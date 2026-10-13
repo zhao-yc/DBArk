@@ -1,0 +1,18 @@
+import type { Command, TaskEvent } from '../shared/contracts';
+
+/** 服务端错误可能展开参数值；概要记录仅保存进度，不将错误原文写入本地库。 */
+export function persistedTaskMessage(command: string, event: TaskEvent): string {
+  if (event.status !== 'failed' && event.status !== 'cancelled') return event.message;
+  if (command === 'query.executeParameterized') return '参数查询未完成，请在当前标签核对已执行语句和事务状态；参数值未写入任务记录。';
+  if (command === 'query.exportStream') {
+    const progress = event.queryExport;
+    return `完整导出未完成，已完成 ${progress?.statementsCompleted ?? 0} 条 SQL、写入 ${progress?.rowsWritten ?? 0} 行；${progress?.fileCommitted ? '文件已经保存。' : '文件未确认保存。'}请核对数据库状态，错误原文及参数值未写入任务记录。`;
+  }
+  return event.message;
+}
+
+/** 执行历史保存模板；新执行导出同样隐藏可能含真实参数的错误原文。 */
+export function persistedQueryError(command: Command, message: string): string {
+  if (command === 'query.executeParameterized') return '参数查询失败，细节仅在当前标签显示；参数值未保存。';
+  return command === 'query.exportStream' ? '执行未完成，细节仅在当前标签显示；错误原文及参数值未保存。' : message;
+}

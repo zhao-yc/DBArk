@@ -8,6 +8,14 @@
 - `src/shared`：跨进程接口和参数校验。
 - `tests/unit`、`tests/integration`、`tests/e2e`：不同边界的验证。
 
+## 完整流式结果测试
+
+`tests/integration/engine-query-stream.integration.test.ts` 验证同会话单次执行、事务/临时表/诊断、多结果编号、精度、文件保护、取消、断线及真正关闭引擎。`DBARK_TEST_MILLION=1` 启用逐行核对百万行；默认仅明确跳过该扩展，100001 行基础用例仍实际验证超过显示上限的完整文件。SSH 使用已验证的 `DBARK_TEST_SSH_*` 配置，严格 TLS 使用已验证 CA，不能因直连通过外推传输。
+
+`tests/e2e/query-stream-export.spec.ts` 使用真实 Electron、SQL 和文件，包括双击、模态、参数隐私、浮点选择、读/写期取消、准备期真实路径 gate、实际 utility 结束和正常退出。受控路径 gate 仅调用本测试目录的真实 realpath 后暂停，未替换 IPC、SQL 或返回数据。运行前统一构建并核对源码/dist 版本；本机 NSIS、原生 CI 和公开归档各自使用对应实际文件，不能混用未来用例。
+
+`query-stream-file`、`query-stream-protocol`、`engine-query-stream`、`main-preparing-tasks` 和 `task-privacy` 单元分别覆盖真实磁盘短写/取消/替换边界、有界事件消费、清理异常后事务状态、生产分派准备退出竞态及持久化脱敏。注入故障的测试不是自然 UI 行为或真实 ENOSPC 证明。实际各轮结果和失败诊断见 [Q05 记录](../tests/integration/acceptance-q05-query-stream-20261014.md)。
+
 ## 测试环境约束
 
 不在开发电脑运行 Docker。真实测试库只能使用 `deve-server.yinzon.com` 对应的 200 服务器；任何 Docker 操作前先通过 SSH 核对主机名和实际地址。测试使用专门的空数据库和测试账号，不对已有业务库执行破坏性操作。

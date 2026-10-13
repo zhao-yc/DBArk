@@ -11,7 +11,7 @@ import '../queryParameters.css';
 interface ParameterRow { id: number; parameter: QueryParameter; manual: boolean; }
 
 /** 仅识别和填写参数；真正执行由拥有固定会话的查询标签统一管理。 */
-export function QueryParametersDialog({ source, loadNames, onExecute, onClose }: { source: string; loadNames: () => Promise<QueryParameterNames>; onExecute: (parameters: QueryParameter[]) => void; onClose: () => void }) {
+export function QueryParametersDialog({ source, loadNames, onExecute, onClose, submitLabel, initialParameters = [] }: { source: string; loadNames: () => Promise<QueryParameterNames>; onExecute: (parameters: QueryParameter[]) => void; onClose: () => void; submitLabel?: string; initialParameters?: QueryParameter[] }) {
   const [rows, setRows] = useState<ParameterRow[]>([]); const [loading, setLoading] = useState(true); const loadingRef = useRef(false);
   const [info, setInfo] = useState<QueryParameterNames | null>(null); const [error, setError] = useState('');
   const sequence = useRef(0); const ready = useRef(false); const alive = useRef(true); const loader = useRef(loadNames); loader.current = loadNames;
@@ -29,8 +29,9 @@ export function QueryParametersDialog({ source, loadNames, onExecute, onClose }:
     try {
       const next = await loader.current(); if (!alive.current) return;
       setRows(previous => {
-        const existing = new Map(previous.map(row => [row.parameter.name, row]));
-        return [...next.names.map(name => { const old = existing.get(name); return { id: old?.id ?? ++sequence.current, parameter: old?.parameter ?? { name, type: 'text' as const, value: '' }, manual: false }; }), ...previous.filter(row => row.manual && !next.names.includes(row.parameter.name))];
+        const existingRows = previous.length ? previous : initialParameters.map(parameter => ({ id: ++sequence.current, parameter, manual: true }));
+        const existing = new Map(existingRows.map(row => [row.parameter.name, row]));
+        return [...next.names.map(name => { const old = existing.get(name); return { id: old?.id ?? ++sequence.current, parameter: old?.parameter ?? { name, type: 'text' as const, value: '' }, manual: false }; }), ...existingRows.filter(row => row.manual && !next.names.includes(row.parameter.name))];
       });
       setInfo(next); ready.current = true;
     } catch (reason) { if (alive.current) setError(errorMessage(reason)); }
@@ -61,6 +62,6 @@ export function QueryParametersDialog({ source, loadNames, onExecute, onClose }:
         <Field label={`${text.value} ${row.parameter.name || row.id}`}><textarea disabled={loading || row.parameter.type === 'null'} value={row.parameter.value ?? ''} maxLength={65536} rows={2} placeholder={row.parameter.type === 'null' ? 'NULL' : hint(row.parameter.type)} onChange={event => update(row.id, { value: event.target.value })}/></Field>
         {row.manual && <button className="icon-button" disabled={loading} aria-label={`${text.remove} ${row.id}`} onClick={() => setRows(previous => previous.filter(item => item.id !== row.id))}><Trash2 size={13}/></button>}
       </div>)}</div><p className="muted small">{text.dateNote}</p><ErrorBox message={error}/>
-    </div><footer className="modal-footer"><button onClick={onClose}>{zh.common.cancel}</button><span className="grow"/><button className="primary" disabled={loading || !info} onClick={execute}><Play size={14}/>{text.execute}</button></footer>
+    </div><footer className="modal-footer"><button onClick={onClose}>{zh.common.cancel}</button><span className="grow"/><button className="primary" disabled={loading || !info} onClick={execute}><Play size={14}/>{submitLabel ?? text.execute}</button></footer>
   </Modal>;
 }

@@ -5,6 +5,7 @@ import { FILTER_LIMITS, validateFilterRules } from './filtering';
 import { queryParameterTypes, validateQueryParameters } from './queryParameters';
 import { snippetSchema } from './snippets';
 import { validateReferenceValues } from './references';
+import { queryStreamExportLimits } from './queryStreamExport';
 
 const id = z.string().min(1).max(200);
 const name = z.string().min(1).max(256);
@@ -52,6 +53,10 @@ export const commandSchemas: Record<Command, z.ZodType> = {
   'query.parameterNames': z.object({ sessionId: id, sql: text.min(1) }).strict(),
   'query.sessionState': z.object({ sessionId: id }).strict(),
   'query.executeParameterized': z.object({ sessionId: id, sql: text.min(1), parameters: queryParameters, taskId: id, maxRows: z.number().int().min(1).max(100000) }).strict(),
+  'query.exportStream': z.object({ sessionId: id, sql: text.min(1), taskId: id, fileToken: id, format: z.enum(['csv', 'json']), encoding: z.enum(['utf8', 'utf16le', 'gb18030']), protocol: z.enum(['text-strict', 'binary-explicit']), resultSelection: z.discriminatedUnion('kind', [z.object({ kind: z.literal('all') }).strict(), z.object({ kind: z.literal('row-result'), ordinal: z.number().int().min(1).max(queryStreamExportLimits.results) }).strict()]), parameters: queryParameters.optional() }).strict().superRefine((input, context) => {
+    if (new TextEncoder().encode(input.sql).byteLength > queryStreamExportLimits.sqlBytes) context.addIssue({ code: 'custom', path: ['sql'], message: 'SQL 模板不能超过 20 MiB' });
+    if ((input.format === 'json') !== (input.resultSelection.kind === 'all')) context.addIssue({ code: 'custom', path: ['resultSelection'], message: 'JSON 必须导出全部结果；CSV 必须指定行结果序号' });
+  }),
   'query.cancel': z.object({ taskId: id }).strict(),
   'query.transaction': z.object({ sessionId: id, action: z.enum(['begin','commit','rollback']) }).strict(),
   'table.page': tablePage,

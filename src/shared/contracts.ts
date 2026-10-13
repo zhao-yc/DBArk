@@ -1,5 +1,6 @@
 /** 所有跨进程数据均为可结构化克隆的普通值，精确数值由驱动保留为字符串。 */
 import type { QueryParameter, QueryParameterNames } from './queryParameters';
+import type { QueryExportProgress, QueryStreamExportInput, QueryStreamExportOutput } from './queryStreamExport';
 export type CellValue = string | number | boolean | null | { type: 'binary'; base64: string };
 export type DataRow = Record<string, CellValue>;
 export type ObjectKind = 'table' | 'view' | 'procedure' | 'function' | 'trigger' | 'event';
@@ -34,7 +35,7 @@ export interface SavedQuery { id: string; name: string; connectionId?: string; d
 export interface SqlSnippet { id: string; name: string; group: string; description: string; sql: string; updatedAt: string; }
 export interface HistoryEntry { id: string; connectionId: string; database?: string; sql: string; startedAt: string; elapsedMs: number; success: boolean; error?: string; }
 export interface TaskRecord { id: string; kind: string; status: 'running' | 'completed' | 'cancelled' | 'failed'; progress: number; message: string; startedAt: string; finishedAt?: string; errors?: string[]; }
-export interface TaskEvent { taskId: string; status: TaskRecord['status']; progress: number; message: string; rows?: number; resultIndex?: number; columns?: ResultColumn[]; batch?: DataRow[]; }
+export interface TaskEvent { taskId: string; status: TaskRecord['status']; progress: number; message: string; rows?: number; resultIndex?: number; columns?: ResultColumn[]; batch?: DataRow[]; queryExport?: QueryExportProgress; }
 export interface FileChoice { token: string; name: string; }
 export type QueryFileEncoding = 'utf8' | 'utf16le' | 'gb18030';
 export interface AppSettings { theme: 'dark' | 'light'; sidebarWidth: number; resultLimit: number; pageSize: number; tabs: { id: string; kind: 'query' | 'table'; title: string; connectionId: string; database?: string; table?: string; sql?: string }[]; activeTabId?: string; }
@@ -65,6 +66,7 @@ export interface CommandMap {
   'query.parameterNames': { input: { sessionId: string; sql: string }; output: QueryParameterNames };
   'query.sessionState': { input: { sessionId: string }; output: { transactionOpen: boolean; transactionKnown: boolean; broken: boolean } };
   'query.executeParameterized': { input: { sessionId: string; sql: string; parameters: QueryParameter[]; taskId: string; maxRows: number }; output: QueryOutcome };
+  'query.exportStream': { input: QueryStreamExportInput; output: QueryStreamExportOutput };
   'query.cancel': { input: { taskId: string }; output: void };
   'query.transaction': { input: { sessionId: string; action: 'begin' | 'commit' | 'rollback' }; output: void };
   'table.page': { input: { connectionId: string; database: string; table: string; page: number; pageSize: number; filters: FilterRule[]; filterMode?: FilterMode; sort: SortRule[] }; output: TablePage };

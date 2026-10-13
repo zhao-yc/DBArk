@@ -1,0 +1,4 @@
+.query-stream-source { white-space: pre-wrap; overflow-wrap: anywhere; overflow: auto; max-height: 180px; padding: 12px; background: var(--surface-2); border: 1px solid var(--line); font-family: monospace; }
+.query-stream-confirm { display: flex; gap: 8px; align-items: flex-start; margin: 14px 0; }
+.query-stream-confirm input { width: auto; margin-top: 3px; }
+.query-stream-progress { padding: 12px; border: 1px solid var(--line); border-radius: 6px; margin-top: 12px; }

@@ -7,9 +7,12 @@ import { EngineBroker } from './broker';
 import { LocalStore } from './storage';
 import { ConnectionConfigManager } from './connectionConfig';
 import { resolveFileToken } from './fileTokens';
+import { ExportReservations } from './exportReservations';
+import { persistedQueryError, persistedTaskMessage } from './taskPrivacy';
 import { readQueryFile, writeQueryFile } from './queryFiles';
 import { validateCommand } from '../shared/validation';
-import type { Command, ConnectionProfile, HistoryEntry, TaskEvent, TaskRecord } from '../shared/contracts';
+import type { Command, ConnectionProfile, HistoryEntry, QueryFileEncoding, TaskEvent, TaskRecord } from '../shared/contracts';
+import type { QueryExportProgress } from '../shared/queryStreamExport';
 
 if (process.env.DBARK_USER_DATA) { mkdirSync(process.env.DBARK_USER_DATA, { recursive: true }); app.setPath('userData', process.env.DBARK_USER_DATA); }
 app.setName('DBArk');
@@ -26,6 +29,9 @@ let lastStorageWarning = 0;
 const sessions = new Map<string, { connectionId: string; database?: string }>();
 const files = new Map<string, { path: string; purpose: string; format?: string }>();
 const queryFileOperations = new Set<Promise<unknown>>();
+const exportReservations = new ExportReservations();
+const preparingTasks = new Map<string, { cancelled: boolean; failure?: string }>();
+const exportProgress = new Map<string, QueryExportProgress>();
 const tasks = new Map<string, TaskRecord>();
 const lastPersist = new Map<string, number>();
 const rendererURL = process.env.DBARK_DEV_URL ?? pathToFileURL(join(__dirname, '../renderer/index.html')).href;
@@ -43,10 +49,11 @@ function persistAuxiliary(action: () => void): void {
 
 /** 任务进度只保留概要；分批结果直接传输，不把整批数据写入配置库。 */
 function taskEvent(event: TaskEvent): void {
+  if (event.queryExport) exportProgress.set(event.taskId, { ...event.queryExport });
   const current = tasks.get(event.taskId);
   if (current) {
     // 服务器错误可能回显已绑定值；参数查询的失败细节仅送给当前界面，不写入磁盘任务记录。
-    const message = current.kind === 'query.executeParameterized' && (event.status === 'failed' || event.status === 'cancelled') ? '参数查询未完成，请在当前标签核对已执行语句和事务状态；参数值未写入任务记录。' : event.message;
+    const message = persistedTaskMessage(current.kind, event);
     const record = { ...current, status: event.status, progress: event.progress, message, finishedAt: event.status === 'running' ? undefined : new Date().toISOString() };
     tasks.set(event.taskId, record);
     if (event.status !== 'running' || Date.now() - (lastPersist.get(event.taskId) ?? 0) > 1000) {
@@ -79,10 +86,22 @@ async function queryFileOperation<T>(action: () => Promise<T>): Promise<T> {
   try { return await operation; } finally { queryFileOperations.delete(operation); }
 }
 
+/** 小型 SQL 保存也占用目标直到原子操作清理完毕，避免与长任务并发覆盖。 */
+async function writeSelectedQuery(input: { fileToken: string; sql: string; encoding: QueryFileEncoding }): Promise<void> {
+  const path = resolveFileToken(files, input.fileToken, 'export', 'sql');
+  const release = await exportReservations.acquire(path);
+  try { await writeQueryFile(path, input.sql, input.encoding); } finally { release(); }
+}
+
 /** 分派前检查配置保存锁，防止检查通过后另一个请求用旧凭据抢先建连。 */
 async function dispatch(command: Command, input: any): Promise<unknown> {
   connectionConfig.assertAvailable(input.connectionId ?? sessions.get(input.sessionId)?.connectionId ?? (command.startsWith('connections.') ? input.id : undefined));
   switch (command) {
+    case 'query.cancel': {
+      const preparing = preparingTasks.get(input.taskId);
+      if (preparing) { preparing.cancelled = true; return; }
+      break;
+    }
     case 'app.info': return { version: app.getVersion(), platform: process.platform, encryptionAvailable: safeStorage.isEncryptionAvailable(), dataPath: app.getPath('userData') };
     case 'app.setDirty': hasPendingEdits = input.dirty; return;
     case 'connections.list': return store.connections();
@@ -109,7 +128,8 @@ async function dispatch(command: Command, input: any): Promise<unknown> {
     case 'files.choose': return chooseFile(input);
     case 'files.path': { const file = files.get(input.token); if (!file) throw new Error('文件选择已失效，请重新选择'); return file.path; }
     case 'files.readQuery': return queryFileOperation(() => readQueryFile(resolveFileToken(files, input.fileToken, 'query', 'sql'), input.encoding));
-    case 'files.writeQuery': return queryFileOperation(() => writeQueryFile(resolveFileToken(files, input.fileToken, 'export', 'sql'), input.sql, input.encoding));
+    case 'files.writeQuery': return queryFileOperation(() => writeSelectedQuery(input));
+    case 'query.exportStream': input = { ...input, filePath: resolveFileToken(files, input.fileToken, 'export', input.format) }; break;
     case 'files.preview':
     case 'files.import':
     case 'files.export':
@@ -126,8 +146,18 @@ async function dispatch(command: Command, input: any): Promise<unknown> {
     tasks.set(taskId, task); store.saveTask(task);
   }
   const session = sessions.get(input.sessionId);
-  const history: HistoryEntry | undefined = (command === 'query.execute' || command === 'query.executeParameterized') && session ? { id: randomUUID(), connectionId: session.connectionId, database: session.database, sql: input.sql, startedAt, elapsedMs: 0, success: false } : undefined;
+  const history: HistoryEntry | undefined = (command === 'query.execute' || command === 'query.executeParameterized' || command === 'query.exportStream') && session ? { id: randomUUID(), connectionId: session.connectionId, database: session.database, sql: input.sql, startedAt, elapsedMs: 0, success: false } : undefined;
+  const preparing: { cancelled: boolean; failure?: string } = { cancelled: false }; if (taskId) preparingTasks.set(taskId, preparing);
+  let releaseTarget: (() => void) | undefined;
+  let sentToEngine = false;
   try {
+    if (command === 'query.exportStream' || command === 'files.export' || command === 'files.exportResult') releaseTarget = await exportReservations.acquire(input.filePath);
+    if (preparing.failure) throw new Error(preparing.failure);
+    // 文件路径归一化期间的取消在主进程捕获，不能丢失后继续发送用户 SQL。
+    if (preparing.cancelled) throw new Error('任务在准备阶段已取消，尚未发送用户 SQL；原目标文件保持不变');
+    connectionConfig.assertAvailable(input.connectionId ?? sessions.get(input.sessionId)?.connectionId);
+    if (taskId) preparingTasks.delete(taskId);
+    sentToEngine = true;
     const result = await broker.request(command, input);
     if (command === 'sessions.open') sessions.set(result.sessionId, { connectionId: input.connectionId, database: input.database });
     if (command === 'sessions.close') sessions.delete(input.sessionId);
@@ -136,10 +166,10 @@ async function dispatch(command: Command, input: any): Promise<unknown> {
     return result;
   } catch (error) {
     const message = error instanceof Error ? error.message : '操作失败';
-    if (taskId && tasks.get(taskId)?.status === 'running') taskEvent({ taskId, status: 'failed', progress: 0, message });
-    if (history) persistAuxiliary(() => store.addHistory({ ...history, elapsedMs: Date.now() - start, error: command === 'query.executeParameterized' ? '参数查询失败，细节仅在当前标签显示；参数值未保存。' : message }));
+    if (taskId && tasks.get(taskId)?.status === 'running') taskEvent({ taskId, status: preparing.cancelled ? 'cancelled' : 'failed', progress: 0, message, ...(command === 'query.exportStream' ? { queryExport: { phase: 'preparing' as const, statementsCompleted: 0, rowsWritten: 0, bytesWritten: 0, fileCommitted: false, ...exportProgress.get(taskId), sqlMayHaveExecuted: sentToEngine, transactionKnown: false } } : {}) });
+    if (history) persistAuxiliary(() => store.addHistory({ ...history, elapsedMs: Date.now() - start, error: persistedQueryError(command, message) }));
     throw error;
-  }
+  } finally { if (taskId) { preparingTasks.delete(taskId); exportProgress.delete(taskId); } releaseTarget?.(); }
 }
 
 /** 按平台生成中文原生菜单，查询快捷键统一发送给当前工作区。 */
@@ -202,16 +232,23 @@ app.on('before-quit', event => {
 });
 app.on('window-all-closed', () => app.quit());
 
+/** 进程退出使所有尚未投递的准备请求失效，迟到的文件检查不能启动新进程继续写入。 */
+function engineExited(): void {
+  for (const preparing of preparingTasks.values()) preparing.failure = '数据库进程已退出，准备任务已停止；尚未发送用户 SQL，原目标文件保持不变';
+  sessions.clear();
+  for (const task of tasks.values()) if (task.status === 'running') {
+    const preparing = preparingTasks.has(task.id);
+    taskEvent({ taskId: task.id, status: 'failed', progress: task.progress, message: '数据库进程已退出，请核对操作结果并重新连接', ...(task.kind === 'query.exportStream' ? { queryExport: { phase: 'executing' as const, statementsCompleted: 0, rowsWritten: 0, bytesWritten: 0, fileCommitted: false, ...exportProgress.get(task.id), ...(preparing ? { phase: 'preparing' as const } : {}), sqlMayHaveExecuted: !preparing, transactionKnown: false } } : {}) });
+  }
+}
+
 if (!app.requestSingleInstanceLock()) { shutdownComplete = true; app.quit(); }
 else {
   app.on('second-instance', () => { if (window?.isMinimized()) window.restore(); window?.focus(); });
   void app.whenReady().then(async () => {
     const wasm = app.isPackaged ? join(process.resourcesPath, 'sql-wasm.wasm') : require.resolve('sql.js/dist/sql-wasm.wasm');
     store = await LocalStore.open(join(app.getPath('userData'), 'dbark.sqlite'), wasm, { available: () => safeStorage.isEncryptionAvailable(), encrypt: value => safeStorage.encryptString(value).toString('base64'), decrypt: value => safeStorage.decryptString(Buffer.from(value, 'base64')) });
-    broker = new EngineBroker(taskEvent, () => {
-      sessions.clear();
-      for (const task of tasks.values()) if (task.status === 'running') taskEvent({ taskId: task.id, status: 'failed', progress: task.progress, message: '数据库进程已退出，请核对操作结果并重新连接' });
-    });
+    broker = new EngineBroker(taskEvent, engineExited);
     connectionConfig = new ConnectionConfigManager(store, broker);
     ipcMain.handle('dbark:request', async (event, payload: unknown) => {
       try {

@@ -11,12 +11,16 @@ import { connect, execute, type ManagedConnection } from './connection';
 import * as metadata from './metadata';
 import { csvCell, csvHeader, encodingName, previewFile, readRecords, readText } from './files';
 import { ResultFileTasks } from './resultFileTasks';
+import { createQueryStreamFile } from './queryStreamFile';
+import { consumeQueryFrames } from './queryStreamProtocol';
+import { queryExportWireProtocol, queryStreamExportLimits, type QueryExportProgress, type QueryExportResultSummary, type QueryStreamExportInput, type QueryStreamExportOutput } from '../shared/queryStreamExport';
 import { buildChanges, buildDesign, buildPageSql, deserializeCell, exportLiteral, identifier, inlineParameters, qualified, serializeCell, splitSql, SqlScriptScanner } from './sql';
 
 interface Session { id: string; connectionId: string; managed: ManagedConnection; busy: boolean; }
 interface RunningTask {
   id: string; managed: ManagedConnection; cancelled: boolean; inFlight: boolean; generation: number;
   cancelPending?: Promise<void>; serverStatus?: number; done: Promise<void>; finish(): void;
+  queryExport?: QueryExportProgress; fileCommitStarted?: boolean;
 }
 interface ResultBudget { remainingRows: number; remainingBytes: number; remainingResults: number; }
 interface IndependentTask { connectionId: string; controller: AbortController; done: Promise<void>; managed?: ManagedConnection; cancelPending?: Promise<void>; cancelError?: Error; }
@@ -88,6 +92,10 @@ export class Engine {
       case 'metadata.table': return input.taskId ? this.withIndependentTask(input.connectionId, input.taskId, connection => metadata.tableInfo(connection, input.database, input.table)) : this.withConnection(input.connectionId, connection => metadata.tableInfo(connection, input.database, input.table));
       case 'metadata.ddl': return this.withConnection(input.connectionId, connection => metadata.objectDdl(connection, input.database, input.name, input.kind));
       case 'query.execute': return this.withSession(input.sessionId, managed => this.runTask(input.taskId, managed, '执行 SQL', task => this.queryScript(task, input.sql, input.maxRows)));
+      case 'query.exportStream': {
+        this.assertFile(input);
+        return this.withSession(input.sessionId, managed => this.runTask(input.taskId, managed, '执行 SQL 并完整导出', task => this.exportQueryStream(task, input as QueryStreamExportInput & { filePath: string })));
+      }
       case 'query.parameterNames': return this.withSession(input.sessionId, async managed => {
         const mode = await this.sqlMode(managed);
         const preview = this.parameterPlan(input.sql, mode);
@@ -277,11 +285,13 @@ export class Engine {
     try {
       const result = await action(task);
       this.checkCancelled(task);
+      await task.cancelPending;
       const errors = (result as { errors?: string[] } | undefined)?.errors;
-      this.emit({ taskId: id, status: errors?.length ? 'failed' : 'completed', progress: 100, message: errors?.length ? errors[0] : `${label}完成` });
+      this.emit({ taskId: id, status: errors?.length ? 'failed' : 'completed', progress: 100, message: errors?.length ? errors[0] : `${label}完成`, ...(task.queryExport ? { queryExport: { ...task.queryExport } } : {}) });
       return result;
     } catch (error) {
-      this.emit({ taskId: id, status: task.cancelled ? 'cancelled' : 'failed', progress: 0, message: this.errorMessage(error) });
+      await task.cancelPending;
+      this.emit({ taskId: id, status: task.cancelled && !task.fileCommitStarted ? 'cancelled' : 'failed', progress: 0, message: this.errorMessage(error), ...(task.queryExport ? { queryExport: { ...task.queryExport } } : {}) });
       throw error;
     } finally {
       // 取消连接仍在建立时，不能放开会话给下一条查询，以免 KILL 误伤复用线程。
@@ -291,7 +301,7 @@ export class Engine {
   }
 
   /** 在下一条 SQL 或下一批文件写入前响应取消，不声称撤销已提交的数据。 */
-  private checkCancelled(task: RunningTask): void { if (task.cancelled) throw new Error('任务已取消；此前已经提交的操作不会撤销'); }
+  private checkCancelled(task: RunningTask): void { if (task.cancelled && !task.fileCommitStarted) throw new Error('任务已取消；此前已经提交的操作不会撤销'); }
   /** 将未知异常转换为可传输文字，避免跨进程依赖 Error 原型。 */
   private errorMessage(error: unknown): string { return error instanceof Error ? error.message : String(error); }
   /** 文件路径必须由主进程的已授权 token 解析结果注入。 */
@@ -394,7 +404,13 @@ export class Engine {
     if (this.resultFiles.has(id)) { this.resultFiles.cancel(id); return; }
     const task = this.tasks.get(id);
     if (!task) return;
+    if (task.fileCommitStarted) return;
     task.cancelled = true;
+    return this.stopTaskCommand(task);
+  }
+
+  /** 文件写入失败也停止当前命令，但不伪装成用户取消；代次保护和控制连接收尾与取消共用。 */
+  private async stopTaskCommand(task: RunningTask): Promise<void> {
     if (task.cancelPending) return task.cancelPending;
     const generation = task.generation;
     task.cancelPending = (async () => {
@@ -402,7 +418,7 @@ export class Engine {
       let control: ManagedConnection | undefined;
       try {
         control = await connect(task.managed.profile);
-        if (!task.inFlight || task.generation !== generation || this.tasks.get(id) !== task || task.managed.broken) return;
+        if (!task.inFlight || task.generation !== generation || this.tasks.get(task.id) !== task || task.managed.broken) return;
         const threadId = task.managed.connection.threadId;
         if (!Number.isSafeInteger(threadId) || (threadId ?? 0) < 1) throw new Error('无法确认待取消的连接编号');
         await execute(control, `KILL QUERY ${threadId}`);
@@ -425,28 +441,40 @@ export class Engine {
     finally { task.inFlight = false; await task.cancelPending; }
   }
 
-  /** 顺序执行脚本并共享结果预算，末尾读取真实事务状态供界面提示。 */
-  private async queryScript(task: RunningTask, sql: string, maxRows: number, parameters?: QueryParameter[]): Promise<QueryOutcome> {
-    if (!Number.isInteger(maxRows) || maxRows < 1 || maxRows > 100000) throw new Error('查询结果上限必须在 1～100000 之间');
-    const started = performance.now();
+  /** 工作台与完整导出共用唯一调度器；每次消费一条，实际执行结束后才按会话模式解释尾部。 */
+  private async *queryStatements(task: RunningTask, sql: string, parameters?: QueryParameter[]): AsyncGenerator<{ statement: string; template: string; mode: SqlLexicalMode; ordinal: number }> {
+    if (typeof sql !== 'string' || Buffer.byteLength(sql) > queryParameterLimits.sqlBytes) throw new Error('SQL 模板不能超过 20 MiB');
     const values = parameters === undefined ? undefined : validateQueryParameters(parameters, this.maxDecimalScale(task.managed), task.managed.status.dialect === 'mariadb');
     let mode = await this.sqlMode(task.managed, task);
     if (values) this.parameterPlan(sql, mode, values);
     const scanner = new SqlScriptScanner(mode.noBackslashEscapes, mode.ansiQuotes, mode.ansiQuotesKnown !== false, mode.noBackslashEscapesKnown !== false);
+    let ordinal = 0, expandedBytes = 0, first = true;
+    const used = new Set<string>();
+    for (;;) {
+      this.checkCancelled(task);
+      scanner.setMode(mode.noBackslashEscapes, mode.ansiQuotes, mode.ansiQuotesKnown !== false, mode.noBackslashEscapesKnown !== false);
+      const template = scanner.push(first ? sql : '', true, 1)[0]; first = false;
+      if (!template) break;
+      const statement = values ? bindQueryParameters(template, values, mode) : template;
+      if (values) for (const token of namedParameterTokens(template, mode)) used.add(token.name);
+      if ((expandedBytes += Buffer.byteLength(statement)) > queryParameterLimits.sqlBytes) throw new Error('展开后的 SQL 合计不能超过 20 MiB');
+      yield { statement, template, mode, ordinal: ++ordinal };
+      mode = await this.sqlMode(task.managed, task);
+    }
+    if (values && [...values.keys()].some(name => !used.has(name))) throw new Error('脚本执行结束后发现未使用的多余参数；动态模式下无法提前确定全部参数边界');
+  }
+
+  /** 顺序执行脚本并共享结果预算，末尾读取真实事务状态供界面提示。 */
+  private async queryScript(task: RunningTask, sql: string, maxRows: number, parameters?: QueryParameter[]): Promise<QueryOutcome> {
+    if (!Number.isInteger(maxRows) || maxRows < 1 || maxRows > 100000) throw new Error('查询结果上限必须在 1～100000 之间');
+    const started = performance.now();
+    const values = parameters !== undefined;
     const results: QueryResult[] = [];
     // 限额由整项任务共享，防止很多结果集或大 BLOB 绕过单结果集行数限制。
     const budget: ResultBudget = { remainingRows: maxRows, remainingBytes: 16 * 1024 * 1024, remainingResults: 200 };
-    let executed = 0, expandedBytes = 0, first = true;
-    const used = new Set<string>();
+    let executed = 0;
     try {
-      for (;;) {
-        this.checkCancelled(task);
-        scanner.setMode(mode.noBackslashEscapes, mode.ansiQuotes, mode.ansiQuotesKnown !== false, mode.noBackslashEscapesKnown !== false);
-        const template = scanner.push(first ? sql : '', true, 1)[0]; first = false;
-        if (!template) break;
-        const statement = values ? bindQueryParameters(template, values, mode) : template;
-        if (values) for (const token of namedParameterTokens(template, mode)) used.add(token.name);
-        if (values && (expandedBytes += Buffer.byteLength(statement)) > queryParameterLimits.sqlBytes) throw new Error('展开后的 SQL 合计不能超过 20 MiB');
+      for await (const { statement, template } of this.queryStatements(task, sql, parameters)) {
         try { results.push(...await this.streamQuery(task, statement, maxRows, results.length, budget, template)); }
         catch (error) {
           if (!values) throw error;
@@ -457,9 +485,7 @@ export class Engine {
         }
         executed++;
         this.emit({ taskId: task.id, status: 'running', progress: 0, message: `已执行 ${executed} 条语句` });
-        mode = await this.sqlMode(task.managed, task);
       }
-      if (values && [...values.keys()].some(name => !used.has(name))) throw new Error('脚本执行结束后发现未使用的多余参数；动态模式下无法提前确定全部参数边界');
     } catch (error) {
       // 数据库错误可能含展开值，参数任务只返回代码；标签事务保持原有状态，由用户决定提交或回滚。
       const code = (error as { code?: unknown })?.code;
@@ -473,6 +499,101 @@ export class Engine {
       this.emit({ taskId: task.id, status: 'running', progress: 99, message: 'SQL 已执行，但无法确认当前事务状态；会话已断开，请重新连接并核对结果，不要直接重复写操作。' });
     }
     return { results, elapsedMs: performance.now() - started, transactionOpen };
+  }
+
+  /** 在原标签会话执行一次；文件消费者背压，界面仅保留共享预算内的预览。 */
+  private async exportQueryStream(task: RunningTask, input: QueryStreamExportInput & { filePath: string }): Promise<QueryStreamExportOutput> {
+    const started = performance.now();
+    const results: QueryExportResultSummary[] = [], preview: QueryOutcome = { results: [], elapsedMs: 0 };
+    const ordinals = { results: 0, rows: 0 };
+    const previews = new Map<number, QueryResult>();
+    let previewBytes = queryStreamExportLimits.previewBytes - queryStreamExportLimits.results * 256;
+    let lastProgress = 0;
+    const progress: QueryExportProgress = task.queryExport = { phase: 'preparing', statementsCompleted: 0, rowsWritten: 0, bytesWritten: 0, fileCommitted: false, sqlMayHaveExecuted: false, transactionKnown: false, peakBufferedRows: 0, peakBufferedBytes: 0 };
+    let writer: Awaited<ReturnType<typeof createQueryStreamFile>> | undefined;
+    /** 状态仅来自原会话缓存，未确认时不把旧位冒充当前事务真值。 */
+    const refresh = () => {
+      progress.transactionKnown = !task.managed.broken && task.managed.serverStatus !== undefined && task.managed.transactionStateKnown !== false;
+      progress.transactionOpen = progress.transactionKnown ? Boolean(task.managed.serverStatus! & 1) : undefined;
+      if (writer) { progress.bytesWritten = writer.bytesWritten; progress.rowsWritten = writer.rowsWritten; progress.fileCommitted = writer.fileCommitted; }
+    };
+    const report = (force = false) => {
+      refresh();
+      if (force || performance.now() - lastProgress >= 100) {
+        lastProgress = performance.now();
+        this.emit({ taskId: task.id, status: 'running', progress: 0, message: `已执行 ${progress.statementsCompleted} 条语句，写入 ${progress.rowsWritten} 行`, rows: progress.rowsWritten, queryExport: { ...progress } });
+      }
+    };
+    try {
+      if ((input.format === 'json') !== (input.resultSelection.kind === 'all') || !['csv', 'json'].includes(input.format)) throw new Error('JSON 必须导出全部结果；CSV 必须指定行结果序号');
+      if (input.resultSelection.kind === 'row-result' && (!Number.isInteger(input.resultSelection.ordinal) || input.resultSelection.ordinal < 1 || input.resultSelection.ordinal > queryStreamExportLimits.results)) throw new Error('行结果序号必须在 1～200 之间');
+      if (!['text-strict', 'binary-explicit'].includes(input.protocol)) throw new Error('完整导出的执行协议无效');
+      writer = await createQueryStreamFile({ filePath: input.filePath, format: input.format, encoding: input.encoding, resultSelection: input.resultSelection, checkCancelled: () => this.checkCancelled(task), onCommitStart: () => { task.fileCommitStarted = true; progress.phase = 'committing'; report(true); } });
+      for await (const { statement, template, mode, ordinal } of this.queryStatements(task, input.sql, input.parameters)) {
+        this.checkCancelled(task);
+        const wire = queryExportWireProtocol(statement, input.protocol, mode);
+        const statementStarted = performance.now(), previewStart = preview.results.length;
+        progress.phase = 'executing'; progress.sqlMayHaveExecuted = true;
+        task.inFlight = true; task.generation++;
+        try {
+          await consumeQueryFrames(task.managed, statement, wire, {
+            statementOrdinal: ordinal, ordinals, checkCancelled: () => this.checkCancelled(task), stop: () => this.stopTaskCommand(task),
+            queuePeak: (rows, bytes) => { progress.peakBufferedRows = Math.max(progress.peakBufferedRows ?? 0, rows); progress.peakBufferedBytes = Math.max(progress.peakBufferedBytes ?? 0, bytes); },
+            consume: async frame => {
+              this.checkCancelled(task);
+              progress.currentResultOrdinal = frame.resultOrdinal; progress.phase = 'writing';
+              await writer!.write(frame);
+              if (frame.kind === 'rows-start' || frame.kind === 'status') {
+                const status = frame.kind === 'status' ? { affectedRows: frame.affectedRows, insertId: frame.insertId, warningCount: frame.warningCount } : {};
+                const summary: QueryExportResultSummary = { resultOrdinal: frame.resultOrdinal, statementOrdinal: frame.statementOrdinal, kind: frame.kind === 'status' ? 'status' : 'rows', rowsWritten: 0, ...status, ...(frame.kind === 'rows-start' ? { rowResultOrdinal: frame.rowResultOrdinal } : {}) };
+                results.push(summary);
+                const columns = frame.kind === 'rows-start' ? frame.columns.map(({ key, name, type }) => ({ key, name, type })) : [];
+                const text = template.slice(0, 32768), bytes = Buffer.byteLength(text) + Buffer.byteLength(JSON.stringify(columns));
+                const retained = bytes <= previewBytes;
+                if (retained) previewBytes -= bytes;
+                const result: QueryResult = { columns: retained ? columns : [], rows: [], statement: retained ? text : '', elapsedMs: 0, truncated: !retained, ...status };
+                preview.results.push(result); previews.set(frame.resultOrdinal, result);
+              } else if (frame.kind === 'rows-end') {
+                if (frame.warningCount !== undefined) {
+                  results[frame.resultOrdinal - 1].warningCount = frame.warningCount;
+                  previews.get(frame.resultOrdinal)!.warningCount = frame.warningCount;
+                }
+              } else if (frame.kind === 'row') {
+                const summary = results[frame.resultOrdinal - 1];
+                if (input.resultSelection.kind === 'all' || summary.rowResultOrdinal === input.resultSelection.ordinal) summary.rowsWritten++;
+                const result = previews.get(frame.resultOrdinal)!;
+                if (!result.truncated && result.rows.length < queryStreamExportLimits.previewRows) {
+                  const row = Object.fromEntries(frame.values.map((value, index) => [`c${index}`, value]));
+                  const bytes = Buffer.byteLength(JSON.stringify(row));
+                  if (bytes <= previewBytes && bytes <= 256 * 1024) { result.rows.push(row); previewBytes -= bytes; }
+                  else result.truncated = true;
+                } else result.truncated = true;
+              }
+              this.checkCancelled(task); report(); progress.phase = 'executing';
+            },
+          });
+        } finally { task.inFlight = false; await task.cancelPending; }
+        for (const result of preview.results.slice(previewStart)) result.elapsedMs = performance.now() - statementStarted;
+        progress.statementsCompleted++; report(true);
+      }
+      if (!progress.statementsCompleted) throw new Error('没有可执行的 SQL 语句');
+      this.checkCancelled(task); progress.phase = 'writing';
+      await writer.complete();
+      await writer.abort();
+      refresh(); preview.elapsedMs = performance.now() - started; preview.transactionOpen = progress.transactionOpen;
+      return { statementsCompleted: progress.statementsCompleted, results, fileCommitted: true, transactionKnown: progress.transactionKnown, transactionOpen: progress.transactionOpen, preview };
+    } catch (error) {
+      let cleanupError: unknown, cleanupFailed = false;
+      // 清理错误不能遮蔽服务器 ERR 后的未知事务状态，也不能跳过统一失败摘要。
+      try { await writer?.abort(); }
+      catch (failure) { cleanupFailed = true; cleanupError = failure; }
+      finally { refresh(); }
+      const code = (error as { code?: unknown })?.code;
+      const safeCode = typeof code === 'string' && /^[A-Z0-9_]+$/.test(code) ? `（${code}）` : '';
+      const detail = input.parameters !== undefined ? `完整导出失败${safeCode}；错误详情可能包含参数值，已隐藏` : this.errorMessage(error);
+      const cleanupDetail = cleanupFailed ? `；临时文件清理失败${input.parameters !== undefined ? '，错误详情已隐藏' : `：${this.errorMessage(cleanupError)}`}` : '';
+      throw new Error(`完整导出在${{ preparing: '准备', executing: '执行', writing: '写入', committing: '文件提交' }[progress.phase]}阶段失败；已完成 ${progress.statementsCompleted} 条 SQL。${progress.sqlMayHaveExecuted ? 'SQL 可能已执行，此前已提交操作保留，未自动回滚或重放。' : '尚未发送用户 SQL。'}${detail}${cleanupDetail}`);
+    }
   }
 
   /** 多结果集按服务器序号隔离；IPC 每批至多 200 行，返回结果受用户上限约束。 */
