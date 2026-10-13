@@ -17,6 +17,7 @@ const profile: ConnectionProfile = {
   host: process.env.DBARK_TEST_HOST ?? '', port: Number(process.env.DBARK_TEST_PORT ?? '3306'),
   user: process.env.DBARK_TEST_USER ?? 'root', password: process.env.DBARK_TEST_PASSWORD ?? '',
   ...(process.env.DBARK_TEST_TLS === '1' ? { tls: { enabled: true, rejectUnauthorized: true, caPath: process.env.DBARK_TEST_CA } } : {}),
+  ...(process.env.DBARK_TEST_SSH === '1' ? { ssh: { enabled: true, host: process.env.DBARK_TEST_SSH_HOST ?? '', port: Number(process.env.DBARK_TEST_SSH_PORT ?? '22'), user: process.env.DBARK_TEST_SSH_USER ?? '', privateKeyPath: process.env.DBARK_TEST_SSH_KEY, hostFingerprint: process.env.DBARK_TEST_SSH_FINGERPRINT } } : {}),
 };
 let sessionId = '', adminSession = '', folder = '', databaseCreated = false;
 
@@ -32,7 +33,8 @@ async function page(table: string): Promise<TablePage> {
 describe.skipIf(!enabled)('远程 MySQL/MariaDB 数据库引擎', () => {
   beforeAll(async () => {
     folder = await mkdtemp(join(tmpdir(), 'dbark-integration-'));
-    await engine.handle('connections.open', { id: profile.id, profile });
+    const status = await engine.handle('connections.open', { id: profile.id, profile });
+    console.info(`数据库实测版本：${status.version}；SSH：${Boolean(profile.ssh?.enabled)}；严格 TLS：${Boolean(profile.tls?.enabled)}`);
     adminSession = (await engine.handle('sessions.open', { connectionId: profile.id })).sessionId;
     await query(`CREATE DATABASE ${identifier(database)} CHARACTER SET utf8mb4`, adminSession); databaseCreated = true;
     sessionId = (await engine.handle('sessions.open', { connectionId: profile.id, database })).sessionId;
@@ -170,5 +172,17 @@ describe.skipIf(!enabled)('远程 MySQL/MariaDB 数据库引擎', () => {
   it('原型属性同名字段可以浏览与导出，不会丢列', async () => {
     await query('CREATE TABLE prototype_columns (id INT PRIMARY KEY, `__proto__` VARCHAR(20), constructor VARCHAR(20)) ENGINE=InnoDB; INSERT INTO prototype_columns VALUES (1,\'字段一\',\'字段二\')');
     const result = await page('prototype_columns'); expect(Object.hasOwn(result.rows[0], '__proto__')).toBe(true); expect(result.rows[0]['__proto__']).toBe('字段一');
+  });
+
+  it.skipIf(!profile.tls?.enabled)('TLS 拒绝不受信任的 CA，不能静默降级为明文', async () => {
+    await expect(engine.handle('connections.test', { ...profile, tls: { enabled: true, rejectUnauthorized: true } })).rejects.toThrow(/certificate|self.signed|issuer/i);
+  });
+
+  it.skipIf(!profile.tls?.enabled || !process.env.DBARK_TEST_WRONG_SAN_HOST)('TLS 拒绝 SAN 不匹配的地址，即使证书 CA 受信任', async () => {
+    await expect(engine.handle('connections.test', { ...profile, host: process.env.DBARK_TEST_WRONG_SAN_HOST })).rejects.toThrow(/altnames|IP.*cert|Hostname/i);
+  });
+
+  it.skipIf(!profile.ssh?.enabled)('SSH 拒绝不匹配的服务器公钥指纹', async () => {
+    await expect(engine.handle('connections.test', { ...profile, ssh: { ...profile.ssh, hostFingerprint: 'SHA256:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA' } })).rejects.toThrow(/verification|fingerprint|verify/i);
   });
 });

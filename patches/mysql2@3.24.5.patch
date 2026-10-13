@@ -1,0 +1,13 @@
+diff --git a/lib/base/connection.js b/lib/base/connection.js
+index 4a02617f76648ebabfda755c5850b98a3d47bf25..0004e33730669b23ea63b10f95be8676d13cab78 100644
+--- a/lib/base/connection.js
++++ b/lib/base/connection.js
+@@ -456,6 +456,8 @@ class BaseConnection extends EventEmitter {
+         session: sessionSlot.get(),
+         isServer: false,
+         socket: this.stream,
++        // IP 地址不发送 SNI，但证书仍必须按真实目标地址校验，不能回退到 localhost。
++        host: this.config.host,
+         servername,
+       },
+       () => {

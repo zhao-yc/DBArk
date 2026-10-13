@@ -24,16 +24,28 @@ function persist(settings: AppSettings) {
   saveTimer = setTimeout(() => void invoke('settings.save', settings).catch(error => useWorkspace.getState().notify(errorMessage(error), true)), 400);
 }
 
+/** 退出握手先取消防抖写入，再保存当前快照；错误必须传回调用方，不重试也不吞掉。 */
+export async function flushSettings(): Promise<void> {
+  clearTimeout(saveTimer);
+  saveTimer = undefined;
+  await invoke('settings.save', useWorkspace.getState().settings);
+}
+
+/** 界面状态仅保存连接概要和工作区配置，数据库密码不进入全局界面存储。 */
 export const useWorkspace = create<WorkspaceState>((set, get) => ({
   ready: false, settings: defaults, connections: [], tasks: [], activeJobs: {}, dirtyTabs: {},
+  /** 并行恢复本地配置、连接概要和任务记录；加载失败仍保留可显示错误的工作台。 */
   initialize: async () => {
     try {
       const [settings, connections, tasks] = await Promise.all([invoke('settings.get', {}), invoke('connections.list', {}), invoke('tasks.list', {})]);
       set({ settings: { ...defaults, ...settings }, connections, tasks, ready: true });
     } catch (error) { set({ ready: true }); get().notify(errorMessage(error), true); }
   },
+  /** 连接编辑成功后整体替换概要列表，不缓存表单中的明文秘密。 */
   setConnections: connections => set({ connections }),
+  /** 合并并立即展示配置修改，由持久化层合并连续写盘请求。 */
   updateSettings: update => { const settings = { ...get().settings, ...update }; set({ settings }); persist(settings); },
+  /** 相同数据表复用已有标签，SQL 查询始终新建独立标签和会话。 */
   openTab: candidate => {
     const current = get().settings;
     const existing = candidate.kind === 'table' ? current.tabs.find(tab => tab.kind === 'table' && tab.connectionId === candidate.connectionId && tab.database === candidate.database && tab.table === candidate.table) : undefined;
@@ -41,16 +53,23 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     const tab = { ...candidate, id: candidate.id ?? uid() };
     get().updateSettings({ tabs: [...current.tabs, tab], activeTabId: tab.id });
   },
+  /** 按标签标识更新查询正文或标题，并把草稿纳入布局恢复状态。 */
   updateTab: (id, update) => get().updateSettings({ tabs: get().settings.tabs.map(tab => tab.id === id ? { ...tab, ...update } : tab) }),
+  /** 调用方完成任务和草稿确认后删除标签，当前标签关闭时激活邻近标签。 */
   closeTab: id => {
     const settings = get().settings; const index = settings.tabs.findIndex(tab => tab.id === id); const tabs = settings.tabs.filter(tab => tab.id !== id);
     get().updateSettings({ tabs, activeTabId: settings.activeTabId === id ? tabs[Math.max(0, index - 1)]?.id : settings.activeTabId });
     get().setDirty(id, false);
   },
+  /** 记录对象树当前上下文，供新建查询等操作使用。 */
   select: selection => set({ selection }),
+  /** 成功与错误共用通知入口，错误通知由用户手动关闭。 */
   notify: (text, error = false) => set({ notice: { text, error } }),
+  /** 标记标签是否有活动操作，防止运行期间关闭其会话。 */
   setBusy: (id, busy) => set(state => ({ activeJobs: { ...state.activeJobs, [id]: busy } })),
+  /** 标记未提交数据或事务，供标签关闭及应用退出确认使用。 */
   setDirty: (id, dirty) => set(state => ({ dirtyTabs: { ...state.dirtyTabs, [id]: dirty } })),
+  /** 仅保留任务概要，不把查询数据批次复制进全局任务历史。 */
   onTask: event => set(state => {
     const previous = state.tasks.find(task => task.id === event.taskId);
     const task: TaskRecord = { id: event.taskId, kind: previous?.kind ?? zh.workspace.text001, startedAt: previous?.startedAt ?? new Date().toISOString(), ...previous, status: event.status, progress: event.progress, message: event.message };
@@ -58,5 +77,5 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
   })
 }));
 
-/** 关闭窗口前立即刷新最后一次编辑状态。 */
-window.addEventListener('beforeunload', () => { clearTimeout(saveTimer); if (useWorkspace.getState().ready) void invoke('settings.save', useWorkspace.getState().settings); });
+/** 主进程的退出握手负责保存；卸载时只清理定时器，禁止向已关闭的配置库再次写入。 */
+window.addEventListener('beforeunload', () => { clearTimeout(saveTimer); saveTimer = undefined; });

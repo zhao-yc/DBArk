@@ -9,6 +9,7 @@ export function Modal({ title, children, onClose, wide = false }: { title: strin
   useEffect(() => {
     const previous = document.activeElement as HTMLElement | null;
     root.current?.querySelector<HTMLElement>('input, select, textarea, button')?.focus();
+    /** 拦截 Escape 并循环 Tab 焦点，避免键盘操作穿透到对话框后方。 */
     const listener = (event: KeyboardEvent) => {
       if (event.key === 'Escape') { event.stopPropagation(); closeRef.current(); }
       if (event.key === 'Tab') {
@@ -23,7 +24,11 @@ export function Modal({ title, children, onClose, wide = false }: { title: strin
   }, []);
   return <div className="modal-overlay"><div ref={root} className={`modal ${wide ? 'wide' : ''}`} role="dialog" aria-modal="true" aria-label={title}><header><h2>{title}</h2><button className="icon-button" aria-label={zh.dialogs.text001} onClick={onClose}><X size={18}/></button></header>{children}</div></div>;
 }
+/** 统一字段标签与布局，具体输入类型由调用方决定。 */
 export function Field({ label, children, full = false }: { label: string; children: ReactNode; full?: boolean }) { return <label className={`field ${full ? 'full' : ''}`}><span>{label}</span>{children}</label>; }
+/** 空白状态展示可操作说明，不向用户填充虚构的数据结果。 */
 export function Empty({ title, text, children }: { title: string; text?: string; children?: ReactNode }) { return <div className="empty"><strong>{title}</strong>{text && <p>{text}</p>}{children}</div>; }
+/** 统一呈现进行中状态，同时保留可读的文字说明。 */
 export function Spinner({ text = zh.common.loading }: { text?: string }) { return <span className="spinner"><LoaderCircle className="spin" size={15}/>{text}</span>; }
+/** 错误以纯文本呈现并通知辅助技术，绝不把驱动返回内容解释为 HTML。 */
 export function ErrorBox({ message }: { message?: string }) { return message ? <div className="error-box" role="alert">{message}</div> : null; }

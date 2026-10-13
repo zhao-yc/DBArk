@@ -11,6 +11,7 @@ const maxClipboardCells = 50_000;
 export function parseTabularText(text: string): string[][] {
   if (text.length > maxClipboardCharacters) throw new Error(zh.clipboard.text001);
   const rows: string[][] = []; let row: string[] = [], value = '', quoted = false, cells = 0;
+  /** 每个分隔符完成一个单元格，并在构建矩阵时限制总规模。 */
   const addCell = () => { row.push(value); value = ''; if (++cells > maxClipboardCells) throw new Error(zh.clipboard.text002); };
   for (let index = 0; index < text.length; index++) {
     const char = text[index];
@@ -31,6 +32,7 @@ export function parseTabularText(text: string): string[][] {
 /** 外部程序读取通用 TSV；DBArk 内部复制额外保存 NULL 和二进制类型。 */
 export function encodeClipboard(values: CellValue[][]) {
   if (values.reduce((count, row) => count + row.length, 0) > maxClipboardCells) throw new Error(zh.clipboard.copyLimit);
+  /** 仅对含分隔符或引号的值加引号，确保电子表格可完整还原单元格边界。 */
   const quote = (value: CellValue) => { const text = cellText(value); return /[\t\r\n"]/.test(text) ? '"' + text.replaceAll('"', '""') + '"' : text; };
   const typed = JSON.stringify({ version: 1, rows: values });
   if (typed.length > maxClipboardCharacters) throw new Error(zh.clipboard.copySizeLimit);

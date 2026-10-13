@@ -3,3 +3,5 @@ allowBuilds:
   ssh2: false
   cpu-features: false
   electron-winstaller: false
+patchedDependencies:
+  mysql2@3.24.5: patches/mysql2@3.24.5.patch

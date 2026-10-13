@@ -6,24 +6,29 @@ import { errorMessage, invoke, kindLabels } from '../lib';
 import { useWorkspace } from '../store';
 import { Spinner } from './ui';
 
+/** 按连接分组展示对象树，只对用户展开的节点加载数据库元数据。 */
 export function Sidebar({ onNewConnection, onEditConnection, onDesign, onDdl, refreshVersion }: { onNewConnection: () => void; onEditConnection: (profile: ConnectionProfile) => void; onDesign: (connectionId: string, database: string, table?: string) => void; onDdl: (connectionId: string, database?: string, object?: DatabaseObject) => void; refreshVersion: number }) {
   const connections = useWorkspace(state => state.connections); const [search, setSearch] = useState('');
   const groups = [...new Set(connections.map(profile => profile.group || zh.sidebar.text001))];
   return <aside className="sidebar"><div className="sidebar-heading"><span>{zh.sidebar.text002}</span><button className="icon-button" aria-label={zh.common.newConnection} title={zh.common.newConnection} onClick={onNewConnection}><Plus size={17}/></button></div><div className="search-box"><Search size={14}/><input aria-label={zh.sidebar.text003} value={search} onChange={event => setSearch(event.target.value)} placeholder={zh.sidebar.text004}/><kbd>⌕</kbd></div><div className="tree-scroll">{groups.map(group => <section className="tree-group" key={group}><div className="group-label"><Folder size={13}/>{group}</div>{connections.filter(profile => (profile.group || zh.sidebar.text001) === group).map(profile => <ConnectionNode key={`${profile.id}:${refreshVersion}`} profile={profile} search={search} onEdit={() => onEditConnection(profile)} onDesign={onDesign} onDdl={onDdl}/>)}</section>)}{connections.length === 0 && <div className="sidebar-empty"><Database size={30}/><p>{zh.sidebar.text005}</p><button onClick={onNewConnection}><Plus size={14}/>{zh.common.newConnection}</button></div>}</div><div className="sidebar-bottom"><span className="status-dot"/>{zh.sidebar.text006}<span className="grow"/><span>{connections.length}{zh.sidebar.text007}</span></div></aside>;
 }
 
+/** 连接节点维护展开状态及数据库列表，配置编辑仍交给独立表单完成。 */
 function ConnectionNode({ profile, search, onEdit, onDesign, onDdl }: { profile: ConnectionProfile; search: string; onEdit: () => void; onDesign: (connectionId: string, database: string, table?: string) => void; onDdl: (connectionId: string, database?: string, object?: DatabaseObject) => void }) {
   const [databases, setDatabases] = useState<string[]>([]); const [opened, setOpened] = useState(false); const [busy, setBusy] = useState(false); const [connected, setConnected] = useState(false);
   const selection = useWorkspace(state => state.selection);
+  /** 先验证连接再列出可访问数据库，失败时保留可重试的节点入口。 */
   async function load() {
     setBusy(true);
     try { await invoke('connections.open', { id: profile.id }); setConnected(true); setDatabases(await invoke('metadata.databases', { connectionId: profile.id })); setOpened(true); }
     catch (error) { useWorkspace.getState().notify(errorMessage(error), true); }
     finally { setBusy(false); }
   }
+  /** 由主进程关闭连接所属的会话和任务，成功后再折叠连接节点。 */
   async function disconnect() {
     try { await invoke('connections.close', { id: profile.id }); setConnected(false); setOpened(false); } catch (error) { useWorkspace.getState().notify(errorMessage(error), true); }
   }
+  /** 删除操作仅作用于本地连接配置，执行前明确提示不会删除数据库。 */
   async function remove() {
     if (!window.confirm(formatText(zh.sidebar.text008, profile.name))) return;
     try { await invoke('connections.delete', { id: profile.id }); useWorkspace.getState().setConnections(await invoke('connections.list', {})); } catch (error) { useWorkspace.getState().notify(errorMessage(error), true); }
@@ -33,9 +38,11 @@ function ConnectionNode({ profile, search, onEdit, onDesign, onDdl }: { profile:
   return <div className="connection-node"><div className={`tree-row connection-row ${selection?.connectionId === profile.id && !selection.database ? 'active' : ''}`}><button className="tree-label" onClick={() => { useWorkspace.getState().select({ connectionId: profile.id }); if (!opened) void load(); else setOpened(false); }}><span className="tree-chevron">{opened ? <ChevronDown size={13}/> : <ChevronRight size={13}/>}</span><Database size={16} style={{ color: profile.color }}/><span className="truncate">{profile.name}</span>{connected && <span className="connection-dot"/>}</button><div className="row-actions"><button title={zh.sidebar.text009} aria-label={formatText(zh.sidebar.text010, profile.name)} onClick={onEdit}><Pencil size={12}/></button><button title={zh.sidebar.text011} aria-label={zh.sidebar.text011} onClick={() => void load()}><RefreshCw size={12}/></button><button title={zh.sidebar.text012} aria-label={zh.sidebar.text012} onClick={() => onDdl(profile.id)}><Plus size={12}/></button>{connected && <button title={zh.sidebar.text013} aria-label={zh.sidebar.text013} onClick={() => void disconnect()}><Unplug size={12}/></button>}<button title={zh.sidebar.text014} aria-label={zh.sidebar.text014} onClick={() => void remove()}><Trash2 size={12}/></button></div></div>{busy && <div className="tree-loading"><Spinner text={zh.sidebar.text015}/></div>}{opened && !busy && databases.map(database => <DatabaseNode key={database} connectionId={profile.id} database={database} search={matches ? '' : search} onDesign={table => onDesign(profile.id, database, table)} onDdl={object => onDdl(profile.id, database, object)}/>)}</div>;
 }
 
+/** 数据库节点按对象种类选择数据浏览或定义编辑入口。 */
 function DatabaseNode({ connectionId, database, search, onDesign, onDdl }: { connectionId: string; database: string; search: string; onDesign: (table?: string) => void; onDdl: (object?: DatabaseObject) => void }) {
   const [open, setOpen] = useState(false); const [objects, setObjects] = useState<DatabaseObject[]>([]); const [busy, setBusy] = useState(false);
   const selection = useWorkspace(state => state.selection);
+  /** 只读取当前数据库对象列表，避免加载未展开数据库的全部字段。 */
   async function load() {
     setBusy(true); try { setObjects(await invoke('metadata.objects', { connectionId, database })); setOpen(true); } catch (error) { useWorkspace.getState().notify(errorMessage(error), true); } finally { setBusy(false); }
   }

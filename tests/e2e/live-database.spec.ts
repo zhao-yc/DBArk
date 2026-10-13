@@ -120,7 +120,8 @@ async function transfer(table: Locator, file: string, mode: 'import' | 'export',
   await chooseTransferFile(file, mode);
   await table.getByRole('button', { name: mode === 'import' ? '导入' : '导出', exact: true }).click();
   const modal = page.getByRole('dialog', { name: new RegExp(`^${mode === 'import' ? '导入数据' : '导出数据'} ·`) });
-  await modal.getByLabel('文件格式', { exact: true }).selectOption(format);
+  // 原生 select 位于包裹式 label 内，匹配标签前缀，避免浏览器把选项文本并入标签名。
+  await modal.getByRole('combobox', { name: /^文件格式/ }).selectOption(format);
   await modal.locator('.file-picker').click();
   if (mode === 'import' && format !== 'sql') {
     await expect(modal.locator('.mapping-grid')).toBeVisible();

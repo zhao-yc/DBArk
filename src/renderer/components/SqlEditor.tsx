@@ -9,6 +9,7 @@ import { useWorkspace } from '../store';
 self.MonacoEnvironment = { getWorker: () => new EditorWorker() };
 loader.config({ monaco });
 
+/** 每个编辑器只接收自身元数据补全，执行快捷键通过引用调用最新的标签逻辑。 */
 export function SqlEditor({ value, onChange, onReady, height = '100%', readOnly = false, suggestions = [], onExecute }: { value: string; onChange?: (value: string) => void; onReady?: (editor: monaco.editor.IStandaloneCodeEditor) => void; height?: string | number; readOnly?: boolean; suggestions?: string[]; onExecute?: () => void }) {
   const theme = useWorkspace(state => state.settings.theme);
   const editorRef = useRef<monaco.editor.IStandaloneCodeEditor | null>(null);
@@ -23,6 +24,7 @@ export function SqlEditor({ value, onChange, onReady, height = '100%', readOnly 
     });
     return () => provider.dispose();
   }, [suggestions]);
+  /** 挂载时注册一次执行动作，编辑器销毁后 Monaco 自动释放该实例动作。 */
   const mounted: OnMount = editor => {
     editorRef.current = editor; onReady?.(editor);
     editor.addAction({ id: 'dbark-run', label: zh.editor.text001, keybindings: [monaco.KeyMod.CtrlCmd | monaco.KeyCode.Enter], run: () => runRef.current?.() });

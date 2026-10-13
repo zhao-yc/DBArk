@@ -40,6 +40,12 @@ beforeEach(async () => {
 });
 
 describe('查询任务与会话互斥', () => {
+  it('驱动在连接上报告致命错误时查询立即失败并释放监听器', async () => {
+    const active = await mocks.connect.mock.results.at(-1)!.value as ManagedConnection;
+    scenario = () => { active.connection.emit('error', new Error('模拟解析器致命错误')); };
+    await expect(engine.handle('query.execute', { sessionId, sql: 'SELECT value', taskId: 'fatal-error', maxRows: 1 })).rejects.toThrow('模拟解析器致命错误');
+    expect(active.connection.listenerCount('error')).toBe(0); expect(events.at(-1)?.status).toBe('failed');
+  });
   it('真实驱动的无字段 DDL/DML 状态包能正常完成，不能等待不存在的列数组', async () => {
     scenario = (_sql, query) => {
       query.emit('fields', undefined);

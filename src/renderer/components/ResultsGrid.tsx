@@ -6,6 +6,7 @@ import { cellPreview, errorMessage } from '../lib';
 import { useWorkspace } from '../store';
 import { cellClipboardType, encodeClipboard } from '../gridClipboard';
 
+/** 任意查询结果只读；支持单格或勾选记录复制，始终保留原始值用于剪贴板。 */
 export function ResultsGrid({ columns, rows }: { columns: ResultColumn[]; rows: DataRow[] }) {
   const theme = useWorkspace(state => state.settings.theme);
   const [selectedRows, setSelectedRows] = useState<ReadonlySet<number>>(new Set());

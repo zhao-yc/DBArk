@@ -87,7 +87,9 @@ export function QueryTab({ tab, onHistory }: { tab: WorkspaceTab; onHistory: () 
   /** 保留结果区域最小高度，防止拖动编辑器后无法操作结果。 */
   function resize(event: React.PointerEvent) {
     const start = event.clientY; const height = editorHeight; event.currentTarget.setPointerCapture(event.pointerId);
+    /** 根据拖动距离改变编辑区域高度，始终保留查询结果的可操作空间。 */
     const move = (next: PointerEvent) => setEditorHeight(Math.max(130, Math.min(window.innerHeight - 300, height + next.clientY - start)));
+    /** 拖动结束释放窗口监听，防止离开分隔条后仍持续调整高度。 */
     const stop = () => { window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', stop); };
     window.addEventListener('pointermove', move); window.addEventListener('pointerup', stop);
   }

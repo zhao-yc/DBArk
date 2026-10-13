@@ -10,6 +10,7 @@ import { ErrorBox, Field, Modal, Spinner } from './ui';
 import { collectChanges, type DraftRow } from '../dataChanges';
 import { cellClipboardType, decodeClipboard, encodeClipboard, pasteCells } from '../gridClipboard';
 
+/** 输入始终保留字符串精度，失焦仅提交到本地草稿，不执行数据库写入。 */
 function TextCellEditor({ row, column, onRowChange, onClose }: RenderEditCellProps<DraftRow>) {
   return <input className="grid-input" autoFocus onFocus={event => event.currentTarget.select()} defaultValue={row.data[column.key] === null ? '' : cellText(row.data[column.key])} onChange={event => onRowChange({ ...row, data: { ...row.data, [column.key]: event.target.value } })} onBlur={() => onClose(true, false)} aria-label={formatText(zh.table.text001, column.key)}/>;
 }
@@ -31,6 +32,7 @@ export function TableTab({ tab, onDesign, onTransfer }: { tab: WorkspaceTab; onD
   const loadGeneration = useRef(0);
   const editable = !!info?.editableKey.length;
   const base = useMemo(() => ({ connectionId: tab.connectionId, database: tab.database!, table: tab.table! }), [tab.connectionId, tab.database, tab.table]);
+  /** 每次加载分配代次，旧请求迟到时不能覆盖新页面或当前编辑状态。 */
   const load = useCallback(async () => {
     const generation = ++loadGeneration.current;
     setBusy(true); setError('');
@@ -44,6 +46,7 @@ export function TableTab({ tab, onDesign, onTransfer }: { tab: WorkspaceTab; onD
   }, [base, pageIndex, pageSize, filters, sort, tab.connectionId]);
   useEffect(() => { void load(); return () => { loadGeneration.current++; }; }, [load]);
   useEffect(() => { useWorkspace.getState().setDirty(tab.id, changes.length > 0); return () => useWorkspace.getState().setDirty(tab.id, false); }, [tab.id, changes.length]);
+  /** 翻页、排序或刷新前先确认是否允许丢弃本页尚未提交的草稿。 */
   function canReload() { return changes.length === 0 || window.confirm(zh.table.text002); }
   const columns = useMemo<Column<DraftRow>[]>(() => [SelectColumn, ...(page?.columns ?? []).map<Column<DraftRow>>(column => ({
     key: column.key, name: column.name, minWidth: 110, width: 165, resizable: true, sortable: true,
@@ -77,15 +80,18 @@ export function TableTab({ tab, onDesign, onTransfer }: { tab: WorkspaceTab; onD
       pendingPaste.current = updated; setError(''); return updated.find(item => item.id === row.id)!;
     } catch (reason) { setError(errorMessage(reason)); return row; }
   }
+  /** 使用独立编辑器查看文本、JSON、二进制与 NULL，待删除行不允许再编辑。 */
   function editCell() {
     if (!selection) return;
     const row = rows.find(row => row.id === selection.rowId); if (!row || row.deleted) return;
     const value = row.data[selection.key]; const type = info?.columns.find(column => column.name === selection.key)?.type ?? '';
     setCellDialog({ ...selection, text: value === null ? '' : cellText(value), mode: value === null ? 'null' : typeof value === 'object' ? 'binary' : /json/i.test(type) ? 'json' : 'text' });
   }
+  /** 将当前草稿交给引擎生成参数化 SQL 预览，此步骤不修改数据库。 */
   async function makePreview() {
     setError(''); try { setPreview(await invoke('table.preview', { ...base, changes })); } catch (reason) { setError(errorMessage(reason)); }
   }
+  /** 一次提交使用唯一任务编号；失败保留草稿，成功后重新读取服务器数据。 */
   async function apply() {
     setApplying(true); setError(''); useWorkspace.getState().setBusy(tab.id, true);
     const taskId = uid(); setApplyTaskId(taskId);

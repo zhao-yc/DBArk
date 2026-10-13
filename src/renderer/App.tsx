@@ -3,7 +3,7 @@ import { useEffect, useState } from 'react';
 import { Activity, ArrowRight, CheckCircle2, CircleHelp, Database, FileCode2, History, Moon, Plus, Search, Settings2, Sun, Table2, TerminalSquare, X } from 'lucide-react';
 import type { ConnectionProfile, DatabaseObject } from '../shared/contracts';
 import { errorMessage, invoke } from './lib';
-import { useWorkspace, type WorkspaceTab } from './store';
+import { flushSettings, useWorkspace, type WorkspaceTab } from './store';
 import { Sidebar } from './components/Sidebar';
 import { ConnectionDialog } from './components/ConnectionDialog';
 import { QueryTab } from './components/QueryTab';
@@ -29,7 +29,7 @@ export default function App() {
       if (action === 'new-connection') setConnectionDialog('new');
       if (action === 'new-query') setNewQuery(true);
       if (action === 'toggle-theme') useWorkspace.getState().updateSettings({ theme: useWorkspace.getState().settings.theme === 'dark' ? 'light' : 'dark' });
-      if (action === 'persist-state') void invoke('settings.save', useWorkspace.getState().settings).catch(reason => useWorkspace.getState().notify(errorMessage(reason), true));
+      if (action === 'persist-state') void flushSettings().catch(reason => useWorkspace.getState().notify(errorMessage(reason), true));
       if (action.startsWith('warning:')) useWorkspace.getState().notify(action.slice('warning:'.length), true);
     });
     void invoke('app.info', {}).then(info => { setVersion(info.version); setPlatform(info.platform); setEncryptionAvailable(info.encryptionAvailable); }).catch(() => {});
@@ -43,6 +43,7 @@ export default function App() {
     const timer = setTimeout(() => useWorkspace.setState({ notice: undefined }), 5500); return () => clearTimeout(timer);
   }, [notice]);
   useEffect(() => {
+    /** 仅在无活动对话框时处理工作区快捷键，避免覆盖表单内的正常操作。 */
     const listener = (event: KeyboardEvent) => {
       if (!(event.ctrlKey || event.metaKey) || document.querySelector('[role="dialog"]')) return;
       if (event.key.toLowerCase() === 't') { event.preventDefault(); setNewQuery(true); }
@@ -61,7 +62,9 @@ export default function App() {
   /** 指针拖动即时调整宽度，持久化由工作空间存储层合并处理。 */
   function resizeSidebar(event: React.PointerEvent) {
     const startX = event.clientX; const width = settings.sidebarWidth; event.currentTarget.setPointerCapture(event.pointerId);
+    /** 将拖动位置限制在可用侧边栏宽度范围内。 */
     const move = (next: PointerEvent) => useWorkspace.getState().updateSettings({ sidebarWidth: Math.max(180, Math.min(600, width + next.clientX - startX)) });
+    /** 拖动结束立即移除窗口级监听，避免后续指针移动误改布局。 */
     const stop = () => { window.removeEventListener('pointermove', move); window.removeEventListener('pointerup', stop); };
     window.addEventListener('pointermove', move); window.addEventListener('pointerup', stop);
   }

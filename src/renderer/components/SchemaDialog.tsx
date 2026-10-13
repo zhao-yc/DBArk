@@ -7,9 +7,12 @@ import { useWorkspace } from '../store';
 import { SqlEditor } from './SqlEditor';
 import { ErrorBox, Field, Modal, Spinner } from './ui';
 
+/** 新字段仅提供可编辑默认值，不在用户确认前生成数据库对象。 */
 const blankColumn = (): TableDesign['columns'][number] => ({ name: '', type: 'varchar(255)', nullable: true, autoIncrement: false, comment: '' });
+/** 保留正在输入的空段，防止输入逗号时受控表单立即把分隔符删除。 */
 const splitColumns = (text: string) => text.split(',').map(item => item.trim());
 
+/** 设计器维护字段、索引及外键草稿，必须先生成预览后才允许执行 DDL。 */
 export function SchemaDialog({ connectionId, database, table, onClose, onApplied }: { connectionId: string; database: string; table?: string; onClose: () => void; onApplied: () => void }) {
   const [design, setDesign] = useState<TableDesign>({ database, name: table ?? '', originalName: table, engine: 'InnoDB', charset: 'utf8mb4', comment: '', columns: table ? [] : [{ ...blankColumn(), name: 'id', type: 'bigint unsigned', nullable: false, autoIncrement: true }], indexes: table ? [] : [{ name: 'PRIMARY', unique: true, columns: ['id'] }], foreignKeys: [] });
   const [section, setSection] = useState<'columns' | 'indexes' | 'foreignKeys'>('columns'); const [busy, setBusy] = useState(!!table); const [error, setError] = useState(''); const [preview, setPreview] = useState<SqlPreview | null>(null); const [sql, setSql] = useState('');
@@ -23,18 +26,24 @@ export function SchemaDialog({ connectionId, database, table, onClose, onApplied
       setDesign({ database, name: table, originalName: table, engine: info.engine || 'InnoDB', charset: info.charset || 'utf8mb4', comment: info.comment || '', columns: info.columns.map(column => ({ name: column.name, originalName: column.name, type: column.type, nullable: column.nullable, defaultValue: column.defaultValue === null && !column.nullable ? undefined : column.defaultValue, autoIncrement: column.extra.toLowerCase().includes('auto_increment'), comment: column.comment })), indexes: info.indexes, foreignKeys: info.foreignKeys });
     }).catch(reason => setError(errorMessage(reason))).finally(() => setBusy(false));
   }, [connectionId, database, table]);
+  /** 结构草稿一旦变化，旧 SQL 预览立即失效，避免提交过时的语句。 */
   function update(patch: Partial<TableDesign>) { setDesign(current => ({ ...current, ...patch })); setPreview(null); }
+  /** 只更新指定字段的草稿，保留原字段名用于安全生成修改语句。 */
   function columnAt(index: number, patch: Partial<TableDesign['columns'][number]>) { update({ columns: design.columns.map((column, item) => item === index ? { ...column, ...patch } : column) }); }
+  /** 索引编辑复用统一草稿更新流程，不直接发送数据库请求。 */
   function indexAt(index: number, patch: Partial<IndexInfo>) { update({ indexes: design.indexes.map((value, item) => item === index ? { ...value, ...patch } : value) }); }
+  /** 外键更新保留未修改的引用字段及级联动作。 */
   function foreignAt(index: number, patch: Partial<ForeignKeyInfo>) { update({ foreignKeys: design.foreignKeys.map((value, item) => item === index ? { ...value, ...patch } : value) }); }
+  /** 预览入口独立建立连接，不要求用户预先展开对象树，也不执行写操作。 */
   async function prepare() {
     setError(''); setBusy(true);
-    try { if (!design.name.trim()) throw new Error(zh.schema.text001); const result = await invoke('schema.preview', { connectionId, design }); setPreview(result); setSql(result.sql); }
+    try { if (!design.name.trim()) throw new Error(zh.schema.text001); await invoke('connections.open', { id: connectionId }); const result = await invoke('schema.preview', { connectionId, design }); setPreview(result); setSql(result.sql); }
     catch (reason) { setError(errorMessage(reason)); } finally { setBusy(false); }
   }
+  /** 确认后先准备连接，再发送一次结构写入；失败只展示错误，不自动重放 DDL。 */
   async function apply() {
     setError(''); setBusy(true); const taskId = uid(); setApplyTaskId(taskId);
-    try { await invoke('schema.apply', { connectionId, database, sql, taskId }); useWorkspace.getState().notify(zh.schema.text002); onApplied(); onClose(); }
+    try { await invoke('connections.open', { id: connectionId }); await invoke('schema.apply', { connectionId, database, sql, taskId }); useWorkspace.getState().notify(zh.schema.text002); onApplied(); onClose(); }
     catch (reason) { setError(errorMessage(reason)); } finally { setBusy(false); }
   }
   if (unsupported) return <Modal title={formatText(zh.schema.text003, table)} wide onClose={onClose}><div className="modal-content"><div className="info-strip">{zh.schema.text004}</div><SqlEditor value={originalDdl} readOnly height={370}/></div><footer className="modal-footer"><button onClick={onClose}>{zh.common.close}</button><span className="grow"/><button className="primary" onClick={() => { useWorkspace.getState().openTab({ kind: 'query', connectionId, database, title: formatText(zh.schema.text005, table), sql: formatText(zh.schema.text006, originalDdl.split('\n').map(line => '-- ' + line).join('\n')) }); onClose(); }}>{zh.schema.text007}</button></footer></Modal>;
@@ -55,23 +64,26 @@ function template(kind: string, database: string, name: string) {
   return `CREATE EVENT ${target}\nON SCHEDULE EVERY 1 DAY\nDO\n  SELECT 1;`;
 }
 
+/** 新数据库和视图等对象共享 SQL 确认入口；无默认数据库也能直接创建数据库。 */
 export function DdlDialog({ connectionId, database, object, onClose, onApplied }: { connectionId: string; database?: string; object?: DatabaseObject; onClose: () => void; onApplied: () => void }) {
   const [name, setName] = useState(object?.name ?? ''); const [kind, setKind] = useState(object?.kind ?? 'view'); const [sql, setSql] = useState(database ? template('view', database, '') : ''); const [busy, setBusy] = useState(!!object); const [error, setError] = useState('');
   const [applyTaskId, setApplyTaskId] = useState('');
   useEffect(() => {
     if (!object || !database) return;
-    void invoke('metadata.ddl', { connectionId, database, name: object.name, kind: object.kind }).then(ddl => {
+    // 定义读取不依赖树节点是否展开，连接准备失败时只展示原始错误。
+    void invoke('connections.open', { id: connectionId }).then(() => invoke('metadata.ddl', { connectionId, database, name: object.name, kind: object.kind })).then(ddl => {
       if (object.kind === 'view') setSql(ddl.replace(/^CREATE\s+/i, 'CREATE OR REPLACE '));
       else if (['procedure', 'function', 'trigger', 'event'].includes(object.kind)) setSql(`DROP ${object.kind.toUpperCase()} IF EXISTS ${qualifiedName(database, object.name)};\nDELIMITER $$\n${ddl.replace(/;\s*$/, '')}$$\nDELIMITER ;`);
       else setSql(ddl);
     }).catch(reason => setError(errorMessage(reason))).finally(() => setBusy(false));
   }, [connectionId, database, object]);
   const statement = database ? sql : name ? `CREATE DATABASE ${identifier(name)} CHARACTER SET utf8mb4;` : '';
+  /** 用户确认后独立准备连接并执行一次 SQL，连接失败或写入失败均不自动重试。 */
   async function apply() {
     if (!statement.trim()) { setError(zh.schema.text053); return; }
     if (!window.confirm(zh.schema.text054)) return;
     setBusy(true); setError(''); const taskId = uid(); setApplyTaskId(taskId);
-    try { await invoke('schema.apply', { connectionId, database: database ?? '', sql: statement, taskId }); useWorkspace.getState().notify(zh.schema.text055); onApplied(); onClose(); }
+    try { await invoke('connections.open', { id: connectionId }); await invoke('schema.apply', { connectionId, database: database ?? '', sql: statement, taskId }); useWorkspace.getState().notify(zh.schema.text055); onApplied(); onClose(); }
     catch (reason) { setError(errorMessage(reason)); } finally { setBusy(false); }
   }
   return <Modal title={!database ? zh.schema.text056 : object ? formatText(zh.schema.text057, kindLabels[object.kind], object.name) : zh.schema.text058} wide onClose={() => { if (!busy) onClose(); }}><div className="modal-content">{!object && <div className="form-grid"><Field label={database ? zh.schema.text059 : zh.schema.text060}><input value={name} onChange={event => { setName(event.target.value); if (database) setSql(template(kind, database, event.target.value)); }}/></Field>{database && <Field label={zh.schema.text061}><select value={kind} onChange={event => { const next = event.target.value as typeof kind; setKind(next); setSql(template(next, database, name)); }}>{['view', 'procedure', 'function', 'trigger', 'event'].map(key => <option key={key} value={key}>{kindLabels[key]}</option>)}</select></Field>}</div>}{object && object.kind !== 'view' && <p className="warning-text">{zh.schema.text062}</p>}<SqlEditor value={statement} onChange={database ? setSql : undefined} readOnly={!database} height={340}/><ErrorBox message={error}/></div><footer className="modal-footer"><span className="grow"/><button disabled={busy} onClick={onClose}>{zh.common.cancel}</button>{busy && applyTaskId && <button onClick={() => void invoke('query.cancel', { taskId: applyTaskId }).catch(reason => setError(errorMessage(reason)))}>{zh.schema.text047}</button>}<button className="primary" disabled={busy || !statement.trim()} onClick={() => void apply()}>{busy ? <Spinner/> : zh.common.executeSql}</button></footer></Modal>;

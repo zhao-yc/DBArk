@@ -11,10 +11,13 @@ export function ConnectionDialog({ profile, onClose }: { profile?: ConnectionPro
   const [form, setForm] = useState<ConnectionProfile>(() => profile ? structuredClone(profile) : { id: uid(), name: '', group: '', color: '#52c5a2', dialect: 'mysql', host: '127.0.0.1', port: 3306, user: 'root', rememberPassword: true });
   const [section, setSection] = useState<'general' | 'ssh' | 'tls'>('general');
   const [busy, setBusy] = useState(''); const [error, setError] = useState(''); const [result, setResult] = useState('');
+  /** 表单合并保留未编辑字段；秘密的 undefined 与空字符串语义不做归一化。 */
   const update = (patch: Partial<ConnectionProfile>) => setForm(previous => ({ ...previous, ...patch }));
   const ssh = form.ssh ?? { enabled: false, host: '', port: 22, user: '' };
   const tls = form.tls ?? { enabled: false, rejectUnauthorized: true };
+  /** 只更新 SSH 子配置，保留身份验证和指纹等其余字段。 */
   const setSsh = (patch: Partial<NonNullable<ConnectionProfile['ssh']>>) => update({ ssh: { ...ssh, ...patch } });
+  /** 只更新 TLS 子配置，证书路径仍由文件选择器提供。 */
   const setTls = (patch: Partial<NonNullable<ConnectionProfile['tls']>>) => update({ tls: { ...tls, ...patch } });
   /** 私钥与证书通过主进程的文件选择器获取，界面不读取文件内容。 */
   async function pick(purpose: 'key' | 'certificate', setter: (path: string) => void) {
