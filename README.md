@@ -6,7 +6,7 @@ DBArk 保留连接树、多标签查询和表格编辑等熟悉的工作方式�
 
 ## 下载
 
-在 [GitHub Releases](https://github.com/zhao-yc/DBArk/releases) 下载 Windows x64 安装程序、macOS arm64/x64 DMG 或 ZIP，以及源码和 SHA256 校验清单。`0.1.x` 为开发预览；Windows 未签名，macOS 仅有 ad-hoc 签名，没有发行证书及公证。安装步骤和数据保护边界见 [中文使用指南](docs/user-guide.md)。
+在 [GitHub Releases](https://github.com/zhao-yc/DBArk/releases) 下载 Windows x64 安装程序、macOS arm64/x64 DMG 或 ZIP，以及源码和 SHA256 校验清单。`0.x` 为开发预览；Windows 未签名，macOS 仅有 ad-hoc 签名，没有发行证书及公证。安装步骤和数据保护边界见 [中文使用指南](docs/user-guide.md)。
 
 ## 开发运行
 
@@ -61,4 +61,4 @@ pnpm dist:mac
 - [验证记录](docs/validation.md)
 - [版本记录](CHANGELOG.md)
 
-后续里程碑包括结构与数据同步、备份恢复、权限管理、监控、计划任务和建模。参见 [路线图](docs/roadmap.md)。
+持续开发目标为覆盖 Navicat 全部功能，按高频工作流程优先推进。已发布能力与后续缺项详见 [全功能覆盖清单](docs/navicat-coverage.md) 和 [路线图](docs/roadmap.md)。

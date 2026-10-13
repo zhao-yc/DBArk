@@ -92,7 +92,7 @@ export class Engine {
       });
       case 'table.page': return this.withConnection(input.connectionId, async managed => {
         const info = await metadata.tableInfo(managed, input.database, input.table);
-        const statement = buildPageSql(info, input.page, input.pageSize, input.filters, input.sort);
+        const statement = buildPageSql(info, input.page, input.pageSize, input.filters, input.sort, input.filterMode);
         // 筛选值用十六进制字面量嵌入已验证模板，避免文本协议受 SQL 转义模式影响。
         const sql = inlineParameters(statement.sql, statement.params);
         const query = managed.connection.query({ sql, rowsAsArray: true });

@@ -4,6 +4,8 @@
 
 原生 CI 冷启动安装产物时，工作台状态栏的就绪等待上限为 15 秒；仍要求状态栏真实可见，不跳过页面错误、隔离接口或沙箱检查，也不自动重试失败用例。
 
+桌面生命周期由 Playwright 自动夹具注册，跨多个测试文件运行时仍逐例启动和退出 Electron，不依赖模块首次导入时的副作用钩子。
+
 ```sh
 pnpm test:e2e
 ```
@@ -52,6 +54,20 @@ Remove-Item Env:DBARK_INTEGRATION_ENABLED
 - 连接表单测试并保存真实凭据，直接从尚未展开的连接创建独立数据库；从对象树进入查询，验证选中 SQL、多结果集、事务提交/回滚、取消后继续查询及重启后密码恢复。真实查询会话打开时，UI 和直接 IPC 均拒绝修改主机/端口且原连接继续可用，纯展示改名仍可保存。
 - v0.1.1 起，同一流程还通过 Ctrl/⌘+Enter 插入隔离计数表，由独立连接核对仅写入一行；覆盖关闭原连接标签后修改默认库：仅原连接的对象树折叠、数据库选择清空，另一连接对象树与活动查询保留；通过新查询表单和实际 `SELECT DATABASE()` 确认不会继承另一连接的库名。
 - 真实表格编辑在预览前不改变数据库，确认提交后由独立观察连接核验；覆盖单元格复制、类型化粘贴、多行 TSV，以及 CSV 字段映射、JSON 和 SQL 导入导出。导出的 SQL 会实际恢复到隔离库中的新表，对比中文文本与 DECIMAL 精度。
+- JSON 导入会先切换到不匹配编码，要求实际解析错误时旧映射消失、执行按钮禁用且没有创建写任务；恢复 UTF-8 并确认新映射就绪后仅点击一次导入。不用重试写入来掩盖预览与元数据的竞态。
+- 固定查询结果后执行新 SQL，再切回旧快照核对 BIGINT、DECIMAL、二进制、NULL 和中文；读取原 SQL、释放快照均走实际 UI。只读快照对话框内的执行快捷键不能向后台查询写入，取消任务留下的部分结果不能固定。
+
+`live-objects.spec.ts` 验证表设计器的字段、主键、唯一索引、外键组合及已有表修改，随后逐一创建、读取实际定义、编辑视图、存储过程、函数、触发器和事件。独立观察连接验证约束拒绝、级联删除、函数返回值、触发器和事件实际生效。
+
+`live-table-scale.spec.ts` 验证全部/任一组合、集合与区间筛选、条件编辑删除、直接跳页，以及 Unicode、NULL、空字符串、含逗号/空格的集合值。非法整数筛选后要求旧行清空，清除条件后可恢复。百万行用例另需显式设置 `DBARK_TEST_MILLION=1`，默认不会造数；数据在远程服务器内生成，测试客户端不持有百万行数组。实际网格每页 1000 行，滚到底后直接跳至第 1000 页核对末行，DOM 行数必须少于 100。
+
+```powershell
+$env:DBARK_INTEGRATION_ENABLED = '1'
+$env:DBARK_TEST_MILLION = '1'
+pnpm exec playwright test tests/e2e/live-table-scale.spec.ts tests/e2e/live-objects.spec.ts --output .cache/live-extended-e2e
+Remove-Item Env:DBARK_TEST_MILLION
+Remove-Item Env:DBARK_INTEGRATION_ENABLED
+```
 
 每例只创建并删除随机 `dbark_e2e_*` 数据库，不操作引擎套件的 `dbark_test_*` 库。清理前退出 Electron 以释放事务；结束后核对数据库已移除。原生确认框和文件选择框自动回答，执行链路与文件 IO 使用真实代码。导入导出的人工测试数据保留在被忽略的 `.cache/e2e-files`，便于失败排查。
 

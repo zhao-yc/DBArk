@@ -126,9 +126,28 @@ describe('结构设计', () => {
   });
   it('修改时生成一次 ALTER，避免自动增长列的索引在中间状态丢失', () => {
     const result = buildDesign({ ...design, originalName: 'items', name: 'items_new', columns: [{ ...design.columns[0] }, { ...design.columns[1], originalName: 'title', name: 'name' }] }, table);
-    expect(result.statements).toHaveLength(1); expect(result.sql).toContain('DROP PRIMARY KEY');
+    expect(result.statements).toHaveLength(1); expect(result.sql).not.toContain('DROP PRIMARY KEY');
     expect(result.sql).toContain('CHANGE COLUMN `title` `name`'); expect(result.sql).toContain('RENAME TO `测试库`.`items_new`');
     expect(result.warnings.join('')).toContain('不能');
+  });
+  it('仅改普通字段时保留未变索引和外键，避免同ALTER重建同名FK', () => {
+    const key = { name: 'fk_id', columns: ['id'], referencedDatabase: 'other', referencedTable: 'ids', referencedColumns: ['id'], onDelete: 'RESTRICT', onUpdate: 'CASCADE' };
+    const result = buildDesign({ ...design, foreignKeys: [key] }, { ...table, foreignKeys: [key] });
+    expect(result.statements).toHaveLength(1); expect(result.sql).not.toContain('DROP FOREIGN KEY');
+    expect(result.sql).not.toContain('ADD CONSTRAINT'); expect(result.sql).not.toContain('DROP PRIMARY KEY');
+  });
+  it('同名外键动作改变时先单独删除，并明确非原子执行边界', () => {
+    const key = { name: 'fk_id', columns: ['id'], referencedDatabase: 'other', referencedTable: 'ids', referencedColumns: ['id'], onDelete: 'RESTRICT', onUpdate: 'CASCADE' };
+    const result = buildDesign({ ...design, foreignKeys: [{ ...key, onDelete: 'CASCADE' }] }, { ...table, foreignKeys: [key] });
+    expect(result.statements).toHaveLength(2); expect(result.statements[0].sql).toBe('ALTER TABLE `测试库`.`items`\n  DROP FOREIGN KEY `fk_id`');
+    expect(result.statements[1].sql).toContain('ADD CONSTRAINT `fk_id`'); expect(result.statements[1].sql).not.toContain('DROP FOREIGN KEY');
+    expect(result.warnings.join('')).toContain('旧外键已删除');
+  });
+  it('索引列改名保留服务器维护的索引，删除索引只删除指定项', () => {
+    const extra = { name: 'ix_title', unique: false, columns: ['title'] };
+    const result = buildDesign({ ...design, columns: [design.columns[0], { ...design.columns[1], originalName: 'title', name: 'renamed' }], indexes: [...design.indexes, { ...extra, columns: ['renamed'] }] }, { ...table, indexes: [...table.indexes, extra] });
+    expect(result.sql).not.toContain('DROP INDEX'); expect(result.sql).not.toContain('ADD KEY');
+    expect(buildDesign(design, { ...table, indexes: [...table.indexes, extra] }).sql).toContain('DROP INDEX `ix_title`');
   });
   it('拒绝缺失字段索引及危险的外键动作', () => {
     expect(() => buildDesign({ ...design, indexes: [{ name: 'x', unique: false, columns: ['unknown'] }] })).toThrow('不存在');

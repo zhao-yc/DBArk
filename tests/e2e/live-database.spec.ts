@@ -1,116 +1,11 @@
-import { randomUUID } from 'node:crypto';
-import { existsSync, readFileSync } from 'node:fs';
 import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
-import mysql, { type Connection, type RowDataPacket } from 'mysql2/promise';
-import type { Locator, TestInfo } from '@playwright/test';
-import { test, expect, desktop, page, closed, pageErrors, answerDialogs, quitDesktop, launchDesktop } from './desktop-fixture';
+import type { RowDataPacket } from 'mysql2/promise';
+import type { Locator } from '@playwright/test';
+import { test, expect, desktop, page, quitDesktop, launchDesktop } from './desktop-fixture';
+import { enabled, environment, modifier, acceptNativeConfirmation, isolatedDatabase, openDatabaseQuery, writeSql, executeSql } from './live-helpers';
 
 test.use({ trace: 'off' });
-
-// 必须由调用者显式启用；仅有本地凭据文件时仍跳过，CI 不会自动连接私有服务器。
-const enabled = process.env.DBARK_INTEGRATION_ENABLED === '1';
-const environment: Record<string, string | undefined> = { ...process.env };
-if (enabled && existsSync('.cache/dbark-test.env')) {
-  for (const line of readFileSync('.cache/dbark-test.env', 'utf8').split(/\r?\n/)) {
-    const match = /^([A-Z][A-Z0-9_]*)=(.*)$/.exec(line.trim());
-    if (!match || environment[match[1]] !== undefined) continue;
-    const value = match[2];
-    environment[match[1]] = /^(['"]).*\1$/.test(value) ? value.slice(1, -1) : value;
-  }
-}
-
-interface LiveContext { observer: Connection; database: string; connectionName: string; connectionId: string; }
-const modifier = process.platform === 'darwin' ? 'Meta' : 'Control';
-
-/** Electron 的确认框走主进程同步原生接口，不能用 CDP 网页对话框接口接受。 */
-async function acceptNativeConfirmation() {
-  await desktop.evaluate(({ dialog }) => {
-    dialog.showMessageBoxSync = ((...args: unknown[]) => {
-      const options = args.at(-1) as Electron.MessageBoxSyncOptions;
-      globalThis.__dbarkE2EDialogs.calls.push({ title: options.title, message: options.message, buttons: options.buttons, response: 0 });
-      return 0;
-    }) as typeof dialog.showMessageBoxSync;
-  });
-}
-
-/** 连接表单走真实 UI；测试追踪关闭，避免把临时数据库密码记录进 Playwright 参数轨迹。 */
-async function connectAndCreate(database: string): Promise<Omit<LiveContext, 'observer'>> {
-  const connectionName = `E2E ${database}`;
-  await page.locator('.app-commandbar').getByRole('button', { name: '新建连接', exact: true }).click();
-  const form = page.getByRole('dialog', { name: '新建连接', exact: true });
-  await form.getByLabel('连接名称', { exact: true }).fill(connectionName);
-  await form.getByLabel('主机地址', { exact: true }).fill(environment.DBARK_TEST_HOST!);
-  await form.getByLabel('端口', { exact: true }).fill(environment.DBARK_TEST_PORT ?? '3306');
-  await form.getByLabel('用户名', { exact: true }).fill(environment.DBARK_TEST_USER ?? 'root');
-  await form.getByLabel('数据库密码', { exact: true }).fill(environment.DBARK_TEST_PASSWORD ?? '');
-  await form.getByLabel('连接分组', { exact: true }).fill('隔离数据库验证');
-  await form.getByRole('button', { name: '测试连接', exact: true }).click();
-  await expect(form.locator('.success-box')).toContainText('连接成功', { timeout: 20000 });
-  await form.getByRole('button', { name: '保存连接', exact: true }).click();
-  await expect(form).toBeHidden();
-  const profiles = await page.evaluate(() => window.dbark.invoke('connections.list', {}));
-  const connectionId = profiles.find(profile => profile.name === connectionName)!.id;
-  await page.locator('.connection-row').hover();
-  await page.locator('.connection-row').getByRole('button', { name: '创建数据库', exact: true }).click();
-  const create = page.getByRole('dialog', { name: '创建数据库', exact: true });
-  await create.getByLabel('数据库名称', { exact: true }).fill(database);
-  await expect(create.locator('.monaco-editor .view-lines')).toContainText('CREATE DATABASE');
-  await acceptNativeConfirmation();
-  await create.getByRole('button', { name: '执行 SQL', exact: true }).click();
-  await expect(create).toBeHidden({ timeout: 20000 });
-  await page.locator('.connection-row .tree-label').click();
-  await expect(page.locator('.database-row').getByRole('button', { name: database, exact: true })).toBeVisible();
-  return { database, connectionName, connectionId };
-}
-
-/** 外部观察连接仅用于断言和清理，不替代被测应用的连接、查询或提交链路。 */
-async function isolatedDatabase(body: (context: LiveContext) => Promise<void>, testInfo: TestInfo) {
-  if (!environment.DBARK_TEST_HOST || !environment.DBARK_TEST_USER) throw new Error('启用实库 E2E 时必须提供已核对服务器的测试连接配置');
-  const database = `dbark_e2e_${Date.now().toString(36)}_${randomUUID().replaceAll('-', '').slice(0, 8)}`;
-  const observer = await mysql.createConnection({ host: environment.DBARK_TEST_HOST, port: Number(environment.DBARK_TEST_PORT ?? 3306), user: environment.DBARK_TEST_USER, password: environment.DBARK_TEST_PASSWORD, charset: 'utf8mb4', supportBigNumbers: true, bigNumberStrings: true, decimalNumbers: false, connectTimeout: 15000 });
-  try {
-    const context = await connectAndCreate(database);
-    await body({ observer, ...context });
-    expect(pageErrors).toEqual([]);
-  } catch (error) {
-    if (!closed) await page.screenshot({ path: testInfo.outputPath('live-failure.png') }).catch(() => undefined);
-    throw error;
-  } finally {
-    // 先退出应用，释放可能尚未回滚的会话，再清理本例唯一库；不触碰引擎测试库。
-    try { if (!closed) { await answerDialogs([1, 1]); await quitDesktop(); } }
-    finally {
-      try {
-        if (!/^dbark_e2e_[a-z0-9_]+$/.test(database)) throw new Error('拒绝清理非 E2E 隔离库');
-        await observer.query({ sql: `DROP DATABASE IF EXISTS \`${database}\``, timeout: 15000 });
-        const [remaining] = await observer.query<RowDataPacket[]>('SELECT SCHEMA_NAME FROM information_schema.SCHEMATA WHERE SCHEMA_NAME = ?', [database]);
-        expect(remaining).toHaveLength(0);
-      } finally { await observer.end(); }
-    }
-  }
-}
-
-/** 选中数据库节点后通过对象树新建查询，确保 SQL 会话绑定正确的库。 */
-async function openDatabaseQuery(database: string) {
-  const row = page.locator('.database-row').filter({ has: page.getByRole('button', { name: database, exact: true }) });
-  await row.hover();
-  await row.getByRole('button', { name: '新建数据库查询', exact: true }).click();
-  await expect(page.locator('.query-tab:visible .monaco-editor')).toBeVisible();
-}
-
-/** 使用 Monaco 的真实键盘输入，不通过内部模型或 IPC 绕过编辑器。 */
-async function writeSql(source: string) {
-  const input = page.locator('.query-tab:visible .monaco-editor').getByRole('textbox');
-  await input.focus(); await page.keyboard.press(`${modifier}+A`); await page.keyboard.insertText(source);
-}
-
-async function executeSql(source: string) {
-  await writeSql(source);
-  const query = page.locator('.query-tab:visible');
-  await query.getByRole('button', { name: '执行全部', exact: true }).click();
-  await expect(query.getByRole('button', { name: '停止', exact: true })).toBeDisabled({ timeout: 20000 });
-  await expect(query.locator('.error-box')).toHaveCount(0);
-}
 
 /** 打开的标签和真实会话分别保护 UI 与 IPC 保存入口，拒绝切换地址时必须保留原连接。 */
 async function verifyConnectionChangeGuard(database: string, connectionName: string, connectionId: string) {
@@ -213,6 +108,7 @@ async function chooseTransferFile(path: string, mode: 'import' | 'export') {
   }, { path, mode });
 }
 
+/** 文件预览完成后点击执行；失败保存脱敏任务状态帮助区分数据库错误与交互未触发。 */
 async function transfer(table: Locator, file: string, mode: 'import' | 'export', format: 'csv' | 'json' | 'sql', rows: number, mapping?: Record<string, string>) {
   await chooseTransferFile(file, mode);
   await table.getByRole('button', { name: mode === 'import' ? '导入' : '导出', exact: true }).click();
@@ -222,10 +118,34 @@ async function transfer(table: Locator, file: string, mode: 'import' | 'export',
   await modal.locator('.file-picker').click();
   if (mode === 'import' && format !== 'sql') {
     await expect(modal.locator('.mapping-grid')).toBeVisible();
+    await expect(modal.locator('.spinner')).toHaveCount(0);
     if (mapping) for (const [source, target] of Object.entries(mapping)) await modal.getByLabel(`映射字段 ${source}`, { exact: true }).selectOption(target);
+    else {
+      // JSON 的同名映射必须等元数据加载后真实就绪，不能只凭预览表格出现就开始写入。
+      for (const field of ['id', 'title', 'note', 'amount']) await expect(modal.getByLabel(`映射字段 ${field}`, { exact: true })).toHaveValue(field);
+    }
+    if (format === 'json') {
+      // 把真实 UTF-8 文件切成不匹配编码，旧映射必须失效且无法执行；恢复后只点击一次导入。
+      const previousTasks = await page.evaluate(async () => (await window.dbark.invoke('tasks.list', {})).length);
+      await modal.getByRole('combobox', { name: /^文件编码/ }).selectOption('utf16le');
+      await expect(modal.locator('.error-box')).toBeVisible();
+      await expect(modal.locator('.mapping-grid')).toHaveCount(0);
+      await expect(modal.getByRole('button', { name: '开始导入', exact: true })).toBeDisabled();
+      expect(await page.evaluate(async () => (await window.dbark.invoke('tasks.list', {})).length)).toBe(previousTasks);
+      await modal.getByRole('combobox', { name: /^文件编码/ }).selectOption('utf8');
+      await expect(modal.locator('.mapping-grid')).toBeVisible();
+      await expect(modal.locator('.spinner')).toHaveCount(0);
+      await expect(modal.locator('.error-box')).toHaveCount(0);
+      for (const field of ['id', 'title', 'note', 'amount']) await expect(modal.getByLabel(`映射字段 ${field}`, { exact: true })).toHaveValue(field);
+    }
   }
   await modal.getByRole('button', { name: mode === 'import' ? '开始导入' : '开始导出', exact: true }).click();
-  await expect(modal.locator('.success-box')).toContainText(`${rows} 行`, { timeout: 20000 });
+  try { await expect(modal.locator('.success-box')).toContainText(`${rows} 行`, { timeout: 20000 }); }
+  catch (reason) {
+    const tasks = await page.evaluate(() => window.dbark.invoke('tasks.list', {}));
+    await writeFile('.cache/e2e-transfer-failure.json', JSON.stringify({ mode, format, tasks }, null, 2));
+    throw reason;
+  }
   await expect(modal.locator('.error-box')).toHaveCount(0);
   await modal.getByRole('button', { name: '完成', exact: true }).click();
   await expect(modal).toBeHidden();
@@ -248,6 +168,35 @@ test.describe('远程真实数据库桌面工作流', () => {
       await executeSql('SELECT 1 AS first_result; SELECT 2 AS second_result;');
       await query.getByRole('button', { name: '结果 2', exact: true }).click();
       await expect(query.locator('.result-body')).toContainText('second_result');
+      // 固定快照保留精度、二进制与 NULL；新查询不得替换旧值，释放后回到本次结果。
+      await executeSql("SELECT CAST(9223372036854775807 AS SIGNED) AS exact_bigint, CAST(12345678901234567890.123456 AS DECIMAL(30,6)) AS exact_decimal, NULL AS missing_value, X'00ff' AS binary_value, '固定中文🚀' AS text_value;");
+      await query.getByRole('button', { name: '固定结果', exact: true }).click();
+      await executeSql("SELECT '新查询结果' AS latest;");
+      await expect(query.locator('.result-body')).toContainText('新查询结果');
+      await query.getByRole('button', { name: '固定 1', exact: true }).click();
+      await expect(query.getByRole('button', { name: '固定 1', exact: true })).toHaveAttribute('aria-pressed', 'true');
+      for (const value of ['9223372036854775807', '12345678901234567890.123456', 'NULL', '0x00ff', '固定中文🚀']) await expect(query.getByRole('gridcell', { name: value, exact: true })).toBeVisible();
+      await expect(query.locator('.result-body')).not.toContainText('新查询结果');
+      await page.screenshot({ path: testInfo.outputPath('live-pinned-result.png') });
+      // 只读快照弹窗获得焦点时，快捷键不得穿透到后台正在编辑的写 SQL。
+      await observer.query('CREATE TABLE ' + database + '.snapshot_shortcut_probe (id INT AUTO_INCREMENT PRIMARY KEY)');
+      await writeSql('INSERT INTO snapshot_shortcut_probe VALUES (NULL);');
+      const tasksBeforeSnapshot = await page.evaluate(async () => (await window.dbark.invoke('tasks.list', {})).length);
+      await query.getByRole('button', { name: '快照 SQL', exact: true }).click();
+      const snapshotSql = page.getByRole('dialog', { name: '固定结果的原 SQL', exact: true });
+      await expect(snapshotSql.locator('.monaco-editor .view-lines')).toContainText('固定中文🚀');
+      await expect(snapshotSql.locator('.monaco-editor .view-lines')).not.toContainText('新查询结果');
+      await snapshotSql.locator('.monaco-editor').getByRole('textbox').focus();
+      await page.keyboard.press(`${modifier}+Enter`);
+      // 同时给 Electron 菜单快捷键和 Monaco 命令分发留出实际处理时间，再核对数据库与任务均未变化。
+      await page.waitForTimeout(350);
+      const [snapshotWrites] = await observer.query<RowDataPacket[]>('SELECT COUNT(*) AS total FROM ' + database + '.snapshot_shortcut_probe');
+      expect(Number(snapshotWrites[0].total)).toBe(0);
+      expect(await page.evaluate(async () => (await window.dbark.invoke('tasks.list', {})).length)).toBe(tasksBeforeSnapshot);
+      await snapshotSql.getByRole('button', { name: '关闭', exact: true }).click();
+      await query.getByRole('button', { name: '释放 固定 1', exact: true }).click();
+      await expect(query.locator('.pinned-results')).toHaveCount(0);
+      await expect(query.locator('.result-body')).toContainText('新查询结果');
       const renamedConnection = await verifyConnectionChangeGuard(database, connectionName, connectionId);
       await executeSql('CREATE TABLE transaction_probe (id INT PRIMARY KEY, note VARCHAR(120)) ENGINE=InnoDB; CREATE TABLE shortcut_probe (id INT AUTO_INCREMENT PRIMARY KEY, note VARCHAR(120)) ENGINE=InnoDB;');
       // 同时经过 Monaco 与 Electron 快捷键入口时，只能提交一次写操作；观察连接核对真实行数。
@@ -271,12 +220,19 @@ test.describe('远程真实数据库桌面工作流', () => {
       await executeSql("INSERT INTO transaction_probe VALUES (2,'应提交');");
       await query.getByRole('button', { name: '提交', exact: true }).click();
       await expect.poll(async () => { const [rows] = await observer.query<RowDataPacket[]>(`SELECT COUNT(*) AS total FROM \`${database}\`.transaction_probe`); return Number(rows[0].total); }).toBe(1);
-      await writeSql('SELECT SLEEP(30) AS cancelled_query;');
+      await executeSql("SELECT '取消后仍保留的快照' AS preserved;");
+      await query.getByRole('button', { name: '固定结果', exact: true }).click();
+      await writeSql('SELECT 1 AS partial_result; SELECT SLEEP(30) AS cancelled_query;');
       await query.getByRole('button', { name: '执行全部', exact: true }).click();
       await expect(query.getByRole('button', { name: '停止', exact: true })).toBeEnabled();
+      await expect(query.locator('.result-body')).toContainText('partial_result');
       await query.getByRole('button', { name: '停止', exact: true }).click();
       await expect(query.getByRole('button', { name: '停止', exact: true })).toBeDisabled({ timeout: 15000 });
       await expect.poll(() => page.evaluate(async () => (await window.dbark.invoke('tasks.list', {})).some(task => task.status === 'cancelled'))).toBe(true);
+      await expect(query.getByRole('button', { name: '固定结果', exact: true })).toBeDisabled();
+      await query.getByRole('button', { name: '固定 2', exact: true }).click();
+      await expect(query.locator('.result-body')).toContainText('取消后仍保留的快照');
+      await query.getByRole('button', { name: '释放 固定 2', exact: true }).click();
       await executeSql("SELECT '取消后仍可查询' AS ready;");
       await expect(query.locator('.result-body')).toContainText('取消后仍可查询');
       await page.screenshot({ path: testInfo.outputPath('live-query.png') });

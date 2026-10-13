@@ -1,4 +1,4 @@
-import { test, expect, _electron as electron, type ElectronApplication, type Page } from '@playwright/test';
+import { test as baseTest, expect, _electron as electron, type ElectronApplication, type Page } from '@playwright/test';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { basename, dirname, join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -8,7 +8,7 @@ import { promisify } from 'node:util';
 interface RecordedDialog { title?: string; message: string; buttons?: string[]; response: number; }
 declare global { var __dbarkE2EDialogs: { answers: number[]; calls: RecordedDialog[] }; }
 
-export { test, expect };
+export { expect };
 export let desktop: ElectronApplication;
 export let page: Page;
 export let dataDir: string;
@@ -76,23 +76,27 @@ async function forceStopOwnProcess() {
   else child.kill('SIGKILL');
 }
 
-test.beforeEach(async () => {
-  pageErrors = [];
-  dataDir = await mkdtemp(join(tmpdir(), 'dbark-e2e-'));
-  await launchDesktop();
-});
-
-test.afterEach(async () => {
-  try {
-    if (!closed) {
-      // 仅清理阶段允许放弃本例留下的草稿，具体退出测试自行核对对话框和保存结果。
-      await answerDialogs([1, 1]);
-      await quitDesktop();
+/** 自动夹具随每个用例运行，不依赖模块首次导入时注册钩子，避免跨文件复用已关闭窗口。 */
+export const test = baseTest.extend<{ desktopLifetime: void }>({
+  desktopLifetime: [async ({}, use) => {
+    pageErrors = [];
+    dataDir = await mkdtemp(join(tmpdir(), 'dbark-e2e-'));
+    try {
+      await launchDesktop();
+      await use();
+    } finally {
+      try {
+        if (!closed) {
+          // 仅清理阶段允许放弃本例留下的草稿，具体退出测试自行核对对话框和保存结果。
+          await answerDialogs([1, 1]);
+          await quitDesktop();
+        }
+      } finally {
+        await forceStopOwnProcess();
+        // 删除前核对绝对路径，确保只能移除本测试创建的临时目录。
+        if (dirname(resolve(dataDir)) !== resolve(tmpdir()) || !basename(dataDir).startsWith('dbark-e2e-')) throw new Error('拒绝清理测试临时目录以外的路径');
+        await rm(dataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+      }
     }
-  } finally {
-    await forceStopOwnProcess();
-    // 删除前核对绝对路径，确保只能移除本测试创建的临时目录。
-    if (dirname(resolve(dataDir)) !== resolve(tmpdir()) || !basename(dataDir).startsWith('dbark-e2e-')) throw new Error('拒绝清理测试临时目录以外的路径');
-    await rm(dataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
-  }
+  }, { auto: true }]
 });

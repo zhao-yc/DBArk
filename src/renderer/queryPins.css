@@ -1,0 +1,9 @@
+/* 固定结果独立成行，多个快照不会挤压执行和事务按钮。 */
+.pinned-results{display:flex;align-items:center;gap:6px;padding:5px 12px;background:var(--surface);border-bottom:1px solid var(--line);flex-shrink:0;overflow-x:auto}
+.pinned-results>span{font-size:10px;color:var(--muted);white-space:nowrap}
+.pinned-result{display:flex;flex-shrink:0;border:1px solid var(--line);border-radius:5px;overflow:hidden}
+.pinned-result.selected{border-color:var(--accent);background:var(--accent-bg)}
+.pinned-result button{background:transparent;border:0;border-radius:0;padding:2px 6px;min-height:24px;font-size:10px}
+.pinned-result.selected button{color:var(--accent)}
+.pinned-results>.current-results{font-size:10px;min-height:24px;padding:2px 8px}
+.pinned-results>.current-results.selected{color:var(--accent);background:var(--accent-bg)}

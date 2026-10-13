@@ -1,4 +1,5 @@
-import type { CellValue, DataRow, FilterRule, RowChange, SortRule, SqlPreview, TableDesign, TableInfo } from '../shared/contracts';
+import type { CellValue, ColumnInfo, DataRow, FilterMode, FilterRule, RowChange, SortRule, SqlPreview, TableDesign, TableInfo } from '../shared/contracts';
+import { validateFilterRules } from '../shared/filtering';
 
 /** 标识符始终作为标识符引用，不允许空值、NUL 或超过 MySQL 限制的名称。 */
 export function identifier(value: string): string {
@@ -124,24 +125,44 @@ export class SqlScriptScanner {
 /** 对编辑器已有的完整文本执行同一套扫描规则，不另建简化版分号切分逻辑。 */
 export function splitSql(sql: string, noBackslashEscapes = false): string[] { return new SqlScriptScanner(noBackslashEscapes).push(sql, true); }
 
-/** 排序与筛选严格使用数据库元数据白名单，值独立绑定，避免拼接表达式。 */
-export function buildPageSql(info: TableInfo, page: number, pageSize: number, filters: FilterRule[], sort: SortRule[]): { sql: string; params: CellValue[] } {
-  if (!Number.isSafeInteger(page) || page < 1 || !Number.isSafeInteger(pageSize) || pageSize < 1 || pageSize > 1000 || !Number.isSafeInteger((page - 1) * pageSize)) throw new Error('分页参数无效，页大小范围为 1～1000');
-  const names = new Set(info.columns.map(column => column.name));
+/** 精确数值参数显式转为 DECIMAL，防止 MySQL 将字符串与 BIGINT 比较时降为 DOUBLE。 */
+function filterParameter(column: ColumnInfo, value: string, pattern: boolean): string {
+  if (pattern || !/^(?:TINYINT|SMALLINT|MEDIUMINT|INT|INTEGER|BIGINT|DECIMAL|NUMERIC|FIXED|BIT|YEAR)\b/i.test(column.type)) return '?';
+  if (!/^[+-]?(?:\d+(?:\.\d*)?|\.\d+)$/.test(value)) throw new Error(`字段 ${column.name} 的筛选值必须为普通十进制数，不接受科学计数法或其他文本`);
+  const [integer, fraction = ''] = value.replace(/^[+-]/, '').split('.');
+  const integerDigits = integer.replace(/^0+/, '').length;
+  // MySQL 支持 30 位小数；元数据明确给出更高位数时保留 MariaDB 该列已支持的尺度。
+  const declaredScale = Number(/^(?:DECIMAL|NUMERIC|FIXED)\(\d+,\s*(\d+)\)/i.exec(column.type)?.[1] ?? 0);
+  const maxScale = Math.max(30, declaredScale);
+  if (fraction.length > maxScale || integerDigits + fraction.length > 65) throw new Error(`字段 ${column.name} 的筛选值超出精确比较范围：最多 65 位数字和 ${maxScale} 位小数`);
+  return `CAST(? AS DECIMAL(65,${fraction.length}))`;
+}
+
+/** 排序与筛选严格使用元数据白名单，值独立绑定；条件与整组均加括号保证组合语义。 */
+export function buildPageSql(info: TableInfo, page: number, pageSize: number, filters: FilterRule[], sort: SortRule[], filterMode: FilterMode = 'all'): { sql: string; params: CellValue[] } {
+  if (!Number.isSafeInteger(page) || page < 1 || page > 10000000 || !Number.isSafeInteger(pageSize) || pageSize < 1 || pageSize > 1000 || !Number.isSafeInteger((page - 1) * pageSize)) throw new Error('分页参数无效，页号范围为 1～10000000，页大小范围为 1～1000');
+  validateFilterRules(filters, filterMode);
+  if (!Array.isArray(sort) || sort.length > 20) throw new Error('排序规则不能超过 20 条');
+  const columns = new Map(info.columns.map(column => [column.name, column]));
   const params: CellValue[] = [];
   const clauses = filters.map(filter => {
-    if (!names.has(filter.column)) throw new Error(`未知筛选字段：${filter.column}`);
+    const metadata = columns.get(filter.column);
+    if (!metadata) throw new Error(`未知筛选字段：${filter.column}`);
     const column = identifier(filter.column);
     if (filter.operator === 'IS NULL' || filter.operator === 'IS NOT NULL') return `${column} ${filter.operator}`;
-    if (!['=', '!=', '>', '>=', '<', '<=', 'LIKE'].includes(filter.operator)) throw new Error('不支持的筛选操作符');
-    params.push(filter.value ?? ''); return `${column} ${filter.operator} ?`;
+    /** 参数按条件原顺序加入，不拆分逗号、裁剪空白或转换为 JavaScript 数值。 */
+    const parameter = (value: string) => { const sql = filterParameter(metadata, value, filter.operator === 'LIKE' || filter.operator === 'NOT LIKE'); params.push(value); return sql; };
+    if (filter.operator === 'IN' || filter.operator === 'NOT IN') return `${column} ${filter.operator} (${filter.values!.map(parameter).join(', ')})`;
+    if (filter.operator === 'BETWEEN') return `${column} BETWEEN ${parameter(filter.values![0])} AND ${parameter(filter.values![1])}`;
+    return `${column} ${filter.operator} ${parameter(filter.value ?? '')}`;
   });
-  const order = sort.length ? sort : info.editableKey.map(column => ({ column, direction: 'ASC' as const }));
+  // 非唯一排序补上可靠行键作为并列项顺序，避免跳页时相同排序值的行随机换位。
+  const order = [...sort, ...info.editableKey.filter(column => !sort.some(rule => rule.column === column)).map(column => ({ column, direction: 'ASC' as const }))];
   const orderSql = order.map(rule => {
-    if (!names.has(rule.column) || !['ASC', 'DESC'].includes(rule.direction)) throw new Error('排序字段或方向无效');
+    if (!columns.has(rule.column) || !['ASC', 'DESC'].includes(rule.direction)) throw new Error('排序字段或方向无效');
     return `${identifier(rule.column)} ${rule.direction}`;
   }).join(', ');
-  return { sql: `SELECT * FROM ${qualified(info.database, info.name)}${clauses.length ? ' WHERE ' + clauses.join(' AND ') : ''}${orderSql ? ' ORDER BY ' + orderSql : ''} LIMIT ${pageSize + 1} OFFSET ${(page - 1) * pageSize}`, params };
+  return { sql: `SELECT * FROM ${qualified(info.database, info.name)}${clauses.length ? ' WHERE (' + clauses.map(clause => `(${clause})`).join(filterMode === 'all' ? ' AND ' : ' OR ') + ')' : ''}${orderSql ? ' ORDER BY ' + orderSql : ''} LIMIT ${pageSize + 1} OFFSET ${(page - 1) * pageSize}`, params };
 }
 
 /** 全旧值比较避免丢失更新；唯一键是可靠定位的必要条件，不能仅凭 LIMIT 1 写入。 */
@@ -192,7 +213,7 @@ export function columnType(value: string): string {
   throw new Error(`字段类型不受支持或包含非法 SQL：${value}`);
 }
 
-/** 以完整设计与数据库现状生成单个 ALTER，外键、索引、字段顺序都纳入变更。 */
+/** 以完整设计和现状生成结构差异；保留未变索引/外键，同名外键修改明确分步预览。 */
 export function buildDesign(design: TableDesign, original?: TableInfo, noBackslashEscapes = false): SqlPreview {
   if (!design.columns.length) throw new Error('表至少需要一个字段');
   const names = new Set(design.columns.map(column => column.name));
@@ -217,6 +238,7 @@ export function buildDesign(design: TableDesign, original?: TableInfo, noBacksla
     return items.map(identifier).join(', ');
   };
   if (new Set(design.indexes.map(index => index.name)).size !== design.indexes.length) throw new Error('索引名称重复');
+  if (new Set(design.foreignKeys.map(key => key.name)).size !== design.foreignKeys.length) throw new Error('外键名称重复');
   const indexes = design.indexes.map(index => index.name === 'PRIMARY' ? `PRIMARY KEY (${localColumns(index.columns)})` : `${index.unique ? 'UNIQUE ' : ''}KEY ${identifier(index.name)} (${localColumns(index.columns)})`);
   const foreignKeys = design.foreignKeys.map(key => {
     if (key.columns.length !== key.referencedColumns.length || !key.columns.length) throw new Error('外键与引用字段数量必须一致');
@@ -227,23 +249,39 @@ export function buildDesign(design: TableDesign, original?: TableInfo, noBacksla
   if (preserveCollation && !/^[a-zA-Z0-9_]+$/.test(preserveCollation)) throw new Error('原表排序规则名称无效');
   const options = `ENGINE=${design.engine.toUpperCase()} DEFAULT CHARACTER SET=${design.charset}${preserveCollation ? ' COLLATE=' + preserveCollation : ''} COMMENT=${literal(design.comment)}`;
   let sql: string;
+  const preliminary: string[] = [];
   if (!original) sql = `CREATE TABLE ${qualified(design.database, design.name)} (\n  ${[...design.columns.map(columnSql), ...indexes, ...foreignKeys].join(',\n  ')}\n) ${options}`;
   else {
     if (original.columns.some(column => column.generated)) throw new Error('含生成列的表请通过 SQL 定义编辑，避免设计器丢失生成表达式');
     const oldNames = new Set(original.columns.map(column => column.name));
     const retained = new Set(design.columns.map(column => column.originalName ?? column.name));
-    const changes: string[] = [...original.foreignKeys.map(key => `DROP FOREIGN KEY ${identifier(key.name)}`), ...original.indexes.map(index => index.name === 'PRIMARY' ? 'DROP PRIMARY KEY' : `DROP INDEX ${identifier(index.name)}`)];
+    // 字段改名由服务器同步更新索引/FK的本表列引用，等价设计无需删除重建。
+    const renamed = new Map(design.columns.map(column => [column.originalName ?? column.name, column.name]));
+    const sameColumns = (left: string[], right: string[]) => left.length === right.length && left.every((name, index) => (renamed.get(name) ?? name) === right[index]);
+    const unchangedIndexes = new Set(original.indexes.filter(old => design.indexes.some(next => next.name === old.name && next.unique === old.unique && sameColumns(old.columns, next.columns))).map(index => index.name));
+    const unchangedForeignKeys = new Set(original.foreignKeys.filter(old => design.foreignKeys.some(next => next.name === old.name && sameColumns(old.columns, next.columns) && next.referencedDatabase === old.referencedDatabase && next.referencedTable === old.referencedTable && JSON.stringify(next.referencedColumns) === JSON.stringify(old.referencedColumns) && next.onUpdate.toUpperCase() === old.onUpdate.toUpperCase() && next.onDelete.toUpperCase() === old.onDelete.toUpperCase())).map(key => key.name));
+    const removedForeignKeys = original.foreignKeys.filter(key => !unchangedForeignKeys.has(key.name));
+    const reusedNames = removedForeignKeys.filter(key => design.foreignKeys.some(next => next.name === key.name));
+    // MySQL 同一 ALTER 内 DROP/ADD 同名 FK 会报重复；先单独删除，并在预览中说明非原子边界。
+    if (reusedNames.length) preliminary.push(`ALTER TABLE ${qualified(design.database, original.name)}\n  ${reusedNames.map(key => `DROP FOREIGN KEY ${identifier(key.name)}`).join(',\n  ')}`);
+    const changes: string[] = [
+      ...removedForeignKeys.filter(key => !reusedNames.includes(key)).map(key => `DROP FOREIGN KEY ${identifier(key.name)}`),
+      ...original.indexes.filter(index => !unchangedIndexes.has(index.name)).map(index => index.name === 'PRIMARY' ? 'DROP PRIMARY KEY' : `DROP INDEX ${identifier(index.name)}`),
+    ];
     for (const column of original.columns) if (!retained.has(column.name)) changes.push(`DROP COLUMN ${identifier(column.name)}`);
     design.columns.forEach((column, index) => {
       const oldName = column.originalName ?? column.name;
       const action = oldNames.has(oldName) ? `CHANGE COLUMN ${identifier(oldName)}` : 'ADD COLUMN';
       changes.push(`${action} ${columnSql(column)}${index ? ' AFTER ' + identifier(design.columns[index - 1].name) : ' FIRST'}`);
     });
-    changes.push(...indexes.map(index => 'ADD ' + index), ...foreignKeys.map(key => 'ADD ' + key), options);
+    changes.push(...indexes.filter((_, index) => !unchangedIndexes.has(design.indexes[index].name)).map(index => 'ADD ' + index), ...foreignKeys.filter((_, index) => !unchangedForeignKeys.has(design.foreignKeys[index].name)).map(key => 'ADD ' + key), options);
     if (design.name !== original.name) changes.push(`RENAME TO ${qualified(design.database, design.name)}`);
     sql = `ALTER TABLE ${qualified(design.database, original.name)}\n  ${changes.join(',\n  ')}`;
   }
-  return { sql: sql + ';', statements: [{ sql, params: [] }], warnings: original ? ['MySQL/MariaDB 的 DDL 通常会隐式提交，执行后不能通过事务回滚。', '修改已有表会重建设计器所列的索引和外键；请检查预览。'] : [] };
+  const statements = [...preliminary, sql].map(statement => ({ sql: statement, params: [] }));
+  const warnings = original ? ['MySQL/MariaDB 的 DDL 通常会隐式提交，执行后不能通过事务回滚。', '仅删除或重建已变更的索引和外键；请检查预览中的结构差异。'] : [];
+  if (preliminary.length) warnings.push('同名外键的修改需要分两条 ALTER 执行：第一条删除旧外键，第二条修改表并添加新外键。若第二条失败或操作被取消，旧外键已删除，需按原定义恢复；执行期间应暂停相关写入。');
+  return { sql: statements.map(statement => statement.sql + ';').join('\n\n'), statements, warnings };
 }
 
 /** SQL 导出使用十六进制文字量，避免字符集、反斜线模式和二进制数据改变原值。 */

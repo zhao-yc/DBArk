@@ -14,6 +14,8 @@
 
 `engine-boundary.integration.test.ts` 验证只读账号拒绝写入、只中断测试会话时不重放写操作、SQL 结构和数据导出恢复、百万行服务端分页与流式导出及取消清理。此套件的管理员连接直连专用实例，SSH/TLS 完整流程由核心套件单独验收。
 
+`engine-filter.integration.test.ts` 验证集合、区间、否定模式、全部/任一条件、SQL 模式及精确数值筛选；MariaDB 独立覆盖 38 位小数。`engine-edit-precision.integration.test.ts` 验证相邻 BIGINT 定位、目标已被删除及 DECIMAL 末位并发修改后整批回滚。`engine-schema.integration.test.ts` 验证普通字段变更保留索引和外键，以及同名外键分步修改的实际约束行为。本轮五个版本的结果见 [2026-10-14 记录](acceptance-20261014.md)，不能把数据库专属跳过算作通过。
+
 百万行用例打印实际行数、末页大小、造数/分页/导出耗时、文件字节数及 RSS 采样峰值。内存上限是针对本用例的回归门槛，不代表所有操作系统或字段分布的性能承诺。测试产生的密码只保存在受忽略的本地环境文件中；日志和提交文件不得包含密码、私钥、业务数据。
 
 ## mysql2 的 TLS 补丁

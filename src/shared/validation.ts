@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import type { Command } from './contracts';
+import { FILTER_LIMITS, validateFilterRules } from './filtering';
 
 const id = z.string().min(1).max(200);
 const name = z.string().min(1).max(256);
@@ -15,6 +16,13 @@ const changes = z.array(z.discriminatedUnion('kind', [z.object({ kind: z.literal
 const index = z.object({ name, unique: z.boolean(), columns: z.array(name).min(1) }).strict();
 const foreignKey = z.object({ name, columns: z.array(name).min(1), referencedDatabase: name, referencedTable: name, referencedColumns: z.array(name).min(1), onUpdate: z.enum(['RESTRICT','CASCADE','SET NULL','NO ACTION']), onDelete: z.enum(['RESTRICT','CASCADE','SET NULL','NO ACTION']) }).strict();
 const fileOptions = { ...target, fileToken: id, format: z.enum(['csv','json','sql']), encoding: z.enum(['utf8','utf16le','gb18030']), taskId: id };
+const filterValue = z.string().max(FILTER_LIMITS.valueLength, `每个筛选值不能超过 ${FILTER_LIMITS.valueLength} 个字符`);
+const filterRule = z.object({ column: name, operator: z.enum(['=','!=','>','>=','<','<=','LIKE','NOT LIKE','IN','NOT IN','BETWEEN','IS NULL','IS NOT NULL']), value: filterValue.optional(), values: z.array(filterValue).max(FILTER_LIMITS.setValues, `筛选集合不能超过 ${FILTER_LIMITS.setValues} 个值`).optional() }).strict();
+/** IPC 同时约束单项形状及整个集合体积，错误由共享校验返回中文说明。 */
+const tablePage = z.object({ ...target, page: z.number().int().min(1).max(10000000), pageSize: z.number().int().min(1).max(1000), filters: z.array(filterRule).max(FILTER_LIMITS.conditions), filterMode: z.enum(['all','any']).optional(), sort: z.array(z.object({ column: name, direction: z.enum(['ASC','DESC']) }).strict()).max(20) }).strict().superRefine((input, context) => {
+  try { validateFilterRules(input.filters, input.filterMode); }
+  catch (error) { context.addIssue({ code: 'custom', path: ['filters'], message: error instanceof Error ? error.message : '筛选条件无效' }); }
+});
 export const commandSchemas: Record<Command, z.ZodType> = {
   'app.info': empty,
   'app.setDirty': z.object({ dirty: z.boolean() }).strict(),
@@ -29,7 +37,7 @@ export const commandSchemas: Record<Command, z.ZodType> = {
   'query.explain': z.object({ sessionId: id, sql: text.min(1), taskId: id, maxRows: z.number().int().min(1).max(100000) }).strict(),
   'query.cancel': z.object({ taskId: id }).strict(),
   'query.transaction': z.object({ sessionId: id, action: z.enum(['begin','commit','rollback']) }).strict(),
-  'table.page': z.object({ ...target, page: z.number().int().min(1).max(10000000), pageSize: z.number().int().min(1).max(1000), filters: z.array(z.object({ column: name, operator: z.enum(['=','!=','>','>=','<','<=','LIKE','IS NULL','IS NOT NULL']), value: z.string().optional() }).strict()).max(30), sort: z.array(z.object({ column: name, direction: z.enum(['ASC','DESC']) }).strict()).max(20) }).strict(),
+  'table.page': tablePage,
   'table.preview': z.object({ ...target, changes }).strict(), 'table.apply': z.object({ ...target, changes, taskId: id }).strict(),
   'schema.preview': z.object({ connectionId: id, design: z.object({ database: name, name, originalName: name.optional(), engine: name, charset: name, comment: z.string(), columns: z.array(z.object({ name, originalName: name.optional(), type: name, nullable: z.boolean(), defaultValue: z.string().nullable().optional(), autoIncrement: z.boolean(), comment: z.string() }).strict()).min(1).max(1000), indexes: z.array(index), foreignKeys: z.array(foreignKey) }).strict() }).strict(),
   'schema.apply': z.object({ connectionId: id, database: z.string().max(256), sql: text.min(1), taskId: id }).strict(),

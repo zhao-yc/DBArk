@@ -27,6 +27,8 @@ TLS 测试可设置 `DBARK_TEST_TLS=1` 和 `DBARK_TEST_CA=CA文件绝对路径`�
 
 完整的 SSH、严格 TLS、权限/断线和百万行开关见 [集成测试说明](../tests/integration/README.md)，本次真实结果见 [数据库验收记录](../tests/integration/acceptance-20261013.md)。两条真实数据库界面工作流及安装后执行方式见 [桌面测试说明](../tests/e2e/README.md)。
 
+首版后的筛选、精确定位及已有表差异已在五个基线上执行，见 [2026-10-14 增量记录](../tests/integration/acceptance-20261014.md)。桌面实库已扩展到对象设计、各类定义、固定结果、筛选保护和百万行 UI，启用范围与资源清理说明见桌面测试文档。
+
 ## 验证策略
 
 单元测试覆盖 SQL 分隔符、注释和字符串、精度、标识符、DDL、乐观锁定位、凭据隔离及配置迁移。端到端测试启动真正的 Electron，使用独立临时用户目录验证窗口、preload、IPC 和数据库执行进程。
