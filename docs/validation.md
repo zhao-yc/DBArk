@@ -145,3 +145,11 @@ Windows 未发行签名；macOS 仅 ad-hoc 签名，没有 Developer ID 与公�
 12公开文件大小、GitHub digest与SHA清单一致；公开源码198文件逐blob匹配固定标签。公开Windows包137478266字节、SHA256 `29d7743c2374a92bf494de4f17a382896f66aff55acb7c662fc6872b6daf9771`，用归档自身49项测试真实安装49/49通过（300.900秒），0失败/跳过/flaky/重试。真实卸载、注册及本批临时目录0，六实例相关库/用户/线程和项目进程额外只读核0，13历史目录与开发资源保留。
 
 schema3旧reader拒读及升级保留、首次默认页假设与真实原型IPC缺陷保留失败、修复和复验均有独立边界，详见 [D06验收记录](../tests/integration/acceptance-p0-grid-preferences-20261014.md)。未覆盖的单处替换、用户正则及macOS实库继续保留，不以首批查找工具当全库搜索。
+
+## 0.7.0 连接概要迁移与公开验收
+
+固定标签 `922ac2f9ce1edf8a3f55e9653bb23be6dbade7b6` 已公开，418单元通过。Windows源码离线6项与只读实库1项分别完成，首次定位/等待失败保留；本机NSIS完整56/56通过（335.466秒）。[主分支CI](https://github.com/zhao-yc/DBArk/actions/runs/38482618549) 及 [标签CI](https://github.com/zhao-yc/DBArk/actions/runs/38484593924) 三平台源码和实际NSIS/DMG各22离线通过、34内网用例跳过，真实加密及清理通过。
+
+公开12资产逐下载核对大小、GitHub digest和SHA清单；源码209文件逐blob匹配固定标签。公开Windows包137491771字节、SHA256 `72cc61bf6185eb197fced11cb3d3bc939193ddba8e7e137fb6a930fd978aedd8`，用归档自身配置及56项测试真实安装56/56通过（339.110秒），0失败/跳过/flaky/重试。系统加密、真实卸载、注册及本批目录清理通过；UTC23:57:00.932额外核六实例本批库/用户/线程和项目进程全0，13历史目录保留。
+
+schema4门槛与旧八表/凭据保留各有独立探针和真实桌面证据；只读实库不冒称未提交业务写入或虚构认证文件握手已验。现有身份替换、其它交换格式、远程同步与macOS实库保留为缺项，详见 [C03验收记录](../tests/integration/acceptance-p0-connection-transfer-20261014.md)。

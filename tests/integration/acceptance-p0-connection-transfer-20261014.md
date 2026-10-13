@@ -104,6 +104,18 @@ UTC `2026-10-13T23:06:57Z` 完成只读清理复核：
 
 构建使用既有已核对dist，`node node_modules/electron-builder/cli.js --win --x64 --publish never`，日志 `.cache/local-v0.7.0-build.log`。本机NSIS137491768字节，SHA256 `62adfa68a5c2c1d17c12998f9972dfad5b90d45d71330db4d14371b7b19f03e6`。
 
-真实安装UTC23:22:33.248開始，23:28:22.115结束，完整 **56/56通过，335466.007ms**，0失败/跳过/flaky/重试；新增6离线+1只读live和旧49项均在同次完整回归，包含百万行UI。系统加密分支真实进入。`dbark-package-e2e-xbKxMa` 实际卸载并删除，剩余注册0；`.cache/local-v0.7.0-install-validation{.json,.log,-results.json}`与截图保留，原定向失败不覆盖。
+真实安装UTC23:22:33.248开始，23:28:22.115结束，完整 **56/56通过，335466.007ms**，0失败/跳过/flaky/重试；新增6离线+1只读live和旧49项均在同次完整回归，包含百万行UI。系统加密分支真实进入。`dbark-package-e2e-xbKxMa` 实际卸载并删除，剩余注册0；`.cache/local-v0.7.0-install-validation{.json,.log,-results.json}`与截图保留，原定向失败不覆盖。
 
 UTC23:28:55.982的 `.cache/local-v0.7.0-cleanup.json` 额外只读核六实例本批schema/用户/线程、项目进程和新目录全部0，13历史目录及六开发基础资源保持。没有Docker命令、没有清用户目录。本机包不能代替下一步固定标签公开文件独立下载验收。
+
+## 固定标签及公开文件独立验收
+
+标签 `v0.7.0` 固定为 `922ac2f9ce1edf8a3f55e9653bb23be6dbade7b6`。[标签CI38484593924](https://github.com/zhao-yc/DBArk/actions/runs/38484593924) 无重跑全部成功：类型/单元job115595084704为42文件418通过；Windows115595084697源码22通过/34内网跳过（1.2分钟）、NSIS22通过/34跳过（1.4分钟）；arm64的115595084408源码和DMG均22通过/34跳过（各1.9分钟）；x64的115595085140源码22通过/34跳过（2.6分钟）、DMG22通过/34跳过（2.4分钟）。各平台新增C03在源码/安装各6项通过，真实系统加密和安装/目录收尾通过。`.cache/v07-tag-*.log`及`v07-tag-native-evidence.json`保留，发布job115599114679成功。
+
+Release412200392于UTC23:42:45公开。12个自定义资产独立下载，逐大小、GitHub digest与SHA清单一致；源码ZIP1002249字节、SHA256 `b69a96752851610a991e5cd090efe641977c3718ba6d97974569095bcd8ce501`，209文件逐Git blob匹配上述固定标签，MIT/中文指南/排除检查通过。`.cache/public-v0.7.0-manifest.json`与`public-source-v0.7.0.json`保留。GitHub额外自动生成的两个源码链接不计入这12个自定义资产。
+
+公开Windows包137491771字节、SHA256 `72cc61bf6185eb197fced11cb3d3bc939193ddba8e7e137fb6a930fd978aedd8`，实际下载安装，没有重新构建。使用公开源码归档自身Playwright配置和56项测试，`workers=1`、`retries=0`，**56/56通过，339110.212ms，0失败/跳过/flaky**。配置路径位于`.cache/published-v0.7.0/source/DBArk-0.7.0/`，未混入后续0.8工作区功能或测试。实际系统加密分支通过。
+
+UTC23:47:11.985开始安装，23:53:04.808结束；独占`dbark-package-e2e-SQQgrb`真实卸载并删除，剩余安装注册0。`.cache/published-v0.7.0-install-validation{.json,.log,-results.json}`和截图保留。UTC23:57:00.932的`.cache/public-v0.7.0-cleanup.json`额外只读核六实例本批库、用户、线程和项目进程、新临时目录全部0，13历史目录与开发基础资源保留，没有Docker命令。
+
+上述安装及原生结果补齐此前源码阶段的未验边界；只读会话测试、虚构认证文件与原始失败的限制保持。C03首批已公开，身份替换、其它格式、远程同步及macOS内网仍不是已完成能力。
