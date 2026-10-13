@@ -4,6 +4,7 @@ import { dirname } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import type { AppSettings, ConnectionProfile, HistoryEntry, SavedQuery, SqlSnippet, TaskRecord } from '../shared/contracts';
 import { validateSnippetBudget } from '../shared/snippets';
+import { tablePreferenceSaveSchema, tablePreferenceTargetSchema, tablePreferencesSchema, tablePreferenceTargetChanged, validateTablePreferenceBudget, type TablePreferenceTarget, type TablePreferences } from '../shared/tablePreferences';
 
 export interface SecretProtector { available(): boolean; encrypt(value: string): string; decrypt(value: string): string; }
 export const defaultSettings: AppSettings = { theme: 'dark', sidebarWidth: 270, resultLimit: 1000, pageSize: 200, tabs: [] };
@@ -27,7 +28,7 @@ export class LocalStore {
   /** 版本迁移在事务中进行，失败时保留原磁盘文件。 */
   private migrate(): void {
     const version = Number(this.db.exec('PRAGMA user_version')[0]?.values[0]?.[0] ?? 0);
-    if (version > 2) throw new Error('配置库由更新版本的 DBArk 创建，请使用新版本打开');
+    if (version > 3) throw new Error('配置库由更新版本的 DBArk 创建，请使用新版本打开');
     this.mutate(() => {
       this.db.run(`CREATE TABLE IF NOT EXISTS connections (id TEXT PRIMARY KEY, data TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS secrets (connection_id TEXT NOT NULL, name TEXT NOT NULL, value TEXT NOT NULL, PRIMARY KEY(connection_id,name));
@@ -36,7 +37,8 @@ export class LocalStore {
         CREATE TABLE IF NOT EXISTS tasks (id TEXT PRIMARY KEY, data TEXT NOT NULL, started_at TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS settings (id INTEGER PRIMARY KEY CHECK(id=1), data TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS sql_snippets (id TEXT PRIMARY KEY, data TEXT NOT NULL, updated_at TEXT NOT NULL);
-        PRAGMA user_version=2;`);
+        CREATE TABLE IF NOT EXISTS table_preferences (connection_id TEXT NOT NULL, database_name TEXT NOT NULL, table_name TEXT NOT NULL, data TEXT NOT NULL, PRIMARY KEY(connection_id,database_name,table_name));
+        PRAGMA user_version=3;`);
     });
     // 上次异常退出的长任务不自动重试，尤其不能重放写操作。
     for (const task of this.tasks()) if (task.status === 'running') this.saveTask({ ...task, status: 'failed', finishedAt: new Date().toISOString(), message: '应用上次退出时任务未完成，请核对数据库状态' });
@@ -109,6 +111,7 @@ export class LocalStore {
   /** 把连接与秘密分开存储，保存失败时恢复两者原始状态。 */
   saveConnection(input: ConnectionProfile): ConnectionProfile {
     const profile = structuredClone({ ...input, id: input.id || randomUUID() });
+    const previous = this.records<ConnectionProfile>('SELECT data FROM connections WHERE id=?', [profile.id])[0];
     const remember = profile.rememberPassword === true;
     this.mutate(() => {
       this.putSecret(profile.id, 'password', profile.password, remember);
@@ -116,6 +119,8 @@ export class LocalStore {
       this.putSecret(profile.id, 'sshPassphrase', profile.ssh?.passphrase, remember);
       delete profile.password; delete profile.hasPassword;
       if (profile.ssh) { delete profile.ssh.password; delete profile.ssh.passphrase; delete profile.ssh.hasPassword; delete profile.ssh.hasPassphrase; }
+      // 更换数据库目标时与连接配置一起提交；磁盘失败不能先丢失原布局。
+      if (previous && tablePreferenceTargetChanged(previous, profile)) this.db.run('DELETE FROM table_preferences WHERE connection_id=?', [profile.id]);
       this.db.run('INSERT INTO connections VALUES (?,?) ON CONFLICT(id) DO UPDATE SET data=excluded.data', [profile.id, JSON.stringify(profile)]);
     });
     return this.connections().find(x => x.id === profile.id)!;
@@ -133,8 +138,45 @@ export class LocalStore {
   deleteConnection(id: string): void {
     this.mutate(() => {
       this.db.run('DELETE FROM connections WHERE id=?', [id]); this.db.run('DELETE FROM secrets WHERE connection_id=?', [id]);
+      this.db.run('DELETE FROM table_preferences WHERE connection_id=?', [id]);
       for (const key of this.volatileSecrets.keys()) if (key.startsWith(`${id}\0`)) this.volatileSecrets.delete(key);
     });
+  }
+  /** 表偏好只属于已保存连接；校验精确身份，不读取凭据或建立数据库连接。 */
+  private preferenceTarget(input: TablePreferenceTarget): TablePreferenceTarget {
+    const target = tablePreferenceTargetSchema.parse(input);
+    const statement = this.db.prepare('SELECT 1 FROM connections WHERE id=?');
+    try { statement.bind([target.connectionId]); if (!statement.step()) throw new Error('连接不存在，无法读取或保存表偏好'); }
+    finally { statement.free(); }
+    return target;
+  }
+  /** 已知连接的未保存表返回 null，损坏的布局明确报错，不伪装为空配置。 */
+  tablePreferences(input: TablePreferenceTarget): TablePreferences | null {
+    const target = this.preferenceTarget(input);
+    const value = this.records<TablePreferences>('SELECT data FROM table_preferences WHERE connection_id=? AND database_name=? AND table_name=?', [target.connectionId, target.database, target.table])[0];
+    if (value === undefined) return null;
+    const preferences = tablePreferencesSchema.parse(value);
+    validateTablePreferenceBudget(0, 0, target, preferences);
+    return preferences;
+  }
+  /** 独立主键更新不会被工作区快照覆盖；预算同时计算 UTF-8 数据及三个身份字段。 */
+  saveTablePreferences(input: TablePreferenceTarget & { preferences: TablePreferences }): TablePreferences {
+    const parsed = tablePreferenceSaveSchema.parse(input);
+    const target = this.preferenceTarget({ connectionId: parsed.connectionId, database: parsed.database, table: parsed.table });
+    this.mutate(() => {
+      const statement = this.db.prepare('SELECT COUNT(*),COALESCE(SUM(length(CAST(connection_id AS BLOB))+length(CAST(database_name AS BLOB))+length(CAST(table_name AS BLOB))+length(CAST(data AS BLOB))),0) FROM table_preferences WHERE NOT(connection_id=? AND database_name=? AND table_name=?)');
+      try {
+        statement.bind([target.connectionId, target.database, target.table]); statement.step();
+        const [count, bytes] = statement.get(); validateTablePreferenceBudget(Number(count), Number(bytes), target, parsed.preferences);
+      } finally { statement.free(); }
+      this.db.run('INSERT INTO table_preferences VALUES (?,?,?,?) ON CONFLICT(connection_id,database_name,table_name) DO UPDATE SET data=excluded.data', [target.connectionId, target.database, target.table, JSON.stringify(parsed.preferences)]);
+    });
+    return parsed.preferences;
+  }
+  /** 仅重置精确目标的布局，已知连接的空记录可重复重置，其他设置和表数据不变。 */
+  resetTablePreferences(input: TablePreferenceTarget): void {
+    const target = this.preferenceTarget(input);
+    this.mutate(() => this.db.run('DELETE FROM table_preferences WHERE connection_id=? AND database_name=? AND table_name=?', [target.connectionId, target.database, target.table]));
   }
   /** 按更新时间返回保存的查询。 */
   queries(): SavedQuery[] { return this.records('SELECT data FROM queries ORDER BY updated_at DESC'); }

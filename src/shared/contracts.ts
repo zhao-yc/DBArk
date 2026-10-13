@@ -1,6 +1,7 @@
 /** 所有跨进程数据均为可结构化克隆的普通值，精确数值由驱动保留为字符串。 */
 import type { QueryParameter, QueryParameterNames } from './queryParameters';
 import type { QueryExportProgress, QueryStreamExportInput, QueryStreamExportOutput } from './queryStreamExport';
+import type { TablePreferenceTarget, TablePreferences } from './tablePreferences';
 export type CellValue = string | number | boolean | null | { type: 'binary'; base64: string };
 export type DataRow = Record<string, CellValue>;
 export type ObjectKind = 'table' | 'view' | 'procedure' | 'function' | 'trigger' | 'event';
@@ -47,6 +48,9 @@ export interface ResultExportOptions { fileToken: string; format: 'csv' | 'json'
 
 /** 请求映射是界面、主进程与数据库进程共同使用的唯一接口定义。 */
 export interface CommandMap {
+  'table.preferences.get': { input: TablePreferenceTarget; output: TablePreferences | null };
+  'table.preferences.save': { input: TablePreferenceTarget & { preferences: TablePreferences }; output: TablePreferences };
+  'table.preferences.reset': { input: TablePreferenceTarget; output: void };
   'app.info': { input: Record<string, never>; output: { version: string; platform: string; encryptionAvailable: boolean; dataPath: string } };
   'app.setDirty': { input: { dirty: boolean }; output: void };
   'connections.list': { input: Record<string, never>; output: ConnectionProfile[] };

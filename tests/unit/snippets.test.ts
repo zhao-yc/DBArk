@@ -30,15 +30,15 @@ describe('独立 SQL 片段库', () => {
     expect(store.snippets().map(item => item.sql)).toEqual([sample.sql, sample.sql]);
     store.deleteSnippet(sample.id); expect(store.snippets().map(item => item.id)).toEqual(['片段二']); store.close();
   });
-  it('旧 v1 库迁移保留查询和设置，v2 库不允许静默回退', async () => {
+  it('旧 v1 库迁移保留查询和设置，未来版本不允许静默回退', async () => {
     const file = path(); const SQL = await initSqlJs({ locateFile: () => wasm }); const db = new SQL.Database();
     db.run('CREATE TABLE queries(id TEXT PRIMARY KEY,data TEXT NOT NULL,updated_at TEXT NOT NULL); CREATE TABLE settings(id INTEGER PRIMARY KEY,data TEXT NOT NULL); PRAGMA user_version=1;');
     db.run('INSERT INTO queries VALUES (?,?,?)', ['旧查询', JSON.stringify({ id: '旧查询', name: '旧查询', sql: 'SELECT 7', updatedAt: '' }), '']);
     db.run('INSERT INTO settings VALUES (1,?)', [JSON.stringify({ theme: 'light', tabs: [] })]); writeFileSync(file, db.export()); db.close();
     const store = await LocalStore.open(file, wasm, protector); expect(store.queries()[0].sql).toBe('SELECT 7'); expect(store.settings().theme).toBe('light'); expect(store.snippets()).toEqual([]); store.close();
-    const migrated = new SQL.Database(readFileSync(file)); expect(migrated.exec('PRAGMA user_version')[0].values[0][0]).toBe(2); migrated.close();
-    // 已发布旧版本的上限为 1，因此升级后回退必须恢复升级前配置备份，不能重置此库。
-    const future = new SQL.Database(readFileSync(file)); future.run('PRAGMA user_version=3'); writeFileSync(file, future.export()); future.close(); const before = readFileSync(file);
+    const migrated = new SQL.Database(readFileSync(file)); expect(migrated.exec('PRAGMA user_version')[0].values[0][0]).toBe(3); migrated.close();
+    // 0.2 使用 schema1，0.3～0.5 使用 schema2；本轮 schema3 回退必须恢复升级前备份，不能重置配置库。
+    const future = new SQL.Database(readFileSync(file)); future.run('PRAGMA user_version=4'); writeFileSync(file, future.export()); future.close(); const before = readFileSync(file);
     await expect(LocalStore.open(file, wasm, protector)).rejects.toThrow('更新版本'); expect(readFileSync(file).equals(before)).toBe(true);
   });
   it('迁移写盘失败完整保留旧配置，修复后可重新迁移', async () => {

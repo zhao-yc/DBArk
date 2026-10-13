@@ -55,6 +55,8 @@ SQL 片段迁移写入 schema 2 后，旧 0.2.0 拒绝读取。开发与回退�
 
 ## 构建
 
+0.6.0 的表偏好由 `tests/unit/table-preferences.test.ts` 验证精确复合键、原型名称、实际 SQLite 满额和 UTF-8 聚合预算、保存/删除/目标变更失败回退，以及 schema2 旧七表全部字段保持。`ui-page-find-replace`、`ui-table-column-preferences` 验证完整原值、Unicode 位置、字面替换、快照和预算、调和及可见列模型。`table-preferences.spec.ts` 的四项离线实际 IPC 与 `table-grid-preferences.spec.ts` 的六项实库 UI 分别运行，编写或列出测试不算实测通过；本批结果见 [D06 验收记录](../tests/integration/acceptance-p0-grid-preferences-20261014.md)。旧 reader 的独立结构探针使用冻结 0.5 源码和真实 SQLite 副本，不属于真实安装或系统加密验证。
+
 Electron 主进程、preload 与数据库进程独立打包为 CommonJS；React 由 Vite 打包，运行时依赖和 SQLite WASM 随安装包分发。Windows 使用 NSIS，macOS 分别产出 arm64/x64 DMG 和 ZIP。
 
 当前使用 JavaScript 驱动与 SQLite WASM，关闭安装包的原生依赖重建；ssh2 的可选 CPU/加密加速模块使用 JavaScript 回退，不依赖开发电脑生成的平台二进制。引入新的必需原生模块时须重新核对两种 macOS 架构和 Electron ABI。

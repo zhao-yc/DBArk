@@ -110,6 +110,9 @@ async function dispatch(command: Command, input: any): Promise<unknown> {
     case 'connections.open': input = { ...input, profile: store.resolveConnection(input.id) }; break;
     case 'connections.test': input = store.resolveConnection(input.id, input as ConnectionProfile); break;
     case 'connections.close': for (const [id, session] of sessions) if (session.connectionId === input.id) sessions.delete(id); break;
+    case 'table.preferences.get': return store.tablePreferences(input);
+    case 'table.preferences.save': return store.saveTablePreferences(input);
+    case 'table.preferences.reset': return store.resetTablePreferences(input);
     case 'queries.list': return store.queries();
     case 'snippets.list': return store.snippets();
     case 'snippets.save': return store.saveSnippet(input);

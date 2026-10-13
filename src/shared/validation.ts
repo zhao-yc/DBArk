@@ -6,6 +6,7 @@ import { queryParameterTypes, validateQueryParameters } from './queryParameters'
 import { snippetSchema } from './snippets';
 import { validateReferenceValues } from './references';
 import { queryStreamExportLimits } from './queryStreamExport';
+import { tablePreferenceSaveSchema, tablePreferenceTargetSchema } from './tablePreferences';
 
 const id = z.string().min(1).max(200);
 const name = z.string().min(1).max(256);
@@ -13,7 +14,27 @@ const text = z.string().max(20_000_000);
 const empty = z.object({}).strict();
 const port = z.number().int().min(1).max(65535);
 const cell = z.union([z.string(), z.number().finite(), z.boolean(), z.null(), z.object({ type: z.literal('binary'), base64: z.string() }).strict()]);
-const row = z.record(z.string(), cell);
+/** 数据库列名和文件表头允许 __proto__；逐自有字段校验并安全重建，不读取继承属性或访问器。 */
+function ownRecord<T>(valueSchema: z.ZodType<T>, label: string) { return z.unknown().transform((input, context): Record<string, T> => {
+  if (!input || typeof input !== 'object' || Array.isArray(input) || ![Object.prototype, null].includes(Object.getPrototypeOf(input))) {
+    context.addIssue({ code: 'custom', message: `${label}必须是普通字段对象` }); return z.NEVER;
+  }
+  const entries: [string, T][] = [];
+  for (const key of Reflect.ownKeys(input)) {
+    const descriptor = Object.getOwnPropertyDescriptor(input, key)!;
+    if (typeof key !== 'string' || !descriptor.enumerable || !Object.hasOwn(descriptor, 'value')) {
+      context.addIssue({ code: 'custom', message: `${label}只接受自有、可枚举的文本字段名和值` }); return z.NEVER;
+    }
+    const parsed = valueSchema.safeParse(descriptor.value);
+    if (!parsed.success) {
+      for (const issue of parsed.error.issues) context.addIssue({ code: 'custom', path: [key, ...issue.path], message: issue.message });
+      return z.NEVER;
+    }
+    entries.push([key, parsed.data]);
+  }
+  return Object.fromEntries(entries);
+}); }
+const row = ownRecord(cell, '数据行');
 const ssh = z.object({ enabled: z.boolean(), host: z.string().max(512), port, user: z.string().max(256), password: z.string().optional(), hasPassword: z.boolean().optional(), privateKeyPath: z.string().optional(), passphrase: z.string().optional(), hasPassphrase: z.boolean().optional(), hostFingerprint: z.string().optional() }).strict();
 export const connectionSchema = z.object({ id: z.string().max(200), name, group: z.string().max(100), color: z.string().regex(/^#[0-9a-fA-F]{6}$/), dialect: z.enum(['mysql','mariadb']), host: z.string().min(1).max(512), port, user: z.string().max(256), database: z.string().max(256).optional(), password: z.string().optional(), rememberPassword: z.boolean().optional(), hasPassword: z.boolean().optional(), ssh: ssh.optional(), tls: z.object({ enabled: z.boolean(), rejectUnauthorized: z.boolean(), caPath: z.string().optional(), certPath: z.string().optional(), keyPath: z.string().optional() }).strict().optional() }).strict();
 const target = { connectionId: id, database: name, table: name };
@@ -39,6 +60,7 @@ const tablePage = z.object({ ...target, page: z.number().int().min(1).max(100000
   catch (error) { context.addIssue({ code: 'custom', path: ['filters'], message: error instanceof Error ? error.message : '筛选条件无效' }); }
 });
 export const commandSchemas: Record<Command, z.ZodType> = {
+  'table.preferences.get': tablePreferenceTargetSchema, 'table.preferences.save': tablePreferenceSaveSchema, 'table.preferences.reset': tablePreferenceTargetSchema,
   'app.info': empty,
   'app.setDirty': z.object({ dirty: z.boolean() }).strict(),
   'connections.list': empty, 'connections.save': connectionSchema, 'connections.test': connectionSchema,
@@ -71,7 +93,7 @@ export const commandSchemas: Record<Command, z.ZodType> = {
   'files.readQuery': z.object({ fileToken: id, encoding: z.enum(['utf8','utf16le','gb18030']) }).strict(),
   'files.writeQuery': z.object({ fileToken: id, encoding: z.enum(['utf8','utf16le','gb18030']), sql: text }).strict(),
   'files.preview': z.object({ fileToken: id, format: z.enum(['csv','json']), encoding: z.enum(['utf8','utf16le','gb18030']) }).strict(),
-  'files.import': z.object({ ...fileOptions, mapping: z.record(z.string(), z.string()) }).strict(),
+  'files.import': z.object({ ...fileOptions, mapping: ownRecord(z.string(), '导入映射') }).strict(),
   'files.export': z.object({ ...fileOptions, includeStructure: z.boolean(), includeData: z.boolean() }).strict(),
   'files.exportResult': z.object({ fileToken: id, format: z.enum(['csv','json']), encoding: z.enum(['utf8','utf16le','gb18030']), taskId: id, result: resultExportData }).strict(),
   'queries.list': empty, 'queries.save': z.object({ id, name, connectionId: id.optional(), database: name.optional(), sql: text, updatedAt: z.string() }).strict(), 'queries.delete': z.object({ id }).strict(),
