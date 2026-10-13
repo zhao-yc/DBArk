@@ -26,9 +26,15 @@ jobs:
           - os: windows-latest
             label: Windows x64
             command: pnpm dist:win
+            artifact: Windows-x64
           - os: macos-latest
-            label: macOS arm64 与 x64
-            command: pnpm dist:mac
+            label: macOS arm64
+            command: pnpm build && pnpm exec electron-builder --mac --arm64 --publish never
+            artifact: macOS-arm64
+          - os: macos-15-intel
+            label: macOS x64
+            command: pnpm build && pnpm exec electron-builder --mac --x64 --publish never
+            artifact: macOS-x64
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -42,9 +48,10 @@ jobs:
       - run: ${{ matrix.command }}
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+      - run: pnpm test:packaged
       - uses: actions/upload-artifact@v4
         with:
-          name: DBArk-${{ runner.os }}-未签名
+          name: DBArk-${{ matrix.artifact }}-未发行签名
           path: |
             release/*.exe
             release/*.dmg
@@ -53,5 +60,5 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: failure()
         with:
-          name: 测试记录-${{ runner.os }}
+          name: 测试记录-${{ matrix.artifact }}
           path: test-results/

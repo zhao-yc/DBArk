@@ -41,4 +41,6 @@ Electron 主进程、preload 与数据库进程独立打包为 CommonJS；React 
 
 `pnpm exec install-electron` 下载锁定的 Electron 运行时。若网络下载失败，应修复官方源连接或使用同一官方产物并验证 npm 包内记录的 SHA256，不能跳过完整性检查。
 
-发布证书接入后设置构建机密，并完成真实平台签名、公证和安装测试。长期保留的密钥、证书按项目要求备份至 `E:\BaiduSyncdisk\codex重要文件备份\DBArk`，附用途、有效期和恢复说明。
+当前 macOS 使用 ad-hoc 签名保持应用完整性，没有 Developer ID 身份及公证，仍标记为未发行签名的开发预览；发行证书接入后设置构建机密，并完成对应平台签名、公证和安装测试。长期保留的密钥、证书按项目要求备份至 `E:\BaiduSyncdisk\codex重要文件备份\DBArk`，附用途、有效期和恢复说明。签名行为参见 [electron-builder 26 官方说明](https://www.electron.build/v26/docs/features/code-signing/code-signing-mac/)。
+
+GitHub Actions 分别使用 Windows x64、macOS arm64 和 macOS Intel 构建机，完成源码回归后构建对应原生架构，再执行 `pnpm test:packaged` 验证随包的实际应用。架构标签依据 [GitHub 托管运行器说明](https://docs.github.com/en/actions/reference/runners/github-hosted-runners)。

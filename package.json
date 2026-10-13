@@ -14,6 +14,7 @@
     "test": "vitest run",
     "test:integration": "vitest run --config vitest.integration.config.ts",
     "test:e2e": "pnpm build && playwright test",
+    "test:packaged": "node scripts/test-packaged.mjs",
     "dist": "pnpm build && electron-builder",
     "dist:win": "pnpm build && electron-builder --win --x64",
     "dist:mac": "pnpm build && electron-builder --mac --arm64 --x64"
@@ -65,7 +66,7 @@
     "asarUnpack": ["node_modules/ssh2/**/*", "node_modules/cpu-features/**/*"],
     "win": { "target": ["nsis"], "icon": "build/icon.ico", "signExecutable": false },
     "nsis": { "oneClick": false, "allowToChangeInstallationDirectory": true, "installerLanguages": ["zh_CN"] },
-    "mac": { "target": ["dmg", "zip"], "icon": "build/icon.icns", "category": "public.app-category.developer-tools", "identity": null },
+    "mac": { "target": ["dmg", "zip"], "icon": "build/icon.icns", "category": "public.app-category.developer-tools", "identity": "-" },
     "publish": null
   }
 }
