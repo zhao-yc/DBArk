@@ -84,3 +84,26 @@ UTC `2026-10-13T23:06:57Z` 完成只读清理复核：
 - `run01-after-processes.json`：项目 DBArk/Electron 进程为 0；桌面交还主智能体。六实例容器、卷、网络仍保留供后续正式验收，没有额外 DROP 或 Docker 操作。
 
 重现时使用新的 `runNN-*` 目录，runner 拒绝覆盖已有轮次。凭据仍静默读取忽略的 `.cache/dbark-test.env`，不要复制到可提交文件；本批没有生成需长期备份的真实密钥或证书。
+
+## 固定源码主分支原生验收
+
+提交 `5a359ddde68a53a998e15b1903b61604d4e952a8` 的 [CI38482618549](https://github.com/zhao-yc/DBArk/actions/runs/38482618549) 全部通过。随包脚本调用全部Playwright并显式关闭内网开关，新增6项离线概要用例自然包含；没有只运行旧12项清单。
+
+| 原生平台 | job | 源码实际结果 | 实际安装结果 |
+| --- | --- | --- | --- |
+| 类型/单元 | 115588569427 | 42文件418/418 | 不适用 |
+| Windows x64 | 115588569866 | 22通过/34内网跳过，1.2分钟 | NSIS22通过/34跳过，1.2分钟 |
+| macOS arm64 | 115588569723 | 22通过/34跳过，1.2分钟 | DMG22通过/34跳过，1.2分钟 |
+| macOS x64 | 115588569628 | 22通过/34跳过，2.0分钟 | DMG22通过/34跳过，2.3分钟 |
+
+各平台日志12条概要成功行（源码6+实际安装6），真实系统加密分支、卸载或DMG收尾及本次临时目录清理均通过。原始 `.cache/v07-main-{unit,win,arm64,x64}.log` 与 `v07-main-native-evidence.json` 保留。此证据只属于该冻结Git源码；后续工作区未接入的O01读取器或单位测试不在418或本批安装功能中。本机完整NSIS、公开标签和下载验收在真正结束后另记，不预填。
+
+## 本机 Windows 完整实际安装
+
+源码提交5a359dd的88个runtime/package/lock文件按Git clean身份及统一build01原始字节SHA分别核对，全部dist逐SHA匹配；`.cache/local-v0.7.0-input-verification.json` 保留。Windows checkout的CRLF不能直接当Git原始LF blob漂移，因此Git身份与编译实际字节分别检查，未修改运行代码或混入后续未接入口的O01新模块。
+
+构建使用既有已核对dist，`node node_modules/electron-builder/cli.js --win --x64 --publish never`，日志 `.cache/local-v0.7.0-build.log`。本机NSIS137491768字节，SHA256 `62adfa68a5c2c1d17c12998f9972dfad5b90d45d71330db4d14371b7b19f03e6`。
+
+真实安装UTC23:22:33.248開始，23:28:22.115结束，完整 **56/56通过，335466.007ms**，0失败/跳过/flaky/重试；新增6离线+1只读live和旧49项均在同次完整回归，包含百万行UI。系统加密分支真实进入。`dbark-package-e2e-xbKxMa` 实际卸载并删除，剩余注册0；`.cache/local-v0.7.0-install-validation{.json,.log,-results.json}`与截图保留，原定向失败不覆盖。
+
+UTC23:28:55.982的 `.cache/local-v0.7.0-cleanup.json` 额外只读核六实例本批schema/用户/线程、项目进程和新目录全部0，13历史目录及六开发基础资源保持。没有Docker命令、没有清用户目录。本机包不能代替下一步固定标签公开文件独立下载验收。
