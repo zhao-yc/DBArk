@@ -7,7 +7,7 @@ vi.mock('../../src/renderer/lib', () => ({
   errorMessage: (error: unknown) => error instanceof Error ? error.message : String(error)
 }));
 
-describe('退出时刷新工作空间设置', () => {
+describe('工作空间设置与连接上下文', () => {
   let workspace: typeof import('../../src/renderer/store');
   let renderer: EventTarget;
 
@@ -43,5 +43,28 @@ describe('退出时刷新工作空间设置', () => {
     await expect(workspace.flushSettings()).rejects.toBe(failure);
     await vi.advanceTimersByTimeAsync(1000);
     expect(request).toHaveBeenCalledTimes(1);
+  });
+
+  it('连接目标失效仅清该连接库选择和树版本，保留其它连接标签及事务任务标记', async () => {
+    const settings = { ...workspace.useWorkspace.getState().settings, tabs: [{ id: '其它标签', kind: 'query' as const, title: '保留查询', connectionId: '其它连接', database: 'other_db', sql: 'SELECT 1;' }] };
+    const dirtyTabs = { '其它标签': true }; const activeJobs = { '其它标签': true };
+    workspace.useWorkspace.setState({ settings, selection: { connectionId: '目标连接', database: 'old_db' }, connectionVersions: { '目标连接': 1, '其它连接': 5 }, dirtyTabs, activeJobs });
+    workspace.useWorkspace.getState().invalidateConnection('目标连接');
+    const current = workspace.useWorkspace.getState();
+    expect(current.selection).toEqual({ connectionId: '目标连接' });
+    expect(current.connectionVersions).toEqual({ '目标连接': 2, '其它连接': 5 });
+    expect(current.settings).toBe(settings);
+    expect(current.dirtyTabs).toBe(dirtyTabs);
+    expect(current.activeJobs).toBe(activeJobs);
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(request).not.toHaveBeenCalled();
+  });
+
+  it('更新未选中的连接保留当前其它连接的数据库选择', () => {
+    const selection = { connectionId: '其它连接', database: 'keep_db' };
+    workspace.useWorkspace.setState({ selection });
+    workspace.useWorkspace.getState().invalidateConnection('目标连接');
+    expect(workspace.useWorkspace.getState().selection).toBe(selection);
+    expect(workspace.useWorkspace.getState().connectionVersions).toEqual({ '目标连接': 1 });
   });
 });

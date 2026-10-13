@@ -3,12 +3,12 @@ import { useState } from 'react';
 import { FolderOpen, ShieldCheck, PlugZap } from 'lucide-react';
 import type { ConnectionProfile } from '../../shared/contracts';
 import { errorMessage, invoke, uid } from '../lib';
-import { assertConnectionUpdateAllowed } from '../connectionChanges';
+import { saveConnectionUpdate } from '../connectionChanges';
 import { useWorkspace } from '../store';
 import { ErrorBox, Field, Modal, Spinner } from './ui';
 
 /** 密码字段缺省表示保持原密码；界面仅提交新值，不读取解密后的保存值。 */
-export function ConnectionDialog({ profile, onClose }: { profile?: ConnectionProfile; onClose: () => void }) {
+export function ConnectionDialog({ profile, onClose, onTransportChanged }: { profile?: ConnectionProfile; onClose: () => void; onTransportChanged: (connectionId: string) => void }) {
   const [form, setForm] = useState<ConnectionProfile>(() => profile ? structuredClone(profile) : { id: uid(), name: '', group: '', color: '#52c5a2', dialect: 'mysql', host: '127.0.0.1', port: 3306, user: 'root', rememberPassword: true });
   const [section, setSection] = useState<'general' | 'ssh' | 'tls'>('general');
   const [busy, setBusy] = useState(''); const [error, setError] = useState(''); const [result, setResult] = useState('');
@@ -33,8 +33,8 @@ export function ConnectionDialog({ profile, onClose }: { profile?: ConnectionPro
       if (test) { const status = await invoke('connections.test', { ...form, name: form.name.trim() || form.host }); setResult(formatText(zh.connections.text002, status.dialect === 'mysql' ? 'MySQL' : 'MariaDB', status.version)); }
       else {
         // 保存瞬间读取最新标签；不能通过重连或关闭标签绕过保护，否则旧事务和表格草稿可能写往错误服务器。
-        assertConnectionUpdateAllowed(profile, form, useWorkspace.getState().settings.tabs);
-        await invoke('connections.save', { ...form, name: form.name.trim() || form.host }); useWorkspace.getState().setConnections(await invoke('connections.list', {})); onClose();
+        await saveConnectionUpdate(profile, { ...form, name: form.name.trim() || form.host }, useWorkspace.getState().settings.tabs, onTransportChanged);
+        useWorkspace.getState().setConnections(await invoke('connections.list', {})); onClose();
       }
     } catch (reason) { setError(errorMessage(reason)); } finally { setBusy(''); }
   }

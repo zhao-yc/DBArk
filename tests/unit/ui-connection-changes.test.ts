@@ -1,7 +1,11 @@
-import { describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AppSettings, ConnectionProfile } from '../../src/shared/contracts';
-import { assertConnectionUpdateAllowed } from '../../src/renderer/connectionChanges';
+import { assertConnectionUpdateAllowed, newQueryContext, saveConnectionUpdate } from '../../src/renderer/connectionChanges';
 import { zh } from '../../src/renderer/locales/zh-CN';
+
+const { request } = vi.hoisted(() => ({ request: vi.fn() }));
+vi.mock('../../src/renderer/lib', () => ({ invoke: request }));
+beforeEach(() => { request.mockReset(); });
 
 const original: ConnectionProfile = {
   id: '开发连接', name: '开发库', group: '开发', color: '#52c5a2', dialect: 'mysql',
@@ -47,5 +51,57 @@ describe('连接编辑的工作区保护', () => {
 
   it('新连接不受已有工作区标签影响', () => {
     expect(() => assertConnectionUpdateAllowed(undefined, { ...original, id: '新连接' }, [openTab('query')])).not.toThrow();
+  });
+});
+
+describe('连接保存成功后的缓存失效通知', () => {
+  it('敏感修改等待保存成功才通知，并仅通知一次对应连接', async () => {
+    const next = { ...original, host: 'new.example.test' }; const invalidated = vi.fn();
+    let complete!: (profile: ConnectionProfile) => void;
+    request.mockImplementation(() => new Promise<ConnectionProfile>(resolve => { complete = resolve; }));
+    const pending = saveConnectionUpdate(original, next, [], invalidated);
+    expect(invalidated).not.toHaveBeenCalled();
+    expect(request).toHaveBeenCalledExactlyOnceWith('connections.save', next);
+    complete(next);
+    await expect(pending).resolves.toBe(next);
+    expect(invalidated).toHaveBeenCalledExactlyOnceWith(original.id);
+  });
+
+  it('保存失败保留原缓存，并原样返回错误供表单显示', async () => {
+    const invalidated = vi.fn(); const failure = new Error('无法保存连接');
+    request.mockRejectedValueOnce(failure);
+    await expect(saveConnectionUpdate(original, { ...original, password: '' }, [], invalidated)).rejects.toBe(failure);
+    expect(invalidated).not.toHaveBeenCalled();
+  });
+
+  it('元信息修改和新连接保存成功均不清理已有连接上下文', async () => {
+    const invalidated = vi.fn();
+    const renamed = { ...original, name: '新名称', group: '新分组', color: '#123456', rememberPassword: false };
+    request.mockResolvedValueOnce(renamed);
+    await saveConnectionUpdate(original, renamed, [openTab('query')], invalidated);
+    const created = { ...original, id: '新连接' };
+    request.mockResolvedValueOnce(created);
+    await saveConnectionUpdate(undefined, created, [], invalidated);
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(invalidated).not.toHaveBeenCalled();
+  });
+
+  it('仍有工作区标签的敏感修改在保存前被拒绝，不发送请求也不触发清理', async () => {
+    const invalidated = vi.fn();
+    await expect(saveConnectionUpdate(original, { ...original, host: 'new.example.test' }, [openTab('table')], invalidated)).rejects.toThrow(zh.connections.openTabsBlockChanges);
+    expect(request).not.toHaveBeenCalled();
+    expect(invalidated).not.toHaveBeenCalled();
+  });
+});
+
+describe('新查询的连接与数据库上下文', () => {
+  it('选择已重置的连接时不从另一连接活动标签填入旧库名', () => {
+    expect(newQueryContext({ connectionId: '变更后的连接' }, openTab('query', '其它连接'), original.id)).toEqual({ connectionId: '变更后的连接' });
+  });
+
+  it('明确选择库时使用该选择，没有树选择时才使用活动标签的连接和库', () => {
+    expect(newQueryContext({ connectionId: '所选连接', database: 'selected_db' }, openTab('query'), original.id)).toEqual({ connectionId: '所选连接', database: 'selected_db' });
+    expect(newQueryContext(undefined, openTab('query'), '其它连接')).toEqual({ connectionId: original.id, database: 'app' });
+    expect(newQueryContext(undefined, undefined, original.id)).toEqual({ connectionId: original.id });
   });
 });

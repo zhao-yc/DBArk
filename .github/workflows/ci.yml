@@ -1,6 +1,9 @@
 name: 客户端检查与构建
 on:
   push:
+    paths-ignore:
+      - 'docs/**'
+      - '**/*.md'
   pull_request:
   workflow_dispatch:
 permissions:

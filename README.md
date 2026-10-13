@@ -6,7 +6,7 @@ DBArk 保留连接树、多标签查询和表格编辑等熟悉的工作方式�
 
 ## 下载
 
-在 [GitHub Releases](https://github.com/zhao-yc/DBArk/releases) 下载 Windows x64 安装程序、macOS arm64/x64 DMG 或 ZIP，以及源码和 SHA256 校验清单。`0.1.0` 为开发预览；Windows 未签名，macOS 仅有 ad-hoc 签名，没有发行证书及公证。安装步骤和数据保护边界见 [中文使用指南](docs/user-guide.md)。
+在 [GitHub Releases](https://github.com/zhao-yc/DBArk/releases) 下载 Windows x64 安装程序、macOS arm64/x64 DMG 或 ZIP，以及源码和 SHA256 校验清单。`0.1.x` 为开发预览；Windows 未签名，macOS 仅有 ad-hoc 签名，没有发行证书及公证。安装步骤和数据保护边界见 [中文使用指南](docs/user-guide.md)。
 
 ## 开发运行
 

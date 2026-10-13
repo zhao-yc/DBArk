@@ -46,7 +46,8 @@ export async function launchDesktop() {
   });
   page = await desktop.firstWindow();
   page.on('pageerror', error => pageErrors.push(error.message));
-  await expect(page.locator('.app-statusbar')).toBeVisible();
+  // 原生 CI 首次启动安装产物需要额外加载时间；只延长就绪等待，仍要求状态栏真实可见。
+  await expect(page.locator('.app-statusbar')).toBeVisible({ timeout: 15000 });
   await answerDialogs([]);
 }
 

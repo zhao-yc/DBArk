@@ -2,6 +2,7 @@ import { zh } from './locales/zh-CN';
 import { create } from 'zustand';
 import type { AppSettings, ConnectionProfile, TaskEvent, TaskRecord } from '../shared/contracts';
 import { errorMessage, invoke, uid } from './lib';
+import type { ConnectionSelection } from './connectionChanges';
 
 export type WorkspaceTab = AppSettings['tabs'][number];
 const defaults: AppSettings = { theme: 'dark', sidebarWidth: 260, resultLimit: 1000, pageSize: 100, tabs: [] };
@@ -9,8 +10,9 @@ let saveTimer: ReturnType<typeof setTimeout> | undefined;
 
 interface WorkspaceState {
   ready: boolean; settings: AppSettings; connections: ConnectionProfile[]; tasks: TaskRecord[];
-  notice?: { text: string; error: boolean }; selection?: { connectionId: string; database?: string }; activeJobs: Record<string, boolean>; dirtyTabs: Record<string, boolean>;
+  notice?: { text: string; error: boolean }; selection?: ConnectionSelection; activeJobs: Record<string, boolean>; dirtyTabs: Record<string, boolean>; connectionVersions: Record<string, number>;
   initialize: () => Promise<void>; setConnections: (connections: ConnectionProfile[]) => void;
+  invalidateConnection: (connectionId: string) => void;
   updateSettings: (update: Partial<AppSettings>) => void; openTab: (tab: Omit<WorkspaceTab, 'id'> & { id?: string }) => void;
   updateTab: (id: string, update: Partial<WorkspaceTab>) => void; closeTab: (id: string) => void;
   select: (selection: WorkspaceState['selection']) => void; notify: (text: string, error?: boolean) => void;
@@ -33,7 +35,7 @@ export async function flushSettings(): Promise<void> {
 
 /** 界面状态仅保存连接概要和工作区配置，数据库密码不进入全局界面存储。 */
 export const useWorkspace = create<WorkspaceState>((set, get) => ({
-  ready: false, settings: defaults, connections: [], tasks: [], activeJobs: {}, dirtyTabs: {},
+  ready: false, settings: defaults, connections: [], tasks: [], activeJobs: {}, dirtyTabs: {}, connectionVersions: {},
   /** 并行恢复本地配置、连接概要和任务记录；加载失败仍保留可显示错误的工作台。 */
   initialize: async () => {
     try {
@@ -43,6 +45,11 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
   },
   /** 连接编辑成功后整体替换概要列表，不缓存表单中的明文秘密。 */
   setConnections: connections => set({ connections }),
+  /** 连接目标保存变更后只清理其对象树和数据库选择，不动其它连接、查询标签、任务或事务标记。 */
+  invalidateConnection: connectionId => set(state => ({
+    connectionVersions: { ...state.connectionVersions, [connectionId]: (state.connectionVersions[connectionId] ?? 0) + 1 },
+    selection: state.selection?.connectionId === connectionId ? { connectionId } : state.selection
+  })),
   /** 合并并立即展示配置修改，由持久化层合并连续写盘请求。 */
   updateSettings: update => { const settings = { ...get().settings, ...update }; set({ settings }); persist(settings); },
   /** 相同数据表复用已有标签，SQL 查询始终新建独立标签和会话。 */

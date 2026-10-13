@@ -1,13 +1,14 @@
 import { mkdir, readFile, rmdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import initSqlJs from 'sql.js';
+import { version as sourceVersion } from '../../package.json';
 import { test, expect, desktop, page, dataDir, closed, pageErrors, dialogCalls, launchDesktop, answerDialogs, requestQuit, quitDesktop } from './desktop-fixture';
 
 test('桌面启动、存储、进程隔离与输入校验', async ({}, testInfo) => {
   await expect(page).toHaveTitle('DBArk');
   await page.screenshot({ path: testInfo.outputPath('desktop-welcome.png') });
   const status = await page.evaluate(async () => ({ info: await window.dbark.invoke('app.info', {}), hasNode: 'require' in window, settings: await window.dbark.invoke('settings.get', {}) }));
-  expect(status.info.version).toBe('0.1.0'); expect(status.hasNode).toBe(false); expect(status.settings.theme).toBe('dark');
+  expect(status.info.version).toBe(sourceVersion); expect(status.hasNode).toBe(false); expect(status.settings.theme).toBe('dark');
   const connection = await page.evaluate(() => window.dbark.invoke('connections.save', { id: '', name: '自动化测试连接', group: '测试', color: '#40bb99', dialect: 'mysql', host: '127.0.0.1', port: 1, user: 'nobody', password: 'temporary-test-password', rememberPassword: false }));
   expect(connection.hasPassword).toBe(true); expect(connection.password).toBeUndefined();
   const error = await page.evaluate(async () => { try { await window.dbark.invoke('query.execute', { sessionId: 'missing', taskId: 'test', sql: 'SELECT 1', maxRows: -1 }); } catch (e) { return (e as Error).message; } });

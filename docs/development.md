@@ -51,4 +51,6 @@ GitHub Actions 分别使用 Windows x64、macOS arm64 和 macOS Intel 构建机�
 
 普通提交只构建并上传附件。发布前更新 `package.json`、版本记录和 `docs/releases/v版本号.md`，核对实际验证记录，再推送同版本 `v*` 标签。工作流须通过类型检查、单元测试、三个原生平台的桌面及安装包验收，才会创建 GitHub 开发预览 Release。
 
+仅修改 Markdown/文档的分支推送不会重新构建全部客户端；代码、测试及工作流变化仍运行检查，版本标签推送始终执行完整发布验收。路径筛选行为见 [GitHub 官方工作流说明](https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax#onpushpull_requestpull_request_targetpathspaths-ignore)。
+
 发布任务从经过检查的提交生成源码 ZIP，仅归档 Git 跟踪文件；汇总三个平台的安装包并生成 `SHA256SUMS.txt`。它使用该次工作流的短期 GitHub 凭据，没有新增长期发布密钥。发行签名、公证及自动更新需独立配置。

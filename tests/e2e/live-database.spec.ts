@@ -23,6 +23,17 @@ if (enabled && existsSync('.cache/dbark-test.env')) {
 interface LiveContext { observer: Connection; database: string; connectionName: string; connectionId: string; }
 const modifier = process.platform === 'darwin' ? 'Meta' : 'Control';
 
+/** Electron 的确认框走主进程同步原生接口，不能用 CDP 网页对话框接口接受。 */
+async function acceptNativeConfirmation() {
+  await desktop.evaluate(({ dialog }) => {
+    dialog.showMessageBoxSync = ((...args: unknown[]) => {
+      const options = args.at(-1) as Electron.MessageBoxSyncOptions;
+      globalThis.__dbarkE2EDialogs.calls.push({ title: options.title, message: options.message, buttons: options.buttons, response: 0 });
+      return 0;
+    }) as typeof dialog.showMessageBoxSync;
+  });
+}
+
 /** 连接表单走真实 UI；测试追踪关闭，避免把临时数据库密码记录进 Playwright 参数轨迹。 */
 async function connectAndCreate(database: string): Promise<Omit<LiveContext, 'observer'>> {
   const connectionName = `E2E ${database}`;
@@ -45,14 +56,7 @@ async function connectAndCreate(database: string): Promise<Omit<LiveContext, 'ob
   const create = page.getByRole('dialog', { name: '创建数据库', exact: true });
   await create.getByLabel('数据库名称', { exact: true }).fill(database);
   await expect(create.locator('.monaco-editor .view-lines')).toContainText('CREATE DATABASE');
-  // Electron 的 window.confirm 使用主进程同步原生框；不能用 CDP 的网页对话框接受接口。
-  await desktop.evaluate(({ dialog }) => {
-    dialog.showMessageBoxSync = ((...args: unknown[]) => {
-      const options = args.at(-1) as Electron.MessageBoxSyncOptions;
-      globalThis.__dbarkE2EDialogs.calls.push({ title: options.title, message: options.message, buttons: options.buttons, response: 0 });
-      return 0;
-    }) as typeof dialog.showMessageBoxSync;
-  });
+  await acceptNativeConfirmation();
   await create.getByRole('button', { name: '执行 SQL', exact: true }).click();
   await expect(create).toBeHidden({ timeout: 20000 });
   await page.locator('.connection-row .tree-label').click();
@@ -146,6 +150,61 @@ async function verifyConnectionChangeGuard(database: string, connectionName: str
   return renamed;
 }
 
+/** 已关闭连接标签后修改默认库，只清该连接树与库选择；新查询不得继承另一连接的活动库。 */
+async function verifyConnectionContextInvalidation(database: string, connectionName: string, connectionId: string, encryptionAvailable: boolean) {
+  const otherName = `另一连接 ${database}`;
+  await page.locator('.app-commandbar').getByRole('button', { name: '新建连接', exact: true }).click();
+  const create = page.getByRole('dialog', { name: '新建连接', exact: true });
+  await create.getByLabel('连接名称', { exact: true }).fill(otherName);
+  await create.getByLabel('主机地址', { exact: true }).fill(environment.DBARK_TEST_HOST!);
+  await create.getByLabel('端口', { exact: true }).fill(environment.DBARK_TEST_PORT ?? '3306');
+  await create.getByLabel('用户名', { exact: true }).fill(environment.DBARK_TEST_USER ?? 'root');
+  await create.getByLabel('数据库密码', { exact: true }).fill(environment.DBARK_TEST_PASSWORD ?? '');
+  await create.getByRole('button', { name: '保存连接', exact: true }).click();
+  await expect(create).toBeHidden();
+
+  const originalNode = page.locator('.connection-node').filter({ has: page.getByRole('button', { name: connectionName, exact: true }) });
+  const otherNode = page.locator('.connection-node').filter({ has: page.getByRole('button', { name: otherName, exact: true }) });
+  await otherNode.locator('.connection-row .tree-label').click();
+  const otherDatabase = otherNode.locator('.database-row').filter({ has: page.getByRole('button', { name: database, exact: true }) });
+  await otherDatabase.hover();
+  await otherDatabase.getByRole('button', { name: '新建数据库查询', exact: true }).click();
+  await executeSql("SELECT '另一连接保持原库' AS ready, DATABASE() AS active_database;");
+  await expect(page.locator('.query-tab:visible .result-body')).toContainText(database);
+  await expect(page.locator('.workspace-tab-button')).toHaveCount(2);
+
+  // 原连接标签关闭触发真实会话释放，另一连接的当前查询与对象树继续存在。
+  await acceptNativeConfirmation();
+  await page.locator('.workspace-tab-button').first().locator('.tab-close').click();
+  await expect(page.locator('.workspace-tab-button')).toHaveCount(1);
+  await originalNode.locator('.connection-row .tree-label').click();
+  const originalDatabase = originalNode.locator('.database-row').filter({ has: page.getByRole('button', { name: database, exact: true }) });
+  await originalDatabase.getByRole('button', { name: database, exact: true }).click();
+  await expect(originalDatabase).toHaveClass(/active/);
+  await expect(originalNode.getByRole('button', { name: 'transaction_probe', exact: true })).toBeVisible();
+  await originalNode.locator('.connection-row').hover();
+  await originalNode.getByRole('button', { name: `编辑连接 ${connectionName}`, exact: true }).click();
+  const edit = page.getByRole('dialog', { name: '编辑连接', exact: true });
+  await edit.getByLabel('默认数据库（可选）', { exact: true }).fill('information_schema');
+  if (!encryptionAvailable) await edit.getByLabel('数据库密码', { exact: true }).fill(environment.DBARK_TEST_PASSWORD ?? '');
+  await edit.getByRole('button', { name: '保存连接', exact: true }).click();
+  await expect(edit).toBeHidden();
+  await expect(originalNode.locator('.database-row')).toHaveCount(0);
+  await expect(originalNode.locator('.connection-row')).toHaveClass(/active/);
+  await expect(otherDatabase).toBeVisible();
+  await expect(page.locator('.query-tab:visible .result-body')).toContainText('另一连接保持原库');
+
+  // 空的默认库输入与选中的连接节点共同证明 selection.database 被清除，而非用其它标签补值。
+  await page.locator('.app-commandbar').getByRole('button', { name: '新建查询', exact: true }).click();
+  const query = page.getByRole('dialog', { name: '新建查询', exact: true });
+  await expect(query.getByRole('combobox', { name: /^数据库连接/ })).toHaveValue(connectionId);
+  await expect(query.getByLabel('默认数据库（可选）', { exact: true })).toHaveValue('');
+  await query.getByRole('button', { name: '打开查询', exact: true }).click();
+  await executeSql('SELECT DATABASE() AS active_database;');
+  await expect(page.locator('.query-tab:visible .result-body')).toContainText('information_schema');
+  await expect(page.locator('.query-tab:visible .result-body')).not.toContainText(database);
+}
+
 /** 文件对话框只替换路径选择，导入预览、字段映射、任务及文件 IO 均走真实主进程。 */
 async function chooseTransferFile(path: string, mode: 'import' | 'export') {
   await desktop.evaluate(({ dialog }, choice) => {
@@ -190,7 +249,15 @@ test.describe('远程真实数据库桌面工作流', () => {
       await query.getByRole('button', { name: '结果 2', exact: true }).click();
       await expect(query.locator('.result-body')).toContainText('second_result');
       const renamedConnection = await verifyConnectionChangeGuard(database, connectionName, connectionId);
-      await executeSql('CREATE TABLE transaction_probe (id INT PRIMARY KEY, note VARCHAR(120)) ENGINE=InnoDB;');
+      await executeSql('CREATE TABLE transaction_probe (id INT PRIMARY KEY, note VARCHAR(120)) ENGINE=InnoDB; CREATE TABLE shortcut_probe (id INT AUTO_INCREMENT PRIMARY KEY, note VARCHAR(120)) ENGINE=InnoDB;');
+      // 同时经过 Monaco 与 Electron 快捷键入口时，只能提交一次写操作；观察连接核对真实行数。
+      await writeSql("INSERT INTO shortcut_probe (note) VALUES ('快捷键只写入一次');");
+      await page.keyboard.press(`${modifier}+Enter`);
+      await expect.poll(async () => { const [rows] = await observer.query<RowDataPacket[]>(`SELECT COUNT(*) AS total FROM \`${database}\`.shortcut_probe`); return Number(rows[0].total); }).toBe(1);
+      await expect(query.getByRole('button', { name: '停止', exact: true })).toBeDisabled();
+      await expect(query.locator('.error-box')).toHaveCount(0);
+      const [shortcutRows] = await observer.query<RowDataPacket[]>(`SELECT COUNT(*) AS total FROM \`${database}\`.shortcut_probe`);
+      expect(Number(shortcutRows[0].total)).toBe(1);
       await query.getByRole('button', { name: '开始事务', exact: true }).click();
       await expect(query.locator('.tab-status')).toContainText('事务进行中');
       await executeSql("INSERT INTO transaction_probe VALUES (1,'应回滚');");
@@ -224,6 +291,8 @@ test.describe('远程真实数据库桌面工作流', () => {
       await form.getByRole('button', { name: '测试连接', exact: true }).click();
       await expect(form.locator('.success-box')).toContainText('连接成功', { timeout: 20000 });
       await form.getByRole('button', { name: '取消', exact: true }).click();
+      await verifyConnectionContextInvalidation(database, renamedConnection, connectionId, encryptionAvailable);
+      await page.screenshot({ path: testInfo.outputPath('live-connection-context.png') });
     }, testInfo);
   });
 
