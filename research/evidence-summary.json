@@ -1,0 +1,77 @@
+{
+  "byte_size": 88929576,
+  "reference_version": "17.0.8.0",
+  "unknowns": [
+    "Navicat 内部取消协议",
+    "Navicat UI 到数据库客户端的完整调用链",
+    "Navicat 并发更新冲突检测算法"
+  ],
+  "format": "PE32+ x64",
+  "evidence_levels": {
+    "static": "已读取目标字节或工具产生的静态分析证据",
+    "implementation": "DBArk 自主实现，需独立测试",
+    "runtime": "本轮未取得 Navicat UI 运行重放证据",
+    "manual": "随附手册文档描述"
+  },
+  "artifact_sha256": "ebc0cc7a7d8d45a1671f0cfbb3690b6b8e27e48e38f8f36acf09f40f3e07b739",
+  "date": "2026-10-13",
+  "facts": {
+    "direct_import_library_count": 42,
+    "rea_examined_resource_entries": 7164,
+    "rea_resource_count": 3577
+  },
+  "main_analysis": {
+    "status": "provider_timeout",
+    "timeout_ms": 900000,
+    "operation": "list_documents",
+    "target_hash_unchanged": true
+  },
+  "driver_analysis": {
+    "status": "completed",
+    "sha256": "0e84673c6a297fec57b4f9aa452b05b56969de165ae666ab55de3896e1104273",
+    "bytes": 457728,
+    "provider": "ghidra",
+    "provider_version": "12.1.4",
+    "overview_evidence_id": "ev_6819f39c0e8b569432962da5f22c027382c46b4bc56f8b169292b2114300c764",
+    "procedure_count": 1234,
+    "string_count": 1759,
+    "functions": [
+      {
+        "name": "mysql_real_connect",
+        "address": "0x180006e20",
+        "evidence_id": "ev_10d0579f6c20e4f9408979353da89e9e5e8c741b77e8d50cb050fa9818f894ab",
+        "has_pseudocode": true
+      },
+      {
+        "name": "mysql_real_query",
+        "address": "0x1800073a0",
+        "evidence_id": "ev_95948d08878bf8986044ce39f98e84444e9fc49ee6e46a21a3bfc1292344b87d",
+        "has_pseudocode": true
+      },
+      {
+        "name": "mysql_kill",
+        "address": "0x180007560",
+        "evidence_id": "ev_ca94a9f70bdfcc831e7a194634d8f7303b71148a53ee1e37a5655ef7a00d9f75",
+        "has_pseudocode": true
+      },
+      {
+        "name": "mysql_commit",
+        "address": "0x1800060e0",
+        "evidence_id": "ev_c3cd26a45b4e875b251322ccae2b73694e00ca9e9ff526c094f6147cbaada150",
+        "has_pseudocode": true
+      },
+      {
+        "name": "mysql_rollback",
+        "address": "0x180006100",
+        "evidence_id": "ev_e9c99e86e9b3cf67f896dd7bd26d62a7b59bf1f5cda10944f61b203558a85911",
+        "has_pseudocode": true
+      }
+    ],
+    "session_cleanup": "close_binary succeeded",
+    "target_hash_unchanged": true,
+    "limitations": [
+      "仅证明随附数据库客户端库的静态函数行为，未建立 Navicat UI 调用链",
+      "mysql_real_query 含未解析的间接跳转；commit/rollback 有终端流边界提示"
+    ]
+  }
+}

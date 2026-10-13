@@ -1,0 +1,62 @@
+import { zh } from './locales/zh-CN';
+import { create } from 'zustand';
+import type { AppSettings, ConnectionProfile, TaskEvent, TaskRecord } from '../shared/contracts';
+import { errorMessage, invoke, uid } from './lib';
+
+export type WorkspaceTab = AppSettings['tabs'][number];
+const defaults: AppSettings = { theme: 'dark', sidebarWidth: 260, resultLimit: 1000, pageSize: 100, tabs: [] };
+let saveTimer: ReturnType<typeof setTimeout> | undefined;
+
+interface WorkspaceState {
+  ready: boolean; settings: AppSettings; connections: ConnectionProfile[]; tasks: TaskRecord[];
+  notice?: { text: string; error: boolean }; selection?: { connectionId: string; database?: string }; activeJobs: Record<string, boolean>; dirtyTabs: Record<string, boolean>;
+  initialize: () => Promise<void>; setConnections: (connections: ConnectionProfile[]) => void;
+  updateSettings: (update: Partial<AppSettings>) => void; openTab: (tab: Omit<WorkspaceTab, 'id'> & { id?: string }) => void;
+  updateTab: (id: string, update: Partial<WorkspaceTab>) => void; closeTab: (id: string) => void;
+  select: (selection: WorkspaceState['selection']) => void; notify: (text: string, error?: boolean) => void;
+  setBusy: (id: string, busy: boolean) => void; setDirty: (id: string, dirty: boolean) => void;
+  onTask: (event: TaskEvent) => void;
+}
+
+/** 合并连续编辑再保存，避免 SQL 输入每个字符都触发磁盘写入。 */
+function persist(settings: AppSettings) {
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(() => void invoke('settings.save', settings).catch(error => useWorkspace.getState().notify(errorMessage(error), true)), 400);
+}
+
+export const useWorkspace = create<WorkspaceState>((set, get) => ({
+  ready: false, settings: defaults, connections: [], tasks: [], activeJobs: {}, dirtyTabs: {},
+  initialize: async () => {
+    try {
+      const [settings, connections, tasks] = await Promise.all([invoke('settings.get', {}), invoke('connections.list', {}), invoke('tasks.list', {})]);
+      set({ settings: { ...defaults, ...settings }, connections, tasks, ready: true });
+    } catch (error) { set({ ready: true }); get().notify(errorMessage(error), true); }
+  },
+  setConnections: connections => set({ connections }),
+  updateSettings: update => { const settings = { ...get().settings, ...update }; set({ settings }); persist(settings); },
+  openTab: candidate => {
+    const current = get().settings;
+    const existing = candidate.kind === 'table' ? current.tabs.find(tab => tab.kind === 'table' && tab.connectionId === candidate.connectionId && tab.database === candidate.database && tab.table === candidate.table) : undefined;
+    if (existing) { get().updateSettings({ activeTabId: existing.id }); return; }
+    const tab = { ...candidate, id: candidate.id ?? uid() };
+    get().updateSettings({ tabs: [...current.tabs, tab], activeTabId: tab.id });
+  },
+  updateTab: (id, update) => get().updateSettings({ tabs: get().settings.tabs.map(tab => tab.id === id ? { ...tab, ...update } : tab) }),
+  closeTab: id => {
+    const settings = get().settings; const index = settings.tabs.findIndex(tab => tab.id === id); const tabs = settings.tabs.filter(tab => tab.id !== id);
+    get().updateSettings({ tabs, activeTabId: settings.activeTabId === id ? tabs[Math.max(0, index - 1)]?.id : settings.activeTabId });
+    get().setDirty(id, false);
+  },
+  select: selection => set({ selection }),
+  notify: (text, error = false) => set({ notice: { text, error } }),
+  setBusy: (id, busy) => set(state => ({ activeJobs: { ...state.activeJobs, [id]: busy } })),
+  setDirty: (id, dirty) => set(state => ({ dirtyTabs: { ...state.dirtyTabs, [id]: dirty } })),
+  onTask: event => set(state => {
+    const previous = state.tasks.find(task => task.id === event.taskId);
+    const task: TaskRecord = { id: event.taskId, kind: previous?.kind ?? zh.workspace.text001, startedAt: previous?.startedAt ?? new Date().toISOString(), ...previous, status: event.status, progress: event.progress, message: event.message };
+    return { tasks: [task, ...state.tasks.filter(item => item.id !== event.taskId)].slice(0, 200) };
+  })
+}));
+
+/** 关闭窗口前立即刷新最后一次编辑状态。 */
+window.addEventListener('beforeunload', () => { clearTimeout(saveTimer); if (useWorkspace.getState().ready) void invoke('settings.save', useWorkspace.getState().settings); });

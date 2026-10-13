@@ -1,0 +1,49 @@
+import { zh, formatText } from '../locales/zh-CN';
+import { useEffect, useState } from 'react';
+import { ArrowRight, FileUp, Download, Square, CheckCircle2 } from 'lucide-react';
+import type { DataRow, FileChoice, TableInfo } from '../../shared/contracts';
+import { errorMessage, invoke, uid } from '../lib';
+import { useWorkspace } from '../store';
+import { ResultsGrid } from './ResultsGrid';
+import { ErrorBox, Field, Modal, Spinner } from './ui';
+
+/** 文件仅通过一次性选择令牌使用，先预览字段映射再启动独立长任务。 */
+export function TransferDialog({ mode, connectionId, database, table, onClose }: { mode: 'import' | 'export'; connectionId: string; database: string; table: string; onClose: () => void }) {
+  const [format, setFormat] = useState<'csv' | 'json' | 'sql'>('csv'); const [encoding, setEncoding] = useState<'utf8' | 'utf16le' | 'gb18030'>('utf8'); const [file, setFile] = useState<FileChoice | null>(null);
+  const [mapping, setMapping] = useState<Record<string, string>>({}); const [sample, setSample] = useState<{ columns: string[]; rows: DataRow[] } | null>(null); const [info, setInfo] = useState<TableInfo | null>(null);
+  const [includeStructure, setIncludeStructure] = useState(true); const [includeData, setIncludeData] = useState(true); const [busy, setBusy] = useState(false); const [previewing, setPreviewing] = useState(false); const [error, setError] = useState(''); const [failureDetails, setFailureDetails] = useState<string[]>([]); const [done, setDone] = useState<number>();
+  const [taskId, setTaskId] = useState(''); const task = useWorkspace(state => state.tasks.find(item => item.id === taskId));
+  useEffect(() => { void invoke('metadata.table', { connectionId, database, table }).then(setInfo).catch(reason => setError(errorMessage(reason))); }, [connectionId, database, table]);
+  /** 格式变更后重新选择文件，避免输出扩展名与内容格式不一致。 */
+  async function chooseFile() {
+    try { const choice = await invoke('files.choose', { purpose: mode, format, suggestedName: `${table}.${format}` }); if (choice) { setFile(choice); setDone(undefined); setSample(null); } }
+    catch (reason) { setError(errorMessage(reason)); }
+  }
+  useEffect(() => {
+    let alive = true;
+    if (!file || mode !== 'import' || format === 'sql') return;
+    setPreviewing(true); setError('');
+    void invoke('files.preview', { fileToken: file.token, format, encoding }).then(result => {
+      if (!alive) return; setSample(result); setMapping(Object.fromEntries(result.columns.map(name => [name, info?.columns.some(column => column.name === name && !column.generated) ? name : ''])));
+    }).catch(reason => { if (alive) setError(errorMessage(reason)); }).finally(() => { if (alive) setPreviewing(false); });
+    return () => { alive = false; };
+  }, [file, mode, format, encoding, info]);
+  /** 每次显式重试使用新任务编号，保留已提交行数与逐行失败明细。 */
+  async function execute() {
+    if (!file) return; setBusy(true); setError(''); setFailureDetails([]); const nextTaskId = uid(); setTaskId(nextTaskId);
+    try {
+      if (mode === 'import') {
+        const selectedMapping = Object.fromEntries(Object.entries(mapping).filter(([, target]) => target));
+        if (format !== 'sql' && Object.keys(selectedMapping).length === 0) throw new Error(zh.transfer.text001);
+        if (new Set(Object.values(selectedMapping)).size !== Object.keys(selectedMapping).length) throw new Error(zh.transfer.text002);
+        const result = await invoke('files.import', { connectionId, database, table, fileToken: file.token, format, encoding, mapping: selectedMapping, taskId: nextTaskId });
+        setDone(result.rows); setFailureDetails(result.errors);
+      } else {
+        if (format === 'sql' && !includeData && !includeStructure) throw new Error(zh.transfer.text003);
+        const result = await invoke('files.export', { connectionId, database, table, fileToken: file.token, format, encoding, includeStructure, includeData, taskId: nextTaskId }); setDone(result.rows);
+      }
+    } catch (reason) { setError(errorMessage(reason)); }
+    finally { setBusy(false); }
+  }
+  return <Modal title={`${mode === 'import' ? zh.transfer.text004 : zh.transfer.text005} · ${database}.${table}`} wide onClose={() => { if (!busy) onClose(); }}><div className="modal-content"><div className="form-grid"><Field label={zh.transfer.text006}><select disabled={busy} value={format} onChange={event => { setFormat(event.target.value as typeof format); setFile(null); setSample(null); setDone(undefined); }}><option value="csv">{zh.transfer.text007}</option><option value="json">JSON</option><option value="sql">{zh.transfer.text008}</option></select></Field><Field label={zh.transfer.text009}><select disabled={busy} value={encoding} onChange={event => setEncoding(event.target.value as typeof encoding)}><option value="utf8">UTF-8</option><option value="utf16le">UTF-16 LE</option><option value="gb18030">{zh.transfer.text010}</option></select></Field></div><button className="file-picker" disabled={busy} onClick={() => void chooseFile()}>{mode === 'import' ? <FileUp size={25}/> : <Download size={25}/>}<span><strong>{file?.name || (mode === 'import' ? zh.transfer.text011 : zh.transfer.text012)}</strong><small>{mode === 'import' ? zh.transfer.text013 : zh.transfer.text014}</small></span><ArrowRight size={17}/></button>{mode === 'export' && format === 'sql' && <div className="check-row"><label className="check"><input type="checkbox" checked={includeStructure} disabled={busy} onChange={event => setIncludeStructure(event.target.checked)}/>{zh.transfer.text015}</label><label className="check"><input type="checkbox" checked={includeData} disabled={busy} onChange={event => setIncludeData(event.target.checked)}/>{zh.transfer.text016}</label></div>}{mode === 'import' && format === 'sql' && <div className="info-strip">{zh.transfer.text017}</div>}{previewing && <Spinner text={zh.transfer.text018}/>}{sample && <><h3>{zh.transfer.text019}</h3><div className="mapping-grid">{sample.columns.map(column => <div className="mapping-row" key={column}><span className="truncate">{column}</span><ArrowRight size={13}/><select aria-label={formatText(zh.transfer.text020, column)} value={mapping[column] ?? ''} disabled={busy} onChange={event => setMapping(current => ({ ...current, [column]: event.target.value }))}><option value="">{zh.transfer.text021}</option>{info?.columns.filter(item => !item.generated).map(target => <option value={target.name} key={target.name}>{target.name}</option>)}</select></div>)}</div><h3>{zh.transfer.text022}</h3><div className="sample-grid"><ResultsGrid columns={sample.columns.map(name => ({ key: name, name, type: '' }))} rows={sample.rows}/></div></>}{task && <div className="transfer-progress"><div><span>{task.message}</span><strong>{Math.round(task.progress)}%</strong></div><progress max="100" value={task.progress}/></div>}{done !== undefined && <div className={failureDetails.length ? 'error-box' : 'success-box'}>{!failureDetails.length && <CheckCircle2 size={16}/>}{zh.transfer.text023}{mode === 'import' ? zh.common.import : zh.common.export} {done}{zh.transfer.text024}{failureDetails.length ? formatText(zh.transfer.text025, failureDetails.length) : '。'}</div>}<ErrorBox message={error}/>{failureDetails.length > 0 && <details className="error-box" open><summary>{failureDetails.length}{zh.transfer.text026}</summary><pre>{failureDetails.join('\n')}</pre></details>}</div><footer className="modal-footer"><button disabled={busy} onClick={onClose}>{done === undefined ? zh.common.close : zh.common.done}</button><span className="grow"/>{busy ? <button onClick={() => void invoke('query.cancel', { taskId }).catch(reason => setError(errorMessage(reason)))}><Square size={13}/>{zh.transfer.text027}</button> : <button className="primary" disabled={!file || previewing || done !== undefined} onClick={() => void execute()}>{mode === 'import' ? zh.transfer.text028 : zh.transfer.text029}<ArrowRight size={14}/></button>}</footer></Modal>;
+}

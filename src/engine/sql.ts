@@ -1,0 +1,274 @@
+import type { CellValue, DataRow, FilterRule, RowChange, SortRule, SqlPreview, TableDesign, TableInfo } from '../shared/contracts';
+
+/** 标识符始终作为标识符引用，不允许空值、NUL 或超过 MySQL 限制的名称。 */
+export function identifier(value: string): string {
+  if (typeof value !== 'string' || !value.length || value.length > 64 || value.includes('\0')) throw new Error('数据库对象名称必须为 1～64 个字符且不能包含 NUL');
+  return '`' + value.replaceAll('`', '``') + '`';
+}
+/** 数据库名与对象名分别引用，避免名称内的点号被误当作层级分隔符。 */
+export const qualified = (database: string, table: string): string => `${identifier(database)}.${identifier(table)}`;
+
+/** SQL 文本生成同时适配 NO_BACKSLASH_ESCAPES；执行数据写入仍使用预处理参数。 */
+export function stringLiteral(value: string, noBackslashEscapes = false): string {
+  if (value.includes('\0')) throw new Error('DDL 文本不能包含 NUL');
+  return "'" + (noBackslashEscapes ? value : value.replaceAll('\\', '\\\\')).replaceAll("'", "''") + "'";
+}
+
+/** MariaDB 元数据用 SQL 引号区分文字量与表达式，界面编辑值必须先解码文字量。 */
+export function mariaDefault(value: string | null, noBackslashEscapes = false): string | null {
+  if (value === null || value === 'NULL') return null;
+  if (!(value.startsWith("'") && value.endsWith("'"))) return value;
+  const body = value.slice(1, -1); let result = '';
+  const escapes: Record<string, string> = { '0': '\0', b: '\b', n: '\n', r: '\r', t: '\t', Z: '\x1a' };
+  for (let index = 0; index < body.length; index++) {
+    if (body[index] === "'" && body[index + 1] === "'") { result += "'"; index++; }
+    else if (body[index] === '\\' && !noBackslashEscapes && index + 1 < body.length) {
+      const next = body[++index]; result += next === '%' || next === '_' ? '\\' + next : (escapes[next] ?? next);
+    } else result += body[index];
+  }
+  return result;
+}
+/** 仅识别设计器支持的时间默认值表达式，不放行任意 SQL 函数。 */
+export function temporalDefault(value: string | null): boolean { return value !== null && /^(?:CURRENT_TIMESTAMP(?:\([0-6]?\))?|CURRENT_DATE(?:\(\))?|CURRENT_TIME(?:\([0-6]?\))?)$/i.test(value); }
+
+/** Buffer 通过显式包装跨进程传递；精确数值及日期由驱动直接返回字符串。 */
+export function serializeCell(value: unknown): CellValue {
+  if (value === null || value === undefined) return null;
+  if (Buffer.isBuffer(value)) return { type: 'binary', base64: value.toString('base64') };
+  if (typeof value === 'bigint') return value.toString();
+  if (value instanceof Date) throw new Error('驱动返回了 Date，必须开启 dateStrings 以避免时区和精度变化');
+  if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') return value;
+  return JSON.stringify(value);
+}
+/** 将跨进程二进制包装还原为驱动参数，其余精确字符串保持不变。 */
+export function deserializeCell(value: CellValue): string | number | boolean | null | Buffer {
+  if (value && typeof value === 'object' && value.type === 'binary') return Buffer.from(value.base64, 'base64');
+  return value as string | number | boolean | null;
+}
+
+/** 支持跨块、跨行字符串与 DELIMITER 指令，导入脚本时只保留当前语句。 */
+export class SqlScriptScanner {
+  private pending = '';
+  private statement = '';
+  private delimiter = ';';
+  private state: 'normal' | 'single' | 'double' | 'identifier' | 'block' = 'normal';
+  private hasCode = false;
+  /** 使用当前会话的反斜线模式初始化扫描器，避免字符串边界判断错误。 */
+  constructor(private readonly noBackslashEscapes = false) {}
+
+  /** 消费一个文本块；仅在 final 时接收末尾无分隔符语句并检查未闭合状态。 */
+  push(chunk: string, final = false): string[] {
+    this.pending += chunk;
+    const statements: string[] = [];
+    let lineEnd: number;
+    while ((lineEnd = this.pending.indexOf('\n')) >= 0) {
+      const line = this.pending.slice(0, lineEnd + 1);
+      this.pending = this.pending.slice(lineEnd + 1);
+      this.line(line, statements);
+    }
+    if (final) {
+      if (this.pending) this.line(this.pending, statements);
+      this.pending = '';
+      if (this.state !== 'normal') throw new Error('SQL 脚本中存在未闭合的引号或注释');
+      if (this.hasCode) statements.push(this.statement.trim());
+      this.statement = '';
+      this.hasCode = false;
+    }
+    if (this.statement.length + this.pending.length > 64 * 1024 * 1024) throw new Error('单条 SQL 不能超过 64 MiB');
+    return statements;
+  }
+
+  /** 按行识别客户端 DELIMITER 指令，字符串和注释内的分隔符不结束语句。 */
+  private line(line: string, output: string[]): void {
+    const directive = this.state === 'normal' && !this.hasCode ? /^\s*DELIMITER\s+(\S+)\s*$/i.exec(line) : null;
+    if (directive) {
+      if (directive[1].length > 16 || /["'`\\]/.test(directive[1])) throw new Error('DELIMITER 必须是至多 16 个字符的非引号分隔符');
+      this.delimiter = directive[1];
+      this.statement = '';
+      return;
+    }
+    for (let i = 0; i < line.length; i++) {
+      const char = line[i], next = line[i + 1];
+      if (this.state === 'block') {
+        this.statement += char;
+        if (char === '*' && next === '/') { this.statement += next; i++; this.state = 'normal'; }
+        continue;
+      }
+      if (this.state !== 'normal') {
+        this.statement += char;
+        const quote = this.state === 'single' ? "'" : this.state === 'double' ? '"' : '`';
+        if (char === '\\' && !this.noBackslashEscapes && this.state !== 'identifier') { if (next !== undefined) { this.statement += next; i++; } }
+        else if (char === quote) {
+          if (next === quote) { this.statement += next; i++; }
+          else this.state = 'normal';
+        }
+        continue;
+      }
+      if (line.startsWith(this.delimiter, i)) {
+        if (this.hasCode) output.push(this.statement.trim());
+        this.statement = ''; this.hasCode = false; i += this.delimiter.length - 1; continue;
+      }
+      if (char === '#' || (char === '-' && next === '-' && /\s/.test(line[i + 2] ?? ' '))) { this.statement += line.slice(i); return; }
+      if (char === '/' && next === '*') {
+        if (line[i + 2] === '!') this.hasCode = true;
+        this.statement += '/*'; i++; this.state = 'block'; continue;
+      }
+      if (char === "'") this.state = 'single';
+      else if (char === '"') this.state = 'double';
+      else if (char === '`') this.state = 'identifier';
+      if (!/\s/.test(char)) this.hasCode = true;
+      this.statement += char;
+    }
+  }
+}
+/** 对编辑器已有的完整文本执行同一套扫描规则，不另建简化版分号切分逻辑。 */
+export function splitSql(sql: string, noBackslashEscapes = false): string[] { return new SqlScriptScanner(noBackslashEscapes).push(sql, true); }
+
+/** 排序与筛选严格使用数据库元数据白名单，值独立绑定，避免拼接表达式。 */
+export function buildPageSql(info: TableInfo, page: number, pageSize: number, filters: FilterRule[], sort: SortRule[]): { sql: string; params: CellValue[] } {
+  if (!Number.isSafeInteger(page) || page < 1 || !Number.isSafeInteger(pageSize) || pageSize < 1 || pageSize > 1000 || !Number.isSafeInteger((page - 1) * pageSize)) throw new Error('分页参数无效，页大小范围为 1～1000');
+  const names = new Set(info.columns.map(column => column.name));
+  const params: CellValue[] = [];
+  const clauses = filters.map(filter => {
+    if (!names.has(filter.column)) throw new Error(`未知筛选字段：${filter.column}`);
+    const column = identifier(filter.column);
+    if (filter.operator === 'IS NULL' || filter.operator === 'IS NOT NULL') return `${column} ${filter.operator}`;
+    if (!['=', '!=', '>', '>=', '<', '<=', 'LIKE'].includes(filter.operator)) throw new Error('不支持的筛选操作符');
+    params.push(filter.value ?? ''); return `${column} ${filter.operator} ?`;
+  });
+  const order = sort.length ? sort : info.editableKey.map(column => ({ column, direction: 'ASC' as const }));
+  const orderSql = order.map(rule => {
+    if (!names.has(rule.column) || !['ASC', 'DESC'].includes(rule.direction)) throw new Error('排序字段或方向无效');
+    return `${identifier(rule.column)} ${rule.direction}`;
+  }).join(', ');
+  return { sql: `SELECT * FROM ${qualified(info.database, info.name)}${clauses.length ? ' WHERE ' + clauses.join(' AND ') : ''}${orderSql ? ' ORDER BY ' + orderSql : ''} LIMIT ${pageSize + 1} OFFSET ${(page - 1) * pageSize}`, params };
+}
+
+/** 全旧值比较避免丢失更新；唯一键是可靠定位的必要条件，不能仅凭 LIMIT 1 写入。 */
+export function buildChanges(info: TableInfo, changes: RowChange[]): SqlPreview {
+  if (info.engine.toUpperCase() !== 'INNODB') throw new Error('仅允许对 InnoDB 事务表集中提交修改');
+  if (!info.editableKey.length) throw new Error('此表没有全部非空的主键或唯一键，数据仅可读取');
+  const columns = new Map(info.columns.map(column => [column.name, column]));
+  const table = qualified(info.database, info.name);
+  const statements: SqlPreview['statements'] = [];
+  for (const change of changes) {
+    const params: CellValue[] = [];
+    const values = change.kind === 'delete' ? [] : Object.entries(change.values);
+    for (const [name] of values) {
+      const column = columns.get(name);
+      if (!column) throw new Error(`未知字段：${name}`);
+      if (column.generated) throw new Error(`生成列不能手动赋值：${name}`);
+    }
+    if (change.kind === 'insert') {
+      statements.push({ sql: values.length ? `INSERT INTO ${table} (${values.map(([name]) => identifier(name)).join(', ')}) VALUES (${values.map(() => '?').join(', ')})` : `INSERT INTO ${table} () VALUES ()`, params: values.map(([, value]) => value) });
+      continue;
+    }
+    if (change.kind === 'update' && !values.length) continue;
+    for (const name of columns.keys()) if (!Object.hasOwn(change.before, name)) throw new Error(`缺少完整原始行：${name}，请刷新数据后重试`);
+    for (const name of info.editableKey) if (change.before[name] === null || change.before[name] === undefined) throw new Error('原始行唯一键不得为空');
+    // 键条件保持可用索引；全文本旧值另做精确比较，不受 CI/AI/PAD SPACE 排序规则影响。
+    const keyClauses = info.editableKey.map(name => { params.push(change.before[name]); return `${identifier(name)} <=> ?`; });
+    const originalClauses = [...columns.values()].map(column => {
+      params.push(change.before[column.name]);
+      // 先统一到连接字符集再取字节，否则 latin1 的 é 与 UTF-8 参数会产生假冲突。
+      if (/^(?:CHAR|VARCHAR|TINYTEXT|TEXT|MEDIUMTEXT|LONGTEXT|ENUM|SET|JSON)\b/i.test(column.type)) {
+        return `BINARY CONVERT(${identifier(column.name)} USING utf8mb4) <=> BINARY CONVERT(? USING utf8mb4)`;
+      }
+      // BLOB/二进制列原生比较已按字节执行；数值和日期维持服务器自身的类型语义。
+      return `${identifier(column.name)} <=> ?`;
+    });
+    const where = [...keyClauses, ...originalClauses].join(' AND ');
+    if (change.kind === 'delete') statements.push({ sql: `DELETE FROM ${table} WHERE ${where}`, params });
+    else statements.push({ sql: `UPDATE ${table} SET ${values.map(([name]) => `${identifier(name)} = ?`).join(', ')} WHERE ${where}`, params: [...values.map(([, value]) => value), ...params] });
+  }
+  return { sql: statements.map(statement => statement.sql + ';\n-- 参数：' + JSON.stringify(statement.params)).join('\n\n'), statements, warnings: ['提交时在同一事务内校验完整原始行；并发冲突会回滚整批修改。'] };
+}
+
+/** 类型只接收受支持的类型语法，不接收任意 SQL 片段。 */
+export function columnType(value: string): string {
+  const type = value.trim();
+  if (/^(?:TINYINT|SMALLINT|MEDIUMINT|INT|INTEGER|BIGINT|DECIMAL|NUMERIC|FLOAT|DOUBLE|REAL|BIT|BOOL|BOOLEAN)(?:\(\d{1,5}(?:\s*,\s*\d{1,5})?\))?(?:\s+UNSIGNED)?(?:\s+ZEROFILL)?$/i.test(type) || /^(?:CHAR|VARCHAR|BINARY|VARBINARY)\(\d{1,5}\)$/i.test(type) || /^(?:DATE|YEAR|TIME|DATETIME|TIMESTAMP)(?:\([0-6]\))?$/i.test(type) || /^(?:TINYTEXT|TEXT|MEDIUMTEXT|LONGTEXT|TINYBLOB|BLOB|MEDIUMBLOB|LONGBLOB|JSON|GEOMETRY|POINT|LINESTRING|POLYGON|MULTIPOINT|MULTILINESTRING|MULTIPOLYGON|GEOMETRYCOLLECTION)$/i.test(type)) return type.toUpperCase();
+  if (/^(?:ENUM|SET)\(\s*'(?:[^'\\]|'')*'(?:\s*,\s*'(?:[^'\\]|'')*')*\s*\)$/i.test(type)) return type;
+  throw new Error(`字段类型不受支持或包含非法 SQL：${value}`);
+}
+
+/** 以完整设计与数据库现状生成单个 ALTER，外键、索引、字段顺序都纳入变更。 */
+export function buildDesign(design: TableDesign, original?: TableInfo, noBackslashEscapes = false): SqlPreview {
+  if (!design.columns.length) throw new Error('表至少需要一个字段');
+  const names = new Set(design.columns.map(column => column.name));
+  if (names.size !== design.columns.length) throw new Error('字段名重复');
+  if (!['INNODB', 'MYISAM', 'MEMORY', 'ARIA', 'ARCHIVE', 'CSV'].includes(design.engine.toUpperCase())) throw new Error('不支持的存储引擎');
+  if (!/^[a-zA-Z0-9_]+$/.test(design.charset)) throw new Error('字符集名称无效');
+  const literal = (value: string) => stringLiteral(value, noBackslashEscapes);
+  /** 先验证类型，再生成列定义；文本字段的时间样式默认值仍按文字量处理。 */
+  const columnSql = (column: TableDesign['columns'][number]) => {
+    let sql = `${identifier(column.name)} ${columnType(column.type)} ${column.nullable ? 'NULL' : 'NOT NULL'}`;
+    if (column.defaultValue !== undefined) {
+      const value = column.defaultValue;
+      sql += ' DEFAULT ' + (value === null ? 'NULL' : /^(?:DATE|DATETIME|TIMESTAMP|TIME)\b/i.test(column.type) && temporalDefault(value) ? value.toUpperCase() : literal(value));
+    }
+    if (column.autoIncrement) sql += ' AUTO_INCREMENT';
+    if (column.comment) sql += ' COMMENT ' + literal(column.comment);
+    return sql;
+  };
+  /** 索引和外键只能引用本次设计中存在且不重复的字段。 */
+  const localColumns = (items: string[]) => {
+    if (!items.length || new Set(items).size !== items.length || items.some(name => !names.has(name))) throw new Error('索引或外键包含空、重复或不存在的字段');
+    return items.map(identifier).join(', ');
+  };
+  if (new Set(design.indexes.map(index => index.name)).size !== design.indexes.length) throw new Error('索引名称重复');
+  const indexes = design.indexes.map(index => index.name === 'PRIMARY' ? `PRIMARY KEY (${localColumns(index.columns)})` : `${index.unique ? 'UNIQUE ' : ''}KEY ${identifier(index.name)} (${localColumns(index.columns)})`);
+  const foreignKeys = design.foreignKeys.map(key => {
+    if (key.columns.length !== key.referencedColumns.length || !key.columns.length) throw new Error('外键与引用字段数量必须一致');
+    if (![key.onDelete, key.onUpdate].every(action => ['RESTRICT', 'CASCADE', 'SET NULL', 'NO ACTION'].includes(action.toUpperCase()))) throw new Error('外键动作无效');
+    return `CONSTRAINT ${identifier(key.name)} FOREIGN KEY (${localColumns(key.columns)}) REFERENCES ${qualified(key.referencedDatabase, key.referencedTable)} (${key.referencedColumns.map(identifier).join(', ')}) ON DELETE ${key.onDelete.toUpperCase()} ON UPDATE ${key.onUpdate.toUpperCase()}`;
+  });
+  const preserveCollation = original?.charset === design.charset ? original.collation : undefined;
+  if (preserveCollation && !/^[a-zA-Z0-9_]+$/.test(preserveCollation)) throw new Error('原表排序规则名称无效');
+  const options = `ENGINE=${design.engine.toUpperCase()} DEFAULT CHARACTER SET=${design.charset}${preserveCollation ? ' COLLATE=' + preserveCollation : ''} COMMENT=${literal(design.comment)}`;
+  let sql: string;
+  if (!original) sql = `CREATE TABLE ${qualified(design.database, design.name)} (\n  ${[...design.columns.map(columnSql), ...indexes, ...foreignKeys].join(',\n  ')}\n) ${options}`;
+  else {
+    if (original.columns.some(column => column.generated)) throw new Error('含生成列的表请通过 SQL 定义编辑，避免设计器丢失生成表达式');
+    const oldNames = new Set(original.columns.map(column => column.name));
+    const retained = new Set(design.columns.map(column => column.originalName ?? column.name));
+    const changes: string[] = [...original.foreignKeys.map(key => `DROP FOREIGN KEY ${identifier(key.name)}`), ...original.indexes.map(index => index.name === 'PRIMARY' ? 'DROP PRIMARY KEY' : `DROP INDEX ${identifier(index.name)}`)];
+    for (const column of original.columns) if (!retained.has(column.name)) changes.push(`DROP COLUMN ${identifier(column.name)}`);
+    design.columns.forEach((column, index) => {
+      const oldName = column.originalName ?? column.name;
+      const action = oldNames.has(oldName) ? `CHANGE COLUMN ${identifier(oldName)}` : 'ADD COLUMN';
+      changes.push(`${action} ${columnSql(column)}${index ? ' AFTER ' + identifier(design.columns[index - 1].name) : ' FIRST'}`);
+    });
+    changes.push(...indexes.map(index => 'ADD ' + index), ...foreignKeys.map(key => 'ADD ' + key), options);
+    if (design.name !== original.name) changes.push(`RENAME TO ${qualified(design.database, design.name)}`);
+    sql = `ALTER TABLE ${qualified(design.database, original.name)}\n  ${changes.join(',\n  ')}`;
+  }
+  return { sql: sql + ';', statements: [{ sql, params: [] }], warnings: original ? ['MySQL/MariaDB 的 DDL 通常会隐式提交，执行后不能通过事务回滚。', '修改已有表会重建设计器所列的索引和外键；请检查预览。'] : [] };
+}
+
+/** SQL 导出使用十六进制文字量，避免字符集、反斜线模式和二进制数据改变原值。 */
+export function exportLiteral(value: CellValue): string {
+  if (value === null) return 'NULL';
+  if (typeof value === 'boolean') return value ? '1' : '0';
+  if (typeof value === 'number') { if (!Number.isFinite(value)) throw new Error('不能导出非有限数字'); return String(value); }
+  if (typeof value === 'object') return `X'${Buffer.from(value.base64, 'base64').toString('hex')}'`;
+  return `_utf8mb4 X'${Buffer.from(value, 'utf8').toString('hex')}'`;
+}
+
+/** 把受控模板的值占位符变成模式无关的文字量，跳过引用名称内部的问号。 */
+export function inlineParameters(sql: string, params: CellValue[]): string {
+  let result = '', position = 0, quoted = false;
+  for (let index = 0; index < sql.length; index++) {
+    const char = sql[index];
+    if (char === '`') {
+      result += char;
+      if (quoted && sql[index + 1] === '`') { result += '`'; index++; }
+      else quoted = !quoted;
+    } else if (char === '?' && !quoted) {
+      if (position >= params.length) throw new Error('SQL 模板缺少参数');
+      result += exportLiteral(params[position++]);
+    } else result += char;
+  }
+  if (position !== params.length || quoted) throw new Error('SQL 模板参数或引用标识符不完整');
+  return result;
+}

@@ -1,0 +1,57 @@
+name: 客户端检查与构建
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+jobs:
+  checks:
+    name: 类型与单元测试
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - run: corepack enable
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm typecheck
+      - run: pnpm test
+      - run: pnpm build
+  desktop:
+    name: ${{ matrix.label }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            label: Windows x64
+            command: pnpm dist:win
+          - os: macos-latest
+            label: macOS arm64 与 x64
+            command: pnpm dist:mac
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - run: corepack enable
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm exec install-electron
+      - run: pnpm test:e2e
+      - run: ${{ matrix.command }}
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: DBArk-${{ runner.os }}-未签名
+          path: |
+            release/*.exe
+            release/*.dmg
+            release/*.zip
+            release/*.blockmap
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: 测试记录-${{ runner.os }}
+          path: test-results/

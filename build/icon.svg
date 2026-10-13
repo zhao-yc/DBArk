@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024" fill="none">
+  <title>DBArk 应用图标</title>
+  <desc>深色圆角底上的薄荷绿色方舟立方体，与应用内自主绘制的品牌标记保持一致。</desc>
+  <defs>
+    <linearGradient id="background" x1="144" y1="96" x2="912" y2="960" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#202D32"/>
+      <stop offset="1" stop-color="#10181D"/>
+    </linearGradient>
+  </defs>
+  <rect x="64" y="64" width="896" height="896" rx="204" fill="url(#background)"/>
+  <rect x="68" y="68" width="888" height="888" rx="200" stroke="#34494C" stroke-opacity="0.7" stroke-width="8"/>
+  <!-- 与 src/renderer/App.tsx 中 Brand 的原始 28 × 28 路径使用相同结构。 -->
+  <g transform="translate(92 107) scale(30)" fill="none">
+    <path d="M4 7L14 2L24 7V19L14 25L4 19V7Z" fill="#6BD3AE" opacity="0.16"/>
+    <path d="M5 8L14 3L23 8M5 8V18L14 24M5 8L14 13M23 8V18L14 24M23 8L14 13M14 13V24M9.5 5.5L18.5 10.5M5 13L14 18L23 13" stroke="#6BD3AE" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+  </g>
+</svg>

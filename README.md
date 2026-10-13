@@ -1,2 +1,60 @@
 # DBArk
-开源 MySQL / MariaDB 桌面数据库客户端，基于 Electron、React 和 TypeScript，采用 MIT 许可证。
+
+面向 MySQL / MariaDB 的开源桌面数据库客户端。使用 Electron、React 和 TypeScript，采用 MIT 许可证。
+
+DBArk 保留连接树、多标签查询和表格编辑等熟悉的工作方式，使用独立的界面与实现。当前开发范围为 Windows 和 macOS 客户端。
+
+## 开发运行
+
+需要 Node.js 24 和 pnpm 12.11.2。
+
+```sh
+corepack enable
+pnpm install --frozen-lockfile
+pnpm exec install-electron
+pnpm dev
+```
+
+开发页面固定使用 `127.0.0.1:5186`，端口被占用时会明确报错。终端显示 Vite 与客户端日志；关闭客户端或在运行终端按 Ctrl+C 停止。修改主进程或数据库引擎后需重启开发命令，界面修改支持热更新。
+
+## 日常操作
+
+1. 新建连接，填写主机、端口、账号和密码，可配置分组、颜色、SSH 和 TLS。
+2. 双击或打开连接，选择数据库；打开表查看数据，或创建查询标签执行 SQL。
+3. 查询支持执行选中内容、多语句脚本、历史、保存查询、执行计划和事务操作。每个查询标签使用独立数据库会话。
+4. 表格修改先形成待提交变更，预览 SQL 后集中保存。表没有可靠唯一键、使用非事务存储引擎或为视图时只读。
+5. 表设计器预览 DDL 后执行。数据库 DDL 通常隐式提交，不能承诺事务回滚；复杂已有结构可通过 SQL 定义编辑。
+6. 导入导出使用本机文件对话框，支持 CSV、JSON、SQL 与 UTF-8、UTF-16LE、GB18030 编码。
+
+SSH 连接须填写可信主机的 SHA256 指纹。TLS 默认验证服务器证书；自签发证书应通过 CA 文件配置。密码在系统加密可用且选择记住时加密保存，否则只保留在当前应用会话。
+
+客户端保留 BIGINT、DECIMAL 和日期时间的字符串表示，避免 JavaScript 数值精度及本机时区隐式转换。结果预览有可调行数及内存限制；完整数据导出通过独立流式任务完成。
+
+## 检查与打包
+
+```sh
+pnpm typecheck
+pnpm test
+pnpm test:e2e
+pnpm dist:win
+# 在 macOS 执行
+pnpm dist:mac
+```
+
+产物位于 `release/`。当前默认生成未签名构建；GitHub Actions 配置了 Windows 与 macOS 的测试、构建和产物上传，不会自动公开发布版本。
+
+数据库集成测试需要显式配置测试连接，参见 [开发与测试](docs/development.md)。支持目标、已验证版本和当前限制以 [验证记录](docs/validation.md) 为准。
+
+## 本地数据与文档
+
+配置、查询历史、保存的查询和任务记录保存在系统用户数据目录的 `DBArk/dbark.sqlite`。密码密文依赖当前系统用户的加密服务，复制配置库到另一台电脑后可能需要重新输入密码。
+
+- [技术架构](docs/architecture.md)
+- [中文使用指南](docs/user-guide.md)
+- [功能对照](docs/feature-matrix.md)
+- [REA 分析证据](docs/reverse-engineering.md)
+- [开发与测试](docs/development.md)
+- [验证记录](docs/validation.md)
+- [版本记录](CHANGELOG.md)
+
+后续里程碑包括结构与数据同步、备份恢复、权限管理、监控、计划任务和建模。参见 [路线图](docs/roadmap.md)。
