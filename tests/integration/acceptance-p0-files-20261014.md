@@ -12,7 +12,11 @@
 
 测试结束本批 DBArk 进程、新临时目录及随机 `dbark_e2e_*` 库残留均为零。忽略证据为 `.cache/p0-files-validation.json`、`.cache/p0-files-full{.log,-results.json}`、`.cache/p0-files-transaction{.log,-results.json}`、`.cache/p0-files-process-cleanup.json` 和 `.cache/p0-files-database-cleanup.json`。截图已经查看，SQL 文件独立标签、结果列名预览和原事务保留布局正常。
 
-本批未验证新安装包、macOS 实库或其它数据库版本，也未重跑旧百万行 UI/SSH/TLS 矩阵。原生文件选择返回路径用于自动化，不能等同于人工确认系统覆盖提示。完整 SQL 结果流式导出未实现；当前操作只写出已经返回的数据。
+主分支提交 `a01821af8f725a8f5d7f8079afe391971abdec16` 的 [原生 CI 38439311222](https://github.com/zhao-yc/DBArk/actions/runs/38439311222) 已全部成功。Windows x64、macOS arm64 和 macOS x64 分别实际运行 11 项离线源码回归，以及 11 项真实 NSIS/DMG 安装回归；三平台均进入系统凭据加密验证分支。安装测试日志显示 Windows 卸载及临时目录清理、macOS 对应 DMG 弹出与临时目录清理均完成。
+
+上述 11 项为 7 项工作台及 4 项 SQL 文件用例。CI 源码回归另外明确跳过 8 项内网实库用例，不能据此认定 macOS 或其它数据库版本的实库 UI 已通过，也没有重跑旧百万行 UI/SSH/TLS 矩阵。工作流当时版本字段仍是 0.2.0，但这些是 main 提交产物，**不是已公开 v0.2.0 tag 的附件**，尚未发布。完整日志与脱敏摘要位于忽略路径 `.cache/p0-files-ci-a01821a/`。
+
+原生文件选择返回路径用于自动化，不能等同于人工确认系统覆盖提示。完整 SQL 结果流式导出未实现；当前操作只写出已经返回的数据。
 
 ## 已核对环境
 

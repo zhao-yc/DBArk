@@ -1,5 +1,8 @@
 /** 简体中文语言包。新增语言时复制模块结构；动态位置使用 {0}、{1} 等占位符。 */
 export const zh = {
+  snippets: {
+    title: 'SQL 片段库', search: '搜索片段名称、说明或正文', groupFilter: '筛选片段分组', allGroups: '全部分组', ungrouped: '未分组', builtin: '内置模板', user: '我的片段', new: '新建片段', name: '片段名称', group: '片段分组', description: '片段说明', sql: '片段 SQL 正文', copy: '复制为新片段', insert: '插入查询', edit: '编辑片段', deleteTitle: '删除 SQL 片段', deleteConfirm: '确定删除“{0}”？已插入查询的正文不会被删除。', unsavedTitle: '放弃片段修改', unsavedConfirm: '片段修改尚未保存，确定放弃？', discard: '放弃修改', saved: '片段已保存', empty: '没有符合条件的片段', hint: '插入仅替换查询选区或写入光标位置，不执行 SQL。模板中的表名请自行修改。', selectName: '选择片段：{0}', selectColumns: '按条件读取列', selectDescription: '修改表名、列名和条件后执行。', countName: '分组统计', countDescription: '按分类统计记录数，修改表名和分类列。', explainName: '查看查询执行计划', explainDescription: '对 SELECT 查询查看执行计划，不修改数据。', loading: '正在读取片段库…', insertUnavailable: '查询编辑器尚未就绪'
+  },
   resultExport: {
     title: '导出已返回结果', defaultName: '查询结果', returnedRows: '已返回 {0} 行',
     returnedOnly: '仅写出当前结果集已返回的行，不重新执行查询，也不读取服务器上的其他数据。',

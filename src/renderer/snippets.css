@@ -1,0 +1,16 @@
+.snippet-filters { display: flex; gap: 8px; margin-bottom: 12px; }
+.snippet-filters input { flex: 1; min-width: 100px; }
+.snippet-filters select { width: 180px; flex-shrink: 0; }
+.snippet-filters button { flex-shrink: 0; }
+.snippet-layout { display: grid; grid-template-columns: 230px minmax(0, 1fr); gap: 18px; height: 440px; }
+.snippet-list { overflow: auto; border-right: 1px solid var(--line); padding-right: 10px; }
+.snippet-list button { display: flex; flex-direction: column; align-items: flex-start; width: 100%; white-space: normal; text-align: left; margin-bottom: 6px; overflow-wrap: anywhere; }
+.snippet-list button[aria-pressed="true"] { outline: 1px solid var(--accent); }
+.snippet-list small { opacity: .65; }
+.snippet-details { min-width: 0; overflow: auto; }
+.snippet-details .field { margin-bottom: 8px; }
+.snippet-source { height: 180px; font-family: Consolas, monospace; resize: vertical; }
+.snippet-description { white-space: pre-wrap; overflow-wrap: anywhere; }
+.snippet-confirm { border: 1px solid var(--line); padding: 12px; margin-top: 10px; }
+.snippet-confirm button { margin-right: 8px; }
+@media (max-width: 720px) { .snippet-layout { grid-template-columns: 170px minmax(0, 1fr); } }

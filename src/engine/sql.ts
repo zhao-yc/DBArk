@@ -54,23 +54,55 @@ export class SqlScriptScanner {
   private delimiter = ';';
   private state: 'normal' | 'single' | 'double' | 'identifier' | 'block' = 'normal';
   private hasCode = false;
+  private atLineStart = true;
+  private alternates: SqlScriptScanner[] = [];
   /** 使用当前会话的反斜线模式初始化扫描器，避免字符串边界判断错误。 */
-  constructor(private readonly noBackslashEscapes = false) {}
+  constructor(private noBackslashEscapes = false, private ansiQuotes = false, ansiQuotesKnown = true, noBackslashEscapesKnown = true) {
+    if (!ansiQuotesKnown || !noBackslashEscapesKnown) this.setMode(noBackslashEscapes, ansiQuotes, ansiQuotesKnown, noBackslashEscapesKnown);
+  }
+
+  /** 仅在语句边界更新模式；尚未消费的尾部保留到读取下一条语句时再解释。 */
+  setMode(noBackslashEscapes: boolean, ansiQuotes = false, ansiQuotesKnown = true, noBackslashEscapesKnown = true): void {
+    if (this.hasCode || this.state !== 'normal') throw new Error('不能在 SQL 语句中途改变词法模式');
+    this.noBackslashEscapes = noBackslashEscapesKnown ? noBackslashEscapes : false; this.ansiQuotes = ansiQuotesKnown ? ansiQuotes : false;
+    this.alternates = [];
+    for (const escapes of noBackslashEscapesKnown ? [noBackslashEscapes] : [false, true]) {
+      for (const quotes of ansiQuotesKnown ? [ansiQuotes] : [false, true]) {
+        if (escapes === this.noBackslashEscapes && quotes === this.ansiQuotes) continue;
+        const alternate = new SqlScriptScanner(escapes, quotes);
+        alternate.pending = this.pending; alternate.statement = this.statement; alternate.delimiter = this.delimiter;
+        alternate.state = this.state; alternate.hasCode = this.hasCode; alternate.atLineStart = this.atLineStart;
+        this.alternates.push(alternate);
+      }
+    }
+  }
 
   /** 消费一个文本块；仅在 final 时接收末尾无分隔符语句并检查未闭合状态。 */
-  push(chunk: string, final = false): string[] {
+  push(chunk: string, final = false, maxStatements = Infinity): string[] {
+    if (!this.alternates.length) return this.consume(chunk, final, maxStatements);
+    try {
+      const result = this.consume(chunk, final, maxStatements);
+      for (const alternate of this.alternates) if (JSON.stringify(result) !== JSON.stringify(alternate.consume(chunk, final, maxStatements))) throw new Error('语句边界不同');
+      return result;
+    } catch { throw new Error('无法确定会话 SQL 引号模式，当前 SQL 的语句边界存在歧义；请关闭此标签并新建查询重新连接'); }
+  }
+
+  /** 不确定模式时两个扫描状态分别保留跨块上下文，只有边界一致的完整语句才能交给服务器。 */
+  private consume(chunk: string, final: boolean, maxStatements: number): string[] {
+    if (maxStatements < 1) throw new Error('每次至少允许取出一条 SQL');
     this.pending += chunk;
     const statements: string[] = [];
     let lineEnd: number;
-    while ((lineEnd = this.pending.indexOf('\n')) >= 0) {
-      const line = this.pending.slice(0, lineEnd + 1);
-      this.pending = this.pending.slice(lineEnd + 1);
-      this.line(line, statements);
+    while ((lineEnd = this.pending.indexOf('\n')) >= 0 || (final && this.pending.length)) {
+      const length = lineEnd >= 0 ? lineEnd + 1 : this.pending.length;
+      const consumed = this.line(this.pending.slice(0, length), statements, maxStatements);
+      this.atLineStart = consumed === length && this.pending[consumed - 1] === '\n';
+      this.pending = this.pending.slice(consumed);
+      if (statements.length >= maxStatements) return statements;
     }
     if (final) {
-      if (this.pending) this.line(this.pending, statements);
-      this.pending = '';
       if (this.state !== 'normal') throw new Error('SQL 脚本中存在未闭合的引号或注释');
+      if (this.statement.length > 64 * 1024 * 1024) throw new Error('单条 SQL 不能超过 64 MiB');
       if (this.hasCode) statements.push(this.statement.trim());
       this.statement = '';
       this.hasCode = false;
@@ -80,13 +112,13 @@ export class SqlScriptScanner {
   }
 
   /** 按行识别客户端 DELIMITER 指令，字符串和注释内的分隔符不结束语句。 */
-  private line(line: string, output: string[]): void {
-    const directive = this.state === 'normal' && !this.hasCode ? /^\s*DELIMITER\s+(\S+)\s*$/i.exec(line) : null;
+  private line(line: string, output: string[], maxStatements: number): number {
+    const directive = this.atLineStart && this.state === 'normal' && !this.hasCode ? /^\s*DELIMITER\s+(\S+)\s*$/i.exec(line) : null;
     if (directive) {
       if (directive[1].length > 16 || /["'`\\]/.test(directive[1])) throw new Error('DELIMITER 必须是至多 16 个字符的非引号分隔符');
       this.delimiter = directive[1];
       this.statement = '';
-      return;
+      return line.length;
     }
     for (let i = 0; i < line.length; i++) {
       const char = line[i], next = line[i + 1];
@@ -98,7 +130,7 @@ export class SqlScriptScanner {
       if (this.state !== 'normal') {
         this.statement += char;
         const quote = this.state === 'single' ? "'" : this.state === 'double' ? '"' : '`';
-        if (char === '\\' && !this.noBackslashEscapes && this.state !== 'identifier') { if (next !== undefined) { this.statement += next; i++; } }
+        if (char === '\\' && !this.noBackslashEscapes && this.state !== 'identifier' && !(this.state === 'double' && this.ansiQuotes)) { if (next !== undefined) { this.statement += next; i++; } }
         else if (char === quote) {
           if (next === quote) { this.statement += next; i++; }
           else this.state = 'normal';
@@ -106,12 +138,15 @@ export class SqlScriptScanner {
         continue;
       }
       if (line.startsWith(this.delimiter, i)) {
+        if (this.statement.length > 64 * 1024 * 1024) throw new Error('单条 SQL 不能超过 64 MiB');
         if (this.hasCode) output.push(this.statement.trim());
-        this.statement = ''; this.hasCode = false; i += this.delimiter.length - 1; continue;
+        this.statement = ''; this.hasCode = false; i += this.delimiter.length - 1;
+        if (output.length >= maxStatements) return i + 1;
+        continue;
       }
-      if (char === '#' || (char === '-' && next === '-' && /\s/.test(line[i + 2] ?? ' '))) { this.statement += line.slice(i); return; }
+      if (char === '#' || (char === '-' && next === '-' && /[\x00-\x20\x7f]/.test(line[i + 2] ?? ' '))) { this.statement += line.slice(i); return line.length; }
       if (char === '/' && next === '*') {
-        if (line[i + 2] === '!') this.hasCode = true;
+        if (line[i + 2] === '!' || line.slice(i + 2, i + 4) === 'M!') this.hasCode = true;
         this.statement += '/*'; i++; this.state = 'block'; continue;
       }
       if (char === "'") this.state = 'single';
@@ -119,11 +154,13 @@ export class SqlScriptScanner {
       else if (char === '`') this.state = 'identifier';
       if (!/\s/.test(char)) this.hasCode = true;
       this.statement += char;
+      if (this.statement.length > 64 * 1024 * 1024) throw new Error('单条 SQL 不能超过 64 MiB');
     }
+    return line.length;
   }
 }
 /** 对编辑器已有的完整文本执行同一套扫描规则，不另建简化版分号切分逻辑。 */
-export function splitSql(sql: string, noBackslashEscapes = false): string[] { return new SqlScriptScanner(noBackslashEscapes).push(sql, true); }
+export function splitSql(sql: string, noBackslashEscapes = false, ansiQuotes = false, ansiQuotesKnown = true, noBackslashEscapesKnown = true): string[] { return new SqlScriptScanner(noBackslashEscapes, ansiQuotes, ansiQuotesKnown, noBackslashEscapesKnown).push(sql, true); }
 
 /** 精确数值参数显式转为 DECIMAL，防止 MySQL 将字符串与 BIGINT 比较时降为 DOUBLE。 */
 function filterParameter(column: ColumnInfo, value: string, pattern: boolean): string {

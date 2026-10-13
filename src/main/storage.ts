@@ -2,7 +2,8 @@ import initSqlJs, { type Database, type SqlValue } from 'sql.js';
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { randomUUID } from 'node:crypto';
-import type { AppSettings, ConnectionProfile, HistoryEntry, SavedQuery, TaskRecord } from '../shared/contracts';
+import type { AppSettings, ConnectionProfile, HistoryEntry, SavedQuery, SqlSnippet, TaskRecord } from '../shared/contracts';
+import { validateSnippetBudget } from '../shared/snippets';
 
 export interface SecretProtector { available(): boolean; encrypt(value: string): string; decrypt(value: string): string; }
 export const defaultSettings: AppSettings = { theme: 'dark', sidebarWidth: 270, resultLimit: 1000, pageSize: 200, tabs: [] };
@@ -19,14 +20,14 @@ export class LocalStore {
     const SQL = await initSqlJs({ locateFile: () => wasmPath });
     const db = new SQL.Database(existsSync(path) ? readFileSync(path) : undefined);
     const store = new LocalStore(db, path, protector, data => new SQL.Database(data));
-    store.migrate();
+    try { store.migrate(); } catch (error) { store.close(); throw error; }
     return store;
   }
 
   /** 版本迁移在事务中进行，失败时保留原磁盘文件。 */
   private migrate(): void {
     const version = Number(this.db.exec('PRAGMA user_version')[0]?.values[0]?.[0] ?? 0);
-    if (version > 1) throw new Error('配置库由更新版本的 DBArk 创建，请使用新版本打开');
+    if (version > 2) throw new Error('配置库由更新版本的 DBArk 创建，请使用新版本打开');
     this.mutate(() => {
       this.db.run(`CREATE TABLE IF NOT EXISTS connections (id TEXT PRIMARY KEY, data TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS secrets (connection_id TEXT NOT NULL, name TEXT NOT NULL, value TEXT NOT NULL, PRIMARY KEY(connection_id,name));
@@ -34,7 +35,8 @@ export class LocalStore {
         CREATE TABLE IF NOT EXISTS history (id TEXT PRIMARY KEY, connection_id TEXT NOT NULL, data TEXT NOT NULL, started_at TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS tasks (id TEXT PRIMARY KEY, data TEXT NOT NULL, started_at TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS settings (id INTEGER PRIMARY KEY CHECK(id=1), data TEXT NOT NULL);
-        PRAGMA user_version=1;`);
+        CREATE TABLE IF NOT EXISTS sql_snippets (id TEXT PRIMARY KEY, data TEXT NOT NULL, updated_at TEXT NOT NULL);
+        PRAGMA user_version=2;`);
     });
     // 上次异常退出的长任务不自动重试，尤其不能重放写操作。
     for (const task of this.tasks()) if (task.status === 'running') this.saveTask({ ...task, status: 'failed', finishedAt: new Date().toISOString(), message: '应用上次退出时任务未完成，请核对数据库状态' });
@@ -136,6 +138,16 @@ export class LocalStore {
   }
   /** 按更新时间返回保存的查询。 */
   queries(): SavedQuery[] { return this.records('SELECT data FROM queries ORDER BY updated_at DESC'); }
+  /** 单独读取片段库，不扩大全局工作台快照。 */
+  snippets(): SqlSnippet[] { return this.records('SELECT data FROM sql_snippets ORDER BY updated_at DESC,id'); }
+  /** 校验数量与正文预算，保存失败使用统一事务快照回退。 */
+  saveSnippet(input: SqlSnippet): SqlSnippet {
+    const snippet = validateSnippetBudget(this.snippets(), { ...input, updatedAt: new Date().toISOString() });
+    this.mutate(() => this.db.run('INSERT INTO sql_snippets VALUES (?,?,?) ON CONFLICT(id) DO UPDATE SET data=excluded.data,updated_at=excluded.updated_at', [snippet.id, JSON.stringify(snippet), snippet.updatedAt]));
+    return snippet;
+  }
+  /** 删除片段不会改动查询正文、历史或连接。 */
+  deleteSnippet(id: string): void { this.mutate(() => this.db.run('DELETE FROM sql_snippets WHERE id=?', [id])); }
   /** 查询正文和来源连接一起原子保存。 */
   saveQuery(query: SavedQuery): void { this.mutate(() => this.db.run('INSERT INTO queries VALUES (?,?,?) ON CONFLICT(id) DO UPDATE SET data=excluded.data,updated_at=excluded.updated_at', [query.id, JSON.stringify(query), query.updatedAt])); }
   /** 只删除指定查询，不影响数据库或执行历史。 */

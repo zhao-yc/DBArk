@@ -1,0 +1,6 @@
+.parameter-actions { display: flex; align-items: center; gap: 8px; margin: 14px 0; }
+.parameter-list { max-height: 340px; overflow: auto; }
+.parameter-row { display: grid; grid-template-columns: minmax(120px, 1fr) minmax(120px, 1fr) minmax(230px, 2fr) 26px; gap: 10px; padding: 12px 0; border-bottom: 1px solid var(--line); align-items: start; }
+.parameter-row textarea { resize: vertical; min-height: 55px; }
+.parameter-content > .info-strip ul { margin: 8px 0 0; }
+@media (max-width: 1100px) { .parameter-row { grid-template-columns: minmax(100px, 1fr) minmax(110px, 1fr) minmax(200px, 2fr) 26px; } }

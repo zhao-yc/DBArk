@@ -1,4 +1,5 @@
 /** 所有跨进程数据均为可结构化克隆的普通值，精确数值由驱动保留为字符串。 */
+import type { QueryParameter, QueryParameterNames } from './queryParameters';
 export type CellValue = string | number | boolean | null | { type: 'binary'; base64: string };
 export type DataRow = Record<string, CellValue>;
 export type ObjectKind = 'table' | 'view' | 'procedure' | 'function' | 'trigger' | 'event';
@@ -29,6 +30,8 @@ export type RowChange = { kind: 'insert'; values: DataRow } | { kind: 'update'; 
 export interface SqlPreview { sql: string; statements: { sql: string; params: CellValue[] }[]; warnings: string[]; }
 export interface TableDesign { database: string; name: string; originalName?: string; engine: string; charset: string; comment: string; columns: { name: string; originalName?: string; type: string; nullable: boolean; defaultValue?: string | null; autoIncrement: boolean; comment: string }[]; indexes: IndexInfo[]; foreignKeys: ForeignKeyInfo[]; }
 export interface SavedQuery { id: string; name: string; connectionId?: string; database?: string; sql: string; updatedAt: string; }
+/** 可复用片段独立于连接、查询标签与执行历史。 */
+export interface SqlSnippet { id: string; name: string; group: string; description: string; sql: string; updatedAt: string; }
 export interface HistoryEntry { id: string; connectionId: string; database?: string; sql: string; startedAt: string; elapsedMs: number; success: boolean; error?: string; }
 export interface TaskRecord { id: string; kind: string; status: 'running' | 'completed' | 'cancelled' | 'failed'; progress: number; message: string; startedAt: string; finishedAt?: string; errors?: string[]; }
 export interface TaskEvent { taskId: string; status: TaskRecord['status']; progress: number; message: string; rows?: number; resultIndex?: number; columns?: ResultColumn[]; batch?: DataRow[]; }
@@ -59,6 +62,9 @@ export interface CommandMap {
   'sessions.close': { input: { sessionId: string }; output: void };
   'query.execute': { input: { sessionId: string; sql: string; taskId: string; maxRows: number }; output: QueryOutcome };
   'query.explain': { input: { sessionId: string; sql: string; taskId: string; maxRows: number }; output: QueryOutcome };
+  'query.parameterNames': { input: { sessionId: string; sql: string }; output: QueryParameterNames };
+  'query.sessionState': { input: { sessionId: string }; output: { transactionOpen: boolean; transactionKnown: boolean; broken: boolean } };
+  'query.executeParameterized': { input: { sessionId: string; sql: string; parameters: QueryParameter[]; taskId: string; maxRows: number }; output: QueryOutcome };
   'query.cancel': { input: { taskId: string }; output: void };
   'query.transaction': { input: { sessionId: string; action: 'begin' | 'commit' | 'rollback' }; output: void };
   'table.page': { input: { connectionId: string; database: string; table: string; page: number; pageSize: number; filters: FilterRule[]; filterMode?: FilterMode; sort: SortRule[] }; output: TablePage };
@@ -75,6 +81,9 @@ export interface CommandMap {
   'files.export': { input: ExportOptions; output: { rows: number } };
   'files.exportResult': { input: ResultExportOptions; output: { rows: number } };
   'queries.list': { input: Record<string, never>; output: SavedQuery[] };
+  'snippets.list': { input: Record<string, never>; output: SqlSnippet[] };
+  'snippets.save': { input: SqlSnippet; output: SqlSnippet };
+  'snippets.delete': { input: { id: string }; output: void };
   'queries.save': { input: SavedQuery; output: void };
   'queries.delete': { input: { id: string }; output: void };
   'history.list': { input: { connectionId?: string }; output: HistoryEntry[] };

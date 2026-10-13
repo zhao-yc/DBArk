@@ -4,6 +4,7 @@ import iconv from 'iconv-lite';
 import { Types, type FieldPacket, type ResultSetHeader } from 'mysql2';
 import type { CellValue, EngineCommand, ConnectionProfile, DataRow, QueryOutcome, QueryResult, ResultColumn, RowChange, TableDesign, TaskEvent } from '../shared/contracts';
 import { connectionTransportChanged } from '../shared/connectionProfile';
+import { bindQueryParameters, namedParameterTokens, queryParameterLimits, validateQueryParameters, type QueryParameter, type SqlLexicalMode } from '../shared/queryParameters';
 import { connect, execute, type ManagedConnection } from './connection';
 import * as metadata from './metadata';
 import { csvCell, csvHeader, encodingName, previewFile, readRecords, readText } from './files';
@@ -77,8 +78,25 @@ export class Engine {
       case 'metadata.table': return this.withConnection(input.connectionId, connection => metadata.tableInfo(connection, input.database, input.table));
       case 'metadata.ddl': return this.withConnection(input.connectionId, connection => metadata.objectDdl(connection, input.database, input.name, input.kind));
       case 'query.execute': return this.withSession(input.sessionId, managed => this.runTask(input.taskId, managed, '执行 SQL', task => this.queryScript(task, input.sql, input.maxRows)));
+      case 'query.parameterNames': return this.withSession(input.sessionId, async managed => {
+        const mode = await this.sqlMode(managed);
+        const preview = this.parameterPlan(input.sql, mode);
+        return { names: preview.names, ...mode, warnings: preview.warnings, maxDecimalScale: this.maxDecimalScale(managed), allowTimeEndpointFraction: managed.status.dialect === 'mariadb' };
+      });
+      case 'query.sessionState': {
+        // 即使会话已断开也允许读取缓存；此命令不建连、不查询、不改变事务与诊断状态。
+        const session = this.sessions.get(input.sessionId);
+        if (!session) throw new Error('会话不存在，请重新打开标签页');
+        const { managed } = session;
+        return { transactionOpen: managed.serverStatus !== undefined && (managed.serverStatus & 1) !== 0, transactionKnown: managed.serverStatus !== undefined && managed.transactionStateKnown !== false, broken: managed.broken || managed.serverStatus === undefined };
+      }
+      case 'query.executeParameterized': return this.withSession(input.sessionId, managed => this.runTask(input.taskId, managed, '执行参数查询', task => {
+        if (!Array.isArray(input.parameters)) throw new Error('参数查询必须提供参数列表');
+        return this.queryScript(task, input.sql, input.maxRows, input.parameters);
+      }));
       case 'query.explain': return this.withSession(input.sessionId, managed => this.runTask(input.taskId, managed, '查看执行计划', async task => {
-        const statements = splitSql(input.sql, await this.noBackslashEscapes(managed));
+        const mode = await this.sqlMode(managed);
+        const statements = splitSql(input.sql, mode.noBackslashEscapes, mode.ansiQuotes, mode.ansiQuotesKnown !== false, mode.noBackslashEscapesKnown !== false);
         if (statements.length !== 1) throw new Error('执行计划一次只接受一条 SQL，请选中需要分析的语句');
         if (/\/\*(?:!|M!)/i.test(statements[0])) throw new Error('执行计划不接受可执行版本注释，请先展开注释为明确的 SQL');
         const start = statements[0].replace(/^(?:\s+|\/\*[\s\S]*?\*\/|--[^\n]*(?:\n|$)|#[^\n]*(?:\n|$))*/, '');
@@ -216,8 +234,66 @@ export class Engine {
   private columns(fields: FieldPacket[], names = false): ResultColumn[] { return fields.map((field, index) => ({ key: names ? field.name : `c${index}`, name: field.name, type: String(field.columnType === undefined ? '未知' : (Types as unknown as Record<number, string>)[field.columnType] ?? field.columnType) })); }
   /** 从实际服务器会话读取字符串转义模式，供扫描器与 DDL 生成共用。 */
   private async noBackslashEscapes(managed: ManagedConnection): Promise<boolean> {
-    const result = await execute<{ mode: string }[]>(managed, 'SELECT @@SESSION.sql_mode AS mode');
-    return result.rows[0].mode.split(',').includes('NO_BACKSLASH_ESCAPES');
+    return (await this.sqlMode(managed)).noBackslashEscapes;
+  }
+
+  /** 使用当前标签会话的协议缓存，不插入 SELECT，以免覆盖 ROW_COUNT、FOUND_ROWS 和警告。 */
+  private async sqlMode(managed: ManagedConnection, task?: RunningTask): Promise<SqlLexicalMode> {
+    if (task) this.checkCancelled(task);
+    if (managed.sqlMode === undefined) {
+      if (managed.serverStatus === undefined) throw new Error('无法确定会话 SQL 模式，请关闭此标签并新建查询重新连接；未执行本次 SQL');
+      return { noBackslashEscapes: Boolean(managed.serverStatus & 512), noBackslashEscapesKnown: managed.noBackslashEscapesKnown !== false, ansiQuotes: false, ansiQuotesKnown: false };
+    }
+    const modes = managed.sqlMode.split(',');
+    return { noBackslashEscapes: modes.includes('NO_BACKSLASH_ESCAPES'), noBackslashEscapesKnown: true, ansiQuotes: modes.includes('ANSI_QUOTES'), ansiQuotesKnown: true };
+  }
+
+  /** MariaDB 10.2.1 起允许 38 位小数，MySQL 及更早 MariaDB 保持 30 位。 */
+  private maxDecimalScale(managed: ManagedConnection): 30 | 38 {
+    const version = /^(\d+)\.(\d+)\.(\d+).*MariaDB/i.exec(managed.status.version.replace(/^5\.5\.5-/, ''));
+    if (!version) return 30;
+    const [, major, minor, patch] = version.map(Number);
+    return major > 10 || (major === 10 && (minor > 2 || (minor === 2 && patch >= 1))) ? 38 : 30;
+  }
+
+  /** 明确的常量 SET 可预演；服务器表达式与版本条件只能在执行后读取实际模式。 */
+  private nextStaticMode(sql: string, mode: SqlLexicalMode): SqlLexicalMode | undefined {
+    const clean = sql.replace(/^(?:\s+|\/\*(?![!]|M!)[\s\S]*?\*\/|--[^\n]*(?:\n|$)|#[^\n]*(?:\n|$))*/, '');
+    const assignment = /^SET\s+(?:(?:SESSION|LOCAL)\s+|@@(?:(?:SESSION|LOCAL)\.)?)?sql_mode\s*=\s*(['"])([A-Za-z0-9_,\s]*)\1\s*$/i.exec(clean);
+    if (assignment && !(assignment[1] === '"' && mode.ansiQuotes)) {
+      const modes = assignment[2].toUpperCase().split(',').map(value => value.trim());
+      return { noBackslashEscapes: modes.includes('NO_BACKSLASH_ESCAPES'), ansiQuotes: modes.includes('ANSI_QUOTES') || modes.includes('ANSI') };
+    }
+    if (/^(?:SET|CALL|EXECUTE)\b/i.test(clean) || /\/\*(?:!|M!)/.test(clean)) return undefined;
+    return mode;
+  }
+
+  /** 静态路径一次校验完整模板；动态模式边界后预览仅为当前模式下的候选名称。 */
+  private parameterPlan(sql: string, initial: SqlLexicalMode, values?: ReadonlyMap<string, string>): { names: string[]; warnings: string[]; dynamic: boolean } {
+    if (typeof sql !== 'string' || Buffer.byteLength(sql) > queryParameterLimits.sqlBytes) throw new Error('参数查询模板不能超过 20 MiB');
+    const scanner = new SqlScriptScanner(initial.noBackslashEscapes, initial.ansiQuotes, initial.ansiQuotesKnown !== false, initial.noBackslashEscapesKnown !== false);
+    const names = new Set<string>(); let mode = initial, dynamic = false, bytes = 0, first = true;
+    for (;;) {
+      let statement: string | undefined;
+      try {
+        scanner.setMode(mode.noBackslashEscapes, mode.ansiQuotes, mode.ansiQuotesKnown !== false, mode.noBackslashEscapesKnown !== false);
+        statement = scanner.push(first ? sql : '', true, 1)[0]; first = false;
+        if (!statement) break;
+        for (const token of namedParameterTokens(statement, mode)) names.add(token.name);
+        if (names.size > queryParameterLimits.names) throw new Error('查询参数不能超过 200 个');
+        if (values && !dynamic) {
+          bytes += Buffer.byteLength(bindQueryParameters(statement, values, mode));
+          if (bytes > queryParameterLimits.sqlBytes) throw new Error('展开后的 SQL 合计不能超过 20 MiB');
+        }
+      } catch (error) { if (!dynamic) throw error; break; }
+      const next = this.nextStaticMode(statement, mode);
+      if (next) mode = next; else dynamic = true;
+    }
+    if (names.size > queryParameterLimits.names) throw new Error('查询参数不能超过 200 个');
+    if (values && !dynamic && [...values.keys()].some(name => !names.has(name))) throw new Error('存在 SQL 未使用的多余参数');
+    const warnings = initial.ansiQuotesKnown === false || initial.noBackslashEscapesKnown === false ? ['会话完整 SQL 模式暂不可确定；仅执行所有可能引号模式下语句和参数边界完全一致的 SQL。遇到引号歧义时请新建查询标签，原标签事务未自动回滚，可明确提交或回滚。'] : [];
+    if (dynamic) warnings.push('脚本含依赖服务器的 SQL 模式变更；后续参数名称仅为当前模式下的预览，执行时逐条重新识别。后续缺参或语法错误会停止脚本，此前已提交语句保留。');
+    return { names: [...names], dynamic, warnings };
   }
 
   /** 取消只针对仍然运行的那一代语句；控制连接失败时销毁原会话，不重连重放。 */
@@ -250,29 +326,56 @@ export class Engine {
     task.inFlight = true; task.generation++;
     try {
       const rows = (await execute<T>(task.managed, sql, params.map(deserializeCell))).rows;
-      if (rows && typeof rows === 'object' && 'serverStatus' in rows) task.serverStatus = Number(rows.serverStatus);
+      if (rows && typeof rows === 'object' && 'serverStatus' in rows) task.managed.serverStatus = task.serverStatus = Number(rows.serverStatus);
       return rows;
     }
     finally { task.inFlight = false; await task.cancelPending; }
   }
 
   /** 顺序执行脚本并共享结果预算，末尾读取真实事务状态供界面提示。 */
-  private async queryScript(task: RunningTask, sql: string, maxRows: number): Promise<QueryOutcome> {
+  private async queryScript(task: RunningTask, sql: string, maxRows: number, parameters?: QueryParameter[]): Promise<QueryOutcome> {
     if (!Number.isInteger(maxRows) || maxRows < 1 || maxRows > 100000) throw new Error('查询结果上限必须在 1～100000 之间');
     const started = performance.now();
-    const statements = splitSql(sql, await this.noBackslashEscapes(task.managed));
+    const values = parameters === undefined ? undefined : validateQueryParameters(parameters, this.maxDecimalScale(task.managed), task.managed.status.dialect === 'mariadb');
+    let mode = await this.sqlMode(task.managed, task);
+    if (values) this.parameterPlan(sql, mode, values);
+    const scanner = new SqlScriptScanner(mode.noBackslashEscapes, mode.ansiQuotes, mode.ansiQuotesKnown !== false, mode.noBackslashEscapesKnown !== false);
     const results: QueryResult[] = [];
     // 限额由整项任务共享，防止很多结果集或大 BLOB 绕过单结果集行数限制。
     const budget: ResultBudget = { remainingRows: maxRows, remainingBytes: 16 * 1024 * 1024, remainingResults: 200 };
-    for (let index = 0; index < statements.length; index++) {
-      this.checkCancelled(task);
-      results.push(...await this.streamQuery(task, statements[index], maxRows, results.length, budget));
-      this.emit({ taskId: task.id, status: 'running', progress: Math.round((index + 1) / statements.length * 99), message: `已执行 ${index + 1}/${statements.length} 条语句` });
+    let executed = 0, expandedBytes = 0, first = true;
+    const used = new Set<string>();
+    try {
+      for (;;) {
+        this.checkCancelled(task);
+        scanner.setMode(mode.noBackslashEscapes, mode.ansiQuotes, mode.ansiQuotesKnown !== false, mode.noBackslashEscapesKnown !== false);
+        const template = scanner.push(first ? sql : '', true, 1)[0]; first = false;
+        if (!template) break;
+        const statement = values ? bindQueryParameters(template, values, mode) : template;
+        if (values) for (const token of namedParameterTokens(template, mode)) used.add(token.name);
+        if (values && (expandedBytes += Buffer.byteLength(statement)) > queryParameterLimits.sqlBytes) throw new Error('展开后的 SQL 合计不能超过 20 MiB');
+        try { results.push(...await this.streamQuery(task, statement, maxRows, results.length, budget, template)); }
+        catch (error) {
+          if (!values) throw error;
+          if (task.cancelled) this.checkCancelled(task);
+          const code = (error as { code?: unknown })?.code;
+          const safeCode = typeof code === 'string' && /^[A-Z0-9_]+$/.test(code) ? `（${code}）` : '';
+          throw new Error(`参数查询失败${safeCode}；服务器错误详情可能包含参数值，已隐藏`);
+        }
+        executed++;
+        this.emit({ taskId: task.id, status: 'running', progress: 0, message: `已执行 ${executed} 条语句` });
+        mode = await this.sqlMode(task.managed, task);
+      }
+      if (values && [...values.keys()].some(name => !used.has(name))) throw new Error('脚本执行结束后发现未使用的多余参数；动态模式下无法提前确定全部参数边界');
+    } catch (error) {
+      // 数据库错误可能含展开值，参数任务只返回代码；标签事务保持原有状态，由用户决定提交或回滚。
+      const code = (error as { code?: unknown })?.code;
+      const detail = values && typeof code === 'string' ? `数据库错误 ${/^[A-Z0-9_]+$/.test(code) ? code : '未知'}` : this.errorMessage(error);
+      throw new Error(`第 ${executed + 1} 条 SQL 未完成；已完成 ${executed} 条，此前已提交语句保留，未自动回滚或重放。${detail}`);
     }
-    let transactionOpen: boolean | undefined;
-    try { transactionOpen = ((await this.statement(task, 'DO 0')).serverStatus & 1) !== 0; }
-    catch {
-      // SQL 已经执行成功，附加状态读取失败不能让用户误以为可以安全重试写操作。
+    const transactionOpen = task.managed.serverStatus === undefined ? undefined : (task.managed.serverStatus & 1) !== 0;
+    if (transactionOpen === undefined) {
+      // SQL 已经执行成功，缺少协议状态不能让用户误以为可以安全重试写操作。
       task.managed.broken = true; task.managed.connection.destroy();
       this.emit({ taskId: task.id, status: 'running', progress: 99, message: 'SQL 已执行，但无法确认当前事务状态；会话已断开，请重新连接并核对结果，不要直接重复写操作。' });
     }
@@ -280,7 +383,7 @@ export class Engine {
   }
 
   /** 多结果集按服务器序号隔离；IPC 每批至多 200 行，返回结果受用户上限约束。 */
-  private async streamQuery(task: RunningTask, sql: string, maxRows: number, offset: number, budget: ResultBudget = { remainingRows: maxRows, remainingBytes: 16 * 1024 * 1024, remainingResults: 200 }): Promise<QueryResult[]> {
+  private async streamQuery(task: RunningTask, sql: string, maxRows: number, offset: number, budget: ResultBudget = { remainingRows: maxRows, remainingBytes: 16 * 1024 * 1024, remainingResults: 200 }, displaySql = sql): Promise<QueryResult[]> {
     this.checkCancelled(task);
     task.inFlight = true; task.generation++;
     const started = performance.now(), results: QueryResult[] = [], batches = new Map<number, DataRow[]>(), batchBytes = new Map<number, number>();
@@ -290,7 +393,7 @@ export class Engine {
     const ensure = (index: number): QueryResult | undefined => {
       if (discarded.has(index)) return;
       if (!results[index]) {
-        const text = sql.length > 32768 ? sql.slice(0, 32768) + '\n-- 结果附带 SQL 文本已截断；完整语句可在执行历史查看。' : sql;
+        const text = displaySql.length > 32768 ? displaySql.slice(0, 32768) + '\n-- 结果附带 SQL 文本已截断；完整语句可在执行历史查看。' : displaySql;
         const bytes = Buffer.byteLength(text);
         if (budget.remainingResults <= 0 || bytes + 256 > budget.remainingBytes) { discarded.add(index); return; }
         budget.remainingResults--;
@@ -328,9 +431,9 @@ export class Engine {
           // CALL 的最终状态包没有索引，必须接在已有行结果集之后，不能覆盖首个结果。
           const index = resultIndex ?? nextImplicitResult;
           if (!Array.isArray(value)) nextImplicitResult = index + 1;
+          if (!Array.isArray(value)) task.managed.serverStatus = task.serverStatus = value.serverStatus;
           const result = ensure(index); if (!result) return;
           if (!Array.isArray(value)) {
-            task.serverStatus = value.serverStatus;
             result.affectedRows = value.affectedRows; result.insertId = String(value.insertId); result.warningCount = value.warningStatus; return;
           }
           if (result.truncated || result.rows.length >= maxRows || budget.remainingRows <= 0) { result.truncated = true; return; }
@@ -354,6 +457,7 @@ export class Engine {
         this.emit({ taskId: task.id, status: 'running', progress: 0, message: '结果达到 200 个结果集或 16 MiB 总上限，后续结果未传输；语句仍已执行。请拆分脚本查看。' });
       }
       this.checkCancelled(task);
+      task.serverStatus = task.managed.serverStatus;
       return results.filter(Boolean);
     } finally { task.inFlight = false; await task.cancelPending; }
   }
@@ -423,7 +527,8 @@ export class Engine {
 
   /** SQL 脚本遵循其自身事务语义；DDL 隐式提交与此前已提交语句不能回滚。 */
   private async importSql(task: RunningTask, input: Input): Promise<{ rows: number; errors: string[] }> {
-    const scanner = new SqlScriptScanner(await this.noBackslashEscapes(task.managed));
+    const initialMode = await this.sqlMode(task.managed, task);
+    const scanner = new SqlScriptScanner(initialMode.noBackslashEscapes, initialMode.ansiQuotes, initialMode.ansiQuotesKnown !== false, initialMode.noBackslashEscapesKnown !== false);
     let rows = 0, statements = 0, pendingRows = 0, committedRows = 0;
     /** 执行单条导入语句，并根据服务器事务状态区分待提交与已提交影响行数。 */
     const run = async (sql: string) => {
@@ -439,12 +544,24 @@ export class Engine {
       }
       if (statements % 100 === 0) this.emit({ taskId: task.id, status: 'running', progress: 0, rows, message: `已执行 ${statements} 条 SQL；脚本按自身事务边界提交` });
     };
+    /** 一次只消费一条；同一行或文件块里的后续 SQL 也必须等待实际模式刷新。 */
+    const drain = async (chunk: string, final = false) => {
+      let first = true;
+      for (;;) {
+        const sql = scanner.push(first ? chunk : '', final, 1)[0]; first = false;
+        if (!sql) return;
+        await run(sql);
+        const mode = await this.sqlMode(task.managed, task);
+        scanner.setMode(mode.noBackslashEscapes, mode.ansiQuotes, mode.ansiQuotesKnown !== false, mode.noBackslashEscapesKnown !== false);
+      }
+    };
     try {
-      for await (const chunk of readText(input.filePath, input.encoding)) for (const sql of scanner.push(chunk)) await run(sql);
-      for (const sql of scanner.push('', true)) await run(sql);
-      // DO 返回的状态位来自服务器，能识别 START TRANSACTION、autocommit=0 和存储过程遗留事务。
-      const status = await this.statement(task, 'DO 0');
-      if ((status.serverStatus & 1) !== 0) {
+      for await (const chunk of readText(input.filePath, input.encoding)) await drain(chunk);
+      await drain('', true);
+      // EOF/OK 返回的状态位来自服务器，无需额外查询破坏脚本的诊断信息。
+      const status = task.managed.serverStatus;
+      if (status === undefined) throw new Error('无法确认 SQL 脚本结束时的服务器事务状态');
+      if ((status & 1) !== 0) {
         await execute(task.managed, 'ROLLBACK');
         return { rows: committedRows, errors: [`脚本执行了 ${statements} 条 SQL，但结束时仍有未提交事务，已回滚该事务。累计影响 ${rows} 行不是成功提交行数；此前提交的 ${committedRows} 行保留。请为脚本补充明确的 COMMIT/ROLLBACK。`] };
       }

@@ -28,6 +28,8 @@ export default function App() {
     void useWorkspace.getState().initialize();
     const unsubscribeTasks = window.dbark?.onTask(event => useWorkspace.getState().onTask(event));
     const unsubscribeMenu = window.dbark?.onMenu(action => {
+      // 原生菜单也尊重模态焦点，防止片段或参数编辑期间叠加第二个工作区表单。
+      if ((action === 'new-connection' || action === 'new-query') && document.querySelector('[role="dialog"]')) return;
       if (action === 'new-connection') setConnectionDialog('new');
       if (action === 'new-query') setNewQuery(true);
       if (action === 'toggle-theme') useWorkspace.getState().updateSettings({ theme: useWorkspace.getState().settings.theme === 'dark' ? 'light' : 'dark' });

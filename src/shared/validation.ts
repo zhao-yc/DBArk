@@ -2,6 +2,8 @@ import { z } from 'zod';
 import type { Command, ResultExportData } from './contracts';
 import { validateResultExportData } from './resultExport';
 import { FILTER_LIMITS, validateFilterRules } from './filtering';
+import { queryParameterTypes, validateQueryParameters } from './queryParameters';
+import { snippetSchema } from './snippets';
 
 const id = z.string().min(1).max(200);
 const name = z.string().min(1).max(256);
@@ -14,6 +16,11 @@ const ssh = z.object({ enabled: z.boolean(), host: z.string().max(512), port, us
 export const connectionSchema = z.object({ id: z.string().max(200), name, group: z.string().max(100), color: z.string().regex(/^#[0-9a-fA-F]{6}$/), dialect: z.enum(['mysql','mariadb']), host: z.string().min(1).max(512), port, user: z.string().max(256), database: z.string().max(256).optional(), password: z.string().optional(), rememberPassword: z.boolean().optional(), hasPassword: z.boolean().optional(), ssh: ssh.optional(), tls: z.object({ enabled: z.boolean(), rejectUnauthorized: z.boolean(), caPath: z.string().optional(), certPath: z.string().optional(), keyPath: z.string().optional() }).strict().optional() }).strict();
 const target = { connectionId: id, database: name, table: name };
 const changes = z.array(z.discriminatedUnion('kind', [z.object({ kind: z.literal('insert'), values: row }).strict(), z.object({ kind: z.literal('update'), before: row, values: row }).strict(), z.object({ kind: z.literal('delete'), before: row }).strict()])).min(1).max(5000);
+/** IPC 允许当前两类驱动的最大尺度；实际执行还须按绑定会话的能力再校验。 */
+const queryParameters = z.array(z.object({ name: z.string().regex(/^[A-Za-z_][A-Za-z0-9_]{0,63}$/), type: z.enum(queryParameterTypes), value: z.string().max(65536).optional() }).strict()).max(200).superRefine((input, context) => {
+  try { validateQueryParameters(input, 38, true); }
+  catch (error) { context.addIssue({ code: 'custom', message: error instanceof Error ? error.message : '查询参数无效' }); }
+});
 const index = z.object({ name, unique: z.boolean(), columns: z.array(name).min(1) }).strict();
 const foreignKey = z.object({ name, columns: z.array(name).min(1), referencedDatabase: name, referencedTable: name, referencedColumns: z.array(name).min(1), onUpdate: z.enum(['RESTRICT','CASCADE','SET NULL','NO ACTION']), onDelete: z.enum(['RESTRICT','CASCADE','SET NULL','NO ACTION']) }).strict();
 const fileOptions = { ...target, fileToken: id, format: z.enum(['csv','json','sql']), encoding: z.enum(['utf8','utf16le','gb18030']), taskId: id };
@@ -41,6 +48,9 @@ export const commandSchemas: Record<Command, z.ZodType> = {
   'sessions.open': z.object({ connectionId: id, database: name.optional() }).strict(), 'sessions.close': z.object({ sessionId: id }).strict(),
   'query.execute': z.object({ sessionId: id, sql: text.min(1), taskId: id, maxRows: z.number().int().min(1).max(100000) }).strict(),
   'query.explain': z.object({ sessionId: id, sql: text.min(1), taskId: id, maxRows: z.number().int().min(1).max(100000) }).strict(),
+  'query.parameterNames': z.object({ sessionId: id, sql: text.min(1) }).strict(),
+  'query.sessionState': z.object({ sessionId: id }).strict(),
+  'query.executeParameterized': z.object({ sessionId: id, sql: text.min(1), parameters: queryParameters, taskId: id, maxRows: z.number().int().min(1).max(100000) }).strict(),
   'query.cancel': z.object({ taskId: id }).strict(),
   'query.transaction': z.object({ sessionId: id, action: z.enum(['begin','commit','rollback']) }).strict(),
   'table.page': tablePage,
@@ -56,6 +66,7 @@ export const commandSchemas: Record<Command, z.ZodType> = {
   'files.export': z.object({ ...fileOptions, includeStructure: z.boolean(), includeData: z.boolean() }).strict(),
   'files.exportResult': z.object({ fileToken: id, format: z.enum(['csv','json']), encoding: z.enum(['utf8','utf16le','gb18030']), taskId: id, result: resultExportData }).strict(),
   'queries.list': empty, 'queries.save': z.object({ id, name, connectionId: id.optional(), database: name.optional(), sql: text, updatedAt: z.string() }).strict(), 'queries.delete': z.object({ id }).strict(),
+  'snippets.list': empty, 'snippets.save': snippetSchema, 'snippets.delete': z.object({ id }).strict(),
   'history.list': z.object({ connectionId: id.optional() }).strict(), 'tasks.list': empty,
   'settings.get': empty, 'settings.save': z.object({ theme: z.enum(['dark','light']), sidebarWidth: z.number().min(180).max(600), resultLimit: z.number().int().min(1).max(100000), pageSize: z.number().int().min(1).max(1000), tabs: z.array(z.object({ id, kind: z.enum(['query','table']), title: name, connectionId: id, database: z.string().optional(), table: z.string().optional(), sql: text.optional() }).strict()).max(100), activeTabId: z.string().optional() }).strict()
 };

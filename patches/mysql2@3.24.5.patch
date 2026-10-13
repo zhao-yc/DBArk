@@ -11,3 +11,43 @@ index 4a02617f76648ebabfda755c5850b98a3d47bf25..0004e33730669b23ea63b10f95be8676
          servername,
        },
        () => {
+diff --git a/lib/commands/query.js b/lib/commands/query.js
+--- a/lib/commands/query.js
++++ b/lib/commands/query.js
+@@ -135,5 +135,12 @@ class Query extends Command {
+     }
+     if (this._fieldCount === 0) {
++      // DBArk 从真实协议包读取会话模式和事务，不发送会污染诊断状态的附加 SQL。
++      connection.emit('dbark:session-state', {
++        serverStatus: rs.serverStatus,
++        warningStatus: rs.warningStatus,
++        stateChanges: rs.stateChanges,
++        sql: this.sql,
++      });
+       return this.doneInsert(rs);
+     }
+     if (this._fieldCount === null) {
+@@ -257,6 +264,11 @@ class Query extends Command {
+   row(packet, _connection) {
+     if (packet.isEOF()) {
+       const status = packet.eofStatusFlags();
++      // 文本/预处理查询共用此方法，SELECT 的 EOF 同样提供当前事务和反斜线模式。
++      _connection.emit('dbark:session-state', {
++        serverStatus: status,
++        warningStatus: packet.eofWarningCount(),
++      });
+       const moreResults = status & ServerStatus.SERVER_MORE_RESULTS_EXISTS;
+       if (moreResults) {
+         this._resultIndex++;
+diff --git a/lib/commands/command.js b/lib/commands/command.js
+--- a/lib/commands/command.js
++++ b/lib/commands/command.js
+@@ -31,6 +31,8 @@ class Command extends EventEmitter {
+     if (packet && packet.isError()) {
+       const err = packet.asError(connection.clientEncoding);
++      // ERR 没有当前事务/模式状态，通知 DBArk 标为待核对，不泄露错误正文或参数。
++      connection.emit('dbark:session-error');
+       err.sql = this.sql || this.query;
+       if (this.queryTimeout) {
+         Timers.clearTimeout(this.queryTimeout);
+         this.queryTimeout = null;

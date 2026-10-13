@@ -20,7 +20,7 @@ function managed(): ManagedConnection {
   connection.query = vi.fn((options: { sql: string }) => {
     const result = new EventEmitter(); queueMicrotask(() => scenario(options.sql, result)); return result;
   });
-  return { connection, profile, status: { version: '模拟服务器', dialect: 'mysql' }, broken: false, close: vi.fn(async () => undefined) } as unknown as ManagedConnection;
+  return { connection, profile, sqlMode: '', serverStatus: 2, status: { version: '模拟服务器', dialect: 'mysql' }, broken: false, close: vi.fn(async () => undefined) } as unknown as ManagedConnection;
 }
 function rows(query: EventEmitter, values: unknown[][]): void {
   query.emit('fields', [{ name: 'value', columnType: 253 }], 0);
@@ -124,15 +124,15 @@ describe('查询任务与会话互斥', () => {
   });
 
   it('使用服务器状态更新显式事务标志，而不是猜测 SQL 文本', async () => {
-    mocks.execute.mockImplementation(async (_managed, sql) => ({ rows: sql.includes('sql_mode') ? [{ mode: '' }] : { affectedRows: 0, serverStatus: 3 }, fields: [] }));
+    const active = await mocks.connect.mock.results.at(-1)!.value as ManagedConnection;
+    scenario = (_sql, query) => { active.serverStatus = 3; rows(query, []); };
     expect((await engine.handle('query.execute', { sessionId, sql: 'START TRANSACTION', taskId: 'tx-state', maxRows: 1 })).transactionOpen).toBe(true);
+    expect(mocks.execute).not.toHaveBeenCalled();
   });
 
-  it('附加状态读取失败不把已完成写入报成可重试错误，并禁止复用断开的会话', async () => {
-    mocks.execute.mockImplementation(async (_managed, sql) => {
-      if (sql === 'DO 0') throw new Error('模拟连接中断');
-      return { rows: [{ mode: '' }], fields: [] };
-    });
+  it('缺少结束协议状态不把已完成写入报成可重试错误，并禁止复用断开的会话', async () => {
+    const active = await mocks.connect.mock.results.at(-1)!.value as ManagedConnection;
+    scenario = (_sql, query) => { active.serverStatus = undefined; rows(query, [['ok']]); };
     const result = await engine.handle('query.execute', { sessionId, sql: 'UPDATE t SET n=1', taskId: 'status-failed', maxRows: 1 });
     expect(result.transactionOpen).toBeUndefined(); expect(result.results).toHaveLength(1);
     await expect(engine.handle('query.execute', { sessionId, sql: 'SELECT 1', taskId: 'after-broken', maxRows: 1 })).rejects.toThrow('断开');

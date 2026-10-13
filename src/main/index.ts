@@ -45,7 +45,9 @@ function persistAuxiliary(action: () => void): void {
 function taskEvent(event: TaskEvent): void {
   const current = tasks.get(event.taskId);
   if (current) {
-    const record = { ...current, status: event.status, progress: event.progress, message: event.message, finishedAt: event.status === 'running' ? undefined : new Date().toISOString() };
+    // 服务器错误可能回显已绑定值；参数查询的失败细节仅送给当前界面，不写入磁盘任务记录。
+    const message = current.kind === 'query.executeParameterized' && (event.status === 'failed' || event.status === 'cancelled') ? '参数查询未完成，请在当前标签核对已执行语句和事务状态；参数值未写入任务记录。' : event.message;
+    const record = { ...current, status: event.status, progress: event.progress, message, finishedAt: event.status === 'running' ? undefined : new Date().toISOString() };
     tasks.set(event.taskId, record);
     if (event.status !== 'running' || Date.now() - (lastPersist.get(event.taskId) ?? 0) > 1000) {
       persistAuxiliary(() => store.saveTask(record)); lastPersist.set(event.taskId, Date.now());
@@ -90,6 +92,9 @@ async function dispatch(command: Command, input: any): Promise<unknown> {
     case 'connections.test': input = store.resolveConnection(input.id, input as ConnectionProfile); break;
     case 'connections.close': for (const [id, session] of sessions) if (session.connectionId === input.id) sessions.delete(id); break;
     case 'queries.list': return store.queries();
+    case 'snippets.list': return store.snippets();
+    case 'snippets.save': return store.saveSnippet(input);
+    case 'snippets.delete': return store.deleteSnippet(input.id);
     case 'queries.save': return store.saveQuery({ ...input, updatedAt: new Date().toISOString() });
     case 'queries.delete': return store.deleteQuery(input.id);
     case 'history.list': return store.history(input.connectionId);
@@ -121,7 +126,7 @@ async function dispatch(command: Command, input: any): Promise<unknown> {
     tasks.set(taskId, task); store.saveTask(task);
   }
   const session = sessions.get(input.sessionId);
-  const history: HistoryEntry | undefined = command === 'query.execute' && session ? { id: randomUUID(), connectionId: session.connectionId, database: session.database, sql: input.sql, startedAt, elapsedMs: 0, success: false } : undefined;
+  const history: HistoryEntry | undefined = (command === 'query.execute' || command === 'query.executeParameterized') && session ? { id: randomUUID(), connectionId: session.connectionId, database: session.database, sql: input.sql, startedAt, elapsedMs: 0, success: false } : undefined;
   try {
     const result = await broker.request(command, input);
     if (command === 'sessions.open') sessions.set(result.sessionId, { connectionId: input.connectionId, database: input.database });
@@ -132,7 +137,7 @@ async function dispatch(command: Command, input: any): Promise<unknown> {
   } catch (error) {
     const message = error instanceof Error ? error.message : '操作失败';
     if (taskId && tasks.get(taskId)?.status === 'running') taskEvent({ taskId, status: 'failed', progress: 0, message });
-    if (history) persistAuxiliary(() => store.addHistory({ ...history, elapsedMs: Date.now() - start, error: message }));
+    if (history) persistAuxiliary(() => store.addHistory({ ...history, elapsedMs: Date.now() - start, error: command === 'query.executeParameterized' ? '参数查询失败，细节仅在当前标签显示；参数值未保存。' : message }));
     throw error;
   }
 }
