@@ -120,8 +120,8 @@ try {
   console.log('正在运行离线安装程序回归：' + executable);
   const env = { ...process.env, DBARK_EXECUTABLE_PATH: executable, DBARK_INTEGRATION_ENABLED: '0' };
   delete env.DBARK_DEV_URL;
-  // 安装后验证工作台七项及 SQL 文件四项；真实远程库由单独显式启用的验收负责。
-  command(process.execPath, [join(project, 'node_modules', '@playwright', 'test', 'cli.js'), 'test', 'tests/e2e/desktop.spec.ts', 'tests/e2e/query-files.spec.ts', 'tests/e2e/snippets.spec.ts'], { env, timeout: 300000 });
+  // 执行当前源码的全部离线用例，避免新增偏好或配置功能遗漏随包验收；内网专属由显式开关跳过。
+  command(process.execPath, [join(project, 'node_modules', '@playwright', 'test', 'cli.js'), 'test'], { env, timeout: 300000 });
 } catch (error) {
   testFailure = error;
 } finally {
