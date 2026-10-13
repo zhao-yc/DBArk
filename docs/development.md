@@ -33,13 +33,15 @@ TLS 测试可设置 `DBARK_TEST_TLS=1` 和 `DBARK_TEST_CA=CA文件绝对路径`�
 
 单元测试覆盖 SQL 分隔符、注释和字符串、精度、标识符、DDL、乐观锁定位、凭据隔离及配置迁移。端到端测试启动真正的 Electron，使用独立临时用户目录验证窗口、preload、IPC 和数据库执行进程。
 
-主分支新增 SQL 片段与类型参数，尚未包含在已发布的 0.2.0 安装包。`tests/unit/snippets.test.ts` 覆盖独立持久化、同名副本与按 ID 更新、schema 1→2 保留旧记录、迁移/保存/删除写盘失败回退、字段及 UTF-8 总预算和普通文本插入编辑。单元结果不能代替实际界面验收。`tests/e2e/snippets.spec.ts` 使用端口 1 的离线连接和真实 Electron/Monaco，设计验证分组搜索、编辑复制、删除确认、未保存修改保护、重启恢复、全选区及光标插入、撤销、模态快捷键和深浅主题；它还核对未建立 SQL 执行任务、历史或保存查询。
+0.3.0 已发布 SQL 片段与类型参数；旧 0.2.0 安装包不包含这些功能。`tests/unit/snippets.test.ts` 覆盖独立持久化、同名副本与按 ID 更新、schema 1→2 保留旧记录、迁移/保存/删除写盘失败回退、字段及 UTF-8 总预算和普通文本插入编辑。单元结果不能代替实际界面验收。`tests/e2e/snippets.spec.ts` 使用端口 1 的离线连接和真实 Electron/Monaco，设计验证分组搜索、编辑复制、删除确认、未保存修改保护、重启恢复、全选区及光标插入、撤销、模态快捷键和深浅主题；它还核对未建立 SQL 执行任务、历史或保存查询。
 
 类型参数对应 `tests/unit/query-parameters.test.ts` 和 `tests/integration/engine-parameters.integration.test.ts`。需要对 MySQL/MariaDB 基线实际验收九种类型、重复名、注释/引号/可执行版本注释、精确数值与日期边界、`NO_BACKSLASH_ESCAPES`/`ANSI_QUOTES` 切换、静态预校验及动态脚本已提交部分保留、累计展开预算、会话事务、临时表、取消和断线，并检查模板历史/任务不保存实际值。已建立会话的 `ROW_COUNT()`、`FOUND_ROWS()` 和 `SHOW WARNINGS` 必须在参数识别和逐条执行前后实测，不能仅凭协议缓存实现推断通过。参数 UI 还应验证识别期间关闭/重试、慢响应、双击执行、识别失败后的再次执行以及后台查询互斥，确认没有重复发送 SQL 或提前丢失已有结果。
 
 本批真实环境及验收进展单独记在 [Q06 验收记录](../tests/integration/acceptance-p0-parameters-20261014.md)，以记录中完成的测试为准；创建测试环境、只读连接检查、单元通过或增加测试文件都不等同于功能实库验收。统一构建后的离线片段 UI 可用 `pnpm exec playwright test tests/e2e/snippets.spec.ts` 定向运行，前提是构建产物与当前源码一致。
 
 SQL 片段迁移写入 schema 2 后，旧 0.2.0 拒绝读取。开发与回退测试先退出所有使用该目录的应用实例，备份完整用户配置目录；每个测试使用独立临时目录，不删除用户新库或修改 `user_version` 来适配旧客户端。回退必须使用升级前完整备份，并单独保留升级后的目录。
+
+外键相关边界由 `references`、`engine-references`、`reference-metadata`、`connection-abort`、`bit-changes` 与 `ui-reference-changes` 单元套件覆盖。实库 `engine-references.integration.test.ts` 需要五个基线及 SSH/TLS 分别启用；23 项包含真实锁等待取消、低权限源定义、BIT 位宽、FLOAT 相邻键及 CSV/JSON/SQL 往返，不用 mock 结果替代。真实桌面 `references.spec.ts` 五项包含草稿/父行变化、复合键整组提交、模态快捷键、真实线程释放和低权清空。首轮失败和最终复验分别记录在 [D05 记录](../tests/integration/acceptance-p0-references-20261014.md)，全平台和安装证据必须独立提供。
 
 百万行场景需要记录页大小、结果上限、内存占用、查询取消及导出完成情况。SSH/TLS、连接中断和低权限账号都必须使用真实服务验证，不能由单元测试代替。
 

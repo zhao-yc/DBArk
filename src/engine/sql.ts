@@ -1,5 +1,6 @@
 import type { CellValue, ColumnInfo, DataRow, FilterMode, FilterRule, RowChange, SortRule, SqlPreview, TableDesign, TableInfo } from '../shared/contracts';
 import { validateFilterRules } from '../shared/filtering';
+import { validateReferenceValues } from '../shared/references';
 
 /** 标识符始终作为标识符引用，不允许空值、NUL 或超过 MySQL 限制的名称。 */
 export function identifier(value: string): string {
@@ -218,28 +219,47 @@ export function buildChanges(info: TableInfo, changes: RowChange[]): SqlPreview 
       if (column.generated) throw new Error(`生成列不能手动赋值：${name}`);
     }
     if (change.kind === 'insert') {
-      statements.push({ sql: values.length ? `INSERT INTO ${table} (${values.map(([name]) => identifier(name)).join(', ')}) VALUES (${values.map(() => '?').join(', ')})` : `INSERT INTO ${table} () VALUES ()`, params: values.map(([, value]) => value) });
+      statements.push({ sql: values.length ? `INSERT INTO ${table} (${values.map(([name]) => identifier(name)).join(', ')}) VALUES (${values.map(([name, value]) => typedCellPlaceholder(columns.get(name)!, value)).join(', ')})` : `INSERT INTO ${table} () VALUES ()`, params: values.map(([, value]) => value) });
       continue;
     }
     if (change.kind === 'update' && !values.length) continue;
     for (const name of columns.keys()) if (!Object.hasOwn(change.before, name)) throw new Error(`缺少完整原始行：${name}，请刷新数据后重试`);
     for (const name of info.editableKey) if (change.before[name] === null || change.before[name] === undefined) throw new Error('原始行唯一键不得为空');
     // 键条件保持可用索引；全文本旧值另做精确比较，不受 CI/AI/PAD SPACE 排序规则影响。
-    const keyClauses = info.editableKey.map(name => { params.push(change.before[name]); return `${identifier(name)} <=> ?`; });
-    const originalClauses = [...columns.values()].map(column => {
+    const keyClauses = info.editableKey.map(name => { params.push(change.before[name]); return `${identifier(name)} <=> ${typedCellPlaceholder(columns.get(name)!, change.before[name])}`; });
+    // MySQL 5.7 对 BIT64 最大键的两个相同预处理谓词会错误传播常量；键条件已精确比较位值，无需重复。
+    const originalClauses = [...columns.values()].filter(column => !(/^BIT\b/i.test(column.type) && info.editableKey.includes(column.name))).map(column => {
       params.push(change.before[column.name]);
       // 先统一到连接字符集再取字节，否则 latin1 的 é 与 UTF-8 参数会产生假冲突。
       if (/^(?:CHAR|VARCHAR|TINYTEXT|TEXT|MEDIUMTEXT|LONGTEXT|ENUM|SET|JSON)\b/i.test(column.type)) {
         return `BINARY CONVERT(${identifier(column.name)} USING utf8mb4) <=> BINARY CONVERT(? USING utf8mb4)`;
       }
       // BLOB/二进制列原生比较已按字节执行；数值和日期维持服务器自身的类型语义。
-      return `${identifier(column.name)} <=> ?`;
+      return `${identifier(column.name)} <=> ${typedCellPlaceholder(column, change.before[column.name])}`;
     });
     const where = [...keyClauses, ...originalClauses].join(' AND ');
     if (change.kind === 'delete') statements.push({ sql: `DELETE FROM ${table} WHERE ${where}`, params });
-    else statements.push({ sql: `UPDATE ${table} SET ${values.map(([name]) => `${identifier(name)} = ?`).join(', ')} WHERE ${where}`, params: [...values.map(([, value]) => value), ...params] });
+    else statements.push({ sql: `UPDATE ${table} SET ${values.map(([name, value]) => `${identifier(name)} = ${typedCellPlaceholder(columns.get(name)!, value)}`).join(', ')} WHERE ${where}`, params: [...values.map(([, value]) => value), ...params] });
   }
   return { sql: statements.map(statement => statement.sql + ';\n-- 参数：' + JSON.stringify(statement.params)).join('\n\n'), statements, warnings: ['提交时在同一事务内校验完整原始行；并发冲突会回滚整批修改。'] };
+}
+
+/** BIT 的驱动 Buffer 是位字节而非整数文本；赋值、定位和乐观锁必须统一按无符号整数解码。 */
+export function typedCellPlaceholder(column: ColumnInfo, value: CellValue): string {
+  if (value === null || !/^BIT\b/i.test(column.type)) return '?';
+  const width = Number(/^BIT\((\d+)\)/i.exec(column.type)?.[1] ?? 1);
+  if (!Number.isInteger(width) || width < 1 || width > 64) throw new Error(`字段 ${column.name} 的 BIT 声明宽度无效`);
+  const maximum = (1n << BigInt(width)) - 1n;
+  if (typeof value === 'object') {
+    validateReferenceValues([value]);
+    const bytes = Buffer.from(value.base64, 'base64');
+    if (!bytes.length || bytes.length > Math.ceil(width / 8) || BigInt('0x' + bytes.toString('hex')) > maximum) throw new Error(`字段 ${column.name} 的二进制值超过 BIT(${width}) 位范围或缺少位字节`);
+    return 'CAST(CONV(HEX(?),16,10) AS UNSIGNED)';
+  }
+  if (typeof value === 'number' && !Number.isSafeInteger(value)) throw new Error(`字段 ${column.name} 的 BIT 数值必须使用精确字符串或安全整数`);
+  const text = typeof value === 'boolean' ? (value ? '1' : '0') : String(value);
+  if (!/^\d+$/.test(text) || BigInt(text) > maximum) throw new Error(`字段 ${column.name} 的值必须在 BIT(${width}) 无符号整数范围内`);
+  return 'CAST(? AS UNSIGNED)';
 }
 
 /** 类型只接收受支持的类型语法，不接收任意 SQL 片段。 */

@@ -164,7 +164,7 @@ describe.skipIf(!enabled)('远程类型参数查询', () => {
       }
       await query("SET sql_mode='ANSI_QUOTES'", undefined, isolated);
       const names = await engine.handle('query.parameterNames', { sessionId: isolated, sql: 'SELECT :v' });
-      expect(names.ansiQuotesKnown).toBe(false); expect(names.names).toEqual(['v']);
+      expect(names.ansiQuotesKnown).toBe(false); expect(names.noBackslashEscapesKnown).toBe(false); expect(names.names).toEqual(['v']);
       expect(firstValues(await query('SELECT :v AS value', [{ name: 'v', type: 'integer', value: '42' }], isolated)).map(String)).toEqual(['42']);
       await expect(query('SELECT :v AS "path\\"', [{ name: 'v', type: 'text', value: '不能猜测' }], isolated)).rejects.toThrow('歧义');
       expect(await engine.handle('query.sessionState', { sessionId: isolated })).toEqual({ transactionOpen: true, transactionKnown: true, broken: false });
@@ -185,6 +185,37 @@ describe.skipIf(!enabled)('远程类型参数查询', () => {
       const names = await engine.handle('query.parameterNames', { sessionId: isolated, sql: 'SELECT :v' });
       expect(names.ansiQuotesKnown).toBe(true); expect(names.ansiQuotes).toBe(false);
       expect(firstValues(await query('SELECT "普通字符串" AS value, :v AS parameter_value', [{ name: 'v', type: 'integer', value: '1' }], isolated)).map(String)).toEqual(['普通字符串', '1']);
+    } finally { await engine.handle('sessions.close', { sessionId: isolated }); }
+  });
+
+  it.each([{ tracking: true, prepared: false }, { tracking: false, prepared: false }, { tracking: true, prepared: true }, { tracking: false, prepared: true }])('CALL 恢复模式但 NBE 位过时：$tracking 跟踪/$prepared 预处理时拒绝字面参数歧义，后续 EOF 不恢复信任', async ({ tracking, prepared }) => {
+    const isolated = (await engine.handle('sessions.open', { connectionId: profile.id, database })).sessionId;
+    const procedure = `stale_nbe_${tracking ? 'tracked' : 'untracked'}_${prepared ? 'prepared' : 'direct'}`;
+    try {
+      await query("SET sql_mode=''", undefined, isolated);
+      await query(`DELIMITER $$\nCREATE PROCEDURE ${procedure}() BEGIN SELECT 7; SET SESSION sql_mode='ANSI_QUOTES,NO_BACKSLASH_ESCAPES'; END$$\nDELIMITER ;`, undefined, isolated);
+      if (!tracking) await query("SET SESSION session_track_system_variables=''", undefined, isolated);
+      if (prepared) await query(`SET @call_sql='CALL ${procedure}()'; PREPARE call_mode_stmt FROM @call_sql; EXECUTE call_mode_stmt`, undefined, isolated);
+      else await query(`CALL ${procedure}()`, undefined, isolated);
+      // 五库均曾把字符串中的 :ghost 错绑定；实际模式已恢复，但 EOF 的 NBE 位仍然过时。
+      const template = "SELECT 'a\\', :ghost -- '\n";
+      for (let index = 0; index < 3; index++) {
+        const names = await engine.handle('query.parameterNames', { sessionId: isolated, sql: 'SELECT :v' });
+        expect(names.ansiQuotesKnown).toBe(false); expect(names.noBackslashEscapesKnown).toBe(false);
+        await expect(engine.handle('query.parameterNames', { sessionId: isolated, sql: template })).rejects.toThrow('歧义');
+        await expect(query(template, [{ name: 'ghost', type: 'integer', value: '7' }], isolated)).rejects.toThrow('歧义');
+        expect(firstValues(await query('SELECT @@SESSION.sql_mode, :v', [{ name: 'v', type: 'integer', value: '42' }], isolated)).map(String)).toEqual(['', '42']);
+      }
+      await query('START TRANSACTION', undefined, isolated);
+      expect(await engine.handle('query.sessionState', { sessionId: isolated })).toEqual({ transactionOpen: true, transactionKnown: true, broken: false });
+      await engine.handle('query.transaction', { sessionId: isolated, action: 'rollback' });
+      expect(await engine.handle('query.sessionState', { sessionId: isolated })).toEqual({ transactionOpen: false, transactionKnown: true, broken: false });
+      expect((await engine.handle('query.parameterNames', { sessionId: isolated, sql: 'SELECT :v' })).noBackslashEscapesKnown).toBe(false);
+      // 用户显式恢复跟踪并改模式，新的完整一致报告可以恢复词法信任；引擎不补发隐藏 SQL。
+      await query("SET SESSION session_track_system_variables='sql_mode,session_track_system_variables'; SET SESSION sql_mode='NO_BACKSLASH_ESCAPES'; SET SESSION sql_mode=''", undefined, isolated);
+      const restored = await engine.handle('query.parameterNames', { sessionId: isolated, sql: template });
+      expect(restored.names).toEqual([]); expect(restored.noBackslashEscapesKnown).toBe(true);
+      expect(firstValues(await query(template, [], isolated))).toEqual(["a', :ghost -- "]);
     } finally { await engine.handle('sessions.close', { sessionId: isolated }); }
   });
 
@@ -212,7 +243,7 @@ describe.skipIf(!enabled)('远程类型参数查询', () => {
       expect(names.ansiQuotesKnown).toBe(false); expect(names.noBackslashEscapesKnown).toBe(false);
       await expect(query("SELECT 'path\\' AS value, :v", [{ name: 'v', type: 'integer', value: '1' }], isolated)).rejects.toThrow('歧义');
       expect(firstValues(await query('SELECT :v AS value', [{ name: 'v', type: 'integer', value: '42' }], isolated)).map(String)).toEqual(['42']);
-      expect((await engine.handle('query.parameterNames', { sessionId: isolated, sql: 'SELECT :v' })).noBackslashEscapesKnown).toBe(true);
+      expect((await engine.handle('query.parameterNames', { sessionId: isolated, sql: 'SELECT :v' })).noBackslashEscapesKnown).toBe(false);
       await engine.handle('query.transaction', { sessionId: isolated, action: 'rollback' });
       expect(await engine.handle('query.sessionState', { sessionId: isolated })).toEqual({ transactionOpen: false, transactionKnown: true, broken: false });
     } finally { await engine.handle('sessions.close', { sessionId: isolated }); }

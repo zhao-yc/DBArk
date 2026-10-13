@@ -1,0 +1,9 @@
+.reference-content > .field { max-width: 440px; margin-bottom: 12px; }
+.reference-mapping { overflow-wrap: anywhere; }
+.reference-grid { height: 280px; margin-top: 12px; border: 1px solid var(--line); }
+.reference-pagination { display: flex; align-items: center; gap: 8px; margin-top: 12px; flex-wrap: wrap; }
+.reference-pagination form { display: flex; gap: 6px; }
+.reference-pagination input { width: 70px; }
+.reference-pagination select { width: 85px; }
+.reference-content [role="alertdialog"] { padding: 12px; margin-top: 12px; border: 1px solid var(--line); }
+.reference-content [role="alertdialog"] button { margin-right: 8px; }

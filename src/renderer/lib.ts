@@ -15,6 +15,8 @@ export const errorMessage = (error: unknown) => error instanceof Error ? error.m
 export const identifier = (value: string) => '`' + value.replaceAll('`', '``') + '`';
 /** 分别引用库名与对象名，避免含点号或反引号的名称改变 SQL 结构。 */
 export const qualifiedName = (database: string, table: string) => `${identifier(database)}.${identifier(table)}`;
+/** 未填写的字段是 DEFAULT；只读取自有属性，不能把原型成员误当作数据库单元格。 */
+export function ownCell(row: DataRow, key: string): CellValue | undefined { return Object.hasOwn(row, key) ? row[key] : undefined; }
 /** 完整文本用于显式查看或复制，二进制转为十六进制且不改变原始数据。 */
 export const cellText = (value: CellValue | undefined) => value === null ? 'NULL' : value === undefined ? '' : typeof value === 'object' ? `0x${atob(value.base64).split('').map(char => char.charCodeAt(0).toString(16).padStart(2, '0')).join('')}` : String(value);
 /** 比较由同一行快照派生的普通数据，包含 NULL、字符串及二进制包装值。 */

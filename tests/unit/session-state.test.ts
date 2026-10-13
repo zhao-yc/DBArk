@@ -12,7 +12,7 @@ describe('协议模式缓存的确定性与失效边界', () => {
     observeSessionError(active);
     expect(active.serverStatus).toBe(3); expect(active.transactionStateKnown).toBe(false); expect(active.noBackslashEscapesKnown).toBe(false); expect(active.sqlMode).toBeUndefined(); expect(active.broken).toBe(false);
     observeSessionState(active, { serverStatus: 514 });
-    expect(active.serverStatus).toBe(514); expect(active.transactionStateKnown).toBe(true); expect(active.noBackslashEscapesKnown).toBe(true); expect(active.sqlMode).toBeUndefined();
+    expect(active.serverStatus).toBe(514); expect(active.transactionStateKnown).toBe(true); expect(active.noBackslashEscapesKnown).toBe(false); expect(active.sqlMode).toBeUndefined();
   });
   it('完整模式报告和 EOF 事务位同步缓存，不改变物理连接状态', () => {
     const active = managed();
@@ -25,10 +25,12 @@ describe('协议模式缓存的确定性与失效边界', () => {
     "SET SESSION session_track_system_variables=''", 'SET @@SESSION.`session_track_system_variables` = @empty',
     '/*说明*/ CALL procedure_name()', '/*!50000 CALL procedure_name() */', 'EXECUTE prepared_name',
     "SET SESSION sql_mode='ANSI_QUOTES'",
-  ])('没有完整报告时 %s 使 ANSI 模式不确定，但不回滚或关闭连接', sql => {
+  ])('没有完整报告时 %s 使两种词法模式不确定，但不回滚或关闭连接', sql => {
     const active = managed();
     observeSessionState(active, { sql, serverStatus: 3 });
-    expect(active.sqlMode).toBeUndefined(); expect(active.serverStatus).toBe(3); expect(active.broken).toBe(false);
+    expect(active.sqlMode).toBeUndefined(); expect(active.serverStatus).toBe(3); expect(active.broken).toBe(false); expect(active.noBackslashEscapesKnown).toBe(false);
+    observeSessionState(active, { sql: 'ROLLBACK', serverStatus: 2 });
+    expect(active.noBackslashEscapesKnown).toBe(false); expect(active.transactionStateKnown).toBe(true);
   });
   it('普通字符串、注释和存储过程定义中的 CALL 不误判为已调用', () => {
     for (const sql of ["INSERT INTO t VALUES ('CALL p()')", '/*CALL p()*/ SET @value=1', "CREATE PROCEDURE p() BEGIN SET sql_mode='ANSI_QUOTES'; END", "SELECT 'session_track_system_variables'"]) {
@@ -44,11 +46,32 @@ describe('协议模式缓存的确定性与失效边界', () => {
     const active = managed(); observeSessionState(active, { serverStatus: 514 }); expect(active.sqlMode).toBeUndefined();
     observeSessionState(active, { serverStatus: 514, sql: 'SET sql_mode=@future', stateChanges: { systemVariables: { sql_mode: 'NO_BACKSLASH_ESCAPES' } } });
     expect(active.sqlMode).toBe('NO_BACKSLASH_ESCAPES');
+    expect(active.noBackslashEscapesKnown).toBe(true);
+  });
+  it('CALL 恢复模式与陈旧 NBE 位矛盾后，后续 EOF 不会使字面量变成参数', () => {
+    const active = managed();
+    observeSessionState(active, { sql: 'CALL change_mode()', serverStatus: 16898, stateChanges: { systemVariables: { sql_mode: '' } } });
+    for (const serverStatus of [514, 515, 2]) {
+      expect(active.sqlMode).toBeUndefined(); expect(active.noBackslashEscapesKnown).toBe(false);
+      const mode = { noBackslashEscapes: Boolean((active.serverStatus ?? 0) & 512), noBackslashEscapesKnown: active.noBackslashEscapesKnown, ansiQuotes: false, ansiQuotesKnown: false };
+      expect(() => namedParameterTokens("SELECT 'a\\', :ghost -- '\n", mode)).toThrow('歧义');
+      observeSessionState(active, { sql: 'SELECT 1', serverStatus });
+      expect(active.transactionStateKnown).toBe(true);
+    }
+    expect(active.noBackslashEscapesKnown).toBe(false);
+    observeSessionState(active, { sql: 'SET sql_mode=@mode', serverStatus: 2, stateChanges: { systemVariables: { sql_mode: '' } } });
+    expect(active.sqlMode).toBe(''); expect(active.noBackslashEscapesKnown).toBe(true);
+    expect(namedParameterTokens("SELECT 'a\\', :ghost -- '\n", { noBackslashEscapes: false, ansiQuotes: false })).toEqual([]);
+  });
+  it('缺少同包状态位的模式报告不能用旧状态猜测一致性', () => {
+    const active = managed();
+    observeSessionState(active, { stateChanges: { systemVariables: { sql_mode: '' } } });
+    expect(active.sqlMode).toBeUndefined(); expect(active.noBackslashEscapesKnown).toBe(false);
   });
   it('明确关闭跟踪优先于同一包里的模式快照，避免相信未来不会更新的值', () => {
     const active = managed();
     observeSessionState(active, { sql: 'SET session_track_system_variables=@empty', serverStatus: 2, stateChanges: { systemVariables: { sql_mode: '', session_track_system_variables: '' } } });
-    expect(active.sqlMode).toBeUndefined(); expect(active.sqlModeTracking).toBe(false);
+    expect(active.sqlMode).toBeUndefined(); expect(active.sqlModeTracking).toBe(false); expect(active.noBackslashEscapesKnown).toBe(false);
   });
 });
 

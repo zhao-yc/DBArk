@@ -4,6 +4,7 @@ import { validateResultExportData } from './resultExport';
 import { FILTER_LIMITS, validateFilterRules } from './filtering';
 import { queryParameterTypes, validateQueryParameters } from './queryParameters';
 import { snippetSchema } from './snippets';
+import { validateReferenceValues } from './references';
 
 const id = z.string().min(1).max(200);
 const name = z.string().min(1).max(256);
@@ -43,7 +44,7 @@ export const commandSchemas: Record<Command, z.ZodType> = {
   'connections.delete': z.object({ id }).strict(), 'connections.open': z.object({ id }).strict(), 'connections.close': z.object({ id }).strict(),
   'metadata.databases': z.object({ connectionId: id }).strict(),
   'metadata.objects': z.object({ connectionId: id, database: name }).strict(),
-  'metadata.table': z.object(target).strict(),
+  'metadata.table': z.object({ ...target, taskId: id.optional() }).strict(),
   'metadata.ddl': z.object({ connectionId: id, database: name, name, kind: z.enum(['table','view','procedure','function','trigger','event']) }).strict(),
   'sessions.open': z.object({ connectionId: id, database: name.optional() }).strict(), 'sessions.close': z.object({ sessionId: id }).strict(),
   'query.execute': z.object({ sessionId: id, sql: text.min(1), taskId: id, maxRows: z.number().int().min(1).max(100000) }).strict(),
@@ -54,6 +55,9 @@ export const commandSchemas: Record<Command, z.ZodType> = {
   'query.cancel': z.object({ taskId: id }).strict(),
   'query.transaction': z.object({ sessionId: id, action: z.enum(['begin','commit','rollback']) }).strict(),
   'table.page': tablePage,
+  'table.referencePage': tablePage.safeExtend({ foreignKeyName: name, matchValues: z.array(cell).optional(), taskId: id }).superRefine((input, context) => {
+    if (input.matchValues !== undefined) try { validateReferenceValues(input.matchValues); } catch (error) { context.addIssue({ code: 'custom', path: ['matchValues'], message: error instanceof Error ? error.message : '关联值无效' }); }
+  }),
   'table.preview': z.object({ ...target, changes }).strict(), 'table.apply': z.object({ ...target, changes, taskId: id }).strict(),
   'schema.preview': z.object({ connectionId: id, design: z.object({ database: name, name, originalName: name.optional(), engine: name, charset: name, comment: z.string(), columns: z.array(z.object({ name, originalName: name.optional(), type: name, nullable: z.boolean(), defaultValue: z.string().nullable().optional(), autoIncrement: z.boolean(), comment: z.string() }).strict()).min(1).max(1000), indexes: z.array(index), foreignKeys: z.array(foreignKey) }).strict() }).strict(),
   'schema.apply': z.object({ connectionId: id, database: z.string().max(256), sql: text.min(1), taskId: id }).strict(),

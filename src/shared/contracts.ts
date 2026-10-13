@@ -56,7 +56,7 @@ export interface CommandMap {
   'connections.close': { input: { id: string }; output: void };
   'metadata.databases': { input: { connectionId: string }; output: string[] };
   'metadata.objects': { input: { connectionId: string; database: string }; output: DatabaseObject[] };
-  'metadata.table': { input: { connectionId: string; database: string; table: string }; output: TableInfo };
+  'metadata.table': { input: { connectionId: string; database: string; table: string; taskId?: string }; output: TableInfo };
   'metadata.ddl': { input: { connectionId: string; database: string; name: string; kind: ObjectKind }; output: string };
   'sessions.open': { input: { connectionId: string; database?: string }; output: { sessionId: string } };
   'sessions.close': { input: { sessionId: string }; output: void };
@@ -68,6 +68,8 @@ export interface CommandMap {
   'query.cancel': { input: { taskId: string }; output: void };
   'query.transaction': { input: { sessionId: string; action: 'begin' | 'commit' | 'rollback' }; output: void };
   'table.page': { input: { connectionId: string; database: string; table: string; page: number; pageSize: number; filters: FilterRule[]; filterMode?: FilterMode; sort: SortRule[] }; output: TablePage };
+  /** 目标仅由服务器来源表的外键解析；值元组保留精确字符串及二进制，不以普通文本筛选代替关联。 */
+  'table.referencePage': { input: { connectionId: string; database: string; table: string; foreignKeyName: string; matchValues?: CellValue[]; page: number; pageSize: number; filters: FilterRule[]; filterMode?: FilterMode; sort: SortRule[]; taskId: string }; output: { source: TableInfo; foreignKey: ForeignKeyInfo; target: TableInfo; page: TablePage } };
   'table.preview': { input: { connectionId: string; database: string; table: string; changes: RowChange[] }; output: SqlPreview };
   'table.apply': { input: { connectionId: string; database: string; table: string; changes: RowChange[]; taskId: string }; output: { affectedRows: number } };
   'schema.preview': { input: { connectionId: string; design: TableDesign }; output: SqlPreview };

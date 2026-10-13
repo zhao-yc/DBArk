@@ -5,6 +5,8 @@ import { Types, type FieldPacket, type ResultSetHeader } from 'mysql2';
 import type { CellValue, EngineCommand, ConnectionProfile, DataRow, QueryOutcome, QueryResult, ResultColumn, RowChange, TableDesign, TaskEvent } from '../shared/contracts';
 import { connectionTransportChanged } from '../shared/connectionProfile';
 import { bindQueryParameters, namedParameterTokens, queryParameterLimits, validateQueryParameters, type QueryParameter, type SqlLexicalMode } from '../shared/queryParameters';
+import { canonicalReference, validateReferenceValues } from '../shared/references';
+import { buildReferencePageSql } from './references';
 import { connect, execute, type ManagedConnection } from './connection';
 import * as metadata from './metadata';
 import { csvCell, csvHeader, encodingName, previewFile, readRecords, readText } from './files';
@@ -17,6 +19,7 @@ interface RunningTask {
   cancelPending?: Promise<void>; serverStatus?: number; done: Promise<void>; finish(): void;
 }
 interface ResultBudget { remainingRows: number; remainingBytes: number; remainingResults: number; }
+interface IndependentTask { connectionId: string; controller: AbortController; done: Promise<void>; managed?: ManagedConnection; cancelPending?: Promise<void>; cancelError?: Error; }
 type Input = Record<string, any>;
 
 /** 独立数据库进程的入口；网络连接与文件流不会进入 Electron 渲染进程。 */
@@ -24,13 +27,17 @@ export class Engine {
   private readonly profiles = new Map<string, ConnectionProfile>();
   private readonly sessions = new Map<string, Session>();
   private readonly tasks = new Map<string, RunningTask>();
+  private closing = false;
+  private readonly independentTasks = new Map<string, IndependentTask>();
   private readonly connectionUses = new Map<string, number>();
+  private readonly pendingUses = new Set<Promise<void>>();
   private readonly resultFiles: ResultFileTasks;
   /** 注入任务事件出口，使引擎既能在 utility process 中运行，也能独立测试。 */
   constructor(private readonly emit: (event: TaskEvent) => void = () => undefined) { this.resultFiles = new ResultFileTasks(emit); }
 
   /** 主进程只注入可信 profile/filePath；其他字段按共享接口处理。 */
   async handle(command: EngineCommand, input: Input): Promise<any> {
+    if (this.closing) throw new Error('数据库引擎正在关闭，不能开始新操作');
     switch (command) {
       case '__connections.prepareSave': {
         const next = input.profile as ConnectionProfile;
@@ -53,10 +60,13 @@ export class Engine {
       });
       case 'connections.close': {
         const active = [...this.tasks.values()].filter(task => task.managed.profile.id === input.id);
-        await Promise.all(active.map(task => this.cancelTask(task.id)));
-        await Promise.all(active.map(task => task.done));
+        const independent = [...this.independentTasks].filter(([, task]) => task.connectionId === input.id);
+        const cancellations = await Promise.allSettled([...active.map(task => this.cancelTask(task.id)), ...independent.map(([id]) => this.cancelTask(id))]);
+        await Promise.all([...active.map(task => task.done), ...independent.map(([, task]) => task.done)]);
         for (const [id, session] of this.sessions) if (session.connectionId === input.id) { await session.managed.close(); this.sessions.delete(id); }
-        this.profiles.delete(input.id); return;
+        this.profiles.delete(input.id);
+        const failed = cancellations.find(result => result.status === 'rejected'); if (failed?.status === 'rejected') throw failed.reason;
+        return;
       }
       case 'sessions.open': return this.withConnectionUse(input.connectionId, async () => {
         const managed = await connect(this.profile(input.connectionId), input.database);
@@ -75,7 +85,7 @@ export class Engine {
       }
       case 'metadata.databases': return this.withConnection(input.connectionId, connection => metadata.databases(connection));
       case 'metadata.objects': return this.withConnection(input.connectionId, connection => metadata.objects(connection, input.database));
-      case 'metadata.table': return this.withConnection(input.connectionId, connection => metadata.tableInfo(connection, input.database, input.table));
+      case 'metadata.table': return input.taskId ? this.withIndependentTask(input.connectionId, input.taskId, connection => metadata.tableInfo(connection, input.database, input.table)) : this.withConnection(input.connectionId, connection => metadata.tableInfo(connection, input.database, input.table));
       case 'metadata.ddl': return this.withConnection(input.connectionId, connection => metadata.objectDdl(connection, input.database, input.name, input.kind));
       case 'query.execute': return this.withSession(input.sessionId, managed => this.runTask(input.taskId, managed, '执行 SQL', task => this.queryScript(task, input.sql, input.maxRows)));
       case 'query.parameterNames': return this.withSession(input.sessionId, async managed => {
@@ -115,21 +125,19 @@ export class Engine {
         const statement = buildPageSql(info, input.page, input.pageSize, input.filters, input.sort, input.filterMode);
         // 筛选值用十六进制字面量嵌入已验证模板，避免文本协议受 SQL 转义模式影响。
         const sql = inlineParameters(statement.sql, statement.params);
-        const query = managed.connection.query({ sql, rowsAsArray: true });
-        let fields: FieldPacket[] = [];
-        query.on('fields', (value: FieldPacket[]) => { fields = value; });
-        const stream = query.stream({ highWaterMark: 8 });
-        const rows: DataRow[] = []; let bytes = 0;
-        try {
-          for await (const raw of stream) {
-            const values = raw as unknown[];
-            if (this.rawRowBytes(values) > 256 * 1024) throw new Error('当前页包含超过 256 KiB 的大字段行，未返回可编辑数据；请筛选该行之外的数据，或使用文件导出读取完整内容');
-            const row = Object.fromEntries(fields.map((field, index) => [field.name, serializeCell(values[index])])); bytes += Buffer.byteLength(JSON.stringify(row));
-            if (bytes > 16 * 1024 * 1024) throw new Error('当前页数据超过 16 MiB，未返回可编辑数据；请减小页大小或使用文件导出');
-            rows.push(row);
-          }
-        } finally { stream.destroy(); }
-        return { rows: rows.slice(0, input.pageSize), columns: this.columns(fields, true), page: input.page, pageSize: input.pageSize, hasMore: rows.length > input.pageSize };
+        return this.readPage(managed, sql, input.page, input.pageSize, info.columns.some(column => /^(?:FLOAT|DOUBLE|REAL)\b/i.test(column.type)));
+      });
+      case 'table.referencePage': return this.withIndependentTask(input.connectionId, input.taskId, async managed => {
+        if (input.matchValues !== undefined) validateReferenceValues(input.matchValues);
+        const source = await metadata.tableInfo(managed, input.database, input.table);
+        const matches = source.foreignKeys.filter(key => key.name.toLowerCase() === String(input.foreignKeyName).toLowerCase());
+        if (matches.length !== 1) throw new Error('外键已不存在或名称不明确，请刷新表结构');
+        const current = matches[0];
+        const target = await metadata.tableInfo(managed, current.referencedDatabase, current.referencedTable);
+        const foreignKey = canonicalReference(source, current, target);
+        const sql = buildReferencePageSql(target, foreignKey, input.matchValues, input.page, input.pageSize, input.filters, input.sort, input.filterMode);
+        const page = await this.readPage(managed, sql, input.page, input.pageSize, target.columns.some(column => /^(?:FLOAT|DOUBLE|REAL)\b/i.test(column.type)));
+        return { source, foreignKey, target, page };
       });
       case 'table.preview': return this.withConnection(input.connectionId, async managed => buildChanges(await metadata.tableInfo(managed, input.database, input.table), input.changes));
       case 'table.apply': return this.withConnection(input.connectionId, managed => this.runTask(input.taskId, managed, '提交数据修改', task => this.applyChanges(task, input)));
@@ -146,7 +154,7 @@ export class Engine {
       case 'files.export': this.assertFile(input); return this.withConnection(input.connectionId, managed => this.runTask(input.taskId, managed, '导出文件', task => this.exportFile(task, input)), input.database);
       case 'files.exportResult': {
         this.assertFile(input);
-        if (this.tasks.has(input.taskId)) throw new Error('任务编号已在执行');
+        if (this.tasks.has(input.taskId) || this.independentTasks.has(input.taskId)) throw new Error('任务编号已在执行');
         return this.resultFiles.run(input as Parameters<ResultFileTasks['run']>[0]);
       }
       default: throw new Error(`数据库进程不支持命令：${command}`);
@@ -155,13 +163,18 @@ export class Engine {
 
   /** 关闭前取消任务并释放固定会话，未提交事务由服务器在断开时回滚。 */
   async closeAll(): Promise<void> {
+    this.closing = true;
+    const independent = [...this.independentTasks];
     const active = [...this.tasks.values()];
     const fileCleanup = this.resultFiles.closeAll();
-    await Promise.all(active.map(task => this.cancelTask(task.id)));
-    await Promise.all(active.map(task => task.done));
+    const cancellations = await Promise.allSettled([...active.map(task => this.cancelTask(task.id)), ...independent.map(([id]) => this.cancelTask(id))]);
+    await Promise.all([...active.map(task => task.done), ...independent.map(([, task]) => task.done)]);
     await fileCleanup;
+    // 首个 await 之前已进入的建连也必须收尾，避免退出后迟到注册会话。
+    await Promise.all([...this.pendingUses]);
     await Promise.all([...this.sessions.values()].map(session => session.managed.close()));
     this.sessions.clear(); this.profiles.clear();
+    const failed = cancellations.find(result => result.status === 'rejected'); if (failed?.status === 'rejected') throw failed.reason;
   }
 
   /** 只读取已经由主进程解密并成功打开的连接配置，不接受界面任意凭据。 */
@@ -181,9 +194,66 @@ export class Engine {
 
   /** 在首个 await 建连之前登记活动，覆盖会话尚未入表和独立元数据任务的竞态。 */
   private async withConnectionUse<T>(id: string, action: () => Promise<T>): Promise<T> {
+    let finish!: () => void;
+    const done = new Promise<void>(resolve => { finish = resolve; });
+    this.pendingUses.add(done);
     this.connectionUses.set(id, (this.connectionUses.get(id) ?? 0) + 1);
     try { return await action(); }
-    finally { const remaining = (this.connectionUses.get(id) ?? 1) - 1; if (remaining) this.connectionUses.set(id, remaining); else this.connectionUses.delete(id); }
+    finally { const remaining = (this.connectionUses.get(id) ?? 1) - 1; if (remaining) this.connectionUses.set(id, remaining); else this.connectionUses.delete(id); this.pendingUses.delete(done); finish(); }
+  }
+
+  /** 外键读取从建连前登记，到连接收尾后才释放任务编号及连接配置锁。 */
+  private async withIndependentTask<T>(connectionId: string, taskId: string, action: (managed: ManagedConnection) => Promise<T>): Promise<T> {
+    return this.withConnectionUse(connectionId, async () => {
+      if (this.closing || !taskId || this.tasks.has(taskId) || this.independentTasks.has(taskId) || this.resultFiles.has(taskId)) throw new Error('任务编号为空或任务已在执行');
+      const profile = this.profile(connectionId);
+      const controller = new AbortController();
+      let finish!: () => void;
+      const done = new Promise<void>(resolve => { finish = resolve; });
+      const task: IndependentTask = { connectionId, controller, done };
+      this.independentTasks.set(taskId, task);
+      this.emit({ taskId, status: 'running', progress: 0, message: '读取关联记录' });
+      let managed: ManagedConnection | undefined;
+      let failure: unknown; let result!: T;
+      try {
+        managed = await connect(profile, undefined, controller.signal);
+        task.managed = managed;
+        if (controller.signal.aborted) throw new Error('任务已取消');
+        result = await action(managed);
+      } catch (error) { failure = error; }
+      finally {
+        try { await task.cancelPending; } catch (error) { failure = error; }
+        try { await managed?.close(); } catch (error) { failure ??= error; }
+        this.independentTasks.delete(taskId); finish();
+      }
+      if (controller.signal.aborted) failure = task.cancelError ?? new Error('任务已取消');
+      this.emit({ taskId, status: task.cancelError ? 'failed' : controller.signal.aborted ? 'cancelled' : failure ? 'failed' : 'completed', progress: failure ? 0 : 100, message: failure ? this.errorMessage(failure) : '读取关联记录完成' });
+      if (failure) throw failure;
+      return result;
+    });
+  }
+
+  /** 普通表页与关联表页共用流式预算和按真实字段名序列化的规则。 */
+  private async readPage(managed: ManagedConnection, sql: string, page: number, pageSize: number, binaryRows = false) {
+    if (managed.signal?.aborted) throw new Error('任务已取消');
+    // 文本协议会截短 FLOAT 的有效位，二进制协议保留相邻 FLOAT/DOUBLE 候选的真实值。
+    const query = binaryRows ? managed.connection.execute({ sql, rowsAsArray: true }) : managed.connection.query({ sql, rowsAsArray: true });
+    let fields: FieldPacket[] = [];
+    query.on('fields', (value: FieldPacket[]) => { fields = value; });
+    const stream = query.stream({ highWaterMark: 8 });
+    const abort = () => { stream.destroy(new Error('任务已取消')); };
+    managed.signal?.addEventListener('abort', abort, { once: true });
+    const rows: DataRow[] = []; let bytes = 0;
+    try {
+      for await (const raw of stream) {
+        const values = raw as unknown[];
+        if (this.rawRowBytes(values) > 256 * 1024) throw new Error('当前页包含超过 256 KiB 的大字段行，未返回可编辑数据；请筛选该行之外的数据，或使用文件导出读取完整内容');
+        const row = Object.fromEntries(fields.map((field, index) => [field.name, serializeCell(values[index])])); bytes += Buffer.byteLength(JSON.stringify(row));
+        if (bytes > 16 * 1024 * 1024) throw new Error('当前页数据超过 16 MiB，未返回可编辑数据；请减小页大小或使用文件导出');
+        rows.push(row);
+      }
+    } finally { managed.signal?.removeEventListener('abort', abort); stream.destroy(); }
+    return { rows: rows.slice(0, pageSize), columns: this.columns(fields, true), page, pageSize, hasMore: rows.length > pageSize };
   }
 
   /** 同一会话不允许并行操作，确保事务、临时表和取消操作作用于确定的连接。 */
@@ -198,7 +268,7 @@ export class Engine {
 
   /** 统一登记任务、发送终态并等待取消控制连接结束后释放任务标识。 */
   private async runTask<T>(id: string, managed: ManagedConnection, label: string, action: (task: RunningTask) => Promise<T>): Promise<T> {
-    if (!id || this.tasks.has(id) || this.resultFiles.has(id)) throw new Error('任务编号为空或任务已在执行');
+    if (this.closing || !id || this.tasks.has(id) || this.independentTasks.has(id) || this.resultFiles.has(id)) throw new Error('任务编号为空或任务已在执行');
     let finish!: () => void;
     const done = new Promise<void>(resolve => { finish = resolve; });
     const task: RunningTask = { id, managed, cancelled: false, inFlight: false, generation: 0, done, finish };
@@ -298,6 +368,29 @@ export class Engine {
 
   /** 取消只针对仍然运行的那一代语句；控制连接失败时销毁原会话，不重连重放。 */
   private async cancelTask(id: string): Promise<void> {
+    const independent = this.independentTasks.get(id);
+    if (independent) {
+      if (!independent.cancelPending) {
+        const managed = independent.managed;
+        if (!managed) independent.controller.abort();
+        else independent.cancelPending = (async () => {
+          let control: ManagedConnection | undefined;
+          const threadId = managed.connection.threadId;
+          try {
+            control = await connect(managed.profile);
+            if (this.independentTasks.get(id) !== independent || independent.managed !== managed || managed.connection.threadId !== threadId) throw new Error('关联任务连接已变化，不能发送取消命令');
+            if (!Number.isSafeInteger(threadId) || (threadId ?? 0) < 1) throw new Error('无法确认关联查询连接编号');
+            // 单纯关闭 socket 无法唤醒服务器的元数据锁等待，必须明确结束此专用会话。
+            await execute(control, `KILL CONNECTION ${threadId}`);
+          } catch (error) {
+            if ((error as { errno?: number }).errno !== 1094) independent.cancelError = new Error('取消控制连接失败，已关闭本地关联连接，但无法确认服务器任务已结束，请检查服务器连接状态');
+          } finally { independent.controller.abort(); await control?.close(); }
+        })();
+      }
+      await independent.cancelPending; await independent.done;
+      if (independent.cancelError) throw independent.cancelError;
+      return;
+    }
     if (this.resultFiles.has(id)) { this.resultFiles.cancel(id); return; }
     const task = this.tasks.get(id);
     if (!task) return;
@@ -608,7 +701,9 @@ export class Engine {
         await this.statement(task, 'SET TRANSACTION ISOLATION LEVEL REPEATABLE READ');
         await this.statement(task, 'START TRANSACTION WITH CONSISTENT SNAPSHOT');
         task.inFlight = true; task.generation++;
-        const query = task.managed.connection.query({ sql: `SELECT ${dataColumns.map(column => identifier(column.name)).join(', ')} FROM ${qualified(input.database, input.table)}`, rowsAsArray: true });
+        const options = { sql: `SELECT ${dataColumns.map(column => identifier(column.name)).join(', ')} FROM ${qualified(input.database, input.table)}`, rowsAsArray: true };
+        // 与表页一样保留浮点二进制位，避免相邻唯一键导出后变成同一个短小数。
+        const query = dataColumns.some(column => /^(?:FLOAT|DOUBLE|REAL)\b/i.test(column.type)) ? task.managed.connection.execute(options) : task.managed.connection.query(options);
         const stream = query.stream({ highWaterMark: 32 });
         try {
           for await (const raw of stream) {

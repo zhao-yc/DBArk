@@ -1,5 +1,6 @@
 import type { DatabaseObject, ForeignKeyInfo, IndexInfo, ObjectKind, TableInfo } from '../shared/contracts';
 import { execute, type ManagedConnection } from './connection';
+import { foreignKeyActions } from './references';
 import { mariaDefault, qualified, temporalDefault } from './sql';
 
 /** 从服务器获取用户可访问的数据库，不在客户端猜测权限。 */
@@ -50,22 +51,27 @@ export async function tableInfo(connection: ManagedConnection, database: string,
     if (row.columnName) index.columns.push(row.columnName); else unusableIndexes.add(row.name);
     if (row.subPart !== null || row.indexType !== 'BTREE' || row.sortDirection === 'D') unsupportedIndexes.add(row.name);
   }
-  const keys = await execute<{ name: string; columnName: string; referencedDatabase: string; referencedTable: string; referencedColumn: string; onUpdate: string; onDelete: string }[]>(connection,
-    'SELECT k.CONSTRAINT_NAME AS name, k.COLUMN_NAME AS columnName, k.REFERENCED_TABLE_SCHEMA AS referencedDatabase, k.REFERENCED_TABLE_NAME AS referencedTable, k.REFERENCED_COLUMN_NAME AS referencedColumn, r.UPDATE_RULE AS onUpdate, r.DELETE_RULE AS onDelete FROM information_schema.KEY_COLUMN_USAGE k JOIN information_schema.REFERENTIAL_CONSTRAINTS r ON r.CONSTRAINT_SCHEMA = k.CONSTRAINT_SCHEMA AND r.CONSTRAINT_NAME = k.CONSTRAINT_NAME AND r.TABLE_NAME = k.TABLE_NAME WHERE k.TABLE_SCHEMA = ? AND k.TABLE_NAME = ? AND k.REFERENCED_TABLE_NAME IS NOT NULL ORDER BY k.CONSTRAINT_NAME, k.ORDINAL_POSITION', [database, table]);
-  const keyMap = new Map<string, ForeignKeyInfo>();
-  for (const row of keys.rows) {
-    let key = keyMap.get(row.name);
-    if (!key) { key = { name: row.name, columns: [], referencedDatabase: row.referencedDatabase, referencedTable: row.referencedTable, referencedColumns: [], onUpdate: row.onUpdate, onDelete: row.onDelete }; keyMap.set(row.name, key); }
-    key.columns.push(row.columnName); key.referencedColumns.push(row.referencedColumn);
-  }
+  const keys = await execute<{ name: string; columnName: string; referencedDatabase: string; referencedTable: string; referencedColumn: string; onUpdate: string | null; onDelete: string | null }[]>(connection,
+    'SELECT k.CONSTRAINT_NAME AS name, k.COLUMN_NAME AS columnName, k.REFERENCED_TABLE_SCHEMA AS referencedDatabase, k.REFERENCED_TABLE_NAME AS referencedTable, k.REFERENCED_COLUMN_NAME AS referencedColumn, r.UPDATE_RULE AS onUpdate, r.DELETE_RULE AS onDelete FROM information_schema.KEY_COLUMN_USAGE k LEFT JOIN information_schema.REFERENTIAL_CONSTRAINTS r ON r.CONSTRAINT_SCHEMA = k.CONSTRAINT_SCHEMA AND r.CONSTRAINT_NAME = k.CONSTRAINT_NAME AND r.TABLE_NAME = k.TABLE_NAME WHERE k.TABLE_SCHEMA = ? AND k.TABLE_NAME = ? AND k.REFERENCED_TABLE_NAME IS NOT NULL ORDER BY k.CONSTRAINT_NAME, k.ORDINAL_POSITION', [database, table]);
   const tableResult = await execute<{ engine: string | null; tableType: string; charset: string | null; collation: string | null; comment: string }[]>(connection,
     'SELECT t.ENGINE AS engine, t.TABLE_TYPE AS tableType, t.TABLE_COLLATION AS collation, t.TABLE_COMMENT AS comment, c.CHARACTER_SET_NAME AS charset FROM information_schema.TABLES t LEFT JOIN information_schema.COLLATIONS c ON c.COLLATION_NAME = t.TABLE_COLLATION WHERE t.TABLE_SCHEMA = ? AND t.TABLE_NAME = ?', [database, table]);
   const maria = connection.status.dialect === 'mariadb';
-  const modes = maria ? (await execute<{ mode: string }[]>(connection, 'SELECT @@SESSION.sql_mode AS mode')).rows[0].mode.split(',') : [];
+  const modes = maria ? (await execute<{ mode: string }[]>(connection, 'SELECT @@SESSION.sql_mode AS mode')).rows[0].mode.split(',') : (connection.sqlMode ?? '').split(',');
+  const ddl = await objectDdl(connection, database, table, tableResult.rows[0]?.tableType === 'VIEW' ? 'view' : 'table');
+  const fallbackActions = keys.rows.some(row => row.onUpdate === null || row.onDelete === null) ? foreignKeyActions(ddl, modes.includes('NO_BACKSLASH_ESCAPES'), modes.includes('ANSI_QUOTES')) : undefined;
+  const keyMap = new Map<string, ForeignKeyInfo>();
+  for (const row of keys.rows) {
+    const fallback = row.onUpdate === null || row.onDelete === null ? fallbackActions?.get(row.name) : undefined;
+    const onUpdate = row.onUpdate ?? fallback?.onUpdate, onDelete = row.onDelete ?? fallback?.onDelete;
+    if (!onUpdate || !onDelete) throw new Error('无法确定外键动作规则，请使用 SQL 定义核对当前约束');
+    let key = keyMap.get(row.name);
+    if (!key) { key = { name: row.name, columns: [], referencedDatabase: row.referencedDatabase, referencedTable: row.referencedTable, referencedColumns: [], onUpdate, onDelete }; keyMap.set(row.name, key); }
+    key.columns.push(row.columnName); key.referencedColumns.push(row.referencedColumn);
+  }
   const mappedColumns = columns.rows.map(column => ({ ...column, defaultValue: maria ? mariaDefault(column.defaultValue, modes.includes('NO_BACKSLASH_ESCAPES')) : column.defaultValue, nullable: column.nullable === 'YES', generated: /(?:VIRTUAL|STORED|PERSISTENT) GENERATED/i.test(column.extra) }));
   const indexes = [...indexMap.values()];
   const candidate = indexes.find(index => index.name === 'PRIMARY') ?? indexes.find(index => index.unique && !unusableIndexes.has(index.name) && index.columns.length && index.columns.every(name => mappedColumns.some(column => column.name === name && !column.nullable)));
-  const result: TableInfo = { database, name: table, columns: mappedColumns, indexes, foreignKeys: [...keyMap.values()], primaryKey: indexMap.get('PRIMARY')?.columns ?? [], editableKey: candidate && !unusableIndexes.has(candidate.name) ? candidate.columns : [], engine: tableResult.rows[0]?.engine ?? '', charset: tableResult.rows[0]?.charset ?? undefined, collation: tableResult.rows[0]?.collation ?? undefined, comment: tableResult.rows[0]?.comment ?? '', ddl: await objectDdl(connection, database, table, tableResult.rows[0]?.tableType === 'VIEW' ? 'view' : 'table') };
+  const result: TableInfo = { database, name: table, columns: mappedColumns, indexes, foreignKeys: [...keyMap.values()], primaryKey: indexMap.get('PRIMARY')?.columns ?? [], editableKey: candidate && !unusableIndexes.has(candidate.name) ? candidate.columns : [], engine: tableResult.rows[0]?.engine ?? '', charset: tableResult.rows[0]?.charset ?? undefined, collation: tableResult.rows[0]?.collation ?? undefined, comment: tableResult.rows[0]?.comment ?? '', ddl };
   // 内部标记防止普通设计器意外覆盖函数索引、前缀索引、全文索引等额外属性。
   const unsupportedDefaults = columns.rows.some(column => column.defaultValue !== null && !temporalDefault(column.defaultValue) && (maria ? !(column.defaultValue === 'NULL' || column.defaultValue.startsWith("'") || /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?$/i.test(column.defaultValue)) : /DEFAULT_GENERATED/i.test(column.extra)));
   Object.defineProperty(result, 'unsupportedDesign', { value: unsupportedIndexes.size > 0 || unusableIndexes.size > 0 || unsupportedDefaults || /\bINVISIBLE\b/i.test(result.ddl), enumerable: false });

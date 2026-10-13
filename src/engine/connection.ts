@@ -17,6 +17,8 @@ export interface ManagedConnection {
   /** ERR 包没有状态位，保留上次状态供展示，但不能把它当作错误后的实时真值。 */
   transactionStateKnown?: boolean;
   noBackslashEscapesKnown?: boolean;
+  /** 独立只读任务可在建连、元数据和读取阶段取消整个连接。 */
+  signal?: AbortSignal;
   /** 结束数据库会话并释放附属 SSH 隧道，可以重复调用。 */
   close(): Promise<void>;
 }
@@ -26,28 +28,38 @@ export function observeSessionState(managed: ManagedConnection, packet: { server
   const previousMode = managed.sqlMode;
   const previousStatus = managed.serverStatus;
   const previousEscapesKnown = managed.noBackslashEscapesKnown;
-  if (packet.serverStatus !== undefined) { managed.serverStatus = packet.serverStatus; managed.transactionStateKnown = true; managed.noBackslashEscapesKnown = true; }
+  if (packet.serverStatus !== undefined) { managed.serverStatus = packet.serverStatus; managed.transactionStateKnown = true; }
   const variables = packet.stateChanges?.systemVariables ?? {};
-  if (Object.hasOwn(variables, 'sql_mode')) { managed.sqlMode = variables.sql_mode; managed.sqlModeTracking = true; }
+  if (Object.hasOwn(variables, 'sql_mode')) {
+    // CALL 退出可报告恢复后的完整模式，却在末包及后续普通 EOF 保留例程内的 NBE 位。
+    // 只有同包完整模式与状态一致才恢复信任；普通成功包只能恢复事务状态。
+    const consistent = packet.serverStatus !== undefined && Boolean(packet.serverStatus & 512) === variables.sql_mode.split(',').includes('NO_BACKSLASH_ESCAPES');
+    managed.sqlMode = consistent ? variables.sql_mode : undefined;
+    managed.noBackslashEscapesKnown = consistent;
+    managed.sqlModeTracking = true;
+  }
   if (Object.hasOwn(variables, 'session_track_system_variables')) {
     const tracked = variables.session_track_system_variables.toLowerCase().split(',').map(value => value.trim());
     managed.sqlModeTracking = tracked.includes('*') || tracked.includes('sql_mode');
-    if (!managed.sqlModeTracking) managed.sqlMode = undefined;
+    if (!managed.sqlModeTracking) { managed.sqlMode = undefined; managed.noBackslashEscapesKnown = false; }
   }
   // 五个基线服务器实测：关闭 tracker 自身时没有任何变量报告，CALL/EXECUTE 也可隐藏这种变化。
-  // 对不透明控制语句不能凭缺少事件猜测“模式没变”；保留协议 NBE 位，ANSI 留给双候选扫描器。
+  // 对不透明控制语句不能凭缺少事件猜测“模式没变”；NBE 位也可能过时，须使用四候选扫描器。
   if (packet.sql && !(Number(packet.serverStatus) & 8) && !Object.hasOwn(variables, 'sql_mode')) {
     try {
       const words = sqlExecutableWords(packet.sql, { noBackslashEscapes: previousMode === undefined ? Boolean((previousStatus ?? 0) & 512) : previousMode.split(',').includes('NO_BACKSLASH_ESCAPES'), noBackslashEscapesKnown: previousMode !== undefined || previousEscapesKnown !== false, ansiQuotes: previousMode?.split(',').includes('ANSI_QUOTES') ?? false, ansiQuotesKnown: previousMode !== undefined });
       const control = words[0];
       if (control === 'CALL' || control === 'EXECUTE' || (control === 'SET' && words.some(word => ['SQL_MODE', 'SESSION_TRACK_SYSTEM_VARIABLES'].includes(word)))) {
         managed.sqlMode = undefined;
+        managed.noBackslashEscapesKnown = false;
         if (!Object.hasOwn(variables, 'session_track_system_variables')) managed.sqlModeTracking = undefined;
       }
-    } catch { managed.sqlMode = undefined; managed.sqlModeTracking = undefined; }
+    } catch { managed.sqlMode = undefined; managed.sqlModeTracking = undefined; managed.noBackslashEscapesKnown = false; }
   }
-  // EOF 始终包含 NO_BACKSLASH_ESCAPES 位；与缓存不符却缺少完整模式变化时宁可明确失效。
-  if (managed.sqlMode !== undefined && packet.serverStatus !== undefined && Boolean(packet.serverStatus & 512) !== managed.sqlMode.split(',').includes('NO_BACKSLASH_ESCAPES')) managed.sqlMode = undefined;
+  // 出现矛盾后持续未知，不能让下一份同样过时的 EOF 重新获得词法解析的信任。
+  if (managed.sqlMode !== undefined && packet.serverStatus !== undefined && Boolean(packet.serverStatus & 512) !== managed.sqlMode.split(',').includes('NO_BACKSLASH_ESCAPES')) {
+    managed.sqlMode = undefined; managed.noBackslashEscapesKnown = false;
+  }
 }
 
 /** ERR 可能来自隐式提交、死锁或执行了一部分的存储程序；无协议证据时明确降为未知。 */
@@ -58,9 +70,12 @@ export function observeSessionError(managed: ManagedConnection): void {
 
 /** 参数化语句使用预处理以适应任意转义模式；无参数控制语句直接走文本协议，避免 START TRANSACTION 等不支持预处理。 */
 export function execute<T = Record<string, unknown>[]>(managed: ManagedConnection, sql: string, params: (string | number | boolean | null | Buffer)[] = []): Promise<{ rows: T; fields: FieldPacket[] }> {
+  if (managed.signal?.aborted) return Promise.reject(new Error('任务已取消'));
   if (managed.broken) return Promise.reject(new Error('数据库连接已断开，请重新连接；未自动重放 SQL'));
   return new Promise((resolve, reject) => {
-    const done = (error: Error | null, rows: unknown, fields: FieldPacket[]) => error ? reject(error) : resolve({ rows: rows as T, fields });
+    const abort = () => reject(new Error('任务已取消'));
+    managed.signal?.addEventListener('abort', abort, { once: true });
+    const done = (error: Error | null, rows: unknown, fields: FieldPacket[]) => { managed.signal?.removeEventListener('abort', abort); error ? reject(error) : resolve({ rows: rows as T, fields }); };
     // 在发送之前选择协议，不在失败后重放 SQL，保证写操作最多发送一次。
     if (params.length) managed.connection.execute(sql, params, done);
     else managed.connection.query(sql, done);
@@ -68,37 +83,54 @@ export function execute<T = Record<string, unknown>[]>(managed: ManagedConnectio
 }
 
 /** 建立数据库连接前完成 SSH 主机校验和 TLS 文件加载；任何阶段失败都会释放隧道。 */
-export async function connect(profile: ConnectionProfile, database = profile.database): Promise<ManagedConnection> {
+export async function connect(profile: ConnectionProfile, database = profile.database, signal?: AbortSignal): Promise<ManagedConnection> {
   let ssh: SshClient | undefined;
   let stream: ClientChannel | undefined;
   let connection: Connection | undefined;
+  const cancelled = () => { if (signal?.aborted) throw new Error('任务已取消'); };
+  const destroy = () => {
+    connection?.destroy();
+    // mysql2.destroy 实际只发送 FIN；正在等待结果时还须销毁底层流，不能留下半关闭的本地 socket。
+    (connection as unknown as { stream?: { destroy(): void } } | undefined)?.stream?.destroy();
+    stream?.destroy(); ssh?.destroy();
+  };
+  signal?.addEventListener('abort', destroy, { once: true });
+  /** 驱动 destroy 未必回调 pending connect/forwardOut，显式唤醒等待并回收迟到通道。 */
+  const stage = <T>(start: (done: (error?: Error | null, result?: T) => void) => void): Promise<T> => new Promise((resolve, reject) => {
+    const abort = () => reject(new Error('任务已取消'));
+    if (signal?.aborted) { abort(); return; }
+    signal?.addEventListener('abort', abort, { once: true });
+    const done = (error?: Error | null, result?: T) => { signal?.removeEventListener('abort', abort); if (signal?.aborted) abort(); else if (error) reject(error); else resolve(result as T); };
+    try { start(done); } catch (error) { done(error as Error); }
+  });
   try {
+    cancelled();
     if (profile.ssh?.enabled) {
       if (!profile.ssh.hostFingerprint) throw new Error('SSH 连接必须填写服务器 SHA256 主机指纹');
       const config = profile.ssh;
       ssh = new SshClient();
       const client = ssh;
-      await new Promise<void>((resolve, reject) => {
-        client.once('ready', resolve).on('error', reject);
-        void (async () => {
-          const privateKey = config.privateKeyPath ? await readFile(config.privateKeyPath) : undefined;
+      const privateKey = config.privateKeyPath ? await readFile(config.privateKeyPath, { signal }) : undefined;
+      cancelled();
+      await stage<void>(done => {
+        client.once('ready', () => done()).on('error', error => done(error));
           client.connect({ host: config.host, port: config.port, username: config.user, password: config.password, privateKey, passphrase: config.passphrase, readyTimeout: 15000, keepaliveInterval: 10000,
             hostVerifier: (key: Buffer) => {
               const actual = 'SHA256:' + createHash('sha256').update(key).digest('base64').replace(/=+$/, '');
               return actual === config.hostFingerprint?.trim().replace(/=+$/, '');
             }
           });
-        })().catch(reject);
       });
-      stream = await new Promise<ClientChannel>((resolve, reject) => client.forwardOut('127.0.0.1', 0, profile.host, profile.port, (error, channel) => error ? reject(error) : resolve(channel)));
+      stream = await stage<ClientChannel>(done => client.forwardOut('127.0.0.1', 0, profile.host, profile.port, (error, channel) => { if (signal?.aborted) channel?.destroy(); done(error, channel); }));
     }
     const tls = profile.tls?.enabled ? {
       rejectUnauthorized: profile.tls.rejectUnauthorized,
       verifyIdentity: profile.tls.rejectUnauthorized,
-      ca: profile.tls.caPath ? await readFile(profile.tls.caPath) : undefined,
-      cert: profile.tls.certPath ? await readFile(profile.tls.certPath) : undefined,
-      key: profile.tls.keyPath ? await readFile(profile.tls.keyPath) : undefined,
+      ca: profile.tls.caPath ? await readFile(profile.tls.caPath, { signal }) : undefined,
+      cert: profile.tls.certPath ? await readFile(profile.tls.certPath, { signal }) : undefined,
+      key: profile.tls.keyPath ? await readFile(profile.tls.keyPath, { signal }) : undefined,
     } : undefined;
+    cancelled();
     const options: ConnectionOptions = {
       host: profile.host, port: profile.port, user: profile.user, password: profile.password, database: database || undefined,
       stream, ssl: tls, connectTimeout: 15000, enableKeepAlive: true, keepAliveInitialDelay: 10000,
@@ -111,10 +143,10 @@ export async function connect(profile: ConnectionProfile, database = profile.dat
     };
     connection = mysql.createConnection(options);
     const active = connection;
-    await new Promise<void>((resolve, reject) => active.connect(error => error ? reject(error) : resolve()));
+    await stage<void>(done => active.connect(error => done(error)));
     let closed = false;
     const managed: ManagedConnection = {
-      connection: active, profile, status: { version: '', dialect: profile.dialect, connectionId: active.threadId }, broken: false,
+      connection: active, profile, status: { version: '', dialect: profile.dialect, connectionId: active.threadId }, broken: false, signal,
       /** 优先发送正常退出；连接已卡死时限时销毁，防止退出流程永久等待。 */
       async close() {
         if (closed) return;
@@ -124,7 +156,7 @@ export async function connect(profile: ConnectionProfile, database = profile.dat
           timeout.unref();
           try { active.end(() => { clearTimeout(timeout); resolve(); }); } catch { clearTimeout(timeout); active.destroy(); resolve(); }
         });
-        stream?.destroy(); ssh?.end();
+        stream?.destroy(); ssh?.end(); signal?.removeEventListener('abort', destroy);
       }
     };
     active.on('error', () => { managed.broken = true; });
@@ -142,8 +174,9 @@ export async function connect(profile: ConnectionProfile, database = profile.dat
     // 初始化的 SET 可能按通用控制保护使缓存失效；该指令没有改变刚读出的 sql_mode。
     managed.sqlMode = result.rows[0].sqlMode;
     managed.sqlModeTracking = true;
+    managed.noBackslashEscapesKnown = true;
     return managed;
   } catch (error) {
-    connection?.destroy(); stream?.destroy(); ssh?.end(); throw error;
+    destroy(); signal?.removeEventListener('abort', destroy); throw error;
   }
 }

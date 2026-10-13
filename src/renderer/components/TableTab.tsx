@@ -3,7 +3,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { DataGrid, SelectColumn, type Column, type RenderEditCellProps } from 'react-data-grid';
 import { ArrowDownToLine, ArrowUpFromLine, ChevronLeft, ChevronRight, Filter, Plus, RefreshCw, Save, SlidersHorizontal, Trash2, Undo2, Eye, KeyRound } from 'lucide-react';
 import type { FilterRule, SortRule, SqlPreview, TableInfo, TablePage } from '../../shared/contracts';
-import { cellPreview, cellText, errorMessage, invoke, parseCell, rowEqual, uid } from '../lib';
+import { cellPreview, cellText, errorMessage, invoke, ownCell, parseCell, rowEqual, uid } from '../lib';
 import { useWorkspace, type WorkspaceTab } from '../store';
 import { SqlEditor } from './SqlEditor';
 import { ErrorBox, Field, Modal, Spinner } from './ui';
@@ -11,10 +11,15 @@ import { collectChanges, type DraftRow } from '../dataChanges';
 import { cellClipboardType, decodeClipboard, encodeClipboard, pasteCells } from '../gridClipboard';
 import { maxTablePage, parsePageJump, type FilterMode } from '../tableFilters';
 import { TableFilterPanel } from './TableFilterPanel';
+import { ForeignKeyDialog } from './ForeignKeyDialog';
+import { patchReferenceRow, referenceWritable, referencesForColumn, type ReferenceSnapshot } from '../referenceChanges';
+import { referenceZh } from '../locales/references.zh-CN';
+import type { CellValue, ForeignKeyInfo } from '../../shared/contracts';
 
 /** 输入始终保留字符串精度，失焦仅提交到本地草稿，不执行数据库写入。 */
 function TextCellEditor({ row, column, onRowChange, onClose }: RenderEditCellProps<DraftRow>) {
-  return <input className="grid-input" autoFocus onFocus={event => event.currentTarget.select()} defaultValue={row.data[column.key] === null ? '' : cellText(row.data[column.key])} onChange={event => onRowChange({ ...row, data: { ...row.data, [column.key]: event.target.value } })} onBlur={() => onClose(true, false)} aria-label={formatText(zh.table.text001, column.key)}/>;
+  const value = ownCell(row.data, column.key);
+  return <input className="grid-input" autoFocus onFocus={event => event.currentTarget.select()} defaultValue={value === null ? '' : cellText(value)} onChange={event => onRowChange({ ...row, data: { ...row.data, [column.key]: event.target.value } })} onBlur={() => onClose(true, false)} aria-label={formatText(zh.table.text001, column.key)}/>;
 }
 
 /** 分页、排序和筛选全部交给数据库，界面仅持有当前页及该页的待提交修改。 */
@@ -31,6 +36,11 @@ export function TableTab({ tab, onDesign, onTransfer }: { tab: WorkspaceTab; onD
   const [cellDialog, setCellDialog] = useState<{ rowId: string; key: string; text: string; mode: 'text' | 'json' | 'binary' | 'null' }>();
   const [preview, setPreview] = useState<SqlPreview | null>(null); const [applying, setApplying] = useState(false);
   const [applyTaskId, setApplyTaskId] = useState('');
+  const [referenceDialog, setReferenceDialog] = useState<{ snapshot: ReferenceSnapshot; keys: ForeignKeyInfo[]; mode: 'choose' | 'browse' } | null>(null);
+  const [referenceBusy, setReferenceBusy] = useState(false); const referenceCount = useRef(0);
+  const rowsRef = useRef(rows); rowsRef.current = rows;
+  const applyingRef = useRef(applying); applyingRef.current = applying;
+  const blocked = busy || referenceBusy || applying;
   const changes = useMemo(() => collectChanges(rows), [rows]);
   const loadGeneration = useRef(0);
   const editable = !!info?.editableKey.length && !!page;
@@ -56,7 +66,28 @@ export function TableTab({ tab, onDesign, onTransfer }: { tab: WorkspaceTab; onD
   useEffect(() => { setPageJump(String(pageIndex)); }, [pageIndex]);
   useEffect(() => { useWorkspace.getState().setDirty(tab.id, changes.length > 0); return () => useWorkspace.getState().setDirty(tab.id, false); }, [tab.id, changes.length]);
   /** 翻页、排序或刷新前先确认是否允许丢弃本页尚未提交的草稿。 */
-  function canReload() { return !busy && !applying && (changes.length === 0 || window.confirm(zh.table.text002)); }
+  function canReload() { return !busy && !applying && referenceCount.current === 0 && !referenceDialog && (changes.length === 0 || window.confirm(zh.table.text002)); }
+  const references = info && selection ? referencesForColumn(info, selection.key) : { keys: [], error: '' };
+  const relatedKeys = references.keys;
+  const referenceRow = rows.find(row => row.id === selection?.rowId);
+  /** 捕获整行草稿及页面代次，多外键在关联窗口内明确选择约束。 */
+  function openReference(mode: 'choose' | 'browse') {
+    if (blocked || referenceDialog || !info || !selection || !relatedKeys.length) return;
+    const row = rowsRef.current.find(item => item.id === selection.rowId);
+    if (!row || row.deleted || (mode === 'choose' && !relatedKeys.some(key => referenceWritable(info, key)))) return;
+    setReferenceDialog({ mode, keys: structuredClone(relatedKeys), snapshot: { rowId: row.id, data: structuredClone(row.data), foreignKey: structuredClone(relatedKeys[0]), source: structuredClone(info), generation: loadGeneration.current } });
+  }
+  /** 请求已关闭窗口后仍占用标签，直到服务器请求实际结束才释放。 */
+  const referenceActivity = useCallback((delta: 1 | -1) => {
+    referenceCount.current = Math.max(0, referenceCount.current + delta); setReferenceBusy(referenceCount.current > 0);
+    useWorkspace.getState().setBusy(tab.id, referenceCount.current > 0 || applyingRef.current);
+  }, [tab.id]);
+  /** 使用最新行状态一次写入完整外键草稿，不更改 original 或调用提交。 */
+  function applyReference(values: CellValue[], source: TableInfo, key: ForeignKeyInfo, expected: ForeignKeyInfo, clear: boolean) {
+    if (!referenceDialog || applyingRef.current) throw new Error(referenceZh.changed);
+    const next = patchReferenceRow(rowsRef.current, { ...referenceDialog.snapshot, foreignKey: expected }, loadGeneration.current, source, key, values, clear);
+    rowsRef.current = next; setRows(next); setError('');
+  }
   /** 条件变更始终从第一页读取，取消草稿确认时不更改任何已应用条件。 */
   function changeFilters(next: FilterRule[]): boolean {
     if (!canReload()) return false;
@@ -76,11 +107,17 @@ export function TableTab({ tab, onDesign, onTransfer }: { tab: WorkspaceTab; onD
   }
   const columns = useMemo<Column<DraftRow>[]>(() => [SelectColumn, ...(page?.columns ?? []).map<Column<DraftRow>>(column => ({
     key: column.key, name: column.name, minWidth: 110, width: 165, resizable: true, sortable: true,
-    editable: row => editable && !busy && !row.deleted && !info?.columns.find(item => item.name === column.key)?.generated,
+    editable: row => editable && !blocked && !row.deleted && !info?.columns.find(item => item.name === column.key)?.generated,
     renderEditCell: TextCellEditor,
     renderHeaderCell: () => <span className="data-header">{info?.primaryKey.includes(column.key) && <KeyRound size={11}/>}<span>{column.name}<small className="column-type">{column.type}</small></span></span>,
-    renderCell: ({ row }) => <span className={row.data[column.key] === null ? 'null-value' : row.data[column.key] === undefined ? 'default-value' : ''} title={cellPreview(row.data[column.key])}>{row.data[column.key] === undefined ? zh.common.defaultValue : cellPreview(row.data[column.key])}</span>
-  }))], [page?.columns, editable, info, busy]);
+    renderCell: ({ row }) => { const value = ownCell(row.data, column.key); return <span className={value === null ? 'null-value' : value === undefined ? 'default-value' : ''} title={value === undefined ? zh.common.defaultValue : cellPreview(value)}>{value === undefined ? zh.common.defaultValue : cellPreview(value)}</span>; }
+  }))], [page?.columns, editable, info, blocked]);
+  /** 刷新后网格可能保留同一活动坐标；点击也须用当前行同步选择，不能只等待坐标变化。 */
+  function selectCurrentCell(row: DraftRow | undefined, key: string | undefined) {
+    if (blocked || document.querySelector('[role="dialog"]')) return;
+    if (!row || !key || !page?.columns.some(column => column.key === key) || !rowsRef.current.some(current => current.id === row.id)) { setSelection(undefined); return; }
+    setSelection(current => current?.rowId === row.id && current.key === key ? current : { rowId: row.id, key });
+  }
   /** 数据网格先返回当前行，再统一替换整个矩阵，避免多行粘贴被默认单行更新覆盖。 */
   function changeRows(updated: DraftRow[]) { setRows(pendingPaste.current ?? updated); pendingPaste.current = null; }
   /** 删除选中记录仅形成草稿，仍须预览并提交后才影响数据库。 */
@@ -91,7 +128,7 @@ export function TableTab({ tab, onDesign, onTransfer }: { tab: WorkspaceTab; onD
   /** 勾选记录时复制整行，否则复制当前单元格；文本和类型化内容同时写入剪贴板。 */
   function copyCells({ row, column }: { row: DraftRow; column: { key: string } }, event: React.ClipboardEvent) {
     if (!selectedRows.size && !(page?.columns.some(item => item.key === column.key))) return;
-    const matrix = selectedRows.size ? rows.filter(item => selectedRows.has(item.id)).map(item => page!.columns.map(column => item.data[column.key] ?? null)) : [[row.data[column.key] ?? null]];
+    const matrix = selectedRows.size ? rows.filter(item => selectedRows.has(item.id)).map(item => page!.columns.map(column => ownCell(item.data, column.key))) : [[ownCell(row.data, column.key)]];
     event.preventDefault();
     try { const content = encodeClipboard(matrix); event.clipboardData.setData('text/plain', content.text); event.clipboardData.setData(cellClipboardType, content.typed); }
     catch (reason) { setError(errorMessage(reason)); }
@@ -99,7 +136,7 @@ export function TableTab({ tab, onDesign, onTransfer }: { tab: WorkspaceTab; onD
   /** 原生粘贴事件提供内容，完全不依赖被禁用的浏览器剪贴板权限。 */
   function pasteClipboard({ row, column }: { row: DraftRow; column: { key: string } }, event: React.ClipboardEvent) {
     event.preventDefault(); pendingPaste.current = null;
-    if (!editable || busy) return row;
+    if (!editable || blocked || referenceDialog) return row;
     try {
       const values = decodeClipboard(event.clipboardData.getData(cellClipboardType), event.clipboardData.getData('text/plain'));
       const updated = pasteCells(rows, page!.columns.map(item => item.key), row.id, column.key, values, new Set(info!.columns.filter(item => item.generated).map(item => item.name)));
@@ -110,11 +147,12 @@ export function TableTab({ tab, onDesign, onTransfer }: { tab: WorkspaceTab; onD
   function editCell() {
     if (!selection) return;
     const row = rows.find(row => row.id === selection.rowId); if (!row || row.deleted) return;
-    const value = row.data[selection.key]; const type = info?.columns.find(column => column.name === selection.key)?.type ?? '';
+    const value = ownCell(row.data, selection.key); const type = info?.columns.find(column => column.name === selection.key)?.type ?? '';
     setCellDialog({ ...selection, text: value === null ? '' : cellText(value), mode: value === null ? 'null' : typeof value === 'object' ? 'binary' : /json/i.test(type) ? 'json' : 'text' });
   }
   /** 将当前草稿交给引擎生成参数化 SQL 预览，此步骤不修改数据库。 */
   async function makePreview() {
+    if (referenceCount.current > 0 || document.querySelector('[role="dialog"]')) return;
     setError(''); try { setPreview(await invoke('table.preview', { ...base, changes })); } catch (reason) { setError(errorMessage(reason)); }
   }
   /** 一次提交使用唯一任务编号；失败保留草稿，成功后重新读取服务器数据。 */
@@ -125,7 +163,8 @@ export function TableTab({ tab, onDesign, onTransfer }: { tab: WorkspaceTab; onD
     catch (reason) { setError(errorMessage(reason)); }
     finally { setApplying(false); useWorkspace.getState().setBusy(tab.id, false); }
   }
-  return <div className="workspace-tab table-tab"><div className="context-bar"><span className="connection-dot" style={{ background: connection?.color }}/><strong>{connection?.name ?? zh.common.connectionDeleted}</strong><span className="breadcrumb-divider">/</span>{tab.database}<span className="breadcrumb-divider">/</span><strong>{tab.table}</strong><span className="grow"/><span className="tag">{info?.engine || zh.table.text004}</span></div><div className="toolbar"><button onClick={() => { if (canReload()) void load(); }} disabled={busy}><RefreshCw size={14}/>{zh.common.refresh}</button><button disabled={!editable || busy} onClick={() => setRows(current => [...current, { id: uid(), data: {}, inserted: true, deleted: false }])}><Plus size={14}/>{zh.common.add}</button><button disabled={!editable || (!selection && !selectedRows.size) || busy} onClick={deleteSelected}><Trash2 size={14}/>{zh.common.delete}</button><button disabled={!selection || busy} onClick={editCell}><Eye size={14}/>{zh.table.text005}</button><span className="toolbar-divider"/><button className={showFilter || filters.length ? 'selected' : ''} onClick={() => setShowFilter(!showFilter)}><Filter size={14}/>{zh.table.text006}{filters.length > 0 ? ` (${filters.length})` : ''}</button><button disabled={!info || busy} onClick={() => onDesign(!info?.engine)}><SlidersHorizontal size={14}/>{info && !info.engine ? zh.table.text007 : zh.table.text008}</button><span className="grow"/><button onClick={() => onTransfer('import')}><ArrowDownToLine size={14}/>{zh.common.import}</button><button onClick={() => onTransfer('export')}><ArrowUpFromLine size={14}/>{zh.common.export}</button></div>{showFilter && <TableFilterPanel columns={info?.columns.map(column => column.name) ?? []} filters={filters} mode={filterMode} disabled={busy || applying} onFiltersChange={changeFilters} onModeChange={changeFilterMode}/>}<ErrorBox message={error}/>{info && !info.editableKey.length && <div className="info-strip">{zh.table.text014}</div>}<div className="table-grid-wrap">{busy && <div className="loading-overlay"><Spinner/></div>}<DataGrid<DraftRow, unknown, string> className={`results-grid rdg-${settings.theme}`} columns={columns} rows={rows} rowHeight={32} headerRowHeight={42} rowKeyGetter={row => row.id} rowClass={row => row.deleted ? 'row-deleted' : row.inserted ? 'row-inserted' : !rowEqual(row.original!, row.data) ? 'row-modified' : undefined} selectedRows={selectedRows} onSelectedRowsChange={setSelectedRows} onRowsChange={changeRows} onActivePositionChange={({ row, column }) => setSelection(row && column && page?.columns.some(item => item.key === column.key) ? { rowId: row.id, key: column.key } : undefined)} sortColumns={sort.map(item => ({ columnKey: item.column, direction: item.direction }))} onSortColumnsChange={next => { if (canReload()) { setSort(next.map(item => ({ column: item.columnKey, direction: item.direction }))); setPageIndex(1); } }} onCellCopy={copyCells} onCellPaste={pasteClipboard} onCellKeyDown={(args, event) => { if (args.mode !== 'ACTIVE' || busy) return; const { row: activeRow, column: activeColumn } = args; if (!activeRow || !activeColumn) return; if ((event.ctrlKey || event.metaKey) && event.key === 'Enter' && changes.length) { event.preventGridDefault(); event.preventDefault(); void makePreview(); } else if (event.key === 'Delete' && editable && !activeRow.deleted && page?.columns.some(item => item.key === activeColumn.key) && !info?.columns.find(item => item.name === activeColumn.key)?.generated) { event.preventGridDefault(); event.preventDefault(); setRows(current => current.map(row => row.id === activeRow.id ? { ...row, data: { ...row.data, [activeColumn.key]: info?.columns.find(item => item.name === activeColumn.key)?.nullable ? null : '' } } : row)); } }} renderers={{ noRowsFallback: <div className="grid-empty">{zh.common.noMatchingData}</div> }}/></div><div className="table-action-bar"><span className={changes.length ? 'warning-text' : 'muted'}>{changes.length ? formatText(zh.table.text015, changes.length) : formatText(zh.table.text016, page?.rows.length ?? 0)}</span>{changes.length > 0 && <><button disabled={busy || applying} onClick={() => { if (window.confirm(zh.table.text017)) void load(); }}><Undo2 size={13}/>{zh.table.text018}</button><button className="primary" disabled={busy || applying} onClick={() => void makePreview()}><Save size={13}/>{zh.table.text019}</button></>}<span className="grow"/><label className="inline-field">{zh.table.text020}<select aria-label={zh.table.text021} value={pageSize} disabled={busy || applying} onChange={event => { if (canReload()) { setPageIndex(1); setPageSize(Number(event.target.value)); useWorkspace.getState().updateSettings({ pageSize: Number(event.target.value) }); } }}>{[50, 100, 200, 500, 1000].map(size => <option key={size}>{size}</option>)}</select>{zh.table.text022}</label><form className="page-jump" title={zh.table.pageJumpHint} onSubmit={event => { event.preventDefault(); jumpToPage(); }}><input aria-label={zh.table.pageJumpLabel} inputMode="numeric" value={pageJump} disabled={busy || applying} onChange={event => setPageJump(event.target.value)}/><button type="submit" disabled={busy || applying}>{zh.table.pageJump}</button></form><button className="icon-button" aria-label={zh.common.pagePrevious} disabled={pageIndex === 1 || busy || applying} onClick={() => { if (canReload()) setPageIndex(current => current - 1); }}><ChevronLeft size={16}/></button><span>{zh.table.text023}{pageIndex}{zh.table.text024}</span><button className="icon-button" aria-label={zh.common.pageNext} disabled={!page?.hasMore || busy || applying || pageIndex >= maxTablePage} onClick={() => { if (canReload()) setPageIndex(current => current + 1); }}><ChevronRight size={16}/></button></div>
+  return <div className="workspace-tab table-tab"><div className="context-bar"><span className="connection-dot" style={{ background: connection?.color }}/><strong>{connection?.name ?? zh.common.connectionDeleted}</strong><span className="breadcrumb-divider">/</span>{tab.database}<span className="breadcrumb-divider">/</span><strong>{tab.table}</strong><span className="grow"/><span className="tag">{info?.engine || zh.table.text004}</span></div><div className="toolbar"><button onClick={() => { if (canReload()) void load(); }} disabled={blocked}><RefreshCw size={14}/>{zh.common.refresh}</button><button disabled={!editable || blocked} onClick={() => setRows(current => [...current, { id: uid(), data: {}, inserted: true, deleted: false }])}><Plus size={14}/>{zh.common.add}</button><button disabled={!editable || (!selection && !selectedRows.size) || blocked} onClick={deleteSelected}><Trash2 size={14}/>{zh.common.delete}</button><button disabled={!selection || blocked} onClick={editCell}><Eye size={14}/>{zh.table.text005}</button><button aria-label={referenceZh.choose} title={referenceZh.choose} disabled={blocked || !referenceRow || referenceRow.deleted || !relatedKeys.some(key => info && referenceWritable(info, key))} onClick={() => openReference('choose')}>{referenceZh.choose}</button><button aria-label={referenceZh.browse} title={referenceZh.browse} disabled={blocked || !referenceRow || referenceRow.deleted || !relatedKeys.length} onClick={() => openReference('browse')}>{referenceZh.browse}</button><span className="toolbar-divider"/><button className={showFilter || filters.length ? 'selected' : ''} onClick={() => setShowFilter(!showFilter)}><Filter size={14}/>{zh.table.text006}{filters.length > 0 ? ` (${filters.length})` : ''}</button><button disabled={!info || blocked} onClick={() => onDesign(!info?.engine)}><SlidersHorizontal size={14}/>{info && !info.engine ? zh.table.text007 : zh.table.text008}</button><span className="grow"/><button onClick={() => onTransfer('import')}><ArrowDownToLine size={14}/>{zh.common.import}</button><button onClick={() => onTransfer('export')}><ArrowUpFromLine size={14}/>{zh.common.export}</button></div>{showFilter && <TableFilterPanel columns={info?.columns.map(column => column.name) ?? []} filters={filters} mode={filterMode} disabled={blocked} onFiltersChange={changeFilters} onModeChange={changeFilterMode}/>}<ErrorBox message={error || references.error}/>{info && !info.editableKey.length && <div className="info-strip">{zh.table.text014}</div>}<div className="table-grid-wrap">{busy && <div className="loading-overlay"><Spinner/></div>}<DataGrid<DraftRow, unknown, string> className={`results-grid rdg-${settings.theme}`} columns={columns} rows={rows} rowHeight={32} headerRowHeight={42} rowKeyGetter={row => row.id} rowClass={row => row.deleted ? 'row-deleted' : row.inserted ? 'row-inserted' : !rowEqual(row.original!, row.data) ? 'row-modified' : undefined} selectedRows={selectedRows} onSelectedRowsChange={setSelectedRows} onRowsChange={changeRows} onActivePositionChange={({ row, column }) => selectCurrentCell(row, column?.key)} onCellClick={({ row, column }) => selectCurrentCell(row, column.key)} sortColumns={sort.map(item => ({ columnKey: item.column, direction: item.direction }))} onSortColumnsChange={next => { if (canReload()) { setSort(next.map(item => ({ column: item.columnKey, direction: item.direction }))); setPageIndex(1); } }} onCellCopy={copyCells} onCellPaste={pasteClipboard} onCellKeyDown={(args, event) => { if (args.mode !== 'ACTIVE' || blocked || document.querySelector('[role=dialog]')) return; const { row: activeRow, column: activeColumn } = args; if (!activeRow || !activeColumn) return; if ((event.ctrlKey || event.metaKey) && event.key === 'Enter' && changes.length) { event.preventGridDefault(); event.preventDefault(); void makePreview(); } else if (event.key === 'Delete' && editable && !activeRow.deleted && page?.columns.some(item => item.key === activeColumn.key) && !info?.columns.find(item => item.name === activeColumn.key)?.generated) { event.preventGridDefault(); event.preventDefault(); setRows(current => current.map(row => row.id === activeRow.id ? { ...row, data: { ...row.data, [activeColumn.key]: info?.columns.find(item => item.name === activeColumn.key)?.nullable ? null : '' } } : row)); } }} renderers={{ noRowsFallback: <div className="grid-empty">{zh.common.noMatchingData}</div> }}/></div><div className="table-action-bar"><span className={changes.length ? 'warning-text' : 'muted'}>{changes.length ? formatText(zh.table.text015, changes.length) : formatText(zh.table.text016, page?.rows.length ?? 0)}</span>{changes.length > 0 && <><button disabled={blocked} onClick={() => { if (window.confirm(zh.table.text017)) void load(); }}><Undo2 size={13}/>{zh.table.text018}</button><button className="primary" disabled={blocked} onClick={() => void makePreview()}><Save size={13}/>{zh.table.text019}</button></>}<span className="grow"/><label className="inline-field">{zh.table.text020}<select aria-label={zh.table.text021} value={pageSize} disabled={blocked} onChange={event => { if (canReload()) { setPageIndex(1); setPageSize(Number(event.target.value)); useWorkspace.getState().updateSettings({ pageSize: Number(event.target.value) }); } }}>{[50, 100, 200, 500, 1000].map(size => <option key={size}>{size}</option>)}</select>{zh.table.text022}</label><form className="page-jump" title={zh.table.pageJumpHint} onSubmit={event => { event.preventDefault(); jumpToPage(); }}><input aria-label={zh.table.pageJumpLabel} inputMode="numeric" value={pageJump} disabled={blocked} onChange={event => setPageJump(event.target.value)}/><button type="submit" disabled={blocked}>{zh.table.pageJump}</button></form><button className="icon-button" aria-label={zh.common.pagePrevious} disabled={pageIndex === 1 || busy || applying} onClick={() => { if (canReload()) setPageIndex(current => current - 1); }}><ChevronLeft size={16}/></button><span>{zh.table.text023}{pageIndex}{zh.table.text024}</span><button className="icon-button" aria-label={zh.common.pageNext} disabled={!page?.hasMore || busy || applying || pageIndex >= maxTablePage} onClick={() => { if (canReload()) setPageIndex(current => current + 1); }}><ChevronRight size={16}/></button></div>
+    {referenceDialog && <ForeignKeyDialog base={base} snapshot={referenceDialog.snapshot} keys={referenceDialog.keys} mode={referenceDialog.mode} onApply={applyReference} onClose={() => setReferenceDialog(null)} onActivity={referenceActivity}/ >}
     {cellDialog && <Modal title={formatText(zh.table.text025, cellDialog.key)} onClose={() => setCellDialog(undefined)}><div className="modal-content"><Field label={zh.table.text026}><select value={cellDialog.mode} onChange={event => setCellDialog({ ...cellDialog, mode: event.target.value as typeof cellDialog.mode })}><option value="text">{zh.table.text027}</option><option value="json">JSON</option><option value="binary">{zh.table.text028}</option><option value="null">{zh.table.text029}</option></select></Field><textarea className="cell-textarea" disabled={cellDialog.mode === 'null'} value={cellDialog.text} onChange={event => setCellDialog({ ...cellDialog, text: event.target.value })}/><ErrorBox message={error}/></div><footer className="modal-footer"><span className="grow"/><button onClick={() => setCellDialog(undefined)}>{zh.common.close}</button><button className="primary" disabled={!editable || info?.columns.find(column => column.name === cellDialog.key)?.generated} onClick={() => { try { const value = parseCell(cellDialog.text, cellDialog.mode); setRows(current => current.map(row => row.id === cellDialog.rowId ? { ...row, data: { ...row.data, [cellDialog.key]: value } } : row)); setCellDialog(undefined); setError(''); } catch (reason) { setError(errorMessage(reason)); } }}>{zh.table.text030}</button></footer></Modal>}
     {preview && <Modal title={zh.table.text031} wide onClose={() => { if (!applying) setPreview(null); }}><div className="modal-content"><p>{zh.table.text032}{changes.length}{zh.table.text033}</p>{preview.warnings.map(warning => <p className="warning-text" key={warning}>{warning}</p>)}<SqlEditor value={preview.sql} height={280} readOnly/><ErrorBox message={error}/></div><footer className="modal-footer"><button disabled={applying} onClick={() => setPreview(null)}>{zh.common.backToEdit}</button><span className="grow"/>{applying && <button onClick={() => void invoke('query.cancel', { taskId: applyTaskId }).catch(reason => setError(errorMessage(reason)))}>{zh.table.text034}</button>}<button className="primary" disabled={applying} onClick={() => void apply()}>{applying ? <Spinner text={zh.table.text035}/> : zh.common.confirmApply}</button></footer></Modal>}
   </div>;
