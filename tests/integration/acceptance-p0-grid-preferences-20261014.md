@@ -133,3 +133,13 @@ UTC `22:39:45.963` 的 `.cache/local-v0.6.0-cleanup.json` 额外只读确认六�
 | macOS x64 | 115578928598 | 16 通过 / 33 跳过，1.7 分钟 | DMG 16 通过 / 33 跳过，1.6 分钟 |
 
 三平台源与包均执行新增 4 项 `table-preferences.spec.ts`，日志各出现真实系统加密验证分支。安装路径是各 runner 本次独立 `dbark-package-e2e-*`；实际运行后完成卸载或 DMG 复制目录及挂载收尾、删除本次临时目录。原始日志 `.cache/v06-main-{unit,win,arm64,x64}.log` 及摘要 `.cache/v06-main-native-evidence.json` 保留。CI 没有注入内网凭据，33 跳过不能表述为 macOS 实库已验；实体 Mac Gatekeeper、发行签名与公证仍未验。公开 tag 及独立下载结果后续追加。
+
+## 固定标签与公开产物独立验收
+
+标签 `v0.6.0` 固定 `8625c629cdae60f30bb203cb9f02c6a3e383cb8b`。发布 [CI 38480893167](https://github.com/zhao-yc/DBArk/actions/runs/38480893167) 单元 job115582924193 为40文件402通过；Windows115582924153 源码16/33跳过57.4秒、NSIS16/33跳过49.6秒；arm64 115582924115 源码16/33跳过1.7分钟、DMG16/33跳过1.6分钟；x64 115582923856 源码16/33跳过1.6分钟、DMG16/33跳过1.4分钟，全部成功。三平台各8条新增列偏好成功行（源码4+实际安装4），真实加密、卸载/DMG及目录清理均有日志；原始 `.cache/v06-tag-{unit,win,arm64,x64}.log` 与 `v06-tag-native-evidence.json` 保留。发布job115586537281成功，Release ID412181926，UTC23:05:33发布。
+
+12个公开文件全部独立下载，GitHub大小/digest、SHA清单逐项及清单自身摘要一致。公开源码957664字节，SHA256 `c0b5fd84a1e172c4a2aeeb9768021c3017e0c71adc6208e2c781e5bffed8919a`；解压前核路径、普通条目及预算，198文件逐Git blob匹配固定标签，MIT/中文文档/排除项通过。证据 `.cache/{published-v0.6.0-release,public-v0.6.0-manifest,public-source-v0.6.0}.json`，没有用后续工作区文件替代归档。
+
+公开Windows包137478266字节，SHA256 `29d7743c2374a92bf494de4f17a382896f66aff55acb7c662fc6872b6daf9771`，与本机包分别记录。实际安装UTC23:08:36.005开始、23:13:50.507结束，归档自身完整49项 **49/49通过，300899.810ms**，0失败/跳过/flaky/重试；真正系统加密分支见日志第15行。`dbark-package-e2e-teR9gA` 真实卸载和目录删除，剩余注册0。证据 `.cache/published-v0.6.0-install-validation{.json,.log,-results.json}` 及截图。
+
+UTC23:14:13.228 `.cache/public-v0.6.0-cleanup.json` 只读复核六实例本批随机schema/用户/线程、本机项目进程和新目录皆0，13历史目录保。基础六容器、卷、网络保持，没有任何Docker命令或扩大清理。macOS本批实库及实体Gatekeeper仍未验；已完成的是两原生架构CI对应DMG安装离线和公开文件完整摘要。
