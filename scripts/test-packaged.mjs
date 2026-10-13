@@ -120,8 +120,8 @@ try {
   console.log('正在运行七项安装程序回归：' + executable);
   const env = { ...process.env, DBARK_EXECUTABLE_PATH: executable, DBARK_INTEGRATION_ENABLED: '0' };
   delete env.DBARK_DEV_URL;
-  // 直接调用项目的 Playwright CLI，固定仅跑离线七项；真实远程库由单独显式启用的验收负责。
-  command(process.execPath, [join(project, 'node_modules', '@playwright', 'test', 'cli.js'), 'test', 'tests/e2e/desktop.spec.ts'], { env, timeout: 300000 });
+  // 安装后验证工作台七项及 SQL 文件四项；真实远程库由单独显式启用的验收负责。
+  command(process.execPath, [join(project, 'node_modules', '@playwright', 'test', 'cli.js'), 'test', 'tests/e2e/desktop.spec.ts', 'tests/e2e/query-files.spec.ts'], { env, timeout: 300000 });
 } catch (error) {
   testFailure = error;
 } finally {

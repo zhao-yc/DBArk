@@ -25,7 +25,7 @@ pnpm test:integration
 
 TLS 测试可设置 `DBARK_TEST_TLS=1` 和 `DBARK_TEST_CA=CA文件绝对路径`。未提供连接时，集成测试会跳过并在结果中标记，不能把跳过视为兼容性通过。测试失败后先核对残留数据库，不在业务库中手工清理。
 
-完整的 SSH、严格 TLS、权限/断线和百万行开关见 [集成测试说明](../tests/integration/README.md)，本次真实结果见 [数据库验收记录](../tests/integration/acceptance-20261013.md)。两条真实数据库界面工作流及安装后执行方式见 [桌面测试说明](../tests/e2e/README.md)。
+完整的 SSH、严格 TLS、权限/断线和百万行开关见 [集成测试说明](../tests/integration/README.md)，本次真实结果见 [数据库验收记录](../tests/integration/acceptance-20261013.md)。真实数据库界面工作流及安装后执行方式见 [桌面测试说明](../tests/e2e/README.md)。
 
 首版后的筛选、精确定位及已有表差异已在五个基线上执行，见 [2026-10-14 增量记录](../tests/integration/acceptance-20261014.md)。桌面实库已扩展到对象设计、各类定义、固定结果、筛选保护和百万行 UI，启用范围与资源清理说明见桌面测试文档。
 
@@ -41,7 +41,7 @@ Electron 主进程、preload 与数据库进程独立打包为 CommonJS；React 
 
 当前使用 JavaScript 驱动与 SQLite WASM，关闭安装包的原生依赖重建；ssh2 的可选 CPU/加密加速模块使用 JavaScript 回退，不依赖开发电脑生成的平台二进制。引入新的必需原生模块时须重新核对两种 macOS 架构和 Electron ABI。
 
-界面文案集中在 `src/renderer/locales/zh-CN.ts`，新增界面文案应按模块加入该语言包。关键实现保留中文注释，数据库错误保留服务器给出的详细内容。
+界面文案集中在 `src/renderer/locales` 的简体中文模块，主语言包为 `zh-CN.ts`，SQL 文件文案为 `queryFiles.zh-CN.ts`；新增文案应按模块管理，不能散落在组件中。关键实现保留中文注释，数据库错误保留服务器给出的详细内容。
 
 `pnpm exec install-electron` 下载锁定的 Electron 运行时。若网络下载失败，应修复官方源连接或使用同一官方产物并验证 npm 包内记录的 SHA256，不能跳过完整性检查。
 

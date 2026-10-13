@@ -1,5 +1,6 @@
 import { z } from 'zod';
-import type { Command } from './contracts';
+import type { Command, ResultExportData } from './contracts';
+import { validateResultExportData } from './resultExport';
 import { FILTER_LIMITS, validateFilterRules } from './filtering';
 
 const id = z.string().min(1).max(200);
@@ -16,6 +17,11 @@ const changes = z.array(z.discriminatedUnion('kind', [z.object({ kind: z.literal
 const index = z.object({ name, unique: z.boolean(), columns: z.array(name).min(1) }).strict();
 const foreignKey = z.object({ name, columns: z.array(name).min(1), referencedDatabase: name, referencedTable: name, referencedColumns: z.array(name).min(1), onUpdate: z.enum(['RESTRICT','CASCADE','SET NULL','NO ACTION']), onDelete: z.enum(['RESTRICT','CASCADE','SET NULL','NO ACTION']) }).strict();
 const fileOptions = { ...target, fileToken: id, format: z.enum(['csv','json','sql']), encoding: z.enum(['utf8','utf16le','gb18030']), taskId: id };
+/** custom 保留已校验结果引用，避免 Zod 深拷贝十万行；主进程仍完整校验每个字段。 */
+const resultExportData = z.custom<ResultExportData>().superRefine((value, context) => {
+  try { validateResultExportData(value); }
+  catch (error) { context.addIssue({ code: 'custom', message: error instanceof Error ? error.message : '结果导出数据无效' }); }
+});
 const filterValue = z.string().max(FILTER_LIMITS.valueLength, `每个筛选值不能超过 ${FILTER_LIMITS.valueLength} 个字符`);
 const filterRule = z.object({ column: name, operator: z.enum(['=','!=','>','>=','<','<=','LIKE','NOT LIKE','IN','NOT IN','BETWEEN','IS NULL','IS NOT NULL']), value: filterValue.optional(), values: z.array(filterValue).max(FILTER_LIMITS.setValues, `筛选集合不能超过 ${FILTER_LIMITS.setValues} 个值`).optional() }).strict();
 /** IPC 同时约束单项形状及整个集合体积，错误由共享校验返回中文说明。 */
@@ -43,9 +49,12 @@ export const commandSchemas: Record<Command, z.ZodType> = {
   'schema.apply': z.object({ connectionId: id, database: z.string().max(256), sql: text.min(1), taskId: id }).strict(),
   'files.choose': z.object({ purpose: z.enum(['import','export','key','certificate','query']), format: z.string().optional(), suggestedName: z.string().optional() }).strict(),
   'files.path': z.object({ token: id }).strict(),
+  'files.readQuery': z.object({ fileToken: id, encoding: z.enum(['utf8','utf16le','gb18030']) }).strict(),
+  'files.writeQuery': z.object({ fileToken: id, encoding: z.enum(['utf8','utf16le','gb18030']), sql: text }).strict(),
   'files.preview': z.object({ fileToken: id, format: z.enum(['csv','json']), encoding: z.enum(['utf8','utf16le','gb18030']) }).strict(),
   'files.import': z.object({ ...fileOptions, mapping: z.record(z.string(), z.string()) }).strict(),
   'files.export': z.object({ ...fileOptions, includeStructure: z.boolean(), includeData: z.boolean() }).strict(),
+  'files.exportResult': z.object({ fileToken: id, format: z.enum(['csv','json']), encoding: z.enum(['utf8','utf16le','gb18030']), taskId: id, result: resultExportData }).strict(),
   'queries.list': empty, 'queries.save': z.object({ id, name, connectionId: id.optional(), database: name.optional(), sql: text, updatedAt: z.string() }).strict(), 'queries.delete': z.object({ id }).strict(),
   'history.list': z.object({ connectionId: id.optional() }).strict(), 'tasks.list': empty,
   'settings.get': empty, 'settings.save': z.object({ theme: z.enum(['dark','light']), sidebarWidth: z.number().min(180).max(600), resultLimit: z.number().int().min(1).max(100000), pageSize: z.number().int().min(1).max(1000), tabs: z.array(z.object({ id, kind: z.enum(['query','table']), title: name, connectionId: id, database: z.string().optional(), table: z.string().optional(), sql: text.optional() }).strict()).max(100), activeTabId: z.string().optional() }).strict()

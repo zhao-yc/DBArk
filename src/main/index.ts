@@ -6,6 +6,8 @@ import { pathToFileURL } from 'node:url';
 import { EngineBroker } from './broker';
 import { LocalStore } from './storage';
 import { ConnectionConfigManager } from './connectionConfig';
+import { resolveFileToken } from './fileTokens';
+import { readQueryFile, writeQueryFile } from './queryFiles';
 import { validateCommand } from '../shared/validation';
 import type { Command, ConnectionProfile, HistoryEntry, TaskEvent, TaskRecord } from '../shared/contracts';
 
@@ -22,7 +24,8 @@ let hasPendingEdits = false;
 let rendererHasSettings = false;
 let lastStorageWarning = 0;
 const sessions = new Map<string, { connectionId: string; database?: string }>();
-const files = new Map<string, { path: string; purpose: string }>();
+const files = new Map<string, { path: string; purpose: string; format?: string }>();
+const queryFileOperations = new Set<Promise<unknown>>();
 const tasks = new Map<string, TaskRecord>();
 const lastPersist = new Map<string, number>();
 const rendererURL = process.env.DBARK_DEV_URL ?? pathToFileURL(join(__dirname, '../renderer/index.html')).href;
@@ -63,8 +66,15 @@ async function chooseFile(input: any): Promise<{ token: string; name: string } |
     filePath = result.canceled ? undefined : result.filePaths[0];
   }
   if (!filePath) return null;
-  const token = randomUUID(); files.set(token, { path: filePath, purpose: input.purpose });
+  const token = randomUUID(); files.set(token, { path: filePath, purpose: input.purpose, format: input.format });
   return { token, name: basename(filePath) };
+}
+
+/** 正常退出等待已授权的小型 SQL 文件操作，防止中途退出留下未关闭的临时文件。 */
+async function queryFileOperation<T>(action: () => Promise<T>): Promise<T> {
+  if (shuttingDown) throw new Error('客户端正在退出，不能开始 SQL 文件操作');
+  const operation = action(); queryFileOperations.add(operation);
+  try { return await operation; } finally { queryFileOperations.delete(operation); }
 }
 
 /** 分派前检查配置保存锁，防止检查通过后另一个请求用旧凭据抢先建连。 */
@@ -93,13 +103,14 @@ async function dispatch(command: Command, input: any): Promise<unknown> {
     }
     case 'files.choose': return chooseFile(input);
     case 'files.path': { const file = files.get(input.token); if (!file) throw new Error('文件选择已失效，请重新选择'); return file.path; }
+    case 'files.readQuery': return queryFileOperation(() => readQueryFile(resolveFileToken(files, input.fileToken, 'query', 'sql'), input.encoding));
+    case 'files.writeQuery': return queryFileOperation(() => writeQueryFile(resolveFileToken(files, input.fileToken, 'export', 'sql'), input.sql, input.encoding));
     case 'files.preview':
     case 'files.import':
-    case 'files.export': {
-      const file = files.get(input.fileToken);
-      const expected = command === 'files.export' ? 'export' : 'import';
-      if (!file || file.purpose !== expected) throw new Error('文件访问未授权，请通过文件对话框重新选择');
-      input = { ...input, filePath: file.path }; break;
+    case 'files.export':
+    case 'files.exportResult': {
+      const expected = command === 'files.export' || command === 'files.exportResult' ? 'export' : 'import';
+      input = { ...input, filePath: resolveFileToken(files, input.fileToken, expected) }; break;
     }
   }
   const taskId: string | undefined = command !== 'query.cancel' ? input.taskId : undefined;
@@ -132,7 +143,7 @@ function createMenu(): void {
   const mac = process.platform === 'darwin';
   const menu: Electron.MenuItemConstructorOptions[] = [
     ...(mac ? [{ label: 'DBArk', submenu: [{ label: '关于 DBArk', role: 'about' }, { type: 'separator' }, { label: '隐藏 DBArk', role: 'hide' }, { label: '退出 DBArk', role: 'quit' }] } as Electron.MenuItemConstructorOptions] : []),
-    { label: '文件', submenu: [{ label: '新建连接', accelerator: 'CmdOrCtrl+Shift+N', click: action('new-connection') }, { label: '新建查询', accelerator: 'CmdOrCtrl+N', click: action('new-query') }, { label: '保存查询', accelerator: 'CmdOrCtrl+S', click: action('save-query') }, { type: 'separator' }, { label: '退出', role: 'quit' }] },
+    { label: '文件', submenu: [{ label: '新建连接', accelerator: 'CmdOrCtrl+Shift+N', click: action('new-connection') }, { label: '新建查询', accelerator: 'CmdOrCtrl+N', click: action('new-query') }, { label: '打开 SQL 文件', accelerator: 'CmdOrCtrl+O', click: action('open-sql-file') }, { label: '另存 SQL 文件', accelerator: 'CmdOrCtrl+Shift+S', click: action('save-sql-file') }, { label: '保存查询', accelerator: 'CmdOrCtrl+S', click: action('save-query') }, { type: 'separator' }, { label: '退出', role: 'quit' }] },
     { label: '编辑', submenu: [{ label: '撤销', role: 'undo' }, { label: '重做', role: 'redo' }, { type: 'separator' }, { label: '剪切', role: 'cut' }, { label: '复制', role: 'copy' }, { label: '粘贴', role: 'paste' }, { label: '全选', role: 'selectAll' }] },
     { label: '查询', submenu: [{ label: '执行查询', accelerator: 'CmdOrCtrl+Enter', click: action('execute') }] },
     { label: '视图', submenu: [{ label: '切换明暗主题', click: action('toggle-theme') }, { label: '放大', role: 'zoomIn' }, { label: '缩小', role: 'zoomOut' }, { label: '重置缩放', role: 'resetZoom' }, { label: '全屏', role: 'togglefullscreen' }] }
@@ -169,6 +180,7 @@ app.on('before-quit', event => {
       await Promise.race([new Promise<void>((resolve, reject) => { stateFlushed = { resolve, reject }; window!.webContents.send('dbark:menu', 'persist-state'); }), new Promise((_, reject) => setTimeout(() => reject(new Error('工作台未能及时保存状态')), 3000))]);
       stateFlushed = undefined;
     }
+    await Promise.allSettled([...queryFileOperations]);
     await broker?.close();
     for (const task of tasks.values()) if (task.status === 'running') persistAuxiliary(() => store.saveTask({ ...task, status: 'cancelled', finishedAt: new Date().toISOString(), message: '客户端已退出，请核对操作结果' }));
     store?.close(); shutdownComplete = true; app.quit();
@@ -176,6 +188,7 @@ app.on('before-quit', event => {
     stateFlushed = undefined;
     const answer = await dialog.showMessageBox({ type: 'error', title: '退出前保存失败', message: error instanceof Error ? error.message : String(error), detail: '可以返回工作台排查后重试，或放弃未保存的配置并退出。', buttons: ['返回工作台','放弃未保存配置并退出'], defaultId: 0, cancelId: 0 });
     if (answer.response === 1) {
+      await Promise.allSettled([...queryFileOperations]);
       await broker?.close().catch(() => undefined);
       try { store?.close(); } catch { /* 用户已明确选择退出，避免退出状态永久锁死。 */ }
       shutdownComplete = true; app.quit();

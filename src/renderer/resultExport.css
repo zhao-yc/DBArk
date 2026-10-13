@@ -1,0 +1,4 @@
+.result-export-columns { max-height: 180px; overflow: auto; border: 1px solid var(--line); border-radius: 6px; }
+.result-export-columns table { border-collapse: collapse; width: 100%; font-size: 12px; }
+.result-export-columns th, .result-export-columns td { padding: 7px 10px; border-bottom: 1px solid var(--line); text-align: left; overflow-wrap: anywhere; white-space: pre-wrap; }
+.result-export-columns th { color: var(--muted); font-weight: 500; }

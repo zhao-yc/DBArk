@@ -33,9 +33,13 @@ export interface HistoryEntry { id: string; connectionId: string; database?: str
 export interface TaskRecord { id: string; kind: string; status: 'running' | 'completed' | 'cancelled' | 'failed'; progress: number; message: string; startedAt: string; finishedAt?: string; errors?: string[]; }
 export interface TaskEvent { taskId: string; status: TaskRecord['status']; progress: number; message: string; rows?: number; resultIndex?: number; columns?: ResultColumn[]; batch?: DataRow[]; }
 export interface FileChoice { token: string; name: string; }
+export type QueryFileEncoding = 'utf8' | 'utf16le' | 'gb18030';
 export interface AppSettings { theme: 'dark' | 'light'; sidebarWidth: number; resultLimit: number; pageSize: number; tabs: { id: string; kind: 'query' | 'table'; title: string; connectionId: string; database?: string; table?: string; sql?: string }[]; activeTabId?: string; }
 export interface ImportOptions { connectionId: string; database: string; table: string; fileToken: string; format: 'csv' | 'json' | 'sql'; encoding: 'utf8' | 'utf16le' | 'gb18030'; mapping: Record<string, string>; taskId: string; }
 export interface ExportOptions { connectionId: string; database: string; table: string; fileToken: string; format: 'csv' | 'json' | 'sql'; encoding: 'utf8' | 'utf16le' | 'gb18030'; includeStructure: boolean; includeData: boolean; taskId: string; }
+/** 仅包含已经返回的结果，不携带可触发数据库访问的 SQL、连接或会话。 */
+export interface ResultExportData { columns: Pick<ResultColumn, 'key' | 'name'>[]; rows: DataRow[]; truncated: boolean; }
+export interface ResultExportOptions { fileToken: string; format: 'csv' | 'json'; encoding: 'utf8' | 'utf16le' | 'gb18030'; taskId: string; result: ResultExportData; }
 
 /** 请求映射是界面、主进程与数据库进程共同使用的唯一接口定义。 */
 export interface CommandMap {
@@ -64,9 +68,12 @@ export interface CommandMap {
   'schema.apply': { input: { connectionId: string; database: string; sql: string; taskId: string }; output: QueryOutcome };
   'files.choose': { input: { purpose: 'import' | 'export' | 'key' | 'certificate' | 'query'; format?: string; suggestedName?: string }; output: FileChoice | null };
   'files.path': { input: { token: string }; output: string };
+  'files.readQuery': { input: { fileToken: string; encoding: QueryFileEncoding }; output: { sql: string; encoding: QueryFileEncoding } };
+  'files.writeQuery': { input: { fileToken: string; encoding: QueryFileEncoding; sql: string }; output: void };
   'files.preview': { input: { fileToken: string; format: 'csv' | 'json'; encoding: string }; output: { columns: string[]; rows: DataRow[] } };
   'files.import': { input: ImportOptions; output: { rows: number; errors: string[] } };
   'files.export': { input: ExportOptions; output: { rows: number } };
+  'files.exportResult': { input: ResultExportOptions; output: { rows: number } };
   'queries.list': { input: Record<string, never>; output: SavedQuery[] };
   'queries.save': { input: SavedQuery; output: void };
   'queries.delete': { input: { id: string }; output: void };

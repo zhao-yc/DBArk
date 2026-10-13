@@ -7,6 +7,7 @@ import { connectionTransportChanged } from '../shared/connectionProfile';
 import { connect, execute, type ManagedConnection } from './connection';
 import * as metadata from './metadata';
 import { csvCell, csvHeader, encodingName, previewFile, readRecords, readText } from './files';
+import { ResultFileTasks } from './resultFileTasks';
 import { buildChanges, buildDesign, buildPageSql, deserializeCell, exportLiteral, identifier, inlineParameters, qualified, serializeCell, splitSql, SqlScriptScanner } from './sql';
 
 interface Session { id: string; connectionId: string; managed: ManagedConnection; busy: boolean; }
@@ -23,8 +24,9 @@ export class Engine {
   private readonly sessions = new Map<string, Session>();
   private readonly tasks = new Map<string, RunningTask>();
   private readonly connectionUses = new Map<string, number>();
+  private readonly resultFiles: ResultFileTasks;
   /** 注入任务事件出口，使引擎既能在 utility process 中运行，也能独立测试。 */
-  constructor(private readonly emit: (event: TaskEvent) => void = () => undefined) {}
+  constructor(private readonly emit: (event: TaskEvent) => void = () => undefined) { this.resultFiles = new ResultFileTasks(emit); }
 
   /** 主进程只注入可信 profile/filePath；其他字段按共享接口处理。 */
   async handle(command: EngineCommand, input: Input): Promise<any> {
@@ -124,6 +126,11 @@ export class Engine {
       case 'files.preview': this.assertFile(input); return previewFile(input as { filePath: string; format: 'csv' | 'json'; encoding: string });
       case 'files.import': this.assertFile(input); return this.withConnection(input.connectionId, managed => this.runTask(input.taskId, managed, '导入文件', task => this.importFile(task, input)), input.database);
       case 'files.export': this.assertFile(input); return this.withConnection(input.connectionId, managed => this.runTask(input.taskId, managed, '导出文件', task => this.exportFile(task, input)), input.database);
+      case 'files.exportResult': {
+        this.assertFile(input);
+        if (this.tasks.has(input.taskId)) throw new Error('任务编号已在执行');
+        return this.resultFiles.run(input as Parameters<ResultFileTasks['run']>[0]);
+      }
       default: throw new Error(`数据库进程不支持命令：${command}`);
     }
   }
@@ -131,8 +138,10 @@ export class Engine {
   /** 关闭前取消任务并释放固定会话，未提交事务由服务器在断开时回滚。 */
   async closeAll(): Promise<void> {
     const active = [...this.tasks.values()];
+    const fileCleanup = this.resultFiles.closeAll();
     await Promise.all(active.map(task => this.cancelTask(task.id)));
     await Promise.all(active.map(task => task.done));
+    await fileCleanup;
     await Promise.all([...this.sessions.values()].map(session => session.managed.close()));
     this.sessions.clear(); this.profiles.clear();
   }
@@ -171,7 +180,7 @@ export class Engine {
 
   /** 统一登记任务、发送终态并等待取消控制连接结束后释放任务标识。 */
   private async runTask<T>(id: string, managed: ManagedConnection, label: string, action: (task: RunningTask) => Promise<T>): Promise<T> {
-    if (!id || this.tasks.has(id)) throw new Error('任务编号为空或任务已在执行');
+    if (!id || this.tasks.has(id) || this.resultFiles.has(id)) throw new Error('任务编号为空或任务已在执行');
     let finish!: () => void;
     const done = new Promise<void>(resolve => { finish = resolve; });
     const task: RunningTask = { id, managed, cancelled: false, inFlight: false, generation: 0, done, finish };
@@ -213,6 +222,7 @@ export class Engine {
 
   /** 取消只针对仍然运行的那一代语句；控制连接失败时销毁原会话，不重连重放。 */
   private async cancelTask(id: string): Promise<void> {
+    if (this.resultFiles.has(id)) { this.resultFiles.cancel(id); return; }
     const task = this.tasks.get(id);
     if (!task) return;
     task.cancelled = true;

@@ -1,5 +1,17 @@
 /** 简体中文语言包。新增语言时复制模块结构；动态位置使用 {0}、{1} 等占位符。 */
 export const zh = {
+  resultExport: {
+    title: '导出已返回结果', defaultName: '查询结果', returnedRows: '已返回 {0} 行',
+    returnedOnly: '仅写出当前结果集已返回的行，不重新执行查询，也不读取服务器上的其他数据。',
+    truncated: '此结果已截断；文件仅包含已返回行，不包含服务器上的其余结果。',
+    format: '结果文件格式', encoding: '结果文件编码', chooseFile: '选择结果保存位置',
+    atomicFile: '写入完成后替换目标文件；取消或失败会保留原文件。',
+    columnMapping: '导出列预览', columnPosition: '列位置', originalColumn: '原列名', outputColumn: 'CSV 标题 / JSON 键', emptyName: '（空列名）',
+    columnRule: '按结果列顺序导出。首个非空列名保留；重复名或空名添加“ [列位置]”后缀，冲突时递增，避开所有原始列名。空名以“列”为前缀。',
+    csvProtocol: 'CSV：\\N 表示 NULL，空字符串使用双引号；反斜线开头的文本增加一个反斜线，二进制写为 base64: 内容。',
+    jsonProtocol: 'JSON：保存对象数组，精确数值保持字符串；NULL 保持 null，二进制保持 type / base64 对象。',
+    preview: '数据预览（最多 20 行）', start: '开始导出已返回行', cancel: '取消结果导出', completed: '已导出 {0} 行已返回结果。'
+  },
   // 通用操作与状态。
   common: {
     cancel: "取消",
