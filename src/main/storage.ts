@@ -10,6 +10,7 @@ export const defaultSettings: AppSettings = { theme: 'dark', sidebarWidth: 270, 
 /** 小型配置库在内存中运行 SQLite，写入时原子替换文件；无需打包本机 ABI 模块。 */
 export class LocalStore {
   private volatileSecrets = new Map<string, string>();
+  /** 绑定数据库、文件路径及系统凭据保护器；仅由 open 创建已迁移的存储实例。 */
   private constructor(private db: Database, private path: string, private protector: SecretProtector, private reopen: (data: Uint8Array) => Database) {}
 
   /** 加载实际 SQLite 文件并迁移；凭据保护由桌面主进程注入。 */

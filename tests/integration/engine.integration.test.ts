@@ -87,6 +87,24 @@ describe.skipIf(!enabled)('远程 MySQL/MariaDB 数据库引擎', () => {
     } finally { await engine.handle('sessions.close', { sessionId: other }); }
   });
 
+  it('修改连接目标时保留活动会话，关闭后清掉旧配置并由下一次open选择新默认库', async () => {
+    const scoped = new Engine(), previous = { ...profile, id: 'reconfigure-check', database: undefined }, next = { ...previous, database };
+    try {
+      await scoped.handle('connections.open', { id: previous.id, profile: previous });
+      const first = (await scoped.handle('sessions.open', { connectionId: previous.id })).sessionId;
+      const readDatabase = (session: string): Promise<QueryOutcome> => scoped.handle('query.execute', { sessionId: session, sql: 'SELECT DATABASE()', maxRows: 1, taskId: randomUUID() });
+      expect((await readDatabase(first)).results[0].rows[0].c0).toBeNull();
+      await expect(scoped.handle('__connections.prepareSave', { id: previous.id, profile: next, transportChanged: true })).rejects.toThrow('打开的会话');
+      expect((await readDatabase(first)).results[0].rows[0].c0).toBeNull();
+      await scoped.handle('sessions.close', { sessionId: first });
+      await scoped.handle('__connections.prepareSave', { id: previous.id, profile: next, transportChanged: true });
+      await expect(scoped.handle('sessions.open', { connectionId: previous.id })).rejects.toThrow('先打开');
+      await scoped.handle('connections.open', { id: previous.id, profile: next });
+      const second = (await scoped.handle('sessions.open', { connectionId: previous.id })).sessionId;
+      expect((await readDatabase(second)).results[0].rows[0].c0).toBe(database);
+    } finally { await scoped.closeAll(); }
+  });
+
   it('任何并发修改冲突会回滚整批，且原值回写可以正常提交', async () => {
     await query("CREATE TABLE edit_test (id INT PRIMARY KEY, title VARCHAR(100)) ENGINE=InnoDB; INSERT INTO edit_test VALUES (1,'old'),(2,'old')");
     const original = await page('edit_test');
@@ -172,6 +190,11 @@ describe.skipIf(!enabled)('远程 MySQL/MariaDB 数据库引擎', () => {
   it('原型属性同名字段可以浏览与导出，不会丢列', async () => {
     await query('CREATE TABLE prototype_columns (id INT PRIMARY KEY, `__proto__` VARCHAR(20), constructor VARCHAR(20)) ENGINE=InnoDB; INSERT INTO prototype_columns VALUES (1,\'字段一\',\'字段二\')');
     const result = await page('prototype_columns'); expect(Object.hasOwn(result.rows[0], '__proto__')).toBe(true); expect(result.rows[0]['__proto__']).toBe('字段一');
+    const filePath = join(folder, 'prototype.json');
+    await engine.handle('files.export', { connectionId: profile.id, database, table: 'prototype_columns', filePath, format: 'json', encoding: 'utf8', includeData: true, includeStructure: false, taskId: randomUUID() });
+    await query('CREATE TABLE prototype_copy LIKE prototype_columns');
+    const imported = await engine.handle('files.import', { connectionId: profile.id, database, table: 'prototype_copy', filePath, format: 'json', encoding: 'utf8', mapping: Object.fromEntries(['id', '__proto__', 'constructor'].map(name => [name, name])), taskId: randomUUID() });
+    expect(imported).toEqual({ rows: 1, errors: [] }); expect((await page('prototype_copy')).rows).toEqual(result.rows);
   });
 
   it.skipIf(!profile.tls?.enabled)('TLS 拒绝不受信任的 CA，不能静默降级为明文', async () => {

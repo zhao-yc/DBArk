@@ -151,3 +151,46 @@ describe('修改事务控制', () => {
     expect(commands.at(-1)).toBe('ROLLBACK'); expect(commands).not.toContain('COMMIT');
   });
 });
+
+describe('连接配置重设保护', () => {
+  it('存在空闲会话时也拒绝切换目标，并保留当前会话供用户提交或回滚', async () => {
+    const active = await mocks.connect.mock.results.at(-1)!.value as ManagedConnection;
+    await expect(engine.handle('__connections.prepareSave', { id: profile.id, profile: { ...profile, host: 'new.invalid' }, transportChanged: true })).rejects.toThrow('打开的会话');
+    expect(active.close).not.toHaveBeenCalled();
+    expect((await engine.handle('query.execute', { sessionId, sql: 'SELECT still_alive', taskId: 'unchanged-session', maxRows: 1 })).results[0].rows).toHaveLength(1);
+  });
+  it('无会话时清掉旧配置，明确要求下一次open提供新目标', async () => {
+    await engine.handle('sessions.close', { sessionId });
+    const next = { ...profile, host: 'new.invalid', password: '新密码' };
+    await engine.handle('__connections.prepareSave', { id: profile.id, profile: next, transportChanged: true });
+    await expect(engine.handle('sessions.open', { connectionId: profile.id })).rejects.toThrow('先打开');
+    await engine.handle('connections.open', { id: profile.id, profile: next });
+    await engine.handle('sessions.open', { connectionId: profile.id });
+    expect(mocks.connect).toHaveBeenLastCalledWith(next, undefined);
+  });
+  it.each(['connections.open', 'sessions.open'] as const)('建连尚未完成时拒绝保存，覆盖%s尚未登记会话的窗口', async command => {
+    await engine.handle('sessions.close', { sessionId });
+    let finish!: (value: ManagedConnection) => void;
+    mocks.connect.mockImplementationOnce(() => new Promise<ManagedConnection>(resolve => { finish = resolve; }));
+    const opening = engine.handle(command, command === 'connections.open' ? { id: profile.id, profile } : { connectionId: profile.id });
+    await expect(engine.handle('__connections.prepareSave', { id: profile.id, profile: { ...profile, host: 'new.invalid' }, transportChanged: true })).rejects.toThrow('正在执行的操作');
+    finish(managed()); await opening;
+  });
+  it('独立结构任务运行时拒绝保存，不取消任务也不切换其凭据', async () => {
+    await engine.handle('sessions.close', { sessionId });
+    let pending: EventEmitter | undefined;
+    scenario = (_sql, query) => { pending = query; };
+    const task = engine.handle('schema.apply', { connectionId: profile.id, database: '', sql: 'CREATE DATABASE example', taskId: 'independent-task' });
+    await vi.waitFor(() => expect(pending).toBeDefined());
+    await expect(engine.handle('__connections.prepareSave', { id: profile.id, profile: { ...profile, user: 'new' }, transportChanged: true })).rejects.toThrow('正在执行的操作');
+    expect(mocks.execute.mock.calls.some(([, sql]) => String(sql).startsWith('KILL'))).toBe(false);
+    rows(pending!, [['done']]); await task;
+    expect(events.at(-1)?.status).toBe('completed');
+  });
+  it('建连失败后计数释放，不会永久阻止后续配置修正', async () => {
+    await engine.handle('sessions.close', { sessionId });
+    mocks.connect.mockRejectedValueOnce(new Error('模拟无法连接'));
+    await expect(engine.handle('sessions.open', { connectionId: profile.id })).rejects.toThrow('无法连接');
+    await expect(engine.handle('__connections.prepareSave', { id: profile.id, profile: { ...profile, host: 'fixed.invalid' }, transportChanged: true })).resolves.toBeUndefined();
+  });
+});

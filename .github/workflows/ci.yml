@@ -3,6 +3,8 @@ on:
   push:
   pull_request:
   workflow_dispatch:
+permissions:
+  contents: read
 jobs:
   checks:
     name: 类型与单元测试
@@ -62,3 +64,34 @@ jobs:
         with:
           name: 测试记录-${{ matrix.artifact }}
           path: test-results/
+  release:
+    name: 发布开发预览
+    needs: [checks, desktop]
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: DBArk-*
+          path: release-assets
+          merge-multiple: true
+      - name: 校验版本、归档源码并发布
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="$(node -p 'require("./package.json").version')"
+          test "$RELEASE_TAG" = "v$version"
+          test -f "docs/releases/$RELEASE_TAG.md"
+          git archive --format=zip --prefix="DBArk-$version/" --output="release-assets/DBArk-$version-source.zip" HEAD
+          cd release-assets
+          shopt -s nullglob
+          assets=(*.exe *.dmg *.zip *.blockmap)
+          test "${#assets[@]}" -ge 6
+          sha256sum "${assets[@]}" > SHA256SUMS.txt
+          gh release create "$RELEASE_TAG" "${assets[@]}" SHA256SUMS.txt --verify-tag --prerelease --title "DBArk $version 开发预览" --notes-file "../docs/releases/$RELEASE_TAG.md" --repo "$GITHUB_REPOSITORY"

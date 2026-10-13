@@ -108,6 +108,44 @@ async function executeSql(source: string) {
   await expect(query.locator('.error-box')).toHaveCount(0);
 }
 
+/** 打开的标签和真实会话分别保护 UI 与 IPC 保存入口，拒绝切换地址时必须保留原连接。 */
+async function verifyConnectionChangeGuard(database: string, connectionName: string, connectionId: string) {
+  await page.locator('.connection-row').hover();
+  await page.getByRole('button', { name: `编辑连接 ${connectionName}`, exact: true }).click();
+  const form = page.getByRole('dialog', { name: '编辑连接', exact: true });
+  await form.getByLabel('主机地址', { exact: true }).fill('127.0.0.1');
+  await form.getByLabel('端口', { exact: true }).fill('1');
+  await form.getByRole('button', { name: '保存连接', exact: true }).click();
+  await expect(form.locator('.error-box')).toContainText('关闭此连接的全部标签');
+  await expect(form).toBeVisible();
+  await form.getByRole('button', { name: '取消', exact: true }).click();
+  const ipc = await page.evaluate(async id => {
+    const before = (await window.dbark.invoke('connections.list', {})).find(profile => profile.id === id)!;
+    let error = '';
+    try { await window.dbark.invoke('connections.save', { ...before, host: '127.0.0.1', port: 1 }); }
+    catch (reason) { error = reason instanceof Error ? reason.message : String(reason); }
+    const after = (await window.dbark.invoke('connections.list', {})).find(profile => profile.id === id)!;
+    return { error, unchanged: before.host === after.host && before.port === after.port && before.name === after.name };
+  }, connectionId);
+  expect(ipc.error).toContain('先关闭相关标签页');
+  expect(ipc.unchanged).toBe(true);
+  await executeSql("SELECT '配置未切换' AS ready, DATABASE() AS active_database;");
+  await expect(page.locator('.query-tab:visible .result-body')).toContainText('配置未切换');
+  await expect(page.locator('.query-tab:visible .result-body')).toContainText(database);
+
+  // 纯展示字段不改变底层传输配置，仍允许在当前会话保持打开时正常保存。
+  const renamed = `${connectionName} 已改名`;
+  await page.locator('.connection-row').hover();
+  await page.getByRole('button', { name: `编辑连接 ${connectionName}`, exact: true }).click();
+  await form.getByLabel('连接名称', { exact: true }).fill(renamed);
+  await form.getByRole('button', { name: '保存连接', exact: true }).click();
+  await expect(form).toBeHidden();
+  await expect(page.locator('.connection-row .tree-label')).toContainText(renamed);
+  await executeSql("SELECT '改名后会话仍可用' AS ready;");
+  await expect(page.locator('.query-tab:visible .result-body')).toContainText('改名后会话仍可用');
+  return renamed;
+}
+
 /** 文件对话框只替换路径选择，导入预览、字段映射、任务及文件 IO 均走真实主进程。 */
 async function chooseTransferFile(path: string, mode: 'import' | 'export') {
   await desktop.evaluate(({ dialog }, choice) => {
@@ -139,7 +177,7 @@ test.describe('远程真实数据库桌面工作流', () => {
   test.describe.configure({ timeout: 180000 });
 
   test('UI 连接建库、选中 SQL、多结果、事务、取消与重启凭据', async ({}, testInfo) => {
-    await isolatedDatabase(async ({ observer, database, connectionName }) => {
+    await isolatedDatabase(async ({ observer, database, connectionName, connectionId }) => {
       await openDatabaseQuery(database);
       const query = page.locator('.query-tab:visible');
       await writeSql("SELECT '中文🚀选中' AS selected_only;\nSELECT '不应执行' AS not_selected;");
@@ -151,6 +189,7 @@ test.describe('远程真实数据库桌面工作流', () => {
       await executeSql('SELECT 1 AS first_result; SELECT 2 AS second_result;');
       await query.getByRole('button', { name: '结果 2', exact: true }).click();
       await expect(query.locator('.result-body')).toContainText('second_result');
+      const renamedConnection = await verifyConnectionChangeGuard(database, connectionName, connectionId);
       await executeSql('CREATE TABLE transaction_probe (id INT PRIMARY KEY, note VARCHAR(120)) ENGINE=InnoDB;');
       await query.getByRole('button', { name: '开始事务', exact: true }).click();
       await expect(query.locator('.tab-status')).toContainText('事务进行中');
@@ -179,7 +218,7 @@ test.describe('远程真实数据库桌面工作流', () => {
       const restored = await page.evaluate(() => window.dbark.invoke('connections.list', {}));
       expect(restored[0].hasPassword).toBe(encryptionAvailable);
       await page.locator('.connection-row').hover();
-      await page.getByRole('button', { name: `编辑连接 ${connectionName}`, exact: true }).click();
+      await page.getByRole('button', { name: `编辑连接 ${renamedConnection}`, exact: true }).click();
       const form = page.getByRole('dialog', { name: '编辑连接', exact: true });
       if (!encryptionAvailable) await form.getByLabel('数据库密码', { exact: true }).fill(environment.DBARK_TEST_PASSWORD ?? '');
       await form.getByRole('button', { name: '测试连接', exact: true }).click();
@@ -236,9 +275,17 @@ test.describe('远程真实数据库桌面工作流', () => {
         const output = join(folder, `records.${format}`);
         await transfer(table, output, 'export', format, 2);
         const content = await readFile(output, 'utf8');
-        expect(content).toContain('矩阵一'); expect(content).toContain('12345678901234567890.123456');
+        if (format !== 'sql') { expect(content).toContain('矩阵一'); expect(content).toContain('12345678901234567890.123456'); }
         if (format === 'json') expect(JSON.parse(content)).toHaveLength(2);
-        if (format === 'sql') { expect(content).toContain('CREATE TABLE'); expect(content).toContain('INSERT INTO'); }
+        if (format === 'sql') {
+          expect(content).toContain('CREATE TABLE'); expect(content).toContain('INSERT INTO');
+          // SQL 用 UTF-8 十六进制字面量保存文本，实际恢复到同一隔离库的新表来验证精度与字符。
+          const restore = join(folder, 'records-restored.sql');
+          await writeFile(restore, content.replaceAll('`records`', '`records_restored`'), 'utf8');
+          await transfer(table, restore, 'import', 'sql', 2);
+          const [restoredRows] = await observer.query<RowDataPacket[]>(`SELECT title,note,amount FROM \`${database}\`.records_restored ORDER BY id`);
+          expect(restoredRows).toEqual(matrixRows);
+        }
       }
       const csv = join(folder, 'import.csv'); const json = join(folder, 'import.json'); const sql = join(folder, 'import.sql');
       await writeFile(csv, 'source_id,source_title,source_note,source_amount\n3,CSV导入,映射成功,1.000001\n', 'utf8');

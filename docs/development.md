@@ -25,6 +25,8 @@ pnpm test:integration
 
 TLS 测试可设置 `DBARK_TEST_TLS=1` 和 `DBARK_TEST_CA=CA文件绝对路径`。未提供连接时，集成测试会跳过并在结果中标记，不能把跳过视为兼容性通过。测试失败后先核对残留数据库，不在业务库中手工清理。
 
+完整的 SSH、严格 TLS、权限/断线和百万行开关见 [集成测试说明](../tests/integration/README.md)，本次真实结果见 [数据库验收记录](../tests/integration/acceptance-20261013.md)。两条真实数据库界面工作流及安装后执行方式见 [桌面测试说明](../tests/e2e/README.md)。
+
 ## 验证策略
 
 单元测试覆盖 SQL 分隔符、注释和字符串、精度、标识符、DDL、乐观锁定位、凭据隔离及配置迁移。端到端测试启动真正的 Electron，使用独立临时用户目录验证窗口、preload、IPC 和数据库执行进程。
@@ -44,3 +46,9 @@ Electron 主进程、preload 与数据库进程独立打包为 CommonJS；React 
 当前 macOS 使用 ad-hoc 签名保持应用完整性，没有 Developer ID 身份及公证，仍标记为未发行签名的开发预览；发行证书接入后设置构建机密，并完成对应平台签名、公证和安装测试。长期保留的密钥、证书按项目要求备份至 `E:\BaiduSyncdisk\codex重要文件备份\DBArk`，附用途、有效期和恢复说明。签名行为参见 [electron-builder 26 官方说明](https://www.electron.build/v26/docs/features/code-signing/code-signing-mac/)。
 
 GitHub Actions 分别使用 Windows x64、macOS arm64 和 macOS Intel 构建机，完成源码回归后构建对应原生架构，再执行 `pnpm test:packaged` 验证随包的实际应用。架构标签依据 [GitHub 托管运行器说明](https://docs.github.com/en/actions/reference/runners/github-hosted-runners)。
+
+## 发布
+
+普通提交只构建并上传附件。发布前更新 `package.json`、版本记录和 `docs/releases/v版本号.md`，核对实际验证记录，再推送同版本 `v*` 标签。工作流须通过类型检查、单元测试、三个原生平台的桌面及安装包验收，才会创建 GitHub 开发预览 Release。
+
+发布任务从经过检查的提交生成源码 ZIP，仅归档 Git 跟踪文件；汇总三个平台的安装包并生成 `SHA256SUMS.txt`。它使用该次工作流的短期 GitHub 凭据，没有新增长期发布密钥。发行签名、公证及自动更新需独立配置。

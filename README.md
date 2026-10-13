@@ -4,6 +4,10 @@
 
 DBArk 保留连接树、多标签查询和表格编辑等熟悉的工作方式，使用独立的界面与实现。当前开发范围为 Windows 和 macOS 客户端。
 
+## 下载
+
+在 [GitHub Releases](https://github.com/zhao-yc/DBArk/releases) 下载 Windows x64 安装程序、macOS arm64/x64 DMG 或 ZIP，以及源码和 SHA256 校验清单。`0.1.0` 为开发预览；Windows 未签名，macOS 仅有 ad-hoc 签名，没有发行证书及公证。安装步骤和数据保护边界见 [中文使用指南](docs/user-guide.md)。
+
 ## 开发运行
 
 需要 Node.js 24 和 pnpm 12.11.2。
@@ -41,7 +45,7 @@ pnpm dist:win
 pnpm dist:mac
 ```
 
-产物位于 `release/`。当前默认生成未签名构建；GitHub Actions 配置了 Windows 与 macOS 的测试、构建和产物上传，不会自动公开发布版本。
+产物位于 `release/`。GitHub Actions 分别在 Windows x64、macOS arm64 和 macOS x64 构建并验收；普通提交上传工作流附件。维护者推送与 `package.json` 版本一致的 `v*` 标签后，只有全部检查通过才发布开发预览、源码 ZIP 和 SHA256 清单。
 
 数据库集成测试需要显式配置测试连接，参见 [开发与测试](docs/development.md)。支持目标、已验证版本和当前限制以 [验证记录](docs/validation.md) 为准。
 

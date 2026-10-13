@@ -55,7 +55,9 @@ export function csvValue(value: string): CellValue {
 export async function* readRecords(filePath: string, format: 'csv' | 'json', encoding: string): AsyncGenerator<DataRow> {
   const source = createReadStream(filePath);
   const decoder = iconv.decodeStream(encodingName(encoding)) as Transform;
-  const numberTokens = new Transform({ objectMode: true, transform(token, _encoding, callback) {
+  const numberTokens = new Transform({ objectMode: true,
+    /** 将数字 token 转为带标记的原始文本，同时保护合法原型同名键。 */
+    transform(token, _encoding, callback) {
     // Assembler 会保留 stringValue 的对象值；独立类区分真实文字字符串与数字 token。
     callback(null, token.name === 'numberValue' ? { name: 'stringValue', value: new JsonNumber(token.value) } : token.name === 'keyValue' ? { ...token, value: jsonKeyPrefix + token.value } : token);
   } });

@@ -2,7 +2,8 @@ import { randomUUID } from 'node:crypto';
 import { open, rename, rm } from 'node:fs/promises';
 import iconv from 'iconv-lite';
 import { Types, type FieldPacket, type ResultSetHeader } from 'mysql2';
-import type { CellValue, Command, ConnectionProfile, DataRow, QueryOutcome, QueryResult, ResultColumn, RowChange, TableDesign, TaskEvent } from '../shared/contracts';
+import type { CellValue, EngineCommand, ConnectionProfile, DataRow, QueryOutcome, QueryResult, ResultColumn, RowChange, TableDesign, TaskEvent } from '../shared/contracts';
+import { connectionTransportChanged } from '../shared/connectionProfile';
 import { connect, execute, type ManagedConnection } from './connection';
 import * as metadata from './metadata';
 import { csvCell, csvHeader, encodingName, previewFile, readRecords, readText } from './files';
@@ -21,22 +22,32 @@ export class Engine {
   private readonly profiles = new Map<string, ConnectionProfile>();
   private readonly sessions = new Map<string, Session>();
   private readonly tasks = new Map<string, RunningTask>();
+  private readonly connectionUses = new Map<string, number>();
   /** 注入任务事件出口，使引擎既能在 utility process 中运行，也能独立测试。 */
   constructor(private readonly emit: (event: TaskEvent) => void = () => undefined) {}
 
   /** 主进程只注入可信 profile/filePath；其他字段按共享接口处理。 */
-  async handle(command: Command, input: Input): Promise<any> {
+  async handle(command: EngineCommand, input: Input): Promise<any> {
     switch (command) {
-      case 'connections.test': {
+      case '__connections.prepareSave': {
+        const next = input.profile as ConnectionProfile;
+        if (!next || next.id !== input.id) throw new Error('主进程未提供有效连接配置');
+        const previous = this.profiles.get(input.id);
+        const changed = input.transportChanged || (previous && connectionTransportChanged(previous, next, { preserveMissingSecrets: false }));
+        if (changed && (this.connectionUses.has(input.id) || [...this.sessions.values()].some(session => session.connectionId === input.id) || [...this.tasks.values()].some(task => task.managed.profile.id === input.id))) throw new Error('该连接仍有打开的会话或正在执行的操作，请先关闭相关标签页并等待任务完成，再修改地址或认证配置；现有任务未被取消');
+        if (changed || !previous) this.profiles.delete(input.id);
+        return;
+      }
+      case 'connections.test': return this.withConnectionUse(input.id, async () => {
         const managed = await connect(input as ConnectionProfile);
         try { return managed.status; } finally { await managed.close(); }
-      }
-      case 'connections.open': {
+      });
+      case 'connections.open': return this.withConnectionUse(input.id, async () => {
         const profile = input.profile as ConnectionProfile | undefined;
         if (!profile || profile.id !== input.id) throw new Error('主进程未提供有效连接配置');
         const managed = await connect(profile);
         try { this.profiles.set(profile.id, profile); return managed.status; } finally { await managed.close(); }
-      }
+      });
       case 'connections.close': {
         const active = [...this.tasks.values()].filter(task => task.managed.profile.id === input.id);
         await Promise.all(active.map(task => this.cancelTask(task.id)));
@@ -44,12 +55,12 @@ export class Engine {
         for (const [id, session] of this.sessions) if (session.connectionId === input.id) { await session.managed.close(); this.sessions.delete(id); }
         this.profiles.delete(input.id); return;
       }
-      case 'sessions.open': {
+      case 'sessions.open': return this.withConnectionUse(input.connectionId, async () => {
         const managed = await connect(this.profile(input.connectionId), input.database);
         const sessionId = randomUUID();
         this.sessions.set(sessionId, { id: sessionId, connectionId: input.connectionId, managed, busy: false });
         return { sessionId };
-      }
+      });
       case 'sessions.close': {
         const session = this.sessions.get(input.sessionId);
         if (!session) return;
@@ -135,8 +146,17 @@ export class Engine {
 
   /** 元数据和文件任务使用独立连接，避免干扰 SQL 标签页里的事务与临时表。 */
   private async withConnection<T>(id: string, action: (managed: ManagedConnection) => Promise<T>, database?: string): Promise<T> {
-    const managed = await connect(this.profile(id), database);
-    try { return await action(managed); } finally { await managed.close(); }
+    return this.withConnectionUse(id, async () => {
+      const managed = await connect(this.profile(id), database);
+      try { return await action(managed); } finally { await managed.close(); }
+    });
+  }
+
+  /** 在首个 await 建连之前登记活动，覆盖会话尚未入表和独立元数据任务的竞态。 */
+  private async withConnectionUse<T>(id: string, action: () => Promise<T>): Promise<T> {
+    this.connectionUses.set(id, (this.connectionUses.get(id) ?? 0) + 1);
+    try { return await action(); }
+    finally { const remaining = (this.connectionUses.get(id) ?? 1) - 1; if (remaining) this.connectionUses.set(id, remaining); else this.connectionUses.delete(id); }
   }
 
   /** 同一会话不允许并行操作，确保事务、临时表和取消操作作用于确定的连接。 */

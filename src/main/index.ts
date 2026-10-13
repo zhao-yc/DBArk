@@ -5,6 +5,7 @@ import { randomUUID } from 'node:crypto';
 import { pathToFileURL } from 'node:url';
 import { EngineBroker } from './broker';
 import { LocalStore } from './storage';
+import { ConnectionConfigManager } from './connectionConfig';
 import { validateCommand } from '../shared/validation';
 import type { Command, ConnectionProfile, HistoryEntry, TaskEvent, TaskRecord } from '../shared/contracts';
 
@@ -13,6 +14,7 @@ app.setName('DBArk');
 let window: BrowserWindow | undefined;
 let store: LocalStore;
 let broker: EngineBroker;
+let connectionConfig: ConnectionConfigManager;
 let shuttingDown = false;
 let shutdownComplete = false;
 let stateFlushed: { resolve(): void; reject(error: Error): void } | undefined;
@@ -65,12 +67,14 @@ async function chooseFile(input: any): Promise<{ token: string; name: string } |
   return { token, name: basename(filePath) };
 }
 
+/** 分派前检查配置保存锁，防止检查通过后另一个请求用旧凭据抢先建连。 */
 async function dispatch(command: Command, input: any): Promise<unknown> {
+  connectionConfig.assertAvailable(input.connectionId ?? sessions.get(input.sessionId)?.connectionId ?? (command.startsWith('connections.') ? input.id : undefined));
   switch (command) {
     case 'app.info': return { version: app.getVersion(), platform: process.platform, encryptionAvailable: safeStorage.isEncryptionAvailable(), dataPath: app.getPath('userData') };
     case 'app.setDirty': hasPendingEdits = input.dirty; return;
     case 'connections.list': return store.connections();
-    case 'connections.save': return store.saveConnection(input);
+    case 'connections.save': return connectionConfig.save(input);
     case 'connections.delete': await broker.request('connections.close', input); store.deleteConnection(input.id); return;
     case 'connections.open': input = { ...input, profile: store.resolveConnection(input.id) }; break;
     case 'connections.test': input = store.resolveConnection(input.id, input as ConnectionProfile); break;
@@ -122,6 +126,7 @@ async function dispatch(command: Command, input: any): Promise<unknown> {
   }
 }
 
+/** 按平台生成中文原生菜单，查询快捷键统一发送给当前工作区。 */
 function createMenu(): void {
   const action = (name: string) => () => window?.webContents.send('dbark:menu', name);
   const mac = process.platform === 'darwin';
@@ -135,6 +140,7 @@ function createMenu(): void {
   Menu.setApplicationMenu(Menu.buildFromTemplate(menu));
 }
 
+/** 创建启用沙箱与上下文隔离的窗口，限制导航并等待页面就绪后显示。 */
 async function createWindow(): Promise<void> {
   window = new BrowserWindow({ width: 1440, height: 920, minWidth: 1024, minHeight: 680, show: false, backgroundColor: '#101319', title: 'DBArk', icon: app.isPackaged ? join(process.resourcesPath, 'icon.png') : join(__dirname, '../../build/icon.png'), webPreferences: { preload: join(__dirname, 'preload.cjs'), sandbox: true, contextIsolation: true, nodeIntegration: false, webSecurity: true, spellcheck: false } });
   window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
@@ -188,6 +194,7 @@ else {
       sessions.clear();
       for (const task of tasks.values()) if (task.status === 'running') taskEvent({ taskId: task.id, status: 'failed', progress: task.progress, message: '数据库进程已退出，请核对操作结果并重新连接' });
     });
+    connectionConfig = new ConnectionConfigManager(store, broker);
     ipcMain.handle('dbark:request', async (event, payload: unknown) => {
       try {
         if (!window || event.sender !== window.webContents || event.senderFrame !== window.webContents.mainFrame || event.senderFrame?.url !== rendererURL) throw new Error('不允许的请求来源');

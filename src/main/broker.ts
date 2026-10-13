@@ -8,6 +8,7 @@ export class EngineBroker {
   private child?: UtilityProcess;
   private stopping = false;
   private pending = new Map<string, { resolve(value: unknown): void; reject(error: Error): void }>();
+  /** 接收任务事件和进程故障出口，不向渲染进程暴露底层消息通道。 */
   constructor(private emit: (event: TaskEvent) => void, private failed: () => void) {}
 
   /** 按需启动唯一数据库进程，退出时拒绝全部等待请求。 */

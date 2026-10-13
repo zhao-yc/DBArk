@@ -11,6 +11,8 @@ export interface ConnectionProfile {
   tls?: { enabled: boolean; rejectUnauthorized: boolean; caPath?: string; certPath?: string; keyPath?: string };
 }
 export interface ConnectionStatus { version: string; dialect: 'mysql' | 'mariadb'; connectionId?: number; }
+/** 内部配置检查仅由主进程调用，不加入渲染进程可访问的 CommandMap/参数白名单。 */
+export type EngineCommand = Command | '__connections.prepareSave';
 export interface DatabaseObject { name: string; kind: ObjectKind; }
 export interface ColumnInfo { name: string; type: string; nullable: boolean; defaultValue: string | null; extra: string; comment: string; generated: boolean; }
 export interface IndexInfo { name: string; unique: boolean; columns: string[]; }

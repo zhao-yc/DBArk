@@ -106,7 +106,7 @@ describe.skipIf(!enabled)('远程数据库权限、断线和容量边界', () =>
       expect(result.rows).toBe(1_000_000);
     } finally { clearInterval(sample); }
     const bytes = (await stat(filePath)).size, rssGrowth = peakRss - initialRss;
-    // 文件约 190 MiB；若一次性缓存完整数据，将明显超过这一宽松且可操作的预算。
+    // 文件约 180 MiB；若一次性缓存完整数据，将明显超过这一宽松且可操作的预算。
     expect(bytes).toBeGreaterThan(180 * 1024 * 1024); expect(rssGrowth).toBeLessThan(160 * 1024 * 1024);
     console.info(JSON.stringify({ 验收: '百万行', rows: count, pageSize: 500, populatedMs: Math.round(populatedMs), pageMs: Math.round(pageMs), exportMs: Math.round(performance.now() - exportStart), bytes, initialRss, peakRss, rssGrowth }));
     const cancelledPath = join(folder, 'cancelled.csv'), taskId = randomUUID();
