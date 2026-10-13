@@ -6,7 +6,9 @@ import { pathToFileURL } from 'node:url';
 import { EngineBroker } from './broker';
 import { LocalStore } from './storage';
 import { ConnectionConfigManager } from './connectionConfig';
-import { resolveFileToken } from './fileTokens';
+import { ConnectionTransfer } from './connectionTransfer';
+import { assertConnectionReady } from '../shared/connectionTransfer';
+import { confirmConnectionFiles, resolveFileToken } from './fileTokens';
 import { ExportReservations } from './exportReservations';
 import { persistedQueryError, persistedTaskMessage } from './taskPrivacy';
 import { readQueryFile, writeQueryFile } from './queryFiles';
@@ -20,6 +22,7 @@ let window: BrowserWindow | undefined;
 let store: LocalStore;
 let broker: EngineBroker;
 let connectionConfig: ConnectionConfigManager;
+let connectionTransfer: ConnectionTransfer;
 let shuttingDown = false;
 let shutdownComplete = false;
 let stateFlushed: { resolve(): void; reject(error: Error): void } | undefined;
@@ -67,7 +70,7 @@ function taskEvent(event: TaskEvent): void {
 async function chooseFile(input: any): Promise<{ token: string; name: string } | null> {
   const filters = input.format ? [{ name: `${String(input.format).toUpperCase()} 文件`, extensions: [input.format] }, { name: '所有文件', extensions: ['*'] }] : [{ name: '所有文件', extensions: ['*'] }];
   let filePath: string | undefined;
-  if (input.purpose === 'export') {
+  if (input.purpose === 'export' || input.purpose === 'connection-export') {
     const result = await dialog.showSaveDialog(window!, { title: '导出文件', defaultPath: input.suggestedName, filters });
     filePath = result.canceled ? undefined : result.filePath;
   } else {
@@ -79,9 +82,9 @@ async function chooseFile(input: any): Promise<{ token: string; name: string } |
   return { token, name: basename(filePath) };
 }
 
-/** 正常退出等待已授权的小型 SQL 文件操作，防止中途退出留下未关闭的临时文件。 */
+/** 正常退出等待已授权的小型文件操作，防止中途退出留下未关闭的临时文件。 */
 async function queryFileOperation<T>(action: () => Promise<T>): Promise<T> {
-  if (shuttingDown) throw new Error('客户端正在退出，不能开始 SQL 文件操作');
+  if (shuttingDown) throw new Error('客户端正在退出，不能开始文件操作');
   const operation = action(); queryFileOperations.add(operation);
   try { return await operation; } finally { queryFileOperations.delete(operation); }
 }
@@ -105,10 +108,21 @@ async function dispatch(command: Command, input: any): Promise<unknown> {
     case 'app.info': return { version: app.getVersion(), platform: process.platform, encryptionAvailable: safeStorage.isEncryptionAvailable(), dataPath: app.getPath('userData') };
     case 'app.setDirty': hasPendingEdits = input.dirty; return;
     case 'connections.list': return store.connections();
-    case 'connections.save': return connectionConfig.save(input);
+    case 'connections.export': return queryFileOperation(async () => {
+      const path = resolveFileToken(files, input.fileToken, 'connection-export', 'json');
+      const release = await exportReservations.acquire(path);
+      try { return await connectionTransfer.exportFile(path, input.connectionIds); } finally { release(); }
+    });
+    case 'connections.importPreview': return queryFileOperation(() => connectionTransfer.preview(resolveFileToken(files, input.fileToken, 'connection-import', 'json')));
+    case 'connections.importApply': if (shuttingDown) throw new Error('客户端正在退出，不能导入连接'); return connectionTransfer.apply(input);
+    case 'connections.save': return connectionConfig.save(confirmConnectionFiles(input, store.connections().find(profile => profile.id === input.id), files));
     case 'connections.delete': await broker.request('connections.close', input); store.deleteConnection(input.id); return;
     case 'connections.open': input = { ...input, profile: store.resolveConnection(input.id) }; break;
-    case 'connections.test': input = store.resolveConnection(input.id, input as ConnectionProfile); break;
+    case 'connections.test': {
+      const previous = store.connections().find(profile => profile.id === input.id);
+      input = { ...input, pendingFiles: [...new Set([...previous?.pendingFiles ?? [], ...input.pendingFiles ?? []])] };
+      assertConnectionReady(input); input = store.resolveConnection(input.id, input as ConnectionProfile); break;
+    }
     case 'connections.close': for (const [id, session] of sessions) if (session.connectionId === input.id) sessions.delete(id); break;
     case 'table.preferences.get': return store.tablePreferences(input);
     case 'table.preferences.save': return store.saveTablePreferences(input);
@@ -253,6 +267,7 @@ else {
     store = await LocalStore.open(join(app.getPath('userData'), 'dbark.sqlite'), wasm, { available: () => safeStorage.isEncryptionAvailable(), encrypt: value => safeStorage.encryptString(value).toString('base64'), decrypt: value => safeStorage.decryptString(Buffer.from(value, 'base64')) });
     broker = new EngineBroker(taskEvent, engineExited);
     connectionConfig = new ConnectionConfigManager(store, broker);
+    connectionTransfer = new ConnectionTransfer(store);
     ipcMain.handle('dbark:request', async (event, payload: unknown) => {
       try {
         if (!window || event.sender !== window.webContents || event.senderFrame !== window.webContents.mainFrame || event.senderFrame?.url !== rendererURL) throw new Error('不允许的请求来源');

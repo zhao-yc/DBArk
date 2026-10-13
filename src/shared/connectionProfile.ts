@@ -2,7 +2,7 @@ import type { ConnectionProfile } from './contracts';
 
 /** 只列出决定数据库目标和认证的字段，显示信息与秘密存在标记不参与路由比较。 */
 function transport(profile: ConnectionProfile): unknown[] {
-  return [profile.dialect, profile.host, profile.port, profile.user, profile.database ?? '',
+  return [[...profile.pendingFiles ?? []].sort(), profile.dialect, profile.host, profile.port, profile.user, profile.database ?? '',
     profile.ssh?.enabled ?? false, profile.ssh?.host ?? '', profile.ssh?.port ?? 22, profile.ssh?.user ?? '', profile.ssh?.privateKeyPath ?? '', profile.ssh?.hostFingerprint ?? '',
     profile.tls?.enabled ?? false, profile.tls?.rejectUnauthorized ?? true, profile.tls?.caPath ?? '', profile.tls?.certPath ?? '', profile.tls?.keyPath ?? ''];
 }

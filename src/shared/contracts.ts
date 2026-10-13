@@ -1,6 +1,7 @@
 /** 所有跨进程数据均为可结构化克隆的普通值，精确数值由驱动保留为字符串。 */
 import type { QueryParameter, QueryParameterNames } from './queryParameters';
 import type { QueryExportProgress, QueryStreamExportInput, QueryStreamExportOutput } from './queryStreamExport';
+import type { ConnectionFileRequirement, ConnectionImportApply, ConnectionImportPreview, ConnectionImportResult } from './connectionTransfer';
 import type { TablePreferenceTarget, TablePreferences } from './tablePreferences';
 export type CellValue = string | number | boolean | null | { type: 'binary'; base64: string };
 export type DataRow = Record<string, CellValue>;
@@ -9,6 +10,7 @@ export type ObjectKind = 'table' | 'view' | 'procedure' | 'function' | 'trigger'
 export interface ConnectionProfile {
   id: string; name: string; group: string; color: string; dialect: 'mysql' | 'mariadb';
   host: string; port: number; user: string; database?: string;
+  pendingFiles?: ConnectionFileRequirement[];
   password?: string; rememberPassword?: boolean; hasPassword?: boolean;
   ssh?: { enabled: boolean; host: string; port: number; user: string; password?: string; hasPassword?: boolean; privateKeyPath?: string; passphrase?: string; hasPassphrase?: boolean; hostFingerprint?: string };
   tls?: { enabled: boolean; rejectUnauthorized: boolean; caPath?: string; certPath?: string; keyPath?: string };
@@ -53,6 +55,9 @@ export interface CommandMap {
   'table.preferences.reset': { input: TablePreferenceTarget; output: void };
   'app.info': { input: Record<string, never>; output: { version: string; platform: string; encryptionAvailable: boolean; dataPath: string } };
   'app.setDirty': { input: { dirty: boolean }; output: void };
+  'connections.export': { input: { connectionIds: string[]; fileToken: string }; output: { count: number } };
+  'connections.importPreview': { input: { fileToken: string }; output: ConnectionImportPreview };
+  'connections.importApply': { input: ConnectionImportApply; output: ConnectionImportResult };
   'connections.list': { input: Record<string, never>; output: ConnectionProfile[] };
   'connections.save': { input: ConnectionProfile; output: ConnectionProfile };
   'connections.delete': { input: { id: string }; output: void };
@@ -80,7 +85,7 @@ export interface CommandMap {
   'table.apply': { input: { connectionId: string; database: string; table: string; changes: RowChange[]; taskId: string }; output: { affectedRows: number } };
   'schema.preview': { input: { connectionId: string; design: TableDesign }; output: SqlPreview };
   'schema.apply': { input: { connectionId: string; database: string; sql: string; taskId: string }; output: QueryOutcome };
-  'files.choose': { input: { purpose: 'import' | 'export' | 'key' | 'certificate' | 'query'; format?: string; suggestedName?: string }; output: FileChoice | null };
+  'files.choose': { input: { purpose: 'import' | 'export' | 'key' | 'certificate' | 'query' | 'connection-import' | 'connection-export'; format?: string; suggestedName?: string }; output: FileChoice | null };
   'files.path': { input: { token: string }; output: string };
   'files.readQuery': { input: { fileToken: string; encoding: QueryFileEncoding }; output: { sql: string; encoding: QueryFileEncoding } };
   'files.writeQuery': { input: { fileToken: string; encoding: QueryFileEncoding; sql: string }; output: void };

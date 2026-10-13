@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { connectionFileRequirements, connectionImportApplySchema, connectionTransferLimits } from './connectionTransfer';
 import type { Command, ResultExportData } from './contracts';
 import { validateResultExportData } from './resultExport';
 import { FILTER_LIMITS, validateFilterRules } from './filtering';
@@ -36,7 +37,7 @@ function ownRecord<T>(valueSchema: z.ZodType<T>, label: string) { return z.unkno
 }); }
 const row = ownRecord(cell, '数据行');
 const ssh = z.object({ enabled: z.boolean(), host: z.string().max(512), port, user: z.string().max(256), password: z.string().optional(), hasPassword: z.boolean().optional(), privateKeyPath: z.string().optional(), passphrase: z.string().optional(), hasPassphrase: z.boolean().optional(), hostFingerprint: z.string().optional() }).strict();
-export const connectionSchema = z.object({ id: z.string().max(200), name, group: z.string().max(100), color: z.string().regex(/^#[0-9a-fA-F]{6}$/), dialect: z.enum(['mysql','mariadb']), host: z.string().min(1).max(512), port, user: z.string().max(256), database: z.string().max(256).optional(), password: z.string().optional(), rememberPassword: z.boolean().optional(), hasPassword: z.boolean().optional(), ssh: ssh.optional(), tls: z.object({ enabled: z.boolean(), rejectUnauthorized: z.boolean(), caPath: z.string().optional(), certPath: z.string().optional(), keyPath: z.string().optional() }).strict().optional() }).strict();
+export const connectionSchema = z.object({ id: z.string().max(200), name, group: z.string().max(100), color: z.string().regex(/^#[0-9a-fA-F]{6}$/), dialect: z.enum(['mysql','mariadb']), host: z.string().min(1).max(512), port, user: z.string().max(256), database: z.string().max(256).optional(), pendingFiles: z.array(z.enum(connectionFileRequirements)).max(4).optional(), password: z.string().optional(), rememberPassword: z.boolean().optional(), hasPassword: z.boolean().optional(), ssh: ssh.optional(), tls: z.object({ enabled: z.boolean(), rejectUnauthorized: z.boolean(), caPath: z.string().optional(), certPath: z.string().optional(), keyPath: z.string().optional() }).strict().optional() }).strict();
 const target = { connectionId: id, database: name, table: name };
 const changes = z.array(z.discriminatedUnion('kind', [z.object({ kind: z.literal('insert'), values: row }).strict(), z.object({ kind: z.literal('update'), before: row, values: row }).strict(), z.object({ kind: z.literal('delete'), before: row }).strict()])).min(1).max(5000);
 /** IPC 允许当前两类驱动的最大尺度；实际执行还须按绑定会话的能力再校验。 */
@@ -63,6 +64,9 @@ export const commandSchemas: Record<Command, z.ZodType> = {
   'table.preferences.get': tablePreferenceTargetSchema, 'table.preferences.save': tablePreferenceSaveSchema, 'table.preferences.reset': tablePreferenceTargetSchema,
   'app.info': empty,
   'app.setDirty': z.object({ dirty: z.boolean() }).strict(),
+  'connections.export': z.object({ connectionIds: z.array(id).min(1).max(connectionTransferLimits.connections), fileToken: id }).strict(),
+  'connections.importPreview': z.object({ fileToken: id }).strict(),
+  'connections.importApply': connectionImportApplySchema,
   'connections.list': empty, 'connections.save': connectionSchema, 'connections.test': connectionSchema,
   'connections.delete': z.object({ id }).strict(), 'connections.open': z.object({ id }).strict(), 'connections.close': z.object({ id }).strict(),
   'metadata.databases': z.object({ connectionId: id }).strict(),
@@ -88,7 +92,7 @@ export const commandSchemas: Record<Command, z.ZodType> = {
   'table.preview': z.object({ ...target, changes }).strict(), 'table.apply': z.object({ ...target, changes, taskId: id }).strict(),
   'schema.preview': z.object({ connectionId: id, design: z.object({ database: name, name, originalName: name.optional(), engine: name, charset: name, comment: z.string(), columns: z.array(z.object({ name, originalName: name.optional(), type: name, nullable: z.boolean(), defaultValue: z.string().nullable().optional(), autoIncrement: z.boolean(), comment: z.string() }).strict()).min(1).max(1000), indexes: z.array(index), foreignKeys: z.array(foreignKey) }).strict() }).strict(),
   'schema.apply': z.object({ connectionId: id, database: z.string().max(256), sql: text.min(1), taskId: id }).strict(),
-  'files.choose': z.object({ purpose: z.enum(['import','export','key','certificate','query']), format: z.string().optional(), suggestedName: z.string().optional() }).strict(),
+  'files.choose': z.object({ purpose: z.enum(['import','export','key','certificate','query','connection-import','connection-export']), format: z.string().optional(), suggestedName: z.string().optional() }).strict(),
   'files.path': z.object({ token: id }).strict(),
   'files.readQuery': z.object({ fileToken: id, encoding: z.enum(['utf8','utf16le','gb18030']) }).strict(),
   'files.writeQuery': z.object({ fileToken: id, encoding: z.enum(['utf8','utf16le','gb18030']), sql: text }).strict(),
