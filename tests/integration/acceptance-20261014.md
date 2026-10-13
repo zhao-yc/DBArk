@@ -72,7 +72,7 @@ MySQL 8.4 复用服务器已有官方镜像；MariaDB 11.4 从官方标签下载
 
 ## 资源与清理状态
 
-截至本记录初稿，以下五个隔离容器有意保留，等待最终桌面验收后统一清理；它们使用 `com.dbark.development=01a13412` 标签和 `dbark-development-01a13412` 专用网络。
+公开 v0.2.0 Windows 安装包完成 12/12 项实库桌面验收并卸载后，以下五个隔离容器已于 2026-10-14 全部定向删除。它们原使用 `com.dbark.development=01a13412` 标签和 `dbark-development-01a13412` 专用网络；下表保留用于追溯。
 
 | 容器 | 测试端口 | 镜像 |
 | --- | ---: | --- |
@@ -82,6 +82,12 @@ MySQL 8.4 复用服务器已有官方镜像；MariaDB 11.4 从官方标签下载
 | `dbark-development-maria1011-01a13412` | 13310 | `dbark-development-maria1011:01a13412` |
 | `dbark-development-maria114-01a13412` | 13311 | `mariadb:11.4` |
 
-每个容器限制 768 MiB 内存、1.5 CPU、128 MiB InnoDB buffer pool，并关闭 performance schema。测试使用随机 `dbark_test_*` 库，完成后自动删除；已实际核对五个实例的引擎测试库及 `dbark_limit_*` 临时只读账号残留均为 **0**。Electron 使用独立 `dbark_e2e_*` 库，由其夹具负责清理。
+每个容器原限制 768 MiB 内存、1.5 CPU、128 MiB InnoDB buffer pool，并关闭 performance schema。销毁前只读核对五个实例的 `dbark_test_*` / `dbark_e2e_*` 随机库和 `dbark_limit_*` 临时只读账号，残留均为 **0**。
 
-远端上传的三个镜像包、临时凭据及启动脚本目录均已删除。本轮复用已按项目备份的随机测试凭据，没有产生新的需保留密钥或证书；已有 TLS 材料只用于隔离验收，不得用于生产。业务容器未作变更，检查时原有运行中服务仍运行，带健康检查的数据库、Redis 与存储服务显示 healthy；原先已退出的恢复容器保持退出状态。共享 `mysql:8.4` 镜像不得在清理时删除。
+清理逐条核对实际主机、IP 和 Unix socket，并检查精确容器名、项目标签及网络成员。通过 inspect 找到五个关联匿名数据卷，确认无业务容器引用后删除；五个容器、五个匿名卷及专用网络全部移除。三个项目专用镜像标签 `dbark-development-mysql57:01a13412`、`dbark-development-mysql80:01a13412`、`dbark-development-maria1011:01a13412` 经引用检查后删除。共享 `mysql:8.4` 镜像保留，`mariadb:11.4` 作为缓存保留。
+
+再次核对，本轮项目容器、关联卷、带该标签的网络以及五个测试端口残留均为 **0**。业务容器的 ID、运行状态、PID、启动时间和健康状态在清理前后完全一致；运行中的数据库、Redis 与存储服务仍为 healthy，原先已退出的恢复容器保持原状态。
+
+远端上传的三个镜像包、临时凭据及启动脚本目录均已删除。本轮复用已按项目备份的随机测试凭据，没有产生新的需保留密钥或证书。本机被忽略的 env/TLS 材料及 E 盘备份继续保留，仅用于将来重建隔离测试和追溯；已有证书和私钥不得用于生产。备份中文用途说明已补记本轮清理状态。
+
+不含秘密的本机清理证据位于 Git 忽略路径 `.cache/development-cleanup-20261014-databases.log`（销毁前五实例零残留检查）和 `.cache/development-cleanup-20261014.log`（删除资源清单、业务状态对比及销毁后零残留检查）。本轮服务器临时测试资源已全部清理完成。

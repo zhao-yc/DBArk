@@ -12,9 +12,17 @@ Windows 源码桌面最终综合回归 **12/12 全部通过，88.171 秒**，无
 
 本机新 NSIS 实际安装后 **12/12 全部通过，88.405 秒**，无跳过或重试，实际包 137445041 字节，SHA256 为 `51d16fcf0c388f98f57bada3cfc37b0151d618f80d03d43e60deccbf6b863fbb`。已真实卸载，安装注册、项目进程、随机测试库均为零，临时安装目录已删除。此校验值只标识本机构建，不能冒充公开 CI 文件摘要。
 
-本机证据保存在被忽略的 `.cache/e2e-v0.2-final-results.json`、`.cache/e2e-v0.2-final.log`、`.cache/local-v0.2.0-install-validation.json` 及对应截图目录，原失败证据另存，没有覆写成通过。原生 CI 和公开产物校验在对应流程结束后补充，不能用本机包替代公开下载验证。
+本机证据保存在被忽略的 `.cache/e2e-v0.2-final-results.json`、`.cache/e2e-v0.2-final.log`、`.cache/local-v0.2.0-install-validation.json` 及对应截图目录，原失败证据另存，没有覆写成通过。
+
+[0.2.0 标签工作流](https://github.com/zhao-yc/DBArk/actions/runs/38432283941) 的类型/单元、Windows x64、macOS x64、macOS arm64 及发布五个任务全部成功，无重跑。Windows 原生源码离线 7 项和实际 NSIS 安装离线 7 项通过；两个 Mac 架构各自源码离线 7 项及 DMG 只读挂载、复制安装后的离线 7 项通过。各平台实际进入系统加密分支并清理安装测试资源；每个平台的 5 项内网实库测试明确跳过，不计为通过。
+
+[公开 v0.2.0](https://github.com/zhao-yc/DBArk/releases/tag/v0.2.0) 的全部 11 个自定义附件已独立下载，与 `SHA256SUMS.txt` 及 GitHub 资产摘要双重比对通过。公开源码 ZIP 为 617483 字节，SHA256 `10189cdf755ea4c7150c9c424b7a945080593bf603102974eaf6f26437411f47`；131 个条目含版本 0.2.0、MIT 和中文指南，没有缓存、工具、私有分析、凭据、证书或数据库文件。
+
+**公开 Windows NSIS 真实安装后 12/12 全部通过，84.754 秒**，无跳过、重试或不稳定项，包含 7 项离线和 5 项 MySQL 8.4 实库。实际公开文件为 137361950 字节，SHA256 `f5de463589fbf0d3a09539724574535f5de44f45d6b21421bb2544c3a4ccb45e`，没有用本机重建包替代。百万行第 1000 页末行和三个阶段 22 个 DOM 行再次核对成功。真实卸载后项目进程、安装注册及随机测试库残留为零，临时目录已删除。独立证据为 `.cache/published-v0.2.0-install-validation{.json,.log,-results.json}`、`.cache/published-v0.2.0-postcleanup.json`、`.cache/published-v0.2.0-database-cleanup.json` 及截图；附件和源码检查记录为 `.cache/public-assets-v0.2.0.json`、`.cache/public-source-v0.2.0-audit.json`。
 
 本轮未重跑 SSH/TLS 与百万行引擎 CSV 导出，沿用下文 0.1.x 的独立证据，不并入本轮数量。原复杂结构限制、DDL 隐式提交、无可靠键只读及流式结果预算继续适用；同名外键分步变更若第二步失败/取消须恢复原约束，不能承诺原子修改。
+
+公开安装验收结束后，200 上五个本轮隔离容器、五个关联匿名卷和一个专用网络已定向清理，三个项目镜像标签已删除；共享 `mysql:8.4` 和 `mariadb:11.4` 缓存保留。项目资源及五个测试端口残留为零，业务容器的状态、PID、启动时间和健康状态前后完全一致。E 盘中文备份说明已补记清理结果，已有测试 env/TLS 材料仅用于重建隔离验收。资源清单和检查方式见 [本轮实库记录](../tests/integration/acceptance-20261014.md)。
 
 ## 0.1.x 应用与安装包
 
@@ -84,4 +92,4 @@ Windows 开发测试机曾遇到 Chromium AppContainer 对项目运行时目录�
 
 Windows 未发行签名；macOS 仅 ad-hoc 签名，没有 Developer ID 与公证。首版手动安装升级。macOS 已在对应原生架构的 GitHub 构建机验证应用，未在用户实体 Mac 上检查 Gatekeeper 首次安装交互，也没有从 macOS 构建机连接内网测试数据库。连接/编辑/导入导出的真实界面验收目前来自 Windows。
 
-服务器网页、同步、备份恢复、权限管理、计划任务和建模属于后续里程碑。现有复杂表结构通过 SQL 定义编辑，不能把简化表设计器当作任意 DDL 的无损编辑器。
+服务器网页版未纳入桌面交付。同步、备份恢复、权限管理、计划任务、建模及其它驱动属于已授权的全功能持续目标，按 [覆盖清单](navicat-coverage.md) 分批实现和验收。现有复杂表结构通过 SQL 定义编辑，不能把简化表设计器当作任意 DDL 的无损编辑器。
