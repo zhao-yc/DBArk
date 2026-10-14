@@ -1,6 +1,6 @@
 /** 只读记录投影的中文文案；协议中的类型标签保持原样，产品解释集中在此。 */
 export const recordProjectionZh = {
-  mode: '记录展示方式', form: '表单', tree: '只读树', json: '整行 JSON',
+  mode: '记录展示方式', form: '表单', tree: '记录树', json: '整行 JSON',
   readonly: '当前页草稿的只读投影；未暂存输入不会出现在此处。查看、切换和展开不会读取或提交数据库。',
   jsonHint: '完整元数据字段按原顺序保留，包含隐藏字段；字符串、大数、JSON 原文和二进制均带类型标签。这是只读展示格式，不是可导入或可恢复格式。',
   jsonText: '类型化整行 JSON（只读）', jsonBytes: '已生成 {0} 字节的完整投影。可选择文本复制；没有写回或导入入口。',
@@ -13,7 +13,7 @@ export const recordProjectionZh = {
   parse: '展开 JSON 结构', parseExplicit: '按 JSON 查看此字符串', closeTree: '收起 JSON 结构',
   jsonSource: '结构来自客户端实际收到的原文。服务器可能已规范化 JSON；这里不能恢复服务器已丢弃的重复成员或格式。',
   invalid: '原文不是有效 JSON；未显示部分结构', lexicalLimited: '原文超过词法解析预算；未显示部分结构',
-  failureAt: '原文偏移 {0}：{1}', lexicalTree: 'JSON 有序结构（只读）',
+  failureAt: '原文偏移 {0}：{1}', lexicalTree: 'JSON 有序结构',
   nodeRange: '可见节点 {0}–{1} / {2}；单屏最多 480 个结构节点', nodePrevious: '上一段节点', nodeNext: '下一段节点',
   root: '根值', member: '成员 #{0}', element: '元素 [{0}]', containerCount: '{0} 项', expand: '展开此节点', collapse: '收起此节点', inspect: '查看原始 token 与路径',
   ordered: '成员按原文顺序编号；同名成员分别保留。路径按成员序号或数组下标定位，不按点号拆分列名。',

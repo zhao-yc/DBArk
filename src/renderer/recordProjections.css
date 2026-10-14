@@ -16,3 +16,12 @@
 .record-token-detail label { display: block; font-size: 11px; margin-top: 10px; }
 .record-token-detail textarea { display: block; width: 100%; min-height: 100px; resize: vertical; font-family: var(--font-mono, monospace); font-size: 11px; }
 .record-lexical-section { border-top: 1px solid var(--line); padding-top: 8px; }
+.record-projection-workspace { display: flex; flex-direction: column; flex: 1; min-height: 0; overflow: auto; }
+.record-form-panel > header, .record-form-panel > nav, .record-form-panel > footer, .record-form-panel > .record-display-modes { flex-shrink: 0; }
+.record-node-input { border-top: 1px solid var(--line); padding-top: 8px; flex: 1 1 55%; min-height: 160px; overflow: auto; }
+.record-node-input header { display: flex; justify-content: space-between; gap: 8px; align-items: center; }
+.record-node-input h3 { margin: 0; font-size: 12px; }
+.record-node-input p, .record-node-input label { font-size: 11px; line-height: 1.6; }
+.record-node-input label { display: block; margin-top: 8px; }
+.record-node-input textarea { display: block; width: 100%; min-height: 60px; resize: vertical; font-family: var(--font-mono, monospace); font-size: 11px; }
+.record-node-input textarea:not([readonly]) { min-height: 120px; }
