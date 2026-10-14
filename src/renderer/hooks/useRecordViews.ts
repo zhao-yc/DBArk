@@ -135,8 +135,9 @@ export function useRecordViews(options: Options) {
     if (isDirty) return;
     const row = latest.current.getRows().find(item => item.id === current.rowId);
     if(!row){replace(null);return;}
-    // 删除撤销、相同值的新引用及元数据修订均重建捕获身份，旧textarea事件不能重新生效。
-    let identityChanged=false;try{if(bufferRef.current?.kind==='document')assertRecordDocumentCurrent(latest.current.getRows(),bufferRef.current.input,latest.current.getContext());else assertRecordDraftCurrent(latest.current.getRows(),current,latest.current.getContext());}catch{identityChanged=true;}
+    // 普通字段沿用原引用跟随，删除时保留已展开的只读文本；整行额外失效整个行对象身份。
+    let identityChanged=row.data!==current.data||row.original!==current.original||row.inserted!==current.inserted;
+    if(bufferRef.current?.kind==='document')try{assertRecordDocumentCurrent(latest.current.getRows(),bufferRef.current.input,latest.current.getContext());}catch{identityChanged=true;}
     const needsDocument=modeRef.current==='input'&&bufferRef.current?.kind!=='document'&&!recordReadonlyReason(latest.current.getContext(),row);
     if(identityChanged||needsDocument){setError('');setFocusKey(null);replace(beginRecordDraft(row,latest.current.getContext()));}
   }, [options.rows, context.info]);
