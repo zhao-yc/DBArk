@@ -21,7 +21,48 @@ export interface ManagedConnection {
   /** 独立只读任务可在建连、元数据和读取阶段取消整个连接。 */
   signal?: AbortSignal;
   /** 结束数据库会话并释放附属 SSH 隧道，可以重复调用。 */
-  close(): Promise<void>;
+  close(options?: { strict?: boolean }): Promise<void>;
+}
+
+/** 严格结构任务观察 QUIT 写入/本地流关闭；COM_QUIT 没有服务器 ACK，不据此证明 DDL 结果。 */
+export async function closeMysqlConnection(connection: Connection, strict: boolean, alreadyBroken = false, timeoutMs = 1000): Promise<void> {
+  const stream = (connection as unknown as { stream?: { closed?: boolean; incoming?: { state?: string }; outgoing?: { state?: string }; once(name: string, fn: () => void): unknown; removeListener(name: string, fn: () => void): unknown; destroy(): void; end(callback?: (error?: Error) => void): void; close?(): void } }).stream;
+  let failure: Error | undefined;
+  await new Promise<void>(resolve => {
+    // ssh2 Channel 的 closed 属性不随手工 close 事件变化；双方协议状态可证明此前已关闭，不能把 EOF 当 CLOSE。
+    let settled = false, endReturned = alreadyBroken, writableFlushed = alreadyBroken, transportClosed = stream?.closed === true || (typeof stream?.close === 'function' && stream.incoming?.state === 'closed' && stream.outgoing?.state === 'closed');
+    const finish = (): void => { if (settled) return; settled = true; clearTimeout(timer); stream?.removeListener('close', onClose); resolve(); };
+    const checkFinished = (): void => { if (!strict || !stream || ((failure || (endReturned && writableFlushed)) && transportClosed)) finish(); };
+    const onClose = (): void => { transportClosed = true; checkFinished(); };
+    const destroyLocal = (): void => { connection.destroy(); stream?.destroy(); };
+    const timer = setTimeout(() => { failure = new Error('数据库连接关闭超时，本地流已强制关闭，请核对服务器状态'); destroyLocal(); finish(); }, timeoutMs);
+    timer.unref();
+    if (strict) stream?.once('close', onClose);
+    if (alreadyBroken) {
+      destroyLocal();
+      checkFinished();
+      return;
+    }
+    try {
+      connection.end(error => {
+        endReturned = true;
+        if (error) { failure = new Error('数据库连接正常退出失败，本地流已强制关闭，请核对服务器状态', { cause: error }); destroyLocal(); }
+        checkFinished();
+        if (strict && !error && stream && !settled) {
+          // mysql2 QUIT 回调早于 writePacket，必须等本次同步写入结束才结束流；ssh2 半开 channel 还须在写队列完成后显式 CLOSE。
+          queueMicrotask(() => {
+            if (settled) return;
+            try { stream.end(error => {
+              try { if (error) throw error; writableFlushed = true; stream.close?.(); checkFinished(); }
+              catch (error) { failure = new Error('数据库退出传输写入或关闭失败，本地流已强制关闭', { cause: error }); destroyLocal(); checkFinished(); }
+            }); }
+            catch (error) { failure = new Error('数据库退出传输关闭失败，本地流已强制关闭', { cause: error }); destroyLocal(); checkFinished(); }
+          });
+        }
+      });
+    } catch (error) { failure = new Error('数据库连接退出发生异常，本地流已强制关闭', { cause: error }); destroyLocal(); checkFinished(); }
+  });
+  if (strict && failure) throw failure;
 }
 
 /** 观察协议包并更新缓存，绝不为诊断或事务状态额外执行 SELECT/DO。 */
@@ -87,6 +128,7 @@ export function execute<T = Record<string, unknown>[]>(managed: ManagedConnectio
 export async function connect(profile: ConnectionProfile, database = profile.database, signal?: AbortSignal): Promise<ManagedConnection> {
   assertConnectionReady(profile);
   let ssh: SshClient | undefined;
+  let sshClosed = false;
   let stream: ClientChannel | undefined;
   let connection: Connection | undefined;
   const cancelled = () => { if (signal?.aborted) throw new Error('任务已取消'); };
@@ -111,6 +153,7 @@ export async function connect(profile: ConnectionProfile, database = profile.dat
       if (!profile.ssh.hostFingerprint) throw new Error('SSH 连接必须填写服务器 SHA256 主机指纹');
       const config = profile.ssh;
       ssh = new SshClient();
+      ssh.once('close', () => { sshClosed = true; });
       const client = ssh;
       const privateKey = config.privateKeyPath ? await readFile(config.privateKeyPath, { signal }) : undefined;
       cancelled();
@@ -146,19 +189,29 @@ export async function connect(profile: ConnectionProfile, database = profile.dat
     connection = mysql.createConnection(options);
     const active = connection;
     await stage<void>(done => active.connect(error => done(error)));
-    let closed = false;
+    let closePending: Promise<void> | undefined;
     const managed: ManagedConnection = {
       connection: active, profile, status: { version: '', dialect: profile.dialect, connectionId: active.threadId }, broken: false, signal,
       /** 优先发送正常退出；连接已卡死时限时销毁，防止退出流程永久等待。 */
-      async close() {
-        if (closed) return;
-        closed = true;
-        await new Promise<void>(resolve => {
-          const timeout = setTimeout(() => { active.destroy(); resolve(); }, 1000);
-          timeout.unref();
-          try { active.end(() => { clearTimeout(timeout); resolve(); }); } catch { clearTimeout(timeout); active.destroy(); resolve(); }
-        });
-        stream?.destroy(); ssh?.end(); signal?.removeEventListener('abort', destroy);
+      async close(options = {}) {
+        if (!closePending) closePending = (async () => {
+          let failure: unknown;
+          try { await closeMysqlConnection(active, Boolean(options.strict), managed.broken || Boolean(signal?.aborted)); } catch (error) { failure = error; }
+          finally {
+            stream?.destroy();
+            if (options.strict && ssh && !sshClosed) {
+              const client = ssh;
+              await new Promise<void>(resolve => {
+                const done = (): void => { clearTimeout(timer); client.removeListener('close', done); resolve(); };
+                const timer = setTimeout(() => { failure ??= new Error('SSH 隧道关闭超时，已强制释放本地传输'); client.destroy(); done(); }, 1000);
+                timer.unref(); client.once('close', done); client.end();
+              });
+            } else ssh?.end();
+            signal?.removeEventListener('abort', destroy);
+          }
+          if (failure) throw failure;
+        })();
+        return closePending;
       }
     };
     active.on('error', () => { managed.broken = true; });

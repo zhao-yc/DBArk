@@ -15,6 +15,7 @@ import { readQueryFile, writeQueryFile } from './queryFiles';
 import { validateCommand } from '../shared/validation';
 import type { Command, ConnectionProfile, HistoryEntry, QueryFileEncoding, TaskEvent, TaskRecord } from '../shared/contracts';
 import type { QueryExportProgress } from '../shared/queryStreamExport';
+import type { TableColumnApplyProgress } from '../shared/tableColumnPatches';
 
 if (process.env.DBARK_USER_DATA) { mkdirSync(process.env.DBARK_USER_DATA, { recursive: true }); app.setPath('userData', process.env.DBARK_USER_DATA); }
 app.setName('DBArk');
@@ -35,6 +36,8 @@ const queryFileOperations = new Set<Promise<unknown>>();
 const exportReservations = new ExportReservations();
 const preparingTasks = new Map<string, { cancelled: boolean; failure?: string }>();
 const exportProgress = new Map<string, QueryExportProgress>();
+const columnProgress = new Map<string, TableColumnApplyProgress>();
+const columnTokens = new Map<string, { connectionId: string; expires: number; kind: 'snapshot' | 'preview'; snapshotId?: string }>();
 const tasks = new Map<string, TaskRecord>();
 const lastPersist = new Map<string, number>();
 const rendererURL = process.env.DBARK_DEV_URL ?? pathToFileURL(join(__dirname, '../renderer/index.html')).href;
@@ -53,6 +56,7 @@ function persistAuxiliary(action: () => void): void {
 /** 任务进度只保留概要；分批结果直接传输，不把整批数据写入配置库。 */
 function taskEvent(event: TaskEvent): void {
   if (event.queryExport) exportProgress.set(event.taskId, { ...event.queryExport });
+  if (event.columnPatch) columnProgress.set(event.taskId, { ...event.columnPatch });
   const current = tasks.get(event.taskId);
   if (current) {
     // 服务器错误可能回显已绑定值；参数查询的失败细节仅送给当前界面，不写入磁盘任务记录。
@@ -98,7 +102,13 @@ async function writeSelectedQuery(input: { fileToken: string; sql: string; encod
 
 /** 分派前检查配置保存锁，防止检查通过后另一个请求用旧凭据抢先建连。 */
 async function dispatch(command: Command, input: any): Promise<unknown> {
-  connectionConfig.assertAvailable(input.connectionId ?? sessions.get(input.sessionId)?.connectionId ?? (command.startsWith('connections.') ? input.id : undefined));
+  const columnCommand = command.startsWith('schema.columns.');
+  for (const [token, value] of columnTokens) if (value.expires <= Date.now()) columnTokens.delete(token);
+  const columnToken = command === 'schema.columns.preview' ? columnTokens.get(input.snapshotId) : command === 'schema.columns.apply' ? columnTokens.get(input.previewToken) : undefined;
+  if ((command === 'schema.columns.preview' && columnToken?.kind !== 'snapshot') || (command === 'schema.columns.apply' && columnToken?.kind !== 'preview')) throw new Error('结构快照或预览已失效，请重新读取；未发送 DDL');
+  const requestConnectionId = columnToken?.connectionId ?? input.connectionId ?? sessions.get(input.sessionId)?.connectionId ?? (command.startsWith('connections.') ? input.id : undefined);
+  if (columnCommand && shuttingDown) throw new Error('客户端正在退出，不能开始结构操作');
+  connectionConfig.assertAvailable(requestConnectionId);
   switch (command) {
     case 'query.cancel': {
       const preparing = preparingTasks.get(input.taskId);
@@ -123,7 +133,10 @@ async function dispatch(command: Command, input: any): Promise<unknown> {
       input = { ...input, pendingFiles: [...new Set([...previous?.pendingFiles ?? [], ...input.pendingFiles ?? []])] };
       assertConnectionReady(input); input = store.resolveConnection(input.id, input as ConnectionProfile); break;
     }
-    case 'connections.close': for (const [id, session] of sessions) if (session.connectionId === input.id) sessions.delete(id); break;
+    case 'connections.close':
+      for (const [id, session] of sessions) if (session.connectionId === input.id) sessions.delete(id);
+      for (const [token, value] of columnTokens) if (value.connectionId === input.id) columnTokens.delete(token);
+      break;
     case 'table.preferences.get': return store.tablePreferences(input);
     case 'table.preferences.save': return store.saveTablePreferences(input);
     case 'table.preferences.reset': return store.resetTablePreferences(input);
@@ -172,10 +185,21 @@ async function dispatch(command: Command, input: any): Promise<unknown> {
     if (preparing.failure) throw new Error(preparing.failure);
     // 文件路径归一化期间的取消在主进程捕获，不能丢失后继续发送用户 SQL。
     if (preparing.cancelled) throw new Error('任务在准备阶段已取消，尚未发送用户 SQL；原目标文件保持不变');
-    connectionConfig.assertAvailable(input.connectionId ?? sessions.get(input.sessionId)?.connectionId);
+    connectionConfig.assertAvailable(requestConnectionId);
+    // 令牌目标只来自可信引擎输出；修订在投递前同步读取，客户端不能注入或覆盖。
+    if (columnCommand && command !== 'schema.columns.release') input = { ...input, connectionRevision: store.connectionRevision() };
     if (taskId) preparingTasks.delete(taskId);
     sentToEngine = true;
     const result = await broker.request(command, input);
+    if (command === 'schema.columns.get' || command === 'schema.columns.preview') {
+      if (columnTokens.size >= 128) throw new Error('结构令牌缓存已达上限，请关闭旧预览后重试');
+      const token = command === 'schema.columns.get' ? result.snapshotId : result.previewToken;
+      columnTokens.set(token, { connectionId: result.target.connectionId, expires: Date.parse(result.expiresAt), kind: command === 'schema.columns.get' ? 'snapshot' : 'preview', ...(command === 'schema.columns.preview' ? { snapshotId: input.snapshotId } : {}) });
+    }
+    if (command === 'schema.columns.release') {
+      if (input.snapshotId) for (const [token, value] of columnTokens) if (token === input.snapshotId || value.snapshotId === input.snapshotId) columnTokens.delete(token);
+      if (input.previewToken) columnTokens.delete(input.previewToken);
+    }
     if (command === 'sessions.open') sessions.set(result.sessionId, { connectionId: input.connectionId, database: input.database });
     if (command === 'sessions.close') sessions.delete(input.sessionId);
     if (taskId && tasks.get(taskId)?.status === 'running') taskEvent({ taskId, status: 'completed', progress: 100, message: '执行完成' });
@@ -183,10 +207,10 @@ async function dispatch(command: Command, input: any): Promise<unknown> {
     return result;
   } catch (error) {
     const message = error instanceof Error ? error.message : '操作失败';
-    if (taskId && tasks.get(taskId)?.status === 'running') taskEvent({ taskId, status: preparing.cancelled ? 'cancelled' : 'failed', progress: 0, message, ...(command === 'query.exportStream' ? { queryExport: { phase: 'preparing' as const, statementsCompleted: 0, rowsWritten: 0, bytesWritten: 0, fileCommitted: false, ...exportProgress.get(taskId), sqlMayHaveExecuted: sentToEngine, transactionKnown: false } } : {}) });
+    if (taskId && tasks.get(taskId)?.status === 'running') taskEvent({ taskId, status: preparing.cancelled ? 'cancelled' : 'failed', progress: 0, message, ...(columnCommand ? { columnPatch: { phase: 'connecting' as const, ddlSubmitted: sentToEngine && command === 'schema.columns.apply', ddlCompleted: false, definitionVerified: false, outcome: sentToEngine && command === 'schema.columns.apply' ? 'unknown' as const : 'not-sent' as const, ...columnProgress.get(taskId) } } : {}), ...(command === 'query.exportStream' ? { queryExport: { phase: 'preparing' as const, statementsCompleted: 0, rowsWritten: 0, bytesWritten: 0, fileCommitted: false, ...exportProgress.get(taskId), sqlMayHaveExecuted: sentToEngine, transactionKnown: false } } : {}) });
     if (history) persistAuxiliary(() => store.addHistory({ ...history, elapsedMs: Date.now() - start, error: persistedQueryError(command, message) }));
     throw error;
-  } finally { if (taskId) { preparingTasks.delete(taskId); exportProgress.delete(taskId); } releaseTarget?.(); }
+  } finally { if (command === 'schema.columns.apply') columnTokens.delete(input.previewToken); if (taskId) { preparingTasks.delete(taskId); exportProgress.delete(taskId); columnProgress.delete(taskId); } releaseTarget?.(); }
 }
 
 /** 按平台生成中文原生菜单，查询快捷键统一发送给当前工作区。 */
@@ -253,8 +277,15 @@ app.on('window-all-closed', () => app.quit());
 function engineExited(): void {
   for (const preparing of preparingTasks.values()) preparing.failure = '数据库进程已退出，准备任务已停止；尚未发送用户 SQL，原目标文件保持不变';
   sessions.clear();
+  columnTokens.clear();
   for (const task of tasks.values()) if (task.status === 'running') {
     const preparing = preparingTasks.has(task.id);
+    if (task.kind.startsWith('schema.columns.')) {
+      const last = columnProgress.get(task.id), possiblySent = !preparing && task.kind === 'schema.columns.apply';
+      const progress: TableColumnApplyProgress = { phase: last?.phase ?? 'connecting', ddlSubmitted: Boolean(last?.ddlSubmitted || possiblySent), ddlCompleted: last?.ddlCompleted ?? false, definitionVerified: last?.definitionVerified ?? false, outcome: last?.ddlCompleted ? 'succeeded' : possiblySent ? 'unknown' : 'not-sent' };
+      taskEvent({ taskId: task.id, status: 'failed', progress: task.progress, message: '数据库进程已退出，结构操作不会自动重放，请核对最新定义', columnPatch: progress });
+      continue;
+    }
     taskEvent({ taskId: task.id, status: 'failed', progress: task.progress, message: '数据库进程已退出，请核对操作结果并重新连接', ...(task.kind === 'query.exportStream' ? { queryExport: { phase: 'executing' as const, statementsCompleted: 0, rowsWritten: 0, bytesWritten: 0, fileCommitted: false, ...exportProgress.get(task.id), ...(preparing ? { phase: 'preparing' as const } : {}), sqlMayHaveExecuted: !preparing, transactionKnown: false } } : {}) });
   }
 }

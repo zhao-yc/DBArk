@@ -71,6 +71,10 @@ GitHub Actions 分别使用 Windows x64、macOS arm64 和 macOS Intel 构建机�
 
 ## 发布
 
+0.8 字段服务的单元覆盖定义解析、严格补丁预算、短连接与令牌、默认值保真边界、目录别名及真实传输退出。独立集成文件为 `engine-column-patches.integration.test.ts` 和 `engine-column-permissions.integration.test.ts`；后者会创建临时数据库用户并修改测试表级权限，必须有明确的测试资源授权，不能当作普通只读测试。现有夹具限定 200 专用实例，执行前核服务器身份，密码只在内存，每轮精确收尾并检查残留。
+
+桌面字段流程为 `tests/e2e/table-column-patches.spec.ts`，须先完成当前运行源码构建，显式启用实库并用 `DBARK_COLUMN_PATCH_TEST_PORT` 选择五个普通基线。使用真实 IPC、SQL 与独立观察连接，不替换服务返回；原生确认框仅用于回答本例交互。截图、结果和实际构建摘要分别保留，禁止覆盖失败记录或用未来源码验收旧安装包。完整当前证据见 [O01 产品验收](../tests/integration/acceptance-o01-columns-20261014.md)。
+
 普通提交只构建并上传附件。发布前更新 `package.json`、版本记录和 `docs/releases/v版本号.md`，核对实际验证记录，再推送同版本 `v*` 标签。工作流须通过类型检查、单元测试、三个原生平台的桌面及安装包验收，才会创建 GitHub 开发预览 Release。
 
 仅修改 Markdown/文档的分支推送不会重新构建全部客户端；代码、测试及工作流变化仍运行检查，版本标签推送始终执行完整发布验收。路径筛选行为见 [GitHub 官方工作流说明](https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax#onpushpull_requestpull_request_targetpathspaths-ignore)。

@@ -11,6 +11,9 @@ import { connect, execute, type ManagedConnection } from './connection';
 import * as metadata from './metadata';
 import { csvCell, csvHeader, encodingName, previewFile, readRecords, readText } from './files';
 import { ResultFileTasks } from './resultFileTasks';
+import { TableColumnPatchTasks, type ColumnTaskOptions, type ColumnTaskContext } from './tableColumnPatchTasks';
+import { parseTableColumnDefinition } from './tableColumnDefinition';
+import { assertStructureExportMode, assertTableStructureExportable } from '../shared/tableColumnPatches';
 import { createQueryStreamFile } from './queryStreamFile';
 import { consumeQueryFrames } from './queryStreamProtocol';
 import { queryExportWireProtocol, queryStreamExportLimits, type QueryExportProgress, type QueryExportResultSummary, type QueryStreamExportInput, type QueryStreamExportOutput } from '../shared/queryStreamExport';
@@ -23,7 +26,7 @@ interface RunningTask {
   queryExport?: QueryExportProgress; fileCommitStarted?: boolean;
 }
 interface ResultBudget { remainingRows: number; remainingBytes: number; remainingResults: number; }
-interface IndependentTask { connectionId: string; controller: AbortController; done: Promise<void>; managed?: ManagedConnection; cancelPending?: Promise<void>; cancelError?: Error; }
+interface IndependentTask { connectionId: string; controller: AbortController; done: Promise<void>; managed?: ManagedConnection; cancelPending?: Promise<void>; cancelError?: Error; cancelRequested?: boolean; actionCompleted?: boolean; columnTask?: boolean; generation?: number; commandTerminal?: Promise<void>; }
 type Input = Record<string, any>;
 
 /** 独立数据库进程的入口；网络连接与文件流不会进入 Electron 渲染进程。 */
@@ -36,8 +39,12 @@ export class Engine {
   private readonly connectionUses = new Map<string, number>();
   private readonly pendingUses = new Set<Promise<void>>();
   private readonly resultFiles: ResultFileTasks;
+  private readonly columnPatches: TableColumnPatchTasks;
   /** 注入任务事件出口，使引擎既能在 utility process 中运行，也能独立测试。 */
-  constructor(private readonly emit: (event: TaskEvent) => void = () => undefined) { this.resultFiles = new ResultFileTasks(emit); }
+  constructor(private readonly emit: (event: TaskEvent) => void = () => undefined) {
+    this.resultFiles = new ResultFileTasks(emit);
+    this.columnPatches = new TableColumnPatchTasks({ run: (connectionId, taskId, action, options) => this.withIndependentTask(connectionId, taskId, (managed, control) => action({ managed, ...control }), options) });
+  }
 
   /** 主进程只注入可信 profile/filePath；其他字段按共享接口处理。 */
   async handle(command: EngineCommand, input: Input): Promise<any> {
@@ -50,6 +57,7 @@ export class Engine {
         const changed = input.transportChanged || (previous && connectionTransportChanged(previous, next, { preserveMissingSecrets: false }));
         if (changed && (this.connectionUses.has(input.id) || [...this.sessions.values()].some(session => session.connectionId === input.id) || [...this.tasks.values()].some(task => task.managed.profile.id === input.id))) throw new Error('该连接仍有打开的会话或正在执行的操作，请先关闭相关标签页并等待任务完成，再修改地址或认证配置；现有任务未被取消');
         if (changed || !previous) this.profiles.delete(input.id);
+        this.columnPatches.release(input.id);
         return;
       }
       case 'connections.test': return this.withConnectionUse(input.id, async () => {
@@ -63,12 +71,14 @@ export class Engine {
         try { this.profiles.set(profile.id, profile); return managed.status; } finally { await managed.close(); }
       });
       case 'connections.close': {
+        this.columnPatches.release(input.id);
         const active = [...this.tasks.values()].filter(task => task.managed.profile.id === input.id);
         const independent = [...this.independentTasks].filter(([, task]) => task.connectionId === input.id);
         const cancellations = await Promise.allSettled([...active.map(task => this.cancelTask(task.id)), ...independent.map(([id]) => this.cancelTask(id))]);
         await Promise.all([...active.map(task => task.done), ...independent.map(([, task]) => task.done)]);
         for (const [id, session] of this.sessions) if (session.connectionId === input.id) { await session.managed.close(); this.sessions.delete(id); }
         this.profiles.delete(input.id);
+        this.columnPatches.release(input.id);
         const failed = cancellations.find(result => result.status === 'rejected'); if (failed?.status === 'rejected') throw failed.reason;
         return;
       }
@@ -157,6 +167,10 @@ export class Engine {
         return buildDesign(design, original, await this.noBackslashEscapes(managed));
       });
       case 'schema.apply': return this.withConnection(input.connectionId, managed => this.runTask(input.taskId, managed, '执行结构变更', task => this.queryScript(task, input.sql, 1000)), input.database);
+      case 'schema.columns.get': return this.columnPatches.get(input as any, input.connectionRevision);
+      case 'schema.columns.preview': return this.columnPatches.preview(input as any, input.connectionRevision);
+      case 'schema.columns.apply': return this.columnPatches.apply(input as any, input.connectionRevision);
+      case 'schema.columns.release': return this.columnPatches.releaseTokens(input);
       case 'files.preview': this.assertFile(input); return previewFile(input as { filePath: string; format: 'csv' | 'json'; encoding: string });
       case 'files.import': this.assertFile(input); return this.withConnection(input.connectionId, managed => this.runTask(input.taskId, managed, '导入文件', task => this.importFile(task, input)), input.database);
       case 'files.export': this.assertFile(input); return this.withConnection(input.connectionId, managed => this.runTask(input.taskId, managed, '导出文件', task => this.exportFile(task, input)), input.database);
@@ -172,6 +186,7 @@ export class Engine {
   /** 关闭前取消任务并释放固定会话，未提交事务由服务器在断开时回滚。 */
   async closeAll(): Promise<void> {
     this.closing = true;
+    this.columnPatches.release();
     const independent = [...this.independentTasks];
     const active = [...this.tasks.values()];
     const fileCleanup = this.resultFiles.closeAll();
@@ -182,6 +197,7 @@ export class Engine {
     await Promise.all([...this.pendingUses]);
     await Promise.all([...this.sessions.values()].map(session => session.managed.close()));
     this.sessions.clear(); this.profiles.clear();
+    this.columnPatches.release();
     const failed = cancellations.find(result => result.status === 'rejected'); if (failed?.status === 'rejected') throw failed.reason;
   }
 
@@ -210,32 +226,44 @@ export class Engine {
     finally { const remaining = (this.connectionUses.get(id) ?? 1) - 1; if (remaining) this.connectionUses.set(id, remaining); else this.connectionUses.delete(id); this.pendingUses.delete(done); finish(); }
   }
 
-  /** 外键读取从建连前登记，到连接收尾后才释放任务编号及连接配置锁。 */
-  private async withIndependentTask<T>(connectionId: string, taskId: string, action: (managed: ManagedConnection) => Promise<T>): Promise<T> {
+  /** 独立任务从建连前登记，到服务器及本地连接收尾后才释放编号和配置锁。 */
+  private async withIndependentTask<T>(connectionId: string, taskId: string, action: (managed: ManagedConnection, control: Omit<ColumnTaskContext, 'managed'>) => Promise<T>, options?: ColumnTaskOptions): Promise<T> {
     return this.withConnectionUse(connectionId, async () => {
       if (this.closing || !taskId || this.tasks.has(taskId) || this.independentTasks.has(taskId) || this.resultFiles.has(taskId)) throw new Error('任务编号为空或任务已在执行');
       const profile = this.profile(connectionId);
       const controller = new AbortController();
       let finish!: () => void;
       const done = new Promise<void>(resolve => { finish = resolve; });
-      const task: IndependentTask = { connectionId, controller, done };
+      const task: IndependentTask = { connectionId, controller, done, columnTask: Boolean(options), generation: 0 };
       this.independentTasks.set(taskId, task);
-      this.emit({ taskId, status: 'running', progress: 0, message: '读取关联记录' });
+      const label = options?.label ?? '读取关联记录';
+      const detail = () => options ? { columnPatch: { ...options.columnPatch } } : {};
+      const report = () => this.emit({ taskId, status: 'running', progress: 0, message: label, ...detail() });
+      const checkCancelled = () => { if (task.cancelRequested || controller.signal.aborted) throw new Error('任务已取消；已执行的结构或数据变更不会撤销'); };
+      const commandStarted = (): (() => void) => {
+        checkCancelled(); task.generation = (task.generation ?? 0) + 1;
+        let terminal!: () => void; task.commandTerminal = new Promise<void>(resolve => { terminal = resolve; }); return terminal;
+      };
+      report();
       let managed: ManagedConnection | undefined;
       let failure: unknown; let result!: T;
       try {
         managed = await connect(profile, undefined, controller.signal);
         task.managed = managed;
         if (controller.signal.aborted) throw new Error('任务已取消');
-        result = await action(managed);
+        result = await action(managed, { report, checkCancelled, commandStarted }); task.actionCompleted = true;
       } catch (error) { failure = error; }
       finally {
         try { await task.cancelPending; } catch (error) { failure = error; }
-        try { await managed?.close(); } catch (error) { failure ??= error; }
+        if (options && !failure) { options.columnPatch.phase = 'releasing'; report(); }
+        try { await managed?.close(options ? { strict: true } : undefined); } catch (error) { failure ??= error; }
         this.independentTasks.delete(taskId); finish();
       }
-      if (controller.signal.aborted) failure = task.cancelError ?? new Error('任务已取消');
-      this.emit({ taskId, status: task.cancelError ? 'failed' : controller.signal.aborted ? 'cancelled' : failure ? 'failed' : 'completed', progress: failure ? 0 : 100, message: failure ? this.errorMessage(failure) : '读取关联记录完成' });
+      if (controller.signal.aborted || task.cancelRequested) failure ??= task.cancelError ?? (options?.columnPatch.ddlCompleted ? undefined : new Error('任务已取消'));
+      if (task.cancelError) failure = task.cancelError;
+      const knownComplete = options?.columnPatch.ddlCompleted;
+      const status = task.cancelError ? 'failed' : failure ? ((controller.signal.aborted || task.cancelRequested) && !knownComplete ? 'cancelled' : 'failed') : 'completed';
+      this.emit({ taskId, status, progress: failure ? 0 : 100, message: failure ? (options ? `${label}未全部完成；${knownComplete ? 'DDL 已完成，不要重复执行，请核对最新定义及资源状态' : options.columnPatch.ddlSubmitted ? 'DDL 可能已执行，请核对最新定义；未自动重放' : '尚未发送 DDL'}` : this.errorMessage(failure)) : `${label}完成`, ...detail() });
       if (failure) throw failure;
       return result;
     });
@@ -380,21 +408,29 @@ export class Engine {
   private async cancelTask(id: string): Promise<void> {
     const independent = this.independentTasks.get(id);
     if (independent) {
+      if (independent.actionCompleted) { await independent.done; return; }
+      independent.cancelRequested = true;
       if (!independent.cancelPending) {
         const managed = independent.managed;
         if (!managed) independent.controller.abort();
         else independent.cancelPending = (async () => {
           let control: ManagedConnection | undefined;
           const threadId = managed.connection.threadId;
+          const generation = independent.generation, terminal = independent.commandTerminal;
           try {
             control = await connect(managed.profile);
-            if (this.independentTasks.get(id) !== independent || independent.managed !== managed || managed.connection.threadId !== threadId) throw new Error('关联任务连接已变化，不能发送取消命令');
-            if (!Number.isSafeInteger(threadId) || (threadId ?? 0) < 1) throw new Error('无法确认关联查询连接编号');
+            if (this.independentTasks.get(id) !== independent || independent.managed !== managed || managed.connection.threadId !== threadId || managed.broken || independent.generation !== generation) throw new Error('独立任务连接或命令代次已变化，不能发送取消命令');
+            if (!Number.isSafeInteger(threadId) || (threadId ?? 0) < 1) throw new Error('无法确认独立任务连接编号');
             // 单纯关闭 socket 无法唤醒服务器的元数据锁等待，必须明确结束此专用会话。
             await execute(control, `KILL CONNECTION ${threadId}`);
+            // KILL 的 ACK 只确认请求被接受；结构任务必须等原命令回调或服务器真实断开才销毁本地流。
+            if (independent.columnTask) await terminal;
           } catch (error) {
-            if ((error as { errno?: number }).errno !== 1094) independent.cancelError = new Error('取消控制连接失败，已关闭本地关联连接，但无法确认服务器任务已结束，请检查服务器连接状态');
-          } finally { independent.controller.abort(); await control?.close(); }
+            if ((error as { errno?: number }).errno !== 1094) independent.cancelError = new Error('取消控制连接失败，已关闭本地独立连接，但无法确认服务器任务已结束，请检查服务器连接状态');
+          } finally {
+            independent.controller.abort();
+            try { await control?.close(independent.columnTask ? { strict: true } : undefined); } catch { independent.cancelError = new Error('取消控制连接清理失败，请核对服务器任务及连接状态'); }
+          }
         })();
       }
       await independent.cancelPending; await independent.done;
@@ -794,6 +830,18 @@ export class Engine {
     if (!input.includeData && !(input.format === 'sql' && input.includeStructure)) throw new Error('请选择导出数据，或以 SQL 格式导出结构');
     const encoding = encodingName(input.encoding);
     const info = await metadata.tableInfo(task.managed, input.database, input.table);
+    if (input.format === 'sql' && input.includeStructure) {
+      // 使用本次独立导出连接的完整缓存模式；在创建临时文件前拒绝不可保真定义，不重写或删除默认值。
+      const mode = task.managed.sqlMode;
+      assertStructureExportMode(mode);
+      if (info.objectKind === 'table') {
+        const modes = mode.toUpperCase().split(',');
+        const document = parseTableColumnDefinition(info.ddl, { dialect: task.managed.status.dialect, mode: { noBackslashEscapes: modes.includes('NO_BACKSLASH_ESCAPES'), ansiQuotes: modes.includes('ANSI_QUOTES') } });
+        assertTableStructureExportable(document, mode);
+        if (document.table !== input.table || (document.database !== undefined && document.database !== input.database)) throw new Error('结构定义与导出目标不一致，未写入目标文件');
+      } else if (info.objectKind !== 'view') throw new Error('无法确认服务器对象为基本表或视图，未导出结构；可以单独导出数据');
+    }
+    this.checkCancelled(task);
     const dataColumns = info.columns.filter(column => input.format !== 'sql' || !column.generated);
     const temporaryPath = `${input.filePath}.dbark-${randomUUID()}.partial`;
     const file = await open(temporaryPath, 'wx');

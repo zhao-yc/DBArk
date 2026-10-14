@@ -2,6 +2,22 @@ import type { DatabaseObject, ForeignKeyInfo, IndexInfo, ObjectKind, TableInfo }
 import { execute, type ManagedConnection } from './connection';
 import { foreignKeyActions } from './references';
 import { mariaDefault, qualified, temporalDefault } from './sql';
+import { parseTableColumnDefinition } from './tableColumnDefinition';
+import { hasUnprovenBinaryDefault } from '../shared/tableColumnPatches';
+
+/** 仅对普通 COLLATIONS 无法解析的别名按实际目录能力查找；调用方可注入可取消的同会话查询。 */
+export async function resolveCollationEncoding(connection: ManagedConnection, collation: string, query: (sql: string) => Promise<Record<string, unknown>[]> = async sql => (await execute<Record<string, unknown>[]>(connection, sql)).rows): Promise<{ charset: string; collation: string }> {
+  if (!collation || collation.length > 255) throw new Error('无法确认表排序规则的完整名称');
+  const columns = await query("SELECT COLUMN_NAME AS name FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = 'information_schema' AND TABLE_NAME = 'COLLATION_CHARACTER_SET_APPLICABILITY' LIMIT 64");
+  const names = new Set(columns.map(column => typeof column.name === 'string' ? column.name.toUpperCase() : ''));
+  if (!names.has('COLLATION_NAME') || !names.has('CHARACTER_SET_NAME')) throw new Error('服务器未提供可确认排序规则字符集的目录能力');
+  const name = names.has('FULL_COLLATION_NAME') ? 'FULL_COLLATION_NAME' : 'COLLATION_NAME';
+  const value = `CONVERT(X'${Buffer.from(collation, 'utf8').toString('hex')}' USING utf8mb4)`;
+  const matches = await query(`SELECT a.CHARACTER_SET_NAME AS charset, a.${name} AS collation FROM information_schema.COLLATION_CHARACTER_SET_APPLICABILITY a JOIN information_schema.CHARACTER_SETS s ON s.CHARACTER_SET_NAME = a.CHARACTER_SET_NAME WHERE a.${name} = ${value} LIMIT 2`);
+  // SQL 目录可能使用不区分大小写的比较，仍核对真实完整名称；多行不能任选第一条。
+  if (matches.length !== 1 || matches[0].collation !== collation || typeof matches[0].charset !== 'string' || !matches[0].charset) throw new Error('无法唯一确认表排序规则与真实字符集的对应关系');
+  return { charset: matches[0].charset, collation };
+}
 
 /** 从服务器获取用户可访问的数据库，不在客户端猜测权限。 */
 export async function databases(connection: ManagedConnection): Promise<string[]> {
@@ -55,6 +71,12 @@ export async function tableInfo(connection: ManagedConnection, database: string,
     'SELECT k.CONSTRAINT_NAME AS name, k.COLUMN_NAME AS columnName, k.REFERENCED_TABLE_SCHEMA AS referencedDatabase, k.REFERENCED_TABLE_NAME AS referencedTable, k.REFERENCED_COLUMN_NAME AS referencedColumn, r.UPDATE_RULE AS onUpdate, r.DELETE_RULE AS onDelete FROM information_schema.KEY_COLUMN_USAGE k LEFT JOIN information_schema.REFERENTIAL_CONSTRAINTS r ON r.CONSTRAINT_SCHEMA = k.CONSTRAINT_SCHEMA AND r.CONSTRAINT_NAME = k.CONSTRAINT_NAME AND r.TABLE_NAME = k.TABLE_NAME WHERE k.TABLE_SCHEMA = ? AND k.TABLE_NAME = ? AND k.REFERENCED_TABLE_NAME IS NOT NULL ORDER BY k.CONSTRAINT_NAME, k.ORDINAL_POSITION', [database, table]);
   const tableResult = await execute<{ engine: string | null; tableType: string; charset: string | null; collation: string | null; comment: string }[]>(connection,
     'SELECT t.ENGINE AS engine, t.TABLE_TYPE AS tableType, t.TABLE_COLLATION AS collation, t.TABLE_COMMENT AS comment, c.CHARACTER_SET_NAME AS charset FROM information_schema.TABLES t LEFT JOIN information_schema.COLLATIONS c ON c.COLLATION_NAME = t.TABLE_COLLATION WHERE t.TABLE_SCHEMA = ? AND t.TABLE_NAME = ?', [database, table]);
+  if (tableResult.rows.length !== 1) throw new Error('无法唯一确认服务器表目录');
+  const tableEntry = tableResult.rows[0];
+  if (tableEntry.tableType === 'BASE TABLE' && !tableEntry.charset) {
+    if (typeof tableEntry.collation !== 'string') throw new Error('无法确认基本表的默认排序规则');
+    tableEntry.charset = (await resolveCollationEncoding(connection, tableEntry.collation)).charset;
+  }
   const maria = connection.status.dialect === 'mariadb';
   const modes = maria ? (await execute<{ mode: string }[]>(connection, 'SELECT @@SESSION.sql_mode AS mode')).rows[0].mode.split(',') : (connection.sqlMode ?? '').split(',');
   const ddl = await objectDdl(connection, database, table, tableResult.rows[0]?.tableType === 'VIEW' ? 'view' : 'table');
@@ -71,9 +93,17 @@ export async function tableInfo(connection: ManagedConnection, database: string,
   const mappedColumns = columns.rows.map(column => ({ ...column, defaultValue: maria ? mariaDefault(column.defaultValue, modes.includes('NO_BACKSLASH_ESCAPES')) : column.defaultValue, nullable: column.nullable === 'YES', generated: /(?:VIRTUAL|STORED|PERSISTENT) GENERATED/i.test(column.extra) }));
   const indexes = [...indexMap.values()];
   const candidate = indexes.find(index => index.name === 'PRIMARY') ?? indexes.find(index => index.unique && !unusableIndexes.has(index.name) && index.columns.length && index.columns.every(name => mappedColumns.some(column => column.name === name && !column.nullable)));
-  const result: TableInfo = { database, name: table, columns: mappedColumns, indexes, foreignKeys: [...keyMap.values()], primaryKey: indexMap.get('PRIMARY')?.columns ?? [], editableKey: candidate && !unusableIndexes.has(candidate.name) ? candidate.columns : [], engine: tableResult.rows[0]?.engine ?? '', charset: tableResult.rows[0]?.charset ?? undefined, collation: tableResult.rows[0]?.collation ?? undefined, comment: tableResult.rows[0]?.comment ?? '', ddl };
+  // 对象种类只取服务器目录；空引擎不等于视图，未确认种类保持 undefined。
+  const tableType = tableResult.rows[0]?.tableType;
+  const result: TableInfo = { database, name: table, columns: mappedColumns, indexes, foreignKeys: [...keyMap.values()], primaryKey: indexMap.get('PRIMARY')?.columns ?? [], editableKey: candidate && !unusableIndexes.has(candidate.name) ? candidate.columns : [], engine: tableResult.rows[0]?.engine ?? '', charset: tableResult.rows[0]?.charset ?? undefined, collation: tableResult.rows[0]?.collation ?? undefined, comment: tableResult.rows[0]?.comment ?? '', ddl, objectKind: tableType === 'BASE TABLE' ? 'table' : tableType === 'VIEW' ? 'view' : undefined };
   // 内部标记防止普通设计器意外覆盖函数索引、前缀索引、全文索引等额外属性。
   const unsupportedDefaults = columns.rows.some(column => column.defaultValue !== null && !temporalDefault(column.defaultValue) && (maria ? !(column.defaultValue === 'NULL' || column.defaultValue.startsWith("'") || /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?$/i.test(column.defaultValue)) : /DEFAULT_GENERATED/i.test(column.extra)));
-  Object.defineProperty(result, 'unsupportedDesign', { value: unsupportedIndexes.size > 0 || unusableIndexes.size > 0 || unsupportedDefaults || /\bINVISIBLE\b/i.test(result.ddl), enumerable: false });
+  // 旧整表设计器会重述所有列；只在实际存在二进制非 NULL 默认时解析既有 DDL，不增加目录查询。
+  let unprovenBinaryDefault = false;
+  if (columns.rows.some(column => /^(?:BINARY|VARBINARY)\b/i.test(column.type) && column.defaultValue !== null)) {
+    try { unprovenBinaryDefault = parseTableColumnDefinition(ddl, { dialect: connection.status.dialect, mode: { noBackslashEscapes: modes.includes('NO_BACKSLASH_ESCAPES'), ansiQuotes: modes.includes('ANSI_QUOTES') } }).columns.some(hasUnprovenBinaryDefault); }
+    catch { unprovenBinaryDefault = true; }
+  }
+  Object.defineProperty(result, 'unsupportedDesign', { value: unsupportedIndexes.size > 0 || unusableIndexes.size > 0 || unsupportedDefaults || unprovenBinaryDefault || /\bINVISIBLE\b/i.test(result.ddl), enumerable: false });
   return result;
 }
