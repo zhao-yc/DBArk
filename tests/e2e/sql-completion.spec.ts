@@ -1,0 +1,62 @@
+import type {RowDataPacket} from 'mysql2/promise';
+import {test,expect,page,desktop,pageErrors} from './desktop-fixture';
+import {enabled,isolatedDatabase,openDatabaseQuery,executeSql,modifier} from './live-helpers';
+
+// 真连接表单填写内存凭据，关闭轨迹；数据库、编辑器、Worker和IPC均使用实际产物。
+test.use({trace:'off'});
+const query=()=>page.locator('.query-tab:visible');
+/** 真实粘贴保留引号及后缀，光标仅通过键盘移动，不直接调用Monaco模型。 */
+async function atCaret(marked:string){
+  const offset=marked.indexOf('|');if(offset<0)throw Error('缺少光标标记');const source=marked.replace('|',''),previous=await desktop.evaluate(({clipboard})=>clipboard.readText());
+  try{await page.keyboard.press('Escape');await desktop.evaluate(({clipboard},value)=>clipboard.writeText(value),source);await query().locator('.monaco-editor').getByRole('textbox').focus();await page.keyboard.press(`${modifier}+A`);await page.keyboard.press(`${modifier}+V`);await expectSql(source);await page.keyboard.press(process.platform==='darwin'?'Meta+ArrowLeft':'Control+Home');for(let i=0;i<offset;i++)await page.keyboard.press('ArrowRight');}
+  finally{await desktop.evaluate(({clipboard},value)=>clipboard.writeText(value),previous);}
+  return source;
+}
+/** 读真实保存草稿核对完整文本，不能仅以视口里相似的短行通过。 */
+async function expectSql(source:string){await expect.poll(()=>page.evaluate(async()=>{const settings=await window.dbark.invoke('settings.get',{});return settings.tabs.find(tab=>tab.id===settings.activeTabId)?.sql?.replaceAll('\r\n','\n');})).toBe(source.replaceAll('\r\n','\n'));}
+/** Monaco各平台均使用Ctrl+空格触发，macOS不占用系统的Command+空格。 */
+async function choose(label:string){await page.keyboard.press('Control+Space');const widget=page.locator('.suggest-widget.visible');await expect(widget.locator('.monaco-list-row.focused')).toContainText(label,{timeout:10000});await page.keyboard.press('Enter');await expect(widget).toHaveCount(0);}
+/** 离线查询不可连接，CTE显式投影仍应通过安装包内Worker提供建议。 */
+async function offlineQuery(){await page.locator('.app-commandbar').getByRole('button',{name:'新建连接',exact:true}).click();const modal=page.getByRole('dialog',{name:'新建连接',exact:true});await modal.getByLabel('连接名称',{exact:true}).fill('补全离线验收');await modal.getByLabel('主机地址',{exact:true}).fill('127.0.0.1');await modal.getByLabel('端口',{exact:true}).fill('1');await modal.getByLabel('用户名',{exact:true}).fill('offline');await modal.getByRole('button',{name:'保存连接',exact:true}).click();await page.locator('.app-commandbar').getByRole('button',{name:'新建查询',exact:true}).click();await page.getByRole('dialog',{name:'新建查询',exact:true}).getByRole('button',{name:'打开查询',exact:true}).click();await expect(query().locator('.monaco-editor')).toBeVisible();}
+
+test('离线语义补全：CTE投影、完整范围替换、键盘接受和撤销，不执行SQL',async({},info)=>{
+  await offlineQuery();const original=await atCaret('WITH q AS (SELECT 1 AS offline_column) SELECT q.off|suffix FROM q');await choose('offline_column');await expectSql('WITH q AS (SELECT 1 AS offline_column) SELECT q.`offline_column` FROM q');await page.screenshot({path:info.outputPath('offline-completion.png')});await page.keyboard.press(`${modifier}+Z`);await expectSql(original);
+  const records=await page.evaluate(async()=>({tasks:await window.dbark.invoke('tasks.list',{}),history:await window.dbark.invoke('history.list',{})}));expect(records.tasks).toEqual([]);expect(records.history).toEqual([]);expect(pageErrors).toEqual([]);
+});
+
+test.describe('200隔离实库：Monaco语义补全',()=>{
+  test.skip(!enabled,'需要显式启用200隔离数据库');
+  test('别名与引用范围、后20张表、跨库目录按前缀读取，补全不产生用户任务',async({},info)=>{
+    test.setTimeout(120000);await isolatedDatabase(async({observer,database})=>{
+      await observer.query(`CREATE TABLE \`${database}\`.subject(id INT PRIMARY KEY,note TEXT,\`__proto__\` TEXT)`);for(let i=0;i<25;i++)await observer.query(`CREATE TABLE \`${database}\`.lookup_${String(i).padStart(2,'0')}(id INT)`);await observer.query(`CREATE TABLE \`${database}\`.zz_later(tail_column INT)`);await openDatabaseQuery(database);
+      const before=await page.evaluate(async()=>({tasks:await window.dbark.invoke('tasks.list',{}),history:await window.dbark.invoke('history.list',{})}));
+      await atCaret('SELECT u.no|junk FROM subject AS u');await choose('note');await expectSql('SELECT u.`note` FROM subject AS u');
+      await atCaret('SELECT u.`no|junk` FROM subject AS u');await choose('note');await expectSql('SELECT u.`note` FROM subject AS u');
+      await atCaret('SELECT * FROM zz_la|');await choose('zz_later');await expectSql('SELECT * FROM `zz_later`');
+      await atCaret(`SELECT z.tail| FROM \`${database}\`.zz_later z`);await choose('tail_column');await expectSql(`SELECT z.\`tail_column\` FROM \`${database}\`.zz_later z`);
+      const after=await page.evaluate(async()=>({tasks:await window.dbark.invoke('tasks.list',{}),history:await window.dbark.invoke('history.list',{})}));expect(after).toEqual(before);await page.screenshot({path:info.outputPath('live-completion.png')});
+    },info);
+  });
+  test('JOIN别名、派生投影、CTE与INSERT列清单使用各自来源',async({},info)=>{
+    test.setTimeout(120000);await isolatedDatabase(async({observer,database})=>{
+      await observer.query(`CREATE TABLE \`${database}\`.users(id INT,unique_name TEXT)`);await observer.query(`CREATE TABLE \`${database}\`.orders(id INT,order_value DECIMAL(40,12))`);await openDatabaseQuery(database);
+      for(const[marked,label,expected]of[
+        ['SELECT o.ord| FROM users u JOIN orders o ON o.id=u.id','order_value','SELECT o.`order_value` FROM users u JOIN orders o ON o.id=u.id'],
+        ['SELECT d.ren| FROM (SELECT unique_name AS renamed FROM users) d','renamed','SELECT d.`renamed` FROM (SELECT unique_name AS renamed FROM users) d'],
+        ['WITH q AS (SELECT unique_name AS cte_name FROM users) SELECT q.cte| FROM q','cte_name','WITH q AS (SELECT unique_name AS cte_name FROM users) SELECT q.`cte_name` FROM q'],
+        ['INSERT INTO users (uni|) VALUES (1)','unique_name','INSERT INTO users (`unique_name`) VALUES (1)'],
+      ]){await atCaret(marked);await choose(label);await expectSql(expected);}
+    },info);
+  });
+  test('补全保留原查询事务、临时表和会话，观察连接看不到未提交写入',async({},info)=>{
+    test.setTimeout(120000);await isolatedDatabase(async({observer,database})=>{
+      await observer.query(`CREATE TABLE \`${database}\`.subject(id INT PRIMARY KEY,note TEXT)`);await openDatabaseQuery(database);
+      await executeSql('CREATE TEMPORARY TABLE marker(v BIGINT);INSERT INTO marker VALUES(9007199254740993);BEGIN;INSERT INTO subject(id,note) VALUES(1,\'尚未提交\');SELECT CONNECTION_ID() AS original_id,v FROM marker');
+      // 多语句默认显示首个DDL结果，单独读取快照后才能比较真实会话编号和精确BIGINT。
+      await executeSql('SELECT CONNECTION_ID() AS original_id,v FROM marker');
+      const before=await query().locator('.result-body').innerText();await atCaret('SELECT s.no| FROM subject s');await choose('note');
+      const[rows]=await observer.query<RowDataPacket[]>(`SELECT COUNT(*) AS n FROM \`${database}\`.subject`);expect(Number(rows[0].n)).toBe(0);await expect(query().getByRole('button',{name:'回滚',exact:true})).toBeEnabled();
+      await executeSql('SELECT CONNECTION_ID() AS original_id,v FROM marker');expect(await query().locator('.result-body').innerText()).toBe(before);await query().getByRole('button',{name:'回滚',exact:true}).click();const[remaining]=await observer.query<RowDataPacket[]>(`SELECT COUNT(*) AS n FROM \`${database}\`.subject`);expect(Number(remaining[0].n)).toBe(0);
+    },info);
+  });
+});

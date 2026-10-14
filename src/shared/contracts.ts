@@ -6,6 +6,7 @@ import type { TablePreferenceTarget, TablePreferences } from './tablePreferences
 import type { TableColumnGetInput, TableColumnGetOutput, TableColumnPreviewInput, TableColumnPreviewOutput, TableColumnApplyInput, TableColumnApplyOutput, TableColumnApplyProgress, TableColumnReleaseInput } from './tableColumnPatches';
 import type { TableIndexGetInput, TableIndexGetOutput, TableIndexPreviewInput, TableIndexPreviewOutput, TableIndexApplyInput, TableIndexApplyOutput, TableIndexApplyProgress, TableIndexReleaseInput } from './tableIndexTasks';
 import type { TableForeignKeyGetInput, TableForeignKeyGetOutput, TableForeignKeyPreviewInput, TableForeignKeyPreviewOutput, TableForeignKeyApplyInput, TableForeignKeyApplyOutput, TableForeignKeyApplyProgress, TableForeignKeyReleaseInput } from './tableForeignKeyTasks';
+import type { CompletionMetadataInput, CompletionMetadataOutput } from './sqlCompletion';
 export type CellValue = string | number | boolean | null | { type: 'binary'; base64: string };
 export type DataRow = Record<string, CellValue>;
 export type ObjectKind = 'table' | 'view' | 'procedure' | 'function' | 'trigger' | 'event';
@@ -68,6 +69,7 @@ export interface CommandMap {
   'connections.open': { input: { id: string }; output: ConnectionStatus };
   'connections.close': { input: { id: string }; output: void };
   'metadata.databases': { input: { connectionId: string }; output: string[] };
+  'metadata.completion': { input: CompletionMetadataInput; output: CompletionMetadataOutput };
   'metadata.objects': { input: { connectionId: string; database: string }; output: DatabaseObject[] };
   'metadata.table': { input: { connectionId: string; database: string; table: string; taskId?: string }; output: TableInfo };
   'metadata.ddl': { input: { connectionId: string; database: string; name: string; kind: ObjectKind }; output: string };

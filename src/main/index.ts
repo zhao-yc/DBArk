@@ -39,6 +39,8 @@ const exportProgress = new Map<string, QueryExportProgress>();
 const structureProgress = new Map<string, TableColumnApplyProgress>();
 const structureTokens = new Map<string, { purpose: 'columns' | 'indexes' | 'foreignKeys'; connectionId: string; expires: number; kind: 'snapshot' | 'preview'; snapshotId?: string }>();
 const tasks = new Map<string, TaskRecord>();
+// 补全是高频短读，只在内存保留活动编号；不挤占用户任务历史或逐次触发SQLite写盘。
+const completionTasks = new Set<string>();
 const lastPersist = new Map<string, number>();
 const rendererURL = process.env.DBARK_DEV_URL ?? pathToFileURL(join(__dirname, '../renderer/index.html')).href;
 
@@ -55,6 +57,7 @@ function persistAuxiliary(action: () => void): void {
 
 /** 任务进度只保留概要；分批结果直接传输，不把整批数据写入配置库。 */
 function taskEvent(event: TaskEvent): void {
+  if(completionTasks.has(event.taskId))return;
   if (event.queryExport) exportProgress.set(event.taskId, { ...event.queryExport });
   const structure = event.foreignKeyPatch ?? event.indexPatch ?? event.columnPatch;
   if (structure) structureProgress.set(event.taskId, { ...structure });
@@ -116,6 +119,14 @@ async function dispatch(command: Command, input: any): Promise<unknown> {
   if (structureCommand && shuttingDown) throw new Error('客户端正在退出，不能开始结构操作');
   connectionConfig.assertAvailable(requestConnectionId);
   switch (command) {
+    case 'metadata.completion': {
+      if(shuttingDown)throw new Error('客户端正在退出，不能读取补全目录');
+      if(tasks.has(input.taskId)||completionTasks.has(input.taskId))throw new Error('任务编号已使用，请重新发起操作');
+      if(completionTasks.size>=8)throw new Error('补全目录读取繁忙，请稍后触发');
+      completionTasks.add(input.taskId);
+      try{return await broker.request(command,{...input,profile:store.resolveConnection(input.connectionId)});}
+      finally{completionTasks.delete(input.taskId);}
+    }
     case 'query.cancel': {
       const preparing = preparingTasks.get(input.taskId);
       if (preparing) { preparing.cancelled = true; return; }
@@ -177,7 +188,7 @@ async function dispatch(command: Command, input: any): Promise<unknown> {
   const taskId: string | undefined = command !== 'query.cancel' ? input.taskId : undefined;
   const startedAt = new Date().toISOString(); const start = Date.now();
   if (taskId) {
-    if (tasks.has(taskId)) throw new Error('任务编号已使用，请重新发起操作');
+    if (tasks.has(taskId)||completionTasks.has(taskId)) throw new Error('任务编号已使用，请重新发起操作');
     const task: TaskRecord = { id: taskId, kind: command, status: 'running', progress: 0, message: '正在执行', startedAt };
     tasks.set(taskId, task); store.saveTask(task);
   }

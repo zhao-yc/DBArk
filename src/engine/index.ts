@@ -9,6 +9,8 @@ import { canonicalReference, validateReferenceValues } from '../shared/reference
 import { buildReferencePageSql } from './references';
 import { connect, execute, type ManagedConnection } from './connection';
 import * as metadata from './metadata';
+import { completionMetadata } from './completionMetadata';
+import type {CompletionMetadataInput} from '../shared/sqlCompletion';
 import { csvCell, csvHeader, encodingName, previewFile, readRecords, readText } from './files';
 import { ResultFileTasks } from './resultFileTasks';
 import { TableColumnPatchTasks } from './tableColumnPatchTasks';
@@ -109,6 +111,12 @@ export class Engine {
         await session.managed.close(); this.sessions.delete(input.sessionId); return;
       }
       case 'metadata.databases': return this.withConnection(input.connectionId, connection => metadata.databases(connection));
+      case 'metadata.completion': {
+        // 主进程注入保存配置即可启动可取消短读，不额外开一次不可取消的测试连接。
+        const profile=input.profile as ConnectionProfile|undefined;
+        if(profile){if(profile.id!==input.connectionId)throw new Error('补全连接配置目标不符');if(!this.profiles.has(profile.id))this.profiles.set(profile.id,profile);}
+        return this.withIndependentTask(input.connectionId,input.taskId,(managed,control)=>completionMetadata(managed,input as CompletionMetadataInput,control),undefined,'读取补全元数据');
+      }
       case 'metadata.objects': return this.withConnection(input.connectionId, connection => metadata.objects(connection, input.database));
       case 'metadata.table': return input.taskId ? this.withIndependentTask(input.connectionId, input.taskId, connection => metadata.tableInfo(connection, input.database, input.table)) : this.withConnection(input.connectionId, connection => metadata.tableInfo(connection, input.database, input.table));
       case 'metadata.ddl': return this.withConnection(input.connectionId, connection => metadata.objectDdl(connection, input.database, input.name, input.kind));
@@ -246,7 +254,7 @@ export class Engine {
   }
 
   /** 独立任务从建连前登记，到服务器及本地连接收尾后才释放编号和配置锁。 */
-  private async withIndependentTask<T>(connectionId: string, taskId: string, action: (managed: ManagedConnection, control: Omit<StructureTaskContext, 'managed'>) => Promise<T>, options?: StructureTaskOptions): Promise<T> {
+  private async withIndependentTask<T>(connectionId: string, taskId: string, action: (managed: ManagedConnection, control: Omit<StructureTaskContext, 'managed'>) => Promise<T>, options?: StructureTaskOptions, readLabel?:string): Promise<T> {
     return this.withConnectionUse(connectionId, async () => {
       if (this.closing || !taskId || this.tasks.has(taskId) || this.independentTasks.has(taskId) || this.resultFiles.has(taskId)) throw new Error('任务编号为空或任务已在执行');
       const profile = this.profile(connectionId);
@@ -258,7 +266,7 @@ export class Engine {
       const done = new Promise<void>(resolve => { finish = resolve; });
       const task: IndependentTask = { connectionId, controller, done, structureTask: Boolean(options), generation: 0 };
       this.independentTasks.set(taskId, task);
-      const label = options?.label ?? '读取关联记录';
+      const label = options?.label ?? readLabel ?? '读取关联记录';
       const detail = () => options ? (options.purpose === 'indexes' ? { indexPatch: { ...options.progress } } : options.purpose === 'foreignKeys' ? { foreignKeyPatch: { ...options.progress } } : { columnPatch: { ...options.progress } }) : {};
       const report = () => this.emit({ taskId, status: 'running', progress: 0, message: label, ...detail() });
       const checkCancelled = () => { if (task.cancelRequested || controller.signal.aborted) throw new Error('任务已取消；已执行的结构或数据变更不会撤销'); };

@@ -232,6 +232,9 @@ export async function connect(profile: ConnectionProfile, database = profile.dat
     managed.noBackslashEscapesKnown = true;
     return managed;
   } catch (error) {
-    destroy(); signal?.removeEventListener('abort', destroy); throw error;
+    destroy(); signal?.removeEventListener('abort', destroy);
+    // 证书/密钥文件读取也可能由AbortSignal中止；统一建连取消文案，避免泄露底层英文异常。
+    if(signal?.aborted)throw new Error('任务已取消');
+    throw error;
   }
 }

@@ -14,6 +14,10 @@ import { validateForeignKeyPatches } from './tableForeignKeyPatches';
 import { foreignKeyAcknowledgementIds, foreignKeyTaskLimits } from './tableForeignKeyTasks';
 const foreignKeyTargetName = z.string().min(1).max(64).refine(value => !value.includes('\0'), '外键目标名称不能含 NUL');
 import { indexAcknowledgementIds } from './tableIndexTasks';
+import { completionLimits } from './sqlCompletion';
+import {completionIdentifier} from './completionLexical';
+const completionName=z.string().min(1).max(64).refine(completionIdentifier,'补全对象名必须是合法BMP标识符');
+const completionPrefix=z.string().max(completionLimits.prefixUnits).refine(value=>value===''||completionIdentifier(value),'补全前缀含无效字符');
 
 const id = z.string().min(1).max(200);
 const name = z.string().min(1).max(256);
@@ -76,6 +80,11 @@ export const commandSchemas: Record<Command, z.ZodType> = {
   'connections.list': empty, 'connections.save': connectionSchema, 'connections.test': connectionSchema,
   'connections.delete': z.object({ id }).strict(), 'connections.open': z.object({ id }).strict(), 'connections.close': z.object({ id }).strict(),
   'metadata.databases': z.object({ connectionId: id }).strict(),
+  'metadata.completion': z.discriminatedUnion('kind',[
+    z.object({kind:z.literal('databases'),connectionId:id,taskId:id,prefix:completionPrefix}).strict(),
+    z.object({kind:z.literal('objects'),connectionId:id,taskId:id,prefix:completionPrefix,database:completionName,objectKind:z.enum(['relation','function','procedure'])}).strict(),
+    z.object({kind:z.literal('columns'),connectionId:id,taskId:id,prefix:completionPrefix,database:completionName,table:completionName}).strict(),
+  ]),
   'metadata.objects': z.object({ connectionId: id, database: name }).strict(),
   'metadata.table': z.object({ ...target, taskId: id.optional() }).strict(),
   'metadata.ddl': z.object({ connectionId: id, database: name, name, kind: z.enum(['table','view','procedure','function','trigger','event']) }).strict(),
