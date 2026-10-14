@@ -6,15 +6,16 @@ import { recordViewZh as text } from '../locales/recordViews.zh-CN';
 import { assertRecordDocumentCurrent, beginRecordDocument, changeRecordDocument, recordDocumentDirty, stageRecordDocument, type RecordDocumentInput } from '../recordInputDocument';
 import { assertRecordJsonNodeCurrent, beginRecordJsonNodeInput, changeRecordJsonNodeInput, recordJsonNodeDirty, stageRecordJsonNodeInput, type RecordJsonNodeInput, type RecordNodeSelection } from '../recordJsonNodeInput';
 import type { ReadyLexicalDocument } from '../jsonLexicalTree';
+import {beginRecordJsonStructureInput,changeRecordJsonStructureInput,recordJsonStructureDirty,stageRecordJsonStructureInput,type RecordJsonStructureInput,type RecordStructureAction,type RecordStructureKind} from '../recordJsonStructureInput';
 
 interface Options { rows: DraftRow[]; getRows(): DraftRow[]; getContext(): RecordContext; onRows(rows: DraftRow[]): void; onDirty(dirty: boolean): void; onFocusGrid(): void }
 /** 展示方式与字段输入格式分离，只读投影与显式整行输入使用不同协议。 */
 export type RecordDisplayMode = 'form' | 'tree' | 'json' | 'input';
-type RecordBuffer = { kind: 'fields'; draft: RecordDraft } | { kind: 'document'; input: RecordDocumentInput } | { kind: 'node'; input: RecordJsonNodeInput };
+type RecordBuffer = { kind: 'fields'; draft: RecordDraft } | { kind: 'document'; input: RecordDocumentInput } | { kind: 'node'; input: RecordJsonNodeInput } | {kind:'structure';input:RecordJsonStructureInput};
 /** 一个互斥缓冲决定当前输入真值，不能同时暂存字段Map和整行原文。 */
-function draftOf(buffer: RecordBuffer | null) { return buffer?.kind === 'fields' ? buffer.draft : buffer?.input.draft ?? null; }
+function draftOf(buffer: RecordBuffer | null) { return buffer?.kind === 'fields' ? buffer.draft : buffer?.kind === 'structure' ? buffer.input.base.draft : buffer?.input.draft ?? null; }
 /** 非法整行原文同样进入原有dirty守卫，不在此处解析。 */
-function bufferDirty(buffer: RecordBuffer | null, context: RecordContext) { return buffer?.kind === 'document' ? recordDocumentDirty(buffer.input) : buffer?.kind === 'node' ? recordJsonNodeDirty(buffer.input) : recordInputDirty(draftOf(buffer), context.info); }
+function bufferDirty(buffer: RecordBuffer | null, context: RecordContext) { return buffer?.kind === 'document' ? recordDocumentDirty(buffer.input) : buffer?.kind === 'node' ? recordJsonNodeDirty(buffer.input) : buffer?.kind === 'structure' ? recordJsonStructureDirty(buffer.input) : recordInputDirty(draftOf(buffer), context.info); }
 
 /** 输入仅在内存中保留；同步引用让同一事件轮次的关闭、暂存和重复操作看到最新状态。 */
 export function useRecordViews(options: Options) {
@@ -56,7 +57,7 @@ export function useRecordViews(options: Options) {
     if (!draftRef.current) return true;
     try {
       const current = bufferRef.current;
-      const next = current?.kind === 'document' ? stageRecordDocument(latest.current.getRows(), current.input, latest.current.getContext()) : current?.kind === 'node' ? stageRecordJsonNodeInput(latest.current.getRows(), current.input, latest.current.getContext()) : stageRecordDraft(latest.current.getRows(), draftRef.current, latest.current.getContext());
+      const next = current?.kind === 'document' ? stageRecordDocument(latest.current.getRows(), current.input, latest.current.getContext()) : current?.kind === 'node' ? stageRecordJsonNodeInput(latest.current.getRows(), current.input, latest.current.getContext()) : current?.kind === 'structure' ? stageRecordJsonStructureInput(latest.current.getRows(),current.input,latest.current.getContext()) : stageRecordDraft(latest.current.getRows(), draftRef.current, latest.current.getContext());
       latest.current.onRows(next);
       const row = next.find(item => item.id === draftRef.current!.rowId)!;
       setError(''); setFocusKey(null); replace(beginRecordDraft(row, latest.current.getContext())); setNotice(text.stagedNotice); return true;
@@ -149,6 +150,19 @@ export function useRecordViews(options: Options) {
       replaceBuffer({kind:'node',input:changeRecordJsonNodeInput(current.input,value)});setError('');setFocusKey(null);setNotice('');
     } catch (reason) { report(reason); }
   }
+  /** 结构操作单独捕获同一缓存选择，复用已有离开守卫；暂存后过期的选择不能自动重放。 */
+  function openStructure(selection:RecordNodeSelection,document:ReadyLexicalDocument,kind:RecordStructureKind) {
+    if(modeRef.current!=='tree'||latest.current.getContext().busy)return false;
+    return request(()=>{
+      const current=draftRef.current;if(!current)return;
+      try{const input=beginRecordJsonStructureInput({rows:latest.current.getRows(),draft:current,context:latest.current.getContext(),columnName:selection.columnName,document,selection},kind);replaceBuffer({kind:'structure',input});setError('');setFocusKey(null);setNotice('');}catch(reason){report(reason);}
+    });
+  }
+  /** 原文修改与操作类型均绑定输入会话，结构编辑和旧值编辑的迟到事件不能交叉覆盖。 */
+  function changeStructure(action:RecordStructureAction,captured:RecordJsonStructureInput) {
+    const current=bufferRef.current;if(current?.kind!=='structure'||current.input.base.session!==captured.base.session)return;
+    try{assertRecordJsonNodeCurrent(latest.current.getRows(),current.input.base,latest.current.getContext());replaceBuffer({kind:'structure',input:changeRecordJsonStructureInput(current.input,action)});setError('');setFocusKey(null);setNotice('');}catch(reason){report(reason);}
+  }
   /** 关闭节点输入同样使用首次离开意图与三选守卫；放弃不修改页面草稿。 */
   function closeNode() { request(() => { const row=latest.current.getRows().find(item=>item.id===draftRef.current?.rowId);replace(row?beginRecordDraft(row,latest.current.getContext()):null);setError('');setFocusKey(null);setNotice(''); }); }
   /** 无未暂存输入时跟随网格草稿；有输入时保留原基线，让最终校验拒绝竞争覆盖。 */
@@ -163,10 +177,11 @@ export function useRecordViews(options: Options) {
     let identityChanged=row.data!==current.data||row.original!==current.original||row.inserted!==current.inserted;
     if(bufferRef.current?.kind==='document')try{assertRecordDocumentCurrent(latest.current.getRows(),bufferRef.current.input,latest.current.getContext());}catch{identityChanged=true;}
     if(bufferRef.current?.kind==='node')try{assertRecordJsonNodeCurrent(latest.current.getRows(),bufferRef.current.input,latest.current.getContext());}catch{identityChanged=true;}
+    if(bufferRef.current?.kind==='structure')try{assertRecordJsonNodeCurrent(latest.current.getRows(),bufferRef.current.input.base,latest.current.getContext());}catch{identityChanged=true;}
     const needsDocument=modeRef.current==='input'&&bufferRef.current?.kind!=='document'&&!recordReadonlyReason(latest.current.getContext(),row);
     if(identityChanged||needsDocument){setError('');setFocusKey(null);replace(beginRecordDraft(row,latest.current.getContext()));}
   }, [options.rows, context.info]);
 
-  return { draft, documentInput:buffer?.kind==='document'?buffer.input:null, nodeInput:buffer?.kind==='node'?buffer.input:null, formOpen, displayMode, changeDisplayMode, changeDocument, openNode, changeNode, closeNode, cellKey, pending, error, focusKey, notice, dirty, hasInput: () => dirtyRef.current, reset, discard, stage, request, resolve, select, openForm, closeForm, openCell, closeCell, expand, change };
+  return { draft, documentInput:buffer?.kind==='document'?buffer.input:null, nodeInput:buffer?.kind==='node'?buffer.input:null, structureInput:buffer?.kind==='structure'?buffer.input:null, formOpen, displayMode, changeDisplayMode, changeDocument, openNode, changeNode, openStructure, changeStructure, closeNode, cellKey, pending, error, focusKey, notice, dirty, hasInput: () => dirtyRef.current, reset, discard, stage, request, resolve, select, openForm, closeForm, openCell, closeCell, expand, change };
 }
 export type RecordViewController = ReturnType<typeof useRecordViews>;

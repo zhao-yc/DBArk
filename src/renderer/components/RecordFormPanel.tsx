@@ -8,6 +8,7 @@ import { recordViewZh as text } from '../locales/recordViews.zh-CN';
 import { recordProjectionZh as projectionText } from '../locales/recordProjections.zh-CN';
 import { recordDocumentZh as documentText } from '../locales/recordDocument.zh-CN';
 import { recordJsonNodeInputZh as nodeText } from '../locales/recordJsonNodeInput.zh-CN';
+import {RecordJsonStructureEditor} from './RecordJsonStructureEditor';
 import { RecordValueEditor } from './RecordValueEditor';
 import { RecordReadonlyProjection } from './RecordReadonlyProjection';
 import { RecordJsonNodeEditor } from './RecordJsonNodeEditor';
@@ -32,13 +33,13 @@ export function RecordFormPanel({ editor, context, rows, visibleKeys, onSelect }
   useEffect(() => { setExpanded(current => [...current].some(key => !editor.draft?.fields.has(key)) ? new Set([...current].filter(key => editor.draft?.fields.has(key))) : current); }, [editor.draft?.fields]);
   useEffect(() => { if (editor.notice) heading.current?.focus(); }, [editor.notice]);
   useEffect(() => { heading.current?.focus(); }, [editor.displayMode]);
-  const keys = recordFieldOrder(context.info?.columns ?? [], visibleKeys, showHidden); const reason = recordReadonlyReason(context, row);
+  const keys = recordFieldOrder(context.info?.columns ?? [], visibleKeys, showHidden); const reason = recordReadonlyReason(context, row,editor.nodeInput?.columnName??editor.structureInput?.base.columnName);
   const previous = adjacentRecordId(rows, row?.id, -1), next = adjacentRecordId(rows, row?.id, 1);
   const status = !row ? text.empty : row.deleted ? text.deleted : row.inserted ? text.inserted : row.original && !rowEqual(row.original, row.data) ? text.staged : text.unchanged;
   return <aside className="record-form-panel" aria-label={text.title} onKeyDown={event => {
     // 树和只读全文均阻止事件落入网格；只有显式节点输入才有本地暂存快捷键。
     if ((editor.displayMode === 'tree' || editor.displayMode === 'json') && ['Delete', 'Enter'].includes(event.key)) event.stopPropagation();
-    localKeys(event, editor.displayMode === 'form' || editor.displayMode === 'input' || !!editor.nodeInput ? editor.stage : () => false, editor.closeForm);
+    localKeys(event, editor.displayMode === 'form' || editor.displayMode === 'input' || !!editor.nodeInput || !!editor.structureInput ? editor.stage : () => false, editor.closeForm);
   }}>
     <header><h2 tabIndex={-1} ref={heading}>{text.title}</h2><button onClick={editor.closeForm}>{text.close}</button></header>
     <p className="record-context">{context.target.database} / {context.target.table}</p>
@@ -57,8 +58,8 @@ export function RecordFormPanel({ editor, context, rows, visibleKeys, onSelect }
         {tooLarge ? <p className="muted small">{text.fieldTooLarge}</p> : <button onClick={() => { if (expanded.has(key)) setExpanded(current => new Set([...current].filter(item => item !== key))); else { editor.expand(key); setExpanded(current => new Set([...current, key])); } }}>{expanded.has(key) ? text.collapseField : fieldReason ? text.viewField : text.editField}</button>}
         {expanded.has(key) && input && <RecordValueEditor column={column} input={input} inserted={row.inserted} reason={fieldReason} focus={editor.focusKey === key} onChange={value => editor.change(key, value)}/>}
       </section>;
-    })}</div> : editor.displayMode==='input' ? <div className="record-document-input"><p>{documentText.hint}</p><p className="muted small">{documentText.formatHint}</p><p className="muted small">{documentText.scope}</p>{editor.documentInput ? <textarea aria-label={documentText.label} className="record-document-editor" value={editor.documentInput.text} readOnly={!!reason} spellCheck={false} maxLength={2_097_152} onChange={event=>editor.documentInput&&editor.changeDocument(event.target.value,editor.documentInput)}/> : <p>{reason||documentText.unavailable}</p>}</div> : <><p className="record-projection-hint">{editor.displayMode==='tree'?nodeText.treeHint:projectionText.readonly}</p><div className="record-projection-workspace"><RecordReadonlyProjection row={row} draft={editor.draft} context={context} visibleKeys={visibleKeys} showHidden={showHidden} mode={editor.displayMode} onEdit={editor.openNode}/>{editor.nodeInput&&<RecordJsonNodeEditor input={editor.nodeInput} reason={recordReadonlyReason(context,row,editor.nodeInput.columnName)} onChange={editor.changeNode} onClose={editor.closeNode}/>}</div></>}
-    {(editor.displayMode !== 'json') && <footer><ErrorBox message={editor.error}/><p className="muted small">{reason || text.readonlyHint}</p><p className="muted small">{text.stageHint}</p><span role="status">{editor.notice}</span>{(editor.displayMode!=='tree'||editor.nodeInput)&&<div className="record-actions"><button disabled={!editor.dirty || context.busy} onClick={editor.discard}>{text.discard}</button><button className="primary" disabled={!editor.dirty || !!reason} onClick={editor.stage}>{text.stage}</button></div>}</footer>}
+    })}</div> : editor.displayMode==='input' ? <div className="record-document-input"><p>{documentText.hint}</p><p className="muted small">{documentText.formatHint}</p><p className="muted small">{documentText.scope}</p>{editor.documentInput ? <textarea aria-label={documentText.label} className="record-document-editor" value={editor.documentInput.text} readOnly={!!reason} spellCheck={false} maxLength={2_097_152} onChange={event=>editor.documentInput&&editor.changeDocument(event.target.value,editor.documentInput)}/> : <p>{reason||documentText.unavailable}</p>}</div> : <><p className="record-projection-hint">{editor.displayMode==='tree'?nodeText.treeHint:projectionText.readonly}</p><div className="record-projection-workspace"><RecordReadonlyProjection row={row} draft={editor.draft} context={context} visibleKeys={visibleKeys} showHidden={showHidden} mode={editor.displayMode} onEdit={editor.openNode} onStructure={editor.openStructure}/>{editor.nodeInput&&<RecordJsonNodeEditor input={editor.nodeInput} reason={recordReadonlyReason(context,row,editor.nodeInput.columnName)} onChange={editor.changeNode} onClose={editor.closeNode}/>}{editor.structureInput&&<RecordJsonStructureEditor input={editor.structureInput} reason={reason} onChange={editor.changeStructure} onClose={editor.closeNode}/>}</div></>}
+    {(editor.displayMode !== 'json') && <footer><ErrorBox message={editor.error}/><p className="muted small">{reason || text.readonlyHint}</p><p className="muted small">{text.stageHint}</p><span role="status">{editor.notice}</span>{(editor.displayMode!=='tree'||editor.nodeInput||editor.structureInput)&&<div className="record-actions"><button disabled={!editor.dirty || context.busy} onClick={editor.discard}>{text.discard}</button><button className="primary" disabled={!editor.dirty || !!reason} onClick={editor.stage}>{text.stage}</button></div>}</footer>}
   </aside>;
 }
 

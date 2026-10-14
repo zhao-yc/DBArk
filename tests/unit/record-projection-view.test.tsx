@@ -15,7 +15,7 @@ function sample(names = ['id', 'payload'], data: DataRow = { id: '1', payload: '
   const info: TableInfo = { database: '库', name: '表', columns, objectKind: 'table', engine: 'InnoDB', editableKey: ['id'], primaryKey: ['id'], indexes: [], foreignKeys: [], ddl: '' };
   const context: RecordContext = { target: { connectionId: '连接', database: '库', table: '表' }, generation: 1, connectionVersion: 1, info, loaded: true, stale: false, busy: false };
   const row: DraftRow = { id: '本地行', data, original: { ...data }, inserted: false, deleted: false };
-  return { context, row, draft: beginRecordDraft(row, context), visibleKeys: names, showHidden: false, onEdit: vi.fn() };
+  return { context, row, draft: beginRecordDraft(row, context), visibleKeys: names, showHidden: false, onEdit: vi.fn(), onStructure:vi.fn() };
 }
 
 describe('只读树显示窗口', () => {
