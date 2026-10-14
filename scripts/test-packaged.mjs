@@ -27,7 +27,7 @@ function command(executable, args, options = {}) {
 /** 相同应用标识会触发升级，安装前查询全部用户级和系统级注册，拒绝覆盖用户现有安装。 */
 function windowsInstallations() {
   const powershell = join(process.env.SystemRoot ?? 'C:\\Windows', 'System32', 'WindowsPowerShell', 'v1.0', 'powershell.exe');
-  const script = "$ErrorActionPreference='Stop'; [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false); $entries = @(Get-ItemProperty 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*','HKLM:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*','HKLM:\\Software\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*' -ErrorAction SilentlyContinue | Where-Object { $_.DisplayName -eq 'DBArk' } | ForEach-Object { if ($_.InstallLocation) { $_.InstallLocation } else { '<未知安装路径>' } }); ConvertTo-Json -InputObject $entries -Compress";
+  const script = "$ErrorActionPreference='Stop'; [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false); $entries = @(Get-ItemProperty 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*','HKLM:\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*','HKLM:\\Software\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\*' -ErrorAction SilentlyContinue | Where-Object { $_.DisplayName -like 'DBArk*' } | ForEach-Object { if ($_.InstallLocation) { $_.InstallLocation } else { '<未知安装路径>' } }); ConvertTo-Json -InputObject $entries -Compress";
   return JSON.parse(command(powershell, ['-NoProfile', '-NonInteractive', '-Command', script], { capture: true }).replace(/^\uFEFF/, '').trim() || '[]');
 }
 
@@ -96,7 +96,8 @@ function uninstallWindows() {
     assertOwnedPath(copiedUninstaller); copyFileSync(uninstaller, copiedUninstaller);
     command(copiedUninstaller, ['/S', '/currentuser', '/KEEP_APP_DATA', '_?=' + applicationDirectory], { windowsVerbatimArguments: true });
   } else if (existsSync(join(applicationDirectory, 'DBArk.exe'))) throw new Error('测试安装缺少卸载器，保留目录供排查');
-  if (existsSync(join(applicationDirectory, 'DBArk.exe')) || windowsInstallations().some(path => typeof path === 'string' && resolve(path) === applicationDirectory)) throw new Error('测试安装卸载未完成，保留目录供排查');
+  // NSIS 实际注册名带版本且 InstallLocation 可以缺失；启动前已证明没有其他安装，收尾必须全部归零。
+  if (existsSync(join(applicationDirectory, 'DBArk.exe')) || windowsInstallations().length) throw new Error('测试安装卸载未完成，保留目录供排查');
 }
 
 /** 部分挂载失败也只分离本次 DMG；无法确认卸载时保留目录，不递归删除挂载点。 */
