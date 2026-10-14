@@ -1,0 +1,2701 @@
+{
+  "format": "DBArk-table-foreign-key-native-fixtures",
+  "version": 1,
+  "scope": "自主原生SHOW CREATE与脱敏目录；原生接受不等于产品完整核验；没有业务行、凭据或原始私有报告",
+  "metadataFields": {
+    "kcu": [
+      "CONSTRAINT_NAME",
+      "COLUMN_NAME",
+      "ORDINAL_POSITION",
+      "POSITION_IN_UNIQUE_CONSTRAINT",
+      "REFERENCED_TABLE_SCHEMA",
+      "REFERENCED_TABLE_NAME",
+      "REFERENCED_COLUMN_NAME"
+    ],
+    "rc": [
+      "CONSTRAINT_NAME",
+      "UNIQUE_CONSTRAINT_NAME",
+      "MATCH_OPTION",
+      "UPDATE_RULE",
+      "DELETE_RULE",
+      "TABLE_NAME",
+      "REFERENCED_TABLE_NAME"
+    ],
+    "indexes": [
+      "INDEX_NAME",
+      "COLUMN_NAME",
+      "SEQ_IN_INDEX",
+      "NON_UNIQUE",
+      "INDEX_TYPE",
+      "COLLATION",
+      "SUB_PART",
+      "INDEX_COMMENT",
+      "IS_VISIBLE",
+      "EXPRESSION",
+      "IGNORED"
+    ]
+  },
+  "entries": [
+    {
+      "id": "mysql-5.7.44-actions-default-after-child",
+      "file": "mysql-5.7.44-actions-default-after-child.sql",
+      "metadataFile": "mysql-5.7.44-actions-default-after-child.metadata.json",
+      "dialect": "mysql",
+      "version": "5.7.44",
+      "engine": "InnoDB",
+      "sourceRun": "run02",
+      "sourceCase": "actions_default",
+      "sourcePhases": [
+        "after"
+      ],
+      "sourceRole": "child",
+      "sourceReportSha256": "b7edc1abc2528c159838077212777ab4b3852812867d75527a6a2b9950a0750c",
+      "capturedWithin": {
+        "from": "2026-10-14T04:26:43.901Z",
+        "to": "2026-10-14T04:26:48.716Z"
+      },
+      "session": {
+        "sqlMode": "IGNORE_SPACE,ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES,NO_ZERO_IN_DATE,NO_ZERO_DATE,ERROR_FOR_DIVISION_BY_ZERO,NO_AUTO_CREATE_USER,NO_ENGINE_SUBSTITUTION",
+        "charset": "utf8mb4",
+        "collation": "utf8mb4_general_ci",
+        "foreignKeyChecks": 1,
+        "uniqueChecks": 1
+      },
+      "ddl": {
+        "sourceRawSha256": "91af4a8e62935b806e8eeb92eca43ba7923ddc03e2ab5a7a98bd3c34e62d29ff",
+        "publishedSha256": "91af4a8e62935b806e8eeb92eca43ba7923ddc03e2ab5a7a98bd3c34e62d29ff",
+        "bytes": 398,
+        "unchangedBytes": true,
+        "sanitization": "无需改名，逐字节保持自主SHOW CREATE原文",
+        "changes": []
+      },
+      "metadata": {
+        "sourceCanonicalSha256": "15baad0bdcade4c9e954f211ae73c050a223b9aff2b8c6558ab446b3ef5ccb89",
+        "publishedSha256": "39e210d954a57fcd6362212f2bf7c690c5acb4b964e274e1c9cdc4dd8d516759",
+        "counts": {
+          "kcu": 3,
+          "rc": 1,
+          "indexes": 3
+        },
+        "sanitization": "只投影白名单；引用库名映射为固定占位名；重新序列化，保留原字段有无与标量类型"
+      },
+      "observation": {
+        "nativeStatementAccepted": true,
+        "error": null,
+        "warningCodes": [],
+        "originalRowsUnchangedByAlter": true,
+        "nativeDefinitionUnchanged": false,
+        "productVerified": false,
+        "rowDataPublished": false,
+        "note": "实际默认/显式动作规范化。三种请求的数据拒绝行为相同，不等于RC动作字符串可跨版本统一。"
+      }
+    },
+    {
+      "id": "mysql-5.7.44-actions-restrict-after-child",
+      "file": "mysql-5.7.44-actions-restrict-after-child.sql",
+      "metadataFile": "mysql-5.7.44-actions-restrict-after-child.metadata.json",
+      "dialect": "mysql",
+      "version": "5.7.44",
+      "engine": "InnoDB",
+      "sourceRun": "run02",
+      "sourceCase": "actions_restrict",
+      "sourcePhases": [
+        "after"
+      ],
+      "sourceRole": "child",
+      "sourceReportSha256": "b7edc1abc2528c159838077212777ab4b3852812867d75527a6a2b9950a0750c",
+      "capturedWithin": {
+        "from": "2026-10-14T04:26:43.901Z",
+        "to": "2026-10-14T04:26:48.716Z"
+      },
+      "session": {
+        "sqlMode": "IGNORE_SPACE,ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES,NO_ZERO_IN_DATE,NO_ZERO_DATE,ERROR_FOR_DIVISION_BY_ZERO,NO_AUTO_CREATE_USER,NO_ENGINE_SUBSTITUTION",
+        "charset": "utf8mb4",
+        "collation": "utf8mb4_general_ci",
+        "foreignKeyChecks": 1,
+        "uniqueChecks": 1
+      },
+      "ddl": {
+        "sourceRawSha256": "831556b5aab010950acdfab7dcf380cbc85c39858ca2af1c195714cef9a4ca77",
+        "publishedSha256": "831556b5aab010950acdfab7dcf380cbc85c39858ca2af1c195714cef9a4ca77",
+        "bytes": 401,
+        "unchangedBytes": true,
+        "sanitization": "无需改名，逐字节保持自主SHOW CREATE原文",
+        "changes": []
+      },
+      "metadata": {
+        "sourceCanonicalSha256": "739983ada6fa2a8c6d5f5f2097c5b5f72f6a993e9abe6b5e88cc07cdefec4ecf",
+        "publishedSha256": "96a3ac93170d5b4571f1302d1a0a0cff81097a77c969c6838e1f5df643092238",
+        "counts": {
+          "kcu": 3,
+          "rc": 1,
+          "indexes": 3
+        },
+        "sanitization": "只投影白名单；引用库名映射为固定占位名；重新序列化，保留原字段有无与标量类型"
+      },
+      "observation": {
+        "nativeStatementAccepted": true,
+        "error": null,
+        "warningCodes": [],
+        "originalRowsUnchangedByAlter": true,
+        "nativeDefinitionUnchanged": false,
+        "productVerified": false,
+        "rowDataPublished": false,
+        "note": "实际默认/显式动作规范化。三种请求的数据拒绝行为相同，不等于RC动作字符串可跨版本统一。"
+      }
+    },
+    {
+      "id": "mysql-5.7.44-actions-no-action-after-child",
+      "file": "mysql-5.7.44-actions-no-action-after-child.sql",
+      "metadataFile": "mysql-5.7.44-actions-no-action-after-child.metadata.json",
+      "dialect": "mysql",
+      "version": "5.7.44",
+      "engine": "InnoDB",
+      "sourceRun": "run02",
+      "sourceCase": "actions_no_action",
+      "sourcePhases": [
+        "after"
+      ],
+      "sourceRole": "child",
+      "sourceReportSha256": "b7edc1abc2528c159838077212777ab4b3852812867d75527a6a2b9950a0750c",
+      "capturedWithin": {
+        "from": "2026-10-14T04:26:43.901Z",
+        "to": "2026-10-14T04:26:48.716Z"
+      },
+      "session": {
+        "sqlMode": "IGNORE_SPACE,ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES,NO_ZERO_IN_DATE,NO_ZERO_DATE,ERROR_FOR_DIVISION_BY_ZERO,NO_AUTO_CREATE_USER,NO_ENGINE_SUBSTITUTION",
+        "charset": "utf8mb4",
+        "collation": "utf8mb4_general_ci",
+        "foreignKeyChecks": 1,
+        "uniqueChecks": 1
+      },
+      "ddl": {
+        "sourceRawSha256": "3280d6b4367b87437afb189de5c49df1e486b209eb3d7ff6d1f37556efac526f",
+        "publishedSha256": "3280d6b4367b87437afb189de5c49df1e486b209eb3d7ff6d1f37556efac526f",
+        "bytes": 444,
+        "unchangedBytes": true,
+        "sanitization": "无需改名，逐字节保持自主SHOW CREATE原文",
+        "changes": []
+      },
+      "metadata": {
+        "sourceCanonicalSha256": "d4fb71f10c3c7d70f2ea08214a1f56594aa19eadf6d10f87feb10102dc9d56b9",
+        "publishedSha256": "987a5e21c8979774cd86cee11733a9670714ac12486a17b83f936e72f2a9b0d5",
+        "counts": {
+          "kcu": 3,
+          "rc": 1,
+          "indexes": 3
+        },
+        "sanitization": "只投影白名单；引用库名映射为固定占位名；重新序列化，保留原字段有无与标量类型"
+      },
+      "observation": {
+        "nativeStatementAccepted": true,
+        "error": null,
+        "warningCodes": [],
+        "originalRowsUnchangedByAlter": true,
+        "nativeDefinitionUnchanged": false,
+        "productVerified": false,
+        "rowDataPublished": false,
+        "note": "实际默认/显式动作规范化。三种请求的数据拒绝行为相同，不等于RC动作字符串可跨版本统一。"
+      }
+    },
+    {
+      "id": "mysql-5.7.44-same-name-actions-before-after-child",
+      "file": "mysql-5.7.44-same-name-actions-before-after-child.sql",
+      "metadataFile": "mysql-5.7.44-same-name-actions-before-after-child.metadata.json",
+      "dialect": "mysql",
+      "version": "5.7.44",
+      "engine": "InnoDB",
+      "sourceRun": "run01",
+      "sourceCase": "same_name_actions",
+      "sourcePhases": [
+        "before",
+        "after"
+      ],
+      "sourceRole": "child",
+      "sourceReportSha256": "507fd4799527dfccd0302237ad779166a9628f776af7a9a0e4c2e1152a3c1b38",
+      "capturedWithin": {
+        "from": "2026-10-14T04:09:40.591Z",
+        "to": "2026-10-14T04:09:48.007Z"
+      },
+      "session": {
+        "sqlMode": "IGNORE_SPACE,ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES,NO_ZERO_IN_DATE,NO_ZERO_DATE,ERROR_FOR_DIVISION_BY_ZERO,NO_AUTO_CREATE_USER,NO_ENGINE_SUBSTITUTION",
+        "charset": "utf8mb4",
+        "collation": "utf8mb4_general_ci",
+        "foreignKeyChecks": 1,
+        "uniqueChecks": 1
+      },
+      "ddl": {
+        "sourceRawSha256": "15686d510ce0422336aff7ca4ed9c6f491c97042312bca598122b9cbdd7859ec",
+        "publishedSha256": "15686d510ce0422336aff7ca4ed9c6f491c97042312bca598122b9cbdd7859ec",
+        "bytes": 404,
+        "unchangedBytes": true,
+        "sanitization": "无需改名，逐字节保持自主SHOW CREATE原文",
+        "changes": []
+      },
+      "metadata": {
+        "sourceCanonicalSha256": "a3933638f8868a2ff470499b75b86665bdaf3a390cd8d80cd0f0db111bbc8125",
+        "publishedSha256": "5cdb58b28e06272cc923c88ac46ba4c23d4c454fe486208b295c2b6e487ca15a",
+        "counts": {
+          "kcu": 3,
+          "rc": 1,
+          "indexes": 3
+        },
+        "sanitization": "只投影白名单；引用库名映射为固定占位名；重新序列化，保留原字段有无与标量类型"
+      },
+      "observation": {
+        "nativeStatementAccepted": false,
+        "error": {
+          "errno": 1022,
+          "code": "ER_DUP_KEY",
+          "sqlState": "23000"
+        },
+        "warningCodes": [
+          {
+            "level": "Error",
+            "code": 1022
+          }
+        ],
+        "originalRowsUnchangedByAlter": true,
+        "nativeDefinitionUnchanged": true,
+        "productVerified": false,
+        "rowDataPublished": false,
+        "note": "同名DROP+ADD改动作单次拒绝；这两个阶段的自主定义和目录完全保持，不自动拆分重放。"
+      }
+    },
+    {
+      "id": "mysql-5.7.44-different-name-actions-before-child",
+      "file": "mysql-5.7.44-different-name-actions-before-child.sql",
+      "metadataFile": "mysql-5.7.44-different-name-actions-before-child.metadata.json",
+      "dialect": "mysql",
+      "version": "5.7.44",
+      "engine": "InnoDB",
+      "sourceRun": "run01",
+      "sourceCase": "different_name_actions",
+      "sourcePhases": [
+        "before"
+      ],
+      "sourceRole": "child",
+      "sourceReportSha256": "507fd4799527dfccd0302237ad779166a9628f776af7a9a0e4c2e1152a3c1b38",
+      "capturedWithin": {
+        "from": "2026-10-14T04:09:40.591Z",
+        "to": "2026-10-14T04:09:48.007Z"
+      },
+      "session": {
+        "sqlMode": "IGNORE_SPACE,ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES,NO_ZERO_IN_DATE,NO_ZERO_DATE,ERROR_FOR_DIVISION_BY_ZERO,NO_AUTO_CREATE_USER,NO_ENGINE_SUBSTITUTION",
+        "charset": "utf8mb4",
+        "collation": "utf8mb4_general_ci",
+        "foreignKeyChecks": 1,
+        "uniqueChecks": 1
+      },
+      "ddl": {
+        "sourceRawSha256": "89e9293c03645c1286eb2857c6e0e23b5fc3d916a53dc210add4c7a8ab9d6cf6",
+        "publishedSha256": "89e9293c03645c1286eb2857c6e0e23b5fc3d916a53dc210add4c7a8ab9d6cf6",
+        "bytes": 419,
+        "unchangedBytes": true,
+        "sanitization": "无需改名，逐字节保持自主SHOW CREATE原文",
+        "changes": []
+      },
+      "metadata": {
+        "sourceCanonicalSha256": "b3c497d74182b655efa417f8f474d4a9c34c6f49df91003aa48e42f841e68558",
+        "publishedSha256": "175de109adaced64fe77cee298e9bcfe65580c32edd506ba351e55e0613d9b01",
+        "counts": {
+          "kcu": 3,
+          "rc": 1,
+          "indexes": 3
+        },
+        "sanitization": "只投影白名单；引用库名映射为固定占位名；重新序列化，保留原字段有无与标量类型"
+      },
+      "observation": {
+        "nativeStatementAccepted": true,
+        "error": null,
+        "warningCodes": [],
+        "originalRowsUnchangedByAlter": true,
+        "nativeDefinitionUnchanged": false,
+        "productVerified": false,
+        "rowDataPublished": false,
+        "note": "异名DROP+ADD改CASCADE单次成功，私有自主DML另证级联更新/删除；本目录不含行或DML。"
+      }
+    },
+    {
+      "id": "mysql-5.7.44-different-name-actions-after-child",
+      "file": "mysql-5.7.44-different-name-actions-after-child.sql",
+      "metadataFile": "mysql-5.7.44-different-name-actions-after-child.metadata.json",
+      "dialect": "mysql",
+      "version": "5.7.44",
+      "engine": "InnoDB",
+      "sourceRun": "run01",
+      "sourceCase": "different_name_actions",
+      "sourcePhases": [
+        "after"
+      ],
+      "sourceRole": "child",
+      "sourceReportSha256": "507fd4799527dfccd0302237ad779166a9628f776af7a9a0e4c2e1152a3c1b38",
+      "capturedWithin": {
+        "from": "2026-10-14T04:09:40.591Z",
+        "to": "2026-10-14T04:09:48.007Z"
+      },
+      "session": {
+        "sqlMode": "IGNORE_SPACE,ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES,NO_ZERO_IN_DATE,NO_ZERO_DATE,ERROR_FOR_DIVISION_BY_ZERO,NO_AUTO_CREATE_USER,NO_ENGINE_SUBSTITUTION",
+        "charset": "utf8mb4",
+        "collation": "utf8mb4_general_ci",
+        "foreignKeyChecks": 1,
+        "uniqueChecks": 1
+      },
+      "ddl": {
+        "sourceRawSha256": "155c57fe8adfb68722a8367911f79376252f380286c422c654c8765ae585610e",
+        "publishedSha256": "155c57fe8adfb68722a8367911f79376252f380286c422c654c8765ae585610e",
+        "bytes": 459,
+        "unchangedBytes": true,
+        "sanitization": "无需改名，逐字节保持自主SHOW CREATE原文",
+        "changes": []
+      },
+      "metadata": {
+        "sourceCanonicalSha256": "1287ea2241c5cc5947c48d8a633f52ddb1ca909a072c0d64ac33304eb8f83a9d",
+        "publishedSha256": "96ff6fed21d5f21544181e87f9a0df2e53862668aac786363d53e2955c3ece7c",
+        "counts": {
+          "kcu": 3,
+          "rc": 1,
+          "indexes": 3
+        },
+        "sanitization": "只投影白名单；引用库名映射为固定占位名；重新序列化，保留原字段有无与标量类型"
+      },
+      "observation": {
+        "nativeStatementAccepted": true,
+        "error": null,
+        "warningCodes": [],
+        "originalRowsUnchangedByAlter": true,
+        "nativeDefinitionUnchanged": false,
+        "productVerified": false,
+        "rowDataPublished": false,
+        "note": "异名DROP+ADD改CASCADE单次成功，私有自主DML另证级联更新/删除；本目录不含行或DML。"
+      }
+    },
+    {
+      "id": "mysql-5.7.44-tuple-replace-success-before-child",
+      "file": "mysql-5.7.44-tuple-replace-success-before-child.sql",
+      "metadataFile": "mysql-5.7.44-tuple-replace-success-before-child.metadata.json",
+      "dialect": "mysql",
+      "version": "5.7.44",
+      "engine": "InnoDB",
+      "sourceRun": "run02",
+      "sourceCase": "tuple_replace_success",
+      "sourcePhases": [
+        "before"
+      ],
+      "sourceRole": "child",
+      "sourceReportSha256": "b7edc1abc2528c159838077212777ab4b3852812867d75527a6a2b9950a0750c",
+      "capturedWithin": {
+        "from": "2026-10-14T04:26:43.901Z",
+        "to": "2026-10-14T04:26:48.716Z"
+      },
+      "session": {
+        "sqlMode": "IGNORE_SPACE,ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES,NO_ZERO_IN_DATE,NO_ZERO_DATE,ERROR_FOR_DIVISION_BY_ZERO,NO_AUTO_CREATE_USER,NO_ENGINE_SUBSTITUTION",
+        "charset": "utf8mb4",
+        "collation": "utf8mb4_general_ci",
+        "foreignKeyChecks": 1,
+        "uniqueChecks": 1
+      },
+      "ddl": {
+        "sourceRawSha256": "4b2a46aaa77a313568e30f68c414cc7de8eb31d683082e25f92b0f08f9600d65",
+        "publishedSha256": "4b2a46aaa77a313568e30f68c414cc7de8eb31d683082e25f92b0f08f9600d65",
+        "bytes": 416,
+        "unchangedBytes": true,
+        "sanitization": "无需改名，逐字节保持自主SHOW CREATE原文",
+        "changes": []
+      },
+      "metadata": {
+        "sourceCanonicalSha256": "1e056aef89cacd45eb5fc4f0a773cd51026814a1894bdcd0b700a104488dd51e",
+        "publishedSha256": "e01320f456085bcb6e6de6174bae76a6e26d5a8e5c1e6c88a42875bbd234c1a3",
+        "counts": {
+          "kcu": 3,
+          "rc": 1,
+          "indexes": 3
+        },
+        "sanitization": "只投影白名单；引用库名映射为固定占位名；重新序列化，保留原字段有无与标量类型"
+      },
+      "observation": {
+        "nativeStatementAccepted": true,
+        "error": null,
+        "warningCodes": [],
+        "originalRowsUnchangedByAlter": true,
+        "nativeDefinitionUnchanged": false,
+        "productVerified": false,
+        "rowDataPublished": false,
+        "note": "异名DROP+ADD改变有序元组单次成功；自主DML另证新映射接管与旧映射不再支配，不外推任意DDL原子性。"
+      }
+    },
+    {
+      "id": "mysql-5.7.44-tuple-replace-success-after-child",
+      "file": "mysql-5.7.44-tuple-replace-success-after-child.sql",
+      "metadataFile": "mysql-5.7.44-tuple-replace-success-after-child.metadata.json",
+      "dialect": "mysql",
+      "version": "5.7.44",
+      "engine": "InnoDB",
+      "sourceRun": "run02",
+      "sourceCase": "tuple_replace_success",
+      "sourcePhases": [
+        "after"
+      ],
+      "sourceRole": "child",
+      "sourceReportSha256": "b7edc1abc2528c159838077212777ab4b3852812867d75527a6a2b9950a0750c",
+      "capturedWithin": {
+        "from": "2026-10-14T04:26:43.901Z",
+        "to": "2026-10-14T04:26:48.716Z"
+      },
+      "session": {
+        "sqlMode": "IGNORE_SPACE,ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES,NO_ZERO_IN_DATE,NO_ZERO_DATE,ERROR_FOR_DIVISION_BY_ZERO,NO_AUTO_CREATE_USER,NO_ENGINE_SUBSTITUTION",
+        "charset": "utf8mb4",
+        "collation": "utf8mb4_general_ci",
+        "foreignKeyChecks": 1,
+        "uniqueChecks": 1
+      },
+      "ddl": {
+        "sourceRawSha256": "c0a6e133c2de3d217291c8b708de59b5acd3e70fc8f8ea0dff7cda3bcecb9c95",
+        "publishedSha256": "c0a6e133c2de3d217291c8b708de59b5acd3e70fc8f8ea0dff7cda3bcecb9c95",
+        "bytes": 470,
+        "unchangedBytes": true,
+        "sanitization": "无需改名，逐字节保持自主SHOW CREATE原文",
+        "changes": []
+      },
+      "metadata": {
+        "sourceCanonicalSha256": "06d6962114a0d447042ab556520ff0a6a9d27dba710bd8b98a632b8c87769981",
+        "publishedSha256": "a0b7d2351d165f1240364afaa7f17101d870c4d939767b37cae12066112b746e",
+        "counts": {
+          "kcu": 3,
+          "rc": 1,
+          "indexes": 5
+        },
+        "sanitization": "只投影白名单；引用库名映射为固定占位名；重新序列化，保留原字段有无与标量类型"
+      },
+      "observation": {
+        "nativeStatementAccepted": true,
+        "error": null,
+        "warningCodes": [],
+        "originalRowsUnchangedByAlter": true,
+        "nativeDefinitionUnchanged": false,
+        "productVerified": false,
+        "rowDataPublished": false,
+        "note": "异名DROP+ADD改变有序元组单次成功；自主DML另证新映射接管与旧映射不再支配，不外推任意DDL原子性。"
+      }
+    },
+    {
+      "id": "mysql-5.7.44-tuple-replace-mismatch-before-after-child",
+      "file": "mysql-5.7.44-tuple-replace-mismatch-before-after-child.sql",
+      "metadataFile": "mysql-5.7.44-tuple-replace-mismatch-before-after-child.metadata.json",
+      "dialect": "mysql",
+      "version": "5.7.44",
+      "engine": "InnoDB",
+      "sourceRun": "run02",
+      "sourceCase": "tuple_replace_mismatch",
+      "sourcePhases": [
+        "before",
+        "after"
+      ],
+      "sourceRole": "child",
+      "sourceReportSha256": "b7edc1abc2528c159838077212777ab4b3852812867d75527a6a2b9950a0750c",
+      "capturedWithin": {
+        "from": "2026-10-14T04:26:43.901Z",
+        "to": "2026-10-14T04:26:48.716Z"
+      },
+      "session": {
+        "sqlMode": "IGNORE_SPACE,ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES,NO_ZERO_IN_DATE,NO_ZERO_DATE,ERROR_FOR_DIVISION_BY_ZERO,NO_AUTO_CREATE_USER,NO_ENGINE_SUBSTITUTION",
+        "charset": "utf8mb4",
+        "collation": "utf8mb4_general_ci",
+        "foreignKeyChecks": 1,
+        "uniqueChecks": 1
+      },
+      "ddl": {
+        "sourceRawSha256": "8b0925577bfb06fbf20215d7d3a8d946e0170e842777243eb685156f7dd802a6",
+        "publishedSha256": "8b0925577bfb06fbf20215d7d3a8d946e0170e842777243eb685156f7dd802a6",
+        "bytes": 419,
+        "unchangedBytes": true,
+        "sanitization": "无需改名，逐字节保持自主SHOW CREATE原文",
+        "changes": []
+      },
+      "metadata": {
+        "sourceCanonicalSha256": "c8b7d69ceb5c48f7e8a71daa2f14a123cbeb015c538429e77eea6c7902bca438",
+        "publishedSha256": "41bba88a9f2976a2932ad718ef308b203001ccf7545b7be3dcccd1a4a68685a8",
+        "counts": {
+          "kcu": 3,
+          "rc": 1,
+          "indexes": 3
+        },
+        "sanitization": "只投影白名单；引用库名映射为固定占位名；重新序列化，保留原字段有无与标量类型"
+      },
+      "observation": {
+        "nativeStatementAccepted": false,
+        "error": {
+          "errno": 1452,
+          "code": "ER_NO_REFERENCED_ROW_2",
+          "sqlState": "23000"
+        },
+        "warningCodes": [
+          {
+            "level": "Error",
+            "code": 1452
+          }
+        ],
+        "originalRowsUnchangedByAlter": true,
+        "nativeDefinitionUnchanged": true,
+        "productVerified": false,
+        "rowDataPublished": false,
+        "note": "异名元组替换因1452拒绝；旧FK/目录/原行保持且自主DML证明旧映射仍约束，只适用本轮已观察失败路径。"
+      }
+    },
+    {
+      "id": "mysql-8.0.46-actions-default-after-child",
+      "file": "mysql-8.0.46-actions-default-after-child.sql",
+      "metadataFile": "mysql-8.0.46-actions-default-after-child.metadata.json",
+      "dialect": "mysql",
+      "version": "8.0.46",
+      "engine": "InnoDB",
+      "sourceRun": "run02",
+      "sourceCase": "actions_default",
+      "sourcePhases": [
+        "after"
+      ],
+      "sourceRole": "child",
+      "sourceReportSha256": "8cadc5e5e944852a941f83080ad836eb9aadeee5b20a9e92814753fd2d3468ba",
+      "capturedWithin": {
+        "from": "2026-10-14T04:26:51.683Z",
+        "to": "2026-10-14T04:26:58.286Z"
+      },
+      "session": {
+        "sqlMode": "IGNORE_SPACE,ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES,NO_ZERO_IN_DATE,NO_ZERO_DATE,ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION",
+        "charset": "utf8mb4",
+        "collation": "utf8mb4_general_ci",
+        "foreignKeyChecks": 1,
+        "uniqueChecks": 1
+      },
+      "ddl": {
+        "sourceRawSha256": "e04d5cac7b0a713780f98af86c136e5f171f43e1a8925a41bd9aa67d3603bcc4",
+        "publishedSha256": "e04d5cac7b0a713780f98af86c136e5f171f43e1a8925a41bd9aa67d3603bcc4",
+        "bytes": 386,
+        "unchangedBytes": true,
+        "sanitization": "无需改名，逐字节保持自主SHOW CREATE原文",
+        "changes": []
+      },
+      "metadata": {
+        "sourceCanonicalSha256": "8fbfa3ba52e0fd280deacbc71d91c80f2ef261e9b03a30ebbe23ae332e470a35",
+        "publishedSha256": "c53895441fa6909b8ca405369610ff642fcbefaf4be6e4874bbc83fa23d75ce9",
+        "counts": {
+          "kcu": 3,
+          "rc": 1,
+          "indexes": 3
+        },
+        "sanitization": "只投影白名单；引用库名映射为固定占位名；重新序列化，保留原字段有无与标量类型"
+      },
+      "observation": {
+        "nativeStatementAccepted": true,
+        "error": null,
+        "warningCodes": [],
+        "originalRowsUnchangedByAlter": true,
+        "nativeDefinitionUnchanged": false,
+        "productVerified": false,
+        "rowDataPublished": false,
+        "note": "实际默认/显式动作规范化。三种请求的数据拒绝行为相同，不等于RC动作字符串可跨版本统一。"
+      }
+    },
+    {
+      "id": "mysql-8.0.46-actions-restrict-after-child",
+      "file": "mysql-8.0.46-actions-restrict-after-child.sql",
+      "metadataFile": "mysql-8.0.46-actions-restrict-after-child.metadata.json",
+      "dialect": "mysql",
+      "version": "8.0.46",
+      "engine": "InnoDB",
+      "sourceRun": "run02",
+      "sourceCase": "actions_restrict",
+      "sourcePhases": [
+        "after"
+      ],
+      "sourceRole": "child",
+      "sourceReportSha256": "8cadc5e5e944852a941f83080ad836eb9aadeee5b20a9e92814753fd2d3468ba",
+      "capturedWithin": {
+        "from": "2026-10-14T04:26:51.683Z",
+        "to": "2026-10-14T04:26:58.286Z"
+      },
+      "session": {
+        "sqlMode": "IGNORE_SPACE,ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES,NO_ZERO_IN_DATE,NO_ZERO_DATE,ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION",
+        "charset": "utf8mb4",
+        "collation": "utf8mb4_general_ci",
+        "foreignKeyChecks": 1,
+        "uniqueChecks": 1
+      },
+      "ddl": {
+        "sourceRawSha256": "28daa9353e3e337c8dca35e764f0f518abb5fcfd95d894b01eac6c572997a69b",
+        "publishedSha256": "28daa9353e3e337c8dca35e764f0f518abb5fcfd95d894b01eac6c572997a69b",
+        "bytes": 427,
+        "unchangedBytes": true,
+        "sanitization": "无需改名，逐字节保持自主SHOW CREATE原文",
+        "changes": []
+      },
+      "metadata": {
+        "sourceCanonicalSha256": "1ad48a5dfdd0d79b7ac9f8b58ce3ff022288a8382ed005ccd41b0dd622b6cba7",
+        "publishedSha256": "eed17505d72bf74020b73c52eedf09bc324b8e1c07a3c3bda6c31baee7bba197",
+        "counts": {
+          "kcu": 3,
+          "rc": 1,
+          "indexes": 3
+        },
+        "sanitization": "只投影白名单；引用库名映射为固定占位名；重新序列化，保留原字段有无与标量类型"
+      },
+      "observation": {
+        "nativeStatementAccepted": true,
+        "error": null,
+        "warningCodes": [],
+        "originalRowsUnchangedByAlter": true,
+        "nativeDefinitionUnchanged": false,
+        "productVerified": false,
+        "rowDataPublished": false,
+        "note": "实际默认/显式动作规范化。三种请求的数据拒绝行为相同，不等于RC动作字符串可跨版本统一。"
+      }
+    },
+    {
+      "id": "mysql-8.0.46-actions-no-action-after-child",
+      "file": "mysql-8.0.46-actions-no-action-after-child.sql",
+      "metadataFile": "mysql-8.0.46-actions-no-action-after-child.metadata.json",
+      "dialect": "mysql",
+      "version": "8.0.46",
+      "engine": "InnoDB",
+      "sourceRun": "run02",
+      "sourceCase": "actions_no_action",
+      "sourcePhases": [
+        "after"
+      ],
+      "sourceRole": "child",
+      "sourceReportSha256": "8cadc5e5e944852a941f83080ad836eb9aadeee5b20a9e92814753fd2d3468ba",
+      "capturedWithin": {
+        "from": "2026-10-14T04:26:51.683Z",
+        "to": "2026-10-14T04:26:58.286Z"
+      },
+      "session": {
+        "sqlMode": "IGNORE_SPACE,ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES,NO_ZERO_IN_DATE,NO_ZERO_DATE,ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION",
+        "charset": "utf8mb4",
+        "collation": "utf8mb4_general_ci",
+        "foreignKeyChecks": 1,
+        "uniqueChecks": 1
+      },
+      "ddl": {
+        "sourceRawSha256": "a89ba82d40a39846ab1dbf820efe1a3621076929f5e46dde8452112a78e8e89c",
+        "publishedSha256": "a89ba82d40a39846ab1dbf820efe1a3621076929f5e46dde8452112a78e8e89c",
+        "bytes": 392,
+        "unchangedBytes": true,
+        "sanitization": "无需改名，逐字节保持自主SHOW CREATE原文",
+        "changes": []
+      },
+      "metadata": {
+        "sourceCanonicalSha256": "5a8f2260c7bffa229787709fd145456c7e5cc0d396e4ee4a2df9ea06f1695211",
+        "publishedSha256": "2b247faeaab8c108644af6cc14ca6055e739247a63eed4798783bac99fa38605",
+        "counts": {
+          "kcu": 3,
+          "rc": 1,
+          "indexes": 3
+        },
+        "sanitization": "只投影白名单；引用库名映射为固定占位名；重新序列化，保留原字段有无与标量类型"
+      },
+      "observation": {
+        "nativeStatementAccepted": true,
+        "error": null,
+        "warningCodes": [],
+        "originalRowsUnchangedByAlter": true,
+        "nativeDefinitionUnchanged": false,
+        "productVerified": false,
+        "rowDataPublished": false,
+        "note": "实际默认/显式动作规范化。三种请求的数据拒绝行为相同，不等于RC动作字符串可跨版本统一。"
+      }
+    },
+    {
+      "id": "mysql-8.0.46-same-name-actions-before-after-child",
+      "file": "mysql-8.0.46-same-name-actions-before-after-child.sql",
+      "metadataFile": "mysql-8.0.46-same-name-actions-before-after-child.metadata.json",
+      "dialect": "mysql",
+      "version": "8.0.46",
+      "engine": "InnoDB",
+      "sourceRun": "run01",
+      "sourceCase": "same_name_actions",
+      "sourcePhases": [
+        "before",
+        "after"
+      ],
+      "sourceRole": "child",
+      "sourceReportSha256": "356b8b225049e3e633caba04a6ee078d0f1cef52140d189fb334f9ec68b16510",
+      "capturedWithin": {
+        "from": "2026-10-14T04:09:51.015Z",
+        "to": "2026-10-14T04:10:00.133Z"
+      },
+      "session": {
+        "sqlMode": "IGNORE_SPACE,ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES,NO_ZERO_IN_DATE,NO_ZERO_DATE,ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION",
+        "charset": "utf8mb4",
+        "collation": "utf8mb4_general_ci",
+        "foreignKeyChecks": 1,
+        "uniqueChecks": 1
+      },
+      "ddl": {
+        "sourceRawSha256": "02118a28178a3ddbce0c82c3852484ffdc5ff5d0427edaf6504e8913c6dd70be",
+        "publishedSha256": "02118a28178a3ddbce0c82c3852484ffdc5ff5d0427edaf6504e8913c6dd70be",
+        "bytes": 430,
+        "unchangedBytes": true,
+        "sanitization": "无需改名，逐字节保持自主SHOW CREATE原文",
+        "changes": []
+      },
+      "metadata": {
+        "sourceCanonicalSha256": "51493ff2ba71e2218c667cb6fee2ef044e1ac4182a037e6a993343ddf3cb2da8",
+        "publishedSha256": "8b5c667c169421e1e1f06f94c2ac41b409a72c0337883d72b0b23264b9ee6e3e",
+        "counts": {
+          "kcu": 3,
+          "rc": 1,
+          "indexes": 3
+        },
+        "sanitization": "只投影白名单；引用库名映射为固定占位名；重新序列化，保留原字段有无与标量类型"
+      },
+      "observation": {
+        "nativeStatementAccepted": false,
+        "error": {
+          "errno": 1826,
+          "code": "ER_FK_DUP_NAME",
+          "sqlState": "HY000"
+        },
+        "warningCodes": [
+          {
+            "level": "Error",
+            "code": 1826
+          }
+        ],
+        "originalRowsUnchangedByAlter": true,
+        "nativeDefinitionUnchanged": true,
+        "productVerified": false,
+        "rowDataPublished": false,
+        "note": "同名DROP+ADD改动作单次拒绝；这两个阶段的自主定义和目录完全保持，不自动拆分重放。"
+      }
+    },
+    {
+      "id": "mysql-8.0.46-different-name-actions-before-child",
+      "file": "mysql-8.0.46-different-name-actions-before-child.sql",
+      "metadataFile": "mysql-8.0.46-different-name-actions-before-child.metadata.json",
+      "dialect": "mysql",
+      "version": "8.0.46",
+      "engine": "InnoDB",
+      "sourceRun": "run01",
+      "sourceCase": "different_name_actions",
+      "sourcePhases": [
+        "before"
+      ],
+      "sourceRole": "child",
+      "sourceReportSha256": "356b8b225049e3e633caba04a6ee078d0f1cef52140d189fb334f9ec68b16510",
+      "capturedWithin": {
+        "from": "2026-10-14T04:09:51.015Z",
+        "to": "2026-10-14T04:10:00.133Z"
+      },
+      "session": {
+        "sqlMode": "IGNORE_SPACE,ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES,NO_ZERO_IN_DATE,NO_ZERO_DATE,ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION",
+        "charset": "utf8mb4",
+        "collation": "utf8mb4_general_ci",
+        "foreignKeyChecks": 1,
+        "uniqueChecks": 1
+      },
+      "ddl": {
+        "sourceRawSha256": "2c6e5aadd1d455c171277337e70ea42054c4a2e08ba24e13429c24f40df56f3d",
+        "publishedSha256": "2c6e5aadd1d455c171277337e70ea42054c4a2e08ba24e13429c24f40df56f3d",
+        "bytes": 445,
+        "unchangedBytes": true,
+        "sanitization": "无需改名，逐字节保持自主SHOW CREATE原文",
+        "changes": []
+      },
+      "metadata": {
+        "sourceCanonicalSha256": "b0660798b62ddd61179899885da80e3737dd33a6ccd9a66c3038f36f9bc52799",
+        "publishedSha256": "db0a284204fbe5f87d97ea4c6cfbc831edc7362aeb64de7fbc48bc62159b30d1",
+        "counts": {
+          "kcu": 3,
+          "rc": 1,
+          "indexes": 3
+        },
+        "sanitization": "只投影白名单；引用库名映射为固定占位名；重新序列化，保留原字段有无与标量类型"
+      },
+      "observation": {
+        "nativeStatementAccepted": true,
+        "error": null,
+        "warningCodes": [],
+        "originalRowsUnchangedByAlter": true,
+        "nativeDefinitionUnchanged": false,
+        "productVerified": false,
+        "rowDataPublished": false,
+        "note": "异名DROP+ADD改CASCADE单次成功，私有自主DML另证级联更新/删除；本目录不含行或DML。"
+      }
+    },
+    {
+      "id": "mysql-8.0.46-different-name-actions-after-child",
+      "file": "mysql-8.0.46-different-name-actions-after-child.sql",
+      "metadataFile": "mysql-8.0.46-different-name-actions-after-child.metadata.json",
+      "dialect": "mysql",
+      "version": "8.0.46",
+      "engine": "InnoDB",
+      "sourceRun": "run01",
+      "sourceCase": "different_name_actions",
+      "sourcePhases": [
+        "after"
+      ],
+      "sourceRole": "child",
+      "sourceReportSha256": "356b8b225049e3e633caba04a6ee078d0f1cef52140d189fb334f9ec68b16510",
+      "capturedWithin": {
+        "from": "2026-10-14T04:09:51.015Z",
+        "to": "2026-10-14T04:10:00.133Z"
+      },
+      "session": {
+        "sqlMode": "IGNORE_SPACE,ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES,NO_ZERO_IN_DATE,NO_ZERO_DATE,ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION",
+        "charset": "utf8mb4",
+        "collation": "utf8mb4_general_ci",
+        "foreignKeyChecks": 1,
+        "uniqueChecks": 1
+      },
+      "ddl": {
+        "sourceRawSha256": "0a048f19edf6668947eb256e75fd4b9e52e11ec9d0f41b0fc34d93586d9d67b7",
+        "publishedSha256": "0a048f19edf6668947eb256e75fd4b9e52e11ec9d0f41b0fc34d93586d9d67b7",
+        "bytes": 447,
+        "unchangedBytes": true,
+        "sanitization": "无需改名，逐字节保持自主SHOW CREATE原文",
+        "changes": []
+      },
+      "metadata": {
+        "sourceCanonicalSha256": "6f31b3641bb54cf5bfec9f4a291d7b132a665a3829649575abafcce44a10e76f",
+        "publishedSha256": "33ae1e88b443abe3e2f7dc0e430144110352dc5156e7051ac417379156f8615a",
+        "counts": {
+          "kcu": 3,
+          "rc": 1,
+          "indexes": 3
+        },
+        "sanitization": "只投影白名单；引用库名映射为固定占位名；重新序列化，保留原字段有无与标量类型"
+      },
+      "observation": {
+        "nativeStatementAccepted": true,
+        "error": null,
+        "warningCodes": [],
+        "originalRowsUnchangedByAlter": true,
+        "nativeDefinitionUnchanged": false,
+        "productVerified": false,
+        "rowDataPublished": false,
+        "note": "异名DROP+ADD改CASCADE单次成功，私有自主DML另证级联更新/删除；本目录不含行或DML。"
+      }
+    },
+    {
+      "id": "mysql-8.0.46-tuple-replace-success-before-child",
+      "file": "mysql-8.0.46-tuple-replace-success-before-child.sql",
+      "metadataFile": "mysql-8.0.46-tuple-replace-success-before-child.metadata.json",
+      "dialect": "mysql",
+      "version": "8.0.46",
+      "engine": "InnoDB",
+      "sourceRun": "run02",
+      "sourceCase": "tuple_replace_success",
+      "sourcePhases": [
+        "before"
+      ],
+      "sourceRole": "child",
+      "sourceReportSha256": "8cadc5e5e944852a941f83080ad836eb9aadeee5b20a9e92814753fd2d3468ba",
+      "capturedWithin": {
+        "from": "2026-10-14T04:26:51.683Z",
+        "to": "2026-10-14T04:26:58.286Z"
+      },
+      "session": {
+        "sqlMode": "IGNORE_SPACE,ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES,NO_ZERO_IN_DATE,NO_ZERO_DATE,ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION",
+        "charset": "utf8mb4",
+        "collation": "utf8mb4_general_ci",
+        "foreignKeyChecks": 1,
+        "uniqueChecks": 1
+      },
+      "ddl": {
+        "sourceRawSha256": "e4de5c86cc644980f3b59d68f8c110ebd5cb124d3dcce6e54e296ad8dc806553",
+        "publishedSha256": "e4de5c86cc644980f3b59d68f8c110ebd5cb124d3dcce6e54e296ad8dc806553",
+        "bytes": 442,
+        "unchangedBytes": true,
+        "sanitization": "无需改名，逐字节保持自主SHOW CREATE原文",
+        "changes": []
+      },
+      "metadata": {
+        "sourceCanonicalSha256": "fd6ac3048ca0adc837f498ee6809d27e7c050a26c922c9a5256fd2cd396e8faf",
+        "publishedSha256": "863228cb7d5092cc31c498275212f2dfdfa83a5db11bc240927f1557f9861d93",
+        "counts": {
+          "kcu": 3,
+          "rc": 1,
+          "indexes": 3
+        },
+        "sanitization": "只投影白名单；引用库名映射为固定占位名；重新序列化，保留原字段有无与标量类型"
+      },
+      "observation": {
+        "nativeStatementAccepted": true,
+        "error": null,
+        "warningCodes": [],
+        "originalRowsUnchangedByAlter": true,
+        "nativeDefinitionUnchanged": false,
+        "productVerified": false,
+        "rowDataPublished": false,
+        "note": "异名DROP+ADD改变有序元组单次成功；自主DML另证新映射接管与旧映射不再支配，不外推任意DDL原子性。"
+      }
+    },
+    {
+      "id": "mysql-8.0.46-tuple-replace-success-after-child",
+      "file": "mysql-8.0.46-tuple-replace-success-after-child.sql",
+      "metadataFile": "mysql-8.0.46-tuple-replace-success-after-child.metadata.json",
+      "dialect": "mysql",
+      "version": "8.0.46",
+      "engine": "InnoDB",
+      "sourceRun": "run02",
+      "sourceCase": "tuple_replace_success",
+      "sourcePhases": [
+        "after"
+      ],
+      "sourceRole": "child",
+      "sourceReportSha256": "8cadc5e5e944852a941f83080ad836eb9aadeee5b20a9e92814753fd2d3468ba",
+      "capturedWithin": {
+        "from": "2026-10-14T04:26:51.683Z",
+        "to": "2026-10-14T04:26:58.286Z"
+      },
+      "session": {
+        "sqlMode": "IGNORE_SPACE,ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES,NO_ZERO_IN_DATE,NO_ZERO_DATE,ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION",
+        "charset": "utf8mb4",
+        "collation": "utf8mb4_general_ci",
+        "foreignKeyChecks": 1,
+        "uniqueChecks": 1
+      },
+      "ddl": {
+        "sourceRawSha256": "52356c079216e1b3c01b4fad848f24c34acb86f69d25c2d966395bfd4b05fbc9",
+        "publishedSha256": "52356c079216e1b3c01b4fad848f24c34acb86f69d25c2d966395bfd4b05fbc9",
+        "bytes": 496,
+        "unchangedBytes": true,
+        "sanitization": "无需改名，逐字节保持自主SHOW CREATE原文",
+        "changes": []
+      },
+      "metadata": {
+        "sourceCanonicalSha256": "2bef8bc3af6d45727a5a72231b5b42cbf8ead29b763e910bb1756ff950731b22",
+        "publishedSha256": "118ebb68f58b4b63e6fe3e61d48b110ebda33f2e2d90526fa905df11e024c2b6",
+        "counts": {
+          "kcu": 3,
+          "rc": 1,
+          "indexes": 5
+        },
+        "sanitization": "只投影白名单；引用库名映射为固定占位名；重新序列化，保留原字段有无与标量类型"
+      },
+      "observation": {
+        "nativeStatementAccepted": true,
+        "error": null,
+        "warningCodes": [],
+        "originalRowsUnchangedByAlter": true,
+        "nativeDefinitionUnchanged": false,
+        "productVerified": false,
+        "rowDataPublished": false,
+        "note": "异名DROP+ADD改变有序元组单次成功；自主DML另证新映射接管与旧映射不再支配，不外推任意DDL原子性。"
+      }
+    },
+    {
+      "id": "mysql-8.0.46-tuple-replace-mismatch-before-after-child",
+      "file": "mysql-8.0.46-tuple-replace-mismatch-before-after-child.sql",
+      "metadataFile": "mysql-8.0.46-tuple-replace-mismatch-before-after-child.metadata.json",
+      "dialect": "mysql",
+      "version": "8.0.46",
+      "engine": "InnoDB",
+      "sourceRun": "run02",
+      "sourceCase": "tuple_replace_mismatch",
+      "sourcePhases": [
+        "before",
+        "after"
+      ],
+      "sourceRole": "child",
+      "sourceReportSha256": "8cadc5e5e944852a941f83080ad836eb9aadeee5b20a9e92814753fd2d3468ba",
+      "capturedWithin": {
+        "from": "2026-10-14T04:26:51.683Z",
+        "to": "2026-10-14T04:26:58.286Z"
+      },
+      "session": {
+        "sqlMode": "IGNORE_SPACE,ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES,NO_ZERO_IN_DATE,NO_ZERO_DATE,ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION",
+        "charset": "utf8mb4",
+        "collation": "utf8mb4_general_ci",
+        "foreignKeyChecks": 1,
+        "uniqueChecks": 1
+      },
+      "ddl": {
+        "sourceRawSha256": "fbf84157dc23f58c07a9d91a31d1df802c2afc1969107cbceac233ef5e135cbb",
+        "publishedSha256": "fbf84157dc23f58c07a9d91a31d1df802c2afc1969107cbceac233ef5e135cbb",
+        "bytes": 445,
+        "unchangedBytes": true,
+        "sanitization": "无需改名，逐字节保持自主SHOW CREATE原文",
+        "changes": []
+      },
+      "metadata": {
+        "sourceCanonicalSha256": "c44fbdc8d52050b07f03db120ca1d00ef84a6a4a91e656d98c4a698452c970c1",
+        "publishedSha256": "8f542f67f29e5dea773207a57a5f0a49819b4dd81ebd2b222ec6d03088cddf6c",
+        "counts": {
+          "kcu": 3,
+          "rc": 1,
+          "indexes": 3
+        },
+        "sanitization": "只投影白名单；引用库名映射为固定占位名；重新序列化，保留原字段有无与标量类型"
+      },
+      "observation": {
+        "nativeStatementAccepted": false,
+        "error": {
+          "errno": 1452,
+          "code": "ER_NO_REFERENCED_ROW_2",
+          "sqlState": "23000"
+        },
+        "warningCodes": [
+          {
+            "level": "Error",
+            "code": 1452
+          }
+        ],
+        "originalRowsUnchangedByAlter": true,
+        "nativeDefinitionUnchanged": true,
+        "productVerified": false,
+        "rowDataPublished": false,
+        "note": "异名元组替换因1452拒绝；旧FK/目录/原行保持且自主DML证明旧映射仍约束，只适用本轮已观察失败路径。"
+      }
+    },
+    {
+      "id": "mysql-8.4.11-actions-default-after-child",
+      "file": "mysql-8.4.11-actions-default-after-child.sql",
+      "metadataFile": "mysql-8.4.11-actions-default-after-child.metadata.json",
+      "dialect": "mysql",
+      "version": "8.4.11",
+      "engine": "InnoDB",
+      "sourceRun": "run02",
+      "sourceCase": "actions_default",
+      "sourcePhases": [
+        "after"
+      ],
+      "sourceRole": "child",
+      "sourceReportSha256": "376cd79553da843c1c6807a8959ae9bb621af7f2814c3994cc80d4b934ee1d44",
+      "capturedWithin": {
+        "from": "2026-10-14T04:26:21.004Z",
+        "to": "2026-10-14T04:26:26.641Z"
+      },
+      "session": {
+        "sqlMode": "IGNORE_SPACE,ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES,NO_ZERO_IN_DATE,NO_ZERO_DATE,ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION",
+        "charset": "utf8mb4",
+        "collation": "utf8mb4_general_ci",
+        "foreignKeyChecks": 1,
+        "uniqueChecks": 1
+      },
+      "ddl": {
+        "sourceRawSha256": "e04d5cac7b0a713780f98af86c136e5f171f43e1a8925a41bd9aa67d3603bcc4",
+        "publishedSha256": "e04d5cac7b0a713780f98af86c136e5f171f43e1a8925a41bd9aa67d3603bcc4",
+        "bytes": 386,
+        "unchangedBytes": true,
+        "sanitization": "无需改名，逐字节保持自主SHOW CREATE原文",
+        "changes": []
+      },
+      "metadata": {
+        "sourceCanonicalSha256": "248fd3543f2f1c0cefe383c03b11b076ba5921b5b0f32c7731552c2d1f56e16f",
+        "publishedSha256": "c53895441fa6909b8ca405369610ff642fcbefaf4be6e4874bbc83fa23d75ce9",
+        "counts": {
+          "kcu": 3,
+          "rc": 1,
+          "indexes": 3
+        },
+        "sanitization": "只投影白名单；引用库名映射为固定占位名；重新序列化，保留原字段有无与标量类型"
+      },
+      "observation": {
+        "nativeStatementAccepted": true,
+        "error": null,
+        "warningCodes": [],
+        "originalRowsUnchangedByAlter": true,
+        "nativeDefinitionUnchanged": false,
+        "productVerified": false,
+        "rowDataPublished": false,
+        "note": "实际默认/显式动作规范化。三种请求的数据拒绝行为相同，不等于RC动作字符串可跨版本统一。"
+      }
+    },
+    {
+      "id": "mysql-8.4.11-actions-restrict-after-child",
+      "file": "mysql-8.4.11-actions-restrict-after-child.sql",
+      "metadataFile": "mysql-8.4.11-actions-restrict-after-child.metadata.json",
+      "dialect": "mysql",
+      "version": "8.4.11",
+      "engine": "InnoDB",
+      "sourceRun": "run02",
+      "sourceCase": "actions_restrict",
+      "sourcePhases": [
+        "after"
+      ],
+      "sourceRole": "child",
+      "sourceReportSha256": "376cd79553da843c1c6807a8959ae9bb621af7f2814c3994cc80d4b934ee1d44",
+      "capturedWithin": {
+        "from": "2026-10-14T04:26:21.004Z",
+        "to": "2026-10-14T04:26:26.641Z"
+      },
+      "session": {
+        "sqlMode": "IGNORE_SPACE,ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES,NO_ZERO_IN_DATE,NO_ZERO_DATE,ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION",
+        "charset": "utf8mb4",
+        "collation": "utf8mb4_general_ci",
+        "foreignKeyChecks": 1,
+        "uniqueChecks": 1
+      },
+      "ddl": {
+        "sourceRawSha256": "28daa9353e3e337c8dca35e764f0f518abb5fcfd95d894b01eac6c572997a69b",
+        "publishedSha256": "28daa9353e3e337c8dca35e764f0f518abb5fcfd95d894b01eac6c572997a69b",
+        "bytes": 427,
+        "unchangedBytes": true,
+        "sanitization": "无需改名，逐字节保持自主SHOW CREATE原文",
+        "changes": []
+      },
+      "metadata": {
+        "sourceCanonicalSha256": "ff2dcdfcd8cc02a9105f0f73e691dec3f2e4a11b58eeb4eaa23cdad327c3fd06",
+        "publishedSha256": "eed17505d72bf74020b73c52eedf09bc324b8e1c07a3c3bda6c31baee7bba197",
+        "counts": {
+          "kcu": 3,
+          "rc": 1,
+          "indexes": 3
+        },
+        "sanitization": "只投影白名单；引用库名映射为固定占位名；重新序列化，保留原字段有无与标量类型"
+      },
+      "observation": {
+        "nativeStatementAccepted": true,
+        "error": null,
+        "warningCodes": [],
+        "originalRowsUnchangedByAlter": true,
+        "nativeDefinitionUnchanged": false,
+        "productVerified": false,
+        "rowDataPublished": false,
+        "note": "实际默认/显式动作规范化。三种请求的数据拒绝行为相同，不等于RC动作字符串可跨版本统一。"
+      }
+    },
+    {
+      "id": "mysql-8.4.11-actions-no-action-after-child",
+      "file": "mysql-8.4.11-actions-no-action-after-child.sql",
+      "metadataFile": "mysql-8.4.11-actions-no-action-after-child.metadata.json",
+      "dialect": "mysql",
+      "version": "8.4.11",
+      "engine": "InnoDB",
+      "sourceRun": "run02",
+      "sourceCase": "actions_no_action",
+      "sourcePhases": [
+        "after"
+      ],
+      "sourceRole": "child",
+      "sourceReportSha256": "376cd79553da843c1c6807a8959ae9bb621af7f2814c3994cc80d4b934ee1d44",
+      "capturedWithin": {
+        "from": "2026-10-14T04:26:21.004Z",
+        "to": "2026-10-14T04:26:26.641Z"
+      },
+      "session": {
+        "sqlMode": "IGNORE_SPACE,ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES,NO_ZERO_IN_DATE,NO_ZERO_DATE,ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION",
+        "charset": "utf8mb4",
+        "collation": "utf8mb4_general_ci",
+        "foreignKeyChecks": 1,
+        "uniqueChecks": 1
+      },
+      "ddl": {
+        "sourceRawSha256": "a89ba82d40a39846ab1dbf820efe1a3621076929f5e46dde8452112a78e8e89c",
+        "publishedSha256": "a89ba82d40a39846ab1dbf820efe1a3621076929f5e46dde8452112a78e8e89c",
+        "bytes": 392,
+        "unchangedBytes": true,
+        "sanitization": "无需改名，逐字节保持自主SHOW CREATE原文",
+        "changes": []
+      },
+      "metadata": {
+        "sourceCanonicalSha256": "48c1577afd846d8719f809af29063ef4ac1acaf85981b5877f58b7f0ca9b66a2",
+        "publishedSha256": "2b247faeaab8c108644af6cc14ca6055e739247a63eed4798783bac99fa38605",
+        "counts": {
+          "kcu": 3,
+          "rc": 1,
+          "indexes": 3
+        },
+        "sanitization": "只投影白名单；引用库名映射为固定占位名；重新序列化，保留原字段有无与标量类型"
+      },
+      "observation": {
+        "nativeStatementAccepted": true,
+        "error": null,
+        "warningCodes": [],
+        "originalRowsUnchangedByAlter": true,
+        "nativeDefinitionUnchanged": false,
+        "productVerified": false,
+        "rowDataPublished": false,
+        "note": "实际默认/显式动作规范化。三种请求的数据拒绝行为相同，不等于RC动作字符串可跨版本统一。"
+      }
+    },
+    {
+      "id": "mysql-8.4.11-same-name-actions-before-after-child",
+      "file": "mysql-8.4.11-same-name-actions-before-after-child.sql",
+      "metadataFile": "mysql-8.4.11-same-name-actions-before-after-child.metadata.json",
+      "dialect": "mysql",
+      "version": "8.4.11",
+      "engine": "InnoDB",
+      "sourceRun": "run01",
+      "sourceCase": "same_name_actions",
+      "sourcePhases": [
+        "before",
+        "after"
+      ],
+      "sourceRole": "child",
+      "sourceReportSha256": "52d04d2dfed6c45584c2e2d97c14ec55b9b66568da2a37f2d39909a8ebd827f0",
+      "capturedWithin": {
+        "from": "2026-10-14T04:09:07.406Z",
+        "to": "2026-10-14T04:09:14.280Z"
+      },
+      "session": {
+        "sqlMode": "IGNORE_SPACE,ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES,NO_ZERO_IN_DATE,NO_ZERO_DATE,ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION",
+        "charset": "utf8mb4",
+        "collation": "utf8mb4_general_ci",
+        "foreignKeyChecks": 1,
+        "uniqueChecks": 1
+      },
+      "ddl": {
+        "sourceRawSha256": "02118a28178a3ddbce0c82c3852484ffdc5ff5d0427edaf6504e8913c6dd70be",
+        "publishedSha256": "02118a28178a3ddbce0c82c3852484ffdc5ff5d0427edaf6504e8913c6dd70be",
+        "bytes": 430,
+        "unchangedBytes": true,
+        "sanitization": "无需改名，逐字节保持自主SHOW CREATE原文",
+        "changes": []
+      },
+      "metadata": {
+        "sourceCanonicalSha256": "13ebc8e7db674f63ba410adaff70b46084bd31a537bfb3cc4500af85cf6984ba",
+        "publishedSha256": "8b5c667c169421e1e1f06f94c2ac41b409a72c0337883d72b0b23264b9ee6e3e",
+        "counts": {
+          "kcu": 3,
+          "rc": 1,
+          "indexes": 3
+        },
+        "sanitization": "只投影白名单；引用库名映射为固定占位名；重新序列化，保留原字段有无与标量类型"
+      },
+      "observation": {
+        "nativeStatementAccepted": false,
+        "error": {
+          "errno": 1826,
+          "code": "ER_FK_DUP_NAME",
+          "sqlState": "HY000"
+        },
+        "warningCodes": [
+          {
+            "level": "Error",
+            "code": 1826
+          }
+        ],
+        "originalRowsUnchangedByAlter": true,
+        "nativeDefinitionUnchanged": true,
+        "productVerified": false,
+        "rowDataPublished": false,
+        "note": "同名DROP+ADD改动作单次拒绝；这两个阶段的自主定义和目录完全保持，不自动拆分重放。"
+      }
+    },
+    {
+      "id": "mysql-8.4.11-different-name-actions-before-child",
+      "file": "mysql-8.4.11-different-name-actions-before-child.sql",
+      "metadataFile": "mysql-8.4.11-different-name-actions-before-child.metadata.json",
+      "dialect": "mysql",
+      "version": "8.4.11",
+      "engine": "InnoDB",
+      "sourceRun": "run01",
+      "sourceCase": "different_name_actions",
+      "sourcePhases": [
+        "before"
+      ],
+      "sourceRole": "child",
+      "sourceReportSha256": "52d04d2dfed6c45584c2e2d97c14ec55b9b66568da2a37f2d39909a8ebd827f0",
+      "capturedWithin": {
+        "from": "2026-10-14T04:09:07.406Z",
+        "to": "2026-10-14T04:09:14.280Z"
+      },
+      "session": {
+        "sqlMode": "IGNORE_SPACE,ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES,NO_ZERO_IN_DATE,NO_ZERO_DATE,ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION",
+        "charset": "utf8mb4",
+        "collation": "utf8mb4_general_ci",
+        "foreignKeyChecks": 1,
+        "uniqueChecks": 1
+      },
+      "ddl": {
+        "sourceRawSha256": "2c6e5aadd1d455c171277337e70ea42054c4a2e08ba24e13429c24f40df56f3d",
+        "publishedSha256": "2c6e5aadd1d455c171277337e70ea42054c4a2e08ba24e13429c24f40df56f3d",
+        "bytes": 445,
+        "unchangedBytes": true,
+        "sanitization": "无需改名，逐字节保持自主SHOW CREATE原文",
+        "changes": []
+      },
+      "metadata": {
+        "sourceCanonicalSha256": "f78cc532a1723ae5df3aa8755a6efe7ab66be58d8e4dd7dc981a1547e3eb9def",
+        "publishedSha256": "db0a284204fbe5f87d97ea4c6cfbc831edc7362aeb64de7fbc48bc62159b30d1",
+        "counts": {
+          "kcu": 3,
+          "rc": 1,
+          "indexes": 3
+        },
+        "sanitization": "只投影白名单；引用库名映射为固定占位名；重新序列化，保留原字段有无与标量类型"
+      },
+      "observation": {
+        "nativeStatementAccepted": true,
+        "error": null,
+        "warningCodes": [],
+        "originalRowsUnchangedByAlter": true,
+        "nativeDefinitionUnchanged": false,
+        "productVerified": false,
+        "rowDataPublished": false,
+        "note": "异名DROP+ADD改CASCADE单次成功，私有自主DML另证级联更新/删除；本目录不含行或DML。"
+      }
+    },
+    {
+      "id": "mysql-8.4.11-different-name-actions-after-child",
+      "file": "mysql-8.4.11-different-name-actions-after-child.sql",
+      "metadataFile": "mysql-8.4.11-different-name-actions-after-child.metadata.json",
+      "dialect": "mysql",
+      "version": "8.4.11",
+      "engine": "InnoDB",
+      "sourceRun": "run01",
+      "sourceCase": "different_name_actions",
+      "sourcePhases": [
+        "after"
+      ],
+      "sourceRole": "child",
+      "sourceReportSha256": "52d04d2dfed6c45584c2e2d97c14ec55b9b66568da2a37f2d39909a8ebd827f0",
+      "capturedWithin": {
+        "from": "2026-10-14T04:09:07.406Z",
+        "to": "2026-10-14T04:09:14.280Z"
+      },
+      "session": {
+        "sqlMode": "IGNORE_SPACE,ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES,NO_ZERO_IN_DATE,NO_ZERO_DATE,ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION",
+        "charset": "utf8mb4",
+        "collation": "utf8mb4_general_ci",
+        "foreignKeyChecks": 1,
+        "uniqueChecks": 1
+      },
+      "ddl": {
+        "sourceRawSha256": "0a048f19edf6668947eb256e75fd4b9e52e11ec9d0f41b0fc34d93586d9d67b7",
+        "publishedSha256": "0a048f19edf6668947eb256e75fd4b9e52e11ec9d0f41b0fc34d93586d9d67b7",
+        "bytes": 447,
+        "unchangedBytes": true,
+        "sanitization": "无需改名，逐字节保持自主SHOW CREATE原文",
+        "changes": []
+      },
+      "metadata": {
+        "sourceCanonicalSha256": "6b8ed4cf2f602371ca52be145788c218c14d84b4a5baf2c8c86341b87c520380",
+        "publishedSha256": "33ae1e88b443abe3e2f7dc0e430144110352dc5156e7051ac417379156f8615a",
+        "counts": {
+          "kcu": 3,
+          "rc": 1,
+          "indexes": 3
+        },
+        "sanitization": "只投影白名单；引用库名映射为固定占位名；重新序列化，保留原字段有无与标量类型"
+      },
+      "observation": {
+        "nativeStatementAccepted": true,
+        "error": null,
+        "warningCodes": [],
+        "originalRowsUnchangedByAlter": true,
+        "nativeDefinitionUnchanged": false,
+        "productVerified": false,
+        "rowDataPublished": false,
+        "note": "异名DROP+ADD改CASCADE单次成功，私有自主DML另证级联更新/删除；本目录不含行或DML。"
+      }
+    },
+    {
+      "id": "mysql-8.4.11-tuple-replace-success-before-child",
+      "file": "mysql-8.4.11-tuple-replace-success-before-child.sql",
+      "metadataFile": "mysql-8.4.11-tuple-replace-success-before-child.metadata.json",
+      "dialect": "mysql",
+      "version": "8.4.11",
+      "engine": "InnoDB",
+      "sourceRun": "run02",
+      "sourceCase": "tuple_replace_success",
+      "sourcePhases": [
+        "before"
+      ],
+      "sourceRole": "child",
+      "sourceReportSha256": "376cd79553da843c1c6807a8959ae9bb621af7f2814c3994cc80d4b934ee1d44",
+      "capturedWithin": {
+        "from": "2026-10-14T04:26:21.004Z",
+        "to": "2026-10-14T04:26:26.641Z"
+      },
+      "session": {
+        "sqlMode": "IGNORE_SPACE,ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES,NO_ZERO_IN_DATE,NO_ZERO_DATE,ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION",
+        "charset": "utf8mb4",
+        "collation": "utf8mb4_general_ci",
+        "foreignKeyChecks": 1,
+        "uniqueChecks": 1
+      },
+      "ddl": {
+        "sourceRawSha256": "e4de5c86cc644980f3b59d68f8c110ebd5cb124d3dcce6e54e296ad8dc806553",
+        "publishedSha256": "e4de5c86cc644980f3b59d68f8c110ebd5cb124d3dcce6e54e296ad8dc806553",
+        "bytes": 442,
+        "unchangedBytes": true,
+        "sanitization": "无需改名，逐字节保持自主SHOW CREATE原文",
+        "changes": []
+      },
+      "metadata": {
+        "sourceCanonicalSha256": "06c1f411afa711147ce06bcf8460e47015a8ef6c9a1631bf5f6b93cb11c97500",
+        "publishedSha256": "863228cb7d5092cc31c498275212f2dfdfa83a5db11bc240927f1557f9861d93",
+        "counts": {
+          "kcu": 3,
+          "rc": 1,
+          "indexes": 3
+        },
+        "sanitization": "只投影白名单；引用库名映射为固定占位名；重新序列化，保留原字段有无与标量类型"
+      },
+      "observation": {
+        "nativeStatementAccepted": true,
+        "error": null,
+        "warningCodes": [],
+        "originalRowsUnchangedByAlter": true,
+        "nativeDefinitionUnchanged": false,
+        "productVerified": false,
+        "rowDataPublished": false,
+        "note": "异名DROP+ADD改变有序元组单次成功；自主DML另证新映射接管与旧映射不再支配，不外推任意DDL原子性。"
+      }
+    },
+    {
+      "id": "mysql-8.4.11-tuple-replace-success-after-child",
+      "file": "mysql-8.4.11-tuple-replace-success-after-child.sql",
+      "metadataFile": "mysql-8.4.11-tuple-replace-success-after-child.metadata.json",
+      "dialect": "mysql",
+      "version": "8.4.11",
+      "engine": "InnoDB",
+      "sourceRun": "run02",
+      "sourceCase": "tuple_replace_success",
+      "sourcePhases": [
+        "after"
+      ],
+      "sourceRole": "child",
+      "sourceReportSha256": "376cd79553da843c1c6807a8959ae9bb621af7f2814c3994cc80d4b934ee1d44",
+      "capturedWithin": {
+        "from": "2026-10-14T04:26:21.004Z",
+        "to": "2026-10-14T04:26:26.641Z"
+      },
+      "session": {
+        "sqlMode": "IGNORE_SPACE,ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES,NO_ZERO_IN_DATE,NO_ZERO_DATE,ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION",
+        "charset": "utf8mb4",
+        "collation": "utf8mb4_general_ci",
+        "foreignKeyChecks": 1,
+        "uniqueChecks": 1
+      },
+      "ddl": {
+        "sourceRawSha256": "52356c079216e1b3c01b4fad848f24c34acb86f69d25c2d966395bfd4b05fbc9",
+        "publishedSha256": "52356c079216e1b3c01b4fad848f24c34acb86f69d25c2d966395bfd4b05fbc9",
+        "bytes": 496,
+        "unchangedBytes": true,
+        "sanitization": "无需改名，逐字节保持自主SHOW CREATE原文",
+        "changes": []
+      },
+      "metadata": {
+        "sourceCanonicalSha256": "e5c73cd986ab67c6ca144af35abd6625f77abde25521f1ad89cdf375001ee819",
+        "publishedSha256": "118ebb68f58b4b63e6fe3e61d48b110ebda33f2e2d90526fa905df11e024c2b6",
+        "counts": {
+          "kcu": 3,
+          "rc": 1,
+          "indexes": 5
+        },
+        "sanitization": "只投影白名单；引用库名映射为固定占位名；重新序列化，保留原字段有无与标量类型"
+      },
+      "observation": {
+        "nativeStatementAccepted": true,
+        "error": null,
+        "warningCodes": [],
+        "originalRowsUnchangedByAlter": true,
+        "nativeDefinitionUnchanged": false,
+        "productVerified": false,
+        "rowDataPublished": false,
+        "note": "异名DROP+ADD改变有序元组单次成功；自主DML另证新映射接管与旧映射不再支配，不外推任意DDL原子性。"
+      }
+    },
+    {
+      "id": "mysql-8.4.11-tuple-replace-mismatch-before-after-child",
+      "file": "mysql-8.4.11-tuple-replace-mismatch-before-after-child.sql",
+      "metadataFile": "mysql-8.4.11-tuple-replace-mismatch-before-after-child.metadata.json",
+      "dialect": "mysql",
+      "version": "8.4.11",
+      "engine": "InnoDB",
+      "sourceRun": "run02",
+      "sourceCase": "tuple_replace_mismatch",
+      "sourcePhases": [
+        "before",
+        "after"
+      ],
+      "sourceRole": "child",
+      "sourceReportSha256": "376cd79553da843c1c6807a8959ae9bb621af7f2814c3994cc80d4b934ee1d44",
+      "capturedWithin": {
+        "from": "2026-10-14T04:26:21.004Z",
+        "to": "2026-10-14T04:26:26.641Z"
+      },
+      "session": {
+        "sqlMode": "IGNORE_SPACE,ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES,NO_ZERO_IN_DATE,NO_ZERO_DATE,ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION",
+        "charset": "utf8mb4",
+        "collation": "utf8mb4_general_ci",
+        "foreignKeyChecks": 1,
+        "uniqueChecks": 1
+      },
+      "ddl": {
+        "sourceRawSha256": "fbf84157dc23f58c07a9d91a31d1df802c2afc1969107cbceac233ef5e135cbb",
+        "publishedSha256": "fbf84157dc23f58c07a9d91a31d1df802c2afc1969107cbceac233ef5e135cbb",
+        "bytes": 445,
+        "unchangedBytes": true,
+        "sanitization": "无需改名，逐字节保持自主SHOW CREATE原文",
+        "changes": []
+      },
+      "metadata": {
+        "sourceCanonicalSha256": "e19b4ab93ef85b390c71812d8b68d33bd45a7a8d4b58519e3e67b1b1c9793ff8",
+        "publishedSha256": "8f542f67f29e5dea773207a57a5f0a49819b4dd81ebd2b222ec6d03088cddf6c",
+        "counts": {
+          "kcu": 3,
+          "rc": 1,
+          "indexes": 3
+        },
+        "sanitization": "只投影白名单；引用库名映射为固定占位名；重新序列化，保留原字段有无与标量类型"
+      },
+      "observation": {
+        "nativeStatementAccepted": false,
+        "error": {
+          "errno": 1452,
+          "code": "ER_NO_REFERENCED_ROW_2",
+          "sqlState": "23000"
+        },
+        "warningCodes": [
+          {
+            "level": "Error",
+            "code": 1452
+          }
+        ],
+        "originalRowsUnchangedByAlter": true,
+        "nativeDefinitionUnchanged": true,
+        "productVerified": false,
+        "rowDataPublished": false,
+        "note": "异名元组替换因1452拒绝；旧FK/目录/原行保持且自主DML证明旧映射仍约束，只适用本轮已观察失败路径。"
+      }
+    },
+    {
+      "id": "mariadb-10.11.19-actions-default-after-child",
+      "file": "mariadb-10.11.19-actions-default-after-child.sql",
+      "metadataFile": "mariadb-10.11.19-actions-default-after-child.metadata.json",
+      "dialect": "mariadb",
+      "version": "10.11.19-MariaDB-ubu2204",
+      "engine": "InnoDB",
+      "sourceRun": "run02",
+      "sourceCase": "actions_default",
+      "sourcePhases": [
+        "after"
+      ],
+      "sourceRole": "child",
+      "sourceReportSha256": "01e8a9fb316530355228ef55a7f5a7adb0e6f1d745104ca199ebac7c2ea3944a",
+      "capturedWithin": {
+        "from": "2026-10-14T04:27:01.343Z",
+        "to": "2026-10-14T04:27:06.022Z"
+      },
+      "session": {
+        "sqlMode": "IGNORE_SPACE,STRICT_TRANS_TABLES,ERROR_FOR_DIVISION_BY_ZERO,NO_AUTO_CREATE_USER,NO_ENGINE_SUBSTITUTION",
+        "charset": "utf8mb4",
+        "collation": "utf8mb4_general_ci",
+        "foreignKeyChecks": 1,
+        "uniqueChecks": 1
+      },
+      "ddl": {
+        "sourceRawSha256": "6803bd42fe359c39c58c882d77296c330dfb26b14708d5e0dc7f91b50b8cc84b",
+        "publishedSha256": "6803bd42fe359c39c58c882d77296c330dfb26b14708d5e0dc7f91b50b8cc84b",
+        "bytes": 378,
+        "unchangedBytes": true,
+        "sanitization": "无需改名，逐字节保持自主SHOW CREATE原文",
+        "changes": []
+      },
+      "metadata": {
+        "sourceCanonicalSha256": "075a1c84292bcce17e8cfe5575342bad63b2096020197f6d77834a05b469d05e",
+        "publishedSha256": "ed8c2117e30fc9ee5b21bdf93a9759fd51a80379d774b4d9e3a4c6b6022dccc2",
+        "counts": {
+          "kcu": 3,
+          "rc": 1,
+          "indexes": 3
+        },
+        "sanitization": "只投影白名单；引用库名映射为固定占位名；重新序列化，保留原字段有无与标量类型"
+      },
+      "observation": {
+        "nativeStatementAccepted": true,
+        "error": null,
+        "warningCodes": [],
+        "originalRowsUnchangedByAlter": true,
+        "nativeDefinitionUnchanged": false,
+        "productVerified": false,
+        "rowDataPublished": false,
+        "note": "实际默认/显式动作规范化。三种请求的数据拒绝行为相同，不等于RC动作字符串可跨版本统一。"
+      }
+    },
+    {
+      "id": "mariadb-10.11.19-actions-restrict-after-child",
+      "file": "mariadb-10.11.19-actions-restrict-after-child.sql",
+      "metadataFile": "mariadb-10.11.19-actions-restrict-after-child.metadata.json",
+      "dialect": "mariadb",
+      "version": "10.11.19-MariaDB-ubu2204",
+      "engine": "InnoDB",
+      "sourceRun": "run02",
+      "sourceCase": "actions_restrict",
+      "sourcePhases": [
+        "after"
+      ],
+      "sourceRole": "child",
+      "sourceReportSha256": "01e8a9fb316530355228ef55a7f5a7adb0e6f1d745104ca199ebac7c2ea3944a",
+      "capturedWithin": {
+        "from": "2026-10-14T04:27:01.343Z",
+        "to": "2026-10-14T04:27:06.022Z"
+      },
+      "session": {
+        "sqlMode": "IGNORE_SPACE,STRICT_TRANS_TABLES,ERROR_FOR_DIVISION_BY_ZERO,NO_AUTO_CREATE_USER,NO_ENGINE_SUBSTITUTION",
+        "charset": "utf8mb4",
+        "collation": "utf8mb4_general_ci",
+        "foreignKeyChecks": 1,
+        "uniqueChecks": 1
+      },
+      "ddl": {
+        "sourceRawSha256": "96c68bd53c7bb982f600f2773c8e298390c1e0d7b2568163f83608c37c60a172",
+        "publishedSha256": "96c68bd53c7bb982f600f2773c8e298390c1e0d7b2568163f83608c37c60a172",
+        "bytes": 381,
+        "unchangedBytes": true,
+        "sanitization": "无需改名，逐字节保持自主SHOW CREATE原文",
+        "changes": []
+      },
+      "metadata": {
+        "sourceCanonicalSha256": "0d5b5ad5d58dc162a99bcf44d65365fa58904a3dff2e695070e6841722a8b0f5",
+        "publishedSha256": "db54b5f6973918ef323dc18f51f7fe2df06495011d96acf15ad1c10432e65868",
+        "counts": {
+          "kcu": 3,
+          "rc": 1,
+          "indexes": 3
+        },
+        "sanitization": "只投影白名单；引用库名映射为固定占位名；重新序列化，保留原字段有无与标量类型"
+      },
+      "observation": {
+        "nativeStatementAccepted": true,
+        "error": null,
+        "warningCodes": [],
+        "originalRowsUnchangedByAlter": true,
+        "nativeDefinitionUnchanged": false,
+        "productVerified": false,
+        "rowDataPublished": false,
+        "note": "实际默认/显式动作规范化。三种请求的数据拒绝行为相同，不等于RC动作字符串可跨版本统一。"
+      }
+    },
+    {
+      "id": "mariadb-10.11.19-actions-no-action-after-child",
+      "file": "mariadb-10.11.19-actions-no-action-after-child.sql",
+      "metadataFile": "mariadb-10.11.19-actions-no-action-after-child.metadata.json",
+      "dialect": "mariadb",
+      "version": "10.11.19-MariaDB-ubu2204",
+      "engine": "InnoDB",
+      "sourceRun": "run02",
+      "sourceCase": "actions_no_action",
+      "sourcePhases": [
+        "after"
+      ],
+      "sourceRole": "child",
+      "sourceReportSha256": "01e8a9fb316530355228ef55a7f5a7adb0e6f1d745104ca199ebac7c2ea3944a",
+      "capturedWithin": {
+        "from": "2026-10-14T04:27:01.343Z",
+        "to": "2026-10-14T04:27:06.022Z"
+      },
+      "session": {
+        "sqlMode": "IGNORE_SPACE,STRICT_TRANS_TABLES,ERROR_FOR_DIVISION_BY_ZERO,NO_AUTO_CREATE_USER,NO_ENGINE_SUBSTITUTION",
+        "charset": "utf8mb4",
+        "collation": "utf8mb4_general_ci",
+        "foreignKeyChecks": 1,
+        "uniqueChecks": 1
+      },
+      "ddl": {
+        "sourceRawSha256": "38e76ec03774985c335320ebe44d534d7addd0c8ab58a2d492a77c33537d6e3d",
+        "publishedSha256": "38e76ec03774985c335320ebe44d534d7addd0c8ab58a2d492a77c33537d6e3d",
+        "bytes": 424,
+        "unchangedBytes": true,
+        "sanitization": "无需改名，逐字节保持自主SHOW CREATE原文",
+        "changes": []
+      },
+      "metadata": {
+        "sourceCanonicalSha256": "0fe2f2b9fe340d1b3191e0ce5ff9cbd32479303cd9795ea1a7c6c1aa6a884222",
+        "publishedSha256": "bb59b645f7678264bd7922e474ce0d198d387c5a983be7470aba183ac75814fb",
+        "counts": {
+          "kcu": 3,
+          "rc": 1,
+          "indexes": 3
+        },
+        "sanitization": "只投影白名单；引用库名映射为固定占位名；重新序列化，保留原字段有无与标量类型"
+      },
+      "observation": {
+        "nativeStatementAccepted": true,
+        "error": null,
+        "warningCodes": [],
+        "originalRowsUnchangedByAlter": true,
+        "nativeDefinitionUnchanged": false,
+        "productVerified": false,
+        "rowDataPublished": false,
+        "note": "实际默认/显式动作规范化。三种请求的数据拒绝行为相同，不等于RC动作字符串可跨版本统一。"
+      }
+    },
+    {
+      "id": "mariadb-10.11.19-same-name-actions-before-after-child",
+      "file": "mariadb-10.11.19-same-name-actions-before-after-child.sql",
+      "metadataFile": "mariadb-10.11.19-same-name-actions-before-after-child.metadata.json",
+      "dialect": "mariadb",
+      "version": "10.11.19-MariaDB-ubu2204",
+      "engine": "InnoDB",
+      "sourceRun": "run01",
+      "sourceCase": "same_name_actions",
+      "sourcePhases": [
+        "before",
+        "after"
+      ],
+      "sourceRole": "child",
+      "sourceReportSha256": "1e81f026bccd79c79b335cbe10d55790bc3c0755d8384f4f7adea6232a7b33f9",
+      "capturedWithin": {
+        "from": "2026-10-14T04:10:03.180Z",
+        "to": "2026-10-14T04:10:08.910Z"
+      },
+      "session": {
+        "sqlMode": "IGNORE_SPACE,STRICT_TRANS_TABLES,ERROR_FOR_DIVISION_BY_ZERO,NO_AUTO_CREATE_USER,NO_ENGINE_SUBSTITUTION",
+        "charset": "utf8mb4",
+        "collation": "utf8mb4_general_ci",
+        "foreignKeyChecks": 1,
+        "uniqueChecks": 1
+      },
+      "ddl": {
+        "sourceRawSha256": "ba2bccf2b1ba9445b92c07b5e77ef6b1e901ebf83bc5b2244e0fe3b598628f80",
+        "publishedSha256": "ba2bccf2b1ba9445b92c07b5e77ef6b1e901ebf83bc5b2244e0fe3b598628f80",
+        "bytes": 384,
+        "unchangedBytes": true,
+        "sanitization": "无需改名，逐字节保持自主SHOW CREATE原文",
+        "changes": []
+      },
+      "metadata": {
+        "sourceCanonicalSha256": "54d9cf899a30ebea62de4de0ed2b9d8e18a3086767be75b415fd66d9e1ae36f0",
+        "publishedSha256": "c6aaddc2692360adb911f50e883759ae39683d57cae5a1793d5cf33460fd0190",
+        "counts": {
+          "kcu": 3,
+          "rc": 1,
+          "indexes": 3
+        },
+        "sanitization": "只投影白名单；引用库名映射为固定占位名；重新序列化，保留原字段有无与标量类型"
+      },
+      "observation": {
+        "nativeStatementAccepted": false,
+        "error": {
+          "errno": 1005,
+          "code": "ER_CANT_CREATE_TABLE",
+          "sqlState": "HY000"
+        },
+        "warningCodes": [
+          {
+            "level": "Warning",
+            "code": 121
+          },
+          {
+            "level": "Error",
+            "code": 1005
+          },
+          {
+            "level": "Warning",
+            "code": 1022
+          }
+        ],
+        "originalRowsUnchangedByAlter": true,
+        "nativeDefinitionUnchanged": true,
+        "productVerified": false,
+        "rowDataPublished": false,
+        "note": "同名DROP+ADD改动作单次拒绝；这两个阶段的自主定义和目录完全保持，不自动拆分重放。"
+      }
+    },
+    {
+      "id": "mariadb-10.11.19-different-name-actions-before-child",
+      "file": "mariadb-10.11.19-different-name-actions-before-child.sql",
+      "metadataFile": "mariadb-10.11.19-different-name-actions-before-child.metadata.json",
+      "dialect": "mariadb",
+      "version": "10.11.19-MariaDB-ubu2204",
+      "engine": "InnoDB",
+      "sourceRun": "run01",
+      "sourceCase": "different_name_actions",
+      "sourcePhases": [
+        "before"
+      ],
+      "sourceRole": "child",
+      "sourceReportSha256": "1e81f026bccd79c79b335cbe10d55790bc3c0755d8384f4f7adea6232a7b33f9",
+      "capturedWithin": {
+        "from": "2026-10-14T04:10:03.180Z",
+        "to": "2026-10-14T04:10:08.910Z"
+      },
+      "session": {
+        "sqlMode": "IGNORE_SPACE,STRICT_TRANS_TABLES,ERROR_FOR_DIVISION_BY_ZERO,NO_AUTO_CREATE_USER,NO_ENGINE_SUBSTITUTION",
+        "charset": "utf8mb4",
+        "collation": "utf8mb4_general_ci",
+        "foreignKeyChecks": 1,
+        "uniqueChecks": 1
+      },
+      "ddl": {
+        "sourceRawSha256": "9a16359286d1e23b206dff75ceb99f233b367dcbb5c7708575fbdb16bdfeed7f",
+        "publishedSha256": "9a16359286d1e23b206dff75ceb99f233b367dcbb5c7708575fbdb16bdfeed7f",
+        "bytes": 399,
+        "unchangedBytes": true,
+        "sanitization": "无需改名，逐字节保持自主SHOW CREATE原文",
+        "changes": []
+      },
+      "metadata": {
+        "sourceCanonicalSha256": "cd922df23a8885fd4c41f9d26cb706ac05022832a8c78dd1c8f498eb2c7d8090",
+        "publishedSha256": "bd3785e8032cdc1da2bb11f046d664cf7cfd784c2ef6e80f21dda7bf05ca7cd6",
+        "counts": {
+          "kcu": 3,
+          "rc": 1,
+          "indexes": 3
+        },
+        "sanitization": "只投影白名单；引用库名映射为固定占位名；重新序列化，保留原字段有无与标量类型"
+      },
+      "observation": {
+        "nativeStatementAccepted": true,
+        "error": null,
+        "warningCodes": [],
+        "originalRowsUnchangedByAlter": true,
+        "nativeDefinitionUnchanged": false,
+        "productVerified": false,
+        "rowDataPublished": false,
+        "note": "异名DROP+ADD改CASCADE单次成功，私有自主DML另证级联更新/删除；本目录不含行或DML。"
+      }
+    },
+    {
+      "id": "mariadb-10.11.19-different-name-actions-after-child",
+      "file": "mariadb-10.11.19-different-name-actions-after-child.sql",
+      "metadataFile": "mariadb-10.11.19-different-name-actions-after-child.metadata.json",
+      "dialect": "mariadb",
+      "version": "10.11.19-MariaDB-ubu2204",
+      "engine": "InnoDB",
+      "sourceRun": "run01",
+      "sourceCase": "different_name_actions",
+      "sourcePhases": [
+        "after"
+      ],
+      "sourceRole": "child",
+      "sourceReportSha256": "1e81f026bccd79c79b335cbe10d55790bc3c0755d8384f4f7adea6232a7b33f9",
+      "capturedWithin": {
+        "from": "2026-10-14T04:10:03.180Z",
+        "to": "2026-10-14T04:10:08.910Z"
+      },
+      "session": {
+        "sqlMode": "IGNORE_SPACE,STRICT_TRANS_TABLES,ERROR_FOR_DIVISION_BY_ZERO,NO_AUTO_CREATE_USER,NO_ENGINE_SUBSTITUTION",
+        "charset": "utf8mb4",
+        "collation": "utf8mb4_general_ci",
+        "foreignKeyChecks": 1,
+        "uniqueChecks": 1
+      },
+      "ddl": {
+        "sourceRawSha256": "179d28b81306694a1dea4005ef0efe0c78a808fe1dda50b1e9bf76e6de72e04b",
+        "publishedSha256": "179d28b81306694a1dea4005ef0efe0c78a808fe1dda50b1e9bf76e6de72e04b",
+        "bytes": 439,
+        "unchangedBytes": true,
+        "sanitization": "无需改名，逐字节保持自主SHOW CREATE原文",
+        "changes": []
+      },
+      "metadata": {
+        "sourceCanonicalSha256": "b7eae0da7a747dadb3171212d91d5e7f89999e621e61c604f8ed4928c619a34d",
+        "publishedSha256": "88a21a21963ed39caa4a4cbc70c936bd9ddf0c53508049e14f8332b12c7e5a47",
+        "counts": {
+          "kcu": 3,
+          "rc": 1,
+          "indexes": 3
+        },
+        "sanitization": "只投影白名单；引用库名映射为固定占位名；重新序列化，保留原字段有无与标量类型"
+      },
+      "observation": {
+        "nativeStatementAccepted": true,
+        "error": null,
+        "warningCodes": [],
+        "originalRowsUnchangedByAlter": true,
+        "nativeDefinitionUnchanged": false,
+        "productVerified": false,
+        "rowDataPublished": false,
+        "note": "异名DROP+ADD改CASCADE单次成功，私有自主DML另证级联更新/删除；本目录不含行或DML。"
+      }
+    },
+    {
+      "id": "mariadb-10.11.19-tuple-replace-success-before-child",
+      "file": "mariadb-10.11.19-tuple-replace-success-before-child.sql",
+      "metadataFile": "mariadb-10.11.19-tuple-replace-success-before-child.metadata.json",
+      "dialect": "mariadb",
+      "version": "10.11.19-MariaDB-ubu2204",
+      "engine": "InnoDB",
+      "sourceRun": "run02",
+      "sourceCase": "tuple_replace_success",
+      "sourcePhases": [
+        "before"
+      ],
+      "sourceRole": "child",
+      "sourceReportSha256": "01e8a9fb316530355228ef55a7f5a7adb0e6f1d745104ca199ebac7c2ea3944a",
+      "capturedWithin": {
+        "from": "2026-10-14T04:27:01.343Z",
+        "to": "2026-10-14T04:27:06.022Z"
+      },
+      "session": {
+        "sqlMode": "IGNORE_SPACE,STRICT_TRANS_TABLES,ERROR_FOR_DIVISION_BY_ZERO,NO_AUTO_CREATE_USER,NO_ENGINE_SUBSTITUTION",
+        "charset": "utf8mb4",
+        "collation": "utf8mb4_general_ci",
+        "foreignKeyChecks": 1,
+        "uniqueChecks": 1
+      },
+      "ddl": {
+        "sourceRawSha256": "ae82610ea9be118b3c55c59a0678ef8df2fab34476af9f93d8187cf220633846",
+        "publishedSha256": "ae82610ea9be118b3c55c59a0678ef8df2fab34476af9f93d8187cf220633846",
+        "bytes": 396,
+        "unchangedBytes": true,
+        "sanitization": "无需改名，逐字节保持自主SHOW CREATE原文",
+        "changes": []
+      },
+      "metadata": {
+        "sourceCanonicalSha256": "50160bcee2958acfbd351ea8c6750baaa35ecdd0ad3f8543f92b91b40c241b2d",
+        "publishedSha256": "bf213d2201a3eb1a8e9dcc0c00851880de478eb18e804046e5e7eed304562c9c",
+        "counts": {
+          "kcu": 3,
+          "rc": 1,
+          "indexes": 3
+        },
+        "sanitization": "只投影白名单；引用库名映射为固定占位名；重新序列化，保留原字段有无与标量类型"
+      },
+      "observation": {
+        "nativeStatementAccepted": true,
+        "error": null,
+        "warningCodes": [],
+        "originalRowsUnchangedByAlter": true,
+        "nativeDefinitionUnchanged": false,
+        "productVerified": false,
+        "rowDataPublished": false,
+        "note": "异名DROP+ADD改变有序元组单次成功；自主DML另证新映射接管与旧映射不再支配，不外推任意DDL原子性。"
+      }
+    },
+    {
+      "id": "mariadb-10.11.19-tuple-replace-success-after-child",
+      "file": "mariadb-10.11.19-tuple-replace-success-after-child.sql",
+      "metadataFile": "mariadb-10.11.19-tuple-replace-success-after-child.metadata.json",
+      "dialect": "mariadb",
+      "version": "10.11.19-MariaDB-ubu2204",
+      "engine": "InnoDB",
+      "sourceRun": "run02",
+      "sourceCase": "tuple_replace_success",
+      "sourcePhases": [
+        "after"
+      ],
+      "sourceRole": "child",
+      "sourceReportSha256": "01e8a9fb316530355228ef55a7f5a7adb0e6f1d745104ca199ebac7c2ea3944a",
+      "capturedWithin": {
+        "from": "2026-10-14T04:27:01.343Z",
+        "to": "2026-10-14T04:27:06.022Z"
+      },
+      "session": {
+        "sqlMode": "IGNORE_SPACE,STRICT_TRANS_TABLES,ERROR_FOR_DIVISION_BY_ZERO,NO_AUTO_CREATE_USER,NO_ENGINE_SUBSTITUTION",
+        "charset": "utf8mb4",
+        "collation": "utf8mb4_general_ci",
+        "foreignKeyChecks": 1,
+        "uniqueChecks": 1
+      },
+      "ddl": {
+        "sourceRawSha256": "a45404eea775291639c2a41938d55d27e160fd0498e156b4cd26f75d35264560",
+        "publishedSha256": "a45404eea775291639c2a41938d55d27e160fd0498e156b4cd26f75d35264560",
+        "bytes": 450,
+        "unchangedBytes": true,
+        "sanitization": "无需改名，逐字节保持自主SHOW CREATE原文",
+        "changes": []
+      },
+      "metadata": {
+        "sourceCanonicalSha256": "1814e92e1055327195c82cf8f6cb5821551400879b11c19571adf98f83c5c437",
+        "publishedSha256": "df58648f892f347f4bbf26a9ca6fb423002c5cfa88c1bd9b71b26cb456cb196d",
+        "counts": {
+          "kcu": 3,
+          "rc": 1,
+          "indexes": 5
+        },
+        "sanitization": "只投影白名单；引用库名映射为固定占位名；重新序列化，保留原字段有无与标量类型"
+      },
+      "observation": {
+        "nativeStatementAccepted": true,
+        "error": null,
+        "warningCodes": [],
+        "originalRowsUnchangedByAlter": true,
+        "nativeDefinitionUnchanged": false,
+        "productVerified": false,
+        "rowDataPublished": false,
+        "note": "异名DROP+ADD改变有序元组单次成功；自主DML另证新映射接管与旧映射不再支配，不外推任意DDL原子性。"
+      }
+    },
+    {
+      "id": "mariadb-10.11.19-tuple-replace-mismatch-before-after-child",
+      "file": "mariadb-10.11.19-tuple-replace-mismatch-before-after-child.sql",
+      "metadataFile": "mariadb-10.11.19-tuple-replace-mismatch-before-after-child.metadata.json",
+      "dialect": "mariadb",
+      "version": "10.11.19-MariaDB-ubu2204",
+      "engine": "InnoDB",
+      "sourceRun": "run02",
+      "sourceCase": "tuple_replace_mismatch",
+      "sourcePhases": [
+        "before",
+        "after"
+      ],
+      "sourceRole": "child",
+      "sourceReportSha256": "01e8a9fb316530355228ef55a7f5a7adb0e6f1d745104ca199ebac7c2ea3944a",
+      "capturedWithin": {
+        "from": "2026-10-14T04:27:01.343Z",
+        "to": "2026-10-14T04:27:06.022Z"
+      },
+      "session": {
+        "sqlMode": "IGNORE_SPACE,STRICT_TRANS_TABLES,ERROR_FOR_DIVISION_BY_ZERO,NO_AUTO_CREATE_USER,NO_ENGINE_SUBSTITUTION",
+        "charset": "utf8mb4",
+        "collation": "utf8mb4_general_ci",
+        "foreignKeyChecks": 1,
+        "uniqueChecks": 1
+      },
+      "ddl": {
+        "sourceRawSha256": "df87b9d62b8b3ecf3bcceb171a732ab28056933de80841fe3cf09ec5efa7e720",
+        "publishedSha256": "df87b9d62b8b3ecf3bcceb171a732ab28056933de80841fe3cf09ec5efa7e720",
+        "bytes": 399,
+        "unchangedBytes": true,
+        "sanitization": "无需改名，逐字节保持自主SHOW CREATE原文",
+        "changes": []
+      },
+      "metadata": {
+        "sourceCanonicalSha256": "1299b6b1d1dc996549fb789f32f2082ffba548d3b3605c94e87d210110d207be",
+        "publishedSha256": "3269db95a71fdb65e3337e72dfceaa097431bec7296d8910186a6d20c7d16e00",
+        "counts": {
+          "kcu": 3,
+          "rc": 1,
+          "indexes": 3
+        },
+        "sanitization": "只投影白名单；引用库名映射为固定占位名；重新序列化，保留原字段有无与标量类型"
+      },
+      "observation": {
+        "nativeStatementAccepted": false,
+        "error": {
+          "errno": 1452,
+          "code": "ER_NO_REFERENCED_ROW_2",
+          "sqlState": "23000"
+        },
+        "warningCodes": [
+          {
+            "level": "Error",
+            "code": 1452
+          }
+        ],
+        "originalRowsUnchangedByAlter": true,
+        "nativeDefinitionUnchanged": true,
+        "productVerified": false,
+        "rowDataPublished": false,
+        "note": "异名元组替换因1452拒绝；旧FK/目录/原行保持且自主DML证明旧映射仍约束，只适用本轮已观察失败路径。"
+      }
+    },
+    {
+      "id": "mariadb-11.4.13-actions-default-after-child",
+      "file": "mariadb-11.4.13-actions-default-after-child.sql",
+      "metadataFile": "mariadb-11.4.13-actions-default-after-child.metadata.json",
+      "dialect": "mariadb",
+      "version": "11.4.13-MariaDB-ubu2404",
+      "engine": "InnoDB",
+      "sourceRun": "run02",
+      "sourceCase": "actions_default",
+      "sourcePhases": [
+        "after"
+      ],
+      "sourceRole": "child",
+      "sourceReportSha256": "e7ba89dba3482808aea745c9641aee55d2b6c4969e87249487f34a727e6fcbd1",
+      "capturedWithin": {
+        "from": "2026-10-14T04:27:08.895Z",
+        "to": "2026-10-14T04:27:13.285Z"
+      },
+      "session": {
+        "sqlMode": "IGNORE_SPACE,STRICT_TRANS_TABLES,ERROR_FOR_DIVISION_BY_ZERO,NO_AUTO_CREATE_USER,NO_ENGINE_SUBSTITUTION",
+        "charset": "utf8mb4",
+        "collation": "utf8mb4_uca1400_ai_ci",
+        "foreignKeyChecks": 1,
+        "uniqueChecks": 1
+      },
+      "ddl": {
+        "sourceRawSha256": "6803bd42fe359c39c58c882d77296c330dfb26b14708d5e0dc7f91b50b8cc84b",
+        "publishedSha256": "6803bd42fe359c39c58c882d77296c330dfb26b14708d5e0dc7f91b50b8cc84b",
+        "bytes": 378,
+        "unchangedBytes": true,
+        "sanitization": "无需改名，逐字节保持自主SHOW CREATE原文",
+        "changes": []
+      },
+      "metadata": {
+        "sourceCanonicalSha256": "14ecfda507c0a674b6046df1a3c132855a2776a23972524fccdbd7ed4e382549",
+        "publishedSha256": "ed8c2117e30fc9ee5b21bdf93a9759fd51a80379d774b4d9e3a4c6b6022dccc2",
+        "counts": {
+          "kcu": 3,
+          "rc": 1,
+          "indexes": 3
+        },
+        "sanitization": "只投影白名单；引用库名映射为固定占位名；重新序列化，保留原字段有无与标量类型"
+      },
+      "observation": {
+        "nativeStatementAccepted": true,
+        "error": null,
+        "warningCodes": [],
+        "originalRowsUnchangedByAlter": true,
+        "nativeDefinitionUnchanged": false,
+        "productVerified": false,
+        "rowDataPublished": false,
+        "note": "实际默认/显式动作规范化。三种请求的数据拒绝行为相同，不等于RC动作字符串可跨版本统一。"
+      }
+    },
+    {
+      "id": "mariadb-11.4.13-actions-restrict-after-child",
+      "file": "mariadb-11.4.13-actions-restrict-after-child.sql",
+      "metadataFile": "mariadb-11.4.13-actions-restrict-after-child.metadata.json",
+      "dialect": "mariadb",
+      "version": "11.4.13-MariaDB-ubu2404",
+      "engine": "InnoDB",
+      "sourceRun": "run02",
+      "sourceCase": "actions_restrict",
+      "sourcePhases": [
+        "after"
+      ],
+      "sourceRole": "child",
+      "sourceReportSha256": "e7ba89dba3482808aea745c9641aee55d2b6c4969e87249487f34a727e6fcbd1",
+      "capturedWithin": {
+        "from": "2026-10-14T04:27:08.895Z",
+        "to": "2026-10-14T04:27:13.285Z"
+      },
+      "session": {
+        "sqlMode": "IGNORE_SPACE,STRICT_TRANS_TABLES,ERROR_FOR_DIVISION_BY_ZERO,NO_AUTO_CREATE_USER,NO_ENGINE_SUBSTITUTION",
+        "charset": "utf8mb4",
+        "collation": "utf8mb4_uca1400_ai_ci",
+        "foreignKeyChecks": 1,
+        "uniqueChecks": 1
+      },
+      "ddl": {
+        "sourceRawSha256": "96c68bd53c7bb982f600f2773c8e298390c1e0d7b2568163f83608c37c60a172",
+        "publishedSha256": "96c68bd53c7bb982f600f2773c8e298390c1e0d7b2568163f83608c37c60a172",
+        "bytes": 381,
+        "unchangedBytes": true,
+        "sanitization": "无需改名，逐字节保持自主SHOW CREATE原文",
+        "changes": []
+      },
+      "metadata": {
+        "sourceCanonicalSha256": "399e81102b750509abca87396666ec43f5e65276e4695ea690b51680851370eb",
+        "publishedSha256": "db54b5f6973918ef323dc18f51f7fe2df06495011d96acf15ad1c10432e65868",
+        "counts": {
+          "kcu": 3,
+          "rc": 1,
+          "indexes": 3
+        },
+        "sanitization": "只投影白名单；引用库名映射为固定占位名；重新序列化，保留原字段有无与标量类型"
+      },
+      "observation": {
+        "nativeStatementAccepted": true,
+        "error": null,
+        "warningCodes": [],
+        "originalRowsUnchangedByAlter": true,
+        "nativeDefinitionUnchanged": false,
+        "productVerified": false,
+        "rowDataPublished": false,
+        "note": "实际默认/显式动作规范化。三种请求的数据拒绝行为相同，不等于RC动作字符串可跨版本统一。"
+      }
+    },
+    {
+      "id": "mariadb-11.4.13-actions-no-action-after-child",
+      "file": "mariadb-11.4.13-actions-no-action-after-child.sql",
+      "metadataFile": "mariadb-11.4.13-actions-no-action-after-child.metadata.json",
+      "dialect": "mariadb",
+      "version": "11.4.13-MariaDB-ubu2404",
+      "engine": "InnoDB",
+      "sourceRun": "run02",
+      "sourceCase": "actions_no_action",
+      "sourcePhases": [
+        "after"
+      ],
+      "sourceRole": "child",
+      "sourceReportSha256": "e7ba89dba3482808aea745c9641aee55d2b6c4969e87249487f34a727e6fcbd1",
+      "capturedWithin": {
+        "from": "2026-10-14T04:27:08.895Z",
+        "to": "2026-10-14T04:27:13.285Z"
+      },
+      "session": {
+        "sqlMode": "IGNORE_SPACE,STRICT_TRANS_TABLES,ERROR_FOR_DIVISION_BY_ZERO,NO_AUTO_CREATE_USER,NO_ENGINE_SUBSTITUTION",
+        "charset": "utf8mb4",
+        "collation": "utf8mb4_uca1400_ai_ci",
+        "foreignKeyChecks": 1,
+        "uniqueChecks": 1
+      },
+      "ddl": {
+        "sourceRawSha256": "38e76ec03774985c335320ebe44d534d7addd0c8ab58a2d492a77c33537d6e3d",
+        "publishedSha256": "38e76ec03774985c335320ebe44d534d7addd0c8ab58a2d492a77c33537d6e3d",
+        "bytes": 424,
+        "unchangedBytes": true,
+        "sanitization": "无需改名，逐字节保持自主SHOW CREATE原文",
+        "changes": []
+      },
+      "metadata": {
+        "sourceCanonicalSha256": "6ed416d93e11df380ba513889c0c18e0afd3f0c4d0ce172163e65088451ce15e",
+        "publishedSha256": "bb59b645f7678264bd7922e474ce0d198d387c5a983be7470aba183ac75814fb",
+        "counts": {
+          "kcu": 3,
+          "rc": 1,
+          "indexes": 3
+        },
+        "sanitization": "只投影白名单；引用库名映射为固定占位名；重新序列化，保留原字段有无与标量类型"
+      },
+      "observation": {
+        "nativeStatementAccepted": true,
+        "error": null,
+        "warningCodes": [],
+        "originalRowsUnchangedByAlter": true,
+        "nativeDefinitionUnchanged": false,
+        "productVerified": false,
+        "rowDataPublished": false,
+        "note": "实际默认/显式动作规范化。三种请求的数据拒绝行为相同，不等于RC动作字符串可跨版本统一。"
+      }
+    },
+    {
+      "id": "mariadb-11.4.13-same-name-actions-before-after-child",
+      "file": "mariadb-11.4.13-same-name-actions-before-after-child.sql",
+      "metadataFile": "mariadb-11.4.13-same-name-actions-before-after-child.metadata.json",
+      "dialect": "mariadb",
+      "version": "11.4.13-MariaDB-ubu2404",
+      "engine": "InnoDB",
+      "sourceRun": "run01",
+      "sourceCase": "same_name_actions",
+      "sourcePhases": [
+        "before",
+        "after"
+      ],
+      "sourceRole": "child",
+      "sourceReportSha256": "ed25bda37e1f8c9542c85ad1d3390f8dc2cd20bc8e4671a0b65806a15ff39703",
+      "capturedWithin": {
+        "from": "2026-10-14T04:10:11.830Z",
+        "to": "2026-10-14T04:10:17.556Z"
+      },
+      "session": {
+        "sqlMode": "IGNORE_SPACE,STRICT_TRANS_TABLES,ERROR_FOR_DIVISION_BY_ZERO,NO_AUTO_CREATE_USER,NO_ENGINE_SUBSTITUTION",
+        "charset": "utf8mb4",
+        "collation": "utf8mb4_uca1400_ai_ci",
+        "foreignKeyChecks": 1,
+        "uniqueChecks": 1
+      },
+      "ddl": {
+        "sourceRawSha256": "ba2bccf2b1ba9445b92c07b5e77ef6b1e901ebf83bc5b2244e0fe3b598628f80",
+        "publishedSha256": "ba2bccf2b1ba9445b92c07b5e77ef6b1e901ebf83bc5b2244e0fe3b598628f80",
+        "bytes": 384,
+        "unchangedBytes": true,
+        "sanitization": "无需改名，逐字节保持自主SHOW CREATE原文",
+        "changes": []
+      },
+      "metadata": {
+        "sourceCanonicalSha256": "6f244053273ee504e5e55a38cbe4dea7f72cc23ebfcd2293d09b5fc74f1db963",
+        "publishedSha256": "c6aaddc2692360adb911f50e883759ae39683d57cae5a1793d5cf33460fd0190",
+        "counts": {
+          "kcu": 3,
+          "rc": 1,
+          "indexes": 3
+        },
+        "sanitization": "只投影白名单；引用库名映射为固定占位名；重新序列化，保留原字段有无与标量类型"
+      },
+      "observation": {
+        "nativeStatementAccepted": false,
+        "error": {
+          "errno": 1005,
+          "code": "ER_CANT_CREATE_TABLE",
+          "sqlState": "HY000"
+        },
+        "warningCodes": [
+          {
+            "level": "Warning",
+            "code": 121
+          },
+          {
+            "level": "Error",
+            "code": 1005
+          },
+          {
+            "level": "Warning",
+            "code": 1022
+          }
+        ],
+        "originalRowsUnchangedByAlter": true,
+        "nativeDefinitionUnchanged": true,
+        "productVerified": false,
+        "rowDataPublished": false,
+        "note": "同名DROP+ADD改动作单次拒绝；这两个阶段的自主定义和目录完全保持，不自动拆分重放。"
+      }
+    },
+    {
+      "id": "mariadb-11.4.13-different-name-actions-before-child",
+      "file": "mariadb-11.4.13-different-name-actions-before-child.sql",
+      "metadataFile": "mariadb-11.4.13-different-name-actions-before-child.metadata.json",
+      "dialect": "mariadb",
+      "version": "11.4.13-MariaDB-ubu2404",
+      "engine": "InnoDB",
+      "sourceRun": "run01",
+      "sourceCase": "different_name_actions",
+      "sourcePhases": [
+        "before"
+      ],
+      "sourceRole": "child",
+      "sourceReportSha256": "ed25bda37e1f8c9542c85ad1d3390f8dc2cd20bc8e4671a0b65806a15ff39703",
+      "capturedWithin": {
+        "from": "2026-10-14T04:10:11.830Z",
+        "to": "2026-10-14T04:10:17.556Z"
+      },
+      "session": {
+        "sqlMode": "IGNORE_SPACE,STRICT_TRANS_TABLES,ERROR_FOR_DIVISION_BY_ZERO,NO_AUTO_CREATE_USER,NO_ENGINE_SUBSTITUTION",
+        "charset": "utf8mb4",
+        "collation": "utf8mb4_uca1400_ai_ci",
+        "foreignKeyChecks": 1,
+        "uniqueChecks": 1
+      },
+      "ddl": {
+        "sourceRawSha256": "9a16359286d1e23b206dff75ceb99f233b367dcbb5c7708575fbdb16bdfeed7f",
+        "publishedSha256": "9a16359286d1e23b206dff75ceb99f233b367dcbb5c7708575fbdb16bdfeed7f",
+        "bytes": 399,
+        "unchangedBytes": true,
+        "sanitization": "无需改名，逐字节保持自主SHOW CREATE原文",
+        "changes": []
+      },
+      "metadata": {
+        "sourceCanonicalSha256": "b7ad75c4cb65df43b5912bf038edfd94394136c2aac8e8b5af2eff9ee0d360b8",
+        "publishedSha256": "bd3785e8032cdc1da2bb11f046d664cf7cfd784c2ef6e80f21dda7bf05ca7cd6",
+        "counts": {
+          "kcu": 3,
+          "rc": 1,
+          "indexes": 3
+        },
+        "sanitization": "只投影白名单；引用库名映射为固定占位名；重新序列化，保留原字段有无与标量类型"
+      },
+      "observation": {
+        "nativeStatementAccepted": true,
+        "error": null,
+        "warningCodes": [],
+        "originalRowsUnchangedByAlter": true,
+        "nativeDefinitionUnchanged": false,
+        "productVerified": false,
+        "rowDataPublished": false,
+        "note": "异名DROP+ADD改CASCADE单次成功，私有自主DML另证级联更新/删除；本目录不含行或DML。"
+      }
+    },
+    {
+      "id": "mariadb-11.4.13-different-name-actions-after-child",
+      "file": "mariadb-11.4.13-different-name-actions-after-child.sql",
+      "metadataFile": "mariadb-11.4.13-different-name-actions-after-child.metadata.json",
+      "dialect": "mariadb",
+      "version": "11.4.13-MariaDB-ubu2404",
+      "engine": "InnoDB",
+      "sourceRun": "run01",
+      "sourceCase": "different_name_actions",
+      "sourcePhases": [
+        "after"
+      ],
+      "sourceRole": "child",
+      "sourceReportSha256": "ed25bda37e1f8c9542c85ad1d3390f8dc2cd20bc8e4671a0b65806a15ff39703",
+      "capturedWithin": {
+        "from": "2026-10-14T04:10:11.830Z",
+        "to": "2026-10-14T04:10:17.556Z"
+      },
+      "session": {
+        "sqlMode": "IGNORE_SPACE,STRICT_TRANS_TABLES,ERROR_FOR_DIVISION_BY_ZERO,NO_AUTO_CREATE_USER,NO_ENGINE_SUBSTITUTION",
+        "charset": "utf8mb4",
+        "collation": "utf8mb4_uca1400_ai_ci",
+        "foreignKeyChecks": 1,
+        "uniqueChecks": 1
+      },
+      "ddl": {
+        "sourceRawSha256": "179d28b81306694a1dea4005ef0efe0c78a808fe1dda50b1e9bf76e6de72e04b",
+        "publishedSha256": "179d28b81306694a1dea4005ef0efe0c78a808fe1dda50b1e9bf76e6de72e04b",
+        "bytes": 439,
+        "unchangedBytes": true,
+        "sanitization": "无需改名，逐字节保持自主SHOW CREATE原文",
+        "changes": []
+      },
+      "metadata": {
+        "sourceCanonicalSha256": "470136b5045fb0c9aeadea38249261566aa88a812efb448e4e67db5fb99c490d",
+        "publishedSha256": "88a21a21963ed39caa4a4cbc70c936bd9ddf0c53508049e14f8332b12c7e5a47",
+        "counts": {
+          "kcu": 3,
+          "rc": 1,
+          "indexes": 3
+        },
+        "sanitization": "只投影白名单；引用库名映射为固定占位名；重新序列化，保留原字段有无与标量类型"
+      },
+      "observation": {
+        "nativeStatementAccepted": true,
+        "error": null,
+        "warningCodes": [],
+        "originalRowsUnchangedByAlter": true,
+        "nativeDefinitionUnchanged": false,
+        "productVerified": false,
+        "rowDataPublished": false,
+        "note": "异名DROP+ADD改CASCADE单次成功，私有自主DML另证级联更新/删除；本目录不含行或DML。"
+      }
+    },
+    {
+      "id": "mariadb-11.4.13-tuple-replace-success-before-child",
+      "file": "mariadb-11.4.13-tuple-replace-success-before-child.sql",
+      "metadataFile": "mariadb-11.4.13-tuple-replace-success-before-child.metadata.json",
+      "dialect": "mariadb",
+      "version": "11.4.13-MariaDB-ubu2404",
+      "engine": "InnoDB",
+      "sourceRun": "run02",
+      "sourceCase": "tuple_replace_success",
+      "sourcePhases": [
+        "before"
+      ],
+      "sourceRole": "child",
+      "sourceReportSha256": "e7ba89dba3482808aea745c9641aee55d2b6c4969e87249487f34a727e6fcbd1",
+      "capturedWithin": {
+        "from": "2026-10-14T04:27:08.895Z",
+        "to": "2026-10-14T04:27:13.285Z"
+      },
+      "session": {
+        "sqlMode": "IGNORE_SPACE,STRICT_TRANS_TABLES,ERROR_FOR_DIVISION_BY_ZERO,NO_AUTO_CREATE_USER,NO_ENGINE_SUBSTITUTION",
+        "charset": "utf8mb4",
+        "collation": "utf8mb4_uca1400_ai_ci",
+        "foreignKeyChecks": 1,
+        "uniqueChecks": 1
+      },
+      "ddl": {
+        "sourceRawSha256": "ae82610ea9be118b3c55c59a0678ef8df2fab34476af9f93d8187cf220633846",
+        "publishedSha256": "ae82610ea9be118b3c55c59a0678ef8df2fab34476af9f93d8187cf220633846",
+        "bytes": 396,
+        "unchangedBytes": true,
+        "sanitization": "无需改名，逐字节保持自主SHOW CREATE原文",
+        "changes": []
+      },
+      "metadata": {
+        "sourceCanonicalSha256": "8975fa4778adf52860cbd6a81447ec5cef62b0639de98549efef3699f0248c80",
+        "publishedSha256": "bf213d2201a3eb1a8e9dcc0c00851880de478eb18e804046e5e7eed304562c9c",
+        "counts": {
+          "kcu": 3,
+          "rc": 1,
+          "indexes": 3
+        },
+        "sanitization": "只投影白名单；引用库名映射为固定占位名；重新序列化，保留原字段有无与标量类型"
+      },
+      "observation": {
+        "nativeStatementAccepted": true,
+        "error": null,
+        "warningCodes": [],
+        "originalRowsUnchangedByAlter": true,
+        "nativeDefinitionUnchanged": false,
+        "productVerified": false,
+        "rowDataPublished": false,
+        "note": "异名DROP+ADD改变有序元组单次成功；自主DML另证新映射接管与旧映射不再支配，不外推任意DDL原子性。"
+      }
+    },
+    {
+      "id": "mariadb-11.4.13-tuple-replace-success-after-child",
+      "file": "mariadb-11.4.13-tuple-replace-success-after-child.sql",
+      "metadataFile": "mariadb-11.4.13-tuple-replace-success-after-child.metadata.json",
+      "dialect": "mariadb",
+      "version": "11.4.13-MariaDB-ubu2404",
+      "engine": "InnoDB",
+      "sourceRun": "run02",
+      "sourceCase": "tuple_replace_success",
+      "sourcePhases": [
+        "after"
+      ],
+      "sourceRole": "child",
+      "sourceReportSha256": "e7ba89dba3482808aea745c9641aee55d2b6c4969e87249487f34a727e6fcbd1",
+      "capturedWithin": {
+        "from": "2026-10-14T04:27:08.895Z",
+        "to": "2026-10-14T04:27:13.285Z"
+      },
+      "session": {
+        "sqlMode": "IGNORE_SPACE,STRICT_TRANS_TABLES,ERROR_FOR_DIVISION_BY_ZERO,NO_AUTO_CREATE_USER,NO_ENGINE_SUBSTITUTION",
+        "charset": "utf8mb4",
+        "collation": "utf8mb4_uca1400_ai_ci",
+        "foreignKeyChecks": 1,
+        "uniqueChecks": 1
+      },
+      "ddl": {
+        "sourceRawSha256": "a45404eea775291639c2a41938d55d27e160fd0498e156b4cd26f75d35264560",
+        "publishedSha256": "a45404eea775291639c2a41938d55d27e160fd0498e156b4cd26f75d35264560",
+        "bytes": 450,
+        "unchangedBytes": true,
+        "sanitization": "无需改名，逐字节保持自主SHOW CREATE原文",
+        "changes": []
+      },
+      "metadata": {
+        "sourceCanonicalSha256": "e1b1d3903afeff679752d5563fd998d79b4259b244436c11c2693b62ca86dbb5",
+        "publishedSha256": "df58648f892f347f4bbf26a9ca6fb423002c5cfa88c1bd9b71b26cb456cb196d",
+        "counts": {
+          "kcu": 3,
+          "rc": 1,
+          "indexes": 5
+        },
+        "sanitization": "只投影白名单；引用库名映射为固定占位名；重新序列化，保留原字段有无与标量类型"
+      },
+      "observation": {
+        "nativeStatementAccepted": true,
+        "error": null,
+        "warningCodes": [],
+        "originalRowsUnchangedByAlter": true,
+        "nativeDefinitionUnchanged": false,
+        "productVerified": false,
+        "rowDataPublished": false,
+        "note": "异名DROP+ADD改变有序元组单次成功；自主DML另证新映射接管与旧映射不再支配，不外推任意DDL原子性。"
+      }
+    },
+    {
+      "id": "mariadb-11.4.13-tuple-replace-mismatch-before-after-child",
+      "file": "mariadb-11.4.13-tuple-replace-mismatch-before-after-child.sql",
+      "metadataFile": "mariadb-11.4.13-tuple-replace-mismatch-before-after-child.metadata.json",
+      "dialect": "mariadb",
+      "version": "11.4.13-MariaDB-ubu2404",
+      "engine": "InnoDB",
+      "sourceRun": "run02",
+      "sourceCase": "tuple_replace_mismatch",
+      "sourcePhases": [
+        "before",
+        "after"
+      ],
+      "sourceRole": "child",
+      "sourceReportSha256": "e7ba89dba3482808aea745c9641aee55d2b6c4969e87249487f34a727e6fcbd1",
+      "capturedWithin": {
+        "from": "2026-10-14T04:27:08.895Z",
+        "to": "2026-10-14T04:27:13.285Z"
+      },
+      "session": {
+        "sqlMode": "IGNORE_SPACE,STRICT_TRANS_TABLES,ERROR_FOR_DIVISION_BY_ZERO,NO_AUTO_CREATE_USER,NO_ENGINE_SUBSTITUTION",
+        "charset": "utf8mb4",
+        "collation": "utf8mb4_uca1400_ai_ci",
+        "foreignKeyChecks": 1,
+        "uniqueChecks": 1
+      },
+      "ddl": {
+        "sourceRawSha256": "df87b9d62b8b3ecf3bcceb171a732ab28056933de80841fe3cf09ec5efa7e720",
+        "publishedSha256": "df87b9d62b8b3ecf3bcceb171a732ab28056933de80841fe3cf09ec5efa7e720",
+        "bytes": 399,
+        "unchangedBytes": true,
+        "sanitization": "无需改名，逐字节保持自主SHOW CREATE原文",
+        "changes": []
+      },
+      "metadata": {
+        "sourceCanonicalSha256": "e8bcbbd91feeec8343d7686d0ef9d5e3eebf99cdb4b47cf1899e11abbbfc93ea",
+        "publishedSha256": "3269db95a71fdb65e3337e72dfceaa097431bec7296d8910186a6d20c7d16e00",
+        "counts": {
+          "kcu": 3,
+          "rc": 1,
+          "indexes": 3
+        },
+        "sanitization": "只投影白名单；引用库名映射为固定占位名；重新序列化，保留原字段有无与标量类型"
+      },
+      "observation": {
+        "nativeStatementAccepted": false,
+        "error": {
+          "errno": 1452,
+          "code": "ER_NO_REFERENCED_ROW_2",
+          "sqlState": "23000"
+        },
+        "warningCodes": [
+          {
+            "level": "Error",
+            "code": 1452
+          }
+        ],
+        "originalRowsUnchangedByAlter": true,
+        "nativeDefinitionUnchanged": true,
+        "productVerified": false,
+        "rowDataPublished": false,
+        "note": "异名元组替换因1452拒绝；旧FK/目录/原行保持且自主DML证明旧映射仍约束，只适用本轮已观察失败路径。"
+      }
+    },
+    {
+      "id": "mysql-8.4.11-add-cross-schema-after-parent",
+      "file": "mysql-8.4.11-add-cross-schema-after-parent.sql",
+      "metadataFile": "mysql-8.4.11-add-cross-schema-after-parent.metadata.json",
+      "dialect": "mysql",
+      "version": "8.4.11",
+      "engine": "InnoDB",
+      "sourceRun": "run01",
+      "sourceCase": "add_cross_schema",
+      "sourcePhases": [
+        "after"
+      ],
+      "sourceRole": "parent",
+      "sourceReportSha256": "52d04d2dfed6c45584c2e2d97c14ec55b9b66568da2a37f2d39909a8ebd827f0",
+      "capturedWithin": {
+        "from": "2026-10-14T04:09:07.406Z",
+        "to": "2026-10-14T04:09:14.280Z"
+      },
+      "session": {
+        "sqlMode": "IGNORE_SPACE,ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES,NO_ZERO_IN_DATE,NO_ZERO_DATE,ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION",
+        "charset": "utf8mb4",
+        "collation": "utf8mb4_general_ci",
+        "foreignKeyChecks": 1,
+        "uniqueChecks": 1
+      },
+      "ddl": {
+        "sourceRawSha256": "aee1c597326bcce08eb1c4f041aa9f0113ab8cfb11feea74bff34299b12c7b1f",
+        "publishedSha256": "aee1c597326bcce08eb1c4f041aa9f0113ab8cfb11feea74bff34299b12c7b1f",
+        "bytes": 279,
+        "unchangedBytes": true,
+        "sanitization": "无需改名，逐字节保持自主SHOW CREATE原文",
+        "changes": []
+      },
+      "metadata": {
+        "sourceCanonicalSha256": "588472a5d0f70f9214d717f705dadc20ca2b91088ce5f753042d0b62febb49d0",
+        "publishedSha256": "78b23e34aadf3e989e7c1e467cd9ad9c01a50ad1c75bb2d794c9124c1a2ea42f",
+        "counts": {
+          "kcu": 3,
+          "rc": 0,
+          "indexes": 3
+        },
+        "sanitization": "只投影白名单；引用库名映射为固定占位名；重新序列化，保留原字段有无与标量类型"
+      },
+      "observation": {
+        "nativeStatementAccepted": true,
+        "error": null,
+        "warningCodes": [],
+        "originalRowsUnchangedByAlter": true,
+        "nativeDefinitionUnchanged": false,
+        "productVerified": false,
+        "rowDataPublished": false,
+        "note": "跨库新增成功；双方都是自主隔离表，引用库名已显式脱敏，不能据此证明跨权限场景。"
+      }
+    },
+    {
+      "id": "mysql-8.4.11-add-cross-schema-after-child",
+      "file": "mysql-8.4.11-add-cross-schema-after-child.sql",
+      "metadataFile": "mysql-8.4.11-add-cross-schema-after-child.metadata.json",
+      "dialect": "mysql",
+      "version": "8.4.11",
+      "engine": "InnoDB",
+      "sourceRun": "run01",
+      "sourceCase": "add_cross_schema",
+      "sourcePhases": [
+        "after"
+      ],
+      "sourceRole": "child",
+      "sourceReportSha256": "52d04d2dfed6c45584c2e2d97c14ec55b9b66568da2a37f2d39909a8ebd827f0",
+      "capturedWithin": {
+        "from": "2026-10-14T04:09:07.406Z",
+        "to": "2026-10-14T04:09:14.280Z"
+      },
+      "session": {
+        "sqlMode": "IGNORE_SPACE,ONLY_FULL_GROUP_BY,STRICT_TRANS_TABLES,NO_ZERO_IN_DATE,NO_ZERO_DATE,ERROR_FOR_DIVISION_BY_ZERO,NO_ENGINE_SUBSTITUTION",
+        "charset": "utf8mb4",
+        "collation": "utf8mb4_general_ci",
+        "foreignKeyChecks": 1,
+        "uniqueChecks": 1
+      },
+      "ddl": {
+        "sourceRawSha256": "51f959fb50227f5e76d55e11aa1287a2b058206b53514bf53880cf17ce886eb6",
+        "publishedSha256": "6063c4094fcfff7767151ddab7eeb0ec85109ef22959142f7cef64865ae632af",
+        "bytes": 451,
+        "unchangedBytes": false,
+        "sanitization": "只替换精确反引号库名token，公开字节已改变",
+        "changes": [
+          {
+            "kind": "quoted-schema-identifier",
+            "sourceIdentifierUtf8Sha256": "0f7d8c1d0e8c5bbc2ae3164613705b280e7513c50a7bdab741f2598c2d5b8ad0",
+            "replacement": "fixture_parent_schema",
+            "occurrences": 1
+          }
+        ]
+      },
+      "metadata": {
+        "sourceCanonicalSha256": "0739eb2a4e792170b4fdd679dcfc1891481bad972fd5b3abc52f6973b304a399",
+        "publishedSha256": "2f0ec778fa3f6a95e72d3ee22f18db0d8d57e5eebcd7ffda7e55c1ed8d7d47fa",
+        "counts": {
+          "kcu": 3,
+          "rc": 1,
+          "indexes": 3
+        },
+        "sanitization": "只投影白名单；引用库名映射为固定占位名；重新序列化，保留原字段有无与标量类型"
+      },
+      "observation": {
+        "nativeStatementAccepted": true,
+        "error": null,
+        "warningCodes": [],
+        "originalRowsUnchangedByAlter": true,
+        "nativeDefinitionUnchanged": false,
+        "productVerified": false,
+        "rowDataPublished": false,
+        "note": "跨库新增成功；双方都是自主隔离表，引用库名已显式脱敏，不能据此证明跨权限场景。"
+      }
+    }
+  ]
+}

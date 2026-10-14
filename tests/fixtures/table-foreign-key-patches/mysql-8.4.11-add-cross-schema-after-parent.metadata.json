@@ -1,0 +1,75 @@
+{
+  "table": {
+    "schema": "fixture_parent_schema",
+    "name": "add_cross_schema_parent",
+    "role": "parent"
+  },
+  "kcu": [
+    {
+      "CONSTRAINT_NAME": "parent_pair",
+      "COLUMN_NAME": "pa",
+      "ORDINAL_POSITION": 1,
+      "POSITION_IN_UNIQUE_CONSTRAINT": null,
+      "REFERENCED_TABLE_SCHEMA": null,
+      "REFERENCED_TABLE_NAME": null,
+      "REFERENCED_COLUMN_NAME": null
+    },
+    {
+      "CONSTRAINT_NAME": "parent_pair",
+      "COLUMN_NAME": "pb",
+      "ORDINAL_POSITION": 2,
+      "POSITION_IN_UNIQUE_CONSTRAINT": null,
+      "REFERENCED_TABLE_SCHEMA": null,
+      "REFERENCED_TABLE_NAME": null,
+      "REFERENCED_COLUMN_NAME": null
+    },
+    {
+      "CONSTRAINT_NAME": "PRIMARY",
+      "COLUMN_NAME": "id",
+      "ORDINAL_POSITION": 1,
+      "POSITION_IN_UNIQUE_CONSTRAINT": null,
+      "REFERENCED_TABLE_SCHEMA": null,
+      "REFERENCED_TABLE_NAME": null,
+      "REFERENCED_COLUMN_NAME": null
+    }
+  ],
+  "rc": [],
+  "indexes": [
+    {
+      "INDEX_NAME": "parent_pair",
+      "COLUMN_NAME": "pa",
+      "SEQ_IN_INDEX": 1,
+      "NON_UNIQUE": 0,
+      "INDEX_TYPE": "BTREE",
+      "COLLATION": "A",
+      "SUB_PART": null,
+      "INDEX_COMMENT": "",
+      "IS_VISIBLE": "YES",
+      "EXPRESSION": null
+    },
+    {
+      "INDEX_NAME": "parent_pair",
+      "COLUMN_NAME": "pb",
+      "SEQ_IN_INDEX": 2,
+      "NON_UNIQUE": 0,
+      "INDEX_TYPE": "BTREE",
+      "COLLATION": "A",
+      "SUB_PART": null,
+      "INDEX_COMMENT": "",
+      "IS_VISIBLE": "YES",
+      "EXPRESSION": null
+    },
+    {
+      "INDEX_NAME": "PRIMARY",
+      "COLUMN_NAME": "id",
+      "SEQ_IN_INDEX": 1,
+      "NON_UNIQUE": 0,
+      "INDEX_TYPE": "BTREE",
+      "COLLATION": "A",
+      "SUB_PART": null,
+      "INDEX_COMMENT": "",
+      "IS_VISIBLE": "YES",
+      "EXPRESSION": null
+    }
+  ]
+}

@@ -7,6 +7,8 @@ import type { ConnectionProfile, TaskEvent } from '../../src/shared/contracts';
 import type { TableColumnGetOutput, TableColumnPreviewOutput } from '../../src/shared/tableColumnPatches';
 import type { TableIndexGetOutput, TableIndexPreviewOutput } from '../../src/shared/tableIndexTasks';
 import type { IndexPatch } from '../../src/shared/tableIndexPatches';
+import type { TableForeignKeyGetOutput, TableForeignKeyPreviewOutput } from '../../src/shared/tableForeignKeyTasks';
+import type { ForeignKeyPatch } from '../../src/shared/tableForeignKeyPatches';
 
 const enabled = process.env.DBARK_INTEGRATION_ENABLED === '1' && Boolean(process.env.DBARK_TEST_HOST);
 const profile: ConnectionProfile = {
@@ -28,6 +30,8 @@ interface PermissionCase {
   getIndexes(): Promise<TableIndexGetOutput>;
   previewIndexes(snapshot: TableIndexGetOutput, patches: IndexPatch[]): Promise<TableIndexPreviewOutput>;
   applyIndexes(plan: TableIndexPreviewOutput, taskId: string): Promise<unknown>;
+  getForeignKeys(): Promise<TableForeignKeyGetOutput>;
+  previewForeignKeys(snapshot: TableForeignKeyGetOutput, patches: ForeignKeyPatch[], taskId: string): Promise<TableForeignKeyPreviewOutput>;
 }
 
 /** 只允许已约定的服务器与基线端口；启用开关不是访问其他数据库的授权。 */
@@ -103,6 +107,8 @@ async function withPermissionCase(grants: Privilege[], action: (context: Permiss
       getIndexes: () => engine.handle('schema.indexes.get', { connectionId: limitedProfile.id, database, table: 'subject', taskId: randomUUID(), connectionRevision: 1 }),
       previewIndexes: (snapshot, patches) => engine.handle('schema.indexes.preview', { snapshotId: snapshot.snapshotId, patches, taskId: randomUUID(), connectionRevision: 1 }),
       applyIndexes: (plan, taskId) => engine.handle('schema.indexes.apply', { previewToken: plan.previewToken, acknowledgements: plan.requiredAcknowledgements, taskId, connectionRevision: 1 }),
+      getForeignKeys: () => engine.handle('schema.foreignKeys.get', { connectionId: limitedProfile.id, database, table: 'subject', taskId: randomUUID(), connectionRevision: 1 }),
+      previewForeignKeys: (snapshot, patches, taskId) => engine.handle('schema.foreignKeys.preview', { snapshotId: snapshot.snapshotId, patches, taskId, connectionRevision: 1 }),
     });
     await assertPrivileges();
   } catch (error) { failure = error; }
@@ -154,7 +160,7 @@ async function withPermissionCase(grants: Privilege[], action: (context: Permiss
         }
       } catch (error) { cleanupErrors.push(error); }
       finally { try { await observer?.close({ strict: true }); } catch (error) { cleanupErrors.push(error); } }
-      console.info(JSON.stringify({ 权限验收库: database, 临时用户: user, 已记录连接ID: [...recordedIds], 残留: cleanupCounts, 清理检查通过: cleanupErrors.length === 0, 清理错误数: cleanupErrors.length, 任务终态: events.filter(event => ['completed', 'failed', 'cancelled'].includes(event.status)).map(event => ({ taskId: event.taskId, status: event.status, columnPatch: event.columnPatch, indexPatch: event.indexPatch })) }));
+      console.info(JSON.stringify({ 权限验收库: database, 临时用户: user, 已记录连接ID: [...recordedIds], 残留: cleanupCounts, 清理检查通过: cleanupErrors.length === 0, 清理错误数: cleanupErrors.length, 任务终态: events.filter(event => ['completed', 'failed', 'cancelled'].includes(event.status)).map(event => ({ taskId: event.taskId, status: event.status, columnPatch: event.columnPatch, indexPatch: event.indexPatch, foreignKeyPatch: event.foreignKeyPatch })) }));
     }
   }
   if (failure && cleanupErrors.length) throw new AggregateError([failure, ...cleanupErrors], '字段权限验收及资源清理均失败');
@@ -239,4 +245,44 @@ describe.skipIf(!enabled)('真实索引差异最小权限边界', () => {
       expect(await context.sql(`SELECT id,v FROM ${context.table}`)).toEqual([{ id: 1, v: '保留数据' }]);
     });
   }, 45000);
+});
+
+describe.skipIf(!enabled)('真实外键差异最小权限边界', () => {
+  for (const grants of [['SELECT'], ['SELECT', 'ALTER', 'CREATE', 'INSERT']] satisfies Privilege[][]) {
+    it(`仅 ${grants.join(' ')}：自引用快照可读，名称与入向目录不完整时新增预览拒绝且不投递 DDL`, async () => {
+      await withPermissionCase(grants, async context => {
+        const before = (await context.sql(`SHOW CREATE TABLE ${context.table}`))[0]['Create Table'];
+        const originalRows = await context.sql(`SELECT id,v FROM ${context.table} ORDER BY id`);
+        const snapshot = await context.getForeignKeys();
+        expect(snapshot.target).toMatchObject({ database: context.database, table: 'subject' });
+        expect(snapshot.foreignKeys).toHaveLength(0);
+        expect(snapshot.namespaceCoverage).toBe('partial');
+        expect(snapshot.incomingCoverage).toEqual({ kind: 'partial', reason: 'permission' });
+        // 可查看或可靠删除的能力不等于可新增；不能把整个表误断言为 writable=false。
+        expect(snapshot.warnings.join('；')).toMatch(/权限|目录|未知|不完整/);
+        const self = snapshot.parents.find(parent => parent.target.database === context.database && parent.target.table === 'subject');
+        if (!self) throw new Error('真实外键快照缺少自身父表候选');
+        const childId = snapshot.columns.find(column => column.name === 'id');
+        const parentId = self.columns.find(column => column.name === 'id');
+        if (!childId || !parentId) throw new Error('真实自引用快照缺少 id 字段');
+        expect(parentId.columnRef).toBe(childId.columnRef);
+        expect(self.keys.some(key => key.kind === 'primary' && key.columnRefs.length === 1 && key.columnRefs[0] === parentId.columnRef)).toBe(true);
+        const taskId = randomUUID();
+        // 使用服务返回的 opaque refs；主键已有完整父子支持，不靠无效字段掩盖名称权限边界。
+        await expect(context.previewForeignKeys(snapshot, [{ op: 'add', clientKey: randomUUID(), definition: {
+          name: 'fk_permission_self', parentRef: self.parentRef,
+          pairs: [{ childColumnRef: childId.columnRef, parentColumnRef: parentId.columnRef }],
+          onUpdate: 'RESTRICT', onDelete: 'RESTRICT',
+        } }], taskId)).rejects.toThrow(/外键名称.*命名空间/);
+        const terminal = context.events.filter(event => event.taskId === taskId && ['completed', 'failed', 'cancelled'].includes(event.status));
+        expect(terminal).toHaveLength(1);
+        expect(terminal[0]).toMatchObject({ status: 'failed', foreignKeyPatch: { ddlSubmitted: false, ddlCompleted: false, definitionVerified: false, outcome: 'not-sent' } });
+        expect(context.events.some(event => event.foreignKeyPatch?.ddlSubmitted)).toBe(false);
+        expect((await context.sql(`SHOW CREATE TABLE ${context.table}`))[0]['Create Table']).toBe(before);
+        expect(await context.sql(`SELECT id,v FROM ${context.table} ORDER BY id`)).toEqual(originalRows);
+        expect(originalRows).toEqual([{ id: 1, v: '保留数据' }]);
+        await context.assertPrivileges();
+      });
+    }, 45000);
+  }
 });

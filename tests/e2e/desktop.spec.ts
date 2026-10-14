@@ -1,8 +1,12 @@
 import { mkdir, readFile, rmdir } from 'node:fs/promises';
 import { join } from 'node:path';
+import { createRequire } from 'node:module';
 import initSqlJs from 'sql.js';
 import { version as sourceVersion } from '../../package.json';
 import { test, expect, desktop, page, dataDir, closed, pageErrors, dialogCalls, launchDesktop, answerDialogs, requestQuit, quitDesktop } from './desktop-fixture';
+
+/** 跟随真实依赖解析 WASM，不要求测试工作目录也必须直接拥有 node_modules。 */
+const sqlWasmFile = createRequire(__filename).resolve('sql.js/dist/sql-wasm.wasm');
 
 test('桌面启动、存储、进程隔离与输入校验', async ({}, testInfo) => {
   await expect(page).toHaveTitle('DBArk');
@@ -137,7 +141,7 @@ test('系统加密可用时密码密文落盘并可重启解密，否则只保�
   expect(bytes.includes(Buffer.from(secret, 'utf8'))).toBe(false);
   expect(bytes.includes(Buffer.from(secret, 'utf16le'))).toBe(false);
   // 独立读取真实 SQLite 文件；不依靠渲染层 hasPassword 标志猜测已发生加密。
-  const SQL = await initSqlJs({ locateFile: () => join(process.cwd(), 'node_modules/sql.js/dist/sql-wasm.wasm') });
+  const SQL = await initSqlJs({ locateFile: () => sqlWasmFile });
   const database = new SQL.Database(bytes);
   const stored = database.exec('SELECT value FROM secrets');
   const encrypted = stored[0]?.values.map(row => String(row[0])) ?? [];

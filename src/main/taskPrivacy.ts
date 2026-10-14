@@ -2,8 +2,8 @@ import type { Command, TaskEvent } from '../shared/contracts';
 
 /** 服务端错误可能展开参数值；概要记录仅保存进度，不将错误原文写入本地库。 */
 export function persistedTaskMessage(command: string, event: TaskEvent): string {
-  if (command.startsWith('schema.columns.') || command.startsWith('schema.indexes.')) {
-    const progress = command.startsWith('schema.indexes.') ? event.indexPatch : event.columnPatch;
+  if (command.startsWith('schema.columns.') || command.startsWith('schema.indexes.') || command.startsWith('schema.foreignKeys.')) {
+    const progress = command.startsWith('schema.foreignKeys.') ? event.foreignKeyPatch : command.startsWith('schema.indexes.') ? event.indexPatch : event.columnPatch;
     return progress?.ddlCompleted ? '结构变更已收到成功响应，请核对最新定义；默认值、注释与错误原文未保存。' : progress?.ddlSubmitted ? '结构变更可能已执行，请核对服务器定义；未自动重放，错误原文未保存。' : '结构任务尚未确认发送 DDL；字段内容与错误原文未保存。';
   }
   if (event.status !== 'failed' && event.status !== 'cancelled') return event.message;

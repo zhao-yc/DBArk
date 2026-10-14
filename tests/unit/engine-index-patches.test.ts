@@ -6,6 +6,7 @@ import type { ManagedConnection } from '../../src/engine/connection';
 import { parseTableColumnDefinition } from '../../src/engine/tableColumnDefinition';
 import { readTableIndexDefinition } from '../../src/engine/tableIndexDefinition';
 import { validateCommand } from '../../src/shared/validation';
+import type { StructureTaskContext, StructureTaskOptions } from '../../src/engine/structureDefinition';
 const mocks = vi.hoisted(() => ({ connect: vi.fn(), execute: vi.fn() }));
 vi.mock('../../src/engine/connection', () => ({ connect: mocks.connect, execute: mocks.execute }));
 import { Engine } from '../../src/engine';
@@ -163,10 +164,41 @@ describe('真实索引生命周期的驱动边界', () => {
     await expect(second()).rejects.toThrow('已有结构变更'); await expect(second()).rejects.toThrow('已失效或已使用');
     held!.complete(); expect(await running).toMatchObject({ definitionVerified: true }); expect(sent.filter(item => item.sql.startsWith('ALTER'))).toHaveLength(1);
   });
+  it('关联父表占用覆盖真实关闭阶段，冲突任务不建连接且无部分占用', async () => {
+    const host = engine as unknown as { withIndependentTask<T>(connectionId: string, taskId: string, action: (managed: ManagedConnection, control: Omit<StructureTaskContext, 'managed'>) => Promise<T>, options: StructureTaskOptions): Promise<T> };
+    const target = { database: 'db', table: 't' }, parent = { database: 'other', table: 'p' };
+    const options = (targets: typeof target[]): StructureTaskOptions => ({ label: '关联结构测试', purpose: 'indexes', executionTargets: targets, progress: { phase: 'reading', ddlSubmitted: false, ddlCompleted: false, definitionVerified: false, outcome: 'not-sent' } });
+    let allowAction!: () => void, allowClose!: () => void, closeStarted = false;
+    const actionGate = new Promise<void>(resolve => { allowAction = resolve; }), closeGate = new Promise<void>(resolve => { allowClose = resolve; });
+    const initialConnections = connections.length;
+    const running = host.withIndependentTask(profile.id, 'related-held', async () => { await actionGate; return 42; }, options([target, parent]));
+    try {
+      await vi.waitFor(() => expect(connections).toHaveLength(initialConnections + 1));
+      vi.mocked(connections.at(-1)!.close).mockImplementation(async () => { closeStarted = true; await closeGate; });
+      allowAction(); await vi.waitFor(() => expect(closeStarted).toBe(true));
+      await expect(host.withIndependentTask(profile.id, 'parent-conflict', async () => 0, options([{ database: 'db', table: 'unrelated' }, parent]))).rejects.toThrow('未发送 DDL');
+      expect(connections).toHaveLength(initialConnections + 1);
+      expect(await host.withIndependentTask(profile.id, 'unrelated-allowed', async () => 7, options([{ database: 'db', table: 'unrelated' }]))).toBe(7);
+    } finally { allowAction(); allowClose(); }
+    expect(await running).toBe(42);
+    expect(await host.withIndependentTask(profile.id, 'parent-after-close', async () => 8, options([parent]))).toBe(8);
+  });
   it('长命令取消等待原回调及连接关闭，终态标记未知且不会转为字段任务', async () => {
     const value = await preview(await get()); holdSql = /^ALTER TABLE/; const operation = apply(value, 'cancel-index'), settled = operation.catch(error => error); await vi.waitFor(() => expect(held).toBeDefined());
     await engine.handle('query.cancel', { taskId: 'cancel-index' }); expect(await settled).toBeInstanceOf(Error);
     expect(events.at(-1)).toMatchObject({ taskId: 'cancel-index', status: 'cancelled', indexPatch: { ddlSubmitted: true, ddlCompleted: false, outcome: 'unknown' } });
     expect(connections.every(connection => vi.mocked(connection.close).mock.calls.length === 1)).toBe(true); expect(source).toBe(original);
+  });
+  it('释放进度事件出口异常不能跳过关闭或留下关联目标占用', async () => {
+    const host = engine as unknown as { withIndependentTask<T>(connectionId: string, taskId: string, action: (managed: ManagedConnection, control: Omit<StructureTaskContext, 'managed'>) => Promise<T>, options: StructureTaskOptions): Promise<T> };
+    const append = events.push.bind(events); let rejectOnce = true;
+    vi.spyOn(events, 'push').mockImplementation((...items) => {
+      if (rejectOnce && items.some(item => item.indexPatch?.phase === 'releasing')) { rejectOnce = false; throw new Error('测试事件出口失败'); }
+      return append(...items);
+    });
+    const options = (): StructureTaskOptions => ({ label: '异常收尾测试', purpose: 'indexes', executionTargets: [{ database: 'db', table: 't' }, { database: 'db', table: 'p' }], progress: { phase: 'reading', ddlSubmitted: false, ddlCompleted: false, definitionVerified: false, outcome: 'not-sent' } });
+    await expect(host.withIndependentTask(profile.id, 'event-error', async () => 1, options())).rejects.toThrow('事件出口失败');
+    expect(connections.at(-1)!.close).toHaveBeenCalledOnce();
+    expect(await host.withIndependentTask(profile.id, 'after-event-error', async () => 2, options())).toBe(2);
   });
 });

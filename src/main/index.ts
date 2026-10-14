@@ -37,7 +37,7 @@ const exportReservations = new ExportReservations();
 const preparingTasks = new Map<string, { cancelled: boolean; failure?: string }>();
 const exportProgress = new Map<string, QueryExportProgress>();
 const structureProgress = new Map<string, TableColumnApplyProgress>();
-const structureTokens = new Map<string, { purpose: 'columns' | 'indexes'; connectionId: string; expires: number; kind: 'snapshot' | 'preview'; snapshotId?: string }>();
+const structureTokens = new Map<string, { purpose: 'columns' | 'indexes' | 'foreignKeys'; connectionId: string; expires: number; kind: 'snapshot' | 'preview'; snapshotId?: string }>();
 const tasks = new Map<string, TaskRecord>();
 const lastPersist = new Map<string, number>();
 const rendererURL = process.env.DBARK_DEV_URL ?? pathToFileURL(join(__dirname, '../renderer/index.html')).href;
@@ -56,7 +56,7 @@ function persistAuxiliary(action: () => void): void {
 /** 任务进度只保留概要；分批结果直接传输，不把整批数据写入配置库。 */
 function taskEvent(event: TaskEvent): void {
   if (event.queryExport) exportProgress.set(event.taskId, { ...event.queryExport });
-  const structure = event.indexPatch ?? event.columnPatch;
+  const structure = event.foreignKeyPatch ?? event.indexPatch ?? event.columnPatch;
   if (structure) structureProgress.set(event.taskId, { ...structure });
   const current = tasks.get(event.taskId);
   if (current) {
@@ -103,7 +103,7 @@ async function writeSelectedQuery(input: { fileToken: string; sql: string; encod
 
 /** 分派前检查配置保存锁，防止检查通过后另一个请求用旧凭据抢先建连。 */
 async function dispatch(command: Command, input: any): Promise<unknown> {
-  const structurePurpose = command.startsWith('schema.columns.') ? 'columns' as const : command.startsWith('schema.indexes.') ? 'indexes' as const : undefined;
+  const structurePurpose = command.startsWith('schema.columns.') ? 'columns' as const : command.startsWith('schema.indexes.') ? 'indexes' as const : command.startsWith('schema.foreignKeys.') ? 'foreignKeys' as const : undefined;
   const structureCommand = structurePurpose !== undefined, structurePrefix = structurePurpose ? `schema.${structurePurpose}.` : '';
   for (const [token, value] of structureTokens) if (value.expires <= Date.now()) structureTokens.delete(token);
   const structureToken = command === structurePrefix + 'preview' ? structureTokens.get(input.snapshotId) : command === structurePrefix + 'apply' ? structureTokens.get(input.previewToken) : undefined;
@@ -213,7 +213,7 @@ async function dispatch(command: Command, input: any): Promise<unknown> {
     return result;
   } catch (error) {
     const message = error instanceof Error ? error.message : '操作失败';
-    if (taskId && tasks.get(taskId)?.status === 'running') taskEvent({ taskId, status: preparing.cancelled ? 'cancelled' : 'failed', progress: 0, message, ...(structureCommand ? { [structurePurpose === 'indexes' ? 'indexPatch' : 'columnPatch']: { phase: 'connecting' as const, ddlSubmitted: sentToEngine && command === structurePrefix + 'apply', ddlCompleted: false, definitionVerified: false, outcome: sentToEngine && command === structurePrefix + 'apply' ? 'unknown' as const : 'not-sent' as const, ...structureProgress.get(taskId) } } : {}), ...(command === 'query.exportStream' ? { queryExport: { phase: 'preparing' as const, statementsCompleted: 0, rowsWritten: 0, bytesWritten: 0, fileCommitted: false, ...exportProgress.get(taskId), sqlMayHaveExecuted: sentToEngine, transactionKnown: false } } : {}) });
+    if (taskId && tasks.get(taskId)?.status === 'running') taskEvent({ taskId, status: preparing.cancelled ? 'cancelled' : 'failed', progress: 0, message, ...(structureCommand ? { [structurePurpose === 'indexes' ? 'indexPatch' : structurePurpose === 'foreignKeys' ? 'foreignKeyPatch' : 'columnPatch']: { phase: 'connecting' as const, ddlSubmitted: sentToEngine && command === structurePrefix + 'apply', ddlCompleted: false, definitionVerified: false, outcome: sentToEngine && command === structurePrefix + 'apply' ? 'unknown' as const : 'not-sent' as const, ...structureProgress.get(taskId) } } : {}), ...(command === 'query.exportStream' ? { queryExport: { phase: 'preparing' as const, statementsCompleted: 0, rowsWritten: 0, bytesWritten: 0, fileCommitted: false, ...exportProgress.get(taskId), sqlMayHaveExecuted: sentToEngine, transactionKnown: false } } : {}) });
     if (history) persistAuxiliary(() => store.addHistory({ ...history, elapsedMs: Date.now() - start, error: persistedQueryError(command, message) }));
     throw error;
   } finally { if (command === structurePrefix + 'apply') structureTokens.delete(input.previewToken); if (taskId) { preparingTasks.delete(taskId); exportProgress.delete(taskId); structureProgress.delete(taskId); } releaseTarget?.(); }
@@ -286,10 +286,10 @@ function engineExited(): void {
   structureTokens.clear();
   for (const task of tasks.values()) if (task.status === 'running') {
     const preparing = preparingTasks.has(task.id);
-    if (task.kind.startsWith('schema.columns.') || task.kind.startsWith('schema.indexes.')) {
-      const last = structureProgress.get(task.id), possiblySent = !preparing && (task.kind === 'schema.columns.apply' || task.kind === 'schema.indexes.apply');
+    if (task.kind.startsWith('schema.columns.') || task.kind.startsWith('schema.indexes.') || task.kind.startsWith('schema.foreignKeys.')) {
+      const last = structureProgress.get(task.id), possiblySent = !preparing && (task.kind === 'schema.columns.apply' || task.kind === 'schema.indexes.apply' || task.kind === 'schema.foreignKeys.apply');
       const progress: TableColumnApplyProgress = { phase: last?.phase ?? 'connecting', ddlSubmitted: Boolean(last?.ddlSubmitted || possiblySent), ddlCompleted: last?.ddlCompleted ?? false, definitionVerified: last?.definitionVerified ?? false, outcome: last?.ddlCompleted ? 'succeeded' : possiblySent ? 'unknown' : 'not-sent' };
-      taskEvent({ taskId: task.id, status: 'failed', progress: task.progress, message: '数据库进程已退出，结构操作不会自动重放，请核对最新定义', ...(task.kind.startsWith('schema.indexes.') ? { indexPatch: progress } : { columnPatch: progress }) });
+      taskEvent({ taskId: task.id, status: 'failed', progress: task.progress, message: '数据库进程已退出，结构操作不会自动重放，请核对最新定义', ...(task.kind.startsWith('schema.indexes.') ? { indexPatch: progress } : task.kind.startsWith('schema.foreignKeys.') ? { foreignKeyPatch: progress } : { columnPatch: progress }) });
       continue;
     }
     taskEvent({ taskId: task.id, status: 'failed', progress: task.progress, message: '数据库进程已退出，请核对操作结果并重新连接', ...(task.kind === 'query.exportStream' ? { queryExport: { phase: 'executing' as const, statementsCompleted: 0, rowsWritten: 0, bytesWritten: 0, fileCommitted: false, ...exportProgress.get(task.id), ...(preparing ? { phase: 'preparing' as const } : {}), sqlMayHaveExecuted: !preparing, transactionKnown: false } } : {}) });

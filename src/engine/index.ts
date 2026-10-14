@@ -13,8 +13,10 @@ import { csvCell, csvHeader, encodingName, previewFile, readRecords, readText } 
 import { ResultFileTasks } from './resultFileTasks';
 import { TableColumnPatchTasks } from './tableColumnPatchTasks';
 import { TableIndexPatchTasks } from './tableIndexPatchTasks';
+import { TableForeignKeyPatchTasks } from './tableForeignKeyPatchTasks';
 import type { StructureTaskContext, StructureTaskOptions } from './structureDefinition';
 import { StructurePatchCache } from './structurePatchCache';
+import { StructureExecutionLocks } from './structureExecutionLocks';
 import { parseTableColumnDefinition } from './tableColumnDefinition';
 import { assertStructureExportMode, assertTableStructureExportable } from '../shared/tableColumnPatches';
 import { createQueryStreamFile } from './queryStreamFile';
@@ -44,13 +46,15 @@ export class Engine {
   private readonly resultFiles: ResultFileTasks;
   private readonly columnPatches: TableColumnPatchTasks;
   private readonly indexPatches: TableIndexPatchTasks;
+  private readonly foreignKeyPatches: TableForeignKeyPatchTasks;
   private readonly structureCache = new StructurePatchCache();
-  private readonly structureExecutions = new Set<string>();
+  private readonly structureExecutions = new StructureExecutionLocks();
   /** 注入任务事件出口，使引擎既能在 utility process 中运行，也能独立测试。 */
   constructor(private readonly emit: (event: TaskEvent) => void = () => undefined) {
     this.resultFiles = new ResultFileTasks(emit);
     this.columnPatches = new TableColumnPatchTasks({ run: (connectionId, taskId, action, options) => this.withIndependentTask(connectionId, taskId, (managed, control) => action({ managed, ...control }), { label: options.label, purpose: 'columns', progress: options.columnPatch, executionTarget: options.executionTarget }) }, undefined, this.structureCache);
     this.indexPatches = new TableIndexPatchTasks({ run: (connectionId, taskId, action, options) => this.withIndependentTask(connectionId, taskId, (managed, control) => action({ managed, ...control }), options) }, undefined, this.structureCache);
+    this.foreignKeyPatches = new TableForeignKeyPatchTasks({ run: (connectionId, taskId, action, options) => this.withIndependentTask(connectionId, taskId, (managed, control) => action({ managed, ...control }), options) }, undefined, this.structureCache);
   }
 
   /** 主进程只注入可信 profile/filePath；其他字段按共享接口处理。 */
@@ -182,6 +186,10 @@ export class Engine {
       case 'schema.indexes.preview': return this.indexPatches.preview(input as any, input.connectionRevision);
       case 'schema.indexes.apply': return this.indexPatches.apply(input as any, input.connectionRevision);
       case 'schema.indexes.release': return this.indexPatches.releaseTokens(input);
+      case 'schema.foreignKeys.get': return this.foreignKeyPatches.get(input as any, input.connectionRevision);
+      case 'schema.foreignKeys.preview': return this.foreignKeyPatches.preview(input as any, input.connectionRevision);
+      case 'schema.foreignKeys.apply': return this.foreignKeyPatches.apply(input as any, input.connectionRevision);
+      case 'schema.foreignKeys.release': return this.foreignKeyPatches.releaseTokens(input);
       case 'files.preview': this.assertFile(input); return previewFile(input as { filePath: string; format: 'csv' | 'json'; encoding: string });
       case 'files.import': this.assertFile(input); return this.withConnection(input.connectionId, managed => this.runTask(input.taskId, managed, '导入文件', task => this.importFile(task, input)), input.database);
       case 'files.export': this.assertFile(input); return this.withConnection(input.connectionId, managed => this.runTask(input.taskId, managed, '导出文件', task => this.exportFile(task, input)), input.database);
@@ -242,27 +250,26 @@ export class Engine {
     return this.withConnectionUse(connectionId, async () => {
       if (this.closing || !taskId || this.tasks.has(taskId) || this.independentTasks.has(taskId) || this.resultFiles.has(taskId)) throw new Error('任务编号为空或任务已在执行');
       const profile = this.profile(connectionId);
-      // 同客户端的字段与索引执行共用精确目标互斥，不能把两个已重核计划并行投递到同一表。
-      const executionKey = options?.executionTarget ? JSON.stringify([connectionId, options.executionTarget.database, options.executionTarget.table]) : undefined;
-      if (executionKey && this.structureExecutions.has(executionKey)) throw new Error('该表已有结构变更正在执行，请等待完成后重新读取并预览；未发送 DDL');
-      if (executionKey) this.structureExecutions.add(executionKey);
+      // 字段、索引及后续外键执行共用资源集合，不能在重核与关闭之间并行修改相关父表。
+      const executionTargets = [...(options?.executionTarget ? [options.executionTarget] : []), ...(options?.executionTargets ?? [])];
+      const releaseExecution = this.structureExecutions.acquire(connectionId, executionTargets);
       const controller = new AbortController();
       let finish!: () => void;
       const done = new Promise<void>(resolve => { finish = resolve; });
       const task: IndependentTask = { connectionId, controller, done, structureTask: Boolean(options), generation: 0 };
       this.independentTasks.set(taskId, task);
       const label = options?.label ?? '读取关联记录';
-      const detail = () => options ? (options.purpose === 'indexes' ? { indexPatch: { ...options.progress } } : { columnPatch: { ...options.progress } }) : {};
+      const detail = () => options ? (options.purpose === 'indexes' ? { indexPatch: { ...options.progress } } : options.purpose === 'foreignKeys' ? { foreignKeyPatch: { ...options.progress } } : { columnPatch: { ...options.progress } }) : {};
       const report = () => this.emit({ taskId, status: 'running', progress: 0, message: label, ...detail() });
       const checkCancelled = () => { if (task.cancelRequested || controller.signal.aborted) throw new Error('任务已取消；已执行的结构或数据变更不会撤销'); };
       const commandStarted = (): (() => void) => {
         checkCancelled(); task.generation = (task.generation ?? 0) + 1;
         let terminal!: () => void; task.commandTerminal = new Promise<void>(resolve => { terminal = resolve; }); return terminal;
       };
-      report();
       let managed: ManagedConnection | undefined;
       let failure: unknown; let result!: T;
       try {
+        report();
         managed = await connect(profile, undefined, controller.signal);
         task.managed = managed;
         if (controller.signal.aborted) throw new Error('任务已取消');
@@ -272,10 +279,11 @@ export class Engine {
         // 成功或失败均已离开动作阶段，迟到取消只等待收尾，不再给关闭中的连接创建 KILL 控制。
         task.actionSettled = true;
         try { await task.cancelPending; } catch (error) { failure = error; }
-        if (options && !failure) { options.progress.phase = 'releasing'; report(); }
+        // 事件接收方异常也必须继续实际关闭连接并释放全部关联资源。
+        if (options && !failure) { options.progress.phase = 'releasing'; try { report(); } catch (error) { failure ??= error; } }
         try { await managed?.close(options ? { strict: true } : undefined); } catch (error) { failure ??= error; }
         this.independentTasks.delete(taskId); finish();
-        if (executionKey) this.structureExecutions.delete(executionKey);
+        releaseExecution();
       }
       if (controller.signal.aborted || task.cancelRequested) failure ??= task.cancelError ?? (options?.progress.ddlCompleted ? undefined : new Error('任务已取消'));
       if (task.cancelError) failure = task.cancelError;

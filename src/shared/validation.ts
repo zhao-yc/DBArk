@@ -10,6 +10,9 @@ import { queryStreamExportLimits } from './queryStreamExport';
 import { tablePreferenceSaveSchema, tablePreferenceTargetSchema } from './tablePreferences';
 import { validateColumnPatches } from './tableColumnPatches';
 import { validateIndexPatches } from './tableIndexPatches';
+import { validateForeignKeyPatches } from './tableForeignKeyPatches';
+import { foreignKeyAcknowledgementIds, foreignKeyTaskLimits } from './tableForeignKeyTasks';
+const foreignKeyTargetName = z.string().min(1).max(64).refine(value => !value.includes('\0'), '外键目标名称不能含 NUL');
 import { indexAcknowledgementIds } from './tableIndexTasks';
 
 const id = z.string().min(1).max(200);
@@ -103,6 +106,10 @@ export const commandSchemas: Record<Command, z.ZodType> = {
   'schema.indexes.preview': z.object({ snapshotId: id, patches: z.unknown().transform(value => validateIndexPatches(value)), taskId: id }).strict(),
   'schema.indexes.apply': z.object({ previewToken: id, acknowledgements: z.array(z.enum(indexAcknowledgementIds)).max(20).refine(value => new Set(value).size === value.length, '索引确认项不能重复'), taskId: id }).strict(),
   'schema.indexes.release': z.object({ snapshotId: id.optional(), previewToken: id.optional() }).strict().refine(value => Boolean(value.snapshotId || value.previewToken), '缺少待释放的索引结构令牌'),
+  'schema.foreignKeys.get': z.object({ connectionId: id, database: foreignKeyTargetName, table: foreignKeyTargetName, taskId: id, parentTargets: z.array(z.object({ database: foreignKeyTargetName, table: foreignKeyTargetName }).strict()).max(foreignKeyTaskLimits.extraParents).optional() }).strict(),
+  'schema.foreignKeys.preview': z.object({ snapshotId: id, patches: z.unknown().transform(value => validateForeignKeyPatches(value)), taskId: id }).strict(),
+  'schema.foreignKeys.apply': z.object({ previewToken: id, acknowledgements: z.array(z.enum(foreignKeyAcknowledgementIds)).max(20).refine(value => new Set(value).size === value.length, '外键确认项不能重复'), taskId: id }).strict(),
+  'schema.foreignKeys.release': z.object({ snapshotId: id.optional(), previewToken: id.optional() }).strict().refine(value => Boolean(value.snapshotId || value.previewToken), '缺少待释放的外键结构令牌'),
   'files.choose': z.object({ purpose: z.enum(['import','export','key','certificate','query','connection-import','connection-export']), format: z.string().optional(), suggestedName: z.string().optional() }).strict(),
   'files.path': z.object({ token: id }).strict(),
   'files.readQuery': z.object({ fileToken: id, encoding: z.enum(['utf8','utf16le','gb18030']) }).strict(),

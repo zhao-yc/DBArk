@@ -277,10 +277,10 @@ SELECT CAST(9223372036854775807 AS SIGNED) AS exact_bigint,
       await executeSql("INSERT INTO file_transaction VALUES (1,'仅原会话可见');");
       const probe = 'SELECT CONNECTION_ID() AS session_id, COUNT(*) AS visible_rows FROM file_transaction;';
       await executeSql(probe);
-      // 查询完成事件先于虚拟表格绘制；必须等待真实单元格数字，而不是立刻读取尚为空的 DOM。
+      // 数字校验与取值必须使用同一份读数，避免两次异步 DOM 读取之间网格重绘清空单元格。
       const sessionCell = query.locator('.result-body [role="gridcell"][aria-colindex="2"]');
-      await expect(sessionCell).toHaveText(/^\d+$/);
-      const originalSession = await sessionCell.innerText();
+      let originalSession = '';
+      await expect.poll(async () => { const value = await sessionCell.innerText(); if (/^\d+$/.test(value)) originalSession = value; return value; }).toMatch(/^\d+$/);
       await expect(query.locator('.result-body [role="gridcell"][aria-colindex="3"]')).toHaveText('1');
       const [before] = await observer.query<RowDataPacket[]>(`SELECT COUNT(*) AS total FROM \`${database}\`.file_transaction`);
       expect(Number(before[0].total)).toBe(0);

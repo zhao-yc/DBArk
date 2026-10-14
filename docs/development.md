@@ -61,6 +61,74 @@ SQL 片段迁移写入 schema 2 后，旧 0.2.0 拒绝读取。开发与回退�
 
 `tests/e2e/table-index-patches.spec.ts` 验证双入口、实际表单、只读预览、双击、复合前缀、数据/结构草稿、取消、约束删除后可靠键刷新及退出保护；禁用含密码追踪，仅替换原生对话框回答。纯解析/目录/依赖/计划/后核验、引擎和主进程用途隔离均有独立单元。当前结果与首轮失败见 [索引验收](../tests/integration/acceptance-o01-indexes-20261014.md)。
 
+## 外键差异开发者验收
+
+以下命令在仓库根目录运行，直接使用已安装的本地测试工具。每轮使用新的报告名，保留首次失败及后续复验，不覆盖旧证据；命令清单本身不代表已经通过验收。纯单元与类型检查不访问数据库，实库及真实 Electron 需要分别启用和记录。
+
+### 单元与类型检查
+
+PowerShell 用文件通配符枚举外键单元文件，再传给 Vitest，避免把未展开的星号误当作测试名称过滤器。该组包含定义解析、目录交叉核对、名称空间证据及分页读取、纯计划、结构读取、任务令牌、IPC 和界面模型；共享的执行互斥及取消生命周期仍需随全量单元回归。
+
+```powershell
+$foreignKeyRun = Get-Date -Format 'yyyyMMdd-HHmmss'
+$foreignKeyUnitFiles = @(Get-ChildItem -LiteralPath tests/unit -Filter '*foreign-key*.test.ts' | ForEach-Object { $_.FullName })
+if ($foreignKeyUnitFiles.Count -eq 0) { throw '未找到外键单元测试文件' }
+node node_modules/vitest/vitest.mjs run @foreignKeyUnitFiles --reporter=json --outputFile=".cache/foreign-key-unit-$foreignKeyRun.json"
+node node_modules/typescript/bin/tsc --noEmit
+```
+
+排查单个边界时可只运行相应脚本，例如任务生命周期或界面草稿模型：
+
+```powershell
+node node_modules/vitest/vitest.mjs run tests/unit/table-foreign-key-tasks.test.ts
+node node_modules/vitest/vitest.mjs run tests/unit/foreign-key-patches-ui.test.ts
+```
+
+检查报告中的实际测试总数、通过数、失败数和命令退出码。零测试、模块加载失败或全部跳过不能登记为单元通过；异步 mock 回归也不替代真实元数据锁、权限或窗口操作证据。
+
+### 引擎实库与真实桌面
+
+只使用已经核对身份的 `deve-server.yinzon.com` 对应 200 服务器隔离实例，不在开发电脑运行 Docker；每次 Docker 操作前重新核对实际连接的服务器。运行前在本机安全环境提供 `DBARK_TEST_HOST`、`DBARK_TEST_PORT`、`DBARK_TEST_USER` 和 `DBARK_TEST_PASSWORD`，确认端口对应本轮已授权的精确基线。本文不记录实际秘密、证书内容或临时用户密码。SSH、严格 TLS 需另用已经授权并核对的环境配置单独运行，不能从直连结果推断通过。
+
+`tests/integration/engine-foreign-key-patches.integration.test.ts` 通过真实 Engine 命令验证非空名称空间、复合有序映射、跨库父表、自引用、异名替换、引用动作、孤儿错误、父表及名称空间漂移、单次令牌、元数据锁取消与其他查询会话的事务/临时表保留。它使用 `DBARK_TEST_PORT`，每轮创建自己的 `dbark_fkpatch_*` 隔离库。
+
+```powershell
+$env:DBARK_INTEGRATION_ENABLED = '1'
+$foreignKeyRun = Get-Date -Format 'yyyyMMdd-HHmmss'
+node node_modules/vitest/vitest.mjs run --config vitest.integration.config.ts tests/integration/engine-foreign-key-patches.integration.test.ts --reporter=json --outputFile=".cache/foreign-key-engine-$foreignKeyRun.json"
+```
+
+`tests/e2e/table-foreign-key-patches.spec.ts` 启动真实 Electron，验证对象树/表页双入口、表单与固定 SQL、双击单次应用、跨库父表弃稿确认、有序映射、父子表数据草稿保护、迟到响应令牌释放、真实锁等待取消及自引用。迟到响应 gate 在真实 IPC 已完成后暂缓交付，用于验证取消竞态，不伪造数据库结果；它与自然锁等待分别记录。套件关闭含密码的追踪，不应通过启动参数重新开启。
+
+桌面运行前先统一构建，并核对 `dist` 与待验源码一致；验证安装产物时通过 `DBARK_EXECUTABLE_PATH` 选择该次实际安装的可执行文件，不能用当前源码结果代替安装包。`DBARK_FOREIGN_KEY_TEST_PORT` 优先于 `DBARK_TEST_PORT`，应显式设置，避免落入默认端口。当前桌面脚本只接受 200 服务器的五个普通基线端口 `13357`、`13380`、`13384`、`13310`、`13311`；不以改环境变量扩大到其他服务器或传输实例。
+
+```powershell
+$env:DBARK_INTEGRATION_ENABLED = '1'
+# DBARK_TEST_PORT 已在本轮核对并授权，桌面测试显式使用同一实例。
+if (-not $env:DBARK_TEST_PORT) { throw '请先设置已核对并授权的测试端口' }
+$env:DBARK_FOREIGN_KEY_TEST_PORT = $env:DBARK_TEST_PORT
+$foreignKeyRun = Get-Date -Format 'yyyyMMdd-HHmmss'
+node node_modules/@playwright/test/cli.js test tests/e2e/table-foreign-key-patches.spec.ts --workers=1 --output=".cache/foreign-key-ui-$foreignKeyRun"
+```
+
+每轮结束先等待本轮引擎、Electron 及其 utility 进程实际关闭，再逐一清理本轮登记的随机库和连接。桌面库前缀为 `dbark_e2e_fk_*`，跨库父目标也属于本例登记范围。清理必须按精确名称和已记录线程核对，不能按前缀批量删除其他轮次资源；异常中断后先确认所有者，再处理残留。保存脱敏失败诊断及清理结果，不以重跑掩盖未释放资源。未启用实库开关或缺少环境而跳过的测试不计为兼容性通过。
+
+### 外键最小权限边界
+
+外键权限测试复用 `tests/integration/engine-column-permissions.integration.test.ts`。它会创建临时用户并授予表级权限，必须取得独立的权限测试授权；普通集成开关、单元授权或能连接数据库均不构成授权。当前授权范围仅限该夹具生成的 `cp_*` 用户，以及对应 `dbark_colperm_*.subject` 表上的 `SELECT`，或 `SELECT ALTER CREATE INSERT` 四项权限。不得追加 `PROCESS`、`REFERENCES`、`LOCK TABLES`、全库/全局权限、可转授权，也不得为让预览成功而扩大权限。
+
+获授权后按 describe 名称只筛选外键边界：
+
+```powershell
+$env:DBARK_INTEGRATION_ENABLED = '1'
+$foreignKeyRun = Get-Date -Format 'yyyyMMdd-HHmmss'
+node node_modules/vitest/vitest.mjs run --config vitest.integration.config.ts tests/integration/engine-column-permissions.integration.test.ts -t '真实外键差异最小权限边界' --reporter=json --outputFile=".cache/foreign-key-permissions-$foreignKeyRun.json"
+```
+
+当前筛选执行两个外键用例：自引用快照可读，但名称和入向目录不完整时新增预览应拒绝，任务事实应为未投递 DDL，原定义、数据和实际授权均保持。原有两个字段、两个索引用例因名称过滤显示跳过，这四项不算失败，也不算本轮已验收；若外键两个用例也因环境开关跳过，则本轮没有实库权限验收结果。
+
+夹具为每个用例创建独立随机库、账号和内存密码，结束时先关闭引擎和低权连接，再精确删除本例账号及其授权、删除本例数据库，核对库、用户及已采样线程无残留。不要打印创建用户 SQL、认证哈希或密码；失败后只保留脱敏编号和精确清理状态，不能把临时账号扩权后再次冒充同一最小权限用例。
+
 ## 构建
 
 0.6.0 的表偏好由 `tests/unit/table-preferences.test.ts` 验证精确复合键、原型名称、实际 SQLite 满额和 UTF-8 聚合预算、保存/删除/目标变更失败回退，以及 schema2 旧七表全部字段保持。`ui-page-find-replace`、`ui-table-column-preferences` 验证完整原值、Unicode 位置、字面替换、快照和预算、调和及可见列模型。`table-preferences.spec.ts` 的四项离线实际 IPC 与 `table-grid-preferences.spec.ts` 的六项实库 UI 分别运行，编写或列出测试不算实测通过；本批结果见 [D06 验收记录](../tests/integration/acceptance-p0-grid-preferences-20261014.md)。旧 reader 的独立结构探针使用冻结 0.5 源码和真实 SQLite 副本，不属于真实安装或系统加密验证。

@@ -1,0 +1,85 @@
+{
+  "table": {
+    "schema": "fixture_schema",
+    "name": "different_name_actions_child",
+    "role": "child"
+  },
+  "kcu": [
+    {
+      "CONSTRAINT_NAME": "different_name_actions_fk_new",
+      "COLUMN_NAME": "ca",
+      "ORDINAL_POSITION": 1,
+      "POSITION_IN_UNIQUE_CONSTRAINT": 1,
+      "REFERENCED_TABLE_SCHEMA": "fixture_schema",
+      "REFERENCED_TABLE_NAME": "different_name_actions_parent",
+      "REFERENCED_COLUMN_NAME": "pa"
+    },
+    {
+      "CONSTRAINT_NAME": "different_name_actions_fk_new",
+      "COLUMN_NAME": "cb",
+      "ORDINAL_POSITION": 2,
+      "POSITION_IN_UNIQUE_CONSTRAINT": 2,
+      "REFERENCED_TABLE_SCHEMA": "fixture_schema",
+      "REFERENCED_TABLE_NAME": "different_name_actions_parent",
+      "REFERENCED_COLUMN_NAME": "pb"
+    },
+    {
+      "CONSTRAINT_NAME": "PRIMARY",
+      "COLUMN_NAME": "id",
+      "ORDINAL_POSITION": 1,
+      "POSITION_IN_UNIQUE_CONSTRAINT": null,
+      "REFERENCED_TABLE_SCHEMA": null,
+      "REFERENCED_TABLE_NAME": null,
+      "REFERENCED_COLUMN_NAME": null
+    }
+  ],
+  "rc": [
+    {
+      "CONSTRAINT_NAME": "different_name_actions_fk_new",
+      "UNIQUE_CONSTRAINT_NAME": "parent_pair",
+      "MATCH_OPTION": "NONE",
+      "UPDATE_RULE": "CASCADE",
+      "DELETE_RULE": "CASCADE",
+      "TABLE_NAME": "different_name_actions_child",
+      "REFERENCED_TABLE_NAME": "different_name_actions_parent"
+    }
+  ],
+  "indexes": [
+    {
+      "INDEX_NAME": "child_pair",
+      "COLUMN_NAME": "ca",
+      "SEQ_IN_INDEX": 1,
+      "NON_UNIQUE": 1,
+      "INDEX_TYPE": "BTREE",
+      "COLLATION": "A",
+      "SUB_PART": null,
+      "INDEX_COMMENT": "",
+      "IS_VISIBLE": "YES",
+      "EXPRESSION": null
+    },
+    {
+      "INDEX_NAME": "child_pair",
+      "COLUMN_NAME": "cb",
+      "SEQ_IN_INDEX": 2,
+      "NON_UNIQUE": 1,
+      "INDEX_TYPE": "BTREE",
+      "COLLATION": "A",
+      "SUB_PART": null,
+      "INDEX_COMMENT": "",
+      "IS_VISIBLE": "YES",
+      "EXPRESSION": null
+    },
+    {
+      "INDEX_NAME": "PRIMARY",
+      "COLUMN_NAME": "id",
+      "SEQ_IN_INDEX": 1,
+      "NON_UNIQUE": 0,
+      "INDEX_TYPE": "BTREE",
+      "COLLATION": "A",
+      "SUB_PART": null,
+      "INDEX_COMMENT": "",
+      "IS_VISIBLE": "YES",
+      "EXPRESSION": null
+    }
+  ]
+}

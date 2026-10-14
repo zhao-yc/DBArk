@@ -1,8 +1,12 @@
 import { mkdir, readFile, rmdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import { createRequire } from 'node:module';
 import initSqlJs from 'sql.js';
 import { test, expect, page, dataDir, pageErrors, launchDesktop, quitDesktop } from './desktop-fixture';
 import type { TablePreferenceTarget, TablePreferences } from '../../src/shared/tablePreferences';
+
+/** 从模块依赖定位 WASM，公开归档可在独立工作目录执行同一测试。 */
+const sqlWasmFile = createRequire(__filename).resolve('sql.js/dist/sql-wasm.wasm');
 
 const preferences: TablePreferences = { version: 1, columns: [{ name: 'constructor', hidden: true, width: 64 }, { name: '__proto__', hidden: false, width: 320 }, { name: '主键', hidden: true, width: 2000 }] };
 /** 创建不可连接的本地配置；布局 IPC 不得尝试查询这个端口或生成 SQL 任务。 */
@@ -75,7 +79,7 @@ test('真实 schema2 配置启动迁移至 schema4，既有查询片段设置原
     await window.dbark.invoke('snippets.save', { id: '旧片段', name: '旧片段', group: '分组', description: '说明', sql: 'SELECT 8', updatedAt: '' });
   }, connection.id);
   await page.getByRole('button', { name: '切换主题', exact: true }).click(); await quitDesktop();
-  const file = join(dataDir, 'dbark.sqlite'), SQL = await initSqlJs({ locateFile: () => join(process.cwd(), 'node_modules/sql.js/dist/sql-wasm.wasm') });
+  const file = join(dataDir, 'dbark.sqlite'), SQL = await initSqlJs({ locateFile: () => sqlWasmFile });
   const old = new SQL.Database(await readFile(file)); old.run('DROP TABLE table_preferences; PRAGMA user_version=2');
   const before = old.exec('SELECT * FROM connections; SELECT * FROM queries; SELECT * FROM sql_snippets; SELECT * FROM settings'); await writeFile(file, old.export()); old.close();
   await launchDesktop();

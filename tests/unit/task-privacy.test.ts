@@ -7,6 +7,20 @@ import { ExportReservations } from '../../src/main/exportReservations';
 import type { TaskEvent } from '../../src/shared/contracts';
 
 describe('完整导出持久化与目标互斥', () => {
+  it.each(['running', 'completed', 'failed', 'cancelled'] as const)('外键%s事件只保存可信执行阶段，不保存名称、定义与服务器原错误', status => {
+    const secret = '自主夹具-含原值的服务器错误';
+    for (const phase of ['before', 'submitted', 'completed'] as const) {
+      const event: TaskEvent = { taskId: 'foreign-key-task', status, progress: 0, message: secret, foreignKeyPatch: { phase: 'verifying', ddlSubmitted: phase !== 'before', ddlCompleted: phase === 'completed', definitionVerified: false, outcome: phase === 'completed' ? 'succeeded' : phase === 'submitted' ? 'unknown' : 'not-sent' } };
+      const message = persistedTaskMessage('schema.foreignKeys.apply', event);
+      expect(message).not.toContain(secret);
+      expect(message).toContain(phase === 'completed' ? '已收到成功响应' : phase === 'submitted' ? '可能已执行' : '尚未确认发送');
+    }
+  });
+  it('没有外键进度或只有其它编辑器进度时，不从服务器原错误推断DDL已完成', () => {
+    const event: TaskEvent = { taskId: 'foreign-key-read', status: 'failed', progress: 0, message: '任意原字段内容', indexPatch: { phase: 'verifying', ddlSubmitted: true, ddlCompleted: true, definitionVerified: true, outcome: 'succeeded' } };
+    expect(persistedTaskMessage('schema.foreignKeys.get', event)).toContain('尚未确认发送');
+    expect(persistedTaskMessage('schema.foreignKeys.get', event)).not.toContain(event.message);
+  });
   it('服务端展开错误不落入任务与历史，保留可信进度而不是参数原值', () => {
     const secret = '实际绑定值-不应落盘';
     const event: TaskEvent = { taskId: 'test', status: 'failed', progress: 0, message: `Duplicate entry '${secret}'`, queryExport: { phase: 'executing', statementsCompleted: 2, rowsWritten: 31, bytesWritten: 1024, fileCommitted: false, sqlMayHaveExecuted: true, transactionKnown: false } };
