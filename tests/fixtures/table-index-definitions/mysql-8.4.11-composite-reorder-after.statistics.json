@@ -1,0 +1,38 @@
+[
+  {
+    "INDEX_NAME": "ix",
+    "COLUMN_NAME": "b",
+    "SEQ_IN_INDEX": 1,
+    "NON_UNIQUE": 1,
+    "INDEX_TYPE": "BTREE",
+    "COLLATION": "A",
+    "SUB_PART": null,
+    "INDEX_COMMENT": "",
+    "IS_VISIBLE": "YES",
+    "EXPRESSION": null
+  },
+  {
+    "INDEX_NAME": "ix",
+    "COLUMN_NAME": "a",
+    "SEQ_IN_INDEX": 2,
+    "NON_UNIQUE": 1,
+    "INDEX_TYPE": "BTREE",
+    "COLLATION": "A",
+    "SUB_PART": null,
+    "INDEX_COMMENT": "",
+    "IS_VISIBLE": "YES",
+    "EXPRESSION": null
+  },
+  {
+    "INDEX_NAME": "PRIMARY",
+    "COLUMN_NAME": "id",
+    "SEQ_IN_INDEX": 1,
+    "NON_UNIQUE": 0,
+    "INDEX_TYPE": "BTREE",
+    "COLLATION": "A",
+    "SUB_PART": null,
+    "INDEX_COMMENT": "",
+    "IS_VISIBLE": "YES",
+    "EXPRESSION": null
+  }
+]

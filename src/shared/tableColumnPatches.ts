@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { inspectStructurePatchInput } from './structurePatchInput';
 import type { SqlLexicalMode } from './queryParameters';
 
 export const tableColumnPatchLimits = { definitionBytes: 2 * 1024 * 1024, columns: 4096, tokens: 150000, nesting: 128, patches: 100, patchBytes: 512 * 1024, ddlBytes: 4 * 1024 * 1024 } as const;
@@ -126,63 +127,9 @@ export const columnPatchSchema = z.discriminatedUnion('kind', [
 ]);
 export type ColumnPatch = z.infer<typeof columnPatchSchema>;
 
-/** 不调用输入的 getter/toJSON：按自有数据描述符递增计量 JSON UTF-8 字节，并只复制已通过预算的值。 */
+/** 字段补丁复用结构输入守卫，保留原公开入口和字段错误前缀。 */
 export function inspectColumnPatchInput(input: unknown): { value: unknown; bytes: number } {
-  let bytes = 0, nodes = 0;
-  const ancestors = new WeakSet<object>();
-  const charge = (size: number): void => { bytes += size; if (bytes > tableColumnPatchLimits.patchBytes) throw new Error('字段补丁超过 512 KiB'); };
-  /** JSON 转义开销按字符计算，不先构造巨大转义字符串或 UTF-8 缓冲。 */
-  const string = (value: string): void => {
-    if (value.length + 2 > tableColumnPatchLimits.patchBytes - bytes) throw new Error('字段补丁超过 512 KiB');
-    charge(2);
-    for (let index = 0; index < value.length; index++) {
-      const code = value.charCodeAt(index);
-      if (code >= 0xd800 && code <= 0xdbff) {
-        const next = value.charCodeAt(++index); if (!(next >= 0xdc00 && next <= 0xdfff)) throw new Error('字段补丁含非法 Unicode'); charge(4);
-      } else if (code >= 0xdc00 && code <= 0xdfff) throw new Error('字段补丁含非法 Unicode');
-      else if (code === 34 || code === 92 || [8, 9, 10, 12, 13].includes(code)) charge(2);
-      else charge(code < 32 ? 6 : code < 128 ? 1 : code < 2048 ? 2 : 3);
-    }
-  };
-  /** 每层和每容器都有独立上限；循环、稀疏数组和非普通对象都不是有效补丁值。 */
-  const visit = (value: unknown, depth: number): unknown => {
-    if (++nodes > 100000 || depth > 8) throw new Error('字段补丁结构超出预算');
-    if (typeof value === 'string') { string(value); return value; }
-    if (value === null) { charge(4); return value; }
-    if (typeof value === 'boolean') { charge(value ? 4 : 5); return value; }
-    if (typeof value === 'number' && Number.isFinite(value)) { charge(String(value).length); return value; }
-    if (!value || typeof value !== 'object') throw new Error('字段补丁包含非法值');
-    const array = Array.isArray(value), prototype = Object.getPrototypeOf(value);
-    if (array ? prototype !== Array.prototype : prototype !== Object.prototype && prototype !== null) throw new Error('字段补丁只接受普通对象和数组');
-    if (ancestors.has(value)) throw new Error('字段补丁不接受循环引用');
-    ancestors.add(value); charge(2);
-    try {
-      if (array) {
-        const length = Object.getOwnPropertyDescriptor(value, 'length')!.value as number;
-        if (length > (depth === 0 ? tableColumnPatchLimits.patches : 65535)) throw new Error('字段补丁数组超出数量范围');
-        // 只在长度上限内枚举，拒绝数组上的额外字段、访问器及符号属性。
-        const keys = Reflect.ownKeys(value);
-        if (keys.length !== length + 1 || keys.some(key => key !== 'length' && (typeof key !== 'string' || !/^(?:0|[1-9]\d*)$/.test(key) || Number(key) >= length))) throw new Error('字段补丁数组必须连续且不能含额外字段');
-        const result: unknown[] = [];
-        for (let index = 0; index < length; index++) {
-          const descriptor = Object.getOwnPropertyDescriptor(value, String(index));
-          if (!descriptor?.enumerable || !Object.hasOwn(descriptor, 'value')) throw new Error('字段补丁不接受访问器或稀疏数组');
-          if (index) charge(1); result.push(visit(descriptor.value, depth + 1));
-        }
-        return result;
-      }
-      const result: Record<string, unknown> = Object.create(null); let count = 0;
-      for (const key of Reflect.ownKeys(value)) {
-        if (++count > 16) throw new Error('字段补丁对象字段过多');
-        const descriptor = Object.getOwnPropertyDescriptor(value, key)!;
-        if (typeof key !== 'string' || !descriptor.enumerable || !Object.hasOwn(descriptor, 'value')) throw new Error('字段补丁只接受自有可枚举数据字段');
-        if (count > 1) charge(1); string(key); charge(1); result[key] = visit(descriptor.value, depth + 1);
-      }
-      return result;
-    } finally { ancestors.delete(value); }
-  };
-  if (!Array.isArray(input)) throw new Error('字段补丁必须为数组');
-  return { value: visit(input, 0), bytes };
+  return inspectStructurePatchInput(input, '字段补丁');
 }
 
 /** 只验证纯补丁语法与预算；目标存在性、依赖、位次环和服务器能力由计划器检查。 */

@@ -1,0 +1,26 @@
+[
+  {
+    "INDEX_NAME": "ix",
+    "COLUMN_NAME": "txt",
+    "SEQ_IN_INDEX": 1,
+    "NON_UNIQUE": 0,
+    "INDEX_TYPE": "BTREE",
+    "COLLATION": "A",
+    "SUB_PART": "2",
+    "INDEX_COMMENT": "",
+    "IS_VISIBLE": "YES",
+    "EXPRESSION": null
+  },
+  {
+    "INDEX_NAME": "PRIMARY",
+    "COLUMN_NAME": "id",
+    "SEQ_IN_INDEX": 1,
+    "NON_UNIQUE": 0,
+    "INDEX_TYPE": "BTREE",
+    "COLLATION": "A",
+    "SUB_PART": null,
+    "INDEX_COMMENT": "",
+    "IS_VISIBLE": "YES",
+    "EXPRESSION": null
+  }
+]

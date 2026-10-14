@@ -1,0 +1,1480 @@
+{
+  "format": "DBArk-table-index-real-definitions",
+  "version": 1,
+  "scope": "自主结构 SHOW CREATE 和白名单 STATISTICS；无行值、凭据、服务器身份或随机研究库名；不是产品 API 验收",
+  "statisticsFields": [
+    "INDEX_NAME",
+    "COLUMN_NAME",
+    "SEQ_IN_INDEX",
+    "NON_UNIQUE",
+    "INDEX_TYPE",
+    "COLLATION",
+    "SUB_PART",
+    "INDEX_COMMENT",
+    "IS_VISIBLE",
+    "EXPRESSION",
+    "IGNORED"
+  ],
+  "entries": [
+    {
+      "id": "mysql-5.7.44-ordinary-btree-after",
+      "file": "mysql-5.7.44-ordinary-btree-after.sql",
+      "statisticsFile": "mysql-5.7.44-ordinary-btree-after.statistics.json",
+      "dialect": "mysql",
+      "version": "5.7.44",
+      "sourceRun": "run01",
+      "sourceCase": "ordinary_btree",
+      "sourcePhase": "after",
+      "sourceReportSha256": "21b973ad52898f8ef3969ae3643ea0e9a3e3a98b4ff76c3b78d42ff90a613dec",
+      "capturedWithin": {
+        "from": "2026-10-14T02:39:07.840Z",
+        "to": "2026-10-14T02:39:11.751Z"
+      },
+      "session": {
+        "sqlMode": "STRICT_ALL_TABLES,NO_ENGINE_SUBSTITUTION",
+        "charset": "utf8mb4",
+        "collation": "utf8mb4_bin",
+        "quoteShowCreate": "1",
+        "innodbStrictMode": "1"
+      },
+      "engine": "InnoDB",
+      "rowFormat": "Dynamic",
+      "ddl": {
+        "sourceRawSha256": "5080b20d3a9874fc1bf7c14fba85b82d3769ba62a1efaeda32cbc3a6ca6da924",
+        "publishedSha256": "5080b20d3a9874fc1bf7c14fba85b82d3769ba62a1efaeda32cbc3a6ca6da924",
+        "bytes": 500,
+        "unchangedBytes": true,
+        "sanitization": "无需改名：SHOW CREATE 原文不含库名或环境字段，逐字节保留"
+      },
+      "statistics": {
+        "sourceCanonicalSha256": "b13fdd295606a06b2239808897339107eedf9165349186f2fbbd8a39d9d206d5",
+        "publishedSha256": "946a800620c65878b59e7c09e49da0f58bb283bf3d9947e4f989aa9ab8002d52",
+        "rows": 3,
+        "sanitization": "白名单逐字段投影，删除 schema/表目录环境字段、基数等；保留原标量类型，文件重新序列化"
+      },
+      "observation": {
+        "statementAccepted": true,
+        "phaseMeaning": "操作后真实结构",
+        "warningCodes": [],
+        "requestedDirectionIgnored": false,
+        "serverAddedOrShortenedPrefix": false,
+        "note": "普通结构观察；不是产品解析/规划或完整DDL语义证明"
+      }
+    },
+    {
+      "id": "mysql-5.7.44-unique-btree-after",
+      "file": "mysql-5.7.44-unique-btree-after.sql",
+      "statisticsFile": "mysql-5.7.44-unique-btree-after.statistics.json",
+      "dialect": "mysql",
+      "version": "5.7.44",
+      "sourceRun": "run01",
+      "sourceCase": "unique_btree",
+      "sourcePhase": "after",
+      "sourceReportSha256": "21b973ad52898f8ef3969ae3643ea0e9a3e3a98b4ff76c3b78d42ff90a613dec",
+      "capturedWithin": {
+        "from": "2026-10-14T02:39:07.840Z",
+        "to": "2026-10-14T02:39:11.751Z"
+      },
+      "session": {
+        "sqlMode": "STRICT_ALL_TABLES,NO_ENGINE_SUBSTITUTION",
+        "charset": "utf8mb4",
+        "collation": "utf8mb4_bin",
+        "quoteShowCreate": "1",
+        "innodbStrictMode": "1"
+      },
+      "engine": "InnoDB",
+      "rowFormat": "Dynamic",
+      "ddl": {
+        "sourceRawSha256": "7330838caadbc76e1ae890d5195adaf84c2983391af8424cda051622266b3217",
+        "publishedSha256": "7330838caadbc76e1ae890d5195adaf84c2983391af8424cda051622266b3217",
+        "bytes": 505,
+        "unchangedBytes": true,
+        "sanitization": "无需改名：SHOW CREATE 原文不含库名或环境字段，逐字节保留"
+      },
+      "statistics": {
+        "sourceCanonicalSha256": "457252ac9415a2b2803ce0aafec50be6055de4338c3b1c0975601f544474e8cb",
+        "publishedSha256": "772023ddb8f06bba54c22f4bca22e5a95c0b3887b5104a9eb85c049901dd05ef",
+        "rows": 3,
+        "sanitization": "白名单逐字段投影，删除 schema/表目录环境字段、基数等；保留原标量类型，文件重新序列化"
+      },
+      "observation": {
+        "statementAccepted": true,
+        "phaseMeaning": "操作后真实结构",
+        "warningCodes": [],
+        "requestedDirectionIgnored": false,
+        "serverAddedOrShortenedPrefix": false,
+        "note": "普通结构观察；不是产品解析/规划或完整DDL语义证明"
+      }
+    },
+    {
+      "id": "mysql-5.7.44-primary-btree-after",
+      "file": "mysql-5.7.44-primary-btree-after.sql",
+      "statisticsFile": "mysql-5.7.44-primary-btree-after.statistics.json",
+      "dialect": "mysql",
+      "version": "5.7.44",
+      "sourceRun": "run01",
+      "sourceCase": "primary_btree",
+      "sourcePhase": "after",
+      "sourceReportSha256": "21b973ad52898f8ef3969ae3643ea0e9a3e3a98b4ff76c3b78d42ff90a613dec",
+      "capturedWithin": {
+        "from": "2026-10-14T02:39:07.840Z",
+        "to": "2026-10-14T02:39:11.751Z"
+      },
+      "session": {
+        "sqlMode": "STRICT_ALL_TABLES,NO_ENGINE_SUBSTITUTION",
+        "charset": "utf8mb4",
+        "collation": "utf8mb4_bin",
+        "quoteShowCreate": "1",
+        "innodbStrictMode": "1"
+      },
+      "engine": "InnoDB",
+      "rowFormat": "Dynamic",
+      "ddl": {
+        "sourceRawSha256": "f50c19d3fd4cd883cf8c1aba416c29a4042c48eb1a04544afe42c56dad0bcff9",
+        "publishedSha256": "f50c19d3fd4cd883cf8c1aba416c29a4042c48eb1a04544afe42c56dad0bcff9",
+        "bytes": 480,
+        "unchangedBytes": true,
+        "sanitization": "无需改名：SHOW CREATE 原文不含库名或环境字段，逐字节保留"
+      },
+      "statistics": {
+        "sourceCanonicalSha256": "a51f35c8e054df74de1dace5802d902315c887e16afce0d76afec9bce789a03b",
+        "publishedSha256": "59154f15d5255b21a362c26e505939797fda902dd155a7031e6f6e7c6f312d67",
+        "rows": 2,
+        "sanitization": "白名单逐字段投影，删除 schema/表目录环境字段、基数等；保留原标量类型，文件重新序列化"
+      },
+      "observation": {
+        "statementAccepted": true,
+        "phaseMeaning": "操作后真实结构",
+        "warningCodes": [],
+        "requestedDirectionIgnored": false,
+        "serverAddedOrShortenedPrefix": false,
+        "note": "普通结构观察；不是产品解析/规划或完整DDL语义证明"
+      }
+    },
+    {
+      "id": "mysql-5.7.44-ordinary-direction-after",
+      "file": "mysql-5.7.44-ordinary-direction-after.sql",
+      "statisticsFile": "mysql-5.7.44-ordinary-direction-after.statistics.json",
+      "dialect": "mysql",
+      "version": "5.7.44",
+      "sourceRun": "run01",
+      "sourceCase": "ordinary_direction",
+      "sourcePhase": "after",
+      "sourceReportSha256": "21b973ad52898f8ef3969ae3643ea0e9a3e3a98b4ff76c3b78d42ff90a613dec",
+      "capturedWithin": {
+        "from": "2026-10-14T02:39:07.840Z",
+        "to": "2026-10-14T02:39:11.751Z"
+      },
+      "session": {
+        "sqlMode": "STRICT_ALL_TABLES,NO_ENGINE_SUBSTITUTION",
+        "charset": "utf8mb4",
+        "collation": "utf8mb4_bin",
+        "quoteShowCreate": "1",
+        "innodbStrictMode": "1"
+      },
+      "engine": "InnoDB",
+      "rowFormat": "Dynamic",
+      "ddl": {
+        "sourceRawSha256": "43238e6d057c59ef05e50cd22433231140321c80966af978288099c581cef371",
+        "publishedSha256": "43238e6d057c59ef05e50cd22433231140321c80966af978288099c581cef371",
+        "bytes": 460,
+        "unchangedBytes": true,
+        "sanitization": "无需改名：SHOW CREATE 原文不含库名或环境字段，逐字节保留"
+      },
+      "statistics": {
+        "sourceCanonicalSha256": "e9b4161458c62ba0af4f2ae6b9b07fabea799dfe3bdea47d7103545b02f854a9",
+        "publishedSha256": "5b07f92ac925f95d88842a28472007442e07fef3c8c6a2ded00306873b28fd0d",
+        "rows": 3,
+        "sanitization": "白名单逐字段投影，删除 schema/表目录环境字段、基数等；保留原标量类型，文件重新序列化"
+      },
+      "observation": {
+        "statementAccepted": true,
+        "phaseMeaning": "操作后真实结构",
+        "warningCodes": [],
+        "requestedDirectionIgnored": true,
+        "serverAddedOrShortenedPrefix": false,
+        "note": "MySQL 5.7 接受 DESC 但原定义及目录均归为升序"
+      }
+    },
+    {
+      "id": "mysql-8.0.46-ordinary-btree-after",
+      "file": "mysql-8.0.46-ordinary-btree-after.sql",
+      "statisticsFile": "mysql-8.0.46-ordinary-btree-after.statistics.json",
+      "dialect": "mysql",
+      "version": "8.0.46",
+      "sourceRun": "run01",
+      "sourceCase": "ordinary_btree",
+      "sourcePhase": "after",
+      "sourceReportSha256": "c2ca749e7a0d24a2a0b0d3da56de12053700cb0398bc9fee571229cbcf15ce7a",
+      "capturedWithin": {
+        "from": "2026-10-14T02:39:33.324Z",
+        "to": "2026-10-14T02:39:38.656Z"
+      },
+      "session": {
+        "sqlMode": "STRICT_ALL_TABLES,NO_ENGINE_SUBSTITUTION",
+        "charset": "utf8mb4",
+        "collation": "utf8mb4_bin",
+        "quoteShowCreate": "1",
+        "innodbStrictMode": "1"
+      },
+      "engine": "InnoDB",
+      "rowFormat": "Dynamic",
+      "ddl": {
+        "sourceRawSha256": "acac3edec5914c6f88dc3c9a76978575ff0b6ee45a2287e4df5e41caad377ae1",
+        "publishedSha256": "acac3edec5914c6f88dc3c9a76978575ff0b6ee45a2287e4df5e41caad377ae1",
+        "bytes": 554,
+        "unchangedBytes": true,
+        "sanitization": "无需改名：SHOW CREATE 原文不含库名或环境字段，逐字节保留"
+      },
+      "statistics": {
+        "sourceCanonicalSha256": "1db1d3383a5ac40e06c1acec203d42c4d3d92c7e480cfb1955837cda52756b9d",
+        "publishedSha256": "54f7793b447b1bd91f28b030ad0978c905d33cb659f0f873b84cb96aeeca214a",
+        "rows": 3,
+        "sanitization": "白名单逐字段投影，删除 schema/表目录环境字段、基数等；保留原标量类型，文件重新序列化"
+      },
+      "observation": {
+        "statementAccepted": true,
+        "phaseMeaning": "操作后真实结构",
+        "warningCodes": [],
+        "requestedDirectionIgnored": false,
+        "serverAddedOrShortenedPrefix": false,
+        "note": "普通结构观察；不是产品解析/规划或完整DDL语义证明"
+      }
+    },
+    {
+      "id": "mysql-8.0.46-unique-btree-after",
+      "file": "mysql-8.0.46-unique-btree-after.sql",
+      "statisticsFile": "mysql-8.0.46-unique-btree-after.statistics.json",
+      "dialect": "mysql",
+      "version": "8.0.46",
+      "sourceRun": "run01",
+      "sourceCase": "unique_btree",
+      "sourcePhase": "after",
+      "sourceReportSha256": "c2ca749e7a0d24a2a0b0d3da56de12053700cb0398bc9fee571229cbcf15ce7a",
+      "capturedWithin": {
+        "from": "2026-10-14T02:39:33.324Z",
+        "to": "2026-10-14T02:39:38.656Z"
+      },
+      "session": {
+        "sqlMode": "STRICT_ALL_TABLES,NO_ENGINE_SUBSTITUTION",
+        "charset": "utf8mb4",
+        "collation": "utf8mb4_bin",
+        "quoteShowCreate": "1",
+        "innodbStrictMode": "1"
+      },
+      "engine": "InnoDB",
+      "rowFormat": "Dynamic",
+      "ddl": {
+        "sourceRawSha256": "9417e1dbcf94d4792d1382064dcfefa840f9e0dd65dfe8a2c70b50e7629dcb75",
+        "publishedSha256": "9417e1dbcf94d4792d1382064dcfefa840f9e0dd65dfe8a2c70b50e7629dcb75",
+        "bytes": 559,
+        "unchangedBytes": true,
+        "sanitization": "无需改名：SHOW CREATE 原文不含库名或环境字段，逐字节保留"
+      },
+      "statistics": {
+        "sourceCanonicalSha256": "8ae9552a1298a8b2e93ec9c7d5a88287929940916a09868534bd1b9b0c4b5702",
+        "publishedSha256": "8451deb9a2beff5912ac76ff99f8d85cc0a15a27042adb4ed467230cce7a1307",
+        "rows": 3,
+        "sanitization": "白名单逐字段投影，删除 schema/表目录环境字段、基数等；保留原标量类型，文件重新序列化"
+      },
+      "observation": {
+        "statementAccepted": true,
+        "phaseMeaning": "操作后真实结构",
+        "warningCodes": [],
+        "requestedDirectionIgnored": false,
+        "serverAddedOrShortenedPrefix": false,
+        "note": "普通结构观察；不是产品解析/规划或完整DDL语义证明"
+      }
+    },
+    {
+      "id": "mysql-8.0.46-primary-btree-after",
+      "file": "mysql-8.0.46-primary-btree-after.sql",
+      "statisticsFile": "mysql-8.0.46-primary-btree-after.statistics.json",
+      "dialect": "mysql",
+      "version": "8.0.46",
+      "sourceRun": "run01",
+      "sourceCase": "primary_btree",
+      "sourcePhase": "after",
+      "sourceReportSha256": "c2ca749e7a0d24a2a0b0d3da56de12053700cb0398bc9fee571229cbcf15ce7a",
+      "capturedWithin": {
+        "from": "2026-10-14T02:39:33.324Z",
+        "to": "2026-10-14T02:39:38.656Z"
+      },
+      "session": {
+        "sqlMode": "STRICT_ALL_TABLES,NO_ENGINE_SUBSTITUTION",
+        "charset": "utf8mb4",
+        "collation": "utf8mb4_bin",
+        "quoteShowCreate": "1",
+        "innodbStrictMode": "1"
+      },
+      "engine": "InnoDB",
+      "rowFormat": "Dynamic",
+      "ddl": {
+        "sourceRawSha256": "0294f729009eb7d732631e6a073bdd2b1db61eef80192bf82d71517c9c40b012",
+        "publishedSha256": "0294f729009eb7d732631e6a073bdd2b1db61eef80192bf82d71517c9c40b012",
+        "bytes": 534,
+        "unchangedBytes": true,
+        "sanitization": "无需改名：SHOW CREATE 原文不含库名或环境字段，逐字节保留"
+      },
+      "statistics": {
+        "sourceCanonicalSha256": "8afabb23d1ceea388b171ebe8c877649dd4e47f7f1abeb4a33a5278f206ce887",
+        "publishedSha256": "2a0ecba143859e6ae3c72b6eaa09d7fadc439e2f461c965d1d9694d73213e98e",
+        "rows": 2,
+        "sanitization": "白名单逐字段投影，删除 schema/表目录环境字段、基数等；保留原标量类型，文件重新序列化"
+      },
+      "observation": {
+        "statementAccepted": true,
+        "phaseMeaning": "操作后真实结构",
+        "warningCodes": [],
+        "requestedDirectionIgnored": false,
+        "serverAddedOrShortenedPrefix": false,
+        "note": "普通结构观察；不是产品解析/规划或完整DDL语义证明"
+      }
+    },
+    {
+      "id": "mysql-8.0.46-ordinary-direction-after",
+      "file": "mysql-8.0.46-ordinary-direction-after.sql",
+      "statisticsFile": "mysql-8.0.46-ordinary-direction-after.statistics.json",
+      "dialect": "mysql",
+      "version": "8.0.46",
+      "sourceRun": "run01",
+      "sourceCase": "ordinary_direction",
+      "sourcePhase": "after",
+      "sourceReportSha256": "c2ca749e7a0d24a2a0b0d3da56de12053700cb0398bc9fee571229cbcf15ce7a",
+      "capturedWithin": {
+        "from": "2026-10-14T02:39:33.324Z",
+        "to": "2026-10-14T02:39:38.656Z"
+      },
+      "session": {
+        "sqlMode": "STRICT_ALL_TABLES,NO_ENGINE_SUBSTITUTION",
+        "charset": "utf8mb4",
+        "collation": "utf8mb4_bin",
+        "quoteShowCreate": "1",
+        "innodbStrictMode": "1"
+      },
+      "engine": "InnoDB",
+      "rowFormat": "Dynamic",
+      "ddl": {
+        "sourceRawSha256": "2453eb76e785521a849f05ffcedf2b554f7f5d73e784ff86b5263286fa1eeebd",
+        "publishedSha256": "2453eb76e785521a849f05ffcedf2b554f7f5d73e784ff86b5263286fa1eeebd",
+        "bytes": 519,
+        "unchangedBytes": true,
+        "sanitization": "无需改名：SHOW CREATE 原文不含库名或环境字段，逐字节保留"
+      },
+      "statistics": {
+        "sourceCanonicalSha256": "5c0760967cd420218dcc0ee48950647afaf565a2d8d740803e74e1341d0bdab3",
+        "publishedSha256": "1e1b1eb10e1b4d730a5901840c5c6359dd80df59fd11e525b76391be6f71effc",
+        "rows": 3,
+        "sanitization": "白名单逐字段投影，删除 schema/表目录环境字段、基数等；保留原标量类型，文件重新序列化"
+      },
+      "observation": {
+        "statementAccepted": true,
+        "phaseMeaning": "操作后真实结构",
+        "warningCodes": [],
+        "requestedDirectionIgnored": false,
+        "serverAddedOrShortenedPrefix": false,
+        "note": "普通结构观察；不是产品解析/规划或完整DDL语义证明"
+      }
+    },
+    {
+      "id": "mysql-8.4.11-ordinary-btree-after",
+      "file": "mysql-8.4.11-ordinary-btree-after.sql",
+      "statisticsFile": "mysql-8.4.11-ordinary-btree-after.statistics.json",
+      "dialect": "mysql",
+      "version": "8.4.11",
+      "sourceRun": "run01",
+      "sourceCase": "ordinary_btree",
+      "sourcePhase": "after",
+      "sourceReportSha256": "e4ea591aa7f5dd1ce99d5e9a9dfb67e9b7b10c80fc1174d8fe729e477a00c97a",
+      "capturedWithin": {
+        "from": "2026-10-14T02:39:39.079Z",
+        "to": "2026-10-14T02:39:43.553Z"
+      },
+      "session": {
+        "sqlMode": "STRICT_ALL_TABLES,NO_ENGINE_SUBSTITUTION",
+        "charset": "utf8mb4",
+        "collation": "utf8mb4_bin",
+        "quoteShowCreate": "1",
+        "innodbStrictMode": "1"
+      },
+      "engine": "InnoDB",
+      "rowFormat": "Dynamic",
+      "ddl": {
+        "sourceRawSha256": "acac3edec5914c6f88dc3c9a76978575ff0b6ee45a2287e4df5e41caad377ae1",
+        "publishedSha256": "acac3edec5914c6f88dc3c9a76978575ff0b6ee45a2287e4df5e41caad377ae1",
+        "bytes": 554,
+        "unchangedBytes": true,
+        "sanitization": "无需改名：SHOW CREATE 原文不含库名或环境字段，逐字节保留"
+      },
+      "statistics": {
+        "sourceCanonicalSha256": "fca3025b2c4e7d8ab536d6444a14da20653d06b4a4f48cfc23e922ead31d72bc",
+        "publishedSha256": "54f7793b447b1bd91f28b030ad0978c905d33cb659f0f873b84cb96aeeca214a",
+        "rows": 3,
+        "sanitization": "白名单逐字段投影，删除 schema/表目录环境字段、基数等；保留原标量类型，文件重新序列化"
+      },
+      "observation": {
+        "statementAccepted": true,
+        "phaseMeaning": "操作后真实结构",
+        "warningCodes": [],
+        "requestedDirectionIgnored": false,
+        "serverAddedOrShortenedPrefix": false,
+        "note": "普通结构观察；不是产品解析/规划或完整DDL语义证明"
+      }
+    },
+    {
+      "id": "mysql-8.4.11-unique-btree-after",
+      "file": "mysql-8.4.11-unique-btree-after.sql",
+      "statisticsFile": "mysql-8.4.11-unique-btree-after.statistics.json",
+      "dialect": "mysql",
+      "version": "8.4.11",
+      "sourceRun": "run01",
+      "sourceCase": "unique_btree",
+      "sourcePhase": "after",
+      "sourceReportSha256": "e4ea591aa7f5dd1ce99d5e9a9dfb67e9b7b10c80fc1174d8fe729e477a00c97a",
+      "capturedWithin": {
+        "from": "2026-10-14T02:39:39.079Z",
+        "to": "2026-10-14T02:39:43.553Z"
+      },
+      "session": {
+        "sqlMode": "STRICT_ALL_TABLES,NO_ENGINE_SUBSTITUTION",
+        "charset": "utf8mb4",
+        "collation": "utf8mb4_bin",
+        "quoteShowCreate": "1",
+        "innodbStrictMode": "1"
+      },
+      "engine": "InnoDB",
+      "rowFormat": "Dynamic",
+      "ddl": {
+        "sourceRawSha256": "9417e1dbcf94d4792d1382064dcfefa840f9e0dd65dfe8a2c70b50e7629dcb75",
+        "publishedSha256": "9417e1dbcf94d4792d1382064dcfefa840f9e0dd65dfe8a2c70b50e7629dcb75",
+        "bytes": 559,
+        "unchangedBytes": true,
+        "sanitization": "无需改名：SHOW CREATE 原文不含库名或环境字段，逐字节保留"
+      },
+      "statistics": {
+        "sourceCanonicalSha256": "59f5a4c8d61810d7616aebd667eacbb73d2b47e9d1684738c013cf09a2f859fa",
+        "publishedSha256": "8451deb9a2beff5912ac76ff99f8d85cc0a15a27042adb4ed467230cce7a1307",
+        "rows": 3,
+        "sanitization": "白名单逐字段投影，删除 schema/表目录环境字段、基数等；保留原标量类型，文件重新序列化"
+      },
+      "observation": {
+        "statementAccepted": true,
+        "phaseMeaning": "操作后真实结构",
+        "warningCodes": [],
+        "requestedDirectionIgnored": false,
+        "serverAddedOrShortenedPrefix": false,
+        "note": "普通结构观察；不是产品解析/规划或完整DDL语义证明"
+      }
+    },
+    {
+      "id": "mysql-8.4.11-primary-btree-after",
+      "file": "mysql-8.4.11-primary-btree-after.sql",
+      "statisticsFile": "mysql-8.4.11-primary-btree-after.statistics.json",
+      "dialect": "mysql",
+      "version": "8.4.11",
+      "sourceRun": "run01",
+      "sourceCase": "primary_btree",
+      "sourcePhase": "after",
+      "sourceReportSha256": "e4ea591aa7f5dd1ce99d5e9a9dfb67e9b7b10c80fc1174d8fe729e477a00c97a",
+      "capturedWithin": {
+        "from": "2026-10-14T02:39:39.079Z",
+        "to": "2026-10-14T02:39:43.553Z"
+      },
+      "session": {
+        "sqlMode": "STRICT_ALL_TABLES,NO_ENGINE_SUBSTITUTION",
+        "charset": "utf8mb4",
+        "collation": "utf8mb4_bin",
+        "quoteShowCreate": "1",
+        "innodbStrictMode": "1"
+      },
+      "engine": "InnoDB",
+      "rowFormat": "Dynamic",
+      "ddl": {
+        "sourceRawSha256": "0294f729009eb7d732631e6a073bdd2b1db61eef80192bf82d71517c9c40b012",
+        "publishedSha256": "0294f729009eb7d732631e6a073bdd2b1db61eef80192bf82d71517c9c40b012",
+        "bytes": 534,
+        "unchangedBytes": true,
+        "sanitization": "无需改名：SHOW CREATE 原文不含库名或环境字段，逐字节保留"
+      },
+      "statistics": {
+        "sourceCanonicalSha256": "f515b1d502ddef2059880d2525244ed5c430519f9610eac3594c4640dfd8082e",
+        "publishedSha256": "2a0ecba143859e6ae3c72b6eaa09d7fadc439e2f461c965d1d9694d73213e98e",
+        "rows": 2,
+        "sanitization": "白名单逐字段投影，删除 schema/表目录环境字段、基数等；保留原标量类型，文件重新序列化"
+      },
+      "observation": {
+        "statementAccepted": true,
+        "phaseMeaning": "操作后真实结构",
+        "warningCodes": [],
+        "requestedDirectionIgnored": false,
+        "serverAddedOrShortenedPrefix": false,
+        "note": "普通结构观察；不是产品解析/规划或完整DDL语义证明"
+      }
+    },
+    {
+      "id": "mysql-8.4.11-ordinary-direction-after",
+      "file": "mysql-8.4.11-ordinary-direction-after.sql",
+      "statisticsFile": "mysql-8.4.11-ordinary-direction-after.statistics.json",
+      "dialect": "mysql",
+      "version": "8.4.11",
+      "sourceRun": "run01",
+      "sourceCase": "ordinary_direction",
+      "sourcePhase": "after",
+      "sourceReportSha256": "e4ea591aa7f5dd1ce99d5e9a9dfb67e9b7b10c80fc1174d8fe729e477a00c97a",
+      "capturedWithin": {
+        "from": "2026-10-14T02:39:39.079Z",
+        "to": "2026-10-14T02:39:43.553Z"
+      },
+      "session": {
+        "sqlMode": "STRICT_ALL_TABLES,NO_ENGINE_SUBSTITUTION",
+        "charset": "utf8mb4",
+        "collation": "utf8mb4_bin",
+        "quoteShowCreate": "1",
+        "innodbStrictMode": "1"
+      },
+      "engine": "InnoDB",
+      "rowFormat": "Dynamic",
+      "ddl": {
+        "sourceRawSha256": "2453eb76e785521a849f05ffcedf2b554f7f5d73e784ff86b5263286fa1eeebd",
+        "publishedSha256": "2453eb76e785521a849f05ffcedf2b554f7f5d73e784ff86b5263286fa1eeebd",
+        "bytes": 519,
+        "unchangedBytes": true,
+        "sanitization": "无需改名：SHOW CREATE 原文不含库名或环境字段，逐字节保留"
+      },
+      "statistics": {
+        "sourceCanonicalSha256": "3f528a865c67de6522aa87f4e348aa4be3765311e7aeb8f8a150d24dbf2dacaf",
+        "publishedSha256": "1e1b1eb10e1b4d730a5901840c5c6359dd80df59fd11e525b76391be6f71effc",
+        "rows": 3,
+        "sanitization": "白名单逐字段投影，删除 schema/表目录环境字段、基数等；保留原标量类型，文件重新序列化"
+      },
+      "observation": {
+        "statementAccepted": true,
+        "phaseMeaning": "操作后真实结构",
+        "warningCodes": [],
+        "requestedDirectionIgnored": false,
+        "serverAddedOrShortenedPrefix": false,
+        "note": "普通结构观察；不是产品解析/规划或完整DDL语义证明"
+      }
+    },
+    {
+      "id": "mariadb-10.11.19-ordinary-btree-after",
+      "file": "mariadb-10.11.19-ordinary-btree-after.sql",
+      "statisticsFile": "mariadb-10.11.19-ordinary-btree-after.statistics.json",
+      "dialect": "mariadb",
+      "version": "10.11.19-MariaDB-ubu2204",
+      "sourceRun": "run01",
+      "sourceCase": "ordinary_btree",
+      "sourcePhase": "after",
+      "sourceReportSha256": "dfd918e3f80be4a4c65abf355f8a88cdacdbb4b8f9409acea44181c7aacc6632",
+      "capturedWithin": {
+        "from": "2026-10-14T02:39:43.974Z",
+        "to": "2026-10-14T02:39:47.498Z"
+      },
+      "session": {
+        "sqlMode": "STRICT_ALL_TABLES,NO_ENGINE_SUBSTITUTION",
+        "charset": "utf8mb4",
+        "collation": "utf8mb4_bin",
+        "quoteShowCreate": "1",
+        "innodbStrictMode": "1"
+      },
+      "engine": "InnoDB",
+      "rowFormat": "Dynamic",
+      "ddl": {
+        "sourceRawSha256": "cc70eeb583054afff8486697e88bfff61b7e3678e0b5d66f2d57ab3ee5379d3c",
+        "publishedSha256": "cc70eeb583054afff8486697e88bfff61b7e3678e0b5d66f2d57ab3ee5379d3c",
+        "bytes": 466,
+        "unchangedBytes": true,
+        "sanitization": "无需改名：SHOW CREATE 原文不含库名或环境字段，逐字节保留"
+      },
+      "statistics": {
+        "sourceCanonicalSha256": "afc30697f8b7b06de978330a127d356b920695c3ce7324325172edef7b1ccf54",
+        "publishedSha256": "0b4ec90e37340ebf27a5ea069a7c0394ab9e319267bac8cd3db2ac5a7b183643",
+        "rows": 3,
+        "sanitization": "白名单逐字段投影，删除 schema/表目录环境字段、基数等；保留原标量类型，文件重新序列化"
+      },
+      "observation": {
+        "statementAccepted": true,
+        "phaseMeaning": "操作后真实结构",
+        "warningCodes": [],
+        "requestedDirectionIgnored": false,
+        "serverAddedOrShortenedPrefix": false,
+        "note": "普通结构观察；不是产品解析/规划或完整DDL语义证明"
+      }
+    },
+    {
+      "id": "mariadb-10.11.19-unique-btree-after",
+      "file": "mariadb-10.11.19-unique-btree-after.sql",
+      "statisticsFile": "mariadb-10.11.19-unique-btree-after.statistics.json",
+      "dialect": "mariadb",
+      "version": "10.11.19-MariaDB-ubu2204",
+      "sourceRun": "run01",
+      "sourceCase": "unique_btree",
+      "sourcePhase": "after",
+      "sourceReportSha256": "dfd918e3f80be4a4c65abf355f8a88cdacdbb4b8f9409acea44181c7aacc6632",
+      "capturedWithin": {
+        "from": "2026-10-14T02:39:43.974Z",
+        "to": "2026-10-14T02:39:47.498Z"
+      },
+      "session": {
+        "sqlMode": "STRICT_ALL_TABLES,NO_ENGINE_SUBSTITUTION",
+        "charset": "utf8mb4",
+        "collation": "utf8mb4_bin",
+        "quoteShowCreate": "1",
+        "innodbStrictMode": "1"
+      },
+      "engine": "InnoDB",
+      "rowFormat": "Dynamic",
+      "ddl": {
+        "sourceRawSha256": "f3f13d6e3c032067c6ebfec2803885112e8c0c78b697a2657d37a28c21a99b0a",
+        "publishedSha256": "f3f13d6e3c032067c6ebfec2803885112e8c0c78b697a2657d37a28c21a99b0a",
+        "bytes": 471,
+        "unchangedBytes": true,
+        "sanitization": "无需改名：SHOW CREATE 原文不含库名或环境字段，逐字节保留"
+      },
+      "statistics": {
+        "sourceCanonicalSha256": "966ab0b9badae0916bfa70c8be683a50c9e75670a2628566f6daeab33fce075a",
+        "publishedSha256": "c50c5ae3020b36c4075e088c6f5a4329733f47d61c1c75582cc4e5acd8b4679b",
+        "rows": 3,
+        "sanitization": "白名单逐字段投影，删除 schema/表目录环境字段、基数等；保留原标量类型，文件重新序列化"
+      },
+      "observation": {
+        "statementAccepted": true,
+        "phaseMeaning": "操作后真实结构",
+        "warningCodes": [],
+        "requestedDirectionIgnored": false,
+        "serverAddedOrShortenedPrefix": false,
+        "note": "普通结构观察；不是产品解析/规划或完整DDL语义证明"
+      }
+    },
+    {
+      "id": "mariadb-10.11.19-primary-btree-after",
+      "file": "mariadb-10.11.19-primary-btree-after.sql",
+      "statisticsFile": "mariadb-10.11.19-primary-btree-after.statistics.json",
+      "dialect": "mariadb",
+      "version": "10.11.19-MariaDB-ubu2204",
+      "sourceRun": "run01",
+      "sourceCase": "primary_btree",
+      "sourcePhase": "after",
+      "sourceReportSha256": "dfd918e3f80be4a4c65abf355f8a88cdacdbb4b8f9409acea44181c7aacc6632",
+      "capturedWithin": {
+        "from": "2026-10-14T02:39:43.974Z",
+        "to": "2026-10-14T02:39:47.498Z"
+      },
+      "session": {
+        "sqlMode": "STRICT_ALL_TABLES,NO_ENGINE_SUBSTITUTION",
+        "charset": "utf8mb4",
+        "collation": "utf8mb4_bin",
+        "quoteShowCreate": "1",
+        "innodbStrictMode": "1"
+      },
+      "engine": "InnoDB",
+      "rowFormat": "Dynamic",
+      "ddl": {
+        "sourceRawSha256": "02732104c0827437862e64d7ee2bd46db66ab6a4a95fba85591e4bfbf9fa491e",
+        "publishedSha256": "02732104c0827437862e64d7ee2bd46db66ab6a4a95fba85591e4bfbf9fa491e",
+        "bytes": 446,
+        "unchangedBytes": true,
+        "sanitization": "无需改名：SHOW CREATE 原文不含库名或环境字段，逐字节保留"
+      },
+      "statistics": {
+        "sourceCanonicalSha256": "25b19b57e4d772ee02befb424326884d2f028a46cf19e00287a7d71a86406198",
+        "publishedSha256": "711028f58f05a106fcb1cfbc670770da2610730e654a4c92645141cd0475b4ed",
+        "rows": 2,
+        "sanitization": "白名单逐字段投影，删除 schema/表目录环境字段、基数等；保留原标量类型，文件重新序列化"
+      },
+      "observation": {
+        "statementAccepted": true,
+        "phaseMeaning": "操作后真实结构",
+        "warningCodes": [],
+        "requestedDirectionIgnored": false,
+        "serverAddedOrShortenedPrefix": false,
+        "note": "普通结构观察；不是产品解析/规划或完整DDL语义证明"
+      }
+    },
+    {
+      "id": "mariadb-10.11.19-ordinary-direction-after",
+      "file": "mariadb-10.11.19-ordinary-direction-after.sql",
+      "statisticsFile": "mariadb-10.11.19-ordinary-direction-after.statistics.json",
+      "dialect": "mariadb",
+      "version": "10.11.19-MariaDB-ubu2204",
+      "sourceRun": "run01",
+      "sourceCase": "ordinary_direction",
+      "sourcePhase": "after",
+      "sourceReportSha256": "dfd918e3f80be4a4c65abf355f8a88cdacdbb4b8f9409acea44181c7aacc6632",
+      "capturedWithin": {
+        "from": "2026-10-14T02:39:43.974Z",
+        "to": "2026-10-14T02:39:47.498Z"
+      },
+      "session": {
+        "sqlMode": "STRICT_ALL_TABLES,NO_ENGINE_SUBSTITUTION",
+        "charset": "utf8mb4",
+        "collation": "utf8mb4_bin",
+        "quoteShowCreate": "1",
+        "innodbStrictMode": "1"
+      },
+      "engine": "InnoDB",
+      "rowFormat": "Dynamic",
+      "ddl": {
+        "sourceRawSha256": "ebd82195c3931fac825be073b5bb5072f46ca5f47c777be9199d72ae07991faa",
+        "publishedSha256": "ebd82195c3931fac825be073b5bb5072f46ca5f47c777be9199d72ae07991faa",
+        "bytes": 431,
+        "unchangedBytes": true,
+        "sanitization": "无需改名：SHOW CREATE 原文不含库名或环境字段，逐字节保留"
+      },
+      "statistics": {
+        "sourceCanonicalSha256": "a071de6574788d26ae9bf9e763623119e8a17138a233e83b7a65d1fdd63eaf37",
+        "publishedSha256": "82a0a90161a5a0673a14c50867e9967047ec9335fcb56accd356a9183c5ec7e3",
+        "rows": 3,
+        "sanitization": "白名单逐字段投影，删除 schema/表目录环境字段、基数等；保留原标量类型，文件重新序列化"
+      },
+      "observation": {
+        "statementAccepted": true,
+        "phaseMeaning": "操作后真实结构",
+        "warningCodes": [],
+        "requestedDirectionIgnored": false,
+        "serverAddedOrShortenedPrefix": false,
+        "note": "普通结构观察；不是产品解析/规划或完整DDL语义证明"
+      }
+    },
+    {
+      "id": "mariadb-11.4.13-ordinary-btree-after",
+      "file": "mariadb-11.4.13-ordinary-btree-after.sql",
+      "statisticsFile": "mariadb-11.4.13-ordinary-btree-after.statistics.json",
+      "dialect": "mariadb",
+      "version": "11.4.13-MariaDB-ubu2404",
+      "sourceRun": "run01",
+      "sourceCase": "ordinary_btree",
+      "sourcePhase": "after",
+      "sourceReportSha256": "cf913b90517f9393b50a9c0a8596dc576b2dd5699a92168ab92deb20868039da",
+      "capturedWithin": {
+        "from": "2026-10-14T02:39:47.914Z",
+        "to": "2026-10-14T02:39:51.350Z"
+      },
+      "session": {
+        "sqlMode": "STRICT_ALL_TABLES,NO_ENGINE_SUBSTITUTION",
+        "charset": "utf8mb4",
+        "collation": "utf8mb4_bin",
+        "quoteShowCreate": "1",
+        "innodbStrictMode": "1"
+      },
+      "engine": "InnoDB",
+      "rowFormat": "Dynamic",
+      "ddl": {
+        "sourceRawSha256": "cc70eeb583054afff8486697e88bfff61b7e3678e0b5d66f2d57ab3ee5379d3c",
+        "publishedSha256": "cc70eeb583054afff8486697e88bfff61b7e3678e0b5d66f2d57ab3ee5379d3c",
+        "bytes": 466,
+        "unchangedBytes": true,
+        "sanitization": "无需改名：SHOW CREATE 原文不含库名或环境字段，逐字节保留"
+      },
+      "statistics": {
+        "sourceCanonicalSha256": "6f4765146d021b63a10308680d19a10f8dbd27187dd21024b5c66743ff11b2d4",
+        "publishedSha256": "0b4ec90e37340ebf27a5ea069a7c0394ab9e319267bac8cd3db2ac5a7b183643",
+        "rows": 3,
+        "sanitization": "白名单逐字段投影，删除 schema/表目录环境字段、基数等；保留原标量类型，文件重新序列化"
+      },
+      "observation": {
+        "statementAccepted": true,
+        "phaseMeaning": "操作后真实结构",
+        "warningCodes": [],
+        "requestedDirectionIgnored": false,
+        "serverAddedOrShortenedPrefix": false,
+        "note": "普通结构观察；不是产品解析/规划或完整DDL语义证明"
+      }
+    },
+    {
+      "id": "mariadb-11.4.13-unique-btree-after",
+      "file": "mariadb-11.4.13-unique-btree-after.sql",
+      "statisticsFile": "mariadb-11.4.13-unique-btree-after.statistics.json",
+      "dialect": "mariadb",
+      "version": "11.4.13-MariaDB-ubu2404",
+      "sourceRun": "run01",
+      "sourceCase": "unique_btree",
+      "sourcePhase": "after",
+      "sourceReportSha256": "cf913b90517f9393b50a9c0a8596dc576b2dd5699a92168ab92deb20868039da",
+      "capturedWithin": {
+        "from": "2026-10-14T02:39:47.914Z",
+        "to": "2026-10-14T02:39:51.350Z"
+      },
+      "session": {
+        "sqlMode": "STRICT_ALL_TABLES,NO_ENGINE_SUBSTITUTION",
+        "charset": "utf8mb4",
+        "collation": "utf8mb4_bin",
+        "quoteShowCreate": "1",
+        "innodbStrictMode": "1"
+      },
+      "engine": "InnoDB",
+      "rowFormat": "Dynamic",
+      "ddl": {
+        "sourceRawSha256": "f3f13d6e3c032067c6ebfec2803885112e8c0c78b697a2657d37a28c21a99b0a",
+        "publishedSha256": "f3f13d6e3c032067c6ebfec2803885112e8c0c78b697a2657d37a28c21a99b0a",
+        "bytes": 471,
+        "unchangedBytes": true,
+        "sanitization": "无需改名：SHOW CREATE 原文不含库名或环境字段，逐字节保留"
+      },
+      "statistics": {
+        "sourceCanonicalSha256": "1e7d89d963191538d5cd62337ab0c4a9b7810e81ec1155f993ad5b9d872ae81a",
+        "publishedSha256": "c50c5ae3020b36c4075e088c6f5a4329733f47d61c1c75582cc4e5acd8b4679b",
+        "rows": 3,
+        "sanitization": "白名单逐字段投影，删除 schema/表目录环境字段、基数等；保留原标量类型，文件重新序列化"
+      },
+      "observation": {
+        "statementAccepted": true,
+        "phaseMeaning": "操作后真实结构",
+        "warningCodes": [],
+        "requestedDirectionIgnored": false,
+        "serverAddedOrShortenedPrefix": false,
+        "note": "普通结构观察；不是产品解析/规划或完整DDL语义证明"
+      }
+    },
+    {
+      "id": "mariadb-11.4.13-primary-btree-after",
+      "file": "mariadb-11.4.13-primary-btree-after.sql",
+      "statisticsFile": "mariadb-11.4.13-primary-btree-after.statistics.json",
+      "dialect": "mariadb",
+      "version": "11.4.13-MariaDB-ubu2404",
+      "sourceRun": "run01",
+      "sourceCase": "primary_btree",
+      "sourcePhase": "after",
+      "sourceReportSha256": "cf913b90517f9393b50a9c0a8596dc576b2dd5699a92168ab92deb20868039da",
+      "capturedWithin": {
+        "from": "2026-10-14T02:39:47.914Z",
+        "to": "2026-10-14T02:39:51.350Z"
+      },
+      "session": {
+        "sqlMode": "STRICT_ALL_TABLES,NO_ENGINE_SUBSTITUTION",
+        "charset": "utf8mb4",
+        "collation": "utf8mb4_bin",
+        "quoteShowCreate": "1",
+        "innodbStrictMode": "1"
+      },
+      "engine": "InnoDB",
+      "rowFormat": "Dynamic",
+      "ddl": {
+        "sourceRawSha256": "02732104c0827437862e64d7ee2bd46db66ab6a4a95fba85591e4bfbf9fa491e",
+        "publishedSha256": "02732104c0827437862e64d7ee2bd46db66ab6a4a95fba85591e4bfbf9fa491e",
+        "bytes": 446,
+        "unchangedBytes": true,
+        "sanitization": "无需改名：SHOW CREATE 原文不含库名或环境字段，逐字节保留"
+      },
+      "statistics": {
+        "sourceCanonicalSha256": "372236a848f15adf43b2590dfba8ae5ad8389c031168aeda20417c780a24c874",
+        "publishedSha256": "711028f58f05a106fcb1cfbc670770da2610730e654a4c92645141cd0475b4ed",
+        "rows": 2,
+        "sanitization": "白名单逐字段投影，删除 schema/表目录环境字段、基数等；保留原标量类型，文件重新序列化"
+      },
+      "observation": {
+        "statementAccepted": true,
+        "phaseMeaning": "操作后真实结构",
+        "warningCodes": [],
+        "requestedDirectionIgnored": false,
+        "serverAddedOrShortenedPrefix": false,
+        "note": "普通结构观察；不是产品解析/规划或完整DDL语义证明"
+      }
+    },
+    {
+      "id": "mariadb-11.4.13-ordinary-direction-after",
+      "file": "mariadb-11.4.13-ordinary-direction-after.sql",
+      "statisticsFile": "mariadb-11.4.13-ordinary-direction-after.statistics.json",
+      "dialect": "mariadb",
+      "version": "11.4.13-MariaDB-ubu2404",
+      "sourceRun": "run01",
+      "sourceCase": "ordinary_direction",
+      "sourcePhase": "after",
+      "sourceReportSha256": "cf913b90517f9393b50a9c0a8596dc576b2dd5699a92168ab92deb20868039da",
+      "capturedWithin": {
+        "from": "2026-10-14T02:39:47.914Z",
+        "to": "2026-10-14T02:39:51.350Z"
+      },
+      "session": {
+        "sqlMode": "STRICT_ALL_TABLES,NO_ENGINE_SUBSTITUTION",
+        "charset": "utf8mb4",
+        "collation": "utf8mb4_bin",
+        "quoteShowCreate": "1",
+        "innodbStrictMode": "1"
+      },
+      "engine": "InnoDB",
+      "rowFormat": "Dynamic",
+      "ddl": {
+        "sourceRawSha256": "ebd82195c3931fac825be073b5bb5072f46ca5f47c777be9199d72ae07991faa",
+        "publishedSha256": "ebd82195c3931fac825be073b5bb5072f46ca5f47c777be9199d72ae07991faa",
+        "bytes": 431,
+        "unchangedBytes": true,
+        "sanitization": "无需改名：SHOW CREATE 原文不含库名或环境字段，逐字节保留"
+      },
+      "statistics": {
+        "sourceCanonicalSha256": "fd9b87aa25ce4341e8602c4ee0fac45f7ef1fc4eb6f5bddd372c1f23bb157f5c",
+        "publishedSha256": "82a0a90161a5a0673a14c50867e9967047ec9335fcb56accd356a9183c5ec7e3",
+        "rows": 3,
+        "sanitization": "白名单逐字段投影，删除 schema/表目录环境字段、基数等；保留原标量类型，文件重新序列化"
+      },
+      "observation": {
+        "statementAccepted": true,
+        "phaseMeaning": "操作后真实结构",
+        "warningCodes": [],
+        "requestedDirectionIgnored": false,
+        "serverAddedOrShortenedPrefix": false,
+        "note": "普通结构观察；不是产品解析/规划或完整DDL语义证明"
+      }
+    },
+    {
+      "id": "mysql-8.4.11-composite-reorder-before",
+      "file": "mysql-8.4.11-composite-reorder-before.sql",
+      "statisticsFile": "mysql-8.4.11-composite-reorder-before.statistics.json",
+      "dialect": "mysql",
+      "version": "8.4.11",
+      "sourceRun": "run01",
+      "sourceCase": "composite_reorder",
+      "sourcePhase": "before",
+      "sourceReportSha256": "e4ea591aa7f5dd1ce99d5e9a9dfb67e9b7b10c80fc1174d8fe729e477a00c97a",
+      "capturedWithin": {
+        "from": "2026-10-14T02:39:39.079Z",
+        "to": "2026-10-14T02:39:43.553Z"
+      },
+      "session": {
+        "sqlMode": "STRICT_ALL_TABLES,NO_ENGINE_SUBSTITUTION",
+        "charset": "utf8mb4",
+        "collation": "utf8mb4_bin",
+        "quoteShowCreate": "1",
+        "innodbStrictMode": "1"
+      },
+      "engine": "InnoDB",
+      "rowFormat": "Dynamic",
+      "ddl": {
+        "sourceRawSha256": "aeac0ebbbb5628289f27301d9fa82095d781158e9e0ef68b86d096ccbcec461d",
+        "publishedSha256": "aeac0ebbbb5628289f27301d9fa82095d781158e9e0ef68b86d096ccbcec461d",
+        "bytes": 513,
+        "unchangedBytes": true,
+        "sanitization": "无需改名：SHOW CREATE 原文不含库名或环境字段，逐字节保留"
+      },
+      "statistics": {
+        "sourceCanonicalSha256": "f1887a0380b5a4c6d181db205d9d693ca127931d21c4cb5cac178e13d750d1bf",
+        "publishedSha256": "9aa388456c7e1b79d09f64d32e678ba1f49ad6b62edebd987b63881cf2d89e3d",
+        "rows": 3,
+        "sanitization": "白名单逐字段投影，删除 schema/表目录环境字段、基数等；保留原标量类型，文件重新序列化"
+      },
+      "observation": {
+        "statementAccepted": true,
+        "phaseMeaning": "操作前真实结构",
+        "warningCodes": [],
+        "requestedDirectionIgnored": false,
+        "serverAddedOrShortenedPrefix": false,
+        "note": "普通结构观察；不是产品解析/规划或完整DDL语义证明"
+      }
+    },
+    {
+      "id": "mysql-8.4.11-composite-reorder-after",
+      "file": "mysql-8.4.11-composite-reorder-after.sql",
+      "statisticsFile": "mysql-8.4.11-composite-reorder-after.statistics.json",
+      "dialect": "mysql",
+      "version": "8.4.11",
+      "sourceRun": "run01",
+      "sourceCase": "composite_reorder",
+      "sourcePhase": "after",
+      "sourceReportSha256": "e4ea591aa7f5dd1ce99d5e9a9dfb67e9b7b10c80fc1174d8fe729e477a00c97a",
+      "capturedWithin": {
+        "from": "2026-10-14T02:39:39.079Z",
+        "to": "2026-10-14T02:39:43.553Z"
+      },
+      "session": {
+        "sqlMode": "STRICT_ALL_TABLES,NO_ENGINE_SUBSTITUTION",
+        "charset": "utf8mb4",
+        "collation": "utf8mb4_bin",
+        "quoteShowCreate": "1",
+        "innodbStrictMode": "1"
+      },
+      "engine": "InnoDB",
+      "rowFormat": "Dynamic",
+      "ddl": {
+        "sourceRawSha256": "a637c7af7584644d0cddd076a9a2425d536f788a00a90cd51463f12a4c37ef6e",
+        "publishedSha256": "a637c7af7584644d0cddd076a9a2425d536f788a00a90cd51463f12a4c37ef6e",
+        "bytes": 513,
+        "unchangedBytes": true,
+        "sanitization": "无需改名：SHOW CREATE 原文不含库名或环境字段，逐字节保留"
+      },
+      "statistics": {
+        "sourceCanonicalSha256": "dfc5d821760e6f2e12370fd3201a34423f3eb8d678a66db699b62eb4413a766c",
+        "publishedSha256": "ca6d77928db8ff7c3c8dc39301611f663d5f73fbfe209a50413e93265585f30c",
+        "rows": 3,
+        "sanitization": "白名单逐字段投影，删除 schema/表目录环境字段、基数等；保留原标量类型，文件重新序列化"
+      },
+      "observation": {
+        "statementAccepted": true,
+        "phaseMeaning": "操作后真实结构",
+        "warningCodes": [],
+        "requestedDirectionIgnored": false,
+        "serverAddedOrShortenedPrefix": false,
+        "note": "普通结构观察；不是产品解析/规划或完整DDL语义证明"
+      }
+    },
+    {
+      "id": "mysql-5.7.44-rename-ordinary-before",
+      "file": "mysql-5.7.44-rename-ordinary-before.sql",
+      "statisticsFile": "mysql-5.7.44-rename-ordinary-before.statistics.json",
+      "dialect": "mysql",
+      "version": "5.7.44",
+      "sourceRun": "run01",
+      "sourceCase": "rename_ordinary",
+      "sourcePhase": "before",
+      "sourceReportSha256": "21b973ad52898f8ef3969ae3643ea0e9a3e3a98b4ff76c3b78d42ff90a613dec",
+      "capturedWithin": {
+        "from": "2026-10-14T02:39:07.840Z",
+        "to": "2026-10-14T02:39:11.751Z"
+      },
+      "session": {
+        "sqlMode": "STRICT_ALL_TABLES,NO_ENGINE_SUBSTITUTION",
+        "charset": "utf8mb4",
+        "collation": "utf8mb4_bin",
+        "quoteShowCreate": "1",
+        "innodbStrictMode": "1"
+      },
+      "engine": "InnoDB",
+      "rowFormat": "Dynamic",
+      "ddl": {
+        "sourceRawSha256": "096e97c4392a059dc857ec98f52f6e4039ae708d299cc5f3778433dbb68be442",
+        "publishedSha256": "096e97c4392a059dc857ec98f52f6e4039ae708d299cc5f3778433dbb68be442",
+        "bytes": 501,
+        "unchangedBytes": true,
+        "sanitization": "无需改名：SHOW CREATE 原文不含库名或环境字段，逐字节保留"
+      },
+      "statistics": {
+        "sourceCanonicalSha256": "869133a5f7a32668a452d040825182510c1a3020869d7edf1cd421bb50397499",
+        "publishedSha256": "946a800620c65878b59e7c09e49da0f58bb283bf3d9947e4f989aa9ab8002d52",
+        "rows": 3,
+        "sanitization": "白名单逐字段投影，删除 schema/表目录环境字段、基数等；保留原标量类型，文件重新序列化"
+      },
+      "observation": {
+        "statementAccepted": true,
+        "phaseMeaning": "操作前真实结构",
+        "warningCodes": [],
+        "requestedDirectionIgnored": false,
+        "serverAddedOrShortenedPrefix": false,
+        "note": "普通结构观察；不是产品解析/规划或完整DDL语义证明"
+      }
+    },
+    {
+      "id": "mysql-5.7.44-rename-ordinary-after",
+      "file": "mysql-5.7.44-rename-ordinary-after.sql",
+      "statisticsFile": "mysql-5.7.44-rename-ordinary-after.statistics.json",
+      "dialect": "mysql",
+      "version": "5.7.44",
+      "sourceRun": "run01",
+      "sourceCase": "rename_ordinary",
+      "sourcePhase": "after",
+      "sourceReportSha256": "21b973ad52898f8ef3969ae3643ea0e9a3e3a98b4ff76c3b78d42ff90a613dec",
+      "capturedWithin": {
+        "from": "2026-10-14T02:39:07.840Z",
+        "to": "2026-10-14T02:39:11.751Z"
+      },
+      "session": {
+        "sqlMode": "STRICT_ALL_TABLES,NO_ENGINE_SUBSTITUTION",
+        "charset": "utf8mb4",
+        "collation": "utf8mb4_bin",
+        "quoteShowCreate": "1",
+        "innodbStrictMode": "1"
+      },
+      "engine": "InnoDB",
+      "rowFormat": "Dynamic",
+      "ddl": {
+        "sourceRawSha256": "29c3ed21ae63ce35e3bfca0c7046409d369055bb88b30bdb282448279d7c20b9",
+        "publishedSha256": "29c3ed21ae63ce35e3bfca0c7046409d369055bb88b30bdb282448279d7c20b9",
+        "bytes": 509,
+        "unchangedBytes": true,
+        "sanitization": "无需改名：SHOW CREATE 原文不含库名或环境字段，逐字节保留"
+      },
+      "statistics": {
+        "sourceCanonicalSha256": "1c5e98b7865eb353aad2835caa9ee1c92fa92280745903ff45a233a9ffc727e7",
+        "publishedSha256": "cfbad274cc66ea21bb1b999e7717308471079396beec5723e305e369852a6ae9",
+        "rows": 3,
+        "sanitization": "白名单逐字段投影，删除 schema/表目录环境字段、基数等；保留原标量类型，文件重新序列化"
+      },
+      "observation": {
+        "statementAccepted": true,
+        "phaseMeaning": "操作后真实结构",
+        "warningCodes": [],
+        "requestedDirectionIgnored": false,
+        "serverAddedOrShortenedPrefix": false,
+        "note": "普通结构观察；不是产品解析/规划或完整DDL语义证明"
+      }
+    },
+    {
+      "id": "mysql-8.4.11-rename-unique-after",
+      "file": "mysql-8.4.11-rename-unique-after.sql",
+      "statisticsFile": "mysql-8.4.11-rename-unique-after.statistics.json",
+      "dialect": "mysql",
+      "version": "8.4.11",
+      "sourceRun": "run01",
+      "sourceCase": "rename_unique",
+      "sourcePhase": "after",
+      "sourceReportSha256": "e4ea591aa7f5dd1ce99d5e9a9dfb67e9b7b10c80fc1174d8fe729e477a00c97a",
+      "capturedWithin": {
+        "from": "2026-10-14T02:39:39.079Z",
+        "to": "2026-10-14T02:39:43.553Z"
+      },
+      "session": {
+        "sqlMode": "STRICT_ALL_TABLES,NO_ENGINE_SUBSTITUTION",
+        "charset": "utf8mb4",
+        "collation": "utf8mb4_bin",
+        "quoteShowCreate": "1",
+        "innodbStrictMode": "1"
+      },
+      "engine": "InnoDB",
+      "rowFormat": "Dynamic",
+      "ddl": {
+        "sourceRawSha256": "cc6547930713978af61e451660ccbb2100d3325c6fc3e181b9e61dacda8b7b3d",
+        "publishedSha256": "cc6547930713978af61e451660ccbb2100d3325c6fc3e181b9e61dacda8b7b3d",
+        "bytes": 568,
+        "unchangedBytes": true,
+        "sanitization": "无需改名：SHOW CREATE 原文不含库名或环境字段，逐字节保留"
+      },
+      "statistics": {
+        "sourceCanonicalSha256": "472e5e425ab65be46363aab4653464bfd458a53be85473097fd042a07796d87e",
+        "publishedSha256": "0d8c0dab481cb87d60ba77d0158feec2a53c3f312a6964fad934bad00727bb5c",
+        "rows": 3,
+        "sanitization": "白名单逐字段投影，删除 schema/表目录环境字段、基数等；保留原标量类型，文件重新序列化"
+      },
+      "observation": {
+        "statementAccepted": true,
+        "phaseMeaning": "操作后真实结构",
+        "warningCodes": [],
+        "requestedDirectionIgnored": false,
+        "serverAddedOrShortenedPrefix": false,
+        "note": "普通结构观察；不是产品解析/规划或完整DDL语义证明"
+      }
+    },
+    {
+      "id": "mysql-8.4.11-text-prefix-two-after",
+      "file": "mysql-8.4.11-text-prefix-two-after.sql",
+      "statisticsFile": "mysql-8.4.11-text-prefix-two-after.statistics.json",
+      "dialect": "mysql",
+      "version": "8.4.11",
+      "sourceRun": "run01",
+      "sourceCase": "text_prefix_two",
+      "sourcePhase": "after",
+      "sourceReportSha256": "e4ea591aa7f5dd1ce99d5e9a9dfb67e9b7b10c80fc1174d8fe729e477a00c97a",
+      "capturedWithin": {
+        "from": "2026-10-14T02:39:39.079Z",
+        "to": "2026-10-14T02:39:43.553Z"
+      },
+      "session": {
+        "sqlMode": "STRICT_ALL_TABLES,NO_ENGINE_SUBSTITUTION",
+        "charset": "utf8mb4",
+        "collation": "utf8mb4_bin",
+        "quoteShowCreate": "1",
+        "innodbStrictMode": "1"
+      },
+      "engine": "InnoDB",
+      "rowFormat": "Dynamic",
+      "ddl": {
+        "sourceRawSha256": "68c5916d6bc028a737c82c338af2cddfc98d1bcaa6cf74e15675f371cc7fbf0b",
+        "publishedSha256": "68c5916d6bc028a737c82c338af2cddfc98d1bcaa6cf74e15675f371cc7fbf0b",
+        "bytes": 519,
+        "unchangedBytes": true,
+        "sanitization": "无需改名：SHOW CREATE 原文不含库名或环境字段，逐字节保留"
+      },
+      "statistics": {
+        "sourceCanonicalSha256": "c1713689893c3f36e44e69b49a58779797838f76874e6d8c764526e3f1d27fb3",
+        "publishedSha256": "ffaf34f2a2fefd67477d1ee5ee5ca76e072fe3fa865c1001b0d4de3b495f6cb6",
+        "rows": 2,
+        "sanitization": "白名单逐字段投影，删除 schema/表目录环境字段、基数等；保留原标量类型，文件重新序列化"
+      },
+      "observation": {
+        "statementAccepted": true,
+        "phaseMeaning": "操作后真实结构",
+        "warningCodes": [],
+        "requestedDirectionIgnored": false,
+        "serverAddedOrShortenedPrefix": false,
+        "note": "普通结构观察；不是产品解析/规划或完整DDL语义证明"
+      }
+    },
+    {
+      "id": "mysql-8.4.11-binary-prefix-four-after",
+      "file": "mysql-8.4.11-binary-prefix-four-after.sql",
+      "statisticsFile": "mysql-8.4.11-binary-prefix-four-after.statistics.json",
+      "dialect": "mysql",
+      "version": "8.4.11",
+      "sourceRun": "run01",
+      "sourceCase": "binary_prefix_four",
+      "sourcePhase": "after",
+      "sourceReportSha256": "e4ea591aa7f5dd1ce99d5e9a9dfb67e9b7b10c80fc1174d8fe729e477a00c97a",
+      "capturedWithin": {
+        "from": "2026-10-14T02:39:39.079Z",
+        "to": "2026-10-14T02:39:43.553Z"
+      },
+      "session": {
+        "sqlMode": "STRICT_ALL_TABLES,NO_ENGINE_SUBSTITUTION",
+        "charset": "utf8mb4",
+        "collation": "utf8mb4_bin",
+        "quoteShowCreate": "1",
+        "innodbStrictMode": "1"
+      },
+      "engine": "InnoDB",
+      "rowFormat": "Dynamic",
+      "ddl": {
+        "sourceRawSha256": "a63725c64bf362d3212cbb2d77dfe278bfc8cef042f46cb795c4a88dfc9f74ed",
+        "publishedSha256": "a63725c64bf362d3212cbb2d77dfe278bfc8cef042f46cb795c4a88dfc9f74ed",
+        "bytes": 524,
+        "unchangedBytes": true,
+        "sanitization": "无需改名：SHOW CREATE 原文不含库名或环境字段，逐字节保留"
+      },
+      "statistics": {
+        "sourceCanonicalSha256": "5b21e2f3f338968283a07cd3e7ea825bf61f9035e85d7143bc1c786fb39187dc",
+        "publishedSha256": "cf4ed8adb829f46a86e0594fa801fc28fa99531c22184306445259d60c772cea",
+        "rows": 2,
+        "sanitization": "白名单逐字段投影，删除 schema/表目录环境字段、基数等；保留原标量类型，文件重新序列化"
+      },
+      "observation": {
+        "statementAccepted": true,
+        "phaseMeaning": "操作后真实结构",
+        "warningCodes": [],
+        "requestedDirectionIgnored": false,
+        "serverAddedOrShortenedPrefix": false,
+        "note": "普通结构观察；不是产品解析/规划或完整DDL语义证明"
+      }
+    },
+    {
+      "id": "mysql-8.4.11-lob-prefix-after",
+      "file": "mysql-8.4.11-lob-prefix-after.sql",
+      "statisticsFile": "mysql-8.4.11-lob-prefix-after.statistics.json",
+      "dialect": "mysql",
+      "version": "8.4.11",
+      "sourceRun": "run01",
+      "sourceCase": "lob_prefix",
+      "sourcePhase": "after",
+      "sourceReportSha256": "e4ea591aa7f5dd1ce99d5e9a9dfb67e9b7b10c80fc1174d8fe729e477a00c97a",
+      "capturedWithin": {
+        "from": "2026-10-14T02:39:39.079Z",
+        "to": "2026-10-14T02:39:43.553Z"
+      },
+      "session": {
+        "sqlMode": "STRICT_ALL_TABLES,NO_ENGINE_SUBSTITUTION",
+        "charset": "utf8mb4",
+        "collation": "utf8mb4_bin",
+        "quoteShowCreate": "1",
+        "innodbStrictMode": "1"
+      },
+      "engine": "InnoDB",
+      "rowFormat": "Dynamic",
+      "ddl": {
+        "sourceRawSha256": "e54bf3c27662abcbdb6eb3e1055609ed4c2f51b0b8d6a0943acd307b08d7e95c",
+        "publishedSha256": "e54bf3c27662abcbdb6eb3e1055609ed4c2f51b0b8d6a0943acd307b08d7e95c",
+        "bytes": 566,
+        "unchangedBytes": true,
+        "sanitization": "无需改名：SHOW CREATE 原文不含库名或环境字段，逐字节保留"
+      },
+      "statistics": {
+        "sourceCanonicalSha256": "c8f5ddec44b6408067c5b72d7a9297342ea7d37d61a25465d5207ecef3eaedf8",
+        "publishedSha256": "a1b6b5eab52385cf08f268a292235f76d084fb27bdbc537876c032f296add936",
+        "rows": 3,
+        "sanitization": "白名单逐字段投影，删除 schema/表目录环境字段、基数等；保留原标量类型，文件重新序列化"
+      },
+      "observation": {
+        "statementAccepted": true,
+        "phaseMeaning": "操作后真实结构",
+        "warningCodes": [],
+        "requestedDirectionIgnored": false,
+        "serverAddedOrShortenedPrefix": false,
+        "note": "普通结构观察；不是产品解析/规划或完整DDL语义证明"
+      }
+    },
+    {
+      "id": "mariadb-10.11.19-text-without-prefix-after",
+      "file": "mariadb-10.11.19-text-without-prefix-after.sql",
+      "statisticsFile": "mariadb-10.11.19-text-without-prefix-after.statistics.json",
+      "dialect": "mariadb",
+      "version": "10.11.19-MariaDB-ubu2204",
+      "sourceRun": "run01",
+      "sourceCase": "text_without_prefix",
+      "sourcePhase": "after",
+      "sourceReportSha256": "dfd918e3f80be4a4c65abf355f8a88cdacdbb4b8f9409acea44181c7aacc6632",
+      "capturedWithin": {
+        "from": "2026-10-14T02:39:43.974Z",
+        "to": "2026-10-14T02:39:47.498Z"
+      },
+      "session": {
+        "sqlMode": "STRICT_ALL_TABLES,NO_ENGINE_SUBSTITUTION",
+        "charset": "utf8mb4",
+        "collation": "utf8mb4_bin",
+        "quoteShowCreate": "1",
+        "innodbStrictMode": "1"
+      },
+      "engine": "InnoDB",
+      "rowFormat": "Dynamic",
+      "ddl": {
+        "sourceRawSha256": "3332a59ba7c2f5775ae64858cb4768ecffe382140f4713a648bec697335c9f2f",
+        "publishedSha256": "3332a59ba7c2f5775ae64858cb4768ecffe382140f4713a648bec697335c9f2f",
+        "bytes": 437,
+        "unchangedBytes": true,
+        "sanitization": "无需改名：SHOW CREATE 原文不含库名或环境字段，逐字节保留"
+      },
+      "statistics": {
+        "sourceCanonicalSha256": "c3f16c229e57094dbe5d88ddad95167170a2b648fef7d41a9d8e310e97cd5ed0",
+        "publishedSha256": "528383dc3dce5cd51e47b79ce21b0a0c8f2cda03ea887b40ccc45c4c31f13766",
+        "rows": 2,
+        "sanitization": "白名单逐字段投影，删除 schema/表目录环境字段、基数等；保留原标量类型，文件重新序列化"
+      },
+      "observation": {
+        "statementAccepted": true,
+        "phaseMeaning": "操作后真实结构",
+        "warningCodes": [
+          {
+            "level": "Note",
+            "code": 1071
+          }
+        ],
+        "requestedDirectionIgnored": false,
+        "serverAddedOrShortenedPrefix": true,
+        "note": "MariaDB 接受后给出 Note 1071，实际前缀为768，不能声称请求原样兑现"
+      }
+    },
+    {
+      "id": "mariadb-10.11.19-prefix-overbudget-ordinary-after",
+      "file": "mariadb-10.11.19-prefix-overbudget-ordinary-after.sql",
+      "statisticsFile": "mariadb-10.11.19-prefix-overbudget-ordinary-after.statistics.json",
+      "dialect": "mariadb",
+      "version": "10.11.19-MariaDB-ubu2204",
+      "sourceRun": "run01",
+      "sourceCase": "prefix_overbudget_ordinary",
+      "sourcePhase": "after",
+      "sourceReportSha256": "dfd918e3f80be4a4c65abf355f8a88cdacdbb4b8f9409acea44181c7aacc6632",
+      "capturedWithin": {
+        "from": "2026-10-14T02:39:43.974Z",
+        "to": "2026-10-14T02:39:47.498Z"
+      },
+      "session": {
+        "sqlMode": "STRICT_ALL_TABLES,NO_ENGINE_SUBSTITUTION",
+        "charset": "utf8mb4",
+        "collation": "utf8mb4_bin",
+        "quoteShowCreate": "1",
+        "innodbStrictMode": "1"
+      },
+      "engine": "InnoDB",
+      "rowFormat": "Dynamic",
+      "ddl": {
+        "sourceRawSha256": "135cb66864b4c614c581d5be3f390f737829fb60fa39f332b875e24f162c1dad",
+        "publishedSha256": "135cb66864b4c614c581d5be3f390f737829fb60fa39f332b875e24f162c1dad",
+        "bytes": 437,
+        "unchangedBytes": true,
+        "sanitization": "无需改名：SHOW CREATE 原文不含库名或环境字段，逐字节保留"
+      },
+      "statistics": {
+        "sourceCanonicalSha256": "7174063947a4ae99db80c14c63f72f8b8366c010c6ad080ccf85f7757485c673",
+        "publishedSha256": "c6f959d81024c104dcdae7e37d1591e8c8f488cd2de2acc0005aaca2cab40a62",
+        "rows": 2,
+        "sanitization": "白名单逐字段投影，删除 schema/表目录环境字段、基数等；保留原标量类型，文件重新序列化"
+      },
+      "observation": {
+        "statementAccepted": true,
+        "phaseMeaning": "操作后真实结构",
+        "warningCodes": [
+          {
+            "level": "Note",
+            "code": 1071
+          }
+        ],
+        "requestedDirectionIgnored": false,
+        "serverAddedOrShortenedPrefix": true,
+        "note": "MariaDB 接受后给出 Note 1071，实际前缀为768，不能声称请求原样兑现"
+      }
+    },
+    {
+      "id": "mariadb-11.4.13-text-without-prefix-after",
+      "file": "mariadb-11.4.13-text-without-prefix-after.sql",
+      "statisticsFile": "mariadb-11.4.13-text-without-prefix-after.statistics.json",
+      "dialect": "mariadb",
+      "version": "11.4.13-MariaDB-ubu2404",
+      "sourceRun": "run01",
+      "sourceCase": "text_without_prefix",
+      "sourcePhase": "after",
+      "sourceReportSha256": "cf913b90517f9393b50a9c0a8596dc576b2dd5699a92168ab92deb20868039da",
+      "capturedWithin": {
+        "from": "2026-10-14T02:39:47.914Z",
+        "to": "2026-10-14T02:39:51.350Z"
+      },
+      "session": {
+        "sqlMode": "STRICT_ALL_TABLES,NO_ENGINE_SUBSTITUTION",
+        "charset": "utf8mb4",
+        "collation": "utf8mb4_bin",
+        "quoteShowCreate": "1",
+        "innodbStrictMode": "1"
+      },
+      "engine": "InnoDB",
+      "rowFormat": "Dynamic",
+      "ddl": {
+        "sourceRawSha256": "3332a59ba7c2f5775ae64858cb4768ecffe382140f4713a648bec697335c9f2f",
+        "publishedSha256": "3332a59ba7c2f5775ae64858cb4768ecffe382140f4713a648bec697335c9f2f",
+        "bytes": 437,
+        "unchangedBytes": true,
+        "sanitization": "无需改名：SHOW CREATE 原文不含库名或环境字段，逐字节保留"
+      },
+      "statistics": {
+        "sourceCanonicalSha256": "5b4ee8c9a6de53173a34938e47ac8fcad3a7bab63f32a1f2b0a5389b556cfd68",
+        "publishedSha256": "528383dc3dce5cd51e47b79ce21b0a0c8f2cda03ea887b40ccc45c4c31f13766",
+        "rows": 2,
+        "sanitization": "白名单逐字段投影，删除 schema/表目录环境字段、基数等；保留原标量类型，文件重新序列化"
+      },
+      "observation": {
+        "statementAccepted": true,
+        "phaseMeaning": "操作后真实结构",
+        "warningCodes": [
+          {
+            "level": "Note",
+            "code": 1071
+          }
+        ],
+        "requestedDirectionIgnored": false,
+        "serverAddedOrShortenedPrefix": true,
+        "note": "MariaDB 接受后给出 Note 1071，实际前缀为768，不能声称请求原样兑现"
+      }
+    },
+    {
+      "id": "mariadb-11.4.13-prefix-overbudget-ordinary-after",
+      "file": "mariadb-11.4.13-prefix-overbudget-ordinary-after.sql",
+      "statisticsFile": "mariadb-11.4.13-prefix-overbudget-ordinary-after.statistics.json",
+      "dialect": "mariadb",
+      "version": "11.4.13-MariaDB-ubu2404",
+      "sourceRun": "run01",
+      "sourceCase": "prefix_overbudget_ordinary",
+      "sourcePhase": "after",
+      "sourceReportSha256": "cf913b90517f9393b50a9c0a8596dc576b2dd5699a92168ab92deb20868039da",
+      "capturedWithin": {
+        "from": "2026-10-14T02:39:47.914Z",
+        "to": "2026-10-14T02:39:51.350Z"
+      },
+      "session": {
+        "sqlMode": "STRICT_ALL_TABLES,NO_ENGINE_SUBSTITUTION",
+        "charset": "utf8mb4",
+        "collation": "utf8mb4_bin",
+        "quoteShowCreate": "1",
+        "innodbStrictMode": "1"
+      },
+      "engine": "InnoDB",
+      "rowFormat": "Dynamic",
+      "ddl": {
+        "sourceRawSha256": "135cb66864b4c614c581d5be3f390f737829fb60fa39f332b875e24f162c1dad",
+        "publishedSha256": "135cb66864b4c614c581d5be3f390f737829fb60fa39f332b875e24f162c1dad",
+        "bytes": 437,
+        "unchangedBytes": true,
+        "sanitization": "无需改名：SHOW CREATE 原文不含库名或环境字段，逐字节保留"
+      },
+      "statistics": {
+        "sourceCanonicalSha256": "c07ad2aa5b734079a377a3c98981e3b5a07eb58bf643c2b6c72dd4b570d24e85",
+        "publishedSha256": "c6f959d81024c104dcdae7e37d1591e8c8f488cd2de2acc0005aaca2cab40a62",
+        "rows": 2,
+        "sanitization": "白名单逐字段投影，删除 schema/表目录环境字段、基数等；保留原标量类型，文件重新序列化"
+      },
+      "observation": {
+        "statementAccepted": true,
+        "phaseMeaning": "操作后真实结构",
+        "warningCodes": [
+          {
+            "level": "Note",
+            "code": 1071
+          }
+        ],
+        "requestedDirectionIgnored": false,
+        "serverAddedOrShortenedPrefix": true,
+        "note": "MariaDB 接受后给出 Note 1071，实际前缀为768，不能声称请求原样兑现"
+      }
+    }
+  ]
+}

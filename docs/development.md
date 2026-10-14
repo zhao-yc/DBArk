@@ -53,6 +53,14 @@ SQL 片段迁移写入 schema 2 后，旧 0.2.0 拒绝读取。开发与回退�
 
 百万行场景需要记录页大小、结果上限、内存占用、查询取消及导出完成情况。SSH/TLS、连接中断和低权限账号都必须使用真实服务验证，不能由单元测试代替。
 
+## 索引与主键差异验证
+
+`tests/integration/engine-index-patches.integration.test.ts` 使用真实产品命令，验证复合列序、前缀单位、DESC 能力、注释、原生改名、DROP/ADD、主键、自增/FK、外部依赖漂移、事务/临时表隔离、元数据锁取消及特殊旧键保留。My8 的表达式/不可见索引和 GIPK 用例在其它版本明确跳过。SSH 下连续四次结构修改的单个用例有 120 秒总限，生产连接和取消超时保持原值，不能用总限掩盖资源释放失败。
+
+最小权限与字段共用 `engine-column-permissions.integration.test.ts` 的随机 `dbark_colperm_*` / `cp_*` 夹具，仅在已获授权的隔离实例运行；仅对 `subject` 表授予约定权限，密码只在内存。真实权限不足、无 LOCK TABLES、目录 partial、约束保留和清理分别断言，不为测试失败追加授权。
+
+`tests/e2e/table-index-patches.spec.ts` 验证双入口、实际表单、只读预览、双击、复合前缀、数据/结构草稿、取消、约束删除后可靠键刷新及退出保护；禁用含密码追踪，仅替换原生对话框回答。纯解析/目录/依赖/计划/后核验、引擎和主进程用途隔离均有独立单元。当前结果与首轮失败见 [索引验收](../tests/integration/acceptance-o01-indexes-20261014.md)。
+
 ## 构建
 
 0.6.0 的表偏好由 `tests/unit/table-preferences.test.ts` 验证精确复合键、原型名称、实际 SQLite 满额和 UTF-8 聚合预算、保存/删除/目标变更失败回退，以及 schema2 旧七表全部字段保持。`ui-page-find-replace`、`ui-table-column-preferences` 验证完整原值、Unicode 位置、字面替换、快照和预算、调和及可见列模型。`table-preferences.spec.ts` 的四项离线实际 IPC 与 `table-grid-preferences.spec.ts` 的六项实库 UI 分别运行，编写或列出测试不算实测通过；本批结果见 [D06 验收记录](../tests/integration/acceptance-p0-grid-preferences-20261014.md)。旧 reader 的独立结构探针使用冻结 0.5 源码和真实 SQLite 副本，不属于真实安装或系统加密验证。

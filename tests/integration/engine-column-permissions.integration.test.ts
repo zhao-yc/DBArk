@@ -5,6 +5,8 @@ import { connect, execute, type ManagedConnection } from '../../src/engine/conne
 import { identifier, qualified } from '../../src/engine/sql';
 import type { ConnectionProfile, TaskEvent } from '../../src/shared/contracts';
 import type { TableColumnGetOutput, TableColumnPreviewOutput } from '../../src/shared/tableColumnPatches';
+import type { TableIndexGetOutput, TableIndexPreviewOutput } from '../../src/shared/tableIndexTasks';
+import type { IndexPatch } from '../../src/shared/tableIndexPatches';
 
 const enabled = process.env.DBARK_INTEGRATION_ENABLED === '1' && Boolean(process.env.DBARK_TEST_HOST);
 const profile: ConnectionProfile = {
@@ -23,6 +25,9 @@ interface PermissionCase {
   apply(plan: TableColumnPreviewOutput, taskId: string): Promise<unknown>;
   sql(text: string, params?: (string | number)[]): Promise<Row[]>;
   assertPrivileges(): Promise<void>;
+  getIndexes(): Promise<TableIndexGetOutput>;
+  previewIndexes(snapshot: TableIndexGetOutput, patches: IndexPatch[]): Promise<TableIndexPreviewOutput>;
+  applyIndexes(plan: TableIndexPreviewOutput, taskId: string): Promise<unknown>;
 }
 
 /** 只允许已约定的服务器与基线端口；启用开关不是访问其他数据库的授权。 */
@@ -95,6 +100,9 @@ async function withPermissionCase(grants: Privilege[], action: (context: Permiss
         return engine.handle('schema.columns.preview', { snapshotId: snapshot.snapshotId, patches: [{ kind: 'alter', columnRef: column.columnRef, changes: { comment: '标准权限修改' } }], taskId: randomUUID(), connectionRevision: 1 });
       },
       apply: (plan, taskId) => engine.handle('schema.columns.apply', { previewToken: plan.previewToken, acknowledgements: plan.requiredAcknowledgements, taskId, connectionRevision: 1 }),
+      getIndexes: () => engine.handle('schema.indexes.get', { connectionId: limitedProfile.id, database, table: 'subject', taskId: randomUUID(), connectionRevision: 1 }),
+      previewIndexes: (snapshot, patches) => engine.handle('schema.indexes.preview', { snapshotId: snapshot.snapshotId, patches, taskId: randomUUID(), connectionRevision: 1 }),
+      applyIndexes: (plan, taskId) => engine.handle('schema.indexes.apply', { previewToken: plan.previewToken, acknowledgements: plan.requiredAcknowledgements, taskId, connectionRevision: 1 }),
     });
     await assertPrivileges();
   } catch (error) { failure = error; }
@@ -146,7 +154,7 @@ async function withPermissionCase(grants: Privilege[], action: (context: Permiss
         }
       } catch (error) { cleanupErrors.push(error); }
       finally { try { await observer?.close({ strict: true }); } catch (error) { cleanupErrors.push(error); } }
-      console.info(JSON.stringify({ 权限验收库: database, 临时用户: user, 已记录连接ID: [...recordedIds], 残留: cleanupCounts, 清理检查通过: cleanupErrors.length === 0, 清理错误数: cleanupErrors.length, 任务终态: events.filter(event => ['completed', 'failed', 'cancelled'].includes(event.status)).map(event => ({ taskId: event.taskId, status: event.status, columnPatch: event.columnPatch })) }));
+      console.info(JSON.stringify({ 权限验收库: database, 临时用户: user, 已记录连接ID: [...recordedIds], 残留: cleanupCounts, 清理检查通过: cleanupErrors.length === 0, 清理错误数: cleanupErrors.length, 任务终态: events.filter(event => ['completed', 'failed', 'cancelled'].includes(event.status)).map(event => ({ taskId: event.taskId, status: event.status, columnPatch: event.columnPatch, indexPatch: event.indexPatch })) }));
     }
   }
   if (failure && cleanupErrors.length) throw new AggregateError([failure, ...cleanupErrors], '字段权限验收及资源清理均失败');
@@ -199,6 +207,36 @@ describe.skipIf(!enabled)('真实字段差异最小权限边界', () => {
       await expect(execute(limited, `INSERT INTO ${table}(id,v) VALUES (2,'保留数据')`)).rejects.toMatchObject({ errno: 1062 });
       expect(await sql(`SELECT id,v FROM ${table}`)).toEqual([{ id: 1, v: '保留数据' }]);
       expect((await get()).columns.find(column => column.name === 'v')).toMatchObject({ comment: '标准权限修改', nullable: false });
+    });
+  }, 45000);
+});
+
+describe.skipIf(!enabled)('真实索引差异最小权限边界', () => {
+  it('仅 SELECT 时目录降级不伪造无依赖，原生改名实际无 ALTER 权限而拒绝', async () => {
+    await withPermissionCase(['SELECT'], async context => {
+      const snapshot = await context.getIndexes(); expect(snapshot.incomingCoverage).toEqual({ kind: 'partial', reason: 'permission' });
+      const value = snapshot.indexes.find(index => index.name === 'uq_value')!; expect(value.access.drop.allowed).toBe(false); expect(value.access.rename.allowed).toBe(true);
+      const before = (await context.sql(`SHOW CREATE TABLE ${context.table}`))[0]['Create Table'];
+      const plan = await context.previewIndexes(snapshot, [{ op: 'alter', indexRef: value.indexRef, changes: { name: 'renamed_unique' } }]), taskId = randomUUID();
+      await expect(context.applyIndexes(plan, taskId)).rejects.toMatchObject({ errno: 1142 });
+      expect(context.events.filter(event => event.taskId === taskId).at(-1)).toMatchObject({ status: 'failed', indexPatch: { ddlSubmitted: true, ddlCompleted: false, outcome: 'unknown' } });
+      await expect(context.applyIndexes(plan, randomUUID())).rejects.toThrow('已失效或已使用');
+      expect((await context.sql(`SHOW CREATE TABLE ${context.table}`))[0]['Create Table']).toBe(before); expect(await context.sql(`SELECT id,v FROM ${context.table}`)).toEqual([{ id: 1, v: '保留数据' }]);
+    });
+  }, 45000);
+  it('限定四种表级权限且无 LOCK TABLES，可单次改名和新增普通键，不扩大授权', async () => {
+    await withPermissionCase(['SELECT', 'ALTER', 'CREATE', 'INSERT'], async context => {
+      let lockError: unknown; try { await execute(context.limited, `LOCK TABLES ${context.table} READ`); } catch (error) { lockError = error; }
+      finally { if (!lockError) await execute(context.limited, 'UNLOCK TABLES'); }
+      expect([1044, 1142, 1227]).toContain(errorNumber(lockError));
+      let snapshot = await context.getIndexes(), value = snapshot.indexes.find(index => index.name === 'uq_value')!;
+      let plan = await context.previewIndexes(snapshot, [{ op: 'alter', indexRef: value.indexRef, changes: { name: 'renamed_unique' } }]);
+      expect(await context.applyIndexes(plan, randomUUID())).toMatchObject({ ddlCompleted: true, definitionVerified: true });
+      snapshot = await context.getIndexes(); const column = snapshot.columns.find(column => column.name === 'id')!;
+      plan = await context.previewIndexes(snapshot, [{ op: 'add', clientKey: randomUUID(), definition: { kind: 'ordinary', name: 'ordinary_id', method: 'BTREE', comment: '', keyParts: [{ columnRef: column.columnRef, direction: 'asc' }] } }]);
+      expect(await context.applyIndexes(plan, randomUUID())).toMatchObject({ ddlCompleted: true, definitionVerified: true }); await context.assertPrivileges();
+      await expect(execute(context.limited, `INSERT INTO ${context.table}(id,v) VALUES(2,'保留数据')`)).rejects.toMatchObject({ errno: 1062 });
+      expect(await context.sql(`SELECT id,v FROM ${context.table}`)).toEqual([{ id: 1, v: '保留数据' }]);
     });
   }, 45000);
 });

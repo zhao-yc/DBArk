@@ -9,6 +9,8 @@ import { validateReferenceValues } from './references';
 import { queryStreamExportLimits } from './queryStreamExport';
 import { tablePreferenceSaveSchema, tablePreferenceTargetSchema } from './tablePreferences';
 import { validateColumnPatches } from './tableColumnPatches';
+import { validateIndexPatches } from './tableIndexPatches';
+import { indexAcknowledgementIds } from './tableIndexTasks';
 
 const id = z.string().min(1).max(200);
 const name = z.string().min(1).max(256);
@@ -97,6 +99,10 @@ export const commandSchemas: Record<Command, z.ZodType> = {
   'schema.columns.preview': z.object({ snapshotId: id, patches: z.unknown().transform(value => validateColumnPatches(value, 38)), taskId: id }).strict(),
   'schema.columns.apply': z.object({ previewToken: id, acknowledgements: z.array(z.string().min(1).max(100)).max(20), taskId: id }).strict(),
   'schema.columns.release': z.object({ snapshotId: id.optional(), previewToken: id.optional() }).strict().refine(value => Boolean(value.snapshotId || value.previewToken), '缺少待释放的结构令牌'),
+  'schema.indexes.get': z.object({ connectionId: id, database: z.string().min(1).max(64), table: z.string().min(1).max(64), taskId: id }).strict(),
+  'schema.indexes.preview': z.object({ snapshotId: id, patches: z.unknown().transform(value => validateIndexPatches(value)), taskId: id }).strict(),
+  'schema.indexes.apply': z.object({ previewToken: id, acknowledgements: z.array(z.enum(indexAcknowledgementIds)).max(20).refine(value => new Set(value).size === value.length, '索引确认项不能重复'), taskId: id }).strict(),
+  'schema.indexes.release': z.object({ snapshotId: id.optional(), previewToken: id.optional() }).strict().refine(value => Boolean(value.snapshotId || value.previewToken), '缺少待释放的索引结构令牌'),
   'files.choose': z.object({ purpose: z.enum(['import','export','key','certificate','query','connection-import','connection-export']), format: z.string().optional(), suggestedName: z.string().optional() }).strict(),
   'files.path': z.object({ token: id }).strict(),
   'files.readQuery': z.object({ fileToken: id, encoding: z.enum(['utf8','utf16le','gb18030']) }).strict(),

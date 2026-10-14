@@ -4,6 +4,7 @@ import type { QueryExportProgress, QueryStreamExportInput, QueryStreamExportOutp
 import type { ConnectionFileRequirement, ConnectionImportApply, ConnectionImportPreview, ConnectionImportResult } from './connectionTransfer';
 import type { TablePreferenceTarget, TablePreferences } from './tablePreferences';
 import type { TableColumnGetInput, TableColumnGetOutput, TableColumnPreviewInput, TableColumnPreviewOutput, TableColumnApplyInput, TableColumnApplyOutput, TableColumnApplyProgress, TableColumnReleaseInput } from './tableColumnPatches';
+import type { TableIndexGetInput, TableIndexGetOutput, TableIndexPreviewInput, TableIndexPreviewOutput, TableIndexApplyInput, TableIndexApplyOutput, TableIndexApplyProgress, TableIndexReleaseInput } from './tableIndexTasks';
 export type CellValue = string | number | boolean | null | { type: 'binary'; base64: string };
 export type DataRow = Record<string, CellValue>;
 export type ObjectKind = 'table' | 'view' | 'procedure' | 'function' | 'trigger' | 'event';
@@ -39,7 +40,7 @@ export interface SavedQuery { id: string; name: string; connectionId?: string; d
 export interface SqlSnippet { id: string; name: string; group: string; description: string; sql: string; updatedAt: string; }
 export interface HistoryEntry { id: string; connectionId: string; database?: string; sql: string; startedAt: string; elapsedMs: number; success: boolean; error?: string; }
 export interface TaskRecord { id: string; kind: string; status: 'running' | 'completed' | 'cancelled' | 'failed'; progress: number; message: string; startedAt: string; finishedAt?: string; errors?: string[]; }
-export interface TaskEvent { taskId: string; status: TaskRecord['status']; progress: number; message: string; rows?: number; resultIndex?: number; columns?: ResultColumn[]; batch?: DataRow[]; queryExport?: QueryExportProgress; columnPatch?: TableColumnApplyProgress; }
+export interface TaskEvent { taskId: string; status: TaskRecord['status']; progress: number; message: string; rows?: number; resultIndex?: number; columns?: ResultColumn[]; batch?: DataRow[]; queryExport?: QueryExportProgress; columnPatch?: TableColumnApplyProgress; indexPatch?: TableIndexApplyProgress; }
 export interface FileChoice { token: string; name: string; }
 export type QueryFileEncoding = 'utf8' | 'utf16le' | 'gb18030';
 export interface AppSettings { theme: 'dark' | 'light'; sidebarWidth: number; resultLimit: number; pageSize: number; tabs: { id: string; kind: 'query' | 'table'; title: string; connectionId: string; database?: string; table?: string; sql?: string }[]; activeTabId?: string; }
@@ -90,6 +91,10 @@ export interface CommandMap {
   'schema.columns.preview': { input: TableColumnPreviewInput; output: TableColumnPreviewOutput };
   'schema.columns.apply': { input: TableColumnApplyInput; output: TableColumnApplyOutput };
   'schema.columns.release': { input: TableColumnReleaseInput; output: void };
+  'schema.indexes.get': { input: TableIndexGetInput; output: TableIndexGetOutput };
+  'schema.indexes.preview': { input: TableIndexPreviewInput; output: TableIndexPreviewOutput };
+  'schema.indexes.apply': { input: TableIndexApplyInput; output: TableIndexApplyOutput };
+  'schema.indexes.release': { input: TableIndexReleaseInput; output: void };
   'files.choose': { input: { purpose: 'import' | 'export' | 'key' | 'certificate' | 'query' | 'connection-import' | 'connection-export'; format?: string; suggestedName?: string }; output: FileChoice | null };
   'files.path': { input: { token: string }; output: string };
   'files.readQuery': { input: { fileToken: string; encoding: QueryFileEncoding }; output: { sql: string; encoding: QueryFileEncoding } };

@@ -1,0 +1,877 @@
+{
+  "format": "DBArk-index-foreign-catalog-examples",
+  "version": 1,
+  "scope": "有限目录映射样例：不是通用Unicode编码器或产品依赖读取算法；库名已脱敏，原布尔假设保留",
+  "entries": [
+    {
+      "id": "mysql-5.7.44-ascii",
+      "version": "5.7.44",
+      "sourceRun": "run02",
+      "sourceCase": "ascii",
+      "sourceReportSha256": "f462317ee931771a0b901ade3a5740f8e65054fe931c458bea404386e5e82e15",
+      "lowerCaseTableNames": 0,
+      "catalogs": {
+        "tables": "INNODB_SYS_TABLES",
+        "foreign": "INNODB_SYS_FOREIGN",
+        "cols": "INNODB_SYS_FOREIGN_COLS"
+      },
+      "target": {
+        "childSchemaAlias": "fixture_child_schema",
+        "childTable": "ChildAscii",
+        "parentSchemaAlias": "fixture_child_schema",
+        "parentTable": "ParentAscii",
+        "foreignKeyName": "FkAscii"
+      },
+      "names": {
+        "childTableCatalog": {
+          "value": "fixture_child_schema/ChildAscii",
+          "sourceUtf8Sha256": "34149a5063b2ec78d03ccd21fc0141526371e8bf1fd3acc9adf343856fa6bafc",
+          "publishedUtf8Sha256": "97502e0a75585ddad309e558fbe3f40a0914ca8fbd830957613f84114adadb28",
+          "changed": true,
+          "transformation": "仅将已知完整研究库名前缀替换为ASCII占位库名，其后目录名称字节不改"
+        },
+        "parentTableCatalog": {
+          "value": "fixture_child_schema/ParentAscii",
+          "sourceUtf8Sha256": "1748ba9baed05e4f1f26f98cca447d9f6cdf1a252f7cad24d8c39e80eef22979",
+          "publishedUtf8Sha256": "9344343bb4b1e5ed5aff1851f6dba90ebc8159db9b57455f446345faeb8bbde6",
+          "changed": true,
+          "transformation": "仅将已知完整研究库名前缀替换为ASCII占位库名，其后目录名称字节不改"
+        },
+        "foreignForName": {
+          "value": "fixture_child_schema/ChildAscii",
+          "sourceUtf8Sha256": "34149a5063b2ec78d03ccd21fc0141526371e8bf1fd3acc9adf343856fa6bafc",
+          "publishedUtf8Sha256": "97502e0a75585ddad309e558fbe3f40a0914ca8fbd830957613f84114adadb28",
+          "changed": true,
+          "transformation": "仅将已知完整研究库名前缀替换为ASCII占位库名，其后目录名称字节不改"
+        },
+        "foreignRefName": {
+          "value": "fixture_child_schema/ParentAscii",
+          "sourceUtf8Sha256": "1748ba9baed05e4f1f26f98cca447d9f6cdf1a252f7cad24d8c39e80eef22979",
+          "publishedUtf8Sha256": "9344343bb4b1e5ed5aff1851f6dba90ebc8159db9b57455f446345faeb8bbde6",
+          "changed": true,
+          "transformation": "仅将已知完整研究库名前缀替换为ASCII占位库名，其后目录名称字节不改"
+        }
+      },
+      "directCatalogNameEquality": {
+        "child": true,
+        "parent": true
+      },
+      "foreignColumns": [
+        {
+          "POS": 0,
+          "FOR_COL_NAME": "C二",
+          "REF_COL_NAME": "P二"
+        },
+        {
+          "POS": 1,
+          "FOR_COL_NAME": "C 一",
+          "REF_COL_NAME": "P 一"
+        }
+      ],
+      "keyColumnUsage": [
+        {
+          "ORDINAL_POSITION": "1",
+          "COLUMN_NAME": "C二",
+          "REFERENCED_COLUMN_NAME": "P二"
+        },
+        {
+          "ORDINAL_POSITION": "2",
+          "COLUMN_NAME": "C 一",
+          "REFERENCED_COLUMN_NAME": "P 一"
+        }
+      ],
+      "originalZeroBasedPositionHypothesisMatched": true,
+      "tupleOrderMatchesAfterSortingActualPosition": true,
+      "limitations": [
+        "仅真实创建增量证明本轮目标归属，不能搬作产品算法",
+        "ASCII随机库已改占位名，特殊库名未验",
+        "特殊表名有限样本不等于通用Unicode编码器已验",
+        "不含完整ID，也不按ID拆分名称",
+        "MySQL8零基POS假设false保留，实际元组顺序单独核对"
+      ]
+    },
+    {
+      "id": "mysql-5.7.44-combined",
+      "version": "5.7.44",
+      "sourceRun": "run02",
+      "sourceCase": "combined",
+      "sourceReportSha256": "f462317ee931771a0b901ade3a5740f8e65054fe931c458bea404386e5e82e15",
+      "lowerCaseTableNames": 0,
+      "catalogs": {
+        "tables": "INNODB_SYS_TABLES",
+        "foreign": "INNODB_SYS_FOREIGN",
+        "cols": "INNODB_SYS_FOREIGN_COLS"
+      },
+      "target": {
+        "childSchemaAlias": "fixture_child_schema",
+        "childTable": "mix@ 空`汉",
+        "parentSchemaAlias": "fixture_parent_schema",
+        "parentTable": "Mix@ 空`汉",
+        "foreignKeyName": "Fk@ 空`汉"
+      },
+      "names": {
+        "childTableCatalog": {
+          "value": "fixture_child_schema/mix@0040@0020@7a7a@0060@6c49",
+          "sourceUtf8Sha256": "54eb4eb20b9bbfd677d95b343cdfa63e28f55307dcd201863032384a4bc238f7",
+          "publishedUtf8Sha256": "586dcafb7cf5b34fdc99f1e6ec93698d07e7c0615a35f78bd43d127a1598875e",
+          "changed": true,
+          "transformation": "仅将已知完整研究库名前缀替换为ASCII占位库名，其后目录名称字节不改"
+        },
+        "parentTableCatalog": {
+          "value": "fixture_parent_schema/Mix@0040@0020@7a7a@0060@6c49",
+          "sourceUtf8Sha256": "b0de41adb8f8a3f77360b8852d87edb7da24c941bb2677d6dcd8edf252ffe4fb",
+          "publishedUtf8Sha256": "ba5d7ea51ec43b0a7438a7075ae9c4cb5339e60f982025c94f22a93c39e7a606",
+          "changed": true,
+          "transformation": "仅将已知完整研究库名前缀替换为ASCII占位库名，其后目录名称字节不改"
+        },
+        "foreignForName": {
+          "value": "fixture_child_schema/mix@0040@0020@7a7a@0060@6c49",
+          "sourceUtf8Sha256": "54eb4eb20b9bbfd677d95b343cdfa63e28f55307dcd201863032384a4bc238f7",
+          "publishedUtf8Sha256": "586dcafb7cf5b34fdc99f1e6ec93698d07e7c0615a35f78bd43d127a1598875e",
+          "changed": true,
+          "transformation": "仅将已知完整研究库名前缀替换为ASCII占位库名，其后目录名称字节不改"
+        },
+        "foreignRefName": {
+          "value": "fixture_parent_schema/Mix@0040@0020@7a7a@0060@6c49",
+          "sourceUtf8Sha256": "b0de41adb8f8a3f77360b8852d87edb7da24c941bb2677d6dcd8edf252ffe4fb",
+          "publishedUtf8Sha256": "ba5d7ea51ec43b0a7438a7075ae9c4cb5339e60f982025c94f22a93c39e7a606",
+          "changed": true,
+          "transformation": "仅将已知完整研究库名前缀替换为ASCII占位库名，其后目录名称字节不改"
+        }
+      },
+      "directCatalogNameEquality": {
+        "child": true,
+        "parent": true
+      },
+      "foreignColumns": [
+        {
+          "POS": 0,
+          "FOR_COL_NAME": "C二",
+          "REF_COL_NAME": "P二"
+        },
+        {
+          "POS": 1,
+          "FOR_COL_NAME": "C 一",
+          "REF_COL_NAME": "P 一"
+        }
+      ],
+      "keyColumnUsage": [
+        {
+          "ORDINAL_POSITION": "1",
+          "COLUMN_NAME": "C二",
+          "REFERENCED_COLUMN_NAME": "P二"
+        },
+        {
+          "ORDINAL_POSITION": "2",
+          "COLUMN_NAME": "C 一",
+          "REFERENCED_COLUMN_NAME": "P 一"
+        }
+      ],
+      "originalZeroBasedPositionHypothesisMatched": true,
+      "tupleOrderMatchesAfterSortingActualPosition": true,
+      "limitations": [
+        "仅真实创建增量证明本轮目标归属，不能搬作产品算法",
+        "ASCII随机库已改占位名，特殊库名未验",
+        "特殊表名有限样本不等于通用Unicode编码器已验",
+        "不含完整ID，也不按ID拆分名称",
+        "MySQL8零基POS假设false保留，实际元组顺序单独核对"
+      ]
+    },
+    {
+      "id": "mysql-8.0.46-ascii",
+      "version": "8.0.46",
+      "sourceRun": "run02",
+      "sourceCase": "ascii",
+      "sourceReportSha256": "f8170fb43a878a67c6b4840a6a2cd0b0705ddb4146007990a3e0adf416051274",
+      "lowerCaseTableNames": 0,
+      "catalogs": {
+        "tables": "INNODB_TABLES",
+        "foreign": "INNODB_FOREIGN",
+        "cols": "INNODB_FOREIGN_COLS"
+      },
+      "target": {
+        "childSchemaAlias": "fixture_child_schema",
+        "childTable": "ChildAscii",
+        "parentSchemaAlias": "fixture_child_schema",
+        "parentTable": "ParentAscii",
+        "foreignKeyName": "FkAscii"
+      },
+      "names": {
+        "childTableCatalog": {
+          "value": "fixture_child_schema/ChildAscii",
+          "sourceUtf8Sha256": "5ff64ab51becd7cd6e888678b4c705f0f2324065df6458b5191fe3ee721a4a84",
+          "publishedUtf8Sha256": "97502e0a75585ddad309e558fbe3f40a0914ca8fbd830957613f84114adadb28",
+          "changed": true,
+          "transformation": "仅将已知完整研究库名前缀替换为ASCII占位库名，其后目录名称字节不改"
+        },
+        "parentTableCatalog": {
+          "value": "fixture_child_schema/ParentAscii",
+          "sourceUtf8Sha256": "aecc26039dc797c21a62008d5df2cec5a353864ae2629162db8e5f12f132ee26",
+          "publishedUtf8Sha256": "9344343bb4b1e5ed5aff1851f6dba90ebc8159db9b57455f446345faeb8bbde6",
+          "changed": true,
+          "transformation": "仅将已知完整研究库名前缀替换为ASCII占位库名，其后目录名称字节不改"
+        },
+        "foreignForName": {
+          "value": "fixture_child_schema/ChildAscii",
+          "sourceUtf8Sha256": "5ff64ab51becd7cd6e888678b4c705f0f2324065df6458b5191fe3ee721a4a84",
+          "publishedUtf8Sha256": "97502e0a75585ddad309e558fbe3f40a0914ca8fbd830957613f84114adadb28",
+          "changed": true,
+          "transformation": "仅将已知完整研究库名前缀替换为ASCII占位库名，其后目录名称字节不改"
+        },
+        "foreignRefName": {
+          "value": "fixture_child_schema/ParentAscii",
+          "sourceUtf8Sha256": "aecc26039dc797c21a62008d5df2cec5a353864ae2629162db8e5f12f132ee26",
+          "publishedUtf8Sha256": "9344343bb4b1e5ed5aff1851f6dba90ebc8159db9b57455f446345faeb8bbde6",
+          "changed": true,
+          "transformation": "仅将已知完整研究库名前缀替换为ASCII占位库名，其后目录名称字节不改"
+        }
+      },
+      "directCatalogNameEquality": {
+        "child": true,
+        "parent": true
+      },
+      "foreignColumns": [
+        {
+          "POS": 1,
+          "FOR_COL_NAME": "C二",
+          "REF_COL_NAME": "P二"
+        },
+        {
+          "POS": 2,
+          "FOR_COL_NAME": "C 一",
+          "REF_COL_NAME": "P 一"
+        }
+      ],
+      "keyColumnUsage": [
+        {
+          "ORDINAL_POSITION": 1,
+          "COLUMN_NAME": "C二",
+          "REFERENCED_COLUMN_NAME": "P二"
+        },
+        {
+          "ORDINAL_POSITION": 2,
+          "COLUMN_NAME": "C 一",
+          "REFERENCED_COLUMN_NAME": "P 一"
+        }
+      ],
+      "originalZeroBasedPositionHypothesisMatched": false,
+      "tupleOrderMatchesAfterSortingActualPosition": true,
+      "limitations": [
+        "仅真实创建增量证明本轮目标归属，不能搬作产品算法",
+        "ASCII随机库已改占位名，特殊库名未验",
+        "特殊表名有限样本不等于通用Unicode编码器已验",
+        "不含完整ID，也不按ID拆分名称",
+        "MySQL8零基POS假设false保留，实际元组顺序单独核对"
+      ]
+    },
+    {
+      "id": "mysql-8.0.46-combined",
+      "version": "8.0.46",
+      "sourceRun": "run02",
+      "sourceCase": "combined",
+      "sourceReportSha256": "f8170fb43a878a67c6b4840a6a2cd0b0705ddb4146007990a3e0adf416051274",
+      "lowerCaseTableNames": 0,
+      "catalogs": {
+        "tables": "INNODB_TABLES",
+        "foreign": "INNODB_FOREIGN",
+        "cols": "INNODB_FOREIGN_COLS"
+      },
+      "target": {
+        "childSchemaAlias": "fixture_child_schema",
+        "childTable": "mix@ 空`汉",
+        "parentSchemaAlias": "fixture_parent_schema",
+        "parentTable": "Mix@ 空`汉",
+        "foreignKeyName": "Fk@ 空`汉"
+      },
+      "names": {
+        "childTableCatalog": {
+          "value": "fixture_child_schema/mix@0040@0020@7a7a@0060@6c49",
+          "sourceUtf8Sha256": "7484bb81e34606664023bcf7b4b044eb13fd299ae66ce5b65ab8d9462049845e",
+          "publishedUtf8Sha256": "586dcafb7cf5b34fdc99f1e6ec93698d07e7c0615a35f78bd43d127a1598875e",
+          "changed": true,
+          "transformation": "仅将已知完整研究库名前缀替换为ASCII占位库名，其后目录名称字节不改"
+        },
+        "parentTableCatalog": {
+          "value": "fixture_parent_schema/Mix@0040@0020@7a7a@0060@6c49",
+          "sourceUtf8Sha256": "da49e3de8630fca816f8a1c10d5435681e7c84611ae227c53a24e7190a0cd657",
+          "publishedUtf8Sha256": "ba5d7ea51ec43b0a7438a7075ae9c4cb5339e60f982025c94f22a93c39e7a606",
+          "changed": true,
+          "transformation": "仅将已知完整研究库名前缀替换为ASCII占位库名，其后目录名称字节不改"
+        },
+        "foreignForName": {
+          "value": "fixture_child_schema/mix@ 空`汉",
+          "sourceUtf8Sha256": "7005b35a68b3d3b001cd87323b45fd07dd4929a73631609731d9fdaa8b58ed58",
+          "publishedUtf8Sha256": "4c48c1bc2c5d7d878667f44264cc63bbeb13a82f447349920b2810f3e285bfea",
+          "changed": true,
+          "transformation": "仅将已知完整研究库名前缀替换为ASCII占位库名，其后目录名称字节不改"
+        },
+        "foreignRefName": {
+          "value": "fixture_parent_schema/Mix@ 空`汉",
+          "sourceUtf8Sha256": "60767ad8958402e23348c2692ccd0a120fb1878b922ae74769488b545be2870e",
+          "publishedUtf8Sha256": "364ba8de19ce15ebd61a9456e1b5f4af60956827249531e1c913a94219bfabdc",
+          "changed": true,
+          "transformation": "仅将已知完整研究库名前缀替换为ASCII占位库名，其后目录名称字节不改"
+        }
+      },
+      "directCatalogNameEquality": {
+        "child": false,
+        "parent": false
+      },
+      "foreignColumns": [
+        {
+          "POS": 1,
+          "FOR_COL_NAME": "C二",
+          "REF_COL_NAME": "P二"
+        },
+        {
+          "POS": 2,
+          "FOR_COL_NAME": "C 一",
+          "REF_COL_NAME": "P 一"
+        }
+      ],
+      "keyColumnUsage": [
+        {
+          "ORDINAL_POSITION": 1,
+          "COLUMN_NAME": "C二",
+          "REFERENCED_COLUMN_NAME": "P二"
+        },
+        {
+          "ORDINAL_POSITION": 2,
+          "COLUMN_NAME": "C 一",
+          "REFERENCED_COLUMN_NAME": "P 一"
+        }
+      ],
+      "originalZeroBasedPositionHypothesisMatched": false,
+      "tupleOrderMatchesAfterSortingActualPosition": true,
+      "limitations": [
+        "仅真实创建增量证明本轮目标归属，不能搬作产品算法",
+        "ASCII随机库已改占位名，特殊库名未验",
+        "特殊表名有限样本不等于通用Unicode编码器已验",
+        "不含完整ID，也不按ID拆分名称",
+        "MySQL8零基POS假设false保留，实际元组顺序单独核对"
+      ]
+    },
+    {
+      "id": "mysql-8.4.11-ascii",
+      "version": "8.4.11",
+      "sourceRun": "run02",
+      "sourceCase": "ascii",
+      "sourceReportSha256": "aa30f1ff3fff2a4759bdb224e2e6b8531a44473d2323fbd9bf1d1f8cf5374f00",
+      "lowerCaseTableNames": 0,
+      "catalogs": {
+        "tables": "INNODB_TABLES",
+        "foreign": "INNODB_FOREIGN",
+        "cols": "INNODB_FOREIGN_COLS"
+      },
+      "target": {
+        "childSchemaAlias": "fixture_child_schema",
+        "childTable": "ChildAscii",
+        "parentSchemaAlias": "fixture_child_schema",
+        "parentTable": "ParentAscii",
+        "foreignKeyName": "FkAscii"
+      },
+      "names": {
+        "childTableCatalog": {
+          "value": "fixture_child_schema/ChildAscii",
+          "sourceUtf8Sha256": "c30db5e11ed353b78ce7c85546d73c86dba355b93aa61b0de08143a66803ca3b",
+          "publishedUtf8Sha256": "97502e0a75585ddad309e558fbe3f40a0914ca8fbd830957613f84114adadb28",
+          "changed": true,
+          "transformation": "仅将已知完整研究库名前缀替换为ASCII占位库名，其后目录名称字节不改"
+        },
+        "parentTableCatalog": {
+          "value": "fixture_child_schema/ParentAscii",
+          "sourceUtf8Sha256": "ac7056daf62f49b2d60f9e1acb2be2c1f2861334dd44f649a016cfd642ccd1f8",
+          "publishedUtf8Sha256": "9344343bb4b1e5ed5aff1851f6dba90ebc8159db9b57455f446345faeb8bbde6",
+          "changed": true,
+          "transformation": "仅将已知完整研究库名前缀替换为ASCII占位库名，其后目录名称字节不改"
+        },
+        "foreignForName": {
+          "value": "fixture_child_schema/ChildAscii",
+          "sourceUtf8Sha256": "c30db5e11ed353b78ce7c85546d73c86dba355b93aa61b0de08143a66803ca3b",
+          "publishedUtf8Sha256": "97502e0a75585ddad309e558fbe3f40a0914ca8fbd830957613f84114adadb28",
+          "changed": true,
+          "transformation": "仅将已知完整研究库名前缀替换为ASCII占位库名，其后目录名称字节不改"
+        },
+        "foreignRefName": {
+          "value": "fixture_child_schema/ParentAscii",
+          "sourceUtf8Sha256": "ac7056daf62f49b2d60f9e1acb2be2c1f2861334dd44f649a016cfd642ccd1f8",
+          "publishedUtf8Sha256": "9344343bb4b1e5ed5aff1851f6dba90ebc8159db9b57455f446345faeb8bbde6",
+          "changed": true,
+          "transformation": "仅将已知完整研究库名前缀替换为ASCII占位库名，其后目录名称字节不改"
+        }
+      },
+      "directCatalogNameEquality": {
+        "child": true,
+        "parent": true
+      },
+      "foreignColumns": [
+        {
+          "POS": 1,
+          "FOR_COL_NAME": "C二",
+          "REF_COL_NAME": "P二"
+        },
+        {
+          "POS": 2,
+          "FOR_COL_NAME": "C 一",
+          "REF_COL_NAME": "P 一"
+        }
+      ],
+      "keyColumnUsage": [
+        {
+          "ORDINAL_POSITION": 1,
+          "COLUMN_NAME": "C二",
+          "REFERENCED_COLUMN_NAME": "P二"
+        },
+        {
+          "ORDINAL_POSITION": 2,
+          "COLUMN_NAME": "C 一",
+          "REFERENCED_COLUMN_NAME": "P 一"
+        }
+      ],
+      "originalZeroBasedPositionHypothesisMatched": false,
+      "tupleOrderMatchesAfterSortingActualPosition": true,
+      "limitations": [
+        "仅真实创建增量证明本轮目标归属，不能搬作产品算法",
+        "ASCII随机库已改占位名，特殊库名未验",
+        "特殊表名有限样本不等于通用Unicode编码器已验",
+        "不含完整ID，也不按ID拆分名称",
+        "MySQL8零基POS假设false保留，实际元组顺序单独核对"
+      ]
+    },
+    {
+      "id": "mysql-8.4.11-combined",
+      "version": "8.4.11",
+      "sourceRun": "run02",
+      "sourceCase": "combined",
+      "sourceReportSha256": "aa30f1ff3fff2a4759bdb224e2e6b8531a44473d2323fbd9bf1d1f8cf5374f00",
+      "lowerCaseTableNames": 0,
+      "catalogs": {
+        "tables": "INNODB_TABLES",
+        "foreign": "INNODB_FOREIGN",
+        "cols": "INNODB_FOREIGN_COLS"
+      },
+      "target": {
+        "childSchemaAlias": "fixture_child_schema",
+        "childTable": "mix@ 空`汉",
+        "parentSchemaAlias": "fixture_parent_schema",
+        "parentTable": "Mix@ 空`汉",
+        "foreignKeyName": "Fk@ 空`汉"
+      },
+      "names": {
+        "childTableCatalog": {
+          "value": "fixture_child_schema/mix@0040@0020@7a7a@0060@6c49",
+          "sourceUtf8Sha256": "be191028a27d6e235a19d4fa78af8d4087ca0a232dcc43fb965d998eea525e25",
+          "publishedUtf8Sha256": "586dcafb7cf5b34fdc99f1e6ec93698d07e7c0615a35f78bd43d127a1598875e",
+          "changed": true,
+          "transformation": "仅将已知完整研究库名前缀替换为ASCII占位库名，其后目录名称字节不改"
+        },
+        "parentTableCatalog": {
+          "value": "fixture_parent_schema/Mix@0040@0020@7a7a@0060@6c49",
+          "sourceUtf8Sha256": "2525732f35abd49988a1a1b89acddd8a9591bfe4c122528bc0a52057d23c5ebf",
+          "publishedUtf8Sha256": "ba5d7ea51ec43b0a7438a7075ae9c4cb5339e60f982025c94f22a93c39e7a606",
+          "changed": true,
+          "transformation": "仅将已知完整研究库名前缀替换为ASCII占位库名，其后目录名称字节不改"
+        },
+        "foreignForName": {
+          "value": "fixture_child_schema/mix@ 空`汉",
+          "sourceUtf8Sha256": "e2ce76d4cc1876d234ed5a8f65578818ece32d274452cdcef1b5227694f02416",
+          "publishedUtf8Sha256": "4c48c1bc2c5d7d878667f44264cc63bbeb13a82f447349920b2810f3e285bfea",
+          "changed": true,
+          "transformation": "仅将已知完整研究库名前缀替换为ASCII占位库名，其后目录名称字节不改"
+        },
+        "foreignRefName": {
+          "value": "fixture_parent_schema/Mix@ 空`汉",
+          "sourceUtf8Sha256": "4cba76b745150957b8955f63221e0e08c033f1e21288b5c29db819de21569a37",
+          "publishedUtf8Sha256": "364ba8de19ce15ebd61a9456e1b5f4af60956827249531e1c913a94219bfabdc",
+          "changed": true,
+          "transformation": "仅将已知完整研究库名前缀替换为ASCII占位库名，其后目录名称字节不改"
+        }
+      },
+      "directCatalogNameEquality": {
+        "child": false,
+        "parent": false
+      },
+      "foreignColumns": [
+        {
+          "POS": 1,
+          "FOR_COL_NAME": "C二",
+          "REF_COL_NAME": "P二"
+        },
+        {
+          "POS": 2,
+          "FOR_COL_NAME": "C 一",
+          "REF_COL_NAME": "P 一"
+        }
+      ],
+      "keyColumnUsage": [
+        {
+          "ORDINAL_POSITION": 1,
+          "COLUMN_NAME": "C二",
+          "REFERENCED_COLUMN_NAME": "P二"
+        },
+        {
+          "ORDINAL_POSITION": 2,
+          "COLUMN_NAME": "C 一",
+          "REFERENCED_COLUMN_NAME": "P 一"
+        }
+      ],
+      "originalZeroBasedPositionHypothesisMatched": false,
+      "tupleOrderMatchesAfterSortingActualPosition": true,
+      "limitations": [
+        "仅真实创建增量证明本轮目标归属，不能搬作产品算法",
+        "ASCII随机库已改占位名，特殊库名未验",
+        "特殊表名有限样本不等于通用Unicode编码器已验",
+        "不含完整ID，也不按ID拆分名称",
+        "MySQL8零基POS假设false保留，实际元组顺序单独核对"
+      ]
+    },
+    {
+      "id": "mariadb-10.11.19-ascii",
+      "version": "10.11.19-MariaDB-ubu2204",
+      "sourceRun": "run02",
+      "sourceCase": "ascii",
+      "sourceReportSha256": "2e82da4c8302706c7c8f8b7db6aa6493f4da7fb2246e6d8356f26e1e4f570a93",
+      "lowerCaseTableNames": 0,
+      "catalogs": {
+        "tables": "INNODB_SYS_TABLES",
+        "foreign": "INNODB_SYS_FOREIGN",
+        "cols": "INNODB_SYS_FOREIGN_COLS"
+      },
+      "target": {
+        "childSchemaAlias": "fixture_child_schema",
+        "childTable": "ChildAscii",
+        "parentSchemaAlias": "fixture_child_schema",
+        "parentTable": "ParentAscii",
+        "foreignKeyName": "FkAscii"
+      },
+      "names": {
+        "childTableCatalog": {
+          "value": "fixture_child_schema/ChildAscii",
+          "sourceUtf8Sha256": "25783e7e573315a8d8a5c7c4881c9d86d99ddda8f66529b1280c40c3919c2f83",
+          "publishedUtf8Sha256": "97502e0a75585ddad309e558fbe3f40a0914ca8fbd830957613f84114adadb28",
+          "changed": true,
+          "transformation": "仅将已知完整研究库名前缀替换为ASCII占位库名，其后目录名称字节不改"
+        },
+        "parentTableCatalog": {
+          "value": "fixture_child_schema/ParentAscii",
+          "sourceUtf8Sha256": "ef829b5c662b64b51a786103a3bfdac24f4ac3366a627578a0d77d3e487e75b9",
+          "publishedUtf8Sha256": "9344343bb4b1e5ed5aff1851f6dba90ebc8159db9b57455f446345faeb8bbde6",
+          "changed": true,
+          "transformation": "仅将已知完整研究库名前缀替换为ASCII占位库名，其后目录名称字节不改"
+        },
+        "foreignForName": {
+          "value": "fixture_child_schema/ChildAscii",
+          "sourceUtf8Sha256": "25783e7e573315a8d8a5c7c4881c9d86d99ddda8f66529b1280c40c3919c2f83",
+          "publishedUtf8Sha256": "97502e0a75585ddad309e558fbe3f40a0914ca8fbd830957613f84114adadb28",
+          "changed": true,
+          "transformation": "仅将已知完整研究库名前缀替换为ASCII占位库名，其后目录名称字节不改"
+        },
+        "foreignRefName": {
+          "value": "fixture_child_schema/ParentAscii",
+          "sourceUtf8Sha256": "ef829b5c662b64b51a786103a3bfdac24f4ac3366a627578a0d77d3e487e75b9",
+          "publishedUtf8Sha256": "9344343bb4b1e5ed5aff1851f6dba90ebc8159db9b57455f446345faeb8bbde6",
+          "changed": true,
+          "transformation": "仅将已知完整研究库名前缀替换为ASCII占位库名，其后目录名称字节不改"
+        }
+      },
+      "directCatalogNameEquality": {
+        "child": true,
+        "parent": true
+      },
+      "foreignColumns": [
+        {
+          "POS": 0,
+          "FOR_COL_NAME": "C二",
+          "REF_COL_NAME": "P二"
+        },
+        {
+          "POS": 1,
+          "FOR_COL_NAME": "C 一",
+          "REF_COL_NAME": "P 一"
+        }
+      ],
+      "keyColumnUsage": [
+        {
+          "ORDINAL_POSITION": "1",
+          "COLUMN_NAME": "C二",
+          "REFERENCED_COLUMN_NAME": "P二"
+        },
+        {
+          "ORDINAL_POSITION": "2",
+          "COLUMN_NAME": "C 一",
+          "REFERENCED_COLUMN_NAME": "P 一"
+        }
+      ],
+      "originalZeroBasedPositionHypothesisMatched": true,
+      "tupleOrderMatchesAfterSortingActualPosition": true,
+      "limitations": [
+        "仅真实创建增量证明本轮目标归属，不能搬作产品算法",
+        "ASCII随机库已改占位名，特殊库名未验",
+        "特殊表名有限样本不等于通用Unicode编码器已验",
+        "不含完整ID，也不按ID拆分名称",
+        "MySQL8零基POS假设false保留，实际元组顺序单独核对"
+      ]
+    },
+    {
+      "id": "mariadb-10.11.19-combined",
+      "version": "10.11.19-MariaDB-ubu2204",
+      "sourceRun": "run02",
+      "sourceCase": "combined",
+      "sourceReportSha256": "2e82da4c8302706c7c8f8b7db6aa6493f4da7fb2246e6d8356f26e1e4f570a93",
+      "lowerCaseTableNames": 0,
+      "catalogs": {
+        "tables": "INNODB_SYS_TABLES",
+        "foreign": "INNODB_SYS_FOREIGN",
+        "cols": "INNODB_SYS_FOREIGN_COLS"
+      },
+      "target": {
+        "childSchemaAlias": "fixture_child_schema",
+        "childTable": "mix@ 空`汉",
+        "parentSchemaAlias": "fixture_parent_schema",
+        "parentTable": "Mix@ 空`汉",
+        "foreignKeyName": "Fk@ 空`汉"
+      },
+      "names": {
+        "childTableCatalog": {
+          "value": "fixture_child_schema/mix@0040@0020@7a7a@0060@6c49",
+          "sourceUtf8Sha256": "b7ccf713d17126ea606e16485649bc3b21a677cc0f8e163fa3588f16cc3ba05f",
+          "publishedUtf8Sha256": "586dcafb7cf5b34fdc99f1e6ec93698d07e7c0615a35f78bd43d127a1598875e",
+          "changed": true,
+          "transformation": "仅将已知完整研究库名前缀替换为ASCII占位库名，其后目录名称字节不改"
+        },
+        "parentTableCatalog": {
+          "value": "fixture_parent_schema/Mix@0040@0020@7a7a@0060@6c49",
+          "sourceUtf8Sha256": "544e7e39535e40feff4827bdb9a9a03fb4e9777aff1ac2d8abac2d4c508579a6",
+          "publishedUtf8Sha256": "ba5d7ea51ec43b0a7438a7075ae9c4cb5339e60f982025c94f22a93c39e7a606",
+          "changed": true,
+          "transformation": "仅将已知完整研究库名前缀替换为ASCII占位库名，其后目录名称字节不改"
+        },
+        "foreignForName": {
+          "value": "fixture_child_schema/mix@0040@0020@7a7a@0060@6c49",
+          "sourceUtf8Sha256": "b7ccf713d17126ea606e16485649bc3b21a677cc0f8e163fa3588f16cc3ba05f",
+          "publishedUtf8Sha256": "586dcafb7cf5b34fdc99f1e6ec93698d07e7c0615a35f78bd43d127a1598875e",
+          "changed": true,
+          "transformation": "仅将已知完整研究库名前缀替换为ASCII占位库名，其后目录名称字节不改"
+        },
+        "foreignRefName": {
+          "value": "fixture_parent_schema/Mix@0040@0020@7a7a@0060@6c49",
+          "sourceUtf8Sha256": "544e7e39535e40feff4827bdb9a9a03fb4e9777aff1ac2d8abac2d4c508579a6",
+          "publishedUtf8Sha256": "ba5d7ea51ec43b0a7438a7075ae9c4cb5339e60f982025c94f22a93c39e7a606",
+          "changed": true,
+          "transformation": "仅将已知完整研究库名前缀替换为ASCII占位库名，其后目录名称字节不改"
+        }
+      },
+      "directCatalogNameEquality": {
+        "child": true,
+        "parent": true
+      },
+      "foreignColumns": [
+        {
+          "POS": 0,
+          "FOR_COL_NAME": "C二",
+          "REF_COL_NAME": "P二"
+        },
+        {
+          "POS": 1,
+          "FOR_COL_NAME": "C 一",
+          "REF_COL_NAME": "P 一"
+        }
+      ],
+      "keyColumnUsage": [
+        {
+          "ORDINAL_POSITION": "1",
+          "COLUMN_NAME": "C二",
+          "REFERENCED_COLUMN_NAME": "P二"
+        },
+        {
+          "ORDINAL_POSITION": "2",
+          "COLUMN_NAME": "C 一",
+          "REFERENCED_COLUMN_NAME": "P 一"
+        }
+      ],
+      "originalZeroBasedPositionHypothesisMatched": true,
+      "tupleOrderMatchesAfterSortingActualPosition": true,
+      "limitations": [
+        "仅真实创建增量证明本轮目标归属，不能搬作产品算法",
+        "ASCII随机库已改占位名，特殊库名未验",
+        "特殊表名有限样本不等于通用Unicode编码器已验",
+        "不含完整ID，也不按ID拆分名称",
+        "MySQL8零基POS假设false保留，实际元组顺序单独核对"
+      ]
+    },
+    {
+      "id": "mariadb-11.4.13-ascii",
+      "version": "11.4.13-MariaDB-ubu2404",
+      "sourceRun": "run02",
+      "sourceCase": "ascii",
+      "sourceReportSha256": "fac8202bf0de6f80c15d4984657239a964c464229b8676b2b99076b727809d71",
+      "lowerCaseTableNames": 0,
+      "catalogs": {
+        "tables": "INNODB_SYS_TABLES",
+        "foreign": "INNODB_SYS_FOREIGN",
+        "cols": "INNODB_SYS_FOREIGN_COLS"
+      },
+      "target": {
+        "childSchemaAlias": "fixture_child_schema",
+        "childTable": "ChildAscii",
+        "parentSchemaAlias": "fixture_child_schema",
+        "parentTable": "ParentAscii",
+        "foreignKeyName": "FkAscii"
+      },
+      "names": {
+        "childTableCatalog": {
+          "value": "fixture_child_schema/ChildAscii",
+          "sourceUtf8Sha256": "eac8e21cab7918898292ef03fdbb9608b8dd7e9db08015850763766d3477a871",
+          "publishedUtf8Sha256": "97502e0a75585ddad309e558fbe3f40a0914ca8fbd830957613f84114adadb28",
+          "changed": true,
+          "transformation": "仅将已知完整研究库名前缀替换为ASCII占位库名，其后目录名称字节不改"
+        },
+        "parentTableCatalog": {
+          "value": "fixture_child_schema/ParentAscii",
+          "sourceUtf8Sha256": "aa2367d2501d8279b019fe0ade28545c2029de7b2df9125af441f8e1a7437741",
+          "publishedUtf8Sha256": "9344343bb4b1e5ed5aff1851f6dba90ebc8159db9b57455f446345faeb8bbde6",
+          "changed": true,
+          "transformation": "仅将已知完整研究库名前缀替换为ASCII占位库名，其后目录名称字节不改"
+        },
+        "foreignForName": {
+          "value": "fixture_child_schema/ChildAscii",
+          "sourceUtf8Sha256": "eac8e21cab7918898292ef03fdbb9608b8dd7e9db08015850763766d3477a871",
+          "publishedUtf8Sha256": "97502e0a75585ddad309e558fbe3f40a0914ca8fbd830957613f84114adadb28",
+          "changed": true,
+          "transformation": "仅将已知完整研究库名前缀替换为ASCII占位库名，其后目录名称字节不改"
+        },
+        "foreignRefName": {
+          "value": "fixture_child_schema/ParentAscii",
+          "sourceUtf8Sha256": "aa2367d2501d8279b019fe0ade28545c2029de7b2df9125af441f8e1a7437741",
+          "publishedUtf8Sha256": "9344343bb4b1e5ed5aff1851f6dba90ebc8159db9b57455f446345faeb8bbde6",
+          "changed": true,
+          "transformation": "仅将已知完整研究库名前缀替换为ASCII占位库名，其后目录名称字节不改"
+        }
+      },
+      "directCatalogNameEquality": {
+        "child": true,
+        "parent": true
+      },
+      "foreignColumns": [
+        {
+          "POS": 0,
+          "FOR_COL_NAME": "C二",
+          "REF_COL_NAME": "P二"
+        },
+        {
+          "POS": 1,
+          "FOR_COL_NAME": "C 一",
+          "REF_COL_NAME": "P 一"
+        }
+      ],
+      "keyColumnUsage": [
+        {
+          "ORDINAL_POSITION": "1",
+          "COLUMN_NAME": "C二",
+          "REFERENCED_COLUMN_NAME": "P二"
+        },
+        {
+          "ORDINAL_POSITION": "2",
+          "COLUMN_NAME": "C 一",
+          "REFERENCED_COLUMN_NAME": "P 一"
+        }
+      ],
+      "originalZeroBasedPositionHypothesisMatched": true,
+      "tupleOrderMatchesAfterSortingActualPosition": true,
+      "limitations": [
+        "仅真实创建增量证明本轮目标归属，不能搬作产品算法",
+        "ASCII随机库已改占位名，特殊库名未验",
+        "特殊表名有限样本不等于通用Unicode编码器已验",
+        "不含完整ID，也不按ID拆分名称",
+        "MySQL8零基POS假设false保留，实际元组顺序单独核对"
+      ]
+    },
+    {
+      "id": "mariadb-11.4.13-combined",
+      "version": "11.4.13-MariaDB-ubu2404",
+      "sourceRun": "run02",
+      "sourceCase": "combined",
+      "sourceReportSha256": "fac8202bf0de6f80c15d4984657239a964c464229b8676b2b99076b727809d71",
+      "lowerCaseTableNames": 0,
+      "catalogs": {
+        "tables": "INNODB_SYS_TABLES",
+        "foreign": "INNODB_SYS_FOREIGN",
+        "cols": "INNODB_SYS_FOREIGN_COLS"
+      },
+      "target": {
+        "childSchemaAlias": "fixture_child_schema",
+        "childTable": "mix@ 空`汉",
+        "parentSchemaAlias": "fixture_parent_schema",
+        "parentTable": "Mix@ 空`汉",
+        "foreignKeyName": "Fk@ 空`汉"
+      },
+      "names": {
+        "childTableCatalog": {
+          "value": "fixture_child_schema/mix@0040@0020@7a7a@0060@6c49",
+          "sourceUtf8Sha256": "87178938926d6a6c5a519249697b56c1c24582a00e0798f972541f424fd84fb2",
+          "publishedUtf8Sha256": "586dcafb7cf5b34fdc99f1e6ec93698d07e7c0615a35f78bd43d127a1598875e",
+          "changed": true,
+          "transformation": "仅将已知完整研究库名前缀替换为ASCII占位库名，其后目录名称字节不改"
+        },
+        "parentTableCatalog": {
+          "value": "fixture_parent_schema/Mix@0040@0020@7a7a@0060@6c49",
+          "sourceUtf8Sha256": "ede61027775717ca02b496a3c21bb4cdf9a9fe82ff4d9ecef488e9779976950a",
+          "publishedUtf8Sha256": "ba5d7ea51ec43b0a7438a7075ae9c4cb5339e60f982025c94f22a93c39e7a606",
+          "changed": true,
+          "transformation": "仅将已知完整研究库名前缀替换为ASCII占位库名，其后目录名称字节不改"
+        },
+        "foreignForName": {
+          "value": "fixture_child_schema/mix@0040@0020@7a7a@0060@6c49",
+          "sourceUtf8Sha256": "87178938926d6a6c5a519249697b56c1c24582a00e0798f972541f424fd84fb2",
+          "publishedUtf8Sha256": "586dcafb7cf5b34fdc99f1e6ec93698d07e7c0615a35f78bd43d127a1598875e",
+          "changed": true,
+          "transformation": "仅将已知完整研究库名前缀替换为ASCII占位库名，其后目录名称字节不改"
+        },
+        "foreignRefName": {
+          "value": "fixture_parent_schema/Mix@0040@0020@7a7a@0060@6c49",
+          "sourceUtf8Sha256": "ede61027775717ca02b496a3c21bb4cdf9a9fe82ff4d9ecef488e9779976950a",
+          "publishedUtf8Sha256": "ba5d7ea51ec43b0a7438a7075ae9c4cb5339e60f982025c94f22a93c39e7a606",
+          "changed": true,
+          "transformation": "仅将已知完整研究库名前缀替换为ASCII占位库名，其后目录名称字节不改"
+        }
+      },
+      "directCatalogNameEquality": {
+        "child": true,
+        "parent": true
+      },
+      "foreignColumns": [
+        {
+          "POS": 0,
+          "FOR_COL_NAME": "C二",
+          "REF_COL_NAME": "P二"
+        },
+        {
+          "POS": 1,
+          "FOR_COL_NAME": "C 一",
+          "REF_COL_NAME": "P 一"
+        }
+      ],
+      "keyColumnUsage": [
+        {
+          "ORDINAL_POSITION": "1",
+          "COLUMN_NAME": "C二",
+          "REFERENCED_COLUMN_NAME": "P二"
+        },
+        {
+          "ORDINAL_POSITION": "2",
+          "COLUMN_NAME": "C 一",
+          "REFERENCED_COLUMN_NAME": "P 一"
+        }
+      ],
+      "originalZeroBasedPositionHypothesisMatched": true,
+      "tupleOrderMatchesAfterSortingActualPosition": true,
+      "limitations": [
+        "仅真实创建增量证明本轮目标归属，不能搬作产品算法",
+        "ASCII随机库已改占位名，特殊库名未验",
+        "特殊表名有限样本不等于通用Unicode编码器已验",
+        "不含完整ID，也不按ID拆分名称",
+        "MySQL8零基POS假设false保留，实际元组顺序单独核对"
+      ]
+    }
+  ]
+}

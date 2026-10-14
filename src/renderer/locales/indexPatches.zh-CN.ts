@@ -1,0 +1,23 @@
+/** 索引差异编辑的界面与确认文字集中管理，协议风险 ID 不直接当中文说明。 */
+export const indexPatchZh = {
+  title: '索引与主键差异', read: '重新读取实际索引', reading: '读取索引定义', preview: '生成索引差异预览', apply: '确认执行本次索引差异', cancel: '取消索引任务', close: '关闭', back: '返回索引差异编辑',
+  maintenance: '请在维护窗口执行并暂停并行结构变更。执行前重核仍不能消除外部 DDL 并发窗口。',
+  ddl: 'DDL 可能隐式提交；取消与事务回滚不能撤销已完成的索引修改。此操作使用独立结构连接，不提交或回滚查询标签事务。',
+  readonly: '当前索引只读。', readonlyTable: '当前服务器或表的写入能力尚未证明，仅显示实际定义。', capabilityUnknown: '能力未知', noChange: '没有实际索引差异。', missing: '索引或字段引用不属于当前快照。', duplicate: '最终索引名称或引用重复。', invalidPrimary: '主键名称固定为 PRIMARY，首批只接受已经 NOT NULL 的完整普通字段。',
+  noColumns: '没有已证明可用于受控索引的普通字段。', unknownColumn: '字段类型或索引能力尚未证明，不能生成补丁。', invalidPrefix: '前缀长度或单位能力未证明，不能自动补值或截短。', unsupportedDirection: '当前服务器未证明能够保留 DESC 方向。', tooManyParts: '索引字段数量超过实际服务器限制。', tooLongName: '索引名称超过实际服务器字符限制。', tooLongComment: '索引注释超过本版保守 UTF-8 字节预算。', primaryCount: '最终只能保留一个主键。',
+  name: '索引名称', kind: '索引种类', method: '索引方法', comment: '索引注释', ordinary: '普通索引', unique: '唯一索引', primary: '主键', unsupported: '只读索引',
+  parts: '有序索引字段', column: '索引字段 {0}', prefix: '索引前缀长度 {0}', direction: '索引方向 {0}', asc: 'ASC（升序）', desc: 'DESC（降序）', fullColumn: '空值表示完整字段；字符列按字符、二进制列按字节。', characters: '字符', bytes: '字节', prefixForbidden: '不支持前缀', prefixUnknown: '前缀能力未知',
+  moveUp: '上移索引字段 {0}', moveDown: '下移索引字段 {0}', removePart: '移除索引字段 {0}', addPart: '添加索引字段', original: '原索引片段（只读）', edit: '编辑索引差异', editNamed: '编辑索引差异 {0}', add: '新增 BTREE 索引', drop: '标记删除索引', dropNamed: '标记删除索引 {0}', undo: '撤销索引草稿', undoNamed: '撤销索引草稿 {0}', rowSave: '应用索引草稿', editorCancel: '取消本行编辑', patches: '本批 {0} 项索引差异',
+  added: '将新增', deleted: '将删除', changed: '将修改', unchanged: '未修改', deleteRisk: '本操作只标记草稿。删除唯一索引或主键会移除对应约束并可能影响可靠行定位，请核对依赖后继续。',
+  discard: '重新读取或关闭将放弃尚未应用的索引差异，是否继续？', discardEditor: '本行仍在编辑，切换会放弃尚未应用到草稿的输入，是否继续？', closeUnknown: '本次 DDL 可能已经执行。请先核对实际定义；关闭会丢失本窗口的预览和草稿，确认关闭？', resetUnknown: '请先核对服务器实际定义；重新读取不会重放旧 DDL。',
+  targetChanged: '目标或连接配置已变化，本窗口不能继续预览或执行，请关闭后重新打开。', previewMismatch: '响应目标或原定义与当前快照不一致，未应用任何 DDL。', expired: '快照或预览已过期，请重新读取并生成预览。',
+  confirmation: '索引风险确认', fixedSql: '索引 SQL 预览（只读）', ackImplicit: '我确认 DDL 可能隐式提交，事务回滚不能撤销已完成的索引修改。', ackWindow: '我确认在维护窗口执行并暂停并行结构变更；执行前重核不能消除外部 DDL 并发窗口。',
+  ackUnique: '我确认本次操作可能移除唯一约束，已核对数据写入、可靠行定位与外部依赖。', ackPrimary: '我确认主键修改可能重建物理布局、影响行定位并耗时，已核对维护与恢复安排。',
+  unsupportedAck: '当前版本不支持此风险确认：{0}。本次计划不能执行。',
+  notSent: '尚未投递 DDL。', failed: '服务器报告失败，请核对实际定义，不要假定所有结构都未变化。', unknown: '无法确定服务器最终状态；请核对实际定义。不会自动重试或重放。', succeeded: '索引差异已执行并核验。', verificationFailed: '索引修改已完成，但结果未完整核验；不能当作未执行重试。',
+  cancelling: '已请求取消，等待实际任务与资源释放。', consumed: '本次执行令牌已消费，不能再次执行；需明确重新读取并生成新预览。', releaseFailed: '索引令牌释放失败：{0}',
+  connecting: '建立结构连接', readingPhase: '读取原索引', rechecking: '重核目标和依赖', executing: '执行索引差异', verifying: '核验实际定义', releasing: '释放结构资源',
+  dataDirty: '同目标表页有未提交的数据草稿，请先提交或明确放弃，再编辑索引差异。', dataBusy: '同目标表页仍有活动操作，请等待实际完成后再编辑索引差异。', workspaceBudget: '工作区标签超过检查预算，请先关闭部分标签。', staleTable: '该表可能发生索引变更，请核对实际定义后手工刷新；现有数据草稿未丢弃。',
+  incomingPartial: '入向外键目录不完整；不能据此认定旧索引没有依赖。', resultProgress: '索引任务进度', previewOnly: '预览只读取和校验结构，不执行 DDL。',
+  batchReview: '此操作单独预览受依赖限制；当前仅允许与其他增改草稿一起送审。集中预览会重新验证整批依赖，形成草稿不代表可以执行。', renameUnsupported: '当前索引或服务器未证明支持原生改名。',
+};

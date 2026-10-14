@@ -1,19 +1,17 @@
 import { createHash, randomUUID } from 'node:crypto';
-import type { FieldPacket, ResultSetHeader } from 'mysql2';
-import type { ManagedConnection } from './connection';
-import { qualified } from './sql';
-import { resolveCollationEncoding } from './metadata';
-import { editableColumnType, parseTableColumnDefinition, tableDefinitionTokens } from './tableColumnDefinition';
+import { structureTaskQuery as columnTaskQuery, readStructureDefinition as readDefinition, structureDocumentOf as documentOf, assertStructureDefinitionUnchanged as assertSnapshot, sameStructureFragment as sameFragment, type StructureTaskContext as ColumnTaskContext, type StructureColumnEncoding as ColumnEncoding, type StructureDefinitionRead as DefinitionRead } from './structureDefinition';
+export { columnTaskQuery };
+export type { ColumnTaskContext };
+import type { ResultSetHeader } from 'mysql2';
+import { StructurePatchCache, structureCacheLimits, type StructureCacheScope } from './structurePatchCache';
+import { editableColumnType, tableDefinitionTokens } from './tableColumnDefinition';
 import { buildTableColumnPatchSql, type ColumnPatchSqlPlan } from './tableColumnPatchSql';
 import { columnPatchAccess, hasUnprovenBinaryDefault, definitionOmittingSqlModes, readControlledTimestampDefault, tableColumnDefaultRisks, tableColumnDefaultRiskMessage, tableColumnPatchLimits, validateColumnPatches, type ColumnPatch, type TableColumnApplyInput, type TableColumnApplyOutput, type TableColumnApplyProgress, type TableColumnDefinitionDocument, type TableColumnGetInput, type TableColumnGetOutput, type TableColumnPatchTarget, type TableColumnPreviewInput, type TableColumnPreviewOutput, type TableColumnView, type TableDefinitionContext } from '../shared/tableColumnPatches';
 import type { ColumnDefaultPatch, ColumnTypePatch, ReadColumnDefault, TableColumnDefinition } from '../shared/tableColumnPatches';
 
-export const columnTaskLimits = { ttlMs: 120000, snapshots: 32, previews: 32, bytes: 16 * 1024 * 1024 } as const;
-export interface ColumnTaskContext { managed: ManagedConnection; checkCancelled(): void; report(): void; commandStarted(): () => void; }
-export interface ColumnTaskOptions { label: string; columnPatch: TableColumnApplyProgress; }
+export const columnTaskLimits = structureCacheLimits;
+export interface ColumnTaskOptions { label: string; columnPatch: TableColumnApplyProgress; executionTarget?: { database: string; table: string }; }
 export interface ColumnTaskHost { run<T>(connectionId: string, taskId: string, action: (context: ColumnTaskContext) => Promise<T>, options: ColumnTaskOptions): Promise<T>; }
-interface ColumnEncoding { name: string; charset: string | null; collation: string | null; }
-interface DefinitionRead { source: string; context: TableDefinitionContext; originalMode: string; normalizedMode: string; identity: string; serverVersion: string; nullability: [string, boolean][]; encodings: ColumnEncoding[]; tableEncoding: { charset: string; collation: string }; }
 interface Snapshot extends DefinitionRead { id: string; target: TableColumnPatchTarget; revision: number; expires: number; refs: Map<string, string>; bytes: number; }
 interface Preview { snapshot: Snapshot; plan: ColumnPatchSqlPlan; patches: ColumnPatch[]; expires: number; bytes: number; }
 
@@ -22,88 +20,6 @@ const hash = (source: string): string => createHash('sha256').update(source).dig
 /** 所有准备与终态共享一份证据，释放失败不能把已收到的 DDL OK 改成未提交。 */
 const initialProgress = (): TableColumnApplyProgress => ({ phase: 'connecting', ddlSubmitted: false, ddlCompleted: false, definitionVerified: false, outcome: 'not-sent' });
 
-/** 结构短会话等待真实回调/连接终态；取消负责 KILL 后关闭，不因 AbortSignal 提前假报命令已结束。 */
-export function columnTaskQuery<T>(context: ColumnTaskContext, sql: string, submitted?: () => void): Promise<{ rows: T; fields: FieldPacket[] }> {
-  context.checkCancelled();
-  const managed = context.managed;
-  if (managed.broken) return Promise.reject(new Error('结构连接已断开；操作未自动重放'));
-  return new Promise((resolve, reject) => {
-    const commandFinished = context.commandStarted();
-    let settled = false;
-    const cleanup = (): void => { managed.connection.removeListener('error', fail); managed.connection.removeListener('end', ended); managed.signal?.removeEventListener('abort', aborted); commandFinished(); };
-    const fail = (error: Error): void => { if (!settled) { settled = true; cleanup(); reject(error); } };
-    const ended = (): void => fail(new Error('结构连接在命令完成前断开，必须核对服务器定义；未自动重放'));
-    // mysql2 主动 destroy 设置 _closing 后可能只发底层 close，没有 connection.end/error。
-    // 成功 KILL 的路径在原命令终态之后才 abort；只有控制失败才依靠此本地破坏终态退出，并保留结果未知。
-    const aborted = (): void => fail(new Error('本地结构连接已中止，不能据此确认服务器 DDL 是否结束；请核对实际定义'));
-    managed.connection.once('error', fail); managed.connection.once('end', ended);
-    managed.signal?.addEventListener('abort', aborted, { once: true });
-    try {
-      // submitted 与同步发送之间不插入 await；发送异常仍保守视为结果未知。
-      submitted?.();
-      managed.connection.query(sql, (error, rows, fields) => {
-        if (error) { fail(error); return; }
-        if (!settled) { settled = true; cleanup(); resolve({ rows: rows as T, fields: fields as FieldPacket[] }); }
-      });
-    } catch (error) { fail(error as Error); }
-  });
-}
-
-/** 只在新的结构会话规范 SHOW CREATE；不修改任何已有查询标签的模式或诊断状态。 */
-async function readDefinition(context: ColumnTaskContext, target: TableColumnPatchTarget, normalize: boolean): Promise<DefinitionRead> {
-  const managed = context.managed;
-  const before = (await columnTaskQuery<Record<string, unknown>[]>(context, 'SELECT @@SESSION.sql_mode AS sqlMode, @@hostname AS hostname, @@port AS port, @@server_id AS serverId, CURRENT_USER() AS currentUser, CONNECTION_ID() AS connectionId, @@character_set_connection AS characterSetConnection, @@collation_connection AS collationConnection, @@sql_quote_show_create AS quoteShowCreate')).rows[0];
-  if (!before || typeof before.sqlMode !== 'string' || Number(before.connectionId) !== managed.connection.threadId) throw new Error('无法确认结构会话身份');
-  const originalMode = before.sqlMode;
-  if (!/^[A-Z0-9_,]*$/i.test(originalMode)) throw new Error('服务器 SQL 模式无效');
-  const omitted = new Set<string>(definitionOmittingSqlModes);
-  const normalizedMode = originalMode.split(',').filter(value => !omitted.has(value.toUpperCase())).join(',');
-  if (normalize) {
-    if (normalizedMode !== originalMode) await columnTaskQuery(context, `SET SESSION sql_mode = '${normalizedMode}'`);
-    await columnTaskQuery(context, 'SET SESSION sql_quote_show_create = 1');
-    await columnTaskQuery(context, 'SET NAMES utf8mb4 COLLATE utf8mb4_bin');
-  }
-  const modeRow = (await columnTaskQuery<{ sqlMode: string; quoteShowCreate: number; charset: string; collation: string }[]>(context, 'SELECT @@SESSION.sql_mode AS sqlMode, @@sql_quote_show_create AS quoteShowCreate, @@character_set_connection AS charset, @@collation_connection AS collation')).rows[0];
-  if (!modeRow || typeof modeRow.sqlMode !== 'string' || modeRow.sqlMode.split(',').some(value => omitted.has(value.toUpperCase())) || Number(modeRow.quoteShowCreate) !== 1 || modeRow.charset !== 'utf8mb4' || modeRow.collation !== 'utf8mb4_bin') throw new Error('结构会话未能提供完整规范定义，未发送结构变更');
-  let uuid: string | undefined;
-  if (managed.status.dialect === 'mysql') {
-    uuid = (await columnTaskQuery<{ uuid: string }[]>(context, 'SELECT @@server_uuid AS uuid')).rows[0]?.uuid;
-    if (typeof uuid !== 'string' || !uuid) throw new Error('无法确认服务器身份');
-  }
-  const rows = (await columnTaskQuery<Record<string, unknown>[]>(context, `SHOW CREATE TABLE ${qualified(target.database, target.table)}`)).rows;
-  if (rows.length !== 1 || typeof rows[0]['Create Table'] !== 'string') throw new Error('对象不是可修改的基本表或无权读取完整定义');
-  const source = rows[0]['Create Table'];
-  if (Buffer.byteLength(source) > tableColumnPatchLimits.definitionBytes) throw new Error('表定义超过 2 MiB');
-  const mode = modeRow.sqlMode.split(',');
-  const definitionContext: TableDefinitionContext = { dialect: managed.status.dialect, mode: { noBackslashEscapes: mode.includes('NO_BACKSLASH_ESCAPES'), ansiQuotes: mode.includes('ANSI_QUOTES') } };
-  const parsed = parseTableColumnDefinition(source, definitionContext);
-  if (parsed.table !== target.table || (parsed.database !== undefined && parsed.database !== target.database)) throw new Error('返回的表身份与请求不一致');
-  // SHOW CREATE 对普通可空列常省略 NULL；真实目录值覆盖显示，但不能覆盖与原片段矛盾的元数据。
-  const db = `CONVERT(X'${Buffer.from(target.database, 'utf8').toString('hex')}' USING utf8mb4)`, table = `CONVERT(X'${Buffer.from(target.table, 'utf8').toString('hex')}' USING utf8mb4)`;
-  const tableEncodings = (await columnTaskQuery<{ charset: string | null; collation: string }[]>(context, `SELECT c.CHARACTER_SET_NAME AS charset, t.TABLE_COLLATION AS collation FROM information_schema.TABLES t LEFT JOIN information_schema.COLLATIONS c ON c.COLLATION_NAME = t.TABLE_COLLATION WHERE t.TABLE_SCHEMA = ${db} AND t.TABLE_NAME = ${table}`)).rows;
-  if (tableEncodings.length !== 1 || typeof tableEncodings[0].collation !== 'string' || !tableEncodings[0].collation) throw new Error('无法确认表的默认字符集与排序规则');
-  const tableEncoding = typeof tableEncodings[0].charset === 'string' && tableEncodings[0].charset ? { charset: tableEncodings[0].charset, collation: tableEncodings[0].collation } : await resolveCollationEncoding(managed, tableEncodings[0].collation, async sql => (await columnTaskQuery<Record<string, unknown>[]>(context, sql)).rows);
-  const metadata = (await columnTaskQuery<{ name: string; nullable: string; extra: string; charset: string | null; collation: string | null }[]>(context, `SELECT COLUMN_NAME AS name, IS_NULLABLE AS nullable, EXTRA AS extra, CHARACTER_SET_NAME AS charset, COLLATION_NAME AS collation FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = ${db} AND TABLE_NAME = ${table} ORDER BY ORDINAL_POSITION`)).rows;
-  if (metadata.length !== parsed.columns.length || metadata.some((column, index) => column.name !== parsed.columns[index].name || !['YES', 'NO'].includes(column.nullable))) throw new Error('字段目录与完整定义不一致，请重新读取');
-  const nullability: [string, boolean][] = [];
-  for (const [index, column] of metadata.entries()) {
-    const raw = parsed.columns[index];
-    if (raw.nullable !== undefined && raw.nullable !== (column.nullable === 'YES')) throw new Error('字段可空性目录与定义矛盾');
-    if (/\bauto_increment\b/i.test(column.extra) !== raw.attributes.some(attribute => attribute.kind === 'auto-increment')) throw new Error('SHOW CREATE 隐藏了真实自增属性，不能生成字段修改');
-    if (!((column.charset === null && column.collation === null) || (typeof column.charset === 'string' && typeof column.collation === 'string'))) throw new Error('字段字符集目录无效');
-    nullability.push([column.name, column.nullable === 'YES']);
-  }
-  const identity = hash(JSON.stringify({ hostname: before.hostname, port: before.port, serverId: before.serverId, currentUser: before.currentUser, uuid, dialect: managed.status.dialect, version: managed.status.version }));
-  return { source, context: definitionContext, originalMode, normalizedMode: modeRow.sqlMode, identity, serverVersion: managed.status.version, nullability, tableEncoding, encodings: metadata.map(({ name, charset, collation }) => ({ name, charset, collation })) };
-}
-
-/** 同一读取快照中的目录真值与源码一起使用，不将缺省 NULL 误显示为未知或不可空。 */
-function documentOf(read: DefinitionRead): TableColumnDefinitionDocument {
-  const document = parseTableColumnDefinition(read.source, read.context), nullable = new Map(read.nullability);
-  for (const column of document.columns) column.nullable = nullable.get(column.name);
-  return document;
-}
-
 /** 投影使用服务端快照引用及共享能力，不把名称对象当字典，也不泄露物理连接编号。 */
 function views(document: TableColumnDefinitionDocument, refs: Map<string, string>): TableColumnView[] {
   const byName = new Map([...refs].map(([ref, name]) => [name, ref]));
@@ -111,21 +27,6 @@ function views(document: TableColumnDefinitionDocument, refs: Map<string, string
     // 只改变显示投影，不把损失字节的文本伪装成原值；内部可定位 DEFAULT 仍允许显式专用覆盖。
     default: hasUnprovenBinaryDefault(column) ? { kind: 'opaque' as const, sql: column.attributes.find(attribute => attribute.kind === 'default')!.raw, reason: '二进制默认值的原始字节不可证明，请显式选择新默认值或删除默认值' } : column.default,
     comment: column.comment, rawDefinition: column.raw, access: columnPatchAccess(column, document.context.dialect) }));
-}
-
-/** 先比较原始身份、真实模式和完整定义，不能把另一个服务器上同名表当作旧预览。 */
-function assertSnapshot(snapshot: Snapshot, read: DefinitionRead): void {
-  if (snapshot.identity !== read.identity) throw new Error('服务器身份已变化，请重新读取和预览；未发送 DDL');
-  if (snapshot.originalMode !== read.originalMode || snapshot.normalizedMode !== read.normalizedMode) throw new Error('结构会话 SQL 模式已变化，请重新预览；未发送 DDL');
-  if (snapshot.source !== read.source) throw new Error('表定义已变化，请重新读取和预览；未发送 DDL');
-  if (JSON.stringify(snapshot.nullability) !== JSON.stringify(read.nullability)) throw new Error('字段目录已变化，请重新读取和预览；未发送 DDL');
-  if (JSON.stringify(snapshot.encodings) !== JSON.stringify(read.encodings) || JSON.stringify(snapshot.tableEncoding) !== JSON.stringify(read.tableEncoding)) throw new Error('字段字符集目录已变化，请重新读取和预览；未发送 DDL');
-}
-
-/** 规范词法比较用于未修改结构核验，忽略布局空白但不忽略文字量和可执行片段。 */
-function sameFragment(a: string, b: string, context: TableDefinitionContext): boolean {
-  const tokens = (text: string) => tableDefinitionTokens(text, context).map(token => [token.kind, token.kind === 'word' ? token.value.toUpperCase() : token.value]);
-  return JSON.stringify(tokens(a)) === JSON.stringify(tokens(b));
 }
 
 /** 精确十进制规范化只操作字符串和有界指数，不经过 JS 浮点。 */
@@ -242,9 +143,12 @@ function verifyAfter(preview: Preview, document: TableColumnDefinitionDocument, 
 
 /** 快照和一次性预览只保留内存；任何失败都不自动重放 DDL，也不持有预览连接。 */
 export class TableColumnPatchTasks {
-  private readonly snapshots = new Map<string, Snapshot>();
-  private readonly previews = new Map<string, Preview>();
-  constructor(private readonly host: ColumnTaskHost, private readonly now: () => number = () => Date.now()) {}
+  private readonly snapshots: StructureCacheScope<Snapshot>;
+  private readonly previews: StructureCacheScope<Preview>;
+  constructor(private readonly host: ColumnTaskHost, private readonly now: () => number = () => Date.now(), private readonly cache = new StructurePatchCache(now)) {
+    this.snapshots = cache.scope('columns', 'snapshot', value => ({ connectionId: value.target.connectionId, expires: value.expires, bytes: value.bytes }));
+    this.previews = cache.scope('columns', 'preview', value => ({ connectionId: value.snapshot.target.connectionId, expires: value.expires, bytes: value.bytes }));
+  }
 
   /** 关闭或连接重配后销毁对应能力令牌，不影响任何用户 SQL 会话。 */
   release(connectionId?: string): void {
@@ -261,10 +165,7 @@ export class TableColumnPatchTasks {
   }
   /** 到期清理后执行整体容量检查，不静默驱逐仍有效的预览。 */
   private capacity(bytes: number, kind: 'snapshot' | 'preview'): void {
-    for (const [id, value] of this.snapshots) if (value.expires <= this.now()) this.snapshots.delete(id);
-    for (const [id, value] of this.previews) if (value.expires <= this.now()) this.previews.delete(id);
-    const used = [...this.snapshots.values(), ...this.previews.values()].reduce((sum, value) => sum + value.bytes, 0);
-    if (bytes + used > columnTaskLimits.bytes || (kind === 'snapshot' ? this.snapshots.size >= columnTaskLimits.snapshots : this.previews.size >= columnTaskLimits.previews)) throw new Error('结构预览缓存已达上限，请关闭旧预览或等待两分钟后重试');
+    this.cache.capacity(bytes, kind);
   }
   /** 主进程配置修订必须是可信非负整数；客户端无此公开字段。 */
   private revision(revision: unknown): number {
@@ -354,7 +255,7 @@ export class TableColumnPatchTasks {
         if (document.columns.some(hasUnprovenBinaryDefault)) output.warnings.push('二进制默认值仍以不能证明原始字节的文本显示；DDL 已完成，但这些字段的默认值未核验，不能据此自动重建或重复执行。');
         if (!output.definitionVerified) output.verificationError = 'DDL 已完成，但定义变更及未改属性尚未全部核验一致，请核对最新定义；不要重复执行';
       } catch { output.verificationError = 'DDL 已收到成功响应，但取消、断线或读取失败使后续定义未能核验；不要重复执行'; }
-      context.report(); this.release(snapshot.target.connectionId); return output;
-    }, { label: '执行字段变更', columnPatch: progress });
+      context.report(); this.cache.release(snapshot.target.connectionId); return output;
+    }, { label: '执行字段变更', columnPatch: progress, executionTarget: snapshot.target });
   }
 }

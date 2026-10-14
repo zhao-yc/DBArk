@@ -18,6 +18,8 @@
 
 百万行用例打印实际行数、末页大小、造数/分页/导出耗时、文件字节数及 RSS 采样峰值。内存上限是针对本用例的回归门槛，不代表所有操作系统或字段分布的性能承诺。测试产生的密码只保存在受忽略的本地环境文件中；日志和提交文件不得包含密码、私钥、业务数据。
 
+索引差异的真实生产 API、特殊旧键与取消由 `engine-index-patches.integration.test.ts` 验证，权限夹具与字段套件共用；每轮随机 `dbark_idxpatch_*` 库，失败先保留自主定义证据再精确清理。适用条件、原始失败和各传输结果见 [索引验收](acceptance-o01-indexes-20261014.md)。未启用 My8 专属能力时明确跳过，不将其计为通过。
+
 ## mysql2 的 TLS 补丁
 
 项目精确锁定 `mysql2@3.24.5`，通过 `pnpm-workspace.yaml` 的 `patchedDependencies` 应用 `patches/mysql2@3.24.5.patch`。该版本在 IP 地址连接时不发送 SNI，但遗漏向 Node TLS 传入真实 `host`，导致证书身份被错误地按 `localhost` 验证。补丁只补传 `host`，继续启用 `rejectUnauthorized` 与 `verifyIdentity`，在认证前拒绝不受信 CA 和 SAN 不匹配证书。升级驱动时必须复查补丁和这两个负例。

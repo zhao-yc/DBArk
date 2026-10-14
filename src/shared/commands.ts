@@ -12,6 +12,7 @@ export const publicCommands: Record<Command, true> = {
   'query.exportStream': true,
   'table.page': true, 'table.referencePage': true, 'table.preview': true, 'table.apply': true, 'schema.preview': true, 'schema.apply': true,
   'schema.columns.get': true, 'schema.columns.preview': true, 'schema.columns.apply': true, 'schema.columns.release': true,
+  'schema.indexes.get': true, 'schema.indexes.preview': true, 'schema.indexes.apply': true, 'schema.indexes.release': true,
   'files.choose': true, 'files.path': true, 'files.preview': true, 'files.import': true, 'files.export': true, 'files.exportResult': true,
   'files.readQuery': true, 'files.writeQuery': true,
   'snippets.list': true, 'snippets.save': true, 'snippets.delete': true,
