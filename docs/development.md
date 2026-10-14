@@ -184,3 +184,5 @@ GitHub Actions 分别使用 Windows x64、macOS arm64 和 macOS Intel 构建机�
 仅修改 Markdown/文档的分支推送不会重新构建全部客户端；代码、测试及工作流变化仍运行检查，版本标签推送始终执行完整发布验收。路径筛选行为见 [GitHub 官方工作流说明](https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax#onpushpull_requestpull_request_targetpathspaths-ignore)。
 
 发布任务从经过检查的提交生成源码 ZIP，仅归档 Git 跟踪文件；汇总三个平台的安装包并生成 `SHA256SUMS.txt`。它使用该次工作流的短期 GitHub 凭据，没有新增长期发布密钥。发行签名、公证及自动更新需独立配置。
+
+CI生成开发预览后，仍须独立下载全部资产并核GitHub摘要和SHA清单，源码逐Git blob核对固定标签；公开安装验收使用归档自身配置及原用例，不能借未来工作区替代。发标签前同步已验功能的指南版本标题；发布后仅向主分支文档和Release正文补记证据，不移动标签或替换原资产。

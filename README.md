@@ -8,7 +8,7 @@ DBArk 保留连接树、多标签查询和表格编辑等熟悉的工作方式�
 
 在 [GitHub Releases](https://github.com/zhao-yc/DBArk/releases) 下载 Windows x64 安装程序、macOS arm64/x64 DMG 或 ZIP，以及源码和 SHA256 校验清单。`0.x` 为开发预览；Windows 未签名，macOS 仅有 ad-hoc 签名，没有发行证书及公证。安装步骤和数据保护边界见 [中文使用指南](docs/user-guide.md)。
 
-[0.12.0](https://github.com/zhao-yc/DBArk/releases/tag/v0.12.0) 已公开，新增只读记录树与完整类型化整行 JSON；普通记录表单仍与网格共享草稿。1561 单元、五数据库基线新增界面45次、Windows源码/本机及公开安装包原完整各99项通过，主分支和固定标签三平台原生源码及实际安装各22离线通过。12个公开文件和512个源码blob核对一致，见[版本说明](docs/releases/v0.12.0.md)。
+[0.13.0](https://github.com/zhao-yc/DBArk/releases/tag/v0.13.0) 已公开，新增与网格共享草稿的整行 JSON 编辑，保留普通表单及只读记录树。1622单元、修正版五数据库新增界面45次、Windows源码/本机及公开NSIS原完整各108项通过；两轮三平台原生源码/实际安装各22离线通过，12公开资产及521源码blob一致。首轮回归失败和修正分别保留，见[版本说明](docs/releases/v0.13.0.md)。
 
 ## 开发运行
 
