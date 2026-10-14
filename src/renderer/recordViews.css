@@ -1,0 +1,23 @@
+.table-record-layout { flex: 1; display: flex; min-height: 0; overflow: hidden; }
+.table-record-layout > .table-grid-wrap { min-width: 260px; flex: 1; }
+.record-form-panel { width: 420px; min-width: 300px; max-width: 52%; flex-shrink: 0; display: flex; flex-direction: column; border-left: 1px solid var(--line); background: var(--surface); padding: 12px; min-height: 0; }
+.record-form-panel header, .record-form-panel nav, .record-actions { display: flex; gap: 8px; align-items: center; justify-content: space-between; }
+.record-form-panel h2 { font-size: 15px; margin: 0; }
+.record-form-panel nav span { text-align: center; }
+.record-context, .record-field h3, .record-field dd { overflow-wrap: anywhere; }
+.record-context { margin: 8px 0; }
+.record-hidden-toggle { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+.record-fields { flex: 1; overflow: auto; min-height: 80px; }
+.record-field { border-top: 1px solid var(--line); padding: 10px 0; }
+.record-field h3 { font-size: 13px; margin: 0; }
+.record-field h3 small { display: block; font-weight: normal; opacity: .7; margin-top: 4px; }
+.record-field dl { margin: 8px 0; }
+.record-field dt { font-size: 11px; opacity: .65; }
+.record-field dd { margin: 3px 0 8px; white-space: pre-wrap; font-family: var(--font-mono, monospace); }
+.record-value-editor { display: flex; flex-direction: column; gap: 6px; margin-top: 8px; }
+.record-field-input { min-height: 100px; width: 100%; resize: vertical; font-family: var(--font-mono, monospace); }
+.record-value-editor label { font-size: 12px; }
+.record-form-panel footer { border-top: 1px solid var(--line); padding-top: 8px; }
+.record-form-panel footer p { margin: 5px 0; }
+.record-actions { margin-top: 8px; justify-content: flex-end; flex-wrap: wrap; }
+@media (max-width: 950px) { .table-record-layout:has(.record-form-panel) > .table-grid-wrap { display: none; } .record-form-panel { width: 100%; max-width: none; flex: 1; border-left: 0; } }

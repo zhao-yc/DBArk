@@ -48,15 +48,18 @@ export async function connectAndCreate(database: string): Promise<Omit<LiveConte
   await expect(form).toBeHidden();
   const profiles = await page.evaluate(() => window.dbark.invoke('connections.list', {}));
   const connectionId = profiles.find(profile => profile.name === connectionName)!.id;
-  await page.locator('.connection-row').hover();
-  await page.locator('.connection-row').getByRole('button', { name: '创建数据库', exact: true }).click();
+  const connectionRow = page.locator('.connection-row').filter({ has: page.getByRole('button', { name: connectionName, exact: true }) });
+  // 使用既有键盘焦点入口显示操作区，避免窗口切换后残留鼠标位置使悬停状态失效；保持真实可见性和点击检查。
+  await connectionRow.getByRole('button', { name: connectionName, exact: true }).focus();
+  const createDatabase = connectionRow.getByRole('button', { name: '创建数据库', exact: true });
+  await expect(createDatabase).toBeVisible(); await createDatabase.click();
   const create = page.getByRole('dialog', { name: '创建数据库', exact: true });
   await create.getByLabel('数据库名称', { exact: true }).fill(database);
   await expect(create.locator('.monaco-editor .view-lines')).toContainText('CREATE DATABASE');
   await acceptNativeConfirmation();
   await create.getByRole('button', { name: '执行 SQL', exact: true }).click();
   await expect(create).toBeHidden({ timeout: 20000 });
-  await page.locator('.connection-row .tree-label').click();
+  await connectionRow.getByRole('button', { name: connectionName, exact: true }).click();
   await expect(page.locator('.database-row').getByRole('button', { name: database, exact: true })).toBeVisible();
   return { database, connectionName, connectionId };
 }
@@ -90,8 +93,10 @@ export async function isolatedDatabase(body: (context: LiveContext) => Promise<v
 /** 选中数据库节点后通过对象树新建查询，确保 SQL 会话绑定正确的库。 */
 export async function openDatabaseQuery(database: string) {
   const row = page.locator('.database-row').filter({ has: page.getByRole('button', { name: database, exact: true }) });
-  await row.hover();
-  await row.getByRole('button', { name: '新建数据库查询', exact: true }).click();
+  // 数据库节点沿用同一 focus-within 操作入口，不依赖鼠标在其他窗口关闭前的位置。
+  await row.getByRole('button', { name: database, exact: true }).focus();
+  const newQuery = row.getByRole('button', { name: '新建数据库查询', exact: true });
+  await expect(newQuery).toBeVisible(); await newQuery.click();
   await expect(page.locator('.query-tab:visible .monaco-editor')).toBeVisible();
 }
 

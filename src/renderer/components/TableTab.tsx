@@ -3,10 +3,10 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { DataGrid, SelectColumn, type Column, type RenderEditCellProps, type DataGridHandle } from 'react-data-grid';
 import { ArrowDownToLine, ArrowUpFromLine, ChevronLeft, ChevronRight, Filter, Plus, RefreshCw, Save, SlidersHorizontal, Trash2, Undo2, Eye, KeyRound } from 'lucide-react';
 import type { FilterRule, SortRule, SqlPreview, TableInfo, TablePage } from '../../shared/contracts';
-import { cellPreview, cellText, errorMessage, invoke, ownCell, parseCell, rowEqual, uid } from '../lib';
+import { cellPreview, cellText, errorMessage, invoke, ownCell, rowEqual, uid } from '../lib';
 import { useWorkspace, type WorkspaceTab } from '../store';
 import { SqlEditor } from './SqlEditor';
-import { ErrorBox, Field, Modal, Spinner } from './ui';
+import { ErrorBox, Modal, Spinner } from './ui';
 import { collectChanges, type DraftRow } from '../dataChanges';
 import { cellClipboardType, decodeClipboard, encodeClipboard, pasteCells } from '../gridClipboard';
 import { maxTablePage, parsePageJump, type FilterMode } from '../tableFilters';
@@ -26,6 +26,10 @@ import { indexPatchZh } from '../locales/indexPatches.zh-CN';
 import { foreignKeyPatchZh } from '../locales/foreignKeyPatches.zh-CN';
 import { columnPatchZh } from '../locales/columnPatches.zh-CN';
 import { columnPageRefreshAction } from '../columnPatchServices';
+import { useRecordViews, type RecordViewController } from '../hooks/useRecordViews';
+import { acceptGridDrafts, captureRecordPagePreview, consumeRecordPagePreview, recordReadonlyReason, recordTargetKey, type RecordContext, type RecordPagePreview } from '../recordViews';
+import { RecordEditorDialogs, RecordFormPanel } from './RecordFormPanel';
+import { recordViewZh } from '../locales/recordViews.zh-CN';
 
 /** 输入始终保留字符串精度，失焦仅提交到本地草稿，不执行数据库写入。 */
 function TextCellEditor({ row, column, onRowChange, onClose }: RenderEditCellProps<DraftRow>) {
@@ -40,13 +44,12 @@ export function TableTab({ tab, onDesign, onTransfer, onColumnPatches, onIndexPa
   const [info, setInfo] = useState<TableInfo | null>(null); const [page, setPage] = useState<TablePage | null>(null); const [pageIndex, setPageIndex] = useState(1);
   const [pageJump, setPageJump] = useState('1');
   const [pageSize, setPageSize] = useState(settings.pageSize);
-  const [rows, setRows] = useState<DraftRow[]>([]); const [sort, setSort] = useState<SortRule[]>([]); const [filters, setFilters] = useState<FilterRule[]>([]); const [showFilter, setShowFilter] = useState(false);
+  const [rows, setRowsState] = useState<DraftRow[]>([]); const [sort, setSort] = useState<SortRule[]>([]); const [filters, setFilters] = useState<FilterRule[]>([]); const [showFilter, setShowFilter] = useState(false);
   const [filterMode, setFilterMode] = useState<FilterMode>('all');
   const [selectedRows, setSelectedRows] = useState<ReadonlySet<string>>(new Set());
   const pendingPaste = useRef<DraftRow[] | null>(null);
   const [busy, setBusy] = useState(false); const [error, setError] = useState(''); const [selection, setSelection] = useState<{ rowId: string; key: string }>();
-  const [cellDialog, setCellDialog] = useState<{ rowId: string; key: string; text: string; mode: 'text' | 'json' | 'binary' | 'null' }>();
-  const [preview, setPreview] = useState<SqlPreview | null>(null); const [applying, setApplying] = useState(false);
+  const [preview, setPreview] = useState<{ view: SqlPreview; snapshot: RecordPagePreview } | null>(null); const [previewing, setPreviewing] = useState(false); const previewingRef = useRef(false); const [applying, setApplying] = useState(false);
   const [applyTaskId, setApplyTaskId] = useState('');
   const [referenceDialog, setReferenceDialog] = useState<{ snapshot: ReferenceSnapshot; keys: ForeignKeyInfo[]; mode: 'choose' | 'browse' } | null>(null);
   const [referenceBusy, setReferenceBusy] = useState(false); const referenceCount = useRef(0);
@@ -58,13 +61,26 @@ export function TableTab({ tab, onDesign, onTransfer, onColumnPatches, onIndexPa
   const preferenceLifecycle = useRef(0); const mounted = useRef(true);
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; preferenceLifecycle.current++; }; }, []);
   const rowsRef = useRef(rows); rowsRef.current = rows;
+  const inputDirtyRef = useRef(false); const recordControllerRef = useRef<RecordViewController | null>(null); const rootElement = useRef<HTMLDivElement>(null);
+  const selectionRef = useRef(selection); selectionRef.current = selection;
+  /** 所有入口同步替换同一页草稿引用，避免一次事件轮次内的迟到回调覆盖更新。 */
+  function setRows(value: DraftRow[] | ((current: DraftRow[]) => DraftRow[])) {
+    const next = typeof value === 'function' ? value(rowsRef.current) : value;
+    rowsRef.current = next; setRowsState(next); useWorkspace.getState().setDirty(tab.id, collectChanges(next).length > 0 || inputDirtyRef.current);
+  }
   const applyingRef = useRef(applying); applyingRef.current = applying;
-  const blocked = busy || referenceBusy || applying || preferencesPending;
+  const blocked = busy || referenceBusy || applying || preferencesPending || previewing || !!preview; const blockedRef = useRef(blocked); blockedRef.current = blocked;
   const changes = useMemo(() => collectChanges(rows), [rows]);
   const loadGeneration = useRef(0);
   const loadingCount = useRef(0); const observedRefresh = useRef(refreshVersion); const [externalStale, setExternalStale] = useState(false);
-  const editable = !!info?.editableKey.length && !!page && !externalStale;
   const base = useMemo(() => ({ connectionId: tab.connectionId, database: tab.database!, table: tab.table! }), [tab.connectionId, tab.database, tab.table]);
+  const recordContextRef = useRef<RecordContext>({ target: base, connectionVersion, generation: loadGeneration.current, info, loaded: !!page, stale: externalStale, busy: blocked });
+  recordContextRef.current = { target: base, connectionVersion, generation: loadGeneration.current, info, loaded: !!page, stale: externalStale, busy: blocked };
+  /** 代次与忙碌读取同步引用，不等待下一次渲染才能阻止旧字段输入写入新页。 */
+  function getRecordContext(): RecordContext { return { ...recordContextRef.current, generation: loadGeneration.current, busy: blockedRef.current }; }
+  const record = useRecordViews({ rows, getRows: () => rowsRef.current, getContext: getRecordContext, onRows: setRows, onDirty: dirty => { inputDirtyRef.current = dirty; useWorkspace.getState().setDirty(tab.id, dirty || collectChanges(rowsRef.current).length > 0); }, onFocusGrid: () => restoreGridFocus(true) });
+  recordControllerRef.current = record;
+  const editable = !recordReadonlyReason({ ...getRecordContext(), busy: false });
   const visibleKeys = useMemo(() => visibleTableKeys(reconcileTablePreferences(page?.columns.map(column => column.key) ?? [], preferences)), [page?.columns, preferences]);
   const visibleColumns = useMemo(() => { const source = new Map(page?.columns.map(column => [column.key, column]) ?? []); return visibleKeys.map(key => source.get(key)!); }, [page?.columns, visibleKeys]);
   useEffect(() => {
@@ -83,6 +99,14 @@ export function TableTab({ tab, onDesign, onTransfer, onColumnPatches, onIndexPa
     if (key !== selection.key) setSelection({ rowId: selection.rowId, key });
     grid.current?.setActivePosition({ rowIdx, idx }, { enableEditor: false, shouldFocus: false });
   }, [visibleKeys]);
+  /** 使用本地行身份还原网格位置；已失效目标回到本标签工具栏，不误选另一行。 */
+  function restoreGridFocus(focus: boolean) {
+    const current = selectionRef.current; const rowIdx = rowsRef.current.findIndex(row => row.id === current?.rowId); const idx = current ? visibleKeys.indexOf(current.key) + 1 : -1;
+    if (rowIdx >= 0 && idx > 0) grid.current?.setActivePosition({ rowIdx, idx }, { enableEditor: false, shouldFocus: focus });
+    else if (focus) rootElement.current?.querySelector<HTMLButtonElement>('.toolbar button:not(:disabled)')?.focus();
+  }
+  /** 所有本地写入口共享输入守卫；未暂存字段不能被另一个工具悄悄覆盖。 */
+  function assertGridWritable() { if (record.hasInput()) throw new Error(recordViewZh.resolveInput); const reason = recordReadonlyReason(getRecordContext()); if (reason) throw new Error(reason); }
   /** 布局即时生效但明确保持未保存状态，异步读取不能覆盖用户刚调整的布局。 */
   function updatePreferences(next: TablePreferences) { if (preferencesLock.current) return; layoutRevision.current++; preferencesRef.current = next; setPreferences(next); setPreferencesDirty(true); setPreferencesError(''); }
   /** 成功返回后才显示已保存，失败保持本页布局并报告未持久化。 */
@@ -103,7 +127,8 @@ export function TableTab({ tab, onDesign, onTransfer, onColumnPatches, onIndexPa
   function jumpToMatch(rowId: string, key: string) {
     const rowIdx = rowsRef.current.findIndex(row => row.id === rowId), idx = visibleKeys.indexOf(key) + 1;
     if (blocked || rowIdx < 0 || idx < 1) return;
-    setSelection({ rowId, key }); grid.current?.scrollToCell({ rowIdx, idx }); grid.current?.setActivePosition({ rowIdx, idx }, { enableEditor: false, shouldFocus: true });
+    const activate = () => { setSelection({ rowId, key }); selectionRef.current = { rowId, key }; grid.current?.scrollToCell({ rowIdx, idx }); grid.current?.setActivePosition({ rowIdx, idx }, { enableEditor: false, shouldFocus: true }); };
+    if (record.formOpen) record.select(rowId, activate); else activate();
   }
   /** 网格快捷键与工具栏明确打开时发出新焦点请求，已打开的面板也能再次聚焦。 */
   function openPageFind(target: 'query' | 'replacement' = 'query') {
@@ -112,12 +137,13 @@ export function TableTab({ tab, onDesign, onTransfer, onColumnPatches, onIndexPa
   }
   /** 当前页替换先核对完整快照，最后只一次写本地草稿。 */
   function applyPagePlan(plan: PageReplacement) {
+    assertGridWritable();
     if (blocked || !info || plan.patches.some(patch => !visibleKeys.includes(patch.key))) throw new Error(tableGridZh.changed);
     const next = applyPageReplacement(rowsRef.current, plan, info, loadGeneration.current); rowsRef.current = next; setRows(next); setError('');
   }
   /** 每次加载分配代次，旧请求迟到时不能覆盖新页面或当前编辑状态。 */
   const load = useCallback(async () => {
-    const generation = ++loadGeneration.current;
+    const generation = ++loadGeneration.current; blockedRef.current = true;
     loadingCount.current++; useWorkspace.getState().setBusy(tab.id, true);
     setBusy(true); setError('');
     try {
@@ -127,33 +153,46 @@ export function TableTab({ tab, onDesign, onTransfer, onColumnPatches, onIndexPa
       const metadata = settled[0].value; if (generation === loadGeneration.current) setInfo(metadata);
       if (settled[1].status === 'rejected') throw settled[1].reason; const data = settled[1].value;
       if (generation !== loadGeneration.current) return;
-      setInfo(metadata); setPage(data); setRows(data.rows.map(data => ({ id: uid(), data: structuredClone(data), original: structuredClone(data), inserted: false, deleted: false }))); setSelectedRows(new Set()); setSelection(undefined); setExternalStale(false);
+      setInfo(metadata); setPage(data); setRows(data.rows.map(data => ({ id: uid(), data: structuredClone(data), original: structuredClone(data), inserted: false, deleted: false }))); setSelectedRows(new Set()); setSelection(undefined); selectionRef.current = undefined; recordControllerRef.current?.reset(); setExternalStale(false);
     } catch (reason) {
       if (generation === loadGeneration.current) {
         // 翻页/筛选已获草稿放弃确认；失败不能把旧页继续显示成新条件下的可编辑结果。
-        setError(errorMessage(reason)); setPage(null); setRows([]); setSelectedRows(new Set()); setSelection(undefined); setCellDialog(undefined);
+        setError(errorMessage(reason)); setPage(null); setRows([]); setSelectedRows(new Set()); setSelection(undefined); selectionRef.current = undefined; recordControllerRef.current?.reset();
       }
     }
     finally { loadingCount.current = Math.max(0, loadingCount.current - 1); useWorkspace.getState().setBusy(tab.id, loadingCount.current > 0 || referenceCount.current > 0 || applyingRef.current || preferencesLock.current); if (generation === loadGeneration.current) setBusy(false); }
   }, [base, pageIndex, pageSize, filters, filterMode, sort, tab.connectionId, connectionVersion]);
-  useEffect(() => { void load(); return () => { loadGeneration.current++; }; }, [load]);
+  const observedConnection = useRef({ target: recordTargetKey(base), version: connectionVersion });
+  useEffect(() => {
+    const changed = observedConnection.current.target !== recordTargetKey(base) || observedConnection.current.version !== connectionVersion;
+    observedConnection.current = { target: recordTargetKey(base), version: connectionVersion };
+    // 正常编辑连接已由上层保护；仍防御外部版本改变静默丢弃两层草稿。
+    if (changed && (collectChanges(rowsRef.current).length || recordControllerRef.current?.hasInput())) { loadGeneration.current++; setExternalStale(true); return; }
+    void load(); return () => { loadGeneration.current++; };
+  }, [load]);
   /** 仅同目标的完成版本触发刷新；未知结果或有草稿时明确过期，绝不自动丢数据。 */
   useEffect(() => {
-    const action = columnPageRefreshAction(observedRefresh.current, refreshVersion, refreshAutomatically, blocked, changes.length > 0);
+    const action = columnPageRefreshAction(observedRefresh.current, refreshVersion, refreshAutomatically, blocked, changes.length > 0 || record.dirty);
     if (action === 'ignore' || action === 'wait') return;
     observedRefresh.current = refreshVersion;
     if (action === 'reload') void load(); else setExternalStale(true);
-  }, [refreshVersion, refreshAutomatically, blocked, changes.length, load]);
+  }, [refreshVersion, refreshAutomatically, blocked, changes.length, record.dirty, load]);
   useEffect(() => { setPageJump(String(pageIndex)); }, [pageIndex]);
-  useEffect(() => { useWorkspace.getState().setDirty(tab.id, changes.length > 0); return () => useWorkspace.getState().setDirty(tab.id, false); }, [tab.id, changes.length]);
+  useEffect(() => { useWorkspace.getState().setDirty(tab.id, changes.length > 0 || record.dirty); }, [tab.id, changes.length, record.dirty]);
+  useEffect(() => () => useWorkspace.getState().setDirty(tab.id, false), [tab.id]);
   /** 翻页、排序或刷新前先确认是否允许丢弃本页尚未提交的草稿。 */
-  function canReload() { return !blocked && !showPreferences && !document.querySelector('[role="dialog"]') && referenceCount.current === 0 && !referenceDialog && (changes.length === 0 || window.confirm(zh.table.text002)); }
+  function canReload() {
+    if (blockedRef.current || showPreferences || document.querySelector('[role="dialog"]') || referenceCount.current > 0 || referenceDialog) return false;
+    if ((collectChanges(rowsRef.current).length || record.hasInput()) && !window.confirm(recordViewZh.discardPage)) return false;
+    record.reset(); return true;
+  }
   const references = info && selection ? referencesForColumn(info, selection.key) : { keys: [], error: '' };
   const relatedKeys = references.keys;
   const referenceRow = rows.find(row => row.id === selection?.rowId);
   /** 捕获整行草稿及页面代次，多外键在关联窗口内明确选择约束。 */
   function openReference(mode: 'choose' | 'browse') {
     if (blocked || referenceDialog || !info || !selection || !relatedKeys.length) return;
+    if (record.hasInput()) { setError(recordViewZh.resolveInput); return; }
     const row = rowsRef.current.find(item => item.id === selection.rowId);
     if (!row || row.deleted || (mode === 'choose' && !relatedKeys.some(key => referenceWritable(info, key)))) return;
     setReferenceDialog({ mode, keys: structuredClone(relatedKeys), snapshot: { rowId: row.id, data: structuredClone(row.data), foreignKey: structuredClone(relatedKeys[0]), source: structuredClone(info), generation: loadGeneration.current } });
@@ -165,6 +204,8 @@ export function TableTab({ tab, onDesign, onTransfer, onColumnPatches, onIndexPa
   }, [tab.id]);
   /** 使用最新行状态一次写入完整外键草稿，不更改 original 或调用提交。 */
   function applyReference(values: CellValue[], source: TableInfo, key: ForeignKeyInfo, expected: ForeignKeyInfo, clear: boolean) {
+    if (record.hasInput()) throw new Error(recordViewZh.resolveInput);
+    const readonly = recordReadonlyReason({ ...getRecordContext(), busy: false }); if (readonly) throw new Error(readonly);
     if (!referenceDialog || applyingRef.current) throw new Error(referenceZh.changed);
     const next = patchReferenceRow(rowsRef.current, { ...referenceDialog.snapshot, foreignKey: expected }, loadGeneration.current, source, key, values, clear);
     rowsRef.current = next; setRows(next); setError('');
@@ -188,21 +229,28 @@ export function TableTab({ tab, onDesign, onTransfer, onColumnPatches, onIndexPa
   }
   const columns = useMemo<Column<DraftRow>[]>(() => [SelectColumn, ...visibleColumns.map<Column<DraftRow>>(column => ({
     key: column.key, name: column.name, minWidth: 64, maxWidth: 2000, width: preferences.columns.find(item => item.name === column.key)?.width ?? 165, resizable: true, sortable: true, draggable: true,
-    editable: row => editable && !blocked && !row.deleted && !info?.columns.find(item => item.name === column.key)?.generated,
+    editable: row => !record.dirty && !recordReadonlyReason(getRecordContext(), row, column.key),
     renderEditCell: TextCellEditor,
     renderHeaderCell: () => <span className="data-header">{info?.primaryKey.includes(column.key) && <KeyRound size={11}/>}<span>{column.name}<small className="column-type">{column.type}</small></span></span>,
     renderCell: ({ row }) => { const value = ownCell(row.data, column.key); return <span className={value === null ? 'null-value' : value === undefined ? 'default-value' : ''} title={value === undefined ? zh.common.defaultValue : cellPreview(value)}>{value === undefined ? zh.common.defaultValue : cellPreview(value)}</span>; }
-  }))], [visibleColumns, preferences, editable, info, blocked]);
+  }))], [visibleColumns, preferences, editable, info, blocked, record.dirty, externalStale]);
   /** 刷新后网格可能保留同一活动坐标；点击也须用当前行同步选择，不能只等待坐标变化。 */
   function selectCurrentCell(row: DraftRow | undefined, key: string | undefined) {
     if (blocked || document.querySelector('[role="dialog"]')) return;
     if (!row || !key || !page?.columns.some(column => column.key === key) || !rowsRef.current.some(current => current.id === row.id)) { setSelection(undefined); return; }
-    setSelection(current => current?.rowId === row.id && current.key === key ? current : { rowId: row.id, key });
+    const activate = () => { selectionRef.current = { rowId: row.id, key }; setSelection(current => current?.rowId === row.id && current.key === key ? current : { rowId: row.id, key }); };
+    if (record.formOpen && !record.select(row.id, activate)) restoreGridFocus(false); else if (!record.formOpen) activate();
   }
   /** 数据网格先返回当前行，再统一替换整个矩阵，避免多行粘贴被默认单行更新覆盖。 */
-  function changeRows(updated: DraftRow[]) { setRows(pendingPaste.current ?? updated); pendingPaste.current = null; }
+  function changeRows(updated: DraftRow[]) { try { assertGridWritable(); setRows(acceptGridDrafts(rowsRef.current, rows, pendingPaste.current ?? updated)); } catch (reason) { setError(errorMessage(reason)); } finally { pendingPaste.current = null; } }
+  /** 新增使用同一草稿 UUID；表单已打开时可立即编辑该新增记录。 */
+  function addRow() {
+    try { assertGridWritable(); const row: DraftRow = { id: uid(), data: {}, inserted: true, deleted: false }; setRows(current => [...current, row]); const key = visibleKeys[0]; if (key) { selectionRef.current = { rowId: row.id, key }; setSelection(selectionRef.current); } if (record.formOpen) record.select(row.id); }
+    catch (reason) { setError(errorMessage(reason)); }
+  }
   /** 删除选中记录仅形成草稿，仍须预览并提交后才影响数据库。 */
   function deleteSelected() {
+    try { assertGridWritable(); } catch (reason) { setError(errorMessage(reason)); return; }
     const targets = selectedRows.size ? selectedRows : new Set(selection ? [selection.rowId] : []);
     setRows(current => current.map(row => targets.has(row.id) ? { ...row, deleted: !row.deleted } : row));
   }
@@ -218,37 +266,46 @@ export function TableTab({ tab, onDesign, onTransfer, onColumnPatches, onIndexPa
   function pasteClipboard({ row, column }: { row: DraftRow; column: { key: string } }, event: React.ClipboardEvent) {
     event.preventDefault(); pendingPaste.current = null;
     if (!editable || blocked || referenceDialog) return row;
+    if (record.hasInput()) { setError(recordViewZh.resolveInput); return row; }
     try {
       const values = decodeClipboard(event.clipboardData.getData(cellClipboardType), event.clipboardData.getData('text/plain'));
       const updated = pasteCells(rows, visibleKeys, row.id, column.key, values, new Set(info!.columns.filter(item => item.generated).map(item => item.name)));
       pendingPaste.current = updated; setError(''); return updated.find(item => item.id === row.id)!;
     } catch (reason) { setError(errorMessage(reason)); return row; }
   }
-  /** 使用独立编辑器查看文本、JSON、二进制与 NULL，待删除行不允许再编辑。 */
-  function editCell() {
-    if (!selection) return;
-    const row = rows.find(row => row.id === selection.rowId); if (!row || row.deleted) return;
-    const value = ownCell(row.data, selection.key); const type = info?.columns.find(column => column.name === selection.key)?.type ?? '';
-    setCellDialog({ ...selection, text: value === null ? '' : cellText(value), mode: value === null ? 'null' : typeof value === 'object' ? 'binary' : /json/i.test(type) ? 'json' : 'text' });
+  /** 单元格弹窗也使用相同 UUID、代次与输入缓冲，关闭不会无提示丢稿。 */
+  function editCell() { if (selection && !blockedRef.current) record.openCell(selection.rowId, selection.key); }
+  /** 固定预览草稿与代次；先处理输入，且在第一个 await 前阻止重复读取和后续编辑。 */
+  async function makePreview(afterInputConfirmation = false) {
+    if (previewingRef.current || applyingRef.current || preview || referenceCount.current > 0 || (!afterInputConfirmation && document.querySelector('[role="dialog"]'))) return;
+    if (record.hasInput()) { record.request(() => void makePreview(true)); return; }
+    let snapshot: RecordPagePreview;
+    try { snapshot = captureRecordPagePreview(rowsRef.current, getRecordContext()); if (!snapshot.changes.length) return; }
+    catch (reason) { setError(errorMessage(reason)); return; }
+    previewingRef.current = true; blockedRef.current = true; setPreviewing(true); setError(''); useWorkspace.getState().setBusy(tab.id, true);
+    try {
+      const view = await invoke('table.preview', { ...base, changes: snapshot.changes });
+      if (snapshot.rows !== rowsRef.current || snapshot.generation !== loadGeneration.current || snapshot.connectionVersion !== recordContextRef.current.connectionVersion || recordContextRef.current.stale) throw new Error(recordViewZh.previewChanged);
+      setPreview({ view, snapshot });
+    } catch (reason) { setError(errorMessage(reason)); }
+    finally { previewingRef.current = false; setPreviewing(false); useWorkspace.getState().setBusy(tab.id, loadingCount.current > 0 || referenceCount.current > 0 || applyingRef.current || preferencesLock.current); }
   }
-  /** 将当前草稿交给引擎生成参数化 SQL 预览，此步骤不修改数据库。 */
-  async function makePreview() {
-    if (externalStale) { setError(columnPatchZh.staleTable); return; }
-    if (referenceCount.current > 0 || document.querySelector('[role="dialog"]')) return;
-    setError(''); try { setPreview(await invoke('table.preview', { ...base, changes })); } catch (reason) { setError(errorMessage(reason)); }
-  }
-  /** 一次提交使用唯一任务编号；失败保留草稿，成功后重新读取服务器数据。 */
+  /** 最终确认同步消耗一次投递机会，异常、取消及未知提交结果都不自动重放。 */
   async function apply() {
-    applyingRef.current = true; setApplying(true); setError(''); useWorkspace.getState().setBusy(tab.id, true);
+    if (!preview || applyingRef.current || previewingRef.current) return;
+    let fixedChanges;
+    try { fixedChanges = consumeRecordPagePreview(preview.snapshot, rowsRef.current, getRecordContext()); }
+    catch (reason) { setError(errorMessage(reason)); return; }
+    applyingRef.current = true; blockedRef.current = true; setApplying(true); setError(''); useWorkspace.getState().setBusy(tab.id, true);
     const taskId = uid(); setApplyTaskId(taskId);
-    try { const result = await invoke('table.apply', { ...base, changes, taskId }); setPreview(null); useWorkspace.getState().notify(formatText(zh.table.text003, result.affectedRows)); await load(); }
+    try { const result = await invoke('table.apply', { ...base, changes: fixedChanges, taskId }); setPreview(null); useWorkspace.getState().notify(formatText(zh.table.text003, result.affectedRows)); await load(); }
     catch (reason) { setError(errorMessage(reason)); }
     finally { applyingRef.current = false; setApplying(false); useWorkspace.getState().setBusy(tab.id, loadingCount.current > 0 || referenceCount.current > 0 || preferencesLock.current); }
   }
-  return <div className="workspace-tab table-tab"><div className="context-bar"><span className="connection-dot" style={{ background: connection?.color }}/><strong>{connection?.name ?? zh.common.connectionDeleted}</strong><span className="breadcrumb-divider">/</span>{tab.database}<span className="breadcrumb-divider">/</span><strong>{tab.table}</strong><span className="grow"/><span className="tag">{info?.engine || zh.table.text004}</span></div><div className="toolbar"><button onClick={() => { if (canReload()) void load(); }} disabled={blocked}><RefreshCw size={14}/>{zh.common.refresh}</button><button disabled={!editable || blocked} onClick={() => setRows(current => [...current, { id: uid(), data: {}, inserted: true, deleted: false }])}><Plus size={14}/>{zh.common.add}</button><button disabled={!editable || (!selection && !selectedRows.size) || blocked} onClick={deleteSelected}><Trash2 size={14}/>{zh.common.delete}</button><button disabled={!selection || blocked} onClick={editCell}><Eye size={14}/>{zh.table.text005}</button><button aria-label={referenceZh.choose} title={referenceZh.choose} disabled={blocked || !referenceRow || referenceRow.deleted || !relatedKeys.some(key => info && referenceWritable(info, key))} onClick={() => openReference('choose')}>{referenceZh.choose}</button><button aria-label={referenceZh.browse} title={referenceZh.browse} disabled={blocked || !referenceRow || referenceRow.deleted || !relatedKeys.length} onClick={() => openReference('browse')}>{referenceZh.browse}</button><span className="toolbar-divider"/><button aria-label={tableGridZh.find} title={tableGridZh.find} disabled={!page || blocked} className={showFind ? "selected" : ""} onClick={() => { if (showFind) setShowFind(false); else openPageFind(); }}>{tableGridZh.find}</button><button aria-label={tableGridZh.preferences} title={tableGridZh.preferences} disabled={!page || blocked || preferencesLoading} onClick={() => setShowPreferences(true)}>{tableGridZh.preferences}</button>{preferencesDirty && <span className="muted small">{tableGridZh.unsaved}</span>}<button className={showFilter || filters.length ? 'selected' : ''} onClick={() => setShowFilter(!showFilter)}><Filter size={14}/>{zh.table.text006}{filters.length > 0 ? ` (${filters.length})` : ''}</button><button title={foreignKeyPatchZh.title} aria-label={foreignKeyPatchZh.title} disabled={!info?.engine || blocked} onClick={onForeignKeyPatches}>{foreignKeyPatchZh.title}</button><button title={indexPatchZh.title} aria-label={indexPatchZh.title} disabled={!info?.engine || blocked} onClick={onIndexPatches}>{indexPatchZh.title}</button><button title={columnPatchZh.title} aria-label={columnPatchZh.title} disabled={!info?.engine || blocked} onClick={onColumnPatches}>{columnPatchZh.title}</button><button disabled={!info || blocked} onClick={() => onDesign(!info?.engine)}><SlidersHorizontal size={14}/>{info && !info.engine ? zh.table.text007 : zh.table.text008}</button><span className="grow"/><button onClick={() => onTransfer('import')}><ArrowDownToLine size={14}/>{zh.common.import}</button><button onClick={() => onTransfer('export')}><ArrowUpFromLine size={14}/>{zh.common.export}</button></div>{showFilter && <TableFilterPanel columns={info?.columns.map(column => column.name) ?? []} filters={filters} mode={filterMode} disabled={blocked} onFiltersChange={changeFilters} onModeChange={changeFilterMode}/>}{showFind && <PageFindPanel focusRequest={findFocus} rows={rows} keys={visibleKeys} info={info} generation={loadGeneration.current} disabled={blocked} onJump={jumpToMatch} onApply={applyPagePlan} onFilter={() => setShowFilter(true)}/>}{externalStale && <div className="info-strip">{columnPatchZh.staleTable}</div>}<ErrorBox message={error || references.error || preferencesError}/>{info && !info.editableKey.length && <div className="info-strip">{zh.table.text014}</div>}<div className="table-grid-wrap">{busy && <div className="loading-overlay"><Spinner/></div>}<DataGrid<DraftRow, unknown, string> ref={grid} aria-label={tableGridZh.grid} onColumnResize={(column, width) => { if (!blocked && visibleKeys.includes(column.key)) { try { updatePreferences(changeTablePreference(preferencesRef.current, column.key, { width })); } catch (reason) { setPreferencesError(errorMessage(reason)); } } }} onColumnsReorder={(source, target) => { if (!blocked) updatePreferences(moveTableColumn(preferencesRef.current, source, target)); }} className={`results-grid rdg-${settings.theme}`} columns={columns} rows={rows} rowHeight={32} headerRowHeight={42} rowKeyGetter={row => row.id} rowClass={row => row.deleted ? 'row-deleted' : row.inserted ? 'row-inserted' : !rowEqual(row.original!, row.data) ? 'row-modified' : undefined} selectedRows={selectedRows} onSelectedRowsChange={setSelectedRows} onRowsChange={changeRows} onActivePositionChange={({ row, column }) => selectCurrentCell(row, column?.key)} onCellClick={({ row, column }) => selectCurrentCell(row, column.key)} sortColumns={sort.map(item => ({ columnKey: item.column, direction: item.direction }))} onSortColumnsChange={next => { if (canReload()) { setSort(next.map(item => ({ column: item.columnKey, direction: item.direction }))); setPageIndex(1); } }} onCellCopy={copyCells} onCellPaste={pasteClipboard} onCellKeyDown={(args, event) => { if (args.mode !== 'ACTIVE' || blocked || document.querySelector('[role=dialog]')) return; const { row: activeRow, column: activeColumn } = args; if (!activeRow || !activeColumn) return; if ((event.ctrlKey || event.metaKey) && ['f', 'h'].includes(event.key.toLowerCase()) && !(event.target instanceof HTMLElement && event.target.closest('input,textarea,select,[contenteditable=true]'))) { event.preventGridDefault(); event.preventDefault(); openPageFind(event.key.toLowerCase() === 'h' ? 'replacement' : 'query'); } else if ((event.ctrlKey || event.metaKey) && event.key === 'Enter' && changes.length) { event.preventGridDefault(); event.preventDefault(); void makePreview(); } else if (event.key === 'Delete' && editable && !activeRow.deleted && page?.columns.some(item => item.key === activeColumn.key) && !info?.columns.find(item => item.name === activeColumn.key)?.generated) { event.preventGridDefault(); event.preventDefault(); setRows(current => current.map(row => row.id === activeRow.id ? { ...row, data: { ...row.data, [activeColumn.key]: info?.columns.find(item => item.name === activeColumn.key)?.nullable ? null : '' } } : row)); } }} renderers={{ noRowsFallback: <div className="grid-empty">{zh.common.noMatchingData}</div> }}/></div><div className="table-action-bar"><span className={changes.length ? 'warning-text' : 'muted'}>{changes.length ? formatText(zh.table.text015, changes.length) : formatText(zh.table.text016, page?.rows.length ?? 0)}</span>{changes.length > 0 && <><button disabled={blocked} onClick={() => { if (window.confirm(zh.table.text017)) void load(); }}><Undo2 size={13}/>{zh.table.text018}</button><button className="primary" disabled={blocked} onClick={() => void makePreview()}><Save size={13}/>{zh.table.text019}</button></>}<span className="grow"/><label className="inline-field">{zh.table.text020}<select aria-label={zh.table.text021} value={pageSize} disabled={blocked} onChange={event => { if (canReload()) { setPageIndex(1); setPageSize(Number(event.target.value)); useWorkspace.getState().updateSettings({ pageSize: Number(event.target.value) }); } }}>{[50, 100, 200, 500, 1000].map(size => <option key={size}>{size}</option>)}</select>{zh.table.text022}</label><form className="page-jump" title={zh.table.pageJumpHint} onSubmit={event => { event.preventDefault(); jumpToPage(); }}><input aria-label={zh.table.pageJumpLabel} inputMode="numeric" value={pageJump} disabled={blocked} onChange={event => setPageJump(event.target.value)}/><button type="submit" disabled={blocked}>{zh.table.pageJump}</button></form><button className="icon-button" aria-label={zh.common.pagePrevious} disabled={pageIndex === 1 || busy || applying} onClick={() => { if (canReload()) setPageIndex(current => current - 1); }}><ChevronLeft size={16}/></button><span>{zh.table.text023}{pageIndex}{zh.table.text024}</span><button className="icon-button" aria-label={zh.common.pageNext} disabled={!page?.hasMore || busy || applying || pageIndex >= maxTablePage} onClick={() => { if (canReload()) setPageIndex(current => current + 1); }}><ChevronRight size={16}/></button></div>
+  return <div ref={rootElement} className="workspace-tab table-tab"><div className="context-bar"><span className="connection-dot" style={{ background: connection?.color }}/><strong>{connection?.name ?? zh.common.connectionDeleted}</strong><span className="breadcrumb-divider">/</span>{tab.database}<span className="breadcrumb-divider">/</span><strong>{tab.table}</strong><span className="grow"/><span className="tag">{info?.engine || zh.table.text004}</span></div><div className="toolbar"><button onClick={() => { if (canReload()) void load(); }} disabled={blocked}><RefreshCw size={14}/>{zh.common.refresh}</button><button disabled={!editable || blocked} onClick={addRow}><Plus size={14}/>{zh.common.add}</button><button disabled={!editable || (!selection && !selectedRows.size) || blocked} onClick={deleteSelected}><Trash2 size={14}/>{zh.common.delete}</button><button className={record.formOpen ? 'selected' : ''} disabled={!page || blocked} onClick={() => { if (record.formOpen) record.closeForm(); else record.openForm(selection?.rowId); }}>{recordViewZh.title}</button><button disabled={!selection || blocked} onClick={editCell}><Eye size={14}/>{zh.table.text005}</button><button aria-label={referenceZh.choose} title={referenceZh.choose} disabled={blocked || !referenceRow || referenceRow.deleted || !relatedKeys.some(key => info && referenceWritable(info, key))} onClick={() => openReference('choose')}>{referenceZh.choose}</button><button aria-label={referenceZh.browse} title={referenceZh.browse} disabled={blocked || !referenceRow || referenceRow.deleted || !relatedKeys.length} onClick={() => openReference('browse')}>{referenceZh.browse}</button><span className="toolbar-divider"/><button aria-label={tableGridZh.find} title={tableGridZh.find} disabled={!page || blocked} className={showFind ? "selected" : ""} onClick={() => { if (showFind) setShowFind(false); else openPageFind(); }}>{tableGridZh.find}</button><button aria-label={tableGridZh.preferences} title={tableGridZh.preferences} disabled={!page || blocked || preferencesLoading} onClick={() => setShowPreferences(true)}>{tableGridZh.preferences}</button>{preferencesDirty && <span className="muted small">{tableGridZh.unsaved}</span>}<button className={showFilter || filters.length ? 'selected' : ''} onClick={() => setShowFilter(!showFilter)}><Filter size={14}/>{zh.table.text006}{filters.length > 0 ? ` (${filters.length})` : ''}</button><button title={foreignKeyPatchZh.title} aria-label={foreignKeyPatchZh.title} disabled={!info?.engine || blocked} onClick={onForeignKeyPatches}>{foreignKeyPatchZh.title}</button><button title={indexPatchZh.title} aria-label={indexPatchZh.title} disabled={!info?.engine || blocked} onClick={onIndexPatches}>{indexPatchZh.title}</button><button title={columnPatchZh.title} aria-label={columnPatchZh.title} disabled={!info?.engine || blocked} onClick={onColumnPatches}>{columnPatchZh.title}</button><button disabled={!info || blocked} onClick={() => onDesign(!info?.engine)}><SlidersHorizontal size={14}/>{info && !info.engine ? zh.table.text007 : zh.table.text008}</button><span className="grow"/><button onClick={() => onTransfer('import')}><ArrowDownToLine size={14}/>{zh.common.import}</button><button onClick={() => onTransfer('export')}><ArrowUpFromLine size={14}/>{zh.common.export}</button></div>{showFilter && <TableFilterPanel columns={info?.columns.map(column => column.name) ?? []} filters={filters} mode={filterMode} disabled={blocked} onFiltersChange={changeFilters} onModeChange={changeFilterMode}/>}{showFind && <PageFindPanel focusRequest={findFocus} rows={rows} keys={visibleKeys} info={info} generation={loadGeneration.current} disabled={blocked || record.dirty} onJump={jumpToMatch} onApply={applyPagePlan} onFilter={() => setShowFilter(true)}/>}{externalStale && <div className="info-strip">{columnPatchZh.staleTable}</div>}<ErrorBox message={error || references.error || preferencesError}/>{info && !editable && <div className="info-strip">{recordReadonlyReason({ ...getRecordContext(), busy: false })}</div>}<div className="table-record-layout"><div className="table-grid-wrap">{busy && <div className="loading-overlay"><Spinner/></div>}<DataGrid<DraftRow, unknown, string> ref={grid} aria-label={tableGridZh.grid} onColumnResize={(column, width) => { if (!blocked && visibleKeys.includes(column.key)) { try { updatePreferences(changeTablePreference(preferencesRef.current, column.key, { width })); } catch (reason) { setPreferencesError(errorMessage(reason)); } } }} onColumnsReorder={(source, target) => { if (!blocked) updatePreferences(moveTableColumn(preferencesRef.current, source, target)); }} className={`results-grid rdg-${settings.theme}`} columns={columns} rows={rows} rowHeight={32} headerRowHeight={42} rowKeyGetter={row => row.id} rowClass={row => row.deleted ? 'row-deleted' : row.inserted ? 'row-inserted' : !rowEqual(row.original!, row.data) ? 'row-modified' : undefined} selectedRows={selectedRows} onSelectedRowsChange={setSelectedRows} onRowsChange={changeRows} onActivePositionChange={({ row, column }) => selectCurrentCell(row, column?.key)} onCellClick={({ row, column }) => selectCurrentCell(row, column.key)} sortColumns={sort.map(item => ({ columnKey: item.column, direction: item.direction }))} onSortColumnsChange={next => { if (canReload()) { setSort(next.map(item => ({ column: item.columnKey, direction: item.direction }))); setPageIndex(1); } }} onCellCopy={copyCells} onCellPaste={pasteClipboard} onCellKeyDown={(args, event) => { if (args.mode !== 'ACTIVE' || blocked || document.querySelector('[role=dialog]')) return; const { row: activeRow, column: activeColumn } = args; if (!activeRow || !activeColumn) return; if ((event.ctrlKey || event.metaKey) && ['f', 'h'].includes(event.key.toLowerCase()) && !(event.target instanceof HTMLElement && event.target.closest('input,textarea,select,[contenteditable=true]'))) { event.preventGridDefault(); event.preventDefault(); openPageFind(event.key.toLowerCase() === 'h' ? 'replacement' : 'query'); } else if ((event.ctrlKey || event.metaKey) && event.key === 'Enter' && changes.length) { event.preventGridDefault(); event.preventDefault(); void makePreview(); } else if (event.key === 'Delete' && editable && !record.hasInput() && !activeRow.deleted && page?.columns.some(item => item.key === activeColumn.key) && !info?.columns.find(item => item.name === activeColumn.key)?.generated) { event.preventGridDefault(); event.preventDefault(); setRows(current => current.map(row => row.id === activeRow.id ? { ...row, data: { ...row.data, [activeColumn.key]: info?.columns.find(item => item.name === activeColumn.key)?.nullable ? null : '' } } : row)); } }} renderers={{ noRowsFallback: <div className="grid-empty">{zh.common.noMatchingData}</div> }}/></div>{record.formOpen && <RecordFormPanel editor={record} context={getRecordContext()} rows={rows} visibleKeys={visibleKeys} onSelect={rowId => { const key = selection?.key && visibleKeys.includes(selection.key) ? selection.key : visibleKeys[0]; if (key) jumpToMatch(rowId, key); }}/>}</div><div className="table-action-bar"><span className={changes.length ? 'warning-text' : 'muted'}>{changes.length ? formatText(zh.table.text015, changes.length) : formatText(zh.table.text016, page?.rows.length ?? 0)}</span>{record.dirty && <span className="warning-text">{recordViewZh.inputDirty}</span>}{(changes.length > 0 || record.dirty) && <><button disabled={blocked} onClick={() => { if (canReload()) void load(); }}><Undo2 size={13}/>{zh.table.text018}</button><button className="primary" disabled={blocked} onClick={() => void makePreview()}><Save size={13}/>{zh.table.text019}</button></>}<span className="grow"/><label className="inline-field">{zh.table.text020}<select aria-label={zh.table.text021} value={pageSize} disabled={blocked} onChange={event => { if (canReload()) { setPageIndex(1); setPageSize(Number(event.target.value)); useWorkspace.getState().updateSettings({ pageSize: Number(event.target.value) }); } }}>{[50, 100, 200, 500, 1000].map(size => <option key={size}>{size}</option>)}</select>{zh.table.text022}</label><form className="page-jump" title={zh.table.pageJumpHint} onSubmit={event => { event.preventDefault(); jumpToPage(); }}><input aria-label={zh.table.pageJumpLabel} inputMode="numeric" value={pageJump} disabled={blocked} onChange={event => setPageJump(event.target.value)}/><button type="submit" disabled={blocked}>{zh.table.pageJump}</button></form><button className="icon-button" aria-label={zh.common.pagePrevious} disabled={pageIndex === 1 || busy || applying} onClick={() => { if (canReload()) setPageIndex(current => current - 1); }}><ChevronLeft size={16}/></button><span>{zh.table.text023}{pageIndex}{zh.table.text024}</span><button className="icon-button" aria-label={zh.common.pageNext} disabled={!page?.hasMore || busy || applying || pageIndex >= maxTablePage} onClick={() => { if (canReload()) setPageIndex(current => current + 1); }}><ChevronRight size={16}/></button></div>
     {showPreferences && <TablePreferencesDialog preferences={preferences} pending={preferencesPending} dirty={preferencesDirty} error={preferencesError} onChange={updatePreferences} onSave={() => void savePreferences()} onReset={() => void savePreferences(true)} onClose={() => { if (!preferencesLock.current) setShowPreferences(false); }}/ >}
     {referenceDialog && <ForeignKeyDialog base={base} snapshot={referenceDialog.snapshot} keys={referenceDialog.keys} mode={referenceDialog.mode} onApply={applyReference} onClose={() => setReferenceDialog(null)} onActivity={referenceActivity}/ >}
-    {cellDialog && <Modal title={formatText(zh.table.text025, cellDialog.key)} onClose={() => setCellDialog(undefined)}><div className="modal-content"><Field label={zh.table.text026}><select value={cellDialog.mode} onChange={event => setCellDialog({ ...cellDialog, mode: event.target.value as typeof cellDialog.mode })}><option value="text">{zh.table.text027}</option><option value="json">JSON</option><option value="binary">{zh.table.text028}</option><option value="null">{zh.table.text029}</option></select></Field><textarea className="cell-textarea" disabled={cellDialog.mode === 'null'} value={cellDialog.text} onChange={event => setCellDialog({ ...cellDialog, text: event.target.value })}/><ErrorBox message={error}/></div><footer className="modal-footer"><span className="grow"/><button onClick={() => setCellDialog(undefined)}>{zh.common.close}</button><button className="primary" disabled={!editable || info?.columns.find(column => column.name === cellDialog.key)?.generated} onClick={() => { try { const value = parseCell(cellDialog.text, cellDialog.mode); setRows(current => current.map(row => row.id === cellDialog.rowId ? { ...row, data: { ...row.data, [cellDialog.key]: value } } : row)); setCellDialog(undefined); setError(''); } catch (reason) { setError(errorMessage(reason)); } }}>{zh.table.text030}</button></footer></Modal>}
-    {preview && <Modal title={zh.table.text031} wide onClose={() => { if (!applying) setPreview(null); }}><div className="modal-content"><p>{zh.table.text032}{changes.length}{zh.table.text033}</p>{preview.warnings.map(warning => <p className="warning-text" key={warning}>{warning}</p>)}<SqlEditor value={preview.sql} height={280} readOnly/><ErrorBox message={error}/></div><footer className="modal-footer"><button disabled={applying} onClick={() => setPreview(null)}>{zh.common.backToEdit}</button><span className="grow"/>{applying && <button onClick={() => void invoke('query.cancel', { taskId: applyTaskId }).catch(reason => setError(errorMessage(reason)))}>{zh.table.text034}</button>}<button className="primary" disabled={applying} onClick={() => void apply()}>{applying ? <Spinner text={zh.table.text035}/> : zh.common.confirmApply}</button></footer></Modal>}
+    <RecordEditorDialogs editor={record} context={getRecordContext()} rows={rows}/>
+    {preview && <Modal title={zh.table.text031} wide onClose={() => { if (!applying) setPreview(null); }}><div className="modal-content"><p>{zh.table.text032}{preview.snapshot.changes.length}{zh.table.text033}</p>{preview.view.warnings.map(warning => <p className="warning-text" key={warning}>{warning}</p>)}<SqlEditor value={preview.view.sql} height={280} readOnly/><ErrorBox message={error}/>{preview.snapshot.attempted && !applying && <p className="warning-text">{recordViewZh.applyAttempted}</p>}</div><footer className="modal-footer"><button disabled={applying} onClick={() => setPreview(null)}>{zh.common.backToEdit}</button><span className="grow"/>{applying && <button onClick={() => void invoke('query.cancel', { taskId: applyTaskId }).catch(reason => setError(errorMessage(reason)))}>{zh.table.text034}</button>}<button className="primary" disabled={applying || preview.snapshot.attempted} onClick={() => void apply()}>{applying ? <Spinner text={zh.table.text035}/> : zh.common.confirmApply}</button></footer></Modal>}
   </div>;
 }

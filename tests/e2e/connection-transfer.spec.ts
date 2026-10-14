@@ -279,9 +279,15 @@ test.describe('离线连接概要复制与迁移', () => {
     await expect(page.evaluate(id => window.dbark.invoke('connections.open', { id }), imported.id)).rejects.toThrow(/重新选择本机/);
     await quitDesktop(); await launchDesktop();
     expect((await list())[0].pendingFiles).toEqual(imported.pendingFiles);
-    const row = page.locator('.connection-row').filter({ hasText: imported.name }); await row.hover();
-    await row.getByRole('button', { name: `编辑连接 ${imported.name}`, exact: true }).click();
-    const editor = page.getByRole('dialog', { name: '编辑连接', exact: true });
+    const row = page.locator('.connection-row').filter({ has: page.getByRole('button', { name: imported.name, exact: true }) });
+    /** 重启或关闭弹窗后通过实际 focus-within 入口显示操作区，不依赖前一窗口的鼠标悬停，也不点击主按钮发起连接。 */
+    async function openImportedEditor() {
+      await row.getByRole('button', { name: imported.name, exact: true }).focus();
+      const edit = row.getByRole('button', { name: `编辑连接 ${imported.name}`, exact: true });
+      await expect(edit).toBeVisible(); await edit.click();
+      const dialog = page.getByRole('dialog', { name: '编辑连接', exact: true }); await expect(dialog).toBeVisible(); return dialog;
+    }
+    const editor = await openImportedEditor();
     await editor.getByRole('button', { name: 'SSH 隧道', exact: true }).click();
     await expect(editor.getByRole('checkbox', { name: '通过 SSH 隧道连接', exact: true })).toBeChecked();
     // 实际 Field 可访问名称含同一 label 内选择按钮的 aria-label，使用完整名称而非不存在的短标签。
@@ -300,8 +306,7 @@ test.describe('离线连接概要复制与迁移', () => {
     // 文件只含虚构文本，用来核验选择授权和保存门槛，不冒充真实私钥或成功 TLS/SSH 认证。
     const selections = { ssh: join(dataDir, '本机选中.key'), ca: join(dataDir, '本机选中CA.pem'), cert: join(dataDir, '本机选中证书.pem'), key: join(dataDir, '本机选中TLS.key') };
     for (const file of Object.values(selections)) await writeFile(file, 'C03 虚构文件：只核验路径授权，不用于真实认证。');
-    await row.hover(); await row.getByRole('button', { name: `编辑连接 ${imported.name}`, exact: true }).click();
-    const reselected = page.getByRole('dialog', { name: '编辑连接', exact: true });
+    const reselected = await openImportedEditor();
     await reselected.getByRole('button', { name: 'SSH 隧道', exact: true }).click();
     await chooseNative('open', selections.ssh); await reselected.getByRole('button', { name: '选择 SSH 私钥', exact: true }).click();
     await expect(reselected.getByRole('textbox', { name: '私钥文件 选择 SSH 私钥', exact: true })).toHaveValue(selections.ssh);

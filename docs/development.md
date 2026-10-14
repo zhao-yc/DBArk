@@ -129,6 +129,22 @@ node node_modules/vitest/vitest.mjs run --config vitest.integration.config.ts te
 
 夹具为每个用例创建独立随机库、账号和内存密码，结束时先关闭引擎和低权连接，再精确删除本例账号及其授权、删除本例数据库，核对库、用户及已采样线程无残留。不要打印创建用户 SQL、认证哈希或密码；失败后只保留脱敏编号和精确清理状态，不能把临时账号扩权后再次冒充同一最小权限用例。
 
+### 普通记录表单（0.11 验收中）
+
+`recordViews.ts` 提供只读原因、行身份、稀疏输入、离开守卫和固定页面提交快照；`useRecordViews` 只持有输入及交互状态，`TableTab` 仍拥有唯一 `DraftRow[]`。`RecordFormPanel` 与旧单元格弹窗复用 `RecordValueEditor`。不要新增逐字段自动写接口、复制整页作为第二份真值，或在冲突后自动更新旧值重试。
+
+`tests/unit/record-views.test.ts` 验证目标/代次/修订、原型同名列、精度与模式、预算和防重入。真实桌面套件 `tests/e2e/table-record-views.spec.ts` 使用既有隔离库，不新建权限用户，关闭含凭据的追踪；`DBARK_RECORD_VIEWS_TEST_PORT` 优先于 `DBARK_TEST_PORT`，只允许 200 的五个普通基线端口。先核服务器身份和当前构建，再显式设置实库开关运行：
+
+```powershell
+$env:DBARK_INTEGRATION_ENABLED = '1'
+if (-not $env:DBARK_TEST_PORT) { throw '请先设置已核对并授权的测试端口' }
+$env:DBARK_RECORD_VIEWS_TEST_PORT = $env:DBARK_TEST_PORT
+$recordRun = Get-Date -Format 'yyyyMMdd-HHmmss'
+node node_modules/@playwright/test/cli.js test tests/e2e/table-record-views.spec.ts --workers=1 --retries=0 --output=".cache/record-ui-$recordRun"
+```
+
+采集真实 IPC 时不伪造返回数据；原型同名键需要先在被观察进程 JSON 编码、Node 再解析，避免测试工具自身对象反序列化丢失 `__proto__`。原失败和修正后完整轮次分别保留。键盘 reported 组合标志不能替代实体输入法、自动 locator 不能替代人工辅助技术验收。当前状态见 [D04 普通表单验收](../tests/integration/acceptance-d04-record-forms-20261014.md)。
+
 ## 构建
 
 0.6.0 的表偏好由 `tests/unit/table-preferences.test.ts` 验证精确复合键、原型名称、实际 SQLite 满额和 UTF-8 聚合预算、保存/删除/目标变更失败回退，以及 schema2 旧七表全部字段保持。`ui-page-find-replace`、`ui-table-column-preferences` 验证完整原值、Unicode 位置、字面替换、快照和预算、调和及可见列模型。`table-preferences.spec.ts` 的四项离线实际 IPC 与 `table-grid-preferences.spec.ts` 的六项实库 UI 分别运行，编写或列出测试不算实测通过；本批结果见 [D06 验收记录](../tests/integration/acceptance-p0-grid-preferences-20261014.md)。旧 reader 的独立结构探针使用冻结 0.5 源码和真实 SQLite 副本，不属于真实安装或系统加密验证。

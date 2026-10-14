@@ -11,6 +11,8 @@ export function Modal({ title, children, onClose, wide = false }: { title: strin
     root.current?.querySelector<HTMLElement>('input, select, textarea, button')?.focus();
     /** 拦截 Escape 并循环 Tab 焦点，避免键盘操作穿透到对话框后方。 */
     const listener = (event: KeyboardEvent) => {
+      // 输入法组合阶段的 Escape/Tab 属于输入法；捕获层必须先跳过，避免提前关闭弹窗或移动焦点。
+      if (event.isComposing || event.keyCode === 229) return;
       if (event.key === 'Escape') { event.stopPropagation(); closeRef.current(); }
       if (event.key === 'Tab') {
         const elements = root.current?.querySelectorAll<HTMLElement>('button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [tabindex="0"]');

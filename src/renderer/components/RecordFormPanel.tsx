@@ -1,0 +1,65 @@
+import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
+import type { DraftRow } from '../dataChanges';
+import { formatText } from '../locales/zh-CN';
+import { ownCell, rowEqual } from '../lib';
+import { adjacentRecordId, recordFieldOrder, recordFieldTooLarge, recordReadonlyReason, recordValueSummary, type RecordContext } from '../recordViews';
+import type { RecordViewController } from '../hooks/useRecordViews';
+import { recordViewZh as text } from '../locales/recordViews.zh-CN';
+import { RecordValueEditor } from './RecordValueEditor';
+import { ErrorBox, Modal } from './ui';
+import '../recordViews.css';
+
+/** 表单快捷键只暂存本地草稿；不截获普通方向键、换行、删除或输入法组合输入。 */
+function localKeys(event: KeyboardEvent, stage: () => boolean, close: () => void) {
+  if (event.nativeEvent.isComposing || event.nativeEvent.keyCode === 229) return;
+  if ((event.ctrlKey || event.metaKey) && ['Enter', 's', 'S'].includes(event.key)) { event.preventDefault(); event.stopPropagation(); if (event.key === 'Enter') stage(); }
+  else if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); close(); }
+}
+
+/** 当前页侧面表单只有展示与缓冲，不拥有第二份页数据或数据库写路径。 */
+export function RecordFormPanel({ editor, context, rows, visibleKeys, onSelect }: { editor: RecordViewController; context: RecordContext; rows: DraftRow[]; visibleKeys: string[]; onSelect(rowId: string): void }) {
+  const [showHidden, setShowHidden] = useState(false); const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set());
+  const heading = useRef<HTMLHeadingElement>(null); const row = rows.find(item => item.id === editor.draft?.rowId);
+  useEffect(() => { heading.current?.focus(); setExpanded(new Set()); }, [editor.draft?.rowId]);
+  useEffect(() => { if (editor.focusKey) { setExpanded(current => new Set([...current, editor.focusKey!])); if (!visibleKeys.includes(editor.focusKey)) setShowHidden(true); } }, [editor.focusKey, visibleKeys]);
+  // 暂存和放弃会清空稀疏缓冲；同时恢复摘要按钮，避免显示“收起”却没有输入区域。
+  useEffect(() => { setExpanded(current => [...current].some(key => !editor.draft?.fields.has(key)) ? new Set([...current].filter(key => editor.draft?.fields.has(key))) : current); }, [editor.draft?.fields]);
+  useEffect(() => { if (editor.notice) heading.current?.focus(); }, [editor.notice]);
+  const keys = recordFieldOrder(context.info?.columns ?? [], visibleKeys, showHidden); const reason = recordReadonlyReason(context, row);
+  const previous = adjacentRecordId(rows, row?.id, -1), next = adjacentRecordId(rows, row?.id, 1);
+  const status = !row ? text.empty : row.deleted ? text.deleted : row.inserted ? text.inserted : row.original && !rowEqual(row.original, row.data) ? text.staged : text.unchanged;
+  return <aside className="record-form-panel" aria-label={text.title} onKeyDown={event => localKeys(event, editor.stage, editor.closeForm)}>
+    <header><h2 tabIndex={-1} ref={heading}>{text.title}</h2><button onClick={editor.closeForm}>{text.close}</button></header>
+    <p className="record-context">{context.target.database} / {context.target.table}</p>
+    <nav aria-label={text.title}><button disabled={!previous || context.busy} onClick={() => previous && onSelect(previous)}>{text.previous}</button><span>{row ? formatText(text.position, rows.indexOf(row) + 1, rows.length) : text.empty}</span><button disabled={!next || context.busy} onClick={() => next && onSelect(next)}>{text.next}</button></nav>
+    <p aria-live="polite">{status}{editor.dirty ? ` · ${text.inputDirty}` : ''}</p>
+    <label className="record-hidden-toggle"><input type="checkbox" checked={showHidden} onChange={event => setShowHidden(event.target.checked)}/>{text.showHidden}</label>
+    <div className="record-fields">{row && editor.draft && keys.map(key => {
+      const column = context.info!.columns.find(item => item.name === key)!; const value = ownCell(row.data, key); const input = editor.draft!.fields.get(key);
+      const fieldReason = recordReadonlyReason(context, row, key); const tooLarge = recordFieldTooLarge(ownCell(editor.draft!.data, key));
+      return <section className="record-field" key={key} aria-label={column.name}>
+        <h3>{column.name}<small>{column.type} · {column.nullable ? text.nullable : text.notNullable}</small></h3>
+        {column.comment && <p className="muted small">{column.comment}</p>}
+        <dl><dt>{text.current}</dt><dd tabIndex={0}>{recordValueSummary(value)}</dd>{row.original && <><dt>{text.original}</dt><dd tabIndex={0}>{recordValueSummary(ownCell(row.original, key))}</dd></>}<dt>{text.metadataDefault}</dt><dd>{column.defaultValue ?? text.missingDefault}</dd></dl>
+        {fieldReason && <p className="muted small">{fieldReason}</p>}
+        {tooLarge ? <p className="muted small">{text.fieldTooLarge}</p> : <button onClick={() => { if (expanded.has(key)) setExpanded(current => new Set([...current].filter(item => item !== key))); else { editor.expand(key); setExpanded(current => new Set([...current, key])); } }}>{expanded.has(key) ? text.collapseField : fieldReason ? text.viewField : text.editField}</button>}
+        {expanded.has(key) && input && <RecordValueEditor column={column} input={input} inserted={row.inserted} reason={fieldReason} focus={editor.focusKey === key} onChange={value => editor.change(key, value)}/>}
+      </section>;
+    })}</div>
+    <footer><ErrorBox message={editor.error}/><p className="muted small">{reason || text.readonlyHint}</p><p className="muted small">{text.stageHint}</p><span role="status">{editor.notice}</span><div className="record-actions"><button disabled={!editor.dirty || context.busy} onClick={editor.discard}>{text.discard}</button><button className="primary" disabled={!editor.dirty || !!reason} onClick={editor.stage}>{text.stage}</button></div></footer>
+  </aside>;
+}
+
+/** 同一时刻仅一个模态层：确认期间保留字段编辑器状态，避免嵌套焦点陷阱。 */
+export function RecordEditorDialogs({ editor, context, rows }: { editor: RecordViewController; context: RecordContext; rows: DraftRow[] }) {
+  if (editor.pending) return <Modal title={text.leaveTitle} onClose={() => editor.resolve('stay')}><div className="modal-content"><p>{text.leaveHint}</p><ErrorBox message={editor.error}/></div><footer className="modal-footer"><button onClick={() => editor.resolve('stay')}>{text.stay}</button><button onClick={() => editor.resolve('discard')}>{text.discardContinue}</button><button className="primary" onClick={() => editor.resolve('stage')}>{text.stageContinue}</button></footer></Modal>;
+  if (editor.cellKey === null || !editor.draft) return null;
+  const key = editor.cellKey; const column = context.info?.columns.find(item => item.name === key); const row = rows.find(item => item.id === editor.draft!.rowId);
+  const reason = recordReadonlyReason(context, row, key); const input = editor.draft.fields.get(key);
+  /** 快捷键和按钮共用同一次暂存；成功后关闭，校验失败保留输入与弹窗。 */
+  function stageCell() { if (reason || !editor.dirty || !editor.stage()) return false; editor.closeCell(); return true; }
+  return <Modal title={formatText(text.cellTitle, key)} onClose={editor.closeCell}><div className="modal-content" onKeyDown={event => localKeys(event, stageCell, editor.closeCell)}>
+    {column && input ? <RecordValueEditor column={column} input={input} inserted={!!row?.inserted} reason={reason} focus onChange={value => editor.change(key, value)}/> : <p>{recordValueSummary(ownCell(editor.draft.data, key))}</p>}
+    <ErrorBox message={editor.error}/><p className="muted small">{reason || text.stageHint}</p>
+  </div><footer className="modal-footer"><button onClick={editor.closeCell}>{text.closeCell}</button><span className="grow"/><button className="primary" disabled={!!reason || !editor.dirty} onClick={stageCell}>{text.stageCell}</button></footer></Modal>;
+}
