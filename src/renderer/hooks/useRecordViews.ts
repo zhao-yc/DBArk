@@ -5,12 +5,15 @@ import { beginRecordDraft, editRecordInput, recordInputDirty, recordReadonlyReas
 import { recordViewZh as text } from '../locales/recordViews.zh-CN';
 
 interface Options { rows: DraftRow[]; getRows(): DraftRow[]; getContext(): RecordContext; onRows(rows: DraftRow[]): void; onDirty(dirty: boolean): void; onFocusGrid(): void }
+/** 展示方式与字段输入格式 RecordMode 分离，树和整行 JSON 永不进入写入解析。 */
+export type RecordDisplayMode = 'form' | 'tree' | 'json';
 
 /** 输入仅在内存中保留；同步引用让同一事件轮次的关闭、暂存和重复操作看到最新状态。 */
 export function useRecordViews(options: Options) {
   const latest = useRef(options); latest.current = options;
   const [draft, setDraft] = useState<RecordDraft | null>(null); const draftRef = useRef(draft);
   const [formOpen, setFormOpen] = useState(false); const [cellKey, setCellKey] = useState<string | null>(null);
+  const [displayMode, setDisplayMode] = useState<RecordDisplayMode>('form');
   const [pending, setPending] = useState(false); const leaveGuard = useRef(new RecordLeaveGuard());
   const [error, setError] = useState(''); const [focusKey, setFocusKey] = useState<string | null>(null);
   const [notice, setNotice] = useState(''); const dirtyRef = useRef(false);
@@ -44,6 +47,11 @@ export function useRecordViews(options: Options) {
   function request(action: () => void): boolean {
     const completed = leaveGuard.current.request(dirtyRef.current, action);
     if (!completed) setPending(true); return completed;
+  }
+  /** 模式切换复用首次离开意图，暂存失败或选择留下时不清除稀疏输入、原值与展示方式。 */
+  function changeDisplayMode(mode: RecordDisplayMode): boolean {
+    if (mode === displayMode || latest.current.getContext().busy) return false;
+    return request(() => { setDisplayMode(mode); setNotice(''); });
   }
   /** “留在当前编辑”不触碰任何草稿；暂存失败也不运行待处理动作。 */
   function resolve(choice: 'stage' | 'discard' | 'stay') {
@@ -93,6 +101,6 @@ export function useRecordViews(options: Options) {
     if (row && (row.data !== current.data || row.original !== current.original || row.inserted !== current.inserted)) replace(beginRecordDraft(row, latest.current.getContext()));
   }, [options.rows, context.info]);
 
-  return { draft, formOpen, cellKey, pending, error, focusKey, notice, dirty, hasInput: () => dirtyRef.current, reset, discard, stage, request, resolve, select, openForm, closeForm, openCell, closeCell, expand, change };
+  return { draft, formOpen, displayMode, changeDisplayMode, cellKey, pending, error, focusKey, notice, dirty, hasInput: () => dirtyRef.current, reset, discard, stage, request, resolve, select, openForm, closeForm, openCell, closeCell, expand, change };
 }
 export type RecordViewController = ReturnType<typeof useRecordViews>;

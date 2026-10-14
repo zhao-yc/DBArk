@@ -145,6 +145,12 @@ node node_modules/@playwright/test/cli.js test tests/e2e/table-record-views.spec
 
 采集真实 IPC 时不伪造返回数据；原型同名键需要先在被观察进程 JSON 编码、Node 再解析，避免测试工具自身对象反序列化丢失 `__proto__`。原失败和修正后完整轮次分别保留。键盘 reported 组合标志不能替代实体输入法、自动 locator 不能替代人工辅助技术验收。当前状态见 [D04 普通表单验收](../tests/integration/acceptance-d04-record-forms-20261014.md)。
 
+### 只读记录投影（0.12）
+
+`jsonLexicalTree.ts`只生成完整有界词法树，数字保留原文范围，对象成员保存在有序数组；不把整个JSON交给`JSON.parse`再重建。`recordProjections.ts`负责实际单元格类型、身份、活动行缓存和最终转义字节预检；它的显示格式没有写回解码器。`recordProjectionView.ts`将已验证节点限制为32字段/480结构条目的窗口，`RecordReadonlyProjection`在身份变化、加载和失效时撤下缓存，不能持有旧页文本冒充新记录。
+
+正式Vitest配置同时收集`.test.ts`和`.test.tsx`。三个新增单元文件覆盖词法、类型化/预算及真实React静态输出，不能由SSR通过推断浏览器交互。`table-record-projections.spec.ts`的七项真实界面和`table-record-projection-lifecycle.spec.ts`的两项生命周期分别运行；后者的门控在真实分页返回完成后只延迟交付，检查忙碌期间旧投影撤下，不替换数据。两套共九项均沿用五个普通隔离基线及关闭追踪要求，没有新增权限用户。见[计划](plans/record-projections.md)与[实际验收](../tests/integration/acceptance-d04-record-projections-20261014.md)。
+
 ## 构建
 
 0.6.0 的表偏好由 `tests/unit/table-preferences.test.ts` 验证精确复合键、原型名称、实际 SQLite 满额和 UTF-8 聚合预算、保存/删除/目标变更失败回退，以及 schema2 旧七表全部字段保持。`ui-page-find-replace`、`ui-table-column-preferences` 验证完整原值、Unicode 位置、字面替换、快照和预算、调和及可见列模型。`table-preferences.spec.ts` 的四项离线实际 IPC 与 `table-grid-preferences.spec.ts` 的六项实库 UI 分别运行，编写或列出测试不算实测通过；本批结果见 [D06 验收记录](../tests/integration/acceptance-p0-grid-preferences-20261014.md)。旧 reader 的独立结构探针使用冻结 0.5 源码和真实 SQLite 副本，不属于真实安装或系统加密验证。

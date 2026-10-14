@@ -1,0 +1,18 @@
+.record-display-modes { display: flex; gap: 5px; margin: 8px 0; }
+.record-display-modes button { flex: 1; font-size: 11px; padding: 6px; }
+.record-display-modes button[aria-pressed=true] { color: var(--accent); border-color: var(--accent); background: var(--accent-bg); }
+.record-projection-hint { font-size: 11px; color: var(--muted); line-height: 1.6; }
+.record-projection-content { flex: 1; min-height: 80px; overflow: auto; overflow-wrap: anywhere; }
+.record-projection-content p { font-size: 11px; line-height: 1.6; }
+.record-projection-fields, .record-lexical-list { list-style: none; padding: 0; margin: 0; }
+.record-projection-entry { border-top: 1px solid var(--line); padding-block: 10px; }
+.record-projection-entry h3 { margin: 0; font-size: 13px; }
+.record-projection-entry h3 small, .record-lexical-list span { display: block; font-size: 11px; color: var(--muted); font-weight: normal; margin-top: 5px; }
+.record-projection-entry pre { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 11px; max-height: 100px; overflow: auto; user-select: text; }
+.record-projection-entry button { font-size: 11px; margin: 4px 5px 0 0; }
+.record-projection-pager { display: flex; justify-content: space-between; gap: 8px; margin: 8px 0; }
+.record-projection-pager button { font-size: 11px; }
+.record-whole-json { width: 100%; min-height: 320px; resize: vertical; font-family: var(--font-mono, monospace); white-space: pre; overflow: auto; font-size: 11px; }
+.record-token-detail label { display: block; font-size: 11px; margin-top: 10px; }
+.record-token-detail textarea { display: block; width: 100%; min-height: 100px; resize: vertical; font-family: var(--font-mono, monospace); font-size: 11px; }
+.record-lexical-section { border-top: 1px solid var(--line); padding-top: 8px; }
