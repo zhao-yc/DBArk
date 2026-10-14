@@ -129,7 +129,7 @@ node node_modules/vitest/vitest.mjs run --config vitest.integration.config.ts te
 
 夹具为每个用例创建独立随机库、账号和内存密码，结束时先关闭引擎和低权连接，再精确删除本例账号及其授权、删除本例数据库，核对库、用户及已采样线程无残留。不要打印创建用户 SQL、认证哈希或密码；失败后只保留脱敏编号和精确清理状态，不能把临时账号扩权后再次冒充同一最小权限用例。
 
-### 普通记录表单（0.11 验收中）
+### 普通记录表单（0.11）
 
 `recordViews.ts` 提供只读原因、行身份、稀疏输入、离开守卫和固定页面提交快照；`useRecordViews` 只持有输入及交互状态，`TableTab` 仍拥有唯一 `DraftRow[]`。`RecordFormPanel` 与旧单元格弹窗复用 `RecordValueEditor`。不要新增逐字段自动写接口、复制整页作为第二份真值，或在冲突后自动更新旧值重试。
 
