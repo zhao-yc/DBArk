@@ -8,7 +8,7 @@ DBArk 保留连接树、多标签查询和表格编辑等熟悉的工作方式�
 
 在 [GitHub Releases](https://github.com/zhao-yc/DBArk/releases) 下载 Windows x64 安装程序、macOS arm64/x64 DMG 或 ZIP，以及源码和 SHA256 校验清单。`0.x` 为开发预览；Windows 未签名，macOS 仅有 ad-hoc 签名，没有发行证书及公证。安装步骤和数据保护边界见 [中文使用指南](docs/user-guide.md)。
 
-[0.9.1](https://github.com/zhao-yc/DBArk/releases/tag/v0.9.1) 已公开，修复独立任务失败后关闭阶段的迟到取消；包含0.9的索引与主键差异。公开Windows安装包最终完整70项通过，首轮失败与复验分别记录，见[版本说明](docs/releases/v0.9.1.md)。
+[0.10.0](https://github.com/zhao-yc/DBArk/releases/tag/v0.10.0) 已公开，新增外键差异设计，支持复合映射、跨库、自引用及明确异名替换。12个公开文件及486个源码blob核对一致，公开Windows安装包最终完整77项通过；首轮中断、诊断及复验分别保留，见[版本说明](docs/releases/v0.10.0.md)。
 
 ## 开发运行
 
