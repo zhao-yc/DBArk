@@ -43,9 +43,16 @@ function limitsOf(overrides: Partial<JsonLexicalLimits>): JsonLexicalLimits {
 class ReadFailure extends Error { constructor(readonly status: 'invalid' | 'limited', readonly offset: number, reason: string) { super(reason); } }
 
 /** 在先验深度上限内递归读取，完整尾部通过后才发布冻结树，错误不返回任何部分节点。 */
-export function parseJsonLexicalTree(text: string, overrides: Partial<JsonLexicalLimits> = {}): LexicalDocument {
+export function parseJsonLexicalTree(text: string, overrides: Partial<JsonLexicalLimits> = {}): LexicalDocument { return parseWithLimits(text, limitsOf(overrides)); }
+
+/** 整行输入格式使用独立固定预算，不能通过参数放宽单JSON字段的硬限额。 */
+export const recordInputLexicalLimits: Readonly<JsonLexicalLimits> = Object.freeze({ sourceUnits: 2_097_152, sourceBytes: 2_097_152, depth: 16, nodes: 32768, containerItems: 4096, stringUnits: 2_097_152, numberUnits: 16 });
+/** 仅供显式整行输入格式的完整词法预检；输出仍不丢重复成员或数字原文。 */
+export function parseRecordInputDocumentTree(text: string): LexicalDocument { return parseWithLimits(text, recordInputLexicalLimits); }
+
+/** 两个公开入口各自选择固定策略，扫描内核不接收未验证的用户预算覆盖。 */
+function parseWithLimits(text: string, limits: Readonly<JsonLexicalLimits>): LexicalDocument {
   if (typeof text !== 'string') throw new Error('JSON 词法树只接受原始字符串');
-  const limits = limitsOf(overrides);
   if (text.length > limits.sourceUnits) return Object.freeze({ status: 'limited', text, offset: 0, reason: 'JSON 原文超过 UTF-16 预算' });
   const sourceBytes = boundedUtf8Bytes(text, limits.sourceBytes);
   if (sourceBytes === undefined) return Object.freeze({ status: 'limited', text, offset: 0, reason: 'JSON 原文超过 UTF-8 预算' });

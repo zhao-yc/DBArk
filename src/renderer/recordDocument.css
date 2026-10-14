@@ -1,0 +1,2 @@
+.record-document-input { padding: 12px; min-width: 0; }
+.record-document-editor { width: 100%; min-height: 28vh; resize: vertical; font-family: Consolas, Monaco, monospace; font-size: 12px; line-height: 1.5; white-space: pre; overflow: auto; }

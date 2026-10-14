@@ -151,6 +151,12 @@ node node_modules/@playwright/test/cli.js test tests/e2e/table-record-views.spec
 
 正式Vitest配置同时收集`.test.ts`和`.test.tsx`。三个新增单元文件覆盖词法、类型化/预算及真实React静态输出，不能由SSR通过推断浏览器交互。`table-record-projections.spec.ts`的七项真实界面和`table-record-projection-lifecycle.spec.ts`的两项生命周期分别运行；后者的门控在真实分页返回完成后只延迟交付，检查忙碌期间旧投影撤下，不替换数据。两套共九项均沿用五个普通隔离基线及关闭追踪要求，没有新增权限用户。见[计划](plans/record-projections.md)与[实际验收](../tests/integration/acceptance-d04-record-projections-20261014.md)。
 
+### 整行输入（0.13）
+
+`recordInputDocument.ts`只在显式打开整行编辑时构建完整输入格式，先按缩进及JSON转义后的字节预检，再序列化；`parseRecordInputDocumentTree`使用独立固定策略，不放宽原单JSON字段解析。完成词法重复成员检查后才解码封闭结构，验证完整字段集合及锁定占位，再交给原`stageRecordDraft`。输入模式和单字段解析语义保持一致，不新增IPC或数据库提交路径。
+
+`useRecordViews`的字段Map和整行原文是互斥variant，dirty、离开、退出及暂存均使用同一同步引用。整行捕获额外包含行对象身份，删除撤销和原值引用变化不能恢复旧输入；只读展示之间保留字段Map，避免丢失展开状态。正式单元含完整格式、预算及行身份，九项真实界面通过五个普通隔离基线；原始夹具失败与实际展开回归分别保留。完整回归及发布阶段见[计划](plans/record-input.md)和[实际记录](../tests/integration/acceptance-d04-record-input-20261014.md)。
+
 ## 构建
 
 0.6.0 的表偏好由 `tests/unit/table-preferences.test.ts` 验证精确复合键、原型名称、实际 SQLite 满额和 UTF-8 聚合预算、保存/删除/目标变更失败回退，以及 schema2 旧七表全部字段保持。`ui-page-find-replace`、`ui-table-column-preferences` 验证完整原值、Unicode 位置、字面替换、快照和预算、调和及可见列模型。`table-preferences.spec.ts` 的四项离线实际 IPC 与 `table-grid-preferences.spec.ts` 的六项实库 UI 分别运行，编写或列出测试不算实测通过；本批结果见 [D06 验收记录](../tests/integration/acceptance-p0-grid-preferences-20261014.md)。旧 reader 的独立结构探针使用冻结 0.5 源码和真实 SQLite 副本，不属于真实安装或系统加密验证。
