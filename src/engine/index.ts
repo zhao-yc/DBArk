@@ -29,7 +29,7 @@ interface RunningTask {
   queryExport?: QueryExportProgress; fileCommitStarted?: boolean;
 }
 interface ResultBudget { remainingRows: number; remainingBytes: number; remainingResults: number; }
-interface IndependentTask { connectionId: string; controller: AbortController; done: Promise<void>; managed?: ManagedConnection; cancelPending?: Promise<void>; cancelError?: Error; cancelRequested?: boolean; actionCompleted?: boolean; structureTask?: boolean; generation?: number; commandTerminal?: Promise<void>; }
+interface IndependentTask { connectionId: string; controller: AbortController; done: Promise<void>; managed?: ManagedConnection; cancelPending?: Promise<void>; cancelError?: Error; cancelRequested?: boolean; actionSettled?: boolean; structureTask?: boolean; generation?: number; commandTerminal?: Promise<void>; }
 type Input = Record<string, any>;
 
 /** 独立数据库进程的入口；网络连接与文件流不会进入 Electron 渲染进程。 */
@@ -266,9 +266,11 @@ export class Engine {
         managed = await connect(profile, undefined, controller.signal);
         task.managed = managed;
         if (controller.signal.aborted) throw new Error('任务已取消');
-        result = await action(managed, { report, checkCancelled, commandStarted }); task.actionCompleted = true;
+        result = await action(managed, { report, checkCancelled, commandStarted });
       } catch (error) { failure = error; }
       finally {
+        // 成功或失败均已离开动作阶段，迟到取消只等待收尾，不再给关闭中的连接创建 KILL 控制。
+        task.actionSettled = true;
         try { await task.cancelPending; } catch (error) { failure = error; }
         if (options && !failure) { options.progress.phase = 'releasing'; report(); }
         try { await managed?.close(options ? { strict: true } : undefined); } catch (error) { failure ??= error; }
@@ -424,7 +426,7 @@ export class Engine {
   private async cancelTask(id: string): Promise<void> {
     const independent = this.independentTasks.get(id);
     if (independent) {
-      if (independent.actionCompleted) { await independent.done; return; }
+      if (independent.actionSettled) { await independent.done; return; }
       independent.cancelRequested = true;
       if (!independent.cancelPending) {
         const managed = independent.managed;
