@@ -19,6 +19,9 @@ export class C02Desktop {
   private readonly pids = new Set<number>();
   private pageErrorCount = 0;
   private quitObserved = false;
+  private shutdownVerified = false;
+  private shutdownFailure?: { reason: unknown };
+  private unexpectedDialog = false;
   private constructor(readonly directory: string, private readonly parent: string, private readonly identity: { dev: number; ino: number }) {}
 
   /** 先创建独占数据目录，调用 start 前不启动进程。 */
@@ -30,19 +33,25 @@ export class C02Desktop {
   /** 真实启动主进程及 preload；仅替换本应用的已知原生确认回答，不替换认证、IPC 或系统加密。 */
   async start(): Promise<void> {
     if (!this.closed) throw new C02FixtureError('C02 上一次 Electron 仍在运行');
+    // closed只是事件；即便之前验证过，也必须在丢弃旧PID前重新确认握手和全部旧进程消失。
+    await this.quit();
+    if (this.app && !this.shutdownVerified) throw new C02FixtureError('C02 上一代应用退出尚未验证，拒绝重启');
     try {
       const executablePath = process.env.DBARK_C02_EXECUTABLE_PATH;
       if (executablePath) {
         const info = isAbsolute(executablePath) ? await lstat(executablePath) : undefined;
         if (!info?.isFile() || info.isSymbolicLink()) throw new C02FixtureError('C02 显式应用路径必须为已有普通文件绝对路径');
       }
-      this.pids.clear(); this.quitObserved = false;
+      this.pids.clear(); this.quitObserved = false; this.shutdownVerified = false; this.unexpectedDialog = false;
       this.app = await electron.launch({ ...(executablePath ? { executablePath, args: [] } : { args: ['.'] }), env: c02DesktopEnvironment(process.env, this.directory), chromiumSandbox: true });
       this.closed = false; this.app.on('close', () => { this.closed = true; });
       if (this.app.process().pid) this.pids.add(this.app.process().pid!);
       const marker = `C02-QUIT-${randomUUID()}`;
-      this.quitReady = new Promise<void>(done => this.app!.on('console', message => { if (message.text() === marker) { this.quitObserved = true; done(); } }));
-      await this.app.evaluate(({ app }, value) => { app.once('will-quit', () => console.log(value)); }, marker);
+      this.quitReady = new Promise<void>(done => this.app!.on('console', message => {
+        const text = message.text();
+        if (text === `${marker}:normal` || text === `${marker}:unexpected`) { this.quitObserved = true; this.unexpectedDialog ||= text.endsWith(':unexpected'); done(); }
+      }));
+      await this.app.evaluate(({ app }, value) => { app.once('will-quit', () => console.log(`${value}:${(globalThis as MainGlobal).__c02Dialogs?.unexpected ? 'unexpected' : 'normal'}`)); }, marker);
       this.page = await this.app.firstWindow();
       this.page.on('pageerror', () => { this.pageErrorCount++; });
       await expect(this.page.locator('.app-statusbar')).toBeVisible({ timeout: 15000 });
@@ -67,18 +76,33 @@ export class C02Desktop {
 
   /** 必须走真实 app.quit 保存握手并等待本例全部已记录进程消失；不会因正常退出而删除用户目录。 */
   async quit(): Promise<void> {
-    if (this.closed) return;
-    const app = this.app!;
-    await this.rememberProcesses();
-    const unexpected = await app.evaluate(() => (globalThis as MainGlobal).__c02Dialogs?.unexpected === true);
-    if (unexpected || this.pageErrorCount) throw new C02FixtureError('C02 出现页面错误或非预期原生确认');
-    const exited = app.waitForEvent('close', { timeout: 15000 });
-    await app.evaluate(({ app }) => { setTimeout(() => app.quit(), 0); });
-    await Promise.race([this.quitReady, exited]);
-    if (!this.quitObserved) throw new C02FixtureError('C02 未经过真实 will-quit 保存握手就已退出');
-    if (!this.closed) await app.close();
-    await exited;
-    await expect.poll(() => [...this.pids].every(pid => c02PidGone(pid)), { timeout: 7000, message: '本例 Electron 与实际 utility 进程必须退出' }).toBe(true);
+    if (this.shutdownFailure) throw this.shutdownFailure.reason;
+    try {
+      this.shutdownVerified = false;
+      if (!this.app) {
+        if (this.pids.size) throw new C02FixtureError('C02 没有应用对象但仍有旧PID责任');
+        return; // 从未启动的空实例允许幂等收尾，不能用closed替代这一条件。
+      }
+      if (!this.closed) {
+        const app = this.app;
+        await this.rememberProcesses();
+        this.unexpectedDialog ||= await app.evaluate(() => (globalThis as MainGlobal).__c02Dialogs?.unexpected === true);
+        if (this.unexpectedDialog || this.pageErrorCount) throw new C02FixtureError('C02 出现页面错误或非预期原生确认');
+        const exited = app.waitForEvent('close', { timeout: 15000 });
+        await app.evaluate(({ app }) => { setTimeout(() => app.quit(), 0); });
+        await Promise.race([this.quitReady, exited]);
+        if (!this.quitObserved) throw new C02FixtureError('C02 未经过真实 will-quit 保存握手就已退出');
+        if (!this.closed) await app.close();
+        await exited;
+      }
+      if (!this.closed || !this.quitObserved) throw new C02FixtureError('C02 未经过真实 will-quit 保存握手就已退出');
+      if (this.unexpectedDialog || this.pageErrorCount) throw new C02FixtureError('C02 出现页面错误或非预期原生确认');
+      await expect.poll(() => [...this.pids].every(pid => c02PidGone(pid)), { timeout: 7000, message: '本例 Electron 与实际 utility 进程必须退出' }).toBe(true);
+      this.shutdownVerified = true;
+    } catch (error) {
+      // 失败属于这一代应用，后续close、强杀或PID消失均不能抹掉首因并允许重启。
+      this.shutdownFailure ??= { reason: error }; throw this.shutdownFailure.reason;
+    }
   }
 
   /** finally 内只处理本例 PID 树和已验证的临时目录；退出失败仍保留为失败，不以强杀替代成功。 */
