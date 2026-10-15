@@ -29,7 +29,9 @@ test.describe('表注释：正式Electron与真实数据库入口', () => {
   test.skip(!active, '必须同时显式启用实库与表注释验收'); test.setTimeout(120000);
   test.beforeEach(() => {
     environment.DBARK_TEST_HOST = process.env.DBARK_TEST_HOST ?? '192.168.31.200'; environment.DBARK_TEST_PORT = process.env.DBARK_COLUMN_PATCH_TEST_PORT ?? process.env.DBARK_TEST_PORT ?? '13384';
-    if (!['192.168.31.200', 'deve-server.yinzon.com'].includes(environment.DBARK_TEST_HOST) || !['13357', '13380', '13384', '13310', '13311'].includes(environment.DBARK_TEST_PORT)) throw new Error('拒绝访问未核对的200专用实例');
+    if (!['192.168.31.200', 'deve-server.yinzon.com'].includes(environment.DBARK_TEST_HOST) || !['13357', '13380', '13384', '13310', '13311', '13484'].includes(environment.DBARK_TEST_PORT)) throw new Error('拒绝访问未核对的200专用实例');
+    // 严格TLS实例必须由执行器显式注入CA；不能借本地env缺省值自动降级或换目标。
+    if (environment.DBARK_TEST_PORT === '13484' && (process.env.DBARK_TEST_TLS !== '1' || environment.DBARK_TEST_TLS !== '1' || !process.env.DBARK_TEST_CA || environment.DBARK_TEST_CA !== process.env.DBARK_TEST_CA)) throw new Error('13484必须显式启用严格TLS并提供一致CA，禁止降级');
   });
   test('对象树与表页两入口，复杂定义不重述、只读预览零DDL、双击只执行一次', async ({}, info) => {
     await isolatedDatabase(async context => {

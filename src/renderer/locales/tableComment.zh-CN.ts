@@ -1,6 +1,7 @@
 /** 协议确认项与用户文案分离，未知确认项不能显示为已授权。 */
 export const tableCommentZh = {
   title: '表注释', comment: '普通表说明', read: '重新读取表属性', preview: '预览表注释变更', apply: '确认修改表注释', back: '返回注释编辑', cancel: '取消注释任务', close: '关闭',
+  engine: '引擎', charset: '默认字符集', collation: '默认排序规则', rowFormat: '行格式', autoIncrement: '自增计数（只读）', unset: '未设置', version: '数据库版本',
   fixedSql: '表注释SQL预览（只读）', before: '原注释', after: '新注释', readonly: '当前表注释只读', budget: '本版保守预算：{0}字符、{1}个UTF-8字节；超限拒绝，不截断。', bmp: '当前注释目录仅证明基本多文种平面文字，暂不接受emoji等补充字符。',
   ackImplicit: '我确认DDL可能隐式提交，取消和事务回滚不能撤销已完成的注释修改，服务器可能等待锁或内部重建。',
   ackWindow: '我确认在维护窗口执行并暂停并行结构修改；执行前重核仍存在外部DDL并发窗口。',
