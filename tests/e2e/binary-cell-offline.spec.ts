@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 import { binaryCellZh as text } from '../../src/renderer/locales/binaryCell.zh-CN';
 let server: ViteDevServer, app: ElectronApplication, page: Page, directory: string, url: string;
+let injectedClipboard = '';
 const errors: string[] = [];
 const viewer = () => page.getByRole('region', { name: text.title, exact: true });
 test.beforeAll(async () => {
@@ -21,7 +22,7 @@ test.beforeEach(async () => {
   // 仅旁观真实 Blob URL 的创建与撤销，不替代图像加载、格式判断或解码。
   await page.evaluate(() => { const active = new Set<string>(); Object.defineProperty(window, '__binaryUrls', { value: active }); const create = URL.createObjectURL.bind(URL), revoke = URL.revokeObjectURL.bind(URL); URL.createObjectURL = value => { const url = create(value); active.add(url); return url; }; URL.revokeObjectURL = url => { active.delete(url); revoke(url); }; });
 });
-test.afterEach(async () => { await app?.close(); if (dirname(resolve(directory)) !== resolve(tmpdir()) || !basename(directory).startsWith('dbark-binary-e2e-')) throw new Error('拒绝清理测试目录之外的路径'); await rm(directory, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 }); });
+test.afterEach(async () => { if (injectedClipboard && app) await app.evaluate(async ({ clipboard }, value) => { if (await clipboard.readText() === value) await clipboard.clear(); }, injectedClipboard).catch(() => undefined); injectedClipboard = ''; await app?.close(); if (dirname(resolve(directory)) !== resolve(tmpdir()) || !basename(directory).startsWith('dbark-binary-e2e-')) throw new Error('拒绝清理测试目录之外的路径'); await rm(directory, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 }); });
 /** 坐标来自当前实际列头，支持大字段位于水平滚动区域外的情况。 */
 async function cell(key: string) {
   const grid = page.locator('.results-grid'), header = page.getByRole('columnheader').filter({ hasText: new RegExp('^' + key) }).first();
@@ -73,12 +74,40 @@ test('记录表单中的图片缓存同样随结构快照失效并释放', async
   await page.getByRole('button', { name: '夹具结构变化', exact: true }).click(); await expect(viewer()).toHaveCount(0); await expect.poll(urls).toBe(0); expect(await writes()).toEqual([]); expect(errors).toEqual([]);
 });
 
-test('无前缀多一字节的Hex在最终暂存也拒绝并保留完整输入，合法上限可保真暂存', async () => {
-  await open('payload'); const hex = viewer().getByRole('textbox'), oversized = 'ff'.repeat(131072);
+test('无前缀多一字节的Hex整次拒绝并保留旧输入，合法上限可保真暂存', async () => {
+  await open('payload'); const hex = viewer().getByRole('textbox'), baseline = await hex.inputValue(), oversized = 'ff'.repeat(131072);
   await hex.fill(oversized); await expect(viewer().getByRole('alert')).toContainText('完整 Hex 编辑');
-  await page.getByRole('button', { name: '暂存修改', exact: true }).click(); await expect(page.getByRole('dialog')).toBeVisible();
-  await expect(hex).toHaveValue(oversized); await expect(page.getByRole('dialog').locator(':scope > .modal-content > .error-box')).toContainText('完整 Hex 编辑');
+  await expect(page.getByRole('button', { name: '暂存修改', exact: true })).toBeDisabled(); await expect(hex).toHaveValue(baseline);
   await expect(page.locator('.row-modified')).toHaveCount(0); expect(await writes()).toEqual([]);
   const upper = '0x' + 'ab'.repeat(131071); await hex.fill(upper); await expect(viewer()).toContainText('Hex 校验通过：131071 字节');
   await page.getByRole('button', { name: '暂存修改', exact: true }).click(); await expect(page.getByRole('dialog')).toHaveCount(0); await open('payload'); await expect(viewer().getByRole('textbox')).toHaveValue(upper); expect(await writes()).toEqual([]); expect(errors).toEqual([]);
+});
+
+test('单元格及记录表单真实剪贴板超限不截断，选区替换整次拒绝，合法边界可暂存', async () => {
+  const modifier = process.platform === 'darwin' ? 'Meta' : 'Control', maximum = 'ab'.repeat(131071);
+  /** 写入本例已知Hex后走系统粘贴，绝不通过DOM赋值替代剪贴板输入链。 */
+  async function paste(hex: ReturnType<typeof viewer>, value: string, selectAll = true) {
+    injectedClipboard = value; await app.evaluate(({ clipboard }, input) => clipboard.writeText(input), value);
+    await hex.focus(); if (selectAll) await hex.press(`${modifier}+A`); await hex.press(`${modifier}+V`);
+  }
+  for (const route of ['cell', 'form'] as const) {
+    if (route === 'form') { await page.reload(); await expect(page.locator('.results-grid')).toBeVisible(); await expect(page.locator('.loading-overlay')).toHaveCount(0); await (await cell('payload')).click(); await page.getByRole('button', { name: '记录表单', exact: true }).click(); await page.getByRole('complementary', { name: '记录表单', exact: true }).getByRole('region', { name: 'payload', exact: true }).getByRole('button', { name: '编辑字段', exact: true }).click(); }
+    else await open('payload');
+    const hex = viewer().getByRole('textbox'), baseline = await hex.inputValue();
+    await expect(hex).not.toHaveAttribute('maxlength');
+    for (const source of ['0x' + maximum + 'ab', maximum + 'ab', '0x' + maximum + ' ', maximum + '   ', 'ff '.repeat(87382)]) {
+      await paste(hex, source); await expect(hex).toHaveValue(baseline); await expect(viewer().getByRole('alert')).toContainText('完整 Hex 编辑'); await expect(page.locator('.row-modified')).toHaveCount(0); expect(await writes()).toEqual([]);
+    }
+    await hex.evaluate((node: HTMLTextAreaElement) => node.setSelectionRange(2, 4)); await paste(hex, maximum, false); await expect(hex).toHaveValue(baseline); await expect(viewer().getByRole('alert')).toContainText('完整 Hex 编辑');
+    await expect(page.getByRole('button', { name: route === 'cell' ? '暂存修改' : '暂存本行', exact: true })).toBeDisabled(); await expect(page.locator('.row-modified')).toHaveCount(0);
+    const legal = route === 'cell' ? '0x' + maximum : maximum + ' \n'; await paste(hex, legal); await expect(hex).toHaveValue(legal); await expect(viewer()).toContainText('Hex 校验通过：131071 字节');
+    await page.getByRole('button', { name: route === 'cell' ? '暂存修改' : '暂存本行', exact: true }).click(); await expect(page.locator('.row-modified')).toHaveCount(1); expect(await writes()).toEqual([]);
+    if (route === 'cell') await expect(page.getByRole('dialog')).toHaveCount(0);
+    else await page.getByRole('complementary', { name: '记录表单', exact: true }).getByRole('button', { name: '收起记录表单', exact: true }).click();
+    await open('payload'); const stagedHex = viewer().getByRole('textbox'); await expect(stagedHex).toHaveValue('0x' + maximum);
+    // 已有合法草稿也必须逐字节保留，失败输入不能替换成截短的新草稿。
+    await paste(stagedHex, '0x' + maximum + 'ab'); await expect(stagedHex).toHaveValue('0x' + maximum); await expect(viewer().getByRole('alert')).toContainText('完整 Hex 编辑'); await expect(page.locator('.row-modified')).toHaveCount(1); expect(await writes()).toEqual([]);
+    await page.getByRole('button', { name: '关闭字段编辑', exact: true }).click();
+  }
+  expect(errors).toEqual([]);
 });

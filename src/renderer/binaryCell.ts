@@ -25,13 +25,25 @@ export function decodeBinaryCell(value: CellValue | undefined): Uint8Array | nul
 }
 /** 编辑输入完整校验后才解码；空串对应零字节二进制，绝不隐式变成 NULL。 */
 export function parseBinaryHex(input: string): Uint8Array {
-  if (input.length > binaryCellLimits.hexUnits) throw new Error(text.editLimit);
+  assertBinaryHexInputBudget(input);
   const hex = input.replace(/^0x/i, '').replace(/\s/g, '');
   if (!/^(?:[0-9a-fA-F]{2})*$/.test(hex)) throw new Error(text.hexInvalid);
   if (hex.length / 2 > binaryCellLimits.editBytes) throw new Error(text.editLimit);
   const bytes = new Uint8Array(hex.length / 2);
   for (let index = 0; index < bytes.length; index++) bytes[index] = Number.parseInt(hex.slice(index * 2, index * 2 + 2), 16);
   return bytes;
+}
+/** 不完整 Hex 可留在编辑缓冲；所有输入先统一检查原始字符与潜在完整字节预算。 */
+export function assertBinaryHexInputBudget(input: string): void {
+  if (input.length > binaryCellLimits.hexUnits) throw new Error(text.editLimit);
+  const units = input.replace(/^0x/i, '').replace(/\s/g, '').length;
+  if (Math.ceil(units / 2) > binaryCellLimits.editBytes) throw new Error(text.editLimit);
+}
+/** 在分配替换结果之前核对原始长度，整次输入超限就拒绝，绝不接受浏览器截取的前缀。 */
+export function replaceBinaryHexInput(current: string, start: number, end: number, inserted: string): string {
+  if (!Number.isInteger(start) || !Number.isInteger(end) || start < 0 || end < start || end > current.length) throw new Error(text.hexInvalid);
+  if (current.length - (end - start) + inserted.length > binaryCellLimits.hexUnits) throw new Error(text.editLimit);
+  const next = current.slice(0, start) + inserted + current.slice(end); assertBinaryHexInputBudget(next); return next;
 }
 /** 最终暂存复用查看器的原始字符和字节门；有界分段编码避免展开大型参数数组。 */
 export function binaryCellFromHex(input: string): { type: 'binary'; base64: string } {

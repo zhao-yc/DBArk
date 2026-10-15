@@ -1,11 +1,22 @@
 import { describe, expect, it } from 'vitest';
-import { binaryByteLength, binaryCellLimits, binaryHexPage, decodeBinaryCell, decodeBinaryText, inspectBinaryImage, parseBinaryHex } from '../../src/renderer/binaryCell';
+import { assertBinaryHexInputBudget, binaryByteLength, binaryCellLimits, binaryHexPage, decodeBinaryCell, decodeBinaryText, inspectBinaryImage, parseBinaryHex, replaceBinaryHexInput } from '../../src/renderer/binaryCell';
 import { beginRecordDraft, editRecordInput, stageRecordDraft, type RecordContext } from '../../src/renderer/recordViews';
 import type { DraftRow } from '../../src/renderer/dataChanges';
 import { parseCell } from '../../src/renderer/lib';
 
 const png = Uint8Array.from(Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+j04QAAAAASUVORK5CYII=', 'base64'));
 describe('完整二进制查看与编辑边界', () => {
+  it('输入和选择替换在拼接前后核对完整预算，超限整次拒绝而非截取前缀', () => {
+    const maximum = 'ab'.repeat(binaryCellLimits.editBytes), current = '0x00ff';
+    for (const inserted of ['0x' + maximum + 'ab', maximum + 'ab', '0x' + maximum + ' ', maximum + '   ', 'ff '.repeat(87382)]) {
+      expect(() => replaceBinaryHexInput(current, 0, current.length, inserted)).toThrow('完整 Hex 编辑');
+      expect(current).toBe('0x00ff');
+    }
+    expect(() => replaceBinaryHexInput(current, 2, 4, maximum)).toThrow('完整 Hex 编辑');
+    expect(replaceBinaryHexInput(current, 2, 4, 'aB ')).toBe('0xaB ff');
+    expect(replaceBinaryHexInput(current, 0, current.length, '0x' + maximum)).toBe('0x' + maximum);
+    expect(() => assertBinaryHexInputBudget('0x0')).not.toThrow(); expect(() => parseBinaryHex('0x0')).toThrow('成对');
+  });
   it('Hex草稿复用原值与可靠键流程，保留原始字节；连接或本地值变化后拒绝旧编辑', () => {
     const original = { id: '18446744073709551615', payload: { type: 'binary' as const, base64: 'AP+A' } };
     const row: DraftRow = { id: 'row', data: structuredClone(original), original, inserted: false, deleted: false };
