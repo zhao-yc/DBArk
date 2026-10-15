@@ -19,6 +19,7 @@ export const recordViewZh = {
   busy: '当前操作尚未结束，暂不可编辑。', deletedReadonly: '待删除记录只能查看；请先在网格撤销删除。',
   generated: '生成列由数据库计算，只能查看。', unknownField: '该字段不属于当前表结构快照。',
   changed: '记录目标、加载代次或本地草稿已变化。输入已保留，请复制或放弃输入后重新核对。',
+  inputSelectionChanged: '输入选区已变化，请重新选择后再输入。',
   defaultExisting: '已有记录不支持重置为服务器 DEFAULT；仅新增记录可以省略该字段。',
   nullForbidden: '该字段不允许 NULL。', fieldTooLarge: '字段超过完整编辑上限（262144 个 UTF-16 代码单元），仅显示摘要；不会截断后暂存。',
   budgetExceeded: '本行输入总量超过 2097152 个 UTF-16 代码单元，请减少同时编辑的字段。',
