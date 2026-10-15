@@ -29,6 +29,7 @@ import { csvCell, csvHeader, encodingName, previewFile, readRecords, readText } 
 import { ResultFileTasks } from './resultFileTasks';
 import { TableColumnPatchTasks } from './tableColumnPatchTasks';
 import { TableIndexPatchTasks } from './tableIndexPatchTasks';
+import { TableCommentTasks } from './tableCommentTasks';
 import { TableForeignKeyPatchTasks } from './tableForeignKeyPatchTasks';
 import type { StructureTaskContext, StructureTaskOptions } from './structureDefinition';
 import { StructurePatchCache } from './structurePatchCache';
@@ -66,6 +67,7 @@ export class Engine {
   private readonly resultFiles: ResultFileTasks;
   private readonly columnPatches: TableColumnPatchTasks;
   private readonly indexPatches: TableIndexPatchTasks;
+  private readonly tableComments: TableCommentTasks;
   private readonly foreignKeyPatches: TableForeignKeyPatchTasks;
   private readonly schemaComparisons: SchemaCompareTasks;
   private readonly structureCache = new StructurePatchCache();
@@ -80,6 +82,7 @@ export class Engine {
     this.schemaComparisons = new SchemaCompareTasks({ read: (target, taskId) => this.withIndependentTask(target.connectionId, taskId, (managed, control) => readSchemaComparisonTarget({ managed, ...control }, target), undefined, '只读结构比较', true, undefined, true), cancel: taskId => this.cancelTask(taskId) }, emit);
     this.columnPatches = new TableColumnPatchTasks({ run: (connectionId, taskId, action, options) => this.withIndependentTask(connectionId, taskId, (managed, control) => action({ managed, ...control }), { label: options.label, purpose: 'columns', progress: options.columnPatch, executionTarget: options.executionTarget }) }, undefined, this.structureCache);
     this.indexPatches = new TableIndexPatchTasks({ run: (connectionId, taskId, action, options) => this.withIndependentTask(connectionId, taskId, (managed, control) => action({ managed, ...control }), options) }, undefined, this.structureCache);
+    this.tableComments = new TableCommentTasks({ run: (connectionId, taskId, action, options) => this.withIndependentTask(connectionId, taskId, (managed, control) => action({ managed, ...control }), options) }, undefined, this.structureCache);
     this.foreignKeyPatches = new TableForeignKeyPatchTasks({ run: (connectionId, taskId, action, options) => this.withIndependentTask(connectionId, taskId, (managed, control) => action({ managed, ...control }), options) }, undefined, this.structureCache);
   }
 
@@ -281,6 +284,10 @@ export class Engine {
       case 'schema.columns.apply': return this.columnPatches.apply(input as any, input.connectionRevision);
       case 'schema.columns.release': return this.columnPatches.releaseTokens(input);
       case 'schema.indexes.get': return this.indexPatches.get(input as any, input.connectionRevision);
+      case 'schema.tableComment.get': return this.tableComments.get(input as any, input.connectionRevision);
+      case 'schema.tableComment.preview': return this.tableComments.preview(input as any, input.connectionRevision);
+      case 'schema.tableComment.apply': return this.tableComments.apply(input as any, input.connectionRevision);
+      case 'schema.tableComment.release': return this.tableComments.releaseTokens(input);
       case 'schema.indexes.preview': return this.indexPatches.preview(input as any, input.connectionRevision);
       case 'schema.indexes.apply': return this.indexPatches.apply(input as any, input.connectionRevision);
       case 'schema.indexes.release': return this.indexPatches.releaseTokens(input);
@@ -396,7 +403,7 @@ export class Engine {
       const task: IndependentTask = { connectionId, controller, done, structureTask: Boolean(options)||strictRead, generation: 0 };
       this.independentTasks.set(taskId, task);
       const label = options?.label ?? readLabel ?? '读取关联记录';
-      const detail = () => options ? (options.purpose === 'indexes' ? { indexPatch: { ...options.progress } } : options.purpose === 'foreignKeys' ? { foreignKeyPatch: { ...options.progress } } : { columnPatch: { ...options.progress } }) : readDetail?.()??{};
+      const detail = () => options ? (options.purpose === 'tableComment' ? { tableComment: { ...options.progress } } : options.purpose === 'indexes' ? { indexPatch: { ...options.progress } } : options.purpose === 'foreignKeys' ? { foreignKeyPatch: { ...options.progress } } : { columnPatch: { ...options.progress } }) : readDetail?.()??{};
       const send = (event: TaskEvent) => { if (!quiet) this.emit(event); };
       const report = () => send({ taskId, status: 'running', progress: 0, message: label, ...detail() });
       const checkCancelled = () => { if (task.cancelRequested || controller.signal.aborted) throw new Error('任务已取消；已执行的结构或数据变更不会撤销'); };

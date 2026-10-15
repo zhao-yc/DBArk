@@ -16,6 +16,7 @@ import { queryStreamExportLimits } from './queryStreamExport';
 import { tablePreferenceSaveSchema, tablePreferenceTargetSchema } from './tablePreferences';
 import { validateColumnPatches } from './tableColumnPatches';
 import { validateIndexPatches } from './tableIndexPatches';
+import { tableCommentAcknowledgements, validateTableComment } from './tableComment';
 import { validateForeignKeyPatches } from './tableForeignKeyPatches';
 import { foreignKeyAcknowledgementIds, foreignKeyTaskLimits } from './tableForeignKeyTasks';
 const foreignKeyTargetName = z.string().min(1).max(64).refine(value => !value.includes('\0'), '外键目标名称不能含 NUL');
@@ -140,6 +141,10 @@ export const commandSchemas: Record<Command, z.ZodType> = {
   'schema.columns.apply': z.object({ previewToken: id, acknowledgements: z.array(z.string().min(1).max(100)).max(20), taskId: id }).strict(),
   'schema.columns.release': z.object({ snapshotId: id.optional(), previewToken: id.optional() }).strict().refine(value => Boolean(value.snapshotId || value.previewToken), '缺少待释放的结构令牌'),
   'schema.indexes.get': z.object({ connectionId: id, database: z.string().min(1).max(64), table: z.string().min(1).max(64), taskId: id }).strict(),
+  'schema.tableComment.get': z.object({ connectionId: id, database: z.string().min(1).max(64), table: z.string().min(1).max(64), taskId: id }).strict(),
+  'schema.tableComment.preview': z.object({ snapshotId: id, comment: z.string().max(4096).transform(value => validateTableComment(value)), taskId: id }).strict(),
+  'schema.tableComment.apply': z.object({ previewToken: id, acknowledgements: z.array(z.enum(tableCommentAcknowledgements)).max(2).refine(value => new Set(value).size === value.length, '表注释确认项不能重复'), taskId: id }).strict(),
+  'schema.tableComment.release': z.object({ snapshotId: id.optional(), previewToken: id.optional() }).strict().refine(value => Boolean(value.snapshotId || value.previewToken), '缺少待释放的表注释令牌'),
   'schema.indexes.preview': z.object({ snapshotId: id, patches: z.unknown().transform(value => validateIndexPatches(value)), taskId: id }).strict(),
   'schema.indexes.apply': z.object({ previewToken: id, acknowledgements: z.array(z.enum(indexAcknowledgementIds)).max(20).refine(value => new Set(value).size === value.length, '索引确认项不能重复'), taskId: id }).strict(),
   'schema.indexes.release': z.object({ snapshotId: id.optional(), previewToken: id.optional() }).strict().refine(value => Boolean(value.snapshotId || value.previewToken), '缺少待释放的索引结构令牌'),

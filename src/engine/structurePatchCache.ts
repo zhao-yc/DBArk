@@ -1,4 +1,4 @@
-export type StructurePatchPurpose = 'columns' | 'indexes' | 'foreignKeys';
+export type StructurePatchPurpose = 'columns' | 'indexes' | 'foreignKeys' | 'tableComment';
 export type StructureCacheKind = 'snapshot' | 'preview';
 export const structureCacheLimits = { ttlMs: 120000, snapshots: 32, previews: 32, bytes: 16 * 1024 * 1024 } as const;
 export interface StructureCacheBinding { connectionId: string; expires: number; bytes: number; }
