@@ -42,7 +42,12 @@ test.describe('原会话真实 JSON 执行计划', () => {
       // 脚本第一结果是 ROLLBACK 的 OK 包，必须明确切到第二结果核对原会话数据。
       await query().getByRole('button', { name: '结果 2', exact: true }).click();
       await expect(query().getByRole('grid')).toContainText(database); await expect(query().getByRole('grid')).toContainText('7');
-      await expect(query().getByRole('grid')).toContainText('1');
+      // 结果网格自带选择列，表头还附带类型；按业务名称前缀找到实际列坐标。
+      for (const [name, value] of [['active', '1'], ['temporary_id', '7']]) {
+        const index = await query().getByRole('columnheader', { name: new RegExp('^' + name) }).getAttribute('aria-colindex');
+        expect(index).toMatch(/^[1-9]\d*$/);
+        await expect(query().locator(`[role=row][aria-rowindex="2"] [role=gridcell][aria-colindex="${index}"]`)).toHaveText(value);
+      }
       await expect(query().getByRole('button', { name: '提交', exact: true })).toBeDisabled();
     }, info);
   });

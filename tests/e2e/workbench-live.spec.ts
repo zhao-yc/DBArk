@@ -37,7 +37,11 @@ test('实库对象树星标、成功打开与对象删除后链接失败', async
     const definition = page.getByRole('dialog');
     await expect(definition).toContainText('只读');
     await expect(definition.getByRole('button', { name: '执行 SQL', exact: true })).toHaveCount(0);
-    await definition.getByRole('button', { name: '关闭对话框', exact: true }).click();
+    // 只读说明在定义读取前已经显示；等实际读取结束再关闭，不能点击忙碌期无效的标题栏关闭。
+    await expect(definition.getByRole('button', { name: '取消', exact: true })).toBeEnabled();
+    await expect(definition.locator('.monaco-editor .view-lines')).toContainText('PROCEDURE');
+    await definition.getByRole('button', { name: '取消', exact: true }).click();
+    await expect(definition).toHaveCount(0);
     await observer.query(`DROP VIEW ${quote(database)}.${quote(view)}`);
     await page.locator('.app-commandbar').getByRole('button', { name: '粘贴对象链接', exact: true }).click();
     link = page.getByRole('dialog', { name: '粘贴对象链接', exact: true });

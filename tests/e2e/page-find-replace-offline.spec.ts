@@ -11,7 +11,8 @@ const errors: string[] = [];
 const panel = () => page.getByRole('region', { name: text.find, exact: true });
 const preview = () => page.getByRole('dialog', { name: text.replaceTitle, exact: true });
 test.beforeAll(async () => {
-  server = await createServer({ configFile: false, root: process.cwd(), plugins: [react()], server: { host: '127.0.0.1', port: 0 }, logLevel: 'error' });
+  // 固定源码夹具不依赖热更新；隔离目录监听，避免Windows根目录监听压力阻塞启动。
+  server = await createServer({ configFile: false, root: process.cwd(), plugins: [react()], server: { host: '127.0.0.1', port: 0, watch: null }, logLevel: 'error' });
   await server.listen(); const address = server.httpServer!.address();
   if (!address || typeof address === 'string') throw new Error('未取得离线测试端口');
   url = `http://127.0.0.1:${address.port}/tests/fixtures/page-find-replace/index.html`;

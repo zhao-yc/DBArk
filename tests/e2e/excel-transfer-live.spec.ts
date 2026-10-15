@@ -53,7 +53,8 @@ test('200 隔离库 Excel 样本与完整流式导出、字段映射导入及精
     expect(fullBook.worksheets[0].getCell('D5').type).not.toBe(ExcelJS.ValueType.Formula);
     await openTable(context, 'excel_target'); const input = await excelDialog('import', fullPath);
     await input.getByRole('combobox', { name: '文本解释方式', exact: true }).selectOption('dbark-v1');
-    await expect(input.getByRole('textbox', { name: '字段“id”的目标列', exact: true })).toHaveValue('id');
+    // 带 datalist 的目标字段输入在可访问树中是 combobox，保留实际字段映射值断言。
+    await expect(input.getByRole('combobox', { name: '字段“id”的目标列', exact: true })).toHaveValue('id');
     await expect(input.getByRole('button', { name: '开始导入', exact: true })).toBeEnabled();
     await page.screenshot({ path: testInfo.outputPath('excel-live-mapping.png') });
     await input.getByRole('button', { name: '开始导入', exact: true }).click(); await expect(input.locator('.success-box')).toContainText('1201 行', { timeout: 45000 });
