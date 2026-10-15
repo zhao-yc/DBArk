@@ -74,7 +74,7 @@ def lines_bounded(text):
     """csv.reader按物理行取输入；限制readline长度，损坏的无换行文件也不能整读。"""
     while True:
         line = text.readline(CHUNK + 1)
-        require(len(line) <= CHUNK, 'CSV物理行超过本例64KiB预算')
+        require(len(line) <= CHUNK, 'CSV物理行超过本例65536字符预算')
         if not line:
             return
         yield line
