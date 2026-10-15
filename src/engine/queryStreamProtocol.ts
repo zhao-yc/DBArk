@@ -11,6 +11,8 @@ export interface QueryFrameConsumer {
   checkCancelled(): void;
   stop(): Promise<void>;
   queuePeak?(rows: number, bytes: number): void;
+  /** 独立任务按实际驱动终包登记命令，不能以异步消费者结束代替服务器命令结束。 */
+  commandStarted?():()=>void;
 }
 
 /** 几何类型可能由驱动返回嵌套对象；先有界计量，不能等 JSON.stringify 大分配后才检查。 */
@@ -52,8 +54,9 @@ export function queryExportFieldBytes(value: unknown): number {
 }
 
 /** 一次发送、一帧背压；停止消费时先结束实际命令，再交还同一会话，绝不自动重放。 */
-export async function consumeQueryFrames(managed: ManagedConnection, sql: string, wire: 'text' | 'binary', consumer: QueryFrameConsumer): Promise<void> {
+export async function consumeQueryFrames(managed: ManagedConnection, sql: string, wire: 'text' | 'binary', consumer: QueryFrameConsumer,parameters?:readonly string[]): Promise<void> {
   consumer.checkCancelled();
+  if(parameters&&wire!=='binary')throw Error('带参数的流式读取必须预先选择二进制协议，不能回退重放');
   const connection = managed.connection;
   const queue: { frame: QueryExportFrame; bytes: number }[] = [];
   let bufferedRows = 0, bufferedBytes = 0;
@@ -62,8 +65,9 @@ export async function consumeQueryFrames(managed: ManagedConnection, sql: string
   let implicit = 0;
   let terminal!: () => void;
   const terminalPromise = new Promise<void>(resolve => { terminal = resolve; });
+  let commandFinished:(()=>void)|undefined;
   const signal = () => { wake?.(); wake = undefined; };
-  const finish = () => { ended = true; terminal(); signal(); };
+  const finish = () => { ended = true;commandFinished?.();commandFinished=undefined; terminal(); signal(); };
   const fail = (error: unknown) => { failure ??= error; signal(); };
   /** 每一行都暂停驱动，队列最多一个数据行（大行独立受限）及边界帧，不积压旧列定义。 */
   const push = (frame: QueryExportFrame, bytes = 0) => {
@@ -117,9 +121,9 @@ export async function consumeQueryFrames(managed: ManagedConnection, sql: string
     if (!ended) fail(new Error('数据库连接已断开，完整导出未完成；未自动重连或重放 SQL'));
     finish();
   };
-  /** 现有补丁的行 EOF 不带 sql 字段；在原始协议边界结束当前行集并保留警告数。 */
+  /** 固定驱动在行 EOF 和状态包都携带 sql；仅有活动行集时在该真实边界收尾。 */
   const onSessionState = (packet: { sql?: string; warningStatus?: number }) => {
-    if (!stopping && packet.sql === undefined && active) closeRows(packet.warningStatus);
+    if (!stopping && active) closeRows(packet.warningStatus);
   };
   connection.on('error', onConnectionError);
   connection.on('end', onConnectionEnd);
@@ -127,7 +131,8 @@ export async function consumeQueryFrames(managed: ManagedConnection, sql: string
   let command: ReturnType<typeof connection.query> | undefined;
   try {
     // 协议策略在发送前已确定；不使用 ER_UNSUPPORTED_PS 触发文本回退。
-    command = wire === 'binary' ? connection.execute({ sql, rowsAsArray: true }) : connection.query({ sql, rowsAsArray: true });
+    commandFinished=consumer.commandStarted?.();
+    command = wire === 'binary' ? parameters?connection.execute({sql,rowsAsArray:true},[...parameters]):connection.execute({ sql, rowsAsArray: true }) : connection.query({ sql, rowsAsArray: true });
     command.on('fields', onFields).on('result', onResult).on('error', fail).once('end', () => { if (!stopping && !failure) closeRows(); finish(); });
     for (;;) {
       consumer.checkCancelled();
@@ -151,6 +156,7 @@ export async function consumeQueryFrames(managed: ManagedConnection, sql: string
     if (command && !managed.broken) await terminalPromise;
     throw error;
   } finally {
+    commandFinished?.();commandFinished=undefined;
     connection.resume();
     connection.removeListener('error', onConnectionError);
     connection.removeListener('end', onConnectionEnd);

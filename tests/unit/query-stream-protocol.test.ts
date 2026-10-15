@@ -24,6 +24,20 @@ function fixture(packets: Packet[]) {
 const fields = (name: string, index: number, type = Types.VAR_STRING): Packet => ['fields', [{ name, columnType: type }], index];
 
 describe('完整导出协议消费', () => {
+  it('预处理参数只发送一次，真实命令结束释放登记且不会等待异步消费完成', async () => {
+    const value=fixture([fields('x',0),['result',['中文'],0],['end']]);
+    const ended=vi.fn();value.consumer.commandStarted=vi.fn(()=>ended);
+    const consume=value.consumer.consume;
+    value.consumer.consume=async frame=>{await consume(frame);if(frame.kind==='row'){value.command.emit('end');expect(ended).toHaveBeenCalledOnce();}};
+    await consumeQueryFrames(value.managed,'SELECT ?','binary',value.consumer,['中文']);
+    expect(value.connection.execute).toHaveBeenCalledExactlyOnceWith({sql:'SELECT ?',rowsAsArray:true},['中文']);
+    expect(value.consumer.commandStarted).toHaveBeenCalledOnce();expect(ended).toHaveBeenCalledOnce();expect(value.connection.query).not.toHaveBeenCalled();
+  });
+  it('带参数不能回退文本协议，发送前拒绝且不登记命令',async()=>{
+    const value=fixture([]);value.consumer.commandStarted=vi.fn(()=>vi.fn());
+    await expect(consumeQueryFrames(value.managed,'SELECT ?','text',value.consumer,['x'])).rejects.toThrow('不能回退');
+    expect(value.connection.query).not.toHaveBeenCalled();expect(value.connection.execute).not.toHaveBeenCalled();expect(value.consumer.commandStarted).not.toHaveBeenCalled();
+  });
   it('驱动几何对象先有界计量，嵌套/Unicode逃逸/大字段不能绕过原始预算', () => {
     const geometry = { x: 1.1, y: 2.2, coordinates: [[0, 1], [3, 4]] };
     expect(queryExportFieldBytes(geometry)).toBeGreaterThanOrEqual(Buffer.byteLength(JSON.stringify(geometry)));
@@ -92,7 +106,7 @@ describe('完整导出协议消费', () => {
     const consume = value.consumer.consume;
     value.consumer.consume = async frame => {
       await consume(frame);
-      if (frame.kind === 'row') { value.connection.emit('dbark:session-state', { warningStatus: 2, serverStatus: 2 }); value.command.emit('end'); }
+      if (frame.kind === 'row') { value.connection.emit('dbark:session-state', { warningStatus: 2, serverStatus: 2,sql:'SELECT x' }); value.command.emit('end'); }
     };
     await consumeQueryFrames(value.managed, 'SELECT x', 'text', value.consumer);
     expect(value.frames.at(-1)).toEqual({ kind: 'rows-end', resultOrdinal: 1, warningCount: 2 });

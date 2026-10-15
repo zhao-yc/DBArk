@@ -14,6 +14,7 @@ import type {CompletionMetadataInput} from '../shared/sqlCompletion';
 import {completionSessionState} from './completionSession';
 import {readSessionObject} from './sessionObjectRead';
 import {StructureSearches} from './structureSearch';
+import {DataSearchTasks} from './dataSearchTasks';
 import {queryDatabaseFromSession} from '../shared/queryContext';
 import { csvCell, csvHeader, encodingName, previewFile, readRecords, readText } from './files';
 import { ResultFileTasks } from './resultFileTasks';
@@ -37,7 +38,7 @@ interface RunningTask {
   queryExport?: QueryExportProgress; fileCommitStarted?: boolean;
 }
 interface ResultBudget { remainingRows: number; remainingBytes: number; remainingResults: number; }
-interface IndependentTask { connectionId: string; controller: AbortController; done: Promise<void>; managed?: ManagedConnection; cancelPending?: Promise<void>; cancelError?: Error; cancelRequested?: boolean; actionSettled?: boolean; structureTask?: boolean; generation?: number; commandTerminal?: Promise<void>; }
+interface IndependentTask { connectionId: string; controller: AbortController; done: Promise<void>; managed?: ManagedConnection; cancelPending?: Promise<void>; stopPending?:Promise<void>; cancelError?: Error; cancelRequested?: boolean; actionSettled?: boolean; structureTask?: boolean; generation?: number; commandTerminal?: Promise<void>; commandInFlight?:boolean; }
 type Input = Record<string, any>;
 
 /** 独立数据库进程的入口；网络连接与文件流不会进入 Electron 渲染进程。 */
@@ -56,8 +57,10 @@ export class Engine {
   private readonly structureCache = new StructurePatchCache();
   private readonly structureExecutions = new StructureExecutionLocks();
   private readonly structureSearches=new StructureSearches();
+  private readonly dataSearches:DataSearchTasks;
   /** 注入任务事件出口，使引擎既能在 utility process 中运行，也能独立测试。 */
-  constructor(private readonly emit: (event: TaskEvent) => void = () => undefined) {
+  constructor(private readonly emit: (event: TaskEvent) => void = () => undefined,options?:{dataSearchAcknowledgementMs?:number}) {
+    this.dataSearches=new DataSearchTasks(emit,options?.dataSearchAcknowledgementMs);
     this.resultFiles = new ResultFileTasks(emit);
     this.columnPatches = new TableColumnPatchTasks({ run: (connectionId, taskId, action, options) => this.withIndependentTask(connectionId, taskId, (managed, control) => action({ managed, ...control }), { label: options.label, purpose: 'columns', progress: options.columnPatch, executionTarget: options.executionTarget }) }, undefined, this.structureCache);
     this.indexPatches = new TableIndexPatchTasks({ run: (connectionId, taskId, action, options) => this.withIndependentTask(connectionId, taskId, (managed, control) => action({ managed, ...control }), options) }, undefined, this.structureCache);
@@ -128,6 +131,15 @@ export class Engine {
         return command==='search.structure'?this.structureSearches.start(request,run):this.structureSearches.next(request,run);
       }
       case 'search.release':return this.structureSearches.release(input);
+      case 'search.dataStart':{
+        const {profile,...request}=input;
+        if(!profile||profile.id!==input.connectionId)throw Error('主进程未提供有效数据搜索连接配置');
+        if(!this.profiles.has(profile.id))this.profiles.set(profile.id,profile);
+        return this.dataSearches.start(request,action=>this.withIndependentTask(input.connectionId,input.taskId,(managed,control)=>action({managed,...control,stop:()=>this.stopIndependentRead(input.taskId)}),undefined,'搜索数据',true,()=>this.dataSearches.detail(input.taskId)));
+      }
+      case 'search.dataNext':return this.dataSearches.next(input);
+      case 'search.dataRelease':
+        if(!this.dataSearches.assertOwner(input))return;await this.cancelTask(input.taskId);return this.dataSearches.release(input);
       case 'metadata.completion': {
         // 主进程注入保存配置即可启动可取消短读，不额外开一次不可取消的测试连接。
         const profile=input.profile as ConnectionProfile|undefined;
@@ -285,7 +297,7 @@ export class Engine {
   }
 
   /** 独立任务从建连前登记，到服务器及本地连接收尾后才释放编号和配置锁。 */
-  private async withIndependentTask<T>(connectionId: string, taskId: string, action: (managed: ManagedConnection, control: Omit<StructureTaskContext, 'managed'>) => Promise<T>, options?: StructureTaskOptions, readLabel?:string, strictRead=false): Promise<T> {
+  private async withIndependentTask<T>(connectionId: string, taskId: string, action: (managed: ManagedConnection, control: Omit<StructureTaskContext, 'managed'>) => Promise<T>, options?: StructureTaskOptions, readLabel?:string, strictRead=false,readDetail?:()=>Partial<TaskEvent>): Promise<T> {
     return this.withConnectionUse(connectionId, async () => {
       if (this.closing || !taskId || this.tasks.has(taskId) || this.independentTasks.has(taskId) || this.resultFiles.has(taskId)) throw new Error('任务编号为空或任务已在执行');
       const profile = this.profile(connectionId);
@@ -298,12 +310,13 @@ export class Engine {
       const task: IndependentTask = { connectionId, controller, done, structureTask: Boolean(options)||strictRead, generation: 0 };
       this.independentTasks.set(taskId, task);
       const label = options?.label ?? readLabel ?? '读取关联记录';
-      const detail = () => options ? (options.purpose === 'indexes' ? { indexPatch: { ...options.progress } } : options.purpose === 'foreignKeys' ? { foreignKeyPatch: { ...options.progress } } : { columnPatch: { ...options.progress } }) : {};
+      const detail = () => options ? (options.purpose === 'indexes' ? { indexPatch: { ...options.progress } } : options.purpose === 'foreignKeys' ? { foreignKeyPatch: { ...options.progress } } : { columnPatch: { ...options.progress } }) : readDetail?.()??{};
       const report = () => this.emit({ taskId, status: 'running', progress: 0, message: label, ...detail() });
       const checkCancelled = () => { if (task.cancelRequested || controller.signal.aborted) throw new Error('任务已取消；已执行的结构或数据变更不会撤销'); };
       const commandStarted = (): (() => void) => {
-        checkCancelled(); task.generation = (task.generation ?? 0) + 1;
-        let terminal!: () => void; task.commandTerminal = new Promise<void>(resolve => { terminal = resolve; }); return terminal;
+        checkCancelled();const generation=task.generation=(task.generation??0)+1;task.commandInFlight=true;task.stopPending=undefined;
+        let terminal!: () => void;task.commandTerminal=new Promise<void>(resolve=>{terminal=resolve;});let ended=false;
+        return()=>{if(ended)return;ended=true;if(task.generation===generation)task.commandInFlight=false;terminal();};
       };
       let managed: ManagedConnection | undefined;
       let failure: unknown; let result!: T;
@@ -317,7 +330,7 @@ export class Engine {
       finally {
         // 成功或失败均已离开动作阶段，迟到取消只等待收尾，不再给关闭中的连接创建 KILL 控制。
         task.actionSettled = true;
-        try { await task.cancelPending; } catch (error) { failure = error; }
+        try { await task.cancelPending;await task.stopPending; } catch (error) { failure = error; }
         // 事件接收方异常也必须继续实际关闭连接并释放全部关联资源。
         if (options && !failure) { options.progress.phase = 'releasing'; try { report(); } catch (error) { failure ??= error; } }
         try { await managed?.close(options||strictRead ? { strict: true } : undefined); } catch (error) { failure ??= error; }
@@ -328,7 +341,9 @@ export class Engine {
       if (task.cancelError) failure = task.cancelError;
       const knownComplete = options?.progress.ddlCompleted;
       const status = task.cancelError ? 'failed' : failure ? ((controller.signal.aborted || task.cancelRequested) && !knownComplete ? 'cancelled' : 'failed') : 'completed';
-      this.emit({ taskId, status, progress: failure ? 0 : 100, message: failure ? (options ? `${label}未全部完成；${knownComplete ? 'DDL 已完成，不要重复执行，请核对最新定义及资源状态' : options.progress.ddlSubmitted ? 'DDL 可能已执行，请核对最新定义；未自动重放' : '尚未发送 DDL'}` : this.errorMessage(failure)) : `${label}完成`, ...detail() });
+      const message=failure ? (options ? `${label}未全部完成；${knownComplete ? 'DDL 已完成，不要重复执行，请核对最新定义及资源状态' : options.progress.ddlSubmitted ? 'DDL 可能已执行，请核对最新定义；未自动重放' : '尚未发送 DDL'}` : this.errorMessage(failure)) : `${label}完成`;
+      this.dataSearches.observe(taskId,status,message);
+      this.emit({ taskId, status, progress: failure ? 0 : 100, message:readDetail?`${label}${status==='completed'?'完成':status==='cancelled'?'已取消':'失败'}`:message, ...detail() });
       if (failure) throw failure;
       return result;
     });
@@ -476,6 +491,7 @@ export class Engine {
     if (independent) {
       if (independent.actionSettled) { await independent.done; return; }
       independent.cancelRequested = true;
+      this.dataSearches.interrupt(id);
       if (!independent.cancelPending) {
         const managed = independent.managed;
         if (!managed) independent.controller.abort();
@@ -492,7 +508,11 @@ export class Engine {
             // KILL 的 ACK 只确认请求被接受；结构任务必须等原命令回调或服务器真实断开才销毁本地流。
             if (independent.structureTask) await terminal;
           } catch (error) {
-            if ((error as { errno?: number }).errno !== 1094) independent.cancelError = new Error('取消控制连接失败，已关闭本地独立连接，但无法确认服务器任务已结束，请检查服务器连接状态');
+            if ((error as { errno?: number }).errno !== 1094) {
+              independent.cancelError = new Error('取消控制连接失败，已关闭本地独立连接，但无法确认服务器任务已结束，请检查服务器连接状态');
+              // 控制建连可同步失败；先标记本地流不可再等待终包，再触发销毁，不能卡住ACK消费者。
+              managed.broken=true;managed.connection.destroy();
+            }
           } finally {
             independent.controller.abort();
             try { await control?.close(independent.structureTask ? { strict: true } : undefined); } catch { independent.cancelError = new Error('取消控制连接清理失败，请核对服务器任务及连接状态'); }
@@ -509,6 +529,25 @@ export class Engine {
     if (task.fileCommitStarted) return;
     task.cancelled = true;
     return this.stopTaskCommand(task);
+  }
+
+  /** 搜索上限或消费者失败只停止当前只读命令；不标记用户取消，也不重放后续查询。 */
+  private async stopIndependentRead(id:string):Promise<void>{
+    const task=this.independentTasks.get(id);if(!task)return;
+    if(task.cancelPending)return task.cancelPending;if(task.stopPending)return task.stopPending;
+    const managed=task.managed,generation=task.generation,terminal=task.commandTerminal;
+    task.stopPending=(async()=>{
+      if(!managed||!task.commandInFlight||managed.broken)return;
+      let control:ManagedConnection|undefined;
+      try{
+        control=await connect(managed.profile);
+        if(this.independentTasks.get(id)!==task||task.managed!==managed||task.generation!==generation||!task.commandInFlight||managed.broken)return;
+        const threadId=managed.connection.threadId;if(!Number.isSafeInteger(threadId)||(threadId??0)<1)throw Error('无法确认搜索连接编号');
+        await execute(control,`KILL QUERY ${threadId}`);await terminal;
+      }catch(error){
+        if((error as{errno?:number}).errno!==1094){task.cancelError=Error('搜索停止控制失败，已关闭本地连接；请核对服务器资源状态');managed.broken=true;managed.connection.destroy();task.controller.abort();}
+      }finally{try{await control?.close({strict:true});}catch{task.cancelError=Error('搜索控制连接清理失败，请核对服务器资源状态');}}
+    })();return task.stopPending;
   }
 
   /** 文件写入失败也停止当前命令，但不伪装成用户取消；代次保护和控制连接收尾与取消共用。 */

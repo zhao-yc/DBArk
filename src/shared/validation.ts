@@ -17,6 +17,7 @@ import { indexAcknowledgementIds } from './tableIndexTasks';
 import { completionLimits } from './sqlCompletion';
 import {completionIdentifier} from './completionLexical';
 import {structureSearchInputSchema,structureSearchContinueSchema,structureSearchReleaseSchema} from './databaseSearch';
+import {dataSearchInputSchema,dataSearchNextSchema,dataSearchReleaseSchema} from './dataSearch';
 const queryDatabaseContext=z.discriminatedUnion('state',[z.object({state:z.literal('known'),database:z.string().min(1).max(256).refine(value=>!value.includes('\0')).nullable()}).strict(),z.object({state:z.literal('unknown')}).strict()]);
 const completionName=z.string().min(1).max(64).refine(completionIdentifier,'补全对象名必须是合法BMP标识符');
 const completionPrefix=z.string().max(completionLimits.prefixUnits).refine(value=>value===''||completionIdentifier(value),'补全前缀含无效字符');
@@ -85,6 +86,7 @@ export const commandSchemas: Record<Command, z.ZodType> = {
   'search.structure':structureSearchInputSchema,
   'search.structureContinue':structureSearchContinueSchema,
   'search.release':structureSearchReleaseSchema,
+  'search.dataStart':dataSearchInputSchema,'search.dataNext':dataSearchNextSchema,'search.dataRelease':dataSearchReleaseSchema,
   'metadata.completion': z.discriminatedUnion('kind',[
     z.object({kind:z.literal('databases'),connectionId:id,taskId:id,prefix:completionPrefix}).strict(),
     z.object({kind:z.literal('objects'),connectionId:id,taskId:id,prefix:completionPrefix,database:completionName,objectKind:z.enum(['relation','function','procedure'])}).strict(),

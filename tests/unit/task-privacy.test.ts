@@ -7,6 +7,10 @@ import { ExportReservations } from '../../src/main/exportReservations';
 import type { TaskEvent } from '../../src/shared/contracts';
 
 describe('完整导出持久化与目标互斥', () => {
+  it.each(['running','completed','failed','cancelled'] as const)('数据搜索%s概要不保存搜索词、命中或错误，完成也提醒范围限制',status=>{
+    const message=persistedTaskMessage('search.dataStart',{taskId:'搜索',status,progress:50,message:'敏感搜索内容'});
+    expect(message).not.toContain('敏感搜索内容');expect(message).toContain('搜索值');if(status==='completed')expect(message).toContain('范围完成情况');
+  });
   it.each(['running', 'completed', 'failed', 'cancelled'] as const)('外键%s事件只保存可信执行阶段，不保存名称、定义与服务器原错误', status => {
     const secret = '自主夹具-含原值的服务器错误';
     for (const phase of ['before', 'submitted', 'completed'] as const) {

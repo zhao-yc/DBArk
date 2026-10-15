@@ -10,6 +10,7 @@ import type { CompletionMetadataInput, CompletionMetadataOutput,CompletionSessio
 import type {QueryDatabaseContext} from './queryContext';
 import type {SessionObjectSnapshot,SessionObjectCompletion,SessionObjectReadResult} from './sessionObjects';
 import type {StructureSearchInput,StructureSearchContinue,StructureSearchPage} from './databaseSearch';
+import type {DataSearchInput,DataSearchNext,DataSearchReply,DataSearchProgress} from './dataSearch';
 export type CellValue = string | number | boolean | null | { type: 'binary'; base64: string };
 export type DataRow = Record<string, CellValue>;
 export type ObjectKind = 'table' | 'view' | 'procedure' | 'function' | 'trigger' | 'event';
@@ -45,7 +46,7 @@ export interface SavedQuery { id: string; name: string; connectionId?: string; d
 export interface SqlSnippet { id: string; name: string; group: string; description: string; sql: string; updatedAt: string; }
 export interface HistoryEntry { id: string; connectionId: string; database?: string; databaseContext?:QueryDatabaseContext; sql: string; startedAt: string; elapsedMs: number; success: boolean; error?: string; }
 export interface TaskRecord { id: string; kind: string; status: 'running' | 'completed' | 'cancelled' | 'failed'; progress: number; message: string; startedAt: string; finishedAt?: string; errors?: string[]; }
-export interface TaskEvent { taskId: string; status: TaskRecord['status']; progress: number; message: string; rows?: number; resultIndex?: number; columns?: ResultColumn[]; batch?: DataRow[]; executionDatabase?:QueryDatabaseContext; queryExport?: QueryExportProgress; columnPatch?: TableColumnApplyProgress; indexPatch?: TableIndexApplyProgress; foreignKeyPatch?: TableForeignKeyApplyProgress; }
+export interface TaskEvent { taskId: string; status: TaskRecord['status']; progress: number; message: string; rows?: number; resultIndex?: number; columns?: ResultColumn[]; batch?: DataRow[]; executionDatabase?:QueryDatabaseContext; queryExport?: QueryExportProgress; columnPatch?: TableColumnApplyProgress; indexPatch?: TableIndexApplyProgress; foreignKeyPatch?: TableForeignKeyApplyProgress; dataSearch?:DataSearchProgress; }
 export interface FileChoice { token: string; name: string; }
 export type QueryFileEncoding = 'utf8' | 'utf16le' | 'gb18030';
 export interface AppSettings { theme: 'dark' | 'light'; sidebarWidth: number; resultLimit: number; pageSize: number; tabs: { id: string; kind: 'query' | 'table'; title: string; connectionId: string; database?: string; databaseContext?:QueryDatabaseContext; table?: string; sql?: string }[]; activeTabId?: string; }
@@ -76,6 +77,9 @@ export interface CommandMap {
   'search.structure':{input:StructureSearchInput;output:StructureSearchPage};
   'search.structureContinue':{input:StructureSearchContinue;output:StructureSearchPage};
   'search.release':{input:{connectionId:string;cursor:string};output:void};
+  'search.dataStart':{input:DataSearchInput;output:DataSearchReply};
+  'search.dataNext':{input:DataSearchNext;output:DataSearchReply};
+  'search.dataRelease':{input:{connectionId:string;taskId:string};output:void};
   'metadata.objects': { input: { connectionId: string; database: string }; output: DatabaseObject[] };
   'metadata.table': { input: { connectionId: string; database: string; table: string; taskId?: string }; output: TableInfo };
   'metadata.ddl': { input: { connectionId: string; database: string; name: string; kind: ObjectKind }; output: string };
