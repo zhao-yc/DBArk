@@ -96,7 +96,7 @@ for (const entry of ['工具栏', '标签加号', '欢迎页', '快捷键', '原
         await expect(form().getByRole('combobox', { name: '数据库连接', exact: true })).toHaveValue(current.id);
         await expect(form().getByRole('combobox', { name: '默认数据库（可选）', exact: true })).toHaveValue('用户新草稿库');
         await expect(page.locator('.tab-strip .workspace-tab-button')).toHaveCount(0);
-        await expect(page.locator('.toast')).not.toContainText('旧导航专属错误不得出现');
+        await expect(page.locator('.toast').filter({ hasText: '旧导航专属错误不得出现' })).toHaveCount(0);
         await form().getByRole('button', { name: '取消', exact: true }).click(); await expect(form()).toBeHidden();
         // 重开读取正式工作区默认上下文，能发现旧响应只偷偷改变selection的情况。
         await open(entry); await expect(form().getByRole('combobox', { name: '数据库连接', exact: true })).toHaveValue(current.id);

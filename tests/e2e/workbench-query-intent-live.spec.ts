@@ -151,7 +151,7 @@ test('双真实连接：旧表/只读定义成功及不存在对象失败不覆�
           const before = await savedTabs(tabCount); await release();
           // 等正式收藏入口finally释放，确认渲染端已处理旧回包，再检查新意图仍然完整。
           await expect(button).toBeEnabled(); await expect(currentDatabase).toHaveClass(/active/);
-          expect(await savedTabs(tabCount)).toEqual(before); await expect(page.locator('.toast')).not.toContainText('原对象已删除');
+          expect(await savedTabs(tabCount)).toEqual(before); await expect(page.locator('.toast').filter({ hasText: '原对象已删除' })).toHaveCount(0);
           if (item.active) {
             await expect(page.getByRole('dialog')).toHaveCount(0);
             await expect(query().locator('.context-bar')).toContainText(current.connectionName);
