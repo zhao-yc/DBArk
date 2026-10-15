@@ -81,3 +81,5 @@ node node_modules/@playwright/test/cli.js test tests/e2e/table-default-encoding.
 固定3a复审后的准备追加：核心和正式UI共用 `tests/helpers/tableDefaultEncodingTarget.ts`，补13484白名单；该端口必须显式 `DBARK_TEST_TLS=1`、非空白CA，实际连接还必须启用TLS与证书校验并使用同一CA文件。正式UI沿既有观察连接／表单CA链路配置，在保存后核对目标、严格TLS和按realpath解析后的CA一致性；没有降级路径，原五端口边界、业务断言和期限保持。新默认编码Dialog中的Field、表头和“不适用”文案集中到专属locale，未动旧TableCommentDialog。
 
 本次追加验证：类型检查通过；27项纯准备门正反例与原63项专属单元合计90项通过；新Dialog AST检查无散落中文字面量；核心4项默认关闭跳过、UI仅收集2项。没有运行GUI或连接200，没有重写原3a提交，没有据此宣布六组合实库或正式UI已通过。
+
+ROOT后续集成：主目录固定cae5a4f的六组合真实核心24项通过；dbda01e的正式Electron表属性四项在六组合共24次通过，其中默认编码每组两项，包含最窄180px侧栏、只读预览、双击单次提交及真实原列/数据保持。主目录完整3239单元、类型与构建已验，旧GUI失败、布局修复、正式输入冻结及后置核零见[表属性实证](../../tests/integration/acceptance-o01-table-properties-20261016.md)。前段作者默认跳过/静态列举仍按当时结果保留；不计为安装包或macOS实库通过，0.18尚未发布。
