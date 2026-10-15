@@ -1,11 +1,13 @@
 import type {DraftRow} from './dataChanges';
-import {boundedUtf8Bytes,jsonLexicalLimits,lexicalNodeAtPath} from './jsonLexicalTree';
+import {boundedUtf8Bytes,jsonLexicalLimits,lexicalNodeAtPath,type ReadyLexicalDocument} from './jsonLexicalTree';
 import {applyJsonStructureAction,type JsonStructureAction} from './jsonStructureInput';
 import {assertRecordJsonNodeCurrent,beginRecordJsonNodeInput,type BeginRecordNodeOptions,type RecordJsonNodeInput} from './recordJsonNodeInput';
 import {editRecordInput,stageRecordDraft,type RecordContext} from './recordViews';
 import {recordJsonStructureInputZh as text} from './locales/recordJsonStructureInput.zh-CN';
+import {moveJsonObjectMember} from './jsonObjectMemberMove';
+import {objectMemberMoveZh as memberMoveText} from './locales/objectMemberMove.zh-CN';
 
-export type RecordStructureAction={readonly kind:'rename';readonly keyToken:string}|{readonly kind:'remove'}|{readonly kind:'append-member';readonly keyToken:string;readonly valueToken:string}|{readonly kind:'insert-element';readonly indexText:string;readonly valueToken:string}|{readonly kind:'move-element';readonly fromText:string;readonly toText:string};
+export type RecordStructureAction={readonly kind:'rename';readonly keyToken:string}|{readonly kind:'remove'}|{readonly kind:'append-member';readonly keyToken:string;readonly valueToken:string}|{readonly kind:'insert-element';readonly indexText:string;readonly valueToken:string}|{readonly kind:'move-element';readonly fromText:string;readonly toText:string}|{readonly kind:'move-member';readonly fromText:string;readonly toText:string};
 export type RecordStructureKind=RecordStructureAction['kind'];
 export interface RecordJsonStructureInput{readonly base:RecordJsonNodeInput;readonly initial:RecordStructureAction;readonly action:RecordStructureAction}
 
@@ -18,6 +20,7 @@ export function beginRecordJsonStructureInput(options:BeginRecordNodeOptions,kin
     const member=parent.members[last.memberIndex];action={kind,keyToken:base.value.document.text.slice(member.keySpan.start,member.keySpan.end)};
   }else if(kind==='remove'){if(!last)throw Error(text.root);action={kind};}
   else if(kind==='append-member'){if(node.kind!=='object')throw Error(text.object);action={kind,keyToken:'""',valueToken:'null'};}
+  else if(kind==='move-member'){if(node.kind!=='object')throw Error(memberMoveText.object);if(!node.members.length)throw Error(memberMoveText.empty);action={kind,fromText:'1',toText:'1'};}
   else{if(node.kind!=='array')throw Error(text.array);if(kind==='insert-element')action={kind,indexText:String(node.elements.length),valueToken:'null'};else{if(!node.elements.length)throw Error(text.empty);action={kind,fromText:'0',toText:'0'};}}
   const initial=Object.freeze(action);return Object.freeze({base,initial,action:initial});
 }
@@ -25,7 +28,7 @@ export function beginRecordJsonStructureInput(options:BeginRecordNodeOptions,kin
 export function recordJsonStructureDirty(input:RecordJsonStructureInput|null):boolean{
   if(!input)return false;const action=input.action,initial=input.initial;
   if(action.kind==='rename')return initial.kind!=='rename'||action.keyToken!==initial.keyToken;
-  if(action.kind==='move-element')return initial.kind!=='move-element'||action.fromText!==initial.fromText||action.toText!==initial.toText;
+  if(action.kind==='move-element'||action.kind==='move-member')return initial.kind!==action.kind||action.fromText!==initial.fromText||action.toText!==initial.toText;
   return true;
 }
 /** 输入类型不能被晚到事件切换；无效JSON/下标也保留，超限则保留上一份完整缓冲。 */
@@ -36,14 +39,21 @@ export function changeRecordJsonStructureInput(input:RecordJsonStructureInput,ac
 }
 /** 数组位置与JSON数字值分离，禁止指数、小数、符号、空白和不安全整数被隐式归一化。 */
 function index(textValue:string):number{if(textValue.length>16||!/^(?:0|[1-9]\d*)$/.test(textValue))throw Error(text.index);const value=Number(textValue);if(!Number.isSafeInteger(value))throw Error(text.index);return value;}
+/** 对象成员序号与树中#1一致，只有完整正十进制原文才能换算为内部零基序号。 */
+function memberIndex(textValue:string):number{if(textValue.length>16||!/^[1-9]\d*$/.test(textValue))throw Error(memberMoveText.position);const value=Number(textValue);if(!Number.isSafeInteger(value))throw Error(memberMoveText.position);return value-1;}
 /** 暂存前重新核完整行身份，结构整体校验成功后只生成原字段JSON输入并合并一次。 */
 export function stageRecordJsonStructureInput(rows:DraftRow[],input:RecordJsonStructureInput,context:RecordContext):DraftRow[]{
   assertRecordJsonNodeCurrent(rows,input.base,context);if(!recordJsonStructureDirty(input))return rows;
-  const action=input.action;let operation:JsonStructureAction;
-  if(action.kind==='insert-element')operation={kind:action.kind,index:index(action.indexText),valueToken:action.valueToken};
-  else if(action.kind==='move-element')operation={kind:action.kind,from:index(action.fromText),to:index(action.toText)};
-  else operation=action;
-  const document=applyJsonStructureAction(input.base.value,input.base.value.document,operation);if(document===input.base.value.document)return rows;
+  const action=input.action;let document:ReadyLexicalDocument;
+  if(action.kind==='move-member')document=moveJsonObjectMember(input.base.value,input.base.value.document,memberIndex(action.fromText),memberIndex(action.toText));
+  else{
+    let operation:JsonStructureAction;
+    if(action.kind==='insert-element')operation={kind:action.kind,index:index(action.indexText),valueToken:action.valueToken};
+    else if(action.kind==='move-element')operation={kind:action.kind,from:index(action.fromText),to:index(action.toText)};
+    else operation=action;
+    document=applyJsonStructureAction(input.base.value,input.base.value.document,operation);
+  }
+  if(document===input.base.value.document)return rows;
   const column=context.info!.columns.find(value=>value.name===input.base.columnName)!;
   const draft=editRecordInput({...input.base.draft,fields:new Map()},column,{mode:'json',text:document.text});return stageRecordDraft(rows,draft,context);
 }
