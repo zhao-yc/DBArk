@@ -12,6 +12,7 @@ let saveTimer: ReturnType<typeof setTimeout> | undefined;
 interface WorkspaceState {
   ready: boolean; settings: AppSettings; connections: ConnectionProfile[]; tasks: TaskRecord[];
   notice?: { text: string; error: boolean }; selection?: ConnectionSelection; activeJobs: Record<string, boolean>; dirtyTabs: Record<string, boolean>; connectionVersions: Record<string, number>;
+  tableLayoutDrafts: Record<string, boolean>; setTableLayoutDraft(id: string, dirty: boolean): void;
   initialize: () => Promise<void>; setConnections: (connections: ConnectionProfile[]) => void;
   invalidateConnection: (connectionId: string) => void;
   updateSettings: (update: Partial<AppSettings>) => void; openTab: (tab: Omit<WorkspaceTab, 'id'> & { id?: string }) => void;
@@ -36,7 +37,7 @@ export async function flushSettings(): Promise<void> {
 
 /** 界面状态仅保存连接概要和工作区配置，数据库密码不进入全局界面存储。 */
 export const useWorkspace = create<WorkspaceState>((set, get) => ({
-  ready: false, settings: defaults, connections: [], tasks: [], activeJobs: {}, dirtyTabs: {}, connectionVersions: {},
+  ready: false, settings: defaults, connections: [], tasks: [], activeJobs: {}, dirtyTabs: {}, connectionVersions: {}, tableLayoutDrafts: {},
   /** 并行恢复本地配置、连接概要和任务记录；加载失败仍保留可显示错误的工作台。 */
   initialize: async () => {
     try {
@@ -77,6 +78,8 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
   setBusy: (id, busy) => set(state => ({ activeJobs: { ...state.activeJobs, [id]: busy } })),
   /** 标记未提交数据或事务，供标签关闭及应用退出确认使用。 */
   setDirty: (id, dirty) => set(state => ({ dirtyTabs: { ...state.dirtyTabs, [id]: dirty } })),
+  /** 列布局草稿独立于数据写入状态；重命名关闭旧标签前也必须检查隐藏页。 */
+  setTableLayoutDraft: (id, dirty) => set(state => ({ tableLayoutDrafts: { ...state.tableLayoutDrafts, [id]: dirty } })),
   /** 仅保留任务概要，不把查询数据批次复制进全局任务历史。 */
   onTask: event => set(state => {
     const previous = state.tasks.find(task => task.id === event.taskId);

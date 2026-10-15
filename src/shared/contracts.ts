@@ -1,6 +1,7 @@
 /** 所有跨进程数据均为可结构化克隆的普通值，精确数值由驱动保留为字符串。 */
 import type { QueryParameter, QueryParameterNames } from './queryParameters';
 import type { TableDefaultEncodingGetInput, TableDefaultEncodingGetOutput, TableDefaultEncodingPreviewInput, TableDefaultEncodingPreviewOutput, TableDefaultEncodingApplyInput, TableDefaultEncodingApplyOutput, TableDefaultEncodingReleaseInput } from './tableDefaultEncoding';
+import type { TableRenameGetInput, TableRenameGetOutput, TableRenamePreviewInput, TableRenamePreviewOutput, TableRenameApplyInput, TableRenameApplyOutput, TableRenameReleaseInput } from './tableRename';
 import type { TableCommentGetInput, TableCommentGetOutput, TableCommentPreviewInput, TableCommentPreviewOutput, TableCommentApplyInput, TableCommentApplyOutput, TableCommentReleaseInput } from './tableComment';
 import type { ExcelSheet, ExcelSheetPreview, ExcelTextProtocol, ExcelImportRequest, ExcelImportResult, ExcelExportRequest } from './excelTransfer';
 import type { QueryExportProgress, QueryStreamExportInput, QueryStreamExportOutput } from './queryStreamExport';
@@ -58,7 +59,7 @@ export interface SavedQuery { id: string; name: string; connectionId?: string; d
 export interface SqlSnippet { id: string; name: string; group: string; description: string; sql: string; updatedAt: string; }
 export interface HistoryEntry { id: string; connectionId: string; database?: string; databaseContext?:QueryDatabaseContext; sql: string; startedAt: string; elapsedMs: number; success: boolean; error?: string; }
 export interface TaskRecord { id: string; kind: string; status: 'running' | 'completed' | 'cancelled' | 'failed'; progress: number; message: string; startedAt: string; finishedAt?: string; errors?: string[]; }
-export interface TaskEvent { taskId: string; status: TaskRecord['status']; progress: number; message: string; rows?: number; resultIndex?: number; columns?: ResultColumn[]; batch?: DataRow[]; executionDatabase?:QueryDatabaseContext; queryExport?: QueryExportProgress; columnPatch?: TableColumnApplyProgress; indexPatch?: TableIndexApplyProgress; foreignKeyPatch?: TableForeignKeyApplyProgress; tableComment?: TableColumnApplyProgress; tableDefaultEncoding?: TableColumnApplyProgress; dataSearch?:DataSearchProgress; }
+export interface TaskEvent { taskId: string; status: TaskRecord['status']; progress: number; message: string; rows?: number; resultIndex?: number; columns?: ResultColumn[]; batch?: DataRow[]; executionDatabase?:QueryDatabaseContext; queryExport?: QueryExportProgress; columnPatch?: TableColumnApplyProgress; indexPatch?: TableIndexApplyProgress; foreignKeyPatch?: TableForeignKeyApplyProgress; tableRename?: TableColumnApplyProgress; tableComment?: TableColumnApplyProgress; tableDefaultEncoding?: TableColumnApplyProgress; dataSearch?:DataSearchProgress; }
 export interface FileChoice { token: string; name: string; }
 export type QueryFileEncoding = 'utf8' | 'utf16le' | 'gb18030';
 export interface AppSettings { theme: 'dark' | 'light'; sidebarWidth: number; resultLimit: number; pageSize: number; tabs: { id: string; kind: 'query' | 'table'; title: string; connectionId: string; database?: string; databaseContext?:QueryDatabaseContext; table?: string; sql?: string; sourceBinding?: QuerySourceBinding }[]; activeTabId?: string; }
@@ -175,6 +176,10 @@ export interface CommandMap {
   'tasks.list': { input: Record<string, never>; output: TaskRecord[] };
   'settings.get': { input: Record<string, never>; output: AppSettings };
   'settings.save': { input: AppSettings; output: void };
+  'schema.tableRename.get': { input: TableRenameGetInput; output: TableRenameGetOutput };
+  'schema.tableRename.preview': { input: TableRenamePreviewInput; output: TableRenamePreviewOutput };
+  'schema.tableRename.apply': { input: TableRenameApplyInput; output: TableRenameApplyOutput };
+  'schema.tableRename.release': { input: TableRenameReleaseInput; output: void };
   'schema.tableComment.get': { input: TableCommentGetInput; output: TableCommentGetOutput };
   'schema.tableComment.preview': { input: TableCommentPreviewInput; output: TableCommentPreviewOutput };
   'schema.tableComment.apply': { input: TableCommentApplyInput; output: TableCommentApplyOutput };

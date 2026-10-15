@@ -1,0 +1,18 @@
+/** 协议确认项与中文文案分离；名称和DDL执行事实不得混为同一状态。 */
+export const tableRenameZh = {
+  title: '表重命名', newName: '新表名（同一数据库）', read: '重新读取原表', preview: '预览重命名', apply: '确认重命名', back: '返回名称编辑', cancel: '取消重命名任务', close: '关闭',
+  engine: '引擎', charset: '默认字符集', collation: '默认排序规则', rowFormat: '行格式', autoIncrement: '自增计数（只读）', unset: '未设置', version: '数据库版本',
+  fixedSql: '固定RENAME语句（只读）', before: '原表名', after: '新表名', readonly: '当前目标仅可查看',
+  ackImplicit: '我确认DDL会隐式提交，可能等待元数据锁；取消和事务回滚不能撤销已完成的重命名。',
+  ackWindow: '我确认在维护窗口执行并暂停并行结构修改；完整重核仍存在外部DDL并发窗口。',
+  ackReferences: '我已检查外部程序、存储程序、事件、查询SQL及名称链接；表级授权不自动迁移，这些引用需要人工处理。',
+  targetChanged: '目标或连接配置已变化，请关闭后重新打开。', expired: '快照或预览已过期，请重新读取。', mismatch: '响应目标、名称或原定义与固定快照不一致，未接受该响应。',
+  discard: '将放弃尚未提交的新表名草稿，是否继续？', unknownClose: 'DDL可能已完成，请核对源表和新表。确认放弃本窗口记录并继续？',
+  notSent: '尚未发送DDL。', unknown: '重命名结果未知，请核对源表和新表；不会自动重试或重放。', succeeded: '表已重命名，物理身份和完整定义已核验。', verificationFailed: 'DDL已完成，但未完整核验；请核对源表和新表，不要重试旧预览。',
+  cancelling: '已请求取消，等待真实任务结束和资源释放。', consumed: '本次令牌已消费，不能再次执行，请关闭或重新读取。', unsupportedAck: '存在当前版本不认识的风险确认项，不能执行。',
+  dirty: '原表或新名称的隐藏表页存在未提交数据或列布局草稿，请先处理。', busy: '原表或新名称的表页仍有活动任务，请等待实际完成。', workspaceBudget: '工作区标签超过检查预算，请先关闭部分标签。',
+  connecting: '建立结构连接', reading: '读取物理身份和完整定义', rechecking: '重核来源、依赖与目标冲突', executing: '执行单表重命名', verifying: '核验新名称和原定义', releasing: '释放结构资源',
+  oldLink: '此名称已参与表重命名，当前窗口禁止旧对象链接或收藏继续打开；请使用刷新后的真实对象重新生成链接。',
+  favoritesPending: '表已重命名，但收藏保存未完成或新名称已被收藏；旧收藏已在当前窗口停用，请在工作台中人工处理。',
+  referencesNotice: '已请求刷新真实对象目录并用新标签重新读取；查询SQL和已复制链接保持原文，请检查引用及表级授权。',
+};
