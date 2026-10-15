@@ -23,7 +23,7 @@ function leadingFull(definition: Readonly<IndexDefinition> | undefined, refs: re
 function supportsForeignKey(definition: Readonly<IndexDefinition> | undefined, dependency: ForeignKeyDependency): boolean {
   if (dependency.support.kind !== 'known' || !leadingFull(definition, dependency.targetColumnRefs)) return false;
   return dependency.support.rule !== 'parent-exact-unique'
-    || (definition!.kind !== 'ordinary' && definition!.keyParts.length === dependency.targetColumnRefs.length);
+    || (['primary', 'unique'].includes(definition!.kind) && definition!.keyParts.length === dependency.targetColumnRefs.length);
 }
 
 /** 未知入向依赖只排除明确不能支撑外键的索引，不把不透明旧键当作没有依赖。 */
@@ -106,7 +106,7 @@ export function planIndexDependencies(
     if (operation.strategy === 'rename') return false;
     const old = operation.sourceIndexRef === undefined ? undefined : snapshot.indexes.get(operation.sourceIndexRef);
     const final = operation.strategy === 'drop' ? undefined : operation.sourceIndexRef === undefined ? finalByClient.get(operation.clientKey!) : finalByRef.get(operation.sourceIndexRef);
-    return !!((old && possiblyUnique(old)) || (final && resolve(final)?.kind !== 'ordinary'));
+    return !!((old && possiblyUnique(old)) || (final && ['primary', 'unique'].includes(resolve(final)?.kind ?? '')));
   };
 
   if (dependencies.incomingCoverage.kind !== 'complete' || !dependencies.outgoingComplete) {
@@ -149,7 +149,7 @@ export function planIndexDependencies(
   if (partition.kind === 'explicit') {
     for (const { operation, final } of creations) {
       const definition = resolve(final)!;
-      if (definition.kind === 'ordinary') continue;
+      if (!['primary', 'unique'].includes(definition.kind)) continue;
       // 首批分区唯一键要求所有 key part 都为完整列，避免未验证前缀参与分区唯一性。
       if (partition.requiredColumnRefs.some(ref => !snapshot.columns.has(ref)) || definition.keyParts.some(part => part.prefixLength !== undefined) || !partition.requiredColumnRefs.every(ref => definition.keyParts.some(part => part.columnRef === ref))) issue('blocker', 'partition-unique-columns', '分区新增或替换的唯一键必须包含全部可信分区字段，且不使用前缀。', operation.sourceIndexRef ? [operation.sourceIndexRef] : [], partition.requiredColumnRefs);
     }

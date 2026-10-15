@@ -1,7 +1,7 @@
 import type { IndexPatch, TableIndexView, IndexPlanOptions, TrustedIndexColumn, DependencyCoverage } from './tableIndexPatches';
 import type { TableColumnApplyProgress, TableColumnPatchTarget } from './tableColumnPatches';
 
-export const indexAcknowledgementIds = ['ddl-implicit-commit', 'external-ddl-window', 'drop-unique-constraint', 'primary-key-change'] as const;
+export const indexAcknowledgementIds = ['ddl-implicit-commit', 'external-ddl-window', 'drop-unique-constraint', 'primary-key-change', 'special-index-change'] as const;
 
 export type TableIndexPatchTarget = TableColumnPatchTarget;
 /** 进度形状与字段任务一致，但事件使用独立 indexPatch 属性，不能混淆两种任务。 */
@@ -15,6 +15,7 @@ export interface TableIndexColumnView {
   generated: boolean; hidden: boolean; prefix: TrustedIndexColumn['prefix'];
   /** 明确可用于受控键的能力投影，不提供时不能用默认类型猜一个可写字段。 */
   fullKeyBytes?: number;
+  charset?: string; collation?: string; specialIndexes?: TrustedIndexColumn['specialIndexes'];
 }
 export interface TableIndexGetOutput {
   target: TableIndexPatchTarget; snapshotId: string; expiresAt: string; ddlHash: string;

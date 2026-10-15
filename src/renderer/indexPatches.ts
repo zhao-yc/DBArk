@@ -1,6 +1,7 @@
 import { assertIndexDefinitionNames, tableIndexPatchLimits, validateIndexPatches, type IndexDefinition, type IndexKeyPart, type IndexPatch, type TableIndexView } from '../shared/tableIndexPatches';
 import type { TableIndexApplyOutput, TableIndexApplyProgress, TableIndexColumnView, TableIndexGetOutput, TableIndexPatchTarget } from '../shared/tableIndexTasks';
 import { indexPatchZh as text } from './locales/indexPatches.zh-CN';
+import { assertSpecialIndexDefinition, indexMethodForKind, isSpecialIndexKind } from '../shared/specialIndexRules';
 
 /** 身份保持精确大小写；配置版本还必须由窗口代次及服务器令牌重核。 */
 export function sameIndexTarget(a: TableIndexPatchTarget, b: TableIndexPatchTarget): boolean { return a.connectionId === b.connectionId && a.database === b.database && a.table === b.table; }
@@ -8,7 +9,7 @@ export function sameIndexTarget(a: TableIndexPatchTarget, b: TableIndexPatchTarg
 export function indexTokenCurrent(expiresAt: string, now = Date.now()): boolean { const expires = Date.parse(expiresAt); return Number.isFinite(expires) && now < expires; }
 /** 未知风险不授权，原型同名不是确认项目。 */
 export function indexAcknowledgementLabel(id: string): string | undefined {
-  const labels = new Map<string, string>([['ddl-implicit-commit', text.ackImplicit], ['external-ddl-window', text.ackWindow], ['drop-unique-constraint', text.ackUnique], ['primary-key-change', text.ackPrimary]]);
+  const labels = new Map<string, string>([['ddl-implicit-commit', text.ackImplicit], ['external-ddl-window', text.ackWindow], ['drop-unique-constraint', text.ackUnique], ['primary-key-change', text.ackPrimary], ['special-index-change', text.ackSpecial]]);
   return labels.get(id);
 }
 /** 两项通用确认必须存在，集合精确一致，未知/重复确认都不得执行。 */
@@ -35,6 +36,7 @@ export function indexDraftPermission(snapshot: TableIndexGetOutput, indexRef: st
   if (!snapshot.writable || !snapshot.capabilities) return { allowed: false, requiresBatchPreview: false, reasons: [text.readonlyTable] };
   if (!index) return { allowed: false, requiresBatchPreview: false, reasons: [text.missing] };
   if (!index.editableDefinition || index.unsupportedReasons.length) return { allowed: false, requiresBatchPreview: false, reasons: index.unsupportedReasons.length ? index.unsupportedReasons : [text.readonly] };
+  if (action !== 'drop' && isSpecialIndexKind(index.editableDefinition.kind)) return { allowed: false, requiresBatchPreview: false, reasons: [text.specialReadonly] };
   if (action === 'rename' && (!snapshot.capabilities.renameIndex || index.kind === 'primary')) return { allowed: false, requiresBatchPreview: false, reasons: [text.renameUnsupported] };
   const access = index.access[action];
   if (access.allowed) return { allowed: true, requiresBatchPreview: false, reasons: [] };
@@ -51,6 +53,7 @@ export function indexNameDraftPermission(snapshot: TableIndexGetOutput, indexRef
 /** 只发送变化属性；恢复原值消掉草稿，不重新序列化原 SQL。 */
 export function makeIndexAlter(index: TableIndexView, next: IndexDefinition, context?: { snapshot: TableIndexGetOutput; patches: readonly IndexPatch[] }): IndexPatch | null {
   const original = index.editableDefinition; if (!original || index.unsupportedReasons.length) throw new Error(index.unsupportedReasons.join('\n') || text.readonly);
+  if (isSpecialIndexKind(original.kind) || isSpecialIndexKind(next.kind)) throw new Error(text.specialReadonly);
   const changes: Extract<IndexPatch, { op: 'alter' }>['changes'] = {};
   if (next.kind !== original.kind) changes.kind = next.kind;
   if (next.name !== original.name) changes.name = next.name;
@@ -66,7 +69,17 @@ export function makeIndexAlter(index: TableIndexView, next: IndexDefinition, con
 /** 同一旧引用或新增 clientKey 只保留一个草稿，撤销不影响其他键。 */
 export function setIndexPatch(patches: readonly IndexPatch[], ref: string, next: IndexPatch | null): IndexPatch[] { const rest = patches.filter(patch => (patch.op === 'add' ? patch.clientKey : patch.indexRef) !== ref); return next ? [...rest, next] : rest; }
 /** 不推断未知字段能力，LOB 只在明确前缀能力下进入候选。 */
-export function indexColumnSelectable(column: TableIndexColumnView): boolean { return !column.generated && !column.hidden && (Number.isSafeInteger(column.fullKeyBytes) && column.fullKeyBytes! > 0 || column.prefix.kind === 'allowed'); }
+export function indexColumnSelectable(column: TableIndexColumnView, kind: IndexDefinition['kind'] = 'ordinary'): boolean { return !column.generated && !column.hidden && (isSpecialIndexKind(kind) ? column.specialIndexes?.[kind]?.allowed === true : Number.isSafeInteger(column.fullKeyBytes) && column.fullKeyBytes! > 0 || column.prefix.kind === 'allowed'); }
+/** 新增种类必须同时有服务器能力和可选字段；旧BTREE编辑不允许跨方法转换。 */
+export function indexCreationKinds(snapshot: TableIndexGetOutput): IndexDefinition['kind'][] {
+  return (['ordinary', 'unique', 'primary', 'fulltext', 'spatial'] as const).filter(kind => (!isSpecialIndexKind(kind) || snapshot.capabilities?.specialIndexes?.[kind] === true) && snapshot.columns.some(column => indexColumnSelectable(column, kind)));
+}
+/** 切换新增索引的算法时重选字段，不把旧前缀、方向或多列草稿偷带入特殊索引。 */
+export function changeIndexDraftKind(definition: IndexDefinition, kind: IndexDefinition['kind'], columns: readonly TableIndexColumnView[]): IndexDefinition {
+  const reset = isSpecialIndexKind(kind) || isSpecialIndexKind(definition.kind);
+  const first = columns.find(column => indexColumnSelectable(column, kind));
+  return { ...definition, kind, method: indexMethodForKind(kind), keyParts: reset ? first ? [{ columnRef: first.columnRef, direction: 'asc' }] : [] : definition.keyParts };
+}
 /** 纯前置校验帮助用户定位输入问题；真正依赖/字节预算仍由可信后端裁决。 */
 export function validateIndexDrafts(snapshot: TableIndexGetOutput, input: readonly IndexPatch[]): IndexPatch[] {
   if (!snapshot.writable || !snapshot.capabilities) throw new Error(text.readonlyTable);
@@ -86,7 +99,8 @@ export function validateIndexDrafts(snapshot: TableIndexGetOutput, input: readon
     if ([...value.name].length > snapshot.capabilities.maxIndexNameCharacters) throw new Error(text.tooLongName);
     if (new TextEncoder().encode(value.comment).byteLength > snapshot.capabilities.maxIndexCommentBytes || value.comment.includes('\0')) throw new Error(text.tooLongComment);
     if (value.keyParts.length > snapshot.capabilities.maxKeyParts) throw new Error(text.tooManyParts);
-    for (const part of value.keyParts) {
+    if (isSpecialIndexKind(value.kind)) assertSpecialIndexDefinition(value, columns, snapshot.capabilities);
+    else for (const part of value.keyParts) {
       const column = columns.get(part.columnRef); if (!column) throw new Error(text.missing);
       if (!indexColumnSelectable(column)) throw new Error(text.unknownColumn);
       if (part.direction === 'desc' && !snapshot.capabilities.descendingIndexes) throw new Error(text.unsupportedDirection);

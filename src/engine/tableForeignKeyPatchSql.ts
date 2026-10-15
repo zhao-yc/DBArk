@@ -33,7 +33,7 @@ function compatible(child: TrustedIndexColumn, parent: TrustedIndexColumn, optio
 function hasSupport(table: ForeignKeyTableSnapshot, refs: string[], unique: boolean): boolean {
   return [...table.indexes.values()].some(index => {
     const value = index.definition;
-    return value && index.visible === true && index.generated === false && !index.parsed.opaqueReasons.length && value.method === 'BTREE' && (!unique || (value.kind !== 'ordinary' && value.keyParts.length === refs.length)) && value.keyParts.length >= refs.length && value.keyParts.every(part => part.prefixLength === undefined && part.direction === 'asc' && table.columns.has(part.columnRef)) && refs.every((ref, position) => value.keyParts[position].columnRef === ref);
+    return value && index.visible === true && index.generated === false && !index.parsed.opaqueReasons.length && value.method === 'BTREE' && (!unique || ((value.kind === 'primary' || value.kind === 'unique') && value.keyParts.length === refs.length)) && value.keyParts.length >= refs.length && value.keyParts.every(part => part.prefixLength === undefined && part.direction === 'asc' && table.columns.has(part.columnRef)) && refs.every((ref, position) => value.keyParts[position].columnRef === ref);
   });
 }
 /** 新约束只接受服务器确认可用的 ASCII 名称，不由 JS 大小写比较推导命名空间可用。 */

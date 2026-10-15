@@ -23,7 +23,7 @@ describe('索引可信能力与列目录适配', () => {
     ['mysql', '5.7.44', false], ['mysql', '8.0.46', true], ['mysql', '8.4.11', true],
     ['mariadb', '10.11.19-MariaDB-ubu2204', true], ['mariadb', '11.4.13-MariaDB-ubu2404', true],
   ] as const)('只开放已证 %s %s 的方向和改名', (dialect, serverVersion, descendingIndexes) => {
-    expect(deriveIndexCapabilities({ ...base, dialect, serverVersion, largePrefix: true })).toEqual({ writable: true, reasons: [], capabilities: { renameIndex: true, descendingIndexes, maxKeyParts: dialect === 'mysql' ? 16 : 32, maxIndexNameCharacters: 64, maxIndexCommentBytes: 1024, maxKeyBytes: 3072 } });
+    expect(deriveIndexCapabilities({ ...base, dialect, serverVersion, largePrefix: true })).toEqual({ writable: true, reasons: [], capabilities: { renameIndex: true, descendingIndexes, maxKeyParts: dialect === 'mysql' ? 16 : 32, maxIndexNameCharacters: 64, maxIndexCommentBytes: 1024, maxKeyBytes: 3072, specialIndexes: { fulltext: true, spatial: true, spatialRequiresSrid: dialect === 'mysql' && serverVersion.startsWith('8.') } } } );
   });
   it.each([['mysql', '8.4.11', 16], ['mariadb', '11.4.13-MariaDB', 32]] as const)('%s 键列上限直接限制纯计划，不能等待服务器拒绝', (dialect, serverVersion, maximum) => {
     const definitionContext = { ...context, dialect };

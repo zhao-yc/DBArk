@@ -16,6 +16,7 @@ const original = 'CREATE TABLE `t` (`id` int NOT NULL,`a` int DEFAULT NULL,`b` i
 let engine: Engine, events: TaskEvent[], source: string, afterSql: string, version: string, failSql: RegExp | undefined, holdSql: RegExp | undefined, closeFails: boolean;
 let connections: ManagedConnection[], sent: { id: number; sql: string }[], nextId: number, headers: Record<string, unknown>[], parts: Record<string, unknown>[];
 let held: { connection: ManagedConnection; complete(error?: Error): void } | undefined, warnings: number, generatedPrimaryKeys: number, pageSize: number, expressionConflict: boolean;
+let catalogSrid: number, sridHeadersAvailable: boolean;
 /** 只替换数据库驱动；实际 Engine、短会话状态机、目录交叉读取、计划与后核验均执行生产代码。 */
 function managed(signal?: AbortSignal): ManagedConnection {
   const connection = new EventEmitter(), threadId = ++nextId; let mode = '', quote = 0, charset = 'utf8mb4', collation = 'utf8mb4_general_ci', fk = 0, unique = 0, gipk = 0;
@@ -34,7 +35,7 @@ function managed(signal?: AbortSignal): ManagedConnection {
       else if (sql.startsWith('SELECT @@server_uuid')) rows = [{ uuid: 'unit' }];
       else if (sql.startsWith('SHOW CREATE TABLE')) rows = [{ Table: 't', 'Create Table': source }];
       else if (sql.startsWith('SELECT c.CHARACTER_SET_NAME')) rows = [{ charset: 'utf8mb4', collation: 'utf8mb4_bin' }];
-      else if (sql.startsWith('SELECT COLUMN_NAME AS name,')) rows = document().columns.map(column => ({ name: column.name, nullable: column.nullable === false ? 'NO' : 'YES', extra: '', charset: null, collation: null }));
+      else if (sql.startsWith('SELECT COLUMN_NAME AS name,')) rows = document().columns.map(column => ({ name: column.name, nullable: column.nullable === false ? 'NO' : 'YES', extra: '', charset: column.type.raw === 'text' ? 'utf8mb4' : null, collation: column.type.raw === 'text' ? 'utf8mb4_bin' : null }));
       else if (sql.startsWith('SET SESSION foreign_key_checks')) { fk = 1; unique = 1; }
       else if (sql.startsWith('SELECT @@SESSION.foreign_key_checks')) rows = [{ fkChecks: fk, uniqueChecks: unique }];
       else if (sql.startsWith('SET SESSION show_gipk')) gipk = 1;
@@ -43,10 +44,11 @@ function managed(signal?: AbortSignal): ManagedConnection {
       else if (sql.startsWith('SELECT @@lower_case_table_names')) rows = [{ lowerCaseTableNames: 0, compileOs: 'Linux', pageSize }];
       else if (sql.startsWith('SELECT @@innodb_large_prefix')) rows = [{ largePrefix: 1 }];
       else if (sql.startsWith('SELECT ENGINE, ROW_FORMAT')) rows = [{ ENGINE: 'InnoDB', ROW_FORMAT: 'Dynamic' }];
-      else if (sql.startsWith('SELECT COLUMN_NAME, DATA_TYPE')) rows = document().columns.map(column => ({ COLUMN_NAME: column.name, DATA_TYPE: 'int', COLUMN_TYPE: column.type.raw, IS_NULLABLE: column.nullable === false ? 'NO' : 'YES', EXTRA: '', CHARACTER_SET_NAME: null, COLLATION_NAME: null, CHARACTER_MAXIMUM_LENGTH: null, CHARACTER_OCTET_LENGTH: null }));
+      else if (sql.startsWith('SELECT COLUMN_NAME, DATA_TYPE')) rows = document().columns.map(column => ({ COLUMN_NAME: column.name, DATA_TYPE: column.type.raw, COLUMN_TYPE: column.type.raw, IS_NULLABLE: column.nullable === false ? 'NO' : 'YES', EXTRA: '', CHARACTER_SET_NAME: column.type.raw === 'text' ? 'utf8mb4' : null, COLLATION_NAME: column.type.raw === 'text' ? 'utf8mb4_bin' : null, CHARACTER_MAXIMUM_LENGTH: column.type.raw === 'text' ? '65535' : null, CHARACTER_OCTET_LENGTH: column.type.raw === 'text' ? '65535' : null, ...(sql.includes(', SRS_ID') ? { SRS_ID: column.type.raw === 'point' ? catalogSrid : null } : {}) }));
       else if (sql.startsWith('SELECT CHARACTER_SET_NAME, MAXLEN')) rows = [{ CHARACTER_SET_NAME: 'utf8mb4', MAXLEN: 4 }];
+      else if (sql.includes("TABLE_NAME = 'COLUMNS' AND COLUMN_NAME = 'SRS_ID'")) rows = sridHeadersAvailable ? [{ COLUMN_NAME: 'SRS_ID' }] : [];
       else if (sql.startsWith("SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = 'information_schema'")) rows = ['INDEX_NAME', 'COLUMN_NAME', 'SEQ_IN_INDEX', 'NON_UNIQUE', 'INDEX_TYPE', 'COLLATION', 'SUB_PART', 'INDEX_COMMENT', 'EXPRESSION', 'IS_VISIBLE'].map(COLUMN_NAME => ({ COLUMN_NAME }));
-      else if (sql.startsWith('SELECT INDEX_NAME, COLUMN_NAME')) rows = readTableIndexDefinition(document()).indexes.flatMap(index => index.parts.map((part, position) => ({ INDEX_NAME: index.name, COLUMN_NAME: part.columnName, SEQ_IN_INDEX: position + 1, NON_UNIQUE: index.kind === 'ordinary' ? 1 : 0, INDEX_TYPE: 'BTREE', COLLATION: part.direction === 'desc' ? 'D' : 'A', SUB_PART: part.prefixLength ?? null, INDEX_COMMENT: index.comment, EXPRESSION: expressionConflict && index.name === 'ia' ? 'lower(a)' : null, IS_VISIBLE: 'YES' })));
+      else if (sql.startsWith('SELECT INDEX_NAME, COLUMN_NAME')) rows = readTableIndexDefinition(document()).indexes.flatMap(index => index.parts.map((part, position) => ({ INDEX_NAME: index.name, COLUMN_NAME: part.columnName, SEQ_IN_INDEX: position + 1, NON_UNIQUE: ['unique', 'primary'].includes(index.kind) ? 0 : 1, INDEX_TYPE: index.kind === 'spatial' ? 'SPATIAL' : index.kind === 'fulltext' ? 'FULLTEXT' : 'BTREE', COLLATION: index.kind === 'fulltext' ? null : part.direction === 'desc' ? 'D' : 'A', SUB_PART: index.kind === 'spatial' ? 32 : part.prefixLength ?? null, INDEX_COMMENT: index.comment, EXPRESSION: expressionConflict && index.name === 'ia' ? 'lower(a)' : null, IS_VISIBLE: 'YES' })));
       else if (sql.includes('FOREIGN_COLS')) rows = parts;
       else if (sql.includes('INNODB_')) rows = headers;
       else if (sql.includes('KEY_COLUMN_USAGE')) rows = [];
@@ -68,11 +70,62 @@ async function apply(value: TableIndexPreviewOutput, taskId = 'apply', acknowled
 beforeEach(async () => {
   source = original; afterSql = original.replace('`ia`', '`renamed`'); version = '8.4.11'; failSql = undefined; holdSql = undefined; closeFails = false;
   connections = []; sent = []; events = []; nextId = 0; headers = []; parts = []; held = undefined; warnings = 0; generatedPrimaryKeys = 0; pageSize = 16384; expressionConflict = false;
+  catalogSrid = 0; sridHeadersAvailable = true;
   mocks.connect.mockReset().mockImplementation(async (_profile, _database, signal) => managed(signal));
   mocks.execute.mockReset().mockImplementation(async (_managed, sql) => { if (String(sql).startsWith('KILL CONNECTION')) held?.complete(Object.assign(new Error('命令取消终态'), { errno: 1317 })); return { rows: [] }; });
   engine = new Engine(event => events.push(event)); await engine.handle('connections.open', { id: profile.id, profile });
 });
 afterEach(async () => { closeFails = false; holdSql = undefined; held?.complete(new Error('单元收尾')); await engine.closeAll(); vi.restoreAllMocks(); });
+
+describe.each(['fulltext', 'spatial'] as const)('真实Engine的%s专属生命周期（驱动替身）', kind => {
+  /** 夹具仅指定原DDL和期望DDL，生产代码负责目录交叉、引用、预览及一次性执行。 */
+  function fixture() {
+    source = 'CREATE TABLE `t` (`id` int NOT NULL,`a` text,`g` point NOT NULL /*!80003 SRID 0 */,PRIMARY KEY (`id`)) ENGINE=InnoDB ROW_FORMAT=DYNAMIC';
+    const clause = kind === 'fulltext' ? 'FULLTEXT KEY `special` (`a`)' : 'SPATIAL KEY `special` (`g`)';
+    afterSql = source.replace(') ENGINE=', `,${clause}) ENGINE=`);
+  }
+  async function addition() {
+    const snapshot = await get(), column = snapshot.columns.find(c => c.name === (kind === 'fulltext' ? 'a' : 'g'))!;
+    expect(column.specialIndexes?.[kind].allowed).toBe(true);
+    const value = await preview(snapshot, [{ op: 'add', clientKey: 'new', definition: { name: 'special', kind, method: kind === 'fulltext' ? 'FULLTEXT' : 'RTREE', comment: '', keyParts: [{ columnRef: column.columnRef, direction: 'asc' }] } }]);
+    expect(value.requiredAcknowledgements).toEqual(['ddl-implicit-commit', 'external-ddl-window', 'special-index-change']);
+    expect(value.warnings.join('')).not.toContain('新增或重建唯一键'); return value;
+  }
+  it('只预览不投递，新增和删除各只发一条ALTER，公开定义完整后核验且不重放', async () => {
+    fixture(); const initial = source, value = await addition(); expect(sent.filter(item => item.sql.startsWith('ALTER'))).toHaveLength(0);
+    warnings = kind === 'fulltext' ? 1 : 0; expect(await apply(value)).toMatchObject({ ddlCompleted: true, definitionVerified: true });
+    if (warnings) { const alter = sent.findIndex(item => item.sql.startsWith('ALTER')); expect(sent[alter + 1].sql).toBe('SHOW WARNINGS LIMIT 20'); }
+    await expect(apply(value, 'replay')).rejects.toThrow('已失效或已使用');
+    const next = await get(), old = next.indexes.find(index => index.name === 'special')!;
+    expect(old).toMatchObject({ kind, access: { drop: { allowed: true }, rename: { allowed: false }, replace: { allowed: false } } });
+    const deletion = await preview(next, [{ op: 'drop', indexRef: old.indexRef }]); expect(deletion.requiredAcknowledgements).not.toContain('drop-unique-constraint');
+    afterSql = initial; expect(await apply(deletion, 'drop-special')).toMatchObject({ ddlCompleted: true, definitionVerified: true });
+    expect(sent.filter(item => item.sql.startsWith('ALTER'))).toHaveLength(2); expect(connections.every(connection => vi.mocked(connection.close).mock.calls.length === 1)).toBe(true);
+  });
+  it('执行前源定义变化消费令牌且零DDL', async () => {
+    fixture(); const value = await addition(); source = source.replace('ROW_FORMAT=DYNAMIC', 'ROW_FORMAT=DYNAMIC COMMENT=\'changed\'');
+    await expect(apply(value)).rejects.toThrow('变化'); expect(sent.filter(item => item.sql.startsWith('ALTER'))).toHaveLength(0); await expect(apply(value, 'retry')).rejects.toThrow('已失效或已使用');
+  });
+  it('目录读取权限失败不投递DDL，服务器拒绝也不重试', async () => {
+    fixture(); const value = await addition(); failSql = /^SELECT COLUMN_NAME, DATA_TYPE/;
+    await expect(apply(value)).rejects.toThrow(); expect(sent.filter(item => item.sql.startsWith('ALTER'))).toHaveLength(0);
+    failSql = undefined; const next = await addition(); failSql = /^ALTER TABLE/;
+    await expect(apply(next, 'denied')).rejects.toMatchObject({ errno: 1227 }); await expect(apply(next, 'denied-retry')).rejects.toThrow('已失效或已使用');
+    expect(sent.filter(item => item.sql.startsWith('ALTER'))).toHaveLength(1); expect(events.at(-1)?.indexPatch).toMatchObject({ ddlSubmitted: true, ddlCompleted: false, outcome: 'unknown' });
+  });
+  it('取消已投递DDL等待真实收尾，状态未知且令牌不重放', async () => {
+    fixture(); const initial = source, value = await addition(); holdSql = /^ALTER TABLE/;
+    const pending = apply(value, 'special-cancel').catch(error => error); await vi.waitFor(() => expect(held).toBeDefined());
+    await engine.handle('query.cancel', { taskId: 'special-cancel' }); expect(await pending).toBeInstanceOf(Error);
+    expect(events.at(-1)).toMatchObject({ status: 'cancelled', indexPatch: { ddlSubmitted: true, ddlCompleted: false, outcome: 'unknown' } });
+    expect(source).toBe(initial); expect(sent.filter(item => item.sql.startsWith('ALTER'))).toHaveLength(1); expect(connections.every(connection => vi.mocked(connection.close).mock.calls.length === 1)).toBe(true);
+    await expect(apply(value, 'cancel-replay')).rejects.toThrow('已失效或已使用');
+  });
+  it('MySQL8 SRID目录变化不会因原DDL未变而放行', async () => {
+    fixture(); const value = await addition(); catalogSrid = 4326;
+    await expect(apply(value)).rejects.toThrow('变化'); expect(sent.filter(item => item.sql.startsWith('ALTER'))).toHaveLength(0);
+  });
+});
 
 describe('真实索引生命周期的驱动边界', () => {
   it('原生改名只发一次 ALTER，不重述索引且完整后核验；准备连接均真实释放', async () => {

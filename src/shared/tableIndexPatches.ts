@@ -6,12 +6,12 @@ export const tableIndexPatchLimits = { patches: 100, patchBytes: 512 * 1024, ind
 export type ColumnRef = string;
 export type IndexRef = string;
 export interface IndexKeyPart { columnRef: ColumnRef; prefixLength?: number; direction: 'asc' | 'desc'; }
-export interface IndexDefinition { kind: 'ordinary' | 'unique' | 'primary'; name: string; method: 'BTREE'; keyParts: IndexKeyPart[]; comment: string; }
+export interface IndexDefinition { kind: 'ordinary' | 'unique' | 'primary' | 'fulltext' | 'spatial'; name: string; method: 'BTREE' | 'FULLTEXT' | 'RTREE'; keyParts: IndexKeyPart[]; comment: string; }
 export interface IndexChanges { kind?: IndexDefinition['kind']; name?: string; keyParts?: IndexKeyPart[]; comment?: string; }
 export type IndexPatch = { op: 'add'; clientKey: string; definition: IndexDefinition } | { op: 'drop'; indexRef: IndexRef } | { op: 'alter'; indexRef: IndexRef; changes: IndexChanges };
 export interface IndexOperationAccess { allowed: boolean; reasons: string[]; }
 export interface TableIndexView {
-  indexRef: IndexRef; name: string; rawSql: string; kind: 'ordinary' | 'unique' | 'primary' | 'unsupported';
+  indexRef: IndexRef; name: string; rawSql: string; kind: IndexDefinition['kind'] | 'unsupported';
   editableDefinition?: IndexDefinition; unsupportedReasons: string[];
   /** 只用于界面显示；预览不接受客户端提交的权限投影。 */
   access: { drop: IndexOperationAccess; rename: IndexOperationAccess; replace: IndexOperationAccess };
@@ -47,7 +47,9 @@ export interface IndexPlanIssue { code: string; message: string; indexRefs: read
 export interface IndexPlanOptions {
   database: string; dialect: 'mysql' | 'mariadb'; serverVersion: string; engine: 'InnoDB';
   sqlMode: { ansiQuotes: boolean; noBackslashEscapes: boolean };
-  capabilities: { renameIndex: boolean; descendingIndexes: boolean; maxKeyParts: number; maxIndexNameCharacters: number; maxIndexCommentBytes: number; maxKeyBytes: number };
+  capabilities: { renameIndex: boolean; descendingIndexes: boolean; maxKeyParts: number; maxIndexNameCharacters: number; maxIndexCommentBytes: number; maxKeyBytes: number;
+    /** 特殊索引与普通键预算分开；缺少投影就是未知，不能沿用BTREE能力。 */
+    specialIndexes?: { fulltext: boolean; spatial: boolean; spatialRequiresSrid: boolean } };
   checks: { foreignKeyChecks: 1; uniqueChecks: 1 };
 }
 export interface TrustedIndexColumn {
@@ -57,6 +59,7 @@ export interface TrustedIndexColumn {
   /** 非前缀列的完整键字节上限由可信目录及类型能力提供；未知时不能猜长度。 */
   fullKeyBytes?: number;
   prefix: { kind: 'allowed'; unit: 'characters' | 'bytes'; maxLength: number } | { kind: 'forbidden'; reason: string } | { kind: 'unknown'; reason: string };
+  specialIndexes?: { fulltext: IndexOperationAccess; spatial: IndexOperationAccess; srid?: number };
 }
 export interface TrustedIndexDefinition { parsed: ParsedIndex; definition?: Readonly<IndexDefinition>; visible: boolean | 'unknown'; generated: boolean | 'unknown'; }
 export interface IndexPlanSnapshot {
@@ -78,8 +81,15 @@ const ref = z.string().min(1).max(200);
 const name = z.string().min(1).max(64).refine(value => !value.includes('\0') && !/\s$/.test(value), '索引名称不能含 NUL 或以空白结束');
 const keyPart = z.object({ columnRef: ref, prefixLength: z.number().int().min(1).max(4294967295).optional(), direction: z.enum(['asc', 'desc']) }).strict();
 const parts = z.array(keyPart).min(1).max(tableIndexPatchLimits.keyParts);
-const kind = z.enum(['ordinary', 'unique', 'primary']);
-export const indexDefinitionSchema = z.object({ kind, name, method: z.literal('BTREE'), keyParts: parts, comment: z.string() }).strict();
+const kind = z.enum(['ordinary', 'unique', 'primary', 'fulltext', 'spatial']);
+export const indexDefinitionSchema = z.object({ kind, name, method: z.enum(['BTREE', 'FULLTEXT', 'RTREE']), keyParts: parts, comment: z.string() }).strict().superRefine((value, context) => {
+  const expected = value.kind === 'fulltext' ? 'FULLTEXT' : value.kind === 'spatial' ? 'RTREE' : 'BTREE';
+  if (value.method !== expected) context.addIssue({ code: 'custom', message: '索引种类和方法不一致', path: ['method'] });
+  if (value.kind === 'fulltext' || value.kind === 'spatial') {
+    if (value.keyParts.some(part => part.prefixLength !== undefined || part.direction !== 'asc')) context.addIssue({ code: 'custom', message: '特殊索引不接受前缀或方向设置', path: ['keyParts'] });
+    if (value.kind === 'spatial' && value.keyParts.length !== 1) context.addIssue({ code: 'custom', message: '空间索引只接受一个完整空间字段', path: ['keyParts'] });
+  }
+});
 export const indexPatchSchema = z.discriminatedUnion('op', [
   z.object({ op: z.literal('add'), clientKey: ref, definition: indexDefinitionSchema }).strict(),
   z.object({ op: z.literal('drop'), indexRef: ref }).strict(),
@@ -90,6 +100,7 @@ export const indexPatchSchema = z.discriminatedUnion('op', [
 export function assertIndexDefinitionNames(definition: Readonly<IndexDefinition>): void {
   if (definition.kind === 'primary' ? definition.name !== 'PRIMARY' : definition.name.toUpperCase() === 'PRIMARY') throw new Error('主键名称必须精确为 PRIMARY，其他索引不能使用该保留名');
   if (definition.name.toUpperCase() === 'GEN_CLUST_INDEX') throw new Error('不能使用 InnoDB 系统聚簇索引保留名');
+  if (definition.name.toUpperCase() === 'FTS_DOC_ID_INDEX') throw new Error('全文文档定位索引由服务器或人工专门管理，本批不能创建或重建');
   const refs = new Set<string>();
   for (const part of definition.keyParts) { if (refs.has(part.columnRef)) throw new Error('索引不能重复引用同一字段'); refs.add(part.columnRef); }
 }

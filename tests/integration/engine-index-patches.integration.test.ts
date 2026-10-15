@@ -147,10 +147,11 @@ describe.skipIf(!enabled)('真实索引差异、主键与有限依赖保护', ()
     expect(events.filter(event => event.taskId === taskId).at(-1)).toMatchObject({ status: 'cancelled', indexPatch: { ddlSubmitted: true, ddlCompleted: false, outcome: 'unknown' } });
     expect((await get('cancel_case')).indexes.map(index => index.name)).toContain('ia');
   });
-  it('全文与生成列旧索引只读，普通新键可添加并核验未改原片段', async () => {
+  it('全文仅可删除、生成列旧键只读；普通新键不改原片段', async () => {
     await sql('CREATE TABLE opaque_case(id INT NOT NULL,a VARCHAR(40),g INT GENERATED ALWAYS AS (length(a)) STORED,PRIMARY KEY(id),FULLTEXT KEY ft(a),KEY ig(g)) ENGINE=InnoDB ROW_FORMAT=DYNAMIC');
     const snapshot = await get('opaque_case');
-    for (const name of ['ft', 'ig']) expect(snapshot.indexes.find(item => item.name === name)?.access).toMatchObject({ drop: { allowed: false }, rename: { allowed: false }, replace: { allowed: false } });
+    expect(snapshot.indexes.find(item => item.name === 'ft')?.access).toMatchObject({ drop: { allowed: true }, rename: { allowed: false }, replace: { allowed: false } });
+    expect(snapshot.indexes.find(item => item.name === 'ig')?.access).toMatchObject({ drop: { allowed: false }, rename: { allowed: false }, replace: { allowed: false } });
     expect(await apply(await preview(snapshot, [addition(snapshot, 'ia', ['a'])]))).toMatchObject({ definitionVerified: true });
   });
   it('MySQL8 表达式及不可见旧键保持只读，新增普通键不改原属性', async ({ skip }) => {
