@@ -32,6 +32,25 @@
 - 本克隆使用自己的依赖和独立临时配置目录；受限环境阻止 SQLite 临时文件原子重命名时，在获得运行许可后复验全部真实磁盘用例通过，没有替换文件系统实现。
 - 未连接实库、未运行 Docker、未构建最终安装包；实库与安装由统筹安排。
 
+## 统筹实库套件准备
+
+追加 `tests/e2e/query-binding-live.spec.ts`，复用 live-helpers 的随机 `dbark_e2e_*` 隔离库及独立 Electron 配置夹具。默认在夹具启动前严格跳过；本轮仅准备测试并核对类型、默认跳过和离线回归，**没有运行或宣称实库通过**。
+
+两项用例分别覆盖：
+
+1. 通过真实查询标签首次另存建立来源，再从分页列表打开第二个同源标签。两个实际连接创建完全同名的临时表、修改不同行并保持各自未提交事务；从结果网格读取真实 CONNECTION_ID、临时标记和本会话值。第二标签更新后，第一标签旧摘要 CAS 必须拒绝，保留其草稿并可明确另存；保存、另存和打开前后比较执行历史与原结果，后续显式探测确认两物理会话未被替换。最后使用各标签回滚按钮，旁观者确认两行均为原值。
+2. 来源关联后显式 `USE information_schema`，只将该只读系统目录作为默认库，不在其中写入。旧绑定更新因上下文变化被拒绝，明确另存才保存新上下文；再次从列表打开副本不执行正文，原标签的连接、临时表与未提交值保持。回滚后旁观者确认原值，原保存记录始终不变。
+
+观察连接仅建立本例的小型 InnoDB 表/两行夹具并验证已提交值；被测 SQL、临时表、事务、保存、另存、标签切换和回滚均走真实 UI/IPC。没有反射写入内部状态、替换 IPC 返回值或放宽旧测试夹具。关闭 trace，避免统筹注入的临时凭据进入轨迹。测试代码不引用主目录凭据路径。
+
+统筹核验实际服务器和隔离授权后，向测试进程注入现有 `DBARK_INTEGRATION_ENABLED=1`、`DBARK_TEST_HOST`、`DBARK_TEST_PORT`、`DBARK_TEST_USER`、`DBARK_TEST_PASSWORD`，运行：
+
+```powershell
+node node_modules/@playwright/test/cli.js test tests/e2e/query-binding-live.spec.ts --workers=1
+```
+
+需要既有夹具允许创建/清理唯一随机隔离库、建立 InnoDB 表和会话临时表、普通读写及事务，并允许选择 information_schema。测试默认的跳过检查可用 `DBARK_INTEGRATION_ENABLED=0` 执行同一文件；两个 skipped 仅说明门禁生效，不能作为数据库验收。
+
 ## 公共文件及集成提醒
 
 - shared contracts / commands / validation：新命令与可选标签来源；新增 queryBinding schema。
