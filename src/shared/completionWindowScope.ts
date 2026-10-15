@@ -1,0 +1,28 @@
+import type{CompletionToken}from'./completionLexical';
+import type{CompletionQueryBranch}from'./completionQueryScope';
+
+const word=(token:CompletionToken|undefined,name:string)=>token?.kind==='word'&&token.value.toUpperCase()===name;
+const symbol=(token:CompletionToken|undefined,value:string)=>token?.kind==='symbol'&&token.value===value;
+const name=(token:CompletionToken|undefined)=>token?.kind==='word'||token?.kind==='identifier';
+
+/** 仅识别当前SELECT已有窗口中的表达式边界；不创建关系、不解析继承，也不扩展目录权限。 */
+export function completionWindowContext(branches:CompletionQueryBranch[],tokens:CompletionToken[],at:number):'expression'|'unsupported'|undefined{
+  const branch=branches.filter(item=>item.select.start<=at&&at<=item.end).sort((a,b)=>b.select.depth-a.select.depth||b.select.start-a.select.start)[0];if(!branch)return;const select=branch.select;
+  const stack:number[]=[],close=new Map<number,number>();
+  for(let index=0;index<tokens.length;index++){if(symbol(tokens[index],'('))stack.push(index);else if(symbol(tokens[index],')')){const open=stack.pop();if(open!==undefined)close.set(open,index);}}
+  const containers=tokens.flatMap((token,index)=>symbol(token,'(')&&token.end<=at&&at<=(tokens[close.get(index)??-1]?.start??Infinity)&&token.start>branch.select.start?[index]:[]);
+  /** 命名窗口只接受本块WINDOW name AS(...)列表，逗号不能被误认成SELECT或函数参数。 */
+  function named(open:number):boolean{
+    let start=-1;for(let index=open-1;index>=0&&tokens[index].start>select.start;index--)if(tokens[index].depth===select.depth&&word(tokens[index],'WINDOW')){start=index;break;}if(start<0)return false;
+    for(let index=start+1;index<tokens.length;){if(!name(tokens[index])||!word(tokens[index+1],'AS')||!symbol(tokens[index+2],'('))return false;const current=index+2;if(current===open)return true;const end=close.get(current);if(end===undefined||!symbol(tokens[end+1],','))return false;index=end+2;}
+    return false;
+  }
+  // 子查询的SELECT在窗口括号之后，已被containers排除；其独立ORDER别名规则继续生效。
+  for(const open of containers.reverse()){
+    if(!word(tokens[open-1],'OVER')&&!named(open))continue;
+    const first=tokens[open+1];if((!word(first,'PARTITION')&&!word(first,'ORDER'))||!word(tokens[open+2],'BY'))return'unsupported';
+    // 点号后的保留字仍是合法字段名，例如u.rows；不能把它误当作帧子句。
+    if(tokens.slice(open+1,close.get(open)).some((token,index,list)=>token.depth===tokens[open].depth+1&&token.start<at&&!symbol(list[index-1],'.')&&['ROWS','RANGE','GROUPS','EXCLUDE'].some(value=>word(token,value))))return'unsupported';
+    return'expression';
+  }
+}

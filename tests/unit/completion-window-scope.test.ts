@@ -1,0 +1,32 @@
+import{describe,it,expect,vi}from'vitest';
+import{analyzeCompletion,type CompletionAnalysisReady}from'../../src/shared/completionAnalysis';
+import{completionSuggestions}from'../../src/renderer/completionSuggestions';
+import type{CompletionDirectoryRequest}from'../../src/shared/sqlCompletion';
+
+/** 真实解析器提供作用域；仅目录读取使用可检查的替身，不模拟语义结果。 */
+function analyze(marked:string):CompletionAnalysisReady{const result=analyzeCompletion(marked.replace('|',''),marked.indexOf('|'));expect(result.status).toBe('ready');if(result.status!=='ready')throw Error('分析未就绪');return result;}
+function directory(){return{load:vi.fn(async(query:CompletionDirectoryRequest)=>({entries:query.kind==='columns'?[{name:query.table==='users'?'user_value':'order_value',kind:'column' as const}]:[],incomplete:false}))};}
+
+describe('普通SELECT窗口字段作用域',()=>{
+  it.each(['PARTITION BY','ORDER BY'])('内联%s仅从当前CTE投影插入字段',async clause=>{const a=analyze(`WITH q AS(SELECT 1 AS value_col) SELECT ROW_NUMBER() OVER(${clause} val|suffix) FROM q`),d=directory(),r=await completionSuggestions(a,undefined,d);expect(r.items).toContainEqual({label:'value_col',kind:'column',insertText:'`q`.`value_col`',detail:'q · 公共表表达式'});expect(a.outputAliases).toBeUndefined();expect(d.load).not.toHaveBeenCalled();});
+  it.each(['PARTITION BY','ORDER BY'])('命名WINDOW的%s保留限定来源与完整替换范围',async clause=>{const marked=`SELECT ROW_NUMBER() OVER w FROM (SELECT 1 AS value_col)d WINDOW w AS (${clause} d.val|suffix)`,a=analyze(marked),d=directory(),r=await completionSuggestions(a,undefined,d);expect(a.target).toMatchObject({start:marked.indexOf('val|'),end:marked.indexOf('val|')+'valsuffix'.length,qualifiers:['d']});expect(r.items.some(item=>item.insertText==='`value_col`')).toBe(true);expect(a.relations.map(item=>item.name)).toEqual(['d']);expect(d.load).not.toHaveBeenCalled();});
+  it('多个独立命名窗口仍读取本块真实关系',async()=>{const a=analyze('SELECT ROW_NUMBER() OVER w2 FROM db.users u WINDOW w1 AS(PARTITION BY u.id),w2 AS(ORDER BY u.use|suffix)'),d=directory(),r=await completionSuggestions(a,'ignored',d);expect(r.items.some(item=>item.insertText==='`user_value`')).toBe(true);expect(d.load.mock.calls.map(([query])=>query)).toEqual([{kind:'columns',database:'db',table:'users',prefix:'use'}]);});
+  it('限定保留字字段和带点引用窗口名不会变成帧或另一层关系',()=>{expect(analyze('SELECT ROW_NUMBER() OVER(ORDER BY u.rows,u.|) FROM users u').relations).toMatchObject([{name:'u',table:'users'}]);expect(analyze('SELECT ROW_NUMBER() OVER `w.一` FROM users u WINDOW `w.一` AS(ORDER BY u.|)').relations).toMatchObject([{name:'u',table:'users'}]);});
+  it.each(['PARTITION BY','ORDER BY'])('外层ORDER BY不能把输出别名泄露进OVER的%s',async clause=>{const a=analyze(`SELECT u.id AS output_alias FROM users u ORDER BY SUM(u.id) OVER(${clause} out|suffix)`),r=await completionSuggestions(a,'db',directory());expect(a.outputAliases).toBeUndefined();expect(r.items.some(item=>item.insertText==='`output_alias`')).toBe(false);});
+  it.each(['PARTITION BY','ORDER BY'])('窗口中不把同名物理字段当成输出别名：%s',async clause=>{const a=analyze(`SELECT u.id AS user_value,ROW_NUMBER() OVER(${clause} use|suffix) FROM users u`),r=await completionSuggestions(a,'db',directory());expect(r.items.some(item=>item.insertText==='`u`.`user_value`')).toBe(true);expect(r.items.some(item=>item.detail==='SELECT 输出别名')).toBe(false);});
+  it.each(['ORDER BY','GROUP BY','HAVING'])('命名窗口不改变%s的原有输出别名规则',async clause=>{const tail=clause==='ORDER BY'?`WINDOW w AS(ORDER BY u.id) ${clause} out|suffix`:`${clause} out|suffix WINDOW w AS(ORDER BY u.id)`,a=analyze(`SELECT u.id AS output_alias,ROW_NUMBER() OVER w AS ranking FROM users u ${tail}`),r=await completionSuggestions(a,'db',directory());expect(r.items.some(item=>item.insertText==='`output_alias`')).toBe(true);});
+  it('内层别名遮蔽外层，兄弟UNION分支不混入窗口来源',()=>{const a=analyze('SELECT 1 FROM users u WHERE EXISTS(SELECT ROW_NUMBER() OVER(ORDER BY u.|) FROM orders u)');expect(a.relations).toMatchObject([{name:'u',table:'orders'}]);const b=analyze('SELECT 1 FROM users u UNION ALL SELECT ROW_NUMBER() OVER(ORDER BY o.|) FROM orders o');expect(b.relations.map(item=>item.name)).toEqual(['o']);});
+  it.each([
+    'SELECT 1 FROM users u JOIN (SELECT ROW_NUMBER() OVER(ORDER BY |) FROM orders o)d',
+    'WITH q AS(SELECT ROW_NUMBER() OVER w FROM orders o WINDOW w AS(ORDER BY |)) SELECT * FROM users u,q',
+    'SELECT 1 FROM users u JOIN (SELECT ROW_NUMBER() OVER w FROM orders o WINDOW w AS(PARTITION BY |))d',
+  ])('普通派生表与CTE窗口不捕获外层别名：%s',source=>{expect(analyze(source).relations.map(item=>item.name)).toEqual(['o']);});
+  it.each([
+    'SELECT ROW_NUMBER() OVER(base ORDER BY u.|) FROM users u',
+    'SELECT ROW_NUMBER() OVER w FROM users u WINDOW base AS(),w AS(base ORDER BY u.|)',
+    'SELECT ROW_NUMBER() OVER(ORDER BY u.id ROWS | PRECEDING) FROM users u',
+    'SELECT ROW_NUMBER() OVER(ORDER BY u.id RANGE BETWEEN | PRECEDING AND CURRENT ROW) FROM users u',
+  ])('继承窗口及帧边界不猜字段：%s',marked=>{expect(analyzeCompletion(marked.replace('|',''),marked.indexOf('|'))).toMatchObject({status:'blocked'});});
+  it('窗口子查询自己的ORDER仍能使用自己的输出别名',()=>{const a=analyze('SELECT u.id AS outer_alias FROM users u ORDER BY SUM(u.id) OVER(ORDER BY (SELECT 1 AS inner_alias ORDER BY inn|suffix))');expect(a.outputAliases?.aliases).toEqual(['inner_alias']);});
+  it('已取消窗口补全不读取目录，不改变目录预算',async()=>{const d=directory(),controller=new AbortController();controller.abort();const r=await completionSuggestions(analyze('SELECT ROW_NUMBER() OVER(ORDER BY u.|) FROM users u'),'db',d,controller.signal);expect(r.items).toEqual([]);expect(d.load).not.toHaveBeenCalled();});
+});
