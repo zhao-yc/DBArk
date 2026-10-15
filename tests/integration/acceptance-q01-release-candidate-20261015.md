@@ -1,6 +1,6 @@
 # 0.16 补全检查点发行候选验收（2026-10-15）
 
-状态：本机候选验收及当前147项集合的主分支三平台矩阵已完成；固定标签和公开文件仍独立核验，Q01和Navicat完整目标保持部分。运行代码仍为`b89f760e5cc0b38248bf4bf827c9db46c2b143fe`，新增规模用例固定于`00148d0b7e245046ced6dc3a0059f62e2abdb2ae`；后续文档不改代码。首批能力与原始失败分别见[语义补全](acceptance-q01-sql-completion-20261015.md)、[上下文](acceptance-q01-session-context-20261015.md)、[临时对象](acceptance-q01-session-objects-20261015.md)、[元数据/初始化](acceptance-q01-session-read-and-warmup-20261015.md)和[输出别名](acceptance-q01-output-aliases-20261015.md)。
+状态：本机候选、当前147项集合的主分支/固定标签三平台矩阵及公开文件独立验收完成，0.16.0开发预览已公开；Q01和Navicat完整目标保持部分。运行代码仍为`b89f760e5cc0b38248bf4bf827c9db46c2b143fe`，新增规模用例固定于`00148d0b7e245046ced6dc3a0059f62e2abdb2ae`，发布标签固定于`b366cae23153122db6cb76002da9e5bb6c4d6097`；后续文档不改代码。首批能力与原始失败分别见[语义补全](acceptance-q01-sql-completion-20261015.md)、[上下文](acceptance-q01-session-context-20261015.md)、[临时对象](acceptance-q01-session-objects-20261015.md)、[元数据/初始化](acceptance-q01-session-read-and-warmup-20261015.md)和[输出别名](acceptance-q01-output-aliases-20261015.md)。
 
 ## 当前运行代码的统一后端矩阵
 
@@ -38,4 +38,14 @@
 
 `run183-installed-full-cleanup`独立核对六实例隔离库/用户/相关线程及本机项目进程、本批临时目录均为0，13历史目录保留；全部用户级/系统级DBArk版本注册名称和固定应用GUID也为0。注册核对首次用旧PowerShell默认编码读取UTF8无BOM脚本而解析失败，未执行注册查询或修改；改为显式UTF8读取同一脚本后核对通过。该工具错误及缺少注册JSON导致的中止原件保留，没有因此重跑已经通过的147项UI。
 
-发布前还需固定标签的三平台原生矩阵、公开安装包/源码及SHA清单的独立下载核验；公开Windows验收必须使用归档自身用例及依赖，不能借当前工作目录覆盖源文件。未签名/未公证、macOS私网未验及复杂作用域未实现在说明中保留。可以按已验能力发布检查点，但不能把该版本视为Q01或全部Navicat功能完成。
+## 固定标签与公开安装的最终核验
+
+固定b366cae的[CI 38691245180](https://github.com/zhao-yc/DBArk/actions/runs/38691245180)全部成功：2089单元，Windows x64、macOS arm64/x64源码及真实安装每轮各24离线通过、123私网跳过；完整日志确认安装卸载/DMG分离及临时目录清理。自动发布任务成功，终态和原日志摘要保存在`o16-final-tag-ci-attestation.json`。
+
+[v0.16.0公开资产](https://github.com/zhao-yc/DBArk/releases/tag/v0.16.0)共12个，全部实际下载并核对GitHub摘要与大小；SHA清单完整且唯一覆盖其余11项。源码ZIP路径和预算预检后解压，608个普通文件逐项等于固定标签Git blob，无本地凭据、第三方程序或原始分析产物，MIT和中文指南齐全。
+
+公开Windows NSIS为137891061字节，SHA256为`2760aea19ae718d6659eec2efe4fbceaf601008633b867b0ba26e15413adf8a6`，与本机NSIS不同，分别记录。实际安装ASAR版本0.16.0、摘要`273297eadda9d735af37305e18101316dfe3334e276712a457a4b95e7f893eee`。使用公开归档自身配置和原147项测试，依赖按相同锁和真实路径核对，没有复制后续工作区源码、测试或创建依赖链接；正式报告147通过、0失败/跳过/重试/flaky，稳定ID与归档发现逐一相等，930180.884ms。
+
+公开安装进入真实系统加密分支并通过schema5迁移。CSV/JSON各1000000行、和500000500000、首末1/1000000、大小75777818/116778249字节，逐行精度、Unicode和顺序校验；两次队列峰值1行/73字节，预览仍200行且虚拟DOM有界。真实卸载后，独立只读注册检查全部名称和固定GUID为0；六实例相关库、用户、线程及本机项目进程、本批临时目录均0，13历史目录保留。源码前后仍608个原Git blob。`o16-public-final-attestation.json`汇合并核对正式报告、原始日志、安装摘要、清单、注册和资源证据，未重跑已过用例。
+
+未签名/未公证、macOS私网未验及复杂作用域未实现在说明中保留。该版本为已验能力检查点，不表示Q01或全部Navicat功能完成。
