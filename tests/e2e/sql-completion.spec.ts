@@ -16,14 +16,23 @@ async function atCaret(marked:string){
 /** 读真实保存草稿核对完整文本，不能仅以视口里相似的短行通过。 */
 async function expectSql(source:string){await expect.poll(()=>page.evaluate(async()=>{const settings=await window.dbark.invoke('settings.get',{});return settings.tabs.find(tab=>tab.id===settings.activeTabId)?.sql?.replaceAll('\r\n','\n');})).toBe(source.replaceAll('\r\n','\n'));}
 /** Monaco各平台均使用Ctrl+空格触发，macOS不占用系统的Command+空格。 */
-async function choose(label:string){await page.keyboard.press('Control+Space');const widget=page.locator('.suggest-widget.visible');await expect(widget.locator('.monaco-list-row.focused')).toContainText(label,{timeout:10000});await page.keyboard.press('Enter');await expect(widget).toHaveCount(0);}
+// 启动8秒与解析2秒分别由产品限时；断言另留3秒绘制余量，不重试触发或接受建议。
+async function choose(label:string){await page.keyboard.press('Control+Space');const widget=page.locator('.suggest-widget.visible');await expect(widget.locator('.monaco-list-row.focused')).toContainText(label,{timeout:13000});await page.keyboard.press('Enter');await expect(widget).toHaveCount(0);}
 /** 离线查询不可连接，CTE显式投影仍应通过安装包内Worker提供建议。 */
 async function offlineQuery(){await page.locator('.app-commandbar').getByRole('button',{name:'新建连接',exact:true}).click();const modal=page.getByRole('dialog',{name:'新建连接',exact:true});await modal.getByLabel('连接名称',{exact:true}).fill('补全离线验收');await modal.getByLabel('主机地址',{exact:true}).fill('127.0.0.1');await modal.getByLabel('端口',{exact:true}).fill('1');await modal.getByLabel('用户名',{exact:true}).fill('offline');await modal.getByRole('button',{name:'保存连接',exact:true}).click();await page.locator('.app-commandbar').getByRole('button',{name:'新建查询',exact:true}).click();await page.getByRole('dialog',{name:'新建查询',exact:true}).getByRole('button',{name:'打开查询',exact:true}).click();await expect(query().locator('.monaco-editor')).toBeVisible();}
 /** 第二库也使用唯一隔离前缀，先退出本例应用释放会话，再精确清理。 */
 async function extraDatabase(observer:Connection,body:(database:string)=>Promise<void>){const database='dbark_colperm_'+randomUUID().replaceAll('-','').slice(0,12);await observer.query(`CREATE DATABASE \`${database}\``);try{await body(database);}finally{if(!closed){await answerDialogs([1,1]);await quitDesktop();}if(!/^dbark_colperm_[a-f0-9]{12}$/.test(database))throw Error('拒绝清理其它库');await observer.query(`DROP DATABASE IF EXISTS \`${database}\``);const[rows]=await observer.query<RowDataPacket[]>('SELECT SCHEMA_NAME FROM information_schema.SCHEMATA WHERE SCHEMA_NAME=?',[database]);expect(rows).toHaveLength(0);}}
 
 test('离线语义补全：CTE投影、完整范围替换、键盘接受和撤销，不执行SQL',async({},info)=>{
-  await offlineQuery();const original=await atCaret('WITH q AS (SELECT 1 AS offline_column) SELECT q.off|suffix FROM q');await choose('offline_column');await expectSql('WITH q AS (SELECT 1 AS offline_column) SELECT q.`offline_column` FROM q');await page.screenshot({path:info.outputPath('offline-completion.png')});await page.keyboard.press(`${modifier}+Z`);await expectSql(original);
+  test.setTimeout(90000);await offlineQuery();
+  // 三个独立编辑器分别首次加载真实Worker；不是失败重试，每次候选名不同以排除串模型。
+  for(let cold=0;cold<3;cold++){
+    if(cold){await page.locator('.app-commandbar').getByRole('button',{name:'新建查询',exact:true}).click();await page.getByRole('dialog',{name:'新建查询',exact:true}).getByRole('button',{name:'打开查询',exact:true}).click();await expect(query().locator('.monaco-editor')).toBeVisible();}
+    const column='offline_column_'+cold,original=await atCaret(`WITH q AS (SELECT 1 AS ${column}) SELECT q.off|suffix FROM q`);
+    try{await choose(column);await expectSql(`WITH q AS (SELECT 1 AS ${column}) SELECT q.\`${column}\` FROM q`);}
+    catch(reason){await info.attach('离线补全阶段-'+cold,{body:JSON.stringify({cold,status:await query().getByLabel('SQL 补全状态',{exact:true}).allTextContents(),pageErrors}),contentType:'application/json'});await page.screenshot({path:info.outputPath('offline-startup-failure-'+cold+'.png')});throw reason;}
+    await page.screenshot({path:info.outputPath('offline-completion-cold-'+cold+'.png')});await page.keyboard.press(`${modifier}+Z`);await expectSql(original);
+  }
   const records=await page.evaluate(async()=>({tasks:await window.dbark.invoke('tasks.list',{}),history:await window.dbark.invoke('history.list',{})}));expect(records.tasks).toEqual([]);expect(records.history).toEqual([]);expect(pageErrors).toEqual([]);
 });
 

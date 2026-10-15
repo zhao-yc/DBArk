@@ -10,3 +10,6 @@ self.onmessage=(event:MessageEvent<{id:number;source:string;offset:number;mode:C
   if([mode.ansiQuotes,mode.noBackslashEscapes].some(value=>value!==undefined&&typeof value!=='boolean')){self.postMessage({id:input.id,result:{status:'blocked',reason:'mode'}});return;}
   self.postMessage({id:input.id,result:analyzeCompletion(input.source,input.offset,mode)});
 };
+
+// 模块与监听器就绪后再确认；主线程在此之前不会交付用户SQL。
+self.postMessage({type:'dbark-completion-ready',version:1});

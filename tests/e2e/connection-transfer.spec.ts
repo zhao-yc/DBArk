@@ -368,11 +368,11 @@ test.describe('连接迁移保持真实只读工作区', () => {
     }
     expect(sessions[0]).not.toBe(sessions[1]);
     await writeFile(testInfo.outputPath('connection-transfer-live-sessions.json'), JSON.stringify({ port: 13384, sessionIds: sessions.map(Number) }, null, 2));
-    // 明确等待两个标签及其活动身份持久化，不能把上一标签的防抖快照当作本次基线。
+    // 明确等待两个标签及执行后的真实库上下文持久化，不能把投递前unknown快照当作迁移基线。
     await expect.poll(async () => {
       const settings = await page.evaluate(() => window.dbark.invoke('settings.get', {}));
-      return { connections: settings.tabs.map(tab => tab.connectionId), activeConnection: settings.tabs.find(tab => tab.id === settings.activeTabId)?.connectionId };
-    }).toEqual({ connections: [first.id, second.id], activeConnection: second.id });
+      return { connections: settings.tabs.map(tab => tab.connectionId), databases:settings.tabs.map(tab=>tab.database),contexts:settings.tabs.map(tab=>tab.databaseContext),activeConnection: settings.tabs.find(tab => tab.id === settings.activeTabId)?.connectionId };
+    }).toEqual({ connections: [first.id, second.id],databases:[first.database,second.database],contexts:[{state:'known',database:first.database},{state:'known',database:second.database}], activeConnection: second.id });
     const before = await page.evaluate(async () => ({ settings: await window.dbark.invoke('settings.get', {}), tasks: await window.dbark.invoke('tasks.list', {}), history: await window.dbark.invoke('history.list', {}) }));
     const row = page.locator('.connection-row').filter({ hasText: first.name }); await row.hover();
     await row.getByRole('button', { name: `复制连接概要 ${first.name}`, exact: true }).click();

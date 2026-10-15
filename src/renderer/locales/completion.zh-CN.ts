@@ -4,5 +4,7 @@ export const completionZh={
   partial:'补全结果不完整',partialHint:'请继续输入更长的名称前缀，或使用表别名限定字段。',
   unavailable:'补全目录暂不可用',unavailableHint:'可以继续编辑；检查连接和元数据读取权限后，按 Ctrl + 空格重试。',
   limited:'当前文本暂不提供补全',limitedHint:'文本大小、嵌套或解析时间超过补全上限，可以继续编辑和执行 SQL。',
+  startupTimeout:'补全启动超时',startupTimeoutHint:'可以继续编辑和执行 SQL；稍后按 Ctrl + 空格重新启动补全。',
+  analysisTimeout:'补全分析超时',analysisTimeoutHint:'本次补全已停止，可以继续编辑和执行 SQL；缩短当前语句或稍后按 Ctrl + 空格重试。',
   databaseUnknown:'默认库待确认',databaseUnknownHint:'可以继续使用显式库名编写 SQL；执行 USE 后会根据服务器通知确认默认库。',
 };

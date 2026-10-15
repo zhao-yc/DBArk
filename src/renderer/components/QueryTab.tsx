@@ -25,7 +25,7 @@ import type { QueryParameter } from '../../shared/queryParameters';
 import '../queryPins.css';
 import { QueryStreamExportDialog, type StreamExportOptions } from './QueryStreamExportDialog';
 import { queryStreamZh } from '../locales/queryStreamExport.zh-CN';
-const completionStatusInfo={partial:{text:completionZh.partial,hint:completionZh.partialHint},unavailable:{text:completionZh.unavailable,hint:completionZh.unavailableHint},limited:{text:completionZh.limited,hint:completionZh.limitedHint},databaseUnknown:{text:completionZh.databaseUnknown,hint:completionZh.databaseUnknownHint}};
+const completionStatusInfo={partial:{text:completionZh.partial,hint:completionZh.partialHint},unavailable:{text:completionZh.unavailable,hint:completionZh.unavailableHint},limited:{text:completionZh.limited,hint:completionZh.limitedHint},databaseUnknown:{text:completionZh.databaseUnknown,hint:completionZh.databaseUnknownHint},startupTimeout:{text:completionZh.startupTimeout,hint:completionZh.startupTimeoutHint},analysisTimeout:{text:completionZh.analysisTimeout,hint:completionZh.analysisTimeoutHint}};
 
 /** 一个标签对应一个固定会话，流式结果和任务事件只接收当前执行编号。 */
 export function QueryTab({ tab, onHistory }: { tab: WorkspaceTab; onHistory: () => void }) {

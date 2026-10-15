@@ -12,7 +12,7 @@ import {completionLimits} from '../../shared/sqlCompletion';
 import {invoke,uid} from '../lib';
 import {resolveCompletionContext} from '../completionContext';
 
-export type SqlCompletionStatus='idle'|'partial'|'unavailable'|'limited'|'databaseUnknown';
+export type SqlCompletionStatus='idle'|'partial'|'unavailable'|'limited'|'databaseUnknown'|'startupTimeout'|'analysisTimeout';
 export interface SqlCompletionScope{connectionId:string;connectionVersion:number;database?:string;databaseUnknown?:boolean;sessionId?:string}
 const completionKinds:Record<SqlCompletionItem['kind'],monaco.languages.CompletionItemKind>={database:monaco.languages.CompletionItemKind.Module,table:monaco.languages.CompletionItemKind.Class,view:monaco.languages.CompletionItemKind.Interface,function:monaco.languages.CompletionItemKind.Function,procedure:monaco.languages.CompletionItemKind.Method,column:monaco.languages.CompletionItemKind.Field,alias:monaco.languages.CompletionItemKind.Variable,keyword:monaco.languages.CompletionItemKind.Keyword};
 
@@ -43,7 +43,7 @@ export function SqlEditor({ value, onChange, onReady, height = '100%', readOnly 
           const cached=completion.sessionId?await invoke('query.completionState',{sessionId:completion.sessionId}):undefined;if(!current())return{suggestions:[]};
           const scope=resolveCompletionContext(completion.database,cached,completion.databaseUnknown);if(!scope.available){statusRef.current?.(scope.reason==='broken'?'unavailable':'idle');return{suggestions:[]};}
           const analysis=await worker.analyze(source,offset,scope.mode,controller.signal);if(!current())return{suggestions:[]};
-          if(analysis.status==='blocked'){statusRef.current?.(['budget','timeout'].includes(analysis.reason)?'limited':analysis.reason==='worker'?'unavailable':'idle');return{suggestions:[]};}
+          if(analysis.status==='blocked'){statusRef.current?.(analysis.reason==='startup-timeout'?'startupTimeout':analysis.reason==='timeout'?'analysisTimeout':analysis.reason==='budget'?'limited':analysis.reason==='worker'?'unavailable':'idle');return{suggestions:[]};}
           const result=await completionSuggestions(analysis,scope.database,directory,controller.signal);if(!current())return{suggestions:[]};
           const start=model.getPositionAt(analysis.target.start),end=model.getPositionAt(analysis.target.end);if(start.lineNumber!==end.lineNumber)return{suggestions:[]};
           const range={startLineNumber:start.lineNumber,startColumn:start.column,endLineNumber:end.lineNumber,endColumn:end.column};
