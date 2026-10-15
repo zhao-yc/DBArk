@@ -1,0 +1,19 @@
+.workbench-shelf { padding: 4px 8px 10px; border-bottom: 1px solid var(--line); }
+.workbench-group-label { padding: 6px 10px 3px; color: var(--muted); font-size: 11px; overflow-wrap: anywhere; }
+.workbench-shelf-item { display: flex; align-items: center; gap: 7px; width: 100%; padding: 6px 10px; border: 0; background: transparent; text-align: left; }
+.workbench-shelf-item small { margin-left: auto; color: var(--muted); }
+.workbench-manager { display: flex; flex-direction: column; gap: 12px; }
+.workbench-group-form, .workbench-item, .workbench-actions { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; }
+.workbench-group-form .field { flex: 1; min-width: 160px; }
+.workbench-group-form > button { align-self: flex-end; }
+.workbench-item { padding: 6px 0; }
+.workbench-item strong, .workbench-favorite strong, .workbench-favorite small { overflow-wrap: anywhere; }
+.workbench-editor, .workbench-favorite { padding: 12px; border: 1px solid var(--line); border-radius: 6px; }
+.workbench-favorites { display: flex; flex-direction: column; gap: 8px; }
+.workbench-favorite { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; }
+.workbench-favorite small { display: block; color: var(--muted); }
+.app.focus-mode .sidebar-container, .app.focus-mode .vertical-resize { display: none; }
+.workbench-focus-hint { padding-left: 8px; font-size: 11px; }
+
+/* 工具栏在最小窗口宽度下仍可横向访问全部快捷入口。 */
+.app-commandbar { overflow-x: auto; flex-shrink: 0; }

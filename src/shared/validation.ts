@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { workbenchSaveSchema, workbenchTargetSchema } from './workbench';
 import{savedQueryPageInputSchema,savedQueryPageNextSchema,savedQueryPageReleaseSchema,savedQueryDeleteCheckedSchema}from'./savedQueryPages';
 import{historyPageInputSchema,historyReadSchema,historyErrorReadSchema}from'./historyPages';
 import{localSqlPageNextSchema,localSqlPageReleaseSchema}from'./localSqlPages';
@@ -80,6 +81,7 @@ const tablePage = z.object({ ...target, page: z.number().int().min(1).max(100000
   catch (error) { context.addIssue({ code: 'custom', path: ['filters'], message: error instanceof Error ? error.message : '筛选条件无效' }); }
 });
 export const commandSchemas: Record<Command, z.ZodType> = {
+  'workbench.get': empty, 'workbench.save': workbenchSaveSchema, 'workbench.resolve': workbenchTargetSchema, 'workbench.copyUri': workbenchTargetSchema,
   'table.preferences.get': tablePreferenceTargetSchema, 'table.preferences.save': tablePreferenceSaveSchema, 'table.preferences.reset': tablePreferenceTargetSchema,
   'app.info': empty,
   'app.setDirty': z.object({ dirty: z.boolean() }).strict(),
