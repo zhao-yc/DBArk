@@ -13,6 +13,7 @@ import type {StructureSearchInput,StructureSearchContinue,StructureSearchPage} f
 import type {DataSearchInput,DataSearchNext,DataSearchReply,DataSearchProgress} from './dataSearch';
 import type {DataSearchCatalogueInput,DataSearchCataloguePage} from './dataSearchCatalogue';
 import type{DataSearchRecordReadInput,DataSearchRecordsReleaseInput,DataSearchRecord}from'./dataSearchRecords';
+import type{SavedQuerySearchInput,SavedQuerySearchNext,SavedQuerySearchPage,SavedQueryOpenResult}from'./savedQuerySearch';
 export type CellValue = string | number | boolean | null | { type: 'binary'; base64: string };
 export type DataRow = Record<string, CellValue>;
 export type ObjectKind = 'table' | 'view' | 'procedure' | 'function' | 'trigger' | 'event';
@@ -77,6 +78,10 @@ export interface CommandMap {
   'metadata.databases': { input: { connectionId: string }; output: string[] };
   'metadata.completion': { input: CompletionMetadataInput; output: CompletionMetadataOutput };
   'search.structure':{input:StructureSearchInput;output:StructureSearchPage};
+  'search.savedQueries':{input:SavedQuerySearchInput;output:SavedQuerySearchPage};
+  'search.savedQueriesContinue':{input:SavedQuerySearchNext;output:SavedQuerySearchPage};
+  'search.savedQueriesRelease':{input:{cursor:string};output:void};
+  'queries.read':{input:{id:string;digest:string;connectionId:string};output:SavedQueryOpenResult};
   'search.structureContinue':{input:StructureSearchContinue;output:StructureSearchPage};
   'search.release':{input:{connectionId:string;cursor:string};output:void};
   'search.dataStart':{input:DataSearchInput;output:DataSearchReply};

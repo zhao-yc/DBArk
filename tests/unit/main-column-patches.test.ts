@@ -1,3 +1,4 @@
+import{SavedQuerySearchCancelled}from'../../src/main/savedQuerySearch';
 import { readFileSync } from 'node:fs';
 import { createContext, runInContext } from 'node:vm';
 import ts from 'typescript';
@@ -13,7 +14,7 @@ function harness() {
   const tasks = new Map<string, TaskRecord>(), events: TaskEvent[] = [], columnTokens = new Map(), columnProgress = new Map();
   let blocked = false, revision = 7;
   const request = vi.fn(async (_command: string, _input: unknown): Promise<any> => undefined);
-  const context = createContext({ Date, Map, Error, Boolean, tasks, events, pendingQueryHistory:new Map(),completionTasks:new Set(), structureTokens: columnTokens, structureProgress: columnProgress, shuttingDown: false, preparingTasks: new Map(), exportProgress: new Map(), sessions: new Map(),
+  const context = createContext({ SavedQuerySearchCancelled,savedQuerySearches:{has:()=>false}, Date, Map, Error, Boolean, tasks, events, pendingQueryHistory:new Map(),completionTasks:new Set(), structureTokens: columnTokens, structureProgress: columnProgress, shuttingDown: false, preparingTasks: new Map(), exportProgress: new Map(), sessions: new Map(),
     connectionConfig: { assertAvailable(id?: string) { if (blocked && id === 'trusted') throw new Error('连接配置正在保存'); } },
     store: { saveTask() {}, connectionRevision: () => revision }, broker: { request },
     taskEvent(event: TaskEvent) { events.push(event); const progress = event.indexPatch ?? event.columnPatch; if (progress) columnProgress.set(event.taskId, progress); tasks.set(event.taskId, { ...tasks.get(event.taskId)!, status: event.status }); },
@@ -24,6 +25,7 @@ function harness() {
 const expiresAt = () => new Date(Date.now() + 120000).toISOString();
 
 describe('结构任务主进程可信令牌与退出证据', () => {
+  it('数据库工具进程退出不误判独立本地查询搜索失败',()=>{const test=harness();test.tasks.set('local',{id:'local',kind:'search.savedQueries',status:'running',startedAt:'',progress:0,message:'本地计算'});test.handlers.engineExited();expect(test.tasks.get('local')?.status).toBe('running');expect(test.events.some(event=>event.taskId==='local')).toBe(false);});
   it('令牌只从可信输出建立，预览不接受客户端目标且同步注入当前修订', async () => {
     const test = harness(); test.request.mockResolvedValueOnce({ snapshotId: 'snapshot', target: { connectionId: 'trusted' }, expiresAt: expiresAt() });
     await test.handlers.dispatch('schema.columns.get', { connectionId: 'trusted', database: 'db', table: 't', taskId: 'get' });

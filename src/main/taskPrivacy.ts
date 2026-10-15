@@ -2,6 +2,7 @@ import type { Command, TaskEvent } from '../shared/contracts';
 
 /** 服务端错误可能展开参数值；概要记录仅保存进度，不将错误原文写入本地库。 */
 export function persistedTaskMessage(command: string, event: TaskEvent): string {
+  if(command.startsWith('search.savedQueries'))return event.status==='completed'?'本地保存查询搜索批次已结束；搜索文字、正文、命中和错误原文未保存。':event.status==='running'?'正在搜索本地保存查询；正文及命中只在当前窗口保留。':'本地保存查询搜索未完成；搜索文字、正文、命中和错误原文未保存，请在当前窗口核对。';
   if(command==='search.recordRead')return event.status==='completed'?'记录定位已结束；键、字段值与错误原文未保存。':event.status==='running'?'正在只读定位记录；键与字段值只在当前窗口保留。':'记录定位未完成；键、字段值与错误原文未保存，请在当前窗口核对。';
   if(command.startsWith('search.data'))return event.status==='completed'?'数据搜索已结束；范围完成情况请在搜索窗口核对，搜索值、命中和错误原文未保存。':event.status==='running'?'正在搜索数据；搜索值及命中只在当前窗口保留。':'数据搜索未完成；搜索值、命中和错误原文未保存，请在搜索窗口核对。';
   if(command.startsWith('search.'))return event.status==='completed'?'结构搜索批次已完成；搜索文字、命中和错误原文未保存。':event.status==='running'?'正在搜索结构；搜索文字及命中只在当前窗口保留。':'结构搜索未完成；搜索文字、命中和错误原文未保存，请在搜索窗口核对。';

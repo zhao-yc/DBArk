@@ -6,6 +6,7 @@ import { randomUUID } from 'node:crypto';
 import type { AppSettings, ConnectionProfile, HistoryEntry, SavedQuery, SqlSnippet, TaskRecord } from '../shared/contracts';
 import { validateSnippetBudget } from '../shared/snippets';
 import { tablePreferenceSaveSchema, tablePreferenceTargetSchema, tablePreferencesSchema, tablePreferenceTargetChanged, validateTablePreferenceBudget, type TablePreferenceTarget, type TablePreferences } from '../shared/tablePreferences';
+import{savedQuerySearchLimits}from'../shared/savedQuerySearch';
 
 export interface SecretProtector { available(): boolean; encrypt(value: string): string; decrypt(value: string): string; }
 export const defaultSettings: AppSettings = { theme: 'dark', sidebarWidth: 270, resultLimit: 1000, pageSize: 200, tabs: [] };
@@ -13,6 +14,7 @@ export const defaultSettings: AppSettings = { theme: 'dark', sidebarWidth: 270, 
 /** 小型配置库在内存中运行 SQLite，写入时原子替换文件；无需打包本机 ABI 模块。 */
 export class LocalStore {
   private connectionRevisionValue = 0;
+  private queryRevisionValue=0;
   private volatileSecrets = new Map<string, string>();
   /** 绑定数据库、文件路径及系统凭据保护器；仅由 open 创建已迁移的存储实例。 */
   private constructor(private db: Database, private path: string, private protector: SecretProtector, private reopen: (data: Uint8Array) => Database) {}
@@ -198,6 +200,14 @@ export class LocalStore {
   }
   /** 按更新时间返回保存的查询。 */
   queries(): SavedQuery[] { return this.records('SELECT data FROM queries ORDER BY updated_at DESC'); }
+  /** 搜索绑定查询及连接库修订；失败写盘不会改变修订。 */
+  querySearchRevision():string{return this.queryRevisionValue+':'+this.connectionRevisionValue;}
+  /** 二进制主键位置分页，仅取一条正文及下一条存在性，不复制整个查询库。 */
+  querySearchNext(after?:string):{id:string;raw:string|null;hasMore:boolean}|null{const statement=this.db.prepare('SELECT id,CASE WHEN length(CAST(data AS BLOB))<=? THEN data ELSE NULL END AS data FROM queries '+(after===undefined?'':'WHERE id COLLATE BINARY>? ')+'ORDER BY id COLLATE BINARY LIMIT 2');try{statement.bind(after===undefined?[savedQuerySearchLimits.recordBytes]:[savedQuerySearchLimits.recordBytes,after]);if(!statement.step())return null;const row=statement.getAsObject();return{id:String(row.id),raw:typeof row.data==='string'?row.data:null,hasMore:statement.step()};}finally{statement.free();}}
+  /** 只在明确打开时读取一条当前原文，过大记录不会进入渲染进程。 */
+  querySearchRaw(id:string):string|undefined{const statement=this.db.prepare('SELECT CASE WHEN length(CAST(data AS BLOB))<=? THEN data ELSE NULL END FROM queries WHERE id=?');try{statement.bind([savedQuerySearchLimits.recordBytes,id]);if(!statement.step())return;const raw=statement.get()[0];if(typeof raw!=='string')throw Error('保存查询记录超过128MiB');return raw;}finally{statement.free();}}
+  /** 打开查询只核本地连接存在性，不解密密码或尝试数据库网络连接。 */
+  queryConnectionExists(id:string):boolean{const statement=this.db.prepare('SELECT 1 FROM connections WHERE id=?');try{statement.bind([id]);return statement.step();}finally{statement.free();}}
   /** 单独读取片段库，不扩大全局工作台快照。 */
   snippets(): SqlSnippet[] { return this.records('SELECT data FROM sql_snippets ORDER BY updated_at DESC,id'); }
   /** 校验数量与正文预算，保存失败使用统一事务快照回退。 */
@@ -209,9 +219,9 @@ export class LocalStore {
   /** 删除片段不会改动查询正文、历史或连接。 */
   deleteSnippet(id: string): void { this.mutate(() => this.db.run('DELETE FROM sql_snippets WHERE id=?', [id])); }
   /** 查询正文和来源连接一起原子保存。 */
-  saveQuery(query: SavedQuery): void { this.mutate(() => this.db.run('INSERT INTO queries VALUES (?,?,?) ON CONFLICT(id) DO UPDATE SET data=excluded.data,updated_at=excluded.updated_at', [query.id, JSON.stringify(query), query.updatedAt])); }
+  saveQuery(query: SavedQuery): void { this.mutate(() => this.db.run('INSERT INTO queries VALUES (?,?,?) ON CONFLICT(id) DO UPDATE SET data=excluded.data,updated_at=excluded.updated_at', [query.id, JSON.stringify(query), query.updatedAt]));this.queryRevisionValue++; }
   /** 只删除指定查询，不影响数据库或执行历史。 */
-  deleteQuery(id: string): void { this.mutate(() => this.db.run('DELETE FROM queries WHERE id=?', [id])); }
+  deleteQuery(id: string): void { this.mutate(() => this.db.run('DELETE FROM queries WHERE id=?', [id]));this.queryRevisionValue++; }
   /** 历史显示限制为最近 500 条，可以按连接筛选。 */
   history(connectionId?: string): HistoryEntry[] { return this.records(`SELECT data FROM history ${connectionId ? 'WHERE connection_id=?' : ''} ORDER BY started_at DESC LIMIT 500`, connectionId ? [connectionId] : []); }
   /** 写入执行历史并限制总量，避免配置文件持续膨胀。 */

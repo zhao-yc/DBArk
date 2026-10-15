@@ -9,3 +9,6 @@
 .database-search-failures { max-height: 110px; overflow: auto; overflow-wrap: anywhere; }
 .database-search-failures p { margin: 6px 0; }
 .database-search-selected .rdg-cell { background: color-mix(in srgb, var(--accent) 16%, var(--surface)); }
+
+/* 本地命中只显示有界文本，不因SQL长行扩展整个模态布局。 */
+.saved-query-search-preview { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 100px; overflow: auto; }

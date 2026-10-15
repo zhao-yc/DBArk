@@ -20,6 +20,7 @@ import {structureSearchInputSchema,structureSearchContinueSchema,structureSearch
 import {dataSearchInputSchema,dataSearchNextSchema,dataSearchReleaseSchema} from './dataSearch';
 import {dataSearchCatalogueSchema} from './dataSearchCatalogue';
 import{dataSearchRecordReadSchema,dataSearchRecordsReleaseSchema}from'./dataSearchRecords';
+import{savedQuerySearchInputSchema,savedQuerySearchNextSchema,savedQuerySearchReleaseSchema,savedQueryReadSchema}from'./savedQuerySearch';
 const queryDatabaseContext=z.discriminatedUnion('state',[z.object({state:z.literal('known'),database:z.string().min(1).max(256).refine(value=>!value.includes('\0')).nullable()}).strict(),z.object({state:z.literal('unknown')}).strict()]);
 const completionName=z.string().min(1).max(64).refine(completionIdentifier,'补全对象名必须是合法BMP标识符');
 const completionPrefix=z.string().max(completionLimits.prefixUnits).refine(value=>value===''||completionIdentifier(value),'补全前缀含无效字符');
@@ -86,6 +87,7 @@ export const commandSchemas: Record<Command, z.ZodType> = {
   'connections.delete': z.object({ id }).strict(), 'connections.open': z.object({ id }).strict(), 'connections.close': z.object({ id }).strict(),
   'metadata.databases': z.object({ connectionId: id }).strict(),
   'search.structure':structureSearchInputSchema,
+  'search.savedQueries':savedQuerySearchInputSchema,'search.savedQueriesContinue':savedQuerySearchNextSchema,'search.savedQueriesRelease':savedQuerySearchReleaseSchema,'queries.read':savedQueryReadSchema,
   'search.structureContinue':structureSearchContinueSchema,
   'search.release':structureSearchReleaseSchema,
   'search.dataStart':dataSearchInputSchema,'search.dataNext':dataSearchNextSchema,'search.dataRelease':dataSearchReleaseSchema,

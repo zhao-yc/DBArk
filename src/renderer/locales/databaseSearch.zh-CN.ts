@@ -1,7 +1,7 @@
 /** 全库搜索文案集中存放，名称和完整定义模式明确区分范围及预算。 */
 export const databaseSearchZh={
   entry:'全库搜索',title:'全库搜索：结构名称',connection:'连接',databases:'数据库范围（每行一个）',
-  dataMode:'搜索数据',
+  dataMode:'搜索数据',savedQueries:'搜索保存查询',
   searchIn:'搜索内容',names:'结构名称',definitions:'定义正文',definitionsTitle:'全库搜索：定义正文',wholeDefinition:'整个定义相等',definitionLocation:'命中位置',
   definitionHint:'逐个读取当前账号可见对象的完整SHOW CREATE定义（含名称、字段、注释及例程正文），最多2MiB/对象，每页最多检查10个对象。不可读或超限定义明确记为失败，不扫描表或视图数据；字段、索引及约束包含在所属表定义中。',
   definitionMatch:(characters:number)=>`定义正文（${characters}字符）`,definitionCount:(count:number)=>` 已检查定义 ${count}。`,definitionsDone:'已完成所选可见对象的定义搜索。',
@@ -12,7 +12,7 @@ export const databaseSearchZh={
   limit:'命中上限',onError:'遇到错误',stop:'停止搜索',continueOnError:'记录错误并继续',start:'开始搜索',next:'继续搜索',cancel:'取消当前批次',close:'关闭',
   opening:'正在搜索并等待连接释放…',closing:'正在取消并清理…',empty:'尚无命中',emptyHint:'选择范围并开始搜索；有未扫描范围时可继续搜索。',
   databaseColumn:'数据库',kindColumn:'类别',objectColumn:'所属对象',nameColumn:'匹配名称',open:'打开当前定义',
-  currentDefinition:'打开时重新读取当前定义，已有查询事务和数据草稿保持原样。结果仅代表搜索时可见的名称。',
+  currentDefinition:'打开时重新读取当前定义，已有查询事务和数据草稿保持原样。结果仅代表搜索时可见的内容。',
   capped:'已达到命中上限，仍有范围尚未完成。请缩小范围或提高上限重新搜索。',
   stopped:'已因错误停止，未完成的范围没有继续搜索。',done:'已完成所选可见名称的搜索。',more:'仍有未扫描范围，继续后再查询下一批。',
   expired:'继续搜索在5分钟后失效，期间不会保留数据库连接。',

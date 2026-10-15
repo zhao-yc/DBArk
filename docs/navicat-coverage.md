@@ -35,7 +35,7 @@
 | F01 | CSV/JSON/SQL 文件任务 | 部分 | 常规映射、编码、进度、取消、错误与恢复已验；0.7 及更早含结构 SQL 对部分 Maria 表达式默认及旧版二进制文字默认存在已证保真缺口。0.8 已公开保护拒绝不可靠结构并保原文件，纯数据和视图路径分别验证；其它格式/驱动仍有缺项 |
 | W01 | 快捷键/主题/标签/退出 | 已验 | 各平台，原生确认及保存失败保护 |
 | W02 | 收藏/虚拟分组/专注/对象 URI | 待做 | 偏好保存、入口、校验、失效对象提示 |
-| W03 | 全库搜索 | 部分 | 0.17开发中已有结构名称、定义正文、分页数据搜索、权限降级及首批只读记录定位。定义本批2173单元、六实例定义66/原名称54、Windows源码及真实NSIS各25项通过，输入/归档一致，卸载及六实例资源核零，见[定义验收](../tests/integration/acceptance-w03-definition-search-20261015.md)。原记录定位六实例276项及精度/取消见[导航验收](../tests/integration/acceptance-w03-record-navigation-20261015.md)，身份仍限明示Linux/ASCII/非分区InnoDB及目录权限范围。其它对象/权限、可编辑导航、定义内行列与多处高亮、本地保存查询、SSH、完整桌面和本批macOS私网/公开发行继续，见[搜索计划](plans/database-search.md) |
+| W03 | 全库搜索 | 部分 | 0.17开发中已有结构名称、定义正文、分页数据搜索、权限降级、首批只读记录定位及本地保存查询全文。当前2193单元、Windows源码及真实NSIS各30项通过，本地正则可终止、按上下文分页、原文校验后独立标签与光标定位；冻结构建/安装归档一致，六实例及本机资源核零，见[本地查询验收](../tests/integration/acceptance-w03-saved-query-search-20261015.md)。旧定义六实例66/名称54及导航276分别见[定义验收](../tests/integration/acceptance-w03-definition-search-20261015.md)和[导航验收](../tests/integration/acceptance-w03-record-navigation-20261015.md)，身份仍限明示Linux/ASCII/非分区InnoDB及目录权限。其它对象/权限、可编辑导航、定义内行列与多处高亮、旧查询列表分页、SSH、完整桌面及本批macOS私网/公开发行继续，见[搜索计划](plans/database-search.md) |
 
 ## P1：常用扩展、迁移与运维
 

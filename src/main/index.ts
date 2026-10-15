@@ -17,6 +17,7 @@ import type { Command, ConnectionProfile, HistoryEntry, QueryFileEncoding, TaskE
 import type { QueryExportProgress } from '../shared/queryStreamExport';
 import type { TableColumnApplyProgress } from '../shared/tableColumnPatches';
 import {queryDatabasePatch} from '../shared/queryContext';
+import{SavedQuerySearches,SavedQuerySearchCancelled}from'./savedQuerySearch';
 
 if (process.env.DBARK_USER_DATA) { mkdirSync(process.env.DBARK_USER_DATA, { recursive: true }); app.setPath('userData', process.env.DBARK_USER_DATA); }
 app.setName('DBArk');
@@ -25,6 +26,8 @@ let store: LocalStore;
 let broker: EngineBroker;
 let connectionConfig: ConnectionConfigManager;
 let connectionTransfer: ConnectionTransfer;
+let savedQuerySearches:SavedQuerySearches;
+const localSearchOperations=new Set<Promise<unknown>>();
 let shuttingDown = false;
 let shutdownComplete = false;
 let stateFlushed: { resolve(): void; reject(error: Error): void } | undefined;
@@ -138,6 +141,8 @@ async function dispatch(command: Command, input: any): Promise<unknown> {
       finally{completionTasks.delete(input.taskId);}
     }
     case 'query.cancel': {
+      if(savedQuerySearches.has(input.taskId))return savedQuerySearches.cancel(input.taskId);
+      if(tasks.get(input.taskId)?.kind.startsWith('search.savedQueries'))return;
       const preparing = preparingTasks.get(input.taskId);
       if (preparing) { preparing.cancelled = true; return; }
       break;
@@ -168,6 +173,9 @@ async function dispatch(command: Command, input: any): Promise<unknown> {
     case 'table.preferences.save': return store.saveTablePreferences(input);
     case 'table.preferences.reset': return store.resetTablePreferences(input);
     case 'queries.list': return store.queries();
+    case 'queries.read':return savedQuerySearches.read(input);
+    case 'search.savedQueriesRelease':return savedQuerySearches.release(input);
+    case 'search.savedQueries':case 'search.savedQueriesContinue':if(shuttingDown)throw Error('客户端正在退出，不能搜索本地查询');break;
     case 'snippets.list': return store.snippets();
     case 'snippets.save': return store.saveSnippet(input);
     case 'snippets.delete': return store.deleteSnippet(input.id);
@@ -218,7 +226,7 @@ async function dispatch(command: Command, input: any): Promise<unknown> {
     if (structureCommand && command !== structurePrefix + 'release') input = { ...input, connectionRevision: store.connectionRevision() };
     if (taskId) preparingTasks.delete(taskId);
     sentToEngine = true;
-    const result = await broker.request(command, input);
+    const result = command==='search.savedQueries'?await savedQuerySearches.start(input):command==='search.savedQueriesContinue'?await savedQuerySearches.next(input):await broker.request(command, input);
     if (command === structurePrefix + 'get' || command === structurePrefix + 'preview') {
       if (structureTokens.size >= 128) throw new Error('结构令牌缓存已达上限，请关闭旧预览后重试');
       const token = command === structurePrefix + 'get' ? result.snapshotId : result.previewToken;
@@ -235,7 +243,7 @@ async function dispatch(command: Command, input: any): Promise<unknown> {
     return result;
   } catch (error) {
     const message = error instanceof Error ? error.message : '操作失败';
-    if (taskId && tasks.get(taskId)?.status === 'running') taskEvent({ taskId, status: preparing.cancelled ? 'cancelled' : 'failed', progress: 0, message, ...(structureCommand ? { [structurePurpose === 'indexes' ? 'indexPatch' : structurePurpose === 'foreignKeys' ? 'foreignKeyPatch' : 'columnPatch']: { phase: 'connecting' as const, ddlSubmitted: sentToEngine && command === structurePrefix + 'apply', ddlCompleted: false, definitionVerified: false, outcome: sentToEngine && command === structurePrefix + 'apply' ? 'unknown' as const : 'not-sent' as const, ...structureProgress.get(taskId) } } : {}), ...(command === 'query.exportStream' ? { queryExport: { phase: 'preparing' as const, statementsCompleted: 0, rowsWritten: 0, bytesWritten: 0, fileCommitted: false, ...exportProgress.get(taskId), sqlMayHaveExecuted: sentToEngine, transactionKnown: false } } : {}) });
+    if (taskId && tasks.get(taskId)?.status === 'running') taskEvent({ taskId, status: preparing.cancelled || error instanceof SavedQuerySearchCancelled ? 'cancelled' : 'failed', progress: 0, message, ...(structureCommand ? { [structurePurpose === 'indexes' ? 'indexPatch' : structurePurpose === 'foreignKeys' ? 'foreignKeyPatch' : 'columnPatch']: { phase: 'connecting' as const, ddlSubmitted: sentToEngine && command === structurePrefix + 'apply', ddlCompleted: false, definitionVerified: false, outcome: sentToEngine && command === structurePrefix + 'apply' ? 'unknown' as const : 'not-sent' as const, ...structureProgress.get(taskId) } } : {}), ...(command === 'query.exportStream' ? { queryExport: { phase: 'preparing' as const, statementsCompleted: 0, rowsWritten: 0, bytesWritten: 0, fileCommitted: false, ...exportProgress.get(taskId), sqlMayHaveExecuted: sentToEngine, transactionKnown: false } } : {}) });
     if (history) persistAuxiliary(() => store.addHistory({ ...history, elapsedMs: Date.now() - start, error: persistedQueryError(command, message) }));
     throw error;
   } finally { if (command === structurePrefix + 'apply') structureTokens.delete(input.previewToken); if (taskId) { pendingQueryHistory.delete(taskId); preparingTasks.delete(taskId); exportProgress.delete(taskId); structureProgress.delete(taskId); } releaseTarget?.(); }
@@ -284,6 +292,7 @@ app.on('before-quit', event => {
       await Promise.race([new Promise<void>((resolve, reject) => { stateFlushed = { resolve, reject }; window!.webContents.send('dbark:menu', 'persist-state'); }), new Promise((_, reject) => setTimeout(() => reject(new Error('工作台未能及时保存状态')), 3000))]);
       stateFlushed = undefined;
     }
+    await savedQuerySearches?.close();await Promise.allSettled([...localSearchOperations]);
     await Promise.allSettled([...queryFileOperations]);
     await broker?.close();
     for (const task of tasks.values()) if (task.status === 'running') persistAuxiliary(() => store.saveTask({ ...task, status: 'cancelled', finishedAt: new Date().toISOString(), message: '客户端已退出，请核对操作结果' }));
@@ -292,6 +301,7 @@ app.on('before-quit', event => {
     stateFlushed = undefined;
     const answer = await dialog.showMessageBox({ type: 'error', title: '退出前保存失败', message: error instanceof Error ? error.message : String(error), detail: '可以返回工作台排查后重试，或放弃未保存的配置并退出。', buttons: ['返回工作台','放弃未保存配置并退出'], defaultId: 0, cancelId: 0 });
     if (answer.response === 1) {
+      await savedQuerySearches?.close();await Promise.allSettled([...localSearchOperations]);
       await Promise.allSettled([...queryFileOperations]);
       await broker?.close().catch(() => undefined);
       try { store?.close(); } catch { /* 用户已明确选择退出，避免退出状态永久锁死。 */ }
@@ -303,10 +313,11 @@ app.on('window-all-closed', () => app.quit());
 
 /** 进程退出使所有尚未投递的准备请求失效，迟到的文件检查不能启动新进程继续写入。 */
 function engineExited(): void {
+  // 本地保存查询的匹配线程独立于数据库工具进程，不能被数据库进程退出误判为失败。
   for (const preparing of preparingTasks.values()) preparing.failure = '数据库进程已退出，准备任务已停止；尚未发送用户 SQL，原目标文件保持不变';
   sessions.clear();
   structureTokens.clear();
-  for (const task of tasks.values()) if (task.status === 'running') {
+  for (const task of tasks.values()) if (task.status === 'running'&&!task.kind.startsWith('search.savedQueries')) {
     const preparing = preparingTasks.has(task.id);
     if (task.kind.startsWith('schema.columns.') || task.kind.startsWith('schema.indexes.') || task.kind.startsWith('schema.foreignKeys.')) {
       const last = structureProgress.get(task.id), possiblySent = !preparing && (task.kind === 'schema.columns.apply' || task.kind === 'schema.indexes.apply' || task.kind === 'schema.foreignKeys.apply');
@@ -327,12 +338,14 @@ else {
     broker = new EngineBroker(taskEvent, engineExited);
     connectionConfig = new ConnectionConfigManager(store, broker);
     connectionTransfer = new ConnectionTransfer(store);
+    savedQuerySearches=new SavedQuerySearches(store,join(__dirname,'savedQuerySearchWorker.cjs'),taskEvent);
     ipcMain.handle('dbark:request', async (event, payload: unknown) => {
       try {
         if (!window || event.sender !== window.webContents || event.senderFrame !== window.webContents.mainFrame || event.senderFrame?.url !== rendererURL) throw new Error('不允许的请求来源');
         if (!payload || typeof payload !== 'object' || !('command' in payload) || !('input' in payload) || typeof payload.command !== 'string') throw new Error('请求格式无效');
         const input = validateCommand(payload.command, payload.input);
-        return { ok: true, result: await dispatch(payload.command as Command, input) };
+        const operation=dispatch(payload.command as Command,input),local=payload.command==='search.savedQueries'||payload.command==='search.savedQueriesContinue';if(local)localSearchOperations.add(operation);
+        try{return{ok:true,result:await operation};}finally{if(local)localSearchOperations.delete(operation);}
       } catch (error) { return { ok: false, error: error instanceof Error ? error.message : '客户端操作失败' }; }
     });
     createMenu(); await createWindow();

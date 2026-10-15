@@ -8,6 +8,7 @@ export const publicCommands: Record<Command, true> = {
   'connections.list': true, 'connections.save': true, 'connections.delete': true, 'connections.test': true, 'connections.open': true, 'connections.close': true,
   'metadata.databases': true, 'metadata.objects': true, 'metadata.table': true, 'metadata.ddl': true, 'metadata.completion': true,
   'search.structure':true,'search.structureContinue':true,'search.release':true,
+  'search.savedQueries':true,'search.savedQueriesContinue':true,'search.savedQueriesRelease':true,'queries.read':true,
   'search.dataStart':true,'search.dataNext':true,'search.dataRelease':true,
   'search.catalogue':true,
   'search.recordRead':true,'search.recordsRelease':true,
