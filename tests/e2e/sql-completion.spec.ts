@@ -36,8 +36,37 @@ test('离线语义补全：CTE投影、完整范围替换、键盘接受和撤�
   const records=await page.evaluate(async()=>({tasks:await window.dbark.invoke('tasks.list',{}),history:await window.dbark.invoke('history.list',{})}));expect(records.tasks).toEqual([]);expect(records.history).toEqual([]);expect(pageErrors).toEqual([]);
 });
 
+test('离线输出别名：子句隔离、字符串引用、范围替换与撤销',async({},info)=>{
+  test.setTimeout(90000);await offlineQuery();
+  for(const[marked,label,expected]of[
+    ['SELECT 1 AS projected_value ORDER BY proj|suffix','projected_value','SELECT 1 AS projected_value ORDER BY `projected_value`'],
+    ["SELECT 1 AS '中文.别名' GROUP BY 中|suffix",'中文.别名',"SELECT 1 AS '中文.别名' GROUP BY `中文.别名`"],
+    ['SELECT SUM(1) AS aggregated_total HAVING agg|suffix>0','aggregated_total','SELECT SUM(1) AS aggregated_total HAVING `aggregated_total`>0'],
+    ['(SELECT 2 AS first_output) UNION ALL (SELECT 1 AS other_output) ORDER BY fir|suffix','first_output','(SELECT 2 AS first_output) UNION ALL (SELECT 1 AS other_output) ORDER BY `first_output`'],
+  ]){const original=await atCaret(marked);await choose(label);await expectSql(expected);await page.keyboard.press(`${modifier}+Z`);await expectSql(original);}
+  const records=await page.evaluate(async()=>({tasks:await window.dbark.invoke('tasks.list',{}),history:await window.dbark.invoke('history.list',{})}));expect(records.tasks).toEqual([]);expect(records.history).toEqual([]);expect(pageErrors).toEqual([]);await page.screenshot({path:info.outputPath('offline-output-alias.png')});
+});
+
 test.describe('200隔离实库：Monaco语义补全',()=>{
   test.skip(!enabled,'需要显式启用200隔离数据库');
+  test('输出别名接受后真实执行，排序、分组、聚合和集合输出正确',async({},info)=>{
+    test.setTimeout(120000);await isolatedDatabase(async({database})=>{
+      await openDatabaseQuery(database);
+      for(const[marked,label,expected,value]of[
+        ['SELECT a AS sorted_value FROM (SELECT 2 AS a UNION ALL SELECT 1)t ORDER BY sort|suffix','sorted_value','SELECT a AS sorted_value FROM (SELECT 2 AS a UNION ALL SELECT 1)t ORDER BY `sorted_value`','1,2'],
+        ['SELECT a+1 AS grouped_value,COUNT(*) AS n FROM (SELECT 1 AS a UNION ALL SELECT 1)t GROUP BY group|suffix','grouped_value','SELECT a+1 AS grouped_value,COUNT(*) AS n FROM (SELECT 1 AS a UNION ALL SELECT 1)t GROUP BY `grouped_value`','2'],
+        ['SELECT SUM(a) AS aggregate_value FROM (SELECT 1 AS a UNION ALL SELECT 2)t HAVING aggr|suffix>2','aggregate_value','SELECT SUM(a) AS aggregate_value FROM (SELECT 1 AS a UNION ALL SELECT 2)t HAVING `aggregate_value`>2','3'],
+        ["SELECT a AS '带.点别名' FROM (SELECT 2 AS a UNION ALL SELECT 1)t ORDER BY 带|suffix",'带.点别名',"SELECT a AS '带.点别名' FROM (SELECT 2 AS a UNION ALL SELECT 1)t ORDER BY `带.点别名`",'1,2'],
+        ['(SELECT 2 AS first_output) UNION ALL (SELECT 1 AS other_output) ORDER BY fir|suffix','first_output','(SELECT 2 AS first_output) UNION ALL (SELECT 1 AS other_output) ORDER BY `first_output`','1,2'],
+      ]){
+        const before=await page.evaluate(async()=>({tasks:await window.dbark.invoke('tasks.list',{}),history:await window.dbark.invoke('history.list',{})}));await atCaret(marked);await choose(label);await expectSql(expected);
+        expect(await page.evaluate(async()=>({tasks:await window.dbark.invoke('tasks.list',{}),history:await window.dbark.invoke('history.list',{})}))).toEqual(before);
+        // 直接执行接受后的模型，不用再次写入预期SQL替换产品实际输出。
+        await query().getByRole('button',{name:'执行全部',exact:true}).click();await expect(query().getByRole('button',{name:'停止',exact:true})).toBeDisabled({timeout:20000});await expect(query().locator('.error-box')).toHaveCount(0);await expect(query().locator('.result-body [role="gridcell"][aria-colindex="2"]')).toHaveText(value.split(','));
+      }
+      expect(pageErrors).toEqual([]);await page.screenshot({path:info.outputPath('live-output-alias.png')});
+    },info);
+  });
   test('别名与引用范围、后20张表、跨库目录按前缀读取，补全不产生用户任务',async({},info)=>{
     test.setTimeout(120000);await isolatedDatabase(async({observer,database})=>{
       await observer.query(`CREATE TABLE \`${database}\`.subject(id INT PRIMARY KEY,note TEXT,\`__proto__\` TEXT)`);for(let i=0;i<25;i++)await observer.query(`CREATE TABLE \`${database}\`.lookup_${String(i).padStart(2,'0')}(id INT)`);await observer.query(`CREATE TABLE \`${database}\`.zz_later(tail_column INT)`);await openDatabaseQuery(database);

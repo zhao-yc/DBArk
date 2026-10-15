@@ -49,7 +49,7 @@ export function SqlEditor({ value, onChange, onReady, height = '100%', readOnly 
             if(query.kind==='databases'||query.kind==='objects'&&query.objectKind!=='relation')throw new Error('会话目录目标无效');
             return invoke('query.temporaryCompletion',query.kind==='columns'?{sessionId:completion.sessionId!,kind:'columns',database:query.database,table:query.table,prefix:query.prefix}:{sessionId:completion.sessionId!,kind:'objects',database:query.database,prefix:query.prefix});
           },cached?.objectsRevision??0):directory;
-          const result=await completionSuggestions(analysis,scope.database,sourceDirectory,controller.signal);if(!current())return{suggestions:[]};
+          const result=await completionSuggestions(analysis,scope.database,sourceDirectory,controller.signal,cached?.dialect);if(!current())return{suggestions:[]};
           if(completion.sessionId){const latest=await invoke('query.completionState',{sessionId:completion.sessionId});if(!current()||latest.busy||latest.broken||latest.objectsRevision!==cached?.objectsRevision||latest.databaseKnown!==cached?.databaseKnown||latest.database!==cached?.database)return{suggestions:[]};}
           const start=model.getPositionAt(analysis.target.start),end=model.getPositionAt(analysis.target.end);if(start.lineNumber!==end.lineNumber)return{suggestions:[]};
           const range={startLineNumber:start.lineNumber,startColumn:start.column,endLineNumber:end.lineNumber,endColumn:end.column};

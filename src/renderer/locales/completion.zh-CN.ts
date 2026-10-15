@@ -1,6 +1,7 @@
 /** 补全文案集中管理；目录名称与错误细节不作为富文本解释。 */
 export const completionZh={
   temporary:'会话临时表',sessionUnconfirmed:'会话对象 · 待核对',
+  outputAlias:'SELECT 输出别名',outputColumn:'集合查询输出列',
   database:'数据库',table:'表',view:'视图',function:'函数',procedure:'存储过程',column:'字段',alias:'表别名',cte:'公共表表达式',derived:'派生表',keyword:'关键字',
   partial:'补全结果不完整',partialHint:'请继续输入更长的名称前缀，或使用表别名限定字段。',
   sessionUnknown:'会话对象待核对',sessionUnknownHint:'点击“会话临时对象”，输入库名和表名并读取结构；可能执行例程的来源不会自动回退同名永久字段。',

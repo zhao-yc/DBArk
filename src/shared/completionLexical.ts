@@ -14,12 +14,15 @@ const space=(value:string|undefined)=>value!==undefined&&/[\x09-\x0d\x20]/.test(
 const nameCharacter=(value:string|undefined)=>value!==undefined&&/[A-Za-z0-9_$\u0080-\uffff]/.test(value);
 /** MySQL标识符使用BMP且不含NUL；不把表情或孤立代理项转成另一个名称。 */
 export function completionIdentifier(value:unknown):value is string{return typeof value==='string'&&value.length>0&&value.length<=64&&!/[\0\ud800-\udfff]/.test(value);}
+/** 输出别名独立于库表列的64字限制；目录请求继续使用物理名称预算。 */
+export function completionAliasIdentifier(value:unknown):value is string{return typeof value==='string'&&value.length>0&&value.length<=completionLimits.aliasUnits&&!/[\0\ud800-\udfff]/.test(value);}
+export function quoteCompletionAlias(value:string):string{if(!completionAliasIdentifier(value))throw Error('补全输出别名无效');return '`'+value.replaceAll('`','``')+'`';}
 /** 引用名按每个限定段独立编码，名称内的点号保持普通字符。 */
 export function quoteCompletionIdentifier(value:string):string{if(!completionIdentifier(value))throw Error('补全标识符无效');return '`'+value.replaceAll('`','``')+'`';}
 const blocked=(reason:Extract<CompletionLexicalResult,{status:'blocked'}>['reason']):CompletionLexicalResult=>({status:'blocked',reason});
 
 /** 单个确定模式的纯词法扫描，不执行SQL、不读取连接，也不记录用户文本。 */
-function scan(source:string,offset:number,ansiQuotes:boolean,noBackslashEscapes:boolean):CompletionLexicalResult{
+function scan(source:string,offset:number,ansiQuotes:boolean,noBackslashEscapes:boolean,prefixUnits:number):CompletionLexicalResult{
   const statements:Statement[]=[],regions:Region[]=[];let current:Statement={start:0,end:source.length,tokens:[],executable:false};
   let index=0,depth=0,total=0,delimiter=';',lineStart=true,hasCode=false;
   /** 限制全文件token数与括号深度，避免大脚本在每次键盘输入时无限分配。 */
@@ -96,7 +99,7 @@ function scan(source:string,offset:number,ansiQuotes:boolean,noBackslashEscapes:
       }
       prefix=source.slice(bodyStart,Math.min(offset,bodyEnd)).replaceAll(quote+quote,quote);
     }else prefix=source.slice(start,offset);
-    if(prefix.length>completionLimits.prefixUnits||prefix.includes('\0')||/[\ud800-\udfff]/.test(prefix))return blocked('identifier');
+    if(prefix.length>prefixUnits||prefix.includes('\0')||/[\ud800-\udfff]/.test(prefix))return blocked('identifier');
   }
   const before=statement.tokens.filter(item=>item.end<=start),qualifiers:string[]=[];
   for(let position=before.length-1;position>=0&&before[position].value==='.';position-=2){
@@ -108,11 +111,12 @@ function scan(source:string,offset:number,ansiQuotes:boolean,noBackslashEscapes:
 }
 
 /** 未知会话模式分别扫描四种组合；仅当前语句及编辑范围完全一致时提供候选。 */
-export function completionLexicalContext(source:string,offset:number,mode:CompletionLexicalMode={}):CompletionLexicalResult{
+export function completionLexicalContext(source:string,offset:number,mode:CompletionLexicalMode={},prefixUnits:number=completionLimits.prefixUnits):CompletionLexicalResult{
+  if(![completionLimits.prefixUnits,completionLimits.aliasUnits].includes(prefixUnits as 64|256))return blocked('budget');
   if(!Number.isInteger(offset)||offset<0||offset>source.length)return blocked('position');
   if(source.length>completionLimits.sourceUnits)return blocked('budget');
   if(source.includes('\0'))return blocked('identifier');
   const results:CompletionLexicalResult[]=[];
-  for(const quotes of mode.ansiQuotes===undefined?[false,true]:[mode.ansiQuotes])for(const escapes of mode.noBackslashEscapes===undefined?[false,true]:[mode.noBackslashEscapes])results.push(scan(source,offset,quotes,escapes));
+  for(const quotes of mode.ansiQuotes===undefined?[false,true]:[mode.ansiQuotes])for(const escapes of mode.noBackslashEscapes===undefined?[false,true]:[mode.noBackslashEscapes])results.push(scan(source,offset,quotes,escapes,prefixUnits));
   const first=JSON.stringify(results[0]);return results.every(value=>JSON.stringify(value)===first)?results[0]:blocked('ambiguous');
 }
