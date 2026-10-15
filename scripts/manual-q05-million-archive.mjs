@@ -4,6 +4,7 @@ import { lstat, mkdir, mkdtemp, readFile, realpath, statfs, writeFile } from 'no
 import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { parseEnv, promisify } from 'node:util';
+import { q05IsolatedPorts, requireQ05IsolatedPort } from './q05-isolated-port.mjs';
 
 const run = promisify(execFile), root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const cache = join(root, '.cache', 'q05-million-archive');
@@ -11,7 +12,7 @@ const options = new Map();
 for (let index = 2; index < process.argv.length; index++) {
   const key = process.argv[index];
   if (['--preflight', '--self-check', '--run'].includes(key)) options.set(key, true);
-  else if (['--env-file', '--port', '--expected-hostname', '--python'].includes(key) && process.argv[index + 1] && !process.argv[index + 1].startsWith('--')) options.set(key, process.argv[++index]);
+  else if (['--config-env-file', '--port', '--expected-hostname', '--python'].includes(key) && process.argv[index + 1] && !process.argv[index + 1].startsWith('--')) options.set(key, process.argv[++index]);
   else throw new Error('未知或缺值参数；使用 --preflight、--self-check 或 --run');
 }
 if (['--preflight', '--self-check', '--run'].filter(key => options.has(key)).length > 1) throw new Error('一次只能选择一种模式');
@@ -30,12 +31,14 @@ async function ownDirectory() {
 }
 
 try {
+  // 纯预检可显式核端口；真实入口在读取env文件前先拒绝业务端口或空目标。
+  if (options.has('--run') || options.has('--port')) requireQ05IsolatedPort(options.get('--port'), options.get('--port'));
   const sha = (await invoke('git', ['rev-parse', 'HEAD'])).stdout.trim();
   const sources = {};
   for (const path of ['src/engine/index.ts', 'src/engine/connection.ts', 'src/engine/queryCsvZip.ts', 'src/engine/queryStreamFile.ts', 'src/engine/atomicFile.ts', 'src/shared/queryStreamExport.ts']) sources[path] = createHash('sha256').update(await readFile(join(root, path))).digest('hex');
   if (!options.has('--run') && !options.has('--self-check')) {
     const disk = await statfs(root, { bigint: true });
-    console.log(JSON.stringify({ 模式: '只读安全预检', 当前提交: sha, 默认关闭: true, 已读凭据: false, 已执行SSH: false, 已连接数据库: false, 本地可用字节: String(disk.bavail * disk.bsize), 产品文件上限GiB: 10, 待写队列上限: '8行/1MiB', 源码指纹: sources }, null, 2));
+    console.log(JSON.stringify({ 模式: '只读安全预检', 当前提交: sha, 默认关闭: true, 已读凭据: false, 已执行SSH: false, 已连接数据库: false, 专用隔离端口: q05IsolatedPorts, 请求端口: options.get('--port') ?? null, 本地可用字节: String(disk.bavail * disk.bsize), 产品文件上限GiB: 10, 待写队列上限: '8行/1MiB', 源码指纹: sources }, null, 2));
   } else if (options.has('--self-check')) {
     const python = await regularAbsolute(options.get('--python'));
     await mkdir(cache, { recursive: true });
@@ -44,12 +47,13 @@ try {
     console.log(result.stdout.trim());
   } else {
     if (process.env.DBARK_Q05_MILLION_ARCHIVE_ENABLED !== '1') throw new Error('真实执行必须同时提供 --run 和 DBARK_Q05_MILLION_ARCHIVE_ENABLED=1');
-    const envPath = await regularAbsolute(options.get('--env-file')), python = await regularAbsolute(options.get('--python'));
+    const envPath = await regularAbsolute(options.get('--config-env-file')), python = await regularAbsolute(options.get('--python'));
     if ((await lstat(envPath)).size > 64 * 1024) throw new Error('本地env文件超过64KiB');
     const config = parseEnv(await readFile(envPath, 'utf8'));
     secrets = [config.DBARK_TEST_PASSWORD, config.DBARK_TEST_USER].filter(Boolean);
     const port = String(options.get('--port') ?? ''), hostname = String(options.get('--expected-hostname') ?? '');
-    if (config.DBARK_TEST_HOST !== '192.168.31.200' || !/^\d{1,5}$/.test(port) || Number(port) < 1 || Number(port) > 65535 || config.DBARK_TEST_PORT !== port || !config.DBARK_TEST_USER || config.DBARK_TEST_PASSWORD === undefined || !/^[A-Za-z0-9][A-Za-z0-9.-]{0,252}$/.test(hostname)) throw new Error('必须显式指定与已有env完全相符的200隔离端口、账号以及预期服务器主机名');
+    requireQ05IsolatedPort(port, config.DBARK_TEST_PORT);
+    if (config.DBARK_TEST_HOST !== '192.168.31.200' || !config.DBARK_TEST_USER || config.DBARK_TEST_PASSWORD === undefined || !/^[A-Za-z0-9][A-Za-z0-9.-]{0,252}$/.test(hostname)) throw new Error('必须显式指定与已有env完全相符的200隔离端口、账号以及预期服务器主机名');
     if (config.DBARK_TEST_SSH === '1') throw new Error('此入口只验直连200指定端口，不自动使用另一条数据库SSH隧道');
     const disk = await statfs(root, { bigint: true });
     if (disk.bavail * disk.bsize < 12n * 1024n ** 3n) throw new Error('本地可用空间不足12GiB，保留10GiB产品上限及安全余量');

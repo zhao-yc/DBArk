@@ -12,12 +12,15 @@ import { execute, type ManagedConnection } from '../../src/engine/connection';
 import { identifier } from '../../src/engine/sql';
 import type { ConnectionProfile, QueryOutcome, TaskEvent } from '../../src/shared/contracts';
 import { queryStreamExportLimits as limits, type QueryStreamExportOutput } from '../../src/shared/queryStreamExport';
+import { requireQ05IsolatedPort } from '../../scripts/q05-isolated-port.mjs';
 
 const enabled = process.env.DBARK_Q05_MILLION_ARCHIVE_ENABLED === '1' && Boolean(process.env.DBARK_Q05_MANUAL_OWNER) && process.env.DBARK_Q05_MANUAL_OWNER === process.env.DBARK_Q05_IDENTITY_CHECKED;
 type Measurement = { scenario: string; events: number; startedAt: string; latest?: Pick<TaskEvent, 'status' | 'queryExport'>; peakRss: number; peakHeap: number; durationMs?: number; error?: unknown };
 
 /** 此文件不匹配默认unit/integration/E2E模式，只由专用脚本生成的配置发现。 */
 it.skipIf(!enabled)('手动Q05真实百万行CSV ZIP：一次查询任务、多行集/状态、取消、失败及所有权清理', async () => {
+  // 第二层硬门在读取标记、创建Engine或调用connect之前执行；原始env值不得先转数字。
+  const targetPort = requireQ05IsolatedPort(process.env.DBARK_TEST_PORT, process.env.DBARK_TEST_PORT);
   const root = resolve(import.meta.dirname, '../..'), directory = resolve(process.env.DBARK_Q05_MANUAL_DIRECTORY ?? '');
   const owner = process.env.DBARK_Q05_MANUAL_OWNER!, python = process.env.DBARK_Q05_PYTHON!;
   assert.equal(dirname(directory), join(root, '.cache', 'q05-million-archive')); assert.match(basename(directory), /^dbark-q05-million-[A-Za-z0-9]+$/);
@@ -27,8 +30,9 @@ it.skipIf(!enabled)('手动Q05真实百万行CSV ZIP：一次查询任务、多�
   assert.equal(marker.owner, owner); assert.match(owner, /^[0-9a-f-]{36}$/); assert.match(marker.database, /^dbark_stream_\d+_[0-9a-f]{8}$/);
   for (const [path, hash] of Object.entries(marker.sources)) { assert.match(path, /^src\/(?:engine|shared)\/[A-Za-z]+\.ts$/); assert.equal(createHash('sha256').update(await readFile(join(root, path))).digest('hex'), hash, '启动后产品源码发生变化'); }
   const database = marker.database, identity = JSON.parse(await readFile(join(directory, 'server-identity.json'), 'utf8'));
-  assert.equal(identity.owner, owner); assert.equal(identity.alias, 'server-200'); assert.ok(identity.addresses.includes('192.168.31.200')); assert.equal(identity.port, Number(process.env.DBARK_TEST_PORT));
-  assert.equal(process.env.DBARK_TEST_HOST, '192.168.31.200'); assert.ok(Number.isInteger(identity.port) && identity.port > 0 && identity.port <= 65535);
+  assert.equal(identity.owner, owner); assert.equal(identity.alias, 'server-200'); assert.ok(identity.addresses.includes('192.168.31.200')); assert.equal(identity.port, targetPort);
+  assert.equal(requireQ05IsolatedPort(String(identity.port), process.env.DBARK_TEST_PORT), targetPort);
+  assert.equal(process.env.DBARK_TEST_HOST, '192.168.31.200');
   assert.ok(process.env.DBARK_TEST_USER && process.env.DBARK_TEST_PASSWORD !== undefined); assert.ok(python);
   const profile: ConnectionProfile = { id: randomUUID(), name: 'Q05手动百万行隔离验收', group: '测试', color: '#53c9ae', dialect: 'mysql', host: '192.168.31.200', port: identity.port, user: process.env.DBARK_TEST_USER!, password: process.env.DBARK_TEST_PASSWORD!, ...(process.env.DBARK_TEST_TLS === '1' ? { tls: { enabled: true, rejectUnauthorized: true, caPath: process.env.DBARK_TEST_CA } } : {}) };
   const measurements = new Map<string, Measurement>(), threads = new Set<number>(), failures: unknown[] = [];
