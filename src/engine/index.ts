@@ -52,6 +52,7 @@ type Input = Record<string, any>;
 /** 独立数据库进程的入口；网络连接与文件流不会进入 Electron 渲染进程。 */
 export class Engine {
   private readonly excelReads = new ExcelReadTasks(event => this.emit(event));
+  private readonly excelConnecting = new Map<string, { connectionId: string; controller: AbortController; done: Promise<void> }>();
   private readonly profiles = new Map<string, ConnectionProfile>();
   private readonly sessions = new Map<string, Session>();
   private readonly tasks = new Map<string, RunningTask>();
@@ -107,10 +108,12 @@ export class Engine {
         this.dataSearchRecords.releaseConnection(input.id);
         this.structureCache.release(input.id);
         this.structureSearches.releaseConnection(input.id);
+        const connecting = [...this.excelConnecting.values()].filter(task => task.connectionId === input.id);
+        connecting.forEach(task => task.controller.abort());
         const active = [...this.tasks.values()].filter(task => task.managed.profile.id === input.id);
         const independent = [...this.independentTasks].filter(([, task]) => task.connectionId === input.id);
         const cancellations = await Promise.allSettled([...active.map(task => this.cancelTask(task.id)), ...independent.map(([id]) => this.cancelTask(id))]);
-        await Promise.all([...active.map(task => task.done), ...independent.map(([, task]) => task.done)]);
+        await Promise.all([...connecting.map(task => task.done), ...active.map(task => task.done), ...independent.map(([, task]) => task.done)]);
         for (const [id, session] of this.sessions) if (session.connectionId === input.id) { await session.managed.close(); this.sessions.delete(id); }
         this.profiles.delete(input.id);
         this.dataSearchRecords.releaseConnection(input.id);
@@ -267,16 +270,16 @@ export class Engine {
       case 'excel.sheets':
       case 'excel.preview': {
         this.assertFile(input);
-        if (this.tasks.has(input.taskId) || this.independentTasks.has(input.taskId) || this.resultFiles.has(input.taskId)) throw new Error('任务编号已在执行');
+        if (this.tasks.has(input.taskId) || this.independentTasks.has(input.taskId) || this.resultFiles.has(input.taskId) || this.excelConnecting.has(input.taskId)) throw new Error('任务编号已在执行');
         return this.excelReads.run(command, input as any);
       }
-      case 'excel.import': this.assertFile(input); return this.withConnection(input.connectionId, managed => this.runTask(input.taskId, managed, '导入 Excel', task => this.importExcel(task, input)), input.database);
-      case 'excel.export': this.assertFile(input); return this.withConnection(input.connectionId, managed => this.runTask(input.taskId, managed, '导出 Excel', task => this.exportExcel(task, input)), input.database);
+      case 'excel.import': this.assertFile(input); return this.withExcelTask(input, '导入 Excel', task => this.importExcel(task, input));
+      case 'excel.export': this.assertFile(input); return this.withExcelTask(input, '导出 Excel', task => this.exportExcel(task, input));
       case 'files.import': this.assertFile(input); return this.withConnection(input.connectionId, managed => this.runTask(input.taskId, managed, '导入文件', task => this.importFile(task, input)), input.database);
       case 'files.export': this.assertFile(input); return this.withConnection(input.connectionId, managed => this.runTask(input.taskId, managed, '导出文件', task => this.exportFile(task, input)), input.database);
       case 'files.exportResult': {
         this.assertFile(input);
-        if (this.tasks.has(input.taskId) || this.independentTasks.has(input.taskId) || this.excelReads.has(input.taskId)) throw new Error('任务编号已在执行');
+        if (this.tasks.has(input.taskId) || this.independentTasks.has(input.taskId) || this.excelReads.has(input.taskId) || this.excelConnecting.has(input.taskId)) throw new Error('任务编号已在执行');
         return this.resultFiles.run(input as Parameters<ResultFileTasks['run']>[0]);
       }
       default: throw new Error(`数据库进程不支持命令：${command}`);
@@ -286,6 +289,7 @@ export class Engine {
   /** 关闭前取消任务并释放固定会话，未提交事务由服务器在断开时回滚。 */
   async closeAll(): Promise<void> {
     this.closing = true;
+    this.excelConnecting.forEach(task => task.controller.abort());
     this.structureCache.release();
     const independent = [...this.independentTasks];
     const active = [...this.tasks.values()];
@@ -327,10 +331,35 @@ export class Engine {
     finally { const remaining = (this.connectionUses.get(id) ?? 1) - 1; if (remaining) this.connectionUses.set(id, remaining); else this.connectionUses.delete(id); this.pendingUses.delete(done); finish(); }
   }
 
+  /** Excel 在建连前占用任务编号并绑定 AbortSignal，取消、断开与退出不能漏掉尚未创建的运行任务。 */
+  private async withExcelTask<T>(input: Input, label: string, action: (task: RunningTask) => Promise<T>): Promise<T> {
+    const id = input.taskId;
+    if (this.closing || !id || this.tasks.has(id) || this.independentTasks.has(id) || this.resultFiles.has(id) || this.excelReads.has(id) || this.excelConnecting.has(id)) throw new Error('任务编号为空或任务已在执行');
+    const controller = new AbortController(); let finish!: () => void;
+    const done = new Promise<void>(resolve => { finish = resolve; });
+    this.excelConnecting.set(id, { connectionId: input.connectionId, controller, done });
+    let submitted = false;
+    try {
+      return await this.withConnectionUse(input.connectionId, async () => {
+        const managed = await connect(this.profile(input.connectionId), input.database, controller.signal);
+        try {
+          if (controller.signal.aborted || this.closing) throw new Error('Excel 任务在建连阶段已取消，尚未读取或写入数据');
+          // 同步交接编号，中间没有 await；取消必定命中建连或实际运行任务之一。
+          this.excelConnecting.delete(id); submitted = true;
+          return await this.runTask(id, managed, label, action);
+        } finally { await managed.close(); }
+      });
+    } catch (reason) {
+      if (!submitted) this.emit({ taskId: id, status: controller.signal.aborted ? 'cancelled' : 'failed', progress: 0, message: controller.signal.aborted ? 'Excel 任务在建连阶段已取消，尚未读取或写入数据' : this.errorMessage(reason) });
+      if (controller.signal.aborted) throw new Error('Excel 任务在建连阶段已取消，尚未读取或写入数据');
+      throw reason;
+    } finally { this.excelConnecting.delete(id); finish(); }
+  }
+
   /** 独立任务从建连前登记，到服务器及本地连接收尾后才释放编号和配置锁。 */
   private async withIndependentTask<T>(connectionId: string, taskId: string, action: (managed: ManagedConnection, control: Omit<StructureTaskContext, 'managed'>) => Promise<T>, options?: StructureTaskOptions, readLabel?:string, strictRead=false,readDetail?:()=>Partial<TaskEvent>): Promise<T> {
     return this.withConnectionUse(connectionId, async () => {
-      if (this.closing || !taskId || this.tasks.has(taskId) || this.independentTasks.has(taskId) || this.resultFiles.has(taskId) || this.excelReads.has(taskId)) throw new Error('任务编号为空或任务已在执行');
+      if (this.closing || !taskId || this.tasks.has(taskId) || this.independentTasks.has(taskId) || this.resultFiles.has(taskId) || this.excelReads.has(taskId) || this.excelConnecting.has(taskId)) throw new Error('任务编号为空或任务已在执行');
       const profile = this.profile(connectionId);
       // 字段、索引及后续外键执行共用资源集合，不能在重核与关闭之间并行修改相关父表。
       const executionTargets = [...(options?.executionTarget ? [options.executionTarget] : []), ...(options?.executionTargets ?? [])];
@@ -415,7 +444,7 @@ export class Engine {
 
   /** 统一登记任务、发送终态并等待取消控制连接结束后释放任务标识。 */
   private async runTask<T>(id: string, managed: ManagedConnection, label: string, action: (task: RunningTask) => Promise<T>): Promise<T> {
-    if (this.closing || !id || this.tasks.has(id) || this.independentTasks.has(id) || this.resultFiles.has(id) || this.excelReads.has(id)) throw new Error('任务编号为空或任务已在执行');
+    if (this.closing || !id || this.tasks.has(id) || this.independentTasks.has(id) || this.resultFiles.has(id) || this.excelReads.has(id) || this.excelConnecting.has(id)) throw new Error('任务编号为空或任务已在执行');
     let finish!: () => void;
     const done = new Promise<void>(resolve => { finish = resolve; });
     const task: RunningTask = { id, managed, cancelled: false, inFlight: false, generation: 0, done, finish };
@@ -518,6 +547,8 @@ export class Engine {
 
   /** 取消只针对仍然运行的那一代语句；控制连接失败时销毁原会话，不重连重放。 */
   private async cancelTask(id: string): Promise<void> {
+    const connecting = this.excelConnecting.get(id);
+    if (connecting) { connecting.controller.abort(); await connecting.done; return; }
     if (this.excelReads.has(id)) return this.excelReads.cancel(id);
     const independent = this.independentTasks.get(id);
     if (independent) {

@@ -14,17 +14,17 @@ import { exportExcelFile, previewExcelSheet, readExcelRows } from '../../src/eng
 const profile: ConnectionProfile = { id: 'excel', name: '离线模拟', group: '', color: '#123456', dialect: 'mysql', host: 'test.invalid', port: 3306, user: 'test' };
 const columns = [{ name: 'id', type: 'bigint unsigned' }, { name: '金额', type: 'decimal(30,12)' }, { name: '时间', type: 'datetime(6)' }, { name: '内容', type: 'text' }, { name: '字节', type: 'blob' }];
 const raw = ['18446744073709551615', '123456789012345678.123456789012', '2026-10-15 10:20:30.123456', '=SUM(A1)', Buffer.from([0, 1, 255])];
-let info: TableInfo, engine: Engine, events: TaskEvent[], source: unknown[][], selects: string[], inserts: CellValue[][];
+let info: TableInfo, engine: Engine, events: TaskEvent[], source: unknown[][], selects: string[], inserts: CellValue[][], eventHook: ((event: TaskEvent) => void) | undefined;
 const folders: string[] = [];
 /** 仅构造驱动边界，文件、映射、事务调度、任务及 XLSX 编解码均使用生产实现。 */
 beforeEach(async () => {
-  source = [raw]; selects = []; inserts = []; events = [];
+  source = [raw]; selects = []; inserts = []; events = []; eventHook = undefined;
   info = { database: '隔离库', name: '表', columns: columns.map(column => ({ ...column, nullable: true, generated: false, defaultValue: null, extra: '', comment: '' })), indexes: [], foreignKeys: [], primaryKey: ['id'], editableKey: ['id'], engine: 'InnoDB', ddl: '', objectKind: 'table' };
   mocks.tableInfo.mockReset().mockImplementation(async () => info);
   mocks.execute.mockReset().mockImplementation(async (_managed, sql: string, params: CellValue[]) => { if (sql.startsWith('INSERT')) inserts.push(params); return { rows: { affectedRows: 1, serverStatus: 2 }, fields: [] }; });
   mocks.connect.mockReset().mockImplementation(async () => ({ profile, sqlMode: '', serverStatus: 2, status: { dialect: 'mysql', version: '模拟' }, broken: false,
     connection: { threadId: 42, query: (options: { sql: string }) => { selects.push(options.sql); return { stream: () => Readable.from(source) }; } }, close: vi.fn(async () => undefined) } as unknown as ManagedConnection));
-  engine = new Engine(event => events.push(event)); await engine.handle('connections.open', { id: profile.id, profile });
+  engine = new Engine(event => { events.push(event); eventHook?.(event); }); await engine.handle('connections.open', { id: profile.id, profile });
 });
 /** 清理只针对本测试创建的独立目录，不触碰其他克隆和测试文件。 */
 afterEach(async () => { await engine.closeAll(); for (const folder of folders.splice(0)) { for (const name of await readdir(folder)) await rm(join(folder, name)); await rmdir(folder); } });
@@ -39,6 +39,25 @@ async function importInput(filePath: string, rows: CellValue[][] = [raw.map(valu
 }
 
 describe('Excel 正式引擎接线', () => {
+  it.each(['cancel', 'disconnect', 'exit'])('%s 覆盖建连阶段，迟到成功连接必须关闭且不读取数据', async route => {
+    const late = await mocks.connect.mock.results[0].value as ManagedConnection;
+    const closeCount = (late.close as ReturnType<typeof vi.fn>).mock.calls.length;
+    let deliver!: (managed: ManagedConnection) => void, signal: AbortSignal | undefined;
+    mocks.connect.mockImplementationOnce((_profile, _database, abort: AbortSignal) => { signal = abort; return new Promise<ManagedConnection>(resolve => { deliver = resolve; }); });
+    const pending = engine.handle('excel.export', { ...target, filePath: await path(), taskId: '建连取消' }); const rejected = expect(pending).rejects.toThrow('建连阶段已取消');
+    const stopping = route === 'cancel' ? engine.handle('query.cancel', { taskId: '建连取消' }) : route === 'disconnect' ? engine.handle('connections.close', { id: profile.id }) : engine.closeAll();
+    expect(signal?.aborted).toBe(true); deliver(late); await stopping; await rejected;
+    expect(selects).toEqual([]); expect(inserts).toEqual([]); expect(events.at(-1)?.status).toBe('cancelled');
+    expect((late.close as ReturnType<typeof vi.fn>).mock.calls.length).toBe(closeCount + 1);
+  });
+  it('导出取消停止实际查询，原文件保持并清理 partial', async () => {
+    const filePath = await path(); await writeFile(filePath, '原目标'); source = Array.from({ length: 5001 }, () => raw);
+    let stopping: Promise<unknown> | undefined;
+    eventHook = event => { if (event.taskId === '流取消' && event.rows === 100) stopping = engine.handle('query.cancel', { taskId: event.taskId }); };
+    await expect(engine.handle('excel.export', { ...target, filePath, taskId: '流取消', scope: 'all' })).rejects.toThrow('已取消'); await stopping;
+    expect(mocks.execute.mock.calls.some(call => call[1] === 'KILL QUERY 42')).toBe(true);
+    expect(await readFile(filePath, 'utf8')).toBe('原目标'); expect(await readdir(folders.at(-1)!)).toEqual(['表.xlsx']); expect(events.at(-1)?.status).toBe('cancelled');
+  });
   it('取消预览等待文件句柄释放，无数据库连接也可独立读取', async () => {
     const input = await importInput(await path()); const connectCount = mocks.connect.mock.calls.length;
     const reading = engine.handle('excel.preview', { ...input, taskId: '读取取消' }); const rejected = expect(reading).rejects.toThrow('已取消');

@@ -21,6 +21,8 @@ describe('Excel 单元格保真策略', () => {
     const rows = []; for await (const row of readExcelRows({ filePath: path, sheetId: '1', headerRow: 2, protocol: 'plain' })) rows.push(row);
     expect(rows).toEqual(sample.rows);
     await expect(previewExcelSheet({ filePath: path, sheetId: '1', headerRow: 0, protocol: 'plain' })).rejects.toThrow('表头行号');
+    const gap = workbook.addWorksheet('缺失表头'); gap.getCell('A3').value = '不能代替第二行的表头'; await workbook.xlsx.writeFile(path);
+    await expect(previewExcelSheet({ filePath: path, sheetId: '2', headerRow: 2, protocol: 'plain' })).rejects.toThrow('表头行为空或不存在');
   });
   it('NULL、空串、反斜线、二进制和公式外观文字可逆', () => {
     for (const value of [null, '', '\\N', '\\B:AA==', '\\path', '=SUM(A1)', { type: 'binary' as const, base64: 'AAH/' }]) {
