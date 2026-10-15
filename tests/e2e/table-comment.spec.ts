@@ -22,7 +22,8 @@ async function preview() {
   await dialog().getByRole('button', { name: text.preview, exact: true }).click(); await expect(dialog().getByRole('heading', { name: text.fixedSql, exact: true })).toBeVisible();
   await expect(dialog().locator('.monaco-editor .view-lines')).toContainText('COMMENT =');
   const editor = dialog().locator('.monaco-editor'), before = await editor.locator('.view-lines').innerText();
-  await editor.click(); await page.keyboard.type('不可写入的SQL'); await expect(editor.locator('.view-lines')).toHaveText(before);
+  // 前后使用同一可见文本接口，保留真实换行，避免把textContent的拼接当成编辑器内容变化。
+  await editor.click(); await page.keyboard.type('不可写入的SQL'); await expect.poll(() => editor.locator('.view-lines').innerText()).toBe(before);
   const boxes = dialog().getByRole('checkbox'); expect(await boxes.count()).toBe(2); for (let index = 0; index < 2; index++) await boxes.nth(index).check();
 }
 

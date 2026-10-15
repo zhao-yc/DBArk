@@ -33,7 +33,10 @@ async function choose() {
 }
 async function preview() {
   await dialog().getByRole('button', { name: text.preview, exact: true }).click(); await expect(dialog().getByRole('heading', { name: text.fixedSql, exact: true })).toBeVisible();
-  const editor = dialog().locator('.monaco-editor'), before = await editor.locator('.view-lines').innerText(); expect(before).toContain('DEFAULT CHARACTER SET'); expect(before).not.toContain('CONVERT TO'); await editor.click(); await page.keyboard.type('不能写入SQL'); await expect(editor.locator('.view-lines')).toHaveText(before);
+  const editor = dialog().locator('.monaco-editor');
+  // 标题出现不代表Monaco已画完；先等待真实SQL可见，再以同一innerText接口逐字核对只读性。
+  await expect.poll(async () => (await editor.locator('.view-lines').innerText()).replace(/\s+/gu, ' ')).toContain('DEFAULT CHARACTER SET');
+  const before = await editor.locator('.view-lines').innerText(); expect(before).not.toContain('CONVERT TO'); await editor.click(); await page.keyboard.type('不能写入SQL'); await expect.poll(() => editor.locator('.view-lines').innerText()).toBe(before);
   const checks = dialog().getByRole('checkbox'); expect(await checks.count()).toBe(3); for (let index = 0; index < 3; index++) await checks.nth(index).check();
 }
 test.describe('表默认编码：正式Electron和真实数据库入口', () => {
