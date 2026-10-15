@@ -20,14 +20,15 @@
 
 `queries.read` 保留既有所见摘要读取保护并返回来源绑定。新增 `queries.create` / `queries.updateSource` 经过共享类型、预加载白名单、严格校验和主进程本地存储；SQL 最多 2000 万 UTF-16 单元，记录沿用 128 MiB 原文预算，写入沿用原子文件替换及内存回退。SQL 原文作为字符串保存，数值、微秒日期、NULL 和二进制字面量不经解析转换。
 
-旧 `queries.save` IPC 继续兼容新建，已有 ID 更新明确拒绝，防止绕过摘要保护。内部 LocalStore.saveQuery 保留给现有迁移/测试等可信调用，生产界面使用新命令。旧版测试夹具若用 queries.save 覆盖已有 ID，需改为读取当前绑定并通过 queries.updateSource 模拟修改。
+旧 `queries.save` IPC 继续兼容新建，已有 ID 更新明确拒绝，防止绕过摘要保护。内部 LocalStore.saveQuery 保留给现有迁移/测试等可信调用，生产界面使用新命令。既有分页及搜索的陈旧原文夹具已改为读取当前绑定并通过 queries.updateSource 模拟另一编辑者修改。
 
 ## 验证记录
 
 - SQLite、保存分页/搜索、存储、校验与准备阶段回归：62 项通过。
-- 真实 QueryTab 保存函数及准备阶段用例：12 项通过，其中新增来源上下文/失败保护 6 项；合计不同用例 68 项。
+- 真实 QueryTab 保存函数、主进程分发、默认库、文件和工作台回归补测通过，合计不同单元用例 93 项。
 - TypeScript 检查与完整源码构建通过；构建仅有现有依赖注释/大包提示。
-- `node node_modules/@playwright/test/cli.js test tests/e2e/query-binding.spec.ts`：2 项真实 Electron 离线用例通过，覆盖保存、另存、重启、关闭、陈旧更新和无 SQL 执行历史。
+- `node node_modules/@playwright/test/cli.js test tests/e2e/query-binding.spec.ts`：2 项真实 Electron 离线用例通过，覆盖保存、另存、重启、关闭、陈旧更新、源删除后拒绝更新及无 SQL 执行历史。
+- 既有分页/搜索的四上下文和陈旧摘要，以及 SQL 文件打开/三编码另存：6 项 Electron 回归通过；连同新增用例共 8 项。测试夹具采用 CAS 模拟其他编辑者，未放宽生产接口。
 - 本克隆使用自己的依赖和独立临时配置目录；受限环境阻止 SQLite 临时文件原子重命名时，在获得运行许可后复验全部真实磁盘用例通过，没有替换文件系统实现。
 - 未连接实库、未运行 Docker、未构建最终安装包；实库与安装由统筹安排。
 

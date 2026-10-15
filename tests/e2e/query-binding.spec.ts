@@ -64,5 +64,10 @@ test('同源标签陈旧 CAS 拒绝，保留草稿并可另存，不覆盖另一
   expect((await page.evaluate(() => window.dbark.invoke('queries.list', {})))[0].sql).toContain('另一标签已保存');
   await saveDialog().getByLabel('查询名称', { exact: true }).fill('冲突草稿副本'); await saveDialog().getByRole('button', { name: '另存为新查询', exact: true }).click(); await expect(saveDialog()).toBeHidden();
   const records = await page.evaluate(() => window.dbark.invoke('queries.list', {})); expect(records).toHaveLength(2); expect(records.find(record => record.id === first.source.id)?.sql).toContain('另一标签已保存'); expect(records.find(record => record.name === '冲突草稿副本')?.sql).toContain('陈旧草稿不得覆盖');
+  const copyId = records.find(record => record.name === '冲突草稿副本')!.id;
+  await page.evaluate(id => window.dbark.invoke('queries.delete', { id }), copyId); await save('保存到原查询');
+  await expect(saveDialog().getByRole('alert')).toContainText('原查询已删除');
+  await saveDialog().getByRole('button', { name: '另存为新查询', exact: true }).click(); await expect(saveDialog()).toBeHidden();
+  expect((await page.evaluate(() => window.dbark.invoke('queries.list', {}))).some(record => record.id === copyId)).toBe(false);
   expect(await page.evaluate(() => window.dbark.invoke('history.list', {}))).toEqual([]); expect(pageErrors).toEqual([]);
 });
