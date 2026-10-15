@@ -59,3 +59,13 @@ test('百万行真实SQL导出CSV和JSON，逐行精度正确且预览与待写�
     expect(pageErrors).toEqual([]);const path=info.outputPath('million-export-measurements.json');await writeFile(path,JSON.stringify({scope:'真实同会话SQL导出；两份文件独立流式逐行检查，不以预览替代完整文件',measurements},null,2));await info.attach('百万行完整导出规模记录',{path,contentType:'application/json'});await page.screenshot({path:info.outputPath('million-export-bounded-preview.png')});
   },info);
 });
+
+// 0.17原246项之外的独立补充；声明阶段双门跳过，先于自动桌面夹具。
+test.describe('Q05百万行CSV ZIP正式UI补充',()=>{
+  test.skip(!enabled||process.env.DBARK_Q05_MILLION_ARCHIVE_UI!=='1','仅由ROOT显式启用200及百万行ZIP正式UI补充');
+  test.beforeAll(async()=>{const{checkMillionUiPrerequisites}=await import('./query-csv-million-ui-helpers');await checkMillionUiPrerequisites();});
+  test('Q05-MILLION-CSV-ZIP-UI：低普通上限下真实新执行导出全部行集，ID与一次执行及清理证据一致',async({},info)=>{
+    test.setTimeout(600000);
+    const{runMillionArchiveUi}=await import('./query-csv-million-ui-helpers');await runMillionArchiveUi(info);
+  });
+});
