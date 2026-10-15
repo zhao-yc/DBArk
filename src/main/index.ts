@@ -206,6 +206,10 @@ async function dispatch(command: Command, input: any): Promise<unknown> {
     case 'files.readQuery': return queryFileOperation(() => readQueryFile(resolveFileToken(files, input.fileToken, 'query', 'sql'), input.encoding));
     case 'files.writeQuery': return queryFileOperation(() => writeSelectedQuery(input));
     case 'query.exportStream': input = { ...input, filePath: resolveFileToken(files, input.fileToken, 'export', input.format) }; break;
+    case 'excel.sheets':
+    case 'excel.preview':
+    case 'excel.import':
+    case 'excel.export': input = { ...input, filePath: resolveFileToken(files, input.fileToken, command === 'excel.export' ? 'export' : 'import', 'xlsx') }; break;
     case 'files.preview':
     case 'files.import':
     case 'files.export':
@@ -228,7 +232,7 @@ async function dispatch(command: Command, input: any): Promise<unknown> {
   let releaseTarget: (() => void) | undefined;
   let sentToEngine = false;
   try {
-    if (command === 'query.exportStream' || command === 'files.export' || command === 'files.exportResult') releaseTarget = await exportReservations.acquire(input.filePath);
+    if (command === 'query.exportStream' || command === 'files.export' || command === 'files.exportResult' || command === 'excel.export') releaseTarget = await exportReservations.acquire(input.filePath);
     if (preparing.failure) throw new Error(preparing.failure);
     // 文件路径归一化期间的取消在主进程捕获，不能丢失后继续发送用户 SQL。
     if (preparing.cancelled) throw new Error('任务在准备阶段已取消，尚未发送用户 SQL；原目标文件保持不变');

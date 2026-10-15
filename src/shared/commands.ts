@@ -23,6 +23,7 @@ export const publicCommands: Record<Command, true> = {
   'schema.foreignKeys.get': true, 'schema.foreignKeys.preview': true, 'schema.foreignKeys.apply': true, 'schema.foreignKeys.release': true,
   'files.choose': true, 'files.path': true, 'files.preview': true, 'files.import': true, 'files.export': true, 'files.exportResult': true,
   'files.readQuery': true, 'files.writeQuery': true,
+  'excel.sheets': true, 'excel.preview': true, 'excel.import': true, 'excel.export': true,
   'snippets.list': true, 'snippets.save': true, 'snippets.delete': true,
   'queries.list': true, 'queries.save': true, 'queries.delete': true, 'history.list': true, 'tasks.list': true, 'settings.get': true, 'settings.save': true
 };

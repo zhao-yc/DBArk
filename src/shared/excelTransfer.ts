@@ -6,9 +6,9 @@ export type ExcelTextProtocol = 'plain' | 'dbark-v1';
 export interface ExcelSheet { id: string; name: string; hidden: boolean; }
 export interface ExcelSheetPreview { sheet: ExcelSheet; columns: string[]; rows: DataRow[]; warnings: string[]; fingerprint: string; }
 export interface ExcelFieldMapping { source: string; target: string; }
-export interface ExcelImportSelection { fileToken: string; sheetId: string; protocol: ExcelTextProtocol; mapping: ExcelFieldMapping[]; fingerprint: string; }
+export interface ExcelImportSelection { fileToken: string; sheetId: string; headerRow?: number; protocol: ExcelTextProtocol; mapping: ExcelFieldMapping[]; fingerprint: string; }
 export interface ExcelTransferTarget { connectionId: string; database: string; table: string; }
-export interface ExcelExportRequest extends ExcelTransferTarget { fileToken: string; taskId: string; }
+export interface ExcelExportRequest extends ExcelTransferTarget { fileToken: string; taskId: string; scope?: 'sample' | 'all'; }
 export interface ExcelImportRequest extends ExcelTransferTarget, ExcelImportSelection { taskId: string; }
 export interface ExcelImportResult { rows: number; errors: string[]; }
 export interface ExcelTransferProgress { message: string; progress: number; }
@@ -16,8 +16,8 @@ export interface ExcelTransferProgress { message: string; progress: number; }
 /** 界面只传文件令牌；实际路径由主进程私下注入引擎，不通过此接口泄漏。 */
 export interface ExcelTransferServices {
   chooseFile(mode: 'import' | 'export', suggestedName: string): Promise<FileChoice | null>;
-  listSheets(fileToken: string): Promise<ExcelSheet[]>;
-  preview(input: { fileToken: string; sheetId: string; protocol: ExcelTextProtocol }): Promise<ExcelSheetPreview>;
+  listSheets(fileToken: string, taskId?: string): Promise<ExcelSheet[]>;
+  preview(input: { fileToken: string; taskId?: string; sheetId: string; headerRow?: number; protocol: ExcelTextProtocol }): Promise<ExcelSheetPreview>;
   targetColumns(target: ExcelTransferTarget): Promise<ExcelColumn[]>;
   exportTable(input: ExcelExportRequest): Promise<{ rows: number }>;
   importTable(input: ExcelImportRequest): Promise<ExcelImportResult>;

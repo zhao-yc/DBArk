@@ -1,5 +1,6 @@
 /** 所有跨进程数据均为可结构化克隆的普通值，精确数值由驱动保留为字符串。 */
 import type { QueryParameter, QueryParameterNames } from './queryParameters';
+import type { ExcelSheet, ExcelSheetPreview, ExcelTextProtocol, ExcelImportRequest, ExcelImportResult, ExcelExportRequest } from './excelTransfer';
 import type { QueryExportProgress, QueryStreamExportInput, QueryStreamExportOutput } from './queryStreamExport';
 import type { ConnectionFileRequirement, ConnectionImportApply, ConnectionImportPreview, ConnectionImportResult } from './connectionTransfer';
 import type { TablePreferenceTarget, TablePreferences } from './tablePreferences';
@@ -133,6 +134,10 @@ export interface CommandMap {
   'schema.foreignKeys.release': { input: TableForeignKeyReleaseInput; output: void };
   'files.choose': { input: { purpose: 'import' | 'export' | 'key' | 'certificate' | 'query' | 'connection-import' | 'connection-export'; format?: string; suggestedName?: string }; output: FileChoice | null };
   'files.path': { input: { token: string }; output: string };
+  'excel.sheets': { input: { fileToken: string; taskId: string }; output: ExcelSheet[] };
+  'excel.preview': { input: { fileToken: string; taskId: string; sheetId: string; headerRow?: number; protocol: ExcelTextProtocol }; output: ExcelSheetPreview };
+  'excel.import': { input: ExcelImportRequest; output: ExcelImportResult };
+  'excel.export': { input: ExcelExportRequest; output: { rows: number } };
   'files.readQuery': { input: { fileToken: string; encoding: QueryFileEncoding }; output: { sql: string; encoding: QueryFileEncoding } };
   'files.writeQuery': { input: { fileToken: string; encoding: QueryFileEncoding; sql: string }; output: void };
   'files.preview': { input: { fileToken: string; format: 'csv' | 'json'; encoding: string }; output: { columns: string[]; rows: DataRow[] } };

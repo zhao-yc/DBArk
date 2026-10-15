@@ -16,7 +16,7 @@ const packageNs = 'http://schemas.openxmlformats.org/package/2006/relationships'
 const warnings = ['数字单元格保留文件中的原始数值文本；Excel 保存前已发生的精度丢失无法恢复。', '日期样式的数字单元格保留原始日期序列值，请在源文件中转为明确的日期时间文本后导入。', '空白格按 NULL 导入；显式空文本保留为空字符串；不读取公式、外部链接或合并单元格。'];
 interface InternalSheet extends ExcelSheet { path: string; }
 export interface ExcelReadOptions { filePath: string; checkCancelled?: () => void; }
-export interface ExcelSheetReadOptions extends ExcelReadOptions { sheetId: string; protocol: ExcelTextProtocol; expectedFingerprint?: string; }
+export interface ExcelSheetReadOptions extends ExcelReadOptions { sheetId: string; headerRow?: number; protocol: ExcelTextProtocol; expectedFingerprint?: string; }
 export interface ExcelExportOptions extends ExcelReadOptions {
   columns: ExcelColumn[]; rows: AsyncIterable<CellValue[]>; onCommitStart: () => void;
   onProgress?: (rows: number) => void; io?: AtomicFileIO;
@@ -208,8 +208,9 @@ function readCell(type: string, text: string, strings: string[], hasValue: boole
 }
 
 /** 逐行解析所选表，空白格为 NULL，显式空文本为字符串；完全空行保持为空数据行。 */
-async function* sheetRows(zip: ExcelZipArchive, sheet: InternalSheet, strings: string[], protocol: ExcelTextProtocol): AsyncGenerator<CellValue[]> {
-  let row: CellValue[] | undefined, rowIndex = 0, lastColumn = 0, cells = 0, rowBytes = 0;
+async function* sheetRows(zip: ExcelZipArchive, sheet: InternalSheet, strings: string[], protocol: ExcelTextProtocol, headerRow = 1): AsyncGenerator<CellValue[]> {
+  if (!Number.isInteger(headerRow) || headerRow < 1 || headerRow > 1000) throw new Error('表头行号必须在 1～1000 之间');
+  let row: CellValue[] | undefined, rowIndex = 0, lastColumn = 0, cells = 0, rowBytes = 0, headerSeen = false;
   let cell: { column: number; type: string; text: string; hasValue: boolean } | undefined;
   let inValue = false, inText = false, phonetic = 0, runText = '';
   const stack: string[] = []; let sawSheetData = false;
@@ -256,7 +257,7 @@ async function* sheetRows(zip: ExcelZipArchive, sheet: InternalSheet, strings: s
         if (rowBytes > EXCEL_LIMITS.maxRowBytes) throw new Error('Excel 单行文本超过 1 MiB');
         row.push(value); cell = undefined;
       }
-      if (event.name === 'row') { if (!row || cell) throw new Error('XLSX 行结构无效'); cells += row.length; if (cells > EXCEL_LIMITS.maxCells) throw new Error('XLSX 单元格总数超过 500 万'); yield row; row = undefined; }
+      if (event.name === 'row') { if (!row || cell) throw new Error('XLSX 行结构无效'); cells += row.length; if (cells > EXCEL_LIMITS.maxCells) throw new Error('XLSX 单元格总数超过 500 万'); if (rowIndex >= headerRow) { if (rowIndex > headerRow && !headerSeen) throw new Error('指定的表头行为空或不存在'); headerSeen = true; yield row; } row = undefined; }
     }
   }
   if (!sawSheetData) throw new Error('XLSX 工作表缺少数据区');
@@ -279,7 +280,7 @@ export async function* readExcelRows(input: ExcelSheetReadOptions): AsyncGenerat
     const strings = await sharedStrings(zip);
     let headers: string[] | undefined, records = 0;
     // 标题必须按原始文本读取；数据协议在按标题形成记录时应用。
-    for await (const values of sheetRows(zip, sheet, strings, 'plain')) {
+    for await (const values of sheetRows(zip, sheet, strings, 'plain', input.headerRow)) {
       if (!headers) { headers = validateExcelHeaders(values.map(value => value === null || typeof value === 'object' ? '' : String(value))); continue; }
       if (values.length > headers.length) throw new Error('Excel 数据行超出标题字段范围');
       if (++records * headers.length > EXCEL_LIMITS.maxCells) throw new Error('XLSX 映射后的单元格总数超过 500 万');
@@ -303,7 +304,7 @@ export async function previewExcelSheet(input: ExcelSheetReadOptions): Promise<E
     if (!sheet) throw new Error('所选工作表不存在，请重新预览');
     const strings = await sharedStrings(zip), rows: DataRow[] = [];
     let columns: string[] | undefined, records = 0;
-    for await (const values of sheetRows(zip, sheet, strings, 'plain')) {
+    for await (const values of sheetRows(zip, sheet, strings, 'plain', input.headerRow)) {
       if (!columns) { columns = validateExcelHeaders(values.map(value => value === null || typeof value === 'object' ? '' : String(value))); continue; }
       if (values.length > columns.length) throw new Error('Excel 数据行超出标题字段范围');
       if (++records * columns.length > EXCEL_LIMITS.maxCells) throw new Error('XLSX 映射后的单元格总数超过 500 万');

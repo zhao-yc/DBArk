@@ -1,6 +1,31 @@
 # Excel 文件传输首批模块
 
-当前实现提供真实 XLSX 流式文件引擎和服务注入式导入/导出对话框。尚未接入正式 IPC、数据库事务和 App 入口，不能据此宣布完整 F02 已完成。
+当前已接入表格实际导入/导出入口、文件令牌、白名单 IPC、参数校验、工具进程、分批事务和任务取消，完成 XLSX 首个实用切片。F02 仍为部分完成：200 服务器实库、百万行和最终安装产物由主对话统一验收。下文旧模块的历史测试数据保留为来源说明，不能视为本次实际验收。
+
+## 本轮接线与实际验证（2026-10-15）
+
+- 来源：复用 `903b883a8701e294e7844307811a26f68a55b8c7`，通过带 `-x` 的 cherry-pick 落为 `9abf996`，未改旧工作目录。
+- 入口：打开表格标签 → 工具栏“导入”或“导出” → 文件格式“Excel 工作簿（XLSX）”。可返回其它文件格式。
+- 导入：选择工作表、实际表头行（1～1000）、普通文本/DBArk 协议、字段映射；展示前 20 行。完整预检拒绝后部公式及文件变化，重新核对目标生成列和映射；只追加到有可靠键的 InnoDB 表，复用 `buildChanges` 类型化参数与文件导入每 500 行提交的事务。失败保留前批、回滚当前批，不自动重试或更新旧记录。
+- 导出：默认“前 1000 行样本”，另可显式选择“整张表（流式）”。均不应用当前表格筛选；通过独立连接一致性快照、驱动背压和原子文件替换执行，整表超过 XLSX 预算会失败并保护原目标。流消费者失败也停止实际 SELECT，等待控制连接和文件清理。
+- 主进程：`excel.sheets/preview/import/export` 接入预加载白名单，拒绝任意路径；严格要求原生对话框创建的 XLSX 指定用途令牌。导出复用全局路径目标锁，准备阶段取消不发送引擎任务。工作簿清单/预览也支持 `query.cancel` 和退出等待，切换参数、关闭或目标元数据失败会取消对应解析。任务摘要不持久化原始字段值与服务器错误。
+- 依赖：沿用精确锁定 `exceljs@4.4.0`（本地 LICENSE 为 MIT）与 `saxes@6.0.0`（ISC）；未新增或升级其它依赖。当前读取与导出均仅支持 XLSX，旧二进制 XLS 不支持。
+- 本次全量单元：**2267/2267 通过，0 失败、0 跳过**，包括引擎接线、主进程原函数授权/锁、真实文件往返、分批失败、读取取消和原子保护。报告：`.cache/f02-excel/all-unit.json`。
+- `node node_modules/typescript/bin/tsc --noEmit`、`node scripts/build.mjs`、`git diff --check` 均通过；构建有现有 Zod 注释和大块提示。未制作安装包。
+- 真实离线 Electron：`excel-transfer.spec.ts` **1/1 通过**；使用本克隆独立配置目录，只替换系统文件对话框回答，正式预加载、IPC、文件 IO 和解析均真实。核对两个工作表、第二行表头、BIGINT 和公式外观文字、用途隔离、表格入口及范围选项。未连接数据库，目标不可用时不能提交导入。报告和截图位于 `.cache/f02-excel/e2e/`。第一次沙箱内 Electron 启动失败，获准在宿主重跑后通过，未降低断言。
+
+```powershell
+$env:TEMP = (Resolve-Path .cache/f02-excel/tmp).Path
+$env:TMP = $env:TEMP
+node node_modules/vitest/vitest.mjs run --reporter=json --outputFile=.cache/f02-excel/all-unit.json
+node node_modules/typescript/bin/tsc --noEmit
+node scripts/build.mjs
+node node_modules/@playwright/test/cli.js test tests/e2e/excel-transfer.spec.ts --reporter=list --output=.cache/f02-excel/e2e
+```
+
+公共文件改动：`contracts.ts`、`commands.ts`、`validation.ts`、`main/index.ts`、`main/taskPrivacy.ts`、`engine/index.ts`、`TransferDialog.tsx`；其余为 Excel 独立模块、样式、文案和测试。原复用提交还改了 `atomicFile.ts`、`package.json` 与 `pnpm-lock.yaml`。未改 App、统一功能覆盖表、版本、发行或部署策略。
+
+未验：200 上 MySQL/MariaDB 真正往返、日期/金额的服务器行为、BIT64、百万行性能、数据库断线及真实 KILL 延迟、最终 Windows 安装包、其它桌面平台。所需资源仅为主对话核对过的 200 隔离 MySQL/MariaDB 实例及随机 `dbark_e2e_*` 库，临时用户需要隔离库建表、读写、建删库及取消自己查询的权限；不需要业务库、Docker 新实例或长期密钥。
 
 ## 已实现
 
