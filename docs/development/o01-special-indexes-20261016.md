@@ -95,6 +95,12 @@ node node_modules/@playwright/test/cli.js test tests/e2e/table-special-index-liv
 
 员工4仅做类型检查和两个UI用例的关闭开关检查，未进行GUI或200实库复验；实际面板结果由ROOT冻结前一轮终态后统一复验。本次修正不把ROOT提供的运行反馈记为员工4独立验收。
 
+### Non_unique目录标志断言修正
+
+ROOT反馈的终态为：MySQL8.0 run523、严格TLS run526各7/7通过；MySQL5.7 run522、MariaDB10.11 run524、MariaDB11.4 run525各5通过、2失败。后三组的两项循环在独立SHOW INDEX的 `Non_unique: 1` 断言处停止，实际是精确字符串 `"1"`；当时产品apply的 `definitionVerified` 已通过，独立目录方法和注释正确，但后续实际查询、删除及循环收尾断言尚未执行，不能记为完整循环通过。此处仅转录ROOT提供的运行反馈，员工4没有独立实库复跑。
+
+本次只将该已知0/1目录标志的断言改为字面量集合 `[1, '1']` 严格包含检查；不接受true、其他数值、带空格或前导零等字符串，不将字段或业务数据统一转换为Number。其他独立目录字段、全文/空间实际查询、删除、保留BTREE与原数据、令牌不重放及全部期限保持原状；产品src仍固定65e7db5。员工4仅执行类型检查及关闭开关时7项实库用例的收集/跳过检查，完整六组合及原生面板复验仍由ROOT统一完成。
+
 ## 官方依据
 
 - [MySQL 8.0 全文限制](https://dev.mysql.com/doc/refman/8.0/en/fulltext-restrictions.html)：字段类型、字符集、同元组排序规则、分区及解析器边界。

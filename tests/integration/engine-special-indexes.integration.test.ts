@@ -107,7 +107,11 @@ describe.skipIf(!enabled)('特殊索引实库准备（须ROOT明确开启）', (
     expect(await apply(value)).toMatchObject({ ddlSubmitted: true, ddlCompleted: true, definitionVerified: true }); await expect(apply(value)).rejects.toThrow('已失效或已使用');
     const rows = (await sql(`SHOW INDEX FROM ${qualified(database, table)}`)).filter(row => row.Key_name === 'special');
     expect(rows.map(row => row.Column_name)).toEqual(kind === 'fulltext' ? ['a', 'b'] : ['g']);
-    for (const row of rows) expect(row).toMatchObject({ Non_unique: 1, Index_type: kind === 'fulltext' ? 'FULLTEXT' : 'SPATIAL', Index_comment: '完整特殊索引' });
+    for (const row of rows) {
+      // 仅此已知0/1目录标志允许驱动的数字1或精确字符串"1"，不转换业务数据或其他元数据。
+      expect([1, '1']).toContain(row.Non_unique);
+      expect(row).toMatchObject({ Index_type: kind === 'fulltext' ? 'FULLTEXT' : 'SPATIAL', Index_comment: '完整特殊索引' });
+    }
     if (kind === 'fulltext') expect(String((await sql(`SELECT COUNT(*) AS n FROM ${qualified(database, table)} WHERE MATCH(a,b) AGAINST('searchword')`))[0].n)).toBe('2');
     else expect(String((await sql(`SELECT COUNT(*) AS n FROM ${qualified(database, table)} WHERE MBRContains(ST_GeomFromText('POLYGON((0 0,5 0,5 5,0 5,0 0))',0),g)`))[0].n)).toBe('2');
     const next = await get(table), old = next.indexes.find(index => index.name === 'special')!;
