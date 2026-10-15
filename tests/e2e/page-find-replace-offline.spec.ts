@@ -52,7 +52,7 @@ test('最小窗口同格逐处导航、单处替换及整批预览仅形成草�
   await expect(panel().locator('.page-find-current')).toContainText('第 1 行 · 列 note · 格内第 2 处 · UTF-16 位置 7');
   await expect(panel().locator('mark')).toHaveText('old'); await panel().getByRole('textbox', { name: text.replacement, exact: true }).fill('$1/$&');
   await panel().getByRole('button', { name: text.replaceOne, exact: true }).click(); await expect(await cell()).toHaveText('😀old前$1/$&后old');
-  await expect(panel().getByRole('status')).toContainText('0 / 2 处'); await panel().getByRole('button', { name: text.previous, exact: true }).click(); await expect(panel().locator('.page-find-current')).toContainText('格内第 2 处');
+  await expect(panel().getByRole('status')).toContainText('2 / 2 处'); await panel().getByRole('button', { name: text.previous, exact: true }).click(); await expect(panel().locator('.page-find-current')).toContainText('格内第 1 处');
   await panel().getByRole('button', { name: text.preview, exact: true }).click(); await expect(preview()).toBeVisible();
   await preview().getByRole('button', { name: text.apply, exact: true }).click(); await expect(await cell()).toHaveText('😀$1/$&前$1/$&后$1/$&');
   expect(await calls()).toEqual([]); expect(errors).toEqual([]); await page.screenshot({ path: result.outputPath('最小窗口单处与整批草稿.png') });
