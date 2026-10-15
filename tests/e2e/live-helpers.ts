@@ -1,8 +1,9 @@
 import { randomUUID } from 'node:crypto';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync, readFileSync,realpathSync } from 'node:fs';
 import mysql, { type Connection, type RowDataPacket } from 'mysql2/promise';
 import type { TestInfo } from '@playwright/test';
 import { expect, desktop, page, closed, pageErrors, answerDialogs, quitDesktop } from './desktop-fixture';
+import {zh} from '../../src/renderer/locales/zh-CN';
 
 // 必须由调用者显式启用；仅有本地凭据文件时仍跳过，CI 不会自动连接私有服务器。
 export const enabled = process.env.DBARK_INTEGRATION_ENABLED === '1';
@@ -18,6 +19,24 @@ if (enabled && existsSync('.cache/dbark-test.env')) {
 
 export interface LiveContext { observer: Connection; database: string; connectionName: string; connectionId: string; }
 export const modifier = process.platform === 'darwin' ? 'Meta' : 'Control';
+
+/** 严格TLS验收必须显式提供已有CA；不能静默退回明文或关闭证书/主机校验。 */
+function tlsCertificate():string|undefined{
+  if(environment.DBARK_TEST_TLS!=='1')return undefined;
+  if(!environment.DBARK_TEST_CA||!existsSync(environment.DBARK_TEST_CA))throw Error('严格TLS验收缺少明确的本机CA证书');
+  return realpathSync(environment.DBARK_TEST_CA);
+}
+/** 只替换本次原生文件选择的回答；路径授权、文件读取和TLS建连仍走产品原逻辑。 */
+async function configureTls(form:ReturnType<typeof page.getByRole>){
+  const certificate=tlsCertificate();if(!certificate)return;
+  await form.getByRole('button',{name:'TLS / SSL',exact:true}).click();await form.getByLabel(zh.connections.text027,{exact:true}).check();await form.getByLabel(zh.connections.text028,{exact:true}).check();
+  await desktop.evaluate(({dialog},path)=>{
+    const root=globalThis as typeof globalThis&{__liveTlsOpenDialog?:typeof dialog.showOpenDialog};if(root.__liveTlsOpenDialog)throw Error('TLS文件选择不可交叉覆盖');root.__liveTlsOpenDialog=dialog.showOpenDialog;
+    dialog.showOpenDialog=(async()=>({canceled:false,filePaths:[path]}))as typeof dialog.showOpenDialog;
+  },certificate);
+  try{await form.getByRole('button',{name:'选择CA 证书',exact:true}).click();await expect(form.getByRole('textbox',{name:'CA 证书 选择CA 证书',exact:true})).toHaveValue(certificate);}
+  finally{await desktop.evaluate(({dialog})=>{const root=globalThis as typeof globalThis&{__liveTlsOpenDialog?:typeof dialog.showOpenDialog};if(root.__liveTlsOpenDialog){dialog.showOpenDialog=root.__liveTlsOpenDialog;delete root.__liveTlsOpenDialog;}});}
+}
 
 /** 浏览器确认框由 Electron 原生接口承接，同时覆盖其同步与异步调用路径。 */
 export async function acceptNativeConfirmation() {
@@ -42,6 +61,7 @@ export async function connectAndCreate(database: string): Promise<Omit<LiveConte
   await form.getByLabel('用户名', { exact: true }).fill(environment.DBARK_TEST_USER ?? 'root');
   await form.getByLabel('数据库密码', { exact: true }).fill(environment.DBARK_TEST_PASSWORD ?? '');
   await form.getByLabel('连接分组', { exact: true }).fill('隔离数据库验证');
+  await configureTls(form);
   await form.getByRole('button', { name: '测试连接', exact: true }).click();
   await expect(form.locator('.success-box')).toContainText('连接成功', { timeout: 20000 });
   await form.getByRole('button', { name: '保存连接', exact: true }).click();
@@ -68,7 +88,8 @@ export async function connectAndCreate(database: string): Promise<Omit<LiveConte
 export async function isolatedDatabase(body: (context: LiveContext) => Promise<void>, testInfo: TestInfo) {
   if (!environment.DBARK_TEST_HOST || !environment.DBARK_TEST_USER) throw new Error('启用实库 E2E 时必须提供已核对服务器的测试连接配置');
   const database = `dbark_e2e_${Date.now().toString(36)}_${randomUUID().replaceAll('-', '').slice(0, 8)}`;
-  const observer = await mysql.createConnection({ host: environment.DBARK_TEST_HOST, port: Number(environment.DBARK_TEST_PORT ?? 3306), user: environment.DBARK_TEST_USER, password: environment.DBARK_TEST_PASSWORD, charset: 'utf8mb4', supportBigNumbers: true, bigNumberStrings: true, decimalNumbers: false, connectTimeout: 15000 });
+  const certificate=tlsCertificate();
+  const observer = await mysql.createConnection({ host: environment.DBARK_TEST_HOST, port: Number(environment.DBARK_TEST_PORT ?? 3306), user: environment.DBARK_TEST_USER, password: environment.DBARK_TEST_PASSWORD, charset: 'utf8mb4', supportBigNumbers: true, bigNumberStrings: true, decimalNumbers: false, connectTimeout: 15000,...(certificate?{ssl:{ca:readFileSync(certificate),rejectUnauthorized:true,verifyIdentity:true}}:{}) });
   try {
     const context = await connectAndCreate(database);
     await body({ observer, ...context });

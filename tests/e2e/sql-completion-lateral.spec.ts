@@ -21,7 +21,7 @@ async function observe(){
     const state:Probe={calls:[],sessions:[],restore:()=>handlers.set('dbark:request',original)};(globalThis as ProbeRoot).__lateralUiProbe=state;
     handlers.set('dbark:request',async(event,input)=>{
       const item={command:input.command,settled:false};state.calls.push(item);
-      try{const result=await original(event,input);if(input.command==='sessions.open')state.sessions.push(result.sessionId);return result;}finally{item.settled=true;}
+      try{const result=await original(event,input);if(input.command==='sessions.open'&&result?.ok===true&&typeof result.result?.sessionId==='string')state.sessions.push(result.result.sessionId);return result;}finally{item.settled=true;}
     });
   });
   // Worker仍运行安装资源中的解析器；包装仅记录能力快照和终态，不改请求或响应。
@@ -82,7 +82,8 @@ test('按实际服务器验证新草稿和物理会话的LATERAL补全、接受�
     }
     const widget=page.locator('.suggest-widget.visible');await expect(widget.locator('.monaco-list-row.focused')).toContainText('user_value');await page.keyboard.press('Enter');await expect.poll(currentSql).toBe(first.replace('use|suffix','`user_value`'));expect(await count('query.execute')).toBe(0);expect(await count('sessions.open')).toBe(0);
     await executeCurrent('copied',['10','20']);expect(await count('sessions.open')).toBe(1);await confirmSources(context.database);
-    const session=await desktop.evaluate(()=>(globalThis as ProbeRoot).__lateralUiProbe!.sessions[0]),snapshot=await page.evaluate(sessionId=>window.dbark.invoke('query.completionState',{sessionId}),session);expect(snapshot.serverVersion).toBe(actualVersion);expect(snapshot.dialect).toBe('mysql');
+    // 主处理器是ok/result封装；只取真实成功回包，不把未解包的undefined当作会话。
+    const sessions=await desktop.evaluate(()=>(globalThis as ProbeRoot).__lateralUiProbe!.sessions);expect(sessions).toHaveLength(1);const snapshot=await page.evaluate(sessionId=>window.dbark.invoke('query.completionState',{sessionId}),sessions[0]);expect(snapshot.serverVersion).toBe(actualVersion);expect(snapshot.dialect).toBe('mysql');
     for(const[marked,label,finished,column,values]of[
       ['SELECT d.cop|suffix FROM users u JOIN LATERAL(SELECT u.user_value AS copied) d ON TRUE ORDER BY u.id','copied','cop|suffix','copied',['10','20']],
       ['SELECT d.copied FROM users u JOIN LATERAL(SELECT u.ord|suffix AS copied FROM orders u WHERE u.id=1) d ON TRUE ORDER BY u.id','order_value','ord|suffix','copied',['100','100']],

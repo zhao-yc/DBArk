@@ -25,3 +25,9 @@
 实际依赖Monaco0.55.1的 `esm/vs/editor/browser/coreCommands.js` 将macOS Cmd+Left映射为视图行首cursorHome，而文档首cursorTop为Cmd+Up。旧测试在wordWrap下用行首加整个文档偏移，与失败候选现象相容。
 
 新的 `tests/e2e/monaco-caret.ts` 使用文档首快捷键，并通过真实选中/复制前缀的长度和摘要核对标记位置，不设置Monaco模型或光标，不将用户原剪贴板写入报告；全部可读原格式及纯文本在主进程内存保存、恢复并核对。Windows `run466` 窗口3通过/1私网跳过，候选、插入、撤销、Worker边界和原期限不变。新Mac原生CI仍待验证，不能追认旧失败根因已经唯一证明。
+
+## 星号修正后的检查点
+
+接入 `b23ed31` 后，星号只使用本查询块FROM；真实MySQL8.0/8.4（含严格TLS）独立拒绝两种非法外层星号，合法局部星号返回实际值。`run470–475`六实例合计30通过/30条件跳过；不支持LATERAL的5.7/MariaDB明确核对能力关闭，未冒充支持。完整 `run467` 为2760单元通过，构建和类型通过。
+
+六组合真实Monaco分别验证新草稿、物理会话和Worker能力；支持组合各四条候选接受后实际SELECT，能力判断阶段零执行。`run492`同一Windows候选14项实际安装专项通过（10实库产品UI、3离线产品Monaco、1源码组件/安装宿主），`run493`严格TLS的三个实库产品UI通过，归档一致、卸载及六实例/根进程核零。首次星号错误、响应解包和严格TLS夹具失败保留。完整矩阵、范围与候选SHA见[第三批验收](../../tests/integration/acceptance-parallel-third-20261016.md)，新macOS原生及公开发行仍待完成。
