@@ -15,6 +15,7 @@ import type {DataSearchCatalogueInput,DataSearchCataloguePage} from './dataSearc
 import type{DataSearchRecordReadInput,DataSearchRecordsReleaseInput,DataSearchRecord}from'./dataSearchRecords';
 import type{SavedQuerySearchInput,SavedQuerySearchNext,SavedQuerySearchPage,SavedQueryOpenResult}from'./savedQuerySearch';
 import type{SavedQueryPageInput,SavedQueryPage}from'./savedQueryPages';
+import type { WorkbenchTarget, WorkbenchSnapshot } from './workbench';
 export type CellValue = string | number | boolean | null | { type: 'binary'; base64: string };
 export type DataRow = Record<string, CellValue>;
 export type ObjectKind = 'table' | 'view' | 'procedure' | 'function' | 'trigger' | 'event';
@@ -62,6 +63,10 @@ export interface ResultExportOptions { fileToken: string; format: 'csv' | 'json'
 
 /** 请求映射是界面、主进程与数据库进程共同使用的唯一接口定义。 */
 export interface CommandMap {
+  'workbench.get': { input: Record<string, never>; output: WorkbenchSnapshot };
+  'workbench.save': { input: WorkbenchSnapshot; output: WorkbenchSnapshot };
+  'workbench.resolve': { input: WorkbenchTarget; output: WorkbenchTarget };
+  'workbench.copyUri': { input: WorkbenchTarget; output: void };
   'table.preferences.get': { input: TablePreferenceTarget; output: TablePreferences | null };
   'table.preferences.save': { input: TablePreferenceTarget & { preferences: TablePreferences }; output: TablePreferences };
   'table.preferences.reset': { input: TablePreferenceTarget; output: void };

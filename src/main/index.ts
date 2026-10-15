@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, Menu, safeStorage } from 'electron';
+import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, safeStorage } from 'electron';
 import { join, basename } from 'node:path';
 import { mkdirSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
@@ -19,6 +19,8 @@ import type { TableColumnApplyProgress } from '../shared/tableColumnPatches';
 import {queryDatabasePatch} from '../shared/queryContext';
 import{SavedQuerySearches,SavedQuerySearchCancelled}from'./savedQuerySearch';
 import{SavedQueryPages}from'./savedQueryPages';
+import { resolveWorkbenchTarget } from './workbench';
+import { objectUri } from '../shared/workbench';
 
 if (process.env.DBARK_USER_DATA) { mkdirSync(process.env.DBARK_USER_DATA, { recursive: true }); app.setPath('userData', process.env.DBARK_USER_DATA); }
 app.setName('DBArk');
@@ -131,6 +133,26 @@ async function dispatch(command: Command, input: any): Promise<unknown> {
   if (structureCommand && shuttingDown) throw new Error('客户端正在退出，不能开始结构操作');
   connectionConfig.assertAvailable(requestConnectionId);
   switch (command) {
+    case 'workbench.get': return store.workbench();
+    // 主进程只写入由严格对象身份生成的链接，不开放任意剪贴板读写权限。
+    case 'workbench.copyUri': return clipboard.writeText(objectUri(input));
+    case 'workbench.save':
+      if (shuttingDown) throw new Error('客户端正在退出，不能修改收藏配置');
+      return store.saveWorkbench(input);
+    case 'workbench.resolve': {
+      if (shuttingDown) throw new Error('客户端正在退出，不能打开收藏');
+      const revision = store.connectionRevision();
+      return resolveWorkbenchTarget(input, {
+        connectionExists: id => store.queryConnectionExists(id),
+        connect: async id => { await broker.request('connections.open', { id, profile: store.resolveConnection(id) }); },
+        databases: id => broker.request('metadata.databases', { connectionId: id }),
+        objects: (id, database) => broker.request('metadata.objects', { connectionId: id, database }),
+        assertCurrent: () => {
+          connectionConfig.assertAvailable(input.connectionId);
+          if (shuttingDown || store.connectionRevision() !== revision) throw new Error('连接配置已变化，请重新打开对象');
+        }
+      });
+    }
     case 'search.structure':case 'search.structureContinue':case 'search.dataStart':case 'search.recordRead':
       if(shuttingDown)throw Error('客户端正在退出，不能开始搜索');
       input={...input,profile:store.resolveConnection(input.connectionId)};break;

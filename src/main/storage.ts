@@ -8,6 +8,7 @@ import { validateSnippetBudget } from '../shared/snippets';
 import { tablePreferenceSaveSchema, tablePreferenceTargetSchema, tablePreferencesSchema, tablePreferenceTargetChanged, validateTablePreferenceBudget, type TablePreferenceTarget, type TablePreferences } from '../shared/tablePreferences';
 import{savedQuerySearchLimits}from'../shared/savedQuerySearch';
 import type{SavedQueryPagePosition}from'../shared/savedQueryPages';
+import { emptyWorkbench, workbenchDocumentSchema, workbenchSaveSchema, type WorkbenchSnapshot } from '../shared/workbench';
 
 export interface SecretProtector { available(): boolean; encrypt(value: string): string; decrypt(value: string): string; }
 export const defaultSettings: AppSettings = { theme: 'dark', sidebarWidth: 270, resultLimit: 1000, pageSize: 200, tabs: [] };
@@ -42,6 +43,7 @@ export class LocalStore {
         CREATE TABLE IF NOT EXISTS history (id TEXT PRIMARY KEY, connection_id TEXT NOT NULL, data TEXT NOT NULL, started_at TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS tasks (id TEXT PRIMARY KEY, data TEXT NOT NULL, started_at TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS settings (id INTEGER PRIMARY KEY CHECK(id=1), data TEXT NOT NULL);
+        CREATE TABLE IF NOT EXISTS workbench (id INTEGER PRIMARY KEY CHECK(id=1), revision INTEGER NOT NULL, data TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS sql_snippets (id TEXT PRIMARY KEY, data TEXT NOT NULL, updated_at TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS table_preferences (connection_id TEXT NOT NULL, database_name TEXT NOT NULL, table_name TEXT NOT NULL, data TEXT NOT NULL, PRIMARY KEY(connection_id,database_name,table_name));
         PRAGMA user_version=5;`);
@@ -236,6 +238,23 @@ export class LocalStore {
   saveTask(task: TaskRecord): void { this.mutate(() => { this.db.run('INSERT INTO tasks VALUES (?,?,?) ON CONFLICT(id) DO UPDATE SET data=excluded.data', [task.id, JSON.stringify(task), task.startedAt]); this.db.run('DELETE FROM tasks WHERE id NOT IN (SELECT id FROM tasks ORDER BY started_at DESC LIMIT 200)'); }); }
   /** 合并默认偏好，兼容缺少新增配置字段的旧记录。 */
   settings(): AppSettings { return { ...defaultSettings, ...this.records<AppSettings>('SELECT data FROM settings WHERE id=1')[0] }; }
+  /** 独立配置表按需创建，旧库无收藏时返回空配置，不把秘密或工作区 SQL 混入收藏。 */
+  workbench(): WorkbenchSnapshot {
+    const document = this.records<unknown>('SELECT data FROM workbench WHERE id=1')[0];
+    if (document === undefined) return { revision: 0, document: emptyWorkbench() };
+    const revision = Number(this.db.exec('SELECT revision FROM workbench WHERE id=1')[0].values[0][0]);
+    return { revision, document: workbenchDocumentSchema.parse(document) };
+  }
+  /** 修订检查与原子落盘共用事务回退，过期界面不能覆盖更新后的收藏或专注状态。 */
+  saveWorkbench(input: WorkbenchSnapshot): WorkbenchSnapshot {
+    const parsed = workbenchSaveSchema.parse(input);
+    const revision = parsed.revision + 1;
+    this.mutate(() => {
+      if (this.workbench().revision !== parsed.revision) throw new Error('收藏配置已变化，请重新读取后重试');
+      this.db.run('INSERT INTO workbench VALUES (1,?,?) ON CONFLICT(id) DO UPDATE SET revision=excluded.revision,data=excluded.data', [revision, JSON.stringify(parsed.document)]);
+    });
+    return { revision, document: parsed.document };
+  }
   /** 保存工作台快照；失败不会留下待下次提交的内存修改。 */
   saveSettings(settings: AppSettings): void { this.mutate(() => this.db.run('INSERT INTO settings VALUES (1,?) ON CONFLICT(id) DO UPDATE SET data=excluded.data', [JSON.stringify(settings)])); }
   /** 关闭内存数据库并清除明文秘密，已成功保存的文件无需再次写入。 */
