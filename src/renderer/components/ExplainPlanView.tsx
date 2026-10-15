@@ -21,12 +21,12 @@ export function ExplainPlanView({ outcome, onText, busy }: { outcome: QueryOutco
     return plan.nodes.filter(node => { if (node.parent && (collapsed.has(node.parent) || hidden.has(node.parent))) { hidden.add(node.id); return false; } return true; });
   }, [plan, collapsed]);
   const current = plan.nodes.find(node => node.id === selected) ?? plan.nodes[0];
-  const detail = useMemo(() => current ? explainNodeDetail(plan.raw, current.path) : '', [plan, current]);
+  const detail = useMemo(() => current?.pathTruncated ? t.longPath : current ? explainNodeDetail(plan.raw, current.path) : '', [plan, current]);
   const first = outcome.results[0], rawCell = first?.rows[0]?.[first.columns[0]?.key];
   const raw = plan.raw || (plan.format === 'json' && typeof rawCell === 'string' ? rawCell : '');
   const result = outcome.results[0];
   /** 选择与焦点一起移动；收起父节点时也把活动项移回可见范围。 */
-  function focus(id: string) { setSelected(id); buttons.current.get(id)?.focus(); }
+  function focus(id: string) { setSelected(id); const element = buttons.current.get(id); element?.focus(); element?.scrollIntoView({ block: 'nearest', inline: 'nearest' }); }
   function toggle(id: string) { setCollapsed(previous => { const next = new Set(previous); if (next.has(id)) next.delete(id); else next.add(id); return next; }); }
   /** 扁平 DOM 避免深递归；ARIA 层级仍保留真实父子关系。 */
   function navigate(event: KeyboardEvent, node: ExplainNode) {
@@ -59,7 +59,7 @@ export function ExplainPlanView({ outcome, onText, busy }: { outcome: QueryOutco
           <p className="explain-hint">{t.keyboard}</p>
           <div role="tree" aria-label={t.tree} className="explain-tree">
             {visible.map(node => <button key={node.id} ref={element => { if (element) buttons.current.set(node.id, element); else buttons.current.delete(node.id); }} role="treeitem" aria-level={node.depth + 1} aria-expanded={children.has(node.id) ? !collapsed.has(node.id) : undefined} aria-selected={selected === node.id} tabIndex={selected === node.id ? 0 : -1} className="explain-node" style={{ paddingLeft: 10 + Math.min(node.depth, 10) * 14 }} onFocus={() => setSelected(node.id)} onClick={() => setSelected(node.id)} onDoubleClick={() => { if (children.has(node.id)) toggle(node.id); }} onKeyDown={event => navigate(event, node)}>
-              <span className="explain-node-title"><span aria-hidden="true">{children.has(node.id) ? collapsed.has(node.id) ? '▸' : '▾' : '·'}</span> {nodeTitle(node.kind)}{node.name ? ` · ${node.name}` : ''}{node.unknown && <small>{t.unknown}</small>}</span>
+              <span className="explain-node-title"><span aria-hidden="true" onClick={event => { if (children.has(node.id)) { event.stopPropagation(); setSelected(node.id); toggle(node.id); } }}>{children.has(node.id) ? collapsed.has(node.id) ? '▸' : '▾' : '·'}</span> {nodeTitle(node.kind)}{node.name ? ` · ${node.name}` : ''}{node.unknown && <small>{t.unknown}</small>}</span>
               <span className="explain-node-metrics">{t.access}：{node.access ?? t.unavailable} · {t.rows}：{node.rows?.value ?? t.unavailable} · {t.filtered}：{node.filtered ? node.filtered.value + '%' : t.unavailable}</span>
             </button>)}
           </div>
@@ -68,7 +68,7 @@ export function ExplainPlanView({ outcome, onText, busy }: { outcome: QueryOutco
           <strong>{nodeTitle(current.kind)} {current.name}</strong>
           <dl>{[[t.access, current.access], [t.rows, current.rows?.value, current.rows?.source], [t.produced, current.produced?.value, current.produced?.source], [t.filtered, current.filtered ? current.filtered.value + '%' : undefined, current.filtered?.source], [t.index, current.index]].map(([label, value, source]) => <div key={label}><dt>{label}</dt><dd title={source ?? (!value ? t.missing : undefined)}>{value ?? t.unavailable}{source && <small>{source}</small>}</dd></div>)}</dl>
           <strong>{t.cost}</strong><dl>{current.costs.length ? current.costs.map(cost => <div key={cost.source}><dt>{cost.source}</dt><dd>{cost.value}</dd></div>) : <div><dd>{t.unavailable}</dd></div>}</dl>
-          <p className="explain-hint">{t.path}：{current.path || '/'}</p><p className="explain-hint">{t.detailHint}</p><pre tabIndex={0}>{detail}</pre>
+          <p className="explain-hint">{t.path}：{current.path || '/'}{current.pathTruncated ? '…' : ''}</p><p className="explain-hint">{t.detailHint}</p><pre tabIndex={0}>{detail}</pre>
         </div>}
       </div> : <p className="explain-empty">{t.empty}</p>)}
       {view === 'raw' && <div className="explain-raw"><pre tabIndex={0} aria-label={t.raw}>{raw ? raw.slice(0, explainLimits.jsonBytes) : t.rawMissing}</pre>{(raw.length > explainLimits.jsonBytes || plan.rawTruncated) && <p>{t.rawLimited}</p>}</div>}

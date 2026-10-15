@@ -1,9 +1,9 @@
 /** 执行计划仅保存优化器估计值；数字保留原始十进制文本，不转成浮点数。 */
-export const explainLimits = { jsonBytes: 192 * 1024, depth: 64, tokens: 16000, nodes: 300, label: 160, detail: 16000, textRows: 1000 } as const;
+export const explainLimits = { jsonBytes: 192 * 1024, depth: 64, tokens: 16000, nodes: 300, label: 160, path: 2048, detail: 16000, textRows: 1000 } as const;
 export type ExplainDialect = 'mysql' | 'mariadb';
 export interface ExplainMetric { source: string; value: string; }
 export interface ExplainNode {
-  id: string; parent?: string; depth: number; path: string; kind: string; name?: string; unknown: boolean;
+  id: string; parent?: string; depth: number; path: string; pathTruncated?: boolean; kind: string; name?: string; unknown: boolean;
   access?: string; rows?: ExplainMetric; produced?: ExplainMetric; filtered?: ExplainMetric; costs: ExplainMetric[]; index?: string;
 }
 export interface ExplainPlan {
@@ -41,7 +41,7 @@ const scalar = (value: unknown): string | undefined => typeof value === 'string'
 const metric = (value: Record<string, unknown>, key: string): ExplainMetric | undefined => {
   const text = scalar(value[key]); return text !== undefined && /^-?\d+(?:\.\d+)?(?:e[+-]?\d+)?$/i.test(text) ? { source: key, value: text } : undefined;
 };
-const commonKinds = new Set(['plan','query_block','table','nested_loop','subqueries','query_specifications','union_result','materialized','expression_cache','filesort','read_sorted_file','temporary_table','buffer_result','block-nl-join','ordering_operation','grouping_operation','duplicates_removal','materialized_from_subquery','attached_subqueries','optimized_away_subqueries','having_subqueries','select_list_subqueries','windowing','windows']);
+const commonKinds = new Set(['plan','query_block','table','nested_loop','subqueries','query_specifications','union_result','materialized','expression_cache','filesort','read_sorted_file','temporary_table','buffer_result','block-nl-join','ordering_operation','grouping_operation','duplicates_removal','materialized_from_subquery','attached_subqueries','optimized_away_subqueries','having_subqueries','select_list_subqueries','windowing','windows','window']);
 const dataKeys = new Set(['cost_info','possible_keys','used_key_parts','used_columns','ref','partitions']);
 
 /** MySQL 使用每次扫描行数及 cost_info，不能把 MariaDB 的 rows 猜作同一字段。 */
@@ -64,7 +64,8 @@ export function parseExplainPlan(raw: string, dialect: ExplainDialect, version: 
     const visit = (kind: string, value: unknown, path: string, parent?: ExplainNode): void => {
       if (plan.nodes.length >= explainLimits.nodes) { limited = true; return; }
       const record = object(value) ? value : {};
-      const node: ExplainNode = { id: String(plan.nodes.length), parent: parent?.id, depth: parent ? parent.depth + 1 : 0, path, kind: kind.slice(0, explainLimits.label), name: scalar(record.table_name ?? record.select_id)?.slice(0, explainLimits.label), unknown: !commonKinds.has(kind), access: scalar(record.access_type)?.slice(0, explainLimits.label), index: scalar(record.key)?.slice(0, explainLimits.label), ...(dialect === 'mysql' ? mysqlMetrics(record) : mariaMetrics(record)) };
+      // 极长公共键会在每个子节点路径中重复，必须限制跨进程表示的累计放大。
+      const node: ExplainNode = { id: String(plan.nodes.length), parent: parent?.id, depth: parent ? parent.depth + 1 : 0, path: path.slice(0, explainLimits.path), ...(path.length > explainLimits.path ? { pathTruncated: true } : {}), kind: kind.slice(0, explainLimits.label), name: scalar(record.table_name ?? record.select_id ?? (kind === 'window' ? record.name : undefined))?.slice(0, explainLimits.label), unknown: !commonKinds.has(kind), access: scalar(record.access_type)?.slice(0, explainLimits.label), index: scalar(record.key)?.slice(0, explainLimits.label), ...(dialect === 'mysql' ? mysqlMetrics(record) : mariaMetrics(record)) };
       plan.nodes.push(node);
       const children = Array.isArray(value) ? value.map((item, i) => [String(i), item] as const) : Object.entries(record);
       for (const [key, child] of children) {
@@ -76,12 +77,13 @@ export function parseExplainPlan(raw: string, dialect: ExplainDialect, version: 
           if (body && typeof body === 'object') { visit(operation, body, childPath + '/' + operation.replaceAll('~', '~0').replaceAll('/', '~1'), node); continue; }
         }
         if (Array.isArray(child) && child.every(item => item === null || typeof item !== 'object')) continue;
-        visit(key, child, childPath, node);
+        visit(kind === 'windows' && Array.isArray(value) ? 'window' : key, child, childPath, node);
       }
     };
     visit('plan', document, '');
     if (limited) plan.warnings.push('树形展示达到 300 个节点上限，其余内容请查看原始输出');
     if (plan.nodes.some(node => node.unknown)) plan.warnings.push('存在未知计划节点，已保留其名称、位置和原始数据');
+    if (plan.nodes.some(node => node.pathTruncated)) plan.warnings.push('部分节点路径超过 2048 字符，已限制路径展示，详情请查看原始输出');
   } catch (error) { plan.nodes = []; plan.warnings.push(error instanceof Error ? error.message : '计划 JSON 解析失败'); }
   return plan;
 }
