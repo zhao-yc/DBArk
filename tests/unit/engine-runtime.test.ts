@@ -194,3 +194,41 @@ describe('连接配置重设保护', () => {
     await expect(engine.handle('__connections.prepareSave', { id: profile.id, profile: { ...profile, host: 'fixed.invalid' }, transportChanged: true })).resolves.toBeUndefined();
   });
 });
+
+
+describe('可视化计划的实际引擎接线', () => {
+  it('JSON 与文本始终使用原会话，保留事务状态且不探测默认库', async () => {
+    const active = await mocks.connect.mock.results.at(-1)!.value as ManagedConnection;
+    active.status = { dialect: 'mysql', version: '8.4.0' }; active.serverStatus = 3;
+    const actual: string[] = [], connections = mocks.connect.mock.calls.length;
+    scenario = (sql, query) => { actual.push(sql); rows(query, [[JSON.stringify({ query_block: { table: { table_name: 'temporary_subject', access_type: 'ALL', rows_examined_per_scan: 7 } } })]]); };
+    const output = await engine.handle('query.explain', { sessionId, sql: 'SELECT * FROM temporary_subject', taskId: 'explain-json', maxRows: 1 });
+    expect(output.explain.nodes.find((node: { kind: string }) => node.kind === 'table').rows.value).toBe('7'); expect(output.transactionOpen).toBe(true);
+    await engine.handle('query.explain', { sessionId, sql: 'SELECT * FROM temporary_subject', taskId: 'explain-text', maxRows: 10, format: 'text' });
+    expect(actual).toEqual(['EXPLAIN FORMAT=JSON SELECT * FROM temporary_subject','EXPLAIN FORMAT=TRADITIONAL SELECT * FROM temporary_subject']);
+    expect(mocks.connect).toHaveBeenCalledTimes(connections); expect(mocks.execute).not.toHaveBeenCalled(); expect(active.connection.listenerCount('error')).toBe(0);
+  });
+  it('格式拒绝在同一互斥任务内回退，保留原始错误以识别能力', async () => {
+    const active = await mocks.connect.mock.results.at(-1)!.value as ManagedConnection;
+    active.status = { dialect: 'mariadb', version: '10.11.0-MariaDB' };
+    const actual: string[] = [], connections = mocks.connect.mock.calls.length;
+    scenario = (sql, query) => { actual.push(sql); if (sql.startsWith('EXPLAIN FORMAT=JSON')) query.emit('error', Object.assign(Error('不支持格式'), { code: 'ER_UNKNOWN_EXPLAIN_FORMAT' })); else rows(query, [['text plan']]); };
+    const output = await engine.handle('query.explain', { sessionId, sql: 'SELECT * FROM t', taskId: 'fallback', maxRows: 10 });
+    expect(output.explain.format).toBe('text'); expect(actual).toEqual(['EXPLAIN FORMAT=JSON SELECT * FROM t','EXPLAIN SELECT * FROM t']);
+    expect(mocks.connect).toHaveBeenCalledTimes(connections); expect(events.at(-1)?.status).toBe('completed');
+  });
+  it('JSON 请求取消使用 KILL QUERY，等待释放后原会话可继续且不回退', async () => {
+    const active = await mocks.connect.mock.results.at(-1)!.value as ManagedConnection;
+    active.status = { dialect: 'mysql', version: '8.0.44' };
+    let pending: EventEmitter | undefined; const actual: string[] = [];
+    scenario = (sql, query) => { actual.push(sql); pending = query; };
+    const running = engine.handle('query.explain', { sessionId, sql: 'SELECT * FROM t', taskId: 'cancel-explain', maxRows: 10 });
+    const failure = expect(running).rejects.toThrow('取消');
+    await vi.waitFor(() => expect(pending).toBeDefined());
+    mocks.execute.mockImplementation(async (_managed, sql) => { if (sql === 'KILL QUERY 42') pending!.emit('error', Object.assign(Error('模拟中断'), { code: 'ER_QUERY_INTERRUPTED' })); return { rows: {}, fields: [] }; });
+    await engine.handle('query.cancel', { taskId: 'cancel-explain' }); await failure;
+    expect(actual).toEqual(['EXPLAIN FORMAT=JSON SELECT * FROM t']); expect(events.at(-1)?.status).toBe('cancelled'); expect(active.connection.listenerCount('error')).toBe(0);
+    scenario = (_sql, query) => rows(query, [['可继续']]);
+    expect((await engine.handle('query.execute', { sessionId, sql: 'SELECT 1', taskId: 'after-explain', maxRows: 1 })).results[0].rows[0].c0).toBe('可继续');
+  });
+});

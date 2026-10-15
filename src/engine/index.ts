@@ -29,6 +29,8 @@ import { StructureExecutionLocks } from './structureExecutionLocks';
 import { parseTableColumnDefinition } from './tableColumnDefinition';
 import { assertStructureExportMode, assertTableStructureExportable } from '../shared/tableColumnPatches';
 import { createQueryStreamFile } from './queryStreamFile';
+import { explainQuery } from './queryExplain';
+import { explainLimits } from '../shared/explain';
 import { consumeQueryFrames } from './queryStreamProtocol';
 import { queryExportWireProtocol, queryStreamExportLimits, type QueryExportProgress, type QueryExportResultSummary, type QueryStreamExportInput, type QueryStreamExportOutput } from '../shared/queryStreamExport';
 import { buildChanges, buildDesign, buildPageSql, deserializeCell, exportLiteral, identifier, inlineParameters, qualified, serializeCell, splitSql, SqlScriptScanner } from './sql';
@@ -200,14 +202,14 @@ export class Engine {
       }
       case 'query.temporaryRead':return this.withSession(input.sessionId,managed=>this.runTask(input.taskId,managed,'读取会话临时对象结构',task=>readSessionObject(managed,{database:input.database,table:input.table},{start:()=>{this.checkCancelled(task);task.inFlight=true;task.generation++;},check:()=>this.checkCancelled(task),finish:async()=>{task.inFlight=false;await task.cancelPending;}})));
       case 'query.explain': return this.withSession(input.sessionId, managed => this.runTask(input.taskId, managed, '查看执行计划', async task => {
-        const mode = await this.sqlMode(managed);
-        const statements = splitSql(input.sql, mode.noBackslashEscapes, mode.ansiQuotes, mode.ansiQuotesKnown !== false, mode.noBackslashEscapesKnown !== false);
-        if (statements.length !== 1) throw new Error('执行计划一次只接受一条 SQL，请选中需要分析的语句');
-        if (/\/\*(?:!|M!)/i.test(statements[0])) throw new Error('执行计划不接受可执行版本注释，请先展开注释为明确的 SQL');
-        const start = statements[0].replace(/^(?:\s+|\/\*[\s\S]*?\*\/|--[^\n]*(?:\n|$)|#[^\n]*(?:\n|$))*/, '');
-        if (/^EXPLAIN\s+ANALYZE\b/i.test(start)) throw new Error('执行计划不支持 EXPLAIN ANALYZE，因为它会实际执行 SQL');
-        if (!/^(?:SELECT|WITH|INSERT|UPDATE|DELETE|REPLACE)\b/i.test(start)) throw new Error('请选择 SELECT、WITH 或数据修改语句查看执行计划');
-        return this.queryScript(task, 'EXPLAIN ' + statements[0], input.maxRows);
+        if (!Number.isInteger(input.maxRows) || input.maxRows < 1 || input.maxRows > 100000 || ![undefined, 'auto', 'text'].includes(input.format)) throw Error('执行计划参数无效');
+        const mode = await this.sqlMode(managed, task);
+        const result = await explainQuery(input.sql, input.format ?? 'auto', {
+          status: managed.status, mode, check: () => this.checkCancelled(task), reusable: () => !managed.broken && managed.serverStatus !== undefined,
+          run: sql => this.streamQuery(task, sql, Math.min(input.maxRows, explainLimits.textRows), 0, { remainingRows: Math.min(input.maxRows, explainLimits.textRows), remainingBytes: 1024 * 1024, remainingResults: 1 }),
+        });
+        if (managed.serverStatus === undefined) { managed.broken = true; managed.connection.destroy(); }
+        return { ...result, transactionOpen: managed.serverStatus === undefined ? undefined : Boolean(managed.serverStatus & 1) };
       }));
       case 'query.cancel': return this.cancelTask(input.taskId);
       case 'query.transaction': return this.withSession(input.sessionId, async managed => {
