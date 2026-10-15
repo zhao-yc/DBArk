@@ -27,7 +27,7 @@ describe('Excel 公开命令与主进程文件授权', () => {
     const input = { fileToken: '输入', taskId: '读取', sheetId: '1', protocol: 'plain' };
     expect(validateCommand('excel.preview', input)).toEqual(input);
     for (const command of ['excel.sheets', 'excel.preview', 'excel.import', 'excel.export'] as const) expect(publicCommands[command]).toBe(true);
-    for (const extra of [{ filePath: '/绕过授权' }, { format: 'xls' }, { headerRow: 0 }, { headerRow: 1001 }, { protocol: '公式缓存' }]) expect(() => validateCommand('excel.preview', { ...input, ...extra })).toThrow('参数无效');
+    for (const extra of [{ filePath: '/绕过授权' }, { format: 'xls' }, { headerRow: 0 }, { headerRow: 1001 }, { protocol: '公式缓存' }, { cellBudget: 6 }]) expect(() => validateCommand('excel.preview', { ...input, ...extra })).toThrow('参数无效');
     expect(() => validateCommand('excel.export', { connectionId: 'c', database: 'd', table: 't', fileToken: '输出', taskId: 't', scope: '当前筛选' })).toThrow();
   });
   it('重复映射与非 SHA256 指纹不能进入引擎', () => {

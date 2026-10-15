@@ -41,5 +41,10 @@ test('Excel 正式文件授权、工作表和预览 IPC，以及表格实际入�
   await expect(output.getByRole('combobox', { name: '导出范围', exact: true })).toHaveValue('sample');
   await output.getByRole('combobox', { name: '导出范围', exact: true }).selectOption('all');
   await output.getByRole('button', { name: '其他文件格式', exact: true }).click(); await expect(page.getByRole('dialog').getByRole('combobox').first()).toHaveValue('csv');
+  const tasks = await page.evaluate(() => window.dbark.invoke('tasks.list', {}));
+  const metadata = tasks.filter(task => task.kind === 'metadata.table'), previews = tasks.filter(task => task.kind === 'excel.preview');
+  expect(metadata.length).toBeGreaterThan(0); expect(previews.length).toBeGreaterThan(0);
+  expect(metadata.every(task => !previews.some(preview => preview.id === task.id))).toBe(true);
+  expect([...metadata, ...previews].some(task => task.status === 'running')).toBe(false);
   expect(pageErrors).toEqual([]);
 });

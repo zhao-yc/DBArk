@@ -15,7 +15,7 @@ const relationshipNs = 'http://schemas.openxmlformats.org/officeDocument/2006/re
 const packageNs = 'http://schemas.openxmlformats.org/package/2006/relationships';
 const warnings = ['数字单元格保留文件中的原始数值文本；Excel 保存前已发生的精度丢失无法恢复。', '日期样式的数字单元格保留原始日期序列值，请在源文件中转为明确的日期时间文本后导入。', '空白格按 NULL 导入；显式空文本保留为空字符串；不读取公式、外部链接或合并单元格。'];
 interface InternalSheet extends ExcelSheet { path: string; }
-export interface ExcelReadOptions { filePath: string; checkCancelled?: () => void; }
+export interface ExcelReadOptions { filePath: string; checkCancelled?: () => void; /** 仅供内核测试收紧预算，公开 IPC 不接受此参数。 */ cellBudget?: number; }
 export interface ExcelSheetReadOptions extends ExcelReadOptions { sheetId: string; headerRow?: number; protocol: ExcelTextProtocol; expectedFingerprint?: string; }
 export interface ExcelExportOptions extends ExcelReadOptions {
   columns: ExcelColumn[]; rows: AsyncIterable<CellValue[]>; onCommitStart: () => void;
@@ -28,11 +28,22 @@ interface StreamingWriterInternals {
   zip: PassThrough & { append(stream: PassThrough, options: { name: string }): void; abort(): void };
 }
 
+/** 导入、预览、导出共同使用含标题的总格数口径；注入只能降低产品预算。 */
+function cellBudget(value: number = EXCEL_LIMITS.maxCells): number {
+  if (!Number.isSafeInteger(value) || value < 1 || value > EXCEL_LIMITS.maxCells) throw new Error('Excel 单元格预算无效');
+  return value;
+}
+/** 行数由调用方显式包含标题，读取稀疏单元格时同样不能绕过预算。 */
+function checkCellCount(rows: number, columns: number, maximum: number): void {
+  if (rows * columns > maximum) throw new Error('Excel 单元格总数（含标题）超过预算，请拆分文件');
+}
+
 /** 表数据逐行写入真实 XLSX；旧文件仅在完整 ZIP 写完、fsync 和最后一次取消检查之后替换。 */
 export async function exportExcelFile(input: ExcelExportOptions): Promise<{ rows: number; bytes: number }> {
   const check = input.checkCancelled ?? (() => undefined);
   if (excelJsPackage.version !== '4.4.0') throw new Error('Excel 流适配需要重新验证当前 ExcelJS 版本');
   validateExcelHeaders(input.columns.map(column => column.name));
+  const maximumCells = cellBudget(input.cellBudget); checkCellCount(1, input.columns.length, maximumCells);
   const atomic = await AtomicFile.create(input.filePath, 'utf8', check, input.onCommitStart, input.io, EXCEL_LIMITS.maxCompressedBytes);
   const streams: PassThrough[] = [], pendingWrites = new Set<Promise<void>>();
   let streamError: Error | undefined, totalXml = 0;
@@ -91,7 +102,8 @@ export async function exportExcelFile(input: ExcelExportOptions): Promise<{ rows
     worksheet.addRow(input.columns.map(column => textCell(column.name))).commit(); await settleRow();
     for await (const row of input.rows) {
       check();
-      if (++count >= EXCEL_LIMITS.maxRows || count * input.columns.length > EXCEL_LIMITS.maxCells) throw new Error('Excel 行数或单元格总数超过上限，请拆分导出');
+      if (++count >= EXCEL_LIMITS.maxRows) throw new Error('Excel 行数超过上限，请拆分导出');
+      checkCellCount(count + 1, input.columns.length, maximumCells);
       if (row.length !== input.columns.length) throw new Error('导出行与字段数量不一致');
       const values = row.map((value, index) => encodeExcelCell(value, input.columns[index]));
       if (values.reduce((bytes, value) => bytes + Buffer.byteLength(String(value)), 0) > EXCEL_LIMITS.maxRowBytes) throw new Error('Excel 单行文本超过 1 MiB，请改用其他格式');
@@ -208,7 +220,7 @@ function readCell(type: string, text: string, strings: string[], hasValue: boole
 }
 
 /** 逐行解析所选表，空白格为 NULL，显式空文本为字符串；完全空行保持为空数据行。 */
-async function* sheetRows(zip: ExcelZipArchive, sheet: InternalSheet, strings: string[], protocol: ExcelTextProtocol, headerRow = 1): AsyncGenerator<CellValue[]> {
+async function* sheetRows(zip: ExcelZipArchive, sheet: InternalSheet, strings: string[], protocol: ExcelTextProtocol, headerRow = 1, maximumCells: number = EXCEL_LIMITS.maxCells): AsyncGenerator<CellValue[]> {
   if (!Number.isInteger(headerRow) || headerRow < 1 || headerRow > 1000) throw new Error('表头行号必须在 1～1000 之间');
   let row: CellValue[] | undefined, rowIndex = 0, lastColumn = 0, cells = 0, rowBytes = 0, headerSeen = false;
   let cell: { column: number; type: string; text: string; hasValue: boolean } | undefined;
@@ -257,7 +269,7 @@ async function* sheetRows(zip: ExcelZipArchive, sheet: InternalSheet, strings: s
         if (rowBytes > EXCEL_LIMITS.maxRowBytes) throw new Error('Excel 单行文本超过 1 MiB');
         row.push(value); cell = undefined;
       }
-      if (event.name === 'row') { if (!row || cell) throw new Error('XLSX 行结构无效'); cells += row.length; if (cells > EXCEL_LIMITS.maxCells) throw new Error('XLSX 单元格总数超过 500 万'); if (rowIndex >= headerRow) { if (rowIndex > headerRow && !headerSeen) throw new Error('指定的表头行为空或不存在'); headerSeen = true; yield row; } row = undefined; }
+      if (event.name === 'row') { if (!row || cell) throw new Error('XLSX 行结构无效'); cells += row.length; checkCellCount(1, cells, maximumCells); if (rowIndex >= headerRow) { if (rowIndex > headerRow && !headerSeen) throw new Error('指定的表头行为空或不存在'); headerSeen = true; yield row; } row = undefined; }
     }
   }
   if (!sawSheetData) throw new Error('XLSX 工作表缺少数据区');
@@ -272,6 +284,7 @@ export async function listExcelSheets(input: ExcelReadOptions): Promise<ExcelShe
 
 /** 原始标题与数据协议分开，__proto__ 等合法字段通过 null 原型对象保留。 */
 export async function* readExcelRows(input: ExcelSheetReadOptions): AsyncGenerator<DataRow> {
+  const maximumCells = cellBudget(input.cellBudget);
   const zip = await ExcelZipArchive.open(input.filePath, input.checkCancelled);
   try {
     if (input.expectedFingerprint !== undefined && await zip.fingerprint() !== input.expectedFingerprint) throw new Error('工作簿自预览后已发生变化，请重新预览并确认字段映射');
@@ -280,10 +293,10 @@ export async function* readExcelRows(input: ExcelSheetReadOptions): AsyncGenerat
     const strings = await sharedStrings(zip);
     let headers: string[] | undefined, records = 0;
     // 标题必须按原始文本读取；数据协议在按标题形成记录时应用。
-    for await (const values of sheetRows(zip, sheet, strings, 'plain', input.headerRow)) {
+    for await (const values of sheetRows(zip, sheet, strings, 'plain', input.headerRow, maximumCells)) {
       if (!headers) { headers = validateExcelHeaders(values.map(value => value === null || typeof value === 'object' ? '' : String(value))); continue; }
       if (values.length > headers.length) throw new Error('Excel 数据行超出标题字段范围');
-      if (++records * headers.length > EXCEL_LIMITS.maxCells) throw new Error('XLSX 映射后的单元格总数超过 500 万');
+      checkCellCount(++records + 1, headers.length, maximumCells);
       const row: DataRow = Object.create(null);
       headers.forEach((name, index) => {
         const value = index < values.length ? values[index] : null;
@@ -297,6 +310,7 @@ export async function* readExcelRows(input: ExcelSheetReadOptions): AsyncGenerat
 
 /** 预览只保留 20 行，但完整流式校验所选表，防止后部公式/合并在开始导入后才被发现。 */
 export async function previewExcelSheet(input: ExcelSheetReadOptions): Promise<ExcelSheetPreview> {
+  const maximumCells = cellBudget(input.cellBudget);
   const zip = await ExcelZipArchive.open(input.filePath, input.checkCancelled);
   try {
     const fingerprint = await zip.fingerprint();
@@ -304,10 +318,10 @@ export async function previewExcelSheet(input: ExcelSheetReadOptions): Promise<E
     if (!sheet) throw new Error('所选工作表不存在，请重新预览');
     const strings = await sharedStrings(zip), rows: DataRow[] = [];
     let columns: string[] | undefined, records = 0;
-    for await (const values of sheetRows(zip, sheet, strings, 'plain', input.headerRow)) {
+    for await (const values of sheetRows(zip, sheet, strings, 'plain', input.headerRow, maximumCells)) {
       if (!columns) { columns = validateExcelHeaders(values.map(value => value === null || typeof value === 'object' ? '' : String(value))); continue; }
       if (values.length > columns.length) throw new Error('Excel 数据行超出标题字段范围');
-      if (++records * columns.length > EXCEL_LIMITS.maxCells) throw new Error('XLSX 映射后的单元格总数超过 500 万');
+      checkCellCount(++records + 1, columns.length, maximumCells);
       const row: DataRow = Object.create(null);
       columns.forEach((name, index) => { const value = index < values.length ? values[index] : null; row[name] = typeof value === 'string' ? decodeExcelText(value, input.protocol) : value; });
       if (rows.length < EXCEL_LIMITS.previewRows) rows.push(row);

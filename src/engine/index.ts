@@ -4,6 +4,7 @@ import { finished } from 'node:stream/promises';
 import { exportExcelFile, previewExcelSheet, readExcelRows } from './excelFiles';
 import { ExcelReadTasks } from './excelReadTasks';
 import { validateExcelMapping } from '../shared/excelTransfer';
+import { validateLosslessImport } from './losslessImport';
 import iconv from 'iconv-lite';
 import { Types, type FieldPacket, type ResultSetHeader } from 'mysql2';
 import type { CellValue, EngineCommand, ConnectionProfile, DataRow, QueryOutcome, QueryResult, ResultColumn, RowChange, TableDesign, TaskEvent } from '../shared/contracts';
@@ -35,7 +36,7 @@ import { assertStructureExportMode, assertTableStructureExportable } from '../sh
 import { createQueryStreamFile } from './queryStreamFile';
 import { consumeQueryFrames } from './queryStreamProtocol';
 import { queryExportWireProtocol, queryStreamExportLimits, type QueryExportProgress, type QueryExportResultSummary, type QueryStreamExportInput, type QueryStreamExportOutput } from '../shared/queryStreamExport';
-import { buildChanges, buildDesign, buildPageSql, deserializeCell, exportLiteral, identifier, inlineParameters, qualified, serializeCell, splitSql, SqlScriptScanner } from './sql';
+import { buildChanges, buildDesign, buildPageSql, deserializeCell, exportLiteral, identifier, inlineParameters, qualified, serializeCell, splitSql, SqlScriptScanner, typedCellPlaceholder } from './sql';
 
 interface Session { id: string; connectionId: string; managed: ManagedConnection; busy: boolean; }
 interface RunningTask {
@@ -170,7 +171,12 @@ export class Engine {
         return this.withIndependentTask(input.connectionId,input.taskId,(managed,control)=>completionMetadata(managed,input as CompletionMetadataInput,control),undefined,'读取补全元数据');
       }
       case 'metadata.objects': return this.withConnection(input.connectionId, connection => metadata.objects(connection, input.database));
-      case 'metadata.table': return input.taskId ? this.withIndependentTask(input.connectionId, input.taskId, connection => metadata.tableInfo(connection, input.database, input.table)) : this.withConnection(input.connectionId, connection => metadata.tableInfo(connection, input.database, input.table));
+      case 'metadata.table': return input.taskId ? this.withIndependentTask(input.connectionId, input.taskId, async (connection, control) => {
+        // 独立预览元数据也等待实际目录查询终态和连接关闭；KILL ACK 不能替代资源收尾。
+        const ended = control.commandStarted();
+        try { return await metadata.tableInfo(connection, input.database, input.table); }
+        finally { ended(); }
+      }, undefined, '读取表格元数据', true) : this.withConnection(input.connectionId, connection => metadata.tableInfo(connection, input.database, input.table));
       case 'metadata.ddl': return this.withConnection(input.connectionId, connection => metadata.objectDdl(connection, input.database, input.name, input.kind));
       case 'query.execute': return this.withSession(input.sessionId, managed => this.runTask(input.taskId, managed, '执行 SQL', task => this.queryScript(task, input.sql, input.maxRows)));
       case 'query.exportStream': {
@@ -953,7 +959,7 @@ export class Engine {
     if (!mapping.length) throw new Error('请至少映射一个源字段');
     if (new Set(mapping.map(([, target]) => target)).size !== mapping.length) throw new Error('多个源字段不能映射到同一个目标字段');
     for (const [, target] of mapping) if (!columns.has(target) || columns.get(target)?.generated) throw new Error(`目标字段不存在或为生成列：${target}`);
-    const sql = `INSERT INTO ${qualified(input.database, input.table)} (${mapping.map(([, target]) => identifier(target)).join(', ')}) VALUES (${mapping.map(() => '?').join(', ')})`;
+    const insertPrefix = `INSERT INTO ${qualified(input.database, input.table)} (${mapping.map(([, target]) => identifier(target)).join(', ')}) VALUES `;
     let committed = 0, pending = 0, sourceLine = 0, committing = false;
     await this.statement(task, 'START TRANSACTION');
     try {
@@ -963,13 +969,21 @@ export class Engine {
           if (!Object.hasOwn(row, source)) throw new Error(`源记录缺少字段：${source}`);
           let value = row[source];
           if (input.format === 'csv' && typeof value === 'string' && value.startsWith('base64:') && /^(?:tinyblob|blob|mediumblob|longblob|binary|varbinary|bit)/i.test(columns.get(target)!.type)) value = { type: 'binary', base64: value.slice(7) };
+          validateLosslessImport(columns.get(target)!, value, task.managed.status.dialect);
           return value;
         });
+        let inserted: ResultSetHeader;
         if (input.format === 'xlsx') {
           const change = buildChanges(info, [{ kind: 'insert', values: Object.fromEntries(mapping.map(([, target], index) => [target, values[index]])) }]).statements[0];
-          await this.statement(task, change.sql, change.params);
-        } else await this.statement(task, sql, values);
+          inserted = await this.statement(task, change.sql, change.params);
+        } else inserted = await this.statement(task, insertPrefix + '(' + mapping.map(([, target], index) => typedCellPlaceholder(columns.get(target)!, values[index])).join(', ') + ')', values);
         pending++;
+        // OK 包的警告数必须立即核对；SHOW WARNINGS 是诊断语句，不能先发下一条 INSERT/COMMIT 清掉诊断区。
+        if (!Number.isSafeInteger(inserted.warningStatus) || inserted.warningStatus !== 0) {
+          const diagnostics = await this.statement<{ Code: number; Level: string }[]>(task, 'SHOW WARNINGS LIMIT 32');
+          const codes = Array.isArray(diagnostics) ? diagnostics.map(item => String(item.Code)).filter(code => /^\d+$/.test(code)).join(', ') : '';
+          throw new Error(`INSERT 返回警告或无法确认警告数，当前批拒绝提交，不能确认无损转换${codes ? `；诊断代码：${codes}` : ''}`);
+        }
         if (pending === 500) {
           committing = true; await this.statement(task, 'COMMIT'); committing = false; committed += pending; pending = 0;
           this.emit({ taskId: task.id, status: 'running', progress: 0, rows: committed, message: `已提交 ${committed} 行（每批 500 行）` });

@@ -53,8 +53,8 @@ export async function objectDdl(connection: ManagedConnection, database: string,
 
 /** 只有不含 NULL 的唯一键才能作为可编辑行标识；函数索引不作为定位键。 */
 export async function tableInfo(connection: ManagedConnection, database: string, table: string): Promise<TableInfo> {
-  const columns = await execute<{ name: string; type: string; nullable: string; defaultValue: string | null; extra: string; comment: string }[]>(connection,
-    'SELECT COLUMN_NAME AS name, COLUMN_TYPE AS type, IS_NULLABLE AS nullable, COLUMN_DEFAULT AS defaultValue, EXTRA AS extra, COLUMN_COMMENT AS comment FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ? ORDER BY ORDINAL_POSITION', [database, table]);
+  const columns = await execute<{ name: string; type: string; nullable: string; defaultValue: string | null; extra: string; comment: string; characterSet?: string | null }[]>(connection,
+    'SELECT COLUMN_NAME AS name, COLUMN_TYPE AS type, IS_NULLABLE AS nullable, COLUMN_DEFAULT AS defaultValue, EXTRA AS extra, COLUMN_COMMENT AS comment, CHARACTER_SET_NAME AS characterSet FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ? ORDER BY ORDINAL_POSITION', [database, table]);
   if (!columns.rows.length) throw new Error('表不存在或当前用户无权查看');
   const stats = await execute<{ name: string; nonUnique: number; columnName: string | null; subPart: number | null; indexType: string; sortDirection: string | null }[]>(connection,
     'SELECT INDEX_NAME AS name, NON_UNIQUE AS nonUnique, COLUMN_NAME AS columnName, SUB_PART AS subPart, INDEX_TYPE AS indexType, COLLATION AS sortDirection FROM information_schema.STATISTICS WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ? ORDER BY INDEX_NAME, SEQ_IN_INDEX', [database, table]);

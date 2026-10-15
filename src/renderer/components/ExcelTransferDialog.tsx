@@ -1,9 +1,10 @@
-import { useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
+import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { CellValue, FileChoice } from '../../shared/contracts';
 import { validateExcelMapping, type ExcelColumn, type ExcelFieldMapping, type ExcelSheet, type ExcelSheetPreview, type ExcelTextProtocol, type ExcelTransferProgress, type ExcelTransferServices, type ExcelTransferTarget } from '../../shared/excelTransfer';
 import { excelTransferZh as text } from '../locales/excelTransfer.zh-CN';
 import { ErrorBox, Field, Modal, Spinner } from './ui';
 import { ExcelTransferLifecycle, type ExcelTaskSnapshot } from '../excelTransferLifecycle';
+import { ExcelPreviewTasks } from '../excelPreviewTasks';
 import '../excelTransfer.css';
 
 interface Props extends ExcelTransferTarget {
@@ -38,38 +39,29 @@ export function ExcelTransferDialog(props: Props) {
   const reservationKey = JSON.stringify([connectionId, database, table]);
   const [mappingPage, setMappingPage] = useState(0); const targetListId = useId();
   const choosing = useRef(false), generation = useRef(0), fileGeneration = useRef(0), mounted = useRef(true);
-  const readTasks = useRef(new Set<string>());
+  const reads = useMemo(() => new ExcelPreviewTasks(id => services.cancel(id)), [services]);
   const key = file && sheetId ? excelPreviewKey(props, file.token, sheetId, protocol, headerRow) : '';
   const current = ready?.key === key ? ready : null;
 
   /** 组件销毁或上下文改变后，所有旧文件与预览请求都失效。 */
-  useLayoutEffect(() => { mounted.current = true; return () => { mounted.current = false; generation.current++; fileGeneration.current++; for (const id of readTasks.current) void services.cancel(id).catch(() => undefined); }; }, [services]);
+  useLayoutEffect(() => { mounted.current = true; reads.activate(); return () => { mounted.current = false; generation.current++; fileGeneration.current++; void reads.dispose().catch(() => undefined); }; }, [reads]);
   useLayoutEffect(() => {
     lifecycle.attach(contextKey, setTaskState, reservationKey);
     fileGeneration.current++; generation.current++; setFile(null); setSheets([]); setSheetId(''); setReady(null); setDone(undefined); setFailures([]); setError(''); setLoading(false);
-    return () => { lifecycle.detach(); for (const id of readTasks.current) void services.cancel(id).catch(() => undefined); };
-  }, [lifecycle, contextKey, reservationKey]);
+    return () => { lifecycle.detach(); void reads.cancel().catch(() => undefined); };
+  }, [lifecycle, contextKey, reservationKey, reads]);
   useEffect(() => {
     const revision = ++generation.current; setReady(null); setDone(undefined); setError(''); setMappingPage(0);
     if (mode !== 'import' || !file || !sheetId) return;
     setLoading(true);
-    const taskId = crypto.randomUUID(); readTasks.current.add(taskId);
-    const previewTask = services.preview({ fileToken: file.token, taskId, sheetId, headerRow, protocol });
-    // 元数据失败时立即取消文件读取；等待后端资源收尾，避免 Promise.all 提前拒绝留下后台解析。
-    const targetsTask = services.targetColumns({ connectionId, database, table }).catch(async reason => { await services.cancel(taskId).catch(() => undefined); throw reason; });
-    void Promise.allSettled([previewTask, targetsTask]).then(([sampleResult, targetResult]) => {
+    void reads.pair(taskId => services.preview({ fileToken: file.token, taskId, sheetId, headerRow, protocol }), taskId => services.targetColumns({ connectionId, database, table }, taskId)).then(([sample, targets]) => {
       if (!mounted.current || generation.current !== revision) return;
-      // 等两侧均收尾后优先报告目标错误，避免它触发的读取取消掩盖真正失败原因。
-      const failed = targetResult.status === 'rejected' ? targetResult : sampleResult.status === 'rejected' ? sampleResult : null;
-      if (failed) { setError(failed.reason instanceof Error ? failed.reason.message : text.error); return; }
-      if (sampleResult.status !== 'fulfilled' || targetResult.status !== 'fulfilled') return;
-      const sample = sampleResult.value, targets = targetResult.value;
       const mapping = sample.columns.map(source => ({ source, target: targets.some(column => column.name === source) ? source : '' }));
       setReady({ key, sample, targets, mapping });
-    })
-      .finally(() => { readTasks.current.delete(taskId); if (mounted.current && generation.current === revision) setLoading(false); });
-    return () => { generation.current++; void services.cancel(taskId).catch(() => undefined); };
-  }, [mode, file?.token, sheetId, protocol, connectionId, database, table, services, key]);
+    }, reason => { if (mounted.current && generation.current === revision) setError(reason instanceof Error ? reason.message : text.error); })
+      .finally(() => { if (mounted.current && generation.current === revision) setLoading(false); });
+    return () => { generation.current++; void reads.cancel().catch(() => undefined); };
+  }, [mode, file?.token, sheetId, protocol, connectionId, database, table, services, key, reads]);
 
   /** 文件选择串行化，且校验响应仍属于本轮选择，避免快速点击或关闭导致状态回滚。 */
   async function chooseFile() {
@@ -81,9 +73,7 @@ export function ExcelTransferDialog(props: Props) {
       if (!selected || !mounted.current || revision !== fileGeneration.current) return;
       generation.current++; setFile(selected); setReady(null); setSheets([]); setSheetId(''); setError(''); setDone(undefined); setFailures([]);
       if (mode === 'import') {
-        setLoading(true); const taskId = crypto.randomUUID(); readTasks.current.add(taskId);
-        let available: ExcelSheet[];
-        try { available = await services.listSheets(selected.token, taskId); } finally { readTasks.current.delete(taskId); }
+        setLoading(true); const available = await reads.single(taskId => services.listSheets(selected.token, taskId));
         if (!mounted.current || revision !== fileGeneration.current) return;
         setSheets(available); setSheetId(available[0]?.id ?? '');
       }
@@ -112,7 +102,13 @@ export function ExcelTransferDialog(props: Props) {
   }
 
   /** 任务真实结束前禁止关闭，取消仅发出请求，按钮状态由后端结果解除。 */
-  function close() { if (!lifecycle.ownsActiveTask) onClose(); }
+  async function close() {
+    if (lifecycle.ownsActiveTask) return;
+    setLoading(true); generation.current++; const revision = ++fileGeneration.current;
+    try { await reads.cancel(); if (mounted.current && revision === fileGeneration.current) onClose(); }
+    catch (reason) { if (mounted.current && revision === fileGeneration.current) setError(reason instanceof Error ? reason.message : text.error); }
+    finally { if (mounted.current && revision === fileGeneration.current) setLoading(false); }
+  }
 
   return <Modal title={`${mode === 'import' ? text.importTitle : text.exportTitle} · ${database}.${table}`} wide onClose={close}>
     <div className="modal-content excel-transfer">
@@ -129,7 +125,7 @@ export function ExcelTransferDialog(props: Props) {
       </div>}
       {mode === 'import' && <p className="muted small">{protocol === 'plain' ? text.plainHelp : text.dbarkHelp}</p>}
       {loading && <Spinner text={text.loading}/>}
-      {loading && <button onClick={() => { for (const id of readTasks.current) void services.cancel(id).catch(reason => { if (mounted.current) setError(reason instanceof Error ? reason.message : text.error); }); }}>{text.cancel}</button>}
+      {loading && <button onClick={() => void reads.cancel().catch(reason => { if (mounted.current) setError(reason instanceof Error ? reason.message : text.error); })}>{text.cancel}</button>}
       {current && <><h3>{text.mapping}</h3><datalist id={targetListId}>{current.targets.map(column => <option key={column.name} value={column.name}/>)}</datalist><div className="mapping-grid">{current.mapping.slice(mappingPage * 50, (mappingPage + 1) * 50).map((item, index) => <div className="mapping-row" key={item.source}><span className="truncate">{item.source}</span><span aria-hidden="true">→</span><input list={targetListId} placeholder={text.skip} aria-label={text.mappingLabel.replace('{name}', item.source)} value={item.target} disabled={busy} onChange={event => {
         const target = event.target.value;
         setReady(previous => previous?.key === key ? { ...previous, mapping: previous.mapping.map((mapping, position) => position === mappingPage * 50 + index ? { ...mapping, target } : mapping) } : previous);
