@@ -8,7 +8,9 @@ DBArk 保留连接树、多标签查询和表格编辑等熟悉的工作方式�
 
 在 [GitHub Releases](https://github.com/zhao-yc/DBArk/releases) 下载 Windows x64 安装程序、macOS arm64/x64 DMG 或 ZIP，以及源码和 SHA256 校验清单。`0.x` 为开发预览；Windows 未签名，macOS 仅有 ad-hoc 签名，没有发行证书及公证。安装步骤和数据保护边界见 [中文使用指南](docs/user-guide.md)。
 
-已公开[0.17.0开发预览](https://github.com/zhao-yc/DBArk/releases/tag/v0.17.0)，增加全库搜索与本地查询检索、收藏及对象链接、XLSX、JSON计划树、窗口/LATERAL补全、JSON成员移动、Hex查看及多CSV ZIP归档。12个公开附件及890个源码文件已独立下载核对，公开Windows实际安装回归继续，见[公开发行验收](tests/integration/acceptance-v017-public-20261016.md)。功能和限制见[0.17说明](docs/releases/v0.17.0.md)。本机3025单元及同一候选四批245项安装套件通过；其中218项走安装产品、27项为开发夹具/源码组件，另1项权限用例未执行。三平台原生源码/离线安装各68通过、178条件跳过，私网与公开下载产物分别验收，见[验收记录](tests/integration/acceptance-parallel-fourth-20261016.md)。
+已公开[0.17.0开发预览](https://github.com/zhao-yc/DBArk/releases/tag/v0.17.0)，增加全库搜索与本地查询检索、收藏及对象链接、XLSX、JSON计划树、窗口/LATERAL补全、JSON成员移动、Hex查看及多CSV ZIP归档。12个公开附件及890个源码文件已独立下载核对，公开Windows四批245项通过、0失败/跳过/重试，卸载及资源核零，见[公开发行验收](tests/integration/acceptance-v017-public-20261016.md)。其中218项走安装产品、27项为开发夹具/源码组件，另1项权限用例未执行。功能和限制见[0.17说明](docs/releases/v0.17.0.md)；本机3025单元、候选和公开安装分别验收，三平台原生源码/离线安装各68通过、178条件跳过，见[验收记录](tests/integration/acceptance-parallel-fourth-20261016.md)。
+
+当前开发源码为0.18.0，TLS加密客户端私钥口令、表注释及表默认字符集/排序规则正在分层验收，尚未发布。整表或现有列编码转换仍有独立工作包。
 
 此前已公开[0.16.0 开发预览](https://github.com/zhao-yc/DBArk/releases/tag/v0.16.0)：增加 SQL 语义、会话临时对象和普通输出别名补全，并修正默认库、历史及布局的上下文。2089单元、六实例275核心通过13条件跳过；固定标签三平台源码和真实安装各24离线通过、123私网跳过。12个公开资产和608个源码文件下载核对一致，公开Windows安装包原147项完整通过，CSV/JSON各逐行校验百万行，卸载及资源独立核零。Q01仍为部分，macOS私网实库未验，详见[版本说明](docs/releases/v0.16.0.md)。
 
