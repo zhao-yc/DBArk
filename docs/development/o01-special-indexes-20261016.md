@@ -101,6 +101,10 @@ ROOT反馈的终态为：MySQL8.0 run523、严格TLS run526各7/7通过；MySQL5
 
 本次只将该已知0/1目录标志的断言改为字面量集合 `[1, '1']` 严格包含检查；不接受true、其他数值、带空格或前导零等字符串，不将字段或业务数据统一转换为Number。其他独立目录字段、全文/空间实际查询、删除、保留BTREE与原数据、令牌不重放及全部期限保持原状；产品src仍固定65e7db5。员工4仅执行类型检查及关闭开关时7项实库用例的收集/跳过检查，完整六组合及原生面板复验仍由ROOT统一完成。
 
+### SQL预览真实DOM等待修正
+
+根据ROOT提供的run528反馈，两条UI用例已越过OPTION候选检查，随后FULLTEXT首次预览读取到空文本，SPATIAL第二次DROP预览读取到 `A`。标题可见先于Monaco文本渲染完成，因此本次仅在 `previewAndConfirm` 中先用可重试 `expect(sqlLines).toContainText(expectedSql)` 等待真实DOM出现预期ADD/DROP SQL，再读取文本；原有SQL必含预期内容、不含USING BTREE/ASC/DESC及所有后续断言保留。沿用默认断言期限，不添加等待时长、不注入编辑器状态，产品src不变。员工4仅做类型检查和默认关闭时2项UI用例跳过检查；未启动GUI、剪贴板、200或Docker，实际复验仍由ROOT统一完成。
+
 ## 官方依据
 
 - [MySQL 8.0 全文限制](https://dev.mysql.com/doc/refman/8.0/en/fulltext-restrictions.html)：字段类型、字符集、同元组排序规则、分区及解析器边界。

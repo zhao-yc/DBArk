@@ -73,7 +73,9 @@ async function data(context: LiveContext, table: string): Promise<RowDataPacket[
 async function previewAndConfirm(context: LiveContext, table: string, expectedApplyCount: number, expectedSql: RegExp): Promise<void> {
   const before = await ddl(context, table), values = await data(context, table);
   await dialog().getByRole('button', { name: text.preview, exact: true }).click(); await expect(dialog().getByRole('heading', { name: text.fixedSql, exact: true })).toBeVisible();
-  const sql = (await dialog().locator('.monaco-editor .view-lines').innerText()).replace(/\u00a0/g, ' ');
+  // 标题先于Monaco文本渲染；沿用默认断言期限等待真实DOM，不注入模型或延长超时。
+  const sqlLines = dialog().locator('.monaco-editor .view-lines'); await expect(sqlLines).toContainText(expectedSql);
+  const sql = (await sqlLines.innerText()).replace(/\u00a0/g, ' ');
   expect(sql).toMatch(expectedSql); expect(sql).not.toMatch(/USING\s+BTREE|\bASC\b|\bDESC\b/);
   expect(await ddl(context, table)).toBe(before); expect(await data(context, table)).toEqual(values);
   expect(await applyCount()).toBe(expectedApplyCount); expect(await applyTasks()).toBe(expectedApplyCount); expect((await commands()).filter(command => command === 'query.execute')).toEqual([]);
