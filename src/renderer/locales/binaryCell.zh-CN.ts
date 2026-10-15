@@ -1,0 +1,17 @@
+export const binaryCellZh = {
+  title: '二进制单元格', open: '查看二进制', hex: 'Hex', text: '按编码查看文本', image: '图片预览', encoding: '查看编码',
+  bytes: '{0} 字节', null: 'SQL NULL（没有字节值）', empty: '空二进制值（0 字节）', default: 'DEFAULT（尚未填写）',
+  invalidBase64: '二进制原值编码无效，无法查看或编辑。', unsupported: '此值不是完整二进制原值。',
+  byteLimit: '超过 2 MiB 完整查看预算，未解码或创建图片预览；不能保存截断内容。',
+  editLimit: '完整 Hex 编辑最多 131071 字节；较大值仅分页查看，不能将显示片段暂存。',
+  hexInvalid: 'Hex 必须是成对的十六进制数字，可包含空白和开头的 0x。', hexValid: 'Hex 校验通过：{0} 字节。',
+  hexLabel: '完整二进制 Hex', previous: '上一段 Hex', next: '下一段 Hex', segment: '显示字节 {0} 至 {1} / {2}（只读片段）',
+  textLabel: '严格解码文本（只读）', textHint: '文本只读，不重新编码或保存；解码失败不会用替代字符改写原字节，BOM 按原文保留。',
+  decodeFailed: '所选编码无法完整解码这些字节；原值未改变。', textLimit: '超过 256 KiB 文本解码预算，请使用分页 Hex 查看。',
+  imageHint: '仅预览 PNG、JPEG 和静态 WebP。SVG、HTML、GIF 与动画不在本轮支持范围；不会加载外链或打开路径。',
+  imageUnsupported: '不是受支持的 PNG、JPEG 或静态 WebP 图片。', imageInvalid: '图片头或数据结构无效，未创建预览。',
+  animation: '动画图片不在本轮安全预览范围。', pixels: '图片超过 4096 边长或 4194304 像素预算，未解码。',
+  imageFailed: '图片解码失败或实际尺寸与头信息不符，预览已释放。', imageInfo: '{0} · {1} × {2} 像素 · {3} 字节',
+  readonly: '此入口只读。表数据的 Hex 修改仍需暂存草稿并集中预览提交。',
+  driverScope: '本轮支持已读取完整值的 MySQL/MariaDB 二进制单元格；Web/BFile 属于其它驱动能力，尚未支持。',
+} as const;
