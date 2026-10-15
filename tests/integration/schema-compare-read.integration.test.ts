@@ -4,6 +4,7 @@ import mysql from 'mysql2';
 import { connect, execute, type ManagedConnection } from '../../src/engine/connection';
 import { readSchemaComparisonTarget } from '../../src/engine/schemaCompare';
 import { compareSchemaSnapshots } from '../../src/engine/schemaCompareProjection';
+import { buildSchemaComparePreview } from '../../src/engine/schemaComparePreview';
 import type { StructureTaskContext } from '../../src/engine/structureDefinition';
 import type { ConnectionProfile } from '../../src/shared/contracts';
 import { identifier, qualified } from '../../src/engine/sql';
@@ -24,10 +25,10 @@ function assertFixtureTarget(): void {
 /** 仅测试夹具允许 DDL，范围严格限于本轮随机数据库。比较读取器完全不写表结构。 */
 async function sql(value: string) { return (await execute(admin!, value)).rows as Record<string, unknown>[]; }
 /** 每侧单独新建并严格释放短会话；不借用用户事务或临时表会话。 */
-async function read(table: string) {
-  const managed = await connect(profile); let activeCommands = 0;
+async function read(table: string, connectionProfile = profile) {
+  const managed = await connect(connectionProfile); let activeCommands = 0;
   const context: StructureTaskContext = { managed, checkCancelled() {}, report() {}, commandStarted() { activeCommands++; return () => { activeCommands--; }; } };
-  try { const value = await readSchemaComparisonTarget(context, { connectionId: profile.id, database, table }); expect(activeCommands).toBe(0); return value; }
+  try { const value = await readSchemaComparisonTarget(context, { connectionId: connectionProfile.id, database, table }); expect(activeCommands).toBe(0); return value; }
   finally { await managed.close({ strict: true }); }
 }
 
@@ -92,5 +93,27 @@ describe.skipIf(!enabled)('真实 MySQL/MariaDB 原定义只读比较', () => {
     expect(await sql('SELECT CONNECTION_ID() AS id,@@SESSION.sql_mode AS mode,value FROM marker')).toEqual(before);
     expect((await execute(observer!, `SELECT COUNT(*) AS count FROM ${qualified(database, 'parent')} WHERE id=123`)).rows).toEqual([{ count: '0' }]);
     expect((await read('target')).source).toBe(target.source); await sql('ROLLBACK');
+  });
+  it('同实例双连接别名保留真实命名空间，外键冲突使混合删除新增整批无SQL', async () => {
+    const source = await read('source'), target = await read('target', { ...profile, id: randomUUID() });
+    expect(source.target.connectionId).not.toBe(target.target.connectionId);
+    expect(source.namespace?.serverIdentity).toBeTruthy();
+    expect(source.namespace).toEqual(target.namespace);
+    const report = { ...compareSchemaSnapshots(source, target), snapshotId: randomUUID(), expiresAt: new Date(Date.now() + 120000).toISOString() };
+    const result = buildSchemaComparePreview(source, target, report, [{ category: 'foreignKeys', name: 'fk_target' }, { category: 'foreignKeys', name: 'fk_source' }]);
+    expect(result.statements).toEqual([]); expect(result.blocked).toHaveLength(2);
+    expect(result.blocked.flatMap(row => row.reasons).join('')).toContain('源外键名已被');
+    expect(result.sql).not.toMatch(/^ALTER\s/m); expect((await read('target')).source).toBe(target.source);
+  });
+  it('实际目录保留列和索引原大小写，预览拒绝重复ADD且目标定义不变', async () => {
+    await sql(`CREATE TABLE ${qualified(database, 'case_source')} (\`ID\` INT,KEY \`I\` (\`ID\`)) ENGINE=InnoDB`);
+    await sql(`CREATE TABLE ${qualified(database, 'case_target')} (\`id\` INT,KEY \`i\` (\`id\`)) ENGINE=InnoDB`);
+    const source = await read('case_source'), target = await read('case_target');
+    const report = { ...compareSchemaSnapshots(source, target), snapshotId: randomUUID(), expiresAt: new Date(Date.now() + 120000).toISOString() };
+    expect(report.rows.find(row => row.category === 'columns' && row.name === 'ID')?.status).toBe('added');
+    const result = buildSchemaComparePreview(source, target, report, [{ category: 'columns', name: 'ID' }, { category: 'indexes', name: 'I' }]);
+    expect(result.statements).toEqual([]); expect(result.blocked).toHaveLength(2);
+    expect(result.blocked.every(row => row.reasons.some(reason => reason.includes('命名空间已存在')))).toBe(true);
+    expect((await read('case_target')).source).toBe(target.source);
   });
 });
