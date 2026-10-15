@@ -57,11 +57,16 @@ export function ExcelTransferDialog(props: Props) {
     const previewTask = services.preview({ fileToken: file.token, taskId, sheetId, headerRow, protocol });
     // 元数据失败时立即取消文件读取；等待后端资源收尾，避免 Promise.all 提前拒绝留下后台解析。
     const targetsTask = services.targetColumns({ connectionId, database, table }).catch(async reason => { await services.cancel(taskId).catch(() => undefined); throw reason; });
-    void Promise.all([previewTask, targetsTask]).then(([sample, targets]) => {
+    void Promise.allSettled([previewTask, targetsTask]).then(([sampleResult, targetResult]) => {
       if (!mounted.current || generation.current !== revision) return;
+      // 等两侧均收尾后优先报告目标错误，避免它触发的读取取消掩盖真正失败原因。
+      const failed = targetResult.status === 'rejected' ? targetResult : sampleResult.status === 'rejected' ? sampleResult : null;
+      if (failed) { setError(failed.reason instanceof Error ? failed.reason.message : text.error); return; }
+      if (sampleResult.status !== 'fulfilled' || targetResult.status !== 'fulfilled') return;
+      const sample = sampleResult.value, targets = targetResult.value;
       const mapping = sample.columns.map(source => ({ source, target: targets.some(column => column.name === source) ? source : '' }));
       setReady({ key, sample, targets, mapping });
-    }, reason => { if (mounted.current && generation.current === revision) setError(reason instanceof Error ? reason.message : text.error); })
+    })
       .finally(() => { readTasks.current.delete(taskId); if (mounted.current && generation.current === revision) setLoading(false); });
     return () => { generation.current++; void services.cancel(taskId).catch(() => undefined); };
   }, [mode, file?.token, sheetId, protocol, connectionId, database, table, services, key]);
