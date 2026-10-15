@@ -23,7 +23,7 @@ function managed(profile: ConnectionProfile, signal?: AbortSignal): ManagedConne
     const finish = (error?: Error) => queueMicrotask(() => {
       if (error) { callback(error); return; }
       let rows: unknown = [];
-      if (sql.includes('@@hostname')) rows = [{ sqlMode: mode, hostname: profile.host, port: 3306, serverId: 1, currentUser: 'test@host', connectionId: threadId }];
+      if (sql.includes('@@hostname')) rows = [{ sqlMode: mode, hostname: profile.host, port: 3306, serverId: 1, currentUser: 'test@host', connectionId: threadId, identifierCase: 0, uuid: profile.host }];
       else if (sql.startsWith('SET SESSION sql_mode')) mode = /'([^']*)'/.exec(sql)![1];
       else if (sql.startsWith('SET SESSION sql_quote')) quoted = 1;
       else if (sql.startsWith('SET NAMES')) { charset = 'utf8mb4'; collation = 'utf8mb4_bin'; }

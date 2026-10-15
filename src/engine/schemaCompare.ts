@@ -1,9 +1,14 @@
+import { createHash } from 'node:crypto';
 import { schemaCompareLimits, schemaCompareTargetSchema, type SchemaCompareTarget } from '../shared/schemaCompare';
 import { readStructureDefinition, assertStructureDefinitionUnchanged, structureTaskQuery, type StructureDefinitionRead, type StructureTaskContext } from './structureDefinition';
 
 import { structureDocumentOf } from './structureDefinition';
 
-export interface SchemaComparisonSnapshot extends StructureDefinitionRead { target: SchemaCompareTarget; }
+export interface SchemaComparisonSnapshot extends StructureDefinitionRead {
+  target: SchemaCompareTarget;
+  /** 只留在引擎内：跨保存连接识别同一服务器，不能用连接编号或认证身份替代。 */
+  namespace?: { serverIdentity: string; identifierCase: 0 | 1 | 2 };
+}
 
 /** 调用方必须提供私有结构短会话；所有 SET 仅规范该短会话，不能借用查询标签会话。 */
 export async function readSchemaComparisonTarget(context: StructureTaskContext, input: SchemaCompareTarget): Promise<SchemaComparisonSnapshot> {
@@ -28,6 +33,11 @@ export async function readSchemaComparisonTarget(context: StructureTaskContext, 
   const recheck = await readStructureDefinition(context, target, false);
   // 第一次读取可能移除了会隐藏定义的原模式；重核的是规范化后的同一短会话。
   assertStructureDefinitionUnchanged({ ...read, originalMode: read.normalizedMode }, recheck);
+  // 同一物理短会话采集命名空间；服务器标识刻意排除 CURRENT_USER，避免不同账号绕过同库外键名冲突。
+  const facts = (await structureTaskQuery<Record<string, unknown>[]>(context, `SELECT @@lower_case_table_names AS identifierCase, @@hostname AS hostname, @@port AS port, @@server_id AS serverId, CONNECTION_ID() AS connectionId${read.context.dialect === 'mysql' ? ', @@server_uuid AS uuid' : ''}`)).rows[0];
+  const identifierCase = Number(facts?.identifierCase);
+  if (!facts || ![0, 1, 2, '0', '1', '2'].includes(facts.identifierCase as number | string) || Number(facts.connectionId) !== context.managed.connection.threadId || typeof facts.hostname !== 'string' || !facts.hostname || !Number.isSafeInteger(Number(facts.port)) || Number(facts.port) < 1 || Number(facts.port) > 65535 || !Number.isSafeInteger(Number(facts.serverId)) || Number(facts.serverId) < 0 || read.context.dialect === 'mysql' && (typeof facts.uuid !== 'string' || !facts.uuid)) throw new Error('无法确认结构比较的服务器与命名空间身份');
+  const serverIdentity = createHash('sha256').update(JSON.stringify(read.context.dialect === 'mysql' ? { dialect: 'mysql', uuid: facts.uuid } : { dialect: 'mariadb', hostname: facts.hostname, port: Number(facts.port), serverId: Number(facts.serverId) })).digest('hex');
   context.checkCancelled();
-  return { ...read, target: { ...target } };
+  return { ...read, target: { ...target }, namespace: { serverIdentity, identifierCase: identifierCase as 0 | 1 | 2 } };
 }

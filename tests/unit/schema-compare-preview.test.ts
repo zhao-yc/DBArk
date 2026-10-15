@@ -69,11 +69,12 @@ describe('结构比较的保守 SQL 审查稿', () => {
     const blocked = preview(snapshot(body), snapshot('`id` int, KEY `i` (`id`)', 'target', 'another_db'));
     expect(blocked.blocked.find(row => row.name === 'fk')?.reasons.join('')).toContain('不能自动映射');
   });
-  it('外键只依赖确认存在的支撑索引，且父表引用显式限定库', () => {
+  it('支撑索引可独立新增，外键仍因未核验全库名称而阻止整批预览', () => {
     const a = snapshot('`id` int, KEY `i` (`id`), CONSTRAINT `fk` FOREIGN KEY (`id`) REFERENCES `parent` (`id`)');
     const b = snapshot('`id` int', 'target');
     expect(preview(a, b, ['fk']).statements).toEqual([]);
-    const result = preview(a, b); expect(result.statements.map(item => item.category)).toEqual(['indexes', 'foreignKeys']); expect(result.sql).toContain('REFERENCES `db`.`parent` (`id`)');
+    const index = preview(a, b, ['i']); expect(index.statements.map(item => item.category)).toEqual(['indexes']);
+    const result = preview(a, b); expect(result.statements).toEqual([]); expect(result.blocked.find(row => row.name === 'fk')?.reasons.join('')).toContain('完整外键命名空间');
   });
   it('拒绝渲染侧注入配置、SQL、重复项、任意对象和过大选择', () => {
     const target = { connectionId: 'c', database: 'db', table: 't' };

@@ -5,6 +5,25 @@ import { schemaCompareZh as text } from '../../src/renderer/locales/schemaCompar
 import { comparisonProtocol } from './schema-compare-protocol';
 
 const dialog = () => page.getByRole('dialog', { name: text.title, exact: true });
+const oldForeignKey = ',CONSTRAINT `target_fk` FOREIGN KEY (`id`) REFERENCES `parent` (`id`) ON DELETE RESTRICT ON UPDATE RESTRICT';
+for (const scenario of [
+  { name: '跨连接同库外键原名冲突', sourceBody: '`id` int,KEY `i` (`id`),CONSTRAINT `source_fk` FOREIGN KEY (`id`) REFERENCES `parent` (`id`) ON DELETE RESTRICT ON UPDATE RESTRICT', targetBody: '`id` int,KEY `i` (`id`)' + oldForeignKey, selection: '选择 外键 source_fk', reason: '库级名称不能直接复制' },
+  { name: '字段仅大小写冲突', sourceBody: '`ID` int,KEY `i` (`ID`)', targetBody: '`id` int,KEY `i` (`id`)' + oldForeignKey, selection: '选择 字段 ID', reason: '显式映射或重命名' },
+  { name: '索引仅大小写冲突', sourceBody: '`id` int,KEY `I` (`id`)', targetBody: '`id` int,KEY `i` (`id`)' + oldForeignKey, selection: '选择 主键 / 索引 I', reason: '显式映射或重命名' },
+]) {
+  test(`${scenario.name}保留差异，混合目标外键删除时整批预览无SQL且禁保存`, async () => {
+    const protocol = await comparisonProtocol(scenario);
+    try {
+      await openComparison(protocol.port); await dialog().getByRole('button', { name: text.start, exact: true }).click();
+      await expect(dialog().getByRole('button', { name: text.start, exact: true })).toBeEnabled(); expect(await dialog().locator('.error-box').allTextContents(), protocol.queries.join('\n')).toEqual([]);
+      await dialog().getByLabel(scenario.selection, { exact: true }).check(); await dialog().getByLabel('选择 外键 target_fk', { exact: true }).check();
+      await dialog().getByRole('button', { name: text.preview, exact: true }).click(); await expect(dialog()).toContainText(scenario.reason);
+      await expect(dialog()).toContainText('已阻止整批预览'); expect(await dialog().getByLabel(text.sql, { exact: true }).inputValue()).not.toMatch(/\nALTER TABLE/);
+      await expect(dialog().getByRole('button', { name: text.save, exact: true })).toBeDisabled(); await expect(dialog().getByLabel(scenario.selection, { exact: true })).toBeChecked();
+      await dialog().getByRole('button', { name: text.close, exact: true }).click(); await expect(dialog()).toHaveCount(0); expect(pageErrors).toEqual([]); expect(protocol.queries.every(sql => !/^(ALTER|DROP|CREATE|INSERT|DELETE|UPDATE)/.test(sql))).toBe(true);
+    } finally { await protocol.close(); }
+  });
+}
 /** 通过真实保存连接 IPC 创建本例配置；表单、比较、预览仍全部由用户入口触发。 */
 async function openComparison(port: number) {
   await page.evaluate(async value => {

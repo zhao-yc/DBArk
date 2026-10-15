@@ -1,10 +1,13 @@
 import { createServer, type AddressInfo, type Socket } from 'node:net';
 import mysql from 'mysql2';
+import { parseTableColumnDefinition } from '../../src/engine/tableColumnDefinition';
 
 /** 离线协议夹具只监听回环临时端口；真实驱动/主进程/IPC 执行生产代码，不代表实库验收。 */
-export async function comparisonProtocol() {
+export async function comparisonProtocol(options?: { sourceBody: string; targetBody: string }) {
   const sockets = new Map<number, Socket>(), queries: string[] = [];
   let nextId = 100, held: (() => void) | undefined, holdNext = false, denyCancel = false;
+  /** 同一份原定义同时用于 SHOW CREATE 与字段目录，协议夹具不能虚构互相矛盾的元数据。 */
+  const definition = (source: boolean) => `CREATE TABLE \`${source ? 'source' : 'target'}\` (${source ? options?.sourceBody ?? '`id` int,`extra` decimal(30,8) DEFAULT 1234567890123456789012.12345678,KEY `extra_idx` (`extra`)' : options?.targetBody ?? '`id` int'}) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin`;
   const server = createServer(socket => {
     const id = ++nextId; sockets.set(id, socket); socket.on('close', () => sockets.delete(id));
     const connection = mysql.createConnection({ stream: socket, isServer: true, connectTimeout: 0 }) as ReturnType<typeof mysql.createConnection> & { _resetSequenceId(): void; writeColumns(columns: unknown[]): void; writeTextRow(row: unknown[]): void; writeEof(): void; };
@@ -25,19 +28,19 @@ export async function comparisonProtocol() {
         sockets.get(Number(sql.split(' ').at(-1)))?.destroy(); ok(); return;
       }
       if (sql.startsWith('SELECT VERSION()')) { rows([{ version: '8.4.11', sqlMode: '', currentDatabase: null, identifierCase: '0' }]); return; }
-      if (sql.includes('@@hostname')) { rows([{ sqlMode: '', hostname: '离线协议夹具', port: '3306', serverId: '1', currentUser: 'test@localhost', connectionId: String(id) }]); return; }
+      if (sql.includes('@@hostname')) { rows([{ sqlMode: '', hostname: '离线协议夹具', port: '3306', serverId: '1', currentUser: 'test@localhost', connectionId: String(id), identifierCase: '0', uuid: 'offline-protocol' }]); return; }
       if (sql.includes('AS quoteShowCreate')) { rows([{ sqlMode: '', quoteShowCreate: quoted, charset, collation }]); return; }
       if (sql.includes('@@server_uuid')) { rows([{ uuid: 'offline-protocol' }]); return; }
       if (sql.includes(' AS visible')) { rows([{ visible: '1' }]); return; }
       if (sql.startsWith('SHOW CREATE')) {
         const source = sql.includes('`source`'), name = source ? 'source' : 'target';
-        const reply = () => rows([{ Table: name, 'Create Table': `CREATE TABLE \`${name}\` (\`id\` int${source ? ",\`extra\` decimal(30,8) DEFAULT 1234567890123456789012.12345678,KEY \`extra_idx\` (\`extra\`)" : ''}) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin` }]);
+        const reply = () => rows([{ Table: name, 'Create Table': definition(source) }]);
         if (holdNext) { holdNext = false; held = reply; } else reply(); return;
       }
       if (sql.includes('FROM information_schema.TABLES')) { rows([{ charset: 'utf8mb4', collation: 'utf8mb4_bin' }]); return; }
       if (sql.includes('FROM information_schema.COLUMNS')) {
         const source = sql.includes(Buffer.from('source').toString('hex'));
-        rows((source ? ['id', 'extra'] : ['id']).map(name => ({ name, nullable: 'YES', extra: '', charset: null, collation: null }))); return;
+        rows(parseTableColumnDefinition(definition(source), { dialect: 'mysql', mode: { ansiQuotes: false, noBackslashEscapes: false } }).columns.map(column => ({ name: column.name, nullable: column.nullable === false ? 'NO' : 'YES', extra: '', charset: null, collation: null }))); return;
       }
       if (sql.startsWith('SET ')) { if (sql.includes('sql_quote_show_create')) quoted = 1; if (sql.startsWith('SET NAMES')) { charset = 'utf8mb4'; collation = 'utf8mb4_bin'; } ok(); return; }
       connection.writeError({ code: 1142, message: '离线夹具拒绝未定义或写入命令' });

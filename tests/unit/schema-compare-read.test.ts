@@ -9,19 +9,19 @@ const createSql = 'CREATE TABLE `table.with``quote` (`id` int NOT NULL, PRIMARY 
 /** mysql2 回调协议的只读测试连接；真实 SQL 构造、回调终态和监听器清理由生产读取器承担。 */
 function harness(dialect: 'mysql' | 'mariadb' = 'mysql', version = dialect === 'mysql' ? '8.4.11' : '11.4.13-MariaDB') {
   const sent: string[] = [], controller = new AbortController();
-  const state = { mode: 'NO_FIELD_OPTIONS,NO_KEY_OPTIONS,ANSI_QUOTES', quoted: 0, charset: 'latin1', collation: 'latin1_swedish_ci', showGipk: 1 as unknown, reads: 0, cancelled: false, commands: 0, mutation: false, deny: false, hold: false, pending: undefined as (() => void) | undefined };
+  const state = { mode: 'NO_FIELD_OPTIONS,NO_KEY_OPTIONS,ANSI_QUOTES', quoted: 0, charset: 'latin1', collation: 'latin1_swedish_ci', showGipk: 1 as unknown, identifierCase: 0 as unknown, user: '测试用户', uuid: '只用于内部身份', reads: 0, cancelled: false, commands: 0, mutation: false, deny: false, hold: false, pending: undefined as (() => void) | undefined };
   const connection = new EventEmitter();
   Object.assign(connection, { threadId: 42, query(sql: string, callback: (error: Error | null, rows?: unknown, fields?: unknown[]) => void) {
     sent.push(sql);
     const respond = () => {
       if (state.deny && sql.startsWith('SHOW CREATE')) return callback(Object.assign(new Error('无权读取完整定义'), { code: 'ER_TABLEACCESS_DENIED_ERROR' }));
       let rows: unknown = [];
-      if (sql.includes('@@hostname')) rows = [{ sqlMode: state.mode, hostname: '测试主机', port: 3306, serverId: 1, currentUser: '测试用户', connectionId: 42 }];
+      if (sql.includes('@@hostname')) rows = [{ sqlMode: state.mode, hostname: '测试主机', port: 3306, serverId: 1, currentUser: state.user, connectionId: 42, identifierCase: state.identifierCase, uuid: state.uuid }];
       else if (sql.startsWith('SET SESSION sql_mode')) state.mode = /'([^']*)'/.exec(sql)![1];
       else if (sql === 'SET SESSION sql_quote_show_create = 1') state.quoted = 1;
       else if (sql.startsWith('SET NAMES')) { state.charset = 'utf8mb4'; state.collation = 'utf8mb4_bin'; }
       else if (sql.includes('AS quoteShowCreate')) rows = [{ sqlMode: state.mode, quoteShowCreate: state.quoted, charset: state.charset, collation: state.collation }];
-      else if (sql.includes('@@server_uuid')) rows = [{ uuid: '只用于内部身份' }];
+      else if (sql.includes('@@server_uuid')) rows = [{ uuid: state.uuid }];
       else if (sql.includes(' AS visible')) rows = [{ visible: state.showGipk }];
       else if (sql.startsWith('SHOW CREATE')) { state.reads++; rows = [{ 'Create Table': state.mutation && state.reads === 2 ? createSql.replace('int NOT', 'bigint NOT') : createSql }]; }
       else if (sql.includes('FROM information_schema.TABLES')) rows = [{ charset: 'utf8mb4', collation: 'utf8mb4_bin' }];
@@ -38,6 +38,16 @@ function harness(dialect: 'mysql' | 'mariadb' = 'mysql', version = dialect === '
 }
 
 describe('比较专用结构读取', () => {
+  it.each(['mysql', 'mariadb'] as const)('%s 服务器命名空间标识不含账号或保存连接编号，字段/索引规则不受表名模式替代', async dialect => {
+    const a = harness(dialect), b = harness(dialect); b.state.user = '另一账号'; b.state.identifierCase = 2;
+    const source = await readSchemaComparisonTarget(a.context, target), other = await readSchemaComparisonTarget(b.context, { ...target, connectionId: '另一保存连接' });
+    expect(source.identity).not.toBe(other.identity); expect(source.namespace?.serverIdentity).toBe(other.namespace?.serverIdentity); expect(other.namespace?.identifierCase).toBe(2);
+    expect(JSON.stringify(source.namespace)).not.toContain('另一账号'); expect(JSON.stringify(source.namespace)).not.toContain('测试主机');
+  });
+  it.each([undefined, '', 3, false])('命名空间模式 %s 无法确认时拒绝比较，不默认为大小写敏感', async mode => {
+    const h = harness(); h.state.identifierCase = mode;
+    await expect(readSchemaComparisonTarget(h.context, target)).rejects.toThrow('命名空间身份'); expect(h.state.commands).toBe(0);
+  });
   it.each(['mysql', 'mariadb'] as const)('在 %s 独立短会话规范原定义并双读核验，SQL 不包含 DDL 或数据读取', async dialect => {
     const h = harness(dialect), result = await readSchemaComparisonTarget(h.context, target);
     expect(result.target).toEqual(target); expect(result.source).toBe(createSql); expect(h.state.reads).toBe(2); expect(h.state.commands).toBe(0);
