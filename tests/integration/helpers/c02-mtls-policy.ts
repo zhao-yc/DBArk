@@ -15,6 +15,20 @@ export function c02Enabled(env: NodeJS.ProcessEnv): boolean {
   return env.DBARK_INTEGRATION_ENABLED === '1' && env.DBARK_C02_MTLS_ENABLED === '1';
 }
 
+/** UI 还需独立显式开关；仅跑核心用例不能顺带启动原生应用。 */
+export function c02UiEnabled(env: NodeJS.ProcessEnv): boolean {
+  return c02Enabled(env) && env.DBARK_C02_MTLS_UI_ENABLED === '1';
+}
+
+/** UI 生命周期必须在租约归还前关闭；原失败与退出失败均保留，不以 finally 覆盖首因。 */
+export async function withC02UiLifetime(action: () => Promise<void>, shutdown: () => Promise<void>): Promise<void> {
+  const errors: unknown[] = [];
+  try { await action(); } catch (error) { errors.push(error); }
+  try { await shutdown(); } catch (error) { errors.push(error); }
+  if (errors.length === 1) throw errors[0];
+  if (errors.length > 1) throw new AggregateError(errors, 'C02 UI 操作及退出均失败', { cause: errors[0] });
+}
+
 /** 只接收本片显式环境值，不加载任何 .env、ROOT 配置或默认数据库凭据。 */
 export function c02Config(env: NodeJS.ProcessEnv): C02Config {
   if (!c02Enabled(env)) throw new Error('C02 mTLS 尚未显式启用');

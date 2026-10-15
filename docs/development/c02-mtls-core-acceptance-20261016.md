@@ -59,3 +59,14 @@ CREATE 前先标记未知，只有成功响应才能确认为本次创建。任�
 - 上述专用实库命令在两个开关均为 `0` 时：1 项明确跳过，没有实库认证通过记录。
 
 这些结果只证明验收准备的门禁、参数与控制流通过本地检查。真实 13484 mTLS 正负例及服务端/临时文件清理仍须 ROOT 显式运行验证，不能计作实库通过。
+
+## ROOT run602 核心实证追加
+
+2026-10-16 06:58:03 至 06:58:06（北京时间），ROOT 对固定 `bda84bcd49f6f48d448692c75556ef3df21f0e7a` 运行上述专用文件。员工 2 已只读核对 `D:\svn\DBArk\.cache\parallel-integration\run602-c02-mtls-core` 中的 summary、results、runner.log 与 server-before/server-after；没有读取原始 CA/key、凭据或复跑实库。
+
+- MySQL **8.4.11 / 13484**，完整复合用例 **1 通过、0 失败、0 跳过**，用例约 1.89 秒。
+- 严格 CA/IP SAN、无证书 1045、加密 key 缺/错口令拒绝、正确口令真实握手/SELECT 均通过，会话 cipher 为 `TLS_AES_256_GCM_SHA384`。
+- ROOT 摘要记录 289 个输入文件未变化；ROOT 回传原 CA/key 摘要未变化。前后目录中的 cp 用户、colperm 库和目标线程均为空，临时材料为空，`clean=true`。
+- 这是 ROOT 执行、员工 2 只读复核的核心证据。它没有证明 Electron utility、ConnectionDialog、原生 safeStorage、真实重启恢复、显式清除或其它平台；这些仍为 UI 分支待验项。
+
+上文“本轮纯检查”保留为准备阶段的历史记录，不把当时的跳过误计为本次实库通过。
