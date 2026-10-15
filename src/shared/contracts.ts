@@ -19,6 +19,7 @@ import type{SavedQueryPageInput,SavedQueryPage}from'./savedQueryPages';
 import type{HistoryPageInput,HistoryPage,HistoryOpenResult}from'./historyPages';
 import type { ExplainPlan } from './explain';
 import type { WorkbenchTarget, WorkbenchSnapshot } from './workbench';
+import type { SchemaCompareInput, SchemaCompareResult, SchemaComparePreviewInput, SchemaComparePreview } from './schemaCompare';
 export type CellValue = string | number | boolean | null | { type: 'binary'; base64: string };
 export type DataRow = Record<string, CellValue>;
 export type ObjectKind = 'table' | 'view' | 'procedure' | 'function' | 'trigger' | 'event';
@@ -127,6 +128,9 @@ export interface CommandMap {
   'table.apply': { input: { connectionId: string; database: string; table: string; changes: RowChange[]; taskId: string }; output: { affectedRows: number } };
   'schema.preview': { input: { connectionId: string; design: TableDesign }; output: SqlPreview };
   'schema.apply': { input: { connectionId: string; database: string; sql: string; taskId: string }; output: QueryOutcome };
+  'schema.compare': { input: SchemaCompareInput; output: SchemaCompareResult };
+  'schema.comparePreview': { input: SchemaComparePreviewInput; output: SchemaComparePreview };
+  'schema.compareRelease': { input: { snapshotId: string }; output: void };
   'schema.columns.get': { input: TableColumnGetInput; output: TableColumnGetOutput };
   'schema.columns.preview': { input: TableColumnPreviewInput; output: TableColumnPreviewOutput };
   'schema.columns.apply': { input: TableColumnApplyInput; output: TableColumnApplyOutput };

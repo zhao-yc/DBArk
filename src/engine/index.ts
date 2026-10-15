@@ -1,4 +1,6 @@
 import { randomUUID } from 'node:crypto';
+import { SchemaCompareTasks } from './schemaCompareTasks';
+import { readSchemaComparisonTarget } from './schemaCompare';
 import { open, rename, rm } from 'node:fs/promises';
 import { finished } from 'node:stream/promises';
 import { exportExcelFile, previewExcelSheet, readExcelRows } from './excelFiles';
@@ -64,6 +66,7 @@ export class Engine {
   private readonly columnPatches: TableColumnPatchTasks;
   private readonly indexPatches: TableIndexPatchTasks;
   private readonly foreignKeyPatches: TableForeignKeyPatchTasks;
+  private readonly schemaComparisons: SchemaCompareTasks;
   private readonly structureCache = new StructurePatchCache();
   private readonly structureExecutions = new StructureExecutionLocks();
   private readonly structureSearches=new StructureSearches();
@@ -73,6 +76,7 @@ export class Engine {
   constructor(private readonly emit: (event: TaskEvent) => void = () => undefined,options?:{dataSearchAcknowledgementMs?:number}) {
     this.dataSearches=new DataSearchTasks(emit,options?.dataSearchAcknowledgementMs,this.dataSearchRecords);
     this.resultFiles = new ResultFileTasks(emit);
+    this.schemaComparisons = new SchemaCompareTasks({ read: (target, taskId) => this.withIndependentTask(target.connectionId, taskId, (managed, control) => readSchemaComparisonTarget({ managed, ...control }, target), undefined, '只读结构比较', true, undefined, true), cancel: taskId => this.cancelTask(taskId) }, emit);
     this.columnPatches = new TableColumnPatchTasks({ run: (connectionId, taskId, action, options) => this.withIndependentTask(connectionId, taskId, (managed, control) => action({ managed, ...control }), { label: options.label, purpose: 'columns', progress: options.columnPatch, executionTarget: options.executionTarget }) }, undefined, this.structureCache);
     this.indexPatches = new TableIndexPatchTasks({ run: (connectionId, taskId, action, options) => this.withIndependentTask(connectionId, taskId, (managed, control) => action({ managed, ...control }), options) }, undefined, this.structureCache);
     this.foreignKeyPatches = new TableForeignKeyPatchTasks({ run: (connectionId, taskId, action, options) => this.withIndependentTask(connectionId, taskId, (managed, control) => action({ managed, ...control }), options) }, undefined, this.structureCache);
@@ -89,6 +93,7 @@ export class Engine {
         const changed = input.transportChanged || (previous && connectionTransportChanged(previous, next, { preserveMissingSecrets: false }));
         if (changed && (this.connectionUses.has(input.id) || [...this.sessions.values()].some(session => session.connectionId === input.id) || [...this.tasks.values()].some(task => task.managed.profile.id === input.id))) throw new Error('该连接仍有打开的会话或正在执行的操作，请先关闭相关标签页并等待任务完成，再修改地址或认证配置；现有任务未被取消');
         if (changed || !previous) this.profiles.delete(input.id);
+        await this.schemaComparisons.close(input.id);
         this.structureCache.release(input.id);
         this.structureSearches.releaseConnection(input.id);
         this.dataSearchRecords.releaseConnection(input.id);
@@ -104,7 +109,18 @@ export class Engine {
         const managed = await connect(profile);
         try { this.profiles.set(profile.id, profile); return managed.status; } finally { await managed.close(); }
       });
+      case 'schema.compare': {
+        for (const [profile, target] of [[input.sourceProfile, input.source], [input.targetProfile, input.target]]) {
+          if (!profile || profile.id !== target.connectionId) throw new Error('主进程未提供有效结构比较连接配置');
+          if (!this.profiles.has(profile.id)) this.profiles.set(profile.id, profile);
+        }
+        if (this.tasks.has(input.taskId) || this.independentTasks.has(input.taskId)) throw new Error('任务编号已使用');
+        return this.withConnectionUse(input.source.connectionId, () => this.withConnectionUse(input.target.connectionId, () => this.schemaComparisons.compare({ taskId: input.taskId, source: input.source, target: input.target }, input.connectionRevision)));
+      }
+      case 'schema.comparePreview': return this.schemaComparisons.preview({ snapshotId: input.snapshotId, selections: input.selections }, input.connectionRevision);
+      case 'schema.compareRelease': return this.schemaComparisons.release(input.snapshotId);
       case 'connections.close': {
+        const comparisonCleanup = this.schemaComparisons.close(input.id);
         this.dataSearchRecords.releaseConnection(input.id);
         this.structureCache.release(input.id);
         this.structureSearches.releaseConnection(input.id);
@@ -112,7 +128,7 @@ export class Engine {
         connecting.forEach(task => task.controller.abort());
         const active = [...this.tasks.values()].filter(task => task.managed.profile.id === input.id);
         const independent = [...this.independentTasks].filter(([, task]) => task.connectionId === input.id);
-        const cancellations = await Promise.allSettled([...active.map(task => this.cancelTask(task.id)), ...independent.map(([id]) => this.cancelTask(id))]);
+        const cancellations = await Promise.allSettled([comparisonCleanup, ...active.map(task => this.cancelTask(task.id)), ...independent.map(([id]) => this.cancelTask(id))]);
         await Promise.all([...connecting.map(task => task.done), ...active.map(task => task.done), ...independent.map(([, task]) => task.done)]);
         for (const [id, session] of this.sessions) if (session.connectionId === input.id) { await session.managed.close(); this.sessions.delete(id); }
         this.profiles.delete(input.id);
@@ -290,11 +306,12 @@ export class Engine {
   async closeAll(): Promise<void> {
     this.closing = true;
     this.excelConnecting.forEach(task => task.controller.abort());
+    const comparisonCleanup = this.schemaComparisons.close();
     this.structureCache.release();
     const independent = [...this.independentTasks];
     const active = [...this.tasks.values()];
     const fileCleanup = Promise.all([this.resultFiles.closeAll(), this.excelReads.closeAll()]);
-    const cancellations = await Promise.allSettled([...active.map(task => this.cancelTask(task.id)), ...independent.map(([id]) => this.cancelTask(id))]);
+    const cancellations = await Promise.allSettled([comparisonCleanup, ...active.map(task => this.cancelTask(task.id)), ...independent.map(([id]) => this.cancelTask(id))]);
     await Promise.all([...active.map(task => task.done), ...independent.map(([, task]) => task.done)]);
     await fileCleanup;
     // 首个 await 之前已进入的建连也必须收尾，避免退出后迟到注册会话。
@@ -357,9 +374,9 @@ export class Engine {
   }
 
   /** 独立任务从建连前登记，到服务器及本地连接收尾后才释放编号和配置锁。 */
-  private async withIndependentTask<T>(connectionId: string, taskId: string, action: (managed: ManagedConnection, control: Omit<StructureTaskContext, 'managed'>) => Promise<T>, options?: StructureTaskOptions, readLabel?:string, strictRead=false,readDetail?:()=>Partial<TaskEvent>): Promise<T> {
+  private async withIndependentTask<T>(connectionId: string, taskId: string, action: (managed: ManagedConnection, control: Omit<StructureTaskContext, 'managed'>) => Promise<T>, options?: StructureTaskOptions, readLabel?:string, strictRead=false,readDetail?:()=>Partial<TaskEvent>, quiet=false): Promise<T> {
     return this.withConnectionUse(connectionId, async () => {
-      if (this.closing || !taskId || this.tasks.has(taskId) || this.independentTasks.has(taskId) || this.resultFiles.has(taskId) || this.excelReads.has(taskId) || this.excelConnecting.has(taskId)) throw new Error('任务编号为空或任务已在执行');
+      if (this.closing || !taskId || this.tasks.has(taskId) || this.schemaComparisons.has(taskId) || this.independentTasks.has(taskId) || this.resultFiles.has(taskId) || this.excelReads.has(taskId) || this.excelConnecting.has(taskId)) throw new Error('任务编号为空或任务已在执行');
       const profile = this.profile(connectionId);
       // 字段、索引及后续外键执行共用资源集合，不能在重核与关闭之间并行修改相关父表。
       const executionTargets = [...(options?.executionTarget ? [options.executionTarget] : []), ...(options?.executionTargets ?? [])];
@@ -371,7 +388,8 @@ export class Engine {
       this.independentTasks.set(taskId, task);
       const label = options?.label ?? readLabel ?? '读取关联记录';
       const detail = () => options ? (options.purpose === 'indexes' ? { indexPatch: { ...options.progress } } : options.purpose === 'foreignKeys' ? { foreignKeyPatch: { ...options.progress } } : { columnPatch: { ...options.progress } }) : readDetail?.()??{};
-      const report = () => this.emit({ taskId, status: 'running', progress: 0, message: label, ...detail() });
+      const send = (event: TaskEvent) => { if (!quiet) this.emit(event); };
+      const report = () => send({ taskId, status: 'running', progress: 0, message: label, ...detail() });
       const checkCancelled = () => { if (task.cancelRequested || controller.signal.aborted) throw new Error('任务已取消；已执行的结构或数据变更不会撤销'); };
       const commandStarted = (): (() => void) => {
         checkCancelled();const generation=task.generation=(task.generation??0)+1;task.commandInFlight=true;task.stopPending=undefined;
@@ -403,7 +421,7 @@ export class Engine {
       const status = task.cancelError ? 'failed' : failure ? ((controller.signal.aborted || task.cancelRequested) && !knownComplete ? 'cancelled' : 'failed') : 'completed';
       const message=failure ? (options ? `${label}未全部完成；${knownComplete ? 'DDL 已完成，不要重复执行，请核对最新定义及资源状态' : options.progress.ddlSubmitted ? 'DDL 可能已执行，请核对最新定义；未自动重放' : '尚未发送 DDL'}` : this.errorMessage(failure)) : `${label}完成`;
       this.dataSearches.observe(taskId,status,message);
-      this.emit({ taskId, status, progress: failure ? 0 : 100, message:readDetail?`${label}${status==='completed'?'完成':status==='cancelled'?'已取消':'失败'}`:message, ...detail() });
+      send({ taskId, status, progress: failure ? 0 : 100, message:readDetail?`${label}${status==='completed'?'完成':status==='cancelled'?'已取消':'失败'}`:message, ...detail() });
       if (failure) throw failure;
       return result;
     });
@@ -550,6 +568,7 @@ export class Engine {
     const connecting = this.excelConnecting.get(id);
     if (connecting) { connecting.controller.abort(); await connecting.done; return; }
     if (this.excelReads.has(id)) return this.excelReads.cancel(id);
+    if (this.schemaComparisons.has(id)) return this.schemaComparisons.cancel(id);
     const independent = this.independentTasks.get(id);
     if (independent) {
       if (independent.actionSettled) { await independent.done; return; }

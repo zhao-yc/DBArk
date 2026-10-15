@@ -4,6 +4,7 @@ import type { Command } from './contracts';
 export const publicCommands: Record<Command, true> = {
   'workbench.get': true, 'workbench.save': true, 'workbench.resolve': true, 'workbench.copyUri': true,
   'table.preferences.get': true, 'table.preferences.save': true, 'table.preferences.reset': true,
+  'schema.compare': true, 'schema.comparePreview': true, 'schema.compareRelease': true,
   'app.info': true, 'app.setDirty': true,
   'connections.export': true, 'connections.importPreview': true, 'connections.importApply': true,
   'connections.list': true, 'connections.save': true, 'connections.delete': true, 'connections.test': true, 'connections.open': true, 'connections.close': true,

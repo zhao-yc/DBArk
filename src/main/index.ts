@@ -134,6 +134,8 @@ async function dispatch(command: Command, input: any): Promise<unknown> {
   const requestConnectionId = structureToken?.connectionId ?? input.connectionId ?? sessions.get(input.sessionId)?.connectionId ?? (command.startsWith('connections.') ? input.id : undefined);
   if (structureCommand && shuttingDown) throw new Error('客户端正在退出，不能开始结构操作');
   connectionConfig.assertAvailable(requestConnectionId);
+  if (command.startsWith('schema.compare') && shuttingDown) throw new Error('客户端正在退出，不能开始结构比较');
+  if (command === 'schema.compare') { connectionConfig.assertAvailable(input.source.connectionId); connectionConfig.assertAvailable(input.target.connectionId); }
   switch (command) {
     case 'workbench.get': return store.workbench();
     // 主进程只写入由严格对象身份生成的链接，不开放任意剪贴板读写权限。
@@ -155,6 +157,7 @@ async function dispatch(command: Command, input: any): Promise<unknown> {
         }
       });
     }
+    case 'schema.compare': input = { ...input, sourceProfile: store.resolveConnection(input.source.connectionId), targetProfile: store.resolveConnection(input.target.connectionId) }; break;
     case 'search.structure':case 'search.structureContinue':case 'search.dataStart':case 'search.recordRead':
       if(shuttingDown)throw Error('客户端正在退出，不能开始搜索');
       input={...input,profile:store.resolveConnection(input.connectionId)};break;
@@ -267,6 +270,10 @@ async function dispatch(command: Command, input: any): Promise<unknown> {
     connectionConfig.assertAvailable(requestConnectionId);
     // 令牌目标只来自可信引擎输出；修订在投递前同步读取，客户端不能注入或覆盖。
     if (structureCommand && command !== structurePrefix + 'release') input = { ...input, connectionRevision: store.connectionRevision() };
+    if (command.startsWith('schema.compare')) {
+      input = { ...input, connectionRevision: store.connectionRevision() };
+      if (command === 'schema.compare') { connectionConfig.assertAvailable(input.source.connectionId); connectionConfig.assertAvailable(input.target.connectionId); }
+    }
     if (taskId) preparingTasks.delete(taskId);
     sentToEngine = true;
     const result = command==='search.savedQueries'?await savedQuerySearches.start(input):command==='search.savedQueriesContinue'?await savedQuerySearches.next(input):await broker.request(command, input);
