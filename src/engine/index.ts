@@ -11,6 +11,7 @@ import { connect, execute, type ManagedConnection } from './connection';
 import * as metadata from './metadata';
 import { completionMetadata } from './completionMetadata';
 import type {CompletionMetadataInput} from '../shared/sqlCompletion';
+import {completionSessionState} from './completionSession';
 import { csvCell, csvHeader, encodingName, previewFile, readRecords, readText } from './files';
 import { ResultFileTasks } from './resultFileTasks';
 import { TableColumnPatchTasks } from './tableColumnPatchTasks';
@@ -136,6 +137,11 @@ export class Engine {
         if (!session) throw new Error('会话不存在，请重新打开标签页');
         const { managed } = session;
         return { transactionOpen: managed.serverStatus !== undefined && (managed.serverStatus & 1) !== 0, transactionKnown: managed.serverStatus !== undefined && managed.transactionStateKnown !== false, broken: managed.broken || managed.serverStatus === undefined };
+      }
+      case 'query.completionState': {
+        // 只读缓存不排队、不建连、不查询，不能改变ROW_COUNT、警告、事务或临时表。
+        const session=this.sessions.get(input.sessionId);if(!session)throw new Error('会话不存在，请重新打开标签页');
+        return completionSessionState(session.managed,session.busy);
       }
       case 'query.executeParameterized': return this.withSession(input.sessionId, managed => this.runTask(input.taskId, managed, '执行参数查询', task => {
         if (!Array.isArray(input.parameters)) throw new Error('参数查询必须提供参数列表');

@@ -33,10 +33,16 @@
 
 模式未知时分别扫描 ANSI_QUOTES 与 NO_BACKSLASH_ESCAPES 的四种组合，只在当前语句和编辑范围一致时继续。字符串、注释、执行注释、无法确认的引号和超预算输入停止建议；文本仍可编辑。未闭合引用名仅在文档末尾允许替换，避免吞掉后方 SQL。跨行名称暂不生成 Monaco 替换。
 
-本批尚未把用户会话的协议缓存模式、USE 后的默认库或临时表定义接入补全。带歧义双引号的输入会保守停止；目录仍按查询标签所选库解释未限定物理表。因此 **USE 切库后的默认目录语义必须完善并验收后，才能发布本批预览**。临时对象补全、选择列别名在 ORDER/GROUP/HAVING 的作用域、LATERAL、窗口/例程局部名称、字符串形式的列别名和完整语法错误恢复继续保留缺项。任意复杂 SQL 不能仅凭第三方 AST 的 accessible 标志承诺已支持。
+第二检查点已将用户会话的协议模式和 USE 后默认库接入补全及面包屑。新连接在原有初始化读取中同时取得 DATABASE()，启用默认库名称跟踪；后续 `query.completionState` 只读内存，不建连、不增加 SQL、不改变 ROW_COUNT、警告、事务或临时表。ANSI_QUOTES/NBE 仅在缓存可靠时交给 Worker；忙碌、断开和错误状态不交付过期模式。未知模式仍保留四种组合的一致性扫描。
 
-补全压缩、更多快捷工作流及其它驱动属于 Q01 后续子能力。SSH、完整旧流程、安装包、三平台原生及公开文件仍需独立验证。覆盖清单维持“部分”，不以本批 SQL 入口代替全部工作包。
+默认库的 null 表示已确认没有默认库，databaseKnown=false 表示缺少可信状态。跟踪关闭后的 USE、没有名称报告的 CALL/EXECUTE/删除库等操作会使旧库失效，恢复跟踪本身不会恢复真值；后续实际名称报告才能确认。未知时不退回标签初始库，仍可按显式库名补全，界面显示“默认库待确认”。两个标签按各自固定会话取模式与默认库，迟到结果仍受模型和版本约束。MySQL 与 MariaDB 的动态 USE 差异已通过协议研究和六实例实库核对。
+
+**临时对象补全、历史/保存查询、断线重建及标签恢复的会话库语义仍需完善后，才能发布本批预览。** 当前历史和保存查询仍采用标签初始库，不能把本次补全入口正确当作所有切库路径已完成。选择列别名在 ORDER/GROUP/HAVING 的作用域、LATERAL、窗口/例程局部名称、字符串形式列别名和完整语法错误恢复继续保留缺项。任意复杂 SQL 不能仅凭第三方 AST 的 accessible 标志承诺已支持。
+
+补全压缩、更多快捷工作流及其它驱动属于 Q01 后续子能力。初始代码 fede8aa 的三平台原生源码与真实安装各 23 离线项已通过、107 私网项跳过；后续会话缓存修改不在该 CI 范围。当前源码的 SSH、完整旧流程、安装、三平台原生及公开文件仍需分别验证。覆盖清单维持“部分”，不以本批 SQL 入口代替全部工作包。
 
 实现参考 [MySQL 标识符](https://dev.mysql.com/doc/refman/8.4/en/identifiers.html)、[限定标识符](https://dev.mysql.com/doc/refman/8.4/en/identifier-qualifiers.html)、[字符串](https://dev.mysql.com/doc/refman/8.4/en/string-literals.html)、[注释](https://dev.mysql.com/doc/refman/8.4/en/comments.html)，语法库采用 [dt-sql-parser](https://github.com/DTStack/dt-sql-parser/blob/main/README.md)。包内实际源码和测试已用于核对其适配边界；第三方许可见[依赖说明](../third-party-sql-completion.md)。本批证据来自 DBArk 自身测试，没有新增 Navicat 实际运行或反编译结论。
 
 分层原件和已知失败见[当前验收记录](../../tests/integration/acceptance-q01-sql-completion-20261015.md)。
+
+第二检查点的协议依据、96 次核心、7 项桌面及失败修正见[会话上下文验收](../../tests/integration/acceptance-q01-session-context-20261015.md)。

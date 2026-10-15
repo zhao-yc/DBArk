@@ -1,5 +1,6 @@
-import type {RowDataPacket} from 'mysql2/promise';
-import {test,expect,page,desktop,pageErrors} from './desktop-fixture';
+import {randomUUID} from 'node:crypto';
+import type {Connection,RowDataPacket} from 'mysql2/promise';
+import {test,expect,page,desktop,pageErrors,closed,answerDialogs,quitDesktop} from './desktop-fixture';
 import {enabled,isolatedDatabase,openDatabaseQuery,executeSql,modifier} from './live-helpers';
 
 // 真连接表单填写内存凭据，关闭轨迹；数据库、编辑器、Worker和IPC均使用实际产物。
@@ -18,6 +19,8 @@ async function expectSql(source:string){await expect.poll(()=>page.evaluate(asyn
 async function choose(label:string){await page.keyboard.press('Control+Space');const widget=page.locator('.suggest-widget.visible');await expect(widget.locator('.monaco-list-row.focused')).toContainText(label,{timeout:10000});await page.keyboard.press('Enter');await expect(widget).toHaveCount(0);}
 /** 离线查询不可连接，CTE显式投影仍应通过安装包内Worker提供建议。 */
 async function offlineQuery(){await page.locator('.app-commandbar').getByRole('button',{name:'新建连接',exact:true}).click();const modal=page.getByRole('dialog',{name:'新建连接',exact:true});await modal.getByLabel('连接名称',{exact:true}).fill('补全离线验收');await modal.getByLabel('主机地址',{exact:true}).fill('127.0.0.1');await modal.getByLabel('端口',{exact:true}).fill('1');await modal.getByLabel('用户名',{exact:true}).fill('offline');await modal.getByRole('button',{name:'保存连接',exact:true}).click();await page.locator('.app-commandbar').getByRole('button',{name:'新建查询',exact:true}).click();await page.getByRole('dialog',{name:'新建查询',exact:true}).getByRole('button',{name:'打开查询',exact:true}).click();await expect(query().locator('.monaco-editor')).toBeVisible();}
+/** 第二库也使用唯一隔离前缀，先退出本例应用释放会话，再精确清理。 */
+async function extraDatabase(observer:Connection,body:(database:string)=>Promise<void>){const database='dbark_colperm_'+randomUUID().replaceAll('-','').slice(0,12);await observer.query(`CREATE DATABASE \`${database}\``);try{await body(database);}finally{if(!closed){await answerDialogs([1,1]);await quitDesktop();}if(!/^dbark_colperm_[a-f0-9]{12}$/.test(database))throw Error('拒绝清理其它库');await observer.query(`DROP DATABASE IF EXISTS \`${database}\``);const[rows]=await observer.query<RowDataPacket[]>('SELECT SCHEMA_NAME FROM information_schema.SCHEMATA WHERE SCHEMA_NAME=?',[database]);expect(rows).toHaveLength(0);}}
 
 test('离线语义补全：CTE投影、完整范围替换、键盘接受和撤销，不执行SQL',async({},info)=>{
   await offlineQuery();const original=await atCaret('WITH q AS (SELECT 1 AS offline_column) SELECT q.off|suffix FROM q');await choose('offline_column');await expectSql('WITH q AS (SELECT 1 AS offline_column) SELECT q.`offline_column` FROM q');await page.screenshot({path:info.outputPath('offline-completion.png')});await page.keyboard.press(`${modifier}+Z`);await expectSql(original);
@@ -54,9 +57,30 @@ test.describe('200隔离实库：Monaco语义补全',()=>{
       await executeSql('CREATE TEMPORARY TABLE marker(v BIGINT);INSERT INTO marker VALUES(9007199254740993);BEGIN;INSERT INTO subject(id,note) VALUES(1,\'尚未提交\');SELECT CONNECTION_ID() AS original_id,v FROM marker');
       // 多语句默认显示首个DDL结果，单独读取快照后才能比较真实会话编号和精确BIGINT。
       await executeSql('SELECT CONNECTION_ID() AS original_id,v FROM marker');
-      const before=await query().locator('.result-body').innerText();await atCaret('SELECT s.no| FROM subject s');await choose('note');
+      await expect(query().locator('.result-body')).toContainText('9007199254740993');const before=await query().locator('.result-body').innerText();await atCaret('SELECT s.no| FROM subject s');await choose('note');
       const[rows]=await observer.query<RowDataPacket[]>(`SELECT COUNT(*) AS n FROM \`${database}\`.subject`);expect(Number(rows[0].n)).toBe(0);await expect(query().getByRole('button',{name:'回滚',exact:true})).toBeEnabled();
-      await executeSql('SELECT CONNECTION_ID() AS original_id,v FROM marker');expect(await query().locator('.result-body').innerText()).toBe(before);await query().getByRole('button',{name:'回滚',exact:true}).click();const[remaining]=await observer.query<RowDataPacket[]>(`SELECT COUNT(*) AS n FROM \`${database}\`.subject`);expect(Number(remaining[0].n)).toBe(0);
+      await executeSql('SELECT CONNECTION_ID() AS original_id,v FROM marker');await expect.poll(()=>query().locator('.result-body').innerText()).toBe(before);await query().getByRole('button',{name:'回滚',exact:true}).click();const[remaining]=await observer.query<RowDataPacket[]>(`SELECT COUNT(*) AS n FROM \`${database}\`.subject`);expect(Number(remaining[0].n)).toBe(0);
     },info);
+  });
+  test('USE切库后的面包屑与字段采用真实默认库，已知ANSI模式支持双引号编辑',async({},info)=>{
+    test.setTimeout(120000);await isolatedDatabase(async({observer,database})=>extraDatabase(observer,async other=>{
+      await observer.query(`CREATE TABLE \`${database}\`.subject(a_column INT)`);await observer.query(`CREATE TABLE \`${other}\`.subject(b_column INT)`);await openDatabaseQuery(database);await executeSql(`USE \`${other}\``);await expect(query().getByLabel('当前查询默认库',{exact:true})).toHaveText(other);await atCaret('SELECT s.b_| FROM subject s');await choose('b_column');await expectSql('SELECT s.`b_column` FROM subject s');
+      const settings=await page.evaluate(()=>window.dbark.invoke('settings.get',{}));expect(settings.tabs.find(tab=>tab.id===settings.activeTabId)?.database).toBe(database);
+      await executeSql(`USE \`${database}\`;SET SESSION sql_mode='ANSI_QUOTES,NO_BACKSLASH_ESCAPES'`);await expect(query().getByLabel('当前查询默认库',{exact:true})).toHaveText(database);await atCaret('SELECT "s"."a_|suffix" FROM subject "s"');await choose('a_column');await expectSql('SELECT "s".`a_column` FROM subject "s"');await page.screenshot({path:info.outputPath('session-mode-completion.png')});
+    }),info);
+  });
+  test('跟踪关闭后默认库未知，不回退旧库；显式来源可用，通知恢复后重新补全',async({},info)=>{
+    test.setTimeout(120000);await isolatedDatabase(async({observer,database})=>extraDatabase(observer,async other=>{
+      await observer.query(`CREATE TABLE \`${database}\`.subject(a_column INT)`);await observer.query(`CREATE TABLE \`${other}\`.subject(b_column INT)`);await openDatabaseQuery(database);await executeSql(`SET SESSION session_track_system_variables='';SET SESSION session_track_schema=OFF;USE \`${other}\``);await expect(query().getByLabel('当前查询默认库',{exact:true})).toHaveText('默认库待确认');
+      await atCaret('SELECT s.| FROM subject s');await page.keyboard.press('Control+Space');await expect(query().getByLabel('SQL 补全状态',{exact:true})).toHaveText('默认库待确认');await expect(page.locator('.suggest-widget.visible .monaco-list-row')).toHaveCount(0);
+      await atCaret(`SELECT s.b_| FROM \`${other}\`.subject s`);await choose('b_column');await expectSql(`SELECT s.\`b_column\` FROM \`${other}\`.subject s`);
+      await executeSql(`SET SESSION session_track_schema=ON;SET SESSION session_track_system_variables='sql_mode,session_track_schema,session_track_system_variables';USE \`${database}\``);await expect(query().getByLabel('当前查询默认库',{exact:true})).toHaveText(database);await atCaret('SELECT s.a_| FROM subject s');await choose('a_column');await expectSql('SELECT s.`a_column` FROM subject s');
+    }),info);
+  });
+  test('两个查询标签保留不同默认库和模式，切换标签不串用旧模型候选',async({},info)=>{
+    test.setTimeout(120000);await isolatedDatabase(async({observer,database})=>extraDatabase(observer,async other=>{
+      await observer.query(`CREATE TABLE \`${database}\`.subject(a_column INT)`);await observer.query(`CREATE TABLE \`${other}\`.subject(b_column INT)`);await openDatabaseQuery(database);await executeSql(`USE \`${other}\`;SET SESSION sql_mode='ANSI_QUOTES'`);await openDatabaseQuery(database);await executeSql('SELECT 1');const tabs=page.locator('.tab-strip .tab-select');await expect(tabs).toHaveCount(2);
+      await expect(query().getByLabel('当前查询默认库',{exact:true})).toHaveText(database);await atCaret('SELECT s.a_| FROM subject s');await choose('a_column');await tabs.nth(0).click();await expect(query().getByLabel('当前查询默认库',{exact:true})).toHaveText(other);await atCaret('SELECT "s".b_| FROM subject "s"');await choose('b_column');await expectSql('SELECT "s".`b_column` FROM subject "s"');await tabs.nth(1).click();await expectSql('SELECT s.`a_column` FROM subject s');await expect(query().getByLabel('当前查询默认库',{exact:true})).toHaveText(database);
+    }),info);
   });
 });
