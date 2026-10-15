@@ -6,9 +6,10 @@ import { basename, dirname, join, resolve } from 'node:path';
 import { parse } from 'csv-parse';
 import { parse as parseCsv } from 'csv-parse/sync';
 import iconv from 'iconv-lite';
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { Engine } from '../../src/engine';
-import { connect, execute, type ManagedConnection } from '../../src/engine/connection';
+import { execute, type ManagedConnection } from '../../src/engine/connection';
+import * as connectionDriver from '../../src/engine/connection';
 import { identifier } from '../../src/engine/sql';
 import type { ConnectionProfile, QueryOutcome, TaskEvent } from '../../src/shared/contracts';
 import { queryStreamExportLimits, type QueryExportProgress, type QueryStreamExportInput, type QueryStreamExportOutput } from '../../src/shared/queryStreamExport';
@@ -26,7 +27,61 @@ const profile: ConnectionProfile = {
 };
 const events: TaskEvent[] = [];
 const engine = new Engine(event => events.push(event));
-let observer: ManagedConnection | undefined, sessionId = '', directory = '', created = false;
+let observer: ManagedConnection | undefined, sessionId = '', directory = '', databaseAttempted = false, restoreConnections: (() => void) | undefined;
+const threadIds = new Set<number>();
+
+/** 只在真实connect成功返回后取物理线程；数据库为空的基础/探测连接同样登记，不按DB筛选。 */
+function recordConnection(managed: ManagedConnection): void {
+  const threadId = managed.connection.threadId;
+  if (!Number.isSafeInteger(threadId) || !threadId || threadId < 1) throw new Error('未取得真实连接线程ID');
+  threadIds.add(threadId);
+}
+
+/** 清理每一步独立尝试，保留第一个原始错误；线程核对、精确删库和目录证据不能互相跳过。 */
+async function cleanupQueryStreamFixture(): Promise<void> {
+  const failures: unknown[] = [];
+  async function attempt(action: () => Promise<unknown>): Promise<void> { try { await action(); } catch (error) { failures.push(error); } }
+  try {
+    await attempt(() => engine.closeAll());
+    const control = observer;
+    await attempt(async () => {
+      if (!control) throw new Error('观察连接缺失，无法核对本例实际线程');
+      const ownId = control.connection.threadId, ids = [...threadIds].filter(id => id !== ownId);
+      expect(threadIds.has(ownId!)).toBe(true);
+      if (ids.length) {
+        // 钩子没有currentTest，保持同5秒/50毫秒期限，以真实PROCESSLIST按ID核零，不能使用DB过滤。
+        await vi.waitFor(async () => expect((await execute<Record<string, unknown>[]>(control, 'SELECT ID FROM information_schema.PROCESSLIST WHERE ID IN (' + ids.map(() => '?').join(',') + ')', ids)).rows).toHaveLength(0), { timeout: 5000, interval: 50 });
+      }
+      console.log(JSON.stringify({ 验收说明: 'Q05真实connect返回线程逐ID释放', 实际非观察线程数: ids.length, 残留数: 0 }));
+    });
+    await attempt(async () => {
+      if (!databaseAttempted) return;
+      if (!/^dbark_stream_\d+_[0-9a-f]{8}$/.test(database)) throw new Error('拒绝清理非本例流式导出数据库');
+      if (!control) throw new Error('观察连接缺失，无法精确清理本例库');
+      // 即使线程核对失败仍尝试本例DROP；限制观察连接的元数据锁等待，不能让失败清理永久挂住finally。
+      await execute(control, 'SET SESSION lock_wait_timeout=5');
+      await execute(control, `DROP DATABASE IF EXISTS ${identifier(database)}`);
+    });
+    await attempt(async () => {
+      if (!databaseAttempted) return;
+      if (!control) throw new Error('观察连接缺失，无法核对本例库残留');
+      expect((await execute<Record<string, unknown>[]>(control, 'SELECT SCHEMA_NAME FROM information_schema.SCHEMATA WHERE SCHEMA_NAME = ?', [database])).rows).toHaveLength(0);
+    });
+  } finally {
+    try { await attempt(async () => { await observer?.close({ strict: true }); }); }
+    finally {
+      try { await attempt(async () => { restoreConnections?.(); }); }
+      finally { await attempt(async () => {
+        if (!directory) return;
+        const absolute = resolve(directory);
+        if (dirname(absolute) !== resolve(tmpdir()) || !/^dbark-q05-stream-[a-zA-Z0-9]+$/.test(basename(absolute))) throw new Error('拒绝清理未知临时目录');
+        await rm(absolute, { recursive: true, force: true });
+      }); }
+    }
+  }
+  if (failures.length === 1) throw failures[0];
+  if (failures.length > 1) throw new AggregateError(failures, 'Q05实库夹具多项收尾失败，首个原始错误已保留', { cause: failures[0] });
+}
 type JsonRowResult = { kind: 'rows'; resultOrdinal: number; statementOrdinal: number; rowResultOrdinal: number; columns: { position: number; name: string; exportName: string; type: string }[]; rows: Record<string, unknown>[]; rowsWritten: number; warningCount?: number };
 type JsonStatusResult = { kind: 'status'; resultOrdinal: number; statementOrdinal: number; affectedRows: number; insertId: string; warningCount: number; rowsWritten: number };
 type JsonDocument = { format: string; version: number; results: (JsonRowResult | JsonStatusResult)[] };
@@ -63,8 +118,24 @@ async function serverIsRunning(threadId: number, fragment: string): Promise<bool
 describe.skipIf(!enabled)('远程完整 SQL 流式导出', () => {
   beforeAll(async () => {
     directory = await mkdtemp(join(tmpdir(), 'dbark-q05-stream-'));
-    observer = await connect(profile);
-    await execute(observer, `CREATE DATABASE ${identifier(database)} CHARACTER SET utf8mb4`); created = true;
+    // 透传原函数与全部参数，不替换驱动或真实结果；Engine基础连接也经过同一模块入口。
+    const connect = connectionDriver.connect;
+    const recording = vi.spyOn(connectionDriver, 'connect').mockImplementation(async (...args: Parameters<typeof connect>) => {
+      const managed = await connect(...args);
+      try { recordConnection(managed); }
+      catch (error) {
+        // 观察断言不能使刚返回、尚未交给调用方的真实连接失去关闭者。
+        try { await managed.close({ strict: true }); }
+        catch (closing) { throw new AggregateError([error, closing], '线程取证失败且关闭连接失败', { cause: error }); }
+        throw error;
+      }
+      return managed;
+    });
+    restoreConnections = () => recording.mockRestore();
+    observer = await connectionDriver.connect(profile);
+    const ownId = Number((await execute<{ id: number | string }[]>(observer, 'SELECT CONNECTION_ID() AS id')).rows[0].id); expect(ownId).toBe(observer.connection.threadId);
+    // CREATE返回未知也要清理本例唯一名称，不因执行成功后返回失败而遗留随机库。
+    databaseAttempted = true; await execute(observer, `CREATE DATABASE ${identifier(database)} CHARACTER SET utf8mb4`);
     await execute(observer, `USE ${identifier(database)}`);
     await execute(observer, 'CREATE TABLE stream_guard (id INT PRIMARY KEY, hits INT NOT NULL DEFAULT 0) ENGINE=InnoDB');
     await execute(observer, 'CREATE TABLE stream_float (id INT PRIMARY KEY, f FLOAT, d DOUBLE) ENGINE=InnoDB');
@@ -75,25 +146,7 @@ describe.skipIf(!enabled)('远程完整 SQL 流式导出', () => {
   });
   beforeEach(async () => { events.length = 0; sessionId = (await engine.handle('sessions.open', { connectionId: profile.id, database })).sessionId; });
   afterEach(async () => { if (sessionId) { await engine.handle('sessions.close', { sessionId }); sessionId = ''; } });
-  afterAll(async () => {
-    try { await engine.closeAll(); }
-    finally {
-      try {
-        if (created && observer) {
-          if (!/^dbark_stream_\d+_[0-9a-f]{8}$/.test(database)) throw new Error('拒绝清理非本例流式导出数据库');
-          await execute(observer, `DROP DATABASE ${identifier(database)}`);
-          expect((await execute(observer, 'SELECT SCHEMA_NAME FROM information_schema.SCHEMATA WHERE SCHEMA_NAME = ?', [database])).rows).toEqual([]);
-        }
-      } finally {
-        await observer?.close();
-        if (directory) {
-          const absolute = resolve(directory);
-          if (dirname(absolute) !== resolve(tmpdir()) || !/^dbark-q05-stream-[a-zA-Z0-9]+$/.test(basename(absolute))) throw new Error('拒绝清理未知临时目录');
-          await rm(absolute, { recursive: true, force: true });
-        }
-      }
-    }
-  });
+  afterAll(cleanupQueryStreamFixture);
 
   it('CSV容器单次CALL保留空集、重复名和终态，同物理会话事务不被文件提交', async () => {
     await execute(observer!, 'CREATE PROCEDURE csv_zip_proc() BEGIN SET @csv_zip_runs=@csv_zip_runs+1; INSERT INTO stream_guard VALUES(451,1); SELECT CONNECTION_ID() AS tid,@csv_zip_runs AS runs, value AS same_name,value+1 AS same_name FROM csv_zip_temp; SELECT 9 AS empty_value FROM DUAL WHERE 0; SELECT CAST(18446744073709551615 AS UNSIGNED) AS big_value,CAST(0.12345678901234567890 AS DECIMAL(30,20)) AS exact_value,CAST(\'2026-10-16 01:02:03.123456\' AS DATETIME(6)) AS moment,NULL AS missing,\'\' AS empty_text,UNHEX(\'0001FF\') AS bytes_value; END');

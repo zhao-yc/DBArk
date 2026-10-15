@@ -92,3 +92,29 @@ node node_modules/vitest/vitest.mjs run --config vitest.integration.config.ts te
 # 仅列出GUI用例，不启动Electron。
 node node_modules/@playwright/test/cli.js test tests/e2e/query-stream-export.spec.ts --list
 ```
+
+## 2026-10-16 线程收尾及Windows原生小样本检查准备
+
+本次后续提交仅改测试与此说明，产品`src`、配置和依赖均保持`625ca7b`不变；原21项核心实库用例与8项旧GUI加1项新GUI不删减。
+
+实库beforeAll观察`connectionDriver.connect`：原函数接收相同参数、实际返回同一个ManagedConnection后，记录其物理`connection.threadId`。没有按database筛选，默认库为空的基础/探测连接、查询会话、取消控制连接和独立退出用例连接都在同一集合。观察连接还用实际CONNECTION_ID核对驱动ID；观察断言失败时严格关闭尚未交给调用方的连接，不能因新增观察器引入泄漏。
+
+afterAll先尽力Engine.closeAll，再由仍存活的独立observer通过带参数的PROCESSLIST查询按所有已记录非observer线程ID核零，完全不使用DB列过滤。钩子使用vi.waitFor，期限仍为5秒、间隔50毫秒，不用钩子无currentTest的expect.poll。之后只对本例`dbark_stream_时间戳_8位随机`执行DROP DATABASE IF EXISTS，再读取SCHEMATA确认不存在。CREATE发送前即记录已尝试，返回不确定也清理唯一名称；观察连接的lock_wait_timeout为5秒，避免失败连接持锁使DROP永久阻塞finally。关闭、线程核对、DROP、目录证据分别尝试，最后严格关闭observer、恢复原connect并核验临时路径后清理；单错误抛回原对象，多错误用AggregateError保留首错误为cause。没有自动KILL其它线程，也不以强行关闭来冒充Engine释放成功。
+
+`tests/helpers/queryCsvZip.ts`新增Windows原生小包检查。只有**操作系统为win32且ROOT显式设置`DBARK_QUERY_CSV_NATIVE_ARCHIVE_CHECK=1`**才执行；普通实库开关不会隐式开启它。默认返回skipped且不启动外部程序。开启后只使用SystemRoot/System32/tar.exe绝对路径，通过execFile参数数组执行`-tf`列目录和逐entry的`-xOf ... -- 固定名称`解包到stdout；不经shell、不落盘展开、不从PATH选择其它tar。依据实际读取的[libarchive官方bsdtar手册](https://github.com/libarchive/libarchive/blob/master/tar/bsdtar.1)，-f指定归档，-x配-O输出解包字节。
+
+原生检查在既有独立ZIP64目录/CRC解码成功后运行，逐项比对原生目录顺序、完整字节与Node原生CRC。包文件至多16MiB、每entry至多8MiB、展开总量至多16MiB、至多201项，只有manifest.json和results/rows-001.csv至rows-200.csv固定名字可进入外部命令；较大文件继续单独流式验收。每次命令5秒期限并限定stdout/stderr缓冲。tar不存在、执行错误、额外警告、目录或字节不一致均明确失败，绝不退回“仅自解码已通过”来声称原生通过。输出仅含条目数、字节数和结果摘要；归档内容、路径及原始stderr不会打印。
+
+本轮只做非GUI类型与纯验证准备：原生命令控制单元中的execFile全部模拟，不能据此声称Windows系统tar已实际通过；没有加载凭据文件、连接200、启动Electron或操作剪贴板。实际原生小包与真实线程释放由统筹下一轮启用验证，也不代表真实跨4GiB/10GiB已验。
+
+实际纯验证为4个文件48项通过（原生命令控制15项、夹具故障注入7项、容器16项、既有流式文件10项），类型检查通过；核心实库仍为21项默认跳过，GUI仍只列出9项。`git diff 625ca7b -- src package.json pnpm-lock.yaml`为空。本次没有再次全量构建产品或宣称真实资源/原生解包已经验收。
+
+```powershell
+# 默认关闭；可以运行类型、纯单元及原21项默认跳过的实库准备。
+$env:DBARK_QUERY_CSV_NATIVE_ARCHIVE_CHECK = '0'
+node node_modules/vitest/vitest.mjs run tests/unit/query-csv-native-check.test.ts tests/unit/query-stream-fixture-cleanup.test.ts tests/unit/query-csv-archive.test.ts --maxWorkers=2
+node node_modules/typescript/bin/tsc --noEmit
+# 仅由ROOT在核对的win32环境显式启用；还需其自行配置已核对的实库开关和凭据。
+$env:DBARK_QUERY_CSV_NATIVE_ARCHIVE_CHECK = '1'
+# 沿用既有21项实库套件，或其中新增CSV容器小样本用例；成功ZIP会自动追加原生检查。
+```
