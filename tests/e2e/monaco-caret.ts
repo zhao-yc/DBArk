@@ -12,9 +12,12 @@ export async function positionMonacoCaret(marked:string):Promise<string>{
   // 全部可读格式留在主进程内存，不能只保存纯文本而丢失用户原有图片或富文本。
   await desktop.evaluate(async({clipboard,ClipboardItem})=>{
     const root=globalThis as ClipboardRoot;if(root.__dbarkMonacoCaretClipboard)throw Error('不能交叉占用光标测试剪贴板');
-    const entries=await Promise.all((await clipboard.read()).map(async item=>Object.fromEntries(await Promise.all(item.types.map(async type=>[type,await item.getType(type)])))));
-    root.__dbarkMonacoCaretClipboard={items:entries.filter(entry=>Object.keys(entry).length).map(entry=>new ClipboardItem(entry)),text:await clipboard.readText()};
+    // Electron空剪贴板也可返回types为空的item；两端只规范化这种空壳，保留有类型的零字节值。
+    const readable=(await clipboard.read()).filter(item=>item.types.length>0);
+    const entries=await Promise.all(readable.map(async item=>Object.fromEntries(await Promise.all(item.types.map(async type=>[type,await item.getType(type)])))));
+    root.__dbarkMonacoCaretClipboard={items:entries.map(entry=>new ClipboardItem(entry)),text:await clipboard.readText()};
   });
+  let operationFailed=false,operationError:unknown;
   try{
     await page.keyboard.press('Escape');await desktop.evaluate(({clipboard},value)=>clipboard.writeText(value),source);
     await page.locator('.query-tab:visible .monaco-editor').getByRole('textbox').focus();await page.keyboard.press(`${modifier}+A`);await page.keyboard.press(`${modifier}+V`);
@@ -30,17 +33,24 @@ export async function positionMonacoCaret(marked:string):Promise<string>{
       await page.keyboard.press('ArrowRight');
     }
     return source;
-  }finally{
-    const restored=await desktop.evaluate(async({clipboard})=>{
-      const root=globalThis as ClipboardRoot,saved=root.__dbarkMonacoCaretClipboard;if(!saved)throw Error('光标测试剪贴板快照丢失');
-      if(saved.items.length)await clipboard.write(saved.items);else clipboard.clear();const actual=await clipboard.read();let same=actual.length===saved.items.length;
-      for(let index=0;same&&index<saved.items.length;index++)for(const type of saved.items[index].types){
-        if(!actual[index].types.includes(type)){same=false;break;}
-        const before=await saved.items[index].getType(type),after=await actual[index].getType(type);
-        same&&='arrayBuffer'in before&&'arrayBuffer'in after?Buffer.from(await before.arrayBuffer()).equals(Buffer.from(await after.arrayBuffer())):JSON.stringify(before)===JSON.stringify(after);
-      }
-      same&&=await clipboard.readText()===saved.text;delete root.__dbarkMonacoCaretClipboard;return same;
-    });
-    expect(restored,'原剪贴板全部可读格式与纯文本必须恢复').toBe(true);
+  }catch(error){operationFailed=true;operationError=error;throw error;}finally{
+    try{
+      const restored=await desktop.evaluate(async({clipboard})=>{
+        const root=globalThis as ClipboardRoot,saved=root.__dbarkMonacoCaretClipboard;if(!saved)throw Error('光标测试剪贴板快照丢失');
+        if(saved.items.length)await clipboard.write(saved.items);else clipboard.clear();
+        const actual=(await clipboard.read()).filter(item=>item.types.length>0);let same=actual.length===saved.items.length;
+        for(let index=0;same&&index<saved.items.length;index++)for(const type of saved.items[index].types){
+          if(!actual[index].types.includes(type)){same=false;break;}
+          const before=await saved.items[index].getType(type),after=await actual[index].getType(type);
+          same&&='arrayBuffer'in before&&'arrayBuffer'in after?Buffer.from(await before.arrayBuffer()).equals(Buffer.from(await after.arrayBuffer())):JSON.stringify(before)===JSON.stringify(after);
+        }
+        same&&=await clipboard.readText()===saved.text;delete root.__dbarkMonacoCaretClipboard;return same;
+      });
+      expect(restored,'原剪贴板全部可读格式与纯文本必须恢复').toBe(true);
+    }catch(restoreError){
+      // cause让Playwright保留原定位异常链，errors同时保留两条完整异常对象。
+      if(operationFailed)throw new AggregateError([operationError,restoreError],'光标定位操作与剪贴板恢复均失败',{cause:operationError});
+      throw restoreError;
+    }
   }
 }
