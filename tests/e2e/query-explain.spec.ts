@@ -39,7 +39,11 @@ test.describe('原会话真实 JSON 执行计划', () => {
       await desktop.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(1024, 680));
       await page.screenshot({ path: info.outputPath('live-explain-minimum.png') });
       await executeSql('ROLLBACK; SELECT DATABASE() AS current_database,(SELECT active FROM customer WHERE id=1) AS active,(SELECT id FROM session_subject) AS temporary_id');
+      // 脚本第一结果是 ROLLBACK 的 OK 包，必须明确切到第二结果核对原会话数据。
+      await query().getByRole('button', { name: '结果 2', exact: true }).click();
       await expect(query().getByRole('grid')).toContainText(database); await expect(query().getByRole('grid')).toContainText('7');
+      await expect(query().getByRole('grid')).toContainText('1');
+      await expect(query().getByRole('button', { name: '提交', exact: true })).toBeDisabled();
     }, info);
   });
 });

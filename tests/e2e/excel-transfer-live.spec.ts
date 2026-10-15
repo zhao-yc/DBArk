@@ -38,7 +38,8 @@ test('200 隔离库 Excel 样本与完整流式导出、字段映射导入及精
     await context.observer.query(`CREATE TABLE ${q('excel_source')} ${definition}`);
     await context.observer.query(`CREATE TABLE ${q('excel_target')} ${definition}`);
     const parameters = Array.from({ length: 1201 }, (_, index) => [(18446744073709550000n + BigInt(index)).toString(), '123456789012345678.123456789012', '2026-10-15 10:20:30.123456', index === 0 ? null : index === 1 ? '' : index === 2 ? '\\N' : '=SUM(A1)', Buffer.from([0, 1, 255]), '18446744073709551615']).flat();
-    await context.observer.execute(`INSERT INTO ${q('excel_source')} VALUES ${Array.from({ length: 1201 }, () => '(?,?,?,?,?,CAST(? AS UNSIGNED))').join(',')}`, parameters);
+    // 夹具也显式按精确 DECIMAL 定型，不能在应用运行之前把 BIT64 最大值钳到有符号上限。
+    await context.observer.execute(`INSERT INTO ${q('excel_source')} VALUES ${Array.from({ length: 1201 }, () => '(?,?,?,?,?,CAST(CAST(? AS DECIMAL(20,0)) AS UNSIGNED))').join(',')}`, parameters);
     await openTable(context, 'excel_source');
     const samplePath = join(dataDir, '样本.xlsx'), sample = await excelDialog('export', samplePath);
     await expect(sample.getByRole('combobox', { name: '导出范围', exact: true })).toHaveValue('sample');

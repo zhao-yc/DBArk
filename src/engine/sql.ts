@@ -259,7 +259,9 @@ export function typedCellPlaceholder(column: ColumnInfo, value: CellValue): stri
   if (typeof value === 'number' && !Number.isSafeInteger(value)) throw new Error(`字段 ${column.name} 的 BIT 数值必须使用精确字符串或安全整数`);
   const text = typeof value === 'boolean' ? (value ? '1' : '0') : String(value);
   if (!/^\d+$/.test(text) || BigInt(text) > maximum) throw new Error(`字段 ${column.name} 的值必须在 BIT(${width}) 无符号整数范围内`);
-  return 'CAST(? AS UNSIGNED)';
+  // MySQL 8.4 已复现预处理参数先按有符号整数推断，最大 BIT64 因而钳到 2^63-1。
+  // 显式十进制定型必须在转无符号之前完成；仍传原始参数，不经过 JavaScript Number。
+  return 'CAST(CAST(? AS DECIMAL(20,0)) AS UNSIGNED)';
 }
 
 /** 类型只接收受支持的类型语法，不接收任意 SQL 片段。 */

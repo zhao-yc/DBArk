@@ -28,7 +28,7 @@ describe('BIT完整写入和乐观锁', () => {
     expect(typedCellPlaceholder(column, binary(String(valid)))).toContain('CONV'); expect(() => typedCellPlaceholder(column, binary(String(overflow)))).toThrow('位范围');
   });
   it('BIT(9)允许零填充且NULL保持NULL，无符号最大值无需Number', () => {
-    expect(typedCellPlaceholder({ ...bit, type: 'bit(9)' }, binary('0001'))).toContain('CONV'); expect(typedCellPlaceholder(bit, null)).toBe('?'); expect(typedCellPlaceholder(bit, '18446744073709551615')).toBe('CAST(? AS UNSIGNED)');
+    expect(typedCellPlaceholder({ ...bit, type: 'bit(9)' }, binary('0001'))).toContain('CONV'); expect(typedCellPlaceholder(bit, null)).toBe('?'); expect(typedCellPlaceholder(bit, '18446744073709551615')).toBe('CAST(CAST(? AS DECIMAL(20,0)) AS UNSIGNED)');
     expect(() => typedCellPlaceholder(bit, 9007199254740992)).toThrow('精确字符串'); expect(() => typedCellPlaceholder(bit, '18446744073709551616')).toThrow('范围'); expect(() => typedCellPlaceholder(bit, binary(''))).toThrow('缺少');
   });
 });
