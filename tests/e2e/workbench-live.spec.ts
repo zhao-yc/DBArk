@@ -25,7 +25,7 @@ test('实库对象树星标、成功打开与对象删除后链接失败', async
     // 收藏操作前后数据库定义原样不变，未触发结构写入。
     const [after] = await observer.query(`SHOW CREATE TABLE ${quote(database)}.${quote(table)}`); expect(after).toEqual(before);
     const shelf = page.getByRole('region', { name: '对象收藏', exact: true });
-    await shelf.getByRole('button', { name: table, exact: true }).click();
+    await shelf.getByRole('button').filter({ hasText: table }).click();
     await expect(page.locator('.table-tab:visible')).toBeVisible();
     await expect(page.locator('.table-tab:visible .error-box')).toHaveCount(0);
     const profilesBefore = await page.evaluate(() => window.dbark.invoke('connections.list', {}));

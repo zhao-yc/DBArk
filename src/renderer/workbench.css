@@ -1,7 +1,11 @@
 .workbench-shelf { padding: 4px 8px 10px; border-bottom: 1px solid var(--line); }
 .workbench-group-label { padding: 6px 10px 3px; color: var(--muted); font-size: 11px; overflow-wrap: anywhere; }
 .workbench-shelf-item { display: flex; align-items: center; gap: 7px; width: 100%; padding: 6px 10px; border: 0; background: transparent; text-align: left; }
-.workbench-shelf-item small { margin-left: auto; color: var(--muted); }
+.workbench-shelf-item > svg { flex-shrink: 0; align-self: flex-start; margin-top: 3px; }
+.workbench-shelf-identity { min-width: 0; flex: 1; }
+.workbench-shelf-name { display: block; overflow-wrap: anywhere; }
+.workbench-shelf-item small { display: flex; gap: 5px; align-items: flex-start; color: var(--muted); font-size: 10px; white-space: normal; overflow-wrap: anywhere; }
+.workbench-connection-color { width: 7px; height: 7px; border-radius: 50%; flex-shrink: 0; margin-top: 4px; }
 .workbench-manager { display: flex; flex-direction: column; gap: 12px; }
 .workbench-group-form, .workbench-item, .workbench-actions { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; }
 .workbench-group-form .field { flex: 1; min-width: 160px; }
