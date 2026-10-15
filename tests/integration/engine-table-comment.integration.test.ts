@@ -28,7 +28,11 @@ async function get(table: string): Promise<TableCommentGetOutput> { return engin
 async function preview(snapshot: TableCommentGetOutput, comment: string): Promise<TableCommentPreviewOutput> { return engine.handle('schema.tableComment.preview', { snapshotId: snapshot.snapshotId, comment, taskId: randomUUID(), connectionRevision: 1 }); }
 async function apply(value: TableCommentPreviewOutput, taskId = randomUUID(), revision = 1) { return engine.handle('schema.tableComment.apply', { previewToken: value.previewToken, acknowledgements: value.requiredAcknowledgements, taskId, connectionRevision: revision }); }
 /** 每例自建普通InnoDB表，表名仅来自本测试固定字面量。 */
-async function create(table: string, comment = '原说明') { await sql(`CREATE TABLE ${target(table)}(id BIGINT NOT NULL AUTO_INCREMENT,s VARCHAR(80) CHARACTER SET latin1 COLLATE latin1_bin DEFAULT NULL,g INT GENERATED ALWAYS AS (length(s)) STORED,note TEXT,PRIMARY KEY(id),KEY prefix_key(s(8)),FULLTEXT KEY ft(note)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin ROW_FORMAT=DYNAMIC COMMENT=${stringLiteral(comment)}`); }
+async function create(table: string, comment = '原说明') {
+  // 仅身份专用表显式声明note字符集，避免MySQL 8重建后补出声明；其它复杂用例仍覆盖隐式继承。
+  const note = table === 'changes' ? 'note TEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_bin' : 'note TEXT';
+  await sql(`CREATE TABLE ${target(table)}(id BIGINT NOT NULL AUTO_INCREMENT,s VARCHAR(80) CHARACTER SET latin1 COLLATE latin1_bin DEFAULT NULL,g INT GENERATED ALWAYS AS (length(s)) STORED,${note},PRIMARY KEY(id),KEY prefix_key(s(8)),FULLTEXT KEY ft(note)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin ROW_FORMAT=DYNAMIC COMMENT=${stringLiteral(comment)}`);
+}
 
 /** 独立观察连接保存实际DDL、原生编号与模式；不调用产品读取器，不改会话或服务器配置。 */
 async function observeRecreatedTable(stage: 'before' | 'after', snapshot: TableCommentGetOutput) {
