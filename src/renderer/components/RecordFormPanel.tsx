@@ -2,7 +2,10 @@ import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
 import type { DraftRow } from '../dataChanges';
 import { formatText } from '../locales/zh-CN';
 import { ownCell, rowEqual } from '../lib';
-import { adjacentRecordId, recordFieldOrder, recordFieldTooLarge, recordReadonlyReason, recordValueSummary, type RecordContext } from '../recordViews';
+import { adjacentRecordId, recordMetadataKey, recordTargetKey, recordFieldOrder, recordFieldTooLarge, recordReadonlyReason, recordValueSummary, type RecordContext, type RecordDraft } from '../recordViews';
+import { isBinaryCell } from '../binaryCell';
+import { BinaryCellViewer } from './BinaryCellViewer';
+import { binaryCellZh } from '../locales/binaryCell.zh-CN';
 import type { RecordViewController } from '../hooks/useRecordViews';
 import { recordViewZh as text } from '../locales/recordViews.zh-CN';
 import { recordProjectionZh as projectionText } from '../locales/recordProjections.zh-CN';
@@ -23,6 +26,11 @@ function localKeys(event: KeyboardEvent, stage: () => boolean, close: () => void
   else if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); close(); }
 }
 
+/** 图片与二进制展示缓存只绑定同一完整快照；待删除行可查看，写入仍由原有资格门控制。 */
+function binarySnapshotCurrent(row: DraftRow | undefined, draft: RecordDraft | null, context: RecordContext): boolean {
+  return !context.stale && !context.busy && !!row && !!draft && draft.target === recordTargetKey(context.target) && draft.metadata === recordMetadataKey(context.info) && draft.generation === context.generation && draft.connectionVersion === context.connectionVersion && draft.data === row.data && draft.original === row.original && draft.inserted === row.inserted;
+}
+
 /** 当前页侧面表单只有展示与缓冲，不拥有第二份页数据或数据库写路径。 */
 export function RecordFormPanel({ editor, context, rows, visibleKeys, onSelect }: { editor: RecordViewController; context: RecordContext; rows: DraftRow[]; visibleKeys: string[]; onSelect(rowId: string): void }) {
   const [showHidden, setShowHidden] = useState(false); const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set());
@@ -36,6 +44,7 @@ export function RecordFormPanel({ editor, context, rows, visibleKeys, onSelect }
   const keys = recordFieldOrder(context.info?.columns ?? [], visibleKeys, showHidden); const reason = recordReadonlyReason(context, row,editor.nodeInput?.columnName??editor.structureInput?.base.columnName);
   const previous = adjacentRecordId(rows, row?.id, -1), next = adjacentRecordId(rows, row?.id, 1);
   const status = !row ? text.empty : row.deleted ? text.deleted : row.inserted ? text.inserted : row.original && !rowEqual(row.original, row.data) ? text.staged : text.unchanged;
+  const binaryCurrent = binarySnapshotCurrent(row, editor.draft, context);
   return <aside className="record-form-panel" aria-label={text.title} onKeyDown={event => {
     // 树和只读全文均阻止事件落入网格；只有显式节点输入才有本地暂存快捷键。
     if ((editor.displayMode === 'tree' || editor.displayMode === 'json') && ['Delete', 'Enter'].includes(event.key)) event.stopPropagation();
@@ -56,7 +65,7 @@ export function RecordFormPanel({ editor, context, rows, visibleKeys, onSelect }
         <dl><dt>{text.current}</dt><dd tabIndex={0}>{recordValueSummary(value)}</dd>{row.original && <><dt>{text.original}</dt><dd tabIndex={0}>{recordValueSummary(ownCell(row.original, key))}</dd></>}<dt>{text.metadataDefault}</dt><dd>{column.defaultValue ?? text.missingDefault}</dd></dl>
         {fieldReason && <p className="muted small">{fieldReason}</p>}
         {tooLarge ? <p className="muted small">{text.fieldTooLarge}</p> : <button onClick={() => { if (expanded.has(key)) setExpanded(current => new Set([...current].filter(item => item !== key))); else { editor.expand(key); setExpanded(current => new Set([...current, key])); } }}>{expanded.has(key) ? text.collapseField : fieldReason ? text.viewField : text.editField}</button>}
-        {expanded.has(key) && input && <RecordValueEditor column={column} input={input} inserted={row.inserted} reason={fieldReason} focus={editor.focusKey === key} onChange={value => editor.change(key, value)}/>}
+        {expanded.has(key) && input && <RecordValueEditor column={column} input={input} inserted={row.inserted} reason={fieldReason} binaryStale={!binaryCurrent} focus={editor.focusKey === key} onChange={value => editor.change(key, value)}/>}
       </section>;
     })}</div> : editor.displayMode==='input' ? <div className="record-document-input"><p>{documentText.hint}</p><p className="muted small">{documentText.formatHint}</p><p className="muted small">{documentText.scope}</p>{editor.documentInput ? <textarea aria-label={documentText.label} className="record-document-editor" value={editor.documentInput.text} readOnly={!!reason} spellCheck={false} maxLength={2_097_152} onChange={event=>editor.documentInput&&editor.changeDocument(event.target.value,editor.documentInput)}/> : <p>{reason||documentText.unavailable}</p>}</div> : <><p className="record-projection-hint">{editor.displayMode==='tree'?nodeText.treeHint:projectionText.readonly}</p><div className="record-projection-workspace"><RecordReadonlyProjection row={row} draft={editor.draft} context={context} visibleKeys={visibleKeys} showHidden={showHidden} mode={editor.displayMode} onEdit={editor.openNode} onStructure={editor.openStructure}/>{editor.nodeInput&&<RecordJsonNodeEditor input={editor.nodeInput} reason={recordReadonlyReason(context,row,editor.nodeInput.columnName)} onChange={editor.changeNode} onClose={editor.closeNode}/>}{editor.structureInput&&<RecordJsonStructureEditor input={editor.structureInput} reason={reason} onChange={editor.changeStructure} onClose={editor.closeNode}/>}</div></>}
     {(editor.displayMode !== 'json') && <footer><ErrorBox message={editor.error}/><p className="muted small">{reason || text.readonlyHint}</p><p className="muted small">{text.stageHint}</p><span role="status">{editor.notice}</span>{(editor.displayMode!=='tree'||editor.nodeInput||editor.structureInput)&&<div className="record-actions"><button disabled={!editor.dirty || context.busy} onClick={editor.discard}>{text.discard}</button><button className="primary" disabled={!editor.dirty || !!reason} onClick={editor.stage}>{text.stage}</button></div>}</footer>}
@@ -69,10 +78,13 @@ export function RecordEditorDialogs({ editor, context, rows }: { editor: RecordV
   if (editor.cellKey === null || !editor.draft) return null;
   const key = editor.cellKey; const column = context.info?.columns.find(item => item.name === key); const row = rows.find(item => item.id === editor.draft!.rowId);
   const reason = recordReadonlyReason(context, row, key); const input = editor.draft.fields.get(key);
+  // 二进制缓存只跟随同一快照；待删除行仍可只读查看，不借用写入资格判断隐藏原值。
+  const binary = isBinaryCell(ownCell(editor.draft.data, key), column?.type);
+  const current = !binary || binarySnapshotCurrent(row, editor.draft, context);
   /** 快捷键和按钮共用同一次暂存；成功后关闭，校验失败保留输入与弹窗。 */
   function stageCell() { if (reason || !editor.dirty || !editor.stage()) return false; editor.closeCell(); return true; }
   return <Modal title={formatText(text.cellTitle, key)} onClose={editor.closeCell}><div className="modal-content" onKeyDown={event => localKeys(event, stageCell, editor.closeCell)}>
-    {column && input ? <RecordValueEditor column={column} input={input} inserted={!!row?.inserted} reason={reason} focus onChange={value => editor.change(key, value)}/> : <p>{recordValueSummary(ownCell(editor.draft.data, key))}</p>}
+    {!current ? <p role="alert">{text.changed}</p> : column && input ? <RecordValueEditor column={column} input={input} inserted={!!row?.inserted} reason={reason} focus onChange={value => editor.change(key, value)}/> : typeof ownCell(editor.draft.data, key) === 'object' && ownCell(editor.draft.data, key) !== null ? <><BinaryCellViewer value={ownCell(editor.draft.data, key)} reason={reason || binaryCellZh.editLimit}/><p className="muted small">{binaryCellZh.editLimit}</p></> : <p>{recordValueSummary(ownCell(editor.draft.data, key))}</p>}
     <ErrorBox message={editor.error}/><p className="muted small">{reason || text.stageHint}</p>
   </div><footer className="modal-footer"><button onClick={editor.closeCell}>{text.closeCell}</button><span className="grow"/><button className="primary" disabled={!!reason || !editor.dirty} onClick={stageCell}>{text.stageCell}</button></footer></Modal>;
 }
