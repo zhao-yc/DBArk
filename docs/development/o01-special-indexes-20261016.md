@@ -63,6 +63,32 @@ MySQL 5.7 的空间计算和 MySQL 8 的 SRID 优化条件不同。本工具不�
 
 原索引实库文件中“所有全文索引只读”的旧断言已同步为本批的“受控全文可删、不可改名或重建”，生成列旧键仍只读。ROOT 应补充原生面板的类型切换、只读原因、SQL 预览和风险确认验收；本批纯函数或构建通过不替代这些结果。
 
+## 追加验收准备：产品源码固定在65e7db5
+
+本次追加以 `65e7db5501a6aa81a3a42663e8b8989ad93f29bb` 为基准，仅修改验收、专属辅助代码及本文档；`src/` 产品源码保持该提交不变。
+
+实库文件通过透传包装实际 `connect` 记录原返回对象和真实线程 ID，明确包含未绑定数据库的基础探测连接、元数据短会话及取消控制连接。原参数、驱动返回和失败原因均不替换；无返回对象或无可信线程 ID 时，不声称线程归属完整。
+
+`afterAll` 先尽力执行 `engine.closeAll()`，随后尝试严格关闭本轮其他真实连接。迟到建连使用5秒/50毫秒预算，逐ID查证继续使用12秒/100毫秒预算，不放宽原任务或连接期限。独立观察连接通过 PROCESSLIST 的实际 ID 集合查证，DB为空、Info为空的基础连接也不能漏过。只有集合完整且逐ID清零后，才精确 `DROP DATABASE IF EXISTS` 本轮 `dbark_special_` 随机库，再查询 SCHEMATA 确认不存在；查证失败保留现场。最后恢复观察包装并严格关闭 observer；各项失败分别保留，多项失败的 AggregateError 以首个错误为 cause，finally不覆盖原清理错误。
+
+新增 `tests/e2e/table-special-index-live.spec.ts`，两条参数化完整流程分别执行 FULLTEXT、SPATIAL。复用现有 `isolatedDatabase` / 桌面生命周期 helper，从真实对象树打开表页，再进入 IndexPatchDialog。覆盖：
+
+- 原BTREE复合前缀草稿切换SPATIAL及FULLTEXT，实际方法、字段重选、候选禁用、前缀/方向禁用和空间单列限制。
+- 生成列旧键的只读原因与按钮禁用；已创建特殊索引的原片段及不可编辑原因。
+- 真实SQL预览前后独立 SHOW CREATE、数据一致，真实 apply IPC及任务计数保持零；风险确认前、漏特殊风险确认时不能执行。
+- 实际双击仅一次新增、已消费按钮禁用；独立 SHOW INDEX 核对字段顺序、方法和注释。随后通过真实删除按钮、风险确认及执行删除，核对原BTREE、生成列只读索引及原始文本/空间WKB数据保留。
+
+UI仅旁观真实主进程handler的命令名，参数、执行和返回完整透传；不使用夹具按钮、注入状态或直接引擎调用代替产品索引入口。原生确认框沿用既有helper；此准备不能证明操作系统原生确认交互已验收。
+
+UI须同时开启 `DBARK_INTEGRATION_ENABLED=1`、`DBARK_SPECIAL_INDEX_INTEGRATION_ENABLED=1` 和 `DBARK_SPECIAL_INDEX_UI_ENABLED=1`。ROOT还须预先确认 `DBARK_TEST_HOST=192.168.31.200`，端口只接受13357、13380、13384、13310、13311、13484；可通过 `DBARK_SPECIAL_INDEX_TEST_PORT` 明确选择，不能自动替换目标。MySQL8夹具按独立观察连接返回的真实版本创建显式 SRID 0 字段；严格TLS沿用现有helper和ROOT提供的CA，不扩展或绕过认证。
+
+本轮仅执行类型检查、6项收尾纯控制流测试，以及关闭开关时的收集/跳过检查：实库7项跳过，真实产品面板2项跳过。员工4未启动GUI、访问200/Docker或读取凭据；未声称这些新增准备已在真实数据库、TLS实例或原生面板通过。ROOT可用以下命令在其已核对环境统一运行：
+
+```powershell
+node node_modules/vitest/vitest.mjs run --config vitest.integration.config.ts tests/integration/engine-special-indexes.integration.test.ts --reporter=dot
+node node_modules/@playwright/test/cli.js test tests/e2e/table-special-index-live.spec.ts --output .cache/o01-special-ui-live --reporter=list
+```
+
 ## 官方依据
 
 - [MySQL 8.0 全文限制](https://dev.mysql.com/doc/refman/8.0/en/fulltext-restrictions.html)：字段类型、字符集、同元组排序规则、分区及解析器边界。
