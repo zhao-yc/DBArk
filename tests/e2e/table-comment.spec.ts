@@ -2,6 +2,7 @@ import type { RowDataPacket } from 'mysql2/promise';
 import { tableCommentZh as text } from '../../src/renderer/locales/tableComment.zh-CN';
 import { test, expect, page } from './desktop-fixture';
 import { enabled, environment, isolatedDatabase, acceptNativeConfirmation, type LiveContext } from './live-helpers';
+import { narrowSidebar } from './sidebar-size';
 
 const active = enabled && process.env.DBARK_TABLE_COMMENT_TEST === '1';
 const dialog = () => page.getByRole('dialog', { name: text.title, exact: true });
@@ -35,6 +36,7 @@ test.describe('表注释：正式Electron与真实数据库入口', () => {
   });
   test('对象树与表页两入口，复杂定义不重述、只读预览零DDL、双击只执行一次', async ({}, info) => {
     await isolatedDatabase(async context => {
+      await narrowSidebar();
       const table = 'comment_complex'; await context.observer.query(`CREATE TABLE ${target(context, table)}(id INT NOT NULL AUTO_INCREMENT,s VARCHAR(80) CHARACTER SET latin1 COLLATE latin1_bin,g INT GENERATED ALWAYS AS(length(s)) STORED,PRIMARY KEY(id),KEY pref(s(8))) ENGINE=InnoDB ROW_FORMAT=DYNAMIC COMMENT='原说明'`);
       const row = await open(context, table); await row.hover(); await row.getByRole('button', { name: `${text.title} ${table}`, exact: true }).click(); await expect(dialog().getByRole('textbox', { name: text.comment, exact: true })).toBeEnabled();
       await dialog().getByRole('button', { name: text.close, exact: true }).click(); await tablePage().getByRole('button', { name: text.title, exact: true }).click();

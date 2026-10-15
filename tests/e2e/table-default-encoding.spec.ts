@@ -4,6 +4,7 @@ import { tableDefaultEncodingZh as text } from '../../src/renderer/locales/table
 import { test, expect, page } from './desktop-fixture';
 import { enabled, environment, isolatedDatabase, acceptNativeConfirmation, type LiveContext } from './live-helpers';
 import { assertDefaultEncodingLiveTarget } from '../helpers/tableDefaultEncodingTarget';
+import { narrowSidebar } from './sidebar-size';
 
 const active = enabled && process.env.DBARK_TABLE_DEFAULT_ENCODING_TEST === '1', dialog = () => page.getByRole('dialog', { name: text.title, exact: true }), tablePage = () => page.locator('.table-tab:visible');
 const target = (context: LiveContext, table: string) => `\`${context.database}\`.\`${table}\``;
@@ -43,6 +44,7 @@ test.describe('表默认编码：正式Electron和真实数据库入口', () => 
   });
   test('对象树与表页两入口，实际候选成对、只读预览零DDL、双击一次并保留原列数据', async ({}, info) => {
     await isolatedDatabase(async context => {
+      await narrowSidebar();
       await assertSavedTls(context);
       const table = 'default_complex'; await context.observer.query(`CREATE TABLE ${target(context, table)}(id INT NOT NULL,s VARCHAR(80),g INT GENERATED ALWAYS AS(CHAR_LENGTH(s)) STORED,PRIMARY KEY(id),KEY pref(s(8))) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin ROW_FORMAT=DYNAMIC`); await context.observer.query(`INSERT INTO ${target(context, table)}(id,s) VALUES(1,'中文😀')`);
       const row = await open(context, table); await row.hover(); await row.getByRole('button', { name: `${text.title} ${table}`, exact: true }).click(); await expect(dialog().getByRole('combobox', { name: text.charset, exact: true })).toBeEnabled(); await expect(dialog()).toContainText(text.scope);
