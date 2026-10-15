@@ -4,6 +4,8 @@ import {completionLexicalContext,completionIdentifier,completionAliasIdentifier,
 import {completionLimits} from './sqlCompletion';
 import{completionQueryBranches,completionBranchAt,completionOutputContext}from'./completionQueryScope';
 import{completionWindowContext}from'./completionWindowScope';
+import{completionLateralTokens,completionLateralScope,completionLateralAllows}from'./completionLateralScope';
+import type{CompletionScopeCapabilities}from'./completionCapabilities';
 
 export interface CompletionCatalogSource{database?:string;table:string}
 /** 派生列只携带名称与需惰性展开的目录来源，不把AST循环引用传出worker。 */
@@ -82,8 +84,11 @@ function collectCtes(tokens:CompletionToken[],end:number):Cte[]{
 }
 
 /** SQL补全语义分析在可终止worker内调用；返回结构有界，异常不包含SQL正文。 */
-export function analyzeCompletion(source:string,offset:number,mode:CompletionLexicalMode={}):CompletionAnalysis{
+export function analyzeCompletion(source:string,offset:number,mode:CompletionLexicalMode={},capabilities:CompletionScopeCapabilities={}):CompletionAnalysis{
   const lexical=completionLexicalContext(source,offset,mode,completionLimits.aliasUnits);if(lexical.status!=='ready')return lexical;
+  const lateralCount=completionLateralTokens(lexical.tokens).length;
+  if(lateralCount>completionLimits.entries)return{status:'blocked',reason:'budget'};
+  const hasLateral=lateralCount>0;if(hasLateral&&capabilities?.lateralDerivedTables!==true)return{status:'blocked',reason:'capability'};
   try{
     const normalized=normalize(source,lexical);if(normalized.text.length>completionLimits.sourceUnits)return{status:'blocked',reason:'budget'};
     const context=completionLexicalContext(normalized.text,normalized.caret,{ansiQuotes:false,noBackslashEscapes:true},completionLimits.aliasUnits);if(context.status!=='ready')return{status:'blocked',reason:'syntax'};
@@ -97,6 +102,8 @@ export function analyzeCompletion(source:string,offset:number,mode:CompletionLex
     const targetToken=lexical.tokens.find(token=>token.start===lexical.target.start&&token.end===lexical.target.end);
     let expansions=0,truncated=false;const branches=completionQueryBranches(queries,normalizedTokens),windowContext=completionWindowContext(branches,normalizedTokens,normalized.caret,targetToken?.kind==='word'?targetToken.value:undefined);
     if(windowContext==='unsupported')return{status:'blocked',reason:'syntax'};
+    const lateral=completionLateralScope(tables,branches,normalizedTokens);if(lateral.status==='blocked'||hasLateral&&!lateral.boundaries.length)return{status:'blocked',reason:'syntax'};
+    const lateralByEntity=new Map(lateral.boundaries.map(boundary=>[boundary.entity,boundary]));
     // 集合边界独立于输出别名展示；尚未支持的全局窗口不能回退到末分支FROM来源。
     const outputContext=completionOutputContext(branches,normalizedTokens,normalized.caret);
     if(windowContext&&outputContext?.union)return{status:'blocked',reason:'syntax'};
@@ -114,8 +121,12 @@ export function analyzeCompletion(source:string,offset:number,mode:CompletionLex
         const scope=entity.belongStmt.position;if(!contains(scope.startIndex,scope.endIndex+1,at))return false;
         if(!sameBranch(entity.belongStmt,entity.position.startIndex,at))return false;
         if(entity.declareType===1&&contains(entity.position.startIndex,entity.position.endIndex+1,at))return false;
-        // 普通派生表和CTE不是关联子查询；尚未确认LATERAL能力时不越过它们读外层别名。
-        if(boundaries.some(boundary=>scope.startIndex<boundary.position.startIndex))return false;
+        // 仅已核验的LATERAL可越过本层派生屏障；同级后置来源仍不可见。
+        if(boundaries.some(boundary=>{
+          if(scope.startIndex>=boundary.position.startIndex)return false;
+          const correlated=lateralByEntity.get(boundary);
+          return !correlated||!completionLateralAllows(correlated,entity);
+        }))return false;
         if(cteBoundary&&scope.startIndex<cteBoundary.bodyStart)return false;
         return true;
       }).sort((a,b)=>b.belongStmt.scopeDepth-a.belongStmt.scopeDepth||b.belongStmt.position.startIndex-a.belongStmt.position.startIndex);
@@ -141,7 +152,8 @@ export function analyzeCompletion(source:string,offset:number,mode:CompletionLex
         if(column.declareType===0){const name=entityName(column.text)?.at(-1);if(name&&name!==normalized.sentinel)columns.push(name);}
         else if(column.declareType===1){
           const prefix=column.text.trim().replace(/\*\s*$/,'').replace(/\.\s*$/,'').trim(),parts=prefix?entityName(prefix):[];
-          const sources=tables.filter(entity=>scopeKey(entity.belongStmt)===scopeKey(query.belongStmt)&&sameBranch(query.belongStmt,entity.position.startIndex,query.position.startIndex)&&(!parts?.length||relationName(entity)===parts.at(-1)));
+          // 限定星号沿实际可见性解析；普通星号仍只输出本查询块FROM的字段。
+          const sources=parts?.length?visible(query.position.startIndex).filter(entity=>relationName(entity)===parts.at(-1)):tables.filter(entity=>scopeKey(entity.belongStmt)===scopeKey(query.belongStmt)&&sameBranch(query.belongStmt,entity.position.startIndex,query.position.startIndex));
           if(parts===null||!sources.length){incomplete=true;continue;}
           for(const entity of sources){const relation=resolve(entity,visited,depth+1);if(!relation){incomplete=true;continue;}columns.push(...relation.columns);catalogs.push(...relation.catalogs);incomplete||=relation.incomplete;}
         }else incomplete=true;
@@ -162,6 +174,15 @@ export function analyzeCompletion(source:string,offset:number,mode:CompletionLex
       const database=parts.length===2?parts[0]:undefined,table=parts.at(-1)!;return{name,source:'table',database,table,aliased:!!entity._alias,columns:[],catalogs:[{database,table}],incomplete:false};
     }
     let relations=visible(normalized.caret).map(entity=>resolve(entity)).filter((value):value is CompletionRelation=>!!value);let outputAliases:CompletionOutputAliases|undefined;
+    // 派生体中的已知隐藏/后置别名不能被当成数据库名去请求函数目录。
+    if(lexical.target.qualifiers.length){
+      const qualifier=lexical.target.qualifiers;
+      const inside=tables.some(entity=>entity.declareType===1&&contains(entity.position.startIndex,entity.position.endIndex+1,normalized.caret));
+      const selected=qualifier.length===1?relations.some(relation=>relation.name===qualifier[0]):relations.some(relation=>!relation.aliased&&relation.source==='table'&&relation.database===qualifier[0]&&relation.table===qualifier[1]);
+      const hidden=tables.some(entity=>relationName(entity)===qualifier[0]&&contains(entity.belongStmt.position.startIndex,entity.belongStmt.position.endIndex+1,normalized.caret));
+      const active=lateral.boundaries.some(boundary=>contains(boundary.start,boundary.end,normalized.caret));
+      if(inside&&!selected&&(active||hidden))return{status:'blocked',reason:'syntax'};
+    }
     // 外层ORDER BY包含OVER时，窗口表达式仍只能引用关系字段，不能继承外层输出别名。
     const output=windowContext?undefined:outputContext;
     if(output){const raw=rawProjection(output.query,new Set(),0),counts=new Map<string,number>();for(const name of raw.columns)counts.set(name.toLowerCase(),(counts.get(name.toLowerCase())??0)+1);const aliases:string[]=[];let incomplete=raw.incomplete||[...counts.values()].some(count=>count>1);
