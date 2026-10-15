@@ -2,6 +2,8 @@ import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { Engine } from '../../src/engine';
 import { connect, execute, type ManagedConnection } from '../../src/engine/connection';
+import * as connectionApi from '../../src/engine/connection';
+import { cleanupSpecialIndexFixture } from './helpers/special-index-cleanup';
 import { identifier, qualified } from '../../src/engine/sql';
 import type { ConnectionProfile, TaskEvent } from '../../src/shared/contracts';
 import type { IndexPatch } from '../../src/shared/tableIndexPatches';
@@ -14,7 +16,25 @@ const profile: ConnectionProfile = { id: randomUUID(), name: '特殊索引独立
   ...(process.env.DBARK_TEST_TLS === '1' ? { tls: { enabled: true, rejectUnauthorized: true, caPath: process.env.DBARK_TEST_CA } } : {}),
   ...(process.env.DBARK_TEST_SSH === '1' ? { ssh: { enabled: true, host: process.env.DBARK_TEST_SSH_HOST ?? '', port: Number(process.env.DBARK_TEST_SSH_PORT ?? 22), user: process.env.DBARK_TEST_SSH_USER ?? '', privateKeyPath: process.env.DBARK_TEST_SSH_KEY, hostFingerprint: process.env.DBARK_TEST_SSH_FINGERPRINT } } : {}) };
 const events: TaskEvent[] = [], engine = new Engine(event => events.push(event));
-let observer: ManagedConnection | undefined, created = false, mysql8 = false, version = '';
+const tracked = new Set<ManagedConnection>(), connecting = new Set<Promise<ManagedConnection>>(), threadIds = new Set<number>(), observationFailures: Error[] = [];
+let observer: ManagedConnection | undefined, databaseAttempted = false, mysql8 = false, version = '', baseThreadId: number | undefined, restoreConnect: (() => void) | undefined;
+/** 透传真实connect的参数与原返回对象；连接未绑定库也必须记录实际握手线程。 */
+function observeConnections(): void {
+  const original = connectionApi.connect;
+  const recording = vi.spyOn(connectionApi, 'connect').mockImplementation(async (...args: Parameters<typeof connect>) => {
+    const opening = original(...args); connecting.add(opening);
+    try {
+      const managed = await opening, id = managed.connection.threadId; tracked.add(managed);
+      if (typeof id === 'number' && Number.isSafeInteger(id) && id > 0) threadIds.add(id);
+      else observationFailures.push(new Error('真实connect未返回可逐ID查证的线程，拒绝认定清理完成'));
+      return managed;
+    } catch (error) {
+      // 无返回对象时不猜线程从未建立；保留真实失败，收尾也不能声称归属完整。
+      observationFailures.push(new Error('真实connect失败，无法完整证明本轮线程归属', { cause: error })); throw error;
+    } finally { connecting.delete(opening); }
+  });
+  restoreConnect = () => recording.mockRestore();
+}
 /** 独立观察连接直接检查服务器定义与数据，不以产品返回值代替实库结果。 */
 async function sql(text: string): Promise<Record<string, unknown>[]> { return (await execute(observer!, text)).rows as Record<string, unknown>[]; }
 async function get(table: string): Promise<TableIndexGetOutput> { return engine.handle('schema.indexes.get', { connectionId: profile.id, database, table, taskId: randomUUID(), connectionRevision: 1 }); }
@@ -33,23 +53,45 @@ async function release(snapshot: TableIndexGetOutput): Promise<void> { await eng
 
 describe.skipIf(!enabled)('特殊索引实库准备（须ROOT明确开启）', () => {
   beforeAll(async () => {
+    observeConnections(); observer = await connect(profile);
     const status = await engine.handle('connections.open', { id: profile.id, profile }); version = status.version; mysql8 = /^8\./.test(version) && !/mariadb/i.test(version);
-    observer = await connect(profile); await sql(`CREATE DATABASE ${identifier(database)} CHARACTER SET utf8mb4 COLLATE utf8mb4_bin`); created = true;
+    baseThreadId = status.connectionId; expect(baseThreadId).toBeGreaterThan(0); expect(threadIds.has(baseThreadId!)).toBe(true);
+    databaseAttempted = true; await sql(`CREATE DATABASE ${identifier(database)} CHARACTER SET utf8mb4 COLLATE utf8mb4_bin`);
     const facts = (await sql('SELECT @@version_compile_os AS compileOs,@@lower_case_table_names AS lowerCaseTableNames,@@innodb_page_size AS pageSize'))[0];
     console.info(JSON.stringify({ 验收库: database, 版本: version, ...facts, SSH: !!profile.ssh?.enabled, 严格TLS: !!profile.tls?.enabled }));
   });
   afterAll(async () => {
-    try {
-      await engine.closeAll();
-      if (observer && created) {
-        // Hook使用vi.waitFor，不能在测试外调用expect.poll；残留连接未清空时保留随机库。
+    await cleanupSpecialIndexFixture({ databaseAttempted, closeAll: () => engine.closeAll(),
+      closeTracked: async () => {
+        // closeAll早期失败也不能漏掉迟到返回的真实连接；保留5秒查证预算，不放宽原连接超时。
+        await vi.waitFor(() => expect(connecting.size).toBe(0), { timeout: 5000, interval: 50 });
+        const results = await Promise.allSettled([...tracked].filter(connection => connection !== observer).map(connection => connection.close({ strict: true })));
+        const errors = results.flatMap(result => result.status === 'rejected' ? [result.reason] : []); if (errors.length) throw new AggregateError(errors, '本轮真实连接严格关闭失败', { cause: errors[0] });
+      },
+      verifyThreadsGone: async () => {
+        if (observationFailures.length) throw new AggregateError(observationFailures, '本轮线程记录不完整');
+        if (connecting.size) throw new Error('仍有真实connect未收尾，不能证明线程集合已完整');
+        if (!observer) throw new Error('观察连接缺失，无法证明真实线程清零');
+        const ids = [...threadIds].filter(id => id !== observer!.connection.threadId); expect(ids.length).toBeGreaterThan(0);
+        if (baseThreadId !== undefined) expect(ids).toContain(baseThreadId);
+        // 同一12秒预算逐ID断言；DB为空的基础连接也在集合内，不再按schema或SQL正文猜归属。
         await vi.waitFor(async () => {
-          const remaining = (await sql('SHOW FULL PROCESSLIST')).filter(row => Number(row.Id) !== observer!.connection.threadId && (row.db === database || typeof row.Info === 'string' && row.Info.includes(database)));
-          expect(remaining.map(row => row.Id)).toEqual([]);
+          const remaining = (await execute<Record<string, unknown>[]>(observer!, `SELECT ID FROM information_schema.PROCESSLIST WHERE ID IN (${ids.map(() => '?').join(',')})`, ids)).rows;
+          expect(remaining).toHaveLength(0);
+          for (const id of ids) expect(remaining.filter(row => Number(row.ID) === id), `本轮线程${id}应已释放`).toHaveLength(0);
         }, { timeout: 12000, interval: 100 });
-        await sql(`DROP DATABASE ${identifier(database)}`); console.info(JSON.stringify({ 已清理验收库: database, 残留线程: 0 }));
-      }
-    } finally { await observer?.close({ strict: true }); }
+        console.info(JSON.stringify({ 已逐ID确认释放: ids, 残留线程: 0 }));
+      },
+      dropOwnDatabase: async () => {
+        if (!/^dbark_special_[a-f0-9]{12}$/.test(database)) throw new Error('拒绝清理本轮随机库以外的目标');
+        await sql(`DROP DATABASE IF EXISTS ${identifier(database)}`);
+      },
+      verifyDatabaseGone: async () => {
+        const remaining = (await execute<Record<string, unknown>[]>(observer!, 'SELECT SCHEMA_NAME FROM information_schema.SCHEMATA WHERE SCHEMA_NAME = ?', [database])).rows;
+        expect(remaining).toHaveLength(0); console.info(JSON.stringify({ 已确认隔离库不存在: database }));
+      },
+      restoreObservation: () => restoreConnect?.(), closeObserverStrict: async () => { await observer?.close({ strict: true }); },
+    });
   });
   it('读取实际版本与字段能力；已有BTREE保留独立方法', async () => {
     await fixture('facts'); const snapshot = await get('facts');
