@@ -2,6 +2,7 @@ import type { Command } from './contracts';
 
 /** 预加载白名单不引入校验器或 Node 依赖；新增公开命令必须在编译时补齐。 */
 export const publicCommands: Record<Command, true> = {
+  'schema.tableComment.get': true, 'schema.tableComment.preview': true, 'schema.tableComment.apply': true, 'schema.tableComment.release': true,
   'workbench.get': true, 'workbench.save': true, 'workbench.resolve': true, 'workbench.copyUri': true,
   'queries.create': true, 'queries.updateSource': true,
   'table.preferences.get': true, 'table.preferences.save': true, 'table.preferences.reset': true,
