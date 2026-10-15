@@ -74,4 +74,15 @@ describe('收藏与链接的最新显式导航意图', () => {
     const latest = navigation.open(testing); a.resolve(production); expect(await old).toBe(false); b.resolve(testing); expect(await latest).toBe(true);
     expect(workspace.useWorkspace.getState().selection?.connectionId).toBe(testing.connectionId);
   });
+  it('重命名立即撤销迟到导航并拒绝旧名称链接；其他连接与新名称仍走真实解析', async () => {
+    const a = pending(); request.mockReturnValueOnce(a.promise);
+    const old = navigation.open(production);
+    navigation.retireTable({ connectionId: production.connectionId, database: production.database, table: production.name });
+    a.resolve(production); expect(await old).toBe(false);
+    await expect(navigation.open(production)).rejects.toThrow('旧对象链接');
+    expect(request).toHaveBeenCalledTimes(1); expect(workspace.useWorkspace.getState().settings.tabs).toEqual([]);
+    request.mockResolvedValueOnce(testing); expect(await navigation.open(testing)).toBe(true);
+    const renamed = { ...production, name: 'renamed' }; request.mockResolvedValueOnce(renamed); expect(await navigation.open(renamed)).toBe(true);
+    expect(workspace.useWorkspace.getState().settings.tabs.at(-1)).toMatchObject({ table: 'renamed' });
+  });
 });

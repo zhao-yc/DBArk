@@ -17,6 +17,7 @@ import { queryStreamExportLimits } from './queryStreamExport';
 import { tablePreferenceSaveSchema, tablePreferenceTargetSchema } from './tablePreferences';
 import { validateColumnPatches } from './tableColumnPatches';
 import { validateIndexPatches } from './tableIndexPatches';
+import { tableRenameAcknowledgements, validateTableRenameName } from './tableRename';
 import { tableCommentAcknowledgements, validateTableComment } from './tableComment';
 import { tableDefaultEncodingAcknowledgements } from './tableDefaultEncoding';
 import { validateForeignKeyPatches } from './tableForeignKeyPatches';
@@ -143,6 +144,10 @@ export const commandSchemas: Record<Command, z.ZodType> = {
   'schema.columns.apply': z.object({ previewToken: id, acknowledgements: z.array(z.string().min(1).max(100)).max(20), taskId: id }).strict(),
   'schema.columns.release': z.object({ snapshotId: id.optional(), previewToken: id.optional() }).strict().refine(value => Boolean(value.snapshotId || value.previewToken), '缺少待释放的结构令牌'),
   'schema.indexes.get': z.object({ connectionId: id, database: z.string().min(1).max(64), table: z.string().min(1).max(64), taskId: id }).strict(),
+  'schema.tableRename.get': z.object({ connectionId: id, database: foreignKeyTargetName, table: foreignKeyTargetName, taskId: id }).strict(),
+  'schema.tableRename.preview': z.object({ snapshotId: id, newName: z.string().max(64).transform(value => validateTableRenameName(value)), taskId: id }).strict(),
+  'schema.tableRename.apply': z.object({ previewToken: id, acknowledgements: z.array(z.enum(tableRenameAcknowledgements)).max(3).refine(value => new Set(value).size === value.length, '重命名确认项不能重复'), taskId: id }).strict(),
+  'schema.tableRename.release': z.object({ snapshotId: id.optional(), previewToken: id.optional() }).strict().refine(value => Boolean(value.snapshotId || value.previewToken), '缺少待释放的重命名令牌'),
   'schema.tableComment.get': z.object({ connectionId: id, database: z.string().min(1).max(64), table: z.string().min(1).max(64), taskId: id }).strict(),
   'schema.tableDefaultEncoding.get': z.object({ connectionId: id, database: foreignKeyTargetName, table: foreignKeyTargetName, taskId: id }).strict(),
   'schema.tableDefaultEncoding.preview': z.object({ snapshotId: id, charset: z.string().regex(/^[A-Za-z0-9_]{1,64}$/), collation: z.string().regex(/^[A-Za-z0-9_]{1,255}$/), taskId: id }).strict(),
