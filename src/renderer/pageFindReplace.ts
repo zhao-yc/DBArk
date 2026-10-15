@@ -6,6 +6,7 @@ import { tableGridZh as text } from './locales/tableGrid.zh-CN';
 export const pageFindLimits = { query: 512, replacement: 4096, bytes: 16 * 1024 * 1024, matches: 50_000 } as const;
 export interface PageFindOptions { kind: 'text' | 'null' | 'default'; query: string; caseSensitive: boolean; wholeCell: boolean; column?: string; }
 export interface PageCellMatch { rowId: string; key: string; ranges: { start: number; end: number }[]; }
+export interface PageOccurrence { rowId: string; key: string; range?: { start: number; end: number }; occurrence: number; }
 export interface PageReplacement { generation: number; signature: string; rows: DraftRow[]; patches: { rowId: string; key: string; before: string; after: string }[]; }
 const encoder = new TextEncoder();
 /** 累计 UTF-8 预算不能静默截断，否则预览和最终草稿会出现不同结果。 */
@@ -32,6 +33,11 @@ function measureJson(value: unknown, total: { bytes: number }): void {
 }
 /** 字面模式只转义为安全正则，不向用户开放正则或替换表达式。 */
 function literalPattern(options: PageFindOptions) { return new RegExp(options.query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), options.caseSensitive ? 'gu' : 'giu'); }
+
+/** 将同格多次出现展开为独立位置；NULL 和 DEFAULT 各自保留一个可导航位置。 */
+export function pageOccurrences(matches: readonly PageCellMatch[]): PageOccurrence[] {
+  return matches.flatMap(match => match.ranges.length ? match.ranges.map((range, index) => ({ rowId: match.rowId, key: match.key, range, occurrence: index + 1 })) : [{ rowId: match.rowId, key: match.key, occurrence: 1 }]);
+}
 
 /** 使用完整自有原值扫描当前页，NULL/DEFAULT 独立于文字，二进制不转成预览匹配。 */
 export function findPageCells(rows: readonly DraftRow[], visibleKeys: readonly string[], options: PageFindOptions): PageCellMatch[] {
@@ -70,15 +76,18 @@ export function pageReplaceWritable(info: TableInfo, key: string): boolean {
 function tableSignature(info: TableInfo) { return JSON.stringify([info.database, info.name, info.engine, info.editableKey, info.columns]); }
 
 /** 先产生完整替换计划和受影响行快照，替换值中的美元符号不是插值。 */
-export function previewPageReplacement(rows: readonly DraftRow[], keys: readonly string[], options: PageFindOptions, replacement: string, info: TableInfo, generation: number): PageReplacement {
+export function previewPageReplacement(rows: readonly DraftRow[], keys: readonly string[], options: PageFindOptions, replacement: string, info: TableInfo, generation: number, only?: PageOccurrence): PageReplacement {
   if (replacement.length > pageFindLimits.replacement) throw new Error(text.replacementLimit);
   if (options.kind !== 'text') throw new Error(text.noReplace);
   const matches = findPageCells(rows, keys, options), patches: PageReplacement['patches'] = []; let outputBytes = 0;
   for (const match of matches) {
+    if (only && (only.rowId !== match.rowId || only.key !== match.key)) continue;
     if (!pageReplaceWritable(info, match.key)) continue;
     const row = rows.find(row => row.id === match.rowId)!; const before = ownCell(row.data, match.key); if (typeof before !== 'string') continue;
     let offset = 0, after = '', cellBytes = 0;
-    for (const range of match.ranges) { const part = before.slice(offset, range.start) + replacement; cellBytes += encoder.encode(part).byteLength; budget(outputBytes + cellBytes); after += part; offset = range.end; }
+    const ranges = only ? match.ranges.filter(range => range.start === only.range?.start && range.end === only.range?.end) : match.ranges;
+    if (!ranges.length) continue;
+    for (const range of ranges) { const part = before.slice(offset, range.start) + replacement; cellBytes += encoder.encode(part).byteLength; budget(outputBytes + cellBytes); after += part; offset = range.end; }
     const tail = before.slice(offset); cellBytes += encoder.encode(tail).byteLength; budget(outputBytes + cellBytes); after += tail; if (after === before) continue;
     outputBytes += cellBytes;
     patches.push({ rowId: row.id, key: match.key, before, after });
