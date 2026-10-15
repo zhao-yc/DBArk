@@ -8,7 +8,7 @@ import { checkServerIdentity, createSecureContext, type TLSSocket } from 'node:t
 import { connect, execute, type ManagedConnection } from '../../../src/engine/connection';
 import { identifier, qualified } from '../../../src/engine/sql';
 import type { ConnectionProfile } from '../../../src/shared/contracts';
-import { C02FixtureError, c02Config, c02Failure, c02Names, c02OpenSslCommands, c02OwnsTables, c02OwnsUser, cleanupC02, type C02CertificatePaths, type C02Config, type C02Ownership } from './c02-mtls-policy';
+import { C02FixtureError, c02Config, c02Failure, c02Names, c02OpenSslCommands, c02OwnsTables, c02OwnsUser, c02UiEnabled, cleanupC02, type C02CertificatePaths, type C02Config, type C02Ownership } from './c02-mtls-policy';
 
 type Row = Record<string, unknown>;
 
@@ -88,9 +88,21 @@ export interface C02MtlSEvidence {
   observedConnectionIds: number[];
 }
 
+/** 只向受控回调提供临时受限用户及一天期文件，不交出管理账号或 CA 私钥。 */
+export interface C02MtlSLease {
+  readonly profile: ConnectionProfile;
+  readonly database: string;
+  readonly user: string;
+  readonly marker: string;
+  /** 只读观察本例精确用户，将真实应用线程纳入最终逐 ID 查证。 */
+  observeApplicationThreads(): Promise<number[]>;
+}
+
 /** 仅 ROOT 双开关运行时读取显式材料、签发一天期证书并访问 13484；所有资源均为本次独占。 */
-export async function runC02MtlS(env: NodeJS.ProcessEnv): Promise<C02MtlSEvidence> {
-  const config = c02Config(env), suffix = randomBytes(6).toString('hex'), owner = randomBytes(16).toString('hex');
+export async function runC02MtlS(env: NodeJS.ProcessEnv, useLease?: (lease: C02MtlSLease) => Promise<void>): Promise<C02MtlSEvidence> {
+  const config = c02Config(env);
+  requireFact(!useLease || c02UiEnabled(env), 'C02 回调租约还需显式开启 UI 开关');
+  const suffix = randomBytes(6).toString('hex'), owner = randomBytes(16).toString('hex');
   const { database, user, account } = c02Names(suffix), table = qualified(database, 'subject');
   const password = `Cp!9${randomBytes(24).toString('hex')}`, passphrase = `C02!${randomBytes(32).toString('hex')}`;
   const parent = resolve(config.tempParent ?? tmpdir());
@@ -182,6 +194,21 @@ export async function runC02MtlS(env: NodeJS.ProcessEnv): Promise<C02MtlSEvidenc
     const session = (await sql(actual, 'SELECT DATABASE() AS db,CURRENT_USER() AS account,CONNECTION_ID() AS id,CURRENT_ROLE() AS roles'))[0];
     requireFact(session.db === database && session.account === `${user}@%` && Number(session.id) === actual.connection.threadId && session.roles === 'NONE', 'C02 成功查询的账号、库、角色或真实会话不匹配');
     await assertGrants();
+    if (useLease) {
+      // 原核心默认调用保持原样；仅 UI 扩展先释放核心连接，再把同一资源租给真实应用。
+      await actual.close({ strict: true });
+      let active = true;
+      try {
+        await useLease({ profile: structuredClone(limited), database, user, marker: owner,
+          observeApplicationThreads: async () => {
+            requireFact(active, 'C02 资源租约已归还，拒绝继续观察');
+            const rows = await sql(admin!, 'SELECT ID FROM information_schema.PROCESSLIST WHERE USER=?', [user]);
+            return rows.map(row => { const id = Number(row.ID); requireFact(Number.isSafeInteger(id) && id > 0, 'C02 应用线程编号无效'); ids.add(id); return id; });
+          },
+        });
+      } finally { active = false; }
+      await assertGrants();
+    }
     evidence = { database, user, serverUuid: config.serverUuid, cipher, noCertificateRejected: true, missingPassphraseRejected: true, wrongPassphraseRejected: true, observedConnectionIds: [...ids] };
   } catch (error) { failure = c02Failure(`C02 mTLS 核心验收失败；精确用户 ${user}、数据库 ${database}`, error); }
   try { await cleanupC02({
