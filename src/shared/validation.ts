@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { tlsPassphraseMaxLength, tlsCredentialMessages, validTlsPassphrase } from './tlsCredentials';
 import { workbenchSaveSchema, workbenchTargetSchema } from './workbench';
 import { schemaCompareInputSchema, schemaComparePreviewSchema, schemaCompareReleaseSchema } from './schemaCompare';
 import { querySaveContentSchema, queryUpdateSourceSchema, querySourceBindingSchema } from './queryBinding';
@@ -59,7 +60,7 @@ function ownRecord<T>(valueSchema: z.ZodType<T>, label: string) { return z.unkno
 }); }
 const row = ownRecord(cell, '数据行');
 const ssh = z.object({ enabled: z.boolean(), host: z.string().max(512), port, user: z.string().max(256), password: z.string().optional(), hasPassword: z.boolean().optional(), privateKeyPath: z.string().optional(), passphrase: z.string().optional(), hasPassphrase: z.boolean().optional(), hostFingerprint: z.string().optional() }).strict();
-export const connectionSchema = z.object({ id: z.string().max(200), name, group: z.string().max(100), color: z.string().regex(/^#[0-9a-fA-F]{6}$/), dialect: z.enum(['mysql','mariadb']), host: z.string().min(1).max(512), port, user: z.string().max(256), database: z.string().max(256).optional(), pendingFiles: z.array(z.enum(connectionFileRequirements)).max(4).optional(), password: z.string().optional(), rememberPassword: z.boolean().optional(), hasPassword: z.boolean().optional(), ssh: ssh.optional(), tls: z.object({ enabled: z.boolean(), rejectUnauthorized: z.boolean(), caPath: z.string().optional(), certPath: z.string().optional(), keyPath: z.string().optional() }).strict().optional() }).strict();
+export const connectionSchema = z.object({ id: z.string().max(200), name, group: z.string().max(100), color: z.string().regex(/^#[0-9a-fA-F]{6}$/), dialect: z.enum(['mysql','mariadb']), host: z.string().min(1).max(512), port, user: z.string().max(256), database: z.string().max(256).optional(), pendingFiles: z.array(z.enum(connectionFileRequirements)).max(4).optional(), password: z.string().optional(), rememberPassword: z.boolean().optional(), hasPassword: z.boolean().optional(), ssh: ssh.optional(), tls: z.object({ enabled: z.boolean(), rejectUnauthorized: z.boolean(), caPath: z.string().optional(), certPath: z.string().optional(), keyPath: z.string().optional(), passphrase: z.string().max(tlsPassphraseMaxLength, tlsCredentialMessages.invalid).refine(validTlsPassphrase, tlsCredentialMessages.invalid).optional(), hasPassphrase: z.boolean().optional() }).strict().optional() }).strict();
 const target = { connectionId: id, database: name, table: name };
 const changes = z.array(z.discriminatedUnion('kind', [z.object({ kind: z.literal('insert'), values: row }).strict(), z.object({ kind: z.literal('update'), before: row, values: row }).strict(), z.object({ kind: z.literal('delete'), before: row }).strict()])).min(1).max(5000);
 /** IPC 允许当前两类驱动的最大尺度；实际执行还须按绑定会话的能力再校验。 */

@@ -1,4 +1,6 @@
 import { assertConnectionReady } from '../shared/connectionTransfer';
+import { assertTlsPassphrase } from '../shared/tlsCredentials';
+import { connectionTlsOptions, tlsConnectionError } from './connectionTls';
 import { readFile } from 'node:fs/promises';
 import { createHash } from 'node:crypto';
 import mysql, { type Connection, type ConnectionOptions, type FieldPacket } from 'mysql2';
@@ -138,6 +140,7 @@ export function execute<T = Record<string, unknown>[]>(managed: ManagedConnectio
 /** 建立数据库连接前完成 SSH 主机校验和 TLS 文件加载；任何阶段失败都会释放隧道。 */
 export async function connect(profile: ConnectionProfile, database:string|null|undefined = profile.database, signal?: AbortSignal): Promise<ManagedConnection> {
   assertConnectionReady(profile);
+  assertTlsPassphrase(profile.tls?.passphrase);
   let ssh: SshClient | undefined;
   let sshClosed = false;
   let stream: ClientChannel | undefined;
@@ -179,13 +182,11 @@ export async function connect(profile: ConnectionProfile, database:string|null|u
       });
       stream = await stage<ClientChannel>(done => client.forwardOut('127.0.0.1', 0, profile.host, profile.port, (error, channel) => { if (signal?.aborted) channel?.destroy(); done(error, channel); }));
     }
-    const tls = profile.tls?.enabled ? {
-      rejectUnauthorized: profile.tls.rejectUnauthorized,
-      verifyIdentity: profile.tls.rejectUnauthorized,
+    const tls = profile.tls?.enabled ? connectionTlsOptions(profile.tls, {
       ca: profile.tls.caPath ? await readFile(profile.tls.caPath, { signal }) : undefined,
       cert: profile.tls.certPath ? await readFile(profile.tls.certPath, { signal }) : undefined,
       key: profile.tls.keyPath ? await readFile(profile.tls.keyPath, { signal }) : undefined,
-    } : undefined;
+    }) : undefined;
     cancelled();
     const options: ConnectionOptions = {
       host: profile.host, port: profile.port, user: profile.user, password: profile.password, database: database || undefined,
@@ -252,6 +253,6 @@ export async function connect(profile: ConnectionProfile, database:string|null|u
     destroy(); signal?.removeEventListener('abort', destroy);
     // 证书/密钥文件读取也可能由AbortSignal中止；统一建连取消文案，避免泄露底层英文异常。
     if(signal?.aborted)throw new Error('任务已取消');
-    throw error;
+    throw tlsConnectionError(error, profile.tls?.passphrase);
   }
 }

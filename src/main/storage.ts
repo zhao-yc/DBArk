@@ -1,4 +1,5 @@
 import { connectionTransferDocumentSchema, connectionTransferLimits, importConnectionProfile, type ExportedConnectionProfile } from '../shared/connectionTransfer';
+import { assertTlsPassphrase, tlsCredentialMessages } from '../shared/tlsCredentials';
 import initSqlJs, { type Database, type SqlValue } from 'sql.js';
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
@@ -114,17 +115,25 @@ export class LocalStore {
     this.volatileSecrets.delete(`${connectionId}\0${name}`);
     // 显式空字符串表示清除凭据，不为“空密码”保留密文或已保存标记。
     if (effective === undefined || effective === '') return;
-    if (remember && this.protector.available()) this.db.run('INSERT INTO secrets VALUES (?,?,?)', [connectionId, name, this.protector.encrypt(effective)]);
+    if (remember && this.protector.available()) {
+      let encrypted: string;
+      try { encrypted = this.protector.encrypt(effective); }
+      catch (error) { if (name === 'tlsPassphrase') throw new Error(tlsCredentialMessages.saveFailed); throw error; }
+      this.db.run('INSERT INTO secrets VALUES (?,?,?)', [connectionId, name, encrypted]);
+    }
     else this.volatileSecrets.set(`${connectionId}\0${name}`, effective);
   }
 
   /** 返回界面的连接配置只携带是否存在凭据的标记。 */
   connections(): ConnectionProfile[] {
-    return this.records<ConnectionProfile>('SELECT data FROM connections ORDER BY rowid').map(profile => ({ ...profile, hasPassword: this.hasSecret(profile.id, 'password'), ssh: profile.ssh ? { ...profile.ssh, hasPassword: this.hasSecret(profile.id, 'sshPassword'), hasPassphrase: this.hasSecret(profile.id, 'sshPassphrase') } : undefined }));
+    return this.records<ConnectionProfile>('SELECT data FROM connections ORDER BY rowid').map(profile => ({ ...profile, hasPassword: this.hasSecret(profile.id, 'password'), ssh: profile.ssh ? { ...profile.ssh, hasPassword: this.hasSecret(profile.id, 'sshPassword'), hasPassphrase: this.hasSecret(profile.id, 'sshPassphrase') } : undefined,
+      // 旧TLS概要在没有新秘密时保持原形状，存在标记只由主进程秘密槽计算。
+      ...(profile.tls && this.hasSecret(profile.id, 'tlsPassphrase') ? { tls: { ...profile.tls, hasPassphrase: true } } : {}) }));
   }
 
   /** 把连接与秘密分开存储，保存失败时恢复两者原始状态。 */
   saveConnection(input: ConnectionProfile): ConnectionProfile {
+    assertTlsPassphrase(input.tls?.passphrase);
     const profile = structuredClone({ ...input, id: input.id || randomUUID() });
     const previous = this.records<ConnectionProfile>('SELECT data FROM connections WHERE id=?', [profile.id])[0];
     const remember = profile.rememberPassword === true;
@@ -132,8 +141,10 @@ export class LocalStore {
       this.putSecret(profile.id, 'password', profile.password, remember);
       this.putSecret(profile.id, 'sshPassword', profile.ssh?.password, remember);
       this.putSecret(profile.id, 'sshPassphrase', profile.ssh?.passphrase, remember);
+      this.putSecret(profile.id, 'tlsPassphrase', profile.tls?.passphrase, remember);
       delete profile.password; delete profile.hasPassword;
       if (profile.ssh) { delete profile.ssh.password; delete profile.ssh.passphrase; delete profile.ssh.hasPassword; delete profile.ssh.hasPassphrase; }
+      if (profile.tls) { delete profile.tls.passphrase; delete profile.tls.hasPassphrase; }
       // 更换数据库目标时与连接配置一起提交；磁盘失败不能先丢失原布局。
       if (previous && tablePreferenceTargetChanged(previous, profile)) this.db.run('DELETE FROM table_preferences WHERE connection_id=?', [profile.id]);
       this.db.run('INSERT INTO connections VALUES (?,?) ON CONFLICT(id) DO UPDATE SET data=excluded.data', [profile.id, JSON.stringify(profile)]);
@@ -161,7 +172,9 @@ export class LocalStore {
     const stored = this.connections().find(x => x.id === id);
     const profile = overrides ?? stored;
     if (!profile) throw new Error('连接不存在，请重新选择连接');
-    return { ...profile, password: profile.password ?? this.readSecret(id, 'password'), ssh: profile.ssh ? { ...profile.ssh, password: profile.ssh.password ?? this.readSecret(id, 'sshPassword'), passphrase: profile.ssh.passphrase ?? this.readSecret(id, 'sshPassphrase') } : undefined };
+    assertTlsPassphrase(profile.tls?.passphrase);
+    return { ...profile, password: profile.password ?? this.readSecret(id, 'password'), ssh: profile.ssh ? { ...profile.ssh, password: profile.ssh.password ?? this.readSecret(id, 'sshPassword'), passphrase: profile.ssh.passphrase ?? this.readSecret(id, 'sshPassphrase') } : undefined,
+      ...(profile.tls ? { tls: { ...profile.tls, passphrase: profile.tls.passphrase ?? this.readSecret(id, 'tlsPassphrase') } } : {}) };
   }
 
   /** 删除连接时同时移除其密文和会话内秘密。 */
