@@ -8,6 +8,8 @@ import type { Connection, RowDataPacket } from 'mysql2/promise';
 import type { TaskEvent } from '../../src/shared/contracts';
 import { test, expect, desktop, page, dataDir, pageErrors, answerDialogs, quitDesktop } from './desktop-fixture';
 import { enabled, isolatedDatabase, openDatabaseQuery, executeSql, modifier } from './live-helpers';
+import { readQueryCsvZip } from '../helpers/queryCsvZip';
+import { parse as parseCsv } from 'csv-parse/sync';
 
 // 凭据只进入临时连接表单；关闭追踪，截图和文件仅使用合成测试数据。
 test.use({ trace: 'off' });
@@ -56,7 +58,7 @@ async function count(observer: Connection, database: string, condition = '1=1') 
   return Number(rows[0].total);
 }
 /** 选择格式和目标后仍需明确新执行确认，双协议确认相互独立。 */
-async function openExport(path?: string, format: 'json' | 'csv' = 'json', ordinal = 1, protocol: 'text-strict' | 'binary-explicit' = 'text-strict') {
+async function openExport(path?: string, format: 'json' | 'csv' | 'csv-zip' = 'json', ordinal = 1, protocol: 'text-strict' | 'binary-explicit' = 'text-strict') {
   await observeEvents(); await choosePath(path);
   await query().getByRole('button', { name: '新执行并完整导出', exact: true }).click();
   const modal = dialog(); await expect(modal).toBeVisible();
@@ -130,6 +132,19 @@ async function restorePathGate() { await desktop.evaluate(() => { const state = 
 test.describe('实库完整 SQL 流式导出', () => {
   test.skip(!enabled, '需要显式启用 DBARK_INTEGRATION_ENABLED 并配置已核对的远程测试实例');
   test.describe.configure({ timeout: 180000 });
+
+  test('多CSV入口明确新执行，ZIP授权、各行集与清单真实落盘且写入只发生一次', async ({}, testInfo) => {
+    await isolatedDatabase(async ({ observer, database }) => {
+      await observer.query(`CREATE TABLE \`${database}\`.stream_guard(id INT PRIMARY KEY)`); await openDatabaseQuery(database);
+      const directory = join(dataDir, 'multi-csv'); await mkdir(directory); const target = join(directory, 'all.zip'); await writeFile(target, '旧文件');
+      await writeSql("INSERT INTO stream_guard VALUES(501);SELECT 11 AS same_name,22 AS same_name;SELECT 33 AS empty_value FROM DUAL WHERE 0;SELECT CAST(18446744073709551615 AS UNSIGNED) AS big_value,NULL AS missing,UNHEX('0001FF') AS bytes_value;");
+      const before = await executionIds(), modal = await openExport(target, 'csv-zip'); await expect(modal).toContainText('所有行集顺序写入独立CSV'); await expect(modal.getByRole('textbox', { name: '行结果集序号', exact: true })).toHaveCount(0); expect(await executionIds()).toEqual(before); expect(await count(observer, database)).toBe(0);
+      const taskId = await start(modal, true), event = await finish(taskId); expect(event?.queryExport).toMatchObject({ statementsCompleted: 4, fileCommitted: true, rowsWritten: 2 });
+      const files = await readQueryCsvZip(target), manifest = JSON.parse(files.get('manifest.json')!.toString('utf8')); expect(manifest.results.map((result: any) => result.kind)).toEqual(['status', 'rows', 'rows', 'rows']);
+      expect(parseCsv(files.get('results/rows-001.csv')!)).toEqual([['same_name', 'same_name [2]'], ['11', '22']]); expect(parseCsv(files.get('results/rows-002.csv')!)).toEqual([['empty_value']]); expect(parseCsv(files.get('results/rows-003.csv')!)[1]).toEqual(['18446744073709551615', '\\N', 'base64:AAH/']);
+      expect(await count(observer, database)).toBe(1); const after = await executionIds(); expect(after.history.filter(id => !before.history.includes(id))).toHaveLength(1); await expect(modal.getByRole('button', { name: '确认新执行并导出', exact: true })).toBeDisabled(); await expect(modal).toContainText('results/rows-003.csv'); expect(await readdir(directory)).toEqual(['all.zip']); await page.screenshot({ path: testInfo.outputPath('multi-csv-zip-success.png') }); await closeExport();
+    }, testInfo);
+  });
 
   test('选区固定、模态快捷键和双击只执行一次，同标签事务临时表保持且旧结果导出不重放', async ({}, testInfo) => {
     await isolatedDatabase(async ({ observer, database }) => {

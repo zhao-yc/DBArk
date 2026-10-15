@@ -8,12 +8,21 @@ export const queryStreamExportLimits = {
   queueRows: 8, queueBytes: 1024 * 1024,
   previewRows: 200, previewBytes: 16 * 1024 * 1024,
   fileBytes: 10 * 1024 * 1024 * 1024,
+  archiveManifestBytes: 8 * 1024 * 1024,
 } as const;
+export type QueryExportFormat = 'csv' | 'json' | 'csv-zip';
+/** 容器仍是原生保存对话框授权的单个ZIP文件，不能借CSV令牌改写其它类型。 */
+export function queryExportFileFormat(format: QueryExportFormat): 'csv' | 'json' | 'zip' { return format === 'csv-zip' ? 'zip' : format; }
+/** 所有包内文件名由有界序号生成，SQL、库表及列名都不参与路径。 */
+export function queryCsvResultFile(ordinal: number): string {
+  if (!Number.isInteger(ordinal) || ordinal < 1 || ordinal > queryStreamExportLimits.results) throw new Error('CSV容器行结果序号必须在1～200之间');
+  return `results/rows-${String(ordinal).padStart(3, '0')}.csv`;
+}
 export type QueryExportProtocol = 'text-strict' | 'binary-explicit';
 export type QueryExportSelection = { kind: 'all' } | { kind: 'row-result'; ordinal: number };
 export interface QueryStreamExportInput {
   sessionId: string; sql: string; taskId: string; fileToken: string;
-  format: 'csv' | 'json'; encoding: QueryFileEncoding; protocol: QueryExportProtocol;
+  format: QueryExportFormat; encoding: QueryFileEncoding; protocol: QueryExportProtocol;
   resultSelection: QueryExportSelection; parameters?: QueryParameter[];
 }
 export interface QueryExportColumn { position: number; key: string; name: string; exportName: string; type: string; }

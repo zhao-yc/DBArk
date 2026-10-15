@@ -38,26 +38,40 @@ describe('同会话完整导出生命周期', () => {
     expect(output.transactionOpen).toBe(true); expect(output.transactionKnown).toBe(true); expect(writer.abort).toHaveBeenCalledOnce();
     expect(mocks.execute).not.toHaveBeenCalled(); expect(events.at(-1)?.queryExport?.fileCommitted).toBe(true);
   });
+  it('CSV容器同一次脚本按序消费多个行集，不新增执行或重新建连', async () => {
+    const beforeConnections = mocks.connect.mock.calls.length;
+    const output = await engine.handle('query.exportStream', { ...input(), format: 'csv-zip', sql: 'SELECT 1;SELECT 2' });
+    expect(options).toMatchObject({ format: 'csv-zip', resultSelection: { kind: 'all' } });
+    expect(mocks.frames.mock.calls.map(call => call[1])).toEqual(['SELECT 1', 'SELECT 2']); expect(new Set(mocks.frames.mock.calls.map(call => call[0])).size).toBe(1);
+    expect(mocks.connect).toHaveBeenCalledTimes(beforeConnections); expect(mocks.execute).not.toHaveBeenCalled(); expect(output.results.map((result: { rowsWritten: number }) => result.rowsWritten)).toEqual([205, 205]); expect(writer.rowsWritten).toBe(410); expect(output.transactionOpen).toBe(true); expect(writer.complete).toHaveBeenCalledOnce(); expect(writer.abort).toHaveBeenCalledOnce();
+  });
+  it('CSV容器准备目标失败不发送SQL；后续行集文件失败停止脚本且不重放', async () => {
+    mocks.create.mockRejectedValueOnce(Error('目标冲突'));
+    await expect(engine.handle('query.exportStream', { ...input(), format: 'csv-zip' })).rejects.toThrow('尚未发送用户 SQL'); expect(mocks.frames).not.toHaveBeenCalled();
+    writer.write.mockImplementation(async frame => { if (frame.resultOrdinal === 2 && frame.kind === 'row') throw Error('第二行集磁盘失败'); });
+    await expect(engine.handle('query.exportStream', { ...input(), taskId: 'next', format: 'csv-zip', sql: 'SELECT 1;SELECT 2;SELECT 3' })).rejects.toThrow('已完成 1 条 SQL');
+    expect(mocks.frames.mock.calls.map(call => call[1])).toEqual(['SELECT 1', 'SELECT 2']); expect(writer.complete).not.toHaveBeenCalled(); expect(writer.abort).toHaveBeenCalledOnce(); expect(events.at(-1)?.queryExport).toMatchObject({ sqlMayHaveExecuted: true, fileCommitted: false, statementsCompleted: 1 });
+  });
   it('参数缺失在首条写SQL前拒绝，不提交文件且保留结构化准备阶段', async () => {
     await expect(engine.handle('query.exportStream', { ...input(), sql: 'INSERT INTO t VALUES (:v)', parameters: [] })).rejects.toThrow('准备');
     expect(mocks.frames).not.toHaveBeenCalled(); expect(writer.complete).not.toHaveBeenCalled(); expect(writer.abort).toHaveBeenCalledOnce();
     expect(events.at(-1)?.queryExport).toMatchObject({ phase: 'preparing', fileCommitted: false, sqlMayHaveExecuted: false, statementsCompleted: 0 });
   });
-  it('创建临时文件期间可取消并保留会话互斥，迟到文件准备不发送SQL', async () => {
+  it.each(['json', 'csv-zip'])('%s创建临时文件期间可取消并保留会话互斥，迟到文件准备不发送SQL', async format => {
     let release!: () => void;
     mocks.create.mockImplementation(async (value: QueryStreamFileOptions) => { options = value; await new Promise<void>(resolve => { release = resolve; }); return writer; });
-    const running = engine.handle('query.exportStream', input()); const failed = expect(running).rejects.toThrow('取消');
+    const running = engine.handle('query.exportStream', { ...input(), format }); const failed = expect(running).rejects.toThrow('取消');
     await expect(engine.handle('query.transaction', { sessionId, action: 'rollback' })).rejects.toThrow('正在执行');
     await engine.handle('query.cancel', { taskId: 'stream' }); release(); await failed;
     expect(mocks.frames).not.toHaveBeenCalled(); expect(events.at(-1)?.status).toBe('cancelled');
     await engine.handle('query.transaction', { sessionId, action: 'rollback' });
   });
-  it('进入原子替换后晚到取消不伪造取消终态，替换失败则明确失败', async () => {
+  it.each(['json', 'csv-zip'])('%s进入原子替换后晚到取消不伪造取消终态，替换失败则明确失败', async format => {
     writer.complete.mockImplementation(async () => { options.onCommitStart(); await engine.handle('query.cancel', { taskId: 'stream' }); writer.fileCommitted = true; });
-    expect((await engine.handle('query.exportStream', input())).fileCommitted).toBe(true); expect(events.at(-1)?.status).toBe('completed');
+    expect((await engine.handle('query.exportStream', { ...input(), format })).fileCommitted).toBe(true); expect(events.at(-1)?.status).toBe('completed');
     writer.fileCommitted = false;
     writer.complete.mockImplementation(async () => { options.onCommitStart(); await engine.handle('query.cancel', { taskId: 'stream' }); throw new Error('原子替换失败'); });
-    await expect(engine.handle('query.exportStream', input())).rejects.toThrow('文件提交');
+    await expect(engine.handle('query.exportStream', { ...input(), format })).rejects.toThrow('文件提交');
     expect(events.at(-1)?.status).toBe('failed'); expect(events.at(-1)?.queryExport).toMatchObject({ phase: 'committing', fileCommitted: false, statementsCompleted: 1, sqlMayHaveExecuted: true });
   });
   it.each([false, true])('SQL ERR 后清理失败仍刷新事务未知、保留执行摘要和参数脱敏（参数模式 %s）', async parameterized => {

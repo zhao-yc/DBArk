@@ -12,6 +12,7 @@ import { connect, execute, type ManagedConnection } from '../../src/engine/conne
 import { identifier } from '../../src/engine/sql';
 import type { ConnectionProfile, QueryOutcome, TaskEvent } from '../../src/shared/contracts';
 import { queryStreamExportLimits, type QueryExportProgress, type QueryStreamExportInput, type QueryStreamExportOutput } from '../../src/shared/queryStreamExport';
+import { readQueryCsvZip } from '../helpers/queryCsvZip';
 
 // 只连接显式启用且已核对的远程实例，既不创建 Docker，也不回退到本机数据库。
 const enabled = process.env.DBARK_INTEGRATION_ENABLED === '1' && Boolean(process.env.DBARK_TEST_HOST);
@@ -92,6 +93,26 @@ describe.skipIf(!enabled)('远程完整 SQL 流式导出', () => {
         }
       }
     }
+  });
+
+  it('CSV容器单次CALL保留空集、重复名和终态，同物理会话事务不被文件提交', async () => {
+    await execute(observer!, 'CREATE PROCEDURE csv_zip_proc() BEGIN SET @csv_zip_runs=@csv_zip_runs+1; INSERT INTO stream_guard VALUES(451,1); SELECT CONNECTION_ID() AS tid,@csv_zip_runs AS runs, value AS same_name,value+1 AS same_name FROM csv_zip_temp; SELECT 9 AS empty_value FROM DUAL WHERE 0; SELECT CAST(18446744073709551615 AS UNSIGNED) AS big_value,CAST(0.12345678901234567890 AS DECIMAL(30,20)) AS exact_value,CAST(\'2026-10-16 01:02:03.123456\' AS DATETIME(6)) AS moment,NULL AS missing,\'\' AS empty_text,UNHEX(\'0001FF\') AS bytes_value; END');
+    try {
+      const threadId = String(firstValues(await query('SELECT CONNECTION_ID()'))[0]); await query('CREATE TEMPORARY TABLE csv_zip_temp(value INT); INSERT INTO csv_zip_temp VALUES(42); SET @csv_zip_runs=0; START TRANSACTION');
+      const exported = await exportSql('CALL csv_zip_proc()', { format: 'csv-zip' }, join(directory, 'all-results.zip')), files = await readQueryCsvZip(exported.path), manifest = JSON.parse(files.get('manifest.json')!.toString('utf8'));
+      expect(exported.output).toMatchObject({ statementsCompleted: 1, fileCommitted: true, transactionKnown: true, transactionOpen: true }); expect(manifest.results.map((result: any) => result.kind)).toEqual(['rows', 'rows', 'rows', 'status']);
+      expect(parseCsv(files.get('results/rows-001.csv')!)).toEqual([['tid', 'runs', 'same_name', 'same_name [4]'], [threadId, '1', '42', '43']]); expect(parseCsv(files.get('results/rows-002.csv')!)).toEqual([['empty_value']]);
+      expect(parseCsv(files.get('results/rows-003.csv')!)[1]).toEqual(['18446744073709551615', '0.12345678901234567890', '2026-10-16 01:02:03.123456', '\\N', '', 'base64:AAH/']);
+      expect(Number((await observed('SELECT COUNT(*) AS total FROM stream_guard WHERE id=451'))[0].total)).toBe(0); expect(firstValues(await query('SELECT CONNECTION_ID(),@csv_zip_runs')).map(String)).toEqual([threadId, '1']); expect((await terminal(exported.taskId, 'completed')).peakBufferedRows).toBeLessThanOrEqual(1);
+      await query('ROLLBACK'); expect(Number((await observed('SELECT COUNT(*) AS total FROM stream_guard WHERE id=451'))[0].total)).toBe(0);
+    } finally { await query('ROLLBACK'); await execute(observer!, 'DROP PROCEDURE IF EXISTS csv_zip_proc'); }
+  });
+
+  it('CSV容器后续SQL失败保留旧包和已提交写入，不发布半包或自动重放', async () => {
+    const path = join(directory, 'failed-multi.zip'), taskId = randomUUID(); await writeFile(path, '原ZIP文件');
+    await expect(engine.handle('query.exportStream', { sessionId, taskId, sql: 'INSERT INTO stream_guard VALUES(452,1);SELECT 1 AS first_value;SELECT * FROM csv_zip_missing_table;INSERT INTO stream_guard VALUES(453,1)', fileToken: randomUUID(), filePath: path, format: 'csv-zip', encoding: 'utf8', protocol: 'text-strict', resultSelection: { kind: 'all' } })).rejects.toThrow('已完成 2 条 SQL');
+    expect(await readFile(path, 'utf8')).toBe('原ZIP文件'); expect(Number((await observed('SELECT COUNT(*) AS total FROM stream_guard WHERE id=452'))[0].total)).toBe(1); expect(Number((await observed('SELECT COUNT(*) AS total FROM stream_guard WHERE id=453'))[0].total)).toBe(0);
+    expect(await terminal(taskId, 'failed')).toMatchObject({ statementsCompleted: 2, sqlMayHaveExecuted: true, fileCommitted: false, transactionKnown: false });
   });
 
   it('一次执行沿用会话事务、临时表和变量，文件提交不改变数据库事务边界', async () => {
