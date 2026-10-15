@@ -82,7 +82,8 @@ export function buildSchemaComparePreview(source: SchemaComparisonSnapshot, targ
         if (!key?.parentTarget || !key.onDelete || !key.onUpdate || key.opaqueReasons.length || key.childColumnNames.some(name => !availableColumns.has(name))) reasons.push('外键定义或字段依赖不完整');
         else if (source.target.database !== target.target.database) reasons.push('跨库外键不能自动映射父库或父表，请单独核对引用');
         else {
-          const supported = [...targetIndexes.indexes, ...sourceIndexes.indexes.filter(index => addedIndexes.has(index.name))].some(index => key.childColumnNames.every((name, i) => index.parts[i]?.columnName === name && !index.parts[i]?.prefixLength));
+          // 列名前导相同不代表能支撑外键，全文和空间索引必须排除；完整命名空间门槛继续独立保留。
+          const supported = [...targetIndexes.indexes, ...sourceIndexes.indexes.filter(index => addedIndexes.has(index.name))].some(index => ['ordinary', 'unique', 'primary'].includes(index.kind) && index.method === 'BTREE' && !index.opaqueReasons.length && key.childColumnNames.every((name, i) => index.parts[i]?.columnName === name && !index.parts[i]?.prefixLength));
           if (!supported) reasons.push('外键缺少明确的完整前导支撑索引，不依赖服务器隐式建索引');
           clause = `ADD CONSTRAINT ${identifier(key.name!)} FOREIGN KEY (${key.childColumnNames.map(identifier).join(', ')}) REFERENCES ${qualified(key.parentTarget.database, key.parentTarget.table)} (${key.parentColumnNames.map(identifier).join(', ')}) ON DELETE ${key.onDelete} ON UPDATE ${key.onUpdate}`;
         }

@@ -76,6 +76,18 @@ describe('结构比较的保守 SQL 审查稿', () => {
     const index = preview(a, b, ['i']); expect(index.statements.map(item => item.category)).toEqual(['indexes']);
     const result = preview(a, b); expect(result.statements).toEqual([]); expect(result.blocked.find(row => row.name === 'fk')?.reasons.join('')).toContain('完整外键命名空间');
   });
+  it('定义比较识别FULLTEXT不会自动开放其ADD审查稿', () => {
+    const result = preview(snapshot('`body` varchar(40),FULLTEXT KEY `ft` (`body`)'), snapshot('`body` varchar(40)', 'target'), ['ft']);
+    expect(result.statements).toEqual([]); expect(result.blocked.find(item => item.name === 'ft')?.reasons.join('')).toContain('索引属性');
+  });
+  it('目标FULLTEXT不能冒充外键支撑，真实BTREE只消除支撑不足而不绕过命名空间门槛', () => {
+    const source = snapshot('`body` varchar(40),KEY `support` (`body`),CONSTRAINT `fk` FOREIGN KEY (`body`) REFERENCES `parent` (`body`)', 'source');
+    const target = snapshot('`body` varchar(40),FULLTEXT KEY `ft` (`body`)', 'target');
+    const missing = preview(source, target, ['fk']);
+    expect(missing.statements).toEqual([]); expect(missing.blocked.find(item => item.name === 'fk')?.reasons.join('')).toContain('缺少明确的完整前导支撑索引');
+    const selected = preview(source, target, ['support', 'fk']), reasons = selected.blocked.find(item => item.name === 'fk')?.reasons.join('') ?? '';
+    expect(reasons).not.toContain('缺少明确的完整前导支撑索引'); expect(reasons).toContain('完整外键命名空间'); expect(selected.statements).toEqual([]);
+  });
   it('拒绝渲染侧注入配置、SQL、重复项、任意对象和过大选择', () => {
     const target = { connectionId: 'c', database: 'db', table: 't' };
     expect(() => validateCommand('schema.compare', { taskId: 't', source: { ...target, password: '秘密' }, target })).toThrow();

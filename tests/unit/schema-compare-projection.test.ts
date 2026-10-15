@@ -62,13 +62,20 @@ describe('只读源到目标原定义比较', () => {
     ['`id` magic_type', 'columns', 'id'], ['`id` int FROBNICATE 1', 'columns', 'id'],
     ["`id` binary(4) DEFAULT 'abc'", 'columns', 'id'],
     ['`id` int,KEY `ix` ((abs(`id`)))', 'indexes', 'ix'],
-    ['`id` text,FULLTEXT KEY `ix` (`id`)', 'indexes', 'ix'],
+    ['`id` text,FULLTEXT KEY `ix` (`id`) WITH PARSER ngram', 'indexes', 'ix'],
     ['`id` int,KEY `ix` (`id`) INVISIBLE', 'indexes', 'ix'],
     ['`id` int,CONSTRAINT `fk` FOREIGN KEY (`id`) REFERENCES `p` (`id`) MATCH FULL ON DELETE RESTRICT', 'foreignKeys', 'fk'],
     ['`id` int /*!80023 INVISIBLE */', 'columns', 'id'],
   ])('未知或特殊定义即使文本相同也不能报相同 %#', (body, category, name) => {
     const report = compareSchemaSnapshots(snapshot(body), snapshot(body));
     expect(row(report, category, name).status).toBe('unknown'); expect(row(report, category, name).reasons.length).toBeGreaterThan(0); expect(report.comparable).toBe(false);
+  });
+  it('已识别的默认FULLTEXT原定义可比较，种类和方法差异仍保留', () => {
+    const fulltext = snapshot('`body` varchar(40),FULLTEXT KEY `ix` (`body`)');
+    const same = compareSchemaSnapshots(fulltext, fulltext);
+    expect(row(same, 'indexes', 'ix')).toMatchObject({ status: 'same', reasons: [] }); expect(same.comparable).toBe(true);
+    const ordinary = snapshot('`body` varchar(40),KEY `ix` (`body`)');
+    expect(row(compareSchemaSnapshots(fulltext, ordinary), 'indexes', 'ix')).toMatchObject({ status: 'changed', changedProperties: expect.arrayContaining(['kind', 'method']) });
   });
   it('陌生版本缺省外键动作不猜测，已显式动作仍可比较', () => {
     const a = snapshot('id int,CONSTRAINT fk FOREIGN KEY (id) REFERENCES p (id)', { version: '9.99.1' });
