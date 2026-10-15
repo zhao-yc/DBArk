@@ -1,6 +1,7 @@
-import {test,expect,page,pageErrors} from './desktop-fixture';
-import {enabled,isolatedDatabase,openDatabaseQuery,executeSql,modifier} from './live-helpers';
-import type {RowDataPacket} from 'mysql2/promise';
+import {test,expect,page,pageErrors,answerDialogs,quitDesktop,closed} from './desktop-fixture';
+import {enabled,isolatedDatabase,openDatabaseQuery,executeSql,modifier,environment} from './live-helpers';
+import mysql,{type RowDataPacket} from 'mysql2/promise';
+import{randomUUID}from'node:crypto';
 
 test.use({trace:'off'});
 const search=()=>page.getByRole('dialog',{name:'全库搜索：数据',exact:true});
@@ -63,5 +64,24 @@ test.describe('200真实数据库：数据搜索界面',()=>{
    const table=page.locator('.table-tab:visible');await expect(table.locator('.loading-overlay')).toHaveCount(0);await expect(table.locator('.results-grid')).toBeVisible();const index=await table.getByRole('columnheader',{name:/^note/}).getAttribute('aria-colindex'),cell=table.locator('[role="row"][aria-rowindex="2"] [role="gridcell"][aria-colindex="'+index+'"]');await cell.dblclick();const editor=table.getByRole('textbox',{name:'编辑 note',exact:true});await editor.fill('搜索前的未提交草稿');await editor.press('Enter');await expect(cell).toHaveText('搜索前的未提交草稿');
    await openSearch();await chooseTable(database,'subject');await search().getByLabel('搜索字段 note',{exact:true}).check();await run('服务器原值');await expect(search().getByRole('status')).toContainText('命中 1');await search().locator('.rdg-row').click();await search().getByRole('button',{name:'打开所属表',exact:true}).click();await expect(search()).toHaveCount(0);await expect(page.locator('.table-tab')).toHaveCount(1);await expect(cell).toHaveText('搜索前的未提交草稿');const[rows]=await observer.query<RowDataPacket[]>('SELECT note FROM `'+database+'`.subject');expect(rows[0].note).toBe('服务器原值');await page.screenshot({path:info.outputPath('data-search-existing-table-draft.png')});
   },info);
+ });
+ test('真实列权限：不可读键仅降为只读命中，明确搜索不可读字段仍报错并可恢复',async({},info)=>{
+  test.setTimeout(120000);const suffix=randomUUID().replaceAll('-','').slice(0,12),database='dbark_colperm_'+suffix,user='cp_'+suffix,password=randomUUID()+randomUUID(),port=Number(environment.DBARK_TEST_PORT??13384);
+  if(environment.DBARK_TEST_HOST!=='192.168.31.200'||![13357,13380,13384,13310,13311].includes(port))throw Error('本列权限桌面夹具仅允许已核对的200隔离非TLS端口');
+  const observer=await mysql.createConnection({host:environment.DBARK_TEST_HOST,port,user:environment.DBARK_TEST_USER,password:environment.DBARK_TEST_PASSWORD,charset:'utf8mb4',connectTimeout:15000});
+  try{
+   await observer.query('CREATE DATABASE `'+database+'` CHARACTER SET utf8mb4');await observer.query('CREATE TABLE `'+database+'`.subject(id BIGINT PRIMARY KEY,note TEXT) ENGINE=InnoDB');await observer.query('INSERT INTO `'+database+'`.subject VALUES(?,?)',['9007199254740993','权限隔离命中']);if(!/^[a-f0-9-]{72}$/.test(password))throw Error('隔离认证格式无效');
+   try{await observer.query("CREATE USER '"+user+"'@'%' IDENTIFIED BY '"+password+"'");}catch{throw Error('隔离账号创建失败，认证内容未写入报告');}
+   await observer.query('GRANT SELECT(note),INSERT(id) ON `'+database+"`.subject TO '"+user+"'@'%'");
+   // 凭据仅通过真实连接表单保存，目录、驱动和搜索IPC均使用该受限账号。
+   await page.locator('.app-commandbar').getByRole('button',{name:'新建连接',exact:true}).click();const form=page.getByRole('dialog',{name:'新建连接',exact:true});await form.getByLabel('连接名称',{exact:true}).fill('列权限隔离搜索');await form.getByLabel('主机地址',{exact:true}).fill(environment.DBARK_TEST_HOST);await form.getByLabel('端口',{exact:true}).fill(String(port));await form.getByLabel('用户名',{exact:true}).fill(user);await form.getByLabel('数据库密码',{exact:true}).fill(password);await form.getByRole('button',{name:'测试连接',exact:true}).click();await expect(form.locator('.success-box')).toContainText('连接成功',{timeout:20000});await form.getByRole('button',{name:'保存连接',exact:true}).click();await expect(form).toHaveCount(0);
+   await openSearch();await chooseTable(database,'subject');await search().getByLabel('搜索字段 note',{exact:true}).check();await run('权限隔离命中');await expect(search().getByRole('status')).toContainText('命中 1');await expect(search().locator('.rdg-row')).toContainText('仅只读：无键列读取权限');await expect(search().getByTitle('仅只读：无键列读取权限',{exact:true})).toHaveCount(1);await search().locator('.rdg').scrollIntoViewIfNeeded();await page.screenshot({path:info.outputPath('data-search-column-permission-readonly.png')});
+   await search().getByRole('button',{name:'清空范围',exact:true}).click();await search().getByLabel('搜索字段 id',{exact:true}).check();await search().getByRole('button',{name:'开始数据搜索',exact:true}).click();await expect(search().getByRole('button',{name:'开始数据搜索',exact:true})).toBeEnabled({timeout:20000});await expect(search().locator('.error-box')).toContainText('SELECT');await expect(search().getByRole('status')).toContainText('搜索未完成');expect(await search().locator('.rdg-row').count()).toBe(0);
+   await search().getByRole('button',{name:'清空范围',exact:true}).click();await search().getByLabel('搜索字段 note',{exact:true}).check();await run('权限隔离命中');await expect(search().getByRole('status')).toContainText('命中 1');await search().getByRole('button',{name:'关闭',exact:true}).click();expect(pageErrors).toEqual([]);
+  }finally{
+   try{if(!closed){await answerDialogs([1,1]);await quitDesktop();}}finally{
+    try{if(!/^cp_[a-f0-9]{12}$/.test(user)||!/^dbark_colperm_[a-f0-9]{12}$/.test(database))throw Error('拒绝清理非本例资源');const[threads]=await observer.query<RowDataPacket[]>('SELECT ID FROM information_schema.PROCESSLIST WHERE ID<>CONNECTION_ID() AND (USER=? OR DB=?)',[user,database]);expect(threads).toHaveLength(0);await observer.query("DROP USER IF EXISTS '"+user+"'@'%'");await observer.query('DROP DATABASE IF EXISTS `'+database+'`');const[users]=await observer.query<RowDataPacket[]>('SELECT User FROM mysql.user WHERE User=?',[user]),[schemas]=await observer.query<RowDataPacket[]>('SELECT SCHEMA_NAME FROM information_schema.SCHEMATA WHERE SCHEMA_NAME=?',[database]);expect(users).toHaveLength(0);expect(schemas).toHaveLength(0);}finally{await observer.end();}
+   }
+  }
  });
 });

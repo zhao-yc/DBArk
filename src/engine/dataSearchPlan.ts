@@ -41,19 +41,32 @@ export async function readDataSearchTarget(managed:ManagedConnection,raw:unknown
   for(const row of rows){if(typeof row.name!=='string'||!requested.includes(row.name)||typeof row.data_type!=='string'||!/^[a-z0-9_]{1,64}$/i.test(row.data_type)||row.character_set!==null&&(typeof row.character_set!=='string'||!/^[a-z0-9_]{1,64}$/i.test(row.character_set))||!['YES','NO'].includes(String(row.nullable))||columns.has(row.name))throw Error('搜索字段目录不完整');columns.set(row.name,{name:row.name,dataType:row.data_type,binary:binaryType.test(row.data_type)||row.character_set==='binary',nullable:row.nullable==='YES'});}
   if(target.columns.some(choice=>!columns.has(choice.name)))throw Error('所选字段不存在或不可见，请刷新范围');
   // MySQL8对binary ENUM的目录字符集与真实列协议可能不一致；按实际零行描述识别，不能仅凭目录强制UTF-8转换。
-  const described=[...columns.keys()],description=await completionQuery<Record<string,unknown>[]>(managed,control,'SELECT '+described.map(identifier).join(',')+' FROM '+qualified(target.database,target.table)+' LIMIT 0',[]);
-  control.checkCancelled();if(description.rows.length!==0||description.fields.length!==described.length)throw Error('数据搜索零行描述与目录不一致');
-  description.fields.forEach((field,index)=>{if(field.name!==described[index]||typeof field.characterSet!=='number'||!Number.isInteger(field.characterSet)||field.characterSet<1||field.characterSet>65535)throw Error('数据搜索协议字段不完整');const column=columns.get(described[index])!;if(/^(?:char|varchar|tinytext|text|mediumtext|longtext|enum|set)$/i.test(column.dataType)&&field.characterSet===63)column.binary=true;});
+  const described=new Set<string>();
+  /** 必选搜索列先独立验证；附加定位键无权读取时不能阻断已有SELECT权限的范围。 */
+  async function describe(names:string[]){
+    const pending=names.filter(name=>!described.has(name));if(!pending.length)return;
+    const description=await completionQuery<Record<string,unknown>[]>(managed,control,'SELECT '+pending.map(identifier).join(',')+' FROM '+qualified(target.database,target.table)+' LIMIT 0',[]);
+    control.checkCancelled();if(description.rows.length!==0||description.fields.length!==pending.length)throw Error('数据搜索零行描述与目录不一致');
+    description.fields.forEach((field,index)=>{if(field.name!==pending[index]||typeof field.characterSet!=='number'||!Number.isInteger(field.characterSet)||field.characterSet<1||field.characterSet>65535)throw Error('数据搜索协议字段不完整');const column=columns.get(pending[index])!;if(/^(?:char|varchar|tinytext|text|mediumtext|longtext|enum|set)$/i.test(column.dataType)&&field.characterSet===63)column.binary=true;});
+    pending.forEach(name=>described.add(name));
+  }
+  await describe(target.columns.map(column=>column.name));
   const selected=target.columns.map(choice=>{const column=columns.get(choice.name);if(!column)throw Error('所选字段不存在或不可见，请刷新范围');if(column.binary&&choice.representation!=='hex')throw Error('二进制字段必须明确选择HEX文本，避免强制字符解码');return column;});
-  let keyColumns:DataSearchColumnMetadata[]=[],unsupported=false;
+  let keyColumns:DataSearchColumnMetadata[]=[],unsupported=false,unreadable=false;
   for(const group of groups.values()){
     if(!group.valid||group.names.length===0)continue;const candidate=group.names.map(name=>columns.get(name));
     if(candidate.some(column=>!column||column.nullable))continue;
     // FLOAT/DOUBLE的服务器文本化不能恢复相邻值；此类键保留只读定位状态，不伪造精确键。
     if(candidate.some(column=>/^(?:float|double|real)$/i.test(column!.dataType))){unsupported=true;continue;}
+    try{await describe(group.names);}catch(error){
+      control.checkCancelled();const failure=error as {code?:string;errno?:number};
+      // 只对服务器明确的列/表SELECT拒绝弃用此候选；取消、断线及其它SQL错误不能冒充只读降级。
+      if(managed.broken||!(['ER_COLUMNACCESS_DENIED_ERROR','ER_TABLEACCESS_DENIED_ERROR'].includes(failure?.code??'')||[1143,1142].includes(failure?.errno??0)))throw error;
+      unreadable=true;continue;
+    }
     keyColumns=candidate as DataSearchColumnMetadata[];break;
   }
-  return{target,columns:selected,keyColumns,indexMetadataIncomplete:incomplete,...(!keyColumns.length?{keyUnavailableReason:unsupported?'unsupported-key-type' as const:'no-key' as const}:{})};
+  return{target,columns:selected,keyColumns,indexMetadataIncomplete:incomplete,...(!keyColumns.length?{keyUnavailableReason:unreadable?'key-not-selectable' as const:unsupported?'unsupported-key-type' as const:'no-key' as const}:{})};
 }
 
 /** 固定投影只传有界文字预览及独立可靠键，原始大字段不进入驱动结果；匹配本身仍由服务器对完整值执行。 */
