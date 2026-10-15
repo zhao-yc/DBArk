@@ -1,0 +1,16 @@
+export const schemaCompareZh = {
+  title: '结构比较（只读）', source: '源表', target: '目标表', connection: '连接', database: '数据库', table: '表名',
+  start: '比较结构', cancel: '取消读取', close: '关闭', closing: '等待读取结束…', reading: '正在读取两侧完整定义…',
+  empty: '请选择两张明确配对的表，再开始比较。', direction: '比较方向：源 → 目标。新增表示目标缺少，删除表示目标多出。',
+  scope: '首阶段仅比较字段、主键/索引及出向外键；不推断重命名，不生成或执行同步 DDL。',
+  exactNames: '名称精确配对；连接、数据库和表名保持原始输入，不自动改写引用。',
+  showSame: '显示相同项', category: '类别', name: '名称', status: '结果', properties: '变化属性', reasons: '不能可靠比较的原因',
+  sourceDefinition: '源定义', targetDefinition: '目标定义', absent: '此侧无对应定义', detail: '查看完整片段',
+  version: '版本',
+  limits: '范围与忽略项', rawTail: '未比较的表尾原定义', allSame: '已覆盖范围内相同；请核对忽略项。',
+  stopped: '读取已取消。', invalid: '请选择连接并填写数据库和表名（长度不超过 64，不含空字符）。',
+  unknown: '存在不可可靠比较项，请查看原因及原定义。', failed: '结构读取失败',
+  categories: { columns: '字段', indexes: '主键 / 索引', foreignKeys: '外键', unclassified: '其它约束' },
+  statuses: { added: '新增', removed: '删除', changed: '变化', same: '相同', unknown: '不可可靠比较' },
+  propertiesMap: { type: '类型', nullable: '可空性', default: '默认值', comment: '注释', position: '字段顺序', charset: '字符集', collation: '排序规则', attributes: '其它属性', kind: '种类', method: '索引方法', parts: '有序键部分', childColumns: '子字段', parent: '父表引用', parentColumns: '父字段', onUpdate: '更新动作', onDelete: '删除动作', definition: '完整定义' } as Record<string, string>,
+};
