@@ -6,6 +6,7 @@ import { Client as SshClient, type ClientChannel } from 'ssh2';
 import type { ConnectionProfile, ConnectionStatus } from '../shared/contracts';
 import { sqlExecutableWords } from '../shared/queryParameters';
 import {initialCompletionDatabase,observeCompletionDatabase,invalidateCompletionDatabase,type CompletionDatabaseState,type SessionStatePacket} from './completionSession';
+import {SessionObjects} from './sessionObjects';
 
 export interface ManagedConnection {
   connection: Connection;
@@ -18,6 +19,8 @@ export interface ManagedConnection {
   sqlModeTracking?: boolean;
   /** 与事务、临时表相同，默认库属于本连接；未知时不可退回标签初始库。 */
   completionDatabase?:CompletionDatabaseState;
+  /** 目录只属于本物理连接，不在连接配置或SQLite之间共享。 */
+  sessionObjects?:SessionObjects;
   /** ERR 包没有状态位，保留上次状态供展示，但不能把它当作错误后的实时真值。 */
   transactionStateKnown?: boolean;
   noBackslashEscapesKnown?: boolean;
@@ -73,6 +76,8 @@ export function observeSessionState(managed: ManagedConnection, packet: SessionS
   const previousMode = managed.sqlMode;
   const previousStatus = managed.serverStatus;
   const previousEscapesKnown = managed.noBackslashEscapesKnown;
+  // 目录是辅助信息，其解析/预算异常绝不能改变已经执行的SQL结果。
+  try{if(packet.sql&&!(Number(packet.serverStatus)&8))managed.sessionObjects?.observe(packet.sql,managed.completionDatabase?.known?managed.completionDatabase.database??undefined:undefined,{noBackslashEscapes:previousMode===undefined?Boolean((previousStatus??0)&512):previousMode.split(',').includes('NO_BACKSLASH_ESCAPES'),noBackslashEscapesKnown:previousMode!==undefined||previousEscapesKnown!==false,ansiQuotes:previousMode?.split(',').includes('ANSI_QUOTES')??false,ansiQuotesKnown:previousMode!==undefined},managed.status.dialect,packet.warningStatus);}catch{managed.sessionObjects?.invalidate();}
   observeCompletionDatabase(managed,packet,{noBackslashEscapes:previousMode===undefined?Boolean((previousStatus??0)&512):previousMode.split(',').includes('NO_BACKSLASH_ESCAPES'),noBackslashEscapesKnown:previousMode!==undefined||previousEscapesKnown!==false,ansiQuotes:previousMode?.split(',').includes('ANSI_QUOTES')??false,ansiQuotesKnown:previousMode!==undefined});
   if (packet.serverStatus !== undefined) { managed.serverStatus = packet.serverStatus; managed.transactionStateKnown = true; }
   const variables = packet.stateChanges?.systemVariables ?? {};
@@ -109,7 +114,8 @@ export function observeSessionState(managed: ManagedConnection, packet: SessionS
 }
 
 /** ERR 可能来自隐式提交、死锁或执行了一部分的存储程序；无协议证据时明确降为未知。 */
-export function observeSessionError(managed: ManagedConnection): void {
+export function observeSessionError(managed: ManagedConnection,sql?:string): void {
+  try{managed.sessionObjects?.error(sql,managed.completionDatabase?.known?managed.completionDatabase.database??undefined:undefined,{noBackslashEscapes:managed.sqlMode?.split(',').includes('NO_BACKSLASH_ESCAPES')??false,ansiQuotes:managed.sqlMode?.split(',').includes('ANSI_QUOTES')??false,noBackslashEscapesKnown:managed.sqlMode!==undefined,ansiQuotesKnown:managed.sqlMode!==undefined},managed.status.dialect);}catch{managed.sessionObjects?.invalidate();}
   invalidateCompletionDatabase(managed);
   managed.transactionStateKnown = false; managed.noBackslashEscapesKnown = false;
   managed.sqlMode = undefined; managed.sqlModeTracking = undefined;
@@ -222,14 +228,19 @@ export async function connect(profile: ConnectionProfile, database:string|null|u
     active.on('error', () => { managed.broken = true; });
     active.on('end', () => { managed.broken = true; });
     active.on('dbark:session-state', (packet: Parameters<typeof observeSessionState>[1]) => observeSessionState(managed, packet));
-    active.on('dbark:session-error', () => observeSessionError(managed));
+    active.on('dbark:session-error', () => {
+      // 已固定版本的驱动在Command错误回调前发事件，此时_command仍是实际失败命令。
+      const command=(active as unknown as {_command?:{sql?:unknown;query?:unknown}})._command,sql=command?.sql??command?.query;
+      observeSessionError(managed,typeof sql==='string'?sql:undefined);
+    });
     if (ssh) { ssh.on('error', () => { managed.broken = true; active.destroy(); }); ssh.on('close', () => { managed.broken = true; active.destroy(); }); }
     // 仅在新会话建立时读取模式；此时尚无用户语句的 ROW_COUNT/警告需要保留。
-    const result = await execute<{ version: string; sqlMode: string;currentDatabase:string|null }[]>(managed, 'SELECT VERSION() AS version, @@SESSION.sql_mode AS sqlMode,DATABASE() AS currentDatabase');
+    const result = await execute<{ version: string; sqlMode: string;currentDatabase:string|null;identifierCase:number }[]>(managed, 'SELECT VERSION() AS version, @@SESSION.sql_mode AS sqlMode,DATABASE() AS currentDatabase,@@lower_case_table_names AS identifierCase');
     managed.status.version = result.rows[0].version;
     managed.status.dialect = /mariadb/i.test(managed.status.version) ? 'mariadb' : 'mysql';
     managed.sqlMode = result.rows[0].sqlMode;
     managed.completionDatabase=initialCompletionDatabase(result.rows[0].currentDatabase);
+    const identifierCase=Number(result.rows[0].identifierCase);managed.sessionObjects=new SessionObjects(identifierCase===1?1:identifierCase===2?2:0);if(![0,1,2].includes(identifierCase))managed.sessionObjects.invalidate();
     // 同时跟踪跟踪配置本身，用户明确关闭此能力时不继续使用过期的 SQL 模式缓存。
     await execute(managed, "SET SESSION session_track_schema=ON,session_track_system_variables = 'sql_mode,session_track_schema,session_track_system_variables'");
     // 初始化的 SET 可能按通用控制保护使缓存失效；该指令没有改变刚读出的 sql_mode。

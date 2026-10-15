@@ -11,8 +11,9 @@ import {completionSuggestions,type SqlCompletionItem} from '../completionSuggest
 import {completionLimits} from '../../shared/sqlCompletion';
 import {invoke,uid} from '../lib';
 import {resolveCompletionContext} from '../completionContext';
+import {SessionCompletionDirectory} from '../sessionCompletionDirectory';
 
-export type SqlCompletionStatus='idle'|'partial'|'unavailable'|'limited'|'databaseUnknown'|'startupTimeout'|'analysisTimeout';
+export type SqlCompletionStatus='idle'|'partial'|'unavailable'|'limited'|'databaseUnknown'|'sessionUnknown'|'startupTimeout'|'analysisTimeout';
 export interface SqlCompletionScope{connectionId:string;connectionVersion:number;database?:string;databaseUnknown?:boolean;sessionId?:string}
 const completionKinds:Record<SqlCompletionItem['kind'],monaco.languages.CompletionItemKind>={database:monaco.languages.CompletionItemKind.Module,table:monaco.languages.CompletionItemKind.Class,view:monaco.languages.CompletionItemKind.Interface,function:monaco.languages.CompletionItemKind.Function,procedure:monaco.languages.CompletionItemKind.Method,column:monaco.languages.CompletionItemKind.Field,alias:monaco.languages.CompletionItemKind.Variable,keyword:monaco.languages.CompletionItemKind.Keyword};
 
@@ -44,10 +45,15 @@ export function SqlEditor({ value, onChange, onReady, height = '100%', readOnly 
           const scope=resolveCompletionContext(completion.database,cached,completion.databaseUnknown);if(!scope.available){statusRef.current?.(scope.reason==='broken'?'unavailable':'idle');return{suggestions:[]};}
           const analysis=await worker.analyze(source,offset,scope.mode,controller.signal);if(!current())return{suggestions:[]};
           if(analysis.status==='blocked'){statusRef.current?.(analysis.reason==='startup-timeout'?'startupTimeout':analysis.reason==='timeout'?'analysisTimeout':analysis.reason==='budget'?'limited':analysis.reason==='worker'?'unavailable':'idle');return{suggestions:[]};}
-          const result=await completionSuggestions(analysis,scope.database,directory,controller.signal);if(!current())return{suggestions:[]};
+          const sourceDirectory=completion.sessionId?new SessionCompletionDirectory(directory,query=>{
+            if(query.kind==='databases'||query.kind==='objects'&&query.objectKind!=='relation')throw new Error('会话目录目标无效');
+            return invoke('query.temporaryCompletion',query.kind==='columns'?{sessionId:completion.sessionId!,kind:'columns',database:query.database,table:query.table,prefix:query.prefix}:{sessionId:completion.sessionId!,kind:'objects',database:query.database,prefix:query.prefix});
+          },cached?.objectsRevision??0):directory;
+          const result=await completionSuggestions(analysis,scope.database,sourceDirectory,controller.signal);if(!current())return{suggestions:[]};
+          if(completion.sessionId){const latest=await invoke('query.completionState',{sessionId:completion.sessionId});if(!current()||latest.busy||latest.broken||latest.objectsRevision!==cached?.objectsRevision||latest.databaseKnown!==cached?.databaseKnown||latest.database!==cached?.database)return{suggestions:[]};}
           const start=model.getPositionAt(analysis.target.start),end=model.getPositionAt(analysis.target.end);if(start.lineNumber!==end.lineNumber)return{suggestions:[]};
           const range={startLineNumber:start.lineNumber,startColumn:start.column,endLineNumber:end.lineNumber,endColumn:end.column};
-          statusRef.current?.(result.unavailable?'unavailable':scope.databaseUnknown?'databaseUnknown':result.incomplete?'partial':'idle');
+          statusRef.current?.(result.unavailable?'unavailable':result.sessionUncertain?'sessionUnknown':scope.databaseUnknown?'databaseUnknown':result.incomplete?'partial':'idle');
           return{incomplete:result.incomplete,suggestions:result.items.map((item,index)=>({label:item.label,kind:completionKinds[item.kind],insertText:item.insertText,detail:item.detail,range,filterText:analysis.target.quoted?source[analysis.target.start]+item.label:item.label,sortText:(item.kind==='keyword'?'9':'0')+String(index).padStart(4,'0'),...(item.trigger?{command:{id:'editor.action.triggerSuggest',title:''}}:{})}))};
         }catch{if(current())statusRef.current?.('unavailable');return{suggestions:[]};}
         finally{cancel.dispose();change.dispose();if(active===controller)active=undefined;}

@@ -22,12 +22,12 @@ diff --git a/lib/commands/query.js b/lib/commands/query.js
 +        serverStatus: rs.serverStatus,
 +        warningStatus: rs.warningStatus,
 +        stateChanges: rs.stateChanges,
-+        sql: this.sql,
++        sql: this.sql || this.query,
 +      });
        return this.doneInsert(rs);
      }
      if (this._fieldCount === null) {
-@@ -257,6 +264,11 @@ class Query extends Command {
+@@ -257,6 +264,12 @@ class Query extends Command {
    row(packet, _connection) {
      if (packet.isEOF()) {
        const status = packet.eofStatusFlags();
@@ -35,6 +35,7 @@ diff --git a/lib/commands/query.js b/lib/commands/query.js
 +      _connection.emit('dbark:session-state', {
 +        serverStatus: status,
 +        warningStatus: packet.eofWarningCount(),
++        sql: this.sql || this.query,
 +      });
        const moreResults = status & ServerStatus.SERVER_MORE_RESULTS_EXISTS;
        if (moreResults) {

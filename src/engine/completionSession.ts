@@ -4,7 +4,7 @@ import type {SqlLexicalMode} from '../shared/queryParameters';
 import {sqlExecutableWords} from '../shared/queryParameters';
 import {completionIdentifier} from '../shared/completionLexical';
 export interface CompletionDatabaseState{database:string|null;known:boolean}
-export interface SessionStatePacket{serverStatus?:number;stateChanges?:{schema?:string|null;systemVariables?:Record<string,string>};sql?:string}
+export interface SessionStatePacket{serverStatus?:number;warningStatus?:number;stateChanges?:{schema?:string|null;systemVariables?:Record<string,string>};sql?:string}
 
 /** 初始化只使用新连接既有诊断轮次取得的DATABASE()，不在用户执行后附加探测SQL。 */
 export function initialCompletionDatabase(value:unknown):CompletionDatabaseState{return value===null?{database:null,known:true}:completionIdentifier(value)?{database:value,known:true}:{database:null,known:false};}
@@ -29,5 +29,5 @@ export function completionSessionState(managed:ManagedConnection,busy:boolean):C
   const broken=managed.broken||managed.serverStatus===undefined;if(busy||broken)return{databaseKnown:false,broken,busy};
   const state=managed.completionDatabase,known=state?.known===true;
   const sqlMode=managed.sqlMode,modes=sqlMode?.split(','),noBackslashEscapes=modes?modes.includes('NO_BACKSLASH_ESCAPES'):managed.noBackslashEscapesKnown===true?Boolean(managed.serverStatus!&512):undefined;
-  return{databaseKnown:known,...(known?{database:state!.database}:{}),...(modes?{ansiQuotes:modes.includes('ANSI_QUOTES')}:{}),...(noBackslashEscapes===undefined?{}:{noBackslashEscapes}),broken:false,busy:false};
+  return{databaseKnown:known,...(known?{database:state!.database}:{}),...(modes?{ansiQuotes:modes.includes('ANSI_QUOTES')}:{}),...(noBackslashEscapes===undefined?{}:{noBackslashEscapes}),...(managed.sessionObjects?{objectsRevision:managed.sessionObjects.revision}:{}),broken:false,busy:false};
 }

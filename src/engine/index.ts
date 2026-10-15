@@ -12,6 +12,7 @@ import * as metadata from './metadata';
 import { completionMetadata } from './completionMetadata';
 import type {CompletionMetadataInput} from '../shared/sqlCompletion';
 import {completionSessionState} from './completionSession';
+import {readSessionObject} from './sessionObjectRead';
 import {queryDatabaseFromSession} from '../shared/queryContext';
 import { csvCell, csvHeader, encodingName, previewFile, readRecords, readText } from './files';
 import { ResultFileTasks } from './resultFileTasks';
@@ -148,6 +149,15 @@ export class Engine {
         if (!Array.isArray(input.parameters)) throw new Error('参数查询必须提供参数列表');
         return this.queryScript(task, input.sql, input.maxRows, input.parameters);
       }));
+      case 'query.temporaryState':{
+        const session=this.sessions.get(input.sessionId);if(!session?.managed.sessionObjects)throw new Error('会话对象目录不存在，请重新连接');
+        return session.managed.sessionObjects.snapshot(session.busy,session.managed.broken);
+      }
+      case 'query.temporaryCompletion':{
+        const session=this.sessions.get(input.sessionId);if(!session?.managed.sessionObjects)throw new Error('会话对象目录不存在，请重新连接');if(session.busy||session.managed.broken)throw new Error('会话对象目录暂不可用');
+        return session.managed.sessionObjects.completion(input.kind==='objects'?{kind:'objects',database:input.database,prefix:input.prefix,objectKind:'relation'}:{kind:'columns',database:input.database,table:input.table,prefix:input.prefix});
+      }
+      case 'query.temporaryRead':return this.withSession(input.sessionId,managed=>this.runTask(input.taskId,managed,'读取会话临时对象结构',task=>readSessionObject(managed,{database:input.database,table:input.table},{start:()=>{this.checkCancelled(task);task.inFlight=true;task.generation++;},check:()=>this.checkCancelled(task),finish:async()=>{task.inFlight=false;await task.cancelPending;}})));
       case 'query.explain': return this.withSession(input.sessionId, managed => this.runTask(input.taskId, managed, '查看执行计划', async task => {
         const mode = await this.sqlMode(managed);
         const statements = splitSql(input.sql, mode.noBackslashEscapes, mode.ansiQuotes, mode.ansiQuotesKnown !== false, mode.noBackslashEscapesKnown !== false);

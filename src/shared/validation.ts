@@ -95,6 +95,9 @@ export const commandSchemas: Record<Command, z.ZodType> = {
   'query.parameterNames': z.object({ sessionId: id, sql: text.min(1) }).strict(),
   'query.sessionState': z.object({ sessionId: id }).strict(),
   'query.completionState':z.object({sessionId:id}).strict(),
+  'query.temporaryState':z.object({sessionId:id}).strict(),
+  'query.temporaryCompletion':z.discriminatedUnion('kind',[z.object({sessionId:id,database:completionName,prefix:completionPrefix,kind:z.literal('objects')}).strict(),z.object({sessionId:id,database:completionName,table:completionName,prefix:completionPrefix,kind:z.literal('columns')}).strict()]),
+  'query.temporaryRead':z.object({sessionId:id,database:completionName,table:completionName,taskId:id}).strict(),
   'query.executeParameterized': z.object({ sessionId: id, sql: text.min(1), parameters: queryParameters, taskId: id, maxRows: z.number().int().min(1).max(100000) }).strict(),
   'query.exportStream': z.object({ sessionId: id, sql: text.min(1), taskId: id, fileToken: id, format: z.enum(['csv', 'json']), encoding: z.enum(['utf8', 'utf16le', 'gb18030']), protocol: z.enum(['text-strict', 'binary-explicit']), resultSelection: z.discriminatedUnion('kind', [z.object({ kind: z.literal('all') }).strict(), z.object({ kind: z.literal('row-result'), ordinal: z.number().int().min(1).max(queryStreamExportLimits.results) }).strict()]), parameters: queryParameters.optional() }).strict().superRefine((input, context) => {
     if (new TextEncoder().encode(input.sql).byteLength > queryStreamExportLimits.sqlBytes) context.addIssue({ code: 'custom', path: ['sql'], message: 'SQL 模板不能超过 20 MiB' });
