@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { TableInfo } from '../../src/shared/contracts';
 import type { DraftRow } from '../../src/renderer/dataChanges';
-import { applyPageReplacement, findPageCells, pageFindLimits, pageOccurrences, previewPageReplacement, type PageFindOptions } from '../../src/renderer/pageFindReplace';
+import { applyPageReplacement, findPageCells, findPageCellsInWorker, pageFindLimits, pageOccurrences, previewPageReplacement, previewPageReplacementInWorker, type PageFindOptions } from '../../src/renderer/pageFindReplace';
 import { collectChanges } from '../../src/renderer/dataChanges';
 
 const options: PageFindOptions = { kind: 'text', query: 'old', caseSensitive: false, wholeCell: false };
@@ -10,6 +10,18 @@ const info: TableInfo = { database: 'CaseDb', name: 'CaseTable', columns: ['id',
 function row(id: string, value = 'old'): DraftRow { const data = Object.fromEntries([['id', '9007199254740993123'], ['text', value], ['__proto__', 'old'], ['constructor', 'old'], ['json', '{"key":"old"}'], ['amount', '12345678901234567890.1234567890'], ['generated', 'old']]); return { id, data, original: structuredClone(data), inserted: false, deleted: false }; }
 
 describe('页内查找和替换草稿', () => {
+  it('同步渲染入口拒绝用户正则；线程语义支持整格分支、大小写和Unicode零宽', () => {
+    const rows = [row('1', 'ab'), row('2', '😀A')]; const regex = { ...options, regex: true };
+    expect(() => findPageCells(rows, ['text'], { ...regex, query: '(a+)+$' })).toThrow('线程');
+    expect(findPageCellsInWorker(rows, ['text'], { ...regex, query: 'a|ab', wholeCell: true })).toEqual([{ rowId: '1', key: 'text', ranges: [{ start: 0, end: 2 }] }]);
+    expect(findPageCellsInWorker([rows[1]], ['text'], { ...regex, query: '(?:)' })[0].ranges).toEqual([{ start: 0, end: 0 }, { start: 2, end: 2 }, { start: 3, end: 3 }]);
+    expect(findPageCellsInWorker(rows, ['text'], { ...regex, query: 'a', caseSensitive: true })).toHaveLength(1);
+    expect(findPageCellsInWorker(rows, ['text'], { ...regex, query: 'a', caseSensitive: false })).toHaveLength(2);
+    expect(() => findPageCellsInWorker(rows, ['text'], { ...regex, query: '[' })).toThrow('无效');
+    const plan = previewPageReplacementInWorker([rows[1]], ['text'], { ...regex, query: '(?:)' }, '$&/$1', info, 1);
+    expect(plan.patches[0].after).toBe('$&/$1😀$&/$1A$&/$1');
+    expect(findPageCellsInWorker([row('3', '')], ['text'], { ...regex, query: '^$', wholeCell: true })[0].ranges).toEqual([{ start: 0, end: 0 }]);
+  });
   it('同格多处按原文范围逐处定位，只替换选中的第二处并保留美元符号字面值', () => {
     const rows = [row('1', '😀old前old后old'), row('2', 'old')];
     const matches = pageOccurrences(findPageCells(rows, ['text'], options));

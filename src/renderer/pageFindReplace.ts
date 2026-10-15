@@ -3,8 +3,8 @@ import type { DraftRow } from './dataChanges';
 import { ownCell, rowEqual } from './lib';
 import { tableGridZh as text } from './locales/tableGrid.zh-CN';
 
-export const pageFindLimits = { query: 512, replacement: 4096, bytes: 16 * 1024 * 1024, matches: 50_000 } as const;
-export interface PageFindOptions { kind: 'text' | 'null' | 'default'; query: string; caseSensitive: boolean; wholeCell: boolean; column?: string; }
+export const pageFindLimits = { query: 512, replacement: 4096, bytes: 16 * 1024 * 1024, matches: 50_000, memory: 128 * 1024 * 1024, timeoutMs: 1500, startupMs: 8000 } as const;
+export interface PageFindOptions { kind: 'text' | 'null' | 'default'; query: string; caseSensitive: boolean; wholeCell: boolean; column?: string; regex?: boolean; }
 export interface PageCellMatch { rowId: string; key: string; ranges: { start: number; end: number }[]; }
 export interface PageOccurrence { rowId: string; key: string; range?: { start: number; end: number }; occurrence: number; }
 export interface PageReplacement { generation: number; signature: string; rows: DraftRow[]; patches: { rowId: string; key: string; before: string; after: string }[]; }
@@ -31,6 +31,11 @@ function measureJson(value: unknown, total: { bytes: number }): void {
     for (const [key, cell] of Object.entries(value)) { if (cell === undefined) continue; if (count++) add(1); measureJson(key, total); add(1); measureJson(cell, total); }
   } else add(value === undefined ? 4 : JSON.stringify(value).length);
 }
+/** 在结构化复制之前计量整个请求；估算包含双向副本、UTF-16 文本及最多五万处结果。 */
+export function assertPageFindTransfer(value: unknown): void {
+  const total = { bytes: 0 }; measureJson(value, total);
+  if (total.bytes * 6 + pageFindLimits.matches * 128 > pageFindLimits.memory) throw new Error(text.budget);
+}
 /** 字面模式只转义为安全正则，不向用户开放正则或替换表达式。 */
 function literalPattern(options: PageFindOptions) { return new RegExp(options.query.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), options.caseSensitive ? 'gu' : 'giu'); }
 
@@ -41,11 +46,28 @@ export function pageOccurrences(matches: readonly PageCellMatch[]): PageOccurren
 
 /** 使用完整自有原值扫描当前页，NULL/DEFAULT 独立于文字，二进制不转成预览匹配。 */
 export function findPageCells(rows: readonly DraftRow[], visibleKeys: readonly string[], options: PageFindOptions): PageCellMatch[] {
+  if (options.regex) throw new Error(text.workerRequired);
+  if (options.query.length > pageFindLimits.query) throw new Error(text.queryLimit);
+  return scanPageCells(rows, visibleKeys, options, options.kind === 'text' ? literalPattern(options) : null);
+}
+
+/** 用户正则只允许实际 Worker 调用；渲染线程的同步入口始终拒绝用户模式。 */
+export function findPageCellsInWorker(rows: readonly DraftRow[], visibleKeys: readonly string[], options: PageFindOptions): PageCellMatch[] {
+  let pattern: RegExp | null = null;
+  if (options.kind === 'text') {
+    if (options.query.length > pageFindLimits.query) throw new Error(text.queryLimit);
+    try { pattern = options.regex ? new RegExp(options.wholeCell ? `^(?:${options.query})$` : options.query, options.caseSensitive ? 'gu' : 'giu') : literalPattern(options); }
+    catch { throw new Error(text.regexInvalid); }
+  }
+  return scanPageCells(rows, visibleKeys, options, pattern);
+}
+
+/** matchAll 在 Unicode 模式下按码点推进零宽命中，返回坐标始终保留原文 UTF-16 偏移。 */
+function scanPageCells(rows: readonly DraftRow[], visibleKeys: readonly string[], options: PageFindOptions, pattern: RegExp | null): PageCellMatch[] {
   if (options.query.length > pageFindLimits.query) throw new Error(text.queryLimit);
   if (options.kind === 'text' && !options.query) throw new Error(text.empty);
   const keys = options.column ? visibleKeys.filter(key => key === options.column) : visibleKeys;
   const matches: PageCellMatch[] = []; let scanned = 0, occurrences = 0;
-  const pattern = options.kind === 'text' ? literalPattern(options) : null;
   for (const row of rows) {
     if (row.deleted) continue;
     for (const key of keys) {
@@ -70,16 +92,26 @@ export function findPageCells(rows: readonly DraftRow[], visibleKeys: readonly s
 /** 替换资格与元数据快照共用真实列定义，不能把数字字符串当普通文本列。 */
 export function pageReplaceWritable(info: TableInfo, key: string): boolean {
   const column = info.columns.find(column => column.name === key);
-  return info.engine.toUpperCase() === 'INNODB' && !!info.editableKey.length && !!column && !column.generated && /^(?:CHAR|VARCHAR|TINYTEXT|TEXT|MEDIUMTEXT|LONGTEXT)\b/i.test(column.type);
+  return info.objectKind !== 'view' && info.engine.toUpperCase() === 'INNODB' && !!info.editableKey.length && !!column && !column.generated && /^(?:CHAR|VARCHAR|TINYTEXT|TEXT|MEDIUMTEXT|LONGTEXT)\b/i.test(column.type);
 }
 /** 库表保持大小写语义，完整列类型和可靠键变化使预览失效。 */
-function tableSignature(info: TableInfo) { return JSON.stringify([info.database, info.name, info.engine, info.editableKey, info.columns]); }
+function tableSignature(info: TableInfo) { return JSON.stringify([info.database, info.name, info.objectKind, info.engine, info.editableKey, info.columns]); }
 
 /** 先产生完整替换计划和受影响行快照，替换值中的美元符号不是插值。 */
 export function previewPageReplacement(rows: readonly DraftRow[], keys: readonly string[], options: PageFindOptions, replacement: string, info: TableInfo, generation: number, only?: PageOccurrence): PageReplacement {
+  return planPageReplacement(rows, findPageCells(rows, keys, options), options, replacement, info, generation, only);
+}
+
+/** Worker 内匹配后构造预览，不能把用户模式回传到渲染线程重新执行。 */
+export function previewPageReplacementInWorker(rows: readonly DraftRow[], keys: readonly string[], options: PageFindOptions, replacement: string, info: TableInfo, generation: number, only?: PageOccurrence): PageReplacement {
+  return planPageReplacement(rows, findPageCellsInWorker(rows, keys, options), options, replacement, info, generation, only);
+}
+
+/** 已有界的范围按原文顺序拼接，不调用字符串正则替换，美元符号与捕获组始终是字面值。 */
+function planPageReplacement(rows: readonly DraftRow[], matches: PageCellMatch[], options: PageFindOptions, replacement: string, info: TableInfo, generation: number, only?: PageOccurrence): PageReplacement {
   if (replacement.length > pageFindLimits.replacement) throw new Error(text.replacementLimit);
   if (options.kind !== 'text') throw new Error(text.noReplace);
-  const matches = findPageCells(rows, keys, options), patches: PageReplacement['patches'] = []; let outputBytes = 0;
+  const patches: PageReplacement['patches'] = []; let outputBytes = 0;
   for (const match of matches) {
     if (only && (only.rowId !== match.rowId || only.key !== match.key)) continue;
     if (!pageReplaceWritable(info, match.key)) continue;
