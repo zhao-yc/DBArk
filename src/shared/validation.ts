@@ -18,6 +18,7 @@ import { tablePreferenceSaveSchema, tablePreferenceTargetSchema } from './tableP
 import { validateColumnPatches } from './tableColumnPatches';
 import { validateIndexPatches } from './tableIndexPatches';
 import { tableCommentAcknowledgements, validateTableComment } from './tableComment';
+import { tableDefaultEncodingAcknowledgements } from './tableDefaultEncoding';
 import { validateForeignKeyPatches } from './tableForeignKeyPatches';
 import { foreignKeyAcknowledgementIds, foreignKeyTaskLimits } from './tableForeignKeyTasks';
 const foreignKeyTargetName = z.string().min(1).max(64).refine(value => !value.includes('\0'), '外键目标名称不能含 NUL');
@@ -143,6 +144,10 @@ export const commandSchemas: Record<Command, z.ZodType> = {
   'schema.columns.release': z.object({ snapshotId: id.optional(), previewToken: id.optional() }).strict().refine(value => Boolean(value.snapshotId || value.previewToken), '缺少待释放的结构令牌'),
   'schema.indexes.get': z.object({ connectionId: id, database: z.string().min(1).max(64), table: z.string().min(1).max(64), taskId: id }).strict(),
   'schema.tableComment.get': z.object({ connectionId: id, database: z.string().min(1).max(64), table: z.string().min(1).max(64), taskId: id }).strict(),
+  'schema.tableDefaultEncoding.get': z.object({ connectionId: id, database: foreignKeyTargetName, table: foreignKeyTargetName, taskId: id }).strict(),
+  'schema.tableDefaultEncoding.preview': z.object({ snapshotId: id, charset: z.string().regex(/^[A-Za-z0-9_]{1,64}$/), collation: z.string().regex(/^[A-Za-z0-9_]{1,255}$/), taskId: id }).strict(),
+  'schema.tableDefaultEncoding.apply': z.object({ previewToken: id, acknowledgements: z.array(z.enum(tableDefaultEncodingAcknowledgements)).max(3).refine(value => new Set(value).size === value.length, '表默认编码确认项不能重复'), taskId: id }).strict(),
+  'schema.tableDefaultEncoding.release': z.object({ snapshotId: id.optional(), previewToken: id.optional() }).strict().refine(value => Boolean(value.snapshotId || value.previewToken), '缺少待释放的表默认编码令牌'),
   'schema.tableComment.preview': z.object({ snapshotId: id, comment: z.string().max(4096).transform(value => validateTableComment(value)), taskId: id }).strict(),
   'schema.tableComment.apply': z.object({ previewToken: id, acknowledgements: z.array(z.enum(tableCommentAcknowledgements)).max(2).refine(value => new Set(value).size === value.length, '表注释确认项不能重复'), taskId: id }).strict(),
   'schema.tableComment.release': z.object({ snapshotId: id.optional(), previewToken: id.optional() }).strict().refine(value => Boolean(value.snapshotId || value.previewToken), '缺少待释放的表注释令牌'),
