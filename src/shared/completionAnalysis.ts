@@ -93,8 +93,13 @@ export function analyzeCompletion(source:string,offset:number,mode:CompletionLex
     if(entities.length>completionLimits.tokens)return{status:'blocked',reason:'budget'};
     const tables=entities.filter(entity=>entity.entityContextType==='table') as CommonEntityContext[],queries=entities.filter(entity=>entity.entityContextType==='queryResult') as CommonEntityContext[],ctes=collectCtes(normalizedTokens,normalized.text.length);
     if(ctes.length>completionLimits.entries)return{status:'blocked',reason:'budget'};
-    let expansions=0,truncated=false;const branches=completionQueryBranches(queries,normalizedTokens),windowContext=completionWindowContext(branches,normalizedTokens,normalized.caret);
+    // 哨兵替换会隐藏正在编辑的ROWS等词；原词只用于停止边界，不还原进AST或生成关系。
+    const targetToken=lexical.tokens.find(token=>token.start===lexical.target.start&&token.end===lexical.target.end);
+    let expansions=0,truncated=false;const branches=completionQueryBranches(queries,normalizedTokens),windowContext=completionWindowContext(branches,normalizedTokens,normalized.caret,targetToken?.kind==='word'?targetToken.value:undefined);
     if(windowContext==='unsupported')return{status:'blocked',reason:'syntax'};
+    // 集合边界独立于输出别名展示；尚未支持的全局窗口不能回退到末分支FROM来源。
+    const outputContext=completionOutputContext(branches,normalizedTokens,normalized.caret);
+    if(windowContext&&outputContext?.union)return{status:'blocked',reason:'syntax'};
     /** 引用名和字符串别名均回到原token解码，不能把已脱敏的'0'当成真实别名。 */
     function aliasName(alias:{startIndex:number}|null|undefined):string|undefined{if(!alias)return;const origin=normalized.origins.get(alias.startIndex);if(!origin)return;if(origin.kind==='string')return stringAlias(source,origin,mode);return completionAliasIdentifier(origin.value)&&origin.value!==normalized.sentinel?origin.value:undefined;}
     /** 语法库可能把UNION各分支放进同一个语句范围，表来源还须按同层UNION边界核对。 */
@@ -158,7 +163,7 @@ export function analyzeCompletion(source:string,offset:number,mode:CompletionLex
     }
     let relations=visible(normalized.caret).map(entity=>resolve(entity)).filter((value):value is CompletionRelation=>!!value);let outputAliases:CompletionOutputAliases|undefined;
     // 外层ORDER BY包含OVER时，窗口表达式仍只能引用关系字段，不能继承外层输出别名。
-    const output=windowContext?undefined:completionOutputContext(branches,normalizedTokens,normalized.caret);
+    const output=windowContext?undefined:outputContext;
     if(output){const raw=rawProjection(output.query,new Set(),0),counts=new Map<string,number>();for(const name of raw.columns)counts.set(name.toLowerCase(),(counts.get(name.toLowerCase())??0)+1);const aliases:string[]=[];let incomplete=raw.incomplete||[...counts.values()].some(count=>count>1);
       for(const column of output.query.columns??[]){if(!column._alias||column.position.startIndex<output.query.position.startIndex||column.position.endIndex>output.query.position.endIndex)continue;const name=aliasName(column._alias);if(!name||counts.get(name.toLowerCase())!==1){incomplete=true;continue;}
         const nested=queries.filter(query=>scopeKey(query.belongStmt)!==scopeKey(output.query.belongStmt)),tokens=normalizedTokens.filter(token=>token.start>=column.position.startIndex&&token.start<=column.position.endIndex&&!nested.some(query=>contains(query.belongStmt.position.startIndex,query.belongStmt.position.endIndex+1,token.start))),window=tokens.some(token=>keyword(token,'OVER')),aggregate=tokens.some((token,index)=>token.kind==='word'&&['AVG','COUNT','SUM','MIN','MAX','GROUP_CONCAT','JSON_ARRAYAGG','JSON_OBJECTAGG','BIT_AND','BIT_OR','BIT_XOR','STD','STDDEV','STDDEV_POP','STDDEV_SAMP','VARIANCE','VAR_POP','VAR_SAMP'].includes(token.value.toUpperCase())&&tokens[index+1]?.value==='('&&tokens[index-1]?.value!=='.');

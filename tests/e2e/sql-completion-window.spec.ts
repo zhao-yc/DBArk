@@ -32,6 +32,34 @@ test('离线窗口隔离：外层ORDER不泄露输出别名，窗口结束后仍
   expect(await page.evaluate(async()=>({tasks:await window.dbark.invoke('tasks.list',{}),history:await window.dbark.invoke('history.list',{})}))).toEqual({tasks:[],history:[]});expect(pageErrors).toEqual([]);await page.screenshot({path:info.outputPath('offline-window-alias-isolation.png')});
 });
 
+test('离线集合和帧边界：实际Worker停止，合法分支窗口仍可接受和撤销',async({},info)=>{
+  test.setTimeout(120000);
+  // 仅旁观真实Worker的有界请求位置及返回状态，不替换解析、超时、取消或返回值。
+  await page.evaluate(()=>{
+    const observed=window as unknown as{__windowReplies:{length:number;offset:number;status:string}[]};observed.__windowReplies=[];const NativeWorker=window.Worker;
+    window.Worker=class extends NativeWorker{
+      constructor(url:string|URL,options?:WorkerOptions){super(url,options);const requests=new Map<number,{length:number;offset:number}>(),post=this.postMessage.bind(this);this.postMessage=(value:any,options?:any)=>{if(Number.isInteger(value?.id)&&typeof value?.source==='string')requests.set(value.id,{length:value.source.length,offset:value.offset});post(value,options);};this.addEventListener('message',event=>{const request=requests.get(event.data?.id);if(request&&event.data?.result?.status){observed.__windowReplies.push({...request,status:event.data.result.status});requests.delete(event.data.id);}});}
+    };
+  });
+  await offlineQuery();
+  for(const marked of[
+    'WITH a AS(SELECT 1 AS first_value),b AS(SELECT 2 AS later_value) SELECT a.first_value FROM a UNION ALL SELECT b.later_value FROM b ORDER BY SUM(first_value) OVER(ORDER BY lat|suffix)',
+    'WITH q AS(SELECT 1 AS value_column) SELECT ROW_NUMBER() OVER(ORDER BY q.value_column ROWS BETWEEN UNBOUNDED PRECEDING AND CUR|RENT ROW) FROM q',
+    'WITH q AS(SELECT 1 AS value_column) SELECT ROW_NUMBER() OVER w FROM q WINDOW w AS(ORDER BY q.value_column RANGE BETWEEN UNBOUNDED PRECEDING AND CUR|RENT ROW)',
+  ]){
+    const original=await atCaret(marked);await page.evaluate(()=>{(window as unknown as{__windowReplies:unknown[]}).__windowReplies=[];});await page.keyboard.press('Control+Space');
+    await expect.poll(()=>page.evaluate(({length,offset})=>(window as unknown as{__windowReplies:{length:number;offset:number;status:string}[]}).__windowReplies.some(value=>value.length===length&&value.offset===offset&&value.status==='blocked'),{length:original.length,offset:marked.indexOf('|')}),{timeout:13000}).toBe(true);
+    // Monaco可保留“无建议”空面板；断言实际候选行为，而非强制整个面板消失。
+    await expect(page.locator('.suggest-widget.visible .monaco-list-row')).toHaveCount(0);await expectSql(original);
+  }
+  for(const[marked,label,expected]of[
+    ['WITH q AS(SELECT 1 AS value_column) SELECT 1 UNION ALL SELECT ROW_NUMBER() OVER(ORDER BY q.val|suffix) FROM q','value_column','WITH q AS(SELECT 1 AS value_column) SELECT 1 UNION ALL SELECT ROW_NUMBER() OVER(ORDER BY q.`value_column`) FROM q'],
+    ['WITH q AS(SELECT 1 AS value_column) SELECT 1 UNION ALL (SELECT q.value_column FROM q ORDER BY SUM(q.value_column) OVER(ORDER BY q.val|suffix) LIMIT 1)','value_column','WITH q AS(SELECT 1 AS value_column) SELECT 1 UNION ALL (SELECT q.value_column FROM q ORDER BY SUM(q.value_column) OVER(ORDER BY q.`value_column`) LIMIT 1)'],
+    ['WITH q AS(SELECT 1 AS value_column) SELECT ROW_NUMBER() OVER(ORDER BY q.val|suffix ROWS BETWEEN 1 PRECEDING AND CURRENT ROW) FROM q','value_column','WITH q AS(SELECT 1 AS value_column) SELECT ROW_NUMBER() OVER(ORDER BY q.`value_column` ROWS BETWEEN 1 PRECEDING AND CURRENT ROW) FROM q'],
+  ]){const original=await atCaret(marked);await choose(label);await expectSql(expected);await page.keyboard.press(`${modifier}+Z`);await expectSql(original);}
+  expect(await page.evaluate(async()=>({tasks:await window.dbark.invoke('tasks.list',{}),history:await window.dbark.invoke('history.list',{})}))).toEqual({tasks:[],history:[]});expect(pageErrors).toEqual([]);await page.screenshot({path:info.outputPath('offline-window-union-frame-boundaries.png')});
+});
+
 test.describe('200隔离实库：窗口字段接受后执行',()=>{
   test.skip(!enabled,'需要统筹显式启用200隔离数据库');
   test('按服务器能力验证OVER和命名WINDOW，MySQL5.7明确跳过',async({},info)=>{
