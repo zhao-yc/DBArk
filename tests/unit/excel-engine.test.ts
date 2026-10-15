@@ -41,11 +41,16 @@ async function importInput(filePath: string, rows: CellValue[][] = [raw.map(valu
 describe('Excel 正式引擎接线', () => {
   it.each([
     ['decimal(5,2)', '1.239', 1], ['varchar(2)', '三个字', 3], ['tinyint unsigned', '-1', 0], ['datetime(3)', '2026-10-15 10:20:30.123456', 2],
+    ['float(5,1)', '1.375', 1], ['double(5,1)', '1.375', 1],
   ] as [string, string, number][])('写入前拒绝 %s 的有损目标转换，不提交当前批', async (type, value, column) => {
     const row: CellValue[] = ['1', '1', null, '', null]; row[column] = value;
     const input = await importInput(await path(), [row]); info.columns[column].type = type;
     const result = await engine.handle('excel.import', input); expect(result.rows).toBe(0); expect(result.errors[0]).toContain('不能无损导入');
     expect(inserts).toEqual([]); expect(mocks.execute.mock.calls.some(call => call[1] === 'COMMIT')).toBe(false); expect(mocks.execute.mock.calls.at(-1)?.[1]).toBe('ROLLBACK');
+  });
+  it.each(['float(5,1)', 'double(5,1)'])('%s 等值尾零保留原始参数，不在校验时改写为 Number', async type => {
+    const input = await importInput(await path(), [['1', '-1.5000', null, '', null]]); info.columns[1].type = type;
+    await expect(engine.handle('excel.import', input)).resolves.toEqual({ rows: 1, errors: [] }); expect(inserts[0][1]).toBe('-1.5000');
   });
   it('INSERT 警告在下一 SQL 前读取诊断并回滚，不把告警行计为成功', async () => {
     const input = await importInput(await path());

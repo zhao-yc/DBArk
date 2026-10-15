@@ -9,6 +9,16 @@ function check(type: string, value: CellValue, dialect: 'mysql' | 'mariadb' = 'm
 }
 describe('文件导入的无损可表示性', () => {
   it.each([
+    ['FLOAT(5,1)', '1.375'], ['DOUBLE(5,1)', '1.375'], ['FLOAT(5,1)', '-1.375'], ['DOUBLE(5,1)', '-1.375'],
+    ['FLOAT(5,1)', '10000'], ['DOUBLE(5,1)', '-10000'], ['DOUBLE(5,1)', '1.00000000000000001'], ['DOUBLE(5,1)', '1e-2'],
+    ['DOUBLE(5,1) UNSIGNED', '-0.1'], ['FLOAT(5,1)', '0.1'], ['FLOAT(24)', '1.5'], ['DOUBLE(5)', '1'], ['REAL(5,1)', '1.5'], ['DOUBLE(2,3)', '0.1'],
+  ])('定标或不能可靠解释的 %s 不放行有损原文 %s', (type, value) => { expect(check(type, value)).toThrow(); });
+  it.each([
+    ['FLOAT(5,1)', '1.5000'], ['FLOAT(5,1)', '-9999.5000'], ['FLOAT(5,1) UNSIGNED', '9999.5'],
+    ['DOUBLE(5,1)', '0.1'], ['DOUBLE(5,1)', '0000.1000'], ['DOUBLE(5,1)', '-9999.9000'], ['DOUBLE(5,1) UNSIGNED', '9999.9'],
+    ['DOUBLE(5,1)', '1e-1'], ['DOUBLE(1,1)', '0.9'], ['FLOAT(5,1) UNSIGNED', '-0.000'], ['DOUBLE PRECISION(5,1)', '1.5'],
+  ])('定标 %s 接受等值尾零、负数与边界 %s', (type, value) => { expect(check(type, value)).not.toThrow(); });
+  it.each([
     ['DECIMAL(5,2)', '1.239'], ['DECIMAL(5,2)', '1000'], ['DECIMAL(5,2) UNSIGNED', '-1'], ['DECIMAL(5,2)', '1e2'],
     ['TINYINT UNSIGNED', '-1'], ['TINYINT', '128'], ['INT', '1.2'], ['BIGINT UNSIGNED', '18446744073709551616'], ['BIGINT', 9007199254740992],
     ['VARCHAR(2)', '中文🚢'], ['CHAR(4)', '尾部 '], ['TINYTEXT', '中'.repeat(86)], ['TEXT', true],
