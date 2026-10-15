@@ -4,9 +4,11 @@ import { ownCell } from './lib';
 import { boundedUtf8Bytes, parseRecordInputDocumentTree } from './jsonLexicalTree';
 import { assertRecordDraftCurrent, editRecordInput, initialRecordInput, recordFieldTooLarge, recordInputDirty, recordReadonlyReason, stageRecordDraft, type RecordContext, type RecordDraft, type RecordInput, type RecordMode } from './recordViews';
 import { recordDocumentZh as text } from './locales/recordDocument.zh-CN';
+import { assertTextInputBudget } from './boundedTextInput';
 
 export interface RecordDocumentInput { readonly draft: RecordDraft; readonly row: DraftRow; readonly initialText: string; readonly text: string }
 export const recordDocumentLimits = Object.freeze({ bytes: 2_097_152, fields: 4096, metadataUnits: 1_048_576 });
+export const recordDocumentInputBudget = Object.freeze({ units: recordDocumentLimits.bytes, bytes: recordDocumentLimits.bytes, message: text.limited });
 type InputField = { name: string; locked: true } | ({ name: string } & RecordInput);
 const modes: ReadonlySet<string> = new Set<RecordMode>(['text', 'json', 'binary', 'null', 'default']);
 
@@ -59,7 +61,7 @@ export function beginRecordDocument(rows: readonly DraftRow[], draft: RecordDraf
 }
 /** 非法 JSON 仍保留为原文并视为 dirty；超限输入不替换现有完整缓冲。 */
 export function changeRecordDocument(input: RecordDocumentInput, value: string): RecordDocumentInput {
-  if(value.length>recordDocumentLimits.bytes||boundedUtf8Bytes(value,recordDocumentLimits.bytes)===undefined)throw Error(text.limited);
+  assertTextInputBudget(value,recordDocumentInputBudget);
   return Object.freeze({...input,text:value});
 }
 /** 仅比较输入原文，语法无效也必须进入原有导航和退出保护。 */
@@ -86,6 +88,8 @@ function objectWithKeys(value: unknown, keys: readonly string[]): value is Recor
 export function stageRecordDocument(rows: DraftRow[], input: RecordDocumentInput, context: RecordContext): DraftRow[] {
   const row=assertRecordDocumentCurrent(rows,input,context),reason=recordReadonlyReason(context,row);
   if(reason)throw Error(reason);
+  // 暂存仍核对完整原文；组件事件不能替代模型预算或词法安全边界。
+  assertTextInputBudget(input.text,recordDocumentInputBudget);
   const columns=columnsOf(context),byName=new Map(columns.map(column=>[column.name,column]));
   const document=decodeDocument(input.text);
   if(!objectWithKeys(document,['format','version','fields'])||document.format!=='DBArk-record-input'||document.version!==1||!Array.isArray(document.fields))throw Error(text.structure);
