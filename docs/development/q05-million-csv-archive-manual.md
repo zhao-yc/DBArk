@@ -6,13 +6,13 @@
 
 ## 默认关闭和执行前置条件
 
-入口：`scripts/manual-q05-million-archive.mjs`。不带参数或`--preflight`只读Git提交、产品源码指纹和本地可用磁盘空间，不读取env、执行SSH、连接数据库、启动GUI或Docker。`--self-check`只生成7行的小型Python标准库样本；不经过产品Engine或数据库。
+入口：`scripts/manual-q05-million-archive.mjs`。不带参数或`--preflight`只读Git提交、产品源码指纹和本地可用磁盘空间，不读取env、执行SSH、连接数据库、启动GUI或Docker。可用`--preflight --port 13384`纯预检一个明确端口。`--self-check`只生成7行的小型Python标准库样本；不经过产品Engine或数据库。
 
 真实执行同时要求`--run`及父进程`DBARK_Q05_MILLION_ARCHIVE_ENABLED=1`。ROOT还须显式提供：
 
-- 已有本地env普通文件的绝对路径；脚本不搜索凭据、不创建数据库用户、不打印或提交账号密码。
+- `--config-env-file`指定已有本地env普通文件的绝对路径；脚本不搜索凭据、不创建数据库用户、不打印或提交账号密码。此名称避开Node保留的`--env-file`参数，确保运行时不会在脚本端口校验之前预加载文件。请使用下方更新后的命令。
 - 已有账号须具备本例隔离库的建库、建表、造数、CREATE ROUTINE/执行过程和清理权限；权限不足明确失败，不自动提权。夹具显式设置自身连接autocommit=1，以核对已提交前缀，不改变其它连接。
-- `--port`，必须与env的`DBARK_TEST_PORT`逐字相同；host必须为`192.168.31.200`，账号及密码必须明确存在。只支持直连此隔离端口，拒绝启用另一个数据库SSH隧道。TLS沿用env的`DBARK_TEST_TLS/DBARK_TEST_CA`，不关闭证书校验。
+- `--port`，只允许ROOT已有的六个专用端口`13357/13380/13384/13310/13311/13484`，还须与env的`DBARK_TEST_PORT`逐字相同。入口在读取env文件前先拒绝白名单外或空目标；读取后再核逐字一致。夹具首条执行语句再次核对原始env白名单，然后复核身份记录端口与env字符串一致，均在Engine/connect之前。`3306`、其它端口、空值、前导零、空白或数字类型不能通过；不会自动更改目标。host必须为`192.168.31.200`，账号及密码必须明确存在。只支持直连此隔离端口，拒绝启用另一个数据库SSH隧道。TLS沿用env的`DBARK_TEST_TLS/DBARK_TEST_CA`，不关闭证书校验。
 - `--expected-hostname`，由ROOT已有服务器身份记录提供，不能把本次读取值自动当成预期。入口先以`ssh -T -o BatchMode=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=10 server-200`执行固定只读命令`hostname; hostname -I; df -Pk /var/lib/docker`，同时核对预期hostname、200地址及Docker数据目录所在文件系统至少2GiB空间，成功后才允许数据库连接。不执行Docker命令；未知SSH主机密钥会失败，不自动接受。
 - Python可执行文件绝对路径。本地至少12GiB可用空间，保留产品10GiB总文件上限及余量；远程空间检查针对已核对主机上的`/var/lib/docker`文件系统。如实际Docker数据目录不在此文件系统，ROOT应先调整此只读检查再执行，不能将错误文件系统空间当作通过。
 
@@ -61,13 +61,15 @@ CREATE已确认但所有权标记创建失败、网络不可达、清理失败�
 ```powershell
 # 安全预检，不读取env或访问服务器。
 node scripts/manual-q05-million-archive.mjs --preflight
+# 六个专用端口、env逐字匹配及两层连接前拒绝的纯本地正负对照。
+node scripts/check-q05-isolated-port.mjs
 # 仅小型纯文件读取器自检。
 node scripts/manual-q05-million-archive.mjs --self-check --python '<Python绝对路径>'
 
 # ROOT明确启用真实手动验收；本轮员工5没有执行此命令。
 $env:DBARK_Q05_MILLION_ARCHIVE_ENABLED = '1'
 try {
-  node scripts/manual-q05-million-archive.mjs --run --env-file '<ROOT已有env绝对路径>' --port '<隔离端口>' --expected-hostname '<已知200主机名>' --python '<Python绝对路径>'
+  node scripts/manual-q05-million-archive.mjs --run --config-env-file '<ROOT已有env绝对路径>' --port '<隔离端口>' --expected-hostname '<已知200主机名>' --python '<Python绝对路径>'
 } finally {
   Remove-Item Env:DBARK_Q05_MILLION_ARCHIVE_ENABLED -ErrorAction SilentlyContinue
 }
@@ -76,3 +78,7 @@ try {
 输出保留在当前克隆`.cache/q05-million-archive/dbark-q05-million-*`：owner.json、SSH身份观察及通过记录、成功ZIP、两个旧文件保护目标、evidence.json、脱敏runner日志。目录保留用于ROOT复核，不提交产物。evidence记录固定起点/实际提交/源码指纹、真实版本/会话/线程/任务、Python校验、原异常及清理结果；只有整体验收终态passed且清理核零，才能记为本切片实库通过。SSH身份预检失败会在连接数据库前停止。
 
 本轮验证：Node入口语法、Python AST语法和TypeScript类型检查通过；只读预检通过；缺少显式开关的`--run`提前拒绝；专用手动夹具收集1项、默认跳过1项。Python仅7行样本的6项有界读取自检通过，包括普通/ZIP64尾部、错误精度、错误位置映射、CRC损坏及超长物理行。GUI、剪贴板、200、Docker和真实百万行均未运行。本入口仍不能替代真实跨4GiB或10GiB、原生Windows解包器、GUI/安装包及跨平台验收。
+
+端口硬门为`88ebefa`之后的独立准备修复，不覆盖原准备证据。纯对照直接调用共享白名单函数，并从真实夹具AST提取首条校验语句执行；不导入或模拟数据库驱动。另以真实CLI运行六个合法端口的只读预检，及业务/其它/空端口的拒绝分支；真实模式负例仅传不存在的env路径，须在读取文件前以端口错误拒绝。本修复不改变原SQL场景或期限。
+
+本次补丁实际结果：94项纯端口对照通过（6项白名单、59项无效值/env不一致、17项真实夹具首语句、6项CLI只读正例、6项CLI连接前拒绝）；类型检查及Node语法通过，手动夹具1项仍默认跳过。未读取凭据、执行SSH或连接数据库；原7行归档自检代码和原准备证据未修改。
