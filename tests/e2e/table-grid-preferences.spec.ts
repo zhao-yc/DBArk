@@ -158,8 +158,8 @@ test.describe('当前页查找替换与列偏好：真实 MySQL UI', () => {
       await find('18446744073709551615', 'exact_big', 'text', 1);
       const numeric = await find('12345678901234567890.123456', 'exact_decimal', 'text', 1);
       await numeric.getByRole('textbox', { name: '替换为文字', exact: true }).fill('错误数值替换');
-      await numeric.getByRole('button', { name: '预览当前页替换', exact: true }).click();
-      await expect(numeric.locator('.error-box')).toContainText('没有可替换的文字单元格');
+      await expect(numeric.getByRole('button', { name: '预览当前页替换', exact: true })).toBeDisabled();
+      await expect(numeric.getByRole('button', { name: '仅替换当前一处', exact: true })).toBeDisabled();
       await expect(page.getByRole('dialog', { name: '当前页替换草稿预览', exact: true })).toHaveCount(0);
       await edit('value_text', '未提交中文'); await find('未提交中文', 'value_text', 'text', 1);
       await find('原型中文', '__proto__', 'text', 1); await find('构造中文', 'constructor', 'text', 1);
