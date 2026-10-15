@@ -152,8 +152,9 @@ export function analyzeCompletion(source:string,offset:number,mode:CompletionLex
         if(column.declareType===0){const name=entityName(column.text)?.at(-1);if(name&&name!==normalized.sentinel)columns.push(name);}
         else if(column.declareType===1){
           const prefix=column.text.trim().replace(/\*\s*$/,'').replace(/\.\s*$/,'').trim(),parts=prefix?entityName(prefix):[];
-          // 限定星号沿实际可见性解析；普通星号仍只输出本查询块FROM的字段。
-          const sources=parts?.length?visible(query.position.startIndex).filter(entity=>relationName(entity)===parts.at(-1)):tables.filter(entity=>scopeKey(entity.belongStmt)===scopeKey(query.belongStmt)&&sameBranch(query.belongStmt,entity.position.startIndex,query.position.startIndex));
+          // 星号只展开本查询块当前分支的FROM；外层标量引用可见，不代表外层关系可用于星号。
+          const local=(entity:CommonEntityContext)=>scopeKey(entity.belongStmt)===scopeKey(query.belongStmt)&&sameBranch(query.belongStmt,entity.position.startIndex,query.position.startIndex);
+          const sources=parts?.length?visible(query.position.startIndex).filter(entity=>local(entity)&&relationName(entity)===parts.at(-1)):tables.filter(local);
           if(parts===null||!sources.length){incomplete=true;continue;}
           for(const entity of sources){const relation=resolve(entity,visited,depth+1);if(!relation){incomplete=true;continue;}columns.push(...relation.columns);catalogs.push(...relation.catalogs);incomplete||=relation.incomplete;}
         }else incomplete=true;

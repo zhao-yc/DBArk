@@ -54,7 +54,7 @@ interface CompletionScopeCapabilities {
 - 同级前置物理表、CTE、普通派生表和先前 LATERAL 输出可见；同级后置关系、自身派生别名和其它 UNION 分支不可见。
 - 体内实际 FROM 来源正常可见，内层同名别名遮蔽祖先；重复同层别名不任选。普通关联子查询可以沿合法祖先读取，普通派生表和 CTE 屏障仍生效，不因外层出现 LATERAL 而整体解除。
 - 输出沿用真实 SELECT 投影和首个 UNION 分支：显式别名、普通列名及明确 CTE 输出；WHERE/ORDER 中出现的列不能成为派生输出。
-- `u.*` 通过同一可见关系函数定位来源，再按实际目录惰性展开；普通 `*` 只用本查询块 FROM，不把相关祖先混成输出。派生星号不暴露物理不可见列。
+- 限定与非限定星号都只用本查询块当前 UNION 分支的 FROM；限定星号额外沿可见关系核对别名和遮蔽。外层关系可用于标量相关引用，不能据此展开外层 `u.*` 或 `q.*`。派生星号不暴露物理不可见列。
 - LATERAL 体内未确认限定符不回退成数据库函数目录；普通派生体明确隐藏的祖先别名同样停止，避免用被屏蔽的别名去请求函数目录。字段插入继续保留限定引用、完整替换范围和既有目录上限。
 - 点号、中文、反引号和原型同名别名按完整标识符处理；名称或注释中的 LATERAL 不触发能力门。
 
@@ -89,3 +89,28 @@ Engine 查询结果使用唯一位置键 c0/c1，显示列名不能直接作为�
 beforeAll 旁观实际驱动创建/握手，记录真实线程 ID，并用独立观察连接核对自身 CONNECTION_ID 与驱动一致、建连探测线程已释放。afterAll 即使关闭查询会话失败，也在 finally 中继续尝试精确清理本例随机库，之后调用 closeAll；库残留和所有已记录 Engine/目录线程残留分别核对，避免一项断言失败跳过另一项。观察连接最后单独关闭并恢复旁观器。收尾失败保留首个原始错误，多项失败以 AggregateError 汇总；CREATE 结果不确定时也只对本例已尝试创建的唯一名称执行 DROP IF EXISTS。未增加权限或清理其它库。
 
 本次仅准备夹具：类型检查通过，实库仍为 6 项默认跳过。另在本克隆忽略目录提取实际夹具回调做 8 组离线故障注入，覆盖按 c0 读取、输出名缺失/重复、原 values 不匹配、关闭会话失败仍清理、多项收尾失败保留首错误及拒绝非本例目标。该探针没有网络或 GUI，不代表真实线程已经完成实测释放；实际 before/after 线程证据仍待统筹在 200 运行。
+
+## 2026-10-16 run462 星号作用域修复与原生对照准备
+
+统筹真实首轮 `run462-lateral-core-first` 在 MySQL 8.4.11 的 13384 实例记录 4 项通过、1 项失败、1 项条件跳过。已只读核对根 `.cache/parallel-integration/run462-lateral-core-first/raw.log` 与 `results.json`：错误正向样本 `SELECT d.use|suffix FROM users u JOIN LATERAL(SELECT u.*) d ON TRUE ORDER BY u.id` 插入实际候选后收到 `Unknown table 'u'`。原记录保留，不能将其计为通过；包装后的日志没有原生 errno，本轮不将推导值冒充该次实测错误码。
+
+本次实际读取的官方依据：
+
+- [MySQL 8.4 SELECT](https://dev.mysql.com/doc/refman/8.4/en/select.html) 的星号说明和 FROM 示例，以及 [LATERAL](https://dev.mysql.com/doc/refman/8.4/en/lateral-derived-tables.html) 的相关列与连接方向限制。标量相关列可见与星号展开分别处理。
+- [MySQL 8.4.11 官方源码 sql/sql_base.cc](https://github.com/mysql/mysql-server/blob/mysql-8.4.11/sql/sql_base.cc#L8661-L8690)：`Tables_in_user_order_iterator` 的限定星号从当前 `query_block->context.table_list` 开始，沿 `next_local` 迭代；`insert_fields` 以当前查询块初始化此迭代器，未找到限定表时在函数末尾产生 `ER_BAD_TABLE_ERROR`。因此外层表或外层 CTE 仅能作为相关标量来源，不能在没有本地 FROM 声明时被拿来展开星号。
+- 已核对本地 `mysql2@3.24.5/lib/constants/errors.js` 第 254、2227 行：`ER_BAD_TABLE_ERROR=1051`，并核对 [MySQL 官方错误表](https://dev.mysql.com/doc/mysql-errors/8.4/en/server-error-reference.html#error_er_bad_table_error) 的 SQLSTATE `42S02`。原生对照明确断言这个三元组，不能因同样出现 Unknown table 字样而误用 `ER_UNKNOWN_TABLE=1109`。
+
+产品修改在共享 `rawProjection` 中为限定星号增加当前查询块和同一 UNION 分支约束。原错误正向单元改为 `SELECT o.* FROM orders o WHERE o.user_id=u.id`；同时覆盖本地非限定星号、CTE 本地 FROM、内层同名遮蔽及带点别名，保留 WHERE 外层标量相关。新增原无 FROM 外层表/CTE 星号、有其它本地 FROM 的外层星号、兄弟 UNION 来源反例，均要求派生字段与目录来源为空、候选为空、目录请求为零。LATERAL 可见性、连接方向、能力、UNION 和预算规则不放宽。
+
+专属实库准备现为 10 项，默认跳过。候选插入正向样本改为 `SELECT d.ord|suffix FROM users u JOIN LATERAL(SELECT o.* FROM orders o WHERE o.user_id=u.id) d ON TRUE ORDER BY u.id`，核对实际 `order_value` 列的 100/200。另新增独立观察连接的两项原生拒绝测试与一项合法本地星号测试，直接执行真实 SQL，分别断言服务器原始错误三元组和实际 100/200；不经语义分析或目录返回来证明 SQL 规则。原表/CTE 星号的补全零字段、零目录另外验证。观察连接中的物理表均使用本例唯一库的完整限定名。
+
+本次不修改 beforeAll/afterAll、根能力接线或根已有收尾修复。统筹接收此提交时保留其 `vi.waitFor` 与先 closeAll 再 DROP 的版本；本分支旧 hooks 不应覆盖根。原生测试由统筹后续在 13380、13384、13484 执行，本轮没有连接 200、启动 GUI 或操作剪贴板。
+
+实际验证：LATERAL 专属 44 项，连同普通语义、输出别名和窗口作用域共 136 项通过；完整单元 123 个文件、2391 项通过；类型检查通过；实库 10 项默认跳过。首次完整单元在沙箱系统临时目录触发存储测试 rename EPERM（102 项失败），改用本克隆 `.cache/lateral-test-temp` 作为当前进程 TEMP/TMP 后全量通过，没有为此修改产品或测试逻辑。两次原始日志分别保存在本克隆忽略目录 `.cache/q01-lateral-star-fix-unit.log` 和 `.cache/q01-lateral-star-fix-unit-workspace-temp.log`。全量命令为：
+
+```powershell
+$env:TEMP = Join-Path (Get-Location) '.cache\lateral-test-temp'
+$env:TMP = $env:TEMP
+New-Item -ItemType Directory -Force -Path $env:TEMP | Out-Null
+node node_modules/vitest/vitest.mjs run --reporter=dot
+```

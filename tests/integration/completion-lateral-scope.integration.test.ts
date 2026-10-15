@@ -67,13 +67,32 @@ describe.skipIf(!enabled)('200隔离实例：LATERAL语义、真实目录和插�
     ['SELECT d.copied FROM users u JOIN LATERAL(SELECT u.use|suffix AS copied) d ON TRUE ORDER BY u.id','user_value','copied',['10','20']],
     ['SELECT d.cop|suffix FROM users u JOIN LATERAL(SELECT u.user_value AS copied) d ON TRUE ORDER BY u.id','copied','copied',['10','20']],
     ['SELECT d.copied FROM users u JOIN LATERAL(SELECT u.ord|suffix AS copied FROM orders u WHERE u.id=1) d ON TRUE ORDER BY u.id','order_value','copied',['100','100']],
-    ['SELECT d.use|suffix FROM users u JOIN LATERAL(SELECT u.*) d ON TRUE ORDER BY u.id','user_value','user_value',['10','20']],
+    ['SELECT d.ord|suffix FROM users u JOIN LATERAL(SELECT o.* FROM orders o WHERE o.user_id=u.id) d ON TRUE ORDER BY u.id','order_value','order_value',['100','200']],
   ]as const)it('真实候选插入后的模型SQL直接执行：'+marked,async context=>{
     if(!capabilities.lateralDerivedTables)context.skip();const source=marked.replace('|',''),prepared=await confirmedDirectory(),analysis=analyzeCompletion(source,marked.indexOf('|'),{ansiQuotes:prepared.state.ansiQuotes,noBackslashEscapes:prepared.state.noBackslashEscapes},capabilities);expect(analysis.status).toBe('ready');if(analysis.status!=='ready')throw Error('分析未就绪');const suggestions=await completionSuggestions(analysis,database,prepared.directory,undefined,'mysql'),item=suggestions.items.find(candidate=>candidate.label===label&&candidate.kind==='column');expect(item).toBeDefined();if(!item)throw Error('实际目录未提供目标字段');
     // 直接使用实际候选和实际替换范围，不用预期SQL覆盖补全结果；此处是无GUI层验收。
     const inserted=source.slice(0,analysis.target.start)+item.insertText+source.slice(analysis.target.end),result=await query(inserted),set=result.results[0],output=set.columns.filter(item=>item.name===column);expect(output).toHaveLength(1);
     // Engine查询使用c0/c1位置键；先确认显示名唯一，再按实际key保留原值断言。
     expect(set.rows.map(row=>String(row[output[0].key]))).toEqual(values);expect(prepared.requests.filter(input=>input.kind==='columns').every(input=>input.table==='users'||input.table==='orders')).toBe(true);
+  });
+  for(const[规则,sql]of[
+    ['外层表星号',`SELECT d.user_value FROM ${identifier(database)}.users u JOIN LATERAL(SELECT u.*) d ON TRUE ORDER BY u.id`],
+    ['外层CTE星号',`WITH q AS(SELECT id,user_value FROM ${identifier(database)}.users) SELECT d.user_value FROM q JOIN LATERAL(SELECT q.*) d ON TRUE ORDER BY q.id`],
+  ]as const)it('独立观察连接核对原生拒绝规则：'+规则,async context=>{
+    if(!capabilities.lateralDerivedTables)context.skip();if(!observer)throw Error('缺少独立观察连接');
+    // 已核对mysql2@3.24.5的lib/constants/errors.js：ER_BAD_TABLE_ERROR=1051；SQLSTATE来自MySQL官方错误表。
+    // 原生SQL直接交给服务器，不经过语义分析、补全目录或Engine错误包装来证明规则。
+    await expect(execute(observer,sql)).rejects.toMatchObject({code:'ER_BAD_TABLE_ERROR',errno:1051,sqlState:'42S02'});
+  });
+  it('独立观察连接核对本地FROM星号及WHERE外层标量相关实际返回100/200',async context=>{
+    if(!capabilities.lateralDerivedTables)context.skip();if(!observer)throw Error('缺少独立观察连接');
+    const result=await execute<{order_value:unknown}[]>(observer,`SELECT d.order_value FROM ${identifier(database)}.users u JOIN LATERAL(SELECT o.* FROM ${identifier(database)}.orders o WHERE o.user_id=u.id) d ON TRUE ORDER BY u.id`);
+    expect(result.fields.map(field=>field.name)).toEqual(['order_value']);expect(result.rows.map(row=>String(row.order_value))).toEqual(['100','200']);
+  });
+  it('无FROM的外层表与CTE星号不捏造派生字段或读取目录',async context=>{
+    if(!capabilities.lateralDerivedTables)context.skip();for(const marked of['SELECT d.| FROM users u JOIN LATERAL(SELECT u.*) d ON TRUE','WITH q AS(SELECT id,user_value FROM users) SELECT d.| FROM q JOIN LATERAL(SELECT q.*) d ON TRUE']){
+      const prepared=await confirmedDirectory(),analysis=analyzeCompletion(marked.replace('|',''),marked.indexOf('|'),{},capabilities);expect(analysis.status).toBe('ready');if(analysis.status!=='ready')throw Error('分析未就绪');expect(analysis.relations.find(item=>item.name==='d')).toMatchObject({columns:[],catalogs:[],incomplete:true});expect((await completionSuggestions(analysis,database,prepared.directory)).items).toEqual([]);expect(prepared.requests).toEqual([]);
+    }
   });
   it('后置关系与普通非LATERAL体不请求目录，不执行不支持SQL',async context=>{if(!capabilities.lateralDerivedTables)context.skip();for(const marked of['SELECT * FROM users u JOIN LATERAL(SELECT late.|) d ON TRUE JOIN orders late ON TRUE','SELECT * FROM users u JOIN(SELECT u.| FROM orders o)d ON TRUE']){const prepared=await confirmedDirectory(),analysis=analyzeCompletion(marked.replace('|',''),marked.indexOf('|'),{},capabilities);if(analysis.status==='ready')await completionSuggestions(analysis,database,prepared.directory);expect(analysis.status).toBe('blocked');expect(prepared.requests).toEqual([]);}});
 });
