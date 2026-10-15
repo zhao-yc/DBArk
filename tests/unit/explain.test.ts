@@ -46,6 +46,9 @@ describe('双数据库五版本静态形状适配（不代表实库验证）', (
   it('长文本详情截断，原型同名键与路径转义仍可读取', () => {
     const raw = '{"__proto__":{"a/b~c":{"text":' + JSON.stringify('内容'.repeat(12000)) + '}}}';
     expect(explainNodeDetail(raw, '/__proto__/a~1b~0c')).toContain('展示已截断'); expect(explainNodeDetail(raw, '/constructor')).toBe('');
+    const long = parseExplainPlan(JSON.stringify({ ['x'.repeat(100000)]: { nested_loop: Array.from({ length: 250 }, () => ({ table: { table_name: 't' } })) } }), 'mysql', '8.4.0');
+    expect(long.nodes.some(node => node.pathTruncated)).toBe(true); expect(long.nodes.every(node => node.path.length <= explainLimits.path)).toBe(true);
+    expect(JSON.stringify(long).length).toBeLessThan(2 * 1024 * 1024); expect(long.warnings.join()).toContain('2048');
   });
 });
 
