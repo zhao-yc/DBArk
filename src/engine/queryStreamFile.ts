@@ -1,10 +1,11 @@
 import type { CellValue, QueryFileEncoding } from '../shared/contracts';
-import { queryStreamExportLimits as limits, type QueryExportColumn, type QueryExportFrame, type QueryExportSelection } from '../shared/queryStreamExport';
+import { queryStreamExportLimits as limits, type QueryExportColumn, type QueryExportFrame, type QueryExportSelection, type QueryExportFormat } from '../shared/queryStreamExport';
 import { AtomicFile, type AtomicFileIO } from './atomicFile';
 import { csvCell, csvHeader } from './files';
+import { prepareQueryCsvZip, QueryCsvArchive } from './queryCsvZip';
 
 export interface QueryStreamFileOptions {
-  filePath: string; format: 'csv' | 'json'; encoding: QueryFileEncoding; resultSelection: QueryExportSelection;
+  filePath: string; format: QueryExportFormat; encoding: QueryFileEncoding; resultSelection: QueryExportSelection;
   checkCancelled(): void; onCommitStart(): void;
 }
 export interface QueryStreamFile {
@@ -29,8 +30,10 @@ function cellText(cell: CellValue, format: 'csv' | 'json'): string {
 
 /** 一次新执行的完整结果按有界帧顺序写出；这里不解析 SQL、不接触数据库。 */
 export async function createQueryStreamFile(input: QueryStreamFileOptions, io?: AtomicFileIO): Promise<QueryStreamFile> {
-  if ((input.format === 'json' && input.resultSelection.kind !== 'all') || (input.format === 'csv' && (input.resultSelection.kind !== 'row-result' || !Number.isInteger(input.resultSelection.ordinal) || input.resultSelection.ordinal < 1 || input.resultSelection.ordinal > limits.results))) throw new Error('完整导出只支持 JSON 全部结果或 CSV 指定行结果集');
+  if (!['json', 'csv', 'csv-zip'].includes(input.format) || (input.format !== 'csv' && input.resultSelection.kind !== 'all') || (input.format === 'csv' && (input.resultSelection.kind !== 'row-result' || !Number.isInteger(input.resultSelection.ordinal) || input.resultSelection.ordinal < 1 || input.resultSelection.ordinal > limits.results))) throw new Error('完整导出只支持JSON/CSV容器全部结果或CSV指定行结果集');
+  if (input.format === 'csv-zip') await prepareQueryCsvZip(input.filePath, input.checkCancelled);
   const file = await AtomicFile.create(input.filePath, input.encoding, input.checkCancelled, input.onCommitStart, io, limits.fileBytes);
+  const archive = input.format === 'csv-zip' ? new QueryCsvArchive(file, input.encoding, input.checkCancelled) : undefined;
   let active: { ordinal: number; columns: QueryExportColumn[]; selected: boolean; rows: number } | undefined;
   let resultCount = 0, rowResultCount = 0, written = 0, selectedFound = false, completed = false;
 
@@ -51,9 +54,10 @@ export async function createQueryStreamFile(input: QueryStreamFileOptions, io?: 
           if (column.position !== index + 1 || typeof column.key !== 'string' || !column.key.length || column.key.length > 256 || typeof column.name !== 'string' || column.name.length > 1024 || typeof column.exportName !== 'string' || !column.exportName.length || column.exportName.length > 2048 || typeof column.type !== 'string' || names.has(column.exportName)) throw new Error('完整导出列描述无效');
           names.add(column.exportName); return { ...column };
         });
-        const selected = input.format === 'json' || (input.resultSelection.kind === 'row-result' && input.resultSelection.ordinal === frame.rowResultOrdinal);
+        const selected = input.resultSelection.kind === 'all' || input.resultSelection.ordinal === frame.rowResultOrdinal;
         active = { ordinal: frame.resultOrdinal, columns, selected, rows: 0 }; if (selected) selectedFound = true;
-        if (input.format === 'json') {
+        if (archive) { await archive.start(frame, columns); await archive.text(columns.map(column => csvHeader(column.exportName)).join(',') + '\r\n'); }
+        else if (input.format === 'json') {
           const metadata = { resultOrdinal: frame.resultOrdinal, statementOrdinal: frame.statementOrdinal, kind: 'rows', rowResultOrdinal: frame.rowResultOrdinal, columns: columns.map(({ key: _key, ...column }) => column) };
           await file.write((resultCount > 1 ? ',\n' : '\n') + JSON.stringify(metadata).slice(0, -1) + ',"rows":[\n');
         } else if (selected) await file.write(columns.map(column => csvHeader(column.exportName)).join(',') + '\r\n');
@@ -63,14 +67,15 @@ export async function createQueryStreamFile(input: QueryStreamFileOptions, io?: 
         if (!active || active.ordinal !== frame.resultOrdinal || !Array.isArray(frame.values) || frame.values.length !== active.columns.length) throw new Error('完整导出行与所属结果列不匹配');
         let size = 4; const parts: string[] = [];
         for (let index = 0; index < frame.values.length; index++) {
-          const text = cellText(frame.values[index], input.format);
+          const text = cellText(frame.values[index], input.format === 'json' ? 'json' : 'csv');
           const part = input.format === 'json' ? JSON.stringify(active.columns[index].exportName) + ':' + text : text;
           size += Buffer.byteLength(part) + 1;
           if (size > limits.rowBytes) throw new Error('完整导出序列化单行超过 16 MiB');
           parts.push(part);
         }
         if (active.selected) {
-          await file.write(input.format === 'json' ? (active.rows ? ',\n' : '') + '{' + parts.join(',') + '}' : parts.join(',') + '\r\n');
+          if (archive) await archive.text(parts.join(',') + '\r\n');
+          else await file.write(input.format === 'json' ? (active.rows ? ',\n' : '') + '{' + parts.join(',') + '}' : parts.join(',') + '\r\n');
           written++;
         }
         active.rows++; break;
@@ -78,17 +83,19 @@ export async function createQueryStreamFile(input: QueryStreamFileOptions, io?: 
       case 'rows-end':
         if (!active || active.ordinal !== frame.resultOrdinal) throw new Error('完整导出结束的结果序号无效');
         if (frame.warningCount !== undefined && (!Number.isInteger(frame.warningCount) || frame.warningCount < 0 || frame.warningCount > 65535)) throw new Error('完整导出警告数量无效');
-        if (input.format === 'json') await file.write('\n],"rowsWritten":' + active.rows + (frame.warningCount === undefined ? '' : ',"warningCount":' + frame.warningCount) + '}');
+        if (archive) await archive.end(active.rows, frame.warningCount);
+        else if (input.format === 'json') await file.write('\n],"rowsWritten":' + active.rows + (frame.warningCount === undefined ? '' : ',"warningCount":' + frame.warningCount) + '}');
         active = undefined; break;
       case 'status':
         nextResult(frame.resultOrdinal, frame.statementOrdinal);
         if (!Number.isSafeInteger(frame.affectedRows) || frame.affectedRows < 0 || !Number.isInteger(frame.warningCount) || frame.warningCount < 0 || typeof frame.insertId !== 'string' || !/^\d+$/.test(frame.insertId)) throw new Error('完整导出状态结果无效');
+        if (archive) archive.status(frame);
         if (input.format === 'json') await file.write((resultCount > 1 ? ',\n' : '\n') + JSON.stringify({ ...frame, rowsWritten: 0 }));
         break;
     }
   }
   try {
-    if (input.encoding === 'utf16le') await file.write('\uFEFF');
+    if (!archive && input.encoding === 'utf16le') await file.write('\uFEFF');
     if (input.format === 'json') await file.write('{"format":"DBArk-query-results","version":1,"results":[');
   } catch (error) { await file.dispose(); throw error; }
   return {
@@ -98,6 +105,7 @@ export async function createQueryStreamFile(input: QueryStreamFileOptions, io?: 
       if (active) throw new Error('完整导出结果集尚未结束');
       if (completed) throw new Error('完整导出文件已提交');
       if (input.format === 'csv' && !selectedFound) throw new Error('本次执行不存在指定的行结果集；SQL 可能已执行，原目标文件保持不变');
+      if (archive) await archive.complete();
       if (input.format === 'json') await file.write('\n]}\n');
       await file.commit(); completed = true;
     },

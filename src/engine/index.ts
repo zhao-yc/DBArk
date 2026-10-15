@@ -757,7 +757,7 @@ export class Engine {
       }
     };
     try {
-      if ((input.format === 'json') !== (input.resultSelection.kind === 'all') || !['csv', 'json'].includes(input.format)) throw new Error('JSON 必须导出全部结果；CSV 必须指定行结果序号');
+      if ((input.format !== 'csv') !== (input.resultSelection.kind === 'all') || !['csv', 'json', 'csv-zip'].includes(input.format)) throw new Error('JSON和CSV容器必须导出全部结果；单CSV必须指定行结果序号');
       if (input.resultSelection.kind === 'row-result' && (!Number.isInteger(input.resultSelection.ordinal) || input.resultSelection.ordinal < 1 || input.resultSelection.ordinal > queryStreamExportLimits.results)) throw new Error('行结果序号必须在 1～200 之间');
       if (!['text-strict', 'binary-explicit'].includes(input.protocol)) throw new Error('完整导出的执行协议无效');
       writer = await createQueryStreamFile({ filePath: input.filePath, format: input.format, encoding: input.encoding, resultSelection: input.resultSelection, checkCancelled: () => this.checkCancelled(task), onCommitStart: () => { task.fileCommitStarted = true; progress.phase = 'committing'; report(true); } });

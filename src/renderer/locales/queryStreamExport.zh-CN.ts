@@ -2,6 +2,7 @@ export const queryStreamZh = {
   title: '完整流式导出（新执行 SQL）', open: '新执行并完整导出', source: '本次固定 SQL', sourceLimit: '仅显示前 65,536 个字符；完整捕获的 SQL 将用于执行。',
   warning: '这会在当前查询标签的同一会话中新执行一次 SQL，包括全部写入、事务控制和临时表操作。已经返回的结果导出不会执行 SQL；本窗口不是该功能的重试入口。',
   format: '完整文件格式', encoding: '文件编码', json: 'JSON：全部行结果与执行状态', csv: 'CSV：指定行结果集', ordinal: '行结果集序号', ordinalHint: '从 1 开始，只计算返回行的结果集；写入状态不占序号。整个脚本仍会执行，其他结果会被消费。',
+  csvZip: 'CSV ZIP：全部行集与执行状态清单', csvZipHint: '一次新执行，所有行集顺序写入独立CSV（空集保留标题行），manifest.json记录列名映射、行数与执行状态。标准ZIP64不压缩，总文件最多10 GiB、200个结果，清单8 MiB；所选编码用于各CSV，清单固定UTF-8。',
   protocol: '执行协议', text: '严格文本（保留诊断语义）', binary: '显式二进制（FLOAT 精确值）',
   textHint: '不试探 PREPARE。文本协议无法保证 FLOAT / DOUBLE 全部精度；遇到这两类结果将明确失败，之前已执行的 SQL 不会撤销。显式二进制模式中必须走文本路径的诊断与控制语句也遵守此限制。',
   binaryHint: '首次 PREPARE 在 MySQL 会清除原有警告；不支持 PREPARE 的错误也会改变诊断状态。诊断与控制语句预先走文本路径，任何执行失败都不会自动重放。FLOAT 自身仍是 IEEE 单精度。',

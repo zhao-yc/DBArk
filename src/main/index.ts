@@ -238,7 +238,7 @@ async function dispatch(command: Command, input: any): Promise<unknown> {
     case 'files.path': { const file = files.get(input.token); if (!file) throw new Error('文件选择已失效，请重新选择'); return file.path; }
     case 'files.readQuery': return queryFileOperation(() => readQueryFile(resolveFileToken(files, input.fileToken, 'query', 'sql'), input.encoding));
     case 'files.writeQuery': return queryFileOperation(() => writeSelectedQuery(input));
-    case 'query.exportStream': input = { ...input, filePath: resolveFileToken(files, input.fileToken, 'export', input.format) }; break;
+    case 'query.exportStream': input = { ...input, filePath: resolveFileToken(files, input.fileToken, 'export', input.format === 'csv-zip' ? 'zip' : input.format) }; break;
     case 'excel.sheets':
     case 'excel.preview':
     case 'excel.import':

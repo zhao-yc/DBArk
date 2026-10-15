@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Download, Square } from 'lucide-react';
 import type { FileChoice } from '../../shared/contracts';
 import type { QueryParameter, QueryParameterNames } from '../../shared/queryParameters';
-import type { QueryExportProgress, QueryStreamExportInput, QueryStreamExportOutput } from '../../shared/queryStreamExport';
+import { queryExportFileFormat, queryCsvResultFile, type QueryExportProgress, type QueryStreamExportInput, type QueryStreamExportOutput } from '../../shared/queryStreamExport';
 import { errorMessage, invoke, uid } from '../lib';
 import { zh, formatText } from '../locales/zh-CN';
 import { queryStreamZh as text } from '../locales/queryStreamExport.zh-CN';
@@ -15,7 +15,7 @@ export type StreamExportOptions = Omit<QueryStreamExportInput, 'sql' | 'sessionI
 
 /** 只持有打开时捕获的 SQL；选文件、识别参数都不会执行用户 SQL。 */
 export function QueryStreamExportDialog({ source, loadNames, onExecute, onCancel, onClose, sessionBusy }: { source: string; sessionBusy: boolean; loadNames(): Promise<QueryParameterNames>; onExecute(options: StreamExportOptions): Promise<QueryStreamExportOutput>; onCancel(taskId: string): Promise<void>; onClose(): void }) {
-  const [format, setFormat] = useState<'csv' | 'json'>('json'); const [encoding, setEncoding] = useState<QueryStreamExportInput['encoding']>('utf8');
+  const [format, setFormat] = useState<QueryStreamExportInput['format']>('json'); const [encoding, setEncoding] = useState<QueryStreamExportInput['encoding']>('utf8');
   const [protocol, setProtocol] = useState<QueryStreamExportInput['protocol']>('text-strict'); const [ordinal, setOrdinal] = useState('1');
   const [file, setFile] = useState<FileChoice | null>(null); const [acknowledged, setAcknowledged] = useState(false); const [binaryAcknowledged, setBinaryAcknowledged] = useState(false);
   const [parameters, setParameters] = useState<QueryParameter[] | undefined>(); const [parameterDialog, setParameterDialog] = useState(false);
@@ -33,7 +33,7 @@ export function QueryStreamExportDialog({ source, loadNames, onExecute, onCancel
   async function chooseFile() {
     if (busyRef.current || choosingRef.current) return;
     choosingRef.current = true; setChoosing(true);
-    try { const next = await invoke('files.choose', { purpose: 'export', format, suggestedName: `${text.defaultName}.${format}` }); if (next) { setFile(next); setError(''); invalidate(); } }
+    try { const extension = queryExportFileFormat(format); const next = await invoke('files.choose', { purpose: 'export', format: extension, suggestedName: `${text.defaultName}.${extension}` }); if (next) { setFile(next); setError(''); invalidate(); } }
     catch (reason) { setError(errorMessage(reason)); }
     finally { choosingRef.current = false; setChoosing(false); }
   }
@@ -56,7 +56,8 @@ export function QueryStreamExportDialog({ source, loadNames, onExecute, onCancel
   function invalidate() { setAcknowledged(false); setBinaryAcknowledged(false); }
   return <>{!parameterDialog && <Modal title={text.title} wide onClose={close}><div className="modal-content">
     <div className="info-strip">{text.warning}</div><h3>{text.source}</h3>{source.length > 65536 && <p className="muted small">{text.sourceLimit}</p>}<pre className="query-stream-source" aria-label={text.source}>{source.slice(0, 65536)}</pre>
-    <div className="form-grid"><Field label={text.format}><select disabled={busy || choosing || completed} value={format} onChange={event => { setFormat(event.target.value as typeof format); setFile(null); invalidate(); }}><option value="json">{text.json}</option><option value="csv">{text.csv}</option></select></Field><Field label={text.encoding}><select disabled={busy || completed} value={encoding} onChange={event => { setEncoding(event.target.value as typeof encoding); invalidate(); }}><option value="utf8">UTF-8</option><option value="utf16le">UTF-16LE</option><option value="gb18030">GB18030</option></select></Field></div>
+    <div className="form-grid"><Field label={text.format}><select disabled={busy || choosing || completed} value={format} onChange={event => { setFormat(event.target.value as typeof format); setFile(null); invalidate(); }}><option value="json">{text.json}</option><option value="csv">{text.csv}</option><option value="csv-zip">{text.csvZip}</option></select></Field><Field label={text.encoding}><select disabled={busy || completed} value={encoding} onChange={event => { setEncoding(event.target.value as typeof encoding); invalidate(); }}><option value="utf8">UTF-8</option><option value="utf16le">UTF-16LE</option><option value="gb18030">GB18030</option></select></Field></div>
+    {format === 'csv-zip' && <p className="muted small">{text.csvZipHint}</p>}
     {format === 'csv' && <><Field label={text.ordinal}><input disabled={busy || completed} value={ordinal} inputMode="numeric" onChange={event => { setOrdinal(event.target.value); invalidate(); }}/></Field><p className="muted small">{text.ordinalHint}</p></>}
     <Field label={text.protocol}><select disabled={busy || completed} value={protocol} onChange={event => { setProtocol(event.target.value as typeof protocol); invalidate(); }}><option value="text-strict">{text.text}</option><option value="binary-explicit">{text.binary}</option></select></Field><p className="warning-text">{protocol === 'text-strict' ? text.textHint : text.binaryHint}</p>
     <div className="parameter-actions"><button disabled={busy || choosing || completed || sessionBusy} onClick={() => setParameterDialog(true)}>{text.parameters}</button><span>{parameters ? formatText(text.parameterCount, parameters.length) : text.noParameters}</span>{parameters && <button disabled={busy || completed} onClick={() => { setParameters(undefined); invalidate(); }}>{text.clearParameters}</button>}</div>
@@ -64,7 +65,7 @@ export function QueryStreamExportDialog({ source, loadNames, onExecute, onCancel
     {failed && <p className="warning-text">{text.retry}</p>}
     {!completed && <><label className="query-stream-confirm"><input type="checkbox" disabled={busy} checked={acknowledged} onChange={event => setAcknowledged(event.target.checked)}/>{text.acknowledge}</label>{protocol === 'binary-explicit' && <label className="query-stream-confirm"><input type="checkbox" disabled={busy} checked={binaryAcknowledged} onChange={event => setBinaryAcknowledged(event.target.checked)}/>{text.binaryAcknowledge}</label>}</>}
     {progress && <div className="query-stream-progress" aria-label={text.progress}><strong>{text[progress.phase]}</strong><p>{formatText(text.stats, progress.statementsCompleted, progress.rowsWritten, progress.bytesWritten)}</p>{progress.sqlMayHaveExecuted && <p className="warning-text">{text.executed}</p>}{!progress.transactionKnown && <p className="warning-text">{text.unknown}</p>}</div>}
-    {cancelling && busy && <p>{text.cancelling}</p>}{completed && <div className="success-box">{text.completed}</div>}{output && <section aria-label={text.summary}><h3>{text.summary}</h3><ul>{output.results.map(result => <li key={result.resultOrdinal}>{result.kind === 'rows' ? formatText(text.rowSummary, result.resultOrdinal, result.rowResultOrdinal ?? 0, result.rowsWritten) : formatText(text.statusSummary, result.resultOrdinal, result.affectedRows ?? 0, result.insertId ?? '0', result.warningCount ?? 0)}</li>)}</ul></section>}<ErrorBox message={error}/>
+    {cancelling && busy && <p>{text.cancelling}</p>}{completed && <div className="success-box">{text.completed}</div>}{output && <section aria-label={text.summary}><h3>{text.summary}</h3><ul>{output.results.map(result => <li key={result.resultOrdinal}>{result.kind === 'rows' ? formatText(text.rowSummary, result.resultOrdinal, result.rowResultOrdinal ?? 0, result.rowsWritten) : formatText(text.statusSummary, result.resultOrdinal, result.affectedRows ?? 0, result.insertId ?? '0', result.warningCount ?? 0)}{format === 'csv-zip' && result.kind === 'rows' && <>；{queryCsvResultFile(result.rowResultOrdinal!)}</>}</li>)}</ul></section>}<ErrorBox message={error}/>
   </div><footer className="modal-footer"><button disabled={busy || choosing || sessionBusy} onClick={close}>{zh.common.close}</button><button disabled={!busy || cancelling} onClick={() => void cancel()}><Square size={13}/>{text.cancel}</button><span className="grow"/>{/* 确认与取消保持独立节点和位置，双击确认的第二击不能变成取消任务。 */}<button className="primary" disabled={!streamExecutionAllowed(file?.token, acknowledged, protocol, binaryAcknowledged, busy || choosing || sessionBusy, completed)} onClick={() => void execute()}>{failed ? text.again : text.execute}</button></footer></Modal>}
   {parameterDialog && <QueryParametersDialog source={source} initialParameters={parameters} loadNames={loadNames} submitLabel={text.applyParameters} onExecute={values => { setParameters(values); invalidate(); setParameterDialog(false); }} onClose={() => setParameterDialog(false)}/>}</>;
 }

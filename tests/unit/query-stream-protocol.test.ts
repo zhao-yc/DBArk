@@ -122,9 +122,11 @@ describe('完整导出IPC与协议预选', () => {
     expect(queryExportWireProtocol('/*!50000 SHOW WARNINGS */', 'binary-explicit', mode)).toBe('text');
     expect(() => queryExportWireProtocol("SELECT 'a\\', :ghost -- '\n", 'binary-explicit', { ...mode, noBackslashEscapesKnown: false })).toThrow('歧义');
   });
-  it('只允许JSON全部或CSV指定行结果，禁止外部路径与结果数组夹带', () => {
+  it('JSON和CSV容器全部或单CSV指定行结果，禁止外部路径与结果数组夹带', () => {
     const input = { sessionId: 's', taskId: 't', sql: 'SELECT 1', fileToken: 'f', format: 'json', encoding: 'utf8', protocol: 'text-strict', resultSelection: { kind: 'all' } };
     expect(validateCommand('query.exportStream', input)).toEqual(input);
+    expect(validateCommand('query.exportStream', { ...input, format: 'csv-zip' })).toEqual({ ...input, format: 'csv-zip' });
+    expect(() => validateCommand('query.exportStream', { ...input, format: 'csv-zip', resultSelection: { kind: 'row-result', ordinal: 1 } })).toThrow('全部');
     expect(() => validateCommand('query.exportStream', { ...input, filePath: 'x' })).toThrow();
     expect(() => validateCommand('query.exportStream', { ...input, format: 'csv' })).toThrow('指定');
     expect(() => validateCommand('query.exportStream', { ...input, resultSelection: { kind: 'row-result', ordinal: 1 } })).toThrow('全部');
