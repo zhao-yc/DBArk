@@ -237,7 +237,8 @@ export function TableTab({ tab, onDesign, onTransfer, onColumnPatches, onIndexPa
   }
   const columns = useMemo<Column<DraftRow>[]>(() => [SelectColumn, ...visibleColumns.map<Column<DraftRow>>(column => ({
     key: column.key, name: column.name, minWidth: 64, maxWidth: 2000, width: preferences.columns.find(item => item.name === column.key)?.width ?? 165, resizable: true, sortable: true, draggable: true,
-    editable: row => !isBinaryCell(ownCell(row.data, column.key), column.type) && !record.dirty && !recordReadonlyReason(getRecordContext(), row, column.key),
+    // MySQL协议把TEXT/LONGTEXT也报为BLOB；实体表编辑按已核对的字段结构判断二进制。
+    editable: row => !isBinaryCell(ownCell(row.data, column.key), info?.columns.find(item => item.name === column.key)?.type) && !record.dirty && !recordReadonlyReason(getRecordContext(), row, column.key),
     renderEditCell: TextCellEditor,
     renderHeaderCell: () => <span className="data-header">{info?.primaryKey.includes(column.key) && <KeyRound size={11}/>}<span>{column.name}<small className="column-type">{column.type}</small></span></span>,
     renderCell: ({ row }) => { const value = ownCell(row.data, column.key); return <span className={value === null ? 'null-value' : value === undefined ? 'default-value' : ''} title={value === undefined ? zh.common.defaultValue : cellPreview(value)}>{value === undefined ? zh.common.defaultValue : cellPreview(value)}</span>; }
