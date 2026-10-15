@@ -52,7 +52,7 @@ describe.skipIf(!enabled)('200隔离实例：数据搜索分页范围目录',()=
   try{
    expect((await read({kind:'columns',database,table:'subject',objectKind:'table',prefix:'id'},restricted)).entries.map(column=>column.name)).toEqual(['id']);
    const probe=await connect(restricted);try{await expect(execute(probe,'SELECT id FROM '+qualified(database,'subject')+' LIMIT 0')).rejects.toMatchObject({errno:1143});}finally{await probe.close({strict:true});}
-   const result=await searchRestricted();expect(result.failures).toEqual([]);expect(result.terminal.status).toBe('completed');expect(result.hits.map(hit=>hit.keyValues)).toEqual([['204']]);expect(result.metadata).toHaveLength(1);expect(result.metadata[0].keyColumns.map(column=>column.name)).toEqual(['c204']);
+   const result=await searchRestricted();expect(result.failures).toEqual([]);expect(result.terminal.status).toBe('completed');expect(result.hits.map(hit=>hit.keyValues)).toEqual([['204']]);expect(result.metadata).toHaveLength(1);expect(result.metadata[0].keyColumns.map(column=>column.name)).toEqual(['c204']);expect(result.hits[0].recordRef).toBeUndefined();expect(['identity-permission','identity-unproven']).toContain(result.hits[0].navigationReason);
   }finally{await sql('REVOKE INSERT(id) ON '+qualified(database,'subject')+" FROM '"+user+"'@'%'");}
  });
  it('所有可靠键都不可读时仍返回所选字段命中，明确没有可用定位键',async()=>{

@@ -112,7 +112,7 @@ async function writeSelectedQuery(input: { fileToken: string; sql: string; encod
 /** 分派前检查配置保存锁，防止检查通过后另一个请求用旧凭据抢先建连。 */
 async function dispatch(command: Command, input: any): Promise<unknown> {
   // 确认与释放不新建连接或任务，不受配置保存锁阻塞；归属由引擎在取消前校验。
-  if(command==='search.dataNext'||command==='search.dataRelease')return broker.request(command,input);
+  if(command==='search.dataNext'||command==='search.dataRelease'||command==='search.recordsRelease')return broker.request(command,input);
   const structurePurpose = command.startsWith('schema.columns.') ? 'columns' as const : command.startsWith('schema.indexes.') ? 'indexes' as const : command.startsWith('schema.foreignKeys.') ? 'foreignKeys' as const : undefined;
   const structureCommand = structurePurpose !== undefined, structurePrefix = structurePurpose ? `schema.${structurePurpose}.` : '';
   for (const [token, value] of structureTokens) if (value.expires <= Date.now()) structureTokens.delete(token);
@@ -126,7 +126,7 @@ async function dispatch(command: Command, input: any): Promise<unknown> {
   if (structureCommand && shuttingDown) throw new Error('客户端正在退出，不能开始结构操作');
   connectionConfig.assertAvailable(requestConnectionId);
   switch (command) {
-    case 'search.structure':case 'search.structureContinue':case 'search.dataStart':
+    case 'search.structure':case 'search.structureContinue':case 'search.dataStart':case 'search.recordRead':
       if(shuttingDown)throw Error('客户端正在退出，不能开始搜索');
       input={...input,profile:store.resolveConnection(input.connectionId)};break;
     case 'metadata.completion':case 'search.catalogue': {

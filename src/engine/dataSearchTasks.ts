@@ -5,6 +5,8 @@ import type {ManagedConnection} from './connection';
 import type {StructureTaskContext} from './structureDefinition';
 import {readDataSearchTarget,buildDataSearchPlan,decodeDataSearchRow} from './dataSearchPlan';
 import {consumeQueryFrames} from './queryStreamProtocol';
+import{completionQuery}from'./completionQuery';
+import{DataSearchRecords,prepareDataSearchRecord,type RecordPreparation}from'./dataSearchRecords';
 
 interface Deferred<T>{promise:Promise<T>;resolve(value:T):void;reject(error:Error):void}
 /** 挂起只保留一个批次与一个等待者；注册后即接住拒绝，防止取消先于消费而产生未处理异常。 */
@@ -20,7 +22,7 @@ class SearchAcknowledgementError extends Error{}
 export class DataSearchTasks{
   private readonly searches=new Map<string,Search>();
   /** 超时是内部生命周期选项，不接受渲染进程覆盖；测试可用短期限验证真实资源收尾。 */
-  constructor(private readonly emit:(event:TaskEvent)=>void,private readonly acknowledgementMs:number=dataSearchLimits.acknowledgementMs){if(!Number.isInteger(acknowledgementMs)||acknowledgementMs<1||acknowledgementMs>60000)throw Error('搜索确认期限无效');}
+  constructor(private readonly emit:(event:TaskEvent)=>void,private readonly acknowledgementMs:number=dataSearchLimits.acknowledgementMs,private readonly records?:DataSearchRecords){if(!Number.isInteger(acknowledgementMs)||acknowledgementMs<1||acknowledgementMs>60000)throw Error('搜索确认期限无效');}
   /** 终态只保留短期幂等回复，不保留连接；关闭窗口应主动释放。 */
   private prune(){for(const [id,state]of this.searches)if(state.expires!==undefined&&state.expires<=Date.now())this.searches.delete(id);}
   /** 权属在任何确认、释放或取消动作之前检查。 */
@@ -38,6 +40,7 @@ export class DataSearchTasks{
   /** 首批或终态回复只在对应阶段发布；异常回复必须等后台连接实际收尾。 */
   async start(raw:unknown,run:DataSearchRun):Promise<DataSearchReply>{
     const input=dataSearchInputSchema.parse(raw);this.prune();if(this.searches.has(input.taskId))throw Error('数据搜索编号已使用');
+    this.records?.assertNewSource(input);
     if(this.searches.size>=dataSearchLimits.retained||[...this.searches.values()].filter(state=>!state.terminal).length>=dataSearchLimits.active)throw Error('数据搜索繁忙，请关闭旧搜索后重试');
     const state:Search={input,progress:{phase:'preparing',targetIndex:0,targets:input.targets.length,processedBlocks:0,blocks:input.targets.reduce((count,target)=>count+Math.ceil(target.columns.length/dataSearchLimits.projectionColumns),0),failedBlocks:0,hits:0,bytes:0,sequence:0,limitReached:false,peakBufferedRows:0,peakBufferedBytes:0},reply:deferred(),done:Promise.resolve(),cancelled:false};
     this.searches.set(input.taskId,state);
@@ -65,12 +68,18 @@ export class DataSearchTasks{
   /** 每个目标和字段块显式记录范围；中断不自动重连，不再执行后续对象。 */
   private async scan(state:Search,control:DataSearchTaskControl){
     const {managed}=control,input=state.input;
+    // 独立只读事务保留已读取对象的元数据锁，身份证明与真实命中之间不能被DDL替换。
+    // 完成、失败和取消均由宿主真正关闭连接；这里不保留用于后续导航的数据库会话。
+    if(this.records)await completionQuery(managed,control,'START TRANSACTION READ ONLY',[]);
+    const preparations=new Map<string,RecordPreparation>();
     outer:for(let targetIndex=0;targetIndex<input.targets.length;targetIndex++)for(const block of dataSearchBlocks(input.targets[targetIndex])){
       control.checkCancelled();state.progress.targetIndex=targetIndex;state.progress.phase='preparing';this.report(state);let pending:DataSearchHit[]=[],pendingBytes=0,metadata:DataSearchTargetMetadata|undefined,charged=false,metadataBytes=0;
       /** 元数据只在首次命中计入保留预算；每批复用同一个描述，不积累服务器行。 */
       const flush=async()=>{if(!pending.length||!metadata)return;state.progress.hits+=pending.length;state.progress.bytes+=pendingBytes+(charged?0:metadataBytes);charged=true;const hits=pending;pending=[];pendingBytes=0;state.progress.sequence++;await this.offer(state,{kind:'batch',sequence:state.progress.sequence,targetIndex,columnOffset:block.columnOffset,metadata,hits,progress:{...state.progress,phase:'waiting'}},control);};
       try{
         metadata=await readDataSearchTarget(managed,block.target,control,{allowViews:input.allowViews});metadataBytes=Buffer.byteLength(JSON.stringify(metadata));
+        const targetKey=JSON.stringify([block.target.database,block.target.table]);let prepared=preparations.get(targetKey);
+        if(this.records&&!prepared){prepared=metadata.keyColumns.length?await prepareDataSearchRecord(control,block.target):{reason:'no-key'};preparations.set(targetKey,prepared);}
         const plan=buildDataSearchPlan(metadata,input.matcher,Math.max(1,input.maxResults-state.progress.hits+1));state.progress.phase='scanning';this.report(state);
         await consumeQueryFrames(managed,plan.sql,'binary',{
           statementOrdinal:1,ordinals:{results:0,rows:0},checkCancelled:()=>{control.checkCancelled();if(state.cancelled)throw Error('数据搜索已取消');},commandStarted:()=>control.commandStarted(),stop:()=>control.stop(),
@@ -79,7 +88,8 @@ export class DataSearchTasks{
             if(frame.kind!=='row')return;const row=decodeDataSearchRow(metadata!,frame.values);
             for(let index=0;index<row.cells.length;index++)if(row.cells[index].matched){
               if(state.progress.hits+pending.length>=input.maxResults){state.progress.limitReached=true;state.progress.limitReason='hits';throw new SearchLimit('已达到数据搜索命中上限');}
-              const hit:DataSearchHit={columnIndex:block.columnOffset+index,cell:row.cells[index],keyValues:row.keyValues,...(row.keyUnavailableReason?{keyUnavailableReason:row.keyUnavailableReason}:{})},bytes=Buffer.byteLength(JSON.stringify(hit));
+              const navigation=this.records&&prepared?this.records.capture(input.connectionId,input.taskId,metadata!,row,prepared):{};
+              const hit:DataSearchHit={columnIndex:block.columnOffset+index,cell:row.cells[index],keyValues:row.keyValues,...(row.keyUnavailableReason?{keyUnavailableReason:row.keyUnavailableReason}:{}),...navigation},bytes=Buffer.byteLength(JSON.stringify(hit));
               if(state.progress.bytes+pendingBytes+bytes+(charged?0:metadataBytes)>dataSearchLimits.resultBytes){state.progress.limitReached=true;state.progress.limitReason='bytes';throw new SearchLimit('已达到数据搜索结果内存上限');}
               if(pending.length&&(pending.length>=dataSearchLimits.batchRows||pendingBytes+bytes+metadataBytes+4096>dataSearchLimits.batchBytes))await flush();
               if(bytes+metadataBytes+4096>dataSearchLimits.batchBytes)throw Error('单处数据搜索命中及描述超过批次预算');pending.push(hit);pendingBytes+=bytes;

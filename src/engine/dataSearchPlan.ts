@@ -85,22 +85,25 @@ export function buildDataSearchPlan(metadata:DataSearchTargetMetadata,rawMatcher
   for(let index=0;index<metadata.keyColumns.length;index++){
     const column=metadata.keyColumns[index],expression=column.binary?identifier(column.name):'CONVERT('+identifier(column.name)+' USING utf8mb4)';
     projections.push('LEFT(CAST('+expression+' AS BINARY),'+(dataSearchLimits.keyBytes+1)+') AS k'+index,'OCTET_LENGTH('+expression+') AS z'+index);
+    // TIMESTAMP原显示值保持不变，另取内部UTC秒数供跨会话定位，不能对已文本化日期反推时区。
+    if(column.dataType.toLowerCase()==='timestamp')projections.push('CONVERT(UNIX_TIMESTAMP('+identifier(column.name)+') USING utf8mb4) AS e'+index);
   }
   return{sql:'SELECT '+projections.join(',')+' FROM '+qualified(target.database,target.table)+' WHERE ('+predicates.join(' OR ')+') LIMIT '+rows,params:[...projectionParams,...whereParams]};
 }
 
 /** 解码位置字段，保留NULL/空串/JSON原文与精确文本；截断的大键只能返回只读状态。 */
 export function decodeDataSearchRow(metadata:DataSearchTargetMetadata,values:CellValue[]):DataSearchRow{
-  if(values.length!==metadata.columns.length*3+metadata.keyColumns.length*2)throw Error('数据搜索结果列数与计划不一致');
+  if(values.length!==metadata.columns.length*3+metadata.keyColumns.reduce((count,column)=>count+(column.dataType.toLowerCase()==='timestamp'?3:2),0))throw Error('数据搜索结果列数与计划不一致');
   const cells=metadata.columns.map((_,index)=>{
     const [matched,preview,count]=values.slice(index*3,index*3+3);if(![0,1,'0','1',null].includes(matched as string|number|null)||preview!==null&&typeof preview!=='string'||typeof preview==='string'&&Buffer.byteLength(preview)>dataSearchLimits.previewCharacters*4)throw Error('数据搜索预览字段不完整');
     const characters=lengthText(count);if((preview===null)!==(characters===null))throw Error('数据搜索NULL与长度不一致');
     return{matched:matched===1||matched==='1',preview:preview as string|null,characters,truncated:characters!==null&&BigInt(characters)>BigInt(dataSearchLimits.previewCharacters)};
   });
   if(!cells.some(cell=>cell.matched))throw Error('服务器返回了没有匹配字段的数据行');
-  let keyValues:CellValue[]|null=metadata.keyColumns.length?[]:null,tooLarge=false;const offset=metadata.columns.length*3;
+  let keyValues:CellValue[]|null=metadata.keyColumns.length?[]:null,tooLarge=false,offset=metadata.columns.length*3;const timestampEpochs:(string|null)[]=[];
   for(let index=0;index<metadata.keyColumns.length;index++){
-    const value=values[offset+index*2],count=lengthText(values[offset+index*2+1]);
+    const value=values[offset],count=lengthText(values[offset+1]),timestamp=metadata.keyColumns[index].dataType.toLowerCase()==='timestamp';offset+=2;
+    if(timestamp){const epoch=values[offset++];if(typeof epoch!=='string'||!/^\d{1,12}(?:\.\d{1,6})?$/.test(epoch))throw Error('TIMESTAMP定位所需的UTC精度信息不完整');timestampEpochs.push(epoch);}else timestampEpochs.push(null);
     if(count===null||!value||typeof value!=='object'||value.type!=='binary')throw Error('可靠键的原始字节不完整');
     if(BigInt(count)>BigInt(dataSearchLimits.keyBytes)){tooLarge=true;continue;}
     const bytes=Buffer.from(value.base64,'base64');if(BigInt(bytes.length)!==BigInt(count))throw Error('可靠键字节已被截断');
@@ -108,7 +111,7 @@ export function decodeDataSearchRow(metadata:DataSearchTargetMetadata,values:Cel
   }
   if(keyValues&&Buffer.byteLength(JSON.stringify(keyValues))>dataSearchLimits.keyBytes)tooLarge=true;
   if(tooLarge)keyValues=null;
-  const result:DataSearchRow={cells,keyValues,...(!keyValues?{keyUnavailableReason:tooLarge?'key-too-large':metadata.keyUnavailableReason??'no-key'}:{})};
+  const result:DataSearchRow={cells,keyValues,...(timestampEpochs.some(value=>value!==null)?{timestampEpochs}:{}),...(!keyValues?{keyUnavailableReason:tooLarge?'key-too-large':metadata.keyUnavailableReason??'no-key'}:{})};
   if(Buffer.byteLength(JSON.stringify(result))>dataSearchLimits.rowBytes)throw Error('数据搜索单行超过32KiB，未传送不完整结果');
   return result;
 }

@@ -1,0 +1,2 @@
+/** 记录定位始终明确当前读取、字段范围、UTC时区和只读边界。 */
+export const dataSearchRecordsZh={title:'命中记录（只读）',open:'定位命中记录',back:'返回搜索结果',reading:'正在核验对象并定位记录…',closing:'正在取消并等待读取结束…',hint:'显示当前命中字段块所选字段与定位键的当前值；TIMESTAMP使用UTC，DATETIME和TIME保留原文。此窗口不刷新、提交或覆盖原工作区草稿。',expires:'定位引用自签发起有效5分钟；对象身份、定义或键失效时需要重新搜索。',none:'当前命中没有可用的精确定位引用；仍可明确打开所属表。',readOnly:'只读',null:'NULL',empty:'（空字符串）',binary:'HEX',truncated:(count:string|null)=>`内容已截断；完整长度 ${count??'未知'}`,value:(name:string)=>`定位字段 ${name}`,searched:'搜索时间',read:'本次读取时间'}as const;

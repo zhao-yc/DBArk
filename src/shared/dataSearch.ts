@@ -2,6 +2,7 @@ import {z} from 'zod';
 import {searchIdentifier} from './databaseSearch';
 import {databaseSearchPatternSchema} from './databaseSearchPattern';
 import type {CellValue} from './contracts';
+import type{DataSearchNavigationReason}from'./dataSearchRecords';
 
 /** 数据搜索的预算在查询生成前固定，字段预览和可靠键分别计量，原值不会被预览取代。 */
 export const dataSearchLimits={targets:64,columns:4096,projectionColumns:16,totalColumns:16384,previewCharacters:128,keyBytes:8192,rowBytes:32*1024,batchBytes:128*1024,batchRows:50,rows:1000,indexRows:256,metadataBytes:128*1024,resultBytes:32*1024*1024,acknowledgementMs:60000,active:4,retained:32,retentionMs:5*60000} as const;
@@ -31,9 +32,9 @@ export type DataSearchNext=z.infer<typeof dataSearchNextSchema>;
 export interface DataSearchColumnMetadata{name:string;dataType:string;binary:boolean;nullable:boolean}
 export interface DataSearchTargetMetadata{target:DataSearchTarget;columns:DataSearchColumnMetadata[];keyColumns:DataSearchColumnMetadata[];keyUnavailableReason?:'no-key'|'unsupported-key-type'|'key-not-selectable';indexMetadataIncomplete:boolean}
 export interface DataSearchCell{matched:boolean;preview:string|null;characters:string|null;truncated:boolean}
-export interface DataSearchRow{cells:DataSearchCell[];keyValues:CellValue[]|null;keyUnavailableReason?:'no-key'|'unsupported-key-type'|'key-too-large'|'key-not-selectable'}
+export interface DataSearchRow{cells:DataSearchCell[];keyValues:CellValue[]|null;keyUnavailableReason?:'no-key'|'unsupported-key-type'|'key-too-large'|'key-not-selectable';timestampEpochs?:(string|null)[]}
 /** 每处匹配单元格为一个命中；同一行多个字段分别列出，候选键与预览保持独立。 */
-export interface DataSearchHit{columnIndex:number;cell:DataSearchCell;keyValues:CellValue[]|null;keyUnavailableReason?:DataSearchRow['keyUnavailableReason']}
+export interface DataSearchHit{columnIndex:number;cell:DataSearchCell;keyValues:CellValue[]|null;keyUnavailableReason?:DataSearchRow['keyUnavailableReason'];recordRef?:string;navigationReason?:DataSearchNavigationReason}
 export interface DataSearchProgress{phase:'preparing'|'scanning'|'waiting'|'releasing';targetIndex:number;targets:number;processedBlocks:number;blocks:number;failedBlocks:number;hits:number;bytes:number;sequence:number;limitReached:boolean;limitReason?:'hits'|'bytes';peakBufferedRows:number;peakBufferedBytes:number}
 export type DataSearchReply=
   |{kind:'batch';sequence:number;targetIndex:number;columnOffset:number;metadata:DataSearchTargetMetadata;hits:DataSearchHit[];progress:DataSearchProgress}

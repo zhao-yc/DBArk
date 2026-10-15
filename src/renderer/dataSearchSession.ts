@@ -1,6 +1,6 @@
 import {dataSearchInputSchema,dataSearchLimits,type DataSearchInput,type DataSearchNext,type DataSearchReply,type DataSearchProgress,type DataSearchHit,type DataSearchTargetMetadata} from '../shared/dataSearch';
 
-export interface DataSearchServices{start(input:DataSearchInput):Promise<DataSearchReply>;next(input:DataSearchNext):Promise<DataSearchReply>;release(input:{connectionId:string;taskId:string}):Promise<void>}
+export interface DataSearchServices{start(input:DataSearchInput):Promise<DataSearchReply>;next(input:DataSearchNext):Promise<DataSearchReply>;release(input:{connectionId:string;taskId:string}):Promise<void>;releaseRecords?(input:{connectionId:string;sourceTaskId:string}):Promise<void>}
 export interface DataSearchViewHit extends DataSearchHit{id:string;block:string;columnOffset:number}
 export interface DataSearchView{busy:boolean;status:'idle'|'running'|'completed'|'failed'|'cancelled';input?:DataSearchInput;progress?:DataSearchProgress;rows:DataSearchViewHit[];blocks:ReadonlyMap<string,DataSearchTargetMetadata>;failures:string[];error?:string}
 interface Operation{input:DataSearchInput;stopped:boolean;done:Promise<void>;release?:Promise<void>}
@@ -12,17 +12,20 @@ export class DataSearchSession{
   private view:DataSearchView={busy:false,status:'idle',rows:[],blocks:new Map(),failures:[]};
   private retainedBytes=0;
   private sequence=0;
+  private sources=new Map<string,{connectionId:string;sourceTaskId:string}>();
+  private closing?:Promise<void>;
   constructor(private readonly services:DataSearchServices,private readonly publish:(view:DataSearchView)=>void){}
   /** 只读快照供组件初始化；所有状态更新产生新对象，旧批次不会被后续修改。 */
   get snapshot(){return this.view;}
   /** 同步登记占位防双击；提交前留一个微任务，卸载可撤销尚未发送的搜索。 */
   start(raw:unknown):Promise<void>{
-    if(this.operation)throw Error('上一次搜索尚未释放，请先关闭或重试清理');
+    if(this.operation||this.closing)throw Error('上一次搜索尚未释放，请先关闭或重试清理');
     const input=dataSearchInputSchema.parse(raw),operation:Operation={input,stopped:false,done:Promise.resolve()};this.operation=operation;
     this.retainedBytes=0;this.sequence=0;this.update({busy:true,status:'running',input,rows:[],blocks:new Map(),failures:[],error:undefined,progress:undefined});
     operation.done=(async()=>{
       try{
-        await Promise.resolve();if(operation.stopped){this.update({...this.view,status:'cancelled'});return;}
+        await Promise.resolve();await this.clearRecords();if(operation.stopped){this.update({...this.view,status:'cancelled'});return;}
+        this.sources.set(input.taskId,{connectionId:input.connectionId,sourceTaskId:input.taskId});
         let page=await this.services.start(input);
         for(;;){
           if(operation.stopped){this.update({...this.view,status:'cancelled'});break;}
@@ -39,6 +42,10 @@ export class DataSearchSession{
   }
   /** 取消与窗口关闭共用一条释放请求；取消返回不能替代仍在等待的开始/续页回复。 */
   async stop():Promise<void>{const operation=this.operation;if(!operation)return;operation.stopped=true;await this.release(operation);await operation.done;this.finish(operation);}
+  /** 关闭窗口才释放仍可使用的定位引用；普通取消保留已收到的只读命中。 */
+  close():Promise<void>{if(this.closing)return this.closing;const operation=(async()=>{try{await this.stop();await this.clearRecords();}finally{this.closing=undefined;}})();this.closing=operation;return operation;}
+  /** 新搜索和关闭共用精确来源清理，失败保留来源以供明确重试。 */
+  private async clearRecords():Promise<void>{for(const[key,source]of this.sources){await this.services.releaseRecords?.(source);this.sources.delete(key);}}
   /** 清理失败后保留占位且允许显式重试，不能遗忘仍可能在执行的后台任务。 */
   private async release(operation:Operation):Promise<void>{
     if(!operation.release){const pending=Promise.resolve().then(()=>this.services.release({connectionId:operation.input.connectionId,taskId:operation.input.taskId}));operation.release=pending;void pending.catch(()=>{});}

@@ -16,6 +16,7 @@ import {readSessionObject} from './sessionObjectRead';
 import {StructureSearches} from './structureSearch';
 import {DataSearchTasks} from './dataSearchTasks';
 import {readDataSearchCatalogue} from './dataSearchCatalogue';
+import{DataSearchRecords}from'./dataSearchRecords';
 import {queryDatabaseFromSession} from '../shared/queryContext';
 import { csvCell, csvHeader, encodingName, previewFile, readRecords, readText } from './files';
 import { ResultFileTasks } from './resultFileTasks';
@@ -59,9 +60,10 @@ export class Engine {
   private readonly structureExecutions = new StructureExecutionLocks();
   private readonly structureSearches=new StructureSearches();
   private readonly dataSearches:DataSearchTasks;
+  private readonly dataSearchRecords=new DataSearchRecords();
   /** 注入任务事件出口，使引擎既能在 utility process 中运行，也能独立测试。 */
   constructor(private readonly emit: (event: TaskEvent) => void = () => undefined,options?:{dataSearchAcknowledgementMs?:number}) {
-    this.dataSearches=new DataSearchTasks(emit,options?.dataSearchAcknowledgementMs);
+    this.dataSearches=new DataSearchTasks(emit,options?.dataSearchAcknowledgementMs,this.dataSearchRecords);
     this.resultFiles = new ResultFileTasks(emit);
     this.columnPatches = new TableColumnPatchTasks({ run: (connectionId, taskId, action, options) => this.withIndependentTask(connectionId, taskId, (managed, control) => action({ managed, ...control }), { label: options.label, purpose: 'columns', progress: options.columnPatch, executionTarget: options.executionTarget }) }, undefined, this.structureCache);
     this.indexPatches = new TableIndexPatchTasks({ run: (connectionId, taskId, action, options) => this.withIndependentTask(connectionId, taskId, (managed, control) => action({ managed, ...control }), options) }, undefined, this.structureCache);
@@ -81,6 +83,7 @@ export class Engine {
         if (changed || !previous) this.profiles.delete(input.id);
         this.structureCache.release(input.id);
         this.structureSearches.releaseConnection(input.id);
+        this.dataSearchRecords.releaseConnection(input.id);
         return;
       }
       case 'connections.test': return this.withConnectionUse(input.id, async () => {
@@ -94,6 +97,7 @@ export class Engine {
         try { this.profiles.set(profile.id, profile); return managed.status; } finally { await managed.close(); }
       });
       case 'connections.close': {
+        this.dataSearchRecords.releaseConnection(input.id);
         this.structureCache.release(input.id);
         this.structureSearches.releaseConnection(input.id);
         const active = [...this.tasks.values()].filter(task => task.managed.profile.id === input.id);
@@ -102,6 +106,7 @@ export class Engine {
         await Promise.all([...active.map(task => task.done), ...independent.map(([, task]) => task.done)]);
         for (const [id, session] of this.sessions) if (session.connectionId === input.id) { await session.managed.close(); this.sessions.delete(id); }
         this.profiles.delete(input.id);
+        this.dataSearchRecords.releaseConnection(input.id);
         this.structureCache.release(input.id);
         const failed = cancellations.find(result => result.status === 'rejected'); if (failed?.status === 'rejected') throw failed.reason;
         return;
@@ -139,6 +144,11 @@ export class Engine {
         return this.dataSearches.start(request,action=>this.withIndependentTask(input.connectionId,input.taskId,(managed,control)=>action({managed,...control,stop:()=>this.stopIndependentRead(input.taskId)}),undefined,'搜索数据',true,()=>this.dataSearches.detail(input.taskId)));
       }
       case 'search.dataNext':return this.dataSearches.next(input);
+      case 'search.recordsRelease':return this.dataSearchRecords.release(input);
+      case 'search.recordRead':{
+        const{profile,...request}=input;if(!profile||profile.id!==input.connectionId)throw Error('主进程未提供有效记录连接配置');if(!this.profiles.has(profile.id))this.profiles.set(profile.id,profile);
+        return this.withIndependentTask(input.connectionId,input.taskId,(managed,control)=>this.dataSearchRecords.read({managed,...control},request),undefined,'正在定位命中记录',true);
+      }
       case 'search.catalogue':{
         const{profile,...request}=input;if(!profile||profile.id!==input.connectionId)throw Error('主进程未提供有效范围连接配置');if(!this.profiles.has(profile.id))this.profiles.set(profile.id,profile);
         return this.withIndependentTask(input.connectionId,input.taskId,(managed,control)=>readDataSearchCatalogue({managed,...control},request),undefined,'读取搜索范围',true);
@@ -270,6 +280,7 @@ export class Engine {
     await fileCleanup;
     // 首个 await 之前已进入的建连也必须收尾，避免退出后迟到注册会话。
     await Promise.all([...this.pendingUses]);
+    this.dataSearchRecords.close();
     await Promise.all([...this.sessions.values()].map(session => session.managed.close()));
     this.sessions.clear(); this.profiles.clear();
     this.structureCache.release();

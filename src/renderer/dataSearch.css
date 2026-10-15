@@ -16,3 +16,6 @@
 /* 目录和条件较多时由内容区滚动，不能让结果虚拟表格被flex压成一条线。 */
 .data-search-content > .rdg { flex-shrink:0;min-height:200px; }
 .data-search-content > fieldset { flex-shrink:0; }
+.data-search-record { overflow:auto; }
+.data-search-record section { margin:14px 0; }
+.data-search-record textarea { width:100%;resize:vertical;font-family:var(--font-mono,monospace); }

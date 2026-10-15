@@ -2,7 +2,7 @@ import type {FieldPacket} from 'mysql2';
 import {execute,type ManagedConnection} from './connection';
 import type {StructureTaskContext} from './structureDefinition';
 /** 元数据取消必须等待真实回调或连接终态，不能将普通execute的早期Abort拒绝当作服务器结束。 */
-export function completionQuery<T>(managed:ManagedConnection,control:Pick<StructureTaskContext,'checkCancelled'|'commandStarted'>,sql:string,values:(string|number)[]):Promise<{rows:T;fields:FieldPacket[]}>{
+export function completionQuery<T>(managed:ManagedConnection,control:Pick<StructureTaskContext,'checkCancelled'|'commandStarted'>,sql:string,values:(string|number|boolean|null|Buffer)[]):Promise<{rows:T;fields:FieldPacket[]}>{
   control.checkCancelled();if(managed.signal?.aborted)return Promise.reject(Error('补全元数据读取已取消'));
   return new Promise((resolve,reject)=>{
     const terminal=control.commandStarted();let settled=false;
