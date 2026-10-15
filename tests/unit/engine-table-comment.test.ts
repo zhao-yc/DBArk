@@ -13,6 +13,7 @@ const profile: ConnectionProfile = { id: 'comment-unit', name: '注释单元', g
 const original = "CREATE TABLE `t` (`id` bigint NOT NULL AUTO_INCREMENT,`s` varchar(80) CHARACTER SET latin1 COLLATE latin1_bin DEFAULT NULL,`g` int GENERATED ALWAYS AS (length(`s`)) STORED,PRIMARY KEY (`id`),KEY `prefix` (`s`(8))) ENGINE=InnoDB AUTO_INCREMENT=9007199254740993 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin ROW_FORMAT=DYNAMIC COMMENT='原说明'";
 let engine: Engine, source: string, physicalId: string, version: string, dialect: 'mysql' | 'mariadb', mode: string, charset: string, catalogMismatch: boolean, warningCount: number;
 let nextId: number, sent: { id: number; sql: string }[], connections: ManagedConnection[], events: TaskEvent[], fail: RegExp | undefined, hold: RegExp | undefined, closeFails: boolean;
+let afterAlterMode: string | undefined;
 let held: { complete(error?: Error): void } | undefined;
 /** 仅替换驱动；真实Engine、目录校验、预览、执行、取消和关闭路径均运行产品代码。 */
 function managed(signal?: AbortSignal): ManagedConnection {
@@ -42,7 +43,12 @@ function managed(signal?: AbortSignal): ManagedConnection {
       else if (sql.startsWith('SELECT PARTITION_NAME AS name')) rows = [{ name: null }];
       else if (sql.startsWith('SELECT CAST(TABLE_ID AS CHAR)')) rows = [{ id: physicalId, name: 'db/t' }];
       else if (sql.startsWith('SELECT c.CHARACTER_SET_NAME AS charset, c.CHARACTER_MAXIMUM')) rows = [{ charset, characters: '2048', bytes: charset === 'utf8mb4' ? '8192' : '6144', maxlen: charset === 'utf8mb4' ? 4 : 3 }];
-      else if (sql.startsWith('ALTER TABLE')) { source = source.replace(/ COMMENT='原说明'$/, '') + ' ' + sql.slice(sql.indexOf('COMMENT = '), -1); rows = { affectedRows: 0, warningStatus: warningCount }; }
+      else if (sql.startsWith('ALTER TABLE')) {
+        source = source.replace(/ COMMENT='原说明'$/, '') + ' ' + sql.slice(sql.indexOf('COMMENT = '), -1);
+        // 仅驱动替身改变当前物理会话模式，后核验仍走真实读取及比较链路。
+        if (afterAlterMode !== undefined) sqlMode = afterAlterMode;
+        rows = { affectedRows: 0, warningStatus: warningCount };
+      }
       else if (sql === 'SHOW WARNINGS LIMIT 20') rows = [{ Code: 1234, Message: '服务器警告' }];
       else { callback(new Error('未定义测试驱动语句：' + sql)); return; }
       callback(null, rows, []);
@@ -56,7 +62,7 @@ async function preview(snapshot: TableCommentGetOutput, comment = '新说明'): 
 async function apply(value: TableCommentPreviewOutput, taskId = 'apply', revision = 1, acknowledgements = value.requiredAcknowledgements) { return engine.handle('schema.tableComment.apply', { previewToken: value.previewToken, taskId, connectionRevision: revision, acknowledgements }); }
 beforeEach(async () => {
   source = original; physicalId = '9007199254740995'; version = '8.4.11'; dialect = 'mysql'; mode = ''; charset = 'utf8mb3'; catalogMismatch = false; warningCount = 0;
-  nextId = 0; sent = []; connections = []; events = []; fail = undefined; hold = undefined; held = undefined; closeFails = false;
+  nextId = 0; sent = []; connections = []; events = []; fail = undefined; hold = undefined; held = undefined; closeFails = false; afterAlterMode = undefined;
   mock.connect.mockReset().mockImplementation(async (_profile, _database, signal) => managed(signal));
   mock.execute.mockReset().mockImplementation(async (_managed, sql) => { if (String(sql).startsWith('KILL CONNECTION')) held?.complete(Object.assign(new Error('取消终态'), { errno: 1317 })); return { rows: [] }; });
   engine = new Engine(event => events.push(event)); await engine.handle('connections.open', { id: profile.id, profile });
@@ -76,6 +82,48 @@ describe('真实Engine表注释受控生命周期（驱动替身）', () => {
     version = current; dialect = current.includes('MariaDB') ? 'mariadb' : 'mysql'; mode = 'NO_BACKSLASH_ESCAPES,ANSI_QUOTES';
     const snapshot = await get(), text = "说明'\\路径\r\n第二行", next = await preview(snapshot, text);
     expect(await apply(next)).toMatchObject({ definitionVerified: true, after: { comment: text } });
+  });
+  it.each(['NO_FIELD_OPTIONS', 'NO_KEY_OPTIONS', 'NO_TABLE_OPTIONS'])('短会话去除%s后成功修改并完整核验，保留转义语义与其他定义', async omitted => {
+    version = '11.4.13-MariaDB'; dialect = 'mariadb'; mode = `${omitted},NO_BACKSLASH_ESCAPES,ANSI_QUOTES`;
+    const text = "规范后'说明\\路径\r\n第二行", next = await preview(await get(), text);
+    expect(await apply(next)).toMatchObject({ ddlCompleted: true, definitionVerified: true, after: { comment: text } });
+    expect(sent.filter(item => item.sql.startsWith('ALTER TABLE'))).toHaveLength(1);
+    expect(sent.filter(item => item.sql.startsWith('SET SESSION sql_mode'))).toEqual([2, 3, 4].map(id => ({ id, sql: "SET SESSION sql_mode = 'NO_BACKSLASH_ESCAPES,ANSI_QUOTES'" })));
+    const context = { dialect, mode: { noBackslashEscapes: true, ansiQuotes: true } };
+    expect(readTableCommentDefinition(source, context).preserved).toBe(readTableCommentDefinition(original, context).preserved);
+    expect(events.at(-1)).toMatchObject({ status: 'completed', tableComment: { ddlCompleted: true, definitionVerified: true } });
+    await expect(apply(next, 'replay')).rejects.toThrow('已失效或已使用');
+  });
+  it.each(['preview', 'apply'] as const)('%s前原始隐藏模式变化即使规范模式相同也拒绝，保留独立会话检查', async stage => {
+    version = '11.4.13-MariaDB'; dialect = 'mariadb'; mode = 'NO_FIELD_OPTIONS,NO_BACKSLASH_ESCAPES,ANSI_QUOTES';
+    const snapshot = await get(), next = stage === 'apply' ? await preview(snapshot) : undefined;
+    mode = 'NO_KEY_OPTIONS,NO_BACKSLASH_ESCAPES,ANSI_QUOTES';
+    await expect(stage === 'preview' ? preview(snapshot) : apply(next!)).rejects.toThrow('SQL 模式');
+    expect(sent.filter(item => item.sql.startsWith('ALTER TABLE'))).toHaveLength(0);
+    if (next) await expect(apply(next, 'replay')).rejects.toThrow('已失效或已使用');
+  });
+  it.each([
+    ['移除NO_BACKSLASH_ESCAPES', 'NO_BACKSLASH_ESCAPES,ANSI_QUOTES', 'ANSI_QUOTES'],
+    ['新增NO_BACKSLASH_ESCAPES', 'ANSI_QUOTES', 'NO_BACKSLASH_ESCAPES,ANSI_QUOTES'],
+    ['移除ANSI_QUOTES', 'NO_BACKSLASH_ESCAPES,ANSI_QUOTES', 'NO_BACKSLASH_ESCAPES'],
+    ['新增ANSI_QUOTES', 'NO_BACKSLASH_ESCAPES', 'NO_BACKSLASH_ESCAPES,ANSI_QUOTES'],
+  ])('发送前%s必须拒绝且消费令牌', async (_label, initial, changed) => {
+    mode = initial; const next = await preview(await get()); mode = changed;
+    await expect(apply(next)).rejects.toThrow('SQL 模式');
+    expect(sent.filter(item => item.sql.startsWith('ALTER TABLE'))).toHaveLength(0);
+    await expect(apply(next, 'replay')).rejects.toThrow('已失效或已使用');
+  });
+  it.each([
+    ['移除NO_BACKSLASH_ESCAPES', 'ANSI_QUOTES'],
+    ['移除ANSI_QUOTES', 'NO_BACKSLASH_ESCAPES'],
+    ['重新加入隐藏模式', 'NO_KEY_OPTIONS,NO_BACKSLASH_ESCAPES,ANSI_QUOTES'],
+  ])('DDL成功后%s仍拒绝完整核验，不因修复而放宽会话模式', async (_label, changed) => {
+    version = '11.4.13-MariaDB'; dialect = 'mariadb'; mode = 'NO_FIELD_OPTIONS,NO_BACKSLASH_ESCAPES,ANSI_QUOTES';
+    const text = '模式变化后不能判完整', next = await preview(await get(), text); afterAlterMode = changed;
+    expect(await apply(next)).toMatchObject({ ddlCompleted: true, definitionVerified: false, after: { comment: text } });
+    expect(events.at(-1)?.tableComment).toMatchObject({ ddlCompleted: true, definitionVerified: false, outcome: 'succeeded' });
+    expect(sent.filter(item => item.sql.startsWith('ALTER TABLE'))).toHaveLength(1);
+    await expect(apply(next, 'replay')).rejects.toThrow('已失效或已使用');
   });
   it('同定义DROP重建通过原生TABLE_ID识别，消费令牌且零DDL', async () => {
     const next = await preview(await get()); physicalId = '9007199254740996';
