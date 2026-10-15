@@ -108,6 +108,13 @@ async function openSaved(name: string) {
 /** 来源断言读取正式本地IPC；所有创建、另存、更新和冲突都由真实UI提交。 */
 async function records() { return page.evaluate(() => window.dbark.invoke('queries.list', {})); }
 
+/** Monaco沿用平台换行；先核对实际完整草稿，再用原字节验证保存，不能假定Windows输入为LF。 */
+async function capturedDraft(expected: string): Promise<string> {
+  let actual='';
+  await expect.poll(async()=>{const settings=await page.evaluate(()=>window.dbark.invoke('settings.get',{}));actual=settings.tabs.find(tab=>tab.id===settings.activeTabId)?.sql??'';return actual.replaceAll('\r\n','\n');}).toBe(expected.replaceAll('\r\n','\n'));
+  return actual;
+}
+
 test('真实JSON计划经保存、原来源更新、另存及同源CAS冲突保留状态，新查询替换旧计划', async ({}, info) => {
   test.setTimeout(180000);
   const { isolatedDatabase, openDatabaseQuery, writeSql, executeSql, readRenderedResult } = await import('./live-helpers');
@@ -127,9 +134,9 @@ test('真实JSON计划经保存、原来源更新、另存及同源CAS冲突保�
       await saveHeld('另存为新查询', () => retainedNode(node), '计划状态原查询'); await retainedNode(node);
       const original = (await records()).find(record => record.name === '计划状态原查询')!;
       expect(original.sql).toBe(source);
-      const updated = source + '\n-- 真实原来源更新'; await writeSql(updated);
+      const updated = source + '\n-- 真实原来源更新'; await writeSql(updated);const updatedDraft=await capturedDraft(updated);
       await saveHeld('保存到原查询', () => retainedNode(node)); await retainedNode(node);
-      expect((await records()).find(record => record.id === original.id)?.sql).toBe(updated);
+      expect((await records()).find(record => record.id === original.id)?.sql).toBe(updatedDraft);
 
       await plan().getByRole('button', { name: '原始输出', exact: true }).click();
       const raw = await plan().getByLabel('原始输出', { exact: true }).innerText();
@@ -140,22 +147,22 @@ test('真实JSON计划经保存、原来源更新、另存及同源CAS冲突保�
       };
       await saveHeld('另存为新查询', retainedRaw, '计划状态独立副本'); await retainedRaw();
       const copy = (await records()).find(record => record.name === '计划状态独立副本')!;
-      expect(copy.id).not.toBe(original.id); expect(copy.sql).toBe(updated);
-      expect((await records()).find(record => record.id === original.id)?.sql).toBe(updated);
+      expect(copy.id).not.toBe(original.id); expect(copy.sql).toBe(updatedDraft);
+      expect((await records()).find(record => record.id === original.id)?.sql).toBe(updatedDraft);
       await plan().getByRole('button', { name: '树形计划', exact: true }).click(); await retainedNode(node);
 
       // 同源第二标签只保存不同正文；原标签仍持旧摘要，CAS错误必须来自正式处理器。
       const beforeOpen = await counts(); await openSaved('计划状态独立副本'); expect(await counts()).toEqual(beforeOpen);
       await expect(page.locator('.tab-strip .tab-select')).toHaveCount(2);
-      const winner = source + '\n-- 同源第二标签先更新'; await writeSql(winner);
+      const winner = source + '\n-- 同源第二标签先更新'; await writeSql(winner);const winnerDraft=await capturedDraft(winner);
       await query().getByRole('button', { name: '保存查询', exact: true }).click();
       await saveDialog().getByRole('button', { name: '保存到原查询', exact: true }).click(); await expect(saveDialog()).toBeHidden();
-      expect((await records()).find(record => record.id === copy.id)?.sql).toBe(winner); expect(await counts()).toEqual(beforeOpen);
+      expect((await records()).find(record => record.id === copy.id)?.sql).toBe(winnerDraft); expect(await counts()).toEqual(beforeOpen);
       await page.locator('.tab-strip .tab-select').first().click();
       await expect(page.locator('.tab-strip .workspace-tab-button.active .tab-select')).toHaveText('计划状态独立副本'); await retainedNode(node);
       const stale = source + '\n-- 陈旧草稿必须保留'; await writeSql(stale);
       await saveHeld('保存到原查询', () => retainedNode(node), undefined, false); await retainedNode(node);
-      expect((await records()).find(record => record.id === copy.id)?.sql).toBe(winner);
+      expect((await records()).find(record => record.id === copy.id)?.sql).toBe(winnerDraft);
       await expect(query().locator('.monaco-editor .view-lines')).toContainText('陈旧草稿必须保留');
       await saveDialog().getByRole('button', { name: '取消', exact: true }).click(); await expect(saveDialog()).toBeHidden();
       expect(await counts()).toEqual({ execute: 0, explain: 1 });

@@ -1,3 +1,4 @@
+import {positionMonacoCaret} from './monaco-caret';
 import {randomUUID} from 'node:crypto';
 import type {Connection,RowDataPacket} from 'mysql2/promise';
 import {test,expect,page,desktop,pageErrors,closed,answerDialogs,quitDesktop} from './desktop-fixture';
@@ -7,12 +8,7 @@ import {enabled,isolatedDatabase,openDatabaseQuery,executeSql,modifier} from './
 test.use({trace:'off'});
 const query=()=>page.locator('.query-tab:visible');
 /** 真实粘贴保留引号及后缀，光标仅通过键盘移动，不直接调用Monaco模型。 */
-async function atCaret(marked:string){
-  const offset=marked.indexOf('|');if(offset<0)throw Error('缺少光标标记');const source=marked.replace('|',''),previous=await desktop.evaluate(({clipboard})=>clipboard.readText());
-  try{await page.keyboard.press('Escape');await desktop.evaluate(({clipboard},value)=>clipboard.writeText(value),source);await query().locator('.monaco-editor').getByRole('textbox').focus();await page.keyboard.press(`${modifier}+A`);await page.keyboard.press(`${modifier}+V`);await expectSql(source);await page.keyboard.press(process.platform==='darwin'?'Meta+ArrowLeft':'Control+Home');for(let i=0;i<offset;i++)await page.keyboard.press('ArrowRight');}
-  finally{await desktop.evaluate(({clipboard},value)=>clipboard.writeText(value),previous);}
-  return source;
-}
+async function atCaret(marked:string){return positionMonacoCaret(marked);}
 /** 读真实保存草稿核对完整文本，不能仅以视口里相似的短行通过。 */
 async function expectSql(source:string){await expect.poll(()=>page.evaluate(async()=>{const settings=await window.dbark.invoke('settings.get',{});return settings.tabs.find(tab=>tab.id===settings.activeTabId)?.sql?.replaceAll('\r\n','\n');})).toBe(source.replaceAll('\r\n','\n'));}
 /** Monaco各平台均使用Ctrl+空格触发，macOS不占用系统的Command+空格。 */

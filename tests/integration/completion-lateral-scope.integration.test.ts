@@ -30,8 +30,10 @@ describe.skipIf(!enabled)('200隔离实例：LATERAL语义、真实目录和插�
     const create=mysql.createConnection,recording=vi.spyOn(mysql,'createConnection').mockImplementation(config=>{const driver=create(config);drivers.add(driver);recordThread(driver);driver.once('connect',()=>recordThread(driver));return driver;});restoreConnections=()=>recording.mockRestore();
     observer=await connect(profile);const control=observer,ownId=Number((await execute<{id:string|number}[]>(control,'SELECT CONNECTION_ID() AS id')).rows[0].id);expect(ownId).toBeGreaterThan(0);expect(ownId).toBe(control.connection.threadId);
     const status=await engine.handle('connections.open',{id:profile.id,profile}),probeId=status.connectionId;if(typeof probeId!=='number'||!Number.isSafeInteger(probeId)||probeId<1)throw Error('未取得真实建连探测线程');threadIds.add(probeId);
-    await expect.poll(async()=>(await execute<Record<string,unknown>[]>(control,'SELECT ID FROM information_schema.PROCESSLIST WHERE ID=?',[probeId])).rows,{timeout:5000}).toHaveLength(0);
-    capabilities=completionCapabilitiesForServer(status.dialect,status.version);if(!capabilities.lateralDerivedTables)return;
+    await vi.waitFor(async()=>expect((await execute<Record<string,unknown>[]>(control,'SELECT ID FROM information_schema.PROCESSLIST WHERE ID=?',[probeId])).rows).toHaveLength(0),{timeout:5000,interval:50});
+    // 六个固定实例的预期独立于被测能力函数，不能把错误的全关闭实现变成全跳过。
+    const baseline:Record<number,[string,boolean]>={13357:['5.7.',false],13380:['8.0.',true],13384:['8.4.',true],13310:['10.11.',false],13311:['11.4.',false],13484:['8.4.',true]},expected=baseline[profile.port];
+    expect(status.version.replace(/^5\.5\.5-/, '').startsWith(expected[0])).toBe(true);capabilities=completionCapabilitiesForServer(status.dialect,status.version);expect(capabilities.lateralDerivedTables).toBe(expected[1]);if(!capabilities.lateralDerivedTables)return;
     bootstrap=(await engine.handle('sessions.open',{connectionId:profile.id})).sessionId;
     // 创建结果不确定时也精确DROP IF EXISTS本例名称，不能因返回失败遗留随机库。
     databaseAttempted=true;await query(`CREATE DATABASE ${identifier(database)} CHARACTER SET utf8mb4`,bootstrap);
@@ -42,27 +44,22 @@ describe.skipIf(!enabled)('200隔离实例：LATERAL语义、真实目录和插�
     const failures:unknown[]=[];
     /** 每项收尾独立尝试；首个失败保留，后续清理和残留核对不能被提前跳过。 */
     async function attempt(action:()=>Promise<unknown>){try{await action();}catch(error){failures.push(error);}}
-    try{await attempt(async()=>{if(sessionId)await engine.handle('sessions.close',{sessionId});});}
-    finally{
-      try{
-        await attempt(async()=>{if(databaseAttempted){if(!/^dbark_lateral_[a-f0-9]{12}$/.test(database))throw Error('拒绝清理非本例库');if(!observer)throw Error('观察连接缺失，无法精确清理本例库');await execute(observer,`DROP DATABASE IF EXISTS ${identifier(database)}`);}});
-      }finally{
-        try{await attempt(()=>engine.closeAll());}
-        finally{
-          try{
-            const control=observer;
-            if(control){
-              await attempt(async()=>{if(databaseAttempted){const remaining=await execute<Record<string,unknown>[]>(control,'SELECT SCHEMA_NAME FROM information_schema.SCHEMATA WHERE SCHEMA_NAME=?',[database]);expect(remaining.rows).toHaveLength(0);}});
-              await attempt(async()=>{
-                for(const driver of drivers)recordThread(driver);const ids=[...threadIds].filter(id=>id!==control.connection.threadId);expect(ids.length).toBeGreaterThan(0);
-                await expect.poll(async()=>(await execute<Record<string,unknown>[]>(control,'SELECT ID FROM information_schema.PROCESSLIST WHERE ID IN ('+ids.map(()=>'?').join(',')+')',ids)).rows,{timeout:5000}).toHaveLength(0);
-                console.log(JSON.stringify({验收说明:'LATERAL本例Engine与目录线程逐ID释放',实际线程数:ids.length,残留数:0}));
-              });
-            }
-          }finally{await attempt(async()=>{await observer?.close();});await attempt(async()=>{restoreConnections?.();});}
-        }
+    try{
+      await attempt(async()=>{if(sessionId)await engine.handle('sessions.close',{sessionId});});
+      // 先关闭本例Engine所有剩余连接，避免失败会话仍持锁而阻塞独立观察连接的精确DROP。
+      await attempt(()=>engine.closeAll());
+      await attempt(async()=>{if(databaseAttempted){if(!/^dbark_lateral_[a-f0-9]{12}$/.test(database))throw Error('拒绝清理非本例库');if(!observer)throw Error('观察连接缺失，无法精确清理本例库');await execute(observer,`DROP DATABASE IF EXISTS ${identifier(database)}`);}});
+      const control=observer;
+      if(control){
+        await attempt(async()=>{if(databaseAttempted){const remaining=await execute<Record<string,unknown>[]>(control,'SELECT SCHEMA_NAME FROM information_schema.SCHEMATA WHERE SCHEMA_NAME=?',[database]);expect(remaining.rows).toHaveLength(0);}});
+        await attempt(async()=>{
+          for(const driver of drivers)recordThread(driver);const ids=[...threadIds].filter(id=>id!==control.connection.threadId);expect(ids.length).toBeGreaterThan(0);
+          // Vitest钩子没有当前测试上下文，使用同5秒/50毫秒预算的vi.waitFor保持真实断言。
+          await vi.waitFor(async()=>expect((await execute<Record<string,unknown>[]>(control,'SELECT ID FROM information_schema.PROCESSLIST WHERE ID IN ('+ids.map(()=>'?').join(',')+')',ids)).rows).toHaveLength(0),{timeout:5000,interval:50});
+          console.log(JSON.stringify({验收说明:'LATERAL本例Engine与目录线程逐ID释放',实际线程数:ids.length,残留数:0}));
+        });
       }
-    }
+    }finally{await attempt(async()=>{await observer?.close();});await attempt(async()=>{restoreConnections?.();});}
     if(failures.length===1)throw failures[0];if(failures.length>1)throw new AggregateError(failures,'LATERAL夹具收尾存在多项失败，首个错误已保留',{cause:failures[0]});
   });
   it('旧版MySQL、MariaDB或未知版本保持能力关闭且无LATERAL目录读取',context=>{if(capabilities.lateralDerivedTables)context.skip();const marked='SELECT * FROM users u JOIN LATERAL(SELECT u.|) d ON TRUE';expect(analyzeCompletion(marked.replace('|',''),marked.indexOf('|'),{},capabilities)).toMatchObject({status:'blocked',reason:'capability'});});

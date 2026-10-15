@@ -11,6 +11,7 @@ import { newQueryContext } from './connectionChanges';
 import { copyConnectionOverview } from './connectionsTransfer';
 import { connectionsTransferZh } from './locales/connectionsTransfer.zh-CN';
 import { flushSettings, useWorkspace, type WorkspaceTab } from './store';
+import { completionServerFacts } from './completionServerFacts';
 import { Sidebar } from './components/Sidebar';
 import { WorkbenchDialog, ObjectLinkDialog } from './components/Workbench';
 import { useWorkbench } from './workbench';
@@ -187,6 +188,15 @@ function NewQueryDialog({ onClose }: { onClose: () => void }) {
   const connections = useWorkspace(state => state.connections); const selection = useWorkspace(state => state.selection); const activeTab = useWorkspace(state => state.settings.tabs.find(tab => tab.id === state.settings.activeTabId));
   const initial = newQueryContext(selection, activeTab, connections[0]?.id ?? '');
   const [connectionId, setConnectionId] = useState(initial.connectionId); const [database, setDatabase] = useState(initial.database ?? ''); const [databases, setDatabases] = useState<string[]>([]); const [error, setError] = useState(''); const [busy, setBusy] = useState(false);
-  useEffect(() => { let alive = true; setDatabases([]); if (!connectionId) return; setBusy(true); void invoke('connections.open', { id: connectionId }).then(() => invoke('metadata.databases', { connectionId })).then(items => { if (alive) setDatabases(items); }).catch(reason => { if (alive) setError(errorMessage(reason)); }).finally(() => { if (alive) setBusy(false); }); return () => { alive = false; }; }, [connectionId]);
+  useEffect(() => {
+    let alive=true;setDatabases([]);if(!connectionId)return;setBusy(true);
+    // 复用原有建连结果，不新增能力探测SQL；旧连接修订的迟到结果不能填充新草稿。
+    const revision=useWorkspace.getState().connectionVersions[connectionId]??0,ticket=completionServerFacts.begin(connectionId,revision);
+    void invoke('connections.open',{id:connectionId}).then(status=>{
+      if((useWorkspace.getState().connectionVersions[connectionId]??0)===revision)completionServerFacts.complete(ticket,status);else completionServerFacts.fail(ticket);
+      return invoke('metadata.databases',{connectionId});
+    }).then(items=>{if(alive)setDatabases(items);}).catch(reason=>{completionServerFacts.fail(ticket);if(alive)setError(errorMessage(reason));}).finally(()=>{if(alive)setBusy(false);});
+    return()=>{alive=false;};
+  },[connectionId]);
   return <Modal title={zh.common.newQuery} onClose={onClose}><form onSubmit={event => { event.preventDefault(); if (connectionId) { useWorkspace.getState().openTab({ kind: 'query', title: zh.common.unnamedQuery, connectionId, database: database || undefined, sql: '' }); onClose(); } }}><div className="modal-content form-grid"><Field label={zh.app.text049} full><select value={connectionId} onChange={event => { setConnectionId(event.target.value); setDatabase(''); setError(''); }}>{connections.map(profile => <option value={profile.id} key={profile.id}>{profile.name}</option>)}</select></Field><Field label={zh.app.text050} full><input list="query-databases" value={database} onChange={event => setDatabase(event.target.value)} placeholder={busy ? zh.app.text051 : zh.app.text052}/><datalist id="query-databases">{databases.map(name => <option key={name} value={name}/>)}</datalist></Field><ErrorBox message={error}/></div><footer className="modal-footer"><span className="grow"/><button type="button" onClick={onClose}>{zh.common.cancel}</button><button className="primary" type="submit" disabled={!connectionId}>{zh.app.text053}<ArrowRight size={14}/></button></footer></form></Modal>;
 }

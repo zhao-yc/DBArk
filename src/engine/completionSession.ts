@@ -29,6 +29,7 @@ export function completionSessionState(managed:ManagedConnection,busy:boolean):C
   const broken=managed.broken||managed.serverStatus===undefined;if(busy||broken)return{databaseKnown:false,broken,busy};
   const state=managed.completionDatabase,known=state?.known===true;
   const sqlMode=managed.sqlMode,modes=sqlMode?.split(','),noBackslashEscapes=modes?modes.includes('NO_BACKSLASH_ESCAPES'):managed.noBackslashEscapesKnown===true?Boolean(managed.serverStatus!&512):undefined;
-  // 方言来自建连时的真实VERSION缓存，不为补全额外执行探测SQL。
-  return{databaseKnown:known,...(known?{database:state!.database}:{}),...(modes?{ansiQuotes:modes.includes('ANSI_QUOTES')}:{}),...(noBackslashEscapes===undefined?{}:{noBackslashEscapes}),...(managed.status?.dialect?{dialect:managed.status.dialect}:{}),...(managed.sessionObjects?{objectsRevision:managed.sessionObjects.revision}:{}),broken:false,busy:false};
+  // 方言和版本只取当前物理会话的建连缓存，不为补全额外执行探测SQL。
+  const server=managed.status;
+  return{databaseKnown:known,...(known?{database:state!.database}:{}),...(modes?{ansiQuotes:modes.includes('ANSI_QUOTES')}:{}),...(noBackslashEscapes===undefined?{}:{noBackslashEscapes}),...(server?.dialect?{dialect:server.dialect}:{}),...(typeof server?.version==='string'&&server.version.length>0&&server.version.length<=128?{serverVersion:server.version}:{}),...(managed.sessionObjects?{objectsRevision:managed.sessionObjects.revision}:{}),broken:false,busy:false};
 }

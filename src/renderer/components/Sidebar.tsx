@@ -10,6 +10,7 @@ import { indexPatchZh } from '../locales/indexPatches.zh-CN';
 import { foreignKeyPatchZh } from '../locales/foreignKeyPatches.zh-CN';
 import { columnPatchZh } from '../locales/columnPatches.zh-CN';
 import { connectionsTransferZh } from '../locales/connectionsTransfer.zh-CN';
+import { completionServerFacts } from '../completionServerFacts';
 
 /** 按连接分组展示对象树，只对用户展开的节点加载数据库元数据。 */
 export function Sidebar({ onNewConnection, onEditConnection, onCopyConnection, onDesign, onColumnPatches, onIndexPatches, onForeignKeyPatches, onDdl, onOpenWorkbench, refreshVersion }: { onNewConnection: () => void; onEditConnection: (profile: ConnectionProfile) => void; onCopyConnection: (profile: ConnectionProfile) => void; onDesign: (connectionId: string, database: string, table?: string) => void; onColumnPatches: (connectionId: string, database: string, table: string) => void; onIndexPatches: (connectionId: string, database: string, table: string) => void; onForeignKeyPatches: (connectionId: string, database: string, table: string) => void; onDdl: (connectionId: string, database?: string, object?: DatabaseObject) => void; onOpenWorkbench: OpenWorkbenchTarget; refreshVersion: number }) {
@@ -25,18 +26,24 @@ function ConnectionNode({ profile, search, onEdit, onCopy, onDesign, onColumnPat
   /** 先验证连接再列出可访问数据库，失败时保留可重试的节点入口。 */
   async function load() {
     setBusy(true);
-    try { await invoke('connections.open', { id: profile.id }); setConnected(true); setDatabases(await invoke('metadata.databases', { connectionId: profile.id })); setOpened(true); }
-    catch (error) { useWorkspace.getState().notify(errorMessage(error), true); }
+    const revision=useWorkspace.getState().connectionVersions[profile.id]??0,ticket=completionServerFacts.begin(profile.id,revision);
+    try { const status=await invoke('connections.open', { id: profile.id }); if((useWorkspace.getState().connectionVersions[profile.id]??0)===revision)completionServerFacts.complete(ticket,status);else completionServerFacts.fail(ticket);setConnected(true); setDatabases(await invoke('metadata.databases', { connectionId: profile.id })); setOpened(true); }
+    catch (error) { completionServerFacts.fail(ticket);useWorkspace.getState().notify(errorMessage(error), true); }
     finally { setBusy(false); }
   }
   /** 由主进程关闭连接所属的会话和任务，成功后再折叠连接节点。 */
   async function disconnect() {
+    completionServerFacts.clear(profile.id);
     try { await invoke('connections.close', { id: profile.id }); setConnected(false); setOpened(false); } catch (error) { useWorkspace.getState().notify(errorMessage(error), true); }
+    // 后端可能已关闭会话再报告取消收尾错误；所有结束路径都撤销期间新建的旧目标ticket。
+    finally { completionServerFacts.clear(profile.id); }
   }
   /** 删除操作仅作用于本地连接配置，执行前明确提示不会删除数据库。 */
   async function remove() {
     if (!window.confirm(formatText(zh.sidebar.text008, profile.name))) return;
+    completionServerFacts.clear(profile.id);
     try { await invoke('connections.delete', { id: profile.id }); useWorkspace.getState().setConnections(await invoke('connections.list', {})); } catch (error) { useWorkspace.getState().notify(errorMessage(error), true); }
+    finally { completionServerFacts.clear(profile.id); }
   }
   const matches = profile.name.toLowerCase().includes(search.toLowerCase());
   if (search && !matches && !opened) return null;

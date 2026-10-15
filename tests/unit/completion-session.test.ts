@@ -5,6 +5,12 @@ import {validateCommand} from '../../src/shared/validation';
 /** 协议状态替身只用于边界时序；五版本真实包在实库套件核对。 */
 function managed(value:unknown='库A'):ManagedConnection{return{sqlMode:'',serverStatus:2,broken:false,noBackslashEscapesKnown:true,completionDatabase:initialCompletionDatabase(value),connection:{query:vi.fn(),execute:vi.fn()}} as unknown as ManagedConnection;}
 describe('补全会话缓存的默认库和词法模式',()=>{
+  it('方言版本来自当前物理会话内存，补全快照不新增任何SQL',()=>{
+    const active=managed();active.status={version:'8.4.11',dialect:'mysql',connectionId:123};const before=JSON.stringify(active);
+    expect(completionSessionState(active,false)).toMatchObject({dialect:'mysql',serverVersion:'8.4.11'});expect(completionSessionState(active,false)).not.toHaveProperty('connectionId');
+    expect(completionSessionState(active,true)).not.toHaveProperty('serverVersion');active.broken=true;expect(completionSessionState(active,false)).not.toHaveProperty('serverVersion');active.broken=false;
+    expect(JSON.stringify(active)).toBe(before);expect(active.connection.query).not.toHaveBeenCalled();expect(active.connection.execute).not.toHaveBeenCalled();
+  });
   it('输出别名边界采用真实服务器方言缓存，读取不执行SQL',()=>{const active=managed();active.status={version:'11.4.0-MariaDB',dialect:'mariadb'};expect(completionSessionState(active,false).dialect).toBe('mariadb');expect(active.connection.query).not.toHaveBeenCalled();expect(active.connection.execute).not.toHaveBeenCalled();});
   it.each([null,'库A','a.b','__proto__'])('初始化使用真实DATABASE值：%s',value=>{const active=managed(value);expect(completionSessionState(active,false)).toEqual({database:value,databaseKnown:true,ansiQuotes:false,noBackslashEscapes:false,broken:false,busy:false});});
   it.each([undefined,123,'','a'.repeat(65),'😀'])('缺失或非法初始化不能冒充无默认库：%s',value=>{const active=managed();active.completionDatabase=initialCompletionDatabase(value);const state=completionSessionState(active,false);expect(state.databaseKnown).toBe(false);expect(state).not.toHaveProperty('database');});

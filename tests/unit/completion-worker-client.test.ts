@@ -12,6 +12,17 @@ function fixture(){
 
 afterEach(()=>vi.useRealTimers());
 describe('编辑器补全线程生命周期',()=>{
+  it('等待就绪时能力也固定为独立快照，调用方修改不能开启或关闭旧请求',async()=>{
+    const f=fixture(),capabilities={lateralDerivedTables:true},request=f.client.analyze('SELECT correlated',4,{},undefined,capabilities);
+    capabilities.lateralDerivedTables=false;expect(f.ports[0].postMessage).not.toHaveBeenCalled();f.ready();
+    const actual=f.ports[0].postMessage.mock.lastCall?.[0].capabilities;expect(actual).toEqual({lateralDerivedTables:true});expect(actual).not.toBe(capabilities);
+    f.reply();await request;f.client.dispose();
+  });
+  it('替换旧能力请求后迟到线程不能交付给关闭能力的新请求',async()=>{
+    const f=fixture(),first=f.client.analyze('old',0,{},undefined,{lateralDerivedTables:true}),old=f.ports[0].onmessage,next=f.client.analyze('new',0,{},undefined,{lateralDerivedTables:false});
+    await expect(first).resolves.toMatchObject({reason:'replaced'});old?.({data:{type:'dbark-completion-ready',version:1}});expect(f.ports[1].postMessage).not.toHaveBeenCalled();f.ready(1);
+    expect(f.ports[1].postMessage.mock.lastCall?.[0]).toMatchObject({source:'new',capabilities:{lateralDerivedTables:false}});f.reply(1);await next;f.client.dispose();
+  });
   it('解析器初始化失败时不发送正文、不自动重试，迟到就绪也不能复活旧线程',async()=>{
     vi.useFakeTimers();const f=fixture(),request=f.client.analyze('private user statement',0),old=f.ports[0].onmessage;old?.({data:{type:'dbark-completion-unavailable',version:1}});await expect(request).resolves.toEqual({status:'blocked',reason:'worker'});expect(f.ports[0].postMessage).not.toHaveBeenCalled();expect(f.ports[0].terminate).toHaveBeenCalledTimes(1);expect(vi.getTimerCount()).toBe(0);old?.({data:{type:'dbark-completion-ready',version:1}});expect(f.create).toHaveBeenCalledTimes(1);const next=f.client.analyze('next explicit request',0);f.reply(1);await next;f.client.dispose();
   });

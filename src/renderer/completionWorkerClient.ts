@@ -1,24 +1,26 @@
 import type {CompletionAnalysis} from '../shared/completionAnalysis';
 import type {CompletionLexicalMode} from '../shared/completionLexical';
 import {completionLimits} from '../shared/sqlCompletion';
+import type {CompletionScopeCapabilities} from '../shared/completionCapabilities';
 
 type WorkerPort=Pick<Worker,'postMessage'|'terminate'|'onmessage'|'onerror'|'onmessageerror'>;
 type Phase='starting'|'analyzing';
-interface Request{id:number;source:string;offset:number;mode:CompletionLexicalMode}
+interface Request{id:number;source:string;offset:number;mode:CompletionLexicalMode;capabilities?:CompletionScopeCapabilities}
 interface Pending{id:number;phase:Phase;request?:Request;resolve:(value:CompletionAnalysis)=>void;timer:ReturnType<typeof setTimeout>;detach:()=>void}
 /** 本地模块启动与用户文本解析分别限时，等待就绪时不向线程传递SQL。 */
 export class CompletionWorkerClient{
   private worker?:WorkerPort;private pending?:Pending;private serial=0;private disposed=false;private ready=false;
   constructor(private readonly createWorker:()=>WorkerPort,private readonly timeoutMs=2000,private readonly startupTimeoutMs=8000){}
   /** 绑定不可变快照；替换、取消、超时和卸载仍终止整个旧线程。 */
-  analyze(source:string,offset:number,mode:CompletionLexicalMode={},signal?:AbortSignal):Promise<CompletionAnalysis>{
+  analyze(source:string,offset:number,mode:CompletionLexicalMode={},signal?:AbortSignal,capabilities?:CompletionScopeCapabilities):Promise<CompletionAnalysis>{
     if(this.disposed)return Promise.resolve({status:'blocked',reason:'disposed'});
     if(signal?.aborted)return Promise.resolve({status:'blocked',reason:'cancelled'});
     if(source.length>completionLimits.sourceUnits)return Promise.resolve({status:'blocked',reason:'budget'});
     if(this.pending)this.reset('replaced');
     return new Promise(resolve=>{
       const id=++this.serial,abort=()=>this.reset('cancelled'),phase=this.ready?'analyzing':'starting';
-      this.pending={id,phase,request:{id,source,offset,mode:{ansiQuotes:mode.ansiQuotes,noBackslashEscapes:mode.noBackslashEscapes}},resolve,timer:this.deadline(id,phase),detach:()=>signal?.removeEventListener('abort',abort)};
+      // 能力与模式绑定同一编辑快照，等待线程启动期间调用方不能改写本次作用域。
+      this.pending={id,phase,request:{id,source,offset,mode:{ansiQuotes:mode.ansiQuotes,noBackslashEscapes:mode.noBackslashEscapes},...(capabilities===undefined?{}:{capabilities:{lateralDerivedTables:capabilities.lateralDerivedTables===true}})},resolve,timer:this.deadline(id,phase),detach:()=>signal?.removeEventListener('abort',abort)};
       signal?.addEventListener('abort',abort,{once:true});
       try{
         if(!this.worker){

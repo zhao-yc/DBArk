@@ -3,6 +3,7 @@ import { create } from 'zustand';
 import type { AppSettings, ConnectionProfile, TaskEvent, TaskRecord } from '../shared/contracts';
 import { errorMessage, invoke, uid } from './lib';
 import type { ConnectionSelection } from './connectionChanges';
+import { completionServerFacts } from './completionServerFacts';
 
 export type WorkspaceTab = AppSettings['tabs'][number];
 const defaults: AppSettings = { theme: 'dark', sidebarWidth: 260, resultLimit: 1000, pageSize: 100, tabs: [] };
@@ -44,12 +45,12 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     } catch (error) { set({ ready: true }); get().notify(errorMessage(error), true); }
   },
   /** 连接编辑成功后整体替换概要列表，不缓存表单中的明文秘密。 */
-  setConnections: connections => set({ connections }),
+  setConnections: connections => {const ids=new Set(connections.map(connection=>connection.id));for(const previous of get().connections)if(!ids.has(previous.id))completionServerFacts.clear(previous.id);set({ connections });},
   /** 连接目标保存变更后只清理其对象树和数据库选择，不动其它连接、查询标签、任务或事务标记。 */
-  invalidateConnection: connectionId => set(state => ({
+  invalidateConnection: connectionId => {completionServerFacts.clear(connectionId);set(state => ({
     connectionVersions: { ...state.connectionVersions, [connectionId]: (state.connectionVersions[connectionId] ?? 0) + 1 },
     selection: state.selection?.connectionId === connectionId ? { connectionId } : state.selection
-  })),
+  }));},
   /** 合并并立即展示配置修改，由持久化层合并连续写盘请求。 */
   updateSettings: update => { const settings = { ...get().settings, ...update }; set({ settings }); persist(settings); },
   /** 相同数据表复用已有标签，SQL 查询始终新建独立标签和会话。 */

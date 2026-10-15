@@ -1,10 +1,11 @@
+import {positionMonacoCaret} from './monaco-caret';
 import {test,expect,page,desktop} from './desktop-fixture';
 import {enabled,isolatedDatabase,openDatabaseQuery,executeSql,modifier} from './live-helpers';
 test.use({trace:'off'});
 const query=()=>page.locator('.query-tab:visible');
 const dialog=()=>page.getByRole('dialog',{name:'当前查询会话的临时对象',exact:true});
 /** 使用真实剪贴板和键盘定位光标，草稿核对读取正式设置，不访问Monaco内部模型。 */
-async function atCaret(marked:string){const offset=marked.indexOf('|');if(offset<0)throw Error('缺少光标标记');const source=marked.replace('|',''),previous=await desktop.evaluate(({clipboard})=>clipboard.readText());try{await page.keyboard.press('Escape');await desktop.evaluate(({clipboard},value)=>clipboard.writeText(value),source);await query().locator('.monaco-editor').getByRole('textbox').focus();await page.keyboard.press(`${modifier}+A`);await page.keyboard.press(`${modifier}+V`);await expectSql(source);await page.keyboard.press(process.platform==='darwin'?'Meta+ArrowLeft':'Control+Home');for(let index=0;index<offset;index++)await page.keyboard.press('ArrowRight');}finally{await desktop.evaluate(({clipboard},value)=>clipboard.writeText(value),previous);}return source;}
+async function atCaret(marked:string){return positionMonacoCaret(marked);}
 async function expectSql(source:string){await expect.poll(()=>page.evaluate(async()=>{const settings=await window.dbark.invoke('settings.get',{});return settings.tabs.find(tab=>tab.id===settings.activeTabId)?.sql?.replaceAll('\r\n','\n');})).toBe(source.replaceAll('\r\n','\n'));}
 /** 每次只触发一次，产品启动/解析期限之外留绘制余量，不以重试掩盖冷启动问题。 */
 async function choose(label:string){await page.keyboard.press('Control+Space');const widget=page.locator('.suggest-widget.visible');await expect(widget.locator('.monaco-list-row.focused')).toContainText(label,{timeout:13000});await page.keyboard.press('Enter');await expect(widget).toHaveCount(0);}
