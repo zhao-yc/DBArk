@@ -29,7 +29,7 @@ function columns(values: ReadonlyMap<string, TrustedIndexColumn>): TableIndexCol
 function parentViews(read: ForeignKeyStructureRead): TableForeignKeyParentView[] {
   return [...read.snapshot.parents].map(([parentRef, table]) => ({ parentRef, target: { ...table.target }, columns: columns(table.columns), keys: [...table.indexes.values()].flatMap(index => {
     const value = index.definition;
-    return value && value.kind !== 'ordinary' && index.visible === true && index.generated === false && !index.parsed.opaqueReasons.length && value.method === 'BTREE' && value.keyParts.every(part => part.direction === 'asc' && part.prefixLength === undefined) ? [{ name: value.name, kind: value.kind, columnRefs: value.keyParts.map(part => part.columnRef) }] : [];
+    return value && (value.kind === 'primary' || value.kind === 'unique') && index.visible === true && index.generated === false && !index.parsed.opaqueReasons.length && value.method === 'BTREE' && value.keyParts.every(part => part.direction === 'asc' && part.prefixLength === undefined) ? [{ name: value.name, kind: value.kind, columnRefs: value.keyParts.map(part => part.columnRef) }] : [];
   }) }));
 }
 /** 权限显示不能代替执行计划；原始片段和只读原因一起保留。 */

@@ -1,6 +1,7 @@
 import { identifier, qualified, SqlScriptScanner, stringLiteral } from './sql';
 import { editableIndexDefinition } from './tableIndexDefinition';
 import { planIndexDependencies } from './tableIndexDependencies';
+import { assertSpecialIndexDefinition, isSpecialIndexKind } from '../shared/specialIndexRules';
 import { hasUnprovenBinaryDefault, tableColumnDefaultRiskMessage, tableColumnDefaultRisks } from '../shared/tableColumnPatches';
 import { assertIndexDefinitionNames, indexDefinitionSchema, tableIndexPatchLimits, validateIndexPatches, type IndexDefinition, type IndexPlanIssue, type IndexPlanOperation, type IndexPlanOptions, type IndexPlanResult, type IndexPlanSnapshot, type PlannedIndex, type TrustedIndexDefinition } from '../shared/tableIndexPatches';
 
@@ -18,6 +19,12 @@ function checkedDefinition(definition: Readonly<IndexDefinition>, snapshot: Inde
   if (new TextEncoder().encode(value.comment).length > options.capabilities.maxIndexCommentBytes) throw new Error('索引注释超过已证明字节预算');
   if (value.comment.includes('\0')) throw new Error('索引注释不能包含 NUL');
   if (value.keyParts.length > options.capabilities.maxKeyParts) throw new Error('索引键部分超过服务器能力限制');
+  if (isSpecialIndexKind(value.kind)) {
+    if (snapshot.dependencies.partition.kind !== 'none') throw new Error('特殊索引仅允许已独立确认无分区的表');
+    if (value.kind === 'fulltext' && [...snapshot.columns.values()].some(column => column.name.toUpperCase() === 'FTS_DOC_ID')) throw new Error('已有显式全文文档ID，需人工核对其维护和生成索引来源');
+    assertSpecialIndexDefinition(value, snapshot.columns, options.capabilities);
+    return value;
+  }
   let bytes = 0;
   for (const part of value.keyParts) {
     const column = snapshot.columns.get(part.columnRef);
@@ -56,6 +63,7 @@ function equalDefinition(left: Readonly<IndexDefinition>, right: Readonly<IndexD
 
 /** 只拼本次新增或替换的索引；未改注释和键部分优先使用已理解的原片段。 */
 function addClause(value: Readonly<IndexDefinition>, snapshot: IndexPlanSnapshot, options: IndexPlanOptions, old?: TrustedIndexDefinition): string {
+  if (isSpecialIndexKind(value.kind)) return `ADD ${value.kind === 'fulltext' ? 'FULLTEXT' : 'SPATIAL'} INDEX ${identifier(value.name)} (${value.keyParts.map(part => identifier(snapshot.columns.get(part.columnRef)!.name)).join(', ')}) COMMENT ${stringLiteral(value.comment, options.sqlMode.noBackslashEscapes)}`;
   const preserveParts = old?.definition && sameParts(old.definition.keyParts, value.keyParts);
   const parts = preserveParts ? old.parsed.parts.map(part => part.rawSql).join(', ') : value.keyParts.map(part => {
     const column = snapshot.columns.get(part.columnRef)!;
@@ -106,6 +114,7 @@ export function planTableIndexPatches(snapshot: IndexPlanSnapshot, input: unknow
       if (!old) throw new Error('索引引用不属于当前快照');
       if (!old.definition || old.parsed.opaqueReasons.length || old.visible !== true || old.generated !== false) throw new Error('目标索引包含未知、隐藏或生成属性，首批只读');
       if (patch.op === 'drop') { final.delete(patch.indexRef); operations.push({ sourceIndexRef: patch.indexRef, strategy: 'drop', clauses: [dropClause(old.definition)] }); continue; }
+      if (isSpecialIndexKind(old.definition.kind) || patch.changes.kind && isSpecialIndexKind(patch.changes.kind)) throw new Error('特殊索引本批仅新增或明确删除，不改名、重建或与BTREE互换');
       const next = { ...old.definition, ...patch.changes };
       if (equalDefinition(next, old.definition)) continue;
       const definition = checkedDefinition(next, snapshot, options);
@@ -130,6 +139,7 @@ export function planTableIndexPatches(snapshot: IndexPlanSnapshot, input: unknow
       for (const [ref, old] of snapshot.indexes) if (ref !== operation.sourceIndexRef && old.parsed.name.toLowerCase() === name && !operations.some(value => value.sourceIndexRef === ref && value.strategy === 'drop')) throw new Error('索引改名目标仍被原索引占用，不自动插入临时改名');
     }
     if (!operations.length) return { kind: 'noop', warnings: [] };
+    if (additions.filter(index => index.definition?.kind === 'fulltext').length > 1) throw new Error('单次ALTER最多新增一个全文索引；本工具不拆成多次DDL');
     const risks = tableColumnDefaultRisks(snapshot.definition);
     if (risks.length) return { kind: 'blocked', issues: [issue('maria-default-restate', tableColumnDefaultRiskMessage(risks))] };
     const dependencies = planIndexDependencies(snapshot, finalIndexes, operations, options);
@@ -142,7 +152,8 @@ export function planTableIndexPatches(snapshot: IndexPlanSnapshot, input: unknow
     if (statements.length !== 1) throw new Error('索引计划必须恰好包含一条 ALTER');
     const binaryRisk = snapshot.definition.columns.some(hasUnprovenBinaryDefault);
     const changed = new Set(operations.map(operation => operation.sourceIndexRef).filter(Boolean));
-    return { kind: 'ready', sql, operations, finalIndexes, preservedOpaqueIndexRefs: [...snapshot.indexes].filter(([, old]) => !old.definition).map(([ref]) => ref), warnings: [...dependencies.warnings, ...(binaryRisk ? [issue('binary-default-unverified', '未改二进制默认值的原始字节无法证明，索引操作可执行但完整定义必须人工核对')] : [])], verification: { unchangedColumnRanges: snapshot.indexDocument.columnRanges, unchangedConstraintRanges: snapshot.indexDocument.otherConstraintRanges, unchangedIndexRefs: [...snapshot.indexes.keys()].filter(ref => !changed.has(ref)), preserveTableTail: true, requiresDependencyRecheck: true, definitionCanBeFullyVerified: !binaryRisk } };
+    const specialWarnings = additions.some(index => index.definition?.kind === 'fulltext') ? [issue('fulltext-internal-rebuild', '新增全文索引可能重建表并由InnoDB保留隐藏FTS_DOC_ID及辅助索引；不自动增删文档ID或解析器，后核验只覆盖公开表定义。')] : [];
+    return { kind: 'ready', sql, operations, finalIndexes, preservedOpaqueIndexRefs: [...snapshot.indexes].filter(([, old]) => !old.definition).map(([ref]) => ref), warnings: [...dependencies.warnings, ...specialWarnings, ...(binaryRisk ? [issue('binary-default-unverified', '未改二进制默认值的原始字节无法证明，索引操作可执行但完整定义必须人工核对')] : [])], verification: { unchangedColumnRanges: snapshot.indexDocument.columnRanges, unchangedConstraintRanges: snapshot.indexDocument.otherConstraintRanges, unchangedIndexRefs: [...snapshot.indexes.keys()].filter(ref => !changed.has(ref)), preserveTableTail: true, requiresDependencyRecheck: true, definitionCanBeFullyVerified: !binaryRisk } };
   } catch (error) {
     // Zod 详细输入诊断不流入任务摘要；受控中文错误可以直接显示。
     const message = error instanceof Error && error.name !== 'ZodError' ? error.message : '索引补丁包含未知字段、非法值或不受支持的结构';

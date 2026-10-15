@@ -58,7 +58,6 @@ function readIndex(document: TableColumnDefinitionDocument, range: DefinitionRan
   const result: ParsedIndex = { range, rawSql: source.slice(range.start, range.end), name: kind === 'primary' ? 'PRIMARY' : '', kind, parts: [], attributes: [], opaqueReasons: [] };
   const reasons: string[] = [], attributes: { kind: string; range: DefinitionRange; rawSql: string }[] = [];
   if (constraintPrefix) reasons.push('具名约束前缀尚未开放重建');
-  if (kind === 'fulltext' || kind === 'spatial') reasons.push('全文或空间索引首批只读');
   if (tokens.some(token => token.kind === 'executable')) reasons.push('索引包含可执行注释');
   if (kind !== 'primary') {
     if (isName(tokens[cursor]) && word(tokens[cursor]) !== 'USING') result.name = tokens[cursor++].value;
@@ -87,8 +86,17 @@ function readIndex(document: TableColumnDefinitionDocument, range: DefinitionRan
     attributes.push({ kind: 'opaque', range: { start, end }, rawSql: source.slice(start, end) });
     reasons.push('索引包含可见性或其他未支持选项'); break;
   }
-  result.method = method ?? 'BTREE'; result.comment = comment ?? '';
-  if (result.method !== 'BTREE') reasons.push('首批仅修改 BTREE 索引');
+  const special = kind === 'fulltext' || kind === 'spatial';
+  result.method = method ?? (kind === 'fulltext' ? 'FULLTEXT' : kind === 'spatial' ? 'RTREE' : 'BTREE'); result.comment = comment ?? '';
+  if (special) {
+    if (method !== undefined) reasons.push('特殊索引的显式USING方法不作重建推断');
+    if (result.parts.some(part => {
+      // 单个名为ASC/DESC的字段不代表排序声明，必须另有末尾方向token。
+      const partTokens = tableDefinitionTokens(part.rawSql, document.context);
+      return part.prefixLength !== undefined || partTokens.length > 1 && ['ASC', 'DESC'].includes(word(partTokens.at(-1)));
+    })) reasons.push('特殊索引的前缀或显式方向不受控');
+    if (kind === 'spatial' && result.parts.length !== 1) reasons.push('空间索引必须恰好一个完整空间字段');
+  } else if (result.method !== 'BTREE') reasons.push('普通索引只修改BTREE方法');
   reasons.push(...result.parts.flatMap(part => part.opaqueReasons));
   result.attributes = attributes; result.opaqueReasons = [...new Set(reasons)]; return result;
 }
@@ -111,13 +119,16 @@ export function readTableIndexDefinition(document: TableColumnDefinitionDocument
 
 /** 同快照列名映射为不透明引用；只在唯一匹配时允许服务器列名大小写规范化。 */
 export function editableIndexDefinition(index: ParsedIndex, columns: ReadonlyMap<string, TrustedIndexColumn>): IndexDefinition | undefined {
-  if (index.opaqueReasons.length || !['ordinary', 'unique', 'primary'].includes(index.kind) || index.method !== 'BTREE' || !index.name || !index.parts.length) return undefined;
+  if (index.opaqueReasons.length || !['ordinary', 'unique', 'primary', 'fulltext', 'spatial'].includes(index.kind) || !index.name || !index.parts.length) return undefined;
+  const special = index.kind === 'fulltext' || index.kind === 'spatial';
+  if (index.method !== (index.kind === 'fulltext' ? 'FULLTEXT' : index.kind === 'spatial' ? 'RTREE' : 'BTREE')) return undefined;
   const keyParts: IndexDefinition['keyParts'] = [];
   for (const part of index.parts) {
     const exact = [...columns].filter(([, column]) => column.name === part.columnName);
     const matches = exact.length ? exact : [...columns].filter(([, column]) => column.name.toLowerCase() === part.columnName?.toLowerCase());
     if (matches.length !== 1 || part.opaqueReasons.length) return undefined;
+    if (special && matches[0][1].specialIndexes?.[index.kind as 'fulltext' | 'spatial']?.allowed !== true) return undefined;
     keyParts.push({ columnRef: matches[0][0], direction: part.direction ?? 'asc', ...(part.prefixLength === undefined ? {} : { prefixLength: part.prefixLength }) });
   }
-  return { kind: index.kind as IndexDefinition['kind'], name: index.name, method: 'BTREE', keyParts, comment: index.comment ?? '' };
+  return { kind: index.kind as IndexDefinition['kind'], name: index.name, method: index.method as IndexDefinition['method'], keyParts, comment: index.comment ?? '' };
 }

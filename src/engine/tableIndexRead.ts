@@ -3,6 +3,7 @@ import { structureTaskQuery, readStructureDefinition, structureDocumentOf, asser
 import { readTableIndexDefinition, editableIndexDefinition } from './tableIndexDefinition';
 import { crossCheckIndexStatistics, deriveIndexCapabilities, deriveStatisticsCapabilities, deriveTrustedIndexColumn, type IndexColumnMetadata } from './tableIndexMetadata';
 import { readIndexDependencies } from './tableIndexDependencyRead';
+import { deriveSpecialIndexColumn } from './tableSpecialIndexMetadata';
 import type { TableIndexPatchTarget } from '../shared/tableIndexTasks';
 import type { IndexPlanOptions, IndexPlanSnapshot, TrustedIndexColumn, TrustedIndexDefinition } from '../shared/tableIndexPatches';
 
@@ -65,7 +66,11 @@ export async function readIndexStructure(context: StructureTaskContext, target: 
   const tables = (await structureTaskQuery<{ ENGINE: string; ROW_FORMAT: string }[]>(context, `SELECT ENGINE, ROW_FORMAT FROM information_schema.TABLES WHERE TABLE_SCHEMA = ${db} AND TABLE_NAME = ${table} LIMIT 2`)).rows;
   if (tables.length !== 1 || typeof tables[0].ENGINE !== 'string' || typeof tables[0].ROW_FORMAT !== 'string') throw new Error('无法唯一确认表引擎和行格式');
   const capability = deriveIndexCapabilities({ dialect: read.context.dialect, serverVersion: read.serverVersion, engine: tables[0].ENGINE, rowFormat: tables[0].ROW_FORMAT, pageSize: facts[0].pageSize as number, largePrefix });
-  const rawColumns = (await structureTaskQuery<IndexColumnMetadata[]>(context, `SELECT COLUMN_NAME, DATA_TYPE, COLUMN_TYPE, IS_NULLABLE, CHARACTER_SET_NAME, COLLATION_NAME, CHARACTER_MAXIMUM_LENGTH, CHARACTER_OCTET_LENGTH, EXTRA FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = ${db} AND TABLE_NAME = ${table} ORDER BY ORDINAL_POSITION LIMIT 4097`)).rows;
+  // 不向5.7/MariaDB盲查SRS_ID；先读取目录自身能力，缺失时只关闭MySQL8空间写入。
+  const sridHeaders = (await structureTaskQuery<{ COLUMN_NAME: string }[]>(context, "SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = 'information_schema' AND TABLE_NAME = 'COLUMNS' AND COLUMN_NAME = 'SRS_ID' LIMIT 2")).rows;
+  if (sridHeaders.length > 1 || sridHeaders.some(row => row.COLUMN_NAME !== 'SRS_ID')) throw new Error('空间字段SRID目录能力无效');
+  const sridDirectoryAvailable = sridHeaders.length === 1;
+  const rawColumns = (await structureTaskQuery<IndexColumnMetadata[]>(context, `SELECT COLUMN_NAME, DATA_TYPE, COLUMN_TYPE, IS_NULLABLE, CHARACTER_SET_NAME, COLLATION_NAME, CHARACTER_MAXIMUM_LENGTH, CHARACTER_OCTET_LENGTH, EXTRA${sridDirectoryAvailable ? ', SRS_ID' : ''} FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = ${db} AND TABLE_NAME = ${table} ORDER BY ORDINAL_POSITION LIMIT 4097`)).rows;
   if (rawColumns.length !== definition.columns.length || rawColumns.length > 4096) throw new Error('索引字段目录数量与原定义不一致或超过预算');
   const charsetRows = (await structureTaskQuery<{ CHARACTER_SET_NAME: string; MAXLEN: number | string }[]>(context, 'SELECT CHARACTER_SET_NAME, MAXLEN FROM information_schema.CHARACTER_SETS ORDER BY CHARACTER_SET_NAME LIMIT 257')).rows;
   if (!charsetRows.length || charsetRows.length > 256) throw new Error('字符集能力目录为空或超过预算');
@@ -77,6 +82,7 @@ export async function readIndexStructure(context: StructureTaskContext, target: 
   const columns = new Map<string, TrustedIndexColumn>(), warnings = [...capability.reasons];
   for (const [position, parsed] of definition.columns.entries()) {
     const metadata = rawColumns[position], derived = deriveTrustedIndexColumn(parsed, metadata, { definitionContext: read.context, charsetMaxBytes: metadata.CHARACTER_SET_NAME === null ? undefined : charsets.get(metadata.CHARACTER_SET_NAME) });
+    derived.column.specialIndexes = deriveSpecialIndexColumn(parsed, metadata, derived.column, read.context, read.serverVersion, sridDirectoryAvailable);
     columns.set(reference(refs?.columns, parsed.name), derived.column);
     if (derived.reasons.length) warnings.push(`字段 ${JSON.stringify(parsed.name)}：${derived.reasons.join('；')}`);
   }
@@ -98,7 +104,7 @@ export async function readIndexStructure(context: StructureTaskContext, target: 
     // 原定义完整、引用列均普通且目录无表达式时，才能排除隐藏函数键或 GIPK；自动外键键来源另行保护。
     const mysqlEight = read.context.dialect === 'mysql' && /^8\./.test(read.serverVersion);
     const expressionsAbsent = mysqlEight ? statsCapabilities.expression && rows.every(row => row.EXPRESSION === null) : !statsCapabilities.expression || rows.every(row => row.EXPRESSION === null);
-    const knownPlain = !!value && expressionsAbsent && value.keyParts.every(part => { const column = columns.get(part.columnRef)!; return !column.generated && !column.hidden; }) && !parsed.opaqueReasons.length;
+    const knownPlain = !!value && parsed.name.toUpperCase() !== 'FTS_DOC_ID_INDEX' && expressionsAbsent && value.keyParts.every(part => { const column = columns.get(part.columnRef)!; return !column.generated && !column.hidden && column.name.toUpperCase() !== 'FTS_DOC_ID'; }) && !parsed.opaqueReasons.length;
     let visible = checked.visible;
     if (visible === 'unknown' && capability.writable && knownPlain && ((read.context.dialect === 'mysql' && /^5\.7\.44(?:$|-)/.test(read.serverVersion) && !statsCapabilities.visibility) || (read.context.dialect === 'mariadb' && statsCapabilities.ignored && rows.every(row => row.IGNORED === 'NO')))) visible = true;
     indexes.set(reference(refs?.indexes, parsed.name), { parsed, ...(value ? { definition: value } : {}), visible, generated: knownPlain ? false : 'unknown' });
@@ -110,7 +116,7 @@ export async function readIndexStructure(context: StructureTaskContext, target: 
   assertStructureDefinitionUnchanged(read, { ...endRead, originalMode: read.originalMode });
   const options: IndexPlanOptions | undefined = capability.capabilities ? { database: target.database, dialect: read.context.dialect, serverVersion: read.serverVersion, engine: 'InnoDB', sqlMode: read.context.mode, capabilities: capability.capabilities, checks: { foreignKeyChecks: 1, uniqueChecks: 1 } } : undefined;
   const model: IndexPlanSnapshot = { definition, indexDocument, columns, indexes, dependencies: dependencyRead.dependencies };
-  const catalogDigest = digest({ facts, flags, largePrefix, tables, rawColumns, charsets: charsetRows, statsCapabilities, statistics });
+  const catalogDigest = digest({ facts, flags, largePrefix, tables, sridHeaders, rawColumns, charsets: charsetRows, statsCapabilities, statistics });
   const bytes = Buffer.byteLength(read.source) * 2 + Buffer.byteLength(JSON.stringify([...columns])) + Buffer.byteLength(JSON.stringify([...indexes])) + Buffer.byteLength(JSON.stringify(rawColumns)) + Buffer.byteLength(JSON.stringify(statistics)) + dependencyRead.bytes + 4096;
   return { ...read, model, options, warnings: [...new Set(warnings)], catalogDigest, dependencyDigest: dependencyRead.digest, bytes };
 }

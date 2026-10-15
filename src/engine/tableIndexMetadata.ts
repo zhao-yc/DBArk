@@ -11,7 +11,7 @@ export interface IndexColumnMetadata {
   COLUMN_NAME: string; DATA_TYPE: string; COLUMN_TYPE: string; IS_NULLABLE: 'YES' | 'NO';
   CHARACTER_SET_NAME: string | null; COLLATION_NAME: string | null;
   CHARACTER_MAXIMUM_LENGTH: string | number | null; CHARACTER_OCTET_LENGTH: string | number | null;
-  EXTRA: string;
+  EXTRA: string; SRS_ID?: unknown;
 }
 export interface IndexColumnContext { definitionContext: TableDefinitionContext; charsetMaxBytes?: string | number; }
 export interface IndexColumnMetadataResult { column: TrustedIndexColumn; writable: boolean; reasons: string[]; }
@@ -38,7 +38,7 @@ export function deriveIndexCapabilities(input: IndexCapabilityMetadata): IndexCa
   // 官方 InnoDB 限制分别为 MySQL 16 列、MariaDB 32 列，不能用共享输入预算代替服务器上限。
   return { writable: true, reasons: [], capabilities: { renameIndex: true, descendingIndexes: version !== '5.7.44', maxKeyParts: input.dialect === 'mysql' ? 16 : 32, maxIndexNameCharacters: 64,
     // 1024 UTF-8 字节是客户端保守预算，不宣称五版服务器都按字节限制注释。
-    maxIndexCommentBytes: 1024, maxKeyBytes: 3072 } };
+    maxIndexCommentBytes: 1024, maxKeyBytes: 3072, specialIndexes: { fulltext: true, spatial: true, spatialRequiresSrid: input.dialect === 'mysql' && version?.startsWith('8.') === true } } };
 }
 
 /** 只读自有数据字段，目录缺失或访问器都不能冒充显式 NULL。 */
@@ -132,6 +132,7 @@ export function deriveTrustedIndexColumn(parsed: TableColumnDefinition, metadata
   if (remaining || parsed.attributes.some(attribute => attribute.kind === 'opaque')) reasons.push('字段含未证明的附加属性');
   if (generated) reasons.push('生成列索引首批只读');
   if (hidden) reasons.push('不可见字段索引首批只读');
+  if (name.toUpperCase() === 'FTS_DOC_ID') reasons.push('全文文档定位列不开放普通索引修改');
   const column: TrustedIndexColumn = { name, nullable, dataType: type, columnType, generated, hidden,
     ...(charset === null ? {} : { charset, collation: collation! }),
     ...(length === undefined ? {} : { characterMaxLength: String(length), characterOctetLength: String(octets) }),
@@ -181,14 +182,17 @@ export function crossCheckIndexStatistics(index: ParsedIndex, rows: readonly Rec
     const row = ordered[position], part = index.parts[position];
     if (metadataInteger(field(row, 'SEQ_IN_INDEX'), '索引键序号') !== position + 1 || textField(row, 'INDEX_NAME') !== index.name) throw new Error('索引目录名称或键序号不一致');
     const method = textField(row, 'INDEX_TYPE').toUpperCase();
-    if ((['ordinary', 'unique', 'primary'].includes(index.kind) && method !== index.method) || textField(row, 'INDEX_COMMENT', true) !== index.comment) throw new Error('索引目录方法或注释不一致');
+    // InnoDB目录把R树报告为SPATIAL；不能要求目录出现DDL模型的RTREE名称。
+    if (method !== (index.kind === 'spatial' && index.method === 'RTREE' ? 'SPATIAL' : index.method) || textField(row, 'INDEX_COMMENT', true) !== index.comment) throw new Error('索引目录方法或注释不一致');
     if (position && method !== textField(ordered[0], 'INDEX_TYPE').toUpperCase()) throw new Error('同一索引方法目录不一致');
     const unique = metadataInteger(field(row, 'NON_UNIQUE'), '索引唯一状态', true);
     if (unique > 1 || (index.kind === 'primary' || index.kind === 'unique') !== (unique === 0)) throw new Error('索引目录唯一属性不一致');
     if (field(row, 'COLUMN_NAME') !== (part.columnName ?? null)) throw new Error('索引目录字段映射与原定义不一致');
-    const prefix = field(row, 'SUB_PART'); if ((prefix === null ? undefined : metadataInteger(prefix, '索引前缀')) !== part.prefixLength) throw new Error('索引目录前缀与原定义不一致');
+    const prefix = field(row, 'SUB_PART'), catalogPrefix = prefix === null ? undefined : metadataInteger(prefix, '索引前缀');
+    // 完整空间字段的32字节MBR是服务器内部表示，不是用户输入的字段前缀。
+    if (!(index.kind === 'spatial' && part.prefixLength === undefined && (catalogPrefix === undefined || catalogPrefix === 32)) && catalogPrefix !== part.prefixLength) throw new Error('索引目录前缀与原定义不一致');
     const direction = field(row, 'COLLATION');
-    if (!index.opaqueReasons.length && !part.opaqueReasons.length && direction !== (part.direction === 'desc' ? 'D' : 'A')) throw new Error('索引目录方向与原定义不一致');
+    if (!index.opaqueReasons.length && !part.opaqueReasons.length && (index.kind === 'fulltext' ? direction !== null : direction !== (part.direction === 'desc' ? 'D' : 'A'))) throw new Error('索引目录方向与原定义不一致');
     if (capabilities.expression) { const expression = field(row, 'EXPRESSION'); if (expression !== null) reasons.push('表达式索引目录首批只读'); }
     let rowVisible: boolean | 'unknown' = 'unknown';
     if (capabilities.visibility) { const value = textField(row, 'IS_VISIBLE'); if (!['YES', 'NO'].includes(value)) throw new Error('索引可见性目录状态未知'); rowVisible = value === 'YES'; }

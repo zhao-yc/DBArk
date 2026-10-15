@@ -55,7 +55,7 @@ describe('索引原片段读取', () => {
   });
   it.each([
     'KEY i ((concat(a,\',\',a)))', 'KEY i (a) INVISIBLE', 'KEY i (a) IGNORED',
-    'KEY i (a) /*!80000 INVISIBLE */', 'FULLTEXT KEY i (a)', 'SPATIAL KEY i (a)',
+    'KEY i (a) /*!80000 INVISIBLE */', 'FULLTEXT KEY i (a) WITH PARSER ngram', 'SPATIAL KEY i (a(4))',
     'KEY i USING HASH (a)', 'KEY i (a) KEY_BLOCK_SIZE=8', 'CONSTRAINT c UNIQUE KEY i (a)',
   ])('复杂索引原片段保持只读：%s', index => {
     const result = read(`CREATE TABLE t(a varchar(20), ${index})`).indexes[0];

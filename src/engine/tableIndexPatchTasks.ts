@@ -6,6 +6,7 @@ import { readIndexStructure, assertIndexStructureUnchanged, indexReferenceNames,
 import { verifyIndexAfter } from './tableIndexVerification';
 import { planTableIndexPatches } from './tableIndexPatchSql';
 import { validateIndexPatches, type IndexPatch, type IndexPlanResult, type TableIndexView } from '../shared/tableIndexPatches';
+import { isSpecialIndexKind } from '../shared/specialIndexRules';
 import type { TableIndexApplyInput, TableIndexApplyOutput, TableIndexApplyProgress, TableIndexGetInput, TableIndexGetOutput, TableIndexPatchTarget, TableIndexPreviewInput, TableIndexPreviewOutput, TableIndexReleaseInput } from '../shared/tableIndexTasks';
 
 type ReadyPlan = Extract<IndexPlanResult, { kind: 'ready' }>;
@@ -26,10 +27,10 @@ export function indexViews(read: IndexStructureRead): TableIndexView[] {
       return plan.kind === 'ready' ? { allowed: true, reasons: [] } : { allowed: false, reasons: plan.kind === 'blocked' ? plan.issues.map(issue => issue.message) : ['此操作没有实际变更'] };
     };
     const unsupportedReasons = [...index.parsed.opaqueReasons];
-    if (!index.definition) unsupportedReasons.push('未得到可重建的完整普通索引定义');
+    if (!index.definition) unsupportedReasons.push('未得到可控的完整索引定义');
     if (index.visible !== true) unsupportedReasons.push('可见性未证明或索引不可见/已忽略');
     if (index.generated !== false) unsupportedReasons.push('尚未排除生成或隐藏索引属性');
-    return { indexRef: ref, name: index.parsed.name, rawSql: index.parsed.rawSql, kind: ['ordinary', 'unique', 'primary'].includes(index.parsed.kind) ? index.parsed.kind as 'ordinary' | 'unique' | 'primary' : 'unsupported',
+    return { indexRef: ref, name: index.parsed.name, rawSql: index.parsed.rawSql, kind: ['ordinary', 'unique', 'primary', 'fulltext', 'spatial'].includes(index.parsed.kind) ? index.parsed.kind as TableIndexView['kind'] : 'unsupported',
       ...(index.definition ? { editableDefinition: structuredClone(index.definition) } : {}), unsupportedReasons: [...new Set(unsupportedReasons)],
       access: { drop: access({ op: 'drop', indexRef: ref }), rename: access({ op: 'alter', indexRef: ref, changes: { name: candidate } }), replace: access({ op: 'alter', indexRef: ref, changes: { comment: index.definition?.comment === 'DBArk 预览能力检查' ? '' : 'DBArk 预览能力检查' } }) } };
   });
@@ -41,7 +42,8 @@ function acknowledgements(snapshot: Snapshot, plan: ReadyPlan): string[] {
   for (const operation of plan.operations) {
     const old = operation.sourceIndexRef ? snapshot.model.indexes.get(operation.sourceIndexRef)?.definition : undefined;
     const final = plan.finalIndexes.find(index => operation.sourceIndexRef ? index.sourceIndexRef === operation.sourceIndexRef : index.clientKey === operation.clientKey)?.definition;
-    if ((operation.strategy === 'drop' || operation.strategy === 'replace') && old?.kind !== 'ordinary') required.add('drop-unique-constraint');
+    if ((operation.strategy === 'drop' || operation.strategy === 'replace') && old && ['unique', 'primary'].includes(old.kind)) required.add('drop-unique-constraint');
+    if (old && isSpecialIndexKind(old.kind) || final && isSpecialIndexKind(final.kind)) required.add('special-index-change');
     if (operation.strategy !== 'rename' && (old?.kind === 'primary' || final?.kind === 'primary')) required.add('primary-key-change');
   }
   return [...required];
@@ -85,7 +87,7 @@ export class TableIndexPatchTasks {
       const target = { connectionId: input.connectionId, database: input.database, table: input.table }, read = await readIndexStructure(context, target);
       this.cache.capacity(read.bytes, 'snapshot'); snapshot = { ...read, id: randomUUID(), target, revision: currentRevision, expires: this.now() + structureCacheLimits.ttlMs };
       return { target: { ...target }, snapshotId: snapshot.id, expiresAt: new Date(snapshot.expires).toISOString(), ddlHash: hash(read.source), writable: !!read.options,
-        columns: [...read.model.columns].map(([columnRef, column]) => ({ columnRef, name: column.name, typeSql: column.columnType, nullable: column.nullable, generated: column.generated, hidden: column.hidden, prefix: column.prefix, ...(column.fullKeyBytes === undefined ? {} : { fullKeyBytes: column.fullKeyBytes }) })),
+        columns: [...read.model.columns].map(([columnRef, column]) => ({ columnRef, name: column.name, typeSql: column.columnType, nullable: column.nullable, generated: column.generated, hidden: column.hidden, prefix: column.prefix, ...(column.fullKeyBytes === undefined ? {} : { fullKeyBytes: column.fullKeyBytes }), ...(column.charset ? { charset: column.charset, collation: column.collation } : {}), ...(column.specialIndexes ? { specialIndexes: structuredClone(column.specialIndexes) } : {}) })),
         indexes: indexViews(read), warnings: [...read.warnings, '结构读取使用独立短会话，查询标签的事务、临时表和检查设置保持原状。', '执行前重核仍存在外部 DDL 并发窗口，请在维护时段暂停并行结构修改。'], incomingCoverage: read.model.dependencies.incomingCoverage,
         ...(read.options ? { capabilities: { ...read.options.capabilities, dialect: read.context.dialect, serverVersion: read.serverVersion } } : {}) };
     }, { label: '读取索引定义', purpose: 'indexes', progress });
@@ -109,7 +111,7 @@ export class TableIndexPatchTasks {
       this.cache.capacity(bytes, 'preview'); value = { snapshot, patches, plan, required, bytes, expires: this.now() + structureCacheLimits.ttlMs };
       return { target: { ...snapshot.target }, previewToken: token, expiresAt: new Date(value.expires).toISOString(), ddlHash: hash(snapshot.source), sql: plan.sql,
         changes: plan.operations.map(operation => ({ ...(operation.sourceIndexRef ? { indexRef: operation.sourceIndexRef } : { clientKey: operation.clientKey }), description: operation.strategy === 'add' ? '新增索引' : operation.strategy === 'drop' ? '删除索引或约束' : operation.strategy === 'rename' ? '原生重命名索引' : '删除并重建指定索引或约束' })),
-        warnings: [...plan.warnings.map(issue => issue.message), ...(plan.finalIndexes.some(index => index.definition?.kind !== 'ordinary' && plan.operations.some(operation => operation.strategy !== 'rename' && (operation.clientKey ? operation.clientKey === index.clientKey : operation.sourceIndexRef === index.sourceIndexRef))) ? ['新增或重建唯一键由数据库按真实排序规则检查重复值；客户端不根据已加载分页猜测唯一性。'] : [])], requiredAcknowledgements: [...required], concurrencyPolicy: 'recheck-before-ddl' as const };
+        warnings: [...plan.warnings.map(issue => issue.message), ...(plan.finalIndexes.some(index => index.definition && ['primary', 'unique'].includes(index.definition.kind) && plan.operations.some(operation => operation.strategy !== 'rename' && (operation.clientKey ? operation.clientKey === index.clientKey : operation.sourceIndexRef === index.sourceIndexRef))) ? ['新增或重建唯一键由数据库按真实排序规则检查重复值；客户端不根据已加载分页猜测唯一性。'] : [])], requiredAcknowledgements: [...required], concurrencyPolicy: 'recheck-before-ddl' as const };
     }, { label: '预览索引变更', purpose: 'indexes', progress });
     if (this.snapshots.get(input.snapshotId) !== snapshot || snapshot.expires <= this.now()) throw new Error('索引快照已释放或过期，未创建新预览');
     this.cache.capacity(value.bytes, 'preview'); this.previews.set(token, value); return output;
