@@ -36,7 +36,7 @@ export function SavedQueriesDialog({onClose,onHistory}:{onClose():void;onHistory
  /** 按当前原文摘要读取，并且只创建新标签，不执行语句或替换旧草稿。 */
  async function open(item:SavedQueryPageEntry){
   if(locked.current||closed.current)return;const connectionId=target(item);if(!connectionId){setError(t.choose);return;}locked.current=true;setBusy(true);setError('');
-  try{const request=invoke('queries.read',{id:item.query.id,digest:item.digest,connectionId});pending.current=request;const result=await request;if(pending.current===request)pending.current=undefined;if(!closed.current)await close(()=>{useWorkspace.getState().openTab({id:uid(),kind:'query',title:result.query.name,connectionId:result.connectionId,database:result.database,databaseContext:result.databaseContext,sql:result.query.sql});onClose();});}
+  try{const request=invoke('queries.read',{id:item.query.id,digest:item.digest,connectionId});pending.current=request;const result=await request;if(pending.current===request)pending.current=undefined;if(!closed.current)await close(()=>{useWorkspace.getState().openTab({id:uid(),kind:'query',title:result.query.name,connectionId:result.connectionId,database:result.database,databaseContext:result.databaseContext,sql:result.query.sql,sourceBinding:result.sourceBinding});onClose();});}
   catch(reason){if(!closed.current)setError(errorMessage(reason));}finally{pending.current=undefined;locked.current=false;if(!closed.current)setBusy(false);}
  }
  /** 按所见摘要删除，成功后丢弃旧续页；失败不重放，也不移除当前卡片。 */

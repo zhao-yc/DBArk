@@ -204,7 +204,7 @@ async function dispatch(command: Command, input: any): Promise<unknown> {
     case 'table.preferences.save': return store.saveTablePreferences(input);
     case 'table.preferences.reset': return store.resetTablePreferences(input);
     case 'queries.list': return store.queries();
-    case 'queries.read':return savedQuerySearches.read(input);
+    case 'queries.read': { const result = savedQuerySearches.read(input); return { ...result, sourceBinding: store.bindQuerySource(input.id, input.digest) }; }
     case 'queries.pageRelease':return savedQueryPages.release(input);
     case 'queries.deleteChecked':if(shuttingDown)throw Error('客户端正在退出，不能删除保存查询');return savedQueryPages.deleteChecked(input);
     case 'queries.page':case 'queries.pageContinue':case 'history.page':case 'history.pageContinue':{
@@ -218,7 +218,9 @@ async function dispatch(command: Command, input: any): Promise<unknown> {
     case 'snippets.list': return store.snippets();
     case 'snippets.save': return store.saveSnippet(input);
     case 'snippets.delete': return store.deleteSnippet(input.id);
-    case 'queries.save': return store.saveQuery({ ...input, updatedAt: new Date().toISOString() });
+    case 'queries.create': if(shuttingDown)throw Error('客户端正在退出，不能保存查询'); return store.createBoundQuery(input);
+    case 'queries.updateSource': if(shuttingDown)throw Error('客户端正在退出，不能更新原查询'); connectionConfig.assertAvailable(input.content.connectionId); return store.updateBoundQuery(input);
+    case 'queries.save': return store.createLegacyQuery({ ...input, updatedAt: new Date().toISOString() });
     case 'queries.delete': return store.deleteQuery(input.id);
     case 'history.list': return store.history(input.connectionId);
     case 'history.pageRelease':return historyPages.release(input);

@@ -2,6 +2,7 @@ import {z} from 'zod';
 import {databaseSearchPatternSchema} from './databaseSearchPattern';
 import type {SavedQuery} from './contracts';
 import type {QueryDatabaseContext} from './queryContext';
+import type { QuerySourceBinding } from './queryBinding';
 
 export const savedQuerySearchLimits={pageQueries:25,pageBytes:128*1024,maxHits:1000,cursors:16,cursorMs:5*60000,active:2,recordBytes:128*1024*1024,sqlUnits:20_000_000,matchMs:2000,initializationMs:5000,previewUnits:256}as const;
 const id=z.string().min(1).max(200),name=z.string().min(1).max(256);
@@ -16,4 +17,4 @@ export type SavedQuerySearchNext=z.infer<typeof savedQuerySearchNextSchema>;
 export interface SavedQueryMatch{field:'name'|'sql';line:number;column:number;offset:number;length:number;preview:string;previewTruncated:boolean}
 export interface SavedQuerySearchHit{query:Omit<SavedQuery,'sql'>;digest:string;matches:SavedQueryMatch[]}
 export interface SavedQuerySearchPage{hits:SavedQuerySearchHit[];failures:{id:string;message:string}[];scanned:number;totalHits:number;limitReached:boolean;stoppedOnError:boolean;cursor?:string;expiresAt?:string}
-export interface SavedQueryOpenResult{query:SavedQuery;connectionId:string;database?:string;databaseContext?:QueryDatabaseContext;contextChanged:boolean}
+export interface SavedQueryOpenResult{query:SavedQuery;connectionId:string;database?:string;databaseContext?:QueryDatabaseContext;contextChanged:boolean;sourceBinding?:QuerySourceBinding}
