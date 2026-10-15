@@ -1,6 +1,6 @@
 # 0.16 补全检查点发行候选验收（2026-10-15）
 
-状态：候选验收进行中，未创建0.16标签或公开资产，Q01和Navicat完整目标保持部分。实现仍为`b89f760e5cc0b38248bf4bf827c9db46c2b143fe`，后续文档变动不改其运行代码；首批能力与原始失败分别见[语义补全](acceptance-q01-sql-completion-20261015.md)、[上下文](acceptance-q01-session-context-20261015.md)、[临时对象](acceptance-q01-session-objects-20261015.md)、[元数据/初始化](acceptance-q01-session-read-and-warmup-20261015.md)和[输出别名](acceptance-q01-output-aliases-20261015.md)。
+状态：本机候选验收及当前147项集合的主分支三平台矩阵已完成；固定标签和公开文件仍独立核验，Q01和Navicat完整目标保持部分。运行代码仍为`b89f760e5cc0b38248bf4bf827c9db46c2b143fe`，新增规模用例固定于`00148d0b7e245046ced6dc3a0059f62e2abdb2ae`；后续文档不改代码。首批能力与原始失败分别见[语义补全](acceptance-q01-sql-completion-20261015.md)、[上下文](acceptance-q01-session-context-20261015.md)、[临时对象](acceptance-q01-session-objects-20261015.md)、[元数据/初始化](acceptance-q01-session-read-and-warmup-20261015.md)和[输出别名](acceptance-q01-output-aliases-20261015.md)。
 
 ## 当前运行代码的统一后端矩阵
 
@@ -22,6 +22,8 @@
 
 固定上述SHA的[主分支CI 38687044474](https://github.com/zhao-yc/DBArk/actions/runs/38687044474)全部终态成功：2089单元，Windows x64、macOS arm64/x64原生源码和真实NSIS/DMG安装各24离线通过、122私网跳过。完整日志、终态和摘要已归档；私网未验组合不外推。
 
+新增规模用例后的[CI 38689382669](https://github.com/zhao-yc/DBArk/actions/runs/38689382669)固定00148d0，也已全部终态成功：2089单元，三平台源码及实际安装各24离线通过、123私网跳过，总147；三个安装任务均确认卸载/分离和本次临时目录清理。原完整日志、终态及`o16-final-main-ci-attestation.json`核对固定SHA和实际阶段，不能以旧146集合替代它。
+
 当前Windows源码专项32项及实际NSIS专项32项分别通过，105个构建文件与包内逐字节相等，实际安装ASAR摘要一致；该次真实卸载和六实例/本机资源独立清零，13历史临时目录保留。安装程序摘要、第一次路径探测工具错误及最终验证见[别名验收](acceptance-q01-output-aliases-20261015.md)。
 
 ## 全量和发行门槛
@@ -32,6 +34,8 @@
 
 当前总147项通过`o16-desktop-collection-147.json`只读枚举稳定用例ID；`o16-full-source-147-partition-attestation.json`证明原146全量和新增1单项在相同运行代码及各自实际用例输入下，全部ID各一次覆盖，0失败/跳过/flaky。这是两轮源码覆盖，不是147项同轮执行。`run192-source-full-cleanup`独立核对六实例隔离库/用户/相关线程及本批进程/临时目录均为0，13历史目录保留。
 
-`run182-output-alias-installed-full`正在使用同一冻结NSIS执行当前147项完整实际安装并精确卸载，不能以现有32项专项代替。应用运行代码和构建产物没有因新增验收改变，源码、当前新增用例及固定标签各自记录；完成后再次独立核对全部隔离资源、本批进程和临时目录。
+`run182-output-alias-installed-full`已使用同一冻结NSIS完成原147项完整实际安装：147通过、0失败/跳过/flaky，全部用例恰一次通过，整套943182ms；真实系统加密、迁移、两格式百万行导出和精确卸载均完成。两份百万行文件大小及队列峰值与源码一致。安装包137891060字节，SHA256为`28e17d3e9d77f12b7297f61fce8352c6b4709f68970063c16754cc94a734fad8`。105个构建文件、实际安装ASAR及318个执行输入逐项核对一致，证明文件`o16-full-installed-147-attestation.json`保留全部摘要和正式结果。
+
+`run183-installed-full-cleanup`独立核对六实例隔离库/用户/相关线程及本机项目进程、本批临时目录均为0，13历史目录保留；全部用户级/系统级DBArk版本注册名称和固定应用GUID也为0。注册核对首次用旧PowerShell默认编码读取UTF8无BOM脚本而解析失败，未执行注册查询或修改；改为显式UTF8读取同一脚本后核对通过。该工具错误及缺少注册JSON导致的中止原件保留，没有因此重跑已经通过的147项UI。
 
 发布前还需固定标签的三平台原生矩阵、公开安装包/源码及SHA清单的独立下载核验；公开Windows验收必须使用归档自身用例及依赖，不能借当前工作目录覆盖源文件。未签名/未公证、macOS私网未验及复杂作用域未实现在说明中保留。可以按已验能力发布检查点，但不能把该版本视为Q01或全部Navicat功能完成。
