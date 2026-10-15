@@ -25,6 +25,7 @@ export class CompletionWorkerClient{
           const worker=this.createWorker();this.worker=worker;
           worker.onmessage=event=>{
             if(worker!==this.worker)return;
+            if(event.data?.type==='dbark-completion-unavailable'){this.reset('worker');return;}
             if(event.data?.type==='dbark-completion-ready'){
               if(event.data.version!==1){this.reset('worker');return;}
               if(!this.ready){this.ready=true;this.send();}return;

@@ -1,6 +1,7 @@
 import {analyzeCompletion} from '../shared/completionAnalysis';
 import {completionLimits} from '../shared/sqlCompletion';
 import type {CompletionLexicalMode} from '../shared/completionLexical';
+import{warmupCompletionAnalysis}from'../shared/completionWarmup';
 
 /** 仅同安装包的本地编辑器发送有界快照；不访问网络、IPC、凭据或用户查询会话。 */
 self.onmessage=(event:MessageEvent<{id:number;source:string;offset:number;mode:CompletionLexicalMode}>)=>{
@@ -11,5 +12,6 @@ self.onmessage=(event:MessageEvent<{id:number;source:string;offset:number;mode:C
   self.postMessage({id:input.id,result:analyzeCompletion(input.source,input.offset,mode)});
 };
 
-// 模块与监听器就绪后再确认；主线程在此之前不会交付用户SQL。
-self.postMessage({type:'dbark-completion-ready',version:1});
+// 首次语法预测也属于启动；仅模块加载完成不足以证明解析器就绪，用户文本仍由独立期限保护。
+try{warmupCompletionAnalysis();self.postMessage({type:'dbark-completion-ready',version:1});}
+catch{self.postMessage({type:'dbark-completion-unavailable',version:1});}

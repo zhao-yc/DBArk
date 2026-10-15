@@ -30,7 +30,7 @@ export class SessionObjects{
   /** 例程或预算外语句可能改变未观测对象，保留已知名称用于遮蔽和显式刷新。 */
   invalidate():void{this.uncertain=true;for(const entry of this.entries.values()){entry.known=false;entry.complete=false;entry.absent=false;entry.columns=[];}this.revision++;}
   /** 显式读取在原会话确认结构；非临时表确认该名称没有临时遮蔽。 */
-  confirm(database:string,table:string,columns:SessionObjectColumn[]|null):void{this.put({database,name:table,columns:columns??[],known:true,complete:true,absent:columns===null});}
+  confirm(database:string,table:string,columns:SessionObjectColumn[]|null,complete=true):void{this.put({database,name:table,columns:columns??[],known:true,complete,absent:columns===null});}
   /** 返回独立摘要，忙碌时不将中间帧当作稳定对象目录。 */
   snapshot(busy=false,broken=false):SessionObjectSnapshot{return{revision:this.revision,uncertain:this.uncertain,caseMode:this.caseMode,objects:busy||broken?[]:[...this.entries.values()].filter(entry=>!entry.absent).map(({database,name,known,complete,columns})=>({database,name,known,complete,columnCount:columns.length})),busy,broken};}
   /** 每次补全即时读取内存；未确认的字段请求绝不落到独立永久目录。 */
