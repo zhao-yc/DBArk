@@ -178,7 +178,7 @@ test.describe('普通记录表单：共享草稿与真实提交', () => {
   test('单元格CtrlEnter失败留输入成功关闭，reported组合键Escape不关闭弹窗', async ({}, info) => {
     await recordDatabase(async context => {
       await simple(context); await observeRequests(); await (await cell('payload')).click(); await table().getByRole('button', { name: '单元格', exact: true }).click();
-      const modal = page.getByRole('dialog', { name: '编辑单元格：payload', exact: true }); const editor = modal.getByRole('textbox', { name: `payload · ${text.value}`, exact: true }); await editor.fill('001'); await editor.press(`${modifier}+Enter`); await expect(modal).toBeVisible(); await expect(modal.locator('.error-box')).toContainText('payload'); await expect(editor).toHaveValue('001');
+      const modal = page.getByRole('dialog', { name: '编辑单元格：payload', exact: true }); const editor = modal.getByRole('textbox', { name: `payload · ${text.value}`, exact: true }); await editor.fill('001'); await editor.press(`${modifier}+Enter`); await expect(modal).toBeVisible(); await expect(modal.getByRole('alert').filter({ hasText: '字段“payload”无法暂存' })).toContainText('payload'); await expect(editor).toHaveValue('001');
       // 浏览器报告的组合状态只是事件边界验收，不代表实体输入法或真实 composition 过程。
       for (const properties of [{ isComposing: true, keyCode: 27 }, { isComposing: false, keyCode: 229 }]) {
         await editor.evaluate((element, state) => { element.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true, ...state })); }, properties);

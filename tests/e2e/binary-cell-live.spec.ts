@@ -5,6 +5,7 @@ import type { LiveContext } from './live-helpers';
 import { binaryCellZh as binary } from '../../src/renderer/locales/binaryCell.zh-CN';
 import { recordViewZh as record } from '../../src/renderer/locales/recordViews.zh-CN';
 import { formatText, zh } from '../../src/renderer/locales/zh-CN';
+import { withNativeClipboard } from './native-clipboard';
 
 // 只在模块声明阶段检查显式开关，默认跳过早于自动桌面夹具；实库 helper 仅在启用的测试体内加载。
 const enabled = process.env.DBARK_INTEGRATION_ENABLED === '1';
@@ -115,6 +116,31 @@ test.describe('200隔离实库二进制单元格', () => {
   test.skip(!enabled, '只由统筹显式注入并启用200隔离验收，默认不启动桌面或加载实库配置');
   test.beforeAll(() => {
     if (process.env.DBARK_TEST_HOST !== '192.168.31.200' || !/^\d+$/.test(process.env.DBARK_TEST_PORT ?? '') || Number(process.env.DBARK_TEST_PORT) < 1 || Number(process.env.DBARK_TEST_PORT) > 65535 || !process.env.DBARK_TEST_USER || process.env.DBARK_TEST_PASSWORD === undefined) throw new Error('必须显式注入已核对200隔离实例的主机、端口及临时账号，不回退业务库配置');
+  });
+
+  test('二进制网格保留真实原生复制粘贴与导航，键盘不进入文本编辑且明确提交才写库', async ({}, info) => {
+    test.setTimeout(120000);
+    await inDatabase(async context => withNativeClipboard(async () => {
+      await fixture(context);
+      await context.observer.query(`UPDATE ${qualified(context.database)} SET token=? WHERE id=?`, [Buffer.from([171, 0, 255, 128]), secondId]);
+      const before = await read(context); await openTable(context);
+      const source = await cell(table(), 'token', 3); await source.click();
+      for (const key of ['F2', 'a']) { await page.keyboard.press(key); await expect(table().getByRole('textbox', { name: '编辑 token', exact: true })).toHaveCount(0); }
+      await page.keyboard.press('ArrowRight'); await expect(await cell(table(), 'bit_value', 3)).toBeFocused();
+      await page.keyboard.press('ArrowLeft'); await expect(source).toBeFocused();
+      const modifier = process.platform === 'darwin' ? 'Meta' : 'Control';
+      await page.keyboard.press(`${modifier}+C`);
+      await expect.poll(() => desktop.evaluate(({ clipboard }) => clipboard.readText())).toBe('0xab00ff80');
+      const target = await cell(table(), 'token'); await target.click(); await page.keyboard.press(`${modifier}+V`);
+      await expect(target).toHaveText('0xab00ff80');
+      // 专用查看器须读到真实字节包装；仅把0x文字粘进去不能满足这条断言。
+      await openCell('token'); await expect(viewer(cellDialog('token')).getByRole('textbox', { name: `token · ${record.value}`, exact: true })).toHaveValue(/^(?:0x)?ab00ff80$/i); await closeCell('token');
+      expect(await calls('table.preview')).toBe(0); expect(await calls('table.apply')).toBe(0); expect(await read(context)).toEqual(before);
+      await showPreview(); expect(await read(context)).toEqual(before);
+      await preview().getByRole('button', { name: '确认提交', exact: true }).click(); await expect(preview()).toHaveCount(0);
+      const expected = before.map((row, index) => ({ ...row, token_hex: index === 0 ? 'AB00FF80' : row.token_hex }));
+      expect(await read(context)).toEqual(expected); expect(await calls('table.apply')).toBe(1);
+    }), info);
   });
 
   test('BLOB VARBINARY BIT查看及草稿零写，明确集中提交后逐字节与大整数保持', async ({}, info) => {

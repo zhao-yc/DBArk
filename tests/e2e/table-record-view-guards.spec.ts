@@ -4,6 +4,9 @@ import type { FilterRule, SortRule } from '../../src/shared/contracts';
 import { recordViewZh as text } from '../../src/renderer/locales/recordViews.zh-CN';
 import { tableGridZh as gridText } from '../../src/renderer/locales/tableGrid.zh-CN';
 import { referenceZh } from '../../src/renderer/locales/references.zh-CN';
+import { binaryCellZh as binaryText } from '../../src/renderer/locales/binaryCell.zh-CN';
+import { binaryCellLimits } from '../../src/renderer/binaryCell';
+import { formatText } from '../../src/renderer/locales/zh-CN';
 import { test, expect, page, desktop, closed, answerDialogs } from './desktop-fixture';
 import { enabled, environment, isolatedDatabase, type LiveContext } from './live-helpers';
 
@@ -290,7 +293,19 @@ test.describe('记录表单额外守卫：清页、编辑入口与只读边界',
       await expect(form().getByRole('button', { name: text.stage, exact: true })).toBeDisabled(); await form().getByRole('button', { name: text.close, exact: true }).click();
       for (const name of ['huge_text', 'huge_blob']) {
         await (await cell(name)).click(); await activeTable().getByRole('button', { name: '单元格', exact: true }).click(); const modal = page.getByRole('dialog', { name: `编辑单元格：${name}`, exact: true });
-        await expect(modal).toContainText(text.fieldTooLarge); await expect(modal.getByRole('textbox')).toHaveCount(0); await expect(modal.getByRole('button', { name: text.stageCell, exact: true })).toBeDisabled(); await modal.getByRole('button', { name: text.closeCell, exact: true }).click();
+        await expect(modal).toContainText(text.fieldTooLarge);
+        if (name === 'huge_blob') {
+          // 大字节值新增只读分页查看；可查看不代表可编辑，更不能把片段当完整草稿暂存。
+          const viewer = modal.getByRole('region', { name: binaryText.title, exact: true }), hex = viewer.getByRole('textbox');
+          await expect(hex).toHaveCount(1); await expect(hex).toHaveAttribute('readonly', '');
+          const first = (await hex.inputValue()).replace(/^0x/i, '').replace(/\s/g, '');
+          expect(first).toHaveLength(binaryCellLimits.pageBytes * 2); expect(first).toMatch(/^f+$/i);
+          await expect(viewer).toContainText(formatText(binaryText.segment, 1, binaryCellLimits.pageBytes, 131072));
+          await viewer.getByRole('button', { name: binaryText.next, exact: true }).click();
+          await expect(viewer).toContainText(formatText(binaryText.segment, binaryCellLimits.pageBytes + 1, binaryCellLimits.pageBytes * 2, 131072));
+          await expect(hex).toHaveAttribute('readonly', '');
+        } else await expect(modal.getByRole('textbox')).toHaveCount(0);
+        await expect(modal.getByRole('button', { name: text.stageCell, exact: true })).toBeDisabled(); await modal.getByRole('button', { name: text.closeCell, exact: true }).click();
       }
       // 查看或拒绝展开不能截断已经形成的草稿，数据库上的小值也必须保持原样。
       expect(await copiedShape('limit_text')).toEqual({ kind: 'text', length: 262144, exact: true });
