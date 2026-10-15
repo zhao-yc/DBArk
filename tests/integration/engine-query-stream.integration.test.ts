@@ -163,7 +163,8 @@ describe.skipIf(!enabled)('远程完整 SQL 流式导出', () => {
 
   it('CSV容器后续SQL失败保留旧包和已提交写入，不发布半包或自动重放', async () => {
     const path = join(directory, 'failed-multi.zip'), taskId = randomUUID(); await writeFile(path, '原ZIP文件');
-    await expect(engine.handle('query.exportStream', { sessionId, taskId, sql: 'INSERT INTO stream_guard VALUES(452,1);SELECT 1 AS first_value;SELECT * FROM csv_zip_missing_table;INSERT INTO stream_guard VALUES(453,1)', fileToken: randomUUID(), filePath: path, format: 'csv-zip', encoding: 'utf8', protocol: 'text-strict', resultSelection: { kind: 'all' } })).rejects.toThrow('已完成 2 条 SQL');
+    // 引用保留字别名，确保预期失败发生在第三条缺表SQL，前两条仍须完成。
+    await expect(engine.handle('query.exportStream', { sessionId, taskId, sql: 'INSERT INTO stream_guard VALUES(452,1);SELECT 1 AS `first_value`;SELECT * FROM csv_zip_missing_table;INSERT INTO stream_guard VALUES(453,1)', fileToken: randomUUID(), filePath: path, format: 'csv-zip', encoding: 'utf8', protocol: 'text-strict', resultSelection: { kind: 'all' } })).rejects.toThrow('已完成 2 条 SQL');
     expect(await readFile(path, 'utf8')).toBe('原ZIP文件'); expect(Number((await observed('SELECT COUNT(*) AS total FROM stream_guard WHERE id=452'))[0].total)).toBe(1); expect(Number((await observed('SELECT COUNT(*) AS total FROM stream_guard WHERE id=453'))[0].total)).toBe(0);
     expect(await terminal(taskId, 'failed')).toMatchObject({ statementsCompleted: 2, sqlMayHaveExecuted: true, fileCommitted: false, transactionKnown: false });
   });
