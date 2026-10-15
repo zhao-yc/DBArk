@@ -16,6 +16,7 @@ import type{DataSearchRecordReadInput,DataSearchRecordsReleaseInput,DataSearchRe
 import type{SavedQuerySearchInput,SavedQuerySearchNext,SavedQuerySearchPage,SavedQueryOpenResult}from'./savedQuerySearch';
 import type{SavedQueryPageInput,SavedQueryPage}from'./savedQueryPages';
 import type{HistoryPageInput,HistoryPage,HistoryOpenResult}from'./historyPages';
+import type { ExplainPlan } from './explain';
 export type CellValue = string | number | boolean | null | { type: 'binary'; base64: string };
 export type DataRow = Record<string, CellValue>;
 export type ObjectKind = 'table' | 'view' | 'procedure' | 'function' | 'trigger' | 'event';
@@ -38,7 +39,7 @@ export interface ForeignKeyInfo { name: string; columns: string[]; referencedDat
 export interface TableInfo { database: string; name: string; columns: ColumnInfo[]; indexes: IndexInfo[]; foreignKeys: ForeignKeyInfo[]; primaryKey: string[]; editableKey: string[]; engine: string; ddl: string; charset?: string; collation?: string; comment?: string; /** 来自可信 information_schema.TABLES；未知类型不通过空 engine 推测。 */ objectKind?: 'table' | 'view'; }
 export interface ResultColumn { key: string; name: string; type: string; }
 export interface QueryResult { columns: ResultColumn[]; rows: DataRow[]; affectedRows?: number; insertId?: string; warningCount?: number; truncated: boolean; elapsedMs: number; statement: string; }
-export interface QueryOutcome { results: QueryResult[]; elapsedMs: number; transactionOpen?: boolean; }
+export interface QueryOutcome { results: QueryResult[]; elapsedMs: number; transactionOpen?: boolean; explain?: ExplainPlan; }
 export type FilterMode = 'all' | 'any';
 export interface FilterRule { column: string; operator: '=' | '!=' | '>' | '>=' | '<' | '<=' | 'LIKE' | 'NOT LIKE' | 'IN' | 'NOT IN' | 'BETWEEN' | 'IS NULL' | 'IS NOT NULL'; value?: string; values?: string[]; }
 export interface SortRule { column: string; direction: 'ASC' | 'DESC'; }
@@ -102,7 +103,7 @@ export interface CommandMap {
   'sessions.open': { input: { connectionId: string; database?: string|null }; output: { sessionId: string } };
   'sessions.close': { input: { sessionId: string }; output: void };
   'query.execute': { input: { sessionId: string; sql: string; taskId: string; maxRows: number }; output: QueryOutcome };
-  'query.explain': { input: { sessionId: string; sql: string; taskId: string; maxRows: number }; output: QueryOutcome };
+  'query.explain': { input: { sessionId: string; sql: string; taskId: string; maxRows: number; format?: 'auto' | 'text' }; output: QueryOutcome };
   'query.parameterNames': { input: { sessionId: string; sql: string }; output: QueryParameterNames };
   'query.sessionState': { input: { sessionId: string }; output: { transactionOpen: boolean; transactionKnown: boolean; broken: boolean } };
   'query.completionState':{input:{sessionId:string};output:CompletionSessionState};
