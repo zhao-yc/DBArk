@@ -122,7 +122,8 @@ try {
   const env = { ...process.env, DBARK_EXECUTABLE_PATH: executable, DBARK_INTEGRATION_ENABLED: '0' };
   delete env.DBARK_DEV_URL;
   // 执行当前源码的全部离线用例，避免新增偏好或配置功能遗漏随包验收；内网专属由显式开关跳过。
-  command(process.execPath, [join(project, 'node_modules', '@playwright', 'test', 'cli.js'), 'test'], { env, timeout: 300000 });
+  // 首批196项源码套件实际耗时298秒；仅全套安装进程预算改为15分钟，单用例期限和断言不变。
+  command(process.execPath, [join(project, 'node_modules', '@playwright', 'test', 'cli.js'), 'test'], { env, timeout: 900000 });
 } catch (error) {
   testFailure = error;
 } finally {

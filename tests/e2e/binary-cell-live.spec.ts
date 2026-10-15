@@ -162,7 +162,20 @@ test.describe('200隔离实库二进制单元格', () => {
       const query = page.locator('.query-tab:visible'); await expect(query.locator('.result-body')).toContainText(firstId); await expect(query.locator('.result-body')).toContainText(secondId);
       await (await cell(query, 'payload')).dblclick(); const modal = page.getByRole('dialog', { name: `${binary.title}：payload`, exact: true });
       await expect(viewer(modal)).toContainText(binary.readonly); await expect(viewer(modal).getByRole('textbox')).toHaveJSProperty('readOnly', true); await expect(modal.getByRole('button', { name: record.stageCell, exact: true })).toHaveCount(0);
-      await modal.getByRole('button', { name: zh.dialogs.text001, exact: true }).click(); await expect(modal).toHaveCount(0); expect(await read(context)).toEqual(before); expect(await calls('table.preview')).toBe(0); expect(await calls('table.apply')).toBe(0);
+      await modal.getByRole('button', { name: zh.dialogs.text001, exact: true }).click(); await expect(modal).toHaveCount(0);
+      // 同名别名仍按唯一内部键读取第二列的图片，显示名称不能反过来用于值定位。
+      await executeSql(`SELECT payload AS \`重复列\`,picture AS \`重复列\` FROM ${qualified(context.database)} ORDER BY id`);
+      // 实际列头可访问名称含数据库类型，与既有 column() 使用相同的列名前缀规则。
+      const headers = query.getByRole('columnheader', { name: /^重复列/ }); await expect(headers).toHaveCount(2);
+      const imageIndex = await headers.nth(1).getAttribute('aria-colindex'); if (!imageIndex) throw new Error('同名第二列缺少实际坐标');
+      await query.locator(`[role=row][aria-rowindex="2"] [role=gridcell][aria-colindex="${imageIndex}"]`).dblclick();
+      const duplicate = page.getByRole('dialog', { name: `${binary.title}：重复列`, exact: true }); await expect(duplicate).toBeVisible();
+      await viewer(duplicate).getByRole('button', { name: binary.image, exact: true }).click();
+      await expect.poll(() => viewer(duplicate).getByRole('img').evaluate((node: HTMLImageElement) => [node.naturalWidth, node.naturalHeight])).toEqual([2, 3]);
+      await expect(duplicate.getByRole('button', { name: record.stageCell, exact: true })).toHaveCount(0);
+      await viewer(duplicate).getByRole('button', { name: binary.hex, exact: true }).click();
+      await expect(viewer(duplicate)).toContainText(binary.readonly); await expect(viewer(duplicate).getByRole('textbox')).toHaveJSProperty('readOnly', true);
+      await duplicate.getByRole('button', { name: zh.dialogs.text001, exact: true }).click(); expect(await read(context)).toEqual(before); expect(await calls('table.preview')).toBe(0); expect(await calls('table.apply')).toBe(0);
     }, info);
   });
 

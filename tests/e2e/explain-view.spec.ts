@@ -10,8 +10,9 @@ test('执行计划离线组件：键盘、缺失指标、未知节点、长文�
   await writeFile(html, '<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src \'self\'; style-src \'self\' \'unsafe-inline\'; script-src \'self\';"><link rel="stylesheet" href="explain-view.css"><title>执行计划离线交互验收</title><body><div id="root" style="height:100vh;width:100vw;overflow:auto"></div><script src="explain-view.js"></script></body></html>');
   const opening = desktop.waitForEvent('window');
   const windowId = await desktop.evaluate(async ({ BrowserWindow }, path) => {
-    const window = new BrowserWindow({ width: 1024, height: 680, show: false, webPreferences: { sandbox: true, nodeIntegration: false, contextIsolation: true } });
-    await window.loadFile(path); return window.id;
+    // 本例验证真实键盘、滚动和截图；使用实际可见窗口，避免隐藏窗口合成调度阻塞取图。
+    const window = new BrowserWindow({ width: 1024, height: 680, show: true, webPreferences: { sandbox: true, nodeIntegration: false, contextIsolation: true } });
+    await window.loadFile(path); window.focus(); return window.id;
   }, html);
   const view = await opening, errors: string[] = []; view.on('pageerror', error => errors.push(error.message));
   try {
