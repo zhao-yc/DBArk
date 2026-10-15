@@ -51,6 +51,35 @@ node node_modules/@playwright/test/cli.js test tests/e2e/query-binding-live.spec
 
 需要既有夹具允许创建/清理唯一随机隔离库、建立 InnoDB 表和会话临时表、普通读写及事务，并允许选择 information_schema。测试默认的跳过检查可用 `DBARK_INTEGRATION_ENABLED=0` 执行同一文件；两个 skipped 仅说明门禁生效，不能作为数据库验收。
 
+## 固定首批集成 7e40329 兼容核对
+
+只读核对 `7e403290e0c3f4d5688c2bbc35eeef6f0a7220df` 的实际组件及分发代码，没有修改根目录或合入其工作区状态。该提交尚无 Q03 的 queries.create / queries.updateSource、来源返回值和 QueryBindingDialog，**不能单独运行本套件验收 Q03**；必须先合入 Q03 三个已有提交及本次测试修订，保留 Q07 计划结果分支和来源保存表单。
+
+- Q07 仅在 outcome.explain 存在时显示计划；本套件显式执行普通 SELECT，不使用执行计划入口。probe 等待真实结果别名及预期数据，并额外要求新生成的执行历史包含同一 SELECT，避免将旧结果或 ROLLBACK 的 OK 状态误作探测成功。
+- ResultsGrid 的真实表头在别名后附类型，首列还可能是选择框。读取已改为别名前缀匹配 columnheader，取得其 aria-colindex，再读相同列号的 gridcell，不用完整表头名称或固定位置偏移。已核对同版本 react-data-grid 的表头与数据格均使用该 ARIA 列号。
+- 回滚仍先等操作互斥释放、提交按钮不可用，再另行显式执行 SELECT 检查原会话、临时表及原值；没有使用 ROLLBACK/SELECT 混合结果索引，更没有降低真实事务和旁观者最终值断言。
+- W02 增加的顶部按钮和模态不改变本套件按 app-commandbar、当前可见 query-tab 及确切 dialog 名称定位的入口。名称字段用所属对话框内的标签定位；编辑器沿用固定提交未改变的 live-helpers，仅在 Monaco 容器内定位 textbox，没有将 datalist 或全页输入当正文。
+- 固定主菜单将 CmdOrCtrl+S 分发为 save-query，CmdOrCtrl+Shift+S 分发为 SQL 文件另存；QueryTab 限定当前活动标签并跳过已有模态，W02 的快捷键没有覆盖这两个动作。本轮仅完成注册/分发源码核对，不把 CDP 合成按键视为实际系统快捷键验收；正式保存用例继续走真实保存按钮。
+- 本套件不自行指定全局任务编号：普通查询沿用 QueryTab 的 uid；来源保存、原文读取及历史读取走本地严格 IPC，无新增固定 taskId。没有 queries.save 调用；首次关联和另存均通过 UI 新建，原查询更新均通过 UI CAS，原有陈旧夹具也已在上一提交改为 CAS。
+
+本轮类型检查通过；在自己 Q03 克隆显式禁用实库后，2 项离线用例通过、2 项实库用例跳过。该结果不代表已在根集成版本完成运行验收，更不代表200实库或原生系统快捷键通过。
+
+## 既有 E2E 保存入口兼容巡检
+
+先使用 `rg -l '保存查询|queries\.save' tests/e2e` 枚举，再逐项区分保存查询、SQL 文件、片段库和连接保存，没有全局替换“保存”。
+
+- `desktop.spec.ts`：普通未绑定查询明确点击“另存为新查询”。保留原 SQL/主题/最后编辑重启恢复断言，增加源记录与标签 ID 分离、绑定恢复，以及未保存的后续编辑不自动覆盖源记录的检查。对应真实离线桌面用例通过。
+- `query-context.spec.ts`：保存帮助器明确另存当前上下文草稿；保留实际 USE、未知库、显式无库、原查询、执行 SQL 和布局恢复断言，本轮禁用实库并跳过，没有降级为本地状态模拟。
+- `query-files.spec.ts`：只通过原生文件选择打开/另存 SQL 文件，没有旧保存查询动作，保持不改。
+- `snippets.spec.ts`：匹配出现在“保存查询保持为空”的说明；其“保存”属于 SQL 片段库，保持不改。
+- `table-preferences.spec.ts`：queries.save 仅首次新建“旧查询”夹具，没有已有 ID 覆盖，保持不改。
+- `saved-query-pages.spec.ts` / `saved-query-search.spec.ts`：旧命令只留初次新建；已有 ID 的陈旧原文修改已在 41d02e9 使用所见绑定 CAS，本轮无需再改。
+- `query-binding.spec.ts` / `query-binding-live.spec.ts`：使用明确更新/另存，未使用旧入口覆盖已有记录。
+
+本分支仅追加测试与说明，不修改生产按钮、兼容行为或根目录；原 Q03 三个提交保持可复核。类型和离线结果以本克隆为界，根后续接入的 D07/Q01 及二批实库、安装验收仍由统筹确认。
+
+扩大巡检后的最终结果：类型检查通过；受影响桌面保存/重启用例 1 项、Q03 离线用例 2 项通过，共 3 项真实离线 UI；新增来源实库 2 项及既有上下文实库 3 项均在显式禁用后跳过，共 5 项 skipped。本轮未访问200服务器或读取凭据。
+
 ## 公共文件及集成提醒
 
 - shared contracts / commands / validation：新命令与可选标签来源；新增 queryBinding schema。

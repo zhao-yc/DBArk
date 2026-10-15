@@ -96,10 +96,13 @@ test('通过界面保存连接和查询，Monaco 可编辑，主题与最后输�
   await page.getByTitle('保存查询', { exact: true }).click();
   const queryDialog = page.getByRole('dialog', { name: '保存查询', exact: true });
   await queryDialog.getByLabel('查询名称', { exact: true }).fill('离线保存的 SQL');
-  await queryDialog.getByRole('button', { name: '保存', exact: true }).click();
+  // 普通未绑定标签明确另存，不能猜测来源记录或依赖兼容保存按钮。
+  await queryDialog.getByRole('button', { name: '另存为新查询', exact: true }).click();
   await expect(queryDialog).toBeHidden();
   const saved = await page.evaluate(() => window.dbark.invoke('queries.list', {}));
   expect(saved[0].name).toBe('离线保存的 SQL'); expect(saved[0].sql).toContain('SELECT');
+  await expect.poll(async () => (await page.evaluate(() => window.dbark.invoke('settings.get', {}))).tabs[0]?.sourceBinding?.id).toBe(saved[0].id);
+  expect((await page.evaluate(() => window.dbark.invoke('settings.get', {}))).tabs[0].id).not.toBe(saved[0].id);
   // 不等待 400 ms 防抖保存，退出握手必须保存最后输入的 SQL 和主题。
   await input.focus(); await page.keyboard.press(process.platform === 'darwin' ? 'Meta+A' : 'Control+A');
   await page.keyboard.insertText('SELECT 2 AS last_edit_before_quit;');
@@ -111,6 +114,8 @@ test('通过界面保存连接和查询，Monaco 可编辑，主题与最后输�
   await expect(page.locator('.monaco-editor .view-lines')).toContainText('last_edit_before_quit');
   const restored = await page.evaluate(async () => ({ settings: await window.dbark.invoke('settings.get', {}), connections: await window.dbark.invoke('connections.list', {}) }));
   expect(restored.settings.tabs[0].sql).toBe('SELECT 2 AS last_edit_before_quit;');
+  expect(restored.settings.tabs[0].sourceBinding?.id).toBe(saved[0].id);
+  expect((await page.evaluate(() => window.dbark.invoke('queries.list', {})))[0].sql).toContain('e2e_value');
   expect(restored.connections[0].hasPassword).toBe(false);
   await page.screenshot({ path: testInfo.outputPath('desktop-sql.png') });
   expect(pageErrors).toEqual([]);

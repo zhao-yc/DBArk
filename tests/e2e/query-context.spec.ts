@@ -11,8 +11,8 @@ async function otherDatabase(observer:Connection,body:(name:string)=>Promise<voi
   const name='dbark_colperm_'+randomUUID().replaceAll('-','').slice(0,12);await observer.query(`CREATE DATABASE \`${name}\` CHARACTER SET utf8mb4`);
   try{await body(name);}finally{if(!closed){await answerDialogs([1,1]);await quitDesktop();}if(!/^dbark_colperm_[a-f0-9]{12}$/.test(name))throw Error('拒绝清理非本例数据库');await observer.query(`DROP DATABASE IF EXISTS \`${name}\``);const[rows]=await observer.query<RowDataPacket[]>('SELECT SCHEMA_NAME FROM information_schema.SCHEMATA WHERE SCHEMA_NAME=?',[name]);expect(rows).toHaveLength(0);}
 }
-/** 通过实际保存入口记录当前草稿，正文不执行。 */
-async function save(name:string){await query().getByRole('button',{name:'保存查询',exact:true}).click();const dialog=page.getByRole('dialog',{name:'保存查询',exact:true});await dialog.getByLabel('查询名称',{exact:true}).fill(name);await dialog.getByRole('button',{name:'保存',exact:true}).click();await expect(dialog).toBeHidden();}
+/** 通过实际入口显式另存上下文草稿，保持原查询和现有会话，正文不执行。 */
+async function save(name:string){await query().getByRole('button',{name:'保存查询',exact:true}).click();const dialog=page.getByRole('dialog',{name:'保存查询',exact:true});await dialog.getByLabel('查询名称',{exact:true}).fill(name);await dialog.getByRole('button',{name:'另存为新查询',exact:true}).click();await expect(dialog).toBeHidden();}
 /** 通过历史面板新开标签，保留原标签，核对用户能选择到的真实入口。 */
 async function reopen(marker:string,saved=false){await page.locator('.app-commandbar').getByRole('button',{name:'历史与查询',exact:true}).click();const dialog=page.getByRole('dialog',{name:'历史与保存的查询',exact:true});if(saved)await dialog.getByRole('button',{name:'保存的查询',exact:true}).click();const card=dialog.locator('.history-card').filter({hasText:marker});await expect(card).toHaveCount(1);await card.getByRole('button',{name:'在新标签打开',exact:true}).click();await expect(dialog).toBeHidden();}
 /** 用已持久化草稿核对默认库，等待真实状态读回与400毫秒保存防抖结束。 */

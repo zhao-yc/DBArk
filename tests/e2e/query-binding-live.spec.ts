@@ -27,12 +27,22 @@ async function committed(context: LiveContext) {
 /** 从真实结果列读取会话编号、同名临时表和本会话未提交值；不能从内部状态反射获得。 */
 async function probe(database: string, rowId: string, marker: string, note: string, currentDatabase = database) {
   const source = `SELECT CONNECTION_ID() AS binding_session_id,(SELECT marker FROM ${isolatedName(database)}.binding_session_token) AS binding_marker,(SELECT note FROM ${isolatedName(database)}.binding_subject WHERE id=${rowId}) AS binding_note,DATABASE() AS binding_database`;
+  const previousHistory = await historyIds();
   await executeSql(source);
+  expect(await page.evaluate(async ({ source, previousHistory }) => (await window.dbark.invoke('history.list', {})).some(entry => entry.sql === source && !previousHistory.includes(entry.id)), { source, previousHistory })).toBe(true);
   const text = await readRenderedResult(value => value.includes('binding_session_id') && value.includes(marker) && value.includes(note) && value.includes(currentDatabase));
-  // ResultsGrid 首列为选择框，只取最后四个实际数据列，并核对列值再使用会话编号。
+  // 表头还包含类型文本，用别名前缀定位；按真实 ARIA 列号读取，不能把选择列当数据。
+  const grid = query().getByRole('grid'), columns: string[] = [];
+  for (const alias of ['binding_session_id', 'binding_marker', 'binding_note', 'binding_database']) {
+    const header = grid.getByRole('columnheader', { name: new RegExp('^' + alias) }); await expect(header).toHaveCount(1);
+    const index = await header.getAttribute('aria-colindex');
+    if (!index || !/^\d+$/.test(index)) throw Error('SELECT 结果缺少真实列号：' + alias);
+    columns.push(index);
+  }
   let values: string[] = [];
   await expect.poll(async () => {
-    values = (await query().locator('.result-body .rdg-row').first().getByRole('gridcell').allTextContents()).slice(-4).map(value => value.trim());
+    const row = grid.locator('.rdg-row').first();
+    values = await Promise.all(columns.map(index => row.locator(`[role="gridcell"][aria-colindex="${index}"]`).innerText().then(value => value.trim())));
     return values.slice(1);
   }).toEqual([marker, note, currentDatabase]);
   expect(values[0]).toMatch(/^\d+$/); expect(Number(values[0])).toBeGreaterThan(0);
@@ -43,6 +53,7 @@ async function historyIds() { return page.evaluate(async () => (await window.dba
 /** 只通过实际工具栏打开保存表单；明确选择创建或原查询更新。 */
 async function save(action: '保存到原查询' | '另存为新查询', name?: string) {
   await query().getByRole('button', { name: '保存查询', exact: true }).click();
+  await expect(saveDialog().getByRole('button', { name: '另存为新查询', exact: true }), '实库套件需先合入Q03新保存入口，不能在仅有首批集成的版本上运行').toBeVisible();
   if (name) await saveDialog().getByLabel('查询名称', { exact: true }).fill(name);
   await saveDialog().getByRole('button', { name: action, exact: true }).click();
 }
