@@ -1,6 +1,7 @@
 import{Worker}from'node:worker_threads';
 import{savedQuerySearchLimits as limits,type SavedQuerySearchHit,type SavedQuerySearchInput}from'../shared/savedQuerySearch';
 import type{SavedQueryPageEntry}from'../shared/savedQueryPages';
+import type{HistoryPageInput,HistoryPagePosition,HistoryPageEntry}from'../shared/historyPages';
 
 /** 每页使用独立且有堆预算的真实线程；定时器超时后等待terminate实际完成再回复。 */
 export class SavedQueryMatcher{
@@ -14,6 +15,8 @@ export class SavedQueryMatcher{
  match(id:string,raw:string){return this.request<SavedQuerySearchHit|undefined>({kind:'record',id,raw},this.matchMs);}
  /** 列表概要不运行正则，不返回完整SQL，仍受线程时间和堆预算约束。 */
  summarize(id:string,raw:string,search:string){return this.request<SavedQueryPageEntry|undefined>({kind:'summary',id,raw,search},this.matchMs);}
+ /** 历史全文和索引一致性在线程内处理，字段/来源筛选不会隐藏损坏记录。 */
+ summarizeHistory(id:string,raw:string,input:HistoryPageInput,position:HistoryPagePosition){return this.request<HistoryPageEntry|undefined>({kind:'historySummary',id,raw,input,position},this.matchMs);}
  /** 仅拒绝当前请求，线程回收由close或原生exit负责。 */
  private fail(error:Error){if(this.pending){clearTimeout(this.pending.timer);this.pending.reject(error);this.pending=undefined;}}
  /** 关闭幂等，不能只清除本地引用就认为后台计算已经结束。 */

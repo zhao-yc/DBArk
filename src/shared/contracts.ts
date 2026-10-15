@@ -15,6 +15,7 @@ import type {DataSearchCatalogueInput,DataSearchCataloguePage} from './dataSearc
 import type{DataSearchRecordReadInput,DataSearchRecordsReleaseInput,DataSearchRecord}from'./dataSearchRecords';
 import type{SavedQuerySearchInput,SavedQuerySearchNext,SavedQuerySearchPage,SavedQueryOpenResult}from'./savedQuerySearch';
 import type{SavedQueryPageInput,SavedQueryPage}from'./savedQueryPages';
+import type{HistoryPageInput,HistoryPage,HistoryOpenResult}from'./historyPages';
 export type CellValue = string | number | boolean | null | { type: 'binary'; base64: string };
 export type DataRow = Record<string, CellValue>;
 export type ObjectKind = 'table' | 'view' | 'procedure' | 'function' | 'trigger' | 'event';
@@ -146,6 +147,11 @@ export interface CommandMap {
   'queries.save': { input: SavedQuery; output: void };
   'queries.delete': { input: { id: string }; output: void };
   'history.list': { input: { connectionId?: string }; output: HistoryEntry[] };
+  'history.page':{input:HistoryPageInput;output:HistoryPage};
+  'history.pageContinue':{input:{taskId:string;cursor:string};output:HistoryPage};
+  'history.pageRelease':{input:{cursor:string};output:void};
+  'history.read':{input:{id:string;digest:string;connectionId:string};output:HistoryOpenResult};
+  'history.readError':{input:{id:string;digest:string};output:{error:string}};
   'tasks.list': { input: Record<string, never>; output: TaskRecord[] };
   'settings.get': { input: Record<string, never>; output: AppSettings };
   'settings.save': { input: AppSettings; output: void };

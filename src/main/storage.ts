@@ -8,6 +8,7 @@ import { validateSnippetBudget } from '../shared/snippets';
 import { tablePreferenceSaveSchema, tablePreferenceTargetSchema, tablePreferencesSchema, tablePreferenceTargetChanged, validateTablePreferenceBudget, type TablePreferenceTarget, type TablePreferences } from '../shared/tablePreferences';
 import{savedQuerySearchLimits}from'../shared/savedQuerySearch';
 import type{SavedQueryPagePosition}from'../shared/savedQueryPages';
+import type{HistoryPagePosition,HistoryPageInput}from'../shared/historyPages';
 
 export interface SecretProtector { available(): boolean; encrypt(value: string): string; decrypt(value: string): string; }
 export const defaultSettings: AppSettings = { theme: 'dark', sidebarWidth: 270, resultLimit: 1000, pageSize: 200, tabs: [] };
@@ -16,6 +17,7 @@ export const defaultSettings: AppSettings = { theme: 'dark', sidebarWidth: 270, 
 export class LocalStore {
   private connectionRevisionValue = 0;
   private queryRevisionValue=0;
+  private historyRevisionValue=0;
   private volatileSecrets = new Map<string, string>();
   /** 绑定数据库、文件路径及系统凭据保护器；仅由 open 创建已迁移的存储实例。 */
   private constructor(private db: Database, private path: string, private protector: SecretProtector, private reopen: (data: Uint8Array) => Database) {}
@@ -40,6 +42,8 @@ export class LocalStore {
         CREATE TABLE IF NOT EXISTS queries (id TEXT PRIMARY KEY, data TEXT NOT NULL, updated_at TEXT NOT NULL);
         CREATE INDEX IF NOT EXISTS queries_updated_id ON queries(updated_at COLLATE BINARY DESC,id COLLATE BINARY DESC);
         CREATE TABLE IF NOT EXISTS history (id TEXT PRIMARY KEY, connection_id TEXT NOT NULL, data TEXT NOT NULL, started_at TEXT NOT NULL);
+        CREATE INDEX IF NOT EXISTS history_started_id ON history(started_at COLLATE BINARY DESC,id COLLATE BINARY DESC);
+        CREATE INDEX IF NOT EXISTS history_connection_started_id ON history(connection_id COLLATE BINARY,started_at COLLATE BINARY DESC,id COLLATE BINARY DESC);
         CREATE TABLE IF NOT EXISTS tasks (id TEXT PRIMARY KEY, data TEXT NOT NULL, started_at TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS settings (id INTEGER PRIMARY KEY CHECK(id=1), data TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS sql_snippets (id TEXT PRIMARY KEY, data TEXT NOT NULL, updated_at TEXT NOT NULL);
@@ -228,8 +232,20 @@ export class LocalStore {
   deleteQuery(id: string): void { this.mutate(() => this.db.run('DELETE FROM queries WHERE id=?', [id]));this.queryRevisionValue++; }
   /** 历史显示限制为最近 500 条，可以按连接筛选。 */
   history(connectionId?: string): HistoryEntry[] { return this.records(`SELECT data FROM history ${connectionId ? 'WHERE connection_id=?' : ''} ORDER BY started_at DESC LIMIT 500`, connectionId ? [connectionId] : []); }
+  /** 历史或连接成功变化即失效旧页；写盘失败不改变本地修订。 */
+  historyPageRevision():string{return this.historyRevisionValue+':'+this.connectionRevisionValue;}
+  /** 原始时间与ID复合键分页，范围用参数绑定；一次只交付一条完整记录。 */
+  historyPageNext(after:HistoryPagePosition|undefined,input:HistoryPageInput):{id:string;startedAt:string;connectionId:string;raw:string|null;hasMore:boolean}|null{
+    const conditions:string[]=[],params:SqlValue[]=[savedQuerySearchLimits.recordBytes];
+    if(input.scope.kind!=='all'){conditions.push('connection_id COLLATE BINARY=?');params.push(input.scope.kind==='connection'?input.scope.connectionId:'');}
+    if(after){conditions.push('(started_at COLLATE BINARY,id COLLATE BINARY)<(?,?)');params.push(after.startedAt,after.id);}
+    const statement=this.db.prepare('SELECT id,connection_id,started_at,CASE WHEN length(CAST(data AS BLOB))<=? THEN data ELSE NULL END AS data FROM history '+(conditions.length?'WHERE '+conditions.join(' AND ')+' ':'')+'ORDER BY started_at COLLATE BINARY DESC,id COLLATE BINARY DESC LIMIT 2');
+    try{statement.bind(params);if(!statement.step())return null;const row=statement.getAsObject();return{id:String(row.id),startedAt:String(row.started_at),connectionId:String(row.connection_id),raw:typeof row.data==='string'?row.data:null,hasMore:statement.step()};}finally{statement.free();}
+  }
+  /** 显式打开或查看错误才读取单条当前原文，不把全量正文带进列表。 */
+  historyRaw(id:string):string|undefined{const statement=this.db.prepare('SELECT CASE WHEN length(CAST(data AS BLOB))<=? THEN data ELSE NULL END FROM history WHERE id=?');try{statement.bind([savedQuerySearchLimits.recordBytes,id]);if(!statement.step())return;const raw=statement.get()[0];if(typeof raw!=='string')throw Error('执行历史记录超过128MiB');return raw;}finally{statement.free();}}
   /** 写入执行历史并限制总量，避免配置文件持续膨胀。 */
-  addHistory(entry: HistoryEntry): void { this.mutate(() => { this.db.run('INSERT INTO history VALUES (?,?,?,?)', [entry.id, entry.connectionId, JSON.stringify(entry), entry.startedAt]); this.db.run('DELETE FROM history WHERE id NOT IN (SELECT id FROM history ORDER BY started_at DESC LIMIT 1000)'); }); }
+  addHistory(entry: HistoryEntry): void { this.mutate(() => { this.db.run('INSERT INTO history VALUES (?,?,?,?)', [entry.id, entry.connectionId, JSON.stringify(entry), entry.startedAt]); this.db.run('DELETE FROM history WHERE id NOT IN (SELECT id FROM history ORDER BY started_at COLLATE BINARY DESC,id COLLATE BINARY DESC LIMIT 1000)'); });this.historyRevisionValue++; }
   /** 只返回近期任务概要，不持久化完整查询结果。 */
   tasks(): TaskRecord[] { return this.records('SELECT data FROM tasks ORDER BY started_at DESC LIMIT 200'); }
   /** 更新任务概要并保留至多 200 条记录。 */
