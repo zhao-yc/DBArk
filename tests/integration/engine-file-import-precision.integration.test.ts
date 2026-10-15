@@ -8,12 +8,14 @@ import { Engine } from '../../src/engine';
 import { closeMysqlConnection, connect, execute, type ManagedConnection } from '../../src/engine/connection';
 import { identifier, qualified } from '../../src/engine/sql';
 import type { ConnectionProfile, TaskEvent } from '../../src/shared/contracts';
+import { generatedWarningCreateSql, generatedWarningTableName, probeGeneratedColumnWarning, type GeneratedWarningProbe } from './file-import-generated-warning.fixture';
+import { timestampWarningCreateSql, timestampWarningTableName, timestampWarningSafeValue, timestampWarningOverflowValue, probeTimestampRangeWarning, type TimestampWarningProbe } from './file-import-timestamp-warning.fixture';
 
 // 必须由统筹核对 Server-200 身份并同时开启两个开关；本文件不读 env 文件或执行 Docker。
 const enabled = process.env.DBARK_INTEGRATION_ENABLED === '1' && process.env.DBARK_FILE_IMPORT_PRECISION_INTEGRATION_ENABLED === '1';
 const runId = randomUUID().replaceAll('-', '').slice(0, 12), database = `dbark_file_import_${runId}`;
 const fileRoot = resolve(process.cwd(), '.cache', 'engine-file-import-precision'), folder = join(fileRoot, runId);
-const allowedTables = new Set(['precision_source', 'precision_xlsx', 'precision_csv', 'precision_json', 'decimal_scale', 'decimal_overflow', 'short_text', 'small_integer', 'short_time', 'fixed_float', 'fixed_double', 'warning_rows', ...['xlsx', 'csv', 'json'].flatMap(format => [`bit_text_${format}`, `bit_binary_${format}`])]);
+const allowedTables = new Set(['precision_source', 'precision_xlsx', 'precision_csv', 'precision_json', 'decimal_scale', 'decimal_overflow', 'short_text', 'small_integer', 'short_time', 'fixed_float', 'fixed_double', 'warning_rows', generatedWarningTableName, timestampWarningTableName, ...['xlsx', 'csv', 'json'].flatMap(format => [`bit_text_${format}`, `bit_binary_${format}`])]);
 const profile: ConnectionProfile = { id: randomUUID(), name: '文件导入精度隔离验收', group: '', color: '#345678', dialect: 'mysql', host: process.env.DBARK_TEST_HOST ?? '', port: Number(process.env.DBARK_TEST_PORT ?? 13384), user: process.env.DBARK_TEST_USER ?? '', password: process.env.DBARK_TEST_PASSWORD ?? '',
   ...(process.env.DBARK_TEST_TLS === '1' ? { tls: { enabled: true, rejectUnauthorized: true, caPath: process.env.DBARK_TEST_CA } } : {}),
   ...(process.env.DBARK_TEST_SSH === '1' ? { ssh: { enabled: true, host: process.env.DBARK_TEST_SSH_HOST ?? '', port: Number(process.env.DBARK_TEST_SSH_PORT ?? 22), user: process.env.DBARK_TEST_SSH_USER ?? '', privateKeyPath: process.env.DBARK_TEST_SSH_KEY, hostFingerprint: process.env.DBARK_TEST_SSH_FINGERPRINT } } : {}) };
@@ -28,6 +30,8 @@ const events: TaskEvent[] = [];
 let engine: Engine | undefined, admin: ManagedConnection | undefined, observer: ManagedConnection | undefined, restoreDrivers: (() => void) | undefined;
 let createAttempted = false, folderCreated = false, globalMode: unknown;
 let warningProbe: { okWarning: boolean; warningStatus: number | null; diagnosticCodes: number[]; state: 'ok' | 'warning-error' } | undefined;
+let generatedWarningProbe: GeneratedWarningProbe | undefined;
+let timestampWarningProbe: TimestampWarningProbe | undefined;
 
 /** 建连与每次夹具写入前都限制真实目标，不能回退到本机、其它端口或任意库。 */
 function assertTarget(): void {
@@ -136,6 +140,8 @@ describe.skipIf(!enabled)('200 隔离库：真实引擎文件导入精度及警�
     for (const [name, type] of [['decimal_scale', 'DECIMAL(5,2)'], ['decimal_overflow', 'DECIMAL(5,2)'], ['short_text', 'VARCHAR(2)'], ['small_integer', 'TINYINT UNSIGNED'], ['short_time', 'DATETIME(3)'], ['fixed_float', 'FLOAT(5,1)'], ['fixed_double', 'DOUBLE(5,1)']] as const) await execute(admin, `CREATE TABLE ${table(name)} (id INT PRIMARY KEY,${identifier('value')} ${type}) ENGINE=InnoDB`);
     for (const format of ['xlsx', 'csv', 'json']) for (const kind of ['text', 'binary']) await execute(admin, `CREATE TABLE ${table(`bit_${kind}_${format}`)} (id INT PRIMARY KEY,${identifier('value')} BIT(64)) ENGINE=InnoDB`);
     await execute(admin, `CREATE TABLE ${table('warning_rows')} (id INT PRIMARY KEY,${identifier('value')} VARCHAR(30)) ENGINE=InnoDB`);
+    await execute(admin, generatedWarningCreateSql(database));
+    await execute(admin, timestampWarningCreateSql(database));
     for (const row of [
       ['18446744073709551615', '12345678901234567890.123456789012345678', '2026-10-16 10:20:30.123456', Buffer.from([0, 1, 255]), '=SUM(A1)', null],
       ['18446744073709551614', '0.000000000000000001', '2026-10-16 10:20:30.000001', Buffer.from([255, 0]), '\\N', ''],
@@ -260,21 +266,43 @@ describe.skipIf(!enabled)('200 隔离库：真实引擎文件导入精度及警�
       catch (reason) { if ((reason as { sqlState?: string }).sqlState !== '01000') throw reason; state = 'warning-error'; }
       const diagnostics = (await execute<{ Code: number }[]>(probe, 'SHOW WARNINGS LIMIT 32')).rows;
       warningProbe = { okWarning: state === 'ok' && typeof warningStatus === 'number' && warningStatus > 0 && diagnostics.some(row => Number(row.Code) === 1265), warningStatus, diagnosticCodes: diagnostics.map(row => Number(row.Code)), state };
-      console.info(JSON.stringify({ 验收: '触发器警告实际传播', ...warningProbe, 边界: warningProbe.okWarning ? '可执行真实 OK 警告回滚断言' : '该版本未观察到可识别 OK 警告，后续警告保护用例将明确跳过' }));
+      console.info(JSON.stringify({ 验收: '触发器警告实际传播', ...warningProbe, 边界: warningProbe.okWarning ? '可执行真实 OK 警告回滚断言' : '该版本未观察到触发器可识别 OK 警告；保留此事实，另行探测生成列夹具' }));
     } finally { try { await execute(probe, 'ROLLBACK'); } finally { await probe.close({ strict: true }); } }
     expect(await rowCount('warning_rows')).toBe('0');
   });
 
+  it('实际探测非严格专用会话生成列越界的 OK 警告，ERR 不冒充 OK', async () => {
+    const probe = await raw(true);
+    try { generatedWarningProbe = await probeGeneratedColumnWarning(probe, database); }
+    finally { await probe.close({ strict: true }); }
+    console.info(JSON.stringify({ 验收: '生成列越界警告实际传播', ...generatedWarningProbe, 边界: generatedWarningProbe.okWarning ? '实际观察到 OK 警告、1264 诊断及事务内 127，可用于批次回滚断言' : '本版本未取得可识别生成列 OK 警告；保留实际 OK/ERR 和诊断事实' }));
+    expect(await rowCount(generatedWarningTableName)).toBe('0');
+  });
+
+  it('实际探测 TIMESTAMP(6) 日历合法但超存储范围的真实 OK 警告', async () => {
+    const probe = await raw(true);
+    try { timestampWarningProbe = await probeTimestampRangeWarning(probe, database); }
+    finally { await probe.close({ strict: true }); }
+    console.info(JSON.stringify({ 验收: '时间戳范围警告实际传播', ...timestampWarningProbe, 边界: timestampWarningProbe.okWarning ? '实际观察到 OK 警告及范围诊断，优先用于批次回滚断言' : '本版本未取得可识别时间戳 OK 警告；保留实际 OK/ERR 和诊断事实' }));
+    expect(await rowCount(timestampWarningTableName)).toBe('0');
+  });
+
   it('真实 OK 警告诊断先于下一条写入，回滚第 501 行且保留先前 500 行', async context => {
-    if (!warningProbe) throw new Error('触发器警告能力尚未实际探测');
-    if (!warningProbe.okWarning) { console.info('该版本触发器未提供可识别 OK 警告；本项未覆盖，不能计为警告保护通过。'); context.skip(); return; }
-    const path = await sourceFile('warning-batch', 'xlsx', Array.from({ length: 502 }, (_, index) => ({ id: String(index + 1), value: `row-${index + 1}` }))), attempt = await importFile('warning_rows', path, 'xlsx', ['id', 'value']);
+    if (!warningProbe || !generatedWarningProbe || !timestampWarningProbe) throw new Error('三种真实警告能力尚未全部探测');
+    if (!warningProbe.okWarning && !generatedWarningProbe.okWarning && !timestampWarningProbe.okWarning) { console.info('时间戳、生成列和触发器均未提供可识别真实 OK 警告；本项未覆盖，不能计为警告保护通过。'); context.skip(); return; }
+    // 优先使用普通用户字段的真实范围警告，其次生成列，最后使用实际传播成功的原触发器。
+    const name = timestampWarningProbe.okWarning ? timestampWarningTableName : generatedWarningProbe.okWarning ? generatedWarningTableName : 'warning_rows';
+    const diagnosticCodes = name === timestampWarningTableName ? timestampWarningProbe.diagnosticCodes.filter(code => code === 1264 || code === 1292) : [name === generatedWarningTableName ? 1264 : 1265];
+    console.info(JSON.stringify({ 验收: '真实 OK 警告批次夹具选择', 来源: name, 诊断代码: diagnosticCodes, 原触发器状态: warningProbe }));
+    const expectedValue = (id: number) => name === timestampWarningTableName ? id === 501 ? timestampWarningOverflowValue : timestampWarningSafeValue : `row-${id}`;
+    const path = await sourceFile('warning-batch', 'xlsx', Array.from({ length: 502 }, (_, index) => ({ id: String(index + 1), value: expectedValue(index + 1) }))), attempt = await importFile(name, path, 'xlsx', ['id', 'value']);
     expect(attempt.result.rows).toBe(500); expect(attempt.result.errors).toHaveLength(1); expect(attempt.result.errors[0]).toContain('第 501'); expect(attempt.result.errors[0]).toContain('当前批 1 行已回滚');
     const frames = attempt.frames, inserts = frames.filter(frame => /^INSERT\b/i.test(frame.sql)); expect(inserts).toHaveLength(501); expect(inserts.at(-1)?.warningStatus).toBeGreaterThan(0);
-    const warningAt = frames.indexOf(inserts.at(-1)!); expect(frames[warningAt + 1]?.sql).toBe('SHOW WARNINGS LIMIT 32'); expect(frames[warningAt + 1]?.diagnosticCodes).toContain(1265);
+    const warningAt = frames.indexOf(inserts.at(-1)!); expect(frames[warningAt + 1]?.sql).toBe('SHOW WARNINGS LIMIT 32'); expect(frames[warningAt + 1]?.diagnosticCodes?.some(code => diagnosticCodes.includes(code))).toBe(true);
     expect(frames.slice(warningAt + 2).map(frame => frame.sql)).toEqual(['ROLLBACK']); expect(frames.filter(frame => frame.sql === 'COMMIT')).toHaveLength(1);
-    const actual = await observed(`SELECT id,${identifier('value')} FROM ${table('warning_rows')} ORDER BY id`); expect(actual).toHaveLength(500);
-    expect(actual.map(row => [String(row.id), row.value])).toEqual(Array.from({ length: 500 }, (_, index) => [String(index + 1), `row-${index + 1}`]));
+    const actual = await observed(`SELECT id,CAST(${identifier('value')} AS CHAR) AS ${identifier('value')} FROM ${table(name)} ORDER BY id`); expect(actual).toHaveLength(500);
+    expect(actual.map(row => [String(row.id), row.value])).toEqual(Array.from({ length: 500 }, (_, index) => [String(index + 1), expectedValue(index + 1)]));
+    if (name === generatedWarningTableName) expect(await observed(`SELECT DISTINCT CAST(warning_guard AS CHAR) AS guard FROM ${table(name)}`)).toEqual([{ guard: '1' }]);
     expect([...events].reverse().find(event => event.taskId === attempt.taskId)?.status).toBe('failed');
   }, 60000);
 });
