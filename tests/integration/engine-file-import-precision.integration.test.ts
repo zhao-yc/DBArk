@@ -147,7 +147,14 @@ describe.skipIf(!enabled)('200 隔离库：真实引擎文件导入精度及警�
   afterAll(async () => {
     const failures: string[] = [];
     /** 每项清理独立执行，前项失败不能跳过文件、其它连接或数据库残留核验。 */
-    const step = async (label: string, action: () => Promise<void>) => { try { await action(); } catch { failures.push(label); } };
+    const step = async (label: string, action: () => Promise<void>) => {
+      try { await action(); }
+      catch (reason) {
+        // 仅对固定清理断言打印诊断，不能把SQL参数、连接配置或认证内容混入日志。
+        if (label === '正常收尾后仍有本轮真实线程' || label === '本轮实际线程收尾失败') console.error(JSON.stringify({ 清理诊断: label, 类型: reason instanceof Error ? reason.name : typeof reason, 原因: reason instanceof Error ? reason.message : '未提供异常说明' }));
+        failures.push(label);
+      }
+    };
     try {
       await step('引擎关闭失败', async () => { await engine?.closeAll(); });
       for (const managed of rawConnections) if (managed !== observer) await step('本轮专用连接严格关闭失败', async () => { await managed.close({ strict: true }); });
@@ -155,7 +162,8 @@ describe.skipIf(!enabled)('200 隔离库：真实引擎文件导入精度及警�
       if (observer) {
         const ids = [...new Set([...drivers].filter(record => record.driver !== observer!.connection).map(record => record.driver.threadId).filter((id): id is number => Number.isSafeInteger(id) && (id ?? 0) > 0))];
         // 先核对正常收尾，随后才强制兜底；不能用兜底清理掩盖产品连接泄漏。
-        if (ids.length) await step('正常收尾后仍有本轮真实线程', async () => { await expect.poll(() => observed('SELECT ID FROM information_schema.PROCESSLIST WHERE ID IN (' + ids.map(() => '?').join(',') + ')', ids), { timeout: 5000, interval: 50 }).toEqual([]); });
+        // Vitest expect.poll只允许测试正文；收尾钩子使用相同期限的真实断言轮询，不能跳过残留核对。
+        if (ids.length) await step('正常收尾后仍有本轮真实线程', async () => { await vi.waitFor(async () => { expect(await observed('SELECT ID FROM information_schema.PROCESSLIST WHERE ID IN (' + ids.map(() => '?').join(',') + ')', ids)).toEqual([]); }, { timeout: 5000, interval: 50 }); });
       }
       for (const record of drivers) if (record.driver !== observer?.connection) await step('真实驱动本地释放失败', () => closeMysqlConnection(record.driver, true, true));
       if (observer) {
@@ -164,7 +172,7 @@ describe.skipIf(!enabled)('200 隔离库：真实引擎文件导入精度及警�
           const remaining = () => observed('SELECT ID FROM information_schema.PROCESSLIST WHERE ID IN (' + ids.map(() => '?').join(',') + ')', ids);
           await step('本轮实际线程收尾失败', async () => {
             for (const row of await remaining()) { const id = Number(row.ID); if (!ids.includes(id)) throw new Error('拒绝清理非本轮线程'); await execute(observer!, `KILL CONNECTION ${id}`); }
-            await expect.poll(remaining, { timeout: 5000, interval: 50 }).toEqual([]);
+            await vi.waitFor(async () => { expect(await remaining()).toEqual([]); }, { timeout: 5000, interval: 50 });
           });
           console.info(JSON.stringify({ 验收: '文件导入逐驱动清理', 本轮真实连接数量: ids.length, 旁观者自身排除: true }));
         }

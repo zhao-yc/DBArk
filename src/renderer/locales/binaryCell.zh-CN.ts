@@ -4,7 +4,7 @@ export const binaryCellZh = {
   invalidBase64: '二进制原值编码无效，无法查看或编辑。', unsupported: '此值不是完整二进制原值。',
   byteLimit: '超过 2 MiB 完整查看预算，未解码或创建图片预览；不能保存截断内容。',
   editLimit: '完整 Hex 编辑最多 131071 字节；较大值仅分页查看，不能将显示片段暂存。',
-  hexInvalid: 'Hex 必须是成对的十六进制数字，可包含空白和开头的 0x。', hexValid: 'Hex 校验通过：{0} 字节。',
+  hexInvalid: 'Hex 必须按完整字节填写成对的十六进制数字，可包含空白和开头的 0x。', hexValid: 'Hex 校验通过：{0} 字节。',
   hexLabel: '完整二进制 Hex', previous: '上一段 Hex', next: '下一段 Hex', segment: '显示字节 {0} 至 {1} / {2}（只读片段）',
   textLabel: '严格解码文本（只读）', textHint: '文本只读，不重新编码或保存；解码失败不会用替代字符改写原字节，BOM 按原文保留。',
   decodeFailed: '所选编码无法完整解码这些字节；原值未改变。', textLimit: '超过 256 KiB 文本解码预算，请使用分页 Hex 查看。',

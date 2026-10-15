@@ -105,7 +105,7 @@ test.describe('Q03 统筹启用的200隔离实库来源绑定', () => {
       const bSql = dangerous + '\n-- 乙标签更新原查询'; await writeSql(bSql); const beforeUpdate = await historyIds();
       await save('保存到原查询'); await expect(saveDialog()).toBeHidden(); expect(await historyIds()).toEqual(beforeUpdate);
       expect(await query().locator('.result-body').innerText()).toBe(b.text); expect((await records()).find(record => record.id === original.id)?.sql).toContain('乙标签更新原查询');
-      await activate(0, '双会话来源'); expect(await query().locator('.result-body').innerText()).toBe(a.text); await expect(query().getByRole('button', { name: '提交', exact: true })).toBeEnabled();
+      await activate(0, '双会话来源'); await expect.poll(() => query().locator('.result-body').innerText()).toBe(a.text); await expect(query().getByRole('button', { name: '提交', exact: true })).toBeEnabled();
       const aSql = dangerous + '\n-- 甲标签陈旧草稿'; await writeSql(aSql); const beforeConflict = await historyIds();
       await save('保存到原查询'); await expect(saveDialog().getByRole('alert')).toContainText('原查询已修改');
       expect(await historyIds()).toEqual(beforeConflict); expect((await records()).find(record => record.id === original.id)?.sql).toContain('乙标签更新原查询');
@@ -141,7 +141,8 @@ test.describe('Q03 统筹启用的200隔离实库来源绑定', () => {
       expect(await historyIds()).toEqual(beforeSave); const copy = (await records()).find(record => record.name === '切库后副本')!; expect(copy.id).not.toBe(original.id); expect(copy.databaseContext).toEqual({ state: 'known', database: 'information_schema' });
       const after = await probe(database, firstId, '切库会话', '切库前未提交', 'information_schema'); expect(after.sessionId).toBe(before.sessionId);
       const beforeOpen = await historyIds(); await openSaved('切库后副本'); expect(await historyIds()).toEqual(beforeOpen); await expect(query().getByLabel('当前查询默认库', { exact: true })).toHaveText('information_schema');
-      await activate(0, '切库后副本'); expect(await query().locator('.result-body').innerText()).toBe(after.text); await expect(query().getByRole('button', { name: '提交', exact: true })).toBeEnabled();
+      // 标签标题先更新，虚拟网格随后测量；等待原结果完整重现，不重发SQL或放宽内容断言。
+      await activate(0, '切库后副本'); await expect.poll(() => query().locator('.result-body').innerText()).toBe(after.text); await expect(query().getByRole('button', { name: '提交', exact: true })).toBeEnabled();
       expect((await probe(database, firstId, '切库会话', '切库前未提交', 'information_schema')).sessionId).toBe(before.sessionId);
       await rollback(); expect((await probe(database, firstId, '切库会话', '原值甲', 'information_schema')).sessionId).toBe(before.sessionId);
       expect(await committed(context)).toEqual([{ id: firstId, note: '原值甲' }, { id: secondId, note: '原值乙' }]);
