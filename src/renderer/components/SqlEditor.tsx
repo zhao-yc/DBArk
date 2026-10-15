@@ -13,7 +13,7 @@ import {invoke,uid} from '../lib';
 import {resolveCompletionContext} from '../completionContext';
 
 export type SqlCompletionStatus='idle'|'partial'|'unavailable'|'limited'|'databaseUnknown';
-export interface SqlCompletionScope{connectionId:string;connectionVersion:number;database?:string;sessionId?:string}
+export interface SqlCompletionScope{connectionId:string;connectionVersion:number;database?:string;databaseUnknown?:boolean;sessionId?:string}
 const completionKinds:Record<SqlCompletionItem['kind'],monaco.languages.CompletionItemKind>={database:monaco.languages.CompletionItemKind.Module,table:monaco.languages.CompletionItemKind.Class,view:monaco.languages.CompletionItemKind.Interface,function:monaco.languages.CompletionItemKind.Function,procedure:monaco.languages.CompletionItemKind.Method,column:monaco.languages.CompletionItemKind.Field,alias:monaco.languages.CompletionItemKind.Variable,keyword:monaco.languages.CompletionItemKind.Keyword};
 
 /** Monaco 使用随安装包发布的编辑器和 worker，离线环境也可直接编辑 SQL。 */
@@ -41,7 +41,7 @@ export function SqlEditor({ value, onChange, onReady, height = '100%', readOnly 
         const current=()=>!disposed&&!controller.signal.aborted&&!model.isDisposed()&&editorRef.current?.getModel()===model&&model.getVersionId()===version&&active===controller;
         try{
           const cached=completion.sessionId?await invoke('query.completionState',{sessionId:completion.sessionId}):undefined;if(!current())return{suggestions:[]};
-          const scope=resolveCompletionContext(completion.database,cached);if(!scope.available){statusRef.current?.(scope.reason==='broken'?'unavailable':'idle');return{suggestions:[]};}
+          const scope=resolveCompletionContext(completion.database,cached,completion.databaseUnknown);if(!scope.available){statusRef.current?.(scope.reason==='broken'?'unavailable':'idle');return{suggestions:[]};}
           const analysis=await worker.analyze(source,offset,scope.mode,controller.signal);if(!current())return{suggestions:[]};
           if(analysis.status==='blocked'){statusRef.current?.(['budget','timeout'].includes(analysis.reason)?'limited':analysis.reason==='worker'?'unavailable':'idle');return{suggestions:[]};}
           const result=await completionSuggestions(analysis,scope.database,directory,controller.signal);if(!current())return{suggestions:[]};
@@ -54,7 +54,7 @@ export function SqlEditor({ value, onChange, onReady, height = '100%', readOnly 
       }
     });
     return()=>{disposed=true;active?.abort();provider.dispose();worker.dispose();directory.dispose();};
-  },[readOnly,completion?.connectionId,completion?.connectionVersion,completion?.database,completion?.sessionId]);
+  },[readOnly,completion?.connectionId,completion?.connectionVersion,completion?.database,completion?.databaseUnknown,completion?.sessionId]);
   /** 挂载时注册一次执行动作，编辑器销毁后 Monaco 自动释放该实例动作。 */
   const mounted: OnMount = editor => {
     editorRef.current = editor; onReady?.(editor);

@@ -16,6 +16,7 @@ const foreignKeyTargetName = z.string().min(1).max(64).refine(value => !value.in
 import { indexAcknowledgementIds } from './tableIndexTasks';
 import { completionLimits } from './sqlCompletion';
 import {completionIdentifier} from './completionLexical';
+const queryDatabaseContext=z.discriminatedUnion('state',[z.object({state:z.literal('known'),database:z.string().min(1).max(256).refine(value=>!value.includes('\0')).nullable()}).strict(),z.object({state:z.literal('unknown')}).strict()]);
 const completionName=z.string().min(1).max(64).refine(completionIdentifier,'补全对象名必须是合法BMP标识符');
 const completionPrefix=z.string().max(completionLimits.prefixUnits).refine(value=>value===''||completionIdentifier(value),'补全前缀含无效字符');
 
@@ -88,7 +89,7 @@ export const commandSchemas: Record<Command, z.ZodType> = {
   'metadata.objects': z.object({ connectionId: id, database: name }).strict(),
   'metadata.table': z.object({ ...target, taskId: id.optional() }).strict(),
   'metadata.ddl': z.object({ connectionId: id, database: name, name, kind: z.enum(['table','view','procedure','function','trigger','event']) }).strict(),
-  'sessions.open': z.object({ connectionId: id, database: name.optional() }).strict(), 'sessions.close': z.object({ sessionId: id }).strict(),
+  'sessions.open': z.object({ connectionId: id, database: name.nullable().optional() }).strict(), 'sessions.close': z.object({ sessionId: id }).strict(),
   'query.execute': z.object({ sessionId: id, sql: text.min(1), taskId: id, maxRows: z.number().int().min(1).max(100000) }).strict(),
   'query.explain': z.object({ sessionId: id, sql: text.min(1), taskId: id, maxRows: z.number().int().min(1).max(100000) }).strict(),
   'query.parameterNames': z.object({ sessionId: id, sql: text.min(1) }).strict(),
@@ -128,10 +129,10 @@ export const commandSchemas: Record<Command, z.ZodType> = {
   'files.import': z.object({ ...fileOptions, mapping: ownRecord(z.string(), '导入映射') }).strict(),
   'files.export': z.object({ ...fileOptions, includeStructure: z.boolean(), includeData: z.boolean() }).strict(),
   'files.exportResult': z.object({ fileToken: id, format: z.enum(['csv','json']), encoding: z.enum(['utf8','utf16le','gb18030']), taskId: id, result: resultExportData }).strict(),
-  'queries.list': empty, 'queries.save': z.object({ id, name, connectionId: id.optional(), database: name.optional(), sql: text, updatedAt: z.string() }).strict(), 'queries.delete': z.object({ id }).strict(),
+  'queries.list': empty, 'queries.save': z.object({ id, name, connectionId: id.optional(), database: name.optional(), databaseContext:queryDatabaseContext.optional(), sql: text, updatedAt: z.string() }).strict(), 'queries.delete': z.object({ id }).strict(),
   'snippets.list': empty, 'snippets.save': snippetSchema, 'snippets.delete': z.object({ id }).strict(),
   'history.list': z.object({ connectionId: id.optional() }).strict(), 'tasks.list': empty,
-  'settings.get': empty, 'settings.save': z.object({ theme: z.enum(['dark','light']), sidebarWidth: z.number().min(180).max(600), resultLimit: z.number().int().min(1).max(100000), pageSize: z.number().int().min(1).max(1000), tabs: z.array(z.object({ id, kind: z.enum(['query','table']), title: name, connectionId: id, database: z.string().optional(), table: z.string().optional(), sql: text.optional() }).strict()).max(100), activeTabId: z.string().optional() }).strict()
+  'settings.get': empty, 'settings.save': z.object({ theme: z.enum(['dark','light']), sidebarWidth: z.number().min(180).max(600), resultLimit: z.number().int().min(1).max(100000), pageSize: z.number().int().min(1).max(1000), tabs: z.array(z.object({ id, kind: z.enum(['query','table']), title: name, connectionId: id, database: z.string().optional(), databaseContext:queryDatabaseContext.optional(), table: z.string().optional(), sql: text.optional() }).strict()).max(100), activeTabId: z.string().optional() }).strict()
 };
 
 /** 只接受已声明命令；剔除任意路径、原型字段和其他非约定输入。 */

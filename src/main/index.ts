@@ -16,6 +16,7 @@ import { validateCommand } from '../shared/validation';
 import type { Command, ConnectionProfile, HistoryEntry, QueryFileEncoding, TaskEvent, TaskRecord } from '../shared/contracts';
 import type { QueryExportProgress } from '../shared/queryStreamExport';
 import type { TableColumnApplyProgress } from '../shared/tableColumnPatches';
+import {queryDatabasePatch} from '../shared/queryContext';
 
 if (process.env.DBARK_USER_DATA) { mkdirSync(process.env.DBARK_USER_DATA, { recursive: true }); app.setPath('userData', process.env.DBARK_USER_DATA); }
 app.setName('DBArk');
@@ -30,7 +31,9 @@ let stateFlushed: { resolve(): void; reject(error: Error): void } | undefined;
 let hasPendingEdits = false;
 let rendererHasSettings = false;
 let lastStorageWarning = 0;
-const sessions = new Map<string, { connectionId: string; database?: string }>();
+const sessions = new Map<string, { connectionId: string }>();
+// 历史上下文由引擎在会话互斥内报告，不能由渲染进程提供或从较早的标签状态推测。
+const pendingQueryHistory = new Map<string,HistoryEntry>();
 const files = new Map<string, { path: string; purpose: string; format?: string }>();
 const queryFileOperations = new Set<Promise<unknown>>();
 const exportReservations = new ExportReservations();
@@ -58,6 +61,8 @@ function persistAuxiliary(action: () => void): void {
 /** 任务进度只保留概要；分批结果直接传输，不把整批数据写入配置库。 */
 function taskEvent(event: TaskEvent): void {
   if(completionTasks.has(event.taskId))return;
+  const history=pendingQueryHistory.get(event.taskId);
+  if(history&&event.executionDatabase)Object.assign(history,queryDatabasePatch(event.executionDatabase));
   if (event.queryExport) exportProgress.set(event.taskId, { ...event.queryExport });
   const structure = event.foreignKeyPatch ?? event.indexPatch ?? event.columnPatch;
   if (structure) structureProgress.set(event.taskId, { ...structure });
@@ -193,7 +198,8 @@ async function dispatch(command: Command, input: any): Promise<unknown> {
     tasks.set(taskId, task); store.saveTask(task);
   }
   const session = sessions.get(input.sessionId);
-  const history: HistoryEntry | undefined = (command === 'query.execute' || command === 'query.executeParameterized' || command === 'query.exportStream') && session ? { id: randomUUID(), connectionId: session.connectionId, database: session.database, sql: input.sql, startedAt, elapsedMs: 0, success: false } : undefined;
+  const history: HistoryEntry | undefined = (command === 'query.execute' || command === 'query.executeParameterized' || command === 'query.exportStream') && session ? { id: randomUUID(), connectionId: session.connectionId, databaseContext:{state:'unknown'}, sql: input.sql, startedAt, elapsedMs: 0, success: false } : undefined;
+  if(history&&taskId)pendingQueryHistory.set(taskId,history);
   const preparing: { cancelled: boolean; failure?: string } = { cancelled: false }; if (taskId) preparingTasks.set(taskId, preparing);
   let releaseTarget: (() => void) | undefined;
   let sentToEngine = false;
@@ -217,7 +223,7 @@ async function dispatch(command: Command, input: any): Promise<unknown> {
       if (input.snapshotId) for (const [token, value] of structureTokens) if (value.purpose === structurePurpose && (token === input.snapshotId || value.snapshotId === input.snapshotId)) structureTokens.delete(token);
       if (input.previewToken) structureTokens.delete(input.previewToken);
     }
-    if (command === 'sessions.open') sessions.set(result.sessionId, { connectionId: input.connectionId, database: input.database });
+    if (command === 'sessions.open') sessions.set(result.sessionId, { connectionId: input.connectionId });
     if (command === 'sessions.close') sessions.delete(input.sessionId);
     if (taskId && tasks.get(taskId)?.status === 'running') taskEvent({ taskId, status: 'completed', progress: 100, message: '执行完成' });
     if (history) persistAuxiliary(() => store.addHistory({ ...history, elapsedMs: Date.now() - start, success: true }));
@@ -227,7 +233,7 @@ async function dispatch(command: Command, input: any): Promise<unknown> {
     if (taskId && tasks.get(taskId)?.status === 'running') taskEvent({ taskId, status: preparing.cancelled ? 'cancelled' : 'failed', progress: 0, message, ...(structureCommand ? { [structurePurpose === 'indexes' ? 'indexPatch' : structurePurpose === 'foreignKeys' ? 'foreignKeyPatch' : 'columnPatch']: { phase: 'connecting' as const, ddlSubmitted: sentToEngine && command === structurePrefix + 'apply', ddlCompleted: false, definitionVerified: false, outcome: sentToEngine && command === structurePrefix + 'apply' ? 'unknown' as const : 'not-sent' as const, ...structureProgress.get(taskId) } } : {}), ...(command === 'query.exportStream' ? { queryExport: { phase: 'preparing' as const, statementsCompleted: 0, rowsWritten: 0, bytesWritten: 0, fileCommitted: false, ...exportProgress.get(taskId), sqlMayHaveExecuted: sentToEngine, transactionKnown: false } } : {}) });
     if (history) persistAuxiliary(() => store.addHistory({ ...history, elapsedMs: Date.now() - start, error: persistedQueryError(command, message) }));
     throw error;
-  } finally { if (command === structurePrefix + 'apply') structureTokens.delete(input.previewToken); if (taskId) { preparingTasks.delete(taskId); exportProgress.delete(taskId); structureProgress.delete(taskId); } releaseTarget?.(); }
+  } finally { if (command === structurePrefix + 'apply') structureTokens.delete(input.previewToken); if (taskId) { pendingQueryHistory.delete(taskId); preparingTasks.delete(taskId); exportProgress.delete(taskId); structureProgress.delete(taskId); } releaseTarget?.(); }
 }
 
 /** 按平台生成中文原生菜单，查询快捷键统一发送给当前工作区。 */

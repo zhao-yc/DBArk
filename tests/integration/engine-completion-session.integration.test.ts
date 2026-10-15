@@ -32,6 +32,19 @@ describe.skipIf(!enabled)('200隔离实例：补全读取真实会话缓存',()=
     await session(async id=>{const cached=await state(id);expect(cached).toMatchObject({database:a,databaseKnown:true,broken:false,busy:false});expect(typeof cached.ansiQuotes).toBe('boolean');expect(typeof cached.noBackslashEscapes).toBe('boolean');});
     const{sessionId}=await engine.handle('sessions.open',{connectionId:profile.id});try{expect(await state(sessionId)).toMatchObject({database:null,databaseKnown:true,broken:false,busy:false});}finally{await engine.handle('sessions.close',{sessionId});}
   });
+  it('历史事件在会话互斥内固定执行前默认库，脚本切库、参数和失败不挪用完成后的库',async()=>session(async id=>{
+    await run(id,`USE ${identifier(b)}`);
+    const taskId=randomUUID();await engine.handle('query.execute',{sessionId:id,taskId,sql:`USE ${identifier(a)};SELECT DATABASE()`,maxRows:20});
+    expect(events.filter(event=>event.taskId===taskId&&event.executionDatabase).map(event=>event.executionDatabase)).toEqual([{state:'known',database:b}]);expect((await state(id)).database).toBe(a);
+    const parameterId=randomUUID();await engine.handle('query.executeParameterized',{sessionId:id,taskId:parameterId,sql:'SELECT :v',parameters:[{name:'v',type:'text',value:'参数'}],maxRows:20});expect(events.find(event=>event.taskId===parameterId&&event.executionDatabase)?.executionDatabase).toEqual({state:'known',database:a});
+    const failed=randomUUID();await expect(engine.handle('query.execute',{sessionId:id,taskId:failed,sql:'SELECT * FROM dbark_missing_context_subject',maxRows:20})).rejects.toThrow();expect(events.find(event=>event.taskId===failed&&event.executionDatabase)?.executionDatabase).toEqual({state:'known',database:a});
+    const unknown=randomUUID();await engine.handle('query.execute',{sessionId:id,taskId:unknown,sql:'SELECT 1',maxRows:20});expect(events.find(event=>event.taskId===unknown&&event.executionDatabase)?.executionDatabase).toEqual({state:'unknown'});
+  }));
+  it('显式空库建连覆盖连接配置默认库，历史事件不会把无库误记为配置库',async()=>{
+    const configured={...profile,id:randomUUID(),database:a};await engine.handle('connections.open',{id:configured.id,profile:configured});const{sessionId}=await engine.handle('sessions.open',{connectionId:configured.id,database:null});
+    try{expect(await state(sessionId)).toMatchObject({databaseKnown:true,database:null});const taskId=randomUUID();expect(cell(await engine.handle('query.execute',{sessionId,taskId,sql:'SELECT DATABASE() AS db',maxRows:20}),'db')).toBeNull();expect(events.find(event=>event.taskId===taskId&&event.executionDatabase)?.executionDatabase).toEqual({state:'known',database:null});}
+    finally{await engine.handle('sessions.close',{sessionId});await engine.handle('connections.close',{id:configured.id});}
+  });
   it('USE后的目录来源为B，原连接、事务和A库临时表保持独立',async()=>session(async id=>{
     await run(id,'CREATE TEMPORARY TABLE marker(v BIGINT);INSERT INTO marker VALUES(9007199254740993);BEGIN;INSERT INTO subject(id,a_column) VALUES(19,\'未提交\')');const before=(await run(id,'SELECT CONNECTION_ID() AS id,v FROM marker')).results[0].rows[0];await run(id,`USE ${identifier(b)}`);const cached=await state(id);expect(cached.database).toBe(b);const directory=await engine.handle('metadata.completion',{connectionId:profile.id,taskId:randomUUID(),kind:'columns',database:cached.database,table:'subject',prefix:''});expect(directory.entries.map((value:{name:string})=>value.name)).toContain('b_column');expect(directory.entries.map((value:{name:string})=>value.name)).not.toContain('a_column');expect((await run(id,`SELECT CONNECTION_ID() AS id,v FROM ${qualified(a,'marker')}`)).results[0].rows[0]).toEqual(before);expect((await engine.handle('query.sessionState',{sessionId:id})).transactionOpen).toBe(true);expect((await execute<Record<string,unknown>[]>(observer!,`SELECT COUNT(*) AS n FROM ${qualified(a,'subject')} WHERE id=19`)).rows[0].n).toBe('0');await engine.handle('query.transaction',{sessionId:id,action:'rollback'});
   }));

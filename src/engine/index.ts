@@ -12,6 +12,7 @@ import * as metadata from './metadata';
 import { completionMetadata } from './completionMetadata';
 import type {CompletionMetadataInput} from '../shared/sqlCompletion';
 import {completionSessionState} from './completionSession';
+import {queryDatabaseFromSession} from '../shared/queryContext';
 import { csvCell, csvHeader, encodingName, previewFile, readRecords, readText } from './files';
 import { ResultFileTasks } from './resultFileTasks';
 import { TableColumnPatchTasks } from './tableColumnPatchTasks';
@@ -349,7 +350,8 @@ export class Engine {
     const done = new Promise<void>(resolve => { finish = resolve; });
     const task: RunningTask = { id, managed, cancelled: false, inFlight: false, generation: 0, done, finish };
     this.tasks.set(id, task);
-    this.emit({ taskId: id, status: 'running', progress: 0, message: label });
+    // 在取得会话互斥后、发送用户SQL前固定历史上下文，避免完成后读到脚本切换后的库。
+    this.emit({ taskId: id, status: 'running', progress: 0, message: label, executionDatabase:queryDatabaseFromSession(completionSessionState(managed,false)) });
     try {
       const result = await action(task);
       this.checkCancelled(task);

@@ -72,7 +72,7 @@ test('真实写盘失败不会丢失布局，修复后保存设置及重启不�
   expect((await page.evaluate(() => window.dbark.invoke('connections.list', {})))[0].host).toBe(connection.host); await expectOfflineOnly();
 });
 
-test('真实 schema2 配置启动迁移至 schema4，既有查询片段设置原样保留', async () => {
+test('真实 schema2 配置启动迁移至 schema5，既有查询片段设置原样保留', async () => {
   const connection = await offlineConnection();
   await page.evaluate(async id => {
     await window.dbark.invoke('queries.save', { id: '旧查询', name: '旧查询', connectionId: id, sql: 'SELECT 7', updatedAt: '' });
@@ -84,7 +84,7 @@ test('真实 schema2 配置启动迁移至 schema4，既有查询片段设置原
   const before = old.exec('SELECT * FROM connections; SELECT * FROM queries; SELECT * FROM sql_snippets; SELECT * FROM settings'); await writeFile(file, old.export()); old.close();
   await launchDesktop();
   const migrated = new SQL.Database(await readFile(file));
-  expect(migrated.exec('PRAGMA user_version')[0].values[0][0]).toBe(4);
+  expect(migrated.exec('PRAGMA user_version')[0].values[0][0]).toBe(5);
   expect(migrated.exec('SELECT * FROM connections; SELECT * FROM queries; SELECT * FROM sql_snippets; SELECT * FROM settings')).toEqual(before); migrated.close();
   expect(await get({ connectionId: connection.id, database: '库', table: '表' })).toBeNull(); await expectOfflineOnly();
 });

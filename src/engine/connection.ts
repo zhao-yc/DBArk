@@ -130,7 +130,7 @@ export function execute<T = Record<string, unknown>[]>(managed: ManagedConnectio
 }
 
 /** 建立数据库连接前完成 SSH 主机校验和 TLS 文件加载；任何阶段失败都会释放隧道。 */
-export async function connect(profile: ConnectionProfile, database = profile.database, signal?: AbortSignal): Promise<ManagedConnection> {
+export async function connect(profile: ConnectionProfile, database:string|null|undefined = profile.database, signal?: AbortSignal): Promise<ManagedConnection> {
   assertConnectionReady(profile);
   let ssh: SshClient | undefined;
   let sshClosed = false;

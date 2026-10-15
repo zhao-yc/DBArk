@@ -65,7 +65,7 @@ test.describe('200隔离实库：Monaco语义补全',()=>{
   test('USE切库后的面包屑与字段采用真实默认库，已知ANSI模式支持双引号编辑',async({},info)=>{
     test.setTimeout(120000);await isolatedDatabase(async({observer,database})=>extraDatabase(observer,async other=>{
       await observer.query(`CREATE TABLE \`${database}\`.subject(a_column INT)`);await observer.query(`CREATE TABLE \`${other}\`.subject(b_column INT)`);await openDatabaseQuery(database);await executeSql(`USE \`${other}\``);await expect(query().getByLabel('当前查询默认库',{exact:true})).toHaveText(other);await atCaret('SELECT s.b_| FROM subject s');await choose('b_column');await expectSql('SELECT s.`b_column` FROM subject s');
-      const settings=await page.evaluate(()=>window.dbark.invoke('settings.get',{}));expect(settings.tabs.find(tab=>tab.id===settings.activeTabId)?.database).toBe(database);
+      const settings=await page.evaluate(()=>window.dbark.invoke('settings.get',{}));expect(settings.tabs.find(tab=>tab.id===settings.activeTabId)?.database).toBe(other);expect(settings.tabs.find(tab=>tab.id===settings.activeTabId)?.databaseContext).toEqual({state:'known',database:other});
       await executeSql(`USE \`${database}\`;SET SESSION sql_mode='ANSI_QUOTES,NO_BACKSLASH_ESCAPES'`);await expect(query().getByLabel('当前查询默认库',{exact:true})).toHaveText(database);await atCaret('SELECT "s"."a_|suffix" FROM subject "s"');await choose('a_column');await expectSql('SELECT "s".`a_column` FROM subject "s"');await page.screenshot({path:info.outputPath('session-mode-completion.png')});
     }),info);
   });

@@ -36,9 +36,9 @@ describe('独立 SQL 片段库', () => {
     db.run('INSERT INTO queries VALUES (?,?,?)', ['旧查询', JSON.stringify({ id: '旧查询', name: '旧查询', sql: 'SELECT 7', updatedAt: '' }), '']);
     db.run('INSERT INTO settings VALUES (1,?)', [JSON.stringify({ theme: 'light', tabs: [] })]); writeFileSync(file, db.export()); db.close();
     const store = await LocalStore.open(file, wasm, protector); expect(store.queries()[0].sql).toBe('SELECT 7'); expect(store.settings().theme).toBe('light'); expect(store.snippets()).toEqual([]); store.close();
-    const migrated = new SQL.Database(readFileSync(file)); expect(migrated.exec('PRAGMA user_version')[0].values[0][0]).toBe(4); migrated.close();
-    // 0.2 使用 schema1，0.3～0.5 使用 schema2，0.6 使用 schema3；本轮 schema4 回退必须恢复升级前备份，不能重置配置库。
-    const future = new SQL.Database(readFileSync(file)); future.run('PRAGMA user_version=5'); writeFileSync(file, future.export()); future.close(); const before = readFileSync(file);
+    const migrated = new SQL.Database(readFileSync(file)); expect(migrated.exec('PRAGMA user_version')[0].values[0][0]).toBe(5); migrated.close();
+    // 0.2 使用 schema1，0.3～0.5 使用 schema2，0.6 使用 schema3；本轮 schema5 回退必须恢复升级前备份，不能重置配置库。
+    const future = new SQL.Database(readFileSync(file)); future.run('PRAGMA user_version=6'); writeFileSync(file, future.export()); future.close(); const before = readFileSync(file);
     await expect(LocalStore.open(file, wasm, protector)).rejects.toThrow('更新版本'); expect(readFileSync(file).equals(before)).toBe(true);
   });
   it('迁移写盘失败完整保留旧配置，修复后可重新迁移', async () => {

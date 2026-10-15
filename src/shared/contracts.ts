@@ -7,6 +7,7 @@ import type { TableColumnGetInput, TableColumnGetOutput, TableColumnPreviewInput
 import type { TableIndexGetInput, TableIndexGetOutput, TableIndexPreviewInput, TableIndexPreviewOutput, TableIndexApplyInput, TableIndexApplyOutput, TableIndexApplyProgress, TableIndexReleaseInput } from './tableIndexTasks';
 import type { TableForeignKeyGetInput, TableForeignKeyGetOutput, TableForeignKeyPreviewInput, TableForeignKeyPreviewOutput, TableForeignKeyApplyInput, TableForeignKeyApplyOutput, TableForeignKeyApplyProgress, TableForeignKeyReleaseInput } from './tableForeignKeyTasks';
 import type { CompletionMetadataInput, CompletionMetadataOutput,CompletionSessionState } from './sqlCompletion';
+import type {QueryDatabaseContext} from './queryContext';
 export type CellValue = string | number | boolean | null | { type: 'binary'; base64: string };
 export type DataRow = Record<string, CellValue>;
 export type ObjectKind = 'table' | 'view' | 'procedure' | 'function' | 'trigger' | 'event';
@@ -37,15 +38,15 @@ export interface TablePage { rows: DataRow[]; columns: ResultColumn[]; hasMore: 
 export type RowChange = { kind: 'insert'; values: DataRow } | { kind: 'update'; before: DataRow; values: DataRow } | { kind: 'delete'; before: DataRow };
 export interface SqlPreview { sql: string; statements: { sql: string; params: CellValue[] }[]; warnings: string[]; }
 export interface TableDesign { database: string; name: string; originalName?: string; engine: string; charset: string; comment: string; columns: { name: string; originalName?: string; type: string; nullable: boolean; defaultValue?: string | null; autoIncrement: boolean; comment: string }[]; indexes: IndexInfo[]; foreignKeys: ForeignKeyInfo[]; }
-export interface SavedQuery { id: string; name: string; connectionId?: string; database?: string; sql: string; updatedAt: string; }
+export interface SavedQuery { id: string; name: string; connectionId?: string; database?: string; databaseContext?:QueryDatabaseContext; sql: string; updatedAt: string; }
 /** 可复用片段独立于连接、查询标签与执行历史。 */
 export interface SqlSnippet { id: string; name: string; group: string; description: string; sql: string; updatedAt: string; }
-export interface HistoryEntry { id: string; connectionId: string; database?: string; sql: string; startedAt: string; elapsedMs: number; success: boolean; error?: string; }
+export interface HistoryEntry { id: string; connectionId: string; database?: string; databaseContext?:QueryDatabaseContext; sql: string; startedAt: string; elapsedMs: number; success: boolean; error?: string; }
 export interface TaskRecord { id: string; kind: string; status: 'running' | 'completed' | 'cancelled' | 'failed'; progress: number; message: string; startedAt: string; finishedAt?: string; errors?: string[]; }
-export interface TaskEvent { taskId: string; status: TaskRecord['status']; progress: number; message: string; rows?: number; resultIndex?: number; columns?: ResultColumn[]; batch?: DataRow[]; queryExport?: QueryExportProgress; columnPatch?: TableColumnApplyProgress; indexPatch?: TableIndexApplyProgress; foreignKeyPatch?: TableForeignKeyApplyProgress; }
+export interface TaskEvent { taskId: string; status: TaskRecord['status']; progress: number; message: string; rows?: number; resultIndex?: number; columns?: ResultColumn[]; batch?: DataRow[]; executionDatabase?:QueryDatabaseContext; queryExport?: QueryExportProgress; columnPatch?: TableColumnApplyProgress; indexPatch?: TableIndexApplyProgress; foreignKeyPatch?: TableForeignKeyApplyProgress; }
 export interface FileChoice { token: string; name: string; }
 export type QueryFileEncoding = 'utf8' | 'utf16le' | 'gb18030';
-export interface AppSettings { theme: 'dark' | 'light'; sidebarWidth: number; resultLimit: number; pageSize: number; tabs: { id: string; kind: 'query' | 'table'; title: string; connectionId: string; database?: string; table?: string; sql?: string }[]; activeTabId?: string; }
+export interface AppSettings { theme: 'dark' | 'light'; sidebarWidth: number; resultLimit: number; pageSize: number; tabs: { id: string; kind: 'query' | 'table'; title: string; connectionId: string; database?: string; databaseContext?:QueryDatabaseContext; table?: string; sql?: string }[]; activeTabId?: string; }
 export interface ImportOptions { connectionId: string; database: string; table: string; fileToken: string; format: 'csv' | 'json' | 'sql'; encoding: 'utf8' | 'utf16le' | 'gb18030'; mapping: Record<string, string>; taskId: string; }
 export interface ExportOptions { connectionId: string; database: string; table: string; fileToken: string; format: 'csv' | 'json' | 'sql'; encoding: 'utf8' | 'utf16le' | 'gb18030'; includeStructure: boolean; includeData: boolean; taskId: string; }
 /** 仅包含已经返回的结果，不携带可触发数据库访问的 SQL、连接或会话。 */
@@ -73,7 +74,7 @@ export interface CommandMap {
   'metadata.objects': { input: { connectionId: string; database: string }; output: DatabaseObject[] };
   'metadata.table': { input: { connectionId: string; database: string; table: string; taskId?: string }; output: TableInfo };
   'metadata.ddl': { input: { connectionId: string; database: string; name: string; kind: ObjectKind }; output: string };
-  'sessions.open': { input: { connectionId: string; database?: string }; output: { sessionId: string } };
+  'sessions.open': { input: { connectionId: string; database?: string|null }; output: { sessionId: string } };
   'sessions.close': { input: { sessionId: string }; output: void };
   'query.execute': { input: { sessionId: string; sql: string; taskId: string; maxRows: number }; output: QueryOutcome };
   'query.explain': { input: { sessionId: string; sql: string; taskId: string; maxRows: number }; output: QueryOutcome };

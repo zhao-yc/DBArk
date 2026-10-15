@@ -30,7 +30,7 @@ export class LocalStore {
   /** 版本迁移在事务中进行，失败时保留原磁盘文件。 */
   private migrate(): void {
     const version = Number(this.db.exec('PRAGMA user_version')[0]?.values[0]?.[0] ?? 0);
-    if (version > 4) throw new Error('配置库由更新版本的 DBArk 创建，请使用新版本打开');
+    if (version > 5) throw new Error('配置库由更新版本的 DBArk 创建，请使用新版本打开');
     this.mutate(() => {
       this.db.run(`CREATE TABLE IF NOT EXISTS connections (id TEXT PRIMARY KEY, data TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS secrets (connection_id TEXT NOT NULL, name TEXT NOT NULL, value TEXT NOT NULL, PRIMARY KEY(connection_id,name));
@@ -40,7 +40,7 @@ export class LocalStore {
         CREATE TABLE IF NOT EXISTS settings (id INTEGER PRIMARY KEY CHECK(id=1), data TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS sql_snippets (id TEXT PRIMARY KEY, data TEXT NOT NULL, updated_at TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS table_preferences (connection_id TEXT NOT NULL, database_name TEXT NOT NULL, table_name TEXT NOT NULL, data TEXT NOT NULL, PRIMARY KEY(connection_id,database_name,table_name));
-        PRAGMA user_version=4;`);
+        PRAGMA user_version=5;`);
     });
     // 上次异常退出的长任务不自动重试，尤其不能重放写操作。
     for (const task of this.tasks()) if (task.status === 'running') this.saveTask({ ...task, status: 'failed', finishedAt: new Date().toISOString(), message: '应用上次退出时任务未完成，请核对数据库状态' });
