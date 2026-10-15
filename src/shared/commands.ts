@@ -9,6 +9,7 @@ export const publicCommands: Record<Command, true> = {
   'metadata.databases': true, 'metadata.objects': true, 'metadata.table': true, 'metadata.ddl': true, 'metadata.completion': true,
   'search.structure':true,'search.structureContinue':true,'search.release':true,
   'search.dataStart':true,'search.dataNext':true,'search.dataRelease':true,
+  'search.catalogue':true,
   'sessions.open': true, 'sessions.close': true, 'query.execute': true, 'query.explain': true, 'query.cancel': true, 'query.transaction': true,
   'query.parameterNames': true, 'query.executeParameterized': true, 'query.sessionState': true,'query.completionState':true,
   'query.temporaryState':true,'query.temporaryCompletion':true,'query.temporaryRead':true,

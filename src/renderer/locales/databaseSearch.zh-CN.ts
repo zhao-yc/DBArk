@@ -1,6 +1,7 @@
 /** 全库搜索文案集中存放，首批入口明确为结构名称搜索。 */
 export const databaseSearchZh={
   entry:'全库搜索',title:'全库搜索：结构名称',connection:'连接',databases:'数据库范围（每行一个）',
+  dataMode:'搜索数据',
   databaseHint:'最多32个数据库，仅搜索当前账号可见的结构名称。不会读取表或视图中的数据；目录在搜索后可能变化。',
   pattern:'搜索文字',mode:'匹配方式',modes:{contains:'包含文字',whole:'完整名称',prefix:'前缀',regexp:'服务器正则'},
   kinds:{table:'表',view:'视图',column:'字段',index:'索引',primaryKey:'主键',foreignKey:'外键',procedure:'存储过程',function:'函数',trigger:'触发器',event:'事件'},

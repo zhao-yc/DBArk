@@ -129,7 +129,7 @@ async function dispatch(command: Command, input: any): Promise<unknown> {
     case 'search.structure':case 'search.structureContinue':case 'search.dataStart':
       if(shuttingDown)throw Error('客户端正在退出，不能开始搜索');
       input={...input,profile:store.resolveConnection(input.connectionId)};break;
-    case 'metadata.completion': {
+    case 'metadata.completion':case 'search.catalogue': {
       if(shuttingDown)throw new Error('客户端正在退出，不能读取补全目录');
       if(tasks.has(input.taskId)||completionTasks.has(input.taskId))throw new Error('任务编号已使用，请重新发起操作');
       if(completionTasks.size>=8)throw new Error('补全目录读取繁忙，请稍后触发');

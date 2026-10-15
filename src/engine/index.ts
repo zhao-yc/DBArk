@@ -15,6 +15,7 @@ import {completionSessionState} from './completionSession';
 import {readSessionObject} from './sessionObjectRead';
 import {StructureSearches} from './structureSearch';
 import {DataSearchTasks} from './dataSearchTasks';
+import {readDataSearchCatalogue} from './dataSearchCatalogue';
 import {queryDatabaseFromSession} from '../shared/queryContext';
 import { csvCell, csvHeader, encodingName, previewFile, readRecords, readText } from './files';
 import { ResultFileTasks } from './resultFileTasks';
@@ -138,6 +139,10 @@ export class Engine {
         return this.dataSearches.start(request,action=>this.withIndependentTask(input.connectionId,input.taskId,(managed,control)=>action({managed,...control,stop:()=>this.stopIndependentRead(input.taskId)}),undefined,'搜索数据',true,()=>this.dataSearches.detail(input.taskId)));
       }
       case 'search.dataNext':return this.dataSearches.next(input);
+      case 'search.catalogue':{
+        const{profile,...request}=input;if(!profile||profile.id!==input.connectionId)throw Error('主进程未提供有效范围连接配置');if(!this.profiles.has(profile.id))this.profiles.set(profile.id,profile);
+        return this.withIndependentTask(input.connectionId,input.taskId,(managed,control)=>readDataSearchCatalogue({managed,...control},request),undefined,'读取搜索范围',true);
+      }
       case 'search.dataRelease':
         if(!this.dataSearches.assertOwner(input))return;await this.cancelTask(input.taskId);return this.dataSearches.release(input);
       case 'metadata.completion': {

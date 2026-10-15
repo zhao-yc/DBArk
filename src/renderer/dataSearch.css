@@ -1,0 +1,18 @@
+.data-search-content { display:flex;flex-direction:column;gap:10px; }
+.data-search-catalogue { display:grid;grid-template-columns:1fr 1fr 1.4fr;gap:12px;border:0;padding:0;margin:0;min-width:0; }
+.data-search-catalogue section { min-width:0;display:flex;flex-direction:column;gap:7px; }
+.data-search-catalogue h3 { margin:0;font-size:13px; }
+.data-search-catalogue .field { min-width:0; }
+.data-search-page-actions { display:flex;gap:6px;flex-wrap:wrap;align-items:center; }
+.data-search-fields { max-height:135px;min-height:90px;overflow:auto;border:1px solid var(--border);border-radius:5px;padding:5px; }
+.data-search-field { display:flex;align-items:center;gap:6px;padding:3px; }
+.data-search-field label { flex:1;min-width:0;display:flex;gap:5px;align-items:center;overflow-wrap:anywhere; }
+.data-search-field input,.data-search-check input { width:auto;margin:0; }
+.data-search-field select { max-width:100px;padding:3px; }
+.data-search-scope { display:flex;flex-wrap:wrap;gap:6px;max-height:75px;overflow:auto; }
+.data-search-checks { display:flex;gap:14px;flex-wrap:wrap; }
+.data-search-check { display:flex;align-items:center;gap:5px; }
+.data-search-conditions { margin-top:5px; }
+/* 目录和条件较多时由内容区滚动，不能让结果虚拟表格被flex压成一条线。 */
+.data-search-content > .rdg { flex-shrink:0;min-height:200px; }
+.data-search-content > fieldset { flex-shrink:0; }

@@ -11,6 +11,7 @@ import type {QueryDatabaseContext} from './queryContext';
 import type {SessionObjectSnapshot,SessionObjectCompletion,SessionObjectReadResult} from './sessionObjects';
 import type {StructureSearchInput,StructureSearchContinue,StructureSearchPage} from './databaseSearch';
 import type {DataSearchInput,DataSearchNext,DataSearchReply,DataSearchProgress} from './dataSearch';
+import type {DataSearchCatalogueInput,DataSearchCataloguePage} from './dataSearchCatalogue';
 export type CellValue = string | number | boolean | null | { type: 'binary'; base64: string };
 export type DataRow = Record<string, CellValue>;
 export type ObjectKind = 'table' | 'view' | 'procedure' | 'function' | 'trigger' | 'event';
@@ -78,6 +79,7 @@ export interface CommandMap {
   'search.structureContinue':{input:StructureSearchContinue;output:StructureSearchPage};
   'search.release':{input:{connectionId:string;cursor:string};output:void};
   'search.dataStart':{input:DataSearchInput;output:DataSearchReply};
+  'search.catalogue':{input:DataSearchCatalogueInput;output:DataSearchCataloguePage};
   'search.dataNext':{input:DataSearchNext;output:DataSearchReply};
   'search.dataRelease':{input:{connectionId:string;taskId:string};output:void};
   'metadata.objects': { input: { connectionId: string; database: string }; output: DatabaseObject[] };
