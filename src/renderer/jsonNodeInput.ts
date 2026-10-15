@@ -1,5 +1,7 @@
 import { boundedUtf8Bytes,jsonLexicalLimits,lexicalNodeAtPath,lexicalToken,parseJsonLexicalTree,type LexicalNode,type LexicalPathSegment,type ReadyLexicalDocument } from './jsonLexicalTree';
 import { jsonNodeInputZh as text } from './locales/jsonNodeInput.zh-CN';
+import { assertTextInputBudget } from './boundedTextInput';
+export const jsonNodeInputBudget = Object.freeze({ units: jsonLexicalLimits.sourceUnits, bytes: jsonLexicalLimits.sourceBytes, message: text.limited });
 export interface JsonNodeInput { readonly document:ReadyLexicalDocument;readonly segments:readonly LexicalPathSegment[];readonly node:LexicalNode;readonly initialToken:string;readonly text:string }
 
 /** 路径必须由明确成员序号/数组下标构成，名称是精确字符串而非对象访问表达式。 */
@@ -13,7 +15,7 @@ export function beginJsonNodeInput(document:ReadyLexicalDocument,segments:readon
 }
 /** 不完整JSON也保留为dirty原文；超预算输入拒绝替换已有完整缓冲。 */
 export function changeJsonNodeInput(input:JsonNodeInput,value:string):JsonNodeInput{
-  if(value.length>jsonLexicalLimits.sourceUnits||boundedUtf8Bytes(value,jsonLexicalLimits.sourceBytes)===undefined)throw Error(text.limited);
+  assertTextInputBudget(value,jsonNodeInputBudget);
   return Object.freeze({...input,text:value});
 }
 /** dirty只比较原始token，合法性不决定是否需要离开保护。 */
@@ -21,6 +23,8 @@ export function jsonNodeInputDirty(input:JsonNodeInput|null):boolean{return !!in
 /** 先核同一文档和节点，再验证替换值及完整合并结果；失败不返回任何部分树或修改旧文档。 */
 export function applyJsonNodeInput(input:JsonNodeInput,current:ReadyLexicalDocument):ReadyLexicalDocument{
   if(current!==input.document||lexicalNodeAtPath(current,{document:current,segments:input.segments})!==input.node||lexicalToken(current,input.node)!==input.initialToken)throw Error(text.changed);
+  // 不信任组件或调用者已做检查，最终合并继续使用相同完整候选预算。
+  assertTextInputBudget(input.text,jsonNodeInputBudget);
   if(!jsonNodeInputDirty(input))return current;
   const replacement=parseJsonLexicalTree(input.text);
   if(replacement.status!=='ready')throw Error(replacement.status==='limited'?text.limited:text.invalid.replace('{0}',replacement.reason));
