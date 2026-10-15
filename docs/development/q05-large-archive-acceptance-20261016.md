@@ -72,3 +72,7 @@ try {
 - 默认入口和未开启环境开关的大模式均未创建验收目录。TypeScript `tsc --noEmit` 与入口语法检查通过。
 
 员工1本地证据在独立克隆缓存：`.cache/q05-large-archive-VXufJ3/`（首次小包保留）与 `.cache/q05-large-archive-8oYBWS/`（成功清理、取消快照及类型日志）。不提交缓存、ZIP、运行时或构建产物。**超过 4 GiB 的真实写入、跨界后的独立解包及其资源观察仍未验，须由统筹使用此入口统一执行。**
+
+## 统筹后续实测
+
+上述为作者准备轮的历史边界。ROOT随后在`.cache/q05-large-archive-d6attQ`实际完成large模式：4297328968字节普通非稀疏归档，第一CSV及所有后续偏移真实跨过ZIP32，独立标准库逐块解包、长度/CRC/SHA和清单核对全部通过；成功后仅精确删除本次ZIP，证据保留。Node逐帧采样RSS303874048字节、堆87000624字节；未采样Python或全进程树峰值，没有硬RSS限额。完整结果及文件层/实库/GUI边界见[第四批验收](../../tests/integration/acceptance-parallel-fourth-20261016.md)。
