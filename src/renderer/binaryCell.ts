@@ -33,6 +33,12 @@ export function parseBinaryHex(input: string): Uint8Array {
   for (let index = 0; index < bytes.length; index++) bytes[index] = Number.parseInt(hex.slice(index * 2, index * 2 + 2), 16);
   return bytes;
 }
+/** 最终暂存复用查看器的原始字符和字节门；有界分段编码避免展开大型参数数组。 */
+export function binaryCellFromHex(input: string): { type: 'binary'; base64: string } {
+  const bytes = parseBinaryHex(input); let raw = '';
+  for (let offset = 0; offset < bytes.length; offset += 8192) raw += String.fromCharCode(...bytes.subarray(offset, offset + 8192));
+  return { type: 'binary', base64: btoa(raw) };
+}
 /** 只展开当前有界片段；分页查看的字符串不能作为完整值交给编辑路径。 */
 export function binaryHexPage(bytes: Uint8Array, page = 0): string {
   const start = Math.max(0, Math.floor(page)) * binaryCellLimits.pageBytes;

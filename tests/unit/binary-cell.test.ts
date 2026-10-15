@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { binaryByteLength, binaryCellLimits, binaryHexPage, decodeBinaryCell, decodeBinaryText, inspectBinaryImage, parseBinaryHex } from '../../src/renderer/binaryCell';
 import { beginRecordDraft, editRecordInput, stageRecordDraft, type RecordContext } from '../../src/renderer/recordViews';
 import type { DraftRow } from '../../src/renderer/dataChanges';
+import { parseCell } from '../../src/renderer/lib';
 
 const png = Uint8Array.from(Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+j04QAAAAASUVORK5CYII=', 'base64'));
 describe('完整二进制查看与编辑边界', () => {
@@ -16,6 +17,19 @@ describe('完整二进制查看与编辑边界', () => {
     expect(() => stageRecordDraft([{ ...row, data: { ...row.data } }], draft, context)).toThrow();
     const invalid = editRecordInput(beginRecordDraft(row, context), column, { mode: 'binary', text: '0x0' }); expect(() => stageRecordDraft([row], invalid, context)).toThrow();
     expect(stageRecordDraft([row], editRecordInput(beginRecordDraft(row, context), column, { mode: 'binary', text: '' }), context)[0].data.payload).toEqual({ type: 'binary', base64: '' });
+    const upper = 'ab'.repeat(binaryCellLimits.editBytes);
+    for (const value of [upper, '0x' + upper, upper + ' \n', '0x' + '00 ff\n80']) {
+      const expected = parseBinaryHex(value), parsed = parseCell(value, 'binary') as { type: 'binary'; base64: string };
+      expect(Buffer.from(parsed.base64, 'base64')).toEqual(Buffer.from(expected));
+      const candidate = editRecordInput(beginRecordDraft(row, context), column, { mode: 'binary', text: value });
+      expect(stageRecordDraft([row], candidate, context)[0].data.payload).toEqual(parsed);
+    }
+    for (const value of [upper + 'ab', '0x' + upper + 'ab', upper + '   ', '0x' + upper + ' ', 'ab '.repeat(binaryCellLimits.editBytes)]) {
+      const candidate = { ...beginRecordDraft(row, context), fields: new Map([['payload', { mode: 'binary' as const, text: value }]]) };
+      expect(() => parseBinaryHex(value)).toThrow('完整 Hex 编辑'); expect(() => parseCell(value, 'binary')).toThrow('完整 Hex 编辑');
+      expect(() => stageRecordDraft([row], candidate, context)).toThrow('完整 Hex 编辑');
+      expect(candidate.fields.get('payload')!.text).toBe(value); expect(row.data.payload).toEqual({ type: 'binary', base64: 'AP+A' });
+    }
   });
   it('SQL NULL、DEFAULT 和零字节二进制保持不同，拒绝字符串冒充原值', () => {
     expect(decodeBinaryCell(null)).toBeNull(); expect(decodeBinaryCell(undefined)).toBeNull(); expect(decodeBinaryCell({ type: 'binary', base64: '' })).toEqual(new Uint8Array());

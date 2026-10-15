@@ -1,5 +1,6 @@
 import { zh } from './locales/zh-CN';
 import type { CellValue, Command, CommandMap, DataRow } from '../shared/contracts';
+import { binaryCellFromHex } from './binaryCell';
 
 /** 所有界面请求经由预加载桥接进入主进程，浏览器页面不直接接触凭据或驱动。 */
 export function invoke<C extends Command>(command: C, input: CommandMap[C]['input']) {
@@ -36,10 +37,6 @@ export function cellPreview(value: CellValue | undefined, limit = 240) {
 export function parseCell(text: string, mode: 'text' | 'json' | 'binary' | 'null'): CellValue {
   if (mode === 'null') return null;
   if (mode === 'json') { JSON.parse(text); return text; }
-  if (mode === 'binary') {
-    const hex = text.replace(/^0x/i, '').replace(/\s/g, '');
-    if (!/^(?:[0-9a-fA-F]{2})*$/.test(hex)) throw new Error(zh.commonMessages.text008);
-    return { type: 'binary', base64: btoa(hex.match(/.{2}/g)?.map(byte => String.fromCharCode(parseInt(byte, 16))).join('') ?? '') };
-  }
+  if (mode === 'binary') return binaryCellFromHex(text);
   return text;
 }
