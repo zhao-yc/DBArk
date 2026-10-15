@@ -14,7 +14,7 @@ function fixture() {
   const dispatch = source.slice(source.indexOf('async function dispatch('), source.indexOf('/** 按平台生成中文原生菜单'));
   const request = vi.fn(async () => ({ rows: 1 })), release = vi.fn(), acquire = vi.fn(async () => release), tasks = new Map();
   const context = createContext({ Date, Map, Set, Error, files: new Map([['输入', { path: '/授权/输入.xlsx', purpose: 'import', format: 'xlsx' }], ['输出', { path: '/授权/输出.xlsx', purpose: 'export', format: 'xlsx' }], ['旧格式', { path: '/授权/旧.csv', purpose: 'import', format: 'csv' }]]),
-    tasks, completionTasks: new Set(), preparingTasks: new Map(), pendingQueryHistory: new Map(), exportProgress: new Map(), structureProgress: new Map(), structureTokens: new Map(), sessions: new Map(), savedQueryPages: undefined,
+    tasks, completionTasks: new Set(), preparingTasks: new Map(), pendingQueryHistory: new Map(), exportProgress: new Map(), structureProgress: new Map(), structureTokens: new Map(), sessions: new Map(), savedQueryPages: undefined, historyPages: undefined,
     connectionConfig: { assertAvailable() {} }, resolveFileToken, store: { saveTask() {} }, exportReservations: { acquire }, broker: { request }, taskEvent(event: { taskId: string; status: string }) { tasks.set(event.taskId, event); }
   });
   Object.assign(context, { SavedQuerySearchCancelled });

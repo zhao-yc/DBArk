@@ -10,7 +10,7 @@ function harness() {
   const source = readFileSync(new URL('../../src/main/index.ts', import.meta.url), 'utf8');
   const dispatch = source.slice(source.indexOf('async function dispatch('), source.indexOf('/** 按平台生成中文原生菜单'));
   const blocked = new Set<string>(), tasks = new Map(), request = vi.fn(async (_command: string, _input: unknown) => ({ snapshotId: 'snapshot' }));
-  const context = createContext({ Date, Map, Error, Boolean, shuttingDown: false, structureTokens: new Map(), sessions: new Map(), tasks, completionTasks: new Set(), preparingTasks: new Map(), pendingQueryHistory: new Map(), exportProgress: new Map(), structureProgress: new Map(), savedQueryPages: undefined,
+  const context = createContext({ Date, Map, Error, Boolean, shuttingDown: false, structureTokens: new Map(), sessions: new Map(), tasks, completionTasks: new Set(), preparingTasks: new Map(), pendingQueryHistory: new Map(), exportProgress: new Map(), structureProgress: new Map(), savedQueryPages: undefined, historyPages: undefined,
     store: { resolveConnection: (id: string) => ({ id, host: '可信地址', password: '仅主进程秘密' }), saveTask() {}, connectionRevision: () => 17 },
     connectionConfig: { assertAvailable: (id: string) => { if (blocked.has(id)) throw new Error('连接配置正在保存'); } }, broker: { request },
     taskEvent(event: TaskEvent) { tasks.set(event.taskId, { ...tasks.get(event.taskId), status: event.status }); },

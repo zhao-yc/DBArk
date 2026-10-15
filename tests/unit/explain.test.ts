@@ -80,7 +80,7 @@ describe('执行计划语句与原会话调度', () => {
     const c = context(); vi.mocked(c.run).mockRejectedValueOnce({ code: 'ER_UNKNOWN_EXPLAIN_FORMAT' });
     const output = await explainQuery('UPDATE t SET n=n+1', 'auto', c);
     expect(vi.mocked(c.run).mock.calls.map(call => call[0])).toEqual(['EXPLAIN FORMAT=JSON UPDATE t SET n=n+1', 'EXPLAIN FORMAT=TRADITIONAL UPDATE t SET n=n+1']); expect(output.explain?.warnings.join()).toContain('回退');
-    for (const code of ['ER_TABLEACCESS_DENIED_ERROR', 'ER_QUERY_INTERRUPTED', 'ECONNRESET']) { const failed = context(); vi.mocked(failed.run).mockRejectedValue({ code }); await expect(explainQuery('SELECT 1', 'auto', failed)).rejects.toMatchObject({ code }); expect(failed.run).toHaveBeenCalledTimes(1); }
+    for (const code of ['ER_PARSE_ERROR', 'ER_NOT_SUPPORTED_YET', 'ER_TABLEACCESS_DENIED_ERROR', 'ER_QUERY_INTERRUPTED', 'ECONNRESET']) { const failed = context(); vi.mocked(failed.run).mockRejectedValue({ code }); await expect(explainQuery('SELECT 1', 'auto', failed)).rejects.toMatchObject({ code }); expect(failed.run).toHaveBeenCalledTimes(1); }
     const broken = context(); broken.reusable = () => false; vi.mocked(broken.run).mockRejectedValue({ code: 'ER_PARSE_ERROR' }); await expect(explainQuery('SELECT 1', 'auto', broken)).rejects.toBeDefined(); expect(broken.run).toHaveBeenCalledTimes(1);
   });
   it('取消后不进入回退；解析错误保留原文，不能自动重发用户语句', async () => {

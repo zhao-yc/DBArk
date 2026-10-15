@@ -114,7 +114,7 @@ export class Engine {
           if (!profile || profile.id !== target.connectionId) throw new Error('主进程未提供有效结构比较连接配置');
           if (!this.profiles.has(profile.id)) this.profiles.set(profile.id, profile);
         }
-        if (this.tasks.has(input.taskId) || this.independentTasks.has(input.taskId)) throw new Error('任务编号已使用');
+        if (this.taskIdInUse(input.taskId)) throw new Error('任务编号已使用');
         return this.withConnectionUse(input.source.connectionId, () => this.withConnectionUse(input.target.connectionId, () => this.schemaComparisons.compare({ taskId: input.taskId, source: input.source, target: input.target }, input.connectionRevision)));
       }
       case 'schema.comparePreview': return this.schemaComparisons.preview({ snapshotId: input.snapshotId, selections: input.selections }, input.connectionRevision);
@@ -286,7 +286,7 @@ export class Engine {
       case 'excel.sheets':
       case 'excel.preview': {
         this.assertFile(input);
-        if (this.tasks.has(input.taskId) || this.independentTasks.has(input.taskId) || this.resultFiles.has(input.taskId) || this.excelConnecting.has(input.taskId)) throw new Error('任务编号已在执行');
+        if (this.taskIdInUse(input.taskId)) throw new Error('任务编号已在执行');
         return this.excelReads.run(command, input as any);
       }
       case 'excel.import': this.assertFile(input); return this.withExcelTask(input, '导入 Excel', task => this.importExcel(task, input));
@@ -295,12 +295,15 @@ export class Engine {
       case 'files.export': this.assertFile(input); return this.withConnection(input.connectionId, managed => this.runTask(input.taskId, managed, '导出文件', task => this.exportFile(task, input)), input.database);
       case 'files.exportResult': {
         this.assertFile(input);
-        if (this.tasks.has(input.taskId) || this.independentTasks.has(input.taskId) || this.excelReads.has(input.taskId) || this.excelConnecting.has(input.taskId)) throw new Error('任务编号已在执行');
+        if (this.taskIdInUse(input.taskId)) throw new Error('任务编号已在执行');
         return this.resultFiles.run(input as Parameters<ResultFileTasks['run']>[0]);
       }
       default: throw new Error(`数据库进程不支持命令：${command}`);
     }
   }
+
+  /** 所有任务通道共用编号占用检查，避免集成后取消误命中另一种活动任务。 */
+  private taskIdInUse(id: string): boolean { return this.tasks.has(id) || this.independentTasks.has(id) || this.resultFiles.has(id) || this.excelReads.has(id) || this.excelConnecting.has(id) || this.schemaComparisons.has(id); }
 
   /** 关闭前取消任务并释放固定会话，未提交事务由服务器在断开时回滚。 */
   async closeAll(): Promise<void> {
@@ -351,7 +354,7 @@ export class Engine {
   /** Excel 在建连前占用任务编号并绑定 AbortSignal，取消、断开与退出不能漏掉尚未创建的运行任务。 */
   private async withExcelTask<T>(input: Input, label: string, action: (task: RunningTask) => Promise<T>): Promise<T> {
     const id = input.taskId;
-    if (this.closing || !id || this.tasks.has(id) || this.independentTasks.has(id) || this.resultFiles.has(id) || this.excelReads.has(id) || this.excelConnecting.has(id)) throw new Error('任务编号为空或任务已在执行');
+    if (this.closing || !id || this.taskIdInUse(id)) throw new Error('任务编号为空或任务已在执行');
     const controller = new AbortController(); let finish!: () => void;
     const done = new Promise<void>(resolve => { finish = resolve; });
     this.excelConnecting.set(id, { connectionId: input.connectionId, controller, done });
@@ -376,7 +379,7 @@ export class Engine {
   /** 独立任务从建连前登记，到服务器及本地连接收尾后才释放编号和配置锁。 */
   private async withIndependentTask<T>(connectionId: string, taskId: string, action: (managed: ManagedConnection, control: Omit<StructureTaskContext, 'managed'>) => Promise<T>, options?: StructureTaskOptions, readLabel?:string, strictRead=false,readDetail?:()=>Partial<TaskEvent>, quiet=false): Promise<T> {
     return this.withConnectionUse(connectionId, async () => {
-      if (this.closing || !taskId || this.tasks.has(taskId) || this.schemaComparisons.has(taskId) || this.independentTasks.has(taskId) || this.resultFiles.has(taskId) || this.excelReads.has(taskId) || this.excelConnecting.has(taskId)) throw new Error('任务编号为空或任务已在执行');
+      if (this.closing || !taskId || this.taskIdInUse(taskId)) throw new Error('任务编号为空或任务已在执行');
       const profile = this.profile(connectionId);
       // 字段、索引及后续外键执行共用资源集合，不能在重核与关闭之间并行修改相关父表。
       const executionTargets = [...(options?.executionTarget ? [options.executionTarget] : []), ...(options?.executionTargets ?? [])];
@@ -462,7 +465,7 @@ export class Engine {
 
   /** 统一登记任务、发送终态并等待取消控制连接结束后释放任务标识。 */
   private async runTask<T>(id: string, managed: ManagedConnection, label: string, action: (task: RunningTask) => Promise<T>): Promise<T> {
-    if (this.closing || !id || this.tasks.has(id) || this.independentTasks.has(id) || this.resultFiles.has(id) || this.excelReads.has(id) || this.excelConnecting.has(id)) throw new Error('任务编号为空或任务已在执行');
+    if (this.closing || !id || this.taskIdInUse(id)) throw new Error('任务编号为空或任务已在执行');
     let finish!: () => void;
     const done = new Promise<void>(resolve => { finish = resolve; });
     const task: RunningTask = { id, managed, cancelled: false, inFlight: false, generation: 0, done, finish };

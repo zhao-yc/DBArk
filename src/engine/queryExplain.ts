@@ -30,7 +30,8 @@ export function explainStatement(sql: string, mode: SqlLexicalMode): string {
 /** 仅格式能力错误回退；取消、权限、断线和普通 SQL 错误不会重发。 */
 function formatUnsupported(error: unknown): boolean {
   const code = (error as { code?: string })?.code;
-  return code === 'ER_UNKNOWN_EXPLAIN_FORMAT' || code === 'ER_NOT_SUPPORTED_YET' || code === 'ER_PARSE_ERROR';
+  // 语法或功能不支持也可能来自用户SQL本身，不能据此自动重发另一条计划语句。
+  return code === 'ER_UNKNOWN_EXPLAIN_FORMAT';
 }
 /** JSON 与文本都在调用方持有的同一会话任务内执行；禁止使用任何 ANALYZE 变体。 */
 export async function explainQuery(sql: string, format: 'auto' | 'text', context: ExplainContext): Promise<QueryOutcome> {

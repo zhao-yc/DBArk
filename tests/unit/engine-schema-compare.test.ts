@@ -1,4 +1,6 @@
 import { EventEmitter } from 'node:events';
+import { join } from 'node:path';
+import { randomUUID } from 'node:crypto';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ConnectionProfile, TaskEvent } from '../../src/shared/contracts';
 import type { ManagedConnection } from '../../src/engine/connection';
@@ -85,5 +87,23 @@ describe('结构比较正式引擎路由', () => {
     await expect(engine.handle('schema.compare', { source: target('source'), target: target('target'), sourceProfile: targetProfile })).rejects.toThrow('有效结构比较'); expect(connections).toEqual([]);
     const result = await compare(); await engine.handle('connections.close', { id: 'target' });
     await expect(engine.handle('schema.comparePreview', { snapshotId: result.snapshotId, selections: [{ category: 'columns', name: 'extra' }], connectionRevision: 7 })).rejects.toThrow('过期');
+  });
+});
+
+describe('集成后的跨功能任务编号', () => {
+  it('活动结构比较的编号不能用于Excel读写或CSV结果导出，原比较仍正常完成', async () => {
+    hold = 'source'; const pending = compare('shared'); await vi.waitFor(() => expect(held).toBeDefined());
+    const filePath = join(process.cwd(), '.cache', 'collision-' + randomUUID() + '.xlsx'), before = [...sent];
+    for (const command of ['excel.sheets','excel.preview','excel.export','excel.import','files.exportResult'] as const) {
+      await expect(engine.handle(command, { taskId:'shared',connectionId:'source',filePath,database:'db',table:'t' })).rejects.toThrow('任务编号');
+    }
+    expect(sent).toEqual(before); hold=undefined; held!.finish(); await expect(pending).resolves.toMatchObject({source:{connectionId:'source'},target:{connectionId:'target'}});
+    expect(events.filter(event=>event.taskId==='shared').map(event=>event.status)).toEqual(['running','running','completed']);
+  });
+  it('Excel实际文件读取尚未终态时，结构比较不能借用同一编号或创建数据库连接', async () => {
+    const taskId='excel-shared',filePath=join(process.cwd(),'.cache','absent-'+randomUUID()+'.xlsx');
+    const pending=engine.handle('excel.sheets',{taskId,filePath}),failed=expect(pending).rejects.toThrow();
+    await expect(compare(taskId)).rejects.toThrow('任务编号');expect(connections).toEqual([]);await failed;
+    expect(events.at(-1)?.status).toBe('failed');expect(events.every(event=>event.taskId===taskId)).toBe(true);
   });
 });
