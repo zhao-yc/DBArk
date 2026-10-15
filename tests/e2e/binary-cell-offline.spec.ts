@@ -68,3 +68,13 @@ test('记录表单中的图片缓存同样随结构快照失效并释放', async
   await field.getByRole('button', { name: '编辑字段', exact: true }).click(); await viewer().getByRole('button', { name: text.image, exact: true }).click(); await expect.poll(urls).toBe(1);
   await page.getByRole('button', { name: '夹具结构变化', exact: true }).click(); await expect(viewer()).toHaveCount(0); await expect.poll(urls).toBe(0); expect(await writes()).toEqual([]); expect(errors).toEqual([]);
 });
+
+test('无前缀多一字节的Hex在最终暂存也拒绝并保留完整输入，合法上限可保真暂存', async () => {
+  await open('payload'); const hex = viewer().getByRole('textbox'), oversized = 'ff'.repeat(131072);
+  await hex.fill(oversized); await expect(viewer().getByRole('alert')).toContainText('完整 Hex 编辑');
+  await page.getByRole('button', { name: '暂存修改', exact: true }).click(); await expect(page.getByRole('dialog')).toBeVisible();
+  await expect(hex).toHaveValue(oversized); await expect(page.getByRole('dialog').locator(':scope > .modal-content > .error-box')).toContainText('完整 Hex 编辑');
+  await expect(page.locator('.row-modified')).toHaveCount(0); expect(await writes()).toEqual([]);
+  const upper = '0x' + 'ab'.repeat(131071); await hex.fill(upper); await expect(viewer()).toContainText('Hex 校验通过：131071 字节');
+  await page.getByRole('button', { name: '暂存修改', exact: true }).click(); await expect(page.getByRole('dialog')).toHaveCount(0); await open('payload'); await expect(viewer().getByRole('textbox')).toHaveValue(upper); expect(await writes()).toEqual([]); expect(errors).toEqual([]);
+});

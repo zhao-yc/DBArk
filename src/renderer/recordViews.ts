@@ -2,6 +2,7 @@ import type { ColumnInfo, DataRow, RowChange, TableInfo } from '../shared/contra
 import { collectChanges, type DraftRow } from './dataChanges';
 import { cellPreview, cellText, ownCell, parseCell } from './lib';
 import { recordViewZh as text } from './locales/recordViews.zh-CN';
+import { binaryCellLimits } from './binaryCell';
 
 export interface RecordTarget { connectionId: string; database: string; table: string }
 export interface RecordContext { target: RecordTarget; connectionVersion: number; generation: number; info: TableInfo | null; loaded: boolean; stale: boolean; busy: boolean }
@@ -13,7 +14,7 @@ export interface RecordDraft {
   /** 只缓存显式展开的字段；载入的整页与 original 不复制、不序列化。 */
   fields: ReadonlyMap<string, RecordInput>;
 }
-export const recordInputLimits = { field: 262_144, total: 2_097_152 } as const;
+export const recordInputLimits = { field: binaryCellLimits.hexUnits, total: 2_097_152 } as const;
 /** 字段错误携带精确列名，界面可聚焦对应输入而无需解析提示文本。 */
 export class RecordFieldError extends Error { constructor(readonly key: string, reason: string) { super(text.invalidField.replace('{0}', key).replace('{1}', reason)); } }
 
