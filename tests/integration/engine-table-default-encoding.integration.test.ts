@@ -13,6 +13,7 @@ import { identifier, stringLiteral } from '../../src/engine/sql';
 import type { ConnectionProfile, TaskEvent } from '../../src/shared/contracts';
 import { definitionOmittingSqlModes } from '../../src/shared/tableColumnPatches';
 import type { TableDefaultEncodingGetOutput, TableDefaultEncodingPreviewOutput, TableEncodingPair } from '../../src/shared/tableDefaultEncoding';
+import { assertDefaultEncodingLiveTarget } from '../helpers/tableDefaultEncodingTarget';
 
 // 两个开关必须同时显式启用；不读凭据文件、不创建账户、不访问其他服务器。
 const enabled = process.env.DBARK_INTEGRATION_ENABLED === '1' && process.env.DBARK_TABLE_DEFAULT_ENCODING_TEST === '1';
@@ -34,8 +35,8 @@ async function data() { return sql(`SELECT CAST(id AS CHAR) AS id,HEX(s) AS s,HE
 
 describe.skipIf(!enabled)('表默认编码六实例核心验收（每轮显式指定一个实例）', () => {
   beforeAll(async () => {
-    if (!['192.168.31.200', 'deve-server.yinzon.com'].includes(profile.host) || !profile.user || !['13357', '13380', '13384', '13310', '13311'].includes(String(profile.port))) throw new Error('必须显式指定已核对200专用实例');
-    if (profile.tls?.enabled && !profile.tls.caPath) throw new Error('严格TLS必须提供已有CA，禁止退回明文');
+    assertDefaultEncodingLiveTarget({ host: profile.host, port: profile.port, tlsFlag: process.env.DBARK_TEST_TLS, caPath: process.env.DBARK_TEST_CA }, profile);
+    if (!profile.user) throw new Error('必须显式提供隔离实例测试账户');
     observer = await connect(profile); const status = await engine.handle('connections.open', { id: profile.id, profile }); version = status.version; dialect = status.dialect;
     // 仅规范本例observer，与产品完整定义显示策略一致，不改全局。
     const mode = String((await sql('SELECT @@SESSION.sql_mode AS mode'))[0].mode), omitted = new Set<string>(definitionOmittingSqlModes);

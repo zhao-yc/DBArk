@@ -77,3 +77,7 @@ node node_modules/@playwright/test/cli.js test tests/e2e/table-default-encoding.
 ```
 
 2026-10-16本地结果：类型检查通过；最终以 `vitest run --maxWorkers=2` 运行169个文件、3123项单元全部通过，其中本切片新增63项；源码构建通过，保留既有依赖注释和大分块警告。首轮默认并发出现一个既有补全Worker测试5秒超时，未改该用例断言或超时，降低并发后完整复验通过；原失败日志保留在个人缓存，不冒充首轮全通过。最终日志为 `.cache/default-encoding-unit-verified.log` 和 `.cache/default-encoding-build-verified.log`，不提交。集成4项默认跳过，正式UI仅收集2项，均未实际运行。
+
+固定3a复审后的准备追加：核心和正式UI共用 `tests/helpers/tableDefaultEncodingTarget.ts`，补13484白名单；该端口必须显式 `DBARK_TEST_TLS=1`、非空白CA，实际连接还必须启用TLS与证书校验并使用同一CA文件。正式UI沿既有观察连接／表单CA链路配置，在保存后核对目标、严格TLS和按realpath解析后的CA一致性；没有降级路径，原五端口边界、业务断言和期限保持。新默认编码Dialog中的Field、表头和“不适用”文案集中到专属locale，未动旧TableCommentDialog。
+
+本次追加验证：类型检查通过；27项纯准备门正反例与原63项专属单元合计90项通过；新Dialog AST检查无散落中文字面量；核心4项默认关闭跳过、UI仅收集2项。没有运行GUI或连接200，没有重写原3a提交，没有据此宣布六组合实库或正式UI已通过。
