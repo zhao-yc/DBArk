@@ -1,3 +1,4 @@
+import {databaseSearchZh} from '../locales/databaseSearch.zh-CN';
 import { zh, formatText } from '../locales/zh-CN';
 import { useEffect, useState } from 'react';
 import { Plus, Trash2, ArrowRight } from 'lucide-react';
@@ -65,26 +66,29 @@ function template(kind: string, database: string, name: string) {
 }
 
 /** 新数据库和视图等对象共享 SQL 确认入口；无默认数据库也能直接创建数据库。 */
-export function DdlDialog({ connectionId, database, object, onClose, onApplied }: { connectionId: string; database?: string; object?: DatabaseObject; onClose: () => void; onApplied: () => void }) {
+export function DdlDialog({ connectionId, database, object, onClose, onApplied, readOnly=false }: { connectionId: string; database?: string; object?: DatabaseObject; onClose: () => void; onApplied: () => void; readOnly?:boolean }) {
   const [name, setName] = useState(object?.name ?? ''); const [kind, setKind] = useState(object?.kind ?? 'view'); const [sql, setSql] = useState(database ? template('view', database, '') : ''); const [busy, setBusy] = useState(!!object); const [error, setError] = useState('');
   const [applyTaskId, setApplyTaskId] = useState('');
   useEffect(() => {
     if (!object || !database) return;
     // 定义读取不依赖树节点是否展开，连接准备失败时只展示原始错误。
     void invoke('connections.open', { id: connectionId }).then(() => invoke('metadata.ddl', { connectionId, database, name: object.name, kind: object.kind })).then(ddl => {
-      if (object.kind === 'view') setSql(ddl.replace(/^CREATE\s+/i, 'CREATE OR REPLACE '));
+      // 搜索按名称导航时只展示重新读取的原定义，不把新同名对象变成可执行重建脚本。
+      if(readOnly)setSql(ddl);
+      else if (object.kind === 'view') setSql(ddl.replace(/^CREATE\s+/i, 'CREATE OR REPLACE '));
       else if (['procedure', 'function', 'trigger', 'event'].includes(object.kind)) setSql(`DROP ${object.kind.toUpperCase()} IF EXISTS ${qualifiedName(database, object.name)};\nDELIMITER $$\n${ddl.replace(/;\s*$/, '')}$$\nDELIMITER ;`);
       else setSql(ddl);
     }).catch(reason => setError(errorMessage(reason))).finally(() => setBusy(false));
-  }, [connectionId, database, object]);
+  }, [connectionId, database, object, readOnly]);
   const statement = database ? sql : name ? `CREATE DATABASE ${identifier(name)} CHARACTER SET utf8mb4;` : '';
   /** 用户确认后独立准备连接并执行一次 SQL，连接失败或写入失败均不自动重试。 */
   async function apply() {
+    if(readOnly)return;
     if (!statement.trim()) { setError(zh.schema.text053); return; }
     if (!window.confirm(zh.schema.text054)) return;
     setBusy(true); setError(''); const taskId = uid(); setApplyTaskId(taskId);
     try { await invoke('connections.open', { id: connectionId }); await invoke('schema.apply', { connectionId, database: database ?? '', sql: statement, taskId }); useWorkspace.getState().notify(zh.schema.text055); onApplied(); onClose(); }
     catch (reason) { setError(errorMessage(reason)); } finally { setBusy(false); }
   }
-  return <Modal title={!database ? zh.schema.text056 : object ? formatText(zh.schema.text057, kindLabels[object.kind], object.name) : zh.schema.text058} wide onClose={() => { if (!busy) onClose(); }}><div className="modal-content">{!object && <div className="form-grid"><Field label={database ? zh.schema.text059 : zh.schema.text060}><input value={name} onChange={event => { setName(event.target.value); if (database) setSql(template(kind, database, event.target.value)); }}/></Field>{database && <Field label={zh.schema.text061}><select value={kind} onChange={event => { const next = event.target.value as typeof kind; setKind(next); setSql(template(next, database, name)); }}>{['view', 'procedure', 'function', 'trigger', 'event'].map(key => <option key={key} value={key}>{kindLabels[key]}</option>)}</select></Field>}</div>}{object && object.kind !== 'view' && <p className="warning-text">{zh.schema.text062}</p>}<SqlEditor value={statement} onChange={database ? setSql : undefined} readOnly={!database} height={340}/><ErrorBox message={error}/></div><footer className="modal-footer"><span className="grow"/><button disabled={busy} onClick={onClose}>{zh.common.cancel}</button>{busy && applyTaskId && <button onClick={() => void invoke('query.cancel', { taskId: applyTaskId }).catch(reason => setError(errorMessage(reason)))}>{zh.schema.text047}</button>}<button className="primary" disabled={busy || !statement.trim()} onClick={() => void apply()}>{busy ? <Spinner/> : zh.common.executeSql}</button></footer></Modal>;
+  return <Modal title={readOnly&&object?databaseSearchZh.definitionTitle(kindLabels[object.kind],object.name):!database ? zh.schema.text056 : object ? formatText(zh.schema.text057, kindLabels[object.kind], object.name) : zh.schema.text058} wide onClose={() => { if (!busy) onClose(); }}><div className="modal-content">{!object && <div className="form-grid"><Field label={database ? zh.schema.text059 : zh.schema.text060}><input value={name} onChange={event => { setName(event.target.value); if (database) setSql(template(kind, database, event.target.value)); }}/></Field>{database && <Field label={zh.schema.text061}><select value={kind} onChange={event => { const next = event.target.value as typeof kind; setKind(next); setSql(template(next, database, name)); }}>{['view', 'procedure', 'function', 'trigger', 'event'].map(key => <option key={key} value={key}>{kindLabels[key]}</option>)}</select></Field>}</div>}{readOnly&&<p className="muted">{databaseSearchZh.definitionReadOnly}</p>}{!readOnly&&object && object.kind !== 'view' && <p className="warning-text">{zh.schema.text062}</p>}<SqlEditor value={statement} onChange={database&&!readOnly ? setSql : undefined} readOnly={readOnly||!database} height={340}/><ErrorBox message={error}/></div><footer className="modal-footer"><span className="grow"/><button disabled={busy} onClick={onClose}>{zh.common.cancel}</button>{busy && applyTaskId && <button onClick={() => void invoke('query.cancel', { taskId: applyTaskId }).catch(reason => setError(errorMessage(reason)))}>{zh.schema.text047}</button>}{!readOnly&&<button className="primary" disabled={busy || !statement.trim()} onClick={() => void apply()}>{busy ? <Spinner/> : zh.common.executeSql}</button>}</footer></Modal>;
 }

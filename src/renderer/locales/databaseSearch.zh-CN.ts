@@ -1,0 +1,22 @@
+/** 全库搜索文案集中存放，首批入口明确为结构名称搜索。 */
+export const databaseSearchZh={
+  entry:'全库搜索',title:'全库搜索：结构名称',connection:'连接',databases:'数据库范围（每行一个）',
+  databaseHint:'最多32个数据库，仅搜索当前账号可见的结构名称。不会读取表或视图中的数据；目录在搜索后可能变化。',
+  pattern:'搜索文字',mode:'匹配方式',modes:{contains:'包含文字',whole:'完整名称',prefix:'前缀',regexp:'服务器正则'},
+  kinds:{table:'表',view:'视图',column:'字段',index:'索引',primaryKey:'主键',foreignKey:'外键',procedure:'存储过程',function:'函数',trigger:'触发器',event:'事件'},
+  caseSensitive:'区分大小写',ruleHint:'普通文字的大小写映射和正则语法遵循当前数据库版本的规则。百分号和下划线在普通文字模式中按原文搜索。',
+  limit:'命中上限',onError:'遇到错误',stop:'停止搜索',continueOnError:'记录错误并继续',start:'开始搜索',next:'继续搜索',cancel:'取消当前批次',close:'关闭',
+  opening:'正在搜索并等待连接释放…',closing:'正在取消并清理…',empty:'尚无命中',emptyHint:'选择范围并开始搜索；有未扫描范围时可继续搜索。',
+  databaseColumn:'数据库',kindColumn:'类别',objectColumn:'所属对象',nameColumn:'匹配名称',open:'打开当前定义',
+  currentDefinition:'打开时重新读取当前定义，已有查询事务和数据草稿保持原样。结果仅代表搜索时可见的名称。',
+  capped:'已达到命中上限，仍有范围尚未完成。请缩小范围或提高上限重新搜索。',
+  stopped:'已因错误停止，未完成的范围没有继续搜索。',done:'已完成所选可见名称的搜索。',more:'仍有未扫描范围，继续后再查询下一批。',
+  expired:'继续搜索在5分钟后失效，期间不会保留数据库连接。',
+  resultConnection:'结果连接',finishedWithErrors:'所选范围已处理，部分范围读取失败，详见失败明细。',
+  summary:(hits:number,processed:number,total:number)=>`命中 ${hits}；已处理范围 ${processed}/${total}。`,
+  failureCount:(count:number)=>`失败范围：${count}`,
+  definitionTitle:(kind:string,name:string)=>`查看${kind} · ${name}`,
+  definitionReadOnly:'当前定义只读查看；搜索结果可能已经变化。修改结构请从对象树进入对应的设计入口。',
+  failed:'搜索批次失败，已显示的结果保留；本批结果未追加，请重新搜索。',cancelled:'搜索已取消，已显示的结果保留；没有自动继续。',
+  invalidRequest:'请检查搜索条件：数据库和类别不能为空或重复，命中上限为1至1000；除完整名称外，搜索文字不能为空。最多32个数据库，名称中的空格会保留。',
+} as const;

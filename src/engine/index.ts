@@ -13,6 +13,7 @@ import { completionMetadata } from './completionMetadata';
 import type {CompletionMetadataInput} from '../shared/sqlCompletion';
 import {completionSessionState} from './completionSession';
 import {readSessionObject} from './sessionObjectRead';
+import {StructureSearches} from './structureSearch';
 import {queryDatabaseFromSession} from '../shared/queryContext';
 import { csvCell, csvHeader, encodingName, previewFile, readRecords, readText } from './files';
 import { ResultFileTasks } from './resultFileTasks';
@@ -54,6 +55,7 @@ export class Engine {
   private readonly foreignKeyPatches: TableForeignKeyPatchTasks;
   private readonly structureCache = new StructurePatchCache();
   private readonly structureExecutions = new StructureExecutionLocks();
+  private readonly structureSearches=new StructureSearches();
   /** 注入任务事件出口，使引擎既能在 utility process 中运行，也能独立测试。 */
   constructor(private readonly emit: (event: TaskEvent) => void = () => undefined) {
     this.resultFiles = new ResultFileTasks(emit);
@@ -74,6 +76,7 @@ export class Engine {
         if (changed && (this.connectionUses.has(input.id) || [...this.sessions.values()].some(session => session.connectionId === input.id) || [...this.tasks.values()].some(task => task.managed.profile.id === input.id))) throw new Error('该连接仍有打开的会话或正在执行的操作，请先关闭相关标签页并等待任务完成，再修改地址或认证配置；现有任务未被取消');
         if (changed || !previous) this.profiles.delete(input.id);
         this.structureCache.release(input.id);
+        this.structureSearches.releaseConnection(input.id);
         return;
       }
       case 'connections.test': return this.withConnectionUse(input.id, async () => {
@@ -88,6 +91,7 @@ export class Engine {
       });
       case 'connections.close': {
         this.structureCache.release(input.id);
+        this.structureSearches.releaseConnection(input.id);
         const active = [...this.tasks.values()].filter(task => task.managed.profile.id === input.id);
         const independent = [...this.independentTasks].filter(([, task]) => task.connectionId === input.id);
         const cancellations = await Promise.allSettled([...active.map(task => this.cancelTask(task.id)), ...independent.map(([id]) => this.cancelTask(id))]);
@@ -114,6 +118,16 @@ export class Engine {
         await session.managed.close(); this.sessions.delete(input.sessionId); return;
       }
       case 'metadata.databases': return this.withConnection(input.connectionId, connection => metadata.databases(connection));
+      case 'search.structure':case 'search.structureContinue':{
+        const profile=input.profile as ConnectionProfile|undefined;
+        if(!profile||profile.id!==input.connectionId)throw Error('主进程未提供有效搜索连接配置');
+        if(!this.profiles.has(profile.id))this.profiles.set(profile.id,profile);
+        const run=<T>(action:(managed:ManagedConnection,control:Pick<StructureTaskContext,'checkCancelled'|'commandStarted'>)=>Promise<T>)=>this.withIndependentTask(input.connectionId,input.taskId,action,undefined,'搜索结构名称',true);
+        // profile是主进程专用字段，不属于可传入或续页修改的公开搜索范围。
+        const {profile:_,...request}=input;
+        return command==='search.structure'?this.structureSearches.start(request,run):this.structureSearches.next(request,run);
+      }
+      case 'search.release':return this.structureSearches.release(input);
       case 'metadata.completion': {
         // 主进程注入保存配置即可启动可取消短读，不额外开一次不可取消的测试连接。
         const profile=input.profile as ConnectionProfile|undefined;
@@ -271,7 +285,7 @@ export class Engine {
   }
 
   /** 独立任务从建连前登记，到服务器及本地连接收尾后才释放编号和配置锁。 */
-  private async withIndependentTask<T>(connectionId: string, taskId: string, action: (managed: ManagedConnection, control: Omit<StructureTaskContext, 'managed'>) => Promise<T>, options?: StructureTaskOptions, readLabel?:string): Promise<T> {
+  private async withIndependentTask<T>(connectionId: string, taskId: string, action: (managed: ManagedConnection, control: Omit<StructureTaskContext, 'managed'>) => Promise<T>, options?: StructureTaskOptions, readLabel?:string, strictRead=false): Promise<T> {
     return this.withConnectionUse(connectionId, async () => {
       if (this.closing || !taskId || this.tasks.has(taskId) || this.independentTasks.has(taskId) || this.resultFiles.has(taskId)) throw new Error('任务编号为空或任务已在执行');
       const profile = this.profile(connectionId);
@@ -281,7 +295,7 @@ export class Engine {
       const controller = new AbortController();
       let finish!: () => void;
       const done = new Promise<void>(resolve => { finish = resolve; });
-      const task: IndependentTask = { connectionId, controller, done, structureTask: Boolean(options), generation: 0 };
+      const task: IndependentTask = { connectionId, controller, done, structureTask: Boolean(options)||strictRead, generation: 0 };
       this.independentTasks.set(taskId, task);
       const label = options?.label ?? readLabel ?? '读取关联记录';
       const detail = () => options ? (options.purpose === 'indexes' ? { indexPatch: { ...options.progress } } : options.purpose === 'foreignKeys' ? { foreignKeyPatch: { ...options.progress } } : { columnPatch: { ...options.progress } }) : {};
@@ -306,7 +320,7 @@ export class Engine {
         try { await task.cancelPending; } catch (error) { failure = error; }
         // 事件接收方异常也必须继续实际关闭连接并释放全部关联资源。
         if (options && !failure) { options.progress.phase = 'releasing'; try { report(); } catch (error) { failure ??= error; } }
-        try { await managed?.close(options ? { strict: true } : undefined); } catch (error) { failure ??= error; }
+        try { await managed?.close(options||strictRead ? { strict: true } : undefined); } catch (error) { failure ??= error; }
         this.independentTasks.delete(taskId); finish();
         releaseExecution();
       }

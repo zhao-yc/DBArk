@@ -9,6 +9,7 @@ import type { TableForeignKeyGetInput, TableForeignKeyGetOutput, TableForeignKey
 import type { CompletionMetadataInput, CompletionMetadataOutput,CompletionSessionState } from './sqlCompletion';
 import type {QueryDatabaseContext} from './queryContext';
 import type {SessionObjectSnapshot,SessionObjectCompletion,SessionObjectReadResult} from './sessionObjects';
+import type {StructureSearchInput,StructureSearchContinue,StructureSearchPage} from './databaseSearch';
 export type CellValue = string | number | boolean | null | { type: 'binary'; base64: string };
 export type DataRow = Record<string, CellValue>;
 export type ObjectKind = 'table' | 'view' | 'procedure' | 'function' | 'trigger' | 'event';
@@ -72,6 +73,9 @@ export interface CommandMap {
   'connections.close': { input: { id: string }; output: void };
   'metadata.databases': { input: { connectionId: string }; output: string[] };
   'metadata.completion': { input: CompletionMetadataInput; output: CompletionMetadataOutput };
+  'search.structure':{input:StructureSearchInput;output:StructureSearchPage};
+  'search.structureContinue':{input:StructureSearchContinue;output:StructureSearchPage};
+  'search.release':{input:{connectionId:string;cursor:string};output:void};
   'metadata.objects': { input: { connectionId: string; database: string }; output: DatabaseObject[] };
   'metadata.table': { input: { connectionId: string; database: string; table: string; taskId?: string }; output: TableInfo };
   'metadata.ddl': { input: { connectionId: string; database: string; name: string; kind: ObjectKind }; output: string };

@@ -1,0 +1,11 @@
+.database-search-content { display: flex; flex-direction: column; gap: 10px; }
+.database-search-options { border: 0; padding: 0; margin: 0; min-width: 0; }
+.database-search-options .form-grid { padding: 0; }
+.database-search-kinds { display: flex; flex-wrap: wrap; gap: 10px 18px; margin-top: 12px; }
+.database-search-kinds label { display: flex; align-items: center; gap: 5px; }
+.database-search-kinds input { width: auto; margin: 0; }
+.database-search-status { min-height: 24px; }
+.database-search-empty { grid-column: 1 / -1; text-align: center; padding: 40px; }
+.database-search-failures { max-height: 110px; overflow: auto; overflow-wrap: anywhere; }
+.database-search-failures p { margin: 6px 0; }
+.database-search-selected .rdg-cell { background: color-mix(in srgb, var(--accent) 16%, var(--surface)); }

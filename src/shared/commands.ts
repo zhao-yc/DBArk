@@ -7,6 +7,7 @@ export const publicCommands: Record<Command, true> = {
   'connections.export': true, 'connections.importPreview': true, 'connections.importApply': true,
   'connections.list': true, 'connections.save': true, 'connections.delete': true, 'connections.test': true, 'connections.open': true, 'connections.close': true,
   'metadata.databases': true, 'metadata.objects': true, 'metadata.table': true, 'metadata.ddl': true, 'metadata.completion': true,
+  'search.structure':true,'search.structureContinue':true,'search.release':true,
   'sessions.open': true, 'sessions.close': true, 'query.execute': true, 'query.explain': true, 'query.cancel': true, 'query.transaction': true,
   'query.parameterNames': true, 'query.executeParameterized': true, 'query.sessionState': true,'query.completionState':true,
   'query.temporaryState':true,'query.temporaryCompletion':true,'query.temporaryRead':true,
