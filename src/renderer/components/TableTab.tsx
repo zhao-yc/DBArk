@@ -89,7 +89,8 @@ export function TableTab({ tab, onDesign, onTransfer, onColumnPatches, onIndexPa
   const pageFindContext = useRef<{ values: unknown[]; generation: number }>({ values: [], generation: 0 });
   /** 任意草稿或上下文变化都递增查找代次；应用时同步重算，不能覆盖同轮事件的新草稿。 */
   function pageFindGeneration(): number {
-    const values = [rowsRef.current, info, connectionVersion, refreshVersion, externalStale, base, loadGeneration.current, pageIndex, pageSize, sort, filters, filterMode, visibleKeys];
+    const context = getRecordContext();
+    const values = [rowsRef.current, context.info, context.connectionVersion, refreshVersion, context.stale, recordTargetKey(context.target), context.loaded, context.generation, pageIndex, pageSize, sort, filters, filterMode, visibleKeys];
     if (values.some((value, index) => value !== pageFindContext.current.values[index])) pageFindContext.current = { values, generation: pageFindContext.current.generation + 1 };
     return pageFindContext.current.generation;
   }
@@ -134,10 +135,10 @@ export function TableTab({ tab, onDesign, onTransfer, onColumnPatches, onIndexPa
     finally { preferencesLock.current = false; if (mounted.current) setPreferencesPending(false); useWorkspace.getState().setBusy(tab.id, loadingCount.current > 0 || referenceCount.current > 0 || applyingRef.current || preferencesLock.current); }
   }
   /** 查找按最新行身份和可见列跳转，虚拟行无需先存在于 DOM。 */
-  function jumpToMatch(rowId: string, key: string) {
+  function jumpToMatch(rowId: string, key: string, focusGrid = true) {
     const rowIdx = rowsRef.current.findIndex(row => row.id === rowId), idx = visibleKeys.indexOf(key) + 1;
     if (blocked || rowIdx < 0 || idx < 1) return;
-    const activate = () => { setSelection({ rowId, key }); selectionRef.current = { rowId, key }; grid.current?.scrollToCell({ rowIdx, idx }); grid.current?.setActivePosition({ rowIdx, idx }, { enableEditor: false, shouldFocus: true }); };
+    const activate = () => { setSelection({ rowId, key }); selectionRef.current = { rowId, key }; grid.current?.scrollToCell({ rowIdx, idx }); grid.current?.setActivePosition({ rowIdx, idx }, { enableEditor: false, shouldFocus: focusGrid }); };
     if (record.formOpen) record.select(rowId, activate); else activate();
   }
   /** 网格快捷键与工具栏明确打开时发出新焦点请求，已打开的面板也能再次聚焦。 */
@@ -148,8 +149,10 @@ export function TableTab({ tab, onDesign, onTransfer, onColumnPatches, onIndexPa
   /** 当前页替换先核对完整快照，最后只一次写本地草稿。 */
   function applyPagePlan(plan: PageReplacement) {
     assertGridWritable();
-    if (blocked || !info || plan.patches.some(patch => !visibleKeys.includes(patch.key))) throw new Error(tableGridZh.changed);
-    const next = applyPageReplacement(rowsRef.current, plan, info, pageFindGeneration()); rowsRef.current = next; setRows(next); setError('');
+    const context = getRecordContext();
+    // 最后写草稿前同步复核字段、记录和连接；迟到Worker结果不能借旧渲染信息跨页或覆盖活动输入。
+    if (blockedRef.current || record.dirty || rootElement.current?.querySelector('.grid-input') || !context.info || plan.patches.some(patch => { const row = rowsRef.current.find(row => row.id === patch.rowId); return !row || !visibleKeys.includes(patch.key) || recordReadonlyReason(context, row, patch.key); })) throw new Error(tableGridZh.changed);
+    const next = applyPageReplacement(rowsRef.current, plan, context.info, pageFindGeneration()); rowsRef.current = next; setRows(next); setError(''); return next;
   }
   /** 每次加载分配代次，旧请求迟到时不能覆盖新页面或当前编辑状态。 */
   const load = useCallback(async () => {

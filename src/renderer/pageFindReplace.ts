@@ -44,6 +44,21 @@ export function pageOccurrences(matches: readonly PageCellMatch[]): PageOccurren
   return matches.flatMap(match => match.ranges.length ? match.ranges.map((range, index) => ({ rowId: match.rowId, key: match.key, range, occurrence: index + 1 })) : [{ rowId: match.rowId, key: match.key, occurrence: 1 }]);
 }
 
+/** 单处替换后跳过新插入的文字，再按当前页行/可见列顺序前进；末尾只循环定位，不再次替换。 */
+export function nextPageOccurrenceAfterReplacement(rows: readonly DraftRow[], keys: readonly string[], occurrences: readonly PageOccurrence[], current: PageOccurrence, replacement: string): number {
+  if (!occurrences.length || !current.range) return -1;
+  const rowOrder = new Map(rows.map((row, index) => [row.id, index])), keyOrder = new Map(keys.map((key, index) => [key, index]));
+  const row = rowOrder.get(current.rowId), column = keyOrder.get(current.key); if (row === undefined || column === undefined) return -1;
+  const end = current.range.start + replacement.length, zeroWidth = current.range.start === current.range.end;
+  const index = occurrences.findIndex(match => {
+    const targetRow = rowOrder.get(match.rowId), targetColumn = keyOrder.get(match.key); if (targetRow === undefined || targetColumn === undefined) return false;
+    if (targetRow !== row) return targetRow > row;
+    if (targetColumn !== column) return targetColumn > column;
+    return !!match.range && (zeroWidth ? match.range.start > end : match.range.start >= end);
+  });
+  return index < 0 ? 0 : index;
+}
+
 /** 使用完整自有原值扫描当前页，NULL/DEFAULT 独立于文字，二进制不转成预览匹配。 */
 export function findPageCells(rows: readonly DraftRow[], visibleKeys: readonly string[], options: PageFindOptions): PageCellMatch[] {
   if (options.regex) throw new Error(text.workerRequired);

@@ -40,3 +40,42 @@ test.describe('200隔离实库页内单处与正则替换', () => {
     }, result);
   });
 });
+
+// 新产品语义的独立补充，双门在自动桌面夹具前关闭；旧用例ID和期限保持原样。
+test.describe('D06替换当前与键盘导航补充', () => {
+  test.skip(!enabled || process.env.DBARK_D06_REPLACE_CURRENT_UI !== '1', '由ROOT单独安排D06真实UI窗口，默认不启动应用或访问200');
+  test.beforeAll(() => { if (environment.DBARK_TEST_HOST !== '192.168.31.200' || !['13357', '13380', '13384', '13310', '13311', '13484'].includes(environment.DBARK_TEST_PORT ?? '')) throw Error('D06补充只允许已核对的200六个专用隔离端口'); });
+  test('D06-REPLACE-CURRENT-UI：文字单处前进、IME零命令及空串只形成本地草稿', async ({}, result) => {
+    test.setTimeout(120000);
+    const fixture = await import('./desktop-fixture');
+    await isolatedDatabase(async ({ observer, database, connectionName }) => {
+      const qualified = '`' + database + '`.`d06_current_ui`', original = '😀old前old后old';
+      await observer.query(`CREATE TABLE ${qualified}(id BIGINT UNSIGNED PRIMARY KEY,note TEXT,other TEXT,nil TEXT,amount DECIMAL(30,6),payload BLOB,generated TEXT GENERATED ALWAYS AS (note) VIRTUAL) ENGINE=InnoDB`);
+      for (const [id, note, other] of [['18446744073709551614', original, '原旁列'], ['18446744073709551615', 'old', '原旁列2']]) await observer.query(`INSERT INTO ${qualified}(id,note,other,nil,amount,payload) VALUES(?,?,?,NULL,12345678901234567890.123456,UNHEX('0001ff'))`, [id, note, other]);
+      const read = async () => (await observer.query<RowDataPacket[]>(`SELECT CAST(id AS CHAR) AS id,note,other,nil,amount,HEX(payload) AS bytes_value,generated FROM ${qualified} ORDER BY id`))[0], before = await read();
+      await fixture.desktop.evaluate(({ ipcMain }) => {
+        type Handler = (event: Electron.IpcMainInvokeEvent, payload: { command: string }) => Promise<unknown>;
+        const handlers = (ipcMain as typeof ipcMain & { _invokeHandlers: Map<string, Handler> })._invokeHandlers, original = handlers.get('dbark:request'); if (!original) throw Error('没有真实IPC处理器');
+        const state = { preview: 0, apply: 0, restore: () => handlers.set('dbark:request', original) }; (globalThis as typeof globalThis & { __d06Current?: typeof state }).__d06Current = state;
+        handlers.set('dbark:request', async (event, payload) => { if (payload.command === 'table.preview') state.preview++; if (payload.command === 'table.apply') state.apply++; return original(event, payload); });
+      });
+      try {
+        await openTable(connectionName, database, 'd06_current_ui');
+        /** 只通过实际可见列及aria坐标定位，横向虚拟列也须先挂载。 */
+        async function cell(key: string, row = 2) { const grid = table().getByRole('grid', { name: text.grid, exact: true }), header = table().getByRole('columnheader', { name: new RegExp('^' + key) }); await grid.evaluate(node => { node.scrollLeft = 0; }); for (let attempt = 0; attempt < 10; attempt++) { await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve())))); if (await header.count()) break; await grid.evaluate(node => { node.scrollLeft += node.clientWidth; }); } await expect(header).toHaveCount(1); const index = await header.getAttribute('aria-colindex'); if (!index) throw Error('缺少实际列坐标'); return table().locator(`[role=row][aria-rowindex="${row}"] [role=gridcell][aria-colindex="${index}"]`); }
+        await expect(await cell('id')).toHaveText('18446744073709551614');
+        await (await cell('other')).dblclick(); const edit = table().getByRole('textbox', { name: '编辑 other', exact: true }); await edit.fill('已有草稿'); await edit.press('Enter'); await expect(edit).toHaveCount(0);
+        await table().getByRole('button', { name: text.find, exact: true }).click(); await panel().getByRole('combobox', { name: text.column, exact: true }).selectOption('note'); const find = panel().getByRole('textbox', { name: text.query, exact: true }), replace = panel().getByRole('textbox', { name: text.replacement, exact: true }); await find.fill('old'); await expect(panel().getByRole('status')).toContainText('0 / 4 处'); await find.press('Enter'); await find.press('Enter'); await expect(panel().locator('.page-find-current')).toContainText('格内第 2 处'); await replace.fill('新old');
+        // DOM报告标志只证明守卫，不声称自动化了实体输入法；正常按键另验。
+        for (const state of [{ isComposing: true, keyCode: 13 }, { isComposing: false, keyCode: 229 }]) await replace.evaluate((input, state) => { input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, cancelable: true, ...state })); }, state);
+        await expect(await cell('note')).toHaveText(original); expect(await read()).toEqual(before);
+        await replace.press('Enter'); await expect(await cell('note')).toHaveText('😀old前新old后old'); await expect(panel().getByRole('status')).toContainText('3 / 4 处'); await expect(replace).toBeFocused();
+        await replace.press('Enter'); await expect(await cell('note')).toHaveText('😀old前新old后新old'); await expect(panel().locator('.page-find-current')).toContainText('第 2 行');
+        await replace.fill(''); await replace.press('Enter'); await expect(await cell('note', 3)).toHaveText(''); await expect(panel().getByRole('status')).toContainText('1 / 3 处');
+        await expect(await cell('other')).toHaveText('已有草稿'); await expect(await cell('nil')).toHaveText('NULL'); await expect(await cell('amount')).toHaveText('12345678901234567890.123456'); await expect(await cell('payload')).toHaveText('0x0001ff'); expect(await read()).toEqual(before);
+        await panel().getByRole('combobox', { name: text.column, exact: true }).selectOption('generated'); await expect(panel().getByRole('status')).toContainText('0 / 4 处'); await find.press('Enter'); await expect(panel().getByRole('button', { name: text.replaceOne, exact: true })).toBeDisabled(); await replace.press('Enter'); expect(await read()).toEqual(before);
+        expect(await fixture.desktop.evaluate(() => { const state = (globalThis as typeof globalThis & { __d06Current?: { preview: number; apply: number } }).__d06Current!; return { preview: state.preview, apply: state.apply }; })).toEqual({ preview: 0, apply: 0 }); expect(pageErrors).toEqual([]); await page.screenshot({ path: result.outputPath('d06-replace-current-drafts-only.png') });
+      } finally { if (!fixture.closed) await fixture.desktop.evaluate(() => { const root = globalThis as typeof globalThis & { __d06Current?: { restore(): void } }; root.__d06Current?.restore(); delete root.__d06Current; }); }
+    }, result);
+  });
+});
