@@ -29,4 +29,26 @@ describe('普通SELECT窗口字段作用域',()=>{
   ])('继承窗口及帧边界不猜字段：%s',marked=>{expect(analyzeCompletion(marked.replace('|',''),marked.indexOf('|'))).toMatchObject({status:'blocked'});});
   it('窗口子查询自己的ORDER仍能使用自己的输出别名',()=>{const a=analyze('SELECT u.id AS outer_alias FROM users u ORDER BY SUM(u.id) OVER(ORDER BY (SELECT 1 AS inner_alias ORDER BY inn|suffix))');expect(a.outputAliases?.aliases).toEqual(['inner_alias']);});
   it('已取消窗口补全不读取目录，不改变目录预算',async()=>{const d=directory(),controller=new AbortController();controller.abort();const r=await completionSuggestions(analyze('SELECT ROW_NUMBER() OVER(ORDER BY u.|) FROM users u'),'db',d,controller.signal);expect(r.items).toEqual([]);expect(d.load).not.toHaveBeenCalled();});
+  it.each([
+    'SELECT u.id FROM users u UNION ALL SELECT o.id FROM orders o ORDER BY SUM(id) OVER(ORDER BY out|suffix)',
+    'SELECT u.id FROM users u UNION ALL SELECT o.id FROM orders o ORDER BY SUM(id) OVER(PARTITION BY o.ord|suffix)',
+    '(SELECT u.id FROM users u) UNION ALL (SELECT o.id FROM orders o) ORDER BY SUM(id) OVER(ORDER BY out|suffix)',
+    'SELECT u.id FROM users u UNION SELECT o.id FROM orders o ORDER BY SUM(id) OVER(ORDER BY |)',
+  ])('集合全局ORDER内窗口保守停止，不借末分支字段或函数目录：%s',async marked=>{const a=analyzeCompletion(marked.replace('|',''),marked.indexOf('|')),d=directory();if(a.status==='ready')await completionSuggestions(a,'db',d);expect(d.load).not.toHaveBeenCalled();expect(a.status).toBe('blocked');});
+  it.each([
+    ['SELECT ROW_NUMBER() OVER(ORDER BY u.use|suffix) FROM users u UNION ALL SELECT o.id FROM orders o','users','`user_value`'],
+    ['SELECT u.id FROM users u UNION ALL SELECT ROW_NUMBER() OVER(ORDER BY o.ord|suffix) FROM orders o','orders','`order_value`'],
+    ['SELECT u.id FROM users u UNION ALL (SELECT o.id FROM orders o ORDER BY SUM(o.id) OVER(ORDER BY o.ord|suffix) LIMIT 1)','orders','`order_value`'],
+  ])('集合各分支自身窗口继续使用正确关系：%s',async(marked,table,insert)=>{const a=analyze(marked),d=directory(),r=await completionSuggestions(a,'db',d);expect(r.items.some(item=>item.insertText===insert)).toBe(true);expect(d.load.mock.calls.map(([query])=>query)).toEqual([{kind:'columns',database:'db',table,prefix:table==='users'?'use':'ord'}]);});
+  it('帧之前的字段表达式继续补全，不把整个带帧窗口清空',async()=>{const d=directory(),r=await completionSuggestions(analyze('SELECT ROW_NUMBER() OVER(ORDER BY u.use|suffix ROWS BETWEEN 1 PRECEDING AND CURRENT ROW) FROM users u'),'db',d);expect(r.items.some(item=>item.insertText==='`user_value`')).toBe(true);expect(d.load.mock.calls.map(([query])=>query)).toEqual([{kind:'columns',database:'db',table:'users',prefix:'use'}]);});
+  it.each([
+    'SELECT ROW_NUMBER() OVER(ORDER BY u.id ROWS BETWEEN UNBOUNDED PRECEDING AND CUR|RENT ROW) FROM users u',
+    'SELECT ROW_NUMBER() OVER(ORDER BY u.id ROWS BETWEEN UNB|OUNDED PRECEDING AND CURRENT ROW) FROM users u',
+    'SELECT ROW_NUMBER() OVER(ORDER BY u.id ROWS BETWEEN 1 PRE|CEDING AND CURRENT ROW) FROM users u',
+    'SELECT ROW_NUMBER() OVER(ORDER BY u.id ROWS BETWEEN CEI|L(2) PRECEDING AND CURRENT ROW) FROM users u',
+    'SELECT ROW_NUMBER() OVER(ORDER BY u.id ROWS BETWEEN 1 PRECEDING AND u.use|suffix FOLLOWING) FROM users u',
+    'SELECT ROW_NUMBER() OVER(ORDER BY u.id ROW|S BETWEEN 1 PRECEDING AND CURRENT ROW) FROM users u',
+    'SELECT ROW_NUMBER() OVER w FROM users u WINDOW w AS(ORDER BY u.id RANGE BETWEEN UNBOUNDED PRECEDING AND CUR|RENT ROW)',
+    'SELECT ROW_NUMBER() OVER(ORDER BY u.id ROWS BETWEEN (SELECT 1 AS inner_alias ORDER BY inn|suffix) PRECEDING AND CURRENT ROW) FROM users u',
+  ])('帧位置即使解析恢复丢失分支也停止，不请求字段或函数目录：%s',async marked=>{const a=analyzeCompletion(marked.replace('|',''),marked.indexOf('|')),d=directory();if(a.status==='ready')await completionSuggestions(a,'db',d);expect(d.load).not.toHaveBeenCalled();expect(a.status).toBe('blocked');});
 });
