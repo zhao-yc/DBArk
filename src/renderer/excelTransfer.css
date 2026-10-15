@@ -1,0 +1,8 @@
+.excel-transfer .excel-preview { max-height: 280px; overflow: auto; border: 1px solid var(--border); border-radius: 6px; }
+.excel-transfer .excel-preview table { border-collapse: collapse; width: 100%; font-size: 12px; }
+.excel-transfer .excel-preview th, .excel-transfer .excel-preview td { max-width: 260px; padding: 7px 10px; border-bottom: 1px solid var(--border); text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.excel-transfer .excel-preview th { position: sticky; top: 0; background: var(--panel-bg, #202127); }
+.excel-transfer .file-picker span { min-width: 0; }
+.excel-transfer .file-picker strong { overflow-wrap: anywhere; }
+.excel-transfer .excel-mapping-pages { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin: 10px 0; }
+@media (max-width: 640px) { .excel-transfer .form-grid { grid-template-columns: 1fr; } }
