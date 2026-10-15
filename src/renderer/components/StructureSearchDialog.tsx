@@ -1,6 +1,6 @@
 import {useRef,useState} from 'react';
 import {DataGrid,type Column} from 'react-data-grid';
-import {structureSearchInputSchema,structureSearchKinds,structureSearchLimits,type StructureSearchHit,type StructureSearchPage,type StructureSearchKind} from '../../shared/databaseSearch';
+import {structureSearchInputSchema,structureSearchKinds,definitionSearchKinds,structureSearchLimits,type StructureSearchHit,type StructureSearchPage,type StructureSearchKind} from '../../shared/databaseSearch';
 import type {DatabaseSearchMode} from '../../shared/databaseSearchPattern';
 import {databaseSearchZh as text} from '../locales/databaseSearch.zh-CN';
 import {structureSearchContext} from '../structureSearchContext';
@@ -14,6 +14,7 @@ export function StructureSearchDialog({onClose,onOpen,onData}:{onClose:()=>void;
   const state=useWorkspace(),initial=structureSearchContext(state.selection,state.settings.tabs.find(tab=>tab.id===state.settings.activeTabId),state.connections[0]?.id??'');
   const [connectionId,setConnectionId]=useState(initial.connectionId),[databases,setDatabases]=useState(initial.database??'');
   const [keyword,setKeyword]=useState(''),[mode,setMode]=useState<DatabaseSearchMode>('contains'),[caseSensitive,setCaseSensitive]=useState(false);
+  const [searchIn,setSearchIn]=useState<'name'|'definition'>('name');
   const [kinds,setKinds]=useState<StructureSearchKind[]>([...structureSearchKinds]),[limit,setLimit]=useState(200),[onError,setOnError]=useState<'stop'|'continue'>('stop');
   const [page,setPage]=useState<StructureSearchPage|null>(null),[hits,setHits]=useState<StructureSearchHit[]>([]),[failures,setFailures]=useState<StructureSearchPage['failures']>([]);
   const [selected,setSelected]=useState<StructureSearchHit|null>(null),[busy,setBusy]=useState(false),[closing,setClosing]=useState(false),[error,setError]=useState('');
@@ -36,7 +37,7 @@ export function StructureSearchDialog({onClose,onOpen,onData}:{onClose:()=>void;
           if(result.cursor)cursor.current={connectionId:current.connectionId,value:result.cursor};
         }else{
           // 先校验全部范围，非法请求不会释放旧搜索或查询数据库。
-          const parsed=structureSearchInputSchema.safeParse({connectionId,taskId:uid(),databases:databases.split(/\r?\n/).filter(value=>value.length>0),kinds,pattern:{mode,text:keyword,caseSensitive},maxResults:limit,onError});
+          const parsed=structureSearchInputSchema.safeParse({connectionId,taskId:uid(),databases:databases.split(/\r?\n/).filter(value=>value.length>0),kinds,pattern:{mode,text:keyword,caseSensitive},maxResults:limit,onError,...(searchIn==='definition'?{searchIn}:{})});
           if(!parsed.success)throw Error(text.invalidRequest);const input=parsed.data;
           await releaseCursor();if(stopRequested.current)return;
           setHits([]);setFailures([]);setSelected(null);setPage(null);activeTask.current=input.taskId;resultConnection.current=input.connectionId;
@@ -57,24 +58,24 @@ export function StructureSearchDialog({onClose,onOpen,onData}:{onClose:()=>void;
     try{await cancel();await work.current;await releaseCursor();if(open==='data')onData?.();else open?onOpen(resultConnection.current,open):onClose();}
     catch(reason){setError(errorMessage(reason));closeRequested.current=false;setClosing(false);}
   }
-  const columns:Column<StructureSearchHit>[]=[{key:'database',name:text.databaseColumn,width:170},{key:'kind',name:text.kindColumn,width:100,renderCell:({row})=>text.kinds[row.kind]},{key:'object',name:text.objectColumn,width:220},{key:'name',name:text.nameColumn,width:260}];
-  return <Modal title={text.title} wide onClose={()=>void close()}>
+  const columns:Column<StructureSearchHit>[]=[{key:'database',name:text.databaseColumn,width:170},{key:'kind',name:text.kindColumn,width:100,renderCell:({row})=>text.kinds[row.kind]},{key:'object',name:text.objectColumn,width:220},{key:'name',name:searchIn==='definition'?text.definitionLocation:text.nameColumn,width:260,renderCell:({row})=>row.matchedIn==='definition'?text.definitionMatch(row.definitionCharacters??0):row.name}];
+  return <Modal title={searchIn==='definition'?text.definitionsTitle:text.title} wide onClose={()=>void close()}>
     <div className="modal-content database-search-content">
       {onData&&<div><button disabled={closing} onClick={()=>void close('data')}>{text.dataMode}</button></div>}
       <fieldset disabled={busy||closing} className="database-search-options">
-        <div className="form-grid"><Field label={text.connection}><select aria-label={text.connection} value={connectionId} onChange={event=>setConnectionId(event.target.value)}>{state.connections.map(profile=><option key={profile.id} value={profile.id}>{profile.name}</option>)}</select></Field>
+        <div className="form-grid"><Field label={text.searchIn}><select aria-label={text.searchIn} value={searchIn} onChange={event=>{const value=event.target.value as 'name'|'definition';setSearchIn(value);setKinds(value==='definition'?[...definitionSearchKinds]:[...structureSearchKinds]);}}><option value="name">{text.names}</option><option value="definition">{text.definitions}</option></select></Field><Field label={text.connection}><select aria-label={text.connection} value={connectionId} onChange={event=>setConnectionId(event.target.value)}>{state.connections.map(profile=><option key={profile.id} value={profile.id}>{profile.name}</option>)}</select></Field>
           <Field label={text.databases}><textarea aria-label={text.databases} rows={2} value={databases} onChange={event=>setDatabases(event.target.value)}/></Field>
           <Field label={text.pattern}><input aria-label={text.pattern} value={keyword} onChange={event=>setKeyword(event.target.value)}/></Field>
-          <Field label={text.mode}><select aria-label={text.mode} value={mode} onChange={event=>setMode(event.target.value as DatabaseSearchMode)}>{Object.entries(text.modes).map(([value,label])=><option key={value} value={value}>{label}</option>)}</select></Field>
+          <Field label={text.mode}><select aria-label={text.mode} value={mode} onChange={event=>setMode(event.target.value as DatabaseSearchMode)}>{Object.entries(text.modes).map(([value,label])=><option key={value} value={value}>{value==='whole'&&searchIn==='definition'?text.wholeDefinition:label}</option>)}</select></Field>
           <Field label={text.limit}><input aria-label={text.limit} type="number" min={1} max={structureSearchLimits.maxHits} value={limit} onChange={event=>setLimit(Number(event.target.value))}/></Field>
           <Field label={text.onError}><select aria-label={text.onError} value={onError} onChange={event=>setOnError(event.target.value as 'stop'|'continue')}><option value="stop">{text.stop}</option><option value="continue">{text.continueOnError}</option></select></Field></div>
-        <div className="database-search-kinds">{structureSearchKinds.map(kind=><label key={kind}><input type="checkbox" checked={kinds.includes(kind)} onChange={event=>setKinds(previous=>event.target.checked?[...previous,kind]:previous.filter(value=>value!==kind))}/>{text.kinds[kind]}</label>)}<label><input type="checkbox" checked={caseSensitive} onChange={event=>setCaseSensitive(event.target.checked)}/>{text.caseSensitive}</label></div>
-        <p className="muted small">{text.databaseHint} {text.ruleHint}</p>
+        <div className="database-search-kinds">{(searchIn==='definition'?definitionSearchKinds:structureSearchKinds).map(kind=><label key={kind}><input type="checkbox" checked={kinds.includes(kind)} onChange={event=>setKinds(previous=>event.target.checked?[...previous,kind]:previous.filter(value=>value!==kind))}/>{text.kinds[kind]}</label>)}<label><input type="checkbox" checked={caseSensitive} onChange={event=>setCaseSensitive(event.target.checked)}/>{text.caseSensitive}</label></div>
+        <p className="muted small">{searchIn==='definition'?text.definitionHint:text.databaseHint} {text.ruleHint}</p>
       </fieldset>
       <ErrorBox message={error}/>
-      <div role="status" className="database-search-status">{busy||closing?<Spinner text={closing?text.closing:text.opening}/>:page?<><span>{text.resultConnection}：{state.connections.find(profile=>profile.id===resultConnection.current)?.name}；{text.summary(page.totalHits,page.completedScopes,page.scopeCount)}</span> {page.limitReached?text.capped:page.stoppedOnError?text.stopped:page.cursor?text.more:page.completedScopes<page.scopeCount?text.failed:failures.length?text.finishedWithErrors:text.done}</>:text.emptyHint}</div>
+      <div role="status" className="database-search-status">{busy||closing?<Spinner text={closing?text.closing:text.opening}/>:page?<><span>{text.resultConnection}：{state.connections.find(profile=>profile.id===resultConnection.current)?.name}；{text.summary(page.totalHits,page.completedScopes,page.scopeCount)}{page.scannedDefinitions!==undefined&&text.definitionCount(page.scannedDefinitions)}</span> {page.limitReached?text.capped:page.stoppedOnError?text.stopped:page.cursor?text.more:page.completedScopes<page.scopeCount?text.failed:failures.length?text.finishedWithErrors:page.scannedDefinitions!==undefined?text.definitionsDone:text.done}</>:text.emptyHint}</div>
       <DataGrid className={state.settings.theme==='dark'?'rdg-dark':'rdg-light'} columns={columns} rows={hits} rowKeyGetter={row=>JSON.stringify([row.database,row.kind,row.object,row.name])} rowClass={row=>row===selected?'database-search-selected':undefined} onCellClick={({row})=>setSelected(row)} onCellDoubleClick={({row})=>{if(!busy&&!closing)void close(row);}} onCellKeyDown={({row},event)=>{if(event.key==='Enter'&&!busy&&!closing){event.preventDefault();void close(row);}}} renderers={{noRowsFallback:<div className="database-search-empty">{text.empty}</div>}} style={{height:230}}/>
-      {failures.length>0&&<details className="database-search-failures" open><summary>{text.failureCount(failures.length)}</summary>{failures.map((failure,index)=><p key={index}>{failure.database} · {text.kinds[failure.kind]}：{failure.message}</p>)}</details>}
+      {failures.length>0&&<details className="database-search-failures" open><summary>{text.failureCount(failures.length)}</summary>{failures.map((failure,index)=><p key={index}>{failure.database} · {text.kinds[failure.kind]}{failure.object?' · '+failure.object:''}：{failure.message}</p>)}</details>}
       <p className="muted small">{text.currentDefinition} {page?.cursor&&text.expired}</p>
     </div>
     <footer className="modal-footer"><button className="primary" disabled={busy||closing||!connectionId} onClick={()=>search()}>{text.start}</button><button disabled={busy||closing||!cursor.current} onClick={()=>search(true)}>{text.next}</button><button disabled={!busy||closing} onClick={()=>void cancel().catch(reason=>setError(errorMessage(reason)))}>{text.cancel}</button><span className="grow"/><button disabled={!selected||busy||closing} onClick={()=>selected&&void close(selected)}>{text.open}</button><button disabled={closing} onClick={()=>void close()}>{text.close}</button></footer>

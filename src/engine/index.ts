@@ -131,7 +131,7 @@ export class Engine {
         const profile=input.profile as ConnectionProfile|undefined;
         if(!profile||profile.id!==input.connectionId)throw Error('主进程未提供有效搜索连接配置');
         if(!this.profiles.has(profile.id))this.profiles.set(profile.id,profile);
-        const run=<T>(action:(managed:ManagedConnection,control:Pick<StructureTaskContext,'checkCancelled'|'commandStarted'>)=>Promise<T>)=>this.withIndependentTask(input.connectionId,input.taskId,action,undefined,'搜索结构名称',true);
+        const run=<T>(action:(managed:ManagedConnection,control:Pick<StructureTaskContext,'checkCancelled'|'commandStarted'>)=>Promise<T>)=>this.withIndependentTask(input.connectionId,input.taskId,action,undefined,'搜索结构',true);
         // profile是主进程专用字段，不属于可传入或续页修改的公开搜索范围。
         const {profile:_,...request}=input;
         return command==='search.structure'?this.structureSearches.start(request,run):this.structureSearches.next(request,run);

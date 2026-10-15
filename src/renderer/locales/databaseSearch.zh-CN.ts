@@ -1,7 +1,10 @@
-/** 全库搜索文案集中存放，首批入口明确为结构名称搜索。 */
+/** 全库搜索文案集中存放，名称和完整定义模式明确区分范围及预算。 */
 export const databaseSearchZh={
   entry:'全库搜索',title:'全库搜索：结构名称',connection:'连接',databases:'数据库范围（每行一个）',
   dataMode:'搜索数据',
+  searchIn:'搜索内容',names:'结构名称',definitions:'定义正文',definitionsTitle:'全库搜索：定义正文',wholeDefinition:'整个定义相等',definitionLocation:'命中位置',
+  definitionHint:'逐个读取当前账号可见对象的完整SHOW CREATE定义（含名称、字段、注释及例程正文），最多2MiB/对象，每页最多检查10个对象。不可读或超限定义明确记为失败，不扫描表或视图数据；字段、索引及约束包含在所属表定义中。',
+  definitionMatch:(characters:number)=>`定义正文（${characters}字符）`,definitionCount:(count:number)=>` 已检查定义 ${count}。`,definitionsDone:'已完成所选可见对象的定义搜索。',
   databaseHint:'最多32个数据库，仅搜索当前账号可见的结构名称。不会读取表或视图中的数据；目录在搜索后可能变化。',
   pattern:'搜索文字',mode:'匹配方式',modes:{contains:'包含文字',whole:'完整名称',prefix:'前缀',regexp:'服务器正则'},
   kinds:{table:'表',view:'视图',column:'字段',index:'索引',primaryKey:'主键',foreignKey:'外键',procedure:'存储过程',function:'函数',trigger:'触发器',event:'事件'},

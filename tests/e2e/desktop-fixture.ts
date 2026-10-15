@@ -4,6 +4,7 @@ import { basename, dirname, join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
+import {randomUUID} from 'node:crypto';
 
 interface RecordedDialog { title?: string; message: string; buttons?: string[]; response: number; }
 declare global { var __dbarkE2EDialogs: { answers: number[]; calls: RecordedDialog[] }; }
@@ -15,6 +16,7 @@ export let dataDir: string;
 export let closed = true;
 export let pageErrors: string[];
 export let dialogCalls: RecordedDialog[] = [];
+let quitReady:Promise<void>;
 
 /** 只替换原生对话框回答；退出状态机、渲染进程、IPC 和磁盘保存全部使用真实代码。 */
 export async function answerDialogs(answers: number[]) {
@@ -38,12 +40,16 @@ export async function launchDesktop() {
   delete env.ELECTRON_RUN_AS_NODE;
   const executablePath = process.env.DBARK_EXECUTABLE_PATH;
   desktop = await electron.launch({ ...(executablePath ? { executablePath, args: [] } : { args: ['.'] }), env, chromiumSandbox: true });
+  const quitMarker='DBARK_E2E_QUIT_READY:'+randomUUID();let ready!:()=>void;quitReady=new Promise<void>(resolve=>{ready=resolve;});
   closed = false;
   desktop.on('close', () => { closed = true; });
   desktop.on('console', message => {
     const text = message.text();
     if (text.startsWith('DBARK_E2E_DIALOG:')) dialogCalls.push(JSON.parse(text.slice('DBARK_E2E_DIALOG:'.length)) as RecordedDialog);
+    if(text===quitMarker)ready();
   });
+  // 只观察实际will-quit，不阻止退出；收到此标记前保存守卫与原生对话框都已完成。
+  await desktop.evaluate(({app},marker)=>{app.once('will-quit',()=>console.log(marker));},quitMarker);
   page = await desktop.firstWindow();
   page.on('pageerror', error => pageErrors.push(error.message));
   // 原生 CI 首次启动安装产物需要额外加载时间；只延长就绪等待，仍要求状态栏真实可见。
@@ -58,11 +64,13 @@ export async function requestQuit(method: 'app' | 'window' = 'app') {
   }, method);
 }
 
-/** 核对 Electron 和数据库 utility 等子进程退出，不能只以窗口消失为准。 */
+/** 先验证真实退出守卫到will-quit，再用公开close断开测试调试连接，仍核所有实际进程退出。 */
 export async function quitDesktop(method: 'app' | 'window' = 'app') {
   const processIds = await desktop.evaluate(({ app }) => app.getAppMetrics().map(metric => metric.pid));
   const exited = desktop.waitForEvent('close', { timeout: 12000 });
-  await requestQuit(method);
+  // 不在保存对话框之前脱离调试，否则会丢失实际回答证据；取消和保存失败继续保留调试通道。
+  await requestQuit(method);await Promise.race([quitReady,exited]);
+  if(!closed)await desktop.close();
   await exited;
   await expect.poll(() => processIds.filter(pid => { try { process.kill(pid, 0); return true; } catch { return false; } }), { timeout: 5000, message: '本次 Electron 启动的子进程应全部释放' }).toEqual([]);
 }

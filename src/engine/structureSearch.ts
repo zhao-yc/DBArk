@@ -5,9 +5,10 @@ import {databaseSearchMatch} from './databaseSearchMatch';
 import {completionQuery} from './completionQuery';
 import type {ManagedConnection} from './connection';
 import type {StructureTaskContext} from './structureDefinition';
+import {readDefinitionSearchPage} from './definitionSearch';
 
 interface Position{object:string;name:string}
-interface SearchState{input:StructureSearchInput;scope:number;total:number;after?:Position}
+interface SearchState{input:StructureSearchInput;scope:number;total:number;after?:Position;scannedDefinitions?:number}
 interface CursorState{state:SearchState;expires:number}
 type Control=Pick<StructureTaskContext,'checkCancelled'|'commandStarted'>;
 type Run=<T>(action:(managed:ManagedConnection,control:Control)=>Promise<T>)=>Promise<T>;
@@ -39,6 +40,7 @@ export function structureSearchQuery(kind:StructureSearchKind,database:string,pa
 
 /** 单页读取的连接由引擎登记并收尾；只有用户继续时才查询下一页，不预取或堆积IPC批次。 */
 async function readPage(state:SearchState,managed:ManagedConnection,control:Control):Promise<StructureSearchPage>{
+  if(state.input.searchIn==='definition')return readDefinitionSearchPage(state,managed,control);
   const {input}=state,page:StructureSearchPage={hits:[],failures:[],totalHits:state.total,completedScopes:state.scope,scopeCount:input.databases.length*input.kinds.length,limitReached:false,stoppedOnError:false};
   let queries=0,bytes=0;
   while(state.scope<page.scopeCount&&page.hits.length<structureSearchLimits.pageHits&&state.total<input.maxResults&&queries<structureSearchLimits.pageQueries){
