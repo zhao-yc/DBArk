@@ -1,4 +1,4 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 const tracer = vi.hoisted(() => ({ ids: new Set<number>() }));
@@ -29,6 +29,20 @@ async function preview(snapshot: TableCommentGetOutput, comment: string): Promis
 async function apply(value: TableCommentPreviewOutput, taskId = randomUUID(), revision = 1) { return engine.handle('schema.tableComment.apply', { previewToken: value.previewToken, acknowledgements: value.requiredAcknowledgements, taskId, connectionRevision: revision }); }
 /** 每例自建普通InnoDB表，表名仅来自本测试固定字面量。 */
 async function create(table: string, comment = '原说明') { await sql(`CREATE TABLE ${target(table)}(id BIGINT NOT NULL AUTO_INCREMENT,s VARCHAR(80) CHARACTER SET latin1 COLLATE latin1_bin DEFAULT NULL,g INT GENERATED ALWAYS AS (length(s)) STORED,note TEXT,PRIMARY KEY(id),KEY prefix_key(s(8)),FULLTEXT KEY ft(note)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin ROW_FORMAT=DYNAMIC COMMENT=${stringLiteral(comment)}`); }
+
+/** 独立观察连接保存实际DDL、原生编号与模式；不调用产品读取器，不改会话或服务器配置。 */
+async function observeRecreatedTable(stage: 'before' | 'after', snapshot: TableCommentGetOutput) {
+  const table = 'changes', catalogue = dialect === 'mysql' && /^8\.(0|4)\./.test(version) ? 'INNODB_TABLES' : 'INNODB_SYS_TABLES';
+  const session = (await sql('SELECT CONNECTION_ID() AS connectionId, @@SESSION.sql_mode AS sqlMode, @@SESSION.sql_quote_show_create AS quoteShowCreate, @@character_set_connection AS charset, @@collation_connection AS collation'))[0];
+  const definition = await ddl(table), ddlHash = createHash('sha256').update(definition).digest('hex');
+  const identities = await sql(`SELECT CAST(TABLE_ID AS CHAR) AS id, NAME AS name FROM information_schema.${catalogue} WHERE CAST(NAME AS BINARY)=CAST(${stringLiteral(database + '/' + table)} AS BINARY) LIMIT 2`);
+  const observation = { stage, database, table, version, dialect, port: profile.port, strictTls: !!profile.tls?.enabled, catalogue, session, definition, ddlHash, snapshotDdlHash: snapshot.ddlHash, identities };
+  const path = `.cache/table-comment-evidence/${database}`;
+  await mkdir(path, { recursive: true });
+  // 先落盘再断言；即使准备条件失败和测试库被清理，也保留服务器原文用于独立诊断。
+  await writeFile(`${path}/recreate-${stage}.json`, JSON.stringify(observation, null, 2), { flag: 'wx' });
+  return observation;
+}
 
 /** 只验证显式准备配置；13484不得因遗漏TLS开关、CA或严格校验而降级连接。 */
 function assertTableCommentTestTarget(profile: ConnectionProfile, tlsRequested: string | undefined): void {
@@ -82,8 +96,21 @@ describe.skipIf(!enabled)('表注释单属性六实例核心验收（每轮显�
   });
   it('外部定义变化、同定义DROP重建与连接修订变化拒绝旧令牌且不重放', async () => {
     await create('changes'); const next = await preview(await get('changes'), '新说明'); await sql(`ALTER TABLE ${target('changes')} COMMENT='外部修改'`); await expect(apply(next)).rejects.toThrow('变化');
-    const recreated = await preview(await get('changes'), '新说明'), definition = await ddl('changes'); await sql('DROP TABLE ' + target('changes'));
-    await sql(definition.replace(/^CREATE TABLE `changes`/, 'CREATE TABLE ' + target('changes'))); await expect(apply(recreated)).rejects.toThrow('身份');
+    const snapshot = await get('changes'), recreated = await preview(snapshot, '新说明'), before = await observeRecreatedTable('before', snapshot);
+    await sql('DROP TABLE ' + target('changes'));
+    await sql(before.definition.replace(/^CREATE TABLE `changes`/, 'CREATE TABLE ' + target('changes')));
+    const after = await observeRecreatedTable('after', snapshot), evidence = `.cache/table-comment-evidence/${database}/recreate-`;
+    console.info(JSON.stringify({ 重建诊断: evidence, 版本: version, 端口: profile.port, 重建前DDL匹配快照: before.ddlHash === snapshot.ddlHash, 重建后DDL完全相同: after.definition === before.definition, 模式相同: JSON.stringify(after.session) === JSON.stringify(before.session), 重建前原生编号: before.identities, 重建后原生编号: after.identities }));
+    // 物理身份专门用例先证明完整DDL、模式均相同；更早的定义守卫拒绝不能代替身份守卫验收。
+    expect(before.ddlHash, '独立SHOW CREATE必须匹配预览快照；证据：' + evidence).toBe(snapshot.ddlHash);
+    expect(after.definition, '同定义重建前置条件失败，保留前后原文；证据：' + evidence).toBe(before.definition);
+    expect(after.session).toEqual(before.session);
+    expect(before.identities).toHaveLength(1); expect(after.identities).toHaveLength(1);
+    expect(before.identities[0].id).toMatch(/^[1-9]\d{0,19}$/); expect(after.identities[0].id).toMatch(/^[1-9]\d{0,19}$/);
+    expect(after.identities[0].id).not.toBe(before.identities[0].id);
+    const identityTask = randomUUID(); await expect(apply(recreated, identityTask)).rejects.toThrow('身份');
+    expect(events.filter(event => event.taskId === identityTask).at(-1)?.tableComment).toMatchObject({ ddlSubmitted: false, ddlCompleted: false, outcome: 'not-sent' });
+    await expect(apply(recreated)).rejects.toThrow('已失效或已使用');
     const revision = await preview(await get('changes'), '新说明'); await expect(apply(revision, randomUUID(), 2)).rejects.toThrow('配置'); await expect(apply(revision)).rejects.toThrow('已失效或已使用');
   });
   it('原生MDL等待取消保留实际未知状态，等待真实终态并关闭独立连接', async () => {
