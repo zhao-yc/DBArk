@@ -64,7 +64,15 @@ export class AtomicFile {
       catch { throw new Error('所选编码无法无损表示结果中的字符，请改用 JSON 格式'); }
     }
     if (iconv.decode(buffer, this.encoding, { stripBOM: false }) !== text) throw new Error('所选编码无法无损表示结果中的字符，请改用 UTF-8 或 JSON 格式');
-    if (this.bytes + this.pendingBytes + buffer.length > this.maxBytes) throw new Error('完整导出超过文件字节上限，原目标文件保持不变');
+    await this.writeBytes(buffer);
+  }
+
+  /** 二进制 XLSX 与文本共用预算及短写保护；复制小缓冲，避免调用者改写尚未落盘的数据。 */
+  async writeBytes(input: Uint8Array): Promise<void> {
+    this.checkCancelled();
+    if (!this.file || this.disposed || this.committed) throw new Error('文件写入器已关闭');
+    if (this.bytes + this.pendingBytes + input.length > this.maxBytes) throw new Error('完整导出超过文件字节上限，原目标文件保持不变');
+    const buffer = Buffer.from(input);
     // 至多 64 KiB 编码缓冲；百万行任务不需要逐行发起系统调用，大行直接有界写入。
     if (this.pendingBytes + buffer.length > 64 * 1024) await this.flush();
     if (buffer.length >= 64 * 1024) await this.writeBuffer(buffer);
