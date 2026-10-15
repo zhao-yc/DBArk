@@ -33,7 +33,9 @@ utf8mb3只覆盖基本多文种平面；目录的字符容量、字节容量和�
 
 ## 验证与ROOT验收准备
 
-本轮只做本机类型检查、驱动替身单元、源码构建和默认关闭用例的收集／跳过检查。不启动GUI、不操作剪贴板、不连接200、不运行Docker，不创建凭据。实库／原生UI／安装包验收均待ROOT安排；不可将单元或构建称为实库通过。
+初版开发阶段只做本机类型检查、驱动替身单元、源码构建和默认关闭用例的收集／跳过检查，当时未启动GUI、操作剪贴板、连接200或运行Docker，也未创建凭据。以下本地结果保留该阶段边界，不可将单元或构建称为实库通过。
+
+2026-10-16后续实证：ROOT在固定源码 `8d2ac07164d8979c638cb16657bba8624beec1b5`、清洁窗口真实串行执行六组合核心，run599各4/4，共24通过、0失败、0跳过；run600后置六实例相关临时资源全零。run583、run593各21通过3失败原样保留、不累加。详细修复过程、独立同DDL不同ID观测和未验边界见[表注释真实核心验收](../../tests/integration/acceptance-o01-table-comment-20261016.md)。GUI、安装产物、真实非默认SQL模式及断网等仍待验收，产品未纳入已发布0.17.0。
 
 - 核心：`tests/integration/engine-table-comment.integration.test.ts`，双开关 `DBARK_INTEGRATION_ENABLED=1` 和 `DBARK_TABLE_COMMENT_TEST=1` 才执行。每轮显式选择一个已核对实例；五版本族和独立严格TLS共六轮。使用已有环境变量和CA，不创建用户。真实connect只包一层记录所有实际线程编号，包括数据库为空的短会话与取消控制连接，实际网络／驱动实现不替换；清理按真实编号及隔离目标复核。
 - 正式UI：`tests/e2e/table-comment.spec.ts`，相同双开关；实际Electron、对象树／表页、中文输入、只读Monaco预览、确认项、双击单次执行、引擎参数只读、返回编辑释放预览。复用现有原生确认／严格TLS夹具。`--list`只收集，不启动GUI。
@@ -51,7 +53,7 @@ node node_modules/vitest/vitest.mjs run --config vitest.integration.config.ts te
 node node_modules/@playwright/test/cli.js test tests/e2e/table-comment.spec.ts --list
 ```
 
-本轮本地结果（2026-10-16）：类型检查通过；164个单元文件、3060项用例全部通过，其中新增表注释35项；源码构建通过，产物位于 `dist/main/index.cjs`、`dist/main/worker.cjs`、`dist/main/preload.cjs` 和 `dist/renderer/`。集成4项明确跳过；正式UI只收集到2项，未执行。构建保留既有依赖注释和大分块警告。
+初版本地结果（2026-10-16，后续实证另列）：类型检查通过；164个单元文件、3060项用例全部通过，其中新增表注释35项；源码构建通过，产物位于 `dist/main/index.cjs`、`dist/main/worker.cjs`、`dist/main/preload.cjs` 和 `dist/renderer/`。集成4项明确跳过；正式UI只收集到2项，未执行。构建保留既有依赖注释和大分块警告。
 
 第一次全量单元在沙箱系统临时目录出现136项EPERM重命名失败。没有改产品存储实现，将该次进程的TEMP/TMP设为已核对的本克隆 `.cache/table-comment-tmp` 后，完整重跑3060项全通过；两个日志分别留在个人 `.cache/table-comment-unit.log` 和 `.cache/table-comment-unit-workspace-tmp.log`，不提交。该过程没有修改用户全局环境变量。
 
