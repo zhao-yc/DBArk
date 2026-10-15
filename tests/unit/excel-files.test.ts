@@ -13,6 +13,17 @@ async function target(): Promise<string> { const base = join(process.cwd(), '.ca
 async function* values(rows: CellValue[][]): AsyncGenerator<CellValue[]> { yield* rows; }
 
 describe('Excel 单元格保真策略', () => {
+  it('总格数含标题：小预算正好相等可往返，多一行导出/预览/读取均拒绝', async () => {
+    const path = await target(), columns = [{ name: '甲', type: 'text' }, { name: '乙', type: 'text' }], rows: CellValue[][] = [['一', '二'], ['三', null]];
+    await exportExcelFile({ filePath: path, columns, rows: values(rows), cellBudget: 6, onCommitStart() {} });
+    const preview = await previewExcelSheet({ filePath: path, sheetId: '1', protocol: 'dbark-v1', cellBudget: 6 }); expect(preview.rows).toHaveLength(2);
+    const actual = []; for await (const row of readExcelRows({ filePath: path, sheetId: '1', protocol: 'dbark-v1', cellBudget: 6 })) actual.push(row); expect(actual).toEqual(preview.rows);
+    const original = await readFile(path);
+    await expect(exportExcelFile({ filePath: path, columns, rows: values([...rows, ['多', '行']]), cellBudget: 6, onCommitStart() {} })).rejects.toThrow('含标题'); expect(await readFile(path)).toEqual(original);
+    await exportExcelFile({ filePath: path, columns, rows: values([...rows, ['多', '行']]), cellBudget: 8, onCommitStart() {} });
+    await expect(previewExcelSheet({ filePath: path, sheetId: '1', protocol: 'dbark-v1', cellBudget: 6 })).rejects.toThrow('含标题');
+    await expect((async () => { for await (const _row of readExcelRows({ filePath: path, sheetId: '1', protocol: 'dbark-v1', cellBudget: 6 })) {} })()).rejects.toThrow('含标题');
+  });
   it('表头可选择实际行号，跳过说明行且保留后续值；空缺行不能悄悄改用下一行', async () => {
     const path = await target(), workbook = new ExcelJS.Workbook(), sheet = workbook.addWorksheet('数据');
     sheet.addRow(['说明']); sheet.addRow(['编号', '名称']); sheet.addRow(['9007199254740993', '中文']); await workbook.xlsx.writeFile(path);

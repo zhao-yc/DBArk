@@ -21,7 +21,7 @@ beforeEach(async () => {
   source = [raw]; selects = []; inserts = []; events = []; eventHook = undefined;
   info = { database: '隔离库', name: '表', columns: columns.map(column => ({ ...column, nullable: true, generated: false, defaultValue: null, extra: '', comment: '' })), indexes: [], foreignKeys: [], primaryKey: ['id'], editableKey: ['id'], engine: 'InnoDB', ddl: '', objectKind: 'table' };
   mocks.tableInfo.mockReset().mockImplementation(async () => info);
-  mocks.execute.mockReset().mockImplementation(async (_managed, sql: string, params: CellValue[]) => { if (sql.startsWith('INSERT')) inserts.push(params); return { rows: { affectedRows: 1, serverStatus: 2 }, fields: [] }; });
+  mocks.execute.mockReset().mockImplementation(async (_managed, sql: string, params: CellValue[]) => { if (sql.startsWith('INSERT')) inserts.push(params); return { rows: { affectedRows: 1, serverStatus: 2, warningStatus: 0 }, fields: [] }; });
   mocks.connect.mockReset().mockImplementation(async () => ({ profile, sqlMode: '', serverStatus: 2, status: { dialect: 'mysql', version: '模拟' }, broken: false,
     connection: { threadId: 42, query: (options: { sql: string }) => { selects.push(options.sql); return { stream: () => Readable.from(source) }; } }, close: vi.fn(async () => undefined) } as unknown as ManagedConnection));
   engine = new Engine(event => { events.push(event); eventHook?.(event); }); await engine.handle('connections.open', { id: profile.id, profile });
@@ -39,6 +39,73 @@ async function importInput(filePath: string, rows: CellValue[][] = [raw.map(valu
 }
 
 describe('Excel 正式引擎接线', () => {
+  it.each([
+    ['decimal(5,2)', '1.239', 1], ['varchar(2)', '三个字', 3], ['tinyint unsigned', '-1', 0], ['datetime(3)', '2026-10-15 10:20:30.123456', 2],
+  ] as [string, string, number][])('写入前拒绝 %s 的有损目标转换，不提交当前批', async (type, value, column) => {
+    const row: CellValue[] = ['1', '1', null, '', null]; row[column] = value;
+    const input = await importInput(await path(), [row]); info.columns[column].type = type;
+    const result = await engine.handle('excel.import', input); expect(result.rows).toBe(0); expect(result.errors[0]).toContain('不能无损导入');
+    expect(inserts).toEqual([]); expect(mocks.execute.mock.calls.some(call => call[1] === 'COMMIT')).toBe(false); expect(mocks.execute.mock.calls.at(-1)?.[1]).toBe('ROLLBACK');
+  });
+  it('INSERT 警告在下一 SQL 前读取诊断并回滚，不把告警行计为成功', async () => {
+    const input = await importInput(await path());
+    mocks.execute.mockImplementation(async (_managed, sql: string, params: CellValue[]) => {
+      if (sql.startsWith('INSERT')) { inserts.push(params); return { rows: { affectedRows: 1, serverStatus: 2, warningStatus: 1 }, fields: [] }; }
+      if (sql.startsWith('SHOW WARNINGS')) return { rows: [{ Level: 'Note', Code: 1265, Message: '不应回显的字段值' }], fields: [] };
+      return { rows: { affectedRows: 0, serverStatus: 2, warningStatus: 0 }, fields: [] };
+    });
+    const result = await engine.handle('excel.import', input); expect(result.rows).toBe(0); expect(result.errors[0]).toContain('当前批 1 行已回滚'); expect(result.errors[0]).toContain('1265'); expect(result.errors[0]).not.toContain('不应回显');
+    const sql = mocks.execute.mock.calls.map(call => call[1]); const inserted = sql.findIndex(item => item.startsWith('INSERT')); expect(sql.slice(inserted + 1)).toEqual(['SHOW WARNINGS LIMIT 32', 'ROLLBACK']);
+  });
+  it('第 501 行转换警告只回滚第二批，保留已确认的前 500 行', async () => {
+    const rows = Array.from({ length: 502 }, (_, index) => [String(index), '1', null, '', null] as CellValue[]), input = await importInput(await path(), rows);
+    mocks.execute.mockImplementation(async (_managed, sql: string, params: CellValue[]) => {
+      if (sql.startsWith('INSERT')) { inserts.push(params); return { rows: { affectedRows: 1, serverStatus: 2, warningStatus: inserts.length === 501 ? 1 : 0 }, fields: [] }; }
+      if (sql.startsWith('SHOW WARNINGS')) return { rows: [{ Level: 'Warning', Code: 1264 }], fields: [] };
+      return { rows: { affectedRows: 0, serverStatus: 2, warningStatus: 0 }, fields: [] };
+    });
+    const result = await engine.handle('excel.import', input); expect(result.rows).toBe(500); expect(result.errors[0]).toContain('第 501'); expect(result.errors[0]).toContain('当前批 1 行已回滚'); expect(inserts).toHaveLength(501);
+    expect(mocks.execute.mock.calls.filter(call => call[1] === 'COMMIT')).toHaveLength(1); expect(mocks.execute.mock.calls.at(-1)?.[1]).toBe('ROLLBACK');
+  });
+  it.each(['csv', 'json'])('%s 复用链路保留精确值和无键表导入，并同样拒绝服务器警告', async format => {
+    const filePath = await path(), record = { id: '18446744073709551615', 金额: '123456789012345678.123456789012', 时间: '2026-10-15 10:20:30.123456', 内容: '=SUM(A1)', 字节: { type: 'binary', base64: 'AAH/' } };
+    await writeFile(filePath, format === 'json' ? JSON.stringify([record]) : 'id,金额,时间,内容,字节\r\n18446744073709551615,123456789012345678.123456789012,2026-10-15 10:20:30.123456,=SUM(A1),base64:AAH/\r\n');
+    info.editableKey = [];
+    const input = { ...target, filePath, format, encoding: 'utf8', taskId: '兼容导入', mapping: Object.fromEntries(columns.map(column => [column.name, column.name])) };
+    await expect(engine.handle('files.import', input)).resolves.toEqual({ rows: 1, errors: [] }); expect(inserts[0]).toEqual(raw);
+    mocks.execute.mockImplementation(async (_managed, sql: string) => ({ rows: sql.startsWith('SHOW WARNINGS') ? [{ Code: 1265 }] : { affectedRows: 1, serverStatus: 2, warningStatus: sql.startsWith('INSERT') ? 1 : 0 }, fields: [] }));
+    const result = await engine.handle('files.import', { ...input, taskId: '兼容告警' }); expect(result.rows).toBe(0); expect(result.errors[0]).toContain('拒绝提交'); expect(mocks.execute.mock.calls.at(-1)?.[1]).toBe('ROLLBACK');
+  });
+  it('元数据任务覆盖建连取消，迟到连接关闭且不读取目标列', async () => {
+    const late = await mocks.connect.mock.results[0].value as ManagedConnection; let deliver!: (value: ManagedConnection) => void, signal!: AbortSignal;
+    mocks.connect.mockImplementationOnce((_profile, _database, abort) => { signal = abort; return new Promise<ManagedConnection>(resolve => { deliver = resolve; }); });
+    const running = engine.handle('metadata.table', { ...target, taskId: '目标元数据' }); const rejected = expect(running).rejects.toThrow('已取消');
+    const stopping = engine.handle('query.cancel', { taskId: '目标元数据' }); expect(signal.aborted).toBe(true); deliver(late); await rejected; await stopping;
+    expect(mocks.tableInfo).not.toHaveBeenCalled(); expect(events.at(-1)?.status).toBe('cancelled');
+  });
+  it('元数据取消等待目录查询真实终态及专用连接清理', async () => {
+    let finishQuery!: (reason: Error) => void, finishClose!: () => void;
+    const query = new Promise<never>((_resolve, reject) => { finishQuery = reject; }), closing = new Promise<void>(resolve => { finishClose = resolve; });
+    const managed = await mocks.connect.mock.results[0].value as ManagedConnection;
+    const close = vi.fn(() => closing); mocks.connect.mockResolvedValueOnce({ ...managed, close }); mocks.tableInfo.mockReturnValueOnce(query);
+    const running = engine.handle('metadata.table', { ...target, taskId: '元数据收尾' }); const rejected = expect(running).rejects.toThrow('目录已终止');
+    await vi.waitFor(() => expect(mocks.tableInfo).toHaveBeenCalled()); let finished = false;
+    const stopping = engine.handle('query.cancel', { taskId: '元数据收尾' }).then(() => { finished = true; });
+    await vi.waitFor(() => expect(mocks.execute.mock.calls.some(call => call[1] === 'KILL CONNECTION 42')).toBe(true));
+    expect(finished).toBe(false); expect(close).not.toHaveBeenCalled(); finishQuery(Error('目录已终止'));
+    await vi.waitFor(() => expect(close).toHaveBeenCalledWith({ strict: true })); expect(finished).toBe(false);
+    finishClose(); await rejected; await stopping; expect(finished).toBe(true);
+  });
+  it.each(['missing', 'diagnostic'])('警告信息 %s 不完整时也不允许 COMMIT 或重放写入', async mode => {
+    const input = await importInput(await path());
+    mocks.execute.mockImplementation(async (_managed, sql: string, params: CellValue[]) => {
+      if (sql.startsWith('INSERT')) { inserts.push(params); return { rows: { affectedRows: 1, serverStatus: 2, ...(mode === 'missing' ? {} : { warningStatus: 1 }) }, fields: [] }; }
+      if (sql.startsWith('SHOW WARNINGS')) { if (mode === 'diagnostic') throw Error('诊断读取失败'); return { rows: [], fields: [] }; }
+      return { rows: { affectedRows: 0, serverStatus: 2, warningStatus: 0 }, fields: [] };
+    });
+    const result = await engine.handle('excel.import', input); expect(result.rows).toBe(0); expect(result.errors).toHaveLength(1); expect(inserts).toHaveLength(1);
+    expect(mocks.execute.mock.calls.some(call => call[1] === 'COMMIT')).toBe(false); expect(mocks.execute.mock.calls.at(-1)?.[1]).toBe('ROLLBACK');
+  });
   it.each(['cancel', 'disconnect', 'exit'])('%s 覆盖建连阶段，迟到成功连接必须关闭且不读取数据', async route => {
     const late = await mocks.connect.mock.results[0].value as ManagedConnection;
     const closeCount = (late.close as ReturnType<typeof vi.fn>).mock.calls.length;
@@ -99,7 +166,7 @@ describe('Excel 正式引擎接线', () => {
   });
   it('第二批失败明确保留前 500 行、回滚当前批并报告失败任务', async () => {
     const rows = Array.from({ length: 502 }, (_, index) => [String(index), '1', null, '数据', null] as CellValue[]); const input = await importInput(await path(), rows);
-    mocks.execute.mockImplementation(async (_managed, sql: string, params: CellValue[]) => { if (sql.startsWith('INSERT')) { if (inserts.length === 501) throw Error('模拟重复键'); inserts.push(params); } return { rows: { affectedRows: 1, serverStatus: 2 }, fields: [] }; });
+    mocks.execute.mockImplementation(async (_managed, sql: string, params: CellValue[]) => { if (sql.startsWith('INSERT')) { if (inserts.length === 501) throw Error('模拟重复键'); inserts.push(params); } return { rows: { affectedRows: 1, serverStatus: 2, warningStatus: 0 }, fields: [] }; });
     const result = await engine.handle('excel.import', input); expect(result.rows).toBe(500); expect(result.errors[0]).toContain('当前批 1 行已回滚'); expect(result.errors[0]).toContain('第 502'); expect(events.at(-1)?.status).toBe('failed');
   });
   it('流中途失败保留原目标并释放快照与临时文件', async () => {

@@ -8,7 +8,7 @@ export const excelTransferZh = {
   plainHelp: '普通模式保留文字 \\N、\\B: 和反斜线。空白格是 NULL，明确的空文本是空字符串。',
   dbarkHelp: '仅用于 DBArk 导出：\\N 表示 NULL，\\B: 后是 Base64 二进制，双反斜线还原为单反斜线。',
   exportHelp: '按下方所选范围导出数据，不应用表格当前筛选。数值与日期时间写为文本以保持精度，公式外观文字也只写为文本。NULL、空串、二进制可通过 DBArk 协议无损还原。',
-  limits: '限制：最多 1,048,575 条数据、16,384 列、500 万格；单格 32,767 字符，单行文本 1 MiB，工作表 XML 256 MiB。超限会失败并保留原文件。',
+  limits: '限制：最多 1,048,575 条数据、16,384 列、500 万格（含标题）；单格 32,767 字符，单行文本 1 MiB，工作表 XML 256 MiB。超限会失败并保留原文件。',
   importLimits: '读取限制：文件 256 MiB、总展开 512 MiB、单文件展开 256 MiB、64 张表、共享字符串 10 万项或 16 MiB。拒绝公式、外链、宏、合并单元格及 ZIP64。',
   loading: '正在校验工作簿并准备预览…', mapping: '字段映射', source: '来源字段', target: '目标字段', skip: '不导入此字段',
   preview: '前 20 行预览', noRows: '工作表只有标题，没有数据行。', nullValue: 'NULL', emptyValue: '空字符串', binaryValue: '二进制',

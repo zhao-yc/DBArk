@@ -18,7 +18,7 @@ export interface ExcelTransferServices {
   chooseFile(mode: 'import' | 'export', suggestedName: string): Promise<FileChoice | null>;
   listSheets(fileToken: string, taskId?: string): Promise<ExcelSheet[]>;
   preview(input: { fileToken: string; taskId?: string; sheetId: string; headerRow?: number; protocol: ExcelTextProtocol }): Promise<ExcelSheetPreview>;
-  targetColumns(target: ExcelTransferTarget): Promise<ExcelColumn[]>;
+  targetColumns(target: ExcelTransferTarget, taskId: string): Promise<ExcelColumn[]>;
   exportTable(input: ExcelExportRequest): Promise<{ rows: number }>;
   importTable(input: ExcelImportRequest): Promise<ExcelImportResult>;
   cancel(taskId: string): Promise<void>;
