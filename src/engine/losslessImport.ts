@@ -64,7 +64,17 @@ export function validateLosslessImport(column: ColumnInfo, value: CellValue, dia
     return;
   }
   if (/^(?:FLOAT|DOUBLE|REAL)\b/.test(type)) {
-    const numeric = Number(numberText), original = decimalKey(numberText);
+    const declaration = /^(FLOAT|DOUBLE(?:\s+PRECISION)?|REAL)(?:\(\s*(\d+)\s*,\s*(\d+)\s*\))?(?:\s+UNSIGNED)?(?:\s+ZEROFILL)?$/.exec(type);
+    if (!declaration || (declaration[1] === 'REAL' && declaration[2] !== undefined)) fail('无法可靠解释该浮点声明的存储精度');
+    const original = decimalKey(numberText);
+    if (declaration![2] !== undefined) {
+      // 先按原十进制有效位检查 M,D，不能先经 Number 舍入后再判断被丢弃的小数或整数容量。
+      const precision = Number(declaration![2]), scale = Number(declaration![3]);
+      if (!Number.isInteger(precision) || precision < 1 || precision > 255 || scale < 0 || scale > 30 || scale > precision) fail('定标浮点声明超出已确认范围');
+      const exact = /^-?(\d+)e(-?\d+)$/.exec(original), power = Number(exact?.[2] ?? 0);
+      if (!original || (exact && (Math.max(0, -power) > scale || Math.max(0, exact[1].length + power) > precision - scale))) fail('非零小数超出定标浮点尺度或整数容量');
+    }
+    const numeric = Number(numberText);
     if (!original || !Number.isFinite(numeric) || original !== decimalKey(String(numeric))) fail('浮点文本不能往返或超出范围');
     if (/^FLOAT\b/.test(type) && !Object.is(Math.fround(numeric), numeric)) fail('数值不能按 FLOAT 精度往返');
     if (unsigned && numeric < 0) fail('目标为无符号浮点数');
