@@ -22,7 +22,7 @@ import { PageFindPanel } from './PageFindPanel';
 import { TablePreferencesDialog } from './TablePreferencesDialog';
 import { tableGridZh } from '../locales/tableGrid.zh-CN';
 import { isBinaryCell } from '../binaryCell';
-import { blocksBinaryTextInput } from '../tableCellKeyboard';
+import { blocksBinaryTextInput, tableCellKeyIsComposing } from '../tableCellKeyboard';
 import '../tableGrid.css';
 import { indexPatchZh } from '../locales/indexPatches.zh-CN';
 import { foreignKeyPatchZh } from '../locales/foreignKeyPatches.zh-CN';
@@ -286,20 +286,32 @@ export function TableTab({ tab, onDesign, onTransfer, onColumnPatches, onIndexPa
   }
   /** 普通编辑仍由网格处理；二进制保留原复制粘贴，仅将文本输入和IME交回专用查看器边界。 */
   function handleGridKeyDown(args: CellKeyDownArgs<DraftRow>, event: CellKeyboardEvent) {
-    if (args.mode !== 'ACTIVE' || blocked || document.querySelector('[role=dialog]')) return;
+    const composing = tableCellKeyIsComposing(event.nativeEvent);
+    if (args.mode !== 'ACTIVE') {
+      // EDIT态的Enter也会被网格自动提交；组合输入只取消网格行为，原生输入仍继续。
+      if (composing) event.preventGridDefault();
+      return;
+    }
+    if (blocked || document.querySelector('[role=dialog]')) return;
     const { row: activeRow, column: activeColumn } = args;
     if (!activeRow || !activeColumn) return;
     const binary = isBinaryCell(ownCell(activeRow.data, activeColumn.key), info?.columns.find(item => item.name === activeColumn.key)?.type);
     if (binary && blocksBinaryTextInput(event)) event.preventGridDefault();
+    // 二进制不进入普通编辑器；TEXT保留原生IME输入，但组合事件不能触发查看、查找、清空或预览。
+    if (composing) { if (binary) event.preventGridDefault(); return; }
     if ((event.ctrlKey || event.metaKey) && ['f', 'h'].includes(event.key.toLowerCase()) && !(event.target instanceof HTMLElement && event.target.closest('input,textarea,select,[contenteditable=true]'))) {
       event.preventGridDefault(); event.preventDefault(); openPageFind(event.key.toLowerCase() === 'h' ? 'replacement' : 'query');
-    } else if (event.key === 'Enter' && !event.ctrlKey && !event.metaKey && !event.nativeEvent.isComposing && binary) {
+    } else if (event.key === 'Enter' && !event.ctrlKey && !event.metaKey && binary) {
       event.preventGridDefault(); event.preventDefault(); record.openCell(activeRow.id, activeColumn.key);
     } else if ((event.ctrlKey || event.metaKey) && event.key === 'Enter' && changes.length) {
       event.preventGridDefault(); event.preventDefault(); void makePreview();
-    } else if (event.key === 'Delete' && editable && !record.hasInput() && !activeRow.deleted && page?.columns.some(item => item.key === activeColumn.key) && !info?.columns.find(item => item.name === activeColumn.key)?.generated) {
+    } else if (event.key === 'Delete') {
       event.preventGridDefault(); event.preventDefault();
-      setRows(current => current.map(row => row.id === activeRow.id ? { ...row, data: { ...row.data, [activeColumn.key]: info?.columns.find(item => item.name === activeColumn.key)?.nullable ? null : binary ? { type: 'binary' as const, base64: '' } : '' } } : row));
+      const context = getRecordContext(), field = context.info?.columns.find(item => item.name === activeColumn.key), currentRow = rowsRef.current.find(row => row.id === activeRow.id);
+      // 清空与编辑/粘贴共享当前列资格；缺结构、迟到行和记录输入不能被快捷键绕过。
+      if (!editable || record.dirty || record.hasInput() || !field || currentRow !== activeRow || !page?.columns.some(item => item.key === activeColumn.key) || recordReadonlyReason(context, currentRow, activeColumn.key)) return;
+      const value = field.nullable ? null : isBinaryCell(ownCell(currentRow.data, activeColumn.key), field.type) ? { type: 'binary' as const, base64: '' } : '';
+      setRows(current => current.map(row => row.id === activeRow.id ? { ...row, data: { ...row.data, [activeColumn.key]: value } } : row));
     }
   }
   /** 单元格弹窗也使用相同 UUID、代次与输入缓冲，关闭不会无提示丢稿。 */

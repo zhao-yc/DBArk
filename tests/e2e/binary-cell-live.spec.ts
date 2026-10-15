@@ -143,6 +143,32 @@ test.describe('200隔离实库二进制单元格', () => {
     }), info);
   });
 
+  test('报告组合标志不执行清空或预览，TEXT输入保留且正常Delete区分NULL与零字节', async ({}, info) => {
+    test.setTimeout(120000);
+    await inDatabase(async context => {
+      await fixture(context);
+      await context.observer.query(`ALTER TABLE ${qualified(context.database)} MODIFY token VARBINARY(32) NOT NULL,ADD note TEXT`);
+      await context.observer.query(`UPDATE ${qualified(context.database)} SET note='普通文本'`);
+      const before = await read(context); await openTable(context); const target = await cell(table(), 'token'); await target.click();
+      /** 只报告DOM组合状态，不模拟或声称实体输入法行为；后续正常按键另证处理器可达。 */
+      async function reportedKey(target: Locator, key: string, state: { isComposing: boolean; keyCode?: number; ctrlKey?: boolean; metaKey?: boolean }) { await target.evaluate((node, input) => { node.dispatchEvent(new KeyboardEvent('keydown', { bubbles: true, cancelable: true, ...input })); }, { key, ...state }); }
+      for (const state of [{ isComposing: true }, { isComposing: false, keyCode: 229 }]) {
+        for (const [key, modifiers] of [['Delete', {}], ['Enter', {}], ['Enter', { ctrlKey: true }], ['Enter', { metaKey: true }], ['f', { ctrlKey: true }], ['h', { metaKey: true }]] as const) await reportedKey(target, key, { ...state, ...modifiers });
+      }
+      await expect(target).toHaveText('0x00ff80'); await expect(table().locator('.row-modified')).toHaveCount(0); await expect(preview()).toHaveCount(0); await expect(cellDialog('token')).toHaveCount(0); await expect(table().locator('.page-find-panel')).toHaveCount(0);
+      expect(await calls('table.preview')).toBe(0); expect(await calls('table.apply')).toBe(0); expect(await read(context)).toEqual(before);
+      await target.press('Enter'); await expect(cellDialog('token')).toBeVisible(); await closeCell('token');
+      // TEXT在协议层仍可能是BLOB；普通字符进入原编辑器，组合Enter/Escape不提前提交或关闭。
+      const note = await cell(table(), 'note'); await note.click(); await note.press('a'); const input = table().getByRole('textbox', { name: '编辑 note', exact: true }); await expect(input).toBeVisible(); await input.fill('普通文本草稿');
+      await reportedKey(input, 'Enter', { isComposing: true, ctrlKey: true }); await reportedKey(input, 'Escape', { isComposing: false, keyCode: 229 }); await expect(input).toHaveValue('普通文本草稿'); await expect(preview()).toHaveCount(0); expect(await calls('table.preview')).toBe(0);
+      await input.press('Enter'); await expect(input).toHaveCount(0); await expect(await cell(table(), 'note')).toHaveText('普通文本草稿');
+      const payload = await cell(table(), 'payload'); await payload.click(); await payload.press('Delete'); await openCell('payload'); await expect(viewer(cellDialog('payload'))).toContainText(binary.null); await closeCell('payload');
+      const bytes = await cell(table(), 'token'); await bytes.click(); await bytes.press('Delete'); await expect(bytes).toHaveText('0x'); await openCell('token'); await expect(viewer(cellDialog('token'))).toContainText(binary.empty); await closeCell('token');
+      expect(await calls('table.apply')).toBe(0); expect(await calls('table.preview')).toBe(0); expect(await read(context)).toEqual(before); const [notes] = await context.observer.query<RowDataPacket[]>(`SELECT note FROM ${qualified(context.database)} ORDER BY id`); expect(notes.map(row => row.note)).toEqual(['普通文本', '普通文本']);
+      await page.screenshot({ path: info.outputPath('reported-ime-and-delete-guards.png') });
+    }, info);
+  });
+
   test('BLOB VARBINARY BIT查看及草稿零写，明确集中提交后逐字节与大整数保持', async ({}, info) => {
     test.setTimeout(120000);
     await inDatabase(async context => {
