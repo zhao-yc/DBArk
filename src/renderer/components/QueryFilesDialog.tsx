@@ -23,7 +23,8 @@ export function QueryFilesDialog({ mode, tab, onClose }: { mode: 'open' | 'save'
       if (!choice) return;
       if (mode === 'open') {
         const result = await invoke('files.readQuery', { fileToken: choice.token, encoding });
-        useWorkspace.getState().openTab({ kind: 'query', connectionId: tab.connectionId, database: tab.database, title: choice.name, sql: result.sql });
+        // 文件另开未绑定草稿，只继承默认库状态，不能借用当前标签的保存查询来源。
+        useWorkspace.getState().openTab({ kind: 'query', connectionId: tab.connectionId, database: tab.database, databaseContext: tab.databaseContext, title: choice.name, sql: result.sql });
       } else {
         await invoke('files.writeQuery', { fileToken: choice.token, encoding, sql: source.current });
         useWorkspace.getState().notify(formatText(text.saved, choice.name));

@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { querySaveContentSchema, queryUpdateSourceSchema, querySourceBindingSchema } from './queryBinding';
 import{savedQueryPageInputSchema,savedQueryPageNextSchema,savedQueryPageReleaseSchema,savedQueryDeleteCheckedSchema}from'./savedQueryPages';
 import{historyPageInputSchema,historyReadSchema,historyErrorReadSchema}from'./historyPages';
 import{localSqlPageNextSchema,localSqlPageReleaseSchema}from'./localSqlPages';
@@ -80,6 +81,7 @@ const tablePage = z.object({ ...target, page: z.number().int().min(1).max(100000
   catch (error) { context.addIssue({ code: 'custom', path: ['filters'], message: error instanceof Error ? error.message : '筛选条件无效' }); }
 });
 export const commandSchemas: Record<Command, z.ZodType> = {
+  'queries.create': querySaveContentSchema, 'queries.updateSource': queryUpdateSourceSchema,
   'table.preferences.get': tablePreferenceTargetSchema, 'table.preferences.save': tablePreferenceSaveSchema, 'table.preferences.reset': tablePreferenceTargetSchema,
   'app.info': empty,
   'app.setDirty': z.object({ dirty: z.boolean() }).strict(),
@@ -152,7 +154,7 @@ export const commandSchemas: Record<Command, z.ZodType> = {
   'snippets.list': empty, 'snippets.save': snippetSchema, 'snippets.delete': z.object({ id }).strict(),
   'history.list': z.object({ connectionId: id.optional() }).strict(), 'tasks.list': empty,
   'history.page':historyPageInputSchema,'history.pageContinue':localSqlPageNextSchema,'history.pageRelease':localSqlPageReleaseSchema,'history.read':historyReadSchema,'history.readError':historyErrorReadSchema,
-  'settings.get': empty, 'settings.save': z.object({ theme: z.enum(['dark','light']), sidebarWidth: z.number().min(180).max(600), resultLimit: z.number().int().min(1).max(100000), pageSize: z.number().int().min(1).max(1000), tabs: z.array(z.object({ id, kind: z.enum(['query','table']), title: name, connectionId: id, database: z.string().optional(), databaseContext:queryDatabaseContext.optional(), table: z.string().optional(), sql: text.optional() }).strict()).max(100), activeTabId: z.string().optional() }).strict()
+  'settings.get': empty, 'settings.save': z.object({ theme: z.enum(['dark','light']), sidebarWidth: z.number().min(180).max(600), resultLimit: z.number().int().min(1).max(100000), pageSize: z.number().int().min(1).max(1000), tabs: z.array(z.object({ id, kind: z.enum(['query','table']), title: name, connectionId: id, database: z.string().optional(), databaseContext:queryDatabaseContext.optional(), table: z.string().optional(), sql: text.optional(), sourceBinding: querySourceBindingSchema.optional() }).strict()).max(100), activeTabId: z.string().optional() }).strict()
 };
 
 /** 只接受已声明命令；剔除任意路径、原型字段和其他非约定输入。 */

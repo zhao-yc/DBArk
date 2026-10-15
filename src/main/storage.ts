@@ -2,13 +2,16 @@ import { connectionTransferDocumentSchema, connectionTransferLimits, importConne
 import initSqlJs, { type Database, type SqlValue } from 'sql.js';
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
-import { randomUUID } from 'node:crypto';
+import { randomUUID, createHash } from 'node:crypto';
 import type { AppSettings, ConnectionProfile, HistoryEntry, SavedQuery, SqlSnippet, TaskRecord } from '../shared/contracts';
 import { validateSnippetBudget } from '../shared/snippets';
 import { tablePreferenceSaveSchema, tablePreferenceTargetSchema, tablePreferencesSchema, tablePreferenceTargetChanged, validateTablePreferenceBudget, type TablePreferenceTarget, type TablePreferences } from '../shared/tablePreferences';
 import{savedQuerySearchLimits}from'../shared/savedQuerySearch';
 import type{SavedQueryPagePosition}from'../shared/savedQueryPages';
 import type{HistoryPagePosition,HistoryPageInput}from'../shared/historyPages';
+import { querySaveContentSchema, queryUpdateSourceSchema, sameSavedQueryContext, savedQueryOriginContext, type QuerySaveContent, type QuerySaveResult } from '../shared/queryBinding';
+import { bindSavedQuery, queryConnectionDigest } from './queryBinding';
+import { parseSavedQueryRecord } from './savedQuerySearchMatch';
 
 export interface SecretProtector { available(): boolean; encrypt(value: string): string; decrypt(value: string): string; }
 export const defaultSettings: AppSettings = { theme: 'dark', sidebarWidth: 270, resultLimit: 1000, pageSize: 200, tabs: [] };
@@ -228,6 +231,63 @@ export class LocalStore {
   deleteSnippet(id: string): void { this.mutate(() => this.db.run('DELETE FROM sql_snippets WHERE id=?', [id])); }
   /** 查询正文和来源连接一起原子保存。 */
   saveQuery(query: SavedQuery): void { this.mutate(() => this.db.run('INSERT INTO queries VALUES (?,?,?) ON CONFLICT(id) DO UPDATE SET data=excluded.data,updated_at=excluded.updated_at', [query.id, JSON.stringify(query), query.updatedAt]));this.queryRevisionValue++; }
+  /** 来源身份只读取当前连接的公开路由字段，不通过 resolveConnection 解密凭据。 */
+  private querySourceProfile(id?: string): ConnectionProfile | undefined {
+    return id ? this.records<ConnectionProfile>('SELECT data FROM connections WHERE id=?', [id])[0] : undefined;
+  }
+  /** 明确打开后绑定所见原文；不保存正文副本、搜索条件或认证内容。 */
+  bindQuerySource(id: string, digest: string) {
+    const raw = this.querySearchRaw(id);
+    if (raw === undefined) throw Error('原查询已删除，请重新打开列表');
+    if (createHash('sha256').update(raw).digest('hex') !== digest) throw Error('原查询已修改，请重新打开后编辑');
+    const query = parseSavedQueryRecord(id, raw);
+    return bindSavedQuery(query, raw, this.querySourceProfile(query.connectionId));
+  }
+  /** 保留上下文类别，所有新记录和更新使用同一正文及存储体积校验。 */
+  private boundQueryRecord(id: string, content: QuerySaveContent): SavedQuery {
+    const context = content.context;
+    const query: SavedQuery = { id, name: content.name, ...(content.connectionId ? { connectionId: content.connectionId } : {}), sql: content.sql, updatedAt: new Date().toISOString(),
+      ...(context.state === 'legacy' ? context.database === undefined ? {} : { database: context.database } : { databaseContext: { ...context }, ...(context.state === 'known' && context.database !== null ? { database: context.database } : {}) }) };
+    return parseSavedQueryRecord(id, JSON.stringify(query));
+  }
+  /** 新建由主进程分配编号，绝不 upsert 或复用查询标签编号。 */
+  createBoundQuery(raw: unknown): QuerySaveResult {
+    const content = querySaveContentSchema.parse(raw), query = this.boundQueryRecord(randomUUID(), content);
+    let profile: ConnectionProfile | undefined;
+    this.mutate(() => {
+      profile = this.querySourceProfile(content.connectionId);
+      if (content.connectionId && !profile) throw Error('当前连接已删除，请选择有效连接后另存');
+      this.db.run('INSERT INTO queries VALUES (?,?,?)', [query.id, JSON.stringify(query), query.updatedAt]);
+    });
+    this.queryRevisionValue++;
+    return { name: query.name, source: bindSavedQuery(query, JSON.stringify(query), profile) };
+  }
+  /** 原文摘要、连接身份及四类上下文在同一 SQLite 事务内核对，失败恢复内存和磁盘。 */
+  updateBoundQuery(raw: unknown): QuerySaveResult {
+    const input = queryUpdateSourceSchema.parse(raw), { source, content } = input;
+    const query = this.boundQueryRecord(source.id, content); let profile: ConnectionProfile | undefined;
+    this.mutate(() => {
+      const previous = this.querySearchRaw(source.id);
+      if (previous === undefined) throw Error('原查询已删除；请另存为新查询，不会恢复或覆盖原记录');
+      if (createHash('sha256').update(previous).digest('hex') !== source.digest) throw Error('原查询已修改；本次未覆盖，请重新打开或另存为新查询');
+      const current = parseSavedQueryRecord(source.id, previous), context = savedQueryOriginContext(current.database, current.databaseContext);
+      if (source.connectionId !== current.connectionId || content.connectionId !== current.connectionId || !sameSavedQueryContext(source.context, context) || !sameSavedQueryContext(content.context, context)) throw Error('来源连接或默认库状态已变化；请另存为新查询');
+      profile = this.querySourceProfile(current.connectionId);
+      if (current.connectionId && (!profile || !source.connectionDigest || queryConnectionDigest(profile) !== source.connectionDigest)) throw Error('来源连接已删除或配置已变化；请重新打开或另存为新查询');
+      this.db.run('UPDATE queries SET data=?,updated_at=? WHERE id=?', [JSON.stringify(query), query.updatedAt, source.id]);
+    });
+    this.queryRevisionValue++;
+    return { name: query.name, source: bindSavedQuery(query, JSON.stringify(query), profile) };
+  }
+  /** 旧命令仅兼容新建；已有记录必须提供所见摘要，不能旁路来源更新保护。 */
+  createLegacyQuery(query: SavedQuery): void {
+    const parsed = parseSavedQueryRecord(query.id, JSON.stringify(query));
+    this.mutate(() => {
+      if (this.querySearchRaw(parsed.id) !== undefined) throw Error('原查询已存在，更新必须使用来源摘要核对；请从保存查询入口打开');
+      this.db.run('INSERT INTO queries VALUES (?,?,?)', [parsed.id, JSON.stringify(parsed), parsed.updatedAt]);
+    });
+    this.queryRevisionValue++;
+  }
   /** 只删除指定查询，不影响数据库或执行历史。 */
   deleteQuery(id: string): void { this.mutate(() => this.db.run('DELETE FROM queries WHERE id=?', [id]));this.queryRevisionValue++; }
   /** 历史显示限制为最近 500 条，可以按连接筛选。 */

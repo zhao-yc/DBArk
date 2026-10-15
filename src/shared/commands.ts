@@ -2,6 +2,7 @@ import type { Command } from './contracts';
 
 /** 预加载白名单不引入校验器或 Node 依赖；新增公开命令必须在编译时补齐。 */
 export const publicCommands: Record<Command, true> = {
+  'queries.create': true, 'queries.updateSource': true,
   'table.preferences.get': true, 'table.preferences.save': true, 'table.preferences.reset': true,
   'app.info': true, 'app.setDirty': true,
   'connections.export': true, 'connections.importPreview': true, 'connections.importApply': true,

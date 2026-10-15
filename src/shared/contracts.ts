@@ -16,6 +16,7 @@ import type{DataSearchRecordReadInput,DataSearchRecordsReleaseInput,DataSearchRe
 import type{SavedQuerySearchInput,SavedQuerySearchNext,SavedQuerySearchPage,SavedQueryOpenResult}from'./savedQuerySearch';
 import type{SavedQueryPageInput,SavedQueryPage}from'./savedQueryPages';
 import type{HistoryPageInput,HistoryPage,HistoryOpenResult}from'./historyPages';
+import type { QuerySourceBinding, QuerySaveContent, QuerySaveResult } from './queryBinding';
 export type CellValue = string | number | boolean | null | { type: 'binary'; base64: string };
 export type DataRow = Record<string, CellValue>;
 export type ObjectKind = 'table' | 'view' | 'procedure' | 'function' | 'trigger' | 'event';
@@ -54,7 +55,7 @@ export interface TaskRecord { id: string; kind: string; status: 'running' | 'com
 export interface TaskEvent { taskId: string; status: TaskRecord['status']; progress: number; message: string; rows?: number; resultIndex?: number; columns?: ResultColumn[]; batch?: DataRow[]; executionDatabase?:QueryDatabaseContext; queryExport?: QueryExportProgress; columnPatch?: TableColumnApplyProgress; indexPatch?: TableIndexApplyProgress; foreignKeyPatch?: TableForeignKeyApplyProgress; dataSearch?:DataSearchProgress; }
 export interface FileChoice { token: string; name: string; }
 export type QueryFileEncoding = 'utf8' | 'utf16le' | 'gb18030';
-export interface AppSettings { theme: 'dark' | 'light'; sidebarWidth: number; resultLimit: number; pageSize: number; tabs: { id: string; kind: 'query' | 'table'; title: string; connectionId: string; database?: string; databaseContext?:QueryDatabaseContext; table?: string; sql?: string }[]; activeTabId?: string; }
+export interface AppSettings { theme: 'dark' | 'light'; sidebarWidth: number; resultLimit: number; pageSize: number; tabs: { id: string; kind: 'query' | 'table'; title: string; connectionId: string; database?: string; databaseContext?:QueryDatabaseContext; table?: string; sql?: string; sourceBinding?: QuerySourceBinding }[]; activeTabId?: string; }
 export interface ImportOptions { connectionId: string; database: string; table: string; fileToken: string; format: 'csv' | 'json' | 'sql'; encoding: 'utf8' | 'utf16le' | 'gb18030'; mapping: Record<string, string>; taskId: string; }
 export interface ExportOptions { connectionId: string; database: string; table: string; fileToken: string; format: 'csv' | 'json' | 'sql'; encoding: 'utf8' | 'utf16le' | 'gb18030'; includeStructure: boolean; includeData: boolean; taskId: string; }
 /** 仅包含已经返回的结果，不携带可触发数据库访问的 SQL、连接或会话。 */
@@ -63,6 +64,8 @@ export interface ResultExportOptions { fileToken: string; format: 'csv' | 'json'
 
 /** 请求映射是界面、主进程与数据库进程共同使用的唯一接口定义。 */
 export interface CommandMap {
+  'queries.create': { input: QuerySaveContent; output: QuerySaveResult };
+  'queries.updateSource': { input: { source: QuerySourceBinding; content: QuerySaveContent }; output: QuerySaveResult };
   'table.preferences.get': { input: TablePreferenceTarget; output: TablePreferences | null };
   'table.preferences.save': { input: TablePreferenceTarget & { preferences: TablePreferences }; output: TablePreferences };
   'table.preferences.reset': { input: TablePreferenceTarget; output: void };
