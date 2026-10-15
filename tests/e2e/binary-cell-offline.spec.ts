@@ -8,7 +8,8 @@ import { binaryCellZh as text } from '../../src/renderer/locales/binaryCell.zh-C
 let server: ViteDevServer, app: ElectronApplication, page: Page, directory: string, url: string;
 const errors: string[] = [];
 const viewer = () => page.getByRole('region', { name: text.title, exact: true });
-test.beforeAll(async () => { server = await createServer({ configFile: false, root: process.cwd(), plugins: [react()], server: { host: '127.0.0.1', port: 0 }, logLevel: 'error' }); await server.listen(); const address = server.httpServer!.address(); if (!address || typeof address === 'string') throw new Error('未取得离线端口'); url = `http://127.0.0.1:${address.port}/tests/fixtures/binary-cell/index.html`; });
+// 固定源码的离线交互不依赖 HMR；不监听根仓库，仍加载完整生产组件及真实图片解码器。
+test.beforeAll(async () => { server = await createServer({ configFile: false, root: process.cwd(), plugins: [react()], server: { host: '127.0.0.1', port: 0, watch: null }, logLevel: 'error' }); await server.listen(); const address = server.httpServer!.address(); if (!address || typeof address === 'string') throw new Error('未取得离线端口'); url = `http://127.0.0.1:${address.port}/tests/fixtures/binary-cell/index.html`; });
 test.afterAll(async () => { await server?.close(); });
 test.beforeEach(async () => {
   errors.length = 0; directory = await mkdtemp(join(tmpdir(), 'dbark-binary-e2e-'));

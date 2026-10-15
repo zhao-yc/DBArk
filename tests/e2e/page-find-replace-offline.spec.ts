@@ -11,7 +11,8 @@ const errors: string[] = [];
 const panel = () => page.getByRole('region', { name: text.find, exact: true });
 const preview = () => page.getByRole('dialog', { name: text.replaceTitle, exact: true });
 test.beforeAll(async () => {
-  server = await createServer({ configFile: false, root: process.cwd(), plugins: [react()], server: { host: '127.0.0.1', port: 0 }, logLevel: 'error' });
+  // 离线夹具不修改源码；关闭目录监听，避免根仓库的监听压力阻塞 Windows Electron 启动。
+  server = await createServer({ configFile: false, root: process.cwd(), plugins: [react()], server: { host: '127.0.0.1', port: 0, watch: null }, logLevel: 'error' });
   await server.listen(); const address = server.httpServer!.address();
   if (!address || typeof address === 'string') throw new Error('未取得离线测试端口');
   url = `http://127.0.0.1:${address.port}/tests/fixtures/page-find-replace/index.html`;
