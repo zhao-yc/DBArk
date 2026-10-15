@@ -1,6 +1,7 @@
 import { test, expect, desktop, page, closed, pageErrors } from './desktop-fixture';
 import { objectUri, type WorkbenchTarget } from '../../src/shared/workbench';
 import type { LiveContext } from './live-helpers';
+import type { QueryDatabaseContext } from '../../src/shared/queryContext';
 
 // 两个开关必须同时显式启用；默认跳过早于桌面夹具，实库帮助器只在测试体内加载。
 const enabled = process.env.DBARK_INTEGRATION_ENABLED === '1' && process.env.DBARK_QUERY_INTENT_LIVE === '1';
@@ -104,16 +105,17 @@ async function chooseCurrent(context: LiveContext) {
   await expect(database).toHaveClass(/active/); return database;
 }
 
-/** 只读取已持久化的标签身份；先核对真实DOM数量，避免把防抖前的旧磁盘快照当作未改变。 */
-async function savedTabs(count: number) {
+/** 执行前会强制落盘未知库；快照须等真实会话回填的预期库也已落盘，不能只等标签数量。 */
+async function savedTabs(count: number, current: Pick<LiveContext, 'connectionId' | 'database'>, queryCount = count) {
   await expect(page.locator('.tab-strip .workspace-tab-button')).toHaveCount(count);
-  let snapshot!: { activeTabId?: string; tabs: { id: string; kind: string; connectionId: string; database?: string; table?: string }[] };
+  let snapshot!: { activeTabId?: string; tabs: { id: string; kind: string; connectionId: string; database?: string; databaseContext?: QueryDatabaseContext; table?: string }[] };
   await expect.poll(async () => {
     snapshot = await page.evaluate(async () => {
       const settings = await window.dbark.invoke('settings.get', {});
-      return { activeTabId: settings.activeTabId, tabs: settings.tabs.map(({ id, kind, connectionId, database, table }) => ({ id, kind, connectionId, database, table })) };
-    }); return snapshot.tabs.length;
-  }).toBe(count);
+      return { activeTabId: settings.activeTabId, tabs: settings.tabs.map(({ id, kind, connectionId, database, databaseContext, table }) => ({ id, kind, connectionId, database, databaseContext, table })) };
+    });
+    return { count: snapshot.tabs.length, queries: snapshot.tabs.filter(tab => tab.kind === 'query').map(({ connectionId, database, databaseContext }) => ({ connectionId, database, databaseContext })) };
+  }).toEqual({ count, queries: Array.from({ length: queryCount }, () => ({ connectionId: current.connectionId, database: current.database, databaseContext: { state: 'known', database: current.database } })) });
   return snapshot;
 }
 
@@ -147,11 +149,13 @@ test('双真实连接：旧表/只读定义成功及不存在对象失败不覆�
             await queryForm().getByRole('button', { name: '打开查询', exact: true }).click(); await expect(queryForm()).toBeHidden(); tabCount++;
             await executeSql(`SELECT note,DATABASE() AS intent_database,CONNECTION_ID() AS intent_session,'主动查询${index}' AS intent_marker FROM intent_current WHERE id=1`);
             result = await readRenderedResult(text => text.includes('当前真实查询结果') && text.includes(current.database) && text.includes('主动查询' + index));
+            // 结果网格先于协议缓存回填和400ms持久化完成；明确等待真实会话面包屑的预期库。
+            await expect(query().getByLabel('当前查询默认库', { exact: true })).toHaveText(current.database);
           }
-          const before = await savedTabs(tabCount); await release();
+          const before = await savedTabs(tabCount, current); await release();
           // 等正式收藏入口finally释放，确认渲染端已处理旧回包，再检查新意图仍然完整。
           await expect(button).toBeEnabled(); await expect(currentDatabase).toHaveClass(/active/);
-          expect(await savedTabs(tabCount)).toEqual(before); await expect(page.locator('.toast').filter({ hasText: '原对象已删除' })).toHaveCount(0);
+          expect(await savedTabs(tabCount, current)).toEqual(before); await expect(page.locator('.toast').filter({ hasText: '原对象已删除' })).toHaveCount(0);
           if (item.active) {
             await expect(page.getByRole('dialog')).toHaveCount(0);
             await expect(query().locator('.context-bar')).toContainText(current.connectionName);
@@ -165,12 +169,12 @@ test('双真实连接：旧表/只读定义成功及不存在对象失败不覆�
         }
 
         // 旧请求失效后新的真实表导航仍可成功；保留已有当前连接查询标签，不把它们替换掉。
-        const beforeLatest = await savedTabs(tabCount);
+        const beforeLatest = await savedTabs(tabCount, current);
         await shelf().getByRole('button', { name: /^打开对象：真实迟到表 ·/ }).click();
         const table = page.locator('.table-tab:visible'); await expect(table).toBeVisible();
         await expect(table.locator('.context-bar')).toContainText(old.connectionName); await expect(table.getByRole('grid')).toContainText('旧目标真实原值', { timeout: 20000 });
         await expect(table.locator('.error-box')).toHaveCount(0);
-        const afterLatest = await savedTabs(tabCount + 1);
+        const afterLatest = await savedTabs(tabCount + 1, current, tabCount);
         expect(afterLatest.tabs.filter(tab => beforeLatest.tabs.some(previous => previous.id === tab.id))).toEqual(beforeLatest.tabs);
 
         // 最新真实过程链接读取原定义且保持只读，证明修复没有全局禁用导航或吞掉有效对象。

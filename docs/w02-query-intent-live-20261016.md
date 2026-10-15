@@ -58,3 +58,15 @@ Remove-Item Env:DBARK_INTEGRATION_ENABLED
 ```
 
 上述命令会启动真实 Electron 并连接已配置的测试服务器。本文件只沿用执行目录的测试环境及现有帮助器规则，不读取根克隆的凭据。
+
+## run543 快照时序定位与修正
+
+ROOT 的 run543 已到达最新有效表导航后的旧标签比较：同一个查询标签的 ID、连接和类型未变，磁盘快照中的 `database` 从 `undefined` 变为本例当前连接的预期隔离库。原始失败记录保留在 ROOT 的 `run543-fourth-ui-observation-fixed` 目录，本轮没有更改这些证据。
+
+只读追踪正式代码后，变化与执行后的恢复上下文落盘时序一致，并非连接 profile 默认库初始化。`QueryTab.runQuery` 在发送 SQL 前调用 `prepareExecutionContext`，经 `rememberDatabase({state:'unknown'})` 清空旧展示库，再用 `flushSettings` 强制落盘。执行完成后，`busy=false` 触发 effect 读取 `query.completionState` 协议缓存；`rememberDatabase` 把真实默认库及 `databaseContext: known` 回填当前标签，随后由工作区的 400ms 防抖写入 SQLite。
+
+原 `savedTabs` 只等标签总数，因而可能在 SQL 结果已经可见、真实库尚未重新持久化时，接收执行前的未知库快照。此前一轮的前后比较都可能读到同一份未知快照；最新表页创建后等待新标签落盘，才暴露旧查询的正常回填。正式导航协调器只设置当前选择并打开目标表页，`store.openTab` 只追加/复用表标签，没有修改旧查询标签数据库的路径；此次差异也没有变成旧目标连接的库。
+
+夹具修正为：执行后先核对真实会话面包屑等于 `current.database`，每次标签快照再明确等待所有预期查询的 `connectionId`、`database` 和 `databaseContext: {state:'known',database:current.database}` 均持久化。查询数量也明确核对，不能接收任意稳定值或从变化后的字段学习期望值。新表页出现后仍要求全部旧查询绑定上述明确库；原有旧标签完整相等断言保留，并额外纳入 `databaseContext` 比较。没有修改产品源码、请求或回包，也没有增加超时。
+
+这一判断来自已有实库失败差异及正式调用链分析；修正后的动态实库结果仍由 ROOT 重验。本轮类型检查通过，`ui-query-context-preparation.test.ts` 与 `query-context.test.ts` 共 11 项单元检查通过，新实库文件为 1 项默认跳过。另提取实际快照函数做内存纯验证：未知库、错误库、错误连接和未知上下文均拒绝，仅明确预期的 known 绑定可以形成快照。没有启动 GUI 或访问 200。
