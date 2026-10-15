@@ -1,29 +1,25 @@
 import { zh, formatText } from '../locales/zh-CN';
 import { useEffect, useState } from 'react';
-import { ArrowUpRight, CheckCircle2, Clock3, FileCode2, Search, Trash2, XCircle } from 'lucide-react';
-import type { HistoryEntry, SavedQuery } from '../../shared/contracts';
+import { ArrowUpRight, CheckCircle2, Clock3, FileCode2, Search, XCircle } from 'lucide-react';
+import type { HistoryEntry } from '../../shared/contracts';
 import {queryContextZh} from '../locales/queryContext.zh-CN';
 import { errorMessage, invoke } from '../lib';
 import { useWorkspace } from '../store';
 import { Empty, ErrorBox, Modal, Spinner } from './ui';
+import{SavedQueriesDialog}from'./SavedQueriesDialog';
 
-/** 历史记录与已保存查询仅用于回看，打开记录不会立即执行 SQL。 */
+/** 历史记录沿用既有上限；保存查询切换到独立有界概要列表，均不自动执行SQL。 */
 export function HistoryDialog({ onClose }: { onClose: () => void }) {
-  const [section, setSection] = useState<'history' | 'queries'>('history'); const [history, setHistory] = useState<HistoryEntry[]>([]); const [queries, setQueries] = useState<SavedQuery[]>([]);
-  const [busy, setBusy] = useState(true); const [error, setError] = useState(''); const [search, setSearch] = useState(''); const connections = useWorkspace(state => state.connections);
-  useEffect(() => { void Promise.all([invoke('history.list', {}), invoke('queries.list', {})]).then(([history, queries]) => { setHistory(history); setQueries(queries); }).catch(reason => setError(errorMessage(reason))).finally(() => setBusy(false)); }, []);
-  /** 优先恢复记录的原连接；缺少来源时使用用户当前选择的新查询上下文。 */
-  function open(item: HistoryEntry | SavedQuery) {
-    const connectionId = item.connectionId || useWorkspace.getState().selection?.connectionId || connections[0]?.id;
-    if (!connectionId) { setError(zh.activity.text001); return; }
-    useWorkspace.getState().openTab({ kind: 'query', title: 'name' in item ? item.name : zh.activity.text002, connectionId, database: item.database, databaseContext:item.databaseContext, sql: item.sql }); onClose();
-  }
-  /** 仅删除本地保存的查询，数据库及执行历史不受影响。 */
-  async function remove(id: string) { try { await invoke('queries.delete', { id }); setQueries(current => current.filter(item => item.id !== id)); } catch (reason) { setError(errorMessage(reason)); } }
-  /** 新记录显示执行开始时的库，旧记录保留初始库标识，不能声称已验证其真实会话。 */
-  function databaseLabel(item:HistoryEntry|SavedQuery){const context=item.databaseContext;return context?context.state==='known'?context.database||queryContextZh.none:queryContextZh.unknown:item.database?item.database+' ('+queryContextZh.legacy+')':queryContextZh.legacy;}
-  const items = (section === 'history' ? history : queries).filter(item => `${'name' in item ? item.name : ''} ${item.sql}`.toLowerCase().includes(search.toLowerCase()));
-  return <Modal title={zh.activity.text003} wide onClose={onClose}><div className="dialog-tabs"><button className={section === 'history' ? 'selected' : ''} onClick={() => setSection('history')}><Clock3 size={14}/>{zh.activity.text004}</button><button className={section === 'queries' ? 'selected' : ''} onClick={() => setSection('queries')}><FileCode2 size={14}/>{zh.activity.text005}</button></div><div className="modal-content"><div className="search-box"><Search size={15}/><input value={search} aria-label={zh.activity.text006} onChange={event => setSearch(event.target.value)} placeholder={zh.activity.text007}/></div><ErrorBox message={error}/>{busy ? <Spinner/> : <div className="history-list">{items.map(item => <article className="history-card" key={item.id}><div><strong>{'name' in item ? item.name : new Date(item.startedAt).toLocaleString('zh-CN')}</strong><span className="grow"/>{'success' in item && (item.success ? <CheckCircle2 size={14} className="accent-text"/> : <XCircle size={14} className="danger"/>)}<span className="muted small">{connections.find(profile => profile.id === item.connectionId)?.name} / {databaseLabel(item)}</span></div><pre>{item.sql}</pre>{'error' in item && item.error && <p className="danger small">{item.error}</p>}<footer><span className="muted small">{'elapsedMs' in item ? formatText(zh.activity.text008, item.elapsedMs) : new Date(item.updatedAt).toLocaleString('zh-CN')}</span><span className="grow"/>{'name' in item && <button className="icon-button" title={zh.activity.text009} onClick={() => void remove(item.id)}><Trash2 size={14}/></button>}<button onClick={() => open(item)}>{zh.activity.text010}<ArrowUpRight size={14}/></button></footer></article>)}{!items.length && <Empty title={section === 'history' ? zh.activity.text011 : zh.activity.text012} text={zh.activity.text013}/>}</div>}</div></Modal>;
+  const[section,setSection]=useState<'history'|'queries'>('history'),[history,setHistory]=useState<HistoryEntry[]>([]);
+  const[busy,setBusy]=useState(true),[error,setError]=useState(''),[search,setSearch]=useState('');const connections=useWorkspace(state=>state.connections);
+  useEffect(()=>{let mounted=true;void invoke('history.list',{}).then(value=>{if(mounted)setHistory(value);}).catch(reason=>{if(mounted)setError(errorMessage(reason));}).finally(()=>{if(mounted)setBusy(false);});return()=>{mounted=false;};},[]);
+  /** 历史恢复保持原来的入口语义；保存查询的来源选择另由分页面板严格核对。 */
+  function open(item:HistoryEntry){const connectionId=item.connectionId||useWorkspace.getState().selection?.connectionId||connections[0]?.id;if(!connectionId){setError(zh.activity.text001);return;}useWorkspace.getState().openTab({kind:'query',title:zh.activity.text002,connectionId,database:item.database,databaseContext:item.databaseContext,sql:item.sql});onClose();}
+  /** 显示历史执行开始时的默认库，不把旧记录当作已核实上下文。 */
+  function databaseLabel(item:HistoryEntry){const context=item.databaseContext;return context?context.state==='known'?context.database||queryContextZh.none:queryContextZh.unknown:item.database?item.database+' ('+queryContextZh.legacy+')':queryContextZh.legacy;}
+  if(section==='queries')return <SavedQueriesDialog onClose={onClose} onHistory={()=>setSection('history')}/>;
+  const items=history.filter(item=>item.sql.toLowerCase().includes(search.toLowerCase()));
+  return <Modal title={zh.activity.text003} wide onClose={onClose}><div className="dialog-tabs"><button className="selected"><Clock3 size={14}/>{zh.activity.text004}</button><button onClick={()=>setSection('queries')}><FileCode2 size={14}/>{zh.activity.text005}</button></div><div className="modal-content"><div className="search-box"><Search size={15}/><input value={search} aria-label={zh.activity.text006} onChange={event=>setSearch(event.target.value)} placeholder={zh.activity.text007}/></div><ErrorBox message={error}/>{busy?<Spinner/>:<div className="history-list">{items.map(item=><article className="history-card" key={item.id}><div><strong>{new Date(item.startedAt).toLocaleString('zh-CN')}</strong><span className="grow"/>{item.success?<CheckCircle2 size={14} className="accent-text"/>:<XCircle size={14} className="danger"/>}<span className="muted small">{connections.find(profile=>profile.id===item.connectionId)?.name} / {databaseLabel(item)}</span></div><pre>{item.sql}</pre>{item.error&&<p className="danger small">{item.error}</p>}<footer><span className="muted small">{formatText(zh.activity.text008,item.elapsedMs)}</span><span className="grow"/><button onClick={()=>open(item)}>{zh.activity.text010}<ArrowUpRight size={14}/></button></footer></article>)}{!items.length&&<Empty title={zh.activity.text011} text={zh.activity.text013}/>}</div>}</div></Modal>;
 }
 
 /** 任务面板订阅统一状态存储，取消按钮只针对仍在运行的任务编号。 */

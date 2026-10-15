@@ -40,9 +40,9 @@ export class SavedQuerySearches{
    while(consumed<limits.pageQueries&&state.total<state.input.maxResults){
     this.check(job,state);const record=this.store.querySearchNext(state.after);if(!record){more=false;break;}
     let hit;try{if(record.raw===null)throw Error('保存查询记录超过128MiB，未把截断内容当作无命中');const current=await matcher();this.emit({taskId,status:'running',progress:0,message:'正在匹配本地记录；已检查 '+state.scanned+'，命中 '+state.total});hit=await current.match(record.id,record.raw);this.check(job,state);}
-    catch(error){this.check(job,state);await job.matcher?.close();const failure={id:record.id,message:(error instanceof Error?error.message:'本地匹配失败').slice(0,1024)};page.failures.push(failure);state.after=record.id;state.scanned++;consumed++;more=record.hasMore;if(state.input.onError==='stop'){page.stoppedOnError=true;break;}if(!more)break;continue;}
+    catch(error){this.check(job,state);await job.matcher?.close();const failure={id:record.id,message:(error instanceof Error?error.message:'本地匹配失败').slice(0,1024)};page.failures.push(failure);state.after=record.id;state.scanned++;consumed++;more=record.hasMore;if(state.input.onError==='stop'){page.stoppedOnError=true;break;}if(!more)break;if(Buffer.byteLength(JSON.stringify(page))+8192>limits.pageBytes)break;continue;}
     // 预留累计数字及续页句柄的空间，不能在最后增加元数据后超过协议预算。
-    if(hit&&Buffer.byteLength(JSON.stringify({...page,hits:[...page.hits,hit]}))+2048>limits.pageBytes){if(!page.hits.length)throw Error('单条保存查询摘要超过128KiB');more=true;break;}
+    if(hit&&Buffer.byteLength(JSON.stringify({...page,hits:[...page.hits,hit]}))+8192>limits.pageBytes){if(!page.hits.length)throw Error('单条保存查询摘要超过128KiB');more=true;break;}
     state.after=record.id;state.scanned++;consumed++;more=record.hasMore;if(hit){page.hits.push(hit);state.total++;}
     this.emit({taskId,status:'running',progress:0,message:'本地保存查询搜索进行中；已检查 '+state.scanned+'，命中 '+state.total});
     if(!more)break;await new Promise<void>(resolve=>setImmediate(resolve));

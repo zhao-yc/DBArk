@@ -14,7 +14,7 @@ function harness() {
   const tasks = new Map<string, TaskRecord>(), events: TaskEvent[] = [], columnTokens = new Map(), columnProgress = new Map();
   let blocked = false, revision = 7;
   const request = vi.fn(async (_command: string, _input: unknown): Promise<any> => undefined);
-  const context = createContext({ SavedQuerySearchCancelled,savedQuerySearches:{has:()=>false}, Date, Map, Error, Boolean, tasks, events, pendingQueryHistory:new Map(),completionTasks:new Set(), structureTokens: columnTokens, structureProgress: columnProgress, shuttingDown: false, preparingTasks: new Map(), exportProgress: new Map(), sessions: new Map(),
+  const context = createContext({ SavedQuerySearchCancelled,savedQuerySearches:{has:()=>false},savedQueryPages:undefined, Date, Map, Error, Boolean, tasks, events, pendingQueryHistory:new Map(),completionTasks:new Set(), structureTokens: columnTokens, structureProgress: columnProgress, shuttingDown: false, preparingTasks: new Map(), exportProgress: new Map(), sessions: new Map(),
     connectionConfig: { assertAvailable(id?: string) { if (blocked && id === 'trusted') throw new Error('连接配置正在保存'); } },
     store: { saveTask() {}, connectionRevision: () => revision }, broker: { request },
     taskEvent(event: TaskEvent) { events.push(event); const progress = event.indexPatch ?? event.columnPatch; if (progress) columnProgress.set(event.taskId, progress); tasks.set(event.taskId, { ...tasks.get(event.taskId)!, status: event.status }); },

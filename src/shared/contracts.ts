@@ -14,6 +14,7 @@ import type {DataSearchInput,DataSearchNext,DataSearchReply,DataSearchProgress} 
 import type {DataSearchCatalogueInput,DataSearchCataloguePage} from './dataSearchCatalogue';
 import type{DataSearchRecordReadInput,DataSearchRecordsReleaseInput,DataSearchRecord}from'./dataSearchRecords';
 import type{SavedQuerySearchInput,SavedQuerySearchNext,SavedQuerySearchPage,SavedQueryOpenResult}from'./savedQuerySearch';
+import type{SavedQueryPageInput,SavedQueryPage}from'./savedQueryPages';
 export type CellValue = string | number | boolean | null | { type: 'binary'; base64: string };
 export type DataRow = Record<string, CellValue>;
 export type ObjectKind = 'table' | 'view' | 'procedure' | 'function' | 'trigger' | 'event';
@@ -82,6 +83,10 @@ export interface CommandMap {
   'search.savedQueriesContinue':{input:SavedQuerySearchNext;output:SavedQuerySearchPage};
   'search.savedQueriesRelease':{input:{cursor:string};output:void};
   'queries.read':{input:{id:string;digest:string;connectionId:string};output:SavedQueryOpenResult};
+  'queries.page':{input:SavedQueryPageInput;output:SavedQueryPage};
+  'queries.pageContinue':{input:{taskId:string;cursor:string};output:SavedQueryPage};
+  'queries.pageRelease':{input:{cursor:string};output:void};
+  'queries.deleteChecked':{input:{id:string;digest:string};output:void};
   'search.structureContinue':{input:StructureSearchContinue;output:StructureSearchPage};
   'search.release':{input:{connectionId:string;cursor:string};output:void};
   'search.dataStart':{input:DataSearchInput;output:DataSearchReply};

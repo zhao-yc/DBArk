@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import{savedQueryPageInputSchema,savedQueryPageNextSchema,savedQueryPageReleaseSchema,savedQueryDeleteCheckedSchema}from'./savedQueryPages';
 import { connectionFileRequirements, connectionImportApplySchema, connectionTransferLimits } from './connectionTransfer';
 import type { Command, ResultExportData } from './contracts';
 import { validateResultExportData } from './resultExport';
@@ -88,6 +89,7 @@ export const commandSchemas: Record<Command, z.ZodType> = {
   'metadata.databases': z.object({ connectionId: id }).strict(),
   'search.structure':structureSearchInputSchema,
   'search.savedQueries':savedQuerySearchInputSchema,'search.savedQueriesContinue':savedQuerySearchNextSchema,'search.savedQueriesRelease':savedQuerySearchReleaseSchema,'queries.read':savedQueryReadSchema,
+  'queries.page':savedQueryPageInputSchema,'queries.pageContinue':savedQueryPageNextSchema,'queries.pageRelease':savedQueryPageReleaseSchema,'queries.deleteChecked':savedQueryDeleteCheckedSchema,
   'search.structureContinue':structureSearchContinueSchema,
   'search.release':structureSearchReleaseSchema,
   'search.dataStart':dataSearchInputSchema,'search.dataNext':dataSearchNextSchema,'search.dataRelease':dataSearchReleaseSchema,

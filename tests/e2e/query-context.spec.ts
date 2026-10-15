@@ -1,7 +1,7 @@
 import {randomUUID} from 'node:crypto';
 import type {Connection,RowDataPacket} from 'mysql2/promise';
 import {test,expect,page,closed,answerDialogs,quitDesktop,launchDesktop} from './desktop-fixture';
-import {enabled,isolatedDatabase,openDatabaseQuery,executeSql,writeSql} from './live-helpers';
+import{enabled,isolatedDatabase,openDatabaseQuery,executeSql,writeSql,readRenderedResult}from'./live-helpers';
 
 // 使用真实Electron/utility/数据库和磁盘，关闭轨迹避免记录表单凭据。
 test.use({trace:'off'});
@@ -36,7 +36,7 @@ test.describe('200隔离实例：查询上下文的实际入口',()=>{
       await openDatabaseQuery(database);await executeSql(`SET SESSION session_track_system_variables='';SET SESSION session_track_schema=OFF;USE \`${other}\``);await savedContext('unknown');await writeSql('INSERT INTO subject VALUES(77)');await save('未知库写入草稿');await reopen('未知库写入草稿',true);await savedContext('unknown');await quitDesktop();await launchDesktop();
       await expect(query().getByLabel('当前查询默认库',{exact:true})).toHaveText('默认库待确认');await query().getByRole('button',{name:'执行全部',exact:true}).click();let dialog=page.getByRole('dialog',{name:'确认重连数据库',exact:true});await expect(dialog).toBeVisible();await dialog.getByLabel('数据库名称',{exact:true}).fill(other);await dialog.getByRole('button',{name:'使用此数据库',exact:true}).click();
       expect(Number((await observer.query<RowDataPacket[]>(`SELECT COUNT(*) AS n FROM \`${other}\`.subject`))[0][0].n)).toBe(0);
-      await executeSql('SELECT CONNECTION_ID() AS ctx_id');await expect(query().locator('.result-body')).toContainText('ctx_id');const ids=(await query().locator('.result-body').innerText()).match(/\b\d+\b/g);expect(ids).toHaveLength(1);const id=Number(ids![0]);expect(Number.isSafeInteger(id)&&id>0).toBe(true);await observer.query(`KILL CONNECTION ${id}`);
+      await executeSql('SELECT CONNECTION_ID() AS ctx_id');const snapshot=await readRenderedResult(text=>text.includes('ctx_id')&&text.match(/\b\d+\b/g)?.length===1),ids=snapshot.match(/\b\d+\b/g);expect(ids).toHaveLength(1);const id=Number(ids![0]);expect(Number.isSafeInteger(id)&&id>0).toBe(true);await observer.query(`KILL CONNECTION ${id}`);
       await writeSql('INSERT INTO subject VALUES(77)');await query().getByRole('button',{name:'执行全部',exact:true}).click();await expect(query().getByRole('button',{name:'停止',exact:true})).toBeDisabled();await expect(query().locator('.error-box')).toContainText('断开');await savedContext('unknown');
       await query().getByRole('button',{name:'选择重连数据库',exact:true}).click();dialog=page.getByRole('dialog',{name:'确认重连数据库',exact:true});await dialog.getByLabel('数据库名称',{exact:true}).fill(other);await dialog.getByRole('button',{name:'使用此数据库',exact:true}).click();expect(Number((await observer.query<RowDataPacket[]>(`SELECT COUNT(*) AS n FROM \`${other}\`.subject`))[0][0].n)).toBe(0);
       await executeSql('INSERT INTO subject VALUES(77)');expect(Number((await observer.query<RowDataPacket[]>(`SELECT COUNT(*) AS n FROM \`${other}\`.subject`))[0][0].n)).toBe(1);expect(Number((await observer.query<RowDataPacket[]>(`SELECT COUNT(*) AS n FROM \`${database}\`.subject`))[0][0].n)).toBe(0);await page.screenshot({path:info.outputPath('explicit-reconnect-no-write-replay.png')});

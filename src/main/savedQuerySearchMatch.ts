@@ -1,5 +1,6 @@
 import{createHash}from'node:crypto';
 import{savedQueryRecordSchema,savedQuerySearchInputSchema,savedQuerySearchLimits as limits,type SavedQuerySearchInput,type SavedQuerySearchHit,type SavedQueryMatch}from'../shared/savedQuerySearch';
+import{savedQueryPageLimits,type SavedQueryPageEntry}from'../shared/savedQueryPages';
 
 /** 本地匹配采用JavaScript Unicode正则语义，与数据库服务器正则明确分开；普通文字先完整转义。 */
 export function compileSavedQueryPattern(raw:SavedQuerySearchInput){const input=savedQuerySearchInputSchema.parse(raw),pattern=input.pattern;const source=pattern.mode==='regexp'?pattern.text:pattern.text.replace(/[.*+?^${}()|[\]\\]/g,'\\$&');try{return{input,expression:new RegExp(source,pattern.caseSensitive?'u':'iu')};}catch{throw Error('本地Unicode正则无效，请检查括号、转义及表达式语法');}}
@@ -14,4 +15,11 @@ export function matchSavedQueryRecord(id:string,raw:string,compiled:ReturnType<t
  const filter=input.database,context=query.databaseContext;if(filter.kind==='known'&&(context?.state!=='known'||context.database!==filter.database)||filter.kind==='unknown'&&context?.state!=='unknown'||filter.kind==='legacy'&&context!==undefined)return;
  const matches:SavedQueryMatch[]=[];for(const field of input.fields){const source=query[field],match=compiled.expression.exec(source);if(!match)continue;if(input.pattern.mode==='whole'&&(match.index!==0||match[0].length!==source.length)||input.pattern.mode==='prefix'&&match.index!==0)continue;matches.push(location(source,match.index,match[0].length,field));}
  if(!matches.length)return;const{sql,...summary}=query;return{query:summary,digest:createHash('sha256').update(raw).digest('hex'),matches};
+}
+
+/** 列表只做普通文字筛选，完整正文在线程内比较，预览不拆开Unicode代理对。 */
+export function summarizeSavedQueryRecord(id:string,raw:string,search:string):SavedQueryPageEntry|undefined{
+ const query=parseSavedQueryRecord(id,raw),needle=search.toLowerCase();if(needle&&!query.name.toLowerCase().includes(needle)&&!query.sql.toLowerCase().includes(needle))return;
+ let end=Math.min(query.sql.length,savedQueryPageLimits.previewUnits);if(end<query.sql.length&&/[\ud800-\udbff]/.test(query.sql[end-1])&&/[\udc00-\udfff]/.test(query.sql[end]))end--;
+ const{sql,...summary}=query;return{query:summary,digest:createHash('sha256').update(raw).digest('hex'),sqlPreview:sql.slice(0,end),sqlUnits:sql.length,previewTruncated:end<sql.length};
 }

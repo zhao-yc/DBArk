@@ -7,6 +7,7 @@ import type { AppSettings, ConnectionProfile, HistoryEntry, SavedQuery, SqlSnipp
 import { validateSnippetBudget } from '../shared/snippets';
 import { tablePreferenceSaveSchema, tablePreferenceTargetSchema, tablePreferencesSchema, tablePreferenceTargetChanged, validateTablePreferenceBudget, type TablePreferenceTarget, type TablePreferences } from '../shared/tablePreferences';
 import{savedQuerySearchLimits}from'../shared/savedQuerySearch';
+import type{SavedQueryPagePosition}from'../shared/savedQueryPages';
 
 export interface SecretProtector { available(): boolean; encrypt(value: string): string; decrypt(value: string): string; }
 export const defaultSettings: AppSettings = { theme: 'dark', sidebarWidth: 270, resultLimit: 1000, pageSize: 200, tabs: [] };
@@ -37,6 +38,7 @@ export class LocalStore {
       this.db.run(`CREATE TABLE IF NOT EXISTS connections (id TEXT PRIMARY KEY, data TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS secrets (connection_id TEXT NOT NULL, name TEXT NOT NULL, value TEXT NOT NULL, PRIMARY KEY(connection_id,name));
         CREATE TABLE IF NOT EXISTS queries (id TEXT PRIMARY KEY, data TEXT NOT NULL, updated_at TEXT NOT NULL);
+        CREATE INDEX IF NOT EXISTS queries_updated_id ON queries(updated_at COLLATE BINARY DESC,id COLLATE BINARY DESC);
         CREATE TABLE IF NOT EXISTS history (id TEXT PRIMARY KEY, connection_id TEXT NOT NULL, data TEXT NOT NULL, started_at TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS tasks (id TEXT PRIMARY KEY, data TEXT NOT NULL, started_at TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS settings (id INTEGER PRIMARY KEY CHECK(id=1), data TEXT NOT NULL);
@@ -204,6 +206,8 @@ export class LocalStore {
   querySearchRevision():string{return this.queryRevisionValue+':'+this.connectionRevisionValue;}
   /** 二进制主键位置分页，仅取一条正文及下一条存在性，不复制整个查询库。 */
   querySearchNext(after?:string):{id:string;raw:string|null;hasMore:boolean}|null{const statement=this.db.prepare('SELECT id,CASE WHEN length(CAST(data AS BLOB))<=? THEN data ELSE NULL END AS data FROM queries '+(after===undefined?'':'WHERE id COLLATE BINARY>? ')+'ORDER BY id COLLATE BINARY LIMIT 2');try{statement.bind(after===undefined?[savedQuerySearchLimits.recordBytes]:[savedQuerySearchLimits.recordBytes,after]);if(!statement.step())return null;const row=statement.getAsObject();return{id:String(row.id),raw:typeof row.data==='string'?row.data:null,hasMore:statement.step()};}finally{statement.free();}}
+  /** 更新时间与ID均降序，复合索引定位下一条，不用OFFSET或复制整页正文数组。 */
+  queryPageNext(after?:SavedQueryPagePosition):{id:string;updatedAt:string;raw:string|null;hasMore:boolean}|null{const statement=this.db.prepare('SELECT id,updated_at,CASE WHEN length(CAST(data AS BLOB))<=? THEN data ELSE NULL END AS data FROM queries '+(after?'WHERE (updated_at COLLATE BINARY,id COLLATE BINARY)<(?,?) ':'')+'ORDER BY updated_at COLLATE BINARY DESC,id COLLATE BINARY DESC LIMIT 2');try{statement.bind(after?[savedQuerySearchLimits.recordBytes,after.updatedAt,after.id]:[savedQuerySearchLimits.recordBytes]);if(!statement.step())return null;const row=statement.getAsObject();return{id:String(row.id),updatedAt:String(row.updated_at),raw:typeof row.data==='string'?row.data:null,hasMore:statement.step()};}finally{statement.free();}}
   /** 只在明确打开时读取一条当前原文，过大记录不会进入渲染进程。 */
   querySearchRaw(id:string):string|undefined{const statement=this.db.prepare('SELECT CASE WHEN length(CAST(data AS BLOB))<=? THEN data ELSE NULL END FROM queries WHERE id=?');try{statement.bind([savedQuerySearchLimits.recordBytes,id]);if(!statement.step())return;const raw=statement.get()[0];if(typeof raw!=='string')throw Error('保存查询记录超过128MiB');return raw;}finally{statement.free();}}
   /** 打开查询只核本地连接存在性，不解密密码或尝试数据库网络连接。 */

@@ -1,5 +1,5 @@
 import {test,expect,page,pageErrors,answerDialogs,quitDesktop,closed} from './desktop-fixture';
-import {enabled,isolatedDatabase,openDatabaseQuery,executeSql,modifier,environment} from './live-helpers';
+import{enabled,isolatedDatabase,openDatabaseQuery,executeSql,modifier,environment,readRenderedResult}from'./live-helpers';
 import mysql,{type RowDataPacket} from 'mysql2/promise';
 import{randomUUID}from'node:crypto';
 
@@ -44,9 +44,9 @@ test.describe('200真实数据库：数据搜索界面',()=>{
  });
  test('NULL与空串不混淆、二进制明确HEX，搜索不扰动原查询事务和结果',async({},info)=>{
   test.setTimeout(120000);await isolatedDatabase(async({observer,database})=>{
-   await observer.query('CREATE TABLE `'+database+'`.subject(id INT PRIMARY KEY,note TEXT,optional_text TEXT,empty_text TEXT,payload BLOB) ENGINE=InnoDB');await observer.query('INSERT INTO `'+database+'`.subject VALUES(1,?,NULL,?,?)',['服务器原值','',Buffer.from([0,65])]);await openDatabaseQuery(database);await executeSql("START TRANSACTION;UPDATE subject SET note='事务未提交' WHERE id=1;SELECT CONNECTION_ID(),note FROM subject");await executeSql('SELECT CONNECTION_ID(),note FROM subject');const query=page.locator('.query-tab:visible');await expect(query.locator('.result-body')).toContainText('事务未提交');const before=await query.locator('.result-body').innerText();
+   await observer.query('CREATE TABLE `'+database+'`.subject(id INT PRIMARY KEY,note TEXT,optional_text TEXT,empty_text TEXT,payload BLOB) ENGINE=InnoDB');await observer.query('INSERT INTO `'+database+'`.subject VALUES(1,?,NULL,?,?)',['服务器原值','',Buffer.from([0,65])]);await openDatabaseQuery(database);await executeSql("START TRANSACTION;UPDATE subject SET note='事务未提交' WHERE id=1;SELECT CONNECTION_ID(),note FROM subject");await executeSql('SELECT CONNECTION_ID(),note FROM subject');const query=page.locator('.query-tab:visible');await expect(query.locator('.result-body')).toContainText('事务未提交');const before=await readRenderedResult(text=>text.includes('CONNECTION_ID()')&&text.includes('事务未提交')&&text.match(/\b\d+\b/g)?.length===1);
    await openSearch();await chooseTable(database,'subject');await search().getByLabel('搜索字段 payload',{exact:true}).check();await expect(search().getByLabel('字段表示 payload',{exact:true})).toHaveValue('hex');await run('0041','whole');await expect(search().getByRole('status')).toContainText('命中 1');await expect(search().locator('.rdg-row')).toContainText('0041');await search().getByLabel('搜索字段 optional_text',{exact:true}).check();await search().getByLabel('搜索字段 empty_text',{exact:true}).check();await run('','null');await expect(search().getByRole('status')).toContainText('命中 1');await expect(search().locator('.rdg-row')).toContainText('optional_text');await page.screenshot({path:info.outputPath('data-search-null-hex.png')});await search().getByRole('button',{name:'关闭',exact:true}).click();
-   expect(await query.locator('.result-body').innerText()).toBe(before);const[rows]=await observer.query<RowDataPacket[]>('SELECT note FROM `'+database+'`.subject');expect(rows[0].note).toBe('服务器原值');await executeSql('SELECT CONNECTION_ID(),note FROM subject');
+   await expect.poll(()=>query.locator('.result-body').innerText()).toBe(before);const[rows]=await observer.query<RowDataPacket[]>('SELECT note FROM `'+database+'`.subject');expect(rows[0].note).toBe('服务器原值');await executeSql('SELECT CONNECTION_ID(),note FROM subject');
    // 执行按钮恢复早于结果的下一次绘制；仅等待同一条SELECT的完整显示，不重新发SQL或改变快照。
    await expect.poll(()=>query.locator('.result-body').innerText()).toBe(before);await executeSql('ROLLBACK');
   },info);

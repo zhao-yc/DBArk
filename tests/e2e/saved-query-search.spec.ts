@@ -1,6 +1,6 @@
 import{readFile}from'node:fs/promises';
 import{join}from'node:path';
-import{test,expect,page,dataDir,pageErrors,answerDialogs,quitDesktop,launchDesktop}from'./desktop-fixture';
+import{test,expect,page,dataDir,pageErrors,answerDialogs,quitDesktop,launchDesktop,desktop}from'./desktop-fixture';
 import{enabled,isolatedDatabase,openDatabaseQuery,executeSql,modifier}from'./live-helpers';
 import type{SavedQuery}from'../../src/shared/contracts';
 import type{RowDataPacket}from'mysql2/promise';
@@ -14,6 +14,10 @@ async function save(value:Partial<SavedQuery>&{id:string;name:string;sql:string}
 async function search(value:string,mode='contains'){await dialog().getByLabel('本地搜索文字',{exact:true}).fill(value);await dialog().getByLabel('本地匹配方式',{exact:true}).selectOption(mode);await dialog().getByRole('button',{name:'开始本地搜索',exact:true}).click();await expect(dialog().getByRole('button',{name:'开始本地搜索',exact:true})).toBeEnabled({timeout:20000});}
 /** 离线连接仅作为本地来源标记，不尝试连接此不可用端口。 */
 async function connection(name:string){return page.evaluate(name=>window.dbark.invoke('connections.save',{id:'',name,group:'',color:'#123456',dialect:'mysql',host:'127.0.0.1',port:1,user:'offline',database:'配置默认库'}),name);}
+
+test('较矮原生窗口中的搜索结果可真实点击、选择来源并打开，说明文字不覆盖表格',async({},info)=>{
+ test.setTimeout(90000);const size=await desktop.evaluate(({BrowserWindow})=>{const window=BrowserWindow.getAllWindows()[0];window.setSize(1024,680);return window.getContentSize();});expect(size[0]).toBeLessThanOrEqual(1100);expect(size[1]).toBeLessThanOrEqual(700);await expect.poll(()=>page.evaluate(()=>window.innerHeight)).toBe(size[1]);const profile=await connection('矮窗口来源');await page.reload();await expect(page.locator('.app-statusbar')).toBeVisible();await save({id:'compact',name:'矮窗口查询',connectionId:profile.id,databaseContext:{state:'known',database:null},sql:'SELECT 9007199254740993 -- compact_anchor'});await open();await search('compact_anchor');await expect(dialog().getByRole('status')).toContainText('命中查询 1');await page.screenshot({path:info.outputPath('saved-query-compact-before-click.png')});await dialog().locator('.rdg-row').click();await expect(dialog().getByLabel('打开查询的连接',{exact:true})).toHaveValue(profile.id);await expect(dialog().locator('.saved-query-search-preview')).toContainText('compact_anchor');await page.screenshot({path:info.outputPath('saved-query-compact-selected.png')});await dialog().getByRole('button',{name:'打开查询（不执行）',exact:true}).click();await expect(dialog()).toHaveCount(0);await expect(page.locator('.query-tab:visible .monaco-editor .view-lines')).toContainText('compact_anchor');expect(await page.evaluate(()=>window.dbark.invoke('history.list',{}))).toEqual([]);expect(pageErrors).toEqual([]);
+});
 
 test('无连接也可搜索58条全文并分三页，虚拟表格、非法输入及隐私不产生数据库执行',async({},info)=>{
  test.setTimeout(120000);for(let i=0;i<58;i++)await save({id:'q'+String(i).padStart(3,'0'),name:'本地查询'+i,sql:'-- 第一行\r\nSELECT 9007199254740993;\r\n-- '+ 'x'.repeat(5000)+'全文命中_'+String(i).padStart(3,'0')});await open();await dialog().getByRole('button',{name:'开始本地搜索',exact:true}).click();await expect(dialog().locator('.error-box')).toContainText('请检查本地搜索条件');expect(await page.evaluate(()=>window.dbark.invoke('tasks.list',{}))).toEqual([]);await page.keyboard.press(`${modifier}+t`);await expect(page.getByRole('dialog')).toHaveCount(1);

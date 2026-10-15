@@ -18,6 +18,7 @@ import type { QueryExportProgress } from '../shared/queryStreamExport';
 import type { TableColumnApplyProgress } from '../shared/tableColumnPatches';
 import {queryDatabasePatch} from '../shared/queryContext';
 import{SavedQuerySearches,SavedQuerySearchCancelled}from'./savedQuerySearch';
+import{SavedQueryPages}from'./savedQueryPages';
 
 if (process.env.DBARK_USER_DATA) { mkdirSync(process.env.DBARK_USER_DATA, { recursive: true }); app.setPath('userData', process.env.DBARK_USER_DATA); }
 app.setName('DBArk');
@@ -27,6 +28,7 @@ let broker: EngineBroker;
 let connectionConfig: ConnectionConfigManager;
 let connectionTransfer: ConnectionTransfer;
 let savedQuerySearches:SavedQuerySearches;
+let savedQueryPages:SavedQueryPages;
 const localSearchOperations=new Set<Promise<unknown>>();
 let shuttingDown = false;
 let shutdownComplete = false;
@@ -134,13 +136,14 @@ async function dispatch(command: Command, input: any): Promise<unknown> {
       input={...input,profile:store.resolveConnection(input.connectionId)};break;
     case 'metadata.completion':case 'search.catalogue': {
       if(shuttingDown)throw new Error('客户端正在退出，不能读取补全目录');
-      if(tasks.has(input.taskId)||completionTasks.has(input.taskId))throw new Error('任务编号已使用，请重新发起操作');
+      if(tasks.has(input.taskId)||completionTasks.has(input.taskId)||savedQueryPages?.owns(input.taskId))throw new Error('任务编号已使用，请重新发起操作');
       if(completionTasks.size>=8)throw new Error('补全目录读取繁忙，请稍后触发');
       completionTasks.add(input.taskId);
       try{return await broker.request(command,{...input,profile:store.resolveConnection(input.connectionId)});}
       finally{completionTasks.delete(input.taskId);}
     }
     case 'query.cancel': {
+      if(savedQueryPages?.owns(input.taskId))return savedQueryPages.cancel(input.taskId);
       if(savedQuerySearches.has(input.taskId))return savedQuerySearches.cancel(input.taskId);
       if(tasks.get(input.taskId)?.kind.startsWith('search.savedQueries'))return;
       const preparing = preparingTasks.get(input.taskId);
@@ -174,6 +177,14 @@ async function dispatch(command: Command, input: any): Promise<unknown> {
     case 'table.preferences.reset': return store.resetTablePreferences(input);
     case 'queries.list': return store.queries();
     case 'queries.read':return savedQuerySearches.read(input);
+    case 'queries.pageRelease':return savedQueryPages.release(input);
+    case 'queries.deleteChecked':if(shuttingDown)throw Error('客户端正在退出，不能删除保存查询');return savedQueryPages.deleteChecked(input);
+    case 'queries.page':case 'queries.pageContinue':{
+      if(shuttingDown)throw Error('客户端正在退出，不能读取查询列表');
+      if(tasks.has(input.taskId)||completionTasks.has(input.taskId)||savedQueryPages?.owns(input.taskId))throw Error('请求编号已使用');
+      // 列表和补全同属高频短读，活动编号只放内存，不逐次写任务或执行历史。
+      completionTasks.add(input.taskId);try{return command==='queries.page'?await savedQueryPages.start(input):await savedQueryPages.next(input);}finally{completionTasks.delete(input.taskId);}
+    }
     case 'search.savedQueriesRelease':return savedQuerySearches.release(input);
     case 'search.savedQueries':case 'search.savedQueriesContinue':if(shuttingDown)throw Error('客户端正在退出，不能搜索本地查询');break;
     case 'snippets.list': return store.snippets();
@@ -206,7 +217,7 @@ async function dispatch(command: Command, input: any): Promise<unknown> {
   const taskId: string | undefined = command !== 'query.cancel' ? input.taskId : undefined;
   const startedAt = new Date().toISOString(); const start = Date.now();
   if (taskId) {
-    if (tasks.has(taskId)||completionTasks.has(taskId)) throw new Error('任务编号已使用，请重新发起操作');
+    if (tasks.has(taskId)||completionTasks.has(taskId)||savedQueryPages?.owns(taskId)) throw new Error('任务编号已使用，请重新发起操作');
     const task: TaskRecord = { id: taskId, kind: command, status: 'running', progress: 0, message: '正在执行', startedAt };
     tasks.set(taskId, task); store.saveTask(task);
   }
@@ -292,7 +303,7 @@ app.on('before-quit', event => {
       await Promise.race([new Promise<void>((resolve, reject) => { stateFlushed = { resolve, reject }; window!.webContents.send('dbark:menu', 'persist-state'); }), new Promise((_, reject) => setTimeout(() => reject(new Error('工作台未能及时保存状态')), 3000))]);
       stateFlushed = undefined;
     }
-    await savedQuerySearches?.close();await Promise.allSettled([...localSearchOperations]);
+    await savedQuerySearches?.close();await savedQueryPages?.close();await Promise.allSettled([...localSearchOperations]);
     await Promise.allSettled([...queryFileOperations]);
     await broker?.close();
     for (const task of tasks.values()) if (task.status === 'running') persistAuxiliary(() => store.saveTask({ ...task, status: 'cancelled', finishedAt: new Date().toISOString(), message: '客户端已退出，请核对操作结果' }));
@@ -301,7 +312,7 @@ app.on('before-quit', event => {
     stateFlushed = undefined;
     const answer = await dialog.showMessageBox({ type: 'error', title: '退出前保存失败', message: error instanceof Error ? error.message : String(error), detail: '可以返回工作台排查后重试，或放弃未保存的配置并退出。', buttons: ['返回工作台','放弃未保存配置并退出'], defaultId: 0, cancelId: 0 });
     if (answer.response === 1) {
-      await savedQuerySearches?.close();await Promise.allSettled([...localSearchOperations]);
+      await savedQuerySearches?.close();await savedQueryPages?.close();await Promise.allSettled([...localSearchOperations]);
       await Promise.allSettled([...queryFileOperations]);
       await broker?.close().catch(() => undefined);
       try { store?.close(); } catch { /* 用户已明确选择退出，避免退出状态永久锁死。 */ }
@@ -339,12 +350,13 @@ else {
     connectionConfig = new ConnectionConfigManager(store, broker);
     connectionTransfer = new ConnectionTransfer(store);
     savedQuerySearches=new SavedQuerySearches(store,join(__dirname,'savedQuerySearchWorker.cjs'),taskEvent);
+    savedQueryPages=new SavedQueryPages(store,join(__dirname,'savedQuerySearchWorker.cjs'));
     ipcMain.handle('dbark:request', async (event, payload: unknown) => {
       try {
         if (!window || event.sender !== window.webContents || event.senderFrame !== window.webContents.mainFrame || event.senderFrame?.url !== rendererURL) throw new Error('不允许的请求来源');
         if (!payload || typeof payload !== 'object' || !('command' in payload) || !('input' in payload) || typeof payload.command !== 'string') throw new Error('请求格式无效');
         const input = validateCommand(payload.command, payload.input);
-        const operation=dispatch(payload.command as Command,input),local=payload.command==='search.savedQueries'||payload.command==='search.savedQueriesContinue';if(local)localSearchOperations.add(operation);
+        const operation=dispatch(payload.command as Command,input),local=payload.command==='search.savedQueries'||payload.command==='search.savedQueriesContinue'||payload.command==='queries.page'||payload.command==='queries.pageContinue';if(local)localSearchOperations.add(operation);
         try{return{ok:true,result:await operation};}finally{if(local)localSearchOperations.delete(operation);}
       } catch (error) { return { ok: false, error: error instanceof Error ? error.message : '客户端操作失败' }; }
     });

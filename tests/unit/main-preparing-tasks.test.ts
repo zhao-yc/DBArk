@@ -17,7 +17,7 @@ describe('主进程准备任务的进程退出竞态', () => {
   it.each(['files.exportResult', 'query.exportStream'] as const)('%s 准备未完成时进程退出，迟到路径检查不能投递新任务', async command => {
     let permit!: (release: () => void) => void; const released = vi.fn();
     const tasks = new Map<string, TaskRecord>(); const events: TaskEvent[] = []; const request = vi.fn(async () => { throw new Error('不应重新启动引擎'); });
-    const context = createContext({ Date, Map, Error, randomUUID: () => 'history', tasks, events,pendingQueryHistory:new Map(), completionTasks:new Set(), preparingTasks: new Map(), exportProgress: new Map(), structureProgress: new Map(), structureTokens: new Map(), files: new Map(), sessions: new Map([['old-session', { connectionId: 'connection' }]]),
+    const context = createContext({ savedQueryPages:undefined,Date, Map, Error, randomUUID: () => 'history', tasks, events,pendingQueryHistory:new Map(), completionTasks:new Set(), preparingTasks: new Map(), exportProgress: new Map(), structureProgress: new Map(), structureTokens: new Map(), files: new Map(), sessions: new Map([['old-session', { connectionId: 'connection' }]]),
       connectionConfig: { assertAvailable() {} }, resolveFileToken: () => '/selected/result.json',
       store: { saveTask() {}, addHistory() {} }, persistAuxiliary: (action: () => void) => action(), persistedQueryError: () => '脱敏错误',
       exportReservations: { acquire: () => new Promise<() => void>(resolve => { permit = resolve; }) }, broker: { request },

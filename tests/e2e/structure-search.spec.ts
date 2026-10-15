@@ -1,5 +1,5 @@
 import {test,expect,page,pageErrors} from './desktop-fixture';
-import {enabled,isolatedDatabase,openDatabaseQuery,executeSql,modifier} from './live-helpers';
+import{enabled,isolatedDatabase,openDatabaseQuery,executeSql,modifier,readRenderedResult}from'./live-helpers';
 import type {RowDataPacket} from 'mysql2/promise';
 
 test.use({trace:'off'});
@@ -45,11 +45,11 @@ test.describe('200实库：结构名称搜索入口',()=>{
       // 查询完成后的上下文会独立确认并防抖落盘；先等原操作真正稳定，再比较搜索前后完整布局。
       await expect(query.getByLabel('当前查询默认库',{exact:true})).toContainText(database);
       await expect.poll(()=>page.evaluate(async()=>{const settings=await window.dbark.invoke('settings.get',{});return settings.tabs.find(tab=>tab.id===settings.activeTabId)?.databaseContext;})).toEqual({state:'known',database});
-      const before=await query.locator('.result-body').innerText(),settings=await page.evaluate(()=>window.dbark.invoke('settings.get',{}));
+      const before=await readRenderedResult(text=>text.includes('session_id')&&text.includes('原事务未提交')&&text.match(/\b\d+\b/g)?.length===1);await expect.poll(()=>page.evaluate(async()=>{const value=await window.dbark.invoke('settings.get',{});return value.tabs.find(tab=>tab.id===value.activeTabId)?.sql;})).toContain('SELECT CONNECTION_ID() AS session_id,note FROM subject');const settings=await page.evaluate(()=>window.dbark.invoke('settings.get',{}));
       await openSearch();await expect(search().getByLabel('数据库范围（每行一个）',{exact:true})).toHaveValue(database);await searchFor('subject','whole');await search().getByRole('button',{name:'关闭',exact:true}).click();
-      expect(await query.locator('.result-body').innerText()).toBe(before);expect((await page.evaluate(()=>window.dbark.invoke('settings.get',{}))).tabs).toEqual(settings.tabs);
+      await expect.poll(()=>query.locator('.result-body').innerText()).toBe(before);expect((await page.evaluate(()=>window.dbark.invoke('settings.get',{}))).tabs).toEqual(settings.tabs);
       const [uncommitted]=await observer.query<RowDataPacket[]>('SELECT note FROM `'+database+'`.subject');expect(uncommitted[0].note).toBe('服务器原值');
-      await executeSql('SELECT CONNECTION_ID() AS session_id,note FROM subject');await expect(query.locator('.result-body')).toContainText('原事务未提交');expect(await query.locator('.result-body').innerText()).toBe(before);await page.screenshot({path:info.outputPath('structure-search-original-transaction.png')});await executeSql('ROLLBACK');
+      await executeSql('SELECT CONNECTION_ID() AS session_id,note FROM subject');await expect.poll(()=>query.locator('.result-body').innerText()).toBe(before);await page.screenshot({path:info.outputPath('structure-search-original-transaction.png')});await executeSql('ROLLBACK');
       const [after]=await observer.query<RowDataPacket[]>('SELECT note FROM `'+database+'`.subject');expect(after[0].note).toBe('服务器原值');
     },info);
   });

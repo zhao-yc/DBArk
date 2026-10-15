@@ -114,3 +114,10 @@ export async function executeSql(source: string) {
   await expect(query.getByRole('button', { name: '停止', exact: true })).toBeDisabled({ timeout: 20000 });
   await expect(query.locator('.error-box')).toHaveCount(0);
 }
+
+/** 捕获同一次完整DOM读取，避免先等到表头、下一次读取却落在表格重绘的空帧；不重发SQL。 */
+export async function readRenderedResult(complete:(text:string)=>boolean):Promise<string>{
+  let snapshot:string|undefined;
+  await expect.poll(async()=>{const text=await page.locator('.query-tab:visible .result-body').innerText();if(text&&complete(text))snapshot=text;return snapshot;},{message:'等待同一次界面读取含完整预期列和值，保留实际SQL执行次数'}).toBeDefined();
+  return snapshot!;
+}

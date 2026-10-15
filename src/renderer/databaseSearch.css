@@ -12,3 +12,6 @@
 
 /* 本地命中只显示有界文本，不因SQL长行扩展整个模态布局。 */
 .saved-query-search-preview { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 100px; overflow: auto; }
+
+/* 矮窗口由内容区滚动；表格、失败明细与说明均保持实际高度，不能互相挤压隐藏。 */
+.database-search-content > * { flex-shrink: 0; }

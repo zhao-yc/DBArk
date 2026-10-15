@@ -9,6 +9,7 @@ export const publicCommands: Record<Command, true> = {
   'metadata.databases': true, 'metadata.objects': true, 'metadata.table': true, 'metadata.ddl': true, 'metadata.completion': true,
   'search.structure':true,'search.structureContinue':true,'search.release':true,
   'search.savedQueries':true,'search.savedQueriesContinue':true,'search.savedQueriesRelease':true,'queries.read':true,
+  'queries.page':true,'queries.pageContinue':true,'queries.pageRelease':true,'queries.deleteChecked':true,
   'search.dataStart':true,'search.dataNext':true,'search.dataRelease':true,
   'search.catalogue':true,
   'search.recordRead':true,'search.recordsRelease':true,
