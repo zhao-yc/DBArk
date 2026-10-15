@@ -7,6 +7,7 @@ const enabled = process.env.DBARK_INTEGRATION_ENABLED === '1' && process.env.DBA
 test.skip(!enabled, '默认严格跳过：需ROOT核对200连接并取得GUI时段后启用查询意图实库验收');
 test.use({ trace: 'off' });
 
+// run518真实可访问树：连接select与带datalist的默认库input均为具名combobox，保留精确名称定位。
 const queryForm = () => page.getByRole('dialog', { name: '新建查询', exact: true });
 const shelf = () => page.getByRole('region', { name: '对象收藏', exact: true });
 const query = () => page.locator('.query-tab:visible');
@@ -136,10 +137,10 @@ test('双真实连接：旧表/只读定义成功及不存在对象失败不覆�
           await hold(target); await button.click(); await nativeReply(item.target !== 2);
           await page.locator('.app-commandbar').getByRole('button', { name: '新建查询', exact: true }).click();
           await expect(queryForm()).toBeVisible();
-          await expect(queryForm().getByLabel('数据库连接', { exact: true })).toHaveValue(current.connectionId);
-          await expect(queryForm().getByLabel('默认数据库（可选）', { exact: true })).toHaveValue(current.database);
+          await expect(queryForm().getByRole('combobox', { name: '数据库连接', exact: true })).toHaveValue(current.connectionId);
+          await expect(queryForm().getByRole('combobox', { name: '默认数据库（可选）', exact: true })).toHaveValue(current.database);
           // 正式建连与列库必须完成，不能用测试回包填充新查询表单。
-          await expect(queryForm().getByLabel('默认数据库（可选）', { exact: true })).toHaveAttribute('placeholder', '选择或输入数据库名称', { timeout: 20000 });
+          await expect(queryForm().getByRole('combobox', { name: '默认数据库（可选）', exact: true })).toHaveAttribute('placeholder', '选择或输入数据库名称', { timeout: 20000 });
           await expect(queryForm().getByRole('alert')).toHaveCount(0);
           let result = '';
           if (item.active) {
@@ -157,8 +158,8 @@ test('双真实连接：旧表/只读定义成功及不存在对象失败不覆�
             expect(await readRenderedResult(text => text.includes('主动查询' + index))).toBe(result);
           } else {
             await expect(page.getByRole('dialog')).toHaveCount(1); await expect(queryForm()).toBeVisible();
-            await expect(queryForm().getByLabel('数据库连接', { exact: true })).toHaveValue(current.connectionId);
-            await expect(queryForm().getByLabel('默认数据库（可选）', { exact: true })).toHaveValue(current.database);
+            await expect(queryForm().getByRole('combobox', { name: '数据库连接', exact: true })).toHaveValue(current.connectionId);
+            await expect(queryForm().getByRole('combobox', { name: '默认数据库（可选）', exact: true })).toHaveValue(current.database);
             await queryForm().getByRole('button', { name: '取消', exact: true }).click(); await expect(queryForm()).toBeHidden();
           }
         }

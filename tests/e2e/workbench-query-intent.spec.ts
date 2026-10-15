@@ -9,6 +9,7 @@ type Entry = '工具栏' | '标签加号' | '欢迎页' | '快捷键' | '原生�
 type Pending = { target: WorkbenchTarget; finish(error?: string): void };
 type Probe = { pending: Map<number, Pending>; next: number; restore(): void };
 type ProbeRoot = typeof globalThis & { __queryIntentUiProbe?: Probe };
+// run518真实可访问树：连接select与带datalist的默认库input均为具名combobox，保留精确名称定位。
 const form = () => page.getByRole('dialog', { name: '新建查询', exact: true });
 const shelf = () => page.getByRole('region', { name: '对象收藏', exact: true });
 
@@ -87,19 +88,19 @@ for (const entry of ['工具栏', '标签加号', '欢迎页', '快捷键', '原
       for (const [index, kind] of ['表页', '定义', '错误'].entries()) {
         const button = shelf().getByRole('button', { name: kind === '定义' ? /^打开对象：迟到定义 ·/ : /^打开对象：迟到表页 ·/ });
         await button.click(); await waiting(index + 1); await open(entry);
-        await form().getByLabel('数据库连接', { exact: true }).selectOption(current.id);
-        await form().getByLabel('默认数据库（可选）', { exact: true }).fill('用户新草稿库');
+        await form().getByRole('combobox', { name: '数据库连接', exact: true }).selectOption(current.id);
+        await form().getByRole('combobox', { name: '默认数据库（可选）', exact: true }).fill('用户新草稿库');
         await finish(index + 1, kind === '错误' ? '旧导航专属错误不得出现' : undefined);
         // 收藏按钮恢复可用意味着正式入口finally已处理完回包，而非只等主进程Promise完成。
         await expect(button).toBeEnabled(); await expect(form()).toBeVisible(); await expect(page.getByRole('dialog')).toHaveCount(1);
-        await expect(form().getByLabel('数据库连接', { exact: true })).toHaveValue(current.id);
-        await expect(form().getByLabel('默认数据库（可选）', { exact: true })).toHaveValue('用户新草稿库');
+        await expect(form().getByRole('combobox', { name: '数据库连接', exact: true })).toHaveValue(current.id);
+        await expect(form().getByRole('combobox', { name: '默认数据库（可选）', exact: true })).toHaveValue('用户新草稿库');
         await expect(page.locator('.tab-strip .workspace-tab-button')).toHaveCount(0);
         await expect(page.locator('.toast')).not.toContainText('旧导航专属错误不得出现');
         await form().getByRole('button', { name: '取消', exact: true }).click(); await expect(form()).toBeHidden();
         // 重开读取正式工作区默认上下文，能发现旧响应只偷偷改变selection的情况。
-        await open(entry); await expect(form().getByLabel('数据库连接', { exact: true })).toHaveValue(current.id);
-        await expect(form().getByLabel('默认数据库（可选）', { exact: true })).toHaveValue('');
+        await open(entry); await expect(form().getByRole('combobox', { name: '数据库连接', exact: true })).toHaveValue(current.id);
+        await expect(form().getByRole('combobox', { name: '默认数据库（可选）', exact: true })).toHaveValue('');
         await form().getByRole('button', { name: '取消', exact: true }).click(); await expect(form()).toBeHidden();
       }
       const latest = shelf().getByRole('button', { name: /^打开对象：最新有效导航 ·/ });
