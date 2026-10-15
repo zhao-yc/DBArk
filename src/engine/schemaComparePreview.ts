@@ -6,12 +6,14 @@ import { readTableIndexDefinition } from './tableIndexDefinition';
 import { readTableForeignKeyDefinition } from './tableForeignKeyDefinition';
 import { identifier, qualified } from './sql';
 import type { SchemaComparisonSnapshot } from './schemaCompare';
+import { compareNamespaceConflicts, comparisonRowKey } from './schemaCompareNamespace';
 
 /** 根据可信原始快照生成审查稿；不提供执行令牌，不绕过依赖与不支持项。 */
 export function buildSchemaComparePreview(source: SchemaComparisonSnapshot, target: SchemaComparisonSnapshot, report: SchemaCompareResult, selections: SchemaComparePreviewInput['selections']): SchemaComparePreview {
   const sourceDoc = structureDocumentOf(source), targetDoc = structureDocumentOf(target);
   const sourceIndexes = readTableIndexDefinition(sourceDoc), targetIndexes = readTableIndexDefinition(targetDoc);
   const sourceKeys = readTableForeignKeyDefinition(sourceDoc, source.target.database, source.serverVersion);
+  const targetKeys = readTableForeignKeyDefinition(targetDoc, target.target.database, target.serverVersion);
   const addedIndexes = new Set<string>();
   const statements: SchemaComparePreview['statements'] = [], blocked: SchemaComparePreview['blocked'] = [];
   const table = qualified(target.target.database, target.target.table);
@@ -40,12 +42,13 @@ export function buildSchemaComparePreview(source: SchemaComparisonSnapshot, targ
     return row;
   });
   const selectedColumns = new Set(selected.filter(row => row.category === 'columns' && row.status === 'added').map(row => row.name));
+  const namespaceConflicts = compareNamespaceConflicts(source, target, selected, { columns: targetDoc.columns.map(column => column.name), indexes: targetIndexes.indexes.map(index => index.name), foreignKeys: targetKeys.foreignKeys.flatMap(key => key.name ? [key.name] : []) });
   const availableColumns = new Set([...targetDoc.columns.map(column => column.name), ...selectedColumns]);
   /** 顺序固定为删除旧外键、字段、索引、增加外键，避免依赖未就绪。 */
   const rank = (row: SchemaCompareDifference) => row.category === 'foreignKeys' && row.status === 'removed' ? 0 : row.category === 'columns' ? 1 : row.category === 'indexes' ? 2 : 3;
   selected.sort((a, b) => rank(a) - rank(b) || (a.source?.ordinal ?? 0) - (b.source?.ordinal ?? 0));
   for (const row of selected) {
-    const reasons = [...global, ...row.reasons];
+    const reasons = [...global, ...row.reasons, ...(namespaceConflicts.get(comparisonRowKey(row)) ?? [])];
     let clause: string | undefined, destructive = false;
     if (row.category === 'columns') {
       const column = sourceDoc.columnsByName.get(row.name);
@@ -95,8 +98,14 @@ export function buildSchemaComparePreview(source: SchemaComparisonSnapshot, targ
       if (row.category === 'indexes') addedIndexes.add(row.name);
     }
   }
+  // 多条 ALTER 不能整体回滚；一项不能生成就撤回整批，包括排在前面的外键删除。
+  if (blocked.length) {
+    const withheld = new Set(blocked.map(comparisonRowKey));
+    for (const row of selected) if (!withheld.has(comparisonRowKey(row))) blocked.push({ category: row.category, name: row.name, reasons: ['本批所选差异含冲突或不支持项，已一并阻止；未生成任何删除或新增 SQL，请处理映射后重新预览'] });
+    statements.length = 0;
+  }
   const warnings = ['这是基于短期快照的审查稿，未执行同步；执行前必须重新读取目标及关联父表并核对权限、数据和完整依赖。', 'ALTER TABLE 会隐式提交，可能锁表或重建表；多条语句不构成可回滚事务。', '未验证入向外键、父表键、已有数据的唯一性或兼容性；表选项、分区、触发器与 CHECK 未同步。', `原片段要求目标会话 SQL 模式为 ${JSON.stringify(target.normalizedMode)}；不能在其它模式直接执行。`];
-  if (blocked.length) warnings.push('部分选择未生成 SQL；以下语句仅是可确认子集，不代表完成同步计划。');
+  if (blocked.length) warnings.push('所选差异包含冲突或不支持项，已阻止整批预览；未生成任何 SQL，不会提供先删除后失败的部分脚本。');
   if (statements.some(item => item.destructive)) warnings.push('本审查稿包含删除外键，会移除目标的引用完整性约束；必须人工复核。');
   return { target: { ...target.target }, direction: 'source-to-target', expiresAt: report.expiresAt, executable: false, statements, blocked, warnings, sql: ['-- DBArk 结构比较 SQL 审查稿；尚未同步', `-- 源：${JSON.stringify(source.target)} → 目标：${JSON.stringify(target.target)}`, `-- 快照有效期至 ${report.expiresAt}，过期后必须重新比较。`, ...warnings.map(value => `-- ${value}`), ...statements.map(item => item.sql)].join('\n') };
 }

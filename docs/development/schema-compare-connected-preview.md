@@ -21,13 +21,13 @@
 
 ## SQL 预览支持范围
 
-在同方言、同主次版本、相同 SQL 模式、相同实际字符集，且除运行时自增计数外原表尾一致、没有未知投影时，支持普通字段新增、仅默认值/注释的字段修改、普通/唯一/主键新增、受限外键新增和明确删除出向外键。默认值与微秒值直接保留服务器原定义，不经 JavaScript 数值或日期转换。
+在同方言、同主次版本、相同 SQL 模式、相同实际字符集，且除运行时自增计数外原表尾一致、没有未知投影时，支持普通字段新增、仅默认值/注释的字段修改、普通/唯一/主键新增和明确删除出向外键。当前外键新增因未核验目标库完整名称可用性而阻止生成，不能以不同连接或服务器代替名称可用性证明。默认值与微秒值直接保留服务器原定义，不经 JavaScript 数值或日期转换。
 
-新增字段必须有已存在或已确认生成的前置字段，索引必须引用最终可用字段，外键必须有明确支撑索引。顺序为删除旧外键、字段、索引、增加外键。被阻止的新增项不能成为后续 SQL 的依赖；不会自动映射父库/父表或依赖服务器隐式创建外键支撑索引。
+新增字段必须有已存在或已确认生成的前置字段，索引必须引用最终可用字段，外键必须有明确支撑索引。当前可生成项按删除旧外键、字段、索引的依赖顺序排列。任一所选项存在冲突、不支持或未确认时，整批 SQL 全部撤回；不会保留排在前面的删除语句。被阻止的新增项不能成为后续 SQL 的依赖；不会自动映射父库/父表或依赖服务器隐式创建外键支撑索引。
 
 字段删除、类型/可空性/顺序变更、自增或生成等特殊字段、索引删除/重建、外键变化、跨库父引用搬运、跨方言/主次版本，以及未知表选项等明确列入未生成项。删除外键标为破坏性操作。预览提醒 ALTER 的隐式提交、锁表/重建表和多语句无法整体回滚；不声称已验证父表权限、已有数据、入向外键或全量同步依赖。
 
-## 本轮验证
+## 首切片验证（2026-10-15）
 
 全部命令只在指定普通克隆执行，使用其独立锁文件依赖与 Electron 运行时。没有本机 Docker、业务库读取或生产部署。
 
@@ -63,3 +63,31 @@ node node_modules/vitest/vitest.mjs run --config vitest.integration.config.ts te
 - [MySQL 8.4 外键约束](https://dev.mysql.com/doc/refman/8.4/en/create-table-foreign-keys.html)：外键的有序映射及索引依赖。
 - [MySQL 隐式提交语句](https://dev.mysql.com/doc/refman/8.4/en/implicit-commit.html)：ALTER TABLE 的事务边界。
 - [MariaDB ALTER TABLE](https://mariadb.com/docs/server/reference/sql-statements/data-definition/alter/alter-table)：字段、索引与外键相关语法。涉及版本差异仍需本轮对应内核验收，不能仅凭文档当作执行通过。
+
+## 2026-10-16：命名空间复审修复
+
+复现旧提交 2fceb2b 的三组 SQL：同连接同库跨表复制外键名称、字段 ID/id、索引 I/i；其中混合选择会出现先 DROP FOREIGN KEY 再执行确定冲突的 ADD。本次保留原始差异配对、名称及 unknown 展示，只在 SQL 生成层拒绝冲突，并在任一所选项未能生成时撤回整批脚本，逐项保留原因。窗口不会允许保存空语句批次。
+
+字段、索引及 InnoDB 外键名按不区分大小写的命名空间检查，不受 lower_case_table_names=0/1/2 对库名/表名的规则替代。本轮支持的 MySQL 5.7/8.0/8.4、MariaDB 10.11/11.4 外键名都是库级唯一；MariaDB 12.1 起改为表级，但不在本轮支持范围。不会自动映射或重命名冲突对象。
+
+每侧双读结束后通过同一可取消短会话执行一条固定 SELECT，校验连接编号并采集实际表名大小写规则。私有服务器摘要使用 MySQL UUID，或 MariaDB 的 hostname/port/server_id，排除账号及保存连接编号；摘要和原始服务器信息不进入公开报告。因此不同保存连接、不同账号指向同一实例时不能绕过已知源外键占名检查。MariaDB 元数据摘要采用保守识别，非全局唯一名称证明；旧快照无法证明身份时保留未确认项。
+
+两张表的原定义无法排除目标库其它表占用某个外键名：即使服务器摘要不同，也不把跨连接当作“名称已可用”。相关外键新增明确保留“目标库完整命名空间未核验”，并阻止整批 SQL；未来需要显式名称映射及完整、有界的目录可用性核验才能放行。独立选择的无冲突字段/索引新增和外键删除仍可预览。
+
+本次只修改 M02 读取器、独立命名空间模块、预览生成器及其测试、说明，没有修改共享契约或主进程/引擎生命周期，没有合入统筹分支。
+
+验证命令：
+
+```powershell
+node node_modules/vitest/vitest.mjs run schema-compare --reporter=dot
+node node_modules/typescript/bin/tsc --noEmit
+node scripts/build.mjs
+node node_modules/vitest/vitest.mjs run --reporter=dot
+node node_modules/@playwright/test/cli.js test tests/e2e/schema-compare.spec.ts
+```
+
+专项 8 文件、97 项通过；完整单元 121 文件、2307 项通过；类型检查和源码构建通过；离线 Electron 6 项通过。新增窗口流程实际选择冲突新增项与目标外键删除，确认原始差异仍在、整批无 ALTER 语句且保存禁用。单元覆盖五类目标版本、仅选新增/混合删除、同库不同表、跨库、双连接别名及不同账号、未知身份、三种表名大小写模式、字段/索引大小写和无冲突独立操作。
+
+仍未在 200 隔离实库执行本次新增查询或 DDL，未验证真实内核命名冲突、不同操作系统/Unicode 名称比较、SSH/TLS 与最终安装包；不以离线版本参数化用例声称实库矩阵通过。
+
+规则依据：[MySQL 外键名称](https://dev.mysql.com/doc/refman/8.4/en/create-table-foreign-keys.html)、[MySQL 标识符大小写](https://dev.mysql.com/doc/refman/8.4/en/identifier-case-sensitivity.html)、[MariaDB 外键名称范围](https://mariadb.com/docs/server/ha-and-performance/optimization-and-tuning/optimization-and-indexes/foreign-keys)、[MariaDB 标识符大小写](https://mariadb.com/docs/server/reference/sql-structure/sql-language-structure/identifier-case-sensitivity)。
