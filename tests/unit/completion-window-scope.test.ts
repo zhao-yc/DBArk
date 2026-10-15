@@ -2,6 +2,8 @@ import{describe,it,expect,vi}from'vitest';
 import{analyzeCompletion,type CompletionAnalysisReady}from'../../src/shared/completionAnalysis';
 import{completionSuggestions}from'../../src/renderer/completionSuggestions';
 import type{CompletionDirectoryRequest}from'../../src/shared/sqlCompletion';
+import{SessionObjects}from'../../src/engine/sessionObjects';
+import{SessionCompletionDirectory}from'../../src/renderer/sessionCompletionDirectory';
 
 /** 真实解析器提供作用域；仅目录读取使用可检查的替身，不模拟语义结果。 */
 function analyze(marked:string):CompletionAnalysisReady{const result=analyzeCompletion(marked.replace('|',''),marked.indexOf('|'));expect(result.status).toBe('ready');if(result.status!=='ready')throw Error('分析未就绪');return result;}
@@ -41,6 +43,15 @@ describe('普通SELECT窗口字段作用域',()=>{
     ['SELECT u.id FROM users u UNION ALL (SELECT o.id FROM orders o ORDER BY SUM(o.id) OVER(ORDER BY o.ord|suffix) LIMIT 1)','orders','`order_value`'],
   ])('集合各分支自身窗口继续使用正确关系：%s',async(marked,table,insert)=>{const a=analyze(marked),d=directory(),r=await completionSuggestions(a,'db',d);expect(r.items.some(item=>item.insertText===insert)).toBe(true);expect(d.load.mock.calls.map(([query])=>query)).toEqual([{kind:'columns',database:'db',table,prefix:table==='users'?'use':'ord'}]);});
   it('帧之前的字段表达式继续补全，不把整个带帧窗口清空',async()=>{const d=directory(),r=await completionSuggestions(analyze('SELECT ROW_NUMBER() OVER(ORDER BY u.use|suffix ROWS BETWEEN 1 PRECEDING AND CURRENT ROW) FROM users u'),'db',d);expect(r.items.some(item=>item.insertText==='`user_value`')).toBe(true);expect(d.load.mock.calls.map(([query])=>query)).toEqual([{kind:'columns',database:'db',table:'users',prefix:'use'}]);});
+  it('执行后未知会话来源先停止字段回退，显式确认该名称后窗口字段才恢复',async()=>{
+    const catalog=new SessionObjects(0),a=analyze('SELECT s.id,ROW_NUMBER() OVER(ORDER BY amo|suffix) AS ranking FROM window_subject s ORDER BY s.id'),permanent={load:vi.fn(async(query:CompletionDirectoryRequest)=>({entries:query.kind==='columns'?[{name:'amount',kind:'column' as const}]:[],incomplete:false}))};
+    const suggest=()=>completionSuggestions(a,'db',new SessionCompletionDirectory(permanent,async query=>catalog.completion(query),catalog.revision));
+    expect((await suggest()).items.some(item=>item.insertText==='`s`.`amount`')).toBe(true);permanent.load.mockClear();
+    catalog.observe('SELECT s.id,ROW_NUMBER() OVER(PARTITION BY s.`category` ORDER BY s.id) AS ranking FROM window_subject s ORDER BY s.id','db',{ansiQuotes:false,noBackslashEscapes:false},'mysql');
+    const stopped=await suggest();expect(stopped.sessionUncertain).toBe(true);expect(stopped.items.some(item=>item.label==='amount')).toBe(false);expect(permanent.load.mock.calls.some(([query])=>query.kind==='columns')).toBe(false);
+    // 对应真实“会话临时对象→读取会话结构”确认结果，不把未知目录自动标记可靠。
+    catalog.confirm('db','window_subject',null);expect((await suggest()).items.some(item=>item.insertText==='`s`.`amount`')).toBe(true);
+  });
   it.each([
     'SELECT ROW_NUMBER() OVER(ORDER BY u.id ROWS BETWEEN UNBOUNDED PRECEDING AND CUR|RENT ROW) FROM users u',
     'SELECT ROW_NUMBER() OVER(ORDER BY u.id ROWS BETWEEN UNB|OUNDED PRECEDING AND CURRENT ROW) FROM users u',
