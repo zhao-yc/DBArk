@@ -70,6 +70,6 @@ export function compareSchemaSnapshots(source: SchemaComparisonSnapshot, target:
   for (const row of rows) counts[row.status]++;
   return { source: { ...source.target }, target: { ...target.target }, direction: 'source-to-target', mode: 'read-only-definition', rows, counts, comparable: counts.unknown === 0,
     sourceVersion: source.serverVersion, targetVersion: target.serverVersion,
-    ignored: ['仅比较两张明确配对表的字段、主键/索引及出向外键；不代表完整 M02 已完成', '表选项、分区、CHECK、触发器、入向外键及其它对象未进行语义比较', '名称精确且区分大小写配对；不推断重命名，不自动映射父库/父表', '默认值与表达式保守按精确定义比较；不证明跨版本语义等价', '两个独立读取时点不构成跨服务器事务快照；只拒绝读取期间已观察到的变化', '不生成或执行结构同步 DDL'],
+    ignored: ['仅比较两张明确配对表的字段、主键/索引及出向外键；不代表完整 M02 已完成', '表选项、分区、CHECK、触发器、入向外键及其它对象未进行语义比较', '名称精确且区分大小写配对；不推断重命名，不自动映射父库/父表', '默认值与表达式保守按精确定义比较；不证明跨版本语义等价', '两个独立读取时点不构成跨服务器事务快照；只拒绝读取期间已观察到的变化', '比较阶段不执行 DDL；SQL 审查稿的支持范围另行列出'],
     ignoredFragments: [{ side: 'source', category: 'tableOptions', rawSql: left.tail }, { side: 'target', category: 'tableOptions', rawSql: right.tail }] };
 }

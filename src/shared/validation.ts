@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { schemaCompareInputSchema, schemaComparePreviewSchema, schemaCompareReleaseSchema } from './schemaCompare';
 import{savedQueryPageInputSchema,savedQueryPageNextSchema,savedQueryPageReleaseSchema,savedQueryDeleteCheckedSchema}from'./savedQueryPages';
 import { connectionFileRequirements, connectionImportApplySchema, connectionTransferLimits } from './connectionTransfer';
 import type { Command, ResultExportData } from './contracts';
@@ -79,6 +80,7 @@ const tablePage = z.object({ ...target, page: z.number().int().min(1).max(100000
 });
 export const commandSchemas: Record<Command, z.ZodType> = {
   'table.preferences.get': tablePreferenceTargetSchema, 'table.preferences.save': tablePreferenceSaveSchema, 'table.preferences.reset': tablePreferenceTargetSchema,
+  'schema.compare': schemaCompareInputSchema, 'schema.comparePreview': schemaComparePreviewSchema, 'schema.compareRelease': schemaCompareReleaseSchema,
   'app.info': empty,
   'app.setDirty': z.object({ dirty: z.boolean() }).strict(),
   'connections.export': z.object({ connectionIds: z.array(id).min(1).max(connectionTransferLimits.connections), fileToken: id }).strict(),

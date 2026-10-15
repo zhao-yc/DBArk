@@ -1,5 +1,7 @@
-import { schemaCompareTargetSchema, type SchemaCompareTarget } from '../shared/schemaCompare';
+import { schemaCompareLimits, schemaCompareTargetSchema, type SchemaCompareTarget } from '../shared/schemaCompare';
 import { readStructureDefinition, assertStructureDefinitionUnchanged, structureTaskQuery, type StructureDefinitionRead, type StructureTaskContext } from './structureDefinition';
+
+import { structureDocumentOf } from './structureDefinition';
 
 export interface SchemaComparisonSnapshot extends StructureDefinitionRead { target: SchemaCompareTarget; }
 
@@ -20,6 +22,7 @@ export async function readSchemaComparisonTarget(context: StructureTaskContext, 
     }
   }
   const read = await readStructureDefinition(context, target, true);
+  if (structureDocumentOf(read).items.length > schemaCompareLimits.objects) throw new Error('结构对象数量超过比较上限');
   context.checkCancelled();
   // SHOW CREATE 与目录不是原子快照；读取结束再核对，拒绝观察到的并发结构变化。
   const recheck = await readStructureDefinition(context, target, false);
