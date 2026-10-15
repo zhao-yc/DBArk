@@ -54,6 +54,13 @@ async function openDialog(): Promise<void> {
 /** 从真实字段选项取服务器引用；不在测试中制造columnRef。 */
 function field(position: number): Locator { return dialog().getByRole('combobox', { name: `索引字段 ${position}`, exact: true }); }
 function option(position: number, name: string): Locator { return field(position).locator('option').filter({ hasText: new RegExp(`^${name} ·`) }); }
+/** 本版Playwright的启用/禁用匹配沿label转向select；JS属性断言直接检查原OPTION，避免误判父select。 */
+async function expectOptionDisabled(position: number, name: string, disabled: boolean): Promise<void> {
+  const candidate = option(position, name); await expect(candidate).toHaveCount(1);
+  await expect(candidate).toHaveJSProperty('disabled', disabled);
+  if (disabled) await expect(candidate).toHaveAttribute('disabled', '');
+  else await expect(candidate).not.toHaveAttribute('disabled');
+}
 async function selectField(position: number, name: string): Promise<void> {
   const value = await option(position, name).getAttribute('value'); if (!value) throw new Error('真实字段选项不存在'); await field(position).selectOption(value);
 }
@@ -108,11 +115,11 @@ test.describe('特殊索引真实产品面板验收准备', () => {
       const kinds = dialog().getByRole('combobox', { name: text.kind, exact: true });
       await kinds.selectOption('spatial'); await expect(field(2)).toHaveCount(0); await expect(dialog().getByRole('textbox', { name: text.method, exact: true })).toHaveValue('RTREE');
       await expect(field(1)).toHaveValue((await option(1, 'g').getAttribute('value'))!);
-      await expect(option(1, 'g')).toBeEnabled(); for (const column of ['a', 'b', 'g_nullable', 'calc', 'id']) await expect(option(1, column)).toBeDisabled();
+      await expectOptionDisabled(1, 'g', false); for (const column of ['a', 'b', 'g_nullable', 'calc', 'id']) await expectOptionDisabled(1, column, true);
       await expect(dialog().getByRole('button', { name: text.addPart, exact: true })).toBeDisabled();
       await kinds.selectOption('fulltext'); await expect(dialog().getByRole('textbox', { name: text.method, exact: true })).toHaveValue('FULLTEXT');
       await expect(field(1)).toHaveValue((await option(1, 'a').getAttribute('value'))!);
-      await expect(option(1, 'a')).toBeEnabled(); await expect(option(1, 'b')).toBeEnabled(); for (const column of ['g', 'g_nullable', 'calc', 'id']) await expect(option(1, column)).toBeDisabled();
+      await expectOptionDisabled(1, 'a', false); await expectOptionDisabled(1, 'b', false); for (const column of ['g', 'g_nullable', 'calc', 'id']) await expectOptionDisabled(1, column, true);
       await expect(dialog().getByRole('spinbutton', { name: '索引前缀长度 1', exact: true })).toHaveValue(''); await expect(dialog().getByRole('spinbutton', { name: '索引前缀长度 1', exact: true })).toBeDisabled(); await expect(dialog().getByRole('combobox', { name: '索引方向 1', exact: true })).toBeDisabled();
       if (kind === 'spatial') await kinds.selectOption(kind);
       else { await dialog().getByRole('button', { name: text.addPart, exact: true }).click(); await selectField(2, 'b'); }
