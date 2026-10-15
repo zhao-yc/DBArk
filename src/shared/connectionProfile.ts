@@ -20,5 +20,6 @@ export function connectionTransportChanged(previous: ConnectionProfile, next: Co
   };
   return changedSecret(previous.password, next.password, previous.hasPassword)
     || changedSecret(previous.ssh?.password, next.ssh?.password, previous.ssh?.hasPassword)
-    || changedSecret(previous.ssh?.passphrase, next.ssh?.passphrase, previous.ssh?.hasPassphrase);
+    || changedSecret(previous.ssh?.passphrase, next.ssh?.passphrase, previous.ssh?.hasPassphrase)
+    || changedSecret(previous.tls?.passphrase, next.tls?.passphrase, previous.tls?.hasPassphrase);
 }

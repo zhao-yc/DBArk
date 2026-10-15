@@ -31,7 +31,7 @@ export interface ConnectionProfile {
   pendingFiles?: ConnectionFileRequirement[];
   password?: string; rememberPassword?: boolean; hasPassword?: boolean;
   ssh?: { enabled: boolean; host: string; port: number; user: string; password?: string; hasPassword?: boolean; privateKeyPath?: string; passphrase?: string; hasPassphrase?: boolean; hostFingerprint?: string };
-  tls?: { enabled: boolean; rejectUnauthorized: boolean; caPath?: string; certPath?: string; keyPath?: string };
+  tls?: { enabled: boolean; rejectUnauthorized: boolean; caPath?: string; certPath?: string; keyPath?: string; passphrase?: string; hasPassphrase?: boolean };
 }
 export interface ConnectionStatus { version: string; dialect: 'mysql' | 'mariadb'; connectionId?: number; }
 /** 内部配置检查仅由主进程调用，不加入渲染进程可访问的 CommandMap/参数白名单。 */
