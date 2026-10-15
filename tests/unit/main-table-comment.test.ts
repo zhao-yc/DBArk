@@ -4,7 +4,7 @@ import ts from 'typescript';
 import { describe, expect, it, vi } from 'vitest';
 import { SavedQuerySearchCancelled } from '../../src/main/savedQuerySearch';
 import { persistedTaskMessage } from '../../src/main/taskPrivacy';
-import type { TaskEvent, TaskRecord } from '../../src/shared/contracts';
+import type { ConnectionProfile, TaskEvent, TaskRecord } from '../../src/shared/contracts';
 
 /** 执行生产dispatch和进程退出代码，替换Electron/broker边界而非复制令牌规则。 */
 function harness() {
@@ -44,5 +44,35 @@ describe('主进程表注释令牌、修订与退出事实', () => {
   });
   it('任务持久化不保存注释和驱动展开的敏感错误原文', () => {
     for (const status of ['running', 'completed', 'cancelled', 'failed'] as const) expect(persistedTaskMessage('schema.tableComment.apply', { taskId: 't', status, progress: 0, message: 'COMMENT=私有业务说明', tableComment: { phase: 'executing', ddlSubmitted: true, ddlCompleted: false, definitionVerified: false, outcome: 'unknown' } })).not.toContain('私有业务说明');
+  });
+});
+
+/** 只提取真实集成准备函数，不导入集成模块、启动引擎或读取任何认证材料。 */
+function checkIntegrationTarget(profile: ConnectionProfile, tlsRequested?: string): void {
+  const source = readFileSync(new URL('../integration/engine-table-comment.integration.test.ts', import.meta.url), 'utf8');
+  const tree = ts.createSourceFile('table-comment-integration.ts', source, ts.ScriptTarget.Latest, true);
+  let guard = '';
+  function visit(node: ts.Node) { if (ts.isFunctionDeclaration(node) && node.name?.text === 'assertTableCommentTestTarget') guard = node.getText(tree); node.forEachChild(visit); }
+  visit(tree); if (!guard) throw new Error('缺少真实表注释集成准备门');
+  runInContext(ts.transpileModule(guard + '\nassertTableCommentTestTarget(profile,tlsRequested);', { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText, createContext({ profile, tlsRequested }));
+}
+
+describe('表注释六实例的显式配置准备门（不连接服务器）', () => {
+  const profile: ConnectionProfile = { id: 'configuration-only', name: '仅配置验证', group: '', color: '#123456', dialect: 'mysql', host: '192.168.31.200', port: 13384, user: 'fixture' };
+  const tls = { enabled: true, rejectUnauthorized: true, caPath: '/仅作配置校验的已有CA占位.pem' };
+  it('原五端口保持显式主机、账号与无TLS配置的原有准入', () => {
+    for (const port of [13357, 13380, 13384, 13310, 13311]) expect(() => checkIntegrationTarget({ ...profile, port })).not.toThrow();
+  });
+  it('13484只有开关、CA和严格校验齐全才通过准备门', () => {
+    expect(() => checkIntegrationTarget({ ...profile, port: 13484, tls }, '1')).not.toThrow();
+    expect(() => checkIntegrationTarget({ ...profile, host: 'deve-server.yinzon.com', port: 13484, tls }, '1')).not.toThrow();
+  });
+  it('13484拒绝遗漏开关、禁用TLS、无CA和关闭证书校验，不降级', () => {
+    const strict = { ...profile, port: 13484, tls };
+    for (const flag of [undefined, '0', 'true']) expect(() => checkIntegrationTarget(strict, flag)).toThrow('13484');
+    for (const value of [undefined, { ...tls, enabled: false }, { ...tls, rejectUnauthorized: false }, { ...tls, caPath: undefined }, { ...tls, caPath: '' }, { ...tls, caPath: '  ' }]) expect(() => checkIntegrationTarget({ ...strict, tls: value }, '1')).toThrow('13484');
+  });
+  it('原有主机、账号、端口及其它端口TLS缺CA的拒绝保持', () => {
+    for (const next of [{ ...profile, host: 'unreviewed.invalid' }, { ...profile, user: '' }, { ...profile, port: 3306 }, { ...profile, tls: { enabled: true, rejectUnauthorized: true } }]) expect(() => checkIntegrationTarget(next, '1')).toThrow();
   });
 });

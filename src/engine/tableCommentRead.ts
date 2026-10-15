@@ -63,7 +63,8 @@ export function assertTableCommentUnchanged(before: TableCommentRead, after: Tab
 }
 /** 后核验只豁免顶层COMMENT；物理编号变化也保守标记为未完整核验。 */
 export function verifyTableComment(before: TableCommentRead, after: TableCommentRead, expected: string): boolean {
-  return !after.reasons.length && before.identity === after.identity && before.tableId === after.tableId && before.originalMode === after.originalMode && before.normalizedMode === after.normalizedMode && after.comment === expected && before.preserved === after.preserved && JSON.stringify([before.nullability, before.encodings, before.tableEncoding, before.engine, before.rowFormat, before.autoIncrement, before.budget]) === JSON.stringify([after.nullability, after.encodings, after.tableEncoding, after.engine, after.rowFormat, after.autoIncrement, after.budget]);
+  // ALTER后的重读复用已规范化的短会话，原始模式应等于快照规范模式；发送前独立会话仍严格比较原始模式。
+  return !after.reasons.length && before.identity === after.identity && before.tableId === after.tableId && before.normalizedMode === after.originalMode && before.normalizedMode === after.normalizedMode && after.comment === expected && before.preserved === after.preserved && JSON.stringify([before.nullability, before.encodings, before.tableEncoding, before.engine, before.rowFormat, before.autoIncrement, before.budget]) === JSON.stringify([after.nullability, after.encodings, after.tableEncoding, after.engine, after.rowFormat, after.autoIncrement, after.budget]);
 }
 /** 哈希只对外标识定义，不替代原生表身份或完整原文复核。 */
 export const tableCommentHash = (source: string): string => createHash('sha256').update(source).digest('hex');

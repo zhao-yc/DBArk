@@ -30,11 +30,17 @@ async function apply(value: TableCommentPreviewOutput, taskId = randomUUID(), re
 /** 每例自建普通InnoDB表，表名仅来自本测试固定字面量。 */
 async function create(table: string, comment = '原说明') { await sql(`CREATE TABLE ${target(table)}(id BIGINT NOT NULL AUTO_INCREMENT,s VARCHAR(80) CHARACTER SET latin1 COLLATE latin1_bin DEFAULT NULL,g INT GENERATED ALWAYS AS (length(s)) STORED,note TEXT,PRIMARY KEY(id),KEY prefix_key(s(8)),FULLTEXT KEY ft(note)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin ROW_FORMAT=DYNAMIC COMMENT=${stringLiteral(comment)}`); }
 
+/** 只验证显式准备配置；13484不得因遗漏TLS开关、CA或严格校验而降级连接。 */
+function assertTableCommentTestTarget(profile: ConnectionProfile, tlsRequested: string | undefined): void {
+  if (!profile.host || !profile.user || !['13357', '13380', '13384', '13310', '13311', '13484'].includes(String(profile.port))) throw new Error('必须显式提供已核对200专用实例配置');
+  if (!['192.168.31.200', 'deve-server.yinzon.com'].includes(profile.host)) throw new Error('拒绝访问未核对的测试主机');
+  if (profile.port === 13484 && (tlsRequested !== '1' || profile.tls?.enabled !== true || profile.tls.rejectUnauthorized !== true || !profile.tls.caPath?.trim())) throw new Error('13484必须显式启用严格TLS并提供已有CA，禁止降级');
+  if (profile.tls?.enabled && !profile.tls.caPath) throw new Error('严格TLS必须提供已有CA，禁止退回明文');
+}
+
 describe.skipIf(!enabled)('表注释单属性六实例核心验收（每轮显式指定一个实例）', () => {
   beforeAll(async () => {
-    if (!profile.host || !profile.user || !['13357', '13380', '13384', '13310', '13311'].includes(String(profile.port))) throw new Error('必须显式提供已核对200专用实例配置');
-    if (!['192.168.31.200', 'deve-server.yinzon.com'].includes(profile.host)) throw new Error('拒绝访问未核对的测试主机');
-    if (profile.tls?.enabled && !profile.tls.caPath) throw new Error('严格TLS必须提供已有CA，禁止退回明文');
+    assertTableCommentTestTarget(profile, process.env.DBARK_TEST_TLS);
     observer = await connect(profile); ids.add(observer.connection.threadId!);
     const status = await engine.handle('connections.open', { id: profile.id, profile }); version = status.version; dialect = status.dialect; if (status.connectionId) ids.add(status.connectionId);
     const facts = (await sql('SELECT @@hostname AS host,@@version_compile_os AS os,@@lower_case_table_names AS names'))[0];
