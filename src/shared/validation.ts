@@ -68,6 +68,7 @@ const queryParameters = z.array(z.object({ name: z.string().regex(/^[A-Za-z_][A-
 const index = z.object({ name, unique: z.boolean(), columns: z.array(name).min(1) }).strict();
 const foreignKey = z.object({ name, columns: z.array(name).min(1), referencedDatabase: name, referencedTable: name, referencedColumns: z.array(name).min(1), onUpdate: z.enum(['RESTRICT','CASCADE','SET NULL','NO ACTION']), onDelete: z.enum(['RESTRICT','CASCADE','SET NULL','NO ACTION']) }).strict();
 const fileOptions = { ...target, fileToken: id, format: z.enum(['csv','json','sql']), encoding: z.enum(['utf8','utf16le','gb18030']), taskId: id };
+const excelSheet = { fileToken: id, sheetId: id, headerRow: z.number().int().min(1).max(1000).optional(), protocol: z.enum(['plain','dbark-v1']) };
 /** custom 保留已校验结果引用，避免 Zod 深拷贝十万行；主进程仍完整校验每个字段。 */
 const resultExportData = z.custom<ResultExportData>().superRefine((value, context) => {
   try { validateResultExportData(value); }
@@ -144,6 +145,10 @@ export const commandSchemas: Record<Command, z.ZodType> = {
   'schema.foreignKeys.release': z.object({ snapshotId: id.optional(), previewToken: id.optional() }).strict().refine(value => Boolean(value.snapshotId || value.previewToken), '缺少待释放的外键结构令牌'),
   'files.choose': z.object({ purpose: z.enum(['import','export','key','certificate','query','connection-import','connection-export']), format: z.string().optional(), suggestedName: z.string().optional() }).strict(),
   'files.path': z.object({ token: id }).strict(),
+  'excel.sheets': z.object({ fileToken: id, taskId: id }).strict(),
+  'excel.preview': z.object({ ...excelSheet, taskId: id }).strict(),
+  'excel.import': z.object({ ...target, ...excelSheet, taskId: id, fingerprint: z.string().regex(/^[a-f0-9]{64}$/), mapping: z.array(z.object({ source: z.string().min(1).max(32767), target: name }).strict()).min(1).max(16384) }).strict().refine(value => new Set(value.mapping.map(item => item.source)).size === value.mapping.length && new Set(value.mapping.map(item => item.target)).size === value.mapping.length, '字段映射不能重复'),
+  'excel.export': z.object({ ...target, fileToken: id, taskId: id, scope: z.enum(['sample','all']).optional() }).strict(),
   'files.readQuery': z.object({ fileToken: id, encoding: z.enum(['utf8','utf16le','gb18030']) }).strict(),
   'files.writeQuery': z.object({ fileToken: id, encoding: z.enum(['utf8','utf16le','gb18030']), sql: text }).strict(),
   'files.preview': z.object({ fileToken: id, format: z.enum(['csv','json']), encoding: z.enum(['utf8','utf16le','gb18030']) }).strict(),

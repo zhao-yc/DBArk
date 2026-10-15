@@ -1,5 +1,9 @@
 import { randomUUID } from 'node:crypto';
 import { open, rename, rm } from 'node:fs/promises';
+import { finished } from 'node:stream/promises';
+import { exportExcelFile, previewExcelSheet, readExcelRows } from './excelFiles';
+import { ExcelReadTasks } from './excelReadTasks';
+import { validateExcelMapping } from '../shared/excelTransfer';
 import iconv from 'iconv-lite';
 import { Types, type FieldPacket, type ResultSetHeader } from 'mysql2';
 import type { CellValue, EngineCommand, ConnectionProfile, DataRow, QueryOutcome, QueryResult, ResultColumn, RowChange, TableDesign, TaskEvent } from '../shared/contracts';
@@ -47,6 +51,7 @@ type Input = Record<string, any>;
 
 /** 独立数据库进程的入口；网络连接与文件流不会进入 Electron 渲染进程。 */
 export class Engine {
+  private readonly excelReads = new ExcelReadTasks(event => this.emit(event));
   private readonly profiles = new Map<string, ConnectionProfile>();
   private readonly sessions = new Map<string, Session>();
   private readonly tasks = new Map<string, RunningTask>();
@@ -259,11 +264,19 @@ export class Engine {
       case 'schema.foreignKeys.apply': return this.foreignKeyPatches.apply(input as any, input.connectionRevision);
       case 'schema.foreignKeys.release': return this.foreignKeyPatches.releaseTokens(input);
       case 'files.preview': this.assertFile(input); return previewFile(input as { filePath: string; format: 'csv' | 'json'; encoding: string });
+      case 'excel.sheets':
+      case 'excel.preview': {
+        this.assertFile(input);
+        if (this.tasks.has(input.taskId) || this.independentTasks.has(input.taskId) || this.resultFiles.has(input.taskId)) throw new Error('任务编号已在执行');
+        return this.excelReads.run(command, input as any);
+      }
+      case 'excel.import': this.assertFile(input); return this.withConnection(input.connectionId, managed => this.runTask(input.taskId, managed, '导入 Excel', task => this.importExcel(task, input)), input.database);
+      case 'excel.export': this.assertFile(input); return this.withConnection(input.connectionId, managed => this.runTask(input.taskId, managed, '导出 Excel', task => this.exportExcel(task, input)), input.database);
       case 'files.import': this.assertFile(input); return this.withConnection(input.connectionId, managed => this.runTask(input.taskId, managed, '导入文件', task => this.importFile(task, input)), input.database);
       case 'files.export': this.assertFile(input); return this.withConnection(input.connectionId, managed => this.runTask(input.taskId, managed, '导出文件', task => this.exportFile(task, input)), input.database);
       case 'files.exportResult': {
         this.assertFile(input);
-        if (this.tasks.has(input.taskId) || this.independentTasks.has(input.taskId)) throw new Error('任务编号已在执行');
+        if (this.tasks.has(input.taskId) || this.independentTasks.has(input.taskId) || this.excelReads.has(input.taskId)) throw new Error('任务编号已在执行');
         return this.resultFiles.run(input as Parameters<ResultFileTasks['run']>[0]);
       }
       default: throw new Error(`数据库进程不支持命令：${command}`);
@@ -276,7 +289,7 @@ export class Engine {
     this.structureCache.release();
     const independent = [...this.independentTasks];
     const active = [...this.tasks.values()];
-    const fileCleanup = this.resultFiles.closeAll();
+    const fileCleanup = Promise.all([this.resultFiles.closeAll(), this.excelReads.closeAll()]);
     const cancellations = await Promise.allSettled([...active.map(task => this.cancelTask(task.id)), ...independent.map(([id]) => this.cancelTask(id))]);
     await Promise.all([...active.map(task => task.done), ...independent.map(([, task]) => task.done)]);
     await fileCleanup;
@@ -317,7 +330,7 @@ export class Engine {
   /** 独立任务从建连前登记，到服务器及本地连接收尾后才释放编号和配置锁。 */
   private async withIndependentTask<T>(connectionId: string, taskId: string, action: (managed: ManagedConnection, control: Omit<StructureTaskContext, 'managed'>) => Promise<T>, options?: StructureTaskOptions, readLabel?:string, strictRead=false,readDetail?:()=>Partial<TaskEvent>): Promise<T> {
     return this.withConnectionUse(connectionId, async () => {
-      if (this.closing || !taskId || this.tasks.has(taskId) || this.independentTasks.has(taskId) || this.resultFiles.has(taskId)) throw new Error('任务编号为空或任务已在执行');
+      if (this.closing || !taskId || this.tasks.has(taskId) || this.independentTasks.has(taskId) || this.resultFiles.has(taskId) || this.excelReads.has(taskId)) throw new Error('任务编号为空或任务已在执行');
       const profile = this.profile(connectionId);
       // 字段、索引及后续外键执行共用资源集合，不能在重核与关闭之间并行修改相关父表。
       const executionTargets = [...(options?.executionTarget ? [options.executionTarget] : []), ...(options?.executionTargets ?? [])];
@@ -402,7 +415,7 @@ export class Engine {
 
   /** 统一登记任务、发送终态并等待取消控制连接结束后释放任务标识。 */
   private async runTask<T>(id: string, managed: ManagedConnection, label: string, action: (task: RunningTask) => Promise<T>): Promise<T> {
-    if (this.closing || !id || this.tasks.has(id) || this.independentTasks.has(id) || this.resultFiles.has(id)) throw new Error('任务编号为空或任务已在执行');
+    if (this.closing || !id || this.tasks.has(id) || this.independentTasks.has(id) || this.resultFiles.has(id) || this.excelReads.has(id)) throw new Error('任务编号为空或任务已在执行');
     let finish!: () => void;
     const done = new Promise<void>(resolve => { finish = resolve; });
     const task: RunningTask = { id, managed, cancelled: false, inFlight: false, generation: 0, done, finish };
@@ -505,6 +518,7 @@ export class Engine {
 
   /** 取消只针对仍然运行的那一代语句；控制连接失败时销毁原会话，不重连重放。 */
   private async cancelTask(id: string): Promise<void> {
+    if (this.excelReads.has(id)) return this.excelReads.cancel(id);
     const independent = this.independentTasks.get(id);
     if (independent) {
       if (independent.actionSettled) { await independent.done; return; }
@@ -856,10 +870,53 @@ export class Engine {
     }
   }
 
-  /** CSV/JSON 每 500 行提交一批；当前批失败回滚，先前批已提交，并明确记录部分成功。 */
-  private async importFile(task: RunningTask, input: Input): Promise<{ rows: number; errors: string[] }> {
+  /** Excel 在写入前重验完整工作表、指纹与目标映射，再复用文件导入的分批事务和参数绑定。 */
+  private async importExcel(task: RunningTask, input: Input): Promise<{ rows: number; errors: string[] }> {
+    const options = { filePath: input.filePath, sheetId: input.sheetId, headerRow: input.headerRow, protocol: input.protocol, checkCancelled: () => this.checkCancelled(task) };
+    const sample = await previewExcelSheet(options);
+    if (sample.fingerprint !== input.fingerprint) throw new Error('工作簿自预览后已发生变化，请重新预览并确认字段映射');
+    const info = await metadata.tableInfo(task.managed, input.database, input.table);
+    validateExcelMapping(input.mapping, sample.columns, info.columns.filter(column => !column.generated).map(column => column.name));
+    // 与表格修改共用可靠键、InnoDB 和类型化参数策略；仅追加，不更新既有记录。
+    buildChanges(info, []);
+    return this.importFile(task, { ...input, format: 'xlsx', mapping: Object.fromEntries(input.mapping.map((item: { source: string; target: string }) => [item.source, item.target])) }, readExcelRows({ ...options, expectedFingerprint: input.fingerprint }));
+  }
+
+  /** 独立连接以一致性快照流式读表；有限样本明确限制 1000 行，完整范围仍受 XLSX 产品预算约束。 */
+  private async exportExcel(task: RunningTask, input: Input): Promise<{ rows: number }> {
+    const info = await metadata.tableInfo(task.managed, input.database, input.table);
+    const engine = this;
+    /** 数据流结束并回滚只读快照后，文件引擎才可原子替换目标；失败和取消都等待流释放。 */
+    async function* rows(): AsyncGenerator<CellValue[]> {
+      await engine.statement(task, 'SET TRANSACTION ISOLATION LEVEL REPEATABLE READ');
+      await engine.statement(task, 'START TRANSACTION WITH CONSISTENT SNAPSHOT');
+      try {
+        engine.checkCancelled(task); task.inFlight = true; task.generation++;
+        const order = info.editableKey.length ? ` ORDER BY ${info.editableKey.map(identifier).join(', ')}` : '';
+        const sql = `SELECT ${info.columns.map(column => identifier(column.name)).join(', ')} FROM ${qualified(input.database, input.table)}${order}${input.scope === 'all' ? '' : ' LIMIT 1000'}`;
+        const options = { sql, rowsAsArray: true };
+        const query = info.columns.some(column => /^(?:FLOAT|DOUBLE|REAL)\b/i.test(column.type)) ? task.managed.connection.execute(options) : task.managed.connection.query(options);
+        const stream = query.stream({ highWaterMark: 32 });
+        const settled = finished(stream, { cleanup: true }); void settled.catch(() => undefined);
+        try { for await (const row of stream) { engine.checkCancelled(task); yield (row as unknown[]).map(serializeCell); } }
+        finally {
+          // 消费者因写盘失败或预算中止时同样停止实际 SELECT，不能留下服务器继续生产整张表。
+          if (!stream.readableEnded) await engine.stopTaskCommand(task);
+          stream.destroy(); await settled.catch(() => undefined); task.inFlight = false; await task.cancelPending;
+        }
+      } finally {
+        task.inFlight = false; await task.cancelPending;
+        if (!task.managed.broken) await execute(task.managed, 'ROLLBACK');
+      }
+    }
+    const result = await exportExcelFile({ filePath: input.filePath, columns: info.columns, rows: rows(), checkCancelled: () => this.checkCancelled(task), onCommitStart: () => { task.fileCommitStarted = true; }, onProgress: count => this.emit({ taskId: task.id, status: 'running', progress: 0, rows: count, message: `已写入 Excel ${count} 行` }) });
+    return { rows: result.rows };
+  }
+
+  /** 文件导入每 500 行提交一批；当前批失败回滚，先前批已提交，并明确记录部分成功。 */
+  private async importFile(task: RunningTask, input: Input, records?: AsyncIterable<DataRow>): Promise<{ rows: number; errors: string[] }> {
     if (input.format === 'sql') return this.importSql(task, input);
-    if (!['csv', 'json'].includes(input.format)) throw new Error('不支持的导入格式');
+    if (!['csv', 'json'].includes(input.format) && !(input.format === 'xlsx' && records)) throw new Error('不支持的导入格式');
     const info = await metadata.tableInfo(task.managed, input.database, input.table);
     if (info.engine.toUpperCase() !== 'INNODB') throw new Error('CSV/JSON 导入仅支持 InnoDB 表，以保证每批失败可回滚');
     const columns = new Map(info.columns.map(column => [column.name, column]));
@@ -871,7 +928,7 @@ export class Engine {
     let committed = 0, pending = 0, sourceLine = 0, committing = false;
     await this.statement(task, 'START TRANSACTION');
     try {
-      for await (const row of readRecords(input.filePath, input.format, input.encoding)) {
+      for await (const row of records ?? readRecords(input.filePath, input.format, input.encoding)) {
         this.checkCancelled(task); sourceLine++;
         const values = mapping.map(([source, target]) => {
           if (!Object.hasOwn(row, source)) throw new Error(`源记录缺少字段：${source}`);
@@ -879,7 +936,11 @@ export class Engine {
           if (input.format === 'csv' && typeof value === 'string' && value.startsWith('base64:') && /^(?:tinyblob|blob|mediumblob|longblob|binary|varbinary|bit)/i.test(columns.get(target)!.type)) value = { type: 'binary', base64: value.slice(7) };
           return value;
         });
-        await this.statement(task, sql, values); pending++;
+        if (input.format === 'xlsx') {
+          const change = buildChanges(info, [{ kind: 'insert', values: Object.fromEntries(mapping.map(([, target], index) => [target, values[index]])) }]).statements[0];
+          await this.statement(task, change.sql, change.params);
+        } else await this.statement(task, sql, values);
+        pending++;
         if (pending === 500) {
           committing = true; await this.statement(task, 'COMMIT'); committing = false; committed += pending; pending = 0;
           this.emit({ taskId: task.id, status: 'running', progress: 0, rows: committed, message: `已提交 ${committed} 行（每批 500 行）` });

@@ -13,6 +13,15 @@ async function target(): Promise<string> { const base = join(process.cwd(), '.ca
 async function* values(rows: CellValue[][]): AsyncGenerator<CellValue[]> { yield* rows; }
 
 describe('Excel 单元格保真策略', () => {
+  it('表头可选择实际行号，跳过说明行且保留后续值；空缺行不能悄悄改用下一行', async () => {
+    const path = await target(), workbook = new ExcelJS.Workbook(), sheet = workbook.addWorksheet('数据');
+    sheet.addRow(['说明']); sheet.addRow(['编号', '名称']); sheet.addRow(['9007199254740993', '中文']); await workbook.xlsx.writeFile(path);
+    const sample = await previewExcelSheet({ filePath: path, sheetId: '1', headerRow: 2, protocol: 'plain' });
+    expect(sample.columns).toEqual(['编号', '名称']); expect(sample.rows).toEqual([{ 编号: '9007199254740993', 名称: '中文' }]);
+    const rows = []; for await (const row of readExcelRows({ filePath: path, sheetId: '1', headerRow: 2, protocol: 'plain' })) rows.push(row);
+    expect(rows).toEqual(sample.rows);
+    await expect(previewExcelSheet({ filePath: path, sheetId: '1', headerRow: 0, protocol: 'plain' })).rejects.toThrow('表头行号');
+  });
   it('NULL、空串、反斜线、二进制和公式外观文字可逆', () => {
     for (const value of [null, '', '\\N', '\\B:AA==', '\\path', '=SUM(A1)', { type: 'binary' as const, base64: 'AAH/' }]) {
       const encoded = encodeExcelCell(value, { name: '值', type: 'text' });
