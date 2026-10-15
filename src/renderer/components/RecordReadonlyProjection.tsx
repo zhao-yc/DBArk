@@ -115,7 +115,7 @@ function LexicalTree({ identity, columnName, document, reason, onEdit, onStructu
   const path = selected ? { identity, columnName, document, segments: selected.path } : null;
   const selectedNode = path ? resolveProjectionPath(identity, columnName, document, path) : null;
   const kinds:RecordStructureKind[]=[];
-  if(selectedNode&&selected){if(selected.path.at(-1)?.kind==='member')kinds.push('rename');if(selected.path.length)kinds.push('remove');if(selectedNode.kind==='object')kinds.push('append-member');if(selectedNode.kind==='array'){kinds.push('insert-element');if(selectedNode.elements.length)kinds.push('move-element');}}
+  if(selectedNode&&selected){if(selected.path.at(-1)?.kind==='member')kinds.push('rename');if(selected.path.length)kinds.push('remove');if(selectedNode.kind==='object'){kinds.push('append-member');if(selectedNode.members.length)kinds.push('move-member');}if(selectedNode.kind==='array'){kinds.push('insert-element');if(selectedNode.elements.length)kinds.push('move-element');}}
   /** 展开只改变显示集合；收起不改原文、词法路径或页内草稿。 */
   function toggle(id: number) { setExpanded(current => { const next = new Set(current); if (next.has(id)) next.delete(id); else next.add(id); return next; }); }
   return <><p>{text.ordered}</p><p>{formatText(text.nodeRange, window.offset + 1, Math.min(window.offset + projectionViewLimits.nodes, window.total), window.total)}</p>
