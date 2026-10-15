@@ -89,6 +89,12 @@ node node_modules/vitest/vitest.mjs run --config vitest.integration.config.ts te
 node node_modules/@playwright/test/cli.js test tests/e2e/table-special-index-live.spec.ts --output .cache/o01-special-ui-live --reporter=list
 ```
 
+### OPTION候选断言修正
+
+针对ROOT反馈的run518，核对当前本机安装的Playwright 1.64.0注入实现：`elementState` 对 enabled/disabled 使用 `follow-label` 重定向，原生OPTION不在直接控件列表内，会通过外层label的control转向SELECT；本面板的Field正是该label结构。因此仅修正专属UI测试的OPTION候选断言，逐项检查原OPTION的原生 `disabled` 布尔属性以及DOM的 `disabled` 属性，仍要求空间g可选、a/b/g_nullable/calc/id不可选，以及全文a/b可选、g/g_nullable/calc/id不可选。字段重选清空、单列与addPart限制、前缀/方向、风险确认、预览及执行断言不变；超时不变，产品src仍固定65e7db5。
+
+员工4仅做类型检查和两个UI用例的关闭开关检查，未进行GUI或200实库复验；实际面板结果由ROOT冻结前一轮终态后统一复验。本次修正不把ROOT提供的运行反馈记为员工4独立验收。
+
 ## 官方依据
 
 - [MySQL 8.0 全文限制](https://dev.mysql.com/doc/refman/8.0/en/fulltext-restrictions.html)：字段类型、字符集、同元组排序规则、分区及解析器边界。
