@@ -1,4 +1,7 @@
 export const tableApplyReceiptZh = {
+  openCurrent: '查看本次提交记录', previewPrivacy: '提交记录仅保存目标和结果摘要，不保存此处SQL或字段值。',
+  committedRecordFailed: '数据已确认提交，但本地记录保存失败；请核对服务器，不要重复执行。',
+  committedCleanupWarning: '数据已确认提交，后续收尾异常；请查看提交记录。',
   title: '数据提交记录', tasks: '返回任务', privacy: '只保存目标和结果摘要，不保存SQL、参数、行值或原错误。记录仅说明目标InnoDB事务，不包含触发器或外部副作用。',
   empty: '暂无提交记录', missing: '未找到提交记录', running: '执行中',
   outcomes: { 'not-sent': '未发送数据写入', committed: '服务器已确认提交', 'rolled-back': '已确认目标事务回滚', unknown: '结果未知，请先核对服务器' },
