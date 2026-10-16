@@ -8,7 +8,9 @@ DBArk 保留连接树、多标签查询和表格编辑等熟悉的工作方式�
 
 在 [GitHub Releases](https://github.com/zhao-yc/DBArk/releases) 下载 Windows x64 安装程序、macOS arm64/x64 DMG 或 ZIP，以及源码和 SHA256 校验清单。`0.x` 为开发预览；Windows 未签名，macOS 仅有 ad-hoc 签名，没有发行证书及公证。安装步骤和数据保护边界见 [中文使用指南](docs/user-guide.md)。
 
-已公开[0.18.0开发预览](https://github.com/zhao-yc/DBArk/releases/tag/v0.18.0)：增加TLS私钥口令、表备注/默认编码、受控重命名/下一自增值、编辑保护及搜索命中导航。12个公开附件和1075个源码文件独立校验一致；公开Windows安装的6项常用流程、密码/加密私钥SSH在普通及严格TLS两个端口各4个正式场景通过，安装EXE/ASAR与原281身份计划候选逐字节一致，清理及边界见[公开发行验收](tests/integration/acceptance-v018-public-20261016.md)和[版本说明](docs/releases/v0.18.0.md)。Windows未签名、Mac仅ad-hoc且未公证，手动更新；Mac私网仍待验。
+已公开[0.19.0开发预览](https://github.com/zhao-yc/DBArk/releases/tag/v0.19.0)：增加执行当前语句、完整记录复制为新增草稿、表单跨页、定义命中导航、命名窗口继承补全和指定旧引擎下一自增值。12个公开附件、1155个源码blob及11项独立SHA清单一致；公开Windows安装6项常用完整流程通过，EXE/ASAR与原317身份计划候选相同，卸载及六实例资源核零。正式标签CI三平台各自源码/实际安装各72通过、245条件跳过，签名及私网边界见[公开发行验收](tests/integration/acceptance-v019-public-20261016.md)与[版本说明](docs/releases/v0.19.0.md)。后续配置受控替换、类型颜色、粘贴新增及查询保存后关闭仍属开发头，不在该公开包中。
+
+此前已公开[0.18.0开发预览](https://github.com/zhao-yc/DBArk/releases/tag/v0.18.0)：增加TLS私钥口令、表备注/默认编码、受控重命名/下一自增值、编辑保护及搜索命中导航。12个公开附件和1075个源码文件独立校验一致；公开Windows安装的6项常用流程、密码/加密私钥SSH在普通及严格TLS两个端口各4个正式场景通过，安装EXE/ASAR与原281身份计划候选逐字节一致，清理及边界见[公开发行验收](tests/integration/acceptance-v018-public-20261016.md)和[版本说明](docs/releases/v0.18.0.md)。Windows未签名、Mac仅ad-hoc且未公证，手动更新；Mac私网仍待验。
 
 此前已公开[0.17.0开发预览](https://github.com/zhao-yc/DBArk/releases/tag/v0.17.0)，增加全库搜索与本地查询检索、收藏及对象链接、XLSX、JSON计划树、窗口/LATERAL补全、JSON成员移动、Hex查看及多CSV ZIP归档。12个公开附件及890个源码文件已独立下载核对，公开Windows四批245项通过、0失败/跳过/重试，卸载及资源核零，见[公开发行验收](tests/integration/acceptance-v017-public-20261016.md)。其中218项走安装产品、27项为开发夹具/源码组件，另1项权限用例未执行。功能和限制见[0.17说明](docs/releases/v0.17.0.md)；本机3025单元、候选和公开安装分别验收，三平台原生源码/离线安装各68通过、178条件跳过，见[验收记录](tests/integration/acceptance-parallel-fourth-20261016.md)。
 
