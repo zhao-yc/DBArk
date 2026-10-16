@@ -25,6 +25,12 @@ function harness() {
 const expiresAt = () => new Date(Date.now() + 120000).toISOString();
 
 describe('结构任务主进程可信令牌与退出证据', () => {
+  it('原字段预览承载ON UPDATE显式null，主进程只注入可信修订而不吞掉移除值',async()=>{
+    const f=harness();f.request.mockResolvedValueOnce({snapshotId:'snapshot',target:{connectionId:'trusted'},expiresAt:expiresAt()});await f.handlers.dispatch('schema.columns.get',{connectionId:'trusted',database:'db',table:'t',taskId:'get-on-update'});
+    f.request.mockResolvedValueOnce({previewToken:'on-update-token',target:{connectionId:'trusted'},expiresAt:expiresAt()});
+    const patches=[{kind:'alter',columnRef:'time-ref',changes:{onUpdate:null}}];await f.handlers.dispatch('schema.columns.preview',{snapshotId:'snapshot',patches,taskId:'preview-on-update'});
+    expect(f.request).toHaveBeenCalledWith('schema.columns.preview',expect.objectContaining({snapshotId:'snapshot',patches,connectionRevision:7}));
+  });
   it('数据库工具进程退出不误判独立本地查询搜索失败',()=>{const test=harness();test.tasks.set('local',{id:'local',kind:'search.savedQueries',status:'running',startedAt:'',progress:0,message:'本地计算'});test.handlers.engineExited();expect(test.tasks.get('local')?.status).toBe('running');expect(test.events.some(event=>event.taskId==='local')).toBe(false);});
   it('令牌只从可信输出建立，预览不接受客户端目标且同步注入当前修订', async () => {
     const test = harness(); test.request.mockResolvedValueOnce({ snapshotId: 'snapshot', target: { connectionId: 'trusted' }, expiresAt: expiresAt() });

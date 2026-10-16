@@ -7,7 +7,7 @@ type Token = TableDefinitionToken;
 const knownTypes = new Set(['TINYINT', 'SMALLINT', 'MEDIUMINT', 'INT', 'INTEGER', 'BIGINT', 'DECIMAL', 'NUMERIC', 'FLOAT', 'DOUBLE', 'REAL', 'BIT', 'BOOL', 'BOOLEAN', 'CHAR', 'VARCHAR', 'BINARY', 'VARBINARY', 'DATE', 'YEAR', 'TIME', 'DATETIME', 'TIMESTAMP', 'TINYTEXT', 'TEXT', 'MEDIUMTEXT', 'LONGTEXT', 'TINYBLOB', 'BLOB', 'MEDIUMBLOB', 'LONGBLOB', 'JSON', 'ENUM', 'SET', 'GEOMETRY', 'POINT', 'LINESTRING', 'POLYGON', 'MULTIPOINT', 'MULTILINESTRING', 'MULTIPOLYGON', 'GEOMETRYCOLLECTION']);
 const attributes = new Set(['NULL', 'NOT', 'DEFAULT', 'COMMENT', 'CHARACTER', 'CHARSET', 'COLLATE', 'AUTO_INCREMENT', 'ON', 'GENERATED', 'AS', 'VIRTUAL', 'STORED', 'PERSISTENT', 'INVISIBLE', 'VISIBLE', 'COLUMN_FORMAT', 'STORAGE', 'SRID', 'CHECK', 'CONSTRAINT', 'REFERENCES', 'UNIQUE', 'PRIMARY']);
 const constraintStarts = new Set(['PRIMARY', 'UNIQUE', 'KEY', 'INDEX', 'FULLTEXT', 'SPATIAL', 'FOREIGN', 'CONSTRAINT', 'CHECK']);
-const editableAttributes: ColumnEditableAttribute[] = ['name', 'type', 'nullable', 'default', 'comment', 'position'];
+const editableAttributes: ColumnEditableAttribute[] = ['name', 'type', 'nullable', 'default', 'comment', 'position', 'onUpdate'];
 
 /** 字符串的解码仅用于显示；原片段始终保留，后续修改不能从解码值重建未修改属性。 */
 function decodeQuoted(source: string, start: number, end: number, quote: string, identifier: boolean, context: TableDefinitionContext): string {

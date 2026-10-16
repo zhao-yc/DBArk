@@ -1,0 +1,31 @@
+import {test as baseTest,expect,type TestInfo} from '@playwright/test';
+import type {RowDataPacket} from 'mysql2/promise';
+import {columnPatchZh as text} from '../../src/renderer/locales/columnPatches.zh-CN';
+type Desktop=typeof import('./desktop-fixture');type Live=typeof import('./live-helpers');
+// 新切片独立关闭；收集先短路，不读取凭据、不加载真实桌面或数据库模块。
+const listing=process.argv.includes('--list'),armed=!listing&&process.env.DBARK_COLUMN_ADD_ON_UPDATE_UI==='1'&&process.env.DBARK_INTEGRATION_ENABLED==='1';
+if(armed&&(process.env.DBARK_TEST_HOST!=='192.168.31.200'||!['13357','13380','13384','13310','13311','13484'].includes(process.env.DBARK_TEST_PORT??'')))throw Error('新增自动时间验收须ROOT明确分配200单一目标');
+const desktop:Desktop|undefined=armed?require('./desktop-fixture'):undefined,test=(desktop?.test??baseTest) as typeof baseTest;
+test.skip(!armed,'默认关闭：须ROOT明确分配新增时间字段的真实GUI及六组合单一目标');test.use({trace:'off',screenshot:'off',video:'off'});test.setTimeout(180000);test.describe.configure({retries:0});
+const page=()=>{if(!desktop)throw Error('未取得ROOT实际窗口授权');return desktop.page;},dialog=()=>page().getByRole('dialog',{name:text.title,exact:true});
+
+/** 实际字段表单分组定位，类型/默认值和自动更新时间精度分别输入，不注入内部状态。 */
+async function fill(type:'DATETIME'|'TIMESTAMP',precision:number){
+ await dialog().getByRole('button',{name:text.add,exact:true}).click();await dialog().getByRole('textbox',{name:text.name,exact:true}).fill('created_at');
+ const typeFields=dialog().locator('.column-patch-field').filter({has:page().getByRole('checkbox',{name:text.modify+' '+text.type,exact:true})});await typeFields.getByRole('combobox').first().selectOption('temporal');await typeFields.getByRole('combobox').nth(1).selectOption(type);await typeFields.getByRole('spinbutton').fill(String(precision));
+ const auto=dialog().getByRole('checkbox',{name:text.modify+' '+text.onUpdate,exact:true});await expect(auto).toBeDisabled();
+ if(type==='TIMESTAMP'){await dialog().getByRole('combobox',{name:text.nullable,exact:true}).selectOption('false');await dialog().getByRole('combobox',{name:text.default,exact:true}).selectOption('expression');const defaults=dialog().locator('.column-patch-field').filter({has:page().getByRole('checkbox',{name:text.modify+' '+text.default,exact:true})});await defaults.getByRole('spinbutton').fill(String(precision));}
+ else await dialog().getByRole('combobox',{name:text.default,exact:true}).selectOption('null');
+ await auto.check();await dialog().getByRole('combobox',{name:text.onUpdate,exact:true}).selectOption('expression');await dialog().getByRole('button',{name:text.rowSave,exact:true}).click();await dialog().getByRole('button',{name:text.edit,exact:true}).click();await expect(auto).toBeChecked();await expect(dialog().getByRole('combobox',{name:text.onUpdate,exact:true})).toHaveValue('expression');await dialog().getByRole('button',{name:text.rowSave,exact:true}).click();await dialog().getByRole('button',{name:text.preview,exact:true}).click();await expect(dialog().getByRole('heading',{name:text.fixedSql,exact:true})).toBeVisible();await expect(dialog().locator('.monaco-editor')).toContainText(/ADD\s+COLUMN/);await expect(dialog().locator('.monaco-editor')).toContainText(/ON\s+UPDATE\s+CURRENT_TIMESTAMP/);
+}
+
+for(const[type,precision]of [['DATETIME',0],['DATETIME',6],['TIMESTAMP',6]] as const)test(type+'('+precision+')真实新增字段草稿、预览、单次ADD及自动时间数据行为',async({},info:TestInfo)=>{
+ const live:Live=await import('./live-helpers');await live.isolatedDatabase(async c=>{
+  const target='`'+c.database.replaceAll('`','``')+'`.`add_auto_time`';await c.observer.query(`CREATE TABLE ${target}(id INT PRIMARY KEY,note VARCHAR(20),amount DECIMAL(30,6) DEFAULT 12345678901234567890.123456,empty_text VARCHAR(10) DEFAULT '',text_null VARCHAR(10) DEFAULT 'NULL') ENGINE=InnoDB`);await c.observer.query(`INSERT INTO ${target}(id,note) VALUES(1,'原值')`);
+  const read=async()=>{const[rows]=await c.observer.query<RowDataPacket[]>(`SELECT id,note,CAST(amount AS CHAR) AS amount,empty_text,text_null FROM ${target} ORDER BY id`);return rows;},ddl=async()=>{const[rows]=await c.observer.query<RowDataPacket[]>('SHOW CREATE TABLE '+target);return String(rows[0]['Create Table']);};const original=await ddl(),data=await read();
+  const connection=page().locator('.connection-node').filter({has:page().locator('.connection-row').getByText(c.connectionName,{exact:true})});await connection.locator('.connection-row').hover();await connection.getByRole('button',{name:'刷新连接',exact:true}).click();await connection.locator('.database-row').getByRole('button',{name:c.database,exact:true}).click();await connection.locator('.object-row').getByText('add_auto_time',{exact:true}).click();await expect(page().locator('.table-tab:visible .loading-overlay')).toHaveCount(0);await page().locator('.table-tab:visible').getByRole('button',{name:text.title,exact:true}).click();await fill(type,precision);
+  expect(await ddl()).toBe(original);expect(await read()).toEqual(data);await expect(dialog().getByRole('button',{name:text.apply,exact:true})).toBeDisabled();for(const label of [text.ackImplicit,text.ackWindow])await dialog().getByRole('checkbox',{name:label,exact:true}).check();await dialog().getByRole('button',{name:text.apply,exact:true}).click();await expect(dialog().getByRole('status')).toHaveText(text.succeeded);await expect(dialog().getByRole('button',{name:text.apply,exact:true})).toBeDisabled();expect(await read()).toEqual(data);expect(await ddl()).toMatch(/ON UPDATE current_timestamp/i);
+  await c.observer.query(`INSERT INTO ${target}(id,note) VALUES(2,'新行')`);await c.observer.query(`UPDATE ${target} SET created_at='2001-01-01 00:00:00' WHERE id=2`);const[before]=await c.observer.query<RowDataPacket[]>(`SELECT CAST(created_at AS CHAR) AS value FROM ${target} WHERE id=2`);await c.observer.query(`UPDATE ${target} SET note='触发自动更新' WHERE id=2`);const[after]=await c.observer.query<RowDataPacket[]>(`SELECT CAST(created_at AS CHAR) AS value FROM ${target} WHERE id=2`);expect(after[0].value).not.toBe(before[0].value);
+  const tasks=await page().evaluate(()=>window.dbark.invoke('tasks.list',{}));expect(tasks.filter(task=>task.kind==='schema.columns.apply')).toHaveLength(1);await dialog().getByRole('button',{name:text.close,exact:true}).click();
+ },info);
+});
