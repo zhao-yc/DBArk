@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { existsSync, readFileSync,realpathSync } from 'node:fs';
 import mysql, { type Connection, type RowDataPacket } from 'mysql2/promise';
 import type { TestInfo } from '@playwright/test';
-import { expect, desktop, page, closed, pageErrors, answerDialogs, quitDesktop, preservesUnconfirmedExit, retainOwnedDesktopResources, confirmOwnedDesktopExit } from './desktop-fixture';
+import { expect, desktop, page, closed, pageErrors, answerDialogs, quitDesktop, preservesUnconfirmedExit, retainOwnedDesktopResources, confirmOwnedDesktopExit, ownedDesktopResources } from './desktop-fixture';
 import {zh} from '../../src/renderer/locales/zh-CN';
 
 // 必须由调用者显式启用；仅有本地凭据文件时仍跳过，CI 不会自动连接私有服务器。
@@ -86,33 +86,43 @@ export async function connectAndCreate(database: string): Promise<Omit<LiveConte
 
 /** 外部观察连接仅用于断言和清理，不替代被测应用的连接、查询或提交链路。 */
 export async function isolatedDatabase(body: (context: LiveContext) => Promise<void>, testInfo: TestInfo, options: { captureFailureScreenshot?: boolean } = {}) {
+  const strictExit = preservesUnconfirmedExit(testInfo);
+  if (strictExit) ownedDesktopResources(testInfo); // 旧TestInfo先拒绝，不能先建观察连接或打开下一例表单。
   if (!environment.DBARK_TEST_HOST || !environment.DBARK_TEST_USER) throw new Error('启用实库 E2E 时必须提供已核对服务器的测试连接配置');
   const database = `dbark_e2e_${Date.now().toString(36)}_${randomUUID().replaceAll('-', '').slice(0, 8)}`;
   const certificate=tlsCertificate();
   const observer = await mysql.createConnection({ host: environment.DBARK_TEST_HOST, port: Number(environment.DBARK_TEST_PORT ?? 3306), user: environment.DBARK_TEST_USER, password: environment.DBARK_TEST_PASSWORD, charset: 'utf8mb4', supportBigNumbers: true, bigNumberStrings: true, decimalNumbers: false, connectTimeout: 15000,...(certificate?{ssl:{ca:readFileSync(certificate),rejectUnauthorized:true,verifyIdentity:true}}:{}) });
-  const strictExit = preservesUnconfirmedExit(testInfo); let failed = false, originalFailure: unknown;
+  let failed = false, originalFailure: unknown;
   try {
+    if (strictExit) ownedDesktopResources(testInfo);
     const context = await connectAndCreate(database);
+    if (strictExit) ownedDesktopResources(testInfo);
     await body({ observer, ...context });
+    if (strictExit) ownedDesktopResources(testInfo);
     expect(pageErrors).toEqual([]);
   } catch (error) {
     if (strictExit) { failed = true; originalFailure = error; }
     // 默认保留原截图；新CALL用例显式关闭，避免编辑器参数进入公共失败图片，不代理截图接口。
-    if (!closed && options.captureFailureScreenshot !== false) await page.screenshot({ path: testInfo.outputPath('live-failure.png') }).catch(() => undefined);
+    if (strictExit) {
+      try { const owner = ownedDesktopResources(testInfo); if (!owner.closed && options.captureFailureScreenshot !== false) await owner.page.screenshot({ path: testInfo.outputPath('live-failure.png') }); } catch { /* 截图失效不覆盖原异常，归属失配仍由停链状态约束。 */ }
+    } else if (!closed && options.captureFailureScreenshot !== false) await page.screenshot({ path: testInfo.outputPath('live-failure.png') }).catch(() => undefined);
     throw error;
   } finally {
     if (strictExit) {
       try {
         // 只核本例独立应用的TRUNCATE投递；未终态或读取未知时先停链，不借退出请求取消它。
-        if (!closed) {
-          const tasks = await page.evaluate(() => window.dbark.invoke('tasks.list', {}));
+        const owner = ownedDesktopResources(testInfo);
+        if (!owner.closed) {
+          const tasks = await owner.page.evaluate(() => window.dbark.invoke('tasks.list', {})); ownedDesktopResources(testInfo);
           if (tasks.some(task => task.kind === 'schema.tableTruncate.apply' && !['completed', 'failed', 'cancelled'].includes(task.status))) throw new Error('本例清空apply尚未终态，保留数据库、观察连接和原生现场');
         }
         await confirmOwnedDesktopExit(testInfo);
+        ownedDesktopResources(testInfo);
         if (!/^dbark_e2e_[a-z0-9_]+$/.test(database)) throw new Error('拒绝清理非 E2E 隔离库');
         await observer.query({ sql: `DROP DATABASE IF EXISTS \`${database}\``, timeout: 15000 });
+        ownedDesktopResources(testInfo);
         const [remaining] = await observer.query<RowDataPacket[]>('SELECT SCHEMA_NAME FROM information_schema.SCHEMATA WHERE SCHEMA_NAME = ?', [database]);
-        expect(remaining).toHaveLength(0); await observer.end();
+        ownedDesktopResources(testInfo); expect(remaining).toHaveLength(0); await observer.end();
       } catch (cleanupFailure) {
         retainOwnedDesktopResources(testInfo);
         if (failed) throw new AggregateError([originalFailure, cleanupFailure], '原用例失败且退出或清理未确认，保留所属资源', { cause: originalFailure });

@@ -18,23 +18,24 @@ function fixture(options: { strict?: boolean; holdClose?: boolean; aliveAfterClo
   const order: string[] = [], close = deferred(), original = options.bodyFailure, info = { status: 'passed', expectedStatus: 'passed', outputPath: () => '仅RAM路径' };
   const observer = { query: vi.fn(async (query: string | { sql: string }) => { const sql = typeof query === 'string' ? query : query.sql; order.push(sql.startsWith('DROP') ? 'drop' : 'catalog'); return [[], []]; }), end: vi.fn(async () => { order.push('observer.end'); }) };
   let context: ReturnType<typeof createContext>;
-  const emitClose = () => { order.push('close'); context.closed = true; close.resolve(); };
-  const desktop = { evaluate: vi.fn(async () => [101]), waitForEvent: vi.fn(() => close.promise), close: vi.fn(async () => { order.push('close-ack'); if (!options.holdClose) emitClose(); }) };
+  const listeners = new Set<() => void>();
+  const emitClose = () => { order.push('close'); context.closed = true; for (const listener of listeners) listener(); close.resolve(); };
+  const desktop = { evaluate: vi.fn(async (call: Function) => { const source = String(call); if (source.includes('getAppMetrics')) return [101]; if (source.includes('__dbarkE2EDialogs')) order.push('answer'); if (source.includes('app.quit')) order.push('quit-request'); }), process: () => ({ pid: 101 }), on: (_event: string, listener: () => void) => listeners.add(listener), off: (_event: string, listener: () => void) => listeners.delete(listener), waitForEvent: vi.fn(() => close.promise), close: vi.fn(async () => { order.push('close-ack'); if (!options.holdClose) emitClose(); }) };
   const rm = vi.fn(async () => { order.push('rm'); }), force = vi.fn(async () => { order.push('force-default'); });
   const assertion = Object.assign((value: unknown) => expect(value), { poll: (read: () => unknown) => ({ toEqual: async (value: unknown) => { order.push('process-proof'); expect(read()).toEqual(value); } }) });
   context = createContext({ Error, AggregateError, WeakMap, Number, Date, expect: assertion, desktop, closed: false, pageErrors: [], snippetsDiagnostics: undefined, snippetsDiagnosticsArmed: false, quitReady: Promise.resolve(),
     createSnippetsNativeDiagnostics: () => undefined, mkdtemp: vi.fn(async () => join(tmpdir(), 'dbark-e2e-owned')), join, dirname, basename, resolve, tmpdir, rm, forceStopOwnProcess: force,
     launchDesktop: vi.fn(async () => { order.push('launch'); context.closed = false; }), requestQuit: vi.fn(async () => { order.push('quit-request'); }), answerDialogs: vi.fn(async () => { order.push('answer'); }),
-    process: { kill: () => { if (options.aliveAfterClose) return true; throw Error('RAM端口确认进程已消失'); } },
+    process: { kill: () => { if (options.aliveAfterClose) return true; throw Object.assign(Error('RAM端口确认进程已消失'), { code: 'ESRCH' }); } },
     environment: { DBARK_TEST_HOST: 'offline.invalid', DBARK_TEST_USER: 'RAM端口' }, randomUUID: () => '12345678-1234-1234-1234-123456789abc', tlsCertificate: () => undefined, readFileSync: () => { throw Error('不能读取认证文件'); },
     mysql: { createConnection: vi.fn(async () => observer) }, connectAndCreate: vi.fn(async (database: string) => ({ database, connectionId: 'RAM连接', connectionName: '合成端口' })),
     page: { evaluate: vi.fn(async () => { order.push('tasks'); return options.tasks ?? []; }), screenshot: vi.fn(async () => { throw Error('纯测试禁止截图'); }) },
   });
   let state = ''; for (const statement of desktopSource.statements) if (ts.isVariableStatement(statement) && statement.declarationList.declarations.some(node => node.name.getText(desktopSource) === 'preservedDesktopExits')) state = statement.getText(desktopSource);
-  const code = state + '\n' + functions(desktopSource, ['preservesUnconfirmedExit', 'retainOwnedDesktopResources', 'confirmOwnedDesktopExit', 'quitDesktop']).map(node => node.getText(desktopSource).replace(/^export /, '')).join('\n') + '\n' + functions(liveSource, ['isolatedDatabase'])[0].getText(liveSource).replace(/^export /, '') + '\nglobalThis.handlers={lifetime:' + lifetime().getText(desktopSource) + ',isolatedDatabase};';
+  const code = state + '\n' + functions(desktopSource, ['preservesUnconfirmedExit', 'retainOwnedDesktopResources', 'ownedDesktopState', 'ownedDesktopResources', 'recordOwnedDesktopProcesses', 'bindOwnedDesktopExit', 'quitOwnedDesktop', 'confirmOwnedDesktopExit', 'quitDesktop']).map(node => node.getText(desktopSource).replace(/^export /, '')).join('\n') + '\n' + functions(liveSource, ['isolatedDatabase'])[0].getText(liveSource).replace(/^export /, '') + '\nglobalThis.handlers={lifetime:' + lifetime().getText(desktopSource) + ',isolatedDatabase};';
   runInContext(ts.transpileModule(code, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText, context);
   const run = () => context.handlers.lifetime({ trace: 'off', preserveOnUnconfirmedExit: options.strict !== false }, async () => context.handlers.isolatedDatabase(async () => { order.push('body'); if (original) throw original; }, info, { captureFailureScreenshot: false }), info) as Promise<void>;
-  return { order, observer, context, desktop, rm, force, run, emitClose, close };
+  return { order, observer, context, desktop, rm, force, run, emitClose, close, info, listeners };
 }
 
 describe('TRUNCATE显式保留模式的真实收尾函数（仅RAM端口）', () => {
@@ -51,7 +52,7 @@ describe('TRUNCATE显式保留模式的真实收尾函数（仅RAM端口）', ()
   });
   it('旧实例close不能放行已替换实例的清理，仍保留所属资源', async () => {
     const f = fixture({ holdClose: true }), pending = f.run(); await vi.waitFor(() => expect(f.desktop.close).toHaveBeenCalledTimes(1));
-    f.context.desktop = { ...f.desktop }; f.emitClose(); await expect(pending).rejects.toThrow('本实例实际close'); expect(f.observer.query).not.toHaveBeenCalled(); expect(f.observer.end).not.toHaveBeenCalled(); expect(f.rm).not.toHaveBeenCalled(); expect(f.force).not.toHaveBeenCalled();
+    f.context.desktop = { ...f.desktop }; f.emitClose(); await expect(pending).rejects.toThrow('归属已改变'); expect(f.observer.query).not.toHaveBeenCalled(); expect(f.observer.end).not.toHaveBeenCalled(); expect(f.rm).not.toHaveBeenCalled(); expect(f.force).not.toHaveBeenCalled();
   });
   it('原用例异常及退出未确认均保留首因，不以finally新错替换原异常', async () => {
     const original = Error('原断言失败'), stopped = Error('退出也未确认'), f = fixture({ bodyFailure: original, holdClose: true }), pending = f.run();
@@ -68,6 +69,49 @@ describe('TRUNCATE显式保留模式的真实收尾函数（仅RAM端口）', ()
     const f = fixture({ strict: false, holdClose: true }), stopped = Error('旧路径退出失败'), pending = f.run(); await vi.waitFor(() => expect(f.desktop.close).toHaveBeenCalledTimes(1)); f.close.reject(stopped); await expect(pending).rejects.toBe(stopped);
     expect(f.observer.query).toHaveBeenCalledTimes(2); expect(f.observer.end).toHaveBeenCalledTimes(1); expect(f.force).toHaveBeenCalledTimes(1); expect(f.rm).toHaveBeenCalledTimes(1); expect(f.order).not.toContain('tasks');
   });
+  it('旧TestInfo在前例完成后失效，不得退出下一例或退回默认清理路径（原红转绿）', async () => {
+    const f = fixture(); await f.run(); const nextInfo = { status: 'passed', expectedStatus: 'passed' }, event = deferred(), listeners = new Set<() => void>();
+    const next = { evaluate: vi.fn(async (call: Function) => String(call).includes('getAppMetrics') ? [202] : undefined), process: () => ({ pid: 202 }), on: (_: string, listener: () => void) => listeners.add(listener), off: (_: string, listener: () => void) => listeners.delete(listener), waitForEvent: vi.fn(() => event.promise), close: vi.fn(async () => { for (const listener of listeners) listener(); event.resolve(); }) };
+    f.context.desktop = next; let lateSucceeded = false, callsBeforeOwnTeardown = -1;
+    await f.context.handlers.lifetime({ trace: 'off', preserveOnUnconfirmedExit: true }, async () => {
+      await f.context.confirmOwnedDesktopExit(f.info).then(() => { lateSucceeded = true; }, () => {}); callsBeforeOwnTeardown = next.close.mock.calls.length;
+    }, nextInfo);
+    expect({ lateSucceeded, callsBeforeOwnTeardown }).toEqual({ lateSucceeded: false, callsBeforeOwnTeardown: 0 });
+    expect(next.close).toHaveBeenCalledTimes(1); expect(f.context.preservesUnconfirmedExit(f.info)).toBe(true);
+    const before = f.context.mysql.createConnection.mock.calls.length;
+    await expect(f.context.handlers.isolatedDatabase(async () => {}, f.info, { captureFailureScreenshot: false })).rejects.toThrow('停链');
+    expect(f.context.mysql.createConnection).toHaveBeenCalledTimes(before); expect(listeners.size).toBe(0);
+  });
+  it.each(['EPERM', 'EACCES', undefined])('真实close后PID探测未知%s立即停链；仅ESRCH可放行（原红转绿）', async code => {
+    const f = fixture(), unknown = Object.assign(Error('RAM探测未知'), { code });
+    const probe = vi.fn(() => { throw unknown; }); f.context.process.kill = probe;
+    await expect(f.run()).rejects.toBe(unknown); expect(probe).toHaveBeenCalledTimes(1);
+    expect(f.order).toContain('close'); expect(f.observer.query).not.toHaveBeenCalled(); expect(f.observer.end).not.toHaveBeenCalled(); expect(f.rm).not.toHaveBeenCalled(); expect(f.force).not.toHaveBeenCalled();
+  });
+  it.each(['getAppMetrics', '__dbarkE2EDialogs', 'app.quit'])('owner操作%s跨await切换实例，不能向下一实例请求或清理', async stage => {
+    const f = fixture(), entered = deferred(), release = deferred(), evaluate = f.desktop.evaluate.getMockImplementation()!;
+    f.desktop.evaluate.mockImplementation(async call => { if (String(call).includes(stage)) { entered.resolve(); await release.promise; } return evaluate(call); });
+    const next = { evaluate: vi.fn(), close: vi.fn() }, pending = f.run();
+    await entered.promise; f.context.desktop = next; release.resolve();
+    await expect(pending).rejects.toThrow('归属已改变'); expect(next.evaluate).not.toHaveBeenCalled(); expect(next.close).not.toHaveBeenCalled(); expect(f.desktop.close).not.toHaveBeenCalled();
+    expect(f.observer.query).not.toHaveBeenCalled(); expect(f.observer.end).not.toHaveBeenCalled(); expect(f.rm).not.toHaveBeenCalled(); expect(f.force).not.toHaveBeenCalled();
+  });
+  it('任务读取未知保留首因，随后迟到close和重复确认不复活许可', async () => {
+    const original = Error('原断言'), unknown = Error('任务未知'), f = fixture({ bodyFailure: original });
+    f.context.page.evaluate.mockRejectedValue(unknown); const failure = await f.run().catch(error => error);
+    expect(failure).toBeInstanceOf(AggregateError); expect(failure.cause).toBe(original); expect(failure.errors).toEqual([original, unknown]);
+    f.emitClose(); await expect(f.context.confirmOwnedDesktopExit(f.info)).rejects.toThrow('停链'); expect(f.desktop.close).not.toHaveBeenCalled(); expect(f.observer.query).not.toHaveBeenCalled(); expect(f.observer.end).not.toHaveBeenCalled(); expect(f.rm).not.toHaveBeenCalled();
+  });
+  it('并发重复收尾共用一次owner握手，只有实际close加严格PID核对才完成', async () => {
+    const f = fixture({ holdClose: true }), pending = f.run(); await vi.waitFor(() => expect(f.desktop.close).toHaveBeenCalledTimes(1));
+    const duplicate = f.context.confirmOwnedDesktopExit(f.info); f.emitClose(); await Promise.all([pending, duplicate]);
+    expect(f.desktop.close).toHaveBeenCalledTimes(1); expect(f.order.filter(item => item === 'quit-request')).toHaveLength(1); expect(f.observer.end).toHaveBeenCalledTimes(1); expect(f.rm).toHaveBeenCalledTimes(1);
+  });
+  it('启动后的所属PID清单未知即保留，不进入用例或自动再试退出', async () => {
+    const f = fixture(); f.desktop.evaluate.mockResolvedValue([]);
+    await expect(f.run()).rejects.toThrow('进程记录未知'); expect(f.order).not.toContain('body'); expect(f.desktop.close).not.toHaveBeenCalled();
+    expect(f.observer.query).not.toHaveBeenCalled(); expect(f.observer.end).not.toHaveBeenCalled(); expect(f.rm).not.toHaveBeenCalled(); expect(f.force).not.toHaveBeenCalled(); expect(f.listeners.size).toBe(0);
+  });
 });
 
 describe('默认路径固定968628d原文及本例显式选项', () => {
@@ -77,6 +121,7 @@ describe('默认路径固定968628d原文及本例显式选项', () => {
     const hash = (value: string) => createHash('sha256').update(value).digest('hex');
     expect(hash(select.elseStatement!.getText(liveSource))).toBe('f19c4b4b1be278aff98a0081fb052bf415bd877350d279745805dc62c2303dc9');
     expect(hash(desktopSource.text.slice(mode.end, body.end - 1))).toBe('b8284b726f3cf8cf347b0e483ad162115ea1b57369eb492f99410b7f5ed37cd4');
+    expect(hash(functions(desktopSource, ['quitDesktop'])[0].getText(desktopSource))).toBe('70ef0597565cd839b2b6c65db33fee9e26c25f8e8260851f860dbed909e75920');
   });
   it('选项默认false，只有TRUNCATE正式UI声明true，原用例标题与期限不改', () => {
     const entry = readFileSync(new URL('../e2e/table-truncate-live.ts', import.meta.url), 'utf8'); expect(desktopSource.text).toContain('preserveOnUnconfirmedExit: [false, { option: true }]'); expect(entry).toContain('test.use({ preserveOnUnconfirmedExit: true })');
