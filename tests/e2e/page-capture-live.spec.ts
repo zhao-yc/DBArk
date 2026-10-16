@@ -62,7 +62,7 @@ async function commitDraft(database: string, name: string, changes: readonly Cap
 }
 
 test.describe('D06显式捕获替换正式产品UI', () => {
-  // 两道显式门在自动桌面夹具之前判定，默认不启动应用、不读取私网配置或访问200。
+  // 双门控制测试体和自动GUI；模块导入的本地env读取仅受既有全局integration门控制。
   test.skip(!enabled || process.env.DBARK_D06_CAPTURE_UI !== '1', '由ROOT单独安排捕获模式正式UI，默认关闭');
   test.beforeAll(() => {
     if (environment.DBARK_TEST_HOST !== '192.168.31.200' || !['13357', '13380', '13384', '13310', '13311', '13484'].includes(environment.DBARK_TEST_PORT ?? '')) throw Error('捕获UI仅允许已核对的200六个专用隔离端口');
