@@ -32,7 +32,7 @@ export function readPasteInsert(data: Pick<DataTransfer, 'types' | 'getData'>): 
 export function decodePasteInsert(typed: string, plain: string): ClipboardCell[][] {
   if (!typed && !plain) throw Error(text.noData);
   if (plain.length > maxClipboardCharacters) throw Error(zh.clipboard.text001);
-  const values = decodeClipboard(typed, plain);
+  const values = decodeClipboard(typed, plain, { maximum: pasteInsertRowLimit, message: text.rowLimit });
   assertShape(values);
   return values;
 }

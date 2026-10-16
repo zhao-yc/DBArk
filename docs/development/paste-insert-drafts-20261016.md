@@ -29,12 +29,12 @@
 | `src/renderer/locales/pasteInsert.zh-CN.ts` | 集中维护新增功能中文文案 |
 | `src/renderer/components/TableTab.tsx` | 新入口、独立状态/四个处理器及生命周期核对；单行新增改用同形共用工厂 |
 | `src/renderer/dataChanges.ts` | 提取 `newDraftRow`，保持原单行草稿结构 |
-| `src/renderer/gridClipboard.ts` | 仅导出原字符/单元格上限常量 |
+| `src/renderer/gridClipboard.ts` | 导出原字符/单元格上限；给解码器增加显式可选行数预算，普通调用保持原行为 |
 | `src/renderer/locales/recordDuplicate.zh-CN.ts` | 原冲突及提交提示改为适用所有新增草稿的措辞 |
-| `tests/unit/paste-insert*.test.*` | 纯逻辑、真实对话框回调及生产TableTab处理器回放 |
+| `tests/unit/paste-insert*.test.*` | 纯逻辑、真实对话框回调、生产TableTab处理器回放及分配前预算反例 |
 | `tests/e2e/paste-insert.spec.ts` | 默认关闭的3项界面专项准备 |
 
-不修改 `ResultsGrid`，该文件留给员工2的D08工作。未改引擎、主进程、共享IPC契约、依赖/锁文件、版本、构建配置。AST对照基点确认38个原函数正文保持，其中TableTab的33个原处理器正文保持；单行 `addRow` 仅替换同形工厂调用。原 `parseTabularText`、`decodeClipboard`、`encodeClipboard`、`pasteCells`、`collectChanges`、`makePreview`、`apply`、`load`、`setRows` 和复制处理器均保持。
+不修改 `ResultsGrid`，该文件留给员工2的D08工作。未改引擎、主进程、共享IPC契约、依赖/锁文件、版本、构建配置。初版 `37a7c67` 的AST对照确认38个原函数正文保持，其中TableTab的33个原处理器正文保持；单行 `addRow` 仅替换同形工厂调用。本次后续预算修复仅为 `decodeClipboard` 增加显式可选参数和提前检查；原 `parseTabularText`、`encodeClipboard`、`pasteCells`、`collectChanges`、`makePreview`、`apply`、`load`、`setRows` 和复制处理器继续保持。
 
 ## 验证证据
 
@@ -42,7 +42,7 @@
 
 | 验证 | 结果 |
 | --- | --- |
-| `node node_modules/vitest/vitest.mjs run record- paste-insert ui-clipboard table-cell-keyboard --configLoader runner --pool threads --maxWorkers 1 --minWorkers 1 --no-file-parallelism --reporter=json --outputFile=.cache/d02-paste-inserts/related-final.json` | 586通过，失败/跳过均0 |
+| `node node_modules/vitest/vitest.mjs run record- paste-insert ui-clipboard table-cell-keyboard --configLoader runner --pool threads --maxWorkers 1 --minWorkers 1 --no-file-parallelism --reporter=json --outputFile=.cache/d02-paste-inserts/related-budget-final.json` | 593通过，失败/跳过均0；含原586项及新增7项预算回归 |
 | `node node_modules/typescript/bin/tsc --noEmit` | 通过 |
 | `node scripts/build.mjs` | 源码构建成功；保留原资源体积及依赖纯注释位置提示 |
 | 关闭全部36个专项门后，正式Playwright配置执行 `test --list --trace=off`，自定义报告器记录完整文件/标题路径/项目身份 | 320项；基准317项完整保留，新增3项；静态跳过247项；实际执行0 |
@@ -53,6 +53,16 @@
 本克隆缓存保存 `related-final.json`、`targeted-handlers.json`、`targeted-final.json`、`build.log`、`list-identities.json`、`list-verification.json`、`preservation.json`、`freeze-verification.json` 和守卫日志；缓存、依赖及构建产物不提交。
 
 冻结核验：w02的339个源码、108个构建文件、18个队列文件逐一保持既有SHA256；独立诊断克隆仍为 `9940cd3990d3f8189dfd93304b5fcb928d66e566` 且受控文件干净。未写入这些目录，也未改变ROOT正在执行的旧验收队列。
+
+## 后续修复：矩阵分配前的1000行预算
+
+员工3独审初版 `37a7c677265306d328cf93eac8277c061f9f3a00` 发现P2：行数在完整解码后才检查。36022字符的typed数据含12000个空行，虽然最终拒绝，仍先调用12001次 `map`；TSV的12000个空行先完成12000次矩阵行 `push`。这些空行不会及时触发原50000单元格限制。原提交及员工3失败原件保持，不amend。
+
+修复给共用解码器增加显式可选的 `ClipboardRowBudget`，仅D02传入1000行及集中维护的错误文案。typed在受1000万字符约束的JSON解析完成、版本和外层类型验证后，先检查外层数组长度，再执行逐行/逐格映射。TSV先按原词法做只计数的扫描，不创建单元格字符串或行数组；CRLF只算一个分隔，转义双引号、引号内换行、末尾分隔及空引号沿原规则。之后继续调用原解析器及原单元格校验。普通网格两参数调用不启用新预算，原权限、精度和未知typed拒绝策略保持。
+
+`paste-insert-budget.test.ts` 在独立VM执行实际解码源码，只观察VM内的数组方法，不改生产源码或宿主内建方法。相同测试在未修产品源码上为4通过/3失败，保存为 `budget-parent-red.json`；修复后7项全绿，typed逐行map及TSV矩阵行push均为0。另验证LF/CR/CRLF的1000/1001边界、单元格内12000个换行，以及3906个包含引号、制表符、CR/LF的短文本对照原解析器。
+
+后续证据为 `budget-fixed-green.json`、`related-budget-final.json`、`typecheck-budget-exit.txt`、`build-budget.log`、`build-budget-exit.txt`，默认关闭UI收集仍为320项、原317项完整保留、实际执行0。该修改不接触对话框、TableTab或员工2的ResultsGrid工作。
 
 ## 尚未验收
 
