@@ -1,0 +1,85 @@
+import { readFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { createContext, runInContext } from 'node:vm';
+import { basename, dirname, join, resolve } from 'node:path';
+import { tmpdir } from 'node:os';
+import ts from 'typescript';
+import { describe, expect, it, vi } from 'vitest';
+
+/** 只解析生产夹具函数，不导入Electron、MySQL、live模块或任何认证配置。 */
+function source(file: string) { return ts.createSourceFile(file, readFileSync(new URL('../e2e/' + file, import.meta.url), 'utf8').replaceAll('\r\n', '\n'), ts.ScriptTarget.Latest, true); }
+const desktopSource = source('desktop-fixture.ts'), liveSource = source('live-helpers.ts');
+function functions(tree: ts.SourceFile, names: string[]) { const found: ts.FunctionDeclaration[] = []; function visit(node: ts.Node) { if (ts.isFunctionDeclaration(node) && names.includes(node.name?.text ?? '')) found.push(node); ts.forEachChild(node, visit); } visit(tree); if (found.length !== names.length) throw Error('缺少真实夹具函数'); return found; }
+function lifetime() { let value: ts.ArrowFunction | undefined; function visit(node: ts.Node) { if (ts.isPropertyAssignment(node) && node.name.getText(desktopSource) === 'desktopLifetime' && ts.isArrayLiteralExpression(node.initializer)) value = node.initializer.elements[0] as ts.ArrowFunction; ts.forEachChild(node, visit); } visit(desktopSource); if (!value) throw Error('缺少实际桌面自动夹具'); return value; }
+/** 手动控制close终态；退出请求和desktop.close响应不等于实际close。 */
+function deferred() { let resolve!: () => void, reject!: (reason: Error) => void; const promise = new Promise<void>((yes, no) => { resolve = yes; reject = no; }); return { promise, resolve, reject }; }
+
+function fixture(options: { strict?: boolean; holdClose?: boolean; aliveAfterClose?: boolean; bodyFailure?: Error; tasks?: { kind: string; status: string }[] } = {}) {
+  const order: string[] = [], close = deferred(), original = options.bodyFailure, info = { status: 'passed', expectedStatus: 'passed', outputPath: () => '仅RAM路径' };
+  const observer = { query: vi.fn(async (query: string | { sql: string }) => { const sql = typeof query === 'string' ? query : query.sql; order.push(sql.startsWith('DROP') ? 'drop' : 'catalog'); return [[], []]; }), end: vi.fn(async () => { order.push('observer.end'); }) };
+  let context: ReturnType<typeof createContext>;
+  const emitClose = () => { order.push('close'); context.closed = true; close.resolve(); };
+  const desktop = { evaluate: vi.fn(async () => [101]), waitForEvent: vi.fn(() => close.promise), close: vi.fn(async () => { order.push('close-ack'); if (!options.holdClose) emitClose(); }) };
+  const rm = vi.fn(async () => { order.push('rm'); }), force = vi.fn(async () => { order.push('force-default'); });
+  const assertion = Object.assign((value: unknown) => expect(value), { poll: (read: () => unknown) => ({ toEqual: async (value: unknown) => { order.push('process-proof'); expect(read()).toEqual(value); } }) });
+  context = createContext({ Error, AggregateError, WeakMap, Number, Date, expect: assertion, desktop, closed: false, pageErrors: [], snippetsDiagnostics: undefined, snippetsDiagnosticsArmed: false, quitReady: Promise.resolve(),
+    createSnippetsNativeDiagnostics: () => undefined, mkdtemp: vi.fn(async () => join(tmpdir(), 'dbark-e2e-owned')), join, dirname, basename, resolve, tmpdir, rm, forceStopOwnProcess: force,
+    launchDesktop: vi.fn(async () => { order.push('launch'); context.closed = false; }), requestQuit: vi.fn(async () => { order.push('quit-request'); }), answerDialogs: vi.fn(async () => { order.push('answer'); }),
+    process: { kill: () => { if (options.aliveAfterClose) return true; throw Error('RAM端口确认进程已消失'); } },
+    environment: { DBARK_TEST_HOST: 'offline.invalid', DBARK_TEST_USER: 'RAM端口' }, randomUUID: () => '12345678-1234-1234-1234-123456789abc', tlsCertificate: () => undefined, readFileSync: () => { throw Error('不能读取认证文件'); },
+    mysql: { createConnection: vi.fn(async () => observer) }, connectAndCreate: vi.fn(async (database: string) => ({ database, connectionId: 'RAM连接', connectionName: '合成端口' })),
+    page: { evaluate: vi.fn(async () => { order.push('tasks'); return options.tasks ?? []; }), screenshot: vi.fn(async () => { throw Error('纯测试禁止截图'); }) },
+  });
+  let state = ''; for (const statement of desktopSource.statements) if (ts.isVariableStatement(statement) && statement.declarationList.declarations.some(node => node.name.getText(desktopSource) === 'preservedDesktopExits')) state = statement.getText(desktopSource);
+  const code = state + '\n' + functions(desktopSource, ['preservesUnconfirmedExit', 'retainOwnedDesktopResources', 'confirmOwnedDesktopExit', 'quitDesktop']).map(node => node.getText(desktopSource).replace(/^export /, '')).join('\n') + '\n' + functions(liveSource, ['isolatedDatabase'])[0].getText(liveSource).replace(/^export /, '') + '\nglobalThis.handlers={lifetime:' + lifetime().getText(desktopSource) + ',isolatedDatabase};';
+  runInContext(ts.transpileModule(code, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText, context);
+  const run = () => context.handlers.lifetime({ trace: 'off', preserveOnUnconfirmedExit: options.strict !== false }, async () => context.handlers.isolatedDatabase(async () => { order.push('body'); if (original) throw original; }, info, { captureFailureScreenshot: false }), info) as Promise<void>;
+  return { order, observer, context, desktop, rm, force, run, emitClose, close };
+}
+
+describe('TRUNCATE显式保留模式的真实收尾函数（仅RAM端口）', () => {
+  it('成功先收到实际close和进程消失证明，再清库/关观察连接/删临时目录，不进强杀兜底', async () => {
+    const f = fixture(); await f.run(); expect(f.order).toEqual(['launch', 'body', 'tasks', 'answer', 'quit-request', 'close-ack', 'close', 'process-proof', 'drop', 'catalog', 'observer.end', 'rm']); expect(f.force).not.toHaveBeenCalled(); expect(f.desktop.waitForEvent).toHaveBeenCalledWith('close', { timeout: 12000 });
+  });
+  it('退出请求和close调用响应未等到实际close时不清库；未确认后自动夹具也不重试或强杀', async () => {
+    const f = fixture({ holdClose: true }), stopped = Error('实际close未确认'); const pending = f.run();
+    await vi.waitFor(() => expect(f.desktop.close).toHaveBeenCalledTimes(1)); expect(f.observer.query).not.toHaveBeenCalled(); expect(f.observer.end).not.toHaveBeenCalled(); expect(f.rm).not.toHaveBeenCalled();
+    f.close.reject(stopped); await expect(pending).rejects.toBe(stopped); expect(f.force).not.toHaveBeenCalled(); expect(f.desktop.close).toHaveBeenCalledTimes(1); expect(f.observer.end).not.toHaveBeenCalled(); expect(f.rm).not.toHaveBeenCalled();
+  });
+  it('已收到close但进程消失未证明仍保留，不用kill响应或closed布尔放行', async () => {
+    const f = fixture({ aliveAfterClose: true }); await expect(f.run()).rejects.toThrow(); expect(f.context.closed).toBe(true); expect(f.observer.query).not.toHaveBeenCalled(); expect(f.observer.end).not.toHaveBeenCalled(); expect(f.force).not.toHaveBeenCalled(); expect(f.rm).not.toHaveBeenCalled();
+  });
+  it('旧实例close不能放行已替换实例的清理，仍保留所属资源', async () => {
+    const f = fixture({ holdClose: true }), pending = f.run(); await vi.waitFor(() => expect(f.desktop.close).toHaveBeenCalledTimes(1));
+    f.context.desktop = { ...f.desktop }; f.emitClose(); await expect(pending).rejects.toThrow('本实例实际close'); expect(f.observer.query).not.toHaveBeenCalled(); expect(f.observer.end).not.toHaveBeenCalled(); expect(f.rm).not.toHaveBeenCalled(); expect(f.force).not.toHaveBeenCalled();
+  });
+  it('原用例异常及退出未确认均保留首因，不以finally新错替换原异常', async () => {
+    const original = Error('原断言失败'), stopped = Error('退出也未确认'), f = fixture({ bodyFailure: original, holdClose: true }), pending = f.run();
+    await vi.waitFor(() => expect(f.desktop.close).toHaveBeenCalledTimes(1)); f.close.reject(stopped); const failure = await pending.catch(error => error);
+    expect(failure).toBeInstanceOf(AggregateError); expect(failure.cause).toBe(original); expect(failure.errors).toEqual([original, stopped]); expect(f.observer.query).not.toHaveBeenCalled(); expect(f.observer.end).not.toHaveBeenCalled(); expect(f.force).not.toHaveBeenCalled(); expect(f.rm).not.toHaveBeenCalled();
+  });
+  it('原断言失败但退出完整确认时，完成正常清理且仍返回同一个原异常', async () => {
+    const original = Error('原业务断言失败'), f = fixture({ bodyFailure: original }); await expect(f.run()).rejects.toBe(original); expect(f.observer.end).toHaveBeenCalledTimes(1); expect(f.rm).toHaveBeenCalledTimes(1); expect(f.force).not.toHaveBeenCalled();
+  });
+  it('本例apply未终态时先停链，不用退出来取消它，也不删库、end或进入自动强制清理', async () => {
+    const f = fixture({ tasks: [{ kind: 'schema.tableTruncate.apply', status: 'running' }] }); await expect(f.run()).rejects.toThrow('尚未终态'); expect(f.desktop.waitForEvent).not.toHaveBeenCalled(); expect(f.observer.query).not.toHaveBeenCalled(); expect(f.observer.end).not.toHaveBeenCalled(); expect(f.force).not.toHaveBeenCalled(); expect(f.rm).not.toHaveBeenCalled();
+  });
+  it('默认选项仍沿原兜底路径，不读取新任务门，退出原错误保持', async () => {
+    const f = fixture({ strict: false, holdClose: true }), stopped = Error('旧路径退出失败'), pending = f.run(); await vi.waitFor(() => expect(f.desktop.close).toHaveBeenCalledTimes(1)); f.close.reject(stopped); await expect(pending).rejects.toBe(stopped);
+    expect(f.observer.query).toHaveBeenCalledTimes(2); expect(f.observer.end).toHaveBeenCalledTimes(1); expect(f.force).toHaveBeenCalledTimes(1); expect(f.rm).toHaveBeenCalledTimes(1); expect(f.order).not.toContain('tasks');
+  });
+});
+
+describe('默认路径固定968628d原文及本例显式选项', () => {
+  it('旧清库finally与桌面自动夹具默认主体保留Git规范化字节，不改旧335路径', () => {
+    const isolated = functions(liveSource, ['isolatedDatabase'])[0], oldTry = isolated.body!.statements.find(ts.isTryStatement)!, select = oldTry.finallyBlock!.statements[0] as ts.IfStatement;
+    const fn = lifetime(), body = fn.body as ts.Block, mode = body.statements[0] as ts.IfStatement;
+    const hash = (value: string) => createHash('sha256').update(value).digest('hex');
+    expect(hash(select.elseStatement!.getText(liveSource))).toBe('f19c4b4b1be278aff98a0081fb052bf415bd877350d279745805dc62c2303dc9');
+    expect(hash(desktopSource.text.slice(mode.end, body.end - 1))).toBe('b8284b726f3cf8cf347b0e483ad162115ea1b57369eb492f99410b7f5ed37cd4');
+  });
+  it('选项默认false，只有TRUNCATE正式UI声明true，原用例标题与期限不改', () => {
+    const entry = readFileSync(new URL('../e2e/table-truncate-live.ts', import.meta.url), 'utf8'); expect(desktopSource.text).toContain('preserveOnUnconfirmedExit: [false, { option: true }]'); expect(entry).toContain('test.use({ preserveOnUnconfirmedExit: true })');
+    expect(entry).toContain("test('真实UI准确表名与完整风险确认；旧预览不能双发，数据和自增经观察连接核对'"); expect(entry).not.toContain('setTimeout');
+  });
+});

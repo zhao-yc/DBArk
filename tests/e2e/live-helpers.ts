@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { existsSync, readFileSync,realpathSync } from 'node:fs';
 import mysql, { type Connection, type RowDataPacket } from 'mysql2/promise';
 import type { TestInfo } from '@playwright/test';
-import { expect, desktop, page, closed, pageErrors, answerDialogs, quitDesktop } from './desktop-fixture';
+import { expect, desktop, page, closed, pageErrors, answerDialogs, quitDesktop, preservesUnconfirmedExit, retainOwnedDesktopResources, confirmOwnedDesktopExit } from './desktop-fixture';
 import {zh} from '../../src/renderer/locales/zh-CN';
 
 // 必须由调用者显式启用；仅有本地凭据文件时仍跳过，CI 不会自动连接私有服务器。
@@ -90,15 +90,35 @@ export async function isolatedDatabase(body: (context: LiveContext) => Promise<v
   const database = `dbark_e2e_${Date.now().toString(36)}_${randomUUID().replaceAll('-', '').slice(0, 8)}`;
   const certificate=tlsCertificate();
   const observer = await mysql.createConnection({ host: environment.DBARK_TEST_HOST, port: Number(environment.DBARK_TEST_PORT ?? 3306), user: environment.DBARK_TEST_USER, password: environment.DBARK_TEST_PASSWORD, charset: 'utf8mb4', supportBigNumbers: true, bigNumberStrings: true, decimalNumbers: false, connectTimeout: 15000,...(certificate?{ssl:{ca:readFileSync(certificate),rejectUnauthorized:true,verifyIdentity:true}}:{}) });
+  const strictExit = preservesUnconfirmedExit(testInfo); let failed = false, originalFailure: unknown;
   try {
     const context = await connectAndCreate(database);
     await body({ observer, ...context });
     expect(pageErrors).toEqual([]);
   } catch (error) {
+    if (strictExit) { failed = true; originalFailure = error; }
     // 默认保留原截图；新CALL用例显式关闭，避免编辑器参数进入公共失败图片，不代理截图接口。
     if (!closed && options.captureFailureScreenshot !== false) await page.screenshot({ path: testInfo.outputPath('live-failure.png') }).catch(() => undefined);
     throw error;
   } finally {
+    if (strictExit) {
+      try {
+        // 只核本例独立应用的TRUNCATE投递；未终态或读取未知时先停链，不借退出请求取消它。
+        if (!closed) {
+          const tasks = await page.evaluate(() => window.dbark.invoke('tasks.list', {}));
+          if (tasks.some(task => task.kind === 'schema.tableTruncate.apply' && !['completed', 'failed', 'cancelled'].includes(task.status))) throw new Error('本例清空apply尚未终态，保留数据库、观察连接和原生现场');
+        }
+        await confirmOwnedDesktopExit(testInfo);
+        if (!/^dbark_e2e_[a-z0-9_]+$/.test(database)) throw new Error('拒绝清理非 E2E 隔离库');
+        await observer.query({ sql: `DROP DATABASE IF EXISTS \`${database}\``, timeout: 15000 });
+        const [remaining] = await observer.query<RowDataPacket[]>('SELECT SCHEMA_NAME FROM information_schema.SCHEMATA WHERE SCHEMA_NAME = ?', [database]);
+        expect(remaining).toHaveLength(0); await observer.end();
+      } catch (cleanupFailure) {
+        retainOwnedDesktopResources(testInfo);
+        if (failed) throw new AggregateError([originalFailure, cleanupFailure], '原用例失败且退出或清理未确认，保留所属资源', { cause: originalFailure });
+        throw cleanupFailure;
+      }
+    } else {
     // 先退出应用，释放可能尚未回滚的会话，再清理本例唯一库；不触碰引擎测试库。
     try { if (!closed) { await answerDialogs([1, 1]); await quitDesktop(); } }
     finally {
@@ -109,6 +129,7 @@ export async function isolatedDatabase(body: (context: LiveContext) => Promise<v
         expect(remaining).toHaveLength(0);
       } finally { await observer.end(); }
     }
+  }
   }
 }
 

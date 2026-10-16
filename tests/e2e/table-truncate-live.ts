@@ -15,6 +15,8 @@ async function open(context: LiveContext, name: string) {
 }
 /** 只有入口双开关才加载此模块；执行权由ROOT另行安排，不是本片交付时的实库证据。 */
 export function registerTableTruncateUiTests() {
+  // 仅本例启用：退出未确认即停止清库、关闭观察连接和自动强制清理。
+  test.use({ preserveOnUnconfirmedExit: true });
   test('真实UI准确表名与完整风险确认；旧预览不能双发，数据和自增经观察连接核对', async ({}, info) => {
     assertTableTruncateLiveTarget({ host: environment.DBARK_TEST_HOST, port: environment.DBARK_TEST_PORT, tlsFlag: environment.DBARK_TEST_TLS, caPath: environment.DBARK_TEST_CA });
     await isolatedDatabase(async context => {

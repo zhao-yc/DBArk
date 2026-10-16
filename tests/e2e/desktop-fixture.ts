@@ -1,4 +1,4 @@
-import { test as baseTest, expect, _electron as electron, type ElectronApplication, type Page } from '@playwright/test';
+import { test as baseTest, expect, _electron as electron, type ElectronApplication, type Page, type TestInfo } from '@playwright/test';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { basename, dirname, join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -21,6 +21,26 @@ export let dialogCalls: RecordedDialog[] = [];
 let quitReady:Promise<void>;
 export let snippetsDiagnostics: SnippetsNativeDiagnostics | undefined;
 let snippetsDiagnosticsArmed = false;
+
+/** 仅显式启用的用例持有此状态；不改变旧用例的退出及兜底路径。 */
+const preservedDesktopExits = new WeakMap<TestInfo, { confirmed: boolean; application?: ElectronApplication; retained: boolean }>();
+/** 共用同一个TestInfo识别本例选项，不以全局环境开关影响其他用例。 */
+export function preservesUnconfirmedExit(info: TestInfo): boolean { return preservedDesktopExits.has(info); }
+/** 一旦无法确认，后续自动fixture也必须停链，不能再尝试退出或删除所属资源。 */
+export function retainOwnedDesktopResources(info: TestInfo): void { const state = preservedDesktopExits.get(info); if (state) state.retained = true; }
+/** 原quitDesktop已等待实际close和已记录进程消失；仅完整返回才能发放本例清理许可。 */
+export async function confirmOwnedDesktopExit(info: TestInfo): Promise<void> {
+  const state = preservedDesktopExits.get(info);
+  if (!state || state.retained) throw new Error('本例退出未确认，已停链保留所属资源');
+  const application = desktop;
+  if (state.confirmed && state.application === application && closed) return;
+  try {
+    if (closed) throw new Error('未取得本例完整退出证明，不能用已关闭标志替代退出收尾');
+    await answerDialogs([1, 1]); await quitDesktop();
+    if (!closed || desktop !== application) throw new Error('退出请求已返回但未观察到本实例实际close，保留所属资源');
+    state.confirmed = true; state.application = application;
+  } catch (reason) { state.retained = true; throw reason; }
+}
 
 /** 首次采集必须由离线片段用例在连接表单已关闭之后明确开启。 */
 export async function startSnippetsNativeDiagnostics() {
@@ -98,8 +118,32 @@ async function forceStopOwnProcess() {
 }
 
 /** 自动夹具随每个用例运行，不依赖模块首次导入时注册钩子，避免跨文件复用已关闭窗口。 */
-export const test = baseTest.extend<{ desktopLifetime: void }>({
-  desktopLifetime: [async ({ trace }, use, testInfo) => {
+export const test = baseTest.extend<{ desktopLifetime: void; preserveOnUnconfirmedExit: boolean }>({
+  preserveOnUnconfirmedExit: [false, { option: true }],
+  desktopLifetime: [async ({ trace, preserveOnUnconfirmedExit }, use, testInfo) => {
+    if (preserveOnUnconfirmedExit) {
+      const state = { confirmed: false, retained: false }; preservedDesktopExits.set(testInfo, state);
+      snippetsDiagnosticsArmed = false; snippetsDiagnostics = createSnippetsNativeDiagnostics(trace, testInfo); pageErrors = [];
+      dataDir = await mkdtemp(join(tmpdir(), 'dbark-e2e-'));
+      let failed = false, originalFailure: unknown;
+      try { await launchDesktop(); await use(); }
+      catch (reason) { failed = true; originalFailure = reason; throw reason; }
+      finally {
+        if (state.retained) {
+          if (!failed) throw new Error('本例已经停链，保留所属资源且不重复退出');
+        } else try {
+          if (snippetsDiagnostics) await snippetsDiagnostics.finish(testInfo.status !== testInfo.expectedStatus);
+          await confirmOwnedDesktopExit(testInfo);
+          if (dirname(resolve(dataDir)) !== resolve(tmpdir()) || !basename(dataDir).startsWith('dbark-e2e-')) throw new Error('拒绝清理测试临时目录以外的路径');
+          await rm(dataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+        } catch (cleanupFailure) {
+          state.retained = true;
+          if (failed) throw new AggregateError([originalFailure, cleanupFailure], '原用例失败且退出或清理未确认，保留所属资源', { cause: originalFailure });
+          throw cleanupFailure;
+        }
+      }
+      return;
+    }
     // 必须在启动 Electron 前拒绝私网环境；trace 是 fixture 的实际解析值，包含 CLI 覆写。
     snippetsDiagnosticsArmed = false;
     snippetsDiagnostics = createSnippetsNativeDiagnostics(trace, testInfo);
