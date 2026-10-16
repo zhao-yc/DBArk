@@ -1,5 +1,5 @@
 import React, { act, useState } from 'react';
-import { afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { memoryDocument, MemoryEvent } from '../fixtures/memory-dom';
 import type { QueryCloseRequest } from '../../src/renderer/queryCloseIntent';
 const io = vi.hoisted(() => ({ editor: null as any, edit: null as any, replace: null as any }));
@@ -22,6 +22,9 @@ let QueryTab: typeof import('../../src/renderer/components/QueryTab')['QueryTab'
 let createRoot: typeof import('react-dom/client')['createRoot'], root: ReturnType<typeof createRoot> | undefined;
 let document: ReturnType<typeof memoryDocument>, commands: string[], records: any[], completion: boolean[], changeRequest: (request?: QueryCloseRequest) => void;
 let invokeHook: undefined | ((command: string, input: any) => Promise<any> | undefined);
+const globals = ['window','document','navigator','IS_REACT_ACT_ENVIRONMENT'].map(name => [name, Object.getOwnPropertyDescriptor(globalThis, name)] as const);
+/** 测试终态恢复外界端口，不能把内存DOM带入同worker的其它用例。 */
+afterAll(() => { for (const [name, descriptor] of globals) { if (descriptor) Object.defineProperty(globalThis, name, descriptor); else Reflect.deleteProperty(globalThis, name); } });
 beforeAll(async () => { document = memoryDocument(); ({ createRoot } = await import('react-dom/client')); ({ QueryTab } = await import('../../src/renderer/components/QueryTab')); ({ useWorkspace, flushSettings } = await import('../../src/renderer/store')); });
 afterEach(async () => { if (root) { await act(async () => root!.unmount()); root = undefined; } await flushSettings(); invokeHook = undefined; });
 /** 使用真实组件状态及真实store；本地查询写入和settings写入仅作RAM IO。 */

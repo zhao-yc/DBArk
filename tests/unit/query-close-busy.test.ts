@@ -1,5 +1,8 @@
-import { beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 let acquireWorkspaceBusy: typeof import('../../src/renderer/store')['acquireWorkspaceBusy'], useWorkspace: typeof import('../../src/renderer/store')['useWorkspace'];
+const previousWindow = Object.getOwnPropertyDescriptor(globalThis, 'window');
+/** 恢复窗口端口，避免纯测试向其它测试泄漏环境。 */
+afterAll(() => { if (previousWindow) Object.defineProperty(globalThis, 'window', previousWindow); else Reflect.deleteProperty(globalThis, 'window'); });
 /** store的卸载监听只注册到内存窗口，不创建GUI或持久IO。 */
 beforeAll(async () => { Object.defineProperty(globalThis, 'window', { value: { addEventListener() {} }, configurable: true }); ({ acquireWorkspaceBusy, useWorkspace } = await import('../../src/renderer/store')); });
 
