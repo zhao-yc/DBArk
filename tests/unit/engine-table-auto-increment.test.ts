@@ -156,6 +156,28 @@ function legacy(versionValue: string) {
   if (dialect === 'mariadb') { delete policy.superReadOnly; Object.assign(policy, { compressedReadOnly: '0', globalWsrep: '0', sessionWsrep: '0' }); }
 }
 describe('0.19旧引擎自增的受控生命周期纯回归', () => {
+  it.each(['10.11.19-MariaDB', '11.4.13-MariaDB'])('%s布尔OFF实际可写，规范表示变化不阻断单次ALTER', async current => {
+    legacy(current);
+    const booleanKeys = ['readOnly', 'innodbReadOnly', 'compressedReadOnly', 'globalWsrep', 'sessionWsrep'] as const;
+    booleanKeys.forEach(key => { policy[key] = 'OFF'; });
+    const snapshot = await get(); expect(snapshot.writable, snapshot.reasons.join('；')).toBe(true);
+    expect(booleanKeys.every(key => snapshot.policy?.[key] === '0')).toBe(true);
+    const next = await preview(snapshot);
+    // 同一逻辑布尔事实改用原0表示仍一致；不是把真实模式变化豁免掉。
+    booleanKeys.forEach(key => { expect(policy[key]).toBe('OFF'); policy[key] = '0'; });
+    expect(await apply(next)).toMatchObject({ ddlSubmitted: true, ddlCompleted: true, structureVerified: true, definitionVerified: true, counterState: 'matched' });
+    expect(sent.filter(item => item.sql.startsWith('ALTER')).map(item => item.sql)).toEqual(['ALTER TABLE `db`.`t` AUTO_INCREMENT = 9007199254740995;']);
+    expect(sent.some(item => /SET GLOBAL|\bMAX\s*\(|ANALYZE|FLUSH/i.test(item.sql))).toBe(false);
+    await expect(apply(next, 'replay-off')).rejects.toThrow('已失效或已使用');
+  });
+  it('MariaDB预览后Galera由OFF改ON继续阻止DDL并消费旧令牌', async () => {
+    legacy('11.4.13-MariaDB');
+    for (const key of ['readOnly', 'innodbReadOnly', 'compressedReadOnly', 'globalWsrep', 'sessionWsrep']) policy[key] = 'OFF';
+    const snapshot = await get(); expect(snapshot.writable, snapshot.reasons.join('；')).toBe(true);
+    const next = await preview(snapshot); policy.globalWsrep = 'ON';
+    await expect(apply(next)).rejects.toThrow(); expect(sent.some(item => item.sql.startsWith('ALTER'))).toBe(false);
+    await expect(apply(next, 'replay-on')).rejects.toThrow('已失效或已使用');
+  });
   it.each(legacyVersions)('%s前后原生状态夹读，大数单ALTER及结果事实保持，变量按方言选择', async current => {
     legacy(current); const snapshot = await get(); expect(snapshot.writable, snapshot.reasons.join('；')).toBe(true);
     const first = sent.findIndex(item => item.sql.startsWith('SHOW TABLE STATUS FROM')), definition = sent.findIndex(item => item.sql.startsWith('SHOW CREATE TABLE')), last = sent.length - 1 - [...sent].reverse().findIndex(item => item.sql.startsWith('SHOW TABLE STATUS FROM'));

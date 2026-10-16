@@ -65,3 +65,17 @@ node node_modules/@playwright/test/cli.js test tests/e2e/table-auto-increment-le
 ROOT尚须逐端口真实运行新核心和正式UI，核对：小计数和2^53以上计数的原生驱动类型、前后原生/完整定义/目录一致、真实只读/权限能力失败的拒绝、单ALTER与物理身份不变、取消前实际唯一MDL观察、核验失败不重放、隔离库和线程清零。若某目录/变量不成立，保留失败及只读原因，不用mock替代。
 
 本批没有重启授权或重启实测。若ROOT随后单独安排隔离实例重启，需分别验证5.7仅ALTER上调后重启的失效及MariaDB持久计数在正常/失败插入情形的恢复；不得据当前候选宣称已验证。无需重启即可先完成本批原生目录、单ALTER及UI验证。
+
+## MariaDB布尔文本兼容修正
+
+本次修正直接基于固定 `31d22a6a602bf8825cb7fc7c3d2eb22833038021`，另建普通任务分支。ROOT的原run866中MariaDB正式UI误落入策略只读，失败保持；公开只读事实 `run868-maria-auto-policy-probe.json` 显示10.11.19和11.4.13的五个布尔别名实际返回 `OFF`，恢复级别仍为 `0`，步长/偏移及锁模式仍为 `1`。这与旧纯替身只提供 `0` 的形态不同。本修正不改写原失败、原正式UI期待或期限，也不将纯检查当作新实际验收。
+
+[MariaDB官方read_only文档的12.0之前分支](https://mariadb.com/docs/server/server-management/variables-and-modes/server-system-variables#read_only)将该变量列为布尔；[官方InnoDB变量](https://mariadb.com/docs/server/server-usage/storage-engines/innodb/innodb-system-variables#innodb_read_only)将只读及压缩只读列为布尔并以OFF/ON描述；[官方wsrep_on文档](https://mariadb.com/docs/galera-cluster/reference/galera-cluster-system-variables#wsrep_on)明确全局/会话作用域及ON/OFF合法值。这里仅支持原能力选择器已开放的两个MariaDB版本，不据新版枚举或默认值扩展能力。
+
+正式读取器只在MariaDB分支复制实际行，将 `readOnly`、`innodbReadOnly`、`compressedReadOnly`、`globalWsrep`、`sessionWsrep` 的精确 `OFF`/`ON` 映射为 `0`/`1`，随后仍执行原完整行、字符串类型及模式守卫。ON/1仍拒绝；未知词、大小写/空白变体、null、数值、布尔或对象不修复。强制恢复、锁模式、步长和偏移不在映射集合中，MariaDB也不补造不存在的superReadOnly。MySQL查询、原严格数值字符串路径及返回对象保持。
+
+先对未修改的31基线运行两个MariaDB反例，均按预期失败；原红报告保留。修正后相同正例变绿，追加ON/未知/null/异形字段、非布尔字段和其余模式守卫负例；正式Engine驱动替身仍要求两个MariaDB快照可写、单ALTER和完整核验成功。OFF与0仅表示变化时策略一致，预览后Galera切ON仍零DDL并消费旧令牌。
+
+本轮只做源码、相关纯回归和类型检查，不读取真实env/key，不运行SSH、Docker、200、GUI或手动CI。实际目录与正式UI复验、其他端口组合、隔离资源归还和发布仍由ROOT在新固定头独立核定；服务器设置和冻结w02均未操作。本地红/绿及交付证据置于本员工普通克隆的 `.cache/maria-auto-policy-20261016`。
+
+本次最终7个相关纯测试文件199项通过、0失败、0跳过，`tsc --noEmit`退出0。正式源码仅增加MariaDB已知布尔别名的复制及规范化；反向恢复该改动后与31基线逐字一致，原查询和守卫不变。没有执行构建、真实集成或正式UI，不将原run866失败改写为该新头通过。
