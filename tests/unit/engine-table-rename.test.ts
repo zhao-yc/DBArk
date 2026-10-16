@@ -81,6 +81,33 @@ beforeEach(async () => {
 afterEach(async () => { closeFails = false; hold = undefined; held?.complete(new Error('单元收尾')); await engine.closeAll(); vi.useRealTimers(); });
 
 describe('真实Engine表重命名生命周期（只替换驱动）', () => {
+  it('员工3原反例：全局只读目录权限＋来源ALTER/DROP＋目标CREATE/INSERT，不要求来源CREATE/INSERT', async () => {
+    grants = ["GRANT SELECT, SHOW VIEW, TRIGGER, PROCESS ON *.* TO 'test'@'host'", "GRANT ALTER, DROP ON `db`.`t` TO 'test'@'host'", "GRANT CREATE, INSERT ON `db`.`renamed` TO 'test'@'host'"];
+    const snapshot = await get(); expect(snapshot.writable, snapshot.reasons.join('；')).toBe(true); expect(sent.filter(item => item.sql.startsWith('RENAME TABLE'))).toHaveLength(0);
+    const result = await apply(await preview(snapshot)); expect(result).toMatchObject({ ddlCompleted: true, definitionVerified: true }); expect(result.after?.physicalIdentity).toMatch(/^[a-f0-9]{64}$/);
+  });
+  it('员工3原反例：新表只有CREATE/INSERT，RENAME后仍可只读完整核验，不追加ALTER/DROP', async () => {
+    grants = ["GRANT SELECT, SHOW VIEW, TRIGGER, PROCESS ON *.* TO 'test'@'host'", "GRANT ALTER, DROP, CREATE, INSERT ON `db`.`t` TO 'test'@'host'", "GRANT CREATE, INSERT ON `db`.`renamed` TO 'test'@'host'"];
+    const next = await preview(await get()), beforeId = physicalId, result = await apply(next);
+    expect(currentName).toBe('renamed'); expect(physicalId).toBe(beforeId); expect(result).toMatchObject({ ddlCompleted: true, definitionVerified: true }); expect(sent.filter(item => item.sql.startsWith('RENAME TABLE'))).toHaveLength(1);
+  });
+  it('严格反向：get可以展示，明确新名后缺少目标CREATE/INSERT必须拒绝，零DDL', async () => {
+    grants = ["GRANT SELECT, SHOW VIEW, TRIGGER, PROCESS ON *.* TO 'test'@'host'", "GRANT ALTER, DROP ON `db`.`t` TO 'test'@'host'"];
+    const snapshot = await get(); expect(snapshot.writable).toBe(true); await expect(preview(snapshot)).rejects.toThrow('目标CREATE/INSERT'); expect(sent.filter(item => item.sql.startsWith('RENAME TABLE'))).toHaveLength(0);
+  });
+  it('严格反向：预览后目标INSERT被撤销，提交仍拒绝且消费令牌', async () => {
+    const next = await preview(await get()); grants = ["GRANT SELECT, SHOW VIEW, TRIGGER, PROCESS ON *.* TO 'test'@'host'", "GRANT ALTER, DROP ON `db`.`t` TO 'test'@'host'", "GRANT CREATE ON `db`.`renamed` TO 'test'@'host'"];
+    await expect(apply(next)).rejects.toThrow('目标CREATE/INSERT'); await expect(apply(next, 'replay')).rejects.toThrow('已失效或已使用'); expect(sent.filter(item => item.sql.startsWith('RENAME TABLE'))).toHaveLength(0);
+  });
+  it('严格反向：后核验丢失目录可见权限仍不能报告完整核验，保留DDL完成事实', async () => {
+    const next = await preview(await get()); hold = /^RENAME TABLE/; const pending = apply(next); await vi.waitFor(() => expect(held).toBeDefined());
+    grants = ["GRANT SELECT, SHOW VIEW ON *.* TO 'test'@'host'"]; held!.complete(); expect(await pending).toMatchObject({ ddlCompleted: true, definitionVerified: false });
+    expect(events.at(-1)?.tableRename).toMatchObject({ ddlCompleted: true, definitionVerified: false, outcome: 'succeeded' });
+  });
+  it('后核验只读：执行后全部写授权均已移除，完整目录和原生身份仍足以核验', async () => {
+    const next = await preview(await get()); hold = /^RENAME TABLE/; const pending = apply(next); await vi.waitFor(() => expect(held).toBeDefined());
+    grants = ["GRANT SELECT, SHOW VIEW, TRIGGER, PROCESS ON *.* TO 'test'@'host'"]; held!.complete(); expect(await pending).toMatchObject({ ddlCompleted: true, definitionVerified: true });
+  });
   it('只读预览零DDL，精确一条RENAME，原生身份和完整定义后核验，令牌不可重放', async () => {
     const snapshot = await get(); expect(snapshot).toMatchObject({ writable: true, tableId: physicalId });
     const next = await preview(snapshot); expect(next.sql).toBe('RENAME TABLE `db`.`t` TO `db`.`renamed`;');
