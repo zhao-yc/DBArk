@@ -67,4 +67,3 @@ describe('时间范围沿真实SQLite概要分页和worker处理',()=>{
   const second=await service.start(request({timeRange:input.timeRange}));await service.close();expect(()=>service.next({taskId:randomUUID(),cursor:second.cursor})).toThrow('已过期');
  });
 });
-
