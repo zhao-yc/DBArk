@@ -1,0 +1,35 @@
+# D02：复制现有记录为新增草稿
+
+本切片从冻结`80b65746242190b9ca3ea22fdb2677c0a8046d0d`的普通克隆专用分支开发，不改变0.18冻结输入、发行物或其运行器。源码原来只有空白新增、剪贴板复制和集中预览，没有复制现有记录为新增草稿的入口。
+
+表页工具栏新增“复制记录为新增草稿”。只允许当前已加载、未过期、InnoDB且有可靠键的基本表中的单条现有记录；新增草稿、待删除记录、视图、未知对象、无可靠键、忙碌或未暂存输入都不能借此获得可写资格。纯SQL查询结果没有该入口，不修改App、IPC、主进程或数据库写入协议。
+
+复制读取当前记录已暂存的值，按可信列目录生成独立本地UUID并追加到本页末尾；保留所有其他草稿及original引用，不改活动单元格、勾选集合、记录表单位置、列偏好、排序、过滤或页码。隐藏字段仍复制。未暂存表单、仍在活动的网格编辑器和模态窗口需先处理，迟到事件会再次同步检查。
+
+生成列与`auto_increment`列省略，由服务器生成。其余值原样保留：大整数、十进制和微秒时间不转浮点数或Date，JSON原文不重新解析，NULL、空文本、文字NULL、零字节二进制和未填写DEFAULT分别保留。二进制base64包装深复制，修改新增草稿不共享原行的包装对象；没有解码成文本、经过剪贴板或读取工具文件。
+
+普通主键和唯一键不自动编号或改值。仅对本入口产生的新增草稿，在原集中预览请求前检查当前页明确相等的完整键，冲突显示键名与列名，要求用户修改后重新预览。自增省略值、DEFAULT和可空唯一键的NULL不推断为冲突；未修改的普通新增草稿沿用既有行为。先于复制INSERT提交的原记录更新/删除按当前有效草稿比较，避免拿旧original误报。
+
+本地冲突检查不声称覆盖未加载页、服务器排序规则、前缀索引或不同类型输入的等价转换。原集中预览另附此范围和权限说明，最终唯一性与INSERT权限仍由原服务器事务判定，失败沿原路径回滚，客户端可编辑状态不代表获得新权限。没有自动执行SQL、后台预览、自动提交或失败重试。
+
+## 验证与ROOT实测点
+
+纯测试调用实际helper、真实IPC参数校验和生产SQL构造器；另外用AST抽取真实TableTab按钮、复制处理函数及集中预览函数，通过状态/DOM/IPC控制端口验证选中保留、迟到拒绝和冲突早于预览请求。测试不启动React浏览器、Electron或数据库。
+
+`tests/e2e/table-record-duplicate.spec.ts`定义4项真实UI例，须同时显式开启`DBARK_INTEGRATION_ENABLED=1`与`DBARK_D02_DUPLICATE_RECORD_UI=1`，并只接受已核对的200/13384。追踪关闭，沿既有随机隔离库与清理helper。本轮只做`--list`；未运行GUI、200、Docker、系统剪贴板或手动CI。
+
+ROOT后续独占窗口应验证：
+
+1. 安装或源码真实网格复制精确BIGINT、DECIMAL、微秒时间、NULL、首尾零/高位字节；生成列、自增列显示DEFAULT，数据库条数不变。
+2. 非自增主键及唯一键保持原值，预览明确报冲突；用户改完键才进入原SQL预览，返回编辑仍无数据库变化。仅最终确认才允许原事务写入。
+3. 无键表、视图、SQL只读结果及已知不可写身份保持原边界；服务器拒绝INSERT时不把失败显示为成功或自动重试。
+4. 原行有暂存修改、勾选和隐藏列/排序/服务器过滤时，复制保留已暂存值、原选择及既有布局；新增行在末尾，原草稿未丢失。记录表单存在未暂存输入时先处理输入。
+
+本切片本地验证结果：新增44项纯测试，加记录表单48项、网格键盘33项、行校验7项，共132项通过；`tsc --noEmit`通过，生产构建通过（保留既有大chunk及依赖注释警告）。4项真实UI例通过正式Playwright `--list`核对，均expectedStatus=skipped、results=0。实际命令为：
+
+- `node node_modules/vitest/vitest.mjs run tests/unit/record-duplicate.test.ts tests/unit/record-views.test.ts tests/unit/table-cell-keyboard.test.ts tests/unit/row-validation.test.ts --maxWorkers=2`
+- `node node_modules/typescript/bin/tsc --noEmit`
+- `node scripts/build.mjs`
+- `node node_modules/@playwright/test/cli.js test tests/e2e/table-record-duplicate.spec.ts --list --reporter=json --trace off`，外层使用最小OS环境并显式设置上述两个门为0，报告写入本人忽略缓存。
+
+以上结果不替代真实UI、服务器权限和事务验收；未启动持续服务，也没有部署或修改0.18冻结包。
