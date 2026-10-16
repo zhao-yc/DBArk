@@ -71,15 +71,15 @@ test.beforeEach(({ trace }) => {
 
 test('真实定义普通文字大小写/Unicode多处导航按精确行列定位，关闭后无SQL执行', async ({}, info) => {
   await database(async context => {
-    await context.observer.query(`CREATE PROCEDURE ${target(context, 'subject')}() BEGIN\n-- 😀 Marker\nSELECT 'Marker', 'Marker';\nEND`);
-    const before = await ddl(context, 'subject', 'PROCEDURE'), expected = offsets(before, 'Marker'); expect(expected).toHaveLength(3);
+    await context.observer.query(`CREATE VIEW ${target(context, 'subject')} AS SELECT '😀 Marker' AS one, 'Marker' AS two, 'Marker' AS three`);
+    const before = await ddl(context, 'subject', 'VIEW'), expected = offsets(before, 'Marker'); expect(expected).toHaveLength(3);
     const tabs = (await page.evaluate(() => window.dbark.invoke('settings.get', {}))).tabs;
     await search(context.database, 'mArKeR'); await open('subject'); await expect(navigation().getByRole('status')).toHaveText(status(before, expected[0], 0, 3));
     await navigation().getByRole('button', { name: t.next, exact: true }).click(); await expect(navigation().getByRole('status')).toHaveText(status(before, expected[1], 1, 3));
     await navigation().getByRole('button', { name: t.previous, exact: true }).click(); await navigation().getByRole('button', { name: t.previous, exact: true }).click(); await expect(navigation().getByRole('status')).toHaveText(status(before, expected[2], 2, 3));
     await expect(definition().locator('.definition-match-active').first()).toBeVisible(); const displayed = await definition().locator('.monaco-editor .view-lines').textContent(); await page.keyboard.insertText('不可修改'); expect(await definition().locator('.monaco-editor .view-lines').textContent()).toBe(displayed);
     await page.keyboard.press(`${process.platform === 'darwin' ? 'Meta' : 'Control'}+Enter`); await navigation().getByRole('button', { name: t.close, exact: true }).click(); await expect(navigation()).toHaveCount(0); await expect(definition().locator('.definition-match')).toHaveCount(0); await expect(definition().getByRole('button', { name: '执行 SQL', exact: true })).toHaveCount(0);
-    expect(await ddl(context, 'subject', 'PROCEDURE')).toBe(before); expect((await page.evaluate(() => window.dbark.invoke('settings.get', {}))).tabs).toEqual(tabs);
+    expect(await ddl(context, 'subject', 'VIEW')).toBe(before); expect((await page.evaluate(() => window.dbark.invoke('settings.get', {}))).tabs).toEqual(tabs);
   }, info);
 });
 for (const count of [200, 201]) test(`真实${count}处边界包含额外探测，导航只在前200处循环`, async ({}, info) => {
@@ -113,7 +113,8 @@ test('延迟真实定义回包后关闭并打开另一对象，旧回包不覆�
 });
 test('真实CRLF正文按服务器原文分类：可无损时精确导航，混合行尾规范化时明确降级', async ({}, info) => {
   await database(async context => {
-    await context.observer.query(`CREATE PROCEDURE ${target(context, 'subject')}() BEGIN\r\n-- 😀 Marker\r\nSELECT 'Marker';\r\nEND`); const before = await ddl(context, 'subject', 'PROCEDURE'), mixed = /\r\n/.test(before) && /(^|[^\r])\n/.test(before), expected = offsets(before, 'Marker');
+    // 此实例原生例程正文拒绝非BMP；真实非BMP位置仍由首项VIEW验证，此处保留CRLF分类与精确期待。
+    await context.observer.query(`CREATE PROCEDURE ${target(context, 'subject')}() BEGIN\r\n-- 中文 Marker\r\nSELECT 'Marker';\r\nEND`); const before = await ddl(context, 'subject', 'PROCEDURE'), mixed = /\r\n/.test(before) && /(^|[^\r])\n/.test(before), expected = offsets(before, 'Marker');
     await search(context.database, 'Marker'); await open('subject');
     if (mixed) { await expect(navigation().getByRole('status')).toHaveText(t.unlocatable); await expect(navigation().getByRole('button', { name: t.next, exact: true })).toHaveCount(0); await expect(definition().locator('.definition-match')).toHaveCount(0); }
     else await expect(navigation().getByRole('status')).toHaveText(status(before, expected[0], 0, expected.length));
