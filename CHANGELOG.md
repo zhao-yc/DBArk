@@ -2,7 +2,7 @@
 
 ## 0.18.0（开发中，未发布）
 
-接入TLS加密客户端私钥口令与独立安全存储槽，保留/清除、会话回退、1024字节及有效Unicode边界；真实mTLS核心正负例已有独立证据，正式对话框、utility与原生系统加密重启仍继续验收。表备注提供单属性面板、只读SQL预览、一次性确认、模式/物理表身份复核及真实取消；表默认字符集/排序规则提供服务器实际配对候选及最小DEFAULT ALTER，现有列转换另行处理。两切片核心分别在六组合各24项通过，Windows源码正式界面四项在六组合共24次通过，含最窄侧栏及严格TLS；修复树节点操作条遮挡和悬浮位移，原失败保留，安装与macOS实库继续。主目录3239项单元、类型与构建通过，固定输入和证据层见[表属性验收](tests/integration/acceptance-o01-table-properties-20261016.md)。另见[表备注](docs/plans/table-comment.md)、[默认编码](docs/plans/table-default-encoding.md)及[TLS口令](docs/development/c02-tls-passphrase-20261016.md)。
+接入TLS加密客户端私钥口令与独立安全存储槽，保留/清除、会话回退、1024字节及有效Unicode边界；真实mTLS核心正负例及Windows正式表单、utility、原生safeStorage落盘/真实重启/仅清TLS与不记住会话回退两项均通过，完整3267单元和类型检查通过，见[正式TLS实证](tests/integration/acceptance-c02-mtls-ui-20261016.md)；安装包、macOS及专属SSH认证等继续。表备注提供单属性面板、只读SQL预览、一次性确认、模式/物理表身份复核及真实取消；表默认字符集/排序规则提供服务器实际配对候选及最小DEFAULT ALTER，现有列转换另行处理。两切片核心分别在六组合各24项通过，Windows源码正式界面四项在六组合共24次通过，含最窄侧栏及严格TLS；修复树节点操作条遮挡和悬浮位移，原失败保留，安装与macOS实库继续。主目录3239项单元、类型与构建通过，固定输入和证据层见[表属性验收](tests/integration/acceptance-o01-table-properties-20261016.md)。另见[表备注](docs/plans/table-comment.md)、[默认编码](docs/plans/table-default-encoding.md)及[TLS口令](docs/development/c02-tls-passphrase-20261016.md)。
 
 ## 0.17.0 — 搜索、工作台与数据工具（开发预览）
 

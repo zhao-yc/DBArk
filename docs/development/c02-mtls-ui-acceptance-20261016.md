@@ -51,3 +51,7 @@ node node_modules/@playwright/test/cli.js test tests/e2e/c02-mtls-live.spec.ts -
 - 首轮 `--list` 发现 CommonJS 工程不能使用 import.meta 的 wasm 路径解析，已改为明确工作目录下 createRequire；未因此改 package.json、TS lib 或依赖。
 - Unicode 修复另有 **38 项相关纯测试通过**，其中新增 19 项；与上述 UI 策略数分别报告，不称为新 UI 认证覆盖。
 - 本轮未访问 200、未启动 GUI/utility、未读原始证书/key/ROOT 凭据、未操作剪贴板或 Docker、未签发新证书。所有 UI/safeStorage/重启/清除流程只有可审查准备代码，等待 ROOT 真实执行。
+
+## ROOT后续实际执行
+
+以上保留520准备时的原始边界。独立复审发现的退出P2由459347a修复后，ROOT集成为90348a1/9217124；完整3267单元及类型通过。run630正式Windows两项真实GUI均通过，原生安全加密实际可用，无跳过/重试；run633原无回调核心也通过，原CA未变且材料与相关资源核零。具体入口、真实重启/仅清TLS/不记住回退、原失败和仍未验组合见[正式验收](../../tests/integration/acceptance-c02-mtls-ui-20261016.md)。0.18仍未发布，不把本轮外推为安装包/macOS/SSH全部通过。
