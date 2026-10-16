@@ -9,7 +9,7 @@ import { validateExcelMapping } from '../shared/excelTransfer';
 import { validateLosslessImport } from './losslessImport';
 import iconv from 'iconv-lite';
 import { Types, type FieldPacket, type ResultSetHeader } from 'mysql2';
-import type { CellValue, EngineCommand, ConnectionProfile, DataRow, QueryOutcome, QueryResult, ResultColumn, RowChange, TableDesign, TaskEvent } from '../shared/contracts';
+import type { CellValue, CommandMap, EngineCommand, ConnectionProfile, DataRow, QueryOutcome, QueryResult, ResultColumn, RowChange, TableDesign, TaskEvent } from '../shared/contracts';
 import { connectionTransportChanged } from '../shared/connectionProfile';
 import { bindQueryParameters, namedParameterTokens, queryParameterLimits, validateQueryParameters, type QueryParameter, type SqlLexicalMode } from '../shared/queryParameters';
 import { canonicalReference, validateReferenceValues } from '../shared/references';
@@ -24,6 +24,8 @@ import {StructureSearches} from './structureSearch';
 import {DataSearchTasks} from './dataSearchTasks';
 import {readDataSearchCatalogue} from './dataSearchCatalogue';
 import{DataSearchRecords}from'./dataSearchRecords';
+import { TableCopySources } from './tableCopySources';
+import { tableCopySourceLimits } from '../shared/tableCopySource';
 import {queryDatabaseFromSession} from '../shared/queryContext';
 import { csvCell, csvHeader, encodingName, previewFile, readRecords, readText } from './files';
 import { ResultFileTasks } from './resultFileTasks';
@@ -82,6 +84,7 @@ export class Engine {
   private readonly structureSearches=new StructureSearches();
   private readonly dataSearches:DataSearchTasks;
   private readonly dataSearchRecords=new DataSearchRecords();
+  private readonly tableCopySources = new TableCopySources();
   /** 注入任务事件出口，使引擎既能在 utility process 中运行，也能独立测试。 */
   constructor(private readonly emit: (event: TaskEvent) => void = () => undefined,options?:{dataSearchAcknowledgementMs?:number}) {
     this.dataSearches=new DataSearchTasks(emit,options?.dataSearchAcknowledgementMs,this.dataSearchRecords);
@@ -111,6 +114,7 @@ export class Engine {
         this.structureCache.release(input.id);
         this.structureSearches.releaseConnection(input.id);
         this.dataSearchRecords.releaseConnection(input.id);
+        this.tableCopySources.releaseConnection(input.id);
         return;
       }
       case 'connections.test': return this.withConnectionUse(input.id, async () => {
@@ -136,6 +140,7 @@ export class Engine {
       case 'connections.close': {
         const comparisonCleanup = this.schemaComparisons.close(input.id);
         this.dataSearchRecords.releaseConnection(input.id);
+        this.tableCopySources.releaseConnection(input.id);
         this.structureCache.release(input.id);
         this.structureSearches.releaseConnection(input.id);
         const connecting = [...this.excelConnecting.values()].filter(task => task.connectionId === input.id);
@@ -147,6 +152,7 @@ export class Engine {
         for (const [id, session] of this.sessions) if (session.connectionId === input.id) { await session.managed.close(); this.sessions.delete(id); }
         this.profiles.delete(input.id);
         this.dataSearchRecords.releaseConnection(input.id);
+        this.tableCopySources.releaseConnection(input.id);
         this.structureCache.release(input.id);
         const failed = cancellations.find(result => result.status === 'rejected'); if (failed?.status === 'rejected') throw failed.reason;
         return;
@@ -260,7 +266,17 @@ export class Engine {
         if (!Object.hasOwn(actions, input.action)) throw new Error('事务操作无效');
         await execute(managed, actions[input.action]);
       });
-      case 'table.page': return this.withConnection(input.connectionId, async managed => {
+      case 'table.copySourceRead': {
+        this.copySourceProfile(input);
+        // 主进程配置仅用于建连，不能混入严格的公开租约输入；其余额外字段继续拒绝。
+        const { profile: trustedProfile, ...request } = input;
+        return this.withCopySourceTask(input.connectionId, input.taskId, context => this.tableCopySources.read(context, request));
+      }
+      case 'table.copySourceRelease': return this.tableCopySources.release(input);
+      case 'table.page': if (input.copySource) {
+        this.copySourceProfile(input);
+        return this.withCopySourceTask(input.connectionId, input.taskId, context => this.tableCopySources.page(context, input as CommandMap['table.page']['input'], (managed, sql, page, pageSize, binary) => this.readPage(managed, sql, page, pageSize, binary, true)));
+      } else return this.withConnection(input.connectionId, async managed => {
         const info = await metadata.tableInfo(managed, input.database, input.table);
         const statement = buildPageSql(info, input.page, input.pageSize, input.filters, input.sort, input.filterMode);
         // 筛选值用十六进制字面量嵌入已验证模板，避免文本协议受 SQL 转义模式影响。
@@ -355,6 +371,7 @@ export class Engine {
     // 首个 await 之前已进入的建连也必须收尾，避免退出后迟到注册会话。
     await Promise.all([...this.pendingUses]);
     this.dataSearchRecords.close();
+    this.tableCopySources.close();
     await Promise.all([...this.sessions.values()].map(session => session.managed.close()));
     this.sessions.clear(); this.profiles.clear();
     this.structureCache.release();
@@ -366,6 +383,25 @@ export class Engine {
     const profile = this.profiles.get(id);
     if (!profile) throw new Error('请先打开数据库连接');
     return profile;
+  }
+
+  /** 只有主进程可补充可信连接配置；不允许租约读取覆盖一个已经打开的目标。 */
+  private copySourceProfile(input: Input): void {
+    if (input.profile && input.profile.id !== input.connectionId) throw new Error('主进程未提供有效表页连接配置');
+    if (!this.profiles.has(input.connectionId) && input.profile) this.profiles.set(input.connectionId, input.profile);
+  }
+
+  /** 新增只读任务受15秒总期限及原KILL/关闭终态保护，不以Promise超时抢先返回。 */
+  private async withCopySourceTask<T>(connectionId: string, taskId: string, action: (context: Pick<StructureTaskContext, 'managed' | 'commandStarted' | 'checkCancelled'>) => Promise<T>): Promise<T> {
+    let expired = false, settled = false, cancelling: Promise<unknown> | undefined;
+    const pending = this.withIndependentTask(connectionId, taskId, (managed, control) => action({ managed, ...control }), undefined, '读取完整复制源', true, () => ({}), true);
+    // 保留原Promise供finally等待并传播控制失败，旁路处理器仅防止等待期间的未处理拒绝。
+    const timer = setTimeout(() => { if (settled) return; expired = true; cancelling = this.cancelTask(taskId); void cancelling.catch(() => undefined); }, tableCopySourceLimits.timeoutMs);
+    timer.unref();
+    try { const result = await pending; if (expired) throw new Error('完整复制源读取超过15秒；请求已收尾，未生成草稿。'); return result; }
+    // pending等待真正的命令及连接终态；保留取消控制或关闭失败，不能统一包装成已成功取消。
+    catch (error) { throw error; }
+    finally { settled = true; clearTimeout(timer); await cancelling; }
   }
 
   /** 元数据和文件任务使用独立连接，避免干扰 SQL 标签页里的事务与临时表。 */
@@ -466,10 +502,17 @@ export class Engine {
   }
 
   /** 普通表页与关联表页共用流式预算和按真实字段名序列化的规则。 */
-  private async readPage(managed: ManagedConnection, sql: string, page: number, pageSize: number, binaryRows = false) {
+  private async readPage(managed: ManagedConnection, sql: string, page: number, pageSize: number, binaryRows = false, waitTerminal = false) {
     if (managed.signal?.aborted) throw new Error('任务已取消');
     // 文本协议会截短 FLOAT 的有效位，二进制协议保留相邻 FLOAT/DOUBLE 候选的真实值。
     const query = binaryRows ? managed.connection.execute({ sql, rowsAsArray: true }) : managed.connection.query({ sql, rowsAsArray: true });
+    // 新来源路径在流预算失败时仍等驱动命令/连接真实终态；原表页行为不变。
+    let finishTerminal!: () => void; let terminalError: Error | undefined;
+    const terminal = waitTerminal ? new Promise<void>(resolve => { finishTerminal = resolve; }) : undefined;
+    const commandEnded = () => finishTerminal();
+    const commandFailed = (error: Error) => { terminalError = error; finishTerminal(); };
+    const connectionEnded = () => commandFailed(new Error('表页连接在读取完成前断开'));
+    if (terminal) { query.once('end', commandEnded); query.once('error', commandFailed); managed.connection.once('end', connectionEnded); managed.connection.once('error', commandFailed); managed.signal?.addEventListener('abort', connectionEnded, { once: true }); }
     let fields: FieldPacket[] = [];
     query.on('fields', (value: FieldPacket[]) => { fields = value; });
     const stream = query.stream({ highWaterMark: 8 });
@@ -484,7 +527,11 @@ export class Engine {
         if (bytes > 16 * 1024 * 1024) throw new Error('当前页数据超过 16 MiB，未返回可编辑数据；请减小页大小或使用文件导出');
         rows.push(row);
       }
-    } finally { managed.signal?.removeEventListener('abort', abort); stream.destroy(); }
+    } finally {
+      managed.signal?.removeEventListener('abort', abort); stream.destroy();
+      if (terminal) { await terminal; query.removeListener('end', commandEnded); query.removeListener('error', commandFailed); managed.connection.removeListener('end', connectionEnded); managed.connection.removeListener('error', commandFailed); managed.signal?.removeEventListener('abort', connectionEnded); }
+    }
+    if (terminalError) throw terminalError;
     return { rows: rows.slice(0, pageSize), columns: this.columns(fields, true), page, pageSize, hasMore: rows.length > pageSize };
   }
 

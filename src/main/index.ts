@@ -122,6 +122,8 @@ async function writeSelectedQuery(input: { fileToken: string; sql: string; encod
 
 /** 分派前检查配置保存锁，防止检查通过后另一个请求用旧凭据抢先建连。 */
 async function dispatch(command: Command, input: any): Promise<unknown> {
+  // 来源释放只撤销内存能力，配置保存和退出收尾时也必须可用，不建立任务或历史。
+  if (command === 'table.copySourceRelease') return broker.request(command, input);
   // 确认与释放不新建连接或任务，不受配置保存锁阻塞；归属由引擎在取消前校验。
   if(command==='search.dataNext'||command==='search.dataRelease'||command==='search.recordsRelease')return broker.request(command,input);
   const structurePurpose = command.startsWith('schema.tableRename.') ? 'tableRename' as const : command.startsWith('schema.tableAutoIncrement.') ? 'tableAutoIncrement' as const : command.startsWith('schema.tableDefaultEncoding.') ? 'tableDefaultEncoding' as const : command.startsWith('schema.tableComment.') ? 'tableComment' as const : command.startsWith('schema.columns.') ? 'columns' as const : command.startsWith('schema.indexes.') ? 'indexes' as const : command.startsWith('schema.foreignKeys.') ? 'foreignKeys' as const : undefined;
@@ -163,6 +165,16 @@ async function dispatch(command: Command, input: any): Promise<unknown> {
     case 'search.structure':case 'search.structureContinue':case 'search.dataStart':case 'search.recordRead':
       if(shuttingDown)throw Error('客户端正在退出，不能开始搜索');
       input={...input,profile:store.resolveConnection(input.connectionId)};break;
+    case 'table.page':case 'table.copySourceRead': {
+      if (command === 'table.page' && !input.copySource) break;
+      // 表来源短读仅占用内存任务编号，沿原取消通道；不写执行历史或持久化行值。
+      if (shuttingDown) throw new Error('客户端正在退出，不能读取完整复制源');
+      if (tasks.has(input.taskId) || completionTasks.has(input.taskId) || savedQueryPages?.owns(input.taskId) || historyPages?.owns(input.taskId)) throw new Error('任务编号已使用');
+      if (completionTasks.size >= 8) throw new Error('只读请求繁忙，请稍后再读取');
+      connectionConfig.assertAvailable(input.connectionId); completionTasks.add(input.taskId);
+      try { return await broker.request(command, { ...input, profile: store.resolveConnection(input.connectionId) }); }
+      finally { completionTasks.delete(input.taskId); }
+    }
     case 'metadata.completion':case 'search.catalogue': {
       if(shuttingDown)throw new Error('客户端正在退出，不能读取补全目录');
       if(tasks.has(input.taskId)||completionTasks.has(input.taskId)||savedQueryPages?.owns(input.taskId)||historyPages?.owns(input.taskId))throw new Error('任务编号已使用，请重新发起操作');
