@@ -1278,15 +1278,13 @@ export class Engine {
       }
       this.checkCancelled(task);
       await file.sync();
-      // CSV 在同步和关闭等待期间仍可取消；每次 await 后重核，不能接受取消后再覆盖原件。
-      if (input.format === 'csv') this.checkCancelled(task);
+      // 三种表文件格式共用提交协议；同步和关闭等待后均重核，不能接受取消后再覆盖原件。
+      this.checkCancelled(task);
       await file.close();
-      if (input.format === 'csv') {
-        this.checkCancelled(task);
-        // 与现有任务取消协议共用屏障；检查和标记间不让出执行权，rename 仅发送一次。
-        // 进入替换窗口后等待真实结果：成功报告完成，失败报告失败，不能伪称已取消或自动重试。
-        task.fileCommitStarted = true;
-      }
+      this.checkCancelled(task);
+      // 与现有任务取消协议共用屏障；检查和标记间不让出执行权，rename 仅发送一次。
+      // 进入替换窗口后等待真实结果：成功报告完成，失败报告失败，不能伪称已取消或自动重试。
+      task.fileCommitStarted = true;
       await rename(temporaryPath, input.filePath); completed = true;
       return { rows: count };
     } finally {

@@ -39,39 +39,44 @@ beforeEach(async () => {
   engine = new Engine(event => events.push(event)); await engine.handle('connections.open', { id: profile.id, profile }); ports.files.set('ram-output', Buffer.from('原件'));
 });
 afterEach(async () => { release?.(); await engine.closeAll(); });
-/** 选列版和省略参数的默认全列版共用相同文件提交断言。 */
-async function input(selected: boolean) {
+/** 三格式与CSV选列共用原files.export的提交边界，编码及序列化仍由产品代码完成。 */
+async function input(selected: boolean, format = 'csv') {
   const catalog = selected ? await engine.handle('files.exportColumns', { connectionId: profile.id, database: 'db', table: 't', taskId: 'catalog', connectionRevision: 1 }) : undefined;
-  return { connectionId: profile.id, database: 'db', table: 't', filePath: 'ram-output', taskId: 'export', format: 'csv', encoding: 'utf8', includeData: true, includeStructure: false, connectionRevision: 1, ...(catalog ? { csvSelection: { catalogId: catalog.catalogId, columns: ['id'] } } : {}) };
+  return { connectionId: profile.id, database: 'db', table: 't', filePath: 'ram-output', taskId: 'export', format, encoding: 'utf8', includeData: true, includeStructure: false, connectionRevision: 1, ...(catalog ? { csvSelection: { catalogId: catalog.catalogId, columns: ['id'] } } : {}) };
 }
 /** 等待实际文件端口到达，再由用例触发真实 query.cancel，不靠定时器猜测竞态。 */
 function pause(stage: string) { ports.pause = stage; ports.resume = new Promise<void>(resolve => { release = resolve; }); return new Promise<void>(resolve => { ports.entered = resolve; }); }
 /** 同时核对原件、临时文件与句柄，避免只看取消状态而漏掉文件已被替换。 */
 function preserved() { expect(ports.files.get('ram-output')!.toString()).toBe('原件'); expect([...ports.files.keys()]).toEqual(['ram-output']); expect(ports.handles).toBe(0); }
+/** 独立固定的三格式完整字节，避免提交修复顺便改变编码、换行或高精度值。 */
+function expectedBytes(format: string): Buffer { return Buffer.from(format === 'csv' ? 'id\r\n18446744073709551615\r\n' : format === 'json' ? '[\n{"id":"18446744073709551615"}\n]\n' : "-- DBArk SQL 导出；请在目标数据库执行\nSET NAMES utf8mb4;\nINSERT INTO `t` (`id`) VALUES (_utf8mb4 X'3138343436373434303733373039353531363135');\n", 'utf8'); }
 
-describe.each([{ selected: false, label: '默认全列' }, { selected: true, label: '选列' }])('CSV提交取消：$label', ({ selected }) => {
+describe.each([{ format: 'csv', selected: false, label: '默认全列CSV' }, { format: 'csv', selected: true, label: '选列CSV' }, { format: 'json', selected: false, label: 'JSON' }, { format: 'sql', selected: false, label: 'SQL' }])('表文件提交取消：$label', ({ selected, format }) => {
+  it('正常导出维持既有格式完整字节与单次替换', async () => {
+    expect(await engine.handle('files.export', await input(selected, format))).toEqual({ rows: 1 }); expect(ports.files.get('ram-output')).toEqual(expectedBytes(format)); expect(ports.renames).toBe(1); expect(ports.handles).toBe(0); expect([...ports.files.keys()]).toEqual(['ram-output']);
+  });
   it.each(['sync', 'close'])('%s等待期间取消保留原件且零次rename，重复取消不重放', async stage => {
-    const request = await input(selected), entered = pause(stage), pending = engine.handle('files.export', request).catch(reason => reason);
+    const request = await input(selected, format), entered = pause(stage), pending = engine.handle('files.export', request).catch(reason => reason);
     await entered; await engine.handle('query.cancel', { taskId: 'export' }); release!();
     expect(await pending).toBeInstanceOf(Error); expect(events.at(-1)?.status).toBe('cancelled'); expect(ports.renames).toBe(0); preserved();
     await engine.handle('query.cancel', { taskId: 'export' }); expect(ports.renames).toBe(0);
   });
   it('rename进行中取消不谎报取消，等待唯一替换结果后完成', async () => {
-    const request = await input(selected), entered = pause('rename'), pending = engine.handle('files.export', request);
+    const request = await input(selected, format), entered = pause('rename'), pending = engine.handle('files.export', request);
     await entered; await engine.handle('query.cancel', { taskId: 'export' }); await engine.handle('query.cancel', { taskId: 'export' });
     expect(events.at(-1)?.status).toBe('running'); expect(ports.files.get('ram-output')!.toString()).toBe('原件'); expect(ports.renames).toBe(1);
     release!(); expect(await pending).toEqual({ rows: 1 }); expect(events.at(-1)?.status).toBe('completed'); expect(ports.renames).toBe(1); expect(ports.handles).toBe(0);
-    expect([...ports.files.keys()]).toEqual(['ram-output']); expect(ports.files.get('ram-output')!.toString()).toBe('id\r\n18446744073709551615\r\n');
+    expect([...ports.files.keys()]).toEqual(['ram-output']); expect(ports.files.get('ram-output')).toEqual(expectedBytes(format));
     await engine.handle('query.cancel', { taskId: 'export' }); expect(ports.renames).toBe(1);
     if (selected) { await expect(engine.handle('files.export', { ...request, taskId: 'retry' })).rejects.toThrow('失效'); expect(ports.renames).toBe(1); }
   });
   it('rename进行中取消遇到替换失败，报告failed并保留原件，不重试rename', async () => {
-    const request = await input(selected), entered = pause('rename'); ports.fail = 'rename'; const pending = engine.handle('files.export', request).catch(reason => reason);
+    const request = await input(selected, format), entered = pause('rename'); ports.fail = 'rename'; const pending = engine.handle('files.export', request).catch(reason => reason);
     await entered; await engine.handle('query.cancel', { taskId: 'export' }); release!();
     expect(await pending).toMatchObject({ message: 'rename失败' }); expect(events.at(-1)?.status).toBe('failed'); expect(ports.renames).toBe(1); preserved();
   });
   it.each(['sync', 'close'])('%s失败不发布成功或替换，句柄和partial收尾', async stage => {
-    ports.fail = stage; await expect(engine.handle('files.export', await input(selected))).rejects.toThrow(stage + '失败');
+    ports.fail = stage; await expect(engine.handle('files.export', await input(selected, format))).rejects.toThrow(stage + '失败');
     expect(events.at(-1)?.status).toBe('failed'); expect(ports.renames).toBe(0); preserved();
   });
 });
