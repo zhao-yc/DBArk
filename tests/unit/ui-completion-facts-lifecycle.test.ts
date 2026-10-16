@@ -3,6 +3,7 @@ import {runInNewContext} from 'node:vm';
 import ts from 'typescript';
 import {describe,it,expect,vi} from 'vitest';
 import {CompletionServerFacts} from '../../src/renderer/completionServerFacts';
+import {beginSidebarConnectionEnd,SidebarNodeRequests} from '../../src/renderer/sidebarNodeRequests';
 
 /** 提取并执行真实侧栏函数，避免另写一份理想清理分支遮蔽组件回归。 */
 function action(name:string,context:Record<string,unknown>):()=>Promise<void>{
@@ -15,7 +16,7 @@ function fixture(){
   const facts=new CompletionServerFacts(),seed=(id:string)=>{facts.complete(facts.begin(id,0),{dialect:'mysql',version:'8.4.11'});};seed('target');seed('other');
   const notify=vi.fn(),setConnected=vi.fn(),setOpened=vi.fn(),setConnections=vi.fn();let resolve!:(value?:unknown)=>void,reject!:(reason:Error)=>void;
   const pending=new Promise((yes,no)=>{resolve=yes;reject=no;}),invoke=vi.fn((_:string,__:unknown)=>pending);
-  const context={completionServerFacts:facts,profile:{id:'target',name:'隔离连接'},invoke,setConnected,setOpened,errorMessage:(error:Error)=>error.message,useWorkspace:{getState:()=>({notify,setConnections})},window:{confirm:()=>true},formatText:()=>'',zh:{sidebar:{text008:''}}};
+  const context={completionServerFacts:facts,profile:{id:'target',name:'隔离连接'},requests:new SidebarNodeRequests(()=>0),beginSidebarConnectionEnd,invoke,setConnected,expand:setOpened,setBusy:vi.fn(),setOpened,errorMessage:(error:Error)=>error.message,useWorkspace:{getState:()=>({notify,setConnections})},window:{confirm:()=>true},formatText:()=>'',zh:{sidebar:{text008:''}}};
   return{facts,notify,invoke,setConnected,setOpened,setConnections,resolve,reject,context};
 }
 describe('连接动作完成及异常都撤销补全事实',()=>{
