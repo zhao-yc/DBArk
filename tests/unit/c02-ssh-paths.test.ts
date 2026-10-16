@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { lstat, mkdir, mkdtemp, realpath, rm, symlink, writeFile } from 'node:fs/promises';
+import { lstat, mkdir, mkdtemp, realpath, rename, rm, symlink, writeFile } from 'node:fs/promises';
 import { basename, dirname, join, relative, resolve, sep, win32 } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { c02SshCanonicalPaths } from '../integration/helpers/c02-ssh-paths';
@@ -7,7 +7,7 @@ import { c02SshAssertSeparatePaths } from '../integration/helpers/c02-ssh-policy
 
 const connection = vi.hoisted(() => ({ connect: vi.fn(), execute: vi.fn() }));
 vi.mock('../../src/engine/connection', () => connection);
-// 默认委托真实文件系统，仅四个对象替换故障用例临时覆盖lstat返回；ESM内置模块不能spyOn。
+// 默认委托真实文件系统，仅元数据故障/精度用例临时覆盖lstat；ESM内置模块不能spyOn。
 vi.mock('node:fs/promises', async importOriginal => {
   const actual = await importOriginal<typeof import('node:fs/promises')>();
   return { ...actual, lstat: vi.fn(actual.lstat) };
@@ -38,6 +38,21 @@ async function alias(target: string, name: string): Promise<string> {
   const path = join(root, name);
   await symlink(target, path, process.platform === 'win32' ? 'junction' : 'dir');
   return path;
+}
+
+/** 只按调用者的bigint选项返回元数据，严格重现旧Number读取会吞掉相邻对象ID变化。 */
+async function injectExactIdentity(object: 'key' | 'parent', field: 'ino' | 'dev', before: bigint, after: bigint) {
+  const actual = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises');
+  const [key, parent, keyNumber, parentNumber] = await Promise.all([actual.lstat(keyPath, { bigint: true }), actual.lstat(outside, { bigint: true }), actual.lstat(keyPath), actual.lstat(outside)]);
+  let reads = 0;
+  const spy = vi.mocked(lstat).mockImplementation(async (_path, options) => {
+    const index = reads++; if (index >= 4) throw Error('本例元数据读取超出四阶段');
+    const isKey = index % 2 === 0, exact = options?.bigint === true;
+    const original = isKey ? exact ? key : keyNumber : exact ? parent : parentNumber;
+    const selected = object === (isKey ? 'key' : 'parent'), value = index < 2 ? before : after;
+    return Object.assign(Object.create(Object.getPrototypeOf(original)), original, selected ? { [field]: exact ? value : Number(value) } : {});
+  });
+  return { spy, restore: () => { spy.mockReset(); spy.mockImplementation(actual.lstat); } };
 }
 
 /** 管理连接会被本地桩明确拒绝，测试只能证明拒绝之前的路径门，不模拟认证成功。 */
@@ -103,11 +118,46 @@ describe('C02 SSH 实际身份目录隔离', () => {
     await expect(c02SshCanonicalPaths({ keyPath, tempParent: join(root, 'absent') })).rejects.toThrow('元数据核对失败');
   });
   it.each([['身份inode', 'key', 'ino'], ['身份设备', 'key', 'dev'], ['临时目录inode', 'parent', 'ino'], ['临时目录设备', 'parent', 'dev']] as const)('解析后%s变化时拒绝', async (_, object, field) => {
-    const key = await lstat(keyPath), parent = await lstat(outside), original = object === 'key' ? key : parent;
-    const changed = Object.assign(Object.create(Object.getPrototypeOf(original)), original, { [field]: original[field] + 1 });
+    const key = await lstat(keyPath, { bigint: true }), parent = await lstat(outside, { bigint: true }), original = object === 'key' ? key : parent;
+    const changed = Object.assign(Object.create(Object.getPrototypeOf(original)), original, { [field]: original[field] + 1n });
+    expect(changed[field]).not.toBe(original[field]);
     const actual = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises');
     const spy = vi.mocked(lstat).mockResolvedValueOnce(key).mockResolvedValueOnce(parent).mockResolvedValueOnce(object === 'key' ? changed : key).mockResolvedValueOnce(object === 'parent' ? changed : parent);
     try { await expect(c02SshCanonicalPaths({ keyPath, tempParent: outside })).rejects.toThrow('对象身份发生变化'); }
+    finally { spy.mockReset(); spy.mockImplementation(actual.lstat); }
+  });
+  it.each([['身份inode', 'key', 'ino'], ['身份设备', 'key', 'dev'], ['临时目录inode', 'parent', 'ino'], ['临时目录设备', 'parent', 'dev']] as const)('精确身份严格反例：%s大于2^53的相邻Number别名仍须拒绝', async (_, object, field) => {
+    const before = 2n ** 53n + 3n, after = before + 1n;
+    expect(before).toBeGreaterThan(2n ** 53n); expect(after - before).toBe(1n); expect(Number(before)).toBe(Number(after));
+    const injected = await injectExactIdentity(object, field, before, after);
+    try {
+      await expect(c02SshCanonicalPaths({ keyPath, tempParent: outside })).rejects.toThrow('对象身份发生变化');
+      expect(injected.spy).toHaveBeenCalledTimes(4);
+      expect(injected.spy.mock.calls.every(([, options]) => options?.bigint === true)).toBe(true);
+    } finally { injected.restore(); }
+  });
+  it.each([2n ** 53n + 3n, 2n ** 53n + 4n])('同一精确大对象ID %s继续允许独立实际路径', async value => {
+    const injected = await injectExactIdentity('key', 'ino', value, value);
+    try {
+      expect(await c02SshCanonicalPaths({ keyPath, tempParent: outside })).toEqual({ keyPath: await realpath(keyPath), tempParent: await realpath(outside) });
+      expect(injected.spy.mock.calls.every(([, options]) => options?.bigint === true)).toBe(true);
+    } finally { injected.restore(); }
+  });
+  it.each(['key', 'parent'] as const)('解析期间实际替换本例%s对象，保留旧对象后创建的新inode必须拒绝', async object => {
+    const actual = await vi.importActual<typeof import('node:fs/promises')>('node:fs/promises');
+    const target = object === 'key' ? keyPath : outside, retained = join(root, object === 'key' ? 'retained-text.txt' : 'retained-directory');
+    const before = await actual.lstat(target, { bigint: true }); let changed: bigint | undefined, reads = 0;
+    const spy = vi.mocked(lstat).mockImplementation(async (path, options) => {
+      if (++reads === 3) {
+        // 移动前核实源和目标的绝对父边界，所有对象只在本例新建目录内。
+        assert.equal(dirname(resolve(target)), object === 'key' ? identity : root); assert.equal(dirname(resolve(retained)), root);
+        await rename(target, retained);
+        if (object === 'key') await writeFile(target, '替换后的另一普通文本对象'); else await mkdir(target);
+        changed = (await actual.lstat(target, { bigint: true })).ino; expect(changed).not.toBe(before.ino);
+      }
+      return actual.lstat(path, options);
+    });
+    try { await expect(c02SshCanonicalPaths({ keyPath, tempParent: outside })).rejects.toThrow('对象身份发生变化'); expect(changed).toBeDefined(); }
     finally { spy.mockReset(); spy.mockImplementation(actual.lstat); }
   });
   it('危险祖先别名在首次建连与回调前被拒绝', async () => {
