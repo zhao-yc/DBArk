@@ -16,6 +16,7 @@ import { recordCopySourceZh } from '../../src/renderer/locales/recordCopySource.
 import { recordViewZh } from '../../src/renderer/locales/recordViews.zh-CN';
 import { RecordPageNavigation, recordPageScope } from '../../src/renderer/recordPageNavigation';
 import { maxTablePage } from '../../src/renderer/tableFilters';
+import { DraftHistory } from '../../src/renderer/draftHistory';
 
 // 员工3的7660最小反例已原样保留；这里将同一旧目录/新页场景接入实际load、按钮和异步处理器。
 const source = readFileSync(new URL('../../src/renderer/components/TableTab.tsx', import.meta.url), 'utf8'), tree = ts.createSourceFile('TableTab.tsx', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX), functions: string[] = [];
@@ -56,7 +57,7 @@ async function fixture(mode: 'mismatch' | 'matching' | 'unavailable' | 'local' =
   const uid = vi.fn(randomUUID), record = { hasInput: () => false, dirty: false };
   // 组合后的load保留D04真实导航门；本组为普通读取，不建立跨页票据。
   const tab = { id: 'tab', ...base }, workspace = { settings: { tabs: [tab], activeTabId: tab.id }, connectionVersions: { conn: 1 }, setBusy: vi.fn(), setDirty: vi.fn() };
-  const port = createContext({ structuredClone, Error, useCallback: (action: unknown) => action, useWorkspace: { getState: () => workspace }, invoke, uid, base, tab, connectionVersion: 1, refreshVersion: 0, pageIndex: 1, pageSize: 50, filters: [], filterMode: 'all', sort: [],
+  const port = createContext({ history: new DraftHistory(), structuredClone, Error, useCallback: (action: unknown) => action, useWorkspace: { getState: () => workspace }, invoke, uid, base, tab, connectionVersion: 1, refreshVersion: 0, pageIndex: 1, pageSize: 50, filters: [], filterMode: 'all', sort: [],
     recordPages: new RecordPageNavigation(), recordPageScope, recordPageScopeRef: { current: { value: { target: base, connectionVersion: 1, refreshVersion: 0, pageSize: 50, filters: [], filterMode: 'all', sort: [] }, page: 1 } }, setRecordPageMessage: vi.fn(), setPageIndex: vi.fn(), showPreferences: false, maxTablePage,
     visibleKeys: ['id', 'note'], updatePreferences: vi.fn(), setPreferencesError: vi.fn(),
     loadGeneration: { current: 0 }, blockedRef: { current: false }, loadingCount: { current: 0 }, referenceCount: { current: 0 }, applyingRef: { current: false }, preferencesLock: { current: false }, copyPendingRef: { current: false }, mounted: { current: true }, copyPageTask: { current: undefined }, copyPage: { current: null }, copySources: { current: null }, copyRowRefs: { current: new Map() }, copyReadIntent: { current: null }, copyEnvironment: { current: { values: [] } }, rowsRef: { current: [] }, selectionRef: { current: undefined }, copiedDraftIds: { current: new Set() }, inputDirtyRef: { current: false }, recordControllerRef: { current: { ...record, reset: vi.fn() } }, previewingRef: { current: false }, preview: null,

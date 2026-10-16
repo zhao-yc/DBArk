@@ -9,6 +9,7 @@ import { ownCell } from '../../src/renderer/lib';
 import { isBinaryCell } from '../../src/renderer/binaryCell';
 import { recordReadonlyReason, type RecordContext } from '../../src/renderer/recordViews';
 import { blocksBinaryTextInput, tableCellKeyIsComposing } from '../../src/renderer/tableCellKeyboard';
+import { draftHistoryKey } from '../../src/renderer/draftHistory';
 
 /** 固定当前生产处理函数源码，只替换DOM/状态端口，不能复制一套守卫实现使断言自证。 */
 const source = readFileSync(new URL('../../src/renderer/components/TableTab.tsx', import.meta.url), 'utf8'), tree = ts.createSourceFile('TableTab.tsx', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
@@ -24,7 +25,7 @@ function fixture() {
   const data = { id: '18446744073709551615', bytes: { type: 'binary' as const, base64: 'AAH/' }, nullable_bytes: { type: 'binary' as const, base64: 'qg==' }, text: '普通文本', amount: '12345678901234567890.123456', generated: { type: 'binary' as const, base64: 'AA==' } };
   const row: DraftRow = { id: 'uuid-1', data: structuredClone(data), original: structuredClone(data), inserted: false, deleted: false }, other: DraftRow = { ...row, id: 'uuid-2', data: { ...row.data, id: '9007199254740993' }, original: { ...row.original, id: '9007199254740993' } };
   const rows = [row, other], setRows = vi.fn<(update: DraftRow[] | ((current: DraftRow[]) => DraftRow[])) => void>(), preview = vi.fn(), open = vi.fn(), find = vi.fn(); let dirtyInput = false, modal = false;
-  const context = createContext({ blocked: false, editable: true, document: { querySelector: () => modal ? {} : null }, HTMLElement: class {}, record: { dirty: false, hasInput: () => dirtyInput, openCell: open }, info, page: { columns: [{ key: 'bytes', type: 'VAR_STRING' }, { key: 'nullable_bytes', type: 'BLOB' }, { key: 'text', type: 'BLOB' }, { key: 'generated', type: 'BLOB' }] }, rowsRef: { current: rows }, getRecordContext: () => state, ownCell, isBinaryCell, recordReadonlyReason, blocksBinaryTextInput, tableCellKeyIsComposing, changes: [{ kind: 'update' }], column: { key: 'bytes' }, setRows, makePreview: preview, openPageFind: find });
+  const context = createContext({ draftHistoryKey, moveHistory: vi.fn(), blocked: false, editable: true, document: { querySelector: () => modal ? {} : null }, HTMLElement: class {}, record: { dirty: false, hasInput: () => dirtyInput, openCell: open }, info, page: { columns: [{ key: 'bytes', type: 'VAR_STRING' }, { key: 'nullable_bytes', type: 'BLOB' }, { key: 'text', type: 'BLOB' }, { key: 'generated', type: 'BLOB' }] }, rowsRef: { current: rows }, getRecordContext: () => state, ownCell, isBinaryCell, recordReadonlyReason, blocksBinaryTextInput, tableCellKeyIsComposing, changes: [{ kind: 'update' }], column: { key: 'bytes' }, setRows, makePreview: preview, openPageFind: find });
   setRows.mockImplementation(update => { context.rowsRef.current = typeof update === 'function' ? update(context.rowsRef.current) : update; });
   runInContext(code, context);
   /** React事件端口只记录两种prevent语义，浏览器原生输入与网格命令不能混为一个开关。 */
