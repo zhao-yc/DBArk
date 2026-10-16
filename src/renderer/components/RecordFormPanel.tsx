@@ -20,6 +20,7 @@ import { BoundedRecordTextarea } from './BoundedRecordTextarea';
 import { ErrorBox, Modal } from './ui';
 import '../recordViews.css';
 import '../recordDocument.css';
+import type { RecordPageNavigationView } from '../recordPageNavigation';
 
 /** 表单快捷键只暂存本地草稿；不截获普通方向键、换行、删除或输入法组合输入。 */
 function localKeys(event: KeyboardEvent, stage: () => boolean, close: () => void) {
@@ -34,7 +35,7 @@ function binarySnapshotCurrent(row: DraftRow | undefined, draft: RecordDraft | n
 }
 
 /** 当前页侧面表单只有展示与缓冲，不拥有第二份页数据或数据库写路径。 */
-export function RecordFormPanel({ editor, context, rows, visibleKeys, onSelect }: { editor: RecordViewController; context: RecordContext; rows: DraftRow[]; visibleKeys: string[]; onSelect(rowId: string): void }) {
+export function RecordFormPanel({ editor, context, rows, visibleKeys, onSelect, pageNavigation }: { editor: RecordViewController; context: RecordContext; rows: DraftRow[]; visibleKeys: string[]; onSelect(rowId: string): void; pageNavigation?: RecordPageNavigationView }) {
   const [showHidden, setShowHidden] = useState(false); const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set());
   const heading = useRef<HTMLHeadingElement>(null); const row = rows.find(item => item.id === editor.draft?.rowId);
   useEffect(() => { heading.current?.focus(); setExpanded(new Set()); }, [editor.draft?.rowId]);
@@ -54,7 +55,8 @@ export function RecordFormPanel({ editor, context, rows, visibleKeys, onSelect }
   }}>
     <header><h2 tabIndex={-1} ref={heading}>{text.title}</h2><button onClick={editor.closeForm}>{text.close}</button></header>
     <p className="record-context">{context.target.database} / {context.target.table}</p>
-    <nav aria-label={text.title}><button disabled={!previous || context.busy} onClick={() => previous && onSelect(previous)}>{text.previous}</button><span>{row ? formatText(text.position, rows.indexOf(row) + 1, rows.length) : text.empty}</span><button disabled={!next || context.busy} onClick={() => next && onSelect(next)}>{text.next}</button></nav>
+    <nav aria-label={text.title}><button disabled={(!previous && !pageNavigation?.previous) || context.busy} onClick={() => previous ? onSelect(previous) : pageNavigation?.onNavigate(-1)}>{text.previous}</button><span>{row ? formatText(text.position, rows.indexOf(row) + 1, rows.length) : text.empty}</span><button disabled={(!next && !pageNavigation?.next) || context.busy} onClick={() => next ? onSelect(next) : pageNavigation?.onNavigate(1)}>{text.next}</button></nav>
+    {pageNavigation?.message && <p role="note" aria-label={text.pageNavigation} aria-live="polite">{pageNavigation.message}</p>}
     <p aria-live="polite">{status}{editor.dirty ? ` · ${text.inputDirty}` : ''}</p>
     <div className="record-display-modes" role="group" aria-label={projectionText.mode}>{(['form', 'tree', 'json', 'input'] as const).map(mode => <button key={mode} aria-pressed={editor.displayMode === mode} disabled={context.busy || editor.pending || (mode==='input' && !!reason)} title={mode==='input' ? reason : undefined} onClick={() => editor.changeDisplayMode(mode)}>{mode==='input'?documentText.input:projectionText[mode]}</button>)}</div>
     {editor.displayMode !== 'json' && editor.displayMode !== 'input' && <label className="record-hidden-toggle"><input type="checkbox" checked={showHidden} onChange={event => setShowHidden(event.target.checked)}/>{text.showHidden}</label>}
