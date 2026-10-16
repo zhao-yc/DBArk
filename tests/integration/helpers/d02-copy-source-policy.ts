@@ -47,5 +47,13 @@ export function d02OwnsTables(rows: { name: unknown; comment: unknown }[], owner
 
 /** 复用已审过的清理顺序；CREATE/授权/其它夹具写响应未知均保留资源，不重放写操作。 */
 export async function cleanupD02Copy(actions: Parameters<typeof cleanupC02>[0], uncertainWrite: boolean, failure?: unknown): Promise<void> {
-  await cleanupC02({ ...actions, ...(uncertainWrite ? { database: 'unknown', user: actions.user === 'absent' ? 'absent' : 'unknown' } : {}) }, failure);
+  // CREATE状态保持原事实；验证/操作失败是独立、不可复活的删除授权标记。
+  let first: unknown = failure ?? (uncertainWrite ? new D02FixtureError('D02夹具写结果未知，永久保留资源') : undefined);
+  let blocked = uncertainWrite || failure !== undefined;
+  const attempt = async (action: () => Promise<void>) => { try { await action(); } catch (error) { blocked = true; first ??= error; throw error; } };
+  const drop = async (action: () => Promise<void>) => { if (blocked) throw new D02FixtureError('D02清理验证或操作失败，禁止所有后续DROP', { cause: first }); await attempt(action); };
+  await cleanupC02({ ...actions,
+    closeConnections: () => attempt(actions.closeConnections), verifyThreadsGone: () => attempt(actions.verifyThreadsGone),
+    dropUser: () => drop(actions.dropUser), dropDatabase: () => drop(actions.dropDatabase),
+  }, first);
 }
