@@ -3,49 +3,84 @@ import {modifier} from './live-helpers';
 
 type SavedItem={types:string[];values:Record<string,Blob|Electron.ClipboardBookmark>};
 type ClipboardRoot=typeof globalThis&{__dbarkMonacoCaretClipboard?:{items:SavedItem[];text:string}};
-type CaretObservation={serial:number;after:number;request?:{serial:number;id:number};expected?:{source:string;offset:number};sourceMatches:boolean;offsetMatches:boolean};
-type CaretWindow=Window&{__dbarkMonacoCaretObservation?:CaretObservation};
+type ExpectedCaret={source:string;prefix:string;lineNumber:number;column:number};
+type CaretProof={trustedKey:boolean;apiAvailable:boolean;focusedEditors:number;sourceMatches:boolean;positionMatches:boolean;offsetMatches:boolean;singleCaret:boolean;stable:boolean;readFailed:boolean};
+type CaretState={generation:number;armed?:{generation:number;expected:ExpectedCaret};events:number;proof?:CaretProof&{generation:number}};
+type CaretWindow=Window&{monaco?:typeof import('monaco-editor');__dbarkMonacoCaretObservation?:CaretState};
 let completionDeadline=0;
 
-/** 位置证明与原产品断言共用既有13秒预算，不能串联成两个13秒等待。 */
+/** 公开位置证明与原产品断言共用既有13秒预算，不为证明另开等待窗口。 */
 export function remainingCompletionTimeout(limit=13000):number{return Math.max(1,Math.min(limit,completionDeadline-Date.now()));}
 
-/** 仅旁观真实Worker成功发送的快照；必须在创建编辑器及其它Worker观察器之前安装。 */
+/** 仅在空白独立fixture启用官方全局API并reload一次；随后捕获真实按键，不拦截Worker。 */
 export async function observeMonacoCaret():Promise<void>{
+  if(await page.evaluate(()=>!!(window as CaretWindow).__dbarkMonacoCaretObservation))return;
+  const empty=await page.evaluate(async()=>{
+    const[connections,settings,tasks,records]=await Promise.all([window.dbark.invoke('connections.list',{}),window.dbark.invoke('settings.get',{}),window.dbark.invoke('tasks.list',{}),window.dbark.invoke('history.list',{})]);
+    return{connections:connections.length,tabs:settings.tabs.length,tasks:tasks.length,history:records.length};
+  });
+  expect(empty,'公开API初始化只能在无连接、标签、任务和历史的空工作台进行').toEqual({connections:0,tabs:0,tasks:0,history:0});
+  await page.addInitScript(()=>{self.MonacoEnvironment={...self.MonacoEnvironment,globalAPI:true};});
+  await page.reload();
+  await expect(page.locator('.app-statusbar')).toBeVisible({timeout:15000});
+  expect(await page.evaluate(()=>typeof(window as CaretWindow).monaco?.editor?.getEditors==='function'),'安装资源必须提供官方Monaco公开只读API').toBe(true);
   await page.evaluate(()=>{
-    const root=window as CaretWindow;if(root.__dbarkMonacoCaretObservation)return;
-    const state:CaretObservation={serial:0,after:0,sourceMatches:true,offsetMatches:true};root.__dbarkMonacoCaretObservation=state;
-    const post=Worker.prototype.postMessage;
-    Worker.prototype.postMessage=function(this:Worker,...args:[message:unknown,options?:Transferable[]|StructuredSerializeOptions]){
-      // 保留同一接收者、参数和原异常；不改请求、回复、能力、取消或产品期限。
-      const result=Reflect.apply(post,this,args),value=args[0] as {id?:unknown;source?:unknown;offset?:unknown}|null,expected=state.expected;
-      if(Number.isInteger(value?.id)&&typeof value?.source==='string'&&Number.isInteger(value?.offset)){
-        state.serial++;
-        if(expected){state.request={serial:state.serial,id:value!.id as number};state.sourceMatches&&=value.source===expected.source;state.offsetMatches&&=value.offset===expected.offset;}
-      }
-      return result;
-    };
+    const root=window as CaretWindow,state:CaretState={generation:0,events:0};root.__dbarkMonacoCaretObservation=state;
+    document.addEventListener('keydown',event=>{
+      const armed=state.armed;if(!armed||event.code!=='Space'||!event.ctrlKey)return;
+      state.events++;
+      const proof:CaretProof={trustedKey:event.isTrusted&&!event.repeat&&!event.metaKey&&!event.altKey&&!event.shiftKey,apiAvailable:false,focusedEditors:0,sourceMatches:false,positionMatches:false,offsetMatches:false,singleCaret:false,stable:false,readFailed:false};
+      try{
+        const api=root.monaco;proof.apiAvailable=typeof api?.editor?.getEditors==='function';
+        if(proof.apiAvailable){
+          /** 与Playwright可见性一致，隐藏或已脱离DOM的旧编辑器不能充当当前模型。 */
+          const visible=(element:Element)=>{const style=getComputedStyle(element);return element.getClientRects().length>0&&style.visibility!=='hidden'&&style.visibility!=='collapse';};
+          const editors=api!.editor.getEditors().filter(editor=>{
+            const node=editor.getContainerDomNode(),query=node.closest('.query-tab'),wrap=query?.querySelector('.sql-editor-wrap');
+            return node.isConnected&&!!query&&!!wrap?.contains(node)&&visible(node)&&visible(query)&&node.contains(event.target as Node|null)&&editor.hasTextFocus();
+          });
+          proof.focusedEditors=editors.length;
+          if(editors.length===1){
+            const editor=editors[0],model=editor.getModel(),position=editor.getPosition();
+            if(model&&!model.isDisposed()&&position){
+              // 所有getter均在同一次原生keydown捕获阶段同步执行，不让await或旧请求介入。
+              const version=model.getVersionId(),eol=model.getEOL(),actual=model.getValue(),offset=model.getOffsetAt(position),selections=editor.getSelections(),expected=armed.expected;
+              if(eol==='\n'||eol==='\r\n'){
+                proof.sourceMatches=actual===expected.source.replaceAll('\n',eol);
+                proof.positionMatches=position.lineNumber===expected.lineNumber&&position.column===expected.column;
+                proof.offsetMatches=offset===expected.prefix.replaceAll('\n',eol).length;
+              }
+              proof.singleCaret=selections?.length===1&&selections[0].isEmpty()&&selections[0].positionLineNumber===position.lineNumber&&selections[0].positionColumn===position.column;
+              const endPosition=editor.getPosition();
+              proof.stable=editor.getModel()===model&&!model.isDisposed()&&model.getVersionId()===version&&endPosition?.lineNumber===position.lineNumber&&endPosition?.column===position.column;
+            }
+          }
+        }
+      }catch{proof.readFailed=true;}
+      // 只留本次generation的布尔/计数；不preventDefault、不修改事件、模型或光标。
+      state.proof={generation:armed.generation,...proof};
+    },true);
   });
 }
 
-/** 由调用者原始marked独立推导期望，不使用定位帮助器返回值或观察到的位置反推答案。 */
+/** 原marked独立给出全文与位置期望；只用本次真实按键的同步快照证明当前状态。 */
 export async function triggerMonacoCompletion(marked:string):Promise<void>{
   const marker=marked.indexOf('|');if(marker<0)throw Error('缺少光标标记');
-  const expected={source:marked.replace('|','').replaceAll('\r\n','\n'),offset:marked.slice(0,marker).replaceAll('\r\n','\n').length};
-  completionDeadline=Date.now()+13000;
+  const source=marked.replace('|','').replaceAll('\r\n','\n'),prefix=marked.slice(0,marker).replaceAll('\r\n','\n'),lines=prefix.split('\n');
+  const expected:ExpectedCaret={source,prefix,lineNumber:lines.length,column:lines.at(-1)!.length+1};completionDeadline=Date.now()+13000;
   await page.evaluate(expected=>{
     const state=(window as CaretWindow).__dbarkMonacoCaretObservation;if(!state)throw Error('未安装真实光标观察器');
-    state.expected=expected;state.after=state.serial;delete state.request;state.sourceMatches=true;state.offsetMatches=true;
+    state.armed={generation:++state.generation,expected};state.events=0;delete state.proof;
   },expected);
   try{
     await page.keyboard.press('Control+Space');
-    await expect.poll(()=>page.evaluate(()=>{
-      const state=(window as CaretWindow).__dbarkMonacoCaretObservation;
-      // 只返回布尔诊断，不把正文、原剪贴板、格式名或内容摘要带出内存。
-      return{seen:!!state?.request&&state.request.serial>state.after,sourceMatches:state?.sourceMatches===true,offsetMatches:state?.offsetMatches===true};
-    }),{timeout:remainingCompletionTimeout(),message:'真实provider必须发送原marked全文与UTF16光标位置，不能把错误光标当产品补全失败'}).toEqual({seen:true,sourceMatches:true,offsetMatches:true});
+    const actual=await page.evaluate(()=>{
+      const state=(window as CaretWindow).__dbarkMonacoCaretObservation,proof=state?.proof;
+      return{captured:state?.events===1&&proof?.generation===state?.armed?.generation,trustedKey:proof?.trustedKey===true,apiAvailable:proof?.apiAvailable===true,focusedEditors:proof?.focusedEditors??0,sourceMatches:proof?.sourceMatches===true,positionMatches:proof?.positionMatches===true,offsetMatches:proof?.offsetMatches===true,singleCaret:proof?.singleCaret===true,stable:proof?.stable===true,readFailed:proof?.readFailed!==false};
+    });
+    expect(actual,'真实Control+Space时唯一可见编辑器的全文、位置与UTF16 offset必须符合原marked').toEqual({captured:true,trustedKey:true,apiAvailable:true,focusedEditors:1,sourceMatches:true,positionMatches:true,offsetMatches:true,singleCaret:true,stable:true,readFailed:false});
   }finally{
-    await page.evaluate(()=>{const state=(window as CaretWindow).__dbarkMonacoCaretObservation;if(state)delete state.expected;});
+    await page.evaluate(()=>{const state=(window as CaretWindow).__dbarkMonacoCaretObservation;if(state){delete state.armed;delete state.proof;state.events=0;}});
   }
 }
 
@@ -110,7 +145,7 @@ export async function positionMonacoCaret(marked:string):Promise<string>{
     // Cmd+Left会到折行的视图行首，macOS继续使用Cmd+Up到文档首；每个码点只按一次ArrowRight。
     await page.keyboard.press(process.platform==='darwin'?'Meta+ArrowUp':'Control+Home');
     for(const _ of prefix)await page.keyboard.press('ArrowRight');
-    // 实际位置在调用者下一次真实触发后由triggerMonacoCompletion独立核对，不再复制前缀。
+    // 实际位置在调用者下一次真实按键的捕获阶段由公开只读API独立核对，不再复制前缀。
     return source;
   }catch(error){operationFailed=true;operationError=error;throw error;}finally{
     try{

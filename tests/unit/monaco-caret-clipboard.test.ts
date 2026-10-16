@@ -12,6 +12,8 @@ interface Options{
   platform?:'win32'|'darwin';emptyRead?:'none'|'one';surroundEmpty?:boolean;
   operationFails?:boolean;operationError?:unknown;beforeReadError?:Error;afterReadError?:Error;
   external?:Entry[];externalText?:string;wrongCaret?:boolean;wrongSource?:boolean;noRequest?:boolean;
+  modelEol?:'\n'|'\r\n';untrustedEvent?:boolean;noKeyEvent?:boolean;focusCount?:number;hidden?:boolean;
+  selected?:boolean;versionChanges?:boolean;startupDirty?:boolean;delayWorkerReady?:boolean;beforeKeydown?:()=>void;
 }
 const marked='SELECT a| FROM q',source='SELECT a FROM q';
 const helperSource=readFileSync(new URL('../e2e/monaco-caret.ts',import.meta.url),'utf8');
@@ -19,64 +21,62 @@ const compiled=ts.transpileModule(helperSource,{compilerOptions:{target:ts.Scrip
 const blob=(value:string,type='text/plain')=>new Blob([value],{type});
 const editorSource=readFileSync(new URL('../../src/renderer/components/SqlEditor.tsx',import.meta.url),'utf8');
 const editorTree=ts.createSourceFile('SqlEditor.tsx',editorSource,ts.ScriptTarget.Latest,true,ts.ScriptKind.TSX);let providerText='';
-/** 提取实际provider原回调；不能另写一份按期望marked产生正确位置的假provider。 */
+/** 真实provider只作辅助传输回放；位置证明必须读取按键事件当时的当前模型。 */
 function visitProvider(node:ts.Node){if(ts.isPropertyAssignment(node)&&node.name.getText(editorTree)==='provideCompletionItems')providerText=node.initializer.getText(editorTree);ts.forEachChild(node,visitProvider);}
 visitProvider(editorTree);if(!providerText)throw Error('缺少真实provider');
 const providerCode=ts.transpileModule('const extracted='+providerText,{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText;
 
-/** 整个正式helper与provider执行于纯VM；只替换OS、键盘/模型、传输和轮询等待边界。 */
+/** 正式helper原样执行；模型、DOM、原生键盘与OS API均为合成边界，不冒充原生验收。 */
 function replay(initial:Entry[],options:Options={}){
-  let current=initial.map(entry=>({...entry})),modelSource='',offset=0,selectAll=false,arrows=0,readCount=0;
-  const keys:string[]=[],insertions:string[]=[],writes:string[]=[],posted:{source:string;offset:number}[]=[],pollDiagnostics:unknown[]=[];
+  let current=initial.map(entry=>({...entry})),modelSource='',offset=0,selectAll=false,arrows=0,readCount=0,hasQuery=false,reloads=0,versionReads=0;
+  const keys:string[]=[],insertions:string[]=[],writes:string[]=[],posted:{source:string;offset:number}[]=[],proofDiagnostics:Record<string,unknown>[]=[],initializers:(()=>void)[]=[],listeners:((event:unknown)=>void)[]=[];
   const clipboard={
-    async read(){
-      readCount++;if(readCount===1&&options.beforeReadError)throw options.beforeReadError;
-      if(readCount>1&&options.afterReadError)throw options.afterReadError;
-      if(readCount>1&&options.external)current=options.external.map(entry=>({...entry}));
-      let entries=current.length?current:options.emptyRead==='none'?[]:[{}];if(options.surroundEmpty)entries=[{},...entries,{}];
-      return entries.map(entry=>({types:Object.keys(entry),async getType(type:string){return entry[type];}}));
-    },
+    async read(){readCount++;if(readCount===1&&options.beforeReadError)throw options.beforeReadError;if(readCount>1&&options.afterReadError)throw options.afterReadError;if(readCount>1&&options.external)current=options.external.map(entry=>({...entry}));let entries=current.length?current:options.emptyRead==='none'?[]:[{}];if(options.surroundEmpty)entries=[{},...entries,{}];return entries.map(entry=>({types:Object.keys(entry),async getType(type:string){return entry[type];}}));},
     async readText(){if(readCount>1&&options.externalText!==undefined)return options.externalText;const value=current.find(entry=>Object.hasOwn(entry,'text/plain'))?.['text/plain'];return value instanceof Blob?value.text():'';},
-    async write(){writes.push('write');throw Error('禁止系统剪贴板写入');},
-    async writeText(){writes.push('writeText');throw Error('禁止系统剪贴板写入');},
-    clear(){writes.push('clear');throw Error('禁止系统剪贴板写入');}
+    async write(){writes.push('write');throw Error('禁止系统剪贴板写入');},async writeText(){writes.push('writeText');throw Error('禁止系统剪贴板写入');},clear(){writes.push('clear');throw Error('禁止系统剪贴板写入');}
   };
-  /** 假传输只回blocked以结束真实Client等待；不把它冒充实际解析器、Worker线程或Monaco。 */
+  const workers:RendererWorker[]=[];
+  /** ready与send可以延迟，专门保留analyze早于布防的旧请求反例。 */
   class RendererWorker{
     onmessage:((event:{data:unknown})=>void)|null=null;onerror:unknown=null;onmessageerror:unknown=null;
-    constructor(){queueMicrotask(()=>this.onmessage?.({data:{type:'dbark-completion-ready',version:1}}));}
-    postMessage(value:{id:number;source:string;offset:number}){posted.push(value);queueMicrotask(()=>this.onmessage?.({data:{id:value.id,result:{status:'blocked',reason:'syntax'}}}));}
-    terminate(){}
+    constructor(){workers.push(this);if(!options.delayWorkerReady)queueMicrotask(()=>this.onmessage?.({data:{type:'dbark-completion-ready',version:1}}));}
+    postMessage(value:{id:number;source:string;offset:number}){posted.push(value);queueMicrotask(()=>this.onmessage?.({data:{id:value.id,result:{status:'blocked',reason:'syntax'}}}));}terminate(){}
   }
-  const context=createContext({Buffer,Blob,Error,AggregateError,Reflect,Worker:RendererWorker,process:{platform:options.platform??'win32'}});
-  context.window=context;context.dbark={invoke:async(command:string)=>{if(command!=='settings.get')throw Error('禁止其它IPC');return{activeTabId:'query',tabs:[{id:'query',sql:modelSource}]};}};
+  const eol=()=>options.modelEol??'\n';
+  /** 从实际合成正文及键盘offset推导行列，不读取marked或定位帮助器的返回值。 */
+  const currentPosition=()=>{const lines=modelSource.slice(0,offset).split(/\r\n|\n/);return{lineNumber:lines.length,column:lines.at(-1)!.length+1};};
+  const model={getValueLength:()=>modelSource.length,getValue:()=>modelSource,getEOL:eol,getVersionId:()=>options.versionChanges?++versionReads:1,isDisposed:()=>false,getOffsetAt:(position:{offset?:number;lineNumber?:number;column?:number})=>position.offset??modelSource.split(eol()).slice(0,position.lineNumber!-1).reduce((sum,line)=>sum+line.length+eol().length,0)+position.column!-1,onDidChangeContent:()=>({dispose(){}})};
+  const target={},node={isConnected:true,closest:()=>query,contains:(item:unknown)=>item===target,getClientRects:()=>options.hidden?[]:[{}]},query={querySelector:()=>({contains:(item:unknown)=>item===node}),getClientRects:()=>[{}]};
+  const editor={getContainerDomNode:()=>node,hasTextFocus:()=>true,getModel:()=>model,getPosition:currentPosition,getSelections:()=>{const p=currentPosition();return[{isEmpty:()=>!options.selected,positionLineNumber:p.lineNumber,positionColumn:p.column}];}};
+  const api={editor:{getEditors:()=>hasQuery?Array(options.focusCount??1).fill(editor):[]}};
+  const context=createContext({Buffer,Blob,Error,AggregateError,Reflect,Worker:RendererWorker,process:{platform:options.platform??'win32'},getComputedStyle:()=>({visibility:options.hidden?'hidden':'visible'})});context.window=context;context.self=context;
+  context.document={addEventListener:(name:string,callback:(event:unknown)=>void,capture:boolean)=>{expect(name).toBe('keydown');expect(capture).toBe(true);listeners.push(callback);}};
+  context.dbark={invoke:async(command:string)=>{if(command==='settings.get')return{activeTabId:'query',tabs:hasQuery?[{id:'query',sql:modelSource}]:[]};if(command==='connections.list')return options.startupDirty?[{id:'合成既有连接'}]:[];if(command==='tasks.list'||command==='history.list')return[];throw Error('禁止其它IPC');}};
   const client=new CompletionWorkerClient(()=>new (context.Worker as typeof RendererWorker)() as unknown as Worker);
-  const model={getValueLength:()=>modelSource.length,getValue:()=>modelSource,getVersionId:()=>1,isDisposed:()=>false,getOffsetAt:(position:{offset:number})=>position.offset,onDidChangeContent:()=>({dispose(){}})};
   const environment={disposed:false,readOnly:false,editorRef:{current:{getModel:()=>model}},active:undefined,statusRef:{current:()=>undefined},completion:{connectionId:'合成连接',connectionVersion:0},completionServerFacts:{get:()=>undefined},completionLimits,AbortController,resolveCompletionContext,completionContextCapabilities,worker:client};
   const provider=runInNewContext('(function(env){with(env){'+providerCode+';return extracted;}})',{})(environment) as (model:unknown,position:{offset:number},context:unknown,token:unknown)=>Promise<unknown>;
   const token={isCancellationRequested:false,onCancellationRequested:()=>({dispose(){}})};
   const desktop={evaluate:async(callback:(api:{clipboard:typeof clipboard},argument:unknown)=>unknown,argument?:unknown)=>callback({clipboard},argument)};
   const page={
-    locator:()=>({getByRole:()=>({focus:async()=>undefined})}),
-    evaluate:async(callback:(argument:unknown)=>unknown,argument?:unknown)=>callback(argument),
-    keyboard:{
-      insertText:async(text:string)=>{insertions.push(text);modelSource=selectAll?text:modelSource.slice(0,offset)+text+modelSource.slice(offset);offset=selectAll?text.length:offset+text.length;selectAll=false;},
-      press:async(key:string)=>{
-        keys.push(key);if(key==='Escape'&&options.operationFails)throw options.operationError;
-        if(key==='Control+A'||key==='Meta+A')selectAll=true;
-        if(key==='Control+Home'||key==='Meta+ArrowUp')offset=0;
-        if(key==='ArrowRight'&&offset<modelSource.length){if(!options.wrongCaret||arrows!==0)offset+=(modelSource.codePointAt(offset)??0)>0xffff?2:1;arrows++;}
-        if(key==='Control+Space'&&!options.noRequest){if(options.wrongSource)modelSource='X'+modelSource.slice(1);await provider(model,{offset},{},token);}
+    locator:()=>({getByRole:()=>({focus:async()=>undefined}),isVisible:async()=>true}),evaluate:async(callback:(argument:unknown)=>unknown,argument?:unknown)=>callback(argument),
+    addInitScript:async(callback:()=>void)=>{initializers.push(callback);},reload:async()=>{reloads++;delete context.__dbarkMonacoCaretObservation;listeners.length=0;for(const initialize of initializers)initialize();expect(context.MonacoEnvironment.globalAPI).toBe(true);context.monaco=api;context.MonacoEnvironment={getWorker(){}};},
+    keyboard:{insertText:async(text:string)=>{hasQuery=true;const value=text.replaceAll('\n',eol());insertions.push(text);modelSource=selectAll?value:modelSource.slice(0,offset)+value+modelSource.slice(offset);offset=selectAll?value.length:offset+value.length;selectAll=false;},press:async(key:string)=>{
+      keys.push(key);if(key==='Escape'&&options.operationFails)throw options.operationError;
+      if(key==='Control+A'||key==='Meta+A')selectAll=true;
+      if(key==='Control+Home'||key==='Meta+ArrowUp'){offset=0;arrows=0;}
+      if(key==='ArrowRight'&&offset<modelSource.length){if(!options.wrongCaret||arrows!==0)offset+=modelSource.startsWith('\r\n',offset)||(modelSource.codePointAt(offset)??0)>0xffff?2:1;arrows++;}
+      if(key==='Control+Space'){
+        options.beforeKeydown?.();if(options.wrongSource)modelSource='X'+modelSource.slice(1);
+        if(!options.noKeyEvent)for(const listener of listeners)listener({isTrusted:!options.untrustedEvent,code:'Space',ctrlKey:true,metaKey:false,altKey:false,shiftKey:false,repeat:false,target});
+        if(!options.noRequest)await provider(model,{offset},{},token);
       }
-    }
+    }}
   };
-  // 纯回放不消耗13秒等待；保留正式轮询回调和断言，只执行一次受控观测。
-  const boundaryExpect=Object.assign((value:unknown,message?:string)=>expect(value,message),{poll:(read:()=>unknown,config?:{message?:string})=>({toBe:async(expected:unknown)=>expect(await read(),config?.message).toBe(expected),toEqual:async(expected:unknown)=>{const actual=await read();pollDiagnostics.push(actual);expect(actual,config?.message).toEqual(expected);}})});
+  // 只替换轮询等待，不替换正式回调或断言；按键位置断言本身没有轮询等待。
+  const boundaryExpect=Object.assign((value:unknown,message?:string)=>{if(value&&typeof value==='object'&&'captured'in value)proofDiagnostics.push(value as Record<string,unknown>);return Object.assign(expect(value,message),{toBeVisible:async()=>expect(await(value as{isVisible:()=>Promise<boolean>}).isVisible()).toBe(true)});},{poll:(read:()=>unknown,config?:{message?:string})=>({toBe:async(expected:unknown)=>expect(await read(),config?.message).toBe(expected),toEqual:async(expected:unknown)=>expect(await read(),config?.message).toEqual(expected)})});
   const module:{exports:{positionMonacoCaret:(text:string)=>Promise<string>;observeMonacoCaret:()=>Promise<void>;triggerMonacoCompletion:(text:string)=>Promise<void>;remainingCompletionTimeout:(limit?:number)=>number}}={exports:{} as never};
-  runInContext('(function(require,module,exports){'+compiled+'\n})',context)((name:string)=>{
-    if(name==='./desktop-fixture')return{desktop,page,expect:boundaryExpect};if(name==='./live-helpers')return{modifier:options.platform==='darwin'?'Meta':'Control'};throw Error('纯回放禁止其它依赖');
-  },module,module.exports);
-  return{run:(value=marked)=>module.exports.positionMonacoCaret(value),observe:()=>module.exports.observeMonacoCaret(),trigger:(value=marked)=>module.exports.triggerMonacoCompletion(value),timeout:(limit?:number)=>module.exports.remainingCompletionTimeout(limit),keys,insertions,writes,posted,pollDiagnostics,context,clipboard,client,get offset(){return offset;},get modelSource(){return modelSource;},get entries(){return current;}};
+  runInContext('(function(require,module,exports){'+compiled+'\n})',context)((name:string)=>{if(name==='./desktop-fixture')return{desktop,page,expect:boundaryExpect};if(name==='./live-helpers')return{modifier:options.platform==='darwin'?'Meta':'Control'};throw Error('纯回放禁止其它依赖');},module,module.exports);
+  return{run:(value=marked)=>module.exports.positionMonacoCaret(value),observe:()=>module.exports.observeMonacoCaret(),trigger:(value=marked)=>module.exports.triggerMonacoCompletion(value),timeout:(limit?:number)=>module.exports.remainingCompletionTimeout(limit),ready:()=>workers.at(-1)?.onmessage?.({data:{type:'dbark-completion-ready',version:1}}),keys,insertions,writes,posted,proofDiagnostics,context,clipboard,client,get offset(){return offset;},get modelSource(){return modelSource;},get entries(){return current;},get reloads(){return reloads;}};
 }
 
 /** 全格式检查使用独立的原始字节观测，不复制正式比较算法。 */
@@ -108,24 +108,25 @@ describe('Monaco光标帮助器的只读剪贴板回放',()=>{
   it('原生读取异常中的格式、路径和摘要不进入失败诊断',async()=>{const privateError=Error('SYNTHETIC_PRIVATE_MARKER web application/x.synthetic D:/synthetic/private sha256=synthetic'),h=replay([],{afterReadError:privateError}),error=await h.run().catch(error=>error);expect(error.message).toBe('光标定位后的剪贴板只读完整采集失败');expect(error.cause).toBeUndefined();expect(error.stack).not.toContain('SYNTHETIC_PRIVATE_MARKER');});
 });
 
-describe('真实provider发送位置与独立marked期望的纯接线',()=>{
-  it.each([{platform:'win32' as const,marked:'SELECT a| FROM q',sql:'SELECT a FROM q',offset:8},{platform:'darwin' as const,marked:'SELECT a| FROM q',sql:'SELECT a FROM q',offset:8},{platform:'win32' as const,marked:'-- 🙂\r\nSELECT a|suffix FROM q',sql:'-- 🙂\nSELECT asuffix FROM q',offset:14}])('$platform输入与UTF16/CRLF位置精确匹配',async value=>{
-    const h=replay([],{platform:value.platform});await h.observe();await h.run(value.marked);await h.trigger(value.marked);expect(h.modelSource).toBe(value.sql);expect(h.offset).toBe(value.offset);expect(h.posted).toHaveLength(1);expect(h.posted[0]).toMatchObject({source:value.sql,offset:value.offset});expect(h.keys.filter(key=>key==='Control+Space')).toHaveLength(1);expect(h.writes).toEqual([]);expect(h.context.__dbarkMonacoCaretObservation.expected).toBeUndefined();h.client.dispose();
+describe('真实按键捕获阶段的公开当前模型位置证明',()=>{
+  it.each([{platform:'win32' as const,marked:'SELECT a| FROM q',sql:'SELECT a FROM q',offset:8},{platform:'darwin' as const,marked:'SELECT a| FROM q',sql:'SELECT a FROM q',offset:8},{platform:'win32' as const,marked:'-- 🙂\r\nSELECT a|suffix FROM q',sql:'-- 🙂\nSELECT asuffix FROM q',offset:14},{platform:'win32' as const,modelEol:'\r\n' as const,marked:'-- 🙂\r\nSELECT a|suffix FROM q',sql:'-- 🙂\r\nSELECT asuffix FROM q',offset:15}])('$platform输入与UTF16/模型EOL位置匹配',async value=>{
+    const h=replay([],value);await h.observe();await h.run(value.marked);await h.trigger(value.marked);expect(h.modelSource).toBe(value.sql);expect(h.offset).toBe(value.offset);expect(h.posted[0]).toMatchObject({source:value.sql,offset:value.offset});expect(h.keys.filter(key=>key==='Control+Space')).toHaveLength(1);expect(h.writes).toEqual([]);expect(h.context.__dbarkMonacoCaretObservation.armed).toBeUndefined();expect(h.reloads).toBe(1);h.client.dispose();
   });
-  it.each([{label:'错误光标offset',wrongCaret:true},{label:'同长度错误正文',wrongSource:true},{label:'真实请求缺失',noRequest:true}])('$label不能把空建议或错误位置当通过',async value=>{
-    const h=replay([],value);await h.observe();await h.run();await expect(h.trigger()).rejects.toThrow('真实provider必须发送原marked全文与UTF16光标位置');expect(h.writes).toEqual([]);expect(h.context.__dbarkMonacoCaretObservation.expected).toBeUndefined();expect(h.pollDiagnostics.at(-1)).not.toEqual({seen:true,sourceMatches:true,offsetMatches:true});if(value.wrongCaret)expect(h.posted[0].offset).toBe(7);if(value.wrongSource){expect(h.posted[0].source.length).toBe(source.length);expect(h.posted[0].source).not.toBe(source);}h.client.dispose();
+  it.each([{label:'错误光标offset',wrongCaret:true},{label:'同长度错误正文',wrongSource:true},{label:'非可信按键',untrustedEvent:true},{label:'缺少本次按键事件',noKeyEvent:true},{label:'多个聚焦编辑器',focusCount:2},{label:'隐藏编辑器',hidden:true},{label:'非折叠选区',selected:true},{label:'读取时版本变化',versionChanges:true}])('$label不能通过当前状态证明',async value=>{
+    const h=replay([],value);await h.observe();await h.run();await expect(h.trigger()).rejects.toThrow('真实Control+Space时唯一可见编辑器');expect(h.writes).toEqual([]);expect(h.context.__dbarkMonacoCaretObservation.armed).toBeUndefined();if(value.wrongCaret)expect(h.offset).toBe(7);if(value.wrongSource){expect(h.modelSource.length).toBe(source.length);expect(h.modelSource).not.toBe(source);}h.client.dispose();
   });
-  it('位置证明与原产品等待共享13秒，不累加等待窗口',async()=>{let now=1000;const h=replay([]);h.context.Date={now:()=>now};await h.observe();await h.run();await h.trigger();expect(h.timeout()).toBe(13000);now=9000;expect(h.timeout()).toBe(5000);expect(h.timeout(2000)).toBe(2000);now=15000;expect(h.timeout()).toBe(1);h.client.dispose();});
-  it('同SQL旧请求曾通过也不能满足本次没有新请求的观察范围',async()=>{
-    const options:Options={},h=replay([],options);await h.observe();await h.run();await h.trigger();expect(h.posted).toHaveLength(1);
-    options.noRequest=true;await h.run();await expect(h.trigger()).rejects.toThrow('真实provider必须发送原marked全文与UTF16光标位置');
-    expect(h.posted).toHaveLength(1);expect(h.context.__dbarkMonacoCaretObservation.after).toBe(1);expect(h.pollDiagnostics.at(-1)).toEqual({seen:false,sourceMatches:true,offsetMatches:true});h.client.dispose();
+  it('没有新Worker请求时仍以真正按键的当前模型证明位置，原产品断言另行保留',async()=>{const h=replay([],{noRequest:true});await h.observe();await h.run();await h.trigger();expect(h.posted).toEqual([]);expect(h.proofDiagnostics.at(-1)).toMatchObject({captured:true,sourceMatches:true,offsetMatches:true});});
+  it('旧analyze等待ready、布防后按键前send，不能让当前错误光标通过',async()=>{
+    const options:Options={wrongCaret:true,noRequest:true,delayWorkerReady:true},h=replay([],options);await h.observe();await h.run();const pending=h.client.analyze(source,8);expect(h.posted).toEqual([]);
+    options.beforeKeydown=()=>h.ready();await expect(h.trigger()).rejects.toThrow('真实Control+Space时唯一可见编辑器');
+    expect(h.posted).toHaveLength(1);expect(h.posted[0]).toMatchObject({source,offset:8});expect(h.offset).toBe(7);expect(h.proofDiagnostics.at(-1)).toMatchObject({captured:true,sourceMatches:true,positionMatches:false,offsetMatches:false});await pending;h.client.dispose();
   });
-  it('与原窗口/LATERAL实例包装兼容，原请求和接收者不变',async()=>{
-    const h=replay([]);await h.observe();const Native=h.context.Worker;let forwarded=0;h.context.Worker=class extends Native{constructor(){super();const post=this.postMessage.bind(this);this.postMessage=(...args:unknown[])=>{forwarded++;return post(...args);};}};await h.run();await h.trigger();expect(forwarded).toBe(1);expect(h.posted).toHaveLength(1);h.client.dispose();
-  });
-  it('未安装观察器不能悄悄跳过光标证明',async()=>{const h=replay([]);await h.run();await expect(h.trigger()).rejects.toThrow('未安装真实光标观察器');expect(h.keys).not.toContain('Control+Space');});
-  it.each(['sql-completion','sql-completion-window','sql-completion-lateral','session-objects'])('%s全部触发走独立marked观察，不信任定位返回值',async name=>{
+  it('同SQL旧请求曾通过，下一次错误光标且没有新请求仍失败',async()=>{const options:Options={},h=replay([],options);await h.observe();await h.run();await h.trigger();expect(h.posted).toHaveLength(1);options.noRequest=true;options.wrongCaret=true;await h.run();await expect(h.trigger()).rejects.toThrow('真实Control+Space时唯一可见编辑器');expect(h.posted).toHaveLength(1);expect(h.proofDiagnostics.at(-1)).toMatchObject({sourceMatches:true,positionMatches:false,offsetMatches:false});h.client.dispose();});
+  it('当前证明不增加13秒预算',async()=>{let now=1000;const h=replay([]);h.context.Date={now:()=>now};await h.observe();await h.run();await h.trigger();expect(h.timeout()).toBe(13000);now=9000;expect(h.timeout()).toBe(5000);expect(h.timeout(2000)).toBe(2000);now=15000;expect(h.timeout()).toBe(1);h.client.dispose();});
+  it('已有连接时拒绝reload，不清理或覆盖既有工作台',async()=>{const h=replay([],{startupDirty:true});await expect(h.observe()).rejects.toThrow('公开API初始化只能在无连接、标签、任务和历史的空工作台进行');expect(h.reloads).toBe(0);expect(h.keys).toEqual([]);expect(h.writes).toEqual([]);});
+  it('不再包装Worker.prototype，已有终态观察保持原样',async()=>{const h=replay([]),post=h.context.Worker.prototype.postMessage;await h.observe();expect(h.context.Worker.prototype.postMessage).toBe(post);});
+  it('未初始化公开API与捕获器不能悄悄跳过证明',async()=>{const h=replay([]);await h.run();await expect(h.trigger()).rejects.toThrow('未安装真实光标观察器');expect(h.keys).not.toContain('Control+Space');});
+  it.each(['sql-completion','sql-completion-window','sql-completion-lateral','session-objects'])('%s继续提交原marked，不信任定位返回值',async name=>{
     const text=readFileSync(new URL('../e2e/'+name+'.spec.ts',import.meta.url),'utf8'),tree=ts.createSourceFile(name,text,ts.ScriptTarget.Latest,true);let atCaret='',trigger='',choose='';
     function visit(node:ts.Node){if(ts.isFunctionDeclaration(node)){if(node.name?.text==='atCaret')atCaret=node.getText(tree);if(node.name?.text==='triggerCompletion')trigger=node.getText(tree);if(node.name?.text==='choose')choose=node.getText(tree);}ts.forEachChild(node,visit);}visit(tree);
     expect(text).toContain('test.beforeEach(observeMonacoCaret)');expect(text).not.toContain("page.keyboard.press('Control+Space')");if(choose)expect(choose).toContain('await triggerCompletion()');

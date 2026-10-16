@@ -2,7 +2,7 @@ import {positionMonacoCaret,observeMonacoCaret,triggerMonacoCompletion,remaining
 import {test,expect,page,desktop} from './desktop-fixture';
 import {enabled,isolatedDatabase,openDatabaseQuery,executeSql,writeSql,modifier} from './live-helpers';
 test.use({trace:'off'});
-// 在任何编辑器及已有Worker观察器之前安装，只读旁观真实发送位置。
+// 空工作台启用官方公开API，捕获真实按键时的当前编辑器位置。
 test.beforeEach(observeMonacoCaret);
 const query=()=>page.locator('.query-tab:visible');
 const dialog=()=>page.getByRole('dialog',{name:'当前查询会话的临时对象',exact:true});
@@ -10,7 +10,7 @@ const dialog=()=>page.getByRole('dialog',{name:'当前查询会话的临时对�
 let expectedCaret='';
 /** 原marked保留为独立断言输入，不使用帮助器返回值推导实际光标期望。 */
 async function atCaret(marked:string){expectedCaret=marked;return positionMonacoCaret(marked);}
-/** 只触发一次，随后必须证明真实provider的完整source和UTF16 offset。 */
+/** 只触发一次，在原生按键捕获阶段核对当前全文和UTF16光标位置。 */
 async function triggerCompletion(){await triggerMonacoCompletion(expectedCaret);}
 async function expectSql(source:string){await expect.poll(()=>page.evaluate(async()=>{const settings=await window.dbark.invoke('settings.get',{});return settings.tabs.find(tab=>tab.id===settings.activeTabId)?.sql?.replaceAll('\r\n','\n');})).toBe(source.replaceAll('\r\n','\n'));}
 /** 每次只触发一次，产品启动/解析期限之外留绘制余量，不以重试掩盖冷启动问题。 */
