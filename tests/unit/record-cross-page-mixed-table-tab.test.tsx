@@ -6,6 +6,9 @@ import { RecordPageNavigation, recordPageScope } from '../../src/renderer/record
 import { recordViewZh } from '../../src/renderer/locales/recordViews.zh-CN';
 import { tableGridZh } from '../../src/renderer/locales/tableGrid.zh-CN';
 import { maxTablePage } from '../../src/renderer/tableFilters';
+import { duplicateRecordDraft } from '../../src/renderer/recordDuplicate';
+import { recordDuplicateZh } from '../../src/renderer/locales/recordDuplicate.zh-CN';
+import type { TableInfo } from '../../src/shared/contracts';
 
 const source = readFileSync(new URL('../../src/renderer/components/TableTab.tsx', import.meta.url), 'utf8');
 const tree = ts.createSourceFile('TableTab.tsx', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
@@ -47,6 +50,8 @@ function fixture() {
     busy: false, referenceBusy: false, applying: false, preferencesPending: false, previewing: false, preview: null, blocked: false, blockedRef: { current: false }, showPreferences: false,
     rootElement: { current: { querySelector: vi.fn(() => null) } }, document: { querySelector: vi.fn(() => null) }, window: { confirm: vi.fn(() => true) }, referenceCount: { current: 0 }, referenceDialog: null,
     loadingCount: { current: 0 }, applyingRef: { current: false }, preferencesLock: { current: false },
+    // D02复制状态是实际load的新依赖；保留D04原断言，补齐组合后的真实端口。
+    copiedDraftIds: { current: new Set<string>() }, setDuplicateNotice: vi.fn(), duplicateRecordDraft, recordDuplicateZh,
     grid: { current: { scrollToCell: vi.fn(), setActivePosition: vi.fn() } }, handleGridKeyDown: vi.fn(), restoreGridFocus: vi.fn(),
     uid: () => `新页本地UUID-${++sequence}`, errorMessage: String, formatText: (text: string, page: number) => text.replace('{0}', String(page)),
     invoke: vi.fn(async (command: string, input: { page?: number }) => command === 'metadata.table' ? { objectKind: 'table', columns: [] } : command === 'table.page' ? { page: input.page, pageSize: 50, hasMore: input.page === 1, rows: [{ id: input.page === 2 ? '51' : '49', text: '新值一' }, ...(input.page === 1 ? [{ id: '50', text: '新值末' }] : [])] } : undefined),
@@ -60,7 +65,7 @@ function fixture() {
   context.setSelectedRows = vi.fn((rows: unknown) => { context.selectedRows = rows; });
   context.setSelection = vi.fn((selection: unknown) => { context.selection = typeof selection === 'function' ? selection(context.selection) : selection; });
   context.setPageIndex = vi.fn((index: number) => { context.pageIndex = index; context.recordPageScopeRef.current.page = index; });
-  const names = ['getRecordPageContext', 'navigateRecordPage', 'jumpToMatch', 'selectCurrentCell', 'applyPagePlan', 'canReload'];
+  const names = ['getRecordPageContext', 'navigateRecordPage', 'jumpToMatch', 'selectCurrentCell', 'applyPagePlan', 'canReload', 'duplicateCurrentRow'];
   if (names.some(name => !functions.has(name)) || !load || !consume || !blocked || buttons.size !== 4) throw Error('缺少生产跨页或原有工具接线');
   const declarations = names.map(name => functions.get(name)).join('\n') + '\n' + names.map(name => `globalThis.${name}=${name};`).join('\n');
   const expressions = ['DataGrid_onCellClick', 'DataGrid_onCellKeyDown', 'PageFindPanel_getSelectionToken'];
@@ -71,6 +76,29 @@ function fixture() {
 }
 
 describe('D04与现有TableTab工具的混合正负向接线', () => {
+  it('D02复制形成整页草稿后，D04拒绝跨页且保留复制身份、活动选择和原行', () => {
+    const f = fixture(), c = f.context, token = c.selectionRef.current, original = structuredClone(f.rows[0]);
+    const info: TableInfo = { database: c.base.database, name: c.base.table, objectKind: 'table', engine: 'InnoDB',
+      columns: [{ name: 'id', type: 'bigint', nullable: false, defaultValue: null, extra: 'auto_increment', generated: false, comment: '' }, { name: 'text', type: 'text', nullable: true, defaultValue: null, extra: '', generated: false, comment: '' }],
+      primaryKey: ['id'], editableKey: ['id'], indexes: [], foreignKeys: [], ddl: '' };
+    c.getRecordContext = () => ({ target: c.base, info, loaded: true, busy: c.blockedRef.current, stale: false, connectionVersion: 4, generation: c.loadGeneration.current });
+    c.duplicateCurrentRow();
+    const copied = c.rowsRef.current[1];
+    expect(c.rowsRef.current[0]).toEqual(original); expect(copied).toMatchObject({ inserted: true, deleted: false, data: { text: '原值' } });
+    expect(Object.hasOwn(copied.data, 'id')).toBe(false); expect(c.copiedDraftIds.current.has(copied.id)).toBe(true);
+    expect(c.selectionRef.current).toBe(token); expect(c.setDuplicateNotice).toHaveBeenCalledWith(recordDuplicateZh.staged);
+    f.navigate();
+    expect(c.setRecordPageMessage).toHaveBeenLastCalledWith({ revision: f.gate.revision, text: recordViewZh.pageDirty });
+    expect(c.rowsRef.current).toHaveLength(2); expect(c.selectionRef.current).toBe(token); expect(c.setPageIndex).not.toHaveBeenCalled();
+    expect(c.invoke).not.toHaveBeenCalled(); expect(c.window.confirm).not.toHaveBeenCalled();
+  });
+  it('跨页成功加载同时重置D02复制状态并完成D04真实目标选择', async () => {
+    const f = fixture(), c = f.context; c.copiedDraftIds.current.add('之前已结束的复制草稿');
+    f.navigate(); await f.load(); f.consume();
+    expect(c.copiedDraftIds.current.size).toBe(0); expect(c.setDuplicateNotice).toHaveBeenCalledWith('');
+    expect(c.selectionRef.current).toEqual({ rowId: '新页本地UUID-1', key: 'text' }); expect(f.gate.pending).toBe(false);
+    expect(c.invoke.mock.calls.every(([command]: [string]) => ['connections.open', 'metadata.table', 'table.page'].includes(command))).toBe(true);
+  });
   it('正反跨页只走原load，按新页真实UUID选择首末行，保留筛选排序且不写数据库', async () => {
     const f = fixture(), c = f.context;
     f.navigate(); expect(c.selectionRef.current).toBeUndefined(); expect(c.rowsRef.current).toHaveLength(0); expect(c.blockedRef.current).toBe(true);
