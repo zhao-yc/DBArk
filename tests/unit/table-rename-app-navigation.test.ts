@@ -7,8 +7,9 @@ import { reconcileTableRenameFavorites, tableRenameTabMatches } from '../../src/
 import { tableRenameZh } from '../../src/renderer/locales/tableRename.zh-CN';
 import { tableRenameFailureResults } from '../helpers/tableRenameResults';
 import { assertTableRenameTargetAvailable } from '../../src/renderer/tableRenameServices';
-const { request } = vi.hoisted(() => ({ request: vi.fn() }));
-vi.mock('../../src/renderer/lib', () => ({ invoke: request, uid: () => '独立标签', errorMessage: String }));
+const { request, saveSettings } = vi.hoisted(() => ({ request: vi.fn(), saveSettings: vi.fn() }));
+// 标签身份即时保存使用独立异步端口，原导航请求的顺序和拒绝断言保持。
+vi.mock('../../src/renderer/lib', () => ({ invoke: (command: string, input: unknown) => command === 'settings.save' ? saveSettings(input) : request(command, input), uid: () => '独立标签', errorMessage: String }));
 const a = { connectionId: 'c', database: 'db', table: 'a' }, b = { ...a, table: 'b' }, target = { connectionId: 'c', database: 'db', kind: 'table' as const, name: 'a' };
 let navigation: ReturnType<typeof import('../../src/renderer/workbenchNavigation').createWorkbenchNavigation>, workspace: typeof import('../../src/renderer/store');
 
@@ -39,7 +40,7 @@ function uncertainCallback(renameTarget = a, renameVersion = 0) {
   runInContext(ts.transpileModule('globalThis.uncertain=' + expression.getText(tree), { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText, context);
   return context.uncertain as (message: string, newName: string) => void;
 }
-beforeEach(async () => { vi.resetModules(); vi.useFakeTimers(); vi.stubGlobal('window', new EventTarget()); request.mockReset(); workspace = await import('../../src/renderer/store'); navigation = (await import('../../src/renderer/workbenchNavigation')).createWorkbenchNavigation(vi.fn()); });
+beforeEach(async () => { vi.resetModules(); vi.useFakeTimers(); vi.stubGlobal('window', new EventTarget()); request.mockReset(); saveSettings.mockReset().mockResolvedValue(undefined); workspace = await import('../../src/renderer/store'); navigation = (await import('../../src/renderer/workbenchNavigation')).createWorkbenchNavigation(vi.fn()); });
 afterEach(() => { navigation.dispose(); vi.clearAllTimers(); vi.useRealTimers(); vi.unstubAllGlobals(); });
 const completed = (from = a, to = b, identity = 'a'.repeat(64)) => ({ target: from, newTarget: to, ddlSubmitted: true, ddlCompleted: true, definitionVerified: true, after: { physicalIdentity: identity, tableId: '7', ddlHash: 'x' }, warnings: [] });
 
@@ -47,7 +48,9 @@ describe('员工2实际App完成回调的严格导航边界', () => {
   it('正对照：实际App完整回执a到b到a，同物理表的新收藏及URI可打开', async () => {
     const fixture = finishCallback(); await fixture.call(completed(), 0); await fixture.call(completed(b, a), 0);
     expect(fixture.book.snapshot.document.favorites[0].target).toMatchObject({ name: 'a' });
-    const uri = parseObjectUri(objectUri(target)); request.mockResolvedValueOnce(uri); expect(await navigation.open(uri)).toBe(true);
+    const savedBeforeOpen = saveSettings.mock.calls.length, uri = parseObjectUri(objectUri(target)); request.mockResolvedValueOnce(uri); expect(await navigation.open(uri)).toBe(true);
+    // 重命名完成已打开a；新URI复用现页，不重复投递标签身份，原即时保存仍为a。
+    expect(saveSettings).toHaveBeenCalledTimes(savedBeforeOpen); expect(saveSettings.mock.calls.at(-1)![0].tabs).toMatchObject([{ connectionId: 'c', database: 'db', table: 'a' }]);
   });
   it.each(['read-failure', 'physical-change'])('严格反例：实际Engine的%s完成结果进入App后，旧URI不能指向新建同名另一表', async kind => {
     const fixture = finishCallback(), result = structuredClone(tableRenameFailureResults[kind as keyof typeof tableRenameFailureResults]), original = structuredClone(result);
