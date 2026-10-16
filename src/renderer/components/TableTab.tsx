@@ -51,7 +51,12 @@ import { DraftHistory, draftHistoryKey } from '../draftHistory';
 import { draftHistoryZh } from '../locales/draftHistory.zh-CN';
 
 /** 输入始终保留字符串精度，失焦仅提交到本地草稿，不执行数据库写入。 */
-function TextCellEditor({ row, column, onRowChange, onClose, binary }: RenderEditCellProps<DraftRow> & { binary: boolean }) {
+function TextCellEditor({ row, column, onRowChange, onClose, binary, onEditingChange }: RenderEditCellProps<DraftRow> & { binary: boolean; onEditingChange: (editor: object, editing: boolean) => void }) {
+  const editor = useRef({}).current;
+  // 网格Enter/Escape/Tab可直接卸载输入框而不派发blur；挂载时在绘制前占门。
+  useLayoutEffect(() => { onEditingChange(editor, true); }, [editor, onEditingChange]);
+  // 被动清理晚于父页卸载标记；旧会话的清理不能释放随后挂载的新编辑器。
+  useEffect(() => () => { onEditingChange(editor, false); }, [editor, onEditingChange]);
   const value = ownCell(row.data, column.key);
   // 即使将来有额外的编辑入口，字节也只能以有界只读预览呈现，不能被转换为文本草稿。
   return <input className="grid-input" readOnly={binary} autoFocus onFocus={event => event.currentTarget.select()} defaultValue={binary ? cellPreview(value) : value === null ? '' : cellText(value)} onChange={event => { if (!binary) onRowChange({ ...row, data: { ...row.data, [column.key]: event.target.value } }); }} onBlur={() => onClose(!binary, false)} aria-label={formatText(zh.table.text001, column.key)}/>;
@@ -94,6 +99,13 @@ export function TableTab({ tab, onDesign, onTransfer, onColumnPatches, onIndexPa
   const history = useRef(new DraftHistory()).current;
   const historyEnvironment = useRef<unknown[]>([]);
   const [gridEditing, setGridEditing] = useState(false);
+  const activeGridEditor = useRef<object | null>(null);
+  /** 编辑器生命周期是占门依据；稳定回调避免每次输入都重新注册，卸载父页不再更新状态。 */
+  const onGridEditingChange = useCallback((editor: object, editing: boolean) => {
+    if (!mounted.current) return;
+    if (editing) { activeGridEditor.current = editor; setGridEditing(true); }
+    else if (activeGridEditor.current === editor) { activeGridEditor.current = null; setGridEditing(false); }
+  }, []);
   useEffect(() => () => history.clear(), [history]);
   const inputDirtyRef = useRef(false); const recordControllerRef = useRef<RecordViewController | null>(null); const rootElement = useRef<HTMLDivElement>(null);
   const selectionRef = useRef(selection); selectionRef.current = selection;
@@ -191,7 +203,7 @@ export function TableTab({ tab, onDesign, onTransfer, onColumnPatches, onIndexPa
   /** 按钮与快捷键都同步核对真实工作区、输入及模态门；历史从不领取连接或执行票据。 */
   function historyAvailable(): boolean {
     const workspace = useWorkspace.getState(), current = workspace.settings.tabs.find(item => item.id === tab.id), context = getRecordContext();
-    return mounted.current && workspace.settings.activeTabId === tab.id && !!current && workspace.connections.some(item => item.id === current.connectionId) && recordTargetKey({ connectionId: current.connectionId, database: current.database ?? '', table: current.table ?? '' }) === recordTargetKey(context.target) && (workspace.connectionVersions[current.connectionId] ?? 0) === context.connectionVersion && !blockedRef.current && !loadingCount.current && !referenceCount.current && !applyingRef.current && !preferencesLock.current && !previewingRef.current && !copyPendingRef.current && !recordReadonlyReason(context) && !record.hasInput() && !record.pending && !gridEditing && !showPreferences && !referenceDialog && !pasteInsertDialog && !document.querySelector('[role="dialog"]') && !rootElement.current?.querySelector('.grid-input');
+    return mounted.current && workspace.settings.activeTabId === tab.id && !!current && workspace.connections.some(item => item.id === current.connectionId) && recordTargetKey({ connectionId: current.connectionId, database: current.database ?? '', table: current.table ?? '' }) === recordTargetKey(context.target) && (workspace.connectionVersions[current.connectionId] ?? 0) === context.connectionVersion && !blockedRef.current && !loadingCount.current && !referenceCount.current && !applyingRef.current && !preferencesLock.current && !previewingRef.current && !copyPendingRef.current && !recordReadonlyReason(context) && !record.hasInput() && !record.pending && !gridEditing && !activeGridEditor.current && !showPreferences && !referenceDialog && !pasteInsertDialog && !document.querySelector('[role="dialog"]') && !rootElement.current?.querySelector('.grid-input');
   }
   /** 只重放本页RAM差异，不重新调用原操作；重建记录输入并撤销旧粘贴/查找/复制意图。 */
   function moveHistory(direction: 'undo' | 'redo') {
@@ -374,7 +386,7 @@ export function TableTab({ tab, onDesign, onTransfer, onColumnPatches, onIndexPa
     key: column.key, name: column.name, minWidth: 64, maxWidth: 2000, width: preferences.columns.find(item => item.name === column.key)?.width ?? 165, resizable: true, sortable: true, draggable: true,
     // 组件的editable同时控制粘贴派发；只读判断保持不变，二进制另在文本入口拦截。
     editable: row => !record.dirty && !recordReadonlyReason(getRecordContext(), row, column.key),
-    renderEditCell: props => <TextCellEditor {...props} binary={isBinaryCell(ownCell(props.row.data, column.key), info?.columns.find(item => item.name === column.key)?.type)}/>,
+    renderEditCell: props => <TextCellEditor {...props} onEditingChange={onGridEditingChange} binary={isBinaryCell(ownCell(props.row.data, column.key), info?.columns.find(item => item.name === column.key)?.type)}/>,
     renderHeaderCell: () => <span className="data-header">{info?.primaryKey.includes(column.key) && <KeyRound size={11}/>}<span>{column.name}<small className="column-type">{column.type}</small></span></span>,
     renderCell: ({ row, tabIndex }) => { const value = ownCell(row.data, column.key); return <DataTypeColor enabled={settings.dataTypeColors === true} selected={tabIndex === 0 || selectedRows.has(row.id)} value={value} type={settings.dataTypeColors === true ? catalogColorType(info?.columns, column.key) : undefined} source="catalog" className={value === null ? 'null-value' : value === undefined ? 'default-value' : ''} title={value === undefined ? zh.common.defaultValue : cellPreview(value)}>{value === undefined ? zh.common.defaultValue : cellPreview(value)}</DataTypeColor>; }
   }))], [visibleColumns, preferences, editable, info, blocked, record.dirty, externalStale, settings.dataTypeColors, settings.dataTypeColors === true ? selectedRows : null]);
@@ -556,7 +568,7 @@ export function TableTab({ tab, onDesign, onTransfer, onColumnPatches, onIndexPa
     finally { applyingRef.current = false; setApplying(false); useWorkspace.getState().setBusy(tab.id, loadingCount.current > 0 || referenceCount.current > 0 || preferencesLock.current || copyPendingRef.current); }
   }
   const historyBlocked = blocked || !editable || record.dirty || record.pending || gridEditing || showPreferences || !!referenceDialog || !!pasteInsertDialog || record.cellKey !== null || !!record.nodeInput || !!record.structureInput || settings.activeTabId !== tab.id;
-  return <div ref={rootElement} className="workspace-tab table-tab" onFocusCapture={event => { if (event.target instanceof HTMLElement && event.target.closest(".grid-input")) setGridEditing(true); }} onBlurCapture={event => { if (event.target instanceof HTMLElement && event.target.closest(".grid-input")) setGridEditing(false); }}><div className="context-bar"><span className="connection-dot" style={{ background: connection?.color }}/><strong>{connection?.name ?? zh.common.connectionDeleted}</strong><span className="breadcrumb-divider">/</span>{tab.database}<span className="breadcrumb-divider">/</span><strong>{tab.table}</strong><span className="grow"/><span className="tag">{info?.engine || zh.table.text004}</span></div><div className="toolbar"><button onClick={() => { if (canReload()) void load(); }} disabled={blocked}><RefreshCw size={14}/>{zh.common.refresh}</button><button disabled={!editable || blocked} onClick={addRow}><Plus size={14}/>{zh.common.add}</button><button aria-label={recordDuplicateZh.action} title={copyMetadataReason || (copySourceReady ? recordCopySourceZh.hint : recordDuplicateReadonlyReason(getRecordContext(), referenceRow) || recordDuplicateZh.hint)} disabled={blocked || record.dirty || !!copyMetadataReason || (!!recordDuplicateReadonlyReason(getRecordContext(), referenceRow) && !copySourceReady)} onClick={duplicateCurrentRow}><CopyPlus size={14}/>{recordDuplicateZh.action}</button>
+  return <div ref={rootElement} className="workspace-tab table-tab"><div className="context-bar"><span className="connection-dot" style={{ background: connection?.color }}/><strong>{connection?.name ?? zh.common.connectionDeleted}</strong><span className="breadcrumb-divider">/</span>{tab.database}<span className="breadcrumb-divider">/</span><strong>{tab.table}</strong><span className="grow"/><span className="tag">{info?.engine || zh.table.text004}</span></div><div className="toolbar"><button onClick={() => { if (canReload()) void load(); }} disabled={blocked}><RefreshCw size={14}/>{zh.common.refresh}</button><button disabled={!editable || blocked} onClick={addRow}><Plus size={14}/>{zh.common.add}</button><button aria-label={recordDuplicateZh.action} title={copyMetadataReason || (copySourceReady ? recordCopySourceZh.hint : recordDuplicateReadonlyReason(getRecordContext(), referenceRow) || recordDuplicateZh.hint)} disabled={blocked || record.dirty || !!copyMetadataReason || (!!recordDuplicateReadonlyReason(getRecordContext(), referenceRow) && !copySourceReady)} onClick={duplicateCurrentRow}><CopyPlus size={14}/>{recordDuplicateZh.action}</button>
 <button aria-label={draftHistoryZh.undo} title={draftHistoryZh.limit} disabled={!history.status.undo || historyBlocked} onClick={() => moveHistory("undo")}>{draftHistoryZh.undo} ({history.status.undo})</button>
 <button aria-label={draftHistoryZh.redo} title={draftHistoryZh.limit} disabled={!history.status.redo || historyBlocked} onClick={() => moveHistory("redo")}>{draftHistoryZh.redo} ({history.status.redo})</button>
 <button aria-label={pasteInsertZh.action} disabled={!editable || blocked || record.dirty || !!pasteInsertDialog} onClick={openPasteInsert}>{pasteInsertZh.action}</button>
