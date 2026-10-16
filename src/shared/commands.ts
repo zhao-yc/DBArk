@@ -2,6 +2,7 @@ import type { Command } from './contracts';
 
 /** 预加载白名单不引入校验器或 Node 依赖；新增公开命令必须在编译时补齐。 */
 export const publicCommands: Record<Command, true> = {
+  'tasks.cancelState': true,
   'schema.tableDefaultEncoding.get': true, 'schema.tableDefaultEncoding.preview': true, 'schema.tableDefaultEncoding.apply': true, 'schema.tableDefaultEncoding.release': true,
   'schema.tableRename.get': true, 'schema.tableRename.preview': true, 'schema.tableRename.apply': true, 'schema.tableRename.release': true,
   'schema.tableAutoIncrement.get': true, 'schema.tableAutoIncrement.preview': true, 'schema.tableAutoIncrement.apply': true, 'schema.tableAutoIncrement.release': true,
@@ -25,6 +26,7 @@ export const publicCommands: Record<Command, true> = {
   'query.parameterNames': true, 'query.executeParameterized': true, 'query.sessionState': true,'query.completionState':true,
   'query.temporaryState':true,'query.temporaryCompletion':true,'query.temporaryRead':true,
   'query.exportStream': true,
+  'table.applyReceipt.list': true, 'table.applyReceipt.detail': true,
   'table.page': true, 'table.copySourceRead': true, 'table.copySourceRelease': true, 'table.referencePage': true, 'table.preview': true, 'table.apply': true, 'schema.preview': true, 'schema.apply': true,
   'schema.columns.get': true, 'schema.columns.preview': true, 'schema.columns.apply': true, 'schema.columns.release': true,
   'schema.indexes.get': true, 'schema.indexes.preview': true, 'schema.indexes.apply': true, 'schema.indexes.release': true,

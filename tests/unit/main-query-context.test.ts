@@ -14,7 +14,7 @@ function fixture(){
   const event=source.slice(source.indexOf('function taskEvent('),source.indexOf('/** 文件只能'));
   const dispatch=source.slice(source.indexOf('async function dispatch('),source.indexOf('/** 按平台生成中文原生菜单'));
   const entries:HistoryEntry[]=[],request=vi.fn<(...args:any[])=>Promise<any>>(async()=>({}));
-  const context=createContext({SavedQuerySearchCancelled,savedQuerySearches:{has:()=>false},savedQueryPages:undefined,historyPages:undefined,Date,Map,Set,Error,randomUUID,queryDatabasePatch,persistedQueryError,persistedTaskMessage,window:undefined,
+  const context=createContext({ tableApplyReceipts: undefined,SavedQuerySearchCancelled,savedQuerySearches:{has:()=>false},savedQueryPages:undefined,historyPages:undefined,Date,Map,Set,Error,randomUUID,queryDatabasePatch,persistedQueryError,persistedTaskMessage,window:undefined,
     tasks:new Map(),pendingQueryHistory:new Map(),completionTasks:new Set(),preparingTasks:new Map(),exportProgress:new Map(),structureProgress:new Map(),structureTokens:new Map(),lastPersist:new Map(),files:new Map(),
     sessions:new Map([['s1',{connectionId:'c1',database:'旧库'}],['s2',{connectionId:'c2',database:'更旧的库'}]]),connectionConfig:{assertAvailable(){}},
     store:{saveTask(){},addHistory(entry:HistoryEntry){entries.push(structuredClone(entry));}},persistAuxiliary:(action:()=>void)=>action(),broker:{request},

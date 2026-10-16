@@ -34,6 +34,8 @@ import { tableCommentZh } from '../locales/tableComment.zh-CN';
 import { tableDefaultEncodingZh } from '../locales/tableDefaultEncoding.zh-CN';
 import { columnPageRefreshAction } from '../columnPatchServices';
 import { useRecordViews, type RecordViewController } from '../hooks/useRecordViews';
+import { TableApplyReceiptsDialog } from './TableApplyReceiptsDialog';
+import { tableApplyReceiptZh } from '../locales/tableApplyReceiptZh';
 import { acceptGridDrafts, captureRecordPagePreview, consumeRecordPagePreview, recordReadonlyReason, recordTargetKey, type RecordContext, type RecordPagePreview } from '../recordViews';
 import { RecordEditorDialogs, RecordFormPanel } from './RecordFormPanel';
 import { recordViewZh } from '../locales/recordViews.zh-CN';
@@ -82,8 +84,16 @@ export function TableTab({ tab, onDesign, onTransfer, onColumnPatches, onIndexPa
   const pasteInsertEnvironment = useRef<unknown[]>([]);
   useEffect(() => () => { pasteInsertIntent.current?.invalidate(); }, []);
   const [busy, setBusy] = useState(false); const [error, setError] = useState(''); const [selection, setSelection] = useState<{ rowId: string; key: string }>();
-  const [preview, setPreview] = useState<{ view: SqlPreview; snapshot: RecordPagePreview } | null>(null); const [previewing, setPreviewing] = useState(false); const previewingRef = useRef(false); const [applying, setApplying] = useState(false);
+  const [preview, setPreview] = useState<{ view: SqlPreview & { previewId?: string; previewExpiresAt?: string }; snapshot: RecordPagePreview } | null>(null); const [previewing, setPreviewing] = useState(false); const previewingRef = useRef(false); const [applying, setApplying] = useState(false);
   const [applyTaskId, setApplyTaskId] = useState('');
+  const [lastReceiptId, setLastReceiptId] = useState(''), [showReceipt, setShowReceipt] = useState(false), [commitLocked, setCommitLocked] = useState(false);
+  const receiptTaskRef = useRef('');
+  // 主进程关联编号用于展示；提交事实仍只来自受校验的独立回执。
+  useEffect(() => window.dbark?.onTask(event => {
+    if (event.taskId !== receiptTaskRef.current || !event.tableApply) return;
+    setLastReceiptId(event.tableApply.operationId);
+    if (event.tableApply.evidence.commitMayHaveBeenSent) setCommitLocked(true);
+  }), []);
   const [referenceDialog, setReferenceDialog] = useState<{ snapshot: ReferenceSnapshot; keys: ForeignKeyInfo[]; mode: 'choose' | 'browse' } | null>(null);
   const [referenceBusy, setReferenceBusy] = useState(false); const referenceCount = useRef(0);
   const grid = useRef<DataGridHandle>(null); const [showFind, setShowFind] = useState(false); const [showPreferences, setShowPreferences] = useState(false);
@@ -562,13 +572,17 @@ export function TableTab({ tab, onDesign, onTransfer, onColumnPatches, onIndexPa
     // 投递机会一旦消耗便不再信任执行前历史；失败、取消或未知结果也不能靠重做重放。
     history.clear();
     applyingRef.current = true; blockedRef.current = true; setApplying(true); setError(''); useWorkspace.getState().setBusy(tab.id, true);
-    const taskId = uid(); setApplyTaskId(taskId);
-    try { const result = await invoke('table.apply', { ...base, changes: fixedChanges, taskId }); setPreview(null); useWorkspace.getState().notify(formatText(zh.table.text003, result.affectedRows)); await load(); }
-    catch (reason) { setError(errorMessage(reason)); }
+    const taskId = uid(); setApplyTaskId(taskId); receiptTaskRef.current = taskId; setLastReceiptId(''); setCommitLocked(false);
+    try { const result = await invoke('table.apply', { ...base, changes: fixedChanges, taskId, previewId: preview.view.previewId }); setLastReceiptId(result.receiptId ?? ''); setPreview(null); useWorkspace.getState().notify(result.receiptSaved === false ? tableApplyReceiptZh.committedRecordFailed : result.cleanupWarning ? tableApplyReceiptZh.committedCleanupWarning : formatText(zh.table.text003, result.affectedRows), result.receiptSaved === false || result.cleanupWarning === true); await load(); }
+    catch (reason) {
+      setError(errorMessage(reason));
+      // 查询本地记录，不连接数据库、不重放失败或未知批次。
+      try { const records = await invoke('table.applyReceipt.list', { taskId }); if (records.items[0]) setLastReceiptId(records.items[0].operationId); } catch { /* 原数据操作错误保持；任务中心仍可手动查看。 */ }
+    }
     finally { applyingRef.current = false; setApplying(false); useWorkspace.getState().setBusy(tab.id, loadingCount.current > 0 || referenceCount.current > 0 || preferencesLock.current || copyPendingRef.current); }
   }
   const historyBlocked = blocked || !editable || record.dirty || record.pending || gridEditing || showPreferences || !!referenceDialog || !!pasteInsertDialog || record.cellKey !== null || !!record.nodeInput || !!record.structureInput || settings.activeTabId !== tab.id;
-  return <div ref={rootElement} className="workspace-tab table-tab"><div className="context-bar"><span className="connection-dot" style={{ background: connection?.color }}/><strong>{connection?.name ?? zh.common.connectionDeleted}</strong><span className="breadcrumb-divider">/</span>{tab.database}<span className="breadcrumb-divider">/</span><strong>{tab.table}</strong><span className="grow"/><span className="tag">{info?.engine || zh.table.text004}</span></div><div className="toolbar"><button onClick={() => { if (canReload()) void load(); }} disabled={blocked}><RefreshCw size={14}/>{zh.common.refresh}</button><button disabled={!editable || blocked} onClick={addRow}><Plus size={14}/>{zh.common.add}</button><button aria-label={recordDuplicateZh.action} title={copyMetadataReason || (copySourceReady ? recordCopySourceZh.hint : recordDuplicateReadonlyReason(getRecordContext(), referenceRow) || recordDuplicateZh.hint)} disabled={blocked || record.dirty || !!copyMetadataReason || (!!recordDuplicateReadonlyReason(getRecordContext(), referenceRow) && !copySourceReady)} onClick={duplicateCurrentRow}><CopyPlus size={14}/>{recordDuplicateZh.action}</button>
+  return <div ref={rootElement} className="workspace-tab table-tab"><div className="context-bar"><span className="connection-dot" style={{ background: connection?.color }}/><strong>{connection?.name ?? zh.common.connectionDeleted}</strong><span className="breadcrumb-divider">/</span>{tab.database}<span className="breadcrumb-divider">/</span><strong>{tab.table}</strong>{lastReceiptId && <button disabled={applying} onClick={() => setShowReceipt(true)}>{tableApplyReceiptZh.openCurrent}</button>}<span className="grow"/><span className="tag">{info?.engine || zh.table.text004}</span></div><div className="toolbar"><button onClick={() => { if (canReload()) void load(); }} disabled={blocked}><RefreshCw size={14}/>{zh.common.refresh}</button><button disabled={!editable || blocked} onClick={addRow}><Plus size={14}/>{zh.common.add}</button><button aria-label={recordDuplicateZh.action} title={copyMetadataReason || (copySourceReady ? recordCopySourceZh.hint : recordDuplicateReadonlyReason(getRecordContext(), referenceRow) || recordDuplicateZh.hint)} disabled={blocked || record.dirty || !!copyMetadataReason || (!!recordDuplicateReadonlyReason(getRecordContext(), referenceRow) && !copySourceReady)} onClick={duplicateCurrentRow}><CopyPlus size={14}/>{recordDuplicateZh.action}</button>
 <button aria-label={draftHistoryZh.undo} title={draftHistoryZh.limit} disabled={!history.status.undo || historyBlocked} onClick={() => moveHistory("undo")}>{draftHistoryZh.undo} ({history.status.undo})</button>
 <button aria-label={draftHistoryZh.redo} title={draftHistoryZh.limit} disabled={!history.status.redo || historyBlocked} onClick={() => moveHistory("redo")}>{draftHistoryZh.redo} ({history.status.redo})</button>
 <button aria-label={pasteInsertZh.action} disabled={!editable || blocked || record.dirty || !!pasteInsertDialog} onClick={openPasteInsert}>{pasteInsertZh.action}</button>
@@ -577,6 +591,7 @@ export function TableTab({ tab, onDesign, onTransfer, onColumnPatches, onIndexPa
     {showPreferences && <TablePreferencesDialog preferences={preferences} pending={preferencesPending} dirty={preferencesDirty} error={preferencesError} onChange={updatePreferences} onSave={() => void savePreferences()} onReset={() => void savePreferences(true)} onClose={() => { if (!preferencesLock.current) setShowPreferences(false); }}/ >}
     {referenceDialog && <ForeignKeyDialog base={base} snapshot={referenceDialog.snapshot} keys={referenceDialog.keys} mode={referenceDialog.mode} onApply={applyReference} onClose={() => setReferenceDialog(null)} onActivity={referenceActivity}/ >}
     <RecordEditorDialogs editor={record} context={getRecordContext()} rows={rows}/>
-    {preview && <Modal title={zh.table.text031} wide onClose={() => { if (!applying) setPreview(null); }}><div className="modal-content"><p>{zh.table.text032}{preview.snapshot.changes.length}{zh.table.text033}</p>{preview.view.warnings.map(warning => <p className="warning-text" key={warning}>{warning}</p>)}<SqlEditor value={preview.view.sql} height={280} readOnly/><ErrorBox message={error}/>{preview.snapshot.attempted && !applying && <p className="warning-text">{recordViewZh.applyAttempted}</p>}</div><footer className="modal-footer"><button disabled={applying} onClick={() => setPreview(null)}>{zh.common.backToEdit}</button><span className="grow"/>{applying && <button onClick={() => void invoke('query.cancel', { taskId: applyTaskId }).catch(reason => setError(errorMessage(reason)))}>{zh.table.text034}</button>}<button className="primary" disabled={applying || preview.snapshot.attempted} onClick={() => void apply()}>{applying ? <Spinner text={zh.table.text035}/> : zh.common.confirmApply}</button></footer></Modal>}
+    {preview && <Modal title={zh.table.text031} wide onClose={() => { if (!applying) setPreview(null); }}><div className="modal-content"><p>{zh.table.text032}{preview.snapshot.changes.length}{zh.table.text033}</p><p className="muted">{tableApplyReceiptZh.previewPrivacy}</p>{commitLocked && applying && <p>{tableApplyReceiptZh.phases.committing}</p>}{preview.view.warnings.map(warning => <p className="warning-text" key={warning}>{warning}</p>)}<SqlEditor value={preview.view.sql} height={280} readOnly/><ErrorBox message={error}/>{preview.snapshot.attempted && !applying && <p className="warning-text">{recordViewZh.applyAttempted}</p>}</div><footer className="modal-footer"><button disabled={applying} onClick={() => setPreview(null)}>{zh.common.backToEdit}</button><span className="grow"/>{applying && !commitLocked && <button onClick={() => void invoke('query.cancel', { taskId: applyTaskId }).catch(reason => setError(errorMessage(reason)))}>{zh.table.text034}</button>}<button className="primary" disabled={applying || preview.snapshot.attempted} onClick={() => void apply()}>{applying ? <Spinner text={zh.table.text035}/> : zh.common.confirmApply}</button></footer></Modal>}
+    {showReceipt && <TableApplyReceiptsDialog initialOperationId={lastReceiptId} onClose={() => setShowReceipt(false)}/>}
   </div>;
 }

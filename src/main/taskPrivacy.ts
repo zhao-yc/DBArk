@@ -2,6 +2,7 @@ import type { Command, TaskEvent } from '../shared/contracts';
 
 /** 服务端错误可能展开参数值；概要记录仅保存进度，不将错误原文写入本地库。 */
 export function persistedTaskMessage(command: string, event: TaskEvent): string {
+  if (command === 'table.apply') return event.status === 'completed' ? '数据提交任务已结束；确切提交结果请查看提交记录，SQL、字段值和错误原文未保存。' : event.status === 'running' ? '正在提交数据；SQL及字段值不写入任务概要。' : '数据提交任务未正常完成；请查看提交记录核对已确认或未知结果，不要重复执行原批次。';
   if (command.startsWith('excel.')) return event.status === 'completed' ? 'Excel 文件任务已完成；文件内容与字段值未保存到任务摘要。' : event.status === 'running' ? '正在处理 Excel 文件；进度与详细信息请在当前窗口核对。' : 'Excel 文件任务未完成；已提交批次与错误详情请在当前窗口核对，字段值和错误原文未保存。';
   if(command.startsWith('schema.compare'))return '结构比较仅供只读审查，尚未同步；原定义、默认值、注释和错误原文未保存。';
   if(command.startsWith('search.savedQueries'))return event.status==='completed'?'本地保存查询搜索批次已结束；搜索文字、正文、命中和错误原文未保存。':event.status==='running'?'正在搜索本地保存查询；正文及命中只在当前窗口保留。':'本地保存查询搜索未完成；搜索文字、正文、命中和错误原文未保存，请在当前窗口核对。';

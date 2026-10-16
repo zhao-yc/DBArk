@@ -140,7 +140,7 @@ describe('无秘密连接交换', () => {
     await expect(LocalStore.open(file, wasm, protector)).rejects.toThrow('修改未保存'); expect(readFileSync(file)).toEqual(before);
     if (lstatSync(blocker).isSymbolicLink() || realpathSync(blocker) !== join(realpathSync(verifiedDirectory()), 'local.sqlite.tmp')) throw new Error('拒绝清理非本例故障目录'); rmdirSync(blocker);
     store = await LocalStore.open(file, wasm, protector); const migrated = new SQL.Database(readFileSync(file));
-    expect(migrated.exec('PRAGMA user_version')[0].values[0][0]).toBe(5); for (const [name, rows] of expected) expect(migrated.exec(`SELECT * FROM ${name}`)).toEqual(rows); migrated.close(); expect(store.resolveConnection(original.id).password).toBe(original.password);
+    expect(migrated.exec('PRAGMA user_version')[0].values[0][0]).toBe(6); for (const [name, rows] of expected) expect(migrated.exec(`SELECT * FROM ${name}`)).toEqual(rows); migrated.close(); expect(store.resolveConnection(original.id).password).toBe(original.password);
   });
   it('预算边界允许完整 500 条和恰好 2 MiB 文件，第五份预览淘汰最旧令牌', async () => {
     const profiles = Array.from({ length: 500 }, (_, index) => ({ ...exportConnectionProfile(original), id: String(index) }));

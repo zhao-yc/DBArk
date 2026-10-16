@@ -1,3 +1,6 @@
+import { applyTableTransaction, emptyTableApplyEvidence } from './tableApplyTransaction';
+import type { TableApplyEvidence } from '../shared/tableApplyReceipt';
+import type { TableApplyBinding } from '../shared/tableApplyReceipt';
 import { randomUUID } from 'node:crypto';
 import { SchemaCompareTasks } from './schemaCompareTasks';
 import { readSchemaComparisonTarget } from './schemaCompare';
@@ -53,6 +56,7 @@ interface Session { id: string; connectionId: string; managed: ManagedConnection
 interface RunningTask {
   id: string; managed: ManagedConnection; cancelled: boolean; inFlight: boolean; generation: number;
   cancelPending?: Promise<void>; serverStatus?: number; done: Promise<void>; finish(): void;
+  tableApply?: TableApplyEvidence;
   queryExport?: QueryExportProgress; fileCommitStarted?: boolean;
 }
 interface ResultBudget { remainingRows: number; remainingBytes: number; remainingResults: number; }
@@ -556,18 +560,23 @@ export class Engine {
     this.emit({ taskId: id, status: 'running', progress: 0, message: label, executionDatabase:queryDatabaseFromSession(completionSessionState(managed,false)) });
     try {
       const result = await action(task);
-      this.checkCancelled(task);
-      await task.cancelPending;
+      if (!task.tableApply?.commitAcknowledged) this.checkCancelled(task);
+      if (task.tableApply?.commitAcknowledged) await task.cancelPending?.catch(() => undefined); else await task.cancelPending;
       const errors = (result as { errors?: string[] } | undefined)?.errors;
       this.emit({ taskId: id, status: errors?.length ? 'failed' : 'completed', progress: 100, message: errors?.length ? errors[0] : `${label}完成`, ...(task.queryExport ? { queryExport: { ...task.queryExport } } : {}) });
       return result;
     } catch (error) {
+      if (task.tableApply?.commitAcknowledged) {
+        await task.cancelPending?.catch(() => undefined);
+        this.emit({ taskId: id, status: 'completed', progress: 100, message: '服务器已确认目标事务提交；请查看提交记录' });
+        return { affectedRows: task.tableApply.serverReportedRows } as T;
+      }
       await task.cancelPending;
       this.emit({ taskId: id, status: task.cancelled && !task.fileCommitStarted ? 'cancelled' : 'failed', progress: 0, message: this.errorMessage(error), ...(task.queryExport ? { queryExport: { ...task.queryExport } } : {}) });
       throw error;
     } finally {
       // 取消连接仍在建立时，不能放开会话给下一条查询，以免 KILL 误伤复用线程。
-      await task.cancelPending;
+      if (task.tableApply?.commitAcknowledged) await task.cancelPending?.catch(() => undefined); else await task.cancelPending;
       this.tasks.delete(id); task.finish();
     }
   }
@@ -693,7 +702,7 @@ export class Engine {
     if (this.resultFiles.has(id)) { this.resultFiles.cancel(id); return; }
     const task = this.tasks.get(id);
     if (!task) return;
-    if (task.fileCommitStarted) return;
+    if (task.fileCommitStarted || task.tableApply?.commitMayHaveBeenSent) return;
     task.cancelled = true;
     return this.stopTaskCommand(task);
   }
@@ -738,12 +747,13 @@ export class Engine {
   }
 
   /** 参数化短操作也登记查询代次，以便导入和批量修改在同样的取消边界内运行。 */
-  private async statement<T = ResultSetHeader>(task: RunningTask, sql: string, params: CellValue[] = []): Promise<T> {
+  private async statement<T = ResultSetHeader>(task: RunningTask, sql: string, params: CellValue[] = [], acknowledged?: (result: T) => void): Promise<T> {
     this.checkCancelled(task);
     task.inFlight = true; task.generation++;
     try {
       const rows = (await execute<T>(task.managed, sql, params.map(deserializeCell))).rows;
       if (rows && typeof rows === 'object' && 'serverStatus' in rows) task.managed.serverStatus = task.serverStatus = Number(rows.serverStatus);
+      acknowledged?.(rows);
       return rows;
     }
     finally { task.inFlight = false; await task.cancelPending; }
@@ -996,23 +1006,21 @@ export class Engine {
 
   /** 任一更新/删除未精确命中一行即视为冲突，整批回滚；FOUND_ROWS 允许原值回写。 */
   private async applyChanges(task: RunningTask, input: Input): Promise<{ affectedRows: number }> {
-    const info = await metadata.tableInfo(task.managed, input.database, input.table);
-    const preview = buildChanges(info, input.changes as RowChange[]);
-    await this.statement(task, 'START TRANSACTION');
-    let affectedRows = 0;
-    try {
-      for (const statement of preview.statements) {
-        const result = await this.statement(task, statement.sql, statement.params);
-        if (result.affectedRows !== 1) throw new Error('数据已被其他连接修改、删除或行定位不唯一；整批修改已回滚，请刷新数据');
-        affectedRows += result.affectedRows;
-      }
-      this.checkCancelled(task);
-      await this.statement(task, 'COMMIT');
-      return { affectedRows };
-    } catch (error) {
-      if (!task.managed.broken) await execute(task.managed, 'ROLLBACK').catch(() => undefined);
+    const evidence = task.tableApply = emptyTableApplyEvidence(), binding = input.tableApplyBinding as TableApplyBinding | undefined;
+    let info: import('../shared/contracts').TableInfo;
+    try { info = await metadata.tableInfo(task.managed, input.database, input.table); }
+    catch (error) {
+      if (binding) this.emit({ taskId: task.id, status: 'running', progress: 0, message: '提交前检查未完成', tableApply: { operationId: binding.operationId, sequence: 1, phase: 'terminal', reason: 'validation', evidence } });
       throw error;
     }
+    return applyTableTransaction(info, input.changes, {
+      evidence, operationId: binding?.operationId, expectedPlan: binding?.plan,
+      checkCancelled: () => this.checkCancelled(task), broken: () => task.managed.broken, cancelled: () => task.cancelled,
+      send: (sql, params, ack) => this.statement(task, sql, params, ack),
+      lockInfo: async () => { await this.statement(task, 'SELECT 1 FROM ' + qualified(input.database, input.table) + ' LIMIT 0'); return metadata.tableInfo(task.managed, input.database, input.table); },
+      rollback: async () => (await execute<ResultSetHeader>(task.managed, 'ROLLBACK')).rows,
+      emit: progress => this.emit({ taskId: task.id, status: 'running', progress: 0, message: progress.phase === 'committing' ? '正在确认提交，暂不能取消' : '数据提交结果请查看提交记录', tableApply: progress })
+    });
   }
 
   /** Excel 在写入前重验完整工作表、指纹与目标映射，再复用文件导入的分批事务和参数绑定。 */
