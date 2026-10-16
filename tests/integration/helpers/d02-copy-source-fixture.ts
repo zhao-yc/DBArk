@@ -152,7 +152,8 @@ export async function withD02CopyCase(config: D02CopyConfig, action: (context: D
           release: async () => { d02Fact(source.copySource?.status === 'ready', 'D02管理员旧来源未真实签发'); await engine.handle('table.copySourceRelease', validateCommand('table.copySourceRelease', { connectionId: previous.id, pageRef: source.copySource.pageRef }) as object); },
         };
       },
-      observe: () => sql(`SELECT CAST(id AS CHAR) AS id,note,CAST(hidden_big AS CHAR) AS big,CAST(hidden_decimal AS CHAR) AS amount,DATE_FORMAT(hidden_stamp,'%Y-%m-%d %H:%i:%s.%f') AS stamp,hidden_null AS nullable,HEX(hidden_blob) AS blob,OCTET_LENGTH(hidden_blob) AS blobBytes,computed FROM ${table} ORDER BY id`),
+      // BLOB是MySQL 8.4保留字；引用别名并保留观察结果原blob键。
+      observe: () => sql(`SELECT CAST(id AS CHAR) AS id,note,CAST(hidden_big AS CHAR) AS big,CAST(hidden_decimal AS CHAR) AS amount,DATE_FORMAT(hidden_stamp,'%Y-%m-%d %H:%i:%s.%f') AS stamp,hidden_null AS nullable,HEX(hidden_blob) AS \`blob\`,OCTET_LENGTH(hidden_blob) AS blobBytes,computed FROM ${table} ORDER BY id`),
       openBlocker: async () => verify(async () => { const blocker = await connect(admin); connections.add(blocker); return blocker; }),
       statement: async (connection, text) => { try { await fixtureQuery(connection, text); } catch (error) { preserve(error); throw d02Failure('D02锁连接操作失败，未重放', error); } },
       driverIds: () => [...ids].filter(id => id !== observer?.connection.threadId), driverCount: () => drivers.size, assertGone,

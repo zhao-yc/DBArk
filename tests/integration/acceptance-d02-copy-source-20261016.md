@@ -81,4 +81,12 @@ CREATE/GRANT或其它夹具写操作响应未知，不重放、不自动DROP；�
 
 ## 本片交付证据与未验边界
 
+### run895观察SQL别名修正
+
+ROOT的run895在首例观察快照时返回`ER_PARSE_ERROR/1064`并永久保留现场，0项通过、1项失败，其余非MDL例未执行，MDL单独跳过。ROOT的run897只读常量探针证实：`SELECT HEX(0) AS blob`失败，引用别名后成功；[MySQL 8.4官方保留字表](https://dev.mysql.com/doc/refman/8.4/en/keywords.html)将BLOB列为保留字。本次仅将观察SQL的该别名改为反引号引用，返回键仍为`blob`，用例字段、断言、期限和全部保护门不变。
+
+已静态检查本夹具及八项入口的其它SQL别名：`alive, allowed, amount, big, blobBytes, comment, db, enabled, extra, grantable, id, micros, name, names, nullable, os, owner, privilege, roles, stamp, status, uuid, version`均未命中该官方8.4保留字表；CAST类型CHAR/UNSIGNED、生成列表达式及TypeScript类型断言不作为SQL别名。此检查不代表完整SQL语法或实库验收通过。
+
+新增两项纯反例实际执行完整夹具的`observe()`，合成端口独立拒绝未引用保留字BLOB，并保留结果原`blob`键；另注入一次1064后恢复读取，确认永久latch仍禁止所有DROP。相同新反例在冻结`fa35eb4`上均失败，修后总48项纯测试及类型检查通过，默认8项跳过、收集8项定义。证据保留于本普通克隆`.cache/d02-observe-alias-fa35eb4/`。作者未连接数据库、重跑实际用例、读取privateenv/CA/key或清理原库；旧残留仅由ROOT独立核归属处理，MDL仍待验。
+
 作者证据留在本普通克隆`.cache/d02-copy-source-integration-8eb9775/`：纯策略、类型、默认8项跳过、8项list及产品blob一致。上述不算实库通过。真实权限、精度、并发、TABLE_ID、五分钟到期、MDL取消、TLS和清理必须由ROOT实际执行后另记端口/UUID、源码SHA、结果和残留边界；有跳过、未跑或清理失败不能标全通过。
