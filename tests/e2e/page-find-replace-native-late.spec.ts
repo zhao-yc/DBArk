@@ -59,12 +59,12 @@ async function holdPreview(value = 'NEW') {
 function promptWitness(state: NativeFindMessageSummary, point: 'terminatedAt' | 'deliveredAt') {
   expect(state.sentAt).toBeDefined(); expect(state[point]).toBeDefined(); expect(state[point]! - state.sentAt!, '本例证据窗口过长，不能排除运行超时').toBeLessThan(1000);
 }
-/** 先验证真实终止/未终止条件，再交付缓存的原生事件；不合成终止确认Promise。 */
+/** 先验证真实终止/未终止条件，交付后所有路径均核原事件时钟；不合成终止确认Promise。 */
 async function releaseOriginal(held: NativeFindMessageSummary, cancelled: boolean) {
   if (cancelled) { await expect.poll(async () => (await workers())[held.id].nativeTerminated).toBe(true); promptWitness((await workers())[held.id], 'terminatedAt'); }
   else expect((await workers())[held.id].nativeTerminated).toBe(false);
   await page.evaluate(id => (window as ProbeWindow).__d06NativeMessages.release(id), held.id);
-  if (!cancelled) promptWitness((await workers())[held.id], 'deliveredAt');
+  promptWitness((await workers())[held.id], 'deliveredAt');
   await expect.poll(async () => (await workers())[held.id].nativeTerminated).toBe(true); expect((await workers())[held.id].terminateCalls).toBe(1);
   await page.evaluate(() => new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))));
 }

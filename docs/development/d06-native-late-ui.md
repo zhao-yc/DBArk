@@ -10,7 +10,7 @@
 
 `terminate()` 实际调用原生方法，原样返回其结果，只旁观时间和次数。此版本不合成Promise、不延迟或伪造终止确认，也不把调用原生terminate称为测得操作系统线程/内存回收确认。非目标Worker保持原行为。测试收尾只终止本例创建且尚未停止的线程，并恢复原Worker。
 
-每个主要负例先确认实际Worker已算出预期计划且尚未交付/终止，再通过输入、组合DOM事件、网格点击或翻页产生新意图。实际发送/交付/终止采用浏览器performance时间戳；必须在发送后1秒内交付原消息，或观察到意图取消触发的实际终止，否则用例失败。这是新用例的证据窗口，早于产品原1.5秒期限，不能把超时当作意图撤销成功；产品8秒启动、1.5秒运行和旧E2E期限均未改。
+每个主要负例先确认实际Worker已算出预期计划且尚未交付/终止，再通过输入、组合DOM事件、网格点击或翻页产生新意图。实际发送/交付/终止采用浏览器performance时间戳；所有路径都必须在发送后1秒内实际交付原消息。取消路径还必须先在发送后1秒内观察到意图取消触发的实际终止，任一条件未满足即失败。这是新用例的证据窗口，早于产品原1.5秒期限，不能把超时当作意图撤销成功；产品8秒启动、1.5秒运行和旧E2E期限均未改。
 
 草稿通过实际Zustand subscribe只读旁观dirtyTabs，结合完整网格原值、0行修改、0次脏真值通知和清洁到脏转换判断旧命令没有造成变化；不替换setRows、setDirty、React hooks或最终应用函数。通知数量不冒称setRows精确调用次数，也不证明任意同值内部赋值从未执行。各场景最后由实际替换输入发出新明确命令，要求真实Worker的新结果成功形成本地草稿。
 
@@ -47,3 +47,13 @@ node node_modules/@playwright/test/cli.js test tests/e2e/page-find-replace-nativ
 新消息门4项纯单元仅用端口哨兵验证事件/对象身份、请求参数、原生终止返回值、错误保持和收尾隔离，不把这些哨兵称为真实Worker计算证据。相关5个文件75项通过，类型检查通过，生产构建通过（31.17秒，保留既有第三方注释及大分块提示）；新文件仅收集8项，JSON中8项expectedStatus均为skipped，未执行测试体。收集JSON在本克隆忽略目录 `.cache/d06-native-late-list.json`，构建日志为 `.cache/d06-native-late-build.log`。
 
 ROOT后续在独占原生窗口、清除实库环境后，单独启用新门并运行新文件；员工5本轮只执行上述纯检查。未启动GUI、Vite服务、200、剪贴板、SSH或Docker，未修改生产逻辑、预算源码、已有夹具、旧用例ID或期限，也未覆盖原c5或23证据。
+
+## 交付时钟断言窄修复
+
+2026-10-16，独立分支 `codex/d06-native-late-clock-fix-20261016`，直接父为原准备提交 `cf91d3ee13e06a61559ead808811489bccf1e31f`。员工1的严格反例证明：原取消路径在发送后200毫秒实际终止、2500毫秒交付原事件时仍可通过，缺少的是交付证据窗口断言，不代表产品取消失败。此补丁仅去掉交付检查的未取消条件，使所有路径统一检查 `deliveredAt - sentAt < 1000`；取消路径原有 `terminatedAt - sentAt < 1000`、原生方法/原事件及产品1.5秒期限均保持。
+
+本次从员工1原严格探针按AST原样提取 `expected`、`expected.poll` 和 `run` 受控端口，分别执行固定cf91及本补丁实际E2E中的 `promptWitness`、`releaseOriginal`，没有复制或重写待测断言。原四个输入均复验：cf91取消路径2500毫秒仍通过，本补丁两种路径2500毫秒都被拒绝，300毫秒都保持通过；额外边界1000毫秒两种路径均拒绝，999毫秒均通过。探针只验证时序断言控制流，没有运行真实Worker或产品匹配。原探针、基线源码和新结果保存在本克隆忽略目录 `.cache/d06-native-late-clock-fix/`，原cf91及审查反例不覆盖。
+
+实际命令为 `node .cache/d06-native-late-clock-fix/probe.cjs`、`node .cache/d06-native-late-clock-fix/checks.cjs type` 和 `node .cache/d06-native-late-clock-fix/checks.cjs list`。类型命令实际调用 `node node_modules/typescript/bin/tsc --noEmit`，退出0。收集命令实际调用官方Playwright CLI对本spec执行 `--list --reporter=json`：默认和启用 `DBARK_D06_NATIVE_LATE_UI=1` 均发现8项、0错误、0实际结果，默认8项跳过；未执行测试体、Vite、GUI或200。上文75项纯单元和构建是原cf91准备时的验证，本窄补丁未重跑或追加其通过数。
+
+ROOT应按此窄修复的新SHA独占重跑8项原生GUI，保留旧run679及原始时钟证据，不能将旧通过记录回写成已经执行新交付断言。
