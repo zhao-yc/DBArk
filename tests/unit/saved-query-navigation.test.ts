@@ -11,7 +11,7 @@ function fixture(value=source(),modelText=value.sql){
  let current:SavedQueryNavigationIdentity|undefined=identity(value),version=1,text=modelText,disposed=false;
  const events={content:new Set<()=>void>(),model:new Set<()=>void>(),dispose:new Set<()=>void>(),editorDispose:new Set<()=>void>()};
  const listen=(event:keyof typeof events,callback:()=>void)=>{events[event].add(callback);return{dispose:()=>events[event].delete(callback)};};
- const model={getValue:()=>text,getVersionId:()=>version,isDisposed:()=>disposed,getPositionAt:(offset:number)=>({lineNumber:1,column:offset+1}),onDidChangeContent:(callback:()=>void)=>listen('content',callback),onWillDispose:(callback:()=>void)=>listen('dispose',callback)};
+ const model={getValue:()=>text,getVersionId:()=>version,isDisposed:()=>disposed,getPositionAt:(offset:number)=>({lineNumber:1,column:offset+1}),validatePosition:(value:monaco.IPosition)=>value,getOffsetAt:(value:monaco.IPosition)=>value.column-1,validateRange:(value:monaco.IRange)=>value,onDidChangeContent:(callback:()=>void)=>listen('content',callback),onWillDispose:(callback:()=>void)=>listen('dispose',callback)};
  let activeModel:unknown=model;
  const decorations={set:vi.fn(),clear:vi.fn()};
  const editor={getModel:()=>activeModel,createDecorationsCollection:vi.fn(()=>decorations),onDidChangeModel:(callback:()=>void)=>listen('model',callback),onDidDispose:(callback:()=>void)=>listen('editorDispose',callback),setPosition:vi.fn(),revealPositionInCenter:vi.fn(),focus:vi.fn()};
