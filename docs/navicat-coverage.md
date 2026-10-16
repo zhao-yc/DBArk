@@ -8,7 +8,7 @@
 
 ## P0：日常流程
 
-0.18 开发验收补充：[SQL 补全 22 项](../tests/integration/acceptance-v018-caret-input-20261016.md)及[数据表与记录视图补充](../tests/integration/acceptance-v018-grid-install-20261016.md)已使用同一 Windows 候选实际执行并核对清理，含原 LATERAL 路径与整文件复验。当前累计 244 个安装产品身份与 23 个组件身份，原全量计划另有 14 项待验；这些计数不是功能覆盖比例，0.18 尚未公开。
+0.18 开发验收补充：[SQL 补全 22 项](../tests/integration/acceptance-v018-caret-input-20261016.md)、[数据表与记录视图补充](../tests/integration/acceptance-v018-grid-install-20261016.md)及[两项原生复制](../tests/integration/acceptance-v018-native-copy-20261016.md)已使用同一 Windows 候选实际执行并核对清理，含原 LATERAL 路径、整文件复验及用户本轮授权的系统剪贴板复制。当前累计 246 个安装产品身份与 23 个组件身份，原全量计划另有 12 个开发组件待验；这些计数不是功能覆盖比例，0.18 尚未公开。
 
 | 编号 | 工作包 | 状态 | 验收要求 |
 | --- | --- | --- | --- |
