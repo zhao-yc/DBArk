@@ -182,6 +182,7 @@ export interface CommandMap {
   'table.applyReceipt.list': { input: import('./tableApplyReceipt').TableApplyReceiptListInput; output: import('./tableApplyReceipt').TableApplyReceiptPage };
   'table.applyReceipt.detail': { input: { operationId: string }; output: import('./tableApplyReceipt').TableApplyReceipt };
   'tasks.list': { input: Record<string, never>; output: TaskRecord[] };
+  'tasks.cancelState': { input: { taskIds: string[] }; output: import('./taskCancelState').TaskCancelSnapshot };
   'settings.get': { input: Record<string, never>; output: AppSettings };
   'settings.save': { input: AppSettings; output: void };
   'schema.tableRename.get': { input: TableRenameGetInput; output: TableRenameGetOutput };

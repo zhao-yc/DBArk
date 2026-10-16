@@ -16,6 +16,7 @@ import { persistedQueryError, persistedTaskMessage } from './taskPrivacy';
 import { readQueryFile, writeQueryFile } from './queryFiles';
 import { validateCommand } from '../shared/validation';
 import type { Command, ConnectionProfile, HistoryEntry, QueryFileEncoding, TaskEvent, TaskRecord } from '../shared/contracts';
+import { taskCancelSnapshot } from './taskCancelState';
 import type { QueryExportProgress } from '../shared/queryStreamExport';
 import type { TableColumnApplyProgress } from '../shared/tableColumnPatches';
 import {queryDatabasePatch} from '../shared/queryContext';
@@ -258,6 +259,7 @@ async function dispatch(command: Command, input: any): Promise<unknown> {
     case 'table.applyReceipt.list': return store.tableApplyReceipts(input);
     case 'table.applyReceipt.detail': return store.tableApplyReceipt(input.operationId);
     case 'tasks.list': return store.tasks();
+    case 'tasks.cancelState': return taskCancelSnapshot(input.taskIds, tasks, (id, operationId) => tableApplyReceipts.cancelState(id, operationId));
     case 'settings.get': rendererHasSettings = true; return store.settings();
     case 'settings.save': {
       try { store.saveSettings(input); rendererSettingsCurrent = true; stateFlushed?.resolve(); }

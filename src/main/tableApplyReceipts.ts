@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import type { TaskCancelState } from '../shared/taskCancelState';
 import type { RowChange, SqlPreview } from '../shared/contracts';
 import { emptyTableApplyEvidence, interruptTableApplyReceipt, mergeTableApplyProgress, parseTableApplyReceipt, tableApplyReceiptLimits, type TableApplyProgress, type TableApplyReceipt, type TableApplyTarget, type TableApplyBinding } from '../shared/tableApplyReceipt';
 
@@ -59,6 +60,14 @@ export class TableApplyReceipts {
 
   /** 仅已校验且绑定当前任务的ACK可决定成功；保留有界终态供退出竞态核对。 */
   confirmed(taskId: string): TableApplyReceipt | undefined { const r = this.active.get(taskId) ?? this.completed.get(taskId); return r?.evidence.commitAcknowledged ? r : undefined; }
+  /** 当前内存证据先于辅助写盘；持久化失败不得把COMMIT降回可取消阶段。 */
+  cancelState(taskId: string, operationId: string | undefined): TaskCancelState {
+    const r = this.active.get(taskId) ?? this.completed.get(taskId);
+    if (!r || !operationId || r.operationId !== operationId) return 'checking';
+    if (r.phase === 'terminal') return 'finished';
+    if (r.evidence.commitMayHaveBeenSent) return 'confirming';
+    return r.phase === 'executing' && r.sequence > 0 && r.evidence.transactionProtected && r.evidence.transactionKnown && r.evidence.transactionOpen ? 'allowed' : 'checking';
+  }
   /** 清理错误是附加原因，不撤销已经收到的数据库提交确认。 */
   cleanupFailed(taskId: string): void { const r = this.confirmed(taskId); if (r) { const next = { ...r, reason: 'cleanup-failed' as const }; this.active.set(taskId, next); this.safeSave(next); } }
   /** 响应、退出和异常共用收尾；缺少可信终态只会归为未知，绝不据RPC成功补造COMMIT。 */

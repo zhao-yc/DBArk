@@ -3,6 +3,7 @@ import { createContext, runInContext } from 'node:vm';
 import ts from 'typescript';
 import { describe, expect, it, vi } from 'vitest';
 import { TableApplyReceipts } from '../../src/main/tableApplyReceipts';
+import { taskCancelSnapshot } from '../../src/main/taskCancelState';
 import { persistedTaskMessage } from '../../src/main/taskPrivacy';
 import { emptyTableApplyEvidence, type TableApplyReceipt } from '../../src/shared/tableApplyReceipt';
 
@@ -12,7 +13,7 @@ function fixture() {
   const store = { connectionRevision: () => 1, saveTask: (r: unknown) => savedTasks.push(r), saveTableApplyReceipt: vi.fn((r: TableApplyReceipt) => { receipts.push(structuredClone(r)); }) };
   const service = new TableApplyReceipts(store), request = vi.fn(async (_command: string, _input: any): Promise<any> => ({ affectedRows: 1 }));
   const context = createContext({ tableApplyReceipts: service, tasks, completionTasks: new Set(), preparingTasks: new Map(), pendingQueryHistory: new Map(), exportProgress: new Map(), structureProgress: new Map(), structureTokens: new Map(), files: new Map(), sessions: new Map(), lastPersist: new Map(), savedQueryPages: undefined, historyPages: undefined, window: undefined,
-    store, broker: { request }, connectionConfig: { assertAvailable() {} }, persistAuxiliary: (f: () => void) => f(), persistedTaskMessage, SavedQuerySearchCancelled: class extends Error {}, shuttingDown: false });
+    store, broker: { request }, connectionConfig: { assertAvailable() {} }, persistAuxiliary: (f: () => void) => f(), persistedTaskMessage, taskCancelSnapshot, SavedQuerySearchCancelled: class extends Error {}, shuttingDown: false });
   const source = readFileSync(new URL('../../src/main/index.ts', import.meta.url), 'utf8'), ast = ts.createSourceFile('main.ts', source, ts.ScriptTarget.Latest, true);
   const functions = ['taskEvent', 'dispatch'].map(name => ast.statements.find(n => ts.isFunctionDeclaration(n) && n.name?.text === name)!.getText(ast)).join('\n');
   runInContext(ts.transpileModule(functions + '\nglobalThis.entry={dispatch,taskEvent}', { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText, context);
@@ -22,6 +23,16 @@ function fixture() {
   return { tasks, store, service, request, entry, input, receipts, savedTasks };
 }
 describe('主进程可信绑定与零派发栅栏', () => {
+  it('取消状态入口直接使用当前内存，不发broker、不读取或写入持久化记录', async () => {
+    const f = fixture(), target = { connectionId: 'c', connectionRevision: 1, database: 'db', table: 'subject' };
+    const binding = f.service.prepare('task', f.input.previewId, target, f.input.changes);
+    f.tasks.set('task', { id: 'task', kind: 'table.apply', status: 'running', tableApplyReceiptId: binding.operationId });
+    f.service.receive('task', { operationId: binding.operationId, sequence: 1, phase: 'executing', reason: 'none', evidence: { ...emptyTableApplyEvidence(), transactionProtected: true, transactionKnown: true, transactionOpen: true } });
+    f.service.receive('task', { operationId: binding.operationId, sequence: 2, phase: 'committing', reason: 'none', evidence: { ...emptyTableApplyEvidence(), transactionProtected: true, transactionKnown: true, transactionOpen: true, dmlMayHaveBeenSent: true, dmlAcknowledged: 1, serverReportedRows: 1, commitMayHaveBeenSent: true } });
+    const saved = f.store.saveTableApplyReceipt.mock.calls.length;
+    expect(await f.entry.dispatch('tasks.cancelState', { taskIds: ['task', 'old-task'] })).toEqual([{ taskId: 'task', state: 'confirming' }, { taskId: 'old-task', state: 'checking' }]);
+    expect(f.request).not.toHaveBeenCalled(); expect(f.store.saveTableApplyReceipt).toHaveBeenCalledTimes(saved); expect(f.savedTasks).toHaveLength(0); f.service.interrupt();
+  });
   it('回执初始保存失败时broker零调用', async () => {
     const f = fixture(); f.store.saveTableApplyReceipt.mockImplementation(() => { throw Error('合成磁盘故障'); });
     await expect(f.entry.dispatch('table.apply', f.input)).rejects.toThrow('合成磁盘故障'); expect(f.request).not.toHaveBeenCalled();
