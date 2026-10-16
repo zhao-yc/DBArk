@@ -20,7 +20,7 @@ async function observe(desktop: Desktop) {
     });
     if (editors?.length !== 1) throw Error('无法唯一观察当前查询编辑器');
     const model = editors[0].getModel(); if (!model || model.isDisposed()) throw Error('当前模型不可观察');
-    return { value: model.getValue(), version: model.getVersionId(), eol: model.getEOL() };
+    return { value: model.getValue(), version: model.getVersionId(), eol: model.getEOL(), focused: editors[0].hasTextFocus(), selections: editors[0].getSelections()?.map(range => ({ start: model.getOffsetAt(range.getStartPosition()), end: model.getOffsetAt(range.getEndPosition()) })) };
   });
 }
 /** 只建本例离线连接和保存查询；正文由正式打开入口进入编辑器，不建立数据库会话。 */
@@ -58,13 +58,30 @@ for (const selected of [true, false]) test(selected ? '真实选区格式化保�
   const prefix = "select '🚢外面' as 前; -- 头部保持\n", body = "select 名称,'🚢  ; -- 字符串' as 标记 from 表 where 编号=1; -- 注释保持", suffix = "\nselect '尾部' as 后;";
   const source = selected ? prefix + body + suffix : 'select 1,2 from 表 where 编号=1;';
   const formatted = selected ? prefix + "select\n  名称,\n  '🚢  ; -- 字符串' as 标记\nfrom\n  表\nwhere\n  编号 = 1;\n\n-- 注释保持" + suffix : 'select\n  1,\n  2\nfrom\n  表\nwhere\n  编号 = 1;';
-  const desktop = await openSource(source), { page } = desktop, initial = await observe(desktop), before = await sideEffects(desktop);
-  const expected = formatted.replaceAll('\n', initial.eol), original = source.replaceAll('\n', initial.eol), box = page.locator('.query-tab:visible .monaco-editor').getByRole('textbox');
-  await box.focus(); await page.keyboard.press(process.platform === 'darwin' ? 'Meta+ArrowUp' : 'Control+Home');
-  if (selected) { await page.keyboard.press('ArrowDown'); await page.keyboard.press(process.platform === 'darwin' ? 'Meta+Shift+ArrowRight' : 'Shift+End'); }
-  await page.getByRole('button', { name: '格式化 SQL', exact: true }).click(); await exactSql(desktop, expected);
-  await box.focus(); await page.keyboard.press(`${modifier}+z`); await exactSql(desktop, original);
-  await page.keyboard.press(process.platform === 'darwin' ? 'Meta+Shift+z' : 'Control+y'); await exactSql(desktop, expected);
+  const desktop = await openSource(source), { page } = desktop, initial = await observe(desktop);
+  const expected = (formatted + ' ').replaceAll('\n', initial.eol), original = (source + ' ').replaceAll('\n', initial.eol), box = page.locator('.query-tab:visible .monaco-editor').getByRole('textbox');
+  // 先用真实按键追加普通空格，格式化的一次撤销必须保留这次独立用户输入。
+  await box.focus(); await page.keyboard.press(process.platform === 'darwin' ? 'Meta+ArrowDown' : 'Control+End'); await page.keyboard.press('Space'); await exactSql(desktop, original);
+  const before = await sideEffects(desktop), start = prefix.replaceAll('\n', initial.eol).length;
+  for (const entry of ['快捷键', '按钮']) {
+    await box.focus(); await page.keyboard.press(process.platform === 'darwin' ? 'Meta+ArrowUp' : 'Control+Home');
+    if (selected) {
+      await page.keyboard.press('ArrowDown');
+      // 按Unicode码点逐键选择，避开换行/软折行的End键差异，不通过模型设置选区。
+      for (const _point of body) await page.keyboard.press('Shift+ArrowRight');
+    }
+    const chosen = await observe(desktop);
+    expect(chosen.focused && chosen.selections?.length === 1 && (selected ? chosen.selections[0].start === start && chosen.selections[0].end === start + body.length : chosen.selections[0].start === chosen.selections[0].end), '真实按键必须得到唯一准确选区或空选区').toBe(true);
+    if (entry === '快捷键') await page.keyboard.press('Alt+Shift+f');
+    else await page.getByRole('button', { name: '格式化 SQL', exact: true }).click();
+    await exactSql(desktop, expected);
+    const after = await observe(desktop); expect(after.focused, '格式化两入口完成后均须将焦点保留或返回真实编辑器').toBe(true);
+    if (selected) expect(after.selections?.length === 1 && after.selections[0].start === start && after.selections[0].end === expected.length - (suffix.replaceAll('\n', initial.eol).length + 1), '选区跟随格式化范围且不纳入外部原文').toBe(true);
+    // 每次只按一次撤销便恢复含用户空格的原文；不补设焦点掩盖格式化的焦点错误。
+    await page.keyboard.press(`${modifier}+z`); await exactSql(desktop, original);
+    await page.keyboard.press(process.platform === 'darwin' ? 'Meta+Shift+z' : 'Control+y'); await exactSql(desktop, expected);
+    await page.keyboard.press(`${modifier}+z`); await exactSql(desktop, original);
+  }
   expect(isDeepStrictEqual(await sideEffects(desktop), before), '格式化及撤销重做不得改变来源绑定、会话、任务、历史或已保存查询').toBe(true);
   expect(desktop.pageErrors.length, '正式界面不应产生页面错误').toBe(0);
 });
@@ -74,8 +91,11 @@ for (const [label, source, message] of [
   ['格式器不支持语法', 'select [合成字段] from 表;', 'SQL 格式化失败，原文未改动。'],
 ]) test(`${label}格式化失败保持原文，不创建编辑或执行SQL`, async () => {
   const desktop = await openSource(source), initial = await observe(desktop), before = await sideEffects(desktop);
-  await desktop.page.getByRole('button', { name: '格式化 SQL', exact: true }).click();
-  await expect(desktop.page.getByText(message, { exact: true })).toBeVisible();
-  const after = await observe(desktop); expect(after.value === initial.value && after.version === initial.version, '拒绝排版不得改模型或编辑版本').toBe(true);
+  for (const entry of ['快捷键', '按钮']) {
+    if (entry === '快捷键') { await desktop.page.locator('.query-tab:visible .monaco-editor').getByRole('textbox').focus(); await desktop.page.keyboard.press('Alt+Shift+f'); }
+    else await desktop.page.getByRole('button', { name: '格式化 SQL', exact: true }).click();
+    await expect(desktop.page.getByText(message, { exact: true })).toBeVisible();
+    const after = await observe(desktop); expect(after.value === initial.value && after.version === initial.version, '拒绝排版不得改模型或编辑版本').toBe(true);
+  }
   expect(isDeepStrictEqual(await sideEffects(desktop), before), '拒绝路径不得执行或保存查询').toBe(true);
 });

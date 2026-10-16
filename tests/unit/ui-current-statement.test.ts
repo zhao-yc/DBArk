@@ -99,9 +99,10 @@ describe('真实按钮和Monaco动作接线', () => {
     function inspect(node: ts.Node) { if (ts.isVariableDeclaration(node) && node.name.getText(file) === 'mounted') mounted = node.initializer!.getText(file); node.forEachChild(inspect); } inspect(file);
     expect(mounted).toContain("keybindings: [monaco.KeyMod.CtrlCmd | monaco.KeyCode.Enter]"); expect(mounted).toContain('monaco.KeyMod.CtrlCmd | monaco.KeyMod.Shift | monaco.KeyCode.Enter');
     const original = vi.fn(), first = vi.fn(), latest = vi.fn(), actions: Array<{ id: string; keybindings: number[]; run(): void }> = [];
-    const port = createContext({ monaco: { KeyMod: { CtrlCmd: 2048, Shift: 1024 }, KeyCode: { Enter: 3 } }, zh: { editor: { text001: '执行' } }, currentStatementZh, editorRef: { current: null }, onReady: undefined, runRef: { current: original }, currentRunRef: { current: first } });
-    runInContext(ts.transpileModule('globalThis.mounted=' + mounted, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText, port); port.mounted({ addAction: (action: typeof actions[number]) => actions.push(action) });
+    // 本例只核对原快捷键；正文桥接的真实生命周期由专用组件测试覆盖。
+    const port = createContext({ monaco: { KeyMod: { CtrlCmd: 2048, Shift: 1024 }, KeyCode: { Enter: 3 } }, zh: { editor: { text001: '执行' } }, currentStatementZh, editorRef: { current: null }, widgetRef: { current: null }, propsRef: { current: {} }, aliveRef: { current: true }, attachContent: () => ({ ready: true }), runRef: { current: original }, currentRunRef: { current: first } });
+    runInContext(ts.transpileModule('globalThis.mounted=' + mounted, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText, port); port.mounted({ onDidDispose: () => ({ dispose() {} }), addAction: (action: typeof actions[number]) => actions.push(action) });
     expect(actions.map(action => [action.id, action.keybindings[0]])).toEqual([['dbark-run', 2051], ['dbark-run-current', 3075]]); port.currentRunRef.current = latest; actions[1].run(); actions[0].run(); expect(latest).toHaveBeenCalledOnce(); expect(first).not.toHaveBeenCalled(); expect(original).toHaveBeenCalledOnce();
-    actions.length = 0; port.currentRunRef.current = undefined; port.mounted({ addAction: (action: typeof actions[number]) => actions.push(action) }); expect(actions.map(action => action.id)).toEqual(['dbark-run']);
+    actions.length = 0; port.currentRunRef.current = undefined; port.mounted({ onDidDispose: () => ({ dispose() {} }), addAction: (action: typeof actions[number]) => actions.push(action) }); expect(actions.map(action => action.id)).toEqual(['dbark-run']);
   });
 });
