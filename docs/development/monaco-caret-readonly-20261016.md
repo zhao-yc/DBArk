@@ -6,7 +6,11 @@
 
 原帮助器为粘贴正文和复制前缀而替换系统剪贴板，随后通过 Electron 44.7.0 新 API 恢复全部格式。任意可读格式不能因此认定可以逐字节回写；比较失败后删除 RAM 快照，以及 fixture 随后退出，都会使 helper 内保留快照的局部修正不足以保证恢复。现有现场也不能唯一证明 run747 由哪一种格式转换引起。
 
-本片沿用 `live-helpers.writeSql` 已使用的真实输入路径：聚焦可见 textbox，Ctrl/Cmd+A，`keyboard.insertText`。随后仍用 Control+Home 或 Meta+ArrowUp 到文档首，并按前缀码点发送 ArrowRight。不调用 Monaco 模型设置、光标设置、执行编辑或替换正文的 IPC，不发送 Ctrl/Cmd+V、Ctrl/Cmd+C 或选择复制前缀。
+本片使用真实输入路径：聚焦可见 textbox，Ctrl/Cmd+A，原生 Backspace 删除整个旧选区，再一次 `keyboard.insertText` 输入原正文。随后仍用 Control+Home 或 Meta+ArrowUp 到文档首，并按前缀码点发送 ArrowRight。不调用 Monaco 模型设置、光标设置、执行编辑或替换正文的 IPC，不发送 Ctrl/Cmd+V、Ctrl/Cmd+C 或选择复制前缀。
+
+ROOT 的 run780 在准备正文时发现括号起始 SQL 末尾多出一个右括号，尚未进入光标或补全断言。Monaco 0.55.1 的 TextArea/Native EditContext 在没有替换计数或位置偏移时调用普通 type，Cursor 对原生输入逐字符执行拦截；默认 SQL surroundingPairs 包含括号，`SurroundSelectionOperation` 会以首字符 `(` 包围非空旧选区，后续字符替换其内部选区后，末尾包围字符可能保留。官方 `SurroundSelectionCommand` 的两端插入及返回内部选区与此路径一致。ROOT run781 已原生对照复现旧路径，并确认明确 Backspace 后同一正文与直接光标核对、接受均成功；该实验只是可行性，不计正式安装验收。
+
+输入修正只增加 Ctrl/Cmd+A 后的一次原生 Backspace，保持原一次 insertText、原 source 期望和原 5 秒正文核对。它在输入前消除旧选区，不根据失败结果回删字符、不重试、不加前导哨兵、不改编辑器选项或期限，不认定为产品补全缺陷。
 
 `positionMonacoCaret` 只准备正文和键盘位置。原前缀复制所承担的位置证明由下一次现有真实 Control+Space 的捕获阶段公开只读 API 接替，不能只凭建议出现、空建议或可见正文判定位置正确。
 
@@ -48,12 +52,14 @@
 
 `tests/unit/monaco-caret-clipboard.test.ts` 在纯 VM 中执行整个正式帮助器、事件捕获回调及实际 `SqlEditor` provider 回调，使用实际 CompletionWorkerClient。DOM/公开 API 对象、键盘/模型、剪贴板、传输和轮询等待是受控边界，假传输只返回 blocked 来结束等待；没有实际解析线程、Monaco、系统键盘、GUI、系统剪贴板或数据库。不能把这些结果当作原生验收。
 
-43 项纯回归中，20 项全格式只读回归原样保留；位置组按直接当前状态的合同替换，并补上实际 Client 的旧 pending/lateSend 反例、模型 CRLF/UTF-16、错误 offset、同长度错误 SQL、无本次事件、非可信事件、多聚焦/隐藏编辑器、非折叠选区、版本变化、同 SQL 旧请求不能替代当前错误位置、正确当前状态无需新 Worker 请求、空工作台初始化约束和共享预算。四个实际调用模块仍将原始 marked 独立接入；Worker.prototype 不再被此帮助器包装。原定位返回值被替换为不可信内容时，调用者仍提交原始 marked 作期望。
+原43项相关回归继续通过，其中两平台键盘序列断言加入 Backspace，20项全格式只读合同保留。新增两项必要输入回归，共45项：直接提取并执行锁定Monaco的官方包围选区判定，确认非空旧选区的首括号触发而删除为空后不触发；以及带旧正文、括号起始的 run780 同类 SQL 必须先清空，再一次输入且全文与直接光标证明通过。模型和键盘仍是假边界，不能把这两项当作完整 Monaco 输入或原生实验。
+
+位置组继续覆盖实际 Client 的旧 pending/lateSend、模型 CRLF/UTF-16、错误 offset、同长度错误 SQL、无本次事件、非可信事件、多聚焦/隐藏编辑器、非折叠选区、版本变化、同 SQL 旧请求不能替代当前错误位置、正确当前状态无需新 Worker 请求、空工作台初始化约束和共享预算。四个实际调用模块仍将原始 marked 独立接入；Worker.prototype 不被此帮助器包装。原定位返回值被替换为不可信内容时，调用者仍提交原始 marked 作期望。
 
 验证命令：
 
 ```text
-node node_modules/vitest/vitest.mjs run tests/unit/monaco-caret-clipboard.test.ts --reporter=json --outputFile=.cache/monaco-caret-direct-api-review/unit-final.json
+node node_modules/vitest/vitest.mjs run tests/unit/monaco-caret-clipboard.test.ts --reporter=json --outputFile=.cache/monaco-native-clear/unit-results.json
 node node_modules/typescript/bin/tsc --noEmit
 node --require ./.cache/monaco-caret-readonly-change/collection-guard.cjs node_modules/@playwright/test/cli.js test tests/e2e/sql-completion.spec.ts tests/e2e/sql-completion-window.spec.ts tests/e2e/sql-completion-lateral.spec.ts tests/e2e/session-objects.spec.ts --list --reporter=json
 ```
