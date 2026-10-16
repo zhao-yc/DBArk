@@ -2,6 +2,7 @@ import type { Command } from './contracts';
 
 /** 预加载白名单不引入校验器或 Node 依赖；新增公开命令必须在编译时补齐。 */
 export const publicCommands: Record<Command, true> = {
+  'schema.databaseCreate.get': true, 'schema.databaseCreate.preview': true, 'schema.databaseCreate.apply': true, 'schema.databaseCreate.release': true,
   'tasks.cancelState': true,
   'schema.tableDefaultEncoding.get': true, 'schema.tableDefaultEncoding.preview': true, 'schema.tableDefaultEncoding.apply': true, 'schema.tableDefaultEncoding.release': true,
   'schema.tableRename.get': true, 'schema.tableRename.preview': true, 'schema.tableRename.apply': true, 'schema.tableRename.release': true,
