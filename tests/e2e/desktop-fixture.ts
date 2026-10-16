@@ -43,8 +43,8 @@ function ownedDesktopState(info: TestInfo): OwnedDesktopExit {
   return state;
 }
 /** 实库清理也核同一所有者；只向调用者提供捕获页面和该实例的close事实。 */
-export function ownedDesktopResources(info: TestInfo): { page: Page; closed: boolean } {
-  const state = ownedDesktopState(info); return { page: state.ownerPage!, closed: state.closed };
+export function ownedDesktopResources(info: TestInfo): { page: Page; application: ElectronApplication; closed: boolean } {
+  const state = ownedDesktopState(info); return { page: state.ownerPage!, application: state.application!, closed: state.closed };
 }
 /** 所属PID只增不减；启动和退出前各记录一次，拒绝空记录或无效PID。 */
 async function recordOwnedDesktopProcesses(info: TestInfo): Promise<void> {
@@ -124,9 +124,9 @@ export async function startSnippetsNativeDiagnostics() {
 }
 
 /** 只替换原生对话框回答；退出状态机、渲染进程、IPC 和磁盘保存全部使用真实代码。 */
-export async function answerDialogs(answers: number[]) {
+export async function answerDialogs(answers: number[], application: ElectronApplication = desktop) {
   dialogCalls = [];
-  await desktop.evaluate(({ dialog }, responses) => {
+  await application.evaluate(({ dialog }, responses) => {
     globalThis.__dbarkE2EDialogs = { answers: responses, calls: [] };
     dialog.showMessageBox = (async (...args: unknown[]) => {
       const options = args.at(-1) as Electron.MessageBoxOptions;

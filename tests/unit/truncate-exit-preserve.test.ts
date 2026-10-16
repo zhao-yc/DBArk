@@ -38,6 +38,33 @@ function fixture(options: { strict?: boolean; holdClose?: boolean; aliveAfterClo
   return { order, observer, context, desktop, rm, force, run, emitClose, close, info, listeners };
 }
 
+/** 真实连接/TLS/确认函数在RAM页面端口运行；不加载Playwright、Electron或证书文件。 */
+function connectionFixture(pauseAt?: string, tls = false, strict = true) {
+  const f = fixture({ strict }), entered = deferred(), release = deferred(), calls: string[] = []; let paused = false;
+  const step = async (label: string) => { calls.push(label); if (!paused && label === pauseAt) { paused = true; entered.resolve(); await release.promise; } };
+  function locator(label: string): any {
+    return { ramLocator: label, getByRole: (_: string, options: { name: string }) => locator(options.name), getByLabel: (name: string) => locator(name), locator, filter: function () { return this; },
+      click: () => step('click:' + label), fill: (_value: string) => step('fill:' + label), check: () => step('check:' + label), focus: () => step('focus:' + label) };
+  }
+  const plainExpect = f.context.expect;
+  f.context.expect = Object.assign((value: any) => value?.ramLocator ? {
+    toContainText: () => step('expect:' + value.ramLocator), toHaveValue: () => step('expect:' + value.ramLocator), toBeVisible: () => step('expect:' + value.ramLocator), toBeHidden: () => step('expect:' + value.ramLocator),
+  } : plainExpect(value), { poll: plainExpect.poll });
+  Object.assign(f.context.page, { locator, getByRole: (_: string, options: { name: string }) => locator(options.name), evaluate: vi.fn(async () => { await step('profiles'); return [{ name: 'E2E dbark_e2e_ram', id: 'ram-profile' }]; }) });
+  const evaluate = f.desktop.evaluate.getMockImplementation()!;
+  f.desktop.evaluate.mockImplementation(async call => { if (String(call).includes('__dbarkE2EDialogs')) await step('native-dialog'); return evaluate(call); });
+  f.context.tlsCertificate = () => tls ? 'RAM证书，不是文件路径' : undefined;
+  f.context.zh = { connections: { text027: '启用TLS', text028: '校验证书' } };
+  const code = functions(desktopSource, ['answerDialogs']).map(node => node.getText(desktopSource).replace(/^export /, '')).join('\n') + '\n'
+    + functions(liveSource, ['configureTls', 'acceptNativeConfirmation', 'connectAndCreate']).map(node => node.getText(liveSource).replace(/^export /, '')).join('\n');
+  runInContext(ts.transpileModule(code, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText, f.context);
+  const run = () => f.context.handlers.lifetime({ trace: 'off', preserveOnUnconfirmedExit: strict }, async () => {
+    const owner = strict ? f.context.ownedDesktopResources(f.info) : undefined;
+    return f.context.connectAndCreate('dbark_e2e_ram', owner ? { page: owner.page, application: owner.application, assertCurrent: () => { f.context.ownedDesktopResources(f.info); } } : undefined);
+  }, f.info) as Promise<void>;
+  return { ...f, run, entered, release, calls };
+}
+
 describe('TRUNCATE显式保留模式的真实收尾函数（仅RAM端口）', () => {
   it('成功先收到实际close和进程消失证明，再清库/关观察连接/删临时目录，不进强杀兜底', async () => {
     const f = fixture(); await f.run(); expect(f.order).toEqual(['launch', 'body', 'tasks', 'answer', 'quit-request', 'close-ack', 'close', 'process-proof', 'drop', 'catalog', 'observer.end', 'rm']); expect(f.force).not.toHaveBeenCalled(); expect(f.desktop.waitForEvent).toHaveBeenCalledWith('close', { timeout: 12000 });
@@ -111,6 +138,40 @@ describe('TRUNCATE显式保留模式的真实收尾函数（仅RAM端口）', ()
     const f = fixture(); f.desktop.evaluate.mockResolvedValue([]);
     await expect(f.run()).rejects.toThrow('进程记录未知'); expect(f.order).not.toContain('body'); expect(f.desktop.close).not.toHaveBeenCalled();
     expect(f.observer.query).not.toHaveBeenCalled(); expect(f.observer.end).not.toHaveBeenCalled(); expect(f.rm).not.toHaveBeenCalled(); expect(f.force).not.toHaveBeenCalled(); expect(f.listeners.size).toBe(0);
+  });
+  it('建库首个click换实例时不填写下一例表单（员工2固定P2原红转绿）', async () => {
+    const f = fixture(), entered = deferred(), release = deferred(), writes: { label: string; value: string }[] = [];
+    f.context.page.locator = vi.fn(() => ({ getByRole: () => ({ click: async () => { entered.resolve(); await release.promise; } }) }));
+    const nextForm = { getByLabel: (label: string) => ({ fill: async (value: string) => { writes.push({ label, value }); throw Error('不能填写下一例'); } }) };
+    const next = { getByRole: vi.fn(() => nextForm), evaluate: vi.fn(), screenshot: vi.fn() };
+    runInContext(ts.transpileModule(functions(liveSource, ['connectAndCreate'])[0].getText(liveSource).replace(/^export /, ''), { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText, f.context);
+    const pending = f.run().catch(error => error); await entered.promise;
+    const application = { evaluate: vi.fn(), close: vi.fn() }; f.context.page = next; f.context.desktop = application; release.resolve();
+    const failure = await pending; expect(failure).toBeInstanceOf(AggregateError); expect(writes).toEqual([]); expect(next.getByRole).not.toHaveBeenCalled(); expect(application.evaluate).not.toHaveBeenCalled();
+    expect(f.observer.query).not.toHaveBeenCalled(); expect(f.observer.end).not.toHaveBeenCalled(); expect(f.rm).not.toHaveBeenCalled(); expect(f.force).not.toHaveBeenCalled();
+  });
+  it.each([['profiles', false], ['click:选择CA 证书', true], ['native-dialog', false]] as const)('连接准备%s跨await换实例，仅旧owner操作已发出且后续全部停链', async (stage, tls) => {
+    const f = connectionFixture(stage, tls), nextPage = { getByRole: vi.fn(), locator: vi.fn(), evaluate: vi.fn() }, nextApp = { evaluate: vi.fn(), close: vi.fn() };
+    const pending = f.run().catch(error => error); await f.entered.promise;
+    f.context.page = nextPage; f.context.desktop = nextApp; f.release.resolve(); const failure = await pending;
+    expect(failure).toBeInstanceOf(Error); expect(nextPage.getByRole).not.toHaveBeenCalled(); expect(nextPage.locator).not.toHaveBeenCalled(); expect(nextPage.evaluate).not.toHaveBeenCalled(); expect(nextApp.evaluate).not.toHaveBeenCalled(); expect(nextApp.close).not.toHaveBeenCalled();
+    expect(f.desktop.close).not.toHaveBeenCalled(); expect(f.rm).not.toHaveBeenCalled(); expect(f.observer.query).not.toHaveBeenCalled(); expect(f.observer.end).not.toHaveBeenCalled();
+  });
+  it('严格连接和TLS准备完成仍使用本例页面及应用，正常握手后才删所属目录', async () => {
+    const f = connectionFixture(undefined, true); await f.run();
+    expect(f.calls).toContain('fill:连接名称'); expect(f.calls).toContain('click:选择CA 证书'); expect(f.calls).toContain('native-dialog'); expect(f.calls).toContain('click:执行 SQL');
+    expect(f.desktop.close).toHaveBeenCalledTimes(1); expect(f.rm).toHaveBeenCalledTimes(1); expect(f.force).not.toHaveBeenCalled();
+  });
+  it('TLS选择失败同时owner切换，保留原错误对象且不在下一实例恢复对话框', async () => {
+    const f = connectionFixture('click:选择CA 证书', true), original = Error('原CA选择失败'), nextApp = { evaluate: vi.fn(), close: vi.fn() };
+    const pending = f.run().catch(error => error); await f.entered.promise;
+    f.context.page = {}; f.context.desktop = nextApp; f.release.reject(original); const failure = await pending;
+    expect(failure).toBeInstanceOf(AggregateError); expect(failure.cause).toBe(original); expect(failure.errors[0]).toBe(original);
+    expect(nextApp.evaluate).not.toHaveBeenCalled(); expect(nextApp.close).not.toHaveBeenCalled(); expect(f.rm).not.toHaveBeenCalled();
+  });
+  it('非严格连接准备无需owner上下文，沿原字段与创建库路径完成', async () => {
+    const f = connectionFixture(undefined, false, false); await f.run();
+    expect(f.calls).toContain('fill:连接名称'); expect(f.calls).toContain('click:执行 SQL'); expect(f.force).toHaveBeenCalledTimes(1); expect(f.rm).toHaveBeenCalledTimes(1);
   });
 });
 

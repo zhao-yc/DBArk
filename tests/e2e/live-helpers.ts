@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { existsSync, readFileSync,realpathSync } from 'node:fs';
 import mysql, { type Connection, type RowDataPacket } from 'mysql2/promise';
-import type { TestInfo } from '@playwright/test';
+import type { TestInfo, Page, ElectronApplication } from '@playwright/test';
 import { expect, desktop, page, closed, pageErrors, answerDialogs, quitDesktop, preservesUnconfirmedExit, retainOwnedDesktopResources, confirmOwnedDesktopExit, ownedDesktopResources } from './desktop-fixture';
 import {zh} from '../../src/renderer/locales/zh-CN';
 
@@ -18,6 +18,8 @@ if (enabled && existsSync('.cache/dbark-test.env')) {
 }
 
 export interface LiveContext { observer: Connection; database: string; connectionName: string; connectionId: string; }
+/** 仅显式严格模式传入；捕获页面/应用与活动TestInfo校验一起跨越准备阶段的await。 */
+interface LiveDesktopOwner { page: Page; application: ElectronApplication; assertCurrent(): void; }
 export const modifier = process.platform === 'darwin' ? 'Meta' : 'Control';
 
 /** 严格TLS验收必须显式提供已有CA；不能静默退回明文或关闭证书/主机校验。 */
@@ -27,60 +29,78 @@ function tlsCertificate():string|undefined{
   return realpathSync(environment.DBARK_TEST_CA);
 }
 /** 只替换本次原生文件选择的回答；路径授权、文件读取和TLS建连仍走产品原逻辑。 */
-async function configureTls(form:ReturnType<typeof page.getByRole>){
+async function configureTls(form:ReturnType<typeof page.getByRole>,owner?:LiveDesktopOwner){
+  owner?.assertCurrent();
   const certificate=tlsCertificate();if(!certificate)return;
-  await form.getByRole('button',{name:'TLS / SSL',exact:true}).click();await form.getByLabel(zh.connections.text027,{exact:true}).check();await form.getByLabel(zh.connections.text028,{exact:true}).check();
-  await desktop.evaluate(({dialog},path)=>{
+  await form.getByRole('button',{name:'TLS / SSL',exact:true}).click();owner?.assertCurrent();
+  await form.getByLabel(zh.connections.text027,{exact:true}).check();owner?.assertCurrent();
+  await form.getByLabel(zh.connections.text028,{exact:true}).check();owner?.assertCurrent();
+  const application=owner?owner.application:desktop;
+  await application.evaluate(({dialog},path)=>{
     const root=globalThis as typeof globalThis&{__liveTlsOpenDialog?:typeof dialog.showOpenDialog};if(root.__liveTlsOpenDialog)throw Error('TLS文件选择不可交叉覆盖');root.__liveTlsOpenDialog=dialog.showOpenDialog;
     dialog.showOpenDialog=(async()=>({canceled:false,filePaths:[path]}))as typeof dialog.showOpenDialog;
   },certificate);
-  try{await form.getByRole('button',{name:'选择CA 证书',exact:true}).click();await expect(form.getByRole('textbox',{name:'CA 证书 选择CA 证书',exact:true})).toHaveValue(certificate);}
-  finally{await desktop.evaluate(({dialog})=>{const root=globalThis as typeof globalThis&{__liveTlsOpenDialog?:typeof dialog.showOpenDialog};if(root.__liveTlsOpenDialog){dialog.showOpenDialog=root.__liveTlsOpenDialog;delete root.__liveTlsOpenDialog;}});}
+  owner?.assertCurrent();
+  let failed=false,originalFailure:unknown;
+  try{await form.getByRole('button',{name:'选择CA 证书',exact:true}).click();owner?.assertCurrent();await expect(form.getByRole('textbox',{name:'CA 证书 选择CA 证书',exact:true})).toHaveValue(certificate);owner?.assertCurrent();}
+  catch(reason){failed=true;originalFailure=reason;throw reason;}
+  finally{
+    try{owner?.assertCurrent();await (owner?application:desktop).evaluate(({dialog})=>{const root=globalThis as typeof globalThis&{__liveTlsOpenDialog?:typeof dialog.showOpenDialog};if(root.__liveTlsOpenDialog){dialog.showOpenDialog=root.__liveTlsOpenDialog;delete root.__liveTlsOpenDialog;}});owner?.assertCurrent();}
+    catch(cleanupFailure){
+      // 显式模式的TLS操作和归属校验同时失败时保留原对象；默认错误覆盖行为不改。
+      if(owner&&failed)throw new AggregateError([originalFailure,cleanupFailure],'TLS准备失败且本例归属或恢复未确认',{cause:originalFailure});
+      throw cleanupFailure;
+    }
+  }
 }
 
 /** 浏览器确认框由 Electron 原生接口承接，同时覆盖其同步与异步调用路径。 */
-export async function acceptNativeConfirmation() {
-  await answerDialogs([]);
-  await desktop.evaluate(({ dialog }) => {
+export async function acceptNativeConfirmation(owner?:LiveDesktopOwner) {
+  owner?.assertCurrent();
+  await answerDialogs([],owner?owner.application:desktop);owner?.assertCurrent();
+  await (owner?owner.application:desktop).evaluate(({ dialog }) => {
     dialog.showMessageBoxSync = ((...args: unknown[]) => {
       const options = args.at(-1) as Electron.MessageBoxSyncOptions;
       globalThis.__dbarkE2EDialogs.calls.push({ title: options.title, message: options.message, buttons: options.buttons, response: 0 });
       return 0;
     }) as typeof dialog.showMessageBoxSync;
   });
+  owner?.assertCurrent();
 }
 
 /** 连接表单走真实 UI；测试追踪关闭，避免把临时数据库密码记录进 Playwright 参数轨迹。 */
-export async function connectAndCreate(database: string): Promise<Omit<LiveContext, 'observer'>> {
+export async function connectAndCreate(database: string, owner?: LiveDesktopOwner): Promise<Omit<LiveContext, 'observer'>> {
   const connectionName = `E2E ${database}`;
-  await page.locator('.app-commandbar').getByRole('button', { name: '新建连接', exact: true }).click();
-  const form = page.getByRole('dialog', { name: '新建连接', exact: true });
-  await form.getByLabel('连接名称', { exact: true }).fill(connectionName);
-  await form.getByLabel('主机地址', { exact: true }).fill(environment.DBARK_TEST_HOST!);
-  await form.getByLabel('端口', { exact: true }).fill(environment.DBARK_TEST_PORT ?? '3306');
-  await form.getByLabel('用户名', { exact: true }).fill(environment.DBARK_TEST_USER ?? 'root');
-  await form.getByLabel('数据库密码', { exact: true }).fill(environment.DBARK_TEST_PASSWORD ?? '');
-  await form.getByLabel('连接分组', { exact: true }).fill('隔离数据库验证');
-  await configureTls(form);
-  await form.getByRole('button', { name: '测试连接', exact: true }).click();
-  await expect(form.locator('.success-box')).toContainText('连接成功', { timeout: 20000 });
-  await form.getByRole('button', { name: '保存连接', exact: true }).click();
-  await expect(form).toBeHidden();
-  const profiles = await page.evaluate(() => window.dbark.invoke('connections.list', {}));
+  // 非严格分支仍按原时点读取全局page；严格分支始终只返回捕获页面，不降级回全局。
+  const targetPage = () => { owner?.assertCurrent(); return owner ? owner.page : page; };
+  await targetPage().locator('.app-commandbar').getByRole('button', { name: '新建连接', exact: true }).click();owner?.assertCurrent();
+  const form = targetPage().getByRole('dialog', { name: '新建连接', exact: true });
+  await form.getByLabel('连接名称', { exact: true }).fill(connectionName);owner?.assertCurrent();
+  await form.getByLabel('主机地址', { exact: true }).fill(environment.DBARK_TEST_HOST!);owner?.assertCurrent();
+  await form.getByLabel('端口', { exact: true }).fill(environment.DBARK_TEST_PORT ?? '3306');owner?.assertCurrent();
+  await form.getByLabel('用户名', { exact: true }).fill(environment.DBARK_TEST_USER ?? 'root');owner?.assertCurrent();
+  await form.getByLabel('数据库密码', { exact: true }).fill(environment.DBARK_TEST_PASSWORD ?? '');owner?.assertCurrent();
+  await form.getByLabel('连接分组', { exact: true }).fill('隔离数据库验证');owner?.assertCurrent();
+  await configureTls(form,owner);owner?.assertCurrent();
+  await form.getByRole('button', { name: '测试连接', exact: true }).click();owner?.assertCurrent();
+  await expect(form.locator('.success-box')).toContainText('连接成功', { timeout: 20000 });owner?.assertCurrent();
+  await form.getByRole('button', { name: '保存连接', exact: true }).click();owner?.assertCurrent();
+  await expect(form).toBeHidden();owner?.assertCurrent();
+  const profiles = await targetPage().evaluate(() => window.dbark.invoke('connections.list', {}));owner?.assertCurrent();
   const connectionId = profiles.find(profile => profile.name === connectionName)!.id;
-  const connectionRow = page.locator('.connection-row').filter({ has: page.getByRole('button', { name: connectionName, exact: true }) });
+  const connectionRow = targetPage().locator('.connection-row').filter({ has: targetPage().getByRole('button', { name: connectionName, exact: true }) });
   // 使用既有键盘焦点入口显示操作区，避免窗口切换后残留鼠标位置使悬停状态失效；保持真实可见性和点击检查。
-  await connectionRow.getByRole('button', { name: connectionName, exact: true }).focus();
+  await connectionRow.getByRole('button', { name: connectionName, exact: true }).focus();owner?.assertCurrent();
   const createDatabase = connectionRow.getByRole('button', { name: '创建数据库', exact: true });
-  await expect(createDatabase).toBeVisible(); await createDatabase.click();
-  const create = page.getByRole('dialog', { name: '创建数据库', exact: true });
-  await create.getByLabel('数据库名称', { exact: true }).fill(database);
-  await expect(create.locator('.monaco-editor .view-lines')).toContainText('CREATE DATABASE');
-  await acceptNativeConfirmation();
-  await create.getByRole('button', { name: '执行 SQL', exact: true }).click();
-  await expect(create).toBeHidden({ timeout: 20000 });
-  await connectionRow.getByRole('button', { name: connectionName, exact: true }).click();
-  await expect(page.locator('.database-row').getByRole('button', { name: database, exact: true })).toBeVisible();
+  await expect(createDatabase).toBeVisible();owner?.assertCurrent(); await createDatabase.click();owner?.assertCurrent();
+  const create = targetPage().getByRole('dialog', { name: '创建数据库', exact: true });
+  await create.getByLabel('数据库名称', { exact: true }).fill(database);owner?.assertCurrent();
+  await expect(create.locator('.monaco-editor .view-lines')).toContainText('CREATE DATABASE');owner?.assertCurrent();
+  await acceptNativeConfirmation(owner);owner?.assertCurrent();
+  await create.getByRole('button', { name: '执行 SQL', exact: true }).click();owner?.assertCurrent();
+  await expect(create).toBeHidden({ timeout: 20000 });owner?.assertCurrent();
+  await connectionRow.getByRole('button', { name: connectionName, exact: true }).click();owner?.assertCurrent();
+  await expect(targetPage().locator('.database-row').getByRole('button', { name: database, exact: true })).toBeVisible();owner?.assertCurrent();
   return { database, connectionName, connectionId };
 }
 
@@ -95,7 +115,8 @@ export async function isolatedDatabase(body: (context: LiveContext) => Promise<v
   let failed = false, originalFailure: unknown;
   try {
     if (strictExit) ownedDesktopResources(testInfo);
-    const context = await connectAndCreate(database);
+    const captured = strictExit ? ownedDesktopResources(testInfo) : undefined;
+    const context = await connectAndCreate(database, captured ? { page: captured.page, application: captured.application, assertCurrent: () => { ownedDesktopResources(testInfo); } } : undefined);
     if (strictExit) ownedDesktopResources(testInfo);
     await body({ observer, ...context });
     if (strictExit) ownedDesktopResources(testInfo);

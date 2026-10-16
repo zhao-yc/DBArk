@@ -29,6 +29,14 @@
 
 Windows/macOS本机的真实close、记录PID退出及服务器逐线程终态仍需ROOT安排；PID快照不能声称覆盖未被记录的后来派生进程，纯端口也不能替代本机权限语义和实际进程树验收。旧失败原件留在员工3固定克隆的 `.cache/employee4-review-8b99`，新分支仅复制其副本到ignored证据目录，没有覆盖旧红。
 
+## 连接准备阶段的owner补齐
+
+员工2在固定80b7窄审发现：外层只在`connectAndCreate`返回后核owner，首个click的await期间换实例时，内部仍可能读取下一例全局page并填写连接名称。该原反例及原始一次填写观察保持不变，追加仅向严格连接准备显式传入捕获page/application和本TestInfo校验，连接表单、TLS原生文件选择、保存连接列表读取及创建库确认的关键await后均复核归属。非严格调用不传owner，仍在原时点读取全局句柄；旧TestInfo的失效标记先阻止进入，不因可选参数而降级。
+
+TLS及创建库确认也使用捕获application；归属失配后不对下一实例恢复或重设对话框。TLS原操作与恢复检查同时失败时，用AggregateError保留原对象为cause。`answerDialogs`只增加可选捕获实例参数，原quitDesktop与默认两段原文仍保持。
+
+追加定向用例覆盖原P2红转绿、连接列表读取/TLS选择/原生确认三个换实例点、严格TLS成功、非严格准备成功及TLS原错误保留；最终单文件27项纯验证通过，类型检查通过，默认关闭list仍仅1项skip且实际结果数组为空。新证据在ignored `.cache/connect-owner`，原员工2反例没有覆写。没有GUI、200、真实数据库、剪贴板或手动CI操作。
+
 ## 留给ROOT的runtime前置，不在此片实现
 
 - 原只读残留脚本的schemaPattern仍需最窄增加 `|^dbark_truncate_[a-f0-9]{12}$`；UI仍为 `dbark_e2e_`，只认领本轮精确库名。
