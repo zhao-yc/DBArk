@@ -30,9 +30,9 @@ describe('重命名集成保留TableTab已有工具行为', () => {
     const f = selectionFixture(), token = f.context.token(); f.context.selectionRef.current = change === 'same-cell-new-token' ? { ...f.selection } : { rowId: 'other', key: 'text' };
     expect(() => f.context.apply(f.plan, f.only, token)).toThrow(tableGridZh.changed); expect(f.applyReplacement).not.toHaveBeenCalled(); expect(f.setRows).not.toHaveBeenCalled();
   });
-  it('新重命名按钮与备注、默认编码均保留实际表类型和busy保护及独立回调', () => {
+  it('重命名、自增、备注、默认编码均保留实际表类型和busy保护及独立回调', () => {
     const buttons: ts.JsxOpeningElement[] = []; const visit = (node: ts.Node) => { if (ts.isJsxOpeningElement(node) && node.tagName.getText(tree) === 'button') buttons.push(node); ts.forEachChild(node, visit); }; visit(tree);
-    for (const name of ['TableRename', 'TableComment', 'TableDefaultEncoding']) {
+    for (const name of ['TableRename', 'TableAutoIncrement', 'TableComment', 'TableDefaultEncoding']) {
       const callback = 'on' + name, button = buttons.find(node => node.attributes.properties.some(attribute => ts.isJsxAttribute(attribute) && attribute.name.getText(tree) === 'onClick' && attribute.initializer?.getText(tree) === '{' + callback + '}'));
       if (!button) throw Error('缺少实际表属性按钮：' + name);
       const disabled = button.attributes.properties.find(attribute => ts.isJsxAttribute(attribute) && attribute.name.getText(tree) === 'disabled') as ts.JsxAttribute;
