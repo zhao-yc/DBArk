@@ -2,6 +2,10 @@
 export const recordViewZh = {
   title: '记录表单', close: '收起记录表单', empty: '请选择当前页记录', previous: '上一条', next: '下一条',
   position: '本页第 {0} / {1} 条', showHidden: '显示隐藏字段', stage: '暂存本行', discard: '放弃本行输入',
+  pageNavigation: '记录跨页状态', pageLoading: '正在读取第 {0} 页…', pageArrived: '已读取第 {0} 页。连续浏览使用当前筛选与排序，不保证跨页数据快照。',
+  pageDirty: '当前页还有输入或未提交草稿，请先处理后再跨页浏览。输入和草稿已保留。',
+  pageEmpty: '第 {0} 页没有记录，可返回上一页；不会自动继续读取。', pageFailed: '第 {0} 页读取失败，旧页未保留为新页。请返回上一页或明确刷新重试。',
+  pageUnavailable: '当前记录或页面已变化，请重新选择记录后再跨页浏览。', pageChanged: '读取结果不属于请求的页码或页大小，请重新读取。',
   stageHint: '仅暂存到本页，仍需预览并提交。切行和失焦不会写入数据库。',
   inputDirty: '有尚未暂存的输入', staged: '本行已有草稿', unchanged: '本行未修改', inserted: '新增记录', deleted: '待删除记录',
   editField: '编辑字段', viewField: '查看字段', collapseField: '收起字段', mode: '值类型', value: '字段内容',
