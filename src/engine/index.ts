@@ -1,3 +1,4 @@
+import { CsvExportFieldCatalogs, type CsvExportFieldSnapshot } from './csvExportFields';
 import { applyTableTransaction, emptyTableApplyEvidence } from './tableApplyTransaction';
 import type { TableApplyEvidence } from '../shared/tableApplyReceipt';
 import type { TableApplyBinding } from '../shared/tableApplyReceipt';
@@ -90,6 +91,7 @@ export class Engine {
   private readonly foreignKeyPatches: TableForeignKeyPatchTasks;
   private readonly schemaComparisons: SchemaCompareTasks;
   private readonly structureCache = new StructurePatchCache();
+  private readonly csvExportFields = new CsvExportFieldCatalogs(this.structureCache);
   private readonly structureExecutions = new StructureExecutionLocks();
   private readonly structureSearches=new StructureSearches();
   private readonly dataSearches:DataSearchTasks;
@@ -368,7 +370,18 @@ export class Engine {
       case 'excel.import': this.assertFile(input); return this.withExcelTask(input, '导入 Excel', task => this.importExcel(task, input));
       case 'excel.export': this.assertFile(input); return this.withExcelTask(input, '导出 Excel', task => this.exportExcel(task, input));
       case 'files.import': this.assertFile(input); return this.withConnection(input.connectionId, managed => this.runTask(input.taskId, managed, '导入文件', task => this.importFile(task, input)), input.database);
-      case 'files.export': this.assertFile(input); return this.withConnection(input.connectionId, managed => this.runTask(input.taskId, managed, '导出文件', task => this.exportFile(task, input)), input.database);
+      case 'files.exportColumns': {
+        const target = { connectionId: input.connectionId, database: input.database, table: input.table };
+        const read = await this.withIndependentTask(input.connectionId, input.taskId, async (managed, control) => { const info = await metadata.tableInfo(managed, input.database, input.table); control.checkCancelled(); return this.csvExportFields.prepare(target, info, managed, input.connectionRevision); }, undefined, '读取CSV导出字段', true);
+        return this.csvExportFields.publish(read);
+      }
+      case 'files.releaseExportColumns': return this.csvExportFields.release(input.catalogId);
+      case 'files.export': {
+        this.assertFile(input);
+        if (input.csvSelection && (input.format !== 'csv' || !input.includeData)) throw Error('字段选择只适用于CSV数据导出');
+        const projection = input.csvSelection ? this.csvExportFields.consume(input.csvSelection, { connectionId: input.connectionId, database: input.database, table: input.table }, input.connectionRevision) : undefined;
+        return this.withConnection(input.connectionId, managed => this.runTask(input.taskId, managed, '导出文件', task => this.exportFile(task, input, projection)), input.database);
+      }
       case 'files.exportResult': {
         this.assertFile(input);
         if (this.taskIdInUse(input.taskId)) throw new Error('任务编号已在执行');
@@ -1191,10 +1204,17 @@ export class Engine {
   }
 
   /** 导出使用流背压和临时文件；完成后原子替换，取消或失败不留下伪完整目标文件。 */
-  private async exportFile(task: RunningTask, input: Input): Promise<{ rows: number }> {
+  private async exportFile(task: RunningTask, input: Input, projection?: CsvExportFieldSnapshot & { selected: string[] }): Promise<{ rows: number }> {
     if (!['csv', 'json', 'sql'].includes(input.format)) throw new Error('不支持的导出格式');
     if (!input.includeData && !(input.format === 'sql' && input.includeStructure)) throw new Error('请选择导出数据，或以 SQL 格式导出结构');
-    const encoding = encodingName(input.encoding);
+    const encoding = encodingName(input.encoding); let selectedTransaction = false;
+    try {
+    if (projection) {
+      // 同一独立会话先取得事务MDL再重读目录；LIMIT 0不读取行值，DDL不能在核对后换列。
+      await this.statement(task, 'SET TRANSACTION ISOLATION LEVEL REPEATABLE READ');
+      await this.statement(task, 'START TRANSACTION WITH CONSISTENT SNAPSHOT'); selectedTransaction = true;
+      await this.statement(task, 'SELECT 1 FROM ' + qualified(input.database, input.table) + ' LIMIT 0');
+    }
     const info = await metadata.tableInfo(task.managed, input.database, input.table);
     if (input.format === 'sql' && input.includeStructure) {
       // 使用本次独立导出连接的完整缓存模式；在创建临时文件前拒绝不可保真定义，不重写或删除默认值。
@@ -1208,7 +1228,7 @@ export class Engine {
       } else if (info.objectKind !== 'view') throw new Error('无法确认服务器对象为基本表或视图，未导出结构；可以单独导出数据');
     }
     this.checkCancelled(task);
-    const dataColumns = info.columns.filter(column => input.format !== 'sql' || !column.generated);
+    const dataColumns = projection ? this.csvExportFields.project(projection, info, task.managed) : info.columns.filter(column => input.format !== 'sql' || !column.generated);
     const temporaryPath = `${input.filePath}.dbark-${randomUUID()}.partial`;
     const file = await open(temporaryPath, 'wx');
     let count = 0, completed = false;
@@ -1233,8 +1253,7 @@ export class Engine {
       if (input.includeData) {
         if (input.format === 'csv') await write(dataColumns.map(column => csvHeader(column.name)).join(',') + '\r\n');
         if (input.format === 'json') await write('[\n');
-        await this.statement(task, 'SET TRANSACTION ISOLATION LEVEL REPEATABLE READ');
-        await this.statement(task, 'START TRANSACTION WITH CONSISTENT SNAPSHOT');
+        if (!projection) { await this.statement(task, 'SET TRANSACTION ISOLATION LEVEL REPEATABLE READ'); await this.statement(task, 'START TRANSACTION WITH CONSISTENT SNAPSHOT'); }
         task.inFlight = true; task.generation++;
         const options = { sql: `SELECT ${dataColumns.map(column => identifier(column.name)).join(', ')} FROM ${qualified(input.database, input.table)}`, rowsAsArray: true };
         // 与表页一样保留浮点二进制位，避免相邻唯一键导出后变成同一个短小数。
@@ -1243,6 +1262,7 @@ export class Engine {
         try {
           for await (const raw of stream) {
             this.checkCancelled(task);
+            if (projection && (!Array.isArray(raw) || raw.length !== dataColumns.length)) throw Error('CSV实际行字段与已核目录不一致，未替换目标文件');
             const row = Object.fromEntries(dataColumns.map((column, index) => [column.name, serializeCell((raw as unknown[])[index])]));
             if (input.format === 'csv') await write(dataColumns.map(column => csvCell(row[column.name])).join(',') + '\r\n');
             else if (input.format === 'json') await write((count ? ',\n' : '') + JSON.stringify(row));
@@ -1254,7 +1274,7 @@ export class Engine {
           stream.destroy(); task.inFlight = false; await task.cancelPending;
         }
         if (input.format === 'json') await write('\n]\n');
-        await this.statement(task, 'ROLLBACK');
+        await this.statement(task, 'ROLLBACK'); selectedTransaction = false;
       }
       this.checkCancelled(task);
       await file.sync(); await file.close();
@@ -1263,6 +1283,10 @@ export class Engine {
     } finally {
       await file.close().catch(() => undefined);
       if (!completed) await rm(temporaryPath, { force: true });
+    }
+    } finally {
+      // 目录重核、文件打开或取消失败也释放读取事务；连接关闭仍沿原独立任务finally完成。
+      if (selectedTransaction) await this.statement(task, 'ROLLBACK').catch(() => undefined);
     }
   }
 }

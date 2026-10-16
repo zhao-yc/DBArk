@@ -137,7 +137,7 @@ async function writeSelectedQuery(input: { fileToken: string; sql: string; encod
 /** 分派前检查配置保存锁，防止检查通过后另一个请求用旧凭据抢先建连。 */
 async function dispatch(command: Command, input: any): Promise<unknown> {
   // 来源释放只撤销内存能力，配置保存和退出收尾时也必须可用，不建立任务或历史。
-  if (command === 'table.copySourceRelease') return broker.request(command, input);
+  if (command === 'table.copySourceRelease' || command === 'files.releaseExportColumns') return broker.request(command, input);
   // 确认与释放不新建连接或任务，不受配置保存锁阻塞；归属由引擎在取消前校验。
   if(command==='search.dataNext'||command==='search.dataRelease'||command==='search.recordsRelease')return broker.request(command,input);
   const structurePurpose = command.startsWith('schema.databaseCreate.') ? 'databaseCreate' as const : command.startsWith('schema.tableRename.') ? 'tableRename' as const : command.startsWith('schema.tableAutoIncrement.') ? 'tableAutoIncrement' as const : command.startsWith('schema.tableDefaultEncoding.') ? 'tableDefaultEncoding' as const : command.startsWith('schema.tableDrop.') ? 'tableDrop' as const : command.startsWith('schema.tableTruncate.') ? 'tableTruncate' as const : command.startsWith('schema.tableComment.') ? 'tableComment' as const : command.startsWith('schema.columns.') ? 'columns' as const : command.startsWith('schema.indexes.') ? 'indexes' as const : command.startsWith('schema.foreignKeys.') ? 'foreignKeys' as const : undefined;
@@ -314,6 +314,7 @@ async function dispatch(command: Command, input: any): Promise<unknown> {
     }
     // 令牌目标只来自可信引擎输出；修订在投递前同步读取，客户端不能注入或覆盖。
     if (structureCommand && command !== structurePrefix + 'release') input = { ...input, connectionRevision: store.connectionRevision() };
+    if (command === 'files.exportColumns' || command === 'files.export' && input.csvSelection) input = { ...input, connectionRevision: store.connectionRevision() };
     if (command.startsWith('schema.compare')) {
       input = { ...input, connectionRevision: store.connectionRevision() };
       if (command === 'schema.compare') { connectionConfig.assertAvailable(input.source.connectionId); connectionConfig.assertAvailable(input.target.connectionId); }
