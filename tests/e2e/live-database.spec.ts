@@ -1,3 +1,4 @@
+import { discardTestTab } from './query-close-ui';
 import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import type { RowDataPacket } from 'mysql2/promise';
@@ -70,7 +71,7 @@ async function verifyConnectionContextInvalidation(database: string, connectionN
 
   // 原连接标签关闭触发真实会话释放，另一连接的当前查询与对象树继续存在。
   await acceptNativeConfirmation();
-  await page.locator('.workspace-tab-button').first().locator('.tab-close').click();
+  await discardTestTab(page, page.locator('.workspace-tab-button').first().locator('.tab-close'));
   await expect(page.locator('.workspace-tab-button')).toHaveCount(1);
   await originalNode.locator('.connection-row .tree-label').click();
   const originalDatabase = originalNode.locator('.database-row').filter({ has: page.getByRole('button', { name: database, exact: true }) });

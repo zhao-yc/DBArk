@@ -1,4 +1,5 @@
-import { test, expect, desktop, page, pageErrors, quitDesktop, launchDesktop } from './desktop-fixture';
+import { discardTestTab } from './query-close-ui';
+import { test, expect, page, pageErrors, quitDesktop, launchDesktop } from './desktop-fixture';
 const modifier = process.platform === 'darwin' ? 'Meta' : 'Control';
 const query = () => page.locator('.query-tab:visible');
 const saveDialog = () => page.getByRole('dialog', { name: '保存查询', exact: true });
@@ -47,8 +48,7 @@ test('原查询更新、另存独立记录、绑定重启恢复与关闭清除�
   records = await page.evaluate(() => window.dbark.invoke('queries.list', {})); expect(records.find(record => record.id === first.source.id)?.sql).toBe(updatedSql); expect(records.find(record => record.id === copy.sourceBinding!.id)?.sql).toContain('重启后只更新副本');
   expect(await page.evaluate(() => window.dbark.invoke('history.list', {}))).toEqual([]);
   await page.screenshot({ path: info.outputPath('query-binding-restored.png') });
-  await desktop.evaluate(({ dialog }) => { dialog.showMessageBoxSync = (() => 0) as typeof dialog.showMessageBoxSync; });
-  await page.locator('.tab-strip .tab-close').click();
+  await discardTestTab(page, page.locator('.tab-strip .tab-close'));
   await expect.poll(async () => (await page.evaluate(() => window.dbark.invoke('settings.get', {}))).tabs.some(tab => tab.id === tabId)).toBe(false);
   expect(pageErrors).toEqual([]);
 });
