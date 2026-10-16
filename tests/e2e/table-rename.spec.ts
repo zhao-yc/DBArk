@@ -19,11 +19,17 @@ async function open(context: LiveContext, name: string) {
 }
 async function ddl(context: LiveContext, name: string) { const [rows] = await context.observer.query<RowDataPacket[]>('SHOW CREATE TABLE ' + target(context, name)); return String(rows[0]['Create Table']); }
 /** 只通过中文复选框确认三项风险，SQL编辑器必须保持只读。 */
-async function preview() {
+async function preview(context: LiveContext, sourceName: string, targetName: string) {
   await dialog().getByRole('button', { name: text.preview, exact: true }).click();
   await expect(dialog().getByRole('heading', { name: text.fixedSql, exact: true })).toBeVisible();
-  const editor = dialog().locator('.monaco-editor'), before = await editor.locator('.view-lines').innerText();
-  expect(before).toContain('RENAME TABLE'); await editor.click(); await page.keyboard.type('不可写入的SQL'); await expect(editor.locator('.view-lines')).toHaveText(before);
+  const editor = dialog().locator('.monaco-editor'), lines = editor.locator('.view-lines');
+  // 本例唯一单行SQL用静态限定名构造；预期空格按Monaco的NBSP展示编码，不调用生产计划器。
+  const expected = `RENAME TABLE ${target(context, sourceName)} TO ${target(context, targetName)};`.replace(/ /g, '\u00a0');
+  // 标题不代表编辑器就绪；完整比较仅移除视图软换行，不trim或折叠其它空白。
+  await expect.poll(async () => (await lines.innerText()).replace(/\r?\n/g, '')).toBe(expected);
+  const before = await lines.innerText(); expect(before.replace(/\r?\n/g, '')).toBe(expected);
+  // 保留完整原始innerText，输入前后使用同一口径逐字比较，不能用关键词或截断文本代替。
+  await editor.click(); await page.keyboard.type('不可写入的SQL'); await expect.poll(() => lines.innerText()).toBe(before);
   const boxes = dialog().getByRole('checkbox'); expect(await boxes.count()).toBe(3); for (let index = 0; index < 3; index++) await boxes.nth(index).check();
 }
 
@@ -43,7 +49,7 @@ test.describe('同库表重命名：正式Electron与真实数据库准备', () 
       if (!writablePort) { await expect(dialog()).toContainText(text.readonly); await expect(dialog().getByRole('textbox', { name: text.newName, exact: true })).toBeDisabled(); await dialog().getByRole('button', { name: text.close, exact: true }).click(); return; }
       await expect(dialog().getByRole('textbox', { name: text.newName, exact: true })).toBeEnabled(); await dialog().getByRole('button', { name: text.close, exact: true }).click();
       await tablePage().getByRole('button', { name: text.title, exact: true }).click(); const before = await ddl(context, name);
-      await dialog().getByRole('textbox', { name: text.newName, exact: true }).fill('renamed_complex'); await preview(); expect(await ddl(context, name)).toBe(before);
+      await dialog().getByRole('textbox', { name: text.newName, exact: true }).fill('renamed_complex'); await preview(context, name, 'renamed_complex'); expect(await ddl(context, name)).toBe(before);
       await dialog().getByRole('button', { name: text.apply, exact: true }).dblclick(); await expect(dialog()).toBeHidden({ timeout: 20000 });
       await expect(tablePage().locator('.context-bar')).toContainText('renamed_complex'); await expect(tablePage().locator('.loading-overlay')).toHaveCount(0);
       expect(await ddl(context, 'renamed_complex')).toBe(before.replace('CREATE TABLE `rename_complex`', 'CREATE TABLE `renamed_complex`'));
