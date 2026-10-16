@@ -1,4 +1,5 @@
 import type { TableCopyPageSources, TableCopySourceReadResult } from '../shared/tableCopySource';
+import type { TablePage } from '../shared/contracts';
 import { tableCopyMetadataKey } from '../shared/tableCopySource';
 import type { DraftRow } from './dataChanges';
 import { ownCell } from './lib';
@@ -13,6 +14,13 @@ export interface RecordCopyReadIntent {
   invalidated: boolean; consumed: boolean; cancelSent: boolean;
 }
 const changed = () => new Error('完整复制源读取期间目标、选择、字段输入或草稿已变化；旧结果已丢弃，未自动重试。');
+export interface RecordCopyPage { page: Pick<TablePage, 'copyMetadataKey' | 'copySource'>; target: string; connectionVersion: number; generation: number }
+/** 所有复制路径先比较完整目录身份；不能把来源报告缺列的页按旧目录认作完整本地行。 */
+export function recordCopyMetadataReason(context: RecordContext, binding: RecordCopyPage | null, source = binding?.page.copySource): string {
+  const page = binding?.page;
+  if (!context.info || !binding || binding.target !== recordTargetKey(context.target) || binding.connectionVersion !== context.connectionVersion || binding.generation !== context.generation || !page?.copyMetadataKey || page.copyMetadataKey !== tableCopyMetadataKey(context.info) || source !== page.copySource || (source?.status === 'ready' && source.metadataKey !== page.copyMetadataKey) || source?.missingColumns.some(name => !context.info!.columns.some(column => column.name === name && !column.generated && !/\bauto_increment\b/i.test(column.extra)))) return '当前目录与表页来源的完整结构身份未知或不一致；请显式刷新后核对，未生成草稿或发起补取。';
+  return '';
+}
 /** 标量使用Object.is保留-0，二进制只比较原始包装；不能用JSON把不同精度值简化相等。 */
 function sameValues(left: DraftRow['data'], right: DraftRow['data']): boolean {
   return Object.keys(left).length === Object.keys(right).length && Object.keys(left).every(key => {

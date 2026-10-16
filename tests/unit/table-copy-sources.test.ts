@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { TableCopySources } from '../../src/engine/tableCopySources';
 import { serializeCell } from '../../src/engine/sql';
 import type { CommandMap, DataRow, TableInfo, TablePage } from '../../src/shared/contracts';
-import { tableCopySourceLimits as limits } from '../../src/shared/tableCopySource';
+import { tableCopySourceLimits as limits, tableCopyMetadataKey } from '../../src/shared/tableCopySource';
 import { validateCommand } from '../../src/shared/validation';
 import { publicCommands } from '../../src/shared/commands';
 
@@ -55,13 +55,14 @@ describe('完整复制源严格IPC', () => {
 });
 
 describe('页租约签发与普通查看兼容', () => {
-  it('完整普通页不进事务或身份路径，不增加来源', async () => { const f = fixture(); f.state.info.columns.find(column => column.name === 'hidden')!.extra = ''; const page = await f.issue(); expect(page.copySource).toBeUndefined(); expect(f.query).not.toHaveBeenCalled(); expect(f.identity).not.toHaveBeenCalled(); });
+  it('显式复制的完整普通页在同MDL复核目录，保留原值且不核物理身份或签发行租约', async () => { const f = fixture(); f.state.info.columns.find(column => column.name === 'hidden')!.extra = ''; const page = await f.issue(); expect(page.copySource).toBeUndefined(); expect(page.copyMetadataKey).toBe(tableCopyMetadataKey(f.state.info)); expect(f.log[2]).toBe('SELECT 1 FROM `db`.`records` LIMIT 0'); expect(f.log.at(-1)).toBe('ROLLBACK'); expect(f.identity).not.toHaveBeenCalled(); });
+  it('初读旧目录没有INVISIBLE，MDL内新目录新增该列时仍签发新结构而非本地完整标记', async () => { const f = fixture(), old = structuredClone(f.state.info); old.columns = old.columns.filter(column => column.name !== 'hidden'); f.readInfo.mockResolvedValueOnce(old); const { page, source } = await f.ready(); expect(source.missingColumns).toEqual(['hidden']); expect(page.copyMetadataKey).toBe(source.metadataKey); expect(page.copyMetadataKey).not.toBe(tableCopyMetadataKey(old)); });
   it('同事务MDL内核目录、身份、读页并签发，rollback之后才交付', async () => {
     const f = fixture(), { source } = await f.ready(); expect(source.missingColumns).toEqual(['hidden']); expect(source.rowRefs).toHaveLength(1); expect(source.expiresAt).toBe(f.state.now + limits.retentionMs);
     expect(f.log).toEqual(['SET TRANSACTION ISOLATION LEVEL REPEATABLE READ', 'START TRANSACTION READ ONLY', 'SELECT 1 FROM `db`.`records` LIMIT 0', 'SELECT @@SESSION.time_zone AS timeZone', expect.stringMatching(/^PAGE:SELECT \*/), 'ROLLBACK']); expect(f.state.locked).toBe(false); expect(f.cache.stats()).toMatchObject({ pages: 1, references: 1, active: 0 });
   });
   it.each(['identity-permission', 'identity-unproven', 'budget'])('%s只使补取不可用，普通原值仍显示', async reason => { const f = fixture(); f.state.preparedReason = reason; expect((await f.issue()).copySource).toMatchObject({ status: 'unavailable', reason }); expect(f.cache.stats().pages).toBe(0); });
-  it.each(['SET TRANSACTION', 'START TRANSACTION', 'SELECT 1 FROM', 'SELECT @@SESSION'])('%s权限失败降级原查看，释锁后不追签', async statement => { const f = fixture(); f.state.fail = statement; const page = await f.issue(); expect(page.rows[0].note).toBe('原记录'); expect(page.copySource).toMatchObject({ status: 'unavailable', reason: 'identity-permission' }); expect(f.cache.stats().pages).toBe(0); expect(f.log.at(-1)).toMatch(/^PAGE:SELECT \*/); });
+  it.each(['SET TRANSACTION', 'START TRANSACTION', 'SELECT 1 FROM', 'SELECT @@SESSION'])('%s权限失败降级原查看，释锁后不追签', async statement => { const f = fixture(); f.state.fail = statement; const page = await f.issue(); expect(page.rows[0].note).toBe('原记录'); expect(page.copySource).toMatchObject({ status: 'unavailable', reason: 'identity-permission' }); expect(page.copyMetadataKey).toBeUndefined(); expect(f.cache.stats().pages).toBe(0); expect(f.log.at(-1)).toMatch(/^PAGE:SELECT \*/); });
   it('断线和取消不被降级为成功', async () => { const f = fixture(); f.state.fail = 'SELECT 1'; f.state.failure = { errno: 2013 }; await expect(f.issue()).rejects.toMatchObject({ errno: 2013 }); expect(f.readPage).not.toHaveBeenCalled(); });
   it.each([1064, 1235])('服务器不支持新增事务语义%s只降级查看，不扩大可写资格', async errno => { const f = fixture(); f.state.fail = 'START TRANSACTION'; f.state.failure = { errno }; expect((await f.issue()).copySource).toMatchObject({ status: 'unavailable', reason: 'unsupported' }); expect(f.cache.stats().pages).toBe(0); });
   it.each(['missing', 'null', 'large', 'no-key'])('原可靠键%s不按行号猜测', async condition => { const f = fixture(); if (condition === 'missing') f.state.info.columns[0].extra = 'INVISIBLE'; else if (condition === 'null') f.state.raw.id = null; else if (condition === 'large') f.state.raw.id = 'x'.repeat(limits.keyBytes + 1); else f.state.info.editableKey = []; expect((await f.issue()).copySource).toMatchObject({ status: 'unavailable', reason: 'no-key' }); });
