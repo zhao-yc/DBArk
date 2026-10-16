@@ -6,6 +6,16 @@
 
 桌面生命周期由 Playwright 自动夹具注册，跨多个测试文件运行时仍逐例启动和退出 Electron，不依赖模块首次导入时的副作用钩子。
 
+片段库原生诊断默认关闭。仅在独立离线进程设置 `DBARK_SNIPPETS_NATIVE_DIAGNOSTICS=1`，且实际解析后的 trace 模式允许本次采集时，为 `snippets.spec.ts` 原有的单个离线用例显式记录 Electron `BrowserContext`。原生 CI 只在源码 `pnpm test:e2e` 步骤开启此门；安装验收不继承。`--trace off`、`test.use({ trace: 'off' })`、重试模式、关闭截图或 DOM 的选项均受尊重。诊断门与 `DBARK_INTEGRATION_ENABLED=1` 或 `DBARK_TEST_*`、`DBARK_C02_*`、`DBARK_SSH_*`、`DBARK_MTLS_*` 配置并用时，在 Electron 启动前拒绝；不读取 `.cache/dbark-test.env`。
+
+首次 trace 在固定离线连接表单关闭后开启，退出前封存 `snippets-native-1.zip`；原用例重启后另开 `snippets-native-2.zip`，失败时在关闭窗口前收尾。默认失败才保留两段及 `snippets-native-state` JSON 附件；成功时按实际 trace 模式删除临时段。trace 包含本固定离线夹具的 DOM、屏幕帧及测试动作，不收集源码文件（`sources: false`），不打开 SQL 文件、连接密码、密钥或剪贴板。新增状态 JSON 不保存输入值、SQL、HTML、文件内容、环境值或异常原文。
+
+只停止本诊断成功开启的 trace。当前锁定的 Playwright 1.64 没有公开的采集状态查询，启动前只读检查客户端 `_isTracing`；已有记录或字段缺失时保守拒绝，不改其它记录器配置。此内部字段需在升级 Playwright 时重新核对。启停超过预算时，摘要保留缺失标记；迟到落盘仍继续按最终成功/失败的保留策略收尾，不能把超预算记录当作完整证据。
+
+JSON 每 500 毫秒采样，最多 128 行、32 个阶段标记、16 个固定错误码。分别读取原生窗口可见、焦点、最小化、最大化、全屏和几何，以及 document 可见性、焦点、视口、编辑按钮存在/disabled/几何和 rAF 请求/交付计数。每个采样通道最多一个在途请求；页面停滞不会堆积 evaluate，也不阻挡原生通道。每次页面采样最多请求一个 rAF，不等待帧，不使用页面定时器或连续帧循环。失败瞬间再次采样，排空与观察器清理各限 300 毫秒，trace 启停各限 5 秒；诊断缺失写固定错误码，不能覆盖原动作失败。
+
+原用例标题、动作顺序、点击 30 秒默认上限、总超时 45 秒、断言和原有截图保持不变。诊断不显示、恢复或聚焦窗口，不使用 sleep、force 点击或失败重试。trace、几何读取和 rAF 请求会增加观察开销，带诊断运行通过不能证明原失败已修复；需保留第一次失败的源码和产物，并由对应原生平台重新验证。本次新增纯单元和 `--list` 仅验证诊断接线与边界，不计为 Windows/macOS 实跑通过。
+
 ```sh
 pnpm test:e2e
 ```

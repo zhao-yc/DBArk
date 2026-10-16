@@ -1,4 +1,4 @@
-import { test, expect, page, pageErrors, quitDesktop, launchDesktop } from './desktop-fixture';
+import { test, expect, page, pageErrors, quitDesktop, launchDesktop, startSnippetsNativeDiagnostics, snippetsDiagnostics } from './desktop-fixture';
 
 const modifier = process.platform === 'darwin' ? 'Meta' : 'Control';
 const source = "-- 原样保留 $1 ${name} 和注释\nSELECT JSON_OBJECT('a', '$&'), '${1:值}', '🚢';\n";
@@ -43,7 +43,7 @@ async function openLibrary() { await query().getByRole('button', { name: 'SQL �
 async function selectSnippet(name: string) { await dialog().getByRole('button', { name: `选择片段：${name}`, exact: true }).click(); }
 
 test('离线片段分组搜索编辑复制删除、重启持久化、纯文本插入撤销与模态快捷键', async ({}, testInfo) => {
-  await offlineQuery(); const original = 'SELECT 0;'; await writeSql(original); await openLibrary();
+  await offlineQuery(); if (snippetsDiagnostics) await startSnippetsNativeDiagnostics(); const original = 'SELECT 0;'; await writeSql(original); await openLibrary();
   await selectSnippet('按条件读取列'); await expect(dialog().getByRole('button', { name: '编辑片段', exact: true })).toHaveCount(0);
   await dialog().locator('.monaco-editor').getByRole('textbox').focus();
   await page.keyboard.press(`${modifier}+Enter`); await page.keyboard.press(`${modifier}+S`); await noExecution(); await expectSql(original);
@@ -59,10 +59,14 @@ test('离线片段分组搜索编辑复制删除、重启持久化、纯文本�
   await dialog().getByLabel('搜索片段名称、说明或正文', { exact: true }).fill('不是参数');
   await expect(dialog().getByRole('button', { name: '选择片段：原文片段', exact: true })).toBeVisible();
   await expect(dialog().getByRole('button', { name: '选择片段：按条件读取列', exact: true })).toHaveCount(0);
+  snippetsDiagnostics?.mark('before-copy');
   await dialog().getByRole('button', { name: '复制为新片段', exact: true }).click();
   await dialog().getByLabel('片段名称', { exact: true }).fill('原文副本');
+  snippetsDiagnostics?.mark('before-copy-save');
   await dialog().getByRole('button', { name: '保存', exact: true }).click();
+  snippetsDiagnostics?.mark('before-copy-edit');
   await dialog().getByRole('button', { name: '编辑片段', exact: true }).click();
+  snippetsDiagnostics?.mark('after-copy-edit');
   await dialog().getByRole('textbox', { name: '片段说明', exact: true }).fill('只修改副本');
   await dialog().getByRole('button', { name: '保存', exact: true }).click();
   const snippets = await page.evaluate(() => window.dbark.invoke('snippets.list', {}));
