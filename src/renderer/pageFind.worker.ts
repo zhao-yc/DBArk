@@ -9,7 +9,7 @@ self.onmessage = (event: MessageEvent<{ id: number; request: PageFindRequest }>)
   try {
     if (!Number.isSafeInteger(id) || id < 1 || !request || !['find', 'preview'].includes(request.operation) || !Array.isArray(request.rows) || !Array.isArray(request.keys) || request.keys.some(key => typeof key !== 'string') || !Number.isSafeInteger(request.generation)) throw new Error(text.budget);
     const options = request.options;
-    if (!options || !['text', 'null', 'default'].includes(options.kind) || typeof options.query !== 'string' || options.query.length > pageFindLimits.query || typeof options.caseSensitive !== 'boolean' || typeof options.wholeCell !== 'boolean' || (options.regex !== undefined && typeof options.regex !== 'boolean') || (options.column !== undefined && typeof options.column !== 'string')) throw new Error(text.budget);
+    if (!options || !['text', 'null', 'default'].includes(options.kind) || typeof options.query !== 'string' || options.query.length > pageFindLimits.query || typeof options.caseSensitive !== 'boolean' || typeof options.wholeCell !== 'boolean' || (options.regex !== undefined && typeof options.regex !== 'boolean') || (options.captureReplacement !== undefined && typeof options.captureReplacement !== 'boolean') || (options.column !== undefined && typeof options.column !== 'string')) throw new Error(text.budget);
     assertPageFindTransfer(request);
     if (request.operation === 'find') result = { status: 'ready', operation: 'find', matches: findPageCellsInWorker(request.rows, request.keys, options) };
     else {
