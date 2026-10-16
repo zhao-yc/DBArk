@@ -1,4 +1,6 @@
 export const historyPagesZh={
+ timeRange:'执行开始时间范围',from:'开始时间（包含）',until:'结束时间（不包含）',clearTime:'清除时间范围',timeZone:'本机时区（打开面板时）',unknownZone:'未能读取，请填写明确绝对时间',
+ timeHint:'按执行开始时刻筛选：开始包含、结束不包含，留空不限。填写YYYY-MM-DD HH:mm[:ss[.SSS]]，或带Z/数值偏移的ISO时间；重复夏令时时刻须明确偏移，非法日期不会自动调整。',
  search:'搜索完整历史SQL或错误',searchButton:'搜索执行历史',fields:'搜索字段',sql:'SQL正文',error:'错误信息',
  scope:'历史来源',all:'全部来源',unbound:'无来源历史',status:'执行结果',allStatus:'全部结果',success:'执行成功',failed:'执行失败',
  onError:'损坏记录处理',continue:'记录失败并继续',stop:'遇到失败停止',hint:'每批检查最多25条，只展示有界概要；保留最近1000条。搜索完整原文，翻页替换当前批次。',
