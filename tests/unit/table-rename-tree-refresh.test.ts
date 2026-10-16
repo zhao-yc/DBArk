@@ -6,6 +6,7 @@ import { sidebarHarness, type SidebarComponentRenderer } from '../helpers/sideba
 import { tableRenameZh } from '../../src/renderer/locales/tableRename.zh-CN';
 import { tableCommentZh } from '../../src/renderer/locales/tableComment.zh-CN';
 import { tableDefaultEncodingZh } from '../../src/renderer/locales/tableDefaultEncoding.zh-CN';
+import { tableAutoIncrementZh } from '../../src/renderer/locales/tableAutoIncrement.zh-CN';
 
 const objects = (name: string) => [{ name, kind: 'table' }];
 /** 真正执行App的精确数据库刷新方法，不在测试里另写刷新键规则。 */
@@ -22,12 +23,12 @@ function appRefresh() {
 /** 父子属性从完整生产JSX取出，再交给同一真实组件实例，避免手工补上漏传的接线。 */
 function childProps(node: SidebarComponentRenderer, name: string) { const children = node.all(value => typeof value.type === 'function' && value.type.name === name); if (children.length !== 1) throw Error('实际父组件没有唯一子节点：' + name); return children[0].props; }
 async function treeHarness() {
-  const f = await sidebarHarness(), rename = vi.fn(), comment = vi.fn(), encoding = vi.fn(), refresh = appRefresh();
-  const sidebar = f.create('sidebar', 'c', { onTableRename: rename, onTableComment: comment, onTableDefaultEncoding: encoding });
+  const f = await sidebarHarness(), rename = vi.fn(), counter = vi.fn(), comment = vi.fn(), encoding = vi.fn(), refresh = appRefresh();
+  const sidebar = f.create('sidebar', 'c', { onTableRename: rename, onTableAutoIncrement: counter, onTableComment: comment, onTableDefaultEncoding: encoding });
   const connection = f.create('connection', 'c', childProps(sidebar, 'ConnectionNode')); connection.click();
   await f.settle(0, { dialect: 'mysql', version: '8.4.11' }); await f.settle(1, ['测试库']);
   const database = f.create('database', 'c', childProps(connection, 'DatabaseNode'));
-  return { ...f, database, rename, comment, encoding, renamed() { sidebar.update({ objectRefreshVersions: refresh.next() }); connection.update(childProps(sidebar, 'ConnectionNode')); database.update(childProps(connection, 'DatabaseNode')); } };
+  return { ...f, database, rename, counter, comment, encoding, renamed() { sidebar.update({ objectRefreshVersions: refresh.next() }); connection.update(childProps(sidebar, 'ConnectionNode')); database.update(childProps(connection, 'DatabaseNode')); } };
 }
 
 describe('重命名与当前侧栏请求门的混合源码', () => {
@@ -74,9 +75,9 @@ describe('重命名与当前侧栏请求门的混合源码', () => {
     const f = await sidebarHarness(), old = f.create('database'); old.update({ refreshVersion: 1 }); old.unmount(); const writes = old.writes, current = f.create('database', 'c', { refreshVersion: 1 });
     await f.settle(0, objects('卸载后目录')); expect(old.writes).toBe(writes); expect(current.expanded()).toBe(false); expect(current.objects()).toEqual([]); expect(f.calls).toHaveLength(1); f.dispose();
   });
-  it('真实对象行仍同时提供重命名、备注与默认编码，接线目标精确到当前表', async () => {
+  it('真实对象行同时提供重命名、自增、备注与默认编码，接线目标精确到当前表', async () => {
     const f = await treeHarness(), node = f.database; node.click(); await f.settle(2, [...objects('CaseTable'), { name: 'view_only', kind: 'view' }]);
-    for (const [label, callback] of [[tableRenameZh.title, f.rename], [tableCommentZh.title, f.comment], [tableDefaultEncodingZh.title, f.encoding]] as const) { node.click(node.button(`${label} CaseTable`)); expect(callback).toHaveBeenCalledExactlyOnceWith('c', '测试库', 'CaseTable'); expect(node.all(value => value.props['aria-label'] === `${label} view_only`)).toHaveLength(0); }
+    for (const [label, callback] of [[tableRenameZh.title, f.rename], [tableAutoIncrementZh.title, f.counter], [tableCommentZh.title, f.comment], [tableDefaultEncodingZh.title, f.encoding]] as const) { node.click(node.button(`${label} CaseTable`)); expect(callback).toHaveBeenCalledExactlyOnceWith('c', '测试库', 'CaseTable'); expect(node.all(value => value.props['aria-label'] === `${label} view_only`)).toHaveLength(0); }
     f.dispose();
   });
 });
