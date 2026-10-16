@@ -340,7 +340,12 @@ export function TableTab({ tab, onDesign, onTransfer, onColumnPatches, onIndexPa
     if (blocked || document.querySelector('[role="dialog"]')) return;
     // 失去有效坐标时先同步撤销选择令牌，迟到预览不能抢在React渲染前写入。
     if (!row || !key || !page?.columns.some(column => column.key === key) || !rowsRef.current.some(current => current.id === row.id)) { selectionRef.current = undefined; setSelection(undefined); return; }
-    const activate = () => { selectionRef.current = { rowId: row.id, key }; setSelection(current => current?.rowId === row.id && current.key === key ? current : { rowId: row.id, key }); };
+    const activate = () => {
+      // 同坐标重复通知复用令牌；同步引用与React状态共用同一对象，重渲染不制造选择变化。
+      const current = selectionRef.current;
+      const next = current?.rowId === row.id && current.key === key ? current : { rowId: row.id, key };
+      selectionRef.current = next; setSelection(next);
+    };
     if (record.formOpen && !record.select(row.id, activate)) restoreGridFocus(false); else if (!record.formOpen) activate();
   }
   /** 数据网格先返回当前行，再统一替换整个矩阵，避免多行粘贴被默认单行更新覆盖。 */
