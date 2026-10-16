@@ -227,7 +227,7 @@ export function buildChanges(info: TableInfo, changes: RowChange[]): SqlPreview 
     for (const name of info.editableKey) if (change.before[name] === null || change.before[name] === undefined) throw new Error('原始行唯一键不得为空');
     // 键条件保持可用索引；全文本旧值另做精确比较，不受 CI/AI/PAD SPACE 排序规则影响。
     const keyClauses = info.editableKey.map(name => { params.push(change.before[name]); return `${identifier(name)} <=> ${typedCellPlaceholder(columns.get(name)!, change.before[name])}`; });
-    // 非文本可靠键已由同一before值精确定位；重复比较会触发部分版本的大整数谓词错误传播。
+    // 非文本可靠键已由同一before值精确定位；实测部分版本重复大整数条件会异常不命中，去重避免该路径。
     // 文本键的索引比较受CI/AI/PAD SPACE影响，仍须保留下面独立的UTF-8字节旧值检查。
     const originalClauses = [...columns.values()].filter(column => !info.editableKey.includes(column.name) || /^(?:CHAR|VARCHAR|TINYTEXT|TEXT|MEDIUMTEXT|LONGTEXT|ENUM|SET|JSON)\b/i.test(column.type)).map(column => {
       params.push(change.before[column.name]);

@@ -2,6 +2,8 @@
 
 ## 0.18.0（开发中，未发布）
 
+当前主目录182文件3337单元、类型与构建通过。补齐当前文字单处替换后的下一处定位、输入焦点及单调意图，文字ABA/输入法结束不能恢复旧命令授权。真实六组合验收另发现超大主键重复谓词误冲突，已去重并保留文本键字节保护和全部非键旧值；36项真实Engine核心及12次正式D06界面通过，原5.7失败和完整回滚分别记录，见[D06及原行保护](tests/integration/acceptance-d06-current-and-key-guards-20261016.md)。百万行多CSV ZIP正式UI补充也已通过，实际1000001行/136780880字节、队列峰值1行148字节，独立Python逐行/CRC核验及一次执行/资源清理通过，见[实证](tests/integration/acceptance-q05-million-archive-ui-20261016.md)。以下保留前期固定检查点，不累加成同一产物的通过数；安装包和macOS实库继续。
+
 接入TLS加密客户端私钥口令与独立安全存储槽，保留/清除、会话回退、1024字节及有效Unicode边界；真实mTLS核心正负例及Windows正式表单、utility、原生safeStorage落盘/真实重启/仅清TLS与不记住会话回退两项均通过，完整3267单元和类型检查通过，见[正式TLS实证](tests/integration/acceptance-c02-mtls-ui-20261016.md)；安装包、macOS及专属SSH认证等继续。表备注提供单属性面板、只读SQL预览、一次性确认、模式/物理表身份复核及真实取消；表默认字符集/排序规则提供服务器实际配对候选及最小DEFAULT ALTER，现有列转换另行处理。两切片核心分别在六组合各24项通过，Windows源码正式界面四项在六组合共24次通过，含最窄侧栏及严格TLS；修复树节点操作条遮挡和悬浮位移，原失败保留，安装与macOS实库继续。主目录3239项单元、类型与构建通过，固定输入和证据层见[表属性验收](tests/integration/acceptance-o01-table-properties-20261016.md)。另见[表备注](docs/plans/table-comment.md)、[默认编码](docs/plans/table-default-encoding.md)及[TLS口令](docs/development/c02-tls-passphrase-20261016.md)。
 
 ## 0.17.0 — 搜索、工作台与数据工具（开发预览）

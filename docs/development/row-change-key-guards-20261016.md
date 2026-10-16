@@ -54,3 +54,5 @@ node node_modules/vitest/vitest.mjs run --config vitest.integration.config.ts te
 ```
 
 run639/run641是ROOT此前的最小谓词实证，不能改称本提交六项真实Engine回归通过，也不能替代正式D06旧用例复验。更广类型/版本、GUI、安装产物和发布仍按各自验收记录判断。
+
+ROOT后续集成为d94930f：run647六组合各6项共36真实Engine核心通过，run650原两项正式D06界面在六组合共12次通过，包括MySQL5.7原集中提交失败按原断言通过；182文件3337单元、类型及构建也已过，相关资源独立核零。作者交付时的默认跳过和首轮旧参数期望失败仍保留，详见[正式验收及原失败](../../tests/integration/acceptance-d06-current-and-key-guards-20261016.md)。0.18未发布，不代表安装、其它驱动或macOS私网已验。
