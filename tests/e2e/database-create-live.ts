@@ -16,7 +16,7 @@ export function registerDatabaseCreateUiTests() {
   test('无默认库连接从真实表单选择编码，只读预览零DDL，确认后仅创建一次并刷新对象树', async () => {
     target(); const name = 'dbark_create_' + randomUUID().replaceAll('-', ''), connectionName = '新建库隔离 ' + name;
     const observer = await mysql.createConnection({ host: environment.DBARK_TEST_HOST, port: 13384, user: environment.DBARK_TEST_USER, password: environment.DBARK_TEST_PASSWORD, charset: 'utf8mb4', connectTimeout: 15000 });
-    let ownsTarget = false;
+    let ownsTarget = false, primary: { reason: unknown } | undefined;
     /** 观察连接只读取本例唯一名称，不替代产品的创建命令。 */
     const actual = async () => (await observer.query<RowDataPacket[]>('SELECT SCHEMA_NAME AS name,DEFAULT_CHARACTER_SET_NAME AS charset,DEFAULT_COLLATION_NAME AS collation FROM information_schema.SCHEMATA WHERE SCHEMA_NAME=?', [name]))[0];
     try {
@@ -32,10 +32,16 @@ export function registerDatabaseCreateUiTests() {
       await dialog.getByRole('textbox', { name: text.confirmation, exact: true }).fill(name); await submit.dblclick(); await expect(dialog.getByRole('status')).toContainText(text.succeeded, { timeout: 30000 }); await expect(submit).toBeDisabled();
       expect(await actual()).toEqual([{ name, charset: 'utf8mb4', collation: 'utf8mb4_bin' }]); const tasks = await page.evaluate(() => window.dbark.invoke('tasks.list', {})); expect(tasks.filter(task => task.kind === 'schema.databaseCreate.apply')).toHaveLength(1);
       await dialog.getByRole('button', { name: '关闭', exact: true }).click(); await connection.getByRole('button', { name: connectionName, exact: true }).click(); await expect(connection.locator('.database-row').getByRole('button', { name, exact: true })).toBeVisible();
-    } finally {
-      // 先关闭本例原生进程，再清理开始时不存在的唯一隔离库；任何已有数据库都不在清理范围。
+    } catch (reason) { primary = { reason }; throw reason; }
+    finally {
+      // 退出拒绝立即停链，保留库、observer及目录；不能靠finally继续清理掩盖原始失败。
       try { if (!closed) { await answerDialogs([1, 1]); await quitDesktop(); } }
-      finally { try { if (ownsTarget) { if (!/^dbark_create_[a-f0-9]{32}$/.test(name)) throw Error('拒绝清理非本例名称'); await observer.query('DROP DATABASE IF EXISTS `' + name + '`'); expect(await actual()).toHaveLength(0); } } finally { await observer.end(); } }
+      catch (reason) { if (primary) throw new AggregateError([primary.reason, reason], '原用例失败且退出未完成，已保留隔离现场'); throw reason; }
+      // 此处仅表达旧接口的Promise顺序，严格owner终态尚待ROOT适配，不能据此授权实跑。
+      const errors: unknown[] = [];
+      try { if (ownsTarget) { if (!/^dbark_create_[a-f0-9]{32}$/.test(name)) throw Error('拒绝清理非本例名称'); await observer.query('DROP DATABASE IF EXISTS `' + name + '`'); expect(await actual()).toHaveLength(0); } } catch (reason) { errors.push(reason); }
+      try { await observer.end(); } catch (reason) { errors.push(reason); }
+      if (errors.length) throw new AggregateError([...(primary ? [primary.reason] : []), ...errors], '用例或清理未完成，首因保持在最前');
     }
   });
 }
