@@ -4,8 +4,9 @@ import ts from 'typescript';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { WorkbenchTarget } from '../../src/shared/workbench';
 
-const { request } = vi.hoisted(() => ({ request: vi.fn() }));
-vi.mock('../../src/renderer/lib', () => ({ invoke: request, uid: () => '本次新标签', errorMessage: (error: unknown) => String(error) }));
+const { request, saveSettings } = vi.hoisted(() => ({ request: vi.fn(), saveSettings: vi.fn() }));
+// 新标签的本地保存不能消耗待交付的导航响应；其它命令仍由原导航spy核对。
+vi.mock('../../src/renderer/lib', () => ({ invoke: (command: string, input: unknown) => command === 'settings.save' ? saveSettings(input) : request(command, input), uid: () => '本次新标签', errorMessage: (error: unknown) => String(error) }));
 const source = readFileSync(new URL('../../src/renderer/App.tsx', import.meta.url), 'utf8');
 const file = ts.createSourceFile('App.tsx', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
 const app = file.statements.find(node => ts.isFunctionDeclaration(node) && node.name?.text === 'App')!;
@@ -60,7 +61,7 @@ describe('正式App新查询入口撤销W02迟到意图', () => {
   let handlers: ReturnType<typeof appHandlers>;
   const definition = vi.fn();
   beforeEach(async () => {
-    vi.resetModules(); vi.useFakeTimers(); vi.stubGlobal('window', new EventTarget()); request.mockReset(); definition.mockReset();
+    vi.resetModules(); vi.useFakeTimers(); vi.stubGlobal('window', new EventTarget()); request.mockReset(); saveSettings.mockReset().mockResolvedValue(undefined); definition.mockReset();
     workspace = await import('../../src/renderer/store');
     workspace.useWorkspace.setState({ connectionVersions: { '当前连接': 7, '旧连接': 3 } });
     workspace.useWorkspace.getState().select({ connectionId: '当前连接', database: '当前库' });
@@ -76,6 +77,7 @@ describe('正式App新查询入口撤销W02迟到意图', () => {
     expect(workspace.useWorkspace.getState().settings).toBe(before); expect(workspace.useWorkspace.getState().selection).toEqual({ connectionId: '当前连接', database: '当前库' });
     expect(handlers.shown.query).toBe(true); expect(definition).not.toHaveBeenCalled();
     expect(workspace.useWorkspace.getState().connectionVersions).toBe(revisions);
+    expect(saveSettings).not.toHaveBeenCalled();
   });
   it.each(entries)('%s打开查询表单后，迟到定义不能再叠加定义模态', async entry => {
     const old = pending(); request.mockReturnValueOnce(old.promise); const definitionTarget = { ...target, kind: 'procedure' as const };
@@ -95,6 +97,7 @@ describe('正式App新查询入口撤销W02迟到意图', () => {
     const current = { connectionId: '最新连接', database: '新库', kind: 'database' as const };
     const next = navigation.open(current); latest.resolve(current); expect(await next).toBe(true);
     expect(workspace.useWorkspace.getState().settings.tabs).toMatchObject([{ kind: 'query', connectionId: '最新连接', database: '新库', sql: '' }]);
+    expect(saveSettings).toHaveBeenCalledOnce(); expect(saveSettings.mock.calls[0][0].tabs).toMatchObject([{ kind: 'query', connectionId: '最新连接' }]);
   });
   it('无连接的标签加号转入建连表单前也撤销旧导航', async () => {
     const old = pending(); request.mockReturnValueOnce(old.promise); const opening = navigation.open(target); handlers.context.connections = [];
