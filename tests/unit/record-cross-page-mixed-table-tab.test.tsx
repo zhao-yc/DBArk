@@ -13,6 +13,7 @@ import { recordCopyMetadataReason, recordCopySourceReady } from '../../src/rende
 import { tableCopyMetadataKey } from '../../src/shared/tableCopySource';
 import { recordTargetKey } from '../../src/renderer/recordViews';
 import { recordCopySourceZh } from '../../src/renderer/locales/recordCopySource.zh-CN';
+import { DraftHistory } from '../../src/renderer/draftHistory';
 
 const source = readFileSync(new URL('../../src/renderer/components/TableTab.tsx', import.meta.url), 'utf8');
 const tree = ts.createSourceFile('TableTab.tsx', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
@@ -46,7 +47,7 @@ function fixture() {
   const gate = new RecordPageNavigation(), reset = vi.fn(), select = vi.fn((_: string, activate: () => void) => { activate(); return true; });
   let sequence = 0;
   const context = createContext({
-    RecordPageNavigation, recordPageScope, recordViewZh, tableGridZh, maxTablePage, structuredClone, base, tab,
+    history: new DraftHistory(), RecordPageNavigation, recordPageScope, recordViewZh, tableGridZh, maxTablePage, structuredClone, base, tab,
     ...value, pageIndex: 1, rows, rowsRef: { current: rows }, page: { hasMore: true, columns: [{ key: 'id' }, { key: 'text' }] }, info: { objectKind: 'table', columns: [{ name: 'id' }, { name: 'text' }] },
     useWorkspace: { getState: () => workspace }, recordPages: gate, recordPageScopeRef: { current: { value, page: 1 } }, loadGeneration: { current: 10 },
     record: { draft: { rowId: rows[0].id }, formOpen: true, dirty: false, hasInput: vi.fn(() => false), reset, select }, recordControllerRef: { current: { formOpen: true, hasInput: () => false, reset } }, recordContextRef: { current: { stale: false } },
