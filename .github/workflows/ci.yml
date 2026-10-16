@@ -8,6 +8,10 @@ on:
   workflow_dispatch:
 permissions:
   contents: read
+# 同一ref只保留最新非标签检查；标签按运行及重跑代次隔离，避免发行运行被替换或取消。
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ startsWith(github.ref, 'refs/tags/') && format('{0}-{1}', github.run_id, github.run_attempt) || 'latest' }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
 jobs:
   checks:
     name: 类型与单元测试
@@ -24,6 +28,13 @@ jobs:
       - run: pnpm build
   desktop:
     name: ${{ matrix.label }}
+    # 员工任务分支保留Linux完整检查；集成、PR、主分支、发行标签和明确手动运行仍走全部原生门。
+    if: >-
+      github.event_name == 'pull_request' ||
+      github.event_name == 'workflow_dispatch' ||
+      github.ref == 'refs/heads/main' ||
+      startsWith(github.ref, 'refs/heads/task/parallel-integration-') ||
+      startsWith(github.ref, 'refs/tags/v')
     strategy:
       fail-fast: false
       matrix:
