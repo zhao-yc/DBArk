@@ -5,7 +5,7 @@ import type { CompletionDirectoryRequest } from '../../src/shared/sqlCompletion'
 
 /** 运行真实解析器到实际建议生成；只有目录结果替换为可核对的只读夹具。 */
 function analyze(marked: string): CompletionAnalysisReady {
-  const result = analyzeCompletion(marked.replace('|', ''), marked.indexOf('|'));
+  const result = analyzeCompletion(marked.replace('|', ''), marked.indexOf('|'),{},{windowFunctions:true});
   expect(result.status).toBe('ready');
   if (result.status !== 'ready') throw Error('继承窗口分析未就绪');
   return result;
@@ -52,7 +52,7 @@ describe('Q01命名窗口继承ORDER字段有界切片', () => {
     'SELECT SUM(u.id) OVER(base ORDER BY u.val|suffix ROWS 1 PRECEDING) FROM users u WINDOW base AS()',
     'SELECT SUM(u.id) OVER(`窗口` ORDER BY u.val|suffix) FROM users u WINDOW `窗口` AS()',
   ])('未知、重复、循环、覆盖属性及未支持形式停止且零目录：%s', async marked => {
-    const a = analyzeCompletion(marked.replace('|', ''), marked.indexOf('|')), d = directory();
+    const a = analyzeCompletion(marked.replace('|', ''), marked.indexOf('|'),{},{windowFunctions:true}), d = directory();
     if (a.status === 'ready') await completionSuggestions(a, 'db', d);
     expect(a.status).toBe('blocked'); expect(d.load).not.toHaveBeenCalled();
   });
@@ -60,10 +60,10 @@ describe('Q01命名窗口继承ORDER字段有界切片', () => {
     'SELECT 1 FROM users u WINDOW base AS() UNION ALL SELECT SUM(o.id) OVER(base ORDER BY o.val|suffix) FROM orders o',
     'SELECT (SELECT SUM(o.id) OVER(base ORDER BY o.val|suffix) FROM orders o) FROM users u WINDOW base AS()',
     'WITH q AS(SELECT SUM(o.id) OVER(base ORDER BY o.val|suffix) FROM orders o) SELECT * FROM q WINDOW base AS()',
-  ])('窗口名不能来自UNION兄弟、祖先或CTE外部：%s', marked => { expect(analyzeCompletion(marked.replace('|', ''), marked.indexOf('|')).status).toBe('blocked'); });
+  ])('窗口名不能来自UNION兄弟、祖先或CTE外部：%s', marked => { expect(analyzeCompletion(marked.replace('|', ''), marked.indexOf('|'),{},{windowFunctions:true}).status).toBe('blocked'); });
   it('内层窗口同名时只验证内层定义，不借外层安全定义绕过重复排序', () => {
     const marked = 'SELECT (SELECT SUM(o.id) OVER(base ORDER BY o.val|suffix) FROM orders o WINDOW base AS(ORDER BY o.id)) FROM users u WINDOW base AS()';
-    expect(analyzeCompletion(marked.replace('|', ''), marked.indexOf('|')).status).toBe('blocked');
+    expect(analyzeCompletion(marked.replace('|', ''), marked.indexOf('|'),{},{windowFunctions:true}).status).toBe('blocked');
   });
   it('合法内层同名定义遮蔽外层，字段来源仍只属于当前普通派生表', async () => {
     const a = analyze('SELECT * FROM users u JOIN (SELECT SUM(o.id) OVER(base ORDER BY o.val|suffix) FROM orders o WINDOW base AS(PARTITION BY o.id))d WINDOW base AS(ORDER BY u.id)'), d = directory();
@@ -89,7 +89,7 @@ describe('Q01命名窗口继承ORDER字段有界切片', () => {
     'SELECT SUM(u.id) OVER(base ORDER BY u.val|suffix) FROM users u WINDOW base AS(next PARTITION BY u.id),next AS()',
     'SELECT SUM(u.id) OVER(base ORDER BY u.val|suffix) FROM users u WINDOW base AS(PARTITION BY u.id ROWS 1 PRECEDING)',
   ])('不完整、重复子句和未支持叠加仍保守：%s', marked => {
-    const result = analyzeCompletion(marked.replace('|', ''), marked.indexOf('|'));
+    const result = analyzeCompletion(marked.replace('|', ''), marked.indexOf('|'),{},{windowFunctions:true});
     expect(result.status).toBe('blocked');
   });
   it('其它合法但未使用的命名窗口不阻止当前已证明目标', () => {
@@ -108,6 +108,6 @@ describe('Q01命名窗口继承ORDER字段有界切片', () => {
   it('引用链超过已有深度预算时停止，不借未展开名称猜字段', () => {
     const definitions = Array.from({ length: 65 }, (_, index) => `w${index} AS(${index === 0 ? '' : 'w' + (index - 1)})`).join(',');
     const marked = `SELECT SUM(u.id) OVER(w64 ORDER BY u.val|suffix) FROM users u WINDOW ${definitions}`;
-    expect(analyzeCompletion(marked.replace('|', ''), marked.indexOf('|')).status).toBe('blocked');
+    expect(analyzeCompletion(marked.replace('|', ''), marked.indexOf('|'),{},{windowFunctions:true}).status).toBe('blocked');
   });
 });

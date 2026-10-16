@@ -1,5 +1,6 @@
 /** 补全文案集中管理；目录名称与错误细节不作为富文本解释。 */
 export const completionZh={
+  namedWindow:'命名窗口',
   temporary:'会话临时表',sessionUnconfirmed:'会话对象 · 待核对',
   outputAlias:'SELECT 输出别名',outputColumn:'集合查询输出列',
   database:'数据库',table:'表',view:'视图',function:'函数',procedure:'存储过程',column:'字段',alias:'表别名',cte:'公共表表达式',derived:'派生表',keyword:'关键字',

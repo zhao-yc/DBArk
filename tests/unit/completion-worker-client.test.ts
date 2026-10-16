@@ -13,9 +13,9 @@ function fixture(){
 afterEach(()=>vi.useRealTimers());
 describe('编辑器补全线程生命周期',()=>{
   it('等待就绪时能力也固定为独立快照，调用方修改不能开启或关闭旧请求',async()=>{
-    const f=fixture(),capabilities={lateralDerivedTables:true},request=f.client.analyze('SELECT correlated',4,{},undefined,capabilities);
-    capabilities.lateralDerivedTables=false;expect(f.ports[0].postMessage).not.toHaveBeenCalled();f.ready();
-    const actual=f.ports[0].postMessage.mock.lastCall?.[0].capabilities;expect(actual).toEqual({lateralDerivedTables:true});expect(actual).not.toBe(capabilities);
+    const f=fixture(),capabilities={lateralDerivedTables:true,windowFunctions:true},request=f.client.analyze('SELECT correlated',4,{},undefined,capabilities);
+    capabilities.lateralDerivedTables=false;capabilities.windowFunctions=false;expect(f.ports[0].postMessage).not.toHaveBeenCalled();f.ready();
+    const actual=f.ports[0].postMessage.mock.lastCall?.[0].capabilities;expect(actual).toEqual({lateralDerivedTables:true,windowFunctions:true});expect(actual).not.toBe(capabilities);
     f.reply();await request;f.client.dispose();
   });
   it('替换旧能力请求后迟到线程不能交付给关闭能力的新请求',async()=>{

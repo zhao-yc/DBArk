@@ -4,7 +4,7 @@ import{completionSuggestions}from'../../src/renderer/completionSuggestions';
 import type{CompletionLexicalMode}from'../../src/shared/completionLexical';
 import type{CompletionDirectoryRequest}from'../../src/shared/sqlCompletion';
 /** 使用真实语法分析，模拟的仅是独立目录端口；建议按最终SQL插入内容断言。 */
-function analyze(marked:string,mode?:CompletionLexicalMode):CompletionAnalysisReady{const result=analyzeCompletion(marked.replace('|',''),marked.indexOf('|'),mode);expect(result.status).toBe('ready');if(result.status!=='ready')throw Error('分析未就绪');return result;}
+function analyze(marked:string,mode?:CompletionLexicalMode):CompletionAnalysisReady{const result=analyzeCompletion(marked.replace('|',''),marked.indexOf('|'),mode,{windowFunctions:true});expect(result.status).toBe('ready');if(result.status!=='ready')throw Error('分析未就绪');return result;}
 function directory(names:string[]=[],incomplete=false){return{load:vi.fn(async(query:CompletionDirectoryRequest)=>({entries:query.kind==='columns'?names.filter(name=>name.toLowerCase().startsWith(query.prefix.toLowerCase())).map(name=>({name,kind:'column' as const})):[],incomplete}))};}
 const aliases=(analysis:CompletionAnalysisReady)=>analysis.outputAliases?.aliases??[];
 describe('SELECT输出别名在不同子句的作用域',()=>{
