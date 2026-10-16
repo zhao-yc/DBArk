@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { validateTableAutoIncrement, type TableAutoIncrementGetInput, type TableAutoIncrementGetOutput, type TableAutoIncrementPreviewInput, type TableAutoIncrementPreviewOutput, type TableAutoIncrementApplyInput, type TableAutoIncrementApplyOutput, type TableAutoIncrementReleaseInput, type TableAutoIncrementProgress, type TableAutoIncrementTarget } from '../../shared/tableAutoIncrement';
-import { TableAutoIncrementRequestFence, sameTableAutoIncrementTarget, tableAutoIncrementAckLabel, tableAutoIncrementAcksComplete, tableAutoIncrementFailure } from '../tableAutoIncrementUi';
+import { TableAutoIncrementRequestFence, sameTableAutoIncrementTarget, tableAutoIncrementAckLabel, tableAutoIncrementAcksComplete, tableAutoIncrementFailure, tableAutoIncrementResultMatches } from '../tableAutoIncrementUi';
 import { tableAutoIncrementZh as text } from '../locales/tableAutoIncrement.zh-CN';
 import { errorMessage, uid } from '../lib';
 import { ErrorBox, Field, Modal, Spinner } from './ui';
@@ -105,16 +105,16 @@ export function TableAutoIncrementDialog({ target, targetVersion, services, onCl
   async function apply(): Promise<void> {
     const next = previewRef.current, original = snapshotRef.current;
     if (!next || !original || consumedRef.current || !tableAutoIncrementAcksComplete(next.requiredAcknowledgements, acks)) return;
-    const op = begin(); if (!op) return; consumedRef.current = true; setConsumed(true); let attempted = false;
+    const op = begin(); if (!op) return; consumedRef.current = true; setConsumed(true); let attempted = false, responseRejected = false;
     try {
       if (!current(next.expiresAt) || !current(original.expiresAt)) throw new Error(text.expired);
       callbacks.current.beforeApply(); if (!accepts(op)) return; attempted = true;
       const result = await service.current.apply({ previewToken: next.previewToken, acknowledgements: [...next.requiredAcknowledgements], taskId: op.taskId });
-      if (result.requestedValue !== next.after) throw new Error(text.mismatch);
+      if (!tableAutoIncrementResultMatches(result, next.after, original.tableId)) { responseRejected = true; throw new Error(text.mismatch); }
       if (alive.current && op.guard === fence.current && !mismatchRef.current) { setValue((original.autoIncrement ?? '')); setUncertain(!result.definitionVerified); setObserved(result.after?.value ?? text.unset); setOutcome(result.definitionVerified ? text.succeeded : text.verificationFailed); setError([result.verificationError, ...result.warnings].filter(Boolean).join('\n')); }
       completion.current.onApplied(result);
     } catch (reason) {
-      const state = tableAutoIncrementFailure(progressRef.current, attempted), stale = state !== 'notSent';
+      const state = responseRejected ? progressRef.current?.ddlCompleted ? 'verificationFailed' : 'unknown' : tableAutoIncrementFailure(progressRef.current, attempted), stale = state !== 'notSent';
       if (alive.current && op.guard === fence.current && !mismatchRef.current) { if (progressRef.current?.ddlCompleted) setValue((original.autoIncrement ?? '')); setOutcome(text[state]); setUncertain(stale); }
       report(reason); if (stale) completion.current.onExecutionUncertain(text[state]);
     } finally { finish(op); }
