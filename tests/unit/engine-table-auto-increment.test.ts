@@ -69,7 +69,7 @@ async function preview(snapshot: TableAutoIncrementGetOutput, value = '900719925
 async function apply(value: TableAutoIncrementPreviewOutput, taskId = 'apply', revision = 1, acknowledgements = value.requiredAcknowledgements) { return engine.handle('schema.tableAutoIncrement.apply', { previewToken: value.previewToken, taskId, connectionRevision: revision, acknowledgements }); }
 beforeEach(async () => {
   counterValue = '9007199254740993'; afterValue = undefined; afterPhysicalId = undefined; columnType = 'bigint'; statsExpiry = '86400'; grants = ["GRANT ALL PRIVILEGES ON *.* TO 'test'@'host'"];
-  policy = { sessionIncrement: '1', sessionOffset: '1', globalIncrement: '1', globalOffset: '1', lockMode: '2', readOnly: '0', superReadOnly: '0' };
+  policy = { sessionIncrement: '1', sessionOffset: '1', globalIncrement: '1', globalOffset: '1', lockMode: '2', readOnly: '0', superReadOnly: '0', innodbReadOnly: '0', forceRecovery: '0' };
   source = original; physicalId = '9007199254740995'; version = '8.4.11'; dialect = 'mysql'; mode = ''; charset = 'utf8mb3'; catalogMismatch = false; warningCount = 0;
   nextId = 0; sent = []; connections = []; events = []; fail = undefined; hold = undefined; held = undefined; closeFails = false; afterAlterMode = undefined;
   mock.connect.mockReset().mockImplementation(async (_profile, _database, signal) => managed(signal));
@@ -113,12 +113,13 @@ describe('真实Engine下一自增值受控生命周期（仅替换驱动）', (
   it.each(['5.7.44', '8.0.29', '9.0.1', '10.11.19-MariaDB', '11.4.13-MariaDB'])('版本%s未开放范围明确只读', async current => {
     version = current; dialect = current.includes('MariaDB') ? 'mariadb' : 'mysql'; const snapshot = await get(); expect(snapshot.writable).toBe(false); await expect(preview(snapshot)).rejects.toThrow();
   });
-  it.each(['counter-null', 'no-auto', 'type', 'cache', 'increment', 'offset', 'read-only', 'metadata-mismatch'] as const)('%s能力无法证明时只读，不修复原列或重述定义', async kind => {
+  it.each(['counter-null', 'no-auto', 'type', 'cache', 'increment', 'offset', 'read-only', 'innodb-read-only', 'force-recovery', 'metadata-mismatch'] as const)('%s能力无法证明时只读，不修复原列或重述定义', async kind => {
     if (kind === 'counter-null') counterValue = null;
     if (kind === 'no-auto') source = source.replace('NOT NULL AUTO_INCREMENT', 'NOT NULL');
     if (kind === 'type') columnType = 'decimal(20,0)';
     if (kind === 'cache') fail = /information_schema_stats_expiry = 0/;
     if (kind === 'increment') policy.sessionIncrement = '2'; if (kind === 'offset') policy.globalOffset = '2'; if (kind === 'read-only') policy.superReadOnly = '1';
+    if (kind === 'innodb-read-only') policy.innodbReadOnly = '1'; if (kind === 'force-recovery') policy.forceRecovery = '1';
     if (kind === 'metadata-mismatch') counterValue = '9007199254740994';
     const snapshot = await get(); expect(snapshot.writable, snapshot.reasons.join('；')).toBe(false); await expect(preview(snapshot)).rejects.toThrow(); expect(sent.filter(item => item.sql.startsWith('ALTER'))).toHaveLength(0);
   });

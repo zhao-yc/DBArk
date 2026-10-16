@@ -5,7 +5,7 @@ export type TableAutoIncrementTarget = TableColumnPatchTarget;
 export type TableAutoIncrementProgress = TableColumnApplyProgress;
 export const tableAutoIncrementAcknowledgements = ['ddl-implicit-commit', 'external-ddl-window', 'dml-counter-window'] as const;
 export interface TableAutoIncrementColumn { name: string; type: string; maximum: string; }
-export interface TableAutoIncrementPolicy { sessionIncrement: string; sessionOffset: string; globalIncrement: string; globalOffset: string; lockMode: string; readOnly: string; superReadOnly: string; }
+export interface TableAutoIncrementPolicy { sessionIncrement: string; sessionOffset: string; globalIncrement: string; globalOffset: string; lockMode: string; readOnly: string; superReadOnly: string; innodbReadOnly: string; forceRecovery: string; }
 export interface TableAutoIncrementGetInput extends TableAutoIncrementTarget { taskId: string; }
 export interface TableAutoIncrementPreviewInput { snapshotId: string; value: string; taskId: string; }
 export interface TableAutoIncrementApplyInput { previewToken: string; acknowledgements: string[]; taskId: string; }
