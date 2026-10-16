@@ -2,8 +2,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { WorkbenchTarget } from '../../src/shared/workbench';
 import { emptyWorkbench, objectUri, parseObjectUri } from '../../src/shared/workbench';
 import { reconcileTableRenameFavorites } from '../../src/renderer/tableRenameReconcile';
-const { request } = vi.hoisted(() => ({ request: vi.fn() }));
-vi.mock('../../src/renderer/lib', () => ({ invoke: request, uid: () => '新标签', errorMessage: (error: unknown) => String(error) }));
+import { readFileSync } from 'node:fs';
+import { createContext, runInContext } from 'node:vm';
+import ts from 'typescript';
+const { request, saveSettings } = vi.hoisted(() => ({ request: vi.fn(), saveSettings: vi.fn() }));
+// 标签身份现在即时登记到主进程；独立补齐本地保存端口，原导航请求顺序和断言保持。
+vi.mock('../../src/renderer/lib', () => ({ invoke: (command: string, input: unknown) => command === 'settings.save' ? saveSettings(input) : request(command, input), uid: () => '新标签', errorMessage: (error: unknown) => String(error) }));
 const production = { connectionId: '生产连接', database: 'app', kind: 'table', name: 'users' } as const;
 const testing = { ...production, connectionId: '测试连接' } as const;
 
@@ -18,12 +22,21 @@ describe('收藏与链接的最新显式导航意图', () => {
   let workspace: typeof import('../../src/renderer/store');
   const definition = vi.fn();
   beforeEach(async () => {
-    vi.resetModules(); vi.useFakeTimers(); vi.stubGlobal('window', new EventTarget()); request.mockReset(); definition.mockReset();
+    vi.resetModules(); vi.useFakeTimers(); vi.stubGlobal('window', new EventTarget()); request.mockReset(); saveSettings.mockReset().mockResolvedValue(undefined); definition.mockReset();
     workspace = await import('../../src/renderer/store');
     const module = await import('../../src/renderer/workbenchNavigation');
     navigation = module.createWorkbenchNavigation(definition);
   });
   afterEach(() => { navigation.dispose(); vi.clearAllTimers(); vi.useRealTimers(); vi.unstubAllGlobals(); });
+  it('打开和关闭导入模态都撤销旧导航，迟到收藏/链接不得新建标签或连接', async () => {
+    const source = readFileSync(new URL('../../src/renderer/App.tsx', import.meta.url), 'utf8'), tree = ts.createSourceFile('App.tsx', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX), handlers: string[] = [];
+    function visit(node: ts.Node) { if (ts.isFunctionDeclaration(node) && ['openConnectionsTransfer', 'closeConnectionsTransfer'].includes(node.name?.text ?? '')) handlers.push(node.getText(tree)); ts.forEachChild(node, visit); } visit(tree);
+    if (handlers.length !== 2) throw Error('缺少导入导航入口'); const show = vi.fn(), port = createContext({ workbenchNavigation: navigation, setConnectionsTransfer: show });
+    runInContext(ts.transpileModule(handlers.join('\n') + '\nglobalThis.handlers={openConnectionsTransfer,closeConnectionsTransfer};', { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText, port);
+    const first = pending(); request.mockReturnValueOnce(first.promise); const old = navigation.open(production); port.handlers.openConnectionsTransfer(); first.resolve(production); expect(await old).toBe(false);
+    const second = pending(); request.mockReturnValueOnce(second.promise); const late = navigation.open(testing); port.handlers.closeConnectionsTransfer(); second.resolve(testing); expect(await late).toBe(false);
+    expect(workspace.useWorkspace.getState().settings.tabs).toEqual([]); expect(show.mock.calls).toEqual([[true], [false]]); expect(saveSettings).not.toHaveBeenCalled();
+  });
   it('先收藏A慢、后链接B快，A迟到不覆盖最新的表页和连接选择', async () => {
     const a = pending(), b = pending(); request.mockReturnValueOnce(a.promise).mockReturnValueOnce(b.promise);
     const old = navigation.open(production), latest = navigation.open(testing);
@@ -34,6 +47,7 @@ describe('收藏与链接的最新显式导航意图', () => {
     expect(workspace.useWorkspace.getState().settings).toBe(settings);
     expect(workspace.useWorkspace.getState().selection?.connectionId).toBe(testing.connectionId);
     expect(request.mock.calls.map(([command]) => command)).toEqual(['workbench.resolve', 'workbench.resolve']);
+    expect(saveSettings).toHaveBeenCalledOnce(); expect(saveSettings.mock.calls[0][0].tabs[0].connectionId).toBe(testing.connectionId);
   });
   it('较新数据库导航创建空查询，旧表页结果不复活', async () => {
     const a = pending(), b = pending(); request.mockReturnValueOnce(a.promise).mockReturnValueOnce(b.promise);

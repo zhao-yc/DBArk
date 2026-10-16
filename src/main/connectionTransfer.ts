@@ -1,10 +1,14 @@
 import { randomUUID } from 'node:crypto';
 import { open } from 'node:fs/promises';
 import { AtomicFile, type AtomicFileIO } from '../engine/atomicFile';
-import { connectionImportApplySchema, connectionTransferDocumentSchema, connectionTransferLimits, exportConnectionProfile, importConnectionProfile, type ConnectionImportApply, type ConnectionImportPreview, type ConnectionImportResult, type ExportedConnectionProfile } from '../shared/connectionTransfer';
-import type { LocalStore } from './storage';
+import { connectionImportApplySchema, connectionImportReviewSchema, connectionReplacementAcknowledgements, connectionTransferDocumentSchema, connectionTransferLimits, exportConnectionProfile, importConnectionProfile, importReplacementProfile, type ConnectionImportApply, type ConnectionImportDecision, type ConnectionImportPreview, type ConnectionImportResult, type ConnectionImportReview, type ConnectionImportReviewInput, type ExportedConnectionProfile } from '../shared/connectionTransfer';
+import { connectionReplacementText as messages } from '../shared/connectionTransferMessages';
+import type { ConnectionProfile } from '../shared/contracts';
+import type { ConnectionImportStorageOptions, LocalStore } from './storage';
 
-interface Snapshot { expires: number; revision: number; profiles: ExportedConnectionProfile[]; }
+interface Review { token: string; decisions: ConnectionImportDecision[]; replacements: ConnectionImportStorageOptions['replacements']; }
+interface Snapshot { expires: number; revision: number; profiles: ExportedConnectionProfile[]; review?: Review; }
+export interface ConnectionReplacementGuard { replace<T>(targets: readonly ConnectionProfile[], expectedRevision: number, commit: () => T): Promise<T>; }
 
 /** 只按公开服务器路由提示潜在重复；匹配从不用于覆盖或复用已有身份。 */
 function target(profile: ExportedConnectionProfile): string {
@@ -40,7 +44,7 @@ async function readDocument(path: string) {
 export class ConnectionTransfer {
   private readonly previews = new Map<string, Snapshot>();
   /** 时钟和文件 IO 可注入，以真实文件及存储验证过期、短写和磁盘失败。 */
-  constructor(private readonly store: Pick<LocalStore, 'connections' | 'connectionRevision' | 'importConnections'>, private readonly now = Date.now, private readonly io?: AtomicFileIO) {}
+  constructor(private readonly store: Pick<LocalStore, 'connections' | 'connectionRevision' | 'importConnections'>, private readonly now = Date.now, private readonly io?: AtomicFileIO, private readonly replacementGuard?: ConnectionReplacementGuard) {}
 
   /** 导出只读取概要白名单，既不解密秘密，也不建立数据库连接。 */
   async exportFile(path: string, connectionIds: string[]): Promise<{ count: number }> {
@@ -69,16 +73,72 @@ export class ConnectionTransfer {
     })) };
   }
 
-  /** 令牌在第一次确认尝试时消费，失败也不能重试或重放；所有新增一次事务提交。 */
-  apply(input: ConnectionImportApply): ConnectionImportResult {
+  /** 决策按不可变源顺序规范化，拒绝跨行偷换、重复源和一批多源复用同一目标。 */
+  private decisions(snapshot: Snapshot, input: ConnectionImportDecision[]): ConnectionImportDecision[] {
+    const decisions = new Map(input.map(item => [item.sourceId, item]));
+    const targetIds = input.flatMap(item => item.action === 'replace' ? [item.targetId] : []);
+    if (decisions.size !== input.length || decisions.size !== snapshot.profiles.length || snapshot.profiles.some(profile => !decisions.has(profile.id)) || new Set(targetIds).size !== targetIds.length) throw new Error(messages.decision);
+    return snapshot.profiles.map(profile => structuredClone(decisions.get(profile.id)!));
+  }
+
+  /** 二次预览绑定源→目标配对和旧概要；任何重新审阅都会先撤销旧确认，不延长原十分钟期限。 */
+  review(input: ConnectionImportReviewInput): ConnectionImportReview {
+    const snapshot = this.previews.get(input.previewToken);
+    if (!snapshot || snapshot.expires <= this.now()) throw new Error(messages.review);
+    snapshot.review = undefined;
+    const parsed = connectionImportReviewSchema.parse(input);
+    if (snapshot.revision !== this.store.connectionRevision()) throw new Error(messages.changed);
+    const decisions = this.decisions(snapshot, parsed.decisions), stored = new Map(this.store.connections().map(profile => [profile.id, exportConnectionProfile(profile)]));
+    const replacements = decisions.flatMap(decision => {
+      if (decision.action !== 'replace') return [];
+      const previous = stored.get(decision.targetId); if (!previous) throw new Error(messages.missing);
+      return [{ sourceId: decision.sourceId, targetId: decision.targetId, previous: structuredClone(previous) }];
+    });
+    if (!replacements.length) throw new Error(messages.decision);
+    const token = randomUUID(); snapshot.review = { token, decisions, replacements };
+    return structuredClone({ confirmationToken: token, expiresAt: new Date(snapshot.expires).toISOString(), entries: snapshot.profiles.map((profile, index) => ({ sourceId: profile.id, action: decisions[index].action, profile, ...(replacements.find(item => item.sourceId === profile.id) ? { previous: replacements.find(item => item.sourceId === profile.id)!.previous } : {}) })) });
+  }
+
+  /** 选择改变或关闭窗口后撤销指定确认；迟到的释放不能撤销随后生成的新确认。 */
+  releaseReview(input: { previewToken: string; confirmationToken: string }): void {
+    const snapshot = this.previews.get(input.previewToken);
+    if (snapshot?.review?.token === input.confirmationToken) snapshot.review = undefined;
+  }
+
+  /** 首次确认尝试即消费整个预览；规范、风险、并发或磁盘失败均不得复用或自动重试。 */
+  private prepareApply(input: ConnectionImportApply) {
     const snapshot = this.previews.get(input.previewToken); this.previews.delete(input.previewToken);
     if (!snapshot || snapshot.expires <= this.now()) throw new Error('导入预览已失效，请重新选择文件并预览');
     const parsed = connectionImportApplySchema.parse(input);
-    if (snapshot.revision !== this.store.connectionRevision()) throw new Error('连接配置已变化，请重新预览并确认导入');
-    const decisions = new Map(parsed.decisions.map(item => [item.sourceId, item.action]));
-    if (decisions.size !== parsed.decisions.length || decisions.size !== snapshot.profiles.length || snapshot.profiles.some(profile => !decisions.has(profile.id))) throw new Error('必须为每个源连接选择一次新增或跳过');
-    const selected = snapshot.profiles.filter(profile => decisions.get(profile.id) === 'add');
-    const connections = selected.length ? this.store.importConnections(selected, parsed.allowIncomplete === true) : [];
-    return { connections: this.store.connections(), added: connections.length, skipped: snapshot.profiles.length - connections.length };
+    if (snapshot.revision !== this.store.connectionRevision()) throw new Error(messages.changed);
+    const decisions = this.decisions(snapshot, parsed.decisions), replacements = decisions.filter(item => item.action === 'replace');
+    if (replacements.length) {
+      if (!snapshot.review || snapshot.review.token !== parsed.confirmationToken || JSON.stringify(snapshot.review.decisions) !== JSON.stringify(decisions)) throw new Error(messages.review);
+      const acknowledged = parsed.acknowledgements ?? [];
+      if (acknowledged.length !== connectionReplacementAcknowledgements.length || new Set(acknowledged).size !== acknowledged.length || connectionReplacementAcknowledgements.some(id => !acknowledged.includes(id))) throw new Error(messages.acknowledgements);
+    } else if (parsed.confirmationToken || parsed.acknowledgements?.length) throw new Error(messages.review);
+    const bound = replacements.length ? snapshot.review!.replacements : [], selected = snapshot.profiles.filter((_, index) => decisions[index].action !== 'skip');
+    const targets = replacements.map(decision => importReplacementProfile(snapshot.profiles.find(profile => profile.id === decision.sourceId)!, bound.find(item => item.sourceId === decision.sourceId)!.previous));
+    return { targets, revision: snapshot.revision, commit: (): ConnectionImportResult => {
+      if (snapshot.expires <= this.now()) throw new Error(messages.review);
+      if (snapshot.revision !== this.store.connectionRevision()) throw new Error(messages.changed);
+      const connections = selected.length ? this.store.importConnections(selected, parsed.allowIncomplete === true, { expectedRevision: snapshot.revision, replacements: bound }) : [];
+      return { connections: this.store.connections(), added: connections.length - replacements.length, skipped: snapshot.profiles.length - connections.length, ...(replacements.length ? { replaced: replacements.length, replacementIds: targets.map(profile => profile.id) } : {}) };
+    } };
+  }
+
+  /** 原新增/跳过同步入口保持；没有主进程活动屏障时任何替换都拒绝。 */
+  apply(input: ConnectionImportApply): ConnectionImportResult {
+    const prepared = this.prepareApply(input);
+    if (prepared.targets.length) throw new Error(messages.unavailable);
+    return prepared.commit();
+  }
+
+  /** 公开主进程处理器使用本入口；全部目标检查成功后才同步执行一批SQLite事务。 */
+  async applyBatch(input: ConnectionImportApply): Promise<ConnectionImportResult> {
+    const prepared = this.prepareApply(input);
+    if (!prepared.targets.length) return prepared.commit();
+    if (!this.replacementGuard) throw new Error(messages.unavailable);
+    return this.replacementGuard.replace(prepared.targets, prepared.revision, prepared.commit);
   }
 }

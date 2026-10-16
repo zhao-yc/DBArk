@@ -8,7 +8,8 @@ import { LocalStore } from './storage';
 import { ConnectionConfigManager } from './connectionConfig';
 import { ConnectionTransfer } from './connectionTransfer';
 import { assertConnectionReady } from '../shared/connectionTransfer';
-import { confirmConnectionFiles, resolveFileToken } from './fileTokens';
+import { confirmConnectionFiles, resolveFileToken, revokeConnectionFiles } from './fileTokens';
+import { connectionReplacementText } from '../shared/connectionTransferMessages';
 import { ExportReservations } from './exportReservations';
 import { persistedQueryError, persistedTaskMessage } from './taskPrivacy';
 import { readQueryFile, writeQueryFile } from './queryFiles';
@@ -39,6 +40,8 @@ let shutdownComplete = false;
 let stateFlushed: { resolve(): void; reject(error: Error): void } | undefined;
 let hasPendingEdits = false;
 let rendererHasSettings = false;
+// 标签清单写入失败后不能把旧布局当作当前空闲事实；必须先成功保存当前布局才能替换。
+let rendererSettingsCurrent = true;
 let lastStorageWarning = 0;
 const sessions = new Map<string, { connectionId: string }>();
 // 历史上下文由引擎在会话互斥内报告，不能由渲染进程提供或从较早的标签状态推测。
@@ -46,7 +49,7 @@ const pendingQueryHistory = new Map<string, { entry: HistoryEntry; currentStatem
 const files = new Map<string, { path: string; purpose: string; format?: string }>();
 const queryFileOperations = new Set<Promise<unknown>>();
 const exportReservations = new ExportReservations();
-const preparingTasks = new Map<string, { cancelled: boolean; failure?: string }>();
+const preparingTasks = new Map<string, { cancelled: boolean; failure?: string; connectionIds?: string[] }>();
 const exportProgress = new Map<string, QueryExportProgress>();
 const structureProgress = new Map<string, TableColumnApplyProgress>();
 const structureTokens = new Map<string, { purpose: 'columns' | 'indexes' | 'foreignKeys' | 'tableComment' | 'tableDefaultEncoding' | 'tableRename' | 'tableAutoIncrement'; connectionId: string; expires: number; kind: 'snapshot' | 'preview'; snapshotId?: string }>();
@@ -104,6 +107,12 @@ async function chooseFile(input: any): Promise<{ token: string; name: string } |
   if (!filePath) return null;
   const token = randomUUID(); files.set(token, { path: filePath, purpose: input.purpose, format: input.format });
   return { token, name: basename(filePath) };
+}
+
+/** 布局请求到达即先撤销空闲依据；包括校验失败，只有完整保存成功才恢复可信标签事实。 */
+function validateMainCommand(command: string, input: unknown) {
+  if (command === 'settings.save') rendererSettingsCurrent = false;
+  return validateCommand(command, input);
 }
 
 /** 正常退出等待已授权的小型文件操作，防止中途退出留下未关闭的临时文件。 */
@@ -201,7 +210,9 @@ async function dispatch(command: Command, input: any): Promise<unknown> {
       try { return await connectionTransfer.exportFile(path, input.connectionIds); } finally { release(); }
     });
     case 'connections.importPreview': return queryFileOperation(() => connectionTransfer.preview(resolveFileToken(files, input.fileToken, 'connection-import', 'json')));
-    case 'connections.importApply': if (shuttingDown) throw new Error('客户端正在退出，不能导入连接'); return connectionTransfer.apply(input);
+    case 'connections.importReview': if (shuttingDown) throw new Error('客户端正在退出，不能导入连接'); return connectionTransfer.review(input);
+    case 'connections.importReviewRelease': return connectionTransfer.releaseReview(input);
+    case 'connections.importApply': return queryFileOperation(() => connectionTransfer.applyBatch(input));
     case 'connections.save': return connectionConfig.save(confirmConnectionFiles(input, store.connections().find(profile => profile.id === input.id), files));
     case 'connections.delete': await broker.request('connections.close', input); store.deleteConnection(input.id); return;
     case 'connections.open': input = { ...input, profile: store.resolveConnection(input.id) }; break;
@@ -243,8 +254,8 @@ async function dispatch(command: Command, input: any): Promise<unknown> {
     case 'tasks.list': return store.tasks();
     case 'settings.get': rendererHasSettings = true; return store.settings();
     case 'settings.save': {
-      try { store.saveSettings(input); stateFlushed?.resolve(); }
-      catch (error) { stateFlushed?.reject(error instanceof Error ? error : new Error(String(error))); throw error; }
+      try { store.saveSettings(input); rendererSettingsCurrent = true; stateFlushed?.resolve(); }
+      catch (error) { rendererSettingsCurrent = false; stateFlushed?.reject(error instanceof Error ? error : new Error(String(error))); throw error; }
       finally { stateFlushed = undefined; }
       return;
     }
@@ -277,7 +288,7 @@ async function dispatch(command: Command, input: any): Promise<unknown> {
   const history: HistoryEntry | undefined = (command === 'query.execute' || command === 'query.executeParameterized' || command === 'query.exportStream') && session ? { id: randomUUID(), connectionId: session.connectionId, databaseContext:{state:'unknown'}, sql: currentStatement ? '' : input.sql, startedAt, elapsedMs: 0, success: false } : undefined;
   const pendingHistory = history ? { entry: history, currentStatement, executionSqlReceived: !currentStatement } : undefined;
   if(pendingHistory&&taskId)pendingQueryHistory.set(taskId,pendingHistory);
-  const preparing: { cancelled: boolean; failure?: string } = { cancelled: false }; if (taskId) preparingTasks.set(taskId, preparing);
+  const preparing: { cancelled: boolean; failure?: string; connectionIds?: string[] } = { cancelled: false, connectionIds: command === 'schema.compare' ? [input.source.connectionId, input.target.connectionId] : requestConnectionId ? [requestConnectionId] : [] }; if (taskId) preparingTasks.set(taskId, preparing);
   let releaseTarget: (() => void) | undefined;
   let sentToEngine = false;
   try {
@@ -404,8 +415,17 @@ else {
     const wasm = app.isPackaged ? join(process.resourcesPath, 'sql-wasm.wasm') : require.resolve('sql.js/dist/sql-wasm.wasm');
     store = await LocalStore.open(join(app.getPath('userData'), 'dbark.sqlite'), wasm, { available: () => safeStorage.isEncryptionAvailable(), encrypt: value => safeStorage.encryptString(value).toString('base64'), decrypt: value => safeStorage.decryptString(Buffer.from(value, 'base64')) });
     broker = new EngineBroker(taskEvent, engineExited);
-    connectionConfig = new ConnectionConfigManager(store, broker);
-    connectionTransfer = new ConnectionTransfer(store);
+    connectionConfig = new ConnectionConfigManager(store, broker, {
+      /** 主进程会话与尚未投递的长任务也必须为空；真实引擎继续检查建连、事务和独立任务。 */
+      assertIdle: ids => {
+        if (shuttingDown || !rendererSettingsCurrent || [...sessions.values()].some(session => ids.includes(session.connectionId)) || [...preparingTasks.values()].some(task => task.connectionIds?.some(id => ids.includes(id)))) throw new Error(connectionReplacementText.active);
+      },
+      revokeFiles: ids => {
+        revokeConnectionFiles(ids, files);
+        for (const [token, value] of structureTokens) if (ids.includes(value.connectionId)) structureTokens.delete(token);
+      },
+    });
+    connectionTransfer = new ConnectionTransfer(store, Date.now, undefined, connectionConfig);
     savedQuerySearches=new SavedQuerySearches(store,join(__dirname,'savedQuerySearchWorker.cjs'),taskEvent);
     savedQueryPages=new SavedQueryPages(store,join(__dirname,'savedQuerySearchWorker.cjs'));
     historyPages=new HistoryPages(store,join(__dirname,'savedQuerySearchWorker.cjs'));
@@ -413,7 +433,7 @@ else {
       try {
         if (!window || event.sender !== window.webContents || event.senderFrame !== window.webContents.mainFrame || event.senderFrame?.url !== rendererURL) throw new Error('不允许的请求来源');
         if (!payload || typeof payload !== 'object' || !('command' in payload) || !('input' in payload) || typeof payload.command !== 'string') throw new Error('请求格式无效');
-        const input = validateCommand(payload.command, payload.input);
+        const input = validateMainCommand(payload.command, payload.input);
         const operation=dispatch(payload.command as Command,input),local=payload.command==='search.savedQueries'||payload.command==='search.savedQueriesContinue'||payload.command==='queries.page'||payload.command==='queries.pageContinue'||payload.command==='history.page'||payload.command==='history.pageContinue';if(local)localSearchOperations.add(operation);
         try{return{ok:true,result:await operation};}finally{if(local)localSearchOperations.delete(operation);}
       } catch (error) { return { ok: false, error: error instanceof Error ? error.message : '客户端操作失败' }; }

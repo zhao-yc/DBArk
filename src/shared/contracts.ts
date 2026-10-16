@@ -6,7 +6,7 @@ import type { TableAutoIncrementGetInput, TableAutoIncrementGetOutput, TableAuto
 import type { TableCommentGetInput, TableCommentGetOutput, TableCommentPreviewInput, TableCommentPreviewOutput, TableCommentApplyInput, TableCommentApplyOutput, TableCommentReleaseInput } from './tableComment';
 import type { ExcelSheet, ExcelSheetPreview, ExcelTextProtocol, ExcelImportRequest, ExcelImportResult, ExcelExportRequest } from './excelTransfer';
 import type { QueryExportProgress, QueryStreamExportInput, QueryStreamExportOutput } from './queryStreamExport';
-import type { ConnectionFileRequirement, ConnectionImportApply, ConnectionImportPreview, ConnectionImportResult } from './connectionTransfer';
+import type { ConnectionFileRequirement, ConnectionImportApply, ConnectionImportPreview, ConnectionImportResult, ConnectionImportReview, ConnectionImportReviewInput } from './connectionTransfer';
 import type { TablePreferenceTarget, TablePreferences } from './tablePreferences';
 import type { TableColumnGetInput, TableColumnGetOutput, TableColumnPreviewInput, TableColumnPreviewOutput, TableColumnApplyInput, TableColumnApplyOutput, TableColumnApplyProgress, TableColumnReleaseInput } from './tableColumnPatches';
 import type { TableIndexGetInput, TableIndexGetOutput, TableIndexPreviewInput, TableIndexPreviewOutput, TableIndexApplyInput, TableIndexApplyOutput, TableIndexApplyProgress, TableIndexReleaseInput } from './tableIndexTasks';
@@ -86,6 +86,8 @@ export interface CommandMap {
   'app.setDirty': { input: { dirty: boolean }; output: void };
   'connections.export': { input: { connectionIds: string[]; fileToken: string }; output: { count: number } };
   'connections.importPreview': { input: { fileToken: string }; output: ConnectionImportPreview };
+  'connections.importReview': { input: ConnectionImportReviewInput; output: ConnectionImportReview };
+  'connections.importReviewRelease': { input: { previewToken: string; confirmationToken: string }; output: void };
   'connections.importApply': { input: ConnectionImportApply; output: ConnectionImportResult };
   'connections.list': { input: Record<string, never>; output: ConnectionProfile[] };
   'connections.save': { input: ConnectionProfile; output: ConnectionProfile };
