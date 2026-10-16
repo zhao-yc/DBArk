@@ -22,10 +22,10 @@ async function setColors(enabled: boolean) {
 test('D08默认关闭、六类图例、暗亮切换和重启恢复及单项重置', async () => {
   await expect(page.locator('.app-statusbar')).toBeVisible(); expect((await page.evaluate(() => window.dbark.invoke('settings.get', {}))).dataTypeColors).toBe(false);
   const modal = await preferences(); await expect(modal.getByRole('checkbox', { name: text.title, exact: true })).not.toBeChecked(); await expect(modal.getByRole('list', { name: text.legend, exact: true }).locator('li')).toHaveCount(6);
-  await modal.getByRole('checkbox', { name: text.title, exact: true }).check(); await modal.getByLabel(zh.app.text019, { exact: true }).selectOption('light');
+  await modal.getByRole('checkbox', { name: text.title, exact: true }).check(); await modal.getByRole('combobox', { name: zh.app.text019, exact: true }).selectOption('light');
   await expect.poll(() => page.evaluate(() => window.dbark.invoke('settings.get', {}))).toMatchObject({ dataTypeColors: true, theme: 'light' }); await modal.getByRole('button', { name: zh.common.done, exact: true }).click();
   await quitDesktop(); await launchDesktop(); await expect(page.locator('.app-statusbar')).toBeVisible(); const restored = await preferences();
-  await expect(restored.getByRole('checkbox', { name: text.title, exact: true })).toBeChecked(); await expect(restored.getByLabel(zh.app.text019, { exact: true })).toHaveValue('light');
+  await expect(restored.getByRole('checkbox', { name: text.title, exact: true })).toBeChecked(); await expect(restored.getByRole('combobox', { name: zh.app.text019, exact: true })).toHaveValue('light');
   await restored.getByRole('button', { name: text.reset, exact: true }).click(); await expect(restored.getByRole('checkbox', { name: text.title, exact: true })).not.toBeChecked();
   await expect.poll(() => page.evaluate(() => window.dbark.invoke('settings.get', {}))).toMatchObject({ dataTypeColors: false, theme: 'light' }); expect(pageErrors).toEqual([]);
 });
