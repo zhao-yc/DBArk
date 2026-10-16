@@ -4,10 +4,12 @@ import { ownCell, rowEqual } from './lib';
 import { tableGridZh as text } from './locales/tableGrid.zh-CN';
 
 export const pageFindLimits = { query: 512, replacement: 4096, bytes: 16 * 1024 * 1024, matches: 50_000, memory: 128 * 1024 * 1024, timeoutMs: 1500, startupMs: 8000 } as const;
-export interface PageFindOptions { kind: 'text' | 'null' | 'default'; query: string; caseSensitive: boolean; wholeCell: boolean; column?: string; regex?: boolean; }
+export interface PageFindOptions { kind: 'text' | 'null' | 'default'; query: string; caseSensitive: boolean; wholeCell: boolean; column?: string; regex?: boolean; captureReplacement?: boolean; }
 export interface PageCellMatch { rowId: string; key: string; ranges: { start: number; end: number }[]; }
 export interface PageOccurrence { rowId: string; key: string; range?: { start: number; end: number }; occurrence: number; }
 export interface PageReplacement { generation: number; signature: string; rows: DraftRow[]; patches: { rowId: string; key: string; before: string; after: string }[]; }
+/** 捕获内容及每处展开仅留在Worker的计划构造过程，不增加查找消息的传输负担。 */
+type PlannedMatch = Omit<PageCellMatch, 'ranges'> & { ranges: (PageCellMatch['ranges'][number] & { replacement?: string })[] };
 const encoder = new TextEncoder();
 /** 累计 UTF-8 预算不能静默截断，否则预览和最终草稿会出现不同结果。 */
 function budget(bytes: number) { if (bytes > pageFindLimits.bytes) throw new Error(text.budget); }
@@ -68,21 +70,26 @@ export function findPageCells(rows: readonly DraftRow[], visibleKeys: readonly s
 
 /** 用户正则只允许实际 Worker 调用；渲染线程的同步入口始终拒绝用户模式。 */
 export function findPageCellsInWorker(rows: readonly DraftRow[], visibleKeys: readonly string[], options: PageFindOptions): PageCellMatch[] {
+  return scanPageCells(rows, visibleKeys, options, workerPattern(options));
+}
+
+/** 仅由Worker入口编译用户模式，查找与预览共用同一flags及整格边界。 */
+function workerPattern(options: PageFindOptions): RegExp | null {
   let pattern: RegExp | null = null;
   if (options.kind === 'text') {
     if (options.query.length > pageFindLimits.query) throw new Error(text.queryLimit);
     try { pattern = options.regex ? new RegExp(options.wholeCell ? `^(?:${options.query})$` : options.query, options.caseSensitive ? 'gu' : 'giu') : literalPattern(options); }
     catch { throw new Error(text.regexInvalid); }
   }
-  return scanPageCells(rows, visibleKeys, options, pattern);
+  return pattern;
 }
 
 /** matchAll 在 Unicode 模式下按码点推进零宽命中，返回坐标始终保留原文 UTF-16 偏移。 */
-function scanPageCells(rows: readonly DraftRow[], visibleKeys: readonly string[], options: PageFindOptions, pattern: RegExp | null): PageCellMatch[] {
+function scanPageCells(rows: readonly DraftRow[], visibleKeys: readonly string[], options: PageFindOptions, pattern: RegExp | null, substitute?: (row: DraftRow, key: string, source: string, match: RegExpExecArray) => string | undefined): PlannedMatch[] {
   if (options.query.length > pageFindLimits.query) throw new Error(text.queryLimit);
   if (options.kind === 'text' && !options.query) throw new Error(text.empty);
   const keys = options.column ? visibleKeys.filter(key => key === options.column) : visibleKeys;
-  const matches: PageCellMatch[] = []; let scanned = 0, occurrences = 0;
+  const matches: PlannedMatch[] = []; let scanned = 0, occurrences = 0;
   for (const row of rows) {
     if (row.deleted) continue;
     for (const key of keys) {
@@ -90,11 +97,12 @@ function scanPageCells(rows: readonly DraftRow[], visibleKeys: readonly string[]
       if (options.kind !== 'text') { if ((options.kind === 'null' && value === null) || (options.kind === 'default' && row.inserted && value === undefined)) matches.push({ rowId: row.id, key, ranges: [] }); }
       else if (value !== null && value !== undefined && typeof value !== 'object') {
         const source = String(value); budget(scanned + source.length); scanned += encoder.encode(source).byteLength; budget(scanned);
-        const ranges = [];
+        const ranges: PlannedMatch['ranges'] = [];
         for (const match of source.matchAll(pattern!)) {
           if (options.wholeCell && (match.index !== 0 || match[0].length !== source.length)) continue;
-          ranges.push({ start: match.index, end: match.index + match[0].length });
           if (++occurrences > pageFindLimits.matches) throw new Error(text.budget);
+          const replacement = substitute?.(row, key, source, match);
+          ranges.push({ start: match.index, end: match.index + match[0].length, ...(replacement === undefined ? {} : { replacement }) });
         }
         if (ranges.length) matches.push({ rowId: row.id, key, ranges });
       }
@@ -114,16 +122,51 @@ function tableSignature(info: TableInfo) { return JSON.stringify([info.database,
 
 /** 先产生完整替换计划和受影响行快照，替换值中的美元符号不是插值。 */
 export function previewPageReplacement(rows: readonly DraftRow[], keys: readonly string[], options: PageFindOptions, replacement: string, info: TableInfo, generation: number, only?: PageOccurrence): PageReplacement {
+  if (options.captureReplacement) throw new Error(text.workerRequired);
   return planPageReplacement(rows, findPageCells(rows, keys, options), options, replacement, info, generation, only);
 }
 
 /** Worker 内匹配后构造预览，不能把用户模式回传到渲染线程重新执行。 */
 export function previewPageReplacementInWorker(rows: readonly DraftRow[], keys: readonly string[], options: PageFindOptions, replacement: string, info: TableInfo, generation: number, only?: PageOccurrence): PageReplacement {
-  return planPageReplacement(rows, findPageCellsInWorker(rows, keys, options), options, replacement, info, generation, only);
+  if (replacement.length > pageFindLimits.replacement) throw new Error(text.replacementLimit);
+  if (options.captureReplacement && (options.kind !== 'text' || !options.regex)) throw new Error(text.captureRequiresRegex);
+  let expandedBytes = 0;
+  const matches = scanPageCells(rows, keys, options, workerPattern(options), options.captureReplacement ? (row, key, source, match) => {
+    // 单处只展开指定的原文边界；非文本、只读或其它命中不能消耗替换输出预算。
+    if ((only && (only.rowId !== row.id || only.key !== key || only.range?.start !== match.index || only.range?.end !== match.index + match[0].length)) || !pageReplaceWritable(info, key) || typeof ownCell(row.data, key) !== 'string') return undefined;
+    return expandCaptureReplacement(replacement, source, match, part => { budget(expandedBytes + part.length); expandedBytes += encoder.encode(part).byteLength; budget(expandedBytes); });
+  } : undefined);
+  return planPageReplacement(rows, matches, options, replacement, info, generation, only);
 }
 
-/** 已有界的范围按原文顺序拼接，不调用字符串正则替换，美元符号与捕获组始终是字面值。 */
-function planPageReplacement(rows: readonly DraftRow[], matches: PageCellMatch[], options: PageFindOptions, replacement: string, info: TableInfo, generation: number, only?: PageOccurrence): PageReplacement {
+/** 按ECMAScript GetSubstitution展开静态模板；每段先计量，不能先分配放大后的完整字符串。 */
+function expandCaptureReplacement(template: string, source: string, match: RegExpExecArray, count: (part: string) => void): string {
+  const parts: string[] = []; let offset = 0;
+  const append = (part: string) => { if (part) { count(part); parts.push(part); } };
+  for (let index = 0; index < template.length;) {
+    if (template[index] !== '$') { index++; continue; }
+    append(template.slice(offset, index));
+    const token = template[index + 1]; let end = index + 2, part: string;
+    if (token === '$') part = '$';
+    else if (token === '&') part = match[0];
+    else if (token === '`') part = source.slice(0, match.index);
+    else if (token === "'") part = source.slice(match.index + match[0].length);
+    else if (token >= '0' && token <= '9') {
+      const second = template[index + 2]; let digits = second >= '0' && second <= '9' ? 2 : 1, capture = Number(template.slice(index + 1, index + 1 + digits));
+      // 两位引用越界时退回一位；$0保持字面，$01在第一组存在时引用第一组。
+      if (capture >= match.length && digits === 2) { digits = 1; capture = Number(token); }
+      end = index + 1 + digits; part = capture > 0 && capture < match.length ? match[capture] ?? '' : template.slice(index, end);
+    } else if (token === '<' && match.groups && template.indexOf('>', index + 2) >= 0) {
+      end = template.indexOf('>', index + 2) + 1; const name = template.slice(index + 2, end - 1);
+      part = Object.hasOwn(match.groups, name) ? match.groups[name] ?? '' : '';
+    } else { end = index + 1; part = '$'; }
+    append(part); index = offset = end;
+  }
+  append(template.slice(offset)); return parts.join('');
+}
+
+/** 已有界的范围按原文顺序拼接；默认字面，显式捕获模式使用Worker已经展开的文字。 */
+function planPageReplacement(rows: readonly DraftRow[], matches: PlannedMatch[], options: PageFindOptions, replacement: string, info: TableInfo, generation: number, only?: PageOccurrence): PageReplacement {
   if (replacement.length > pageFindLimits.replacement) throw new Error(text.replacementLimit);
   if (options.kind !== 'text') throw new Error(text.noReplace);
   const patches: PageReplacement['patches'] = []; let outputBytes = 0;
@@ -134,7 +177,7 @@ function planPageReplacement(rows: readonly DraftRow[], matches: PageCellMatch[]
     let offset = 0, after = '', cellBytes = 0;
     const ranges = only ? match.ranges.filter(range => range.start === only.range?.start && range.end === only.range?.end) : match.ranges;
     if (!ranges.length) continue;
-    for (const range of ranges) { const part = before.slice(offset, range.start) + replacement; cellBytes += encoder.encode(part).byteLength; budget(outputBytes + cellBytes); after += part; offset = range.end; }
+    for (const range of ranges) { const part = before.slice(offset, range.start) + (range.replacement ?? replacement); cellBytes += encoder.encode(part).byteLength; budget(outputBytes + cellBytes); after += part; offset = range.end; }
     const tail = before.slice(offset); cellBytes += encoder.encode(tail).byteLength; budget(outputBytes + cellBytes); after += tail; if (after === before) continue;
     outputBytes += cellBytes;
     patches.push({ rowId: row.id, key: match.key, before, after });
