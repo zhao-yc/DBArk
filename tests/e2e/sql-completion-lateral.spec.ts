@@ -1,4 +1,4 @@
-import {positionMonacoCaret} from './monaco-caret';
+import {positionMonacoCaret,observeMonacoCaret,triggerMonacoCompletion,remainingCompletionTimeout} from './monaco-caret';
 import type {RowDataPacket} from 'mysql2/promise';
 import type {TestInfo} from '@playwright/test';
 import {test,expect,page,desktop,closed,pageErrors} from './desktop-fixture';
@@ -7,6 +7,8 @@ import {enabled,isolatedDatabase,openDatabaseQuery,type LiveContext} from './liv
 // 默认跳过早于桌面启动；连接资料只由统筹向既有环境变量注入。
 test.skip(!enabled,'需要统筹显式启用200隔离实库与原生桌面');
 test.use({trace:'off'});
+// 在任何编辑器及已有Worker观察器之前安装，只读旁观真实发送位置。
+test.beforeEach(observeMonacoCaret);
 const query=()=>page.locator('.query-tab:visible');
 type Observation={command:string;settled:boolean};
 type Probe={calls:Observation[];sessions:string[];restore():void};
@@ -40,11 +42,15 @@ async function observe(){
 async function count(command:string,settled=false){return desktop.evaluate((_,input)=>(globalThis as ProbeRoot).__lateralUiProbe?.calls.filter(item=>item.command===input.command&&(!input.settled||item.settled)).length??0,{command,settled});}
 /** 从持久化草稿核对完整SQL，不能只读取Monaco当前视口或改写模型。 */
 async function currentSql(){return page.evaluate(async()=>{const settings=await window.dbark.invoke('settings.get',{});return settings.tabs.find(tab=>tab.id===settings.activeTabId)?.sql?.replaceAll('\r\n','\n');});}
-/** 全文经原生粘贴进入Monaco，光标用正常键盘移动并核对，不设置编辑器模型或位置。 */
-async function atCaret(marked:string){const source=await positionMonacoCaret(marked);return{source,offset:marked.indexOf("|")};}
+/** 全文经原生输入进入Monaco，光标用正常键盘移动并核对，不设置编辑器模型或位置。 */
+let expectedCaret='';
+/** 原marked保留为独立断言输入，不使用帮助器返回值推导实际光标期望。 */
+async function atCaret(marked:string){expectedCaret=marked;const source=await positionMonacoCaret(marked);return{source,offset:marked.slice(0,marked.indexOf('|')).replaceAll('\r\n','\n').length};}
+/** 只触发一次，随后必须证明真实provider的完整source和UTF16 offset。 */
+async function triggerCompletion(){await triggerMonacoCompletion(expectedCaret);}
 /** 等待真实Worker对本次快照的终态，避免把空建议窗口当成能力门已执行。 */
 async function analyzed(source:string,offset:number,supported:boolean){
-  await expect.poll(()=>page.evaluate(input=>(window as unknown as{__lateralReplies:Reply[]}).__lateralReplies.some(reply=>reply.length===input.length&&reply.offset===input.offset&&reply.enabled===input.supported&&reply.status===(input.supported?'ready':'blocked')&&(input.supported||reply.reason==='capability')),{length:source.length,offset,supported}),{timeout:13000}).toBe(true);
+  await expect.poll(()=>page.evaluate(input=>(window as unknown as{__lateralReplies:Reply[]}).__lateralReplies.some(reply=>reply.length===input.length&&reply.offset===input.offset&&reply.enabled===input.supported&&reply.status===(input.supported?'ready':'blocked')&&(input.supported||reply.reason==='capability')),{length:source.length,offset,supported}),{timeout:remainingCompletionTimeout()}).toBe(true);
 }
 /** 只点执行当前草稿；不能用预期SQL覆盖实际候选插入结果后再执行。 */
 async function executeCurrent(column:string,values:string[]){
@@ -75,7 +81,7 @@ test('按实际服务器验证新草稿和物理会话的LATERAL补全、接受�
     const[versions]=await context.observer.query<RowDataPacket[]>('SELECT VERSION() AS version');const actualVersion=String(versions[0].version);expect(actualVersion.replace(/^5\.5\.5-/, '').startsWith(expected[0])).toBe(true);
     await fixture(context);await observe();await openDatabaseQuery(context.database);expect(await count('sessions.open')).toBe(0);expect(await count('query.execute')).toBe(0);
     const first='SELECT d.copied FROM users u JOIN LATERAL(SELECT u.use|suffix AS copied) d ON TRUE ORDER BY u.id',prepared=await atCaret(first),catalogs=await count('metadata.completion');
-    await page.keyboard.press('Control+Space');await analyzed(prepared.source,prepared.offset,expected[1]);
+    await triggerCompletion();await analyzed(prepared.source,prepared.offset,expected[1]);
     if(!expected[1]){
       await expect(page.locator('.suggest-widget.visible .monaco-list-row')).toHaveCount(0);expect(await currentSql()).toBe(prepared.source);expect(await count('metadata.completion')).toBe(catalogs);expect(await count('query.execute')).toBe(0);expect(await count('sessions.open')).toBe(0);
       await info.attach('实际版本能力关闭',{body:JSON.stringify({port:process.env.DBARK_TEST_PORT,version:actualVersion,lateralDerivedTables:false}),contentType:'application/json'});return;
@@ -89,10 +95,10 @@ test('按实际服务器验证新草稿和物理会话的LATERAL补全、接受�
       ['SELECT d.copied FROM users u JOIN LATERAL(SELECT u.ord|suffix AS copied FROM orders u WHERE u.id=1) d ON TRUE ORDER BY u.id','order_value','ord|suffix','copied',['100','100']],
       ['SELECT d.ord|suffix FROM users u JOIN LATERAL(SELECT o.* FROM orders o WHERE o.user_id=u.id) d ON TRUE ORDER BY u.id','order_value','ord|suffix','order_value',['100','200']],
     ]as const){
-      await confirmSources(context.database);const value=await atCaret(marked),executions=await count('query.execute');await page.keyboard.press('Control+Space');await analyzed(value.source,value.offset,true);await expect(widget.locator('.monaco-list-row.focused')).toContainText(label);await page.keyboard.press('Enter');await expect.poll(currentSql).toBe(marked.replace(finished,'`'+label+'`'));expect(await count('query.execute')).toBe(executions);await executeCurrent(column,[...values]);
+      await confirmSources(context.database);const value=await atCaret(marked),executions=await count('query.execute');await triggerCompletion();await analyzed(value.source,value.offset,true);await expect(widget.locator('.monaco-list-row.focused')).toContainText(label);await page.keyboard.press('Enter');await expect.poll(currentSql).toBe(marked.replace(finished,'`'+label+'`'));expect(await count('query.execute')).toBe(executions);await executeCurrent(column,[...values]);
     }
-    const invalid=await atCaret('SELECT * FROM users u JOIN LATERAL(SELECT later.|) d ON TRUE JOIN orders later ON TRUE'),before=await count('metadata.completion');await page.keyboard.press('Control+Space');
-    await expect.poll(()=>page.evaluate(input=>(window as unknown as{__lateralReplies:Reply[]}).__lateralReplies.some(reply=>reply.length===input.length&&reply.offset===input.offset&&reply.status==='blocked'&&reply.reason==='syntax'),{length:invalid.source.length,offset:invalid.offset}),{timeout:13000}).toBe(true);await expect(widget.locator('.monaco-list-row')).toHaveCount(0);expect(await count('metadata.completion')).toBe(before);expect(await count('query.execute')).toBe(4);
+    const invalid=await atCaret('SELECT * FROM users u JOIN LATERAL(SELECT later.|) d ON TRUE JOIN orders later ON TRUE'),before=await count('metadata.completion');await triggerCompletion();
+    await expect.poll(()=>page.evaluate(input=>(window as unknown as{__lateralReplies:Reply[]}).__lateralReplies.some(reply=>reply.length===input.length&&reply.offset===input.offset&&reply.status==='blocked'&&reply.reason==='syntax'),{length:invalid.source.length,offset:invalid.offset}),{timeout:remainingCompletionTimeout()}).toBe(true);await expect(widget.locator('.monaco-list-row')).toHaveCount(0);expect(await count('metadata.completion')).toBe(before);expect(await count('query.execute')).toBe(4);
     const history=await page.evaluate(()=>window.dbark.invoke('history.list',{}));expect(history).toHaveLength(4);await page.screenshot({path:info.outputPath('lateral-real-monaco.png')});
   },info);
 });
