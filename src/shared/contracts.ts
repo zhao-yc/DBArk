@@ -60,7 +60,7 @@ export interface SavedQuery { id: string; name: string; connectionId?: string; d
 export interface SqlSnippet { id: string; name: string; group: string; description: string; sql: string; updatedAt: string; }
 export interface HistoryEntry { id: string; connectionId: string; database?: string; databaseContext?:QueryDatabaseContext; sql: string; startedAt: string; elapsedMs: number; success: boolean; error?: string; }
 export interface TaskRecord { id: string; kind: string; status: 'running' | 'completed' | 'cancelled' | 'failed'; progress: number; message: string; startedAt: string; finishedAt?: string; errors?: string[]; }
-export interface TaskEvent { taskId: string; status: TaskRecord['status']; progress: number; message: string; rows?: number; resultIndex?: number; columns?: ResultColumn[]; batch?: DataRow[]; executionDatabase?:QueryDatabaseContext; queryExport?: QueryExportProgress; columnPatch?: TableColumnApplyProgress; indexPatch?: TableIndexApplyProgress; foreignKeyPatch?: TableForeignKeyApplyProgress; tableRename?: TableColumnApplyProgress; tableAutoIncrement?: TableColumnApplyProgress; tableComment?: TableColumnApplyProgress; tableDefaultEncoding?: TableColumnApplyProgress; dataSearch?:DataSearchProgress; }
+export interface TaskEvent { taskId: string; status: TaskRecord['status']; progress: number; message: string; rows?: number; resultIndex?: number; columns?: ResultColumn[]; batch?: DataRow[]; executionDatabase?:QueryDatabaseContext; /** 当前语句开始发送时只报告一次实际片段，历史不得使用完整源脚本。 */ executionSql?: string; queryExport?: QueryExportProgress; columnPatch?: TableColumnApplyProgress; indexPatch?: TableIndexApplyProgress; foreignKeyPatch?: TableForeignKeyApplyProgress; tableRename?: TableColumnApplyProgress; tableAutoIncrement?: TableColumnApplyProgress; tableComment?: TableColumnApplyProgress; tableDefaultEncoding?: TableColumnApplyProgress; dataSearch?:DataSearchProgress; }
 export interface FileChoice { token: string; name: string; }
 export type QueryFileEncoding = 'utf8' | 'utf16le' | 'gb18030';
 export interface AppSettings { theme: 'dark' | 'light'; sidebarWidth: number; resultLimit: number; pageSize: number; tabs: { id: string; kind: 'query' | 'table'; title: string; connectionId: string; database?: string; databaseContext?:QueryDatabaseContext; table?: string; sql?: string; sourceBinding?: QuerySourceBinding }[]; activeTabId?: string; }
@@ -116,7 +116,7 @@ export interface CommandMap {
   'metadata.ddl': { input: { connectionId: string; database: string; name: string; kind: ObjectKind }; output: string };
   'sessions.open': { input: { connectionId: string; database?: string|null }; output: { sessionId: string } };
   'sessions.close': { input: { sessionId: string }; output: void };
-  'query.execute': { input: { sessionId: string; sql: string; taskId: string; maxRows: number }; output: QueryOutcome };
+  'query.execute': { input: { sessionId: string; sql: string; taskId: string; maxRows: number; /** 同一Monaco模型全文中的UTF-16光标；缺省保持原选区/全部行为。 */ currentStatement?: { offset: number } }; output: QueryOutcome };
   'query.explain': { input: { sessionId: string; sql: string; taskId: string; maxRows: number; format?: 'auto' | 'text' }; output: QueryOutcome };
   'query.parameterNames': { input: { sessionId: string; sql: string }; output: QueryParameterNames };
   'query.sessionState': { input: { sessionId: string }; output: { transactionOpen: boolean; transactionKnown: boolean; broken: boolean } };

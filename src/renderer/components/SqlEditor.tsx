@@ -13,6 +13,7 @@ import {invoke,uid} from '../lib';
 import {resolveCompletionContext,completionContextCapabilities} from '../completionContext';
 import {SessionCompletionDirectory} from '../sessionCompletionDirectory';
 import {completionServerFacts} from '../completionServerFacts';
+import { currentStatementZh } from '../locales/currentStatement.zh-CN';
 
 export type SqlCompletionStatus='idle'|'partial'|'unavailable'|'limited'|'databaseUnknown'|'sessionUnknown'|'startupTimeout'|'analysisTimeout';
 export interface SqlCompletionScope{connectionId:string;connectionVersion:number;database?:string;databaseUnknown?:boolean;sessionId?:string}
@@ -23,10 +24,11 @@ self.MonacoEnvironment = { getWorker: () => new EditorWorker() };
 loader.config({ monaco });
 
 /** 每个编辑器只接收自身元数据补全，执行快捷键通过引用调用最新的标签逻辑。 */
-export function SqlEditor({ value, onChange, onReady, height = '100%', readOnly = false, completion, onCompletionStatus, onExecute }: { value: string; onChange?: (value: string) => void; onReady?: (editor: monaco.editor.IStandaloneCodeEditor) => void; height?: string | number; readOnly?: boolean; completion?:SqlCompletionScope;onCompletionStatus?:(status:SqlCompletionStatus)=>void;onExecute?: () => void }) {
+export function SqlEditor({ value, onChange, onReady, height = '100%', readOnly = false, completion, onCompletionStatus, onExecute, onExecuteCurrent }: { value: string; onChange?: (value: string) => void; onReady?: (editor: monaco.editor.IStandaloneCodeEditor) => void; height?: string | number; readOnly?: boolean; completion?:SqlCompletionScope;onCompletionStatus?:(status:SqlCompletionStatus)=>void;onExecute?: () => void; onExecuteCurrent?: () => void }) {
   const theme = useWorkspace(state => state.settings.theme);
   const editorRef = useRef<monaco.editor.IStandaloneCodeEditor | null>(null);
   const runRef = useRef(onExecute); runRef.current = onExecute;
+  const currentRunRef = useRef(onExecuteCurrent); currentRunRef.current = onExecuteCurrent;
   const statusRef=useRef(onCompletionStatus);statusRef.current=onCompletionStatus;
   useEffect(() => {
     if(readOnly||!completion)return;
@@ -69,6 +71,8 @@ export function SqlEditor({ value, onChange, onReady, height = '100%', readOnly 
   const mounted: OnMount = editor => {
     editorRef.current = editor; onReady?.(editor);
     editor.addAction({ id: 'dbark-run', label: zh.editor.text001, keybindings: [monaco.KeyMod.CtrlCmd | monaco.KeyCode.Enter], run: () => runRef.current?.() });
+    // 与原动作分开注册；按钮和快捷键最终进入同一个忙碌/模态守卫。
+    if (currentRunRef.current) editor.addAction({ id: 'dbark-run-current', label: currentStatementZh.action, keybindings: [monaco.KeyMod.CtrlCmd | monaco.KeyMod.Shift | monaco.KeyCode.Enter], run: () => currentRunRef.current?.() });
   };
   return <Editor language="sql" theme={theme === 'dark' ? 'vs-dark' : 'light'} value={value} onChange={text => onChange?.(text ?? '')} onMount={mounted} height={height} loading={<div className="editor-loading">{zh.editor.text002}</div>} options={{ readOnly, wordBasedSuggestions:'off',quickSuggestions:{other:true,comments:false,strings:false},fontFamily: 'Cascadia Code, SFMono-Regular, Consolas, monospace', fontSize: 13, lineHeight: 23, minimap: { enabled: false }, automaticLayout: true, scrollBeyondLastLine: false, padding: { top: 18, bottom: 12 }, tabSize: 2, wordWrap: 'on', renderLineHighlight: 'line', smoothScrolling: true, fixedOverflowWidgets: true, contextmenu: true }} />;
 }
