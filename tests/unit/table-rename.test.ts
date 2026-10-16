@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { validateTableRenameName, tableRenameAcknowledgements } from '../../src/shared/tableRename';
 import { planTableRename, renameDefinitionBody } from '../../src/engine/tableRenameSql';
-import { proveRenamePrivileges } from '../../src/engine/tableRenameRead';
+import { proveRenamePrivileges, tableRenamePhysicalIdentity } from '../../src/engine/tableRenameRead';
 import { sameTableRenameTarget, tableRenameAcksComplete, tableRenameAckLabel, tableRenameFailure, TableRenameRequestFence } from '../../src/renderer/tableRenameUi';
 import { assertTableRenameTargetAvailable } from '../../src/renderer/tableRenameServices';
 import { reconcileTableRenameFavorites, tableRenameTabMatches } from '../../src/renderer/tableRenameReconcile';
@@ -36,6 +36,25 @@ describe('表重命名输入、权限与界面边界', () => {
     expect(proveRenamePrivileges(["GRANT ALL PRIVILEGES ON *.* TO 'u'@'h'"], target, mode, 'new_t')).toBe(true);
     for (const next of [grants.slice(1), [...grants, "REVOKE SELECT ON db.* FROM 'u'@'h'"], [...grants, "GRANT 'role' TO 'u'@'h'"], ["GRANT ALL ON `*`.`*` TO 'u'@'h'"], grants.map(value => value.replace('ALTER, DROP', 'ALTER(id), DROP'))]) expect(proveRenamePrivileges(next, target, mode, 'new_t')).toBe(false);
     expect(proveRenamePrivileges(grants, target, mode, 'elsewhere')).toBe(false);
+  });
+  it('读取/执行/后核验权限严格分阶段，但目录可见性及未知角色仍不放宽', () => {
+    const visibility = "GRANT SELECT, SHOW VIEW, TRIGGER, PROCESS ON *.* TO 'u'@'h'", source = "GRANT ALTER, DROP ON `db`.`t` TO 'u'@'h'", destination = "GRANT CREATE, INSERT ON `db`.`new_t` TO 'u'@'h'";
+    expect(proveRenamePrivileges([visibility, source], target, mode)).toBe(true);
+    expect(proveRenamePrivileges([visibility, source], target, mode, 'new_t', 'execute')).toBe(false);
+    expect(proveRenamePrivileges([visibility, source, destination], target, mode, 'new_t', 'execute')).toBe(true);
+    expect(proveRenamePrivileges([visibility], { ...target, table: 'new_t' }, mode, undefined, 'verify')).toBe(true);
+    expect(proveRenamePrivileges([visibility], target, mode)).toBe(false);
+    for (const phase of ['get', 'execute', 'verify'] as const) {
+      expect(proveRenamePrivileges([source, destination], target, mode, 'new_t', phase)).toBe(false);
+      expect(proveRenamePrivileges([visibility, source, destination, "GRANT 'role' TO 'u'@'h'"], target, mode, 'new_t', phase)).toBe(false);
+      expect(proveRenamePrivileges([visibility, source, destination, "REVOKE SELECT ON db.* FROM 'u'@'h'"], target, mode, 'new_t', phase)).toBe(false);
+    }
+  });
+  it('名称回收凭证绑定服务器与原生表编号，不能用DDL摘要或相同编号的另一服务器替代', () => {
+    const first = tableRenamePhysicalIdentity({ identity: 'a'.repeat(64), tableId: '9007199254740993' });
+    expect(first).toMatch(/^[a-f0-9]{64}$/); expect(first).not.toBe(tableRenamePhysicalIdentity({ identity: 'b'.repeat(64), tableId: '9007199254740993' }));
+    expect(first).not.toBe(tableRenamePhysicalIdentity({ identity: 'a'.repeat(64), tableId: '9007199254740994' }));
+    expect(() => tableRenamePhysicalIdentity({ identity: 'DDL摘要不能代替服务器身份', tableId: '1' })).toThrow('物理身份');
   });
   it('三项风险必须精确匹配，原型成员和未知确认项不能执行', () => {
     expect(tableRenameAcksComplete(tableRenameAcknowledgements, new Set(tableRenameAcknowledgements))).toBe(true);

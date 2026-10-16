@@ -181,7 +181,8 @@ export default function App() {
     if ((workspace.connectionVersions[before.connectionId] ?? 0) !== version) { workspace.notify(tableRenameZh.targetChanged, true); return; }
     workbenchNavigation.invalidate(); refreshRenameDatabase(before); markStructureTarget(before, false); markStructureTarget(after, false);
     if (!result.definitionVerified) { workspace.notify(tableRenameZh.verificationFailed, true); return; }
-    workbenchNavigation.retireTable(before);
+    if (!result.after?.physicalIdentity) { workspace.notify(tableRenameZh.verificationFailed, true); return; }
+    const nameReusable = workbenchNavigation.completeTableRename(before, after, result.after.physicalIdentity);
     try {
       assertTableRenameTargetAvailable(before, workspace); assertTableRenameTargetAvailable(after, workspace);
       // 从不把现有组件改成另一目标，旧请求只能触及已关闭的旧标签ID。
@@ -194,7 +195,7 @@ export default function App() {
     if (!currentWorkbench.ready || currentWorkbench.busy) { workspace.notify(tableRenameZh.favoritesPending, true); return; }
     const plan = reconcileTableRenameFavorites(currentWorkbench.snapshot.document, before, after);
     if (plan.conflict || plan.changed && !await currentWorkbench.save(plan.document)) workspace.notify(tableRenameZh.favoritesPending, true);
-    else workspace.notify(tableRenameZh.referencesNotice);
+    else workspace.notify(nameReusable ? tableRenameZh.referencesNotice : tableRenameZh.ambiguousLink, !nameReusable);
   }
   /** 注释入口保护全部同目标表页；不覆盖已有模态或未提交数据。 */
   function openTableComment(target: TableColumnPatchTarget) {

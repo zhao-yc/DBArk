@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import type { ResultSetHeader } from 'mysql2';
 import { StructurePatchCache, structureCacheLimits, type StructureCacheScope } from './structurePatchCache';
 import { structureTaskQuery, type StructureTaskHost } from './structureDefinition';
-import { readTableRename, assertTableRenameUnchanged, assertRenameDestinationAbsent } from './tableRenameRead';
+import { readTableRename, assertTableRenameUnchanged, assertRenameDestinationAbsent, tableRenamePhysicalIdentity } from './tableRenameRead';
 import { tableCommentHash, type TableCommentRead } from './tableCommentRead';
 import { planTableRename, verifyTableRename } from './tableRenameSql';
 import { tableRenameAcknowledgements, type TableRenameTarget, type TableRenameGetInput, type TableRenameGetOutput, type TableRenamePreviewInput, type TableRenamePreviewOutput, type TableRenameApplyInput, type TableRenameApplyOutput, type TableRenameReleaseInput, type TableRenameProgress } from '../shared/tableRename';
@@ -43,7 +43,7 @@ export class TableRenameTasks {
     const current = this.revision(revision), progress = initialProgress(); let snapshot!: Snapshot;
     const output = await this.host.run(input.connectionId, input.taskId, async context => {
       progress.phase = 'reading'; context.report(); const target = { connectionId: input.connectionId, database: input.database, table: input.table };
-      const read = await readTableRename(context, target); this.cache.capacity(read.bytes, 'snapshot');
+      const read = await readTableRename(context, target, undefined, 'get'); this.cache.capacity(read.bytes, 'snapshot');
       snapshot = { ...read, id: randomUUID(), target, revision: current, expires: this.now() + structureCacheLimits.ttlMs };
       return { target, snapshotId: snapshot.id, expiresAt: new Date(snapshot.expires).toISOString(), ddlHash: tableCommentHash(read.source), tableId: read.tableId,
         engine: read.engine, rowFormat: read.rowFormat, autoIncrement: read.autoIncrement, charset: read.tableEncoding.charset, collation: read.tableEncoding.collation,
@@ -60,7 +60,7 @@ export class TableRenameTasks {
     const plan = planTableRename(snapshot.target, input.newName), progress = initialProgress(), token = randomUUID(); let preview!: Preview;
     const output = await this.host.run(snapshot.target.connectionId, input.taskId, async context => {
       progress.phase = 'rechecking'; context.report();
-      assertTableRenameUnchanged(snapshot, await readTableRename(context, snapshot.target, plan.newName));
+      assertTableRenameUnchanged(snapshot, await readTableRename(context, snapshot.target, plan.newName, 'execute'));
       await assertRenameDestinationAbsent(context, snapshot.target, plan.newName);
       if (this.snapshots.get(input.snapshotId) !== snapshot || snapshot.expires <= this.now()) throw new Error('快照已释放或过期，未生成重命名预览');
       preview = { snapshot, ...plan, expires: snapshot.expires, bytes: snapshot.bytes + Buffer.byteLength(plan.sql) + 8192 }; this.cache.capacity(preview.bytes, 'preview');
@@ -79,7 +79,7 @@ export class TableRenameTasks {
     const newTarget = { ...snapshot.target, table: preview.newName }, progress = initialProgress();
     return this.host.run(snapshot.target.connectionId, input.taskId, async context => {
       progress.phase = 'rechecking'; context.report();
-      assertTableRenameUnchanged(snapshot, await readTableRename(context, snapshot.target, preview.newName));
+      assertTableRenameUnchanged(snapshot, await readTableRename(context, snapshot.target, preview.newName, 'execute'));
       await assertRenameDestinationAbsent(context, snapshot.target, preview.newName);
       if (preview.expires <= this.now()) throw new Error('重命名预览已过期；未发送DDL');
       context.checkCancelled(); progress.phase = 'executing'; context.report();
@@ -89,9 +89,9 @@ export class TableRenameTasks {
       const output: TableRenameApplyOutput = { target: { ...snapshot.target }, newTarget, ddlSubmitted: true, ddlCompleted: true, definitionVerified: false, warnings: [] };
       if (result.warningStatus !== 0) output.warnings.push('DDL已完成但警告计数非零或未知，不能证明完整核验；请检查源表和新表。');
       try {
-        const after = await readTableRename(context, newTarget);
+        const after = await readTableRename(context, newTarget, undefined, 'verify');
         await assertRenameDestinationAbsent(context, snapshot.target, snapshot.target.table);
-        if (after.tableId) output.after = { tableId: after.tableId, ddlHash: tableCommentHash(after.source) };
+        if (after.tableId) output.after = { tableId: after.tableId, ddlHash: tableCommentHash(after.source), physicalIdentity: tableRenamePhysicalIdentity(after) };
         output.definitionVerified = progress.definitionVerified = result.warningStatus === 0 && verifyTableRename(snapshot, after);
         if (!output.definitionVerified) output.verificationError = 'DDL已完成，但新名称的物理身份、完整定义或旧名称消失尚未全部核验；请核对实际状态，不要重复执行';
       } catch { output.verificationError = '已收到DDL成功响应，但取消、断线或目录读取失败导致后核验未完成；请核对源表和新表，不要重复执行'; }

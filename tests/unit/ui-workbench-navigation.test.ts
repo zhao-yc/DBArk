@@ -1,5 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { WorkbenchTarget } from '../../src/shared/workbench';
+import { emptyWorkbench, objectUri, parseObjectUri } from '../../src/shared/workbench';
+import { reconcileTableRenameFavorites } from '../../src/renderer/tableRenameReconcile';
 const { request } = vi.hoisted(() => ({ request: vi.fn() }));
 vi.mock('../../src/renderer/lib', () => ({ invoke: request, uid: () => '新标签', errorMessage: (error: unknown) => String(error) }));
 const production = { connectionId: '生产连接', database: 'app', kind: 'table', name: 'users' } as const;
@@ -84,5 +86,33 @@ describe('收藏与链接的最新显式导航意图', () => {
     request.mockResolvedValueOnce(testing); expect(await navigation.open(testing)).toBe(true);
     const renamed = { ...production, name: 'renamed' }; request.mockResolvedValueOnce(renamed); expect(await navigation.open(renamed)).toBe(true);
     expect(workspace.useWorkspace.getState().settings.tabs.at(-1)).toMatchObject({ table: 'renamed' });
+  });
+  it('员工3原反例：同一已核验物理身份a→b→a，新收藏和重新生成的URI均可导航', async () => {
+    const a = { connectionId: 'c', database: 'db', table: 'a' }, b = { ...a, table: 'b' }, identity = 'a'.repeat(64);
+    const document = emptyWorkbench(); document.favorites = [{ id: 'favorite', groupId: null, label: '业务表', target: { connectionId: 'c', database: 'db', kind: 'table', name: 'a' } }];
+    expect(navigation.completeTableRename(a, b, identity)).toBe(true); const first = reconcileTableRenameFavorites(document, a, b); request.mockResolvedValueOnce(first.document.favorites[0].target); expect(await navigation.open(first.document.favorites[0].target)).toBe(true);
+    expect(navigation.completeTableRename(b, a, identity)).toBe(true); const second = reconcileTableRenameFavorites(first.document, b, a); expect(second).toMatchObject({ changed: true, conflict: false });
+    request.mockResolvedValueOnce(second.document.favorites[0].target); await expect(navigation.open(second.document.favorites[0].target)).resolves.toBe(true);
+    const freshLink = objectUri(second.document.favorites[0].target); request.mockResolvedValueOnce(parseObjectUri(freshLink)); await expect(navigation.open(parseObjectUri(freshLink))).resolves.toBe(true);
+    await expect(navigation.open({ ...second.document.favorites[0].target, kind: 'table', name: 'b' })).rejects.toThrow('旧对象链接');
+  });
+  it('严格反向：不同物理表复用退役名称，不会恢复旧URI；后来回到原身份也不抹除已知歧义', async () => {
+    const a = { connectionId: 'c', database: 'db', table: 'a' }, b = { ...a, table: 'b' }, c = { ...a, table: 'c' }, d = { ...a, table: 'd' };
+    const oldLink = objectUri({ connectionId: 'c', database: 'db', kind: 'table', name: 'a' });
+    expect(navigation.completeTableRename(a, b, 'a'.repeat(64))).toBe(true);
+    expect(navigation.completeTableRename(c, a, 'b'.repeat(64))).toBe(false);
+    await expect(navigation.open(parseObjectUri(oldLink))).rejects.toThrow('旧对象链接');
+    expect(navigation.completeTableRename(a, d, 'b'.repeat(64))).toBe(true);
+    expect(navigation.completeTableRename(b, a, 'a'.repeat(64))).toBe(false);
+    await expect(navigation.open(parseObjectUri(oldLink))).rejects.toThrow('旧对象链接'); expect(request).not.toHaveBeenCalled();
+  });
+  it('严格反向：未知身份、跨库/连接或无效回执不重新认可名称，完成前的旧请求仍失效', async () => {
+    const a = { connectionId: 'c', database: 'db', table: 'a' }, b = { ...a, table: 'b' }, uri = { connectionId: 'c', database: 'db', kind: 'table' as const, name: 'a' };
+    const previous = pending(); request.mockReturnValueOnce(previous.promise); const old = navigation.open(uri);
+    navigation.completeTableRename(a, b, 'a'.repeat(64)); previous.resolve(uri); expect(await old).toBe(false);
+    expect(() => navigation.completeTableRename(b, a, '')).toThrow(); expect(() => navigation.completeTableRename(b, { ...a, database: 'other' }, 'a'.repeat(64))).toThrow();
+    await expect(navigation.open(uri)).rejects.toThrow('旧对象链接');
+    navigation.retireTable({ ...a, table: 'unknown' }); expect(navigation.completeTableRename(b, { ...a, table: 'unknown' }, 'a'.repeat(64))).toBe(false);
+    const other = { ...uri, connectionId: 'other' }; request.mockResolvedValueOnce(other); await expect(navigation.open(other)).resolves.toBe(true);
   });
 });
