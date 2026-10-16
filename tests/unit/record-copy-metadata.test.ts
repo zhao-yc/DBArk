@@ -14,23 +14,29 @@ import { formatText } from '../../src/renderer/locales/zh-CN';
 import { recordDuplicateZh } from '../../src/renderer/locales/recordDuplicate.zh-CN';
 import { recordCopySourceZh } from '../../src/renderer/locales/recordCopySource.zh-CN';
 import { recordViewZh } from '../../src/renderer/locales/recordViews.zh-CN';
+import { RecordPageNavigation, recordPageScope } from '../../src/renderer/recordPageNavigation';
+import { maxTablePage } from '../../src/renderer/tableFilters';
 
 // 员工3的7660最小反例已原样保留；这里将同一旧目录/新页场景接入实际load、按钮和异步处理器。
 const source = readFileSync(new URL('../../src/renderer/components/TableTab.tsx', import.meta.url), 'utf8'), tree = ts.createSourceFile('TableTab.tsx', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX), functions: string[] = [];
-let load = '', disabled = '', copyValues = '', environment = '';
+let load = '', disabled = '', copyValues = '', environment = '', resize = '';
 /** 取生产原文并替换外界端口，按钮守卫与实际处理器不能各测一套实现。 */
 function visit(node: ts.Node) {
-  if (ts.isFunctionDeclaration(node) && node.name && ['setRows', 'getRecordContext', 'assertGridWritable', 'invalidateCopyRead', 'releaseCopySources', 'duplicateCurrentRow', 'readCompleteCopySource'].includes(node.name.text)) functions.push(node.getText(tree));
+  if (ts.isFunctionDeclaration(node) && node.name && ['setRows', 'getRecordContext', 'getRecordPageContext', 'navigateRecordPage', 'assertGridWritable', 'invalidateCopyRead', 'releaseCopySources', 'duplicateCurrentRow', 'readCompleteCopySource'].includes(node.name.text)) functions.push(node.getText(tree));
   if (ts.isVariableDeclaration(node) && node.name.getText(tree) === 'load') load = node.initializer!.getText(tree);
   if (ts.isVariableDeclaration(node) && node.name.getText(tree) === 'copyValues') copyValues = node.initializer!.getText(tree);
   if (ts.isIfStatement(node) && node.expression.getText(tree).startsWith('copyValues.some')) environment = node.getText(tree);
+  if ((ts.isJsxOpeningElement(node) || ts.isJsxSelfClosingElement(node)) && node.tagName.getText(tree) === 'DataGrid') {
+    const attr = node.attributes.properties.find(attr => ts.isJsxAttribute(attr) && attr.name.getText(tree) === 'onColumnResize');
+    if (attr && ts.isJsxAttribute(attr) && attr.initializer && ts.isJsxExpression(attr.initializer)) resize = attr.initializer.expression!.getText(tree);
+  }
   if (ts.isJsxOpeningElement(node) && node.tagName.getText(tree) === 'button' && node.attributes.properties.some(attr => ts.isJsxAttribute(attr) && attr.name.getText(tree) === 'aria-label' && attr.initializer?.getText(tree) === '{recordDuplicateZh.action}')) {
     const attr = node.attributes.properties.find(attr => ts.isJsxAttribute(attr) && attr.name.getText(tree) === 'disabled'); if (attr && ts.isJsxAttribute(attr) && attr.initializer && ts.isJsxExpression(attr.initializer)) disabled = attr.initializer.expression!.getText(tree);
   }
   node.forEachChild(visit);
 }
 visit(tree);
-const code = ts.transpileModule(functions.join('\n') + '\nconst load=' + load + ';globalThis.handlers={load,copy:duplicateCurrentRow,read:readCompleteCopySource,context:getRecordContext,disabled:()=>(' + disabled + '),environment:()=>{const copyValues=' + copyValues + ';' + environment + '}};', { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
+const code = ts.transpileModule(functions.join('\n') + '\nconst load=' + load + ';globalThis.handlers={load,copy:duplicateCurrentRow,read:readCompleteCopySource,context:getRecordContext,navigate:navigateRecordPage,invalidate:invalidateCopyRead,resize:(' + resize + '),disabled:()=>(' + disabled + '),environment:()=>{const copyValues=' + copyValues + ';' + environment + '}};', { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
 
 /** 仅模拟IO；旧目录id/note，新来源页声明新增hidden INVISIBLE，服务器回包由测试显式结束。 */
 async function fixture(mode: 'mismatch' | 'matching' | 'unavailable' | 'local' = 'mismatch') {
@@ -42,13 +48,18 @@ async function fixture(mode: 'mismatch' | 'matching' | 'unavailable' | 'local' =
   const pending = new Promise<TableCopySourceReadResult>(resolve => { finish = resolve; });
   const invoke = vi.fn(async (command: string) => { if (command === 'metadata.table') return metadata; if (command === 'table.page') return page; if (command === 'table.copySourceRead') return pending; if (['connections.open', 'table.copySourceRelease', 'query.cancel'].includes(command)) return undefined; throw Error('不应调用:' + command); });
   const uid = vi.fn(randomUUID), record = { hasInput: () => false, dirty: false };
-  const port = createContext({ structuredClone, Error, useCallback: (action: unknown) => action, useWorkspace: { getState: () => ({ setBusy: vi.fn(), setDirty: vi.fn() }) }, invoke, uid, base, tab: { id: 'tab', connectionId: 'conn' }, connectionVersion: 1, refreshVersion: 0, pageIndex: 1, pageSize: 50, filters: [], filterMode: 'all', sort: [],
+  // 组合后的load保留D04真实导航门；本组为普通读取，不建立跨页票据。
+  const tab = { id: 'tab', ...base }, workspace = { settings: { tabs: [tab], activeTabId: tab.id }, connectionVersions: { conn: 1 }, setBusy: vi.fn(), setDirty: vi.fn() };
+  const port = createContext({ structuredClone, Error, useCallback: (action: unknown) => action, useWorkspace: { getState: () => workspace }, invoke, uid, base, tab, connectionVersion: 1, refreshVersion: 0, pageIndex: 1, pageSize: 50, filters: [], filterMode: 'all', sort: [],
+    recordPages: new RecordPageNavigation(), recordPageScope, recordPageScopeRef: { current: { value: { target: base, connectionVersion: 1, refreshVersion: 0, pageSize: 50, filters: [], filterMode: 'all', sort: [] }, page: 1 } }, setRecordPageMessage: vi.fn(), setPageIndex: vi.fn(), showPreferences: false, maxTablePage,
+    visibleKeys: ['id', 'note'], updatePreferences: vi.fn(), setPreferencesError: vi.fn(),
     loadGeneration: { current: 0 }, blockedRef: { current: false }, loadingCount: { current: 0 }, referenceCount: { current: 0 }, applyingRef: { current: false }, preferencesLock: { current: false }, copyPendingRef: { current: false }, mounted: { current: true }, copyPageTask: { current: undefined }, copyPage: { current: null }, copySources: { current: null }, copyRowRefs: { current: new Map() }, copyReadIntent: { current: null }, copyEnvironment: { current: { values: [] } }, rowsRef: { current: [] }, selectionRef: { current: undefined }, copiedDraftIds: { current: new Set() }, inputDirtyRef: { current: false }, recordControllerRef: { current: { ...record, reset: vi.fn() } }, previewingRef: { current: false }, preview: null,
     recordContextRef: { current: { target: base, connectionVersion: 1, generation: 0, info: null, loaded: false, stale: false, busy: false } }, record, rootElement: { current: { querySelector: () => null } }, document: { querySelector: () => null }, blocked: false, copySourceReady: false, copyMetadataReason: '', referenceRow: undefined, info: null, page: null,
     setRowsState, setError: vi.fn(), setCopyPending: vi.fn(), setDuplicateNotice: vi.fn(), setSelectedRows: vi.fn(), setSelection: vi.fn(), setExternalStale: vi.fn(), setBusy: vi.fn(), setInfo: vi.fn(), setPage: vi.fn(),
     recordReadonlyReason, recordTargetKey, tableCopyMetadataKey, recordCopyMetadataReason, recordCopySourceReady, recordDuplicateReadonlyReason, duplicateRecordDraft, beginRecordCopyRead, consumeRecordCopyRead, collectChanges, errorMessage, formatText, recordDuplicateZh, recordCopySourceZh, recordViewZh,
   });
   port.setInfo = (value: TableInfo) => { port.info = value; port.recordContextRef.current.info = value; }; port.setPage = (value: TablePage) => { port.page = value; port.recordContextRef.current.loaded = !!value; };
+  port.setCopyPending = vi.fn((value: boolean) => { port.blocked = value; });
   runInContext(code, port); await port.handlers.load(); port.blockedRef.current = false;
   const row = port.rowsRef.current[0]; port.selectionRef.current = { rowId: row.id, key: 'note' }; port.referenceRow = row;
   /** 模拟React渲染，仅计算生产辅助函数及生产不可复活守卫原文。 */
@@ -60,6 +71,28 @@ async function fixture(mode: 'mismatch' | 'matching' | 'unavailable' | 'local' =
 }
 
 describe('7660目录/页结构竞态的实际入口回归', () => {
+  it('补取占门期间D04跨页和布局都不变，重复取消只发一次且迟到完整回包不追加', async () => {
+    const f = await fixture('matching'), p = f.port, originalRows = p.rowsRef.current;
+    p.record.formOpen = true; p.record.draft = { rowId: originalRows[0].id }; p.recordControllerRef.current.formOpen = true;
+    const pending = p.handlers.read(); expect(p.copyPendingRef.current).toBe(true);
+    p.handlers.navigate(1); p.handlers.resize({ key: 'note' }, 300);
+    expect(p.setPageIndex).not.toHaveBeenCalled(); expect(p.updatePreferences).not.toHaveBeenCalled(); expect(p.recordPages.pending).toBe(false);
+    p.handlers.invalidate(); p.handlers.invalidate(); p.handlers.navigate(1);
+    expect(p.copyPendingRef.current).toBe(true); expect(p.blockedRef.current).toBe(true);
+    f.finish(); await pending;
+    expect(p.rowsRef.current).toBe(originalRows); expect(f.setRowsState).not.toHaveBeenCalled(); expect(p.copyPendingRef.current).toBe(false);
+    expect(f.invoke.mock.calls.map(([command]) => command)).toEqual(['table.copySourceRead', 'query.cancel']);
+  });
+  it('实际重新加载撤销旧补取并释放旧租约，迟到回包不覆盖新页或自动重试', async () => {
+    const f = await fixture('matching'), p = f.port, oldRows = p.rowsRef.current, pending = p.handlers.read();
+    await p.handlers.load(); const newRows = p.rowsRef.current, writes = f.setRowsState.mock.calls.length;
+    expect(newRows).not.toBe(oldRows); expect(newRows).toHaveLength(1); expect(newRows[0].id).not.toBe(oldRows[0].id);
+    f.finish(); await pending;
+    expect(p.rowsRef.current).toBe(newRows); expect(f.setRowsState).toHaveBeenCalledTimes(writes); expect(p.rowsRef.current).toHaveLength(1);
+    expect(f.invoke.mock.calls.filter(([command]) => command === 'query.cancel')).toHaveLength(1);
+    expect(f.invoke.mock.calls.filter(([command]) => command === 'table.copySourceRelease')).toHaveLength(1);
+    expect(f.invoke.mock.calls.filter(([command]) => command === 'table.copySourceRead')).toHaveLength(1);
+  });
   it.each(['mismatch', 'unavailable'] as const)('%s来源报告新INVISIBLE而目录旧：按钮禁用，强行调用也无草稿/任务/SQL', async mode => { const f = await fixture(mode); expect(f.port.handlers.disabled()).toBe(true); f.port.handlers.copy(); expect(f.port.rowsRef.current).toHaveLength(1); expect(f.setRowsState).not.toHaveBeenCalled(); expect(f.invoke).not.toHaveBeenCalled(); expect(f.uid).not.toHaveBeenCalled(); expect(f.port.setError).toHaveBeenLastCalledWith(expect.stringContaining('结构身份未知或不一致')); });
   it('目录一致正例实际发起只读补取，完整回包只追加含新列源值的一条草稿', async () => { const f = await fixture('matching'); expect(f.port.handlers.disabled()).toBe(false); const active = f.port.handlers.read(); expect(f.invoke.mock.calls.map(([command]) => command)).toEqual(['table.copySourceRead']); expect(f.port.rowsRef.current).toHaveLength(1); f.finish(); await active; expect(f.port.rowsRef.current).toHaveLength(2); expect(f.port.rowsRef.current[1].data).toEqual({ note: '源记录', hidden: '源值而非默认值' }); expect(f.invoke.mock.calls.map(([command]) => command)).toEqual(['table.copySourceRead']); });
   it('完整且结构一致的普通行保留本地快捷复制，零IPC', async () => { const f = await fixture('local'); expect(f.port.handlers.disabled()).toBe(false); f.port.handlers.copy(); expect(f.port.rowsRef.current).toHaveLength(2); expect(f.port.rowsRef.current[1].data).toEqual({ note: '源记录' }); expect(f.invoke).not.toHaveBeenCalled(); });
