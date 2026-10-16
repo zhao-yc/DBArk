@@ -19,16 +19,21 @@ import { maxTablePage } from '../../src/renderer/tableFilters';
 
 // 员工3的7660最小反例已原样保留；这里将同一旧目录/新页场景接入实际load、按钮和异步处理器。
 const source = readFileSync(new URL('../../src/renderer/components/TableTab.tsx', import.meta.url), 'utf8'), tree = ts.createSourceFile('TableTab.tsx', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX), functions: string[] = [];
-let load = '', disabled = '', copyValues = '', environment = '', resize = '';
+let load = '', disabled = '', copyValues = '', environment = '', resize = '', activePosition = '', cellClick = '', selectionSync = '';
 /** 取生产原文并替换外界端口，按钮守卫与实际处理器不能各测一套实现。 */
 function visit(node: ts.Node) {
-  if (ts.isFunctionDeclaration(node) && node.name && ['setRows', 'getRecordContext', 'getRecordPageContext', 'navigateRecordPage', 'assertGridWritable', 'invalidateCopyRead', 'releaseCopySources', 'duplicateCurrentRow', 'readCompleteCopySource'].includes(node.name.text)) functions.push(node.getText(tree));
+  if (ts.isFunctionDeclaration(node) && node.name && ['setRows', 'getRecordContext', 'getRecordPageContext', 'navigateRecordPage', 'selectCurrentCell', 'assertGridWritable', 'invalidateCopyRead', 'releaseCopySources', 'duplicateCurrentRow', 'readCompleteCopySource'].includes(node.name.text)) functions.push(node.getText(tree));
   if (ts.isVariableDeclaration(node) && node.name.getText(tree) === 'load') load = node.initializer!.getText(tree);
   if (ts.isVariableDeclaration(node) && node.name.getText(tree) === 'copyValues') copyValues = node.initializer!.getText(tree);
   if (ts.isIfStatement(node) && node.expression.getText(tree).startsWith('copyValues.some')) environment = node.getText(tree);
+  if (ts.isExpressionStatement(node) && node.getText(tree) === 'selectionRef.current = selection;') selectionSync = node.getText(tree);
   if ((ts.isJsxOpeningElement(node) || ts.isJsxSelfClosingElement(node)) && node.tagName.getText(tree) === 'DataGrid') {
     const attr = node.attributes.properties.find(attr => ts.isJsxAttribute(attr) && attr.name.getText(tree) === 'onColumnResize');
     if (attr && ts.isJsxAttribute(attr) && attr.initializer && ts.isJsxExpression(attr.initializer)) resize = attr.initializer.expression!.getText(tree);
+    for (const attribute of node.attributes.properties) if (ts.isJsxAttribute(attribute) && attribute.initializer && ts.isJsxExpression(attribute.initializer)) {
+      if (attribute.name.getText(tree) === 'onActivePositionChange') activePosition = attribute.initializer.expression!.getText(tree);
+      if (attribute.name.getText(tree) === 'onCellClick') cellClick = attribute.initializer.expression!.getText(tree);
+    }
   }
   if (ts.isJsxOpeningElement(node) && node.tagName.getText(tree) === 'button' && node.attributes.properties.some(attr => ts.isJsxAttribute(attr) && attr.name.getText(tree) === 'aria-label' && attr.initializer?.getText(tree) === '{recordDuplicateZh.action}')) {
     const attr = node.attributes.properties.find(attr => ts.isJsxAttribute(attr) && attr.name.getText(tree) === 'disabled'); if (attr && ts.isJsxAttribute(attr) && attr.initializer && ts.isJsxExpression(attr.initializer)) disabled = attr.initializer.expression!.getText(tree);
@@ -36,7 +41,8 @@ function visit(node: ts.Node) {
   node.forEachChild(visit);
 }
 visit(tree);
-const code = ts.transpileModule(functions.join('\n') + '\nconst load=' + load + ';globalThis.handlers={load,copy:duplicateCurrentRow,read:readCompleteCopySource,context:getRecordContext,navigate:navigateRecordPage,invalidate:invalidateCopyRead,resize:(' + resize + '),disabled:()=>(' + disabled + '),environment:()=>{const copyValues=' + copyValues + ';' + environment + '}};', { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
+if (!activePosition || !cellClick || !selectionSync) throw Error('缺少真实网格选择回调或渲染引用同步语句');
+const code = ts.transpileModule(functions.join('\n') + '\nconst load=' + load + ';globalThis.handlers={load,copy:duplicateCurrentRow,read:readCompleteCopySource,context:getRecordContext,navigate:navigateRecordPage,invalidate:invalidateCopyRead,activePosition:(' + activePosition + '),cellClick:(' + cellClick + '),renderSelection:()=>{' + selectionSync + '},resize:(' + resize + '),disabled:()=>(' + disabled + '),environment:()=>{const copyValues=' + copyValues + ';' + environment + '}};', { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
 
 /** 仅模拟IO；旧目录id/note，新来源页声明新增hidden INVISIBLE，服务器回包由测试显式结束。 */
 async function fixture(mode: 'mismatch' | 'matching' | 'unavailable' | 'local' = 'mismatch') {
@@ -60,8 +66,10 @@ async function fixture(mode: 'mismatch' | 'matching' | 'unavailable' | 'local' =
   });
   port.setInfo = (value: TableInfo) => { port.info = value; port.recordContextRef.current.info = value; }; port.setPage = (value: TablePage) => { port.page = value; port.recordContextRef.current.loaded = !!value; };
   port.setCopyPending = vi.fn((value: boolean) => { port.blocked = value; });
+  // React状态与同步引用分别观察；真实setter既接收对象，也接收函数式更新。
+  port.setSelection = vi.fn((value: unknown) => { port.selection = typeof value === 'function' ? value(port.selection) : value; });
   runInContext(code, port); await port.handlers.load(); port.blockedRef.current = false;
-  const row = port.rowsRef.current[0]; port.selectionRef.current = { rowId: row.id, key: 'note' }; port.referenceRow = row;
+  const row = port.rowsRef.current[0]; port.selectionRef.current = { rowId: row.id, key: 'note' }; port.selection = port.selectionRef.current; port.referenceRow = row;
   /** 模拟React渲染，仅计算生产辅助函数及生产不可复活守卫原文。 */
   function render() { port.handlers.environment(); port.copyMetadataReason = recordCopyMetadataReason(port.handlers.context(), port.copyPage.current, port.copySources.current?.source); port.copySourceReady = !port.copyMetadataReason && recordCopySourceReady(port.handlers.context(), row, port.copySources.current?.source, port.copyRowRefs.current.get(row.id)); }
   render(); invoke.mockClear(); uid.mockClear(); setRowsState.mockClear();
@@ -69,6 +77,57 @@ async function fixture(mode: 'mismatch' | 'matching' | 'unavailable' | 'local' =
   const result = { target: base, pageRef: ready?.pageRef ?? '', rowRef: ready?.rowRefs[0] ?? '', metadataKey: page.copyMetadataKey!, readAt: new Date().toISOString(), complete: true as const, values: { id: 1, note: '源记录', hidden: '源值而非默认值' } };
   return { port, old, fresh, metadata, page, invoke, uid, setRowsState, render, finish: () => finish(result) };
 }
+
+describe('复制补取的同坐标通知与令牌', () => {
+  it('同坐标通知后自有busy渲染按生产语句回写ref，完整回包仍只追加一次', async () => {
+    const f = await fixture('matching'), p = f.port, state = p.selection;
+    p.handlers.activePosition({ row: p.rowsRef.current[0], column: { key: 'note' } });
+    const captured = p.selectionRef.current, pending = p.handlers.read();
+    expect(p.copyReadIntent.current.selection).toBe(captured); p.handlers.renderSelection();
+    expect(p.selectionRef.current).toBe(state); f.finish(); await pending;
+    expect(p.setError.mock.calls.at(-1)?.[0] ?? '').toBe(''); expect(p.rowsRef.current).toHaveLength(2); expect(f.setRowsState).toHaveBeenCalledOnce();
+    expect(f.invoke.mock.calls.map(([command]) => command)).toEqual(['table.copySourceRead']);
+  });
+  it('真实新坐标把同一令牌发布给React和同步引用，渲染回写不再分裂身份', async () => {
+    const f = await fixture('matching'), p = f.port, previous = p.selectionRef.current;
+    p.handlers.activePosition({ row: p.rowsRef.current[0], column: { key: 'id' } });
+    const token = p.selectionRef.current; expect(token).not.toBe(previous); expect(p.selection).toBe(token);
+    p.selectionRef.current = p.selection; expect(p.selectionRef.current).toBe(token);
+    expect(f.invoke).not.toHaveBeenCalled(); expect(f.setRowsState).not.toHaveBeenCalled();
+  });
+  it.each(['activePosition', 'cellClick'] as const)('%s重复同坐标不重建同步或React选择令牌', async event => {
+    const f = await fixture('matching'), p = f.port, token = p.selectionRef.current, row = p.rowsRef.current[0];
+    p.handlers[event]({ row, column: { key: 'note' } }); p.handlers[event]({ row, column: { key: 'note' } });
+    expect(p.selectionRef.current).toBe(token); expect(p.selection).toBe(token);
+    expect(f.invoke).not.toHaveBeenCalled(); expect(f.setRowsState).not.toHaveBeenCalled();
+  });
+  it.each(['activePosition', 'cellClick'] as const)('自有占门提交期间%s同坐标通知后仍消费一次完整回包', async event => {
+    const f = await fixture('matching'), p = f.port, token = p.selectionRef.current, rows = p.rowsRef.current, sourcePage = p.copyPage.current;
+    const consume = vi.fn(consumeRecordCopyRead); p.consumeRecordCopyRead = consume;
+    // useState提交前仍可能收到上一轮props转交的网格通知；执行正式回调及处理器，不改造结果。
+    p.setCopyPending.mockImplementation((value: boolean) => { if (value) p.handlers[event]({ row: rows[0], column: { key: 'note' } }); p.blocked = value; });
+    const pending = p.handlers.read(); f.finish(); await pending;
+    expect(consume).toHaveBeenCalledOnce(); const [intent, actualRows, context, selection, source, rowRef, result] = consume.mock.calls[0];
+    expect(intent.invalidated).toBe(false); expect(actualRows).toBe(rows); expect(intent.row).toBe(rows[0]); expect(context.info).toBe(intent.info);
+    expect(context.connectionVersion).toBe(intent.version); expect(context.generation).toBe(intent.generation); expect(source).toBe(intent.source); expect(rowRef).toBe(intent.rowRef);
+    expect(rows[0].data).toEqual(intent.dataSnapshot); expect(rows[0].original).toEqual(intent.originalSnapshot); expect(p.copyPage.current).toBe(sourcePage); expect(result.complete).toBe(true);
+    expect(intent.selection).toBe(token); expect(selection, '同坐标不得触发consume的selection引用拒绝条件').toBe(token);
+    expect(p.rowsRef.current).toHaveLength(2); expect(p.rowsRef.current[0]).toBe(rows[0]); expect(p.rowsRef.current[1].data.hidden).toBe('源值而非默认值');
+    expect(f.setRowsState).toHaveBeenCalledOnce(); expect(f.invoke.mock.calls.map(([command]) => command)).toEqual(['table.copySourceRead']);
+  });
+  it.each(['行', '列', '清空'] as const)('真正%s变化再恢复同坐标仍永久拒绝，忙态也只取消一次', async change => {
+    const f = await fixture('matching'), p = f.port, originalRows = p.rowsRef.current, row = originalRows[0];
+    if (change === '行') originalRows.push({ ...row, id: row.id + '-another', data: { ...row.data, id: 2 }, original: { ...row.original, id: 2 } });
+    const pending = p.handlers.read();
+    const other = change === '行' ? { row: originalRows[1], column: { key: 'note' } } : change === '列' ? { row, column: { key: 'id' } } : { row: undefined, column: undefined };
+    p.handlers.activePosition(other); p.handlers.activePosition({ row, column: { key: 'note' } });
+    p.handlers.activePosition(other); p.handlers.activePosition({ row, column: { key: 'note' } });
+    expect(p.copyReadIntent.current.invalidated).toBe(true); expect(p.copyPendingRef.current).toBe(true);
+    f.finish(); await pending;
+    expect(p.rowsRef.current).toBe(originalRows); expect(f.setRowsState).not.toHaveBeenCalled();
+    expect(f.invoke.mock.calls.map(([command]) => command)).toEqual(['table.copySourceRead', 'query.cancel']);
+  });
+});
 
 describe('7660目录/页结构竞态的实际入口回归', () => {
   it('补取占门期间D04跨页和布局都不变，重复取消只发一次且迟到完整回包不追加', async () => {
