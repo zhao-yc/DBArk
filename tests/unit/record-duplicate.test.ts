@@ -17,6 +17,7 @@ function fixture(auto = true) {
   const columns: ColumnInfo[] = [['id', 'bigint unsigned'], ['code', 'varchar(20)'], ['big', 'bigint unsigned'], ['amount', 'decimal(30,6)'], ['time', 'datetime(6)'], ['nullable', 'text'], ['empty', 'text'], ['word', 'text'], ['payload', 'blob'], ['empty_binary', 'blob'], ['flag', 'tinyint'], ['small', 'int'], ['json', 'json'], ['hidden', 'text'], ['default_value', 'text'], ['computed', 'varchar(20)'], ['__proto__', 'text'], ['constructor', 'text'], ['toString', 'text']].map(([name, type]) => ({ name, type, nullable: name !== 'id', generated: name === 'computed', extra: name === 'id' && auto ? 'auto_increment' : name === 'computed' ? 'STORED GENERATED' : '', defaultValue: name === 'default_value' ? '服务器默认值' : null, comment: '' }));
   const info: TableInfo = { database: '隔离库', name: '复制表', objectKind: 'table', engine: 'InnoDB', ddl: '', columns, indexes: [{ name: 'PRIMARY', unique: true, columns: ['id'] }], primaryKey: ['id'], editableKey: ['id'], foreignKeys: [] };
   const data: DataRow = Object.fromEntries([['id', '18446744073709551615'], ['code', '原键'], ['big', '9007199254740993123'], ['amount', '12345678901234567890.120000'], ['time', '2026-10-16 01:02:03.123456'], ['nullable', null], ['empty', ''], ['word', 'NULL'], ['payload', { type: 'binary', base64: 'AP+AAA==' }], ['empty_binary', { type: 'binary', base64: '' }], ['flag', false], ['small', 7], ['json', ' {"n":9007199254740993,"n":1e999} '], ['hidden', '隐藏值'], ['computed', '服务器计算'], ['__proto__', '原型值'], ['constructor', '构造值'], ['toString', '方法值']]);
+  data.default_value = '服务器已有值';
   const source: DraftRow = { id: 'source', data, original: structuredClone(data), inserted: false, deleted: false };
   const rows = [source];
   const context: RecordContext = { target: { connectionId: '连接', database: info.database, table: info.name }, connectionVersion: 4, generation: 9, info, loaded: true, stale: false, busy: false };
@@ -24,15 +25,16 @@ function fixture(auto = true) {
 }
 
 describe('复制现有记录只追加精确新增草稿', () => {
-  it('保留全部精确类型和隐藏列，省略自增、生成和未填写值；真实校验/SQL仍为INSERT', () => {
+  it('保留完整现有精确值和隐藏列，仅省略自增/生成；真实校验/SQL仍为INSERT', () => {
     const f = fixture(), next = duplicateRecordDraft(f.rows, f.source.id, f.context, 'copy'), copy = next[1];
     expect(next).not.toBe(f.rows); expect(next[0]).toBe(f.source); expect(f.rows).toHaveLength(1);
     expect(copy).toMatchObject({ id: 'copy', inserted: true, deleted: false }); expect(copy.original).toBeUndefined();
-    for (const name of ['id', 'computed', 'default_value']) expect(Object.hasOwn(copy.data, name)).toBe(false);
+    for (const name of ['id', 'computed']) expect(Object.hasOwn(copy.data, name)).toBe(false);
+    expect(copy.data.default_value).toBe('服务器已有值');
     for (const name of ['big', 'amount', 'time', 'nullable', 'empty', 'word', 'flag', 'small', 'json', 'hidden']) expect(ownCell(copy.data, name)).toBe(ownCell(f.source.data, name));
     const changes = collectChanges(next), validated = validateCommand('table.preview', { ...f.context.target, changes }) as CommandMap['table.preview']['input'];
     expect(validated.changes).toEqual(changes); expect(changes).toHaveLength(1); expect(changes[0].kind).toBe('insert');
-    const preview = buildChanges(f.info, changes); expect(preview.statements).toHaveLength(1); expect(preview.statements[0].sql).toMatch(/^INSERT INTO/); expect(preview.statements[0].sql).not.toContain('`computed`'); expect(preview.statements[0].sql).not.toContain('`default_value`');
+    const preview = buildChanges(f.info, changes); expect(preview.statements).toHaveLength(1); expect(preview.statements[0].sql).toMatch(/^INSERT INTO/); expect(preview.statements[0].sql).not.toContain('`computed`'); expect(preview.statements[0].sql).toContain('`default_value`');
     expect(preview.statements[0].params).toContain('12345678901234567890.120000'); expect(preview.statements[0].params).toContain('2026-10-16 01:02:03.123456'); expect(preview.statements[0].params).toContain(null);
   });
   it('二进制包装不共享，零字节与NULL分开，不能借修改复制值污染原始快照', () => {
@@ -107,8 +109,8 @@ describe('真实表页复制入口与集中预览控制端口', () => {
   it('按钮接生产处理器，追加一次且不改变选择/勾选/表单，不调用IPC或剪贴板', () => {
     expect(functions.size).toBe(3); expect(disabled).not.toBe(''); const f = eventFixture(); expect(f.port.copyDisabled()).toBe(false); f.port.copyAction(); expect(f.setRows).toHaveBeenCalledOnce(); expect(f.port.rowsRef.current).toHaveLength(2); expect(f.port.selectionRef.current).toBe(f.selected); expect(f.port.selectedRows).toBe(f.selectedRows); expect(f.setSelection).not.toHaveBeenCalled(); expect(f.setSelectedRows).not.toHaveBeenCalled(); expect(f.invoke).not.toHaveBeenCalled(); expect([...f.port.copiedDraftIds.current]).toEqual(['copy']);
   });
-  it.each(['busy', 'stale', 'view', 'no-key', 'no-selection', 'new-row', 'deleted', 'record-input', 'grid-input', 'dialog'] as const)('%s晚到事件再次守卫，不追加/不请求IPC', condition => {
-    const f = eventFixture(); if (condition === 'busy') f.context.busy = true; else if (condition === 'stale') f.context.stale = true; else if (condition === 'view') f.info.objectKind = 'view'; else if (condition === 'no-key') f.info.editableKey = []; else if (condition === 'no-selection') { f.port.selectionRef.current = undefined; f.port.referenceRow = undefined; } else if (condition === 'new-row') f.source.inserted = true; else if (condition === 'deleted') f.source.deleted = true; else if (condition === 'record-input') { f.port.record.hasInput = () => true; f.port.record.dirty = true; } else if (condition === 'grid-input') f.port.rootElement.current.querySelector = () => ({}); else f.port.document.querySelector = () => ({});
+  it.each(['busy', 'stale', 'view', 'no-key', 'no-selection', 'new-row', 'deleted', 'record-input', 'grid-input', 'dialog', 'missing-data', 'missing-original', 'own-undefined', 'unknown-column'] as const)('%s晚到事件再次守卫，不追加/不请求IPC', condition => {
+    const f = eventFixture(); if (condition === 'busy') f.context.busy = true; else if (condition === 'stale') f.context.stale = true; else if (condition === 'view') f.info.objectKind = 'view'; else if (condition === 'no-key') f.info.editableKey = []; else if (condition === 'no-selection') { f.port.selectionRef.current = undefined; f.port.referenceRow = undefined; } else if (condition === 'new-row') f.source.inserted = true; else if (condition === 'deleted') f.source.deleted = true; else if (condition === 'record-input') { f.port.record.hasInput = () => true; f.port.record.dirty = true; } else if (condition === 'grid-input') f.port.rootElement.current.querySelector = () => ({}); else if (condition === 'dialog') f.port.document.querySelector = () => ({}); else if (condition === 'missing-data') delete f.source.data.hidden; else if (condition === 'missing-original') delete f.source.original!.hidden; else if (condition === 'own-undefined') Object.defineProperty(f.source.data, 'hidden', { value: undefined, enumerable: true }); else f.source.data.unlisted = '不在当前目录的值';
     if (!['grid-input', 'dialog'].includes(condition)) expect(f.port.copyDisabled()).toBe(true); f.port.copyAction(); expect(f.setRows).not.toHaveBeenCalled(); expect(f.invoke).not.toHaveBeenCalled(); expect(f.port.rowsRef.current).toBe(f.rows); expect(f.port.copiedDraftIds.current.size).toBe(0);
   });
   it('普通键冲突在预览IPC之前报错；用户修改后仍只走原table.preview而非apply', async () => {
