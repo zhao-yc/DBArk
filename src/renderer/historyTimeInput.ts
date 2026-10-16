@@ -1,4 +1,4 @@
-import { historyAbsoluteEpoch, historyClockEpoch, type HistoryClockParts, type HistoryTimeRange } from '../shared/historyTimeRange';
+import { canonicalHistoryInstant, historyAbsoluteEpoch, historyClockEpoch, type HistoryClockParts, type HistoryTimeRange } from '../shared/historyTimeRange';
 
 /** 使用固定IANA时区读取真实日历分量，不能套用当前UTC偏移推算另一天。 */
 function zonedClock(formatter: Intl.DateTimeFormat, instant: number): HistoryClockParts {
@@ -27,7 +27,8 @@ export function historyLocalInstant(value: string, timeZone: string): string {
   if (!candidates.size) throw Error('该本机时间不存在（夏令时或时区跳变），请修改输入或明确填写Z/数值偏移');
   if (candidates.size !== 1) throw Error('该本机时间重复出现，无法确定时刻；请明确填写Z或数值偏移');
   const canonical = new Date([...candidates][0]).toISOString();
-  if (!/^\d{4}-/.test(canonical)) throw Error('绝对时刻超出支持的四位年份范围');
+  // 本机年份合法不代表换算后的UTC年份合法；复用IPC校验，公元零年也在界面先拒绝。
+  if (!canonicalHistoryInstant(canonical)) throw Error('绝对时刻超出支持的四位年份范围');
   return canonical;
 }
 /** 草稿只在明确搜索时转换，保留原输入；开始包含、结束不包含，空端点表示不限。 */

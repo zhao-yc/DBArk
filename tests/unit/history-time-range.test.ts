@@ -31,6 +31,11 @@ describe('历史时间的严格绝对时刻与范围',()=>{
  });
 });
 describe('本机墙钟不静默选择夏令时时刻',()=>{
+ it('上海公元一年起点转换落到UTC公元零年时，界面立即拒绝，不构造IPC范围',()=>{
+  expect(()=>historyLocalInstant('0001-01-01 00:00','Asia/Shanghai')).toThrow('四位年份范围');
+  expect(()=>historyInputRange('0001-01-01 00:00','','Asia/Shanghai')).toThrow('四位年份范围');
+  expect(historyLocalInstant('0001-01-01 00:00','UTC')).toBe('0001-01-01T00:00:00.000Z');
+ });
  it('固定IANA时区和各端点的实际偏移，保留毫秒，不采用当前偏移',()=>{
   expect(historyLocalInstant('2026-10-17 08:00:00.125','Asia/Shanghai')).toBe('2026-10-17T00:00:00.125Z');
   expect(historyLocalInstant('2024-01-01 12:00','America/New_York')).toBe('2024-01-01T17:00:00.000Z');
