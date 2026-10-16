@@ -1,6 +1,7 @@
 import { test as baseTest, expect, type TestInfo } from '@playwright/test';
 import type { RowDataPacket } from 'mysql2/promise';
 import type { OfflineCompletionDiagnostic } from './monaco-caret-diagnostics';
+import { isDeepStrictEqual } from 'node:util';
 
 // --list先短路：只读取两道进程布尔门，不加载desktop/live、私网配置或原生输入帮助器。
 const listing = process.argv.some(value => value === '--list' || value.startsWith('--list='));
@@ -34,10 +35,15 @@ async function snapshot(desktop: Desktop, context: LiveContext) {
 
 /** 沿用原补全余量，全文必须等于独立给出的期望，不以模型内容推导期望。 */
 async function savedSql(desktop: Desktop, caret: Caret, source: string) {
-  await expect.poll(() => desktop.page.evaluate(async () => {
+  await expect.poll(() => desktop.page.evaluate(async expected => {
     const settings = await window.dbark.invoke('settings.get', {});
-    return settings.tabs.find(tab => tab.id === settings.activeTabId)?.sql?.replaceAll('\r\n', '\n');
-  }), { timeout: caret.remainingCompletionTimeout(5000) }).toBe(source);
+    return settings.tabs.find(tab => tab.id === settings.activeTabId)?.sql?.replaceAll('\r\n', '\n') === expected;
+  }, source), { timeout: caret.remainingCompletionTimeout(5000), message: 'CALL补全后的完整正文必须与独立期望一致' }).toBe(true);
+}
+
+/** 完整快照只在RAM严格深比较；匹配器只见布尔，不序列化意外执行产生的任务/历史SQL。 */
+function assertSnapshotUnchanged(actual: Awaited<ReturnType<typeof snapshot>>, before: Awaited<ReturnType<typeof snapshot>>) {
+  expect(isDeepStrictEqual(actual, before), 'CALL补全不得改变标记行、任务或历史').toBe(true);
 }
 
 /** 两例共享真实UI步骤；旁观连接仅准备本例对象与读标记，不执行CALL或伪造目录。 */
@@ -67,21 +73,21 @@ async function verifyCall(info: TestInfo, qualified: boolean) {
     const before = await snapshot(desktop, context); expect(before.marker).toEqual([{ id: 1, hits: 0 }]);
     let phase: OfflineCompletionDiagnostic['phase'] = 'prepare';
     try {
-      await caret.positionMonacoCaret(marked); phase = 'completion';
+      await caret.positionMonacoCaret(marked, { redactSqlAssertion: true }); phase = 'completion';
       await caret.triggerMonacoCompletion(marked);
       const widget = desktop.page.locator('.suggest-widget.visible');
       await expect(widget.locator('.monaco-list-row.focused')).toContainText(name, { timeout: caret.remainingCompletionTimeout() });
       await desktop.page.keyboard.press('Enter');
       await expect(widget).toHaveCount(0, { timeout: caret.remainingCompletionTimeout() });
       await savedSql(desktop, caret, expected);
-      expect(await snapshot(desktop, context)).toEqual(before);
+      assertSnapshotUnchanged(await snapshot(desktop, context), before);
       await desktop.page.keyboard.press(process.platform === 'darwin' ? 'Meta+Z' : 'Control+Z');
       await savedSql(desktop, caret, marked.replace('|', ''));
-      expect(await snapshot(desktop, context)).toEqual(before); expect(desktop.pageErrors).toEqual([]);
+      assertSnapshotUnchanged(await snapshot(desktop, context), before); expect(desktop.pageErrors).toEqual([]);
     } catch (reason) {
       pending = { testId: info.testId, desktop, context: { cold: 0, phase, marked, pageErrorCount: desktop.pageErrors.length } }; throw reason;
     }
-  }, info);
+  }, info, { captureFailureScreenshot: false });
 }
 
 test('CALL当前库过程：完整suffix替换、真实接受撤销且标记行与任务历史不变', async ({}, info) => {

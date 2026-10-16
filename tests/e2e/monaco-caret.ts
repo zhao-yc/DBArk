@@ -131,7 +131,7 @@ async function checkClipboard(phase:'before'|'after'):Promise<boolean>{
 }
 
 /** 用与writeSql相同的原生输入设置正文，仅以文档首和ArrowRight移动，不调用模型或设置光标。 */
-export async function positionMonacoCaret(marked:string):Promise<string>{
+export async function positionMonacoCaret(marked:string,options:{redactSqlAssertion?:boolean}={}):Promise<string>{
   const marker=marked.indexOf('|');if(marker<0)throw Error('缺少光标标记');
   const source=marked.replace('|','').replaceAll('\r\n','\n'),prefix=marked.slice(0,marker).replaceAll('\r\n','\n');
   await checkClipboard('before');let operationFailed=false,operationError:unknown;
@@ -141,9 +141,16 @@ export async function positionMonacoCaret(marked:string):Promise<string>{
     await page.keyboard.press(`${modifier}+A`);
     // 先原生删除旧选区，避免首括号触发surroundSelection并在文末遗留配对字符。
     await page.keyboard.press('Backspace');await page.keyboard.insertText(source);
+    if(options.redactSqlAssertion){
+      // 仅CALL显式启用：在页面内精确比较全文，失败匹配器只收到布尔；沿用原默认5秒准备预算。
+      await expect.poll(()=>page.evaluate(async expected=>{
+        const settings=await window.dbark.invoke('settings.get',{});return settings.tabs.find(tab=>tab.id===settings.activeTabId)?.sql?.replaceAll('\r\n','\n')===expected;
+      },source),{message:'光标定位后的完整正文必须与独立期望一致'}).toBe(true);
+    }else{
     await expect.poll(()=>page.evaluate(async()=>{
       const settings=await window.dbark.invoke('settings.get',{});return settings.tabs.find(tab=>tab.id===settings.activeTabId)?.sql?.replaceAll('\r\n','\n');
     })).toBe(source);
+    }
     // Cmd+Left会到折行的视图行首，macOS继续使用Cmd+Up到文档首；每个码点只按一次ArrowRight。
     await page.keyboard.press(process.platform==='darwin'?'Meta+ArrowUp':'Control+Home');
     for(const _ of prefix)await page.keyboard.press('ArrowRight');

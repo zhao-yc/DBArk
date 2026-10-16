@@ -15,6 +15,7 @@ interface Options{
   modelEol?:'\n'|'\r\n';untrustedEvent?:boolean;noKeyEvent?:boolean;focusCount?:number;hidden?:boolean;
   selected?:boolean;versionChanges?:boolean;startupDirty?:boolean;delayWorkerReady?:boolean;beforeKeydown?:()=>void;
   initialSql?:string;guardSelectedSurround?:boolean;
+  preparedSqlOverride?:string;
 }
 const marked='SELECT a| FROM q',source='SELECT a FROM q';
 const helperSource=readFileSync(new URL('../e2e/monaco-caret.ts',import.meta.url),'utf8');
@@ -67,7 +68,7 @@ function replay(initial:Entry[],options:Options={}){
   const api={editor:{getEditors:()=>hasQuery?Array(options.focusCount??1).fill(editor):[]}};
   const context=createContext({Buffer,Blob,Error,AggregateError,Reflect,Worker:RendererWorker,process:{platform:options.platform??'win32'},getComputedStyle:()=>({visibility:options.hidden?'hidden':'visible'})});context.window=context;context.self=context;
   context.document={addEventListener:(name:string,callback:(event:unknown)=>void,capture:boolean)=>{expect(name).toBe('keydown');expect(capture).toBe(true);listeners.push(callback);}};
-  context.dbark={invoke:async(command:string)=>{if(command==='settings.get')return{activeTabId:'query',tabs:hasQuery?[{id:'query',sql:modelSource}]:[]};if(command==='connections.list')return options.startupDirty?[{id:'合成既有连接'}]:[];if(command==='tasks.list'||command==='history.list')return[];throw Error('禁止其它IPC');}};
+  context.dbark={invoke:async(command:string)=>{if(command==='settings.get')return{activeTabId:'query',tabs:hasQuery?[{id:'query',sql:options.preparedSqlOverride??modelSource}]:[]};if(command==='connections.list')return options.startupDirty?[{id:'合成既有连接'}]:[];if(command==='tasks.list'||command==='history.list')return[];throw Error('禁止其它IPC');}};
   const client=new CompletionWorkerClient(()=>new (context.Worker as typeof RendererWorker)() as unknown as Worker);
   const environment={disposed:false,readOnly:false,editorRef:{current:{getModel:()=>model}},active:undefined,statusRef:{current:()=>undefined},completion:{connectionId:'合成连接',connectionVersion:0},completionServerFacts:{get:()=>undefined},completionLimits,AbortController,resolveCompletionContext,completionContextCapabilities,worker:client};
   const provider=runInNewContext('(function(env){with(env){'+providerCode+';return extracted;}})',{})(environment) as (model:unknown,position:{offset:number},context:unknown,token:unknown)=>Promise<unknown>;
@@ -91,15 +92,26 @@ function replay(initial:Entry[],options:Options={}){
   };
   // 只替换轮询等待，不替换正式回调或断言；按键位置断言本身没有轮询等待。
   const boundaryExpect=Object.assign((value:unknown,message?:string)=>{if(value&&typeof value==='object'&&'captured'in value)proofDiagnostics.push(value as Record<string,unknown>);return Object.assign(expect(value,message),{toBeVisible:async()=>expect(await(value as{isVisible:()=>Promise<boolean>}).isVisible()).toBe(true)});},{poll:(read:()=>unknown,config?:{message?:string})=>({toBe:async(expected:unknown)=>expect(await read(),config?.message).toBe(expected),toEqual:async(expected:unknown)=>expect(await read(),config?.message).toEqual(expected)})});
-  const module:{exports:{positionMonacoCaret:(text:string)=>Promise<string>;observeMonacoCaret:()=>Promise<void>;triggerMonacoCompletion:(text:string)=>Promise<void>;remainingCompletionTimeout:(limit?:number)=>number}}={exports:{} as never};
+  const module:{exports:{positionMonacoCaret:(text:string,options?:{redactSqlAssertion?:boolean})=>Promise<string>;observeMonacoCaret:()=>Promise<void>;triggerMonacoCompletion:(text:string)=>Promise<void>;remainingCompletionTimeout:(limit?:number)=>number}}={exports:{} as never};
   runInContext('(function(require,module,exports){'+compiled+'\n})',context)((name:string)=>{if(name==='./desktop-fixture')return{desktop,page,expect:boundaryExpect};if(name==='./live-helpers')return{modifier:options.platform==='darwin'?'Meta':'Control'};throw Error('纯回放禁止其它依赖');},module,module.exports);
-  return{run:(value=marked)=>module.exports.positionMonacoCaret(value),observe:()=>module.exports.observeMonacoCaret(),trigger:(value=marked)=>module.exports.triggerMonacoCompletion(value),timeout:(limit?:number)=>module.exports.remainingCompletionTimeout(limit),ready:()=>workers.at(-1)?.onmessage?.({data:{type:'dbark-completion-ready',version:1}}),keys,insertions,writes,posted,proofDiagnostics,context,clipboard,client,get offset(){return offset;},get modelSource(){return modelSource;},get entries(){return current;},get reloads(){return reloads;}};
+  return{run:(value=marked,inputOptions?:{redactSqlAssertion?:boolean})=>module.exports.positionMonacoCaret(value,inputOptions),observe:()=>module.exports.observeMonacoCaret(),trigger:(value=marked)=>module.exports.triggerMonacoCompletion(value),timeout:(limit?:number)=>module.exports.remainingCompletionTimeout(limit),ready:()=>workers.at(-1)?.onmessage?.({data:{type:'dbark-completion-ready',version:1}}),keys,insertions,writes,posted,proofDiagnostics,context,clipboard,client,get offset(){return offset;},get modelSource(){return modelSource;},get entries(){return current;},get reloads(){return reloads;}};
 }
 
 /** 全格式检查使用独立的原始字节观测，不复制正式比较算法。 */
 async function bytes(entries:Entry[]){return Promise.all(entries.map(async entry=>Object.fromEntries(await Promise.all(Object.entries(entry).map(async([type,value])=>[type,value instanceof Blob?Buffer.from(await value.arrayBuffer()).toString('hex'):value])))));}
 
 describe('Monaco光标帮助器的只读剪贴板回放',()=>{
+  it('CALL显式脱敏选项仍完整原生输入、精确准备且零剪贴板写入',async()=>{
+    const call='CALL p(1, 7)|',h=replay([{'text/plain':blob('合成剪贴板哨兵')}]);
+    await expect(h.run(call,{redactSqlAssertion:true})).resolves.toBe(call.replace('|',''));
+    expect(h.insertions).toEqual([call.replace('|','')]);expect(h.writes).toEqual([]);expect(h.context.__dbarkMonacoCaretClipboard).toBeUndefined();
+  });
+  it.each([{label:'同长度参数改变',value:'CALL p(8, 9)'},{label:'长度变化',value:'CALL p(91726431)'}])('CALL准备$label仍失败，匹配器不回显参数',async({value:preparedSqlOverride})=>{
+    const h=replay([],{preparedSqlOverride});let failure:Error|undefined;
+    try{await h.run('CALL p(1, 7)|',{redactSqlAssertion:true});}catch(error){failure=error as Error;}
+    expect(failure).toBeDefined();expect(failure!.message).toContain('完整正文');expect(failure!.message).not.toContain(preparedSqlOverride);
+    expect(h.writes).toEqual([]);expect(h.context.__dbarkMonacoCaretClipboard).toBeUndefined();
+  });
   it.each([{label:'空数组',items:[],emptyRead:'none' as const},{label:'单空壳',items:[{}],emptyRead:'one' as const},{label:'多个空壳',items:[{},{},{}],emptyRead:'one' as const}])('$label不需要清空或写回',async({items,emptyRead})=>{
     const h=replay(items,{emptyRead});await expect(h.run()).resolves.toBe(source);expect(h.writes).toEqual([]);expect(h.context.__dbarkMonacoCaretClipboard).toBeUndefined();
   });
