@@ -36,11 +36,12 @@ node scripts/research/rea-portable-probe.mjs --configure --java-home '<已核完
 node scripts/research/rea-portable-probe.mjs --status
 node scripts/research/rea-portable-probe.mjs --help-cli --record help-check
 node scripts/research/rea-portable-probe.mjs --doctor --allow-scheduled-analysis --record doctor-check
-# 当前.cache约束下会在启动前拒绝；须先由ROOT解决下面的会话目录和资源边界。
-node scripts/research/rea-portable-probe.mjs --sample --allow-scheduled-analysis --record sample-check
+# 纯预检，不启动REA/JVM或网络，不创建会话目录。
+node scripts/research/rea-portable-probe.mjs --sample --preflight --runtime-parent 'D:\svn\DBArk\rea-analysis-employee1-20261016' --record sample-preflight
+# 实际样例仍须等待ROOT单独释放；应使用下文带RSS监测的入口。
 ```
 
-默认状态检查不运行分析。doctor和样例必须先取得ROOT资源排程，再显式启用；分析目标固定为脚本生成且摘要核对的样例，不接受任意目标路径。每轮使用不同记录名，原退出信息先落盘，再保存stdout/stderr，不自动扩大预算或重试。配置为Node 256MiB、分析JVM 256MiB、单逻辑CPU；Java版本探针额外限制64MiB。堆配置不等于进程RSS或总内存上限。
+默认状态检查不运行分析。doctor和样例必须先取得ROOT资源排程，再显式启用；分析目标固定为脚本生成且摘要核对的样例，不接受任意目标路径。每轮使用不同记录名，原退出信息先落盘，再保存stdout/stderr，不自动扩大预算或重试。Node 256MiB及分析JVM 256MiB为配置值；Java版本探针额外限制64MiB。堆配置不等于进程RSS或总内存上限；原单CPU环境变量是否被传入分析进程，需要结合下文Windows启动器行为判断。
 
 ## 已保存的失败与修正
 
@@ -67,7 +68,7 @@ Node侧守卫记录本轮外网连接尝试0、私料读取拦截0、未知子�
 
 已定位目录边界：REA固定源码的 [GhidraSessionRoot](https://github.com/morluto/rea/blob/9e7e13fb7155a2fe6f672ddb4a17e40d1a9c4173/src/ghidra/GhidraSessionRoot.ts) 会因Ghidra不接受任意点前缀项目路径组件，把`.cache`内的临时根回退到最近无点祖先。本轮实际会话为ROOT目录下的`rea-ghidra-<随机值>`，结束后已不存在。该行为不满足本任务只写员工1缓存的约束；不能再盲目重试或声称“所有运行写入始终只在.cache”。
 
-因此本地脚本现在在启动分析前拒绝包含点前缀组件的会话路径，doctor仍可单独运行。后续需要ROOT明确安排不含点的专用临时目录及实际内存预算，再检查桥接就绪问题；不通过SUBST、目录junction、修改第三方摘要或放宽原生安全检查来绕过。没有扩大120秒期限、关闭分析器或以重建/静态字符串替代成功结果。
+因此本地脚本先改为拒绝含点前缀的会话路径，后续接入下面ROOT明确创建的固定普通目录，doctor仍可单独运行。不通过SUBST、目录junction、修改第三方摘要或放宽原生安全检查来绕过。没有扩大120秒期限、关闭分析器或以重建/静态字符串替代成功结果。
 
 完整原件、资源采样和安装日志均保存在忽略缓存；仅提交本中文文档和自写最小脚本。未生成需要长期保留的模型密钥或证书；REA会话鉴权属于临时内部状态，未提交或输出其令牌。
 
@@ -75,8 +76,26 @@ Node侧守卫记录本轮外网连接尝试0、私料读取拦截0、未知子�
 
 固定源码的`GhidraClient.ts`在模块导入时计算`SESSION_ROOT = ghidraSessionRoot()`。后者先取`os.tmpdir()`；Windows路径任意组件以点开头时，不使用原临时根，而向上寻找第一个没有点组件的祖先。`PrivateRuntimeRoot.create`将该结果传入Windows私有根API，因此只改工作目录或`--snapshot`不能解决回退。当前原生CLI/config没有公开workspace、session、project或Ghidra cache根参数；`--snapshot`保存REA分析快照，不是临时项目目录。
 
-建议ROOT明确创建并精确排除`D:\svn\DBArk\rea-analysis-employee1-20261016`，`.git/info/exclude`条目仅为`/rea-analysis-employee1-20261016/`。必须在启动新的Node进程之前，把该子进程的TEMP/TMP指向该无点普通目录。第三方包和日志仍留员工1忽略缓存；不改源码树、不使用SUBST/junction、不让provider自行退到未知祖先。自写probe所需最小适配是增加显式`--runtime-parent`，核对其精确路径、存在及非链接后，仅给样例子进程使用；本轮只给方案，未应用或执行。
+ROOT已在run1015明确创建并精确排除`D:\svn\DBArk\rea-analysis-employee1-20261016`，`.git/info/exclude`条目仅为`/rea-analysis-employee1-20261016/`；员工1只读核对该目录普通、为空且check-ignore成功。probe已接入显式`--runtime-parent`，仅接受该精确绝对路径，逐层核对存在、普通目录、无符号链接及realpath一致，临近spawn再次核对；不自动创建或回退。仅在新的样例Node子进程环境里设置TEMP/TMP，第三方包和日志仍留员工1缓存，不改全局环境。该核查缩短路径替换窗口，不声称提供抵抗并发恶意目录替换的原生句柄级沙箱。
 
 桥接的最早可靠定位仍有限：Java日志确认headless启动、自动分析成功及`ReaGhidraBridge.java`脚本启动；更早有packed-db-cache权限告警，但引擎仍完成分析，不能认定该告警是桥接根因。发布包的`GhidraSocketConnection`在连接失败后等待50ms并继续，逐次Socket错误没有进入最终timeout原件；因此尚缺具体错误码。Node侧1655次尝试不能证明成功连接或完成鉴权。也不能直接归因于JBR25、Windows原生控制或执行沙箱的loopback限制。
 
 下一轮可只旁观loopback的connect成功数、首/末安全错误码，保留原参数、返回值及处理器，不读载荷、令牌或描述符；必要时由ROOT先安排一个独立loopback原语检查。缓存内`next-execution-plan.json`给出可审参数和诊断提案，未运行新listener、JVM或Ghidra。Windows当前走`analyzeHeadless.bat`，不是已检查的直接Java命令；官方`launch.bat`中的多次Java/LaunchSupport辅助调用没有显式-Xmx，所以GHIDRA_HEADLESS_MAXMEM不证明这些辅助进程的内存上限。新预算与run1012后的资源窗口由ROOT决定，未延长120秒或盲目重试。
+
+## run1015之后的接线验证与待执行命令
+
+loopback观测已加入自写guard的`loopbackObservation`：仅保存`connected`、`firstErrorCode`、`lastErrorCode`，错误值限定安全大写错误码，不保存地址、端口、载荷、令牌或描述符。使用Node `errorMonitor`旁观错误，不新增吞掉异常的普通error处理器；原connect返回值与同步抛错保持，完成后移除本次旁观者。原有guard计数继续保留，旧失败原件不改，新审计文件以独占方式创建。
+
+已完成语法、默认状态及7项纯参数预检：固定目录通过，缺少父目录、使用祖先/缓存/子目录或把父目录参数用于状态均拒绝。额外纯事件桩替换底层connect后才加载guard，验证成功计数、异步/同步错误码、既有事件处理器及返回/抛错保持；没有listener、真实端口连接、REA或JVM。此桩不是实际loopback可达性验收。记录在缓存`runtime-adapter-validation.json`。
+
+新发现：固定源码及正式发布包的Windows启动器会把`GHIDRA_HEADLESS_JAVA_OPTIONS`覆盖为空，原环境变量`-XX:ActiveProcessorCount=1`不能证明实际分析JVM为单CPU。待执行的缓存监测器`observe-rss1536.py`因此仅对自己设置一个可用逻辑CPU的进程亲和性，使新子进程继承；采样时记录各进程掩码，若不一致或无法核验就停止本次子树。此路径仅作AST语法审查，尚未实际执行。
+
+ROOT已指定后续一次独占最小样例的整体Node子树RSS观察停止阈值为1536MiB，0.1秒采样，分别记录主/辅助JVM工作集和私有内存峰值；Python监测器自身不在Node子树RSS合计内。超过阈值时只通过已确认属于本次子树的句柄终止Node所有者，以触发REA Job清理；采样间隔可能超调，也可能漏掉极短进程，不能称为硬内存限制。保留原120秒provider期限、180秒驱动超时及210秒外层监测兜底，不延长期限。强制终止可能来不及落下Node退出审计，须如实报告缺失并另行核对残留，不能自动重试。
+
+以下命令**尚未执行**，必须等ROOT单独释放run1012之后的资源窗口；工作目录为员工1本克隆。新记录名不得复用：
+
+```powershell
+& 'C:\Users\zhao-\.cache\codex-runtimes\codex-primary-runtime\dependencies\python\python.exe' -X utf8 -B '.cache/rea-ghidra-portable-20261016/observe-rss1536.py' sample sample-runtime-parent-1536-first 'D:\svn\DBArk\rea-analysis-employee1-20261016'
+```
+
+新的预期写入仅为缓存里的该记录原件，以及ROOT专用目录里的REA私有随机会话（项目、隔离home/temp/cache/config及内部鉴权文件）；不读取或输出内部鉴权内容。第三方Windows启动器仍会启动多个辅助Java并编译桥接脚本，受本次子树观测。释放后先复核脚本/固定输入摘要、目录和记录名；结束再核会话清理及本次进程残留。缓存`next-execution-plan-v2.json`固定待执行入口与摘要，不代表分析成功。
