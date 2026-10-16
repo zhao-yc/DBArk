@@ -28,14 +28,14 @@ async function openImport() {
   const modal = page.getByRole('dialog', { name: text.title, exact: true });
   await modal.getByRole('button', { name: text.import, exact: true }).click();
   await modal.getByRole('button', { name: text.chooseImport, exact: true }).click();
-  await expect(modal.getByLabel(`${text.action} 1`, { exact: true })).toHaveValue('add');
+  await expect(modal.getByRole('combobox', { name: `${text.action} 1`, exact: true })).toHaveValue('add');
   return modal;
 }
 /** 用户必须选择目标再审阅，并逐项核对与主进程相同的中文风险。 */
 async function review(modal: Awaited<ReturnType<typeof openImport>>, id: string) {
-  await modal.getByLabel(`${text.action} 1`, { exact: true }).selectOption('replace');
-  await expect(modal.getByLabel(`${text.replaceTarget} 1`, { exact: true })).toHaveValue('');
-  await modal.getByLabel(`${text.replaceTarget} 1`, { exact: true }).selectOption(id);
+  await modal.getByRole('combobox', { name: `${text.action} 1`, exact: true }).selectOption('replace');
+  await expect(modal.getByRole('combobox', { name: `${text.replaceTarget} 1`, exact: true })).toHaveValue('');
+  await modal.getByRole('combobox', { name: `${text.replaceTarget} 1`, exact: true }).selectOption(id);
   await modal.getByRole('button', { name: text.reviewReplace, exact: true }).click();
   await expect(modal.getByLabel(text.reviewTitle, { exact: true })).toBeVisible();
 }
@@ -53,7 +53,7 @@ test('C03明确选择旧→新目标、风险未齐不可提交，替换后保�
 
 test('C03目标A→B→A重新选择清除全部确认，不复活旧审阅', async () => {
   const a = await seed('C03目标A'), b = await seed('C03目标B'); await page.reload(); const modal = await openImport(); await review(modal, a.id); await acknowledge(modal);
-  await modal.getByLabel(`${text.replaceTarget} 1`, { exact: true }).selectOption(b.id); await modal.getByLabel(`${text.replaceTarget} 1`, { exact: true }).selectOption(a.id);
+  await modal.getByRole('combobox', { name: `${text.replaceTarget} 1`, exact: true }).selectOption(b.id); await modal.getByRole('combobox', { name: `${text.replaceTarget} 1`, exact: true }).selectOption(a.id);
   await expect(modal.getByLabel(text.reviewTitle, { exact: true })).toHaveCount(0); await expect(modal.getByRole('checkbox', { name: text.staged, exact: true })).not.toBeChecked();
   await expect(modal.getByRole('button', { name: text.replaceConfirm, exact: true })).toBeDisabled();
   const connections = await page.evaluate(() => window.dbark.invoke('connections.list', {})); expect(connections.every(profile => profile.host === 'old.invalid' && profile.hasPassword)).toBe(true); expect(pageErrors).toEqual([]);
