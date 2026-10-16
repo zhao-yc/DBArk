@@ -4,6 +4,7 @@ import type { Command } from './contracts';
 export const publicCommands: Record<Command, true> = {
   'schema.tableDefaultEncoding.get': true, 'schema.tableDefaultEncoding.preview': true, 'schema.tableDefaultEncoding.apply': true, 'schema.tableDefaultEncoding.release': true,
   'schema.tableRename.get': true, 'schema.tableRename.preview': true, 'schema.tableRename.apply': true, 'schema.tableRename.release': true,
+  'schema.tableAutoIncrement.get': true, 'schema.tableAutoIncrement.preview': true, 'schema.tableAutoIncrement.apply': true, 'schema.tableAutoIncrement.release': true,
   'schema.tableComment.get': true, 'schema.tableComment.preview': true, 'schema.tableComment.apply': true, 'schema.tableComment.release': true,
   'workbench.get': true, 'workbench.save': true, 'workbench.resolve': true, 'workbench.copyUri': true,
   'queries.create': true, 'queries.updateSource': true,
