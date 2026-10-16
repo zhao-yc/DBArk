@@ -1,6 +1,6 @@
 # Q01 CALL两项真实E2E准备（2026-10-17）
 
-状态：定义、四组合列表、窄产物边界纯验证及类型检查完成，实际GUI/200/数据库/系统剪贴板读取/手动CI均为0。初版94083d96d98a0c2a5006ae7d74f4dd8c6bc5fc02以已冻结9298b3add79e0a3a09abd23ab2174c68f354fbfd为父，仅新增两文件；后续边界修复从94083独立分支，增加仅CALL显式启用的输入断言/失败截图选项，默认路径保留，见末节。产品源码、作者克隆与Root冻结树不改，不rebase旧提交。
+状态：定义、四组合列表、窄产物边界及fixture活导出纯验证、类型检查完成；本修复员工实际GUI/200/数据库/系统剪贴板读取/手动CI均为0。ROOT已实际执行run1091，结果1通过/1失败，不能计作整批通过，详见末节。初版94083d96d98a0c2a5006ae7d74f4dd8c6bc5fc02以已冻结9298b3add79e0a3a09abd23ab2174c68f354fbfd为父，仅新增两文件；后续边界修复从94083独立分支，增加仅CALL显式启用的输入断言/失败截图选项，默认路径保留。产品源码、作者克隆与Root冻结树不改，不rebase旧提交。
 
 ## 两项定义
 
@@ -64,3 +64,17 @@ Root在对应固定产品源码/产物上加载新增定义。DBARK_EXECUTABLE_P
 本修复只覆盖上述已证实的matcher和公共图片分支。未修改Playwright自动error-context、runner代码框、未捕获底层API异常、页面错误、外部CLI覆写trace或人工取证路径；这些仍可能包含正文，不能宣称“所有产物绝无SQL”。原始错误不做全局脱敏吞并，后续如要求整条runner产物白名单，ROOT须另定范围并审查；本次不借此扩展框架或权限。专用afterEach诊断schema和500ms预算保持原字节。
 
 固定纯验证、类型、四组合list及默认路径核对原件位于员工1克隆忽略目录`.cache/call-e2e-boundary-fix-20261017`，只提交必要测试和本说明，不提交合成错误全文、实际参数或剪贴板内容。
+
+## run1091旧page引用定位与最小测试修复
+
+ROOT在冻结5ab产品、97a0ed085512c42e62d0e487644e9e3e873dd274测试头上实际执行两例：当前库例1通过，显式限定库例1失败，0retry，测试子进程退出1。原summary保持notAccepted，候选已卸载，ROOT前后1249源文件、12控制和11依赖核对保持、Native为0，run1101六实例资源为0。以上是ROOT已有实际记录，不是本修复重跑结果；1090源码及1091控制/输出均不修改，下一次真实复验必须新run由ROOT一次执行。
+
+已有error-context只在内存中分类并提取行号，没有输出正文或认证。其指示97a源码第69行的profile核对，错误属于page-closed；该行位于补全try第75行之前，因而没有登记pending，也没有Monaco附件。该位置已经越过前面的CREATE PROCEDURE await，不应据先前猜测改过程名、参数、期望或SQL夹具。
+
+原Playwright 1.64编译保留`await import('./desktop-fixture')`。该模块在当前CommonJS路径导出可变page、desktop和pageErrors；首例结束主动关闭应用，第二例自动fixture替换导出，而原生动态import的缓存命名空间仍持有首例page快照。caret内部命名导入经CommonJS编译后读取require对象的当前属性，所以它可以完成第二例前置准备；随后CALL测试自身却用旧namespace.page核profile而失败。
+
+最小修复只把verifyCall内desktop入口改为同步require已注册fixture的live导出对象，并加中文注释。caret/live的稳定函数导入、双门、list先短路、原生输入/Enter/undo、过程名与参数、全部断言、150秒/0retry及5秒/13秒/500ms预算保持；无产品源码变更，也不增加重试、fallback或运行中诊断。
+
+新增仅2项真实Node/Playwright编译回放：使用正式babelTransform，当前入口直接从正式verifyCall声明提取；RAM fixture只模拟导出替换与旧page关闭，真实Node子进程完成CommonJS与动态import互操作。旧入口反例中首代成功、次代旧page关闭，require仍能读取新代；修复入口两代均成功，page/desktop/pageErrors均为新代。它不是实际Electron/数据库复验，不复制完整应用逻辑，也未执行真实E2E主体。
+
+本轮只运行上述2项、类型检查及四门list，全部通过；四门各列2身份且零live模块、私网文件、网络或原生子进程。未重跑57/571/5073，未实际GUI、200或系统剪贴板。纯回放临时目录只清理本例mkdtemp路径，删除前核对真实绝对父目录和前缀。验证原件在员工1克隆`.cache/call-fixture-live-fix-20261017`。静态检索另见page-find-replace-live.spec.ts:50同类desktop动态导入，仅报路径，不包含在本修复。
