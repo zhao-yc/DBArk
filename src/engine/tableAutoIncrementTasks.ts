@@ -5,12 +5,13 @@ import { structureTaskQuery, type StructureTaskHost } from './structureDefinitio
 import { readTableAutoIncrement, assertTableAutoIncrementUnchanged, verifyTableAutoIncrementStructure, type TableAutoIncrementRead } from './tableAutoIncrementRead';
 import { tableCommentHash as tableAutoIncrementHash } from './tableCommentRead';
 import { planTableAutoIncrement } from './tableAutoIncrementSql';
-import { compareAutoIncrementDecimal, tableAutoIncrementAcknowledgements, validateTableAutoIncrement, type TableAutoIncrementGetInput, type TableAutoIncrementGetOutput, type TableAutoIncrementPreviewInput, type TableAutoIncrementPreviewOutput, type TableAutoIncrementApplyInput, type TableAutoIncrementApplyOutput, type TableAutoIncrementProgress, type TableAutoIncrementReleaseInput, type TableAutoIncrementTarget } from '../shared/tableAutoIncrement';
+import { tableAutoIncrementCapabilityWarnings } from './tableAutoIncrementCapabilities';
+import { compareAutoIncrementDecimal, tableAutoIncrementRequiredAcknowledgements, validateTableAutoIncrement, type TableAutoIncrementGetInput, type TableAutoIncrementGetOutput, type TableAutoIncrementPreviewInput, type TableAutoIncrementPreviewOutput, type TableAutoIncrementApplyInput, type TableAutoIncrementApplyOutput, type TableAutoIncrementProgress, type TableAutoIncrementReleaseInput, type TableAutoIncrementTarget } from '../shared/tableAutoIncrement';
 
 interface Snapshot extends TableAutoIncrementRead { id: string; target: TableAutoIncrementTarget; revision: number; expires: number; }
 interface Preview { snapshot: Snapshot; sql: string; value: string; bytes: number; expires: number; }
 const initialProgress = (): TableAutoIncrementProgress => ({ phase: 'connecting', ddlSubmitted: false, ddlCompleted: false, definitionVerified: false, outcome: 'not-sent' });
-const warnings = ['DDL通常隐式提交，不能事务回滚；可能等待元数据锁或服务器内部处理。', '执行前严格重核完整定义、原生物理身份、模式和目录计数；仍存在外部DDL/DML窗口，请在维护时段暂停写入与并行结构变更。', '首批只上调目录观测值，不扫描业务行或MAX、不新增或修改列级AUTO_INCREMENT；服务器可能忽略、调整请求或被并发DML推进。只报告核验时的目录观测值，不保证下一次插入分配值；失败、取消及未知结果不自动重放。'];
+const warnings = ['DDL通常隐式提交，不能事务回滚；可能等待元数据锁或服务器内部处理。', '执行前严格重核完整定义、原生物理身份、模式和目录计数；仍存在外部DDL/DML窗口，请在维护时段暂停写入与并行结构变更。', '首批只上调目录观测值，客户端不查询业务行或MAX、不新增或修改列级AUTO_INCREMENT；服务器可能忽略、调整请求或被并发DML推进。只报告核验时的目录观测值，不保证下一次插入分配值；失败、取消及未知结果不自动重放。'];
 
 /** 下一自增值使用独立令牌用途，复用已有短会话、取消与同表租约，不接收客户端SQL。 */
 export class TableAutoIncrementTasks {
@@ -41,8 +42,8 @@ export class TableAutoIncrementTasks {
       const read = await readTableAutoIncrement(context, target); this.cache.capacity(read.bytes, 'snapshot');
       snapshot = { ...read, id: randomUUID(), target, revision: current, expires: this.now() + structureCacheLimits.ttlMs };
       return { target, snapshotId: snapshot.id, expiresAt: new Date(snapshot.expires).toISOString(), ddlHash: tableAutoIncrementHash(read.source),
-        tableId: read.tableId, column: read.column, policy: read.policy, engine: read.engine, rowFormat: read.rowFormat, autoIncrement: read.autoIncrement, charset: read.tableEncoding.charset, collation: read.tableEncoding.collation,
-        writable: !read.reasons.length && !!read.column && !!read.policy && !!read.tableId && !!read.autoIncrement && compareAutoIncrementDecimal(read.autoIncrement, read.column.maximum) < 0, reasons: [...read.reasons, ...(read.column && read.autoIncrement && compareAutoIncrementDecimal(read.autoIncrement, read.column.maximum) >= 0 ? ['目录计数已达列类型上限，没有可上调空间'] : [])], warnings: [...warnings], serverVersion: read.serverVersion };
+        tableId: read.tableId, column: read.column, policy: read.policy, capability: read.capability, engine: read.engine, rowFormat: read.rowFormat, autoIncrement: read.autoIncrement, charset: read.tableEncoding.charset, collation: read.tableEncoding.collation,
+        writable: !read.reasons.length && !!read.capability && !!read.column && !!read.policy && !!read.tableId && !!read.autoIncrement && compareAutoIncrementDecimal(read.autoIncrement, read.column.maximum) < 0, reasons: [...read.reasons, ...(read.column && read.autoIncrement && compareAutoIncrementDecimal(read.autoIncrement, read.column.maximum) >= 0 ? ['目录计数已达列类型上限，没有可上调空间'] : [])], warnings: [...warnings, ...tableAutoIncrementCapabilityWarnings(read.capability)], serverVersion: read.serverVersion };
     }, { label: '读取表下一自增值', purpose: 'tableAutoIncrement', progress });
     this.snapshots.set(snapshot.id, snapshot); return output;
   }
@@ -60,7 +61,7 @@ export class TableAutoIncrementTasks {
       if (this.snapshots.get(input.snapshotId) !== snapshot || snapshot.expires <= this.now()) throw new Error('表下一自增值快照已释放或过期，未生成预览');
       preview = { snapshot, ...plan, expires: snapshot.expires, bytes: snapshot.bytes + Buffer.byteLength(plan.sql) + 8192 };
       this.cache.capacity(preview.bytes, 'preview');
-      return { target: { ...snapshot.target }, previewToken: token, expiresAt: new Date(preview.expires).toISOString(), ddlHash: tableAutoIncrementHash(snapshot.source), sql: plan.sql, before: snapshot.autoIncrement!, after: plan.value, warnings: [...warnings], requiredAcknowledgements: [...tableAutoIncrementAcknowledgements] };
+      return { target: { ...snapshot.target }, previewToken: token, expiresAt: new Date(preview.expires).toISOString(), ddlHash: tableAutoIncrementHash(snapshot.source), sql: plan.sql, before: snapshot.autoIncrement!, after: plan.value, warnings: [...warnings, ...tableAutoIncrementCapabilityWarnings(snapshot.capability)], requiredAcknowledgements: [...tableAutoIncrementRequiredAcknowledgements(snapshot.capability)] };
     }, { label: '预览表下一自增值', purpose: 'tableAutoIncrement', progress });
     if (this.snapshots.get(input.snapshotId) !== snapshot || snapshot.expires <= this.now()) throw new Error('表下一自增值快照已释放或过期，未生成预览');
     this.previews.set(token, preview); return output;
@@ -71,7 +72,8 @@ export class TableAutoIncrementTasks {
     if (!preview || preview.expires <= this.now()) throw new Error('表下一自增值预览已失效或已使用；未发送DDL');
     const snapshot = preview.snapshot;
     if (snapshot.revision !== this.revision(revision)) throw new Error('连接配置已变化；未发送DDL');
-    if (!Array.isArray(input.acknowledgements) || input.acknowledgements.length !== tableAutoIncrementAcknowledgements.length || new Set(input.acknowledgements).size !== input.acknowledgements.length || tableAutoIncrementAcknowledgements.some(value => !input.acknowledgements.includes(value))) throw new Error('确认项与实际预览不一致；令牌已消费，未发送DDL');
+    const required = tableAutoIncrementRequiredAcknowledgements(snapshot.capability);
+    if (!Array.isArray(input.acknowledgements) || input.acknowledgements.length !== required.length || new Set(input.acknowledgements).size !== input.acknowledgements.length || required.some(value => !input.acknowledgements.includes(value))) throw new Error('确认项与实际预览不一致；令牌已消费，未发送DDL');
     const progress = initialProgress();
     return this.host.run(snapshot.target.connectionId, input.taskId, async context => {
       progress.phase = 'rechecking'; context.report(); assertTableAutoIncrementUnchanged(snapshot, await readTableAutoIncrement(context, snapshot.target));
