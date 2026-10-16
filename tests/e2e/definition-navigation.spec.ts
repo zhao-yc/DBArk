@@ -42,7 +42,8 @@ async function database(body: (context: LiveContext) => Promise<void>, info: Tes
     const row = page.locator('.database-row').filter({ has: page.getByRole('button', { name: context.database, exact: true }) });
     await row.getByRole('button', { name: context.database, exact: true }).focus(); await row.getByRole('button', { name: '新建数据库查询', exact: true }).click();
     await page.locator('.query-tab:visible .monaco-editor').getByRole('textbox').focus(); await page.keyboard.press(`${process.platform === 'darwin' ? 'Meta' : 'Control'}+a`); const draft = '-- 保留原草稿 😀\nSELECT 9007199254740993'; await page.keyboard.insertText(draft);
-    await expect.poll(async () => (await page.evaluate(() => window.dbark.invoke('settings.get', {}))).tabs.find(tab => tab.kind === 'query')?.sql).toBe(draft);
+    // Monaco按平台保存行尾；仅准备草稿统一CRLF为LF，后续tabs/history仍逐字比较原始快照。
+    await expect.poll(async () => (await page.evaluate(() => window.dbark.invoke('settings.get', {}))).tabs.find(tab => tab.kind === 'query')?.sql?.replaceAll('\r\n', '\n')).toBe(draft);
     const tabs = (await page.evaluate(() => window.dbark.invoke('settings.get', {}))).tabs, history = await page.evaluate(() => window.dbark.invoke('history.list', {}));
     await observe();
     try { await body(context); await noWrites(); expect((await page.evaluate(() => window.dbark.invoke('settings.get', {}))).tabs).toEqual(tabs); expect(await page.evaluate(() => window.dbark.invoke('history.list', {}))).toEqual(history); }
