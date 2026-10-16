@@ -41,6 +41,8 @@ node node_modules/@playwright/test/cli.js test tests/e2e/c02-ssh-live.spec.ts --
 
 ## 真实路径与清理约束
 
+首次建连前，先对已有身份文件与临时父目录做末级普通对象/非链接检查，再用 `fs.realpath` 解析双方任意祖先 junction/符号链接。临时父目录不得等于或位于实际身份父目录内；共享名称前缀的兄弟目录、跨盘及真正的父目录不误判为子目录，以 `..` 开头的普通子目录名仍按子目录拒绝。解析前后文件与目录的 `ino/dev` 必须一致。配置纯检查保留作早期拒绝，不能代替此实际路径门。驱动使用已核对的实际身份路径，lease只向 `C02Desktop.create` 传规范实际临时父目录；原桌面夹具的随机目录、末级非链接、`ino/dev`、PID及删除所有权保护不变。
+
 管理观察连接经产品真实 SSH 私钥和固定主机指纹，只准备/观察本次随机 `cp_<12hex>`@`%`、`dbark_colperm_<12hex>.subject`。仅 GRANT 精确表 SELECT，用户/表写本次令牌；13484额外收紧 REQUIRE SSL，不增加权限。不创建其它表/账号/角色，不改 GLOBAL、SSH身份或服务器配置，不执行 Docker。版本/UUID/强制角色/观察者直接 PROCESS 权限在CREATE前检查，权限目录验证没有额外库/列/全局或角色授权。
 
 正式 ConnectionDialog 使用现有数据库密码输入及 SSH 页的主机/端口/用户名、原生“选择 SSH 私钥”和主机指纹字段。仅替换本应用文件选择与已知关闭确认的原生回答，文件授权、表单保存、main broker、ssh2认证/forwardOut及utility均为正式实现。SSH密码及私钥口令不填入、不保存。错误指纹仍是规范32字节指纹，必须命中安装 ssh2 源码的 `Host denied (verification failed)`，不能用超时或网络不可达冒充；之后正确指纹实际成功。
@@ -58,3 +60,19 @@ CREATE先记未知，仅成功响应才确认归属；未知CREATE不DROP，对�
 - Playwright `--list` 列出1个SSH正式UI用例；默认不开启，无GUI或实库执行。
 - 没有启动 GUI/200/剪贴板/Docker，没有读取真实ROOT凭据或密钥，没有修改原520/459及公开归档。
 - 新SSH正式表单、utility、重启、原生存储、六端口及跨平台私网的实际结果均待ROOT执行，旧核心证据不能计入本新UI通过数。
+
+### 目录隔离复审后的修复验证
+
+原 `d18d8a9` 准备及员工4祖先 junction 复审报告/探针保持原样。补丁只修正 SSH 测试夹具路径门，不涉及真实密钥、mTLS、桌面退出代码或产品行为。新增自有普通文本和临时目录检查：身份/临时路径单边或双边祖先别名、多级祖先、直接及 `..ordinary-child` 子目录均拒绝；独立目录与安全别名放行并输出实际路径；末级 junction 仍拒绝。Windows 大小写、跨盘与兄弟前缀用平台路径规则另测；四项元数据故障注入检查解析后文件/父目录 `ino/dev` 改变时拒绝。危险祖先别名在首个连接及回调前失败，安全身份别名在连接入口已转换实际路径；连接桩明确失败，不模拟认证成功。
+
+新增路径检查26项，加原SSH纯检查35项和原C02回归55项，共116项通过：
+
+```powershell
+node node_modules/vitest/vitest.mjs run tests/unit/c02-ssh-paths.test.ts tests/unit/c02-ssh-policy.test.ts tests/unit/c02-mtls-fixture-policy.test.ts tests/unit/c02-desktop-exit.test.ts tests/unit/c02-mtls-ui-policy.test.ts --maxWorkers=2
+node node_modules/typescript/bin/tsc --noEmit
+node node_modules/@playwright/test/cli.js test tests/e2e/c02-ssh-live.spec.ts --list
+```
+
+TypeScript退出0，Playwright只枚举1项。Windows真实junction在普通沙箱内报EPERM，经工具自动审批后仅在自有缓存重跑通过；不通过跳过相关用例来代替验证。独立缓存探针 `path-regression-probe.mjs` 用固定旧策略复现原放行及实际落点，再用修复后路径门确认拒绝、安全别名的规范父目录落点通过。该探针、完整日志和源文件SHA256清单位于员工2普通克隆的忽略目录 `.cache/c02-ssh-path-fix-20261016/`，未改原复审原件。
+
+这些检查只证明本地路径隔离和门禁顺序，不能计作新 SSH 认证、正式 UI、utility、真实线程清理或重启通过。未访问服务器或读取任何真实密钥内容；没有新可复用身份材料需备份。
