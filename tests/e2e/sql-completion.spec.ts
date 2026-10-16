@@ -1,5 +1,5 @@
 import {positionMonacoCaret,observeMonacoCaret,triggerMonacoCompletion,remainingCompletionTimeout} from './monaco-caret';
-import {collectMonacoCaretDiagnostics} from './monaco-caret-diagnostics';
+import {attachMonacoCaretDiagnostic,type OfflineCompletionDiagnostic} from './monaco-caret-diagnostics';
 import {randomUUID} from 'node:crypto';
 import type {Connection,RowDataPacket} from 'mysql2/promise';
 import {test,expect,page,desktop,pageErrors,closed,answerDialogs,quitDesktop} from './desktop-fixture';
@@ -9,6 +9,12 @@ import {enabled,isolatedDatabase,openDatabaseQuery,executeSql,modifier} from './
 test.use({trace:'off'});
 // 空工作台启用官方公开API，捕获真实按键时的当前编辑器位置。
 test.beforeEach(observeMonacoCaret);
+let pendingOfflineDiagnostic:{testId:string;context:OfflineCompletionDiagnostic}|undefined;
+/** 原失败先交回runner；afterEach才有真实duration，诊断失败不能覆盖它。 */
+test.afterEach(async({},info)=>{
+  const pending=pendingOfflineDiagnostic;pendingOfflineDiagnostic=undefined;
+  if(pending?.testId===info.testId)try{await attachMonacoCaretDiagnostic(page,info,pending.context);}catch{/* 诊断不新增测试错误。 */}
+});
 const query=()=>page.locator('.query-tab:visible');
 /** 原生输入保留引号及后缀，光标仅通过键盘移动，不直接调用Monaco模型。 */
 let expectedCaret='';
@@ -35,11 +41,8 @@ test('离线语义补全：CTE投影、完整范围替换、键盘接受和撤�
     let original:string,phase:'prepare'|'completion'='prepare';
     try{original=await atCaret(marked);phase='completion';await choose(column);await expectSql(`WITH q AS (SELECT 1 AS ${column}) SELECT q.\`${column}\` FROM q`);}
     catch(reason){
-      try{
-        // prepare也进入诊断；失败附件只输出白名单指标，不记录原始pageErrors或截图正文。
-        const diagnostics=await collectMonacoCaretDiagnostics(page,marked);
-        await info.attach('离线补全阶段-'+cold,{body:JSON.stringify({cold,phase,pageErrorCount:pageErrors.length,diagnostics}),contentType:'application/json'});
-      }catch{/* 附件失败不记录原生异常，也不能覆盖原断言。 */}finally{throw reason;}
+      // 不在测试体等待诊断IPC或附件；只保存本次上下文，原错误立即原样抛回。
+      pendingOfflineDiagnostic={testId:info.testId,context:{cold,phase,marked,pageErrorCount:pageErrors.length}};throw reason;
     }
     await page.screenshot({path:info.outputPath('offline-completion-cold-'+cold+'.png')});await page.keyboard.press(`${modifier}+Z`);await expectSql(original);
   }

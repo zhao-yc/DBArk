@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { runInNewContext } from 'node:vm';
 import ts from 'typescript';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { collectMonacoCaretDiagnostics, readMonacoCaretDiagnostics } from '../e2e/monaco-caret-diagnostics';
+import { attachMonacoCaretDiagnostic, collectMonacoCaretDiagnostics, readMonacoCaretDiagnostics } from '../e2e/monaco-caret-diagnostics';
 
 /** 只模拟公开getter和settings.get；任何剪贴板访问都会直接失败。 */
 function environment(options: { model?: string; main?: string; api?: boolean; focused?: boolean; editorCount?: number; selection?: boolean | null; modelFails?: boolean; mainFails?: boolean; noActiveTab?: boolean } = {}) {
@@ -76,26 +76,31 @@ describe('失败诊断的只读白名单', () => {
 /** 回放正式测试体的控制流；所有页面/输入/附件均为纯端口，不执行浏览器或原生API。 */
 async function replayCase(attachmentFails: boolean) {
   const source = readFileSync(new URL('../e2e/sql-completion.spec.ts', import.meta.url), 'utf8');
-  const tree = ts.createSourceFile('sql-completion.spec.ts', source, ts.ScriptTarget.Latest, true); let body = '';
+  const tree = ts.createSourceFile('sql-completion.spec.ts', source, ts.ScriptTarget.Latest, true); let body = '', afterBody = '';
   function visit(node: ts.Node) {
     if (ts.isCallExpression(node) && node.expression.getText(tree) === 'test' && ts.isStringLiteral(node.arguments[0]) && node.arguments[0].text === '离线语义补全：CTE投影、完整范围替换、键盘接受和撤销，不执行SQL') body = node.arguments[1].getText(tree);
+    if (ts.isCallExpression(node) && node.expression.getText(tree) === 'test.afterEach') afterBody = node.arguments[0].getText(tree);
     ts.forEachChild(node, visit);
   }
   visit(tree); expect(body).not.toBe('');
-  const code = ts.transpileModule('const replay = ' + body + '; replay;', { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
+  const code = ts.transpileModule('let pendingOfflineDiagnostic; const replay = ' + body + '; const after = ' + afterBody + '; ({replay,after});', { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
   const originalFailure = Error('合成原prepare断言失败'), attachments: { name: string; data: Record<string, unknown> }[] = [], screenshots: string[] = [], timeouts: number[] = [], inputs: string[] = [], chosen: string[] = [];
   const control = { click: async () => undefined, getByRole: () => control };
-  const page = { locator: () => control, getByRole: () => control, keyboard: { press: async () => undefined }, screenshot: async ({ path }: { path: string }) => { screenshots.push(path); } };
+  const page = { locator: () => control, getByRole: () => control, keyboard: { press: async () => undefined }, screenshot: async ({ path }: { path: string }) => { screenshots.push(path); }, evaluate: async () => ({ model: { availability: 'unknown', utf16Units: null } }) };
   const run = runInNewContext(code, {
     test: { setTimeout: (value: number) => timeouts.push(value) }, offlineQuery: async () => undefined, page, query: () => ({ locator: () => ({}) }), expect: () => ({ toBeVisible: async () => undefined }),
     atCaret: async (marked: string) => { inputs.push(marked); if (inputs.length === 3) throw originalFailure; return marked.replace('|', ''); },
     choose: async (column: string) => { chosen.push(column); }, expectSql: async () => undefined, modifier: 'Control', pageErrors: ['不可输出的真实页面错误'],
-    collectMonacoCaretDiagnostics: async () => ({ model: { availability: 'unknown', utf16Units: null } })
-  }) as (fixtures: unknown, info: unknown) => Promise<void>;
+    attachMonacoCaretDiagnostic
+  }) as { replay: (fixtures: unknown, info: unknown) => Promise<void>; after: (fixtures: unknown, info: unknown) => Promise<void> };
   let received: unknown;
+  const info = { testId: '合成同一测试身份', timeout: 90000, duration: 12, outputPath: (name: string) => name, attach: async (name: string, options: { body: string }) => { attachments.push({ name, data: JSON.parse(options.body) }); if (attachmentFails) throw Error('合成附件失败'); } };
   try {
-    await run({}, { outputPath: (name: string) => name, attach: async (name: string, options: { body: string }) => { attachments.push({ name, data: JSON.parse(options.body) }); if (attachmentFails) throw Error('合成附件失败'); } });
+    await run.replay({}, info);
   } catch (error) { received = error; }
+  // 原错误在任何诊断前已原样返回；公开duration只在afterEach阶段使用。
+  expect(received).toBe(originalFailure); expect(attachments).toHaveLength(0);
+  await run.after({}, info);
   return { received, originalFailure, attachments, screenshots, timeouts, inputs, chosen };
 }
 
