@@ -99,7 +99,8 @@ function DatabaseNode({ connectionId, database, search, onDesign, onColumnPatche
   useEffect(() => { if (observedRefresh.current !== refreshVersion) { observedRefresh.current = refreshVersion; void load(false); } }, [refreshVersion]);
   /** 只读取当前数据库对象列表，避免加载未展开数据库的全部字段。 */
   async function load(reveal = true) {
-    const request = requests.begin('load'); if (!request) return;
+    // 结构变化必须重读目录，不能被改名前的在途加载吞掉；普通按钮连点仍只发一次。
+    const request = requests.begin('load', !reveal); if (!request) return;
     setBusy(true);
     try { for (let ending = sidebarConnectionEnd(connectionId); ending; ending = sidebarConnectionEnd(connectionId)) { await ending; if (!requests.current(request)) return; } if (!requests.current(request)) return; const next = await invoke('metadata.objects', { connectionId, database }); if (requests.current(request)) { setObjects(next); if (reveal) expand(true); } }
     catch (error) { useWorkspace.getState().notify(errorMessage(error), true); }

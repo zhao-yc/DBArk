@@ -12,9 +12,9 @@ export class SidebarNodeRequests {
   constructor(private readonly currentRevision: () => number) { this.revision = currentRevision(); }
   get kind(): SidebarNodeRequestKind | undefined { return this.pending?.kind; }
 
-  /** 断开和删除可取代加载，但不能重入正在进行的另一项结束操作。 */
-  begin(kind: SidebarNodeRequestKind): SidebarNodeRequest | undefined {
-    if (!this.active || this.currentRevision() !== this.revision || (this.pending && (kind === 'load' || this.pending.kind !== 'load'))) return;
+  /** 结构刷新可明确接管目录加载；普通加载仍去重，任何加载均不能越过结束操作。 */
+  begin(kind: SidebarNodeRequestKind, replaceLoad = false): SidebarNodeRequest | undefined {
+    if (!this.active || this.currentRevision() !== this.revision || (this.pending && (this.pending.kind !== 'load' || kind === 'load' && !replaceLoad))) return;
     return this.pending = { kind, generation: ++this.generation };
   }
   /** 每个异步落点都同时核对节点生存期、连接修订和精确请求身份。 */

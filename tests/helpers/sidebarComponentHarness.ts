@@ -37,6 +37,8 @@ export class SidebarComponentRenderer {
   ref(value: unknown) { const index = this.index++; return this.slots[index] ??= { current: value }; }
   effect(action: () => (() => void), deps: unknown[]) { const index = this.index++, old = this.slots[index]; if (!old || !deps.every((v, i) => v === old.deps[i])) { this.slots[index] = { deps, cleanup: old?.cleanup }; this.effects.push(() => { old?.cleanup?.(); this.slots[index].cleanup = action(); }); } }
   render(): this { if (!this.mounted) return this; this.context.host = this; this.index = 0; this.tree = this.component(this.props); const effects = this.effects; this.effects = []; effects.forEach(effect => effect()); return this; }
+  /** 父组件按真实JSX传下新属性，保留本节点hooks和展开意图。 */
+  update(props: Record<string, unknown>): this { Object.assign(this.props, props); return this.render(); }
   all(predicate: (node: Node) => boolean): Node[] { const found: Node[] = []; function visit(node: any) { if (Array.isArray(node)) return node.forEach(visit); if (!node || typeof node !== 'object') return; if (predicate(node)) found.push(node); visit(node.props?.children); } visit(this.tree); return found; }
   label(): Node { return this.all(node => node.type === 'button' && node.props.className === 'tree-label')[0]; }
   button(name: string): Node { const values = this.all(node => node.type === 'button' && node.props['aria-label'] === name); if (values.length !== 1) throw Error('未找到唯一生产按钮：' + name); return values[0]; }
@@ -50,12 +52,12 @@ export class SidebarComponentRenderer {
 /** 每个夹具有独立真实请求门和补全事实缓存，可在同一上下文模拟节点重挂载。 */
 export async function sidebarHarness() {
   const calls: Deferred[] = [], notices: string[] = [], renderers: SidebarComponentRenderer[] = [];
-  const state = { selection: null, connectionVersions: { c: 0 } as Record<string, number>, select() {}, notify(message: string) { notices.push(message); }, openTab() {}, setConnections() {} };
+  const state = { connections: [{ id: 'c', name: '测试连接', color: '#123456' } as ConnectionProfile], selection: null, connectionVersions: { c: 0 } as Record<string, number>, select() {}, notify(message: string) { notices.push(message); }, openTab() {}, setConnections() {} };
   const module = { exports: {} as Record<string, any> }, context = { module, exports: module.exports, store: state, window: { confirm: () => true }, sidebarIpcInvoke: (command: string, input: unknown) => new Promise((resolve, reject) => calls.push({ command, input, resolve, reject, settled: false })) };
   runInNewContext(await compile(), context);
   const facts = module.exports.completionServerFacts as CompletionServerFacts;
-  const callbacks = { onEdit() {}, onCopy() {}, onDesign() {}, onColumnPatches() {}, onIndexPatches() {}, onForeignKeyPatches() {}, onTableComment() {}, onTableDefaultEncoding() {}, onDdl() {} };
-  function create(kind: 'connection' | 'database', id = 'c') { const component = module.exports[kind === 'connection' ? 'ConnectionNode' : 'DatabaseNode'], profile = { id, name: '测试连接', color: '#123456' } as ConnectionProfile, props = kind === 'connection' ? { profile, search: '', ...callbacks } : { connectionId: id, database: '测试库', search: '', ...callbacks }; const renderer = new SidebarComponentRenderer(context, component, props); renderers.push(renderer); return renderer; }
+  const callbacks = { onNewConnection() {}, onEditConnection() {}, onCopyConnection() {}, onOpenWorkbench() {}, onEdit() {}, onCopy() {}, onDesign() {}, onColumnPatches() {}, onIndexPatches() {}, onForeignKeyPatches() {}, onTableRename() {}, onTableComment() {}, onTableDefaultEncoding() {}, onDdl() {} };
+  function create(kind: 'sidebar' | 'connection' | 'database', id = 'c', overrides: Record<string, unknown> = {}) { const component = module.exports[kind === 'sidebar' ? 'Sidebar' : kind === 'connection' ? 'ConnectionNode' : 'DatabaseNode'], profile = { id, name: '测试连接', color: '#123456' } as ConnectionProfile, props = kind === 'sidebar' ? { refreshVersion: 0, objectRefreshVersions: {}, ...callbacks } : kind === 'connection' ? { profile, search: '', objectRefreshVersions: {}, ...callbacks } : { connectionId: id, database: '测试库', search: '', ...callbacks }; const renderer = new SidebarComponentRenderer(context, component, { ...props, ...overrides }); renderers.push(renderer); return renderer; }
   async function flush() { for (let i = 0; i < 12; i++) await Promise.resolve(); renderers.forEach(renderer => renderer.render()); }
   async function settle(index: number, value: unknown, failed = false) { const call = calls[index]; if (!call || call.settled) throw Error('无可完成的在途调用：' + JSON.stringify({ index, calls: calls.map(call => call.command), notices })); call.settled = true; if (failed) call.reject(value as Error); else call.resolve(value); await flush(); }
   const beginEnd = module.exports.beginSidebarConnectionEnd as (connectionId: string) => { done: Promise<void>; release(): void } | undefined;
