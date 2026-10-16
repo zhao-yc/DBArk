@@ -6,6 +6,7 @@ import {completionQuery} from './completionQuery';
 import {databaseSearchMatch} from './databaseSearchMatch';
 import {qualified} from './sql';
 import {definitionOmittingSqlModes} from '../shared/tableColumnPatches';
+import {definitionNavigationResult} from './definitionNavigation';
 
 export interface DefinitionSearchState{input:StructureSearchInput;scope:number;total:number;after?:{object:string;name:string};scannedDefinitions?:number}
 type Control=Pick<StructureTaskContext,'checkCancelled'|'commandStarted'>;
@@ -35,7 +36,9 @@ export function definitionText(kind:DefinitionSearchKind,rows:Record<string,unkn
 export function definitionMatchQuery(source:string,pattern:StructureSearchInput['pattern']){
  if(typeof source!=='string'||Buffer.byteLength(source)>structureSearchLimits.definitionBytes)throw Error('定义匹配超过2MiB预算');
  const match=databaseSearchMatch({column:'definition_text',qualifier:'search_definition'},pattern);
- return{sql:'SELECT CHAR_LENGTH(definition_text) AS characters FROM (SELECT CONVERT(? USING utf8mb4) AS definition_text) AS search_definition WHERE '+match.sql,params:[source,...match.params]};
+ // 同一次服务器匹配返回实际LOWER结果，位置映射不借用JavaScript的大小写规则；不把全文追加到回包。
+ const folded=!pattern.caseSensitive&&pattern.mode!=='regexp';
+ return{sql:'SELECT CHAR_LENGTH(definition_text) AS characters'+(folded?', LOWER(definition_text) AS navigationText, LOWER(navigation_pattern) AS navigationNeedle':'')+' FROM (SELECT CONVERT(? USING utf8mb4) AS definition_text'+(folded?', CONVERT(? USING utf8mb4) AS navigation_pattern':'')+') AS search_definition WHERE '+match.sql,params:[source,...(folded?[pattern.text]:[]),...match.params]};
 }
 
 /** 每页最多检查十个定义，页间只保留二进制名称位置，不持有连接或完整定义正文。 */
@@ -54,7 +57,7 @@ export async function readDefinitionSearchPage(state:DefinitionSearchState,manag
    if(rows.length>2)throw Error('定义目录超过单对象枚举预算');if(rows.length===0){state.scope++;delete state.after;continue;}
    object=searchIdentifier.parse(rows[0].object_name);hasMore=rows.length>1;state.after={object,name:object};objects++;state.scannedDefinitions=(state.scannedDefinitions??0)+1;
    const spec=showTypes[kind],source=definitionText(kind,await read('SHOW CREATE '+spec.type+' '+qualified(database,object))),query=definitionMatchQuery(source,input.pattern),matched=await read(query.sql,query.params);
-   if(matched.length>1)throw Error('定义匹配返回了多条状态');if(matched.length){const characters=Number(matched[0].characters);if(!Number.isSafeInteger(characters)||characters<1||characters>structureSearchLimits.definitionBytes)throw Error('定义长度信息无效');page.hits.push({database,kind,object,name:object,parentKind:kind,matchedIn:'definition',definitionCharacters:characters});state.total++;}
+   if(matched.length>1)throw Error('定义匹配返回了多条状态');if(matched.length){const characters=Number(matched[0].characters);if(!Number.isSafeInteger(characters)||characters<1||characters>structureSearchLimits.definitionBytes)throw Error('定义长度信息无效');page.hits.push({database,kind,object,name:object,parentKind:kind,matchedIn:'definition',definitionCharacters:characters,definitionNavigation:definitionNavigationResult(source,input.pattern,matched[0])});state.total++;}
    if(!hasMore){state.scope++;delete state.after;}
   }catch(error){
    control.checkCancelled();if(managed.broken)throw error;page.failures.push({database,kind,...(object?{object}:{}),message:(error instanceof Error?error.message:String(error)).slice(0,1024)});

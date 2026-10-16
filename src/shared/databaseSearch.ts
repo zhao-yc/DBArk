@@ -1,5 +1,6 @@
 import {z} from 'zod';
 import {databaseSearchPatternSchema} from './databaseSearchPattern';
+import type {DefinitionNavigationResult} from './definitionNavigation';
 
 /** 首批结构名称搜索按请求拉取一页，页间不保留数据库连接或未消费的结果批次。 */
 export const structureSearchLimits={databases:32,pageHits:50,pageQueries:10,maxHits:1000,pageBytes:128*1024,cursors:32,cursorMs:5*60*1000,definitionBytes:2*1024*1024,definitionPageObjects:10} as const;
@@ -21,7 +22,7 @@ export const structureSearchContinueSchema=z.object({connectionId:z.string().min
 export const structureSearchReleaseSchema=structureSearchContinueSchema.omit({taskId:true});
 export type StructureSearchInput=z.infer<typeof structureSearchInputSchema>;
 export type StructureSearchContinue=z.infer<typeof structureSearchContinueSchema>;
-export interface StructureSearchHit{database:string;kind:StructureSearchKind;object:string;name:string;parentKind:'table'|'view'|'procedure'|'function'|'trigger'|'event';matchedIn?:'definition';definitionCharacters?:number}
+export interface StructureSearchHit{database:string;kind:StructureSearchKind;object:string;name:string;parentKind:'table'|'view'|'procedure'|'function'|'trigger'|'event';matchedIn?:'definition';definitionCharacters?:number;definitionNavigation?:DefinitionNavigationResult}
 export interface StructureSearchFailure{database:string;kind:StructureSearchKind;object?:string;message:string}
 export interface StructureSearchPage{
   hits:StructureSearchHit[];failures:StructureSearchFailure[];totalHits:number;completedScopes:number;scopeCount:number;
