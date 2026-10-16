@@ -1,4 +1,4 @@
-# Monaco 光标测试：原生输入、当次请求证明和剪贴板只读核对
+# Monaco 光标测试：原生输入、真实按键位置证明和剪贴板只读核对
 
 基线为 `80b65746242190b9ca3ea22fdb2677c0a8046d0d`。本片只调整测试帮助器、四个调用模块、纯回归及本文档，不修改产品、Worker 协议、fixture 退出、版本或发布资料。原 run747 等失败记录不变。
 
@@ -8,25 +8,26 @@
 
 本片沿用 `live-helpers.writeSql` 已使用的真实输入路径：聚焦可见 textbox，Ctrl/Cmd+A，`keyboard.insertText`。随后仍用 Control+Home 或 Meta+ArrowUp 到文档首，并按前缀码点发送 ArrowRight。不调用 Monaco 模型设置、光标设置、执行编辑或替换正文的 IPC，不发送 Ctrl/Cmd+V、Ctrl/Cmd+C 或选择复制前缀。
 
-`positionMonacoCaret` 只准备正文和键盘位置。原前缀复制所承担的位置证明由下一次现有真实补全触发后的独立请求核对接替，不能只凭建议出现、空建议或可见正文判定位置正确。
+`positionMonacoCaret` 只准备正文和键盘位置。原前缀复制所承担的位置证明由下一次现有真实 Control+Space 的捕获阶段公开只读 API 接替，不能只凭建议出现、空建议或可见正文判定位置正确。
 
-## 当次位置证明
+## 真实按键时的当前模型证明
 
-四个模块均在 `test.beforeEach` 安装 `observeMonacoCaret`，早于创建编辑器及已有的窗口/LATERAL Worker 实例包装器。它包装原 `Worker.prototype.postMessage`，先用原接收者、原参数调用原方法，再只读观察成功发出的补全请求；不改请求、响应、能力、取消、线程或产品期限。
+原提交 `dc48f67` 的发送序号方案存在阻断：请求在布防前已经 analyze/provider 创建，只是等待 Worker ready，在布防后才 send，仍会被认成新请求。其 34 项纯回归不足以覆盖这条路径。原提交和原结果保留，不再把 send 较晚宣称为本次 provider 创建或当前光标证明。
 
-每个 `atCaret(marked)` 把测试原始 `marked` 单独保存在调用模块中。`triggerCompletion` 将这份原始输入交给 `triggerMonacoCompletion`，期望不来自定位帮助器返回的 source、实际请求或先前观察到的 offset。
+四个模块仍在 `test.beforeEach` 安装 `observeMonacoCaret`。初始化先只读取连接、标签、任务及历史数量，要求全零；再用 `page.addInitScript` 设置官方 `MonacoEnvironment.globalAPI=true`，reload 一次空工作台并确认 `monaco.editor.getEditors` 可用。已有数据时明确失败，不清理、不重试。Monaco 0.55.1 的官方初始化公开应用已加载的同一 API 与 editor registry，不动态导入第二份 Monaco，也不改产品代码。reload 是明确的测试初始化步骤，测试注册与总期限不变。
 
-在原有一次 Control+Space 之前，观察器截取单调发送序号作为边界并清除本次记录。随后必须观察到序号大于边界的新发送，并同时满足：
+每个 `atCaret(marked)` 保留测试原始 `marked`。`triggerCompletion` 以它独立生成预期全文、前缀和逻辑行列，不能用帮助器返回值、当前正文或旧请求反填期望。在原有一次 Control+Space 之前设本次 generation、清空本次记录；只有该次真实、可信、非 repeat 的 Control+Space 捕获事件能够产生证明，事件数必须恰好一。监听器不 preventDefault、不 stopPropagation、不设置模型或光标、不再触发键盘，也不拦截 Worker。
 
-- 完整 source 等于原 `marked` 去掉标记并将 CRLF 转成 LF 后的预期全文；同长度错误 SQL 不能通过。
-- offset 等于原 `marked` 标记之前前缀经相同换行处理后的 UTF-16 长度；键盘 ArrowRight 按码点移动，但 Worker offset 使用 UTF-16 单位。
-- 本次范围中观察到的请求不能有 source 或 offset 不匹配；错误状态不会被稍后匹配结果抹掉。
+- 通过 `editor.getEditors()` 筛出唯一仍连接 DOM、可见、位于可见 QueryTab 主 `.sql-editor-wrap` 内、包含事件 target 且 `hasTextFocus()` 的编辑器。旧模型、隐藏标签、同一 QueryTab 内的只读结果 SQL 或其它编辑器不能代替当前主编辑器。
+- 捕获阶段同步读取 `getModel()`、`getValue()`、`getPosition()`、`getOffsetAt()`、`getEOL()`、`getSelections()` 及 `getVersionId()`；要求同一未销毁模型、读取前后版本和位置稳定，且仅一个折叠选区。
+- 原 `marked` 先按 LF 独立计算逻辑行列；再以模型公开的 LF/CRLF EOL 展开预期正文和前缀，分别严格核对完整正文、行列及 UTF-16 offset。实际正文和 offset 不参与构造期望；同长度错误 SQL 不能通过。键盘 ArrowRight 仍按码点移动。
+- 按键结束后立即核对该 generation 的安全布尔/计数，再解除布防及原始预期引用；没有额外的轮询等待。所有 getter 都在同一个同步事件处理器内执行，没有 await，不依赖 Worker 创建、ready 或发送时刻。
 
-本片不查全局历史 `.some` 来证明位置，也不靠旧回复满足本次断言。没有新发送时保守失败；不增加触发次数、清除产品缓存、重试或延长期限来制造新请求。位置证明和原先首个产品断言共享 13 秒预算，后者只使用 `remainingCompletionTimeout` 的剩余时间，不串联为两个 13 秒；产品的 8 秒启动和 2 秒解析限时不变。若实际 Monaco 合法缓存导致本次完全没有新发送，本片不声称已证明当前模型位置，须由统筹核定证据后再设计，不能用旧 SQL/旧 offset 放行。
+本片不查历史 `.some`、不借用旧回复，也不再要求出现新 Worker 发送来证明位置。缓存命中时，当前真实按键的模型状态仍可以独立核对；原建议、能力门和 Worker 终态断言继续检查产品行为。位置证明与原先首个产品断言仍共享 13 秒预算，产品的 8 秒启动和 2 秒解析限时不变，不增加触发、重试或期限。
 
 | 调用模块 | 静态定位调用点 | 原测试注册数 | 补齐的位置证据 |
 | --- | ---: | ---: | --- |
-| `tests/e2e/sql-completion.spec.ts` | 16 | 9 | choose 及默认库未知的直接触发统一核对当次完整 source/offset |
+| `tests/e2e/sql-completion.spec.ts` | 16 | 9 | choose 及默认库未知的直接触发统一核对真实按键的当前全文/位置 |
 | `tests/e2e/sql-completion-window.spec.ts` | 6 | 4 | 正向、输出别名隔离、集合与帧停止均接入；原 Worker 终态及零建议断言保留 |
 | `tests/e2e/sql-completion-lateral.spec.ts` | 3 | 1 | 初始能力门、执行后补全、语法停止均接入；原能力/终态、IPC计数及执行结果断言保留 |
 | `tests/e2e/session-objects.spec.ts` | 11 | 7 | 第四个原调用模块同步覆盖；正向及默认库未知、隐藏列无建议均接入 |
@@ -45,18 +46,20 @@
 
 ## 验证与边界
 
-`tests/unit/monaco-caret-clipboard.test.ts` 在纯 VM 中执行整个正式帮助器及实际 `SqlEditor` provider 回调，使用实际 CompletionWorkerClient。键盘/模型、剪贴板、传输和轮询等待是受控边界，假传输只返回 blocked 来结束等待；没有实际解析线程、Monaco、系统键盘、GUI、系统剪贴板或数据库。不能把这些结果当作原生验收。
+`tests/unit/monaco-caret-clipboard.test.ts` 在纯 VM 中执行整个正式帮助器、事件捕获回调及实际 `SqlEditor` provider 回调，使用实际 CompletionWorkerClient。DOM/公开 API 对象、键盘/模型、剪贴板、传输和轮询等待是受控边界，假传输只返回 blocked 来结束等待；没有实际解析线程、Monaco、系统键盘、GUI、系统剪贴板或数据库。不能把这些结果当作原生验收。
 
-34 项纯回归覆盖：零剪贴板写入、空壳与有类型零字节、全部格式、多条目、外部删除/新增类型/改字节/书签/纯文本/item数、异常关系与安全消息、两个平台、UTF-16/CRLF、错误 offset、同长度错误 SQL、无请求、同 SQL 旧请求重用失败、共享等待预算，以及四个实际调用模块的原始 marked 接线。原定位返回值被替换为不可信内容时，调用者仍提交原始 marked 作独立期望。现有 Worker 实例包装与共享观察器一起运行的纯例也通过。
+43 项纯回归中，20 项全格式只读回归原样保留；位置组按直接当前状态的合同替换，并补上实际 Client 的旧 pending/lateSend 反例、模型 CRLF/UTF-16、错误 offset、同长度错误 SQL、无本次事件、非可信事件、多聚焦/隐藏编辑器、非折叠选区、版本变化、同 SQL 旧请求不能替代当前错误位置、正确当前状态无需新 Worker 请求、空工作台初始化约束和共享预算。四个实际调用模块仍将原始 marked 独立接入；Worker.prototype 不再被此帮助器包装。原定位返回值被替换为不可信内容时，调用者仍提交原始 marked 作期望。
 
 验证命令：
 
 ```text
-node node_modules/vitest/vitest.mjs run tests/unit/monaco-caret-clipboard.test.ts --reporter=json --outputFile=.cache/monaco-caret-readonly-change/unit-final.json
+node node_modules/vitest/vitest.mjs run tests/unit/monaco-caret-clipboard.test.ts --reporter=json --outputFile=.cache/monaco-caret-direct-api-review/unit-final.json
 node node_modules/typescript/bin/tsc --noEmit
 node --require ./.cache/monaco-caret-readonly-change/collection-guard.cjs node_modules/@playwright/test/cli.js test tests/e2e/sql-completion.spec.ts tests/e2e/sql-completion-window.spec.ts tests/e2e/sql-completion-lateral.spec.ts tests/e2e/session-objects.spec.ts --list --reporter=json
 ```
 
 仅收集阶段显式设置 `DBARK_INTEGRATION_ENABLED=0`；守卫禁止原生启动、网络及私有 env/key/runtime 读取。21 项仅收集、执行 0，原生启动/网络/私有读取均为 0。缓存内保存完整 JSON、调用点行号、阶段日志和守卫记录；缓存不提交。
 
-仍由 ROOT 负责：对新测试头核定后，按既有身份和清理合同进行真实安装验收，确认原生输入、实际光标、当次 Worker 请求、接受/撤销及四个模块全部原断言。此员工未启动 GUI、读取真实剪贴板、访问200或运行真实E2E，未改 ROOT 或冻结候选，也未发布 0.18。
+ROOT 已回报 run773/run775 的原安装资源只读可行性结果，单行与中文/emoji 的 LF/CRLF 样例可按公开 EOL 和逻辑行列核对，真实建议能够接受；原 run774 原始换行比较失败记录保留。这些只是可行性证据，不计四模块安装验收。
+
+仍由 ROOT 负责：对修正后的固定测试头核定后，按既有身份和清理合同进行真实安装验收，确认原生输入、当前模型位置、接受/撤销及四个模块全部原断言。此员工未启动 GUI、读取真实剪贴板、访问200或运行真实E2E，未改 ROOT 或冻结候选，也未发布 0.18。

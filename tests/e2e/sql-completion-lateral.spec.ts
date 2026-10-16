@@ -7,7 +7,7 @@ import {enabled,isolatedDatabase,openDatabaseQuery,type LiveContext} from './liv
 // 默认跳过早于桌面启动；连接资料只由统筹向既有环境变量注入。
 test.skip(!enabled,'需要统筹显式启用200隔离实库与原生桌面');
 test.use({trace:'off'});
-// 在任何编辑器及已有Worker观察器之前安装，只读旁观真实发送位置。
+// 空工作台启用官方公开API，捕获真实按键时的当前编辑器位置。
 test.beforeEach(observeMonacoCaret);
 const query=()=>page.locator('.query-tab:visible');
 type Observation={command:string;settled:boolean};
@@ -46,7 +46,7 @@ async function currentSql(){return page.evaluate(async()=>{const settings=await 
 let expectedCaret='';
 /** 原marked保留为独立断言输入，不使用帮助器返回值推导实际光标期望。 */
 async function atCaret(marked:string){expectedCaret=marked;const source=await positionMonacoCaret(marked);return{source,offset:marked.slice(0,marked.indexOf('|')).replaceAll('\r\n','\n').length};}
-/** 只触发一次，随后必须证明真实provider的完整source和UTF16 offset。 */
+/** 只触发一次，在原生按键捕获阶段核对当前全文和UTF16光标位置。 */
 async function triggerCompletion(){await triggerMonacoCompletion(expectedCaret);}
 /** 等待真实Worker对本次快照的终态，避免把空建议窗口当成能力门已执行。 */
 async function analyzed(source:string,offset:number,supported:boolean){

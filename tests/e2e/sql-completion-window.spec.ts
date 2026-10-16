@@ -4,7 +4,7 @@ import{test,expect,page,desktop,pageErrors}from'./desktop-fixture';
 import{enabled,isolatedDatabase,openDatabaseQuery,modifier}from'./live-helpers';
 
 test.use({trace:'off'});
-// 在任何编辑器及已有Worker观察器之前安装，只读旁观真实发送位置。
+// 空工作台启用官方公开API，捕获真实按键时的当前编辑器位置。
 test.beforeEach(observeMonacoCaret);
 const query=()=>page.locator('.query-tab:visible');
 /** 核对保存草稿里的完整SQL，避免只比较Monaco当前视口。 */
@@ -13,7 +13,7 @@ async function expectSql(source:string){await expect.poll(()=>page.evaluate(asyn
 let expectedCaret='';
 /** 原marked保留为独立断言输入，不使用帮助器返回值推导实际光标期望。 */
 async function atCaret(marked:string){expectedCaret=marked;return positionMonacoCaret(marked);}
-/** 只触发一次，随后必须证明真实provider的完整source和UTF16 offset。 */
+/** 只触发一次，在原生按键捕获阶段核对当前全文和UTF16光标位置。 */
 async function triggerCompletion(){await triggerMonacoCompletion(expectedCaret);}
 /** 等待真实Worker及Monaco候选后按Enter接受，不直接调用编辑器模型。 */
 async function choose(label:string){await triggerCompletion();const widget=page.locator('.suggest-widget.visible');await expect(widget.locator('.monaco-list-row.focused')).toContainText(label,{timeout:remainingCompletionTimeout()});await page.keyboard.press('Enter');await expect(widget).toHaveCount(0);}

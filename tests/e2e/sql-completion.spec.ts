@@ -6,14 +6,14 @@ import {enabled,isolatedDatabase,openDatabaseQuery,executeSql,modifier} from './
 
 // 真连接表单填写内存凭据，关闭轨迹；数据库、编辑器、Worker和IPC均使用实际产物。
 test.use({trace:'off'});
-// 在任何编辑器及已有Worker观察器之前安装，只读旁观真实发送位置。
+// 空工作台启用官方公开API，捕获真实按键时的当前编辑器位置。
 test.beforeEach(observeMonacoCaret);
 const query=()=>page.locator('.query-tab:visible');
 /** 原生输入保留引号及后缀，光标仅通过键盘移动，不直接调用Monaco模型。 */
 let expectedCaret='';
 /** 原marked保留为独立断言输入，不使用帮助器返回值推导实际光标期望。 */
 async function atCaret(marked:string){expectedCaret=marked;return positionMonacoCaret(marked);}
-/** 只触发一次，随后必须证明真实provider的完整source和UTF16 offset。 */
+/** 只触发一次，在原生按键捕获阶段核对当前全文和UTF16光标位置。 */
 async function triggerCompletion(){await triggerMonacoCompletion(expectedCaret);}
 /** 读真实保存草稿核对完整文本，不能仅以视口里相似的短行通过。 */
 async function expectSql(source:string){await expect.poll(()=>page.evaluate(async()=>{const settings=await window.dbark.invoke('settings.get',{});return settings.tabs.find(tab=>tab.id===settings.activeTabId)?.sql?.replaceAll('\r\n','\n');})).toBe(source.replaceAll('\r\n','\n'));}
