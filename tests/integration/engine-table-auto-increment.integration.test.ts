@@ -13,6 +13,7 @@ import type { ConnectionProfile, TaskEvent } from '../../src/shared/contracts';
 import type { TableAutoIncrementGetOutput, TableAutoIncrementPreviewOutput } from '../../src/shared/tableAutoIncrement';
 import { assertTableAutoIncrementLiveTarget } from '../helpers/tableAutoIncrementTarget';
 import { readTableAutoIncrementDefinition } from '../../src/engine/tableAutoIncrementSql';
+import { tableAutoIncrementMdlProof, tableAutoIncrementMdlThread, tableAutoIncrementTaskUnfinished } from '../helpers/tableAutoIncrementMdl';
 
 // 默认关闭；仅双显式开关允许实际访问，不读取本地凭据文件、不创建账号、不修改全局。
 const enabled = process.env.DBARK_INTEGRATION_ENABLED === '1' && process.env.DBARK_TABLE_AUTO_INCREMENT_TEST === '1';
@@ -78,8 +79,19 @@ describe.skipIf(!enabled)('表级下一自增值核心验收（显式单实例�
     await create('cancelled'); const snapshot = await get('cancelled'), next = await preview(snapshot, '50'), taskId = randomUUID();
     await sql('START TRANSACTION'); await sql('SELECT * FROM ' + target('cancelled'));
     const pending = apply(next, taskId).catch(error => error);
+    let mdlThreadId: number | undefined, mdlObserved = false;
     try {
-      await vi.waitFor(() => expect(events.some(event => event.taskId === taskId && event.tableAutoIncrement?.ddlSubmitted)).toBe(true), { timeout: 15000 });
+      try {
+        await vi.waitFor(async () => {
+          expect(events.some(event => event.taskId === taskId && event.tableAutoIncrement?.ddlSubmitted)).toBe(true);
+          expect(tableAutoIncrementTaskUnfinished(events, taskId), '本任务先结束，不能补记MDL等待').toBe(true);
+          const rows = await sql('SHOW FULL PROCESSLIST');
+          mdlThreadId = tableAutoIncrementMdlThread(rows, tracer.ids, observer!.connection.threadId, next.sql);
+          expect(tableAutoIncrementTaskUnfinished(events, taskId), '查询期间本任务已结束，不能补记MDL等待').toBe(true);
+          expect(mdlThreadId !== undefined, '必须实际观察本例唯一线程的完整SQL处于明确MDL等待').toBe(true);
+          mdlObserved = true;
+        }, { timeout: 15000 });
+      } finally { console.info(JSON.stringify(tableAutoIncrementMdlProof(profile.port, taskId, mdlThreadId, mdlObserved))); }
       await engine.handle('query.cancel', { taskId }); expect(await pending).toBeInstanceOf(Error); expect(events.filter(event => event.taskId === taskId).at(-1)?.tableAutoIncrement).toMatchObject({ ddlSubmitted: true, ddlCompleted: false, outcome: 'unknown' });
     } finally { await sql('ROLLBACK'); await pending; }
     expect((await get('cancelled')).autoIncrement).toBe(snapshot.autoIncrement); await expect(apply(next)).rejects.toThrow('已失效或已使用');
