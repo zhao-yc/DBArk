@@ -1,0 +1,4 @@
+.saved-query-navigation{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:6px 12px;border-bottom:1px solid var(--line)}
+.monaco-editor .saved-query-match{background:rgba(224,166,36,.3);outline:1px solid rgba(224,166,36,.6)}
+.monaco-editor .saved-query-match-active{background:rgba(53,148,240,.35);outline:2px solid #3594f0}
+.monaco-editor .saved-query-match-zero{color:#c67c00;font-weight:bold}

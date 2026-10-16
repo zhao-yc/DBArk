@@ -1,6 +1,6 @@
 import{useRef,useState}from'react';
 import{DataGrid,type Column}from'react-data-grid';
-import{savedQuerySearchInputSchema,savedQuerySearchLimits,type SavedQuerySearchInput,type SavedQuerySearchHit,type SavedQuerySearchPage,type SavedQueryOpenResult,type SavedQueryMatch}from'../../shared/savedQuerySearch';
+import{savedQuerySearchInputSchema,savedQuerySearchLimits,type SavedQuerySearchInput,type SavedQuerySearchHit,type SavedQuerySearchPage,type SavedQueryOpenResult}from'../../shared/savedQuerySearch';
 import type{DatabaseSearchMode}from'../../shared/databaseSearchPattern';
 import{savedQuerySearchZh as t}from'../locales/savedQuerySearch.zh-CN';
 import{invoke,errorMessage,uid}from'../lib';
@@ -8,7 +8,7 @@ import{useWorkspace}from'../store';
 import{Modal,Field,ErrorBox,Spinner}from'./ui';
 
 /** 与服务器搜索互斥的本地窗口，任务和句柄仅归本窗口，打开不执行SQL。 */
-export function SavedQuerySearchDialog({onClose,onStructure,onOpen}:{onClose():void;onStructure():void;onOpen(result:SavedQueryOpenResult,match?:SavedQueryMatch):void}){
+export function SavedQuerySearchDialog({onClose,onStructure,onOpen}:{onClose():void;onStructure():void;onOpen(result:SavedQueryOpenResult,hit?:SavedQuerySearchHit):void}){
  const state=useWorkspace(),[keyword,setKeyword]=useState(''),[mode,setMode]=useState<DatabaseSearchMode>('contains'),[caseSensitive,setCaseSensitive]=useState(false),[fields,setFields]=useState<('name'|'sql')[]>(['name','sql']);
  const[scopeKind,setScopeKind]=useState<'all'|'connection'|'unbound'>('all'),[connectionId,setConnectionId]=useState(''),[databaseKind,setDatabaseKind]=useState<'all'|'known'|'none'|'unknown'|'legacy'>('all'),[database,setDatabase]=useState(''),[limit,setLimit]=useState(200),[onError,setOnError]=useState<'stop'|'continue'>('stop');
  const[page,setPage]=useState<SavedQuerySearchPage>(),[hits,setHits]=useState<SavedQuerySearchHit[]>([]),[failures,setFailures]=useState<SavedQuerySearchPage['failures']>([]),[selected,setSelected]=useState<SavedQuerySearchHit>(),[openConnection,setOpenConnection]=useState(''),[busy,setBusy]=useState(false),[closing,setClosing]=useState(false),[error,setError]=useState('');
@@ -21,9 +21,9 @@ export function SavedQuerySearchDialog({onClose,onStructure,onOpen}:{onClose():v
  /** 取消等待实际回复，迟到的数据不会落入其它窗口或查询标签。 */
  async function cancel(){stopped.current=true;if(cancelWork.current)return cancelWork.current;if(!active.current)return;const operation=invoke('query.cancel',{taskId:active.current});cancelWork.current=operation;try{await operation;}finally{cancelWork.current=undefined;}}
  /** 先等当前任务和句柄收尾，再跳转或打开已经重新核验的本地查询。 */
- async function close(open?:'structure'|{result:SavedQueryOpenResult;match?:SavedQueryMatch}){if(closingRequested.current)return;closingRequested.current=true;setClosing(true);setError('');try{await cancel();await work.current;await opening.current?.catch(()=>undefined);await release();if(open==='structure')onStructure();else if(open)onOpen(open.result,open.match);else onClose();}catch(reason){closingRequested.current=false;setClosing(false);setError(errorMessage(reason));}}
+ async function close(open?:'structure'|{result:SavedQueryOpenResult;hit?:SavedQuerySearchHit}){if(closingRequested.current)return;closingRequested.current=true;setClosing(true);setError('');try{await cancel();await work.current;await opening.current?.catch(()=>undefined);await release();if(open==='structure')onStructure();else if(open)onOpen(open.result,open.hit);else onClose();}catch(reason){closingRequested.current=false;setClosing(false);setError(errorMessage(reason));}}
  /** 原文可能已修改或删除；读取失败保留原结果供用户重新搜索，绝不按旧预览打开新SQL。 */
- async function open(row=selected){if(busy||closing||!row)return;const target=row===selected?openConnection:state.connections.some(connection=>connection.id===row.query.connectionId)?row.query.connectionId!:'';if(!target){select(row);setError(t.chooseConnection);return;}setSelected(row);setOpenConnection(target);setBusy(true);setError('');const request=invoke('queries.read',{id:row.query.id,digest:row.digest,connectionId:target});opening.current=request;try{const result=await request;if(opening.current===request)opening.current=undefined;if(!closingRequested.current)await close({result,match:row.matches.find(match=>match.field==='sql')});}catch(reason){if(!closingRequested.current)setError(errorMessage(reason));}finally{if(opening.current===request)opening.current=undefined;setBusy(false);}}
+ async function open(row=selected){if(busy||closing||!row)return;const target=row===selected?openConnection:state.connections.some(connection=>connection.id===row.query.connectionId)?row.query.connectionId!:'';if(!target){select(row);setError(t.chooseConnection);return;}setSelected(row);setOpenConnection(target);setBusy(true);setError('');const request=invoke('queries.read',{id:row.query.id,digest:row.digest,connectionId:target});opening.current=request;try{const result=await request;if(opening.current===request)opening.current=undefined;if(!closingRequested.current)await close({result,hit:row});}catch(reason){if(!closingRequested.current)setError(errorMessage(reason));}finally{if(opening.current===request)opening.current=undefined;setBusy(false);}}
  /** 来源失效不会自动选择当前或首个连接，必须由用户明确选择。 */
  function select(row:SavedQuerySearchHit){setSelected(row);setOpenConnection(state.connections.some(connection=>connection.id===row.query.connectionId)?row.query.connectionId!:'');}
  const databaseLabel=(row:SavedQuerySearchHit)=>row.query.databaseContext?.state==='known'?row.query.databaseContext.database??t.knownNone:row.query.databaseContext?.state==='unknown'?t.unknown:t.legacy+(row.query.database?'：'+row.query.database:'');
