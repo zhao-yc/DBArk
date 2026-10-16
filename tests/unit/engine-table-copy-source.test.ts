@@ -9,7 +9,7 @@ vi.mock('../../src/engine/connection', () => ({ connect: mocks.connect, execute:
 vi.mock('../../src/engine/metadata', () => ({ tableInfo: mocks.tableInfo }));
 import { Engine } from '../../src/engine';
 import { TableCopySources } from '../../src/engine/tableCopySources';
-import { tableCopySourceReadSchema } from '../../src/shared/tableCopySource';
+import { tableCopySourceReadSchema, tableCopyMetadataKey } from '../../src/shared/tableCopySource';
 
 const profile: ConnectionProfile = { id: 'conn', name: '测试', group: '', color: '', dialect: 'mysql', host: 'unconnected.invalid', port: 3306, user: 'test' };
 const info: TableInfo = { database: 'db', name: 'records', objectKind: 'table', engine: 'InnoDB', ddl: '', columns: [{ name: 'id', type: 'int', extra: '', nullable: false, generated: false, defaultValue: null, comment: '' }], primaryKey: ['id'], editableKey: ['id'], indexes: [], foreignKeys: [] };
@@ -34,7 +34,7 @@ describe('引擎表复制源与原普通表页隔离', () => {
   });
   it('opt-in无缺列继续原值，独立任务安静且等严格关闭，未创建历史事件', async () => {
     const read = vi.spyOn(engine as unknown as { readPage(...args: unknown[]): Promise<TablePage> }, 'readPage').mockResolvedValue(page);
-    expect(await engine.handle('table.page', { ...input(), profile, copySource: true, taskId: randomUUID() })).toBe(page);
+    expect(await engine.handle('table.page', { ...input(), profile, copySource: true, taskId: randomUUID() })).toEqual({ ...page, copyMetadataKey: tableCopyMetadataKey(info) });
     expect(read.mock.calls[0].slice(1)).toEqual(['SELECT * FROM `db`.`records` ORDER BY `id` ASC LIMIT 51 OFFSET 0', 1, 50, false, true]); expect(events).toHaveLength(0);
     const target = await mocks.connect.mock.results[0].value as ManagedConnection; expect(target.close).toHaveBeenCalledWith({ strict: true });
   });

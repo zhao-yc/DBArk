@@ -79,14 +79,16 @@ export class TableCopySources {
     const epoch = this.epochs.get(input.connectionId) ?? 0, info = await this.ports.info(context, input.database, input.table);
     const statement = (metadata: TableInfo) => { const built = buildPageSql(metadata, input.page, input.pageSize, input.filters, input.sort, input.filterMode); return inlineParameters(built.sql, built.params); };
     const read = async (metadata: TableInfo, sql = statement(metadata)) => { context.checkCancelled(); const terminal = context.commandStarted(); try { const page = await readPage(context.managed, sql, input.page, input.pageSize, metadata.columns.some(column => /^(?:FLOAT|DOUBLE|REAL)\b/i.test(column.type))); context.checkCancelled(); return page; } finally { terminal(); } };
-    if (!info.columns.some(column => ordinary(column) && /\bINVISIBLE\b/i.test(column.extra))) return read(info);
     let issued: PageLease | undefined; let transaction = false, fallback: TableCopyUnavailable | undefined;
     try {
       await this.ports.query(context, 'SET TRANSACTION ISOLATION LEVEL REPEATABLE READ');
       await this.ports.query(context, 'START TRANSACTION READ ONLY'); transaction = true;
       // 先建立真实表MDL，之后目录、物理身份、页面SELECT和签发全在同一只读事务持锁期间。
       await this.ports.query(context, 'SELECT 1 FROM ' + qualified(info.database, info.name) + ' LIMIT 0');
-      const fresh = await this.ports.info(context, info.database, info.name), prepared = await this.ports.identity(context, fresh);
+      const fresh = await this.ports.info(context, info.database, info.name), metadataKey = tableCopyMetadataKey(fresh);
+      // 即使初始目录没有INVISIBLE，也须在同一MDL内复核并读页，不能给本地快捷路径旧结构背书。
+      if (!fresh.columns.some(column => ordinary(column) && /\bINVISIBLE\b/i.test(column.extra))) return { ...await read(fresh), copyMetadataKey: metadataKey };
+      const prepared = await this.ports.identity(context, fresh);
       const timeZone = (await this.ports.query<{ timeZone: string }[]>(context, 'SELECT @@SESSION.time_zone AS timeZone')).rows[0]?.timeZone;
       const pageSql = statement(fresh), aliases = new Map<string, string>(), names = new Set(fresh.columns.map(column => column.name));
       for (const key of fresh.editableKey) { const column = fresh.columns.find(column => column.name === key); if (!column || !/^TIMESTAMP\b/i.test(column.type) || /\bINVISIBLE\b/i.test(column.extra)) continue; let alias = '__dbark_copy_epoch_' + aliases.size; while (names.has(alias)) alias += '_'; names.add(alias); aliases.set(key, alias); }
@@ -98,14 +100,14 @@ export class TableCopySources {
       }
       const epochs = raw.rows.map(row => Object.fromEntries([...aliases].flatMap(([key, alias]) => { const value = own(row, alias); return value !== undefined && value !== null ? [[key, String(value)]] : []; })));
       const hidden = new Set(aliases.values());
-      const page: TablePage = aliases.size ? { ...raw, columns: raw.columns.filter(column => !hidden.has(column.key)), rows: raw.rows.map(row => Object.fromEntries(Object.entries(row).filter(([key]) => !hidden.has(key)))) } : raw;
+      const page: TablePage = { ...raw, copyMetadataKey: metadataKey, ...(aliases.size ? { columns: raw.columns.filter(column => !hidden.has(column.key)), rows: raw.rows.map(row => Object.fromEntries(Object.entries(row).filter(([key]) => !hidden.has(key)))) } : {}) };
       const loaded = page.columns.map(column => column.key), missing = fresh.columns.filter(column => ordinary(column) && (!loaded.includes(column.name) || page.rows.some(row => !Object.hasOwn(row, column.name)))).map(column => column.name);
       if (!missing.length) return page;
       const unavailable = (reason: TableCopyUnavailable): TablePage => ({ ...page, copySource: { status: 'unavailable', reason, missingColumns: missing } });
       if ('reason' in prepared) return unavailable(prepared.reason);
       if (fresh.objectKind !== 'table' || fresh.engine.toUpperCase() !== 'INNODB') return unavailable('unsupported');
       if (!fresh.editableKey.length || loaded.some(key => !fresh.columns.some(column => column.name === key))) return unavailable('no-key');
-      this.prune(); const metadataKey = tableCopyMetadataKey(fresh), rowRefs: (string | null)[] = [], rows = new Map<string, RowLease>();
+      this.prune(); const rowRefs: (string | null)[] = [], rows = new Map<string, RowLease>();
       if (this.closed || epoch !== (this.epochs.get(input.connectionId) ?? 0)) return unavailable('expired');
       if (typeof timeZone !== 'string' || timeZone.length > 128 || fresh.columns.length > limits.columns || Buffer.byteLength(fresh.ddl) > limits.definitionBytes || [...this.pages.values()].filter(value => value.connectionId === input.connectionId).length >= limits.pagesPerConnection) return unavailable('budget');
       page.rows.forEach((row, index) => {
@@ -130,7 +132,7 @@ export class TableCopySources {
     finally { if (transaction) { try { await this.ports.query(context, 'ROLLBACK'); context.checkCancelled(); if (issued) this.current(issued, context); } catch (error) { if (issued) this.remove(issued); throw error; } } }
     // 证明失败只能降级查看；事务结束后不再为同名对象追签任何来源。
     const page = await read(info);
-    return { ...page, copySource: { status: 'unavailable', reason: fallback!, missingColumns: info.columns.filter(column => ordinary(column) && !page.columns.some(item => item.key === column.name)).map(column => column.name) } };
+    return { ...page, copyMetadataKey: undefined, copySource: { status: 'unavailable', reason: fallback!, missingColumns: info.columns.filter(column => ordinary(column) && !page.columns.some(item => item.key === column.name)).map(column => column.name) } };
   }
 
   /** 按租约原始可靠键读取完整行；预检长度后再取值，不能把截断内容当作可写草稿。 */

@@ -14,5 +14,5 @@ export interface TableCopySourceReadResult { target: { connectionId: string; dat
 
 /** 只比较写入边界和可见目录，不包含变化中的表级自增计数；物理身份另由引擎租约证明。 */
 export function tableCopyMetadataKey(info: TableInfo): string {
-  return JSON.stringify([info.database, info.name, info.objectKind, info.engine, info.editableKey, info.primaryKey, info.indexes, info.foreignKeys, info.columns.map(column => [column.name, column.type, column.nullable, column.generated, column.extra, column.defaultValue])]);
+  return JSON.stringify([info.database, info.name, info.objectKind, info.engine, info.charset, info.collation, info.comment, info.editableKey, info.primaryKey, info.indexes, info.foreignKeys, info.columns.map(column => [column.name, column.type, column.nullable, column.generated, column.extra, column.defaultValue, column.characterSet, column.comment])]);
 }
