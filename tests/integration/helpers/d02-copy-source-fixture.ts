@@ -14,6 +14,7 @@ import { cleanupD02Copy, d02CopyNames, d02Fact, d02Failure, d02OwnsTables, D02Fi
 
 type Row = Record<string, unknown>;
 type Parameter = string | number | boolean | null | Buffer;
+export interface D02CopyRequirements { mdl?: boolean }
 export interface D02CopyCase {
   database: string; table: string; profile: ConnectionProfile; events: TaskEvent[];
   dispatch<K extends Command>(command: K, input: CommandMap[K]['input']): Promise<CommandMap[K]['output']>;
@@ -28,7 +29,7 @@ export interface D02CopyCase {
 }
 
 /** 只在双门开启、目标配置通过后动态导入本模块；真实mysql2只被旁路记录，不替换SQL或返回。 */
-export async function withD02CopyCase(config: D02CopyConfig, action: (context: D02CopyCase) => Promise<void>, limited = false): Promise<void> {
+export async function withD02CopyCase(config: D02CopyConfig, action: (context: D02CopyCase) => Promise<void>, limited = false, requirements: D02CopyRequirements = {}): Promise<void> {
   const suffix = randomUUID().replaceAll('-', '').slice(0, 12), owner = randomUUID().replaceAll('-', ''), names = d02CopyNames(suffix, limited);
   const { database, user, account } = names, table = qualified(database, 'subject'), password = 'D02!' + randomBytes(24).toString('hex');
   const events: TaskEvent[] = [], engine = new Engine(event => events.push(event));
@@ -132,7 +133,7 @@ export async function withD02CopyCase(config: D02CopyConfig, action: (context: D
     const fact = (await sql('SELECT @@server_uuid AS uuid,VERSION() AS version,@@lower_case_table_names AS names,@@version_compile_os AS os,@@mandatory_roles AS roles'))[0];
     d02Fact(String(fact?.uuid).toLowerCase() === config.serverUuid && /^8\.4\./.test(String(fact?.version)) && Number(fact?.names) === 0 && ['linux', 'debian-linux-gnu'].includes(String(fact?.os).toLowerCase()) && fact?.roles === '', 'D02实例UUID或已批准的MySQL8.4/Linux条件不符，未创建对象');
     const process = await sql("SELECT Process_priv AS allowed FROM mysql.user WHERE CONCAT(User,'@',Host)=CURRENT_USER()"); d02Fact(process.length === 1 && process[0].allowed === 'Y', 'D02既有观察账号缺少直接PROCESS权限；不自动扩权');
-    const instrument = await sql("SELECT ENABLED AS enabled FROM performance_schema.setup_instruments WHERE NAME='wait/lock/metadata/sql/mdl'"); d02Fact(instrument.length === 1 && instrument[0].enabled === 'YES', 'D02服务器未提供真实MDL观察条件；不自动修改全局设置');
+    if (requirements.mdl) { const instrument = await sql("SELECT ENABLED AS enabled FROM performance_schema.setup_instruments WHERE NAME='wait/lock/metadata/sql/mdl'"); d02Fact(instrument.length === 1 && instrument[0].enabled === 'YES', 'D02服务器未提供真实MDL观察条件；不自动修改全局设置'); }
     d02Fact((await sql('SELECT ID FROM information_schema.PROCESSLIST WHERE ID=?', [observer.connection.threadId!])).length === 1, 'D02观察连接不能看见自身线程，拒绝零线程假证据');
     d02Fact((await sql('SELECT SCHEMA_NAME FROM information_schema.SCHEMATA WHERE SCHEMA_NAME=?', [database])).length === 0, 'D02随机库已存在，拒绝接管');
     if (limited) d02Fact((await sql('SELECT User FROM mysql.user WHERE User=?', [user])).length === 0, 'D02随机账号已存在，拒绝接管');

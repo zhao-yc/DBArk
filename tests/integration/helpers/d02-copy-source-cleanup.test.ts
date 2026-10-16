@@ -6,11 +6,11 @@ import { isDeepStrictEqual } from 'node:util';
 import ts from 'typescript';
 import { describe, expect, it } from 'vitest';
 
-type Mode = 'normal' | 'create-unknown' | 'grant-write-unknown' | 'grant-extra' | 'grant-read-once' | 'grant-read-at-drop' | 'owner-read-at-drop' | 'table-read-at-drop' | 'role-read-at-drop' | 'schema-read-at-drop' | 'action-recovered' | 'close-failed' | 'user-post-drop-read' | 'database-post-drop-read';
+type Mode = 'normal' | 'create-unknown' | 'grant-write-unknown' | 'grant-extra' | 'grant-read-once' | 'grant-read-at-drop' | 'owner-read-at-drop' | 'table-read-at-drop' | 'role-read-at-drop' | 'schema-read-at-drop' | 'action-recovered' | 'close-failed' | 'user-post-drop-read' | 'database-post-drop-read' | 'no-mdl-plain' | 'no-mdl-required' | 'mdl-enabled';
 /** 转译并执行正式完整withD02CopyCase及原D02/C02策略；只替换IO端口，不重写清理状态机。 */
 async function scenario(mode: Mode) {
   const trace: string[] = [], modules = new Map<string, { exports: Record<string, unknown> }>();
-  let database = '', owner = '', random = 0, grantsCalls = 0, closing = false, injected = false, actionActive = false, userRemoved = false, databaseRemoved = false;
+  let database = '', owner = '', random = 0, grantsCalls = 0, closing = false, injected = false, actionActive = false, userRemoved = false, databaseRemoved = false, instrumentQueries = 0;
   const uuid = '00000000-0000-0000-0000-000000000001';
   const forbidden = () => { throw new Error('纯测试禁止真实外部IO'); };
   const mysql = { createConnection() { const driver = new EventEmitter(); Object.assign(driver, { threadId: 1, destroy: () => undefined }); return driver; } }, factory = mysql.createConnection;
@@ -19,12 +19,13 @@ async function scenario(mode: Mode) {
   const execute = async (_managed: unknown, text: string) => {
     let rows: Record<string, unknown>[] = [];
     if (text.startsWith('CREATE DATABASE')) { database = /`([^`]+)`/.exec(text)![1]; trace.push('CREATE DATABASE'); if (mode === 'create-unknown') fail('CREATE响应未知'); }
+    else if (text.startsWith('CREATE USER')) trace.push('CREATE USER');
     else if (text.startsWith('GRANT SELECT') && mode === 'grant-write-unknown') fail('GRANT响应未知');
     else if (text.startsWith('DROP USER')) { trace.push('DROP USER'); userRemoved = true; }
     else if (text.startsWith('DROP DATABASE')) { trace.push('DROP DATABASE'); databaseRemoved = true; }
     else if (text.includes('@@server_uuid')) rows = [{ uuid, version: '8.4.5', names: 0, os: 'Linux', roles: '' }];
     else if (text.includes('Process_priv')) rows = [{ allowed: 'Y' }];
-    else if (text.includes('setup_instruments')) rows = [{ enabled: 'YES' }];
+    else if (text.includes('setup_instruments')) { instrumentQueries++; rows = mode.startsWith('no-mdl') ? [] : [{ enabled: 'YES' }]; }
     else if (text.includes('PROCESSLIST WHERE ID=?')) rows = [{ ID: 1 }];
     else if (text.includes('TABLE_PRIVILEGES')) {
       grantsCalls++;
@@ -55,11 +56,11 @@ async function scenario(mode: Mode) {
     runInContext(js, context, { filename: file + '.ts' }); return module.exports;
   }
   let failure: unknown;
-  const run = load('d02-copy-source-fixture').withD02CopyCase as (config: unknown, action: (context: { assertGrants(): Promise<void>; write(text: string): Promise<void>; sql(text: string): Promise<unknown> }) => Promise<void>, limited: boolean) => Promise<void>;
-  try { await run({ host: '192.168.31.200', port: 13384, serverUuid: uuid, user: '合成观察账号', password: '合成口令', tls: false }, async context => { if (mode === 'action-recovered') { actionActive = true; try { await context.assertGrants(); } catch { trace.push('调用方捕获验证失败'); } await context.assertGrants(); trace.push('后续验证成功'); try { await context.write('DROP DATABASE `不应发送`'); } catch { trace.push('后续写入被禁止'); } try { await context.sql('DROP DATABASE `同样不应发送`'); } catch { trace.push('观察端口DROP也被禁止'); } } }, true); }
+  const run = load('d02-copy-source-fixture').withD02CopyCase as (config: unknown, action: (context: { assertGrants(): Promise<void>; write(text: string): Promise<void>; sql(text: string): Promise<unknown> }) => Promise<void>, limited: boolean, requirements?: { mdl?: boolean }) => Promise<void>;
+  try { await run({ host: '192.168.31.200', port: 13384, serverUuid: uuid, user: '合成观察账号', password: '合成口令', tls: false }, async context => { trace.push('执行用例'); if (mode === 'action-recovered') { actionActive = true; try { await context.assertGrants(); } catch { trace.push('调用方捕获验证失败'); } await context.assertGrants(); trace.push('后续验证成功'); try { await context.write('DROP DATABASE `不应发送`'); } catch { trace.push('后续写入被禁止'); } try { await context.sql('DROP DATABASE `同样不应发送`'); } catch { trace.push('观察端口DROP也被禁止'); } } }, true, { mdl: mode === 'no-mdl-required' || mode === 'mdl-enabled' }); }
   catch (error) { failure = error; }
   expect(mysql.createConnection).toBe(factory);
-  return { trace, failure, grantsCalls, drops: trace.filter(item => item.startsWith('DROP ')) };
+  return { trace, failure, grantsCalls, instrumentQueries, drops: trace.filter(item => item.startsWith('DROP ')) };
 }
 
 describe('D02正式完整夹具的永久清理失效门（仅合成IO）', () => {
@@ -69,4 +70,7 @@ describe('D02正式完整夹具的永久清理失效门（仅合成IO）', () =>
   it('未知CREATE保留unknown而非伪装absent；权限读取失败保留真实confirmed', async () => { const unknown = await scenario('create-unknown'), confirmed = await scenario('grant-read-once'); expect((unknown.failure as Error).message).toContain('用户absent、库unknown'); expect((confirmed.failure as Error).message).toContain('用户confirmed、库confirmed'); });
   it('用户DROP后确认读取失败不能继续DROP库，既有删除不伪装成未发生', async () => { const result = await scenario('user-post-drop-read'); expect(result.failure).toBeTruthy(); expect(result.drops).toEqual(['DROP USER']); expect((result.failure as Error).message).toContain('用户confirmed、库confirmed'); expect((result.failure as Error).message).toContain('DROP成功响应：用户true、库false'); });
   it('库DROP后的确认失败保留错误而不重放删除', async () => { const result = await scenario('database-post-drop-read'); expect(result.failure).toBeTruthy(); expect(result.drops).toEqual(['DROP USER', 'DROP DATABASE']); expect(result.trace).toContain('删库后确认一次抛错'); });
+  it('普通场景无MDL仪表仍执行及正常清理，不查询不相关的仪表', async () => { const result = await scenario('no-mdl-plain'); expect(result.failure).toBeUndefined(); expect(result.instrumentQueries).toBe(0); expect(result.trace).toContain('执行用例'); expect(result.drops).toEqual(['DROP USER', 'DROP DATABASE']); });
+  it('显式MDL场景缺少仪表时在所有CREATE前拒绝并显示固定分类', async () => { const result = await scenario('no-mdl-required'); expect(result.instrumentQueries).toBe(1); expect(result.trace.some(item => item.startsWith('CREATE'))).toBe(false); expect(result.trace).not.toContain('执行用例'); expect(result.drops).toEqual([]); expect((result.failure as Error).message).toContain('D02_PREFLIGHT_MDL'); expect((result.failure as Error).message).toContain('服务器未提供真实MDL观察条件'); expect((result.failure as Error).message).toContain('用户absent、库absent'); });
+  it('显式MDL场景必须实际收到仪表YES才允许进入用例', async () => { const result = await scenario('mdl-enabled'); expect(result.failure).toBeUndefined(); expect(result.instrumentQueries).toBe(1); expect(result.trace).toContain('执行用例'); expect(result.drops).toEqual(['DROP USER', 'DROP DATABASE']); });
 });
