@@ -1,5 +1,9 @@
 # Navicat 全功能覆盖目标
 
+当前公开开发预览为[0.20](https://github.com/zhao-yc/DBArk/releases/tag/v0.20.0)。后续高频分支的ON UPDATE六身份在六实例共36次实际通过，新建库专用一项通过；历史时间范围固定390d的49项相关回归、类型和构建，以及正式Windows界面一项通过。各自证据见[自动时间](../tests/integration/acceptance-on-update-ui-20261017.md)、[新建库](../tests/integration/acceptance-database-create-ui-20261017.md)和[历史筛选](../tests/integration/acceptance-history-time-ui-20261017.md)。这些是未进入0.20标签的开发Electron能力，不代替新安装或macOS实库。
+
+CSV字段选择与顺序已在本分支源码整合；已复现的文件sync期间取消窗口正在补齐三种表导出格式，正式CSV界面及完整整合回归继续。公开0.20已经明确记录该已知问题，没有把后续修复算作该版已修。下方旧检查点保持其原始来源与统计。
+
 后续产品7e59已整合专用单表删除、新建库编码及相关接线，5468项完整单元、类型和构建通过；Windows正式App格式化四项实际单次通过，见[对象与格式化检查点](../tests/integration/acceptance-frequency-objects-format-20261017.md)。这不接纳数据库写入、安装或其它平台，实库用例的归属追加继续；下面源码5335和旧候选均保留历史来源。
 
 本分支后续高频源码已固定f9dfa3c：ON UPDATE、选区/全文与快捷格式化、单表清空、正文桥接及严格退出验收整合后，5335项完整单元、类型和构建通过，见[源码整合实证](../tests/integration/acceptance-frequency-source-20261017.md)。内部版本未改，原生/实库/安装未由本次源码结果接纳；下文旧候选保留其历史来源，当前公开版仍0.19。
