@@ -6,8 +6,8 @@ import { cellText } from './lib';
 export const cellClipboardType = 'application/x-dbark-cells';
 /** undefined 仅表示新增行尚未填写的 DEFAULT，不能编码成实际 NULL。 */
 export type ClipboardCell = CellValue | undefined;
-const maxClipboardCharacters = 10_000_000;
-const maxClipboardCells = 50_000;
+export const maxClipboardCharacters = 10_000_000;
+export const maxClipboardCells = 50_000;
 
 /** 兼容电子表格的制表符格式，保留被引号包裹的换行、制表符和双引号。 */
 export function parseTabularText(text: string): string[][] {
