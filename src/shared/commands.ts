@@ -32,6 +32,7 @@ export const publicCommands: Record<Command, true> = {
   'schema.columns.get': true, 'schema.columns.preview': true, 'schema.columns.apply': true, 'schema.columns.release': true,
   'schema.indexes.get': true, 'schema.indexes.preview': true, 'schema.indexes.apply': true, 'schema.indexes.release': true,
   'schema.foreignKeys.get': true, 'schema.foreignKeys.preview': true, 'schema.foreignKeys.apply': true, 'schema.foreignKeys.release': true,
+  'files.exportColumns': true, 'files.releaseExportColumns': true,
   'files.choose': true, 'files.path': true, 'files.preview': true, 'files.import': true, 'files.export': true, 'files.exportResult': true,
   'files.readQuery': true, 'files.writeQuery': true,
   'excel.sheets': true, 'excel.preview': true, 'excel.import': true, 'excel.export': true,
