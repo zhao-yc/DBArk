@@ -6,7 +6,7 @@ import { recordDuplicateZh as text } from './locales/recordDuplicate.zh-CN';
 import { recordReadonlyReason, type RecordContext } from './recordViews';
 
 /** 沿用表页原可编辑范围，不把查询结果、视图、无键表或过期页提升为可写对象。 */
-export function recordDuplicateReadonlyReason(context: RecordContext, row?: DraftRow): string {
+export function recordDuplicateTargetReason(context: RecordContext, row?: DraftRow): string {
   const reason = recordReadonlyReason(context, row);
   if (reason) return reason;
   if (context.info!.database !== context.target.database || context.info!.name !== context.target.table) return text.changed;
@@ -14,10 +14,16 @@ export function recordDuplicateReadonlyReason(context: RecordContext, row?: Draf
   if (context.info!.editableKey.some(key => !context.info!.columns.some(column => column.name === key) || ownCell(row.original!, key) === undefined || ownCell(row.original!, key) === null)) return text.incompleteKey;
   const names = new Set(context.info!.columns.map(column => column.name));
   if ([...Object.keys(row.original), ...Object.keys(row.data)].some(key => !names.has(key))) return text.changed;
+  return '';
+}
+
+/** 旧本地复制仍要求两侧完整拥有普通值；后续补取不能绕过这个最终安全门。 */
+export function recordDuplicateReadonlyReason(context: RecordContext, row?: DraftRow): string {
+  const reason = recordDuplicateTargetReason(context, row); if (reason) return reason;
   // 原始快照与当前草稿均须完整拥有普通字段；SELECT *遗漏的INVISIBLE不是用户选择DEFAULT。
   const missing = context.info!.columns.find(column => !column.generated && !/\bauto_increment\b/i.test(column.extra) && (
-    !Object.hasOwn(row.original!, column.name) || !Object.hasOwn(row.data, column.name)
-    || ownCell(row.original!, column.name) === undefined || ownCell(row.data, column.name) === undefined
+    !Object.hasOwn(row!.original!, column.name) || !Object.hasOwn(row!.data, column.name)
+    || ownCell(row!.original!, column.name) === undefined || ownCell(row!.data, column.name) === undefined
   ));
   if (missing) return formatText(text.incompleteValues, missing.name);
   return '';

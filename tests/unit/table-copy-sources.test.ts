@@ -1,0 +1,92 @@
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { randomUUID } from 'node:crypto';
+import { TableCopySources } from '../../src/engine/tableCopySources';
+import { serializeCell } from '../../src/engine/sql';
+import type { CommandMap, DataRow, TableInfo, TablePage } from '../../src/shared/contracts';
+import { tableCopySourceLimits as limits } from '../../src/shared/tableCopySource';
+import { validateCommand } from '../../src/shared/validation';
+import { publicCommands } from '../../src/shared/commands';
+
+const registries: TableCopySources[] = [];
+afterEach(() => { registries.splice(0).forEach(cache => cache.close()); vi.useRealTimers(); });
+/** 所有SQL只进入受控端口；校验实际模块的持锁次序、精确参数和回包，不接数据库。 */
+function fixture() {
+  const info: TableInfo = { database: 'db', name: 'records', objectKind: 'table', engine: 'InnoDB', ddl: 'CREATE TABLE records (id BIGINT PRIMARY KEY,note TEXT,hidden TEXT INVISIBLE)', primaryKey: ['id'], editableKey: ['id'], indexes: [{ name: 'PRIMARY', unique: true, columns: ['id'] }], foreignKeys: [], columns: [['id', 'bigint', 'auto_increment'], ['note', 'text', ''], ['hidden', 'text', 'INVISIBLE']].map(([name, type, extra]) => ({ name, type, extra, nullable: false, generated: false, defaultValue: null, comment: '' })) };
+  const state = { now: Date.now(), info, identity: { server: 'server', tableId: '17', definition: 'definition' }, preparedReason: '' as string, locked: false, cancelled: false, raw: { id: '9007199254740993', note: '原记录', hidden: '非默认值' } as Record<string, unknown>, visible: undefined as DataRow | undefined, count: 1, rows: 1, size: undefined as string | undefined, fail: '' as string, failure: { errno: 1142 }, onRollback: undefined as (() => void) | undefined, block: undefined as (() => Promise<void>) | undefined };
+  const log: string[] = [], params: unknown[][] = [];
+  const context = { managed: {} as never, checkCancelled: () => { if (state.cancelled) throw new Error('受控取消'); }, commandStarted: vi.fn(() => vi.fn()) };
+  const readInfo = vi.fn(async () => { if (readInfo.mock.calls.length > 1) expect(state.locked).toBe(true); return structuredClone(state.info); });
+  const identity = vi.fn(async () => { expect(state.locked).toBe(true); return state.preparedReason ? { reason: state.preparedReason } : { identity: structuredClone(state.identity) }; });
+  const query = vi.fn(async (_context, sql: string, values: unknown[] = []) => {
+    context.checkCancelled(); log.push(sql); params.push(values);
+    if (state.fail && sql.startsWith(state.fail)) throw state.failure;
+    if (sql.startsWith('SELECT 1 FROM')) state.locked = true;
+    if (sql === 'ROLLBACK') { state.locked = false; state.onRollback?.(); }
+    if (sql.startsWith('SELECT @@SESSION.time_zone')) return { rows: [{ timeZone: '+08:00' }] };
+    if (sql.startsWith('SELECT OCTET_LENGTH')) { expect(state.locked).toBe(true); await state.block?.(); return { rows: Array.from({ length: state.count }, () => Object.fromEntries(state.info.columns.map((column, index) => ['n' + index, state.size ?? (state.raw[column.name] === null ? null : Buffer.isBuffer(state.raw[column.name]) ? (state.raw[column.name] as Buffer).length : Buffer.byteLength(String(state.raw[column.name])))]))) }; }
+    if (sql.startsWith('SELECT `')) { expect(state.locked).toBe(true); return { rows: Array.from({ length: state.count }, () => Object.fromEntries(state.info.columns.map((column, index) => ['c' + index, state.raw[column.name]]))) }; }
+    return { rows: [] };
+  });
+  const readPage = vi.fn(async (_managed, sql: string, page: number, pageSize: number) => {
+    log.push('PAGE:' + sql);
+    const visible = state.visible ?? Object.fromEntries(state.info.columns.filter(column => !/INVISIBLE/i.test(column.extra)).map(column => [column.name, serializeCell(state.raw[column.name])]));
+    const epochs = [...sql.matchAll(/UNIX_TIMESTAMP\(`([^`]+)`\) AS `([^`]+)`/g)].map(match => [match[2], '1792067696.123456']);
+    const data = Object.fromEntries([...Object.entries(visible), ...epochs]);
+    return { page, pageSize, hasMore: false, columns: Object.keys(data).map(key => ({ key, name: key, type: 'text', nullable: false })), rows: Array.from({ length: state.rows }, () => structuredClone(data)) } as TablePage;
+  });
+  const cache = new TableCopySources({ now: () => state.now, info: readInfo, identity: identity as never, query: query as never }); registries.push(cache);
+  const input: CommandMap['table.page']['input'] = { connectionId: 'conn', taskId: randomUUID(), copySource: true, database: 'db', table: 'records', page: 1, pageSize: 50, filters: [], sort: [] };
+  async function issue(connectionId = 'conn') { const page = await cache.page(context, { ...input, connectionId }, readPage); expect(page.rows).toHaveLength(state.rows); return page; }
+  async function ready() { const page = await issue(); if (page.copySource?.status !== 'ready') throw new Error('测试必须得到租约'); return { page, source: page.copySource, request: { connectionId: 'conn', taskId: randomUUID(), pageRef: page.copySource.pageRef, rowRef: page.copySource.rowRefs[0]! } }; }
+  return { state, log, params, context, readInfo, identity, query, readPage, cache, input, issue, ready };
+}
+
+describe('完整复制源严格IPC', () => {
+  it('页opt-in与任务号耦合；旧普通页及referencePage不扩大', () => {
+    const f = fixture(), { taskId, copySource, ...ordinary } = f.input;
+    expect(validateCommand('table.page', ordinary)).toEqual(ordinary); expect(validateCommand('table.page', f.input)).toEqual(f.input);
+    for (const patch of [{ taskId }, { copySource: true }, { taskId, copySource: false }, { copySource: true, taskId: 'not-uuid' }, { sql: 'SELECT 1' }]) expect(() => validateCommand('table.page', { ...ordinary, ...patch })).toThrow();
+  });
+  it.each(['table.copySourceRead', 'table.copySourceRelease'] as const)('%s只接归属及引擎引用，拒绝SQL/键/身份注入', command => {
+    const input = { connectionId: 'conn', pageRef: randomUUID(), ...(command === 'table.copySourceRead' ? { taskId: randomUUID(), rowRef: randomUUID() } : {}) };
+    expect(publicCommands[command]).toBe(true); expect(validateCommand(command, input)).toEqual(input);
+    for (const patch of [{ sql: 'SELECT secret' }, { key: '1' }, { complete: true }, { identity: {} }, { pageRef: 'not-uuid' }, { connectionId: '' }]) expect(() => validateCommand(command, { ...input, ...patch })).toThrow();
+  });
+});
+
+describe('页租约签发与普通查看兼容', () => {
+  it('完整普通页不进事务或身份路径，不增加来源', async () => { const f = fixture(); f.state.info.columns.find(column => column.name === 'hidden')!.extra = ''; const page = await f.issue(); expect(page.copySource).toBeUndefined(); expect(f.query).not.toHaveBeenCalled(); expect(f.identity).not.toHaveBeenCalled(); });
+  it('同事务MDL内核目录、身份、读页并签发，rollback之后才交付', async () => {
+    const f = fixture(), { source } = await f.ready(); expect(source.missingColumns).toEqual(['hidden']); expect(source.rowRefs).toHaveLength(1); expect(source.expiresAt).toBe(f.state.now + limits.retentionMs);
+    expect(f.log).toEqual(['SET TRANSACTION ISOLATION LEVEL REPEATABLE READ', 'START TRANSACTION READ ONLY', 'SELECT 1 FROM `db`.`records` LIMIT 0', 'SELECT @@SESSION.time_zone AS timeZone', expect.stringMatching(/^PAGE:SELECT \*/), 'ROLLBACK']); expect(f.state.locked).toBe(false); expect(f.cache.stats()).toMatchObject({ pages: 1, references: 1, active: 0 });
+  });
+  it.each(['identity-permission', 'identity-unproven', 'budget'])('%s只使补取不可用，普通原值仍显示', async reason => { const f = fixture(); f.state.preparedReason = reason; expect((await f.issue()).copySource).toMatchObject({ status: 'unavailable', reason }); expect(f.cache.stats().pages).toBe(0); });
+  it.each(['SET TRANSACTION', 'START TRANSACTION', 'SELECT 1 FROM', 'SELECT @@SESSION'])('%s权限失败降级原查看，释锁后不追签', async statement => { const f = fixture(); f.state.fail = statement; const page = await f.issue(); expect(page.rows[0].note).toBe('原记录'); expect(page.copySource).toMatchObject({ status: 'unavailable', reason: 'identity-permission' }); expect(f.cache.stats().pages).toBe(0); expect(f.log.at(-1)).toMatch(/^PAGE:SELECT \*/); });
+  it('断线和取消不被降级为成功', async () => { const f = fixture(); f.state.fail = 'SELECT 1'; f.state.failure = { errno: 2013 }; await expect(f.issue()).rejects.toMatchObject({ errno: 2013 }); expect(f.readPage).not.toHaveBeenCalled(); });
+  it.each([1064, 1235])('服务器不支持新增事务语义%s只降级查看，不扩大可写资格', async errno => { const f = fixture(); f.state.fail = 'START TRANSACTION'; f.state.failure = { errno }; expect((await f.issue()).copySource).toMatchObject({ status: 'unavailable', reason: 'unsupported' }); expect(f.cache.stats().pages).toBe(0); });
+  it.each(['missing', 'null', 'large', 'no-key'])('原可靠键%s不按行号猜测', async condition => { const f = fixture(); if (condition === 'missing') f.state.info.columns[0].extra = 'INVISIBLE'; else if (condition === 'null') f.state.raw.id = null; else if (condition === 'large') f.state.raw.id = 'x'.repeat(limits.keyBytes + 1); else f.state.info.editableKey = []; expect((await f.issue()).copySource).toMatchObject({ status: 'unavailable', reason: 'no-key' }); });
+  it('不可见生成列无须补取；普通列已经加载也不签发', async () => { const f = fixture(); f.state.visible = { id: '9007199254740993', note: '原记录', hidden: '非默认值' }; expect((await f.issue()).copySource).toBeUndefined(); });
+  it('TIMESTAMP键的epoch与显示值分离，内部列不出现在页和指纹', async () => { const f = fixture(); f.state.info.columns[0].type = 'timestamp(6)'; f.state.raw.id = '2026-10-15 20:34:56.123456'; const { page, request } = await f.ready(); expect(Object.keys(page.rows[0])).toEqual(['id', 'note']); await f.cache.read(f.context, request); const select = f.query.mock.calls.find(([, sql]) => sql.startsWith('SELECT OCTET_LENGTH'))!; expect(select[1]).toContain('UNIX_TIMESTAMP(`id`)=CAST(? AS DECIMAL(20,6))'); expect(select[2]).toEqual(['1792067696.123456', '1792067696.123456', '1792067696.123456']); });
+  it('内部epoch因原页预算失败时退回普通查看，不签发有损键', async () => { const f = fixture(); f.state.info.columns[0].type = 'timestamp(6)'; f.readPage.mockRejectedValueOnce(new Error('当前页包含超过 256 KiB 的大字段行')); expect((await f.issue()).copySource).toMatchObject({ status: 'unavailable', reason: 'no-key' }); expect(f.cache.stats().pages).toBe(0); });
+  it('连接在签发事务收尾时被撤销，不交付迟到租约', async () => { const f = fixture(); f.state.onRollback = () => f.cache.releaseConnection('conn'); await expect(f.issue()).rejects.toMatchObject({ reason: 'expired' }); expect(f.cache.stats().pages).toBe(0); });
+});
+
+describe('完整源只读投影、精度、并发与预算', () => {
+  it('先查长度再全字段精确读取，LIMIT2、原始键和同快照，明确读取时点', async () => { const f = fixture(), { request } = await f.ready(), result = await f.cache.read(f.context, request); expect(result).toMatchObject({ complete: true, values: { id: '9007199254740993', note: '原记录', hidden: '非默认值' }, readAt: new Date(f.state.now).toISOString() }); const reads = f.log.filter(sql => sql.includes(' WHERE ')); expect(reads).toHaveLength(2); expect(reads[0]).toMatch(/^SELECT OCTET_LENGTH/); expect(reads[1]).toContain('`hidden` AS c2'); for (const sql of reads) { expect(sql).toContain('`id` <=> ?'); expect(sql).toMatch(/LIMIT 2$/); expect(sql).not.toMatch(/LEFT\(|9007199254740993/); } expect(f.params.filter(values => values.length)).toEqual([['+08:00'], ['9007199254740993'], ['9007199254740993']]); });
+  it.each([null, '', 'NULL', '900719925474099312345', '12345678901234567890.120000', '2026-10-16 01:02:03.123456', false, 1.0000001192092896, Buffer.from([0, 255, 0])])('缺列完整值%j不截断、不转换为DEFAULT', async value => { const f = fixture(); f.state.raw.hidden = value; const { request } = await f.ready(); expect((await f.cache.read(f.context, request)).values.hidden).toEqual(serializeCell(value)); });
+  it.each(['__proto__', 'constructor', 'toString'])('特殊列%s自有且不污染原型', async name => { const f = fixture(); f.state.info.columns[2].name = name; f.state.raw = Object.fromEntries([['id', f.state.raw.id], ['note', '原记录'], [name, '特殊值']]); const { request } = await f.ready(), result = await f.cache.read(f.context, request); expect(Object.hasOwn(result.values, name)).toBe(true); expect(result.values[name]).toBe('特殊值'); expect(Object.getPrototypeOf(result.values)).toBe(Object.prototype); });
+  it.each(['server', 'tableId', 'definition', 'metadata', 'loaded', 'minus-zero'])('%s变化拒绝拼接旧值与新缺列值', async condition => { const f = fixture(); if (condition === 'minus-zero') f.state.raw.note = -0; const { request } = await f.ready(); if (condition === 'metadata') f.state.info.columns[2].type = 'blob'; else if (condition === 'loaded') f.state.raw.note = '并发更新'; else if (condition === 'minus-zero') f.state.raw.note = 0; else f.state.identity[condition as keyof typeof f.state.identity] += 'changed'; await expect(f.cache.read(f.context, request)).rejects.toMatchObject({ reason: 'changed' }); });
+  it.each([0, 2])('定位匹配%s行拒绝，无OFFSET回退或重试', async count => { const f = fixture(), { request } = await f.ready(); f.state.count = count; await expect(f.cache.read(f.context, request)).rejects.toMatchObject({ reason: 'changed' }); expect(f.log.filter(sql => /^SELECT `/.test(sql))).toHaveLength(0); });
+  it.each(['missing', 'date', 'object', 'infinity', 'nan'])('缺列返回%s不冒充完整值', async kind => { const f = fixture(), { request } = await f.ready(); f.state.raw.hidden = kind === 'date' ? new Date() : kind === 'object' ? { n: 1 } : kind === 'infinity' ? Infinity : kind === 'nan' ? NaN : undefined; await expect(f.cache.read(f.context, request)).rejects.toThrow(); });
+  it('原始行超过256KiB在完整值读取之前拒绝', async () => { const f = fixture(), { request } = await f.ready(); f.state.size = String(limits.rowBytes); await expect(f.cache.read(f.context, request)).rejects.toMatchObject({ reason: 'budget' }); expect(f.log.filter(sql => /^SELECT `/.test(sql))).toHaveLength(0); });
+  it.each(['bigint', 'decimal(30,6)', 'bit(64)', 'varbinary(8)', 'float'])('可靠键%s使用原解码参数和类型化绑定', async type => { const f = fixture(); f.state.info.columns[0].type = type; f.state.raw.id = type.startsWith('bit') || type.startsWith('varbinary') ? Buffer.from([0, 255]) : type === 'float' ? 1.0000001192092896 : type.startsWith('decimal') ? '12345678901234567890.120000' : '9007199254740993'; const { request } = await f.ready(); await f.cache.read(f.context, request); const call = f.query.mock.calls.find(([, sql]) => sql.startsWith('SELECT OCTET_LENGTH'))!; expect(call[1]).toContain(type.startsWith('bit') ? 'CAST(CONV(HEX(?),16,10) AS UNSIGNED)' : '`id` <=> ?'); expect(call[2]).toEqual([f.state.raw.id]); });
+  it.each(['SELECT OCTET_LENGTH', 'SELECT `'])('%s权限不足不返回部分完整值，仍在只读事务收尾', async statement => { const f = fixture(), { request } = await f.ready(); f.state.fail = statement; await expect(f.cache.read(f.context, request)).rejects.toMatchObject({ reason: 'identity-permission' }); expect(f.log.at(-1)).toBe('ROLLBACK'); expect(f.cache.stats().active).toBe(0); });
+  it('超过1024列时保留普通页但不签发，不能扩大完整读取预算', async () => { const f = fixture(); while (f.state.info.columns.length <= limits.columns) { const name = 'x' + f.state.info.columns.length; f.state.info.columns.push({ ...f.state.info.columns[1], name }); f.state.raw[name] = null; } expect((await f.issue()).copySource).toMatchObject({ status: 'unavailable', reason: 'budget' }); });
+  it('JSON转义使结果超过512KiB仍拒绝，不将预算内原始值裁短', async () => { const f = fixture(), { request } = await f.ready(); f.state.raw.hidden = '\u0000'.repeat(90000); await expect(f.cache.read(f.context, request)).rejects.toMatchObject({ reason: 'budget' }); });
+  it.each(['release', 'expire', 'connection', 'close'])('%s发生在完整读取收尾前使旧结果失效', async action => { const f = fixture(), { request } = await f.ready(); f.state.onRollback = () => { if (action === 'release') f.cache.release({ connectionId: 'conn', pageRef: request.pageRef }); else if (action === 'expire') f.state.now += limits.retentionMs; else if (action === 'connection') f.cache.releaseConnection('conn'); else f.cache.close(); }; await expect(f.cache.read(f.context, request)).rejects.toMatchObject({ reason: 'expired' }); expect(f.cache.stats().active).toBe(0); });
+  it('同源只准1个在途；取消在真实端口结束之前不释放活动占位', async () => { const f = fixture(), { request } = await f.ready(); let finish!: () => void; f.state.block = () => new Promise(resolve => { finish = resolve; }); const first = f.cache.read(f.context, request); await vi.waitFor(() => expect(finish).toBeTypeOf('function')); await expect(f.cache.read(f.context, { ...request, taskId: randomUUID() })).rejects.toMatchObject({ reason: 'changed' }); f.state.cancelled = true; expect(f.cache.stats().active).toBe(1); finish(); await expect(first).rejects.toThrow('受控取消'); expect(f.cache.stats().active).toBe(0); });
+  it('跨连接不允许读取或释放其他归属，释放原页幂等', async () => { const f = fixture(), { request } = await f.ready(); await expect(f.cache.read(f.context, { ...request, connectionId: 'other' })).rejects.toMatchObject({ reason: 'expired' }); expect(() => f.cache.release({ connectionId: 'other', pageRef: request.pageRef })).toThrow(); f.cache.release({ connectionId: 'conn', pageRef: request.pageRef }); f.cache.release({ connectionId: 'conn', pageRef: request.pageRef }); expect(f.cache.stats()).toMatchObject({ pages: 0, references: 0, bytes: 0 }); });
+  it('每连接最多4页，TTL后引用与预算一起释放', async () => { const f = fixture(); await f.ready(); for (let i = 1; i < 4; i++) { f.readInfo.mockClear(); await f.issue(); } f.readInfo.mockClear(); expect((await f.issue()).copySource).toMatchObject({ status: 'unavailable', reason: 'budget' }); f.state.now += limits.retentionMs; expect(f.cache.stats()).toMatchObject({ pages: 0, references: 0, bytes: 0 }); });
+  it('全局4000引用跨连接生效，释放后可重新签发', async () => { const f = fixture(); f.state.rows = 1000; const first = await f.ready(); for (let i = 1; i < 4; i++) { f.readInfo.mockClear(); await f.issue(); } f.readInfo.mockClear(); expect((await f.issue('other')).copySource).toMatchObject({ status: 'unavailable', reason: 'budget' }); expect(f.cache.stats().references).toBe(4000); f.cache.release({ connectionId: 'conn', pageRef: first.request.pageRef }); f.readInfo.mockClear(); expect((await f.issue('other')).copySource?.status).toBe('ready'); });
+  it('DDL/列数/缓存32MiB均有界，无部分租约', async () => { const f = fixture(); f.state.info.ddl = 'x'.repeat(limits.definitionBytes + 1); expect((await f.issue()).copySource).toMatchObject({ reason: 'budget' }); f.state.info.ddl = 'x'.repeat(limits.definitionBytes); for (let i = 0; i < 16; i++) { f.readInfo.mockClear(); await f.issue('conn' + i); } expect(f.cache.stats().bytes).toBeLessThanOrEqual(limits.cacheBytes); expect(f.cache.stats().pages).toBeLessThan(16); });
+});
