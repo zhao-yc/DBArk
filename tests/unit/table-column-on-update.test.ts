@@ -37,12 +37,12 @@ describe('既有字段受控ON UPDATE',()=>{
    const column=model(`CREATE TABLE t (updated_at ${definition}) ENGINE=InnoDB`).columns[0];expect(columnOnUpdateAccess(column,'mysql','8.4.11').editable,definition).toBe(false);expect(()=>plan(`CREATE TABLE t (updated_at ${definition}) ENGINE=InnoDB`,patch(null))).toThrow();
   }
  });
- it('同列混合修改、错误精度拒绝，不能扩大至类型转换或新增字段',()=>{
+ it('同列混合修改、错误精度、任意表达式及无DEFAULT的新增自动时间字段拒绝',()=>{
   expect(()=>plan(ddl(),patch(timestamp(0)))).toThrow('精度');expect(()=>plan(ddl(),{...patch(null),changes:{onUpdate:null,comment:'改动'}})).toThrow('混合');
   const base={snapshotId:'snapshot',taskId:'task'};
   for(const onUpdate of ['',undefined,{...timestamp(),sql:'NOW()'},{...timestamp(),precision:7},{kind:'expression',expression:'uuid'}])expect(()=>validateCommand('schema.columns.preview',{...base,patches:[patch(onUpdate as any)]})).toThrow();
   expect(validateCommand('schema.columns.preview',{...base,patches:[patch(null)]})).toMatchObject({patches:[{changes:{onUpdate:null}}]});
-  expect(()=>validateCommand('schema.columns.preview',{...base,patches:[{kind:'add',clientKey:'new',name:'ts',type:{kind:'temporal',type:'DATETIME',precision:6},nullable:true,default:{kind:'none'},comment:'',position:{kind:'last'},onUpdate:null}]})).toThrow();
+  expect(()=>validateCommand('schema.columns.preview',{...base,patches:[{kind:'add',clientKey:'new',name:'ts',type:{kind:'temporal',type:'DATETIME',precision:6},nullable:true,default:{kind:'none'},comment:'',position:{kind:'last'},onUpdate:timestamp()}]})).toThrow('DEFAULT');
  });
  it('真实UI草稿助手未勾修改及恢复原值不留补丁，移除null不能被空值合并吞掉',()=>{
   const column=model(ddl('DATETIME(6)','ON UPDATE CURRENT_TIMESTAMP(6)')).columns[1],view:TableColumnView={columnRef:'updated_at',name:column.name,ordinal:2,typeSql:column.type.raw,nullable:column.nullable,default:column.default,comment:column.comment,rawDefinition:column.raw,onUpdate:readColumnOnUpdate(column),access:columnPatchAccess(column,'mysql','8.4.11')};

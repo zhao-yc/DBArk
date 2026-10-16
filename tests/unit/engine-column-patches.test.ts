@@ -1,7 +1,7 @@
 import { EventEmitter } from 'node:events';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ConnectionProfile, TaskEvent } from '../../src/shared/contracts';
-import type { TableColumnGetOutput, TableColumnPreviewOutput } from '../../src/shared/tableColumnPatches';
+import type { TableColumnGetOutput, TableColumnPreviewOutput, TableColumnApplyOutput } from '../../src/shared/tableColumnPatches';
 import type { ManagedConnection } from '../../src/engine/connection';
 import { validateCommand } from '../../src/shared/validation';
 import { parseTableColumnDefinition } from '../../src/engine/tableColumnDefinition';
@@ -71,6 +71,20 @@ beforeEach(async () => {
 afterEach(async () => { failClose = false; holdSql = undefined; held?.complete(new Error('测试收尾')); await engine.closeAll(); vi.restoreAllMocks(); });
 
 describe('字段结构短会话与一次性计划', () => {
+  it('新增时间列受控ON UPDATE沿原Engine预览零DDL，单次ADD与新列目录后核验完整',async()=>{
+    const snapshot=await get(),patch={kind:'add',clientKey:'new-time',name:'created_at',type:{kind:'temporal',type:'TIMESTAMP',precision:6},nullable:true,default:{kind:'null'},comment:'新时间',position:{kind:'last'},onUpdate:{kind:'expression',expression:'current-timestamp',precision:6}};
+    const value=await engine.handle('schema.columns.preview',{snapshotId:snapshot.snapshotId,patches:[patch],taskId:'preview-add-time',connectionRevision:1});expect(value.sql).toContain('ADD COLUMN `created_at` TIMESTAMP(6) NULL DEFAULT NULL ON UPDATE CURRENT_TIMESTAMP(6)');expect(sent.filter(item=>item.sql.startsWith('ALTER'))).toHaveLength(0);
+    ddlAfter=source.replace(',\n  PRIMARY KEY',",\n  created_at TIMESTAMP(6) NULL DEFAULT NULL ON UPDATE CURRENT_TIMESTAMP(6) COMMENT '新时间',\n  PRIMARY KEY");const output:TableColumnApplyOutput=await apply(value);expect(output).toMatchObject({ddlCompleted:true,definitionVerified:true});expect(output.after?.columns.find(column=>column.name==='created_at')?.onUpdate).toMatchObject({precision:6});await expect(apply(value)).rejects.toThrow('已使用');expect(sent.filter(item=>item.sql.startsWith('ALTER'))).toHaveLength(1);
+  });
+  it.each(['遗漏自动时间','默认值被改','NULL被改','生成列','未知属性','目录不符'])('新增自动时间DDL得到OK但%s不伪核验、不重放',async kind=>{
+    const snapshot=await get(),patch={kind:'add',clientKey:'new-time',name:'created_at',type:{kind:'temporal',type:'DATETIME',precision:6},nullable:true,default:{kind:'null'},comment:'新时间',position:{kind:'last'},onUpdate:{kind:'expression',expression:'current-timestamp',precision:6}};
+    const value=await engine.handle('schema.columns.preview',{snapshotId:snapshot.snapshotId,patches:[patch],taskId:'preview-add-time',connectionRevision:1});let definition="created_at DATETIME(6) NULL DEFAULT NULL ON UPDATE CURRENT_TIMESTAMP(6) COMMENT '新时间'";
+    if(kind==='遗漏自动时间')definition=definition.replace(' ON UPDATE CURRENT_TIMESTAMP(6)','');if(kind==='默认值被改')definition=definition.replace('DEFAULT NULL','DEFAULT CURRENT_TIMESTAMP(6)');if(kind==='NULL被改')definition=definition.replace('NULL DEFAULT','NOT NULL DEFAULT');if(kind==='生成列')definition+=' GENERATED ALWAYS AS (now()) VIRTUAL';if(kind==='未知属性')definition+=' EXTRA_UNKNOWN';if(kind==='目录不符')onUpdateExtraOverride='on update CURRENT_TIMESTAMP(0)';ddlAfter=source.replace(',\n  PRIMARY KEY',',\n  '+definition+',\n  PRIMARY KEY');
+    const output=await apply(value);expect(output).toMatchObject({ddlSubmitted:true,ddlCompleted:true,definitionVerified:false});await expect(apply(value)).rejects.toThrow('已使用');expect(sent.filter(item=>item.sql.startsWith('ALTER'))).toHaveLength(1);
+  });
+  it.each(['源码多出属性','EXTRA暗含属性'])('新增时间列未勾自动更新却%s仍拒绝完整后核验',async kind=>{
+    const snapshot=await get(),value=await engine.handle('schema.columns.preview',{snapshotId:snapshot.snapshotId,taskId:'preview-unrequested',connectionRevision:1,patches:[{kind:'add',clientKey:'new',name:'ts',type:{kind:'temporal',type:'DATETIME'},nullable:true,default:{kind:'null'},comment:'',position:{kind:'last'}}]});ddlAfter=source.replace(',\n  PRIMARY KEY',",\n  ts DATETIME NULL DEFAULT NULL"+(kind==='源码多出属性'?' ON UPDATE CURRENT_TIMESTAMP':'')+" COMMENT '',\n  PRIMARY KEY");if(kind==='EXTRA暗含属性')onUpdateExtraOverride='on update CURRENT_TIMESTAMP';expect(await apply(value)).toMatchObject({ddlCompleted:true,definitionVerified:false});
+  });
   it('ON UPDATE真实Engine开启和移除各单次ALTER，原DEFAULT/NULL/注释/旁列后核验且令牌不重放',async()=>{
     source="CREATE TABLE t(id int NOT NULL,v DATETIME(6) NULL DEFAULT '2001-01-01 00:00:00.000001' COMMENT '保留',note varchar(10) DEFAULT 'NULL') ENGINE=InnoDB";
     const initial=source,snapshot=await get();expect(snapshot.columns[1].onUpdate).toBeNull();expect(snapshot.columns[1].access.onUpdate.editable).toBe(true);

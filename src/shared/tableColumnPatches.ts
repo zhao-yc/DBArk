@@ -93,10 +93,15 @@ export function sameColumnOnUpdate(left: ColumnOnUpdatePatch | undefined, right:
   return (left.precision ?? precision) === (right.precision ?? precision);
 }
 
+/** 既有和新增自动时间属性使用同一已知版本门，不按相近版本推断支持。 */
+export function columnOnUpdateVersionSupported(dialect: TableDefinitionContext['dialect'], serverVersion?: string): boolean {
+  const version = serverVersion?.replace(/^5\.5\.5-/, '').match(/^\d+\.\d+\.\d+/)?.[0];
+  return (dialect === 'mysql' ? ['5.7.44', '8.0.46', '8.4.11'] : ['10.11.19', '11.4.13']).includes(version ?? '');
+}
+
 /** 首片仅开放既定五版普通时间列；TIMESTAMP必须已有明确默认值，避免隐式默认行为。 */
 export function columnOnUpdateAccess(column: TableColumnDefinition, dialect: TableDefinitionContext['dialect'], serverVersion?: string): ColumnAttributeAccess {
-  const version = serverVersion?.replace(/^5\.5\.5-/, '').match(/^\d+\.\d+\.\d+/)?.[0];
-  if (!(dialect === 'mysql' ? ['5.7.44', '8.0.46', '8.4.11'] : ['10.11.19', '11.4.13']).includes(version ?? '')) return { editable: false, reason: '当前版本尚未开放自动更新时间属性' };
+  if (!columnOnUpdateVersionSupported(dialect, serverVersion)) return { editable: false, reason: '当前版本尚未开放自动更新时间属性' };
   if (!/^(?:DATETIME|TIMESTAMP)(?:\s*\([0-6]\))?$/i.test(column.type.raw.trim())) return { editable: false, reason: '自动更新时间只开放既有普通DATETIME/TIMESTAMP字段' };
   if (column.access.type?.editable !== true || column.access.default?.editable !== true || column.attributes.some(attribute => ['generated', 'opaque', 'visibility', 'auto-increment'].includes(attribute.kind))) return { editable: false, reason: '字段含只读或不可靠属性，不能修改自动更新时间' };
   const restate = columnRestateAccess(column, dialect); if (!restate.editable) return restate;
@@ -162,11 +167,32 @@ export const columnOnUpdatePatchSchema = columnTimestampExpressionSchema.nullabl
 export type ColumnOnUpdatePatch = z.infer<typeof columnOnUpdatePatchSchema>;
 const position = z.discriminatedUnion('kind', [z.object({ kind: z.literal('first') }).strict(), z.object({ kind: z.literal('last') }).strict(), z.object({ kind: z.literal('after'), columnRef: ref }).strict()]);
 export const columnPatchSchema = z.discriminatedUnion('kind', [
-  z.object({ kind: z.literal('add'), clientKey: ref, name, type: columnTypePatchSchema, nullable: z.boolean(), default: columnDefaultPatchSchema, comment: z.string(), position }).strict(),
+  z.object({ kind: z.literal('add'), clientKey: ref, name, type: columnTypePatchSchema, nullable: z.boolean(), default: columnDefaultPatchSchema, comment: z.string(), position, onUpdate: columnOnUpdatePatchSchema.optional() }).strict(),
   z.object({ kind: z.literal('drop'), columnRef: ref }).strict(),
   z.object({ kind: z.literal('alter'), columnRef: ref, changes: z.object({ name: name.optional(), type: columnTypePatchSchema.optional(), nullable: z.boolean().optional(), default: columnDefaultPatchSchema.optional(), comment: z.string().optional(), position: position.optional(), onUpdate: columnOnUpdatePatchSchema.optional() }).strict() }).strict(),
 ]);
 export type ColumnPatch = z.infer<typeof columnPatchSchema>;
+
+/** 新增字段不借用既有列模型；只验证显式受控属性，省略该键完全沿用原ADD行为。 */
+export function assertAddedColumnOnUpdate(column: Pick<Extract<ColumnPatch, { kind: 'add' }>, 'type' | 'nullable' | 'default' | 'onUpdate'>): void {
+  if (!Object.hasOwn(column, 'onUpdate')) return;
+  if (column.type.kind !== 'temporal' || !['DATETIME', 'TIMESTAMP'].includes(column.type.type)) throw new Error('新增自动更新时间只接受普通DATETIME/TIMESTAMP字段');
+  // 即使显式选择null，也不能让旧TIMESTAMP规则偷偷附加自动属性；未勾选才沿原ADD路径。
+  if (column.default.kind === 'none') throw new Error('新增自动更新时间必须显式设置DEFAULT，不能依赖隐式默认值');
+  if (column.default.kind === 'null' && !column.nullable) throw new Error('NOT NULL列不能设置NULL默认值');
+  const precision = column.type.precision ?? 0;
+  if (column.default.kind === 'expression' && column.default.precision !== undefined && column.default.precision !== precision) throw new Error('新增默认时间表达式精度必须与字段精度一致');
+  if (column.onUpdate === null) return;
+  if (!column.onUpdate || (column.onUpdate.precision !== undefined && column.onUpdate.precision !== precision)) throw new Error('新增自动更新时间精度必须与字段精度一致');
+}
+
+/** 新字段编辑器的属性开关显示受控能力；最终载荷仍由严格Schema和计划器重核。 */
+export function addedColumnOnUpdateAccess(column: { type: ColumnTypePatch; nullable: boolean | undefined; default: ColumnDefaultPatch }, dialect: TableDefinitionContext['dialect'], serverVersion?: string): ColumnAttributeAccess {
+  if (!columnOnUpdateVersionSupported(dialect, serverVersion)) return { editable: false, reason: '当前版本尚未开放自动更新时间属性' };
+  if (column.nullable === undefined) return { editable: false, reason: '请明确选择NULL或NOT NULL后设置新增自动更新时间' };
+  try { assertAddedColumnOnUpdate({ ...column, nullable: column.nullable, onUpdate: { kind: 'expression', expression: 'current-timestamp' } }); return { editable: true }; }
+  catch (error) { return { editable: false, reason: error instanceof Error ? error.message : '新增自动更新时间属性不可用' }; }
+}
 
 /** 字段补丁复用结构输入守卫，保留原公开入口和字段错误前缀。 */
 export function inspectColumnPatchInput(input: unknown): { value: unknown; bytes: number } {
@@ -182,6 +208,7 @@ export function validateColumnPatches(input: unknown, maxDecimalScale: 30 | 38 =
     const seen = patch.kind === 'add' ? added : references, key = patch.kind === 'add' ? patch.clientKey : patch.columnRef;
     if (seen.has(key)) throw new Error('字段补丁引用重复'); seen.add(key);
     if (patch.kind === 'drop') continue;
+    if (patch.kind === 'add') assertAddedColumnOnUpdate(patch);
     const values = patch.kind === 'alter' ? patch.changes : patch;
     if (patch.kind === 'alter' && !Object.values(values).some(value => value !== undefined)) throw new Error('字段修改不能为空');
     const type = values.type;

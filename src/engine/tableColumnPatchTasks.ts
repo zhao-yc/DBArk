@@ -142,7 +142,8 @@ function verifyAfter(preview: Preview, document: TableColumnDefinitionDocument, 
     const priorDefault = before?.default;
     const defaultCanonicalized = Boolean(changes.type && priorDefault && (priorDefault.kind === 'none' || priorDefault.kind === 'null' || (priorDefault.kind === 'literal' && priorDefault.introducer === undefined && priorDefault.valueType !== 'binary')) && defaultMatches(priorDefault as ColumnDefaultPatch, after, document.context, afterEncoding));
     // 新增字段没有旧片段可作证据；出现未请求的生成、自增或其它属性时不能报完整核验成功。
-    if (patch.kind === 'add' && after.attributes.some(attribute => !['nullable', 'default', 'comment'].includes(attribute.kind) && !addedEncodingAttribute(attribute.kind))) return false;
+    if (patch.kind === 'add' && after.attributes.some(attribute => !['nullable', 'default', 'comment'].includes(attribute.kind) && !(attribute.kind === 'on-update' && patch.onUpdate != null) && !addedEncodingAttribute(attribute.kind))) return false;
+    if (patch.kind === 'add' && !sameColumnOnUpdate(readColumnOnUpdate(after), patch.onUpdate ?? null, after.type.raw)) return false;
     if (afterEncoding?.charset && !inheritedEncoding) return false;
     if (changes.nullable !== undefined && after.nullable !== changes.nullable) return false;
     if (changes.comment !== undefined && (after.comment ?? '') !== changes.comment) return false;
@@ -280,7 +281,8 @@ export class TableColumnPatchTasks {
       try {
         const after = await readDefinition(context, snapshot.target, false), document = documentOf(after);
         const unreliable = await onUpdateCatalog(context, snapshot.target, document);
-        output.definitionVerified = progress.definitionVerified = after.identity === current.identity && after.normalizedMode === current.normalizedMode && verifyAfter(preview, document, after) && !preview.patches.some(patch => patch.kind === 'alter' && Object.hasOwn(patch.changes, 'onUpdate') && unreliable.has(snapshot.refs.get(patch.columnRef)!));
+        const unreliableRequestedTime = preview.patches.some(patch => patch.kind === 'add' ? unreliable.has(patch.name) : patch.kind === 'alter' && Object.hasOwn(patch.changes, 'onUpdate') && unreliable.has(snapshot.refs.get(patch.columnRef)!));
+        output.definitionVerified = progress.definitionVerified = after.identity === current.identity && after.normalizedMode === current.normalizedMode && verifyAfter(preview, document, after) && !unreliableRequestedTime;
         output.after = { ddlHash: hash(after.source), columns: views(document, new Map(preview.plan.finalColumns.map(column => [column.columnRef, column.name])), after.serverVersion, unreliable) };
         if (document.columns.some(hasUnprovenBinaryDefault)) output.warnings.push('二进制默认值仍以不能证明原始字节的文本显示；DDL 已完成，但这些字段的默认值未核验，不能据此自动重建或重复执行。');
         if (!output.definitionVerified) output.verificationError = 'DDL 已完成，但定义变更及未改属性尚未全部核验一致，请核对最新定义；不要重复执行';

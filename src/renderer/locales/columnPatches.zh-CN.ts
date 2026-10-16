@@ -1,4 +1,5 @@
 export const columnPatchZh = {
+  noAddedOnUpdate: '不自动更新时间（不附加ON UPDATE）', addedOnUpdateHint: '新增普通DATETIME/TIMESTAMP字段须显式设置DEFAULT、NULL和一致精度。未勾选时不附加ON UPDATE，不自动补默认值或调整字段精度。',
   onUpdate: '自动更新时间', removeOnUpdate: '不自动更新时间（移除ON UPDATE）', enableOnUpdate: '修改记录时设为CURRENT_TIMESTAMP', onUpdateHint: '本片仅修改既有时间字段；精度须与原字段一致，不能与本字段其他属性混合修改。DEFAULT、可空性和注释保持原值。', onUpdateUnknown: '原自动更新时间不能可靠识别，请核对原定义。', onUpdateMixed: '自动更新时间不能与同一字段其他属性混合修改。', onUpdatePrecision: '自动更新时间精度必须与现有字段精度一致。',
   title: '字段差异编辑', read: '重新读取实际定义', reading: '读取字段定义', preview: '生成字段差异预览', apply: '确认执行本次字段差异', cancel: '取消任务', close: '关闭', back: '返回差异编辑',
   maintenance: '请在维护窗口执行并暂停并行结构变更。执行前重核定义仍存在外部工具在重核与 ALTER 之间修改结构的窗口。', ddl: 'DDL 可能隐式提交；取消与事务回滚不能撤销已经完成的结构修改。本功能使用独立结构连接，不提交或回滚查询标签事务。',

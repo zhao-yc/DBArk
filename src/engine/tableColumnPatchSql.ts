@@ -1,5 +1,5 @@
 import { identifier, qualified, SqlScriptScanner, stringLiteral } from './sql';
-import { columnOnUpdateAccess, readColumnOnUpdate, sameColumnOnUpdate } from '../shared/tableColumnPatches';
+import { columnOnUpdateAccess, columnOnUpdateVersionSupported, readColumnOnUpdate, sameColumnOnUpdate } from '../shared/tableColumnPatches';
 import { assertColumnAttributeReadable, tableDefinitionTokens, type TableDefinitionToken } from './tableColumnDefinition';
 import { columnRestateAccess, hasUnprovenBinaryDefault, readControlledTimestampDefault, tableColumnDefaultRisks, tableColumnDefaultRiskMessage, tableColumnPatchLimits, validateColumnPatches, type ColumnDefaultPatch, type ColumnPatch, type ColumnTypePatch, type DefinitionRange, type TableColumnDefinition, type TableColumnDefinitionDocument } from '../shared/tableColumnPatches';
 
@@ -179,6 +179,7 @@ export function buildTableColumnPatchSql(document: TableColumnDefinitionDocument
   const unknownTail = tailUnknown(document);
   for (const patch of patches) {
     if (patch.kind === 'add') {
+      if (Object.hasOwn(patch, 'onUpdate') && !columnOnUpdateVersionSupported(document.context.dialect, options.serverVersion)) throw new Error('当前版本尚未开放新增自动更新时间属性');
       if (originalRefs.has(patch.clientKey) || nodes.has(patch.clientKey)) throw new Error('新增字段引用与现有快照冲突');
       const node = { ref: patch.clientKey, name: patch.name }; nodes.set(node.ref, node); operations.set(node.ref, patch); continue;
     }
@@ -248,7 +249,9 @@ export function buildTableColumnPatchSql(document: TableColumnDefinitionDocument
     }
     if (operation.kind === 'add') {
       const type = typeSql(operation.type, document.context.mode.noBackslashEscapes), value = defaultSql(operation.default, type, operation.nullable, document, largeDefaultUnsupported);
-      clauses.push(`ADD COLUMN ${identifier(operation.name)} ${type} ${operation.nullable ? 'NULL' : 'NOT NULL'}${value === undefined ? '' : ' DEFAULT ' + value} COMMENT ${stringLiteral(operation.comment, document.context.mode.noBackslashEscapes)}${positionSql}`); continue;
+      const precision = operation.type.kind === 'temporal' ? operation.type.precision ?? 0 : 0;
+      const onUpdate = operation.onUpdate ? ' ON UPDATE CURRENT_TIMESTAMP' + (precision ? `(${precision})` : '') : '';
+      clauses.push(`ADD COLUMN ${identifier(operation.name)} ${type} ${operation.nullable ? 'NULL' : 'NOT NULL'}${value === undefined ? '' : ' DEFAULT ' + value}${onUpdate} COMMENT ${stringLiteral(operation.comment, document.context.mode.noBackslashEscapes)}${positionSql}`); continue;
     }
     const column = node.original!, changes = { ...operation.changes }; if (!moved) delete changes.position;
     const keys = Object.keys(changes); if (!keys.length) continue;
