@@ -1,15 +1,17 @@
 import { readFileSync } from 'node:fs';
 import { runInNewContext } from 'node:vm';
 import ts from 'typescript';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { attachMonacoCaretDiagnostic, collectMonacoCaretDiagnostics, readMonacoCaretDiagnostics } from '../e2e/monaco-caret-diagnostics';
+import { diagnosticSample, diagnosticFilePorts } from './monaco-diagnostic-test-ports';
 
 /** 只模拟公开getter和settings.get；任何剪贴板访问都会直接失败。 */
-function environment(options: { model?: string; main?: string; api?: boolean; focused?: boolean; editorCount?: number; selection?: boolean | null; modelFails?: boolean; mainFails?: boolean; noActiveTab?: boolean } = {}) {
+function environment(options: { model?: string; main?: string; api?: boolean; focused?: boolean; editorCount?: number; selection?: boolean | null; modelFails?: boolean; mainFails?: boolean; noActiveTab?: boolean; route?: 'textarea' | 'nativeEditContext' | 'other' | 'outside'; bound?: unknown } = {}) {
   const expected = '合成私密SQL🙂\nSELECT 1', calls: string[] = [];
   const wrap = { contains: (node: unknown) => node === container };
   const query = { isConnected: true, getClientRects: () => [{}], querySelector: () => wrap, querySelectorAll: () => [{}] };
-  const container = { isConnected: true, getClientRects: () => [{}], closest: () => query };
+  const active = options.route ? { tagName: options.route === 'textarea' ? 'TEXTAREA' : 'DIV', editContext: options.route === 'nativeEditContext' ? {} : undefined, matches: (name: string) => name === '.native-edit-context' && options.route === 'nativeEditContext' } : undefined;
+  const container = { isConnected: true, getClientRects: () => [{}], closest: () => query, contains: (node: unknown) => Object.hasOwn(options, 'bound') ? options.bound : node === active && options.route !== 'outside' };
   const model = { isDisposed: () => false, getValue: () => { if (options.modelFails) throw Error('不可输出的模型正文/路径'); return options.model ?? expected; }, getVersionId: () => 7 };
   const editor = { getContainerDomNode: () => container, hasTextFocus: () => options.focused ?? true, getModel: () => model, getSelections: () => options.selection === null ? null : [{ isEmpty: () => options.selection ?? true }] };
   const root = {
@@ -18,13 +20,24 @@ function environment(options: { model?: string; main?: string; api?: boolean; fo
   };
   Object.defineProperty(root, 'clipboard', { get() { throw Error('禁止读取系统剪贴板'); } });
   vi.stubGlobal('window', root);
-  vi.stubGlobal('document', { hasFocus: () => options.focused ?? true, querySelectorAll: () => [query] });
+  vi.stubGlobal('document', { activeElement: active, hasFocus: () => options.focused ?? true, querySelectorAll: () => [query] });
   vi.stubGlobal('getComputedStyle', () => ({ visibility: 'visible' }));
   return { expected, calls };
 }
-afterEach(() => vi.unstubAllGlobals());
+let disk: ReturnType<typeof diagnosticFilePorts>;
+beforeEach(() => { disk = diagnosticFilePorts(); });
+afterEach(() => { vi.unstubAllGlobals(); vi.restoreAllMocks(); });
 
 describe('失败诊断的只读白名单', () => {
+  it.each(['textarea', 'nativeEditContext', 'other', 'outside'] as const)('活动输入路线仅为固定枚举与归属布尔：%s', async route => {
+    const h = environment({ route }), result = await readMonacoCaretDiagnostics(h.expected);
+    expect(result.inputRoute).toBe(route === 'other' || route === 'outside' ? 'unknown' : route);
+    expect(result.inputBoundToEditor).toBe(route !== 'outside'); expect(result.model.matchesExpected).toBe(true);
+  });
+  it.each(['不可输出的归属', { secret: '不可输出的归属' }, 0, 1])('异常DOM归属仍为unknown，不携带原返回值：%j', async bound => {
+    const h = environment({ route: 'nativeEditContext', bound }), result = await readMonacoCaretDiagnostics(h.expected);
+    expect(result.inputBoundToEditor).toBeNull(); expect(result.inputRoute).toBe('unknown'); expect(JSON.stringify(result)).not.toContain('不可输出的归属');
+  });
   it('只比较独立正文，CRLF归一化后仅返回布尔、UTF16长度和选择状态', async () => {
     const h = environment({ model: '合成私密SQL🙂\r\nSELECT 1' });
     const result = await readMonacoCaretDiagnostics(h.expected);
@@ -74,7 +87,8 @@ describe('失败诊断的只读白名单', () => {
 });
 
 /** 回放正式测试体的控制流；所有页面/输入/附件均为纯端口，不执行浏览器或原生API。 */
-async function replayCase(attachmentFails: boolean) {
+async function replayCase(attachmentFails: boolean, diskFails = false) {
+  if (diskFails) disk.write.mockRejectedValue(Error('不可输出的实际路径'));
   const source = readFileSync(new URL('../e2e/sql-completion.spec.ts', import.meta.url), 'utf8');
   const tree = ts.createSourceFile('sql-completion.spec.ts', source, ts.ScriptTarget.Latest, true); let body = '', afterBody = '';
   function visit(node: ts.Node) {
@@ -86,7 +100,7 @@ async function replayCase(attachmentFails: boolean) {
   const code = ts.transpileModule('let pendingOfflineDiagnostic; const replay = ' + body + '; const after = ' + afterBody + '; ({replay,after});', { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
   const originalFailure = Error('合成原prepare断言失败'), attachments: { name: string; data: Record<string, unknown> }[] = [], screenshots: string[] = [], timeouts: number[] = [], inputs: string[] = [], chosen: string[] = [];
   const control = { click: async () => undefined, getByRole: () => control };
-  const page = { locator: () => control, getByRole: () => control, keyboard: { press: async () => undefined }, screenshot: async ({ path }: { path: string }) => { screenshots.push(path); }, evaluate: async () => ({ model: { availability: 'unknown', utf16Units: null } }) };
+  const page = { locator: () => control, getByRole: () => control, keyboard: { press: async () => undefined }, screenshot: async ({ path }: { path: string }) => { screenshots.push(path); }, evaluate: async () => diagnosticSample };
   const run = runInNewContext(code, {
     test: { setTimeout: (value: number) => timeouts.push(value) }, offlineQuery: async () => undefined, page, query: () => ({ locator: () => ({}) }), expect: () => ({ toBeVisible: async () => undefined }),
     atCaret: async (marked: string) => { inputs.push(marked); if (inputs.length === 3) throw originalFailure; return marked.replace('|', ''); },
@@ -94,7 +108,7 @@ async function replayCase(attachmentFails: boolean) {
     attachMonacoCaretDiagnostic
   }) as { replay: (fixtures: unknown, info: unknown) => Promise<void>; after: (fixtures: unknown, info: unknown) => Promise<void> };
   let received: unknown;
-  const info = { testId: '合成同一测试身份', timeout: 90000, duration: 12, outputPath: (name: string) => name, attach: async (name: string, options: { body: string }) => { attachments.push({ name, data: JSON.parse(options.body) }); if (attachmentFails) throw Error('合成附件失败'); } };
+  const info = { testId: '合成同一测试身份', timeout: 90000, duration: 12, outputPath: (name: string) => name, attach: async (name: string, options: { path: string }) => { attachments.push({ name, data: JSON.parse(disk.data.get(options.path)!) }); if (attachmentFails) throw Error('合成附件失败'); } };
   try {
     await run.replay({}, info);
   } catch (error) { received = error; }
@@ -108,11 +122,27 @@ describe('正式离线CTE测试的prepare失败边界', () => {
   it('第三轮prepare失败有安全附件，原断言原样抛出，前两轮成功截图及90秒期限保持', async () => {
     const result = await replayCase(false);
     expect(result.received).toBe(result.originalFailure); expect(result.inputs).toHaveLength(3); expect(result.chosen).toEqual(['offline_column_0', 'offline_column_1']);
-    expect(result.attachments).toEqual([{ name: '离线补全阶段-2', data: { cold: 2, phase: 'prepare', pageErrorCount: 1, diagnostics: { model: { availability: 'unknown', utf16Units: null } } } }]);
+    expect(result.attachments).toEqual([{ name: '离线补全阶段-2', data: { cold: 2, phase: 'prepare', pageErrorCount: 1, diagnostics: diagnosticSample } }]);
     expect(JSON.stringify(result.attachments)).not.toContain('不可输出');
     expect(result.screenshots).toEqual(['offline-completion-cold-0.png', 'offline-completion-cold-1.png']); expect(result.timeouts).toEqual([90000]);
   });
   it('诊断附件本身失败也不能覆盖原prepare错误或重放输入', async () => {
     const result = await replayCase(true); expect(result.received).toBe(result.originalFailure); expect(result.inputs).toHaveLength(3); expect(result.attachments).toHaveLength(1);
+  });
+  it('磁盘失败不能覆盖原prepare错误、重放输入或创建path附件', async () => {
+    const result = await replayCase(false, true);
+    expect(result.received).toBe(result.originalFailure); expect(result.inputs).toHaveLength(3); expect(result.attachments).toHaveLength(0);
+    expect(result.chosen).toEqual(['offline_column_0', 'offline_column_1']); expect(result.timeouts).toEqual([90000]);
+    expect(disk.warning.mock.calls).toEqual([['离线补全诊断不可用：采样或持久化附件失败']]);
+  });
+  it('没有原失败待诊断时正式afterEach零采样、零磁盘、零附件', async () => {
+    const source = readFileSync(new URL('../e2e/sql-completion.spec.ts', import.meta.url), 'utf8'), tree = ts.createSourceFile('sql-completion.spec.ts', source, ts.ScriptTarget.Latest, true);
+    let body = '';
+    function visit(node: ts.Node) { if (ts.isCallExpression(node) && node.expression.getText(tree) === 'test.afterEach') body = node.arguments[0].getText(tree); ts.forEachChild(node, visit); }
+    visit(tree); expect(body).not.toBe('');
+    const attach = vi.fn(), code = ts.transpileModule('let pendingOfflineDiagnostic; (' + body + ');', { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
+    const after = runInNewContext(code, { attachMonacoCaretDiagnostic: attach }) as (fixtures: unknown, info: unknown) => Promise<void>;
+    await after({}, { testId: '合成未失败' }); expect(attach).not.toHaveBeenCalled();
+    expect(disk.write).not.toHaveBeenCalled(); expect(disk.rename).not.toHaveBeenCalled(); expect(disk.remove).not.toHaveBeenCalled(); expect(disk.warning).not.toHaveBeenCalled();
   });
 });
