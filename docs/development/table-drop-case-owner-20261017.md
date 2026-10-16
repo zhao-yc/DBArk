@@ -1,0 +1,9 @@
+本片从032390bd3881773156211401e48d954e06a38e71的独立普通克隆追加，只改正式table-drop-live.ts、专属RAM测试和本说明。Root冻结目录、产品、版本、依赖、默认门和共享fixture均不修改。正式测试身份仍为“单表删除真实入口先预览与准确确认，观察目录消失、关闭旧标签且拒绝旧URI导航”；测试SQL、准确库表确认、风险勾选、预算、重试及原断言参数不变。
+
+正式用例开始即以本TestInfo捕获page/application，open与dialog显式接收owner。每次访问页面都先核同一TestInfo、捕获对象及未关闭状态，不读取共享全局page；每个关键UI或观察SQL的await返回后立即再次重核。下一例、同例重绑或已关闭对象都不能继续后面的页面动作。旧URI仍手工fill，不通过clipboard写入。
+
+五条观察SQL沿本例已有observer调用，不代理连接或重试。请求拒绝、同步抛错或返回时归属已失效均先retainOwnedDesktopResources再抛原首因；保留标记异常也不替换原失败。此状态使既有严格isolatedDatabase finally停链，不能借退出、DROP DATABASE或observer.end掩盖未知请求。共享helper的原始异常/清理异常聚合规则保持，不在本片复制另一套退出实现；服务器逐ID取消终态仍另未验。
+
+RAM测试转译并执行真实正式用例模块，仅用内存页面/观察连接/注册端口，不导入真实desktop或数据库模块，不增加代理框架。覆盖稳定owner正例、首个UI等待后换例或同例重绑、观察SQL迟到时换例、五条观察SQL分别未知、保留标记错误不覆盖首因、已关闭页面拒绝，以及源码每个关键await之后的归属检查。稳定正例核五条SQL、准确确认及手填URI；负例核零下一页面动作、后续SQL不再发送和无显式退出/清库。异步UI断言端口只用于推进owner链路，不冒充浏览器可见性、焦点或产品正确性证明；原断言由静态基线对比另外保证。
+
+静态审计比较032基线与本片的完整正式标题、五条SQL参数、全部原matcher参数和test.use/预算/重试配置；同时比较table-drop.spec.ts、desktop-fixture.ts、live-helpers.ts、package.json与锁文件的原件摘要。定向RAM、既有owner及默认list守卫结果和全工程类型检查见本任务忽略缓存交接；未运行实际list、GUI、200、数据库、凭据、剪贴板、Docker或CI，也未创建发行包。本片需Root后续独占整合及实跑，不接纳任何实际删除、服务器逐ID终态或跨平台验收。
