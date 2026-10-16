@@ -1,0 +1,3 @@
+.definition-navigation{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:6px 0}
+.monaco-editor .definition-match{background:rgba(224,166,36,.3);outline:1px solid rgba(224,166,36,.6)}
+.monaco-editor .definition-match-active{background:rgba(53,148,240,.35);outline:2px solid #3594f0}
