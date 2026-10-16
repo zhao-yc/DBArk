@@ -47,13 +47,13 @@ test('大量命中明确只显示前200处，关闭高亮后旧控件不能恢�
 });
 test('Unicode零宽正则可导航末尾，零宽标记不写入SQL',async()=>{
  const sql='-- 😀 😀',original=await prepare(sql);await open('(?=😀)|$','regexp');await expect(navigation().getByRole('status')).toHaveText(t.count(0,3));
- await navigation().getByRole('button',{name:t.previous,exact:true}).click();await expect(navigation().getByRole('status')).toHaveText(t.count(2,3));expect(await activeSql()).toBe(sql);
+ await navigation().getByRole('button',{name:t.previous,exact:true}).click();await expect(navigation().getByRole('status')).toHaveText(t.count(2,3));await expect.poll(activeSql).toBe(sql);
  const settings=await page.evaluate(()=>window.dbark.invoke('settings.get',{}));expect(settings.tabs.find(tab=>tab.id===original.id)).toEqual(original);expect(await page.evaluate(()=>window.dbark.invoke('history.list',{}))).toEqual([]);
 });
 test('CRLF内部零宽命中明确不可精确定位，不显示两处同点或修改原文',async()=>{
  const sql='a\r\nb',original=await prepare(sql);await open('(?=\\r)|(?=\\n)','regexp');
  await expect(navigation().getByRole('status')).toHaveText(t.unlocatable);await expect(navigation().getByRole('button',{name:t.previous,exact:true})).toHaveCount(0);await expect(navigation().getByRole('button',{name:t.next,exact:true})).toHaveCount(0);
- await expect(query().locator('.saved-query-match')).toHaveCount(0);expect(await activeSql()).toBe(sql);
+ await expect(query().locator('.saved-query-match')).toHaveCount(0);await expect.poll(activeSql).toBe(sql);
  const settings=await page.evaluate(()=>window.dbark.invoke('settings.get',{}));expect(settings.tabs.find(tab=>tab.id===original.id)).toEqual(original);expect(await page.evaluate(()=>window.dbark.invoke('history.list',{}))).toEqual([]);
  await navigation().getByRole('button',{name:t.close,exact:true}).click();await expect(navigation()).toHaveCount(0);
 });
