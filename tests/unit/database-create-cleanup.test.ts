@@ -26,6 +26,12 @@ function harness(quitFails: boolean, taskState?: 'running' | 'unknown') {
   return { run, calls, original, quit, observer };
 }
 describe('新建库正式用例退出失败时保留现场', () => {
+  it('观察连接DROP未知时不继续end，原用例失败保持为cause和聚合首项', async () => {
+    const value = harness(false), query = value.observer.query.getMockImplementation()!, unknown = Error('DROP观察请求未知');
+    value.observer.query.mockImplementation(async sql => { if (sql.startsWith('DROP DATABASE')) throw unknown; return query(sql); });
+    const failure = await value.run().catch(reason => reason);
+    expect(failure.errors).toEqual([value.original, unknown]); expect(failure.cause).toBe(value.original); expect(value.observer.end).not.toHaveBeenCalled(); expect(value.calls).toContain('retain');
+  });
   it('退出拒绝立即停链，保留库和observer；原失败是聚合首因', async () => {
     const value = harness(true), failure = await value.run().catch(reason => reason);
     expect(value.calls).toEqual(['quit', 'retain']); expect(value.observer.end).not.toHaveBeenCalled();
