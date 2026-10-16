@@ -31,7 +31,7 @@ node node_modules/vitest/vitest.mjs run tests/unit/editor-content-bridge.test.ts
 node node_modules/typescript/bin/tsc --noEmit
 ```
 
-38项通过：13项桥接模型端口测试、6项真实锁定库/ReactDOM/SqlEditor测试、19项原当前语句及快捷键窄回归。真实库测试只替换loader、worker和Monaco原生/模型边界，没有替换@monaco-editor/react组件：
+953初版38项通过；布局恢复追加后42项通过：13项桥接模型端口测试、10项真实锁定库/ReactDOM/SqlEditor测试、19项原当前语句及快捷键窄回归。真实库测试只替换loader、worker和Monaco原生/模型边界，没有替换@monaco-editor/react组件：
 
 - 旧路径反例在后置监听前交付合成正文，模型变化但onChange不补发；该RAM时序不是CI原生时序证明。
 - 新路径在真实库创建模型时核对ReactDOM的busy/aria-hidden/inert/visibility及readonly均处于等待态；合成原生早输入被readonly拒绝。onReady时模型监听已建立、库onChange订阅数0，随后一次正文事件只转发一次。该RAM检查不替代浏览器无障碍树或原生焦点验收。
@@ -41,6 +41,16 @@ node node_modules/typescript/bin/tsc --noEmit
 类型检查退出0。原`sql-completion.spec.ts`、named-window、CALL三文件只执行`--list --reporter=json`，显式关闭实库/专项门，发现原9+2+2项，results均空；没有改E2E文件、选择器或期限。原件在本克隆忽略目录`.cache/editor-content-bridge-evidence/`。
 
 本轮未运行GUI、200、剪贴板、手动CI、产品构建或候选重建。所有原失败和冻结控制保持。实际Monaco原生输入、Windows时序、安装产物、组合格式化撤销及真实持久化链路均由Root后续验证。
+
+## 条件性P2：布局effect重显
+
+员工4对953的组合审查提供Suspense反例：React隐藏可见内容时清理layout effect，重显时重新setup，却保留同一个widget；锁定库的onMount不会因此重发。953清理正文桥接和editorRef后没有重建路径，导致该条件下重显仍readonly。隐藏期间若widget另行销毁，旧的就绪呈现也未关闭。
+
+在原953产品代码上仅运行新增隐藏/恢复两分支反例，得到两项失败；最小追加后原38项与新增四项组合全绿。当前renderer没有Suspense，该P2尚未证明影响当前入口或StrictMode，更不能归因原CI586失败。
+
+追加只保留widget的存活句柄及公开onDidDispose状态。布局隐藏仍释放正文桥接、清editorRef并锁住输入；重显setup仅为仍存活的widget重建正文桥接，使用当前已提交props，不重复执行动作注册或onReady。真实卸载释放存活监听；已销毁句柄不能重新开放，就绪呈现保持关闭。没有扩成其它生命周期框架。
+
+四项组合分别验证StrictMode模型换代、取消的并发渲染、同一存活widget隐藏/恢复、隐藏期间销毁widget；恢复例还核对排队旧事件不补发、动作/onReady不重复、就绪呈现及随后一次编辑。全部为真实React/锁定库配合模型端口的RAM测试，不是GUI或原生焦点验收。追加未改Root树、公共caret、QueryTab、桥接模块或冻结包，Root决定发行整合。
 
 ## 可选后续诊断（尚未实现）
 

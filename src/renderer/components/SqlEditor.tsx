@@ -29,6 +29,7 @@ export function SqlEditor({ value, onChange, onReady, height = '100%', readOnly 
   const theme = useWorkspace(state => state.settings.theme);
   const editorRef = useRef<monaco.editor.IStandaloneCodeEditor | null>(null);
   const contentRef = useRef<ReturnType<typeof editorContentBridge> | null>(null);
+  const widgetRef = useRef<{ editor: monaco.editor.IStandaloneCodeEditor; alive: boolean; disposal?: monaco.IDisposable } | null>(null);
   const propsRef = useRef({ value, onChange, onReady, readOnly });
   const aliveRef = useRef(true), [contentReady, setContentReady] = useState(false);
   // options引用稳定；库即使迟到应用初始options，也读取同一份最新readonly，不能重新开放失效实例。
@@ -39,8 +40,14 @@ export function SqlEditor({ value, onChange, onReady, height = '100%', readOnly 
   useLayoutEffect(() => { contentRef.current?.sync(); }, [value, readOnly]);
   useLayoutEffect(() => {
     aliveRef.current = true;
+    // Suspense重显会恢复layout effect但库不重发onMount；仅恢复仍存活widget的正文桥接。
+    const widget = widgetRef.current;
+    if (widget?.alive) attachContent(widget.editor);
+    else if (widget) { optionsRef.current.readOnly = true; setContentReady(false); }
     return () => { aliveRef.current = false; contentRef.current?.dispose(); contentRef.current = null; editorRef.current = null; };
   }, []);
+  // 真实卸载释放widget存活监听；单纯布局隐藏保留句柄，不能用已销毁实例恢复桥接。
+  useEffect(() => () => { const widget = widgetRef.current; widgetRef.current = null; if (widget) { widget.alive = false; widget.disposal?.dispose(); } }, []);
   const runRef = useRef(onExecute); runRef.current = onExecute;
   const currentRunRef = useRef(onExecuteCurrent); currentRunRef.current = onExecuteCurrent;
   const statusRef=useRef(onCompletionStatus);statusRef.current=onCompletionStatus;
@@ -81,16 +88,24 @@ export function SqlEditor({ value, onChange, onReady, height = '100%', readOnly 
     });
     return()=>{disposed=true;active?.abort();provider.dispose();worker.dispose();directory.dispose();};
   },[readOnly,completion?.connectionId,completion?.connectionVersion,completion?.database,completion?.databaseUnknown,completion?.sessionId]);
-  /** 挂载时注册一次执行动作，编辑器销毁后 Monaco 自动释放该实例动作。 */
-  const mounted: OnMount = editor => {
-    // 已卸载组件的迟到挂载通知不得重新开放输入或调用父层。
-    if (!aliveRef.current) { if (editor.getModel()) editor.updateOptions({ readOnly: true }); return; }
+  /** 正文桥接可随布局恢复，执行动作及父层onReady不在这里重复发布。 */
+  function attachContent(editor: monaco.editor.IStandaloneCodeEditor) {
     contentRef.current?.dispose(); editorRef.current = editor;
     const bridge = editorContentBridge(editor, () => propsRef.current, ready => {
       optionsRef.current.readOnly = !ready || propsRef.current.readOnly;
       if (aliveRef.current) setContentReady(ready);
     });
     contentRef.current = bridge;
+    return bridge;
+  }
+  /** 挂载时注册一次执行动作，编辑器销毁后 Monaco 自动释放该实例动作。 */
+  const mounted: OnMount = editor => {
+    // 已卸载组件的迟到挂载通知不得重新开放输入或调用父层。
+    if (!aliveRef.current) { if (editor.getModel()) editor.updateOptions({ readOnly: true }); return; }
+    widgetRef.current?.disposal?.dispose();
+    const widget = { editor, alive: true, disposal: undefined as monaco.IDisposable | undefined }; widgetRef.current = widget;
+    widget.disposal = editor.onDidDispose(() => { widget.alive = false; if (editorRef.current === editor) editorRef.current = null; });
+    const bridge = attachContent(editor);
     editor.addAction({ id: 'dbark-run', label: zh.editor.text001, keybindings: [monaco.KeyMod.CtrlCmd | monaco.KeyCode.Enter], run: () => runRef.current?.() });
     // 与原动作分开注册；按钮和快捷键最终进入同一个忙碌/模态守卫。
     if (currentRunRef.current) editor.addAction({ id: 'dbark-run-current', label: currentStatementZh.action, keybindings: [monaco.KeyMod.CtrlCmd | monaco.KeyMod.Shift | monaco.KeyCode.Enter], run: () => currentRunRef.current?.() });
