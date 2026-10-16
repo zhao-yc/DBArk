@@ -8,7 +8,7 @@ export const definitionOmittingSqlModes = ['NO_FIELD_OPTIONS', 'NO_KEY_OPTIONS',
 /** 范围使用 JS 字符串的 UTF-16 偏移，end 不包含在范围内，可直接 source.slice。 */
 export interface DefinitionRange { start: number; end: number; }
 export interface DefinitionFragment { range: DefinitionRange; raw: string; }
-export type ColumnEditableAttribute = 'name' | 'type' | 'nullable' | 'default' | 'comment' | 'position';
+export type ColumnEditableAttribute = 'name' | 'type' | 'nullable' | 'default' | 'comment' | 'position' | 'onUpdate';
 export interface ColumnAttributeAccess { editable: boolean; reason?: string; }
 export interface TableDefinitionContext { dialect: 'mysql' | 'mariadb'; mode: SqlLexicalMode; }
 export type ReadColumnDefault =
@@ -67,11 +67,49 @@ export function columnRestateAccess(column: TableColumnDefinition, dialect: Tabl
 }
 
 /** 界面与计划器共用目标列能力；是否覆盖全部风险默认值必须由整表预览另行检查。 */
-export function columnPatchAccess(column: TableColumnDefinition, dialect: TableDefinitionContext['dialect']): TableColumnDefinition['access'] {
+export function columnPatchAccess(column: TableColumnDefinition, dialect: TableDefinitionContext['dialect'], serverVersion?: string): TableColumnDefinition['access'] {
   const access = Object.fromEntries(Object.entries(column.access).map(([key, value]) => [key, { ...value }])) as TableColumnDefinition['access'];
   const restate = columnRestateAccess(column, dialect);
   if (!restate.editable) for (const key of ['name', 'type', 'nullable', 'comment', 'position'] as const) access[key] = restate;
+  access.onUpdate = columnOnUpdateAccess(column, dialect, serverVersion);
   return access;
+}
+
+/** 原ON UPDATE只投影已识别的受控时间表达式；undefined表示未知，不冒充移除。 */
+export function readColumnOnUpdate(column: TableColumnDefinition): ColumnOnUpdatePatch | undefined {
+  const attributes = column.attributes.filter(attribute => attribute.kind === 'on-update');
+  if (!attributes.length) return null;
+  if (attributes.length !== 1) return undefined;
+  const expression = /^ON\s+UPDATE\s+(.+)$/is.exec(attributes[0].raw)?.[1];
+  const value = expression && readControlledTimestampDefault(expression);
+  return value ? { kind: 'expression', expression: 'current-timestamp', precision: value.precision } : undefined;
+}
+
+/** 精度沿用字段本身；未提供精度不代表零，显式null才表示删除ON UPDATE。 */
+export function sameColumnOnUpdate(left: ColumnOnUpdatePatch | undefined, right: ColumnOnUpdatePatch | undefined, typeSql: string): boolean {
+  if (left === undefined || right === undefined) return false;
+  if (left === null || right === null) return left === right;
+  const precision = Number(/\((\d+)\)/.exec(typeSql)?.[1] ?? 0);
+  return (left.precision ?? precision) === (right.precision ?? precision);
+}
+
+/** 首片仅开放既定五版普通时间列；TIMESTAMP必须已有明确默认值，避免隐式默认行为。 */
+export function columnOnUpdateAccess(column: TableColumnDefinition, dialect: TableDefinitionContext['dialect'], serverVersion?: string): ColumnAttributeAccess {
+  const version = serverVersion?.replace(/^5\.5\.5-/, '').match(/^\d+\.\d+\.\d+/)?.[0];
+  if (!(dialect === 'mysql' ? ['5.7.44', '8.0.46', '8.4.11'] : ['10.11.19', '11.4.13']).includes(version ?? '')) return { editable: false, reason: '当前版本尚未开放自动更新时间属性' };
+  if (!/^(?:DATETIME|TIMESTAMP)(?:\s*\([0-6]\))?$/i.test(column.type.raw.trim())) return { editable: false, reason: '自动更新时间只开放既有普通DATETIME/TIMESTAMP字段' };
+  if (column.access.type?.editable !== true || column.access.default?.editable !== true || column.attributes.some(attribute => ['generated', 'opaque', 'visibility', 'auto-increment'].includes(attribute.kind))) return { editable: false, reason: '字段含只读或不可靠属性，不能修改自动更新时间' };
+  const restate = columnRestateAccess(column, dialect); if (!restate.editable) return restate;
+  if (column.nullable === undefined) return { editable: false, reason: '字段可空性未确认，不能重述时间字段' };
+  if (column.default.kind === 'none') return { editable: false, reason: '时间字段没有明确DEFAULT，不能证明自动时间属性变化后默认行为保持' };
+  if (/^TIMESTAMP\b/i.test(column.type.raw) && !column.attributes.some(attribute => attribute.kind === 'nullable')) return { editable: false, reason: 'TIMESTAMP没有明确NULL属性，不能证明隐式可空行为保持' };
+  const value = readColumnOnUpdate(column), precision = Number(/\((\d+)\)/.exec(column.type.raw)?.[1] ?? 0);
+  if (column.default.kind === 'expression') {
+    const defaultTime = readControlledTimestampDefault(column.default.sql);
+    if (!defaultTime || defaultTime.precision !== precision) return { editable: false, reason: '时间字段默认表达式或精度不受控，不能重述自动更新时间' };
+  }
+  if (value === undefined || (value !== null && value.precision !== precision)) return { editable: false, reason: '原自动更新时间表达式或精度不能可靠识别' };
+  return { editable: true };
 }
 
 /** 返回整表仍不可证明可保留的默认值列；名称数组不使用原型敏感字典。 */
@@ -113,17 +151,20 @@ export const columnTypePatchSchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('enumeration'), type: z.enum(['ENUM', 'SET']), values: z.array(z.string()).min(1).max(65535) }).strict(),
 ]);
 export type ColumnTypePatch = z.infer<typeof columnTypePatchSchema>;
+export const columnTimestampExpressionSchema = z.object({ kind: z.literal('expression'), expression: z.literal('current-timestamp'), precision: z.number().int().min(0).max(6).optional() }).strict();
 export const columnDefaultPatchSchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('none') }).strict(), z.object({ kind: z.literal('null') }).strict(),
   z.object({ kind: z.literal('literal'), valueType: z.enum(['text', 'number', 'boolean', 'binary']), value: z.string() }).strict(),
-  z.object({ kind: z.literal('expression'), expression: z.literal('current-timestamp'), precision: z.number().int().min(0).max(6).optional() }).strict(),
+  columnTimestampExpressionSchema,
 ]);
 export type ColumnDefaultPatch = z.infer<typeof columnDefaultPatchSchema>;
+export const columnOnUpdatePatchSchema = columnTimestampExpressionSchema.nullable();
+export type ColumnOnUpdatePatch = z.infer<typeof columnOnUpdatePatchSchema>;
 const position = z.discriminatedUnion('kind', [z.object({ kind: z.literal('first') }).strict(), z.object({ kind: z.literal('last') }).strict(), z.object({ kind: z.literal('after'), columnRef: ref }).strict()]);
 export const columnPatchSchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('add'), clientKey: ref, name, type: columnTypePatchSchema, nullable: z.boolean(), default: columnDefaultPatchSchema, comment: z.string(), position }).strict(),
   z.object({ kind: z.literal('drop'), columnRef: ref }).strict(),
-  z.object({ kind: z.literal('alter'), columnRef: ref, changes: z.object({ name: name.optional(), type: columnTypePatchSchema.optional(), nullable: z.boolean().optional(), default: columnDefaultPatchSchema.optional(), comment: z.string().optional(), position: position.optional() }).strict() }).strict(),
+  z.object({ kind: z.literal('alter'), columnRef: ref, changes: z.object({ name: name.optional(), type: columnTypePatchSchema.optional(), nullable: z.boolean().optional(), default: columnDefaultPatchSchema.optional(), comment: z.string().optional(), position: position.optional(), onUpdate: columnOnUpdatePatchSchema.optional() }).strict() }).strict(),
 ]);
 export type ColumnPatch = z.infer<typeof columnPatchSchema>;
 
@@ -169,6 +210,8 @@ export interface TableColumnView {
   /** 仅在读取器及能力检查确认可完整表达时提供，界面不能从缺省建议猜测原类型。 */
   editableType?: ColumnTypePatch;
   default: ReadColumnDefault; comment: string | undefined; rawDefinition: string;
+  /** null为无自动更新；缺失表示不能可靠投影，不能据此生成移除补丁。 */
+  onUpdate?: ColumnOnUpdatePatch;
   access: Record<ColumnEditableAttribute, ColumnAttributeAccess>;
 }
 export interface TableColumnGetOutput {

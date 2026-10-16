@@ -1,4 +1,5 @@
 import { createHash, randomUUID } from 'node:crypto';
+import { readColumnOnUpdate, sameColumnOnUpdate } from '../shared/tableColumnPatches';
 import { structureTaskQuery as columnTaskQuery, readStructureDefinition as readDefinition, structureDocumentOf as documentOf, assertStructureDefinitionUnchanged as assertSnapshot, sameStructureFragment as sameFragment, type StructureTaskContext as ColumnTaskContext, type StructureColumnEncoding as ColumnEncoding, type StructureDefinitionRead as DefinitionRead } from './structureDefinition';
 export { columnTaskQuery };
 export type { ColumnTaskContext };
@@ -21,12 +22,35 @@ const hash = (source: string): string => createHash('sha256').update(source).dig
 const initialProgress = (): TableColumnApplyProgress => ({ phase: 'connecting', ddlSubmitted: false, ddlCompleted: false, definitionVerified: false, outcome: 'not-sent' });
 
 /** 投影使用服务端快照引用及共享能力，不把名称对象当字典，也不泄露物理连接编号。 */
-function views(document: TableColumnDefinitionDocument, refs: Map<string, string>): TableColumnView[] {
+function views(document: TableColumnDefinitionDocument, refs: Map<string, string>, serverVersion: string, unreliable = new Set<string>()): TableColumnView[] {
   const byName = new Map([...refs].map(([ref, name]) => [name, ref]));
   return document.columns.map(column => ({ columnRef: byName.get(column.name) ?? randomUUID(), name: column.name, ordinal: column.ordinal, typeSql: column.type.raw, editableType: editableColumnType(column, document.context), nullable: column.nullable,
     // 只改变显示投影，不把损失字节的文本伪装成原值；内部可定位 DEFAULT 仍允许显式专用覆盖。
     default: hasUnprovenBinaryDefault(column) ? { kind: 'opaque' as const, sql: column.attributes.find(attribute => attribute.kind === 'default')!.raw, reason: '二进制默认值的原始字节不可证明，请显式选择新默认值或删除默认值' } : column.default,
-    comment: column.comment, rawDefinition: column.raw, access: columnPatchAccess(column, document.context.dialect) }));
+    comment: column.comment, rawDefinition: column.raw, ...(readColumnOnUpdate(column) === undefined ? {} : { onUpdate: readColumnOnUpdate(column) }), access: { ...columnPatchAccess(column, document.context.dialect, serverVersion), ...(unreliable.has(column.name) ? { onUpdate: { editable: false, reason: '自动更新时间目录与原定义不一致，不能修改该属性' } } : {}) } }));
+}
+
+/** 只在字段流程核对EXTRA；不修改共用结构读取器或把目录缺失当作无自动更新。 */
+async function onUpdateCatalog(context: ColumnTaskContext, target: TableColumnPatchTarget, document: TableColumnDefinitionDocument): Promise<Set<string>> {
+  const temporal = document.columns.filter(column => /^(?:DATETIME|TIMESTAMP)\b/i.test(column.type.raw));
+  const bad = new Set<string>(); if (!temporal.length) return bad;
+  const literal = (value: string) => `CONVERT(X'${Buffer.from(value, 'utf8').toString('hex')}' USING utf8mb4)`;
+  const rows = (await columnTaskQuery<{ name: string; extra: string }[]>(context, `SELECT COLUMN_NAME AS name, EXTRA AS extra FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = ${literal(target.database)} AND TABLE_NAME = ${literal(target.table)} ORDER BY ORDINAL_POSITION LIMIT 4097`)).rows;
+  if (rows.length !== document.columns.length || rows.some((row, index) => row.name !== document.columns[index].name)) return new Set(temporal.map(column => column.name));
+  for (const column of temporal) {
+    const extra = rows.find(row => row.name === column.name)?.extra;
+    if (typeof extra !== 'string') { bad.add(column.name); continue; }
+    const raw = extra.replace(/\bDEFAULT_GENERATED\b/ig, '').trim(), expression = /^on\s+update\s+(.+)$/is.exec(raw)?.[1];
+    const timestamp = expression && readControlledTimestampDefault(expression);
+    const actual = raw === '' ? null : timestamp ? { kind: 'expression' as const, expression: 'current-timestamp' as const, precision: timestamp.precision } : undefined;
+    if (!sameColumnOnUpdate(readColumnOnUpdate(column), actual, column.type.raw)) bad.add(column.name);
+  }
+  return bad;
+}
+
+/** 预览和投递前分别核目录，不允许调用者绕过get的只读属性。 */
+function assertOnUpdateCatalog(patches: readonly ColumnPatch[], refs: Map<string, string>, unreliable: Set<string>): void {
+  for (const patch of patches) if (patch.kind === 'alter' && Object.hasOwn(patch.changes, 'onUpdate') && unreliable.has(refs.get(patch.columnRef)!)) throw new Error('自动更新时间目录与原定义不一致，未发送结构修改');
 }
 
 /** 精确十进制规范化只操作字符串和有界指数，不经过 JS 浮点。 */
@@ -125,10 +149,11 @@ function verifyAfter(preview: Preview, document: TableColumnDefinitionDocument, 
     // 原字段的未改属性逐项相等；专用改名不会要求重述危险表达式。
     if (beforeName) {
       const before = original.columnsByName.get(beforeName)!;
-      const retained = (column: TableColumnDefinition) => column.attributes.filter(attribute => !(['nullable', 'default', 'comment'].includes(attribute.kind) && Object.hasOwn(changes, attribute.kind)) && !(attribute.kind === 'default' && defaultCanonicalized) && !(column === after && addedEncodingAttribute(attribute.kind)));
+      const changedAttribute = (kind: string) => (['nullable', 'default', 'comment'].includes(kind) && Object.hasOwn(changes, kind)) || (kind === 'on-update' && Object.hasOwn(changes, 'onUpdate'));
+      const retained = (column: TableColumnDefinition) => column.attributes.filter(attribute => !changedAttribute(attribute.kind) && !(attribute.kind === 'default' && defaultCanonicalized) && !(column === after && addedEncodingAttribute(attribute.kind)));
       if (retained(before).length !== retained(after).length) return false;
       for (const attribute of before.attributes) {
-        if (['nullable', 'default', 'comment'].includes(attribute.kind) && Object.hasOwn(changes, attribute.kind)) continue;
+        if (changedAttribute(attribute.kind)) continue;
         if (attribute.kind === 'default' && defaultCanonicalized) continue;
         const current = after.attributes.find(item => item.kind === attribute.kind);
         if (!current || !sameFragment(attribute.raw, current.raw, document.context)) return false;
@@ -137,6 +162,7 @@ function verifyAfter(preview: Preview, document: TableColumnDefinitionDocument, 
     }
     if (changes.type && !typeMatches(changes.type, after, document.context)) return false;
     if (changes.default && !defaultMatches(changes.default, after, document.context, afterEncoding)) return false;
+    if (patch.kind === 'alter' && Object.hasOwn(patch.changes, 'onUpdate') && !sameColumnOnUpdate(readColumnOnUpdate(after), patch.changes.onUpdate, after.type.raw)) return false;
   }
   return true;
 }
@@ -181,10 +207,11 @@ export class TableColumnPatchTasks {
       const target = { connectionId: input.connectionId, database: input.database, table: input.table };
       const read = await readDefinition(context, target, true), document = documentOf(read), risks = tableColumnDefaultRisks(document);
       const refs = new Map(document.columns.map(column => [randomUUID(), column.name]));
+      const unreliable = await onUpdateCatalog(context, target, document);
       const bytes = Buffer.byteLength(read.source) + Buffer.byteLength(JSON.stringify([...refs])) + Buffer.byteLength(JSON.stringify(read.nullability)) + Buffer.byteLength(JSON.stringify(read.encodings)) + 2048;
       this.capacity(bytes, 'snapshot');
       snapshot = { ...read, id: randomUUID(), target, revision: currentRevision, expires: this.now() + columnTaskLimits.ttlMs, refs, bytes };
-      return { target, snapshotId: snapshot.id, ddlHash: hash(read.source), expiresAt: new Date(snapshot.expires).toISOString(), columns: views(document, refs), warnings: [...(risks.length ? [tableColumnDefaultRiskMessage(risks)] : []), ...(document.columns.some(hasUnprovenBinaryDefault) ? ['二进制文本默认值不能证明原始字节（字段：' + document.columns.filter(hasUnprovenBinaryDefault).map(column => JSON.stringify(column.name)).join('、') + '），目标列不能重述或导出结构；旁列及专用默认值操作仍可预览，成功后完整定义需人工核对。'] : []), read.originalMode === read.normalizedMode ? '结构读取使用独立短会话，未修改查询标签。' : '专用结构会话已去除隐藏定义的兼容模式；原查询标签模式未变。', '执行前重核仍存在外部 DDL 并发窗口，请在维护时段暂停并行结构修改。'], capabilities: { dialect: read.context.dialect, serverVersion: read.serverVersion, maxDecimalScale: read.context.dialect === 'mariadb' ? 38 as const : 30 as const } };
+      return { target, snapshotId: snapshot.id, ddlHash: hash(read.source), expiresAt: new Date(snapshot.expires).toISOString(), columns: views(document, refs, read.serverVersion, unreliable), warnings: [...(risks.length ? [tableColumnDefaultRiskMessage(risks)] : []), ...(document.columns.some(hasUnprovenBinaryDefault) ? ['二进制文本默认值不能证明原始字节（字段：' + document.columns.filter(hasUnprovenBinaryDefault).map(column => JSON.stringify(column.name)).join('、') + '），目标列不能重述或导出结构；旁列及专用默认值操作仍可预览，成功后完整定义需人工核对。'] : []), read.originalMode === read.normalizedMode ? '结构读取使用独立短会话，未修改查询标签。' : '专用结构会话已去除隐藏定义的兼容模式；原查询标签模式未变。', '执行前重核仍存在外部 DDL 并发窗口，请在维护时段暂停并行结构修改。'], capabilities: { dialect: read.context.dialect, serverVersion: read.serverVersion, maxDecimalScale: read.context.dialect === 'mariadb' ? 38 as const : 30 as const } };
     }, { label: '读取字段定义', columnPatch: progress });
     this.capacity(snapshot.bytes, 'snapshot'); this.snapshots.set(snapshot.id, snapshot);
     output.target = { ...snapshot.target };
@@ -201,6 +228,7 @@ export class TableColumnPatchTasks {
     const output = await this.host.run(snapshot.target.connectionId, input.taskId, async context => {
       progress.phase = 'rechecking'; context.report();
       const read = await readDefinition(context, snapshot.target, true); assertSnapshot(snapshot, read);
+      if (patches.some(patch => patch.kind === 'alter' && Object.hasOwn(patch.changes, 'onUpdate'))) assertOnUpdateCatalog(patches, snapshot.refs, await onUpdateCatalog(context, snapshot.target, documentOf(read)));
       if (this.snapshots.get(input.snapshotId) !== snapshot || snapshot.expires <= this.now()) throw new Error('字段快照已释放或过期，未创建新预览');
       const plan = buildTableColumnPatchSql(documentOf(snapshot), patches, { database: snapshot.target.database, serverVersion: snapshot.serverVersion, columnRefs: snapshot.refs });
       const bytes = snapshot.bytes + Buffer.byteLength(plan.sql) + Buffer.byteLength(JSON.stringify(patches)) + 2048;
@@ -221,6 +249,7 @@ export class TableColumnPatchTasks {
     return this.host.run(snapshot.target.connectionId, input.taskId, async context => {
       progress.phase = 'rechecking'; context.report();
       const current = await readDefinition(context, snapshot.target, true); assertSnapshot(snapshot, current);
+      if (preview.patches.some(patch => patch.kind === 'alter' && Object.hasOwn(patch.changes, 'onUpdate'))) assertOnUpdateCatalog(preview.patches, snapshot.refs, await onUpdateCatalog(context, snapshot.target, documentOf(current)));
       if (preview.expires <= this.now()) throw new Error('预览在准备期间已过期，请重新预览；未发送 DDL');
       context.checkCancelled(); progress.phase = 'executing'; context.report();
       let result: ResultSetHeader;
@@ -250,8 +279,9 @@ export class TableColumnPatchTasks {
       }
       try {
         const after = await readDefinition(context, snapshot.target, false), document = documentOf(after);
-        output.definitionVerified = progress.definitionVerified = after.identity === current.identity && after.normalizedMode === current.normalizedMode && verifyAfter(preview, document, after);
-        output.after = { ddlHash: hash(after.source), columns: views(document, new Map(preview.plan.finalColumns.map(column => [column.columnRef, column.name]))) };
+        const unreliable = await onUpdateCatalog(context, snapshot.target, document);
+        output.definitionVerified = progress.definitionVerified = after.identity === current.identity && after.normalizedMode === current.normalizedMode && verifyAfter(preview, document, after) && !preview.patches.some(patch => patch.kind === 'alter' && Object.hasOwn(patch.changes, 'onUpdate') && unreliable.has(snapshot.refs.get(patch.columnRef)!));
+        output.after = { ddlHash: hash(after.source), columns: views(document, new Map(preview.plan.finalColumns.map(column => [column.columnRef, column.name])), after.serverVersion, unreliable) };
         if (document.columns.some(hasUnprovenBinaryDefault)) output.warnings.push('二进制默认值仍以不能证明原始字节的文本显示；DDL 已完成，但这些字段的默认值未核验，不能据此自动重建或重复执行。');
         if (!output.definitionVerified) output.verificationError = 'DDL 已完成，但定义变更及未改属性尚未全部核验一致，请核对最新定义；不要重复执行';
       } catch { output.verificationError = 'DDL 已收到成功响应，但取消、断线或读取失败使后续定义未能核验；不要重复执行'; }
