@@ -1,4 +1,5 @@
 import {positionMonacoCaret,observeMonacoCaret,triggerMonacoCompletion,remainingCompletionTimeout} from './monaco-caret';
+import {collectMonacoCaretDiagnostics} from './monaco-caret-diagnostics';
 import {randomUUID} from 'node:crypto';
 import type {Connection,RowDataPacket} from 'mysql2/promise';
 import {test,expect,page,desktop,pageErrors,closed,answerDialogs,quitDesktop} from './desktop-fixture';
@@ -30,9 +31,16 @@ test('离线语义补全：CTE投影、完整范围替换、键盘接受和撤�
   // 三个独立编辑器分别首次加载真实Worker；不是失败重试，每次候选名不同以排除串模型。
   for(let cold=0;cold<3;cold++){
     if(cold){await page.locator('.app-commandbar').getByRole('button',{name:'新建查询',exact:true}).click();await page.getByRole('dialog',{name:'新建查询',exact:true}).getByRole('button',{name:'打开查询',exact:true}).click();await expect(query().locator('.monaco-editor')).toBeVisible();}
-    const column='offline_column_'+cold,original=await atCaret(`WITH q AS (SELECT 1 AS ${column}) SELECT q.off|suffix FROM q`);
-    try{await choose(column);await expectSql(`WITH q AS (SELECT 1 AS ${column}) SELECT q.\`${column}\` FROM q`);}
-    catch(reason){await info.attach('离线补全阶段-'+cold,{body:JSON.stringify({cold,status:await query().getByLabel('SQL 补全状态',{exact:true}).allTextContents(),pageErrors}),contentType:'application/json'});await page.screenshot({path:info.outputPath('offline-startup-failure-'+cold+'.png')});throw reason;}
+    const column='offline_column_'+cold,marked=`WITH q AS (SELECT 1 AS ${column}) SELECT q.off|suffix FROM q`;
+    let original:string,phase:'prepare'|'completion'='prepare';
+    try{original=await atCaret(marked);phase='completion';await choose(column);await expectSql(`WITH q AS (SELECT 1 AS ${column}) SELECT q.\`${column}\` FROM q`);}
+    catch(reason){
+      try{
+        // prepare也进入诊断；失败附件只输出白名单指标，不记录原始pageErrors或截图正文。
+        const diagnostics=await collectMonacoCaretDiagnostics(page,marked);
+        await info.attach('离线补全阶段-'+cold,{body:JSON.stringify({cold,phase,pageErrorCount:pageErrors.length,diagnostics}),contentType:'application/json'});
+      }catch{/* 附件失败不记录原生异常，也不能覆盖原断言。 */}finally{throw reason;}
+    }
     await page.screenshot({path:info.outputPath('offline-completion-cold-'+cold+'.png')});await page.keyboard.press(`${modifier}+Z`);await expectSql(original);
   }
   const records=await page.evaluate(async()=>({tasks:await window.dbark.invoke('tasks.list',{}),history:await window.dbark.invoke('history.list',{})}));expect(records.tasks).toEqual([]);expect(records.history).toEqual([]);expect(pageErrors).toEqual([]);
