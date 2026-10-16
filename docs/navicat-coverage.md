@@ -1,5 +1,9 @@
 # Navicat 全功能覆盖目标
 
+当前公开开发预览为[0.20](https://github.com/zhao-yc/DBArk/releases/tag/v0.20.0)：12附件、11独立SHA、1264源码blob已核对，公开Windows NSIS六项真实安装回归通过并完成卸载、六实例资源核零，见[公开后验收](../tests/integration/acceptance-v020-public-20261017.md)。表导出取消提交窗口已知问题保留，后续修复不计入本标签；下方旧发行状态均保留其历史来源。
+
+后续历史时间范围固定390d已完成49项相关回归、类型和构建及一项正式Windows界面，见[时间筛选实证](../tests/integration/acceptance-history-time-ui-20261017.md)。新功能、CSV修复的完整整合回归及实库继续，不以旧测试或纯检查代替。
+
 后续高频产品7e59、正式测试头032390b已通过ON UPDATE六个真实界面身份在六实例的36次正向执行，0跳过/重试；独立采集核对源码、构建、完整身份及前后资源，见[六实例实证](../tests/integration/acceptance-on-update-ui-20261017.md)。这批是Windows开发Electron，尚未进入0.20发布标签，不代替安装、macOS或取消/MDL逐ID终态。
 
 同一来源的新建库专用真实窗口另有一项通过，覆盖编码配对、预览零DDL、准确名称确认、单次创建和树刷新；原控制文件身份错误已保留，按真实定义重采既有结果且未重放写入，见[新建库实证](../tests/integration/acceptance-database-create-ui-20261017.md)。另已复现原CSV表导出在sync期间取消后仍替换原文件的提交窗口，后续修复中，不能把普通取消测试当作该窗口已验。
