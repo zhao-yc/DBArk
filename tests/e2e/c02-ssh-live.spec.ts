@@ -1,3 +1,4 @@
+import { discardTestTab } from './query-close-ui';
 import { test, expect, type Locator } from '@playwright/test';
 import { createRequire } from 'node:module';
 import { readFile, writeFile } from 'node:fs/promises';
@@ -112,7 +113,7 @@ async function utilitySelect(scope: C02Desktop, lease: C02SshLease, id: string):
   const value = await execute("SELECT CONCAT(CURRENT_USER(),'|',DATABASE(),'|',CONNECTION_ID()) AS c02_identity,marker FROM subject", text => text.includes(lease.marker) && text.includes(`${lease.user}@%`) && text.includes(lease.database));
   c02Assert((await lease.observeApplicationThreads()).some(id => new RegExp(`\\b${id}\\b`).test(value)), 'C02 SSH 网格实际会话与观察线程不对应');
   if (lease.profile.tls?.enabled) await execute("SHOW SESSION STATUS LIKE 'Ssl_cipher'", text => text.includes('Ssl_cipher') && /TLS_[A-Z0-9_]+|AES[0-9_-]+|CHACHA[A-Z0-9_-]*/.test(text));
-  c02Assert(await scope.rememberProcesses(), 'C02 SSH 实际数据库utility未出现'); while (await page.locator('.tab-close').count()) await page.locator('.tab-close').first().click(); await expect(page.locator('.tab-close')).toHaveCount(0);
+  c02Assert(await scope.rememberProcesses(), 'C02 SSH 实际数据库utility未出现'); while (await page.locator('.tab-close').count()) await discardTestTab(page, page.locator('.tab-close').first()); await expect(page.locator('.tab-close')).toHaveCount(0);
 }
 
 test('C02 正式SSH表单：错指纹拒绝、既有私钥、utility SELECT与真实退出重启', async ({}, info) => {

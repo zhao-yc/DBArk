@@ -7,6 +7,8 @@ import { completionServerFacts } from './completionServerFacts';
 
 export type WorkspaceTab = AppSettings['tabs'][number];
 const defaults: AppSettings = { theme: 'dark', sidebarWidth: 260, resultLimit: 1000, pageSize: 100, dataTypeColors: false, tabs: [] };
+let busySequence = 0;
+const busyOwners = new Map<string, number>();
 let saveTimer: ReturnType<typeof setTimeout> | undefined;
 
 interface WorkspaceState {
@@ -26,6 +28,16 @@ interface WorkspaceState {
 function persist(settings: AppSettings) {
   clearTimeout(saveTimer);
   saveTimer = setTimeout(() => void invoke('settings.save', settings).catch(error => useWorkspace.getState().notify(errorMessage(error), true)), 400);
+}
+
+export interface WorkspaceBusyLease { owns(): boolean; release(): boolean; }
+/** 标签作业采用内存世代；新占用使旧释放失效，布尔持久布局不增加字段。 */
+export function acquireWorkspaceBusy(id: string): WorkspaceBusyLease {
+  if (useWorkspace.getState().activeJobs[id]) throw Error('标签已有活动作业，未取得作业占用');
+  useWorkspace.getState().setBusy(id, true);
+  const owner = busyOwners.get(id); let active = true;
+  const owns = () => active && busyOwners.get(id) === owner && useWorkspace.getState().activeJobs[id] === true;
+  return { owns, release() { const current = owns(); active = false; if (current) useWorkspace.getState().setBusy(id, false); return current; } };
 }
 
 /** 退出握手先取消防抖写入，再保存当前快照；错误必须传回调用方，不重试也不吞掉。 */
@@ -81,7 +93,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
   /** 成功与错误共用通知入口，错误通知由用户手动关闭。 */
   notify: (text, error = false) => set({ notice: { text, error } }),
   /** 标记标签是否有活动操作，防止运行期间关闭其会话。 */
-  setBusy: (id, busy) => set(state => ({ activeJobs: { ...state.activeJobs, [id]: busy } })),
+  setBusy: (id, busy) => { if (busy) busyOwners.set(id, ++busySequence); else busyOwners.delete(id); set(state => ({ activeJobs: { ...state.activeJobs, [id]: busy } })); },
   /** 标记未提交数据或事务，供标签关闭及应用退出确认使用。 */
   setDirty: (id, dirty) => set(state => ({ dirtyTabs: { ...state.dirtyTabs, [id]: dirty } })),
   /** 列布局草稿独立于数据写入状态；重命名关闭旧标签前也必须检查隐藏页。 */

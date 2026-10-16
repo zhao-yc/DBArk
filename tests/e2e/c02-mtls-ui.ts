@@ -1,3 +1,4 @@
+import { discardTestTab } from './query-close-ui';
 import { expect, type Locator } from '@playwright/test';
 import type { C02MtlSLease } from '../integration/helpers/c02-mtls-fixture';
 import { C02FixtureError, c02Failure } from '../integration/helpers/c02-mtls-policy';
@@ -148,6 +149,6 @@ export async function utilitySelect(scope: C02Desktop, lease: C02MtlSLease, id: 
   const cipher = await execute("SHOW SESSION STATUS LIKE 'Ssl_cipher'", value => value.includes('Ssl_cipher') && /TLS_[A-Z0-9_]+|AES[0-9_-]+|CHACHA[A-Z0-9_-]*/.test(value));
   c02Assert(cipher.includes('Ssl_cipher') && /TLS_[A-Z0-9_]+|AES[0-9_-]+|CHACHA[A-Z0-9_-]*/.test(cipher), 'C02 utility 会话未显示真实 SSL cipher');
   c02Assert(await scope.rememberProcesses(), 'C02 实际数据库 utility 进程未出现');
-  while (await page.locator('.tab-close').count()) await page.locator('.tab-close').first().click();
+  while (await page.locator('.tab-close').count()) await discardTestTab(page, page.locator('.tab-close').first());
   await expect(page.locator('.tab-close')).toHaveCount(0);
 }
