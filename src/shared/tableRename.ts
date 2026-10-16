@@ -16,7 +16,7 @@ export interface TableRenamePreviewOutput {
 export interface TableRenameApplyOutput {
   target: TableRenameTarget; newTarget: TableRenameTarget;
   ddlSubmitted: true; ddlCompleted: true; definitionVerified: boolean; warnings: string[];
-  after?: { tableId: string; ddlHash: string }; verificationError?: string;
+  after?: { tableId: string; ddlHash: string; physicalIdentity: string }; verificationError?: string;
 }
 
 /** 首批只接受可直接映射原生目录的ASCII标识符，不修剪、不拆库名、不补后缀。 */
