@@ -20,6 +20,7 @@ concurrency:
   cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
 jobs:
   checks:
+    if: github.event_name != 'workflow_dispatch' || inputs.native_clipboard_components != true
     name: 类型与单元测试
     runs-on: ubuntu-latest
     steps:
@@ -36,11 +37,12 @@ jobs:
     name: ${{ matrix.label }}
     # 员工任务分支保留Linux完整检查；集成、PR、主分支、发行标签和明确手动运行仍走全部原生门。
     if: >-
-      github.event_name == 'pull_request' ||
+      (github.event_name == 'pull_request' ||
       github.event_name == 'workflow_dispatch' ||
       github.ref == 'refs/heads/main' ||
       startsWith(github.ref, 'refs/heads/task/parallel-integration-') ||
-      startsWith(github.ref, 'refs/tags/v')
+      startsWith(github.ref, 'refs/tags/v')) &&
+      (github.event_name != 'workflow_dispatch' || inputs.native_clipboard_components != true)
     strategy:
       fail-fast: false
       matrix:
