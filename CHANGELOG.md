@@ -1,8 +1,8 @@
 # 版本记录
 
-## 0.18.0（开发中，未发布）
+## 0.18.0 — 连接凭据、表属性与编辑保护（开发预览）
 
-原Windows候选的281身份计划现已按角色补全：246项安装产品、32项开发Electron组件、3项安装宿主源码组件。用户本轮授权的两项系统复制实装通过；其余12个原生组件在临时Windows及两架构Mac各自通过，三个证据ZIP独立下载、摘要/CRC及逐例报告核对，0跳过、0重试。原参数/恢复失败及各自产物和源码归属保持，不能把281项或三平台重复身份当成功能覆盖比例，见[两项复制](tests/integration/acceptance-v018-native-copy-20261016.md)及[组件补验](tests/integration/acceptance-v018-native-components-20261016.md)。公开下载及其它平台私网组合继续，本版尚未发布。
+原Windows候选的281身份计划现已按角色补全：246项安装产品、32项开发Electron组件、3项安装宿主源码组件。用户本轮授权的两项系统复制实装通过；其余12个原生组件在临时Windows及两架构Mac各自通过，三个证据ZIP独立下载、摘要/CRC及逐例报告核对，0跳过、0重试。原参数/恢复失败及各自产物和源码归属保持，不能把281项或三平台重复身份当成功能覆盖比例，见[两项复制](tests/integration/acceptance-v018-native-copy-20261016.md)及[组件补验](tests/integration/acceptance-v018-native-components-20261016.md)。本版功能、适用版本、签名及未验范围见[发行说明](docs/releases/v0.18.0.md)；正式标签、公开下载及其它平台私网组合仍须单列核验。
 
 当前主目录两项混合完整206文件3763单元及新增MDL20项、类型与新构建通过。[自增与导航实证](tests/integration/acceptance-o01-auto-w03-root-20261016.md)记录受控下一自增值、200处导航与CRLF精确定位降级；六组合核心18通过/18条件跳过，正式自增UI15通过/3条件跳过，本地导航及原搜索9通过/1原实库条件跳过，原保存观测失败保留。[测试保护及原生诊断](tests/integration/acceptance-test-guards-native-diagnostics-20261016.md)补强捕获SQL谓词绑定及安装执行路径，六组合原捕获UI18次、Windows片段原用例诊断开关两种模式通过，并核到实际DOM/屏幕帧；macOS原失败根因仍待证。新增同库表重命名专用入口、单项SQL及三风险确认，绑定物理身份与完整定义，未知/未核验停用两端旧URI；结构刷新接管与普通去重同时保持。六组合核心18通过/18条件跳过、Windows正式UI12通过/6条件跳过，旧版本仅查看，见[重命名实证](tests/integration/acceptance-o01-rename-root-20261016.md)。默认关闭的正则捕获已支持原生数字/命名组、原文前后缀及实际展开长度前进，预算先于结果构造；六组合18次正式界面和加强交付时钟后的8项真实组件通过，旧P2、SQL显示辅助及平台限制见[捕获与迟到实证](tests/integration/acceptance-d06-capture-and-late-20261016.md)。侧栏修复折叠/刷新/修改后的迟到响应、旧finally覆盖新忙态及重复加载，显式断开的结束屏障跨重新挂载保持；5项真实App受控时序及8次真实数据库界面通过，见[侧栏验收](tests/integration/acceptance-sidebar-async-20261016.md)。获新增限权授权后补跑原外键用例，父表拒读、整组NULL草稿、预览后确认提交及随机用户/库/线程核零通过，见[补充验收](tests/integration/acceptance-d05-permission-supplement-20261016.md)，不回填旧公开安装统计。[并行CI](docs/development/parallel-ci-20261016.md)让普通任务push保留Linux完整检查，集成/PR/发行等继续三平台原生和真实安装门。
 
