@@ -22,7 +22,7 @@ export class ContentModelPort {
 }
 
 export class ContentEditorPort {
-  readOnly = true; disposed = false; edits: string[] = []; undoStops = 0; actions: any[] = [];
+  readOnly = true; disposed = false; edits: string[] = []; undoStops = 0; actions: any[] = []; activeActions = new Set<any>();
   modelChanges = new Set<() => void>(); ending = new Set<() => void>(); libraryChanges = new Set<(event: any) => void>();
   unlocks: number[] = []; modelSubscription?: { dispose(): void }; setValueCalls = 0;
   constructor(public model: ContentModelPort | null, options: any = {}) { this.readOnly = options.readOnly ?? false; this.attachLibraryEvents(); }
@@ -40,7 +40,8 @@ export class ContentEditorPort {
   pushUndoStop() { this.undoStops++; return true; }
   setValue(value: string) { this.setValueCalls++; this.model?.edit(value); }
   nativeInput(value: string) { if (this.readOnly || !this.model || this.disposed) return false; this.model.edit(value); return true; }
-  addAction(action: any) { this.actions.push(action); return { dispose() {} }; }
+  /** 区分历史注册与当前存活动作，核对释放和布局重显不会重绑。 */
+  addAction(action: any) { this.actions.push(action); this.activeActions.add(action); return { dispose: () => { this.activeActions.delete(action); } }; }
   saveViewState() { return null; } restoreViewState() {} revealLine() {}
   dispose() { if (this.disposed) return; this.disposed = true; for (const callback of [...this.ending]) callback(); this.modelSubscription?.dispose(); this.modelChanges.clear(); this.ending.clear(); this.libraryChanges.clear(); }
 }

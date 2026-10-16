@@ -16,7 +16,7 @@ const globals = ['window', 'document', 'navigator', 'self', 'IS_REACT_ACT_ENVIRO
 let commands: string[];
 beforeAll(async () => {
   document = memoryDocument(); Object.defineProperty(globalThis, 'self', { configurable: true, value: window });
-  io.monaco = { KeyMod: { CtrlCmd: 2048, Shift: 1024 }, KeyCode: { Enter: 3 }, Uri: { parse: (value: string) => ({ path: value }) }, languages: { CompletionItemKind: Object.fromEntries(['Module', 'Class', 'Interface', 'Function', 'Method', 'Field', 'Variable', 'Keyword'].map((name, i) => [name, i])) }, editor: {
+  io.monaco = { KeyMod: { CtrlCmd: 2048, Shift: 1024, Alt: 512 }, KeyCode: { Enter: 3, KeyF: 36 }, Uri: { parse: (value: string) => ({ path: value }) }, languages: { CompletionItemKind: Object.fromEntries(['Module', 'Class', 'Interface', 'Function', 'Method', 'Field', 'Variable', 'Keyword'].map((name, i) => [name, i])) }, editor: {
     EditorOption: { readOnly: 1 }, getModel: () => undefined, createModel: (value: string) => new ContentModelPort(value), setModelLanguage() {}, setTheme() {}, onDidChangeMarkers: () => ({ dispose() {} }), getModelMarkers: () => [],
     create: (node: any, options: any) => {
       const state = { busy: false, ariaHidden: false, inert: false, visibilityHidden: false, readOnly: options.readOnly === true };
@@ -91,14 +91,43 @@ describe('真实锁定库、SqlEditor与模型端口的就绪合同（不是GUI�
     await render(<View/>); expect(editor.readOnly).toBe(false);
   });
   it.each([false, true])('布局effect隐藏/恢复只重建存活widget桥接，不重复动作或onReady；隐藏期间销毁=%s', async destroyed => {
-    const change = vi.fn(), ready = vi.fn(), never = new Promise(() => {});
+    const change = vi.fn(), ready = vi.fn(), format = vi.fn(), never = new Promise(() => {});
     function Gate({ pending }: { pending: boolean }) { if (pending) throw never; return null; }
-    function View({ pending = false }: { pending?: boolean }) { return <React.Suspense fallback={<span>等待</span>}><SqlEditor value="原文" onChange={change} onReady={ready}/><Gate pending={pending}/></React.Suspense>; }
+    function View({ pending = false }: { pending?: boolean }) { return <React.Suspense fallback={<span>等待</span>}><SqlEditor value="原文" onChange={change} onReady={ready} onFormat={format}/><Gate pending={pending}/></React.Suspense>; }
     await render(<View/>); const editor = io.editors.find(editor => !editor.disposed)!, actions = editor.actions.length, model = editor.model;
-    model.deferred = true; editor.nativeInput('隐藏前排队'); await render(<View pending/>); expect(editor.readOnly).toBe(true);
+    const action = editor.actions.find((action: any) => action.id === 'dbark-format-sql'); expect(action).toBeDefined();
+    model.deferred = true; editor.nativeInput('隐藏前排队'); await render(<View pending/>); expect(editor.readOnly).toBe(true); action.run(); expect(format).not.toHaveBeenCalled();
     if (destroyed) editor.dispose(); await render(<View/>); model.flush(); expect(ready).toHaveBeenCalledTimes(1); expect(editor.actions).toHaveLength(actions); expect(change).not.toHaveBeenCalled();
     expect(document.body.querySelectorAll('[aria-busy]').at(-1)?.getAttribute('aria-busy')).toBe(destroyed ? 'true' : 'false');
-    if (destroyed) { expect(editor.readOnly).toBe(true); expect(editor.nativeInput('不可复活')).toBe(false); expect(model.content.size).toBe(0); }
-    else { expect(editor.disposed).toBe(false); expect(editor.readOnly).toBe(false); expect(editor.getValue()).toBe('原文'); model.deferred = false; await act(async () => { editor.nativeInput('恢复后的输入'); }); expect(change).toHaveBeenCalledExactlyOnceWith('恢复后的输入'); }
+    if (destroyed) { action.run(); expect(format).not.toHaveBeenCalled(); expect(editor.activeActions.has(action)).toBe(false); expect(editor.readOnly).toBe(true); expect(editor.nativeInput('不可复活')).toBe(false); expect(model.content.size).toBe(0); }
+    else { action.run(); expect(format).toHaveBeenCalledTimes(1); expect(editor.activeActions.has(action)).toBe(true); expect(editor.disposed).toBe(false); expect(editor.readOnly).toBe(false); expect(editor.getValue()).toBe('原文'); model.deferred = false; await act(async () => { editor.nativeInput('恢复后的输入'); }); expect(change).toHaveBeenCalledExactlyOnceWith('恢复后的输入'); }
+  });
+});
+
+/** 使用真实SqlEditor/ReactDOM和锁定库，键注册与回调生命周期只经RAM端口观察。 */
+describe('编辑器格式化快捷键的显式注册与世代', () => {
+  it('Alt+Shift+F只绑定一次且只读最新已提交回调，CtrlCmd执行键不变', async () => {
+    const old=vi.fn(),latest=vi.fn(); await render(<SqlEditor value="select 1;" onFormat={old}/>);const editor=io.editors[0];
+    const action=editor.actions.find((action:any)=>action.id==='dbark-format-sql');
+    expect(action).toMatchObject({keybindings:[1572],precondition:'editorTextFocus && !editorReadonly',label:'格式化 SQL'});
+    expect(editor.actions.find((action:any)=>action.id==='dbark-run').keybindings).toEqual([2051]);
+    await render(<SqlEditor value="select 1;" onFormat={latest}/>); action.run(); expect(latest).toHaveBeenCalledTimes(1);expect(old).not.toHaveBeenCalled();
+    expect(editor.actions.filter((action:any)=>action.id==='dbark-format-sql')).toHaveLength(1);
+    await render(<SqlEditor value="select 1;" readOnly onFormat={latest}/>);action.run();expect(latest).toHaveBeenCalledTimes(1);expect(editor.activeActions.has(action)).toBe(false);
+    await render(<SqlEditor value="select 1;" onFormat={latest}/>);const active=[...editor.activeActions].filter((action:any)=>action.id==='dbark-format-sql');expect(active).toHaveLength(1);
+    action.run();expect(latest).toHaveBeenCalledTimes(1);(active[0] as any).run();expect(latest).toHaveBeenCalledTimes(2);
+    await act(async()=>root!.unmount());root=undefined;(active[0] as any).run();expect(latest).toHaveBeenCalledTimes(2);expect(editor.activeActions.has(active[0])).toBe(false);
+  });
+  it('未传onFormat及只读实例均不注册，后续移除回调即释放旧动作', async () => {
+    const format=vi.fn();await render(<SqlEditor value="只读" readOnly onFormat={format}/>);const editor=io.editors[0];expect(editor.actions.some((action:any)=>action.id==='dbark-format-sql')).toBe(false);
+    await render(<SqlEditor value="原文"/>);expect(editor.actions.some((action:any)=>action.id==='dbark-format-sql')).toBe(false);
+    await render(<SqlEditor value="原文" onFormat={format}/>);const action=editor.actions.find((action:any)=>action.id==='dbark-format-sql');expect(action).toBeDefined();
+    await render(<SqlEditor value="原文"/>);action.run();expect(format).not.toHaveBeenCalled();expect(editor.activeActions.has(action)).toBe(false);
+  });
+  it('被取消的并发渲染不能发布未提交格式化回调', async () => {
+    const old=vi.fn(),speculative=vi.fn(),never=new Promise(()=>{});function Gate({pending}:{pending:boolean}){if(pending)throw never;return null;}
+    function View({pending=false}:{pending?:boolean}){return <React.Suspense fallback={<span>等待</span>}><SqlEditor value="原文" onFormat={pending?speculative:old}/><Gate pending={pending}/></React.Suspense>;}
+    await render(<View/>);const editor=io.editors.find(editor=>!editor.disposed)!,action=editor.actions.find((action:any)=>action.id==='dbark-format-sql');
+    await act(async()=>{React.startTransition(()=>root!.render(<View pending/>));});action.run();expect(old).toHaveBeenCalledTimes(1);expect(speculative).not.toHaveBeenCalled();
   });
 });

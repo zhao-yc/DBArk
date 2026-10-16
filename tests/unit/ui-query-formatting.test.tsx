@@ -1,11 +1,12 @@
 import React, { act } from 'react';
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { memoryDocument, MemoryEvent } from '../fixtures/memory-dom';
-const io = vi.hoisted(() => ({ source: '', start: 0, end: 0, multi: false, readOnly: false, events: [] as string[], editor: null as any }));
+const io = vi.hoisted(() => ({ source: '', start: 0, end: 0, multi: false, readOnly: false, events: [] as string[], editor: null as any, format: undefined as undefined | (() => void) }));
 /** 只替换Monaco外界端口；真实QueryTab、store和DOM负责按钮、正文回传及副作用边界。 */
 vi.mock('../../src/renderer/components/SqlEditor', async () => {
   const { useEffect, createElement } = await import('react');
   return { SqlEditor(props: any) {
+    io.format = props.onFormat;
     useEffect(() => {
       io.source = props.value; let version = 1;
       const position = (offset: number) => { const lines = io.source.slice(0, offset).split('\n'); return { lineNumber: lines.length, column: lines.at(-1)!.length + 1 }; };
@@ -33,14 +34,14 @@ async function mount(source: string, start = 0, end = 0) {
   function View() { const tab = useWorkspace(state => state.settings.tabs[0]); return <QueryTab tab={tab} onHistory={() => {}}/>; }
   const node = document.createElement('div'); document.body.appendChild(node); root = createRoot(node as any); await act(async () => root!.render(<View/>));
 }
-async function click() { const button = document.body.querySelectorAll('button').find(node => node.getAttribute('aria-label') === '格式化 SQL'); expect(button).toBeDefined(); await act(async () => button!.dispatchEvent(new MemoryEvent('click'))); await flushSettings(); }
+async function click(entry: '按钮' | '快捷回调') { if (entry === '快捷回调') { expect(io.format).toBeTypeOf('function'); await act(async () => io.format!()); await flushSettings(); return; } const button = document.body.querySelectorAll('button').find(node => node.getAttribute('aria-label') === '格式化 SQL'); expect(button).toBeDefined(); await act(async () => button!.dispatchEvent(new MemoryEvent('click'))); await flushSettings(); }
 
-describe('真实QueryTab格式化按钮', () => {
+describe.each(['按钮', '快捷回调'] as const)('真实QueryTab格式化%s', entry => {
   it.each([true, false])('选区/全文只走单次executeEdits及两侧undo stop，不改变来源或执行状态 %s', async selected => {
     const prefix = 'select 0;\n', body = "select 名称,'🚢' from 表 where id=1;", suffix = '\nselect 9;', source = prefix + body + suffix;
     await mount(source, selected ? prefix.length : 0, selected ? prefix.length + body.length : 0);
     const before = useWorkspace.getState(), binding = before.settings.tabs[0].sourceBinding;
-    await click(); expect(io.events).toEqual(['undo-stop', 'dbark-sql-format', 'undo-stop', 'focus']);
+    await click(entry); expect(io.events).toEqual(['undo-stop', 'dbark-sql-format', 'undo-stop', 'focus']);
     const after = useWorkspace.getState(); expect(after.settings.tabs[0].sql).toBe(io.source); expect(io.source).not.toBe(source);
     if (selected) { expect(io.source.startsWith(prefix)).toBe(true); expect(io.source.endsWith(suffix)).toBe(true); }
     expect(after.settings.tabs[0].sourceBinding).toBe(binding); expect(after.activeJobs).toEqual(before.activeJobs); expect(after.dirtyTabs).toEqual(before.dirtyTabs); expect(commands.filter(command => command !== 'settings.save')).toEqual([]);
@@ -52,6 +53,6 @@ describe('真实QueryTab格式化按钮', () => {
     if (reason === '非活动标签') await act(async () => useWorkspace.getState().updateSettings({ activeTabId: '其他' }));
     if (reason === '后台作业') await act(async () => useWorkspace.getState().setBusy('t', true));
     let dialog: any; if (reason === '弹窗') { dialog = document.createElement('div'); dialog.setAttribute('role', 'dialog'); document.body.appendChild(dialog); }
-    await click(); expect(io.source).toBe(source); expect(io.events).toEqual([]); expect(commands.filter(command => command !== 'settings.save')).toEqual([]); dialog?.parentNode?.removeChild(dialog);
+    await click(entry); expect(io.source).toBe(source); expect(io.events).toEqual([]); expect(commands.filter(command => command !== 'settings.save')).toEqual([]); dialog?.parentNode?.removeChild(dialog);
   });
 });
