@@ -48,7 +48,8 @@ function assertSnapshotUnchanged(actual: Awaited<ReturnType<typeof snapshot>>, b
 
 /** 两例共享真实UI步骤；旁观连接仅准备本例对象与读标记，不执行CALL或伪造目录。 */
 async function verifyCall(info: TestInfo, qualified: boolean) {
-  const desktop = await import('./desktop-fixture'), caret = await import('./monaco-caret'), live = await import('./live-helpers');
+  // CommonJS动态命名空间会缓存旧page；每例使用已注册fixture的live导出对象。
+  const desktop = require('./desktop-fixture') as Desktop, caret = await import('./monaco-caret'), live = await import('./live-helpers');
   const { assertDefaultEncodingLiveTarget } = await import('../helpers/tableDefaultEncodingTarget');
   // 复用已有六组合纯准备门：13484必须严格TLS，实际目标与凭据由Root本轮明确提供。
   const env = live.environment;

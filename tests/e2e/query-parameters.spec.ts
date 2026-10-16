@@ -12,18 +12,15 @@ test.use({ trace: 'off' });
 const query = () => page.locator('.query-tab:visible');
 const parameterDialog = () => page.getByRole('dialog', { name: '类型参数查询', exact: true });
 
-/** 真实粘贴避免输入路径自动补引号；逐字核对 SQL，只允许平台换行差异，随后恢复剪贴板文本。 */
+/** 原生键盘准备 SQL；先删除旧选区避免配对包装，逐字核对持久化正文且不访问剪贴板。 */
 async function writeSql(source: string) {
-  const previous = await desktop.evaluate(({ clipboard }) => clipboard.readText());
-  try {
-    await desktop.evaluate(({ clipboard }, sql) => clipboard.writeText(sql), source);
-    await query().locator('.monaco-editor').getByRole('textbox').focus();
-    await page.keyboard.press(`${modifier}+A`); await page.keyboard.press(`${modifier}+V`);
-    await expect.poll(async () => page.evaluate(async () => {
-      const settings = await window.dbark.invoke('settings.get', {});
-      return settings.tabs.find(tab => tab.id === settings.activeTabId)?.sql?.replaceAll('\r\n', '\n');
-    })).toBe(source.replaceAll('\r\n', '\n'));
-  } finally { await desktop.evaluate(({ clipboard }, text) => clipboard.writeText(text), previous); }
+  await query().locator('.monaco-editor').getByRole('textbox').focus();
+  await page.keyboard.press(`${modifier}+A`); await page.keyboard.press('Backspace');
+  await page.keyboard.insertText(source);
+  await expect.poll(async () => page.evaluate(async () => {
+    const settings = await window.dbark.invoke('settings.get', {});
+    return settings.tabs.find(tab => tab.id === settings.activeTabId)?.sql?.replaceAll('\r\n', '\n');
+  })).toBe(source.replaceAll('\r\n', '\n'));
 }
 
 /** 从独立观察连接读取提交结果，不调用应用实现来解释参数值。 */

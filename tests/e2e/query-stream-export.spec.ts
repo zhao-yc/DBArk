@@ -22,18 +22,15 @@ const binaryAcknowledgement = '我接受显式二进制模式的首次准备与�
 type StreamWindow = Window & { __q05StreamEvents?: TaskEvent[] };
 type JsonDocument = { format: string; version: number; results: { kind: 'rows' | 'status'; resultOrdinal: number; statementOrdinal: number; rowResultOrdinal?: number; rows?: Record<string, unknown>[]; rowsWritten: number; columns?: { name: string; exportName: string }[] }[] };
 
-/** 真正粘贴到 Monaco 并核对持久化模板，避免自动补引号改变模式测试 SQL。 */
+/** 原生键盘准备 SQL；先删除旧选区避免配对包装，逐字核对持久化模板且不访问剪贴板。 */
 async function writeSql(source: string) {
-  const previous = await desktop.evaluate(({ clipboard }) => clipboard.readText());
-  try {
-    await desktop.evaluate(({ clipboard }, sql) => clipboard.writeText(sql), source);
-    await query().locator('.monaco-editor').getByRole('textbox').focus();
-    await page.keyboard.press(`${modifier}+A`); await page.keyboard.press(`${modifier}+V`);
-    await expect.poll(() => page.evaluate(async () => {
-      const settings = await window.dbark.invoke('settings.get', {});
-      return settings.tabs.find(tab => tab.id === settings.activeTabId)?.sql?.replaceAll('\r\n', '\n');
-    })).toBe(source.replaceAll('\r\n', '\n'));
-  } finally { await desktop.evaluate(({ clipboard }, value) => clipboard.writeText(value), previous); }
+  await query().locator('.monaco-editor').getByRole('textbox').focus();
+  await page.keyboard.press(`${modifier}+A`); await page.keyboard.press('Backspace');
+  await page.keyboard.insertText(source);
+  await expect.poll(() => page.evaluate(async () => {
+    const settings = await window.dbark.invoke('settings.get', {});
+    return settings.tabs.find(tab => tab.id === settings.activeTabId)?.sql?.replaceAll('\r\n', '\n');
+  })).toBe(source.replaceAll('\r\n', '\n'));
 }
 /** 只替换系统文件选择结果，不替换授权、IPC、数据库执行或实际文件写入。 */
 async function choosePath(path?: string) {
