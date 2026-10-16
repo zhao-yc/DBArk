@@ -1,4 +1,4 @@
-import {test as baseTest,expect,type TestInfo} from '@playwright/test';
+import {test as baseTest,expect,type TestInfo,type Page} from '@playwright/test';
 import type {RowDataPacket} from 'mysql2/promise';
 import {columnPatchZh as text} from '../../src/renderer/locales/columnPatches.zh-CN';
 type Desktop=typeof import('./desktop-fixture');
@@ -10,25 +10,37 @@ const desktop:Desktop|undefined=armed?require('./desktop-fixture'):undefined,tes
 // 新写入专项独立开启所属实例退出证明；失败或取消不能清理未确认的隔离现场。
 if(desktop)desktop.test.use({preserveOnUnconfirmedExit:true});
 test.skip(!armed,'默认关闭：须ROOT独占分配真实界面及对应六组合目标');test.use({trace:'off',screenshot:'off',video:'off'});test.setTimeout(180000);test.describe.configure({retries:0});
-const page=()=>{if(!desktop)throw Error('未取得实际界面窗口');return desktop.page;},dialog=()=>page().getByRole('dialog',{name:text.title,exact:true});
+/** 本例页面只由显式owner提供，旧TestInfo及每次页面获取均须核归属。 */
+interface CaseOwner{page:Page;assertCurrent():void;}
+const page=(owner:CaseOwner)=>{owner.assertCurrent();return owner.page;},dialog=(owner:CaseOwner)=>page(owner).getByRole('dialog',{name:text.title,exact:true});
 
 /** 正式产品入口编辑，暂存及预览都不能写入结构；不注入组件状态或直接调用apply。 */
-async function change(value:'expression'|'none'){
- await page().locator('.table-tab:visible').getByRole('button',{name:text.title,exact:true}).click();await dialog().getByRole('button',{name:/^updated_at ·/}).click();
- await dialog().getByRole('checkbox',{name:text.modify+' '+text.onUpdate,exact:true}).check();await dialog().getByRole('combobox',{name:text.onUpdate,exact:true}).selectOption(value);await dialog().getByRole('button',{name:text.rowSave,exact:true}).click();await dialog().getByRole('button',{name:text.preview,exact:true}).click();await expect(dialog().getByRole('heading',{name:text.fixedSql,exact:true})).toBeVisible();
+async function change(owner:CaseOwner,value:'expression'|'none'){
+ await page(owner).locator('.table-tab:visible').getByRole('button',{name:text.title,exact:true}).click();owner.assertCurrent();await dialog(owner).getByRole('button',{name:/^updated_at ·/}).click();owner.assertCurrent();
+ await dialog(owner).getByRole('checkbox',{name:text.modify+' '+text.onUpdate,exact:true}).check();owner.assertCurrent();await dialog(owner).getByRole('combobox',{name:text.onUpdate,exact:true}).selectOption(value);owner.assertCurrent();await dialog(owner).getByRole('button',{name:text.rowSave,exact:true}).click();owner.assertCurrent();await dialog(owner).getByRole('button',{name:text.preview,exact:true}).click();owner.assertCurrent();await expect(dialog(owner).getByRole('heading',{name:text.fixedSql,exact:true})).toBeVisible();owner.assertCurrent();
 }
 /** 使用原风险确认和单次按钮；本测试从不调用生产apply IPC来替代用户操作。 */
-async function confirm(){for(const label of [text.ackImplicit,text.ackWindow])await dialog().getByRole('checkbox',{name:label,exact:true}).check();await dialog().getByRole('button',{name:text.apply,exact:true}).click();await expect(dialog().getByRole('status')).toHaveText(text.succeeded);await expect(dialog().getByRole('button',{name:text.apply,exact:true})).toBeDisabled();await dialog().getByRole('button',{name:text.close,exact:true}).click();}
+async function confirm(owner:CaseOwner){for(const label of [text.ackImplicit,text.ackWindow]){await dialog(owner).getByRole('checkbox',{name:label,exact:true}).check();owner.assertCurrent();}await dialog(owner).getByRole('button',{name:text.apply,exact:true}).click();owner.assertCurrent();await expect(dialog(owner).getByRole('status')).toHaveText(text.succeeded);owner.assertCurrent();await expect(dialog(owner).getByRole('button',{name:text.apply,exact:true})).toBeDisabled();owner.assertCurrent();await dialog(owner).getByRole('button',{name:text.close,exact:true}).click();owner.assertCurrent();}
 
 for(const type of ['DATETIME','DATETIME(6)','TIMESTAMP(6)'])test(type+'通过真实字段窗口开启及移除ON UPDATE，精确默认/旁列保持且不重放',async({},info:TestInfo)=>{
- const live:Live=await import('./live-helpers');await live.isolatedDatabase(async c=>{
-  const target='`'+c.database.replaceAll('`','``')+'`.`column_auto_time`';await c.observer.query(`CREATE TABLE ${target}(id INT PRIMARY KEY,note VARCHAR(20),updated_at ${type} NULL DEFAULT '2001-01-01 00:00:00' COMMENT '保留时间',big_value DECIMAL(30,6) DEFAULT 12345678901234567890.123456,empty_text VARCHAR(10) DEFAULT '',text_null VARCHAR(10) DEFAULT 'NULL') ENGINE=InnoDB`);await c.observer.query(`INSERT INTO ${target}(id,note) VALUES(1,'原值')`);
-  const read=async()=>{const [rows]=await c.observer.query<RowDataPacket[]>(`SELECT CAST(updated_at AS CHAR) AS timestamp_value,CAST(big_value AS CHAR) AS amount,empty_text,text_null FROM ${target} WHERE id=1`);return rows[0];};
-  const ddl=async()=>{const [rows]=await c.observer.query<RowDataPacket[]>('SHOW CREATE TABLE '+target);return String(rows[0]['Create Table']);};const original=await ddl(),data=await read();
-  const connection=page().locator('.connection-node').filter({has:page().locator('.connection-row').getByText(c.connectionName,{exact:true})});await connection.locator('.connection-row').hover();await connection.getByRole('button',{name:'刷新连接',exact:true}).click();await connection.locator('.database-row').getByRole('button',{name:c.database,exact:true}).click();await connection.locator('.object-row').getByText('column_auto_time',{exact:true}).click();await expect(page().locator('.table-tab:visible .loading-overlay')).toHaveCount(0);
-  await change('expression');expect(await ddl()).toBe(original);expect(await read()).toEqual(data);await confirm();const enabled=await ddl();expect(enabled).toMatch(/ON UPDATE current_timestamp/i);expect(await read()).toEqual(data);
-  await c.observer.query(`UPDATE ${target} SET note='更新后' WHERE id=1`);const updated=await read();expect(updated.timestamp_value).not.toBe(data.timestamp_value);expect({...updated,timestamp_value:data.timestamp_value}).toEqual(data);
-  await change('none');expect(await ddl()).toBe(enabled);await confirm();expect(await ddl()).toBe(original);await c.observer.query(`UPDATE ${target} SET note='再次更新' WHERE id=1`);expect(await read()).toEqual(updated);
-  const tasks=await page().evaluate(()=>window.dbark.invoke('tasks.list',{}));expect(tasks.filter(task=>task.kind==='schema.columns.apply')).toHaveLength(2);
- },info);
+ if(!desktop)throw Error('未取得本例窗口');
+ const captured=desktop.ownedDesktopResources(info);
+ const owner:CaseOwner={page:captured.page,assertCurrent:()=>{desktop.ownedDesktopResources(info);}};
+ const live:Live=await import('./live-helpers');owner.assertCurrent();await live.isolatedDatabase(async c=>{
+  owner.assertCurrent();
+  /** 观察请求未知或失去归属即保留；只调用一次本例observer，不借退出收尾取消它。 */
+  const observe = async <T>(request: () => Promise<T>): Promise<T> => {
+    owner.assertCurrent();
+    try { const value = await request(); owner.assertCurrent(); return value; }
+    catch (reason) { desktop.retainOwnedDesktopResources(info); throw reason; }
+  };
+  const target='`'+c.database.replaceAll('`','``')+'`.`column_auto_time`';await observe(() => c.observer.query(`CREATE TABLE ${target}(id INT PRIMARY KEY,note VARCHAR(20),updated_at ${type} NULL DEFAULT '2001-01-01 00:00:00' COMMENT '保留时间',big_value DECIMAL(30,6) DEFAULT 12345678901234567890.123456,empty_text VARCHAR(10) DEFAULT '',text_null VARCHAR(10) DEFAULT 'NULL') ENGINE=InnoDB`));owner.assertCurrent();await observe(() => c.observer.query(`INSERT INTO ${target}(id,note) VALUES(1,'原值')`));owner.assertCurrent();
+  const read=async()=>{owner.assertCurrent();const [rows]=await observe(() => c.observer.query<RowDataPacket[]>(`SELECT CAST(updated_at AS CHAR) AS timestamp_value,CAST(big_value AS CHAR) AS amount,empty_text,text_null FROM ${target} WHERE id=1`));owner.assertCurrent();return rows[0];};
+  const ddl=async()=>{owner.assertCurrent();const [rows]=await observe(() => c.observer.query<RowDataPacket[]>('SHOW CREATE TABLE '+target));owner.assertCurrent();return String(rows[0]['Create Table']);};const original=await ddl(),data=await read();owner.assertCurrent();
+  const connection=page(owner).locator('.connection-node').filter({has:page(owner).locator('.connection-row').getByText(c.connectionName,{exact:true})});await connection.locator('.connection-row').hover();owner.assertCurrent();await connection.getByRole('button',{name:'刷新连接',exact:true}).click();owner.assertCurrent();await connection.locator('.database-row').getByRole('button',{name:c.database,exact:true}).click();owner.assertCurrent();await connection.locator('.object-row').getByText('column_auto_time',{exact:true}).click();owner.assertCurrent();await expect(page(owner).locator('.table-tab:visible .loading-overlay')).toHaveCount(0);owner.assertCurrent();
+  await change(owner,'expression');owner.assertCurrent();expect(await ddl()).toBe(original);owner.assertCurrent();expect(await read()).toEqual(data);owner.assertCurrent();await confirm(owner);owner.assertCurrent();const enabled=await ddl();owner.assertCurrent();expect(enabled).toMatch(/ON UPDATE current_timestamp/i);expect(await read()).toEqual(data);owner.assertCurrent();
+  await observe(() => c.observer.query(`UPDATE ${target} SET note='更新后' WHERE id=1`));owner.assertCurrent();const updated=await read();owner.assertCurrent();expect(updated.timestamp_value).not.toBe(data.timestamp_value);expect({...updated,timestamp_value:data.timestamp_value}).toEqual(data);
+  await change(owner,'none');owner.assertCurrent();expect(await ddl()).toBe(enabled);owner.assertCurrent();await confirm(owner);owner.assertCurrent();expect(await ddl()).toBe(original);owner.assertCurrent();await observe(() => c.observer.query(`UPDATE ${target} SET note='再次更新' WHERE id=1`));owner.assertCurrent();expect(await read()).toEqual(updated);owner.assertCurrent();
+  const tasks=await page(owner).evaluate(()=>window.dbark.invoke('tasks.list',{}));owner.assertCurrent();expect(tasks.filter(task=>task.kind==='schema.columns.apply')).toHaveLength(2);
+ },info);owner.assertCurrent();
 });
