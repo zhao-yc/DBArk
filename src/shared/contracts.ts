@@ -25,6 +25,7 @@ import type { ExplainPlan } from './explain';
 import type { WorkbenchTarget, WorkbenchSnapshot } from './workbench';
 import type { SchemaCompareInput, SchemaCompareResult, SchemaComparePreviewInput, SchemaComparePreview } from './schemaCompare';
 import type { QuerySourceBinding, QuerySaveContent, QuerySaveResult } from './queryBinding';
+import type { TableCopyPageSources, TableCopySourceReadInput, TableCopySourceReadResult, TableCopySourceReleaseInput } from './tableCopySource';
 export type CellValue = string | number | boolean | null | { type: 'binary'; base64: string };
 export type DataRow = Record<string, CellValue>;
 export type ObjectKind = 'table' | 'view' | 'procedure' | 'function' | 'trigger' | 'event';
@@ -51,7 +52,7 @@ export interface QueryOutcome { results: QueryResult[]; elapsedMs: number; trans
 export type FilterMode = 'all' | 'any';
 export interface FilterRule { column: string; operator: '=' | '!=' | '>' | '>=' | '<' | '<=' | 'LIKE' | 'NOT LIKE' | 'IN' | 'NOT IN' | 'BETWEEN' | 'IS NULL' | 'IS NOT NULL'; value?: string; values?: string[]; }
 export interface SortRule { column: string; direction: 'ASC' | 'DESC'; }
-export interface TablePage { rows: DataRow[]; columns: ResultColumn[]; hasMore: boolean; page: number; pageSize: number; }
+export interface TablePage { rows: DataRow[]; columns: ResultColumn[]; hasMore: boolean; page: number; pageSize: number; copySource?: TableCopyPageSources; }
 export type RowChange = { kind: 'insert'; values: DataRow } | { kind: 'update'; before: DataRow; values: DataRow } | { kind: 'delete'; before: DataRow };
 export interface SqlPreview { sql: string; statements: { sql: string; params: CellValue[] }[]; warnings: string[]; }
 export interface TableDesign { database: string; name: string; originalName?: string; engine: string; charset: string; comment: string; columns: { name: string; originalName?: string; type: string; nullable: boolean; defaultValue?: string | null; autoIncrement: boolean; comment: string }[]; indexes: IndexInfo[]; foreignKeys: ForeignKeyInfo[]; }
@@ -128,7 +129,9 @@ export interface CommandMap {
   'query.exportStream': { input: QueryStreamExportInput; output: QueryStreamExportOutput };
   'query.cancel': { input: { taskId: string }; output: void };
   'query.transaction': { input: { sessionId: string; action: 'begin' | 'commit' | 'rollback' }; output: void };
-  'table.page': { input: { connectionId: string; database: string; table: string; page: number; pageSize: number; filters: FilterRule[]; filterMode?: FilterMode; sort: SortRule[] }; output: TablePage };
+  'table.page': { input: { connectionId: string; database: string; table: string; page: number; pageSize: number; filters: FilterRule[]; filterMode?: FilterMode; sort: SortRule[]; copySource?: boolean; taskId?: string }; output: TablePage };
+  'table.copySourceRead': { input: TableCopySourceReadInput; output: TableCopySourceReadResult };
+  'table.copySourceRelease': { input: TableCopySourceReleaseInput; output: void };
   /** 目标仅由服务器来源表的外键解析；值元组保留精确字符串及二进制，不以普通文本筛选代替关联。 */
   'table.referencePage': { input: { connectionId: string; database: string; table: string; foreignKeyName: string; matchValues?: CellValue[]; page: number; pageSize: number; filters: FilterRule[]; filterMode?: FilterMode; sort: SortRule[]; taskId: string }; output: { source: TableInfo; foreignKey: ForeignKeyInfo; target: TableInfo; page: TablePage } };
   'table.preview': { input: { connectionId: string; database: string; table: string; changes: RowChange[] }; output: SqlPreview };

@@ -4,6 +4,13 @@ import { foreignKeyActions } from './references';
 import { mariaDefault, qualified, temporalDefault } from './sql';
 import { parseTableColumnDefinition } from './tableColumnDefinition';
 import { hasUnprovenBinaryDefault } from '../shared/tableColumnPatches';
+import type { FieldPacket } from 'mysql2';
+
+export type MetadataQuery = <T = Record<string, unknown>[]>(sql: string, params?: (string | number | boolean | null | Buffer)[]) => Promise<{ rows: T; fields: FieldPacket[] }>;
+/** 可取消表读取可注入同会话查询；所有旧调用继续使用原execute协议与错误边界。 */
+function metadataReader(connection: ManagedConnection, query?: MetadataQuery): MetadataQuery {
+  return query ?? function<T>(sql: string, params: (string | number | boolean | null | Buffer)[] = []) { return execute<T>(connection, sql, params); };
+}
 
 /** 仅对普通 COLLATIONS 无法解析的别名按实际目录能力查找；调用方可注入可取消的同会话查询。 */
 export async function resolveCollationEncoding(connection: ManagedConnection, collation: string, query: (sql: string) => Promise<Record<string, unknown>[]> = async sql => (await execute<Record<string, unknown>[]>(connection, sql)).rows): Promise<{ charset: string; collation: string }> {
@@ -40,10 +47,10 @@ export async function objects(connection: ManagedConnection, database: string): 
 }
 
 /** SHOW CREATE 的对象类型来自固定映射，名称独立引用。 */
-export async function objectDdl(connection: ManagedConnection, database: string, name: string, kind: ObjectKind): Promise<string> {
+export async function objectDdl(connection: ManagedConnection, database: string, name: string, kind: ObjectKind, query?: MetadataQuery): Promise<string> {
   const types: Record<ObjectKind, string> = { table: 'TABLE', view: 'VIEW', procedure: 'PROCEDURE', function: 'FUNCTION', trigger: 'TRIGGER', event: 'EVENT' };
   if (!Object.hasOwn(types, kind)) throw new Error('不支持的数据库对象类型');
-  const { rows } = await execute<Record<string, unknown>[]>(connection, `SHOW CREATE ${types[kind]} ${qualified(database, name)}`);
+  const { rows } = await metadataReader(connection, query)<Record<string, unknown>[]>(`SHOW CREATE ${types[kind]} ${qualified(database, name)}`);
   const row = rows[0];
   if (!row) throw new Error('找不到数据库对象');
   const key = Object.keys(row).find(key => /^Create /i.test(key) || key === 'SQL Original Statement');
@@ -52,11 +59,12 @@ export async function objectDdl(connection: ManagedConnection, database: string,
 }
 
 /** 只有不含 NULL 的唯一键才能作为可编辑行标识；函数索引不作为定位键。 */
-export async function tableInfo(connection: ManagedConnection, database: string, table: string): Promise<TableInfo> {
-  const columns = await execute<{ name: string; type: string; nullable: string; defaultValue: string | null; extra: string; comment: string; characterSet?: string | null }[]>(connection,
+export async function tableInfo(connection: ManagedConnection, database: string, table: string, query?: MetadataQuery): Promise<TableInfo> {
+  const read = metadataReader(connection, query);
+  const columns = await read<{ name: string; type: string; nullable: string; defaultValue: string | null; extra: string; comment: string; characterSet?: string | null }[]>(
     'SELECT COLUMN_NAME AS name, COLUMN_TYPE AS type, IS_NULLABLE AS nullable, COLUMN_DEFAULT AS defaultValue, EXTRA AS extra, COLUMN_COMMENT AS comment, CHARACTER_SET_NAME AS characterSet FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ? ORDER BY ORDINAL_POSITION', [database, table]);
   if (!columns.rows.length) throw new Error('表不存在或当前用户无权查看');
-  const stats = await execute<{ name: string; nonUnique: number; columnName: string | null; subPart: number | null; indexType: string; sortDirection: string | null }[]>(connection,
+  const stats = await read<{ name: string; nonUnique: number; columnName: string | null; subPart: number | null; indexType: string; sortDirection: string | null }[]>(
     'SELECT INDEX_NAME AS name, NON_UNIQUE AS nonUnique, COLUMN_NAME AS columnName, SUB_PART AS subPart, INDEX_TYPE AS indexType, COLLATION AS sortDirection FROM information_schema.STATISTICS WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ? ORDER BY INDEX_NAME, SEQ_IN_INDEX', [database, table]);
   const indexMap = new Map<string, IndexInfo>();
   const unusableIndexes = new Set<string>();
@@ -67,19 +75,19 @@ export async function tableInfo(connection: ManagedConnection, database: string,
     if (row.columnName) index.columns.push(row.columnName); else unusableIndexes.add(row.name);
     if (row.subPart !== null || row.indexType !== 'BTREE' || row.sortDirection === 'D') unsupportedIndexes.add(row.name);
   }
-  const keys = await execute<{ name: string; columnName: string; referencedDatabase: string; referencedTable: string; referencedColumn: string; onUpdate: string | null; onDelete: string | null }[]>(connection,
+  const keys = await read<{ name: string; columnName: string; referencedDatabase: string; referencedTable: string; referencedColumn: string; onUpdate: string | null; onDelete: string | null }[]>(
     'SELECT k.CONSTRAINT_NAME AS name, k.COLUMN_NAME AS columnName, k.REFERENCED_TABLE_SCHEMA AS referencedDatabase, k.REFERENCED_TABLE_NAME AS referencedTable, k.REFERENCED_COLUMN_NAME AS referencedColumn, r.UPDATE_RULE AS onUpdate, r.DELETE_RULE AS onDelete FROM information_schema.KEY_COLUMN_USAGE k LEFT JOIN information_schema.REFERENTIAL_CONSTRAINTS r ON r.CONSTRAINT_SCHEMA = k.CONSTRAINT_SCHEMA AND r.CONSTRAINT_NAME = k.CONSTRAINT_NAME AND r.TABLE_NAME = k.TABLE_NAME WHERE k.TABLE_SCHEMA = ? AND k.TABLE_NAME = ? AND k.REFERENCED_TABLE_NAME IS NOT NULL ORDER BY k.CONSTRAINT_NAME, k.ORDINAL_POSITION', [database, table]);
-  const tableResult = await execute<{ engine: string | null; tableType: string; charset: string | null; collation: string | null; comment: string }[]>(connection,
+  const tableResult = await read<{ engine: string | null; tableType: string; charset: string | null; collation: string | null; comment: string }[]>(
     'SELECT t.ENGINE AS engine, t.TABLE_TYPE AS tableType, t.TABLE_COLLATION AS collation, t.TABLE_COMMENT AS comment, c.CHARACTER_SET_NAME AS charset FROM information_schema.TABLES t LEFT JOIN information_schema.COLLATIONS c ON c.COLLATION_NAME = t.TABLE_COLLATION WHERE t.TABLE_SCHEMA = ? AND t.TABLE_NAME = ?', [database, table]);
   if (tableResult.rows.length !== 1) throw new Error('无法唯一确认服务器表目录');
   const tableEntry = tableResult.rows[0];
   if (tableEntry.tableType === 'BASE TABLE' && !tableEntry.charset) {
     if (typeof tableEntry.collation !== 'string') throw new Error('无法确认基本表的默认排序规则');
-    tableEntry.charset = (await resolveCollationEncoding(connection, tableEntry.collation)).charset;
+    tableEntry.charset = (await resolveCollationEncoding(connection, tableEntry.collation, async sql => (await read<Record<string, unknown>[]>(sql)).rows)).charset;
   }
   const maria = connection.status.dialect === 'mariadb';
-  const modes = maria ? (await execute<{ mode: string }[]>(connection, 'SELECT @@SESSION.sql_mode AS mode')).rows[0].mode.split(',') : (connection.sqlMode ?? '').split(',');
-  const ddl = await objectDdl(connection, database, table, tableResult.rows[0]?.tableType === 'VIEW' ? 'view' : 'table');
+  const modes = maria ? (await read<{ mode: string }[]>( 'SELECT @@SESSION.sql_mode AS mode')).rows[0].mode.split(',') : (connection.sqlMode ?? '').split(',');
+  const ddl = await objectDdl(connection, database, table, tableResult.rows[0]?.tableType === 'VIEW' ? 'view' : 'table', read);
   const fallbackActions = keys.rows.some(row => row.onUpdate === null || row.onDelete === null) ? foreignKeyActions(ddl, modes.includes('NO_BACKSLASH_ESCAPES'), modes.includes('ANSI_QUOTES')) : undefined;
   const keyMap = new Map<string, ForeignKeyInfo>();
   for (const row of keys.rows) {

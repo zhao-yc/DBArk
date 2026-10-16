@@ -65,12 +65,14 @@ test('无可靠键表与视图保持只读，不产生复制入口的写入资�
   }, info);
 });
 
-test('INVISIBLE普通列未加载时禁用复制，不能把非默认源值静默写成DEFAULT', async ({}, info) => {
+test('INVISIBLE普通列沿引擎租约只读补取，非默认源值进入新增草稿且不写数据库', async ({}, info) => {
   await isolatedDatabase(async ({ observer, database, connectionName }) => {
     await observer.query(`CREATE TABLE ${q(database, 'copy_invisible')} (id INT PRIMARY KEY AUTO_INCREMENT,note TEXT,server_hidden VARCHAR(40) INVISIBLE DEFAULT '服务器默认值') ENGINE=InnoDB`);
     await observer.query(`INSERT INTO ${q(database, 'copy_invisible')} (note,server_hidden) VALUES ('普通可见记录','源记录非默认值')`);
     const table = await openTable(connectionName, database, 'copy_invisible'); await table.getByRole('gridcell', { name: '普通可见记录', exact: true }).click(); const action = table.getByRole('button', { name: text.action, exact: true });
-    await expect(action).toBeDisabled(); await expect(action).toHaveAttribute('title', /server_hidden.*未完整加载/); await expect(table.locator('.row-inserted')).toHaveCount(0);
+    // 此用例要求ROOT提供能核真实InnoDB身份的账号；权限不足有独立纯测试，不冒充完整能力验收。
+    await expect(action).toBeEnabled(); await expect(action).toHaveAttribute('title', /只读补取缺失字段/); await action.click(); await expect(table.locator('.row-inserted')).toHaveCount(1); await expect(table.getByRole('status')).toContainText('缺失字段读取时间');
+    await table.getByRole('button', { name: zh.table.text019, exact: true }).click(); const preview = page.getByRole('dialog', { name: zh.table.text031, exact: true }); await expect(preview).toBeVisible(); await expect(preview).toContainText('server_hidden'); await expect(preview).toContainText('源记录非默认值'); await preview.getByRole('button', { name: zh.common.backToEdit, exact: true }).click();
     const [rows] = await observer.query<RowDataPacket[]>(`SELECT server_hidden FROM ${q(database, 'copy_invisible')}`); expect(rows).toHaveLength(1); expect(rows[0].server_hidden).toBe('源记录非默认值');
   }, info);
 });
