@@ -22,11 +22,14 @@ const binaryAcknowledgement = '我接受显式二进制模式的首次准备与�
 type StreamWindow = Window & { __q05StreamEvents?: TaskEvent[] };
 type JsonDocument = { format: string; version: number; results: { kind: 'rows' | 'status'; resultOrdinal: number; statementOrdinal: number; rowResultOrdinal?: number; rows?: Record<string, unknown>[]; rowsWritten: number; columns?: { name: string; exportName: string }[] }[] };
 
-/** 原生键盘准备 SQL；先删除旧选区避免配对包装，逐字核对持久化模板且不访问剪贴板。 */
+/** 合成paste准备SQL，走可见编辑器既有粘贴处理；逐字核对持久化模板，不访问系统剪贴板。 */
 async function writeSql(source: string) {
   await query().locator('.monaco-editor').getByRole('textbox').focus();
   await page.keyboard.press(`${modifier}+A`); await page.keyboard.press('Backspace');
-  await page.keyboard.insertText(source);
+  await query().locator('.monaco-editor').getByRole('textbox').evaluate((element, sql) => {
+    const transfer = new DataTransfer(); transfer.setData('text/plain', sql);
+    element.dispatchEvent(new ClipboardEvent('paste', { clipboardData: transfer, bubbles: true, cancelable: true }));
+  }, source);
   await expect.poll(() => page.evaluate(async () => {
     const settings = await window.dbark.invoke('settings.get', {});
     return settings.tabs.find(tab => tab.id === settings.activeTabId)?.sql?.replaceAll('\r\n', '\n');
