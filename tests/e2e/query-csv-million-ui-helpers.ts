@@ -30,6 +30,7 @@ export async function checkMillionUiPrerequisites(): Promise<void> {
   assert.equal(process.env.DBARK_TEST_HOST, '192.168.31.200'); assert.ok(process.env.DBARK_TEST_USER && process.env.DBARK_TEST_PASSWORD !== undefined);
   assert.ok(environment.DBARK_TEST_HOST === process.env.DBARK_TEST_HOST && environment.DBARK_TEST_USER === process.env.DBARK_TEST_USER && environment.DBARK_TEST_PASSWORD === process.env.DBARK_TEST_PASSWORD, 'ROOT环境与既有夹具连接配置必须相同');
   assert.equal(environment.DBARK_TEST_TLS === '1', process.env.DBARK_TEST_TLS === '1');
+  if (port === 13484) assert.equal(process.env.DBARK_TEST_TLS, '1', '13484必须显式严格TLS，不能借默认环境降级');
   if (process.env.DBARK_TEST_TLS === '1') { const ca = process.env.DBARK_TEST_CA; assert.ok(ca && isAbsolute(ca) && environment.DBARK_TEST_CA === ca); const file = await lstat(ca); assert.ok(file.isFile() && !file.isSymbolicLink()); }
   const python = process.env.DBARK_Q05_PYTHON; assert.ok(python && isAbsolute(python)); const file = await lstat(python); assert.ok(file.isFile() && !file.isSymbolicLink());
   const expected = process.env.DBARK_Q05_EXPECTED_HOSTNAME; assert.ok(expected && /^[A-Za-z0-9][A-Za-z0-9.-]{0,252}$/.test(expected));
@@ -170,7 +171,8 @@ export async function runMillionArchiveUi(info: TestInfo): Promise<void> {
       if (database) await attempt(async () => { const [rows] = await control!.query<RowDataPacket[]>({ sql: 'SELECT SCHEMA_NAME FROM information_schema.SCHEMATA WHERE SCHEMA_NAME=?', values: [database], timeout: 5000 }); evidence.databaseRemaining = rows.length; expect(rows).toHaveLength(0); });
       await attempt(async () => { await control!.end(); evidence.controlEnded = true; });
     }
-    await attempt(async () => { expect(closed).toBe(true); const remaining = (snapshot?.workerPids ?? []).filter(pid => { try { process.kill(pid, 0); return true; } catch { return false; } }); evidence.utilityPidsRemaining = remaining; expect(remaining).toEqual([]); });
+    // 只有ESRCH可证明进程消失；权限不足和未知观测失败必须保留失败，不能伪造资源全零。
+    await attempt(async () => { expect(closed).toBe(true); const remaining = (snapshot?.workerPids ?? []).filter(pid => { try { process.kill(pid, 0); return true; } catch (error) { if ((error as NodeJS.ErrnoException | undefined)?.code === 'ESRCH') return false; throw new Error('无法确认本例utility进程是否退出', { cause: error }); } }); evidence.utilityPidsRemaining = remaining; expect(remaining).toEqual([]); });
     await attempt(async () => { const names = (await readdir(directory)).filter(name => name.endsWith('.partial')); evidence.partialRemaining = names.length; expect(names).toEqual([]); expect(JSON.parse(await readFile(join(directory, 'owner.json'), 'utf8')).owner).toBe(owner); });
     evidence.finishedAt = new Date().toISOString(); evidence.status = failures.length ? 'failed' : 'passed'; evidence.errors = failures.map(error => errorDetail(error)); await attempt(() => writeFile(join(directory, 'evidence.json'), JSON.stringify(evidence, null, 2), { flag: 'wx' }));
     await attempt(() => info.attach('Q05百万行ZIP正式UI补充证据', { path: join(directory, 'evidence.json'), contentType: 'application/json' }));
