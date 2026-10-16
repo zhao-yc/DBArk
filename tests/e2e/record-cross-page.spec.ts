@@ -2,7 +2,7 @@ import type { TestInfo } from '@playwright/test';
 import type { LiveContext } from './live-helpers';
 import { test, expect, page, desktop, closed } from './desktop-fixture';
 import { recordViewZh as text } from '../../src/renderer/locales/recordViews.zh-CN';
-import { zh } from '../../src/renderer/locales/zh-CN';
+import { zh, formatText } from '../../src/renderer/locales/zh-CN';
 import { recordDocumentZh as documentText } from '../../src/renderer/locales/recordDocument.zh-CN';
 
 // ROOT独占正式窗口/隔离库。默认跳过，不读取实库配置；不增加原45秒总超时或点击上限。
@@ -100,7 +100,10 @@ test.describe('D04记录表单跨页正式入口准备', () => {
         }
         const before = (await calls()).length; await next().click(); await expect(note()).toHaveText(text.pageDirty); expect((await calls()).length).toBe(before);
         if (input) await expect(input).toHaveValue(kind === '字段文本' ? '跨页前原样保留' : '{');
-        await expect(table().locator('.table-action-bar')).toContainText(/草稿|未提交|未暂存/);
+        // 未暂存输入与已暂存修改使用各自现有文案，精确核对提示及待提交条数。
+        const hint = table().locator('.table-action-bar .warning-text');
+        if (input) await expect(hint).toHaveText(text.inputDirty);
+        else await expect(hint).toHaveText(formatText(zh.table.text015, 1));
       }, info);
     });
   }
