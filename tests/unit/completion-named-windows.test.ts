@@ -15,8 +15,8 @@ describe('命名窗口引用的本查询块作用域', () => {
     expect(suggestions.items).toEqual([{ label: 'recent', kind: 'alias', insertText: '`recent`', detail: '命名窗口' }]);
     expect(directory.load).not.toHaveBeenCalled();
   });
-  it('已知MySQL5.7不提供窗口字段，不错误宣称服务器具备窗口能力', () => {
-    const marked = 'SELECT ROW_NUMBER() OVER(ORDER BY s.|) FROM sales s';
+  it('已知MySQL5.7不提供新增窗口名称，不错误宣称服务器具备窗口能力', () => {
+    const marked = 'SELECT ROW_NUMBER() OVER so|suffix FROM sales s WINDOW sorted AS(ORDER BY s.id)';
     expect(analyze(marked, completionCapabilitiesForServer('mysql', '5.7.44'))).toEqual({ status: 'blocked', reason: 'capability' });
   });
 });
@@ -127,7 +127,7 @@ describe('集合括号与输出别名补充边界', () => {
     const outer = analyze('SELECT q.rank|suffix FROM (SELECT ROW_NUMBER() OVER win AS ranking WINDOW win AS()) q');
     expect(outer.status).toBe('ready'); if (outer.status === 'ready') expect(outer.relations).toMatchObject([{ name: 'q', columns: ['ranking'] }]);
   });
-  it('缺省窗口能力同样阻断窗口字段，不向目录泄露未知版本假设', async () => {
-    await blocked('SELECT ROW_NUMBER() OVER(ORDER BY s.|) FROM sales s', {}, {});
+  it('缺省窗口能力仍阻断新增窗口名称，不向目录泄露未知版本假设', async () => {
+    await blocked('SELECT ROW_NUMBER() OVER so|suffix FROM sales s WINDOW sorted AS(ORDER BY s.id)', {}, {});
   });
 });

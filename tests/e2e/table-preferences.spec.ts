@@ -72,7 +72,7 @@ test('真实写盘失败不会丢失布局，修复后保存设置及重启不�
   expect((await page.evaluate(() => window.dbark.invoke('connections.list', {})))[0].host).toBe(connection.host); await expectOfflineOnly();
 });
 
-test('真实 schema2 配置启动迁移至 schema5，既有查询片段设置原样保留', async () => {
+test('真实 schema2 配置启动迁移至 schema6，既有查询片段设置原样保留并创建空回执表', async () => {
   const connection = await offlineConnection();
   await page.evaluate(async id => {
     await window.dbark.invoke('queries.save', { id: '旧查询', name: '旧查询', connectionId: id, sql: 'SELECT 7', updatedAt: '' });
@@ -80,11 +80,19 @@ test('真实 schema2 配置启动迁移至 schema5，既有查询片段设置原
   }, connection.id);
   await page.getByRole('button', { name: '切换主题', exact: true }).click(); await quitDesktop();
   const file = join(dataDir, 'dbark.sqlite'), SQL = await initSqlJs({ locateFile: () => sqlWasmFile });
-  const old = new SQL.Database(await readFile(file)); old.run('DROP TABLE table_preferences; PRAGMA user_version=2');
+  // 仅降级本例临时库：移除两张后续新增表，确保启动真正执行创建迁移。
+  const old = new SQL.Database(await readFile(file)); old.run('DROP TABLE table_preferences; DROP TABLE table_apply_receipts; PRAGMA user_version=2');
+  expect(old.exec('PRAGMA user_version')[0].values[0][0]).toBe(2);
+  expect(old.exec("SELECT name FROM sqlite_master WHERE type='table' AND name IN ('table_preferences','table_apply_receipts')")).toEqual([]);
   const before = old.exec('SELECT * FROM connections; SELECT * FROM queries; SELECT * FROM sql_snippets; SELECT * FROM settings'); await writeFile(file, old.export()); old.close();
   await launchDesktop();
   const migrated = new SQL.Database(await readFile(file));
-  expect(migrated.exec('PRAGMA user_version')[0].values[0][0]).toBe(5);
-  expect(migrated.exec('SELECT * FROM connections; SELECT * FROM queries; SELECT * FROM sql_snippets; SELECT * FROM settings')).toEqual(before); migrated.close();
+  expect(migrated.exec('PRAGMA user_version')[0].values[0][0]).toBe(6);
+  expect(migrated.exec('SELECT * FROM connections; SELECT * FROM queries; SELECT * FROM sql_snippets; SELECT * FROM settings')).toEqual(before);
+  // 校验列名、类型、非空和主键约束，不能仅靠版本号声称迁移成功。
+  expect(migrated.exec('PRAGMA table_info(table_apply_receipts)')[0].values).toEqual([
+    [0, 'id', 'TEXT', 0, null, 1], [1, 'data', 'TEXT', 1, null, 0], [2, 'started_at', 'TEXT', 1, null, 0],
+  ]);
+  expect(migrated.exec('SELECT id, data, started_at FROM table_apply_receipts')).toEqual([]); migrated.close();
   expect(await get({ connectionId: connection.id, database: '库', table: '表' })).toBeNull(); await expectOfflineOnly();
 });

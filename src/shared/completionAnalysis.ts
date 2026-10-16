@@ -5,6 +5,7 @@ import {completionLimits} from './sqlCompletion';
 import{completionQueryBranches,completionBranchAt,completionOutputContext}from'./completionQueryScope';
 import{completionWindowContext}from'./completionWindowScope';
 import { completionNamedWindows } from './completionNamedWindows';
+import { completionProcedureScope } from './completionProcedureScope';
 import{completionLateralTokens,completionLateralScope,completionLateralAllows}from'./completionLateralScope';
 import type{CompletionScopeCapabilities}from'./completionCapabilities';
 
@@ -94,6 +95,11 @@ export function analyzeCompletion(source:string,offset:number,mode:CompletionLex
     const normalized=normalize(source,lexical);if(normalized.text.length>completionLimits.sourceUnits)return{status:'blocked',reason:'budget'};
     const context=completionLexicalContext(normalized.text,normalized.caret,{ansiQuotes:false,noBackslashEscapes:true},completionLimits.aliasUnits);if(context.status!=='ready')return{status:'blocked',reason:'syntax'};
     const normalizedTokens=context.tokens;
+    // 规范化会脱敏参数；原始token未闭合时不能借替换后的完整字面量恢复非法调用。
+    const procedure=completionProcedureScope(normalizedTokens,normalized.caret,()=>lexical.tokens.every(token=>token.closed)&&new QuietMySQL().validate(normalized.text).length===0);
+    if(procedure==='invalid')return{status:'blocked',reason:'syntax'};
+    // 复用既有procedure语义与目录契约，不添加参数占位、全库扫描或执行动作。
+    if(procedure)return{status:'ready',target:lexical.target,syntax:['procedure'],keywords:[],relations:[],localRelations:[],columnMode:'expression',incomplete:false};
     const before=normalized.text.slice(0,normalized.caret).split('\n'),position={lineNumber:before.length,column:before.at(-1)!.length+1},parser=new QuietMySQL();
     const suggestions=parser.getSuggestionAtCaretPosition(normalized.text,position),entities=parser.getAllEntities(normalized.text,position)??[];
     if(entities.length>completionLimits.tokens)return{status:'blocked',reason:'budget'};
@@ -104,7 +110,7 @@ export function analyzeCompletion(source:string,offset:number,mode:CompletionLex
     // 仅新增继承路径要求当前分支完整语法；使用独立静默解析器，不改变已收集实体或回显SQL。
     let expansions=0,truncated=false;const branches=completionQueryBranches(queries,normalizedTokens),windowContext=completionWindowContext(branches,normalizedTokens,normalized.caret,targetToken?.kind==='word'?targetToken.value:undefined,(start,end)=>new QuietMySQL().validate(normalized.text.slice(start,end)).length===0);
     if(windowContext==='unsupported')return{status:'blocked',reason:'syntax'};
-    if(windowContext&&capabilities.windowFunctions!==true)return{status:'blocked',reason:'capability'};
+    // 既有窗口字段只分析当前文本的关系/投影，不代表服务器支持执行；新增窗口名称在下方单独核对能力。
     const lateral=completionLateralScope(tables,branches,normalizedTokens);if(lateral.status==='blocked'||hasLateral&&!lateral.boundaries.length)return{status:'blocked',reason:'syntax'};
     const lateralByEntity=new Map(lateral.boundaries.map(boundary=>[boundary.entity,boundary]));
     // 集合边界独立于输出别名展示；尚未支持的全局窗口不能回退到末分支FROM来源。
