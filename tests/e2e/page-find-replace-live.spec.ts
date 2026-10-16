@@ -50,9 +50,10 @@ test.describe('D06替换当前与键盘导航补充', () => {
     const fixture = await import('./desktop-fixture');
     await isolatedDatabase(async ({ observer, database, connectionName }) => {
       const qualified = '`' + database + '`.`d06_current_ui`', original = '😀old前old后old';
-      await observer.query(`CREATE TABLE ${qualified}(id BIGINT UNSIGNED PRIMARY KEY,note TEXT,other TEXT,nil TEXT,amount DECIMAL(30,6),payload BLOB,generated TEXT GENERATED ALWAYS AS (note) VIRTUAL) ENGINE=InnoDB`);
+      // generated是MySQL保留字；夹具与产品一致显式引用字段，不能让建表语法失败冒充界面结果。
+      await observer.query(`CREATE TABLE ${qualified}(id BIGINT UNSIGNED PRIMARY KEY,note TEXT,other TEXT,nil TEXT,amount DECIMAL(30,6),payload BLOB,\`generated\` TEXT GENERATED ALWAYS AS (note) VIRTUAL) ENGINE=InnoDB`);
       for (const [id, note, other] of [['18446744073709551614', original, '原旁列'], ['18446744073709551615', 'old', '原旁列2']]) await observer.query(`INSERT INTO ${qualified}(id,note,other,nil,amount,payload) VALUES(?,?,?,NULL,12345678901234567890.123456,UNHEX('0001ff'))`, [id, note, other]);
-      const read = async () => (await observer.query<RowDataPacket[]>(`SELECT CAST(id AS CHAR) AS id,note,other,nil,amount,HEX(payload) AS bytes_value,generated FROM ${qualified} ORDER BY id`))[0], before = await read();
+      const read = async () => (await observer.query<RowDataPacket[]>(`SELECT CAST(id AS CHAR) AS id,note,other,nil,amount,HEX(payload) AS bytes_value,\`generated\` FROM ${qualified} ORDER BY id`))[0], before = await read();
       await fixture.desktop.evaluate(({ ipcMain }) => {
         type Handler = (event: Electron.IpcMainInvokeEvent, payload: { command: string }) => Promise<unknown>;
         const handlers = (ipcMain as typeof ipcMain & { _invokeHandlers: Map<string, Handler> })._invokeHandlers, original = handlers.get('dbark:request'); if (!original) throw Error('没有真实IPC处理器');
