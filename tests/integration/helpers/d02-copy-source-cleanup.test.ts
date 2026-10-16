@@ -8,7 +8,7 @@ import { describe, expect, it } from 'vitest';
 
 type Mode = 'normal' | 'create-unknown' | 'grant-write-unknown' | 'grant-extra' | 'grant-read-once' | 'grant-read-at-drop' | 'owner-read-at-drop' | 'table-read-at-drop' | 'role-read-at-drop' | 'schema-read-at-drop' | 'action-recovered' | 'close-failed' | 'user-post-drop-read' | 'database-post-drop-read' | 'no-mdl-plain' | 'no-mdl-required' | 'mdl-enabled';
 /** 转译并执行正式完整withD02CopyCase及原D02/C02策略；只替换IO端口，不重写清理状态机。 */
-async function scenario(mode: Mode) {
+async function scenario(mode: Mode | 'observe' | 'observe-error-once') {
   const trace: string[] = [], modules = new Map<string, { exports: Record<string, unknown> }>();
   let database = '', owner = '', random = 0, grantsCalls = 0, closing = false, injected = false, actionActive = false, userRemoved = false, databaseRemoved = false, instrumentQueries = 0;
   const uuid = '00000000-0000-0000-0000-000000000001';
@@ -18,7 +18,13 @@ async function scenario(mode: Mode) {
   const fail = (label: string): never => { injected = true; trace.push(label); throw Object.assign(new Error('合成底层内容不得进入错误输出'), { code: 'SYNTH_VERIFICATION', errno: 9911 }); };
   const execute = async (_managed: unknown, text: string) => {
     let rows: Record<string, unknown>[] = [];
-    if (text.startsWith('CREATE DATABASE')) { database = /`([^`]+)`/.exec(text)![1]; trace.push('CREATE DATABASE'); if (mode === 'create-unknown') fail('CREATE响应未知'); }
+    // 独立语法反例只检查官方8.4保留字BLOB；不声称合成端口能验证完整MySQL语法。
+    if (text.includes('HEX(hidden_blob)')) {
+      trace.push('观察行');
+      if (/\bAS\s+BLOB\b/i.test(text) || mode === 'observe-error-once' && !injected) { injected = true; trace.push('观察解析失败'); throw Object.assign(new Error('合成语法原文及行内容不得输出'), { code: 'ER_PARSE_ERROR', sqlState: '42000', errno: 1064 }); }
+      rows = [{ id: '9007199254740993', blob: '00FF8000', blobBytes: 4 }];
+    }
+    else if (text.startsWith('CREATE DATABASE')) { database = /`([^`]+)`/.exec(text)![1]; trace.push('CREATE DATABASE'); if (mode === 'create-unknown') fail('CREATE响应未知'); }
     else if (text.startsWith('CREATE USER')) trace.push('CREATE USER');
     else if (text.startsWith('GRANT SELECT') && mode === 'grant-write-unknown') fail('GRANT响应未知');
     else if (text.startsWith('DROP USER')) { trace.push('DROP USER'); userRemoved = true; }
@@ -56,14 +62,25 @@ async function scenario(mode: Mode) {
     runInContext(js, context, { filename: file + '.ts' }); return module.exports;
   }
   let failure: unknown;
-  const run = load('d02-copy-source-fixture').withD02CopyCase as (config: unknown, action: (context: { assertGrants(): Promise<void>; write(text: string): Promise<void>; sql(text: string): Promise<unknown> }) => Promise<void>, limited: boolean, requirements?: { mdl?: boolean }) => Promise<void>;
-  try { await run({ host: '192.168.31.200', port: 13384, serverUuid: uuid, user: '合成观察账号', password: '合成口令', tls: false }, async context => { trace.push('执行用例'); if (mode === 'action-recovered') { actionActive = true; try { await context.assertGrants(); } catch { trace.push('调用方捕获验证失败'); } await context.assertGrants(); trace.push('后续验证成功'); try { await context.write('DROP DATABASE `不应发送`'); } catch { trace.push('后续写入被禁止'); } try { await context.sql('DROP DATABASE `同样不应发送`'); } catch { trace.push('观察端口DROP也被禁止'); } } }, true, { mdl: mode === 'no-mdl-required' || mode === 'mdl-enabled' }); }
+  /** 运行真实observe正文；一次解析失败后读取恢复也不能撤销永久保留标记。 */
+  const observeAction = async (context: { observe(): Promise<Record<string, unknown>[]>; write(text: string): Promise<void> }) => {
+    if (mode !== 'observe' && mode !== 'observe-error-once') return;
+    if (mode === 'observe-error-once') { try { await context.observe(); } catch { trace.push('捕获观察失败'); } }
+    const rows = await context.observe();
+    expect(rows).toEqual([{ id: '9007199254740993', blob: '00FF8000', blobBytes: 4 }]);
+    trace.push('观察成功且原blob键保留');
+    if (mode === 'observe-error-once') { try { await context.write('DROP DATABASE `不应发送`'); } catch { trace.push('观察恢复仍禁止写入'); } }
+  };
+  const run = load('d02-copy-source-fixture').withD02CopyCase as (config: unknown, action: (context: { assertGrants(): Promise<void>; observe(): Promise<Record<string, unknown>[]>; write(text: string): Promise<void>; sql(text: string): Promise<unknown> }) => Promise<void>, limited: boolean, requirements?: { mdl?: boolean }) => Promise<void>;
+  try { await run({ host: '192.168.31.200', port: 13384, serverUuid: uuid, user: '合成观察账号', password: '合成口令', tls: false }, async context => { trace.push('执行用例'); await observeAction(context); if (mode === 'action-recovered') { actionActive = true; try { await context.assertGrants(); } catch { trace.push('调用方捕获验证失败'); } await context.assertGrants(); trace.push('后续验证成功'); try { await context.write('DROP DATABASE `不应发送`'); } catch { trace.push('后续写入被禁止'); } try { await context.sql('DROP DATABASE `同样不应发送`'); } catch { trace.push('观察端口DROP也被禁止'); } } }, true, { mdl: mode === 'no-mdl-required' || mode === 'mdl-enabled' }); }
   catch (error) { failure = error; }
   expect(mysql.createConnection).toBe(factory);
   return { trace, failure, grantsCalls, instrumentQueries, drops: trace.filter(item => item.startsWith('DROP ')) };
 }
 
 describe('D02正式完整夹具的永久清理失效门（仅合成IO）', () => {
+  it('独立保留字反例拒绝未引用BLOB，实际observe保留原blob结果键且正常清理', async () => { const result = await scenario('observe'); expect(result.failure).toBeUndefined(); expect(result.trace).toContain('观察成功且原blob键保留'); expect(result.trace).not.toContain('观察解析失败'); expect(result.drops).toEqual(['DROP USER', 'DROP DATABASE']); });
+  it('observe一次1064后即使下一次成功也永久禁止DROP', async () => { const result = await scenario('observe-error-once'); expect(result.trace).toContain('捕获观察失败'); expect(result.trace).toContain('观察成功且原blob键保留'); expect(result.trace).toContain('观察恢复仍禁止写入'); expect(result.failure).toBeTruthy(); expect(result.drops).toEqual([]); expect(result.trace).toContain('关闭观察连接'); });
   it('正常对照仍按确认归属和线程清零顺序删除，不把全部清理永久禁用', async () => { const result = await scenario('normal'); expect(result.failure).toBeUndefined(); expect(result.drops).toEqual(['DROP USER', 'DROP DATABASE']); expect(result.trace.indexOf('关闭Engine')).toBeLessThan(result.trace.indexOf('DROP USER')); });
   it.each(['create-unknown', 'grant-write-unknown', 'grant-extra', 'grant-read-once', 'grant-read-at-drop', 'owner-read-at-drop', 'table-read-at-drop', 'role-read-at-drop', 'schema-read-at-drop', 'close-failed'] as const)('%s：验证无法判定后禁止全部后续DROP，并保留第一失败', async mode => { const result = await scenario(mode); expect(result.failure).toBeTruthy(); expect(result.drops).toEqual([]); expect(result.trace).toContain('关闭观察连接'); if (mode !== 'grant-extra') { const serialized: string[] = []; const visit = (error: unknown, depth = 0) => { if (!error || typeof error !== 'object' || depth > 12) return; const value = error as { code?: string; cause?: unknown; errors?: unknown[] }; if (value.code) serialized.push(value.code); visit(value.cause, depth + 1); value.errors?.forEach(item => visit(item, depth + 1)); }; visit(result.failure); expect(serialized).toContain('SYNTH_VERIFICATION'); } });
   it('调用方捕获一次失败且验证恢复成功也不能复活DROP授权', async () => { const result = await scenario('action-recovered'); expect(result.trace).toContain('调用方捕获验证失败'); expect(result.trace).toContain('后续验证成功'); expect(result.trace).toContain('后续写入被禁止'); expect(result.trace).toContain('观察端口DROP也被禁止'); expect(result.failure).toBeTruthy(); expect(result.drops).toEqual([]); });
