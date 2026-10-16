@@ -37,6 +37,7 @@ import { TableIndexPatchTasks } from './tableIndexPatchTasks';
 import { TableRenameTasks } from './tableRenameTasks';
 import { TableAutoIncrementTasks } from './tableAutoIncrementTasks';
 import { TableCommentTasks } from './tableCommentTasks';
+import { TableTruncateTasks } from './tableTruncateTasks';
 import { TableDefaultEncodingTasks } from './tableDefaultEncodingTasks';
 import { TableForeignKeyPatchTasks } from './tableForeignKeyPatchTasks';
 import type { StructureTaskContext, StructureTaskOptions } from './structureDefinition';
@@ -80,6 +81,7 @@ export class Engine {
   private readonly tableRenames: TableRenameTasks;
   private readonly tableAutoIncrements: TableAutoIncrementTasks;
   private readonly tableComments: TableCommentTasks;
+  private readonly tableTruncates: TableTruncateTasks;
   private readonly tableDefaultEncodings: TableDefaultEncodingTasks;
   private readonly foreignKeyPatches: TableForeignKeyPatchTasks;
   private readonly schemaComparisons: SchemaCompareTasks;
@@ -99,6 +101,7 @@ export class Engine {
     this.tableRenames = new TableRenameTasks({ run: (connectionId, taskId, action, options) => this.withIndependentTask(connectionId, taskId, (managed, control) => action({ managed, ...control }), options) }, undefined, this.structureCache);
     this.tableAutoIncrements = new TableAutoIncrementTasks({ run: (connectionId, taskId, action, options) => this.withIndependentTask(connectionId, taskId, (managed, control) => action({ managed, ...control }), options) }, undefined, this.structureCache);
     this.tableComments = new TableCommentTasks({ run: (connectionId, taskId, action, options) => this.withIndependentTask(connectionId, taskId, (managed, control) => action({ managed, ...control }), options) }, undefined, this.structureCache);
+    this.tableTruncates = new TableTruncateTasks({ run: (connectionId, taskId, action, options) => this.withIndependentTask(connectionId, taskId, (managed, control) => action({ managed, ...control }), options) }, undefined, this.structureCache);
     this.tableDefaultEncodings = new TableDefaultEncodingTasks({ run: (connectionId, taskId, action, options) => this.withIndependentTask(connectionId, taskId, (managed, control) => action({ managed, ...control }), options) }, undefined, this.structureCache);
     this.foreignKeyPatches = new TableForeignKeyPatchTasks({ run: (connectionId, taskId, action, options) => this.withIndependentTask(connectionId, taskId, (managed, control) => action({ managed, ...control }), options) }, undefined, this.structureCache);
   }
@@ -330,6 +333,10 @@ export class Engine {
       case 'schema.tableComment.preview': return this.tableComments.preview(input as any, input.connectionRevision);
       case 'schema.tableComment.apply': return this.tableComments.apply(input as any, input.connectionRevision);
       case 'schema.tableComment.release': return this.tableComments.releaseTokens(input);
+      case 'schema.tableTruncate.get': return this.tableTruncates.get(input as any, input.connectionRevision);
+      case 'schema.tableTruncate.preview': return this.tableTruncates.preview(input as any, input.connectionRevision);
+      case 'schema.tableTruncate.apply': return this.tableTruncates.apply(input as any, input.connectionRevision);
+      case 'schema.tableTruncate.release': return this.tableTruncates.releaseTokens(input);
       case 'schema.indexes.preview': return this.indexPatches.preview(input as any, input.connectionRevision);
       case 'schema.indexes.apply': return this.indexPatches.apply(input as any, input.connectionRevision);
       case 'schema.indexes.release': return this.indexPatches.releaseTokens(input);
@@ -465,7 +472,7 @@ export class Engine {
       const task: IndependentTask = { connectionId, controller, done, structureTask: Boolean(options)||strictRead, generation: 0 };
       this.independentTasks.set(taskId, task);
       const label = options?.label ?? readLabel ?? '读取关联记录';
-      const detail = () => options ? (options.purpose === 'tableRename' ? { tableRename: { ...options.progress } } : options.purpose === 'tableAutoIncrement' ? { tableAutoIncrement: { ...options.progress } } : options.purpose === 'tableDefaultEncoding' ? { tableDefaultEncoding: { ...options.progress } } : options.purpose === 'tableComment' ? { tableComment: { ...options.progress } } : options.purpose === 'indexes' ? { indexPatch: { ...options.progress } } : options.purpose === 'foreignKeys' ? { foreignKeyPatch: { ...options.progress } } : { columnPatch: { ...options.progress } }) : readDetail?.()??{};
+      const detail = () => options ? (options.purpose === 'tableRename' ? { tableRename: { ...options.progress } } : options.purpose === 'tableAutoIncrement' ? { tableAutoIncrement: { ...options.progress } } : options.purpose === 'tableDefaultEncoding' ? { tableDefaultEncoding: { ...options.progress } } : options.purpose === 'tableTruncate' ? { tableTruncate: { ...options.progress } } : options.purpose === 'tableComment' ? { tableComment: { ...options.progress } } : options.purpose === 'indexes' ? { indexPatch: { ...options.progress } } : options.purpose === 'foreignKeys' ? { foreignKeyPatch: { ...options.progress } } : { columnPatch: { ...options.progress } }) : readDetail?.()??{};
       const send = (event: TaskEvent) => { if (!quiet) this.emit(event); };
       const report = () => send({ taskId, status: 'running', progress: 0, message: label, ...detail() });
       const checkCancelled = () => { if (task.cancelRequested || controller.signal.aborted) throw new Error('任务已取消；已执行的结构或数据变更不会撤销'); };
