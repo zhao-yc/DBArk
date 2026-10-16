@@ -139,6 +139,70 @@ describe('查询任务与会话互斥', () => {
   });
 });
 
+describe('光标当前语句的真实引擎投递', () => {
+  it('前后语句不执行，结果与一次发送事件只含当前片段，不探测SQL模式', async () => {
+    const sql = 'SET @previous=1;\r\nSELECT 当前; DELETE FROM 后句;', actual: string[] = [];
+    scenario = (value, query) => { actual.push(value); rows(query, [['当前']]); };
+    const result = await engine.handle('query.execute', { sessionId, sql, currentStatement: { offset: sql.indexOf('当前') }, taskId: 'current', maxRows: 10 });
+    expect(actual).toEqual(['SELECT 当前']); expect(result.results[0].statement).toBe('SELECT 当前'); expect(events.filter(event => event.executionSql).map(event => event.executionSql)).toEqual(['SELECT 当前']); expect(mocks.execute).not.toHaveBeenCalled();
+  });
+  it('DELIMITER过程体整体发送一次，内部两个分号不拆分，也不发送前后的SET/CALL', async () => {
+    const sql = 'SET @before=1;\nDELIMITER $$\nCREATE PROCEDURE p() BEGIN SELECT 1; SELECT 2; END$$\nDELIMITER ;\nCALL p();', actual: string[] = [];
+    scenario = (value, query) => { actual.push(value); rows(query, []); };
+    await engine.handle('query.execute', { sessionId, sql, currentStatement: { offset: sql.indexOf('SELECT 2') }, taskId: 'procedure-current', maxRows: 10 });
+    expect(actual).toEqual(['CREATE PROCEDURE p() BEGIN SELECT 1; SELECT 2; END']); expect(events.filter(event => event.executionSql)).toHaveLength(1); expect(mocks.execute).not.toHaveBeenCalled();
+  });
+  it('只用实际缓存模式，不能预演前面的SET改变当前解析', async () => {
+    const active = await mocks.connect.mock.results.at(-1)!.value as ManagedConnection, sql = "SET sql_mode=''; SELECT 'C:\\'; SELECT 2;";
+    active.sqlMode = 'NO_BACKSLASH_ESCAPES'; const actual: string[] = []; scenario = (value, query) => { actual.push(value); rows(query, []); };
+    await engine.handle('query.execute', { sessionId, sql, currentStatement: { offset: sql.lastIndexOf('SELECT 2') }, taskId: 'actual-mode', maxRows: 10 }); expect(actual).toEqual(['SELECT 2']); expect(mocks.execute).not.toHaveBeenCalled();
+  });
+  it.each(['ambiguous', 'missing-mode', 'incomplete', 'empty', 'delimiter'] as const)('%s定位拒绝时零驱动投递、零executionSql事件', async condition => {
+    const active = await mocks.connect.mock.results.at(-1)!.value as ManagedConnection; let sql = 'SELECT 1;  SELECT 2;', offset = 10;
+    if (condition === 'ambiguous') { active.sqlMode = undefined; active.noBackslashEscapesKnown = false; sql = "SELECT 'a\\'; SELECT 2;"; offset = sql.indexOf('SELECT 2'); }
+    else if (condition === 'missing-mode') { active.sqlMode = undefined; active.serverStatus = undefined; }
+    else if (condition === 'incomplete') { sql = "SELECT 1; SELECT '未完成"; offset = 2; }
+    else if (condition === 'delimiter') { sql = 'DELIMITER $$\nSELECT 1$$'; offset = 2; }
+    await expect(engine.handle('query.execute', { sessionId, sql, currentStatement: { offset }, taskId: 'reject-current', maxRows: 10 })).rejects.toThrow();
+    expect(active.connection.query).not.toHaveBeenCalled(); expect(events.filter(event => event.executionSql)).toEqual([]); expect(mocks.execute).not.toHaveBeenCalled();
+  });
+  it('未知模式但所有候选边界一致时只发一条，沿原预算和事务状态', async () => {
+    const active = await mocks.connect.mock.results.at(-1)!.value as ManagedConnection; active.sqlMode = undefined; active.noBackslashEscapesKnown = false;
+    scenario = (_sql, query) => { active.serverStatus = 3; rows(query, [['一'], ['二']]); };
+    const output = await engine.handle('query.execute', { sessionId, sql: 'SELECT 1; SELECT 2;', currentStatement: { offset: 13 }, taskId: 'unknown-consistent', maxRows: 1 });
+    expect(output.results[0]).toMatchObject({ statement: 'SELECT 2', rows: [{ c0: '一' }], truncated: true }); expect(output.transactionOpen).toBe(true); expect(events.filter(event => event.executionSql)).toHaveLength(1); expect(mocks.execute).not.toHaveBeenCalled();
+  });
+  it('模式读取等待点前取消不发片段，也不发授权历史事件', async () => {
+    const active = await mocks.connect.mock.results.at(-1)!.value as ManagedConnection;
+    const running = engine.handle('query.execute', { sessionId, sql: 'SELECT 1;SELECT 2;', currentStatement: { offset: 12 }, taskId: 'before-send-current', maxRows: 10 });
+    const failure = expect(running).rejects.toThrow('取消'); await engine.handle('query.cancel', { taskId: 'before-send-current' }); await failure;
+    expect(active.connection.query).not.toHaveBeenCalled(); expect(events.filter(event => event.executionSql)).toEqual([]);
+  });
+  it('发送后失败保留一次实际片段事件，不执行前后语句或自动重放', async () => {
+    const actual: string[] = []; scenario = (sql, query) => { actual.push(sql); query.emit('error', new Error('当前语句失败')); };
+    await expect(engine.handle('query.execute', { sessionId, sql: 'SELECT before; SELECT current; SELECT after;', currentStatement: { offset: 24 }, taskId: 'current-failed', maxRows: 10 })).rejects.toThrow('已完成 0 条');
+    expect(actual).toEqual(['SELECT current']); expect(events.filter(event => event.executionSql).map(event => event.executionSql)).toEqual(['SELECT current']);
+  });
+  it('驱动同步拒绝接收时不报告已发送片段', async () => {
+    const active = await mocks.connect.mock.results.at(-1)!.value as ManagedConnection; active.connection.query = (() => { throw Error('投递失败'); }) as never;
+    await expect(engine.handle('query.execute', { sessionId, sql: 'SELECT 1', currentStatement: { offset: 2 }, taskId: 'sync-current-failed', maxRows: 10 })).rejects.toThrow('投递失败'); expect(events.filter(event => event.executionSql)).toEqual([]);
+  });
+  it('当前片段发送后取消只KILL本任务，事件保留一次且后句不投递', async () => {
+    let pending: EventEmitter | undefined; const actual: string[] = []; scenario = (sql, query) => { actual.push(sql); pending = query; };
+    const running = engine.handle('query.execute', { sessionId, sql: 'SELECT before;SELECT SLEEP(10);SELECT after;', currentStatement: { offset: 22 }, taskId: 'cancel-current', maxRows: 10 }); const failure = expect(running).rejects.toThrow('模拟中断');
+    await vi.waitFor(() => expect(pending).toBeDefined()); mocks.execute.mockImplementation(async (_managed, sql) => { if (String(sql).startsWith('KILL QUERY')) pending!.emit('error', Error('模拟中断')); return { rows: { affectedRows: 0 }, fields: [] }; });
+    await engine.handle('query.cancel', { taskId: 'cancel-current' }); await failure;
+    expect(actual).toEqual(['SELECT SLEEP(10)']); expect(events.filter(event => event.executionSql).map(event => event.executionSql)).toEqual(actual); expect(events.at(-1)?.status).toBe('cancelled');
+  });
+  it('当前片段断线后拒绝复用会话，不重放已经投递的内容', async () => {
+    const active = await mocks.connect.mock.results.at(-1)!.value as ManagedConnection, actual: string[] = [];
+    scenario = (sql, query) => { actual.push(sql); active.broken = true; query.emit('error', Error('ECONNRESET')); };
+    const input = { sessionId, sql: 'SELECT before; SELECT current;', currentStatement: { offset: 23 }, taskId: 'broken-current', maxRows: 10 };
+    await expect(engine.handle('query.execute', input)).rejects.toThrow('ECONNRESET'); await expect(engine.handle('query.execute', { ...input, taskId: 'after-broken-current' })).rejects.toThrow('断开');
+    expect(actual).toEqual(['SELECT current']); expect(events.filter(event => event.executionSql)).toHaveLength(1);
+  });
+});
+
 describe('修改事务控制', () => {
   it('第二条操作并发冲突时回滚第一条操作，不提交部分修改', async () => {
     let updates = 0;

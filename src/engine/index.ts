@@ -45,6 +45,7 @@ import { explainLimits } from '../shared/explain';
 import { consumeQueryFrames } from './queryStreamProtocol';
 import { queryExportWireProtocol, queryStreamExportLimits, type QueryExportProgress, type QueryExportResultSummary, type QueryStreamExportInput, type QueryStreamExportOutput } from '../shared/queryStreamExport';
 import { buildChanges, buildDesign, buildPageSql, deserializeCell, exportLiteral, identifier, inlineParameters, qualified, serializeCell, splitSql, SqlScriptScanner, typedCellPlaceholder } from './sql';
+import { currentSqlStatement } from './currentStatement';
 
 interface Session { id: string; connectionId: string; managed: ManagedConnection; busy: boolean; }
 interface RunningTask {
@@ -208,7 +209,7 @@ export class Engine {
         finally { ended(); }
       }, undefined, '读取表格元数据', true) : this.withConnection(input.connectionId, connection => metadata.tableInfo(connection, input.database, input.table));
       case 'metadata.ddl': return this.withConnection(input.connectionId, connection => metadata.objectDdl(connection, input.database, input.name, input.kind));
-      case 'query.execute': return this.withSession(input.sessionId, managed => this.runTask(input.taskId, managed, '执行 SQL', task => this.queryScript(task, input.sql, input.maxRows)));
+      case 'query.execute': return this.withSession(input.sessionId, managed => this.runTask(input.taskId, managed, '执行 SQL', task => this.queryScript(task, input.sql, input.maxRows, undefined, input.currentStatement)));
       case 'query.exportStream': {
         this.assertFile(input);
         return this.withSession(input.sessionId, managed => this.runTask(input.taskId, managed, '执行 SQL 并完整导出', task => this.exportQueryStream(task, input as QueryStreamExportInput & { filePath: string })));
@@ -702,10 +703,18 @@ export class Engine {
   }
 
   /** 工作台与完整导出共用唯一调度器；每次消费一条，实际执行结束后才按会话模式解释尾部。 */
-  private async *queryStatements(task: RunningTask, sql: string, parameters?: QueryParameter[]): AsyncGenerator<{ statement: string; template: string; mode: SqlLexicalMode; ordinal: number }> {
+  private async *queryStatements(task: RunningTask, sql: string, parameters?: QueryParameter[], currentStatement?: { offset: number }): AsyncGenerator<{ statement: string; template: string; mode: SqlLexicalMode; ordinal: number }> {
     if (typeof sql !== 'string' || Buffer.byteLength(sql) > queryParameterLimits.sqlBytes) throw new Error('SQL 模板不能超过 20 MiB');
     const values = parameters === undefined ? undefined : validateQueryParameters(parameters, this.maxDecimalScale(task.managed), task.managed.status.dialect === 'mariadb');
     let mode = await this.sqlMode(task.managed, task);
+    if (currentStatement !== undefined) {
+      // 只用本会话实际模式定位；之前的SET不执行，DELIMITER过程体也不二次按分号拆分。
+      const current = currentSqlStatement(sql, currentStatement.offset, mode);
+      if (!current) throw new Error('光标所在位置没有可执行的完整语句；未执行相邻语句或全文');
+      this.checkCancelled(task);
+      yield { statement: current.sql, template: current.sql, mode, ordinal: 1 };
+      return;
+    }
     if (values) this.parameterPlan(sql, mode, values);
     const scanner = new SqlScriptScanner(mode.noBackslashEscapes, mode.ansiQuotes, mode.ansiQuotesKnown !== false, mode.noBackslashEscapesKnown !== false);
     let ordinal = 0, expandedBytes = 0, first = true;
@@ -725,7 +734,7 @@ export class Engine {
   }
 
   /** 顺序执行脚本并共享结果预算，末尾读取真实事务状态供界面提示。 */
-  private async queryScript(task: RunningTask, sql: string, maxRows: number, parameters?: QueryParameter[]): Promise<QueryOutcome> {
+  private async queryScript(task: RunningTask, sql: string, maxRows: number, parameters?: QueryParameter[], currentStatement?: { offset: number }): Promise<QueryOutcome> {
     if (!Number.isInteger(maxRows) || maxRows < 1 || maxRows > 100000) throw new Error('查询结果上限必须在 1～100000 之间');
     const started = performance.now();
     const values = parameters !== undefined;
@@ -734,8 +743,8 @@ export class Engine {
     const budget: ResultBudget = { remainingRows: maxRows, remainingBytes: 16 * 1024 * 1024, remainingResults: 200 };
     let executed = 0;
     try {
-      for await (const { statement, template } of this.queryStatements(task, sql, parameters)) {
-        try { results.push(...await this.streamQuery(task, statement, maxRows, results.length, budget, template)); }
+      for await (const { statement, template } of this.queryStatements(task, sql, parameters, currentStatement)) {
+        try { results.push(...await this.streamQuery(task, statement, maxRows, results.length, budget, template, currentStatement !== undefined)); }
         catch (error) {
           if (!values) throw error;
           if (task.cancelled) this.checkCancelled(task);
@@ -857,7 +866,7 @@ export class Engine {
   }
 
   /** 多结果集按服务器序号隔离；IPC 每批至多 200 行，返回结果受用户上限约束。 */
-  private async streamQuery(task: RunningTask, sql: string, maxRows: number, offset: number, budget: ResultBudget = { remainingRows: maxRows, remainingBytes: 16 * 1024 * 1024, remainingResults: 200 }, displaySql = sql): Promise<QueryResult[]> {
+  private async streamQuery(task: RunningTask, sql: string, maxRows: number, offset: number, budget: ResultBudget = { remainingRows: maxRows, remainingBytes: 16 * 1024 * 1024, remainingResults: 200 }, displaySql = sql, reportExecutionSql = false): Promise<QueryResult[]> {
     this.checkCancelled(task);
     task.inFlight = true; task.generation++;
     const started = performance.now(), results: QueryResult[] = [], batches = new Map<number, DataRow[]>(), batchBytes = new Map<number, number>();
@@ -885,6 +894,8 @@ export class Engine {
     try {
       await new Promise<void>((resolve, reject) => {
         const query = task.managed.connection.query({ sql, rowsAsArray: true });
+        // 驱动已接收当前片段后才授权落历史；取消/定位失败/同步投递失败都没有全文或空SQL历史。
+        if (reportExecutionSql) this.emit({ taskId: task.id, status: 'running', progress: 0, message: '已发送当前语句', executionSql: sql });
         /** 驱动解析器或底层连接的致命错误也必须结束任务，不能让界面永久等待。 */
         const fail = (error: Error) => { cleanup(); reject(error); };
         const cleanup = () => { task.managed.connection.removeListener('error', fail); };

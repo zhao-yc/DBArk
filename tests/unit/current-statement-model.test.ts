@@ -4,6 +4,7 @@ import { pathToFileURL } from 'node:url';
 import type * as monaco from 'monaco-editor';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { currentSqlStatement, sqlStatementRanges } from '../../src/engine/currentStatement';
+import { CurrentStatementIntent } from '../../src/renderer/currentStatementIntent';
 
 type BufferPort = { dispose(): void };
 let Builder: new () => { acceptChunk(value: string): void; finish(): { create(eol: number): { textBuffer: BufferPort } } };
@@ -20,7 +21,7 @@ beforeAll(async () => {
 /** getValue/getPositionAt/getOffsetAt/validateRange均使用安装版本的真实实现。 */
 function model(source: string) {
   const builder = new Builder(); builder.acceptChunk(source); const { textBuffer } = builder.finish().create(1);
-  const instance = Object.assign(Object.create(prototype), { _buffer: textBuffer, _isDisposed: false, _versionId: 7, _isTooLargeForHeapOperation: false }) as monaco.editor.ITextModel;
+  const instance = Object.assign(Object.create(prototype), { _buffer: textBuffer, _isDisposed: false, _versionId: 7, _isTooLargeForHeapOperation: false, onDidChangeContent: () => ({ dispose() {} }), onWillDispose: () => ({ dispose() {} }) }) as monaco.editor.ITextModel;
   return { instance, dispose: () => textBuffer.dispose() };
 }
 
@@ -42,6 +43,9 @@ describe('真实Monaco原文与UTF16范围往返', () => {
       expect(f.instance.getOffsetAt({ lineNumber: validated.endLineNumber, column: validated.endColumn })).toBe(range.end);
       expect(f.instance.getValueInRange(validated)).toBe(range.sql); expect(source.slice(range.start, range.end)).toBe(range.sql);
       expect(sqlStatementRanges(source, { noBackslashEscapes: false, ansiQuotes: false })).toContainEqual(range);
+      const editor = { getModel: () => f.instance, getPosition: () => position, onDidChangeModel: () => ({ dispose() {} }), onDidDispose: () => ({ dispose() {} }), onDidChangeCursorPosition: () => ({ dispose() {} }) };
+      const intent = new CurrentStatementIntent(editor as unknown as monaco.editor.IStandaloneCodeEditor, () => ({ tabId: 'query', connectionId: 'connection', connectionVersion: 3, sessionId: 'session', draft, present: true, active: true, modal: false }), () => () => {});
+      try { intent.bindSession('session'); expect(intent.source).toBe(source); expect(intent.offset).toBe(offset); intent.assertCurrent(); } finally { intent.dispose(); }
     } finally { f.dispose(); }
   });
 });

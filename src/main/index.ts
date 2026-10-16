@@ -42,7 +42,7 @@ let rendererHasSettings = false;
 let lastStorageWarning = 0;
 const sessions = new Map<string, { connectionId: string }>();
 // 历史上下文由引擎在会话互斥内报告，不能由渲染进程提供或从较早的标签状态推测。
-const pendingQueryHistory = new Map<string,HistoryEntry>();
+const pendingQueryHistory = new Map<string, { entry: HistoryEntry; currentStatement: boolean; executionSqlReceived: boolean }>();
 const files = new Map<string, { path: string; purpose: string; format?: string }>();
 const queryFileOperations = new Set<Promise<unknown>>();
 const exportReservations = new ExportReservations();
@@ -70,8 +70,10 @@ function persistAuxiliary(action: () => void): void {
 /** 任务进度只保留概要；分批结果直接传输，不把整批数据写入配置库。 */
 function taskEvent(event: TaskEvent): void {
   if(completionTasks.has(event.taskId))return;
-  const history=pendingQueryHistory.get(event.taskId);
+  const pendingHistory=pendingQueryHistory.get(event.taskId), history=pendingHistory?.entry;
   if(history&&event.executionDatabase)Object.assign(history,queryDatabasePatch(event.executionDatabase));
+  // 接收一次实际发送片段；独立布尔状态保证定位失败/发送前取消不能落全文或空SQL。
+  if (pendingHistory?.currentStatement && !pendingHistory.executionSqlReceived && typeof event.executionSql === 'string' && event.executionSql.trim()) { pendingHistory.entry.sql = event.executionSql; pendingHistory.executionSqlReceived = true; }
   if (event.queryExport) exportProgress.set(event.taskId, { ...event.queryExport });
   const structure = event.tableAutoIncrement ?? event.tableRename ?? event.tableDefaultEncoding ?? event.tableComment ?? event.foreignKeyPatch ?? event.indexPatch ?? event.columnPatch;
   if (structure) structureProgress.set(event.taskId, { ...structure });
@@ -259,8 +261,10 @@ async function dispatch(command: Command, input: any): Promise<unknown> {
     tasks.set(taskId, task); store.saveTask(task);
   }
   const session = sessions.get(input.sessionId);
-  const history: HistoryEntry | undefined = (command === 'query.execute' || command === 'query.executeParameterized' || command === 'query.exportStream') && session ? { id: randomUUID(), connectionId: session.connectionId, databaseContext:{state:'unknown'}, sql: input.sql, startedAt, elapsedMs: 0, success: false } : undefined;
-  if(history&&taskId)pendingQueryHistory.set(taskId,history);
+  const currentStatement = command === 'query.execute' && input.currentStatement !== undefined;
+  const history: HistoryEntry | undefined = (command === 'query.execute' || command === 'query.executeParameterized' || command === 'query.exportStream') && session ? { id: randomUUID(), connectionId: session.connectionId, databaseContext:{state:'unknown'}, sql: currentStatement ? '' : input.sql, startedAt, elapsedMs: 0, success: false } : undefined;
+  const pendingHistory = history ? { entry: history, currentStatement, executionSqlReceived: !currentStatement } : undefined;
+  if(pendingHistory&&taskId)pendingQueryHistory.set(taskId,pendingHistory);
   const preparing: { cancelled: boolean; failure?: string } = { cancelled: false }; if (taskId) preparingTasks.set(taskId, preparing);
   let releaseTarget: (() => void) | undefined;
   let sentToEngine = false;
@@ -291,12 +295,12 @@ async function dispatch(command: Command, input: any): Promise<unknown> {
     if (command === 'sessions.open') sessions.set(result.sessionId, { connectionId: input.connectionId });
     if (command === 'sessions.close') sessions.delete(input.sessionId);
     if (taskId && command!=='search.dataStart' && tasks.get(taskId)?.status === 'running') taskEvent({ taskId, status: 'completed', progress: 100, message: '执行完成' });
-    if (history) persistAuxiliary(() => store.addHistory({ ...history, elapsedMs: Date.now() - start, success: true }));
+    if (history && pendingHistory?.executionSqlReceived) persistAuxiliary(() => store.addHistory({ ...history, elapsedMs: Date.now() - start, success: true }));
     return result;
   } catch (error) {
     const message = error instanceof Error ? error.message : '操作失败';
     if (taskId && tasks.get(taskId)?.status === 'running') taskEvent({ taskId, status: preparing.cancelled || error instanceof SavedQuerySearchCancelled ? 'cancelled' : 'failed', progress: 0, message, ...(structureCommand ? { [structurePurpose === 'tableRename' ? 'tableRename' : structurePurpose === 'tableAutoIncrement' ? 'tableAutoIncrement' : structurePurpose === 'tableDefaultEncoding' ? 'tableDefaultEncoding' : structurePurpose === 'tableComment' ? 'tableComment' : structurePurpose === 'indexes' ? 'indexPatch' : structurePurpose === 'foreignKeys' ? 'foreignKeyPatch' : 'columnPatch']: { phase: 'connecting' as const, ddlSubmitted: sentToEngine && command === structurePrefix + 'apply', ddlCompleted: false, definitionVerified: false, outcome: sentToEngine && command === structurePrefix + 'apply' ? 'unknown' as const : 'not-sent' as const, ...structureProgress.get(taskId) } } : {}), ...(command === 'query.exportStream' ? { queryExport: { phase: 'preparing' as const, statementsCompleted: 0, rowsWritten: 0, bytesWritten: 0, fileCommitted: false, ...exportProgress.get(taskId), sqlMayHaveExecuted: sentToEngine, transactionKnown: false } } : {}) });
-    if (history) persistAuxiliary(() => store.addHistory({ ...history, elapsedMs: Date.now() - start, error: persistedQueryError(command, message) }));
+    if (history && pendingHistory?.executionSqlReceived) persistAuxiliary(() => store.addHistory({ ...history, elapsedMs: Date.now() - start, error: persistedQueryError(command, message) }));
     throw error;
   } finally { if (command === structurePrefix + 'apply') structureTokens.delete(input.previewToken); if (taskId) { pendingQueryHistory.delete(taskId); preparingTasks.delete(taskId); exportProgress.delete(taskId); structureProgress.delete(taskId); } releaseTarget?.(); }
 }

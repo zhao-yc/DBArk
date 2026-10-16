@@ -37,3 +37,28 @@ describe('执行历史的真实默认库归属',()=>{
     f.request.mockRejectedValueOnce(Error('会话不存在'));await expect(f.handlers.dispatch(command,{sessionId:'s1',taskId:'unknown',sql:'SELECT 2',fileToken:'file',format:'json'})).rejects.toThrow('会话不存在');expect(f.entries[1].databaseContext).toEqual({state:'unknown'});expect(f.entries[1].database).toBeUndefined();expect(f.context.pendingQueryHistory.size).toBe(0);
   });
 });
+
+describe('当前语句历史只来自实际投递片段', () => {
+  const input = { sessionId: 's1', taskId: 'current', sql: 'SET @before=1; SELECT 当前; DELETE FROM 后句;', maxRows: 10, currentStatement: { offset: 20 } };
+  it('实际片段只接收一次，保留原默认库归属，不落完整源脚本', async () => {
+    const f = fixture(); f.request.mockImplementationOnce(async () => {
+      f.handlers.taskEvent({ taskId: 'current', status: 'running', progress: 0, message: '执行', executionDatabase: { state: 'known', database: '真实库' } });
+      f.handlers.taskEvent({ taskId: 'current', status: 'running', progress: 0, message: '已发送', executionSql: 'SELECT 当前' });
+      f.handlers.taskEvent({ taskId: 'current', status: 'running', progress: 1, message: '重复事件', executionSql: '不应覆盖' }); return {};
+    });
+    await f.handlers.dispatch('query.execute', input); expect(f.entries).toHaveLength(1); expect(f.entries[0]).toMatchObject({ sql: 'SELECT 当前', success: true, database: '真实库' }); expect(f.context.pendingQueryHistory.size).toBe(0);
+  });
+  it.each(['解析拒绝', '发送前取消', '会话不存在', '返回前未发送'] as const)('%s不得落全文或空SQL历史', async phase => {
+    const f = fixture(); f.request.mockImplementationOnce(async () => { if (phase === '返回前未发送') return {}; throw Error(phase); });
+    await f.handlers.dispatch('query.execute', input).catch(() => {}); expect(f.entries).toEqual([]); expect(f.context.pendingQueryHistory.size).toBe(0);
+  });
+  it.each(['执行失败', '发送后取消', '连接断开'])('%s仍保存实际片段且不自动重放', async phase => {
+    const f = fixture(); f.request.mockImplementationOnce(async () => { f.handlers.taskEvent({ taskId: 'current', status: 'running', progress: 0, message: '已发送', executionSql: 'SELECT 当前' }); throw Error(phase); });
+    await expect(f.handlers.dispatch('query.execute', input)).rejects.toThrow(phase); expect(f.entries).toHaveLength(1); expect(f.entries[0]).toMatchObject({ sql: 'SELECT 当前', success: false }); expect(f.request).toHaveBeenCalledOnce();
+  });
+  it('空白事件不授权历史，普通执行也不能被executionSql改写', async () => {
+    const f = fixture(); f.request.mockImplementation(async (_command, value) => { f.handlers.taskEvent({ taskId: value.taskId, status: 'running', progress: 0, message: '事件', executionSql: value.currentStatement ? '  ' : '其它片段' }); return {}; });
+    await f.handlers.dispatch('query.execute', input); expect(f.entries).toEqual([]);
+    await f.handlers.dispatch('query.execute', { ...input, taskId: 'ordinary', currentStatement: undefined }); expect(f.entries).toHaveLength(1); expect(f.entries[0].sql).toBe(input.sql);
+  });
+});
