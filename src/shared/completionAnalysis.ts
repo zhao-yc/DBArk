@@ -100,7 +100,8 @@ export function analyzeCompletion(source:string,offset:number,mode:CompletionLex
     if(ctes.length>completionLimits.entries)return{status:'blocked',reason:'budget'};
     // 哨兵替换会隐藏正在编辑的ROWS等词；原词只用于停止边界，不还原进AST或生成关系。
     const targetToken=lexical.tokens.find(token=>token.start===lexical.target.start&&token.end===lexical.target.end);
-    let expansions=0,truncated=false;const branches=completionQueryBranches(queries,normalizedTokens),windowContext=completionWindowContext(branches,normalizedTokens,normalized.caret,targetToken?.kind==='word'?targetToken.value:undefined);
+    // 仅新增继承路径要求当前分支完整语法；使用独立静默解析器，不改变已收集实体或回显SQL。
+    let expansions=0,truncated=false;const branches=completionQueryBranches(queries,normalizedTokens),windowContext=completionWindowContext(branches,normalizedTokens,normalized.caret,targetToken?.kind==='word'?targetToken.value:undefined,(start,end)=>new QuietMySQL().validate(normalized.text.slice(start,end)).length===0);
     if(windowContext==='unsupported')return{status:'blocked',reason:'syntax'};
     const lateral=completionLateralScope(tables,branches,normalizedTokens);if(lateral.status==='blocked'||hasLateral&&!lateral.boundaries.length)return{status:'blocked',reason:'syntax'};
     const lateralByEntity=new Map(lateral.boundaries.map(boundary=>[boundary.entity,boundary]));
