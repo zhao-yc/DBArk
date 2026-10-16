@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
     inputs:
       native_clipboard_components:
-        description: '在三个临时原生runner补验12项离线开发组件剪贴板用例'
+        description: '在三个临时原生runner验证1项二进制原生粘贴开发组件'
         required: false
         type: boolean
         default: false
@@ -94,7 +94,7 @@ jobs:
         with:
           name: 测试记录-${{ matrix.artifact }}
           path: test-results/
-  # 只在明确手动勾选时运行；两个夹具启动独立开发Electron，不计安装产品验收。
+  # 只在明确手动勾选时运行；本例在临时runner写入合成Hex，不操作用户本机剪贴板。
   native-clipboard-components:
     name: 离线开发组件原生剪贴板 · ${{ matrix.label }}
     if: github.event_name == 'workflow_dispatch' && inputs.native_clipboard_components == true
@@ -123,21 +123,19 @@ jobs:
       - run: corepack enable
       - run: pnpm install --frozen-lockfile
       - run: pnpm exec install-electron
-      - name: 仅验两个离线开发组件（12项，不计安装产品）
+      - name: 仅验二进制原生粘贴组件（1项，不计安装产品）
         run: >-
           pnpm exec playwright test
-          tests/e2e/query-binary-types-offline.spec.ts
-          tests/e2e/record-input-guards-offline.spec.ts
+          tests/e2e/binary-cell-offline.spec.ts
+          --grep="单元格及记录表单真实剪贴板超限不截断，选区替换整次拒绝，合法边界可暂存$"
           --workers=1 --retries=0 --reporter="list,json"
         env:
-          DBARK_QUERY_BINARY_NATIVE_ENABLED: '1'
-          DBARK_RECORD_INPUT_NATIVE_ENABLED: '1'
           PLAYWRIGHT_JSON_OUTPUT_FILE: test-results/native-clipboard-components/report.json
       - name: 保存开发组件验收记录
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: 开发组件原生剪贴板-${{ matrix.artifact }}
+          name: 二进制粘贴开发组件-${{ matrix.artifact }}
           path: test-results/
           if-no-files-found: warn
   release:
