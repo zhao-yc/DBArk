@@ -9,6 +9,7 @@ export const tableAutoIncrementZh = {
   targetChanged: '目标或连接配置已变化；旧目标DDL可能已完成，请核对原服务器后重新打开。', expired: '快照或预览已过期，请重新读取。', mismatch: '响应目标、计数或原定义与固定快照不一致，未接受该响应。',
   discard: '将放弃尚未提交的计数草稿，是否继续？', unknownClose: 'DDL可能已完成，请先核对实际目录计数与定义。确认放弃本窗口记录并继续？',
   notSent: '尚未发送DDL。', unknown: 'DDL结果未知，请暂停写入并核对实际定义与计数；不会自动重试或重放。', succeeded: 'DDL已完成，定义及目录在核验时与请求一致；不保证下一次插入分配值。', verificationFailed: 'DDL已完成，但定义或目录计数未与请求完整吻合；请核对实际状态，不要重放。',
+  completedUnsettled: 'DDL已完成且目录曾核验吻合，但请求或资源收尾异常；请核对资源状态，不要重放。',
   cancelling: '已请求取消，等待真实任务结束和资源释放。', consumed: '本次令牌已消费，不能再次执行，请重新读取。', unsupportedAck: '存在当前版本不认识的风险确认项，不能执行。',
   dirty: '同目标隐藏表页存在未提交数据或列布局草稿，请先处理。', busy: '同目标表页仍有活动任务，请等待实际完成。', workspaceBudget: '工作区标签超过检查预算，请先关闭部分标签。',
   connecting: '建立独立结构连接', reading: '读取计数、列类型与物理身份', rechecking: '重核完整定义和目录计数', executing: '调整表级自增计数', verifying: '核验实际目录与定义', releasing: '释放结构资源',
