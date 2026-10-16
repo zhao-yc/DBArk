@@ -36,7 +36,12 @@ export async function readTableAutoIncrementPolicy(context: StructureTaskContext
     ...(maria ? [['GLOBAL.innodb_read_only_compressed', 'compressedReadOnly'], ['GLOBAL.wsrep_on', 'globalWsrep'], ['SESSION.wsrep_on', 'sessionWsrep']] as [string, keyof TableAutoIncrementPolicy][] : []),
   ];
   const rows = (await structureTaskQuery<TableAutoIncrementPolicy[]>(context, 'SELECT ' + fields.map(([variable, alias]) => `CAST(@@${variable} AS CHAR) AS ${alias}`).join(', '))).rows;
-  const row = rows[0], keys = fields.map(([, alias]) => alias);
+  const row = maria && rows[0] ? { ...rows[0] } : rows[0], keys = fields.map(([, alias]) => alias);
+  // MariaDB的已知布尔变量可能返回OFF/ON；仅规范化明确字段，不转换其他词、类型或数值策略。
+  if (maria && row) for (const key of ['readOnly', 'innodbReadOnly', 'compressedReadOnly', 'globalWsrep', 'sessionWsrep'] as const) {
+    if (row[key] === 'OFF') row[key] = '0';
+    else if (row[key] === 'ON') row[key] = '1';
+  }
   if (rows.length !== 1 || !row || Object.keys(row).length !== keys.length || keys.some(key => typeof row[key] !== 'string') || !['0', '1', '2'].includes(row.lockMode)
     || ['sessionIncrement', 'sessionOffset', 'globalIncrement', 'globalOffset'].some(key => row[key as keyof TableAutoIncrementPolicy] !== '1')
     || keys.filter(key => !['sessionIncrement', 'sessionOffset', 'globalIncrement', 'globalOffset', 'lockMode'].includes(key)).some(key => row[key] !== '0')) throw new Error('自增步长/偏移不是1、服务器/InnoDB只读、强制恢复、Galera或运行模式未知，当前仅可查看');
