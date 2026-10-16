@@ -20,7 +20,7 @@ function production(path: string, names: string[], snapshotEffect = false): stri
   // 静态Worker URL不参与本模型执行，固定为合法脚本字面量；其它生产语句原样保留。
   return ts.transpileModule(parts.join('\n').replaceAll('import.meta.url', '"file:///PageFindPanel.tsx"') + '\nObject.assign(globalThis,{' + [...names, ...(snapshotEffect ? ['snapshotChanged'] : [])].join(',') + '});', { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
 }
-const parentCode = production('../../src/renderer/components/TableTab.tsx', ['assertGridWritable', 'pageFindGeneration', 'applyPagePlan', 'selectCurrentCell']);
+const parentCode = production('../../src/renderer/components/TableTab.tsx', ['assertGridWritable', 'pageFindGeneration', 'applyPagePlan', 'selectCurrentCell', 'invalidateCopyRead']);
 const panelCode = production('../../src/renderer/components/PageFindPanel.tsx', ['selectPosition', 'invalidateIntent', 'changeReplacement', 'changeOptions', 'compositionStarted', 'compositionEnded', 'sameCurrent', 'jump', 'replaceCurrent', 'inputKey', 'run', 'cancel', 'apply'], true);
 const options: PageFindOptions = { kind: 'text', query: 'old', caseSensitive: false, wholeCell: false, column: 'note' };
 
@@ -31,7 +31,7 @@ function fixture() {
   const row: DraftRow = { id: 'uuid-1', data: { ...data, other: '已有草稿' }, original: structuredClone(data), inserted: false, deleted: false }, other: DraftRow = { ...row, id: 'uuid-2', data: { ...data, id: '9007199254740993', note: 'old' }, original: { ...data, id: '9007199254740993', note: 'old' } };
   const keys = ['note', 'other', 'nil', 'bytes', 'amount', 'generated'], state: RecordContext = { target: { connectionId: 'c', database: 'd', table: 't' }, connectionVersion: 1, generation: 3, info, loaded: true, busy: false, stale: false };
   let input = false;
-  const parent = createContext({ rowsRef: { current: [row, other] }, selectionRef: { current: { rowId: row.id, key: 'note' } }, record: { dirty: false, hasInput: () => input, formOpen: false }, blocked: false, page: { columns: keys.map(key => ({ key })) }, document: { querySelector: () => null }, setSelection: vi.fn(), getRecordContext: () => state, blockedRef: { current: false }, rootElement: { current: { querySelector: vi.fn(() => null) } }, recordReadonlyReason, recordTargetKey, recordViewZh, tableGridZh: text, applyPageReplacement, visibleKeys: keys, refreshVersion: 0, pageIndex: 1, pageSize: 100, sort: [], filters: [], filterMode: 'all', pageFindContext: { current: { values: [], generation: 0 } }, setRows: vi.fn(), setError: vi.fn() });
+  const parent = createContext({ copyReadIntent: { current: null }, invoke: vi.fn(async () => undefined), rowsRef: { current: [row, other] }, selectionRef: { current: { rowId: row.id, key: 'note' } }, record: { dirty: false, hasInput: () => input, formOpen: false }, blocked: false, page: { columns: keys.map(key => ({ key })) }, document: { querySelector: () => null }, setSelection: vi.fn(), getRecordContext: () => state, blockedRef: { current: false }, rootElement: { current: { querySelector: vi.fn(() => null) } }, recordReadonlyReason, recordTargetKey, recordViewZh, tableGridZh: text, applyPageReplacement, visibleKeys: keys, refreshVersion: 0, pageIndex: 1, pageSize: 100, sort: [], filters: [], filterMode: 'all', pageFindContext: { current: { values: [], generation: 0 } }, setRows: vi.fn(), setError: vi.fn() });
   parent.setRows.mockImplementation((rows: DraftRow[]) => { parent.rowsRef.current = rows; }); runInContext(parentCode, parent);
   const timers: (() => void)[] = [], worker = vi.fn(async (request: PageFindRequest): Promise<PageFindResult> => request.operation === 'find' ? { status: 'ready', operation: 'find', matches: findPageCellsInWorker(request.rows, request.keys, request.options) } : { status: 'ready', operation: 'preview', preview: previewPageReplacementInWorker(request.rows, request.keys, request.options, request.replacement!, request.info!, request.generation, request.only) });
   const snapshot = { rows: parent.rowsRef.current, keys, info, generation: parent.pageFindGeneration(), options, disabled: false, replaceDisabled: false };
@@ -83,6 +83,11 @@ describe('替换当前一次与匹配移动', () => {
 });
 
 describe('TableTab最终应用复用真实RecordContext和完整旧值', () => {
+  it('切换选择执行真实来源失效函数，恢复坐标也只请求一次取消', () => {
+    const f = fixture(), intent = { taskId: 'copy-source-task', invalidated: false, consumed: false, cancelSent: false }; f.parent.copyReadIntent.current = intent;
+    f.parent.selectCurrentCell(f.other, 'note'); f.parent.selectCurrentCell(f.row, 'note');
+    expect(intent.invalidated).toBe(true); expect(intent.cancelSent).toBe(true); expect(f.parent.invoke).toHaveBeenCalledExactlyOnceWith('query.cancel', { taskId: intent.taskId }); expect(f.parent.setRows).not.toHaveBeenCalled();
+  });
   it('网格取消选择同步撤销令牌，无需等待React渲染', () => {
     const f = fixture(), only = f.panel.occurrences[1] as PageOccurrence, token = f.parent.selectionRef.current, plan = previewPageReplacement(f.parent.rowsRef.current, f.keys, options, '新', f.info, f.parent.pageFindGeneration(), only);
     f.parent.selectCurrentCell(undefined, undefined);
