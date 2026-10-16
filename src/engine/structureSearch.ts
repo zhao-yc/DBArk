@@ -90,6 +90,8 @@ export class StructureSearches{
     try{
       const page=await run((managed,control)=>readPage(state,managed,control));
       if(!page.limitReached&&!page.stoppedOnError&&state.scope<page.scopeCount){const cursor=randomUUID(),expires=this.now()+structureSearchLimits.cursorMs;this.cursors.set(cursor,{state,expires});page.cursor=cursor;page.expiresAt=new Date(expires).toISOString();}
+      // 定义位置、摘要、对象名及续页元数据共同占128KiB；失败不泄漏已生成的游标。
+      if(state.input.searchIn==='definition'&&Buffer.byteLength(JSON.stringify(page))>structureSearchLimits.pageBytes){if(page.cursor)this.cursors.delete(page.cursor);throw Error('定义搜索批次及元数据超过128KiB');}
       return page;
     }finally{this.active--;}
   }

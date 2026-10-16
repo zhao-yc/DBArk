@@ -7,6 +7,8 @@ import { errorMessage, identifier, invoke, kindLabels, qualifiedName, uid } from
 import { useWorkspace } from '../store';
 import { SqlEditor } from './SqlEditor';
 import { ErrorBox, Field, Modal, Spinner } from './ui';
+import type { DefinitionSearchOpen } from '../../shared/definitionNavigation';
+import { DefinitionViewer } from './DefinitionViewer';
 
 /** 新字段仅提供可编辑默认值，不在用户确认前生成数据库对象。 */
 const blankColumn = (): TableDesign['columns'][number] => ({ name: '', type: 'varchar(255)', nullable: true, autoIncrement: false, comment: '' });
@@ -66,7 +68,13 @@ function template(kind: string, database: string, name: string) {
 }
 
 /** 新数据库和视图等对象共享 SQL 确认入口；无默认数据库也能直接创建数据库。 */
-export function DdlDialog({ connectionId, database, object, onClose, onApplied, readOnly=false }: { connectionId: string; database?: string; object?: DatabaseObject; onClose: () => void; onApplied: () => void; readOnly?:boolean }) {
+interface DdlDialogProps { connectionId: string; database?: string; object?: DatabaseObject; onClose(): void; onApplied(): void; readOnly?: boolean; definitionSearch?: DefinitionSearchOpen; }
+/** 只读定义使用独立组件生命周期，切换编辑/查看模式不会改变同一组件的Hook顺序。 */
+export function DdlDialog(props: DdlDialogProps) {
+  return props.readOnly && props.object && props.database ? <DefinitionViewer connectionId={props.connectionId} database={props.database} object={props.object} search={props.definitionSearch} onClose={props.onClose}/> : <DdlEditorDialog {...props}/>;
+}
+/** 原有显式DDL编辑、预览与确认执行路径保持独立。 */
+function DdlEditorDialog({ connectionId, database, object, onClose, onApplied, readOnly=false }: DdlDialogProps) {
   const [name, setName] = useState(object?.name ?? ''); const [kind, setKind] = useState(object?.kind ?? 'view'); const [sql, setSql] = useState(database ? template('view', database, '') : ''); const [busy, setBusy] = useState(!!object); const [error, setError] = useState('');
   const [applyTaskId, setApplyTaskId] = useState('');
   useEffect(() => {

@@ -1,4 +1,4 @@
-import {useRef,useState} from 'react';
+import {useEffect,useRef,useState} from 'react';
 import {DataGrid,type Column} from 'react-data-grid';
 import {structureSearchInputSchema,structureSearchKinds,definitionSearchKinds,structureSearchLimits,type StructureSearchHit,type StructureSearchPage,type StructureSearchKind} from '../../shared/databaseSearch';
 import type {DatabaseSearchMode} from '../../shared/databaseSearchPattern';
@@ -8,9 +8,12 @@ import {invoke,errorMessage,uid} from '../lib';
 import {useWorkspace} from '../store';
 import {Modal,Field,ErrorBox,Spinner} from './ui';
 import '../databaseSearch.css';
+import type {DefinitionSearchOpen} from '../../shared/definitionNavigation';
+import {DefinitionSearchConnectionLease} from '../definitionNavigation';
+import {definitionNavigationZh} from '../locales/definitionNavigation.zh-CN';
 
 /** 搜索窗口独占自己的任务和续页；不借用、关闭或刷新任何已有查询/表格标签。 */
-export function StructureSearchDialog({onClose,onOpen,onData,onSavedQueries}:{onClose:()=>void;onOpen:(connectionId:string,hit:StructureSearchHit)=>void;onData?:()=>void;onSavedQueries?:()=>void}){
+export function StructureSearchDialog({onClose,onOpen,onData,onSavedQueries}:{onClose:()=>void;onOpen:(connectionId:string,hit:StructureSearchHit,definitionSearch?:DefinitionSearchOpen)=>void;onData?:()=>void;onSavedQueries?:()=>void}){
   const state=useWorkspace(),initial=structureSearchContext(state.selection,state.settings.tabs.find(tab=>tab.id===state.settings.activeTabId),state.connections[0]?.id??'');
   const [connectionId,setConnectionId]=useState(initial.connectionId),[databases,setDatabases]=useState(initial.database??'');
   const [keyword,setKeyword]=useState(''),[mode,setMode]=useState<DatabaseSearchMode>('contains'),[caseSensitive,setCaseSensitive]=useState(false);
@@ -20,6 +23,10 @@ export function StructureSearchDialog({onClose,onOpen,onData,onSavedQueries}:{on
   const [selected,setSelected]=useState<StructureSearchHit|null>(null),[busy,setBusy]=useState(false),[closing,setClosing]=useState(false),[error,setError]=useState('');
   const cursor=useRef<{connectionId:string;value:string}|null>(null),activeTask=useRef<string|null>(null),work=useRef<Promise<void>|null>(null),stopRequested=useRef(false),closeRequested=useRef(false),cancelWork=useRef<Promise<void>|null>(null);
   const resultConnection=useRef(initial.connectionId);
+  const resultLease=useRef<DefinitionSearchConnectionLease|null>(null);
+  const plannedLease=useRef<DefinitionSearchConnectionLease|null>(null);
+  // 同步观察连接修订ABA；卸载只取消后续使用，不让旧搜索恢复为新来源。
+  useEffect(()=>{const unsubscribe=useWorkspace.subscribe(()=>{resultLease.current?.current();plannedLease.current?.current();});return()=>{unsubscribe();resultLease.current?.cancel();plannedLease.current?.cancel();};},[]);
 
   /** 释放小型目录位置；调用成功前保留引用，失败时仍可再次明确关闭。 */
   async function releaseCursor(){const current=cursor.current;if(!current)return;await invoke('search.release',{connectionId:current.connectionId,cursor:current.value});if(cursor.current===current)cursor.current=null;}
@@ -32,6 +39,7 @@ export function StructureSearchDialog({onClose,onOpen,onData,onSavedQueries}:{on
         let result:StructureSearchPage;
         if(next){
           const current=cursor.current;if(!current)throw Error('没有可继续的搜索，请重新搜索');
+          if(!resultLease.current?.current()||resultLease.current.connectionId!==current.connectionId)throw Error(definitionNavigationZh.invalid);
           const taskId=uid();activeTask.current=taskId;cursor.current=null;
           result=await invoke('search.structureContinue',{connectionId:current.connectionId,taskId,cursor:current.value});
           if(result.cursor)cursor.current={connectionId:current.connectionId,value:result.cursor};
@@ -39,14 +47,19 @@ export function StructureSearchDialog({onClose,onOpen,onData,onSavedQueries}:{on
           // 先校验全部范围，非法请求不会释放旧搜索或查询数据库。
           const parsed=structureSearchInputSchema.safeParse({connectionId,taskId:uid(),databases:databases.split(/\r?\n/).filter(value=>value.length>0),kinds,pattern:{mode,text:keyword,caseSensitive},maxResults:limit,onError,...(searchIn==='definition'?{searchIn}:{})});
           if(!parsed.success)throw Error(text.invalidRequest);const input=parsed.data;
-          await releaseCursor();if(stopRequested.current)return;
+          // 首次await前绑定修订；释放旧游标期间改过连接也不能默默在新连接上开始搜索。
+          const version=useWorkspace.getState().connectionVersions[input.connectionId]??0;
+          const prepared=new DefinitionSearchConnectionLease(input.connectionId,version,()=>{const workspace=useWorkspace.getState();return workspace.connections.some(profile=>profile.id===input.connectionId)?workspace.connectionVersions[input.connectionId]??0:undefined;});plannedLease.current=prepared;
+          await releaseCursor();if(stopRequested.current)return;if(!prepared.current())throw Error(definitionNavigationZh.invalid);
           setHits([]);setFailures([]);setSelected(null);setPage(null);activeTask.current=input.taskId;resultConnection.current=input.connectionId;
+          resultLease.current?.cancel();resultLease.current=prepared;plannedLease.current=null;
           result=await invoke('search.structure',input);
           if(result.cursor)cursor.current={connectionId:input.connectionId,value:result.cursor};
         }
+        if(!resultLease.current?.current())throw Error(definitionNavigationZh.invalid);
         setPage(result);setHits(previous=>[...(next?previous:[]),...result.hits]);setFailures(previous=>[...(next?previous:[]),...result.failures]);
       }catch(reason){if(next)setPage(previous=>previous?{...previous,cursor:undefined}:previous);setError(stopRequested.current?text.cancelled:errorMessage(reason));}
-      finally{activeTask.current=null;setBusy(false);}
+      finally{plannedLease.current?.cancel();plannedLease.current=null;activeTask.current=null;setBusy(false);}
     })();
     work.current=operation;void operation.finally(()=>{if(work.current===operation)work.current=null;});
   }
@@ -55,7 +68,7 @@ export function StructureSearchDialog({onClose,onOpen,onData,onSavedQueries}:{on
   /** 关闭及跳转先等待当前批次与续页释放，清理失败时保留窗口供用户核对。 */
   async function close(open?:StructureSearchHit|'data'|'queries'){
     if(closeRequested.current)return;closeRequested.current=true;setClosing(true);setError('');
-    try{await cancel();await work.current;await releaseCursor();if(open==='data')onData?.();else if(open==='queries')onSavedQueries?.();else open?onOpen(resultConnection.current,open):onClose();}
+    try{await cancel();await work.current;await releaseCursor();if(open==='data')onData?.();else if(open==='queries')onSavedQueries?.();else if(open){const lease=resultLease.current;onOpen(resultConnection.current,open,open.matchedIn==='definition'&&lease?{connectionId:resultConnection.current,connectionVersion:lease.version,database:open.database,name:open.object,kind:open.parentKind,invalidated:!lease.current(),result:open.definitionNavigation}:undefined);}else onClose();}
     catch(reason){setError(errorMessage(reason));closeRequested.current=false;setClosing(false);}
   }
   const columns:Column<StructureSearchHit>[]=[{key:'database',name:text.databaseColumn,width:170},{key:'kind',name:text.kindColumn,width:100,renderCell:({row})=>text.kinds[row.kind]},{key:'object',name:text.objectColumn,width:220},{key:'name',name:searchIn==='definition'?text.definitionLocation:text.nameColumn,width:260,renderCell:({row})=>row.matchedIn==='definition'?text.definitionMatch(row.definitionCharacters??0):row.name}];
@@ -79,6 +92,6 @@ export function StructureSearchDialog({onClose,onOpen,onData,onSavedQueries}:{on
       {failures.length>0&&<details className="database-search-failures" open><summary>{text.failureCount(failures.length)}</summary>{failures.map((failure,index)=><p key={index}>{failure.database} · {text.kinds[failure.kind]}{failure.object?' · '+failure.object:''}：{failure.message}</p>)}</details>}
       <p className="muted small">{text.currentDefinition} {page?.cursor&&text.expired}</p>
     </div>
-    <footer className="modal-footer"><button className="primary" disabled={busy||closing||!connectionId} onClick={()=>search()}>{text.start}</button><button disabled={busy||closing||!cursor.current} onClick={()=>search(true)}>{text.next}</button><button disabled={!busy||closing} onClick={()=>void cancel().catch(reason=>setError(errorMessage(reason)))}>{text.cancel}</button><span className="grow"/><button disabled={!selected||busy||closing} onClick={()=>selected&&void close(selected)}>{text.open}</button><button disabled={closing} onClick={()=>void close()}>{text.close}</button></footer>
+    <footer className="modal-footer"><button className="primary" disabled={busy||closing||!connectionId} onClick={()=>search()}>{text.start}</button><button disabled={busy||closing||!cursor.current||!resultLease.current?.current()} onClick={()=>search(true)}>{text.next}</button><button disabled={!busy||closing} onClick={()=>void cancel().catch(reason=>setError(errorMessage(reason)))}>{text.cancel}</button><span className="grow"/><button disabled={!selected||busy||closing} onClick={()=>selected&&void close(selected)}>{text.open}</button><button disabled={closing} onClick={()=>void close()}>{text.close}</button></footer>
   </Modal>;
 }
