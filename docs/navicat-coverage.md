@@ -10,7 +10,7 @@
 
 0.18 开发验收补充：[SQL 补全 22 项](../tests/integration/acceptance-v018-caret-input-20261016.md)、[数据表与记录视图补充](../tests/integration/acceptance-v018-grid-install-20261016.md)及[两项原生复制](../tests/integration/acceptance-v018-native-copy-20261016.md)已使用同一 Windows 候选实际执行并核对清理。另 [12 个开发组件](../tests/integration/acceptance-v018-native-components-20261016.md)在三平台临时原生 CI 各自实际通过并下载逐例核对，原 281 身份计划现已补全：246 个安装产品和 35 个组件；Mac 同身份不重复累加。这些计数不是功能覆盖比例。0.18现已公开：12附件/1075源码blob独立核对，公开Windows六项常用完整批及两端口各四场景SSH通过，实际EXE/ASAR与原候选相同；原计划未全套重跑，见[公开验收](../tests/integration/acceptance-v018-public-20261016.md)。
 
-0.19 准备候选的当前语句、复制草稿、定义命中导航、表单跨页和自增操作已完成 Windows 源码 31 项真实界面验收，范围仅 MySQL8.4/13384；原准备和文案失败、测试修正及清理分别保留，见[常用操作实证](../tests/integration/acceptance-v019-common-source-20261016.md)。完整源值补取仍在修复及复审，未混入已验范围；候选版本尚未发布。
+0.19前期31项检查点仍保持[原来源](../tests/integration/acceptance-v019-common-source-20261016.md)。后续完整源值补取的选择令牌误失效已窄修，固定31在MySQL8.4/13384的六批36身份正式界面全部通过；自增另在5.7、8.0及严格TLS各三项通过。Maria10.11实际只读导致原批两失败，已查明OFF布尔字符串格式，独立修正及新验收继续；没有改服务器开关或放宽期待。来源、整合、原失败及核零见[第二轮实证](../tests/integration/acceptance-v019-copy-and-navigation-20261016.md)。新Engine八项权限/MDL/TTL定义仍待清理P2修复后实跑，0.19尚未发布。
 
 | 编号 | 工作包 | 状态 | 验收要求 |
 | --- | --- | --- | --- |
