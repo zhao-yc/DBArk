@@ -6,7 +6,7 @@ import { generateC02OpenSshMaterials } from '../integration/helpers/c02-openssh-
 
 const manifest = { purpose: c02OpenSshPurpose, run: 'a'.repeat(32), user: 'c02_' + 'a'.repeat(12), port: 22384, fingerprint: 'SHA256:' + Buffer.alloc(32, 1).toString('base64').replace(/=+$/, ''), clientPublic: 'ssh-ed25519 YWJj dbark-c02-client' } as const;
 const config = { nonce: 'b'.repeat(32), machineHash: 'c'.repeat(64), hostname: 'only-test-server', daemon: 'only-test-daemon', socket: '1:2' };
-const proof = { purpose: c02OpenSshPurpose, run: manifest.run, host: '192.168.31.200', ...config, container: 'd'.repeat(64), image: 'sha256:' + 'e'.repeat(64), port: manifest.port, fingerprint: manifest.fingerprint, checkedAt: 1000000, restricted: true };
+const proof = { purpose: c02OpenSshPurpose, run: manifest.run, host: '192.168.31.200', ...config, container: 'd'.repeat(64), image: 'sha256:' + 'e'.repeat(64), port: manifest.port, fingerprint: manifest.fingerprint, checkedAt: 1000000, restricted: true, openSshVersion: 'OpenSSH_10.2p1', maxSessions: 0 };
 /** 全部是自有虚构策略数据，不读当前环境、凭据或200机器身份。 */
 function env(): NodeJS.ProcessEnv { return { DBARK_INTEGRATION_ENABLED: '1', DBARK_C02_OPENSSH_CORE_ENABLED: '1', DBARK_C02_OPENSSH_ROOT_CONFIRM: 'server-200/192.168.31.200/isolated-openssh', DBARK_C02_OPENSSH_DB_HOST: '192.168.31.200', DBARK_C02_OPENSSH_DB_PORT: '13384', DBARK_C02_OPENSSH_DB_UUID: '11111111-2222-3333-4444-555555555555', DBARK_C02_OPENSSH_CLIENT_DIR: resolve('own', `dbark-c02-openssh-${manifest.run}`), DBARK_C02_OPENSSH_PROOF_PATH: resolve('own', 'server-proof.json'), DBARK_C02_OPENSSH_PROOF_NONCE: config.nonce, DBARK_C02_OPENSSH_MACHINE_SHA256: config.machineHash, DBARK_C02_OPENSSH_SOCKET_ID: config.socket, DBARK_C02_OPENSSH_HOSTNAME: config.hostname, DBARK_C02_OPENSSH_DAEMON_ID: config.daemon, DBARK_C02_OPENSSH_ADMIN_USER: '仅测试管理员', DBARK_C02_OPENSSH_ADMIN_PASSWORD: '仅测试占位，不是实际凭据' }; }
 
@@ -33,6 +33,7 @@ describe('隔离OpenSSH默认门与范围', () => {
   it('ROOT新鲜核对记录匹配才可消费，不能以未认证扫描或环境自述替代', () => { expect(c02OpenSshProof(proof, manifest, config, 1000001).run).toBe(manifest.run); });
   it.each([{ host: '127.0.0.1' }, { machineHash: '0'.repeat(64) }, { socket: '1:3' }, { daemon: '其它daemon' }, { hostname: '本机' }, { nonce: '0'.repeat(32) }, { run: '0'.repeat(32) }, { port: 22 }, { fingerprint: 'SHA256:错误' }, { restricted: false }, { container: '短ID' }, { image: 'latest' }])('真实目标/容器证明变化%j拒绝', patch => { expect(() => c02OpenSshProof({ ...proof, ...patch }, manifest, config, 1000001)).toThrow(); });
   it('过期或未来核对记录不能作为当前服务器证明', () => { expect(() => c02OpenSshProof(proof, manifest, config, 1300001)).toThrow('过期'); expect(() => c02OpenSshProof(proof, manifest, config, 999999)).toThrow('过期'); });
+  it.each([{ openSshVersion: undefined }, { openSshVersion: 'OpenSSH_10.1p1' }, { maxSessions: undefined }, { maxSessions: 1 }])('拒绝缺失或错误的实际版本/会话策略%j', patch => { expect(() => c02OpenSshProof({ ...proof, ...patch }, manifest, config, 1000001)).toThrow('固定OpenSSH版本'); });
   it('实际off或对象off允许；CLI开启任一采集时拒绝，不依赖项目默认值', () => {
     expect(() => c02OpenSshPrivacy({ trace: 'off', screenshot: { mode: 'off' }, video: 'off' })).not.toThrow();
     for (const key of ['trace', 'screenshot', 'video']) expect(() => c02OpenSshPrivacy({ trace: 'off', screenshot: 'off', video: 'off', [key]: 'on' })).toThrow('拒绝CLI覆写');

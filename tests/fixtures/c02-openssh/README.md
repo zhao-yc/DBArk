@@ -32,7 +32,7 @@ ROOT 后续只向 200 的 `/tmp/dbark-c02-openssh-<run>` 复制 **manifest.json�
 
 ROOT 需要先从实际 200 取得 hostname、`SHA256(/etc/machine-id 去首尾空白)`、实际 `/var/run/docker.sock` 的 `st_dev:st_ino`、Docker daemon ID，以及两个实例 UUID；不能从旧笔记或环境自述替代。初次取 daemon ID 前也必须核对实际宿主和 Unix socket。之后 server.py 每条 Docker 命令均再次核对宿主、材料和 socket，显式使用该 Unix socket及本轮空 Docker 配置；子进程只继承 PATH、LANG。
 
-`verify` 从实际 inspect 检查完整容器 ID、image ID、purpose/run/config labels、私网端口、挂载、能力、日志、资源和独占网络，再读取实际 `sshd -T` 及新 host key 指纹，写出 ROOT 核对记录。客户端只消费该记录，要求 ROOT nonce、宿主、daemon、socket、run、端口和指纹全部匹配且记录不超过五分钟；它不冒充客户端直接检查了 Docker。
+`verify` 从实际 inspect 检查完整容器 ID、image ID、purpose/run/config labels、私网端口、挂载、能力、日志、资源和独占网络，再读取实际 `sshd -T`、`sshd -V` 及新 host key 指纹，写出 ROOT 核对记录。客户端要求记录中实际 `openSshVersion=OpenSSH_10.2p1`、`maxSessions=0`，以及 ROOT nonce、宿主、daemon、socket、run、端口和指纹全部匹配且不超过五分钟；旧版缺字段 proof 必须重新 verify，不能客户端补填。它不冒充客户端直接检查了 Docker。
 
 ## 默认关闭与参数
 
@@ -60,7 +60,7 @@ ROOT 需要先从实际 200 取得 hostname、`SHA256(/etc/machine-id 去首尾�
    ```
 
 3. 把新 proof 以客户端独占权限放入该轮客户端材料目录，明确注入 PROOF_PATH/NONCE 和相同宿主身份。每轮即将过期时先重新 verify、再复制 proof；不能修改时间戳绕过。DB_HOST 固定 200；先选择13384及其 UUID，再选择13484、对应 UUID和严格 TLS_CA_PATH。管理者凭据仅在 Node 测试进程中，C02Desktop 仍使用自身环境白名单。
-4. 只开 CORE 门运行 `tests/integration/c02-openssh.integration.test.ts`。每个端口两种认证均须执行：错密码；加密 key 的错/缺口令；正确认证的错指纹；真实产品 Engine/ssh2 forwardOut 的 SELECT、账号/库/marker/线程核对、13484 实际 cipher。另以真实协议检查非白名单 loopback 转发及 exec/SFTP 被 reason=1 管理策略拒绝；普通网络失败、连接被拒绝或超时不能充当策略通过。
+4. 只开 CORE 门运行 `tests/integration/c02-openssh.integration.test.ts`。每个端口两种认证均须执行：错密码；加密 key 的错/缺口令；正确认证的错指纹；真实产品 Engine/ssh2 forwardOut 的 SELECT、账号/库/marker/线程核对、13484 实际 cipher。另以真实协议检查非白名单 loopback 的 direct-tcpip 明确 reason=1；固定 OpenSSH10.2p1/MaxSessions=0 的 exec/SFTP 必须在 session 开通道阶段返回 reason=2。二者均要求 ssh2 的 CHANNEL_OPEN_FAILURE 错误形状、同一已认证连接仍存活且无传输错误；普通网络/exec/subsystem错误、任意 reason=2 或超时都不能充当通过。源码依据及修正证据见[28fd39c 后续修正](revision-28fd39c.md)。
 5. 先使用项目既有构建命令生成当前实际应用，再只开 UI 门，运行：
 
    ```sh
@@ -68,7 +68,7 @@ ROOT 需要先从实际 200 取得 hostname、`SHA256(/etc/machine-id 去首尾�
    ```
 
    四例是两种认证 × 原生持久化/仅会话。实际 ConnectionDialog、文件选择授权、Monaco、broker/utility及新测试 userData 均保留真实路径。持久化例必须实读系统安全后端、SQLite 无秘密明文、独立加密槽和真实 safeStorage 解密；真实退出并检查所有 PID 后重开同目录，不补填，实际测试连接及查询成功，再仅清 SSH 秘密并验证 DB 密码仍保留。Linux basic_text/未知后端计为持久恢复未验。仅会话例则验证未勾保存、SQLite 零秘密槽和重启不恢复。不得开启 CLI debug、trace、截图或视频收集秘密。
-6. 每例先严格关闭应用/utility，观察随机用户及已记录连接 ID 清零，再凭用户 ATTRIBUTE、表 COMMENT 和唯一对象集合精确 DROP，最后独立观察旧管理/应用连接 ID。CREATE 结果未知、额外授权/对象、归属不符或线程未清零均保留，报告精确随机用户/库和 unknown 状态；不重试写操作。测试只证明 DB 夹具归还，事实文件明确服务器及新密钥尚待 ROOT 清理。
+6. 每例先严格关闭应用/utility，观察随机用户及已记录连接 ID 清零，再凭用户 ATTRIBUTE、表 COMMENT 和唯一对象集合精确 DROP，最后独立观察旧管理/应用连接 ID。授权检查一旦观察到异常或读取失败，就永久失效并在公共删除门阻止用户和库的全部 DROP；即使用例先失败，也须在删除门重核权限。普通认证/用例失败且范围重新核实合法，仍可精确归还。CREATE 结果未知、额外对象、归属不符或线程未清零均保留，报告精确随机用户/库、真实 CREATE 状态及授权失效状态；不重试写操作。测试只证明 DB 夹具归还，事实文件明确服务器及新密钥尚待 ROOT 清理。
 7. **所有核心/UI 客户端结束后**，ROOT 在原 200 用相同身份参数运行 `server.py down`。只按 runtime 的完整 ID 和实际归属删除本轮容器、无其它引用的网络/镜像，再核路径、run、dev/ino、白名单及无链接后清理精确服务器材料目录。分步失败保留现场；未知 CREATE 或部分 down 不按名字/通配接管，由 ROOT 对照 runtime 人工核对。
 8. 确认服务器和客户端均结束后，只开启 MATERIALS remove，提供本轮 CLIENT_DIR、REMOVE_RUN 和 CLEANUP_CONFIRM，逐文件清除客户端五文件及可选同轮 proof，然后 rmdir。额外文件、其它 run 或对象替换均拒绝删除。一次性材料无后续复用需求；ROOT 如决定跨轮留存，应按用户要求另备份到 `E:\BaiduSyncdisk\codex重要文件备份\DBArk` 并附中文用途/保管/清理说明，不能把秘密写入说明。
 

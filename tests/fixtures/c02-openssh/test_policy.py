@@ -84,10 +84,37 @@ class Policy(unittest.TestCase):
                 self.assertEqual(args[:3], ['/usr/bin/docker', '--host', 'unix:///var/run/docker.sock'])
                 self.assertEqual(args[3:5], ['--config', str(Path(directory) / 'docker-config')])
                 self.assertEqual(set(kwargs['env']), {'PATH', 'LANG'})
+                self.assertEqual(kwargs['stderr'], module.subprocess.STDOUT if args[-1] == '-V' else module.subprocess.PIPE)
                 return SimpleNamespace(returncode=0, stdout=('仅测试daemon' if args[-3:] == ['info', '--format', '{{.ID}}'] else '仅测试输出').encode(), stderr=b'')
             with patch.object(module.subprocess, 'run', side_effect=command):
                 self.assertEqual(server.docker('inspect', '仅测试ID'), '仅测试输出')
-            self.assertEqual(order, ['先核宿主及socket', '仅构造Docker参数', '先核宿主及socket', '仅构造Docker参数'])
+                self.assertEqual(server.docker('exec', '仅测试ID', '/usr/sbin/sshd', '-V', merge_output=True), '仅测试输出')
+            self.assertEqual(order, ['先核宿主及socket', '仅构造Docker参数', '先核宿主及socket', '仅构造Docker参数'] * 2)
+
+    def test_verify_records_actual_fixed_version_and_zero_sessions_without_side_effects(self):
+        # 用真实verify控制流与假Docker/文件端口检查新证明；不访问宿主或写文件。
+        for version in ['OpenSSH_10.2p1', 'OpenSSH_10.1p1']:
+            server = module.Server.__new__(module.Server)
+            server.run, server.daemon, server.directory = 'a' * 32, '仅假daemon', Path('/仅内存证明')
+            server.expected = {'hostname': '仅测试', 'machineHash': 'b' * 64, 'socket': '1:2'}
+            server.manifest = {'user': 'c02_' + 'a' * 12, 'port': 22384, 'fingerprint': 'SHA256:仅合成'}
+            server.inspect = lambda: {'Id': 'c' * 64, 'Image': 'sha256:' + 'd' * 64, 'State': {'Running': True}}
+            def command(*args, **kwargs):
+                if args[-1] == '-V':
+                    self.assertEqual(kwargs, {'merge_output': True})
+                    return version + ', OpenSSL 仅合成'
+                if 'sshd' in args[-4]:
+                    return '\n'.join(line.lower() if line.startswith('AllowUsers ') else line.split(' ', 1)[0].lower() + ' ' + line.split(' ', 1)[1] for line in module.config_text(server.manifest['user']).splitlines())
+                return '256 SHA256:仅合成 仅公开合成'
+            server.docker = command
+            with patch.object(Path, 'write_text') as write, patch.object(Path, 'chmod'), patch('builtins.print'):
+                if version == 'OpenSSH_10.2p1':
+                    server.verify('e' * 32)
+                    value = module.json.loads(write.call_args.args[0])
+                    self.assertEqual((value['openSshVersion'], value['maxSessions']), (version, 0))
+                else:
+                    with self.assertRaises(RuntimeError): server.verify('e' * 32)
+                    write.assert_not_called()
 
 
 if __name__ == '__main__':

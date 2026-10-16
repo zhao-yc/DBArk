@@ -113,20 +113,20 @@ class Server:
         actual = {'hostname': socket.gethostname(), 'machineHash': hashlib.sha256(Path('/etc/machine-id').read_bytes().strip()).hexdigest(), 'socket': f'{sock.st_dev}:{sock.st_ino}'}
         validate_host(actual, self.expected)
 
-    def docker(self, *args):
+    def docker(self, *args, merge_output=False):
         """每条Docker命令前重核宿主/socket，显式Unix地址及自有空配置，不读Root Docker凭据。"""
         self.check_host()
         config = self.directory / 'docker-config'; config.mkdir(mode=0o700, exist_ok=True)
         prefix = ['/usr/bin/docker', '--host', 'unix:///var/run/docker.sock', '--config', str(config)]
         # 不把ROOT现有认证环境或agent/socket带给Docker CLI，也不继承远端context。
         env = {'PATH': '/usr/sbin:/usr/bin:/sbin:/bin', 'LANG': 'C.UTF-8'}
-        def call(command):
-            result = subprocess.run(prefix + list(command), env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=300, check=False)
+        def call(command, merged=False):
+            result = subprocess.run(prefix + list(command), env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT if merged else subprocess.PIPE, timeout=300, check=False)
             require(result.returncode == 0, 'C02指定Docker步骤失败；未输出原日志或自动重试，保留本轮目录')
             return result.stdout.decode().strip()
         require(call(['info', '--format', '{{.ID}}']) == self.daemon, 'C02实际Docker daemon ID不匹配')
         self.check_host()
-        return call(args)
+        return call(args, merge_output)
 
     def save(self):
         self.check_host()
@@ -172,9 +172,12 @@ class Server:
         actual = dict(line.split(' ', 1) for line in lines if ' ' in line)
         for key, expected in [('allowusers', self.manifest['user']), ('maxsessions', '0'), ('allowtcpforwarding', 'local'), ('permitopen', '192.168.31.200:13384 192.168.31.200:13484'), ('allowstreamlocalforwarding', 'no'), ('allowagentforwarding', 'no'), ('x11forwarding', 'no'), ('permittty', 'no'), ('permitlisten', 'none'), ('passwordauthentication', 'yes'), ('pubkeyauthentication', 'yes'), ('authenticationmethods', 'publickey password'), ('permittunnel', 'no'), ('permituserrc', 'no'), ('permituserenvironment', 'no'), ('permitrootlogin', 'no'), ('kbdinteractiveauthentication', 'no'), ('hostbasedauthentication', 'no'), ('permitemptypasswords', 'no'), ('strictmodes', 'yes'), ('hostkey', '/run/c02/host.key'), ('authorizedkeysfile', '/opt/c02/authorized_keys')]:
             require(actual.get(key) == expected, 'C02实际sshd有效策略超出范围')
+        # sshd -V写stderr；只合并这个固定只读命令，仍不回显原输出或继承ROOT环境。
+        version = self.docker('exec', value['Id'], '/usr/sbin/sshd', '-V', merge_output=True).split(',')[0].strip()
+        require(version == 'OpenSSH_10.2p1', 'C02实际OpenSSH版本不匹配')
         fingerprint = self.docker('exec', value['Id'], '/usr/bin/ssh-keygen', '-lf', '/run/c02/host.key', '-E', 'sha256').split()[1]
         require(fingerprint == self.manifest['fingerprint'], 'C02实际新主机密钥指纹不匹配')
-        proof = dict(self.expected, purpose=PURPOSE, run=self.run, host=HOST, daemon=self.daemon, container=value['Id'], image=value['Image'], port=self.manifest['port'], fingerprint=fingerprint, nonce=nonce, checkedAt=int(time.time() * 1000), restricted=True)
+        proof = dict(self.expected, purpose=PURPOSE, run=self.run, host=HOST, daemon=self.daemon, container=value['Id'], image=value['Image'], port=self.manifest['port'], fingerprint=fingerprint, nonce=nonce, checkedAt=int(time.time() * 1000), restricted=True, openSshVersion=version, maxSessions=int(actual['maxsessions']))
         output = self.directory / 'server-proof.json'; output.write_text(json.dumps(proof)); output.chmod(0o600)
         print('C02核对记录已写入本轮目录；无认证内容输出')
 

@@ -5,8 +5,10 @@ import { c02SshFingerprint } from './c02-ssh-policy';
 export const c02OpenSshPurpose = 'dbark-c02-openssh-v1';
 export const c02OpenSshBase = 'alpine:3.23.6@sha256:1f3591b8a02ea153f41c5bba878ad477f63ab3d19349762cb77504db02a23e15';
 export const c02OpenSshPackage = '10.2_p1-r0';
+export const c02OpenSshServerVersion = 'OpenSSH_10.2p1';
+export interface C02OpenSshServerPolicy { openSshVersion: typeof c02OpenSshServerVersion; maxSessions: 0; }
 export interface C02OpenSshManifest { purpose: typeof c02OpenSshPurpose; run: string; user: string; port: number; fingerprint: string; clientPublic: string; }
-export interface C02OpenSshProof { purpose: string; run: string; host: string; hostname: string; machineHash: string; socket: string; daemon: string; container: string; image: string; port: number; fingerprint: string; nonce: string; checkedAt: number; restricted: boolean; }
+export interface C02OpenSshProof extends C02OpenSshServerPolicy { purpose: string; run: string; host: string; hostname: string; machineHash: string; socket: string; daemon: string; container: string; image: string; port: number; fingerprint: string; nonce: string; checkedAt: number; restricted: boolean; }
 export interface C02OpenSshConfig { directory: string; proofPath: string; nonce: string; machineHash: string; hostname: string; daemon: string; socket: string; port: 13384 | 13484; uuid: string; adminUser: string; adminPassword: string; caPath?: string; }
 
 /** 双门先于配置、材料、数据库或原生应用访问；服务器部署另有独立专项门。 */
@@ -46,5 +48,6 @@ export function c02OpenSshManifest(value: unknown): C02OpenSshManifest {
 export function c02OpenSshProof(value: unknown, manifest: C02OpenSshManifest, config: Pick<C02OpenSshConfig, 'nonce' | 'machineHash' | 'hostname' | 'daemon' | 'socket'>, now = Date.now()): C02OpenSshProof {
   const v = value as C02OpenSshProof;
   c02OpenSshCheck(v?.purpose === c02OpenSshPurpose && v.run === manifest.run && v.host === '192.168.31.200' && v.port === manifest.port && v.fingerprint === manifest.fingerprint && v.nonce === config.nonce && v.machineHash === config.machineHash && v.hostname === config.hostname && v.daemon === config.daemon && v.socket === config.socket && v.restricted === true, 'C02实际服务器、socket或容器核对记录不匹配');
-  c02OpenSshCheck(/^[a-f0-9]{64}$/.test(v.container) && /^sha256:[a-f0-9]{64}$/.test(v.image) && Number.isSafeInteger(v.checkedAt) && now >= v.checkedAt && now - v.checkedAt <= 300000, 'C02容器身份不完整或核对记录已过期'); return v;
+  c02OpenSshCheck(/^[a-f0-9]{64}$/.test(v.container) && /^sha256:[a-f0-9]{64}$/.test(v.image) && Number.isSafeInteger(v.checkedAt) && now >= v.checkedAt && now - v.checkedAt <= 300000, 'C02容器身份不完整或核对记录已过期');
+  c02OpenSshCheck(v.openSshVersion === c02OpenSshServerVersion && v.maxSessions === 0, 'C02缺少实际固定OpenSSH版本及MaxSessions=0核对'); return v;
 }

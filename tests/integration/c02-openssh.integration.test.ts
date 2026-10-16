@@ -14,7 +14,7 @@ describe.skipIf(!c02OpenSshEnabled(process.env, 'CORE'))('C02隔离OpenSSH真实
       if (mode === 'encrypted-key') { const missing = structuredClone(profile); delete missing.ssh!.passphrase; await rejectC02OpenSsh(missing, 'passphrase'); }
       const fingerprint = structuredClone(profile); fingerprint.ssh!.hostFingerprint = c02WrongSshFingerprint(profile.ssh!.hostFingerprint!); await rejectC02OpenSsh(fingerprint, 'fingerprint');
       await selectC02OpenSsh(lease, mode);
-      const { verifyC02OpenSshChannels } = await import('./helpers/c02-openssh-protocol'); await verifyC02OpenSshChannels(profile);
+      const { verifyC02OpenSshChannels } = await import('./helpers/c02-openssh-protocol'); await verifyC02OpenSshChannels(profile, lease.serverPolicy);
     });
     console.info(JSON.stringify({ 验收: 'C02实际OpenSSH核心', mode, ...result }));
   }, 180000);
