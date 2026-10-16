@@ -1,11 +1,12 @@
 import type{CompletionToken}from'./completionLexical';
 import type{CompletionQueryBranch}from'./completionQueryScope';
+import{completionWindowInheritance}from'./completionWindowInheritance';
 
 const word=(token:CompletionToken|undefined,name:string)=>token?.kind==='word'&&token.value.toUpperCase()===name;
 const symbol=(token:CompletionToken|undefined,value:string)=>token?.kind==='symbol'&&token.value===value;
 const name=(token:CompletionToken|undefined)=>token?.kind==='word'||token?.kind==='identifier';
 
-/** 仅识别当前SELECT已有窗口中的表达式边界；不创建关系、不解析继承，也不扩展目录权限。 */
+/** 仅识别当前SELECT已有窗口中的表达式边界；有界继承只定位字段，不创建关系或扩展目录权限。 */
 export function completionWindowContext(branches:CompletionQueryBranch[],tokens:CompletionToken[],at:number,targetWord?:string):'expression'|'unsupported'|undefined{
   const branch=branches.filter(item=>item.select.start<=at&&at<=item.end).sort((a,b)=>b.select.depth-a.select.depth||b.select.start-a.select.start)[0];
   const stack:number[]=[],close=new Map<number,number>();
@@ -28,7 +29,7 @@ export function completionWindowContext(branches:CompletionQueryBranch[],tokens:
     // 窗口排序中的子查询继续用自身作用域；只有已确认分支才允许当前窗口表达式。
     if(branch&&tokens[open].start<branch.select.start)continue;
     if(!branch)return'unsupported';
-    const first=tokens[open+1];if((!word(first,'PARTITION')&&!word(first,'ORDER'))||!word(tokens[open+2],'BY'))return'unsupported';
+    const first=tokens[open+1];if((!word(first,'PARTITION')&&!word(first,'ORDER'))||!word(tokens[open+2],'BY'))return completionWindowInheritance(branch,tokens,close,open)?'expression':'unsupported';
     return'expression';
   }
 }

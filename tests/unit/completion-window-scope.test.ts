@@ -25,10 +25,10 @@ describe('普通SELECT窗口字段作用域',()=>{
   ])('普通派生表与CTE窗口不捕获外层别名：%s',source=>{expect(analyze(source).relations.map(item=>item.name)).toEqual(['o']);});
   it.each([
     'SELECT ROW_NUMBER() OVER(base ORDER BY u.|) FROM users u',
-    'SELECT ROW_NUMBER() OVER w FROM users u WINDOW base AS(),w AS(base ORDER BY u.|)',
+    'SELECT ROW_NUMBER() OVER w FROM users u WINDOW base AS(ORDER BY u.id),w AS(base ORDER BY u.|)',
     'SELECT ROW_NUMBER() OVER(ORDER BY u.id ROWS | PRECEDING) FROM users u',
     'SELECT ROW_NUMBER() OVER(ORDER BY u.id RANGE BETWEEN | PRECEDING AND CURRENT ROW) FROM users u',
-  ])('继承窗口及帧边界不猜字段：%s',marked=>{expect(analyzeCompletion(marked.replace('|',''),marked.indexOf('|'))).toMatchObject({status:'blocked'});});
+  ])('未知或覆盖排序的继承窗口及帧边界不猜字段：%s',marked=>{expect(analyzeCompletion(marked.replace('|',''),marked.indexOf('|'))).toMatchObject({status:'blocked'});});
   it('窗口子查询自己的ORDER仍能使用自己的输出别名',()=>{const a=analyze('SELECT u.id AS outer_alias FROM users u ORDER BY SUM(u.id) OVER(ORDER BY (SELECT 1 AS inner_alias ORDER BY inn|suffix))');expect(a.outputAliases?.aliases).toEqual(['inner_alias']);});
   it('已取消窗口补全不读取目录，不改变目录预算',async()=>{const d=directory(),controller=new AbortController();controller.abort();const r=await completionSuggestions(analyze('SELECT ROW_NUMBER() OVER(ORDER BY u.|) FROM users u'),'db',d,controller.signal);expect(r.items).toEqual([]);expect(d.load).not.toHaveBeenCalled();});
   it.each([
