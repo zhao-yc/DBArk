@@ -7,7 +7,7 @@ export const tableGridZh = {
   currentReadonly: '当前匹配不是可写文字字段，只能查找和导航。',
   regex: '正则表达式', search: '查找当前页', searching: '正在查找或生成预览…', cancelSearch: '取消查找或预览', cancelled: '查找已取消，线程已终止，草稿未改变。',
   regexHint: '使用 JavaScript Unicode 正则，不含 / 分隔符；大小写和整格匹配由选项控制，不启用多行或跨行点号。修改后点击“查找当前页”。零宽匹配在原文边界插入替换文字。默认按字面替换，可勾选“展开正则捕获”。单次运行限时 1.5 秒，超时可缩小范围后重试。',
-  captureReplacement: '展开正则捕获', captureHint: '启用后按 JavaScript 替换字符串展开：$1～$99 数字组、$<名称> 命名组、$& 完整命中、$$ 美元符号、$` 原文前缀及 $\' 原文后缀；未参与的组为空，组号不存在时保留字面。只形成本页草稿。', captureRequiresRegex: '捕获组替换需要先启用正则表达式。',
+  captureReplacement: '展开正则捕获', captureHint: '启用后按 JavaScript 替换字符串展开：$1～$99 数字组、$<名称> 命名组、$& 完整命中、$$ 美元符号、$` 原文前缀及 $\' 原文后缀；未参与的组为空。编号按 JavaScript 规则回退一位或保留字面，例如仅有第1组时$10为第1组加0。只形成本页草稿。', captureRequiresRegex: '捕获组替换需要先启用正则表达式。',
   zeroWidth: '│零宽│', regexInvalid: '正则表达式无效，请检查语法。', timeout: '查找或预览超时，线程已终止，草稿未改变；请简化模式或缩小列范围后重试。', workerFailed: '查找线程不可用，草稿未改变，请重新查找。', workerRequired: '用户正则只能通过可终止的查找线程执行。',
   replacement: '替换为文字', preview: '预览当前页替换', replaceTitle: '当前页替换草稿预览', replaceHint: '仅替换可写 InnoDB 表的非生成 CHAR、VARCHAR、TEXT 列。JSON、数字、日期、NULL、DEFAULT 和二进制不替换。确认只形成草稿，仍需集中提交才写入数据库。',
   apply: '确认形成替换草稿', changed: '页面、记录或表结构已变化，整批替换未应用，请重新预览。', count: '将修改 {0} 格、{1} 行；下面只显示前 50 格，全部计划将一次应用。', before: '替换前', after: '替换后', row: '当前页行', noReplace: '没有可替换的文字单元格。',
