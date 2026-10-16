@@ -10,7 +10,6 @@ type ProbeWindow = Window & { __q01NamedWindow?: Probe };
 
 /** 只读观察同次真实按键后的Worker请求与结果；所有postMessage保持原样投递。 */
 async function observe(caret: Caret) {
-  await caret.observeMonacoCaret();
   await page.addInitScript(() => {
     const root = window as ProbeWindow, probe: Probe = { generation: 0, key: false, replies: [] }; root.__q01NamedWindow = probe;
     const pending = new WeakMap<Worker, Map<number, { generation: number; capability: boolean }>>(), original = Worker.prototype.postMessage;
@@ -28,6 +27,8 @@ async function observe(caret: Caret) {
     };
   });
   await page.reload(); await expect(page.locator('.app-statusbar')).toBeVisible();
+  // probe先随文档初始化；共享helper的第二次原reload后，光标观察器才安装到当前文档。
+  await caret.observeMonacoCaret();
 }
 /** 同正文/光标/世代的Worker事实才算本次响应，不能用空面板代替否定证据。 */
 async function trigger(caret: Caret, marked: string, supported: boolean, names?: string[]) {
