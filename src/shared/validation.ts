@@ -22,7 +22,9 @@ import { validateIndexPatches } from './tableIndexPatches';
 import { tableRenameAcknowledgements, validateTableRenameName } from './tableRename';
 import { tableAutoIncrementKnownAcknowledgements, validateTableAutoIncrement } from './tableAutoIncrement';
 import { tableCommentAcknowledgements, validateTableComment } from './tableComment';
+import { tableDropAcknowledgements } from './tableDrop';
 import { tableTruncateAcknowledgements } from './tableTruncate';
+import { databaseCreateAcknowledgements, validateDatabaseCreateName } from './databaseCreate';
 import { tableDefaultEncodingAcknowledgements } from './tableDefaultEncoding';
 import { validateForeignKeyPatches } from './tableForeignKeyPatches';
 import { foreignKeyAcknowledgementIds, foreignKeyTaskLimits } from './tableForeignKeyTasks';
@@ -165,10 +167,18 @@ export const commandSchemas: Record<Command, z.ZodType> = {
   'schema.tableAutoIncrement.apply': z.object({ previewToken: id, acknowledgements: z.array(z.enum(tableAutoIncrementKnownAcknowledgements)).max(4).refine(value => new Set(value).size === value.length, '下一自增值确认项不能重复'), taskId: id }).strict(),
   'schema.tableAutoIncrement.release': z.object({ snapshotId: id.optional(), previewToken: id.optional() }).strict().refine(value => Boolean(value.snapshotId || value.previewToken), '缺少待释放的下一自增值令牌'),
   'schema.tableComment.get': z.object({ connectionId: id, database: z.string().min(1).max(64), table: z.string().min(1).max(64), taskId: id }).strict(),
+  'schema.tableDrop.get': z.object({ connectionId: id, database: foreignKeyTargetName, table: foreignKeyTargetName, taskId: id }).strict(),
+  'schema.tableDrop.preview': z.object({ snapshotId: id, taskId: id }).strict(),
+  'schema.tableDrop.apply': z.object({ previewToken: id, confirmation: z.string().min(3).max(129), acknowledgements: z.array(z.enum(tableDropAcknowledgements)).length(3).refine(values => new Set(values).size === values.length), taskId: id }).strict(),
+  'schema.tableDrop.release': z.object({ snapshotId: id.optional(), previewToken: id.optional() }).strict().refine(value => !!value.snapshotId || !!value.previewToken),
   'schema.tableTruncate.get': z.object({ connectionId: id, database: foreignKeyTargetName, table: foreignKeyTargetName, taskId: id }).strict(),
   'schema.tableTruncate.preview': z.object({ snapshotId: id, taskId: id }).strict(),
   'schema.tableTruncate.apply': z.object({ previewToken: id, confirmation: z.string().min(3).max(129), acknowledgements: z.array(z.enum(tableTruncateAcknowledgements)).length(3).refine(values => new Set(values).size === values.length), taskId: id }).strict(),
   'schema.tableTruncate.release': z.object({ snapshotId: id.optional(), previewToken: id.optional() }).strict().refine(value => !!value.snapshotId || !!value.previewToken),
+  'schema.databaseCreate.get': z.object({ connectionId: id, taskId: id }).strict(),
+  'schema.databaseCreate.preview': z.object({ snapshotId: id, name: z.string().max(64).refine(value => { try { validateDatabaseCreateName(value); return true; } catch { return false; } }, '数据库名称不在受控范围'), charset: z.string().regex(/^[A-Za-z0-9_]{1,64}$/), collation: z.string().regex(/^[A-Za-z0-9_]{1,255}$/), taskId: id }).strict(),
+  'schema.databaseCreate.apply': z.object({ previewToken: id, confirmation: z.string().max(64), acknowledgements: z.array(z.enum(databaseCreateAcknowledgements)).max(2).refine(value => new Set(value).size === value.length, '确认项不能重复'), taskId: id }).strict(),
+  'schema.databaseCreate.release': z.object({ snapshotId: id.optional(), previewToken: id.optional() }).strict().refine(value => Boolean(value.snapshotId || value.previewToken), '缺少待释放的新建库令牌'),
   'schema.tableDefaultEncoding.get': z.object({ connectionId: id, database: foreignKeyTargetName, table: foreignKeyTargetName, taskId: id }).strict(),
   'schema.tableDefaultEncoding.preview': z.object({ snapshotId: id, charset: z.string().regex(/^[A-Za-z0-9_]{1,64}$/), collation: z.string().regex(/^[A-Za-z0-9_]{1,255}$/), taskId: id }).strict(),
   'schema.tableDefaultEncoding.apply': z.object({ previewToken: id, acknowledgements: z.array(z.enum(tableDefaultEncodingAcknowledgements)).max(3).refine(value => new Set(value).size === value.length, '表默认编码确认项不能重复'), taskId: id }).strict(),

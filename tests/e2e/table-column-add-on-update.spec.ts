@@ -6,6 +6,8 @@ type Desktop=typeof import('./desktop-fixture');type Live=typeof import('./live-
 const listing=process.argv.includes('--list'),armed=!listing&&process.env.DBARK_COLUMN_ADD_ON_UPDATE_UI==='1'&&process.env.DBARK_INTEGRATION_ENABLED==='1';
 if(armed&&(process.env.DBARK_TEST_HOST!=='192.168.31.200'||!['13357','13380','13384','13310','13311','13484'].includes(process.env.DBARK_TEST_PORT??'')))throw Error('新增自动时间验收须ROOT明确分配200单一目标');
 const desktop:Desktop|undefined=armed?require('./desktop-fixture'):undefined,test=(desktop?.test??baseTest) as typeof baseTest;
+// 新写入专项独立开启所属实例退出证明；失败或取消不能清理未确认的隔离现场。
+if(desktop)desktop.test.use({preserveOnUnconfirmedExit:true});
 test.skip(!armed,'默认关闭：须ROOT明确分配新增时间字段的真实GUI及六组合单一目标');test.use({trace:'off',screenshot:'off',video:'off'});test.setTimeout(180000);test.describe.configure({retries:0});
 const page=()=>{if(!desktop)throw Error('未取得ROOT实际窗口授权');return desktop.page;},dialog=()=>page().getByRole('dialog',{name:text.title,exact:true});
 

@@ -4,6 +4,7 @@ import mysql, { type Connection, type RowDataPacket } from 'mysql2/promise';
 import type { TestInfo, Page, ElectronApplication } from '@playwright/test';
 import { expect, desktop, page, closed, pageErrors, answerDialogs, quitDesktop, preservesUnconfirmedExit, retainOwnedDesktopResources, confirmOwnedDesktopExit, ownedDesktopResources } from './desktop-fixture';
 import {zh} from '../../src/renderer/locales/zh-CN';
+import {databaseCreateZh as databaseText} from '../../src/renderer/locales/databaseCreate.zh-CN';
 
 // 必须由调用者显式启用；仅有本地凭据文件时仍跳过，CI 不会自动连接私有服务器。
 export const enabled = process.env.DBARK_INTEGRATION_ENABLED === '1';
@@ -95,9 +96,17 @@ export async function connectAndCreate(database: string, owner?: LiveDesktopOwne
   await expect(createDatabase).toBeVisible();owner?.assertCurrent(); await createDatabase.click();owner?.assertCurrent();
   const create = targetPage().getByRole('dialog', { name: '创建数据库', exact: true });
   await create.getByLabel('数据库名称', { exact: true }).fill(database);owner?.assertCurrent();
+  // 走新建库真实目录、预览与准确确认；保持utf8mb4/bin显式配对，不使用SQL或IPC替代表单。
+  await create.getByRole('combobox', { name: databaseText.charset, exact: true }).selectOption('utf8mb4');owner?.assertCurrent();
+  await create.getByRole('combobox', { name: databaseText.collation, exact: true }).selectOption('utf8mb4_bin');owner?.assertCurrent();
+  await create.getByRole('button', { name: databaseText.preview, exact: true }).click();owner?.assertCurrent();
   await expect(create.locator('.monaco-editor .view-lines')).toContainText('CREATE DATABASE');owner?.assertCurrent();
-  await acceptNativeConfirmation(owner);owner?.assertCurrent();
-  await create.getByRole('button', { name: '执行 SQL', exact: true }).click();owner?.assertCurrent();
+  await create.getByRole('textbox', { name: databaseText.confirmation, exact: true }).fill(database);owner?.assertCurrent();
+  await create.getByRole('checkbox', { name: databaseText.ackDdl, exact: true }).check();owner?.assertCurrent();
+  await create.getByRole('checkbox', { name: databaseText.ackCreate, exact: true }).check();owner?.assertCurrent();
+  await create.getByRole('button', { name: databaseText.apply, exact: true }).click();owner?.assertCurrent();
+  await expect(create.getByRole('status')).toHaveText(databaseText.succeeded, { timeout: 20000 });owner?.assertCurrent();
+  await create.getByRole('button', { name: '关闭', exact: true }).click();owner?.assertCurrent();
   await expect(create).toBeHidden({ timeout: 20000 });owner?.assertCurrent();
   await connectionRow.getByRole('button', { name: connectionName, exact: true }).click();owner?.assertCurrent();
   await expect(targetPage().locator('.database-row').getByRole('button', { name: database, exact: true })).toBeVisible();owner?.assertCurrent();
@@ -131,11 +140,11 @@ export async function isolatedDatabase(body: (context: LiveContext) => Promise<v
   } finally {
     if (strictExit) {
       try {
-        // 只核本例独立应用的TRUNCATE投递；未终态或读取未知时先停链，不借退出请求取消它。
+        // 只核本例独立应用的结构写入；未终态或读取未知时先停链，不借退出请求取消它。
         const owner = ownedDesktopResources(testInfo);
         if (!owner.closed) {
           const tasks = await owner.page.evaluate(() => window.dbark.invoke('tasks.list', {})); ownedDesktopResources(testInfo);
-          if (tasks.some(task => task.kind === 'schema.tableTruncate.apply' && !['completed', 'failed', 'cancelled'].includes(task.status))) throw new Error('本例清空apply尚未终态，保留数据库、观察连接和原生现场');
+          if (tasks.some(task => ['schema.tableTruncate.apply', 'schema.tableDrop.apply', 'schema.databaseCreate.apply', 'schema.columns.apply'].includes(task.kind) && task.status !== 'completed')) throw new Error('本例结构apply尚未终态或未确认成功，保留数据库、观察连接和原生现场');
         }
         await confirmOwnedDesktopExit(testInfo);
         ownedDesktopResources(testInfo);

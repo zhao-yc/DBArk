@@ -5,6 +5,7 @@ import { basename, dirname, join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import ts from 'typescript';
 import { describe, expect, it, vi } from 'vitest';
+import {databaseCreateZh as databaseText} from '../../src/renderer/locales/databaseCreate.zh-CN';
 
 /** 只解析生产夹具函数，不导入Electron、MySQL、live模块或任何认证配置。 */
 function source(file: string) { return ts.createSourceFile(file, readFileSync(new URL('../e2e/' + file, import.meta.url), 'utf8').replaceAll('\r\n', '\n'), ts.ScriptTarget.Latest, true); }
@@ -43,18 +44,19 @@ function connectionFixture(pauseAt?: string, tls = false, strict = true) {
   const f = fixture({ strict }), entered = deferred(), release = deferred(), calls: string[] = []; let paused = false;
   const step = async (label: string) => { calls.push(label); if (!paused && label === pauseAt) { paused = true; entered.resolve(); await release.promise; } };
   function locator(label: string): any {
-    return { ramLocator: label, getByRole: (_: string, options: { name: string }) => locator(options.name), getByLabel: (name: string) => locator(name), locator, filter: function () { return this; },
-      click: () => step('click:' + label), fill: (_value: string) => step('fill:' + label), check: () => step('check:' + label), focus: () => step('focus:' + label) };
+    return { ramLocator: label, getByRole: (role: string, options?: { name: string }) => locator(options?.name ?? role), getByLabel: (name: string) => locator(name), locator, filter: function () { return this; },
+      click: () => step('click:' + label), fill: (_value: string) => step('fill:' + label), check: () => step('check:' + label), focus: () => step('focus:' + label), selectOption: (_value: string) => step('select:' + label) };
   }
   const plainExpect = f.context.expect;
   f.context.expect = Object.assign((value: any) => value?.ramLocator ? {
-    toContainText: () => step('expect:' + value.ramLocator), toHaveValue: () => step('expect:' + value.ramLocator), toBeVisible: () => step('expect:' + value.ramLocator), toBeHidden: () => step('expect:' + value.ramLocator),
+    toContainText: () => step('expect:' + value.ramLocator), toHaveValue: () => step('expect:' + value.ramLocator), toHaveText: () => step('expect:' + value.ramLocator), toBeVisible: () => step('expect:' + value.ramLocator), toBeHidden: () => step('expect:' + value.ramLocator),
   } : plainExpect(value), { poll: plainExpect.poll });
-  Object.assign(f.context.page, { locator, getByRole: (_: string, options: { name: string }) => locator(options.name), evaluate: vi.fn(async () => { await step('profiles'); return [{ name: 'E2E dbark_e2e_ram', id: 'ram-profile' }]; }) });
+  Object.assign(f.context.page, { locator, getByRole: (role: string, options?: { name: string }) => locator(options?.name ?? role), evaluate: vi.fn(async () => { await step('profiles'); return [{ name: 'E2E dbark_e2e_ram', id: 'ram-profile' }]; }) });
   const evaluate = f.desktop.evaluate.getMockImplementation()!;
   f.desktop.evaluate.mockImplementation(async call => { if (String(call).includes('__dbarkE2EDialogs')) await step('native-dialog'); return evaluate(call); });
   f.context.tlsCertificate = () => tls ? 'RAM证书，不是文件路径' : undefined;
   f.context.zh = { connections: { text027: '启用TLS', text028: '校验证书' } };
+  f.context.databaseText = databaseText;
   const code = functions(desktopSource, ['answerDialogs']).map(node => node.getText(desktopSource).replace(/^export /, '')).join('\n') + '\n'
     + functions(liveSource, ['configureTls', 'acceptNativeConfirmation', 'connectAndCreate']).map(node => node.getText(liveSource).replace(/^export /, '')).join('\n');
   runInContext(ts.transpileModule(code, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText, f.context);
@@ -91,6 +93,16 @@ describe('TRUNCATE显式保留模式的真实收尾函数（仅RAM端口）', ()
   });
   it('本例apply未终态时先停链，不用退出来取消它，也不删库、end或进入自动强制清理', async () => {
     const f = fixture({ tasks: [{ kind: 'schema.tableTruncate.apply', status: 'running' }] }); await expect(f.run()).rejects.toThrow('尚未终态'); expect(f.desktop.waitForEvent).not.toHaveBeenCalled(); expect(f.observer.query).not.toHaveBeenCalled(); expect(f.observer.end).not.toHaveBeenCalled(); expect(f.force).not.toHaveBeenCalled(); expect(f.rm).not.toHaveBeenCalled();
+  });
+  it('DROP apply运行中保持停链，不发quit或清库/关闭观察连接/删目录', async () => {
+    const f = fixture({ tasks: [{ kind: 'schema.tableDrop.apply', status: 'running' }] });
+    await expect(f.run()).rejects.toThrow('尚未终态'); expect(f.order).not.toContain('quit-request'); expect(f.desktop.close).not.toHaveBeenCalled(); expect(f.desktop.waitForEvent).not.toHaveBeenCalled();
+    expect(f.observer.query).not.toHaveBeenCalled(); expect(f.observer.end).not.toHaveBeenCalled(); expect(f.rm).not.toHaveBeenCalled(); expect(f.force).not.toHaveBeenCalled();
+  });
+  it('DROP夹具任务读取未知保留原错，不发quit或清库/end/rm', async () => {
+    const f = fixture({ tasks: [{ kind: 'schema.tableDrop.apply', status: 'running' }] }), unknown = Error('DROP任务状态未知'); f.context.page.evaluate.mockRejectedValue(unknown);
+    await expect(f.run()).rejects.toBe(unknown); expect(f.order).not.toContain('quit-request'); expect(f.desktop.close).not.toHaveBeenCalled();
+    expect(f.observer.query).not.toHaveBeenCalled(); expect(f.observer.end).not.toHaveBeenCalled(); expect(f.rm).not.toHaveBeenCalled(); expect(f.force).not.toHaveBeenCalled();
   });
   it('默认选项仍沿原兜底路径，不读取新任务门，退出原错误保持', async () => {
     const f = fixture({ strict: false, holdClose: true }), stopped = Error('旧路径退出失败'), pending = f.run(); await vi.waitFor(() => expect(f.desktop.close).toHaveBeenCalledTimes(1)); f.close.reject(stopped); await expect(pending).rejects.toBe(stopped);
@@ -150,7 +162,7 @@ describe('TRUNCATE显式保留模式的真实收尾函数（仅RAM端口）', ()
     const failure = await pending; expect(failure).toBeInstanceOf(AggregateError); expect(writes).toEqual([]); expect(next.getByRole).not.toHaveBeenCalled(); expect(application.evaluate).not.toHaveBeenCalled();
     expect(f.observer.query).not.toHaveBeenCalled(); expect(f.observer.end).not.toHaveBeenCalled(); expect(f.rm).not.toHaveBeenCalled(); expect(f.force).not.toHaveBeenCalled();
   });
-  it.each([['profiles', false], ['click:选择CA 证书', true], ['native-dialog', false]] as const)('连接准备%s跨await换实例，仅旧owner操作已发出且后续全部停链', async (stage, tls) => {
+  it.each([['profiles', false], ['click:选择CA 证书', true], ['check:' + databaseText.ackDdl, false]] as const)('连接准备%s跨await换实例，仅旧owner操作已发出且后续全部停链', async (stage, tls) => {
     const f = connectionFixture(stage, tls), nextPage = { getByRole: vi.fn(), locator: vi.fn(), evaluate: vi.fn() }, nextApp = { evaluate: vi.fn(), close: vi.fn() };
     const pending = f.run().catch(error => error); await f.entered.promise;
     f.context.page = nextPage; f.context.desktop = nextApp; f.release.resolve(); const failure = await pending;
@@ -159,7 +171,7 @@ describe('TRUNCATE显式保留模式的真实收尾函数（仅RAM端口）', ()
   });
   it('严格连接和TLS准备完成仍使用本例页面及应用，正常握手后才删所属目录', async () => {
     const f = connectionFixture(undefined, true); await f.run();
-    expect(f.calls).toContain('fill:连接名称'); expect(f.calls).toContain('click:选择CA 证书'); expect(f.calls).toContain('native-dialog'); expect(f.calls).toContain('click:执行 SQL');
+    expect(f.calls).toContain('fill:连接名称'); expect(f.calls).toContain('click:选择CA 证书'); expect(f.calls).toContain('select:' + databaseText.charset); expect(f.calls).toContain('check:' + databaseText.ackDdl); expect(f.calls).toContain('click:' + databaseText.apply);
     expect(f.desktop.close).toHaveBeenCalledTimes(1); expect(f.rm).toHaveBeenCalledTimes(1); expect(f.force).not.toHaveBeenCalled();
   });
   it('TLS选择失败同时owner切换，保留原错误对象且不在下一实例恢复对话框', async () => {
@@ -171,7 +183,14 @@ describe('TRUNCATE显式保留模式的真实收尾函数（仅RAM端口）', ()
   });
   it('非严格连接准备无需owner上下文，沿原字段与创建库路径完成', async () => {
     const f = connectionFixture(undefined, false, false); await f.run();
-    expect(f.calls).toContain('fill:连接名称'); expect(f.calls).toContain('click:执行 SQL'); expect(f.force).toHaveBeenCalledTimes(1); expect(f.rm).toHaveBeenCalledTimes(1);
+    expect(f.calls).toContain('fill:连接名称'); expect(f.calls).toContain('click:' + databaseText.apply); expect(f.force).toHaveBeenCalledTimes(1); expect(f.rm).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('新结构写入未确认成功时的停链',()=>{
+  it.each(['running','failed','cancelled'] as const)('列修改%s不能用退出代替服务器结果确认',async status=>{
+    const f=fixture({tasks:[{kind:'schema.columns.apply',status}]});await expect(f.run()).rejects.toThrow('未确认成功');
+    expect(f.desktop.waitForEvent).not.toHaveBeenCalled();expect(f.observer.query).not.toHaveBeenCalled();expect(f.observer.end).not.toHaveBeenCalled();expect(f.rm).not.toHaveBeenCalled();expect(f.force).not.toHaveBeenCalled();
   });
 });
 
@@ -184,8 +203,10 @@ describe('默认路径固定968628d原文及本例显式选项', () => {
     expect(hash(desktopSource.text.slice(mode.end, body.end - 1))).toBe('b8284b726f3cf8cf347b0e483ad162115ea1b57369eb492f99410b7f5ed37cd4');
     expect(hash(functions(desktopSource, ['quitDesktop'])[0].getText(desktopSource))).toBe('70ef0597565cd839b2b6c65db33fee9e26c25f8e8260851f860dbed909e75920');
   });
-  it('选项默认false，只有TRUNCATE正式UI声明true，原用例标题与期限不改', () => {
+  it('选项默认false，TRUNCATE和DROP正式UI显式声明true，原用例标题与期限不改', () => {
     const entry = readFileSync(new URL('../e2e/table-truncate-live.ts', import.meta.url), 'utf8'); expect(desktopSource.text).toContain('preserveOnUnconfirmedExit: [false, { option: true }]'); expect(entry).toContain('test.use({ preserveOnUnconfirmedExit: true })');
     expect(entry).toContain("test('真实UI准确表名与完整风险确认；旧预览不能双发，数据和自增经观察连接核对'"); expect(entry).not.toContain('setTimeout');
+    const drop = readFileSync(new URL('../e2e/table-drop-live.ts', import.meta.url), 'utf8'); expect(drop).toContain('test.use({ preserveOnUnconfirmedExit: true })');
+    expect(drop).toContain("test('单表删除真实入口先预览与准确确认，观察目录消失、关闭旧标签且拒绝旧URI导航'"); expect(drop).not.toContain('setTimeout');
   });
 });

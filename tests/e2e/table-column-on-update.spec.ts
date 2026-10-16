@@ -7,6 +7,8 @@ type Live=typeof import('./live-helpers');
 const listing=process.argv.includes('--list'),armed=!listing&&process.env.DBARK_COLUMN_ON_UPDATE_UI==='1'&&process.env.DBARK_INTEGRATION_ENABLED==='1';
 if(armed&&(process.env.DBARK_TEST_HOST!=='192.168.31.200'||!['13357','13380','13384','13310','13311','13484'].includes(process.env.DBARK_TEST_PORT??'')))throw Error('须ROOT明确分配200六组合中的单一目标');
 const desktop:Desktop|undefined=armed?require('./desktop-fixture'):undefined,test=(desktop?.test??baseTest) as typeof baseTest;
+// 新写入专项独立开启所属实例退出证明；失败或取消不能清理未确认的隔离现场。
+if(desktop)desktop.test.use({preserveOnUnconfirmedExit:true});
 test.skip(!armed,'默认关闭：须ROOT独占分配真实界面及对应六组合目标');test.use({trace:'off',screenshot:'off',video:'off'});test.setTimeout(180000);test.describe.configure({retries:0});
 const page=()=>{if(!desktop)throw Error('未取得实际界面窗口');return desktop.page;},dialog=()=>page().getByRole('dialog',{name:text.title,exact:true});
 

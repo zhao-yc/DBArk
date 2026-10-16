@@ -25,7 +25,8 @@ async function observe(desktop: Desktop) {
 }
 /** 只建本例离线连接和保存查询；正文由正式打开入口进入编辑器，不建立数据库会话。 */
 async function openSource(sql: string) {
-  const desktop = await import('./desktop-fixture'), { page } = desktop;
+  // Playwright转译为CJS后，动态import命名空间可能固化上一例的page；读取同一夹具当前导出。
+  const desktop = require('./desktop-fixture') as Desktop, { page } = desktop;
   await page.addInitScript(() => { self.MonacoEnvironment = { ...self.MonacoEnvironment, globalAPI: true }; });
   await page.evaluate(async source => {
     const connection = await window.dbark.invoke('connections.save', { id: '', name: '格式化离线连接', group: '', color: '#51bda5', dialect: 'mysql', host: '127.0.0.1', port: 1, user: 'offline' });
