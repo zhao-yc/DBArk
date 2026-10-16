@@ -131,11 +131,11 @@ export async function isolatedDatabase(body: (context: LiveContext) => Promise<v
   } finally {
     if (strictExit) {
       try {
-        // 只核本例独立应用的TRUNCATE投递；未终态或读取未知时先停链，不借退出请求取消它。
+        // 只核本例独立应用的TRUNCATE/DROP投递；未终态或读取未知时先停链，不借退出请求取消它。
         const owner = ownedDesktopResources(testInfo);
         if (!owner.closed) {
           const tasks = await owner.page.evaluate(() => window.dbark.invoke('tasks.list', {})); ownedDesktopResources(testInfo);
-          if (tasks.some(task => task.kind === 'schema.tableTruncate.apply' && !['completed', 'failed', 'cancelled'].includes(task.status))) throw new Error('本例清空apply尚未终态，保留数据库、观察连接和原生现场');
+          if (tasks.some(task => ['schema.tableTruncate.apply', 'schema.tableDrop.apply'].includes(task.kind) && !['completed', 'failed', 'cancelled'].includes(task.status))) throw new Error('本例清空或删除apply尚未终态，保留数据库、观察连接和原生现场');
         }
         await confirmOwnedDesktopExit(testInfo);
         ownedDesktopResources(testInfo);

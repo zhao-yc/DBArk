@@ -20,7 +20,11 @@ URI沿当前既有名称协议，退役记录覆盖当前窗口。重启后仍�
 
 正式验收定义默认双门关闭：DBARK_INTEGRATION_ENABLED=1与DBARK_TABLE_DROP_TEST=1必须同时满足。table-drop.spec.ts在--list/--list=json先短路，纯RAM门控测试覆盖两门四组合，证明不读额外配置、不加载live、桌面或观察连接模块。核心定义的生产引擎仅在双门允许的beforeAll动态导入，list也先短路。本轮没有执行正式定义或Playwright list。
 
-未来定义包括核心3项与真实UI1项，每个允许端口分别验收，共8个计划身份：单次DROP与目录消失、入向FK/同名重建/错误确认反例、真实MDL等待取消、TableTab预览确认/关页/旧URI拒绝。只允许已核对200的13384/13484，13484须显式TLS和相同CA；UI保存连接后再次核对实际profile，新增表写入前必须匹配ROOT显式绑定的DBARK_TEST_EXPECTED_SERVER_UUID，核心定义在建库前核对此UUID。UI复用既有isolatedDatabase，它在回调前已建隔离库，因此ROOT仍须在运行该fixture前完成实际服务器及UUID预检；回调内UUID门不能冒充建库前预检。新核心隔离库名称为dbark_drop_<12位小写十六进制>，Root资源清理账本须先识别此精确前缀，未确认owned线程及真实退出前禁止清库。没有绑定当前候选、fixture退出补丁或实跑命令，不能复用历史授权。
+未来定义包括核心3项与真实UI1项，每个允许端口分别验收，共8个计划身份：单次DROP与目录消失、入向FK/同名重建/错误确认反例、真实MDL等待取消、TableTab预览确认/关页/旧URI拒绝。只允许已核对200的13384/13484，13484须显式TLS和相同CA；UI保存连接后再次核对实际profile，新增表写入前必须匹配ROOT显式绑定的DBARK_TEST_EXPECTED_SERVER_UUID，核心定义在建库前核对此UUID。UI复用既有isolatedDatabase，它在回调前已建隔离库，因此ROOT仍须在运行该fixture前完成实际服务器及UUID预检；回调内UUID门不能冒充建库前预检。新核心隔离库名称为dbark_drop_<12位小写十六进制>，Root资源清理账本须先识别此精确前缀，未确认owned线程及真实退出前禁止清库。没有绑定当前候选或实跑命令；退出夹具源接入见下文，不能复用历史实际执行授权。
+
+正式DROP注册现显式启用`preserveOnUnconfirmedExit`，共享严格夹具只额外识别准确的`schema.tableDrop.apply`，保留原`schema.tableTruncate.apply`判断；未改成通用任务前缀或任务系统。两种apply未终态或任务读取未知时，均不发起退出、不DROP库、不end observer、不rm或强制结束。默认false两段和原quitDesktop原文保持，owner绑定及仅ESRCH可确认PID消失的规则不变。
+
+这只是本地任务和所属应用的停链门，不把本地cancelled/failed状态、quit响应或进程close当作服务器终态；服务器UUID/profile/TLS建库前检查及所属结构/控制/observer逐ID终态仍由Root在实际运行前补齐，本片没有证明或实现这些前置。未扩大权限、产品IPC或退出框架，没有GUI、200、数据库、系统剪贴板或CI操作。
 
 本轮GUI、200连接、数据库读写、clipboard、Docker、手动CI、凭据读取均为0。未新增依赖、框架、版本、安装包、Root改动或员工4fixture改动。共享接线只存在于员工3独立普通克隆，供Root后续整合。
 

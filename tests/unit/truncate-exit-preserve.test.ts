@@ -92,6 +92,16 @@ describe('TRUNCATE显式保留模式的真实收尾函数（仅RAM端口）', ()
   it('本例apply未终态时先停链，不用退出来取消它，也不删库、end或进入自动强制清理', async () => {
     const f = fixture({ tasks: [{ kind: 'schema.tableTruncate.apply', status: 'running' }] }); await expect(f.run()).rejects.toThrow('尚未终态'); expect(f.desktop.waitForEvent).not.toHaveBeenCalled(); expect(f.observer.query).not.toHaveBeenCalled(); expect(f.observer.end).not.toHaveBeenCalled(); expect(f.force).not.toHaveBeenCalled(); expect(f.rm).not.toHaveBeenCalled();
   });
+  it('DROP apply运行中保持停链，不发quit或清库/关闭观察连接/删目录', async () => {
+    const f = fixture({ tasks: [{ kind: 'schema.tableDrop.apply', status: 'running' }] });
+    await expect(f.run()).rejects.toThrow('尚未终态'); expect(f.order).not.toContain('quit-request'); expect(f.desktop.close).not.toHaveBeenCalled(); expect(f.desktop.waitForEvent).not.toHaveBeenCalled();
+    expect(f.observer.query).not.toHaveBeenCalled(); expect(f.observer.end).not.toHaveBeenCalled(); expect(f.rm).not.toHaveBeenCalled(); expect(f.force).not.toHaveBeenCalled();
+  });
+  it('DROP夹具任务读取未知保留原错，不发quit或清库/end/rm', async () => {
+    const f = fixture({ tasks: [{ kind: 'schema.tableDrop.apply', status: 'running' }] }), unknown = Error('DROP任务状态未知'); f.context.page.evaluate.mockRejectedValue(unknown);
+    await expect(f.run()).rejects.toBe(unknown); expect(f.order).not.toContain('quit-request'); expect(f.desktop.close).not.toHaveBeenCalled();
+    expect(f.observer.query).not.toHaveBeenCalled(); expect(f.observer.end).not.toHaveBeenCalled(); expect(f.rm).not.toHaveBeenCalled(); expect(f.force).not.toHaveBeenCalled();
+  });
   it('默认选项仍沿原兜底路径，不读取新任务门，退出原错误保持', async () => {
     const f = fixture({ strict: false, holdClose: true }), stopped = Error('旧路径退出失败'), pending = f.run(); await vi.waitFor(() => expect(f.desktop.close).toHaveBeenCalledTimes(1)); f.close.reject(stopped); await expect(pending).rejects.toBe(stopped);
     expect(f.observer.query).toHaveBeenCalledTimes(2); expect(f.observer.end).toHaveBeenCalledTimes(1); expect(f.force).toHaveBeenCalledTimes(1); expect(f.rm).toHaveBeenCalledTimes(1); expect(f.order).not.toContain('tasks');
@@ -184,8 +194,10 @@ describe('默认路径固定968628d原文及本例显式选项', () => {
     expect(hash(desktopSource.text.slice(mode.end, body.end - 1))).toBe('b8284b726f3cf8cf347b0e483ad162115ea1b57369eb492f99410b7f5ed37cd4');
     expect(hash(functions(desktopSource, ['quitDesktop'])[0].getText(desktopSource))).toBe('70ef0597565cd839b2b6c65db33fee9e26c25f8e8260851f860dbed909e75920');
   });
-  it('选项默认false，只有TRUNCATE正式UI声明true，原用例标题与期限不改', () => {
+  it('选项默认false，TRUNCATE和DROP正式UI显式声明true，原用例标题与期限不改', () => {
     const entry = readFileSync(new URL('../e2e/table-truncate-live.ts', import.meta.url), 'utf8'); expect(desktopSource.text).toContain('preserveOnUnconfirmedExit: [false, { option: true }]'); expect(entry).toContain('test.use({ preserveOnUnconfirmedExit: true })');
     expect(entry).toContain("test('真实UI准确表名与完整风险确认；旧预览不能双发，数据和自增经观察连接核对'"); expect(entry).not.toContain('setTimeout');
+    const drop = readFileSync(new URL('../e2e/table-drop-live.ts', import.meta.url), 'utf8'); expect(drop).toContain('test.use({ preserveOnUnconfirmedExit: true })');
+    expect(drop).toContain("test('单表删除真实入口先预览与准确确认，观察目录消失、关闭旧标签且拒绝旧URI导航'"); expect(drop).not.toContain('setTimeout');
   });
 });

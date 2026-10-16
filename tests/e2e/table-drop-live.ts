@@ -18,6 +18,8 @@ async function open(context: LiveContext) {
 }
 /** 双门非list模式才导入；此文件是未执行验收定义，不代表本轮实库许可或通过。 */
 export function registerTableDropUiTests() {
+  // 仅正式DROP定义启用本例归属与退出保留；不能用本地状态替代服务器逐ID终态证明。
+  test.use({ preserveOnUnconfirmedExit: true });
   test('单表删除真实入口先预览与准确确认，观察目录消失、关闭旧标签且拒绝旧URI导航', async ({}, info) => {
     assertTableDropLiveTarget({ host: environment.DBARK_TEST_HOST, port: environment.DBARK_TEST_PORT, tlsFlag: environment.DBARK_TEST_TLS, caPath: environment.DBARK_TEST_CA });
     await isolatedDatabase(async context => {
