@@ -4,6 +4,23 @@ import { beginSidebarConnectionEnd, sidebarConnectionEnd, SidebarNodeRequests } 
 
 const status = { connectionId: 101, dialect: 'mysql' as const, version: '8.4.11' };
 const objects = (name: string) => [{ name, kind: 'table' }];
+
+describe('结构刷新对同步请求门的接管边界', () => {
+  it('普通加载仍去重，明确接管使旧结果与旧finally失去归属', () => {
+    const requests = new SidebarNodeRequests(() => 0), old = requests.begin('load')!;
+    expect(requests.begin('load')).toBeUndefined(); const next = requests.begin('load', true)!; expect(next).toBeDefined();
+    expect(requests.current(old)).toBe(false); expect(requests.finish(old)).toBe(false); expect(requests.current(next)).toBe(true); expect(requests.finish(next)).toBe(true);
+  });
+  it.each(['disconnect', 'remove'] as const)('接管不能跳过当前%s或把它伪装成完成', kind => {
+    const requests = new SidebarNodeRequests(() => 0), ending = requests.begin(kind)!;
+    expect(requests.begin('load', true)).toBeUndefined(); expect(requests.kind).toBe(kind); expect(requests.current(ending)).toBe(true); expect(requests.finish(ending)).toBe(true);
+  });
+  it('接管不能借新连接修订或activate恢复旧请求，卸载也不放行', () => {
+    let revision = 0; const requests = new SidebarNodeRequests(() => revision), old = requests.begin('load')!;
+    requests.dispose(); expect(requests.begin('load', true)).toBeUndefined(); requests.activate(); expect(requests.current(old)).toBe(false);
+    const next = requests.begin('load', true)!; expect(next).toBeDefined(); revision++; expect(requests.begin('load', true)).toBeUndefined(); expect(requests.finish(next)).toBe(false);
+  });
+});
 /** 经实际生产按钮启动并完成连接与目录两次IPC，不直接设置展开状态。 */
 async function connected(f: Awaited<ReturnType<typeof sidebarHarness>>) { const node = f.create('connection'); node.click(); await f.settle(0, status); await f.settle(1, ['测试库']); return node; }
 
