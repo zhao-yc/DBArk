@@ -36,7 +36,7 @@ node node_modules/vitest/vitest.mjs run --config tests/integration/helpers/d02-c
 作者的安全验证入口（两个门均明确为0，且不继承凭据环境）：
 
 ```powershell
-node node_modules/vitest/vitest.mjs run --config tests/integration/helpers/d02-copy-source-vitest.config.ts tests/integration/helpers/d02-copy-source-policy.test.ts --maxWorkers=1
+node node_modules/vitest/vitest.mjs run --config tests/integration/helpers/d02-copy-source-vitest.config.ts tests/integration/helpers/d02-copy-source-policy.test.ts tests/integration/helpers/d02-copy-source-cleanup.test.ts --maxWorkers=1
 node node_modules/vitest/vitest.mjs run --config tests/integration/helpers/d02-copy-source-vitest.config.ts tests/integration/engine-table-copy-source.integration.test.ts --maxWorkers=1
 node tests/integration/helpers/d02-copy-source-list.mjs
 node node_modules/typescript/bin/tsc --noEmit
@@ -66,6 +66,10 @@ Vitest 3.2原生`list`会过滤skipped定义，所以关闭门时原生JSON为0�
 复用已审过`cleanupC02`顺序：关闭Engine/阻塞连接 → 独立观察目标线程归零 → 核账号/库归属 → 精确删除临时账号/库 → 严格关闭观察连接。源租约通过公开release/expired及Engine关闭验证，不读取产品私有缓存。观察连接自身最后严格关闭；对Engine、控制、blocker及临时账号线程有独立服务器归零证据，不用观察连接递归证明自己已消失。
 
 CREATE/GRANT或其它夹具写操作响应未知，不重放、不自动DROP；额外授权、归属标记变化、未知对象、无法取得线程编号或线程仍在也保留现场。安全错误保留固定阶段、类别/编号和精确随机资源名，不展示凭据、SQL参数、行内容或驱动原文。ROOT据输出的精确库/临时用户名独立核对后再处理，不按前缀批量删除。
+
+`c0b749a`独审发现权限/归属查询抛错时可能继续DROP。后续夹具修正把验证失败与真实CREATE状态分开：读取抛错、结果无法判定、额外授权、关闭验证失败等会永久撤销写入/删除授权；后续读取恢复或调用方捕获异常不能复活。两个DROP共用重核门，在每次删除前重新核线程、账号及subject归属；底层发送门也禁止从观察/锁端口绕过失效标记。仍允许关闭连接和观察事实，但不重放删除。已发送的删除无法撤销，若其事后确认失败，只保留第一失败并阻止之后的DROP，不把真实confirmed/unknown CREATE状态改成absent。
+
+正式纯测试`helpers/d02-copy-source-cleanup.test.ts`执行完整`withD02CopyCase`及原D02/C02策略，只有外界IO为白名单合成替身；覆盖正常对照、未知CREATE/授权、一次查询失败后恢复、删除前归属/角色/权限错误、关闭错误、删除后确认失败和首因保留。该证据只证明夹具控制流，不算真实数据库清理通过。员工3原反例/旧失败保持不变，新分支缓存`.cache/d02-cleanup-latch-c0b749a/`保留原源红、修后绿和原件哈希。
 
 ## 本片交付证据与未验边界
 

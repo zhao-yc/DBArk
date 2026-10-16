@@ -34,6 +34,12 @@ export async function withD02CopyCase(config: D02CopyConfig, action: (context: D
   const events: TaskEvent[] = [], engine = new Engine(event => events.push(event));
   const drivers = new Set<Connection>(), ids = new Set<number>(), tlsProofs = new Map<Connection, boolean>(), connections = new Set<ManagedConnection>();
   let observer: ManagedConnection | undefined, databaseState: D02Ownership = 'absent', userState: D02Ownership = 'absent', uncertainWrite = false, failure: unknown;
+  let preservation: Error | undefined, userDeleted = false, databaseDeleted = false, userDropAcknowledged = false, databaseDropAcknowledged = false;
+  /** 一次验证无法判定即永久失效；保留第一个安全因果链，后续读取恢复也不能重新授权写入。 */
+  const preserve = (error: unknown) => { preservation ??= d02Failure('D02验证或操作无法确认，永久保留现场', error); };
+  const verify = async <T>(action: () => Promise<T>): Promise<T> => { try { return await action(); } catch (error) { preserve(error); throw error; } };
+  /** 与CREATE确认状态独立；每次真正发送夹具写操作前同步检查，不能在await后绕过标记。 */
+  const requireWriteAuthorization = () => { if (preservation || uncertainWrite) throw preservation ?? new D02FixtureError('D02写结果未知，禁止后续写操作'); };
   const admin: ConnectionProfile = { id: randomUUID(), name: 'D02隔离观察', group: '', color: '#123456', dialect: 'mysql', host: config.host, port: config.port, user: config.user, password: config.password, ...(config.tls ? { tls: { enabled: true, rejectUnauthorized: true, caPath: config.caPath } } : {}) };
   const profile: ConnectionProfile = limited ? { ...admin, id: randomUUID(), name: 'D02临时仅SELECT', database, user, password } : { ...admin, id: randomUUID(), name: 'D02完整源正式Engine', database };
   const factory = mysql.createConnection;
@@ -49,31 +55,59 @@ export async function withD02CopyCase(config: D02CopyConfig, action: (context: D
   }) as typeof mysql.createConnection;
   /** 夹具SQL超时只强制本地收尾并报告未知，不把socket销毁当作服务器完成或重放依据。 */
   const fixtureQuery = async <T>(connection: ManagedConnection, text: string, values: Parameter[] = []): Promise<{ rows: T }> => {
+    // 所有现有DROP共用最终发送门；不能从观察/锁端口绕过已永久失效的授权。
+    if (/^\s*DROP\b/i.test(text)) requireWriteAuthorization();
     let timer: ReturnType<typeof setTimeout> | undefined;
     try { return await Promise.race([execute<T>(connection, text, values), new Promise<never>((_, reject) => { timer = setTimeout(() => { connection.broken = true; connection.connection.destroy(); reject(new D02FixtureError('D02夹具SQL超时，服务器结果未知且未重放')); }, 10000); })]); }
     finally { if (timer) clearTimeout(timer); }
   };
   /** 任意夹具写语句只发送一次；错误按未知结果保留现场，不能重放或反向补偿。 */
-  const write = async (text: string, values: Parameter[] = []): Promise<void> => { try { await fixtureQuery(observer!, text, values); } catch (error) { uncertainWrite = true; throw d02Failure('D02夹具写响应未知，保留现场且未重放', error); } };
+  const write = async (text: string, values: Parameter[] = []): Promise<void> => { requireWriteAuthorization(); try { await fixtureQuery(observer!, text, values); } catch (error) { uncertainWrite = true; preserve(error); throw d02Failure('D02夹具写响应未知，保留现场且未重放', error); } };
   /** 观察端只取显式指定的本轮目录、线程和subject事实，不记录完整查询日志。 */
-  const sql = async (text: string, values: Parameter[] = []): Promise<Row[]> => (await fixtureQuery<Row[]>(observer!, text, values)).rows;
+  const sql = async (text: string, values: Parameter[] = []): Promise<Row[]> => verify(async () => (await fixtureQuery<Row[]>(observer!, text, values)).rows);
   /** 出现额外权限或归属漂移时同步保留全部资源，后续DROP回调也不能绕过。 */
-  const owned = (condition: unknown, message: string): void => { if (!condition) { uncertainWrite = true; throw new D02FixtureError(message); } };
+  const owned = (condition: unknown, message: string): void => { if (!condition) { const error = new D02FixtureError(message); preserve(error); throw error; } };
   /** 只允许精确subject的SELECT，不执行SHOW GRANTS，不增加PROCESS或任何全局权限。 */
-  const assertGrants = async (): Promise<void> => {
+  const assertGrants = async (): Promise<void> => verify(async () => {
     if (!limited || userState !== 'confirmed') return;
     const grants = await sql('SELECT TABLE_SCHEMA AS db,TABLE_NAME AS name,PRIVILEGE_TYPE AS privilege,IS_GRANTABLE AS grantable FROM information_schema.TABLE_PRIVILEGES WHERE GRANTEE=?', [account]);
     owned(grants.length === 1 && grants[0].db === database && grants[0].name === 'subject' && grants[0].privilege === 'SELECT' && grants[0].grantable === 'NO', 'D02账号权限不再是精确subject SELECT，保留现场');
     for (const scope of ['SCHEMA', 'COLUMN', 'USER']) owned((await sql(`SELECT PRIVILEGE_TYPE FROM information_schema.${scope}_PRIVILEGES WHERE GRANTEE=?${scope === 'USER' ? " AND PRIVILEGE_TYPE<>'USAGE'" : ''}`, [account])).length === 0, 'D02账号存在额外权限，保留现场');
     owned((await sql('SELECT 1 FROM mysql.role_edges WHERE TO_USER=? AND TO_HOST=?', [user, '%'])).length === 0, 'D02账号存在角色授权，保留现场');
-  };
+  });
   /** 精确线程归零由独立观察连接确认；不把本地socket关闭或全零不可见结果当作证据。 */
-  const assertGone = async (targetIds: number[]): Promise<void> => {
+  const assertGone = async (targetIds: number[]): Promise<void> => verify(async () => {
     d02Fact(targetIds.every(id => Number.isSafeInteger(id) && id > 0 && id !== observer?.connection.threadId), 'D02待核线程编号无效');
     const end = Date.now() + 12000;
     do { const rows = targetIds.length ? await sql('SELECT ID FROM information_schema.PROCESSLIST WHERE ID IN (' + targetIds.map(() => '?').join(',') + ')', targetIds) : []; if (!rows.length) return; await delay(100); } while (Date.now() < end);
     throw new D02FixtureError('D02真实线程尚未归还，保留账号和库');
+  });
+  /** 两个DROP共用同一重核门；线程、账号及subject归属全部可判定才授权一次删除。 */
+  const verifyDeletion = async (): Promise<void> => {
+    requireWriteAuthorization();
+    await verify(async () => {
+      owned(databaseState !== 'unknown' && userState !== 'unknown', 'D02真实CREATE确认状态仍未知，禁止任何DROP');
+      await verifyThreadsGone();
+      if (limited && userState === 'confirmed') {
+        if (userDeleted) owned((await sql('SELECT User FROM mysql.user WHERE User=?', [user])).length === 0, 'D02已删除账号再次出现，保留现场');
+        else { await assertGrants(); const rows = await sql("SELECT ATTRIBUTE->>'$.dbarkD02Owner' AS owner FROM information_schema.USER_ATTRIBUTES WHERE USER=? AND HOST=?", [user, '%']); owned(rows.length === 1 && rows[0].owner === owner, 'D02账号归属已变化，拒绝删除'); }
+      }
+      if (databaseState === 'confirmed' && !databaseDeleted) {
+        const tables = await sql('SELECT TABLE_NAME AS name,TABLE_COMMENT AS comment FROM information_schema.TABLES WHERE TABLE_SCHEMA=?', [database]);
+        owned(tables.length === 1 && d02OwnsTables(tables.map(row => ({ name: row.name, comment: row.comment })), owner), 'D02subject缺失、存在未知表或归属已变化，拒绝删除');
+        for (const [catalog, column] of [['ROUTINES', 'ROUTINE_SCHEMA'], ['EVENTS', 'EVENT_SCHEMA'], ['TRIGGERS', 'TRIGGER_SCHEMA']]) owned((await sql(`SELECT 1 FROM information_schema.${catalog} WHERE ${column}=?`, [database])).length === 0, 'D02库中存在非本轮对象，拒绝删除');
+      }
+    });
+    requireWriteAuthorization();
   };
+  /** 即使在清理阶段也永久记录无法判定；观察动作仍可继续，但其成功不能清除保留标记。 */
+  const verifyThreadsGone = async (): Promise<void> => verify(async () => {
+    if (!observer) { d02Fact(databaseState === 'absent' && userState === 'absent', 'D02无观察连接，保留对象'); return; }
+    d02Fact([...drivers].every(driver => Number.isSafeInteger(driver.threadId) && Number(driver.threadId) > 0), 'D02存在无法核对编号的连接，保留现场');
+    if (config.tls) d02Fact([...drivers].every(driver => tlsProofs.get(driver) === true), 'D02真实连接缺少严格TLS证据');
+    await assertGone([...ids].filter(id => id !== observer!.connection.threadId));
+    if (limited) d02Fact((await sql('SELECT ID FROM information_schema.PROCESSLIST WHERE USER=?', [user])).length === 0, 'D02临时账号仍有线程，保留对象');
+  });
   /** 每次CREATE TABLE都附本轮归属标记，重建用例也不借用原业务表。 */
   const recreate = async (): Promise<void> => {
     await write(`CREATE TABLE ${table} (id BIGINT UNSIGNED PRIMARY KEY AUTO_INCREMENT,note VARCHAR(40) NOT NULL,hidden_big BIGINT UNSIGNED INVISIBLE DEFAULT 7,hidden_decimal DECIMAL(30,6) INVISIBLE DEFAULT 0,hidden_stamp DATETIME(6) INVISIBLE,hidden_null TEXT INVISIBLE,hidden_blob MEDIUMBLOB INVISIBLE,computed INT GENERATED ALWAYS AS(LENGTH(note)) STORED) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin COMMENT='dbark-d02-owner:${owner}'`);
@@ -118,22 +152,22 @@ export async function withD02CopyCase(config: D02CopyConfig, action: (context: D
         };
       },
       observe: () => sql(`SELECT CAST(id AS CHAR) AS id,note,CAST(hidden_big AS CHAR) AS big,CAST(hidden_decimal AS CHAR) AS amount,DATE_FORMAT(hidden_stamp,'%Y-%m-%d %H:%i:%s.%f') AS stamp,hidden_null AS nullable,HEX(hidden_blob) AS blob,OCTET_LENGTH(hidden_blob) AS blobBytes,computed FROM ${table} ORDER BY id`),
-      openBlocker: async () => { const blocker = await connect(admin); connections.add(blocker); return blocker; },
-      statement: async (connection, text) => { try { await fixtureQuery(connection, text); } catch (error) { throw d02Failure('D02锁连接操作失败，未重放', error); } },
+      openBlocker: async () => verify(async () => { const blocker = await connect(admin); connections.add(blocker); return blocker; }),
+      statement: async (connection, text) => { try { await fixtureQuery(connection, text); } catch (error) { preserve(error); throw d02Failure('D02锁连接操作失败，未重放', error); } },
       driverIds: () => [...ids].filter(id => id !== observer?.connection.threadId), driverCount: () => drivers.size, assertGone,
-      assertSame: (left, right, message) => d02Fact(isDeepStrictEqual(left, right), message),
+      assertSame: (left, right, message) => owned(isDeepStrictEqual(left, right), message),
     });
     await assertGrants(); d02Fact(events.length === 0, 'D02只读来源意外发送任务事件');
-  } catch (error) { failure = d02Failure(`D02验收失败；本轮数据库${database}；临时用户${limited ? user : '未创建'}`, error); }
+  } catch (error) { preserve(error); failure = d02Failure(`D02验收失败；本轮数据库${database}；临时用户${limited ? user : '未创建'}`, error); }
   try {
     await cleanupD02Copy({ user: userState, database: databaseState,
-      closeConnections: async () => { const errors: unknown[] = []; try { await engine.closeAll(); } catch (error) { errors.push(d02Failure('D02引擎关闭失败', error)); } const results = await Promise.allSettled([...connections].map(connection => connection.close({ strict: true }))); results.forEach(result => { if (result.status === 'rejected') errors.push(d02Failure('D02锁连接关闭失败', result.reason)); }); if (errors.length) throw new AggregateError(errors, 'D02真实连接收尾失败'); },
-      verifyThreadsGone: async () => { if (!observer) { d02Fact(databaseState === 'absent' && userState === 'absent', 'D02无观察连接，保留对象'); return; } d02Fact([...drivers].every(driver => Number.isSafeInteger(driver.threadId) && Number(driver.threadId) > 0), 'D02存在无法核对编号的连接，保留现场'); if (config.tls) d02Fact([...drivers].every(driver => tlsProofs.get(driver) === true), 'D02真实连接缺少严格TLS证据'); await assertGone([...ids].filter(id => id !== observer!.connection.threadId)); if (limited) d02Fact((await sql('SELECT ID FROM information_schema.PROCESSLIST WHERE USER=?', [user])).length === 0, 'D02临时账号仍有线程，保留对象'); },
-      dropUser: async () => { owned(!uncertainWrite, 'D02写结果不明确，保留账号'); await assertGrants(); const rows = await sql("SELECT ATTRIBUTE->>'$.dbarkD02Owner' AS owner FROM information_schema.USER_ATTRIBUTES WHERE USER=? AND HOST=?", [user, '%']); owned(rows.length === 1 && rows[0].owner === owner, 'D02账号归属已变化，拒绝删除'); await write(`DROP USER ${account}`); d02Fact((await sql('SELECT User FROM mysql.user WHERE User=?', [user])).length === 0, 'D02账号删除后仍存在'); },
-      dropDatabase: async () => { owned(!uncertainWrite, 'D02写结果不明确，保留数据库'); const tables = await sql('SELECT TABLE_NAME AS name,TABLE_COMMENT AS comment FROM information_schema.TABLES WHERE TABLE_SCHEMA=?', [database]); owned(d02OwnsTables(tables.map(row => ({ name: row.name, comment: row.comment })), owner), 'D02库中存在未知表或归属已变化，拒绝删除'); for (const [catalog, column] of [['ROUTINES', 'ROUTINE_SCHEMA'], ['EVENTS', 'EVENT_SCHEMA'], ['TRIGGERS', 'TRIGGER_SCHEMA']]) owned((await sql(`SELECT 1 FROM information_schema.${catalog} WHERE ${column}=?`, [database])).length === 0, 'D02库中存在非本轮对象，拒绝删除'); await write('DROP DATABASE ' + identifier(database)); d02Fact((await sql('SELECT SCHEMA_NAME FROM information_schema.SCHEMATA WHERE SCHEMA_NAME=?', [database])).length === 0, 'D02数据库删除后仍存在'); },
-      closeAdmin: async () => { await observer?.close({ strict: true }); }, removeTemporaryFiles: async () => undefined,
-    }, uncertainWrite, failure);
+      closeConnections: async () => verify(async () => { const errors: unknown[] = []; try { await engine.closeAll(); } catch (error) { errors.push(d02Failure('D02引擎关闭失败', error)); } const results = await Promise.allSettled([...connections].map(connection => connection.close({ strict: true }))); results.forEach(result => { if (result.status === 'rejected') errors.push(d02Failure('D02锁连接关闭失败', result.reason)); }); if (errors.length) throw new AggregateError(errors, 'D02真实连接收尾失败'); }),
+      verifyThreadsGone,
+      dropUser: async () => { await verifyDeletion(); await write(`DROP USER ${account}`); userDropAcknowledged = true; await verify(async () => { d02Fact((await sql('SELECT User FROM mysql.user WHERE User=?', [user])).length === 0, 'D02账号删除后仍存在'); userDeleted = true; }); },
+      dropDatabase: async () => { await verifyDeletion(); await write('DROP DATABASE ' + identifier(database)); databaseDropAcknowledged = true; await verify(async () => { d02Fact((await sql('SELECT SCHEMA_NAME FROM information_schema.SCHEMATA WHERE SCHEMA_NAME=?', [database])).length === 0, 'D02数据库删除后仍存在'); databaseDeleted = true; }); },
+      closeAdmin: async () => verify(async () => { await observer?.close({ strict: true }); }), removeTemporaryFiles: async () => undefined,
+    }, uncertainWrite, failure ?? preservation);
     console.info(JSON.stringify({ D02清理: database, Engine及锁线程已观察归零: true, 临时账号已删除: limited, 数据库已删除: true, 观察连接: '已严格关闭' }));
-  } catch (error) { throw d02Failure(`D02验收或清理失败；保留现场核对入口${database}/${limited ? user : '无临时用户'}`, error); }
+  } catch (error) { throw d02Failure(`D02验收或清理失败；保留现场核对入口${database}/${limited ? user : '无临时用户'}；真实CREATE状态：用户${userState}、库${databaseState}；DROP成功响应：用户${userDropAcknowledged}、库${databaseDropAcknowledged}；确认删除：用户${userDeleted}、库${databaseDeleted}`, error); }
   finally { mysql.createConnection = factory; }
 }
