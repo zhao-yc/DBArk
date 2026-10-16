@@ -8,7 +8,7 @@
 
 专用配置：`tests/integration/helpers/d02-copy-source-vitest.config.ts`。`envDir:false`禁止Vite自动加载.env；配置只收集本片，避免ROOT启用集成总门时误带其它夹具。入口默认只读取两个开关；未同时为1时不执行beforeAll、不动态导入真实夹具、Engine或mysql2，也不读取CA。没有默认凭据、自动发现服务器或自动读取`.cache/dbark-test.env`。
 
-开启后使用正式`validateCommand → Engine.handle分发 → mysql2`。只有`connections.open`由测试适配器补入本轮可信profile，其它公开输入都经过原严格校验；SQL、原键、行引用、返回值不被mock。mysql2工厂旁路仅记录真实连接/线程/TLS，不替换语句或返回。观察连接独立读取行、列目录、TABLE_ID、MDL及线程事实。没有Electron IPC、主进程SQLite历史或真实UI，这些不在本入口的实库验收范围。
+开启后使用正式`validateCommand → Engine.handle分发 → mysql2`。只有`connections.open`由测试适配器补入本轮可信profile，其它公开输入都经过原严格校验；SQL、原键、行引用、返回值不被mock。mysql2工厂旁路仅记录真实连接/线程/TLS，不替换语句或返回。观察连接独立读取行、列目录、TABLE_ID及线程事实；MDL用例另外读取PENDING/GRANTED。没有Electron IPC、主进程SQLite历史或真实UI，这些不在本入口的实库验收范围。
 
 ## ROOT必须显式注入
 
@@ -25,7 +25,7 @@
 | `DBARK_TEST_CA` | 严格TLS时使用原CA绝对路径，不复制/下载/生成CA |
 | `DBARK_D02_COPY_CA_SHA256` | ROOT已核对的原CA摘要；读取文件后必须相同，不能自签替换 |
 
-禁止SSH。连接先核实际UUID、MySQL8.4/Linux、大小写目录及无强制角色；既有观察账号必须已有直接PROCESS及读取MySQL权限目录、performance_schema的能力，MDL观察仪表须已启用。缺条件就中止，不新增PROCESS、不修改全局设置、不自动修复权限。严格TLS还须实际每条连接均有加密及认证成功证据。
+禁止SSH。所有用例连接先核实际UUID、MySQL8.4/Linux、大小写目录及无强制角色；既有观察账号必须已有直接PROCESS、读取MySQL权限目录和自身线程的能力。仅MDL特定用例显式调用`withD02CopyCase(..., false, { mdl: true })`，并在任何CREATE前严格要求原MDL观察仪表返回YES，随后仍必须实际观察PENDING/GRANTED。其余7例默认无MDL要求，不读取不相关的仪表表；MDL要求未满足仍失败，不自动跳过、不把普通取消算作MDL通过。不新增PROCESS、不修改全局设置、不自动修复权限。严格TLS还须实际每条连接均有加密及认证成功证据。
 
 ROOT仅在自己的独占窗口与上述环境确认后执行：
 
@@ -36,7 +36,7 @@ node node_modules/vitest/vitest.mjs run --config tests/integration/helpers/d02-c
 作者的安全验证入口（两个门均明确为0，且不继承凭据环境）：
 
 ```powershell
-node node_modules/vitest/vitest.mjs run --config tests/integration/helpers/d02-copy-source-vitest.config.ts tests/integration/helpers/d02-copy-source-policy.test.ts tests/integration/helpers/d02-copy-source-cleanup.test.ts --maxWorkers=1
+node node_modules/vitest/vitest.mjs run --config tests/integration/helpers/d02-copy-source-vitest.config.ts tests/integration/helpers/d02-copy-source-policy.test.ts tests/integration/helpers/d02-copy-source-cleanup.test.ts tests/integration/helpers/d02-copy-source-diagnostics.test.ts --maxWorkers=1
 node node_modules/vitest/vitest.mjs run --config tests/integration/helpers/d02-copy-source-vitest.config.ts tests/integration/engine-table-copy-source.integration.test.ts --maxWorkers=1
 node tests/integration/helpers/d02-copy-source-list.mjs
 node node_modules/typescript/bin/tsc --noEmit
@@ -59,6 +59,8 @@ node node_modules/typescript/bin/tsc --noEmit
 
 Vitest 3.2原生`list`会过滤skipped定义，所以关闭门时原生JSON为0项，此原始结果保留。上述专用list使用官方`createVitest/collect`收集真实注册定义，强制双门为0且不执行beforeAll，列出8项并逐项确认状态为skipped；没有为列清单放开验收门，也没有制造替代测试。
 
+根据ROOT的run879/881只读记录，13384/13484的performance_schema关闭、MDL仪表行为空，未改服务。ROOT可显式按完整标题排除“D02完整复制源真实Engine验收准备（ROOT独占双门） 真实MDL等待可由原query.cancel终止，目标线程归零且租约可释放”，只先运行其余7例。8项定义、总双门和MDL正文/期限均保留；MDL仍待专用观察环境，不计为已验。此项是验收前提分离，不是产品平台条件放宽。
+
 ## 资源与清理
 
 每项独立随机库。普通库只用`dbark_e2e_d02_<12hex>`；限权库只用原授权`dbark_colperm_<12hex>.subject`，账号严格`cp_<12hex>@%`，只授精确该表SELECT，无schema/global/column/role扩权。subject注释和账号ATTRIBUTE带本轮所有权令牌。临时口令只在内存中使用，不写报告或材料；不生成密钥、证书或持久服务。
@@ -70,6 +72,12 @@ CREATE/GRANT或其它夹具写操作响应未知，不重放、不自动DROP；�
 `c0b749a`独审发现权限/归属查询抛错时可能继续DROP。后续夹具修正把验证失败与真实CREATE状态分开：读取抛错、结果无法判定、额外授权、关闭验证失败等会永久撤销写入/删除授权；后续读取恢复或调用方捕获异常不能复活。两个DROP共用重核门，在每次删除前重新核线程、账号及subject归属；底层发送门也禁止从观察/锁端口绕过失效标记。仍允许关闭连接和观察事实，但不重放删除。已发送的删除无法撤销，若其事后确认失败，只保留第一失败并阻止之后的DROP，不把真实confirmed/unknown CREATE状态改成absent。
 
 正式纯测试`helpers/d02-copy-source-cleanup.test.ts`执行完整`withD02CopyCase`及原D02/C02策略，只有外界IO为白名单合成替身；覆盖正常对照、未知CREATE/授权、一次查询失败后恢复、删除前归属/角色/权限错误、关闭错误、删除后确认失败和首因保留。该证据只证明夹具控制流，不算真实数据库清理通过。员工3原反例/旧失败保持不变，新分支缓存`.cache/d02-cleanup-latch-c0b749a/`保留原源红、修后绿和原件哈希。
+
+## run877安全诊断后续
+
+原日志中，D02已确认的固定拒绝原因首次经公共C02脱敏后成为普通Error，外层再次脱敏时固定原因被替换成通用文字。D02现在只为源码固定清单登记私有分类，并在重复包装时携带该分类；不信任外部message/code/诊断属性，未知D02文案和外部阶段均回退脱敏。动态资源阶段只允许严格随机库/临时用户名及CREATE、DROP响应、删除确认枚举，不允许混入其它自由文字。
+
+公共`c02-mtls-policy.ts`原样保持；D02错误本身不再进入C02的消息信任范围。C02仍清洗driver原文、SQL、参数、凭据及行内容；仅D02私有分类在最外层恢复。诊断测试覆盖run877相同包装层级、多次包装、AggregateError、伪造标签、未知文案/getter、循环cause和公共C02边界。MDL前提失败分类为`D02_PREFLIGHT_MDL`，不会据此修改OS/观察断言，也不代表任何实库用例已通过。
 
 ## 本片交付证据与未验边界
 

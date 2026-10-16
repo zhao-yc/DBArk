@@ -90,7 +90,7 @@ describe.skipIf(!enabled)('D02完整复制源真实Engine验收准备（ROOT独�
         try { await context.statement(blocker, 'UNLOCK TABLES'); } catch (error) { failures.push(error); }
       }
       if (failures.length) throw new AggregateError(failures, 'D02真实MDL验收或锁连接收尾失败', { cause: failures[0] });
-    });
+    }, false, { mdl: true });
   }, 60000);
 
   it('仅subject SELECT且无PROCESS账号明确降级，不能取得或误用旧管理员来源', async () => {
