@@ -60,8 +60,8 @@ export interface SavedQuery { id: string; name: string; connectionId?: string; d
 /** 可复用片段独立于连接、查询标签与执行历史。 */
 export interface SqlSnippet { id: string; name: string; group: string; description: string; sql: string; updatedAt: string; }
 export interface HistoryEntry { id: string; connectionId: string; database?: string; databaseContext?:QueryDatabaseContext; sql: string; startedAt: string; elapsedMs: number; success: boolean; error?: string; }
-export interface TaskRecord { id: string; kind: string; status: 'running' | 'completed' | 'cancelled' | 'failed'; progress: number; message: string; startedAt: string; finishedAt?: string; errors?: string[]; }
-export interface TaskEvent { taskId: string; status: TaskRecord['status']; progress: number; message: string; rows?: number; resultIndex?: number; columns?: ResultColumn[]; batch?: DataRow[]; executionDatabase?:QueryDatabaseContext; /** 当前语句开始发送时只报告一次实际片段，历史不得使用完整源脚本。 */ executionSql?: string; queryExport?: QueryExportProgress; columnPatch?: TableColumnApplyProgress; indexPatch?: TableIndexApplyProgress; foreignKeyPatch?: TableForeignKeyApplyProgress; tableRename?: TableColumnApplyProgress; tableAutoIncrement?: TableColumnApplyProgress; tableComment?: TableColumnApplyProgress; tableDefaultEncoding?: TableColumnApplyProgress; dataSearch?:DataSearchProgress; }
+export interface TaskRecord { /** 仅由main签发的随机回执关联，不能按可复用taskId补造提交事实。 */ tableApplyReceiptId?: string; id: string; kind: string; status: 'running' | 'completed' | 'cancelled' | 'failed'; progress: number; message: string; startedAt: string; finishedAt?: string; errors?: string[]; }
+export interface TaskEvent { tableApply?: import('./tableApplyReceipt').TableApplyProgress; taskId: string; status: TaskRecord['status']; progress: number; message: string; rows?: number; resultIndex?: number; columns?: ResultColumn[]; batch?: DataRow[]; executionDatabase?:QueryDatabaseContext; /** 当前语句开始发送时只报告一次实际片段，历史不得使用完整源脚本。 */ executionSql?: string; queryExport?: QueryExportProgress; columnPatch?: TableColumnApplyProgress; indexPatch?: TableIndexApplyProgress; foreignKeyPatch?: TableForeignKeyApplyProgress; tableRename?: TableColumnApplyProgress; tableAutoIncrement?: TableColumnApplyProgress; tableComment?: TableColumnApplyProgress; tableDefaultEncoding?: TableColumnApplyProgress; dataSearch?:DataSearchProgress; }
 export interface FileChoice { token: string; name: string; }
 export type QueryFileEncoding = 'utf8' | 'utf16le' | 'gb18030';
 export interface AppSettings { theme: 'dark' | 'light'; sidebarWidth: number; resultLimit: number; pageSize: number; dataTypeColors?: boolean; tabs: { id: string; kind: 'query' | 'table'; title: string; connectionId: string; database?: string; databaseContext?:QueryDatabaseContext; table?: string; sql?: string; sourceBinding?: QuerySourceBinding }[]; activeTabId?: string; }
@@ -136,8 +136,8 @@ export interface CommandMap {
   'table.copySourceRelease': { input: TableCopySourceReleaseInput; output: void };
   /** 目标仅由服务器来源表的外键解析；值元组保留精确字符串及二进制，不以普通文本筛选代替关联。 */
   'table.referencePage': { input: { connectionId: string; database: string; table: string; foreignKeyName: string; matchValues?: CellValue[]; page: number; pageSize: number; filters: FilterRule[]; filterMode?: FilterMode; sort: SortRule[]; taskId: string }; output: { source: TableInfo; foreignKey: ForeignKeyInfo; target: TableInfo; page: TablePage } };
-  'table.preview': { input: { connectionId: string; database: string; table: string; changes: RowChange[] }; output: SqlPreview };
-  'table.apply': { input: { connectionId: string; database: string; table: string; changes: RowChange[]; taskId: string }; output: { affectedRows: number } };
+  'table.preview': { input: { connectionId: string; database: string; table: string; changes: RowChange[] }; output: SqlPreview & { previewId?: string; previewExpiresAt?: string } };
+  'table.apply': { input: { connectionId: string; database: string; table: string; changes: RowChange[]; taskId: string; previewId?: string }; output: { affectedRows: number; receiptId?: string; receiptSaved?: boolean; cleanupWarning?: boolean } };
   'schema.preview': { input: { connectionId: string; design: TableDesign }; output: SqlPreview };
   'schema.apply': { input: { connectionId: string; database: string; sql: string; taskId: string }; output: QueryOutcome };
   'schema.compare': { input: SchemaCompareInput; output: SchemaCompareResult };
@@ -179,6 +179,8 @@ export interface CommandMap {
   'history.pageRelease':{input:{cursor:string};output:void};
   'history.read':{input:{id:string;digest:string;connectionId:string};output:HistoryOpenResult};
   'history.readError':{input:{id:string;digest:string};output:{error:string}};
+  'table.applyReceipt.list': { input: import('./tableApplyReceipt').TableApplyReceiptListInput; output: import('./tableApplyReceipt').TableApplyReceiptPage };
+  'table.applyReceipt.detail': { input: { operationId: string }; output: import('./tableApplyReceipt').TableApplyReceipt };
   'tasks.list': { input: Record<string, never>; output: TaskRecord[] };
   'settings.get': { input: Record<string, never>; output: AppSettings };
   'settings.save': { input: AppSettings; output: void };

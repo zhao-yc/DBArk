@@ -206,7 +206,7 @@ describe('光标当前语句的真实引擎投递', () => {
 describe('修改事务控制', () => {
   it('第二条操作并发冲突时回滚第一条操作，不提交部分修改', async () => {
     let updates = 0;
-    mocks.execute.mockImplementation(async (_managed, sql) => ({ rows: { affectedRows: String(sql).startsWith('UPDATE') ? (++updates === 1 ? 1 : 0) : 0 }, fields: [] }));
+    mocks.execute.mockImplementation(async (_managed, sql) => ({ rows: { affectedRows: String(sql).startsWith('UPDATE') ? (++updates === 1 ? 1 : 0) : 0, serverStatus: sql === 'ROLLBACK' ? 2 : 3 }, fields: [] }));
     await expect(engine.handle('table.apply', { connectionId: profile.id, database: 'db', table: 'table', taskId: 'conflict', changes: [
       { kind: 'update', before: { id: 1, value: 'old' }, values: { value: 'new' } },
       { kind: 'update', before: { id: 2, value: 'old' }, values: { value: 'new' } },

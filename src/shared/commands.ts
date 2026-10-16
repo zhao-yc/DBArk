@@ -25,6 +25,7 @@ export const publicCommands: Record<Command, true> = {
   'query.parameterNames': true, 'query.executeParameterized': true, 'query.sessionState': true,'query.completionState':true,
   'query.temporaryState':true,'query.temporaryCompletion':true,'query.temporaryRead':true,
   'query.exportStream': true,
+  'table.applyReceipt.list': true, 'table.applyReceipt.detail': true,
   'table.page': true, 'table.copySourceRead': true, 'table.copySourceRelease': true, 'table.referencePage': true, 'table.preview': true, 'table.apply': true, 'schema.preview': true, 'schema.apply': true,
   'schema.columns.get': true, 'schema.columns.preview': true, 'schema.columns.apply': true, 'schema.columns.release': true,
   'schema.indexes.get': true, 'schema.indexes.preview': true, 'schema.indexes.apply': true, 'schema.indexes.release': true,

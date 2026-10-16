@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { tableApplyReceiptListSchema } from './tableApplyReceipt';
 import { tlsPassphraseMaxLength, tlsCredentialMessages, validTlsPassphrase } from './tlsCredentials';
 import { workbenchSaveSchema, workbenchTargetSchema } from './workbench';
 import { schemaCompareInputSchema, schemaComparePreviewSchema, schemaCompareReleaseSchema } from './schemaCompare';
@@ -144,7 +145,8 @@ export const commandSchemas: Record<Command, z.ZodType> = {
   'table.referencePage': tablePage.safeExtend({ foreignKeyName: name, matchValues: z.array(cell).optional(), taskId: id }).superRefine((input, context) => {
     if (input.matchValues !== undefined) try { validateReferenceValues(input.matchValues); } catch (error) { context.addIssue({ code: 'custom', path: ['matchValues'], message: error instanceof Error ? error.message : '关联值无效' }); }
   }),
-  'table.preview': z.object({ ...target, changes }).strict(), 'table.apply': z.object({ ...target, changes, taskId: id }).strict(),
+  'table.applyReceipt.list': tableApplyReceiptListSchema, 'table.applyReceipt.detail': z.object({ operationId: z.uuid() }).strict(),
+  'table.preview': z.object({ ...target, changes }).strict(), 'table.apply': z.object({ ...target, changes, taskId: id, previewId: z.uuid().optional() }).strict(),
   'schema.preview': z.object({ connectionId: id, design: z.object({ database: name, name, originalName: name.optional(), engine: name, charset: name, comment: z.string(), columns: z.array(z.object({ name, originalName: name.optional(), type: name, nullable: z.boolean(), defaultValue: z.string().nullable().optional(), autoIncrement: z.boolean(), comment: z.string() }).strict()).min(1).max(1000), indexes: z.array(index), foreignKeys: z.array(foreignKey) }).strict() }).strict(),
   'schema.apply': z.object({ connectionId: id, database: z.string().max(256), sql: text.min(1), taskId: id }).strict(),
   'schema.columns.get': z.object({ connectionId: id, database: z.string().min(1).max(64), table: z.string().min(1).max(64), taskId: id }).strict(),

@@ -3,6 +3,7 @@ import { join, basename } from 'node:path';
 import { mkdirSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { pathToFileURL } from 'node:url';
+import { TableApplyReceipts } from './tableApplyReceipts';
 import { EngineBroker } from './broker';
 import { LocalStore } from './storage';
 import { ConnectionConfigManager } from './connectionConfig';
@@ -29,6 +30,7 @@ app.setName('DBArk');
 let window: BrowserWindow | undefined;
 let store: LocalStore;
 let broker: EngineBroker;
+let tableApplyReceipts: TableApplyReceipts;
 let connectionConfig: ConnectionConfigManager;
 let connectionTransfer: ConnectionTransfer;
 let savedQuerySearches:SavedQuerySearches;
@@ -73,6 +75,8 @@ function persistAuxiliary(action: () => void): void {
 /** 任务进度只保留概要；分批结果直接传输，不把整批数据写入配置库。 */
 function taskEvent(event: TaskEvent): void {
   if(completionTasks.has(event.taskId))return;
+  if (event.tableApply) tableApplyReceipts?.receive(event.taskId, event.tableApply);
+  if (event.status !== 'running' && tableApplyReceipts?.confirmed(event.taskId)) event = { ...event, status: 'completed', progress: 100, message: '服务器已确认目标事务提交；附加错误请查看提交记录' };
   const pendingHistory=pendingQueryHistory.get(event.taskId), history=pendingHistory?.entry;
   if(history&&event.executionDatabase)Object.assign(history,queryDatabasePatch(event.executionDatabase));
   // 接收一次实际发送片段；独立布尔状态保证定位失败/发送前取消不能落全文或空SQL。
@@ -251,6 +255,8 @@ async function dispatch(command: Command, input: any): Promise<unknown> {
     case 'history.pageRelease':return historyPages.release(input);
     case 'history.read':return historyPages.read(input);
     case 'history.readError':return historyPages.readError(input);
+    case 'table.applyReceipt.list': return store.tableApplyReceipts(input);
+    case 'table.applyReceipt.detail': return store.tableApplyReceipt(input.operationId);
     case 'tasks.list': return store.tasks();
     case 'settings.get': rendererHasSettings = true; return store.settings();
     case 'settings.save': {
@@ -291,12 +297,19 @@ async function dispatch(command: Command, input: any): Promise<unknown> {
   const preparing: { cancelled: boolean; failure?: string; connectionIds?: string[] } = { cancelled: false, connectionIds: command === 'schema.compare' ? [input.source.connectionId, input.target.connectionId] : requestConnectionId ? [requestConnectionId] : [] }; if (taskId) preparingTasks.set(taskId, preparing);
   let releaseTarget: (() => void) | undefined;
   let sentToEngine = false;
+  const previewConnectionRevision = command === 'table.preview' ? store.connectionRevision() : 0;
   try {
     if (command === 'query.exportStream' || command === 'files.export' || command === 'files.exportResult' || command === 'excel.export') releaseTarget = await exportReservations.acquire(input.filePath);
     if (preparing.failure) throw new Error(preparing.failure);
     // 文件路径归一化期间的取消在主进程捕获，不能丢失后继续发送用户 SQL。
     if (preparing.cancelled) throw new Error('任务在准备阶段已取消，尚未发送用户 SQL；原目标文件保持不变');
     connectionConfig.assertAvailable(requestConnectionId);
+    if (command === 'table.apply') {
+      const binding = tableApplyReceipts.prepare(input.taskId, input.previewId, { connectionId: input.connectionId, connectionRevision: store.connectionRevision(), database: input.database, table: input.table }, input.changes);
+      const linked = { ...tasks.get(input.taskId)!, tableApplyReceiptId: binding.operationId };
+      store.saveTask(linked); tasks.set(input.taskId, linked);
+      input = { ...input, tableApplyBinding: binding };
+    }
     // 令牌目标只来自可信引擎输出；修订在投递前同步读取，客户端不能注入或覆盖。
     if (structureCommand && command !== structurePrefix + 'release') input = { ...input, connectionRevision: store.connectionRevision() };
     if (command.startsWith('schema.compare')) {
@@ -306,6 +319,8 @@ async function dispatch(command: Command, input: any): Promise<unknown> {
     if (taskId) preparingTasks.delete(taskId);
     sentToEngine = true;
     const result = command==='search.savedQueries'?await savedQuerySearches.start(input):command==='search.savedQueriesContinue'?await savedQuerySearches.next(input):await broker.request(command, input);
+    if (command === 'table.preview' && previewConnectionRevision !== store.connectionRevision()) throw Error('连接配置自预览开始后已变化，请重新预览');
+    if (command === 'table.preview') return { ...result, ...tableApplyReceipts.preview({ connectionId: input.connectionId, connectionRevision: store.connectionRevision(), database: input.database, table: input.table }, input.changes, result) };
     if (command === structurePrefix + 'get' || command === structurePrefix + 'preview') {
       if (structureTokens.size >= 128) throw new Error('结构令牌缓存已达上限，请关闭旧预览后重试');
       const token = command === structurePrefix + 'get' ? result.snapshotId : result.previewToken;
@@ -317,15 +332,22 @@ async function dispatch(command: Command, input: any): Promise<unknown> {
     }
     if (command === 'sessions.open') sessions.set(result.sessionId, { connectionId: input.connectionId });
     if (command === 'sessions.close') sessions.delete(input.sessionId);
+    if (command === 'table.apply' && !tableApplyReceipts.confirmed(taskId!)) throw Error('未收到可信提交确认，结果未知；请查看提交记录，不要重复执行原批次');
     if (taskId && command!=='search.dataStart' && tasks.get(taskId)?.status === 'running') taskEvent({ taskId, status: 'completed', progress: 100, message: '执行完成' });
     if (history && pendingHistory?.executionSqlReceived) persistAuxiliary(() => store.addHistory({ ...history, elapsedMs: Date.now() - start, success: true }));
-    return result;
+    return command === 'table.apply' ? { ...result, ...tableApplyReceipts.finish(taskId!) } : result;
   } catch (error) {
+    if (command === 'table.apply' && taskId && !sentToEngine) tableApplyReceipts.notDispatched(taskId);
+    if (command === 'table.apply' && taskId && tableApplyReceipts.confirmed(taskId)) {
+      const confirmed = tableApplyReceipts.confirmed(taskId)!; tableApplyReceipts.cleanupFailed(taskId);
+      taskEvent({ taskId, status: 'completed', progress: 100, message: '服务器已确认目标事务提交，后续收尾异常；请查看提交记录' });
+      return { affectedRows: confirmed.evidence.serverReportedRows, cleanupWarning: true, ...tableApplyReceipts.finish(taskId) };
+    }
     const message = error instanceof Error ? error.message : '操作失败';
     if (taskId && tasks.get(taskId)?.status === 'running') taskEvent({ taskId, status: preparing.cancelled || error instanceof SavedQuerySearchCancelled ? 'cancelled' : 'failed', progress: 0, message, ...(structureCommand ? { [structurePurpose === 'tableRename' ? 'tableRename' : structurePurpose === 'tableAutoIncrement' ? 'tableAutoIncrement' : structurePurpose === 'tableDefaultEncoding' ? 'tableDefaultEncoding' : structurePurpose === 'tableComment' ? 'tableComment' : structurePurpose === 'indexes' ? 'indexPatch' : structurePurpose === 'foreignKeys' ? 'foreignKeyPatch' : 'columnPatch']: { phase: 'connecting' as const, ddlSubmitted: sentToEngine && command === structurePrefix + 'apply', ddlCompleted: false, definitionVerified: false, outcome: sentToEngine && command === structurePrefix + 'apply' ? 'unknown' as const : 'not-sent' as const, ...structureProgress.get(taskId) } } : {}), ...(command === 'query.exportStream' ? { queryExport: { phase: 'preparing' as const, statementsCompleted: 0, rowsWritten: 0, bytesWritten: 0, fileCommitted: false, ...exportProgress.get(taskId), sqlMayHaveExecuted: sentToEngine, transactionKnown: false } } : {}) });
     if (history && pendingHistory?.executionSqlReceived) persistAuxiliary(() => store.addHistory({ ...history, elapsedMs: Date.now() - start, error: persistedQueryError(command, message) }));
     throw error;
-  } finally { if (command === structurePrefix + 'apply') structureTokens.delete(input.previewToken); if (taskId) { pendingQueryHistory.delete(taskId); preparingTasks.delete(taskId); exportProgress.delete(taskId); structureProgress.delete(taskId); } releaseTarget?.(); }
+  } finally { if (command === 'table.apply' && taskId) tableApplyReceipts.finish(taskId); if (command === structurePrefix + 'apply') structureTokens.delete(input.previewToken); if (taskId) { pendingQueryHistory.delete(taskId); preparingTasks.delete(taskId); exportProgress.delete(taskId); structureProgress.delete(taskId); } releaseTarget?.(); }
 }
 
 /** 按平台生成中文原生菜单，查询快捷键统一发送给当前工作区。 */
@@ -374,7 +396,11 @@ app.on('before-quit', event => {
     await savedQuerySearches?.close();await savedQueryPages?.close();await historyPages?.close();await Promise.allSettled([...localSearchOperations]);
     await Promise.allSettled([...queryFileOperations]);
     await broker?.close();
-    for (const task of tasks.values()) if (task.status === 'running') persistAuxiliary(() => store.saveTask({ ...task, status: 'cancelled', finishedAt: new Date().toISOString(), message: '客户端已退出，请核对操作结果' }));
+    tableApplyReceipts?.interrupt();
+    for (const task of tasks.values()) if (task.status === 'running') {
+      const committed = task.kind === 'table.apply' && tableApplyReceipts?.confirmed(task.id);
+      persistAuxiliary(() => store.saveTask({ ...task, status: committed ? 'completed' : 'cancelled', finishedAt: new Date().toISOString(), message: committed ? '服务器已确认目标事务提交；请查看提交记录' : '客户端已退出，请核对操作结果' }));
+    }
     store?.close(); shutdownComplete = true; app.quit();
   })().catch(async error => {
     stateFlushed = undefined;
@@ -392,6 +418,7 @@ app.on('window-all-closed', () => app.quit());
 
 /** 进程退出使所有尚未投递的准备请求失效，迟到的文件检查不能启动新进程继续写入。 */
 function engineExited(): void {
+  tableApplyReceipts?.interrupt();
   // 本地保存查询的匹配线程独立于数据库工具进程，不能被数据库进程退出误判为失败。
   for (const preparing of preparingTasks.values()) preparing.failure = '数据库进程已退出，准备任务已停止；尚未发送用户 SQL，原目标文件保持不变';
   sessions.clear();
@@ -414,6 +441,7 @@ else {
   void app.whenReady().then(async () => {
     const wasm = app.isPackaged ? join(process.resourcesPath, 'sql-wasm.wasm') : require.resolve('sql.js/dist/sql-wasm.wasm');
     store = await LocalStore.open(join(app.getPath('userData'), 'dbark.sqlite'), wasm, { available: () => safeStorage.isEncryptionAvailable(), encrypt: value => safeStorage.encryptString(value).toString('base64'), decrypt: value => safeStorage.decryptString(Buffer.from(value, 'base64')) });
+    tableApplyReceipts = new TableApplyReceipts(store, () => persistAuxiliary(() => { throw Error('提交记录保存失败'); }));
     broker = new EngineBroker(taskEvent, engineExited);
     connectionConfig = new ConnectionConfigManager(store, broker, {
       /** 主进程会话与尚未投递的长任务也必须为空；真实引擎继续检查建连、事务和独立任务。 */

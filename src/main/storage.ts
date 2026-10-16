@@ -1,6 +1,8 @@
 import { connectionTransferDocumentSchema, connectionTransferLimits, exportConnectionProfile, importConnectionProfile, importReplacementProfile, type ExportedConnectionProfile } from '../shared/connectionTransfer';
 import { connectionReplacementText } from '../shared/connectionTransferMessages';
 import { assertTlsPassphrase, tlsCredentialMessages } from '../shared/tlsCredentials';
+import { parseTableApplyReceipt, interruptTableApplyReceipt, tableApplyReceiptLimits, type TableApplyReceipt, type TableApplyReceiptListInput, type TableApplyReceiptPage } from '../shared/tableApplyReceipt';
+import { persistedTaskMessage } from './taskPrivacy';
 import initSqlJs, { type Database, type SqlValue } from 'sql.js';
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
@@ -43,7 +45,7 @@ export class LocalStore {
   /** 版本迁移在事务中进行，失败时保留原磁盘文件。 */
   private migrate(): void {
     const version = Number(this.db.exec('PRAGMA user_version')[0]?.values[0]?.[0] ?? 0);
-    if (version > 5) throw new Error('配置库由更新版本的 DBArk 创建，请使用新版本打开');
+    if (version > 6) throw new Error('配置库由更新版本的 DBArk 创建，请使用新版本打开');
     this.mutate(() => {
       this.db.run(`CREATE TABLE IF NOT EXISTS connections (id TEXT PRIMARY KEY, data TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS secrets (connection_id TEXT NOT NULL, name TEXT NOT NULL, value TEXT NOT NULL, PRIMARY KEY(connection_id,name));
@@ -57,8 +59,17 @@ export class LocalStore {
         CREATE TABLE IF NOT EXISTS workbench (id INTEGER PRIMARY KEY CHECK(id=1), revision INTEGER NOT NULL, data TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS sql_snippets (id TEXT PRIMARY KEY, data TEXT NOT NULL, updated_at TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS table_preferences (connection_id TEXT NOT NULL, database_name TEXT NOT NULL, table_name TEXT NOT NULL, data TEXT NOT NULL, PRIMARY KEY(connection_id,database_name,table_name));
-        PRAGMA user_version=5;`);
+        CREATE TABLE IF NOT EXISTS table_apply_receipts (id TEXT PRIMARY KEY, data TEXT NOT NULL, started_at TEXT NOT NULL);
+        PRAGMA user_version=6;`);
     });
+    for (const receipt of this.records<TableApplyReceipt>('SELECT data FROM table_apply_receipts').map(parseTableApplyReceipt)) if (receipt.phase !== 'terminal') this.saveTableApplyReceipt(interruptTableApplyReceipt(receipt));
+    const confirmedEdits = new Map(this.records<TableApplyReceipt>('SELECT data FROM table_apply_receipts').map(parseTableApplyReceipt).filter(r => r.outcome === 'committed').map(r => [r.operationId, r]));
+    // 旧通用表格任务也只保留固定概要，不能让历史服务器错误继续泄漏字段值。
+    for (const task of this.tasks()) if (task.kind === 'table.apply') {
+      const { errors: _errors, ...safe } = task;
+      const confirmed = task.tableApplyReceiptId ? confirmedEdits.get(task.tableApplyReceiptId) : undefined, status = confirmed ? 'completed' as const : task.status;
+      this.saveTask({ ...safe, status, ...(confirmed ? { progress: 100, finishedAt: confirmed.finishedAt } : {}), message: persistedTaskMessage('table.apply', { taskId: task.id, status, progress: task.progress, message: '' }) });
+    }
     // 上次异常退出的长任务不自动重试，尤其不能重放写操作。
     for (const task of this.tasks()) if (task.status === 'running') this.saveTask({ ...task, status: 'failed', finishedAt: new Date().toISOString(), message: '应用上次退出时任务未完成，请核对数据库状态' });
   }
@@ -344,6 +355,32 @@ export class LocalStore {
   historyRaw(id:string):string|undefined{const statement=this.db.prepare('SELECT CASE WHEN length(CAST(data AS BLOB))<=? THEN data ELSE NULL END FROM history WHERE id=?');try{statement.bind([savedQuerySearchLimits.recordBytes,id]);if(!statement.step())return;const raw=statement.get()[0];if(typeof raw!=='string')throw Error('执行历史记录超过128MiB');return raw;}finally{statement.free();}}
   /** 写入执行历史并限制总量，避免配置文件持续膨胀。 */
   addHistory(entry: HistoryEntry): void { this.mutate(() => { this.db.run('INSERT INTO history VALUES (?,?,?,?)', [entry.id, entry.connectionId, JSON.stringify(entry), entry.startedAt]); this.db.run('DELETE FROM history WHERE id NOT IN (SELECT id FROM history ORDER BY started_at COLLATE BINARY DESC,id COLLATE BINARY DESC LIMIT 1000)'); });this.historyRevisionValue++; }
+  /** 独立提交回执不被普通任务挤占；未知/执行中不淘汰，满时写入失败先于派发。 */
+  saveTableApplyReceipt(input: TableApplyReceipt): void {
+    const receipt = parseTableApplyReceipt(input);
+    this.mutate(() => {
+      const records = this.records<TableApplyReceipt>('SELECT data FROM table_apply_receipts').map(parseTableApplyReceipt);
+      const old = records.find(r => r.operationId === receipt.operationId);
+      if (old && (old.taskId !== receipt.taskId || old.previewId !== receipt.previewId || JSON.stringify(old.target) !== JSON.stringify(receipt.target))) throw Error('提交记录身份不能替换');
+      if (!old && records.length >= tableApplyReceiptLimits.records) {
+        const evict = records.filter(r => r.phase === 'terminal' && r.outcome !== 'unknown').sort((a,b) => a.startedAt.localeCompare(b.startedAt) || a.operationId.localeCompare(b.operationId))[0];
+        if (!evict) throw Error('提交记录已满，未知或执行中记录不能自动删除；未派发本批数据写入');
+        this.db.run('DELETE FROM table_apply_receipts WHERE id=?', [evict.operationId]);
+      }
+      this.db.run('INSERT INTO table_apply_receipts VALUES (?,?,?) ON CONFLICT(id) DO UPDATE SET data=excluded.data', [receipt.operationId, JSON.stringify(receipt), receipt.startedAt]);
+    });
+  }
+  /** 只读稳定分页，不含SQL、字段值和原始错误。 */
+  tableApplyReceipts(input: TableApplyReceiptListInput): TableApplyReceiptPage {
+    const page = input.page ?? 0;
+    const rows = this.records<TableApplyReceipt>('SELECT data FROM table_apply_receipts ORDER BY started_at DESC,id DESC').map(parseTableApplyReceipt).filter(r => (!input.outcome || r.outcome === input.outcome) && (!input.connectionId || r.target.connectionId === input.connectionId) && (!input.taskId || r.taskId === input.taskId));
+    return { items: rows.slice(page * 25, (page + 1) * 25), total: rows.length, page };
+  }
+  /** 详情只按随机操作ID读取，不提供重放写入接口。 */
+  tableApplyReceipt(operationId: string): TableApplyReceipt {
+    const statement = this.db.prepare('SELECT data FROM table_apply_receipts WHERE id=?');
+    try { statement.bind([operationId]); if (!statement.step()) throw Error('提交记录不存在或已超出保留范围'); return parseTableApplyReceipt(JSON.parse(String(statement.get()[0]))); } finally { statement.free(); }
+  }
   /** 只返回近期任务概要，不持久化完整查询结果。 */
   tasks(): TaskRecord[] { return this.records('SELECT data FROM tasks ORDER BY started_at DESC LIMIT 200'); }
   /** 更新任务概要并保留至多 200 条记录。 */

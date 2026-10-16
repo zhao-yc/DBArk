@@ -1,10 +1,11 @@
 import { zh } from '../locales/zh-CN';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { errorMessage, invoke } from '../lib';
 import { useWorkspace } from '../store';
 import { Empty, ErrorBox, Modal, Spinner } from './ui';
 import{SavedQueriesDialog}from'./SavedQueriesDialog';
 import{HistoryPagesDialog}from'./HistoryPagesDialog';
+import { TableApplyReceiptsDialog } from './TableApplyReceiptsDialog';
 
 /** 两个资料源分别管理有界页和收尾，切换时不保留另一面板的活动读取。 */
 export function HistoryDialog({ onClose }: { onClose: () => void }) {
@@ -15,5 +16,11 @@ export function HistoryDialog({ onClose }: { onClose: () => void }) {
 /** 任务面板订阅统一状态存储，取消按钮只针对仍在运行的任务编号。 */
 export function TasksDialog({ onClose }: { onClose: () => void }) {
   const tasks = useWorkspace(state => state.tasks); const [error, setError] = useState('');
-  return <Modal title={zh.common.taskCenter} onClose={onClose}><div className="modal-content"><ErrorBox message={error}/><div className="tasks-list">{tasks.map(task => <article className="task-card" key={task.id}><div><strong>{task.kind}</strong><span className="grow"/><span className={`task-state ${task.status}`}>{{ running: zh.activity.text014, completed: zh.activity.text015, cancelled: zh.activity.text016, failed: zh.activity.text017 }[task.status]}</span></div><p>{task.message}</p><progress max="100" value={task.progress}/><footer><span>{new Date(task.startedAt).toLocaleTimeString('zh-CN')}</span><span className="grow"/>{task.status === 'running' && <button onClick={() => void invoke('query.cancel', { taskId: task.id }).catch(reason => setError(errorMessage(reason)))}>{zh.activity.text018}</button>}</footer>{task.errors?.length ? <pre>{task.errors.join('\n')}</pre> : null}</article>)}{!tasks.length && <Empty title={zh.activity.text019} text={zh.activity.text020}/>}</div></div></Modal>;
+  const [receipts, setReceipts] = useState(false), [committing, setCommitting] = useState<Set<string>>(new Set());
+  useEffect(() => window.dbark?.onTask(event => {
+    if (event.status !== 'running') setCommitting(old => { const next = new Set(old); next.delete(event.taskId); return next; });
+    else if (event.tableApply?.evidence.commitMayHaveBeenSent) setCommitting(old => new Set([...old, event.taskId]));
+  }), []);
+  if (receipts) return <TableApplyReceiptsDialog onClose={onClose} onTasks={() => setReceipts(false)}/>;
+  return <Modal title={zh.common.taskCenter} onClose={onClose}><div className="modal-content"><button onClick={() => setReceipts(true)}>数据提交记录</button><ErrorBox message={error}/><div className="tasks-list">{tasks.map(task => <article className="task-card" key={task.id}><div><strong>{task.kind}</strong><span className="grow"/><span className={`task-state ${task.status}`}>{{ running: zh.activity.text014, completed: zh.activity.text015, cancelled: zh.activity.text016, failed: zh.activity.text017 }[task.status]}</span></div><p>{task.message}</p><progress max="100" value={task.progress}/><footer><span>{new Date(task.startedAt).toLocaleTimeString('zh-CN')}</span><span className="grow"/>{task.status === 'running' && !committing.has(task.id) && <button onClick={() => void invoke('query.cancel', { taskId: task.id }).catch(reason => setError(errorMessage(reason)))}>{zh.activity.text018}</button>}</footer>{task.errors?.length ? <pre>{task.errors.join('\n')}</pre> : null}</article>)}{!tasks.length && <Empty title={zh.activity.text019} text={zh.activity.text020}/>}</div></div></Modal>;
 }
