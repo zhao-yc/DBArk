@@ -5,7 +5,7 @@ const saveDialog = () => page.getByRole('dialog', { name: '保存查询', exact:
 /** 仅建离线本地来源；打开、键入、三选、保存和关闭全部走真实UI。 */
 async function seedAndOpen() {
   const source = await page.evaluate(async () => {
-    const connection = await window.dbark.invoke('connections.save', { id: '', name: '关闭流程离线连接', group: '', color: '', dialect: 'mysql', host: '127.0.0.1', port: 1, user: 'offline' });
+    const connection = await window.dbark.invoke('connections.save', { id: '', name: '关闭流程离线连接', group: '', color: '#51bda5', dialect: 'mysql', host: '127.0.0.1', port: 1, user: 'offline' });
     return window.dbark.invoke('queries.create', { name: '关闭流程来源', connectionId: connection.id, context: { state: 'known', database: null }, sql: 'SELECT 900719925474099312345; -- 不得自动执行' });
   });
   await page.reload(); await expect(page.locator('.app-statusbar')).toBeVisible();
