@@ -16,6 +16,7 @@ let nextId: number, sent: { id: number; sql: string }[], connections: ManagedCon
 let afterAlterMode: string | undefined;
 let counterValue: string | null, afterValue: string | undefined, columnType: string, policy: Record<string,string>, statsExpiry: string, grants: string[], afterPhysicalId: string | undefined;
 let held: { complete(error?: Error): void } | undefined;
+let nativeReplies: Record<string, unknown>[][];
 /** 仅替换驱动；真实Engine、目录校验、预览、执行、取消和关闭路径均运行产品代码。 */
 function managed(signal?: AbortSignal): ManagedConnection {
   const connection = new EventEmitter(), threadId = ++nextId; let sqlMode = mode, quote = 0, encoding = '', collation = '';
@@ -24,11 +25,14 @@ function managed(signal?: AbortSignal): ManagedConnection {
     sent.push({ id: threadId, sql });
     const complete = (error?: Error) => queueMicrotask(() => {
       if (error || fail?.test(sql)) { callback(error ?? Object.assign(new Error('驱动拒绝'), { errno: 1227 })); return; }
+      // 按真实方言拒绝不存在的变量，避免替身用多余字段掩盖错误SQL。
+      if ((dialect === 'mariadb' && /information_schema_stats_expiry|super_read_only|show_gipk_in_create/.test(sql)) || version.startsWith('5.7.') && /information_schema_stats_expiry|show_gipk_in_create/.test(sql)) { callback(new Error('该版本不存在此变量')); return; }
       let rows: unknown = [];
       const context = { dialect, mode: { noBackslashEscapes: sqlMode.includes('NO_BACKSLASH_ESCAPES'), ansiQuotes: sqlMode.includes('ANSI_QUOTES') } };
       if (sql === 'SET SESSION information_schema_stats_expiry = 0') statsExpiry = '0';
       else if (sql.startsWith('SELECT CAST(@@SESSION.information_schema_stats_expiry')) rows = [{ expiry: statsExpiry }];
-      else if (sql.startsWith('SELECT CAST(@@SESSION.auto_increment_increment')) rows = [{ ...policy }];
+      else if (sql.startsWith('SELECT CAST(@@SESSION.auto_increment_increment')) rows = [Object.fromEntries([...sql.matchAll(/ AS (\w+)(?:,|$)/g)].map(match => [match[1], policy[match[1]]]))];
+      else if (sql.startsWith('SHOW TABLE STATUS FROM')) rows = nativeReplies.shift() ?? [{ Name: 't', Engine: 'InnoDB', Auto_increment: counterValue }];
       else if (sql === 'SHOW GRANTS') rows = grants.map(value => ({ Grants: value }));
       else if (sql.startsWith('SELECT COLUMN_NAME AS name, DATA_TYPE')) rows = parseTableColumnDefinition(source, context).columns.map(column => ({ name: column.name, dataType: column.name === 'id' ? columnType.split(/[ (]/)[0] : 'int', columnType: column.name === 'id' ? columnType : 'int', extra: column.attributes.some(attribute => attribute.kind === 'auto-increment') ? 'auto_increment' : '' }));
       else if (sql.startsWith('SET SESSION foreign_key_checks')) rows = {};
@@ -71,7 +75,7 @@ beforeEach(async () => {
   counterValue = '9007199254740993'; afterValue = undefined; afterPhysicalId = undefined; columnType = 'bigint'; statsExpiry = '86400'; grants = ["GRANT ALL PRIVILEGES ON *.* TO 'test'@'host'"];
   policy = { sessionIncrement: '1', sessionOffset: '1', globalIncrement: '1', globalOffset: '1', lockMode: '2', readOnly: '0', superReadOnly: '0', innodbReadOnly: '0', forceRecovery: '0' };
   source = original; physicalId = '9007199254740995'; version = '8.4.11'; dialect = 'mysql'; mode = ''; charset = 'utf8mb3'; catalogMismatch = false; warningCount = 0;
-  nextId = 0; sent = []; connections = []; events = []; fail = undefined; hold = undefined; held = undefined; closeFails = false; afterAlterMode = undefined;
+  nextId = 0; sent = []; connections = []; events = []; fail = undefined; hold = undefined; held = undefined; closeFails = false; afterAlterMode = undefined; nativeReplies = [];
   mock.connect.mockReset().mockImplementation(async (_profile, _database, signal) => managed(signal));
   mock.execute.mockReset().mockImplementation(async (_managed, sql) => { if (String(sql).startsWith('KILL CONNECTION')) held?.complete(Object.assign(new Error('取消终态'), { errno: 1317 })); return { rows: [] }; });
   engine = new Engine(event => events.push(event)); await engine.handle('connections.open', { id: profile.id, profile });
@@ -110,7 +114,7 @@ describe('真实Engine下一自增值受控生命周期（仅替换驱动）', (
     await expect(apply(next, 'apply', kind === 'revision' ? 2 : 1, kind === 'acks' ? [] : next.requiredAcknowledgements)).rejects.toThrow();
     expect(sent.filter(item => item.sql.startsWith('ALTER'))).toHaveLength(0); await expect(apply(next, 'replay')).rejects.toThrow('已失效或已使用');
   });
-  it.each(['5.7.44', '8.0.29', '9.0.1', '10.11.19-MariaDB', '11.4.13-MariaDB'])('版本%s未开放范围明确只读', async current => {
+  it.each(['5.7.43', '8.0.29', '9.0.1', '10.11.18-MariaDB', '11.4.12-MariaDB'])('版本%s未开放范围明确只读', async current => {
     version = current; dialect = current.includes('MariaDB') ? 'mariadb' : 'mysql'; const snapshot = await get(); expect(snapshot.writable).toBe(false); await expect(preview(snapshot)).rejects.toThrow();
   });
   it.each(['counter-null', 'no-auto', 'type', 'cache', 'increment', 'offset', 'read-only', 'innodb-read-only', 'force-recovery', 'metadata-mismatch'] as const)('%s能力无法证明时只读，不修复原列或重述定义', async kind => {
@@ -142,5 +146,62 @@ describe('真实Engine下一自增值受控生命周期（仅替换驱动）', (
     const snapshot = await get(), next = await preview(snapshot); await engine.handle('schema.tableAutoIncrement.release', { snapshotId: snapshot.snapshotId }); await expect(apply(next)).rejects.toThrow('已失效或已使用');
     vi.useFakeTimers({ toFake: ['Date'] }); const expired = await preview(await get()); vi.setSystemTime(Date.now() + 120001); await expect(apply(expired, 'expired')).rejects.toThrow('已失效或已使用');
     const closed = await preview(await get()); await engine.handle('connections.close', { id: profile.id }); await expect(apply(closed, 'closed')).rejects.toThrow('已失效或已使用');
+  });
+});
+
+const legacyVersions = ['5.7.44', '10.11.19-MariaDB', '5.5.5-11.4.13-MariaDB'] as const;
+/** 只设置驱动事实；不会把纯替身的成功冒充真实版本、目录新鲜度或重启验收。 */
+function legacy(versionValue: string) {
+  version = versionValue; dialect = versionValue.includes('MariaDB') ? 'mariadb' : 'mysql';
+  if (dialect === 'mariadb') { delete policy.superReadOnly; Object.assign(policy, { compressedReadOnly: '0', globalWsrep: '0', sessionWsrep: '0' }); }
+}
+describe('0.19旧引擎自增的受控生命周期纯回归', () => {
+  it.each(legacyVersions)('%s前后原生状态夹读，大数单ALTER及结果事实保持，变量按方言选择', async current => {
+    legacy(current); const snapshot = await get(); expect(snapshot.writable, snapshot.reasons.join('；')).toBe(true);
+    const first = sent.findIndex(item => item.sql.startsWith('SHOW TABLE STATUS FROM')), definition = sent.findIndex(item => item.sql.startsWith('SHOW CREATE TABLE')), last = sent.length - 1 - [...sent].reverse().findIndex(item => item.sql.startsWith('SHOW TABLE STATUS FROM'));
+    expect(first).toBeLessThan(definition); expect(last).toBeGreaterThan(definition); expect(snapshot.autoIncrement).toBe('9007199254740993');
+    expect(sent.some(item => /information_schema_stats_expiry|show_gipk_in_create/.test(item.sql))).toBe(false);
+    expect(Object.hasOwn(snapshot.policy!, 'superReadOnly')).toBe(dialect === 'mysql');
+    expect(sent.some(item => /@@GLOBAL.super_read_only/.test(item.sql))).toBe(dialect === 'mysql');
+    const next = await preview(snapshot); expect(sent.some(item => item.sql.startsWith('ALTER'))).toBe(false);
+    expect(next.requiredAcknowledgements).toHaveLength(dialect === 'mysql' ? 4 : 3);
+    expect(snapshot.warnings.join('；')).toContain(dialect === 'mysql' ? '重启会使' : '持久化'); expect(next.warnings).toEqual(snapshot.warnings);
+    expect(await apply(next)).toMatchObject({ ddlSubmitted: true, ddlCompleted: true, structureVerified: true, definitionVerified: true, counterState: 'matched', after: { value: '9007199254740995', tableId: snapshot.tableId } });
+    expect(sent.filter(item => item.sql.startsWith('ALTER')).map(item => item.sql)).toEqual(['ALTER TABLE `db`.`t` AUTO_INCREMENT = 9007199254740995;']);
+    expect(sent.some(item => /\b(?:MAX\s*\(|SET GLOBAL|ANALYZE|FLUSH)\b/i.test(item.sql))).toBe(false);
+    await expect(apply(next, 'replay-legacy')).rejects.toThrow('已失效或已使用');
+  });
+  it.each([null, 9007199254740992, '09007199254740993', '0', '1e16', '18446744073709551616'])('原生计数%j不能经Number修复或伪造精度', async value => {
+    legacy('5.7.44'); nativeReplies = [[{ Name: 't', Engine: 'InnoDB', Auto_increment: value }]];
+    const snapshot = await get(); expect(snapshot.writable).toBe(false); await expect(preview(snapshot)).rejects.toThrow(); expect(sent.some(item => item.sql.startsWith('ALTER'))).toBe(false);
+  });
+  it.each(['empty', 'duplicate', 'name', 'engine', 'before', 'after', 'query-error'] as const)('原生状态%s无法唯一证明则保留只读原因', async kind => {
+    legacy('10.11.19-MariaDB'); const good = { Name: 't', Engine: 'InnoDB', Auto_increment: counterValue };
+    if (kind === 'empty') nativeReplies = [[]]; if (kind === 'duplicate') nativeReplies = [[good, good]];
+    if (kind === 'name') nativeReplies = [[{ ...good, Name: 'T' }]]; if (kind === 'engine') nativeReplies = [[{ ...good, Engine: 'MyISAM' }]];
+    if (kind === 'before') nativeReplies = [[{ ...good, Auto_increment: '9007199254740994' }]];
+    if (kind === 'after') nativeReplies = [[good], [{ ...good, Auto_increment: '9007199254740994' }]];
+    if (kind === 'query-error') fail = /^SHOW TABLE STATUS FROM/;
+    const snapshot = await get(); expect(snapshot.writable).toBe(false); expect(snapshot.reasons.length).toBeGreaterThan(0); await expect(preview(snapshot)).rejects.toThrow();
+  });
+  it.each(['compressedReadOnly', 'globalWsrep', 'sessionWsrep', 'readOnly', 'innodbReadOnly', 'forceRecovery', 'globalOffset', 'missing', 'permission'] as const)('MariaDB模式%s未知/危险或直接权限不足时拒绝', async kind => {
+    legacy('11.4.13-MariaDB');
+    if (kind === 'missing') delete policy.globalWsrep; else if (kind === 'permission') grants = ["GRANT SELECT ON *.* TO 'u'@'h'"]; else policy[kind] = kind === 'globalOffset' ? '2' : '1';
+    const snapshot = await get(); expect(snapshot.writable).toBe(false); await expect(preview(snapshot)).rejects.toThrow();
+  });
+  it('MySQL5.7缺少重启确认先消费令牌；8.4不允许夹带该确认项', async () => {
+    legacy('5.7.44'); const next = await preview(await get());
+    await expect(apply(next, 'legacy-acks', 1, next.requiredAcknowledgements.filter(id => id !== 'restart-volatile'))).rejects.toThrow('确认项');
+    await expect(apply(next, 'legacy-again')).rejects.toThrow('已失效或已使用'); expect(sent.some(item => item.sql.startsWith('ALTER'))).toBe(false);
+    version = '8.4.11'; dialect = 'mysql'; const modern = await preview(await get());
+    await expect(apply(modern, 'modern-extra', 1, [...modern.requiredAcknowledgements, 'restart-volatile'])).rejects.toThrow('确认项');
+  });
+  it.each(legacyVersions)('%s预览后DML、物理身份变化与不同实际计数不会冒充成功或重放', async current => {
+    legacy(current); const stale = await preview(await get()); counterValue = '9007199254740994'; source = source.replace('9007199254740993', counterValue);
+    await expect(apply(stale, 'stale-dml')).rejects.toThrow(); expect(sent.some(item => item.sql.startsWith('ALTER'))).toBe(false);
+    const identity = await preview(await get()); physicalId = '9007199254740996'; await expect(apply(identity, 'stale-id')).rejects.toThrow('身份');
+    const next = await preview(await get()); afterValue = '9007199254740996';
+    expect(await apply(next, 'different-legacy')).toMatchObject({ ddlSubmitted: true, ddlCompleted: true, structureVerified: true, definitionVerified: false, counterState: 'different', after: { value: '9007199254740996' } });
+    await expect(apply(next, 'different-again')).rejects.toThrow('已失效或已使用');
   });
 });

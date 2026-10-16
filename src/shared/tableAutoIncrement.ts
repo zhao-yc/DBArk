@@ -4,13 +4,18 @@ import type { TableCommentGetOutput } from './tableComment';
 export type TableAutoIncrementTarget = TableColumnPatchTarget;
 export type TableAutoIncrementProgress = TableColumnApplyProgress;
 export const tableAutoIncrementAcknowledgements = ['ddl-implicit-commit', 'external-ddl-window', 'dml-counter-window'] as const;
+export const tableAutoIncrementKnownAcknowledgements = [...tableAutoIncrementAcknowledgements, 'restart-volatile'] as const;
+export type TableAutoIncrementCapability = 'mysql8-stats-expiry' | 'mysql57-native-status' | 'mariadb1011-native-status' | 'mariadb114-native-status';
+/** 5.7的内存计数需要额外确认；保持MySQL8原来的三项契约。 */
+export function tableAutoIncrementRequiredAcknowledgements(capability?: TableAutoIncrementCapability): readonly string[] { return capability === 'mysql57-native-status' ? tableAutoIncrementKnownAcknowledgements : tableAutoIncrementAcknowledgements; }
 export interface TableAutoIncrementColumn { name: string; type: string; maximum: string; }
-export interface TableAutoIncrementPolicy { sessionIncrement: string; sessionOffset: string; globalIncrement: string; globalOffset: string; lockMode: string; readOnly: string; superReadOnly: string; innodbReadOnly: string; forceRecovery: string; }
+// MariaDB没有super_read_only；只返回实际查询的字段，缺失变量不能伪造为0。
+export interface TableAutoIncrementPolicy { sessionIncrement: string; sessionOffset: string; globalIncrement: string; globalOffset: string; lockMode: string; readOnly: string; superReadOnly?: string; innodbReadOnly: string; forceRecovery: string; compressedReadOnly?: string; globalWsrep?: string; sessionWsrep?: string; }
 export interface TableAutoIncrementGetInput extends TableAutoIncrementTarget { taskId: string; }
 export interface TableAutoIncrementPreviewInput { snapshotId: string; value: string; taskId: string; }
 export interface TableAutoIncrementApplyInput { previewToken: string; acknowledgements: string[]; taskId: string; }
 export interface TableAutoIncrementReleaseInput { snapshotId?: string; previewToken?: string; }
-export interface TableAutoIncrementGetOutput extends Omit<TableCommentGetOutput, 'comment' | 'budget'> { tableId?: string; column?: TableAutoIncrementColumn; policy?: TableAutoIncrementPolicy; }
+export interface TableAutoIncrementGetOutput extends Omit<TableCommentGetOutput, 'comment' | 'budget'> { tableId?: string; column?: TableAutoIncrementColumn; policy?: TableAutoIncrementPolicy; capability?: TableAutoIncrementCapability; }
 export interface TableAutoIncrementPreviewOutput {
   target: TableAutoIncrementTarget; previewToken: string; expiresAt: string; ddlHash: string;
   sql: string; before: string; after: string; warnings: string[]; requiredAcknowledgements: string[];

@@ -18,7 +18,7 @@ import { tablePreferenceSaveSchema, tablePreferenceTargetSchema } from './tableP
 import { validateColumnPatches } from './tableColumnPatches';
 import { validateIndexPatches } from './tableIndexPatches';
 import { tableRenameAcknowledgements, validateTableRenameName } from './tableRename';
-import { tableAutoIncrementAcknowledgements, validateTableAutoIncrement } from './tableAutoIncrement';
+import { tableAutoIncrementKnownAcknowledgements, validateTableAutoIncrement } from './tableAutoIncrement';
 import { tableCommentAcknowledgements, validateTableComment } from './tableComment';
 import { tableDefaultEncodingAcknowledgements } from './tableDefaultEncoding';
 import { validateForeignKeyPatches } from './tableForeignKeyPatches';
@@ -151,7 +151,7 @@ export const commandSchemas: Record<Command, z.ZodType> = {
   'schema.tableRename.release': z.object({ snapshotId: id.optional(), previewToken: id.optional() }).strict().refine(value => Boolean(value.snapshotId || value.previewToken), '缺少待释放的重命名令牌'),
   'schema.tableAutoIncrement.get': z.object({ connectionId: id, database: foreignKeyTargetName, table: foreignKeyTargetName, taskId: id }).strict(),
   'schema.tableAutoIncrement.preview': z.object({ snapshotId: id, value: z.string().max(20).transform(value => validateTableAutoIncrement(value)), taskId: id }).strict(),
-  'schema.tableAutoIncrement.apply': z.object({ previewToken: id, acknowledgements: z.array(z.enum(tableAutoIncrementAcknowledgements)).max(3).refine(value => new Set(value).size === value.length, '下一自增值确认项不能重复'), taskId: id }).strict(),
+  'schema.tableAutoIncrement.apply': z.object({ previewToken: id, acknowledgements: z.array(z.enum(tableAutoIncrementKnownAcknowledgements)).max(4).refine(value => new Set(value).size === value.length, '下一自增值确认项不能重复'), taskId: id }).strict(),
   'schema.tableAutoIncrement.release': z.object({ snapshotId: id.optional(), previewToken: id.optional() }).strict().refine(value => Boolean(value.snapshotId || value.previewToken), '缺少待释放的下一自增值令牌'),
   'schema.tableComment.get': z.object({ connectionId: id, database: z.string().min(1).max(64), table: z.string().min(1).max(64), taskId: id }).strict(),
   'schema.tableDefaultEncoding.get': z.object({ connectionId: id, database: foreignKeyTargetName, table: foreignKeyTargetName, taskId: id }).strict(),
