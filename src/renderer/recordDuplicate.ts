@@ -12,6 +12,14 @@ export function recordDuplicateReadonlyReason(context: RecordContext, row?: Draf
   if (context.info!.database !== context.target.database || context.info!.name !== context.target.table) return text.changed;
   if (!row || row.inserted || !row.original) return text.selectExisting;
   if (context.info!.editableKey.some(key => !context.info!.columns.some(column => column.name === key) || ownCell(row.original!, key) === undefined || ownCell(row.original!, key) === null)) return text.incompleteKey;
+  const names = new Set(context.info!.columns.map(column => column.name));
+  if ([...Object.keys(row.original), ...Object.keys(row.data)].some(key => !names.has(key))) return text.changed;
+  // 原始快照与当前草稿均须完整拥有普通字段；SELECT *遗漏的INVISIBLE不是用户选择DEFAULT。
+  const missing = context.info!.columns.find(column => !column.generated && !/\bauto_increment\b/i.test(column.extra) && (
+    !Object.hasOwn(row.original!, column.name) || !Object.hasOwn(row.data, column.name)
+    || ownCell(row.original!, column.name) === undefined || ownCell(row.data, column.name) === undefined
+  ));
+  if (missing) return formatText(text.incompleteValues, missing.name);
   return '';
 }
 
@@ -21,11 +29,11 @@ export function duplicateRecordDraft(rows: DraftRow[], rowId: string | undefined
   const reason = recordDuplicateReadonlyReason(context, source);
   if (reason) throw new Error(reason);
   if (!newId || rows.some(row => row.id === newId) || rows.filter(row => row.id === rowId).length !== 1) throw new Error(text.changed);
-  // 只按可信列目录复制；缺少自有值继续表示DEFAULT，绝不填成NULL或套用元数据默认表达式。
+  // 只复制完整已加载源值；普通字段缺失必须拒绝，只有生成列/自增列才主动省略。
   const entries = context.info!.columns.flatMap<[string, CellValue]>(column => {
     if (column.generated || /\bauto_increment\b/i.test(column.extra)) return [];
     const value = ownCell(source!.data, column.name);
-    if (value === undefined) return [];
+    if (value === undefined) throw new Error(formatText(text.incompleteValues, column.name));
     // 二进制在线路中是base64包装，深复制包装对象；不经过文本、JSON数值解析或浮点数转换。
     return [[column.name, structuredClone(value)]];
   });
