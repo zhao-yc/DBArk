@@ -65,6 +65,16 @@ test('无可靠键表与视图保持只读，不产生复制入口的写入资�
   }, info);
 });
 
+test('INVISIBLE普通列未加载时禁用复制，不能把非默认源值静默写成DEFAULT', async ({}, info) => {
+  await isolatedDatabase(async ({ observer, database, connectionName }) => {
+    await observer.query(`CREATE TABLE ${q(database, 'copy_invisible')} (id INT PRIMARY KEY AUTO_INCREMENT,note TEXT,server_hidden VARCHAR(40) INVISIBLE DEFAULT '服务器默认值') ENGINE=InnoDB`);
+    await observer.query(`INSERT INTO ${q(database, 'copy_invisible')} (note,server_hidden) VALUES ('普通可见记录','源记录非默认值')`);
+    const table = await openTable(connectionName, database, 'copy_invisible'); await table.getByRole('gridcell', { name: '普通可见记录', exact: true }).click(); const action = table.getByRole('button', { name: text.action, exact: true });
+    await expect(action).toBeDisabled(); await expect(action).toHaveAttribute('title', /server_hidden.*未完整加载/); await expect(table.locator('.row-inserted')).toHaveCount(0);
+    const [rows] = await observer.query<RowDataPacket[]>(`SELECT server_hidden FROM ${q(database, 'copy_invisible')}`); expect(rows).toHaveLength(1); expect(rows[0].server_hidden).toBe('源记录非默认值');
+  }, info);
+});
+
 test('复制已暂存值并保持原记录选中、勾选与已有草稿，新增草稿不支持再次复制', async ({}, info) => {
   await isolatedDatabase(async ({ observer, database, connectionName }) => {
     await observer.query(`CREATE TABLE ${q(database, 'copy_drafts')} (id INT PRIMARY KEY AUTO_INCREMENT,note TEXT) ENGINE=InnoDB`); await observer.query(`INSERT INTO ${q(database, 'copy_drafts')} (note) VALUES ('原记录')`);

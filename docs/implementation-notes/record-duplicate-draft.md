@@ -4,9 +4,11 @@
 
 表页工具栏新增“复制记录为新增草稿”。只允许当前已加载、未过期、InnoDB且有可靠键的基本表中的单条现有记录；新增草稿、待删除记录、视图、未知对象、无可靠键、忙碌或未暂存输入都不能借此获得可写资格。纯SQL查询结果没有该入口，不修改App、IPC、主进程或数据库写入协议。
 
-复制读取当前记录已暂存的值，按可信列目录生成独立本地UUID并追加到本页末尾；保留所有其他草稿及original引用，不改活动单元格、勾选集合、记录表单位置、列偏好、排序、过滤或页码。隐藏字段仍复制。未暂存表单、仍在活动的网格编辑器和模态窗口需先处理，迟到事件会再次同步检查。
+复制读取当前记录已暂存的值，按可信列目录生成独立本地UUID并追加到本页末尾；保留所有其他草稿及original引用，不改活动单元格、勾选集合、记录表单位置、列偏好、排序、过滤或页码。界面隐藏但已加载的字段仍复制。所有非生成、非自增字段在original和data两侧都须有自有且非undefined的值；实际NULL允许，缺失不能作为用户选择DEFAULT。目录与记录出现未知字段时也拒绝。按钮资格、提示及操作处理器共用该检查。未暂存表单、仍在活动的网格编辑器和模态窗口需先处理，迟到事件会再次同步检查。
 
-生成列与`auto_increment`列省略，由服务器生成。其余值原样保留：大整数、十进制和微秒时间不转浮点数或Date，JSON原文不重新解析，NULL、空文本、文字NULL、零字节二进制和未填写DEFAULT分别保留。二进制base64包装深复制，修改新增草稿不共享原行的包装对象；没有解码成文本、经过剪贴板或读取工具文件。
+生成列与`auto_increment`列省略，由服务器生成。其余现有值完整保留：大整数、十进制和微秒时间不转浮点数或Date，JSON原文不重新解析，NULL、空文本、文字NULL和零字节二进制分别保留。复制时只有明确省略的服务器生成字段使用DEFAULT；普通源字段未加载时拒绝复制，不套用其默认定义。新增草稿生成后，用户显式选择DEFAULT仍沿原编辑器，不影响普通新增行为。二进制base64包装深复制，修改新增草稿不共享原行的包装对象；没有解码成文本、经过剪贴板或读取工具文件。
+
+MySQL的普通INVISIBLE列不是生成列，`SELECT *`不会返回它，省略其INSERT值却会使用默认值。因此当前页未完整加载时安全拒绝；完整值确已加载时本helper允许复制INVISIBLE原值，未永久禁用该列类型。[官方语义](https://dev.mysql.com/doc/refman/8.4/en/invisible-columns.html)。当前切片只交付完整已加载原行复制；按可靠键补取缺失字段的完整产品能力尚未交付，具体共享契约方案见[后续补取方案](record-copy-source-proposal.md)，待ROOT批准后单独实现。
 
 普通主键和唯一键不自动编号或改值。仅对本入口产生的新增草稿，在原集中预览请求前检查当前页明确相等的完整键，冲突显示键名与列名，要求用户修改后重新预览。自增省略值、DEFAULT和可空唯一键的NULL不推断为冲突；未修改的普通新增草稿沿用既有行为。先于复制INSERT提交的原记录更新/删除按当前有效草稿比较，避免拿旧original误报。
 
@@ -16,7 +18,7 @@
 
 纯测试调用实际helper、真实IPC参数校验和生产SQL构造器；另外用AST抽取真实TableTab按钮、复制处理函数及集中预览函数，通过状态/DOM/IPC控制端口验证选中保留、迟到拒绝和冲突早于预览请求。测试不启动React浏览器、Electron或数据库。
 
-`tests/e2e/table-record-duplicate.spec.ts`定义4项真实UI例，须同时显式开启`DBARK_INTEGRATION_ENABLED=1`与`DBARK_D02_DUPLICATE_RECORD_UI=1`，并只接受已核对的200/13384。追踪关闭，沿既有随机隔离库与清理helper。本轮只做`--list`；未运行GUI、200、Docker、系统剪贴板或手动CI。
+`tests/e2e/table-record-duplicate.spec.ts`定义5项真实UI例，须同时显式开启`DBARK_INTEGRATION_ENABLED=1`与`DBARK_D02_DUPLICATE_RECORD_UI=1`，并只接受已核对的200/13384。追踪关闭，沿既有随机隔离库与清理helper。本轮只做`--list`；未运行GUI、200、Docker、系统剪贴板或手动CI。
 
 ROOT后续独占窗口应验证：
 
@@ -24,10 +26,13 @@ ROOT后续独占窗口应验证：
 2. 非自增主键及唯一键保持原值，预览明确报冲突；用户改完键才进入原SQL预览，返回编辑仍无数据库变化。仅最终确认才允许原事务写入。
 3. 无键表、视图、SQL只读结果及已知不可写身份保持原边界；服务器拒绝INSERT时不把失败显示为成功或自动重试。
 4. 原行有暂存修改、勾选和隐藏列/排序/服务器过滤时，复制保留已暂存值、原选择及既有布局；新增行在末尾，原草稿未丢失。记录表单存在未暂存输入时先处理输入。
+5. 真实INVISIBLE非生成列写入不同于默认值的源值，当前SELECT星号未加载时按钮禁用、提示缺少列、不形成新增草稿，原值/条数不变；后续完整读取功能另验。
 
-本切片本地验证结果：新增44项纯测试，加记录表单48项、网格键盘33项、行校验7项，共132项通过；`tsc --noEmit`通过，生产构建通过（保留既有大chunk及依赖注释警告）。4项真实UI例通过正式Playwright `--list`核对，均expectedStatus=skipped、results=0。实际命令为：
+原e6efbc版本44项加相关回归共132项通过，不能证明普通缺失字段已完整；员工3据生产目录/SELECT星号/INSERT独立发现P2。原报告和20项探针逐字保留在本任务忽略缓存；修正前20通过，修正后原样探针17通过、3条仍断言错误行为的旧用例因拒绝而失败，保留退出码1，未改成全通过。作者原44项夹具也另存原件；新夹具明确普通字段已完整加载，不继续把缺失当DEFAULT。
 
-- `node node_modules/vitest/vitest.mjs run tests/unit/record-duplicate.test.ts tests/unit/record-views.test.ts tests/unit/table-cell-keyboard.test.ts tests/unit/row-validation.test.ts --maxWorkers=2`
+修正后48项复制/事件测试、12项独立完整性安全测试，加记录表单48项、网格键盘33项、行校验7项，共148项通过。类型检查及生产构建通过，保留既有打包警告；5项UI定义均skipped、results=0，只列定义未执行。实际命令为：
+
+- `node node_modules/vitest/vitest.mjs run tests/unit/record-duplicate.test.ts tests/unit/record-duplicate-completeness.test.ts tests/unit/record-views.test.ts tests/unit/table-cell-keyboard.test.ts tests/unit/row-validation.test.ts --maxWorkers=2`
 - `node node_modules/typescript/bin/tsc --noEmit`
 - `node scripts/build.mjs`
 - `node node_modules/@playwright/test/cli.js test tests/e2e/table-record-duplicate.spec.ts --list --reporter=json --trace off`，外层使用最小OS环境并显式设置上述两个门为0，报告写入本人忽略缓存。
