@@ -88,8 +88,8 @@ describe('精度和二进制', () => {
 describe('数据修改的乐观锁', () => {
   it('先用键定位再比较完整旧值，并保留 NULL', () => {
     const result = buildChanges(table, [{ kind: 'update', before: { id: '9007199254740993', title: null }, values: { title: '新值' } }]);
-    expect(result.statements[0].sql).toContain('WHERE `id` <=> ? AND `id` <=> ? AND BINARY CONVERT(`title` USING utf8mb4) <=> BINARY CONVERT(? USING utf8mb4)');
-    expect(result.statements[0].params).toEqual(['新值', '9007199254740993', '9007199254740993', null]);
+    expect(result.statements[0].sql).toContain('WHERE `id` <=> ? AND BINARY CONVERT(`title` USING utf8mb4) <=> BINARY CONVERT(? USING utf8mb4)');
+    expect(result.statements[0].params).toEqual(['新值', '9007199254740993', null]);
   });
   it('缺少可靠唯一键、非事务引擎、旧行缺列时拒绝写入', () => {
     const changes = [{ kind: 'delete' as const, before: { id: '1' } }];

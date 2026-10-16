@@ -25,7 +25,7 @@ describe('合法原型列跨草稿、IPC 和 SQL 完整旧值校验', () => {
     expect(Object.getPrototypeOf(update.before)).toBe(Object.prototype); expect(Object.getPrototypeOf(update.values)).toBe(Object.prototype);
     const result = buildChanges(info, parsed.changes); expect(result.statements).toHaveLength(1);
     expect(result.statements[0].sql).toContain('`__proto__` = ?'); expect(result.statements[0].sql).toContain('BINARY CONVERT(`__proto__` USING utf8mb4) <=> BINARY CONVERT(? USING utf8mb4)');
-    expect(result.statements[0].params).toEqual(['新标题', '$& 新原型', before.id, before.id, before.title, before['__proto__'], before.constructor, before.amount, before.binary, null]);
+    expect(result.statements[0].params).toEqual(['新标题', '$& 新原型', before.id, before.title, before['__proto__'], before.constructor, before.amount, before.binary, null]);
     expect(before['__proto__']).toBe('原型旧值'); expect(data['__proto__']).toBe('$& 新原型');
   });
   it('删除仍校验原型列旧值，真正缺失的原始字段仍被拒绝', () => {

@@ -12,10 +12,10 @@ describe('BIT完整写入和乐观锁', () => {
     expect(preview.statements.map(statement => statement.sql.match(/CAST\(CONV\(HEX\(\?\),16,10\) AS UNSIGNED\)/g)?.length)).toEqual([1, 2, 1]);
     expect(preview.statements[1].params).toEqual([next, old]);
   });
-  it('非键BIT旧值仍参与完整乐观锁，只消除BIT键的重复条件', () => {
+  it('非键BIT旧值仍参与完整乐观锁，非文本键只保留原定位条件', () => {
     const table = { ...info, columns: [{ ...bit, name: 'id', type: 'int' }, bit], primaryKey: ['id'], editableKey: ['id'] };
     const old = binary('ffffffffffffffff'); const preview = buildChanges(table, [{ kind: 'update', before: { id: 1, bits: old }, values: { bits: null } }]);
-    expect(preview.statements[0].sql).toContain('`bits` <=> CAST(CONV(HEX(?),16,10) AS UNSIGNED)'); expect(preview.statements[0].params).toEqual([null, 1, 1, old]);
+    expect(preview.statements[0].sql).toContain('`bits` <=> CAST(CONV(HEX(?),16,10) AS UNSIGNED)'); expect(preview.statements[0].params).toEqual([null, 1, old]);
   });
   it('定位键只来自同一before快照，IPC不接受与原值矛盾的独立key', () => {
     const change = { kind: 'update', before: { bits: binary('ffffffffffffffff') }, values: { bits: binary('0020000000000001') } };

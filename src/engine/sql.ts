@@ -227,8 +227,9 @@ export function buildChanges(info: TableInfo, changes: RowChange[]): SqlPreview 
     for (const name of info.editableKey) if (change.before[name] === null || change.before[name] === undefined) throw new Error('原始行唯一键不得为空');
     // 键条件保持可用索引；全文本旧值另做精确比较，不受 CI/AI/PAD SPACE 排序规则影响。
     const keyClauses = info.editableKey.map(name => { params.push(change.before[name]); return `${identifier(name)} <=> ${typedCellPlaceholder(columns.get(name)!, change.before[name])}`; });
-    // MySQL 5.7 对 BIT64 最大键的两个相同预处理谓词会错误传播常量；键条件已精确比较位值，无需重复。
-    const originalClauses = [...columns.values()].filter(column => !(/^BIT\b/i.test(column.type) && info.editableKey.includes(column.name))).map(column => {
+    // 非文本可靠键已由同一before值精确定位；重复比较会触发部分版本的大整数谓词错误传播。
+    // 文本键的索引比较受CI/AI/PAD SPACE影响，仍须保留下面独立的UTF-8字节旧值检查。
+    const originalClauses = [...columns.values()].filter(column => !info.editableKey.includes(column.name) || /^(?:CHAR|VARCHAR|TINYTEXT|TEXT|MEDIUMTEXT|LONGTEXT|ENUM|SET|JSON)\b/i.test(column.type)).map(column => {
       params.push(change.before[column.name]);
       // 先统一到连接字符集再取字节，否则 latin1 的 é 与 UTF-8 参数会产生假冲突。
       if (/^(?:CHAR|VARCHAR|TINYTEXT|TEXT|MEDIUMTEXT|LONGTEXT|ENUM|SET|JSON)\b/i.test(column.type)) {
