@@ -1,4 +1,4 @@
-import {positionMonacoCaret} from './monaco-caret';
+import {positionMonacoCaret,observeMonacoCaret,triggerMonacoCompletion,remainingCompletionTimeout} from './monaco-caret';
 import {randomUUID} from 'node:crypto';
 import type {Connection,RowDataPacket} from 'mysql2/promise';
 import {test,expect,page,desktop,pageErrors,closed,answerDialogs,quitDesktop} from './desktop-fixture';
@@ -6,14 +6,20 @@ import {enabled,isolatedDatabase,openDatabaseQuery,executeSql,modifier} from './
 
 // 真连接表单填写内存凭据，关闭轨迹；数据库、编辑器、Worker和IPC均使用实际产物。
 test.use({trace:'off'});
+// 在任何编辑器及已有Worker观察器之前安装，只读旁观真实发送位置。
+test.beforeEach(observeMonacoCaret);
 const query=()=>page.locator('.query-tab:visible');
-/** 真实粘贴保留引号及后缀，光标仅通过键盘移动，不直接调用Monaco模型。 */
-async function atCaret(marked:string){return positionMonacoCaret(marked);}
+/** 原生输入保留引号及后缀，光标仅通过键盘移动，不直接调用Monaco模型。 */
+let expectedCaret='';
+/** 原marked保留为独立断言输入，不使用帮助器返回值推导实际光标期望。 */
+async function atCaret(marked:string){expectedCaret=marked;return positionMonacoCaret(marked);}
+/** 只触发一次，随后必须证明真实provider的完整source和UTF16 offset。 */
+async function triggerCompletion(){await triggerMonacoCompletion(expectedCaret);}
 /** 读真实保存草稿核对完整文本，不能仅以视口里相似的短行通过。 */
 async function expectSql(source:string){await expect.poll(()=>page.evaluate(async()=>{const settings=await window.dbark.invoke('settings.get',{});return settings.tabs.find(tab=>tab.id===settings.activeTabId)?.sql?.replaceAll('\r\n','\n');})).toBe(source.replaceAll('\r\n','\n'));}
 /** Monaco各平台均使用Ctrl+空格触发，macOS不占用系统的Command+空格。 */
 // 启动8秒与解析2秒分别由产品限时；断言另留3秒绘制余量，不重试触发或接受建议。
-async function choose(label:string){await page.keyboard.press('Control+Space');const widget=page.locator('.suggest-widget.visible');await expect(widget.locator('.monaco-list-row.focused')).toContainText(label,{timeout:13000});await page.keyboard.press('Enter');await expect(widget).toHaveCount(0);}
+async function choose(label:string){await triggerCompletion();const widget=page.locator('.suggest-widget.visible');await expect(widget.locator('.monaco-list-row.focused')).toContainText(label,{timeout:remainingCompletionTimeout()});await page.keyboard.press('Enter');await expect(widget).toHaveCount(0);}
 /** 离线查询不可连接，CTE显式投影仍应通过安装包内Worker提供建议。 */
 async function offlineQuery(){await page.locator('.app-commandbar').getByRole('button',{name:'新建连接',exact:true}).click();const modal=page.getByRole('dialog',{name:'新建连接',exact:true});await modal.getByLabel('连接名称',{exact:true}).fill('补全离线验收');await modal.getByLabel('主机地址',{exact:true}).fill('127.0.0.1');await modal.getByLabel('端口',{exact:true}).fill('1');await modal.getByLabel('用户名',{exact:true}).fill('offline');await modal.getByRole('button',{name:'保存连接',exact:true}).click();await page.locator('.app-commandbar').getByRole('button',{name:'新建查询',exact:true}).click();await page.getByRole('dialog',{name:'新建查询',exact:true}).getByRole('button',{name:'打开查询',exact:true}).click();await expect(query().locator('.monaco-editor')).toBeVisible();}
 /** 第二库也使用唯一隔离前缀，先退出本例应用释放会话，再精确清理。 */
@@ -109,7 +115,7 @@ test.describe('200隔离实库：Monaco语义补全',()=>{
   test('跟踪关闭后默认库未知，不回退旧库；显式来源可用，通知恢复后重新补全',async({},info)=>{
     test.setTimeout(120000);await isolatedDatabase(async({observer,database})=>extraDatabase(observer,async other=>{
       await observer.query(`CREATE TABLE \`${database}\`.subject(a_column INT)`);await observer.query(`CREATE TABLE \`${other}\`.subject(b_column INT)`);await openDatabaseQuery(database);await executeSql(`SET SESSION session_track_system_variables='';SET SESSION session_track_schema=OFF;USE \`${other}\``);await expect(query().getByLabel('当前查询默认库',{exact:true})).toHaveText('默认库待确认');
-      await atCaret('SELECT s.| FROM subject s');await page.keyboard.press('Control+Space');await expect(query().getByLabel('SQL 补全状态',{exact:true})).toHaveText('默认库待确认');await expect(page.locator('.suggest-widget.visible .monaco-list-row')).toHaveCount(0);
+      await atCaret('SELECT s.| FROM subject s');await triggerCompletion();await expect(query().getByLabel('SQL 补全状态',{exact:true})).toHaveText('默认库待确认',{timeout:remainingCompletionTimeout(5000)});await expect(page.locator('.suggest-widget.visible .monaco-list-row')).toHaveCount(0);
       await atCaret(`SELECT s.b_| FROM \`${other}\`.subject s`);await choose('b_column');await expectSql(`SELECT s.\`b_column\` FROM \`${other}\`.subject s`);
       await executeSql(`SET SESSION session_track_schema=ON;SET SESSION session_track_system_variables='sql_mode,session_track_schema,session_track_system_variables';USE \`${database}\``);await expect(query().getByLabel('当前查询默认库',{exact:true})).toHaveText(database);await atCaret('SELECT s.a_| FROM subject s');await choose('a_column');await expectSql('SELECT s.`a_column` FROM subject s');
     }),info);

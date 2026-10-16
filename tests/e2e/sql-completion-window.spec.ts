@@ -1,16 +1,22 @@
-import {positionMonacoCaret} from './monaco-caret';
+import {positionMonacoCaret,observeMonacoCaret,triggerMonacoCompletion,remainingCompletionTimeout} from './monaco-caret';
 import type{RowDataPacket}from'mysql2/promise';
 import{test,expect,page,desktop,pageErrors}from'./desktop-fixture';
 import{enabled,isolatedDatabase,openDatabaseQuery,modifier}from'./live-helpers';
 
 test.use({trace:'off'});
+// 在任何编辑器及已有Worker观察器之前安装，只读旁观真实发送位置。
+test.beforeEach(observeMonacoCaret);
 const query=()=>page.locator('.query-tab:visible');
 /** 核对保存草稿里的完整SQL，避免只比较Monaco当前视口。 */
 async function expectSql(source:string){await expect.poll(()=>page.evaluate(async()=>{const settings=await window.dbark.invoke('settings.get',{});return settings.tabs.find(tab=>tab.id===settings.activeTabId)?.sql?.replaceAll('\r\n','\n');})).toBe(source);}
-/** 通过真实剪贴板和键盘设置光标，并恢复用户原剪贴板。 */
-async function atCaret(marked:string){return positionMonacoCaret(marked);}
+/** 通过原生输入和键盘移动定位，剪贴板只读核对。 */
+let expectedCaret='';
+/** 原marked保留为独立断言输入，不使用帮助器返回值推导实际光标期望。 */
+async function atCaret(marked:string){expectedCaret=marked;return positionMonacoCaret(marked);}
+/** 只触发一次，随后必须证明真实provider的完整source和UTF16 offset。 */
+async function triggerCompletion(){await triggerMonacoCompletion(expectedCaret);}
 /** 等待真实Worker及Monaco候选后按Enter接受，不直接调用编辑器模型。 */
-async function choose(label:string){await page.keyboard.press('Control+Space');const widget=page.locator('.suggest-widget.visible');await expect(widget.locator('.monaco-list-row.focused')).toContainText(label,{timeout:13000});await page.keyboard.press('Enter');await expect(widget).toHaveCount(0);}
+async function choose(label:string){await triggerCompletion();const widget=page.locator('.suggest-widget.visible');await expect(widget.locator('.monaco-list-row.focused')).toContainText(label,{timeout:remainingCompletionTimeout()});await page.keyboard.press('Enter');await expect(widget).toHaveCount(0);}
 /** 离线连接固定使用不可连接端口；本地CTE投影不依赖数据库目录。 */
 async function offlineQuery(){await page.locator('.app-commandbar').getByRole('button',{name:'新建连接',exact:true}).click();const modal=page.getByRole('dialog',{name:'新建连接',exact:true});await modal.getByLabel('连接名称',{exact:true}).fill('窗口补全离线验收');await modal.getByLabel('主机地址',{exact:true}).fill('127.0.0.1');await modal.getByLabel('端口',{exact:true}).fill('1');await modal.getByLabel('用户名',{exact:true}).fill('offline');await modal.getByRole('button',{name:'保存连接',exact:true}).click();await page.locator('.app-commandbar').getByRole('button',{name:'新建查询',exact:true}).click();await page.getByRole('dialog',{name:'新建查询',exact:true}).getByRole('button',{name:'打开查询',exact:true}).click();await expect(query().locator('.monaco-editor')).toBeVisible();}
 /** 实际执行可能使物理来源进入待核对；只通过真实会话读取入口确认本例表。 */
@@ -30,7 +36,7 @@ test('离线窗口字段：OVER与命名WINDOW通过真实Monaco接受和撤销'
 test('离线窗口隔离：外层ORDER不泄露输出别名，窗口结束后仍可补全别名',async({},info)=>{
   test.setTimeout(90000);await offlineQuery();
   const marked='WITH q AS(SELECT 1 AS value_column) SELECT q.value_column AS value_illegal FROM q ORDER BY SUM(q.value_column) OVER(ORDER BY val|suffix)',original=await atCaret(marked);
-  await page.keyboard.press('Control+Space');const widget=page.locator('.suggest-widget.visible');await expect(widget.locator('.monaco-list-row.focused')).toContainText('value_column',{timeout:13000});await expect(widget).not.toContainText('value_illegal');await page.keyboard.press('Enter');await expectSql(marked.replace('val|suffix','`q`.`value_column`'));await page.keyboard.press(`${modifier}+Z`);await expectSql(original);
+  await triggerCompletion();const widget=page.locator('.suggest-widget.visible');await expect(widget.locator('.monaco-list-row.focused')).toContainText('value_column',{timeout:remainingCompletionTimeout()});await expect(widget).not.toContainText('value_illegal');await page.keyboard.press('Enter');await expectSql(marked.replace('val|suffix','`q`.`value_column`'));await page.keyboard.press(`${modifier}+Z`);await expectSql(original);
   await atCaret('WITH q AS(SELECT 1 AS value_column) SELECT q.value_column AS value_output,ROW_NUMBER() OVER w FROM q WINDOW w AS(ORDER BY q.value_column) ORDER BY value_o|suffix');await choose('value_output');await expectSql('WITH q AS(SELECT 1 AS value_column) SELECT q.value_column AS value_output,ROW_NUMBER() OVER w FROM q WINDOW w AS(ORDER BY q.value_column) ORDER BY `value_output`');
   expect(await page.evaluate(async()=>({tasks:await window.dbark.invoke('tasks.list',{}),history:await window.dbark.invoke('history.list',{})}))).toEqual({tasks:[],history:[]});expect(pageErrors).toEqual([]);await page.screenshot({path:info.outputPath('offline-window-alias-isolation.png')});
 });
@@ -50,8 +56,8 @@ test('离线集合和帧边界：实际Worker停止，合法分支窗口仍可�
     'WITH q AS(SELECT 1 AS value_column) SELECT ROW_NUMBER() OVER(ORDER BY q.value_column ROWS BETWEEN UNBOUNDED PRECEDING AND CUR|RENT ROW) FROM q',
     'WITH q AS(SELECT 1 AS value_column) SELECT ROW_NUMBER() OVER w FROM q WINDOW w AS(ORDER BY q.value_column RANGE BETWEEN UNBOUNDED PRECEDING AND CUR|RENT ROW)',
   ]){
-    const original=await atCaret(marked);await page.evaluate(()=>{(window as unknown as{__windowReplies:unknown[]}).__windowReplies=[];});await page.keyboard.press('Control+Space');
-    await expect.poll(()=>page.evaluate(({length,offset})=>(window as unknown as{__windowReplies:{length:number;offset:number;status:string}[]}).__windowReplies.some(value=>value.length===length&&value.offset===offset&&value.status==='blocked'),{length:original.length,offset:marked.indexOf('|')}),{timeout:13000}).toBe(true);
+    const original=await atCaret(marked);await page.evaluate(()=>{(window as unknown as{__windowReplies:unknown[]}).__windowReplies=[];});await triggerCompletion();
+    await expect.poll(()=>page.evaluate(({length,offset})=>(window as unknown as{__windowReplies:{length:number;offset:number;status:string}[]}).__windowReplies.some(value=>value.length===length&&value.offset===offset&&value.status==='blocked'),{length:original.length,offset:marked.indexOf('|')}),{timeout:remainingCompletionTimeout()}).toBe(true);
     // Monaco可保留“无建议”空面板；断言实际候选行为，而非强制整个面板消失。
     await expect(page.locator('.suggest-widget.visible .monaco-list-row')).toHaveCount(0);await expectSql(original);
   }
