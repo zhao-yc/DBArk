@@ -8,7 +8,7 @@ const symbol = (token: CompletionToken | undefined, value: string) => token?.kin
 const windowName = (token: CompletionToken | undefined) => token && (token.kind === 'word' || token.kind === 'identifier') && /^[A-Za-z_][A-Za-z0-9_$]{0,63}$/.test(token.value) ? token.value.toLowerCase() : undefined;
 
 /** 只放开本SELECT内“已知空窗口/分区窗口 + ORDER BY”，不推断新关系、帧或版本能力。 */
-export function completionWindowInheritance(branch: CompletionQueryBranch, tokens: CompletionToken[], close: ReadonlyMap<number, number>, open: number): boolean {
+export function completionWindowInheritance(branch: CompletionQueryBranch, tokens: CompletionToken[], close: ReadonlyMap<number, number>, open: number, validate?: (start: number, end: number) => boolean): boolean {
   const reference = windowName(tokens[open + 1]);
   if (!reference || !word(tokens[open + 2], 'ORDER') || !word(tokens[open + 3], 'BY')) return false;
   const end = close.get(open);
@@ -20,6 +20,9 @@ export function completionWindowInheritance(branch: CompletionQueryBranch, token
 
   // 解析恢复可能在第一个WINDOW后提前结束；重复子句仍须看至真实括号/集合边界，不能被AST截断藏掉。
   const lexicalEnd = tokens.find(token => token.start > branch.select.start && (symbol(token, ')') && token.depth < branch.select.depth || token.depth === branch.select.depth && ['UNION', 'INTERSECT', 'EXCEPT'].some(value => word(token, value))))?.start ?? Infinity;
+  const branchEnd = tokens.filter(token => token.start >= branch.select.start && token.start < lexicalEnd).at(-1)?.end;
+  // 有界继承只在当前SELECT分支完整通过语法校验时开放；AST恢复不能证明列表后继或分区表达式完整。
+  if (!validate || branchEnd === undefined || !validate(branch.select.start, branchEnd)) return false;
   const starts = tokens.flatMap((token, index) => token.start > branch.query.position.endIndex && token.start < lexicalEnd && token.depth === branch.select.depth && word(token, 'WINDOW') && !symbol(tokens[index - 1], '.') ? [index] : []);
   if (starts.length !== 1) return false;
   if (tokens.some((token, index) => token.start > branch.select.start && index < starts[0] && token.depth === branch.select.depth && word(token, 'ORDER') && word(tokens[index + 1], 'BY'))) return false;
