@@ -8,7 +8,9 @@
 
 ## P0：日常流程
 
-0.18 开发验收补充：[SQL 补全 22 项](../tests/integration/acceptance-v018-caret-input-20261016.md)、[数据表与记录视图补充](../tests/integration/acceptance-v018-grid-install-20261016.md)及[两项原生复制](../tests/integration/acceptance-v018-native-copy-20261016.md)已使用同一 Windows 候选实际执行并核对清理，含原 LATERAL 路径、整文件复验及用户本轮授权的系统剪贴板复制。当前累计 246 个安装产品身份与 23 个组件身份，原全量计划另有 12 个开发组件待验；这些计数不是功能覆盖比例，0.18 尚未公开。
+0.18 开发验收补充：[SQL 补全 22 项](../tests/integration/acceptance-v018-caret-input-20261016.md)、[数据表与记录视图补充](../tests/integration/acceptance-v018-grid-install-20261016.md)及[两项原生复制](../tests/integration/acceptance-v018-native-copy-20261016.md)已使用同一 Windows 候选实际执行并核对清理。另 [12 个开发组件](../tests/integration/acceptance-v018-native-components-20261016.md)在三平台临时原生 CI 各自实际通过并下载逐例核对，原 281 身份计划现已补全：246 个安装产品和 35 个组件；Mac 同身份不重复累加。这些计数不是功能覆盖比例，0.18 尚未公开。
+
+0.19 准备候选的当前语句、复制草稿、定义命中导航、表单跨页和自增操作已完成 Windows 源码 31 项真实界面验收，范围仅 MySQL8.4/13384；原准备和文案失败、测试修正及清理分别保留，见[常用操作实证](../tests/integration/acceptance-v019-common-source-20261016.md)。完整源值补取仍在修复及复审，未混入已验范围；候选版本尚未发布。
 
 | 编号 | 工作包 | 状态 | 验收要求 |
 | --- | --- | --- | --- |
@@ -17,7 +19,7 @@
 | C03 | 配置导入导出/复制 | 部分 | 0.7.0 首批白名单复制、所选概要 JSON 导出及不可变预览新增/跳过；不带秘密或生效认证路径，pendingFiles/schema4 阻止误连。418单元、本机完整56项、三平台源码/实际安装各22离线项及公开12资产/209源码blob通过，公开Windows完整56项通过；已有身份替换、其它格式与macOS实库继续保留 |
 | C04 | 连接资源生命周期 | 部分 | 原取消、断线、改目标不重放已验；0.16未知库显式确认重连、真实KILL后零自动写入、发送前落盘及准备取消均通过Windows源码、本机及公开NSIS147项，终态资源清零。macOS实库矩阵待验 |
 | Q01 | SQL 高亮/补全/格式化/搜索替换 | 部分 | 0.16已有语义Worker、真实上下文、会话临时对象/遮蔽/实际读取、视图确认及隐藏字段部分状态，新增普通ORDER/GROUP/HAVING输出别名、字符串引用及UNION首输出。2089单元、六实例四套后端275通过13条件跳过，Windows源码147分两轮完整覆盖、本机及公开NSIS各原147完整通过，注册/资源核零。固定b366cae标签三平台源码/实际安装各24离线通过123私网跳过，12公开资产/608源码文件一致。完整窗口/LATERAL/例程及其它边界继续，原失败保留，见[补全计划](plans/sql-semantic-completion.md)与[发行验收](../tests/integration/acceptance-q01-release-candidate-20261015.md) |
-| Q02 | 选区/脚本/多结果/取消/事务 | 部分 | DELIMITER、临时表、隔离、回滚与释放已验；CALL 模式/状态矛盾已在 0.4.0 修复并通过五库及公开 Windows 安装回归，其它驱动与平台实库继续补验 |
+| Q02 | 选区/脚本/多结果/取消/事务 | 部分 | DELIMITER、临时表、隔离、回滚与释放已有公开验收；CALL模式/状态矛盾已在0.4.0修复并通过五库及公开Windows安装回归。0.19准备候选新增当前语句按钮及Ctrl/Cmd+Shift+Enter，Windows源码在MySQL8.4五项真实界面通过，含原选区/全部、真实片段历史、过程体、拒绝输入及事务状态，见[常用操作实证](../tests/integration/acceptance-v019-common-source-20261016.md)。候选未发布，安装、macOS及其它驱动/版本继续 |
 | Q03 | 历史/保存查询/SQL 文件编辑 | 部分 | 三编码打开/另存随0.3.0公开；0.16修正历史执行前库、保存当前库、重开/重启的无库与未知，Windows源码、本机及公开NSIS147项通过，标签三平台离线通过。0.17开发中保存查询浏览改为复合键概要分页、完整文字筛选和摘要保护打开/删除，2210单元及Windows源码/真实NSIS各39项通过，含原上下文3项，资源核零，见[分页验收](../tests/integration/acceptance-query-pages-20261015.md)。执行历史后续见下方新增检查点，关联编辑/另存及macOS私网等仍待完成；前期依据见[第三检查点](../tests/integration/acceptance-q03-query-context-20261015.md) |
 | Q04 | 固定结果 | 已验 | 0.2.0 Windows 实库/实装：原 SQL、精度、截断标记、释放；只保留已返回数据 |
 | Q05 | 结果集导出 | 部分 | 已返回结果/固定快照及同会话明确新执行、JSON全结果/CSV指定行集、背压、取消断线与退出已有公开检查点。0.16源码、本机及公开NSIS的CSV/JSON各逐行验证100万行，精度/顺序/Unicode正确，待写峰值1行73字节、预览200；原完整147项及资源核验见[发行验收](../tests/integration/acceptance-q01-release-candidate-20261015.md)。0.17同次新执行的多CSV ZIP64具备顺序流式写出、位置映射/状态清单、10GiB/200结果及原子替换；六组合核心各20通过/1百万行条件跳过、MySQL8.4真实界面9项通过，实际系统tar小包及4297328968字节真实ZIP64独立校验通过。后续MySQL8.4引擎层真实百万行ZIP、取消及失败保护复合验收通过，1000001行/5协议结果/136780886字节，独立Python逐行/CRC校验，待写峰值1行148字节、资源核零；不改变先前六条件跳过统计。0.18 Windows源码正式GUI百万行ZIP补充1项已通过，实际1000001行/136780880字节、队列峰值1行148字节，独立Python逐行/CRC及一次执行核对通过，见[正式UI实证](../tests/integration/acceptance-q05-million-archive-ui-20261016.md)；公开安装包百万行ZIP、强杀恢复及macOS等仍待验，见[第四批验收](../tests/integration/acceptance-parallel-fourth-20261016.md)、[百万行入口](development/q05-million-csv-archive-manual.md)与[容器边界](development/query-multi-csv-archive.md) |
