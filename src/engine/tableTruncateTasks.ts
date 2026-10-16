@@ -10,7 +10,7 @@ interface Snapshot extends TableTruncateRead { id: string; target: TableTruncate
 interface Preview { snapshot: Snapshot; sql: string; bytes: number; expires: number; }
 const hash = (source: string) => createHash('sha256').update(source).digest('hex');
 const progress = (): TableTruncateProgress => ({ phase: 'connecting', ddlSubmitted: false, ddlCompleted: false, definitionVerified: false, outcome: 'not-sent' });
-const warnings = ['清空全部当前数据，DDL隐式提交且不能事务回滚；不会触发ON DELETE触发器，不能用撤销恢复。', '自增计数将重置；不提供删除行数，OK包的0行不是删除0条。', '请核对备份并在维护窗口暂停并行DDL与数据写入；重核不消除外部变更窗口。'];
+const warnings = ['清空全部当前数据，DDL隐式提交且不能事务回滚；不会触发ON DELETE触发器，不能用撤销恢复。', '有自增列时计数将重置，不新增自增列；不提供删除行数，OK包的0行不是删除0条。', '请核对备份并在维护窗口暂停并行DDL与数据写入；重核不消除外部变更窗口。'];
 
 /** 清空专用用途共享原缓存预算、物理身份与结构执行锁；客户端不提供SQL。 */
 export class TableTruncateTasks {

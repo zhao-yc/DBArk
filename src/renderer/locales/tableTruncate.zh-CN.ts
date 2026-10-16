@@ -1,10 +1,10 @@
 /** 清空确认使用固定协议项目，不能把未知项目显示为已授权。 */
 export const tableTruncateZh = {
   title: '清空表数据', read: '重新读取清空能力', preview: '预览清空SQL', apply: '确认清空全部数据', back: '取消本次预览', cancel: '取消清空任务', close: '关闭',
-  connection: '连接编号', engine: '引擎', autoIncrement: '当前自增计数（只读）', unset: '无自增列', version: '数据库版本',
+  connection: '连接编号', engine: '引擎', autoIncrement: '当前自增计数（只读）', unset: '未设置或无自增列', version: '数据库版本',
   fixedSql: '清空SQL预览（只读）', readonly: '当前表不能使用专用清空入口', confirmation: '输入准确的库名.表名', confirmationHint: '确认文字须完全一致，不忽略空格和大小写：',
   ackData: '我确认已核对备份，将清空此表全部数据；DDL隐式提交且不可事务回滚，撤销和取消不能恢复数据。',
-  ackCounter: '我确认自增计数将重置；OK包的0行不表示删除0条，本窗口不报告删除行数。',
+  ackCounter: '我确认有自增列时计数将重置，本操作不新增自增列；OK包的0行不表示删除0条，本窗口不报告删除行数。',
   ackWindow: '我确认在维护窗口执行并暂停并行DDL和数据写入；执行前重核仍存在外部变更窗口。',
   targetChanged: '目标或连接配置已变化，请关闭后重新打开。', expired: '快照或预览已过期，请重新读取。', mismatch: '响应目标或原定义与当前快照不一致，未接受该响应。',
   discard: '将放弃本次清空预览和确认，是否继续？', unknownClose: '清空可能已完成，请先核对服务器数据。确认放弃本窗口记录并继续？',
