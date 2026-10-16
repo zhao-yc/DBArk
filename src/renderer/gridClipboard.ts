@@ -9,6 +9,30 @@ export type ClipboardCell = CellValue | undefined;
 export const maxClipboardCharacters = 10_000_000;
 export const maxClipboardCells = 50_000;
 
+/** 仅需要更小行数预算的入口显式传入；普通网格复制粘贴继续使用原上限。 */
+export interface ClipboardRowBudget { maximum: number; message: string; }
+
+/** 沿原TSV词法只计数，不创建单元格字符串或行数组；引号内换行不产生新行。 */
+function assertTabularRowBudget(text: string, budget: ClipboardRowBudget) {
+  let rows = 0, quoted = false, content = false, hasCells = false;
+  for (let index = 0; index < text.length; index++) {
+    const char = text[index];
+    if (quoted) {
+      if (char === '"' && text[index + 1] === '"') { content = true; index++; }
+      else if (char === '"') quoted = false;
+      else content = true;
+    } else if (char === '"' && !content) quoted = true;
+    else if (char === '\t') { hasCells = true; content = false; }
+    else if (char === '\n' || char === '\r') {
+      if (++rows > budget.maximum) throw new Error(budget.message);
+      content = false; hasCells = false; if (char === '\r' && text[index + 1] === '\n') index++;
+    } else content = true;
+  }
+  if (quoted) throw new Error(zh.clipboard.text003);
+  // 与原解析器保持相同的末行规则：末尾分隔符及空引号不额外制造一行。
+  if ((content || hasCells || !rows) && rows + 1 > budget.maximum) throw new Error(budget.message);
+}
+
 /** 兼容电子表格的制表符格式，保留被引号包裹的换行、制表符和双引号。 */
 export function parseTabularText(text: string): string[][] {
   if (text.length > maxClipboardCharacters) throw new Error(zh.clipboard.text001);
@@ -44,12 +68,17 @@ export function encodeClipboard(values: ClipboardCell[][]) {
 }
 
 /** 剪贴板属于外部输入，类型化数据必须逐格校验，不能直接信任 JSON 内容。 */
-export function decodeClipboard(typed: string, text: string): ClipboardCell[][] {
-  if (!typed) return parseTabularText(text);
+export function decodeClipboard(typed: string, text: string, rowBudget?: ClipboardRowBudget): ClipboardCell[][] {
+  if (!typed) {
+    if (rowBudget) { if (text.length > maxClipboardCharacters) throw new Error(zh.clipboard.text001); assertTabularRowBudget(text, rowBudget); }
+    return parseTabularText(text);
+  }
   if (typed.length > maxClipboardCharacters) throw new Error(zh.clipboard.text004);
   let payload: unknown;
   try { payload = JSON.parse(typed); } catch { throw new Error(zh.clipboard.text005); }
   if (!payload || typeof payload !== 'object' || !Object.hasOwn(payload, 'version') || !('version' in payload) || payload.version !== 1 || !Object.hasOwn(payload, 'rows') || !('rows' in payload) || !Array.isArray(payload.rows)) throw new Error(zh.clipboard.text006);
+  // JSON解析完成后先核外层行数，空行也占预算，禁止先map整批再交调用方拒绝。
+  if (rowBudget && payload.rows.length > rowBudget.maximum) throw new Error(rowBudget.message);
   let count = 0;
   return payload.rows.map((row: unknown) => {
     if (!Array.isArray(row)) throw new Error(zh.clipboard.text007);
