@@ -138,7 +138,9 @@ export async function positionMonacoCaret(marked:string):Promise<string>{
   try{
     await page.keyboard.press('Escape');
     await page.locator('.query-tab:visible .monaco-editor').getByRole('textbox').focus();
-    await page.keyboard.press(`${modifier}+A`);await page.keyboard.insertText(source);
+    await page.keyboard.press(`${modifier}+A`);
+    // 先原生删除旧选区，避免首括号触发surroundSelection并在文末遗留配对字符。
+    await page.keyboard.press('Backspace');await page.keyboard.insertText(source);
     await expect.poll(()=>page.evaluate(async()=>{
       const settings=await window.dbark.invoke('settings.get',{});return settings.tabs.find(tab=>tab.id===settings.activeTabId)?.sql?.replaceAll('\r\n','\n');
     })).toBe(source);

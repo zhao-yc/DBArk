@@ -14,6 +14,7 @@ interface Options{
   external?:Entry[];externalText?:string;wrongCaret?:boolean;wrongSource?:boolean;noRequest?:boolean;
   modelEol?:'\n'|'\r\n';untrustedEvent?:boolean;noKeyEvent?:boolean;focusCount?:number;hidden?:boolean;
   selected?:boolean;versionChanges?:boolean;startupDirty?:boolean;delayWorkerReady?:boolean;beforeKeydown?:()=>void;
+  initialSql?:string;guardSelectedSurround?:boolean;
 }
 const marked='SELECT a| FROM q',source='SELECT a FROM q';
 const helperSource=readFileSync(new URL('../e2e/monaco-caret.ts',import.meta.url),'utf8');
@@ -26,9 +27,24 @@ function visitProvider(node:ts.Node){if(ts.isPropertyAssignment(node)&&node.name
 visitProvider(editorTree);if(!providerText)throw Error('缺少真实provider');
 const providerCode=ts.transpileModule('const extracted='+providerText,{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText;
 
+/** 执行锁定Monaco官方包围选区判定，不另写首括号与非空选区的理想分支。 */
+function officialSurroundSelection(){
+  const declarations=(relative:string,names:string[])=>{
+    const text=readFileSync(new URL('../../node_modules/monaco-editor/esm/vs/'+relative,import.meta.url),'utf8'),tree=ts.createSourceFile(relative,text,ts.ScriptTarget.Latest,true),found:string[]=[];
+    function visit(node:ts.Node){if((ts.isClassDeclaration(node)||ts.isFunctionDeclaration(node))&&node.name&&names.includes(node.name.text))found.push(node.getText(tree));if(ts.isVariableDeclaration(node)&&names.includes(node.name.getText(tree)))found.push('const '+node.getText(tree)+';');ts.forEachChild(node,visit);}visit(tree);if(found.length!==names.length)throw Error('官方输入规则提取不完整');return found.join('\n');
+  };
+  return runInNewContext(declarations('editor/common/cursor/cursorTypeEditOperations.js',['SurroundSelectionOperation','shouldSurroundChar'])+'\n'+declarations('editor/common/cursorCommon.js',['isQuote'])+'\n'+declarations('basic-languages/sql/sql.js',['conf'])+'\n({operation:SurroundSelectionOperation,pairs:conf.surroundingPairs})');
+}
+const surround=officialSurroundSelection();
+/** 模型与选区是合成边界，是否包围选区的规则仍执行官方原方法。 */
+function wouldSurroundSelectedSql(text:string,selected:boolean,character:string):boolean{
+  const lines=text.split(/\r\n|\n/),selection={isEmpty:()=>!selected||!text.length,startLineNumber:1,startColumn:1,endLineNumber:lines.length,endColumn:lines.at(-1)!.length+1};
+  return surround.operation._isSurroundSelectionType({autoSurround:'languageDefined',surroundingPairs:Object.fromEntries(surround.pairs.map((pair:{open:string;close:string})=>[pair.open,pair.close]))},{getLineContent:(line:number)=>lines[line-1],getValueInRange:()=>text},[selection],character);
+}
+
 /** 正式helper原样执行；模型、DOM、原生键盘与OS API均为合成边界，不冒充原生验收。 */
 function replay(initial:Entry[],options:Options={}){
-  let current=initial.map(entry=>({...entry})),modelSource='',offset=0,selectAll=false,arrows=0,readCount=0,hasQuery=false,reloads=0,versionReads=0;
+  let current=initial.map(entry=>({...entry})),modelSource=options.initialSql??'',offset=0,selectAll=false,arrows=0,readCount=0,hasQuery=false,reloads=0,versionReads=0;
   const keys:string[]=[],insertions:string[]=[],writes:string[]=[],posted:{source:string;offset:number}[]=[],proofDiagnostics:Record<string,unknown>[]=[],initializers:(()=>void)[]=[],listeners:((event:unknown)=>void)[]=[];
   const clipboard={
     async read(){readCount++;if(readCount===1&&options.beforeReadError)throw options.beforeReadError;if(readCount>1&&options.afterReadError)throw options.afterReadError;if(readCount>1&&options.external)current=options.external.map(entry=>({...entry}));let entries=current.length?current:options.emptyRead==='none'?[]:[{}];if(options.surroundEmpty)entries=[{},...entries,{}];return entries.map(entry=>({types:Object.keys(entry),async getType(type:string){return entry[type];}}));},
@@ -60,9 +76,10 @@ function replay(initial:Entry[],options:Options={}){
   const page={
     locator:()=>({getByRole:()=>({focus:async()=>undefined}),isVisible:async()=>true}),evaluate:async(callback:(argument:unknown)=>unknown,argument?:unknown)=>callback(argument),
     addInitScript:async(callback:()=>void)=>{initializers.push(callback);},reload:async()=>{reloads++;delete context.__dbarkMonacoCaretObservation;listeners.length=0;for(const initialize of initializers)initialize();expect(context.MonacoEnvironment.globalAPI).toBe(true);context.monaco=api;context.MonacoEnvironment={getWorker(){}};},
-    keyboard:{insertText:async(text:string)=>{hasQuery=true;const value=text.replaceAll('\n',eol());insertions.push(text);modelSource=selectAll?value:modelSource.slice(0,offset)+value+modelSource.slice(offset);offset=selectAll?value.length:offset+value.length;selectAll=false;},press:async(key:string)=>{
+    keyboard:{insertText:async(text:string)=>{if(options.guardSelectedSurround&&wouldSurroundSelectedSql(modelSource,selectAll,text[0]??''))throw Error('原生输入仍带可包围的非空旧选区');hasQuery=true;const value=text.replaceAll('\n',eol());insertions.push(text);modelSource=selectAll?value:modelSource.slice(0,offset)+value+modelSource.slice(offset);offset=selectAll?value.length:offset+value.length;selectAll=false;},press:async(key:string)=>{
       keys.push(key);if(key==='Escape'&&options.operationFails)throw options.operationError;
       if(key==='Control+A'||key==='Meta+A')selectAll=true;
+      if(key==='Backspace'&&selectAll){modelSource='';offset=0;selectAll=false;}
       if(key==='Control+Home'||key==='Meta+ArrowUp'){offset=0;arrows=0;}
       if(key==='ArrowRight'&&offset<modelSource.length){if(!options.wrongCaret||arrows!==0)offset+=modelSource.startsWith('\r\n',offset)||(modelSource.codePointAt(offset)??0)>0xffff?2:1;arrows++;}
       if(key==='Control+Space'){
@@ -87,7 +104,7 @@ describe('Monaco光标帮助器的只读剪贴板回放',()=>{
     const h=replay(items,{emptyRead});await expect(h.run()).resolves.toBe(source);expect(h.writes).toEqual([]);expect(h.context.__dbarkMonacoCaretClipboard).toBeUndefined();
   });
   it.each(['win32','darwin'] as const)('%s只用原生输入和文档首移动，保留带类型零字节',async platform=>{
-    const h=replay([{'text/plain':blob(''),'text/html':blob('','text/html'),'image/png':new Blob([])}],{platform});await h.run();expect(h.insertions).toEqual([source]);expect(h.writes).toEqual([]);expect(h.keys).toEqual(['Escape',platform==='darwin'?'Meta+A':'Control+A',platform==='darwin'?'Meta+ArrowUp':'Control+Home',...Array(8).fill('ArrowRight')]);
+    const h=replay([{'text/plain':blob(''),'text/html':blob('','text/html'),'image/png':new Blob([])}],{platform});await h.run();expect(h.insertions).toEqual([source]);expect(h.writes).toEqual([]);expect(h.keys).toEqual(['Escape',platform==='darwin'?'Meta+A':'Control+A','Backspace',platform==='darwin'?'Meta+ArrowUp':'Control+Home',...Array(8).fill('ArrowRight')]);
   });
   it('多item、富文本、图片、书签、web与raw全部保持，只忽略无类型空壳',async()=>{
     const entries:Entry[]=[{}, {'text/plain':blob('合成原文🙂\0'),'text/html':blob('<b>合成</b>'),'image/png':new Blob([new Uint8Array([0,1,255])]),'electron application/bookmark':{title:'合成',url:'https://synthetic.invalid/'},'web application/x.synthetic':blob('合成web'),'electron application/osclipboard;format="16"':blob('合成raw')},{'text/rtf':blob('合成rtf')}];
@@ -109,6 +126,11 @@ describe('Monaco光标帮助器的只读剪贴板回放',()=>{
 });
 
 describe('真实按键捕获阶段的公开当前模型位置证明',()=>{
+  it('官方规则证实首括号会包围非空旧选区，删除为空后不再包围',()=>{expect(wouldSurroundSelectedSql('SELECT old_value',true,'(')).toBe(true);expect(wouldSurroundSelectedSql('',false,'(')).toBe(false);expect(wouldSurroundSelectedSql('SELECT old_value',true,' ')).toBe(false);});
+  it('已有旧正文时先原生清空，再一次输入括号起始SQL并证明真实位置',async()=>{
+    const sample='(SELECT 2 AS first_output) UNION ALL (SELECT 1 AS other_output) ORDER BY fir|suffix',expected='(SELECT 2 AS first_output) UNION ALL (SELECT 1 AS other_output) ORDER BY firsuffix',h=replay([],{initialSql:'SELECT SUM(1) AS aggregated_total HAVING aggsuffix>0',guardSelectedSurround:true});
+    await h.observe();await expect(h.run(sample)).resolves.toBe(expected);await h.trigger(sample);expect(h.modelSource).toBe(expected);expect(h.insertions).toEqual([expected]);expect(h.keys.filter(key=>key==='Backspace')).toHaveLength(1);expect(h.writes).toEqual([]);h.client.dispose();
+  });
   it.each([{platform:'win32' as const,marked:'SELECT a| FROM q',sql:'SELECT a FROM q',offset:8},{platform:'darwin' as const,marked:'SELECT a| FROM q',sql:'SELECT a FROM q',offset:8},{platform:'win32' as const,marked:'-- 🙂\r\nSELECT a|suffix FROM q',sql:'-- 🙂\nSELECT asuffix FROM q',offset:14},{platform:'win32' as const,modelEol:'\r\n' as const,marked:'-- 🙂\r\nSELECT a|suffix FROM q',sql:'-- 🙂\r\nSELECT asuffix FROM q',offset:15}])('$platform输入与UTF16/模型EOL位置匹配',async value=>{
     const h=replay([],value);await h.observe();await h.run(value.marked);await h.trigger(value.marked);expect(h.modelSource).toBe(value.sql);expect(h.offset).toBe(value.offset);expect(h.posted[0]).toMatchObject({source:value.sql,offset:value.offset});expect(h.keys.filter(key=>key==='Control+Space')).toHaveLength(1);expect(h.writes).toEqual([]);expect(h.context.__dbarkMonacoCaretObservation.armed).toBeUndefined();expect(h.reloads).toBe(1);h.client.dispose();
   });
