@@ -1,4 +1,5 @@
-import { connectionTransferDocumentSchema, connectionTransferLimits, importConnectionProfile, type ExportedConnectionProfile } from '../shared/connectionTransfer';
+import { connectionTransferDocumentSchema, connectionTransferLimits, exportConnectionProfile, importConnectionProfile, importReplacementProfile, type ExportedConnectionProfile } from '../shared/connectionTransfer';
+import { connectionReplacementText } from '../shared/connectionTransferMessages';
 import { assertTlsPassphrase, tlsCredentialMessages } from '../shared/tlsCredentials';
 import initSqlJs, { type Database, type SqlValue } from 'sql.js';
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
@@ -17,6 +18,8 @@ import { parseSavedQueryRecord } from './savedQuerySearchMatch';
 
 export interface SecretProtector { available(): boolean; encrypt(value: string): string; decrypt(value: string): string; }
 export const defaultSettings: AppSettings = { theme: 'dark', sidebarWidth: 270, resultLimit: 1000, pageSize: 200, tabs: [] };
+/** 只由不可变预览生成，旧概要和单调修订共同约束最终原子替换。 */
+export interface ConnectionImportStorageOptions { expectedRevision: number; replacements: { sourceId: string; targetId: string; previous: ExportedConnectionProfile }[]; }
 
 /** 小型配置库在内存中运行 SQLite，写入时原子替换文件；无需打包本机 ABI 模块。 */
 export class LocalStore {
@@ -156,13 +159,33 @@ export class LocalStore {
   /** 任意成功的连接配置或认证变更都会让导入预览失效，失败写盘不改变版本。 */
   connectionRevision(): number { return this.connectionRevisionValue; }
 
-  /** 导入仅新增白名单概要；整批一次落盘，不读取、复制或保存任何秘密。 */
-  importConnections(input: ExportedConnectionProfile[], allowIncomplete: boolean): ConnectionProfile[] {
+  /** 白名单批次在同一事务内新增/受控替换；替换绝不走缺省保留秘密的普通保存路径。 */
+  importConnections(input: ExportedConnectionProfile[], allowIncomplete: boolean, options?: ConnectionImportStorageOptions): ConnectionProfile[] {
     const document = connectionTransferDocumentSchema.parse({ format: 'DBArk-connections', version: 1, connections: input });
     if (Buffer.byteLength(JSON.stringify(document), 'utf8') > connectionTransferLimits.fileBytes) throw new Error('连接配置超过 2 MiB 上限');
-    const profiles = document.connections.map(profile => importConnectionProfile(profile, randomUUID()));
+    const replacements = new Map(options?.replacements.map(item => [item.sourceId, item]) ?? []);
+    const targetIds = new Set(options?.replacements.map(item => item.targetId));
+    if (options && (!Number.isSafeInteger(options.expectedRevision) || options.expectedRevision !== this.connectionRevisionValue || replacements.size !== options.replacements.length || targetIds.size !== options.replacements.length || options.replacements.some(item => !document.connections.some(profile => profile.id === item.sourceId)))) throw new Error(connectionReplacementText.expected);
+    // 会话槽使用NUL分隔；遇到旧库中有歧义的身份时拒绝替换，不能把另一连接的会话秘密当作本目标清除。
+    if (replacements.size && ([...targetIds].some(id => !id || id.includes('\0')) || this.records<ConnectionProfile>('SELECT data FROM connections').some(profile => [...targetIds].some(id => profile.id !== id && profile.id.startsWith(`${id}\0`))))) throw new Error(connectionReplacementText.expected);
+    const profiles = document.connections.map(profile => { const replacement = replacements.get(profile.id); return replacement ? importReplacementProfile(profile, replacement.previous) : importConnectionProfile(profile, randomUUID()); });
     if (!allowIncomplete && profiles.some(profile => profile.pendingFiles?.length)) throw new Error('连接含待重新选择的认证文件，请明确确认暂存后再导入');
-    this.mutate(() => { for (const profile of profiles) this.db.run('INSERT INTO connections VALUES (?,?)', [profile.id, JSON.stringify(profile)]); });
+    this.mutate(() => {
+      // CAS在任何写入之前再次检查；JS同步事务中没有await，不允许检查与提交之间插入配置修改。
+      if (options && options.expectedRevision !== this.connectionRevisionValue) throw new Error(connectionReplacementText.expected);
+      for (const replacement of replacements.values()) {
+        const previous = this.records<ConnectionProfile>('SELECT data FROM connections WHERE id=?', [replacement.targetId])[0];
+        if (!previous || replacement.previous.id !== replacement.targetId || JSON.stringify(exportConnectionProfile(previous)) !== JSON.stringify(replacement.previous)) throw new Error(connectionReplacementText.expected);
+      }
+      for (const profile of profiles) {
+        if (targetIds.has(profile.id)) {
+          // 删除整个秘密命名空间，包括未来新增槽；失败时mutate恢复SQLite及全部会话秘密。
+          this.db.run('DELETE FROM secrets WHERE connection_id=?', [profile.id]);
+          for (const key of this.volatileSecrets.keys()) if (key.startsWith(`${profile.id}\0`)) this.volatileSecrets.delete(key);
+          this.db.run('UPDATE connections SET data=? WHERE id=?', [JSON.stringify(profile), profile.id]);
+        } else this.db.run('INSERT INTO connections VALUES (?,?)', [profile.id, JSON.stringify(profile)]);
+      }
+    });
     this.connectionRevisionValue++;
     return profiles;
   }

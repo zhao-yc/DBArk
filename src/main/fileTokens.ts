@@ -1,7 +1,12 @@
 import type { ConnectionProfile } from '../shared/contracts';
 import type { ConnectionFileRequirement } from '../shared/connectionTransfer';
 
-export interface SelectedFile { path: string; purpose: string; format?: string; }
+export interface SelectedFile { path: string; purpose: string; format?: string; revokedConnections?: ReadonlySet<string>; }
+
+/** 授权原属窗口；受控替换仅撤销这些目标对既有认证选择的使用，不影响其它连接或源文件令牌。 */
+export function revokeConnectionFiles(ids: readonly string[], files: Map<string, SelectedFile>): void {
+  for (const [token, file] of files) if (file.purpose === 'key' || file.purpose === 'certificate') files.set(token, { ...file, revokedConnections: new Set([...file.revokedConnections ?? [], ...ids]) });
+}
 
 /** 仅解析当前窗口原生对话框创建且用途匹配的令牌，路径永远由主进程注入。 */
 export function resolveFileToken(files: ReadonlyMap<string, SelectedFile>, token: string, purpose: 'import' | 'export' | 'query' | 'connection-import' | 'connection-export', format?: string): string {
@@ -17,7 +22,7 @@ export function confirmConnectionFiles(input: ConnectionProfile, previous: Conne
   const paths: Record<ConnectionFileRequirement, string | undefined> = { sshPrivateKey: input.ssh?.privateKeyPath, tlsCa: input.tls?.caPath, tlsCert: input.tls?.certPath, tlsKey: input.tls?.keyPath };
   for (const item of pending) {
     const purpose = item === 'sshPrivateKey' || item === 'tlsKey' ? 'key' : 'certificate';
-    if (paths[item] && [...files.values()].some(file => file.purpose === purpose && file.path === paths[item])) pending.delete(item);
+    if (paths[item] && [...files.values()].some(file => file.purpose === purpose && file.path === paths[item] && !file.revokedConnections?.has(input.id))) pending.delete(item);
   }
   return { ...input, pendingFiles: pending.size ? [...pending] : undefined };
 }

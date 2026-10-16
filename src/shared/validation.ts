@@ -6,7 +6,7 @@ import { querySaveContentSchema, queryUpdateSourceSchema, querySourceBindingSche
 import{savedQueryPageInputSchema,savedQueryPageNextSchema,savedQueryPageReleaseSchema,savedQueryDeleteCheckedSchema}from'./savedQueryPages';
 import{historyPageInputSchema,historyReadSchema,historyErrorReadSchema}from'./historyPages';
 import{localSqlPageNextSchema,localSqlPageReleaseSchema}from'./localSqlPages';
-import { connectionFileRequirements, connectionImportApplySchema, connectionTransferLimits } from './connectionTransfer';
+import { connectionFileRequirements, connectionImportApplySchema, connectionImportReviewSchema, connectionTransferLimits } from './connectionTransfer';
 import type { Command, ResultExportData } from './contracts';
 import { validateResultExportData } from './resultExport';
 import { FILTER_LIMITS, validateFilterRules } from './filtering';
@@ -98,6 +98,8 @@ export const commandSchemas: Record<Command, z.ZodType> = {
   'app.setDirty': z.object({ dirty: z.boolean() }).strict(),
   'connections.export': z.object({ connectionIds: z.array(id).min(1).max(connectionTransferLimits.connections), fileToken: id }).strict(),
   'connections.importPreview': z.object({ fileToken: id }).strict(),
+  'connections.importReview': connectionImportReviewSchema,
+  'connections.importReviewRelease': z.object({ previewToken: id, confirmationToken: id }).strict(),
   'connections.importApply': connectionImportApplySchema,
   'connections.list': empty, 'connections.save': connectionSchema, 'connections.test': connectionSchema,
   'connections.delete': z.object({ id }).strict(), 'connections.open': z.object({ id }).strict(), 'connections.close': z.object({ id }).strict(),

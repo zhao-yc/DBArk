@@ -21,10 +21,21 @@ export const connectionTransferDocumentSchema = z.object({ format: z.literal('DB
 export type ConnectionTransferDocument = z.infer<typeof connectionTransferDocumentSchema>;
 export interface ConnectionImportEntry { sourceId: string; profile: ExportedConnectionProfile; warnings: string[]; matches: { id: string; name: string; reasons: ('id' | 'name' | 'target')[] }[]; }
 export interface ConnectionImportPreview { previewToken: string; expiresAt: string; entries: ConnectionImportEntry[]; }
-export interface ConnectionImportApply { previewToken: string; decisions: { sourceId: string; action: 'add' | 'skip' }[]; allowIncomplete?: boolean; }
+export const connectionReplacementAcknowledgements = ['review-target', 'clear-credentials', 'reselect-files', 'retain-linked-records'] as const;
+/** 新增/跳过不能夹带目标；替换只能明确引用本机目标ID，匹配提示从不生成替换决策。 */
+export const connectionImportDecisionSchema = z.discriminatedUnion('action', [
+  z.object({ sourceId: identifier, action: z.literal('add') }).strict(),
+  z.object({ sourceId: identifier, action: z.literal('skip') }).strict(),
+  z.object({ sourceId: identifier, action: z.literal('replace'), targetId: identifier.refine(value => !value.includes('\0'), '替换目标身份不能含NUL') }).strict(),
+]);
+export type ConnectionImportDecision = z.infer<typeof connectionImportDecisionSchema>;
+export const connectionImportReviewSchema = z.object({ previewToken: identifier, decisions: z.array(connectionImportDecisionSchema).min(1).max(connectionTransferLimits.connections) }).strict();
+export type ConnectionImportReviewInput = z.infer<typeof connectionImportReviewSchema>;
+export interface ConnectionImportReview { confirmationToken: string; expiresAt: string; entries: { sourceId: string; action: ConnectionImportDecision['action']; profile: ExportedConnectionProfile; previous?: ExportedConnectionProfile }[]; }
+export interface ConnectionImportApply extends ConnectionImportReviewInput { allowIncomplete?: boolean; confirmationToken?: string; acknowledgements?: typeof connectionReplacementAcknowledgements[number][]; }
 /** 确认结果返回完整公开连接列表，新增和跳过数量仅统计本批。 */
-export interface ConnectionImportResult { connections: ConnectionProfile[]; added: number; skipped: number; }
-export const connectionImportApplySchema = z.object({ previewToken: identifier, decisions: z.array(z.object({ sourceId: identifier, action: z.enum(['add', 'skip']) }).strict()).min(1).max(connectionTransferLimits.connections), allowIncomplete: z.boolean().optional() }).strict();
+export interface ConnectionImportResult { connections: ConnectionProfile[]; added: number; skipped: number; replaced?: number; replacementIds?: string[]; }
+export const connectionImportApplySchema = connectionImportReviewSchema.extend({ allowIncomplete: z.boolean().optional(), confirmationToken: identifier.optional(), acknowledgements: z.array(z.enum(connectionReplacementAcknowledgements)).max(connectionReplacementAcknowledgements.length).optional() }).strict();
 
 /** 路径只提取跨平台 basename，绝不把原路径或证书内容写入交换文件。 */
 function hint(path: string | undefined): string | undefined { return path?.split(/[\\/]/).at(-1) || undefined; }
@@ -56,6 +67,13 @@ export function importConnectionProfile(profile: ExportedConnectionProfile, id: 
     ...(profile.ssh ? { ssh: { enabled: profile.ssh.enabled, host: profile.ssh.host, port: profile.ssh.port, user: profile.ssh.user, hostFingerprint: profile.ssh.hostFingerprint } } : {}),
     ...(profile.tls ? { tls: { enabled: profile.tls.enabled, rejectUnauthorized: profile.tls.rejectUnauthorized } } : {}),
   };
+}
+
+/** 替换丢弃所有路径；旧认证文件即使被源概要省略也保留缺项，不能静默回退到另一认证方式。 */
+export function importReplacementProfile(profile: ExportedConnectionProfile, previous: ExportedConnectionProfile): ConnectionProfile {
+  const next = importConnectionProfile(profile, previous.id);
+  const pending = new Set([...next.pendingFiles ?? [], ...importConnectionProfile(previous, previous.id).pendingFiles ?? []]);
+  return { ...next, ...(pending.size ? { pendingFiles: [...pending] } : {}) };
 }
 
 /** 缺失文件不能静默切换认证方式；禁用部分仍保留标记，以便以后开启时继续阻止误连。 */

@@ -53,7 +53,13 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     selection: state.selection?.connectionId === connectionId ? { connectionId } : state.selection
   }));},
   /** 合并并立即展示配置修改，由持久化层合并连续写盘请求。 */
-  updateSettings: update => { const settings = { ...get().settings, ...update }; set({ settings }); persist(settings); },
+  updateSettings: update => {
+    const previous = get().settings, settings = { ...previous, ...update }; set({ settings });
+    // 标签身份立即投递到主进程；正文仍防抖。相同IPC通道中该事实先于随后发起的导入确认，不能留下400ms空闲窗口。
+    const identities = (value: AppSettings) => JSON.stringify(value.tabs.map(tab => [tab.id, tab.connectionId, tab.kind]));
+    if (identities(previous) !== identities(settings)) { clearTimeout(saveTimer); saveTimer = undefined; void invoke('settings.save', settings).catch(error => get().notify(errorMessage(error), true)); }
+    else persist(settings);
+  },
   /** 相同数据表复用已有标签，SQL 查询始终新建独立标签和会话。 */
   openTab: candidate => {
     const current = get().settings;
