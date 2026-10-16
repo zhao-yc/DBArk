@@ -1,4 +1,5 @@
 import{createHash}from'node:crypto';
+import { historyTimeMatches } from '../shared/historyTimeRange';
 import{historyPageInputSchema,historyRecordSchema,historyPageLimits,type HistoryPageInput,type HistoryPageEntry,type HistoryPagePosition}from'../shared/historyPages';
 import{savedQuerySearchLimits}from'../shared/savedQuerySearch';
 
@@ -15,6 +16,8 @@ function preview(source:string,limit:number){let end=Math.min(source.length,limi
 export function summarizeHistoryRecord(id:string,raw:string,request:HistoryPageInput,position:HistoryPagePosition):HistoryPageEntry|undefined{
  const input=historyPageInputSchema.parse(request),entry=parseHistoryRecord(id,raw);
  if(entry.startedAt!==position.startedAt||(entry.connectionId??'')!==position.connectionId)throw Error('执行历史来源或时间与索引不一致');
+ // 时间校验先于正文/状态筛选；遗留无时区记录不能被悄悄认作范围内或直接跳过。
+ if(!historyTimeMatches(entry.startedAt,input.timeRange))return;
  if(input.scope.kind==='connection'&&entry.connectionId!==input.scope.connectionId||input.scope.kind==='unbound'&&!!entry.connectionId)return;
  if(input.status==='success'&&!entry.success||input.status==='failed'&&entry.success)return;
  const needle=input.search.toLowerCase();if(needle&&!input.fields.some(field=>(entry[field]??'').toLowerCase().includes(needle)))return;
