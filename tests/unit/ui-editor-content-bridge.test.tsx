@@ -73,4 +73,32 @@ describe('真实锁定库、SqlEditor与模型端口的就绪合同（不是GUI�
     model.deferred = true; editor.nativeInput('迟到事件'); await act(async () => root!.unmount()); root = undefined; model.flush();
     expect(change).not.toHaveBeenCalled(); expect(model.content.size).toBe(0); expect(model.ending.size).toBe(0); expect(editor.ending.size).toBe(0);
   });
+  it('StrictMode加载后模型换代和卸载仍释放旧事件', async () => {
+    const old = vi.fn(), next = vi.fn(); await render(<React.StrictMode><SqlEditor value="初文" onChange={old}/></React.StrictMode>);
+    const editor = io.editors.find(editor => !editor.disposed)!, previous = editor.model; previous.deferred = true; editor.nativeInput('旧队列');
+    await render(<React.StrictMode><SqlEditor value="新props" onChange={next}/></React.StrictMode>);
+    const model = new ContentModelPort('其它正文'); await act(async () => { editor.setModel(model); previous.flush(); });
+    expect(old).not.toHaveBeenCalled(); expect(next).not.toHaveBeenCalled(); expect(previous.content.size).toBe(0); expect(model.getValue()).toBe('新props');
+    await act(async () => { editor.nativeInput('新用户正文'); }); expect(next).toHaveBeenCalledExactlyOnceWith('新用户正文');
+  });
+  it('取消的并发渲染不发布未提交props，旧可见编辑器继续使用原回调', async () => {
+    const committed = vi.fn(), speculative = vi.fn(), never = new Promise(() => {});
+    function Gate({ pending }: { pending: boolean }) { if (pending) throw never; return null; }
+    function View({ pending = false }: { pending?: boolean }) { return <React.Suspense fallback={<span>等待</span>}><SqlEditor value={pending ? '未提交正文' : '原文'} readOnly={pending} onChange={pending ? speculative : committed}/><Gate pending={pending}/></React.Suspense>; }
+    await render(<View/>); const editor = io.editors.find(editor => !editor.disposed)!;
+    await act(async () => { React.startTransition(() => root!.render(<View pending/>)); }); expect(editor.getValue()).toBe('原文'); expect(editor.readOnly).toBe(false);
+    await act(async () => { editor.nativeInput('仍可见输入'); }); expect(committed).toHaveBeenCalledExactlyOnceWith('仍可见输入'); expect(speculative).not.toHaveBeenCalled();
+    await render(<View/>); expect(editor.readOnly).toBe(false);
+  });
+  it.each([false, true])('布局effect隐藏/恢复只重建存活widget桥接，不重复动作或onReady；隐藏期间销毁=%s', async destroyed => {
+    const change = vi.fn(), ready = vi.fn(), never = new Promise(() => {});
+    function Gate({ pending }: { pending: boolean }) { if (pending) throw never; return null; }
+    function View({ pending = false }: { pending?: boolean }) { return <React.Suspense fallback={<span>等待</span>}><SqlEditor value="原文" onChange={change} onReady={ready}/><Gate pending={pending}/></React.Suspense>; }
+    await render(<View/>); const editor = io.editors.find(editor => !editor.disposed)!, actions = editor.actions.length, model = editor.model;
+    model.deferred = true; editor.nativeInput('隐藏前排队'); await render(<View pending/>); expect(editor.readOnly).toBe(true);
+    if (destroyed) editor.dispose(); await render(<View/>); model.flush(); expect(ready).toHaveBeenCalledTimes(1); expect(editor.actions).toHaveLength(actions); expect(change).not.toHaveBeenCalled();
+    expect(document.body.querySelectorAll('[aria-busy]').at(-1)?.getAttribute('aria-busy')).toBe(destroyed ? 'true' : 'false');
+    if (destroyed) { expect(editor.readOnly).toBe(true); expect(editor.nativeInput('不可复活')).toBe(false); expect(model.content.size).toBe(0); }
+    else { expect(editor.disposed).toBe(false); expect(editor.readOnly).toBe(false); expect(editor.getValue()).toBe('原文'); model.deferred = false; await act(async () => { editor.nativeInput('恢复后的输入'); }); expect(change).toHaveBeenCalledExactlyOnceWith('恢复后的输入'); }
+  });
 });
