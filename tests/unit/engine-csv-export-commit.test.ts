@@ -3,7 +3,7 @@ import { Readable } from 'node:stream';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { TaskEvent } from '../../src/shared/contracts';
 
-const ports = vi.hoisted(() => ({ connect: vi.fn(), execute: vi.fn(), tableInfo: vi.fn(), files: new Map<string, Buffer>(), pause: '' as string, fail: '' as string, entered: undefined as (() => void) | undefined, resume: undefined as Promise<void> | undefined, renames: 0, handles: 0 }));
+const ports = vi.hoisted(() => ({ connect: vi.fn(), execute: vi.fn(), tableInfo: vi.fn(), files: new Map<string, Buffer>(), pause: '' as string, fail: '' as string, entered: undefined as (() => void) | undefined, resume: undefined as Promise<void> | undefined, renames: 0, handles: 0, dataQueries: 0 }));
 vi.mock('../../src/engine/connection', () => ({ connect: ports.connect, execute: ports.execute }));
 vi.mock('../../src/engine/metadata', () => ({ tableInfo: ports.tableInfo }));
 // 只替换驱动和文件端口，实际 Engine、串流、目录与取消协议全部运行；不接触真实导出文件。
@@ -11,7 +11,7 @@ vi.mock('node:fs/promises', async original => ({ ...await original<typeof import
   open: async (path: string) => {
     ports.files.set(path, Buffer.alloc(0)); ports.handles++; let closed = false;
     return {
-      write: async (buffer: Buffer, offset: number, length: number) => { const size = Math.min(3, length); ports.files.set(path, Buffer.concat([ports.files.get(path)!, buffer.subarray(offset, offset + size)])); return { bytesWritten: size }; },
+      write: async (buffer: Buffer, offset: number, length: number) => { const size = Math.min(3, length); if (offset + size === buffer.length) await boundary('header'); ports.files.set(path, Buffer.concat([ports.files.get(path)!, buffer.subarray(offset, offset + size)])); return { bytesWritten: size }; },
       sync: () => boundary('sync'),
       close: async () => { if (closed) return; await boundary('close'); closed = true; ports.handles--; }
     };
@@ -30,12 +30,12 @@ const profile = { id: 'csv-commit-ram', name: '离线文件提交', group: '', c
 const info = { database: 'db', name: 't', objectKind: 'table', columns: [{ name: 'id', type: 'bigint unsigned', nullable: false, defaultValue: null, extra: '', comment: '', generated: false }], indexes: [], foreignKeys: [], primaryKey: ['id'], editableKey: ['id'], engine: 'InnoDB', charset: 'utf8mb4', collation: 'utf8mb4_bin', ddl: 'CREATE TABLE `t` (`id` bigint unsigned NOT NULL,PRIMARY KEY (`id`)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4' };
 let engine: Engine, events: TaskEvent[], release: (() => void) | undefined;
 beforeEach(async () => {
-  ports.files.clear(); ports.pause = ports.fail = ''; ports.entered = undefined; ports.resume = undefined; ports.renames = ports.handles = 0; events = []; release = undefined;
+  ports.files.clear(); ports.pause = ports.fail = ''; ports.entered = undefined; ports.resume = undefined; ports.renames = ports.handles = ports.dataQueries = 0; events = []; release = undefined;
   ports.connect.mockReset().mockImplementation(async () => {
-    const connection = new EventEmitter(); Object.assign(connection, { threadId: 1, query: () => ({ stream: () => Readable.from([['18446744073709551615']], { objectMode: true }) }), destroy() {} });
+    const connection = new EventEmitter(); Object.assign(connection, { threadId: 1, query: () => { ports.dataQueries++; return { stream: () => Readable.from([['18446744073709551615']], { objectMode: true }) }; }, destroy() {} });
     return { connection, profile, close: async () => {}, broken: false, sqlMode: '', serverStatus: 2, status: { dialect: 'mysql', version: '8.4.11' } };
   });
-  ports.execute.mockReset().mockResolvedValue({ rows: [] }); ports.tableInfo.mockReset().mockImplementation(async () => structuredClone(info));
+  ports.execute.mockReset().mockImplementation(async (_managed, sql: string) => { if (sql === 'START TRANSACTION WITH CONSISTENT SNAPSHOT') await boundary('transaction'); return { rows: [] }; }); ports.tableInfo.mockReset().mockImplementation(async () => structuredClone(info));
   engine = new Engine(event => events.push(event)); await engine.handle('connections.open', { id: profile.id, profile }); ports.files.set('ram-output', Buffer.from('原件'));
 });
 afterEach(async () => { release?.(); await engine.closeAll(); });
@@ -52,6 +52,12 @@ function preserved() { expect(ports.files.get('ram-output')!.toString()).toBe('�
 function expectedBytes(format: string): Buffer { return Buffer.from(format === 'csv' ? 'id\r\n18446744073709551615\r\n' : format === 'json' ? '[\n{"id":"18446744073709551615"}\n]\n' : "-- DBArk SQL 导出；请在目标数据库执行\nSET NAMES utf8mb4;\nINSERT INTO `t` (`id`) VALUES (_utf8mb4 X'3138343436373434303733373039353531363135');\n", 'utf8'); }
 
 describe.each([{ format: 'csv', selected: false, label: '默认全列CSV' }, { format: 'csv', selected: true, label: '选列CSV' }, { format: 'json', selected: false, label: 'JSON' }, { format: 'sql', selected: false, label: 'SQL' }])('表文件提交取消：$label', ({ selected, format }) => {
+  it.each(['header', 'transaction'])('%s等待期间接受取消后零次发送数据SELECT，不替换且清理partial与句柄', async stage => {
+    const request = await input(selected, format), entered = pause(stage), pending = engine.handle('files.export', request).catch(reason => reason);
+    await entered; await engine.handle('query.cancel', { taskId: 'export' }); release!();
+    expect(await pending).toBeInstanceOf(Error); expect(events.at(-1)?.status).toBe('cancelled'); expect(ports.dataQueries).toBe(0); expect(ports.renames).toBe(0); preserved();
+    await engine.handle('query.cancel', { taskId: 'export' }); expect(ports.dataQueries).toBe(0);
+  });
   it('正常导出维持既有格式完整字节与单次替换', async () => {
     expect(await engine.handle('files.export', await input(selected, format))).toEqual({ rows: 1 }); expect(ports.files.get('ram-output')).toEqual(expectedBytes(format)); expect(ports.renames).toBe(1); expect(ports.handles).toBe(0); expect([...ports.files.keys()]).toEqual(['ram-output']);
   });
