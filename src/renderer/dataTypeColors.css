@@ -1,0 +1,8 @@
+/* 仅设置字色；两套前景均针对既有未选中底色校验对比度，不改选择、焦点、边框或背景。 */
+:root{--data-type-text:#d6dde5;--data-type-number:#8fc7ff;--data-type-temporal:#f0c987;--data-type-json:#c8b4ff;--data-type-binary:#83dbc7;--data-type-null:#a5b4c3}
+:root[data-theme=light]{--data-type-text:#304860;--data-type-number:#1e5591;--data-type-temporal:#765015;--data-type-json:#68428f;--data-type-binary:#176457;--data-type-null:#566574}
+.data-type-text{color:var(--data-type-text)}.data-type-number{color:var(--data-type-number)}.data-type-temporal{color:var(--data-type-temporal)}.data-type-json{color:var(--data-type-json)}.data-type-binary{color:var(--data-type-binary)}.data-type-null{color:var(--data-type-null)}
+.data-type-color.data-type-null{color:var(--data-type-null)}
+/* 焦点/错误等状态保留网格继承前景；选中单元格/行另由组件直接移除语义类。 */
+.results-grid .rdg-cell:focus-within .data-type-color,.results-grid .rdg-cell[aria-invalid=true] .data-type-color,.results-grid .rdg-cell[aria-errormessage] .data-type-color{color:inherit}
+.data-type-legend{display:flex;flex-wrap:wrap;gap:8px 16px;list-style:none;margin:10px 0;padding:0;color:var(--text)}.data-type-legend li{display:flex;align-items:center;gap:6px}.data-type-swatch{display:inline-block;width:10px;height:10px;background:currentColor;border-radius:2px}.data-type-preference>p{margin:8px 0}

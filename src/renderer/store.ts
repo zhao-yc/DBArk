@@ -6,7 +6,7 @@ import type { ConnectionSelection } from './connectionChanges';
 import { completionServerFacts } from './completionServerFacts';
 
 export type WorkspaceTab = AppSettings['tabs'][number];
-const defaults: AppSettings = { theme: 'dark', sidebarWidth: 260, resultLimit: 1000, pageSize: 100, tabs: [] };
+const defaults: AppSettings = { theme: 'dark', sidebarWidth: 260, resultLimit: 1000, pageSize: 100, dataTypeColors: false, tabs: [] };
 let saveTimer: ReturnType<typeof setTimeout> | undefined;
 
 interface WorkspaceState {

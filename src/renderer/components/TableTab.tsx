@@ -24,6 +24,8 @@ import { tableGridZh } from '../locales/tableGrid.zh-CN';
 import { isBinaryCell } from '../binaryCell';
 import { blocksBinaryTextInput, tableCellKeyIsComposing } from '../tableCellKeyboard';
 import '../tableGrid.css';
+import { DataTypeColor } from './DataTypeColor';
+import { catalogColorType } from '../dataTypeColors';
 import { indexPatchZh } from '../locales/indexPatches.zh-CN';
 import { foreignKeyPatchZh } from '../locales/foreignKeyPatches.zh-CN';
 import { columnPatchZh } from '../locales/columnPatches.zh-CN';
@@ -331,8 +333,8 @@ export function TableTab({ tab, onDesign, onTransfer, onColumnPatches, onIndexPa
     editable: row => !record.dirty && !recordReadonlyReason(getRecordContext(), row, column.key),
     renderEditCell: props => <TextCellEditor {...props} binary={isBinaryCell(ownCell(props.row.data, column.key), info?.columns.find(item => item.name === column.key)?.type)}/>,
     renderHeaderCell: () => <span className="data-header">{info?.primaryKey.includes(column.key) && <KeyRound size={11}/>}<span>{column.name}<small className="column-type">{column.type}</small></span></span>,
-    renderCell: ({ row }) => { const value = ownCell(row.data, column.key); return <span className={value === null ? 'null-value' : value === undefined ? 'default-value' : ''} title={value === undefined ? zh.common.defaultValue : cellPreview(value)}>{value === undefined ? zh.common.defaultValue : cellPreview(value)}</span>; }
-  }))], [visibleColumns, preferences, editable, info, blocked, record.dirty, externalStale]);
+    renderCell: ({ row, tabIndex }) => { const value = ownCell(row.data, column.key); return <DataTypeColor enabled={settings.dataTypeColors === true} selected={tabIndex === 0 || selectedRows.has(row.id)} value={value} type={settings.dataTypeColors === true ? catalogColorType(info?.columns, column.key) : undefined} source="catalog" className={value === null ? 'null-value' : value === undefined ? 'default-value' : ''} title={value === undefined ? zh.common.defaultValue : cellPreview(value)}>{value === undefined ? zh.common.defaultValue : cellPreview(value)}</DataTypeColor>; }
+  }))], [visibleColumns, preferences, editable, info, blocked, record.dirty, externalStale, settings.dataTypeColors, settings.dataTypeColors === true ? selectedRows : null]);
   /** 刷新后网格可能保留同一活动坐标；点击也须用当前行同步选择，不能只等待坐标变化。 */
   function selectCurrentCell(row: DraftRow | undefined, key: string | undefined) {
     // 先永久撤销旧意图；忙碌时忽略新选择也不能让切走再切回的回包复活。

@@ -16,7 +16,7 @@ import { bindSavedQuery, queryConnectionDigest } from './queryBinding';
 import { parseSavedQueryRecord } from './savedQuerySearchMatch';
 
 export interface SecretProtector { available(): boolean; encrypt(value: string): string; decrypt(value: string): string; }
-export const defaultSettings: AppSettings = { theme: 'dark', sidebarWidth: 270, resultLimit: 1000, pageSize: 200, tabs: [] };
+export const defaultSettings: AppSettings = { theme: 'dark', sidebarWidth: 270, resultLimit: 1000, pageSize: 200, dataTypeColors: false, tabs: [] };
 
 /** 小型配置库在内存中运行 SQLite，写入时原子替换文件；无需打包本机 ABI 模块。 */
 export class LocalStore {
@@ -326,7 +326,11 @@ export class LocalStore {
   /** 更新任务概要并保留至多 200 条记录。 */
   saveTask(task: TaskRecord): void { this.mutate(() => { this.db.run('INSERT INTO tasks VALUES (?,?,?) ON CONFLICT(id) DO UPDATE SET data=excluded.data', [task.id, JSON.stringify(task), task.startedAt]); this.db.run('DELETE FROM tasks WHERE id NOT IN (SELECT id FROM tasks ORDER BY started_at DESC LIMIT 200)'); }); }
   /** 合并默认偏好，兼容缺少新增配置字段的旧记录。 */
-  settings(): AppSettings { return { ...defaultSettings, ...this.records<AppSettings>('SELECT data FROM settings WHERE id=1')[0] }; }
+  settings(): AppSettings {
+    const stored = this.records<AppSettings>('SELECT data FROM settings WHERE id=1')[0];
+    // 旧配置缺项或损坏标志一律关闭，不增加数据库迁移，也不从真值字符串猜偏好。
+    return { ...defaultSettings, ...stored, dataTypeColors: stored?.dataTypeColors === true };
+  }
   /** 独立配置表按需创建，旧库无收藏时返回空配置，不把秘密或工作区 SQL 混入收藏。 */
   workbench(): WorkbenchSnapshot {
     const document = this.records<unknown>('SELECT data FROM workbench WHERE id=1')[0];
@@ -345,7 +349,10 @@ export class LocalStore {
     return { revision, document: parsed.document };
   }
   /** 保存工作台快照；失败不会留下待下次提交的内存修改。 */
-  saveSettings(settings: AppSettings): void { this.mutate(() => this.db.run('INSERT INTO settings VALUES (1,?) ON CONFLICT(id) DO UPDATE SET data=excluded.data', [JSON.stringify(settings)])); }
+  saveSettings(settings: AppSettings): void {
+    // 直接存储入口同样拒绝非布尔值；未指定的旧调用仍兼容默认关闭。
+    if (settings.dataTypeColors !== undefined && typeof settings.dataTypeColors !== 'boolean') throw new Error('类型颜色偏好必须是布尔值');
+    this.mutate(() => this.db.run('INSERT INTO settings VALUES (1,?) ON CONFLICT(id) DO UPDATE SET data=excluded.data', [JSON.stringify(settings)])); }
   /** 关闭内存数据库并清除明文秘密，已成功保存的文件无需再次写入。 */
   close(): void { this.db.close(); this.volatileSecrets.clear(); }
 }
