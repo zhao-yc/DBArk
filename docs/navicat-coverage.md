@@ -10,7 +10,7 @@
 
 0.18 开发验收补充：[SQL 补全 22 项](../tests/integration/acceptance-v018-caret-input-20261016.md)、[数据表与记录视图补充](../tests/integration/acceptance-v018-grid-install-20261016.md)及[两项原生复制](../tests/integration/acceptance-v018-native-copy-20261016.md)已使用同一 Windows 候选实际执行并核对清理。另 [12 个开发组件](../tests/integration/acceptance-v018-native-components-20261016.md)在三平台临时原生 CI 各自实际通过并下载逐例核对，原 281 身份计划现已补全：246 个安装产品和 35 个组件；Mac 同身份不重复累加。这些计数不是功能覆盖比例。0.18现已公开：12附件/1075源码blob独立核对，公开Windows六项常用完整批及两端口各四场景SSH通过，实际EXE/ASAR与原候选相同；原计划未全套重跑，见[公开验收](../tests/integration/acceptance-v018-public-20261016.md)。
 
-0.19前期31项检查点仍保持[原来源](../tests/integration/acceptance-v019-common-source-20261016.md)。完整源值补取的选择令牌误失效已窄修，固定31在MySQL8.4/13384六批36身份正式界面全过；Maria OFF布尔格式另在固定ad修正后六组合各三项自增UI全过，未改服务器设置或原期待，资源核零。来源、不同基线及原失败见[第二轮实证](../tests/integration/acceptance-v019-copy-and-navigation-20261016.md)。Engine夹具清理P2已独审修复、组合33纯及类型过；原八例首例因既有实例缺少MDL观测条件在任何CREATE前停下，其余七项未执行、资源0，专用前提及独立正确性验收继续。0.19尚未发布。
+0.19前期31项检查点仍保持[原来源](../tests/integration/acceptance-v019-common-source-20261016.md)。完整源值补取的选择令牌误失效已窄修，固定31在MySQL8.4/13384六批36身份正式界面全过；Maria OFF布尔格式另在固定ad修正后六组合各三项自增UI全过，未改服务器设置或原期待，资源核零。固定dbd1新Windows候选已真实安装八批42身份通过，见[安装检查点](../tests/integration/acceptance-v019-windows-candidate-20261016.md)。Engine夹具永久清理门、诊断及观察别名原失败分别保留；固定8b在明文13384和严格TLS13484各七项核心全部通过，包含自然五分钟TTL、精度/并发/物理身份/预算及限权隔离，两轮资源核零，MDL仍未验，见[核心实证](../tests/integration/acceptance-d02-copy-source-actual-20261016.md)。完整317身份中同候选已验42、剩余本地261/65批和另列14项仍需执行；Windows CI输入准备失败、其它原生及公开附件继续，0.19尚未发布。
 
 | 编号 | 工作包 | 状态 | 验收要求 |
 | --- | --- | --- | --- |
