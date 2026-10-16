@@ -1240,6 +1240,8 @@ export class Engine {
         if (input.format === 'csv') await write(dataColumns.map(column => csvHeader(column.name)).join(',') + '\r\n');
         if (input.format === 'json') await write('[\n');
         if (!projection) { await this.statement(task, 'SET TRANSACTION ISOLATION LEVEL REPEATABLE READ'); await this.statement(task, 'START TRANSACTION WITH CONSISTENT SNAPSHOT'); }
+        // 表头写入和事务准备都可能等待；真正标记在途并发送SELECT前重核，已接受取消不能启动新流。
+        this.checkCancelled(task);
         task.inFlight = true; task.generation++;
         const options = { sql: `SELECT ${dataColumns.map(column => identifier(column.name)).join(', ')} FROM ${qualified(input.database, input.table)}`, rowsAsArray: true };
         // 与表页一样保留浮点二进制位，避免相邻唯一键导出后变成同一个短小数。
