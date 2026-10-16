@@ -8,7 +8,7 @@ on:
   workflow_dispatch:
     inputs:
       native_clipboard_components:
-        description: '在三个临时原生runner补验12项离线开发组件剪贴板用例'
+        description: '在三个临时原生runner补验13项离线开发组件剪贴板用例'
         required: false
         type: boolean
         default: false
@@ -21,6 +21,7 @@ concurrency:
 jobs:
   checks:
     name: 类型与单元测试
+    if: github.event_name != 'workflow_dispatch' || inputs.native_clipboard_components != true
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -36,11 +37,12 @@ jobs:
     name: ${{ matrix.label }}
     # 员工任务分支保留Linux完整检查；集成、PR、主分支、发行标签和明确手动运行仍走全部原生门。
     if: >-
-      github.event_name == 'pull_request' ||
+      (github.event_name == 'pull_request' ||
       github.event_name == 'workflow_dispatch' ||
       github.ref == 'refs/heads/main' ||
       startsWith(github.ref, 'refs/heads/task/parallel-integration-') ||
-      startsWith(github.ref, 'refs/tags/v')
+      startsWith(github.ref, 'refs/tags/v')) &&
+      (github.event_name != 'workflow_dispatch' || inputs.native_clipboard_components != true)
     strategy:
       fail-fast: false
       matrix:
@@ -92,7 +94,8 @@ jobs:
         with:
           name: 测试记录-${{ matrix.artifact }}
           path: test-results/
-  # 只在明确手动勾选时运行；两个夹具启动独立开发Electron，不计安装产品验收。
+  # 只在明确手动勾选时运行；三个夹具启动独立开发Electron，不计安装产品验收。
+  # 合成数据仅写临时原生runner剪贴板；空剪贴板恢复结果不能外推本机富格式恢复。
   native-clipboard-components:
     name: 离线开发组件原生剪贴板 · ${{ matrix.label }}
     if: github.event_name == 'workflow_dispatch' && inputs.native_clipboard_components == true
@@ -121,11 +124,14 @@ jobs:
       - run: corepack enable
       - run: pnpm install --frozen-lockfile
       - run: pnpm exec install-electron
-      - name: 仅验两个离线开发组件（12项，不计安装产品）
+      # 锚定既定13项标题，避免二进制文件内其他用例混入；单worker、单次、0retry。
+      - name: 仅验13项离线开发组件（不计安装产品）
         run: >-
           pnpm exec playwright test
           tests/e2e/query-binary-types-offline.spec.ts
           tests/e2e/record-input-guards-offline.spec.ts
+          tests/e2e/binary-cell-offline.spec.ts
+          --grep='(?:^|\s)(?:wire BLOB中的TEXT LONGTEXT及NULL双击和Enter均不打开字节查看器|真实字节及空字节保留双击Enter与只读守卫，重复别名标题按name值按key|document全量超限原生粘贴整次拒绝，不能暂存合法前缀|document满预算合法dirty输入的选区替换拒绝后，仅暂存旧完整值|document非法旧缓冲遇到超限粘贴仍不可暂存，修正后完整恢复|documentCRLF沿用原生选区语义，Unicode完整替换且UTF8超限不接收前缀|document可信普通输入与组合提交的完整值也经预算兜底，旧缓冲不变|node全量超限原生粘贴整次拒绝，不能暂存合法前缀|node满预算合法dirty输入的选区替换拒绝后，仅暂存旧完整值|node非法旧缓冲遇到超限粘贴仍不可暂存，修正后完整恢复|nodeCRLF沿用原生选区语义，Unicode完整替换且UTF8超限不接收前缀|node可信普通输入与组合提交的完整值也经预算兜底，旧缓冲不变|单元格及记录表单真实剪贴板超限不截断，选区替换整次拒绝，合法边界可暂存)$'
           --workers=1 --retries=0 --reporter="list,json"
         env:
           DBARK_QUERY_BINARY_NATIVE_ENABLED: '1'
