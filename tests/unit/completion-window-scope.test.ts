@@ -6,7 +6,7 @@ import{SessionObjects}from'../../src/engine/sessionObjects';
 import{SessionCompletionDirectory}from'../../src/renderer/sessionCompletionDirectory';
 
 /** 真实解析器提供作用域；仅目录读取使用可检查的替身，不模拟语义结果。 */
-function analyze(marked:string):CompletionAnalysisReady{const result=analyzeCompletion(marked.replace('|',''),marked.indexOf('|'));expect(result.status).toBe('ready');if(result.status!=='ready')throw Error('分析未就绪');return result;}
+function analyze(marked:string):CompletionAnalysisReady{const result=analyzeCompletion(marked.replace('|',''),marked.indexOf('|'),{},{windowFunctions:true});expect(result.status).toBe('ready');if(result.status!=='ready')throw Error('分析未就绪');return result;}
 function directory(){return{load:vi.fn(async(query:CompletionDirectoryRequest)=>({entries:query.kind==='columns'?[{name:query.table==='users'?'user_value':'order_value',kind:'column' as const}]:[],incomplete:false}))};}
 
 describe('普通SELECT窗口字段作用域',()=>{
@@ -28,7 +28,7 @@ describe('普通SELECT窗口字段作用域',()=>{
     'SELECT ROW_NUMBER() OVER w FROM users u WINDOW base AS(ORDER BY u.id),w AS(base ORDER BY u.|)',
     'SELECT ROW_NUMBER() OVER(ORDER BY u.id ROWS | PRECEDING) FROM users u',
     'SELECT ROW_NUMBER() OVER(ORDER BY u.id RANGE BETWEEN | PRECEDING AND CURRENT ROW) FROM users u',
-  ])('未知或覆盖排序的继承窗口及帧边界不猜字段：%s',marked=>{expect(analyzeCompletion(marked.replace('|',''),marked.indexOf('|'))).toMatchObject({status:'blocked'});});
+  ])('未知或覆盖排序的继承窗口及帧边界不猜字段：%s',marked=>{expect(analyzeCompletion(marked.replace('|',''),marked.indexOf('|'),{},{windowFunctions:true})).toMatchObject({status:'blocked'});});
   it('窗口子查询自己的ORDER仍能使用自己的输出别名',()=>{const a=analyze('SELECT u.id AS outer_alias FROM users u ORDER BY SUM(u.id) OVER(ORDER BY (SELECT 1 AS inner_alias ORDER BY inn|suffix))');expect(a.outputAliases?.aliases).toEqual(['inner_alias']);});
   it('已取消窗口补全不读取目录，不改变目录预算',async()=>{const d=directory(),controller=new AbortController();controller.abort();const r=await completionSuggestions(analyze('SELECT ROW_NUMBER() OVER(ORDER BY u.|) FROM users u'),'db',d,controller.signal);expect(r.items).toEqual([]);expect(d.load).not.toHaveBeenCalled();});
   it.each([
@@ -36,7 +36,7 @@ describe('普通SELECT窗口字段作用域',()=>{
     'SELECT u.id FROM users u UNION ALL SELECT o.id FROM orders o ORDER BY SUM(id) OVER(PARTITION BY o.ord|suffix)',
     '(SELECT u.id FROM users u) UNION ALL (SELECT o.id FROM orders o) ORDER BY SUM(id) OVER(ORDER BY out|suffix)',
     'SELECT u.id FROM users u UNION SELECT o.id FROM orders o ORDER BY SUM(id) OVER(ORDER BY |)',
-  ])('集合全局ORDER内窗口保守停止，不借末分支字段或函数目录：%s',async marked=>{const a=analyzeCompletion(marked.replace('|',''),marked.indexOf('|')),d=directory();if(a.status==='ready')await completionSuggestions(a,'db',d);expect(d.load).not.toHaveBeenCalled();expect(a.status).toBe('blocked');});
+  ])('集合全局ORDER内窗口保守停止，不借末分支字段或函数目录：%s',async marked=>{const a=analyzeCompletion(marked.replace('|',''),marked.indexOf('|'),{},{windowFunctions:true}),d=directory();if(a.status==='ready')await completionSuggestions(a,'db',d);expect(d.load).not.toHaveBeenCalled();expect(a.status).toBe('blocked');});
   it.each([
     ['SELECT ROW_NUMBER() OVER(ORDER BY u.use|suffix) FROM users u UNION ALL SELECT o.id FROM orders o','users','`user_value`'],
     ['SELECT u.id FROM users u UNION ALL SELECT ROW_NUMBER() OVER(ORDER BY o.ord|suffix) FROM orders o','orders','`order_value`'],
@@ -61,5 +61,5 @@ describe('普通SELECT窗口字段作用域',()=>{
     'SELECT ROW_NUMBER() OVER(ORDER BY u.id ROW|S BETWEEN 1 PRECEDING AND CURRENT ROW) FROM users u',
     'SELECT ROW_NUMBER() OVER w FROM users u WINDOW w AS(ORDER BY u.id RANGE BETWEEN UNBOUNDED PRECEDING AND CUR|RENT ROW)',
     'SELECT ROW_NUMBER() OVER(ORDER BY u.id ROWS BETWEEN (SELECT 1 AS inner_alias ORDER BY inn|suffix) PRECEDING AND CURRENT ROW) FROM users u',
-  ])('帧位置即使解析恢复丢失分支也停止，不请求字段或函数目录：%s',async marked=>{const a=analyzeCompletion(marked.replace('|',''),marked.indexOf('|')),d=directory();if(a.status==='ready')await completionSuggestions(a,'db',d);expect(d.load).not.toHaveBeenCalled();expect(a.status).toBe('blocked');});
+  ])('帧位置即使解析恢复丢失分支也停止，不请求字段或函数目录：%s',async marked=>{const a=analyzeCompletion(marked.replace('|',''),marked.indexOf('|'),{},{windowFunctions:true}),d=directory();if(a.status==='ready')await completionSuggestions(a,'db',d);expect(d.load).not.toHaveBeenCalled();expect(a.status).toBe('blocked');});
 });

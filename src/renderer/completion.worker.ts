@@ -11,7 +11,7 @@ self.onmessage=(event:MessageEvent<{id:number;source:string;offset:number;mode:C
   const mode=input.mode??{};
   if([mode.ansiQuotes,mode.noBackslashEscapes].some(value=>value!==undefined&&typeof value!=='boolean')){self.postMessage({id:input.id,result:{status:'blocked',reason:'mode'}});return;}
   // 本地能力缺省关闭；未知字段和非布尔值不能让未核验服务器获得LATERAL作用域。
-  const capabilities=input.capabilities;if(capabilities!==undefined&&(!capabilities||typeof capabilities!=='object'||Array.isArray(capabilities)||Object.keys(capabilities).some(key=>key!=='lateralDerivedTables')||capabilities.lateralDerivedTables!==undefined&&typeof capabilities.lateralDerivedTables!=='boolean')){self.postMessage({id:input.id,result:{status:'blocked',reason:'capability'}});return;}
+  const capabilities=input.capabilities;if(capabilities!==undefined&&(!capabilities||typeof capabilities!=='object'||Array.isArray(capabilities)||Object.keys(capabilities).some(key=>!['lateralDerivedTables','windowFunctions'].includes(key))||[capabilities.lateralDerivedTables,capabilities.windowFunctions].some(value=>value!==undefined&&typeof value!=='boolean'))){self.postMessage({id:input.id,result:{status:'blocked',reason:'capability'}});return;}
   self.postMessage({id:input.id,result:analyzeCompletion(input.source,input.offset,mode,capabilities)});
 };
 

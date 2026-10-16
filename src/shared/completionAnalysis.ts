@@ -4,6 +4,7 @@ import {completionLexicalContext,completionIdentifier,completionAliasIdentifier,
 import {completionLimits} from './sqlCompletion';
 import{completionQueryBranches,completionBranchAt,completionOutputContext}from'./completionQueryScope';
 import{completionWindowContext}from'./completionWindowScope';
+import { completionNamedWindows } from './completionNamedWindows';
 import{completionLateralTokens,completionLateralScope,completionLateralAllows}from'./completionLateralScope';
 import type{CompletionScopeCapabilities}from'./completionCapabilities';
 
@@ -17,7 +18,7 @@ export type CompletionSyntax='database'|'relation'|'column'|'function'|'procedur
 export interface CompletionOutputAliases{clause:'order'|'group'|'having';union:boolean;aliases:string[];columns:string[];catalogs:CompletionCatalogSource[];localNames:string[];localCount:number;incomplete:boolean}
 export interface CompletionAnalysisReady{
   status:'ready';target:CompletionLexicalContext['target'];syntax:CompletionSyntax[];keywords:string[];
-  relations:CompletionRelation[];localRelations:string[];columnMode:'expression'|'insert-list';incomplete:boolean;outputAliases?:CompletionOutputAliases;
+  relations:CompletionRelation[];localRelations:string[];columnMode:'expression'|'insert-list';incomplete:boolean;windowNames?:string[];outputAliases?:CompletionOutputAliases;
 }
 export type CompletionAnalysis=CompletionAnalysisReady|{status:'blocked';reason:string};
 interface Cte{name:string;columns?:string[];start:number;end:number;bodyStart:number;bodyEnd:number;scopeEnd:number;recursive:boolean}
@@ -103,11 +104,19 @@ export function analyzeCompletion(source:string,offset:number,mode:CompletionLex
     // 仅新增继承路径要求当前分支完整语法；使用独立静默解析器，不改变已收集实体或回显SQL。
     let expansions=0,truncated=false;const branches=completionQueryBranches(queries,normalizedTokens),windowContext=completionWindowContext(branches,normalizedTokens,normalized.caret,targetToken?.kind==='word'?targetToken.value:undefined,(start,end)=>new QuietMySQL().validate(normalized.text.slice(start,end)).length===0);
     if(windowContext==='unsupported')return{status:'blocked',reason:'syntax'};
+    if(windowContext&&capabilities.windowFunctions!==true)return{status:'blocked',reason:'capability'};
     const lateral=completionLateralScope(tables,branches,normalizedTokens);if(lateral.status==='blocked'||hasLateral&&!lateral.boundaries.length)return{status:'blocked',reason:'syntax'};
     const lateralByEntity=new Map(lateral.boundaries.map(boundary=>[boundary.entity,boundary]));
     // 集合边界独立于输出别名展示；尚未支持的全局窗口不能回退到末分支FROM来源。
     const outputContext=completionOutputContext(branches,normalizedTokens,normalized.caret);
     if(windowContext&&outputContext?.union)return{status:'blocked',reason:'syntax'};
+    const namedWindows=completionNamedWindows(branches,normalizedTokens,normalized.caret,(start,end)=>new QuietMySQL().validate(normalized.text.slice(start,end)).length===0);
+    if(namedWindows){
+      if(capabilities.windowFunctions!==true)return{status:'blocked',reason:'capability'};
+      if('blocked' in namedWindows)return{status:'blocked',reason:namedWindows.reason};
+      if(outputContext?.union)return{status:'blocked',reason:'syntax'};
+      return{status:'ready',target:lexical.target,syntax:[],keywords:[],relations:[],localRelations:[],columnMode:'expression',incomplete:false,windowNames:namedWindows.names};
+    }
     /** 引用名和字符串别名均回到原token解码，不能把已脱敏的'0'当成真实别名。 */
     function aliasName(alias:{startIndex:number}|null|undefined):string|undefined{if(!alias)return;const origin=normalized.origins.get(alias.startIndex);if(!origin)return;if(origin.kind==='string')return stringAlias(source,origin,mode);return completionAliasIdentifier(origin.value)&&origin.value!==normalized.sentinel?origin.value:undefined;}
     /** 语法库可能把UNION各分支放进同一个语句范围，表来源还须按同层UNION边界核对。 */

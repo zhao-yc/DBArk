@@ -8,6 +8,8 @@ interface Directory{load:(query:CompletionDirectoryRequest,signal?:AbortSignal)=
 /** 将有界语义目标转成惰性目录读取，不预取全库、前20张表或用户任意SQL。 */
 export async function completionSuggestions(analysis:CompletionAnalysisReady,database:string|undefined,directory:Directory,signal?:AbortSignal,dialect?:'mysql'|'mariadb'):Promise<SqlCompletionItems>{
   if(signal?.aborted)return{items:[],incomplete:false,unavailable:false};
+  // 窗口名称是本块本地符号；不混合字段、函数、输出别名或目录读取。
+  if(analysis.windowNames!==undefined){const names=analysis.windowNames.filter(name=>completionIdentifier(name)&&name.toLowerCase().startsWith(analysis.target.prefix.toLowerCase()));return{items:names.slice(0,completionLimits.suggestions).map(name=>({label:name,kind:'alias' as const,insertText:quote(name),detail:text.namedWindow})),incomplete:analysis.incomplete||names.length>completionLimits.suggestions,unavailable:false};}
   const {target}=analysis,prefix=target.prefix,qualifiers=target.qualifiers,items:SqlCompletionItem[]=[],jobs:Promise<void>[]=[],keys=new Set<string>(),requests=new Map<string,Promise<CompletionMetadataOutput>>(),output=analysis.outputAliases,localColumns=new Set<string>(),starNames:string[]=[];let incomplete=analysis.incomplete,unavailable=false,sessionUncertain=false,reads=0,localComplete=true,starsComplete=true;
   const matches=(name:string)=>name.toLowerCase().startsWith(prefix.toLowerCase());
   /** 基线服务器按UTF-8字节截断输出名；离线或未确认方言时采用两种方言共同可引用的范围。 */
