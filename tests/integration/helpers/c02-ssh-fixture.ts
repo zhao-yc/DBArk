@@ -6,10 +6,13 @@ import { identifier, qualified } from '../../../src/engine/sql';
 import type { ConnectionProfile } from '../../../src/shared/contracts';
 import { C02FixtureError, c02Failure, c02Names, c02OwnsTables, c02OwnsUser, cleanupC02, type C02Ownership } from './c02-mtls-policy';
 import { c02SshConfig, c02SshVersion } from './c02-ssh-policy';
+import { c02SshCanonicalPaths } from './c02-ssh-paths';
 
 type Row = Record<string, unknown>;
 export interface C02SshLease {
-  readonly profile: ConnectionProfile; readonly database: string; readonly user: string; readonly marker: string; readonly tempParent: string;
+  readonly profile: ConnectionProfile; readonly database: string; readonly user: string; readonly marker: string;
+  /** 已通过真实身份目录隔离，桌面夹具必须直接使用此规范实际路径。 */
+  readonly tempParent: string;
   observeApplicationThreads(): Promise<number[]>;
 }
 export interface C02SshEvidence { port: number; version: string; ownerSupported: boolean; database: string; user: string; observedConnectionIds: number[] }
@@ -27,16 +30,19 @@ async function sql(connection: ManagedConnection, text: string, params: (string 
 
 /** 不重复旧核心：管理连接仅准备/观察精确资源，SSH正负认证及查询留给正式UI和utility。 */
 export async function withC02SshLease(env: NodeJS.ProcessEnv, use: (lease: C02SshLease) => Promise<void>): Promise<C02SshEvidence> {
-  const config = c02SshConfig(env), { database, user, account } = c02Names(randomBytes(6).toString('hex')), owner = randomBytes(16).toString('hex');
+  const config = c02SshConfig(env);
+  // 默认门禁先于任何文件访问；真实路径隔离必须先于建连及回调中的userData创建。
+  const paths = await c02SshCanonicalPaths(config);
+  const { database, user, account } = c02Names(randomBytes(6).toString('hex')), owner = randomBytes(16).toString('hex');
   const table = qualified(database, 'subject'), password = `Cp!9${randomBytes(24).toString('hex')}`;
   const profile: ConnectionProfile = { id: randomUUID(), name: 'C02 SSH 管理观察', group: '', color: '#123456', dialect: config.dialect, host: config.host, port: config.port, user: config.adminUser, password: config.adminPassword,
-    ssh: { enabled: true, host: config.sshHost, port: config.sshPort, user: config.sshUser, privateKeyPath: config.keyPath, hostFingerprint: config.fingerprint },
+    ssh: { enabled: true, host: config.sshHost, port: config.sshPort, user: config.sshUser, privateKeyPath: paths.keyPath, hostFingerprint: config.fingerprint },
     ...(config.caPath ? { tls: { enabled: true, rejectUnauthorized: true, caPath: config.caPath } } : {}) };
   let admin: ManagedConnection | undefined, failure: unknown, version = '', ownerSupported = false;
   let userOwnership: C02Ownership = 'absent', databaseOwnership: C02Ownership = 'absent';
   const ids = new Set<number>();
-  /** 只核对文件元数据，不读、复制、哈希或改写现存私钥内容；正式驱动仅在ROOT执行时读取。 */
-  const file = async (path: string): Promise<void> => { const info = await lstat(path); check(info.isFile() && !info.isSymbolicLink(), 'C02 SSH 显式身份或CA路径不是普通文件'); };
+  /** CA只核对文件元数据；身份已在连接前完成真实路径与普通文件检查，不读取其内容。 */
+  const file = async (path: string): Promise<void> => { const info = await lstat(path); check(info.isFile() && !info.isSymbolicLink(), 'C02 SSH 显式CA路径不是普通文件'); };
   /** 权限目录只允许subject表SELECT，不读认证哈希或执行SHOW GRANTS。 */
   const assertGrants = async (): Promise<void> => {
     const grants = await sql(admin!, 'SELECT TABLE_SCHEMA AS db,TABLE_NAME AS name,PRIVILEGE_TYPE AS privilege,IS_GRANTABLE AS grantable FROM information_schema.TABLE_PRIVILEGES WHERE GRANTEE=?', [account]);
@@ -45,8 +51,7 @@ export async function withC02SshLease(env: NodeJS.ProcessEnv, use: (lease: C02Ss
     check((await sql(admin!, 'SELECT 1 FROM mysql.role_edges WHERE TO_USER=? AND TO_HOST=?', [user, '%'])).length === 0, 'C02 SSH 临时用户出现额外角色');
   };
   try {
-    const parent = await lstat(config.tempParent); check(parent.isDirectory() && !parent.isSymbolicLink(), 'C02 SSH 显式临时父路径不是普通目录');
-    await file(config.keyPath); if (config.caPath) await file(config.caPath);
+    if (config.caPath) await file(config.caPath);
     admin = await connect(profile);
     version = String((await sql(admin, 'SELECT VERSION() AS version'))[0]?.version);
     const support = c02SshVersion(config.port, version); check(support.targetMatches, 'C02 SSH 目标端口与实际版本不匹配，未创建对象'); ownerSupported = support.ownerSupported;
@@ -62,7 +67,7 @@ export async function withC02SshLease(env: NodeJS.ProcessEnv, use: (lease: C02Ss
       userOwnership = 'unknown'; await sql(admin, `CREATE USER ${account} IDENTIFIED BY '${password}'${config.caPath ? ' REQUIRE SSL' : ''} ATTRIBUTE '{"dbarkC02Owner":"${owner}"}'`); userOwnership = 'confirmed';
       await sql(admin, `GRANT SELECT ON ${table} TO ${account}`); await assertGrants();
       let active = true;
-      try { await use({ profile: { ...profile, id: randomUUID(), name: 'C02 SSH 一次性SELECT', user, password, database }, database, user, marker: owner, tempParent: config.tempParent,
+      try { await use({ profile: { ...profile, id: randomUUID(), name: 'C02 SSH 一次性SELECT', user, password, database }, database, user, marker: owner, tempParent: paths.tempParent,
         observeApplicationThreads: async () => { check(active, 'C02 SSH 租约已归还'); return (await sql(admin!, 'SELECT ID FROM information_schema.PROCESSLIST WHERE USER=?', [user])).map(row => { const id = Number(row.ID); check(Number.isSafeInteger(id) && id > 0, 'C02 SSH 线程编号无效'); ids.add(id); return id; }); },
       }); } finally { active = false; }
       await assertGrants();

@@ -1,4 +1,5 @@
-import { dirname, isAbsolute, relative, resolve, sep } from 'node:path';
+import * as paths from 'node:path';
+import { isAbsolute } from 'node:path';
 import { C02FixtureError } from './c02-mtls-policy';
 
 export const c02SshPorts = [13357, 13380, 13384, 13310, 13311, 13484] as const;
@@ -24,6 +25,12 @@ export function c02WrongSshFingerprint(actual: string): string {
   return `SHA256:${bytes.toString('base64').replace(/=+$/, '')}`;
 }
 
+/** 同步配置和真实路径复核共用目录边界；按平台处理大小写、跨盘及以..开头的普通子目录名。 */
+export function c02SshAssertSeparatePaths(keyPath: string, tempParent: string, path = paths): void {
+  const fromIdentityDirectory = path.relative(path.dirname(path.resolve(keyPath)), path.resolve(tempParent));
+  if (!fromIdentityDirectory || !path.isAbsolute(fromIdentityDirectory) && fromIdentityDirectory !== '..' && !fromIdentityDirectory.startsWith(`..${path.sep}`)) throw new C02FixtureError('C02 SSH 临时目录不能位于原身份目录内');
+}
+
 /** SSH字段只消费ROOT解析ssh -G的显式值，指纹来自其已认证记录；不运行ssh、不读配置/env/身份文件。 */
 export function c02SshConfig(env: NodeJS.ProcessEnv): C02SshConfig {
   if (!c02SshEnabled(env)) throw new C02FixtureError('C02 SSH UI 尚未显式启用');
@@ -39,8 +46,7 @@ export function c02SshConfig(env: NodeJS.ProcessEnv): C02SshConfig {
   const serverUuid = env.DBARK_C02_SSH_DB_UUID;
   if ([13380, 13384, 13484].includes(port) && !/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(serverUuid ?? '')) throw new C02FixtureError('MySQL8 目标必须由 ROOT 显式提供已核对的 server_uuid');
   const keyPath = path('DBARK_C02_SSH_KEY_PATH'), tempParent = path('DBARK_C02_SSH_TEMP_PARENT');
-  const fromIdentityDirectory = relative(dirname(resolve(keyPath)), resolve(tempParent));
-  if (!fromIdentityDirectory || !isAbsolute(fromIdentityDirectory) && fromIdentityDirectory !== '..' && !fromIdentityDirectory.startsWith(`..${sep}`)) throw new C02FixtureError('C02 SSH 临时目录不能位于原身份目录内');
+  c02SshAssertSeparatePaths(keyPath, tempParent);
   return { host: '192.168.31.200', port, dialect: [13310, 13311].includes(port) ? 'mariadb' : 'mysql', serverUuid: serverUuid?.toLowerCase(),
     adminUser: text('DBARK_C02_SSH_ADMIN_USER'), adminPassword: text('DBARK_C02_SSH_ADMIN_PASSWORD'), sshHost: '192.168.31.200', sshPort: number('DBARK_C02_SSH_PORT'), sshUser: text('DBARK_C02_SSH_USER'),
     keyPath, fingerprint, tempParent, caPath: port === 13484 ? path('DBARK_C02_SSH_TLS_CA_PATH') : undefined };
