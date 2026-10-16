@@ -7,11 +7,21 @@
 | 项目 | 选择及官方依据 |
 | --- | --- |
 | 基础镜像 | `alpine:3.23.6`，固定 amd64 manifest `sha256:1f3591b8a02ea153f41c5bba878ad477f63ab3d19349762cb77504db02a23e15`；[Docker 官方 repo-info](https://github.com/docker-library/repo-info/blob/master/repos/alpine/remote/3.23.6.md)。这不是多架构 index 摘要。 |
-| OpenSSH | Alpine v3.23/main/x86_64 的 `openssh-server`、`openssh-keygen`、`openssh-server-common` 固定 `10.2_p1-r0`，使用 `--no-upgrade`；[官方 server 包页](https://pkgs.alpinelinux.org/package/v3.23/main/x86_64/openssh-server)、[官方 keygen 包页](https://pkgs.alpinelinux.org/package/v3.23/main/x86_64/openssh-keygen)。 |
+| OpenSSH | Alpine v3.23/main/x86_64 的 `openssh-server`、`openssh-keygen`、`openssh-server-common` 固定 `10.2_p1-r0`，使用 `apk add --no-cache`，不传 `--upgrade/-u` 或 `--latest/-l`；[官方 server 包页](https://pkgs.alpinelinux.org/package/v3.23/main/x86_64/openssh-server)、[官方 keygen 包页](https://pkgs.alpinelinux.org/package/v3.23/main/x86_64/openssh-keygen)。 |
 | 客户端格式 | 当前锁定依赖 `ssh2@1.17.0`；[该版本官方说明](https://github.com/mscdex/ssh2/blob/v1.17.0/README.md)。新 Ed25519 client key 使用现代 OpenSSH 容器、`aes256-ctr`、bcrypt 16 轮；正确、错误及缺失口令在本机真实解析。 |
 | 转发与会话策略 | [OpenSSH 官方 sshd_config 手册](https://man.openbsd.org/sshd_config)解释 `PermitOpen`、`AllowTcpForwarding` 和 `MaxSessions 0`；后者保留转发并禁止 shell/login/subsystem。 |
 
-Dockerfile 固定基础摘要和 OpenSSH 包版本，并在镜像内记录 `packages.lock`。尚未真实构建，因此不声称仓库仍可安装、依赖完整可重现、容器可启动或 `chpasswd -c sha512` 已通过目标环境检查。依赖不可满足时应失败，不能改用浮动包或其它镜像继续。200 必须实测为 Linux x86_64；其它架构不在此准备范围内。
+Dockerfile 固定基础摘要和 OpenSSH 包版本，并在镜像内记录 `packages.lock`。尚未完成真实构建，因此不声称仓库仍可安装、依赖完整可重现、容器可启动或 `chpasswd -c sha512` 已通过目标环境检查。依赖不可满足时应失败，不能改用浮动包或其它镜像继续。200 必须实测为 Linux x86_64；其它架构不在此准备范围内。
+
+## apk 3 参数兼容修正与原失败
+
+ROOT 在200的原 run826 构建失败；run827、run828 的固定构建诊断仍未完成镜像，镜像/容器/网络均为0。公开的 `run828-c02-build-diagnostic.log` 已显示基础摘要解析并命中缓存，随后在包安装前拒绝 `--no-upgrade`。这些原失败记录保留，不能改写为已通过或归因于尚未执行的包安装、sshd、认证或网络步骤。
+
+[官方 apk-tools v3.0.4 的 apk-add 手册](https://github.com/alpinelinux/apk-tools/blob/v3.0.4/doc/apk-add.8.scd)说明：默认 `apk add` 避免改动已安装包，新增包或其依赖需要时仍可能变更；`--upgrade/-u` 才请求优先升级。本次删除该版本不支持的 `--no-upgrade`，沿用默认求解策略，不替换成 `--upgrade=no`。这表示“不请求升级既有包”，不表示冻结所有传递依赖。基础摘要、三个精确包版本、失败即停止的 `&&` 链、版本检查及权限策略保持，不增加浮动回退。
+
+本修正从 `ff8569ffe9e6afe498fb09fcd786eb30d1ca2903` 的普通分支提交；只做源码、纯断言、语法与类型检查，不读取真实环境或密钥，不执行GUI、SSH、200、Docker或手动CI。新增 Dockerfile 纯断言核对固定来源、精确安装参数、无升级请求及无失败回退；它不执行 apk，实际包安装、镜像构建、容器启动和OpenSSH互通仍待 ROOT 以新run核定。
+
+本次34项Node纯检查通过（Dockerfile约束2项、内存fixture20项、假协议端口12项），另有7项Python内存策略、`tsc --noEmit`、entrypoint及提取的Dockerfile RUN块的Bash `-n`通过。Bash只解析语法，不执行脚本；Dockerfile反向恢复参数并去掉新增注释后与固定基线逐字一致。
 
 ## 范围与权限
 
