@@ -28,6 +28,6 @@ const tab: WorkspaceTab = { id: 'offline-table', kind: 'table', connectionId: 'o
 /** 夹具提供外部结构刷新和连接版本变化，以验证正在查找及预览的生命周期。 */
 function Fixture() {
   const [refresh, setRefresh] = useState(0);
-  return <div style={{ height: '100vh', display: 'flex', flexDirection: 'column' }}><div><button onClick={() => setRefresh(value => value + 1)}>夹具外部结构变化</button><button onClick={() => useWorkspace.getState().invalidateConnection('offline')}>夹具连接变化</button></div><div style={{ flex: 1, minHeight: 0 }}><TableTab tab={tab} refreshVersion={refresh} refreshAutomatically={false} onDesign={() => {}} onTransfer={() => {}} onColumnPatches={() => {}} onIndexPatches={() => {}} onForeignKeyPatches={() => {}} onTableRename={() => {}} onTableComment={() => {}} onTableDefaultEncoding={() => {}}/></div></div>;
+  return <div style={{ height: '100vh', display: 'flex', flexDirection: 'column' }}><div><button onClick={() => setRefresh(value => value + 1)}>夹具外部结构变化</button><button onClick={() => useWorkspace.getState().invalidateConnection('offline')}>夹具连接变化</button></div><div style={{ flex: 1, minHeight: 0 }}><TableTab tab={tab} refreshVersion={refresh} refreshAutomatically={false} onDesign={() => {}} onTransfer={() => {}} onColumnPatches={() => {}} onIndexPatches={() => {}} onForeignKeyPatches={() => {}} onTableRename={() => {}} onTableAutoIncrement={() => {}} onTableComment={() => {}} onTableDefaultEncoding={() => {}}/></div></div>;
 }
 createRoot(document.getElementById('root')!).render(<Fixture/>);

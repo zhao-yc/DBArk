@@ -5,6 +5,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { zh, formatText } from '../../src/renderer/locales/zh-CN';
 import { tableDefaultEncodingZh } from '../../src/renderer/locales/tableDefaultEncoding.zh-CN';
 import { tableRenameZh } from '../../src/renderer/locales/tableRename.zh-CN';
+import { tableAutoIncrementZh } from '../../src/renderer/locales/tableAutoIncrement.zh-CN';
 import { tableCommentZh } from '../../src/renderer/locales/tableComment.zh-CN';
 import { foreignKeyPatchZh } from '../../src/renderer/locales/foreignKeyPatches.zh-CN';
 import { indexPatchZh } from '../../src/renderer/locales/indexPatches.zh-CN';
@@ -18,7 +19,7 @@ function harness() {
   const slots: any[] = [], effects: { deps?: unknown[]; cleanup?: () => void }[] = [], pending: (() => void)[] = [];
   let cursor = 0, version = 0, tree: Node;
   const request = vi.fn(), notify = vi.fn(), useWorkspace = Object.assign(() => undefined, { getState: () => ({ connectionVersions: { c: version }, select() {}, notify }) });
-  const context = createContext({ zh, formatText, tableDefaultEncodingZh, tableRenameZh, tableCommentZh, foreignKeyPatchZh, indexPatchZh, columnPatchZh, invoke: request, useWorkspace, errorMessage: String, kindLabels: { table: '表' },
+  const context = createContext({ zh, formatText, tableDefaultEncodingZh, tableRenameZh, tableAutoIncrementZh, tableCommentZh, foreignKeyPatchZh, indexPatchZh, columnPatchZh, invoke: request, useWorkspace, errorMessage: String, kindLabels: { table: '表' },
     React: { createElement: (type: unknown, props: any, ...children: any[]) => ({ type, props: props ?? {}, children: children.flat() }) },
     useState(initial: unknown) { const index = cursor++; if (!(index in slots)) slots[index] = initial; return [slots[index], (next: any) => { slots[index] = typeof next === 'function' ? next(slots[index]) : next; }]; },
     useRef(initial: unknown) { const index = cursor++; if (!(index in slots)) slots[index] = { current: initial }; return slots[index]; },
