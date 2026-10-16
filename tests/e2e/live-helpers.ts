@@ -85,7 +85,7 @@ export async function connectAndCreate(database: string): Promise<Omit<LiveConte
 }
 
 /** 外部观察连接仅用于断言和清理，不替代被测应用的连接、查询或提交链路。 */
-export async function isolatedDatabase(body: (context: LiveContext) => Promise<void>, testInfo: TestInfo) {
+export async function isolatedDatabase(body: (context: LiveContext) => Promise<void>, testInfo: TestInfo, options: { captureFailureScreenshot?: boolean } = {}) {
   if (!environment.DBARK_TEST_HOST || !environment.DBARK_TEST_USER) throw new Error('启用实库 E2E 时必须提供已核对服务器的测试连接配置');
   const database = `dbark_e2e_${Date.now().toString(36)}_${randomUUID().replaceAll('-', '').slice(0, 8)}`;
   const certificate=tlsCertificate();
@@ -95,7 +95,8 @@ export async function isolatedDatabase(body: (context: LiveContext) => Promise<v
     await body({ observer, ...context });
     expect(pageErrors).toEqual([]);
   } catch (error) {
-    if (!closed) await page.screenshot({ path: testInfo.outputPath('live-failure.png') }).catch(() => undefined);
+    // 默认保留原截图；新CALL用例显式关闭，避免编辑器参数进入公共失败图片，不代理截图接口。
+    if (!closed && options.captureFailureScreenshot !== false) await page.screenshot({ path: testInfo.outputPath('live-failure.png') }).catch(() => undefined);
     throw error;
   } finally {
     // 先退出应用，释放可能尚未回滚的会话，再清理本例唯一库；不触碰引擎测试库。
