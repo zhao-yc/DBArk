@@ -5,6 +5,8 @@ import { tmpdir } from 'node:os';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import {randomUUID} from 'node:crypto';
+import { createSnippetsNativeDiagnostics, snippetsDiagnosticPort } from './snippets-native-diagnostics';
+import type { SnippetsNativeDiagnostics } from '../helpers/snippetsNativeDiagnostics';
 
 interface RecordedDialog { title?: string; message: string; buttons?: string[]; response: number; }
 declare global { var __dbarkE2EDialogs: { answers: number[]; calls: RecordedDialog[] }; }
@@ -17,6 +19,15 @@ export let closed = true;
 export let pageErrors: string[];
 export let dialogCalls: RecordedDialog[] = [];
 let quitReady:Promise<void>;
+export let snippetsDiagnostics: SnippetsNativeDiagnostics | undefined;
+let snippetsDiagnosticsArmed = false;
+
+/** 首次采集必须由离线片段用例在连接表单已关闭之后明确开启。 */
+export async function startSnippetsNativeDiagnostics() {
+  if (!snippetsDiagnostics || snippetsDiagnosticsArmed) return;
+  snippetsDiagnosticsArmed = true;
+  await snippetsDiagnostics.start(snippetsDiagnosticPort(desktop, page), 'initial');
+}
 
 /** 只替换原生对话框回答；退出状态机、渲染进程、IPC 和磁盘保存全部使用真实代码。 */
 export async function answerDialogs(answers: number[]) {
@@ -55,6 +66,7 @@ export async function launchDesktop() {
   // 原生 CI 首次启动安装产物需要额外加载时间；只延长就绪等待，仍要求状态栏真实可见。
   await expect(page.locator('.app-statusbar')).toBeVisible({ timeout: 15000 });
   await answerDialogs([]);
+  if (snippetsDiagnosticsArmed) await snippetsDiagnostics?.start(snippetsDiagnosticPort(desktop, page), 'restart');
 }
 
 /** 通过原生窗口或 app.quit 发起退出，保留调试通道直到保存握手和实际进程结束。 */
@@ -66,6 +78,7 @@ export async function requestQuit(method: 'app' | 'window' = 'app') {
 
 /** 先验证真实退出守卫到will-quit，再用公开close断开测试调试连接，仍核所有实际进程退出。 */
 export async function quitDesktop(method: 'app' | 'window' = 'app') {
+  if (snippetsDiagnostics) { snippetsDiagnostics.mark('before-quit'); await snippetsDiagnostics.stop(); }
   const processIds = await desktop.evaluate(({ app }) => app.getAppMetrics().map(metric => metric.pid));
   const exited = desktop.waitForEvent('close', { timeout: 12000 });
   // 不在保存对话框之前脱离调试，否则会丢失实际回答证据；取消和保存失败继续保留调试通道。
@@ -86,7 +99,10 @@ async function forceStopOwnProcess() {
 
 /** 自动夹具随每个用例运行，不依赖模块首次导入时注册钩子，避免跨文件复用已关闭窗口。 */
 export const test = baseTest.extend<{ desktopLifetime: void }>({
-  desktopLifetime: [async ({}, use) => {
+  desktopLifetime: [async ({ trace }, use, testInfo) => {
+    // 必须在启动 Electron 前拒绝私网环境；trace 是 fixture 的实际解析值，包含 CLI 覆写。
+    snippetsDiagnosticsArmed = false;
+    snippetsDiagnostics = createSnippetsNativeDiagnostics(trace, testInfo);
     pageErrors = [];
     dataDir = await mkdtemp(join(tmpdir(), 'dbark-e2e-'));
     try {
@@ -94,6 +110,7 @@ export const test = baseTest.extend<{ desktopLifetime: void }>({
       await use();
     } finally {
       try {
+        if (snippetsDiagnostics) await snippetsDiagnostics.finish(testInfo.status !== testInfo.expectedStatus);
         if (!closed) {
           // 仅清理阶段允许放弃本例留下的草稿，具体退出测试自行核对对话框和保存结果。
           await answerDialogs([1, 1]);
