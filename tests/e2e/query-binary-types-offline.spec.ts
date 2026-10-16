@@ -9,7 +9,7 @@ import { basename, dirname, join, resolve } from 'node:path';
 test.skip(process.env.DBARK_QUERY_BINARY_NATIVE_ENABLED !== '1', '默认不启动GUI，需统筹分配原生验收资源');
 test.use({ trace: 'off' });
 let server: ViteDevServer, app: ElectronApplication, page: Page, directory: string, url: string;
-type SavedClipboard = typeof globalThis & { __queryBinaryClipboard?: Electron.ClipboardItem[]; __queryBinaryOriginalText?: string };
+type SavedClipboard = typeof globalThis & { __queryBinaryClipboard?: Electron.ClipboardItem[]; __queryBinaryOriginalText?: string; __queryBinaryRawItemCount?: number };
 let clipboardSaved = false;
 const errors: string[] = [];
 test.beforeAll(async () => {
@@ -24,24 +24,44 @@ test.beforeEach(async () => {
   app = await electron.launch({ args: ['tests/fixtures/binary-cell/electron.cjs'], env, chromiumSandbox: true }); page = await app.firstWindow(); page.on('pageerror', error => errors.push(error.message)); await expect(page.locator('.results-grid')).toBeVisible({ timeout: 30000 });
   // 即使本套不粘贴内容，原生验收仍完整保存所有可读格式，原内容仅留在独立主进程内存。
   await app.evaluate(async ({ clipboard, ClipboardItem }) => {
-    const entries = await Promise.all((await clipboard.read()).map(async item => Object.fromEntries(await Promise.all(item.types.map(async type => [type, await item.getType(type)])))));
-    const root = globalThis as SavedClipboard; root.__queryBinaryClipboard = entries.filter(item => Object.keys(item).length).map(item => new ClipboardItem(item)); root.__queryBinaryOriginalText = await clipboard.readText();
+    const original = await clipboard.read(), readable = original.filter(item => item.types.length > 0);
+    const entries = await Promise.all(readable.map(async item => Object.fromEntries(await Promise.all(item.types.map(async type => [type, await item.getType(type)])))));
+    const root = globalThis as SavedClipboard; root.__queryBinaryClipboard = entries.filter(item => Object.keys(item).length).map(item => new ClipboardItem(item)); root.__queryBinaryOriginalText = await clipboard.readText(); root.__queryBinaryRawItemCount = original.length;
   }); clipboardSaved = true;
 });
 test.afterEach(async ({}, info) => {
-  const pids = await app.evaluate(({ app }) => app.getAppMetrics().map(metric => metric.pid)); let restored = false;
+  const pids = await app.evaluate(({ app }) => app.getAppMetrics().map(metric => metric.pid)); let restored = false; let diagnostic: Record<string, boolean | number> = { snapshotSaved: false };
   try {
-    if (clipboardSaved) restored = await app.evaluate(async ({ clipboard }) => {
-      const root = globalThis as SavedClipboard, saved = root.__queryBinaryClipboard!; if (saved.length) await clipboard.write(saved); else clipboard.clear();
-      const actual = await clipboard.read(); let same = actual.length === saved.length;
-      for (let index = 0; same && index < saved.length; index++) for (const type of saved[index].types) {
-        if (!actual[index].types.includes(type)) { same = false; break; }
-        const before = await saved[index].getType(type), after = await actual[index].getType(type);
-        same &&= 'arrayBuffer' in before && 'arrayBuffer' in after ? Buffer.from(await before.arrayBuffer()).equals(Buffer.from(await after.arrayBuffer())) : JSON.stringify(before) === JSON.stringify(after);
-      }
-      same &&= await clipboard.readText() === root.__queryBinaryOriginalText; delete root.__queryBinaryClipboard; delete root.__queryBinaryOriginalText; return same;
-    });
-    await info.attach('原剪贴板恢复结果', { body: JSON.stringify({ restored }), contentType: 'application/json' });
+    if (clipboardSaved) {
+      const result = await app.evaluate(async ({ clipboard }) => {
+        const root = globalThis as SavedClipboard, saved = root.__queryBinaryClipboard!, capturedRawItems = root.__queryBinaryRawItemCount!;
+        if (!Number.isSafeInteger(capturedRawItems) || capturedRawItems < saved.length) throw Error('原剪贴板快照计数缺失');
+        if (saved.length) await clipboard.write(saved); else clipboard.clear();
+        // 两端仅忽略无可读类型空壳；有类型零字节、多item及全部格式仍逐一核对。
+        const raw = await clipboard.read(), actual = raw.filter(item => item.types.length > 0);
+        let missingTypes = 0, additionalTypes = 0, payloadMismatches = 0, typeSetsMatch = true;
+        for (let index = 0; index < Math.max(saved.length, actual.length); index++) {
+          const before = saved[index], after = actual[index];
+          if (!before || !after || before.types.length !== after.types.length) typeSetsMatch = false;
+          for (const type of before?.types ?? []) if (!after?.types.includes(type)) missingTypes++;
+          for (const type of after?.types ?? []) if (!before?.types.includes(type)) additionalTypes++;
+          if (!before || !after) continue;
+          for (const type of before.types) {
+            if (!after.types.includes(type)) continue;
+            const a = await before.getType(type), b = await after.getType(type);
+            const same = 'arrayBuffer' in a && 'arrayBuffer' in b ? Buffer.from(await a.arrayBuffer()).equals(Buffer.from(await b.arrayBuffer())) : JSON.stringify(a) === JSON.stringify(b);
+            if (!same) payloadMismatches++;
+          }
+        }
+        const textMatches = await clipboard.readText() === root.__queryBinaryOriginalText, itemCountMatches = actual.length === saved.length;
+        const diagnostic = { snapshotSaved: true, capturedRawItems, capturedReadableItems: saved.length, capturedEmptyTypeItems: capturedRawItems - saved.length, restoredRawItems: raw.length, restoredReadableItems: actual.length, restoredEmptyTypeItems: raw.length - actual.length, savedTypeCount: saved.reduce((count, item) => count + item.types.length, 0), actualTypeCount: actual.reduce((count, item) => count + item.types.length, 0), itemCountMatches, typeSetsMatch, textMatches, missingTypes, additionalTypes, payloadMismatches };
+        const restored = itemCountMatches && typeSetsMatch && textMatches && !missingTypes && !additionalTypes && !payloadMismatches;
+        delete root.__queryBinaryClipboard; delete root.__queryBinaryOriginalText; delete root.__queryBinaryRawItemCount;
+        return { restored, diagnostic };
+      });
+      restored = result.restored; diagnostic = result.diagnostic;
+    }
+    await info.attach('原剪贴板恢复结果', { body: JSON.stringify({ restored, ...diagnostic }), contentType: 'application/json' });
   } finally {
     await app?.close(); if (dirname(resolve(directory)) !== resolve(tmpdir()) || !basename(directory).startsWith('dbark-query-binary-types-')) throw Error('拒绝清理离线临时目录以外的路径'); await rm(directory, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
   }

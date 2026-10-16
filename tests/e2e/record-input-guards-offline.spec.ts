@@ -9,7 +9,7 @@ import type {} from '../fixtures/record-input-guards/main';
 // 原生剪贴板需要统筹协调桌面使用权；默认跳过早于Electron启动。
 test.skip(process.env.DBARK_RECORD_INPUT_NATIVE_ENABLED !== '1', '需要统筹明确分配原生GUI及系统剪贴板使用权');
 test.use({ trace: 'off' });
-type SavedClipboard = typeof globalThis & { __recordInputClipboard?: Electron.ClipboardItem[]; __recordInputOriginalText?: string };
+type SavedClipboard = typeof globalThis & { __recordInputClipboard?: Electron.ClipboardItem[]; __recordInputOriginalText?: string; __recordInputRawItemCount?: number };
 let server: ViteDevServer, app: ElectronApplication, page: Page, directory: string, url: string, clipboardSaved = false;
 const errors: string[] = [];
 const panel = () => page.getByRole('complementary', { name: '记录表单', exact: true });
@@ -29,26 +29,44 @@ test.beforeEach(async () => {
   await expect(page.getByRole('button', { name: '打开夹具记录', exact: true })).toBeVisible({ timeout: 30000 });
   // 覆盖前完整读取每种格式，原内容只保存在本次独立主进程内存，不写报告或轨迹。
   await app.evaluate(async ({ clipboard, ClipboardItem }) => {
-    const original = await clipboard.read(), saved = await Promise.all(original.map(async item => Object.fromEntries(await Promise.all(item.types.map(async type => [type, await item.getType(type)])))));
-    const root = globalThis as SavedClipboard; root.__recordInputClipboard = saved.filter(item => Object.keys(item).length).map(item => new ClipboardItem(item)); root.__recordInputOriginalText = await clipboard.readText();
+    const original = await clipboard.read(), readable = original.filter(item => item.types.length > 0), saved = await Promise.all(readable.map(async item => Object.fromEntries(await Promise.all(item.types.map(async type => [type, await item.getType(type)])))));
+    const root = globalThis as SavedClipboard; root.__recordInputClipboard = saved.filter(item => Object.keys(item).length).map(item => new ClipboardItem(item)); root.__recordInputOriginalText = await clipboard.readText(); root.__recordInputRawItemCount = original.length;
   }); clipboardSaved = true;
 });
 test.afterEach(async ({}, info) => {
-  let restored = false;
+  let restored = false; let diagnostic: Record<string, boolean | number> = { snapshotSaved: false };
   try {
     if (page) await info.attach('合成输入事件', { body: JSON.stringify((await audit()).events), contentType: 'application/json' });
-    if (clipboardSaved) restored = await app.evaluate(async ({ clipboard }) => {
-      const root = globalThis as SavedClipboard, saved = root.__recordInputClipboard!;
-      if (saved.length) await clipboard.write(saved); else clipboard.clear();
-      const actual = await clipboard.read(); let same = actual.length === saved.length;
-      for (let index = 0; same && index < saved.length; index++) for (const type of saved[index].types) {
-        if (!actual[index].types.includes(type)) { same = false; break; }
-        const before = await saved[index].getType(type), after = await actual[index].getType(type);
-        same &&= 'arrayBuffer' in before && 'arrayBuffer' in after ? Buffer.from(await before.arrayBuffer()).equals(Buffer.from(await after.arrayBuffer())) : JSON.stringify(before) === JSON.stringify(after);
-      }
-      same &&= await clipboard.readText() === root.__recordInputOriginalText; delete root.__recordInputClipboard; delete root.__recordInputOriginalText; return same;
-    });
-    await info.attach('原剪贴板恢复结果', { body: JSON.stringify({ restored }), contentType: 'application/json' });
+    if (clipboardSaved) {
+      const result = await app.evaluate(async ({ clipboard }) => {
+        const root = globalThis as SavedClipboard, saved = root.__recordInputClipboard!, capturedRawItems = root.__recordInputRawItemCount!;
+        if (!Number.isSafeInteger(capturedRawItems) || capturedRawItems < saved.length) throw Error('原剪贴板快照计数缺失');
+        if (saved.length) await clipboard.write(saved); else clipboard.clear();
+        // 两端仅忽略无可读类型空壳；有类型零字节、多item及全部格式仍逐一核对。
+        const raw = await clipboard.read(), actual = raw.filter(item => item.types.length > 0);
+        let missingTypes = 0, additionalTypes = 0, payloadMismatches = 0, typeSetsMatch = true;
+        for (let index = 0; index < Math.max(saved.length, actual.length); index++) {
+          const before = saved[index], after = actual[index];
+          if (!before || !after || before.types.length !== after.types.length) typeSetsMatch = false;
+          for (const type of before?.types ?? []) if (!after?.types.includes(type)) missingTypes++;
+          for (const type of after?.types ?? []) if (!before?.types.includes(type)) additionalTypes++;
+          if (!before || !after) continue;
+          for (const type of before.types) {
+            if (!after.types.includes(type)) continue;
+            const a = await before.getType(type), b = await after.getType(type);
+            const same = 'arrayBuffer' in a && 'arrayBuffer' in b ? Buffer.from(await a.arrayBuffer()).equals(Buffer.from(await b.arrayBuffer())) : JSON.stringify(a) === JSON.stringify(b);
+            if (!same) payloadMismatches++;
+          }
+        }
+        const textMatches = await clipboard.readText() === root.__recordInputOriginalText, itemCountMatches = actual.length === saved.length;
+        const diagnostic = { snapshotSaved: true, capturedRawItems, capturedReadableItems: saved.length, capturedEmptyTypeItems: capturedRawItems - saved.length, restoredRawItems: raw.length, restoredReadableItems: actual.length, restoredEmptyTypeItems: raw.length - actual.length, savedTypeCount: saved.reduce((count, item) => count + item.types.length, 0), actualTypeCount: actual.reduce((count, item) => count + item.types.length, 0), itemCountMatches, typeSetsMatch, textMatches, missingTypes, additionalTypes, payloadMismatches };
+        const restored = itemCountMatches && typeSetsMatch && textMatches && !missingTypes && !additionalTypes && !payloadMismatches;
+        delete root.__recordInputClipboard; delete root.__recordInputOriginalText; delete root.__recordInputRawItemCount;
+        return { restored, diagnostic };
+      });
+      restored = result.restored; diagnostic = result.diagnostic;
+    }
+    await info.attach('原剪贴板恢复结果', { body: JSON.stringify({ restored, ...diagnostic }), contentType: 'application/json' });
   } finally {
     await app?.close(); if (dirname(resolve(directory)) !== resolve(tmpdir()) || !basename(directory).startsWith('dbark-record-input-guards-')) throw Error('拒绝清理组件测试目录以外的路径'); await rm(directory, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
   }

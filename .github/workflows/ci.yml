@@ -126,7 +126,7 @@ jobs:
           pnpm exec playwright test
           tests/e2e/query-binary-types-offline.spec.ts
           tests/e2e/record-input-guards-offline.spec.ts
-          --workers=1 --retries=0 --reporter=list,json
+          --workers=1 --retries=0 --reporter="list,json"
         env:
           DBARK_QUERY_BINARY_NATIVE_ENABLED: '1'
           DBARK_RECORD_INPUT_NATIVE_ENABLED: '1'
