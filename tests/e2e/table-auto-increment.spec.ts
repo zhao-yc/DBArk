@@ -19,11 +19,18 @@ async function open(context: LiveContext, name: string) {
 }
 async function ddl(context: LiveContext, name: string) { const [rows] = await context.observer.query<RowDataPacket[]>('SHOW CREATE TABLE ' + target(context, name)); return String(rows[0]['Create Table']); }
 /** 只通过中文复选框确认三项风险，SQL编辑器必须保持只读。 */
-async function preview() {
+async function preview(context: LiveContext, name: string, value: string) {
   await dialog().getByRole('button', { name: text.preview, exact: true }).click();
   await expect(dialog().getByRole('heading', { name: text.fixedSql, exact: true })).toBeVisible();
-  const editor = dialog().locator('.monaco-editor'), before = await editor.locator('.view-lines').innerText();
-  expect(before).toContain('AUTO_INCREMENT ='); await editor.click(); await page.keyboard.type('不可写入的SQL'); await expect(editor.locator('.view-lines')).toHaveText(before);
+  const editor = dialog().locator('.monaco-editor'), lines = editor.locator('.view-lines');
+  let before = '';
+  // 标题可先于Monaco挂载；完整目标、请求值和结尾均须就绪，只转换显示用的不换行空格。
+  await expect.poll(async () => {
+    before = await lines.textContent() ?? '';
+    return before.replace(/\u00a0/g, ' ');
+  }).toBe(`ALTER TABLE ${target(context, name)} AUTO_INCREMENT = ${value};`);
+  // 前后统一textContent口径；保留完整原始文本逐字比较，不被视觉换行或空白归一化掩盖写入。
+  await editor.click(); await page.keyboard.type('不可写入的SQL'); await expect.poll(() => lines.textContent()).toBe(before);
   const boxes = dialog().getByRole('checkbox'); expect(await boxes.count()).toBe(3); for (let index = 0; index < 3; index++) await boxes.nth(index).check();
 }
 
@@ -43,7 +50,7 @@ test.describe('表级下一自增值：正式Electron与真实数据库准备', 
       if (!writablePort) { await expect(dialog()).toContainText(text.readonly); await expect(dialog().getByRole('textbox', { name: text.value, exact: true })).toBeDisabled(); await dialog().getByRole('button', { name: text.close, exact: true }).click(); return; }
       await expect(dialog().getByRole('textbox', { name: text.value, exact: true })).toBeEnabled(); await dialog().getByRole('button', { name: text.close, exact: true }).click();
       await tablePage().getByRole('button', { name: text.title, exact: true }).click(); const before = await ddl(context, name);
-      await dialog().getByRole('textbox', { name: text.value, exact: true }).fill('9007199254740993'); await preview(); expect(await ddl(context, name)).toBe(before);
+      await dialog().getByRole('textbox', { name: text.value, exact: true }).fill('9007199254740993'); await preview(context, name, '9007199254740993'); expect(await ddl(context, name)).toBe(before);
       await dialog().getByRole('button', { name: text.apply, exact: true }).dblclick(); await expect(dialog().locator('.table-auto-increment-outcome')).toHaveText(text.succeeded, { timeout: 20000 });
       await expect(dialog()).toContainText('9007199254740993'); await expect(dialog().getByRole('button', { name: text.apply, exact: true })).toBeDisabled();
       await context.observer.query('SET SESSION information_schema_stats_expiry = 0');
