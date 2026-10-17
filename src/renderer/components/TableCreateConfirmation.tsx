@@ -9,9 +9,9 @@ import { useWorkspace } from '../store';
 import { errorMessage, uid } from '../lib';
 import { Modal, ErrorBox, Field } from './ui';
 import { SqlEditor } from './SqlEditor';
-export interface TableCreateConfirmationProps { connectionId: string; design: TableCreateDraft; onBack(): void; onClose(): void; onCreated(result: TableCreateApplyOutput, version: number): void; onDirtyChange?(dirty: boolean): void; services?: TableCreateServices; }
+export interface TableCreateConfirmationProps { connectionId: string; design: TableCreateDraft; invalidated?: boolean; onBack(): void; onClose(): void; onCreated(result: TableCreateApplyOutput, version: number): void; onDirtyChange?(dirty: boolean): void; services?: TableCreateServices; }
 /** 只接管现有设计器的确认阶段；原字段/索引/FK表单及已有表修改无需复制或更换生成器。 */
-export function TableCreateConfirmation({ connectionId, design, onBack, onClose, onCreated, onDirtyChange, services = tableCreateServices }: TableCreateConfirmationProps) {
+export function TableCreateConfirmation({ connectionId, design, invalidated = false, onBack, onClose, onCreated, onDirtyChange, services = tableCreateServices }: TableCreateConfirmationProps) {
   const version = useWorkspace(state => state.connectionVersions[connectionId] ?? 0), profile = useWorkspace(state => state.connections.find(value => value.id === connectionId));
   const fixed = useRef({ connectionId, version, design: structuredClone(design), key: JSON.stringify(design), label: profile ? `${profile.name} · ${profile.host}:${profile.port}` : connectionId });
   const intent = useRef(0), renderedKey = JSON.stringify([connectionId, version, design]), lastKey = useRef(renderedKey), observedVersion = useRef(version);
@@ -25,6 +25,8 @@ export function TableCreateConfirmation({ connectionId, design, onBack, onClose,
   const [error, setError] = useState(''), [outcome, setOutcome] = useState(''), [attempted, setAttempted] = useState(false), [unknown, setUnknown] = useState(false), [complete, setComplete] = useState(false), [, tick] = useState(0);
   const [explicitEncoding, setExplicitEncoding] = useState(false), [selection, setSelection] = useState<TableEncodingPair>({ charset: '', collation: '' });
   const encodingMode = useRef(false), encodingSelection = useRef(selection), catalog = useRef<TableCreateGetOutput['encodings']>(undefined);
+  // 父设计器目标一旦失效必须传入本确认租约，数据库ABA不能因冻结草稿看似未变而复活。
+  if (invalidated) invalid.current = true;
   if (connectionId !== fixed.current.connectionId || version !== fixed.current.version || JSON.stringify(design) !== fixed.current.key) invalid.current = true;
   const validTime = (expires: string) => Number.isFinite(Date.parse(expires)) && Date.parse(expires) > Date.now();
   const expired = !!snapshot && !validTime(snapshot.expiresAt) || !!preview && !validTime(preview.expiresAt);

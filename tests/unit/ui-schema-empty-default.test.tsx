@@ -193,3 +193,9 @@ it('前缀真实确认控件准确库表名及两项勾选后双击只消费一�
   for (const label of [text.ackDdl,text.ackCreate]) { const node=document.querySelectorAll('label').find(value=>value.textContent===label)?.querySelector('input');expect(node).not.toBeNull();await act(async()=>{node!.checked=true;node!.dispatchEvent(new MemoryEvent('click'));}); }
   const button=document.querySelectorAll('button').find(value=>value.textContent===text.apply)!;expect(button.disabled).toBe(false);await act(async()=>{button.dispatchEvent(new MemoryEvent('click'));button.dispatchEvent(new MemoryEvent('click'));});expect(services.apply).toHaveBeenCalledOnce();expect(vi.mocked(services.apply).mock.calls[0][0]).toMatchObject({previewToken:'prefix-p',confirmation:'db.new_table',acknowledgements:[...tableCreateAcknowledgements]});expect(applied).toHaveBeenCalledOnce();
 });
+
+it('前缀确认准备期间同连接数据库A→B→A，父窗口目标失效必须传播给确认页', async () => {
+  await prefixDraft(); prefixPorts(); let resolve!:(value:any)=>void; const pending=new Promise<any>(yes=>{resolve=yes;});const normal=services.preview;services.preview=vi.fn(async input=>{const value=await normal(input);await pending;return value;});await click(zh.schema.text049);expect(services.preview).toHaveBeenCalledOnce();
+  await act(async()=>root!.render(<SchemaDialog connectionId="c" database="other_db" onClose={closed} onApplied={applied}/>));await act(async()=>root!.render(<SchemaDialog connectionId="c" database="db" onClose={closed} onApplied={applied}/>));await act(async()=>resolve({}));
+  expect(document.querySelector('pre[aria-label="只读预览SQL"]')).toBeNull();expect(services.apply).not.toHaveBeenCalled();expect(services.release).toHaveBeenCalledWith({previewToken:'prefix-p'});expect(document.body.textContent).toContain(text.mismatch);
+});
