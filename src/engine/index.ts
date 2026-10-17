@@ -246,7 +246,8 @@ export class Engine {
         // 主进程注入保存配置即可启动可取消短读，不额外开一次不可取消的测试连接。
         const profile=input.profile as ConnectionProfile|undefined;
         if(profile){if(profile.id!==input.connectionId)throw new Error('补全连接配置目标不符');if(!this.profiles.has(profile.id))this.profiles.set(profile.id,profile);}
-        return this.withIndependentTask(input.connectionId,input.taskId,(managed,control)=>completionMetadata(managed,input as CompletionMetadataInput,control),undefined,'读取补全元数据');
+        // 补全结果也须等待原流真实关闭，不能在 QUIT 回调先到时被资源确认门拒绝。
+        return this.withIndependentTask(input.connectionId,input.taskId,(managed,control)=>completionMetadata(managed,input as CompletionMetadataInput,control),undefined,'读取补全元数据',true);
       }
       case 'metadata.objects': return this.withConnection(input.connectionId, connection => metadata.objects(connection, input.database));
       case 'metadata.table': return input.taskId ? this.withIndependentTask(input.connectionId, input.taskId, async (connection, control) => {
