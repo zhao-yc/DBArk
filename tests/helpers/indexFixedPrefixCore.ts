@@ -107,3 +107,26 @@ export async function finishFixedPrefix(owner: FixedPrefixOwner, steps: { resour
   await owner.run(steps.closeObserver);
   steps.restore(); owner.finish();
 }
+
+/** Maria已有握手模式IGNORE_SPACE单独受证；未知、空项及省略定义的组合仍拒绝，不SET绕过。 */
+export function assertFixedPrefixModes(value: unknown, dialect: 'mysql' | 'mariadb') {
+  const common = ['ONLY_FULL_GROUP_BY', 'STRICT_TRANS_TABLES', 'STRICT_ALL_TABLES', 'NO_ZERO_IN_DATE', 'NO_ZERO_DATE', 'ERROR_FOR_DIVISION_BY_ZERO', 'NO_ENGINE_SUBSTITUTION', 'NO_AUTO_CREATE_USER', 'NO_BACKSLASH_ESCAPES'];
+  if (typeof value !== 'string' || !/^[A-Z0-9_,]*$/.test(value) || value !== '' && value.split(',').some(mode => !common.includes(mode) && !(dialect === 'mariadb' && mode === 'IGNORE_SPACE'))) throw Error('前缀case会话模式未知或可能省略原定义');
+}
+
+/** 最大预算请求仍是255/255/255/12；只读预览必须展示产品规范后的整字段SQL。 */
+export function assertFixedPrefixBudgetPreview(value: unknown, qualifiedTarget: string) {
+  const expected = 'ALTER TABLE ' + qualifiedTarget + " ADD INDEX `budget_key` USING BTREE (`c` ASC, `d` ASC, `e` ASC, `b`(12) ASC) COMMENT '';";
+  if (value !== expected) throw Error('前缀case最大预算预览未保持整字段规范和BINARY(12)');
+}
+
+/** SQL NULL必须是自有数据字段的实际null；缺字段、undefined、文字null不能冒充整字段。 */
+export function assertFixedPrefixBudgetSubParts(value: unknown) {
+  if (!Array.isArray(value) || value.length !== 4) throw Error('前缀case最大预算目录键部分数量不符');
+  for (const [index, name] of ['c', 'd', 'e', 'b'].entries()) {
+    const row = value[index];
+    if (!row || typeof row !== 'object' || ['Key_name', 'Column_name', 'Seq_in_index'].some(key => !Object.hasOwn(row, key)) || row.Key_name !== 'budget_key' || row.Column_name !== name || ![index + 1, String(index + 1)].includes(row.Seq_in_index)) throw Error('前缀case最大预算目录身份或顺序不符');
+    const field = Object.getOwnPropertyDescriptor(row, 'Sub_part');
+    if (!field || !Object.hasOwn(field, 'value') || (index < 3 ? field.value !== null : field.value !== 12 && field.value !== '12')) throw Error('前缀case最大预算目录必须为SQL NULL/NULL/NULL及字节12');
+  }
+}

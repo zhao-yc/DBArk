@@ -4,7 +4,7 @@ import type { ManagedConnection } from '../../src/engine/connection';
 import type { ConnectionProfile, TaskEvent } from '../../src/shared/contracts';
 import type { IndexPatch } from '../../src/shared/tableIndexPatches';
 import type { TableIndexGetOutput, TableIndexPreviewOutput } from '../../src/shared/tableIndexTasks';
-import { assertPrefixReleased, bindFixedPrefixTarget, finishFixedPrefix, isPrefixDuplicate, watchPrefixConnection, type FixedPrefixCase, type FixedPrefixOwner, type PrefixConnectionFact } from '../helpers/indexFixedPrefixCore';
+import { assertFixedPrefixBudgetPreview, assertFixedPrefixBudgetSubParts, assertFixedPrefixModes, assertPrefixReleased, bindFixedPrefixTarget, finishFixedPrefix, isPrefixDuplicate, watchPrefixConnection, type FixedPrefixCase, type FixedPrefixOwner, type PrefixConnectionFact } from '../helpers/indexFixedPrefixCore';
 
 /** 每次只运行一个准确端口的一个case；模块被真正list收集时完全不会导入。 */
 export async function runFixedPrefixCase(kind: FixedPrefixCase, owner: FixedPrefixOwner) {
@@ -38,8 +38,7 @@ export async function runFixedPrefixCase(kind: FixedPrefixCase, owner: FixedPref
     expect(String(row.version)).toMatch(new RegExp('^' + target.version.replaceAll('.', '\\.') + '(?:$|-)')); expect(/mariadb/i.test(String(row.version))).toBe(target.dialect === 'mariadb'); expect(connection.status.dialect).toBe(target.dialect);
     expect(['linux', 'debian-linux-gnu']).toContain(String(row.os).toLowerCase()); expect(String(row.names)).toBe('0'); expect(String(row.pageSize)).toBe('16384');
     for (const key of ['autocommit', 'foreignChecks', 'uniqueChecks', 'innodbStrict', 'quoteShowCreate']) expect(String(row[key])).toBe('1');
-    const modes = ['ONLY_FULL_GROUP_BY', 'STRICT_TRANS_TABLES', 'STRICT_ALL_TABLES', 'NO_ZERO_IN_DATE', 'NO_ZERO_DATE', 'ERROR_FOR_DIVISION_BY_ZERO', 'NO_ENGINE_SUBSTITUTION', 'NO_AUTO_CREATE_USER', 'NO_BACKSLASH_ESCAPES'];
-    expect(typeof row.mode).toBe('string'); expect(String(row.mode).split(',').filter(Boolean).every(mode => modes.includes(mode))).toBe(true);
+    assertFixedPrefixModes(row.mode, target.dialect);
     let identity: unknown;
     if (target.dialect === 'mysql') { const values = await observe(connection, 'SELECT @@server_uuid AS uuid'); owner.check(); expect(values).toEqual([{ uuid: target.uuid }]); identity = target.uuid; }
     else { expect(row.hostname).toBe(target.hostname); expect(String(row.serverId)).toBe(target.serverId); expect(String(row.serverPort)).toBe(target.serverPort); identity = [row.hostname, String(row.serverId), String(row.serverPort)]; }
@@ -111,6 +110,7 @@ export async function runFixedPrefixCase(kind: FixedPrefixCase, owner: FixedPref
     await call(id, async () => { let blocked = false; try { await engine.handle('schema.indexes.preview', { snapshotId: original.snapshotId, patches: [addition('budget_key', [part('c', 255), part('d', 255), part('e', 255), part('b', 13)])], connectionRevision: 1, taskId: id }); } catch (error) { if (!(error instanceof Error) || !error.message.includes('最大键字节数')) throw error; blocked = true; } expect(blocked).toBe(true); });
     expect(alterCount()).toBe(0); expect(await snapshot()).toEqual(baseline);
     value = await preview([addition('budget_key', [part('c', 255), part('d', 255), part('e', 255), part('b', 12)])]);
+    assertFixedPrefixBudgetPreview(value.sql, quoted);
   } else value = await preview([addition('unique_prefix', [part('c', 1), part('b', 1)], true)]);
   expect(alterCount()).toBe(0); expect(await snapshot()).toEqual(baseline);
   expect(value.target).toEqual({ connectionId, database: schema, table }); expect(value.sql.startsWith('ALTER TABLE ' + quoted + ' ')).toBe(true);
@@ -131,7 +131,7 @@ export async function runFixedPrefixCase(kind: FixedPrefixCase, owner: FixedPref
     expect(removeTarget(after.ddl)).toBe(removeTarget(baseline.ddl)); expect(after.indexes.filter(index => index.Key_name !== 'old_c')).toEqual(baseline.indexes.filter(index => index.Key_name !== 'old_c'));
     expect(after.indexes.filter(index => index.Key_name === 'old_c').map(index => [index.Column_name, String(index.Sub_part), index.Index_comment])).toEqual([['c', '3', '原索引'], ['b', '2', '原索引']]);
   } else if (kind === 'budget') {
-    expect(after.indexes.filter(index => index.Key_name !== 'budget_key')).toEqual(baseline.indexes); expect(after.indexes.filter(index => index.Key_name === 'budget_key').map(index => [index.Column_name, String(index.Sub_part)])).toEqual([['c', '255'], ['d', '255'], ['e', '255'], ['b', '12']]);
+    expect(after.indexes.filter(index => index.Key_name !== 'budget_key')).toEqual(baseline.indexes); assertFixedPrefixBudgetSubParts(after.indexes.filter(index => index.Key_name === 'budget_key'));
     expect(after.ddl.replace(/^\s*KEY `budget_key` .*\n/m, '').replace(/,\n\)/g, '\n)')).toBe(baseline.ddl);
   } else expect(after).toEqual(baseline);
   expect(after.columns).toEqual(baseline.columns); expect(after.rows).toEqual(baseline.rows);

@@ -1,6 +1,6 @@
 import { EventEmitter } from 'node:events';
 import { describe, expect, it, vi } from 'vitest';
-import { assertPrefixReleased, bindFixedPrefixTarget, finishFixedPrefix, fixedPrefixOwner, isPrefixDuplicate, watchPrefixConnection } from '../helpers/indexFixedPrefixCore';
+import { assertFixedPrefixBudgetPreview, assertFixedPrefixBudgetSubParts, assertFixedPrefixModes, assertPrefixReleased, bindFixedPrefixTarget, finishFixedPrefix, fixedPrefixOwner, isPrefixDuplicate, watchPrefixConnection } from '../helpers/indexFixedPrefixCore';
 
 /** 合成配置全部在RAM；不读取环境、证书、驱动或正式入口。 */
 function configuration(port = '13384') {
@@ -88,5 +88,39 @@ describe('前缀核心case原30秒活动门与精确清理顺序', () => {
     let now = 0; const owner = fixedPrefixOwner('elapsed', () => now, 30000, 29999); now = 1; expect(() => owner.check()).toThrow('原30秒');
     for (const elapsed of [NaN, Infinity, -1, 30000]) expect(() => fixedPrefixOwner('unknown', () => 0, 30000, elapsed).check()).toThrow();
     expect(() => fixedPrefixOwner('changed', () => 0, 60000).check()).toThrow();
+  });
+});
+
+describe('前缀核心入口的Maria模式及满列规范期待', () => {
+  /** 明确合成SHOW INDEX目录；不导入驱动或用产品生成器反填期待。 */
+  const rows = () => ['c', 'd', 'e', 'b'].map((Column_name, index) => ({ Key_name: 'budget_key', Column_name, Seq_in_index: index + 1, Sub_part: index < 3 ? null : 12 }));
+  it.each(['13310', '13311'])('Maria%s已知IGNORE_SPACE可并存普通模式', port => {
+    const raw = configuration(port), target = bindFixedPrefixTarget(() => raw).target;
+    expect(() => assertFixedPrefixModes('IGNORE_SPACE,STRICT_TRANS_TABLES,ERROR_FOR_DIVISION_BY_ZERO,NO_AUTO_CREATE_USER,NO_ENGINE_SUBSTITUTION', target.dialect)).not.toThrow();
+  });
+  it('未知、省略定义、组合ANSI及空项仍拒绝，不扩大MySQL模式合同', () => {
+    expect(() => assertFixedPrefixModes('STRICT_TRANS_TABLES,NO_ENGINE_SUBSTITUTION', 'mysql')).not.toThrow();
+    for (const mode of ['IGNORE_SPACE,UNKNOWN', 'IGNORE_SPACE,NO_FIELD_OPTIONS', 'IGNORE_SPACE,NO_KEY_OPTIONS', 'IGNORE_SPACE,NO_TABLE_OPTIONS', 'IGNORE_SPACE,ANSI', 'IGNORE_SPACE,,STRICT_TRANS_TABLES', undefined, null]) expect(() => assertFixedPrefixModes(mode, 'mariadb')).toThrow();
+    expect(() => assertFixedPrefixModes('IGNORE_SPACE', 'mysql')).toThrow();
+  });
+  it('满列预览只接受无长度c/d/e和BINARY(12)，不退到254或放行13', () => {
+    const sql = "ALTER TABLE `db`.`t` ADD INDEX `budget_key` USING BTREE (`c` ASC, `d` ASC, `e` ASC, `b`(12) ASC) COMMENT '';";
+    expect(() => assertFixedPrefixBudgetPreview(sql, '`db`.`t`')).not.toThrow();
+    for (const changed of [sql.replace('`c` ASC', '`c`(255) ASC'), sql.replace('`d` ASC', '`d`(254) ASC'), sql.replace('`b`(12)', '`b`(13)'), sql.replace('`db`.`t`', '`other`.`t`'), undefined]) expect(() => assertFixedPrefixBudgetPreview(changed, '`db`.`t`')).toThrow();
+  });
+  it('目录接受实际SQL NULL/NULL/NULL与字节12，不把文字null或未设值当SQL NULL', () => {
+    expect(() => assertFixedPrefixBudgetSubParts(rows())).not.toThrow();
+    for (const index of [0, 1, 2]) for (const bad of ['null', 'NULL', undefined, 0, 255, 254]) { const changed: Record<string, unknown>[] = rows(); changed[index].Sub_part = bad; expect(() => assertFixedPrefixBudgetSubParts(changed)).toThrow('SQL NULL'); }
+    const numbersAsText: Record<string, unknown>[] = rows(); numbersAsText[3].Sub_part = '12'; expect(() => assertFixedPrefixBudgetSubParts(numbersAsText)).not.toThrow();
+  });
+  it('缺失、继承或getter的Sub_part不可冒充NULL，且不执行getter', () => {
+    for (const index of [0, 1, 2, 3]) { const changed: Record<string, unknown>[] = rows(); delete changed[index].Sub_part; expect(() => assertFixedPrefixBudgetSubParts(changed)).toThrow('SQL NULL'); }
+    const inherited: Record<string, unknown>[] = rows(); const first = { ...inherited[0] }; delete first.Sub_part; inherited[0] = Object.assign(Object.create({ Sub_part: null }), first); expect(() => assertFixedPrefixBudgetSubParts(inherited)).toThrow('SQL NULL');
+    let reads = 0; const accessor = rows(); Object.defineProperty(accessor[0], 'Sub_part', { get() { reads++; return null; } }); expect(() => assertFixedPrefixBudgetSubParts(accessor)).toThrow('SQL NULL'); expect(reads).toBe(0);
+  });
+  it('目录的b必须12，字段顺序/数量/身份也不能被归一化吞掉', () => {
+    for (const bad of [null, undefined, 'null', '12.0', 13, 0]) { const changed: Record<string, unknown>[] = rows(); changed[3].Sub_part = bad; expect(() => assertFixedPrefixBudgetSubParts(changed)).toThrow('SQL NULL'); }
+    const changed = rows(); changed[0].Column_name = 'other'; expect(() => assertFixedPrefixBudgetSubParts(changed)).toThrow('身份');
+    expect(() => assertFixedPrefixBudgetSubParts(rows().slice(0, 3))).toThrow('数量'); expect(() => assertFixedPrefixBudgetSubParts(rows().reverse())).toThrow('顺序');
   });
 });
