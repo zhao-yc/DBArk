@@ -19,3 +19,8 @@
 `tests/e2e/copy-insert-sql.spec.ts` 定义原生验收，默认关闭；`--list` 总是先短路，不导入桌面、数据库或私有配置。实际运行还必须由 ROOT 另行许可，同时开启 `DBARK_INTEGRATION_ENABLED=1`、`DBARK_COPY_INSERT_SQL_UI=1`、`DBARK_COPY_INSERT_SQL_NATIVE_CLIPBOARD=1`，并核对 200/13384 的隔离窗口。它使用真实对象树和产品主进程，检查当前/勾选复制、草稿及生成列拒绝、原表数据未改变；原剪贴板全部可读格式只存主进程内存并逐格式恢复，不保存正文、截图或 trace，恢复或所属桌面不明时保留现场。
 
 本任务未获系统剪贴板许可，实际原生读写、GUI、数据库、SSH、Docker、CI 和依赖安装均为零。真实 MySQL SQL-mode 导入、原生剪贴板及跨平台 UI 均待 ROOT 统一安排；本地生成的语句未执行。
+
+
+## 六实例真实回放检查点
+
+Root后续在固定790源码完成六个200隔离组合各两项真实表页解码、SQL生成及独立会话回放，共12项单次通过，含严格TLS与ANSI_QUOTES/NO_BACKSLASH_ESCAPES，逐INSERT零警告、目标准确且源表不变；1357/1359及逐组合相关资源均零。当前100定向/type、原0fb完整6859构建基线和Root列表计数断言失败分别保留，详见[完整实证及独采边界](../tests/integration/acceptance-copy-insert-replay-root-20261017.md)。该记录没有原生系统剪贴板读写或GUI、安装、macOS验证，不增加R93安装计数，也不表示后续Maria保留资源已清理。
