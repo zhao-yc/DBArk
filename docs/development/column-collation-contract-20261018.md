@@ -1,6 +1,6 @@
 # 列排序规则执行合同
 
-当前只冻结合同并防止旧计划器忽略新属性；尚无可用排序规则编辑入口，不计作已完成。后续 UI、真实读取、Tasks 专用计划与后核必须闭环后才能开放。
+本文记录 `988ca7b` 的合同冻结点和旧路径关闭保护。后续 UI、真实读取、Tasks 专用计划与后核已在独立任务分支接通，仍待整合及真实验收，见[最新检查点](../../tests/integration/acceptance-column-collation-integration-20261018.md)；不将合同单项计作完成。
 
 - 原四个 `schema.columns` RPC 保持。已有列可选 `collation: { current, access }`，整表可选一次 `collationCatalog`。current 来自真实有效列编码，完整目录与私有事实同源并计入原总预算；不猜表默认值、不截断、不在每列重复。access 只表示快照能力，preview／apply 仍重新读取。
 - `alter.changes.collation` 只接受严格 `{ charset, collation }` 配对。首片只能一项 alter、一个 collation 键；不能混入其它属性、列、新增或删除。共享校验只证明载荷形状，实际目录成员、同字符集、差异及权限由引擎证明。
