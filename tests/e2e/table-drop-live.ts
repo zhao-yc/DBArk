@@ -54,7 +54,11 @@ export function registerTableDropUiTests() {
       const target = `\`${context.database}\`.\`subject\``;
       await observe(owner, () => context.observer.query(`CREATE TABLE ${target}(id BIGINT PRIMARY KEY,note VARCHAR(80)) ENGINE=InnoDB`)); owner.assertCurrent();
       await observe(owner, () => context.observer.query(`INSERT INTO ${target} VALUES(1,'合成待删除数据')`)); owner.assertCurrent();
-      await open(owner, context); owner.assertCurrent(); await dialog(owner).getByRole('button', { name: text.preview, exact: true }).click(); owner.assertCurrent();
+      await open(owner, context); owner.assertCurrent();
+      // 先证明定位器在真实标签上有命中，删除后的零计数才不会因旧CSS类失配而空通过。
+      const originalTab = page(owner).locator('.workspace-tab .tab-select').getByText('subject', { exact: true });
+      await expect(originalTab).toHaveCount(1); owner.assertCurrent();
+      await dialog(owner).getByRole('button', { name: text.preview, exact: true }).click(); owner.assertCurrent();
       await expect(dialog(owner).locator('.monaco-editor .view-lines')).toContainText('DROP TABLE'); owner.assertCurrent();
       const submit = dialog(owner).getByRole('button', { name: text.apply, exact: true }); await expect(submit).toBeDisabled(); owner.assertCurrent();
       await dialog(owner).getByLabel(text.confirmation, { exact: true }).fill(context.database + '.subject '); owner.assertCurrent();
@@ -63,14 +67,17 @@ export function registerTableDropUiTests() {
       await dialog(owner).getByLabel(text.confirmation, { exact: true }).fill(context.database + '.subject'); owner.assertCurrent(); await submit.click(); owner.assertCurrent();
       await expect(dialog(owner).getByText(text.succeeded, { exact: true })).toBeVisible(); owner.assertCurrent(); await expect(submit).toBeDisabled(); owner.assertCurrent();
       const [after] = await observe(owner, () => context.observer.query<RowDataPacket[]>('SELECT TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA=? AND TABLE_NAME=?',[context.database,'subject'])); owner.assertCurrent(); expect(after).toHaveLength(0);
-      await expect(page(owner).locator('.workspace-tab-button').getByText('subject',{exact:true})).toHaveCount(0); owner.assertCurrent();
+      await expect(originalTab).toHaveCount(0); owner.assertCurrent();
       const tasks = await page(owner).evaluate(() => window.dbark.invoke('tasks.list', {})); owner.assertCurrent(); expect(tasks.filter(task => task.kind === 'schema.tableDrop.apply')).toHaveLength(1);
       await dialog(owner).getByRole('button', { name: text.close, exact: true }).click(); owner.assertCurrent();
+      // 关闭会等待令牌释放；弹窗卸载之后，App才允许工作区快捷键，不能把click返回当关闭完成。
+      await expect(dialog(owner)).toHaveCount(0); owner.assertCurrent();
       // 旧URI本身不写入系统clipboard，人工输入原目标；必须由原产品导航拒绝。
       const connectionId = context.connectionId;
       const uri = objectUri({ connectionId, database: context.database, kind: 'table', name: 'subject' });
       await page(owner).keyboard.press(process.platform === 'darwin' ? 'Meta+Shift+O' : 'Control+Shift+O'); owner.assertCurrent();
       const link = page(owner).getByRole('dialog', { name: '粘贴对象链接', exact: true });
+      await expect(link).toBeVisible(); owner.assertCurrent();
       await link.getByLabel('DBArk 对象链接', { exact: true }).fill(uri); owner.assertCurrent(); await link.getByRole('button', { name: '打开链接', exact: true }).click(); owner.assertCurrent();
       await expect(link.getByRole('alert')).toContainText('此名称已退役'); owner.assertCurrent(); await link.getByRole('button', {name:'关闭对话框',exact:true}).click(); owner.assertCurrent();
     }, info, { captureFailureScreenshot: false });
