@@ -31,7 +31,7 @@ let qualified: typeof import('../../src/engine/sql')['qualified'], identifier: t
 let buildCopyInsertSql: typeof import('../../src/main/copyInsertSql')['buildCopyInsertSql'];
 let randomUUID: typeof import('node:crypto')['randomUUID'];
 let database = '', owner = '', databaseState: D02Ownership = 'absent', pending = 0, failure: unknown;
-let halted = false, caseActive = false;
+let halted = false, caseActive = false, cleanupComplete = true;
 const definitions = new Map<string, string>();
 
 /** 活动命令和失败不可恢复；全局测试超时也不能在未终态时补DROP。 */
@@ -68,7 +68,9 @@ async function assertOwned() {
 
 describe.skipIf(!enabled)('复制INSERT真实解码和独立会话回放（默认关闭，Root统一实跑）', () => {
   beforeEach(async () => {
-    if (halted) throw Error('INSERT回放前例已失败并保留现场，后续模式不自动继续');
+    // 收尾未完成也要永久停链；不得先重置旧owner或读取下一模式配置。
+    if (halted || !cleanupComplete) { observed.retain = true; halted = true; throw Error('INSERT回放前例已失败或收尾未可信完成，后续模式不自动继续'); }
+    cleanupComplete = false;
     caseActive = true;
     engine = undefined; observer = undefined; databaseState = 'absent'; pending = 0; failure = undefined; observed.retain = false; observed.connections.clear(); definitions.clear();
     try {
@@ -132,34 +134,45 @@ describe.skipIf(!enabled)('复制INSERT真实解码和独立会话回放（默�
 
   afterEach(async context => {
     if (!caseActive) return;
+    // 首次await前锁定后续模式；只有同一例在原30秒内完整成功才允许放行。
     caseActive = false;
+    halted = true; cleanupComplete = false;
+    const started = Date.now(), cleanupEngine = engine, cleanupObserver = observer, cleanupConnections = [...observed.connections], cleanupDatabase = database, cleanupOwner = owner;
+    /** 不增加时限或计时器；框架超时、迟到回包及共享身份改变都不能恢复删除或下一例。 */
+    function assertCleanupCurrent() {
+      if (observed.retain || context.task.result?.state === 'fail' || Date.now() - started >= 30000 || engine !== cleanupEngine || observer !== cleanupObserver || database !== cleanupDatabase || owner !== cleanupOwner) {
+        observed.retain = true; halted = true; throw Error('INSERT回放收尾未在原时限内可信完成，保留现场且不放行后续模式');
+      }
+    }
     if (context.task.result?.state === 'fail') observed.retain = true;
     if (pending) { observed.retain = true; halted = true; throw new Error('INSERT回放存在未终态命令，保留连接及隔离库，禁止补DROP', { cause: failure }); }
     try { await cleanupD02Copy({ user: 'absent', database: databaseState,
       closeConnections: async () => {
         const errors: unknown[] = [];
-        try { await engine?.closeAll(); } catch (reason) { errors.push(reason); }
-        const results = await Promise.allSettled([...observed.connections].filter(value => value !== observer).map(value => value.close({ strict: true })));
+        try { await cleanupEngine?.closeAll(); } catch (reason) { errors.push(reason); }
+        const results = await Promise.allSettled(cleanupConnections.filter(value => value !== cleanupObserver).map(value => value.close({ strict: true })));
         const rejected = results.filter((value): value is PromiseRejectedResult => value.status === 'rejected');
         errors.push(...rejected.map(value => value.reason));
         if (errors.length) throw new AggregateError(errors, 'INSERT回放连接strict关闭失败', { cause: errors[0] });
       },
       verifyThreadsGone: async () => {
-        if (!observer) { if (observed.connections.size) throw Error('INSERT回放无观察连接，不能证明线程释放'); return; }
-        const ids = [...observed.connections].filter(value => value !== observer).map(value => value.connection.threadId);
-        if (ids.some(id => !Number.isSafeInteger(id) || !id || id === observer!.connection.threadId)) throw Error('INSERT回放真实线程编号未知');
+        if (!cleanupObserver) { if (cleanupConnections.length) throw Error('INSERT回放无观察连接，不能证明线程释放'); return; }
+        const ids = cleanupConnections.filter(value => value !== cleanupObserver).map(value => value.connection.threadId);
+        if (ids.some(id => !Number.isSafeInteger(id) || !id || id === cleanupObserver.connection.threadId)) throw Error('INSERT回放真实线程编号未知');
         await vi.waitFor(async () => {
-          expect((await execute<Record<string, unknown>[]>(observer!, 'SELECT ID FROM information_schema.PROCESSLIST WHERE ID=?', [observer!.connection.threadId!])).rows).toHaveLength(1);
-          if (ids.length) expect((await execute<Record<string, unknown>[]>(observer!, `SELECT ID FROM information_schema.PROCESSLIST WHERE ID IN (${ids.map(() => '?').join(',')})`, ids as number[])).rows).toEqual([]);
+          expect((await execute<Record<string, unknown>[]>(cleanupObserver, 'SELECT ID FROM information_schema.PROCESSLIST WHERE ID=?', [cleanupObserver.connection.threadId!])).rows).toHaveLength(1);
+          if (ids.length) expect((await execute<Record<string, unknown>[]>(cleanupObserver, `SELECT ID FROM information_schema.PROCESSLIST WHERE ID IN (${ids.map(() => '?').join(',')})`, ids as number[])).rows).toEqual([]);
         }, { timeout: 5000, interval: 50 });
       },
       dropUser: async () => { throw Error('INSERT回放不创建或删除用户'); },
       dropDatabase: async () => {
-        await assertOwned(); await sql('DROP DATABASE ' + identifier(database));
+        assertCleanupCurrent(); await assertOwned(); assertCleanupCurrent(); await sql('DROP DATABASE ' + identifier(cleanupDatabase));
         expect(await sql('SELECT SCHEMA_NAME FROM information_schema.SCHEMATA WHERE BINARY SCHEMA_NAME=BINARY ?', [database])).toHaveLength(0); databaseState = 'absent';
       },
-      closeAdmin: async () => { await observer?.close({ strict: true }); }, removeTemporaryFiles: async () => undefined
-    }, observed.retain, failure); }
-    catch (reason) { halted = true; throw reason; }
+      closeAdmin: async () => { await cleanupObserver?.close({ strict: true }); }, removeTemporaryFiles: async () => undefined
+    }, observed.retain, failure);
+      assertCleanupCurrent(); cleanupComplete = true; halted = false;
+    }
+    catch (reason) { observed.retain = true; halted = true; throw reason; }
   }, 30000);
 });
