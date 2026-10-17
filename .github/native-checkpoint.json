@@ -1,0 +1,7 @@
+{
+  "sourceCommit": "d0b337e16ebf0fc7fb7fbf38e3dc46f31aebb477",
+  "purpose": "固定查询复制、正文基线保护、UPSERT补全及严格目录收尾，执行三平台源码和实际安装检查；复制专项保持离线",
+  "systemClipboardRequested": false,
+  "databaseIntegrationRequested": false,
+  "publicationRequested": false
+}
