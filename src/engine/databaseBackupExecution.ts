@@ -61,6 +61,7 @@ interface RunRecord {
   stopWork?: Promise<void>;
   commitRequested?: boolean; commitSettled?: boolean; recovering?: Promise<DatabaseBackupRunResult>;
   archiveAbortConfirmed?: boolean;
+  scopeEnds: Record<'dump' | 'lock' | 'tools', 'confirmed' | 'unknown'>;
   binding?: DatabaseBackupRunBindings; target?: DatabaseBackupTargetReservation; scope?: DatabaseBackupExecutionScope; archive?: DatabaseBackupExecutionArchive;
   result?: DatabaseBackupRunResult;
 }
@@ -105,7 +106,7 @@ export class DatabaseBackupExecutor {
     this.prune();
     if (this.records.has(input.planToken) || this.tasks.has(input.taskId)) throw Error('备份计划或任务号已经领取，不能重放');
     if (this.records.size >= databaseBackupExecutionLimits.records || [...this.records.values()].filter(item => !item.finished).length >= databaseBackupExecutionLimits.active) throw Error('备份执行容量已满，未知任务须先核对释放');
-    const owner = Object.freeze({ ...input }), record: RunRecord = { owner, controller: new AbortController(), failures: [], pending: new Set(), expiresAt: this.ports.now() + 120_000, finished: false, commitStarted: false, cancelled: false, validArchive: false, ownerMismatch: false, scopeCleanupAttempted: false, snapshotErrors: new Set(), fileCommittedSeen: false };
+    const owner = Object.freeze({ ...input }), record: RunRecord = { owner, controller: new AbortController(), failures: [], pending: new Set(), expiresAt: this.ports.now() + 120_000, finished: false, commitStarted: false, cancelled: false, validArchive: false, ownerMismatch: false, scopeCleanupAttempted: false, snapshotErrors: new Set(), fileCommittedSeen: false, scopeEnds: { dump: 'unknown', lock: 'unknown', tools: 'unknown' } };
     this.records.set(input.planToken, record); this.tasks.set(input.taskId, record);
     let phase = '领取计划';
     try {
@@ -171,8 +172,10 @@ export class DatabaseBackupExecutor {
   private async cleanupScope(record: RunRecord): Promise<void> {
     if (!record.scope || record.scopeCleanupAttempted) return;
     record.scopeCleanupAttempted = true;
-    for (const [phase, operation] of [['关闭 dump', () => record.scope!.closeDump()], ['释放全局锁', () => record.scope!.unlock()], ['关闭工具资源', () => record.scope!.closeTools()]] as const) {
-      try { const proof = await this.wait(record, phase, operation(), this.budgets.cleanupMs, false); this.owned(record, proof); if (proof.state !== 'confirmed') throw Error(`${phase}终态未知`); } catch (error) { this.fail(record, phase, error); }
+    for (const [key, phase, operation] of [['dump', '关闭 dump', () => record.scope!.closeDump()], ['lock', '释放全局锁', () => record.scope!.unlock()], ['tools', '关闭工具资源', () => record.scope!.closeTools()]] as const) {
+      // 每次显式取证先撤销该项旧确认；unknown/拒绝不能被 snapshot 的 true 或历史确认覆盖。
+      record.scopeEnds[key] = 'unknown';
+      try { const proof = await this.wait(record, phase, operation(), this.budgets.cleanupMs, false); this.owned(record, proof); if (proof.state !== 'confirmed') throw Error(`${phase}终态未知`); record.scopeEnds[key] = 'confirmed'; } catch (error) { this.fail(record, phase, error); }
     }
   }
   /** 锁内证据必须覆盖所有对象与权限，且不能悄悄更换实例、工具、定义或范围。 */
@@ -189,6 +192,7 @@ export class DatabaseBackupExecutor {
   private resourcesConfirmed(record: RunRecord): boolean {
     if (record.ownerMismatch) return false;
     if (!record.scope) return !record.archive;
+    if (record.scopeEnds.dump !== 'confirmed' || record.scopeEnds.lock !== 'confirmed' || record.scopeEnds.tools !== 'confirmed') return false;
     try { const state = record.scope.snapshot(); this.owned(record, state); return state.dumpClosed === true && state.lockReleased === true && state.toolsClosed === true; }
     catch (error) { if (!record.snapshotErrors.has('资源终态读取')) { record.snapshotErrors.add('资源终态读取'); this.fail(record, '资源终态读取', error); } return false; }
   }
@@ -201,6 +205,8 @@ export class DatabaseBackupExecutor {
   /** 已提交但摘要或边界未知时仍保留目标，不让后续任务覆盖现场。 */
   private async releaseTarget(record: RunRecord): Promise<void> {
     const file = this.archiveState(record);
+    // 开始提交后没有不可再发布的负终态接口；瞬时 false/Promise拒绝均不足以允许删除或释放。
+    if (record.commitStarted && file?.fileCommitted !== true) return;
     if (record.archive && !file?.fileCommitted && !record.archiveAbortConfirmed) return;
     if (file?.fileCommitted && (!record.validArchive || !record.commitStarted || !record.commitSettled || file.bytes !== record.archiveSummary?.bytes || file.sha256 !== record.archiveSummary?.sha256)) return;
     if (!record.target) return;
@@ -209,13 +215,13 @@ export class DatabaseBackupExecutor {
   /** 每次读取都活读文件提交事实；commit 超时后晚到的 rename 不能被缓存为未提交。 */
   private result(record: RunRecord): DatabaseBackupRunResult {
     const file = this.archiveState(record), committed = file?.fileCommitted === true;
-    const resources = this.resourcesConfirmed(record) && !record.pending.size && !record.target && (!record.archive || (file?.closed === true && (committed || record.archiveAbortConfirmed === true)));
+    const resources = (!record.commitStarted || committed) && this.resourcesConfirmed(record) && !record.pending.size && !record.target && (!record.archive || (file?.closed === true && (committed || record.archiveAbortConfirmed === true)));
     if (!resources || (committed && (!record.validArchive || !file?.artifactToken || file.bytes !== record.archiveSummary?.bytes || file.sha256 !== record.archiveSummary?.sha256))) return { state: 'retained-unknown', fileCommitted: committed, resources: 'unknown', restoreVerified: false, ...(committed ? { artifactToken: file?.artifactToken, bytes: file?.bytes, sha256: file?.sha256 } : {}) };
     if (committed) return { state: 'completed', artifactToken: file!.artifactToken!, bytes: file!.bytes!, sha256: file!.sha256!, fileCommitted: true, resources: 'confirmed', restoreVerified: false };
     return { state: record.cancelled ? 'cancelled' : 'failed', fileCommitted: false, resources: 'confirmed', restoreVerified: false };
   }
   /** 私有诊断保留准确句柄及主副原错误；Root 必须脱敏后再做 IPC 或日志输出。 */
-  retained(taskId: string) { const record = this.tasks.get(taskId); return record ? { owner: record.owner, scope: record.scope, archive: record.archive, target: record.target, pending: record.pending.size, failures: [...record.failures], result: this.result(record) } : null; }
+  retained(taskId: string) { const record = this.tasks.get(taskId); return record ? { owner: record.owner, scope: record.scope, archive: record.archive, target: record.target, pending: record.pending.size, cleanupProofs: { ...record.scopeEnds }, failures: [...record.failures], result: this.result(record) } : null; }
   /** 只有显式恢复动作才重新观察/清理原句柄；不重新领取计划，不启动 dump 或执行 SQL。 */
   recover(taskId: string): Promise<DatabaseBackupRunResult> {
     const record = this.tasks.get(taskId); if (!record || !record.finished) return Promise.reject(Error('任务未到可恢复终态'));
@@ -223,7 +229,7 @@ export class DatabaseBackupExecutor {
     const operation = (async () => {
       if (record.pending.size || record.ownerMismatch) return this.result(record);
       record.scopeCleanupAttempted = false; await this.cleanupScope(record);
-      if (!this.archiveState(record)?.fileCommitted && (!record.commitRequested || record.commitSettled) && record.archive) {
+      if (!this.archiveState(record)?.fileCommitted && !record.commitStarted && (!record.commitRequested || record.commitSettled) && record.archive) {
         try { const proof = await this.wait(record, '显式中止原归档', record.archive.abort(), this.budgets.cleanupMs, false); this.owned(record, proof); if (proof.state !== 'confirmed') throw Error('原归档仍未知'); record.archiveAbortConfirmed = true; } catch (error) { this.fail(record, '显式中止原归档', error); }
       }
       if (this.resourcesConfirmed(record) && !record.pending.size && (!record.archive || this.archiveState(record)?.closed === true)) await this.releaseTarget(record);

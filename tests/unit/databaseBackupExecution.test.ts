@@ -126,4 +126,30 @@ describe('B01 真实执行状态机（仅 RAM 端口）', () => {
     vi.mocked(f.archive.finish).mockImplementation(async manifest => { manifest.database = 'aliased-database'; return finish(manifest); });
     expect((await f.executor.run({ planToken: f.plan.planToken, taskId: 'run' })).state).toBe('failed'); expect(f.archive.commit).not.toHaveBeenCalled();
   });
+  it.each(['closeDump', 'unlock', 'closeTools'] as const)('显式终态门：%s unknown/拒绝不能被snapshot全真覆盖，重新同owner确认才释放', async method => {
+    for (const mode of ['unknown', 'rejected'] as const) {
+      const f = await fixture(), primary = Error('保留原始主错'), secondary = Error('保留原始副错');
+      vi.mocked(f.scope.startDump).mockRejectedValue(primary);
+      vi.mocked(f.scope[method]).mockImplementation(async () => { if (mode === 'rejected') throw secondary; return { owner: f.owner, state: 'unknown' }; });
+      vi.spyOn(f.scope, 'snapshot').mockImplementation(() => ({ owner: f.owner, dumpClosed: true, lockReleased: true, toolsClosed: true }));
+      const result = await f.executor.run({ planToken: f.plan.planToken, taskId: 'run' });
+      expect(result.state).toBe('retained-unknown'); expect(result.resources).toBe('unknown'); expect(f.held).toBe(true); expect(f.release).not.toHaveBeenCalled();
+      const before = f.executor.retained('run')!; expect(before.failures.some(item => item.error === primary && item.primary)).toBe(true);
+      if (mode === 'rejected') expect(before.failures.some(item => item.error === secondary && !item.primary)).toBe(true);
+      vi.mocked(f.scope[method]).mockImplementation(async () => ({ owner: f.owner, state: 'confirmed' }));
+      const recovered = await f.executor.recover('run'); expect(recovered.resources).toBe('confirmed'); expect(recovered.state).toBe('failed'); expect(f.release).toHaveBeenCalledTimes(1);
+      expect(f.executor.retained('run')!.failures.some(item => item.error === primary)).toBe(true);
+    }
+  });
+  it('提交未知门：commit开始后拒绝，snapshot暂为false或closed全真也不能abort/释放，真实晚到提交可再确认', async () => {
+    const f = await fixture(), commitError = Error('OS发布仍未知');
+    vi.mocked(f.archive.commit).mockImplementation(async () => { f.hooks.onCommitStart(); throw commitError; });
+    const normalSnapshot = f.archive.snapshot;
+    vi.spyOn(f.archive, 'snapshot').mockImplementation(() => ({ ...normalSnapshot(), closed: true }));
+    expect((await f.executor.run({ planToken: f.plan.planToken, taskId: 'run' })).state).toBe('retained-unknown');
+    expect((await f.executor.recover('run')).state).toBe('retained-unknown'); expect(f.archive.abort).not.toHaveBeenCalled(); expect(f.release).not.toHaveBeenCalled(); expect(f.held).toBe(true);
+    f.setCommitted(); expect(f.executor.retained('run')!.result.fileCommitted).toBe(true);
+    expect((await f.executor.recover('run')).state).toBe('completed'); expect(f.release).toHaveBeenCalledTimes(1); expect(f.archive.abort).not.toHaveBeenCalled();
+    expect(f.executor.retained('run')!.failures.some(item => item.error === commitError)).toBe(true); expect(f.scope.startDump).toHaveBeenCalledTimes(1); expect(f.archive.commit).toHaveBeenCalledTimes(1);
+  });
 });

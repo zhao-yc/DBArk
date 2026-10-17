@@ -25,12 +25,12 @@ Root 原生适配器负责固定 `shell=false`、可信套件路径/哈希、凭
 2. 固定计划格式/期限/预算，同 owner 登记目标、scope、归档句柄，先核源/工具/输出租约，再获取实际锁。
 3. 锁内复核全部类别可见性、权限、源/连接修订、精确家族版本、工具套件和注册修订，要求对象与定义和原计划一致；缺失或变化直接失败，不改成部分导出。
 4. dump 只接受有界 Uint8Array。每个输入片段最多 1 MiB，并拆成至多 64 KiB 的写入片段，逐次 await 后才读下一段。独立增量计算原始字节数及 SHA256，不解码、不改写、不加载完整 SQL。空 stdout 即使 exit=0 也失败。
-5. 等待明确 exit=0 且没有 signal，核锁连续性；分别确认 dump close、unlock、工具关闭和全部未决工作结算。主错误及每项清理副错误都保留，清理不会因为已有主错误而被跳过，也不会在同一次失败自动重复 close。
+5. 等待明确 exit=0 且没有 signal，核锁连续性；分别保存 dump close、unlock、工具关闭的同 owner 显式 confirmed 回执，并要求 snapshot 一致、全部未决工作结算。snapshot 全真不能覆盖任一显式 unknown/拒绝。主错误及每项清理副错误都保留，清理不会因为已有主错误而被跳过，也不会在同一次失败自动重复 close。
 6. 只有实际资源终态确认后才生成 `resourcesConfirmed=true`、`restoreVerified=false` 的 manifest。源证据和传给归档端口的 manifest 使用隔离副本，防止端口通过可变别名篡改已核准范围。
 7. 调用归档 finish，核独立 dump 字节摘要、最终归档摘要/预算以及返回 manifest 的源、工具、范围与一致性字段，然后才进入 AtomicFile 提交边界。提交后的取消不回报假取消，也不删除已提交文件。
 8. 文件终态及全部资源确认后释放目标占用。未知时保留准确 scope/archive/target 与未决异步工作；`retained(taskId)` 是 Root 私有诊断，含原错误对象，不能直接发 renderer 或原样日志输出。
 
-默认容量 2 个活动 run、8 个有效/保留记录；每阶段最多 30 秒、每项清理最多 1 秒，实际持锁不超过计划预算。超时不是释放证明。提交 Promise 超时后不 abort 仍可能 rename 的归档；状态查询活读晚到的 fileCommitted，目标继续保留。显式 `recover(taskId)` 只观察/清理同一 owner 的原句柄，不重新取计划、加锁、启动 dump 或执行 SQL；仍未决或 owner 错乱时不放行。
+默认容量 2 个活动 run、8 个有效/保留记录；每阶段最多 30 秒、每项清理最多 1 秒，实际持锁不超过计划预算。超时不是释放证明。提交 Promise 超时或拒绝后不 abort 仍可能 rename 的归档；状态查询活读晚到的 fileCommitted，目标继续保留。显式 `recover(taskId)` 只观察/清理同一 owner 的原句柄，不重新取计划、加锁、启动 dump 或执行 SQL；仍未决或 owner 错乱时不放行。commitStarted 后没有不可再发布的负终态接口，因此即使 Promise 已 settled、snapshot 暂为 false/closed，也不能 abort 或释放目标；只能继续保留，或在真实发布被确认后按实际提交处理。
 
 ## 员工4归档模块的适配
 
@@ -70,3 +70,25 @@ node node_modules/typescript/bin/tsc --noEmit
 执行状态机 14 项、恢复预检 14 项，共 28 项通过；最终类型检查退出码 0。覆盖顺序、单次领取、容量、锁内范围、主副错误、EOF/exit 与 close 区别、64 KiB 背压、取消 ACK、提交边界/超时/晚到事实、外来 owner、未知 abort、空 dump、manifest 及其可变别名篡改；恢复侧覆盖准确组合、完整清单类型、SQL范围、DEFINER、隔离目标、客户端、事件及未决超时容量。专项报告 `.cache/database-backup-execution/execution-tests.json` 的 SHA256 为 `49914abffa56876945c3232f47d1ad6b1c191f5ac03e52c6d0fa4bb282d41afc`。
 
 首轮类型检查发现 RAM fixture 的 true 被推断为 boolean，补充字面量类型后重验；没有放宽生产证明类型。未重跑前片 22 项、M02、全套或构建。本轮产品 OS spawn、数据库、GUI、网络、工具探测/下载/安装、凭据读取、剪贴板、Docker 均为 0；测试工具链、Git 同步/推送及只读提交 CI 查询单列，不冒充产品执行。Root 实际工具分发和其它分支验收状态不纳入本片结果。
+
+## 固定 6cf 独审两项 P2 补修
+
+员工1报告 SHA256 为 `904f8b218115dbf698c47e31708b078ced76e59749bacf22e5b445485513c928`，同字节原件 `independent.test.ts` 为 `1a17f561ba3eacb9a1b5150e45296455e59a02413fe7252a84f049309ac7f556`。在本普通修复克隆、原始 `6cfb89213c9e3e220ca677f05862f707ca30b34d` 上先复跑 G2/G3，确认为 2 红；原件和受审报告没有改动。
+
+P2-1 只用 snapshot 判清理终态，导致 close 的显式 unknown/拒绝被全真 snapshot 覆盖，释放目标。补修记录 dump/lock/tools 三项显式回执，每次重取证先撤销该项旧确认；必须同 owner、显式 confirmed 且 snapshot 一致才能放行。历史主副错误保留；显式恢复取得新的三个 confirmed 后仍可释放，不把任意历史业务错误变成永久未知。
+
+P2-2 在 commitStarted 后 Promise 拒绝，recover 仍会 abort 并释放，而 OS 可能稍后发布。补修在 recover、目标释放和结果判定统一沿用 commitStarted 保守门：没有明确不可再发布的负终态接口就保留目标；暂时 false、closed、取消 ACK 或 Promise settled 都不够。之后观察到实际 fileCommitted=true，且全部终态与摘要确认，才允许按真实提交完成；不重跑 dump/commit，也不抹掉原提交错误。
+
+最小复跑为同字节原件 G1/G2/G3 3 组通过（另 2 组名称过滤），作者窄集 5 项通过（另 13 项名称过滤，含三种清理方法各 unknown/拒绝两个变体、正向完整 owner 和晚到提交确认）；类型检查退出码 0。没有重跑原 28 项、完整套、构建或实际端口。
+
+本克隆 ignored 证据目录 `.cache/execution-fix-independent/`：
+
+| 文件 | SHA256 |
+| --- | --- |
+| baseline-red.json | b2b71787f56f4d06b7c05e5640d4fc19bc4041399bee2f038500ef34efdab0f0 |
+| fixed-original.json | 349e5d2a5517829a7f91ce2412f00c70cffc4238cac27b990730cc9cf5f608f0 |
+| author-narrow.json | 5f7e535bb6beaca7a677b7268d719e92a7a1866c7d0bd972b248d36f9c0f2d10 |
+
+首次本地诊断配置被 Vitest 默认 `.cache` 排除规则过滤，未发现用例；该次保留为 `preflight-no-tests.json`，不计原反例。随后仅在 ignored 配置设置 exclude=[]，原件字节不变，取得以上真正红/绿结果。
+
+源检查普通克隆中的未提交 `databaseBackupSource.ts` 完整保留，插入修复前后 SHA256 均为 `41904be170d574a50f7e832656a76d139c6dba4902ff7c7a055343dccaa7958b`；未 stash/reset，也没有混入修复提交。
