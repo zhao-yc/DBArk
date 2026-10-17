@@ -154,6 +154,8 @@ export function buildTableColumnPatchSql(document: TableColumnDefinitionDocument
   const mysql57 = document.context.dialect === 'mysql' && version[1] === '5';
   const largeDefaultUnsupported = mysql57 || (document.context.dialect === 'mysql' && version[1] === '8' && version[2] === '0' && Number(version[3]) < 13);
   const patches = validateColumnPatches(input, document.context.dialect === 'mysql' ? 30 : 38);
+  // 新配对绝不能落到旧属性重述路径而被忽略；须由专用事实/计划/后核闭环处理。
+  if (patches.some(patch => patch.kind === 'alter' && Object.hasOwn(patch.changes, 'collation'))) throw new Error('列排序规则必须使用专用受控计划，旧字段计划器未发送DDL');
   if (document.database !== undefined && document.database !== options.database) throw new Error('表定义数据库与目标不一致');
   const target = qualified(options.database, document.table), nodes = new Map<string, ColumnNode>(), names = new Set<string>();
   for (const [ref, name] of options.columnRefs) {
@@ -205,7 +207,10 @@ export function buildTableColumnPatchSql(document: TableColumnDefinitionDocument
     if (changes.nullable === column.nullable) delete changes.nullable;
     if (changes.comment === (column.comment ?? '')) delete changes.comment;
     if (changes.default && defaultUnchanged(column, changes.default)) delete changes.default;
-    for (const key of Object.keys(changes) as (keyof Alter['changes'])[]) assertColumnAttributeReadable(column, key);
+    for (const key of Object.keys(changes) as (keyof Alter['changes'])[]) {
+      if (key === 'collation') throw new Error('列排序规则必须使用专用受控计划');
+      assertColumnAttributeReadable(column, key);
+    }
     assertDependencies(document, column, new Set(Object.keys(changes)), unknownTail);
     if (changes.name !== undefined) { node.name = changes.name; acknowledgements.add('external-name-dependencies'); }
     if (changes.type || changes.nullable === false) acknowledgements.add('conversion-or-nullability');

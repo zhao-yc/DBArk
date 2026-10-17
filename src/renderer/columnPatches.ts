@@ -68,6 +68,8 @@ export function makeColumnAlter(column: TableColumnView, changes: ColumnChanges)
   const next: ColumnChanges = {};
   for (const [attribute, value] of Object.entries(changes)) {
     const key = attribute as keyof ColumnChanges; if (value === undefined) continue;
+    // 共享合同先冻结，专用UI接线完成前不从旧七属性入口隐式提交新配对。
+    if (key === 'collation') throw new Error(text.readonly);
     const original = key === 'type' ? column.typeSql.trim().toUpperCase() : key === 'default' ? editableColumnDefault(column.default) : key === 'position' ? undefined : column[key];
     if (key === 'onUpdate' && sameColumnOnUpdate(column.onUpdate, value as typeof column.onUpdate, column.typeSql)) continue;
     const comparable = key === 'type' ? columnTypeLabel(value as ColumnTypePatch).toUpperCase() : value;
@@ -97,7 +99,7 @@ export function validateColumnDrafts(columns: readonly TableColumnView[], input:
       if (value && value.precision !== undefined && value.precision !== precision) throw new Error(text.onUpdatePrecision);
     }
     if (patch.kind === 'add') { if (refs.has(patch.clientKey)) throw new Error(text.duplicate); names.set(patch.clientKey, patch.name); }
-    else if (patch.kind === 'alter') { for (const key of Object.keys(patch.changes) as (keyof ColumnChanges)[]) if (!refs.get(patch.columnRef)!.access[key].editable) throw new Error(refs.get(patch.columnRef)!.access[key].reason || text.readonly); if (patch.changes.name !== undefined) names.set(patch.columnRef, patch.changes.name); }
+    else if (patch.kind === 'alter') { for (const key of Object.keys(patch.changes) as (keyof ColumnChanges)[]) { if (key === 'collation') throw new Error(text.readonly); if (!refs.get(patch.columnRef)!.access[key].editable) throw new Error(refs.get(patch.columnRef)!.access[key].reason || text.readonly); } if (patch.changes.name !== undefined) names.set(patch.columnRef, patch.changes.name); }
   }
   if (!names.size) throw new Error(text.lastColumn);
   const folded = new Set<string>(); for (const name of names.values()) { if (folded.has(name.toLowerCase())) throw new Error(text.duplicate); folded.add(name.toLowerCase()); }

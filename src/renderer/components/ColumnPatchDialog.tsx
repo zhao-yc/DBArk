@@ -19,7 +19,7 @@ export interface ColumnPatchServices {
   cancel(input: { taskId: string }): Promise<void>;
   subscribe?(listener: (event: { taskId: string; progress: ColumnPatchProgress }) => void): () => void;
 }
-interface EditRow { key: string; original?: TableColumnView; name: string; type: ColumnTypePatch; nullable: boolean | undefined; default: ColumnDefaultPatch; onUpdate?: ColumnOnUpdatePatch; comment: string; position: NonNullable<ColumnChanges['position']>; enabled: Set<keyof ColumnChanges>; }
+interface EditRow { key: string; original?: TableColumnView; name: string; type: ColumnTypePatch; nullable: boolean | undefined; default: ColumnDefaultPatch; onUpdate?: ColumnOnUpdatePatch; collation?: ColumnChanges['collation']; comment: string; position: NonNullable<ColumnChanges['position']>; enabled: Set<keyof ColumnChanges>; }
 
 /** 结构化类型编辑只生成共享联合类型，不将输入拼成type SQL。 */
 function TypeFields({ value, disabled, onChange }: { value: ColumnTypePatch; disabled: boolean; onChange(value: ColumnTypePatch): void }) {

@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { inspectStructurePatchInput } from './structurePatchInput';
 import type { SqlLexicalMode } from './queryParameters';
+import type { TableEncodingPair } from './tableDefaultEncoding';
 
 export const tableColumnPatchLimits = { definitionBytes: 2 * 1024 * 1024, columns: 4096, tokens: 150000, nesting: 128, patches: 100, patchBytes: 512 * 1024, ddlBytes: 4 * 1024 * 1024 } as const;
 /** 这些兼容模式会省略 SHOW CREATE 属性，结构读取可规范化，未经规范化的结构导出必须拒绝。 */
@@ -165,11 +166,15 @@ export const columnDefaultPatchSchema = z.discriminatedUnion('kind', [
 export type ColumnDefaultPatch = z.infer<typeof columnDefaultPatchSchema>;
 export const columnOnUpdatePatchSchema = columnTimestampExpressionSchema.nullable();
 export type ColumnOnUpdatePatch = z.infer<typeof columnOnUpdatePatchSchema>;
+/** 只承载实际目录中的完整配对；同字符集、差异和权限仍由专用引擎流程重核。 */
+export const columnCollationPatchSchema = z.object({ charset: z.string().regex(/^[A-Za-z0-9_]{1,64}$/), collation: z.string().regex(/^[A-Za-z0-9_]{1,64}$/) }).strict();
+/** 默认算法可能重建或等待锁；外部查询的排序语义不由定义后核证明。 */
+export const columnCollationAcknowledgements = ['column-collation-semantics', 'column-collation-default-algorithm'] as const;
 const position = z.discriminatedUnion('kind', [z.object({ kind: z.literal('first') }).strict(), z.object({ kind: z.literal('last') }).strict(), z.object({ kind: z.literal('after'), columnRef: ref }).strict()]);
 export const columnPatchSchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('add'), clientKey: ref, name, type: columnTypePatchSchema, nullable: z.boolean(), default: columnDefaultPatchSchema, comment: z.string(), position, onUpdate: columnOnUpdatePatchSchema.optional() }).strict(),
   z.object({ kind: z.literal('drop'), columnRef: ref }).strict(),
-  z.object({ kind: z.literal('alter'), columnRef: ref, changes: z.object({ name: name.optional(), type: columnTypePatchSchema.optional(), nullable: z.boolean().optional(), default: columnDefaultPatchSchema.optional(), comment: z.string().optional(), position: position.optional(), onUpdate: columnOnUpdatePatchSchema.optional() }).strict() }).strict(),
+  z.object({ kind: z.literal('alter'), columnRef: ref, changes: z.object({ name: name.optional(), type: columnTypePatchSchema.optional(), nullable: z.boolean().optional(), default: columnDefaultPatchSchema.optional(), comment: z.string().optional(), position: position.optional(), onUpdate: columnOnUpdatePatchSchema.optional(), collation: columnCollationPatchSchema.optional() }).strict() }).strict(),
 ]);
 export type ColumnPatch = z.infer<typeof columnPatchSchema>;
 
@@ -203,6 +208,9 @@ export function inspectColumnPatchInput(input: unknown): { value: unknown; bytes
 export function validateColumnPatches(input: unknown, maxDecimalScale: 30 | 38 = 30): ColumnPatch[] {
   const checked = inspectColumnPatchInput(input);
   const patches = z.array(columnPatchSchema).min(1).max(tableColumnPatchLimits.patches).parse(checked.value);
+  // 首片只能单列单属性，不能静默拆分、忽略旁属性或先发送一部分DDL。
+  const collation = patches.find(patch => patch.kind === 'alter' && Object.hasOwn(patch.changes, 'collation'));
+  if (collation && (patches.length !== 1 || collation.kind !== 'alter' || Object.keys(collation.changes).length !== 1)) throw new Error('列排序规则只能单列单属性独立修改');
   const references = new Set<string>(), added = new Set<string>();
   for (const patch of patches) {
     const seen = patch.kind === 'add' ? added : references, key = patch.kind === 'add' ? patch.clientKey : patch.columnRef;
@@ -239,11 +247,15 @@ export interface TableColumnView {
   default: ReadColumnDefault; comment: string | undefined; rawDefinition: string;
   /** null为无自动更新；缺失表示不能可靠投影，不能据此生成移除补丁。 */
   onUpdate?: ColumnOnUpdatePatch;
+  /** 有效编码来自实际列目录；access仅为本快照能力，不能替代preview/apply重核。 */
+  collation?: { current: TableEncodingPair; access: ColumnAttributeAccess };
   access: Record<ColumnEditableAttribute, ColumnAttributeAccess>;
 }
 export interface TableColumnGetOutput {
   target: TableColumnPatchTarget; snapshotId: string; ddlHash: string; expiresAt: string;
   columns: TableColumnView[]; warnings: string[];
+  /** 只在真实完整目录与合计预算允许时提供；不得截断、猜测或在每列重复。 */
+  collationCatalog?: TableEncodingPair[];
   capabilities: { dialect: 'mysql' | 'mariadb'; serverVersion: string; maxDecimalScale: 30 | 38 };
   definitionContext?: { originalSqlMode: string; sqlMode: string; characterSetConnection: 'utf8mb4'; collationConnection: 'utf8mb4_bin'; sqlQuoteShowCreate: true };
 }
