@@ -18,14 +18,14 @@ function metadata(name: string): IndexColumnMetadata {
   return { COLUMN_NAME: name, DATA_TYPE: integer ? 'int' : binary ? 'binary' : 'char', COLUMN_TYPE: integer ? 'int' : binary ? 'binary(255)' : 'char(255)', IS_NULLABLE: integer ? 'NO' : 'YES', CHARACTER_SET_NAME: integer || binary ? null : 'utf8mb4', COLLATION_NAME: integer || binary ? null : 'utf8mb4_bin', CHARACTER_MAXIMUM_LENGTH: integer ? null : '255', CHARACTER_OCTET_LENGTH: integer ? null : binary ? '255' : '1020', EXTRA: '' };
 }
 /** 使用真实列目录适配器、解析器、能力门和规划器；这里不导入数据库连接或真实测试入口。 */
-function read(source = ddl(), dialect: 'mysql' | 'mariadb' = 'mysql'): IndexStructureRead {
+function read(source = ddl(), dialect: 'mysql' | 'mariadb' = 'mysql', readMetadata = metadata): IndexStructureRead {
   const context: TableDefinitionContext = { dialect, mode: { ansiQuotes: false, noBackslashEscapes: false } }, version = dialect === 'mysql' ? '8.4.11' : '11.4.13-MariaDB';
   const definition = parseTableColumnDefinition(source, context), indexDocument = readTableIndexDefinition(definition);
-  const columns = new Map(definition.columns.map(column => [column.name, deriveTrustedIndexColumn(column, metadata(column.name), { definitionContext: context, ...(column.name === 'id' || column.name === 'b' ? {} : { charsetMaxBytes: 4 }) }).column]));
+  const columns = new Map(definition.columns.map(column => [column.name, deriveTrustedIndexColumn(column, readMetadata(column.name), { definitionContext: context, ...(column.name === 'id' || column.name === 'b' ? {} : { charsetMaxBytes: 4 }) }).column]));
   const indexes = new Map(indexDocument.indexes.map(parsed => [parsed.name, { parsed, definition: editableIndexDefinition(parsed, columns), visible: true as const, generated: false as const }]));
   const capabilities = deriveIndexCapabilities({ dialect, serverVersion: version, engine: 'InnoDB', rowFormat: 'Dynamic', pageSize: 16384 }).capabilities!;
   const options: IndexPlanOptions = { database: 'db', dialect, serverVersion: version, engine: 'InnoDB', sqlMode: context.mode, capabilities, checks: { foreignKeyChecks: 1, uniqueChecks: 1 } };
-  return { source, context, originalMode: 'STRICT_ALL_TABLES', normalizedMode: 'STRICT_ALL_TABLES', identity: '合成固定身份', serverVersion: version, nullability: definition.columns.map(column => [column.name, column.name !== 'id']), encodings: definition.columns.map(column => ({ name: column.name, charset: metadata(column.name).CHARACTER_SET_NAME, collation: metadata(column.name).COLLATION_NAME })), tableEncoding: { charset: 'utf8mb4', collation: 'utf8mb4_bin' }, model: { definition, indexDocument, columns, indexes, dependencies: { incomingCoverage: { kind: 'complete', source: 'innodb-dictionary' }, outgoingComplete: true, foreignKeys: [], autoIncrementColumnRefs: [], partition: { kind: 'none' }, hiddenDependencies: [], automaticForeignKeyIndexProvenance: { kind: 'known', indexRefs: [] } } }, options, warnings: [], catalogDigest: '合成目录摘要', dependencyDigest: '合成依赖摘要', bytes: Buffer.byteLength(source) };
+  return { source, context, originalMode: 'STRICT_ALL_TABLES', normalizedMode: 'STRICT_ALL_TABLES', identity: '合成固定身份', serverVersion: version, nullability: definition.columns.map(column => [column.name, column.name !== 'id']), encodings: definition.columns.map(column => ({ name: column.name, charset: readMetadata(column.name).CHARACTER_SET_NAME, collation: readMetadata(column.name).COLLATION_NAME })), tableEncoding: { charset: 'utf8mb4', collation: 'utf8mb4_bin' }, model: { definition, indexDocument, columns, indexes, dependencies: { incomingCoverage: { kind: 'complete', source: 'innodb-dictionary' }, outgoingComplete: true, foreignKeys: [], autoIncrementColumnRefs: [], partition: { kind: 'none' }, hiddenDependencies: [], automaticForeignKeyIndexProvenance: { kind: 'known', indexRefs: [] } } }, options, warnings: [], catalogDigest: '合成目录摘要', dependencyDigest: '合成依赖摘要', bytes: Buffer.byteLength(source) };
 }
 /** 请求只携带结构化键部分，不拼字段名长度表达式冒充正式前缀。 */
 const index = (parts: IndexDefinition['keyParts'], kind: IndexDefinition['kind'] = 'ordinary'): IndexDefinition => ({ name: kind === 'primary' ? 'PRIMARY' : 'added', kind, method: 'BTREE', comment: '', keyParts: parts });
@@ -91,5 +91,65 @@ describe('CHAR/BINARY真实目录形状的拒绝边界', () => {
   });
   it.each([{ generated: true }, { hidden: true }, { dataType: 'JSON' }])('生成隐藏及未知类型继续拒绝：%j', change => {
     const before = read(); Object.assign(before.model.columns.get('c')!, change); expect(plan(before, index([part('c', 2)])).kind).toBe('blocked');
+  });
+});
+
+/** 独立合成目录明确给定类型和长度，不从待验证计划反填服务器SHOW或SUB_PART。 */
+function fullLengthRead(type: 'char' | 'varchar' | 'binary' | 'varbinary' | 'text' | 'blob', keys = oldKeys) {
+  const binary = type === 'binary' || type === 'varbinary' || type === 'blob', name = binary ? 'b' : 'c', large = type === 'text' || type === 'blob';
+  const declaration = type + (large ? '' : '(255)');
+  let source = ddl(keys).replace(binary ? 'b binary(255)' : 'c char(255)', name + ' ' + declaration);
+  if (large && !binary) source = source.replace(" DEFAULT '原值'", '');
+  const readMetadata = (column: string): IndexColumnMetadata => column !== name ? metadata(column) : { ...metadata(name), DATA_TYPE: type, COLUMN_TYPE: declaration };
+  return { name, value: read(source, 'mysql', readMetadata) };
+}
+
+describe('满列前缀与服务器整字段表示一致，仍严格后核真正前缀', () => {
+  it.each(['char', 'varchar', 'binary', 'varbinary'] as const)('%s的255计划接受无前缀SHOW及SUB_PART NULL，SQL和finalIndexes同为整字段', type => {
+    const { name, value: before } = fullLengthRead(type), result = plan(before, index([part(name, 255)]));
+    expect(result.kind).toBe('ready'); if (result.kind !== 'ready') return;
+    const after = fullLengthRead(type, `${oldKeys},KEY added(${name}) COMMENT ''`).value;
+    const parsed = after.model.indexDocument.indexes.find(value => value.name === 'added')!;
+    expect(() => crossCheckIndexStatistics(parsed, [{ INDEX_NAME: 'added', COLUMN_NAME: name, SEQ_IN_INDEX: 1, NON_UNIQUE: 1, INDEX_TYPE: 'BTREE', COLLATION: 'A', SUB_PART: null, INDEX_COMMENT: '' }], { visibility: false, ignored: false, expression: false })).not.toThrow();
+    // 本红例先核完整链，而不是只要求SQL字符串变化；基线verify实际返回false。
+    expect(verifyIndexAfter(before, result, after)).toBe(true);
+    expect(result.sql).toContain(`(\`${name}\` ASC)`); expect(result.sql).not.toContain('(255)');
+    expect(result.finalIndexes.find(value => value.clientKey === 'new')!.definition!.keyParts[0].prefixLength).toBeUndefined();
+    const shortened = fullLengthRead(type, `${oldKeys},KEY added(${name}(254)) COMMENT ''`).value;
+    expect(verifyIndexAfter(before, result, shortened)).toBe(false);
+    const partial = plan(before, index([part(name, 254)])); expect(partial.kind).toBe('ready');
+    if (partial.kind === 'ready') expect(verifyIndexAfter(before, partial, after)).toBe(false);
+  });
+  it('3072最大边界规范三列满长，3073仍在发送前拒绝，不降到254', () => {
+    const before = read(), parts = [part('c', 255), part('d', 255), part('e', 255)], result = plan(before, index([...parts, part('b', 12)]));
+    expect(result.kind).toBe('ready'); if (result.kind !== 'ready') return;
+    expect(verifyIndexAfter(before, result, read(ddl(`${oldKeys},KEY added(c,d,e,b(12)) COMMENT ''`)))).toBe(true);
+    expect(result.sql).toContain('(`c` ASC, `d` ASC, `e` ASC, `b`(12) ASC)');
+    expect(plan(before, index([...parts, part('b', 13)])).kind).toBe('blocked');
+  });
+  it.each(['char', 'binary'] as const)('%s满长缺失或矛盾完整成本不得规范，partial仍沿已证前缀预算', type => {
+    for (const fullKeyBytes of [undefined, 0, -1, NaN, Infinity, type === 'char' ? 1019 : 254, type === 'char' ? 1021 : 256]) {
+      const { name, value: before } = fullLengthRead(type); before.model.columns.get(name)!.fullKeyBytes = fullKeyBytes;
+      expect(plan(before, index([part(name, 255)])).kind).toBe('blocked');
+    }
+    const { name, value: before } = fullLengthRead(type); delete before.model.columns.get(name)!.fullKeyBytes;
+    expect(plan(before, index([part(name, 254)])).kind).toBe('ready');
+  });
+  it('未知最大长度、错误单位和主键满长前缀仍拒绝', () => {
+    for (const maxLength of [0, -1, NaN, Infinity]) { const before = read(); before.model.columns.get('c')!.prefix = { kind: 'allowed', unit: 'characters', maxLength }; expect(plan(before, index([part('c', 255)])).kind).toBe('blocked'); }
+    const before = read(); before.model.columns.get('b')!.nullable = false;
+    expect(plan(before, index([part('b', 255)], 'primary')).kind).toBe('blocked');
+    before.model.columns.get('c')!.prefix = { kind: 'allowed', unit: 'bytes', maxLength: 255 }; expect(plan(before, index([part('c', 255)])).kind).toBe('blocked');
+  });
+  it.each(['text', 'blob'] as const)('%s即使合成目录给出同值成本，显式LOB前缀也不规范为整列', type => {
+    const { name, value: before } = fullLengthRead(type); before.model.columns.get(name)!.fullKeyBytes = type === 'text' ? 1020 : 255;
+    const result = plan(before, index([part(name, 255)])); expect(result.kind).toBe('ready'); if (result.kind !== 'ready') return;
+    expect(result.sql).toContain(`\`${name}\`(255)`); expect(result.finalIndexes.find(value => value.clientKey === 'new')!.definition!.keyParts[0].prefixLength).toBe(255);
+    expect(verifyIndexAfter(before, result, fullLengthRead(type, `${oldKeys},KEY added(${name}) COMMENT ''`).value)).toBe(false);
+  });
+  it('旧全字段显式选择满长仍为noop，不误触发删除重建', () => {
+    const before = read(ddl("KEY old_c(c) COMMENT '原索引',KEY spare(id)"));
+    const result = planTableIndexPatches(before.model, [{ op: 'alter', indexRef: 'old_c', changes: { keyParts: [part('c', 255)] } }], before.options!);
+    expect(result.kind).toBe('noop');
   });
 });
