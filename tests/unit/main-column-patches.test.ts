@@ -1,26 +1,26 @@
-import{SavedQuerySearchCancelled}from'../../src/main/savedQuerySearch';
-import { readFileSync } from 'node:fs';
-import { createContext, runInContext } from 'node:vm';
-import ts from 'typescript';
-import { describe, expect, it, vi } from 'vitest';
-import type { TaskEvent, TaskRecord } from '../../src/shared/contracts';
+import { describe, expect, it } from 'vitest';
+import type { TaskEvent } from '../../src/shared/contracts';
 import { persistedTaskMessage } from '../../src/main/taskPrivacy';
+import { mainColumnsHarness } from './main-columns-owner-harness';
 
-/** 执行生产 dispatch/退出函数原文；只替换 Electron、存储与 broker 边界。 */
+/** 原dispatch断言保持；只补真实owner初值，人工token改为先由实际get/preview原文建立归属。 */
 function harness() {
-  const source = readFileSync(new URL('../../src/main/index.ts', import.meta.url), 'utf8');
-  const dispatch = source.slice(source.indexOf('async function dispatch('), source.indexOf('/** 按平台生成中文原生菜单'));
-  const exit = source.slice(source.indexOf('function engineExited('), source.indexOf('if (!app.requestSingleInstanceLock())'));
-  const tasks = new Map<string, TaskRecord>(), events: TaskEvent[] = [], columnTokens = new Map(), columnProgress = new Map();
-  let blocked = false, revision = 7;
-  const request = vi.fn(async (_command: string, _input: unknown): Promise<any> => undefined);
-  const context = createContext({ tableApplyReceipts: undefined, SavedQuerySearchCancelled,savedQuerySearches:{has:()=>false},savedQueryPages:undefined,historyPages:undefined, Date, Map, Error, Boolean, tasks, events, pendingQueryHistory:new Map(),completionTasks:new Set(), structureTokens: columnTokens, structureProgress: columnProgress, shuttingDown: false, preparingTasks: new Map(), exportProgress: new Map(), sessions: new Map(),
-    connectionConfig: { assertAvailable(id?: string) { if (blocked && id === 'trusted') throw new Error('连接配置正在保存'); } },
-    store: { saveTask() {}, connectionRevision: () => revision }, broker: { request },
-    taskEvent(event: TaskEvent) { events.push(event); const progress = event.indexPatch ?? event.columnPatch; if (progress) columnProgress.set(event.taskId, progress); tasks.set(event.taskId, { ...tasks.get(event.taskId)!, status: event.status }); },
-  });
-  runInContext(ts.transpileModule(dispatch + exit + '\nglobalThis.handlers = { dispatch, engineExited };', { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText, context);
-  return { request, context, events, columnTokens, columnProgress, tasks, setBlocked: (value: boolean) => { blocked = value; }, setRevision: (value: number) => { revision = value; }, handlers: context.handlers as { dispatch(command: string, input: unknown): Promise<any>; engineExited(): void } };
+  const f = mainColumnsHarness();
+  /** fixture通过真实capture/dispatch/helper建能力后才调整过期时间，不伪造owner或私有绑定。 */
+  async function seed(id: string, record: any, clearCalls = true): Promise<void> {
+    if (record.kind === 'preview') {
+      const snapshotId = record.snapshotId ?? id + '-snapshot';
+      if (!f.tokens.has(snapshotId)) await seed(snapshotId, { ...record, kind: 'snapshot' }, false);
+      f.request.mockResolvedValueOnce({ previewToken: id, target: { connectionId: record.connectionId }, expiresAt: expiresAt() });
+      await f.dispatch('schema.columns.preview', { snapshotId, patches: [], taskId: 'fixture-' + id });
+    } else {
+      f.request.mockResolvedValueOnce({ snapshotId: id, target: { connectionId: record.connectionId }, expiresAt: expiresAt() });
+      await f.dispatch('schema.columns.get', { connectionId: record.connectionId, database: 'db', table: 't', taskId: 'fixture-' + id });
+    }
+    Object.assign(f.tokens.get(id), record);
+    if (clearCalls) f.request.mockClear();
+  }
+  return { ...f, seed, columnTokens: f.tokens, columnProgress: f.progress, handlers: { dispatch: f.dispatch, engineExited: f.context.actual.engineExited } };
 }
 const expiresAt = () => new Date(Date.now() + 120000).toISOString();
 
@@ -40,6 +40,10 @@ describe('结构任务主进程可信令牌与退出证据', () => {
     await expect(test.handlers.dispatch('schema.columns.preview', { snapshotId: 'snapshot', patches: [], taskId: 'blocked' })).rejects.toThrow('正在保存');
     expect(test.request).toHaveBeenCalledTimes(1);
     test.setBlocked(false); test.setRevision(8);
+    // 修订变化使旧快照失效；保留“注入当前修订”断言前先合法释放并重新读取，不伪造绑定。
+    await expect(test.handlers.dispatch('schema.columns.preview', { snapshotId: 'snapshot', patches: [], taskId: 'stale' })).rejects.toThrow('变化');
+    await test.handlers.dispatch('schema.columns.release', { snapshotId: 'snapshot' }); test.request.mockClear();
+    await test.seed('snapshot', { purpose: 'columns', kind: 'snapshot', connectionId: 'trusted', expires: Date.now() + 10000 }, false);
     test.request.mockResolvedValueOnce({ previewToken: 'preview', target: { connectionId: 'trusted' }, expiresAt: expiresAt() });
     await test.handlers.dispatch('schema.columns.preview', { snapshotId: 'snapshot', patches: [], taskId: 'preview' });
     expect(test.request.mock.calls[1][1]).toMatchObject({ connectionRevision: 8 });
@@ -49,10 +53,10 @@ describe('结构任务主进程可信令牌与退出证据', () => {
   it('未知、过期令牌拒投递；apply 拒绝后也不能再次使用能力', async () => {
     const test = harness();
     await expect(test.handlers.dispatch('schema.columns.preview', { snapshotId: 'fake', taskId: 'p' })).rejects.toThrow('失效');
-    test.columnTokens.set('expired', { purpose: 'columns', kind: 'snapshot', connectionId: 'trusted', expires: Date.now() - 1 });
+    await test.seed('expired', { purpose: 'columns', kind: 'snapshot', connectionId: 'trusted', expires: Date.now() - 1 });
     await expect(test.handlers.dispatch('schema.columns.preview', { snapshotId: 'expired', taskId: 'p' })).rejects.toThrow('失效');
     expect(test.request).not.toHaveBeenCalled();
-    test.columnTokens.set('apply', { purpose: 'columns', kind: 'preview', connectionId: 'trusted', expires: Date.now() + 10000 });
+    await test.seed('apply', { purpose: 'columns', kind: 'preview', connectionId: 'trusted', expires: Date.now() + 10000 });
     test.request.mockRejectedValueOnce(new Error('引擎中途退出'));
     await expect(test.handlers.dispatch('schema.columns.apply', { previewToken: 'apply', acknowledgements: [], taskId: 'a' })).rejects.toThrow('退出');
     expect(test.events.at(-1)?.columnPatch).toMatchObject({ ddlSubmitted: true, ddlCompleted: false, outcome: 'unknown' });
@@ -72,8 +76,8 @@ describe('结构任务主进程可信令牌与退出证据', () => {
 
   it('释放快照同时撤销关联预览，准备退出不开始结构请求', async () => {
     const test = harness();
-    test.columnTokens.set('s', { purpose: 'columns', kind: 'snapshot', connectionId: 'trusted', expires: Date.now() + 10000 });
-    test.columnTokens.set('p', { purpose: 'columns', kind: 'preview', connectionId: 'trusted', snapshotId: 's', expires: Date.now() + 10000 });
+    await test.seed('s', { purpose: 'columns', kind: 'snapshot', connectionId: 'trusted', expires: Date.now() + 10000 });
+    await test.seed('p', { purpose: 'columns', kind: 'preview', connectionId: 'trusted', snapshotId: 's', expires: Date.now() + 10000 });
     await test.handlers.dispatch('schema.columns.release', { snapshotId: 's' }); expect(test.columnTokens.size).toBe(0);
     test.context.shuttingDown = true;
     await expect(test.handlers.dispatch('schema.columns.get', { connectionId: 'trusted', taskId: 'late' })).rejects.toThrow('退出');

@@ -7,6 +7,7 @@ import { randomUUID } from 'node:crypto';
 import { pathToFileURL } from 'node:url';
 import { TableApplyReceipts } from './tableApplyReceipts';
 import { EngineBroker } from './broker';
+import { ColumnsMainCapabilities, type ColumnsInvocation } from './columnsMainCapabilities';
 import { LocalStore } from './storage';
 import { ConnectionConfigManager } from './connectionConfig';
 import { ConnectionTransfer } from './connectionTransfer';
@@ -63,6 +64,8 @@ const tasks = new Map<string, TaskRecord>();
 const completionTasks = new Set<string>();
 const lastPersist = new Map<string, number>();
 const rendererURL = process.env.DBARK_DEV_URL ?? pathToFileURL(join(__dirname, '../renderer/index.html')).href;
+// 字段令牌只绑定真实IPC文档；回收仍使用原引擎精确release，不扩其他结构业务。
+const columnsMain = new ColumnsMainCapabilities(structureTokens, { currentWindow: () => window, rendererURL, connectionRevision: () => store.connectionRevision(), assertAvailable: id => connectionConfig.assertAvailable(id), shuttingDown: () => shuttingDown, release: input => broker.request('schema.columns.release', input) });
 
 /** 辅助记录失败不能改变已经完成的数据库操作结果，避免用户误以为 SQL 未执行。 */
 function persistAuxiliary(action: () => void): void {
@@ -137,7 +140,7 @@ async function writeSelectedQuery(input: { fileToken: string; sql: string; encod
 }
 
 /** 分派前检查配置保存锁，防止检查通过后另一个请求用旧凭据抢先建连。 */
-async function dispatch(command: Command, input: any): Promise<unknown> {
+async function dispatch(command: Command, input: any, columns?: ColumnsInvocation): Promise<unknown> {
   // 来源释放只撤销内存能力，配置保存和退出收尾时也必须可用，不建立任务或历史。
   if (command === 'table.copySourceRelease' || command === 'files.releaseExportColumns') return broker.request(command, input);
   // 确认与释放不新建连接或任务，不受配置保存锁阻塞；归属由引擎在取消前校验。
@@ -151,6 +154,9 @@ async function dispatch(command: Command, input: any): Promise<unknown> {
     const value = id ? structureTokens.get(id) : undefined;
     if (value && value.purpose !== structurePurpose) throw new Error('结构令牌用途不符，未释放其他编辑器的预览');
   }
+  const columnRequest = structurePurpose === 'columns' ? columnsMain.begin(command, input, columns) : undefined;
+  // 纯能力释放先同步撤销父及关联预览，退出/保存锁不得阻止精确回收。
+  if (command === 'schema.columns.release') return columnsMain.release(columnRequest!, input);
   const requestConnectionId = structureToken?.connectionId ?? input.connectionId ?? sessions.get(input.sessionId)?.connectionId ?? (command.startsWith('connections.') ? input.id : undefined);
   if (structureCommand && shuttingDown) throw new Error('客户端正在退出，不能开始结构操作');
   connectionConfig.assertAvailable(requestConnectionId);
@@ -325,6 +331,7 @@ async function dispatch(command: Command, input: any): Promise<unknown> {
     }
     // 令牌目标只来自可信引擎输出；修订在投递前同步读取，客户端不能注入或覆盖。
     if (structureCommand && command !== structurePrefix + 'release') input = { ...input, connectionRevision: store.connectionRevision() };
+    if (columnRequest) columnsMain.beforeSend(columnRequest, input.connectionRevision);
     if (command === 'files.exportColumns' || command === 'files.export' && input.csvSelection) input = { ...input, connectionRevision: store.connectionRevision() };
     if (command.startsWith('schema.compare')) {
       input = { ...input, connectionRevision: store.connectionRevision() };
@@ -333,13 +340,17 @@ async function dispatch(command: Command, input: any): Promise<unknown> {
     if (taskId) preparingTasks.delete(taskId);
     sentToEngine = true;
     const result = command==='search.savedQueries'?await savedQuerySearches.start(input):command==='search.savedQueriesContinue'?await savedQuerySearches.next(input):await broker.request(command, input);
+    if (columnRequest && (command === 'schema.columns.get' || command === 'schema.columns.preview')) {
+      try { columnsMain.publish(columnRequest, result); }
+      catch (error) { await columnsMain.rejectReply(columnRequest, error); }
+    }
     if (structurePurpose === 'tableCreate' && (command === structurePrefix + 'get' || command === structurePrefix + 'preview') && store.connectionRevision() !== input.connectionRevision) {
       await broker.request('schema.tableCreate.release', command === structurePrefix + 'get' ? { snapshotId: result.snapshotId } : { previewToken: result.previewToken });
       throw Error(tableCreateMessages.stale);
     }
     if (command === 'table.preview' && previewConnectionRevision !== store.connectionRevision()) throw Error('连接配置自预览开始后已变化，请重新预览');
     if (command === 'table.preview') return { ...result, ...tableApplyReceipts.preview({ connectionId: input.connectionId, connectionRevision: store.connectionRevision(), database: input.database, table: input.table }, input.changes, result) };
-    if (command === structurePrefix + 'get' || command === structurePrefix + 'preview') {
+    if (structurePurpose !== 'columns' && (command === structurePrefix + 'get' || command === structurePrefix + 'preview')) {
       if (structureTokens.size >= 128) throw new Error('结构令牌缓存已达上限，请关闭旧预览后重试');
       const token = command === structurePrefix + 'get' ? result.snapshotId : result.previewToken;
       structureTokens.set(token, { purpose: structurePurpose!, connectionId: result.target.connectionId, expires: Date.parse(result.expiresAt), kind: command === structurePrefix + 'get' ? 'snapshot' : 'preview', ...(command === structurePrefix + 'preview' ? { snapshotId: input.snapshotId } : {}) });
@@ -385,6 +396,7 @@ function createMenu(): void {
 /** 创建启用沙箱与上下文隔离的窗口，限制导航并等待页面就绪后显示。 */
 async function createWindow(): Promise<void> {
   window = new BrowserWindow({ width: 1440, height: 920, minWidth: 1024, minHeight: 680, show: false, backgroundColor: '#101319', title: 'DBArk', icon: app.isPackaged ? join(process.resourcesPath, 'icon.png') : join(__dirname, '../../build/icon.png'), webPreferences: { preload: join(__dirname, 'preload.cjs'), sandbox: true, contextIsolation: true, nodeIntegration: false, webSecurity: true, spellcheck: false } });
+  columnsMain.trackWindow(window);
   window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
   window.webContents.on('will-navigate', (event, url) => { if (url !== rendererURL) event.preventDefault(); });
   window.webContents.session.setPermissionRequestHandler((_webContents, _permission, callback) => callback(false));
@@ -476,13 +488,26 @@ else {
     savedQueryPages=new SavedQueryPages(store,join(__dirname,'savedQuerySearchWorker.cjs'));
     historyPages=new HistoryPages(store,join(__dirname,'savedQuerySearchWorker.cjs'));
     ipcMain.handle('dbark:request', async (event, payload: unknown) => {
+      let columns: ColumnsInvocation | undefined;
       try {
         if (!window || event.sender !== window.webContents || event.senderFrame !== window.webContents.mainFrame || event.senderFrame?.url !== rendererURL) throw new Error('不允许的请求来源');
         if (!payload || typeof payload !== 'object' || !('command' in payload) || !('input' in payload) || typeof payload.command !== 'string') throw new Error('请求格式无效');
+        if (payload.command.startsWith('schema.columns.')) columns = columnsMain.capture(event);
         const input = validateMainCommand(payload.command, payload.input);
-        const operation=dispatch(payload.command as Command,input),local=payload.command==='search.savedQueries'||payload.command==='search.savedQueriesContinue'||payload.command==='queries.page'||payload.command==='queries.pageContinue'||payload.command==='history.page'||payload.command==='history.pageContinue';if(local)localSearchOperations.add(operation);
-        try{return{ok:true,result:await operation};}finally{if(local)localSearchOperations.delete(operation);}
-      } catch (error) { return { ok: false, error: error instanceof Error ? error.message : '客户端操作失败' }; }
+        const operation=dispatch(payload.command as Command,input,columns),local=payload.command==='search.savedQueries'||payload.command==='search.savedQueriesContinue'||payload.command==='queries.page'||payload.command==='queries.pageContinue'||payload.command==='history.page'||payload.command==='history.pageContinue';if(local)localSearchOperations.add(operation);
+        try {
+          const result = await operation;
+          if (columns && (payload.command === 'schema.columns.get' || payload.command === 'schema.columns.preview')) {
+            try { columnsMain.assertReply(columns); }
+            catch (error) { await columnsMain.rejectReply(columns, error); }
+          }
+          return { ok: true, result };
+        } finally { if(local)localSearchOperations.delete(operation); }
+      } catch (error) {
+        let failure = error;
+        if (columns && columnsMain.hasUnpublished(columns)) try { await columnsMain.rejectReply(columns, error); } catch (cleanup) { failure = cleanup; }
+        return { ok: false, error: failure instanceof Error ? failure.message : '客户端操作失败' };
+      }
     });
     createMenu(); await createWindow();
   }).catch(error => { dialog.showErrorBox('DBArk 启动失败', error instanceof Error ? error.message : String(error)); shutdownComplete = true; app.quit(); });
