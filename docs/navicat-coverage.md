@@ -1,5 +1,7 @@
 # Navicat 全功能覆盖目标
 
+最新未发布检查点：复制空表结构（含自增）与单表清空已合入当前任务分支。固定功能来源 b995 完整5780单元、类型及构建通过；Windows正式开发Electron的清空一项、普通/自增复制两项均单次通过，六实例资源核零。当前目录逐段解决正文桥接/格式化冲突，104项定向与类型通过，108构建产物与已验来源逐字一致，见[本批验收与范围](../tests/integration/acceptance-table-copy-truncate-20261017.md)。复制生成列/依赖及非8.4范围仍未完成；新安装包和macOS私网不由本批接纳。以下检查点保留原始来源，不跨版本累计。
+
 后续高频产品3ad已完成5606项完整单元、类型和构建，CSV选列及单表删除两个正式Windows源码界面身份已分别单次通过并核资源清零，见[整合与实库检查点](../tests/integration/acceptance-frequency-csv-drop-20261017.md)。DROP旧超时、Root一次定位错误及修正链均保留；最终测试头ef8仅改正式测试，不把旧失败改成通过。新功能及三格式取消修复尚未进入公开0.20标签，安装/macOS及取消MDL服务器逐ID终态继续。
 
 当前公开开发预览为[0.20](https://github.com/zhao-yc/DBArk/releases/tag/v0.20.0)：12附件、11独立SHA、1264源码blob已核对，公开Windows NSIS六项真实安装回归通过并完成卸载、六实例资源核零，见[公开后验收](../tests/integration/acceptance-v020-public-20261017.md)。表导出取消提交窗口已知问题保留，后续修复不计入本标签；下方旧发行状态均保留其历史来源。
@@ -13,6 +15,20 @@
 最新0.20候选产品686已修正文监听就绪及条件性布局恢复，5124项完整单元、类型和构建通过；新Windows包SQL补全/命名窗口/CALL共13项真实安装专项已通过并清理，见[新候选实证](../tests/integration/acceptance-v020-editor-readiness-20261017.md)。普通CI三平台各安装阶段72通过，实际分为58产品路径、12开发组件和2安装宿主源码组件；另13个开发组件专项在三平台各单次通过，见[分层校准](../tests/integration/acceptance-v020-native-layers-20261017.md)。新候选309项已全部通过，累计335个唯一身份（安装产品298、开发组件34、安装宿主源码组件3），卸载和六实例资源核零，见[完整分层检查点](../tests/integration/acceptance-v020-editor-full-20261017.md)。下方335项属于旧5ab候选，不能跨产品累加；公开发行继续。后续高频分支7e59已整合专用删除表与新建库编码，5468项完整单元、类型和构建通过，Windows真实格式化四项单次通过，见[新检查点](../tests/integration/acceptance-frequency-objects-format-20261017.md)；数据库写入及安装仍待验。
 
 0.20准备版产品固定5ab：5073项单元、类型与构建通过；同一Windows候选累计接纳335个不同验收身份，其中安装产品298、开发组件34、安装宿主源码组件3。查询/导出/CALL14项准备修复复验已通过并完成卸载、资源核零，剩余4项原生复制等待本轮剪贴板许可；这不是Navicat功能覆盖百分比。测试头586的Windows原生CI仍有正文同步失败，单独排查并保留原失败，详见[最新分层实证](../tests/integration/acceptance-v020-installed-progress-20261017.md)。尚未公开发行，当前公开版仍0.19；以下旧检查点保持各自来源，不重复累计。
+<details><summary>开发分支原始检查点（保留其当时来源）</summary>
+
+最新未发布检查点：功能产品3ad完整5606单元/type/build通过，CSV选列正式UI一项及DROP最终测试ef8一项单次通过、资源核零；两个旧DROP失败与更正均保留。后续5e只集中17条渲染文案，Root原10回归/type/build通过，main产物不变，见[整合与实际验收](../tests/integration/acceptance-frequency-csv-drop-20261017.md)。不混称同一头完整大套或安装结果；新包和macOS私网及取消MDL逐ID终态继续。
+
+当前公开开发预览为[0.20](https://github.com/zhao-yc/DBArk/releases/tag/v0.20.0)。后续高频分支的ON UPDATE六身份在六实例共36次实际通过，新建库专用一项通过；历史时间范围固定390d的49项相关回归、类型和构建，以及正式Windows界面一项通过。各自证据见[自动时间](../tests/integration/acceptance-on-update-ui-20261017.md)、[新建库](../tests/integration/acceptance-database-create-ui-20261017.md)和[历史筛选](../tests/integration/acceptance-history-time-ui-20261017.md)。这些是未进入0.20标签的开发Electron能力，不代替新安装或macOS实库。
+
+CSV字段选择与顺序已在本分支源码整合；已复现的文件sync期间取消窗口正在补齐三种表导出格式，正式CSV界面及完整整合回归继续。公开0.20已经明确记录该已知问题，没有把后续修复算作该版已修。下方旧检查点保持其原始来源与统计。
+
+后续产品7e59已整合专用单表删除、新建库编码及相关接线，5468项完整单元、类型和构建通过；Windows正式App格式化四项实际单次通过，见[对象与格式化检查点](../tests/integration/acceptance-frequency-objects-format-20261017.md)。这不接纳数据库写入、安装或其它平台，实库用例的归属追加继续；下面源码5335和旧候选均保留历史来源。
+
+本分支后续高频源码已固定f9dfa3c：ON UPDATE、选区/全文与快捷格式化、单表清空、正文桥接及严格退出验收整合后，5335项完整单元、类型和构建通过，见[源码整合实证](../tests/integration/acceptance-frequency-source-20261017.md)。内部版本未改，原生/实库/安装未由本次源码结果接纳；下文旧候选保留其历史来源，当前公开版仍0.19。
+
+0.20准备版固定5ab：5073项单元、类型与构建通过；三平台源码/真实安装离线各72通过、265条件跳过，另原12个开发组件各平台12单次通过。本机候选常用六项真实安装/13384实库及卸载、资源核零已完成，见[分层实证](../tests/integration/acceptance-v020-ci-and-smoke-20261017.md)；[完整安装差异](development/v020-windows-acceptance-delta-20261017.md)继续，未公开发行，当前公开版仍0.19。以下旧检查点保持各自来源，不相加为同一候选通过数。
+</details>
 
 用户于 2026-10-13 要求持续开发至覆盖 Navicat 全部功能，高频优先。本清单固定本轮需求基准，后续新增能力作为明确变更记录，不用“全功能”代替可验收要求。
 

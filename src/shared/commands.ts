@@ -2,11 +2,15 @@ import type { Command } from './contracts';
 
 /** 预加载白名单不引入校验器或 Node 依赖；新增公开命令必须在编译时补齐。 */
 export const publicCommands: Record<Command, true> = {
+  'schema.databaseCreate.get': true, 'schema.databaseCreate.preview': true, 'schema.databaseCreate.apply': true, 'schema.databaseCreate.release': true,
   'tasks.cancelState': true,
+  'schema.tableDrop.get': true, 'schema.tableDrop.preview': true, 'schema.tableDrop.apply': true, 'schema.tableDrop.release': true,
   'schema.tableDefaultEncoding.get': true, 'schema.tableDefaultEncoding.preview': true, 'schema.tableDefaultEncoding.apply': true, 'schema.tableDefaultEncoding.release': true,
+  'schema.tableCopyStructure.get': true, 'schema.tableCopyStructure.preview': true, 'schema.tableCopyStructure.apply': true, 'schema.tableCopyStructure.release': true,
   'schema.tableRename.get': true, 'schema.tableRename.preview': true, 'schema.tableRename.apply': true, 'schema.tableRename.release': true,
   'schema.tableAutoIncrement.get': true, 'schema.tableAutoIncrement.preview': true, 'schema.tableAutoIncrement.apply': true, 'schema.tableAutoIncrement.release': true,
   'schema.tableComment.get': true, 'schema.tableComment.preview': true, 'schema.tableComment.apply': true, 'schema.tableComment.release': true,
+  'schema.tableTruncate.get': true, 'schema.tableTruncate.preview': true, 'schema.tableTruncate.apply': true, 'schema.tableTruncate.release': true,
   'workbench.get': true, 'workbench.save': true, 'workbench.resolve': true, 'workbench.copyUri': true,
   'queries.create': true, 'queries.updateSource': true,
   'table.preferences.get': true, 'table.preferences.save': true, 'table.preferences.reset': true,
@@ -31,6 +35,7 @@ export const publicCommands: Record<Command, true> = {
   'schema.columns.get': true, 'schema.columns.preview': true, 'schema.columns.apply': true, 'schema.columns.release': true,
   'schema.indexes.get': true, 'schema.indexes.preview': true, 'schema.indexes.apply': true, 'schema.indexes.release': true,
   'schema.foreignKeys.get': true, 'schema.foreignKeys.preview': true, 'schema.foreignKeys.apply': true, 'schema.foreignKeys.release': true,
+  'files.exportColumns': true, 'files.releaseExportColumns': true,
   'files.choose': true, 'files.path': true, 'files.preview': true, 'files.import': true, 'files.export': true, 'files.exportResult': true,
   'files.readQuery': true, 'files.writeQuery': true,
   'excel.sheets': true, 'excel.preview': true, 'excel.import': true, 'excel.export': true,

@@ -1,9 +1,14 @@
+import type { CsvExportFieldsInput, CsvExportFieldsOutput, CsvExportSelection } from './csvExportFields';
+import type { TableCopyStructureGetInput, TableCopyStructureGetOutput, TableCopyStructurePreviewInput, TableCopyStructurePreviewOutput, TableCopyStructureApplyInput, TableCopyStructureApplyOutput, TableCopyStructureReleaseInput } from './tableCopyStructure';
 /** 所有跨进程数据均为可结构化克隆的普通值，精确数值由驱动保留为字符串。 */
+import type { DatabaseCreateGetInput, DatabaseCreateGetOutput, DatabaseCreatePreviewInput, DatabaseCreatePreviewOutput, DatabaseCreateApplyInput, DatabaseCreateApplyOutput, DatabaseCreateReleaseInput } from './databaseCreate';
 import type { QueryParameter, QueryParameterNames } from './queryParameters';
 import type { TableDefaultEncodingGetInput, TableDefaultEncodingGetOutput, TableDefaultEncodingPreviewInput, TableDefaultEncodingPreviewOutput, TableDefaultEncodingApplyInput, TableDefaultEncodingApplyOutput, TableDefaultEncodingReleaseInput } from './tableDefaultEncoding';
 import type { TableRenameGetInput, TableRenameGetOutput, TableRenamePreviewInput, TableRenamePreviewOutput, TableRenameApplyInput, TableRenameApplyOutput, TableRenameReleaseInput } from './tableRename';
 import type { TableAutoIncrementGetInput, TableAutoIncrementGetOutput, TableAutoIncrementPreviewInput, TableAutoIncrementPreviewOutput, TableAutoIncrementApplyInput, TableAutoIncrementApplyOutput, TableAutoIncrementReleaseInput } from './tableAutoIncrement';
 import type { TableCommentGetInput, TableCommentGetOutput, TableCommentPreviewInput, TableCommentPreviewOutput, TableCommentApplyInput, TableCommentApplyOutput, TableCommentReleaseInput } from './tableComment';
+import type { TableDropGetInput, TableDropGetOutput, TableDropPreviewInput, TableDropPreviewOutput, TableDropApplyInput, TableDropApplyOutput, TableDropReleaseInput } from './tableDrop';
+import type { TableTruncateGetInput, TableTruncateGetOutput, TableTruncatePreviewInput, TableTruncatePreviewOutput, TableTruncateApplyInput, TableTruncateApplyOutput, TableTruncateReleaseInput } from './tableTruncate';
 import type { ExcelSheet, ExcelSheetPreview, ExcelTextProtocol, ExcelImportRequest, ExcelImportResult, ExcelExportRequest } from './excelTransfer';
 import type { QueryExportProgress, QueryStreamExportInput, QueryStreamExportOutput } from './queryStreamExport';
 import type { ConnectionFileRequirement, ConnectionImportApply, ConnectionImportPreview, ConnectionImportResult, ConnectionImportReview, ConnectionImportReviewInput } from './connectionTransfer';
@@ -61,12 +66,12 @@ export interface SavedQuery { id: string; name: string; connectionId?: string; d
 export interface SqlSnippet { id: string; name: string; group: string; description: string; sql: string; updatedAt: string; }
 export interface HistoryEntry { id: string; connectionId: string; database?: string; databaseContext?:QueryDatabaseContext; sql: string; startedAt: string; elapsedMs: number; success: boolean; error?: string; }
 export interface TaskRecord { /** 仅由main签发的随机回执关联，不能按可复用taskId补造提交事实。 */ tableApplyReceiptId?: string; id: string; kind: string; status: 'running' | 'completed' | 'cancelled' | 'failed'; progress: number; message: string; startedAt: string; finishedAt?: string; errors?: string[]; }
-export interface TaskEvent { tableApply?: import('./tableApplyReceipt').TableApplyProgress; taskId: string; status: TaskRecord['status']; progress: number; message: string; rows?: number; resultIndex?: number; columns?: ResultColumn[]; batch?: DataRow[]; executionDatabase?:QueryDatabaseContext; /** 当前语句开始发送时只报告一次实际片段，历史不得使用完整源脚本。 */ executionSql?: string; queryExport?: QueryExportProgress; columnPatch?: TableColumnApplyProgress; indexPatch?: TableIndexApplyProgress; foreignKeyPatch?: TableForeignKeyApplyProgress; tableRename?: TableColumnApplyProgress; tableAutoIncrement?: TableColumnApplyProgress; tableComment?: TableColumnApplyProgress; tableDefaultEncoding?: TableColumnApplyProgress; dataSearch?:DataSearchProgress; }
+export interface TaskEvent { databaseCreate?: import('./databaseCreate').DatabaseCreateProgress; tableApply?: import('./tableApplyReceipt').TableApplyProgress; taskId: string; status: TaskRecord['status']; progress: number; message: string; rows?: number; resultIndex?: number; columns?: ResultColumn[]; batch?: DataRow[]; executionDatabase?:QueryDatabaseContext; /** 当前语句开始发送时只报告一次实际片段，历史不得使用完整源脚本。 */ executionSql?: string; queryExport?: QueryExportProgress; columnPatch?: TableColumnApplyProgress; indexPatch?: TableIndexApplyProgress; foreignKeyPatch?: TableForeignKeyApplyProgress; tableCopyStructure?: TableColumnApplyProgress; tableRename?: TableColumnApplyProgress; tableAutoIncrement?: TableColumnApplyProgress; tableComment?: TableColumnApplyProgress; tableDrop?: TableColumnApplyProgress; tableTruncate?: TableColumnApplyProgress; tableDefaultEncoding?: TableColumnApplyProgress; dataSearch?:DataSearchProgress; }
 export interface FileChoice { token: string; name: string; }
 export type QueryFileEncoding = 'utf8' | 'utf16le' | 'gb18030';
 export interface AppSettings { theme: 'dark' | 'light'; sidebarWidth: number; resultLimit: number; pageSize: number; dataTypeColors?: boolean; tabs: { id: string; kind: 'query' | 'table'; title: string; connectionId: string; database?: string; databaseContext?:QueryDatabaseContext; table?: string; sql?: string; sourceBinding?: QuerySourceBinding }[]; activeTabId?: string; }
 export interface ImportOptions { connectionId: string; database: string; table: string; fileToken: string; format: 'csv' | 'json' | 'sql'; encoding: 'utf8' | 'utf16le' | 'gb18030'; mapping: Record<string, string>; taskId: string; }
-export interface ExportOptions { connectionId: string; database: string; table: string; fileToken: string; format: 'csv' | 'json' | 'sql'; encoding: 'utf8' | 'utf16le' | 'gb18030'; includeStructure: boolean; includeData: boolean; taskId: string; }
+export interface ExportOptions { csvSelection?: CsvExportSelection; connectionId: string; database: string; table: string; fileToken: string; format: 'csv' | 'json' | 'sql'; encoding: 'utf8' | 'utf16le' | 'gb18030'; includeStructure: boolean; includeData: boolean; taskId: string; }
 /** 仅包含已经返回的结果，不携带可触发数据库访问的 SQL、连接或会话。 */
 export interface ResultExportData { columns: Pick<ResultColumn, 'key' | 'name'>[]; rows: DataRow[]; truncated: boolean; }
 export interface ResultExportOptions { fileToken: string; format: 'csv' | 'json'; encoding: 'utf8' | 'utf16le' | 'gb18030'; taskId: string; result: ResultExportData; }
@@ -165,6 +170,8 @@ export interface CommandMap {
   'files.writeQuery': { input: { fileToken: string; encoding: QueryFileEncoding; sql: string }; output: void };
   'files.preview': { input: { fileToken: string; format: 'csv' | 'json'; encoding: string }; output: { columns: string[]; rows: DataRow[] } };
   'files.import': { input: ImportOptions; output: { rows: number; errors: string[] } };
+  'files.exportColumns': { input: CsvExportFieldsInput; output: CsvExportFieldsOutput };
+  'files.releaseExportColumns': { input: { catalogId: string }; output: void };
   'files.export': { input: ExportOptions; output: { rows: number } };
   'files.exportResult': { input: ResultExportOptions; output: { rows: number } };
   'queries.list': { input: Record<string, never>; output: SavedQuery[] };
@@ -185,6 +192,10 @@ export interface CommandMap {
   'tasks.cancelState': { input: { taskIds: string[] }; output: import('./taskCancelState').TaskCancelSnapshot };
   'settings.get': { input: Record<string, never>; output: AppSettings };
   'settings.save': { input: AppSettings; output: void };
+  'schema.tableCopyStructure.get': { input: TableCopyStructureGetInput; output: TableCopyStructureGetOutput };
+  'schema.tableCopyStructure.preview': { input: TableCopyStructurePreviewInput; output: TableCopyStructurePreviewOutput };
+  'schema.tableCopyStructure.apply': { input: TableCopyStructureApplyInput; output: TableCopyStructureApplyOutput };
+  'schema.tableCopyStructure.release': { input: TableCopyStructureReleaseInput; output: void };
   'schema.tableRename.get': { input: TableRenameGetInput; output: TableRenameGetOutput };
   'schema.tableRename.preview': { input: TableRenamePreviewInput; output: TableRenamePreviewOutput };
   'schema.tableRename.apply': { input: TableRenameApplyInput; output: TableRenameApplyOutput };
@@ -197,6 +208,18 @@ export interface CommandMap {
   'schema.tableComment.preview': { input: TableCommentPreviewInput; output: TableCommentPreviewOutput };
   'schema.tableComment.apply': { input: TableCommentApplyInput; output: TableCommentApplyOutput };
   'schema.tableComment.release': { input: TableCommentReleaseInput; output: void };
+  'schema.tableDrop.get': { input: TableDropGetInput; output: TableDropGetOutput };
+  'schema.tableDrop.preview': { input: TableDropPreviewInput; output: TableDropPreviewOutput };
+  'schema.tableDrop.apply': { input: TableDropApplyInput; output: TableDropApplyOutput };
+  'schema.tableDrop.release': { input: TableDropReleaseInput; output: void };
+  'schema.tableTruncate.get': { input: TableTruncateGetInput; output: TableTruncateGetOutput };
+  'schema.tableTruncate.preview': { input: TableTruncatePreviewInput; output: TableTruncatePreviewOutput };
+  'schema.tableTruncate.apply': { input: TableTruncateApplyInput; output: TableTruncateApplyOutput };
+  'schema.tableTruncate.release': { input: TableTruncateReleaseInput; output: void };
+  'schema.databaseCreate.get': { input: DatabaseCreateGetInput; output: DatabaseCreateGetOutput };
+  'schema.databaseCreate.preview': { input: DatabaseCreatePreviewInput; output: DatabaseCreatePreviewOutput };
+  'schema.databaseCreate.apply': { input: DatabaseCreateApplyInput; output: DatabaseCreateApplyOutput };
+  'schema.databaseCreate.release': { input: DatabaseCreateReleaseInput; output: void };
   'schema.tableDefaultEncoding.get': { input: TableDefaultEncodingGetInput; output: TableDefaultEncodingGetOutput };
   'schema.tableDefaultEncoding.preview': { input: TableDefaultEncodingPreviewInput; output: TableDefaultEncodingPreviewOutput };
   'schema.tableDefaultEncoding.apply': { input: TableDefaultEncodingApplyInput; output: TableDefaultEncodingApplyOutput };

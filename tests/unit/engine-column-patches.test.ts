@@ -1,7 +1,7 @@
 import { EventEmitter } from 'node:events';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ConnectionProfile, TaskEvent } from '../../src/shared/contracts';
-import type { TableColumnGetOutput, TableColumnPreviewOutput } from '../../src/shared/tableColumnPatches';
+import type { TableColumnGetOutput, TableColumnPreviewOutput, TableColumnApplyOutput } from '../../src/shared/tableColumnPatches';
 import type { ManagedConnection } from '../../src/engine/connection';
 import { validateCommand } from '../../src/shared/validation';
 import { parseTableColumnDefinition } from '../../src/engine/tableColumnDefinition';
@@ -15,6 +15,7 @@ let engine: Engine, events: TaskEvent[], source: string, originalMode: string, i
 let holdSql: RegExp | undefined, held: { connection: ManagedConnection; complete(error?: Error): void } | undefined;
 let hiddenAnsiDefinition: string | undefined, metadataAutoIncrement = false;
 let warningCount = 0;
+let onUpdateExtraOverride: string | undefined;
 let columnEncodingOverride: { charset: string; collation: string } | undefined;
 let tableEncodingOverride: { charset: string | null; collation: string } | undefined;
 let catalogMatchesOverride: Record<string, unknown>[] | undefined;
@@ -40,7 +41,7 @@ function managed(signal?: AbortSignal): ManagedConnection {
       else if (sql.startsWith('SELECT c.CHARACTER_SET_NAME')) rows = [tableEncodingOverride ?? { charset: 'utf8mb4', collation: 'utf8mb4_bin' }];
       else if (sql.startsWith("SELECT COLUMN_NAME AS name FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = 'information_schema'")) rows = ['COLLATION_NAME', 'CHARACTER_SET_NAME', 'FULL_COLLATION_NAME', 'ID', 'IS_DEFAULT'].map(name => ({ name }));
       else if (sql.startsWith('SELECT a.CHARACTER_SET_NAME')) rows = catalogMatchesOverride ?? [{ charset: 'utf8mb4', collation: tableEncodingOverride!.collation }];
-      else if (sql.startsWith('SELECT COLUMN_NAME')) rows = parseTableColumnDefinition(source, { dialect: 'mysql', mode: { noBackslashEscapes: mode.includes('NO_BACKSLASH_ESCAPES'), ansiQuotes: mode.includes('ANSI_QUOTES') } }).columns.map(column => ({ name: column.name, nullable: column.nullable === false ? 'NO' : 'YES', charset: /^(?:varchar|char|text|enum|set)/i.test(column.type.raw) ? 'utf8mb4' : null, collation: /^(?:varchar|char|text|enum|set)/i.test(column.type.raw) ? (/COLLATE utf8mb4_general_ci/i.test(column.raw) ? 'utf8mb4_general_ci' : 'utf8mb4_bin') : null, extra: (metadataAutoIncrement && column.name === 'id') || column.attributes.some(attribute => attribute.kind === 'auto-increment') ? 'auto_increment' : '' }));
+      else if (sql.startsWith('SELECT COLUMN_NAME')) rows = parseTableColumnDefinition(source, { dialect: 'mysql', mode: { noBackslashEscapes: mode.includes('NO_BACKSLASH_ESCAPES'), ansiQuotes: mode.includes('ANSI_QUOTES') } }).columns.map(column => ({ name: column.name, nullable: column.nullable === false ? 'NO' : 'YES', charset: /^(?:varchar|char|text|enum|set)/i.test(column.type.raw) ? 'utf8mb4' : null, collation: /^(?:varchar|char|text|enum|set)/i.test(column.type.raw) ? (/COLLATE utf8mb4_general_ci/i.test(column.raw) ? 'utf8mb4_general_ci' : 'utf8mb4_bin') : null, extra: onUpdateExtraOverride ?? ((metadataAutoIncrement && column.name === 'id') || column.attributes.some(attribute => attribute.kind === 'auto-increment') ? 'auto_increment' : column.attributes.find(attribute => attribute.kind === 'on-update')?.raw ?? '') }));
       else if (sql.startsWith('ALTER TABLE')) { source = ddlAfter; rows = { affectedRows: 0, warningStatus: warningCount }; }
       else if (sql === 'SHOW WARNINGS LIMIT 20') rows = Array.from({ length: Math.min(20, warningCount) }, () => ({ Level: 'Warning', Code: 1265, Message: '服务器转换警告：' + '汉'.repeat(3000) }));
       if (sql.startsWith('SELECT COLUMN_NAME') && columnEncodingOverride) rows = (rows as Array<Record<string, unknown>>).map(row => row.name === 'v' ? { ...row, ...columnEncodingOverride } : row);
@@ -62,7 +63,7 @@ async function apply(value: TableColumnPreviewOutput, taskId = 'apply') { return
 beforeEach(async () => {
   source = original; originalMode = ''; identity = 'server-one'; events = []; connections = []; sent = []; failSql = undefined; failClose = false; holdSql = undefined; held = undefined;
   ddlAfter = original.replace("COMMENT '旧'", "COMMENT '新'");
-  hiddenAnsiDefinition = undefined; metadataAutoIncrement = false; warningCount = 0; serverDialect = 'mysql'; columnEncodingOverride = undefined; tableEncodingOverride = undefined; catalogMatchesOverride = undefined;
+  hiddenAnsiDefinition = undefined; metadataAutoIncrement = false; warningCount = 0; serverDialect = 'mysql'; columnEncodingOverride = undefined; tableEncodingOverride = undefined; catalogMatchesOverride = undefined; onUpdateExtraOverride = undefined;
   mocks.connect.mockReset().mockImplementation(async (_profile, _database, signal) => managed(signal));
   mocks.execute.mockReset().mockImplementation(async (_managed, sql) => { if (String(sql).startsWith('KILL CONNECTION')) held?.complete(new Error('已被取消')); return { rows: [] }; });
   engine = new Engine(event => events.push(event)); await engine.handle('connections.open', { id: profile.id, profile });
@@ -70,6 +71,44 @@ beforeEach(async () => {
 afterEach(async () => { failClose = false; holdSql = undefined; held?.complete(new Error('测试收尾')); await engine.closeAll(); vi.restoreAllMocks(); });
 
 describe('字段结构短会话与一次性计划', () => {
+  it('新增时间列受控ON UPDATE沿原Engine预览零DDL，单次ADD与新列目录后核验完整',async()=>{
+    const snapshot=await get(),patch={kind:'add',clientKey:'new-time',name:'created_at',type:{kind:'temporal',type:'TIMESTAMP',precision:6},nullable:true,default:{kind:'null'},comment:'新时间',position:{kind:'last'},onUpdate:{kind:'expression',expression:'current-timestamp',precision:6}};
+    const value=await engine.handle('schema.columns.preview',{snapshotId:snapshot.snapshotId,patches:[patch],taskId:'preview-add-time',connectionRevision:1});expect(value.sql).toContain('ADD COLUMN `created_at` TIMESTAMP(6) NULL DEFAULT NULL ON UPDATE CURRENT_TIMESTAMP(6)');expect(sent.filter(item=>item.sql.startsWith('ALTER'))).toHaveLength(0);
+    ddlAfter=source.replace(',\n  PRIMARY KEY',",\n  created_at TIMESTAMP(6) NULL DEFAULT NULL ON UPDATE CURRENT_TIMESTAMP(6) COMMENT '新时间',\n  PRIMARY KEY");const output:TableColumnApplyOutput=await apply(value);expect(output).toMatchObject({ddlCompleted:true,definitionVerified:true});expect(output.after?.columns.find(column=>column.name==='created_at')?.onUpdate).toMatchObject({precision:6});await expect(apply(value)).rejects.toThrow('已使用');expect(sent.filter(item=>item.sql.startsWith('ALTER'))).toHaveLength(1);
+  });
+  it.each(['遗漏自动时间','默认值被改','NULL被改','生成列','未知属性','目录不符'])('新增自动时间DDL得到OK但%s不伪核验、不重放',async kind=>{
+    const snapshot=await get(),patch={kind:'add',clientKey:'new-time',name:'created_at',type:{kind:'temporal',type:'DATETIME',precision:6},nullable:true,default:{kind:'null'},comment:'新时间',position:{kind:'last'},onUpdate:{kind:'expression',expression:'current-timestamp',precision:6}};
+    const value=await engine.handle('schema.columns.preview',{snapshotId:snapshot.snapshotId,patches:[patch],taskId:'preview-add-time',connectionRevision:1});let definition="created_at DATETIME(6) NULL DEFAULT NULL ON UPDATE CURRENT_TIMESTAMP(6) COMMENT '新时间'";
+    if(kind==='遗漏自动时间')definition=definition.replace(' ON UPDATE CURRENT_TIMESTAMP(6)','');if(kind==='默认值被改')definition=definition.replace('DEFAULT NULL','DEFAULT CURRENT_TIMESTAMP(6)');if(kind==='NULL被改')definition=definition.replace('NULL DEFAULT','NOT NULL DEFAULT');if(kind==='生成列')definition+=' GENERATED ALWAYS AS (now()) VIRTUAL';if(kind==='未知属性')definition+=' EXTRA_UNKNOWN';if(kind==='目录不符')onUpdateExtraOverride='on update CURRENT_TIMESTAMP(0)';ddlAfter=source.replace(',\n  PRIMARY KEY',',\n  '+definition+',\n  PRIMARY KEY');
+    const output=await apply(value);expect(output).toMatchObject({ddlSubmitted:true,ddlCompleted:true,definitionVerified:false});await expect(apply(value)).rejects.toThrow('已使用');expect(sent.filter(item=>item.sql.startsWith('ALTER'))).toHaveLength(1);
+  });
+  it.each(['源码多出属性','EXTRA暗含属性'])('新增时间列未勾自动更新却%s仍拒绝完整后核验',async kind=>{
+    const snapshot=await get(),value=await engine.handle('schema.columns.preview',{snapshotId:snapshot.snapshotId,taskId:'preview-unrequested',connectionRevision:1,patches:[{kind:'add',clientKey:'new',name:'ts',type:{kind:'temporal',type:'DATETIME'},nullable:true,default:{kind:'null'},comment:'',position:{kind:'last'}}]});ddlAfter=source.replace(',\n  PRIMARY KEY',",\n  ts DATETIME NULL DEFAULT NULL"+(kind==='源码多出属性'?' ON UPDATE CURRENT_TIMESTAMP':'')+" COMMENT '',\n  PRIMARY KEY");if(kind==='EXTRA暗含属性')onUpdateExtraOverride='on update CURRENT_TIMESTAMP';expect(await apply(value)).toMatchObject({ddlCompleted:true,definitionVerified:false});
+  });
+  it('ON UPDATE真实Engine开启和移除各单次ALTER，原DEFAULT/NULL/注释/旁列后核验且令牌不重放',async()=>{
+    source="CREATE TABLE t(id int NOT NULL,v DATETIME(6) NULL DEFAULT '2001-01-01 00:00:00.000001' COMMENT '保留',note varchar(10) DEFAULT 'NULL') ENGINE=InnoDB";
+    const initial=source,snapshot=await get();expect(snapshot.columns[1].onUpdate).toBeNull();expect(snapshot.columns[1].access.onUpdate.editable).toBe(true);
+    const value=await preview(snapshot,{onUpdate:{kind:'expression',expression:'current-timestamp',precision:6}});expect(sent.filter(item=>item.sql.startsWith('ALTER'))).toHaveLength(0);
+    ddlAfter=source.replace(" COMMENT '保留'"," ON UPDATE CURRENT_TIMESTAMP(6) COMMENT '保留'");expect(await apply(value)).toMatchObject({ddlCompleted:true,definitionVerified:true});await expect(apply(value)).rejects.toThrow('已使用');expect(sent.filter(item=>item.sql.startsWith('ALTER'))).toHaveLength(1);
+    const second=await get();expect(second.columns[1].onUpdate).toMatchObject({precision:6});const remove=await preview(second,{onUpdate:null});ddlAfter=initial;expect(await apply(remove,'remove-on-update')).toMatchObject({ddlCompleted:true,definitionVerified:true});expect(sent.filter(item=>item.sql.startsWith('ALTER'))).toHaveLength(2);
+  });
+  it('EXTRA与完整定义矛盾时get只读，伪造preview及预览后目录变化均在DDL前拒绝',async()=>{
+    source="CREATE TABLE t(id int NOT NULL,v TIMESTAMP(6) NULL DEFAULT NULL) ENGINE=InnoDB";onUpdateExtraOverride='on update CURRENT_TIMESTAMP(6)';
+    const locked=await get();expect(locked.columns[1].access.onUpdate.editable).toBe(false);await expect(preview(locked,{onUpdate:{kind:'expression',expression:'current-timestamp',precision:6}})).rejects.toThrow('目录');expect(sent.filter(item=>item.sql.startsWith('ALTER'))).toHaveLength(0);
+    onUpdateExtraOverride=undefined;const value=await preview(await get(),{onUpdate:{kind:'expression',expression:'current-timestamp',precision:6}});onUpdateExtraOverride='on update CURRENT_TIMESTAMP(0)';await expect(apply(value)).rejects.toThrow('目录');await expect(apply(value)).rejects.toThrow('已使用');expect(sent.filter(item=>item.sql.startsWith('ALTER'))).toHaveLength(0);
+  });
+  it('自动时间变更沿原专用会话取消等待真实回调，终态unknown且令牌不重放',async()=>{
+    source='CREATE TABLE t(id int NOT NULL,v DATETIME(6) NULL DEFAULT NULL) ENGINE=InnoDB';const value=await preview(await get(),{onUpdate:{kind:'expression',expression:'current-timestamp',precision:6}});holdSql=/^ALTER TABLE/;
+    const running=apply(value),failure=expect(running).rejects.toThrow('取消');await vi.waitFor(()=>expect(held).toBeDefined());const active=held!.connection;await engine.handle('query.cancel',{taskId:'apply'});await failure;expect(active.close).toHaveBeenCalledOnce();expect(events.at(-1)?.columnPatch).toMatchObject({ddlSubmitted:true,ddlCompleted:false,outcome:'unknown'});await expect(apply(value)).rejects.toThrow('已使用');expect(sent.filter(item=>item.sql.startsWith('ALTER'))).toHaveLength(1);
+  });
+  it('自动时间EXTRA目录读取失败不冒充无属性，get失败并关闭专用连接',async()=>{
+    source='CREATE TABLE t(id int NOT NULL,v DATETIME(6) NULL DEFAULT NULL) ENGINE=InnoDB';failSql=/^SELECT COLUMN_NAME AS name, EXTRA AS extra/;await expect(get()).rejects.toThrow();expect(sent.filter(item=>item.sql.startsWith('ALTER'))).toHaveLength(0);for(const connection of connections)expect(connection.close).toHaveBeenCalledOnce();
+  });
+  it.each(['保留ONUPDATE','默认值被改变','可空性被改变','目录后核验失败'])('自动时间DDL成功但%s不伪报完整核验，也不重放',async mode=>{
+    source="CREATE TABLE t(id int NOT NULL,v DATETIME(6) NULL DEFAULT NULL ON UPDATE CURRENT_TIMESTAMP(6) COMMENT '旧') ENGINE=InnoDB";const value=await preview(await get(),{onUpdate:null});
+    ddlAfter=mode==='保留ONUPDATE'?source:source.replace(' ON UPDATE CURRENT_TIMESTAMP(6)','');if(mode==='默认值被改变')ddlAfter=ddlAfter.replace('DEFAULT NULL','DEFAULT CURRENT_TIMESTAMP(6)');if(mode==='可空性被改变')ddlAfter=ddlAfter.replace('NULL DEFAULT','NOT NULL DEFAULT');if(mode==='目录后核验失败')onUpdateExtraOverride='on update CURRENT_TIMESTAMP(6)';
+    const output=await apply(value);expect(output).toMatchObject({ddlSubmitted:true,ddlCompleted:true,definitionVerified:false});expect(sent.filter(item=>item.sql.startsWith('ALTER'))).toHaveLength(1);await expect(apply(value)).rejects.toThrow();
+  });
   it('读取与预览各自关闭连接，不发送 ALTER；只提供可信字段引用与受控当前类型', async () => {
     const snapshot = await get(), value = await preview(snapshot);
     expect(snapshot.columns[1].editableType).toEqual({ kind: 'string', type: 'VARCHAR', length: 20 });

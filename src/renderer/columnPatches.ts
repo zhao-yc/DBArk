@@ -1,5 +1,6 @@
 import { readControlledTimestampDefault, validateColumnPatches, type ColumnDefaultPatch, type ColumnPatch, type ColumnTypePatch, type ReadColumnDefault, type TableColumnView, type TableColumnPatchTarget, type TableColumnApplyProgress, type TableColumnApplyOutput } from '../shared/tableColumnPatches';
 import { columnPatchZh as text } from './locales/columnPatches.zh-CN';
+import { sameColumnOnUpdate } from '../shared/tableColumnPatches';
 
 export type ColumnChanges = Extract<ColumnPatch, { kind: 'alter' }>['changes'];
 /** 原默认值只做中文语义展示；数值保持原文本，表达式不求值，不将内部模型对象显示给用户。 */
@@ -68,6 +69,7 @@ export function makeColumnAlter(column: TableColumnView, changes: ColumnChanges)
   for (const [attribute, value] of Object.entries(changes)) {
     const key = attribute as keyof ColumnChanges; if (value === undefined) continue;
     const original = key === 'type' ? column.typeSql.trim().toUpperCase() : key === 'default' ? editableColumnDefault(column.default) : key === 'position' ? undefined : column[key];
+    if (key === 'onUpdate' && sameColumnOnUpdate(column.onUpdate, value as typeof column.onUpdate, column.typeSql)) continue;
     const comparable = key === 'type' ? columnTypeLabel(value as ColumnTypePatch).toUpperCase() : value;
     if (JSON.stringify(original) === JSON.stringify(comparable)) continue;
     if (!Object.hasOwn(column.access, key) || !column.access[key].editable) throw new Error(column.access[key]?.reason || text.readonly);
@@ -88,6 +90,12 @@ export function validateColumnDrafts(columns: readonly TableColumnView[], input:
   const names = new Map(columns.filter(column => !dropped.has(column.columnRef)).map(column => [column.columnRef, column.name]));
   for (const patch of patches) {
     if (patch.kind !== 'add' && !refs.has(patch.columnRef)) throw new Error(text.missing);
+    if (patch.kind === 'alter' && Object.hasOwn(patch.changes, 'onUpdate')) {
+      const column = refs.get(patch.columnRef)!, value = patch.changes.onUpdate;
+      if (Object.keys(patch.changes).length !== 1) throw new Error(text.onUpdateMixed);
+      const precision = Number(/\((\d+)\)/.exec(column.typeSql)?.[1] ?? 0);
+      if (value && value.precision !== undefined && value.precision !== precision) throw new Error(text.onUpdatePrecision);
+    }
     if (patch.kind === 'add') { if (refs.has(patch.clientKey)) throw new Error(text.duplicate); names.set(patch.clientKey, patch.name); }
     else if (patch.kind === 'alter') { for (const key of Object.keys(patch.changes) as (keyof ColumnChanges)[]) if (!refs.get(patch.columnRef)!.access[key].editable) throw new Error(refs.get(patch.columnRef)!.access[key].reason || text.readonly); if (patch.changes.name !== undefined) names.set(patch.columnRef, patch.changes.name); }
   }

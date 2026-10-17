@@ -1,3 +1,5 @@
+import { CsvExportFieldCatalogs, type CsvExportFieldSnapshot } from './csvExportFields';
+import { TableCopyStructureTasks } from './tableCopyStructureTasks';
 import { applyTableTransaction, emptyTableApplyEvidence } from './tableApplyTransaction';
 import type { TableApplyEvidence } from '../shared/tableApplyReceipt';
 import type { TableApplyBinding } from '../shared/tableApplyReceipt';
@@ -37,6 +39,9 @@ import { TableIndexPatchTasks } from './tableIndexPatchTasks';
 import { TableRenameTasks } from './tableRenameTasks';
 import { TableAutoIncrementTasks } from './tableAutoIncrementTasks';
 import { TableCommentTasks } from './tableCommentTasks';
+import { TableDropTasks } from './tableDropTasks';
+import { TableTruncateTasks } from './tableTruncateTasks';
+import { DatabaseCreateTasks } from './databaseCreateTasks';
 import { TableDefaultEncodingTasks } from './tableDefaultEncodingTasks';
 import { TableForeignKeyPatchTasks } from './tableForeignKeyPatchTasks';
 import type { StructureTaskContext, StructureTaskOptions } from './structureDefinition';
@@ -77,13 +82,18 @@ export class Engine {
   private readonly resultFiles: ResultFileTasks;
   private readonly columnPatches: TableColumnPatchTasks;
   private readonly indexPatches: TableIndexPatchTasks;
+  private readonly tableCopies: TableCopyStructureTasks;
   private readonly tableRenames: TableRenameTasks;
   private readonly tableAutoIncrements: TableAutoIncrementTasks;
   private readonly tableComments: TableCommentTasks;
+  private readonly tableDrops: TableDropTasks;
+  private readonly tableTruncates: TableTruncateTasks;
+  private readonly databaseCreates: DatabaseCreateTasks;
   private readonly tableDefaultEncodings: TableDefaultEncodingTasks;
   private readonly foreignKeyPatches: TableForeignKeyPatchTasks;
   private readonly schemaComparisons: SchemaCompareTasks;
   private readonly structureCache = new StructurePatchCache();
+  private readonly csvExportFields = new CsvExportFieldCatalogs(this.structureCache);
   private readonly structureExecutions = new StructureExecutionLocks();
   private readonly structureSearches=new StructureSearches();
   private readonly dataSearches:DataSearchTasks;
@@ -96,9 +106,13 @@ export class Engine {
     this.schemaComparisons = new SchemaCompareTasks({ read: (target, taskId) => this.withIndependentTask(target.connectionId, taskId, (managed, control) => readSchemaComparisonTarget({ managed, ...control }, target), undefined, '只读结构比较', true, undefined, true), cancel: taskId => this.cancelTask(taskId) }, emit);
     this.columnPatches = new TableColumnPatchTasks({ run: (connectionId, taskId, action, options) => this.withIndependentTask(connectionId, taskId, (managed, control) => action({ managed, ...control }), { label: options.label, purpose: 'columns', progress: options.columnPatch, executionTarget: options.executionTarget }) }, undefined, this.structureCache);
     this.indexPatches = new TableIndexPatchTasks({ run: (connectionId, taskId, action, options) => this.withIndependentTask(connectionId, taskId, (managed, control) => action({ managed, ...control }), options) }, undefined, this.structureCache);
+    this.tableCopies = new TableCopyStructureTasks({ run: (connectionId, taskId, action, options) => this.withIndependentTask(connectionId, taskId, (managed, control) => action({ managed, ...control }), options) }, undefined, this.structureCache);
     this.tableRenames = new TableRenameTasks({ run: (connectionId, taskId, action, options) => this.withIndependentTask(connectionId, taskId, (managed, control) => action({ managed, ...control }), options) }, undefined, this.structureCache);
     this.tableAutoIncrements = new TableAutoIncrementTasks({ run: (connectionId, taskId, action, options) => this.withIndependentTask(connectionId, taskId, (managed, control) => action({ managed, ...control }), options) }, undefined, this.structureCache);
     this.tableComments = new TableCommentTasks({ run: (connectionId, taskId, action, options) => this.withIndependentTask(connectionId, taskId, (managed, control) => action({ managed, ...control }), options) }, undefined, this.structureCache);
+    this.tableDrops = new TableDropTasks({ run: (connectionId, taskId, action, options) => this.withIndependentTask(connectionId, taskId, (managed, control) => action({ managed, ...control }), options) }, undefined, this.structureCache);
+    this.tableTruncates = new TableTruncateTasks({ run: (connectionId, taskId, action, options) => this.withIndependentTask(connectionId, taskId, (managed, control) => action({ managed, ...control }), options) }, undefined, this.structureCache);
+    this.databaseCreates = new DatabaseCreateTasks({ run: (connectionId, taskId, action, options) => this.withIndependentTask(connectionId, taskId, (managed, control) => action({ managed, ...control }), options) }, undefined, this.structureCache);
     this.tableDefaultEncodings = new TableDefaultEncodingTasks({ run: (connectionId, taskId, action, options) => this.withIndependentTask(connectionId, taskId, (managed, control) => action({ managed, ...control }), options) }, undefined, this.structureCache);
     this.foreignKeyPatches = new TableForeignKeyPatchTasks({ run: (connectionId, taskId, action, options) => this.withIndependentTask(connectionId, taskId, (managed, control) => action({ managed, ...control }), options) }, undefined, this.structureCache);
   }
@@ -314,6 +328,10 @@ export class Engine {
       case 'schema.columns.apply': return this.columnPatches.apply(input as any, input.connectionRevision);
       case 'schema.columns.release': return this.columnPatches.releaseTokens(input);
       case 'schema.indexes.get': return this.indexPatches.get(input as any, input.connectionRevision);
+      case 'schema.tableCopyStructure.get': return this.tableCopies.get(input as any, input.connectionRevision);
+      case 'schema.tableCopyStructure.preview': return this.tableCopies.preview(input as any, input.connectionRevision);
+      case 'schema.tableCopyStructure.apply': return this.tableCopies.apply(input as any, input.connectionRevision);
+      case 'schema.tableCopyStructure.release': return this.tableCopies.releaseTokens(input);
       case 'schema.tableRename.get': return this.tableRenames.get(input as any, input.connectionRevision);
       case 'schema.tableRename.preview': return this.tableRenames.preview(input as any, input.connectionRevision);
       case 'schema.tableRename.apply': return this.tableRenames.apply(input as any, input.connectionRevision);
@@ -323,6 +341,10 @@ export class Engine {
       case 'schema.tableAutoIncrement.apply': return this.tableAutoIncrements.apply(input as any, input.connectionRevision);
       case 'schema.tableAutoIncrement.release': return this.tableAutoIncrements.releaseTokens(input);
       case 'schema.tableComment.get': return this.tableComments.get(input as any, input.connectionRevision);
+      case 'schema.databaseCreate.get': return this.databaseCreates.get(input as any, input.connectionRevision);
+      case 'schema.databaseCreate.preview': return this.databaseCreates.preview(input as any, input.connectionRevision);
+      case 'schema.databaseCreate.apply': return this.databaseCreates.apply(input as any, input.connectionRevision);
+      case 'schema.databaseCreate.release': return this.databaseCreates.releaseTokens(input);
       case 'schema.tableDefaultEncoding.get': return this.tableDefaultEncodings.get(input as any, input.connectionRevision);
       case 'schema.tableDefaultEncoding.preview': return this.tableDefaultEncodings.preview(input as any, input.connectionRevision);
       case 'schema.tableDefaultEncoding.apply': return this.tableDefaultEncodings.apply(input as any, input.connectionRevision);
@@ -330,6 +352,14 @@ export class Engine {
       case 'schema.tableComment.preview': return this.tableComments.preview(input as any, input.connectionRevision);
       case 'schema.tableComment.apply': return this.tableComments.apply(input as any, input.connectionRevision);
       case 'schema.tableComment.release': return this.tableComments.releaseTokens(input);
+      case 'schema.tableDrop.get': return this.tableDrops.get(input as any, input.connectionRevision);
+      case 'schema.tableDrop.preview': return this.tableDrops.preview(input as any, input.connectionRevision);
+      case 'schema.tableDrop.apply': return this.tableDrops.apply(input as any, input.connectionRevision);
+      case 'schema.tableDrop.release': return this.tableDrops.releaseTokens(input);
+      case 'schema.tableTruncate.get': return this.tableTruncates.get(input as any, input.connectionRevision);
+      case 'schema.tableTruncate.preview': return this.tableTruncates.preview(input as any, input.connectionRevision);
+      case 'schema.tableTruncate.apply': return this.tableTruncates.apply(input as any, input.connectionRevision);
+      case 'schema.tableTruncate.release': return this.tableTruncates.releaseTokens(input);
       case 'schema.indexes.preview': return this.indexPatches.preview(input as any, input.connectionRevision);
       case 'schema.indexes.apply': return this.indexPatches.apply(input as any, input.connectionRevision);
       case 'schema.indexes.release': return this.indexPatches.releaseTokens(input);
@@ -347,7 +377,18 @@ export class Engine {
       case 'excel.import': this.assertFile(input); return this.withExcelTask(input, '导入 Excel', task => this.importExcel(task, input));
       case 'excel.export': this.assertFile(input); return this.withExcelTask(input, '导出 Excel', task => this.exportExcel(task, input));
       case 'files.import': this.assertFile(input); return this.withConnection(input.connectionId, managed => this.runTask(input.taskId, managed, '导入文件', task => this.importFile(task, input)), input.database);
-      case 'files.export': this.assertFile(input); return this.withConnection(input.connectionId, managed => this.runTask(input.taskId, managed, '导出文件', task => this.exportFile(task, input)), input.database);
+      case 'files.exportColumns': {
+        const target = { connectionId: input.connectionId, database: input.database, table: input.table };
+        const read = await this.withIndependentTask(input.connectionId, input.taskId, async (managed, control) => { const info = await metadata.tableInfo(managed, input.database, input.table); control.checkCancelled(); return this.csvExportFields.prepare(target, info, managed, input.connectionRevision); }, undefined, '读取CSV导出字段', true);
+        return this.csvExportFields.publish(read);
+      }
+      case 'files.releaseExportColumns': return this.csvExportFields.release(input.catalogId);
+      case 'files.export': {
+        this.assertFile(input);
+        if (input.csvSelection && (input.format !== 'csv' || !input.includeData)) throw Error('字段选择只适用于CSV数据导出');
+        const projection = input.csvSelection ? this.csvExportFields.consume(input.csvSelection, { connectionId: input.connectionId, database: input.database, table: input.table }, input.connectionRevision) : undefined;
+        return this.withConnection(input.connectionId, managed => this.runTask(input.taskId, managed, '导出文件', task => this.exportFile(task, input, projection)), input.database);
+      }
       case 'files.exportResult': {
         this.assertFile(input);
         if (this.taskIdInUse(input.taskId)) throw new Error('任务编号已在执行');
@@ -465,7 +506,7 @@ export class Engine {
       const task: IndependentTask = { connectionId, controller, done, structureTask: Boolean(options)||strictRead, generation: 0 };
       this.independentTasks.set(taskId, task);
       const label = options?.label ?? readLabel ?? '读取关联记录';
-      const detail = () => options ? (options.purpose === 'tableRename' ? { tableRename: { ...options.progress } } : options.purpose === 'tableAutoIncrement' ? { tableAutoIncrement: { ...options.progress } } : options.purpose === 'tableDefaultEncoding' ? { tableDefaultEncoding: { ...options.progress } } : options.purpose === 'tableComment' ? { tableComment: { ...options.progress } } : options.purpose === 'indexes' ? { indexPatch: { ...options.progress } } : options.purpose === 'foreignKeys' ? { foreignKeyPatch: { ...options.progress } } : { columnPatch: { ...options.progress } }) : readDetail?.()??{};
+      const detail = () => options ? (options.purpose === 'tableCopyStructure' ? { tableCopyStructure: { ...options.progress } } : options.purpose === 'databaseCreate' ? { databaseCreate: { ...options.progress } } : options.purpose === 'tableRename' ? { tableRename: { ...options.progress } } : options.purpose === 'tableAutoIncrement' ? { tableAutoIncrement: { ...options.progress } } : options.purpose === 'tableDefaultEncoding' ? { tableDefaultEncoding: { ...options.progress } } : options.purpose === 'tableDrop' ? { tableDrop: { ...options.progress } } : options.purpose === 'tableTruncate' ? { tableTruncate: { ...options.progress } } : options.purpose === 'tableComment' ? { tableComment: { ...options.progress } } : options.purpose === 'indexes' ? { indexPatch: { ...options.progress } } : options.purpose === 'foreignKeys' ? { foreignKeyPatch: { ...options.progress } } : { columnPatch: { ...options.progress } }) : readDetail?.()??{};
       const send = (event: TaskEvent) => { if (!quiet) this.emit(event); };
       const report = () => send({ taskId, status: 'running', progress: 0, message: label, ...detail() });
       const checkCancelled = () => { if (task.cancelRequested || controller.signal.aborted) throw new Error('任务已取消；已执行的结构或数据变更不会撤销'); };
@@ -1170,10 +1211,17 @@ export class Engine {
   }
 
   /** 导出使用流背压和临时文件；完成后原子替换，取消或失败不留下伪完整目标文件。 */
-  private async exportFile(task: RunningTask, input: Input): Promise<{ rows: number }> {
+  private async exportFile(task: RunningTask, input: Input, projection?: CsvExportFieldSnapshot & { selected: string[] }): Promise<{ rows: number }> {
     if (!['csv', 'json', 'sql'].includes(input.format)) throw new Error('不支持的导出格式');
     if (!input.includeData && !(input.format === 'sql' && input.includeStructure)) throw new Error('请选择导出数据，或以 SQL 格式导出结构');
-    const encoding = encodingName(input.encoding);
+    const encoding = encodingName(input.encoding); let selectedTransaction = false;
+    try {
+    if (projection) {
+      // 同一独立会话先取得事务MDL再重读目录；LIMIT 0不读取行值，DDL不能在核对后换列。
+      await this.statement(task, 'SET TRANSACTION ISOLATION LEVEL REPEATABLE READ');
+      await this.statement(task, 'START TRANSACTION WITH CONSISTENT SNAPSHOT'); selectedTransaction = true;
+      await this.statement(task, 'SELECT 1 FROM ' + qualified(input.database, input.table) + ' LIMIT 0');
+    }
     const info = await metadata.tableInfo(task.managed, input.database, input.table);
     if (input.format === 'sql' && input.includeStructure) {
       // 使用本次独立导出连接的完整缓存模式；在创建临时文件前拒绝不可保真定义，不重写或删除默认值。
@@ -1187,7 +1235,7 @@ export class Engine {
       } else if (info.objectKind !== 'view') throw new Error('无法确认服务器对象为基本表或视图，未导出结构；可以单独导出数据');
     }
     this.checkCancelled(task);
-    const dataColumns = info.columns.filter(column => input.format !== 'sql' || !column.generated);
+    const dataColumns = projection ? this.csvExportFields.project(projection, info, task.managed) : info.columns.filter(column => input.format !== 'sql' || !column.generated);
     const temporaryPath = `${input.filePath}.dbark-${randomUUID()}.partial`;
     const file = await open(temporaryPath, 'wx');
     let count = 0, completed = false;
@@ -1212,8 +1260,9 @@ export class Engine {
       if (input.includeData) {
         if (input.format === 'csv') await write(dataColumns.map(column => csvHeader(column.name)).join(',') + '\r\n');
         if (input.format === 'json') await write('[\n');
-        await this.statement(task, 'SET TRANSACTION ISOLATION LEVEL REPEATABLE READ');
-        await this.statement(task, 'START TRANSACTION WITH CONSISTENT SNAPSHOT');
+        if (!projection) { await this.statement(task, 'SET TRANSACTION ISOLATION LEVEL REPEATABLE READ'); await this.statement(task, 'START TRANSACTION WITH CONSISTENT SNAPSHOT'); }
+        // 表头写入和事务准备都可能等待；真正标记在途并发送SELECT前重核，已接受取消不能启动新流。
+        this.checkCancelled(task);
         task.inFlight = true; task.generation++;
         const options = { sql: `SELECT ${dataColumns.map(column => identifier(column.name)).join(', ')} FROM ${qualified(input.database, input.table)}`, rowsAsArray: true };
         // 与表页一样保留浮点二进制位，避免相邻唯一键导出后变成同一个短小数。
@@ -1222,6 +1271,7 @@ export class Engine {
         try {
           for await (const raw of stream) {
             this.checkCancelled(task);
+            if (projection && (!Array.isArray(raw) || raw.length !== dataColumns.length)) throw Error('CSV实际行字段与已核目录不一致，未替换目标文件');
             const row = Object.fromEntries(dataColumns.map((column, index) => [column.name, serializeCell((raw as unknown[])[index])]));
             if (input.format === 'csv') await write(dataColumns.map(column => csvCell(row[column.name])).join(',') + '\r\n');
             else if (input.format === 'json') await write((count ? ',\n' : '') + JSON.stringify(row));
@@ -1233,15 +1283,26 @@ export class Engine {
           stream.destroy(); task.inFlight = false; await task.cancelPending;
         }
         if (input.format === 'json') await write('\n]\n');
-        await this.statement(task, 'ROLLBACK');
+        await this.statement(task, 'ROLLBACK'); selectedTransaction = false;
       }
       this.checkCancelled(task);
-      await file.sync(); await file.close();
+      await file.sync();
+      // 三种表文件格式共用提交协议；同步和关闭等待后均重核，不能接受取消后再覆盖原件。
+      this.checkCancelled(task);
+      await file.close();
+      this.checkCancelled(task);
+      // 与现有任务取消协议共用屏障；检查和标记间不让出执行权，rename 仅发送一次。
+      // 进入替换窗口后等待真实结果：成功报告完成，失败报告失败，不能伪称已取消或自动重试。
+      task.fileCommitStarted = true;
       await rename(temporaryPath, input.filePath); completed = true;
       return { rows: count };
     } finally {
       await file.close().catch(() => undefined);
       if (!completed) await rm(temporaryPath, { force: true });
+    }
+    } finally {
+      // 目录重核、文件打开或取消失败也释放读取事务；连接关闭仍沿原独立任务finally完成。
+      if (selectedTransaction) await this.statement(task, 'ROLLBACK').catch(() => undefined);
     }
   }
 }

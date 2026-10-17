@@ -1,4 +1,6 @@
+import { tableCopyStructureKnownAcknowledgements, validateTableCopyStructureName } from './tableCopyStructure';
 import { z } from 'zod';
+import { csvExportFieldLimits } from './csvExportFields';
 import { taskCancelInputSchema } from './taskCancelState';
 import { tableApplyReceiptListSchema } from './tableApplyReceipt';
 import { tlsPassphraseMaxLength, tlsCredentialMessages, validTlsPassphrase } from './tlsCredentials';
@@ -22,6 +24,9 @@ import { validateIndexPatches } from './tableIndexPatches';
 import { tableRenameAcknowledgements, validateTableRenameName } from './tableRename';
 import { tableAutoIncrementKnownAcknowledgements, validateTableAutoIncrement } from './tableAutoIncrement';
 import { tableCommentAcknowledgements, validateTableComment } from './tableComment';
+import { tableDropAcknowledgements } from './tableDrop';
+import { tableTruncateAcknowledgements } from './tableTruncate';
+import { databaseCreateAcknowledgements, validateDatabaseCreateName } from './databaseCreate';
 import { tableDefaultEncodingAcknowledgements } from './tableDefaultEncoding';
 import { validateForeignKeyPatches } from './tableForeignKeyPatches';
 import { foreignKeyAcknowledgementIds, foreignKeyTaskLimits } from './tableForeignKeyTasks';
@@ -155,6 +160,10 @@ export const commandSchemas: Record<Command, z.ZodType> = {
   'schema.columns.apply': z.object({ previewToken: id, acknowledgements: z.array(z.string().min(1).max(100)).max(20), taskId: id }).strict(),
   'schema.columns.release': z.object({ snapshotId: id.optional(), previewToken: id.optional() }).strict().refine(value => Boolean(value.snapshotId || value.previewToken), '缺少待释放的结构令牌'),
   'schema.indexes.get': z.object({ connectionId: id, database: z.string().min(1).max(64), table: z.string().min(1).max(64), taskId: id }).strict(),
+  'schema.tableCopyStructure.get': z.object({ connectionId: id, database: foreignKeyTargetName, table: foreignKeyTargetName, taskId: id }).strict(),
+  'schema.tableCopyStructure.preview': z.object({ snapshotId: id, newName: z.string().max(64).transform(value => validateTableCopyStructureName(value)), taskId: id }).strict(),
+  'schema.tableCopyStructure.apply': z.object({ previewToken: id, confirmation: z.string().min(3).max(129), acknowledgements: z.array(z.enum(tableCopyStructureKnownAcknowledgements)).min(3).max(4).refine(value => new Set(value).size === value.length), taskId: id }).strict(),
+  'schema.tableCopyStructure.release': z.object({ snapshotId: id.optional(), previewToken: id.optional() }).strict().refine(value => !!value.snapshotId || !!value.previewToken),
   'schema.tableRename.get': z.object({ connectionId: id, database: foreignKeyTargetName, table: foreignKeyTargetName, taskId: id }).strict(),
   'schema.tableRename.preview': z.object({ snapshotId: id, newName: z.string().max(64).transform(value => validateTableRenameName(value)), taskId: id }).strict(),
   'schema.tableRename.apply': z.object({ previewToken: id, acknowledgements: z.array(z.enum(tableRenameAcknowledgements)).max(3).refine(value => new Set(value).size === value.length, '重命名确认项不能重复'), taskId: id }).strict(),
@@ -164,6 +173,18 @@ export const commandSchemas: Record<Command, z.ZodType> = {
   'schema.tableAutoIncrement.apply': z.object({ previewToken: id, acknowledgements: z.array(z.enum(tableAutoIncrementKnownAcknowledgements)).max(4).refine(value => new Set(value).size === value.length, '下一自增值确认项不能重复'), taskId: id }).strict(),
   'schema.tableAutoIncrement.release': z.object({ snapshotId: id.optional(), previewToken: id.optional() }).strict().refine(value => Boolean(value.snapshotId || value.previewToken), '缺少待释放的下一自增值令牌'),
   'schema.tableComment.get': z.object({ connectionId: id, database: z.string().min(1).max(64), table: z.string().min(1).max(64), taskId: id }).strict(),
+  'schema.tableDrop.get': z.object({ connectionId: id, database: foreignKeyTargetName, table: foreignKeyTargetName, taskId: id }).strict(),
+  'schema.tableDrop.preview': z.object({ snapshotId: id, taskId: id }).strict(),
+  'schema.tableDrop.apply': z.object({ previewToken: id, confirmation: z.string().min(3).max(129), acknowledgements: z.array(z.enum(tableDropAcknowledgements)).length(3).refine(values => new Set(values).size === values.length), taskId: id }).strict(),
+  'schema.tableDrop.release': z.object({ snapshotId: id.optional(), previewToken: id.optional() }).strict().refine(value => !!value.snapshotId || !!value.previewToken),
+  'schema.tableTruncate.get': z.object({ connectionId: id, database: foreignKeyTargetName, table: foreignKeyTargetName, taskId: id }).strict(),
+  'schema.tableTruncate.preview': z.object({ snapshotId: id, taskId: id }).strict(),
+  'schema.tableTruncate.apply': z.object({ previewToken: id, confirmation: z.string().min(3).max(129), acknowledgements: z.array(z.enum(tableTruncateAcknowledgements)).length(3).refine(values => new Set(values).size === values.length), taskId: id }).strict(),
+  'schema.tableTruncate.release': z.object({ snapshotId: id.optional(), previewToken: id.optional() }).strict().refine(value => !!value.snapshotId || !!value.previewToken),
+  'schema.databaseCreate.get': z.object({ connectionId: id, taskId: id }).strict(),
+  'schema.databaseCreate.preview': z.object({ snapshotId: id, name: z.string().max(64).refine(value => { try { validateDatabaseCreateName(value); return true; } catch { return false; } }, '数据库名称不在受控范围'), charset: z.string().regex(/^[A-Za-z0-9_]{1,64}$/), collation: z.string().regex(/^[A-Za-z0-9_]{1,255}$/), taskId: id }).strict(),
+  'schema.databaseCreate.apply': z.object({ previewToken: id, confirmation: z.string().max(64), acknowledgements: z.array(z.enum(databaseCreateAcknowledgements)).max(2).refine(value => new Set(value).size === value.length, '确认项不能重复'), taskId: id }).strict(),
+  'schema.databaseCreate.release': z.object({ snapshotId: id.optional(), previewToken: id.optional() }).strict().refine(value => Boolean(value.snapshotId || value.previewToken), '缺少待释放的新建库令牌'),
   'schema.tableDefaultEncoding.get': z.object({ connectionId: id, database: foreignKeyTargetName, table: foreignKeyTargetName, taskId: id }).strict(),
   'schema.tableDefaultEncoding.preview': z.object({ snapshotId: id, charset: z.string().regex(/^[A-Za-z0-9_]{1,64}$/), collation: z.string().regex(/^[A-Za-z0-9_]{1,255}$/), taskId: id }).strict(),
   'schema.tableDefaultEncoding.apply': z.object({ previewToken: id, acknowledgements: z.array(z.enum(tableDefaultEncodingAcknowledgements)).max(3).refine(value => new Set(value).size === value.length, '表默认编码确认项不能重复'), taskId: id }).strict(),
@@ -188,7 +209,9 @@ export const commandSchemas: Record<Command, z.ZodType> = {
   'files.writeQuery': z.object({ fileToken: id, encoding: z.enum(['utf8','utf16le','gb18030']), sql: text }).strict(),
   'files.preview': z.object({ fileToken: id, format: z.enum(['csv','json']), encoding: z.enum(['utf8','utf16le','gb18030']) }).strict(),
   'files.import': z.object({ ...fileOptions, mapping: ownRecord(z.string(), '导入映射') }).strict(),
-  'files.export': z.object({ ...fileOptions, includeStructure: z.boolean(), includeData: z.boolean() }).strict(),
+  'files.exportColumns': z.object({ ...target, taskId: id }).strict(),
+  'files.releaseExportColumns': z.object({ catalogId: id }).strict(),
+  'files.export': z.object({ ...fileOptions, includeStructure: z.boolean(), includeData: z.boolean(), csvSelection: z.object({ catalogId: id, columns: z.array(z.string().min(1).max(64).refine(value => !value.includes('\0'))).min(1).max(csvExportFieldLimits.columns).refine(value => new Set(value).size === value.length, 'CSV字段不能重复') }).strict().optional() }).strict().refine(value => !value.csvSelection || value.format === 'csv' && value.includeData, '字段选择只适用于CSV数据导出'),
   'files.exportResult': z.object({ fileToken: id, format: z.enum(['csv','json']), encoding: z.enum(['utf8','utf16le','gb18030']), taskId: id, result: resultExportData }).strict(),
   'queries.list': empty, 'queries.save': z.object({ id, name, connectionId: id.optional(), database: name.optional(), databaseContext:queryDatabaseContext.optional(), sql: text, updatedAt: z.string() }).strict(), 'queries.delete': z.object({ id }).strict(),
   'snippets.list': empty, 'snippets.save': snippetSchema, 'snippets.delete': z.object({ id }).strict(),

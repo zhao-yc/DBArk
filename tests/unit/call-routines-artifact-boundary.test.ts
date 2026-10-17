@@ -39,6 +39,8 @@ describe('CALL的窄失败产物边界',()=>{
     let screenshots=0,ended=0;const queries:string[]=[],original=new Error('合成原失败');
     const observer={query:async(value:{sql:string})=>{queries.push(value.sql);return[[]];},end:async()=>{ended++;}};
     const ports:any={environment:{DBARK_TEST_HOST:'合成端点',DBARK_TEST_USER:'合成用户'},randomUUID:()=> 'a'.repeat(32),Date:{now:()=>1000},tlsCertificate:()=>undefined,mysql:{createConnection:async()=>observer},connectAndCreate:async(database:string)=>({database,connectionId:'本例'}),expect:playwrightExpect,pageErrors:[],closed:false,page:{screenshot:async()=>{screenshots++;}},answerDialogs:async()=>undefined,quitDesktop:async()=>{ports.closed=true;}};
+    // CALL沿默认退出路径；显式补齐新增模式端口，不修改截图、原异常和精确清理断言。
+    ports.preservesUnconfirmedExit=()=>false;
     const run=runInNewContext(isolated+';isolatedDatabase',ports);let failure:unknown;
     try{await run(async()=>{throw original;},{outputPath:(name:string)=>name},captureFailureScreenshot===undefined?undefined:{captureFailureScreenshot});}catch(error){failure=error;}
     expect(failure).toBe(original);expect(screenshots).toBe(captureFailureScreenshot===false?0:1);expect(ended).toBe(1);

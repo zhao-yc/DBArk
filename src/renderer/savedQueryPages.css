@@ -10,3 +10,7 @@
 .history-pages .history-error{display:block}
 .history-pages .history-error pre{max-height:320px;overflow:auto}
 .history-pages>details{margin:12px 0;flex-shrink:0}
+
+.history-pages .history-time-range{display:flex;flex-wrap:wrap;align-items:end;gap:12px;margin-top:12px}
+.history-pages .history-time-range label{display:flex;flex:1 1 230px;flex-direction:column;gap:6px}
+.history-pages .history-time-range input{width:100%;min-width:0}

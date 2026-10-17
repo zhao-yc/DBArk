@@ -1,4 +1,5 @@
 import { identifier, qualified, SqlScriptScanner, stringLiteral } from './sql';
+import { columnOnUpdateAccess, columnOnUpdateVersionSupported, readColumnOnUpdate, sameColumnOnUpdate } from '../shared/tableColumnPatches';
 import { assertColumnAttributeReadable, tableDefinitionTokens, type TableDefinitionToken } from './tableColumnDefinition';
 import { columnRestateAccess, hasUnprovenBinaryDefault, readControlledTimestampDefault, tableColumnDefaultRisks, tableColumnDefaultRiskMessage, tableColumnPatchLimits, validateColumnPatches, type ColumnDefaultPatch, type ColumnPatch, type ColumnTypePatch, type DefinitionRange, type TableColumnDefinition, type TableColumnDefinitionDocument } from '../shared/tableColumnPatches';
 
@@ -119,7 +120,7 @@ function modifiedDefinition(column: TableColumnDefinition, changes: Alter['chang
   const replacements: { range: DefinitionRange; value: string }[] = [], insertions = new Map<number, string>();
   const insert = (at: number, value: string): void => { insertions.set(at, (insertions.get(at) ?? '') + value); };
   const last = column.attributes.at(-1)?.range.end ?? column.type.range.end;
-  const attribute = (kind: 'nullable' | 'default' | 'comment', value: string): void => {
+  const attribute = (kind: 'nullable' | 'default' | 'comment' | 'on-update', value: string): void => {
     const existing = column.attributes.find(item => item.kind === kind);
     if (existing) replacements.push({ range: existing.range, value });
     else if (value) insert(kind === 'nullable' ? column.type.range.end : last, ' ' + value);
@@ -132,6 +133,10 @@ function modifiedDefinition(column: TableColumnDefinition, changes: Alter['chang
     attribute('default', sql === undefined ? '' : 'DEFAULT ' + sql);
   }
   if (changes.comment !== undefined) attribute('comment', 'COMMENT ' + stringLiteral(changes.comment, document.context.mode.noBackslashEscapes));
+  if (Object.hasOwn(changes, 'onUpdate')) {
+    const precision = Number(/\((\d+)\)/.exec(column.type.raw)?.[1] ?? 0);
+    attribute('on-update', changes.onUpdate === null ? '' : 'ON UPDATE CURRENT_TIMESTAMP' + (precision ? `(${precision})` : ''));
+  }
   for (const [at, value] of insertions) replacements.push({ range: { start: at, end: at }, value });
   replacements.sort((a, b) => b.range.start - a.range.start || b.range.end - a.range.end);
   let text = column.raw, previous = column.range.end;
@@ -174,6 +179,7 @@ export function buildTableColumnPatchSql(document: TableColumnDefinitionDocument
   const unknownTail = tailUnknown(document);
   for (const patch of patches) {
     if (patch.kind === 'add') {
+      if (Object.hasOwn(patch, 'onUpdate') && !columnOnUpdateVersionSupported(document.context.dialect, options.serverVersion)) throw new Error('当前版本尚未开放新增自动更新时间属性');
       if (originalRefs.has(patch.clientKey) || nodes.has(patch.clientKey)) throw new Error('新增字段引用与现有快照冲突');
       const node = { ref: patch.clientKey, name: patch.name }; nodes.set(node.ref, node); operations.set(node.ref, patch); continue;
     }
@@ -185,6 +191,15 @@ export function buildTableColumnPatchSql(document: TableColumnDefinitionDocument
       drops.push(`DROP COLUMN ${identifier(column.name)}`); order = order.filter(item => item !== node); nodes.delete(node.ref); changed.add(column.name); acknowledgements.add('drop-column-data'); continue;
     }
     const changes = { ...patch.changes };
+    // 自动时间首片只修改本属性；不允许同列类型/默认值组合扩大重述语义。
+    if (Object.hasOwn(changes, 'onUpdate')) {
+      const access = columnOnUpdateAccess(column, document.context.dialect, options.serverVersion);
+      if (!access.editable) throw new Error(access.reason);
+      if (Object.keys(changes).length !== 1) throw new Error('自动更新时间不能与同一字段其他属性混合修改');
+      const precision = Number(/\((\d+)\)/.exec(column.type.raw)?.[1] ?? 0);
+      if (changes.onUpdate !== null && changes.onUpdate!.precision !== undefined && changes.onUpdate!.precision !== precision) throw new Error('自动更新时间精度必须与现有字段精度一致');
+      if (sameColumnOnUpdate(readColumnOnUpdate(column), changes.onUpdate, column.type.raw)) delete changes.onUpdate;
+    }
     if (changes.name === column.name) delete changes.name;
     if (changes.type && sameType(column.type.raw, typeSql(changes.type, document.context.mode.noBackslashEscapes), document)) delete changes.type;
     if (changes.nullable === column.nullable) delete changes.nullable;
@@ -234,7 +249,9 @@ export function buildTableColumnPatchSql(document: TableColumnDefinitionDocument
     }
     if (operation.kind === 'add') {
       const type = typeSql(operation.type, document.context.mode.noBackslashEscapes), value = defaultSql(operation.default, type, operation.nullable, document, largeDefaultUnsupported);
-      clauses.push(`ADD COLUMN ${identifier(operation.name)} ${type} ${operation.nullable ? 'NULL' : 'NOT NULL'}${value === undefined ? '' : ' DEFAULT ' + value} COMMENT ${stringLiteral(operation.comment, document.context.mode.noBackslashEscapes)}${positionSql}`); continue;
+      const precision = operation.type.kind === 'temporal' ? operation.type.precision ?? 0 : 0;
+      const onUpdate = operation.onUpdate ? ' ON UPDATE CURRENT_TIMESTAMP' + (precision ? `(${precision})` : '') : '';
+      clauses.push(`ADD COLUMN ${identifier(operation.name)} ${type} ${operation.nullable ? 'NULL' : 'NOT NULL'}${value === undefined ? '' : ' DEFAULT ' + value}${onUpdate} COMMENT ${stringLiteral(operation.comment, document.context.mode.noBackslashEscapes)}${positionSql}`); continue;
     }
     const column = node.original!, changes = { ...operation.changes }; if (!moved) delete changes.position;
     const keys = Object.keys(changes); if (!keys.length) continue;
