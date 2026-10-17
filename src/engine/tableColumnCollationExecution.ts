@@ -31,30 +31,32 @@ const warnings = Object.freeze([
 ]);
 const sha = (value: string) => createHash('sha256').update(value).digest('hex');
 
-/** 只复制普通有界证据；访问器/Proxy/自定义原型/循环不执行，重复引用和原生Map独立保留。 */
+/** 只复制普通有界证据；32MiB约束UTF-8内容及文本结构成本，不是严格堆内存上限。 */
 function copyEvidence<T>(value: T): T {
   const copies = new WeakMap<object, unknown>(), active = new WeakSet<object>(); let nodes = 0, bytes = 0;
+  // 在写入副本前收费；普通对象键与Map键都必须计量，不能只信reader声明的bytes。
+  const charge = (cost: number): void => { bytes += cost; if (bytes > 32 * 1024 * 1024) throw Error('列排序规则执行证据超过32 MiB'); };
   const copy = (item: unknown, depth: number): unknown => {
     if (++nodes > 300000 || depth > 48) throw Error('列排序规则执行证据超过节点或深度预算');
-    if (typeof item === 'string') { bytes += Buffer.byteLength(item); if (bytes > 32 * 1024 * 1024) throw Error('列排序规则执行证据超过32 MiB'); return item; }
-    if (item === null || item === undefined || typeof item === 'boolean') return item;
-    if (typeof item === 'number') { if (!Number.isFinite(item)) throw Error('列排序规则执行证据包含无效数值'); return item; }
+    if (typeof item === 'string') { charge(Buffer.byteLength(item, 'utf8') + 2); return item; }
+    if (item === null || item === undefined || typeof item === 'boolean') { charge(String(item).length); return item; }
+    if (typeof item === 'number') { if (!Number.isFinite(item)) throw Error('列排序规则执行证据包含无效数值'); charge(String(item).length); return item; }
     if (typeof item !== 'object' || types.isProxy(item)) throw Error('列排序规则执行证据不是普通数据');
     if (active.has(item)) throw Error('列排序规则执行证据包含循环');
     if (copies.has(item)) return copies.get(item);
-    active.add(item); const prototype = Object.getPrototypeOf(item); let output: unknown;
+    active.add(item); charge(2); const prototype = Object.getPrototypeOf(item); let output: unknown;
     if (types.isMap(item)) {
       if (prototype !== Map.prototype || Reflect.ownKeys(item).length || Object.getOwnPropertyDescriptor(Map.prototype, 'size')!.get!.call(item) > 300000) throw Error('列排序规则执行证据Map无效');
       const result = new Map(); output = result; copies.set(item, result);
-      for (const [key, entry] of Map.prototype.entries.call(item)) { if (typeof key !== 'string') throw Error('列排序规则证据引用必须为字符串'); result.set(copy(key, depth + 1), copy(entry, depth + 1)); }
+      for (const [key, entry] of Map.prototype.entries.call(item)) { if (typeof key !== 'string') throw Error('列排序规则证据引用必须为字符串'); charge(4); result.set(copy(key, depth + 1), copy(entry, depth + 1)); }
     } else if (Array.isArray(item)) {
       if (prototype !== Array.prototype || item.length > 300000 || Reflect.ownKeys(item).length !== item.length + 1) throw Error('列排序规则执行证据数组无效');
       const result: unknown[] = []; output = result; copies.set(item, result);
-      for (let index = 0; index < item.length; index++) { const field = Object.getOwnPropertyDescriptor(item, String(index)); if (!field?.enumerable || !Object.hasOwn(field, 'value')) throw Error('列排序规则执行证据数组缺项'); result.push(copy(field.value, depth + 1)); }
+      for (let index = 0; index < item.length; index++) { const field = Object.getOwnPropertyDescriptor(item, String(index)); if (!field?.enumerable || !Object.hasOwn(field, 'value')) throw Error('列排序规则执行证据数组缺项'); charge(1); result.push(copy(field.value, depth + 1)); }
     } else {
       if (prototype !== Object.prototype && prototype !== null) throw Error('列排序规则执行证据原型无效');
       const result = Object.create(null); output = result; copies.set(item, result);
-      for (const key of Reflect.ownKeys(item)) { const field = Object.getOwnPropertyDescriptor(item, key); if (typeof key !== 'string' || key === 'toJSON' || !field?.enumerable || !Object.hasOwn(field, 'value')) throw Error('列排序规则执行证据字段不是数据'); result[key] = copy(field.value, depth + 1); }
+      for (const key of Reflect.ownKeys(item)) { if (typeof key !== 'string' || key === 'toJSON') throw Error('列排序规则执行证据字段不是数据'); charge(Buffer.byteLength(key, 'utf8') + 4); const field = Object.getOwnPropertyDescriptor(item, key); if (!field?.enumerable || !Object.hasOwn(field, 'value')) throw Error('列排序规则执行证据字段不是数据'); result[key] = copy(field.value, depth + 1); }
     }
     active.delete(item); return Object.freeze(output);
   };

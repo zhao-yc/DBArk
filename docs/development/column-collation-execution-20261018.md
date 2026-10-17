@@ -36,6 +36,20 @@ requiredAcknowledgements精确为`['ddl-implicit-commit','external-ddl-window','
 
 ## 实际验证
 
+### V2：对象键漏计的窄修
+
+员工1对固定3431的独审发现：`base`增加33,554,433字节普通自有旁键、值为1且reader声明bytes不变时，原复制器只计字符串值，仍保留该键并返回计划。此项是私有畸形输入的预算缺口，没有证明外部入口、远程可利用或实际DDL发送。原红记录封存在本克隆`.cache/column-collation-execution-budget-v2/original-red`，不改写原独审目录。
+
+V2保持32MiB、300000节点、48层深度门和既有接口。每次复制调用的32MiB为UTF-8内容及文本结构预算：普通对象键和字符串值按原始UTF-8字节加引号2收费；对象字段另加冒号/分隔2，容器加2，数组每项加分隔1，Map每项加条目/分隔4；null/undefined/boolean/有限number按其文本长度收费。对象引用复用时只复制并收费一次容器及其内容；每个字段键和每次出现的字符串值仍各自收费。普通对象在读取属性描述符和写入副本前先给键收费，Map键继续走字符串复制路径。
+
+这是限定内容与逻辑文本结构的预算，不是JSON序列化大小或严格堆内存上限；不计JSON转义膨胀、V8对象/属性开销、输入本体、枚举临时数组、摘要临时字符串或并存的多次复制峰值。节点/深度门独立约束容器结构；Root Tasks仍需对实际保留的facts/plan及公共投影计总缓存成本，不能用该单次预算替代缓存总额。
+
+新`table-column-collation-execution-budget.test.ts`仅通过AST提取真实私有复制器测键/Map/值同预算、中文UTF-8、恰界与超1字节、ASCII旁键、引用/访问器和节点/深度门；不新增生产导出。原E6保持独立真实RAM reader准备路径，仅在隔离副本重定位源码路径后复验。没有重复55项旧执行计划测试。
+
+V2实跑：原E6单项通过（同文件其它7组明确跳过），新增7项边界对照通过，`tsc --noEmit`及`git diff --check`通过。隔离E6首次因Vitest默认排除`.cache`未找到测试；调整专用配置的exclude后实际执行并通过，原首次输出未作为测试通过证据。报告分别为`.cache/column-collation-execution-budget-v2/original-e6-fixed.json`及`boundaries.json`。
+
+以下55项及其报告SHA为3431原片历史验证，本次V2未重跑。
+
 `node node_modules/vitest/vitest.mjs run tests/unit/table-column-collation-execution.test.ts --reporter=json --outputFile=.cache/column-collation-execution/tests.json`：55项RAM通过，覆盖非observed/伪造mapping/不同目标、uint64及相邻超安全整数、同ID定义错、新ID定义正确、原物理租约变化、源/范围/SQL/ACK/warnings/私有快照篡改、原v1 blocked/false、原模式保留、反射副作用拒绝。
 
 `node node_modules/typescript/bin/tsc --noEmit`及`git diff --check`通过。报告SHA256：`751abcb60ec26cdcfdb8cd2fde9c7950485ccdc677dfa4fbff09a4f9458f07fa`。没有实库、网络、认证、GUI、剪贴板、full/build或DDL执行；未操作远端。Root整合后再做真实函数连测。
