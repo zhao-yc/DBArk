@@ -28,7 +28,7 @@ describe('生产新建表接线与精确刷新（RAM）', () => {
     const f = harness(); f.state.connectionVersions.c = 2; f.done({ target: { connectionId: 'c', database: 'db', table: 'new' } }, 1); expect(f.refresh).toEqual([]); expect(f.targets).toEqual([]); expect(f.state.notify).toHaveBeenCalledWith(tableCreateZh.mismatch, true);
   });
   it('生产适配器只传结构/令牌，无通用schema.apply fallback', async () => {
-    port.invoke.mockClear(); await tableCreateServices.get({ connectionId: 'c', database: 'db', taskId: 'get' }); await tableCreateServices.apply({ previewToken: 'p', confirmation: 'db.t', acknowledgements: [], taskId: 'apply' });
+    port.invoke.mockClear(); await tableCreateServices.get({ connectionId: 'c', database: 'db', taskId: 'get' }, () => true); await tableCreateServices.apply({ previewToken: 'p', confirmation: 'db.t', acknowledgements: [], taskId: 'apply' }, () => true);
     expect(port.invoke.mock.calls.map(call => call[0])).toEqual(['connections.open', 'schema.tableCreate.get', 'schema.tableCreate.apply']); expect(port.invoke.mock.calls.at(-1)?.[1]).not.toHaveProperty('sql');
   });
   it('原修改表入口和原生成器保留，只有新表分支交给专用确认', () => {
@@ -41,4 +41,12 @@ describe('生产新建表接线与精确刷新（RAM）', () => {
     runInContext(ts.transpileModule(node.getText(tree) + '\nglobalThis.check=assertCreateSettled;', { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText, context);
     await expect(context.check(info)).rejects.toThrow('终态'); expect(retain).toHaveBeenCalledWith(info);
   });
+});
+
+/** 各专用命令在发送前都检查父租约，函数参数不能混入IPC载荷。 */
+it.each(['preview', 'apply'] as const)('真实%s适配器失效或异常guard在IPC前拒绝', async phase => {
+  const input: any = phase === 'preview' ? { snapshotId: 's', design: {}, taskId: 'p' } : { previewToken: 'p', confirmation: 'db.t', acknowledgements: [], taskId: 'a' };
+  for (const guard of [() => false, () => { throw Error('父窗口已销毁'); }]) {
+    port.invoke.mockClear(); await expect(tableCreateServices[phase](input, guard)).rejects.toThrow(tableCreateZh.mismatch); expect(port.invoke).not.toHaveBeenCalled();
+  }
 });

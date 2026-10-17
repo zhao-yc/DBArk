@@ -75,7 +75,7 @@ export function TableCreateConfirmation({ connectionId, design, invalidated = fa
       if (snapshots.current.size || tokens.current.size) { await releaseAll(); if (!accepts(op)) return; }
       const parsed = tableCreateDraftSchema.safeParse(fixed.current.design); if (!parsed.success) throw Error(text.invalidDesign); const draft = parsed.data;
       if (!accepts(op)) return;
-      const value = await service.current.get({ connectionId: fixed.current.connectionId, database: draft.database, taskId: op.taskId, ...(chosen ? { includeEncodings: true } : {}), ...(tableCreateHasPrefix(draft) ? { includePrefixFacts: true } : {}) }); snapshots.current.add(value.snapshotId);
+      const value = await service.current.get({ connectionId: fixed.current.connectionId, database: draft.database, taskId: op.taskId, ...(chosen ? { includeEncodings: true } : {}), ...(tableCreateHasPrefix(draft) ? { includePrefixFacts: true } : {}) }, () => accepts(op)); snapshots.current.add(value.snapshotId);
       if (!accepts(op) || value.target.connectionId !== fixed.current.connectionId || value.target.database !== draft.database || !validTime(value.expiresAt)) { await releaseOne('snapshotId', value.snapshotId); return; }
       if (tableCreateHasPrefix(draft) && !value.prefixFacts) throw Error(tableCreatePrefixZh.unavailable);
       setSnapshot(value);
@@ -93,7 +93,7 @@ export function TableCreateConfirmation({ connectionId, design, invalidated = fa
       }
       if (!accepts(op)) return;
       activeTask.current = uid();
-      const next = await service.current.preview({ snapshotId: value.snapshotId, design: draft, taskId: activeTask.current }); tokens.current.add(next.previewToken);
+      const next = await service.current.preview({ snapshotId: value.snapshotId, design: draft, taskId: activeTask.current }, () => accepts(op)); tokens.current.add(next.previewToken);
       if (!accepts(op) || next.target.connectionId !== fixed.current.connectionId || next.target.database !== draft.database || next.target.table !== draft.name || !validTime(next.expiresAt) || next.requiredAcknowledgements.length !== tableCreateAcknowledgements.length || tableCreateAcknowledgements.some(id => !next.requiredAcknowledgements.includes(id))) { await releaseOne('previewToken', next.previewToken); if (accepts(op)) throw Error(text.response); return; }
       if (chosen && (!next.encoding || next.encoding.catalogDigest !== value.encodings?.digest || !sameTableEncodingPair(next.encoding.selection, chosen)) || !chosen && next.encoding) { await releaseOne('previewToken', next.previewToken); throw Error(text.response); }
       if (!accepts(op)) { await releaseOne('previewToken', next.previewToken); return; }
@@ -114,7 +114,7 @@ export function TableCreateConfirmation({ connectionId, design, invalidated = fa
     const op = begin(); if (!op) return; consumed.current = true; setAttempted(true);
     try {
       if (!accepts(op)) return;
-      const result = await service.current.apply({ previewToken: preview.previewToken, confirmation, acknowledgements: [...tableCreateAcknowledgements], taskId: op.taskId });
+      const result = await service.current.apply({ previewToken: preview.previewToken, confirmation, acknowledgements: [...tableCreateAcknowledgements], taskId: op.taskId }, () => accepts(op));
       if (!accepts(op)) return;
       if (JSON.stringify(result.target) !== JSON.stringify(preview.target) || result.ddlCompleted !== true || result.ddlSubmitted !== true) throw Error(text.response);
       if (alive.current && op.guard === fence.current) { setComplete(true); setUnknown(!result.definitionVerified || !result.resourcesReleased); setOutcome(!result.resourcesReleased ? text.cleanup : result.definitionVerified ? text.succeeded : text.unverified); setError(result.warnings.join('\n')); }
