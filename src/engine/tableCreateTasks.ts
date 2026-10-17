@@ -124,11 +124,14 @@ export class TableCreateTasks {
         try { output.definitionVerified = progress.definitionVerified = (await read(context, snapshot.database)).identity === snapshot.identity && await verify(context, preview); } catch { /* ACK事实已成立，后核失败不能变回未执行或自动重放。 */ }
         if (!output.definitionVerified) output.warnings.push(text.verify); if (result.warningStatus) output.warnings.push(text.serverWarning);
         context.report(); this.releaseTokens({ snapshotId: preview.snapshotId }); return output;
-      }, { label: text.labels.apply, purpose: 'tableCreate', progress, executionTarget: { database: snapshot.database, table: preview.target.table } });
-      released = true; result.resourcesReleased = true; return result;
+      }, { label: text.labels.apply, purpose: 'tableCreate', progress, executionTarget: { database: snapshot.database, table: preview.target.table }, onResourcesReleased: () => { released = true; } });
+      result.resourcesReleased = released; return result;
     } catch (reason) {
       // 成功ACK后关闭失败仍回传独立事实；未确认收尾的目标锁保留，避免另一窗口再次投递。
-      if (output?.ddlCompleted) { output.warnings.push(text.cleanup); return output; } throw reason;
-    } finally { if (released) this.executing.delete(key); }
+      if (output?.ddlCompleted) { output.resourcesReleased = released; if (!released) output.warnings.push(text.cleanup); return output; } throw reason;
+    } finally {
+      // 必须同时有可信收尾事实和确定的DDL状态；发送前正常取消可新预览，DDL/关闭未知仍锁定。
+      if (released && (!progress.ddlSubmitted || progress.ddlCompleted)) this.executing.delete(key);
+    }
   }
 }
