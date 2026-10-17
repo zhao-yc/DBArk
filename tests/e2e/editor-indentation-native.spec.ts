@@ -132,7 +132,7 @@ test('离线原生缩进：两种样式热更、真实Tab/Undo/选区、新模�
     await info.attach('缩进原生终态', { body: Buffer.from(JSON.stringify({ accepted: true, normalOwners: run.owners.map(owner => ({ confirmed: owner.confirmed, willQuit: owner.ready, closed: owner.closed, recordedPids: owner.ids.size })), directoryRemoved: run.removed, sqliteChecked: true, systemClipboard: 0, sqlExecution: 0 })), contentType: 'application/json' });
   } catch (reason) {
     run.retained = true;
-    try { await info.attach('缩进原生保留现场', { body: Buffer.from(JSON.stringify({ directory: run.path, owners: run.owners.map(owner => ({ confirmed: owner.confirmed, willQuit: owner.ready, closed: owner.closed, ids: [...owner.ids] })), automaticRetry: false, automaticForceStop: false, directoryRemoved: run.removed })), contentType: 'application/json' }); }
+    try { await info.attach('缩进原生保留现场', { body: Buffer.from(JSON.stringify({ directory: run.path, owners: run.owners.map(owner => ({ confirmed: owner.confirmed, willQuit: owner.ready, closed: owner.closed, ids: [...owner.ids], sourceDiagnostics: owner.sourceDiagnostics ?? [] })), automaticRetry: false, automaticForceStop: false, directoryRemoved: run.removed })), contentType: 'application/json' }); }
     catch (attachment) { throw new AggregateError([reason, attachment], '缩进用例失败且现场附录失败', { cause: reason }); }
     throw reason;
   }

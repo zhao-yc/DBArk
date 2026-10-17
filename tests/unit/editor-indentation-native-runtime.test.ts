@@ -12,7 +12,7 @@ const url = new URL('../e2e/editor-indentation-native-runtime.ts', import.meta.u
 function method(name: string) { const node = tree.statements.find(node => ts.isFunctionDeclaration(node) && node.name?.text === name)!; expect(node).toBeDefined(); return ts.transpileModule(node.getText(tree), { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS } }).outputText; }
 
 /** 真正运行原生适配器函数，Electron/目录/PID均为RAM；不导入原生模块或调用操作系统。 */
-function fixture(mode: '正常' | '无握手关闭' | 'PID权限错误' | '链接目录' = '正常', installed = false) {
+function fixture(mode: '正常' | '无握手关闭' | 'PID权限错误' | '链接目录' = '正常', installed = false, platform = 'win32') {
   const parent = resolve('RAM-native-parent'), directory = join(parent, 'dbark-indent-RAM'), applications: any[] = []; let exists = false, ownedStats = 0, blocked = 0;
   const project = resolve('RAM-source'), root = installed ? resolve('RAM-install') : project, resources = join(installed ? root : resolve('RAM-electron'), 'resources'), exe = join(installed ? root : resolve('RAM-electron'), 'DBArk.exe'), appPath = installed ? join(resources, 'app.asar') : root;
   const bytes = new Map<string, Uint8Array>(), put = (path: string, text: string) => bytes.set(path, Buffer.from(text));
@@ -33,7 +33,8 @@ function fixture(mode: '正常' | '无握手关闭' | 'PID权限错误' | '链�
     application.waitForEvent = () => new Promise(done => application.once('close', done)); application.close = vi.fn(async () => { expect(runtime.listenerCount('will-quit')).toBe(0); application.emit('close'); }); applications.push(application); applicationHook(application); return application;
   });
   const probe = vi.fn(() => { throw Object.assign(Error('合成探测'), { code: mode === 'PID权限错误' ? 'EPERM' : 'ESRCH' }); });
-  const poll = (read: () => unknown) => ({ toEqual: async (value: unknown) => expect(read()).toEqual(value) });
+  // 有限RAM采样模拟指标稍后就绪，不启动计时器、进程、窗口或系统探测。
+  const poll = (read: () => unknown) => ({ toEqual: async (value: unknown) => expect(await read()).toEqual(value), toBe: async (value: unknown) => { let actual: unknown; for (let attempt = 0; attempt < 3; attempt++) { actual = await read(); if (actual === value) return; } expect(actual).toBe(value); } });
   const nativeExpect = Object.assign(() => ({ toBeVisible: async () => {} }), { poll });
   const context: any = { exports: {}, EditorIndentNativeRun, sealEditorIndentLaunchIdentity, expect: nativeExpect, electron: { launch }, requireIndentOfflinePort: preflight, randomUUID: () => 'RAM-marker', WeakMap, Set, URL, fileURLToPath, dirname, basename, resolve, join, __dirname: join(project, 'tests/e2e'), tmpdir: () => parent,
     realpath: async (path: string) => path, mkdtemp: async () => { exists = true; return directory; }, lstat: async (path: string) => {
@@ -41,7 +42,7 @@ function fixture(mode: '正常' | '无握手关闭' | 'PID权限错误' | '链�
       const file = bytes.has(path), dir = [root, resources, ...[...bytes.keys()].flatMap(path => { const names: string[] = []; while (dirname(path) !== path) { path = dirname(path); names.push(path); } return names; })].includes(path);
       if (!file && !dir) throw Object.assign(Error('不存在'), { code: 'ENOENT' }); return { isFile: () => file, isDirectory: () => dir && !file, isSymbolicLink: () => false };
     }, readdir: async (path: string) => [...new Set([...bytes.keys()].filter(name => name.startsWith(path + (process.platform === 'win32' ? '\\' : '/'))).map(name => name.slice(path.length + 1).split(/[\\/]/)[0]))], readFile: async (path: string) => { if (!bytes.has(path)) throw Error('RAM未知文件'); return bytes.get(path)!; }, rm: removed,
-    process: { env: environment, pid: 101, execPath: exe, resourcesPath: resources, kill: probe }, setTimeout: (callback: () => void) => callback(), console: { log: (message: string) => applications.at(-1).emit('console', { text: () => message }) },
+    process: { env: environment, pid: platform === 'win32' ? 303 : 101, ppid: 101, platform, execPath: exe, resourcesPath: resources, kill: probe }, setTimeout: (callback: () => void) => callback(), console: { log: (message: string) => applications.at(-1).emit('console', { text: () => message }) },
   };
   const run = runInNewContext(method('createEditorIndentNativeRun') + '\ncreateEditorIndentNativeRun(binding)', { ...context, binding: { assertCurrent } }) as EditorIndentNativeRun;
   return { run, launch, preflight, assertCurrent, removed, applications, probe, directory, bytes, exe, manifestPath, manifest, environment, context, root, project, appPath, resources, onLaunch: (hook: typeof applicationHook) => { applicationHook = hook; }, countOwned: () => ownedStats, pauseOwned: (at: number) => { blocked = at; waiting = new Promise(done => { released = done; }); return { entered: new Promise<void>(done => { entered = done; }), release: () => released() }; } };
@@ -57,7 +58,7 @@ describe('缩进原生适配器的实际边界函数（RAM）', () => {
   });
   it('原will-quit之后才调用公开close，两次owner全部PID不存在后才能删除原目录', async () => {
     const f = fixture(), first = await f.run.launch(); await f.run.close(first); const second = await f.run.launch(); await f.run.close(second); await f.run.finish();
-    expect(f.preflight).toHaveBeenCalledTimes(2); expect(f.launch).toHaveBeenCalledTimes(2); expect(f.applications.every(value => value.close.mock.calls.length === 1)).toBe(true); expect(f.probe).toHaveBeenCalledTimes(4); expect(f.removed).toHaveBeenCalledWith(f.directory, { recursive: true, force: false }); expect(f.run.removed).toBe(true);
+    expect(f.preflight).toHaveBeenCalledTimes(2); expect(f.launch).toHaveBeenCalledTimes(2); expect(f.applications.every(value => value.close.mock.calls.length === 1)).toBe(true); expect(f.probe).toHaveBeenCalledTimes(6); expect(f.removed).toHaveBeenCalledWith(f.directory, { recursive: true, force: false }); expect(f.run.removed).toBe(true);
   });
   it('意外close没有本owner握手即停链，不调用公开close补造退出或自动删除', async () => {
     const f = fixture('无握手关闭'), owner = await f.run.launch(); await expect(f.run.close(owner)).rejects.toThrow('未取得will-quit'); expect(owner.confirmed).toBe(false); expect(f.applications[0].close).not.toHaveBeenCalled(); expect(f.removed).not.toHaveBeenCalled();
@@ -108,11 +109,56 @@ describe('修复复核：独审六红中的runtime四条及固定字节边界（
   });
   it.each(['appPath', 'mainPid', 'page'] as const)('实际返回%s身份不符即保留已取得owner，不能进入成功或清理', async target => {
     const f = fixture();
-    if (target === 'mainPid') f.context.process.pid = 999;
+    if (target === 'mainPid') f.context.process.pid = 0;
     f.onLaunch(app => {
       if (target === 'appPath') app.runtime.getAppPath = () => resolve('RAM-foreign-app');
       if (target === 'page') app.browserWindow = async () => ({ evaluate: async () => ({ id: 999, contents: 999, renderer: 202, url: app.page.url(), destroyed: false }) });
     });
     await expect(f.run.launch()).rejects.toThrow(); expect(f.run.owners).toHaveLength(1); expect(f.run.owners[0].confirmed).toBe(false); expect(f.removed).not.toHaveBeenCalled(); expect(f.run.retained).toBe(true);
+  });
+});
+
+describe('run1616窄修：Windows启动器与窗口准备分阶段（RAM）', () => {
+  it('Windows封存原shell ChildProcess及实际子进程，两种PID都保留到正常退出核查', async () => {
+    const f = fixture(), owner = await f.run.launch();
+    expect([...owner.ids].sort()).toEqual([101, 202, 303]);
+    expect(owner.sourceDiagnostics?.[0]).toMatchObject({ phase: '启动来源', complete: false, expected: { launcherPid: 101, relation: '启动器父进程' }, observed: { mainPid: 303, parentPid: 101, platform: 'win32' } });
+    expect(owner.sourceDiagnostics?.at(-1)).toMatchObject({ phase: '窗口准备', complete: true, expected: { launcherPid: 101, mainPid: 303 }, observed: { window: { renderer: 202 } } });
+    await f.run.close(owner); expect(f.probe.mock.calls).toEqual([[101, 0], [303, 0], [202, 0]]);
+  });
+  it.each(['linux', 'darwin'])('非Windows的%s仍要求实际主PID与启动器相同，不扩大拓扑', async platform => {
+    const f = fixture('正常', false, platform), owner = await f.run.launch(); expect(owner.sourceDiagnostics?.[0].expected.relation).toBe('同一进程'); await f.run.close(owner);
+    const g = fixture('正常', false, platform); g.context.process.pid = 303;
+    await expect(g.run.launch()).rejects.toThrow('启动器关系未知'); expect(g.run.retained).toBe(true); expect(g.removed).not.toHaveBeenCalled();
+  });
+  it.each([{ metrics: [] }, { metrics: [{ pid: 0 }] }])('启动阶段指标$metrics只能标记未完成，窗口后必须重新取得有效renderer', async ({ metrics }) => {
+    const f = fixture(); let preparing = false, samples = 0;
+    f.onLaunch(app => { app.runtime.getAppMetrics = () => !preparing || samples++ === 0 ? metrics : [{ pid: 202 }]; app.firstWindow = async () => { preparing = true; return app.page; }; });
+    const owner = await f.run.launch(); expect(owner.sourceDiagnostics?.slice(0, 2).every(value => !value.complete)).toBe(true);
+    expect(owner.sourceDiagnostics?.at(-1)).toMatchObject({ phase: '窗口准备', complete: true, observed: { metrics: [202] } }); expect(owner.ids.has(0)).toBe(false);
+  });
+  it.each([{ metrics: [] }, { metrics: [{ pid: 0 }] }, { metrics: [{ pid: -1 }] }, { metrics: [{ pid: 404 }] }])('窗口后指标持续$metrics时有界拒绝，不以主PID代替renderer或自动清理', async ({ metrics }) => {
+    const f = fixture(); f.onLaunch(app => { app.runtime.getAppMetrics = () => metrics; });
+    await expect(f.run.launch()).rejects.toThrow(); const owner = f.run.owners[0];
+    expect(owner.sourceDiagnostics?.at(-1)).toMatchObject({ phase: '窗口准备', complete: false, observed: { metrics: metrics.map(value => value.pid) } }); expect(owner.ids.has(0)).toBe(false); expect(owner.confirmed).toBe(false); expect(f.run.retained).toBe(true); expect(f.applications[0].close).not.toHaveBeenCalled(); expect(f.removed).not.toHaveBeenCalled();
+  });
+  it('窗口renderer首次为零时不能与有效metrics拼成证明，须重新取得同一窗口的正PID', async () => {
+    const f = fixture(); let samples = 0;
+    f.onLaunch(app => { const original = app.browserWindow; app.browserWindow = async (page: unknown) => { const handle = await original(page); return { evaluate: async (fn: Function) => ({ ...await handle.evaluate(fn), renderer: samples++ === 0 ? 0 : 202 }) }; }; });
+    const owner = await f.run.launch(); expect(owner.sourceDiagnostics?.filter(value => value.phase === '窗口准备').map(value => [value.complete, value.observed.window?.renderer])).toEqual([[false, 0], [true, 202]]); expect(owner.ids.has(0)).toBe(false);
+  });
+  it('Windows实际父PID不符立即拒绝，附件保留精确observed与expected而不猜测', async () => {
+    const f = fixture(); f.context.process.ppid = 999;
+    await expect(f.run.launch()).rejects.toThrow('启动器关系未知'); const owner = f.run.owners[0];
+    expect(owner.sourceDiagnostics).toHaveLength(1); expect(owner.sourceDiagnostics?.[0]).toMatchObject({ complete: false, expected: { launcherPid: 101, relation: '启动器父进程' }, observed: { mainPid: 303, parentPid: 999, metrics: [202] } }); expect(owner.page).toBeUndefined(); expect([...owner.ids]).toEqual([101]);
+  });
+  it('已封存的实际主PID变化即拒绝，不因仍有相同父PID接受替代主进程', async () => {
+    const f = fixture(), owner = await f.run.launch(); f.context.process.pid = 909;
+    await expect(f.run.close(owner)).rejects.toThrow('启动器关系未知'); expect(owner.sourceDiagnostics?.at(-1)).toMatchObject({ complete: false, expected: { mainPid: 303 }, observed: { mainPid: 909, parentPid: 101 } }); expect(f.applications[0].close).not.toHaveBeenCalled(); expect(owner.confirmed).toBe(false);
+  });
+  it('窗口指标等待中原门失效后不继续采样或把poll成功当授权', async () => {
+    const f = fixture(); let calls = 0;
+    f.onLaunch(app => { app.firstWindow = async () => { app.runtime.getAppMetrics = () => { calls++; f.run.retained = true; return []; }; return app.page; }; });
+    await expect(f.run.launch()).rejects.toThrow('owner已失效'); expect(calls).toBe(1); expect(f.applications[0].close).not.toHaveBeenCalled(); expect(f.removed).not.toHaveBeenCalled();
   });
 });
