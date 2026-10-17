@@ -69,3 +69,13 @@ Root要求补查重绘前窗口后，075上的真实React反例为1正常通过�
 另一个旧React用例仍期望卸载后回调；未修改503父归档重跑同用例亦失败。按既有fd父租约规则，将它更正为迟到ACK不回调、不关闭其它页面、且apply始终只调用一次，保留父红。它没有改变引擎中已发送DDL的事实。
 
 所有本轮原红、作者原件哈希、关联报告和交接保存在员工2普通clone的`.cache/table-create-prefix/review-fixes/`；员工5补核副本在`.cache/review5-recheck/`。没有修改engine/index.ts、connection.ts、已有表索引SQL、W03或DefinitionViewer；实际DB、GUI、SSH、CIM、私料、系统剪贴板、CI执行、安装、Docker均为0。最终合同审查、员工1／5独立复核、固定头整合及真实桌面／数据库验收仍由Root接管。
+
+## Root固定整合与边界
+
+Root按原顺序移植六个功能及补修提交，跳过本分支重复的共同测试基线副本，最终服务修复为`9eb3244`，加默认关闭任务卡后固定`b84010261450cd311012b7dbc92e293e7fec0e5e`。共享IPC自动合并后保留S02命令；资源host及Broker沿已验`2aa8d15`，没有用新表分支覆盖它们。
+
+员工1以固定`05838aa`复核三项引擎原红，三组通过，非法整数、缺失和矛盾目录仍拒绝，报告SHA256为`0c53a7f3b5b198c09e54653227604675ef8cbfb092fc36bbe49bc0c2a5e39b16`。员工5同字节原14项为12绿2红，两红分别是旧单参调用期待和零分配仍期待release一次；独立兼容对照2项通过，失效后get/preview/apply/release均为0，已分配能力的迟到释放仍通过，报告SHA256为`74b59a9ca3c9149ffae0eae4b9be89fb7997ab3f36ff2e9bc4360b3a7d4ca866`。不把修改期待的副本冒充未修改原件全部通过。
+
+Root固定整合头16个必要相关文件613项通过、0跳过，覆盖公共SQL列渲染、新表旧路径、MySQL/MariaDB事实、FK、前缀计划与完整后核、确认及服务租约；`run1393`报告SHA256为`3c1aac0d683cb4015b5d5f497d80b775cdc7b3ecda538a47f10fff11b11dd08f`。正式Playwright列表只收集一个默认跳过占位，未读取认证或运行真实场景。
+
+随后复用613项原报告，仅补最终类型及隔离源码构建：冻结1604个源码文件、108个产物，旧运行产物逐摘要保持。`run1395`摘要SHA256为`2b7f89de555ea01d242a79fc1e9a19e00446247f98228c13c68baffc2863d181`。没有重复相关套或列表；S02原完整CI、R93安装及公开0.20证据分别保留，不能外推本片真实MySQL、TLS、原生、安装或macOS通过。首个准确8.4.11实际窗口仍按[关闭态任务卡](table-create-prefix-first-live-task-20261017.md)由Root统一安排。
