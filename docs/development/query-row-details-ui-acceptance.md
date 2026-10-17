@@ -51,3 +51,5 @@ node node_modules/@playwright/test/cli.js test tests/e2e/query-row-details.spec.
 员工5本片只运行新 `query-row-details-ui-gate.test.ts`：43项通过，覆盖两门、列表先短路、错误目标/SSH/证书/trace拒绝、两个单条只读SQL及真实spec所属门的RAM回归；`tsc --noEmit`退出0。准确spec在双门0/0和1/1、无凭据环境下实际 `--list` 均退出0，只列一个默认关闭项。
 
 实际命令为 `node .cache/employee5-row-details-e2e-v2/run.cjs`、`node .cache/employee5-row-details-e2e-v2/typecheck.cjs`、`node .cache/employee5-row-details-e2e-v2/list.cjs 0` 与 `node .cache/employee5-row-details-e2e-v2/list.cjs 1`。不运行GUI、SQL、构建、打包、部署、全量或旧已绿套件。原始日志及哈希交接保存在ignored `.cache/employee5-row-details-e2e-v2/`；初版36项及列表记录保留在v1，没有覆盖。
+
+Root在首次GUI执行前独立核对长文本fixture：MySQL的CHAR默认返回二进制，CONCAT含二进制参数也返回二进制，见[官方字符串函数说明](https://dev.mysql.com/doc/refman/8.4/en/string-functions.html)。准确MySQL8.4.11的run1534只读原mysql2结果确认原组合为Buffer；显式CHAR USING utf8mb4后为string，两者解码内容及CRLF完全相同。Root只将两处CHAR指定为utf8mb4，使其确实构造预期长文本，不改变产品、字节列或原值断言；正式GUI尚未由本准备片执行。原流、原控制流及原服务器线程正常收尾，0 DDL/DML。摘要SHA-256：`5831b753f2351cf3d97310f8559529642e61e843d76dfbe6c4bd855c10ccfca0`。

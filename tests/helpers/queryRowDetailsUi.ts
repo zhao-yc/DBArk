@@ -49,7 +49,7 @@ export function queryRowDetailsUiSql(target: QueryRowDetailsUiBinding['target'])
   NULL AS null_value, '' AS empty_value,
   _binary X'00FF' AS bytes_value, _binary X'' AS empty_bytes,
   ${literal(queryRowDetailsUiValues.json)} AS json_text,
-  CONCAT(REPEAT('长',300),CHAR(13),CHAR(10),'原换行') AS long_text,
+  CONCAT(REPEAT('长',300),CHAR(13 USING utf8mb4),CHAR(10 USING utf8mb4),'原换行') AS long_text,
   ${literal(queryRowDetailsUiValues.html)} AS html_text,
   CONCAT('隐藏-',p.n) AS hidden_value,
   @@server_uuid AS server_uuid, @@version AS server_version,

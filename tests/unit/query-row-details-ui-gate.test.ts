@@ -77,6 +77,8 @@ describe('可审的真实UI接线与只读SQL预算', () => {
     expect(sql.first).toContain('AS `重复`'); expect(sql.first.match(/AS `重复`/gu)).toHaveLength(2);
     expect(sql.first).toContain('_binary X\'00FF\''); expect(sql.first).toContain('_binary X\'\''); expect(sql.first).toContain(queryRowDetailsUiValues.json);
     expect(queryRowDetailsUiValues.long.length).toBeGreaterThan(240); expect(queryRowDetailsUiValues.long).toContain('\r\n');
+    // CHAR默认返回binary；显式字符集才能使长文本fixture保持文本，而不是把正确字节返回误判为失败。
+    expect(sql.first).toContain('CHAR(13 USING utf8mb4),CHAR(10 USING utf8mb4)');
   });
   it('真实入口不调用模型、store、内部handler、系统剪贴板或实库清理；只保留两个明确执行点', () => {
     const file = ts.createSourceFile('query-row-details-ui.ts', ui, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS), executeCalls: string[] = [], invokes: string[] = [], runtimeImports: string[] = [];
