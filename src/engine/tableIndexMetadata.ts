@@ -145,9 +145,13 @@ export function deriveTrustedIndexColumn(parsed: TableColumnDefinition, metadata
     let unit = 1;
     if (character) { unit = metadataInteger(context.charsetMaxBytes, '真实字符集 MAXLEN'); column.charsetMaxBytes = unit; }
     if ((binary && length !== octets) || (character && (!Number.isSafeInteger(length * unit) || octets > length * unit || octets < length))) throw new Error('字符长度、字节长度与真实字符集 MAXLEN 冲突');
-    const declared = /^(?:CHAR|VARCHAR|BINARY|VARBINARY)\((\d+)\)$/i.exec(columnType);
-    if (declared && metadataInteger(declared[1], '原定义长度') !== length) throw new Error('目录长度与字段声明长度不一致');
-    if (declared && !binary && octets !== length * unit) throw new Error('完整字符字段字节长度与真实 MAXLEN 不一致');
+    // 与上方类型等价检查使用同一词法层；空白不能跳过长度核对，未知数字或修饰语也不能被拼接成合法声明。
+    if (['CHAR', 'VARCHAR', 'BINARY', 'VARBINARY'].includes(type)) {
+      const tokens = tableDefinitionTokens(columnType, mode);
+      if (tokens.length !== 4 || tokens[0].kind !== 'word' || tokens[0].value.toUpperCase() !== type || tokens[1].kind !== 'symbol' || tokens[1].value !== '(' || tokens[2].kind !== 'number' || !/^\d+$/.test(tokens[2].value) || tokens[3].kind !== 'symbol' || tokens[3].value !== ')') throw new Error('字段声明长度无法由完整受控类型证明');
+      if (metadataInteger(tokens[2].value, '原定义长度') !== length) throw new Error('目录长度与字段声明长度不一致');
+      if (!binary && octets !== length * unit) throw new Error('完整字符字段字节长度与真实 MAXLEN 不一致');
+    }
     // CHAR/BINARY沿用真实目录长度；字符前缀计字符，二进制前缀计字节，不默认声明长度。
     if (['CHAR', 'VARCHAR', 'BINARY', 'VARBINARY'].includes(type) || large) column.prefix = { kind: 'allowed', unit: binary ? 'bytes' : 'characters', maxLength: length };
     else column.prefix = { kind: 'forbidden', reason: '该类型的前缀索引尚无本批实证' };

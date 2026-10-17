@@ -68,6 +68,28 @@ describe('索引可信能力与列目录适配', () => {
     expect(result.writable).toBe(true); expect(result.column.prefix).toEqual({ kind: 'allowed', unit: type === 'char' ? 'characters' : 'bytes', maxLength: 4 });
     expect(result.column.fullKeyBytes).toBe(type === 'char' ? 16 : 4);
   });
+  it.each(['char', 'varchar', 'binary', 'varbinary'])('%s声明空白与大小写不改变255的准确长度交叉核对', type => {
+    const binary = type.includes('binary'), values = { CHARACTER_MAXIMUM_LENGTH: '255', CHARACTER_OCTET_LENGTH: binary ? '255' : '1020', ...(binary ? {} : { CHARACTER_SET_NAME: 'utf8mb4', COLLATION_NAME: 'utf8mb4_bin' }) };
+    for (const spelling of [`${type.toUpperCase()} (255)`, `${type}( 255 )`, ` ${type}\t(\n255\n) `]) {
+      const value = metadata(`${type}(255)`, { ...values, COLUMN_TYPE: spelling });
+      const result = column(`v ${type}(255)`, value, binary ? undefined : 4);
+      expect(result.column.prefix).toEqual({ kind: 'allowed', unit: binary ? 'bytes' : 'characters', maxLength: 255 });
+    }
+  });
+  it.each(['char', 'varchar', 'binary', 'varbinary'])('%s词法等价空白不能让目录256绕过声明255', type => {
+    const binary = type.includes('binary');
+    for (const spelling of [`${type.toUpperCase()} (255)`, `${type}( 255 )`, ` ${type}\t(\n255\n) `]) {
+      const value = metadata(`${type}(255)`, { COLUMN_TYPE: spelling, CHARACTER_MAXIMUM_LENGTH: '256', CHARACTER_OCTET_LENGTH: binary ? '256' : '1024', ...(binary ? {} : { CHARACTER_SET_NAME: 'utf8mb4', COLLATION_NAME: 'utf8mb4_bin' }) });
+      expect(() => column(`v ${type}(255)`, value, binary ? undefined : 4)).toThrow('目录长度与字段声明长度不一致');
+    }
+  });
+  it.each(['char', 'varchar', 'binary', 'varbinary'])('%s未知声明不能去空白或拼接数字后推断长度', type => {
+    const binary = type.includes('binary');
+    for (const spelling of [type, `${type}(2 55)`, `${type}(255.0)`, `${type}((255))`, `${type}(0xff)`]) {
+      const value = metadata(type, { COLUMN_TYPE: spelling, CHARACTER_MAXIMUM_LENGTH: '255', CHARACTER_OCTET_LENGTH: binary ? '255' : '1020', ...(binary ? {} : { CHARACTER_SET_NAME: 'utf8mb4', COLLATION_NAME: 'utf8mb4_bin' }) });
+      expect(() => column(`v ${spelling}`, value, binary ? undefined : 4)).toThrow();
+    }
+  });
   it.each([
     ['tinyint', 1], ['smallint unsigned', 2], ['mediumint(8)', 3], ['int', 4], ['bigint unsigned', 8],
     ['decimal(30,6)', 14], ['decimal(65,30)', 30], ['float', 8], ['double', 8], ['bit(1)', 1], ['bit(9)', 2], ['bit(64)', 8],
