@@ -1,4 +1,5 @@
 import { EventEmitter } from 'node:events';
+import { inspect } from 'node:util';
 import type { Server, Socket } from 'node:net';
 import { describe, expect, it, vi } from 'vitest';
 import { DatabaseBackupNativeRelay, databaseBackupNativeRelayNodeNet, type DatabaseBackupNativeRelayTarget } from '../../src/engine/databaseBackupNativeRelay';
@@ -55,6 +56,22 @@ function fixture(target: DatabaseBackupNativeRelayTarget = { ip: '192.0.2.20', p
 }
 
 describe('B01 原生 TCP 中继（纯 RAM）', () => {
+  it('隐私出口与显式私有API对照：JSON/inspect不带原字段，在途字节/四元组仍由原owner私有保留', async () => {
+    const f = fixture(); const hidden = ['relay-task', 'planToken', 'sourceLease', 'connectionRevision', '192.0.2.20', '192.0.2.10', '45001', 'threadId', 'upstreamTuple', 'RAM_AUTH_SECRET', 'RAM_RAW_ERROR'];
+    const check = () => {
+      const snapshot = f.relay.snapshot(f.owner);
+      expect(Object.keys(f.relay)).toEqual([]); expect(Object.getOwnPropertyNames(f.relay)).toEqual([]);
+      expect(JSON.parse(JSON.stringify(f.relay))).toEqual(snapshot);
+      for (const output of [JSON.stringify(f.relay), JSON.stringify(snapshot), inspect(f.relay, { depth: 8 }), inspect(f.relay, { depth: 8, customInspect: false }), inspect(f.relay, { depth: 8, customInspect: false, showHidden: true })]) for (const marker of hidden) expect(output).not.toContain(marker);
+    };
+    check(); f.open(); f.greet(); const facts = await f.relay.handshake; expect(facts).toMatchObject({ threadId: 91, upstream: { localPort: 45001, remoteAddress: '192.0.2.20' } });
+    const retained = f.relay.retained(f.owner); expect(retained.upstream).toBe(f.upstream); expect(retained.upstreamTuple).toBe(facts.upstream); expect(retained.clients[0].socket).toBe(f.client); expect(retained.handshake).toBe(f.relay.handshake); expect(retained.upstreamConnected).toBe(f.relay.upstreamConnected);
+    f.client.ack(); f.upstream.writableResult = false; const payload = Buffer.from('RAM_AUTH_SECRET'); f.client.feed(payload); expect(f.relay.snapshot(f.owner).upstreamWriteBytes).toBe(payload.length); f.upstream.outgoing.length = 0; f.client.outgoing.length = 0; check();
+    f.upstream.emit('error', Object.assign(Error('RAM_RAW_ERROR'), { cause: Error('RAM_AUTH_SECRET') })); expect(await f.relay.failure).toBe('upstream-error'); check(); expect(f.relay.retained(f.owner).upstream).toBe(retained.upstream);
+    f.upstream.ack(); expect(f.relay.snapshot(f.owner).upstreamWriteBytes).toBe(payload.length); f.upstream.emit('drain'); expect(f.relay.snapshot(f.owner).upstreamWriteBytes).toBe(0); expect(f.upstream.destroy).not.toHaveBeenCalled();
+    expect(() => f.relay.retained({ ...f.owner })).toThrow(); f.relay.requestClose(f.owner, 'all'); let localClosed = false; void retained.upstreamClosed!.then(() => { localClosed = true; }); await Promise.resolve(); expect(localClosed).toBe(false); f.upstream.emit('close'); await retained.upstreamClosed; expect(localClosed).toBe(true); check();
+    const g = fixture(); g.listen(); g.accept(); g.relay.cancel(g.owner); g.connect(); await expect(g.relay.handshake).rejects.toThrow(); const lateTuple = g.relay.retained(g.owner).upstreamTuple; expect(lateTuple?.localPort).toBe(45001); g.upstream.emit('close'); expect(g.relay.retained(g.owner).upstreamTuple).toBe(lateTuple); expect(JSON.stringify(g.relay)).not.toContain('45001');
+  });
   it('构造适配器和 relay 不分配/监听/连接；先登记稳定原实例与Promise，再仅listen环回随机端口', async () => {
     expect(databaseBackupNativeRelayNodeNet()).toMatchObject({ server: expect.any(Function), socket: expect.any(Function) });
     const f = fixture(); expect(f.port.server).not.toHaveBeenCalled(); expect(f.port.socket).not.toHaveBeenCalled();
@@ -84,7 +101,7 @@ describe('B01 原生 TCP 中继（纯 RAM）', () => {
   });
   it.each(['end', 'error', 'close'] as const)('CLI %s 不自动end/destroy上游，原四元组/Socket和本地close事件分别保留', async event => {
     const f = fixture(); f.open(); f.greet(); await f.relay.handshake; f.client.ack(); f.client.emit(event, Error('合成原错误不输出'));
-    expect(f.upstream.end).not.toHaveBeenCalled(); expect(f.upstream.destroy).not.toHaveBeenCalled(); expect(f.relay.snapshot(f.owner).upstreamTuple?.localPort).toBe(45001); expect(f.relay.snapshot(f.owner).upstream?.localCloseSeen).toBe(false);
+    expect(f.upstream.end).not.toHaveBeenCalled(); expect(f.upstream.destroy).not.toHaveBeenCalled(); expect(f.relay.retained(f.owner).upstream?.localPort).toBe(45001); expect(f.relay.snapshot(f.owner).upstream?.localCloseSeen).toBe(false);
     f.relay.requestClose(f.owner, 'upstream'); expect(f.upstream.destroy).toHaveBeenCalledTimes(1); let closed = false; void f.relay.retained(f.owner).upstreamClosed!.then(() => { closed = true; }); await Promise.resolve(); expect(closed).toBe(false); f.upstream.emit('close'); await f.relay.retained(f.owner).upstreamClosed; expect(f.relay.snapshot(f.owner).upstream?.localCloseSeen).toBe(true); expect('serverClosed' in f.relay.snapshot(f.owner)).toBe(false);
   });
   it('封存accept不关闭原Socket；第二客户端与迟到accept留在原owner，不能再连上游', async () => {
@@ -94,7 +111,7 @@ describe('B01 原生 TCP 中继（纯 RAM）', () => {
   });
   it('取消/租约失效永久停新转发，晚到connect仍记录原四元组但不恢复/重连', async () => {
     const f = fixture(); f.listen(); f.accept(); f.controller.abort(); await expect(f.relay.handshake).rejects.toThrow('Root'); f.connect(); f.upstream.feed(packet());
-    expect(f.relay.snapshot(f.owner).upstreamTuple?.localPort).toBe(45001); expect(f.client.outgoing).toHaveLength(0); expect(f.upstream.connect).toHaveBeenCalledTimes(1); expect(f.upstream.destroy).not.toHaveBeenCalled(); expect(() => f.relay.start(f.owner)).toThrow();
+    expect(f.relay.retained(f.owner).upstream?.localPort).toBe(45001); expect(f.client.outgoing).toHaveLength(0); expect(f.upstream.connect).toHaveBeenCalledTimes(1); expect(f.upstream.destroy).not.toHaveBeenCalled(); expect(() => f.relay.start(f.owner)).toThrow();
     const g = fixture(); g.open(); g.greet(); await g.relay.handshake; g.invalidate(); g.client.ack(); g.client.feed(Buffer.from('不会发送')); expect(await g.relay.failure).toBe('owner-invalid'); expect(g.upstream.outgoing).toHaveLength(0); g.relay.requestClose(g.owner, 'all');
   });
   it('握手写入期间取消保留副本，迟到成功callback只记原写完成，不恢复尾部或新SQL字节', async () => {
