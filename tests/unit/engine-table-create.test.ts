@@ -10,6 +10,8 @@ import { closeMysqlConnection } from '../../src/engine/connection';
 import { Engine } from '../../src/engine';
 const profile: ConnectionProfile = { id: 'c', name: '离线新建表', group: '', color: '', dialect: 'mysql', host: 'invalid', port: 3306, user: 'unit' };
 const design = (): TableCreateDesign => ({ database: 'db', name: 'new`table', engine: 'InnoDB', charset: 'utf8mb4', comment: '', columns: [{ name: 'id', type: 'bigint unsigned', nullable: false, autoIncrement: true, comment: '' }, { name: 'amount', type: 'decimal(30,12)', nullable: false, autoIncrement: false, defaultValue: '123456789012345678.123456789012', comment: '' }], indexes: [{ name: 'PRIMARY', unique: true, columns: ['id'] }, { name: 'uq_amount', unique: true, columns: ['amount'] }], foreignKeys: [] });
+const definition = "CREATE TABLE `new``table` (`id` bigint unsigned NOT NULL AUTO_INCREMENT,`amount` decimal(30,12) NOT NULL DEFAULT '123456789012345678.123456789012',PRIMARY KEY (`id`),UNIQUE KEY `uq_amount` (`amount`)) ENGINE=InnoDB";
+let showDefinition: string | undefined;
 let engine: Engine, events: TaskEvent[], sent: string[], connections: ManagedConnection[], sequence: number, uuid: string, mode: string, occupied: boolean, created: boolean, closeFails: boolean, badVerify: boolean, dialect: 'mysql' | 'mariadb', version: string;
 let hold: RegExp | undefined, held: { complete(error?: Error): void } | undefined, fail: RegExp | undefined, holdClose: boolean, releaseClose: (() => void) | undefined;
 /** 仅替换驱动，真实Engine、任务锁、缓存、SQL与取消/关闭代码均执行产品实现。 */
@@ -28,7 +30,7 @@ function managed(signal?: AbortSignal): ManagedConnection {
       else if (sql.startsWith('SELECT SCHEMA_NAME')) rows = [{ name: 'db', charset: 'utf8mb4', collation: 'utf8mb4_bin' }];
       else if (sql.startsWith('SELECT TABLE_NAME')) rows = occupied || created ? [{ TABLE_NAME: 'new`table' }] : [];
       else if (sql.startsWith('CREATE TABLE')) { created = true; rows = { affectedRows: 0, warningStatus: 0 }; }
-      else if (sql.startsWith('SHOW CREATE TABLE')) rows = [{ 'Create Table': "CREATE TABLE `new``table` (`id` bigint unsigned NOT NULL AUTO_INCREMENT,`amount` decimal(30,12) NOT NULL DEFAULT '123456789012345678.123456789012',PRIMARY KEY (`id`),UNIQUE KEY `uq_amount` (`amount`)) ENGINE=InnoDB" }];
+      else if (sql.startsWith('SHOW CREATE TABLE')) rows = [{ 'Create Table': showDefinition ?? definition }];
       else if (sql.startsWith('SELECT t.TABLE_NAME')) rows = [{ name: 'new`table', engine: 'InnoDB', charset: 'utf8mb4', comment: '' }];
       else if (sql.startsWith('SELECT COLUMN_NAME')) rows = [{ name: 'id', type: 'bigint unsigned', nullable: 'NO', defaultValue: null, extra: 'auto_increment', comment: '' }, { name: 'amount', type: badVerify ? 'decimal(20,2)' : 'decimal(30,12)', nullable: 'NO', defaultValue: dialect === 'mariadb' ? "'123456789012345678.123456789012'" : '123456789012345678.123456789012', extra: '', comment: '' }];
       else if (sql.startsWith('SELECT INDEX_NAME')) rows = [{ name: 'PRIMARY', nonUnique: 0, column: 'id', sequence: 1 }, { name: 'uq_amount', nonUnique: 0, column: 'amount', sequence: 1 }];
@@ -43,12 +45,21 @@ async function get(revision = 1): Promise<TableCreateGetOutput> { return engine.
 async function preview(snapshot: TableCreateGetOutput, draft = design()): Promise<TableCreatePreviewOutput> { return engine.handle('schema.tableCreate.preview', { snapshotId: snapshot.snapshotId, design: draft, taskId: 'preview-' + sequence, connectionRevision: 1 }); }
 async function apply(value: TableCreatePreviewOutput, taskId = 'apply', revision = 1, confirmation = 'db.new`table') { return engine.handle('schema.tableCreate.apply', { previewToken: value.previewToken, confirmation, acknowledgements: [...tableCreateAcknowledgements], taskId, connectionRevision: revision }); }
 beforeEach(async () => {
-  events = []; sent = []; connections = []; sequence = 0; uuid = 'server-1'; mode = ''; occupied = created = closeFails = badVerify = holdClose = false; hold = held = fail = releaseClose = undefined; dialect = 'mysql'; version = '8.4.11';
+  events = []; sent = []; connections = []; sequence = 0; uuid = 'server-1'; mode = ''; occupied = created = closeFails = badVerify = holdClose = false; hold = held = fail = releaseClose = undefined; showDefinition = undefined; dialect = 'mysql'; version = '8.4.11';
   driver.connect.mockReset().mockImplementation(async (_profile, _database, signal) => managed(signal)); driver.execute.mockReset().mockImplementation(async () => { held?.complete(Error('合成取消终态')); return { rows: [] }; });
   engine = new Engine(event => events.push(event)); await engine.handle('connections.open', { id: 'c', profile });
 });
 afterEach(async () => { closeFails = holdClose = false; releaseClose?.(); hold = undefined; held?.complete(Error('纯测试收尾')); await engine.closeAll(); vi.useRealTimers(); });
 describe('新建表真实Engine仅RAM驱动', () => {
+  it.each(['类型', '自增缺失', '自增多出'])('SHOW CREATE的%s已与设计及目录矛盾时只保留ACK', async kind => {
+    showDefinition = kind === '类型' ? definition.replace('bigint unsigned', 'int unsigned') : kind === '自增缺失' ? definition.replace(' AUTO_INCREMENT', '') : definition.replace('decimal(30,12) NOT NULL', 'decimal(30,12) NOT NULL AUTO_INCREMENT');
+    expect(await apply(await preview(await get()))).toMatchObject({ ddlCompleted: true, definitionVerified: false, resourcesReleased: true });
+    expect(sent.filter(sql => /^(CREATE|ALTER|DROP)/.test(sql))).toHaveLength(1);
+  });
+  it('SHOW CREATE仅整数显示宽度不同仍可与设计和目录共同核验', async () => {
+    showDefinition = definition.replace('bigint unsigned', 'BIGINT(20) UNSIGNED');
+    expect(await apply(await preview(await get()))).toMatchObject({ ddlCompleted: true, definitionVerified: true });
+  });
   it('发送前取消经产品严格关闭后可新预览同目标，旧令牌仍不可重放', async () => {
     const first = await preview(await get()); hold = /^SELECT @@hostname/;
     const pending = apply(first, 'cancel-before-create').catch(reason => reason);

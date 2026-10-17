@@ -37,11 +37,12 @@ async function verify(context: StructureTaskContext, preview: Preview): Promise<
   if (preview.snapshot.mode.split(',').some(mode => (definitionOmittingSqlModes as readonly string[]).includes(mode.toUpperCase()))) return false;
   const document = parseTableColumnDefinition(String(ddl[0]['Create Table']), { dialect: context.managed.status.dialect, mode: { noBackslashEscapes: preview.snapshot.noBackslash, ansiQuotes: preview.snapshot.mode.split(',').includes('ANSI_QUOTES') } });
   if (document.table !== table || document.database !== undefined && document.database !== database || document.columns.length !== design.columns.length || document.items.filter(item => item.kind === 'constraint').length !== design.indexes.length || document.items.some(item => item.kind === 'constraint' && !['PRIMARY', 'UNIQUE', 'KEY', 'INDEX'].includes(item.constraintKind)) || document.columns.some(column => !column.type.known || column.attributes.some(attribute => !['nullable', 'default', 'comment', 'auto-increment'].includes(attribute.kind)))) return false;
+  const type = (value: string) => value.toLowerCase().replace(/\s+/g, '').replace(/^integer\b/, 'int').replace(/^(tinyint|smallint|mediumint|int|bigint)\(\d+\)/, '$1');
   const temporal = (value: string) => value.toUpperCase().replace(/\(\)$/, '');
   // SHOW CREATE与目录必须同时支持本次设计，不能将两次不一致的读取拼成一次核验成功。
   if (document.columns.some((column, index) => {
     const expected = design.columns[index], value = column.default;
-    if (column.name !== expected.name || column.comment !== undefined && column.comment !== expected.comment || column.nullable !== undefined && column.nullable !== expected.nullable) return true;
+    if (column.name !== expected.name || type(column.type.raw) !== type(expected.type) || column.attributes.some(attribute => attribute.kind === 'auto-increment') !== expected.autoIncrement || column.comment !== undefined && column.comment !== expected.comment || column.nullable !== undefined && column.nullable !== expected.nullable) return true;
     if (expected.defaultValue === undefined) return value.kind !== 'none' && !(expected.nullable && value.kind === 'null');
     if (expected.defaultValue === null) return value.kind !== 'null';
     if (/^(?:DATE|TIME|DATETIME|TIMESTAMP)\b/i.test(expected.type) && temporalDefault(expected.defaultValue)) return value.kind !== 'expression' || temporal(value.sql) !== temporal(expected.defaultValue);
@@ -51,7 +52,6 @@ async function verify(context: StructureTaskContext, preview: Preview): Promise<
   if (tables?.length !== 1 || tables[0].name !== table || tables[0].engine?.toUpperCase() !== design.engine.toUpperCase() || tables[0].charset !== design.charset || tables[0].comment !== design.comment) return false;
   const condition = `TABLE_SCHEMA=${literal(database)} AND TABLE_NAME=${literal(table)}`;
   const columns = (await query<{ name: string; type: string; nullable: string; defaultValue: string | null; extra: string; comment: string }[]>(context, `SELECT COLUMN_NAME AS name,COLUMN_TYPE AS type,IS_NULLABLE AS nullable,COLUMN_DEFAULT AS defaultValue,EXTRA AS extra,COLUMN_COMMENT AS comment FROM information_schema.COLUMNS WHERE ${condition} ORDER BY ORDINAL_POSITION LIMIT 1001`)).rows;
-  const type = (value: string) => value.toLowerCase().replace(/\s+/g, '').replace(/^integer\b/, 'int').replace(/^(tinyint|smallint|mediumint|int|bigint)\(\d+\)/, '$1');
   if (!Array.isArray(columns) || columns.length !== design.columns.length || columns.some((column, index) => {
     const expected = design.columns[index], actualDefault = context.managed.status.dialect === 'mariadb' ? mariaDefault(column.defaultValue, preview.snapshot.noBackslash) : column.defaultValue;
     const sameDefault = expected.defaultValue === undefined ? actualDefault === null : expected.defaultValue === null ? actualDefault === null : temporalDefault(expected.defaultValue) && /^(?:DATE|TIME|DATETIME|TIMESTAMP)\b/i.test(expected.type) ? String(actualDefault).toUpperCase().replace(/\(\)$/, '') === expected.defaultValue.toUpperCase().replace(/\(\)$/, '') : actualDefault === expected.defaultValue;
