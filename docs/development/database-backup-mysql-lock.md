@@ -56,3 +56,9 @@ release仅允许已观察状态，且Root同步许可必须是同一原owner、`
 研究来源是员工5只读交付 `employee5-ftwrl-observation-20261018`，handoff SHA-256 `d8043f3993d084bdc98da7b8469ec809fabc8c70d9deffd1e997a25bfb0b2efa`。官方依据：[FLUSH/FTWRL说明](https://dev.mysql.com/doc/refman/8.4/en/flush.html)、[metadata_locks当前状态表](https://dev.mysql.com/doc/refman/8.4/en/performance-schema-metadata-locks-table.html)、[8.4.11获取两锁调用链](https://github.com/mysql/mysql-server/blob/mysql-8.4.11/sql/sql_reload.cc#L259-L275)、[GLOBAL/COMMIT锁实现](https://github.com/mysql/mysql-server/blob/mysql-8.4.11/sql/lock.cc#L965-L1046)。当前状态采样与全窗口连续性是不同证据。
 
 本片只运行专属13项RAM组合及类型检查，包含最后同步记账钩子使释放许可失效后不得发送UNLOCK的反例。未申请真实锁、建立数据库连接、访问200、运行OS业务、旧套件、full/build或打包，没有密钥/私料操作。Root仍需独审固定提交，随后在200专用隔离MySQL8.4.11实例按准确原连接/仪表/权限/源身份验证本原语；七类DDL及各数据引擎、COMMIT和完整备份组合验收均未完成，不能由RAM结果推导。
+
+## Root整合检查点
+
+作者固定 `92f22b65f537b7bad4fd9ee958ca2fa9b35b3cc6`，Root 整合 `eac6de8`。Root 13 项专项及类型检查终态退出码 0。员工5另写五组独立 RAM 组合全部通过，没有重跑作者套件：验证旧 control 迟到事件不结算当前 source、UNLOCK 后仍等待原控制 Query-end、后置仪表／实例失效、租约撤销与通用序列化，以及成功后原连接迟到 end。独审 handoff SHA-256：`815b756c6ca9e9e237932f540e998678de630648572198ad95de21503c181a79`。
+
+本检查点没有实际申请 FTWRL 或执行 UNLOCK，不放开 lockCapability。Root 专属租约、完整窗口命令账本、真实 MDL、七类 DDL 阻断、原服务器释放和完整备份仍分别待验。

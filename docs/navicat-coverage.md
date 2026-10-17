@@ -1,5 +1,7 @@
 # Navicat 全功能覆盖目标
 
+固定 `cbb46f4`（含私有源会话）的完整CI已成功：429文件／8017通过／10跳过，类型及构建通过，见[源会话检查点](../tests/integration/acceptance-backup-source-session-20261018.md)。后续Root `eac6de8` 另整合MySQL8.4.11私有锁观察／受许可释放原语，13项专项／类型及5组独审RAM通过；尚未申请真实FTWRL、不放开lockCapability，见[锁原语边界](development/database-backup-mysql-lock.md)。这些不增加完整备份、安装或发行计数。
+
 后续私有备份源会话已整合，8项相关回归及类型通过；准确MySQL8.4.11的默认连接反例与规范专属连接正例各完成24条真实读取、九对象七类别定义及精确清理。规范连接下七类可见性proven，程序依赖及持锁仍正确阻断，尚非完整备份产品入口，见[源会话实证](../tests/integration/acceptance-backup-source-session-20261018.md)。本源码增量不继承此前完整套件或原生通过数。
 
 新原生 `4576d73` 的Windows x64／macOS arm64／x64三个桌面job均成功：源码和实际安装阶段各73通过／289条件跳过，包含字号与换行组合及独立重启；Windows helper安装资源摘要一致。运行总体仍因旧Linux夹具显示失败，修正头 `85db959` 的完整CI另为8009通过／10跳过；相关产品文件已逐路径核为相同。Windows新附件已独立下载核SHA，本机新安装实库继续，见[增量原生终态](../tests/integration/acceptance-native-increment-20261018.md)。公开预览仍为0.20.0，本批未发布。
