@@ -1,5 +1,7 @@
 # Navicat 全功能覆盖目标
 
+后续未发布检查点：共同测试屏障修复头`369c5b1`的完整Linux CI为7240通过、10平台条件跳过，类型与构建成功；原失败保留，见[就绪屏障证据](development/definition-navigation-verification-20261017.md)。前缀索引三场景及JSON/CSV勾选导出仅补关闭态准备，59项纯检查、另8项包装器与列表通过，实际执行仍为0，见[准备整合边界](development/query-selected-results-export-20261017.md)。这些不增加已发布版本、真实安装通过数或大包完成状态。
+
 后续未发布索引规范化：满列前缀在可信完整成本一致时规范为整字段，修正服务器SHOW/SUB_PART规范化导致的后核误报；旧全字段同值不误重建，真正短前缀仍严格核对。固定`28d5e4e`的12个相关文件420项、类型及独立源码构建通过，另9项独审通过；MAX边界和原红保留，真实矩阵仍待执行，见[规范化及整合证据](development/index-full-prefix-normalization-20261017.md)。上一`afecff5`完整Linux CI7228通过、10跳过及构建另属其原头，不外推本次完整或原生验收。
 
 后续未发布完整检查：原cbf的Linux CI暴露三个旧查询端口遗漏新依赖，22项失败及原日志保留。Root修复为`515d152`后，Windows完整7169项/类型通过，同头Linux CI7159通过、10平台条件跳过及构建成功；后续零DDL勾选导出夹具`10d60ca`另有82项定向、类型及四种关闭态列表通过，真实入口仍未执行，见[后续核验](../tests/integration/verification-query-entry-ci-root-20261017.md)。不与此前定向计数相加，不外推原生、安装或公开发行。

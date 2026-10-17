@@ -67,3 +67,7 @@ node D:/svn/DBArk/node_modules/typescript/bin/tsc --noEmit
 ```
 
 本轮实际DB、GUI、SSH、CIM、private材料读取、系统clipboard、CI、安装、Docker及200访问均 **0**。未检查、退出或修改Root旧五进程现场。三个场景仍是关闭态准备，不增加正式通过或安装验收计数；真实六组合由Root后续统一核定资源后安排。
+
+## Root整合补核
+
+Root将原`3fc0142`及修正Maria模式、满列SUB_PART期待的`938f0ea`依次整合为`bf2fb65`、`d5c2128`。本地前缀准备与CSV反例合计59项通过、0跳过，包装器另定向8项通过/53项未选择，类型通过；真正核心列表在双门关、开均只收集3个身份。来源与一次列表误写及精确恢复经过见[双格式Root整合核验](../../docs/development/query-selected-results-export-20261017.md)。未重跑未变115项索引回归或构建，三个核心身份仍未实际执行。
