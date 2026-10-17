@@ -6,4 +6,4 @@ if (!listing && process.env.DBARK_INTEGRATION_ENABLED === '1' && process.env.DBA
   const helper = Object.fromEntries(selectedResultsTargetKeys.filter(key => Object.hasOwn(process.env, key)).map(key => [key, process.env[key]]));
   const binding = bindSelectedResultsTarget(() => process.env, helper);
   const { registerSelectedResultsExport } = require('./query-selected-results-export-live'); registerSelectedResultsExport(binding);
-} else test.skip('查询结果勾选行按原顺序导出固定快照，切换和新执行清选择且不重执行SQL', () => {});
+} else for (const format of ['json', 'csv'] as const) test.skip(`查询结果勾选行 ${format.toUpperCase()} 按原顺序导出固定快照，切换和新执行清选择且不重执行SQL`, () => {});

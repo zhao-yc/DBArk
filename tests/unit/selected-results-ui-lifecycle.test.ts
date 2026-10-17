@@ -187,10 +187,10 @@ describe('勾选行专项默认关闭包装器', () => {
     return { skip, register, loads };
   }
   it.each([['0', '0'], ['0', '1'], ['1', '0']])('默认双门%s/%s短路且不读认证', (integration, selected) => {
-    const result = wrapper(integration, selected); expect(result.skip).toHaveBeenCalledTimes(1); expect(result.loads).toEqual(['@playwright/test']); expect(result.register).not.toHaveBeenCalled();
+    const result = wrapper(integration, selected); expect(result.skip).toHaveBeenCalledTimes(2); expect(result.loads).toEqual(['@playwright/test']); expect(result.register).not.toHaveBeenCalled();
   });
   it.each([['0', '0'], ['0', '1'], ['1', '0'], ['1', '1']])('列表双门%s/%s先短路且不读认证', (integration, selected) => {
-    const result = wrapper(integration, selected, true); expect(result.skip).toHaveBeenCalledTimes(1); expect(result.loads).toEqual(['@playwright/test']);
+    const result = wrapper(integration, selected, true); expect(result.skip).toHaveBeenCalledTimes(2); expect(result.loads).toEqual(['@playwright/test']);
   });
   it('双门启用仍必须在live加载之前绑定显式一致RAM目标', () => {
     expect(() => wrapper('1', '1', false, {})).toThrow('显式一致配置');

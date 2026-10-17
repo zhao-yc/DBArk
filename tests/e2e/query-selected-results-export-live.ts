@@ -7,6 +7,7 @@ import { closeMysqlConnection } from '../../src/engine/connection';
 import { SelectedResultsUiLifecycle, probeSelectedResultsTarget, type SelectedResultsTarget } from '../helpers/selectedResultsExportUi';
 import { zh } from '../../src/renderer/locales/zh-CN';
 import { queryContextZh } from '../../src/renderer/locales/queryContext.zh-CN';
+import { verifySelectedResultsCsv } from '../helpers/selectedResultsExportCsv';
 
 /** 双门和显式RAM身份通过后才加载；本专项不导入建库helper，不执行任何DDL或DROP。 */
 export function registerSelectedResultsExport(binding: SelectedResultsTarget) {
@@ -18,7 +19,7 @@ export function registerSelectedResultsExport(binding: SelectedResultsTarget) {
     if (!state) { retainOwnedDesktopResources(info); throw Error('勾选行验收未建立本例所有权，保留现场'); }
     state.afterEach();
   });
-  test('查询结果勾选行按原顺序导出固定快照，切换和新执行清选择且不重执行SQL', async ({}, info) => {
+  for (const format of ['json', 'csv'] as const) test(`查询结果勾选行 ${format.toUpperCase()} 按原顺序导出固定快照，切换和新执行清选择且不重执行SQL`, async ({}, info) => {
     const captured = ownedDesktopResources(info), page = captured.page, application = captured.application, directory = dataDir;
     const state = new SelectedResultsUiLifecycle({
       assertCurrent(allowClosed = false) {
@@ -38,7 +39,7 @@ export function registerSelectedResultsExport(binding: SelectedResultsTarget) {
         native => closeMysqlConnection(native as Parameters<typeof closeMysqlConnection>[0], true)));
 
       // 只经真实表单建立一个不保存密码、无默认库、无SSH/TLS的临时工作区连接。
-      const connectionName = '勾选行零DDL验收';
+      const connectionName = `勾选行 ${format.toUpperCase()} 零DDL验收`;
       await observe(() => page.locator('.app-commandbar').getByRole('button', { name: zh.common.newConnection, exact: true }).click());
       const form = page.getByRole('dialog', { name: zh.common.newConnection, exact: true });
       await observe(() => form.getByLabel(zh.connections.text006, { exact: true }).fill(connectionName));
@@ -89,7 +90,7 @@ export function registerSelectedResultsExport(binding: SelectedResultsTarget) {
       await observe(() => rows.nth(1).getByRole('checkbox').check());
       await observe(() => expect(selected).toBeEnabled());
       const before = await observe(() => page.evaluate(async () => (await window.dbark.invoke('history.list', {})).map(item => item.id).sort()));
-      const file = join(directory, 'selected-query-rows.json');
+      const file = join(directory, `selected-query-rows.${format}`);
       // 只回答本例一次原生保存位置；立即恢复原函数，文件授权和导出任务仍走产品实现。
       await observe(() => application.evaluate(({ dialog }, file) => {
         const original = dialog.showSaveDialog;
@@ -99,15 +100,19 @@ export function registerSelectedResultsExport(binding: SelectedResultsTarget) {
       const dialog = page.getByRole('dialog', { name: zh.resultExport.selectedTitle, exact: true });
       await observe(() => expect(dialog).toContainText('仅导出已返回结果中勾选的 2 行'));
       await observe(() => expect(dialog).toContainText('打开时已固定选择快照'));
-      await observe(() => dialog.getByRole('combobox', { name: zh.resultExport.format, exact: true }).selectOption('json'));
+      await observe(() => dialog.getByRole('combobox', { name: zh.resultExport.format, exact: true }).selectOption(format));
+      await observe(() => dialog.getByRole('combobox', { name: zh.resultExport.encoding, exact: true }).selectOption('utf8'));
       await observe(() => dialog.locator('.file-picker').click());
       await observe(() => dialog.getByRole('button', { name: zh.resultExport.start, exact: true }).click());
       await observe(() => expect(dialog.locator('.success-box')).toHaveText('已导出 2 行已返回结果。'));
-      const actual = JSON.parse(await observe(() => readFile(file, 'utf8')));
-      expect(actual.map((row: Record<string, unknown>) => row.id)).toEqual([1, 3]);
-      expect(actual[0].repeated).toBe('18446744073709551615'); expect(actual[0]['repeated [3]']).toBeNull();
-      expect(actual[0].bytes).toEqual({ type: 'binary', base64: 'AP8=' });
-      expect(actual[1].repeated).toBe('0.12345678901234567890'); expect(actual[1].bytes).toBeNull();
+      const bytes = await observe(() => readFile(file));
+      if (format === 'json') {
+        const actual = JSON.parse(bytes.toString('utf8'));
+        expect(actual.map((row: Record<string, unknown>) => row.id)).toEqual([1, 3]);
+        expect(actual[0].repeated).toBe('18446744073709551615'); expect(actual[0]['repeated [3]']).toBeNull();
+        expect(actual[0].bytes).toEqual({ type: 'binary', base64: 'AP8=' });
+        expect(actual[1].repeated).toBe('0.12345678901234567890'); expect(actual[1].bytes).toBeNull();
+      } else verifySelectedResultsCsv(bytes);
       await observe(() => dialog.getByRole('button', { name: zh.common.done, exact: true }).click());
       expect(await observe(() => page.evaluate(async () => (await window.dbark.invoke('history.list', {})).map(item => item.id).sort()))).toEqual(before);
       await observe(() => tab.getByRole('button', { name: zh.query.pinResult, exact: true }).click());
