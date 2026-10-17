@@ -8,6 +8,7 @@ import type { AppSettings } from '../../src/shared/contracts';
 
 /** 列表和默认关闭不加载桌面owner；实际启用前拒绝实库、SSH、认证及录制参数。 */
 function assertOfflineCloseOthersEnvironment(env: Record<string, string | undefined>, args: string[]): void {
+  if (Object.hasOwn(env, 'DBARK_DEV_URL')) throw Error('关闭其他查询原生专项拒绝DBARK_DEV_URL，空值也不得覆盖本例renderer');
   const alias = (key: string) => key === 'DBARK_C02_EXECUTABLE_PATH' && !!env.DBARK_EXECUTABLE_PATH && env[key] === env.DBARK_EXECUTABLE_PATH;
   if (env.DBARK_INTEGRATION_ENABLED !== '0' || Object.keys(env).some(key => /^DBARK_(?:TEST_|C02_|SSH_|MTLS_|TLS_|MYSQL_|MARIADB_|AUTH_|PASSWORD|TOKEN|CREDENTIAL|CERT|CA_PATH|PRIVATE_KEY)/.test(key) && !alias(key))) throw Error('关闭其他查询原生专项只允许离线配置及integration=0，拒绝实库或认证参数');
   for (const [index, value] of args.entries()) {
@@ -114,18 +115,34 @@ async function closeDialog(info: TestInfo, tab: Tab) {
   const dialog = desktop(info).page.getByRole('dialog', { name: close.title, exact: true });
   await expect(dialog).toBeVisible(); await expect(dialog.locator('strong')).toHaveText(tab.title); desktop(info); return dialog;
 }
-/** 开启本例只读DOM观察，保存曾出现的目标，避免仅核最终无弹窗而漏掉短暂误推进。 */
-async function observeCloseDialogs(info: TestInfo) {
-  await desktop(info).page.evaluate(title => {
-    const seen: string[] = [], sample = () => {
-      for (const dialog of document.querySelectorAll('[role="dialog"]')) if (dialog.getAttribute('aria-label') === title) {
-        const target = dialog.querySelector('strong')?.textContent ?? ''; if (seen.at(-1) !== target) seen.push(target);
-      }
-    };
+/** 观察本例窗口及准确目标；addedNodes补同批移除漏采，但记录不冒充完整DOM历史。 */
+async function observeCloseDialogs(info: TestInfo, targets: Pick<Tab, 'id' | 'title'>[]) {
+  if (targets.length !== 3 || new Set(targets.map(tab => tab.id)).size !== 3 || new Set(targets.map(tab => tab.title)).size !== 3) throw Error('本例DOM观察必须绑定三个唯一目标及标题');
+  await desktop(info).page.evaluate(({ title, targets, runId }) => {
+    const seen: string[] = [], matches: { tabId: string | null; title: string }[] = [], recorded = new WeakMap<Element, string>();
+    /** 精确匹配真实关闭dialog及strong；未知同名dialog也记录为未归属，使最终断言失败。 */
+    function capture(dialog: Element) {
+      if (dialog.getAttribute('aria-label') !== title) return;
+      const target = dialog.querySelector('strong')?.textContent ?? '';
+      if (recorded.get(dialog) === target) return;
+      recorded.set(dialog, target);
+      if (seen.at(-1) !== target) { seen.push(target); matches.push({ tabId: targets.find(tab => tab.title === target)?.id ?? null, title: target }); }
+    }
+    /** 直接插入的dialog与包装子树均读取，包括回调时已经从body移除的原节点。 */
+    function added(node: Node) {
+      if (node.nodeType !== 1) return;
+      const element = node as Element;
+      if (element.matches('[role="dialog"]')) capture(element);
+      for (const dialog of element.querySelectorAll('[role="dialog"]')) capture(dialog);
+    }
+    function sample(records: MutationRecord[] = []) {
+      for (const record of records) for (const node of record.addedNodes) added(node);
+      for (const dialog of document.querySelectorAll('[role="dialog"]')) capture(dialog);
+    }
     const observer = new MutationObserver(sample); observer.observe(document.body, { subtree: true, childList: true, characterData: true, attributes: true }); sample();
-    // 仅保存测试观察记录，不替换任何DOM方法、业务对象、事件或回调。
-    (window as unknown as { __closeOthersObservation: { seen: string[]; stop(): void } }).__closeOthersObservation = { seen, stop: () => observer.disconnect() };
-  }, close.title); desktop(info);
+    // 只写测试观察记录；停止前收集尚未交付的records，不替换DOM或业务接口。
+    (window as unknown as { __closeOthersObservation: { runId: string; targets: typeof targets; seen: string[]; matches: typeof matches; stop(): void } }).__closeOthersObservation = { runId, targets, seen, matches, stop: () => { sample(observer.takeRecords()); observer.disconnect(); } };
+  }, { title: close.title, targets, runId: `${info.testId}:${info.retry}` }); desktop(info);
 }
 /** 只读历史核对没有执行SQL；成功后严格确认正常退出及所属PID，夹具再清理目录。 */
 async function finish(info: TestInfo, identity: string) {
@@ -173,7 +190,8 @@ test('来源CAS冲突：首个A保存失败仍可另存关闭，但B不自动推
     expect(external.source.id).toBe(records[0].id); expect(external.source.digest).not.toBe(a.sourceBinding!.digest);
     const originals = await queries(info); expect(originals).toHaveLength(1); expect(originals[0].sql).toBe(externalSql);
     expect((await settings(info)).tabs).toEqual([a, b, c]);
-    await observeCloseDialogs(info);
+    const observedTargets = [a, b, c].map(({ id, title }) => ({ id, title }));
+    await observeCloseDialogs(info, observedTargets);
     await page.locator('.app-commandbar').getByRole('button', { name: close.others, exact: true }).click(); desktop(info);
     await (await closeDialog(info, a)).getByRole('button', { name: close.save, exact: true }).click(); desktop(info);
     const save = page.getByRole('dialog', { name: binding.title, exact: true }); await expect(save).toBeVisible();
@@ -196,8 +214,10 @@ test('来源CAS冲突：首个A保存失败仍可另存关闭，但B不自动推
     // 真实界面切换跨后续提交；只观察、不手动调用queue或伪造无modal。
     await select(info, b); await select(info, c); await expect(page.getByRole('dialog')).toHaveCount(0);
     expect((await settings(info)).tabs).toEqual([b, c]); expect(await queries(info)).toEqual(after);
-    const observed = await page.evaluate(() => { const observation = (window as unknown as { __closeOthersObservation: { seen: string[]; stop(): void } }).__closeOthersObservation; observation.stop(); return observation.seen; }); desktop(info);
-    expect(observed).toEqual([a.title]);
+    await expect(page.locator('.tab-strip .tab-select')).toHaveCount(2);
+    const observed = await page.evaluate(() => { const observation = (window as unknown as { __closeOthersObservation: { runId: string; targets: { id: string; title: string }[]; seen: string[]; matches: { tabId: string | null; title: string }[]; stop(): void } }).__closeOthersObservation; observation.stop(); return { runId: observation.runId, targets: observation.targets, seen: observation.seen, matches: observation.matches }; }); desktop(info);
+    expect(observed.runId).toBe(`${info.testId}:${info.retry}`); expect(observed.targets).toEqual(observedTargets);
+    expect(observed.seen).toEqual([a.title]); expect(observed.matches).toEqual([{ tabId: a.id, title: a.title }]);
     await finish(info, '首个来源冲突后粘性停链与旧弹窗另存');
   } catch (reason) { await retainFailure(info); throw reason; }
 });
