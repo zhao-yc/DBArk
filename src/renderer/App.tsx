@@ -88,6 +88,7 @@ export default function App() {
   const closeRequests = useMemo(() => new QueryCloseRequests(), []);
   const [queryCloseRequest, setQueryCloseRequest] = useState<QueryCloseRequest>();
   const otherQueryClose = useRef<QueryCloseQueue | null>(null), [closingOtherQueries, setClosingOtherQueries] = useState(false);
+  const [queryCloseCommit, setQueryCloseCommit] = useState<{ queue: QueryCloseQueue; request: QueryCloseRequest }>();
   useEffect(() => () => { otherQueryClose.current?.dispose(); }, []);
   const [connectionsTransfer, setConnectionsTransfer] = useState(false);
   const workbench = useWorkbench();
@@ -211,9 +212,19 @@ export default function App() {
     const queue = otherQueryClose.current?.owns(request) ? otherQueryClose.current : undefined, tab = current.settings.tabs.find(tab => tab.id === request.tabId);
     if (!close || !tab) { queue?.finish(request, false); return; }
     if (current.activeJobs[request.tabId] || current.dirtyTabs[request.tabId]) { current.notify(queryCloseZh.changed, true); queue?.finish(request, false); return; }
-    if (queue) queue.finish(request, queue.remove(tab, () => current.closeTab(request.tabId)));
+    if (queue) {
+      queue.finish(request, queue.remove(tab, () => current.closeTab(request.tabId)));
+      if (queue.awaitingCommit === request) setQueryCloseCommit({ queue, request });
+    }
     else current.closeTab(request.tabId);
   }
+  /** 原请求已从本次渲染清空且portal已移除后交付提交回执；新的外部模态仍由全局门拒绝。 */
+  function commitQueryClose(commit: { queue: QueryCloseQueue; request: QueryCloseRequest }, pending?: QueryCloseRequest) {
+    if (pending || otherQueryClose.current !== commit.queue || commit.queue.awaitingCommit !== commit.request) return;
+    setQueryCloseCommit(undefined);
+    commit.queue.committed(commit.request, !document.querySelector('[role="dialog"]'));
+  }
+  useLayoutEffect(() => { if (queryCloseCommit) commitQueryClose(queryCloseCommit, queryCloseRequest); }, [queryCloseCommit, queryCloseRequest, settings.tabs]);
   useEffect(() => { if (queryCloseRequest && !settings.tabs.some(tab => tab.id === queryCloseRequest.tabId)) finishQueryClose(queryCloseRequest, false); }, [settings.tabs, queryCloseRequest]);
   /** 新字段入口先保护同目标所有表页，绝不自动放弃已有数据草稿。 */
   function openColumnPatches(target: TableColumnPatchTarget) {

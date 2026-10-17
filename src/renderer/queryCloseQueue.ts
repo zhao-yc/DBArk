@@ -12,11 +12,13 @@ interface QueuePorts {
 /** 单窗口串行队列：捕获对象与顺序，只有原关闭回执才能推进；不写store或保存持久状态。 */
 export class QueryCloseQueue {
   #targets: WorkspaceTab[] = []; #keep?: WorkspaceTab; #index = 0; #request?: QueryCloseRequest;
+  #commit?: QueryCloseRequest; #dispatchLease?: object; #requestLease?: object;
   #closed = new Set<WorkspaceTab>(); #versions = new Map<string, number>(); #profiles = new Map<string, object | undefined>();
   #running = false; #valid = true; #unsubscribe?: () => void; #adopting?: { before: WorkspaceTab; after: WorkspaceTab };
   constructor(private readonly ports: QueuePorts) {}
   get running() { return this.#running; }
-  get pending() { return !!this.#request; }
+  get pending() { return !!this.#request || !!this.#commit; }
+  get awaitingCommit() { return this.#commit; }
   /** 同一队列只启动一次，保留查询和全部目标必须是当前准确对象。 */
   start(keep: WorkspaceTab): void {
     if (this.#keep || !this.#valid) return;
@@ -45,8 +47,9 @@ export class QueryCloseQueue {
   }
   /** 保存自身的明确同步更新可以接管新对象；不开放任意SQL、ID或连接变更。 */
   hooks(tab: WorkspaceTab): Pick<QueryCloseRequest, 'mutate' | 'failed'> {
-    return { failed: () => this.#stop(), mutate: (before, patch, update) => {
-      if (!this.#inspect() || !this.#request || this.#targets[this.#index] !== before || before.id !== tab.id || Object.keys(patch).some(key => !['title', 'sourceBinding', 'database', 'databaseContext'].includes(key))) throw Error(text.changed);
+    const lease = {}; this.#dispatchLease = lease;
+    return { failed: () => { if (this.#request && this.#requestLease === lease) this.#stop(); }, mutate: (before, patch, update) => {
+      if (!this.#request || this.#requestLease !== lease || !this.#inspect() || this.#targets[this.#index] !== before || before.id !== tab.id || Object.keys(patch).some(key => !['title', 'sourceBinding', 'database', 'databaseContext'].includes(key))) throw Error(text.changed);
       this.#adopting = { before, after: { ...before, ...patch } };
       try { update(); if (!this.#inspect()) throw Error(text.changed); } finally { this.#adopting = undefined; }
     } };
@@ -60,15 +63,26 @@ export class QueryCloseQueue {
   /** 原请求取消、失败或未真正关闭即停止；旧回包不能消费新请求。 */
   finish(request: QueryCloseRequest, closed: boolean): void {
     if (!this.owns(request)) return;
-    this.#request = undefined;
-    if (!closed) this.#stop(); else if (this.#running) { this.#index++; this.#advance(); }
+    this.#request = undefined; this.#requestLease = undefined;
+    if (!closed) this.#stop(); else if (this.#running) {
+      this.#index++;
+      if (this.#index < this.#targets.length) this.#commit = request; else this.#stop();
+    }
     this.#releaseIfDone();
+  }
+  /** App真实提交后才允许下一项；准确旧请求票据只消费一次，外部弹窗或归属变化立即停链。 */
+  committed(request: QueryCloseRequest, modalClear: boolean): void {
+    if (this.#commit !== request || !this.#running) return;
+    this.#commit = undefined;
+    if (!modalClear || !this.#inspect()) { this.#stop(); return; }
+    this.#advance();
   }
   /** 空草稿的原同步关闭也逐个完成；异步请求发出后立即等待，不抢跑下一项。 */
   #advance(): void {
     while (this.#running && this.#inspect() && this.#index < this.#targets.length) {
-      const tab = this.#targets[this.#index], result = this.ports.close(tab, this);
-      if (typeof result === 'object') { this.#request = result; return; }
+      const tab = this.#targets[this.#index]; this.#dispatchLease = undefined;
+      const result = this.ports.close(tab, this);
+      if (typeof result === 'object') { this.#request = result; this.#requestLease = this.#dispatchLease; this.#dispatchLease = undefined; return; }
       if (!result || this.ports.read().settings.tabs.some(item => item.id === tab.id)) { this.#stop(); return; }
       this.#index++;
     }
@@ -79,6 +93,7 @@ export class QueryCloseQueue {
   #releaseIfDone(): void {
     if (!this.#running && !this.#request) {
       this.#unsubscribe?.(); this.#unsubscribe = undefined; this.#valid = false; this.#keep = undefined;
+      this.#commit = undefined; this.#dispatchLease = undefined; this.#requestLease = undefined;
       this.#targets = []; this.#closed.clear(); this.#versions.clear(); this.#profiles.clear();
     }
   }

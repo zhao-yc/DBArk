@@ -10,10 +10,20 @@ function fixture() {
   const state = { settings: { tabs: [keep, a, table, b] }, connections: [{ id: 'c' }], connectionVersions: {} as Record<string, number> }, listeners = new Set<() => void>(), requests: QueryCloseRequest[] = [], changes: boolean[] = [];
   const notify = () => { for (const listener of [...listeners]) listener(); };
   const queue = new QueryCloseQueue({ read: () => state, subscribe: fn => { listeners.add(fn); return () => { listeners.delete(fn); }; }, close: (target, owner) => { const request = { tabId: target.id, ...owner.hooks(target) }; requests.push(request); return request; }, changed: value => changes.push(value) });
-  return { state, keep, a, b, queue, requests, changes, listeners, notify, change(tabs: WorkspaceTab[]) { state.settings.tabs = tabs; notify(); }, close(request: QueryCloseRequest) { const current = state.settings.tabs.find(item => item.id === request.tabId)!; queue.finish(request, queue.remove(current, () => { state.settings.tabs = state.settings.tabs.filter(item => item !== current); notify(); })); } };
+  return { state, keep, a, b, queue, requests, changes, listeners, notify, change(tabs: WorkspaceTab[]) { state.settings.tabs = tabs; notify(); }, close(request: QueryCloseRequest) { const current = state.settings.tabs.find(item => item.id === request.tabId)!; queue.finish(request, queue.remove(current, () => { state.settings.tabs = state.settings.tabs.filter(item => item !== current); notify(); })); queue.committed(request,true); } };
 }
 
 describe('关闭其他查询的对象归属与串行回执', () => {
+  it('成功只标记待提交；准确提交票据到达前不关闭下一项，外部modal则停止',()=>{
+    const f=fixture();f.queue.start(f.keep);const first=f.requests[0];f.queue.finish(first,f.queue.remove(f.a,()=>f.change(f.state.settings.tabs.filter(tab=>tab!==f.a))));
+    expect(f.requests).toHaveLength(1);expect(f.queue.awaitingCommit).toBe(first);expect(f.queue.pending).toBe(true);first.failed!();expect(f.queue.running).toBe(true);
+    f.queue.committed({...first},true);expect(f.requests).toHaveLength(1);f.queue.committed(first,false);expect(f.queue.running).toBe(false);expect(f.state.settings.tabs).toContain(f.b);
+  });
+  it('同队列B原租约不被旧A的failed或mutate停错；当前B第一次失败仍粘性停',()=>{
+    const f=fixture();f.queue.start(f.keep);const a=f.requests[0];f.close(a);expect(f.requests.map(request=>request.tabId)).toEqual(['a','b']);
+    a.failed!();expect(f.queue.running).toBe(true);expect(()=>a.mutate!(f.b,{title:'旧A无权变更B'},()=>{})).toThrow();expect(f.queue.running).toBe(true);
+    f.requests[1].failed!();expect(f.queue.running).toBe(false);f.queue.finish(f.requests[1],false);expect(f.listeners.size).toBe(0);
+  });
   it('按原顺序每次只有一个请求，只关闭query；新开标签永不纳入', () => {
     const f = fixture(); f.queue.start(f.keep); expect(f.requests.map(item => item.tabId)).toEqual(['a']);
     const added = tab('new'); f.change([...f.state.settings.tabs, added]); f.close(f.requests[0]); expect(f.requests.map(item => item.tabId)).toEqual(['a', 'b']);
