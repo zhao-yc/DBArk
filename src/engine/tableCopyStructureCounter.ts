@@ -59,9 +59,9 @@ export function tableCopyStructureObservedCounter(value: unknown, definition: Ta
   if (definition.declaredValue !== undefined && definition.declaredValue !== observed) throw Error('原定义与准确目录计数不同，可能有并发写入；未发送DDL');
   return observed;
 }
-/** MySQL8.4.11独立结构连接重读准确计数，不借自增修改任务要求ALTER，也不读取业务MAX。 */
+/** 已核MySQL8补丁版本的独立结构连接重读准确计数，不借自增修改任务要求ALTER，也不读取业务MAX。 */
 export async function readTableCopyStructureCounter(context: StructureTaskContext, target: TableCopyStructureTarget, initial: TableCommentRead): Promise<{ read: TableCommentRead; plan: TableCopyStructureCounterPlan; policy: TableAutoIncrementPolicy }> {
-  // 第二道版本门在任何SQL前拒绝准备态，调用方误放宽版本也不能把8.4的计数规则带到8.0。
+  // 第二道版本门在任何SQL前拒绝未证明版本，调用方误放宽版本也不能外推计数规则。
   const profile = tableCopyStructureServerProfile(context.managed.status.dialect, context.managed.status.version);
   if (!profile.canWrite || profile.expectedNewCounter === null) throw Error(profile.readonlyReason);
   await structureTaskQuery(context, 'SET SESSION information_schema_stats_expiry = 0');
@@ -80,6 +80,6 @@ export async function readTableCopyStructureCounter(context: StructureTaskContex
   const actual = auto[0], canonical = (value: string) => value.replace(/\s+/g, ' ').trim().toLowerCase();
   if (columns.length !== document.columns.length || columns.some((column, index) => column.name !== document.columns[index].name) || auto.length !== 1 || actual.name !== definition.column.name || typeof actual.columnType !== 'string' || typeof actual.dataType !== 'string' || actual.columnType.split(/[ (]/)[0].toLowerCase() !== actual.dataType.toLowerCase() || canonical(actual.columnType) !== canonical(definition.column.type) || tableAutoIncrementMaximum(actual.columnType) !== definition.column.maximum) throw Error('完整目录与自增列属性或类型不一致，当前只读');
   const policy = await readTableAutoIncrementPolicy(context);
-  // Root固定8.4.11/Linux、步长与偏移1的三个隔离样本均为1；不外推其它运行策略。
+  // Root对8.4.11与8.0.46分别独占实测，Linux/默认步长偏移下新计数均为1；不外推其它版本或策略。
   return { read, plan: { column: definition.column, sourceValue: observed, expectedNewValue: profile.expectedNewCounter }, policy };
 }

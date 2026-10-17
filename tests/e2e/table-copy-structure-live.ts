@@ -4,13 +4,8 @@ import type { TestInfo } from '@playwright/test';
 import { test, expect, ownedDesktopResources, confirmOwnedDesktopExit, retainOwnedDesktopResources } from './desktop-fixture';
 import { connectAndCreate, environment } from './live-helpers';
 import { tableCopyStructureZh as text } from '../../src/renderer/locales/tableCopyStructure.zh-CN';
+import { tableCopyStructureTarget, type TableCopyStructureTargetKey } from '../helpers/tableCopyStructureTarget';
 
-/** 首片未来定义仅准备ROOT明确分配的明文13384，不沿helper默认值猜目标或静默降级。 */
-function target() {
-  if (process.env.DBARK_TEST_HOST !== '192.168.31.200' || process.env.DBARK_TEST_PORT !== '13384' || process.env.DBARK_TEST_TLS === '1') throw Error('首个复制结构UI定义仅准备200明文13384，其它组合未准备');
-  for (const key of ['DBARK_TEST_HOST', 'DBARK_TEST_PORT', 'DBARK_TEST_TLS'] as const) if (process.env[key] !== environment[key]) throw Error('复制结构原始目标与helper配置不一致');
-  if (!environment.DBARK_TEST_USER || !/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(process.env.DBARK_TEST_EXPECTED_SERVER_UUID ?? '')) throw Error('须ROOT提供已有测试账号并先核对、绑定本轮服务器UUID');
-}
 /** 创建任务未确认成功或读取未知时先停链，不能借退出取消后继续删库。 */
 export async function assertTableCopyStructureTasksTerminal(info: TestInfo): Promise<void> {
   try {
@@ -34,17 +29,17 @@ export async function cleanupTableCopyStructureCase(info: TestInfo, observer: Co
   } catch (reason) { retainOwnedDesktopResources(info); if (primary) throw new AggregateError([primary.reason, reason], '原UI失败且任务、退出或观察清理未确认，保留本例现场', { cause: primary.reason }); throw reason; }
 }
 /** 只注册未执行定义；不修改共享fixture，ROOT须另行安排固定候选与实际服务器终态证明。 */
-export function registerTableCopyStructureUiTests() {
-  target(); test.use({ preserveOnUnconfirmedExit: true, trace: 'off', screenshot: 'off', video: 'off' }); test.setTimeout(120000); test.describe.configure({ retries: 0 });
-  for (const autoIncrement of [false, true]) test('真实表入口'+(autoIncrement ? '（含自增列）' : '')+'先展示DDL和准确确认，单次创建空表并保持源数据与结构', async ({}, info) => {
-    target(); const captured = ownedDesktopResources(info), own = () => ownedDesktopResources(info), page = captured.page, database = 'dbark_copy_' + randomUUID().replaceAll('-', '');
+export function registerTableCopyStructureUiTests(key: TableCopyStructureTargetKey = 'mysql84') {
+  tableCopyStructureTarget(key, process.env, environment); test.use({ preserveOnUnconfirmedExit: true, trace: 'off', screenshot: 'off', video: 'off' }); test.setTimeout(120000); test.describe.configure({ retries: 0 });
+  for (const autoIncrement of [false, true]) test((key === 'mysql80' ? 'MySQL8.0.46：' : '')+'真实表入口'+(autoIncrement ? '（含自增列）' : '')+'先展示DDL和准确确认，单次创建空表并保持源数据与结构', async ({}, info) => {
+    const target = tableCopyStructureTarget(key, process.env, environment), captured = ownedDesktopResources(info), own = () => ownedDesktopResources(info), page = captured.page, database = 'dbark_copy_' + randomUUID().replaceAll('-', '');
     let observer: Connection | undefined, ownsName = false, primary: { reason: unknown } | undefined;
     /** 观察SQL未知或归属变化立即保留，禁止finally继续猜测清库。 */
     const observe = async <T>(request: () => Promise<T>): Promise<T> => { own(); try { const value = await request(); own(); return value; } catch (reason) { retainOwnedDesktopResources(info); throw reason; } };
     try {
-      observer = await mysql.createConnection({ host: environment.DBARK_TEST_HOST, port: 13384, user: environment.DBARK_TEST_USER, password: environment.DBARK_TEST_PASSWORD, charset: 'utf8mb4', connectTimeout: 15000 }); own(); const connection = observer;
+      observer = await mysql.createConnection({ host: environment.DBARK_TEST_HOST, port: target.port, user: environment.DBARK_TEST_USER, password: environment.DBARK_TEST_PASSWORD, charset: 'utf8mb4', connectTimeout: 15000 }); own(); const connection = observer;
       const [facts] = await observe(() => connection.query<RowDataPacket[]>('SELECT @@version AS version,@@version_compile_os AS os,@@lower_case_table_names AS names,@@server_uuid AS uuid'));
-      expect(String(facts[0].version)).toMatch(/^8\.4\.11(?:[-+].*)?$/); expect(['linux', 'debian-linux-gnu']).toContain(String(facts[0].os).toLowerCase()); expect(Number(facts[0].names)).toBe(0); expect(facts[0].uuid).toBe(process.env.DBARK_TEST_EXPECTED_SERVER_UUID);
+      expect(String(facts[0].version)).toMatch(target.versionPattern); expect(['linux', 'debian-linux-gnu']).toContain(String(facts[0].os).toLowerCase()); expect(Number(facts[0].names)).toBe(0); expect(facts[0].uuid).toBe(process.env.DBARK_TEST_EXPECTED_SERVER_UUID);
       const [existing] = await observe(() => connection.query<RowDataPacket[]>('SELECT SCHEMA_NAME FROM information_schema.SCHEMATA WHERE SCHEMA_NAME=?', [database])); expect(existing).toHaveLength(0); ownsName = true;
       const context = await connectAndCreate(database, { page, application: captured.application, assertCurrent: () => { own(); } }); own();
       const source = '`' + database + '`.`copy_source`', destination = '`' + database + '`.`copy_destination`';

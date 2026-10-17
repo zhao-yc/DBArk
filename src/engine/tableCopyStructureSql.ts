@@ -50,7 +50,7 @@ export async function readTableCopyStructure(context: StructureTaskContext, targ
   const forbidden = new Set(['INVISIBLE', 'TABLESPACE', 'DATA', 'DIRECTORY', 'INDEX', 'KEY_BLOCK_SIZE', 'STATS_PERSISTENT', 'STATS_AUTO_RECALC', 'STATS_SAMPLE_PAGES', 'PACK_KEYS', 'CHECKSUM', 'DELAY_KEY_WRITE', 'COMPRESSION', 'ENCRYPTION', 'AUTOEXTEND_SIZE']);
   if (tableDefinitionTokens(document.tail.raw, read.context).some(token => token.kind === 'executable' || token.kind === 'word' && forbidden.has(token.value.toUpperCase())) || document.columns.some(column => tableDefinitionTokens(column.raw, read.context).some(token => token.kind === 'word' && token.value.toUpperCase() === 'INVISIBLE'))) reasons.push('隐藏字段或尚未证明的物理表选项不能复制');
   let serverUuid = '', capability = '';
-  // 8.0.46仅复用已有目录/UUID/GIPK只读核对；读到能力并不证明CREATE LIKE计数语义。
+  // 版本语义合同之外仍逐次核对目录/UUID/GIPK；读到单项能力不能替代其它守卫。
   if (profile.canReadFacts) try {
     const rows = (await structureTaskQuery<Record<string, unknown>[]>(context, 'SELECT @@SESSION.sql_mode AS sqlMode, @@hostname AS hostname, @@port AS port, @@server_id AS serverId, CURRENT_USER() AS currentUser, CONNECTION_ID() AS connectionId, @@character_set_connection AS characterSetConnection, @@collation_connection AS collationConnection, @@sql_quote_show_create AS quoteShowCreate')).rows;
     const ids = (await structureTaskQuery<{ uuid: string }[]>(context, 'SELECT @@server_uuid AS uuid')).rows, row = rows[0];
