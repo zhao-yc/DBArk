@@ -175,13 +175,14 @@ export async function connect(profile: ConnectionProfile, database:string|null|u
       if (!profile.ssh.hostFingerprint) throw new Error('SSH 连接必须填写服务器 SHA256 主机指纹');
       const config = profile.ssh;
       ssh = new SshClient();
-      resources.add('ssh-client', ssh);
       ssh.once('close', () => { sshClosed = true; });
       const client = ssh;
       const privateKey = config.privateKeyPath ? await readFile(config.privateKeyPath, { signal }) : undefined;
       cancelled();
       await stage<void>(done => {
         client.once('ready', () => done()).on('error', error => done(error));
+        // 私钥读取前只创建JS对象；紧邻真正网络分配前登记，既不等待未开始的close，也不漏首个close。
+        resources.add('ssh-client', client);
           client.connect({ host: config.host, port: config.port, username: config.user, password: config.password, privateKey, passphrase: config.passphrase, readyTimeout: 15000, keepaliveInterval: 10000,
             hostVerifier: (key: Buffer) => {
               const actual = 'SHA256:' + createHash('sha256').update(key).digest('base64').replace(/=+$/, '');
