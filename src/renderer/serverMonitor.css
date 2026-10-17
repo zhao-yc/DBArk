@@ -1,0 +1,14 @@
+.server-monitor-dialog { max-height: 75vh; overflow: auto; padding: 20px; }
+.server-monitor-dialog header, .server-monitor-toolbar { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.server-monitor-dialog header { justify-content: space-between; }
+.server-monitor-dialog dl { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 8px; }
+.server-monitor-dialog dl > div { border-bottom: 1px solid var(--border, #555); padding: 6px; overflow-wrap: anywhere; }
+.server-monitor-dialog dd { margin: 4px 0; font-variant-numeric: tabular-nums; }
+.server-monitor-table { overflow: auto; }
+.server-monitor-table table { width: 100%; border-collapse: collapse; }
+.server-monitor-table th, .server-monitor-table td { text-align: left; vertical-align: top; padding: 6px; border-bottom: 1px solid var(--border, #555); }
+.server-monitor-table pre { max-width: 480px; white-space: pre-wrap; overflow-wrap: anywhere; margin: 0; }
+.server-monitor-toolbar { position: sticky; top: 0; background: var(--panel, #24272d); z-index: 1; padding-block: 8px; }
+.server-monitor-note, .server-monitor-time { color: var(--muted, #969da9); font-size: 12px; }
+.server-monitor-table summary { cursor: pointer; }
+.server-monitor-dialog footer { display: flex; justify-content: flex-end; padding-top: 16px; }
