@@ -83,20 +83,35 @@ beforeEach(async () => {
 });
 afterEach(async () => { releaseClosing?.(); closing = undefined; closeFails = false; hold = undefined; held?.complete(Error('离线收尾')); await engine.closeAll(); vi.restoreAllMocks(); });
 
-describe('8.0.46复制结构准备：真实Engine和RAM驱动，不执行原ff42全套', () => {
-  it.each([false, true])('普通/自增来源auto=%s均可只读完整定义，但无可执行预览或8.4计数计划', async auto => {
-    version = '8.0.46'; if (auto) autoSource('9007199254740993');
-    const snapshot = await get(); expect(snapshot.serverVersion).toBe('8.0.46'); expect(snapshot.writable).toBe(false); expect(snapshot.reasons.join('；')).toContain('仅作只读兼容准备'); expect(snapshot.sourceDdl).toBe(definitions.get('t')); expect(snapshot.autoIncrement).toBeUndefined();
-    await expect(preview(snapshot)).rejects.toThrow('只读兼容准备'); expect(writes()).toEqual([]); expect(sent.some(sql => sql.startsWith('SELECT @@SESSION.sql_generate_invisible_primary_key'))).toBe(true); expect(sent.some(sql => sql.includes('information_schema_stats_expiry'))).toBe(false);
+describe('8.0.46复制结构准确补丁兼容：真实Engine及RAM端口', () => {
+  it('普通表保持完整默认值/索引/表选项，先预览再唯一CREATE，新物理ID和源不变均核验', async () => {
+    version = '8.0.46'; definitions.set('t', original.replace('DEFAULT NULL', "DEFAULT 'AUTO_INCREMENT=99'")); const before = definitions.get('t'), sourceId = ids.get('t'), snapshot = await get(); expect(snapshot.writable, snapshot.reasons.join('；')).toBe(true); expect(snapshot.autoIncrement).toBeUndefined(); expect(snapshot.sourceDdl).toBe(before);
+    const plan = await preview(snapshot); expect(writes()).toEqual([]); expect(await apply(plan)).toMatchObject({ ddlCompleted: true, definitionVerified: true, counter: { state: 'not-applicable' } }); expect(writes()).toEqual([plan.sql]); expect(definitions.get('t')).toBe(before); expect(ids.get('t')).toBe(sourceId); expect(ids.get('t_copy')).not.toBe(sourceId); expect(definitions.get('t_copy')).toBe(before!.replace('CREATE TABLE `t`', 'CREATE TABLE `t_copy`'));
   });
-  it.each(['uuid', 'gipk', 'permission', 'view'])('准备态%s异常仍保留原读取约束，不以只读文案掩盖未知事实', async kind => {
-    version = '8.0.46'; if (kind === 'uuid') uuid = 'unknown'; if (kind === 'gipk') capability.gipk = 1; if (kind === 'permission') grants = ["GRANT SELECT, SHOW VIEW, TRIGGER ON *.* TO 'unit'@'host'"]; if (kind === 'view') dependency = 'view';
-    const snapshot = await get(); expect(snapshot.writable).toBe(false); expect(snapshot.reasons.length).toBeGreaterThan(1); await expect(preview(snapshot)).rejects.toThrow(); expect(writes()).toEqual([]);
+  it.each(['42', '9007199254740993', '1'])('本版本自增源值%s准确绑定，新值1仅按完整目录核验，不复制源行', async value => {
+    version = '8.0.46'; autoSource(value); const snapshot = await get(); expect(snapshot.writable, snapshot.reasons.join('；')).toBe(true); expect(snapshot.autoIncrement).toMatchObject({ sourceValue: value, expectedNewValue: '1' }); const before = definitions.get('t');
+    const plan = await preview(snapshot); expect(plan.requiredAcknowledgements).toContain('auto-increment-copy'); expect(await apply(plan)).toMatchObject({ ddlCompleted: true, structureVerified: true, definitionVerified: true, counter: { state: 'matched', sourceValue: value, actualValue: '1' } }); expect(writes()).toEqual([plan.sql]); expect(definitions.get('t')).toBe(before); expect(counters.get('t')).toBe(value); expect(sent.some(sql => /^SELECT (?:\*|COUNT|MAX)/.test(sql))).toBe(false);
   });
-  it('8.4预览后切换8.0合同拒绝执行并消费原令牌，不借旧计数规则继续', async () => {
-    const plan = await preview(await get()); version = '8.0.46'; await expect(apply(plan)).rejects.toThrow(); await expect(apply(plan)).rejects.toThrow('失效'); expect(writes()).toEqual([]);
+  it.each(['uuid', 'gipk', 'permission', 'view', 'partition', 'os'])('%s未知或不在范围时仍只读，不借版本事实绕过其它约束', async kind => {
+    version = '8.0.46'; if (kind === 'uuid') uuid = 'unknown'; if (kind === 'gipk') capability.gipk = 1; if (kind === 'permission') grants = ["GRANT SELECT, SHOW VIEW, TRIGGER ON *.* TO 'unit'@'host'"]; if (kind === 'view') dependency = 'view'; if (kind === 'partition') dependency = 'partition'; if (kind === 'os') os = 'Windows';
+    const snapshot = await get(); expect(snapshot.writable).toBe(false); await expect(preview(snapshot)).rejects.toThrow(); expect(writes()).toEqual([]);
   });
-  it.each([false, true])('8.4既有普通/自增auto=%s仅作最小正向回归，仍单次DDL及准确计数', async auto => {
+  it.each(['expiry', 'policy', 'column', 'generated'])('自增%s未证明时只读，不放开非默认策略或生成列', async kind => {
+    version = '8.0.46'; autoSource('42'); if (kind === 'expiry') expiry = '86400'; if (kind === 'policy') policy.sessionOffset = '2'; if (kind === 'column') columnTypeOverride = 'int'; if (kind === 'generated') definitions.set('t', definitions.get('t')!.replace('NOT NULL AUTO_INCREMENT', 'NOT NULL AUTO_INCREMENT GENERATED ALWAYS AS (1) STORED'));
+    expect((await get()).writable).toBe(false); expect(writes()).toEqual([]);
+  });
+  it('8.4预览后切到8.0已核合同仍拒绝旧预览，不混用profile身份', async () => {
+    const plan = await preview(await get()); version = '8.0.46'; await expect(apply(plan)).rejects.toThrow('合同'); await expect(apply(plan)).rejects.toThrow('失效'); expect(writes()).toEqual([]);
+  });
+  it('8.0源计数变化零DDL；同快照多个预览仍单次消费', async () => {
+    version = '8.0.46'; autoSource('42'); let snapshot = await get(), plan = await preview(snapshot); counters.set('t', '43'); definitions.set('t', definitions.get('t')!.replace('AUTO_INCREMENT=42', 'AUTO_INCREMENT=43')); await expect(apply(plan)).rejects.toThrow(); expect(writes()).toEqual([]);
+    autoSource('42'); snapshot = await get(); plan = await preview(snapshot); const other = await preview(snapshot, 'other'); const result = await Promise.allSettled([apply(plan), apply(other, { taskId: 'parallel' })]); expect(result.filter(item => item.status === 'fulfilled')).toHaveLength(1); expect(writes()).toEqual([plan.sql]);
+  });
+  it('本版本目标计数不符保留创建完成，不补ALTER；已发送取消未知不重放', async () => {
+    version = '8.0.46'; autoSource('42'); let plan = await preview(await get()); afterCreate = () => { counters.set('t_copy', '2'); definitions.set('t_copy', definitions.get('t_copy')!.replace('ENGINE=InnoDB', 'ENGINE=InnoDB AUTO_INCREMENT=2')); }; expect(await apply(plan)).toMatchObject({ ddlCompleted: true, structureVerified: true, definitionVerified: false, counter: { state: 'different', actualValue: '2' } }); expect(writes()).toEqual([plan.sql]);
+    definitions.delete('t_copy'); counters.delete('t_copy'); afterCreate = undefined; plan = await preview(await get()); hold = /^CREATE TABLE/; const pending = apply(plan, { taskId: 'cancel80' }).catch(error => error); await vi.waitFor(() => expect(held).toBeDefined()); await engine.handle('query.cancel', { taskId: 'cancel80' }); expect(await pending).toBeInstanceOf(Error); expect(events.at(-1)?.tableCopyStructure).toMatchObject({ ddlSubmitted: true, ddlCompleted: false, outcome: 'unknown' }); await expect(apply(plan)).rejects.toThrow('失效'); expect(writes()).toHaveLength(2);
+  });
+  it.each([false, true])('8.4既有普通/自增auto=%s只作最小正向回归，仍单次DDL及准确计数', async auto => {
     if (auto) autoSource('42'); const plan = await preview(await get()); expect(await apply(plan)).toMatchObject({ ddlCompleted: true, definitionVerified: true, ...(auto ? { counter: { state: 'matched', actualValue: '1' } } : {}) }); expect(writes()).toEqual([plan.sql]);
   });
 });
