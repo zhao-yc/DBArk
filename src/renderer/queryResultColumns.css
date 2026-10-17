@@ -1,0 +1,6 @@
+.query-result-columns-list { max-height: 50vh; overflow-y: auto; margin-top: 12px; }
+.query-result-column { display: flex; align-items: center; gap: 8px; padding: 8px 4px; border-bottom: 1px solid var(--line); }
+.query-result-column label { display: flex; flex: 1; align-items: center; gap: 8px; min-width: 0; }
+.query-result-column strong { overflow-wrap: anywhere; }
+.query-result-column small { color: var(--muted); }
+.query-result-column button { flex-shrink: 0; }
