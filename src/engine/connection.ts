@@ -9,6 +9,7 @@ import type { ConnectionProfile, ConnectionStatus } from '../shared/contracts';
 import { sqlExecutableWords } from '../shared/queryParameters';
 import {initialCompletionDatabase,observeCompletionDatabase,invalidateCompletionDatabase,type CompletionDatabaseState,type SessionStatePacket} from './completionSession';
 import {SessionObjects} from './sessionObjects';
+import { ConnectionResourceOwner, type ConnectionResourceRecovery } from './connectionResourceState';
 
 export interface ManagedConnection {
   connection: Connection;
@@ -30,6 +31,8 @@ export interface ManagedConnection {
   signal?: AbortSignal;
   /** 结束数据库会话并释放附属 SSH 隧道，可以重复调用。 */
   close(options?: { strict?: boolean }): Promise<void>;
+  /** 物理连接自身全部资源的内部证明/显式恢复端口；缺失代表不能提供独立证明，不能当已关闭。 */
+  readonly resources?: ConnectionResourceRecovery;
 }
 
 /** 严格结构任务观察 QUIT 写入/本地流关闭；COM_QUIT 没有服务器 ACK，不据此证明 DDL 结果。 */
@@ -138,15 +141,19 @@ export function execute<T = Record<string, unknown>[]>(managed: ManagedConnectio
 }
 
 /** 建立数据库连接前完成 SSH 主机校验和 TLS 文件加载；任何阶段失败都会释放隧道。 */
-export async function connect(profile: ConnectionProfile, database:string|null|undefined = profile.database, signal?: AbortSignal): Promise<ManagedConnection> {
+export async function connect(profile: ConnectionProfile, database:string|null|undefined = profile.database, signal?: AbortSignal, onResources?: (resources: ConnectionResourceRecovery) => void): Promise<ManagedConnection> {
   assertConnectionReady(profile);
   assertTlsPassphrase(profile.tls?.passphrase);
   let ssh: SshClient | undefined;
   let sshClosed = false;
   let stream: ClientChannel | undefined;
   let connection: Connection | undefined;
+  const resources = new ConnectionResourceOwner(() => (connection as unknown as { stream?: unknown } | undefined)?.stream, () => { connection?.destroy(); });
+  // host可在任何网络资源分配前登记已预留的容量；初始化失败也不丢失资源归属句柄。
+  try { onResources?.(resources.recovery); } catch (error) { resources.seal(); throw error; }
   const cancelled = () => { if (signal?.aborted) throw new Error('任务已取消'); };
   const destroy = () => {
+    resources.captureTransport();
     connection?.destroy();
     // mysql2.destroy 实际只发送 FIN；正在等待结果时还须销毁底层流，不能留下半关闭的本地 socket。
     (connection as unknown as { stream?: { destroy(): void } } | undefined)?.stream?.destroy();
@@ -154,11 +161,12 @@ export async function connect(profile: ConnectionProfile, database:string|null|u
   };
   signal?.addEventListener('abort', destroy, { once: true });
   /** 驱动 destroy 未必回调 pending connect/forwardOut，显式唤醒等待并回收迟到通道。 */
-  const stage = <T>(start: (done: (error?: Error | null, result?: T) => void) => void): Promise<T> => new Promise((resolve, reject) => {
+  const stage = <T>(start: (done: (error?: Error | null, result?: T) => void) => void, mayAllocateResource = false): Promise<T> => new Promise((resolve, reject) => {
     const abort = () => reject(new Error('任务已取消'));
     if (signal?.aborted) { abort(); return; }
+    const allocated = mayAllocateResource ? resources.beginAllocation() : () => {};
     signal?.addEventListener('abort', abort, { once: true });
-    const done = (error?: Error | null, result?: T) => { signal?.removeEventListener('abort', abort); if (signal?.aborted) abort(); else if (error) reject(error); else resolve(result as T); };
+    const done = (error?: Error | null, result?: T) => { resources.captureTransport(); allocated(); signal?.removeEventListener('abort', abort); if (signal?.aborted) abort(); else if (error) reject(error); else resolve(result as T); };
     try { start(done); } catch (error) { done(error as Error); }
   });
   try {
@@ -167,6 +175,7 @@ export async function connect(profile: ConnectionProfile, database:string|null|u
       if (!profile.ssh.hostFingerprint) throw new Error('SSH 连接必须填写服务器 SHA256 主机指纹');
       const config = profile.ssh;
       ssh = new SshClient();
+      resources.add('ssh-client', ssh);
       ssh.once('close', () => { sshClosed = true; });
       const client = ssh;
       const privateKey = config.privateKeyPath ? await readFile(config.privateKeyPath, { signal }) : undefined;
@@ -180,7 +189,7 @@ export async function connect(profile: ConnectionProfile, database:string|null|u
             }
           });
       });
-      stream = await stage<ClientChannel>(done => client.forwardOut('127.0.0.1', 0, profile.host, profile.port, (error, channel) => { if (signal?.aborted) channel?.destroy(); done(error, channel); }));
+      stream = await stage<ClientChannel>(done => client.forwardOut('127.0.0.1', 0, profile.host, profile.port, (error, channel) => { if (channel) resources.add('ssh-channel', channel); if (signal?.aborted) channel?.destroy(); done(error, channel); }), true);
     }
     const tls = profile.tls?.enabled ? connectionTlsOptions(profile.tls, {
       ca: profile.tls.caPath ? await readFile(profile.tls.caPath, { signal }) : undefined,
@@ -198,14 +207,17 @@ export async function connect(profile: ConnectionProfile, database:string|null|u
       // JSON 保持服务器原始文本；JS 自动解析会损失 JSON 内部大整数的精度。
       typeCast(field, next) { if (field.type === 'JSON') return field.string('utf8'); return next(); },
     };
+    resources.captureTransport(true);
     connection = mysql.createConnection(options);
+    resources.captureTransport(true);
     const active = connection;
-    await stage<void>(done => active.connect(error => done(error)));
+    await stage<void>(done => active.connect(error => done(error)), true);
     let closePending: Promise<void> | undefined;
     const managed: ManagedConnection = {
-      connection: active, profile, status: { version: '', dialect: profile.dialect, connectionId: active.threadId }, broken: false, signal,
+      connection: active, profile, status: { version: '', dialect: profile.dialect, connectionId: active.threadId }, broken: false, signal, resources: resources.recovery,
       /** 优先发送正常退出；连接已卡死时限时销毁，防止退出流程永久等待。 */
       async close(options = {}) {
+        resources.captureTransport();
         if (!closePending) closePending = (async () => {
           let failure: unknown;
           try { await closeMysqlConnection(active, Boolean(options.strict), managed.broken || Boolean(signal?.aborted)); } catch (error) { failure = error; }
@@ -248,9 +260,10 @@ export async function connect(profile: ConnectionProfile, database:string|null|u
     managed.sqlMode = result.rows[0].sqlMode;
     managed.sqlModeTracking = true;
     managed.noBackslashEscapesKnown = true;
+    resources.seal();
     return managed;
   } catch (error) {
-    destroy(); signal?.removeEventListener('abort', destroy);
+    try { destroy(); } finally { signal?.removeEventListener('abort', destroy); resources.seal(); }
     // 证书/密钥文件读取也可能由AbortSignal中止；统一建连取消文案，避免泄露底层英文异常。
     if(signal?.aborted)throw new Error('任务已取消');
     throw tlsConnectionError(error, profile.tls?.passphrase);
