@@ -16,6 +16,7 @@ let document: ReturnType<typeof memoryDocument>, createRoot: typeof import('reac
 let Viewer: typeof import('../../src/renderer/components/DefinitionViewer')['DefinitionViewer'], workspace: typeof import('../../src/renderer/store')['useWorkspace'];
 let Builder: any, modelPrototype: any, Uri: any;
 let closed: ReturnType<typeof vi.fn>, requests: { command: string; input: any }[], read: (input: any) => Promise<string>;
+let renderStart = 0, renderEpoch = 0;
 const resources: { dispose(): void }[] = [];
 const sql = 'CREATE VIEW `对象` AS SELECT \'😀标记\'\r\n-- 标记';
 
@@ -28,7 +29,7 @@ beforeAll(async () => {
   Uri = (await import(/* @vite-ignore */ pathToFileURL(join(base, 'esm/vs/base/common/uri.js')).href)).URI;
 });
 beforeEach(() => {
-  workspace.setState({ connections: [{ id: 'c' }] as any, connectionVersions: { c: 1 } }); requests = []; closed = vi.fn(); editors.mounts = []; read = async () => sql;
+  workspace.setState({ connections: [{ id: 'c' }] as any, connectionVersions: { c: 1 } }); requests = []; closed = vi.fn(); editors.mounts = []; renderStart = 0; renderEpoch = 0; read = async () => sql;
   (window as any).dbark = { invoke: async (command: string, input: any) => { requests.push({ command, input }); if (command === 'connections.open') return {}; if (command === 'metadata.ddl') return read(input); throw Error('纯测试禁止命令：' + command); } };
   const container = document.createElement('div'); document.body.appendChild(container); root = createRoot(container as unknown as Element);
 });
@@ -38,7 +39,7 @@ afterAll(() => { for (const [name, descriptor] of globals) if (descriptor) Objec
 /** 来源使用实际正文匹配器计算摘要及UTF16跨度，不伪造组件导航状态。 */
 function search(text = sql, name = '对象'): DefinitionSearchOpen { return { connectionId: 'c', connectionVersion: 1, database: '库', name, kind: 'view', invalidated: false, result: definitionNavigationResult(text, { mode: 'contains', text: '标记', caseSensitive: true }) }; }
 /** 保持同一React根，覆盖原组件props切换及StrictMode重订阅。 */
-async function render(source = search(), strict = false): Promise<void> { await act(async () => { const element = <Viewer connectionId={source.connectionId} database={source.database} object={{ name: source.name, kind: source.kind }} search={source} onClose={closed}/>; root!.render(strict ? <StrictMode>{element}</StrictMode> : element); }); }
+async function render(source = search(), strict = false): Promise<void> { renderStart = editors.mounts.length; renderEpoch++; await act(async () => { const element = <Viewer connectionId={source.connectionId} database={source.database} object={{ name: source.name, kind: source.kind }} search={source} onClose={closed}/>; root!.render(strict ? <StrictMode>{element}</StrictMode> : element); }); }
 async function click(label: string): Promise<void> { const button = document.querySelectorAll('button').find(node => node.textContent === label); expect(button, label).toBeDefined(); await act(async () => { button!.dispatchEvent(new MemoryEvent('click')); }); }
 function deferred<T>() { let resolve!: (value: T) => void; const promise = new Promise<T>(yes => { resolve = yes; }); return { promise, resolve }; }
 
@@ -51,10 +52,20 @@ function editor(text = sql) {
   const model: any = Object.assign(Object.create(modelPrototype), { _buffer: buffer, _isDisposed: false, _associatedResource: Uri.parse('inmemory://definition/组件模型'), getVersionId: () => version, isDisposed: () => false, onDidChangeContent: (fn: () => void) => listen('content', fn), onWillDispose: (fn: () => void) => listen('dispose', fn) }); active = model;
   const decorations = { set: vi.fn(), clear: vi.fn() }, port = { getModel: () => active, createDecorationsCollection: vi.fn(() => decorations), setPosition: vi.fn(), revealPositionInCenter: vi.fn(), focus: vi.fn(), onDidChangeModel: (fn: () => void) => listen('model', fn), onDidDispose: (fn: () => void) => listen('editor', fn) };
   resources.push({ dispose: () => buffer.dispose() });
-  return { port, model, decorations, events, emit(key: keyof typeof events) { if (key === 'content') version++; if (key === 'model') active = Object.assign(Object.create(modelPrototype), model); for (const fn of [...events[key]]) fn(); } };
+  return { sourceText: text, port, model, decorations, events, emit(key: keyof typeof events) { if (key === 'content') version++; if (key === 'model') active = Object.assign(Object.create(modelPrototype), model); for (const fn of [...events[key]]) fn(); } };
 }
-async function settled() { await vi.waitFor(async () => { await act(async () => { await new Promise(resolve => setImmediate(resolve)); }); expect(editors.mounts.length).toBeGreaterThan(0); }); }
-async function ready(value = editor()) { await settled(); const mount = editors.mounts.at(-1)!; expect(mount.readOnly).toBe(true); await act(async () => mount.onReady(value.port)); return value; }
+/** 等待本次渲染和准确原文的真实编辑器端口；历史记录非空不能证明新定义或异步摘要已完成。 */
+async function settled(expectedText?: string) {
+  const start = renderStart, epoch = renderEpoch; let mount: typeof editors.mounts[number] | undefined;
+  await vi.waitFor(async () => {
+    await act(async () => { await new Promise(resolve => setImmediate(resolve)); });
+    expect(renderEpoch).toBe(epoch);
+    mount = editors.mounts.slice(start).filter(value => expectedText === undefined || value.value === expectedText).at(-1);
+    expect(mount).toBeDefined();
+  });
+  return mount!;
+}
+async function ready(value = editor()) { const mount = await settled(value.sourceText); expect(mount.readOnly).toBe(true); await act(async () => mount.onReady(value.port)); return value; }
 
 describe('定义正文真实React生命周期与Monaco端口（仅RAM）', () => {
   it.each([false, true])('正常读取、全部高亮、准确UTF16行列和前后循环，StrictMode=%s', async strict => {
@@ -72,6 +83,21 @@ describe('定义正文真实React生命周期与Monaco端口（仅RAM）', () =>
   it('换对象后旧编辑器onReady回调不得影响当前导航', async () => {
     await render(); await settled(); const old = editors.mounts.at(-1)!; read = async () => sql.replaceAll('对象', '第二对象'); await render(search(sql.replaceAll('对象', '第二对象'), '第二对象')); const value = await ready(editor(sql.replaceAll('对象', '第二对象'))); const stale = editor();
     await act(async () => old.onReady(stale.port)); expect(stale.port.createDecorationsCollection).not.toHaveBeenCalled(); await click(t.next); expect(value.port.setPosition).toHaveBeenCalledTimes(2);
+  });
+  it('旧编辑器已有渲染记录时，当前模型仍须等待本次定义读取完成', async () => {
+    await render(); await ready();
+    const pending = deferred<string>(), nextSql = sql.replaceAll('对象', '第二对象');
+    read = () => pending.promise;
+    await render(search(nextSql, '第二对象'));
+    const value = editor(nextSql); let completed = false;
+    const waiting = ready(value).then(() => { completed = true; });
+    try {
+      // 新读取明确被门阻塞；推进事件循环只用于完成已有微任务，不以固定毫秒数推断新定义就绪。
+      await new Promise<void>(resolve => setImmediate(resolve)); await new Promise<void>(resolve => setImmediate(resolve));
+      expect(completed).toBe(false); expect(value.port.createDecorationsCollection).not.toHaveBeenCalled();
+    } finally { await act(async () => pending.resolve(nextSql)); await waiting; }
+    await click(t.next); expect(value.port.setPosition).toHaveBeenCalledTimes(2);
+    expect(requests.filter(item => item.command === 'metadata.ddl')).toHaveLength(2);
   });
   it.each(['修订ABA', '删除恢复'])('%s同步撤销已有高亮，不靠下一次点击才清理', async mode => {
     await render(); const value = await ready(); await act(async () => { workspace.setState(mode === '修订ABA' ? { connectionVersions: { c: 2 } } : { connections: [] }); workspace.setState({ connections: [{ id: 'c' }] as any, connectionVersions: { c: 1 } }); });
