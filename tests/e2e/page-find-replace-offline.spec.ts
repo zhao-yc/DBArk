@@ -6,24 +6,46 @@ import { tmpdir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 import { tableGridZh as text } from '../../src/renderer/locales/tableGrid.zh-CN';
 
-let server: ViteDevServer, app: ElectronApplication, page: Page, directory: string, url: string;
+let server: ViteDevServer, app: ElectronApplication, page: Page, directory: string, url: string, cacheDirectory: string;
 const errors: string[] = [];
 const panel = () => page.getByRole('region', { name: text.find, exact: true });
 const preview = () => page.getByRole('dialog', { name: text.replaceTitle, exact: true });
 test.beforeAll(async () => {
   // 固定源码夹具不依赖热更新；隔离目录监听，避免Windows根目录监听压力阻塞启动。
-  server = await createServer({ configFile: false, root: process.cwd(), plugins: [react()], server: { host: '127.0.0.1', port: 0, watch: null }, logLevel: 'error' });
+  // 每次启动独占优化缓存，避免不同离线夹具和源码/安装阶段互相替换依赖产物。
+  cacheDirectory = await mkdtemp(join(tmpdir(), 'dbark-find-vite-'));
+  server = await createServer({ configFile: false, root: process.cwd(), cacheDir: cacheDirectory, plugins: [react()], server: { host: '127.0.0.1', port: 0, watch: null }, logLevel: 'error' });
   await server.listen(); const address = server.httpServer!.address();
   if (!address || typeof address === 'string') throw new Error('未取得离线测试端口');
   url = `http://127.0.0.1:${address.port}/tests/fixtures/page-find-replace/index.html`;
 });
-test.afterAll(async () => { await server?.close(); });
-test.beforeEach(async () => {
+test.afterAll(async () => {
+  await server?.close();
+  if (cacheDirectory) {
+    if (dirname(resolve(cacheDirectory)) !== resolve(tmpdir()) || !basename(cacheDirectory).startsWith('dbark-find-vite-')) throw new Error('拒绝清理夹具缓存目录之外的路径');
+    await rm(cacheDirectory, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+  }
+});
+test.beforeEach(async ({}, result) => {
   errors.length = 0; directory = await mkdtemp(join(tmpdir(), 'dbark-find-e2e-'));
   const env: Record<string, string> = Object.fromEntries(Object.entries({ ...process.env, DBARK_FIND_FIXTURE_URL: url, DBARK_FIND_FIXTURE_DATA: directory }).filter((entry): entry is [string, string] => entry[1] !== undefined)); delete env.ELECTRON_RUN_AS_NODE;
   app = await electron.launch({ args: ['tests/fixtures/page-find-replace/electron.cjs'], env, chromiumSandbox: true });
-  page = await app.firstWindow(); page.on('pageerror', reason => errors.push(reason.message));
-  await expect(page.getByRole('button', { name: text.find, exact: true })).toBeEnabled({ timeout: 30000 });
+  const startupEvents: { kind: string; message: string }[] = [];
+  const observed = new Set<Page>();
+  /** 在首个窗口就绪前旁观真实网络、控制台及渲染异常；不重载页面或重试失败用例。 */
+  const observe = (candidate: Page) => {
+    if (observed.has(candidate)) return; observed.add(candidate);
+    candidate.on('pageerror', reason => { errors.push(reason.message); startupEvents.push({ kind: 'pageerror', message: reason.message }); });
+    candidate.on('requestfailed', request => startupEvents.push({ kind: 'requestfailed', message: request.url() + ' ' + (request.failure()?.errorText ?? '') }));
+    candidate.on('console', message => { if (['error', 'warning'].includes(message.type())) startupEvents.push({ kind: message.type(), message: message.text() }); });
+  };
+  app.context().on('page', observe); app.context().pages().forEach(observe);
+  page = await app.firstWindow(); observe(page);
+  try { await expect(page.getByRole('button', { name: text.find, exact: true })).toBeEnabled({ timeout: 30000 }); }
+  catch (reason) {
+    await result.attach('夹具启动记录', { body: JSON.stringify({ url: page.url(), events: startupEvents }, null, 2), contentType: 'application/json' });
+    throw reason;
+  }
 });
 test.afterEach(async () => {
   await app?.close();
