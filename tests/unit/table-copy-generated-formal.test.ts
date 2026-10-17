@@ -1,8 +1,11 @@
 import { readFileSync } from 'node:fs';
+import { EventEmitter } from 'node:events';
 import { createContext, runInContext } from 'node:vm';
 import ts from 'typescript';
 import { describe, expect, it, vi } from 'vitest';
 import { tableCopyStructureTarget } from '../helpers/tableCopyStructureTarget';
+import { bindTableCopyGeneratedTarget } from '../helpers/tableCopyGeneratedTarget';
+import { closeMysqlConnection } from '../../src/engine/connection';
 
 const gates = [['0', '0'], ['0', '1'], ['1', '0'], ['1', '1']] as const;
 const uuid = '11111111-2222-3333-4444-555555555555';
@@ -31,25 +34,24 @@ describe('普通生成列复制正式入口默认关闭', () => {
   });
 });
 
-/** 运行真实register及原专用cleanup，仅用合成观察连接；不加载真实driver、fixture或认证helper。 */
+/** 运行真实register和专属预检，仅用合成观察连接；不加载真实driver、fixture或认证helper。 */
 function formal(factsChange: Record<string, unknown> = {}, queryUnknown = false) {
   const calls: string[] = [], cases: { name: string; body: Function }[] = [], info = {}, resource = { closed: false, application: {}, page: { evaluate: vi.fn(async () => []) } };
   let retained = false;
   const own = (value: unknown) => { expect(value).toBe(info); if (retained) throw Error('归属未知已保留'); return resource; };
   const retain = () => { calls.push('retain'); retained = true; };
-  const observer = { query: async (sql: string) => { calls.push(sql); if (queryUnknown) throw Error('合成读取未知'); return [[{ version: '8.4.11', os: 'Linux', names: 0, uuid, ...factsChange }]]; }, end: async () => { calls.push('end'); } };
-  const old = readFileSync(new URL('../e2e/table-copy-structure-live.ts', import.meta.url), 'utf8'), tree = ts.createSourceFile('old.ts', old, ts.ScriptTarget.Latest, true);
-  const functions = tree.statements.filter(node => ts.isFunctionDeclaration(node) && ['assertTableCopyStructureTasksTerminal', 'cleanupTableCopyStructureCase'].includes(node.name?.text ?? '')).map(node => node.getText(tree)).join('\n');
-  const cleanup = { exports: {} as Record<string, Function>, expect, ownedDesktopResources: own, retainOwnedDesktopResources: retain, confirmOwnedDesktopExit: async () => { calls.push('exit'); resource.closed = true; } };
-  runInContext(compile(functions), createContext(cleanup));
+  const stream = Object.assign(new EventEmitter(), { closed: false, end(callback: () => void) { queueMicrotask(() => { callback(); stream.closed = true; calls.push('transport-close'); stream.emit('close'); }); }, destroy() { stream.closed = true; stream.emit('close'); } });
+  const native = Object.assign(new EventEmitter(), { stream, end(callback: () => void) { calls.push('quit'); queueMicrotask(callback); }, destroy() { stream.destroy(); } });
+  const observer = { connection: native, query: async (sql: string) => { calls.push(sql); if (queryUnknown) throw Error('合成读取未知'); return [[{ version: '8.4.11', os: 'Linux', names: 0, uuid, ...factsChange }]]; } };
   const test = Object.assign((name: string, body: Function) => { cases.push({ name, body }); }, { use: vi.fn(), setTimeout: vi.fn(), describe: { configure: vi.fn() } });
   const context = createContext({ exports: {} as Record<string, Function>, process: { env: environment() }, require(name: string) {
-    if (name === './table-copy-structure-live') return cleanup.exports;
-    if (name === './desktop-fixture') return { test, expect, ownedDesktopResources: own, retainOwnedDesktopResources: retain };
+    if (name === './desktop-fixture') return { test, expect, ownedDesktopResources: own, retainOwnedDesktopResources: retain, confirmOwnedDesktopExit: async () => { calls.push('exit'); resource.closed = true; } };
     if (name === 'node:crypto') return { randomUUID: () => uuid };
     if (name === 'mysql2/promise') return { __esModule: true, default: { createConnection: async () => { calls.push('open'); return observer; } } };
     if (name === './live-helpers') return { environment: environment(), connectAndCreate: async () => { calls.push('create-database'); throw Error('测试不允许隔离DDL'); } };
     if (name === '../helpers/tableCopyStructureTarget') return { tableCopyStructureTarget };
+    if (name === '../helpers/tableCopyGeneratedTarget') return { bindTableCopyGeneratedTarget };
+    if (name === '../../src/engine/connection') return { closeMysqlConnection };
     if (name.endsWith('/tableCopyStructure.zh-CN')) return { tableCopyStructureZh: {} };
     throw Error('拒绝实际导入：' + name);
   } });
@@ -61,9 +63,9 @@ describe('生成列正式定义实际前置（仅RAM观察端口）', () => {
     const f = formal(); expect(f.cases.map(value => value.name)).toEqual([expect.stringContaining('VIRTUAL'), expect.stringContaining('STORED')]); expect(f.calls).toEqual([]);
   });
   it.each([{ uuid: 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee' }, { version: '8.0.46' }, { os: 'Win64' }, { names: 1 }])('实际身份%s不符时在任何隔离DDL前拒绝', async change => {
-    const f = formal(change); await expect(f.run()).rejects.toThrow(); expect(f.calls).not.toContain('create-database'); expect(f.calls.some(value => value.startsWith('DROP'))).toBe(false); expect(f.calls).toContain('end');
+    const f = formal(change); await expect(f.run()).rejects.toThrow(); expect(f.calls).not.toContain('create-database'); expect(f.calls.some(value => value.startsWith('DROP'))).toBe(false); expect(f.calls).toContain('transport-close');
   });
   it('观察未知保留，不借退出或DROP继续', async () => {
-    const f = formal({}, true); await expect(f.run()).rejects.toThrow(); expect(f.calls).toContain('retain'); expect(f.calls).not.toContain('create-database'); expect(f.calls).not.toContain('exit'); expect(f.calls).not.toContain('end');
+    const f = formal({}, true); await expect(f.run()).rejects.toThrow(); expect(f.calls).toContain('retain'); expect(f.calls).not.toContain('create-database'); expect(f.calls).not.toContain('exit'); expect(f.calls).not.toContain('quit');
   });
 });

@@ -42,6 +42,16 @@ node D:/svn/DBArk/node_modules/typescript/bin/tsc --noEmit
 
 新增 `table-copy-generated.spec.ts`，list优先短路，只有 `DBARK_INTEGRATION_ENABLED=1` 与 `DBARK_TABLE_COPY_GENERATED_UI=1` 且准确13384/plain原始凭据通过，才加载正式定义；发现回填文件时拒绝加载。定义分别注册VIRTUAL与STORED两例，实际版本/OS/名称模式及Root UUID在任何隔离建库前核对，未知停链；同库合成源行只用于验证原数据未变化，目标仍必须空。新确认与原表达式展示均纳入界面步骤。
 
-专用退出/清理直接复用原 `cleanupTableCopyStructureCase`，未改共享fixture、live-helpers、quitDesktop、原复制正式入口或既有超时/重试。真正双门开启CLI `--list --workers=1 --retries=0 --trace=off --reporter=json` 只收集默认关闭身份，errors=0、results为空，无实际例执行。
+原 `8c1965c` 专用退出/清理直接复用原 `cleanupTableCopyStructureCase`。独审发现正式入口的owner只检查窗口、未持续固定本轮配置；本次追加用途专属身份及收尾壳，原共享清理、fixture、live-helpers、quitDesktop、复制正式入口及既有超时/重试均不修改。真正双门开启CLI `--list --workers=1 --retries=0 --trace=off --reporter=json` 只收集默认关闭身份，errors=0、results为空，无实际例执行。
+
+## 独审GEN-UI-R1追加修复
+
+独审handoff SHA256为 `0bafea94e07ac610fde5142b73c39fb466da8824f424cd7ea5280d0df1fa7e7a`。四种漂移（helper凭据、helper目标、raw/helper一致变化、表单等待后凭据）在保留原生产正式入口时均到达RAM建库提交边界，复现为四红；修复后同一组全部在提交前拒绝。记录分别为 `.cache/copy-generated/owner-parent-red.json` 和 `owner-final-results.json`。
+
+注册时固定raw自有host/port/TLS/user/password/Root UUID，原始配置与helper必须显式一致，空密码仍合法。每个关键等待前后重新核对实时raw和helper的值与自有属性；发现一次变化后永久失效，即便恢复也不重新绑定。owner同时固定本例TestInfo、page和application，传入原 `connectAndCreate` 内部等待，表单不会因全局helper变化而继续使用漂移凭据建库。
+
+任何DDL之前，先用无默认库观察连接核准确8.4.11、Linux、lower_case_table_names=0及固定Root UUID，并通过产品严格QUIT等待同一原生流close。Promise end、缺原生连接/流和QUIT回调均不能替代close。严格预检结束后再开本例观察连接并重新核四项事实及隔离名称缺席，再走真实表单。漂移、观察未知或UI失败立即保留，不自动退出或清库；清理只在身份有效、任务终态及所属退出均已确认后推进，DROP未知不重试，原失败保留为AggregateError首项及cause。
+
+新增纯测执行真实注册函数、原表单函数及用途专属清理，覆盖内部等待、DDL前漂移、原生close延迟/失败、原始自有属性、UUID/版本/OS/模式拒绝、任务未终态、退出未知、DROP未知和保留失败。未变更产品生成列复制逻辑、共享fixture/helper/quit或原120秒预算与0重试；GUI、DB、SSH/200、CI、安装、clipboard和构建仍均为0。真实生成列UI验收仍须Root独审通过后另行安排。
 
 本轮GUI、DB、SSH/200、CI、安装、构建、clipboard及部署均为0，不读私料。函数/字符串/时间等复杂表达式、生成列链、其它版本和更多EXTRA组合仍缺项，已明确只读。Root须独审并在新的准确8.4.11隔离库实际核验，不能把本片开发/文档或父红新绿当作真实验收；不自动合并或修改R93候选。
