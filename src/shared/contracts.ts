@@ -32,6 +32,7 @@ import type { WorkbenchTarget, WorkbenchSnapshot } from './workbench';
 import type { SchemaCompareInput, SchemaCompareResult, SchemaComparePreviewInput, SchemaComparePreview } from './schemaCompare';
 import type { QuerySourceBinding, QuerySaveContent, QuerySaveResult } from './queryBinding';
 import type { TableCopyPageSources, TableCopySourceReadInput, TableCopySourceReadResult, TableCopySourceReleaseInput } from './tableCopySource';
+import type { CopyInsertSqlInput } from './copyInsertSql';
 export type CellValue = string | number | boolean | null | { type: 'binary'; base64: string };
 export type DataRow = Record<string, CellValue>;
 export type ObjectKind = 'table' | 'view' | 'procedure' | 'function' | 'trigger' | 'event';
@@ -140,6 +141,8 @@ export interface CommandMap {
   'table.page': { input: { connectionId: string; database: string; table: string; page: number; pageSize: number; filters: FilterRule[]; filterMode?: FilterMode; sort: SortRule[]; copySource?: boolean; taskId?: string }; output: TablePage };
   'table.copySourceRead': { input: TableCopySourceReadInput; output: TableCopySourceReadResult };
   'table.copySourceRelease': { input: TableCopySourceReleaseInput; output: void };
+  /** 只生成并复制受限的已加载表行 INSERT，不访问数据库。 */
+  'table.copyInsertSql': { input: CopyInsertSqlInput; output: void };
   /** 目标仅由服务器来源表的外键解析；值元组保留精确字符串及二进制，不以普通文本筛选代替关联。 */
   'table.referencePage': { input: { connectionId: string; database: string; table: string; foreignKeyName: string; matchValues?: CellValue[]; page: number; pageSize: number; filters: FilterRule[]; filterMode?: FilterMode; sort: SortRule[]; taskId: string }; output: { source: TableInfo; foreignKey: ForeignKeyInfo; target: TableInfo; page: TablePage } };
   'table.preview': { input: { connectionId: string; database: string; table: string; changes: RowChange[] }; output: SqlPreview & { previewId?: string; previewExpiresAt?: string } };

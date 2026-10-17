@@ -1,5 +1,6 @@
 import { tableCreateMessages } from '../shared/tableCreate';
 import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, safeStorage } from 'electron';
+import { copyInsertSql } from './copyInsertSql';
 import { join, basename } from 'node:path';
 import { mkdirSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
@@ -158,6 +159,8 @@ async function dispatch(command: Command, input: any): Promise<unknown> {
   if (command.startsWith('schema.compare') && shuttingDown) throw new Error('客户端正在退出，不能开始结构比较');
   if (command === 'schema.compare') { connectionConfig.assertAvailable(input.source.connectionId); connectionConfig.assertAvailable(input.target.connectionId); }
   switch (command) {
+    // 无 await、无引擎调用：全部校验和生成通过后才一次写入系统剪贴板。
+    case 'table.copyInsertSql': return copyInsertSql(input, sql => clipboard.writeText(sql));
     case 'workbench.get': return store.workbench();
     // 主进程只写入由严格对象身份生成的链接，不开放任意剪贴板读写权限。
     case 'workbench.copyUri': return clipboard.writeText(objectUri(input));
