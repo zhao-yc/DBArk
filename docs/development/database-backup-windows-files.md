@@ -83,3 +83,13 @@ GetSecurityInfo(SE_FILE_OBJECT, OWNER|DACL) 直接按原句柄取得完整安全
 - [MySQL8.4.11默认配置fopen路径](https://github.com/mysql/mysql-server/blob/mysql-8.4.11/mysys/my_default.cc#L879)、[CRT fopen调用](https://github.com/mysql/mysql-server/blob/mysql-8.4.11/mysys/my_winfile.cc#L616)。
 
 本片13项 RAM/协议与固定资源摘要专项、TypeScript 类型检查不包括 C# 编译或 OS 验收。Root 仍须验证：准确 Windows x64/NTFS/PowerShell 环境编译；原句柄、FileID、ACL全量读回；合成 client.cnf 短写/同步/关闭/删除；准确 MySQL两exe配合合成配置及version开关的无连接读取；只读、非空、换绑、重解析、close失败和删除等待等反例；打包资源路径/hash和最后全部helper/流回收。未运行真实 helper、认证文件、数据库、GUI、clipboard、full/build，没有创建长期密钥或真实凭据备份。
+
+## 06a7c26 独审后的健康门修复
+
+合法回执只能证明该回执本身，不能撤销随后同一数据块中的协议错误。RPC 返回、原 facade、缓存 close、Root 清理许可及 shutdown 返回现在复核永久健康状态；独立失效 Promise 使“响应先 resolve、write 回调仍挂起”时也能立即拒绝上层调用，原 write、frame 和未完成响应继续留在原实例，不能因拒绝或取消而销账。
+
+SecretFile 端口增加可选 `checkHealthy()`，与取消检查分离。Windows bridge 提供此门；SecretFile 在既有的所有归属检查中同步复核，失效后永久标记 `portUnknown`，撤销 `ready`/`closed`，拒绝私有路径，清理只返回 unknown，曾成功的清理缓存也不能继续发出 confirmed。未提供该门的既有端口保留原行为。快照仍只含布尔/计数，历史分配、删除、close 和 pending 事实保留。
+
+单个 RPC 的完整响应后再出现任何字节，即使不足一个帧头也立即判 unknown。原 stdout 的残头、残体、意外 EOF/close，以及未收到正常 shutdown 回执时的原进程退出或原流终止均停链。正常 shutdown 回执必须实际报告零 guard/work；在解析该回执时登记正常终止许可，以允许 EOF/exit 早于调用方 await 返回。该许可不能代替原 child 和三流 close；协议已未知时，迟到 close 仍记物理事实，但不能恢复 confirmed。
+
+新增 `database-backup-windows-health.test.ts` 前部保留员工5原五个同字节用例（原夹具 SHA-256 `5b486f6794d221fd7facb512cfc53b264f12f718e608743be066a38a7ccb458c`），随后增加回执、EOF、迟到事件和缓存等反例。该新专项共31项 RAM/协议检查，包含缓存清理 Promise 已取出、尚未 await 消费时失效的窗口；原清理 Promise 始终保留且不重新执行删除，健康端口仅另加异步结果交付检查。本次未重跑原13项、full/build，也未编译或运行 C#/PowerShell/实际 OS。固定 C# 原字节与内置摘要保持不变；真实 Windows 和打包验收边界不变。
