@@ -21,13 +21,14 @@ let encodingCatalog: unknown[], tableCollation: string;
 let mysql57Facts: Record<string, unknown>, mysql57Engines: unknown, mysql57Charsets: unknown;
 let ordinaryIndex: boolean;
 let engine: Engine, events: TaskEvent[], sent: string[], connections: ManagedConnection[], sequence: number, uuid: string, mode: string, occupied: boolean, created: boolean, closeFails: boolean, badVerify: boolean, dialect: 'mysql' | 'mariadb', version: string;
+let injectedUnknownClose = false;
 let hold: RegExp | undefined, held: { complete(error?: Error): void } | undefined, fail: RegExp | undefined, holdClose: boolean, releaseClose: (() => void) | undefined;
 /** 仅替换驱动，真实Engine、任务锁、缓存、SQL与取消/关闭代码均执行产品实现。 */
 function managed(signal?: AbortSignal): ManagedConnection {
   const connection = new EventEmitter(), id = ++sequence;
   const stream = Object.assign(new EventEmitter(), { closed: false, end(callback: () => void) { queueMicrotask(() => { callback(); stream.closed = true; stream.emit('close'); }); } });
   Object.assign(connection, { stream, end(callback: () => void) { queueMicrotask(callback); } });
-  const value = { connection, signal, profile, status: { version, dialect, connectionId: id }, broken: false, close: vi.fn(async () => { if (holdClose && created) await new Promise<void>(resolve => { releaseClose = resolve; }); if (closeFails) throw Error('合成连接关闭未知'); await closeMysqlConnection(connection as any, true, false, 500); }) } as unknown as ManagedConnection;
+  const value = { connection, signal, profile, status: { version, dialect, connectionId: id }, broken: false, close: vi.fn(async () => { if (holdClose && created) await new Promise<void>(resolve => { releaseClose = resolve; }); if (closeFails) { injectedUnknownClose = true; throw Error('合成连接关闭未知'); } await closeMysqlConnection(connection as any, true, false, 500); }) } as unknown as ManagedConnection;
   Object.assign(connection, { threadId: id, destroy: () => connection.emit('end'), query(sql: string, callback: (error: Error | null, rows?: unknown, fields?: unknown[]) => void) {
     sent.push(sql);
     const complete = (error?: Error) => queueMicrotask(() => {
@@ -76,6 +77,7 @@ function compositeForeignKey(): TableCreateDesign {
   return draft;
 }
 beforeEach(async () => {
+  injectedUnknownClose = false;
   encodingCatalog = [{ charset: 'utf8mb4', collation: 'utf8mb4_bin', compiled: 'Yes' }, { charset: 'utf8mb4', collation: 'utf8mb4_0900_ai_ci', compiled: 'Yes' }, { charset: 'latin1', collation: 'latin1_bin', compiled: 'Yes' }]; tableCollation = 'utf8mb4_bin';
   mysql57Facts = {}; mysql57Engines = [{ engine: 'InnoDB', support: 'DEFAULT' }]; mysql57Charsets = [{ charset: 'latin1' }, { charset: 'utf8mb4' }]; ordinaryIndex = false;
   events = []; sent = []; connections = []; sequence = 0; uuid = 'server-1'; mode = ''; occupied = created = closeFails = badVerify = holdClose = false; hold = held = fail = releaseClose = undefined; showDefinition = catalogType = catalogDefault = laterDefinition = deniedForeign = undefined; indexChanges = {}; foreignRules = []; foreignParts = []; foreignIndex = laterShowFails = false; showReads = 0; dialect = 'mysql'; version = '8.4.11';
@@ -276,7 +278,12 @@ describe('新建表外键实际定义后核（真实Engine，仅RAM驱动）', (
     expect(await apply(await preview(await get(), draft))).toMatchObject({ ddlCompleted: true, definitionVerified: false });
   });
 });
-afterEach(async () => { closeFails = holdClose = false; releaseClose?.(); hold = undefined; held?.complete(Error('纯测试收尾')); await engine.closeAll(); vi.useRealTimers(); });
+afterEach(async () => {
+  closeFails = holdClose = false; releaseClose?.(); hold = undefined; held?.complete(Error('纯测试收尾'));
+  // 注入关闭未知的RAM端口没有物理资源facade，不能以恢复开关代替释放证明。
+  if (injectedUnknownClose) await expect(engine.closeAll()).rejects.toThrow('资源未确认释放'); else await engine.closeAll();
+  vi.useRealTimers();
+});
 describe('新建表真实Engine仅RAM驱动', () => {
   it.each(['前缀', '方法', '方向', '不可见', '注释'])('SHOW索引%s不同，即使目录投影同名同列也不报完整核验', async kind => {
     const draft = design(); draft.columns[1].type = 'varchar(80)'; catalogType = 'varchar(80)';

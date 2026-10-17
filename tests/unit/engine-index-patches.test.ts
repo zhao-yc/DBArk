@@ -15,6 +15,7 @@ import { Engine } from '../../src/engine';
 const profile: ConnectionProfile = { id: 'index-unit', name: '索引单元', group: '', color: '#123456', dialect: 'mysql', host: 'invalid', port: 3306, user: 'test' };
 const original = 'CREATE TABLE `t` (`id` int NOT NULL,`a` int DEFAULT NULL,`b` int DEFAULT NULL,PRIMARY KEY (`id`),KEY `ia` (`a`)) ENGINE=InnoDB ROW_FORMAT=DYNAMIC';
 let engine: Engine, events: TaskEvent[], source: string, afterSql: string, version: string, failSql: RegExp | undefined, holdSql: RegExp | undefined, closeFails: boolean;
+let injectedUnknownClose = false;
 let connections: ManagedConnection[], sent: { id: number; sql: string }[], nextId: number, headers: Record<string, unknown>[], parts: Record<string, unknown>[];
 let held: { connection: ManagedConnection; complete(error?: Error): void } | undefined, warnings: number, generatedPrimaryKeys: number, pageSize: number, expressionConflict: boolean;
 let catalogSrid: number, sridHeadersAvailable: boolean;
@@ -22,7 +23,7 @@ let fixedColumnMetadata: Map<string, IndexColumnMetadata>;
 /** 只替换数据库驱动；实际 Engine、短会话状态机、目录交叉读取、计划与后核验均执行生产代码。 */
 function managed(signal?: AbortSignal): ManagedConnection {
   const connection = new EventEmitter(), threadId = ++nextId; let mode = '', quote = 0, charset = 'utf8mb4', collation = 'utf8mb4_general_ci', fk = 0, unique = 0, gipk = 0;
-  const value = { connection, profile, signal, broken: false, status: { version, dialect: 'mysql', connectionId: threadId }, close: vi.fn(async () => { if (closeFails) throw new Error('真实关闭失败含私有文本'); }) } as unknown as ManagedConnection;
+  const value = { connection, profile, signal, broken: false, status: { version, dialect: 'mysql', connectionId: threadId }, close: vi.fn(async () => { if (closeFails) { injectedUnknownClose = true; throw new Error('真实关闭失败含私有文本'); } }) } as unknown as ManagedConnection;
   Object.assign(connection, { threadId, destroy: () => connection.emit('end'), query(sql: string, callback: (error: Error | null, rows?: unknown, fields?: unknown[]) => void) {
     sent.push({ id: threadId, sql });
     const complete = (error?: Error): void => queueMicrotask(() => {
@@ -70,6 +71,7 @@ async function preview(snapshot: TableIndexGetOutput, patches?: unknown): Promis
 }
 async function apply(value: TableIndexPreviewOutput, taskId = 'apply', acknowledgements = value.requiredAcknowledgements) { return engine.handle('schema.indexes.apply', { previewToken: value.previewToken, acknowledgements, taskId, connectionRevision: 1 }); }
 beforeEach(async () => {
+  injectedUnknownClose = false;
   source = original; afterSql = original.replace('`ia`', '`renamed`'); version = '8.4.11'; failSql = undefined; holdSql = undefined; closeFails = false;
   connections = []; sent = []; events = []; nextId = 0; headers = []; parts = []; held = undefined; warnings = 0; generatedPrimaryKeys = 0; pageSize = 16384; expressionConflict = false;
   catalogSrid = 0; sridHeadersAvailable = true; fixedColumnMetadata = new Map();
@@ -77,7 +79,12 @@ beforeEach(async () => {
   mocks.execute.mockReset().mockImplementation(async (_managed, sql) => { if (String(sql).startsWith('KILL CONNECTION')) held?.complete(Object.assign(new Error('命令取消终态'), { errno: 1317 })); return { rows: [] }; });
   engine = new Engine(event => events.push(event)); await engine.handle('connections.open', { id: profile.id, profile });
 });
-afterEach(async () => { closeFails = false; holdSql = undefined; held?.complete(new Error('单元收尾')); await engine.closeAll(); vi.restoreAllMocks(); });
+afterEach(async () => {
+  closeFails = false; holdSql = undefined; held?.complete(new Error('单元收尾'));
+  // 无资源证明的旧RAM端口在注入关闭未知后，退出也必须承认仍未释放。
+  if (injectedUnknownClose) await expect(engine.closeAll()).rejects.toThrow('资源未确认释放'); else await engine.closeAll();
+  vi.restoreAllMocks();
+});
 
 describe.each(['c', 'b'] as const)('已有表%s定长前缀的真实Engine纯驱动链路', name => {
   /** 这里只增加本文件私有的合成目录回包，不修改共享fixture或真实入口。 */

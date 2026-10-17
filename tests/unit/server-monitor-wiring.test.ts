@@ -40,7 +40,7 @@ describe('服务器监控正式命令接线', () => {
     const result = await value.handle('serverMonitor.read', { connectionId: profile.id, taskId: 'read' });
     expect(result.summary.value).toEqual(summary); expect(result.globalStatus.value[0].value).toBe('18446744073709551615');
     expect(dedicated.connection.query).toHaveBeenCalledTimes(3); expect(user.connection.query).not.toHaveBeenCalled(); expect(user.close).not.toHaveBeenCalled();
-    expect(ports.connect).toHaveBeenCalledWith(profile, undefined, expect.any(AbortSignal)); expect(dedicated.close).toHaveBeenCalledWith({ strict: true }); expect(events.at(-1)).toMatchObject({ taskId: 'read', status: 'completed' });
+    expect(ports.connect).toHaveBeenCalledWith(profile, undefined, expect.any(AbortSignal), expect.any(Function)); expect(dedicated.close).toHaveBeenCalledWith({ strict: true }); expect(events.at(-1)).toMatchObject({ taskId: 'read', status: 'completed' });
   });
   it('快照必须等同一短连接严格收尾后才落定', async () => {
     const { value } = engine(), dedicated = managed(); let release!: () => void;
@@ -50,7 +50,7 @@ describe('服务器监控正式命令接线', () => {
   });
   it('严格关闭失败拒绝快照，完成事件不能假报成功', async () => {
     const { value, events } = engine(), dedicated = managed(); vi.mocked(dedicated.close).mockRejectedValueOnce(Error('RAM严格关闭失败')); ports.connect.mockResolvedValueOnce(dedicated);
-    await expect(value.handle('serverMonitor.read', { connectionId: profile.id, taskId: 'read' })).rejects.toThrow('RAM严格关闭失败'); expect(events.at(-1)).toMatchObject({ status: 'failed', message: '读取服务器监控失败' });
+    await expect(value.handle('serverMonitor.read', { connectionId: profile.id, taskId: 'read' })).rejects.toThrow('独立任务连接关闭失败'); expect(events.at(-1)).toMatchObject({ status: 'failed', message: '读取服务器监控失败' });
   });
   it('建连阶段取消只中止同一读取，不再发固定SQL或借用用户会话', async () => {
     const { value } = engine(); let signal!: AbortSignal;

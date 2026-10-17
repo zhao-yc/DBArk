@@ -1,6 +1,7 @@
 import { TableCopyDataTasks } from './tableCopyDataTasks';
 import { TableCreateTasks } from './tableCreateTasks';
 import { readServerMonitor } from './serverMonitor';
+import { IndependentTaskResources, type IndependentTaskResourceLease } from './independentTaskResources';
 import { CsvExportFieldCatalogs, type CsvExportFieldSnapshot } from './csvExportFields';
 import { TableCopyStructureTasks } from './tableCopyStructureTasks';
 import { applyTableTransaction, emptyTableApplyEvidence } from './tableApplyTransaction';
@@ -68,7 +69,7 @@ interface RunningTask {
   queryExport?: QueryExportProgress; fileCommitStarted?: boolean;
 }
 interface ResultBudget { remainingRows: number; remainingBytes: number; remainingResults: number; }
-interface IndependentTask { connectionId: string; controller: AbortController; done: Promise<void>; managed?: ManagedConnection; cancelPending?: Promise<void>; stopPending?:Promise<void>; cancelError?: Error; cancelRequested?: boolean; actionSettled?: boolean; structureTask?: boolean; generation?: number; commandTerminal?: Promise<void>; commandInFlight?:boolean; }
+interface IndependentTask { connectionId: string; controller: AbortController; done: Promise<void>; managed?: ManagedConnection; resources?: IndependentTaskResourceLease; resourceCloseFailed?: boolean; cancelPending?: Promise<void>; stopPending?:Promise<void>; cancelError?: Error; cancelRequested?: boolean; actionSettled?: boolean; structureTask?: boolean; generation?: number; commandTerminal?: Promise<void>; commandInFlight?:boolean; }
 type Input = Record<string, any>;
 
 /** 独立数据库进程的入口；网络连接与文件流不会进入 Electron 渲染进程。 */
@@ -80,6 +81,8 @@ export class Engine {
   private readonly tasks = new Map<string, RunningTask>();
   private closing = false;
   private readonly independentTasks = new Map<string, IndependentTask>();
+  private readonly independentResources = new IndependentTaskResources();
+  private readonly disconnecting = new Set<string>();
   private readonly connectionUses = new Map<string, number>();
   private readonly pendingUses = new Set<Promise<void>>();
   private readonly resultFiles: ResultFileTasks;
@@ -133,7 +136,7 @@ export class Engine {
         if (!next || next.id !== input.id) throw new Error('主进程未提供有效连接配置');
         const previous = this.profiles.get(input.id);
         const changed = input.transportChanged || (previous && connectionTransportChanged(previous, next, { preserveMissingSecrets: false }));
-        if (changed && (this.connectionUses.has(input.id) || [...this.sessions.values()].some(session => session.connectionId === input.id) || [...this.tasks.values()].some(task => task.managed.profile.id === input.id))) throw new Error('该连接仍有打开的会话或正在执行的操作，请先关闭相关标签页并等待任务完成，再修改地址或认证配置；现有任务未被取消');
+        if (changed && (this.connectionUses.has(input.id) || this.independentResources.retained(input.id) || [...this.sessions.values()].some(session => session.connectionId === input.id) || [...this.tasks.values()].some(task => task.managed.profile.id === input.id))) throw new Error('该连接仍有打开的会话或正在执行的操作，或存在待确认的连接资源；请先关闭相关标签并显式断开连接，再修改地址或认证配置，现有任务未被取消');
         if (changed || !previous) this.profiles.delete(input.id);
         await this.schemaComparisons.close(input.id);
         this.structureCache.release(input.id);
@@ -163,6 +166,9 @@ export class Engine {
       case 'schema.comparePreview': return this.schemaComparisons.preview({ snapshotId: input.snapshotId, selections: input.selections }, input.connectionRevision);
       case 'schema.compareRelease': return this.schemaComparisons.release(input.snapshotId);
       case 'connections.close': {
+        if (this.disconnecting.has(input.id)) throw Error('该连接正在断开，请等待本次资源回收完成');
+        this.disconnecting.add(input.id);
+        try {
         const comparisonCleanup = this.schemaComparisons.close(input.id);
         this.dataSearchRecords.releaseConnection(input.id);
         this.tableCopySources.releaseConnection(input.id);
@@ -175,12 +181,15 @@ export class Engine {
         const cancellations = await Promise.allSettled([comparisonCleanup, ...active.map(task => this.cancelTask(task.id)), ...independent.map(([id]) => this.cancelTask(id))]);
         await Promise.all([...connecting.map(task => task.done), ...active.map(task => task.done), ...independent.map(([, task]) => task.done)]);
         for (const [id, session] of this.sessions) if (session.connectionId === input.id) { await session.managed.close(); this.sessions.delete(id); }
+        const recovered = await this.independentResources.recover(input.id);
+        if (recovered.remaining) throw Error('独立任务连接资源尚未确认释放，请核对服务器及隧道状态后再次显式断开；原操作未重放');
         this.profiles.delete(input.id);
         this.dataSearchRecords.releaseConnection(input.id);
         this.tableCopySources.releaseConnection(input.id);
         this.structureCache.release(input.id);
         const failed = cancellations.find(result => result.status === 'rejected'); if (failed?.status === 'rejected') throw failed.reason;
         return;
+        } finally { this.disconnecting.delete(input.id); }
       }
       case 'sessions.open': return this.withConnectionUse(input.connectionId, async () => {
         const managed = await connect(this.profile(input.connectionId), input.database);
@@ -418,7 +427,7 @@ export class Engine {
   }
 
   /** 所有任务通道共用编号占用检查，避免集成后取消误命中另一种活动任务。 */
-  private taskIdInUse(id: string): boolean { return this.tasks.has(id) || this.independentTasks.has(id) || this.resultFiles.has(id) || this.excelReads.has(id) || this.excelConnecting.has(id) || this.schemaComparisons.has(id); }
+  private taskIdInUse(id: string): boolean { return this.tasks.has(id) || this.independentTasks.has(id) || this.independentResources.owns(id) || this.resultFiles.has(id) || this.excelReads.has(id) || this.excelConnecting.has(id) || this.schemaComparisons.has(id); }
 
   /** 关闭前取消任务并释放固定会话，未提交事务由服务器在断开时回滚。 */
   async closeAll(): Promise<void> {
@@ -437,6 +446,8 @@ export class Engine {
     this.dataSearchRecords.close();
     this.tableCopySources.close();
     await Promise.all([...this.sessions.values()].map(session => session.managed.close()));
+    const recovered = await this.independentResources.recover();
+    if (recovered.remaining) throw Error('退出前仍有独立任务资源未确认释放，请核对服务器及隧道状态后重试；原操作未重放');
     this.sessions.clear(); this.profiles.clear();
     this.structureCache.release();
     const failed = cancellations.find(result => result.status === 'rejected'); if (failed?.status === 'rejected') throw failed.reason;
@@ -478,6 +489,7 @@ export class Engine {
 
   /** 在首个 await 建连之前登记活动，覆盖会话尚未入表和独立元数据任务的竞态。 */
   private async withConnectionUse<T>(id: string, action: () => Promise<T>): Promise<T> {
+    if (this.closing || this.disconnecting.has(id)) throw Error('连接正在关闭，不能分配新的任务资源');
     let finish!: () => void;
     const done = new Promise<void>(resolve => { finish = resolve; });
     this.pendingUses.add(done);
@@ -519,10 +531,13 @@ export class Engine {
       // 字段、索引及后续外键执行共用资源集合，不能在重核与关闭之间并行修改相关父表。
       const executionTargets = [...(options?.executionTarget ? [options.executionTarget] : []), ...(options?.executionTargets ?? [])];
       const releaseExecution = this.structureExecutions.acquire(connectionId, executionTargets);
+      let resources: IndependentTaskResourceLease;
+      try { resources = this.independentResources.reserve(connectionId, taskId, releaseExecution); }
+      catch (error) { releaseExecution(); throw error; }
       const controller = new AbortController();
       let finish!: () => void;
       const done = new Promise<void>(resolve => { finish = resolve; });
-      const task: IndependentTask = { connectionId, controller, done, structureTask: Boolean(options)||strictRead, generation: 0 };
+      const task: IndependentTask = { connectionId, controller, done, resources, structureTask: Boolean(options)||strictRead, generation: 0 };
       this.independentTasks.set(taskId, task);
       const label = options?.label ?? readLabel ?? '读取关联记录';
       const detail = () => options ? (options.purpose === 'tableCreate' ? { tableCreate: { ...options.progress } } : options.purpose === 'tableCopyData' ? { tableCopyData: { ...options.progress } } : options.purpose === 'tableCopyStructure' ? { tableCopyStructure: { ...options.progress } } : options.purpose === 'databaseCreate' ? { databaseCreate: { ...options.progress } } : options.purpose === 'tableRename' ? { tableRename: { ...options.progress } } : options.purpose === 'tableAutoIncrement' ? { tableAutoIncrement: { ...options.progress } } : options.purpose === 'tableDefaultEncoding' ? { tableDefaultEncoding: { ...options.progress } } : options.purpose === 'tableDrop' ? { tableDrop: { ...options.progress } } : options.purpose === 'tableTruncate' ? { tableTruncate: { ...options.progress } } : options.purpose === 'tableComment' ? { tableComment: { ...options.progress } } : options.purpose === 'indexes' ? { indexPatch: { ...options.progress } } : options.purpose === 'foreignKeys' ? { foreignKeyPatch: { ...options.progress } } : { columnPatch: { ...options.progress } }) : readDetail?.()??{};
@@ -538,7 +553,8 @@ export class Engine {
       let failure: unknown; let result!: T;
       try {
         report();
-        managed = await connect(profile, undefined, controller.signal);
+        managed = await connect(profile, undefined, controller.signal, receipt => resources.capture(receipt));
+        resources.capture(managed.resources);
         task.managed = managed;
         if (controller.signal.aborted) throw new Error('任务已取消');
         result = await action(managed, { report, checkCancelled, commandStarted });
@@ -550,9 +566,13 @@ export class Engine {
         try { await task.cancelPending;await task.stopPending; resourcesReleased = !task.cancelError; } catch (error) { failure = error; }
         // 事件接收方异常也必须继续实际关闭连接并释放全部关联资源。
         if (options && !failure) { options.progress.phase = 'releasing'; try { report(); } catch (error) { failure ??= error; } }
-        try { await managed?.close(options||strictRead ? { strict: true } : undefined); } catch (error) { resourcesReleased = false; failure ??= error; }
+        try { await managed?.close(options||strictRead ? { strict: true } : undefined); }
+        catch { task.resourceCloseFailed = true; failure ??= Error('独立任务连接关闭失败，物理终态尚未确认；请显式断开连接并核对资源状态，原操作未重放'); }
+        // 动作Promise与资源隔离分别结算：失败也唤醒等待者，原任务号及全部目标锁仍可保留。
+        const confirmed = resources.settle(Boolean(task.resourceCloseFailed));
+        resourcesReleased = resourcesReleased && confirmed;
+        if (!confirmed) failure ??= Error('独立任务物理资源尚未确认释放，请显式断开连接；原操作未重放');
         this.independentTasks.delete(taskId); finish();
-        releaseExecution();
         // 新建表动作可因发送前取消失败，但严格收尾事实独立成立；未知DDL由用途自身继续保守锁定。
         if (options?.purpose === 'tableCreate' && managed && resourcesReleased && !task.cancelError) options.onResourcesReleased?.();
       }
@@ -739,7 +759,8 @@ export class Engine {
           const threadId = managed.connection.threadId;
           const generation = independent.generation, terminal = independent.commandTerminal;
           try {
-            control = await connect(managed.profile);
+            control = await connect(managed.profile, undefined, undefined, receipt => independent.resources?.capture(receipt));
+            independent.resources?.capture(control.resources);
             if (this.independentTasks.get(id) !== independent || independent.managed !== managed || managed.connection.threadId !== threadId || managed.broken || independent.generation !== generation) throw new Error('独立任务连接或命令代次已变化，不能发送取消命令');
             if (!Number.isSafeInteger(threadId) || (threadId ?? 0) < 1) throw new Error('无法确认独立任务连接编号');
             // 单纯关闭 socket 无法唤醒服务器的元数据锁等待，必须明确结束此专用会话。
@@ -754,7 +775,7 @@ export class Engine {
             }
           } finally {
             independent.controller.abort();
-            try { await control?.close(independent.structureTask ? { strict: true } : undefined); } catch { independent.cancelError = new Error('取消控制连接清理失败，请核对服务器任务及连接状态'); }
+            try { await control?.close(independent.structureTask ? { strict: true } : undefined); } catch { independent.resourceCloseFailed = true; independent.cancelError = new Error('取消控制连接清理失败，请核对服务器任务及连接状态'); }
           }
         })();
       }
@@ -779,13 +800,13 @@ export class Engine {
       if(!managed||!task.commandInFlight||managed.broken)return;
       let control:ManagedConnection|undefined;
       try{
-        control=await connect(managed.profile);
+        control=await connect(managed.profile,undefined,undefined,receipt=>task.resources?.capture(receipt));task.resources?.capture(control.resources);
         if(this.independentTasks.get(id)!==task||task.managed!==managed||task.generation!==generation||!task.commandInFlight||managed.broken)return;
         const threadId=managed.connection.threadId;if(!Number.isSafeInteger(threadId)||(threadId??0)<1)throw Error('无法确认搜索连接编号');
         await execute(control,`KILL QUERY ${threadId}`);await terminal;
       }catch(error){
         if((error as{errno?:number}).errno!==1094){task.cancelError=Error('搜索停止控制失败，已关闭本地连接；请核对服务器资源状态');managed.broken=true;managed.connection.destroy();task.controller.abort();}
-      }finally{try{await control?.close({strict:true});}catch{task.cancelError=Error('搜索控制连接清理失败，请核对服务器资源状态');}}
+      }finally{try{await control?.close({strict:true});}catch{task.resourceCloseFailed=true;task.cancelError=Error('搜索控制连接清理失败，请核对服务器资源状态');}}
     })();return task.stopPending;
   }
 
