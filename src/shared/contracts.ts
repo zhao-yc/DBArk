@@ -1,3 +1,4 @@
+import type { TableCopyStructureGetInput, TableCopyStructureGetOutput, TableCopyStructurePreviewInput, TableCopyStructurePreviewOutput, TableCopyStructureApplyInput, TableCopyStructureApplyOutput, TableCopyStructureReleaseInput } from './tableCopyStructure';
 /** 所有跨进程数据均为可结构化克隆的普通值，精确数值由驱动保留为字符串。 */
 import type { DatabaseCreateGetInput, DatabaseCreateGetOutput, DatabaseCreatePreviewInput, DatabaseCreatePreviewOutput, DatabaseCreateApplyInput, DatabaseCreateApplyOutput, DatabaseCreateReleaseInput } from './databaseCreate';
 import type { QueryParameter, QueryParameterNames } from './queryParameters';
@@ -64,7 +65,7 @@ export interface SavedQuery { id: string; name: string; connectionId?: string; d
 export interface SqlSnippet { id: string; name: string; group: string; description: string; sql: string; updatedAt: string; }
 export interface HistoryEntry { id: string; connectionId: string; database?: string; databaseContext?:QueryDatabaseContext; sql: string; startedAt: string; elapsedMs: number; success: boolean; error?: string; }
 export interface TaskRecord { /** 仅由main签发的随机回执关联，不能按可复用taskId补造提交事实。 */ tableApplyReceiptId?: string; id: string; kind: string; status: 'running' | 'completed' | 'cancelled' | 'failed'; progress: number; message: string; startedAt: string; finishedAt?: string; errors?: string[]; }
-export interface TaskEvent { databaseCreate?: import('./databaseCreate').DatabaseCreateProgress; tableApply?: import('./tableApplyReceipt').TableApplyProgress; taskId: string; status: TaskRecord['status']; progress: number; message: string; rows?: number; resultIndex?: number; columns?: ResultColumn[]; batch?: DataRow[]; executionDatabase?:QueryDatabaseContext; /** 当前语句开始发送时只报告一次实际片段，历史不得使用完整源脚本。 */ executionSql?: string; queryExport?: QueryExportProgress; columnPatch?: TableColumnApplyProgress; indexPatch?: TableIndexApplyProgress; foreignKeyPatch?: TableForeignKeyApplyProgress; tableRename?: TableColumnApplyProgress; tableAutoIncrement?: TableColumnApplyProgress; tableComment?: TableColumnApplyProgress; tableDrop?: TableColumnApplyProgress; tableTruncate?: TableColumnApplyProgress; tableDefaultEncoding?: TableColumnApplyProgress; dataSearch?:DataSearchProgress; }
+export interface TaskEvent { databaseCreate?: import('./databaseCreate').DatabaseCreateProgress; tableApply?: import('./tableApplyReceipt').TableApplyProgress; taskId: string; status: TaskRecord['status']; progress: number; message: string; rows?: number; resultIndex?: number; columns?: ResultColumn[]; batch?: DataRow[]; executionDatabase?:QueryDatabaseContext; /** 当前语句开始发送时只报告一次实际片段，历史不得使用完整源脚本。 */ executionSql?: string; queryExport?: QueryExportProgress; columnPatch?: TableColumnApplyProgress; indexPatch?: TableIndexApplyProgress; foreignKeyPatch?: TableForeignKeyApplyProgress; tableCopyStructure?: TableColumnApplyProgress; tableRename?: TableColumnApplyProgress; tableAutoIncrement?: TableColumnApplyProgress; tableComment?: TableColumnApplyProgress; tableDrop?: TableColumnApplyProgress; tableTruncate?: TableColumnApplyProgress; tableDefaultEncoding?: TableColumnApplyProgress; dataSearch?:DataSearchProgress; }
 export interface FileChoice { token: string; name: string; }
 export type QueryFileEncoding = 'utf8' | 'utf16le' | 'gb18030';
 export interface AppSettings { theme: 'dark' | 'light'; sidebarWidth: number; resultLimit: number; pageSize: number; dataTypeColors?: boolean; tabs: { id: string; kind: 'query' | 'table'; title: string; connectionId: string; database?: string; databaseContext?:QueryDatabaseContext; table?: string; sql?: string; sourceBinding?: QuerySourceBinding }[]; activeTabId?: string; }
@@ -188,6 +189,10 @@ export interface CommandMap {
   'tasks.cancelState': { input: { taskIds: string[] }; output: import('./taskCancelState').TaskCancelSnapshot };
   'settings.get': { input: Record<string, never>; output: AppSettings };
   'settings.save': { input: AppSettings; output: void };
+  'schema.tableCopyStructure.get': { input: TableCopyStructureGetInput; output: TableCopyStructureGetOutput };
+  'schema.tableCopyStructure.preview': { input: TableCopyStructurePreviewInput; output: TableCopyStructurePreviewOutput };
+  'schema.tableCopyStructure.apply': { input: TableCopyStructureApplyInput; output: TableCopyStructureApplyOutput };
+  'schema.tableCopyStructure.release': { input: TableCopyStructureReleaseInput; output: void };
   'schema.tableRename.get': { input: TableRenameGetInput; output: TableRenameGetOutput };
   'schema.tableRename.preview': { input: TableRenamePreviewInput; output: TableRenamePreviewOutput };
   'schema.tableRename.apply': { input: TableRenameApplyInput; output: TableRenameApplyOutput };
