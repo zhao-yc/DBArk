@@ -63,7 +63,8 @@ test('退出保存失败可返回工作台，修复磁盘后再次退出并恢�
   await requestQuit();
   await expect.poll(() => desktop.evaluate(() => globalThis.__dbarkE2EDialogs.calls.length)).toBe(1);
   const failure = await desktop.evaluate(() => globalThis.__dbarkE2EDialogs.calls[0]);
-  expect(failure.title).toBe('退出前保存失败'); expect(failure.message).toContain('本地数据保存失败');
+  expect(failure.title).toBe('退出前保存或收尾失败'); expect(failure.message).toContain('本地数据保存失败');
+  expect(failure.buttons).toEqual(['返回工作台', '强制退出客户端']); expect(failure.response).toBe(0);
   expect(closed).toBe(false); await expect(page.locator('.app-statusbar')).toBeVisible();
   expect(await page.evaluate(async () => (await window.dbark.invoke('settings.get', {})).theme)).toBe('dark');
   await rmdir(blockedFile);
@@ -126,14 +127,17 @@ test('通过界面保存连接和查询，Monaco 可编辑，主题与最后输�
   expect(pageErrors).toEqual([]);
 });
 
-test('保存失败时明确放弃配置可退出，重启仍保留上次成功保存的状态', async () => {
+test('保存失败时明确强制退出并放弃配置，重启仍保留上次成功保存的状态', async () => {
   const blockedFile = join(dataDir, 'dbark.sqlite.tmp');
   await mkdir(blockedFile);
+  // 此回答明确选择强制退出；本例只验配置放弃与重启，不接纳普通资源收尾或远端终态。
   await answerDialogs([1]);
   await page.getByRole('button', { name: '切换主题', exact: true }).click();
   await quitDesktop();
   expect(dialogCalls).toHaveLength(1);
-  expect(dialogCalls[0].title).toBe('退出前保存失败');
+  expect(dialogCalls[0].title).toBe('退出前保存或收尾失败');
+  expect(dialogCalls[0].message).toContain('本地数据保存失败');
+  expect(dialogCalls[0].buttons).toEqual(['返回工作台', '强制退出客户端']);
   expect(dialogCalls[0].response).toBe(1);
   await rmdir(blockedFile);
   await launchDesktop();
