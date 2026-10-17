@@ -1,0 +1,5 @@
+.database-backup-content{display:flex;flex-direction:column;gap:12px;max-height:75vh;overflow:auto}
+.database-backup-content fieldset{display:flex;flex-wrap:wrap;gap:12px;border:1px solid var(--border)}
+.database-backup-content fieldset label{display:flex;flex-direction:column;gap:6px;flex:1;min-width:160px}
+.database-backup-content section,.database-backup-content p,.database-backup-content li{overflow-wrap:anywhere}
+.database-backup-content details ul{max-height:240px;overflow:auto}.database-backup-plan{padding:12px;border:1px solid var(--border);border-left:3px solid #4e86c5}
