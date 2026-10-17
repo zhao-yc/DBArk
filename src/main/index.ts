@@ -69,6 +69,8 @@ const rendererURL = process.env.DBARK_DEV_URL ?? pathToFileURL(join(__dirname, '
 const columnsMain = new ColumnsMainCapabilities(structureTokens, { currentWindow: () => window, rendererURL, connectionRevision: () => store.connectionRevision(), assertAvailable: id => connectionConfig.assertAvailable(id), shuttingDown: () => shuttingDown, release: input => broker.request('schema.columns.release', input) });
 const tablePresetSources=new TablePresetSources({assert:value=>columnsMain.assertCapturedOwner(value),same:(left,right)=>columnsMain.sharesDocumentOwner(left,right)});
 const tablePresetReads=new Map<string,{cancelled:boolean;sent:boolean;stop?:Promise<unknown>}>();
+/** 仅真实Main调用持有发布门；成功结果直到IPC最后同步检查后才释放取消登记。 */
+type MainInvocation = ColumnsInvocation & {presetPublication?:{pendingStop():Promise<unknown>|undefined;settledStop(stop:Promise<unknown>):void;assertCurrent():void;release():void}};
 /** 取消只指向本片已登记的独立metadata任务；原请求仍等待utility严格资源结算。 */
 function cancelTablePresetRead(taskId:string):Promise<unknown> {
   const state=tablePresetReads.get(taskId);if(!state)return Promise.resolve();
@@ -153,7 +155,7 @@ async function writeSelectedQuery(input: { fileToken: string; sql: string; encod
 }
 
 /** 分派前检查配置保存锁，防止检查通过后另一个请求用旧凭据抢先建连。 */
-async function dispatch(command: Command, input: any, columns?: ColumnsInvocation): Promise<unknown> {
+async function dispatch(command: Command, input: any, columns?: MainInvocation): Promise<unknown> {
   // 来源释放只撤销内存能力，配置保存和退出收尾时也必须可用，不建立任务或历史。
   if (command === 'table.copySourceRelease' || command === 'files.releaseExportColumns') return broker.request(command, input);
   // 确认与释放不新建连接或任务，不受配置保存锁阻塞；归属由引擎在取消前校验。
@@ -196,12 +198,25 @@ async function dispatch(command: Command, input: any, columns?: ColumnsInvocatio
       if(tasks.has(input.taskId)||completionTasks.has(input.taskId)||savedQueryPages?.owns(input.taskId)||historyPages?.owns(input.taskId)||completionTasks.size>=8)throw Error('方案读取任务编号已使用或读取繁忙');
       const state={cancelled:false,sent:false,stop:undefined as Promise<unknown>|undefined};tablePresetReads.set(input.taskId,state);completionTasks.add(input.taskId);
       const check=()=>{tablePresetSources.assert(columns,input);connectionConfig.assertAvailable(input.connectionId);if(state.cancelled||shuttingDown||store.connectionRevision()!==revision)throw Error('方案读取已取消或连接配置已变化');};
-      try {return await applyTablePreset(input,{
+      let result:unknown,failure:unknown,failed=false;
+      try {result=await applyTablePreset(input,{
         selected:value=>store.selectedTablePreset(value),
         assertCurrent:check,
         metadata:target=>{check();const profile=store.resolveConnection(target.connectionId);state.sent=true;return broker.request('metadata.table',{...target,profile});},
-      });}
-      finally{try{await state.stop;}finally{tablePresetReads.delete(input.taskId);completionTasks.delete(input.taskId);}}
+      });}catch(reason){failed=true;failure=reason;}
+      // 不让finally中的await预定成功结果；原读取及严格取消结算结束后才判断是否允许发布。
+      try{if(state.stop)await state.stop;}
+      catch(reason){failure=failed?new AggregateError([failure,reason],'原方案读取失败且取消结算失败',{cause:failure}):reason;failed=true;}
+      const release=()=>{tablePresetReads.delete(input.taskId);completionTasks.delete(input.taskId);};
+      if(failed){release();throw failure;}
+      const assertPublication=()=>{check();const {taskId:_taskId,...selected}=input;store.selectedTablePreset(selected);};
+      try{
+        assertPublication();
+        if(!columns)throw Error('缺少真实方案发布来源');
+        let settledStop=state.stop;
+        columns.presetPublication={pendingStop:()=>state.stop===settledStop?undefined:state.stop,settledStop:stop=>{settledStop=stop;},assertCurrent:assertPublication,release};
+        return result;
+      }catch(reason){release();throw reason;}
     }
     // 监控使用主进程解密的目标配置，避免为了打开只读窗口另建一次不受任务管理的测试连接。
     case 'serverMonitor.read': input = { ...input, profile: store.resolveConnection(input.connectionId) }; break;
@@ -530,7 +545,7 @@ else {
     savedQueryPages=new SavedQueryPages(store,join(__dirname,'savedQuerySearchWorker.cjs'));
     historyPages=new HistoryPages(store,join(__dirname,'savedQuerySearchWorker.cjs'));
     ipcMain.handle('dbark:request', async (event, payload: unknown) => {
-      let columns: ColumnsInvocation | undefined;
+      let columns: MainInvocation | undefined;
       try {
         if (!window || event.sender !== window.webContents || event.senderFrame !== window.webContents.mainFrame || event.senderFrame?.url !== rendererURL) throw new Error('不允许的请求来源');
         if (!payload || typeof payload !== 'object' || !('command' in payload) || !('input' in payload) || typeof payload.command !== 'string') throw new Error('请求格式无效');
@@ -539,13 +554,18 @@ else {
         const operation=dispatch(payload.command as Command,input,columns),local=payload.command==='search.savedQueries'||payload.command==='search.savedQueriesContinue'||payload.command==='queries.page'||payload.command==='queries.pageContinue'||payload.command==='history.page'||payload.command==='history.pageContinue';if(local)localSearchOperations.add(operation);
         try {
           const result = await operation;
-          if(payload.command.startsWith('table.presets.'))columnsMain.assertCapturedOwner(columns);
+          if(payload.command.startsWith('table.presets.')){
+            // dispatch成功到IPC发布之间仍允许取消；新取消必须结算，最后检查之后不能再await。
+            const publication=columns?.presetPublication;let stop=publication?.pendingStop();
+            while(stop){await stop;publication!.settledStop(stop);stop=publication!.pendingStop();}
+            columnsMain.assertCapturedOwner(columns);publication?.assertCurrent();
+          }
           if (columns && (payload.command === 'schema.columns.get' || payload.command === 'schema.columns.preview')) {
             try { columnsMain.assertReply(columns); }
             catch (error) { await columnsMain.rejectReply(columns, error); }
           }
           return { ok: true, result };
-        } finally { if(local)localSearchOperations.delete(operation); }
+        } finally { columns?.presetPublication?.release();if(local)localSearchOperations.delete(operation); }
       } catch (error) {
         let failure = error;
         if (columns && columnsMain.hasUnpublished(columns)) try { await columnsMain.rejectReply(columns, error); } catch (cleanup) { failure = cleanup; }

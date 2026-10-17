@@ -14,6 +14,7 @@ import { cellClipboardType, decodeClipboard, encodeClipboard, pasteCells } from 
 import { maxTablePage, parsePageJump, type FilterMode } from '../tableFilters';
 import { TableFilterPanel } from './TableFilterPanel';
 import { TablePresetPanel } from './TablePresetPanel';
+import { createPresetDialogGuard } from '../tablePresetDialogs';
 import { validateTablePresetColumns, type TablePresetConfiguration } from '../../shared/tablePresets';
 import { ForeignKeyDialog } from './ForeignKeyDialog';
 import { patchReferenceRow, referenceWritable, referencesForColumn, type ReferenceSnapshot } from '../referenceChanges';
@@ -78,6 +79,7 @@ function TextCellEditor({ row, column, onRowChange, onClose, binary, onEditingCh
 export function TableTab({ tab, onDesign, onTransfer, onColumnPatches, onIndexPatches, onForeignKeyPatches, onTableCopyData, onTableCopyStructure, onTableRename, onTableAutoIncrement, onTableComment, onTableDrop, onTableTruncate, onTableDefaultEncoding, refreshVersion = 0, refreshAutomatically = true }: { tab: WorkspaceTab; onDesign: (isView: boolean) => void; onTransfer: (mode: 'import' | 'export') => void; onColumnPatches(): void; onIndexPatches(): void; onForeignKeyPatches(): void; onTableCopyData?(): void; onTableCopyStructure?(): void; onTableRename(): void; onTableAutoIncrement(): void; onTableComment(): void; onTableDrop?(): void; onTableTruncate?(): void; onTableDefaultEncoding(): void; refreshVersion?: number; refreshAutomatically?: boolean }) {
   const settings = useWorkspace(state => state.settings); const connection = useWorkspace(state => state.connections.find(profile => profile.id === tab.connectionId));
   const connectionVersion = useWorkspace(state => state.connectionVersions[tab.connectionId] ?? 0);
+  const presetUiEpoch=useRef(0);
   const [info, setInfo] = useState<TableInfo | null>(null); const [page, setPage] = useState<TablePage | null>(null); const [pageIndex, setPageIndex] = useState(1);
   const [pageJump, setPageJump] = useState('1');
   const [pageSize, setPageSize] = useState(settings.pageSize);
@@ -108,9 +110,13 @@ export function TableTab({ tab, onDesign, onTransfer, onColumnPatches, onIndexPa
     setLastReceiptId(event.tableApply.operationId);
     if (event.tableApply.evidence.commitMayHaveBeenSent) setCommitLocked(true);
   }), []);
-  const [referenceDialog, setReferenceDialog] = useState<{ snapshot: ReferenceSnapshot; keys: ForeignKeyInfo[]; mode: 'choose' | 'browse' } | null>(null);
+  const [referenceDialog, setReferenceDialogState] = useState<{ snapshot: ReferenceSnapshot; keys: ForeignKeyInfo[]; mode: 'choose' | 'browse' } | null>(null);
+  /** 关联窗口即使打开后关闭，也永久推进原方案的上下文代次。 */
+  function setReferenceDialog(next:typeof referenceDialog){presetUiEpoch.current++;setReferenceDialogState(next);}
   const [referenceBusy, setReferenceBusy] = useState(false); const referenceCount = useRef(0);
-  const grid = useRef<DataGridHandle>(null); const [showFind, setShowFind] = useState(false); const [showPreferences, setShowPreferences] = useState(false);
+  const grid = useRef<DataGridHandle>(null); const [showFind, setShowFind] = useState(false); const [showPreferences, setShowPreferencesState] = useState(false);
+  /** 布局窗口变化同步记代，不依赖晚到的React effect或最终布尔值。 */
+  function setShowPreferences(next:boolean){presetUiEpoch.current++;setShowPreferencesState(next);}
   const [findFocus, setFindFocus] = useState<{ target: 'query' | 'replacement'; generation: number }>({ target: 'query', generation: 0 });
   const [preferences, setPreferences] = useState<TablePreferences>({ version: 1, columns: [] }); const preferencesRef = useRef(preferences); preferencesRef.current = preferences;
   const [preferencesLoading, setPreferencesLoading] = useState(true); const [preferencesPending, setPreferencesPending] = useState(false); const preferencesLock = useRef(false);
@@ -342,8 +348,11 @@ export function TableTab({ tab, onDesign, onTransfer, onColumnPatches, onIndexPa
   useEffect(() => { useWorkspace.getState().setDirty(tab.id, changes.length > 0 || record.dirty); }, [tab.id, changes.length, record.dirty]);
   useEffect(() => () => useWorkspace.getState().setDirty(tab.id, false), [tab.id]);
   /** 翻页、排序或刷新前先确认是否允许丢弃本页尚未提交的草稿。 */
+  function reloadBlocked():boolean {
+    return !!(blockedRef.current||showPreferences||document.querySelector('[role="dialog"]')||referenceCount.current>0||referenceDialog);
+  }
   function canReload() {
-    if (blockedRef.current || showPreferences || document.querySelector('[role="dialog"]') || referenceCount.current > 0 || referenceDialog) return false;
+    if (reloadBlocked()) return false;
     if ((collectChanges(rowsRef.current).length || record.hasInput()) && !window.confirm(recordViewZh.discardPage)) return false;
     recordPages.cancel(); record.reset(); return true;
   }
@@ -378,6 +387,7 @@ export function TableTab({ tab, onDesign, onTransfer, onColumnPatches, onIndexPa
   }
   /** 请求已关闭窗口后仍占用标签，直到服务器请求实际结束才释放。 */
   const referenceActivity = useCallback((delta: 1 | -1) => {
+    presetUiEpoch.current++;
     referenceCount.current = Math.max(0, referenceCount.current + delta); setReferenceBusy(referenceCount.current > 0);
     useWorkspace.getState().setBusy(tab.id, loadingCount.current > 0 || referenceCount.current > 0 || applyingRef.current || preferencesLock.current || copyPendingRef.current);
   }, [tab.id]);
@@ -390,15 +400,21 @@ export function TableTab({ tab, onDesign, onTransfer, onColumnPatches, onIndexPa
     setRows(next); setError('');
   }
   /** 条件变更始终从第一页读取，取消草稿确认时不更改任何已应用条件。 */
-  const presetApplyScope=useRef<{base:typeof base;connectionVersion:number;refreshVersion:number;info:TableInfo;rows:DraftRow[];generation:number}|null>(null);
+  const presetApplyScope=useRef<{base:typeof base;connectionVersion:number;refreshVersion:number;info:TableInfo;rows:DraftRow[];generation:number;uiEpoch:number;dialogs:ReturnType<typeof createPresetDialogGuard>}|null>(null);
+  useEffect(()=>()=>{presetApplyScope.current?.dialogs.dispose();presetApplyScope.current=null;},[]);
   /** 先沿原丢稿确认入口授权读取；记录原页对象，晚回包不能清掉后来新增的编辑。 */
   function preparePresetApply():boolean {
+    presetApplyScope.current?.dialogs.dispose();presetApplyScope.current=null;
     if(!info||externalStale||activeGridEditor.current||!canReload())return false;
-    presetApplyScope.current={base,connectionVersion,refreshVersion,info,rows:rowsRef.current,generation:loadGeneration.current};return true;
+    presetApplyScope.current={base,connectionVersion,refreshVersion,info,rows:rowsRef.current,generation:loadGeneration.current,uiEpoch:presetUiEpoch.current,dialogs:createPresetDialogGuard(document)};return true;
   }
   /** 整份恢复条件、组合和排序，只触发现有表页读取，不调用写SQL或改动草稿历史。 */
   function applyNamedPreset(configuration:TablePresetConfiguration):boolean {
     const original=presetApplyScope.current;presetApplyScope.current=null;
+    if(!original)return false;
+    const dialogsCurrent=original.dialogs.current();original.dialogs.dispose();
+    // 晚回包只做无副作用检查；不重调会确认丢稿/清输入的canReload，不清后来窗口。
+    if(!dialogsCurrent||original.uiEpoch!==presetUiEpoch.current||reloadBlocked())return false;
     if(!mounted.current||!original||original.base!==base||original.connectionVersion!==connectionVersion||original.refreshVersion!==refreshVersion||original.info!==info||original.rows!==rowsRef.current||original.generation!==loadGeneration.current||blockedRef.current||externalStale||record.hasInput()||activeGridEditor.current)return false;
     const next=validateTablePresetColumns(configuration,info!.columns.map(column=>column.name));
     setFilters(next.filters);setFilterMode(next.filterMode);setSort(next.sort);setPageIndex(1);return true;

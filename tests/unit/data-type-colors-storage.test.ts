@@ -25,7 +25,7 @@ describe('D08既有本地偏好兼容', () => {
     const legacy = { ...store.settings(), theme: 'light' as const }; delete legacy.dataTypeColors; store.saveSettings(legacy); const queries = store.queries(), history = store.history(); store.close();
     const SQL = await initSqlJs({ locateFile: () => wasm }), before = new SQL.Database(readFileSync(file)), schema = before.exec("SELECT type,name,sql FROM sqlite_master ORDER BY name"); expect(JSON.parse(String(before.exec('SELECT data FROM settings')[0].values[0][0]))).not.toHaveProperty('dataTypeColors'); before.close();
     store = await LocalStore.open(file, wasm, protector); expect(store.settings()).toEqual({ ...legacy, dataTypeColors: false }); expect(store.queries()).toEqual(queries); expect(store.history()).toEqual(history);
-    const after = new SQL.Database(readFileSync(file)); expect(after.exec('PRAGMA user_version')[0].values[0][0]).toBe(6); expect(after.exec("SELECT type,name,sql FROM sqlite_master ORDER BY name")).toEqual(schema); after.close();
+    const after = new SQL.Database(readFileSync(file)); expect(after.exec('PRAGMA user_version')[0].values[0][0]).toBe(7); expect(after.exec("SELECT type,name,sql FROM sqlite_master ORDER BY name")).toEqual(schema); after.close();
   });
   it('显式开启后重开恢复，单项重置恢复false，其他布局与已有SQL不新增记录', async () => {
     const settings = { ...store.settings(), theme: 'light' as const, sidebarWidth: 333, tabs: [{ id: 'tab', kind: 'query' as const, title: '原布局', connectionId: 'synthetic', sql: '原先已存在的布局正文' }] };
