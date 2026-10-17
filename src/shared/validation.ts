@@ -102,6 +102,13 @@ const tablePage = z.object({ ...target, page: z.number().int().min(1).max(100000
   try { validateFilterRules(input.filters, input.filterMode); }
   catch (error) { context.addIssue({ code: 'custom', path: ['filters'], message: error instanceof Error ? error.message : '筛选条件无效' }); }
 });
+/** 先检查原输入，再交给对象schema；解析后的自有字段无法证明原型来源。 */
+const settingsRawWriteSchema = z.unknown().superRefine((raw, context) => {
+  if (!raw || typeof raw !== 'object') return;
+  try { assertQueryLayoutWrite(raw as { tabs?: unknown }); }
+  catch (error) { context.addIssue({ code: z.ZodIssueCode.custom, message: error instanceof Error ? error.message : '查询布局无效' }); }
+});
+
 export const commandSchemas: Record<Command, z.ZodType> = {
   'table.presets.list':tablePresetListSchema,'table.presets.save':tablePresetSaveSchema,'table.presets.delete':tablePresetSelectSchema,'table.presets.apply':tablePresetApplySchema,
   'table.copyInsertSql': copyInsertSqlInputSchema,
@@ -237,7 +244,7 @@ export const commandSchemas: Record<Command, z.ZodType> = {
   'snippets.list': empty, 'snippets.save': snippetSchema, 'snippets.delete': z.object({ id }).strict(),
   'history.list': z.object({ connectionId: id.optional() }).strict(), 'tasks.list': empty, 'tasks.cancelState': taskCancelInputSchema,
   'history.page':historyPageInputSchema,'history.pageContinue':localSqlPageNextSchema,'history.pageRelease':localSqlPageReleaseSchema,'history.read':historyReadSchema,'history.readError':historyErrorReadSchema,
-  'settings.get': empty, 'settings.save': z.object({ theme: z.enum(['dark','light']), sidebarWidth: z.number().min(180).max(600), resultLimit: z.number().int().min(1).max(100000), pageSize: z.number().int().min(1).max(1000), dataTypeColors: z.boolean().optional(), editorFontSize: z.number().int().min(editorFontLimits.min).max(editorFontLimits.max).optional(), editorWordWrap: z.boolean().optional(), editorTabSize: z.number().int().min(editorIndentationLimits.min).max(editorIndentationLimits.max).optional(), editorInsertSpaces: z.boolean().optional(), tabs: z.array(z.object({ id, kind: z.enum(['query','table']), title: name, connectionId: id, database: z.string().optional(), databaseContext:queryDatabaseContext.optional(), table: z.string().optional(), sql: text.optional(), sourceBinding: querySourceBindingSchema.optional(), queryEditorHeight: z.number().int().min(queryLayoutLimits.minEditorHeight).max(queryLayoutLimits.maxEditorHeight).optional() }).strict()).max(100), activeTabId: z.string().optional() }).strict().superRefine((value, context) => { try { assertEditorIndentationWrite(value); assertQueryLayoutWrite(value); } catch (error) { context.addIssue({ code: z.ZodIssueCode.custom, message: error instanceof Error ? error.message : '缩进偏好无效' }); } })
+  'settings.get': empty, 'settings.save': settingsRawWriteSchema.pipe(z.object({ theme: z.enum(['dark','light']), sidebarWidth: z.number().min(180).max(600), resultLimit: z.number().int().min(1).max(100000), pageSize: z.number().int().min(1).max(1000), dataTypeColors: z.boolean().optional(), editorFontSize: z.number().int().min(editorFontLimits.min).max(editorFontLimits.max).optional(), editorWordWrap: z.boolean().optional(), editorTabSize: z.number().int().min(editorIndentationLimits.min).max(editorIndentationLimits.max).optional(), editorInsertSpaces: z.boolean().optional(), tabs: z.array(z.object({ id, kind: z.enum(['query','table']), title: name, connectionId: id, database: z.string().optional(), databaseContext:queryDatabaseContext.optional(), table: z.string().optional(), sql: text.optional(), sourceBinding: querySourceBindingSchema.optional(), queryEditorHeight: z.number().int().min(queryLayoutLimits.minEditorHeight).max(queryLayoutLimits.maxEditorHeight).optional() }).strict()).max(100), activeTabId: z.string().optional() }).strict().superRefine((value, context) => { try { assertEditorIndentationWrite(value); assertQueryLayoutWrite(value); } catch (error) { context.addIssue({ code: z.ZodIssueCode.custom, message: error instanceof Error ? error.message : '缩进偏好无效' }); } }))
 };
 
 /** 只接受已声明命令；剔除任意路径、原型字段和其他非约定输入。 */

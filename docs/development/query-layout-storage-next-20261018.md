@@ -11,3 +11,9 @@
 验证：20项纯合同通过；另9个定向存储/兼容文件唯一77项最终逐项全部通过（首轮临时目录EPERM及新增夹具传参错误后，仅修环境/夹具并针对未通过项复核，不重跑已通过项）。覆盖真实Main设置分支、严格IPC/直接存储、逐标签重启、坏读局部回退不写回、全部11张旧表逐表比较、旧7迁移失败/重试、未来9原文件保持，以及布局写入不改变现有连接/工作台/方案CAS和失败高度不夹带。一次tsc --noEmit通过；该检查后仅新测试改正了误带的select.id参数，产品文件未再改动。没有执行full/build/GUI/实际业务数据库/网络/.env/SSH/Docker/剪贴板；E2E版本期待仅兼容适配，未执行E2E。
 
 必要旧夹具只把当前版本期待7改8、明确未来造数8改9及相关测试标题/注释同步；SQL、记录比较及原断言数量均保留。历史0.22文档、package版本、renderer QueryTab和Root工作区未改。
+
+## 导出schema原始输入门窄修
+
+员工4独审发现导出settings.save schema单独调用时，会先把原型上的高度解析为自有字段；Main validateCommand及直接LocalStore原始门已能拒绝，未证明现有写盘绕过。后续窄修在导出schema最前以原始输入调用同一共享门，再pipe原strict对象schema，不以解析后的superRefine代替原始自有性证明。原schema、Main和直接存储仍允许旧缺项及合法query，拒绝显式undefined、继承字段、非query字段和未知IPC字段。
+
+原独审1红同字节回归已复现，修后连必要窄对照共6项通过；Main参数验证及settings.save原分支、直接LocalStore方法均在RAM写入端口执行，没有创建SQLite。只做本次窄测试和一次type，不重跑97/341/full/build；原两个合同提交保留，未接renderer、未改schema版本、Root或冻结0.22。
