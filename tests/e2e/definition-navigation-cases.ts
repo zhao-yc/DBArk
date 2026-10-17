@@ -1,7 +1,7 @@
 import type { TestInfo } from '@playwright/test';
 import type { RowDataPacket } from 'mysql2/promise';
-import { test, expect, ownedDesktopResources, retainOwnedDesktopResources } from './desktop-fixture';
-import { enabled, environment, isolatedDatabase, type LiveContext } from './definition-navigation-live';
+import { test, expect, ownedDesktopResources } from './desktop-fixture';
+import { enabled, environment, isolatedDatabase, beginDefinitionNavigationCase, finishDefinitionNavigationCase, type LiveContext } from './definition-navigation-live';
 import { assertDefaultEncodingLiveTarget } from '../helpers/tableDefaultEncodingTarget';
 import { definitionNavigationZh as t } from '../../src/renderer/locales/definitionNavigation.zh-CN';
 
@@ -49,8 +49,10 @@ async function database(body: (context: LiveContext) => Promise<void>, info: Tes
     await expect.poll(async () => (await page.evaluate(() => window.dbark.invoke('settings.get', {}))).tabs.find(tab => tab.kind === 'query')?.sql?.replaceAll('\r\n', '\n')).toBe(draft);
     const tabs = (await page.evaluate(() => window.dbark.invoke('settings.get', {}))).tabs, history = await page.evaluate(() => window.dbark.invoke('history.list', {}));
     await observe(context);
+    let primary: { reason: unknown } | undefined;
     try { await body(context); await noWrites(context); expect((await page.evaluate(() => window.dbark.invoke('settings.get', {}))).tabs).toEqual(tabs); expect(await page.evaluate(() => window.dbark.invoke('history.list', {}))).toEqual(history); }
-    finally { try { const current = ownedDesktopResources(info); context.assertCurrent(); if (!current.closed) await desktop.evaluate(() => { (globalThis as Main).__definitionNavigationObserver?.restore(); delete (globalThis as Main).__definitionNavigationObserver; }); context.assertCurrent(); } catch (reason) { retainOwnedDesktopResources(info); throw reason; } }
+    catch (reason) { primary = { reason }; throw reason; }
+    finally { try { const current = ownedDesktopResources(info); context.assertCurrent(); if (!current.closed) await desktop.evaluate(() => { (globalThis as Main).__definitionNavigationObserver?.restore(); delete (globalThis as Main).__definitionNavigationObserver; }); context.assertCurrent(); } catch (reason) { context.retain?.(); if (primary) throw new AggregateError([primary.reason, reason], 'W03原断言及旁观器恢复未确认', { cause: primary.reason }); throw reason; } }
   }, info);
 }
 /** 搜索与打开均走实际中文控件；不直接打开定义或传入制造的位置。 */
@@ -67,7 +69,9 @@ function offsets(sql: string, needle: string) { const values: number[] = []; let
 function status(sql: string, offset: number, index: number, count: number) { const lines = sql.slice(0, offset).split(/\r\n|\r|\n/); return t.count(index, count) + t.position(lines.length, lines.at(-1)!.length + 1); }
 async function ddl(context: LiveContext, name: string, kind = 'TABLE') { const [rows] = await context.observer.query<RowDataPacket[]>('SHOW CREATE ' + kind + ' ' + target(context, name)); const key = Object.keys(rows[0]).find(key => /^Create /.test(key))!; return String(rows[0][key]); }
 
-test.beforeEach(({ trace }) => {
+test.afterEach(({}, info) => { finishDefinitionNavigationCase(info); });
+test.beforeEach(({ trace }, info) => {
+  beginDefinitionNavigationCase(info).check();
   if (trace !== 'off') throw Error('真实连接表单禁止记录trace');
   assertDefaultEncodingLiveTarget({ host: process.env.DBARK_TEST_HOST, port: process.env.DBARK_TEST_PORT, tlsFlag: process.env.DBARK_TEST_TLS, caPath: process.env.DBARK_TEST_CA });
   if (!process.env.DBARK_TEST_USER || environment.DBARK_TEST_TLS !== process.env.DBARK_TEST_TLS || environment.DBARK_TEST_CA !== process.env.DBARK_TEST_CA) throw Error('必须显式指定既有测试账号和同一TLS/CA');
