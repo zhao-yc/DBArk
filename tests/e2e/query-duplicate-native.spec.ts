@@ -9,7 +9,9 @@ import { queryDuplicateZh } from '../../src/renderer/locales/queryDuplicate.zh-C
 const listing = process.argv.some(value => value === '--list' || value.startsWith('--list='));
 const active = !listing && process.env.DBARK_QUERY_DUPLICATE_NATIVE_TEST === '1';
 if (active) {
-  if (process.env.DBARK_INTEGRATION_ENABLED !== '0' || Object.keys(process.env).some(key => /^DBARK_(?:TEST_|C02_|SSH_|MTLS_)/.test(key))) throw Error('查询复制原生专项只允许独立离线进程及integration=0');
+  // 正式安装runner会传同一EXE的C02别名；只允许该准确同值路径，其它实库/认证配置仍拒绝。
+  const canonicalAlias = (key: string) => key === 'DBARK_C02_EXECUTABLE_PATH' && !!process.env.DBARK_EXECUTABLE_PATH && process.env[key] === process.env.DBARK_EXECUTABLE_PATH;
+  if (process.env.DBARK_INTEGRATION_ENABLED !== '0' || Object.keys(process.env).some(key => /^DBARK_(?:TEST_|C02_|SSH_|MTLS_)/.test(key) && !canonicalAlias(key))) throw Error('查询复制原生专项只允许独立离线进程及integration=0');
   for (const [index, value] of process.argv.entries()) {
     if ((value === '--trace' && process.argv[index + 1] !== 'off') || (value.startsWith('--trace=') && value !== '--trace=off')) throw Error('查询复制原生专项禁止开启trace');
   }
@@ -50,7 +52,8 @@ async function write(info: TestInfo, sql: string) {
   const { page } = desktop(info), box = page.locator('.query-tab:visible .monaco-editor').getByRole('textbox');
   await box.focus(); desktop(info); await page.keyboard.press(`${modifier}+A`); desktop(info);
   await page.keyboard.insertText(sql); desktop(info);
-  await expect.poll(async () => { const value = await settings(info); return value.tabs.find(tab => tab.id === value.activeTabId)?.sql; }).toBe(sql);
+  // 新建模型可规范为平台EOL；这里只核输入行内容，后续复制和来源不变仍严格比较实际原字符串。
+  await expect.poll(async () => { const value = await settings(info); return value.tabs.find(tab => tab.id === value.activeTabId)?.sql?.replaceAll('\r\n', '\n'); }).toBe(sql);
 }
 /** 真实键盘Undo/Redo；预期来自复制前实际Undo结果，不硬编码编辑器的分组。 */
 async function historyKey(info: TestInfo, key: string) {
@@ -85,7 +88,10 @@ test('离线原生复制当前全文、隔离保存来源及副本编辑，并�
 
     await page.locator('.app-commandbar').getByRole('button', { name: zh.common.newQuery, exact: true }).click(); desktop(info);
     const newQuery = page.getByRole('dialog', { name: zh.common.newQuery, exact: true });
-    await expect(newQuery.getByLabel(zh.app.text049, { exact: true })).toHaveText(connectionName);
+    const connectionSelect = newQuery.getByRole('combobox', { name: new RegExp('^' + zh.app.text049) });
+    await expect(connectionSelect).toHaveCount(1); await expect(connectionSelect).toHaveText(connectionName); desktop(info);
+    const profileId = await page.evaluate(async () => (await window.dbark.invoke('connections.list', {}))[0]?.id); desktop(info);
+    expect(profileId).toBeTruthy(); await expect(connectionSelect).toHaveValue(profileId!);
     await expect(newQuery.getByLabel(zh.app.text050, { exact: true })).toHaveValue('');
     // 原流程会尝试127.0.0.1:1并拒连；这是离线边界，不伪造服务器信息或补全状态。
     await expect(newQuery.locator('.error-box')).toContainText(/ECONNREFUSED|连接被拒绝|拒绝连接/i, { timeout: 20000 });
@@ -98,23 +104,25 @@ test('离线原生复制当前全文、隔离保存来源及副本编辑，并�
     await save.getByLabel(queryBindingZh.name, { exact: true }).fill(sourceName); desktop(info);
     await save.getByRole('button', { name: queryBindingZh.create, exact: true }).click(); desktop(info);
     await expect(save).toBeHidden();
-    const records = await queries(info); expect(records).toHaveLength(1); expect(records[0].sql).toBe(savedSql);
+    const records = await queries(info); expect(records).toHaveLength(1); expect(records[0].sql.replaceAll('\r\n', '\n')).toBe(savedSql);
     expect(records[0].databaseContext).toEqual({ state: 'known', database: null });
     await expect.poll(async () => (await settings(info)).tabs[0]?.sourceBinding?.id).toBe(records[0].id);
     const sourceId = (await settings(info)).activeTabId!; expect(sourceId).toBeTruthy();
 
-    await write(info, draftSql); await historyKey(info, undoKey);
-    await expect.poll(async () => (await settings(info)).tabs.find(tab => tab.id === sourceId)?.sql).not.toBe(draftSql);
+    await write(info, draftSql);
+    const draftRaw = (await settings(info)).tabs.find(tab => tab.id === sourceId)!.sql!; expect(typeof draftRaw).toBe('string');
+    await historyKey(info, undoKey);
+    await expect.poll(async () => (await settings(info)).tabs.find(tab => tab.id === sourceId)?.sql).not.toBe(draftRaw);
     const undoBaseline = (await settings(info)).tabs.find(tab => tab.id === sourceId)!.sql; expect(typeof undoBaseline).toBe('string');
     await historyKey(info, redoKey);
-    await expect.poll(async () => (await settings(info)).tabs.find(tab => tab.id === sourceId)?.sql).toBe(draftSql);
+    await expect.poll(async () => (await settings(info)).tabs.find(tab => tab.id === sourceId)?.sql).toBe(draftRaw);
     const original = (await settings(info)).tabs.find(tab => tab.id === sourceId)!;
     expect(original.sourceBinding?.id).toBe(records[0].id); expect(original.databaseContext).toEqual({ state: 'known', database: null });
     await query.getByRole('button', { name: queryDuplicateZh.action, exact: true }).click(); desktop(info);
     await expect.poll(() => settings(info).then(value => value.tabs.length)).toBe(2);
     const copied = await settings(info), target = copied.tabs.find(tab => tab.id === copied.activeTabId)!;
     expect(target.id).not.toBe(sourceId); expect(target.title).toBe(sourceName + queryDuplicateZh.suffix);
-    expect(target.sql).toBe(draftSql); expect(target.connectionId).toBe(original.connectionId); expect(target.kind).toBe('query');
+    expect(target.sql).toBe(draftRaw); expect(target.connectionId).toBe(original.connectionId); expect(target.kind).toBe('query');
     expect(target.database).toBeUndefined(); expect(target.databaseContext).toEqual({ state: 'known', database: null });
     expect(target).not.toHaveProperty('sourceBinding');
     expect(Object.keys(target).filter(key => !['id', 'kind', 'title', 'connectionId', 'sql', 'database', 'databaseContext'].includes(key))).toEqual([]);
@@ -122,16 +130,18 @@ test('离线原生复制当前全文、隔离保存来源及副本编辑，并�
     await expect(query.getByLabel('当前查询默认库', { exact: true })).toHaveText(queryContextZh.none);
     expect(await queries(info)).toEqual(records);
 
-    await write(info, copySql); expect((await settings(info)).tabs.find(tab => tab.id === sourceId)?.sql).toBe(draftSql);
+    await write(info, copySql);
+    const copyRaw = (await settings(info)).tabs.find(tab => tab.id === target.id)!.sql!; expect(typeof copyRaw).toBe('string');
+    expect((await settings(info)).tabs.find(tab => tab.id === sourceId)?.sql).toBe(draftRaw);
     expect(await queries(info)).toEqual(records);
     await select(info, sourceName, sourceId); await historyKey(info, undoKey);
     await expect.poll(async () => (await settings(info)).tabs.find(tab => tab.id === sourceId)?.sql).toBe(undoBaseline);
-    expect((await settings(info)).tabs.find(tab => tab.id === target.id)?.sql).toBe(copySql);
+    expect((await settings(info)).tabs.find(tab => tab.id === target.id)?.sql).toBe(copyRaw);
     await historyKey(info, redoKey);
-    await expect.poll(async () => (await settings(info)).tabs.find(tab => tab.id === sourceId)?.sql).toBe(draftSql);
+    await expect.poll(async () => (await settings(info)).tabs.find(tab => tab.id === sourceId)?.sql).toBe(draftRaw);
     const final = await settings(info); expect(final.tabs).toHaveLength(2);
     expect(final.tabs.find(tab => tab.id === sourceId)?.sourceBinding).toEqual(original.sourceBinding);
-    expect(final.tabs.find(tab => tab.id === target.id)?.sql).toBe(copySql); expect(final.tabs.find(tab => tab.id === target.id)).not.toHaveProperty('sourceBinding');
+    expect(final.tabs.find(tab => tab.id === target.id)?.sql).toBe(copyRaw); expect(final.tabs.find(tab => tab.id === target.id)).not.toHaveProperty('sourceBinding');
     expect(await queries(info)).toEqual(records); expect(runtime.pageErrors).toEqual([]);
     await runtime.confirmOwnedDesktopExit(info);
     expect(runtime.ownedDesktopResources(info).closed).toBe(true);
