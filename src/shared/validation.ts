@@ -1,3 +1,4 @@
+import { tableCopyStructureAcknowledgements, validateTableCopyStructureName } from './tableCopyStructure';
 import { z } from 'zod';
 import { csvExportFieldLimits } from './csvExportFields';
 import { taskCancelInputSchema } from './taskCancelState';
@@ -159,6 +160,10 @@ export const commandSchemas: Record<Command, z.ZodType> = {
   'schema.columns.apply': z.object({ previewToken: id, acknowledgements: z.array(z.string().min(1).max(100)).max(20), taskId: id }).strict(),
   'schema.columns.release': z.object({ snapshotId: id.optional(), previewToken: id.optional() }).strict().refine(value => Boolean(value.snapshotId || value.previewToken), '缺少待释放的结构令牌'),
   'schema.indexes.get': z.object({ connectionId: id, database: z.string().min(1).max(64), table: z.string().min(1).max(64), taskId: id }).strict(),
+  'schema.tableCopyStructure.get': z.object({ connectionId: id, database: foreignKeyTargetName, table: foreignKeyTargetName, taskId: id }).strict(),
+  'schema.tableCopyStructure.preview': z.object({ snapshotId: id, newName: z.string().max(64).transform(value => validateTableCopyStructureName(value)), taskId: id }).strict(),
+  'schema.tableCopyStructure.apply': z.object({ previewToken: id, confirmation: z.string().min(3).max(129), acknowledgements: z.array(z.enum(tableCopyStructureAcknowledgements)).length(3).refine(value => new Set(value).size === value.length), taskId: id }).strict(),
+  'schema.tableCopyStructure.release': z.object({ snapshotId: id.optional(), previewToken: id.optional() }).strict().refine(value => !!value.snapshotId || !!value.previewToken),
   'schema.tableRename.get': z.object({ connectionId: id, database: foreignKeyTargetName, table: foreignKeyTargetName, taskId: id }).strict(),
   'schema.tableRename.preview': z.object({ snapshotId: id, newName: z.string().max(64).transform(value => validateTableRenameName(value)), taskId: id }).strict(),
   'schema.tableRename.apply': z.object({ previewToken: id, acknowledgements: z.array(z.enum(tableRenameAcknowledgements)).max(3).refine(value => new Set(value).size === value.length, '重命名确认项不能重复'), taskId: id }).strict(),
