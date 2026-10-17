@@ -20,6 +20,10 @@ function rowBytes(row: DraftRow, maximum: number): number {
   }
   return bytes;
 }
+/** 新批量入口发布前使用同一历史成本，避免追加成功后才发现整批无法作为一步撤销。 */
+export function addedDraftHistoryBytes(row: DraftRow, maximum = draftHistoryLimits.bytes): number {
+  return 96 + row.id.length * 2 + rowBytes(row, maximum);
+}
 /** 值比较不解析JSON或数值；缺字段与显式undefined仍是不同结构。 */
 function sameValue(a: CellValue, b: CellValue): boolean { return Object.is(a, b) || !!a && !!b && typeof a === 'object' && typeof b === 'object' && a.type === b.type && a.base64 === b.base64; }
 function sameData(a: DataRow, b: DataRow): boolean {
@@ -65,7 +69,7 @@ export class DraftHistory {
       patches.set(id, { before: old, after: value });
     }
     for (const [id, value] of next) if (!prior.has(id)) {
-      bytes += 96 + id.length * 2 + rowBytes(value.row, this.limits.bytes);
+      bytes += addedDraftHistoryBytes(value.row, this.limits.bytes);
       if (bytes > this.limits.bytes) { this.clear(); this.anchor = after; this.notice = text.overflow; return; }
       patches.set(id, { after: value });
     }

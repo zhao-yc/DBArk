@@ -18,7 +18,7 @@ import { zh } from '../../src/renderer/locales/zh-CN';
 type Element = { type: unknown; props: Record<string, any> };
 const renderer = fileURLToPath(new URL('../../src/renderer', import.meta.url)), compiled = new Map<string, string>();
 /** 执行完整生产TableTab与真实useRecordViews/helper，React调度、DOM和IPC仅替换成RAM端口。 */
-async function fixture() {
+async function fixture(options: { batch?: boolean; plainKey?: boolean; lease?: boolean } = {}) {
   const slots: any[] = []; let cursor = 0, dirty = false, tree: Element, dialog = false, editor = false, counter = 0;
   const effects: (() => void)[] = [];
   const equal = (a: any[], b: any[]) => !!a && !!b && a.length === b.length && a.every((value, index) => Object.is(value, b[index]));
@@ -39,17 +39,20 @@ async function fixture() {
   const tab = { id: '表页', kind: 'table', connectionId: '连接', database: 'db', table: 'items' };
   const workspace = { settings: { activeTabId: tab.id, tabs: [tab], pageSize: 50, theme: 'dark' }, connections: [{ id: '连接', name: '合成连接' }], connectionVersions: { 连接: 1 }, setDirty: vi.fn(), setBusy: vi.fn(), setTableLayoutDraft: vi.fn(), notify: vi.fn(), updateSettings: vi.fn() };
   const source = { id: '18446744073709551615', note: '原值', bytes: { type: 'binary', base64: 'AAH/' }, doc: '{"x":1,"x":-0,"n":9007199254740993}' };
+  if (options.plainKey) info.columns[0].extra = '';
+  const sourceRows = options.batch ? [source, { ...source, id: '18446744073709551614', note: '' }] : [source];
+  const pageSource = { status: 'ready', pageRef: 'RAM页引用', rowRefs: ['RAM行1', 'RAM行2'], expiresAt: Date.now() + 60_000, metadataKey: tableCopyMetadataKey(info), missingColumns: [] as string[] };
   let failApply = false;
   const invoke = vi.fn(async (command: string, input: any) => {
     if (command === 'metadata.table') return info;
-    if (command === 'table.page') return { page: input.page, pageSize: input.pageSize, hasMore: true, columns: info.columns.map(column => ({ key: column.name, name: column.name, type: column.type })), rows: [structuredClone(source)], copyMetadataKey: tableCopyMetadataKey(info) };
+    if (command === 'table.page') return { page: input.page, pageSize: input.pageSize, hasMore: true, columns: info.columns.map(column => ({ key: column.name, name: column.name, type: column.type })), rows: structuredClone(sourceRows), copyMetadataKey: tableCopyMetadataKey(info), ...(options.batch && options.lease ? { copySource: pageSource } : {}) };
     if (command === 'table.preview') return { sql: '仅RAM模拟预览', warnings: [] };
     if (command === 'table.apply') { if (failApply) throw Error('合成执行结果未知'); return { affectedRows: 1 }; }
     if (command === 'table.preferences.get' || command === 'connections.open') return null;
     throw Error('未授权的RAM端口：' + command);
   });
   const store = Object.assign((selector: (value: any) => any) => selector(workspace), { getState: () => workspace });
-  const context = createContext({ Error, structuredClone, HTMLElement: Node, TextEncoder, TextDecoder, URL, atob, btoa, document: { querySelector: () => dialog ? {} : null }, window: { confirm: () => true } });
+  const context = createContext({ Error, Object, structuredClone, HTMLElement: Node, TextEncoder, TextDecoder, URL, atob, btoa, document: { querySelector: () => dialog ? {} : null }, window: { confirm: () => true } });
   const modules = new Map<string, { exports: any }>();
   function load(file: string): any {
     file = path.resolve(file); if (modules.has(file)) return modules.get(file)!.exports;
@@ -92,8 +95,8 @@ async function fixture() {
     const event = { key, ctrlKey: true, metaKey: false, altKey: false, shiftKey: false, nativeEvent: {}, target: new Node(kind), preventGridDefault: vi.fn(), preventDefault: vi.fn(), ...patch };
     grid().onCellKeyDown({ mode, row: grid().rows[0], column: { key: 'note' } }, event); await render(); return event;
   }
-  await render(); expect(grid().rows).toHaveLength(1);
-  return { render, click, change, press, grid, record, button, all, props, workspace, invoke, info, preparePasteInsert: load(path.join(renderer, 'pasteInsert.ts')).preparePasteInsert, editor(value: boolean) { editor = value; }, modal(value: boolean) { dialog = value; }, failApply() { failApply = true; } };
+  await render(); expect(grid().rows).toHaveLength(options.batch ? 2 : 1);
+  return { render, click, change, press, grid, record, button, all, props, workspace, invoke, info, pageSource, preparePasteInsert: load(path.join(renderer, 'pasteInsert.ts')).preparePasteInsert, editor(value: boolean) { editor = value; }, modal(value: boolean) { dialog = value; }, failApply() { failApply = true; } };
 }
 
 describe('完整TableTab及记录控制器的RAM编辑历史', () => {
@@ -167,5 +170,50 @@ describe('完整TableTab及记录控制器的RAM编辑历史', () => {
     await f.click(text.undo); await f.click(text.undo); await f.click(text.redo); await f.click(text.redo);
     f.button(zh.table.text019).props.onClick(); await f.render(); expect(f.invoke.mock.calls.filter(call => call[0] === 'table.preview')).toHaveLength(0);
     expect(f.all('ErrorBox').some(element => String(element.props.message).includes('冲突'))).toBe(true);
+  });
+});
+
+const batchAction = '复制勾选记录为新增草稿';
+
+describe('完整TableTab勾选复制入口', () => {
+  it('勾选两行仅发布一次历史、保留勾选和类型，撤销重做及直接再次回调零额外IPC', async () => {
+    const f = await fixture({ batch: true }); const initial = f.grid().rows, selected = new Set(initial.map((row: any) => row.id));
+    expect(f.button(batchAction).props.disabled).toBe(true); f.grid().onSelectedRowsChange(selected); await f.render();
+    const click = f.button(batchAction).props.onClick, calls = f.invoke.mock.calls.length; click(); click(); await f.render();
+    expect(f.grid().rows).toHaveLength(4); expect(f.grid().selectedRows).toBe(selected); expect(f.button(text.undo).props.children).toContain(1);
+    const added = f.grid().rows.slice(2); expect(added[0].data.bytes).toEqual(initial[0].data.bytes); expect(added[0].data.bytes).not.toBe(added[1].data.bytes); expect(added[0].data.bytes).not.toBe(initial[0].data.bytes);
+    expect(added[0].data.doc).toBe(initial[0].data.doc); expect(added[1].data.note).toBe(''); expect(Object.hasOwn(added[0].data, 'id')).toBe(false);
+    await f.click(text.undo); expect(f.grid().rows).toHaveLength(2); await f.click(text.redo); expect(f.grid().rows.slice(2).map((row: any) => row.id)).toEqual(added.map((row: any) => row.id)); expect(Array.from(f.grid().selectedRows)).toEqual(Array.from(selected)); expect(f.invoke).toHaveBeenCalledTimes(calls);
+  });
+  it.each(['缺失', '删除', '新增', '缺值', '截断来源', '来源到期', '字节预算'] as const)('%s整批拒绝，保持已有草稿和历史，零补取/预览/剪贴板', async condition => {
+    const f = await fixture({ batch: true, lease: ['截断来源', '来源到期'].includes(condition) }); await f.change('已有暂存值');
+    if (condition === '新增') await f.click(zh.common.add);
+    const rows = f.grid().rows;
+    if (condition === '删除') { f.grid().onSelectedRowsChange(new Set([rows[1].id])); await f.render(); await f.click(zh.common.delete); }
+    if (condition === '缺值') f.grid().onRowsChange(rows.map((row: any, index: number) => index === 1 ? { ...row, data: { ...row.data, doc: undefined } } : row));
+    if (condition === '字节预算') f.grid().onRowsChange(rows.map((row: any, index: number) => index === 1 ? { ...row, data: { ...row.data, note: '大'.repeat(90_000) } } : row));
+    if (condition === '截断来源') f.pageSource.missingColumns = ['doc'];
+    if (condition === '来源到期') f.pageSource.expiresAt = Date.now() - 1;
+    const selected = new Set(rows.map((row: any) => row.id)); if (condition === '缺失') selected.add('不存在'); f.grid().onSelectedRowsChange(selected); await f.render();
+    const before = f.grid().rows, undo = f.button(text.undo).props.children, calls = f.invoke.mock.calls.length; await f.click(batchAction);
+    expect(f.grid().rows).toBe(before); expect(f.grid().selectedRows).toBe(selected); expect(f.button(text.undo).props.children).toEqual(undo); expect(f.invoke).toHaveBeenCalledTimes(calls); expect(f.all('ErrorBox').some(element => !!element.props.message)).toBe(true);
+  });
+  it.each(['勾选变化', '页变化', '目标变化', '连接版本', '模态', '编辑器', '目录ABA'] as const)('%s同步拒绝旧真实按钮回调', async condition => {
+    const f = await fixture({ batch: true }); f.grid().onSelectedRowsChange(new Set(f.grid().rows.map((row: any) => row.id))); await f.render();
+    const oldClick = f.button(batchAction).props.onClick;
+    if (condition === '勾选变化') f.grid().onSelectedRowsChange(new Set([f.grid().rows[0].id]));
+    if (condition === '页变化') await f.click(zh.common.pageNext);
+    if (condition === '目标变化') f.workspace.settings.activeTabId = '其它';
+    if (condition === '连接版本') f.workspace.connectionVersions.连接++;
+    if (condition === '模态') f.modal(true);
+    if (condition === '编辑器') f.editor(true);
+    if (condition === '目录ABA') { const type = f.info.columns[1].type; f.info.columns[1].type = 'varchar(500)'; await f.render(); f.info.columns[1].type = type; await f.render(); }
+    const calls = f.invoke.mock.calls.length; oldClick(); expect(f.invoke).toHaveBeenCalledTimes(calls); await f.render(); expect(f.grid().rows).toHaveLength(2); expect(f.invoke.mock.calls.filter(call => ["table.copySourceRead", "table.copyInsertSql", "table.preview", "table.apply"].includes(call[0]))).toHaveLength(0);
+  });
+  it('非自增键冲突经过整批撤销重做仍在原集中预览前阻止，修改两个新键后沿原table.preview', async () => {
+    const f = await fixture({ batch: true, plainKey: true }); f.grid().onSelectedRowsChange(new Set(f.grid().rows.map((row: any) => row.id))); await f.render(); await f.click(batchAction); await f.click(text.undo); await f.click(text.redo);
+    f.button(zh.table.text019).props.onClick(); await f.render(); expect(f.invoke.mock.calls.filter(call => call[0] === 'table.preview')).toHaveLength(0); expect(f.all('ErrorBox').some(element => String(element.props.message).includes('冲突'))).toBe(true);
+    f.grid().onRowsChange(f.grid().rows.map((row: any, index: number) => index < 2 ? row : { ...row, data: { ...row.data, id: '1844674407370955161' + index } })); await f.render();
+    f.button(zh.table.text019).props.onClick(); await f.render(); expect(f.invoke.mock.calls.filter(call => call[0] === 'table.preview')).toHaveLength(1); expect(f.invoke.mock.calls.filter(call => call[0] === 'table.apply')).toHaveLength(0);
   });
 });
