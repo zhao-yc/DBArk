@@ -1,5 +1,7 @@
 # Navicat 全功能覆盖目标
 
+后续未发布检查点：表设计器已整合显式空串默认值、已有表目标/连接修订及迟到预览保护，并修正Maria目录字符集NULL时的完整SHOW补证。原整合头aef完整6977及type通过；最终cbf在收紧三项独审反例后489项相关/type和独立源码构建通过，108份旧活动产物未覆盖。真实10.11原阶段通过，11.4原成功ACK/后核失败及保留现场如实列出，修复后真实UI尚待执行，见[本批整合和剩余边界](../tests/integration/acceptance-schema-default-maria-root-20261017.md)。
+
 后续未发布检查点：同库复制结构及数据已完成准确MySQL8.4.11的空表与精度表两个正式Windows源码界面身份，前后六资源零，来源567的208项定向/type与0fb完整6859基线分开记录；1351整批仍因后续Maria前置失败不接纳，见[Data完整阶段实证](../tests/integration/acceptance-table-copy-data-root-20261017.md)。取消/断线、更多类型、安装及其它平台继续。
 
 后续未发布检查点：两条临时限权账号的真实表单已明确取消密码保存；`649b317` 的 19 项定向、类型及列表通过，生产和构建逐摘要与已验基线相同。Windows/MySQL 8.4.11 两个源码权限界面身份单次通过，六实例相关临时库、用户和线程核零，见[权限源码实证](../tests/integration/acceptance-limited-account-ram-root-20261017.md)。固定 R93 安装并集不增加。
