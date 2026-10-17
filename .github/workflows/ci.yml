@@ -67,6 +67,9 @@ jobs:
       - run: corepack enable
       - run: pnpm install --frozen-lockfile
       - run: pnpm exec install-electron
+      - name: 编译固定Windows敏感文件helper（不执行协议）
+        if: runner.os == 'Windows'
+        run: node scripts/check-backup-windows-helper.mjs
       - run: pnpm test:e2e
         env:
           # 已验的本地查询导航在三个原生平台执行；私网用例继续关闭。

@@ -1,4 +1,5 @@
 import { spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
@@ -118,6 +119,17 @@ try {
   const executable = platform === 'win32' ? installWindows() : installMac();
   assertOwnedPath(executable);
   if (!existsSync(executable)) throw new Error('安装产物中缺少 DBArk 可执行文件');
+  // Windows私有helper以固定资源置于asar外；先核真实安装字节，不执行文件协议。
+  if (platform === 'win32') {
+    const helper = join(dirname(executable), 'resources', 'database-backup-windows', 'databaseBackupWindowsFiles.helper.cs');
+    assertOwnedPath(helper);
+    const info = lstatSync(helper);
+    if (!info.isFile() || info.isSymbolicLink() || info.size < 1 || info.size > 65536) throw Error('安装的Windows helper资源无效');
+    const actual = createHash('sha256').update(readFileSync(helper)).digest('hex');
+    const source = createHash('sha256').update(readFileSync(join(project, 'src/engine/databaseBackupWindowsFiles.helper.cs'))).digest('hex');
+    if (actual !== source) throw Error('安装的Windows helper资源与固定源码摘要不一致');
+    console.log('Windows helper安装资源摘要已核对（未执行协议）：' + actual);
+  }
   console.log('正在运行离线安装程序回归：' + executable);
   // 普通与C02专用夹具统一使用本次安装所得程序，覆盖父进程继承的旧路径。
   const env = { ...process.env, DBARK_EXECUTABLE_PATH: executable, DBARK_C02_EXECUTABLE_PATH: executable, DBARK_INTEGRATION_ENABLED: '0' };
