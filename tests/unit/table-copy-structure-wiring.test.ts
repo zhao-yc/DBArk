@@ -46,4 +46,13 @@ describe('复制结构实际入口与结果刷新接线', () => {
     const uncertain = evaluate(attribute(tree, 'TableCopyStructureDialog', 'copyStructureTarget', 'onExecutionUncertain'), { copyStructureTarget: target, copyStructureVersion: 1, useWorkspace: { getState: () => workspace }, refreshRenameDatabase, markStructureTarget });
     uncertain('结果未知', 'new_t'); expect(refreshRenameDatabase).toHaveBeenCalledExactlyOnceWith(target); expect(markStructureTarget.mock.calls).toEqual([[target, false], [{ ...target, table: 'new_t' }, false]]); expect(notify).toHaveBeenCalledWith('结果未知', true);
   });
+  it('P2：创建完成但源物理身份后核失败，真实完成回调必须同时置陈旧源页及新页并保留草稿', () => {
+    const tree = source('App.tsx'), refreshRenameDatabase = vi.fn(), markStructureTarget = vi.fn(), notify = vi.fn(), dirtyTabs = { sourceDraft: true }, workspace = { connectionVersions: { c: 1 }, dirtyTabs, notify };
+    const completed = evaluate(attribute(tree, 'TableCopyStructureDialog', 'copyStructureTarget', 'onApplied'), { copyStructureTarget: target, copyStructureVersion: 1, useWorkspace: { getState: () => workspace }, refreshRenameDatabase, markStructureTarget, tableCopyStructureZh });
+    const newTarget = { ...target, table: 'new_t' };
+    // 对应真实Engine的DDL已完成但源TABLE_ID变化结果，不能只使新表失效。
+    completed({ target, newTarget, ddlSubmitted: true, ddlCompleted: true, definitionVerified: false, verificationError: '源物理身份变化', warnings: [] });
+    expect(markStructureTarget.mock.calls).toEqual([[newTarget, false], [target, false]]); expect(refreshRenameDatabase).toHaveBeenCalledExactlyOnceWith(target); expect(workspace.dirtyTabs).toBe(dirtyTabs); expect(dirtyTabs.sourceDraft).toBe(true); expect(notify).toHaveBeenCalledWith(tableCopyStructureZh.verificationFailed, true);
+    workspace.connectionVersions.c = 2; completed({ target, newTarget, ddlCompleted: true, definitionVerified: false }); expect(markStructureTarget).toHaveBeenCalledTimes(2);
+  });
 });

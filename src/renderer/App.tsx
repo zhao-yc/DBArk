@@ -321,7 +321,9 @@ export default function App() {
       assertTableCopyStructureTargetAvailable(copyStructureTarget, workspace); assertTableCopyStructureTargetAvailable({ ...copyStructureTarget, table: newName }, workspace); workbenchNavigation.invalidate();
     }} onApplied={result => {
       const workspace = useWorkspace.getState(); if ((workspace.connectionVersions[copyStructureTarget.connectionId] ?? 0) !== copyStructureVersion) { workspace.notify(tableCopyStructureZh.targetChanged, true); return; }
-      refreshRenameDatabase(copyStructureTarget); markStructureTarget(result.newTarget, result.definitionVerified); if (!result.definitionVerified) workspace.notify(tableCopyStructureZh.verificationFailed, true);
+      refreshRenameDatabase(copyStructureTarget); markStructureTarget(result.newTarget, result.definitionVerified);
+      // DDL成功但后核不完整也可能是源身份变化；两端均保守失效，保留源页与所有草稿。
+      if (!result.definitionVerified) { markStructureTarget(copyStructureTarget, false); workspace.notify(tableCopyStructureZh.verificationFailed, true); }
     }} onExecutionUncertain={(message, newName) => {
       const workspace = useWorkspace.getState(); if ((workspace.connectionVersions[copyStructureTarget.connectionId] ?? 0) === copyStructureVersion) { refreshRenameDatabase(copyStructureTarget); markStructureTarget(copyStructureTarget, false); markStructureTarget({ ...copyStructureTarget, table: newName }, false); }
       workspace.notify(message, true);
