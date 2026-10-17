@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import { createRequire } from 'node:module';
 import initSqlJs from 'sql.js';
 import { version as sourceVersion } from '../../package.json';
+import { sqlFormattingZh } from '../../src/renderer/locales/sqlFormatting.zh-CN';
 import { test, expect, desktop, page, dataDir, closed, pageErrors, dialogCalls, launchDesktop, answerDialogs, requestQuit, quitDesktop } from './desktop-fixture';
 
 /** 跟随真实依赖解析 WASM，不要求测试工作目录也必须直接拥有 node_modules。 */
@@ -91,8 +92,12 @@ test('通过界面保存连接和查询，Monaco 可编辑，主题与最后输�
   // Monaco 新版使用原生 EditContext；通过无障碍角色定位，兼容 textarea 与原生输入区。
   const input = editor.getByRole('textbox');
   await input.focus(); await page.keyboard.insertText('select 1 as e2e_value;');
-  await page.getByTitle('格式化 SQL', { exact: true }).click();
-  await expect(editor.locator('.view-lines')).toContainText('SELECT');
+  // 提示文字包含快捷键和作用范围；实际按钮以稳定的无障碍名称定位。
+  await page.getByRole('button', { name: sqlFormattingZh.action, exact: true }).click();
+  // 新格式化保留关键字大小写；两行排版及随后保存的精确SQL共同证明不是空操作。
+  await expect(editor.locator('.view-lines .view-line')).toHaveCount(2);
+  await expect(editor.locator('.view-lines .view-line').first()).toHaveText('select');
+  await expect(editor.locator('.view-lines .view-line').nth(1)).toHaveText('1 as e2e_value;');
   await page.getByTitle('保存查询', { exact: true }).click();
   const queryDialog = page.getByRole('dialog', { name: '保存查询', exact: true });
   await queryDialog.getByLabel('查询名称', { exact: true }).fill('离线保存的 SQL');
@@ -100,7 +105,7 @@ test('通过界面保存连接和查询，Monaco 可编辑，主题与最后输�
   await queryDialog.getByRole('button', { name: '另存为新查询', exact: true }).click();
   await expect(queryDialog).toBeHidden();
   const saved = await page.evaluate(() => window.dbark.invoke('queries.list', {}));
-  expect(saved[0].name).toBe('离线保存的 SQL'); expect(saved[0].sql).toContain('SELECT');
+  expect(saved[0].name).toBe('离线保存的 SQL'); expect(saved[0].sql.replaceAll('\r\n', '\n')).toBe('select\n  1 as e2e_value;');
   await expect.poll(async () => (await page.evaluate(() => window.dbark.invoke('settings.get', {}))).tabs[0]?.sourceBinding?.id).toBe(saved[0].id);
   expect((await page.evaluate(() => window.dbark.invoke('settings.get', {}))).tabs[0].id).not.toBe(saved[0].id);
   // 不等待 400 ms 防抖保存，退出握手必须保存最后输入的 SQL 和主题。
