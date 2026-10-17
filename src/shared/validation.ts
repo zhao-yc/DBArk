@@ -1,5 +1,5 @@
 import { tableCopyDataMode, tableCopyDataAcknowledgements } from './tableCopyData';
-import { tableCreateDesignSchema, tableCreateAcknowledgements } from './tableCreate';
+import { tableCreateDesignSchema, tableCreateDraftSchema, tableCreateAcknowledgements } from './tableCreate';
 import { tableCopyStructureKnownAcknowledgements, validateTableCopyStructureName } from './tableCopyStructure';
 import { z } from 'zod';
 import { serverMonitorLimits, validateServerMonitorInput } from './serverMonitor';
@@ -194,8 +194,8 @@ export const commandSchemas: Record<Command, z.ZodType> = {
   'schema.tableTruncate.preview': z.object({ snapshotId: id, taskId: id }).strict(),
   'schema.tableTruncate.apply': z.object({ previewToken: id, confirmation: z.string().min(3).max(129), acknowledgements: z.array(z.enum(tableTruncateAcknowledgements)).length(3).refine(values => new Set(values).size === values.length), taskId: id }).strict(),
   'schema.tableTruncate.release': z.object({ snapshotId: id.optional(), previewToken: id.optional() }).strict().refine(value => !!value.snapshotId || !!value.previewToken),
-  'schema.tableCreate.get': z.object({ connectionId: id, database: tableCreateDesignSchema.shape.database, taskId: id, includeEncodings: z.boolean().optional() }).strict(),
-  'schema.tableCreate.preview': z.object({ snapshotId: id, design: tableCreateDesignSchema, taskId: id }).strict(),
+  'schema.tableCreate.get': z.object({ connectionId: id, database: tableCreateDesignSchema.shape.database, taskId: id, includeEncodings: z.boolean().optional(), includePrefixFacts: z.boolean().optional() }).strict(),
+  'schema.tableCreate.preview': z.object({ snapshotId: id, design: tableCreateDraftSchema, taskId: id }).strict(),
   'schema.tableCreate.apply': z.object({ previewToken: id, confirmation: z.string().max(129), acknowledgements: z.array(z.enum(tableCreateAcknowledgements)).length(2).refine(value => new Set(value).size === 2), taskId: id }).strict(),
   'schema.tableCreate.release': z.object({ snapshotId: id.optional(), previewToken: id.optional() }).strict().refine(value => !!(value.snapshotId || value.previewToken)),
   'schema.databaseCreate.get': z.object({ connectionId: id, taskId: id }).strict(),

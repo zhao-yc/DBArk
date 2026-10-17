@@ -9,9 +9,9 @@ export interface TableCreateIndexPlan {
 }
 /** 只接受准确首片服务器事实；端口、宽泛版本或草稿声明不能代替实际事实。 */
 export function assertTableCreatePrefixFacts(facts: TableCreatePrefixFacts): void {
-  if (facts.dialect !== 'mysql' || !/^8\.4\.11(?:[-+][^\s]+)?$/.test(facts.serverVersion) || facts.pageSize !== 16384 || facts.defaultRowFormat !== 'DYNAMIC' || !/^[a-f0-9]{64}$/.test(facts.digest) || !Array.isArray(facts.charsets) || !facts.charsets.length || facts.charsets.length > 256) throw Error('前缀新表仅支持已证明的MySQL8.4.11/InnoDB/DYNAMIC/16KiB能力');
+  if (facts.dialect !== 'mysql' || typeof facts.serverVersion !== 'string' || /\s/.test(facts.serverVersion) || !/^8\.4\.11(?:[-+][^\s]+)?$/.test(facts.serverVersion) || facts.pageSize !== 16384 || facts.defaultRowFormat !== 'DYNAMIC' || !/^[a-f0-9]{64}$/.test(facts.digest) || !Array.isArray(facts.charsets) || !facts.charsets.length || facts.charsets.length > 256) throw Error('前缀新表仅支持已证明的MySQL8.4.11/InnoDB/DYNAMIC/16KiB能力');
   const names = new Set<string>();
-  for (const charset of facts.charsets) { if (!/^[A-Za-z0-9_]+$/.test(charset.name) || names.has(charset.name) || !Number.isSafeInteger(charset.maxBytes) || charset.maxBytes < 1 || charset.maxBytes > 4) throw Error('实际字符集MAXLEN目录不完整或无效'); names.add(charset.name); }
+  for (const charset of facts.charsets) { if (typeof charset.name !== 'string' || /\s/.test(charset.name) || !/^[A-Za-z0-9_]+$/.test(charset.name) || names.has(charset.name) || !Number.isSafeInteger(charset.maxBytes) || charset.maxBytes < 1 || charset.maxBytes > 4) throw Error('实际字符集MAXLEN目录不完整或无效'); names.add(charset.name); }
 }
 /** 解析待建类型的严格白名单；不调用真实目录适配器，也不制造COLUMNS行。 */
 function plannedColumn(column: TableCreateDraft['columns'][number], maxBytes: number): PlannedIndexColumn {
@@ -29,6 +29,7 @@ export function planTableCreateIndexes(input: TableCreateDraft, facts: TableCrea
   assertTableCreatePrefixFacts(facts);
   if (design.engine.toUpperCase() !== 'INNODB' || design.foreignKeys.length) throw Error('首片前缀新表仅允许InnoDB且不含外键');
   const charset = facts.charsets.find(value => value.name === design.charset); if (!charset) throw Error('待建字符集不属于本次实际MAXLEN目录');
+  if (design.indexes.filter(index => index.name !== 'PRIMARY').length > 64 || design.indexes.some(index => index.name.toUpperCase() === 'PRIMARY' && index.name !== 'PRIMARY')) throw Error('前缀新表索引数量或主键名称超出首片范围');
   const columns = new Map(design.columns.map(column => [column.name, column]));
   if (columns.size !== design.columns.length || new Set(design.columns.map(column => column.name.toLowerCase())).size !== design.columns.length || new Set(design.indexes.map(index => index.name.toLowerCase())).size !== design.indexes.length) throw Error('新表字段或索引名称重复');
   const planned = new Map<string, PlannedIndexColumn>();
@@ -36,10 +37,12 @@ export function planTableCreateIndexes(input: TableCreateDraft, facts: TableCrea
     const keyParts = tableCreateIndexParts(index); if (!keyParts.length || keyParts.length > 16 || new Set(keyParts.map(part => part.columnName)).size !== keyParts.length) throw Error('新表索引键部分为空、重复或超过首片预算');
     let keyBytes = 0;
     for (const part of keyParts) {
-      const source = columns.get(part.columnName); if (!source) throw Error('索引字段不属于本次待建草稿');
+      const source = columns.get(part.columnName); if (source?.name.toUpperCase() === 'FTS_DOC_ID') throw Error('全文文档定位列不属于新表前缀首片'); if (!source) throw Error('索引字段不属于本次待建草稿');
       const column = planned.get(source.name) ?? plannedColumn(source, charset.maxBytes); planned.set(source.name, column);
       if (index.name === 'PRIMARY' && (part.prefixLength !== undefined || source.nullable)) throw Error('主键只允许非空完整字段，不接受前缀');
       if (part.prefixLength !== undefined && (column.family === 'integer' || part.prefixLength > column.declaredUnits!)) throw Error('前缀类型或长度超出待建字段的已证明范围');
+      // 准确8.4.11将等于整字段长度的字符串前缀省略于SHOW/SUB_PART；仅在类型与MAXLEN证明后规范化，主键已先拒绝。
+      if (column.family !== 'integer' && part.prefixLength === column.declaredUnits) delete part.prefixLength;
       const bytes = part.prefixLength === undefined ? column.fullKeyBytes : part.prefixLength * column.unitBytes;
       keyBytes += bytes; if (!Number.isSafeInteger(keyBytes) || keyBytes > 3072) throw Error('整条索引超过已证明的3072字节预算，不能自动截短');
     }

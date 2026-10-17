@@ -1,12 +1,13 @@
+import { tableCreatePrefixZh as prefixText } from '../../src/renderer/locales/tableCreatePrefix.zh-CN';
 import { act, StrictMode } from 'react';
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { memoryDocument, MemoryEvent } from '../fixtures/memory-dom';
 import type { TableDesign, TableInfo } from '../../src/shared/contracts';
 import type { TableCreateServices } from '../../src/renderer/tableCreateServices';
-import { tableCreateAcknowledgements, tableCreateDesignSchema } from '../../src/shared/tableCreate';
+import { tableCreateAcknowledgements, tableCreateDesignSchema, tableCreateLegacyDesign, type TableCreatePrefixFacts } from '../../src/shared/tableCreate';
 import { tableCreateZh as text } from '../../src/renderer/locales/tableCreate.zh-CN';
 import { zh, formatText } from '../../src/renderer/locales/zh-CN';
-import { buildDesign } from '../../src/engine/sql';
+import { buildPrefixTableDesign, buildDesign } from '../../src/engine/sql';
 
 // 只替换Monaco显示和传输端口；实际SchemaDialog、确认页、React事件及SQL生成器均保持。
 vi.mock('../../src/renderer/components/SqlEditor', () => ({ SqlEditor: ({ value, onChange, readOnly }: { value: string; onChange?(value: string): void; readOnly?: boolean }) => <><pre aria-label="只读预览SQL">{value}</pre>{onChange && <input aria-label="编辑预览SQL" value={value} disabled={readOnly} onChange={event => { if (!readOnly) onChange(event.target.value); }}/>}</> }));
@@ -54,7 +55,7 @@ async function input(label: string, value: string): Promise<void> { const node =
 async function check(label: string, value: boolean): Promise<void> { const node = document.querySelector(`input[aria-label="${label}"]`); expect(node, '缺少复选框：' + label).not.toBeNull(); await act(async () => { node!.checked = value; node!.dispatchEvent(new MemoryEvent('click')); }); }
 async function click(label: string): Promise<void> { const node = document.querySelectorAll('button').find(item => item.textContent === label); expect(node, '缺少按钮：' + label).toBeDefined(); expect(node!.disabled).toBe(false); await act(async () => { node!.dispatchEvent(new MemoryEvent('click')); }); }
 /** 新建和编辑各走原预览接口，不以一条手写SQL代替实际生成。 */
-async function preview(original = false): Promise<TableDesign> { await click(zh.schema.text049); return original ? requests.filter(item => item.command === 'schema.preview').at(-1)!.input.design : vi.mocked(services.preview).mock.calls.at(-1)![0].design; }
+async function preview(original = false): Promise<TableDesign> { await click(zh.schema.text049); return original ? requests.filter(item => item.command === 'schema.preview').at(-1)!.input.design : tableCreateLegacyDesign(vi.mocked(services.preview).mock.calls.at(-1)![0].design); }
 
 describe('设计器显式空字符串默认值的真实React链（仅RAM）', () => {
   it('新建明确选择空串后，草稿及原生成器产生DEFAULT空字符串而非省略或NULL', async () => { await mount(); await check(emptyLabel, true); const draft = await preview(); expect(draft.columns[0].defaultValue).toBe(''); expect(buildDesign(draft).sql).toContain("DEFAULT ''"); expect(services.apply).not.toHaveBeenCalled(); expect(requests.some(item => item.command === 'schema.apply')).toBe(false); });
@@ -151,4 +152,44 @@ describe('已有表预览绑定准确目标和连接修订（仅RAM）', () => {
     if(change==='target')await act(async()=>root!.render(<SchemaDialog connectionId="next_connection" database="next_db" table="next_table" onClose={closed} onApplied={applied}/>));else await act(async()=>workspace.setState({connectionVersions:{c:2}}));
     await act(async()=>finish({}));expect(applied).not.toHaveBeenCalled();expect(closed).not.toHaveBeenCalled();expect(requests.filter(item=>item.command==='schema.apply')).toHaveLength(1);expect(document.querySelector('pre[aria-label="只读预览SQL"]')).toBeNull();
   });
+});
+
+
+/** 字段选择及前缀长度均经过真实React事件，后端用现有生成入口，禁止直接改草稿。 */
+async function prefixDraft() {
+  await mount(); await click(zh.schema.text027); await input(formatText(zh.schema.text018, 2), 'v'); await input(formatText(zh.schema.text019, 2), 'varchar(1000)');
+  const tab = document.querySelectorAll('button').find(node => node.textContent.startsWith(zh.common.indexes)); expect(tab).toBeDefined(); await act(async () => tab!.dispatchEvent(new MemoryEvent('click')));
+  await click(zh.schema.text036); await input(formatText(zh.schema.text031, 2), 'ix');
+  const select = document.querySelector(`select[aria-label="${prefixText.field(2, 1)}"]`); expect(select).not.toBeNull(); await act(async () => { select!.value = 'v'; select!.dispatchEvent(new MemoryEvent('change')); }); await input(prefixText.prefix(2, 1), '10');
+}
+/** 只替换新表服务端口；实际确认页仍核目标、租约、单次令牌和迟到回调。 */
+function prefixPorts() {
+  const facts: TableCreatePrefixFacts = { dialect: 'mysql', serverVersion: '8.4.11', pageSize: 16384, defaultRowFormat: 'DYNAMIC', charsets: [{ name: 'utf8mb4', maxBytes: 4 }], digest: 'a'.repeat(64) };
+  services.get = vi.fn(async input => ({ target: { connectionId: 'c', database: 'db' }, snapshotId: 'prefix-s', expiresAt: new Date(Date.now() + 120000).toISOString(), serverVersion: '8.4.11', warnings: [], ...(input.includePrefixFacts ? { prefixFacts: facts } : {}) }));
+  services.preview = vi.fn(async input => ({ target: { connectionId: 'c', database: 'db', table: input.design.name }, previewToken: 'prefix-p', expiresAt: new Date(Date.now() + 110000).toISOString(), designDigest: 'b'.repeat(64), sql: buildPrefixTableDesign(input.design, facts).sql, warnings: [], requiredAcknowledgements: [...tableCreateAcknowledgements] }));
+}
+describe('新表前缀真实字段控件到确认页（仅RAM端口）', () => {
+  it('字段选择与长度形成互斥keyParts，按需读取能力并只读展示准确SQL', async () => {
+    await prefixDraft(); prefixPorts(); await click(zh.schema.text049); expect(services.get).toHaveBeenCalledWith(expect.objectContaining({ includePrefixFacts: true })); const draft = vi.mocked(services.preview).mock.calls[0][0].design;
+    expect(draft.indexes[1]).toEqual({ name: 'ix', unique: false, keyParts: [{ columnName: 'v', prefixLength: 10 }] }); expect(document.body.textContent).toContain('KEY `ix` (`v`(10))'); expect(document.body.textContent).toContain('ROW_FORMAT=DYNAMIC'); expect(document.querySelector('input[aria-label="编辑预览SQL"]')).toBeNull(); expect(services.apply).not.toHaveBeenCalled();
+  });
+  it('表示切换清除旧表示，不以name(n)拼进columns，清除前缀后不请求新能力', async () => {
+    await prefixDraft(); await click(prefixText.legacy); await click(zh.schema.text049); const input = vi.mocked(services.preview).mock.calls[0][0]; expect(input.design.indexes[1]).toEqual({ name: 'ix', unique: false, columns: ['v'] }); expect(vi.mocked(services.get).mock.calls[0][0].includePrefixFacts).toBeUndefined();
+  });
+  it('非法小数长度在确认前拒绝，不发get/preview或任意SQL', async () => {
+    await prefixDraft(); await input(prefixText.prefix(2, 1), '1.5'); await click(zh.schema.text049); expect(services.get).not.toHaveBeenCalled(); expect(services.preview).not.toHaveBeenCalled(); expect(document.body.textContent).toContain(text.invalidDesign);
+  });
+  it('前缀确认准备期间修订ABA，迟到真实端口返回只释放不能展示或提交', async () => {
+    await prefixDraft(); prefixPorts(); let resolve!:(value:any)=>void; const pending = new Promise<any>(yes=>{resolve=yes;}); const normal = services.preview; services.preview = vi.fn(async input => { const value = await normal(input); await pending; return value; });
+    await click(zh.schema.text049); expect(services.preview).toHaveBeenCalledOnce(); await act(async()=>{workspace.setState({connectionVersions:{c:2}});workspace.setState({connectionVersions:{c:1}});resolve({});}); expect(document.querySelector('pre[aria-label="只读预览SQL"]')).toBeNull(); expect(services.apply).not.toHaveBeenCalled(); expect(services.release).toHaveBeenCalledWith({previewToken:'prefix-p'});
+  });
+  it('缺能力事实时明确拒绝，不能仅凭草稿长度继续生成', async () => {
+    await prefixDraft(); prefixPorts(); services.get = vi.fn(async () => ({target:{connectionId:'c',database:'db'},snapshotId:'missing',expiresAt:new Date(Date.now()+120000).toISOString(),serverVersion:'8.4.11',warnings:[]})); await click(zh.schema.text049); expect(services.preview).not.toHaveBeenCalled(); expect(document.body.textContent).toContain(prefixText.unavailable);
+  });
+});
+
+it('前缀真实确认控件准确库表名及两项勾选后双击只消费一次令牌（RAM服务）', async () => {
+  await prefixDraft(); prefixPorts(); services.apply = vi.fn(async()=>({target:{connectionId:'c',database:'db',table:'new_table'},ddlSubmitted:true as const,ddlCompleted:true as const,definitionVerified:true,resourcesReleased:true,warnings:[]})); await click(zh.schema.text049); await input(text.confirmation, 'db.new_table');
+  for (const label of [text.ackDdl,text.ackCreate]) { const node=document.querySelectorAll('label').find(value=>value.textContent===label)?.querySelector('input');expect(node).not.toBeNull();await act(async()=>{node!.checked=true;node!.dispatchEvent(new MemoryEvent('click'));}); }
+  const button=document.querySelectorAll('button').find(value=>value.textContent===text.apply)!;expect(button.disabled).toBe(false);await act(async()=>{button.dispatchEvent(new MemoryEvent('click'));button.dispatchEvent(new MemoryEvent('click'));});expect(services.apply).toHaveBeenCalledOnce();expect(vi.mocked(services.apply).mock.calls[0][0]).toMatchObject({previewToken:'prefix-p',confirmation:'db.new_table',acknowledgements:[...tableCreateAcknowledgements]});expect(applied).toHaveBeenCalledOnce();
 });
