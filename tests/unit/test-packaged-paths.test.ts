@@ -1,4 +1,5 @@
 import { readFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { posix, win32 } from 'node:path';
 import { runInNewContext } from 'node:vm';
 import ts from 'typescript';
@@ -18,7 +19,7 @@ const cases = [
 ] as const;
 
 /** 运行实际安装函数和测试执行块；文件检查、安装命令与Playwright均为受控端口，不安装或启动程序。 */
-function runProbe(input: typeof cases[number], executableExists = true) {
+function runProbe(input: typeof cases[number], executableExists = true, helperMode: 'normal' | 'missing' | 'symlink' | 'directory' | 'oversize' | 'changed' = 'normal') {
   const path = input.platform === 'win32' ? win32 : posix;
   const inherited = Object.freeze({
     PATH: '保留原路径', LANG: 'zh_CN.UTF-8', KEEP_FIXTURE: '保留自定义环境',
@@ -27,18 +28,33 @@ function runProbe(input: typeof cases[number], executableExists = true) {
   });
   const project = path.join(path.dirname(input.directory), '源码项目');
   const node = path.join(path.dirname(input.directory), '运行环境', input.platform === 'win32' ? 'node.exe' : 'node');
+  const helper = path.join(path.dirname(input.executable), 'resources', 'database-backup-windows', 'databaseBackupWindowsFiles.helper.cs');
+  const sourceHelper = path.join(project, 'src/engine/databaseBackupWindowsFiles.helper.cs');
+  const sourceBytes = Buffer.from('// 仅RAM公开编译资源\n');
+  // 运行真实安装块的资源检查及Node SHA256，只替换固定两文件的RAM读取，不按摘要真假自报结果。
+  const stat = vi.fn((target: string) => {
+    if (target !== helper) throw Error('越界资源检查');
+    if (helperMode === 'missing') throw Object.assign(Error('合成资源不存在'), { code: 'ENOENT' });
+    return { isFile: () => helperMode !== 'directory', isSymbolicLink: () => helperMode === 'symlink', size: helperMode === 'oversize' ? 65537 : sourceBytes.length };
+  });
+  const read = vi.fn((target: string) => {
+    if (target === sourceHelper) return sourceBytes;
+    if (target === helper) return helperMode === 'changed' ? Buffer.from('// 已被替换的公开资源\n') : sourceBytes;
+    throw Error('越界资源读取');
+  });
   const command = vi.fn((_executable: string, _args: string[], _options?: { env?: Record<string, string>; timeout?: number; windowsVerbatimArguments?: boolean }) => '');
   const owned: string[] = [];
   const execute = () => runInNewContext(probe, {
     platform: input.platform, process: { arch: input.arch, env: inherited, execPath: node },
     project, artifact: path.join(project, input.platform === 'win32' ? '安装程序.exe' : '安装映像.dmg'),
     applicationDirectory: input.directory, mountDirectory: path.join(path.dirname(input.directory), '只读挂载'),
-    installAttempted: false, join: path.join, basename: path.basename, command,
+    installAttempted: false, join: path.join, basename: path.basename, dirname: path.dirname, command,
+    lstatSync: stat, readFileSync: read, createHash,
     assertOwnedPath: (target: string) => { owned.push(target); },
     existsSync: (target: string) => executableExists && target === input.executable,
     mkdirSync: vi.fn(), console: { log: vi.fn() },
   }, { timeout: 1000 });
-  return { execute, command, inherited, project, node, owned };
+  return { execute, command, inherited, project, node, owned, helper, sourceHelper, read, stat };
 }
 
 describe('真实安装执行器统一普通及C02可执行路径', () => {
@@ -59,10 +75,20 @@ describe('真实安装执行器统一普通及C02可执行路径', () => {
     expect(f.inherited.DBARK_C02_EXECUTABLE_PATH).toBe('继承的错误专用程序');
     expect(f.inherited.DBARK_DEV_URL).toBe('http://虚构开发地址');
     expect(f.owned).toContain(input.executable);
+    if (input.platform === 'win32') {
+      expect(f.owned).toContain(f.helper); expect(f.stat).toHaveBeenCalledWith(f.helper);
+      expect(f.read.mock.calls.map(([target]) => target)).toEqual([f.helper, f.sourceHelper]);
+    } else { expect(f.stat).not.toHaveBeenCalled(); expect(f.read).not.toHaveBeenCalled(); }
   });
   it('安装所得程序不存在时拒绝启动测试，不回退到继承的两种路径', () => {
     const f = runProbe(cases[0], false);
     expect(f.execute).toThrow('安装产物中缺少 DBArk 可执行文件');
     expect(f.command.mock.calls.some(([executable]) => executable === f.node)).toBe(false);
+  });
+  it.each(['missing', 'symlink', 'directory', 'oversize', 'changed'] as const)('Windows helper资源%s时拒绝运行测试，不回退到继承路径', mode => {
+    const f = runProbe(cases[0], true, mode);
+    expect(f.execute).toThrow(mode === 'missing' ? '合成资源不存在' : mode === 'changed' ? '摘要不一致' : '资源无效');
+    expect(f.command.mock.calls.some(([executable]) => executable === f.node)).toBe(false);
+    if (mode !== 'changed') expect(f.read).not.toHaveBeenCalled();
   });
 });
