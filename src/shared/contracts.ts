@@ -104,6 +104,7 @@ export interface CommandMap {
   'connections.open': { input: { id: string }; output: ConnectionStatus };
   'connections.close': { input: { id: string }; output: void };
   'metadata.databases': { input: { connectionId: string }; output: string[] };
+  'serverMonitor.read': { input: import('./serverMonitor').ServerMonitorInput; output: import('./serverMonitor').ServerMonitorSnapshot };
   'metadata.completion': { input: CompletionMetadataInput; output: CompletionMetadataOutput };
   'search.structure':{input:StructureSearchInput;output:StructureSearchPage};
   'search.savedQueries':{input:SavedQuerySearchInput;output:SavedQuerySearchPage};

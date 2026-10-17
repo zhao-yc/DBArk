@@ -1,5 +1,6 @@
 import { TableCopyDataTasks } from './tableCopyDataTasks';
 import { TableCreateTasks } from './tableCreateTasks';
+import { readServerMonitor } from './serverMonitor';
 import { CsvExportFieldCatalogs, type CsvExportFieldSnapshot } from './csvExportFields';
 import { TableCopyStructureTasks } from './tableCopyStructureTasks';
 import { applyTableTransaction, emptyTableApplyEvidence } from './tableApplyTransaction';
@@ -197,6 +198,10 @@ export class Engine {
         await session.managed.close(); this.sessions.delete(input.sessionId); return;
       }
       case 'metadata.databases': return this.withConnection(input.connectionId, connection => metadata.databases(connection));
+      // 监控只用独立短连接，不借用SQL标签事务；原任务严格收尾后才交还快照。
+      case 'serverMonitor.read': return this.withIndependentTask(input.connectionId, input.taskId,
+        (managed, control) => readServerMonitor({ managed, ...control }, input as import('../shared/serverMonitor').ServerMonitorInput),
+        undefined, '读取服务器监控', true, () => ({}));
       case 'search.structure':case 'search.structureContinue':{
         const profile=input.profile as ConnectionProfile|undefined;
         if(!profile||profile.id!==input.connectionId)throw Error('主进程未提供有效搜索连接配置');

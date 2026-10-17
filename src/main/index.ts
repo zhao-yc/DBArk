@@ -157,6 +157,7 @@ async function dispatch(command: Command, input: any): Promise<unknown> {
   // 新建表在第一次等待前消费主进程能力；目的和修订仍由引擎独立核验。
   if (command === 'schema.tableCreate.apply' || command === 'schema.tableCopyData.apply') structureTokens.delete(input.previewToken);
   if (command.startsWith('schema.compare') && shuttingDown) throw new Error('客户端正在退出，不能开始结构比较');
+  if (command === 'serverMonitor.read' && shuttingDown) throw new Error('客户端正在退出，不能刷新服务器监控');
   if (command === 'schema.compare') { connectionConfig.assertAvailable(input.source.connectionId); connectionConfig.assertAvailable(input.target.connectionId); }
   switch (command) {
     // 无 await、无引擎调用：全部校验和生成通过后才一次写入系统剪贴板。

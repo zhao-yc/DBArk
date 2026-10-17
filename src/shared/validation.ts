@@ -2,6 +2,7 @@ import { tableCopyDataMode, tableCopyDataAcknowledgements } from './tableCopyDat
 import { tableCreateDesignSchema, tableCreateAcknowledgements } from './tableCreate';
 import { tableCopyStructureKnownAcknowledgements, validateTableCopyStructureName } from './tableCopyStructure';
 import { z } from 'zod';
+import { serverMonitorLimits, validateServerMonitorInput } from './serverMonitor';
 import { csvExportFieldLimits } from './csvExportFields';
 import { taskCancelInputSchema } from './taskCancelState';
 import { tableApplyReceiptListSchema } from './tableApplyReceipt';
@@ -114,6 +115,10 @@ export const commandSchemas: Record<Command, z.ZodType> = {
   'connections.importApply': connectionImportApplySchema,
   'connections.list': empty, 'connections.save': connectionSchema, 'connections.test': connectionSchema,
   'connections.delete': z.object({ id }).strict(), 'connections.open': z.object({ id }).strict(), 'connections.close': z.object({ id }).strict(),
+  'serverMonitor.read': z.object({ connectionId: id, taskId: id, sessionLimit: z.number().int().min(1).max(serverMonitorLimits.sessions).optional() }).strict().superRefine((value, context) => {
+    // IPC先拒绝额外范围，内核继续复用同一标识及预算校验。
+    try { validateServerMonitorInput(value); } catch { context.addIssue({ code: z.ZodIssueCode.custom, message: '服务器监控参数无效' }); }
+  }),
   'metadata.databases': z.object({ connectionId: id }).strict(),
   'search.structure':structureSearchInputSchema,
   'search.savedQueries':savedQuerySearchInputSchema,'search.savedQueriesContinue':savedQuerySearchNextSchema,'search.savedQueriesRelease':savedQuerySearchReleaseSchema,'queries.read':savedQueryReadSchema,

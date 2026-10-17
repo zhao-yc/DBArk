@@ -2,6 +2,7 @@ import type { Command, TaskEvent } from '../shared/contracts';
 
 /** 服务端错误可能展开参数值；概要记录仅保存进度，不将错误原文写入本地库。 */
 export function persistedTaskMessage(command: string, event: TaskEvent): string {
+  if (command === 'serverMonitor.read') return event.status === 'completed' ? '服务器监控快照读取完成；会话SQL、账号和错误原文未保存。' : event.status === 'running' ? '正在读取只读服务器监控；快照只留在当前窗口。' : '服务器监控读取未正常完成；会话SQL、账号和错误原文未保存，请在当前窗口核对。';
   if (command.startsWith('schema.tableCopyData.')) {
     const progress = event.tableCopyData;
     return progress?.dataCompleted ? '复制数据事务已收到提交成功响应；源行、确认文字及错误原文未保存。' : progress?.ddlCompleted ? '目标表已创建，数据未确认提交；保留目标，请人工核对，不重放或补DROP。' : progress?.ddlSubmitted ? '建表结果未知，保留目标，请人工核对，不自动重放。' : '结构及数据复制尚未确认发送DDL；行内容与错误原文未保存。';
