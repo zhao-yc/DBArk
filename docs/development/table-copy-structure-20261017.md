@@ -8,7 +8,7 @@
 
 首片仅开放MySQL 8.4.11、Linux或debian-linux-gnu、lower_case_table_names=0、非系统库、ASCII名称、永久非分区InnoDB普通表。新名为1～64个ASCII字母/数字/下划线，首字符不能是数字；不trim、不跨库、不补后缀，也不接受与来源相同或仅大小写不同的名字。
 
-仅创建空表，复制已核普通列、普通/唯一/主键BTREE索引及已解析的表选项。普通唯一自增整数列已按[自增追加](table-copy-structure-auto-increment-20261017.md)支持，要求准确目录与默认策略；生成/隐藏/未知字段、CHECK、外键、特殊/表达式/不透明索引、未知/特殊物理表选项、已知入向/出向外键、触发器、视图引用均只读。未知目录、身份、角色、部分撤销、字符属性或权限能力不能推断为支持。首片要求显式全局SELECT、SHOW VIEW、TRIGGER、CREATE及可读取物理身份的目录权限；不借重命名任务要求ALTER/DROP/INSERT，不发GRANT，也不自动扩权。
+仅创建空表，复制已核普通列、普通/唯一/主键BTREE索引及已解析的表选项。普通唯一自增整数列已按[自增追加](table-copy-structure-auto-increment-20261017.md)支持，要求准确目录与默认策略；准确MySQL8.4.11普通数值生成列的最小追加见[生成列支持](table-copy-generated-20261017.md)。未证明生成列、隐藏/未知字段、CHECK、外键、特殊/表达式/不透明索引、未知/特殊物理表选项、已知入向/出向外键、触发器、视图引用均只读。未知目录、身份、角色、部分撤销、字符属性或权限能力不能推断为支持。仍要求显式全局SELECT、SHOW VIEW、TRIGGER、CREATE及可读取物理身份的目录权限；不借重命名任务要求ALTER/DROP/INSERT，不发GRANT，也不自动扩权。
 
 不复制行数据、外键、触发器、授权或其它对象，不宣传为完整克隆。MySQL官方说明CREATE LIKE创建空表并保留列属性和索引，但不会复制外键；参见[MySQL 8.4 CREATE TABLE LIKE](https://dev.mysql.com/doc/refman/8.4/en/create-table-like.html)。本片进一步收窄支持范围，不把官方支持列表直接当成本产品验收。
 

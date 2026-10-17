@@ -16,6 +16,7 @@ let fail: RegExp | undefined, hold: RegExp | undefined, held: { complete(error?:
 let initialMode: string;
 let counters: Map<string, unknown>, copiedAutoDefinition: string | undefined, expiry: string, columnTypeOverride: string | undefined, policy: Record<string, string>;
 let closing: Promise<void> | undefined, releaseClosing: (() => void) | undefined;
+let generatedRows: Map<string, Record<string, unknown>[]>;
 /** 精确解析产品只读目录中的编码名称，预期DDL由测试独立断言，驱动不调用产品规划器。 */
 function nameOf(sql: string): string { const quoted = /^SHOW CREATE TABLE `db`\.`([^`]+)`/.exec(sql); if (quoted) return quoted[1]; const values = [...sql.matchAll(/X'([a-f0-9]*)'/g)].map(value => Buffer.from(value[1], 'hex').toString()); return values.at(-1)?.split('/').at(-1) ?? 't'; }
 /** 仅替换数据库驱动边界，完整读取、任务、缓存、锁、取消和关闭都运行真实Engine。 */
@@ -41,8 +42,9 @@ function managed(signal?: AbortSignal): ManagedConnection {
       else if (sql.startsWith('SELECT @@SESSION.sql_generate')) rows = [{ ...capability }];
       else if (sql.startsWith('SHOW CREATE TABLE')) { if (!source) { callback(Error('对象不存在')); return; } rows = [{ Table: name, 'Create Table': source }]; }
       else if (sql.startsWith('SELECT c.CHARACTER_SET_NAME AS charset, t.TABLE_COLLATION')) rows = [{ charset: 'utf8mb4', collation: 'utf8mb4_bin' }];
-      else if (sql.startsWith('SELECT COLUMN_NAME AS name, DATA_TYPE')) rows = parseTableColumnDefinition(source, context).columns.map(column => ({ name: column.name, dataType: column.type.raw.split(/[ (]/)[0], columnType: columnTypeOverride ?? column.type.raw, extra: column.attributes.some(attribute => attribute.kind === 'auto-increment') ? 'auto_increment' : '' }));
-      else if (sql.startsWith('SELECT COLUMN_NAME AS name')) rows = parseTableColumnDefinition(source, context).columns.map(column => ({ name: column.name, nullable: column.nullable === false ? 'NO' : 'YES', extra: column.attributes.some(attribute => attribute.kind === 'auto-increment') ? 'auto_increment' : '', charset: column.name === 's' ? 'latin1' : null, collation: column.name === 's' ? 'latin1_bin' : null }));
+      else if (sql.startsWith('SELECT COLUMN_NAME AS name, ORDINAL_POSITION AS ordinal')) rows = generatedRows.get(name) ?? [];
+      else if (sql.startsWith('SELECT COLUMN_NAME AS name, DATA_TYPE')) rows = generatedRows.get(name) ?? parseTableColumnDefinition(source, context).columns.map(column => ({ name: column.name, dataType: column.type.raw.split(/[ (]/)[0], columnType: columnTypeOverride ?? column.type.raw, extra: column.attributes.some(attribute => attribute.kind === 'auto-increment') ? 'auto_increment' : '' }));
+      else if (sql.startsWith('SELECT COLUMN_NAME AS name')) rows = generatedRows.get(name) ?? parseTableColumnDefinition(source, context).columns.map(column => ({ name: column.name, nullable: column.nullable === false ? 'NO' : 'YES', extra: column.attributes.some(attribute => attribute.kind === 'auto-increment') ? 'auto_increment' : '', charset: column.name === 's' ? 'latin1' : null, collation: column.name === 's' ? 'latin1_bin' : null }));
       else if (sql.startsWith('SELECT TABLE_TYPE AS kind')) rows = [{ kind: 'BASE TABLE', engine: 'InnoDB', rowFormat: 'Dynamic', comment: readTableCommentDefinition(source, context).comment, autoIncrement: counters.get(name) ?? null }];
       else if (sql.startsWith('SELECT @@version_compile_os')) rows = [{ os, lowerNames: lower }];
       else if (sql.startsWith('SELECT PARTITION_NAME')) rows = [{ name: dependency === 'partition' ? 'p0' : null }];
@@ -56,7 +58,7 @@ function managed(signal?: AbortSignal): ManagedConnection {
       else if (sql.startsWith('CREATE TABLE')) {
         const match = /^CREATE TABLE `db`\.`([^`]+)` LIKE `db`\.`t`;$/u.exec(sql); if (!match) { callback(Error('非法测试DDL')); return; }
         if (definitions.has(match[1])) { callback(Error('服务器同名冲突')); return; }
-        definitions.set(match[1], (copiedAutoDefinition ?? definitions.get('t')!).replace('CREATE TABLE `t`', 'CREATE TABLE `' + match[1] + '`')); counters.set(match[1], copiedAutoDefinition ? '1' : null); ids.set(match[1], '9007199254740997'); afterCreate?.(); rows = { affectedRows: 0, warningStatus: warning };
+        definitions.set(match[1], (copiedAutoDefinition ?? definitions.get('t')!).replace('CREATE TABLE `t`', 'CREATE TABLE `' + match[1] + '`')); if (generatedRows.has('t')) generatedRows.set(match[1], structuredClone(generatedRows.get('t')!)); counters.set(match[1], copiedAutoDefinition ? '1' : null); ids.set(match[1], '9007199254740997'); afterCreate?.(); rows = { affectedRows: 0, warningStatus: warning };
       }
       else if (/^SELECT 1 FROM `db`\.`[^`]+` LIMIT 1$/.test(sql)) rows = nonempty ? [{ 1: 1 }] : [];
       else { callback(Error('未定义离线端口：' + sql)); return; }
@@ -74,7 +76,7 @@ function autoSource(value: string) {
   copiedAutoDefinition = bare; definitions.set('t', value === '1' ? bare : bare.replace('ENGINE=InnoDB', 'ENGINE=InnoDB AUTO_INCREMENT=' + value)); counters.set('t', value);
 }
 beforeEach(async () => {
-  definitions = new Map([['t', original]]); ids = new Map([['t', '9007199254740995']]); events = []; connections = []; sent = []; sequence = 0;
+  definitions = new Map([['t', original]]); ids = new Map([['t', '9007199254740995']]); generatedRows = new Map(); events = []; connections = []; sent = []; sequence = 0;
   version = '8.4.11'; uuid = '11111111-2222-3333-4444-555555555555'; os = 'Linux'; lower = 0; grants = ["GRANT SELECT, SHOW VIEW, TRIGGER, PROCESS, CREATE ON *.* TO 'unit'@'host'"]; dependency = ''; capability = { gipk: 0, autocommit: 1, partialRevokes: 0 }; nonempty = false; warning = 0; closeFails = false; fail = hold = undefined; held = undefined; afterCreate = undefined;
   initialMode = ''; counters = new Map([['t', null]]); copiedAutoDefinition = undefined; expiry = '0'; columnTypeOverride = undefined; policy = { sessionIncrement: '1', sessionOffset: '1', globalIncrement: '1', globalOffset: '1', lockMode: '2', readOnly: '0', superReadOnly: '0', innodbReadOnly: '0', forceRecovery: '0' };
   closing = undefined; releaseClosing = undefined;
@@ -82,6 +84,85 @@ beforeEach(async () => {
   engine = new Engine(event => events.push(event)); await engine.handle('connections.open', { id: profile.id, profile });
 });
 afterEach(async () => { releaseClosing?.(); closing = undefined; closeFails = false; hold = undefined; held?.complete(Error('离线收尾')); await engine.closeAll(); vi.restoreAllMocks(); });
+
+/** 固定SHOW及独立目录事实，不从产品生成列表达式投影器生成预期。 */
+function ordinaryGenerated(storage: 'VIRTUAL' | 'STORED') {
+  const expression = '(`qty` * `price`) + 9007199254740993.123456789012';
+  definitions.set('t', `CREATE TABLE \`t\` (\`qty\` int NOT NULL,\`price\` decimal(30,12) NOT NULL,\`total\` decimal(50,12) GENERATED ALWAYS AS (${expression}) ${storage},PRIMARY KEY (\`qty\`)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin COMMENT='来源说明'`);
+  generatedRows.set('t', [
+    { name: 'qty', ordinal: 1, dataType: 'int', columnType: 'int', nullable: 'NO', extra: '', defaultValue: null, generationExpression: '', charset: null, collation: null },
+    { name: 'price', ordinal: 2, dataType: 'decimal', columnType: 'decimal(30,12)', nullable: 'NO', extra: '', defaultValue: null, generationExpression: '', charset: null, collation: null },
+    { name: 'total', ordinal: 3, dataType: 'decimal', columnType: 'decimal(50,12)', nullable: 'YES', extra: storage + ' GENERATED', defaultValue: null, generationExpression: '(' + expression + ')', charset: null, collation: null },
+  ]);
+}
+
+describe('复制结构普通生成列父红反例（真实Engine仅RAM驱动）', () => {
+  it.each(['VIRTUAL', 'STORED'] as const)('%s普通生成列应沿既有链创建空表并完整核验', async storage => {
+    ordinaryGenerated(storage); const source = await get(); expect(source.writable).toBe(true);
+    const planned = await preview(source); expect(planned.sql).toBe('CREATE TABLE `db`.`t_copy` LIKE `db`.`t`;');
+    expect(await apply(planned)).toMatchObject({ ddlCompleted: true, definitionVerified: true });
+    expect(writes()).toEqual(['CREATE TABLE `db`.`t_copy` LIKE `db`.`t`;']);
+  });
+  it.each(['8.0.46', '8.4.12', '5.7.44', '10.11.19'])('%s生成列仍只读，不外推其它版本', async value => {
+    ordinaryGenerated('VIRTUAL'); version = value; expect((await get()).writable).toBe(false); expect(writes()).toEqual([]);
+  });
+  it.each(['方式', '表达式', '默认值', '列序', '类型', '目录缺项'])('目录%s矛盾或未知不形成写能力', async kind => {
+    ordinaryGenerated('VIRTUAL'); const rows = generatedRows.get('t')!, generated = rows[2];
+    if (kind === '方式') generated.extra = 'STORED GENERATED';
+    if (kind === '表达式') generated.generationExpression = '`price` + `qty`';
+    if (kind === '默认值') generated.defaultValue = '123';
+    if (kind === '列序') generated.ordinal = 2;
+    if (kind === '类型') generated.columnType = 'decimal(20,2)';
+    if (kind === '目录缺项') delete generated.generationExpression;
+    expect((await get()).writable).toBe(false); expect(writes()).toEqual([]);
+  });
+  it('SHOW漏生成属性而EXTRA有生成标记不能误当普通列', async () => {
+    ordinaryGenerated('VIRTUAL'); definitions.set('t', definitions.get('t')!.replace(/GENERATED ALWAYS AS \(.*\) VIRTUAL,PRIMARY/, 'DEFAULT NULL,PRIMARY'));
+    expect((await get()).writable).toBe(false); expect(writes()).toEqual([]);
+  });
+  it.each(['引用顺序', '末位精度'])('目录%s差异不能用数学等价或JS数值舍入抹平', async kind => {
+    ordinaryGenerated('VIRTUAL'); const row = generatedRows.get('t')![2];
+    row.generationExpression = String(row.generationExpression).replace(...(kind === '引用顺序' ? ['`qty` * `price`', '`price` * `qty`'] : ['9007199254740993.123456789012', '9007199254740993.123456789013']) as [string, string]);
+    expect((await get()).writable).toBe(false); expect(writes()).toEqual([]);
+  });
+  it('生成目录读取权限未知仅返回只读，不改权限或写表', async () => {
+    ordinaryGenerated('STORED'); fail = /GENERATION_EXPRESSION AS generationExpression/;
+    expect((await get()).writable).toBe(false); expect(writes()).toEqual([]);
+  });
+  it('专属确认不可省略或以普通三项代替，旧令牌先消费不重放', async () => {
+    ordinaryGenerated('VIRTUAL'); const p = await preview(await get()); expect(p.requiredAcknowledgements).toContain('generated-columns-copy');
+    await expect(apply(p, { acknowledgements: p.requiredAcknowledgements.filter(value => value !== 'generated-columns-copy') })).rejects.toThrow();
+    await expect(apply(p)).rejects.toThrow(); expect(writes()).toEqual([]);
+  });
+  it('预览后目录生成表达式变化拒绝旧能力，不能只比较SHOW摘要', async () => {
+    ordinaryGenerated('VIRTUAL'); const p = await preview(await get()); generatedRows.get('t')![2].generationExpression = '`qty` + 1';
+    await expect(apply(p)).rejects.toThrow(); expect(writes()).toEqual([]);
+  });
+  it.each(['来源', '目标'])('ACK后%s生成属性矛盾保留完成事实，不重放/ALTER/DROP补救', async kind => {
+    ordinaryGenerated('STORED'); const p = await preview(await get()); afterCreate = () => { generatedRows.get(kind === '来源' ? 't' : 't_copy')![2].extra = 'VIRTUAL GENERATED'; };
+    expect(await apply(p)).toMatchObject({ ddlCompleted: true, definitionVerified: false }); expect(writes()).toEqual(['CREATE TABLE `db`.`t_copy` LIKE `db`.`t`;']);
+    await expect(apply(p)).rejects.toThrow();
+  });
+  it.each(['partition', 'foreign', 'trigger', 'view'])('生成列不会豁免原%s依赖守卫', async value => {
+    ordinaryGenerated('VIRTUAL'); dependency = value; expect((await get()).writable).toBe(false); expect(writes()).toEqual([]);
+  });
+  it('原始模式隐藏定义时，第二次读取不能掩盖只读边界', async () => {
+    ordinaryGenerated('STORED'); initialMode = 'NO_FIELD_OPTIONS'; expect((await get()).writable).toBe(false);
+  });
+  it('返回的生成列表达式不能替换引擎持有计划或客户端SQL', async () => {
+    ordinaryGenerated('VIRTUAL'); const source = await get(); expect(source.generatedColumns?.[0].storage).toBe('VIRTUAL'); source.generatedColumns![0].expression = '伪造表达式';
+    const p = await preview(source); expect(p.generatedColumns?.[0].expression).toContain('9007199254740993.123456789012');
+    expect(await apply(p)).toMatchObject({ ddlCompleted: true, definitionVerified: true });
+  });
+  it('普通自增与不引用自增列的生成列共存，五项确认及准确计数仍完整', async () => {
+    ordinaryGenerated('STORED'); const base = definitions.get('t')!.replace('(`qty`', '(`id` bigint NOT NULL AUTO_INCREMENT,`qty`').replace('PRIMARY KEY (`qty`)', 'PRIMARY KEY (`id`)');
+    copiedAutoDefinition = base; definitions.set('t', base.replace('ENGINE=InnoDB', 'ENGINE=InnoDB AUTO_INCREMENT=9007199254740993')); counters.set('t', '9007199254740993');
+    const rows = generatedRows.get('t')!; rows.forEach(row => { row.ordinal = Number(row.ordinal) + 1; });
+    rows.unshift({ name: 'id', ordinal: 1, dataType: 'bigint', columnType: 'bigint', nullable: 'NO', extra: 'auto_increment', defaultValue: null, generationExpression: '', charset: null, collation: null });
+    const p = await preview(await get()); expect(p.requiredAcknowledgements).toHaveLength(5);
+    expect(await apply(p)).toMatchObject({ ddlCompleted: true, structureVerified: true, definitionVerified: true, counter: { state: 'matched', actualValue: '1' } });
+  });
+});
 
 describe('真实Engine复制空表结构（仅替换驱动）', () => {
   it('读/预览零DDL，准确单次CREATE LIKE；源ID不变、新ID不同、完整定义和空表均核验', async () => {

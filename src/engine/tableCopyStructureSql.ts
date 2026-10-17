@@ -10,8 +10,10 @@ import { structureDocumentOf, structureTaskQuery, type StructureTaskContext } fr
 import { tableDefinitionTokens } from './tableColumnDefinition';
 import { readTableIndexDefinition } from './tableIndexDefinition';
 import type { TableCommentRead } from './tableCommentRead';
+import { readTableCopyGenerated, type TableCopyGeneratedPlan } from './tableCopyStructureGenerated';
+import { tableCopyGeneratedText } from '../shared/tableCopyStructureGenerated';
 import { validateTableCopyStructureName, type TableCopyStructureTarget } from '../shared/tableCopyStructure';
-export interface TableCopyStructureRead extends TableCommentRead { serverUuid: string; capability: string; serverProfileId: string; autoIncrementPlan?: TableCopyStructureCounterPlan; autoIncrementPolicy?: TableAutoIncrementPolicy; }
+export interface TableCopyStructureRead extends TableCommentRead { serverUuid: string; capability: string; serverProfileId: string; autoIncrementPlan?: TableCopyStructureCounterPlan; autoIncrementPolicy?: TableAutoIncrementPolicy; generatedPlan?: TableCopyGeneratedPlan; }
 
 /** 只生成一条同库CREATE LIKE；不含IF NOT EXISTS、替换、复制数据或客户端SQL。 */
 export function planTableCopyStructure(target: TableCopyStructureTarget, value: unknown): { sql: string; newName: string } {
@@ -40,9 +42,11 @@ export async function readTableCopyStructure(context: StructureTaskContext, targ
     catch (reason) { context.checkCancelled(); additional.push(reason instanceof Error ? reason.message : '准确自增计数能力未知，当前只读'); }
   }
   const reasons = [...read.reasons, ...additional], document = structureDocumentOf(read);
+  let generatedPlan: TableCopyGeneratedPlan | undefined;
+  try { generatedPlan = await readTableCopyGenerated(context, target, read); } catch (reason) { context.checkCancelled(); reasons.push(reason instanceof Error ? reason.message : tableCopyGeneratedText.catalog); }
   if (!profile.canWrite) reasons.push(profile.readonlyReason);
   try { planTableCopyStructure(target, target.table === 'dbark_copy_probe' ? 'dbark_copy_probe_2' : 'dbark_copy_probe'); } catch (reason) { reasons.push((reason as Error).message); }
-  if (read.engine !== 'InnoDB' || !read.tableId || /\bTEMPORARY\b/i.test(document.head.raw) || document.columns.some(column => !column.access.type.editable)) reasons.push('生成、临时或未知字段/物理身份不在复制结构首片范围');
+  if (read.engine !== 'InnoDB' || !read.tableId || /\bTEMPORARY\b/i.test(document.head.raw) || document.columns.some(column => !column.access.type.editable && !generatedPlan?.columns.some(generated => generated.name === column.name))) reasons.push(tableCopyGeneratedText.unproven);
   if (read.originalMode !== read.normalizedMode) reasons.push('原SQL模式隐藏定义属性，复制结构首片只读');
   if (!autoIncrementPlan && (read.autoIncrement !== null || document.columns.some(column => column.attributes.some(attribute => attribute.kind === 'auto-increment')))) reasons.push('唯一自增列或准确计数能力未证明，当前只读');
   const indexes = readTableIndexDefinition(document);
@@ -66,13 +70,14 @@ export async function readTableCopyStructure(context: StructureTaskContext, targ
     if (Buffer.byteLength(JSON.stringify(grants)) > 512 * 1024 || !copyPrivileges(grants, target, read)) throw Error('首片须显式全局SELECT/SHOW VIEW/TRIGGER/CREATE；未知角色或授权只读，不自动扩权');
     capability = JSON.stringify(facts[0]);
   } catch (reason) { context.checkCancelled(); reasons.push(reason instanceof Error ? reason.message : '复制能力未知'); }
-  return { ...read, reasons: [...new Set(reasons)], serverUuid: serverUuid ?? '', capability, serverProfileId: profile.id, ...(autoIncrementPlan ? { autoIncrementPlan, autoIncrementPolicy } : {}) };
+  return { ...read, bytes: read.bytes + (generatedPlan?.bytes ?? 0), reasons: [...new Set(reasons)], serverUuid: serverUuid ?? '', capability, serverProfileId: profile.id, ...(autoIncrementPlan ? { autoIncrementPlan, autoIncrementPolicy } : {}), ...(generatedPlan ? { generatedPlan } : {}) };
 }
 /** 同名重建、UUID、完整定义、依赖或能力变化均拒绝；摘要不替代原生表编号。 */
 export function assertTableCopyStructureUnchanged(before: TableCopyStructureRead, after: TableCopyStructureRead): void {
   if (before.serverProfileId !== after.serverProfileId) throw Error(tableCopyStructureProfileText.changed);
   assertTableRenameUnchanged(before, after);
   if (JSON.stringify([before.autoIncrementPlan, before.autoIncrementPolicy]) !== JSON.stringify([after.autoIncrementPlan, after.autoIncrementPolicy])) throw Error('自增列、源计数或运行策略变化，未发送DDL');
+  if (JSON.stringify(before.generatedPlan ?? null) !== JSON.stringify(after.generatedPlan ?? null)) throw Error(tableCopyGeneratedText.changed);
   if (!before.serverUuid || before.serverUuid !== after.serverUuid || !before.capability || before.capability !== after.capability) throw Error('复制结构UUID或服务器能力变化，未发送DDL');
 }
 /** 来源含计数均不变；新表只分离已证明的顶层计数，列及其它定义逐字保留，准确新计数由调用方另核。 */
@@ -80,5 +85,5 @@ export function verifyTableCopyStructureStructure(before: TableCopyStructureRead
   try { assertTableCopyStructureUnchanged(before, source); } catch { return false; }
   const definitionMatches = before.autoIncrementPlan ? !!after.autoIncrementPlan && tableCopyStructureCounterDefinition(before.source, before.context).comparison === tableCopyStructureCounterDefinition(after.source, after.context).comparison && JSON.stringify(before.autoIncrementPlan.column) === JSON.stringify(after.autoIncrementPlan.column) && JSON.stringify(before.autoIncrementPolicy) === JSON.stringify(after.autoIncrementPolicy) : renameDefinitionBody(before) === renameDefinitionBody(after) && before.autoIncrement === after.autoIncrement;
   return empty && !after.reasons.length && !!after.tableId && before.tableId !== after.tableId && before.serverUuid === after.serverUuid && before.identity === after.identity && before.capability === after.capability && before.normalizedMode === after.originalMode && before.normalizedMode === after.normalizedMode
-    && definitionMatches && JSON.stringify([before.nullability, before.encodings, before.tableEncoding, before.engine, before.rowFormat, before.comment]) === JSON.stringify([after.nullability, after.encodings, after.tableEncoding, after.engine, after.rowFormat, after.comment]);
+    && definitionMatches && JSON.stringify(before.generatedPlan ?? null) === JSON.stringify(after.generatedPlan ?? null) && JSON.stringify([before.nullability, before.encodings, before.tableEncoding, before.engine, before.rowFormat, before.comment]) === JSON.stringify([after.nullability, after.encodings, after.tableEncoding, after.engine, after.rowFormat, after.comment]);
 }
