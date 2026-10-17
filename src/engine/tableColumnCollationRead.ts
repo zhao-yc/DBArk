@@ -4,6 +4,7 @@ import {readIndexStructure,indexReferenceNames,assertIndexStructureUnchanged,typ
 import {readTableDefaultEncodingCatalog} from './tableDefaultEncodingCatalog';
 import {readTableDefaultEncodingAlter} from './tableDefaultEncodingPrivileges';
 import type {TableColumnPatchTarget} from '../shared/tableColumnPatches';
+import {assertColumnCollationRuntimeFacts} from './tableColumnCollationInput';
 
 /** 私有准备证据，不属于IPC或写入授权；TABLE_ID/算法与外部依赖读取未完成前始终阻断执行。 */
 export interface ColumnCollationFacts {
@@ -61,13 +62,16 @@ export async function readColumnCollationFacts(context:StructureTaskContext,targ
     context.checkCancelled();
     const bytes=before.bytes*2+Buffer.byteLength(base.source)*3+catalog.bytes*2+Buffer.byteLength(JSON.stringify([...references.columns,...references.indexes]))*2+32768;
     if(!Number.isSafeInteger(bytes)||bytes>maximumBytes)throw Error('列排序规则私有准备证据超过16 MiB预算');
-    return{status:'preparation',facts:{kind:'column-collation-preparation-v1',target:{...target},base,references,indexes:before,catalog,directAlterProven,bytes,execution:{kind:'blocked',reasons:['table-id-algorithm-unverified','external-dependencies-and-visibility-unverified']}}};
+    const facts:ColumnCollationFacts={kind:'column-collation-preparation-v1',target:{...target},base,references,indexes:before,catalog,directAlterProven,bytes,execution:{kind:'blocked',reasons:['table-id-algorithm-unverified','external-dependencies-and-visibility-unverified']}};
+    assertColumnCollationRuntimeFacts(facts);return{status:'preparation',facts};
   }catch(error){if(permissionUnavailable(context,error))return{status:'unavailable',reason:'catalog-permission',execution:'blocked'};throw error;}
 }
 
 /** 独立新会话重核仍比较原模式、完整定义、全部稳定索引/FK和候选，不接受客户端布尔代替事实。 */
 export function assertColumnCollationUnchanged(before:ColumnCollationFacts,after:ColumnCollationFacts):void{
+  assertColumnCollationRuntimeFacts(before);assertColumnCollationRuntimeFacts(after);
   assertStructureDefinitionUnchanged(before.base,after.base);
   assertIndexStructureUnchanged(before.indexes,after.indexes);
   if(hash([before.target,before.references,before.catalog,before.directAlterProven,before.execution,before.base.serverVersion,before.base.context,before.base.columnExtras])!==hash([after.target,after.references,after.catalog,after.directAlterProven,after.execution,after.base.serverVersion,after.base.context,after.base.columnExtras]))throw Error('列排序规则候选、权限或稳定引用已变化；未发送DDL');
+  assertColumnCollationRuntimeFacts(before);assertColumnCollationRuntimeFacts(after);
 }
