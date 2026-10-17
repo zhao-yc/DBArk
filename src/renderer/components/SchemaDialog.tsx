@@ -1,6 +1,9 @@
 import {databaseSearchZh} from '../locales/databaseSearch.zh-CN';
 import { zh, formatText } from '../locales/zh-CN';
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
+import type { TableCreateApplyOutput } from '../../shared/tableCreate';
+import { TableCreateConfirmation } from './TableCreateConfirmation';
+import { tableCreateZh } from '../locales/tableCreate.zh-CN';
 import { Plus, Trash2, ArrowRight } from 'lucide-react';
 import type { DatabaseObject, ForeignKeyInfo, IndexInfo, SqlPreview, TableDesign } from '../../shared/contracts';
 import { errorMessage, identifier, invoke, kindLabels, qualifiedName, uid } from '../lib';
@@ -17,11 +20,21 @@ const blankColumn = (): TableDesign['columns'][number] => ({ name: '', type: 'va
 const splitColumns = (text: string) => text.split(',').map(item => item.trim());
 
 /** 设计器维护字段、索引及外键草稿，必须先生成预览后才允许执行 DDL。 */
-export function SchemaDialog({ connectionId, database, table, onClose, onApplied }: { connectionId: string; database: string; table?: string; onClose: () => void; onApplied: () => void }) {
-  const [design, setDesign] = useState<TableDesign>({ database, name: table ?? '', originalName: table, engine: 'InnoDB', charset: 'utf8mb4', comment: '', columns: table ? [] : [{ ...blankColumn(), name: 'id', type: 'bigint unsigned', nullable: false, autoIncrement: true }], indexes: table ? [] : [{ name: 'PRIMARY', unique: true, columns: ['id'] }], foreignKeys: [] });
+export function SchemaDialog({ connectionId, database, table, onClose, onApplied, onCreated, onDirtyChange }: { connectionId: string; database: string; table?: string; onClose: () => void; onApplied: () => void; onCreated?(result: TableCreateApplyOutput, version: number): void; onDirtyChange?(dirty: boolean): void }) {
+  const [design, setDesign] = useState<TableDesign>({ database, name: table ?? '', ...(table ? { originalName: table } : {}), engine: 'InnoDB', charset: 'utf8mb4', comment: '', columns: table ? [] : [{ ...blankColumn(), name: 'id', type: 'bigint unsigned', nullable: false, autoIncrement: true }], indexes: table ? [] : [{ name: 'PRIMARY', unique: true, columns: ['id'] }], foreignKeys: [] });
   const [section, setSection] = useState<'columns' | 'indexes' | 'foreignKeys'>('columns'); const [busy, setBusy] = useState(!!table); const [error, setError] = useState(''); const [preview, setPreview] = useState<SqlPreview | null>(null); const [sql, setSql] = useState('');
   const [unsupported, setUnsupported] = useState(false); const [originalDdl, setOriginalDdl] = useState('');
   const [applyTaskId, setApplyTaskId] = useState('');
+  const [confirming, setConfirming] = useState(false);
+  const sourceVersion = useWorkspace(state => state.connectionVersions[connectionId] ?? 0);
+  const origin = useRef({ connectionId, database, version: sourceVersion, draft: JSON.stringify(design), invalid: false });
+  if (!table && (origin.current.connectionId !== connectionId || origin.current.database !== database || origin.current.version !== sourceVersion)) origin.current.invalid = true;
+  useEffect(() => {
+    if (table) return;
+    // 草稿阶段也观察连接ABA，不能到确认阶段才默默绑定另一份配置。
+    return useWorkspace.subscribe(state => { if ((state.connectionVersions[origin.current.connectionId] ?? 0) !== origin.current.version) { origin.current.invalid = true; setError(tableCreateZh.mismatch); } });
+  }, [table]);
+  useEffect(() => { if (!table) onDirtyChange?.(confirming || JSON.stringify(design) !== origin.current.draft); }, [design, confirming, table]);
   useEffect(() => {
     if (!table) return;
     void invoke('connections.open', { id: connectionId }).then(() => invoke('metadata.table', { connectionId, database, table })).then(info => {
@@ -40,16 +53,19 @@ export function SchemaDialog({ connectionId, database, table, onClose, onApplied
   function foreignAt(index: number, patch: Partial<ForeignKeyInfo>) { update({ foreignKeys: design.foreignKeys.map((value, item) => item === index ? { ...value, ...patch } : value) }); }
   /** 预览入口独立建立连接，不要求用户预先展开对象树，也不执行写操作。 */
   async function prepare() {
+    if (!table) { if (origin.current.invalid) { setError(tableCreateZh.mismatch); return; } setConfirming(true); return; }
     setError(''); setBusy(true);
     try { if (!design.name.trim()) throw new Error(zh.schema.text001); await invoke('connections.open', { id: connectionId }); const result = await invoke('schema.preview', { connectionId, design }); setPreview(result); setSql(result.sql); }
     catch (reason) { setError(errorMessage(reason)); } finally { setBusy(false); }
   }
   /** 确认后先准备连接，再发送一次结构写入；失败只展示错误，不自动重放 DDL。 */
   async function apply() {
+    if (!table) return; // 新表只能消费专用能力，不能降级到可编辑SQL提交。
     setError(''); setBusy(true); const taskId = uid(); setApplyTaskId(taskId);
     try { await invoke('connections.open', { id: connectionId }); await invoke('schema.apply', { connectionId, database, sql, taskId }); useWorkspace.getState().notify(zh.schema.text002); onApplied(); onClose(); }
     catch (reason) { setError(errorMessage(reason)); } finally { setBusy(false); }
   }
+  if (!table && confirming) return <TableCreateConfirmation connectionId={connectionId} design={design} onBack={() => setConfirming(false)} onClose={onClose} onCreated={onCreated ?? (() => onApplied())} onDirtyChange={onDirtyChange}/>;
   if (unsupported) return <Modal title={formatText(zh.schema.text003, table)} wide onClose={onClose}><div className="modal-content"><div className="info-strip">{zh.schema.text004}</div><SqlEditor value={originalDdl} readOnly height={370}/></div><footer className="modal-footer"><button onClick={onClose}>{zh.common.close}</button><span className="grow"/><button className="primary" onClick={() => { useWorkspace.getState().openTab({ kind: 'query', connectionId, database, title: formatText(zh.schema.text005, table), sql: formatText(zh.schema.text006, originalDdl.split('\n').map(line => '-- ' + line).join('\n')) }); onClose(); }}>{zh.schema.text007}</button></footer></Modal>;
   return <Modal title={table ? formatText(zh.schema.text008, table) : formatText(zh.schema.text009, database)} wide onClose={() => { if (!busy) onClose(); }}><div className="modal-content schema-content"><div className="schema-properties"><Field label={zh.schema.text010}><input value={design.name} onChange={event => update({ name: event.target.value })}/></Field><Field label={zh.schema.text011}><select value={design.engine} onChange={event => update({ engine: event.target.value })}><option>InnoDB</option><option>MyISAM</option><option>MEMORY</option><option>ARCHIVE</option></select></Field><Field label={zh.schema.text012}><input value={design.charset} onChange={event => update({ charset: event.target.value })}/></Field><Field label={zh.schema.text013}><input value={design.comment} onChange={event => update({ comment: event.target.value })}/></Field></div>{preview ? <><div className="info-strip">{zh.schema.text014}</div>{preview.warnings.map(warning => <div className="warning-text" key={warning}>{warning}</div>)}<SqlEditor value={sql} onChange={setSql} height={350}/></> : <><div className="dialog-tabs inset">{(['columns', 'indexes', 'foreignKeys'] as const).map((key, index) => <button key={key} className={section === key ? 'selected' : ''} onClick={() => setSection(key)}>{[zh.common.fields, zh.common.indexes, zh.common.foreignKeys][index]} <span className="count">{design[key].length}</span></button>)}</div><div className="design-table-wrap">
     {section === 'columns' && <><table className="design-table"><thead><tr><th>{zh.schema.text015}</th><th>{zh.common.type}</th><th>{zh.schema.text016}</th><th>{zh.schema.text017}</th><th>{zh.common.defaultValue}</th><th>{zh.common.comment}</th><th/></tr></thead><tbody>{design.columns.map((column, index) => <tr key={index}><td><input aria-label={formatText(zh.schema.text018, index + 1)} value={column.name} onChange={event => columnAt(index, { name: event.target.value })}/></td><td><input aria-label={formatText(zh.schema.text019, index + 1)} value={column.type} onChange={event => columnAt(index, { type: event.target.value })}/></td><td><input type="checkbox" aria-label={formatText(zh.schema.text020, index + 1)} checked={column.nullable} onChange={event => columnAt(index, { nullable: event.target.checked })}/></td><td><input type="checkbox" aria-label={formatText(zh.schema.text021, index + 1)} checked={column.autoIncrement} onChange={event => columnAt(index, { autoIncrement: event.target.checked })}/></td><td><input aria-label={formatText(zh.schema.text022, index + 1)} value={column.defaultValue ?? ''} placeholder={column.defaultValue === null ? 'NULL' : zh.schema.text023} onChange={event => columnAt(index, { defaultValue: event.target.value === 'NULL' ? null : event.target.value || undefined })}/></td><td><input aria-label={formatText(zh.schema.text024, index + 1)} value={column.comment} onChange={event => columnAt(index, { comment: event.target.value })}/></td><td><button className="icon-button danger" title={zh.schema.text025} aria-label={formatText(zh.schema.text026, index + 1)} onClick={() => update({ columns: design.columns.filter((_, item) => item !== index) })}><Trash2 size={14}/></button></td></tr>)}</tbody></table><button className="text-button" onClick={() => update({ columns: [...design.columns, blankColumn()] })}><Plus size={14}/>{zh.schema.text027}</button></>}
