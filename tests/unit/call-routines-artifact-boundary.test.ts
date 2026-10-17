@@ -18,7 +18,8 @@ const isolated=declaration('../e2e/live-helpers.ts','isolatedDatabase');
 describe('CALL的窄失败产物边界',()=>{
   it('全文一致仍通过，沿用原补全余量上限',async()=>{
     const limits:number[]=[];const read=runInNewContext(saved+';savedSql',{expect:playwrightExpect,window:{dbark:{invoke:async()=>({activeTabId:'q',tabs:[{id:'q',sql:'CALL p(1, 7)'}]})}}});
-    await read({page:{evaluate:(callback:(value:unknown)=>unknown,value:unknown)=>callback(value)}},{remainingCompletionTimeout:(limit:number)=>{limits.push(limit);return 1;}},'CALL p(1, 7)');expect(limits).toEqual([5000]);
+    // 合成成功路径留出调度余量；仍核原函数请求5000ms，不以1ms排程偶然性误报正文不一致。
+    await read({page:{evaluate:(callback:(value:unknown)=>unknown,value:unknown)=>callback(value)}},{remainingCompletionTimeout:(limit:number)=>{limits.push(limit);return 1000;}},'CALL p(1, 7)');expect(limits).toEqual([5000]);
   });
   it('真实Playwright全文失败仅输出布尔，不能写出实际或期望参数',async()=>{
     const read=runInNewContext(saved+';savedSql',{expect:playwrightExpect,window:{dbark:{invoke:async()=>({activeTabId:'q',tabs:[{id:'q',sql:'CALL p(91726431)'}]})}}});let failure:Error|undefined;
