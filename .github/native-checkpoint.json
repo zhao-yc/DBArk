@@ -1,0 +1,7 @@
+{
+  "sourceHead": "42e4be40d55f77b0656c97715061fe0aacda035a",
+  "compiledProductSource": "2270e4f0c2a59a606b061a7b2bb650260f94ddab",
+  "scope": "Windows x64、macOS arm64与x64源码及安装验证；不发行",
+  "nativeClipboardComponents": false,
+  "note": "本提交只新增来源清单，产品、测试与工作流输入沿用sourceHead。"
+}
