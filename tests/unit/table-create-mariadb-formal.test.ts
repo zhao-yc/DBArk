@@ -1,4 +1,5 @@
 import { EventEmitter } from 'node:events';
+import observed1355 from '../fixtures/table-create/mariadb-handshake-facts-1355.json';
 import { readFileSync } from 'node:fs';
 import { createContext, runInContext } from 'node:vm';
 import ts from 'typescript';
@@ -203,3 +204,6 @@ describe.each(['10.11.19', '11.4.13'] as const)('%s端口映射与真实监听�
   it('外部端口固定13310或13311，真实3306同流关闭后可进入原创建链', async () => { const f = formal({ version, serverPort: 3306, completeBody: true }); expect(await f.run()).toBeUndefined(); expect(f.targets.map(x => x.port)).toEqual([version === '10.11.19' ? 13310 : 13311, version === '10.11.19' ? 13310 : 13311]); expect(f.submissions).toHaveLength(1); });
   it('第二连接的真实监听事实变化，不能降级忽略端口而建库', async () => { const f = formal({ version, serverPort: 3306, changedServerPort: 3307, completeBody: true }); expect(await f.run()).toBeDefined(); expect(f.submissions).toEqual([]); expect(f.calls.some(x => x.startsWith('DROP'))).toBe(false); expect(f.calls).not.toContain('exit'); });
 });
+
+
+it.each(['10.11.19', '11.4.13'] as const)('%s的1355握手IGNORE_SPACE可经原正式链一次创建', async version => { const actual = observed1355.rows.find(r => r.version.startsWith(version + '-MariaDB'))!; const f = formal({ version, serverPort: actual.serverPort, facts: { mode: actual.mode, os: actual.os }, completeBody: true }); expect(await f.run()).toBeUndefined(); expect(f.calls.filter(x => x === 'table-submit')).toHaveLength(1); });
