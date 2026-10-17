@@ -8,7 +8,7 @@ import { definitionOmittingSqlModes, tableColumnPatchLimits, type TableColumnApp
 
 export interface StructureTaskContext { managed: ManagedConnection; checkCancelled(): void; report(): void; commandStarted(): () => void; }
 export interface StructureTaskOptions {
-  label: string; purpose: 'columns' | 'indexes' | 'foreignKeys' | 'tableComment' | 'tableDrop' | 'tableTruncate' | 'tableDefaultEncoding' | 'tableCreate' | 'databaseCreate' | 'tableCopyStructure' | 'tableRename' | 'tableAutoIncrement'; progress: TableColumnApplyProgress;
+  label: string; purpose: 'columns' | 'indexes' | 'foreignKeys' | 'tableComment' | 'tableDrop' | 'tableTruncate' | 'tableDefaultEncoding' | 'tableCreate' | 'databaseCreate' | 'tableCopyData' | 'tableCopyStructure' | 'tableRename' | 'tableAutoIncrement'; progress: TableColumnApplyProgress;
   executionTarget?: { database: string; table: string }; executionTargets?: readonly { database: string; table: string }[];
   /** 仅Engine在任务与取消控制会话严格收尾均已确认后通知；不是动作成功或取消ACK。 */
   onResourcesReleased?: () => void;
