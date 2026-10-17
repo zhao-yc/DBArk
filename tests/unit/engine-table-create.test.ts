@@ -83,6 +83,23 @@ beforeEach(async () => {
   engine = new Engine(event => events.push(event)); await engine.handle('connections.open', { id: 'c', profile });
 });
 
+/** 空串继续使用现有合同与生成器；真实任务模型核SHOW及目录，不借客户端改SQL。 */
+describe('显式空串默认值沿原新表任务（仅RAM驱动）', () => {
+  it.each(['mysql', 'mariadb'] as const)('%s空串经过合同、预览和目录后核完整保留', async family => {
+    dialect = family; version = family === 'mysql' ? '8.4.11' : '10.11.19-MariaDB';
+    const draft = design(); draft.columns[1].type = 'varchar(64)'; draft.columns[1].defaultValue = '';
+    catalogType = 'varchar(64)'; catalogDefault = family === 'mysql' ? '' : "''";
+    showDefinition = definition.replace("decimal(30,12) NOT NULL DEFAULT '123456789012345678.123456789012'", "varchar(64) NOT NULL DEFAULT ''");
+    const planned = await preview(await get(), draft); expect(planned.sql).toContain("`amount` VARCHAR(64) NOT NULL DEFAULT ''"); expect(sent.some(sql => sql.startsWith('CREATE TABLE'))).toBe(false);
+    expect(await apply(planned)).toMatchObject({ ddlCompleted: true, definitionVerified: true, resourcesReleased: true });
+    expect(sent.filter(sql => sql.startsWith('CREATE TABLE'))).toEqual([planned.sql]);
+  });
+  it.each(['json', 'text'])('5.7的%s不支持空串默认仍由原后台拒绝，零DDL', async type => {
+    version = '5.7.44'; const draft = design(); draft.columns[1].type = type; draft.columns[1].defaultValue = '';
+    await expect(preview(await get(), draft)).rejects.toThrow(); expect(sent.some(sql => sql.startsWith('CREATE TABLE'))).toBe(false);
+  });
+});
+
 /** 新选项只经新表专用契约传输，真实Engine及单次令牌、后核和收尾路径保持。 */
 describe('新表实际编码目录配对（仅RAM驱动）', () => {
   const getEncodings = () => engine.handle('schema.tableCreate.get', { connectionId: 'c', database: 'db', taskId: 'encoding-get-' + sequence, connectionRevision: 1, includeEncodings: true }) as Promise<TableCreateGetOutput>;
