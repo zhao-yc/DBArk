@@ -35,3 +35,13 @@ node D:/svn/DBArk/node_modules/typescript/bin/tsc --noEmit
 类型检查通过。使用当前公共源码、scripts、package及Vite配置的ignored独立快照执行原 `node scripts/build.mjs`；产物仅证明源码构建，不代表安装或原生功能验收，构建原日志与产物摘要另留本地证据目录。
 
 实际DB、GUI、SSH、CIM、private材料读取、系统clipboard、CI、安装、Docker及200访问均为0。Root旧现场未检查或操作；真实验收继续由Root后续安排。
+
+## Root整合与剩余边界
+
+Root整合为`28d5e4e463391e5acb28479171e27a727cbdaa55`。独立9项纯检查通过，涵盖满长/短前缀、成本矛盾、预算、LOB、主键、noop及原模型不变；报告SHA256为`01142bd6b30960751b9798a8c5dea369ece11f9cd9a59572ca197aa678e08fa7`。
+
+固定该头的12个相关单元文件420项全部通过、0跳过，覆盖索引目录、SQL规划、严格后核、依赖读取/裁决、特殊索引、界面草稿及Engine索引链，类型检查退出0。1555份tracked源码逐摘要导出后独立构建成功，产物108份；仍在运行的旧窗口所用108份产物未覆盖。检查摘要SHA256为`1ebaffbaacd2d3763d4d1e522e885e959fa0fbec972925c1c6865c6a1cc1a6e5`。
+
+上一固定`afecff5`的[完整Linux CI](https://github.com/zhao-yc/DBArk/actions/runs/39024932036)为7228通过、10平台条件跳过及类型/构建成功，共7238项；它先于本次规划器修复，不能称为28d完整套。此前Windows完整7169及82项夹具检查另有[明确来源](../../tests/integration/verification-query-entry-ci-root-20261017.md)，不与本420相加。
+
+本次尚无新的真实数据库、原生GUI、安装或macOS验收。三场景核心入口的MAX独立期待及Maria已知模式修正正在独立分支准备；旧3fc原件保持，不以旧预期或合成SHOW/目录冒充新实库证据。
