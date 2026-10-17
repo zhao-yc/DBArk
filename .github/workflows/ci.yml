@@ -70,6 +70,8 @@ jobs:
       - name: 编译固定Windows敏感文件helper（不执行协议）
         if: runner.os == 'Windows'
         run: node scripts/check-backup-windows-helper.mjs
+      - name: 预检固定离线查询端口（仅127.0.0.1:1）
+        run: node scripts/check-offline-query-port.mjs
       - run: pnpm test:e2e
         env:
           # 已验的本地查询导航在三个原生平台执行；私网用例继续关闭。
@@ -79,6 +81,8 @@ jobs:
           DBARK_EDITOR_FONT_NATIVE_TEST: '1'
           # 真实查询复制、保存来源与Undo基线；仅固定离线连接，不接私网或系统剪贴板。
           DBARK_QUERY_DUPLICATE_NATIVE_TEST: '1'
+          # 串行关闭其他查询的两项正式离线用例；预检拒连并等原socket关闭后才启动。
+          DBARK_QUERY_CLOSE_OTHERS_NATIVE_TEST: '1'
           # 仅源码 E2E 的固定离线片段用例采集；安装验收与实库用例不继承此门。
           DBARK_SNIPPETS_NATIVE_DIAGNOSTICS: '1'
       - run: ${{ matrix.command }}
@@ -89,6 +93,7 @@ jobs:
           DBARK_W03_SAVED_QUERY_NAVIGATION_TEST: '1'
           DBARK_EDITOR_FONT_NATIVE_TEST: '1'
           DBARK_QUERY_DUPLICATE_NATIVE_TEST: '1'
+          DBARK_QUERY_CLOSE_OTHERS_NATIVE_TEST: '1'
       - uses: actions/upload-artifact@v4
         with:
           name: DBArk-${{ matrix.artifact }}-未发行签名

@@ -19,12 +19,13 @@ const cases = [
 ] as const;
 
 /** 运行实际安装函数和测试执行块；文件检查、安装命令与Playwright均为受控端口，不安装或启动程序。 */
-function runProbe(input: typeof cases[number], executableExists = true, helperMode: 'normal' | 'missing' | 'symlink' | 'directory' | 'oversize' | 'changed' = 'normal') {
+function runProbe(input: typeof cases[number], executableExists = true, helperMode: 'normal' | 'missing' | 'symlink' | 'directory' | 'oversize' | 'changed' = 'normal', nativeGate?: string, preflightFails=false) {
   const path = input.platform === 'win32' ? win32 : posix;
   const inherited = Object.freeze({
     PATH: '保留原路径', LANG: 'zh_CN.UTF-8', KEEP_FIXTURE: '保留自定义环境',
     DBARK_EXECUTABLE_PATH: '继承的错误普通程序', DBARK_C02_EXECUTABLE_PATH: '继承的错误专用程序',
     DBARK_C02_SSH_UI_ENABLED: '1', DBARK_INTEGRATION_ENABLED: '1', DBARK_DEV_URL: 'http://虚构开发地址',
+    ...(nativeGate === undefined ? {} : { DBARK_QUERY_CLOSE_OTHERS_NATIVE_TEST: nativeGate }),
   });
   const project = path.join(path.dirname(input.directory), '源码项目');
   const node = path.join(path.dirname(input.directory), '运行环境', input.platform === 'win32' ? 'node.exe' : 'node');
@@ -42,7 +43,7 @@ function runProbe(input: typeof cases[number], executableExists = true, helperMo
     if (target === helper) return helperMode === 'changed' ? Buffer.from('// 已被替换的公开资源\n') : sourceBytes;
     throw Error('越界资源读取');
   });
-  const command = vi.fn((_executable: string, _args: string[], _options?: { env?: Record<string, string>; timeout?: number; windowsVerbatimArguments?: boolean }) => '');
+  const command = vi.fn((_executable: string, args: string[], _options?: { env?: Record<string, string>; timeout?: number; windowsVerbatimArguments?: boolean }) => { if(preflightFails && args[0]===path.join(project,'scripts','check-offline-query-port.mjs'))throw Error('合成固定端口预检失败');return ''; });
   const owned: string[] = [];
   const execute = () => runInNewContext(probe, {
     platform: input.platform, process: { arch: input.arch, env: inherited, execPath: node },
@@ -58,6 +59,20 @@ function runProbe(input: typeof cases[number], executableExists = true, helperMo
 }
 
 describe('真实安装执行器统一普通及C02可执行路径', () => {
+  it.each(cases)('$platform/$arch门1才紧邻Playwright执行同一固定预检，仍保留环境归一',input=>{
+    const f=runProbe(input,true,'normal','1');f.execute();const calls=f.command.mock.calls.filter(([executable])=>executable===f.node),path=input.platform==='win32'?win32:posix;
+    expect(calls).toHaveLength(2);expect(calls[0][1]).toEqual([path.join(f.project,'scripts','check-offline-query-port.mjs')]);expect(calls[0][2]?.timeout).toBe(10000);
+    expect(calls[1][1]).toEqual([path.join(f.project,'node_modules','@playwright','test','cli.js'),'test']);expect(calls[1][2]?.timeout).toBe(900000);
+    for(const call of calls){expect(call[2]?.env).toMatchObject({DBARK_EXECUTABLE_PATH:input.executable,DBARK_C02_EXECUTABLE_PATH:input.executable,DBARK_INTEGRATION_ENABLED:'0',DBARK_QUERY_CLOSE_OTHERS_NATIVE_TEST:'1'});expect(Object.hasOwn(call[2]!.env!,'DBARK_DEV_URL')).toBe(false)}
+    expect(f.command.mock.calls.indexOf(calls[1])).toBe(f.command.mock.calls.indexOf(calls[0])+1);
+  });
+  it.each([undefined,'0','','true'])('安装门%s不做预检，仅执行原Playwright路径',gate=>{
+    const f=runProbe(cases[0],true,'normal',gate);f.execute();expect(f.command.mock.calls.filter(([executable])=>executable===f.node)).toHaveLength(1);
+    expect(f.command.mock.calls.some(([,args])=>args[0]?.includes('check-offline-query-port'))).toBe(false);
+  });
+  it('预检失败明确阻止Playwright启动，不回退或重试',()=>{
+    const f=runProbe(cases[0],true,'normal','1',true);expect(f.execute).toThrow('合成固定端口预检失败');const calls=f.command.mock.calls.filter(([executable])=>executable===f.node);expect(calls).toHaveLength(1);expect(calls[0][1][0]).toContain('check-offline-query-port.mjs');
+  });
   it.each(cases)('$platform/$arch将安装所得准确路径覆盖两个继承值，保留原环境及离线门', input => {
     const f = runProbe(input); f.execute();
     const invocation = f.command.mock.calls.find(([executable]) => executable === f.node);

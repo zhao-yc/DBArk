@@ -134,6 +134,8 @@ try {
   // 普通与C02专用夹具统一使用本次安装所得程序，覆盖父进程继承的旧路径。
   const env = { ...process.env, DBARK_EXECUTABLE_PATH: executable, DBARK_C02_EXECUTABLE_PATH: executable, DBARK_INTEGRATION_ENABLED: '0' };
   delete env.DBARK_DEV_URL;
+  // 安装完成且环境归一后才做同一固定预检，紧邻真正Playwright启动；关门时不执行网络检查。
+  if (env.DBARK_QUERY_CLOSE_OTHERS_NATIVE_TEST === '1') command(process.execPath, [join(project, 'scripts', 'check-offline-query-port.mjs')], { env, timeout: 10000 });
   // 执行当前源码的全部离线用例，避免新增偏好或配置功能遗漏随包验收；内网专属由显式开关跳过。
   // 首批196项源码套件实际耗时298秒；仅全套安装进程预算改为15分钟，单用例期限和断言不变。
   command(process.execPath, [join(project, 'node_modules', '@playwright', 'test', 'cli.js'), 'test'], { env, timeout: 900000 });
