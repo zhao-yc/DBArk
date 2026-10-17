@@ -4,6 +4,7 @@ import { zh } from '../../src/renderer/locales/zh-CN';
 import { queryRowDetailsZh as text } from '../../src/renderer/locales/queryRowDetails.zh-CN';
 import { queryResultColumnsZh as columnsText } from '../../src/renderer/locales/queryResultColumns.zh-CN';
 import { queryRowDetailsUiSql, queryRowDetailsUiValues as values, type QueryRowDetailsUiBinding } from '../helpers/queryRowDetailsUi';
+import { prepareQueryRowDetailsKeyboardSql } from '../helpers/queryRowDetailsKeyboardSql';
 import type { HistoryEntry } from '../../src/shared/contracts';
 import type * as Desktop from './desktop-fixture';
 
@@ -44,6 +45,8 @@ export function registerQueryRowDetailsUi(binding: QueryRowDetailsUiBinding) {
     const row = (index: number) => grid().locator(`[role="row"][aria-rowindex="${index + 2}"]`);
     /** 输入只走真实键盘；读取实际落盘raw字符串作为后续history预期。 */
     async function write(sql: string) {
+      // 只在输入准备阶段连接引号外句法空白，避免Monaco自动缩进；正文比对仍逐字严格。
+      sql = prepareQueryRowDetailsKeyboardSql(sql);
       const box = query().locator('.monaco-editor').getByRole('textbox');
       await step(() => box.focus()); await step(() => page.keyboard.press(`${modifier}+A`)); await step(() => page.keyboard.insertText(sql));
       await step(() => expect.poll(async () => { const value = await settings(); return inputEol(value.tabs.find(tab => tab.id === value.activeTabId)?.sql ?? ''); }).toBe(sql));
