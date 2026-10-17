@@ -40,13 +40,17 @@ export async function verifyCreatedPrefixIndexes(context: StructureTaskContext, 
   if (!optionsMatch(document, design, tables[0].collation)) return false;
   const columns = (await structureTaskQuery<IndexColumnMetadata[]>(context, `SELECT COLUMN_NAME,DATA_TYPE,COLUMN_TYPE,IS_NULLABLE,CHARACTER_SET_NAME,COLLATION_NAME,CHARACTER_MAXIMUM_LENGTH,CHARACTER_OCTET_LENGTH,EXTRA FROM information_schema.COLUMNS WHERE ${condition} ORDER BY ORDINAL_POSITION LIMIT 1001`)).rows;
   if (columns.length !== design.columns.length || columns.some((column, index) => column.COLUMN_NAME !== design.columns[index].name)) return false;
-  for (const expected of plan.columns) {
-    const metadata = columns.find(column => column.COLUMN_NAME === expected.name), definition = document.columns.find(column => column.name === expected.name);
-    if (!metadata || !definition) return false;
-    const charset = facts.charsets.find(value => value.name === metadata.CHARACTER_SET_NAME);
-    if (expected.family === 'character' && (metadata.CHARACTER_SET_NAME !== design.charset || metadata.COLLATION_NAME !== tables[0].collation || charset?.maxBytes !== expected.unitBytes)) return false;
-    if (expected.family !== 'character' && (metadata.CHARACTER_SET_NAME !== null || metadata.COLLATION_NAME !== null)) return false;
+  // 所有实际列都核目录语义；只有键列另外授予索引成本能力，非键列不能被遗漏或伪造成计划键列。
+  for (const metadata of columns) {
+    const expected = plan.columns.find(column => column.name === metadata.COLUMN_NAME), definition = document.columns.find(column => column.name === metadata.COLUMN_NAME);
+    if (!definition || typeof metadata.DATA_TYPE !== 'string' || typeof metadata.EXTRA !== 'string' || !/^(?:(?:auto_increment|DEFAULT_GENERATED)\s*)*$/i.test(metadata.EXTRA)) return false;
+    const charset = facts.charsets.find(value => value.name === metadata.CHARACTER_SET_NAME), character = /^(CHAR|VARCHAR|ENUM|SET|(?:TINY|MEDIUM|LONG)?TEXT)$/.test(metadata.DATA_TYPE.toUpperCase());
+    if (character && (metadata.CHARACTER_SET_NAME !== design.charset || metadata.COLLATION_NAME !== tables[0].collation || !charset)) return false;
     const actual = deriveTrustedIndexColumn(definition, metadata, { definitionContext: document.context, charsetMaxBytes: charset?.maxBytes });
+    if (actual.column.generated || actual.column.hidden) return false;
+    if (!expected) continue;
+    if (expected.family === 'character' && charset?.maxBytes !== expected.unitBytes) return false;
+    if (expected.family !== 'character' && (metadata.CHARACTER_SET_NAME !== null || metadata.COLLATION_NAME !== null)) return false;
     if (!actual.writable || actual.reasons.length || actual.column.fullKeyBytes !== expected.fullKeyBytes) return false;
     if (expected.declaredUnits !== undefined && (actual.column.prefix.kind !== 'allowed' || actual.column.prefix.maxLength !== expected.declaredUnits || actual.column.prefix.unit !== (expected.family === 'binary' ? 'bytes' : 'characters'))) return false;
   }
