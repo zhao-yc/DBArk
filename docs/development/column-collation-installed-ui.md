@@ -33,7 +33,7 @@ Root controller独占准确 `192.168.31.200:13384`、MySQL `8.4.11`、server_uui
 
 沿用原desktop-fixture strict owner，单case、serial、retry0、repeat1、首错停链，trace/screenshot/video全部off。每步核原TestInfo、原App/页面及固定身份；失败保留现场，不强退、不重启、不启动另一类型。成功先由原正常退出/PID消失握手完成，再只读确认原夹具已清除自己的临时profile目录。spec不含finally清理，NSIS安装/卸载与数据库精确清理由Root独占controller负责。
 
-本片通过 `ownedDesktopLaunchGuard` 只向原自动夹具传入绑定检查函数，不传目标或认证字段。夹具在分配资源前检查一次，在创建临时目录的异步等待后、原生 `electron.launch` 紧前同步复核一次；正文检查不能替代这两处。该选项默认未设置，其他用例沿用原行为，原owner及退出状态机不变。
+本片通过 `ownedDesktopLaunchGuard` 只向原自动夹具传入绑定检查函数，不传目标或认证字段。该端口仅在 `preserveOnUnconfirmedExit:true` 的显式strict分支生效：分配资源前检查一次，在创建临时目录的异步等待后、原生 `electron.launch` 紧前同步复核一次；正文检查不能替代这两处。该选项默认未设置，非preserve默认分支不调用该端口，保留原 `await launchDesktop()` 及后续主体的Git规范化字节；原owner及退出状态机不变。
 
 ## Root授权后的准确命令
 

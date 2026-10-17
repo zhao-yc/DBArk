@@ -1,5 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { createContext, runInContext } from 'node:vm';
+import { win32 } from 'node:path';
 import ts from 'typescript';
 import { expect, it, vi } from 'vitest';
 import { bindColumnCollationInstalledTarget as bind } from '../helpers/columnCollationInstalledUi';
@@ -39,7 +40,7 @@ function fixture(mkdir?:()=>Promise<string>) {
   }
   visit(tree);expect(functions).toHaveLength(4);expect(auto).not.toBe('');
   const launch=vi.fn(async()=>{throw Error('RAM原生边界拒绝，不启动应用');}),remove=vi.fn(),mkdtemp=vi.fn(mkdir??(async()=> 'C:\\RAM\\profile-new')),diagnostics=vi.fn(()=>undefined),states=new WeakMap();
-  const context=createContext({exports:{},Error,AggregateError,preservedDesktopExits:states,process:{env:environment()},electron:{launch},createSnippetsNativeDiagnostics:diagnostics,snippetsDiagnosticsArmed:false,snippetsDiagnostics:undefined,pageErrors:[],dataDir:undefined,desktop:undefined,page:undefined,closed:true,mkdtemp,tmpdir:()=> 'C:\\RAM',join:(...parts:string[])=>parts.join('\\'),rm:remove});
+  const context=createContext({exports:{},Error,AggregateError,preservedDesktopExits:states,process:{env:environment()},electron:{launch},createSnippetsNativeDiagnostics:diagnostics,snippetsDiagnosticsArmed:false,snippetsDiagnostics:undefined,pageErrors:[],dataDir:undefined,desktop:undefined,page:undefined,closed:true,mkdtemp,tmpdir:()=> 'C:\\RAM',join:(...parts:string[])=>parts.join('\\'),dirname:win32.dirname,basename:win32.basename,resolve:win32.resolve,forceStopOwnProcess:vi.fn(),rm:remove});
   runInContext(compile(functions.join('\n')+'\nglobalThis.fixture='+auto+';'),context);
   const info={},body=vi.fn();
   return {launch,remove,mkdtemp,diagnostics,states,info,body,run:(options:unknown)=>context.fixture(options,body,info) as Promise<void>};
@@ -96,4 +97,10 @@ it('绑定不漂移的显式用例可到RAM原生边界，证明没有无条件�
 it('原strict用例未设置检查端口时保持原启动行为',async()=>{
   const f=fixture();await f.run({trace:'off',preserveOnUnconfirmedExit:true}).catch(()=>{});
   expect(f.mkdtemp).toHaveBeenCalledTimes(1);expect(f.launch).toHaveBeenCalledTimes(1);expect(f.remove).not.toHaveBeenCalled();
+});
+
+it('非preserve默认分支不调用显式strict检查端口，仍沿原启动和清理路径',async()=>{
+  const f=fixture(async()=> 'C:\\RAM\\dbark-e2e-default'),assertCurrent=vi.fn(()=>{throw Error('默认分支不得启用strict检查');});
+  await expect(f.run({trace:'off',preserveOnUnconfirmedExit:false,ownedDesktopLaunchGuard:{assertCurrent}})).rejects.toThrow('RAM原生边界');
+  expect(assertCurrent).not.toHaveBeenCalled();expect(f.mkdtemp).toHaveBeenCalledTimes(1);expect(f.launch).toHaveBeenCalledTimes(1);expect(f.remove).toHaveBeenCalledTimes(1);expect(f.body).not.toHaveBeenCalled();
 });

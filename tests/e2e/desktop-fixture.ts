@@ -198,9 +198,9 @@ export const test = baseTest.extend<{ desktopLifetime: void; preserveOnUnconfirm
   preserveOnUnconfirmedExit: [false, { option: true }],
   ownedDesktopLaunchGuard: [undefined, { option: true }],
   desktopLifetime: [async ({ trace, preserveOnUnconfirmedExit, ownedDesktopLaunchGuard }, use, testInfo) => {
-    // 先检查再分配所属资源；只传检查端口，不把认证或目标对象放进fixture配置。
-    ownedDesktopLaunchGuard?.assertCurrent();
     if (preserveOnUnconfirmedExit) {
+      // 检查端口仅在显式strict分支生效，并在分配所属资源前复核；默认分支保留原文。
+      ownedDesktopLaunchGuard?.assertCurrent();
       const state: OwnedDesktopExit = { confirmed: false, retained: false, active: true, closed: false }; preservedDesktopExits.set(testInfo, state);
       snippetsDiagnosticsArmed = false; snippetsDiagnostics = createSnippetsNativeDiagnostics(trace, testInfo); pageErrors = [];
       const directory = await mkdtemp(join(tmpdir(), 'dbark-e2e-')); dataDir = directory;
@@ -236,7 +236,7 @@ export const test = baseTest.extend<{ desktopLifetime: void; preserveOnUnconfirm
     pageErrors = [];
     dataDir = await mkdtemp(join(tmpdir(), 'dbark-e2e-'));
     try {
-      await launchDesktop(ownedDesktopLaunchGuard);
+      await launchDesktop();
       await use();
     } finally {
       try {
