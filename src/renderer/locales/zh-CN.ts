@@ -238,6 +238,9 @@ export const zh = {
   },
   // 表设计和数据库对象定义。
   schema: {
+    emptyStringDefault: '空字符串默认值',
+    emptyStringDefaultLabel: '第{0}个字段：空字符串默认值',
+    emptyStringDefaultHint: '勾选后将默认值设为空字符串；取消勾选后不设置默认值。输入其它内容会替换当前选择。',
     literalNull: '文字 NULL',
     literalNullLabel: '第{0}个字段：文字 NULL',
     text001: "请填写表名称。",
