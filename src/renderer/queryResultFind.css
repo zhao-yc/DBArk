@@ -1,0 +1,10 @@
+.query-result-find-region{height:100%;min-height:0;display:flex;flex-direction:column}
+.query-result-find-toolbar{display:flex;align-items:center;flex-wrap:wrap;gap:6px;padding:4px 10px;background:var(--surface);border-bottom:1px solid var(--line-soft);flex-shrink:0}
+.query-result-find-toolbar>button{font-size:10px;min-height:25px;padding:2px 7px}
+.query-result-find-toolbar>input{width:220px;min-width:100px;max-width:100%;font-size:11px;height:26px}
+.query-result-find-toolbar label{font-size:11px;white-space:nowrap}
+.query-result-find-status{display:flex;flex-wrap:wrap;gap:4px 12px;padding:4px 10px;font-size:10px;line-height:1.6;background:var(--surface);border-bottom:1px solid var(--line-soft);flex-shrink:0}
+.query-result-find-status>.muted{flex-basis:100%}
+.query-result-find-status strong{color:var(--warning);font-weight:500}
+.query-result-find-grid{flex:1;min-height:0;position:relative}
+.results-grid .query-result-find-hit{background:var(--accent-bg);box-shadow:inset 0 0 0 2px var(--accent)}
