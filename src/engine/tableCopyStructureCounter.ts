@@ -10,6 +10,7 @@ import type { TableCommentRead } from './tableCommentRead';
 import { readTableRename } from './tableRenameRead';
 import { readTableAutoIncrementPolicy } from './tableAutoIncrementCapabilities';
 import { structureTaskQuery, type StructureTaskContext } from './structureDefinition';
+import { tableCopyStructureServerProfile } from '../shared/tableCopyStructureProfiles';
 
 export interface TableCopyStructureCounterDefinition {
   /** 只供内存比较，绝不作为发送给数据库的新DDL。 */
@@ -60,6 +61,9 @@ export function tableCopyStructureObservedCounter(value: unknown, definition: Ta
 }
 /** MySQL8.4.11独立结构连接重读准确计数，不借自增修改任务要求ALTER，也不读取业务MAX。 */
 export async function readTableCopyStructureCounter(context: StructureTaskContext, target: TableCopyStructureTarget, initial: TableCommentRead): Promise<{ read: TableCommentRead; plan: TableCopyStructureCounterPlan; policy: TableAutoIncrementPolicy }> {
+  // 第二道版本门在任何SQL前拒绝准备态，调用方误放宽版本也不能把8.4的计数规则带到8.0。
+  const profile = tableCopyStructureServerProfile(context.managed.status.dialect, context.managed.status.version);
+  if (!profile.canWrite || profile.expectedNewCounter === null) throw Error(profile.readonlyReason);
   await structureTaskQuery(context, 'SET SESSION information_schema_stats_expiry = 0');
   const expiry = (await structureTaskQuery<{ expiry: string }[]>(context, 'SELECT CAST(@@SESSION.information_schema_stats_expiry AS CHAR) AS expiry')).rows;
   if (expiry.length !== 1 || expiry[0].expiry !== '0') throw Error('无法证明自增目录已绕过统计缓存，当前只读');
@@ -77,5 +81,5 @@ export async function readTableCopyStructureCounter(context: StructureTaskContex
   if (columns.length !== document.columns.length || columns.some((column, index) => column.name !== document.columns[index].name) || auto.length !== 1 || actual.name !== definition.column.name || typeof actual.columnType !== 'string' || typeof actual.dataType !== 'string' || actual.columnType.split(/[ (]/)[0].toLowerCase() !== actual.dataType.toLowerCase() || canonical(actual.columnType) !== canonical(definition.column.type) || tableAutoIncrementMaximum(actual.columnType) !== definition.column.maximum) throw Error('完整目录与自增列属性或类型不一致，当前只读');
   const policy = await readTableAutoIncrementPolicy(context);
   // Root固定8.4.11/Linux、步长与偏移1的三个隔离样本均为1；不外推其它运行策略。
-  return { read, plan: { column: definition.column, sourceValue: observed, expectedNewValue: '1' }, policy };
+  return { read, plan: { column: definition.column, sourceValue: observed, expectedNewValue: profile.expectedNewCounter }, policy };
 }
