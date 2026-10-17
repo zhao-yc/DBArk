@@ -75,7 +75,8 @@ export function registerTableCopyDataUiTests() {
       await observe(() => connection.query(`CREATE TABLE ${source} (id bigint unsigned NOT NULL AUTO_INCREMENT,amount decimal(65,30) DEFAULT NULL,payload varbinary(64) DEFAULT NULL,note varchar(80) DEFAULT NULL,PRIMARY KEY (id)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin COMMENT='合成数据复制来源'`));
       await observe(() => connection.query("SET SESSION sql_mode = CONCAT_WS(',', NULLIF(@@SESSION.sql_mode,''), 'NO_AUTO_VALUE_ON_ZERO')"));
       if (scenario === 'precision') await observe(() => connection.query(`INSERT INTO ${source} (id,amount,payload,note) VALUES (0,9007199254740993.123456789012345678901234567890,X'00FF275C80',NULL),(9007199254740993,-123.000000000000000000000000000001,NULL,'合成行'),(18446744073709551614,NULL,X'', '')`));
-      const values = (table: string) => 'SELECT CAST(id AS CHAR) AS id,CAST(amount AS CHAR) AS amount,HEX(payload) AS payload,payload IS NULL AS payloadNull,note FROM ' + table + ' ORDER BY id';
+      // ORDER BY明确引用基表BIGINT列，避免同名CAST输出别名导致文字排序；投影仍保持准确文字及字节。
+      const values = (table: string) => 'SELECT CAST(id AS CHAR) AS id,CAST(amount AS CHAR) AS amount,HEX(payload) AS payload,payload IS NULL AS payloadNull,note FROM ' + table + ' AS source_row ORDER BY source_row.id';
       const [before] = await observe(() => connection.query<RowDataPacket[]>('SHOW CREATE TABLE ' + source)); const [rowsBefore] = await observe(() => connection.query<RowDataPacket[]>(values(source)));
       expect(rowsBefore.map(row => ({ ...row }))).toEqual(scenario === 'empty' ? [] : [
         { id: '0', amount: '9007199254740993.123456789012345678901234567890', payload: '00FF275C80', payloadNull: 0, note: null },
