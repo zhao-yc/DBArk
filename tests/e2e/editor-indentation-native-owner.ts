@@ -2,20 +2,23 @@ import type { ElectronApplication, Page } from '@playwright/test';
 
 export interface IndentNativeOwner { application: ElectronApplication; page: Page; ids: Set<number>; closed: boolean; confirmed: boolean; ready: boolean; errors: string[]; quitReady: Promise<void>; }
 export interface IndentNativePort {
-  assertCurrent(): void; preflight(): Promise<void>; directory(): Promise<string>; assertDirectory(path: string): Promise<void>;
+  assertCurrent(owner?: IndentNativeOwner): void; preflight(): Promise<void>; directory(): Promise<string>; assertDirectory(path: string): Promise<void>;
   launch(path: string): Promise<IndentNativeOwner>; prepare(owner: IndentNativeOwner): Promise<void>; record(owner: IndentNativeOwner): Promise<number[]>;
   quit(owner: IndentNativeOwner): Promise<void>; absent(ids: readonly number[]): Promise<void>; remove(path: string): Promise<void>;
 }
 /** 每次应用独立持有退出/PID事实，未知时只保留现场；不借通用夹具的强停兜底。 */
 export class EditorIndentNativeRun {
   readonly owners: IndentNativeOwner[] = [];
-  path?: string; retained = false; removed = false; private pending = false;
+  path?: string; retained = false; removed = false; private pending = false; private directoryIdentity?: string;
   constructor(private readonly port: IndentNativePort) {}
+  /** 已获得的资源先登记再判断权限，迟到返回也不能丢掉需保留的实例/目录。 */
+  acquiredOwner(owner: IndentNativeOwner): void { if (!this.owners.includes(owner)) this.owners.push(owner); }
+  acquiredDirectory(path: string): void { if (this.directoryIdentity && this.directoryIdentity !== path) { this.retained = true; throw Error('本例出现第二个所属目录，保留现场'); } this.directoryIdentity = path; this.path = path; }
   /** 失败状态单向消费；旧owner不能操作重启后的新实例。 */
   assert(owner?: IndentNativeOwner, closed = false): void {
     try {
-      this.port.assertCurrent();
-      if (this.retained || this.removed || owner && (this.owners.at(-1) !== owner || !closed && (owner.closed || owner.confirmed))) throw Error('缩进原生专项owner已失效，停链保留资源');
+      this.port.assertCurrent(owner);
+      if (this.retained || this.removed || this.path !== this.directoryIdentity || owner && (this.owners.at(-1) !== owner || !closed && (owner.closed || owner.confirmed))) throw Error('缩进原生专项owner已失效，停链保留资源');
     } catch (reason) { this.retained = true; throw reason; }
   }
   /** 每个await两侧核同一owner，迟到结果不能继续向下一个实例读写。 */
@@ -30,9 +33,10 @@ export class EditorIndentNativeRun {
     this.pending = true;
     try {
       await this.port.preflight(); this.assert();
-      if (!this.path) { this.path = await this.port.directory(); this.assert(); }
-      await this.port.assertDirectory(this.path); this.assert();
-      const owner = await this.port.launch(this.path); this.owners.push(owner); this.assert(owner);
+      if (!this.path) { this.acquiredDirectory(await this.port.directory()); this.assert(); }
+      const path = this.path; if (!path) throw Error('本例目录登记未知，保留现场');
+      await this.port.assertDirectory(path); this.assert();
+      const owner = await this.port.launch(path); this.acquiredOwner(owner); this.assert(owner);
       const ids = await this.port.record(owner); this.assert(owner); this.addIds(owner, ids);
       await this.port.prepare(owner); this.assert(owner); return owner;
     } catch (reason) { this.retained = true; throw reason; }

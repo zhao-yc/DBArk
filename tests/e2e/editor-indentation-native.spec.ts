@@ -1,7 +1,7 @@
 import { test, expect, type TestInfo } from '@playwright/test';
 import { zh, formatText } from '../../src/renderer/locales/zh-CN';
 import { editorIndentationZh as text } from '../../src/renderer/locales/editorIndentation.zh-CN';
-import { editorIndentNativeActive, bindEditorIndentNativeEnvironment } from './editor-indentation-native-gate';
+import { editorIndentNativeActive, bindEditorIndentNativeEnvironment, bindEditorIndentNativeCase } from './editor-indentation-native-gate';
 import type { EditorIndentNativeRun, IndentNativeOwner } from './editor-indentation-native-owner';
 
 const active = editorIndentNativeActive(process.env, process.argv);
@@ -11,6 +11,9 @@ const runtime: Runtime | undefined = active ? require('./editor-indentation-nati
 test.skip(!active, '默认关闭：Root审核后显式开启DBARK_EDITOR_INDENT_NATIVE_TEST=1且integration=0');
 test.use({ trace: 'off', screenshot: 'off', video: 'off' });
 test.describe.configure({ mode: 'serial', retries: 0, timeout: 120000 });
+const cases = new WeakMap<TestInfo, ReturnType<typeof bindEditorIndentNativeCase>>();
+// 无论成功、失败或超时都消费原TestInfo权限；迟到Promise不得借同一环境继续领取资源。
+test.afterEach(({}, info) => { cases.get(info)?.retain(); });
 const modifier = process.platform === 'darwin' ? 'Meta' : 'Control';
 const bottom = process.platform === 'darwin' ? 'Meta+ArrowDown' : 'Control+End';
 const redo = process.platform === 'darwin' ? 'Meta+Shift+z' : 'Control+y';
@@ -97,7 +100,8 @@ async function noExecution(run: EditorIndentNativeRun, owner: IndentNativeOwner)
 test('离线原生缩进：两种样式热更、真实Tab/Undo/选区、新模型与只读、SQLite及独立重启', async ({ trace, screenshot, video }, info: TestInfo) => {
   // 实际解析选项先于端口、目录或Electron，CLI/配置不能暗中恢复录制。
   expect(trace).toBe('off'); expect(screenshot).toBe('off'); expect(video).toBe('off');
-  const run = runtime!.createEditorIndentNativeRun(binding!);
+  const scope = bindEditorIndentNativeCase(info, binding!, () => test.info()); cases.set(info, scope); scope.assertCurrent();
+  const run = runtime!.createEditorIndentNativeRun(scope);
   try {
     const first = await run.launch(); await observe(run, first); await prepareQuery(run, first);
     const source = "SELECT '900719925474099312345', '🚢';\n\t-- 原始Tab不能自动转换\n" + Array.from({ length: 65 }, (_, index) => '-- 缩进滚动探针 ' + index).join('\n');
@@ -108,15 +112,22 @@ test('离线原生缩进：两种样式热更、真实Tab/Undo/选区、新模�
     const before = await current(run, first); expect(before.selections?.some(selection => selection.startColumn !== selection.endColumn)).toBe(true);
     await preference(run, first, 4, true); expect(contentSnapshot(await current(run, first))).toEqual(contentSnapshot(before));
     await run.step(first, () => first.page.locator('.query-tab:visible .monaco-editor').getByRole('textbox').focus()); await run.step(first, () => first.page.keyboard.press(`${modifier}+z`)); expect((await current(run, first)).value).toBe(undone); await run.step(first, () => first.page.keyboard.press(redo)); expect((await current(run, first)).value).toBe(appended);
-    await newQuery(run, first); await write(run, first, 'SELECT\n'); const fresh = await current(run, first); expect(fresh).toMatchObject({ tabSize: 4, indentSize: 4, insertSpaces: true });
+    await newQuery(run, first); await write(run, first, 'SELECT\n'); const fresh = await current(run, first); expect(fresh).toMatchObject({ tabSize: 4, indentSize: 4, insertSpaces: true, detectIndentation: false });
     await run.step(first, () => first.page.keyboard.press(bottom)); await run.step(first, () => first.page.keyboard.press('Tab')); expect((await current(run, first)).value).toBe(fresh.value + '    ');
+    // 为第二种样式单独建立真实增量/历史和非空选区，不能用当前版本相同代替Undo历史证明。
+    await run.step(first, () => first.page.keyboard.insertText('-- Tab样式撤销探针'));
+    const tabAppended = (await current(run, first)).value; await run.step(first, () => first.page.keyboard.press(`${modifier}+z`)); const tabUndone = (await current(run, first)).value; expect(tabUndone).not.toBe(tabAppended); await run.step(first, () => first.page.keyboard.press(redo)); expect((await current(run, first)).value).toBe(tabAppended);
+    for (let index = 0; index < 4; index++) await run.step(first, () => first.page.keyboard.press('Shift+ArrowLeft'));
+    const tabSelection = await current(run, first); expect(tabSelection.selections?.some(selection => selection.startColumn !== selection.endColumn)).toBe(true);
     const beforeTabs = await snapshots(run, first, '.query-tab', false); expect(beforeTabs).toHaveLength(2); await preference(run, first, 8, false); expect((await snapshots(run, first, '.query-tab', false)).map(contentSnapshot)).toEqual(beforeTabs.map(contentSnapshot));
+    expect(contentSnapshot(await current(run, first))).toEqual(contentSnapshot(tabSelection));
+    await run.step(first, () => first.page.locator('.query-tab:visible .monaco-editor').getByRole('textbox').focus()); await run.step(first, () => first.page.keyboard.press(`${modifier}+z`)); expect((await current(run, first)).value).toBe(tabUndone); await run.step(first, () => first.page.keyboard.press(redo)); expect((await current(run, first)).value).toBe(tabAppended);
     await write(run, first, 'SELECT\n'); const tabStart = await current(run, first); await run.step(first, () => first.page.keyboard.press(bottom)); await run.step(first, () => first.page.keyboard.press('Tab')); const tabText = (await current(run, first)).value; expect(tabText).toBe(tabStart.value + '\t');
     await readonlyPreview(run, first); await noExecution(run, first); await expect.poll(() => settings(run, first).then(value => value.tabs.find(tab => tab.id === value.activeTabId)?.sql)).toBe(tabText); const saved = await settings(run, first); expect(saved.tabs).toHaveLength(2); expect(saved.tabs[0].sql).toBe(appended);
-    await run.close(first); const disk = await run.stopped(path => runtime!.readIndentNativeSettings(path)); expect(disk.schema).toBe(7); expect(disk.settings).toMatchObject({ editorTabSize: 8, editorInsertSpaces: false, tabs: saved.tabs, activeTabId: saved.activeTabId });
+    await run.close(first); const disk = await run.stopped(path => runtime!.readIndentNativeSettings(path, () => run.assert())); expect(disk.schema).toBe(7); expect(disk.settings).toMatchObject({ editorTabSize: 8, editorInsertSpaces: false, tabs: saved.tabs, activeTabId: saved.activeTabId });
     const second = await run.launch(); expect(second.application).not.toBe(first.application); await observe(run, second);
     expect(await settings(run, second)).toMatchObject({ editorTabSize: 8, editorInsertSpaces: false, tabs: saved.tabs, activeTabId: saved.activeTabId });
-    const restarted = await snapshots(run, second, '.query-tab', false); expect(restarted).toHaveLength(2); expect(restarted.map(value => [value.tabSize, value.indentSize, value.insertSpaces, value.readOnly])).toEqual([[8, 8, false, false], [8, 8, false, false]]); expect(restarted.map(value => value.value)).toEqual(saved.tabs.map(tab => tab.sql));
+    const restarted = await snapshots(run, second, '.query-tab', false); expect(restarted).toHaveLength(2); expect(restarted.map(value => [value.tabSize, value.indentSize, value.insertSpaces, value.readOnly, value.detectIndentation])).toEqual([[8, 8, false, false, false], [8, 8, false, false, false]]); expect(restarted.map(value => value.value)).toEqual(saved.tabs.map(tab => tab.sql));
     await readonlyPreview(run, second); await noExecution(run, second); await run.close(second); await run.finish();
     await info.attach('缩进原生终态', { body: Buffer.from(JSON.stringify({ accepted: true, normalOwners: run.owners.map(owner => ({ confirmed: owner.confirmed, willQuit: owner.ready, closed: owner.closed, recordedPids: owner.ids.size })), directoryRemoved: run.removed, sqliteChecked: true, systemClipboard: 0, sqlExecution: 0 })), contentType: 'application/json' });
   } catch (reason) {
