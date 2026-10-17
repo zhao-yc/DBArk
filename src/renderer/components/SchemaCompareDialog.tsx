@@ -2,6 +2,8 @@ import { useEffect, useRef, useState } from 'react';
 import { schemaCompareInputSchema, type SchemaCompareInput, type SchemaCompareResult, type SchemaComparePreview, type SchemaComparePreviewInput, type SchemaCompareTarget } from '../../shared/schemaCompare';
 import { schemaCompareZh as text } from '../locales/schemaCompare.zh-CN';
 import { ErrorBox, Field, Modal } from './ui';
+import { SchemaCompareResults } from './SchemaCompareResults';
+import { applySchemaCompareResultsSelection } from '../schemaCompareResults';
 import '../schemaCompare.css';
 
 export interface SchemaCompareServices { compare(input: SchemaCompareInput): Promise<SchemaCompareResult>; cancel(taskId: string): Promise<unknown>; preview(input: SchemaComparePreviewInput): Promise<SchemaComparePreview>; release(snapshotId: string): Promise<unknown>; save(sql: string): Promise<boolean>; }
@@ -13,11 +15,12 @@ export interface SchemaCompareDialogProps {
 export function SchemaCompareDialog({ connections, services, initialSource, initialTarget, onClose }: SchemaCompareDialogProps) {
   const fallback = { connectionId: '', database: '', table: '' };
   const [source, setSource] = useState<SchemaCompareTarget>(initialSource ?? fallback), [target, setTarget] = useState<SchemaCompareTarget>(initialTarget ?? fallback);
-  const [report, setReport] = useState<SchemaCompareResult | null>(null), [error, setError] = useState(''), [busy, setBusy] = useState(false), [closing, setClosing] = useState(false), [showSame, setShowSame] = useState(false);
+  const [report, setReport] = useState<SchemaCompareResult | null>(null), [error, setError] = useState(''), [busy, setBusy] = useState(false), [closing, setClosing] = useState(false);
   const [selected, setSelected] = useState<string[]>([]), [preview, setPreview] = useState<SchemaComparePreview | null>(null), [previewBusy, setPreviewBusy] = useState(false), [saved, setSaved] = useState(false);
   const snapshot = useRef<string | null>(null), previewWork = useRef<Promise<void> | null>(null);
   const active = useRef<string | null>(null), work = useRef<Promise<void> | null>(null), cancellation = useRef<{ taskId: string; promise: Promise<unknown> } | null>(null), stopRequested = useRef(false), alive = useRef(true), closeRequested = useRef(false), service = useRef(services);
   const activeService = useRef(services), cancelFailure = useRef<string | null>(null);
+  const selectionBlocked = useRef(false); selectionBlocked.current = busy || closing || previewBusy;
   service.current = services;
   useEffect(() => { alive.current = true; return () => { alive.current = false; if (snapshot.current) void service.current.release(snapshot.current).catch(() => undefined); if (active.current) void activeService.current.cancel(active.current).catch(() => undefined); }; }, []);
   /** 同一轮固定输入和服务；取消后即使读取晚到成功，也不能把结果重新显示为已完成。 */
@@ -86,14 +89,18 @@ export function SchemaCompareDialog({ connections, services, initialSource, init
   function endpoint(label: string, value: SchemaCompareTarget, update: (value: SchemaCompareTarget) => void) {
     return <fieldset disabled={busy || closing || previewBusy}><legend>{label}</legend><Field label={text.connection}><select aria-label={`${label} ${text.connection}`} value={value.connectionId} onChange={event => update({ ...value, connectionId: event.target.value })}><option value="">—</option>{connections.map(connection => <option key={connection.id} value={connection.id}>{connection.name}</option>)}</select></Field><Field label={text.database}><input aria-label={`${label} ${text.database}`} value={value.database} onChange={event => update({ ...value, database: event.target.value })}/></Field><Field label={text.table}><input aria-label={`${label} ${text.table}`} value={value.table} onChange={event => update({ ...value, table: event.target.value })}/></Field></fieldset>;
   }
-  const rows = report?.rows.filter(row => showSame || row.status !== 'same') ?? [];
   const endpointName = (value: SchemaCompareTarget) => `${connections.find(connection => connection.id === value.connectionId)?.name ?? value.connectionId} · ${JSON.stringify(value.database)}.${JSON.stringify(value.table)}`;
   return <Modal title={text.title} wide onClose={() => void close()}><div className="modal-content schema-compare-content">
     <p>{text.direction}</p><p className="muted small">{text.scope} {text.exactNames}</p>
     <div className="schema-compare-endpoints">{endpoint(text.source, source, value => changeEndpoint('source', value))}{endpoint(text.target, target, value => changeEndpoint('target', value))}</div><button disabled={busy || closing || previewBusy} onClick={() => { changeEndpoint('source', target); changeEndpoint('target', source); }}>{text.swap}</button><ErrorBox message={error}/>
     <div role="status">{closing ? text.closing : busy ? text.reading : report ? <>{Object.entries(report.counts).map(([status, count]) => <span className="schema-compare-count" key={status}>{text.statuses[status as keyof typeof text.statuses]}：{count}</span>)}{report.counts.unknown > 0 ? text.unknown : report.counts.added + report.counts.removed + report.counts.changed === 0 ? text.allSame : ''}</> : text.empty}</div>
-    {report && <><p className="schema-compare-direction">{endpointName(report.source)}（{text.version} {report.sourceVersion}） → {endpointName(report.target)}（{text.version} {report.targetVersion}）</p><label><input type="checkbox" checked={showSame} onChange={event => setShowSame(event.target.checked)}/>{text.showSame}</label>
-      <div className="schema-compare-results"><table><thead><tr><th>{text.select}</th><th>{text.category}</th><th>{text.name}</th><th>{text.status}</th><th>{text.properties}</th><th>{text.detail}</th></tr></thead><tbody>{rows.map((row, index) => <tr key={JSON.stringify([row.category, row.name, index])} data-status={row.status}><td><input type="checkbox" aria-label={text.select + ' ' + text.categories[row.category] + ' ' + row.name} disabled={busy || closing || previewBusy || row.status === 'same' || row.status === 'unknown'} checked={selected.includes(JSON.stringify([row.category, row.name]))} onChange={event => { const key = JSON.stringify([row.category, row.name]); setSelected(previous => event.target.checked ? [...previous, key] : previous.filter(value => value !== key)); setPreview(null); setSaved(false); }}/></td><td>{text.categories[row.category]}</td><td><code>{JSON.stringify(row.name)}</code></td><td>{text.statuses[row.status]}</td><td>{row.changedProperties.map(key => text.propertiesMap[key] ?? key).join('、')}{row.reasons.length > 0 && <ul aria-label={text.reasons}>{row.reasons.map(reason => <li key={reason}>{reason}</li>)}</ul>}</td><td><details><summary>{text.detail}</summary><strong>{text.sourceDefinition}</strong><pre>{row.source?.rawSql ?? text.absent}</pre><strong>{text.targetDefinition}</strong><pre>{row.target?.rawSql ?? text.absent}</pre></details></td></tr>)}</tbody></table></div>
+    {report && <><p className="schema-compare-direction">{endpointName(report.source)}（{text.version} {report.sourceVersion}） → {endpointName(report.target)}（{text.version} {report.targetVersion}）</p>
+      <SchemaCompareResults report={report} selectedIds={selected} disabled={busy || closing || previewBusy} onSelectionChange={event => {
+        // 回调捕获原快照，接纳前活读父级归属和忙碌状态，旧报告不能借新报告改选择或撤销预览。
+        if (!alive.current || event.snapshotId !== report.snapshotId || snapshot.current !== report.snapshotId || selectionBlocked.current || active.current || closeRequested.current) return;
+        setSelected(previous => snapshot.current === event.snapshotId ? applySchemaCompareResultsSelection(report, previous, event) : previous);
+        setPreview(null); setSaved(false);
+      }}/>
       <p>{text.previewScope} {text.selected}：{selected.length}</p>
       {preview && <section className="schema-compare-preview"><h3>{text.sql}</h3><ul>{preview.warnings.map(warning => <li key={warning}>{warning}</li>)}</ul><textarea aria-label={text.sql} readOnly value={preview.sql}/>{preview.blocked.length > 0 && <div><strong>{text.blocked}</strong><ul>{preview.blocked.map(item => <li key={JSON.stringify([item.category, item.name])}>{text.categories[item.category]} {JSON.stringify(item.name)}：{item.reasons.join('；')}</li>)}</ul></div>}{saved && <p role="status">{text.saved}</p>}</section>}
       <details className="schema-compare-limits"><summary>{text.limits}</summary><ul>{report.ignored.map(reason => <li key={reason}>{reason}</li>)}</ul><details><summary>{text.rawTail}</summary>{report.ignoredFragments.map(fragment => <div key={fragment.side}><strong>{fragment.side === 'source' ? text.source : text.target}</strong><pre>{fragment.rawSql}</pre></div>)}</details></details></>}
