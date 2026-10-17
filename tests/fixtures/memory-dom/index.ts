@@ -16,6 +16,10 @@ export class MemoryNode {
   selectionStart = 0; selectionEnd = 0; private text = '';
   constructor(name: string, nodeType = 1) { this.nodeType = nodeType; this.nodeName = this.tagName = nodeType === 1 ? name.toUpperCase() : name; }
   get firstChild() { return this.childNodes[0] ?? null; }
+  /** 仅DOM结构端口；内存环境没有布局，几何默认为0，专项布局用例另提供测量值。 */
+  get children() { return this.childNodes.filter(node => node.nodeType === 1); }
+  get classList() { return { contains: (name: string) => (this.getAttribute('class') ?? '').split(/\s+/).includes(name) }; }
+  getBoundingClientRect() { return { x: 0, y: 0, top: 0, left: 0, bottom: 0, right: 0, width: 0, height: 0 }; }
   get lastChild(): MemoryNode | null { return this.childNodes.at(-1) ?? null; }
   get nextSibling() { const list = this.parentNode?.childNodes ?? []; return list[list.indexOf(this) + 1] ?? null; }
   get textContent(): string { return this.text + this.childNodes.map(node => node.textContent).join(''); }
