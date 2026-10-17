@@ -11,6 +11,11 @@ export function tableCopyStructureTarget(key: TableCopyStructureTargetKey, raw: 
   for (const name of ['DBARK_TEST_HOST', 'DBARK_TEST_PORT', 'DBARK_TEST_TLS', 'DBARK_TEST_EXPECTED_SERVER_UUID'] as const) {
     if (raw[name] !== environment[name]) throw Error('复制结构原始目标与helper配置不一致');
   }
-  if (!environment.DBARK_TEST_USER || !/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(raw.DBARK_TEST_EXPECTED_SERVER_UUID ?? '')) throw Error('须Root提供已有测试账号并先核对、绑定本轮服务器UUID');
+  // 凭据必须来自本轮显式原始环境，不能由helper或原型回填；空字符串密码仍是合法显式值。
+  if (!Object.hasOwn(raw, 'DBARK_TEST_USER') || typeof raw.DBARK_TEST_USER !== 'string' || raw.DBARK_TEST_USER.length === 0 || !Object.hasOwn(raw, 'DBARK_TEST_PASSWORD') || typeof raw.DBARK_TEST_PASSWORD !== 'string') throw Error('复制结构UI须显式提供已有测试账号和密码');
+  for (const name of ['DBARK_TEST_USER', 'DBARK_TEST_PASSWORD'] as const) {
+    if (!Object.hasOwn(environment, name) || raw[name] !== environment[name]) throw Error('复制结构原始凭据与helper配置不一致');
+  }
+  if (!/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(raw.DBARK_TEST_EXPECTED_SERVER_UUID ?? '')) throw Error('须Root先核对、绑定本轮服务器UUID');
   return profile;
 }
