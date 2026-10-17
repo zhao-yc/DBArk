@@ -1,5 +1,7 @@
 # Navicat 全功能覆盖目标
 
+最新未发布检查点：功能产品3ad完整5606单元/type/build通过，CSV选列正式UI一项及DROP最终测试ef8一项单次通过、资源核零；两个旧DROP失败与更正均保留。后续5e只集中17条渲染文案，Root原10回归/type/build通过，main产物不变，见[整合与实际验收](../tests/integration/acceptance-frequency-csv-drop-20261017.md)。不混称同一头完整大套或安装结果；新包和macOS私网及取消MDL逐ID终态继续。
+
 当前公开开发预览为[0.20](https://github.com/zhao-yc/DBArk/releases/tag/v0.20.0)。后续高频分支的ON UPDATE六身份在六实例共36次实际通过，新建库专用一项通过；历史时间范围固定390d的49项相关回归、类型和构建，以及正式Windows界面一项通过。各自证据见[自动时间](../tests/integration/acceptance-on-update-ui-20261017.md)、[新建库](../tests/integration/acceptance-database-create-ui-20261017.md)和[历史筛选](../tests/integration/acceptance-history-time-ui-20261017.md)。这些是未进入0.20标签的开发Electron能力，不代替新安装或macOS实库。
 
 CSV字段选择与顺序已在本分支源码整合；已复现的文件sync期间取消窗口正在补齐三种表导出格式，正式CSV界面及完整整合回归继续。公开0.20已经明确记录该已知问题，没有把后续修复算作该版已修。下方旧检查点保持其原始来源与统计。
