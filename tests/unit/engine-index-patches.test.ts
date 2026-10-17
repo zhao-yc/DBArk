@@ -28,9 +28,14 @@ function managed(signal?: AbortSignal): ManagedConnection {
     sent.push({ id: threadId, sql });
     const complete = (error?: Error): void => queueMicrotask(() => {
       if (error || failSql?.test(sql)) { callback(error ?? Object.assign(new Error('驱动拒绝含私有文本'), { errno: 1227, code: 'ER_SPECIFIC_ACCESS_DENIED_ERROR' })); return; }
+      // 字段/索引互斥回归显式模拟缺少PROCESS权限，仅准确新增物理目录查询拒绝。
+      if (sql.startsWith('SELECT CAST(TABLE_ID AS CHAR) AS id, NAME AS name FROM information_schema.INNODB_TABLES')) { callback(Object.assign(new Error('RAM物理目录权限不足'), { errno: 1227, fatal: false })); return; }
       let rows: unknown = [];
       const document = () => parseTableColumnDefinition(source, { dialect: 'mysql', mode: { ansiQuotes: false, noBackslashEscapes: false } });
-      if (sql.startsWith('SELECT @@SESSION.sql_mode AS sqlMode, @@hostname')) rows = [{ sqlMode: mode, hostname: 'unit', port: 3306, serverId: 7, currentUser: 'test@host', connectionId: threadId }];
+      if (sql === 'SELECT VERSION() AS version, @@version_compile_os AS os, @@lower_case_table_names AS lowerNames LIMIT 2') rows = [{ version, os: 'Linux', lowerNames: 0 }];
+      else if (sql.startsWith('SELECT TABLE_SCHEMA AS databaseName, TABLE_NAME AS tableName, TABLE_TYPE AS kind, ENGINE AS engine FROM information_schema.TABLES')) rows = [{ databaseName: 'db', tableName: 't', kind: 'BASE TABLE', engine: 'InnoDB' }];
+      else if (sql.startsWith('SELECT PARTITION_NAME AS name FROM information_schema.PARTITIONS')) rows = [{ name: null }];
+      else if (sql.startsWith('SELECT @@SESSION.sql_mode AS sqlMode, @@hostname')) rows = [{ sqlMode: mode, hostname: 'unit', port: 3306, serverId: 7, currentUser: 'test@host', connectionId: threadId }];
       else if (sql.startsWith('SET SESSION sql_mode')) mode = /'([^']*)'/.exec(sql)![1];
       else if (sql === 'SET SESSION sql_quote_show_create = 1') quote = 1;
       else if (sql.startsWith('SET NAMES')) { charset = 'utf8mb4'; collation = 'utf8mb4_bin'; }
