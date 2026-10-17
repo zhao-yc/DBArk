@@ -1,4 +1,11 @@
 import type * as monaco from 'monaco-editor';
+import { zh } from './locales/zh-CN';
+
+const bodyFlushers = new WeakMap<monaco.editor.IStandaloneCodeEditor, (expected?: string) => string>();
+/** 只通过当前存活正文桥flush，不以旧tab.sql、选区或受控sync替代模型全文。 */
+export function flushEditorContent(editor: monaco.editor.IStandaloneCodeEditor, expectedDraft?: string): string {
+  const flush = bodyFlushers.get(editor); if (!flush) throw Error(zh.editor.bodyUnavailable); return flush(expectedDraft);
+}
 
 export interface EditorContentProps { value: string; readOnly: boolean; onChange?: (value: string) => void; }
 interface ModelLease { model: monaco.editor.ITextModel; valid: boolean; syncing: boolean; controlledThrough: number; subscriptions: monaco.IDisposable[]; }
@@ -56,7 +63,21 @@ export function editorContentBridge(editor: monaco.editor.IStandaloneCodeEditor,
   /** 组件卸载、editor销毁和重复清理共用幂等释放，不保留旧模型或可编辑入口。 */
   function dispose() {
     if (closed) return; closed = true; releaseModel();
-    for (const item of subscriptions) item.dispose(); availability(false);
+    const currentBridge = bodyFlushers.get(editor);
+    if (currentBridge === flush) bodyFlushers.delete(editor);
+    for (const item of subscriptions) item.dispose();
+    // 同一editor已由新桥接管时，旧桥只能释放自身，不能锁住新桥或发布旧就绪状态。
+    if (!currentBridge || currentBridge === flush) availability(false); else ready = false;
+  }
+  /** 只发布当前正文，不编辑模型或触碰撤销栈；外部新草稿尚未进模型时拒绝覆盖它。 */
+  function flush(expected?: string): string {
+    const item = lease, props = current();
+    if (!ready || !item || !owns(item) || props.readOnly || editor.getRawOptions().readOnly) throw Error(zh.editor.bodyUnavailable);
+    const value = item.model.getValue(), version = item.model.getVersionId();
+    if (expected !== undefined && expected !== props.value && expected !== value) throw Error(zh.editor.bodyUnavailable);
+    if ((expected ?? props.value) !== value) props.onChange?.(value);
+    if (!owns(item) || item.model.getVersionId() !== version || item.model.getValue() !== value) throw Error(zh.editor.bodyUnavailable);
+    return value;
   }
   try {
     editor.updateOptions({ readOnly: true });
@@ -64,5 +85,6 @@ export function editorContentBridge(editor: monaco.editor.IStandaloneCodeEditor,
     subscriptions.push(editor.onDidDispose(() => { editorAlive = false; dispose(); }));
     bindModel();
   } catch (reason) { dispose(); throw reason; }
-  return { sync, dispose, get ready() { return ready; } };
+  bodyFlushers.set(editor, flush);
+  return { sync, flush, dispose, get ready() { return ready; } };
 }

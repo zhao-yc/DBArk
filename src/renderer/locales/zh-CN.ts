@@ -338,6 +338,7 @@ export const zh = {
   },
   // 本地 SQL 编辑器。
   editor: {
+    bodyUnavailable: '编辑器正文尚未就绪或草稿已变化，请稍后重试。',
     text001: "执行选中内容或全部 SQL",
     text002: "正在准备 SQL 编辑器…",
   },
