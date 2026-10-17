@@ -23,11 +23,11 @@ it('旧缺项读取默认true而不写盘，false/true经原IPC与原子字节�
   expect(editorWordWrapOptions(undefined)).toEqual({ wordWrap: 'on' }); expect(editorWordWrapOptions(false)).toEqual({ wordWrap: 'off' });
 });
 
-it('非法显式值在IPC/直接存储/读取均拒绝，不强转且不保存混入的SQL或其它偏好', () => {
+it('非法显式值在写入口拒绝，读取只局部回退true且不丢其它偏好', () => {
   const store = open(), original = store.settings();
   for (const value of ['true','false',0,1,null,{},[],NaN]) {
     const changed = { ...original, editorWordWrap: value, editorFontSize: 32, tabs: [{ id: 'q', kind: 'query', connectionId: 'c', title: '错误混入', sql: '不应保存' }] };
-    expect(() => validateCommand('settings.save', changed)).toThrow(); expect(() => store.saveSettings(changed as AppSettings)).toThrow('布尔'); expect(() => readEditorWordWrap(value)).toThrow('布尔'); expect(() => open({ ...original, editorWordWrap: value }).settings()).toThrow('布尔');
+    expect(() => validateCommand('settings.save', changed)).toThrow(); expect(() => store.saveSettings(changed as AppSettings)).toThrow('布尔'); expect(readEditorWordWrap(value)).toBe(true); expect(open({ ...original, editorWordWrap: value }).settings()).toEqual({ ...original, editorWordWrap: true });
   }
   expect(fs.writes).toBe(0); expect(store.settings()).toEqual(original); const legacy = { ...original }; delete legacy.editorWordWrap; expect(validateCommand('settings.save', legacy)).toEqual(legacy);
 });
