@@ -40,3 +40,6 @@ node node_modules/@playwright/test/cli.js test tests/e2e/query-duplicate-native.
 ```
 
 本候选不运行构建，也不修改 CI 或安装执行器。仅提交本地固定候选，供 Root 独审后安排执行。
+## Root后续实证
+
+Root `c17ad63` 对齐 Field 下拉的真实可访问名，并让输入行内容接受平台 EOL；来源／复制／Undo 仍严格比较实际原字符串。仅正式安装 runner 的同值 C02_EXE 路径别名可继承，其它认证／实库配置继续拒绝。Windows 开发 Electron 的原一项 run1516 已单次通过、正常退出及配置目录清理确认；三平台源码／安装门随后接入，尚不外推其它平台或真实数据库会话，见[原生检查点](../../tests/integration/acceptance-query-duplicate-native-20261018.md)。

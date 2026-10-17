@@ -77,6 +77,8 @@ jobs:
           DBARK_W03_SAVED_QUERY_NAVIGATION_TEST: '1'
           # 真实Monaco热更新、SQLite落盘及独立重启；不使用系统剪贴板或私网数据库。
           DBARK_EDITOR_FONT_NATIVE_TEST: '1'
+          # 真实查询复制、保存来源与Undo基线；仅固定离线连接，不接私网或系统剪贴板。
+          DBARK_QUERY_DUPLICATE_NATIVE_TEST: '1'
           # 仅源码 E2E 的固定离线片段用例采集；安装验收与实库用例不继承此门。
           DBARK_SNIPPETS_NATIVE_DIAGNOSTICS: '1'
       - run: ${{ matrix.command }}
@@ -86,6 +88,7 @@ jobs:
         env:
           DBARK_W03_SAVED_QUERY_NAVIGATION_TEST: '1'
           DBARK_EDITOR_FONT_NATIVE_TEST: '1'
+          DBARK_QUERY_DUPLICATE_NATIVE_TEST: '1'
       - uses: actions/upload-artifact@v4
         with:
           name: DBArk-${{ matrix.artifact }}-未发行签名
