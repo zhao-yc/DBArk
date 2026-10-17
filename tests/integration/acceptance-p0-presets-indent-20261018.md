@@ -33,6 +33,14 @@
 
 两轮有17项重叠且来源不同，不相加为204个唯一身份。私有证据位于Root ignored `parallel-integration/run1597-*`、`run1598-*`、`run1599-*`及`run1600-p0-merged-source-comparison.json`。日志SHA256：118项 `6595825162b79ab6fe502a34c87cf60e76abe1b54302df34aaa70a97574684d7`；86项 `fb86bd186d38ff9de9fe72fb182ac4fb7cbe945b134443543d8ede1cdccbdd1c`；类型空日志 `e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855`；构建 `f125241918e1c34087501dc26ebb8aad0b8dc10d716dd575429976759b77f2c0`。
 
+## 完整CI及旧夹具补齐
+
+原固定 `863c70c833c99fc30c16c5f0d98a346a192a59af` 的[完整CI39075195842](https://github.com/zhao-yc/DBArk/actions/runs/39075195842)未通过：469文件中464通过、5失败；8817项通过、7失败、10条件跳过，另39个未处理拒绝。类型步骤通过，完整单元失败后未执行构建。七例报错为旧AST/VM提取夹具缺少新增的`invalidateTablePresetSources`、`tablePresetReads`、`reloadBlocked`、`bindEditorIndentation`依赖；39个未处理拒绝主要来自同一旧窗口夹具。正在补齐真实依赖，不能把缺依赖简单改成noop、吞错或删除原断言。原日志在Root ignored `run1601-863c70c-full-ci-original-red.log`，SHA256 `5518c7c2a04da33d2c76b132633fdb6fc1768caa90f985da18e9bcddf2b735ea`，原失败终态保留。
+
+夹具修复：作者 `9f312e288e309a913200a6ab50835c6daa8d69c7` 对应Root `997d959d6f64033106f9ba5a47ea88d9b75cfe1a`，三个Main夹具使用真实来源类、实际失效/取消函数及登记Map；作者 `cba45f1bfa542ea5fbeb812c27668f7a1fa0f79c` 对应Root `48d9903aa108a79f9495af9786519aeb10c7f5d8`，两个UI夹具补真实忙门和缩进模型绑定器/事件端口。279处原断言（174+105）逐字与顺序保持，无生产代码、构建脚本、依赖或工作流改动。两个作者分别四文件37、两文件48通过，类型通过；交接SHA256分别为 `86cc763a44344593bcace3c153fe9a49a5f7d08b29f51e8784e5e8c6f8bd8a46`、`86b57b142145907af64eca4629812f4c449fef5636c262891c283111ff9fd883`。
+
+Root固定48d9903合并后的六个受影响文件一次85通过，无未处理拒绝，类型退出0；日志 `run1602-fixture-integration/stdout.log` SHA256 `55143b182df75727470ea4f11aa4b07a645da043305b4a8ab4cd1c7c5c1e2819`。已逐路径核 `src/`、`scripts/`、package、锁文件和workflow与原类型/构建通过的f2bcde3完全相同，本次不重复本地构建；仍需新完整CI，不能把定向85代替全量终态。
+
 ## 未验收边界
 
 本批尚未接纳新的完整CI、真实GUI、自然Electron IPC/原生Observer、服务器资源结算、安装及macOS私网组合。旧8244完整8763、0.21三平台源码/实装76及公开下载分别保留原来源，不外推本源码。本轮不运行SSH/Docker、读取数据库凭据、修改数据库或系统剪贴板；新批量及缩进正式E2E另在独立任务准备，默认关闭。
