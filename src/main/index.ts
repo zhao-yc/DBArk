@@ -160,6 +160,8 @@ async function dispatch(command: Command, input: any): Promise<unknown> {
   if (command === 'serverMonitor.read' && shuttingDown) throw new Error('客户端正在退出，不能刷新服务器监控');
   if (command === 'schema.compare') { connectionConfig.assertAvailable(input.source.connectionId); connectionConfig.assertAvailable(input.target.connectionId); }
   switch (command) {
+    // 监控使用主进程解密的目标配置，避免为了打开只读窗口另建一次不受任务管理的测试连接。
+    case 'serverMonitor.read': input = { ...input, profile: store.resolveConnection(input.connectionId) }; break;
     // 无 await、无引擎调用：全部校验和生成通过后才一次写入系统剪贴板。
     case 'table.copyInsertSql': return copyInsertSql(input, sql => clipboard.writeText(sql));
     case 'workbench.get': return store.workbench();
@@ -420,11 +422,11 @@ app.on('before-quit', event => {
     store?.close(); shutdownComplete = true; app.quit();
   })().catch(async error => {
     stateFlushed = undefined;
-    const answer = await dialog.showMessageBox({ type: 'error', title: '退出前保存失败', message: error instanceof Error ? error.message : String(error), detail: '可以返回工作台排查后重试，或放弃未保存的配置并退出。', buttons: ['返回工作台','放弃未保存配置并退出'], defaultId: 0, cancelId: 0 });
+    const answer = await dialog.showMessageBox({ type: 'error', title: '退出前保存或收尾失败', message: error instanceof Error ? error.message : String(error), detail: '返回工作台可排查后重试。强制退出会终止本地执行进程并放弃未保存配置，不能确认远端操作已停止，也不能撤销已提交操作。', buttons: ['返回工作台','强制退出客户端'], defaultId: 0, cancelId: 0 });
     if (answer.response === 1) {
       await savedQuerySearches?.close();await savedQueryPages?.close();await historyPages?.close();await Promise.allSettled([...localSearchOperations]);
       await Promise.allSettled([...queryFileOperations]);
-      await broker?.close().catch(() => undefined);
+      try { broker?.forceClose(); } catch (failure) { shuttingDown = false; dialog.showErrorBox('强制退出失败', failure instanceof Error ? failure.message : '数据库执行进程未能终止'); return; }
       try { store?.close(); } catch { /* 用户已明确选择退出，避免退出状态永久锁死。 */ }
       shutdownComplete = true; app.quit();
     } else shuttingDown = false;

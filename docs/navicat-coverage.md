@@ -118,7 +118,7 @@ CSV字段选择与顺序已在本分支源码整合；已复现的文件sync期�
 | B01 | 常用数据库备份恢复 | 待做 | MySQL/MariaDB/PostgreSQL/SQLite/Redis 分别验证；表导出不能代替整库备份 |
 | B02 | 备份转 SQL/SQL 与 Redis 文件 | 部分 | SQL 执行已验；补转换及 Redis 命令任务 |
 | S01 | 用户/角色/授权撤销 | 待做 | 真实权限、预览、权限不足与当前账号保护 |
-| S02 | 服务器/会话/命令监控 | 在做 | 只读内核已接typed IPC和独立短会话，30项RAM及类型通过；正式界面、资源异常隔离及实库待验，见[接线边界](development/server-monitor-integration-20261017.md)；取消查询与结束会话区分 |
+| S02 | 服务器/会话/命令监控 | 在做 | 已接正式连接选择、概要/固定状态/有限会话、串行刷新及只读独立任务；源码与RAM证据见[接线边界](development/server-monitor-integration-20261017.md)、[资源隔离与退出](development/independent-task-resource-recovery-20261017.md)，实库/原生/安装待验；取消读取与结束他人会话区分 |
 | F02 | Excel | 部分 | 0.17开发中已有XLSX有界读取、工作表/字段映射及流式导出；MySQL8.4实际1201行往返及六实例文件精度/真实警告批次回滚已验，后者174项包含XLSX/CSV/JSON，见[第二批验收](../tests/integration/acceptance-parallel-second-20261016.md)。完整工作表/类型/公式与取消矩阵、原生macOS及公开发行仍待完成 |
 | D09 | 数据概况/剖析 | 待做 | NULL、分布、抽样范围、服务端聚合及取消 |
 

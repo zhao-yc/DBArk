@@ -7,6 +7,7 @@ import type { TaskEvent } from '../shared/contracts';
 export class EngineBroker {
   private child?: UtilityProcess;
   private stopping = false;
+  private closePending?: Promise<void>;
   private pending = new Map<string, { resolve(value: unknown): void; reject(error: Error): void }>();
   /** 接收任务事件和进程故障出口，不向渲染进程暴露底层消息通道。 */
   constructor(private emit: (event: TaskEvent) => void, private failed: () => void) {}
@@ -42,12 +43,28 @@ export class EngineBroker {
     });
   }
 
-  /** 给引擎短暂清理机会，再终止进程，确保退出后任务不能继续。 */
-  async close(): Promise<void> {
+  /** 普通退出必须收到真实收尾成功；拒绝或超时保留引擎及隔离账本，允许用户重试。 */
+  close(): Promise<void> {
+    if (!this.child) return Promise.resolve();
+    if (this.closePending) return this.closePending;
+    const child = this.child;
+    const work = (async () => {
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        await Promise.race([this.request('__shutdown', {}), new Promise<never>((_resolve, reject) => { timer = setTimeout(() => reject(Error('数据库任务收尾尚未确认，已保留执行进程；请核对资源后重试退出')), 3000); })]);
+        if (this.child === child) { this.stopping = true; if (child.kill() === false) throw Error('数据库执行进程未能终止，请重试退出'); }
+      } catch (error) { this.stopping = false; throw error; }
+      finally { if (timer) clearTimeout(timer); }
+    })();
+    this.closePending = work;
+    void work.finally(() => { if (this.closePending === work) this.closePending = undefined; }).catch(() => undefined);
+    return work;
+  }
+
+  /** 仅产品明确的强制退出选择可调用；不把它当作服务器任务或资源已经终态的证明。 */
+  forceClose(): void {
     if (!this.child) return;
     this.stopping = true;
-    const child = this.child;
-    await Promise.race([this.request('__shutdown', {}).catch(() => undefined), new Promise(resolve => setTimeout(resolve, 3000))]);
-    child.kill();
+    if (this.child.kill() === false) { this.stopping = false; throw Error('强制退出未能终止数据库执行进程，请重试'); }
   }
 }

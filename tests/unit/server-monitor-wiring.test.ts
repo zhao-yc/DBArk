@@ -28,6 +28,12 @@ function engine() { const events: TaskEvent[] = []; const value = new Engine(eve
 beforeEach(() => { ports.connect.mockReset(); ports.execute.mockReset(); });
 
 describe('服务器监控正式命令接线', () => {
+  it('主进程可信profile可直接绑定独立任务，错误目标在网络分配前拒绝', async () => {
+    const value = new Engine(() => {}), dedicated = managed(); ports.connect.mockResolvedValueOnce(dedicated);
+    await value.handle('serverMonitor.read', { connectionId: profile.id, taskId: 'trusted', profile }); expect(ports.connect).toHaveBeenCalledOnce();
+    await expect(value.handle('serverMonitor.read', { connectionId: 'other', taskId: 'wrong', profile })).rejects.toThrow('主进程未提供'); expect(ports.connect).toHaveBeenCalledOnce();
+    expect(() => validateCommand('serverMonitor.read', { connectionId: profile.id, taskId: 'untrusted', profile })).toThrow();
+  });
   it('公开命令有typed白名单且拒绝任意SQL、额外权限和超限会话', () => {
     expect(publicCommands['serverMonitor.read']).toBe(true);
     expect(validateCommand('serverMonitor.read', { connectionId: profile.id, taskId: 'read', sessionLimit: 100 })).toEqual({ connectionId: profile.id, taskId: 'read', sessionLimit: 100 });

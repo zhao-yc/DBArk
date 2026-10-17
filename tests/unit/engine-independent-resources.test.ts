@@ -1,5 +1,5 @@
 import { EventEmitter } from 'node:events';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ConnectionProfile, TaskEvent } from '../../src/shared/contracts';
 import type { ManagedConnection } from '../../src/engine/connection';
 import type { StructureTaskOptions, StructureTaskContext } from '../../src/engine/structureDefinition';
@@ -27,6 +27,7 @@ function run(value: Engine, id: string, action: (managed: ManagedConnection, con
 }
 function assertTargetHeld(value: Engine, table: string) { expect(() => Reflect.get(value, 'structureExecutions').acquire(profile.id, [{ database: 'ram_db', table }])).toThrow('结构变更'); }
 beforeEach(() => { ports.connect.mockReset(); ports.execute.mockReset(); });
+afterEach(() => vi.useRealTimers());
 
 describe('Engine独立动作与物理资源分开结算', () => {
   it('1062和close双失败仍返回原1062，释放动作等待者但保留任务号及全部目标，显式断开才回收', async () => {
@@ -69,5 +70,12 @@ describe('Engine独立动作与物理资源分开结算', () => {
     await expect(value.handle('query.cancel', { taskId: 'cancelled' })).rejects.toThrow('取消控制连接失败'); expect(await read).toBeInstanceOf(Error);
     expect(main.owner.recovery.snapshot().confirmedClosed).toBe(true); expect(control.owner.recovery.snapshot().confirmedClosed).toBe(false); expect(Reflect.get(value, 'independentResources').owns('cancelled')).toBe(true); assertTargetHeld(value, 'parent');
     await value.handle('connections.close', { id: profile.id }); expect(control.managed.connection.destroy).toHaveBeenCalledOnce(); expect(control.managed.close).not.toHaveBeenCalled(); expect(Reflect.get(value, 'independentResources').owns('cancelled')).toBe(false); expect(ports.connect).toHaveBeenCalledTimes(2); expect(ports.execute).not.toHaveBeenCalled();
+  });
+  it('普通退出恢复未知时保留原账本并重开显式恢复入口，不自动重放动作', async () => {
+    vi.useFakeTimers(); const { value } = engine(), item = physical(true), action = vi.fn(async () => {}); ports.connect.mockResolvedValueOnce(item.managed);
+    await expect(run(value, 'unknown-exit', action)).rejects.toThrow('关闭失败'); vi.mocked(item.managed.connection.destroy).mockImplementation(() => {}); item.stream.destroy.mockImplementation(() => {});
+    const quit = value.closeAll(), rejected = expect(quit).rejects.toThrow('资源未确认释放'); await vi.advanceTimersByTimeAsync(21); await rejected;
+    expect(Reflect.get(value, 'closing')).toBe(false); expect(Reflect.get(value, 'independentResources').owns('unknown-exit')).toBe(true); assertTargetHeld(value, 'parent');
+    item.stream.destroy.mockImplementation(item.closed); await value.handle('connections.close', { id: profile.id }); expect(Reflect.get(value, 'independentResources').owns('unknown-exit')).toBe(false); expect(action).toHaveBeenCalledOnce(); expect(ports.connect).toHaveBeenCalledOnce();
   });
 });

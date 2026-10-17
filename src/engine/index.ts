@@ -208,9 +208,12 @@ export class Engine {
       }
       case 'metadata.databases': return this.withConnection(input.connectionId, connection => metadata.databases(connection));
       // 监控只用独立短连接，不借用SQL标签事务；原任务严格收尾后才交还快照。
-      case 'serverMonitor.read': return this.withIndependentTask(input.connectionId, input.taskId,
-        (managed, control) => readServerMonitor({ managed, ...control }, input as import('../shared/serverMonitor').ServerMonitorInput),
-        undefined, '读取服务器监控', true, () => ({}));
+      case 'serverMonitor.read': {
+        this.copySourceProfile(input);
+        return this.withIndependentTask(input.connectionId, input.taskId,
+          (managed, control) => readServerMonitor({ managed, ...control }, { connectionId: input.connectionId, taskId: input.taskId, ...(input.sessionLimit !== undefined ? { sessionLimit: input.sessionLimit } : {}) }),
+          undefined, '读取服务器监控', true, () => ({}));
+      }
       case 'search.structure':case 'search.structureContinue':{
         const profile=input.profile as ConnectionProfile|undefined;
         if(!profile||profile.id!==input.connectionId)throw Error('主进程未提供有效搜索连接配置');
@@ -432,6 +435,7 @@ export class Engine {
   /** 关闭前取消任务并释放固定会话，未提交事务由服务器在断开时回滚。 */
   async closeAll(): Promise<void> {
     this.closing = true;
+    try {
     this.excelConnecting.forEach(task => task.controller.abort());
     const comparisonCleanup = this.schemaComparisons.close();
     this.structureCache.release();
@@ -446,11 +450,17 @@ export class Engine {
     this.dataSearchRecords.close();
     this.tableCopySources.close();
     await Promise.all([...this.sessions.values()].map(session => session.managed.close()));
+    // 已关闭的查询会话不能在返回工作台后被继续使用；未知独立资源的profile仍保留供显式恢复。
+    this.sessions.clear();
     const recovered = await this.independentResources.recover();
     if (recovered.remaining) throw Error('退出前仍有独立任务资源未确认释放，请核对服务器及隧道状态后重试；原操作未重放');
     this.sessions.clear(); this.profiles.clear();
     this.structureCache.release();
     const failed = cancellations.find(result => result.status === 'rejected'); if (failed?.status === 'rejected') throw failed.reason;
+    } catch (error) {
+      // 返回工作台后仍可显式断开和恢复原资源；普通退出失败不能永久封死引擎入口。
+      this.closing = false; throw error;
+    }
   }
 
   /** 只读取已经由主进程解密并成功打开的连接配置，不接受界面任意凭据。 */
