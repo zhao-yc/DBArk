@@ -11,7 +11,7 @@ export interface TableCreatePreparationProfile {
 const mysql80: TableCreatePreparationProfile = Object.freeze({
   id: 'mysql-8.0.46-create-preparation-v1', version: '8.0.46', state: 'prepared',
   canReadFacts: true, canWrite: false,
-  reason: 'MySQL8.0.46新建表仅完成兼容准备；等待Root先验8.4并另行授权，未激活准确版本追加写入或正式UI。',
+  reason: 'MySQL8.0.46等待Root本轮真实实证；正式入口默认关闭，准备合同不授予或限制通用MySQL/Maria创建能力。',
 });
 const unsupported: TableCreatePreparationProfile = Object.freeze({
   id: 'unsupported', version: null, state: 'unsupported', canReadFacts: false, canWrite: false,

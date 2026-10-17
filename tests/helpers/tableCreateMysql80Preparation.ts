@@ -27,7 +27,7 @@ export function assertTableCreateMysql80Facts(rows: unknown, target: TableCreate
   if (!profile.canReadFacts || profile.state !== 'prepared' || !validUuid(row.uuid) || row.uuid !== target.serverUuid || !['linux', 'debian-linux-gnu'].includes(String(row.os).toLowerCase()) || ![0, '0'].includes(row.names as number)) throw Error('新建表8.0.46实际版本、OS、名称模式或Root UUID不一致；未创建隔离库');
 }
 
-/** 仅供准备反例及后续接线复用；本片没有任何真实端口适配器，也不提供执行DDL的端口。 */
+/** 供只读预检适配器及纯反例复用；该端口不提供执行DDL或隔离建库能力。 */
 export interface TableCreateMysql80PreparationPorts {
   assertCurrent(): void;
   retain(): void;
