@@ -21,3 +21,17 @@
 ## 后续原生门
 
 专属 DBARK_QUERY_DUPLICATE_NATIVE_TEST=1 已加入三平台源码及实际安装阶段，integration 继续为 0，私网和特殊系统剪贴板组件保持原门。新的准确固定头必须分别得到 Windows x64／macOS arm64／x64 终态，不能继承旧 `4576d73` 的结果。公开预览仍为 0.20.0。
+
+## 完整 CI 原红与提取夹具修正
+
+[整合头 d0b337e 的完整 CI 39056904940](https://github.com/zhao-yc/DBArk/actions/runs/39056904940) 为 436 文件：435 通过、1 失败；8108 项通过、1 失败、10 条件跳过。唯一失败是 ui-current-statement 的 editor 接管反例：提取真实 attachQueryEditor 时未向 VM 提供新 duplicateIntent 引用。真实组件已在函数运行前执行 useRef(null)，不是产品中的未定义变量。
+
+Root `163035e` 仅为原 VM 补同样的 `{ current: null }`，该场景没有发起复制；不替换真实函数，不删除当前语句的失效／不执行断言。原同字节目标单项先复现 1 红／18 未选，修正后同文件 19 项通过。已逐路径核对与 d0b337e 的 src、E2E、scripts、包配置、锁文件和工作流没有差异；新的完整 CI 仍需另得终态，不能把原红运行改绿。
+
+| 原件 | SHA-256 |
+| --- | --- |
+| 原 job 117466624566 日志 | `4469eb3e5113f4a9e7ad048425f26d366980961586e1080a9a33f34838c7f277` |
+| 目标单项原红 | `38aaf17fe1d911a3ae71f379db272d1c005848e4ac84a61bc166b3db156548e1` |
+| 修正后 19 项 | `0b36a35e7bbfdb96ef92261b461109ecd4dd4a001b6070b060fd1e7538aaf9e3` |
+
+原生检查头 `a04a61d` 仅比固定来源 d0b337e 增加检查标记；其 Linux job 的同类原夹具失败及三个桌面 job 须按各自终态单独记录，不提前接纳新安装或其它平台。
