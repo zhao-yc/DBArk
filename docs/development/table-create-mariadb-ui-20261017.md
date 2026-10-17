@@ -57,3 +57,13 @@ node D:/svn/DBArk/node_modules/@playwright/test/cli.js test tests/e2e/table-crea
 选定6文件357项通过，TypeScript无发射检查通过；真实Playwright list只列出两个关闭定义。父红1项与修正后真实React绿结果分开保留，未把失败草稿当最终通过证据。没有读取实际认证、访问200、GUI、DB、SSH、clipboard、Docker、CI或安装程序，没有修改Root分支；代码推送不代表实际执行或生产部署授权。
 
 Root后续须分别提供两实例本轮raw认证/指纹，独占实际执行，并另核六实例资源与各自真实SHOW/COLUMNS/STATISTICS形状。当前Maria目录样本均为合成，真实展示宽度、默认值引号、索引顺序、窗口刷新和实际strict close仍待Root验收；遇到差异应依据实际来源修正，不回填通过、不把研究层“不绝对唯一”当永久停止既有功能验收的理由。
+
+## 端口映射勘误：外部连接端口与真实serverPort分离
+
+Root及员工2复核指出，原`d8d0fc1`把读取的`@@port`与外部13310/13311直接比较，容器发布端口或代理映射时会误拒绝。父版本上的两版本事实反例、真实注册函数映射反例共4项失败，原报告另存`.cache/maria-pure/port-parent-red.json`；不修改此前357项通过报告。
+
+最小修复仅在本用途事实helper与纯测试：`target.port`仍由raw严格固定为13310或13311，只用于连接配置归属；查询改为`@@port AS serverPort`，它必须是实际返回的自有字段、合法1至65535整数或规范十进制字符串，缺失、继承、空串、非法或越界均拒绝。没有默认3306，也不从外部端口补值；3306只出现在明确提供的合成样本中。
+
+真实serverPort按规范字符串纳入原RAM指纹，预检和后续观察连接比较的是同一服务器事实。端口3306的数值/字符串表示可以等价；实际监听端口3306变3307仍使指纹变化，在建库前停链，不退出或DROP。外部端口错误仍由原raw绑定拒绝，不能以“允许任意监听端口”放开连接目标。
+
+本次选定6文件389项纯测通过，类型检查通过。正式UI主体、认证键、默认关闭双门、生产engine、strict QUIT/同流close与未知sticky retain均不变；真实两实例和资源核对仍全部未执行。新增报告为`.cache/maria-pure/port-new-green-final.json`，不覆盖原失败或原交付。

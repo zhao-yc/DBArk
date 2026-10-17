@@ -15,7 +15,7 @@ const environment = (version: MariaCreateVersion = '10.11.19'): Record<string, s
 const source = readFileSync(new URL('../e2e/table-create-mariadb-live.ts', import.meta.url), 'utf8');
 const compile = (value: string) => ts.transpileModule(value, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS, esModuleInterop: true } }).outputText;
 type Drift = 'helper凭据' | 'helper目标' | 'raw和helper一致变化' | '表单等待后凭据';
-type Changes = { version?: MariaCreateVersion; swapStream?: boolean; tableUnknown?: boolean; drift?: Drift; facts?: Record<string, unknown>; missingNative?: boolean; missingStream?: boolean; closeUnknown?: boolean; holdClose?: boolean; queryUnknown?: boolean; afterAbsence?: boolean; beforeSource?: boolean; afterForm?: boolean; replacePage?: boolean; retainThrows?: boolean; completeBody?: boolean; engineSupport?: string; charset?: string; taskPending?: boolean; exitUnknown?: boolean; dropUnknown?: boolean; closeAtEndUnknown?: boolean };
+type Changes = { serverPort?: number; changedServerPort?: number; version?: MariaCreateVersion; swapStream?: boolean; tableUnknown?: boolean; drift?: Drift; facts?: Record<string, unknown>; missingNative?: boolean; missingStream?: boolean; closeUnknown?: boolean; holdClose?: boolean; queryUnknown?: boolean; afterAbsence?: boolean; beforeSource?: boolean; afterForm?: boolean; replacePage?: boolean; retainThrows?: boolean; completeBody?: boolean; engineSupport?: string; charset?: string; taskPending?: boolean; exitUnknown?: boolean; dropUnknown?: boolean; closeAtEndUnknown?: boolean };
 
 /** 执行正式注册函数和原建库表单，仅替换驱动/桌面端口；没有真实连接、认证文件或GUI。 */
 function formal(changes: Changes = {}) {
@@ -58,7 +58,7 @@ function formal(changes: Changes = {}) {
         if (changes.queryUnknown) throw sourceStop;
         if (changes.drift && changes.drift !== '表单等待后凭据') mutate();
         if (changes.replacePage) replacePage = true;
-        return [[{ version: (changes.version ?? '10.11.19') + '-MariaDB', os: 'Linux', names: 0, hostname: '合成Maria主机', port: Number(raw.DBARK_TEST_PORT), serverId: 27, mode: 'STRICT_TRANS_TABLES,ERROR_FOR_DIVISION_BY_ZERO,NO_AUTO_CREATE_USER,NO_ENGINE_SUBSTITUTION', autocommit: 1, innodbStrict: 1, quoteShowCreate: 1, ...changes.facts }]];
+        return [[{ version: (changes.version ?? '10.11.19') + '-MariaDB', os: 'Linux', names: 0, hostname: '合成Maria主机', serverPort: index > 1 && changes.changedServerPort !== undefined ? changes.changedServerPort : changes.serverPort ?? Number(raw.DBARK_TEST_PORT), serverId: 27, mode: 'STRICT_TRANS_TABLES,ERROR_FOR_DIVISION_BY_ZERO,NO_AUTO_CREATE_USER,NO_ENGINE_SUBSTITUTION', autocommit: 1, innodbStrict: 1, quoteShowCreate: 1, ...changes.facts }]];
       }
       if (sql.startsWith('SELECT ENGINE AS engine')) return [[{ engine: 'InnoDB', support: changes.engineSupport ?? 'DEFAULT' }]];
       if (sql.startsWith('SELECT CHARACTER_SET_NAME AS charset')) return [[{ charset: changes.charset ?? 'utf8mb4' }]];
@@ -197,3 +197,9 @@ describe('Maria新建表注册身份不能回填或重绑定', () => {
 
 
 it('Maria表DDL提交未知只保留现场，一次提交后不退出、不DROP、不重放', async () => { const f = formal({ completeBody: true, tableUnknown: true, retainThrows: true }); const reason = await f.run(); expect(originalCause(reason)).toBe(f.sourceStop); expect(f.calls.filter(x => x === 'table-submit')).toHaveLength(1); expect(f.calls).not.toContain('exit'); expect(f.calls.some(x => x.startsWith('DROP'))).toBe(false); await expect(f.after()).rejects.toThrow('保留'); });
+
+
+describe.each(['10.11.19', '11.4.13'] as const)('%s端口映射与真实监听事实', version => {
+  it('外部端口固定13310或13311，真实3306同流关闭后可进入原创建链', async () => { const f = formal({ version, serverPort: 3306, completeBody: true }); expect(await f.run()).toBeUndefined(); expect(f.targets.map(x => x.port)).toEqual([version === '10.11.19' ? 13310 : 13311, version === '10.11.19' ? 13310 : 13311]); expect(f.submissions).toHaveLength(1); });
+  it('第二连接的真实监听事实变化，不能降级忽略端口而建库', async () => { const f = formal({ version, serverPort: 3306, changedServerPort: 3307, completeBody: true }); expect(await f.run()).toBeDefined(); expect(f.submissions).toEqual([]); expect(f.calls.some(x => x.startsWith('DROP'))).toBe(false); expect(f.calls).not.toContain('exit'); });
+});
