@@ -13,6 +13,23 @@ export interface AtomicFileIO {
 }
 export const nativeAtomicFileIO: AtomicFileIO = { open: path => open(path, 'wx'), rename, remove: path => rm(path, { force: true }) };
 const activeTargets = new Set<string>();
+const targetReservations = new WeakMap<AtomicFileTargetReservation,{key:string;claimed:boolean;released:boolean}>();
+
+/** 外层任务持有目标锁；文件清理失败时不随dispose释放，须由所属任务确认资源终态后归还。 */
+export class AtomicFileTargetReservation {
+  private constructor() {}
+  static async reserve(target: string): Promise<AtomicFileTargetReservation> {
+    const key=await exportTargetKey(target);
+    if(activeTargets.has(key))throw Error('目标文件正在由另一个任务写入，请选择其他文件或等待');
+    const reservation=new AtomicFileTargetReservation();
+    targetReservations.set(reservation,{key,claimed:false,released:false});activeTargets.add(key);return reservation;
+  }
+  /** 仅私有任务协调器在确认同owner全部文件资源结束后调用；不向renderer暴露此对象。 */
+  release(): void {
+    const state=targetReservations.get(this);if(!state)throw Error('文件目标预留身份无效');
+    if(!state.released){state.released=true;activeTargets.delete(state.key);}
+  }
+}
 
 /** 对真实父目录归一化，防止相对路径、大小写或父目录链接绕过同目标互斥。 */
 export async function exportTargetKey(target: string): Promise<string> {
@@ -32,6 +49,7 @@ export class AtomicFile {
   private pending: Uint8Array[] = [];
   private readonly temporary: string;
   private key = '';
+  private ownsTarget = true;
 
   /** 构造不进行 IO；只有 open 成功后才拥有临时文件的删除权。 */
   private constructor(private readonly target: string, private readonly encoding: string, private readonly checkCancelled: () => void, private readonly onCommitStart: () => void, private readonly io: AtomicFileIO, private readonly maxBytes: number) {
@@ -39,11 +57,17 @@ export class AtomicFile {
   }
 
   /** 创建或取消失败时释放目标锁，绝不删除未由本次 open 创建的文件。 */
-  static async create(target: string, encoding: string, checkCancelled: () => void, onCommitStart: () => void, io: AtomicFileIO = nativeAtomicFileIO, maxBytes = 10 * 1024 ** 3): Promise<AtomicFile> {
+  static async create(target: string, encoding: string, checkCancelled: () => void, onCommitStart: () => void, io: AtomicFileIO = nativeAtomicFileIO, maxBytes = 10 * 1024 ** 3, reservation?: AtomicFileTargetReservation): Promise<AtomicFile> {
     const writer = new AtomicFile(target, encodingName(encoding), checkCancelled, onCommitStart, io, maxBytes);
     writer.key = await exportTargetKey(target);
-    if (activeTargets.has(writer.key)) throw new Error('目标文件正在由另一个任务写入，请选择其他文件或等待');
-    activeTargets.add(writer.key);
+    if(reservation){
+      const state=targetReservations.get(reservation);
+      if(!state||state.released||state.claimed||state.key!==writer.key||!activeTargets.has(writer.key))throw Error('文件目标预留已失效、已使用或不属于当前路径');
+      state.claimed=true;writer.ownsTarget=false;
+    }else{
+      if (activeTargets.has(writer.key)) throw new Error('目标文件正在由另一个任务写入，请选择其他文件或等待');
+      activeTargets.add(writer.key);
+    }
     try {
       checkCancelled(); writer.file = await io.open(writer.temporary); writer.created = true; checkCancelled();
       return writer;
@@ -114,7 +138,7 @@ export class AtomicFile {
     finally {
       this.file = undefined;
       try { if (this.created && !this.committed) await this.io.remove(this.temporary); }
-      finally { if (this.key) activeTargets.delete(this.key); }
+      finally { if (this.key && this.ownsTarget) activeTargets.delete(this.key); }
     }
   }
 }
