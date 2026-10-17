@@ -30,7 +30,7 @@
 
 这是**本轮已验目标指纹**，不称为持久全局实例oracle；不用server_uid、server_uuid、GIPK或partial_revokes，不伪造替代值。这个有界验收指纹不收缩或禁止generic产品能力，也不声称证明跨代理/克隆的全局身份。预检连接关闭后，观察连接再次核同一RAM事实；任何不一致停止。
 
-模式仅允许本片列明的常见普通模式：STRICT_TRANS_TABLES、STRICT_ALL_TABLES、ERROR_FOR_DIVISION_BY_ZERO、NO_AUTO_CREATE_USER、NO_ENGINE_SUBSTITUTION、ONLY_FULL_GROUP_BY、NO_ZERO_DATE、NO_ZERO_IN_DATE、NO_BACKSLASH_ESCAPES。隐藏定义/模拟模式、未知词或空项均拒绝本验收入口；不SET GLOBAL或更改现有查询会话。这是准确样本的前置约束，不是新增生产默认封禁。
+模式仅允许本片列明的常见普通模式：IGNORE_SPACE、STRICT_TRANS_TABLES、STRICT_ALL_TABLES、ERROR_FOR_DIVISION_BY_ZERO、NO_AUTO_CREATE_USER、NO_ENGINE_SUBSTITUTION、ONLY_FULL_GROUP_BY、NO_ZERO_DATE、NO_ZERO_IN_DATE、NO_BACKSLASH_ESCAPES。隐藏定义/模拟模式、未知词或空项均拒绝本验收入口；不SET GLOBAL或更改现有查询会话。这是准确样本的前置约束，不是新增生产默认封禁。
 
 ## 正式主体与资源终态
 
@@ -67,3 +67,13 @@ Root及员工2复核指出，原`d8d0fc1`把读取的`@@port`与外部13310/1331
 真实serverPort按规范字符串纳入原RAM指纹，预检和后续观察连接比较的是同一服务器事实。端口3306的数值/字符串表示可以等价；实际监听端口3306变3307仍使指纹变化，在建库前停链，不退出或DROP。外部端口错误仍由原raw绑定拒绝，不能以“允许任意监听端口”放开连接目标。
 
 本次选定6文件389项纯测通过，类型检查通过。正式UI主体、认证键、默认关闭双门、生产engine、strict QUIT/同流close与未知sticky retain均不变；真实两实例和资源核对仍全部未执行。新增报告为`.cache/maria-pure/port-new-green-final.json`，不覆盖原失败或原交付。
+
+## IGNORE_SPACE握手模式勘误
+
+1351原红保留：Data两项完整phase通过，Maria10.11在DDL前被事实复合条件拒绝，11.4未执行，整批不接纳。Root公开只读1355报告中的两个准确Maria版本均含`IGNORE_SPACE`，其余非敏感版本/OS/名称映射/真实监听端口/自动提交/严格模式/引用显示形状已记录；旧白名单遗漏这个单独模式。这里不将global max-failures通知当作首因，也不借修改会话模式绕过拒绝。
+
+[MariaDB SQL_MODE官方文档](https://mariadb.com/docs/server/server-management/variables-and-modes/sql_mode#ignore_space)说明IGNORE_SPACE允许函数名与左括号之间空白，内置函数名因此成为保留字；[保留字文档](https://mariadb.com/docs/server/reference/sql-structure/sql-language-structure/reserved-words)允许引用后作为标识符。本例普通INT/VARCHAR设计的库、表、列和索引名均由原生成器反引号引用，默认值是文字，不依赖函数空白解析；该单独模式不属于既有隐藏SHOW定义模式。因此只在本用途helper明确追加IGNORE_SPACE，仍拒绝未知词及NO_*_OPTIONS、ANSI等模式，不SET会话，不修改任何产品src或108dist。
+
+新增夹具`tests/fixtures/table-create/mariadb-handshake-facts-1355.json`从Root公开1355非敏感字段取形状并记录原报告SHA；hostname/serverId明确使用合成值，不装作完整真实身份记录。两版本事实和真实注册函数各一项在父版本失败，共4红；修复后准确握手模式、真实generic任务、原完整注册链通过，IGNORE_SPACE并存未知或省略定义模式仍拒绝。选定6文件405项纯测、类型及两个关闭list定义通过；这些新测试与本员工实际DB/GUI/SSH/私料/clipboard/安装/CI/Docker动作均为0，不能把它们写成Maria真实UI已通过。
+
+原Data2完整phase独采及1351整体失败另见员工3ignored交接`review1351-source-preparation-20261017/data2-handoff.json`，不混入R93安装215口径；后续Maria复验必须用新编号，不能覆盖1351原件。

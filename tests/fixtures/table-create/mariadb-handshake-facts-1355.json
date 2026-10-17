@@ -1,0 +1,29 @@
+{
+  "source": "Root公开只读run1355，非敏感实际事实形状；hostname/serverId在测试内显式合成",
+  "sourceSha256": "4062d49430701fba33fcfd1a2298c80ea68e04d2d7a87c382abe1561662791ec",
+  "readonly": true,
+  "rows": [
+    {
+      "connectionPort": 13310,
+      "version": "10.11.19-MariaDB-ubu2204",
+      "os": "debian-linux-gnu",
+      "names": 0,
+      "serverPort": 3306,
+      "mode": "IGNORE_SPACE,STRICT_TRANS_TABLES,ERROR_FOR_DIVISION_BY_ZERO,NO_AUTO_CREATE_USER,NO_ENGINE_SUBSTITUTION",
+      "autocommit": 1,
+      "innodbStrict": 1,
+      "quoteShowCreate": 1
+    },
+    {
+      "connectionPort": 13311,
+      "version": "11.4.13-MariaDB-ubu2404",
+      "os": "debian-linux-gnu",
+      "names": 0,
+      "serverPort": 3306,
+      "mode": "IGNORE_SPACE,STRICT_TRANS_TABLES,ERROR_FOR_DIVISION_BY_ZERO,NO_AUTO_CREATE_USER,NO_ENGINE_SUBSTITUTION",
+      "autocommit": 1,
+      "innodbStrict": 1,
+      "quoteShowCreate": 1
+    }
+  ]
+}

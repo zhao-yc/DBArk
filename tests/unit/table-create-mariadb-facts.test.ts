@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import observed1355 from '../fixtures/table-create/mariadb-handshake-facts-1355.json';
 import { assertMariaCreateFacts, bindTableCreateMariaTarget, mariaCreateKeys } from '../helpers/tableCreateMariaTarget';
 
 describe.each(['10.11.19', '11.4.13'] as const)('%s的Maria事实反例（仅RAM）', version => {
@@ -6,6 +7,8 @@ describe.each(['10.11.19', '11.4.13'] as const)('%s的Maria事实反例（仅RAM
   const target = () => bindTableCreateMariaTarget(version, raw, raw()).target;
   const facts = () => ({ version: version + '-MariaDB-ubu2404', os: 'Linux', names: 0, hostname: '合成Maria', serverPort: Number(raw().DBARK_TEST_PORT), serverId: 27, mode: 'STRICT_TRANS_TABLES,NO_ENGINE_SUBSTITUTION', autocommit: 1, innodbStrict: 1, quoteShowCreate: 1 });
   it('真实Maria发行后缀及兼容前缀可读，结果只是RAM指纹', () => { expect(assertMariaCreateFacts([facts()], target())).toBeTypeOf('string'); expect(assertMariaCreateFacts([{ ...facts(), version: '5.5.5-' + facts().version }], target())).toBeTypeOf('string'); });
+  it('1355真实非敏感握手事实形状包含IGNORE_SPACE时可读，身份字段显式合成', () => { const actual = observed1355.rows.find(r => r.version.startsWith(version + '-MariaDB'))!; expect(actual.connectionPort).toBe(target().port); expect(() => assertMariaCreateFacts([{ ...facts(), ...actual }], target())).not.toThrow(); });
+  it.each(['FORGED', 'NO_FIELD_OPTIONS', 'NO_KEY_OPTIONS', 'NO_TABLE_OPTIONS', 'ANSI'])('IGNORE_SPACE并存的%s仍须拒绝', bad => { const actual = observed1355.rows.find(r => r.version.startsWith(version + '-MariaDB'))!; expect(() => assertMariaCreateFacts([{ ...facts(), ...actual, mode: actual.mode + ',' + bad }], target())).toThrow(); });
   it('发布端口与服务端监听端口不同仍接受已知真实事实', () => { expect(() => assertMariaCreateFacts([{ ...facts(), serverPort: 3306 }], target())).not.toThrow(); });
   it.each([{ version: '8.4.11' }, { version: '10.11.19' }, { version: '11.4.12-MariaDB' }, { version: '10.11.19-MariaDB suffix' }, { mode: 'FORGED' }, { mode: 'ORACLE' }, { mode: 'ANSI' }, { mode: '' }, { mode: 'STRICT_TRANS_TABLES,,NO_ENGINE_SUBSTITUTION' }, { autocommit: 0 }, { innodbStrict: undefined }, { quoteShowCreate: 0 }, { names: null }, { serverId: '027' }, { hostname: '其他实例' }, { serverPort: 0 }])('事实%s不完整或非准确目标时拒绝', patch => { expect(() => assertMariaCreateFacts([{ ...facts(), ...patch }], target())).toThrow(); });
   it.each([undefined, null, 0, -1, 65536, '', '03306', '3306x', '1e3', {}, true])('serverPort未知或非法%s不能默认3306', serverPort => { expect(() => assertMariaCreateFacts([{ ...facts(), serverPort }], target())).toThrow(); });

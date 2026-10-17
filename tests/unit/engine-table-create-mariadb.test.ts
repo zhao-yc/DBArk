@@ -6,11 +6,11 @@ import type { ManagedConnection } from '../../src/engine/connection';
 import { tableCreateAcknowledgements } from '../../src/shared/tableCreate';
 
 /** 真实generic建表任务及解析器，只替换查询结果；Maria目录样本不是MySQL能力放行。 */
-function fixture(version: string, wrongDefault = false, failAfterAck = false) {
+function fixture(version: string, wrongDefault = false, failAfterAck = false, mode = 'STRICT_TRANS_TABLES,NO_ENGINE_SUBSTITUTION') {
   const sent: string[] = []; let created = false;
   const connection = Object.assign(new EventEmitter(), { query(sql: string, callback: (error: Error | null, rows?: unknown, fields?: unknown[]) => void) {
     sent.push(sql); let rows: unknown;
-    if (sql.startsWith('SELECT @@hostname')) rows = [{ hostname: '合成Maria', port: 13310, serverId: 27, currentUser: 'unit@host', sqlMode: 'STRICT_TRANS_TABLES,NO_ENGINE_SUBSTITUTION', lowerNames: 0, charset: 'utf8mb4', collation: 'utf8mb4_bin' }];
+    if (sql.startsWith('SELECT @@hostname')) rows = [{ hostname: '合成Maria', port: 13310, serverId: 27, currentUser: 'unit@host', sqlMode: mode, lowerNames: 0, charset: 'utf8mb4', collation: 'utf8mb4_bin' }];
     else if (sql.startsWith('SELECT SCHEMA_NAME')) rows = [{ name: 'db', charset: 'utf8mb4', collation: 'utf8mb4_bin' }];
     else if (sql.startsWith('SELECT TABLE_NAME')) rows = [];
     else if (sql.startsWith('CREATE TABLE')) { created = true; rows = { affectedRows: 0, warningStatus: 0 }; }
@@ -43,6 +43,7 @@ describe.each(['10.11.19-MariaDB', '11.4.13-MariaDB'])('%s普通创建真实gene
   it('INT、文字NULL及普通默认、普通与唯一索引完整后核，一次消费无MySQL探测', async () => {
     const f = fixture(version); expect(await f.run()).toMatchObject({ ddlCompleted: true, definitionVerified: true, resourcesReleased: true }); expect(f.sent.filter(sql => sql.startsWith('CREATE TABLE'))).toHaveLength(1); expect(f.sent.some(sql => /server_uuid|server_uid|gipk|partial_revokes/i.test(sql))).toBe(false);
   });
+  it('IGNORE_SPACE握手模式保留引用标识符及文字默认后核，不SET会话', async () => { const f = fixture(version, false, false, 'IGNORE_SPACE,STRICT_TRANS_TABLES,ERROR_FOR_DIVISION_BY_ZERO,NO_AUTO_CREATE_USER,NO_ENGINE_SUBSTITUTION'); expect(await f.run()).toMatchObject({ ddlCompleted: true, definitionVerified: true }); expect(f.sent.filter(sql => sql.startsWith('CREATE TABLE'))).toHaveLength(1); expect(f.sent.some(sql => /^SET\b/i.test(sql))).toBe(false); });
   it('目录SQL NULL不能冒充文字NULL；ACK仍成立，不重放或DROP', async () => {
     const f = fixture(version, true); expect(await f.run()).toMatchObject({ ddlCompleted: true, definitionVerified: false }); expect(f.sent.filter(sql => sql.startsWith('CREATE TABLE'))).toHaveLength(1); expect(f.sent.some(sql => /^DROP/.test(sql))).toBe(false);
   });
