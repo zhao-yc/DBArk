@@ -1,5 +1,7 @@
 # 复制空表结构：普通数值生成列最小支持
 
+Root 后续实证：固定整合 `9d2fd9c` 的完整 6390 项、类型和构建通过，VIRTUAL/STORED 两个正式 Windows/准确 MySQL 8.4.11 界面身份单次通过并核资源清零。见[实际验收及限制](../../tests/integration/acceptance-generated-encoding-root-20261017.md)。下文作者阶段“实际0”保留其原时间与来源，不外推安装、macOS、其它版本或复杂生成列。
+
 本片从Root普通整合固定 `c1384b6706166616464c2d8a74703d80331c79d2`，建立新的普通独立克隆及 `codex/employee4-copy-generated-20261017` 分支；不用worktree，不改Root、R93候选或原作者固定分支。只追加复制空表结构的生成列支持，不复制行数据，不改通用SQL生成器。
 
 ## 实现范围与依据

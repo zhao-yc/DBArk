@@ -1,5 +1,7 @@
 # 新建表字符集与排序规则配对
 
+Root 后续实证：固定整合 `9d2fd9c` 的完整 6390 项、类型和构建通过，一个正式 Windows/准确 MySQL 8.4.11 编码配对界面身份单次通过并核资源清零。见[实际验收及限制](../../tests/integration/acceptance-generated-encoding-root-20261017.md)。作者阶段的实际0及旧反例保持，不外推安装、macOS、其它版本或已有表 ALTER。
+
 本片从固定 `1dd59a6589acc40c73fd9241aca21633a0bf81b9` 的普通克隆、独立分支开发，不使用worktree，不修改Root或R93候选。已核对原缺项：通用 `TableDesign` 只有charset，原 `SchemaDialog` 为字符集文本框，没有新表collation选择。
 
 ## 用户流程与兼容行为

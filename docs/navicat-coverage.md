@@ -1,5 +1,7 @@
 # Navicat 全功能覆盖目标
 
+后续未发布检查点：普通数值生成列 VIRTUAL/STORED 空表结构复制、新建表实际字符集与排序规则配对已整合。固定 `9d2fd9c` 的完整 6390 项、类型及构建通过，Windows 正式开发 Electron 在准确 MySQL 8.4.11 的三个界面身份单次通过，前后六资源零；原目标漂移及通知失败反例与追加修复分别保留，见[本批源码实证](../tests/integration/acceptance-generated-encoding-root-20261017.md)。生成列复杂表达式及其它版本、安装、macOS 和完整对象能力继续，不计入固定 0.21 安装候选。
+
 后续未发布新建表已完成复合外键首个正式 Windows/准确 MySQL 8.4.11 界面身份，包含 SHOW/RC/KCU 完整后核和树刷新；首轮标签定位失败及测试修正分别保留。固定生产整合 739e 的完整 6182 项、类型和构建通过，最终测试头另有 80 项定向和类型，前后六资源零，见[外键实证](../tests/integration/acceptance-table-create-fk-root-20261017.md)。其他版本、数据级联、安装及完整矩阵继续。
 
 后续未发布新建表已补准确 MySQL 8.0.46 入口：固定 `1dd59a6` 的 221 项定向回归、类型和构建通过，Windows 正式开发 Electron 一项实际界面单次通过并核前后六实例零资源，见[准确组合实证](../tests/integration/acceptance-table-create-mysql80-20261017.md)。不外推其他版本、安装包或外键创建。
