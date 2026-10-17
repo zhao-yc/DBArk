@@ -35,7 +35,7 @@ node D:/svn/DBArk/node_modules/vitest/vitest.mjs run tests/unit/query-result-col
 node D:/svn/DBArk/node_modules/typescript/bin/tsc --noEmit
 ```
 
-类型检查及最终固定源码证据见本普通clone的`.cache/query-result-columns/`交接记录。没有full、build、安装、Docker、实际DB／200、GUI、文件导出、系统剪贴板或CI执行；正常代码push不代表生产或实际验收授权。CI按该固定SHA另行只读核验，未取得结果不得写成通过。
+类型检查及最终固定源码证据见本普通clone的`.cache/query-result-columns/`交接记录。没有full、build、安装、Docker、实际DB／200、GUI、文件导出、系统剪贴板或人工CI执行；正常代码push不代表生产或实际验收授权。CI按该固定SHA另行只读核验，未取得结果不得写成通过。
 
 ## 默认关闭的正式SQL列布局验收卡
 
@@ -46,3 +46,12 @@ Root选择已批准的只读连接及独立查询标签，使用只返回常量�
 原生验收复制如需覆盖，先由Root明确本轮剪贴板方式和归属；本卡不授予系统剪贴板权限。可先在专属页面只投递合成ClipboardEvent并读取RAM结果，比对可见列及原值。实际CSV／JSON文件验收另需Root明确的保存对话框授权及文件目标，检查隐藏列完全缺席、可见列顺序相同、重复标题按既有规则映射、精度与NULL／空串／二进制不丢失。导出打开后变更源布局或结果，应保留打开时固定内容，不能重执行查询来填充文件。
 
 切结果、固定／释放快照、新执行、连接修订ABA、忙碌、模态和关闭后，保存的旧管理／网格回调都应拒绝。失败、未知或退出未确认保留本owner现场，停止后续动作，不全局杀进程、不借其它窗口处理认证、不自动删除测试文件或旧资源。成功后也只按Root授权处理本例资源，不能以本卡准备完成宣称正式验收通过。
+
+
+## 独审补修：观测漂移后永久撤销
+
+员工1指出current()沿用既有“返回false但保留绑定”的方式，隐藏值变回原值或删去额外键后可能复活旧选择。原14f同字节补核为1个新owner正常对照通过、隐藏值／额外键ABA两个反例失败；不将此方式表述为本片新引入。
+
+现在先判断传入binding是否为当前own绑定，旧binding只拒绝；只有当前own绑定观测到行列引用、元数据、布局或已选源行键／值漂移时，同步invalidate该绑定和selection。恢复原值也不能让旧current／count／snapshot／select复活，且不会误撤销较新的owner。只改renderer/resultExport、专属撤销单测及本文，不混入正式UI准备分支。
+
+最小专项为新增3项＋原选择19项共22/22，原红与同字节测试留存于`.cache/query-result-columns/revocation/`；类型检查另留日志。未重复76／full／build，未读真实环境、未做实际GUI／DB／文件／剪贴板操作。

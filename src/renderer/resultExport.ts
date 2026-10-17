@@ -39,16 +39,19 @@ export class ResultExportSelection {
   }
   /** 同一数组内换行、换列或改已选值也失效，不能由相同result引用掩盖漂移。 */
   current(binding: ResultSelectionBinding | undefined): binding is ResultSelectionBinding {
-    if (!binding || binding !== this.binding || binding.result.rows !== binding.rows || binding.result.columns !== binding.columns || binding.result.truncated !== binding.truncated || binding.rows.length !== binding.rowRefs.length || binding.columns.length !== binding.columnRefs.length || binding.visibleColumns.length !== binding.visibleRefs.length || binding.visibleColumns.some((column,i)=>column!==binding.visibleRefs[i])) return false;
-    if (binding.rows.some((row, i) => row !== binding.rowRefs[i]) || binding.columns.some((column, i) => column !== binding.columnRefs[i] || column.key !== binding.columnValues[i].key || column.name !== binding.columnValues[i].name || column.type !== binding.columnValues[i].type)) return false;
-    if (this.selection?.binding === binding) return this.selection.indices.every((index, i) => {
+    // 旧binding只返回拒绝，绝不能撤销已经接纳的较新owner。
+    if (!binding || binding !== this.binding) return false;
+    const revoke = () => { this.invalidate(); return false; };
+    if (binding.result.rows !== binding.rows || binding.result.columns !== binding.columns || binding.result.truncated !== binding.truncated || binding.rows.length !== binding.rowRefs.length || binding.columns.length !== binding.columnRefs.length || binding.visibleColumns.length !== binding.visibleRefs.length || binding.visibleColumns.some((column,i)=>column!==binding.visibleRefs[i])) return revoke();
+    if (binding.rows.some((row, i) => row !== binding.rowRefs[i]) || binding.columns.some((column, i) => column !== binding.columnRefs[i] || column.key !== binding.columnValues[i].key || column.name !== binding.columnValues[i].name || column.type !== binding.columnValues[i].type)) return revoke();
+    if (this.selection?.binding === binding && !this.selection.indices.every((index, i) => {
       const live=binding.rows[index],saved=this.selection!.sourceValues[i];
       return Object.keys(live).length===binding.columns.length&&binding.columns.every((column,position)=>{
         if(!Object.hasOwn(live,column.key))return false;
         const a=live[column.key],b=saved[position];
         return a&&b&&typeof a==='object'&&typeof b==='object'?a.type===b.type&&a.base64===b.base64:Object.is(a,b);
       });
-    });
+    })) return revoke();
     return true;
   }
   /** 按显示顺序生成有界原值快照；先校验预算再克隆，不接受空选回退全量。 */
