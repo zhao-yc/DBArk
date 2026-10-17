@@ -39,12 +39,18 @@ function checkedDefinition(definition: Readonly<IndexDefinition>, snapshot: Inde
       // 仅开放已适配目录语义的字符/二进制字符串；版本、表能力门及真实长度/总字节预算仍逐项核对。
       if (!['CHAR', 'VARCHAR', 'BINARY', 'VARBINARY'].includes(type) && !large) throw new Error('该字段类型的前缀索引尚未验证');
       if (column.prefix.kind !== 'allowed') throw new Error('该字段不允许前缀或前缀能力未知');
+      if (!Number.isSafeInteger(column.prefix.maxLength) || column.prefix.maxLength < 1) throw new Error('无法证明字段前缀最大长度');
       if (part.prefixLength > column.prefix.maxLength) throw new Error('索引前缀超过字段长度');
       const binary = ['BINARY', 'VARBINARY'].includes(type) || type.endsWith('BLOB');
       if (column.prefix.unit !== (binary ? 'bytes' : 'characters')) throw new Error('索引前缀单位与字段类型不一致');
       const unitBytes = binary ? 1 : column.charsetMaxBytes;
       if (!Number.isSafeInteger(unitBytes) || unitBytes! < 1) throw new Error('无法证明字符集最大字节数');
       partBytes = part.prefixLength * unitBytes!;
+      // 有显式长度声明的满列前缀等价于整字段；必须由独立完整成本再次证明，不能放宽真正部分前缀。
+      if (!large && part.prefixLength === column.prefix.maxLength) {
+        if (!Number.isSafeInteger(column.fullKeyBytes) || column.fullKeyBytes! < 1 || partBytes !== column.fullKeyBytes) throw new Error('满列前缀与字段完整索引字节成本无法交叉证明');
+        delete part.prefixLength;
+      }
     } else {
       if (large) throw new Error('TEXT/BLOB 必须显式指定已验证前缀，不能接受服务器自动截短');
       partBytes = column.fullKeyBytes;
@@ -118,6 +124,8 @@ export function planTableIndexPatches(snapshot: IndexPlanSnapshot, input: unknow
       const next = { ...old.definition, ...patch.changes };
       if (equalDefinition(next, old.definition)) continue;
       const definition = checkedDefinition(next, snapshot, options);
+      // 显式满列长度规范后可能与原整字段完全相同，此时不能误生成DROP+ADD。
+      if (equalDefinition(definition, old.definition)) continue;
       const rename = definition.kind === old.definition.kind && definition.name !== old.definition.name && sameParts(definition.keyParts, old.definition.keyParts) && definition.comment === old.definition.comment;
       if (rename && definition.kind === 'primary') throw new Error('主键不能重命名');
       if (rename && !options.capabilities.renameIndex) throw new Error('当前服务器未证明支持原生索引改名');
