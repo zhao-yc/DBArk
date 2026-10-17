@@ -37,6 +37,15 @@ GitHub候选附件12117293340已通过独立网络流及落盘重读两次核验
 | `DBArk-0.22.0-win-x64-unsigned.exe` | 142319896 | `d90b7aae077fcb47512fb3db126d5202ce35dabc01b60acef7e9f721e2fd513e` |
 | `DBArk-0.22.0-win-x64-unsigned.exe.blockmap` | 148857 | `ee7433c2d789f55bc0738ba7d319da25a047155abb72670f668a5436d822bd31` |
 
-PE版本元数据为DBArk/0.22.0。该exe是NSIS安装器，不能作为应用主程序传入Electron启动接口。本机尚未执行安装器或启动此候选；CI实际安装与本机数据核验分别记录。Windows无发行签名，macOS为adhoc签名且未公证。两份macOS附件目前只核了服务端元数据，没有独立下载，亦未在本机模拟macOS验收。
+PE版本元数据为DBArk/0.22.0。该exe是NSIS安装器，不能作为应用主程序传入Electron启动接口。本机尚未执行安装器或启动此安装候选；CI实际安装与本机数据核验分别记录。Windows无发行签名，macOS为adhoc签名且未公证。
+
+两份macOS附件随后也完成一次独立下载、网络流与落盘重读SHA256，均与GitHub附件摘要一致；下载地址仅进入无回显stdin，未落盘。这里核验的是外层CI附件ZIP，没有解包或在Windows运行macOS程序：
+
+| 附件 | 字节 | 外层ZIP SHA256 |
+| --- | --- | --- |
+| macOS arm64 / 12117537093 | 339247916 | `8961b435cd91d7475c60485a5e7d215292ab16cce9e62f57d58af24b107bdd2f` |
+| macOS x64 / 12117264341 | 352987526 | `48cd30022ad63c68285f32e5d4c1380f8bda083d587d4feb9e8517c5d83b48a4` |
+
+原回执分别保留在Root忽略目录 `run1612-v022-mac-arm64-download/download.json`、`run1612-v022-mac-x64-download/download.json`；Windows回执在 `run1608-v022-windows-download`。后续新源码离线GUI专项及其原失败另见[准备与实际尝试](acceptance-p0-native-preparation-20261018.md)，不回填本候选统计。
 
 新功能实库、专用原生GUI及完整发行下载仍待完成；Navicat全功能目标继续。随机 `dbark_phys_*` 控制器仍未启动，原授权问题待答，本检查点未借用其它命名空间创建测试资源。
