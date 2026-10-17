@@ -8,6 +8,8 @@ import { queryContextZh } from '../../src/renderer/locales/queryContext.zh-CN';
 import { queryConnectionDatabase, resolveQueryDatabase } from '../../src/shared/queryContext';
 import { queryResultSelectionFixture } from '../fixtures/query-result-selection';
 import { QueryRowDetails } from '../../src/renderer/queryRowDetails';
+import { bindEditorIndentation } from '../../src/renderer/editorIndentation';
+import { editorIndentationOptions } from '../../src/shared/editorIndentation';
 
 const source = readFileSync(new URL('../../src/renderer/components/QueryTab.tsx', import.meta.url), 'utf8'), tree = ts.createSourceFile('QueryTab.tsx', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
 const names = new Set(['ensureSession', 'currentStatementScope', 'executeCurrentStatement', 'runQuery', 'prepareExecutionContext', 'querySource', 'execute', 'attachQueryEditor', 'invalidateResultSelection']), functions: string[] = [];
@@ -108,10 +110,25 @@ describe('真实按钮和Monaco动作接线', () => {
     function inspect(node: ts.Node) { if (ts.isVariableDeclaration(node) && node.name.getText(file) === 'mounted') mounted = node.initializer!.getText(file); node.forEachChild(inspect); } inspect(file);
     expect(mounted).toContain("keybindings: [monaco.KeyMod.CtrlCmd | monaco.KeyCode.Enter]"); expect(mounted).toContain('monaco.KeyMod.CtrlCmd | monaco.KeyMod.Shift | monaco.KeyCode.Enter');
     const original = vi.fn(), first = vi.fn(), latest = vi.fn(), actions: Array<{ id: string; keybindings: number[]; run(): void }> = [];
+    /** 提供真实绑定器需要的模型切换/选项端口；事件会实际更新editor及新model选项，不以noop绕过挂载。 */
+    function actionEditor() {
+      const modelListeners = new Set<() => void>(), disposeListeners = new Set<() => void>(), editorOptions: Record<string, unknown> = {};
+      const createModel = () => { const options: Record<string, unknown> = {}; return { isDisposed: () => false, updateOptions: vi.fn((next: Record<string, unknown>) => Object.assign(options, next)) }; };
+      let model = createModel();
+      return {
+        editor: {
+          getModel: () => model, updateOptions: vi.fn((next: Record<string, unknown>) => Object.assign(editorOptions, next)),
+          onDidChangeModel(listener: () => void) { modelListeners.add(listener); return { dispose() { modelListeners.delete(listener); } }; },
+          onDidDispose(listener: () => void) { disposeListeners.add(listener); return { dispose() { disposeListeners.delete(listener); } }; },
+          addAction: (action: typeof actions[number]) => actions.push(action),
+        },
+        changeModel() { model = createModel(); for (const listener of modelListeners) listener(); },
+      };
+    }
     // 本例只核对原快捷键；正文桥接的真实生命周期由专用组件测试覆盖。
-    const port = createContext({ monaco: { KeyMod: { CtrlCmd: 2048, Shift: 1024 }, KeyCode: { Enter: 3 } }, zh: { editor: { text001: '执行' } }, currentStatementZh, editorRef: { current: null }, widgetRef: { current: null }, propsRef: { current: {} }, aliveRef: { current: true }, attachContent: () => ({ ready: true }), runRef: { current: original }, currentRunRef: { current: first } });
-    runInContext(ts.transpileModule('globalThis.mounted=' + mounted, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText, port); port.mounted({ onDidDispose: () => ({ dispose() {} }), addAction: (action: typeof actions[number]) => actions.push(action) });
+    const port = createContext({ monaco: { KeyMod: { CtrlCmd: 2048, Shift: 1024 }, KeyCode: { Enter: 3 } }, zh: { editor: { text001: '执行' } }, currentStatementZh, bindEditorIndentation, editorIndentationOptions, optionsRef: { current: { tabSize: 4, insertSpaces: true } }, editorRef: { current: null }, widgetRef: { current: null }, propsRef: { current: {} }, aliveRef: { current: true }, attachContent: () => ({ ready: true }), runRef: { current: original }, currentRunRef: { current: first } });
+    runInContext(ts.transpileModule('globalThis.mounted=' + mounted, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText, port); const firstEditor = actionEditor(); port.mounted(firstEditor.editor); firstEditor.changeModel();
     expect(actions.map(action => [action.id, action.keybindings[0]])).toEqual([['dbark-run', 2051], ['dbark-run-current', 3075]]); port.currentRunRef.current = latest; actions[1].run(); actions[0].run(); expect(latest).toHaveBeenCalledOnce(); expect(first).not.toHaveBeenCalled(); expect(original).toHaveBeenCalledOnce();
-    actions.length = 0; port.currentRunRef.current = undefined; port.mounted({ onDidDispose: () => ({ dispose() {} }), addAction: (action: typeof actions[number]) => actions.push(action) }); expect(actions.map(action => action.id)).toEqual(['dbark-run']);
+    actions.length = 0; port.currentRunRef.current = undefined; const nextEditor = actionEditor(); port.mounted(nextEditor.editor); nextEditor.changeModel(); expect(actions.map(action => action.id)).toEqual(['dbark-run']);
   });
 });

@@ -73,7 +73,8 @@ function fixture() {
   context.setSelectedRows = vi.fn((rows: unknown) => { context.selectedRows = rows; });
   context.setSelection = vi.fn((selection: unknown) => { context.selection = typeof selection === 'function' ? selection(context.selection) : selection; });
   context.setPageIndex = vi.fn((index: number) => { context.pageIndex = index; context.recordPageScopeRef.current.page = index; });
-  const names = ['getRecordPageContext', 'navigateRecordPage', 'jumpToMatch', 'selectCurrentCell', 'applyPagePlan', 'canReload', 'duplicateCurrentRow', 'invalidateCopyRead', 'releaseCopySources'];
+  // canReload现委派原纯忙门；一并提取真实函数，复用上面的模态/布局/关联活动端口。
+  const names = ['getRecordPageContext', 'navigateRecordPage', 'jumpToMatch', 'selectCurrentCell', 'applyPagePlan', 'reloadBlocked', 'canReload', 'duplicateCurrentRow', 'invalidateCopyRead', 'releaseCopySources'];
   if (names.some(name => !functions.has(name)) || !load || !consume || !blocked || buttons.size !== 4) throw Error('缺少生产跨页或原有工具接线');
   const declarations = names.map(name => functions.get(name)).join('\n') + '\n' + names.map(name => `globalThis.${name}=${name};`).join('\n');
   const expressions = ['DataGrid_onCellClick', 'DataGrid_onCellKeyDown', 'PageFindPanel_getSelectionToken'];
