@@ -9,11 +9,13 @@ import { useWorkspace } from '../store';
 import { errorMessage, uid } from '../lib';
 import { Modal, ErrorBox, Field } from './ui';
 import { SqlEditor } from './SqlEditor';
-export interface TableCreateConfirmationProps { connectionId: string; design: TableCreateDraft; invalidated?: boolean; onBack(): void; onClose(): void; onCreated(result: TableCreateApplyOutput, version: number): void; onDirtyChange?(dirty: boolean): void; services?: TableCreateServices; }
+export interface TableCreateConfirmationProps { connectionId: string; design: TableCreateDraft; invalidated?: boolean; isParentCurrent?(): boolean; onBack(): void; onClose(): void; onCreated(result: TableCreateApplyOutput, version: number): void; onDirtyChange?(dirty: boolean): void; services?: TableCreateServices; }
 /** 只接管现有设计器的确认阶段；原字段/索引/FK表单及已有表修改无需复制或更换生成器。 */
-export function TableCreateConfirmation({ connectionId, design, invalidated = false, onBack, onClose, onCreated, onDirtyChange, services = tableCreateServices }: TableCreateConfirmationProps) {
+export function TableCreateConfirmation({ connectionId, design, invalidated = false, isParentCurrent, onBack, onClose, onCreated, onDirtyChange, services = tableCreateServices }: TableCreateConfirmationProps) {
   const version = useWorkspace(state => state.connectionVersions[connectionId] ?? 0), profile = useWorkspace(state => state.connections.find(value => value.id === connectionId));
   const fixed = useRef({ connectionId, version, design: structuredClone(design), key: JSON.stringify(design), label: profile ? `${profile.name} · ${profile.host}:${profile.port}` : connectionId });
+  // 固定本次接受的父租约函数；函数内部活读origin/lifetime，不改领后续父上下文。
+  const parentCurrent = useRef(isParentCurrent);
   const intent = useRef(0), renderedKey = JSON.stringify([connectionId, version, design]), lastKey = useRef(renderedKey), observedVersion = useRef(version);
   if (lastKey.current !== renderedKey) { lastKey.current = renderedKey; intent.current++; }
   const completed = useRef(onCreated), callbacks = useRef({ onBack, onClose, onDirtyChange }); callbacks.current = { onBack, onClose, onDirtyChange };
@@ -30,7 +32,7 @@ export function TableCreateConfirmation({ connectionId, design, invalidated = fa
   if (connectionId !== fixed.current.connectionId || version !== fixed.current.version || JSON.stringify(design) !== fixed.current.key) invalid.current = true;
   const validTime = (expires: string) => Number.isFinite(Date.parse(expires)) && Date.parse(expires) > Date.now();
   const expired = !!snapshot && !validTime(snapshot.expiresAt) || !!preview && !validTime(preview.expiresAt);
-  const editable = !busy && !invalid.current && !expired && !attempted;
+  const editable = !busy && scopeCurrent() && !expired && !attempted;
   const confirmed = !!preview && confirmation === tableCreateConfirmation(preview.target) && acks.size === tableCreateAcknowledgements.length && tableCreateAcknowledgements.every(id => acks.has(id));
   useEffect(() => { callbacks.current.onDirtyChange?.(!complete || unknown); }, [complete, unknown]);
   useEffect(() => {
@@ -52,10 +54,17 @@ export function TableCreateConfirmation({ connectionId, design, invalidated = fa
     try { await promise; } finally { if (releasing.current.get(key) === promise) releasing.current.delete(key); }
   }
   async function releaseAll() { const errors: string[] = []; for (const [kind, ids] of [['previewToken', tokens.current], ['snapshotId', snapshots.current]] as const) for (const id of [...ids]) try { await releaseOne(kind, id); } catch (reason) { errors.push(errorMessage(reason)); } if (errors.length) throw Error(errors.join('\n')); }
+  /** 每次动作及等待返回都活读父租约；首次false/异常永久结束，A→B→A不能重新认领。 */
+  function scopeCurrent(): boolean {
+    if (!alive.current || invalid.current) return false;
+    let valid = true; try { valid = !parentCurrent.current || parentCurrent.current() === true; } catch { valid = false; }
+    if (!valid) { invalid.current = true; intent.current++; acceptedPreview.current = null; }
+    return valid;
+  }
   /** 同步围栏覆盖准备、执行和全部释放等待；取消控制响应不提前解锁。 */
-  function begin(allowInvalid = false) { if (invalid.current && !allowInvalid) return; const guard = fence.current, value = guard.begin(uid()); if (!value) return; activeTask.current = value.taskId; setBusy(true); setError(''); progress.current = null; return { guard, ...value, intent: intent.current }; }
+  function begin(allowInvalid = false) { if (!scopeCurrent() && !allowInvalid) return; const guard = fence.current, value = guard.begin(uid()); if (!value) return; activeTask.current = value.taskId; setBusy(true); setError(''); progress.current = null; return { guard, ...value, intent: intent.current }; }
   type Operation = NonNullable<ReturnType<typeof begin>>;
-  const accepts = (op: Operation) => alive.current && op.guard === fence.current && op.guard.accepts(op) && !invalid.current && op.intent === intent.current;
+  const accepts = (op: Operation) => alive.current && op.guard === fence.current && op.guard.accepts(op) && scopeCurrent() && op.intent === intent.current;
   function finish(op: Operation) { op.guard.finish(op); if (alive.current && op.guard === fence.current) setBusy(false); }
   /** 初次只读准备；迟到或StrictMode旧代次只释放自己返回的能力。 */
   async function prepare() {
@@ -65,6 +74,7 @@ export function TableCreateConfirmation({ connectionId, design, invalidated = fa
       acceptedPreview.current = null; setPreview(null); setConfirmation(''); setAcks(new Set());
       if (snapshots.current.size || tokens.current.size) { await releaseAll(); if (!accepts(op)) return; }
       const parsed = tableCreateDraftSchema.safeParse(fixed.current.design); if (!parsed.success) throw Error(text.invalidDesign); const draft = parsed.data;
+      if (!accepts(op)) return;
       const value = await service.current.get({ connectionId: fixed.current.connectionId, database: draft.database, taskId: op.taskId, ...(chosen ? { includeEncodings: true } : {}), ...(tableCreateHasPrefix(draft) ? { includePrefixFacts: true } : {}) }); snapshots.current.add(value.snapshotId);
       if (!accepts(op) || value.target.connectionId !== fixed.current.connectionId || value.target.database !== draft.database || !validTime(value.expiresAt)) { await releaseOne('snapshotId', value.snapshotId); return; }
       if (tableCreateHasPrefix(draft) && !value.prefixFacts) throw Error(tableCreatePrefixZh.unavailable);
@@ -81,12 +91,14 @@ export function TableCreateConfirmation({ connectionId, design, invalidated = fa
         if (!metadata.candidates.some(pair => sameTableEncodingPair(pair, chosen))) throw Error(text.encodingInvalid);
         draft.charset = chosen.charset; draft.collation = chosen.collation;
       }
+      if (!accepts(op)) return;
       activeTask.current = uid();
       const next = await service.current.preview({ snapshotId: value.snapshotId, design: draft, taskId: activeTask.current }); tokens.current.add(next.previewToken);
       if (!accepts(op) || next.target.connectionId !== fixed.current.connectionId || next.target.database !== draft.database || next.target.table !== draft.name || !validTime(next.expiresAt) || next.requiredAcknowledgements.length !== tableCreateAcknowledgements.length || tableCreateAcknowledgements.some(id => !next.requiredAcknowledgements.includes(id))) { await releaseOne('previewToken', next.previewToken); if (accepts(op)) throw Error(text.response); return; }
       if (chosen && (!next.encoding || next.encoding.catalogDigest !== value.encodings?.digest || !sameTableEncodingPair(next.encoding.selection, chosen)) || !chosen && next.encoding) { await releaseOne('previewToken', next.previewToken); throw Error(text.response); }
+      if (!accepts(op)) { await releaseOne('previewToken', next.previewToken); return; }
       acceptedPreview.current = next; setPreview(next);
-    } catch (reason) { if (alive.current && op.guard === fence.current) report(reason); } finally { finish(op); }
+    } catch (reason) { if (alive.current && op.guard === fence.current && scopeCurrent()) report(reason); } finally { finish(op); }
   }
   /** 配对变化同步撤销界面预览和确认；令牌仍由原集合负责，重新准备或离开时完整释放。 */
   function changeSelection(pair: TableEncodingPair) { intent.current++; acceptedPreview.current = null; encodingSelection.current = pair; setSelection(pair); setPreview(null); setConfirmation(''); setAcks(new Set()); }
@@ -96,16 +108,19 @@ export function TableCreateConfirmation({ connectionId, design, invalidated = fa
     encodingMode.current = !encodingMode.current; setExplicitEncoding(encodingMode.current); catalog.current = undefined; changeSelection({ charset: '', collation: '' }); void prepare();
   }
   /** 服务器ACK与后核/收尾独立，刷新只针对最初目标；回调异常不能重放CREATE。 */
-  function notify(result: TableCreateApplyOutput) { if (invalid.current) { report(text.mismatch); return; } try { completed.current(result, fixed.current.version); } catch (reason) { report(reason); } }
+  function notify(result: TableCreateApplyOutput) { if (!scopeCurrent()) { report(text.mismatch); return; } try { completed.current(result, fixed.current.version); } catch (reason) { report(reason); } }
   async function apply() {
-    if (!editable || !preview || acceptedPreview.current !== preview || !snapshot || !confirmed || consumed.current || !validTime(preview.expiresAt) || !validTime(snapshot.expiresAt)) return;
+    if (!scopeCurrent() || !editable || !preview || acceptedPreview.current !== preview || !snapshot || !confirmed || consumed.current || !validTime(preview.expiresAt) || !validTime(snapshot.expiresAt)) return;
     const op = begin(); if (!op) return; consumed.current = true; setAttempted(true);
     try {
+      if (!accepts(op)) return;
       const result = await service.current.apply({ previewToken: preview.previewToken, confirmation, acknowledgements: [...tableCreateAcknowledgements], taskId: op.taskId });
+      if (!accepts(op)) return;
       if (JSON.stringify(result.target) !== JSON.stringify(preview.target) || result.ddlCompleted !== true || result.ddlSubmitted !== true) throw Error(text.response);
       if (alive.current && op.guard === fence.current) { setComplete(true); setUnknown(!result.definitionVerified || !result.resourcesReleased); setOutcome(!result.resourcesReleased ? text.cleanup : result.definitionVerified ? text.succeeded : text.unverified); setError(result.warnings.join('\n')); }
       notify(result);
     } catch (reason) {
+      if (!scopeCurrent()) { if (alive.current) report(text.mismatch); return; }
       const actual = progress.current;
       if (alive.current && op.guard === fence.current) { const known = !!actual?.ddlCompleted; setComplete(known); setUnknown(known || !actual || actual.ddlSubmitted || actual.outcome !== 'not-sent'); setOutcome(known ? text.cleanup : actual?.outcome === 'not-sent' && !actual.ddlSubmitted ? text.notSent : text.unknown); }
       if (actual?.ddlCompleted) notify({ target: preview.target, ddlSubmitted: true, ddlCompleted: true, definitionVerified: actual.definitionVerified, resourcesReleased: false, warnings: [text.cleanup] });
