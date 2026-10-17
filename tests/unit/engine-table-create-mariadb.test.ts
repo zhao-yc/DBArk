@@ -6,7 +6,7 @@ import type { ManagedConnection } from '../../src/engine/connection';
 import { tableCreateAcknowledgements } from '../../src/shared/tableCreate';
 import maria114Metadata from '../fixtures/table-create/mariadb114-create-metadata-1363.json';
 
-interface VerificationSample { ddl?: string; table?: Record<string, unknown>; columns?: Record<string, unknown>[]; dialect?: 'mariadb' | 'mysql'; }
+interface VerificationSample { ddl?: string; table?: Record<string, unknown>; columns?: Record<string, unknown>[]; dialect?: 'mariadb' | 'mysql'; designComment?: string; }
 
 /** 真实generic建表任务及解析器，只替换查询结果；Maria目录样本不是MySQL能力放行。 */
 function fixture(version: string, wrongDefault = false, failAfterAck = false, mode = 'STRICT_TRANS_TABLES,NO_ENGINE_SUBSTITUTION', sample: VerificationSample = {}) {
@@ -36,7 +36,7 @@ function fixture(version: string, wrongDefault = false, failAfterAck = false, mo
   const tasks = new TableCreateTasks(host);
   return { sent, created: () => created, async run() {
     const snapshot = await tasks.get({ connectionId: 'c', database: 'db', taskId: 'get' }, 1);
-    const preview = await tasks.preview({ snapshotId: snapshot.snapshotId, taskId: 'preview', design: { database: 'db', name: 'new_table', engine: 'InnoDB', charset: 'utf8mb4', comment: '', columns: [{ name: 'id', type: 'int', nullable: false, autoIncrement: false, comment: '' }, { name: 'literal_null', type: 'varchar(64)', nullable: true, autoIncrement: false, defaultValue: 'NULL', comment: '' }, { name: 'note', type: 'varchar(64)', nullable: true, autoIncrement: false, defaultValue: '普通默认', comment: '' }], indexes: [{ name: 'PRIMARY', unique: true, columns: ['id'] }, { name: 'uq_literal', unique: true, columns: ['literal_null'] }, { name: 'ix_note', unique: false, columns: ['note', 'id'] }], foreignKeys: [] } }, 1);
+    const preview = await tasks.preview({ snapshotId: snapshot.snapshotId, taskId: 'preview', design: { database: 'db', name: 'new_table', engine: 'InnoDB', charset: 'utf8mb4', comment: sample.designComment ?? '', columns: [{ name: 'id', type: 'int', nullable: false, autoIncrement: false, comment: '' }, { name: 'literal_null', type: 'varchar(64)', nullable: true, autoIncrement: false, defaultValue: 'NULL', comment: '' }, { name: 'note', type: 'varchar(64)', nullable: true, autoIncrement: false, defaultValue: '普通默认', comment: '' }], indexes: [{ name: 'PRIMARY', unique: true, columns: ['id'] }, { name: 'uq_literal', unique: true, columns: ['literal_null'] }, { name: 'ix_note', unique: false, columns: ['note', 'id'] }], foreignKeys: [] } }, 1);
     expect(created).toBe(false); expect(preview.sql).toContain("DEFAULT 'NULL'");
     const input = { previewToken: preview.previewToken, confirmation: 'db.new_table', acknowledgements: [...tableCreateAcknowledgements], taskId: 'apply' };
     const result = await tasks.apply(input, 1); await expect(tasks.apply(input, 1)).rejects.toThrow('失效'); return result;
@@ -68,6 +68,38 @@ describe('Maria11.4 UCA1400空目录映射的独立SHOW补证', () => {
     expect(await f.run()).toMatchObject({ ddlCompleted: true, definitionVerified: true, resourcesReleased: true });
     expect(f.sent.filter(sql => sql.startsWith('CREATE TABLE'))).toHaveLength(1);
     expect(f.sent.some(sql => /^(?:SET |DROP |ALTER )/.test(sql))).toBe(false);
+  });
+  it.each([
+    ['SHOW引擎与设计目录矛盾', (s: VerificationSample) => { s.ddl = s.ddl!.replace('ENGINE=InnoDB', 'ENGINE=MyISAM'); }],
+    ['SHOW注释与设计目录矛盾', (s: VerificationSample) => { s.ddl += " COMMENT='未批准表注释'"; }],
+    ['SHOW额外ROW_FORMAT', (s: VerificationSample) => { s.ddl += ' ROW_FORMAT=COMPACT'; }],
+    ['SHOW额外AUTO_INCREMENT', (s: VerificationSample) => { s.ddl += ' AUTO_INCREMENT=17'; }],
+    ['SHOW额外CHECKSUM', (s: VerificationSample) => { s.ddl += ' CHECKSUM=1'; }],
+    ['SHOW额外压缩选项', (s: VerificationSample) => { s.ddl += " COMPRESSION='zlib'"; }],
+    ['SHOW缺引擎', (s: VerificationSample) => { s.ddl = s.ddl!.replace('ENGINE=InnoDB ', ''); }],
+    ['SHOW重复引擎', (s: VerificationSample) => { s.ddl += ' ENGINE=InnoDB'; }],
+    ['SHOW重复注释', (s: VerificationSample) => { s.ddl += " COMMENT='' COMMENT=''"; }],
+    ['SHOW注释不能是标识符', (s: VerificationSample) => { s.ddl += ' COMMENT=InnoDB'; }],
+    ['SHOW引擎不能是字符串', (s: VerificationSample) => { s.ddl = s.ddl!.replace('ENGINE=InnoDB', "ENGINE='InnoDB'"); }],
+    ['SHOW缺注释值', (s: VerificationSample) => { s.ddl += ' COMMENT='; }],
+    ['SHOW引擎错误DEFAULT修饰', (s: VerificationSample) => { s.ddl = s.ddl!.replace('ENGINE=InnoDB', 'DEFAULT ENGINE=InnoDB'); }],
+    ['SHOW注释错误DEFAULT修饰', (s: VerificationSample) => { s.ddl += " DEFAULT COMMENT=''"; }],
+    ['SHOW引用分号不能冒充结束符', (s: VerificationSample) => { s.ddl += " ';'"; }],
+    ['SHOW引用等号不能冒充赋值', (s: VerificationSample) => { s.ddl = s.ddl!.replace('ENGINE=InnoDB', "ENGINE '=' InnoDB"); }],
+    ['SHOW与目录一致但注释违背设计', (s: VerificationSample) => { s.ddl += " COMMENT='非设计注释'"; s.table!.comment = '非设计注释'; }],
+  ] as const)('%s不能借NULL补证变为完整核验', async (_name, change) => {
+    const sample = maria114Sample(); change(sample); const f = fixture(maria114Metadata.version, false, false, undefined, sample);
+    expect(await f.run()).toMatchObject({ ddlCompleted: true, definitionVerified: false, resourcesReleased: true });
+    expect(f.sent.filter(sql => sql.startsWith('CREATE TABLE'))).toHaveLength(1); expect(f.sent.some(sql => /^(?:SET |DROP |ALTER )/.test(sql))).toBe(false);
+  });
+  it.each([' COMMENT=\'\'', ';', ' COMMENT=\'\';'])('SHOW合法空注释及结束符%s仍能完整后核', async tail => {
+    const sample = maria114Sample(); sample.ddl += tail; const f = fixture(maria114Metadata.version, false, false, undefined, sample);
+    expect(await f.run()).toMatchObject({ ddlCompleted: true, definitionVerified: true, resourcesReleased: true });
+  });
+  it('SHOW非空注释解码后必须同时准确匹配设计和目录', async () => {
+    const sample = maria114Sample(); sample.designComment = "本次'设计"; sample.table!.comment = sample.designComment; sample.ddl += " COMMENT='本次''设计'";
+    const f = fixture(maria114Metadata.version, false, false, undefined, sample);
+    expect(await f.run()).toMatchObject({ ddlCompleted: true, definitionVerified: true, resourcesReleased: true });
   });
   it.each([
     ['SHOW缺字符集', (s: VerificationSample) => { s.ddl = s.ddl!.replace('DEFAULT CHARSET=utf8mb4 ', ''); }],

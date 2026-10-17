@@ -51,6 +51,28 @@ async function absent(context: StructureTaskContext, database: string, table: st
   const rows = (await query<unknown[]>(context, `SELECT TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA=${literal(database)} AND TABLE_NAME=${literal(table)} LIMIT 2`)).rows;
   if (!Array.isArray(rows) || rows.length) throw Error(text.occupied);
 }
+/** NULL字符集补证只允许设计器能表达的表选项；通用编码解析器认可的其余属性不能当作已核验。 */
+function verifyMariaCreateOptions(document: ReturnType<typeof parseTableColumnDefinition>, design: TableCreateDesign, actual: { engine: string; collation: string; comment: string }): boolean {
+  const tokens = tableDefinitionTokens(document.tail.raw, document.context), options = new Map<string, { kind: string; value: string }>();
+  if (tokens[0]?.kind !== 'symbol' || tokens[0].value !== ')') return false;
+  let cursor = 1;
+  while (cursor < tokens.length) {
+    if (tokens[cursor].kind === 'symbol' && tokens[cursor].value === ';' && cursor === tokens.length - 1) break;
+    let token = tokens[cursor++], isDefault = false;
+    if (token.kind === 'word' && token.value.toUpperCase() === 'DEFAULT') { isDefault = true; token = tokens[cursor++]; }
+    if (token?.kind !== 'word') return false;
+    let key = token.value.toUpperCase();
+    if (key === 'CHARACTER') { const set = tokens[cursor++]; if (set?.kind !== 'word' || set.value.toUpperCase() !== 'SET') return false; key = 'CHARSET'; }
+    if (!['ENGINE', 'CHARSET', 'COLLATE', 'COMMENT'].includes(key) || options.has(key) || isDefault && !['CHARSET', 'COLLATE'].includes(key)) return false;
+    if (tokens[cursor]?.kind === 'symbol' && tokens[cursor].value === '=') cursor++;
+    const value = tokens[cursor++];
+    if (!value || (key === 'COMMENT' ? value.kind !== 'string' : !['word', 'identifier'].includes(value.kind))) return false;
+    options.set(key, value);
+  }
+  // 省略空注释可由设计和目录共同确认；引擎与完整编码必须显式出现，且两份实际证据不能互相矛盾。
+  const engine = options.get('ENGINE')?.value, comment = options.get('COMMENT')?.value ?? '';
+  return typeof engine === 'string' && typeof actual.engine === 'string' && engine.toUpperCase() === design.engine.toUpperCase() && engine.toUpperCase() === actual.engine.toUpperCase() && options.get('CHARSET')?.value === design.charset && options.get('COLLATE')?.value === actual.collation && comment === design.comment && comment === actual.comment;
+}
 /** 只读核指定新表的列、索引和外键；未知规范化一律保守未核验，不能反推同名对象归属。 */
 async function verify(context: StructureTaskContext, preview: Preview): Promise<boolean> {
   const { database, table } = preview.target, design = preview.design;
@@ -96,7 +118,7 @@ async function verify(context: StructureTaskContext, preview: Preview): Promise<
   // Maria通用UCA排序规则可能没有一对一目录映射；仅用完整SHOW的显式编码与TABLES实际排序规则交叉补证。
   if (context.managed.status.dialect === 'mariadb' && actualCharset === null) {
     const encoding = readTableDefaultEncodingDefinition(document.source, document.context);
-    if (encoding.reasons.length || !encoding.charset || !encoding.collation || typeof tables[0].collation !== 'string' || !tables[0].collation || encoding.charset !== design.charset || encoding.collation !== tables[0].collation) return false;
+    if (encoding.reasons.length || !encoding.charset || !encoding.collation || typeof tables[0].collation !== 'string' || !tables[0].collation || encoding.charset !== design.charset || encoding.collation !== tables[0].collation || !verifyMariaCreateOptions(document, design, tables[0])) return false;
     actualCharset = encoding.charset;
   }
   if (actualCharset !== design.charset) return false;
