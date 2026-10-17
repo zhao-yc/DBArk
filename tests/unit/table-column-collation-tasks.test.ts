@@ -21,7 +21,7 @@ function makeFacts(collation = 'utf8mb4_bin') {
 function fixture() {
   const state = {
     current: makeFacts(), after: makeFacts('utf8mb4_unicode_ci'), id: '19611', postId: '19611', version: '8.4.11', now: 0,
-    warnings: 0, closed: 0, failClose: false, holdAlter: false, held: undefined as (() => void) | undefined,
+    warnings: 0, closed: 0, failClose: false, invalidAck: false, holdAlter: false, held: undefined as (() => void) | undefined,
     error: undefined as Error | undefined, failSql: undefined as RegExp | undefined,
     sqlHook: undefined as ((sql: string) => void) | undefined,
     closing: undefined as ((value: unknown) => void | Promise<void>) | undefined,
@@ -58,7 +58,7 @@ function fixture() {
         else if (sql.includes('FROM information_schema.TABLES')) rows = [{ databaseName: 'ram_db', tableName: 'subject', kind: 'BASE TABLE', engine: 'InnoDB' }];
         else if (sql.includes('FROM information_schema.PARTITIONS')) rows = [{ name: null }];
         else if (sql.includes('FROM information_schema.INNODB_TABLES')) rows = [{ id: state.id, name: 'ram_db/subject' }];
-        else if (sql.startsWith('ALTER TABLE')) { state.current = structuredClone(state.after); state.id = state.postId; rows = { affectedRows: 0, warningStatus: state.warnings }; }
+        else if (sql.startsWith('ALTER TABLE')) { state.current = structuredClone(state.after); state.id = state.postId; rows = state.invalidAck ? undefined : { affectedRows: 0, warningStatus: state.warnings }; }
         else if (sql === 'SHOW WARNINGS LIMIT 20') rows = [{ Level: 'Warning', Code: 1265, Message: '合成服务器警告' }];
         else throw new Error('未登记的RAM查询：' + sql);
         callback(null, rows, []);
@@ -267,4 +267,40 @@ it.each(['cancel', 'aborted', 'broken', 'normal'] as const)('后核投影完成�
     expect(f.options.at(-1)?.columnPatch).toMatchObject({ ddlCompleted: true, definitionVerified: mode === 'normal', outcome: 'succeeded' });
     await expect(f.apply(value)).rejects.toThrow('已使用'); expect(f.sent.filter(sql => sql.startsWith('ALTER'))).toHaveLength(1);
   } finally { spy.mockRestore(); }
+});
+it.each(['success', 'post-read-failure', 'driver-error', 'invalid-ack', 'strict-close-failure'] as const)('DDL结束%s撤销同连接在途旧get并清所有结构scope，不重登记旧能力', async mode => {
+  const f = fixture(), snapshot = await f.get(), value = await f.preview(snapshot);
+  let entered!: () => void, resume!: () => void;
+  const closing = new Promise<void>(resolve => { entered = resolve; }), gate = new Promise<void>(resolve => { resume = resolve; });
+  f.state.closing = async output => { if ((output as TableColumnGetOutput).snapshotId) { entered(); await gate; } };
+  const latePromise = f.get().then(output => ({ output, error: undefined }), error => ({ output: undefined, error }));
+  await closing;
+  const shared = f.cache.scope<{ connectionId: string }>('indexes', 'snapshot', item => ({ connectionId: item.connectionId, expires: 120000, bytes: 64 }));
+  shared.set('same-connection-other-scope', { connectionId: f.target.connectionId });
+  shared.set('other-connection-scope', { connectionId: 'OTHER' });
+  if (mode === 'post-read-failure') f.state.sqlHook = sql => { if (sql.startsWith('ALTER')) { f.state.failSql = /^SELECT VERSION/; f.state.error = Object.assign(new Error('后核目录断线'), { errno: 2013 }); } };
+  if (mode === 'driver-error') { f.state.failSql = /^ALTER TABLE/; f.state.error = Object.assign(new Error('发送结果未知'), { errno: 2013 }); }
+  if (mode === 'invalid-ack') f.state.invalidAck = true;
+  if (mode === 'strict-close-failure') f.state.failClose = true;
+  let output: Awaited<ReturnType<typeof f.apply>> | undefined, applyError: unknown;
+  try { output = await f.apply(value); } catch (error) { applyError = error; }
+  const sameScopeAfterApply = shared.get('same-connection-other-scope'), otherScopeAfterApply = shared.get('other-connection-scope');
+  f.state.failClose = false; resume(); const late = await latePromise;
+  expect(sameScopeAfterApply).toBeUndefined(); expect(otherScopeAfterApply).toEqual({ connectionId: 'OTHER' });
+  expect(late.output).toBeUndefined(); expect(late.error).toBeInstanceOf(Error); expect(late.error.message).toMatch(/已释放|过期/);
+  expect(f.scope('snapshot').size).toBe(0);
+  if (mode === 'success' || mode === 'post-read-failure') {
+    expect(output).toMatchObject({ ddlSubmitted: true, ddlCompleted: true, definitionVerified: mode === 'success' }); expect(applyError).toBeUndefined();
+  } else expect(applyError).toBeInstanceOf(Error);
+  expect(f.options.at(-1)?.columnPatch).toMatchObject({ ddlSubmitted: true, ddlCompleted: ['success', 'post-read-failure', 'strict-close-failure'].includes(mode), outcome: ['success', 'post-read-failure', 'strict-close-failure'].includes(mode) ? 'succeeded' : 'unknown' });
+  await expect(f.apply(value)).rejects.toThrow('已使用'); expect(f.sent.filter(sql => sql.startsWith('ALTER'))).toHaveLength(1);
+});
+it('同连接DDL只撤销本连接pendingReads，其它连接在途get及共享scope保持', async () => {
+  const f = fixture(), value = await f.preview(await f.get());
+  let entered!: () => void, resume!: () => void;
+  const closing = new Promise<void>(resolve => { entered = resolve; }), gate = new Promise<void>(resolve => { resume = resolve; });
+  f.state.closing = async output => { if ((output as TableColumnGetOutput).target?.connectionId === 'OTHER') { entered(); await gate; } };
+  const otherPromise = f.tasks.get({ ...f.target, connectionId: 'OTHER', taskId: 'other-get' }, 1);
+  await closing; expect(await f.apply(value)).toMatchObject({ ddlCompleted: true }); resume();
+  const other = await otherPromise; expect(f.scope('snapshot').has(other.snapshotId)).toBe(true); expect(other.target.connectionId).toBe('OTHER');
 });

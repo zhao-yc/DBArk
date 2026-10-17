@@ -315,57 +315,62 @@ export class TableColumnPatchTasks {
       if (preview.patches.some(patch => patch.kind === 'alter' && Object.hasOwn(patch.changes, 'onUpdate'))) assertOnUpdateCatalog(preview.patches, snapshot.refs, await onUpdateCatalog(context, snapshot.target, documentOf(current)));
       if (preview.expires <= this.now()) throw new Error('预览在准备期间已过期，请重新预览；未发送 DDL');
       context.checkCancelled(); progress.phase = 'executing'; context.report();
-      let result: ResultSetHeader;
       try {
-        result = (await columnTaskQuery<ResultSetHeader>(context, preview.plan.sql, () => { progress.ddlSubmitted = true; progress.outcome = 'unknown'; context.report(); })).rows;
-      } catch (error) {
-        // 明确 ERR 仍不能证明非原子 DDL 的所有引擎均未改动；保守未知且绝不自动重放。
-        progress.outcome = progress.ddlSubmitted ? 'unknown' : 'not-sent'; context.report(); throw error;
-      }
-      if (!result || typeof result.affectedRows !== 'number') throw new Error('结构命令未返回可确认的 OK 包，请核对实际定义');
-      progress.ddlCompleted = true; progress.outcome = 'succeeded'; progress.phase = 'verifying'; context.report();
-      const output: TableColumnApplyOutput = { ddlSubmitted: true, ddlCompleted: true, definitionVerified: false, warnings: result.warningStatus ? [`服务器返回 ${result.warningStatus} 条结构变更警告，请核对数据转换结果。`] : [] };
-      // SHOW WARNINGS 必须紧跟此 ALTER 的 OK，在任何身份/定义 SELECT 覆盖诊断之前读取。
-      if (result.warningStatus) {
+        let result: ResultSetHeader;
         try {
-          const warnings = (await columnTaskQuery<{ Level: string; Code: number; Message: string }[]>(context, 'SHOW WARNINGS LIMIT 20')).rows;
-          let budget = 32 * 1024;
-          for (const warning of warnings.slice(0, 20)) {
-            if (typeof warning.Message !== 'string' || !Number.isSafeInteger(warning.Code)) throw new Error('服务器警告格式无法识别');
-            let message = warning.Message.slice(0, 2048);
-            while (Buffer.byteLength(message) > budget && message.length) message = message.slice(0, Math.floor(message.length / 2));
-            if (!message) break;
-            budget -= Buffer.byteLength(message); output.warnings.push(`服务器警告 ${warning.Code}：${message}${message.length < warning.Message.length ? '（已截断）' : ''}`);
-          }
-          if (result.warningStatus > warnings.length) output.warnings.push('仅显示前 20 条警告，后续警告未全部返回。');
-        } catch { output.warnings.push('DDL 已完成，但警告读取失败或被取消，不能证明没有其他数据转换后果；请人工核对。'); }
-      }
-      try {
-        const after = await readDefinition(context, snapshot.target, false), document = documentOf(after);
-        if (preview.kind === 'collation') {
-          if (!collationBefore) throw new Error('缺少执行前真实列排序规则事实');
-          const fresh = await readColumnCollationTaskFacts(context, snapshot.target, after, collationBefore.facts.references);
-          if (fresh.kind !== 'ready') throw new Error('列排序规则后核目录不可用');
-          const verified = verifyColumnCollationExecution(collationBefore.facts, fresh.value.facts, collationBefore.physical, fresh.value.physical, preview.plan);
-          const columns = await columnCollationTaskViews(views(document, snapshot.refs, after.serverVersion), after, fresh.value, context);
-          // Promise完成与await恢复之间仍可能取消；发布后核结果前重查原任务，不能撤销已收到的OK。
-          context.checkCancelled();
-          if (context.managed.signal?.aborted) throw context.managed.signal.reason ?? new Error('列排序规则后核已取消');
-          if (context.managed.broken) throw new Error('列排序规则后核的结构连接已断开');
-          output.after = { ddlHash: hash(after.source), columns };
-          output.definitionVerified = progress.definitionVerified = verified.definitionVerified;
-          if (verified.tableIdChanged) output.warnings.push('服务器操作后物理表编号已变化；定义核验不据此判断执行算法。');
-          if (!verified.definitionVerified) output.verificationError = 'DDL 已完成，但列排序规则专用后核未通过；请核对最新定义，不要重复执行。' + verified.reasons.slice(0, 8).join('；').slice(0, 2048);
-        } else {
-          const unreliable = await onUpdateCatalog(context, snapshot.target, document);
-          const unreliableRequestedTime = preview.patches.some(patch => patch.kind === 'add' ? unreliable.has(patch.name) : patch.kind === 'alter' && Object.hasOwn(patch.changes, 'onUpdate') && unreliable.has(snapshot.refs.get(patch.columnRef)!));
-          output.definitionVerified = progress.definitionVerified = after.identity === current.identity && after.normalizedMode === current.normalizedMode && verifyAfter(preview, document, after) && !unreliableRequestedTime;
-          output.after = { ddlHash: hash(after.source), columns: views(document, new Map(preview.plan.finalColumns.map(column => [column.columnRef, column.name])), after.serverVersion, unreliable) };
-          if (document.columns.some(hasUnprovenBinaryDefault)) output.warnings.push('二进制默认值仍以不能证明原始字节的文本显示；DDL 已完成，但这些字段的默认值未核验，不能据此自动重建或重复执行。');
-          if (!output.definitionVerified) output.verificationError = 'DDL 已完成，但定义变更及未改属性尚未全部核验一致，请核对最新定义；不要重复执行';
+          result = (await columnTaskQuery<ResultSetHeader>(context, preview.plan.sql, () => { progress.ddlSubmitted = true; progress.outcome = 'unknown'; context.report(); })).rows;
+        } catch (error) {
+          // 明确 ERR 仍不能证明非原子 DDL 的所有引擎均未改动；保守未知且绝不自动重放。
+          progress.outcome = progress.ddlSubmitted ? 'unknown' : 'not-sent'; context.report(); throw error;
         }
-      } catch { output.verificationError = 'DDL 已收到成功响应，但取消、断线或读取失败使后续定义未能核验；不要重复执行'; }
-      context.report(); this.cache.release(snapshot.target.connectionId); return output;
+        if (!result || typeof result.affectedRows !== 'number') throw new Error('结构命令未返回可确认的 OK 包，请核对实际定义');
+        progress.ddlCompleted = true; progress.outcome = 'succeeded'; progress.phase = 'verifying'; context.report();
+        const output: TableColumnApplyOutput = { ddlSubmitted: true, ddlCompleted: true, definitionVerified: false, warnings: result.warningStatus ? [`服务器返回 ${result.warningStatus} 条结构变更警告，请核对数据转换结果。`] : [] };
+        // SHOW WARNINGS 必须紧跟此 ALTER 的 OK，在任何身份/定义 SELECT 覆盖诊断之前读取。
+        if (result.warningStatus) {
+          try {
+            const warnings = (await columnTaskQuery<{ Level: string; Code: number; Message: string }[]>(context, 'SHOW WARNINGS LIMIT 20')).rows;
+            let budget = 32 * 1024;
+            for (const warning of warnings.slice(0, 20)) {
+              if (typeof warning.Message !== 'string' || !Number.isSafeInteger(warning.Code)) throw new Error('服务器警告格式无法识别');
+              let message = warning.Message.slice(0, 2048);
+              while (Buffer.byteLength(message) > budget && message.length) message = message.slice(0, Math.floor(message.length / 2));
+              if (!message) break;
+              budget -= Buffer.byteLength(message); output.warnings.push(`服务器警告 ${warning.Code}：${message}${message.length < warning.Message.length ? '（已截断）' : ''}`);
+            }
+            if (result.warningStatus > warnings.length) output.warnings.push('仅显示前 20 条警告，后续警告未全部返回。');
+          } catch { output.warnings.push('DDL 已完成，但警告读取失败或被取消，不能证明没有其他数据转换后果；请人工核对。'); }
+        }
+        try {
+          const after = await readDefinition(context, snapshot.target, false), document = documentOf(after);
+          if (preview.kind === 'collation') {
+            if (!collationBefore) throw new Error('缺少执行前真实列排序规则事实');
+            const fresh = await readColumnCollationTaskFacts(context, snapshot.target, after, collationBefore.facts.references);
+            if (fresh.kind !== 'ready') throw new Error('列排序规则后核目录不可用');
+            const verified = verifyColumnCollationExecution(collationBefore.facts, fresh.value.facts, collationBefore.physical, fresh.value.physical, preview.plan);
+            const columns = await columnCollationTaskViews(views(document, snapshot.refs, after.serverVersion), after, fresh.value, context);
+            // Promise完成与await恢复之间仍可能取消；发布后核结果前重查原任务，不能撤销已收到的OK。
+            context.checkCancelled();
+            if (context.managed.signal?.aborted) throw context.managed.signal.reason ?? new Error('列排序规则后核已取消');
+            if (context.managed.broken) throw new Error('列排序规则后核的结构连接已断开');
+            output.after = { ddlHash: hash(after.source), columns };
+            output.definitionVerified = progress.definitionVerified = verified.definitionVerified;
+            if (verified.tableIdChanged) output.warnings.push('服务器操作后物理表编号已变化；定义核验不据此判断执行算法。');
+            if (!verified.definitionVerified) output.verificationError = 'DDL 已完成，但列排序规则专用后核未通过；请核对最新定义，不要重复执行。' + verified.reasons.slice(0, 8).join('；').slice(0, 2048);
+          } else {
+            const unreliable = await onUpdateCatalog(context, snapshot.target, document);
+            const unreliableRequestedTime = preview.patches.some(patch => patch.kind === 'add' ? unreliable.has(patch.name) : patch.kind === 'alter' && Object.hasOwn(patch.changes, 'onUpdate') && unreliable.has(snapshot.refs.get(patch.columnRef)!));
+            output.definitionVerified = progress.definitionVerified = after.identity === current.identity && after.normalizedMode === current.normalizedMode && verifyAfter(preview, document, after) && !unreliableRequestedTime;
+            output.after = { ddlHash: hash(after.source), columns: views(document, new Map(preview.plan.finalColumns.map(column => [column.columnRef, column.name])), after.serverVersion, unreliable) };
+            if (document.columns.some(hasUnprovenBinaryDefault)) output.warnings.push('二进制默认值仍以不能证明原始字节的文本显示；DDL 已完成，但这些字段的默认值未核验，不能据此自动重建或重复执行。');
+            if (!output.definitionVerified) output.verificationError = 'DDL 已完成，但定义变更及未改属性尚未全部核验一致，请核对最新定义；不要重复执行';
+          }
+        } catch { output.verificationError = 'DDL 已收到成功响应，但取消、断线或读取失败使后续定义未能核验；不要重复执行'; }
+        context.report(); return output;
+      } finally {
+        // 已尝试发送后结果可能未知；撤销本类在途读取，同时保留原同连接全部结构scope清理。
+        if (progress.ddlSubmitted) { this.release(snapshot.target.connectionId); this.cache.release(snapshot.target.connectionId); }
+      }
     }, { label: '执行字段变更', columnPatch: progress, executionTarget: snapshot.target });
   }
 }
