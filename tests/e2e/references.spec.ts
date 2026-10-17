@@ -3,6 +3,7 @@ import mysql, { type Connection, type RowDataPacket } from 'mysql2/promise';
 import type { Locator, TestInfo } from '@playwright/test';
 import { test, expect, page, desktop, closed, answerDialogs, quitDesktop, pageErrors } from './desktop-fixture';
 import { enabled, environment, isolatedDatabase, acceptNativeConfirmation, openDatabaseQuery, executeSql, modifier, type LiveContext } from './live-helpers';
+import { zh } from '../../src/renderer/locales/zh-CN';
 
 // 仅测试显式授权的远程实例，禁用会记录连接表单凭据的追踪。
 test.use({ trace: 'off' });
@@ -390,6 +391,9 @@ test.describe('实库外键选择与关联浏览', () => {
         await form.getByLabel('主机地址', { exact: true }).fill(environment.DBARK_TEST_HOST!);
         await form.getByLabel('端口', { exact: true }).fill(environment.DBARK_TEST_PORT ?? '13384');
         await form.getByLabel('用户名', { exact: true }).fill(user); await form.getByLabel('数据库密码', { exact: true }).fill(password);
+        // 只关闭本临时限权账号的密码保存，不改变共享管理连接或普通账号的记忆策略。
+        await form.getByRole('checkbox', { name: zh.connections.text016, exact: true }).uncheck();
+        await expect(form.getByRole('checkbox', { name: zh.connections.text016, exact: true })).not.toBeChecked();
         await form.getByRole('button', { name: '测试连接', exact: true }).click();
         await expect(form.locator('.success-box')).toContainText('连接成功', { timeout: 20000 });
         await form.getByRole('button', { name: '保存连接', exact: true }).click(); await expect(form).toBeHidden();

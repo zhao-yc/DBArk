@@ -2,6 +2,7 @@ import {test,expect,page,pageErrors,answerDialogs,quitDesktop,closed} from './de
 import{enabled,isolatedDatabase,openDatabaseQuery,executeSql,modifier,environment,readRenderedResult}from'./live-helpers';
 import mysql,{type RowDataPacket} from 'mysql2/promise';
 import{randomUUID}from'node:crypto';
+import { zh } from '../../src/renderer/locales/zh-CN';
 
 test.use({trace:'off'});
 const search=()=>page.getByRole('dialog',{name:'全库搜索：数据',exact:true});
@@ -76,8 +77,11 @@ test.describe('200真实数据库：数据搜索界面',()=>{
    await observer.query('CREATE DATABASE `'+database+'` CHARACTER SET utf8mb4');await observer.query('CREATE TABLE `'+database+'`.subject(id BIGINT PRIMARY KEY,note TEXT) ENGINE=InnoDB');await observer.query('INSERT INTO `'+database+'`.subject VALUES(?,?)',['9007199254740993','权限隔离命中']);if(!/^[a-f0-9-]{72}$/.test(password))throw Error('隔离认证格式无效');
    try{await observer.query("CREATE USER '"+user+"'@'%' IDENTIFIED BY '"+password+"'");}catch{throw Error('隔离账号创建失败，认证内容未写入报告');}
    await observer.query('GRANT SELECT(note),INSERT(id) ON `'+database+"`.subject TO '"+user+"'@'%'");
-   // 凭据仅通过真实连接表单保存，目录、驱动和搜索IPC均使用该受限账号。
-   await page.locator('.app-commandbar').getByRole('button',{name:'新建连接',exact:true}).click();const form=page.getByRole('dialog',{name:'新建连接',exact:true});await form.getByLabel('连接名称',{exact:true}).fill('列权限隔离搜索');await form.getByLabel('主机地址',{exact:true}).fill(environment.DBARK_TEST_HOST);await form.getByLabel('端口',{exact:true}).fill(String(port));await form.getByLabel('用户名',{exact:true}).fill(user);await form.getByLabel('数据库密码',{exact:true}).fill(password);await form.getByRole('button',{name:'测试连接',exact:true}).click();await expect(form.locator('.success-box')).toContainText('连接成功',{timeout:20000});await form.getByRole('button',{name:'保存连接',exact:true}).click();await expect(form).toHaveCount(0);
+   // 临时限权账号通过真实连接表单关闭密码保存，仅在本会话RAM中使用凭据。
+   await page.locator('.app-commandbar').getByRole('button',{name:'新建连接',exact:true}).click();const form=page.getByRole('dialog',{name:'新建连接',exact:true});await form.getByLabel('连接名称',{exact:true}).fill('列权限隔离搜索');await form.getByLabel('主机地址',{exact:true}).fill(environment.DBARK_TEST_HOST);await form.getByLabel('端口',{exact:true}).fill(String(port));await form.getByLabel('用户名',{exact:true}).fill(user);await form.getByLabel('数据库密码',{exact:true}).fill(password);
+   await form.getByRole('checkbox', { name: zh.connections.text016, exact: true }).uncheck();
+   await expect(form.getByRole('checkbox', { name: zh.connections.text016, exact: true })).not.toBeChecked();
+   await form.getByRole('button',{name:'测试连接',exact:true}).click();await expect(form.locator('.success-box')).toContainText('连接成功',{timeout:20000});await form.getByRole('button',{name:'保存连接',exact:true}).click();await expect(form).toHaveCount(0);
    await openSearch();await chooseTable(database,'subject');await search().getByLabel('搜索字段 note',{exact:true}).check();await run('权限隔离命中');await expect(search().getByRole('status')).toContainText('命中 1');await expect(search().locator('.rdg-row')).toContainText('仅只读：无键列读取权限');await expect(search().getByTitle('仅只读：无键列读取权限',{exact:true})).toHaveCount(1);await search().locator('.rdg').scrollIntoViewIfNeeded();await page.screenshot({path:info.outputPath('data-search-column-permission-readonly.png')});
    await search().getByRole('button',{name:'清空范围',exact:true}).click();await search().getByLabel('搜索字段 id',{exact:true}).check();await search().getByRole('button',{name:'开始数据搜索',exact:true}).click();await expect(search().getByRole('button',{name:'开始数据搜索',exact:true})).toBeEnabled({timeout:20000});await expect(search().locator('.error-box')).toContainText('SELECT');await expect(search().getByRole('status')).toContainText('搜索未完成');expect(await search().locator('.rdg-row').count()).toBe(0);
    await search().getByRole('button',{name:'清空范围',exact:true}).click();await search().getByLabel('搜索字段 note',{exact:true}).check();await run('权限隔离命中');await expect(search().getByRole('status')).toContainText('命中 1');await search().getByRole('button',{name:'关闭',exact:true}).click();expect(pageErrors).toEqual([]);
