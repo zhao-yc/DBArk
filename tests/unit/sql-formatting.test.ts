@@ -3,6 +3,11 @@ import { planSqlFormatting } from '../../src/renderer/sqlFormatting';
 import { completionLimits } from '../../src/shared/sqlCompletion';
 
 describe('选区格式化的原文与安全边界', () => {
+  it.each([[1, true], [8, true], [4, false]] as const)('显式格式化使用宽度%s/空格%s，字面量原文不变且重复格式化不追加编辑', (tabSize, insertSpaces) => {
+    const source = "select a,b,'🚢  原文' from 表 where id=1;", indentation = { tabSize, insertSpaces };
+    const plan = planSqlFormatting(source, 0, source.length, '\n', indentation)!;
+    expect(plan.text).toContain('\n' + (insertSpaces ? ' '.repeat(tabSize) : '\t') + 'a,'); expect(plan.text).toContain("'🚢  原文'"); expect(planSqlFormatting(plan.text, 0, plan.text.length, '\n', indentation)).toBeNull();
+  });
   it('只排版选中SQL，Unicode、字符串、注释及选区外内容逐字不变', () => {
     const prefix = "select '🚢外面' as 前; -- 头部保持\n", body = "select 名称,'🚢  ; -- 字符串' as 标记 from 表 where 编号=1; -- 注释保持", suffix = "\nselect '尾部' as 后;";
     const source = prefix + body + suffix, plan = planSqlFormatting(source, prefix.length, prefix.length + body.length)!;

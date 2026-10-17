@@ -186,7 +186,7 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
     try {
       const workspace = useWorkspace.getState(), current = workspace.settings.tabs.find(item => item.id === tab.id), instance = editor.current;
       if (!alive.current || workspace.activeJobs[tab.id] || workspace.settings.activeTabId !== tab.id || current?.kind !== 'query' || !instance || instance.getModel()?.getValue() !== (current.sql ?? '')) throw new Error(sqlFormattingZh.unavailable);
-      formatSqlEditor(instance);
+      formatSqlEditor(instance, { tabSize: workspace.settings.editorTabSize, insertSpaces: workspace.settings.editorInsertSpaces });
     } catch (reason) { setError(errorMessage(reason)); }
   }
   /** 复制仅占本地意图，不占SQL任务、不清结果；关闭/换连/新作业会永久撤销等待中的复制。 */

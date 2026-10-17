@@ -2,6 +2,7 @@ import type * as monaco from 'monaco-editor';
 import { format } from 'sql-formatter';
 import { completionLimits } from '../shared/sqlCompletion';
 import { sqlFormattingZh as text } from './locales/sqlFormatting.zh-CN';
+import { editorIndentationOptions } from '../shared/editorIndentation';
 
 interface Atom { start: number; end: number; kind: string; raw: string; gapSensitive?: boolean; }
 const whitespace = (char: string) => /[\t\n\r\f ]/.test(char);
@@ -49,7 +50,7 @@ function atoms(source: string, ansiQuotes: boolean, noBackslashEscapes: boolean)
 }
 
 /** 四种引号模式均保持token原文及敏感空白；任何疑点都在修改模型前拒绝。 */
-export function planSqlFormatting(source: string, start: number, end: number, eol: string = '\n'): { start: number; end: number; text: string } | null {
+export function planSqlFormatting(source: string, start: number, end: number, eol: string = '\n', indentation: { tabSize?: unknown; insertSpaces?: unknown } = {}): { start: number; end: number; text: string } | null {
   if (source.length > completionLimits.sourceUnits) throw new Error(text.limited);
   if (source.includes('\0') || !Number.isInteger(start) || !Number.isInteger(end) || start < 0 || end < start || end > source.length || !['\n', '\r\n'].includes(eol)) fail();
   const scans = [false, true].flatMap(ansi => [false, true].map(escapes => ({ ansi, escapes, tokens: atoms(source, ansi, escapes) })));
@@ -58,7 +59,9 @@ export function planSqlFormatting(source: string, start: number, end: number, eo
   const original = source.slice(start, end), leading = /^[\t\n\r\f ]*/.exec(original)![0], trailing = /[\t\n\r\f ]*$/.exec(original)![0];
   if (!original.trim()) return null;
   let formatted: string;
-  try { formatted = format(original.trim(), { language: 'mysql', keywordCase: 'preserve', identifierCase: 'preserve', functionCase: 'preserve', dataTypeCase: 'preserve' }).trim().replace(/\r?\n/g, eol); }
+  // 仅显式格式化时使用当前缩进；更改偏好本身从不改写SQL。
+  const options = editorIndentationOptions(indentation.tabSize, indentation.insertSpaces);
+  try { formatted = format(original.trim(), { language: 'mysql', tabWidth: options.tabSize, useTabs: !options.insertSpaces, keywordCase: 'preserve', identifierCase: 'preserve', functionCase: 'preserve', dataTypeCase: 'preserve' }).trim().replace(/\r?\n/g, eol); }
   catch { throw new Error(text.failed); }
   const replacement = leading + formatted + trailing, next = source.slice(0, start) + replacement + source.slice(end);
   if (next.length > completionLimits.sourceUnits) throw new Error(text.limited);
@@ -68,13 +71,13 @@ export function planSqlFormatting(source: string, start: number, end: number, eo
 }
 
 /** 只用Monaco编辑事务改当前模型；两侧undo stop使一次撤销/重做与前后键入分离。 */
-export function formatSqlEditor(editor: monaco.editor.IStandaloneCodeEditor): boolean {
+export function formatSqlEditor(editor: monaco.editor.IStandaloneCodeEditor, indentation: { tabSize?: unknown; insertSpaces?: unknown } = {}): boolean {
   const model = editor.getModel(), selections = editor.getSelections();
   if (!model || model.isDisposed() || editor.getRawOptions().readOnly) throw new Error(text.unavailable);
   if (model.getValueLength() > completionLimits.sourceUnits) throw new Error(text.limited);
   if (!selections || selections.length !== 1) throw new Error(text.selection);
   const selection = selections[0], range = selection.isEmpty() ? model.getFullModelRange() : selection, version = model.getVersionId();
-  const plan = planSqlFormatting(model.getValue(), model.getOffsetAt(range.getStartPosition()), model.getOffsetAt(range.getEndPosition()), model.getEOL());
+  const plan = planSqlFormatting(model.getValue(), model.getOffsetAt(range.getStartPosition()), model.getOffsetAt(range.getEndPosition()), model.getEOL(), indentation);
   if (!plan) return false;
   if (editor.getModel() !== model || model.isDisposed() || model.getVersionId() !== version) throw new Error(text.unavailable);
   editor.pushUndoStop();

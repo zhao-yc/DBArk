@@ -37,6 +37,12 @@ async function mount(source: string, start = 0, end = 0) {
 async function click(entry: '按钮' | '快捷回调') { if (entry === '快捷回调') { expect(io.format).toBeTypeOf('function'); await act(async () => io.format!()); await flushSettings(); return; } const button = document.body.querySelectorAll('button').find(node => node.getAttribute('aria-label') === '格式化 SQL'); expect(button).toBeDefined(); await act(async () => button!.dispatchEvent(new MemoryEvent('click'))); await flushSettings(); }
 
 describe.each(['按钮', '快捷回调'] as const)('真实QueryTab格式化%s', entry => {
+  it.each([[8, true], [4, false]] as const)('显式操作使用当前全局宽度%s/空格%s，不自动格式化或新增副作用', async (editorTabSize, editorInsertSpaces) => {
+    const source = 'select a,b from 表 where id=1;'; await mount(source);
+    await act(async () => useWorkspace.getState().updateSettings({ editorTabSize, editorInsertSpaces }));
+    expect(io.source).toBe(source); expect(io.events).toEqual([]); await click(entry);
+    expect(io.source).toContain('\n' + (editorInsertSpaces ? ' '.repeat(editorTabSize) : '\t') + 'a,'); expect(io.events).toEqual(['undo-stop', 'dbark-sql-format', 'undo-stop', 'focus']); expect(commands.filter(command => command !== 'settings.save')).toEqual([]);
+  });
   it.each([true, false])('选区/全文只走单次executeEdits及两侧undo stop，不改变来源或执行状态 %s', async selected => {
     const prefix = 'select 0;\n', body = "select 名称,'🚢' from 表 where id=1;", suffix = '\nselect 9;', source = prefix + body + suffix;
     await mount(source, selected ? prefix.length : 0, selected ? prefix.length + body.length : 0);

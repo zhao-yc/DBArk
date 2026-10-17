@@ -2,10 +2,14 @@
 export class ContentModelPort {
   version = 1; disposed = false; controlledEdits = 0; stackStops = 0; readonly content = new Set<(event: any) => void>(); readonly ending = new Set<() => void>();
   pending: Array<() => void> = []; deferred = false; uri = { path: 'ram-model' };
+  options = { tabSize: 4, indentSize: 4, insertSpaces: true }; optionChanges: Array<Partial<ContentModelPort['options']>> = [];
   constructor(public value = '', public eol = '\n') { this.value = this.normalize(value); }
   normalize(value: string) { return value.replace(/\r\n|\r|\n/g, this.eol); }
   getValue() { return this.value; } getEOL() { return this.eol; } getVersionId() { return this.version; }
   getValueLength() { return this.value.length; } isDisposed() { return this.disposed; }
+  /** 观察Monaco公开模型选项端口，更新不派发正文事件或改变版本/撤销栈。 */
+  updateOptions(options: Partial<ContentModelPort['options']>) { if (this.disposed) throw Error('不能更新已销毁模型'); Object.assign(this.options, options); this.optionChanges.push({ ...options }); }
+  getOptions() { return { ...this.options }; }
   getFullModelRange() { return { startLineNumber: 1, startColumn: 1, endLineNumber: this.value.split(this.eol).length, endColumn: this.value.split(this.eol).at(-1)!.length + 1 }; }
   onDidChangeContent(callback: (event: any) => void) { this.content.add(callback); return { dispose: () => this.content.delete(callback) }; }
   onWillDispose(callback: () => void) { this.ending.add(callback); return { dispose: () => this.ending.delete(callback) }; }

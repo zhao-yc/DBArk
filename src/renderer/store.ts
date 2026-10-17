@@ -1,3 +1,4 @@
+import { editorIndentationLimits, readEditorInsertSpaces, readEditorTabSize } from '../shared/editorIndentation';
 import { defaultEditorWordWrap, readEditorWordWrap } from '../shared/editorWordWrap';
 import { editorFontLimits, readEditorFontSize } from '../shared/editorFont';
 import { zh } from './locales/zh-CN';
@@ -8,7 +9,7 @@ import type { ConnectionSelection } from './connectionChanges';
 import { completionServerFacts } from './completionServerFacts';
 
 export type WorkspaceTab = AppSettings['tabs'][number];
-const defaults: AppSettings = { theme: 'dark', sidebarWidth: 260, resultLimit: 1000, pageSize: 100, dataTypeColors: false, editorFontSize: editorFontLimits.defaultSize, editorWordWrap: defaultEditorWordWrap, tabs: [] };
+const defaults: AppSettings = { theme: 'dark', sidebarWidth: 260, resultLimit: 1000, pageSize: 100, dataTypeColors: false, editorFontSize: editorFontLimits.defaultSize, editorWordWrap: defaultEditorWordWrap, editorTabSize: editorIndentationLimits.defaultTabSize, editorInsertSpaces: editorIndentationLimits.defaultInsertSpaces, tabs: [] };
 let busySequence = 0;
 const busyOwners = new Map<string, number>();
 let saveTimer: ReturnType<typeof setTimeout> | undefined;
@@ -56,7 +57,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
   initialize: async () => {
     try {
       const [settings, connections, tasks] = await Promise.all([invoke('settings.get', {}), invoke('connections.list', {}), invoke('tasks.list', {})]);
-      set({ settings: { ...defaults, ...settings, editorFontSize: readEditorFontSize(settings.editorFontSize), editorWordWrap: readEditorWordWrap(settings.editorWordWrap) }, connections, tasks, ready: true });
+      set({ settings: { ...defaults, ...settings, editorFontSize: readEditorFontSize(settings.editorFontSize), editorWordWrap: readEditorWordWrap(settings.editorWordWrap), editorTabSize: readEditorTabSize(settings.editorTabSize), editorInsertSpaces: readEditorInsertSpaces(settings.editorInsertSpaces) }, connections, tasks, ready: true });
     } catch (error) { set({ ready: true }); get().notify(errorMessage(error), true); }
   },
   /** 连接编辑成功后整体替换概要列表，不缓存表单中的明文秘密。 */

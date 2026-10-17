@@ -65,7 +65,7 @@ it('正式命令栏aria-pressed与所有可写/只读实例热更一致，仅upd
 });
 
 it('renderer初始化旧缺项只补true，原字号/SQL/标签/活动项与其它偏好不变且不触发保存',async()=>{
-  ports();await act(async()=>store.getState().initialize());expect(store.getState().settings).toEqual({...legacy(),editorWordWrap:true});expect(saved).toHaveLength(0);
+  ports();await act(async()=>store.getState().initialize());expect(store.getState().settings).toEqual({...legacy(),editorWordWrap:true,editorTabSize:2,editorInsertSpaces:true});expect(saved).toHaveLength(0);
 });
 
 it('迟到loader从稳定optionsRef取最新off，仍由原桥接解除可写实例readonly',async()=>{
