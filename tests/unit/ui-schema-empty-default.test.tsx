@@ -4,7 +4,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest
 import { memoryDocument, MemoryEvent } from '../fixtures/memory-dom';
 import type { TableDesign, TableInfo } from '../../src/shared/contracts';
 import type { TableCreateServices } from '../../src/renderer/tableCreateServices';
-import { tableCreateAcknowledgements, tableCreateDesignSchema, tableCreateLegacyDesign, type TableCreatePrefixFacts } from '../../src/shared/tableCreate';
+import { tableCreateAcknowledgements, tableCreateDesignSchema, tableCreateLegacyDesign, type TableCreatePrefixFacts, type TableCreateDraft } from '../../src/shared/tableCreate';
 import { tableCreateZh as text } from '../../src/renderer/locales/tableCreate.zh-CN';
 import { zh, formatText } from '../../src/renderer/locales/zh-CN';
 import { buildPrefixTableDesign, buildDesign } from '../../src/engine/sql';
@@ -15,6 +15,7 @@ let services: TableCreateServices;
 vi.mock('../../src/renderer/tableCreateServices', () => ({ get tableCreateServices() { return services; } }));
 const globals = ['window', 'document', 'navigator', 'IS_REACT_ACT_ENVIRONMENT'].map(name => [name, Object.getOwnPropertyDescriptor(globalThis, name)] as const);
 let document: ReturnType<typeof memoryDocument>, createRoot: typeof import('react-dom/client')['createRoot'], root: ReturnType<typeof createRoot> | undefined;
+let Confirmation: typeof import('../../src/renderer/components/TableCreateConfirmation')['TableCreateConfirmation'];
 let SchemaDialog: typeof import('../../src/renderer/components/SchemaDialog')['SchemaDialog'], workspace: typeof import('../../src/renderer/store')['useWorkspace'];
 let requests: { command: string; input: any }[], dirty: ReturnType<typeof vi.fn>, applied: ReturnType<typeof vi.fn>, closed: ReturnType<typeof vi.fn>;
 const emptyLabel = '第1个字段：空字符串默认值';
@@ -30,7 +31,7 @@ beforeAll(async () => {
     node.setAttribute = (key, value) => { set(key.toLowerCase(), value); if (key === 'disabled') node.disabled = true; if (key === 'type') node.type = value; };
     node.removeAttribute = key => { remove(key.toLowerCase()); if (key === 'disabled') node.disabled = false; }; return node;
   };
-  ({ createRoot } = await import('react-dom/client')); ({ SchemaDialog } = await import('../../src/renderer/components/SchemaDialog')); ({ useWorkspace: workspace } = await import('../../src/renderer/store'));
+  ({ createRoot } = await import('react-dom/client')); ({ SchemaDialog } = await import('../../src/renderer/components/SchemaDialog')); ({ TableCreateConfirmation: Confirmation } = await import('../../src/renderer/components/TableCreateConfirmation')); ({ useWorkspace: workspace } = await import('../../src/renderer/store'));
 });
 afterEach(async () => { if (root) { await act(async () => root!.unmount()); root = undefined; } delete (window as any).dbark; vi.restoreAllMocks(); });
 afterAll(() => { for (const [name, descriptor] of globals) if (descriptor) Object.defineProperty(globalThis, name, descriptor); else Reflect.deleteProperty(globalThis, name); });
@@ -198,4 +199,40 @@ it('前缀确认准备期间同连接数据库A→B→A，父窗口目标失效�
   await prefixDraft(); prefixPorts(); let resolve!:(value:any)=>void; const pending=new Promise<any>(yes=>{resolve=yes;});const normal=services.preview;services.preview=vi.fn(async input=>{const value=await normal(input);await pending;return value;});await click(zh.schema.text049);expect(services.preview).toHaveBeenCalledOnce();
   await act(async()=>root!.render(<SchemaDialog connectionId="c" database="other_db" onClose={closed} onApplied={applied}/>));await act(async()=>root!.render(<SchemaDialog connectionId="c" database="db" onClose={closed} onApplied={applied}/>));await act(async()=>resolve({}));
   expect(document.querySelector('pre[aria-label="只读预览SQL"]')).toBeNull();expect(services.apply).not.toHaveBeenCalled();expect(services.release).toHaveBeenCalledWith({previewToken:'prefix-p'});expect(document.body.textContent).toContain(text.mismatch);
+});
+
+
+/** 实际确认控件保持就绪；不直接调用产品apply函数或修改组件内部状态。 */
+async function acknowledgePrefix(): Promise<ReturnType<typeof document.querySelector>> {
+  await input(text.confirmation,'db.new_table');
+  for(const label of [text.ackDdl,text.ackCreate]){const node=document.querySelectorAll('label').find(value=>value.textContent===label)?.querySelector('input');expect(node).toBeDefined();await act(async()=>{node!.checked=true;node!.dispatchEvent(new MemoryEvent('click'));});}
+  return document.querySelectorAll('button').find(value=>value.textContent===text.apply)!;
+}
+const successfulPrefix = () => ({target:{connectionId:'c',database:'db',table:'new_table'},ddlSubmitted:true as const,ddlCompleted:true as const,definitionVerified:true,resourcesReleased:true,warnings:[]});
+
+it.each([false,true])('父观察已失效但子订阅及React重绘尚未运行时同步点击，ABA=%s',async aba=>{
+  await prefixDraft();let invoke=()=>{};const unsubscribe=workspace.subscribe(state=>{if(state.connectionVersions.c===2){workspace.setState({connectionVersions:{c:1}});invoke();}});
+  try{prefixPorts();services.apply=vi.fn(async()=>successfulPrefix());await click(zh.schema.text049);const button=(await acknowledgePrefix())!;expect(button.disabled).toBe(false);invoke=()=>{button.dispatchEvent(new MemoryEvent('click'));};
+    await act(async()=>{if(aba)workspace.setState({connectionVersions:{c:2}});else invoke();});expect(services.apply).toHaveBeenCalledTimes(aba?0:1);expect(applied).toHaveBeenCalledTimes(aba?0:1);
+  }finally{unsubscribe();}
+});
+
+/** 父租约作为可活读的RAM端口；仍运行真实确认组件、事件、请求围栏及清理。 */
+async function directConfirmation(current:()=>boolean){
+  const design:TableCreateDraft={database:'db',name:'new_table',engine:'InnoDB',charset:'utf8mb4',comment:'',columns:[{name:'id',type:'bigint unsigned',nullable:false,autoIncrement:true,comment:''},{name:'v',type:'varchar(100)',nullable:true,autoIncrement:false,comment:''}],indexes:[{name:'PRIMARY',unique:true,columns:['id']},{name:'ix',unique:false,keyParts:[{columnName:'v',prefixLength:10}]}],foreignKeys:[]};
+  await act(async()=>root!.render(<Confirmation connectionId="c" design={design} isParentCurrent={current} onBack={()=>{}} onClose={closed} onCreated={applied}/>));
+}
+it('首次prepare等待前活读已结束父租约，不发送get，恢复true也不复活',async()=>{
+  await mount();prefixPorts();let valid=false;await directConfirmation(()=>valid);expect(services.get).not.toHaveBeenCalled();valid=true;await act(async()=>workspace.setState({connectionVersions:{c:1}}));expect(services.get).not.toHaveBeenCalled();expect(services.preview).not.toHaveBeenCalled();
+});
+it.each(['get','preview'] as const)('%s等待后活读父租约，旧响应仅释放，恢复true不复活',async phase=>{
+  await mount();prefixPorts();let valid=true,resolve!:()=>void;const wait=new Promise<void>(yes=>{resolve=yes;});
+  if(phase==='get'){const original=services.get;services.get=vi.fn(async input=>{const value=await original(input);await wait;return value;});}else{const original=services.preview;services.preview=vi.fn(async input=>{const value=await original(input);await wait;return value;});}
+  await directConfirmation(()=>valid);await act(async()=>{valid=false;resolve();});valid=true;await act(async()=>workspace.setState({connectionVersions:{c:1}}));expect(document.querySelector('pre[aria-label="只读预览SQL"]')).toBeNull();expect(services.apply).not.toHaveBeenCalled();expect(services.release).toHaveBeenCalledWith(phase==='get'?{snapshotId:'prefix-s'}:{previewToken:'prefix-p'});if(phase==='get')expect(services.preview).not.toHaveBeenCalled();
+});
+it('释放旧能力等待后父租约结束，不继续下一次get',async()=>{
+  await mount();prefixPorts();let valid=true,resolve!:()=>void;const wait=new Promise<void>(yes=>{resolve=yes;});await directConfirmation(()=>valid);services.release=vi.fn(async()=>wait);await click(text.encodingChoose);await act(async()=>{valid=false;resolve();});expect(services.get).toHaveBeenCalledOnce();expect(services.apply).not.toHaveBeenCalled();
+});
+it('apply等待后父租约结束，保留已发送事实但不回调新目标或重放',async()=>{
+  await mount();prefixPorts();let valid=true,resolve!:(value:ReturnType<typeof successfulPrefix>)=>void;const wait=new Promise<ReturnType<typeof successfulPrefix>>(yes=>{resolve=yes;});services.apply=vi.fn(async()=>wait);await directConfirmation(()=>valid);const button=(await acknowledgePrefix())!;await act(async()=>button.dispatchEvent(new MemoryEvent('click')));expect(services.apply).toHaveBeenCalledOnce();await act(async()=>{valid=false;resolve(successfulPrefix());});valid=true;await act(async()=>button.dispatchEvent(new MemoryEvent('click')));expect(applied).not.toHaveBeenCalled();expect(services.apply).toHaveBeenCalledOnce();
 });
