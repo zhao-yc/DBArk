@@ -1,4 +1,5 @@
 import { tracingChannel } from 'node:diagnostics_channel';
+import { types } from 'node:util';
 import type { Query } from 'mysql2';
 import { databaseBackupSourceSql, DatabaseBackupSourceLimitError, type DatabaseBackupSourceContext, type DatabaseBackupSourceRead } from './databaseBackupSource';
 import type { StructureTaskContext } from './structureDefinition';
@@ -75,6 +76,29 @@ function rowCopy(value: unknown, budget: number): { row: Row; bytes: number } {
   return { row, bytes };
 }
 
+/** 不执行配置 getter；mysql2 的布尔 typeCast 会回退连接级函数，必须在发送前排除此组合。 */
+function privateConfiguration(connection: Context['managed']['connection']): { config: object; typeCast: boolean | undefined } | null {
+  try {
+    if (types.isProxy(connection)) return null;
+    const binding = Object.getOwnPropertyDescriptor(connection, 'config');
+    if (!binding || !('value' in binding) || !binding.value || typeof binding.value !== 'object' || types.isProxy(binding.value)) return null;
+    const config: object = binding.value;
+    /** 只接受可静态读取的数据描述符；原型上的 getter/代理同样不能作为默认配置。 */
+    const option = (key: string): { value: unknown } | null => {
+      let target: object | null = config;
+      for (let depth = 0; target && depth < 32; depth++, target = Object.getPrototypeOf(target)) {
+        if (types.isProxy(target)) return null;
+        const descriptor = Object.getOwnPropertyDescriptor(target, key);
+        if (descriptor) return 'value' in descriptor ? { value: descriptor.value } : null;
+      }
+      return target ? null : { value: undefined };
+    };
+    const debug = option('debug'), format = option('queryFormat'), cast = option('typeCast');
+    if (!debug || debug.value || !format || typeof format.value === 'function' || !cast || cast.value !== undefined && typeof cast.value !== 'boolean') return null;
+    return { config, typeCast: cast.value as boolean | undefined };
+  } catch { return null; }
+}
+
 /** 一个私有物理会话的串行行事件读取器；失败后封存，Root 保留原句柄，绝不自动重试或重连。 */
 export class DatabaseBackupSourceReader {
   readonly context: DatabaseBackupSourceContext;
@@ -118,8 +142,12 @@ export class DatabaseBackupSourceReader {
     if (this.active || this.sealed) throw safeError('protocol-invalid');
     let statement: DatabaseBackupSourceRead;
     try { statement = statementCopy(input); } catch { throw safeError('protocol-invalid'); }
-    // mysql2 调试与诊断订阅会向外部输出 SQL/参数，敏感读取遇此配置在发送前拒绝。
-    const privateDriver = (): boolean => !this.connection.config.debug && typeof this.connection.config.queryFormat !== 'function' && !['mysql2:query', 'mysql2:execute'].some(key => tracingChannel(key).hasSubscribers);
+    // 敏感读取不接受外部字段回调或动态配置；只核对，不修改原连接的全局 config。
+    const initialConfiguration = privateConfiguration(this.connection);
+    const privateDriver = (): boolean => {
+      const current = privateConfiguration(this.connection);
+      return Boolean(initialConfiguration && current && current.config === initialConfiguration.config && current.typeCast === initialConfiguration.typeCast && !['mysql2:query', 'mysql2:execute'].some(key => tracingChannel(key).hasSubscribers));
+    };
     if (!privateDriver()) throw safeError('protocol-invalid');
     let query: Query | null = null, rows: Row[] = [], acceptedRows = 0, acceptedBytes = 0;
     let reading: 'reading' | 'stopped' | 'completed' = 'reading', submission: 'not-submitted' | 'started' | 'returned' | 'unknown' = 'not-submitted';
@@ -164,6 +192,8 @@ export class DatabaseBackupSourceReader {
       const registration: unknown = this.hooks.register(operation);
       if (registration !== undefined) { void Promise.resolve(registration).catch(() => undefined); throw Error(); }
       this.check(owner); if (reading !== 'reading') { observe('not-submitted'); return operation; }
+      // register/checkOwner 可以同步改变配置；必须在 commandStarted 之前再核，拒绝换绑。
+      if (!privateDriver()) throw Error();
       this.connection.on('error', connectionError); this.connection.on('end', connectionEnd); this.signal?.addEventListener('abort', aborted, { once: true });
       try {
         commandFinished = this.commandStarted();
@@ -174,6 +204,7 @@ export class DatabaseBackupSourceReader {
       if (reading !== 'reading') { submission = 'not-submitted'; observe('not-submitted'); return operation; }
       if (!privateDriver()) throw Error();
       // 同步发送期间不插入 await；有值时用 COM_STMT，SHOW 等无参数语句用 COM_QUERY。
+      // true 只选择默认转换，不隔离全局函数；隔离依赖上面的静态配置隐私门与 Root 配置所有权。
       const options = { sql: statement.sql, rowsAsArray: false, namedPlaceholders: false, typeCast: true as const };
       sendAttempted = true;
       query = statement.params.length ? this.connection.execute(options, [...statement.params]) : this.connection.query(options);

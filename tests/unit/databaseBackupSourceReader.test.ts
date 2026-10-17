@@ -37,6 +37,34 @@ function fixture() {
 }
 
 describe('B01 源读取原生 Query 适配（纯 RAM）', () => {
+  it('typeCast隐私门：函数、getter、代理与注册期动态配置在命令登记前拒绝', async () => {
+    for (const mode of ['query', 'execute']) for (const kind of ['function', 'getter', 'config-getter', 'proxy', 'register-function', 'register-config', 'register-boolean', 'register-getter', 'register-proxy']) {
+      const f = fixture(), callback = vi.fn(), getter = vi.fn(() => callback), config = f.connection.config;
+      if (kind === 'function') Object.defineProperty(config, 'typeCast', { value: callback });
+      if (kind === 'getter') Object.defineProperty(config, 'typeCast', { get: getter });
+      if (kind === 'config-getter') Object.defineProperty(f.connection, 'config', { get: getter });
+      if (kind === 'proxy') f.connection.config = new Proxy(config, { get: getter });
+      if (kind.startsWith('register-')) {
+        Object.defineProperty(config, 'typeCast', { value: true, writable: true, configurable: true });
+        vi.mocked(f.hooks.register).mockImplementation(() => {
+          if (kind === 'register-function') Object.defineProperty(config, 'typeCast', { value: callback });
+          if (kind === 'register-config') f.connection.config = { debug: false };
+          if (kind === 'register-boolean') Object.defineProperty(config, 'typeCast', { value: false });
+          if (kind === 'register-getter') Object.defineProperty(config, 'typeCast', { get: getter });
+          if (kind === 'register-proxy') f.connection.config = new Proxy(config, { get: getter });
+        });
+      }
+      const input = statement(mode === 'query' ? 'grants' : 'tables');
+      if (kind.startsWith('register-')) { const operation = f.reader.start(f.owner, input); await expect(operation.result).rejects.toMatchObject({ reason: 'registration-failed' }); expect(await operation.nativeTerminal).toBe('not-submitted'); }
+      else expect(() => f.reader.start(f.owner, input)).toThrow();
+      expect(f.context.commandStarted).not.toHaveBeenCalled(); expect(f.connection.query).not.toHaveBeenCalled(); expect(f.connection.execute).not.toHaveBeenCalled(); expect(callback).not.toHaveBeenCalled(); expect(getter).not.toHaveBeenCalled();
+    }
+    for (const mode of ['query', 'execute']) for (const value of [undefined, true, false]) {
+      const f = fixture(); Object.defineProperty(f.connection.config, 'typeCast', { value, writable: true });
+      const operation = f.reader.start(f.owner, statement(mode === 'query' ? 'grants' : 'tables')); f.fields(); f.row({ value: '安全默认对照' }); f.queries[0].emit('end');
+      expect((await operation.result).complete).toBe(true); expect(f.context.commandStarted).toHaveBeenCalledTimes(1); expect(Object.getOwnPropertyDescriptor(f.connection.config, 'typeCast')?.value).toBe(value); expect(f.hooks.requestStop).not.toHaveBeenCalled();
+    }
+  });
   it('目录真正用 execute 参数，发送前登记同一操作；原生逐行不累积到驱动回调数组', async () => {
     const f = fixture(), input = statement(), operation = f.reader.start(f.owner, input);
     expect(f.order).toEqual(['register', 'started', 'send']); expect(f.registrations[0]).toBe(operation); expect(operation.query).toBe(f.queries[0]);
