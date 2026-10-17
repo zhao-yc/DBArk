@@ -1,5 +1,5 @@
 import { expect, it, vi } from 'vitest';
-import { bindBatchDuplicateTarget, batchDuplicateTargetKeys, BatchDuplicateLifecycle, batchDuplicateDigest } from '../helpers/batchRecordDuplicateUi';
+import { bindBatchDuplicateTarget, batchDuplicateTargetKeys, BatchDuplicateLifecycle, BatchDuplicatePreparation, batchDuplicateDigest } from '../helpers/batchRecordDuplicateUi';
 
 /** 全部参数和所有者均为内存哨兵；不读取实际环境或认证。 */
 function parameters() { return { DBARK_TEST_HOST: '192.168.31.200', DBARK_TEST_PORT: '13384', DBARK_TEST_TLS: '0', DBARK_TEST_USER: '内存账号', DBARK_TEST_PASSWORD: '', DBARK_TEST_EXPECTED_SERVER_UUID: '00000000-0000-0000-0000-000000000001', DBARK_BATCH_DUPLICATE_DATABASE: 'dbark_batch_ram', DBARK_BATCH_DUPLICATE_TABLE: 'subject', DBARK_BATCH_DUPLICATE_DDL_SHA256: 'a'.repeat(64), DBARK_BATCH_DUPLICATE_ROWS_SHA256: 'b'.repeat(64) } as Record<string, string | undefined>; }
@@ -55,4 +55,14 @@ it('共享保留通知失败仍保持本地锁定；原操作异常不被通知�
 it('退出或最后task读取跨await发生owner变化时不得结算', async () => {
   const f = fixture(); f.state.markReadOnlyVerified(); await expect(f.state.finish(async () => { f.change(); return []; })).rejects.toThrow(); expect(f.confirmExit).not.toHaveBeenCalled();
   const g = fixture(); g.state.markReadOnlyVerified(); g.confirmExit.mockImplementation(async () => { g.change(); g.close(); }); await expect(g.state.finish(async () => [])).rejects.toThrow(); g.state.endBody(); expect(() => g.state.afterEach()).toThrow();
+});
+it.each(['到期', '回退', '原起点变化'] as const)('P2 afterEach：body已完成后%s仍按原时钟永久保留', async mode => {
+  const f = fixture(); f.state.markReadOnlyVerified(); await f.state.finish(async () => []); f.state.endBody();
+  if (mode === '到期') f.time(120000); if (mode === '回退') f.time(9); if (mode === '原起点变化') f.info._startWallTime = 100000;
+  expect(() => f.state.afterEach()).toThrow('原期限'); f.time(11); f.info._startWallTime = 0; expect(() => f.state.afterEach()).toThrow(); expect(f.retain).toHaveBeenCalledTimes(1); expect(f.confirmExit).toHaveBeenCalledTimes(1);
+});
+it('P2 启动准备：首次绑定原起点，通知保留和恢复参数均不能复活', () => {
+  let now = 1; const info = { _startWallTime: 0, status: 'passed', timeout: 120000 }, state = new BatchDuplicatePreparation(info, () => now);
+  state.assertCurrent(); now = 120000; expect(() => state.assertCurrent()).toThrow('原TestInfo'); now = 2; expect(() => state.assertCurrent()).toThrow();
+  const retained = new BatchDuplicatePreparation(info, () => 2); retained.assertCurrent(); retained.preserve(); expect(() => retained.assertCurrent()).toThrow();
 });

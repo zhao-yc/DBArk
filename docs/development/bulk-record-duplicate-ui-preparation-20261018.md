@@ -1,6 +1,6 @@
 # 批量复制新增草稿：默认关闭正式GUI验收准备
 
-固定基底 `4e647642dfba47a1bfa8f39f23b30f7b99876bde`，员工4普通 clone、独立分支 `codex/employee4-batch-duplicate-ui-20261018`。Root继续推进不改变本片来源。本片只新增专用spec/live、RAM目标绑定及生命周期、两份纯测试和本文，不改生产、旧单行spec、旧导出lifecycle或共享desktop-fixture。没有工作树。
+固定基底 `4e647642dfba47a1bfa8f39f23b30f7b99876bde`，员工4普通 clone、独立分支 `codex/employee4-batch-duplicate-ui-20261018`。Root继续推进不改变本片来源。初始 `224489c` 新增专用spec/live、RAM目标绑定及生命周期、两份纯测试和本文；后续按Root明确授权，在共享desktop-fixture增加仅提供准备hook的strict接缝，见下文独审窄修。不改生产、旧单行spec、旧导出lifecycle或默认退出/强停/清理逻辑，没有工作树。
 
 ## 三个正式身份
 
@@ -45,7 +45,7 @@
 
 每例显式观察SQL最小6条：独立预检身份1，正式观察身份1，前后SHOW CREATE各1，前后两行SELECT各1。三例18条/阶段，源码和安装各跑一次共36条；**不含产品建连测试、目录/表页内部SQL及Root独立线程核对**。复制/Undo/Redo合同零新增SQL；第三例的实际table.preview仍会读表元数据。当前没有GUI可观测零额外SQL端口，空tasks、原行不变或无预览模态都不能单独证明隐藏读取为零；该保证继续限定源码/RAM，不加全局日志或产品计数器。
 
-## 本轮验证与保留结果
+## 224489c首片验证与保留结果
 
 仅在envDir=false、拒绝网络/真实产品进程/私料/密钥生成的纯守卫中运行两份新测试。首轮43项为40通过、3失败：关闭门测试的`it.each`数组参数被框架展开，给VM的argv形状错误；原报告和3条失败保留。只修测试数据为具名argv对象，增加完整参数正例；关闭门7项通过。之后补充预览明确2条变化和新键断言、PromiseConnection原生端口类型，关闭门同7项再复核通过；未重跑目标/生命周期已绿37项。
 
@@ -63,3 +63,19 @@ node --require ./.cache/batch-duplicate-ui/outer-guard.cjs D:/svn/DBArk/node_mod
 ```
 
 类型命令首次原输出 `type-output.txt`、修复输出 `type-fixed-output.txt` 分开。纯守卫每次仅允许esbuild编译工具链，拒绝可选net use而不实际执行；网络、私有读取、密钥生成及产品原生模块加载均0，worker没有guard-blocks文件。未运行full/build、GUI、实库、SSH/Docker、剪贴板、安装或发布，未读取.env或实际认证。仅本地commit，不push；Root独审整合后再安排关闭态/list和实际验收。
+
+## 原两项P2独审与窄修
+
+员工5对固定224489c独立10项为8绿2红，原交接SHA256 `359a6c379d11c207e9e232b2a1e3e03e0e5108bef15b67be9c1dbe4429926e7e`。原代码/报告只读保留，本轮不改写或删除旧红，不重复原44或独审旧8绿。
+
+第一项原红：自动fixture等待mkdtemp期间尚无body lifecycle；afterEach已保留且超时后，原guard只核参数/字节，晚目录仍能到达原生launch。Root补充授权新增 `ownedDesktopLaunchGuard.assertPreparation(info:TestInfo)` 可选端口。仅在显式strict并提供该hook时，原WeakMap登记后创建闭包包装，比较原TestInfo映射的同一state、active、retained，再调用新准备门及原参数/字节门；耗时字节核对后再核原墓碑和期限。该包装在目录await前、内外两层恢复后，以及原launchDesktop的原生launch前guard调用链生效；共享dataDir赋值也必须晚于外层恢复门，拒绝目录回包时不覆盖下一owner目录、不继续启动、不强停、不删除目录。
+
+bulk使用按TestInfo键控的 `BatchDuplicatePreparation`，从原 `_startWallTime` 捕获120秒，核passed、原timeout、原起点不变及单调时钟。body开头再核同一准备门；body前afterEach或隐私门先将本地准备永久保留，再尽力通知共享fixture。包装读取共享真实内部墓碑，不接受客户端传入retained，未暴露可修改的state。
+
+未提供新hook的旧strict仍按原时点调用原guard、原mkdtemp和原launch；default分支不改。共享正常退出、强停和清理逻辑原样保留，没有把120秒施加所有旧用例，也没有扩成新退出系统。
+
+第二项原红：body在期限内finish/endBody后，afterEach未核时钟，跨原120秒仍返回成功。修复抽出独立 `assertDeadline`，afterEach即使active已false也核同一原起点、原timeout/status、截止时间及单调时钟；owner/close同步核对后再核一次。原期限过期、回退或起点变化永久保留，不调用要求active的整套主体门，不重计120秒或追认清理。
+
+本轮窄复核16通过、48未选择：原A3/A5安全断言、A4/A6合法对照共4项；新增启动真实自动fixture、真实WeakMap retain/active/替换、框架仍passed但原期限到达、字节核对耗时到期、内外await间保留且不覆盖下一owner目录、无hook原两次guard调用兼容，以及body结束后的到期/回退/原起点和启动准备保留共12项。原A3适配件只给VM的真实helper依赖补 `BatchDuplicatePreparation` import/导出，原断言与调度不改；原文件、报告、适配差异与SHA均封存。A5/A6原同字节先有一次2通过检查，最终4项按当前源码另核，不累加身份。
+
+仅运行 `vitest -t 'P2|A3|A4|A5|A6'` 的这些RAM端口和本轮一次类型检查；未执行真实Playwright、--list、Electron、GUI、端口、数据库、网络、.env或剪贴板。合法启动对照只到会立即拒绝的RAM原生端口，不称真实应用启动或退出已验。新的精确提交和type最终退出及全部原件摘要以本轮ignored `batch-duplicate-ui-fix/handoff.json` 为准，Root再交原审查者窄复核。

@@ -194,18 +194,38 @@ async function forceStopOwnProcess() {
 }
 
 /** 自动夹具随每个用例运行，不依赖模块首次导入时注册钩子，避免跨文件复用已关闭窗口。 */
-export const test = baseTest.extend<{ desktopLifetime: void; preserveOnUnconfirmedExit: boolean; ownedDesktopLaunchGuard: { assertCurrent(): void } | undefined }>({
+export const test = baseTest.extend<{ desktopLifetime: void; preserveOnUnconfirmedExit: boolean; ownedDesktopLaunchGuard: { assertCurrent(): void; assertPreparation?(info: TestInfo): void } | undefined }>({
   preserveOnUnconfirmedExit: [false, { option: true }],
   ownedDesktopLaunchGuard: [undefined, { option: true }],
   desktopLifetime: [async ({ trace, preserveOnUnconfirmedExit, ownedDesktopLaunchGuard }, use, testInfo) => {
     if (preserveOnUnconfirmedExit) {
       // 检查端口仅在显式strict分支生效，并在分配所属资源前复核；默认分支保留原文。
-      ownedDesktopLaunchGuard?.assertCurrent();
+      // 旧strict路径保留原调用时点；只有新准备hook需要先登记本例真实墓碑。
+      if (!ownedDesktopLaunchGuard?.assertPreparation) ownedDesktopLaunchGuard?.assertCurrent();
       const state: OwnedDesktopExit = { confirmed: false, retained: false, active: true, closed: false }; preservedDesktopExits.set(testInfo, state);
+      const originalGuard = ownedDesktopLaunchGuard;
+      const launchGuard = originalGuard?.assertPreparation ? { assertCurrent() {
+        try {
+          if (preservedDesktopExits.get(testInfo) !== state || !state.active || state.retained) throw new Error('本例启动准备已失效，保留所属资源');
+          originalGuard.assertPreparation!(testInfo);
+          originalGuard.assertCurrent();
+          // 参数/字节核对也可能耗时或触发保留，原生启动前再次核同一墓碑与原期限。
+          if (preservedDesktopExits.get(testInfo) !== state || !state.active || state.retained) throw new Error('本例启动准备已失效，保留所属资源');
+          originalGuard.assertPreparation!(testInfo);
+        } catch (reason) { state.retained = true; throw reason; }
+      } } : originalGuard;
       snippetsDiagnosticsArmed = false; snippetsDiagnostics = createSnippetsNativeDiagnostics(trace, testInfo); pageErrors = [];
-      const directory = await mkdtemp(join(tmpdir(), 'dbark-e2e-')); dataDir = directory;
+      // 显式新hook在目录await两侧都核原TestInfo/墓碑；旧路径不增加门或改变失败策略。
+      const directory = originalGuard?.assertPreparation ? await (async () => {
+        launchGuard!.assertCurrent();
+        try { const created = await mkdtemp(join(tmpdir(), 'dbark-e2e-')); launchGuard!.assertCurrent(); return created; }
+        catch (reason) { state.retained = true; throw reason; }
+      })() : await mkdtemp(join(tmpdir(), 'dbark-e2e-'));
+      // 内层已核目录回包，外层await恢复仍可能晚于afterEach；先复核再写共享目录句柄。
+      if (originalGuard?.assertPreparation) launchGuard!.assertCurrent();
+      dataDir = directory;
       let failed = false, originalFailure: unknown;
-      try { await launchDesktop(ownedDesktopLaunchGuard); await bindOwnedDesktopExit(testInfo); await use(); }
+      try { await launchDesktop(launchGuard); await bindOwnedDesktopExit(testInfo); await use(); }
       catch (reason) { failed = true; originalFailure = reason; throw reason; }
       finally {
         try {

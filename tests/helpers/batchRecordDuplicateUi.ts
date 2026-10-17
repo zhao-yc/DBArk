@@ -51,6 +51,19 @@ export function batchDuplicateDigest(value: string | unknown[]): string { return
 
 interface Owner { assertCurrent(allowClosed?: boolean): void; closed(): boolean; retain(): void; confirmExit(): Promise<void>; }
 interface Info { readonly _startWallTime?: number; readonly timeout: number; readonly status?: string; }
+/** 每例启动准备从同一TestInfo原起点计时，目录晚回包和通知失败不能复活。 */
+export class BatchDuplicatePreparation {
+  private readonly start: number; private last: number; private retained = false;
+  constructor(private readonly info: Info, private readonly now = () => Date.now()) { this.start = info._startWallTime ?? NaN; this.last = this.start; }
+  preserve(): void { this.retained = true; }
+  assertCurrent(): void {
+    try {
+      const current = this.now();
+      if (this.retained || !Number.isFinite(this.start) || this.start < 0 || this.info._startWallTime !== this.start || !Number.isFinite(current) || current < this.last || current >= this.start + 120000 || this.info.timeout !== 120000 || this.info.status !== 'passed') throw Error('批量复制启动准备的原TestInfo或期限失效');
+      this.last = current;
+    } catch (reason) { this.retained = true; throw reason; }
+  }
+}
 /** 独立生命周期沿TestInfo原起点；不借用要求2查询/1导出的旧finish合同。 */
 export class BatchDuplicateLifecycle {
   private active = true; private retained = false; private pending = 0; private factsVerified = false; private exited = false; private ended = false;
@@ -58,11 +71,16 @@ export class BatchDuplicateLifecycle {
   constructor(private readonly owner: Owner, private readonly info: Info, private readonly now = () => Date.now()) { this.start = info._startWallTime ?? NaN; this.last = this.start; }
   /** 本地先锁定，即使共享保留通知抛错，迟到操作也不能继续。 */
   preserve(): void { if (this.retained) return; this.retained = true; try { this.owner.retain(); } catch { /* 保留原失败，通知失败不解锁。 */ } }
+  /** 主体结束后仍核同一原起点和单调时钟；不能借afterEach重新建立期限。 */
+  private assertDeadline(): void {
+    const current = this.now();
+    if (!Number.isFinite(this.start) || this.start < 0 || this.info._startWallTime !== this.start || !Number.isFinite(current) || current < this.last || current >= this.start + 120000 || this.info.timeout !== 120000 || this.info.status !== 'passed') throw Error('批量复制原期限或框架状态失效');
+    this.last = current;
+  }
   assertCurrent(allowClosed = false): void {
     try {
-      const current = this.now();
-      if (this.retained || !this.active || !Number.isFinite(this.start) || this.start < 0 || !Number.isFinite(current) || current < this.last || current >= this.start + 120000 || this.info.timeout !== 120000 || this.info.status !== 'passed') throw Error('批量复制原期限或主体状态失效');
-      this.last = current; this.owner.assertCurrent(allowClosed);
+      if (this.retained || !this.active) throw Error('批量复制主体已失效或保留');
+      this.assertDeadline(); this.owner.assertCurrent(allowClosed);
       if (!allowClosed && this.owner.closed()) throw Error('批量复制所属桌面已关闭');
     } catch (reason) { this.preserve(); throw reason; }
   }
@@ -90,7 +108,7 @@ export class BatchDuplicateLifecycle {
   /** 主体只记录此前收尾完成；afterEach不再发退出、清理或延长期限。 */
   endBody(): void { if (!this.retained && this.factsVerified && this.exited && !this.pending) { try { this.assertCurrent(true); this.ended = true; } catch { /* 原保留原因不变。 */ } } this.active = false; }
   afterEach(): void {
-    try { if (this.retained || this.active || this.pending || !this.ended || !this.exited || this.info.status !== 'passed' || this.info.timeout !== 120000) throw Error('批量复制主体或收尾未确认'); this.owner.assertCurrent(true); if (!this.owner.closed()) throw Error('批量复制退出证明缺失'); }
+    try { if (this.retained || this.active || this.pending || !this.ended || !this.exited) throw Error('批量复制主体或收尾未确认'); this.assertDeadline(); this.owner.assertCurrent(true); if (!this.owner.closed()) throw Error('批量复制退出证明缺失'); this.assertDeadline(); }
     catch (reason) { this.preserve(); throw reason; }
   }
 }

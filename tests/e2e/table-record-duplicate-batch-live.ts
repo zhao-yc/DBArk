@@ -5,7 +5,7 @@ import mysql, { type Connection, type RowDataPacket } from 'mysql2/promise';
 import type { Locator, TestInfo } from '@playwright/test';
 import { closeMysqlConnection } from '../../src/engine/connection';
 import { test, expect, pageErrors, ownedDesktopResources, retainOwnedDesktopResources, confirmOwnedDesktopExit } from './desktop-fixture';
-import { BatchDuplicateLifecycle, batchDuplicateDigest, type BatchDuplicateTarget } from '../helpers/batchRecordDuplicateUi';
+import { BatchDuplicateLifecycle, BatchDuplicatePreparation, batchDuplicateDigest, type BatchDuplicateTarget } from '../helpers/batchRecordDuplicateUi';
 import { recordDuplicateZh as text } from '../../src/renderer/locales/recordDuplicate.zh-CN';
 import { draftHistoryZh as history } from '../../src/renderer/locales/draftHistory.zh-CN';
 import { zh } from '../../src/renderer/locales/zh-CN';
@@ -19,8 +19,13 @@ const names = ['批量复制精确值与暂存值，整批一步撤销重做且�
 /** 本模块仅由双门实跑分支动态加载；所有SQL均为既有表的显式只读观察。 */
 export function registerBatchRecordDuplicate(binding: BatchDuplicateTarget): void {
   const states = new WeakMap<TestInfo, BatchDuplicateLifecycle>(), target = binding.target;
+  const preparations = new WeakMap<TestInfo, BatchDuplicatePreparation>();
   /** 安装模式只读核本轮明确EXE/asar，源模式的构建身份由Root外层固定。 */
-  const launchGuard = { assertCurrent() {
+  const launchGuard = { assertPreparation(info: TestInfo) {
+    let preparation = preparations.get(info);
+    if (!preparation) { preparation = new BatchDuplicatePreparation(info as TestInfo & { _startWallTime?: number }); preparations.set(info, preparation); }
+    preparation.assertCurrent();
+  }, assertCurrent() {
     binding.assertCurrent();
     if (target.executable) {
       const digest = (file: string) => createHash('sha256').update(readFileSync(file)).digest('hex');
@@ -30,14 +35,15 @@ export function registerBatchRecordDuplicate(binding: BatchDuplicateTarget): voi
   test.use({ preserveOnUnconfirmedExit: true, ownedDesktopLaunchGuard: launchGuard, trace: 'off', screenshot: 'off', video: 'off' });
   test.setTimeout(120000); test.describe.configure({ mode: 'serial', retries: 0 });
   // 实际解析的CLI配置仍须关闭；覆盖采集配置时在任何认证表单/SQL之前停链。
-  test.beforeEach(({ trace, screenshot, video }, info) => { if (trace !== 'off' || screenshot !== 'off' || video !== 'off') { retainOwnedDesktopResources(info); throw Error('批量复制验收禁止轨迹、截图和视频'); } });
+  test.beforeEach(({ trace, screenshot, video }, info) => { if (trace !== 'off' || screenshot !== 'off' || video !== 'off') { preparations.get(info)?.preserve(); retainOwnedDesktopResources(info); throw Error('批量复制验收禁止轨迹、截图和视频'); } });
   test.afterEach(({}, info) => {
     const state = states.get(info);
-    if (!state) { try { retainOwnedDesktopResources(info); } catch { /* 缺失owner也不能降级退出。 */ } throw Error('批量复制未建立本例生命周期，保留现场'); }
+    if (!state) { preparations.get(info)?.preserve(); try { retainOwnedDesktopResources(info); } catch { /* 缺失owner也不能降级退出。 */ } throw Error('批量复制未建立本例生命周期，保留现场'); }
     state.afterEach();
   });
 
   for (const [scenario, name] of names.entries()) test(name, async ({}, info) => {
+    launchGuard.assertPreparation(info);
     const captured = ownedDesktopResources(info), page = captured.page;
     const state = new BatchDuplicateLifecycle({ assertCurrent(allowClosed = false) {
       binding.assertCurrent(); const current = ownedDesktopResources(info);
