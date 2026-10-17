@@ -20,7 +20,7 @@ export class CompletionWorkerClient{
     return new Promise(resolve=>{
       const id=++this.serial,abort=()=>this.reset('cancelled'),phase=this.ready?'analyzing':'starting';
       // 能力与模式绑定同一编辑快照，等待线程启动期间调用方不能改写本次作用域。
-      this.pending={id,phase,request:{id,source,offset,mode:{ansiQuotes:mode.ansiQuotes,noBackslashEscapes:mode.noBackslashEscapes},...(capabilities===undefined?{}:{capabilities:{lateralDerivedTables:capabilities.lateralDerivedTables===true,windowFunctions:capabilities.windowFunctions===true}})},resolve,timer:this.deadline(id,phase),detach:()=>signal?.removeEventListener('abort',abort)};
+      this.pending={id,phase,request:{id,source,offset,mode:{ansiQuotes:mode.ansiQuotes,noBackslashEscapes:mode.noBackslashEscapes},...(capabilities===undefined?{}:{capabilities:{lateralDerivedTables:capabilities.lateralDerivedTables===true,windowFunctions:capabilities.windowFunctions===true,insertRowAliases:capabilities.insertRowAliases===true}})},resolve,timer:this.deadline(id,phase),detach:()=>signal?.removeEventListener('abort',abort)};
       signal?.addEventListener('abort',abort,{once:true});
       try{
         if(!this.worker){

@@ -5,7 +5,7 @@ import {completionCapabilitiesForServer,type CompletionScopeCapabilities} from '
 
 /** 物理会话事实始终优先；断开、繁忙或未知版本不能借用另一连接轮次的能力。 */
 export function completionContextCapabilities(state?:CompletionSessionState,opened?:Readonly<Pick<ConnectionStatus,'dialect'|'version'>>):CompletionScopeCapabilities{
-  if(state)return state.busy||state.broken?{lateralDerivedTables:false,windowFunctions:false}:completionCapabilitiesForServer(state.dialect,state.serverVersion);
+  if(state)return state.busy||state.broken?{lateralDerivedTables:false,windowFunctions:false,insertRowAliases:false}:completionCapabilitiesForServer(state.dialect,state.serverVersion);
   return completionCapabilitiesForServer(opened?.dialect,opened?.version);
 }
 /** 初始标签库仅用于尚无查询会话的草稿；已存在会话必须采用其缓存快照。 */
