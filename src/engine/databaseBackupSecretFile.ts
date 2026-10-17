@@ -43,6 +43,8 @@ export interface DatabaseBackupSecretFilePorts {
   /** Root的不可逆终态许可；签发后同一scope不再启动工具或使用此路径，cancel ACK不能签发它。 */
   cleanupPermit(owner: DatabaseBackupSecretOwner): Promise<DatabaseBackupSecretCleanupPermit>;
   windows?: DatabaseBackupSecretWindowsProtection;
+  /** 可选的永久健康门；与取消分离，供路径、快照和清理返回检查原端口是否已未知。 */
+  checkHealthy?(): void;
   checkCancelled(): void;
 }
 export interface DatabaseBackupSecretFileConfig {
@@ -72,7 +74,7 @@ const resource = <T>(): Resource<T> => ({ started: false, settled: false, closed
 export class DatabaseBackupSecretFile {
   #entry: Ownership; #config: DatabaseBackupSecretFileConfig; #ports: DatabaseBackupSecretFilePorts;
   #parent = resource<DatabaseBackupSecretDirectory>(); #directory = resource<DatabaseBackupSecretDirectory>(); #file = resource<DatabaseBackupSecretFileHandle>();
-  #filePath: string; #active = false; #started = false; #failed = false; #ready = false; #consumed = false;
+  #filePath: string; #active = false; #started = false; #failed = false; #ready = false; #consumed = false; #portUnknown = false;
   #bytesWritten = 0; #pending = 0; #allocationInvalid = false; #cleanupStarted = false; #cleanupConfirmed = false; #cleanupPromise?: Promise<{ owner: DatabaseBackupSecretOwner; state: 'confirmed' | 'unknown' }>;
   #fileRemovalStarted = false; #fileRemoved = false; #directoryRemovalStarted = false; #directoryRemoved = false;
 
@@ -95,6 +97,9 @@ export class DatabaseBackupSecretFile {
     const entry = this.#entry;
     try { if (entry.poisoned || entry.owner.taskId !== entry.taskId || entry.owner.planToken !== entry.planToken) throw blocked(); }
     catch { entry.poisoned = true; this.#failed = true; this.#ready = false; throw blocked(); }
+    // 端口失效不伪装成owner换绑；只永久停用本文件，仍保留原槽位和待处理事实。
+    try { if (this.#portUnknown) throw blocked(); this.#ports.checkHealthy?.(); }
+    catch { this.#portUnknown = true; this.#failed = true; this.#ready = false; throw blocked(); }
   }
   #check(): void { this.#owner(); this.#ports.checkCancelled(); if (this.#failed || this.#cleanupStarted) throw blocked(); }
   /** 待处理标志先于调用端口，返回的原句柄先捕获再检查取消。reject不被解释为“没有资源”。 */
@@ -174,9 +179,15 @@ export class DatabaseBackupSecretFile {
   cleanup(): Promise<{ owner: DatabaseBackupSecretOwner; state: 'confirmed' | 'unknown' }> {
     try { this.#owner(); } catch { return Promise.resolve({ owner: this.#entry.owner, state: 'unknown' }); }
     if (this.#active || this.#pending) return Promise.resolve({ owner: this.#entry.owner, state: 'unknown' });
-    if (this.#cleanupPromise) return this.#cleanupPromise;
+    if (this.#cleanupPromise) return this.#cleanupResult();
     this.#cleanupStarted = true; this.#ready = false;
-    this.#cleanupPromise = Promise.resolve().then(() => this.#cleanup()); return this.#cleanupPromise;
+    this.#cleanupPromise = Promise.resolve().then(() => this.#cleanup()); return this.#cleanupResult();
+  }
+  /** 原清理Promise只创建一次；健康端口另在异步交付缓存结果时检查，不能重新执行清理。 */
+  #cleanupResult(): Promise<{ owner: DatabaseBackupSecretOwner; state: 'confirmed' | 'unknown' }> {
+    const original = this.#cleanupPromise!;
+    if (!this.#ports.checkHealthy) return original;
+    return original.then(result => { try { this.#owner(); return result; } catch { return { owner: this.#entry.owner, state: 'unknown' as const }; } });
   }
   /** 许可必须来自Root真实终态；删除仅限原wx文件和独占空目录，绝不递归，也不finally补删。 */
   async #cleanup(): Promise<{ owner: DatabaseBackupSecretOwner; state: 'confirmed' | 'unknown' }> {
@@ -213,7 +224,7 @@ export class DatabaseBackupSecretFile {
       parentStarted: this.#parent.started, directoryStarted: this.#directory.started, fileStarted: this.#file.started,
       allocationUnknown: this.#allocationInvalid || [this.#parent, this.#directory, this.#file].some(slot => slot.started && slot.settled && !slot.resource),
       parentAllocated: !!this.#parent.resource, directoryAllocated: !!this.#directory.resource, fileAllocated: !!this.#file.resource, parentClosed: this.#parent.closed, directoryClosed: this.#directory.closed, fileClosed: this.#file.closed,
-      closeUnknown: this.#parent.closeUnknown || this.#directory.closeUnknown || this.#file.closeUnknown, failed: this.#failed, cleanupStarted: this.#cleanupStarted, fileRemovalStarted: this.#fileRemovalStarted, fileRemoved: this.#fileRemoved, directoryRemovalStarted: this.#directoryRemovalStarted, directoryRemoved: this.#directoryRemoved, closed: this.#cleanupConfirmed && !this.#entry.poisoned };
+      closeUnknown: this.#parent.closeUnknown || this.#directory.closeUnknown || this.#file.closeUnknown, portUnknown: this.#portUnknown, failed: this.#failed, cleanupStarted: this.#cleanupStarted, fileRemovalStarted: this.#fileRemovalStarted, fileRemoved: this.#fileRemoved, directoryRemovalStarted: this.#directoryRemovalStarted, directoryRemoved: this.#directoryRemoved, closed: this.#cleanupConfirmed && !this.#portUnknown && !this.#entry.poisoned };
   }
   toJSON() { return this.snapshot(); }
   [Symbol.for('nodejs.util.inspect.custom')]() { return this.snapshot(); }
