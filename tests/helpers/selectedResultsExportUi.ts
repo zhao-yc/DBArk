@@ -31,15 +31,37 @@ export interface SelectedResultsOwner {
   retain(): void;
   confirmExit(): Promise<void>;
 }
+interface SelectedResultsTestInfo {
+  readonly _startWallTime?: number;
+  readonly timeout: number;
+  readonly status?: string;
+}
 
 /** 专用生命周期只管理本例所有者；本地保留先落定，通知失败和迟到结果都不能重新解锁。 */
 export class SelectedResultsUiLifecycle {
   readonly state = { active: true, pending: 0, retained: false, tasksVerified: false, exited: false };
-  constructor(private readonly owner: SelectedResultsOwner) {}
+  private readonly startedAt: number;
+  private readonly deadline: number;
+  private lastNow: number;
+  private endedAt: number | undefined;
+  constructor(private readonly owner: SelectedResultsOwner, private readonly info: SelectedResultsTestInfo, private readonly now: () => number = () => Date.now()) {
+    // 固定框架原起点；缺少该版本TestInfo事实就拒绝运行，不能从body或helper取得新的120秒。
+    this.startedAt = info._startWallTime ?? NaN;
+    this.deadline = this.startedAt + 120000;
+    this.lastNow = this.startedAt;
+  }
   preserve(): void { if (this.state.retained) return; this.state.retained = true; try { this.owner.retain(); } catch { /* 通知失败仍保持本地停链。 */ } }
+  /** 原框架失败、超时、跳过或预算变化都不可复活；时钟倒退也不能延长本例期限。 */
+  private assertBudget(): void {
+    const current = this.now();
+    if (!Number.isFinite(this.startedAt) || this.startedAt < 0 || !Number.isFinite(this.deadline) || !Number.isFinite(current) || current < this.lastNow || current >= this.deadline || this.info.timeout !== 120000 || this.info.status !== 'passed') throw Error('勾选行验收原120秒期限或框架状态已失效');
+    this.lastNow = current;
+  }
   assertCurrent(allowClosed = false): void {
     try {
       if (this.state.retained) throw Error('勾选行验收已停链保留现场');
+      if (!this.state.active) throw Error('勾选行验收主体活动已结束');
+      this.assertBudget();
       this.owner.assertCurrent(allowClosed);
       if (!allowClosed && this.owner.closed()) throw Error('勾选行验收桌面已关闭');
     } catch (reason) { this.preserve(); throw reason; }
@@ -65,12 +87,22 @@ export class SelectedResultsUiLifecycle {
       finally { this.state.pending--; }
     } catch (reason) { this.preserve(); throw reason; }
   }
-  endBody(): void { this.state.active = false; }
+  /** 主体结束只记录已在原期限内完成的成功证明；失败finally不覆盖原始错误。 */
+  endBody(): void {
+    if (this.state.active && !this.state.retained && !this.state.pending && this.state.tasksVerified && this.state.exited) {
+      try { this.assertCurrent(true); this.endedAt = this.lastNow; }
+      catch { /* 原期限或归属未知已由动作门保留，不从finally覆盖首因。 */ }
+    }
+    this.state.active = false;
+  }
   /** 超时、未结束动作或缺失退出证明均只保留现场，不退出也不删除任何资源。 */
   afterEach(): void {
     try {
-      this.assertCurrent(true);
-      if (this.state.active || this.state.pending || !this.state.tasksVerified || !this.state.exited || !this.owner.closed()) throw Error('勾选行验收主体或退出尚未确认终态');
+      // 这里仅核此前成功结束事实，不重新开放主体动作，也不给afterEach另一次120秒预算。
+      if (this.state.retained) throw Error('勾选行验收已停链保留现场');
+      if (this.state.active || this.state.pending || !this.state.tasksVerified || !this.state.exited || this.endedAt === undefined || this.endedAt >= this.deadline || this.info.timeout !== 120000 || this.info.status !== 'passed') throw Error('勾选行验收主体或退出尚未确认终态');
+      this.owner.assertCurrent(true);
+      if (!this.owner.closed()) throw Error('勾选行验收主体或退出尚未确认终态');
     } catch (reason) { this.preserve(); throw reason; }
   }
 }
