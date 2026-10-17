@@ -21,7 +21,7 @@
 - 新增存储边界4项：旧缺项/损坏值默认、IPC与直接存储严格拒绝、8/32/13正确保存及其他SQL不变、原子保存失败回退。
 - 新增真实React7项：从正式App源码提取准确state/命令栏button/开关方法/弹窗表达式，挂载真实弹窗、store、SqlEditor和锁定@monaco-editor/react；验证全实例热更新、恢复/取消、延迟回包、新SQL/标签、旧弹窗回包、失败重试、迟到loader和Suspense恢复。
 - 直接回归原正文/只读/格式化生命周期13项及当前语句入口19项。
-- 最终43/43，0失败0跳过；TypeScript类型检查退出码0。
+- 初版a510固定来源：43/43，0失败0跳过；当时TypeScript类型检查退出码0。
 
 Monaco模型/选区/撤销写入口、loader和worker只为RAM端口；真实React及锁定库effect仍运行，未用假SqlEditor代替产品。存储使用原LocalStore的records/saveSettings/mutate/flush，底层单settings表与文件原子写入为RAM端口，不启动SQLite或外部DB，不读取实际配置。正式App其余布局没有在本片完整运行，原生焦点、Monaco视觉/撤销体验、真实落盘和重启持久恢复由Root统一验收。
 
@@ -33,3 +33,16 @@ node D:/svn/DBArk/node_modules/typescript/bin/tsc --noEmit
 ```
 
 本片没有全套/full/build、实际GUI/DB、系统剪贴板、OS原生业务进程、原生文件导出、私料读取、SSH或Docker。没有生产部署。
+
+
+## a510关闭提交窗口修复
+
+独立普通clone分支`codex/employee2-editor-font-preferences-fix-20261017`，固定基线`a51009c6e9c6f671f324d56d6fc9ebcfe65511c9`。员工1报告SHA256为`ee56daaa978e28892d75d71f15dc398fcf0f2e9b69fd5b12ba76ddaae6c5fb8a`。
+
+FONT-1/P2：原取消仅通知父组件，React实际卸载前alive仍为true；同一提交窗口的旧保存闭包可将后来的28覆盖成旧草稿18。现在新增单向closed门，统一close方法在任何父层通知前同步标记closed并消费pending。取消、Modal标题关闭/Escape以及保存成功均进入同一方法。保存入口和字段合并前均核本弹窗权限，旧回包/错误/finally也不能恢复关闭后的状态；重新打开通过新组件取得新代次。
+
+已发出的updateSettings/flushSettings不宣称可回滚；关闭只结束后续UI权限，仍保持原保存锁、单字段合并和既有持久化语义，不回写旧settings。未改变Main/schema/Storage/SqlEditor/App或共享Modal。
+
+独审原测试SHA256`7092e6412a41983bee7e241340bd74b435986723d3e87ff4ccb524fd57634801`保留同字节：仅选T4/T5，在原a510为1绿1红、3未选，修复后2绿、3未选。新增一组窄对照循环四个关闭入口，在卸载提交前投递旧save，并验证正常重开取得当前28后可明确保存30；1绿、7未选。类型检查退出码0。原红、员工1原报告/结果和原a510 Dialog副本留在本clone的.cache/editor-font-preferences-fix，不删除或改写原件。
+
+本轮未重跑43/full/build，未运行实际GUI/DB/系统clipboard/OS业务进程或读取私料；真实配置落盘重启和原生Monaco仍由Root统一验收。

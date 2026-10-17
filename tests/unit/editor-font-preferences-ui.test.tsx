@@ -7,6 +7,7 @@ import { afterAll, afterEach, beforeAll, expect, it, vi } from 'vitest';
 import { memoryDocument, MemoryEvent } from '../fixtures/memory-dom';
 import { ContentEditorPort, ContentModelPort } from './editor-content-test-ports';
 import { editorFontZh as text } from '../../src/renderer/locales/editorFont.zh-CN';
+import { zh } from '../../src/renderer/locales/zh-CN';
 const port = vi.hoisted(() => ({ monaco: null as any, editors: [] as any[], initial: [] as any[], loader: undefined as Promise<any> | undefined }));
 // 保留锁定@monaco-editor/react的真实组件/effect；只替换loader、worker与Monaco布局/模型端口。
 vi.mock('monaco-editor', () => port.monaco);
@@ -120,4 +121,27 @@ it('Suspense隐藏期间改字号，恢复原widget时只热更新最新字号�
   await act(async () => hideEditors(false));
   expect(port.editors).toEqual(editors); expect(editors.map(editor => editor.options.fontSize)).toEqual([32,32]); expect(editors.map(editor => editor.options.lineHeight)).toEqual([57,57]);
   expect(editors.map(editorState)).toEqual(before); expect(editors.map(editor => editor.readOnly)).toEqual([false,true]); expect(ready).toHaveBeenCalledTimes(2);
+});
+
+
+it('关闭同步撤销：取消/标题/Escape/保存成功通知前旧保存均失效，正常重开有新权限', async () => {
+  const handler = (node: any) => node[Object.keys(node).find(key => key.startsWith('__reactProps$'))!].onClick as () => void;
+  for (const mode of ['cancel','header','escape','saved']) {
+    await mount(24); await click(text.entry); await draft('18'); const oldSave = handler(button(text.save));
+    const changeAndDeliver = () => { store.getState().updateSettings({ editorFontSize: 28 }); oldSave(); };
+    if (mode === 'saved') {
+      // 正式App关闭方法先通知导航，再setState；在通知内投递旧保存，覆盖卸载尚未提交的窗口。
+      invalidate.mockImplementationOnce(changeAndDeliver); await click(text.save);
+    } else await act(async () => {
+      if (mode === 'cancel') handler(button(text.cancel))();
+      else if (mode === 'header') handler(document.querySelector(`button[aria-label="${zh.dialogs.text001}"]`))();
+      else document.dispatchEvent(Object.assign(new MemoryEvent('keydown'), { key: 'Escape' }));
+      changeAndDeliver();
+    });
+    expect(store.getState().settings.editorFontSize, mode).toBe(28);
+    expect(saved.filter(settings => settings.editorFontSize === 18), mode).toHaveLength(mode === 'saved' ? 1 : 0);
+    await click(text.entry); expect(document.querySelector(`input[aria-label="${text.field}"]`)!.value).toBe('28');
+    await draft('30'); await click(text.save); expect(store.getState().settings.editorFontSize, mode).toBe(30); expect(saved.at(-1).editorFontSize).toBe(30);
+    await act(async () => root!.unmount()); root = undefined; reply = () => {}; await flush(); document.body.textContent = ''; invalidate.mockReset();
+  }
 });
