@@ -72,6 +72,8 @@ jobs:
           # 已验的本地查询导航在三个原生平台执行；私网用例继续关闭。
           DBARK_INTEGRATION_ENABLED: '0'
           DBARK_W03_SAVED_QUERY_NAVIGATION_TEST: '1'
+          # 真实Monaco热更新、SQLite落盘及独立重启；不使用系统剪贴板或私网数据库。
+          DBARK_EDITOR_FONT_NATIVE_TEST: '1'
           # 仅源码 E2E 的固定离线片段用例采集；安装验收与实库用例不继承此门。
           DBARK_SNIPPETS_NATIVE_DIAGNOSTICS: '1'
       - run: ${{ matrix.command }}
@@ -80,6 +82,7 @@ jobs:
       - run: pnpm test:packaged
         env:
           DBARK_W03_SAVED_QUERY_NAVIGATION_TEST: '1'
+          DBARK_EDITOR_FONT_NATIVE_TEST: '1'
       - uses: actions/upload-artifact@v4
         with:
           name: DBArk-${{ matrix.artifact }}-未发行签名
