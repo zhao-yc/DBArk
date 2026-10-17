@@ -45,6 +45,6 @@ node D:/svn/DBArk/node_modules/typescript/bin/tsc --noEmit
 
 Root `da157e0`／`f838e2e` 对应作者 `621f6d3`／`f566dbb`。初版独审九组为六绿三红，三红同因把 SELECT 投影或 CAST 类型中的 AS 误作新行声明。修复独审仅原三红及新增语义边界对照，共四绿、六未选；旧 I3 中 SELECT 投影别名必须阻断的期待失效，新对照确认应恢复既有 schema 函数路径。原件及原红未改写，固定修复报告 SHA-256：`50ec7affc8765e9911f98ca75f0c0786119a11046b9b8afba4fe412f407f7265`。
 
-Root 当前 11 个相关单元文件 283 项、类型检查及源码构建终态通过。这里含真实解析器、Worker 及目录 RAM 组合，不是实际 GUI／服务器完成数；正式 Windows 补全界面仍待独立验收，未进入旧 `4576d73` 安装或公开 0.20.0。
+Root 当前 11 个相关单元文件 283 项、类型检查及源码构建终态通过；固定 `b378dd2` 完整CI为432文件／8078通过／10跳过，类型和构建通过。这里含真实解析器、Worker 及目录 RAM 组合，不是实际 GUI／服务器完成数。随后正式 Windows UI 未出现建议；真实旁观已确认 Worker ready／能力开启，但列目录因原流未关闭的资源门拒绝交付。原红、精确清理及修复边界见[真实检查点](../../tests/integration/acceptance-upsert-completion-20261018.md)，无旁观正式复验继续。未进入旧 `4576d73` 安装或公开 0.20.0。
 
 上述执行记录属于原提交 `621f6d3` 的作者验证；后续独审发现的 AS 位置误判及窄修记录见 [AS 声明位置修复](q01-insert-row-alias-as-position-fix-20261018.md)，原记录不追认为已覆盖该问题。

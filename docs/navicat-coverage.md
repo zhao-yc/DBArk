@@ -1,5 +1,7 @@
 # Navicat 全功能覆盖目标
 
+固定 `b378dd2` 的完整CI已成功：432文件／8078通过／10跳过，类型与构建通过。后续UPSERT正式UI原红保留：点号触发与真实Worker ready已核到，列目录因QUIT回调先于原流close而被资源保护门拒绝交付；修复严格收尾及正式复验继续。三例专属空fixture已按标记、原运行端／服务器线程及零行精确清理，见[真实补全检查点](../tests/integration/acceptance-upsert-completion-20261018.md)。源码／RAM通过不外推实机成功，未增加安装或发行计数。
+
 后续高频整合 `da157e0`／`f838e2e` 新增受版本及厂商门保护的UPSERT VALUES新行别名字段补全，并修正SELECT投影／CAST的AS误识别；Root283项相关／类型／构建和独审窄复核通过，真实界面继续，见[补全边界](development/q01-insert-row-alias-20261018.md)。固定 `4576d73` 的新Windows同包另有三个高频实库身份分批通过（表字段CSV、查询选行JSON／CSV），原定位／精度期待红及修正分别保留，服务器／进程核零、规范卸载完成，见[安装实库补验](../tests/integration/acceptance-native-installed-frequency-20261018.md)。不跨产品或分层累加，不计作公开发行。
 
 固定 `cbb46f4`（含私有源会话）的完整CI已成功：429文件／8017通过／10跳过，类型及构建通过，见[源会话检查点](../tests/integration/acceptance-backup-source-session-20261018.md)。后续Root `eac6de8` 另整合MySQL8.4.11私有锁观察／受许可释放原语，13项专项／类型及5组独审RAM通过；尚未申请真实FTWRL、不放开lockCapability，见[锁原语边界](development/database-backup-mysql-lock.md)。这些不增加完整备份、安装或发行计数。
