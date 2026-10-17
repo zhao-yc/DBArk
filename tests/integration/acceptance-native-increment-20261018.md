@@ -21,6 +21,6 @@
 | macOS x64 | `a9f4f19fa0651dc05b7c77b8f851a84affe1856176fdde7f7e97b222b8906bed` |
 | 85db959 完整 CI | `3c40c5440910ab3e9747bcd53e1070c0800df2f47742be0796e1c88386a20e24` |
 
-Windows 附件 12106992998 已通过连接器临时只读地址独立下载，142368109 字节，ZIP SHA-256 `45a6bd6cf6f3964f546da6c32c8ebc78d10ffd16710981fff32f2cf1fd4cda7d`，与 Actions 附件摘要一致。只读枚举含安装器及 blockmap 两项；本检查点尚未执行本机新安装或实库验收。临时地址只在 RAM，不入命令行、环境或日志。macOS 附件只核元数据，未独立下载。
+Windows 附件 12106992998 已通过连接器临时只读地址独立下载，142368109 字节，ZIP SHA-256 `45a6bd6cf6f3964f546da6c32c8ebc78d10ffd16710981fff32f2cf1fd4cda7d`，与 Actions 附件摘要一致。只读枚举含安装器及 blockmap 两项；下载当时未执行本机新安装或实库验收。后续同包三个高频 Windows 实库身份分批通过并完成规范卸载，原失败、协议类型修正及收尾见[安装实库补验](acceptance-native-installed-frequency-20261018.md)。临时地址只在 RAM，不入命令行、环境或日志。macOS 附件只核元数据，未独立下载。
 
 Windows 包未签名；macOS 为 ad-hoc 签名、未公证。公开预览仍为 0.20.0，本批 0.21.0 候选未公开发行，原生离线用例不代替 SSH／TLS／实库及全功能矩阵。
