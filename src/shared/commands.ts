@@ -7,6 +7,7 @@ export const publicCommands: Record<Command, true> = {
   'tasks.cancelState': true,
   'schema.tableDrop.get': true, 'schema.tableDrop.preview': true, 'schema.tableDrop.apply': true, 'schema.tableDrop.release': true,
   'schema.tableDefaultEncoding.get': true, 'schema.tableDefaultEncoding.preview': true, 'schema.tableDefaultEncoding.apply': true, 'schema.tableDefaultEncoding.release': true,
+  'schema.tableCopyData.get': true, 'schema.tableCopyData.preview': true, 'schema.tableCopyData.apply': true, 'schema.tableCopyData.release': true,
   'schema.tableCopyStructure.get': true, 'schema.tableCopyStructure.preview': true, 'schema.tableCopyStructure.apply': true, 'schema.tableCopyStructure.release': true,
   'schema.tableRename.get': true, 'schema.tableRename.preview': true, 'schema.tableRename.apply': true, 'schema.tableRename.release': true,
   'schema.tableAutoIncrement.get': true, 'schema.tableAutoIncrement.preview': true, 'schema.tableAutoIncrement.apply': true, 'schema.tableAutoIncrement.release': true,
