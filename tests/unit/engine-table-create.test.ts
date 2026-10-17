@@ -5,7 +5,8 @@ import type { ManagedConnection } from '../../src/engine/connection';
 import { tableCreateAcknowledgements, type TableCreateDesign, type TableCreateGetOutput, type TableCreatePreviewOutput } from '../../src/shared/tableCreate';
 import { validateCommand } from '../../src/shared/validation';
 const driver = vi.hoisted(() => ({ connect: vi.fn(), execute: vi.fn() }));
-vi.mock('../../src/engine/connection', () => ({ connect: driver.connect, execute: driver.execute }));
+vi.mock('../../src/engine/connection', async () => ({ ...await vi.importActual('../../src/engine/connection'), connect: driver.connect, execute: driver.execute }));
+import { closeMysqlConnection } from '../../src/engine/connection';
 import { Engine } from '../../src/engine';
 const profile: ConnectionProfile = { id: 'c', name: '离线新建表', group: '', color: '', dialect: 'mysql', host: 'invalid', port: 3306, user: 'unit' };
 const design = (): TableCreateDesign => ({ database: 'db', name: 'new`table', engine: 'InnoDB', charset: 'utf8mb4', comment: '', columns: [{ name: 'id', type: 'bigint unsigned', nullable: false, autoIncrement: true, comment: '' }, { name: 'amount', type: 'decimal(30,12)', nullable: false, autoIncrement: false, defaultValue: '123456789012345678.123456789012', comment: '' }], indexes: [{ name: 'PRIMARY', unique: true, columns: ['id'] }, { name: 'uq_amount', unique: true, columns: ['amount'] }], foreignKeys: [] });
@@ -14,7 +15,9 @@ let hold: RegExp | undefined, held: { complete(error?: Error): void } | undefine
 /** 仅替换驱动，真实Engine、任务锁、缓存、SQL与取消/关闭代码均执行产品实现。 */
 function managed(signal?: AbortSignal): ManagedConnection {
   const connection = new EventEmitter(), id = ++sequence;
-  const value = { connection, signal, profile, status: { version, dialect, connectionId: id }, broken: false, close: vi.fn(async () => { if (holdClose && created) await new Promise<void>(resolve => { releaseClose = resolve; }); if (closeFails) throw Error('合成连接关闭未知'); }) } as unknown as ManagedConnection;
+  const stream = Object.assign(new EventEmitter(), { closed: false, end(callback: () => void) { queueMicrotask(() => { callback(); stream.closed = true; stream.emit('close'); }); } });
+  Object.assign(connection, { stream, end(callback: () => void) { queueMicrotask(callback); } });
+  const value = { connection, signal, profile, status: { version, dialect, connectionId: id }, broken: false, close: vi.fn(async () => { if (holdClose && created) await new Promise<void>(resolve => { releaseClose = resolve; }); if (closeFails) throw Error('合成连接关闭未知'); await closeMysqlConnection(connection as any, true, false, 500); }) } as unknown as ManagedConnection;
   Object.assign(connection, { threadId: id, destroy: () => connection.emit('end'), query(sql: string, callback: (error: Error | null, rows?: unknown, fields?: unknown[]) => void) {
     sent.push(sql);
     const complete = (error?: Error) => queueMicrotask(() => {
@@ -46,6 +49,37 @@ beforeEach(async () => {
 });
 afterEach(async () => { closeFails = holdClose = false; releaseClose?.(); hold = undefined; held?.complete(Error('纯测试收尾')); await engine.closeAll(); vi.useRealTimers(); });
 describe('新建表真实Engine仅RAM驱动', () => {
+  it('发送前取消经产品严格关闭后可新预览同目标，旧令牌仍不可重放', async () => {
+    const first = await preview(await get()); hold = /^SELECT @@hostname/;
+    const pending = apply(first, 'cancel-before-create').catch(reason => reason);
+    await vi.waitFor(() => expect(held).toBeDefined()); await engine.handle('query.cancel', { taskId: 'cancel-before-create' });
+    expect(await pending).toBeInstanceOf(Error); expect(events.findLast(event => event.taskId === 'cancel-before-create')?.tableCreate).toMatchObject({ ddlSubmitted: false, outcome: 'not-sent' });
+    expect(sent.some(sql => sql.startsWith('CREATE TABLE'))).toBe(false);
+    expect(connections.every(value => vi.mocked(value.close).mock.calls.length === 1 && (value.connection as any).stream.closed)).toBe(true);
+    hold = undefined; await expect(apply(first, 'old-after-cancel')).rejects.toThrow('失效');
+    expect(await apply(await preview(await get()), 'new-after-cancel')).toMatchObject({ ddlCompleted: true, resourcesReleased: true });
+  });
+  it('发送前关闭未知仍保留目标锁，不能借新预览恢复投递', async () => {
+    const first = await preview(await get()); fail = /^SELECT @@hostname/; closeFails = true;
+    await expect(apply(first)).rejects.toThrow(); fail = undefined; closeFails = false;
+    await expect(apply(await preview(await get()), 'after-close-unknown')).rejects.toThrow('同一目标');
+    expect(sent.some(sql => sql.startsWith('CREATE TABLE'))).toBe(false);
+  });
+  it('DDL未知即使严格关闭已成功仍保留目标锁', async () => {
+    const first = await preview(await get()); fail = /^CREATE TABLE/; await expect(apply(first)).rejects.toThrow(); fail = undefined;
+    expect(connections.every(value => (value.connection as any).stream.closed)).toBe(true);
+    await expect(apply(await preview(await get()), 'after-ddl-unknown')).rejects.toThrow('同一目标');
+    expect(sent.filter(sql => sql.startsWith('CREATE TABLE'))).toHaveLength(1);
+  });
+  it('取消控制连接关闭未知不发布资源释放事实，同目标仍锁定', async () => {
+    const first = await preview(await get()); hold = /^SELECT @@hostname/;
+    const pending = apply(first, 'cancel-control-unknown').catch(reason => reason);
+    await vi.waitFor(() => expect(held).toBeDefined()); closeFails = true;
+    await expect(engine.handle('query.cancel', { taskId: 'cancel-control-unknown' })).rejects.toThrow('清理失败');
+    expect(await pending).toBeInstanceOf(Error); closeFails = false; hold = undefined;
+    await expect(apply(await preview(await get()), 'after-control-unknown')).rejects.toThrow('同一目标');
+    expect(sent.some(sql => sql.startsWith('CREATE TABLE'))).toBe(false);
+  });
   it('只读准备绑定设计，一条准确CREATE，保留精度/主键/unique并完整后核', async () => {
     const p = await preview(await get()); expect(p.sql).toContain('CREATE TABLE `db`.`new``table`'); expect(p.sql).toContain("DEFAULT '123456789012345678.123456789012'"); expect(sent.some(sql => /^(CREATE|DROP|ALTER|USE)/.test(sql))).toBe(false);
     expect(await apply(p)).toMatchObject({ ddlCompleted: true, definitionVerified: true, resourcesReleased: true }); expect(sent.filter(sql => sql.startsWith('CREATE TABLE'))).toHaveLength(1); expect(sent.some(sql => /IF NOT EXISTS|^(DROP|ALTER)/.test(sql))).toBe(false);

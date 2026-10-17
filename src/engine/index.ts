@@ -534,12 +534,15 @@ export class Engine {
       finally {
         // 成功或失败均已离开动作阶段，迟到取消只等待收尾，不再给关闭中的连接创建 KILL 控制。
         task.actionSettled = true;
-        try { await task.cancelPending;await task.stopPending; } catch (error) { failure = error; }
+        let resourcesReleased = false;
+        try { await task.cancelPending;await task.stopPending; resourcesReleased = !task.cancelError; } catch (error) { failure = error; }
         // 事件接收方异常也必须继续实际关闭连接并释放全部关联资源。
         if (options && !failure) { options.progress.phase = 'releasing'; try { report(); } catch (error) { failure ??= error; } }
-        try { await managed?.close(options||strictRead ? { strict: true } : undefined); } catch (error) { failure ??= error; }
+        try { await managed?.close(options||strictRead ? { strict: true } : undefined); } catch (error) { resourcesReleased = false; failure ??= error; }
         this.independentTasks.delete(taskId); finish();
         releaseExecution();
+        // 新建表动作可因发送前取消失败，但严格收尾事实独立成立；未知DDL由用途自身继续保守锁定。
+        if (options?.purpose === 'tableCreate' && managed && resourcesReleased && !task.cancelError) options.onResourcesReleased?.();
       }
       if (controller.signal.aborted || task.cancelRequested) failure ??= task.cancelError ?? (options?.progress.ddlCompleted ? undefined : new Error('任务已取消'));
       if (task.cancelError) failure = task.cancelError;
