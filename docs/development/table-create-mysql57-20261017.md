@@ -1,5 +1,7 @@
 # 准确MySQL5.7.44普通新建表
 
+Root 后续实证：固定整合 `509a57b` 的完整 6480 项、类型及构建通过，一个正式 Windows/准确 MySQL 5.7.44 新建表界面身份单次通过并核六资源零。见[实际验收及限制](../../tests/integration/acceptance-table-create-mysql57-root-20261017.md)。下文作者阶段实际0保留其原来源；这是新建表能力证明及已验组合，不表示首次支持 5.7 连接/查询，也不代表完整类型、FK、新表 tableID、安装或 macOS。
+
 本片固定基线 `6d817d9c775d15ac5ec3f32ef811ab10e84022ff`，新普通克隆及分支 `codex/employee4-table-create-mysql57-20261017`，不使用worktree，不修改Root或两旧分支。
 
 ## 原有支持与缺项

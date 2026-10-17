@@ -1,5 +1,7 @@
 # Navicat 全功能覆盖目标
 
+后续未发布检查点：准确 MySQL 5.7.44 普通新建表已增加真实会话、InnoDB 和字符集能力证明。固定 `509a57b` 的完整 6480 项、类型及构建通过；Root 保留编码配对合并冲突并新增三项组合回归，Windows 正式开发 Electron 一个准确 5.7.44 界面身份单次通过、前后六资源零，见[5.7 实证](../tests/integration/acceptance-table-create-mysql57-root-20261017.md)。不外推完整 5.7 类型/FK、安装或 macOS，也不新增新表 tableID 归属保证。
+
 后续未发布检查点：普通数值生成列 VIRTUAL/STORED 空表结构复制、新建表实际字符集与排序规则配对已整合。固定 `9d2fd9c` 的完整 6390 项、类型及构建通过，Windows 正式开发 Electron 在准确 MySQL 8.4.11 的三个界面身份单次通过，前后六资源零；原目标漂移及通知失败反例与追加修复分别保留，见[本批源码实证](../tests/integration/acceptance-generated-encoding-root-20261017.md)。生成列复杂表达式及其它版本、安装、macOS 和完整对象能力继续，不计入固定 0.21 安装候选。
 
 后续未发布新建表已完成复合外键首个正式 Windows/准确 MySQL 8.4.11 界面身份，包含 SHOW/RC/KCU 完整后核和树刷新；首轮标签定位失败及测试修正分别保留。固定生产整合 739e 的完整 6182 项、类型和构建通过，最终测试头另有 80 项定向和类型，前后六资源零，见[外键实证](../tests/integration/acceptance-table-create-fk-root-20261017.md)。其他版本、数据级联、安装及完整矩阵继续。
@@ -10,7 +12,7 @@
 
 后续未发布普通整合分支已开放准确 MySQL 8.0.46 的普通/含自增列表结构复制：固定 e8db 源码完整 5860 单元、类型和构建通过，Windows 正式开发 Electron 两个实库身份单次通过，前后六实例资源核零，见[本批实证](../tests/integration/acceptance-table-copy-mysql80-20261017.md)。不继承 0.21 安装、macOS 或直接 SQL 首次插入结果，也不外推其他版本和复杂依赖。
 
-0.21.0 固定 `93f33ec` 候选的原三平台原生 CI 已成功；Windows 本机最新实库补全三批八项单次通过并完成卸载及前后资源核零，完整批累计 103 个不同安装身份，剩余 237 个零系统剪贴板身份继续。只读前置失败、后续补全失败及单项诊断分别保留，未把诊断通过当作原失败已修；13 个原生组件另按来源核对，补充 CI 的 macOS x64 打包失败单列。尚未发布，见[补全实证](../tests/integration/acceptance-v021-completion-installed-20261017.md)、[离线实证](../tests/integration/acceptance-v021-offline-installed-20261017.md)、[本次范围](../tests/integration/acceptance-v021-priority-installed-20261017.md)及[候选说明](releases/v0.21.0.md)。不继承旧安装包或后续源码的通过数。
+0.21.0 固定 `93f33ec` 候选的原三平台原生 CI 已成功；Windows 本机最新 21 批 53 项单次通过并完成卸载及前后资源核零，完整批累计 156 个不同安装身份，剩余 184 个零系统剪贴板身份继续。编号格式前置失败为零实际，旧补全失败及单项诊断分别保留，未把诊断通过当作原失败已修；13 个原生组件另按来源核对，补充 CI 的 macOS x64 打包失败单列。尚未发布，见[53 项实证](../tests/integration/acceptance-v021-next53-installed-20261017.md)、[补全实证](../tests/integration/acceptance-v021-completion-installed-20261017.md)、[本次范围](../tests/integration/acceptance-v021-priority-installed-20261017.md)及[候选说明](releases/v0.21.0.md)。不继承旧安装包或后续源码的通过数。
 
 最新未发布检查点：复制空表结构（含自增）与单表清空已合入当前任务分支。固定功能来源 b995 完整5780单元、类型及构建通过；Windows正式开发Electron的清空一项、普通/自增复制两项均单次通过，六实例资源核零。当前目录逐段解决正文桥接/格式化冲突，104项定向与类型通过，108构建产物与已验来源逐字一致，见[本批验收与范围](../tests/integration/acceptance-table-copy-truncate-20261017.md)。复制生成列/依赖及非8.4范围仍未完成；新安装包和macOS私网不由本批接纳。以下检查点保留原始来源，不跨版本累计。
 
