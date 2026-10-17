@@ -74,16 +74,16 @@ async function style(owner: Owner) {
   });
 }
 
-test('字号热更新保留真实正文与撤销，SQLite落盘并在独立重启恢复', async ({}, info) => {
+test('字号及换行热更新保留正文与撤销，SQLite落盘并在独立重启恢复', async ({}, info) => {
   const directory = await mkdtemp(join(tmpdir(), 'dbark-font-')), owners: Owner[] = [];
   // 新建Monaco模型使用宿主默认EOL；测试输入及断言同源，不将CRLF差异误判为正文丢失。
-  const sql = "SELECT 9007199254740993 AS precision_probe;", appended = (process.platform === 'win32' ? '\r\n' : '\n') + '-- 字号撤销探针';
+  const sql = "SELECT '" + '合成换行探针'.repeat(90) + "' AS precision_probe;", appended = (process.platform === 'win32' ? '\r\n' : '\n') + '-- 字号撤销探针';
   try {
     const first = await launch(directory, owners);
     // 仅准备不会连接的离线概要和旧版缺字号设置；实际字号更改全部由界面完成。
     await first.page.evaluate(async sql => {
       const connection = await window.dbark.invoke('connections.save', { id: '', name: '字号离线来源', group: '', color: '#123456', dialect: 'mysql', host: '127.0.0.1', port: 1, user: 'offline' });
-      const old = await window.dbark.invoke('settings.get', {}); delete old.editorFontSize;
+      const old = await window.dbark.invoke('settings.get', {}); delete old.editorFontSize; delete old.editorWordWrap;
       const tab = { id: 'font-query', kind: 'query' as const, title: '字号与撤销', connectionId: connection.id, sql, databaseContext: { state: 'known' as const, database: null } };
       await window.dbark.invoke('settings.save', { ...old, tabs: [tab], activeTabId: tab.id });
     }, sql);
@@ -113,22 +113,35 @@ test('字号热更新保留真实正文与撤销，SQLite落盘并在独立重�
     await first.page.keyboard.press('Escape'); await expect(modal).toBeHidden(); expect((await style(first)).fontSize).toBe('18px');
     modal = await dialog(first); await modal.getByLabel('字号（px）', { exact: true }).fill('20'); await modal.getByRole('button', { name: '保存字号', exact: true }).click();
     await expect(modal).toBeHidden(); await expect.poll(() => settings(first).then(value => value.editorFontSize)).toBe(20);
+    // 用实际长行绘制证明换行开关，而不是只读aria属性或模拟Monaco回包。
+    const wrap = first.page.locator('.app-commandbar').getByRole('button', { name: '自动换行', exact: true });
+    await expect(wrap).toHaveAttribute('aria-pressed', 'true'); await expect.poll(() => editor.locator('.view-line').count()).toBeGreaterThan(2);
+    await wrap.click(); await expect(wrap).toHaveAttribute('aria-pressed', 'false'); await expect(editor.locator('.view-line')).toHaveCount(2);
+    await wrap.click(); await expect(wrap).toHaveAttribute('aria-pressed', 'true'); await expect.poll(() => editor.locator('.view-line').count()).toBeGreaterThan(2);
+    await wrap.click(); await expect(wrap).toHaveAttribute('aria-pressed', 'false'); await expect(editor.locator('.view-line')).toHaveCount(2);
+    expect(await editor.evaluate((element, original) => element === original, originalNode)).toBe(true);
+    expect((await style(first)).fontSize).toBe('20px');
+    await editor.getByRole('textbox').focus(); await first.page.keyboard.press(`${modifier}+z`); await expect.poll(() => activeSql(first)).toBe(undoBaseline);
+    await first.page.keyboard.press(`${modifier}+${process.platform === 'darwin' ? 'Shift+z' : 'y'}`); await expect.poll(() => activeSql(first)).toBe(sql + appended);
+    await expect.poll(() => settings(first).then(value => value.editorWordWrap)).toBe(false);
     const before = await settings(first); await close(first);
     // 仅在原应用全部退出后读取真实SQLite文件；此处不是IPC回包或内存保存替身。
     const SQL = await initSqlJs({ locateFile: name => resolve('node_modules/sql.js/dist', name) });
     const db = new SQL.Database(await readFile(join(directory, 'dbark.sqlite')));
-    try { const stored = JSON.parse(String(db.exec('SELECT data FROM settings WHERE id=1')[0].values[0][0])); expect(stored.editorFontSize).toBe(20); expect(stored.tabs).toEqual(before.tabs); }
+    try { const stored = JSON.parse(String(db.exec('SELECT data FROM settings WHERE id=1')[0].values[0][0])); expect(stored.editorFontSize).toBe(20); expect(stored.editorWordWrap).toBe(false); expect(stored.tabs).toEqual(before.tabs); }
     finally { db.close(); }
     const second = await launch(directory, owners);
     await expect(second.page.locator('.query-tab:visible .monaco-editor').getByRole('textbox')).toBeEditable();
     await expect.poll(() => style(second).then(value => value.fontSize)).toBe('20px');
+    await expect(second.page.locator('.app-commandbar').getByRole('button', { name: '自动换行', exact: true })).toHaveAttribute('aria-pressed', 'false');
+    await expect(second.page.locator('.query-tab:visible .monaco-editor .view-line')).toHaveCount(2);
     expect(await activeSql(second)).toBe(sql + appended); expect((await settings(second)).tabs).toEqual(before.tabs);
     expect(await second.page.evaluate(() => window.dbark.invoke('history.list', {}))).toEqual([]);
     expect(await second.page.evaluate(() => window.dbark.invoke('tasks.list', {}))).toEqual([]);
     await close(second); expect(owners.every(owner => owner.confirmed)).toBe(true);
     if (dirname(resolve(directory)) !== resolve(tmpdir()) || !basename(directory).startsWith('dbark-font-')) throw Error('拒绝清理非本例目录');
     await rm(directory, { recursive: true, force: false });
-    await info.attach('字号原生终态', { body: Buffer.from(JSON.stringify({ accepted: true, launches: 2, owners: owners.map(owner => ({ confirmed: owner.confirmed, closed: owner.closed, recordedProcesses: owner.ids.size })), systemClipboard: 0, databaseExecution: 0, sqliteChecked: true, directoryRemoved: true })), contentType: 'application/json' });
+    await info.attach('字号原生终态', { body: Buffer.from(JSON.stringify({ accepted: true, launches: 2, owners: owners.map(owner => ({ confirmed: owner.confirmed, closed: owner.closed, recordedProcesses: owner.ids.size })), wordWrapChecked: true, systemClipboard: 0, databaseExecution: 0, sqliteChecked: true, directoryRemoved: true })), contentType: 'application/json' });
   } catch (error) {
     // 不在未知退出时强退、删除配置或复用旧owner；保留原始失败供Root处理。
     await info.attach('字号原生保留现场', { body: Buffer.from(JSON.stringify({ directory, owners: owners.map(owner => ({ closed: owner.closed, confirmed: owner.confirmed, ids: [...owner.ids] })), automaticRetry: false })), contentType: 'application/json' });

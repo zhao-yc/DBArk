@@ -1,5 +1,7 @@
 # Navicat 全功能覆盖目标
 
+自动换行偏好已整合，并修复损坏单项设置引起工作区草稿覆盖的恢复路径。Root 8 项相关回归／类型／构建通过，Windows 长行绘制、字号共存、撤销、SQLite 及独立重启一项单次通过，见[换行实证](../tests/integration/acceptance-editor-wrap-native-20261018.md)。备份私有中继另完成准确 MySQL 8.4.11 上的正常 QUIT 与取消两场景，服务器身份／自有线程及终态逐项核对，见[中继实证](../tests/integration/acceptance-backup-relay-20261018.md)；仍未计作完整备份。新安装与完整源检查／持锁／dump／恢复继续。
+
 备份 Windows 文件运行端已补真实实证：固定原句柄／完整 ACL／合成选项写入、两官方客户端读取及原文件清理通过，Root 75 项相关回归及类型通过；新增固定 C# 编译和安装资源摘要检查门。尚无真实密码、dump、服务器持锁或完整产品入口，详见[文件运行端](../tests/integration/acceptance-backup-windows-files-20261017.md)，不计作完整备份已完成。
 
 后续高频开发已整合 SQL 编辑器字号设置及取消时旧回调保护：Root 12 项相关专项、类型与构建通过；Windows 真实 Monaco 热更新、撤销基线、SQLite 独立读回及同配置独立重启一项通过，两次正常退出及临时目录清理完成，系统剪贴板和数据库执行均为 0。新增用例已配置未来三平台源码／安装 CI，当前新安装和 macOS 尚未验收，见[字号实际检查点](../tests/integration/acceptance-editor-font-native-20261017.md)。前一备份开发头 `0f59758` 的完整 CI 为 420 文件／7915 通过／10 跳过，类型及构建通过；不外推字号或完整备份通过。
