@@ -1,4 +1,7 @@
 export const columnPatchZh = {
+  collation: '列排序规则', collationCurrent: '当前字符集 / 排序规则', collationChoose: '选择同字符集排序规则', collationReadonly: '此列未获得修改排序规则的明确授权。', collationCatalog: '本次快照缺少完整、唯一的同字符集真实候选目录。', collationInvalid: '请选择本次目录中的同字符集完整配对。', collationMixed: '列排序规则仅支持单列单属性独立修改；请先明确撤销其它草稿。', collationStale: '列排序规则快照、原值或目录已变化，请重新读取实际定义。',
+  ackCollationSemantics: '我确认列排序规则变化会影响比较、排序、分组和连接语义，可能与既有数据或外部视图、程序产生冲突；定义核验不能证明全局无影响。',
+  ackCollationAlgorithm: '我确认默认 ALTER 算法可能重建表并产生锁等待，已安排维护窗口；系统不保证在线执行或无锁。',
   noAddedOnUpdate: '不自动更新时间（不附加ON UPDATE）', addedOnUpdateHint: '新增普通DATETIME/TIMESTAMP字段须显式设置DEFAULT、NULL和一致精度。未勾选时不附加ON UPDATE，不自动补默认值或调整字段精度。',
   onUpdate: '自动更新时间', removeOnUpdate: '不自动更新时间（移除ON UPDATE）', enableOnUpdate: '修改记录时设为CURRENT_TIMESTAMP', onUpdateHint: '本片仅修改既有时间字段；精度须与原字段一致，不能与本字段其他属性混合修改。DEFAULT、可空性和注释保持原值。', onUpdateUnknown: '原自动更新时间不能可靠识别，请核对原定义。', onUpdateMixed: '自动更新时间不能与同一字段其他属性混合修改。', onUpdatePrecision: '自动更新时间精度必须与现有字段精度一致。',
   title: '字段差异编辑', read: '重新读取实际定义', reading: '读取字段定义', preview: '生成字段差异预览', apply: '确认执行本次字段差异', cancel: '取消任务', close: '关闭', back: '返回差异编辑',
