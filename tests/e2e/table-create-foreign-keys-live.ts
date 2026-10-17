@@ -122,8 +122,9 @@ export function registerTableCreateForeignKeysUiTests() {
           await ui(() => designer.getByRole('button', { name: zh.schema.text045, exact: true }).click());
           const foreign = designer.locator('.foreign-card');
           for (const [label, value] of [[zh.schema.text037, 'fk_child_parent'], [zh.schema.text038, 'child_a, child_b'], [zh.schema.text039, context.database], [zh.schema.text040, 'fk_parent'], [zh.schema.text041, 'parent_a, parent_b']]) await ui(() => foreign.getByLabel(label, { exact: true }).fill(value));
-          await ui(() => foreign.getByLabel(zh.schema.text042, { exact: true }).selectOption('CASCADE'));
-          await ui(() => foreign.getByLabel(zh.schema.text043, { exact: true }).selectOption('CASCADE'));
+          // Field把选项文字也包含在label内；按准确可见标签定位其关联select，避免精确label全文失配。
+          await ui(() => foreign.locator('label.field').filter({ has: page.getByText(zh.schema.text042, { exact: true }) }).getByRole('combobox').selectOption('CASCADE'));
+          await ui(() => foreign.locator('label.field').filter({ has: page.getByText(zh.schema.text043, { exact: true }) }).getByRole('combobox').selectOption('CASCADE'));
           await ui(() => designer.getByRole('button', { name: zh.schema.text049, exact: true }).click());
           const confirmation = page.getByRole('dialog', { name: text.title, exact: true });
           await ui(() => expect(confirmation.locator('.monaco-editor .view-lines')).toContainText('FOREIGN KEY'));
