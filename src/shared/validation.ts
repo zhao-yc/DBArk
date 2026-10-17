@@ -1,4 +1,4 @@
-import { tableCopyStructureAcknowledgements, validateTableCopyStructureName } from './tableCopyStructure';
+import { tableCopyStructureKnownAcknowledgements, validateTableCopyStructureName } from './tableCopyStructure';
 import { z } from 'zod';
 import { csvExportFieldLimits } from './csvExportFields';
 import { taskCancelInputSchema } from './taskCancelState';
@@ -162,7 +162,7 @@ export const commandSchemas: Record<Command, z.ZodType> = {
   'schema.indexes.get': z.object({ connectionId: id, database: z.string().min(1).max(64), table: z.string().min(1).max(64), taskId: id }).strict(),
   'schema.tableCopyStructure.get': z.object({ connectionId: id, database: foreignKeyTargetName, table: foreignKeyTargetName, taskId: id }).strict(),
   'schema.tableCopyStructure.preview': z.object({ snapshotId: id, newName: z.string().max(64).transform(value => validateTableCopyStructureName(value)), taskId: id }).strict(),
-  'schema.tableCopyStructure.apply': z.object({ previewToken: id, confirmation: z.string().min(3).max(129), acknowledgements: z.array(z.enum(tableCopyStructureAcknowledgements)).length(3).refine(value => new Set(value).size === value.length), taskId: id }).strict(),
+  'schema.tableCopyStructure.apply': z.object({ previewToken: id, confirmation: z.string().min(3).max(129), acknowledgements: z.array(z.enum(tableCopyStructureKnownAcknowledgements)).min(3).max(4).refine(value => new Set(value).size === value.length), taskId: id }).strict(),
   'schema.tableCopyStructure.release': z.object({ snapshotId: id.optional(), previewToken: id.optional() }).strict().refine(value => !!value.snapshotId || !!value.previewToken),
   'schema.tableRename.get': z.object({ connectionId: id, database: foreignKeyTargetName, table: foreignKeyTargetName, taskId: id }).strict(),
   'schema.tableRename.preview': z.object({ snapshotId: id, newName: z.string().max(64).transform(value => validateTableRenameName(value)), taskId: id }).strict(),

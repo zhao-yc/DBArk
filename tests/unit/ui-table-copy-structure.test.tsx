@@ -112,7 +112,20 @@ describe('复制结构真实对话框反例（内存ReactDOM，不冒充原生�
   });
   it.each(['wrong-target','wrong-hash','expired','unknown-ack'] as const)('拒绝预览响应%s，不产生可执行授权', async reason => {
     await mount({ preview: async () => ({ ...preview(), ...(reason === 'wrong-target' ? { target: { ...target, table: 'other' } } : reason === 'wrong-hash' ? { ddlHash: 'other' } : reason === 'expired' ? { expiresAt: new Date(0).toISOString() } : { requiredAcknowledgements: ['__proto__'] }) }) });
-    await type('t_copy', text.newName); await click(text.preview); if (reason === 'unknown-ack') { await type('db.t_copy'); expect(button(text.apply).disabled).toBe(true); } else expect(services.release).toHaveBeenCalledWith({ previewToken: 'p' });
+    await type('t_copy', text.newName); await click(text.preview); expect(services.release).toHaveBeenCalledWith({ previewToken: 'p' });
     expect(services.apply).not.toHaveBeenCalled();
+  });
+  it('自增预览逐字展示准确源值/新值，专属风险未确认不能发送；计数不符保留创建事实', async () => {
+    const autoIncrement = { column: { name: 'id', type: 'bigint unsigned', maximum: '18446744073709551615' }, sourceValue: '9007199254740993', expectedNewValue: '1' as const };
+    await mount({ get: async () => ({ ...snapshot(), autoIncrement }), preview: async () => ({ ...preview(), autoIncrement, requiredAcknowledgements: [...tableCopyStructureAcknowledgements, 'auto-increment-copy'] }) });
+    await type('t_copy', text.newName); await click(text.preview); await type('db.t_copy'); await act(async () => { for (const node of document.querySelectorAll('input[type="checkbox"]').slice(0, 3)) { node.checked = true; node.dispatchEvent(new MemoryEvent('click')); } });
+    expect(button(text.apply).disabled).toBe(true); expect(document.body.textContent).toContain('9007199254740993'); expect(document.body.textContent).toContain(text.newCounter + '：1');
+    await acknowledge(); vi.mocked(services.apply).mockResolvedValueOnce({ target, newTarget: { ...target, table: 't_copy' }, ddlSubmitted: true, ddlCompleted: true, definitionVerified: false, structureVerified: true, counter: { state: 'different', sourceValue: autoIncrement.sourceValue, expectedValue: '1', actualValue: '2' }, warnings: [], verificationError: '准确计数不符' }); await click(text.apply, true);
+    expect(services.apply).toHaveBeenCalledTimes(1); expect(vi.mocked(services.apply).mock.calls[0][0].acknowledgements).toContain('auto-increment-copy'); expect(document.body.textContent).toContain(text.actualCounter + '：2'); expect(props.onApplied).toHaveBeenCalledWith(expect.objectContaining({ ddlCompleted: true, definitionVerified: false, structureVerified: true })); expect(button(text.apply).disabled).toBe(true);
+  });
+  it('自增计划回包若源观测或预期值不符，不能显示可执行预览', async () => {
+    const autoIncrement = { column: { name: 'id', type: 'int', maximum: '2147483647' }, sourceValue: '42', expectedNewValue: '1' as const };
+    await mount({ get: async () => ({ ...snapshot(), autoIncrement }), preview: async () => ({ ...preview(), autoIncrement: { ...autoIncrement, sourceValue: '43' }, requiredAcknowledgements: [...tableCopyStructureAcknowledgements, 'auto-increment-copy'] }) });
+    await type('t_copy', text.newName); await click(text.preview); expect(services.release).toHaveBeenCalledWith({ previewToken: 'p' }); expect(services.apply).not.toHaveBeenCalled();
   });
 });
