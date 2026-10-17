@@ -1,0 +1,7 @@
+{
+  "sourceCommit": "b084246203a6a793a205e1a78366c6d72ec4a4e5",
+  "purpose": "固定只读整行详情与受控关闭其他查询的产品增量，执行Windows x64和macOS arm64/x64源码及真实安装检查；批量关闭两项保持离线并分别预检固定端口",
+  "systemClipboardRequested": false,
+  "databaseIntegrationRequested": false,
+  "publicationRequested": false
+}
