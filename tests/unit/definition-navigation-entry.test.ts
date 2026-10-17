@@ -40,7 +40,7 @@ describe('W03正式定义导航入口的默认关闭与列举隔离', () => {
 
 it('正式分支保留八项原场景，并明确关闭轨迹和启用所属资源保留模式（仅注册不执行）', () => {
   const names: string[] = [], options: unknown[] = [], hooks: unknown[] = [];
-  const test = Object.assign((name: string, _body: unknown) => names.push(name), { skip() {}, use: (value: unknown) => options.push(value), setTimeout() {}, beforeEach: (hook: unknown) => hooks.push(hook) });
+  const test = Object.assign((name: string, _body: unknown) => names.push(name), { skip() {}, use: (value: unknown) => options.push(value), setTimeout() {}, beforeEach: (hook: unknown) => hooks.push(hook), afterEach: (hook: unknown) => hooks.push(hook) });
   const cases = resolve('tests/e2e/definition-navigation-cases.ts');
   const source = readFileSync(existsSync(cases) ? cases : resolve('tests/e2e/definition-navigation.spec.ts'), 'utf8');
   vm.runInNewContext(ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText, { exports: {}, require(name: string) {
@@ -51,14 +51,14 @@ it('正式分支保留八项原场景，并明确关闭轨迹和启用所属资�
     throw Error('注册不得加载其它模块：' + name);
   } });
   expect(names).toHaveLength(8); expect(names.some(name => name.includes('延迟真实定义回包'))).toBe(true); expect(names.some(name => name.includes('真实CRLF正文'))).toBe(true);
-  expect(options).toEqual([{ trace: 'off', screenshot: 'off', video: 'off', preserveOnUnconfirmedExit: true }]); expect(hooks).toHaveLength(1);
+  expect(options).toEqual([{ trace: 'off', screenshot: 'off', video: 'off', preserveOnUnconfirmedExit: true }]); expect(hooks).toHaveLength(2);
 });
 
 /** 调用真实connectAndCreate；页面只记录控件操作，不连接数据库、加载证书或启动Electron。 */
-function formFixture(expireAfterFill = false, scenario?: 'success' | 'exitUnknown' | 'observerUnknown' | 'tasksPending' | 'applyFailed') {
+function formFixture(expireAfterFill = false, scenario?: 'success' | 'exitUnknown' | 'observerUnknown' | 'tasksPending' | 'applyFailed' | 'noCreate' | 'missingAck') {
   const actions: { path: string; action: string; value?: unknown }[] = [], checks: string[] = [], queries: unknown[] = []; let expired = false, evaluation = 0, retained = false, exited = false;
   const end = vi.fn(async () => {}), confirm = vi.fn(async () => { if (scenario === 'exitUnknown') throw Error('退出未确认'); exited = true; });
-  const owner = { assertCurrent() { checks.push('核归属'); if (expired) throw Error('本例归属失效'); }, desktop: { evaluate: async () => {} }, page: undefined as any };
+  const owner = { assertCurrent() { checks.push('核归属'); if (expired) throw Error('本例归属失效'); }, desktop: { browserWindow: async () => ({ evaluate: async () => 101, dispose: async () => {} }), evaluate: async (callback: Function) => callback.toString().includes("phase === \"confirmed\"") || callback.toString().includes("phase === 'confirmed'") ? scenario !== 'missingAck' : undefined }, page: undefined as any };
   const locator = (path: string): any => new Proxy({}, { get(_target, key: string) {
     if (key === 'then') return undefined;
     if (key === 'getByRole') return (role: string, options: { name: string } = { name: role }) => locator(path + '/' + role + ':' + options.name);
@@ -66,15 +66,16 @@ function formFixture(expireAfterFill = false, scenario?: 'success' | 'exitUnknow
     if (key === 'locator') return (value: string) => locator(path + '/' + value);
     if (key === 'filter') return () => locator(path);
     if (key === 'evaluate') return async () => ++evaluation === 1 ? [{ id: 'c', name: actions.find(item => item.path.endsWith('连接名称') && item.action === 'fill')!.value, port: 13384 }] : evaluation === 2 ? { version: '8.4.11', dialect: 'mysql' } : scenario === 'tasksPending' || scenario === 'applyFailed' ? [{ kind: 'schema.databaseCreate.apply', status: scenario === 'tasksPending' ? 'running' : 'failed' }] : [];
-    return async (value?: unknown) => { actions.push({ path, action: key, value }); if (expireAfterFill && key === 'fill') expired = true; };
+    return async (value?: unknown) => { actions.push({ path, action: key, value }); if (expireAfterFill && key === 'fill') expired = true; if (scenario === 'noCreate' && key === 'click' && path.endsWith(databaseText.preview)) throw Error('预览前失败，CREATE未发送'); };
   } }); owner.page = locator('页面');
   const exports: any = {}, source = readFileSync(resolve('tests/e2e/definition-navigation-live.ts'), 'utf8');
-  vm.runInNewContext(ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022, esModuleInterop: true } }).outputText, {
+  vm.runInNewContext(ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022, esModuleInterop: true } }).outputText + '\nconst isolatedOriginal = exports.isolatedDatabase; exports.isolatedDatabase = (body, info) => isolatedOriginal(body, Object.assign({_startWallTime:Date.now()}, info));', {
     exports, console: { info() {} }, process: { platform: 'win32', env: { DBARK_TEST_HOST: '已核对测试服务器', DBARK_TEST_PORT: '13384', DBARK_TEST_USER: '既有账号', DBARK_TEST_TLS: '0', DBARK_INTEGRATION_ENABLED: scenario ? '1' : '0', DBARK_W03_DEFINITION_NAVIGATION_TEST: scenario ? '1' : '0' } },
     require(name: string) {
       if (name === 'node:crypto') return { randomUUID() { if (scenario) return 'a'.repeat(32); throw Error('表单端口不生成资源'); } };
       if (name === 'node:fs') return new Proxy({}, { get() { throw Error('表单端口禁止证书或文件读取'); } });
-      if (name === 'mysql2/promise') return { createConnection() { if (!scenario) throw Error('表单端口禁止实库'); return Promise.resolve({ query: async (sql: unknown) => { queries.push(sql); if (scenario === 'observerUnknown') throw Error('观察结果未知'); return [[]]; }, end }); } };
+      if (name === 'mysql2/promise') return { createConnection() { if (!scenario) throw Error('表单端口禁止实库'); return Promise.resolve({ query: async (sql: unknown) => { queries.push(sql); if (scenario === 'observerUnknown') throw Error('观察结果未知'); return [[]]; }, end }).then(raw => { if (!('connection' in raw)) Object.assign(raw, { connection: { stream: { closed: false, once() {}, removeListener() {}, end() {}, destroy() {} }, end() {}, destroy() {} } }); return raw; }); } };
+      if (name.endsWith('/engine/connection')) return { closeMysqlConnection: async (native: any) => { await end(); native.stream.closed = true; } };
       if (name.endsWith('/databaseCreate.zh-CN')) return { databaseCreateZh: databaseText };
       if (name.endsWith('/zh-CN')) return { zh };
       if (name.endsWith('/tableDefaultEncodingTarget')) return { assertDefaultEncodingLiveTarget() { checks.push('核目标'); } };
@@ -112,4 +113,15 @@ describe('W03专用夹具本例归属及失败停链收尾（仅RAM端口）', (
     const value = formFixture(false, 'exitUnknown'); const reason = await value.isolated(async () => { throw Error('原断言失败'); }).catch((error: AggregateError) => error);
     expect(reason.errors.map((error: Error) => error.message)).toEqual(['原断言失败', '退出未确认']); expect(value.end).not.toHaveBeenCalled(); expect(value.retained()).toBe(true);
   });
+});
+
+
+it('仅确认原先不存在、CREATE未发送时不DROP；正常退出并严格关闭观察连接', async () => {
+  const f = formFixture(false, 'noCreate'); await expect(f.isolated()).rejects.toThrow('CREATE未发送'); expect(f.confirm).toHaveBeenCalledOnce(); expect(f.end).toHaveBeenCalledOnce(); expect(f.queries).toHaveLength(1); expect(f.retained()).toBe(false);
+});
+it('已进入CREATE但准确ACK未确认时本地停链，不退出、不DROP或重放', async () => {
+  const f = formFixture(false, 'missingAck'); await expect(f.isolated()).rejects.toThrow(); expect(f.retained()).toBe(true); expect(f.confirm).not.toHaveBeenCalled(); expect(f.end).not.toHaveBeenCalled(); expect(f.queries).toHaveLength(1);
+});
+it('已确认CREATE后的普通已知断言失败保留首因，仍允许本例正常收尾', async () => {
+  const f = formFixture(false, 'success'); await expect(f.isolated(async () => { throw Error('已知断言失败'); })).rejects.toThrow('已知断言失败'); expect(f.confirm).toHaveBeenCalledOnce(); expect(f.end).toHaveBeenCalledOnce(); expect(f.queries).toHaveLength(3); expect(f.retained()).toBe(false);
 });
