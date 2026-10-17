@@ -56,7 +56,7 @@ export function registerTableDropUiTests() {
       await observe(owner, () => context.observer.query(`INSERT INTO ${target} VALUES(1,'合成待删除数据')`)); owner.assertCurrent();
       await open(owner, context); owner.assertCurrent();
       // 先证明定位器在真实标签上有命中，删除后的零计数才不会因旧CSS类失配而空通过。
-      const originalTab = page(owner).locator('.workspace-tab .tab-select').getByText('subject', { exact: true });
+      const originalTab = page(owner).locator('.workspace-tab-button .tab-select').getByText('subject', { exact: true });
       await expect(originalTab).toHaveCount(1); owner.assertCurrent();
       await dialog(owner).getByRole('button', { name: text.preview, exact: true }).click(); owner.assertCurrent();
       await expect(dialog(owner).locator('.monaco-editor .view-lines')).toContainText('DROP TABLE'); owner.assertCurrent();
