@@ -53,16 +53,16 @@ describe('命名方案真实SQLite、CAS与原子持久化',()=>{
   expect(()=>validateTablePresetBudget(500,500,4*1024*1024)).not.toThrow();for(const args of [[501,500,1],[500,501,1],[500,500,4*1024*1024+1]])expect(()=>validateTablePresetBudget(...args as [number,number,number])).toThrow();store.close();
  });
 });
-describe('schema7迁移保护',()=>{
+describe('schema8迁移保护',()=>{
  it('真实旧schema6的设置/查询/历史/秘密槽和其它原表记录逐表不变',async()=>{
   const {store,file}=await fixture();store.saveQuery({id:'q',name:'旧查询',sql:'原文',updatedAt:'2026-10-18T00:00:00Z'});store.addHistory({id:'h',connectionId:profile.id,sql:'旧历史',startedAt:'2026-10-18T00:00:00Z',elapsedMs:1,success:true});store.saveSettings({...store.settings(),sidebarWidth:345});store.close();
   const SQL=await initSqlJs({locateFile:()=>wasm}),old=new SQL.Database(readFileSync(file));old.run('DROP TABLE table_presets;PRAGMA user_version=6');
   const tables=['connections','secrets','queries','history','settings','workbench','sql_snippets','table_preferences','tasks','table_apply_receipts'];const before=tables.map(name=>old.exec('SELECT * FROM '+name));writeFileSync(file,old.export());old.close();
-  const migrated=await LocalStore.open(file,wasm,protector);expect(migrated.tablePresets(target).entries).toEqual([]);migrated.close();const after=new SQL.Database(readFileSync(file));expect(after.exec('PRAGMA user_version')[0].values[0][0]).toBe(7);expect(tables.map(name=>after.exec('SELECT * FROM '+name))).toEqual(before);after.close();
+  const migrated=await LocalStore.open(file,wasm,protector);expect(migrated.tablePresets(target).entries).toEqual([]);migrated.close();const after=new SQL.Database(readFileSync(file));expect(after.exec('PRAGMA user_version')[0].values[0][0]).toBe(8);expect(tables.map(name=>after.exec('SELECT * FROM '+name))).toEqual(before);after.close();
  });
  it.each(['future','document','migration'] as const)('%s失败保持原文件字节，不猜测降级',async mode=>{
   const {store,file}=await fixture();store.close();const SQL=await initSqlJs({locateFile:()=>wasm}),db=new SQL.Database(readFileSync(file));
-  if(mode==='future')db.run('PRAGMA user_version=8');
+  if(mode==='future')db.run('PRAGMA user_version=9');
   if(mode==='document')db.run('INSERT INTO table_presets VALUES (?,?,?,?)',[target.connectionId,target.database,target.table,JSON.stringify({version:2,revision:0,entries:[]})]);
   if(mode==='migration')db.run('DROP TABLE table_presets;PRAGMA user_version=6');
   writeFileSync(file,db.export());db.close();if(mode==='migration')mkdirSync(file+'.tmp');const before=readFileSync(file);

@@ -87,7 +87,7 @@ test('真实 schema2 配置启动迁移至 schema6，既有查询片段设置原
   const before = old.exec('SELECT * FROM connections; SELECT * FROM queries; SELECT * FROM sql_snippets; SELECT * FROM settings'); await writeFile(file, old.export()); old.close();
   await launchDesktop();
   const migrated = new SQL.Database(await readFile(file));
-  expect(migrated.exec('PRAGMA user_version')[0].values[0][0]).toBe(7);
+  expect(migrated.exec('PRAGMA user_version')[0].values[0][0]).toBe(8);
   expect(migrated.exec('SELECT * FROM connections; SELECT * FROM queries; SELECT * FROM sql_snippets; SELECT * FROM settings')).toEqual(before);
   // 校验列名、类型、非空和主键约束，不能仅靠版本号声称迁移成功。
   expect(migrated.exec('PRAGMA table_info(table_apply_receipts)')[0].values).toEqual([

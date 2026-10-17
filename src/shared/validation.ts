@@ -1,3 +1,4 @@
+import { assertQueryLayoutWrite, queryLayoutLimits } from './queryLayout';
 import { assertEditorIndentationWrite, editorIndentationLimits } from './editorIndentation';
 import { editorFontLimits } from './editorFont';
 import { tableCopyDataMode, tableCopyDataAcknowledgements } from './tableCopyData';
@@ -236,12 +237,17 @@ export const commandSchemas: Record<Command, z.ZodType> = {
   'snippets.list': empty, 'snippets.save': snippetSchema, 'snippets.delete': z.object({ id }).strict(),
   'history.list': z.object({ connectionId: id.optional() }).strict(), 'tasks.list': empty, 'tasks.cancelState': taskCancelInputSchema,
   'history.page':historyPageInputSchema,'history.pageContinue':localSqlPageNextSchema,'history.pageRelease':localSqlPageReleaseSchema,'history.read':historyReadSchema,'history.readError':historyErrorReadSchema,
-  'settings.get': empty, 'settings.save': z.object({ theme: z.enum(['dark','light']), sidebarWidth: z.number().min(180).max(600), resultLimit: z.number().int().min(1).max(100000), pageSize: z.number().int().min(1).max(1000), dataTypeColors: z.boolean().optional(), editorFontSize: z.number().int().min(editorFontLimits.min).max(editorFontLimits.max).optional(), editorWordWrap: z.boolean().optional(), editorTabSize: z.number().int().min(editorIndentationLimits.min).max(editorIndentationLimits.max).optional(), editorInsertSpaces: z.boolean().optional(), tabs: z.array(z.object({ id, kind: z.enum(['query','table']), title: name, connectionId: id, database: z.string().optional(), databaseContext:queryDatabaseContext.optional(), table: z.string().optional(), sql: text.optional(), sourceBinding: querySourceBindingSchema.optional() }).strict()).max(100), activeTabId: z.string().optional() }).strict().superRefine((value, context) => { try { assertEditorIndentationWrite(value); } catch (error) { context.addIssue({ code: z.ZodIssueCode.custom, message: error instanceof Error ? error.message : '缩进偏好无效' }); } })
+  'settings.get': empty, 'settings.save': z.object({ theme: z.enum(['dark','light']), sidebarWidth: z.number().min(180).max(600), resultLimit: z.number().int().min(1).max(100000), pageSize: z.number().int().min(1).max(1000), dataTypeColors: z.boolean().optional(), editorFontSize: z.number().int().min(editorFontLimits.min).max(editorFontLimits.max).optional(), editorWordWrap: z.boolean().optional(), editorTabSize: z.number().int().min(editorIndentationLimits.min).max(editorIndentationLimits.max).optional(), editorInsertSpaces: z.boolean().optional(), tabs: z.array(z.object({ id, kind: z.enum(['query','table']), title: name, connectionId: id, database: z.string().optional(), databaseContext:queryDatabaseContext.optional(), table: z.string().optional(), sql: text.optional(), sourceBinding: querySourceBindingSchema.optional(), queryEditorHeight: z.number().int().min(queryLayoutLimits.minEditorHeight).max(queryLayoutLimits.maxEditorHeight).optional() }).strict()).max(100), activeTabId: z.string().optional() }).strict().superRefine((value, context) => { try { assertEditorIndentationWrite(value); assertQueryLayoutWrite(value); } catch (error) { context.addIssue({ code: z.ZodIssueCode.custom, message: error instanceof Error ? error.message : '缩进偏好无效' }); } })
 };
 
 /** 只接受已声明命令；剔除任意路径、原型字段和其他非约定输入。 */
 export function validateCommand(command: string, input: unknown): unknown {
   if (!Object.hasOwn(commandSchemas, command)) throw new Error('不支持的客户端操作');
+  // 先检查原始自有字段，避免optional或对象解析把显式undefined/继承值变成缺项。
+  if (command === 'settings.save' && input && typeof input === 'object') {
+    try { assertQueryLayoutWrite(input as { tabs?: unknown }); }
+    catch (error) { throw new Error(`参数无效：${error instanceof Error ? error.message : '查询布局无效'}`); }
+  }
   const result = commandSchemas[command as Command].safeParse(input);
   if (!result.success) throw new Error(`参数无效：${result.error.issues.map(x => `${x.path.join('.')} ${x.message}`).join('；')}`);
   return result.data;

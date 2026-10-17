@@ -141,6 +141,6 @@ describe('表布局本地持久化', () => {
     await expect(LocalStore.open(file, wasm, protector)).rejects.toThrow('修改未保存'); expect(readFileSync(file).equals(before)).toBe(true); removeWriteBlocker(file);
     const restored = await LocalStore.open(file, wasm, protector); expect(restored.resolveConnection(profile.id).password).toBe(profile.password); expect(restored.queries()[0].sql).toBe('SELECT 7'); expect(restored.snippets()[0].sql).toBe('SELECT 8'); expect(restored.settings().theme).toBe('light'); expect(restored.tablePreferences(target)).toBeNull(); restored.close();
     expect(snapshot()).toEqual(oldRows);
-    const db = new SQL.Database(readFileSync(file)); expect(db.exec('PRAGMA user_version')[0].values[0][0]).toBe(7); db.close();
+    const db = new SQL.Database(readFileSync(file)); expect(db.exec('PRAGMA user_version')[0].values[0][0]).toBe(8); db.close();
   });
 });

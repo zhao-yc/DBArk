@@ -1,3 +1,4 @@
+import { assertQueryLayoutWrite, readQueryEditorHeight } from '../shared/queryLayout';
 import { assertEditorIndentationWrite, editorIndentationLimits, readEditorInsertSpaces, readEditorTabSize } from '../shared/editorIndentation';
 import { assertEditorWordWrap, defaultEditorWordWrap, readEditorWordWrap } from '../shared/editorWordWrap';
 import { assertEditorFontSize, editorFontLimits, readEditorFontSize } from '../shared/editorFont';
@@ -49,7 +50,8 @@ export class LocalStore {
   /** 版本迁移在事务中进行，失败时保留原磁盘文件。 */
   private migrate(): void {
     const version = Number(this.db.exec('PRAGMA user_version')[0]?.values[0]?.[0] ?? 0);
-    if (version > 7) throw new Error('配置库由更新版本的 DBArk 创建，请使用新版本打开');
+    if (version > 8) throw new Error('配置库由更新版本的 DBArk 创建，请使用新版本打开');
+    // schema8保护新查询标签布局；旧0.22的严格合同不识别此字段，不能降级打开。
     // 未知方案版本或损坏文档在任何迁移落盘前拒绝，不能猜测降级或重写原文件。
     if (this.db.exec("SELECT 1 FROM sqlite_master WHERE type='table' AND name='table_presets'").length) {
       for (const document of this.records<unknown>('SELECT data FROM table_presets')) tablePresetDocumentSchema.parse(document);
@@ -69,7 +71,7 @@ export class LocalStore {
         CREATE TABLE IF NOT EXISTS table_preferences (connection_id TEXT NOT NULL, database_name TEXT NOT NULL, table_name TEXT NOT NULL, data TEXT NOT NULL, PRIMARY KEY(connection_id,database_name,table_name));
         CREATE TABLE IF NOT EXISTS table_apply_receipts (id TEXT PRIMARY KEY, data TEXT NOT NULL, started_at TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS table_presets (connection_id TEXT NOT NULL, database_name TEXT NOT NULL, table_name TEXT NOT NULL, data TEXT NOT NULL, PRIMARY KEY(connection_id,database_name,table_name));
-        PRAGMA user_version=7;`);
+        PRAGMA user_version=8;`);
     });
     for (const receipt of this.records<TableApplyReceipt>('SELECT data FROM table_apply_receipts').map(parseTableApplyReceipt)) if (receipt.phase !== 'terminal') this.saveTableApplyReceipt(interruptTableApplyReceipt(receipt));
     const confirmedEdits = new Map(this.records<TableApplyReceipt>('SELECT data FROM table_apply_receipts').map(parseTableApplyReceipt).filter(r => r.outcome === 'committed').map(r => [r.operationId, r]));
@@ -459,8 +461,14 @@ export class LocalStore {
   /** 合并默认偏好，兼容缺少新增配置字段的旧记录。 */
   settings(): AppSettings {
     const stored = this.records<AppSettings>('SELECT data FROM settings WHERE id=1')[0];
+    // 高度只处理对应标签：缺项保持缺项，坏值局部回退；表标签移除不适用字段，不写回。
+    const tabs = Array.isArray(stored?.tabs) ? stored.tabs.map(tab => {
+      if (!tab || typeof tab !== 'object' || !Object.hasOwn(tab, 'queryEditorHeight')) return tab;
+      if (tab.kind === 'query') return { ...tab, queryEditorHeight: readQueryEditorHeight(tab.queryEditorHeight) };
+      const { queryEditorHeight: _height, ...unchanged } = tab; return unchanged;
+    }) : stored?.tabs ?? defaultSettings.tabs;
     // 旧颜色标志只认true；缺项或损坏字号回退13，不迁移数据库或隐式强转。
-    return { ...defaultSettings, ...stored, dataTypeColors: stored?.dataTypeColors === true, editorFontSize: readEditorFontSize(stored?.editorFontSize), editorWordWrap: readEditorWordWrap(stored?.editorWordWrap), editorTabSize: readEditorTabSize(stored?.editorTabSize), editorInsertSpaces: readEditorInsertSpaces(stored?.editorInsertSpaces) };
+    return { ...defaultSettings, ...stored, tabs, dataTypeColors: stored?.dataTypeColors === true, editorFontSize: readEditorFontSize(stored?.editorFontSize), editorWordWrap: readEditorWordWrap(stored?.editorWordWrap), editorTabSize: readEditorTabSize(stored?.editorTabSize), editorInsertSpaces: readEditorInsertSpaces(stored?.editorInsertSpaces) };
   }
   /** 独立配置表按需创建，旧库无收藏时返回空配置，不把秘密或工作区 SQL 混入收藏。 */
   workbench(): WorkbenchSnapshot {
@@ -483,6 +491,7 @@ export class LocalStore {
   saveSettings(settings: AppSettings): void {
     // 新缩进字段缺项兼容旧调用；显式坏值先拒绝，不能进入事务或写盘。
     assertEditorIndentationWrite(settings);
+    assertQueryLayoutWrite(settings);
     // 直接存储入口同样拒绝非布尔值；未指定的旧调用仍兼容默认关闭。
     if (settings.dataTypeColors !== undefined && typeof settings.dataTypeColors !== 'boolean') throw new Error('类型颜色偏好必须是布尔值');
     // 兼容缺项的旧调用；显式字号不得越界或借字符串/小数绕过IPC。
