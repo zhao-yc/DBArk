@@ -35,3 +35,21 @@ Root `163035e` 仅为原 VM 补同样的 `{ current: null }`，该场景没有�
 | 修正后 19 项 | `0b36a35e7bbfdb96ef92261b461109ecd4dd4a001b6070b060fd1e7538aaf9e3` |
 
 原生检查头 `a04a61d` 仅比固定来源 d0b337e 增加检查标记；其 Linux job 的同类原夹具失败及三个桌面 job 须按各自终态单独记录，不提前接纳新安装或其它平台。
+
+## 修后完整 CI 与三平台原生终态
+
+[Root 8200537 的完整 CI 39057665140](https://github.com/zhao-yc/DBArk/actions/runs/39057665140) 已成功：436 个文件、8109 项通过、10 项条件跳过，类型与源码构建通过。原 d0b337e 失败仍按上节保留。
+
+[原生固定头 a04a61d 的运行 39057012742](https://github.com/zhao-yc/DBArk/actions/runs/39057012742) 的 Windows x64、macOS arm64、macOS x64 三个桌面 job 分别成功；各源码阶段 74 通过／290 条件跳过，各真实安装阶段同样 74 通过／290 条件跳过，0 重试。三平台均包含查询复制与字号／换行热更新及独立重启恢复；实际 NSIS／DMG 安装启动及测试安装目录清理均完成。Windows 安装资源 helper 摘要匹配，未在本片执行 helper 协议。
+
+该原生运行整体仍因 Linux job 的原 `duplicateIntent` 提取夹具失败显示红，发布 job 被跳过；不能把整条运行改为成功。已分别按路径比对：a04a61d 与 d0b337e、8200537 与 d0b337e 的产品 src、E2E、脚本、包配置、锁文件及工作流一致，修后变化只涉及旧单元夹具及文档。桌面结果与新完整 CI 分别记录，不能外推未执行的私网、实际取消或数据库会话隔离。
+
+| 原 job 日志（本地保存为 LF） | SHA-256 |
+| --- | --- |
+| 8200537 完整 117468862845 | `df5fc9d87b49d18c0ca24bebd3c41ccf0a5cdc0b878fc96918baa3f1fa2b435b` |
+| a04a61d 原 Linux 117466939014 | `29c7f9b932b03f6ff5a638d6bcb981c16750e4ec9818630e1a3ad6bfe94e8aaf` |
+| Windows x64 117466939125 | `c488001b68cb0efcd582bc412e0b17b5417acb75208822b9062efb53bb272019` |
+| macOS arm64 117466939140 | `660d599ace76767eaf8cf4110fe5cc7d36e499a379fb7fcbb277bc1facbba808` |
+| macOS x64 117466939174 | `d6a27f1a215296d64d2699acf881b0148fbfc16f72214b39466f914afe44bb11` |
+
+这批为未签名检查构建，macOS 未公证；尚未创建标签或发布新的公开附件，公开预览仍为 0.20.0。

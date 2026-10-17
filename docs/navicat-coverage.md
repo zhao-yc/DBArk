@@ -1,6 +1,8 @@
 # Navicat 全功能覆盖目标
 
-新整合 `d0b337e` 的完整CI有8108通过／1失败／10跳过，唯一为旧当前语句AST夹具遗漏新复制ref；Root `163035e` 补组件相同的初始null引用，原红复现后19项通过，产品／E2E／构建等路径字节相同。新完整终态与固定原生 `a04a61d` 的三平台源码／安装继续单独核，见[夹具原红与范围](../tests/integration/acceptance-query-duplicate-native-20261018.md)。不将原红改绿、不增加发行计数。
+固定 `8200537` 的修后完整 CI 已成功：436 文件／8109 项通过／10 条件跳过，类型及构建通过。固定原生 `a04a61d` 的 Windows x64、macOS arm64／x64 三个桌面 job 均已成功，各源码及真实安装阶段分别 74 通过／290 条件跳过，包含查询复制与编辑器偏好恢复。原 d0b337e 完整 CI 及 a04a61d 的 Linux job 仍保留旧提取夹具遗漏 ref 的失败，原生运行整体仍为红；产品／E2E／构建路径已独立比对相同，见[准确分层终态](../tests/integration/acceptance-query-duplicate-native-20261018.md)。没有新增公开发行。
+
+同一 `8200537` 的真实 Engine 补全目录正常收尾已在 MySQL 5.7.44／8.0.46／8.4.11、MariaDB 10.11.19／11.4.13 及严格 TLS MySQL8.4.11 六组合分别单次通过：三列完整目录、原命令／流关闭、原服务器线程消失及本例零行库清理均确认。只覆盖正常目录，不扩大实际取消或其它平台界面，见[六实例收尾](../tests/integration/acceptance-completion-close-matrix-20261018.md)。
 
 后续Root `36d0562` 已修补全目录严格收尾，目录相关37项、合并类型／构建通过；Windows准确MySQL8.4.11的原点号自动补全、三列真实建议及精确插入正式无旁观一项单次通过，原红及诊断保持，原库／线程／配置目录清理完成，见[正式复验](../tests/integration/acceptance-upsert-completion-20261018.md)。“复制为新查询”及草稿基线保护另有53项相关通过，固定 `c17ad63` 的Windows正式离线原生一项已核原始正文／换行、保存来源、副本独立、实际Undo基线及正常退出／PID／目录清理；新三平台源码／安装门已配置，见[复制原生实证](../tests/integration/acceptance-query-duplicate-native-20261018.md)。本源码增量不继承旧安装或完整CI计数。
 
