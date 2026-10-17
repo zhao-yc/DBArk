@@ -8,7 +8,7 @@ export function flushEditorContent(editor: monaco.editor.IStandaloneCodeEditor, 
 }
 
 export interface EditorContentProps { value: string; readOnly: boolean; onChange?: (value: string) => void; }
-interface ModelLease { model: monaco.editor.ITextModel; valid: boolean; syncing: boolean; controlledThrough: number; subscriptions: monaco.IDisposable[]; }
+interface ModelLease { model: monaco.editor.ITextModel; valid: boolean; syncing: boolean; controlledThrough: number; syncedValue: string; publishedValue?: string; subscriptions: monaco.IDisposable[]; }
 
 /** 单实例只转发真实正文事件；受控props另走有明确抑制范围的编辑，不补发既有模型正文。 */
 export function editorContentBridge(editor: monaco.editor.IStandaloneCodeEditor, current: () => EditorContentProps, publishReady: (ready: boolean) => void) {
@@ -43,18 +43,18 @@ export function editorContentBridge(editor: monaco.editor.IStandaloneCodeEditor,
       } catch (reason) { availability(false); throw reason; }
       finally { if (!model.isDisposed()) item.controlledThrough = model.getVersionId(); item.syncing = false; }
     }
-    if (owns(item)) availability(true);
+    if (owns(item)) { item.syncedValue = props.value; item.publishedValue = undefined; availability(true); }
   }
   /** 新模型先绑定正文与销毁事件，再同步props、开放输入；不回放挂载前发生的编辑。 */
   function bindModel() {
     availability(false); releaseModel();
     if (closed) return;
     const model = editor.getModel(); if (!model || model.isDisposed()) return;
-    const item: ModelLease = { model, valid: true, syncing: false, controlledThrough: model.getVersionId(), subscriptions: [] }; lease = item;
+    const item: ModelLease = { model, valid: true, syncing: false, controlledThrough: model.getVersionId(), syncedValue: current().value, subscriptions: [] }; lease = item;
     try {
       item.subscriptions.push(model.onDidChangeContent(event => {
         if (!owns(item) || item.syncing || event.versionId <= item.controlledThrough || event.versionId !== model.getVersionId()) return;
-        const props = current(); if (!props.readOnly) props.onChange?.(model.getValue());
+        const props = current(); if (!props.readOnly && props.onChange) { const value = model.getValue(); item.publishedValue = value; props.onChange(value); }
       }));
       item.subscriptions.push(model.onWillDispose(() => { if (lease === item) { releaseModel(); availability(false); } }));
       sync();
@@ -74,8 +74,10 @@ export function editorContentBridge(editor: monaco.editor.IStandaloneCodeEditor,
     const item = lease, props = current();
     if (!ready || !item || !owns(item) || props.readOnly || editor.getRawOptions().readOnly) throw Error(zh.editor.bodyUnavailable);
     const value = item.model.getValue(), version = item.model.getVersionId();
+    // 当前props也可能来自尚未sync的外部更新；只有桥已同步/交付的正文或当前模型本身可以作为读取基线。
+    if (props.value !== item.syncedValue && props.value !== item.publishedValue && props.value !== value) throw Error(zh.editor.bodyUnavailable);
     if (expected !== undefined && expected !== props.value && expected !== value) throw Error(zh.editor.bodyUnavailable);
-    if ((expected ?? props.value) !== value) props.onChange?.(value);
+    if ((expected ?? props.value) !== value && props.onChange) { item.publishedValue = value; props.onChange(value); }
     if (!owns(item) || item.model.getVersionId() !== version || item.model.getValue() !== value) throw Error(zh.editor.bodyUnavailable);
     return value;
   }
