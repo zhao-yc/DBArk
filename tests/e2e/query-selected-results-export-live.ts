@@ -43,7 +43,11 @@ export function registerSelectedResultsExport(binding: SelectedResultsTarget) {
       await observe(() => page.locator('.app-commandbar').getByRole('button', { name: zh.common.newConnection, exact: true }).click());
       const form = page.getByRole('dialog', { name: zh.common.newConnection, exact: true });
       await observe(() => form.getByLabel(zh.connections.text006, { exact: true }).fill(connectionName));
-      await observe(() => form.getByLabel(zh.connections.text008, { exact: true }).selectOption('mysql'));
+      // Field包装label包含select选项文字；限定本对话框的combobox与标签前缀，不按完整label文本精确匹配。
+      const dialectSelect = form.getByRole('combobox', { name: new RegExp('^' + zh.connections.text008) });
+      await observe(() => expect(dialectSelect).toHaveCount(1));
+      await observe(() => dialectSelect.selectOption('mysql'));
+      await observe(() => expect(dialectSelect).toHaveValue('mysql'));
       await observe(() => form.getByLabel(zh.connections.text009, { exact: true }).fill(binding.target.host));
       await observe(() => form.getByLabel(zh.connections.text010, { exact: true }).fill(String(binding.target.port)));
       await observe(() => form.getByLabel(zh.common.user, { exact: true }).fill(binding.target.user));
@@ -65,7 +69,11 @@ export function registerSelectedResultsExport(binding: SelectedResultsTarget) {
       // 使用全局新查询表单，明确留空默认库；不展开数据库，更不创建数据库或表。
       await observe(() => page.locator('.app-commandbar').getByRole('button', { name: zh.common.newQuery, exact: true }).click());
       const query = page.getByRole('dialog', { name: zh.common.newQuery, exact: true });
-      await observe(() => query.getByLabel(zh.app.text049, { exact: true }).selectOption(profile!.id));
+      // 此处同样是Field包装的select；动态连接名称不能成为exact label定位的前提。
+      const queryConnectionSelect = query.getByRole('combobox', { name: new RegExp('^' + zh.app.text049) });
+      await observe(() => expect(queryConnectionSelect).toHaveCount(1));
+      await observe(() => queryConnectionSelect.selectOption(profile!.id));
+      await observe(() => expect(queryConnectionSelect).toHaveValue(profile!.id));
       await observe(() => query.getByLabel(zh.app.text050, { exact: true }).fill(''));
       await observe(() => expect(query.getByLabel(zh.app.text050, { exact: true })).toHaveValue(''));
       await observe(() => query.getByRole('button', { name: zh.app.text053, exact: true }).click());
