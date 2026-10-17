@@ -250,12 +250,16 @@ export class Engine {
         return this.withIndependentTask(input.connectionId,input.taskId,(managed,control)=>completionMetadata(managed,input as CompletionMetadataInput,control),undefined,'读取补全元数据',true);
       }
       case 'metadata.objects': return this.withConnection(input.connectionId, connection => metadata.objects(connection, input.database));
-      case 'metadata.table': return input.taskId ? this.withIndependentTask(input.connectionId, input.taskId, async (connection, control) => {
+      case 'metadata.table': {
+        // 方案应用由Main补充已验证配置，直接进入原独立元数据租约；不另开无法取消的连接。
+        if(input.profile)this.copySourceProfile(input);
+        return input.taskId ? this.withIndependentTask(input.connectionId, input.taskId, async (connection, control) => {
         // 独立预览元数据也等待实际目录查询终态和连接关闭；KILL ACK 不能替代资源收尾。
         const ended = control.commandStarted();
         try { return await metadata.tableInfo(connection, input.database, input.table); }
         finally { ended(); }
       }, undefined, '读取表格元数据', true) : this.withConnection(input.connectionId, connection => metadata.tableInfo(connection, input.database, input.table));
+      }
       case 'metadata.ddl': return this.withConnection(input.connectionId, connection => metadata.objectDdl(connection, input.database, input.name, input.kind));
       case 'query.execute': return this.withSession(input.sessionId, managed => this.runTask(input.taskId, managed, '执行 SQL', task => this.queryScript(task, input.sql, input.maxRows, undefined, input.currentStatement)));
       case 'query.exportStream': {

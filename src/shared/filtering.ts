@@ -1,8 +1,13 @@
 import type { FilterMode, FilterRule } from './contracts';
+import { z } from 'zod';
 
 /** 筛选体积在界面、IPC 与引擎使用相同上限，避免集合展开形成过大的查询。 */
 export const FILTER_LIMITS = { conditions: 30, setValues: 200, valueLength: 4096, totalValues: 1000, totalCharacters: 1_000_000 } as const;
 const operators = new Set(['=', '!=', '>', '>=', '<', '<=', 'LIKE', 'NOT LIKE', 'IN', 'NOT IN', 'BETWEEN', 'IS NULL', 'IS NOT NULL']);
+const field = z.string().min(1).max(256), value = z.string().max(FILTER_LIMITS.valueLength,`每个筛选值不能超过 ${FILTER_LIMITS.valueLength} 个字符`);
+/** 表页与命名方案共用严格形状，拒绝SQL、认证路径及未知扩展字段。 */
+export const filterRuleSchema = z.object({ column: field, operator: z.enum(['=','!=','>','>=','<','<=','LIKE','NOT LIKE','IN','NOT IN','BETWEEN','IS NULL','IS NOT NULL']), value: value.optional(), values: z.array(value).max(FILTER_LIMITS.setValues,`筛选集合不能超过 ${FILTER_LIMITS.setValues} 个值`).optional() }).strict();
+export const sortRulesSchema = z.array(z.object({ column: field, direction: z.enum(['ASC','DESC']) }).strict()).max(20);
 
 /** 只校验结构与体积，不改写空白/空字符串；列名是否存在由数据库元数据另行验证。 */
 export function validateFilterRules(filters: readonly FilterRule[], filterMode: FilterMode = 'all'): void {

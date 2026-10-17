@@ -17,7 +17,8 @@ import{localSqlPageNextSchema,localSqlPageReleaseSchema}from'./localSqlPages';
 import { connectionFileRequirements, connectionImportApplySchema, connectionImportReviewSchema, connectionTransferLimits } from './connectionTransfer';
 import type { Command, ResultExportData } from './contracts';
 import { validateResultExportData } from './resultExport';
-import { FILTER_LIMITS, validateFilterRules } from './filtering';
+import { FILTER_LIMITS, validateFilterRules, filterRuleSchema as filterRule, sortRulesSchema } from './filtering';
+import { tablePresetListSchema, tablePresetSaveSchema, tablePresetSelectSchema, tablePresetApplySchema } from './tablePresets';
 import { queryParameterTypes, validateQueryParameters } from './queryParameters';
 import { snippetSchema } from './snippets';
 import { validateReferenceValues } from './references';
@@ -94,14 +95,13 @@ const resultExportData = z.custom<ResultExportData>().superRefine((value, contex
   try { validateResultExportData(value); }
   catch (error) { context.addIssue({ code: 'custom', message: error instanceof Error ? error.message : '结果导出数据无效' }); }
 });
-const filterValue = z.string().max(FILTER_LIMITS.valueLength, `每个筛选值不能超过 ${FILTER_LIMITS.valueLength} 个字符`);
-const filterRule = z.object({ column: name, operator: z.enum(['=','!=','>','>=','<','<=','LIKE','NOT LIKE','IN','NOT IN','BETWEEN','IS NULL','IS NOT NULL']), value: filterValue.optional(), values: z.array(filterValue).max(FILTER_LIMITS.setValues, `筛选集合不能超过 ${FILTER_LIMITS.setValues} 个值`).optional() }).strict();
 /** IPC 同时约束单项形状及整个集合体积，错误由共享校验返回中文说明。 */
-const tablePage = z.object({ ...target, page: z.number().int().min(1).max(10000000), pageSize: z.number().int().min(1).max(1000), filters: z.array(filterRule).max(FILTER_LIMITS.conditions), filterMode: z.enum(['all','any']).optional(), sort: z.array(z.object({ column: name, direction: z.enum(['ASC','DESC']) }).strict()).max(20) }).strict().superRefine((input, context) => {
+const tablePage = z.object({ ...target, page: z.number().int().min(1).max(10000000), pageSize: z.number().int().min(1).max(1000), filters: z.array(filterRule).max(FILTER_LIMITS.conditions), filterMode: z.enum(['all','any']).optional(), sort: sortRulesSchema }).strict().superRefine((input, context) => {
   try { validateFilterRules(input.filters, input.filterMode); }
   catch (error) { context.addIssue({ code: 'custom', path: ['filters'], message: error instanceof Error ? error.message : '筛选条件无效' }); }
 });
 export const commandSchemas: Record<Command, z.ZodType> = {
+  'table.presets.list':tablePresetListSchema,'table.presets.save':tablePresetSaveSchema,'table.presets.delete':tablePresetSelectSchema,'table.presets.apply':tablePresetApplySchema,
   'table.copyInsertSql': copyInsertSqlInputSchema,
   'workbench.get': empty, 'workbench.save': workbenchSaveSchema, 'workbench.resolve': workbenchTargetSchema, 'workbench.copyUri': workbenchTargetSchema,
   'queries.create': querySaveContentSchema, 'queries.updateSource': queryUpdateSourceSchema,

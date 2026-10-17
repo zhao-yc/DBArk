@@ -28,6 +28,7 @@ import{SavedQueryPages}from'./savedQueryPages';
 import{HistoryPages}from'./historyPages';
 import { resolveWorkbenchTarget } from './workbench';
 import { objectUri } from '../shared/workbench';
+import { applyTablePreset, TablePresetSources } from './tablePresets';
 
 if (process.env.DBARK_USER_DATA) { mkdirSync(process.env.DBARK_USER_DATA, { recursive: true }); app.setPath('userData', process.env.DBARK_USER_DATA); }
 app.setName('DBArk');
@@ -66,6 +67,18 @@ const lastPersist = new Map<string, number>();
 const rendererURL = process.env.DBARK_DEV_URL ?? pathToFileURL(join(__dirname, '../renderer/index.html')).href;
 // 字段令牌只绑定真实IPC文档；回收仍使用原引擎精确release，不扩其他结构业务。
 const columnsMain = new ColumnsMainCapabilities(structureTokens, { currentWindow: () => window, rendererURL, connectionRevision: () => store.connectionRevision(), assertAvailable: id => connectionConfig.assertAvailable(id), shuttingDown: () => shuttingDown, release: input => broker.request('schema.columns.release', input) });
+const tablePresetSources=new TablePresetSources({assert:value=>columnsMain.assertCapturedOwner(value),same:(left,right)=>columnsMain.sharesDocumentOwner(left,right)});
+const tablePresetReads=new Map<string,{cancelled:boolean;sent:boolean;stop?:Promise<unknown>}>();
+/** 取消只指向本片已登记的独立metadata任务；原请求仍等待utility严格资源结算。 */
+function cancelTablePresetRead(taskId:string):Promise<unknown> {
+  const state=tablePresetReads.get(taskId);if(!state)return Promise.resolve();
+  state.cancelled=true;if(state.sent)state.stop??=broker.request('query.cancel',{taskId});
+  return state.stop??Promise.resolve();
+}
+/** 来源销毁不依赖旧渲染进程继续发IPC；收尾失败由仍在等待的原请求保留。 */
+function invalidateTablePresetSources():void {
+  tablePresetSources.invalidate();for(const taskId of tablePresetReads.keys())void cancelTablePresetRead(taskId).catch(()=>undefined);
+}
 
 /** 辅助记录失败不能改变已经完成的数据库操作结果，避免用户误以为 SQL 未执行。 */
 function persistAuxiliary(action: () => void): void {
@@ -166,6 +179,30 @@ async function dispatch(command: Command, input: any, columns?: ColumnsInvocatio
   if (command === 'serverMonitor.read' && shuttingDown) throw new Error('客户端正在退出，不能刷新服务器监控');
   if (command === 'schema.compare') { connectionConfig.assertAvailable(input.source.connectionId); connectionConfig.assertAvailable(input.target.connectionId); }
   switch (command) {
+    case 'table.presets.list':
+      if(shuttingDown)throw Error('客户端正在退出，不能读取方案');
+      return tablePresetSources.issue(columns,input,store.tablePresets(input));
+    case 'table.presets.save':
+      if(shuttingDown)throw Error('客户端正在退出，不能保存方案');
+      tablePresetSources.assert(columns,input);
+      return tablePresetSources.issue(columns,input,store.saveTablePreset(input));
+    case 'table.presets.delete':
+      if(shuttingDown)throw Error('客户端正在退出，不能删除方案');
+      tablePresetSources.assert(columns,input);
+      return tablePresetSources.issue(columns,input,store.deleteTablePreset(input));
+    case 'table.presets.apply': {
+      const revision=store.connectionRevision();
+      tablePresetSources.assert(columns,input);
+      if(tasks.has(input.taskId)||completionTasks.has(input.taskId)||savedQueryPages?.owns(input.taskId)||historyPages?.owns(input.taskId)||completionTasks.size>=8)throw Error('方案读取任务编号已使用或读取繁忙');
+      const state={cancelled:false,sent:false,stop:undefined as Promise<unknown>|undefined};tablePresetReads.set(input.taskId,state);completionTasks.add(input.taskId);
+      const check=()=>{tablePresetSources.assert(columns,input);connectionConfig.assertAvailable(input.connectionId);if(state.cancelled||shuttingDown||store.connectionRevision()!==revision)throw Error('方案读取已取消或连接配置已变化');};
+      try {return await applyTablePreset(input,{
+        selected:value=>store.selectedTablePreset(value),
+        assertCurrent:check,
+        metadata:target=>{check();const profile=store.resolveConnection(target.connectionId);state.sent=true;return broker.request('metadata.table',{...target,profile});},
+      });}
+      finally{try{await state.stop;}finally{tablePresetReads.delete(input.taskId);completionTasks.delete(input.taskId);}}
+    }
     // 监控使用主进程解密的目标配置，避免为了打开只读窗口另建一次不受任务管理的测试连接。
     case 'serverMonitor.read': input = { ...input, profile: store.resolveConnection(input.connectionId) }; break;
     // 无 await、无引擎调用：全部校验和生成通过后才一次写入系统剪贴板。
@@ -213,6 +250,7 @@ async function dispatch(command: Command, input: any, columns?: ColumnsInvocatio
       finally{completionTasks.delete(input.taskId);}
     }
     case 'query.cancel': {
+      if(tablePresetReads.has(input.taskId))return cancelTablePresetRead(input.taskId);
       if(historyPages?.owns(input.taskId))return historyPages.cancel(input.taskId);
       if(savedQueryPages?.owns(input.taskId))return savedQueryPages.cancel(input.taskId);
       if(savedQuerySearches.has(input.taskId))return savedQuerySearches.cancel(input.taskId);
@@ -397,6 +435,10 @@ function createMenu(): void {
 async function createWindow(): Promise<void> {
   window = new BrowserWindow({ width: 1440, height: 920, minWidth: 1024, minHeight: 680, show: false, backgroundColor: '#101319', title: 'DBArk', icon: app.isPackaged ? join(process.resourcesPath, 'icon.png') : join(__dirname, '../../build/icon.png'), webPreferences: { preload: join(__dirname, 'preload.cjs'), sandbox: true, contextIsolation: true, nodeIntegration: false, webSecurity: true, spellcheck: false } });
   columnsMain.trackWindow(window);
+  window.webContents.on('did-start-navigation',details=>{if(details.isMainFrame&&!details.isSameDocument)invalidateTablePresetSources();});
+  window.webContents.on('did-navigate',invalidateTablePresetSources);
+  window.webContents.on('render-process-gone',invalidateTablePresetSources);
+  window.webContents.on('destroyed',invalidateTablePresetSources);
   window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
   window.webContents.on('will-navigate', (event, url) => { if (url !== rendererURL) event.preventDefault(); });
   window.webContents.session.setPermissionRequestHandler((_webContents, _permission, callback) => callback(false));
@@ -492,11 +534,12 @@ else {
       try {
         if (!window || event.sender !== window.webContents || event.senderFrame !== window.webContents.mainFrame || event.senderFrame?.url !== rendererURL) throw new Error('不允许的请求来源');
         if (!payload || typeof payload !== 'object' || !('command' in payload) || !('input' in payload) || typeof payload.command !== 'string') throw new Error('请求格式无效');
-        if (payload.command.startsWith('schema.columns.')) columns = columnsMain.capture(event);
+        if (payload.command.startsWith('schema.columns.')||payload.command.startsWith('table.presets.')) columns = columnsMain.capture(event);
         const input = validateMainCommand(payload.command, payload.input);
         const operation=dispatch(payload.command as Command,input,columns),local=payload.command==='search.savedQueries'||payload.command==='search.savedQueriesContinue'||payload.command==='queries.page'||payload.command==='queries.pageContinue'||payload.command==='history.page'||payload.command==='history.pageContinue';if(local)localSearchOperations.add(operation);
         try {
           const result = await operation;
+          if(payload.command.startsWith('table.presets.'))columnsMain.assertCapturedOwner(columns);
           if (columns && (payload.command === 'schema.columns.get' || payload.command === 'schema.columns.preview')) {
             try { columnsMain.assertReply(columns); }
             catch (error) { await columnsMain.rejectReply(columns, error); }

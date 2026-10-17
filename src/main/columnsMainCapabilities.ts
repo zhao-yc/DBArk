@@ -58,6 +58,13 @@ export class ColumnsMainCapabilities {
     return left.window === right.window && left.contents === right.contents && left.frame === right.frame && left.document === right.document && left.processId === right.processId && left.frameToken === right.frameToken;
   }
 
+  /** 本地方案复用真实IPC捕获门，不授予结构令牌、DDL或引擎能力。 */
+  assertCapturedOwner(invocation?:ColumnsInvocation):void {this.assertOwner(invocation);}
+  /** 同文档多次IPC核实际对象与代次；不能靠数字窗口ID或URL伪造。 */
+  sharesDocumentOwner(left:ColumnsInvocation,right:ColumnsInvocation):boolean {
+    this.assertOwner(left);this.assertOwner(right);return this.sameOwner(left.owner,right.owner);
+  }
+
   /** 已知token必须有本helper建立的归属，不能把手工Map记录当已授权的columns能力。 */
   private binding(record: StructureToken, invocation: ColumnsInvocation): Binding {
     const binding = this.bindings.get(record);

@@ -15,6 +15,7 @@ import type { ExcelSheet, ExcelSheetPreview, ExcelTextProtocol, ExcelImportReque
 import type { QueryExportProgress, QueryStreamExportInput, QueryStreamExportOutput } from './queryStreamExport';
 import type { ConnectionFileRequirement, ConnectionImportApply, ConnectionImportPreview, ConnectionImportResult, ConnectionImportReview, ConnectionImportReviewInput } from './connectionTransfer';
 import type { TablePreferenceTarget, TablePreferences } from './tablePreferences';
+import type { TablePresetTarget, TablePresetSave, TablePresetSelect, TablePresetApply, TablePresetSnapshot, TablePresetConfiguration } from './tablePresets';
 import type { TableColumnGetInput, TableColumnGetOutput, TableColumnPreviewInput, TableColumnPreviewOutput, TableColumnApplyInput, TableColumnApplyOutput, TableColumnApplyProgress, TableColumnReleaseInput } from './tableColumnPatches';
 import type { TableIndexGetInput, TableIndexGetOutput, TableIndexPreviewInput, TableIndexPreviewOutput, TableIndexApplyInput, TableIndexApplyOutput, TableIndexApplyProgress, TableIndexReleaseInput } from './tableIndexTasks';
 import type { TableForeignKeyGetInput, TableForeignKeyGetOutput, TableForeignKeyPreviewInput, TableForeignKeyPreviewOutput, TableForeignKeyApplyInput, TableForeignKeyApplyOutput, TableForeignKeyApplyProgress, TableForeignKeyReleaseInput } from './tableForeignKeyTasks';
@@ -87,6 +88,10 @@ export interface CommandMap {
   'workbench.copyUri': { input: WorkbenchTarget; output: void };
   'queries.create': { input: QuerySaveContent; output: QuerySaveResult };
   'queries.updateSource': { input: { source: QuerySourceBinding; content: QuerySaveContent }; output: QuerySaveResult };
+  'table.presets.list': {input:TablePresetTarget;output:TablePresetSnapshot};
+  'table.presets.save': {input:TablePresetSave;output:TablePresetSnapshot};
+  'table.presets.delete': {input:TablePresetSelect;output:TablePresetSnapshot};
+  'table.presets.apply': {input:TablePresetApply;output:TablePresetConfiguration};
   'table.preferences.get': { input: TablePreferenceTarget; output: TablePreferences | null };
   'table.preferences.save': { input: TablePreferenceTarget & { preferences: TablePreferences }; output: TablePreferences };
   'table.preferences.reset': { input: TablePreferenceTarget; output: void };

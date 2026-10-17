@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, type ReactNode } from 'react';
 import { Pencil, X } from 'lucide-react';
 import type { FilterRule } from '../../shared/contracts';
 import { errorMessage } from '../lib';
@@ -7,13 +7,14 @@ import { emptyFilterDraft, filterDraftFromRule, filterOperatorLabels, filterRule
 import { ErrorBox } from './ui';
 
 interface Props {
+  children?:ReactNode;
   columns: string[]; filters: FilterRule[]; mode: FilterMode; disabled: boolean;
   onFiltersChange: (filters: FilterRule[]) => boolean;
   onModeChange: (mode: FilterMode) => boolean;
 }
 
 /** 编辑区只维护待应用条件；父组件确认草稿处理后，才替换已应用规则并重新读取服务器。 */
-export function TableFilterPanel({ columns, filters, mode, disabled, onFiltersChange, onModeChange }: Props) {
+export function TableFilterPanel({ columns, filters, mode, disabled, onFiltersChange, onModeChange, children }: Props) {
   const [draft, setDraft] = useState(() => emptyFilterDraft(columns[0] ?? ''));
   const [editing, setEditing] = useState<number | null>(null); const [error, setError] = useState('');
   useEffect(() => { if (!columns.includes(draft.column)) setDraft(current => ({ ...current, column: columns[0] ?? '' })); }, [columns, draft.column]);
@@ -40,6 +41,7 @@ export function TableFilterPanel({ columns, filters, mode, disabled, onFiltersCh
     if (editing === index) cancelEdit(); else if (editing !== null && editing > index) setEditing(editing - 1);
   }
   return <div className="filter-panel expanded-filter-panel">
+    {children}
     <div className="filter-mode-row"><label>{zh.table.filterModeLabel}<select aria-label={zh.table.filterModeLabel} value={mode} disabled={disabled} onChange={event => onModeChange(event.target.value as FilterMode)}><option value="all">{zh.table.filterModeAll}</option><option value="any">{zh.table.filterModeAny}</option></select></label><button disabled={disabled || !filters.length} onClick={() => { if (onFiltersChange([])) cancelEdit(); }}>{zh.common.clearAll}</button></div>
     <form className="filter-rule-form" onSubmit={event => { event.preventDefault(); applyCondition(); }}>
       <div className="filter-inputs"><select aria-label={zh.table.text009} value={draft.column} disabled={disabled} onChange={event => changeDraft({ column: event.target.value })}>{columns.map(column => <option key={column}>{column}</option>)}</select><select aria-label={zh.table.filterOperatorLabel} value={draft.operator} disabled={disabled} onChange={event => changeDraft({ operator: event.target.value as FilterRule['operator'] })}>{Object.entries(filterOperatorLabels).map(([operator, label]) => <option key={operator} value={operator}>{label}</option>)}</select>
