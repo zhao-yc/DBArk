@@ -15,17 +15,17 @@ function fixture(){
  const context=createContext({initialBinding:binding,resultSelection,zh,tab,workspace,useWorkspace:{getState:()=>workspace},connectionVersion:1,alive:{current:true},busyRef:{current:false},document:{querySelector:()=>null},setExportSelected:vi.fn(),setExportResult:vi.fn(),refreshResultSelection:vi.fn(),setError:vi.fn(),errorMessage:(reason:any)=>reason.message});
  const code=`(function(){const selectionBinding=initialBinding;${['resultSelectionAllowed','selectResultRows','exportSelectedRows','invalidateResultSelection'].map(name=>functions.get(name)!.getText(tree)).join('\n')}return{selectResultRows,exportSelectedRows,invalidateResultSelection};})()`;
  const handlers=runInContext(ts.transpileModule(code,{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText,context);
- return{result,resultSelection,binding,workspace,context,handlers,select(){handlers.selectResultRows({scope:binding,rows:result.rows,columns:result.columns,indices:new Set([1])});}};
+ return{result,resultSelection,binding,workspace,context,handlers,select(){return handlers.selectResultRows({scope:binding,rows:result.rows,columns:result.columns,indices:new Set([1])});}};
 }
 describe('实际QueryTab勾选导出接线的同步门（RAM）',()=>{
  it('空选不打开；有效选择只打开固定副本，不投递查询或任意IPC',()=>{
-  const f=fixture();f.handlers.exportSelectedRows();expect(f.context.setExportResult).not.toHaveBeenCalled();f.select();f.handlers.exportSelectedRows();
+  const f=fixture();f.handlers.exportSelectedRows();expect(f.context.setExportResult).not.toHaveBeenCalled();expect(f.select()).toBe(true);f.handlers.exportSelectedRows();
   expect(f.context.setExportSelected).toHaveBeenCalledWith(true);expect(f.context.setExportResult).toHaveBeenCalledWith(expect.objectContaining({rows:[{c0:'乙'}],truncated:true,statement:''}));
  });
  it.each(['inactive','closed','connection','version','job','busy','unmounted','modal'])('%s在React更新前也不能接纳旧勾选或打开对话框',change=>{
   const f=fixture();f.select();
   if(change==='inactive')f.workspace.settings.activeTabId='other';else if(change==='closed')f.workspace.settings.tabs=[];else if(change==='connection')f.workspace.settings.tabs=[{...f.workspace.settings.tabs[0],connectionId:'other'}];else if(change==='version')f.workspace.connectionVersions.c++;else if(change==='job')f.workspace.activeJobs.q={};else if(change==='busy')f.context.busyRef.current=true;else if(change==='unmounted')f.context.alive.current=false;else f.context.document.querySelector=()=>({});
-  f.handlers.exportSelectedRows();expect(f.context.setExportResult).not.toHaveBeenCalled();
+  expect(f.select()).toBe(false);f.handlers.exportSelectedRows();expect(f.context.setExportResult).not.toHaveBeenCalled();
  });
  it('切换结果或同步撤销后，旧QueryTab回调不能导出新对象或恢复旧选择',()=>{
   const f=fixture();f.select();f.resultSelection.bind({...f.result,rows:[{c0:'新行'}]},['other',2]);f.handlers.exportSelectedRows();expect(f.context.setExportResult).not.toHaveBeenCalled();f.select();expect(f.context.setExportResult).not.toHaveBeenCalled();

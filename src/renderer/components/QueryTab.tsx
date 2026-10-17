@@ -347,10 +347,11 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
     return alive.current && !busyRef.current && !workspace.activeJobs[tab.id] && workspace.settings.activeTabId === tab.id && current?.kind === 'query' && current.connectionId === tab.connectionId && (workspace.connectionVersions[current.connectionId] ?? 0) === connectionVersion && !document.querySelector('[role="dialog"]') && resultSelection.current(binding);
   }
   /** 网格只交付当前准确数组的选择，验证失败清空选择，不能回退成全结果导出。 */
-  function selectResultRows(selection: ResultGridSelection) {
-    if (!resultSelectionAllowed(selectionBinding)) return;
-    try { if (resultSelection.select(selectionBinding, selection)) refreshResultSelection(value => value + 1); }
+  function selectResultRows(selection: ResultGridSelection): boolean {
+    if (!resultSelectionAllowed(selectionBinding)) return false;
+    try { if (resultSelection.select(selectionBinding, selection)) { refreshResultSelection(value => value + 1); return true; } }
     catch (reason) { resultSelection.invalidate(); refreshResultSelection(value => value + 1); setError(errorMessage(reason)); }
+    return false;
   }
   /** 打开时克隆已选快照；后续新执行、切换或勾选变化不修改这次文件内容。 */
   function exportSelectedRows() {

@@ -16,7 +16,7 @@ import type { ResultGridSelection } from '../resultExport';
 export function isResultBinaryCell(value: CellValue | undefined): boolean { return isBinaryCell(value); }
 
 /** 任意查询结果只读；支持单格或勾选记录复制，始终保留原始值用于剪贴板。 */
-export function ResultsGrid({ columns, rows, onActiveRowChange, sort, onSortChange, selectionScope, onSelectionChange }: { columns: ResultColumn[]; rows: DataRow[]; onActiveRowChange?: (row: DataRow | null) => void; sort?: SortRule[]; onSortChange?: (sort: SortRule[]) => void; selectionScope?: object; onSelectionChange?(selection: ResultGridSelection): void }) {
+export function ResultsGrid({ columns, rows, onActiveRowChange, sort, onSortChange, selectionScope, onSelectionChange }: { columns: ResultColumn[]; rows: DataRow[]; onActiveRowChange?: (row: DataRow | null) => void; sort?: SortRule[]; onSortChange?: (sort: SortRule[]) => void; selectionScope?: object; onSelectionChange?(selection: ResultGridSelection): boolean }) {
   const theme = useWorkspace(state => state.settings.theme);
   const dataTypeColors = useWorkspace(state => state.settings.dataTypeColors === true);
   const scope = useMemo(() => ({ columns, rows, selectionScope }), [columns, rows, selectionScope]);
@@ -26,8 +26,11 @@ export function ResultsGrid({ columns, rows, onActiveRowChange, sort, onSortChan
   /** 旧网格回调在首次effect前也不能覆盖新选择；复制仍沿用同一组当前勾选行。 */
   function setSelectedRows(indices: ReadonlySet<number>) {
     if (currentScope.current !== scope) return;
-    const next = new Set(indices); setSelection({ scope, indices: next });
-    onSelectionChange?.({ scope: selectionScope ?? scope, rows, columns, indices: next });
+    const next = new Set(indices);
+    // 导出父级须明确接纳同一选择；模态或任务门拒绝时保留原勾选，避免显示与文件范围分离。
+    if (onSelectionChange && onSelectionChange({ scope: selectionScope ?? scope, rows, columns, indices: next }) !== true) return;
+    if (currentScope.current !== scope) return;
+    setSelection({ scope, indices: next });
   }
   const [binary, setBinary] = useState<{ row: DataRow; key: string; rows: DataRow[]; columns: ResultColumn[] } | null>(null);
   const rowIndexes = useMemo(() => new Map(rows.map((row, index) => [row, index])), [rows]);
