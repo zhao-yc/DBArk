@@ -92,4 +92,8 @@ SecretFile 端口增加可选 `checkHealthy()`，与取消检查分离。Windows
 
 单个 RPC 的完整响应后再出现任何字节，即使不足一个帧头也立即判 unknown。原 stdout 的残头、残体、意外 EOF/close，以及未收到正常 shutdown 回执时的原进程退出或原流终止均停链。正常 shutdown 回执必须实际报告零 guard/work；在解析该回执时登记正常终止许可，以允许 EOF/exit 早于调用方 await 返回。该许可不能代替原 child 和三流 close；协议已未知时，迟到 close 仍记物理事实，但不能恢复 confirmed。
 
-新增 `database-backup-windows-health.test.ts` 前部保留员工5原五个同字节用例（原夹具 SHA-256 `5b486f6794d221fd7facb512cfc53b264f12f718e608743be066a38a7ccb458c`），随后增加回执、EOF、迟到事件和缓存等反例。该新专项共31项 RAM/协议检查，包含缓存清理 Promise 已取出、尚未 await 消费时失效的窗口；原清理 Promise 始终保留且不重新执行删除，健康端口仅另加异步结果交付检查。本次未重跑原13项、full/build，也未编译或运行 C#/PowerShell/实际 OS。固定 C# 原字节与内置摘要保持不变；真实 Windows 和打包验收边界不变。
+新增 `database-backup-windows-health.test.ts` 前部保留员工5原五个同字节用例（原夹具 SHA-256 `5b486f6794d221fd7facb512cfc53b264f12f718e608743be066a38a7ccb458c`），随后增加回执、EOF、迟到事件和缓存等反例。该新专项共31项 RAM/协议检查，包含缓存清理 Promise 已取出、尚未 await 消费时失效的窗口；原清理 Promise 始终保留且不重新执行删除，健康端口仅另加异步结果交付检查。健康门提交 `5c4fb02` 的31项与类型检查通过；本次未重跑原13项、full/build，也未编译或运行 C#/PowerShell/实际 OS。
+
+Root 随后在独立编译预检 `run1476-windows-files-compile` 对原固定源码报告 CS0165：`Protect` 把第二个带 `out dacl` 的原生调用放在 `&&` 右侧，C# 无法从自定义 `Need` 推断该调用必定执行。现把 Owner 调用、DACL 调用和 `present` 断言拆成逐个 `Need`，保持局部变量未初始化，不用零值掩盖原生失败。已静态检查全部其余 `out` 调用：元数据 TryGetValue、卷信息、文件指针和 WriteFile 都在表达式首项，原生身份/安全描述符/复制/NtCreateFile 均独立调用，没有其他短路右侧 out 值在后续使用的组合。
+
+更新后的固定 C# SHA-256 为 `475b78748fcf1f9990c58d5926792ae978de71d1962f2e729805f0c35af45606`，TypeScript pin 与 bootstrap 同步更新；窄验只跑新专项中的固定资源原字节摘要/启动边界用例。员工4未实际编译更新后的 C#，须由 Root 以这个新固定头重编译；编译成功也不等于 `Program.Run`、真实 OS、ACL、文件或客户端兼容验收。发行资源复制规则仍由 Root 接入。

@@ -88,7 +88,14 @@ namespace DBArkWindowsFiles {
     }
     static void Protect(Slot slot) {
       Need(slot.Id!=1&&slot.Created&&!slot.WorkClosed); IntPtr descriptor; uint bytes; Need(ConvertStringSecurityDescriptorToSecurityDescriptorW(Sddl(slot.Directory),1,out descriptor,out bytes));
-      try { IntPtr owner,dacl; bool present,defaulted; Need(GetSecurityDescriptorOwner(descriptor,out owner,out defaulted)&&GetSecurityDescriptorDacl(descriptor,out present,out dacl,out defaulted)&&present); Need(SetSecurityInfo(slot.Work,1,0x80000005,owner,IntPtr.Zero,dacl,IntPtr.Zero)==0); }
+      try {
+        // 每个原生out调用都单独执行并检查；不能依赖Need推断短路右侧已赋值。
+        IntPtr owner,dacl; bool present,defaulted;
+        Need(GetSecurityDescriptorOwner(descriptor,out owner,out defaulted));
+        Need(GetSecurityDescriptorDacl(descriptor,out present,out dacl,out defaulted));
+        Need(present);
+        Need(SetSecurityInfo(slot.Work,1,0x80000005,owner,IntPtr.Zero,dacl,IntPtr.Zero)==0);
+      }
       finally { LocalFree(descriptor); }
       RequireAcl(slot);
     }
