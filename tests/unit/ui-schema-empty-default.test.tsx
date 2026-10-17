@@ -171,7 +171,7 @@ function prefixPorts() {
 }
 describe('新表前缀真实字段控件到确认页（仅RAM端口）', () => {
   it('字段选择与长度形成互斥keyParts，按需读取能力并只读展示准确SQL', async () => {
-    await prefixDraft(); prefixPorts(); await click(zh.schema.text049); expect(services.get).toHaveBeenCalledWith(expect.objectContaining({ includePrefixFacts: true })); const draft = vi.mocked(services.preview).mock.calls[0][0].design;
+    await prefixDraft(); prefixPorts(); await click(zh.schema.text049); expect(services.get).toHaveBeenCalledWith(expect.objectContaining({ includePrefixFacts: true }), expect.any(Function)); const draft = vi.mocked(services.preview).mock.calls[0][0].design;
     expect(draft.indexes[1]).toEqual({ name: 'ix', unique: false, keyParts: [{ columnName: 'v', prefixLength: 10 }] }); expect(document.body.textContent).toContain('KEY `ix` (`v`(10))'); expect(document.body.textContent).toContain('ROW_FORMAT=DYNAMIC'); expect(document.querySelector('input[aria-label="编辑预览SQL"]')).toBeNull(); expect(services.apply).not.toHaveBeenCalled();
   });
   it('表示切换清除旧表示，不以name(n)拼进columns，清除前缀后不请求新能力', async () => {
@@ -181,7 +181,7 @@ describe('新表前缀真实字段控件到确认页（仅RAM端口）', () => {
     await prefixDraft(); await input(prefixText.prefix(2, 1), '1.5'); await click(zh.schema.text049); expect(services.get).not.toHaveBeenCalled(); expect(services.preview).not.toHaveBeenCalled(); expect(document.body.textContent).toContain(text.invalidDesign);
   });
   it('前缀确认准备期间修订ABA，迟到真实端口返回只释放不能展示或提交', async () => {
-    await prefixDraft(); prefixPorts(); let resolve!:(value:any)=>void; const pending = new Promise<any>(yes=>{resolve=yes;}); const normal = services.preview; services.preview = vi.fn(async input => { const value = await normal(input); await pending; return value; });
+    await prefixDraft(); prefixPorts(); let resolve!:(value:any)=>void; const pending = new Promise<any>(yes=>{resolve=yes;}); const normal = services.preview; services.preview = vi.fn(async (input, current) => { const value = await normal(input, current); await pending; return value; });
     await click(zh.schema.text049); expect(services.preview).toHaveBeenCalledOnce(); await act(async()=>{workspace.setState({connectionVersions:{c:2}});workspace.setState({connectionVersions:{c:1}});resolve({});}); expect(document.querySelector('pre[aria-label="只读预览SQL"]')).toBeNull(); expect(services.apply).not.toHaveBeenCalled(); expect(services.release).toHaveBeenCalledWith({previewToken:'prefix-p'});
   });
   it('缺能力事实时明确拒绝，不能仅凭草稿长度继续生成', async () => {
@@ -196,7 +196,7 @@ it('前缀真实确认控件准确库表名及两项勾选后双击只消费一�
 });
 
 it('前缀确认准备期间同连接数据库A→B→A，父窗口目标失效必须传播给确认页', async () => {
-  await prefixDraft(); prefixPorts(); let resolve!:(value:any)=>void; const pending=new Promise<any>(yes=>{resolve=yes;});const normal=services.preview;services.preview=vi.fn(async input=>{const value=await normal(input);await pending;return value;});await click(zh.schema.text049);expect(services.preview).toHaveBeenCalledOnce();
+  await prefixDraft(); prefixPorts(); let resolve!:(value:any)=>void; const pending=new Promise<any>(yes=>{resolve=yes;});const normal=services.preview;services.preview=vi.fn(async (input,current)=>{const value=await normal(input,current);await pending;return value;});await click(zh.schema.text049);expect(services.preview).toHaveBeenCalledOnce();
   await act(async()=>root!.render(<SchemaDialog connectionId="c" database="other_db" onClose={closed} onApplied={applied}/>));await act(async()=>root!.render(<SchemaDialog connectionId="c" database="db" onClose={closed} onApplied={applied}/>));await act(async()=>resolve({}));
   expect(document.querySelector('pre[aria-label="只读预览SQL"]')).toBeNull();expect(services.apply).not.toHaveBeenCalled();expect(services.release).toHaveBeenCalledWith({previewToken:'prefix-p'});expect(document.body.textContent).toContain(text.mismatch);
 });
@@ -227,7 +227,7 @@ it('首次prepare等待前活读已结束父租约，不发送get，恢复true�
 });
 it.each(['get','preview'] as const)('%s等待后活读父租约，旧响应仅释放，恢复true不复活',async phase=>{
   await mount();prefixPorts();let valid=true,resolve!:()=>void;const wait=new Promise<void>(yes=>{resolve=yes;});
-  if(phase==='get'){const original=services.get;services.get=vi.fn(async input=>{const value=await original(input);await wait;return value;});}else{const original=services.preview;services.preview=vi.fn(async input=>{const value=await original(input);await wait;return value;});}
+  if(phase==='get'){const original=services.get;services.get=vi.fn(async (input,current)=>{const value=await original(input,current);await wait;return value;});}else{const original=services.preview;services.preview=vi.fn(async (input,current)=>{const value=await original(input,current);await wait;return value;});}
   await directConfirmation(()=>valid);await act(async()=>{valid=false;resolve();});valid=true;await act(async()=>workspace.setState({connectionVersions:{c:1}}));expect(document.querySelector('pre[aria-label="只读预览SQL"]')).toBeNull();expect(services.apply).not.toHaveBeenCalled();expect(services.release).toHaveBeenCalledWith(phase==='get'?{snapshotId:'prefix-s'}:{previewToken:'prefix-p'});if(phase==='get')expect(services.preview).not.toHaveBeenCalled();
 });
 it('释放旧能力等待后父租约结束，不继续下一次get',async()=>{

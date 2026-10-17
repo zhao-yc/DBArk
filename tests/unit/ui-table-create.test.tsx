@@ -57,9 +57,9 @@ async function choosePair() { await selectEncoding(text.charset, 'utf8mb4'); awa
 
 describe('新建表配对选择的真实ReactDOM（仅RAM）', () => {
   it('确认阶段仅列实际同字符集规则，未选完整配对没有预览或执行能力', async () => {
-    await mountEncoding(); expect(services.get).toHaveBeenLastCalledWith(expect.objectContaining({ includeEncodings: true })); expect(button(text.apply).disabled).toBe(true); await selectEncoding(text.charset, 'utf8mb4');
+    await mountEncoding(); expect(services.get).toHaveBeenLastCalledWith(expect.objectContaining({ includeEncodings: true }), expect.any(Function)); expect(button(text.apply).disabled).toBe(true); await selectEncoding(text.charset, 'utf8mb4');
     const select = document.querySelector(`select[aria-label="${text.collation}"]`)!; expect(select.querySelectorAll('option').map(node => node.value)).toEqual(['', 'utf8mb4_bin', 'utf8mb4_0900_ai_ci']); expect(button(text.preview).disabled).toBe(true);
-    await selectEncoding(text.collation, 'utf8mb4_bin'); await click(text.preview); expect(services.preview).toHaveBeenLastCalledWith(expect.objectContaining({ design: expect.objectContaining({ charset: 'utf8mb4', collation: 'utf8mb4_bin' }) })); await confirm(); await click(text.apply, true); expect(services.apply).toHaveBeenCalledTimes(1); expect(vi.mocked(services.apply).mock.calls[0][0]).not.toHaveProperty('collation');
+    await selectEncoding(text.collation, 'utf8mb4_bin'); await click(text.preview); expect(services.preview).toHaveBeenLastCalledWith(expect.objectContaining({ design: expect.objectContaining({ charset: 'utf8mb4', collation: 'utf8mb4_bin' }) }), expect.any(Function)); await confirm(); await click(text.apply, true); expect(services.apply).toHaveBeenCalledTimes(1); expect(vi.mocked(services.apply).mock.calls[0][0]).not.toHaveProperty('collation');
   });
   it('切换字符集清空规则、旧预览和风险确认，原能力仍完整释放', async () => {
     await mountEncoding(); await choosePair(); await confirm(); expect(button(text.apply).disabled).toBe(false); await selectEncoding(text.charset, 'latin1'); expect(button(text.apply).disabled).toBe(true); expect(document.querySelector(`select[aria-label="${text.collation}"]`)!.value).toBe(''); expect(document.querySelector('textarea')).toBeNull(); await click(text.back); expect(services.release).toHaveBeenCalledWith({ previewToken: 'p' }); expect(services.release).toHaveBeenCalledWith({ snapshotId: 's' }); expect(back).toHaveBeenCalledTimes(1);
@@ -109,9 +109,9 @@ describe('新建表真实ReactDOM的确认与生命周期（仅RAM）', () => {
   it('返回草稿必须等令牌释放完成，释放失败不能离开', async () => {
     await mount(); const wait = deferred<void>(); vi.mocked(services.release).mockReturnValueOnce(wait.promise); await click(text.back); expect(back).not.toHaveBeenCalled(); expect(button(text.close).disabled).toBe(true); await act(async () => wait.reject(Error('合成释放失败'))); expect(back).not.toHaveBeenCalled(); expect(services.apply).not.toHaveBeenCalled();
   });
-  it('执行后卸载的ACK回调仍只通知原目标，不能操作新页面', async () => {
+  it('执行后卸载使父租约结束，迟到ACK不回调或重放', async () => {
     await mount(); await confirm(); const pending = deferred<Awaited<ReturnType<TableCreateServices['apply']>>>(); vi.mocked(services.apply).mockReturnValueOnce(pending.promise); await click(text.apply); await act(async () => root!.unmount()); root = undefined;
-    await act(async () => pending.resolve({ target: preview().target, ddlSubmitted: true, ddlCompleted: true, definitionVerified: true, resourcesReleased: true, warnings: [] })); expect(created).toHaveBeenCalledTimes(1); expect(close).not.toHaveBeenCalled();
+    await act(async () => pending.resolve({ target: preview().target, ddlSubmitted: true, ddlCompleted: true, definitionVerified: true, resourcesReleased: true, warnings: [] })); expect(created).not.toHaveBeenCalled(); expect(close).not.toHaveBeenCalled(); expect(services.apply).toHaveBeenCalledTimes(1);
   });
   it('原SchemaDialog新建阶段仍提供原字段/索引表单，草稿未确认不发请求', async () => {
     await mount({ schema: true }); expect(services.get).not.toHaveBeenCalled(); expect(document.body.textContent).toContain('索引'); expect(document.querySelectorAll('input').some(node => node.value === 'bigint unsigned')).toBe(true);
@@ -146,4 +146,21 @@ describe('文字NULL默认值的真实设计器（仅RAM）', () => {
     await click(zh.schema.text049);
     expect(vi.mocked(services.preview).mock.calls.at(-1)![0].design.columns[0].defaultValue).toBe(asLiteral ? 'NULL' : null);
   });
+});
+
+/** 服务适配器也必须活读同一父租约；open等待不构成发送旧目标get的授权。 */
+it.each([true, false])('真实get适配器open等待结束后父租约有效=%s', async validAfterOpen => {
+  await mount(); const actual = await vi.importActual<typeof import('../../src/renderer/tableCreateServices')>('../../src/renderer/tableCreateServices');
+  const wait = deferred<void>(); let valid = true; const requests: string[] = [];
+  (window as any).dbark = { invoke: vi.fn(async (command: string) => { requests.push(command); if (command === 'connections.open') return wait.promise; if (command === 'schema.tableCreate.get') return snapshot(); throw Error('RAM禁止其它IPC'); }) };
+  services.get = actual.tableCreateServices.get;
+  // 创建新确认实例，固定接纳此父guard；初次mount的合成能力已由卸载释放。
+  await act(async () => root!.unmount()); root = undefined;
+  const container = document.createElement('div'); document.body.appendChild(container); root = createRoot(container as unknown as Element);
+  await act(async () => root!.render(<Component {...props} isParentCurrent={() => valid}/>));
+  expect(requests).toEqual(['connections.open']);
+  await act(async () => { valid = validAfterOpen; wait.resolve(); });
+  expect(requests.filter(command => command === 'schema.tableCreate.get')).toHaveLength(validAfterOpen ? 1 : 0);
+  expect(services.apply).not.toHaveBeenCalled();
+  delete (window as any).dbark;
 });

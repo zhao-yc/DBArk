@@ -58,3 +58,14 @@ Root要求补查重绘前窗口后，075上的真实React反例为1正常通过�
 所有实际列继续走目录适配器，非键列不能跳过。另按真实DATA_TYPE逐一证明TINYBLOB、BLOB、MEDIUMBLOB、LONGBLOB的255／65535／16777215／4294967295双长度容量及NULL字符集／排序规则；不从两个互相一致的短长度反推子类型。没有增加LOB索引能力，未扩大既有类型或未知选项的放行范围。容量及目录语义依据MySQL官方[字符串类型](https://dev.mysql.com/doc/refman/8.4/en/string-type-syntax.html)和[字符集目录](https://dev.mysql.com/doc/refman/8.4/en/information-schema-character-sets-table.html)。
 
 补核先在503父版本记录1正常通过／4失败，其中三个引擎反例及一个服务open等待反例。新增引擎补核25项，连同原计划器33项和真实RAM引擎链35项共93/93通过。反例与目录缺失／矛盾、四种非键BLOB容量均由真实任务链核验，只替换传输；没有实际数据库执行，不把RAM结果当作MySQL验收。
+
+
+## 服务适配器内部等待补修
+
+组件调用前后的租约检查不能覆盖服务内部connections.open等待。专用get、preview、apply现在强制接收renderer内的current函数；确认页传入固定操作围栏及同一父租约的活读闭包。get在open前、open完成后真正发送get前检查，preview／apply在真正IPC前检查。当前preview／apply内部没有其它await窗口。函数不加入共享合同或IPC载荷，release／cancel仍可收尾原能力。
+
+原员工5反例保留。复制其四项独立补核到自己的隔离目录，仅适配memory-dom导入和失效分支release期望：修复后get未发送，没有签发快照，故release应为0；get／preview／apply计数要求不变。该副本4/4通过，不能表述为未修改的原诊断用例全绿。正式关联六文件180/180、0跳过，类型检查通过，没有重跑旧382或全量套。
+
+另一个旧React用例仍期望卸载后回调；未修改503父归档重跑同用例亦失败。按既有fd父租约规则，将它更正为迟到ACK不回调、不关闭其它页面、且apply始终只调用一次，保留父红。它没有改变引擎中已发送DDL的事实。
+
+所有本轮原红、作者原件哈希、关联报告和交接保存在员工2普通clone的`.cache/table-create-prefix/review-fixes/`；员工5补核副本在`.cache/review5-recheck/`。没有修改engine/index.ts、connection.ts、已有表索引SQL、W03或DefinitionViewer；实际DB、GUI、SSH、CIM、私料、系统剪贴板、CI执行、安装、Docker均为0。最终合同审查、员工1／5独立复核、固定头整合及真实桌面／数据库验收仍由Root接管。
