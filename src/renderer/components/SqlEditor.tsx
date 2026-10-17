@@ -1,3 +1,4 @@
+import { editorWordWrapOptions, readEditorWordWrap } from '../../shared/editorWordWrap';
 import { editorFontOptions, readEditorFontSize } from '../../shared/editorFont';
 import { zh } from '../locales/zh-CN';
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
@@ -30,13 +31,14 @@ loader.config({ monaco });
 export function SqlEditor({ value, onChange, onReady, height = '100%', readOnly = false, completion, onCompletionStatus, onExecute, onExecuteCurrent, onFormat }: { value: string; onChange?: (value: string) => void; onReady?: (editor: monaco.editor.IStandaloneCodeEditor) => void; height?: string | number; readOnly?: boolean; completion?:SqlCompletionScope;onCompletionStatus?:(status:SqlCompletionStatus)=>void;onExecute?: () => void; onExecuteCurrent?: () => void; onFormat?: () => void }) {
   const theme = useWorkspace(state => state.settings.theme);
   const fontSize = useWorkspace(state => readEditorFontSize(state.settings.editorFontSize));
+  const wordWrap = useWorkspace(state => readEditorWordWrap(state.settings.editorWordWrap));
   const editorRef = useRef<monaco.editor.IStandaloneCodeEditor | null>(null);
   const contentRef = useRef<ReturnType<typeof editorContentBridge> | null>(null);
   const widgetRef = useRef<{ editor: monaco.editor.IStandaloneCodeEditor; alive: boolean; disposal?: monaco.IDisposable; formatAction?: monaco.IDisposable; formatToken?: object } | null>(null);
   const propsRef = useRef({ value, onChange, onReady, readOnly, onFormat });
   const aliveRef = useRef(true), [contentReady, setContentReady] = useState(false);
   // options引用稳定；库即使迟到应用初始options，也读取同一份最新readonly，不能重新开放失效实例。
-  const optionsRef = useRef<monaco.editor.IStandaloneEditorConstructionOptions>({ readOnly: true, wordBasedSuggestions:'off',quickSuggestions:{other:true,comments:false,strings:false},fontFamily: 'Cascadia Code, SFMono-Regular, Consolas, monospace', ...editorFontOptions(fontSize), minimap: { enabled: false }, automaticLayout: true, scrollBeyondLastLine: false, padding: { top: 18, bottom: 12 }, tabSize: 2, wordWrap: 'on', renderLineHighlight: 'line', smoothScrolling: true, fixedOverflowWidgets: true, contextmenu: true });
+  const optionsRef = useRef<monaco.editor.IStandaloneEditorConstructionOptions>({ readOnly: true, wordBasedSuggestions:'off',quickSuggestions:{other:true,comments:false,strings:false},fontFamily: 'Cascadia Code, SFMono-Regular, Consolas, monospace', ...editorFontOptions(fontSize), minimap: { enabled: false }, automaticLayout: true, scrollBeyondLastLine: false, padding: { top: 18, bottom: 12 }, tabSize: 2, ...editorWordWrapOptions(wordWrap), renderLineHighlight: 'line', smoothScrolling: true, fixedOverflowWidgets: true, contextmenu: true });
   // 只发布已提交的props；并发渲染被取消时不能把未提交回调交给旧模型。
   useLayoutEffect(() => { propsRef.current = { value, onChange, onReady, readOnly, onFormat }; syncFormatAction(); });
   /** 外部value只能走桥接的受控编辑范围；库不再另行更新value或订阅onChange。 */
@@ -55,6 +57,12 @@ export function SqlEditor({ value, onChange, onReady, height = '100%', readOnly 
     const widget = widgetRef.current;
     if (aliveRef.current && widget?.alive) widget.editor.updateOptions(options);
   }, [fontSize]);
+  /** 换行只更新原实例单个选项；顺序在widget恢复之后，隐藏期间的最新值也能提交。 */
+  useLayoutEffect(() => {
+    const options = editorWordWrapOptions(wordWrap); Object.assign(optionsRef.current, options);
+    const widget = widgetRef.current;
+    if (aliveRef.current && widget?.alive) widget.editor.updateOptions(options);
+  }, [wordWrap]);
   // 真实卸载释放widget存活监听；单纯布局隐藏保留句柄，不能用已销毁实例恢复桥接。
   useEffect(() => () => { const widget = widgetRef.current; widgetRef.current = null; if (widget) { widget.alive = false; widget.formatToken = undefined; widget.formatAction?.dispose(); widget.disposal?.dispose(); } }, []);
   const runRef = useRef(onExecute); runRef.current = onExecute;
@@ -102,6 +110,8 @@ export function SqlEditor({ value, onChange, onReady, height = '100%', readOnly 
     contentRef.current?.dispose(); editorRef.current = editor;
     // 迟到挂载/布局恢复只应用最新已提交字号，readonly仍完全由原正文桥接管理。
     editor.updateOptions({ fontSize: optionsRef.current.fontSize, lineHeight: optionsRef.current.lineHeight });
+    // 迟到挂载/恢复只取稳定optionsRef中最后提交的换行值，不动模型或readonly。
+    editor.updateOptions({ wordWrap: optionsRef.current.wordWrap });
     const bridge = editorContentBridge(editor, () => propsRef.current, ready => {
       optionsRef.current.readOnly = !ready || propsRef.current.readOnly;
       if (aliveRef.current) setContentReady(ready);

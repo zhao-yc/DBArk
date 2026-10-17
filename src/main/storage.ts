@@ -1,3 +1,4 @@
+import { assertEditorWordWrap, defaultEditorWordWrap, readEditorWordWrap } from '../shared/editorWordWrap';
 import { assertEditorFontSize, editorFontLimits, readEditorFontSize } from '../shared/editorFont';
 import { connectionTransferDocumentSchema, connectionTransferLimits, exportConnectionProfile, importConnectionProfile, importReplacementProfile, type ExportedConnectionProfile } from '../shared/connectionTransfer';
 import { connectionReplacementText } from '../shared/connectionTransferMessages';
@@ -20,7 +21,7 @@ import { bindSavedQuery, queryConnectionDigest } from './queryBinding';
 import { parseSavedQueryRecord } from './savedQuerySearchMatch';
 
 export interface SecretProtector { available(): boolean; encrypt(value: string): string; decrypt(value: string): string; }
-export const defaultSettings: AppSettings = { theme: 'dark', sidebarWidth: 270, resultLimit: 1000, pageSize: 200, dataTypeColors: false, editorFontSize: editorFontLimits.defaultSize, tabs: [] };
+export const defaultSettings: AppSettings = { theme: 'dark', sidebarWidth: 270, resultLimit: 1000, pageSize: 200, dataTypeColors: false, editorFontSize: editorFontLimits.defaultSize, editorWordWrap: defaultEditorWordWrap, tabs: [] };
 /** 只由不可变预览生成，旧概要和单调修订共同约束最终原子替换。 */
 export interface ConnectionImportStorageOptions { expectedRevision: number; replacements: { sourceId: string; targetId: string; previous: ExportedConnectionProfile }[]; }
 
@@ -390,7 +391,7 @@ export class LocalStore {
   settings(): AppSettings {
     const stored = this.records<AppSettings>('SELECT data FROM settings WHERE id=1')[0];
     // 旧颜色标志只认true；缺项或损坏字号回退13，不迁移数据库或隐式强转。
-    return { ...defaultSettings, ...stored, dataTypeColors: stored?.dataTypeColors === true, editorFontSize: readEditorFontSize(stored?.editorFontSize) };
+    return { ...defaultSettings, ...stored, dataTypeColors: stored?.dataTypeColors === true, editorFontSize: readEditorFontSize(stored?.editorFontSize), editorWordWrap: readEditorWordWrap(stored?.editorWordWrap) };
   }
   /** 独立配置表按需创建，旧库无收藏时返回空配置，不把秘密或工作区 SQL 混入收藏。 */
   workbench(): WorkbenchSnapshot {
@@ -415,6 +416,8 @@ export class LocalStore {
     if (settings.dataTypeColors !== undefined && typeof settings.dataTypeColors !== 'boolean') throw new Error('类型颜色偏好必须是布尔值');
     // 兼容缺项的旧调用；显式字号不得越界或借字符串/小数绕过IPC。
     if (settings.editorFontSize !== undefined) assertEditorFontSize(settings.editorFontSize);
+    // 只兼容缺项，显式非法换行值必须在任何持久化变更前拒绝。
+    if (settings.editorWordWrap !== undefined) assertEditorWordWrap(settings.editorWordWrap);
     this.mutate(() => this.db.run('INSERT INTO settings VALUES (1,?) ON CONFLICT(id) DO UPDATE SET data=excluded.data', [JSON.stringify(settings)])); }
   /** 关闭内存数据库并清除明文秘密，已成功保存的文件无需再次写入。 */
   close(): void { this.db.close(); this.volatileSecrets.clear(); }
