@@ -128,7 +128,7 @@ describe.skipIf(!enabled)('复制INSERT真实解码和独立会话回放（默�
       await observe(() => engine!.handle('sessions.close', { sessionId: session.sessionId }));
       await assertOwned();
     } catch (reason) { observed.retain = true; failure ??= reason; throw reason; }
-  }, 60000);
+  }, { timeout: 60000, retry: 0 });
 
   afterEach(async context => {
     if (!caseActive) return;
