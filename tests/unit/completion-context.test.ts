@@ -5,18 +5,18 @@ import type {CompletionSessionState} from '../../src/shared/sqlCompletion';
 const state=(update:Partial<CompletionSessionState>={}):CompletionSessionState=>({database:'B',databaseKnown:true,ansiQuotes:true,noBackslashEscapes:false,broken:false,busy:false,...update});
 describe('编辑器使用实际会话补全上下文',()=>{
   it('无会话草稿只用已经取得的方言版本，未知不可推定支持，MariaDB窗口与LATERAL分开判断',()=>{
-    expect(completionContextCapabilities()).toEqual({lateralDerivedTables:false,windowFunctions:false});
-    expect(completionContextCapabilities(undefined,{dialect:'mysql',version:'8.4.11'})).toEqual({lateralDerivedTables:true,windowFunctions:true});
-    expect(completionContextCapabilities(undefined,{dialect:'mysql',version:'5.7.44'})).toEqual({lateralDerivedTables:false,windowFunctions:false});
-    expect(completionContextCapabilities(undefined,{dialect:'mariadb',version:'11.4.13-MariaDB'})).toEqual({lateralDerivedTables:false,windowFunctions:true});
+    expect(completionContextCapabilities()).toEqual({lateralDerivedTables:false,windowFunctions:false,insertRowAliases:false});
+    expect(completionContextCapabilities(undefined,{dialect:'mysql',version:'8.4.11'})).toEqual({lateralDerivedTables:true,windowFunctions:true,insertRowAliases:true});
+    expect(completionContextCapabilities(undefined,{dialect:'mysql',version:'5.7.44'})).toEqual({lateralDerivedTables:false,windowFunctions:false,insertRowAliases:false});
+    expect(completionContextCapabilities(undefined,{dialect:'mariadb',version:'11.4.13-MariaDB'})).toEqual({lateralDerivedTables:false,windowFunctions:true,insertRowAliases:false});
   });
   it('已有会话的旧版或未知版本不借用已打开连接的MySQL8能力',()=>{
     const opened={dialect:'mysql' as const,version:'8.4.11'};
-    for(const update of[{}, {dialect:'mysql' as const,serverVersion:'5.7.44'}, {dialect:'mariadb' as const,serverVersion:'11.4.13-MariaDB'}])expect(completionContextCapabilities(state(update),opened)).toEqual({lateralDerivedTables:false,windowFunctions:update.dialect==='mariadb'});
-    expect(completionContextCapabilities(state({dialect:'mysql',serverVersion:'8.0.46'}),{dialect:'mysql',version:'5.7.44'})).toEqual({lateralDerivedTables:true,windowFunctions:true});
+    for(const update of[{}, {dialect:'mysql' as const,serverVersion:'5.7.44'}, {dialect:'mariadb' as const,serverVersion:'11.4.13-MariaDB'}])expect(completionContextCapabilities(state(update),opened)).toEqual({lateralDerivedTables:false,windowFunctions:update.dialect==='mariadb',insertRowAliases:false});
+    expect(completionContextCapabilities(state({dialect:'mysql',serverVersion:'8.0.46'}),{dialect:'mysql',version:'5.7.44'})).toEqual({lateralDerivedTables:true,windowFunctions:true,insertRowAliases:true});
   });
   it.each(['busy','broken']as const)('%s会话隐藏能力，缓存中再新的版本也不能替代',key=>{
-    expect(completionContextCapabilities(state({dialect:'mysql',serverVersion:'8.4.11',[key]:true}),{dialect:'mysql',version:'8.4.11'})).toEqual({lateralDerivedTables:false,windowFunctions:false});
+    expect(completionContextCapabilities(state({dialect:'mysql',serverVersion:'8.4.11',[key]:true}),{dialect:'mysql',version:'8.4.11'})).toEqual({lateralDerivedTables:false,windowFunctions:false,insertRowAliases:false});
   });
   it('没有查询会话时采用标签初始库，模式仍未知',()=>{expect(resolveCompletionContext('A')).toEqual({database:'A',mode:{},databaseUnknown:false,available:true});});
   it('有会话时B覆盖标签A，并传递已知模式',()=>{expect(resolveCompletionContext('A',state())).toEqual({database:'B',mode:{ansiQuotes:true,noBackslashEscapes:false},databaseUnknown:false,available:true});});

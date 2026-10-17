@@ -8,6 +8,7 @@ import { completionNamedWindows } from './completionNamedWindows';
 import { completionProcedureScope } from './completionProcedureScope';
 import{completionLateralTokens,completionLateralScope,completionLateralAllows}from'./completionLateralScope';
 import type{CompletionScopeCapabilities}from'./completionCapabilities';
+import {completionInsertRowAlias} from './completionInsertRowAlias';
 
 export interface CompletionCatalogSource{database?:string;table:string}
 /** 派生列只携带名称与需惰性展开的目录来源，不把AST循环引用传出worker。 */
@@ -104,6 +105,18 @@ export function analyzeCompletion(source:string,offset:number,mode:CompletionLex
     const suggestions=parser.getSuggestionAtCaretPosition(normalized.text,position),entities=parser.getAllEntities(normalized.text,position)??[];
     if(entities.length>completionLimits.tokens)return{status:'blocked',reason:'budget'};
     const tables=entities.filter(entity=>entity.entityContextType==='table') as CommonEntityContext[],queries=entities.filter(entity=>entity.entityContextType==='queryResult') as CommonEntityContext[],ctes=collectCtes(normalizedTokens,normalized.text.length);
+    // 新行别名仅供同条 INSERT 更新右侧使用；不支持的局部名称在例程目录回退之前停止。
+    const insertRow=completionInsertRowAlias(normalizedTokens,normalized.caret,lexical.target.qualifiers);
+    if(insertRow){
+      if(insertRow==='unsupported')return{status:'blocked',reason:'syntax'};
+      if(capabilities.insertRowAliases!==true)return{status:'blocked',reason:'capability'};
+      const target=tables.filter(entity=>entity.belongStmt.stmtContextType==='insertStmt'&&entity.position.startIndex===insertRow.targetStart);
+      // 词法范围必须与真实 AST 目标一致；哨兵只能修复正在编辑的名称，不能补造其它缺失语法。
+      if(target.length!==1||lexical.tokens.some(token=>!token.closed&&token.start!==lexical.target.start)||parser.validate(normalized.text).length)return{status:'blocked',reason:'syntax'};
+      const parts=entityName(target[0].text);if(!parts?.length||parts.length>2||parts.includes(normalized.sentinel))return{status:'blocked',reason:'syntax'};
+      const database=parts.length===2?parts[0]:undefined,table=parts.at(-1)!;
+      return{status:'ready',target:lexical.target,syntax:['column'],keywords:[],relations:[{name:insertRow.name,source:'table',database,table,aliased:true,columns:[],catalogs:[{database,table}],incomplete:false}],localRelations:[],columnMode:'expression',incomplete:false};
+    }
     if(ctes.length>completionLimits.entries)return{status:'blocked',reason:'budget'};
     // 哨兵替换会隐藏正在编辑的ROWS等词；原词只用于停止边界，不还原进AST或生成关系。
     const targetToken=lexical.tokens.find(token=>token.start===lexical.target.start&&token.end===lexical.target.end);
