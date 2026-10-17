@@ -90,8 +90,16 @@ async function verify(context: StructureTaskContext, preview: Preview): Promise<
     const actual = parsedIndexes.indexes.find(index => index.name === expected.name);
     return !actual || actual.kind !== (expected.name === 'PRIMARY' ? 'primary' : expected.unique ? 'unique' : 'ordinary') || actual.method !== 'BTREE' || actual.comment !== '' || actual.opaqueReasons.length > 0 || actual.attributes.some(attribute => attribute.kind !== 'method') || actual.parts.length !== expected.columns.length || actual.parts.some((part, index) => part.columnName !== expected.columns[index] || part.prefixLength !== undefined || part.direction !== 'asc' || part.expressionSql !== undefined || part.opaqueReasons.length > 0);
   })) return false;
-  const tables = (await query<{ name: string; engine: string; charset: string; collation: string; comment: string }[]>(context, `SELECT t.TABLE_NAME AS name,t.ENGINE AS engine,c.CHARACTER_SET_NAME AS charset,t.TABLE_COLLATION AS collation,t.TABLE_COMMENT AS comment FROM information_schema.TABLES t LEFT JOIN information_schema.COLLATIONS c ON c.COLLATION_NAME=t.TABLE_COLLATION WHERE t.TABLE_SCHEMA=${literal(database)} AND t.TABLE_NAME=${literal(table)} LIMIT 2`)).rows;
-  if (tables?.length !== 1 || tables[0].name !== table || tables[0].engine?.toUpperCase() !== design.engine.toUpperCase() || tables[0].charset !== design.charset || tables[0].comment !== design.comment) return false;
+  const tables = (await query<{ name: string; engine: string; charset: string | null; collation: string; comment: string }[]>(context, `SELECT t.TABLE_NAME AS name,t.ENGINE AS engine,c.CHARACTER_SET_NAME AS charset,t.TABLE_COLLATION AS collation,t.TABLE_COMMENT AS comment FROM information_schema.TABLES t LEFT JOIN information_schema.COLLATIONS c ON c.COLLATION_NAME=t.TABLE_COLLATION WHERE t.TABLE_SCHEMA=${literal(database)} AND t.TABLE_NAME=${literal(table)} LIMIT 2`)).rows;
+  if (tables?.length !== 1 || tables[0].name !== table || tables[0].engine?.toUpperCase() !== design.engine.toUpperCase() || tables[0].comment !== design.comment) return false;
+  let actualCharset = tables[0].charset;
+  // Maria通用UCA排序规则可能没有一对一目录映射；仅用完整SHOW的显式编码与TABLES实际排序规则交叉补证。
+  if (context.managed.status.dialect === 'mariadb' && actualCharset === null) {
+    const encoding = readTableDefaultEncodingDefinition(document.source, document.context);
+    if (encoding.reasons.length || !encoding.charset || !encoding.collation || typeof tables[0].collation !== 'string' || !tables[0].collation || encoding.charset !== design.charset || encoding.collation !== tables[0].collation) return false;
+    actualCharset = encoding.charset;
+  }
+  if (actualCharset !== design.charset) return false;
   if (design.collation !== undefined && tables[0].collation !== design.collation) return false;
   const condition = `TABLE_SCHEMA=${literal(database)} AND TABLE_NAME=${literal(table)}`;
   const columns = (await query<{ name: string; type: string; nullable: string; defaultValue: string | null; extra: string; comment: string }[]>(context, `SELECT COLUMN_NAME AS name,COLUMN_TYPE AS type,IS_NULLABLE AS nullable,COLUMN_DEFAULT AS defaultValue,EXTRA AS extra,COLUMN_COMMENT AS comment FROM information_schema.COLUMNS WHERE ${condition} ORDER BY ORDINAL_POSITION LIMIT 1001`)).rows;
