@@ -1,3 +1,4 @@
+import { csvExportFieldsZh } from './locales/csvExportFields.zh-CN';
 import { csvExportTargetKey, validateCsvExportColumnNames, type CsvExportFieldsOutput, type CsvExportSelection, type CsvExportTarget } from '../shared/csvExportFields';
 export interface CsvExportContext extends CsvExportTarget { version: number; }
 export type CsvExportFieldState = { key: string; status: 'loading' | 'consumed' } | { key: string; status: 'failed'; error: string } | { key: string; status: 'ready'; catalog: CsvExportFieldsOutput; selected: string[] } | null;
@@ -32,26 +33,26 @@ export class CsvExportFieldsController {
     try {
       const catalog = await this.dependencies.read({ connectionId: context.connectionId, database: context.database, table: context.table }, this.dependencies.taskId()); this.owned.add(catalog.catalogId);
       if (generation !== this.generation) { await this.release(catalog.catalogId); return; }
-      if (csvExportTargetKey(catalog.target) !== csvExportTargetKey(context) || !Number.isFinite(Date.parse(catalog.expiresAt)) || Date.parse(catalog.expiresAt) <= this.now()) { await this.release(catalog.catalogId); throw Error('CSV字段目录目标不符或已过期，请重新读取'); }
+      if (csvExportTargetKey(catalog.target) !== csvExportTargetKey(context) || !Number.isFinite(Date.parse(catalog.expiresAt)) || Date.parse(catalog.expiresAt) <= this.now()) { await this.release(catalog.catalogId); throw Error(csvExportFieldsZh.targetMismatch); }
       const selected = validateCsvExportColumnNames(catalog.columns.map(column => column.name));
       this.update({ key, status: 'ready', catalog, selected });
     } catch (reason) { if (generation === this.generation) this.update({ key, status: 'failed', error: reason instanceof Error ? reason.message : String(reason) }); else this.dependencies.cleanupError(reason); }
   }
   /** 仅从实际目录勾选，重新加入的字段放在末尾，原目录顺序不被篡改。 */
   select(context: CsvExportContext, name: string, checked: boolean): void {
-    const state = this.ready(context); if (!state || !state.catalog.columns.some(column => column.name === name)) { this.update({ key: csvExportContextKey(context), status: 'failed', error: 'CSV字段目录已失效，请重新读取' }); return; }
+    const state = this.ready(context); if (!state || !state.catalog.columns.some(column => column.name === name)) { this.update({ key: csvExportContextKey(context), status: 'failed', error: csvExportFieldsZh.invalid }); return; }
     if (checked && state.selected.includes(name)) return;
     const selected = state.selected.filter(value => value !== name); if (checked) selected.push(name); this.update({ ...state, selected });
   }
   /** 顺序只移动当前选择，不从显示位置猜数据库字段。 */
   move(context: CsvExportContext, name: string, offset: -1 | 1): void {
-    const state = this.ready(context); if (!state) { this.update({ key: csvExportContextKey(context), status: 'failed', error: 'CSV字段目录已失效，请重新读取' }); return; }
+    const state = this.ready(context); if (!state) { this.update({ key: csvExportContextKey(context), status: 'failed', error: csvExportFieldsZh.invalid }); return; }
     const selected = state.selected.slice(), from = selected.indexOf(name), to = from + offset;
     if (from < 0 || to < 0 || to >= selected.length) return; [selected[from], selected[to]] = [selected[to], selected[from]]; this.update({ ...state, selected });
   }
   /** 一次点击先消费本地能力；失败只能显式重读，不自动重用旧目录或重发导出。 */
   take(context: CsvExportContext | null): CsvExportSelection {
-    const state = this.ready(context); if (!state) throw Error('请先重新读取CSV字段目录');
+    const state = this.ready(context); if (!state) throw Error(csvExportFieldsZh.readRequired);
     const columns = validateCsvExportColumnNames(state.selected); this.update({ key: state.key, status: 'consumed' }); return { catalogId: state.catalog.catalogId, columns };
   }
   /** 离开窗口或切换目标立即失效；迟到目录仍由其原请求负责精确释放。 */

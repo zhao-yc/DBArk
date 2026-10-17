@@ -1,3 +1,4 @@
+import { csvExportFieldsZh } from '../locales/csvExportFields.zh-CN';
 import { zh, formatText } from '../locales/zh-CN';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { ArrowRight, FileUp, Download, Square, CheckCircle2 } from 'lucide-react';
@@ -62,7 +63,7 @@ export function TransferDialog({ mode, connectionId, database, table, onClose }:
     // 就绪状态在入口重新检查，不能只依赖按钮禁用；快速切换参数也不能使用旧文件的映射。
     const current = previewController.ready(previewContext);
     if (needsPreview && !current) { setError(zh.transfer.previewNotReady); return; }
-    if (mode === 'export' && format === 'csv' && !csvController.ready(csvContext)?.selected.length) { setError('请先读取CSV实际字段目录并至少选择一列'); return; }
+    if (mode === 'export' && format === 'csv' && !csvController.ready(csvContext)?.selected.length) { setError(csvExportFieldsZh.selectionRequired); return; }
     const executionKey = formKeyRef.current;
     busyRef.current = true; setBusy(true); setError(''); setFailureDetails([]); const nextTaskId = uid(); setTaskId(nextTaskId);
     try {
