@@ -4,7 +4,7 @@ import type { spawn as nodeSpawn } from 'node:child_process';
 import type { DatabaseBackupNativeChild } from './databaseBackupNativeProcess';
 import type { DatabaseBackupSecretOwner as Owner, DatabaseBackupSecretFilePorts, DatabaseBackupSecretDirectory, DatabaseBackupSecretFileHandle, DatabaseBackupSecretStamp, DatabaseBackupSecretAcl, DatabaseBackupSecretCleanupPermit } from './databaseBackupSecretFile';
 
-export const databaseBackupWindowsFilesSource = Object.freeze({ name: 'databaseBackupWindowsFiles.helper.cs', sha256: 'de41d2526e432f5278584f49ce21bf45073e4f9669d17fbee56773fb3cd01d94', maxBytes: 65536 });
+export const databaseBackupWindowsFilesSource = Object.freeze({ name: 'databaseBackupWindowsFiles.helper.cs', sha256: '475b78748fcf1f9990c58d5926792ae978de71d1962f2e729805f0c35af45606', maxBytes: 65536 });
 /** 固定小bootstrap；只将已核固定C#资源载入内存后编译，不拼接任何请求或秘密。 */
 export const databaseBackupWindowsFilesBootstrap = `$ErrorActionPreference='Stop'
 $ProgressPreference='SilentlyContinue'
