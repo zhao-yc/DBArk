@@ -18,3 +18,11 @@ Root固定2b76352的16个相关文件一次133项通过，无失败或跳过；�
 | `run1619-query-layout-build/build.log` | `debf492af4893f8a43f21c3de99a207c9e35e7a4c8d494194b5583dc8ab84983` |
 
 本次没有跑完整套件、真实GUI、重启、安装、服务器/SSH/Docker、系统剪贴板或数据库凭据。新增布局源码不继承0724/91e3的8824完整数或三平台安装76统计；基础fa63444的新完整CI另有旧只读DDL呈现用例一红（8936通过/1失败/10跳过），原日志保留并独立定位，不能冒称本版全绿。0.23完整检查、正式窗口/重启、安装及平台矩阵继续，尚未公开发行。
+
+## 随后完整CI及旧夹具修正
+
+固定 `50e589088fc6cb0485b0745069c9a8156e07d347` 的[完整CI39080659541](https://github.com/zhao-yc/DBArk/actions/runs/39080659541)、job117536738985全部成功：483文件、9000通过、10条件跳过，类型及构建成功。原日志 `run1624-50e5890-full-ci-green.log` SHA256 `2571fb82dc0992ccb6e98789c6f78193e968fa14ed5f326c10a02539ade35cd1`。桌面job条件跳过，不提供原生或安装验收；该9000不包含随后测试夹具修正。
+
+原fa63444唯一红仍保持：旧RAM textarea缺少defaultValue反射textContent，ReactDOM初次挂载因此未从默认文本初始化value，后续render可能掩盖它。作者固定Date.now稳定复现空value且完整DDL已在defaultValue、readonly和拒绝原因已呈现，以首次/同props再提交因果对照确认。没有通过增加等待、强制render或编辑器noop追绿。原日志 `run1620-fa63444-full-ci-original-red.log` SHA256 `946aebe837d932cbdd1ddda766910181d7e579e4c424f828a9ad58857fe6d033`。
+
+作者70eaead对应Root `d035b09e95e93fe8df1cdc2e15090008c3beb69f`，仅在该测试factory补浏览器默认文本反射、固定原红时钟并加只读/拒绝路径检查；63处原断言逐字保持，无产品改动。作者正式窄测3项、因果1项通过、类型一次通过，交接SHA256 `5f8f504ade04401c2c97765486dd480534749286cdfde182cd52f85767755588`。Root受影响完整文件一次22项通过，日志SHA256 `0d4cd8fedc0e00e6c68bcd71a1100ff4fdab0f966c686f1e1d78e7da983e53d0`；相关产品文件与fa一致，不重复本地类型/构建。原红、50e完整9000及修后22属于不同来源，不改写或累加为同一完整终态。
