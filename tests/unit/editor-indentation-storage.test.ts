@@ -29,12 +29,12 @@ function inspect(path: string, read: (db: Database) => void) { const db = new SQ
 const original = () => ({ ...defaultSettings, theme: 'light' as const, sidebarWidth: 333, editorFontSize: 22, editorWordWrap: false, activeTabId: 'q', tabs: [{ id: 'q', kind: 'query' as const, title: '原查询', connectionId: 'synthetic', sql: "select '原文\t🚢';" }] });
 
 describe('缩进偏好的原settings与真实SQLite重启', () => {
-  it('旧缺项和损坏值只局部回退2/空格，不写盘、不丢SQL；schema保持6', async () => {
+  it('旧缺项和损坏值只局部回退2/空格，不写盘、不丢SQL；保持整合schema7', async () => {
     const { path, store } = await open(); close(store); const legacy = original(); delete legacy.editorTabSize; delete legacy.editorInsertSpaces;
     for (const values of [{}, { editorTabSize: '4', editorInsertSpaces: 'false' }, { editorTabSize: 0, editorInsertSpaces: 0 }, { editorTabSize: 9, editorInsertSpaces: null }, { editorTabSize: 1.5, editorInsertSpaces: [] }]) {
       seed(path, { ...legacy, ...values }); const before = readFileSync(path); const loaded = await LocalStore.open(path, wasm, protector); stores.push(loaded); const afterOpen = readFileSync(path);
       expect(loaded.settings()).toEqual({ ...legacy, editorTabSize: 2, editorInsertSpaces: true }); expect(readFileSync(path)).toEqual(afterOpen); close(loaded);
-      inspect(path, db => { expect(db.exec('PRAGMA user_version')[0].values[0][0]).toBe(6); expect(JSON.parse(String(db.exec('SELECT data FROM settings')[0].values[0][0]))).toEqual({ ...legacy, ...values }); });
+      inspect(path, db => { expect(db.exec('PRAGMA user_version')[0].values[0][0]).toBe(7); expect(JSON.parse(String(db.exec('SELECT data FROM settings')[0].values[0][0]))).toEqual({ ...legacy, ...values }); });
       expect(before.length).toBeGreaterThan(0);
     }
   });
@@ -43,7 +43,7 @@ describe('缩进偏好的原settings与真实SQLite重启', () => {
     for (const editorTabSize of [1, 8, 2]) for (const editorInsertSpaces of [false, true]) {
       const settings = { ...original(), editorTabSize, editorInsertSpaces }; store.saveSettings(validateCommand('settings.save', settings) as AppSettings);
       const reopened = await LocalStore.open(path, wasm, protector); stores.push(reopened); expect(reopened.settings()).toEqual(settings); close(reopened);
-      inspect(path, db => { expect(db.exec('PRAGMA user_version')[0].values[0][0]).toBe(6); expect(db.exec('SELECT COUNT(*) FROM queries')[0].values[0][0]).toBe(0); });
+      inspect(path, db => { expect(db.exec('PRAGMA user_version')[0].values[0][0]).toBe(7); expect(db.exec('SELECT COUNT(*) FROM queries')[0].values[0][0]).toBe(0); });
     }
     expect(editorIndentationOptions(undefined, undefined)).toEqual({ tabSize: 2, indentSize: 2, insertSpaces: true, detectIndentation: false });
   });

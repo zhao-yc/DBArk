@@ -4,7 +4,7 @@
 
 已核对本地锁定依赖源码：Monaco的 `textModelDefaults.js` 默认为 `insertSpaces:true`、`detectIndentation:true`；原SqlEditor显式宽度2但未关闭自动检测。sql-formatter 15.9.0的 `sqlFormatter.js` 默认为 `tabWidth:2`、`useTabs:false`。本片保留原默认2/空格，并显式设置 `detectIndentation:false`，防止正文已有Tab或其他宽度盖过用户选择。
 
-`settings` JSON只增加可选 `editorTabSize`、`editorInsertSpaces`，SQLite版本仍为6。主进程读取及renderer初始化分别做局部安全回退，不丢SQL、标签或其它偏好，不因读坏值自动保存。显式宽度只接受1–8原始整数、空格标志只接受原始布尔值；IPC严格schema与直接LocalStore写入口都拒绝坏值，包括显式undefined。缺项旧调用仍可保存，未知字段仍由IPC strict拒绝。
+`settings` JSON只增加可选 `editorTabSize`、`editorInsertSpaces`，本功能不升级SQLite版本；作者独立基线为6，Root整合版因命名筛选方案升为7。主进程读取及renderer初始化分别做局部安全回退，不丢SQL、标签或其它偏好，不因读坏值自动保存。显式宽度只接受1–8原始整数、空格标志只接受原始布尔值；IPC严格schema与直接LocalStore写入口都拒绝坏值，包括显式undefined。缺项旧调用仍可保存，未知字段仍由IPC strict拒绝。
 
 独立绑定器只调用现有widget的 `updateOptions` 与当前model的 `updateOptions`，同时应用 `tabSize`、`indentSize`、`insertSpaces`。挂载、切model、热更新及隐藏恢复都走同一选项路径，销毁时释放订阅。不重建model，不调用正文替换、自动格式化、Undo、选区或滚动写入方法；只读仍由原正文桥接控制。所有已开SqlEditor和后来新model均使用全局偏好。
 
