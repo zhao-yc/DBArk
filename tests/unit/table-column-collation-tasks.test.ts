@@ -12,6 +12,7 @@ vi.mock('../../src/engine/tableColumnCollationRead', async () => ({ ...await vi.
 import { TableColumnPatchTasks } from '../../src/engine/tableColumnPatchTasks';
 import { StructurePatchCache, structureCacheLimits } from '../../src/engine/structurePatchCache';
 import { readColumnCollationTaskFacts } from '../../src/engine/tableColumnCollationTaskRead';
+import * as collationProjection from '../../src/engine/tableColumnCollationTaskRead';
 
 /** 可变源仅代表RAM目录观测；不触及账号、连接配置、认证、环境变量或真实数据库。 */
 function makeFacts(collation = 'utf8mb4_bin') {
@@ -244,4 +245,26 @@ it('后核投影排队取消保留OK完成但不伪核验，apply令牌已消费
   expect(output).toMatchObject({ ddlSubmitted: true, ddlCompleted: true, definitionVerified: false }); expect(output.verificationError).toMatch(/取消/);
   expect(f.options.at(-1)?.columnPatch).toMatchObject({ ddlCompleted: true, definitionVerified: false, outcome: 'succeeded' });
   await expect(f.apply(value)).rejects.toThrow('已使用'); expect(f.sent.filter(sql => sql.startsWith('ALTER'))).toHaveLength(1);
+});
+it.each(['cancel', 'aborted', 'broken', 'normal'] as const)('后核投影完成后恢复前%s须重新检查发布门，OK事实和一次性令牌保持', async mode => {
+  const f = fixture(), value = await f.preview(await f.get()), original = collationProjection.columnCollationTaskViews;
+  const error = new Error('发布前取消原件'); let boundaryRan = false;
+  // 原投影/候选全部运行；then观察只构造精确Promise边界，不宣称真实IPC按此时序可达。
+  const spy = vi.spyOn(collationProjection, 'columnCollationTaskViews').mockImplementation((...args) => original(...args).then(columns => {
+    queueMicrotask(() => {
+      boundaryRan = true; const context = f.contexts.at(-1)!;
+      if (mode === 'aborted') context.checkCancelled = vi.fn();
+      if (mode === 'cancel' || mode === 'aborted') f.controllers.at(-1)!.abort(error);
+      if (mode === 'broken') context.managed.broken = true;
+    });
+    return columns;
+  }));
+  try {
+    const output = await f.apply(value); expect(boundaryRan).toBe(true);
+    expect(output).toMatchObject({ ddlSubmitted: true, ddlCompleted: true, definitionVerified: mode === 'normal' });
+    if (mode === 'normal') { expect(output.after).toBeDefined(); expect(output.verificationError).toBeUndefined(); }
+    else { expect(output.after).toBeUndefined(); expect(output.verificationError).toMatch(/取消、断线或读取失败/); }
+    expect(f.options.at(-1)?.columnPatch).toMatchObject({ ddlCompleted: true, definitionVerified: mode === 'normal', outcome: 'succeeded' });
+    await expect(f.apply(value)).rejects.toThrow('已使用'); expect(f.sent.filter(sql => sql.startsWith('ALTER'))).toHaveLength(1);
+  } finally { spy.mockRestore(); }
 });

@@ -348,6 +348,10 @@ export class TableColumnPatchTasks {
           if (fresh.kind !== 'ready') throw new Error('列排序规则后核目录不可用');
           const verified = verifyColumnCollationExecution(collationBefore.facts, fresh.value.facts, collationBefore.physical, fresh.value.physical, preview.plan);
           const columns = await columnCollationTaskViews(views(document, snapshot.refs, after.serverVersion), after, fresh.value, context);
+          // Promise完成与await恢复之间仍可能取消；发布后核结果前重查原任务，不能撤销已收到的OK。
+          context.checkCancelled();
+          if (context.managed.signal?.aborted) throw context.managed.signal.reason ?? new Error('列排序规则后核已取消');
+          if (context.managed.broken) throw new Error('列排序规则后核的结构连接已断开');
           output.after = { ddlHash: hash(after.source), columns };
           output.definitionVerified = progress.definitionVerified = verified.definitionVerified;
           if (verified.tableIdChanged) output.warnings.push('服务器操作后物理表编号已变化；定义核验不据此判断执行算法。');
