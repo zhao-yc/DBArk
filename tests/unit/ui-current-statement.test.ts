@@ -6,9 +6,10 @@ import { CurrentStatementIntent } from '../../src/renderer/currentStatementInten
 import { currentStatementZh } from '../../src/renderer/locales/currentStatement.zh-CN';
 import { queryContextZh } from '../../src/renderer/locales/queryContext.zh-CN';
 import { queryConnectionDatabase, resolveQueryDatabase } from '../../src/shared/queryContext';
+import { queryResultSelectionFixture } from '../fixtures/query-result-selection';
 
 const source = readFileSync(new URL('../../src/renderer/components/QueryTab.tsx', import.meta.url), 'utf8'), tree = ts.createSourceFile('QueryTab.tsx', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
-const names = new Set(['ensureSession', 'currentStatementScope', 'executeCurrentStatement', 'runQuery', 'prepareExecutionContext', 'querySource', 'execute', 'attachQueryEditor']), functions: string[] = [];
+const names = new Set(['ensureSession', 'currentStatementScope', 'executeCurrentStatement', 'runQuery', 'prepareExecutionContext', 'querySource', 'execute', 'attachQueryEditor', 'invalidateResultSelection']), functions: string[] = [];
 /** 运行真实组件入口和真正异步建连函数，仅替换IO与React端口。 */
 function visit(node: ts.Node) { if (ts.isFunctionDeclaration(node) && node.name && names.has(node.name.text)) functions.push(node.getText(tree)); node.forEachChild(visit); }
 visit(tree);
@@ -18,6 +19,7 @@ const code = ts.transpileModule(functions.join('\n') + '\nglobalThis.handlers={e
 function gate() { let release!: () => void; const pending = new Promise<void>(resolve => { release = resolve; }); return { pending, release }; }
 /** workspace、模型事件和IPC各有独立观察端口，保持生产执行函数本身不变。 */
 function fixture() {
+  const selection = queryResultSelectionFixture();
   let sql = "SET @before=1; SELECT '🧭当前'; DELETE FROM after;", version = 1, offset = sql.indexOf('当前'), modal = false, activeModel: unknown;
   const listeners = new Map<string, Set<() => void>>(), workspace = { settings: { activeTabId: 'tab', tabs: [{ id: 'tab', kind: 'query', connectionId: 'c', sql, database: 'db', databaseContext: { state: 'known', database: 'db' } }] }, connections: [{ id: 'c', database: 'db' }], connectionVersions: { c: 2 }, setBusy: vi.fn(), setDirty: vi.fn() };
   const listen = (kind: string, action: () => void) => { const list = listeners.get(kind) ?? new Set(); list.add(action); listeners.set(kind, list); return { dispose: () => { list.delete(action); } }; };
@@ -27,13 +29,13 @@ function fixture() {
   const editor = { getModel: () => activeModel, getPosition: () => ({ lineNumber: 1, column: offset + 1 }), getSelection: () => ({}), onDidChangeModel: (action: () => void) => listen('model', action), onDidDispose: (action: () => void) => listen('editorDispose', action), onDidChangeCursorPosition: (action: () => void) => listen('caret', action) };
   const invoke = vi.fn(async (command: string, _input?: any): Promise<any> => command === 'sessions.open' ? { sessionId: 'session' } : { results: [] }), flushSettings = vi.fn(async () => {}), handleQueryError = vi.fn(async (_reason: unknown) => {});
   let serial = 0;
-  const port = createContext({ CurrentStatementIntent, currentStatementZh, queryContextZh, queryConnectionDatabase, resolveQueryDatabase, Error, document: { querySelector: () => modal ? {} : null },
+  const port = createContext({ resultSelection: selection.resultSelection, CurrentStatementIntent, currentStatementZh, queryContextZh, queryConnectionDatabase, resolveQueryDatabase, Error, document: { querySelector: () => modal ? {} : null },
     useWorkspace: { getState: () => workspace, subscribe: (action: () => void) => listen('context', action).dispose }, tab: workspace.settings.tabs[0], settings: { resultLimit: 10 }, editor: { current: editor }, activeCurrentIntent: { current: null }, setSearchEditor: vi.fn(), sessionRef: { current: '' }, pendingSession: { current: null }, busyRef: { current: false }, cancelledQuery: { current: '' }, task: { current: '' }, parameterSession: { current: '' }, explainSource: { current: '' },
     invoke, flushSettings, handleQueryError, rememberDatabase: vi.fn(), uid: () => `task-${++serial}`, errorMessage: (reason: any) => reason.message, zh: { query: { text001: '请输入SQL' } },
     setSessionId: vi.fn(), setRecoveryDatabase: vi.fn(), setRecovery: vi.fn(), setBusy: vi.fn(), setQueryRunning: vi.fn(), setError: vi.fn(), setSelectedPin: vi.fn(), setShowPinSql: vi.fn(), setOutcome: vi.fn(), setStream: vi.fn(), setResultIndex: vi.fn(), setTransaction: vi.fn(), setTransactionKnown: vi.fn(),
   });
   runInContext(code, port);
-  return { port, workspace, model, editor, invoke, flushSettings, handleQueryError, emit, listeners,
+  return { selection, port, workspace, model, editor, invoke, flushSettings, handleQueryError, emit, listeners,
     edit: (value: string) => { sql = value; version++; emit('content'); }, swap: (value: unknown) => { activeModel = value; emit('model'); }, move: (value: number) => { offset = value; emit('caret'); }, modal: (value: boolean) => { modal = value; },
     execute: () => port.handlers.executeCurrentStatement() as Promise<void>, original: (mode?: string) => port.handlers.execute(mode) as Promise<void>,
   };
@@ -41,9 +43,10 @@ function fixture() {
 
 describe('真实QueryTab当前语句异步意图', () => {
   it('真实入口在异步建连和落盘后只发一次完整模型正文与真实UTF16光标', async () => {
-    expect(functions).toHaveLength(8); const f = fixture(), expected = f.model.getValue(); await f.execute();
+    expect(functions).toHaveLength(9); const f = fixture(), expected = f.model.getValue(); await f.execute();
     const calls = f.invoke.mock.calls.filter(([command]) => command === 'query.execute'); expect(calls).toHaveLength(1); expect(calls[0][1]).toMatchObject({ sessionId: 'session', sql: expected, currentStatement: { offset: expected.indexOf('当前') } }); expect(calls[0][1].sql).not.toBe('SELECT selected');
     expect(f.model.getValue()).toBe(expected); expect([...f.listeners.values()].every(list => !list.size)).toBe(true);
+    expect(f.selection.resultSelection.count(f.selection.binding)).toBe(0);
   });
   it.each(['connections.open', 'sessions.open', 'settings'] as const)('%s等待期间编辑再恢复原文仍不发送', async phase => {
     const f = fixture(), held = gate(), original = f.model.getValue();
