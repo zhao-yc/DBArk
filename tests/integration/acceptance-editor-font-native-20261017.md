@@ -31,4 +31,6 @@ Root 最小相关专项 12 项通过，TypeScript 类型与源码构建通过。
 
 将该用例显式加入未来 Windows x64、macOS arm64/x64 的源码和安装阶段环境。该配置本身不是通过证据，新原生固定头仍需等实际运行终态。
 
+随后静态独审核锁定 Monaco `coreCommands.js` 的 `cursorBottom`，发现 macOS 文末绑定应为 Command+下方向键。正式用例据此修正；Windows仍为Control+End，其已验路径不变。原 `c33a05e` 检查头保留，修正后的 macOS 结果须等新固定检查终态，不能用 Windows 或 RAM 结果代替。
+
 字号前一产品 `0f59758` 的 Linux CI `39044637174`／job `117430819429` 已成功：420 文件、7915 项通过／10 跳过，类型和构建通过。其日志 SHA-256 `21c58c81ea341d6866a7be83148dd8b02a02c672aa025f810015fcec09ec74f9`；该头不含字号，不能外推新功能全套通过。

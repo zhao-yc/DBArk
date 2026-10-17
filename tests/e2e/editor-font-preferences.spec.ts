@@ -10,6 +10,8 @@ test.use({ trace: 'off', screenshot: 'off', video: 'off' });
 test.setTimeout(90000);
 interface Owner { app: ElectronApplication; page: Page; ids: Set<number>; closed: boolean; confirmed: boolean; errors: string[]; ready: Promise<void>; }
 const modifier = process.platform === 'darwin' ? 'Meta' : 'Control';
+// Monaco的macOS文末动作使用Command+下方向键；End只用于其它平台。
+const cursorBottom = process.platform === 'darwin' ? 'Meta+ArrowDown' : 'Control+End';
 
 /** 每次启动独立登记原应用、窗口与退出事实，不复用上次启动的授权或全局夹具。 */
 async function launch(directory: string, owners: Owner[]): Promise<Owner> {
@@ -91,7 +93,7 @@ test('字号热更新保留真实正文与撤销，SQLite落盘并在独立重�
     await expect.poll(() => style(first).then(value => value.fontSize)).toBe('13px');
     const initial = await style(first), originalNode = await editor.elementHandle();
     expect(initial.lineHeight).toBe('23px');
-    await editor.getByRole('textbox').focus(); await first.page.keyboard.press(`${modifier}+End`); await first.page.keyboard.insertText(appended);
+    await editor.getByRole('textbox').focus(); await first.page.keyboard.press(cursorBottom); await first.page.keyboard.insertText(appended);
     await expect.poll(() => activeSql(first)).toBe(sql + appended);
     // 真实输入可能产生多个撤销分组；先记录本机同一撤销动作的实际基线，不假设整段只有一个undo项。
     await first.page.keyboard.press(`${modifier}+z`); await expect.poll(() => activeSql(first)).not.toBe(sql + appended);
