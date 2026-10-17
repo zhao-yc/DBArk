@@ -1,0 +1,5 @@
+.server-monitor-session-controls { display: flex; flex-wrap: wrap; align-items: end; gap: 10px; }
+.server-monitor-session-controls label { display: flex; flex: 1 1 280px; flex-direction: column; gap: 4px; }
+.server-monitor-session-controls input { width: 100%; min-width: 0; }
+.server-monitor-session-controls [role="group"] { display: flex; flex-wrap: wrap; gap: 6px; }
+.server-monitor-session-controls button[aria-pressed="true"] { border-color: var(--accent, #52c5a2); }
