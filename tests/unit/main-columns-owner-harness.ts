@@ -3,6 +3,7 @@ import { createContext, runInContext } from 'node:vm';
 import ts from 'typescript';
 import { vi } from 'vitest';
 import { ColumnsMainCapabilities } from '../../src/main/columnsMainCapabilities';
+import { TablePresetSources } from '../../src/main/tablePresets';
 import { validateCommand } from '../../src/shared/validation';
 import { SavedQuerySearchCancelled } from '../../src/main/savedQuerySearch';
 
@@ -12,7 +13,7 @@ export function deferred<T = any>() { let resolve!: (value: T) => void, reject!:
 /** AST提取实际生产入口；不存在原函数或IPC回调时立即失败，不维护手写分发器副本。 */
 function productionParts() {
   const source = readFileSync(new URL('../../src/main/index.ts', import.meta.url), 'utf8'), tree = ts.createSourceFile('index.ts', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
-  const names = ['dispatch', 'engineExited', 'createWindow', 'validateMainCommand'], parts: string[] = [];
+  const names = ['dispatch', 'engineExited', 'createWindow', 'validateMainCommand', 'cancelTablePresetRead', 'invalidateTablePresetSources'], parts: string[] = [];
   let wrapper = '';
   function visit(node: ts.Node) {
     if (ts.isFunctionDeclaration(node) && names.includes(node.name?.text ?? '')) parts.push(node.getText(tree));
@@ -55,7 +56,7 @@ export function mainColumnsHarness() {
   }
   let handler!: (event: any, payload: any) => Promise<any>;
   const context = createContext({
-    Date, Map, Error, Boolean, SavedQuerySearchCancelled, columnsMain: undefined, window: undefined, structureTokens: tokens, tasks, structureProgress: progress, events,
+    Date, Map, Error, Boolean, SavedQuerySearchCancelled, columnsMain: undefined, tablePresetSources: undefined, tablePresetReads: new Map(), window: undefined, structureTokens: tokens, tasks, structureProgress: progress, events,
     tableApplyReceipts: undefined, pendingQueryHistory: new Map(), completionTasks: new Set(), preparingTasks: new Map(), exportProgress: new Map(), sessions: new Map(),
     savedQuerySearches: { has: () => false }, savedQueryPages: undefined, historyPages: undefined, localSearchOperations: new Set(), shuttingDown: false, shutdownComplete: false,
     rendererSettingsCurrent: true, rendererURL: 'app://renderer', process: { resourcesPath: 'ram' }, __dirname: 'ram', join: (...parts: string[]) => parts.join('/'),
@@ -72,6 +73,8 @@ export function mainColumnsHarness() {
     connectionRevision: () => revision, assertAvailable: id => context.connectionConfig.assertAvailable(id), shuttingDown: () => context.shuttingDown,
     release: input => request('schema.columns.release', input) });
   context.columnsMain = capabilities;
+  // 导航和销毁执行原失效/取消函数；来源授权沿用同一真实owner，不能用空函数跳过。
+  context.tablePresetSources = new TablePresetSources({ assert: value => capabilities.assertCapturedOwner(value), same: (left, right) => capabilities.sharesDocumentOwner(left, right) });
   runInContext(ts.transpileModule(productionParts(), { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText, context);
   // createWindow在首个await前同步建立窗口及真实owner监听，RAM loadURL不操作GUI。
   void context.actual.createWindow();
