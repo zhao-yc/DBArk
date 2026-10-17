@@ -1,3 +1,4 @@
+import { TableCreateTasks } from './tableCreateTasks';
 import { CsvExportFieldCatalogs, type CsvExportFieldSnapshot } from './csvExportFields';
 import { TableCopyStructureTasks } from './tableCopyStructureTasks';
 import { applyTableTransaction, emptyTableApplyEvidence } from './tableApplyTransaction';
@@ -88,6 +89,7 @@ export class Engine {
   private readonly tableComments: TableCommentTasks;
   private readonly tableDrops: TableDropTasks;
   private readonly tableTruncates: TableTruncateTasks;
+  private readonly tableCreates: TableCreateTasks;
   private readonly databaseCreates: DatabaseCreateTasks;
   private readonly tableDefaultEncodings: TableDefaultEncodingTasks;
   private readonly foreignKeyPatches: TableForeignKeyPatchTasks;
@@ -112,6 +114,7 @@ export class Engine {
     this.tableComments = new TableCommentTasks({ run: (connectionId, taskId, action, options) => this.withIndependentTask(connectionId, taskId, (managed, control) => action({ managed, ...control }), options) }, undefined, this.structureCache);
     this.tableDrops = new TableDropTasks({ run: (connectionId, taskId, action, options) => this.withIndependentTask(connectionId, taskId, (managed, control) => action({ managed, ...control }), options) }, undefined, this.structureCache);
     this.tableTruncates = new TableTruncateTasks({ run: (connectionId, taskId, action, options) => this.withIndependentTask(connectionId, taskId, (managed, control) => action({ managed, ...control }), options) }, undefined, this.structureCache);
+    this.tableCreates = new TableCreateTasks({ run: (connectionId, taskId, action, options) => this.withIndependentTask(connectionId, taskId, (managed, control) => action({ managed, ...control }), options) }, undefined, this.structureCache);
     this.databaseCreates = new DatabaseCreateTasks({ run: (connectionId, taskId, action, options) => this.withIndependentTask(connectionId, taskId, (managed, control) => action({ managed, ...control }), options) }, undefined, this.structureCache);
     this.tableDefaultEncodings = new TableDefaultEncodingTasks({ run: (connectionId, taskId, action, options) => this.withIndependentTask(connectionId, taskId, (managed, control) => action({ managed, ...control }), options) }, undefined, this.structureCache);
     this.foreignKeyPatches = new TableForeignKeyPatchTasks({ run: (connectionId, taskId, action, options) => this.withIndependentTask(connectionId, taskId, (managed, control) => action({ managed, ...control }), options) }, undefined, this.structureCache);
@@ -341,6 +344,10 @@ export class Engine {
       case 'schema.tableAutoIncrement.apply': return this.tableAutoIncrements.apply(input as any, input.connectionRevision);
       case 'schema.tableAutoIncrement.release': return this.tableAutoIncrements.releaseTokens(input);
       case 'schema.tableComment.get': return this.tableComments.get(input as any, input.connectionRevision);
+      case 'schema.tableCreate.get': return this.tableCreates.get(input as any, input.connectionRevision);
+      case 'schema.tableCreate.preview': return this.tableCreates.preview(input as any, input.connectionRevision);
+      case 'schema.tableCreate.apply': return this.tableCreates.apply(input as any, input.connectionRevision);
+      case 'schema.tableCreate.release': return this.tableCreates.releaseTokens(input);
       case 'schema.databaseCreate.get': return this.databaseCreates.get(input as any, input.connectionRevision);
       case 'schema.databaseCreate.preview': return this.databaseCreates.preview(input as any, input.connectionRevision);
       case 'schema.databaseCreate.apply': return this.databaseCreates.apply(input as any, input.connectionRevision);
@@ -506,7 +513,7 @@ export class Engine {
       const task: IndependentTask = { connectionId, controller, done, structureTask: Boolean(options)||strictRead, generation: 0 };
       this.independentTasks.set(taskId, task);
       const label = options?.label ?? readLabel ?? '读取关联记录';
-      const detail = () => options ? (options.purpose === 'tableCopyStructure' ? { tableCopyStructure: { ...options.progress } } : options.purpose === 'databaseCreate' ? { databaseCreate: { ...options.progress } } : options.purpose === 'tableRename' ? { tableRename: { ...options.progress } } : options.purpose === 'tableAutoIncrement' ? { tableAutoIncrement: { ...options.progress } } : options.purpose === 'tableDefaultEncoding' ? { tableDefaultEncoding: { ...options.progress } } : options.purpose === 'tableDrop' ? { tableDrop: { ...options.progress } } : options.purpose === 'tableTruncate' ? { tableTruncate: { ...options.progress } } : options.purpose === 'tableComment' ? { tableComment: { ...options.progress } } : options.purpose === 'indexes' ? { indexPatch: { ...options.progress } } : options.purpose === 'foreignKeys' ? { foreignKeyPatch: { ...options.progress } } : { columnPatch: { ...options.progress } }) : readDetail?.()??{};
+      const detail = () => options ? (options.purpose === 'tableCreate' ? { tableCreate: { ...options.progress } } : options.purpose === 'tableCopyStructure' ? { tableCopyStructure: { ...options.progress } } : options.purpose === 'databaseCreate' ? { databaseCreate: { ...options.progress } } : options.purpose === 'tableRename' ? { tableRename: { ...options.progress } } : options.purpose === 'tableAutoIncrement' ? { tableAutoIncrement: { ...options.progress } } : options.purpose === 'tableDefaultEncoding' ? { tableDefaultEncoding: { ...options.progress } } : options.purpose === 'tableDrop' ? { tableDrop: { ...options.progress } } : options.purpose === 'tableTruncate' ? { tableTruncate: { ...options.progress } } : options.purpose === 'tableComment' ? { tableComment: { ...options.progress } } : options.purpose === 'indexes' ? { indexPatch: { ...options.progress } } : options.purpose === 'foreignKeys' ? { foreignKeyPatch: { ...options.progress } } : { columnPatch: { ...options.progress } }) : readDetail?.()??{};
       const send = (event: TaskEvent) => { if (!quiet) this.emit(event); };
       const report = () => send({ taskId, status: 'running', progress: 0, message: label, ...detail() });
       const checkCancelled = () => { if (task.cancelRequested || controller.signal.aborted) throw new Error('任务已取消；已执行的结构或数据变更不会撤销'); };

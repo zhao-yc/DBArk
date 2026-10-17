@@ -1,3 +1,4 @@
+import { tableCreateDesignSchema, tableCreateAcknowledgements } from './tableCreate';
 import { tableCopyStructureAcknowledgements, validateTableCopyStructureName } from './tableCopyStructure';
 import { z } from 'zod';
 import { csvExportFieldLimits } from './csvExportFields';
@@ -181,6 +182,10 @@ export const commandSchemas: Record<Command, z.ZodType> = {
   'schema.tableTruncate.preview': z.object({ snapshotId: id, taskId: id }).strict(),
   'schema.tableTruncate.apply': z.object({ previewToken: id, confirmation: z.string().min(3).max(129), acknowledgements: z.array(z.enum(tableTruncateAcknowledgements)).length(3).refine(values => new Set(values).size === values.length), taskId: id }).strict(),
   'schema.tableTruncate.release': z.object({ snapshotId: id.optional(), previewToken: id.optional() }).strict().refine(value => !!value.snapshotId || !!value.previewToken),
+  'schema.tableCreate.get': z.object({ connectionId: id, database: tableCreateDesignSchema.shape.database, taskId: id }).strict(),
+  'schema.tableCreate.preview': z.object({ snapshotId: id, design: tableCreateDesignSchema, taskId: id }).strict(),
+  'schema.tableCreate.apply': z.object({ previewToken: id, confirmation: z.string().max(129), acknowledgements: z.array(z.enum(tableCreateAcknowledgements)).length(2).refine(value => new Set(value).size === 2), taskId: id }).strict(),
+  'schema.tableCreate.release': z.object({ snapshotId: id.optional(), previewToken: id.optional() }).strict().refine(value => !!(value.snapshotId || value.previewToken)),
   'schema.databaseCreate.get': z.object({ connectionId: id, taskId: id }).strict(),
   'schema.databaseCreate.preview': z.object({ snapshotId: id, name: z.string().max(64).refine(value => { try { validateDatabaseCreateName(value); return true; } catch { return false; } }, '数据库名称不在受控范围'), charset: z.string().regex(/^[A-Za-z0-9_]{1,64}$/), collation: z.string().regex(/^[A-Za-z0-9_]{1,255}$/), taskId: id }).strict(),
   'schema.databaseCreate.apply': z.object({ previewToken: id, confirmation: z.string().max(64), acknowledgements: z.array(z.enum(databaseCreateAcknowledgements)).max(2).refine(value => new Set(value).size === value.length, '确认项不能重复'), taskId: id }).strict(),
