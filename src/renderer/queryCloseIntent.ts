@@ -2,13 +2,15 @@ import type * as monaco from 'monaco-editor';
 import type { QueryDatabaseContext } from '../shared/queryContext';
 import { queryDatabasePatch } from '../shared/queryContext';
 import { queryCloseZh as text } from './locales/queryClose.zh-CN';
+import type { WorkspaceTab } from './store';
 
-export interface QueryCloseRequest { readonly tabId: string; }
+export interface QueryCloseRequest { readonly tabId: string; readonly failed?: () => void; readonly mutate?: (before: WorkspaceTab, patch: Partial<WorkspaceTab>, update: () => void) => void; }
 /** 请求只存在窗口内存中，以对象身份区分同标签的不同关闭操作。 */
 export class QueryCloseRequests {
   private current?: QueryCloseRequest;
   /** 有请求未终结时拒绝第二次申请。 */
-  begin(tabId: string): QueryCloseRequest | undefined { if (this.current) return; return this.current = { tabId }; }
+  begin(tabId: string, hooks?: Pick<QueryCloseRequest, 'failed' | 'mutate'>): QueryCloseRequest | undefined { if (this.current) return; return this.current = { tabId, ...hooks }; }
+  get pending(): boolean { return !!this.current; }
   /** 只有原请求对象可消费完成结果，旧返回不能关闭新标签。 */
   finish(request: QueryCloseRequest): boolean { if (this.current !== request) return false; this.current = undefined; return true; }
 }

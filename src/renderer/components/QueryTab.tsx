@@ -127,10 +127,10 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
     return pendingSession.current;
   }
   /** 仅更新仍存在的查询标签；重复快照不触发SQLite写入，也不复活已经关闭的标签。 */
-  function rememberDatabase(context:QueryDatabaseContext){
+  function rememberDatabase(context:QueryDatabaseContext, request?:QueryCloseRequest){
     const workspace=useWorkspace.getState(),current=workspace.settings.tabs.find(item=>item.id===tab.id);if(!current)return;
     const patch=queryDatabasePatch(context);if(current.database===patch.database&&JSON.stringify(current.databaseContext)===JSON.stringify(context))return;
-    workspace.updateTab(tab.id,patch);
+    if(request?.mutate)request.mutate(current,patch,()=>workspace.updateTab(tab.id,patch));else workspace.updateTab(tab.id,patch);
   }
   /** 用户SQL发送前等待恢复信息真正落盘，不能把400毫秒防抖窗口当作崩溃安全。 */
   async function prepareExecutionContext(){
@@ -331,7 +331,7 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
     finally { busyRef.current = false; setBusy(false); useWorkspace.getState().setBusy(tab.id, false); }
   }
   /** 保存点击时的正文与真实会话默认库；不执行SQL，不从初始标签库回填未知状态。 */
-  async function saveQuery(action: 'update' | 'create', name: string, intent?: QuerySaveCloseIntent) {
+  async function saveQuery(action: 'update' | 'create', name: string, intent?: QuerySaveCloseIntent, request?: QueryCloseRequest) {
     if(busyRef.current)throw Error(queryContextZh.busy);
     intent?.assertCurrent();
     const current = useWorkspace.getState().settings.tabs.find(item => item.id === tab.id);
@@ -345,13 +345,16 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
         : current.sourceBinding?.context.state === 'legacy' && current.databaseContext === undefined ? savedQueryOriginContext(current.database)
         : savedQueryOriginContext(undefined, resolveQueryDatabase(current.database,current.databaseContext,connection?.database));
       intent?.assertCurrent();
-      if (context.state !== 'legacy') { intent?.adoptContext(context); rememberDatabase(context); }
+      if (context.state !== 'legacy') { intent?.adoptContext(context); rememberDatabase(context, request); }
       const content = { name, connectionId: current.connectionId, context, sql };
       if (action === 'update' && !current.sourceBinding) throw Error(queryBindingZh.unbound);
       const result = action === 'update' ? await invoke('queries.updateSource', { source: current.sourceBinding!, content }) : await invoke('queries.create', content);
       // 成功后才推进所见摘要；仅更新仍存在的原标签，绝不替换会话、事务或结果。
       const workspace = useWorkspace.getState();
-      if ((!intent || intent.ownsView()) && workspace.settings.tabs.some(item => item.id === tab.id)) workspace.updateTab(tab.id, { title: result.name, sourceBinding: result.source });
+      if ((!intent || intent.ownsView()) && workspace.settings.tabs.some(item => item.id === tab.id)) {
+        const before=workspace.settings.tabs.find(item=>item.id===tab.id)!,patch={title:result.name,sourceBinding:result.source};
+        if(request?.mutate)request.mutate(before,patch,()=>workspace.updateTab(tab.id,patch));else workspace.updateTab(tab.id,patch);
+      }
       if (!intent || intent.ownsView()) setSave(false); workspace.notify(action === 'update' ? queryBindingZh.saved : queryBindingZh.created);
       let restored = true;
       await flushSettings().catch(reason => { restored = false; workspace.notify(queryBindingZh.restoreFailed + errorMessage(reason), true); });
@@ -367,21 +370,23 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
   /** 一次关闭请求只借用既有保存函数；失败保留弹窗，成功后不重发写入。 */
   async function saveAndClose(action: 'update' | 'create', name: string) {
     const request = closeRequestRef.current;
-    if (!request || !editor.current) throw Error(queryCloseZh.unavailable);
-    const before = useWorkspace.getState();
-    if (before.activeJobs[tab.id] || before.dirtyTabs[tab.id]) throw Error(queryCloseZh.changed);
-    const intent = new QuerySaveCloseIntent(editor.current, () => {
-      const state = useWorkspace.getState(), current = state.settings.tabs.find(item => item.id === tab.id), profile = state.connections.find(item => item.id === current?.connectionId);
-      return { present: current?.kind === 'query' && !!profile, connection: profile, draft: current?.sql, blocked: !!state.dirtyTabs[tab.id], connectionId: current?.connectionId ?? '', connectionVersion: state.connectionVersions[tab.connectionId] ?? 0, sessionId: sessionRef.current, database: current?.database, databaseContext: current?.databaseContext };
-    }, listener => useWorkspace.subscribe(listener), () => alive.current, () => closeRequestRef.current === request);
-    closeIntent.current = intent;
+    let intent: QuerySaveCloseIntent | undefined;
     try {
-      const result = await saveQuery(action, name, intent);
+      if (!request || !editor.current) throw Error(queryCloseZh.unavailable);
+      const before = useWorkspace.getState();
+      if (before.activeJobs[tab.id] || before.dirtyTabs[tab.id]) throw Error(queryCloseZh.changed);
+      intent = new QuerySaveCloseIntent(editor.current, () => {
+        const state = useWorkspace.getState(), current = state.settings.tabs.find(item => item.id === tab.id), profile = state.connections.find(item => item.id === current?.connectionId);
+        return { present: current?.kind === 'query' && !!profile, connection: profile, draft: current?.sql, blocked: !!state.dirtyTabs[tab.id], connectionId: current?.connectionId ?? '', connectionVersion: state.connectionVersions[tab.connectionId] ?? 0, sessionId: sessionRef.current, database: current?.database, databaseContext: current?.databaseContext };
+      }, listener => useWorkspace.subscribe(listener), () => alive.current, () => closeRequestRef.current === request);
+      closeIntent.current = intent;
+      const result = await saveQuery(action, name, intent, request);
       if (!alive.current || closeRequestRef.current !== request) return;
       const state = useWorkspace.getState(), close = result.restored && result.busyUnchanged && intent.isCurrent() && !state.activeJobs[tab.id] && !state.dirtyTabs[tab.id];
       if (result.restored && !close) state.notify(queryCloseZh.retained, true);
       setClosePhase(null); onCloseRequestFinished?.(request, close);
-    } finally { intent.dispose(); if (closeIntent.current === intent) closeIntent.current = undefined; }
+    } catch (reason) { request?.failed?.(); throw reason; }
+    finally { intent?.dispose(); if (closeIntent.current === intent) closeIntent.current = undefined; }
   }
   /** 直接关闭也需核对请求及既有作业/事务守卫；空草稿不要求保存。 */
   function finishClose(close: boolean) {
