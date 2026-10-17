@@ -12,7 +12,7 @@ import { schemaCompareResultsFixture } from './schemaCompareResults.fixtures';
 import type { SchemaComparePreviewInput } from '../../src/shared/schemaCompare';
 
 // 包装只记录正式组件端口供迟到回调对照；真实组件、父窗口和 ReactDOM 均不替换。
-const captured = vi.hoisted(() => ({ props: [] as SchemaCompareResultsProps[], actions: [] as { preview?: () => void; save?: () => void }[] }));
+const captured = vi.hoisted(() => ({ props: [] as SchemaCompareResultsProps[], actions: [] as { preview?: () => void; save?: () => void; close?: () => void }[] }));
 vi.mock('../../src/renderer/components/SchemaCompareResults', async original => {
   const actual = await original<typeof import('../../src/renderer/components/SchemaCompareResults')>();
   return { ...actual, SchemaCompareResults: (props: SchemaCompareResultsProps) => { captured.props.push(props); return <actual.SchemaCompareResults {...props}/>; } };
@@ -21,12 +21,13 @@ vi.mock('../../src/renderer/components/ui', async original => {
   const actual = await original<typeof import('../../src/renderer/components/ui')>();
   const { Children, isValidElement } = await import('react');
   return { ...actual, Modal: (props: React.ComponentProps<typeof actual.Modal>) => {
-    const actions: { preview?: () => void; save?: () => void } = {};
+    const actions: { preview?: () => void; save?: () => void; close?: () => void } = {};
     // 仅捕获正式父窗口交给 Modal 的按钮回调；仍渲染原 Modal，不读取 React 私有字段。
     function visit(nodes: React.ReactNode): void {
       Children.forEach(nodes, child => { if (isValidElement<{ children?: React.ReactNode; onClick?: () => void }>(child)) {
         if (child.type === 'button' && child.props.children === labels.preview) actions.preview = child.props.onClick;
         if (child.type === 'button' && child.props.children === labels.save) actions.save = child.props.onClick;
+        if (child.type === 'button' && child.props.children === labels.close) actions.close = child.props.onClick;
         visit(child.props.children);
       } });
     }
@@ -121,8 +122,9 @@ describe('正式父窗口快照接纳与预览', () => {
     const a = schemaCompareResultsFixture('快照甲'), b = schemaCompareResultsFixture('快照乙');
     const services = { compare: vi.fn().mockResolvedValueOnce(a).mockResolvedValueOnce(b), cancel: vi.fn(), release: vi.fn().mockResolvedValue(undefined), save: vi.fn().mockResolvedValue(true),
       preview: vi.fn().mockResolvedValue({ direction: 'source-to-target', target: a.target, expiresAt: a.expiresAt, sql: '仅内存 SQL 审查稿', statements: [{ category: 'columns', name: 'NULL', sql: '仅内存 SQL', destructive: false }], blocked: [], warnings: [], executable: false }) };
-    await mount(<SchemaCompareDialog connections={[{ id: 'a', name: '甲' }, { id: 'b', name: '乙' }]} services={services} initialSource={a.source} initialTarget={a.target} onClose={() => undefined}/>);
-    await click(button(labels.start)); return { a, b, services };
+    const closed = vi.fn();
+    await mount(<SchemaCompareDialog connections={[{ id: 'a', name: '甲' }, { id: 'b', name: '乙' }]} services={services} initialSource={a.source} initialTarget={a.target} onClose={closed}/>);
+    await click(button(labels.start)); return { a, b, services, closed };
   }
   it('隐藏已选仍进入正式预览，清除后撤销旧审查稿并仅预览保留项', async () => {
     const { a, services } = await setup();
@@ -194,5 +196,38 @@ describe('正式父窗口快照接纳与预览', () => {
     await click(button(labels.start)); await check('选择 字段 NULL', true);
     await act(async () => { oldPreview(); oldSave(); }); expect(services.preview).toHaveBeenCalledTimes(1); expect(services.save).not.toHaveBeenCalled();
     await click(button(labels.preview)); expect(services.preview).toHaveBeenCalledTimes(2);
+  });
+  it('权威选择：同一渲染内清除隐藏项再连续选择，预览活读全部已接纳意图', async () => {
+    const { a, services } = await setup(); await check('选择 字段 NULL', true); await check('选择 主键 / 索引 ix.Mixed', true);
+    await input(text.category, 'columns'); const before = captured.props.at(-1)!, actions = captured.actions.at(-1)!;
+    await act(async () => {
+      before.onSelectionChange({ snapshotId: a.snapshotId, kind: 'clearHidden', ids: [id(a.rows[1])] });
+      before.onSelectionChange({ snapshotId: a.snapshotId, kind: 'toggle', id: id(a.rows[2]), checked: true });
+      actions.preview!();
+    });
+    expect(captured.props.at(-1)!.selectedIds).toEqual([id(a.rows[0]), id(a.rows[2])]);
+    expect(services.preview).toHaveBeenLastCalledWith({ snapshotId: a.snapshotId, selections: [{ category: 'columns', name: 'NULL' }, { category: 'foreignKeys', name: 'fk' }] });
+    expect(byLabel(labels.sql).value).toBe('仅内存 SQL 审查稿');
+  });
+  it('权威选择：选择先接纳会同步撤销旧稿，原渲染保存 handler 不能保存失效稿', async () => {
+    const { a, services } = await setup(); await check('选择 字段 NULL', true); await click(button(labels.preview));
+    const before = captured.props.at(-1)!, actions = captured.actions.at(-1)!;
+    await act(async () => {
+      before.onSelectionChange({ snapshotId: a.snapshotId, kind: 'toggle', id: id(a.rows[1]), checked: true });
+      actions.save!();
+    });
+    expect(services.save).not.toHaveBeenCalled(); expect(captured.props.at(-1)!.selectedIds).toEqual([id(a.rows[0]), id(a.rows[1])]); expect(document.body.querySelectorAll('textarea')).toHaveLength(0);
+    await click(button(labels.preview)); await click(button(labels.save)); expect(services.save).toHaveBeenCalledTimes(1); expect(document.body.textContent).toContain(labels.saved);
+  });
+  it('权威选择：关闭等待原预览 owner，终态不接纳旧稿或让旧回调重新领取', async () => {
+    const { a, services, closed } = await setup(); await check('选择 字段 NULL', true);
+    const before = captured.props.at(-1)!, actions = captured.actions.at(-1)!; let finish!: () => void;
+    const waiting = new Promise<void>(resolve => { finish = resolve; });
+    services.preview.mockImplementationOnce(async () => { await waiting; return { sql: '关闭后不可显示', statements: [{}], warnings: [], blocked: [] }; });
+    await click(button(labels.preview)); await click(button(labels.close)); expect(closed).not.toHaveBeenCalled();
+    await act(async () => { before.onSelectionChange({ snapshotId: a.snapshotId, kind: 'toggle', id: id(a.rows[1]), checked: true }); actions.preview!(); actions.save!(); actions.close!(); });
+    expect(captured.props.at(-1)!.selectedIds).toEqual([id(a.rows[0])]); expect(services.preview).toHaveBeenCalledTimes(1);
+    await act(async () => finish()); expect(closed).toHaveBeenCalledTimes(1); expect(services.release).toHaveBeenCalledWith(a.snapshotId); expect(document.body.querySelectorAll('textarea')).toHaveLength(0);
+    await act(async () => { actions.preview!(); actions.save!(); actions.close!(); }); expect(closed).toHaveBeenCalledTimes(1); expect(services.preview).toHaveBeenCalledTimes(1); expect(services.save).not.toHaveBeenCalled();
   });
 });

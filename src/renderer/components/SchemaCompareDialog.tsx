@@ -11,6 +11,8 @@ export interface SchemaCompareDialogProps {
   connections: readonly { id: string; name: string }[]; services: SchemaCompareServices;
   initialSource?: SchemaCompareTarget; initialTarget?: SchemaCompareTarget; onClose(): void;
 }
+/** 已接纳选择以同步引用为权威；React state 只负责投影，不能作为请求范围的同步屏障。 */
+interface AcceptedSelection { report: SchemaCompareResult; ids: string[]; revision: number; }
 /** 通过注入服务接线，渲染侧只提交连接引用和表名，不能持有凭据或自行借用查询会话。 */
 export function SchemaCompareDialog({ connections, services, initialSource, initialTarget, onClose }: SchemaCompareDialogProps) {
   const fallback = { connectionId: '', database: '', table: '' };
@@ -21,6 +23,7 @@ export function SchemaCompareDialog({ connections, services, initialSource, init
   const active = useRef<string | null>(null), work = useRef<Promise<void> | null>(null), cancellation = useRef<{ taskId: string; promise: Promise<unknown> } | null>(null), stopRequested = useRef(false), alive = useRef(true), closeRequested = useRef(false), service = useRef(services);
   const activeService = useRef(services), cancelFailure = useRef<string | null>(null);
   const previewOwner = useRef<object | null>(null), currentEpoch = useRef<object | null>(null), epoch = {};
+  const acceptedSelection = useRef<AcceptedSelection | null>(null), acceptedPreview = useRef<{ selection: AcceptedSelection; value: SchemaComparePreview } | null>(null);
   currentEpoch.current = epoch;
   const selectionBlocked = useRef(false); selectionBlocked.current = !!previewOwner.current || busy || closing || previewBusy;
   service.current = services;
@@ -32,11 +35,11 @@ export function SchemaCompareDialog({ connections, services, initialSource, init
     if (!parsed.success) { setError(text.invalid); return; }
     const taskId = parsed.data.taskId, current = service.current;
     if (snapshot.current) void current.release(snapshot.current).catch(() => undefined);
-    snapshot.current = null; setSelected([]); setPreview(null); setSaved(false);
+    snapshot.current = null; acceptedSelection.current = null; acceptedPreview.current = null; setSelected([]); setPreview(null); setSaved(false);
     activeService.current = current;
     active.current = taskId; stopRequested.current = false; cancelFailure.current = null; setBusy(true); setReport(null); setError('');
     const operation = (async () => {
-      try { const result = await current.compare(parsed.data); if (alive.current && !stopRequested.current) { snapshot.current = result.snapshotId; setReport(result); } else await current.release(result.snapshotId); }
+      try { const result = await current.compare(parsed.data); if (alive.current && !stopRequested.current) { snapshot.current = result.snapshotId; acceptedSelection.current = { report: result, ids: [], revision: 0 }; setReport(result); } else await current.release(result.snapshotId); }
       catch (reason) { if (alive.current) setError(stopRequested.current ? cancelFailure.current ?? text.stopped : reason instanceof Error ? reason.message : text.failed); }
       finally { if (alive.current) { setBusy(false); if (stopRequested.current) setError(cancelFailure.current ?? text.stopped); } active.current = null; }
     })();
@@ -55,28 +58,29 @@ export function SchemaCompareDialog({ connections, services, initialSource, init
   }
   /** 关闭先取消再等待读取终态；取消失败时保留窗口和错误供核对。 */
   async function close(): Promise<void> {
-    if (closeRequested.current) return;
+    if (!alive.current || currentEpoch.current !== epoch || closeRequested.current) return;
     closeRequested.current = true; setClosing(true);
-    try { await cancel(); await work.current; await previewWork.current; if (snapshot.current) await service.current.release(snapshot.current); snapshot.current = null; onClose(); }
+    try { await cancel(); await work.current; await previewWork.current; if (snapshot.current) await service.current.release(snapshot.current); snapshot.current = null; acceptedSelection.current = null; acceptedPreview.current = null; onClose(); }
     catch (reason) { setError(reason instanceof Error ? reason.message : text.failed); closeRequested.current = false; setClosing(false); }
   }
   /** 输入一旦变化就撤销旧预览，避免将旧方向或旧目标显示为当前结果。 */
   function changeEndpoint(side: 'source' | 'target', value: SchemaCompareTarget): void {
     if (snapshot.current) void service.current.release(snapshot.current).catch(() => undefined);
-    snapshot.current = null; setReport(null); setPreview(null); setSelected([]); setSaved(false);
+    snapshot.current = null; acceptedSelection.current = null; acceptedPreview.current = null; setReport(null); setPreview(null); setSelected([]); setSaved(false);
     if (side === 'source') setSource(value); else setTarget(value);
   }
   /** 只把稳定差异的类别与名称传给引擎；SQL 及原定义不回传。 */
   function generatePreview(): void {
-    if (!report || !alive.current || currentEpoch.current !== epoch || snapshot.current !== report.snapshotId || selectionBlocked.current || active.current || closeRequested.current) return;
+    const selection = acceptedSelection.current;
+    if (!report || !selection || selection.report !== report || !selection.ids.length || selection.ids.length > 100 || !alive.current || currentEpoch.current !== epoch || snapshot.current !== report.snapshotId || selectionBlocked.current || active.current || closeRequested.current) return;
     // 服务可以在首个 await 前同步回调；先登记 owner 并封锁选择，重绘不能清掉进行中的封锁。
     const owner = {}; previewOwner.current = owner; selectionBlocked.current = true;
     setPreviewBusy(true); setError(''); setSaved(false);
-    const id = report.snapshotId, input = { snapshotId: id, selections: report.rows.filter(row => selected.includes(JSON.stringify([row.category, row.name]))).map(({ category, name }) => ({ category, name })) };
+    const id = report.snapshotId, input = { snapshotId: id, selections: report.rows.filter(row => selection.ids.includes(JSON.stringify([row.category, row.name]))).map(({ category, name }) => ({ category, name })) };
     const operation = (async () => {
       try {
         const result = await service.current.preview(input);
-        if (previewOwner.current === owner && alive.current && !closeRequested.current && snapshot.current === id) setPreview(result);
+        if (previewOwner.current === owner && acceptedSelection.current === selection && alive.current && !closeRequested.current && snapshot.current === id) { acceptedPreview.current = { selection, value: result }; setPreview(result); }
       } catch (reason) { if (previewOwner.current === owner && alive.current && snapshot.current === id) setError(reason instanceof Error ? reason.message : text.failed); }
       finally {
         // 只释放本操作；旧异步尾部不能解除后续操作、比较或关闭持有的门。
@@ -88,12 +92,13 @@ export function SchemaCompareDialog({ connections, services, initialSource, init
   }
   /** 保存期间固定审查稿并等待原生文件操作，关闭不会抢先卸载窗口。 */
   async function savePreview(): Promise<void> {
-    if (!preview || !report || !alive.current || currentEpoch.current !== epoch || snapshot.current !== report.snapshotId || selectionBlocked.current || active.current || closeRequested.current) return;
+    const draft = acceptedPreview.current;
+    if (!preview || !report || !draft || draft.value !== preview || draft.selection !== acceptedSelection.current || draft.selection.report !== report || !alive.current || currentEpoch.current !== epoch || snapshot.current !== report.snapshotId || selectionBlocked.current || active.current || closeRequested.current) return;
     // 保存同样先同步封锁，固定本次 SQL 与快照，防止原生文件对话框返回前选择改变。
-    const owner = {}, id = report.snapshotId, sql = preview.sql; previewOwner.current = owner; selectionBlocked.current = true;
+    const owner = {}, id = report.snapshotId, sql = draft.value.sql; previewOwner.current = owner; selectionBlocked.current = true;
     setPreviewBusy(true); setError('');
     const operation = (async () => {
-      try { const saved = await service.current.save(sql); if (saved && previewOwner.current === owner && alive.current && !closeRequested.current && snapshot.current === id) setSaved(true); }
+      try { const saved = await service.current.save(sql); if (saved && previewOwner.current === owner && acceptedPreview.current === draft && acceptedSelection.current === draft.selection && alive.current && !closeRequested.current && snapshot.current === id) setSaved(true); }
       catch (reason) { if (previewOwner.current === owner && alive.current && snapshot.current === id) setError(reason instanceof Error ? reason.message : text.failed); }
       finally { if (previewOwner.current === owner) { previewOwner.current = null; selectionBlocked.current = !!active.current || closeRequested.current; if (alive.current) setPreviewBusy(false); } }
     })();
@@ -113,7 +118,13 @@ export function SchemaCompareDialog({ connections, services, initialSource, init
       <SchemaCompareResults report={report} selectedIds={selected} disabled={busy || closing || previewBusy} onSelectionChange={event => {
         // 回调捕获原快照，接纳前活读父级归属和忙碌状态，旧报告不能借新报告改选择或撤销预览。
         if (!alive.current || event.snapshotId !== report.snapshotId || snapshot.current !== report.snapshotId || selectionBlocked.current || active.current || closeRequested.current) return;
-        setSelected(previous => snapshot.current === event.snapshotId ? applySchemaCompareResultsSelection(report, previous, event) : previous);
+        const current = acceptedSelection.current;
+        if (!current || current.report !== report) return;
+        const next = applySchemaCompareResultsSelection(report, current.ids, event);
+        if (next.length === current.ids.length && next.every((id, index) => id === current.ids[index])) return;
+        // 在同一个同步段先发布权威选择代次并撤销旧稿，再排队显示状态；预览不再读取旧闭包。
+        acceptedSelection.current = { report, ids: next, revision: current.revision + 1 }; acceptedPreview.current = null;
+        setSelected(next);
         setPreview(null); setSaved(false);
       }}/>
       <p>{text.previewScope} {text.selected}：{selected.length}</p>
