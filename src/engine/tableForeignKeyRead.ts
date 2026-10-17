@@ -66,7 +66,7 @@ function canRetainReadOnly(context: StructureTaskContext, error: unknown): boole
   return error instanceof Error;
 }
 /** 固定投影和 LIMIT+1 检测，不让被过滤掉的空目录冒充没有外键。 */
-async function outgoingRows(context: StructureTaskContext, target: Target, io: ForeignKeyReadIO): Promise<{ rc: Row[]; kcu: Row[]; bytes: number }> {
+export async function readOutgoingForeignKeyRows(context: StructureTaskContext, target: Target, io: Pick<ForeignKeyReadIO, 'query'> = productionIO): Promise<{ rc: Row[]; kcu: Row[]; bytes: number }> {
   const where = `CONSTRAINT_SCHEMA = ${literal(target.database)} AND TABLE_NAME = ${literal(target.table)}`;
   const rc = (await io.query<Row[]>(context, `SELECT CONSTRAINT_SCHEMA, CONSTRAINT_NAME, TABLE_NAME, UNIQUE_CONSTRAINT_SCHEMA, REFERENCED_TABLE_NAME, UNIQUE_CONSTRAINT_NAME, MATCH_OPTION, UPDATE_RULE, DELETE_RULE FROM information_schema.REFERENTIAL_CONSTRAINTS WHERE ${where} ORDER BY CONSTRAINT_NAME LIMIT 257`)).rows;
   if (!Array.isArray(rc) || rc.length > limits.foreignKeys) throw new Error('外键规则目录超过 256 条预算');
@@ -114,7 +114,7 @@ export async function readForeignKeyStructure(context: StructureTaskContext, tar
   if (parsed.foreignKeys.length > limits.foreignKeys || parsed.foreignKeys.reduce((count, key) => count + key.childColumnNames.length, 0) > limits.parts) throw new Error('源外键定义超过受控预算');
   let entries: ForeignKeyCatalogEntry[] = [], outgoingComplete = false, outgoingDigest = hash(['unread']);
   try {
-    const rows = await outgoingRows(context, childTarget, io);
+    const rows = await readOutgoingForeignKeyRows(context, childTarget, io);
     if (bytes + rows.bytes > limits.bytes) throw new Error('外键结构总快照超过 16 MiB');
     bytes += rows.bytes;
     outgoingDigest = hash([rows.rc.map(row => Object.entries(row).sort()).sort(), rows.kcu.map(row => Object.entries(row).sort()).sort()]);

@@ -14,6 +14,8 @@ const definition = "CREATE TABLE `new``table` (`id` bigint unsigned NOT NULL AUT
 let showDefinition: string | undefined;
 let catalogType: string | undefined, catalogDefault: string | null | undefined;
 let indexChanges: Record<string, unknown>;
+let foreignRules: unknown, foreignParts: unknown, foreignIndex: boolean, deniedForeign: 'rc' | 'kcu' | undefined;
+let laterDefinition: string | undefined, showReads: number, laterShowFails: boolean;
 let engine: Engine, events: TaskEvent[], sent: string[], connections: ManagedConnection[], sequence: number, uuid: string, mode: string, occupied: boolean, created: boolean, closeFails: boolean, badVerify: boolean, dialect: 'mysql' | 'mariadb', version: string;
 let hold: RegExp | undefined, held: { complete(error?: Error): void } | undefined, fail: RegExp | undefined, holdClose: boolean, releaseClose: (() => void) | undefined;
 /** 仅替换驱动，真实Engine、任务锁、缓存、SQL与取消/关闭代码均执行产品实现。 */
@@ -32,10 +34,15 @@ function managed(signal?: AbortSignal): ManagedConnection {
       else if (sql.startsWith('SELECT SCHEMA_NAME')) rows = [{ name: 'db', charset: 'utf8mb4', collation: 'utf8mb4_bin' }];
       else if (sql.startsWith('SELECT TABLE_NAME')) rows = occupied || created ? [{ TABLE_NAME: 'new`table' }] : [];
       else if (sql.startsWith('CREATE TABLE')) { created = true; rows = { affectedRows: 0, warningStatus: 0 }; }
-      else if (sql.startsWith('SHOW CREATE TABLE')) rows = [{ 'Create Table': showDefinition ?? definition }];
+      else if (sql.startsWith('SHOW CREATE TABLE')) {
+        if (showReads++ > 0 && laterShowFails) { callback(Error('合成后读SHOW未知')); return; }
+        rows = [{ 'Create Table': showReads > 1 ? laterDefinition ?? showDefinition ?? definition : showDefinition ?? definition }];
+      }
       else if (sql.startsWith('SELECT t.TABLE_NAME')) rows = [{ name: 'new`table', engine: 'InnoDB', charset: 'utf8mb4', comment: '' }];
       else if (sql.startsWith('SELECT COLUMN_NAME')) rows = [{ name: 'id', type: 'bigint unsigned', nullable: 'NO', defaultValue: null, extra: 'auto_increment', comment: '' }, { name: 'amount', type: catalogType ?? (badVerify ? 'decimal(20,2)' : 'decimal(30,12)'), nullable: 'NO', defaultValue: catalogDefault !== undefined ? catalogDefault : dialect === 'mariadb' ? "'123456789012345678.123456789012'" : '123456789012345678.123456789012', extra: '', comment: '' }];
-      else if (sql.startsWith('SELECT INDEX_NAME')) rows = [{ name: 'PRIMARY', nonUnique: 0, column: 'id', sequence: 1, subPart: null, method: 'BTREE', direction: 'A', comment: '' }, { name: 'uq_amount', nonUnique: 0, column: 'amount', sequence: 1, subPart: null, method: 'BTREE', direction: 'A', comment: '', ...indexChanges }];
+      else if (sql.startsWith('SELECT INDEX_NAME')) rows = [{ name: 'PRIMARY', nonUnique: 0, column: 'id', sequence: 1, subPart: null, method: 'BTREE', direction: 'A', comment: '' }, { name: 'uq_amount', nonUnique: 0, column: 'amount', sequence: 1, subPart: null, method: 'BTREE', direction: 'A', comment: '', ...indexChanges }, ...(foreignIndex ? [{ name: 'ix_child', nonUnique: 1, column: 'id', sequence: 1, subPart: null, method: 'BTREE', direction: 'A', comment: '' }, { name: 'ix_child', nonUnique: 1, column: 'amount', sequence: 2, subPart: null, method: 'BTREE', direction: 'A', comment: '' }] : [])];
+      else if (sql.includes('FROM information_schema.REFERENTIAL_CONSTRAINTS')) { if (deniedForeign === 'rc') { callback(Object.assign(Error('合成规则目录拒读'), { errno: 1142, code: 'ER_TABLEACCESS_DENIED_ERROR' })); return; } rows = foreignRules; }
+      else if (sql.includes('FROM information_schema.KEY_COLUMN_USAGE')) { if (deniedForeign === 'kcu') { callback(Object.assign(Error('合成列目录拒读'), { errno: 1143, code: 'ER_COLUMNACCESS_DENIED_ERROR' })); return; } rows = foreignParts; }
       else { callback(Error('纯测试未声明SQL')); return; }
       callback(null, rows, []);
     });
@@ -46,10 +53,99 @@ function managed(signal?: AbortSignal): ManagedConnection {
 async function get(revision = 1): Promise<TableCreateGetOutput> { return engine.handle('schema.tableCreate.get', { connectionId: 'c', database: 'db', taskId: 'get-' + sequence, connectionRevision: revision }); }
 async function preview(snapshot: TableCreateGetOutput, draft = design()): Promise<TableCreatePreviewOutput> { return engine.handle('schema.tableCreate.preview', { snapshotId: snapshot.snapshotId, design: draft, taskId: 'preview-' + sequence, connectionRevision: 1 }); }
 async function apply(value: TableCreatePreviewOutput, taskId = 'apply', revision = 1, confirmation = 'db.new`table') { return engine.handle('schema.tableCreate.apply', { previewToken: value.previewToken, confirmation, acknowledgements: [...tableCreateAcknowledgements], taskId, connectionRevision: revision }); }
+/** 独立固定设计、SHOW和两套目录：不调用生产解析器或比较器生成测试期望。 */
+function compositeForeignKey(): TableCreateDesign {
+  const draft = design();
+  draft.indexes.push({ name: 'ix_child', unique: false, columns: ['id', 'amount'] });
+  draft.foreignKeys.push({ name: 'fk_mix', columns: ['id', 'amount'], referencedDatabase: 'parent_db', referencedTable: 'parent', referencedColumns: ['parent_id', 'parent_amount'], onUpdate: 'CASCADE', onDelete: 'CASCADE' });
+  showDefinition = definition.replace(') ENGINE=InnoDB', ',KEY `ix_child` (`id`,`amount`),CONSTRAINT `fk_mix` FOREIGN KEY (`id`,`amount`) REFERENCES `parent_db`.`parent` (`parent_id`,`parent_amount`) ON DELETE CASCADE ON UPDATE CASCADE) ENGINE=InnoDB');
+  foreignIndex = true;
+  foreignRules = [{ CONSTRAINT_SCHEMA: 'db', CONSTRAINT_NAME: 'fk_mix', TABLE_NAME: 'new`table', UNIQUE_CONSTRAINT_SCHEMA: 'parent_db', REFERENCED_TABLE_NAME: 'parent', UNIQUE_CONSTRAINT_NAME: 'PRIMARY', MATCH_OPTION: 'NONE', UPDATE_RULE: 'CASCADE', DELETE_RULE: 'CASCADE' }];
+  foreignParts = [
+    { CONSTRAINT_SCHEMA: 'db', CONSTRAINT_NAME: 'fk_mix', TABLE_SCHEMA: 'db', TABLE_NAME: 'new`table', COLUMN_NAME: 'id', ORDINAL_POSITION: 1, POSITION_IN_UNIQUE_CONSTRAINT: 1, REFERENCED_TABLE_SCHEMA: 'parent_db', REFERENCED_TABLE_NAME: 'parent', REFERENCED_COLUMN_NAME: 'parent_id' },
+    { CONSTRAINT_SCHEMA: 'db', CONSTRAINT_NAME: 'fk_mix', TABLE_SCHEMA: 'db', TABLE_NAME: 'new`table', COLUMN_NAME: 'amount', ORDINAL_POSITION: '2', POSITION_IN_UNIQUE_CONSTRAINT: '2', REFERENCED_TABLE_SCHEMA: 'parent_db', REFERENCED_TABLE_NAME: 'parent', REFERENCED_COLUMN_NAME: 'parent_amount' },
+  ];
+  return draft;
+}
 beforeEach(async () => {
-  events = []; sent = []; connections = []; sequence = 0; uuid = 'server-1'; mode = ''; occupied = created = closeFails = badVerify = holdClose = false; hold = held = fail = releaseClose = undefined; showDefinition = catalogType = catalogDefault = undefined; indexChanges = {}; dialect = 'mysql'; version = '8.4.11';
+  events = []; sent = []; connections = []; sequence = 0; uuid = 'server-1'; mode = ''; occupied = created = closeFails = badVerify = holdClose = false; hold = held = fail = releaseClose = undefined; showDefinition = catalogType = catalogDefault = laterDefinition = deniedForeign = undefined; indexChanges = {}; foreignRules = []; foreignParts = []; foreignIndex = laterShowFails = false; showReads = 0; dialect = 'mysql'; version = '8.4.11';
   driver.connect.mockReset().mockImplementation(async (_profile, _database, signal) => managed(signal)); driver.execute.mockReset().mockImplementation(async () => { held?.complete(Error('合成取消终态')); return { rows: [] }; });
   engine = new Engine(event => events.push(event)); await engine.handle('connections.open', { id: 'c', profile });
+});
+
+describe('新建表外键实际定义后核（真实Engine，仅RAM驱动）', () => {
+  it.each(['mysql', 'mariadb'] as const)('%s正常跨库复合FK与SHOW/两套目录/复读定义一致才完整核验', async value => {
+    dialect = value; version = value === 'mysql' ? '8.4.11' : '10.11.19'; const draft = compositeForeignKey();
+    const p = await preview(await get(), draft), result = await apply(p);
+    expect(result).toMatchObject({ ddlCompleted: true, definitionVerified: true, resourcesReleased: true });
+    expect(events.at(-1)?.tableCreate).toMatchObject({ ddlCompleted: true, definitionVerified: true });
+    const rcIndex = sent.findIndex(sql => sql.includes('FROM information_schema.REFERENTIAL_CONSTRAINTS'));
+    expect(rcIndex).toBeGreaterThan(sent.findIndex(sql => sql.startsWith('CREATE TABLE'))); expect(sent.at(-1)).toMatch(/^SHOW CREATE TABLE/); expect(showReads).toBe(2);
+    expect(sent[rcIndex]).toContain('LIMIT 257'); expect(sent.find(sql => sql.includes('FROM information_schema.KEY_COLUMN_USAGE'))).toContain('LIMIT 8193');
+    expect(sent.filter(sql => /^(CREATE|ALTER|DROP|INSERT|UPDATE|DELETE)/.test(sql))).toHaveLength(1);
+    await expect(apply(p, 'fk-replay')).rejects.toThrow('失效');
+  });
+  it.each(['名称', '子列顺序', '父库', '父表', '父列顺序', '删除动作', '更新动作', '未知MATCH'])('SHOW的%s与设计矛盾不能由目录补证', async kind => {
+    const draft = compositeForeignKey();
+    const replacements: Record<string, [string, string]> = { 名称: ['CONSTRAINT `fk_mix`', 'CONSTRAINT `other`'], 子列顺序: ['FOREIGN KEY (`id`,`amount`)', 'FOREIGN KEY (`amount`,`id`)'], 父库: ['`parent_db`.`parent`', '`other_db`.`parent`'], 父表: ['`parent_db`.`parent`', '`parent_db`.`other`'], 父列顺序: ['(`parent_id`,`parent_amount`)', '(`parent_amount`,`parent_id`)'], 删除动作: ['ON DELETE CASCADE', 'ON DELETE RESTRICT'], 更新动作: ['ON UPDATE CASCADE', 'ON UPDATE NO ACTION'], 未知MATCH: ['ON DELETE CASCADE', 'MATCH SIMPLE ON DELETE CASCADE'] };
+    showDefinition = showDefinition!.replace(...replacements[kind]);
+    expect(await apply(await preview(await get(), draft))).toMatchObject({ ddlCompleted: true, definitionVerified: false, resourcesReleased: true });
+    expect(sent.some(sql => sql.includes('FROM information_schema.REFERENTIAL_CONSTRAINTS'))).toBe(false);
+  });
+  it.each(['规则空集', '字段空集', '父库矛盾', '父表矛盾', '规则动作', '子列顺序', '父列顺序', '缺项', '序号重复', '重复规则', '多出约束', '未知父键位置'])('目录%s时CREATE ACK保持但完整核验为false', async kind => {
+    const draft = compositeForeignKey(), rules = foreignRules as Record<string, unknown>[], parts = foreignParts as Record<string, unknown>[];
+    if (kind === '规则空集') foreignRules = [];
+    if (kind === '字段空集') foreignParts = [];
+    if (kind === '父库矛盾') rules[0].UNIQUE_CONSTRAINT_SCHEMA = 'other_db';
+    if (kind === '父表矛盾') parts[0].REFERENCED_TABLE_NAME = 'other';
+    if (kind === '规则动作') rules[0].UPDATE_RULE = 'RESTRICT';
+    if (kind === '子列顺序') [parts[0].COLUMN_NAME, parts[1].COLUMN_NAME] = [parts[1].COLUMN_NAME, parts[0].COLUMN_NAME];
+    if (kind === '父列顺序') [parts[0].REFERENCED_COLUMN_NAME, parts[1].REFERENCED_COLUMN_NAME] = [parts[1].REFERENCED_COLUMN_NAME, parts[0].REFERENCED_COLUMN_NAME];
+    if (kind === '缺项') parts.pop();
+    if (kind === '序号重复') parts[1].ORDINAL_POSITION = 1;
+    if (kind === '重复规则') rules.push({ ...rules[0] });
+    if (kind === '多出约束') rules.push({ ...rules[0], CONSTRAINT_NAME: 'other' });
+    if (kind === '未知父键位置') parts[0].POSITION_IN_UNIQUE_CONSTRAINT = null;
+    const result = await apply(await preview(await get(), draft));
+    expect(result).toMatchObject({ ddlCompleted: true, definitionVerified: false, resourcesReleased: true }); expect(result.warnings.join('')).toContain('未核验');
+    expect(sent.filter(sql => /^(CREATE|ALTER|DROP)/.test(sql))).toHaveLength(1);
+  });
+  it.each(['rc', 'kcu'] as const)('%s权限拒读不扩大权限、不重试、不擦ACK', async kind => {
+    const draft = compositeForeignKey(); deniedForeign = kind;
+    const result = await apply(await preview(await get(), draft)); expect(result).toMatchObject({ ddlCompleted: true, definitionVerified: false, resourcesReleased: true });
+    expect(sent.filter(sql => sql.includes(kind === 'rc' ? 'FROM information_schema.REFERENTIAL_CONSTRAINTS' : 'FROM information_schema.KEY_COLUMN_USAGE'))).toHaveLength(1);
+    expect(sent.some(sql => /^(GRANT|ALTER|DROP)/.test(sql))).toBe(false);
+  });
+  it('目录后复读SHOW变化，不能把两次定义拼为完整核验', async () => {
+    const draft = compositeForeignKey(); laterDefinition = showDefinition!.replace('ON DELETE CASCADE', 'ON DELETE RESTRICT');
+    expect(await apply(await preview(await get(), draft))).toMatchObject({ ddlCompleted: true, definitionVerified: false }); expect(showReads).toBe(2);
+  });
+  it('目录后复读SHOW未知保留ACK，不发送补救DDL', async () => {
+    const draft = compositeForeignKey(); laterShowFails = true;
+    expect(await apply(await preview(await get(), draft))).toMatchObject({ ddlCompleted: true, definitionVerified: false }); expect(showReads).toBe(2);
+    expect(sent.filter(sql => /^(CREATE|ALTER|DROP)/.test(sql))).toHaveLength(1);
+  });
+  it('模式省略不借目录补齐FK定义', async () => {
+    mode = 'NO_KEY_OPTIONS'; const draft = compositeForeignKey();
+    expect(await apply(await preview(await get(), draft))).toMatchObject({ ddlCompleted: true, definitionVerified: false });
+    expect(sent.some(sql => sql.includes('FROM information_schema.REFERENTIAL_CONSTRAINTS'))).toBe(false);
+  });
+  it('未建模的隐式支持索引仍保守不完整，但原生成器和创建ACK保留', async () => {
+    const draft = compositeForeignKey(); draft.indexes.pop();
+    expect(await apply(await preview(await get(), draft))).toMatchObject({ ddlCompleted: true, definitionVerified: false });
+    expect(sent.filter(sql => sql.startsWith('CREATE TABLE'))).toHaveLength(1);
+  });
+  it('完整FK核验成功与严格关闭未知是两项独立事实', async () => {
+    const draft = compositeForeignKey(), p = await preview(await get(), draft); closeFails = true;
+    expect(await apply(p)).toMatchObject({ ddlCompleted: true, definitionVerified: true, resourcesReleased: false });
+  });
+  it.each(['规则上限', '字段上限', '字节上限'])('目录%s超过有界预算只保留ACK', async kind => {
+    const draft = compositeForeignKey();
+    if (kind === '规则上限') foreignRules = Array.from({ length: 257 }, () => (foreignRules as unknown[])[0]);
+    if (kind === '字段上限') foreignParts = Array.from({ length: 8193 }, () => (foreignParts as unknown[])[0]);
+    if (kind === '字节上限') (foreignRules as Record<string, unknown>[])[0].unexpected = 'x'.repeat(4 * 1024 * 1024);
+    expect(await apply(await preview(await get(), draft))).toMatchObject({ ddlCompleted: true, definitionVerified: false });
+  });
 });
 afterEach(async () => { closeFails = holdClose = false; releaseClose?.(); hold = undefined; held?.complete(Error('纯测试收尾')); await engine.closeAll(); vi.useRealTimers(); });
 describe('新建表真实Engine仅RAM驱动', () => {
@@ -133,6 +229,7 @@ describe('新建表真实Engine仅RAM驱动', () => {
     const p = await preview(await get()); expect(p.sql).toContain('CREATE TABLE `db`.`new``table`'); expect(p.sql).toContain("DEFAULT '123456789012345678.123456789012'"); expect(sent.some(sql => /^(CREATE|DROP|ALTER|USE)/.test(sql))).toBe(false);
     expect(await apply(p)).toMatchObject({ ddlCompleted: true, definitionVerified: true, resourcesReleased: true }); expect(sent.filter(sql => sql.startsWith('CREATE TABLE'))).toHaveLength(1); expect(sent.some(sql => /IF NOT EXISTS|^(DROP|ALTER)/.test(sql))).toBe(false);
     await expect(apply(p, 'replay')).rejects.toThrow('失效'); expect(events.at(-1)?.tableCreate).toMatchObject({ ddlCompleted: true, definitionVerified: true }); expect(connections.every(c => vi.mocked(c.close).mock.calls.length === 1)).toBe(true);
+    expect(showReads).toBe(1); expect(sent.some(sql => /REFERENTIAL_CONSTRAINTS|KEY_COLUMN_USAGE/.test(sql))).toBe(false);
   });
   it.each(['5.7.44', '8.0.46', '8.4.11', '10.11.19', '11.4.13'])('普通版本%s仍使用原生成器，不随意缩为8.4.11', async value => { version = value; dialect = value.startsWith('1') ? 'mariadb' : 'mysql'; const p = await preview(await get()); expect((await apply(p)).ddlCompleted).toBe(true); });
   it.each(['身份', '模式', '修订', '同名'])('%s变化拒绝旧预览且不覆盖', async kind => {
