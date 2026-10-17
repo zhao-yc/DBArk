@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
-import { tableCreateAcknowledgements, tableCreateConfirmation, tableCreateDesignSchema, type TableCreateApplyOutput, type TableCreateGetOutput, type TableCreatePreviewOutput, type TableCreateProgress } from '../../shared/tableCreate';
-import type { TableDesign } from '../../shared/contracts';
+import { tableCreateAcknowledgements, tableCreateConfirmation, tableCreateDraftSchema, tableCreateHasPrefix, type TableCreateDraft, type TableCreateApplyOutput, type TableCreateGetOutput, type TableCreatePreviewOutput, type TableCreateProgress } from '../../shared/tableCreate';
+import { tableCreatePrefixZh } from '../locales/tableCreatePrefix.zh-CN';
 import { sameTableEncodingPair, validateTableEncodingPair, type TableEncodingPair } from '../../shared/tableDefaultEncoding';
 import { IndexRequestFence } from '../indexPatches';
 import { tableCreateServices, type TableCreateServices } from '../tableCreateServices';
@@ -9,7 +9,7 @@ import { useWorkspace } from '../store';
 import { errorMessage, uid } from '../lib';
 import { Modal, ErrorBox, Field } from './ui';
 import { SqlEditor } from './SqlEditor';
-export interface TableCreateConfirmationProps { connectionId: string; design: TableDesign; onBack(): void; onClose(): void; onCreated(result: TableCreateApplyOutput, version: number): void; onDirtyChange?(dirty: boolean): void; services?: TableCreateServices; }
+export interface TableCreateConfirmationProps { connectionId: string; design: TableCreateDraft; onBack(): void; onClose(): void; onCreated(result: TableCreateApplyOutput, version: number): void; onDirtyChange?(dirty: boolean): void; services?: TableCreateServices; }
 /** 只接管现有设计器的确认阶段；原字段/索引/FK表单及已有表修改无需复制或更换生成器。 */
 export function TableCreateConfirmation({ connectionId, design, onBack, onClose, onCreated, onDirtyChange, services = tableCreateServices }: TableCreateConfirmationProps) {
   const version = useWorkspace(state => state.connectionVersions[connectionId] ?? 0), profile = useWorkspace(state => state.connections.find(value => value.id === connectionId));
@@ -62,9 +62,10 @@ export function TableCreateConfirmation({ connectionId, design, onBack, onClose,
       const chosen = encodingMode.current ? { ...encodingSelection.current } : undefined, previousDigest = catalog.current?.digest;
       acceptedPreview.current = null; setPreview(null); setConfirmation(''); setAcks(new Set());
       if (snapshots.current.size || tokens.current.size) { await releaseAll(); if (!accepts(op)) return; }
-      const parsed = tableCreateDesignSchema.safeParse(fixed.current.design); if (!parsed.success) throw Error(text.invalidDesign); const draft = parsed.data;
-      const value = await service.current.get({ connectionId: fixed.current.connectionId, database: draft.database, taskId: op.taskId, ...(chosen ? { includeEncodings: true } : {}) }); snapshots.current.add(value.snapshotId);
+      const parsed = tableCreateDraftSchema.safeParse(fixed.current.design); if (!parsed.success) throw Error(text.invalidDesign); const draft = parsed.data;
+      const value = await service.current.get({ connectionId: fixed.current.connectionId, database: draft.database, taskId: op.taskId, ...(chosen ? { includeEncodings: true } : {}), ...(tableCreateHasPrefix(draft) ? { includePrefixFacts: true } : {}) }); snapshots.current.add(value.snapshotId);
       if (!accepts(op) || value.target.connectionId !== fixed.current.connectionId || value.target.database !== draft.database || !validTime(value.expiresAt)) { await releaseOne('snapshotId', value.snapshotId); return; }
+      if (tableCreateHasPrefix(draft) && !value.prefixFacts) throw Error(tableCreatePrefixZh.unavailable);
       setSnapshot(value);
       if (chosen) {
         const metadata = value.encodings;

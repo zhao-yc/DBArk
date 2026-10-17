@@ -1,3 +1,5 @@
+import { tableCreateDraftSchema, type TableCreateDraft, type TableCreatePrefixFacts } from '../shared/tableCreate';
+import { planTableCreateIndexes } from './tableCreateIndexPlan';
 import type { CellValue, ColumnInfo, DataRow, FilterMode, FilterRule, RowChange, SortRule, SqlPreview, TableDesign, TableInfo } from '../shared/contracts';
 import { validateFilterRules } from '../shared/filtering';
 import { validateReferenceValues } from '../shared/references';
@@ -301,6 +303,18 @@ export function columnType(value: string): string {
   throw new Error(`字段类型不受支持或包含非法 SQL：${value}`);
 }
 
+/** 新旧设计共用同一列渲染规则，默认值及类型处理不能因索引入口分叉。 */
+function renderDesignColumn(column: TableDesign['columns'][number], noBackslashEscapes: boolean): string {
+  let sql = `${identifier(column.name)} ${columnType(column.type)} ${column.nullable ? 'NULL' : 'NOT NULL'}`;
+  if (column.defaultValue !== undefined) {
+    const value = column.defaultValue;
+    sql += ' DEFAULT ' + (value === null ? 'NULL' : /^(?:DATE|DATETIME|TIMESTAMP|TIME)\b/i.test(column.type) && temporalDefault(value) ? value.toUpperCase() : stringLiteral(value, noBackslashEscapes));
+  }
+  if (column.autoIncrement) sql += ' AUTO_INCREMENT';
+  if (column.comment) sql += ' COMMENT ' + stringLiteral(column.comment, noBackslashEscapes);
+  return sql;
+}
+
 /** 以完整设计和现状生成结构差异；保留未变索引/外键，同名外键修改明确分步预览。 */
 export function buildDesign(design: TableDesign, original?: TableInfo, noBackslashEscapes = false, newTableEncoding?: { charset: string; collation: string }): SqlPreview {
   // 仅新建用途可传显式配对；已有表即便误传也拒绝，不转成ALTER或数据编码转换。
@@ -312,16 +326,7 @@ export function buildDesign(design: TableDesign, original?: TableInfo, noBacksla
   if (!/^[a-zA-Z0-9_]+$/.test(design.charset)) throw new Error('字符集名称无效');
   const literal = (value: string) => stringLiteral(value, noBackslashEscapes);
   /** 先验证类型，再生成列定义；文本字段的时间样式默认值仍按文字量处理。 */
-  const columnSql = (column: TableDesign['columns'][number]) => {
-    let sql = `${identifier(column.name)} ${columnType(column.type)} ${column.nullable ? 'NULL' : 'NOT NULL'}`;
-    if (column.defaultValue !== undefined) {
-      const value = column.defaultValue;
-      sql += ' DEFAULT ' + (value === null ? 'NULL' : /^(?:DATE|DATETIME|TIMESTAMP|TIME)\b/i.test(column.type) && temporalDefault(value) ? value.toUpperCase() : literal(value));
-    }
-    if (column.autoIncrement) sql += ' AUTO_INCREMENT';
-    if (column.comment) sql += ' COMMENT ' + literal(column.comment);
-    return sql;
-  };
+  const columnSql = (column: TableDesign['columns'][number]) => renderDesignColumn(column, noBackslashEscapes);
   /** 索引和外键只能引用本次设计中存在且不重复的字段。 */
   const localColumns = (items: string[]) => {
     if (!items.length || new Set(items).size !== items.length || items.some(name => !names.has(name))) throw new Error('索引或外键包含空、重复或不存在的字段');
@@ -372,6 +377,18 @@ export function buildDesign(design: TableDesign, original?: TableInfo, noBacksla
   const warnings = original ? ['MySQL/MariaDB 的 DDL 通常会隐式提交，执行后不能通过事务回滚。', '仅删除或重建已变更的索引和外键；请检查预览中的结构差异。'] : [];
   if (preliminary.length) warnings.push('同名外键的修改需要分两条 ALTER 执行：第一条删除旧外键，第二条修改表并添加新外键。若第二条失败或操作被取消，旧外键已删除，需按原定义恢复；执行期间应暂停相关写入。');
   return { sql: statements.map(statement => statement.sql + ';').join('\n\n'), statements, warnings };
+}
+
+/** 前缀只从结构化计划渲染；不接受rawSQL，不替换旧生成结果，公共buildDesign接口保持。 */
+export function buildPrefixTableDesign(input: TableCreateDraft, facts: TableCreatePrefixFacts, noBackslashEscapes = false, encoding?: { charset: string; collation: string }): SqlPreview {
+  const design = tableCreateDraftSchema.parse(input), plan = planTableCreateIndexes(design, facts);
+  if (encoding && (encoding.charset !== design.charset || !/^[A-Za-z0-9_]{1,255}$/.test(encoding.collation))) throw Error('新表编码配对无效');
+  const indexes = plan.indexes.map(index => {
+    const parts = index.keyParts.map(part => identifier(part.columnName) + (part.prefixLength === undefined ? '' : `(${part.prefixLength})`)).join(', ');
+    return index.name === 'PRIMARY' ? `PRIMARY KEY (${parts})` : `${index.unique ? 'UNIQUE ' : ''}KEY ${identifier(index.name)} (${parts})`;
+  });
+  const sql = `CREATE TABLE ${qualified(design.database, design.name)} (\n  ${[...design.columns.map(column => renderDesignColumn(column, noBackslashEscapes)), ...indexes].join(',\n  ')}\n) ENGINE=INNODB DEFAULT CHARACTER SET=${design.charset}${encoding ? ' COLLATE=' + encoding.collation : ''} ROW_FORMAT=DYNAMIC COMMENT=${stringLiteral(design.comment, noBackslashEscapes)}`;
+  return { sql: sql + ';', statements: [{ sql, params: [] }], warnings: [] };
 }
 
 /** SQL 导出使用十六进制文字量，避免字符集、反斜线模式和二进制数据改变原值。 */

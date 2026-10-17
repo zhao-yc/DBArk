@@ -29,6 +29,7 @@ export interface TableCreatePrefixFacts {
 export function tableCreateIndexParts(index: TableCreateIndex): { columnName: string; prefixLength?: number }[] {
   return 'keyParts' in index ? index.keyParts.map(part => ({ ...part })) : index.columns.map(columnName => ({ columnName }));
 }
+/** 仅实际指定前缀的请求启用专属能力读取，旧整字段输入不增加服务器限制。 */
 export function tableCreateHasPrefix(design: TableCreateDraft): boolean { return design.indexes.some(index => tableCreateIndexParts(index).some(part => part.prefixLength !== undefined)); }
 /** 只有全字段请求可进入旧生成/核验链，前缀不得被静默丢弃。 */
 export function tableCreateLegacyDesign(input: TableCreateDraft): TableCreateDesign {
@@ -37,9 +38,9 @@ export function tableCreateLegacyDesign(input: TableCreateDraft): TableCreateDes
 }
 export interface TableCreateTarget { connectionId: string; database: string; table: string; }
 export interface TableCreateEncodingCatalog { candidates: TableEncodingPair[]; digest?: string; warnings: string[]; reasons: string[]; }
-export interface TableCreateGetInput { connectionId: string; database: string; taskId: string; includeEncodings?: boolean; }
-export interface TableCreateGetOutput { target: { connectionId: string; database: string }; snapshotId: string; expiresAt: string; serverVersion: string; warnings: string[]; encodings?: TableCreateEncodingCatalog; }
-export interface TableCreatePreviewInput { snapshotId: string; design: TableCreateDesign; taskId: string; }
+export interface TableCreateGetInput { connectionId: string; database: string; taskId: string; includeEncodings?: boolean; includePrefixFacts?: boolean; }
+export interface TableCreateGetOutput { target: { connectionId: string; database: string }; snapshotId: string; expiresAt: string; serverVersion: string; warnings: string[]; encodings?: TableCreateEncodingCatalog; prefixFacts?: TableCreatePrefixFacts; }
+export interface TableCreatePreviewInput { snapshotId: string; design: TableCreateDraft; taskId: string; }
 export interface TableCreatePreviewOutput { target: TableCreateTarget; previewToken: string; expiresAt: string; designDigest: string; sql: string; warnings: string[]; requiredAcknowledgements: string[]; encoding?: { selection: TableEncodingPair; catalogDigest: string }; }
 export const tableCreateAcknowledgements = ['ddl-implicit-commit', 'create-only-no-replay'] as const;
 export interface TableCreateApplyInput { previewToken: string; confirmation: string; acknowledgements: string[]; taskId: string; }
