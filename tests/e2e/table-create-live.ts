@@ -1,5 +1,6 @@
 import type { Page, TestInfo } from '@playwright/test';
-import type { RowDataPacket } from 'mysql2/promise';
+import mysql, { type RowDataPacket } from 'mysql2/promise';
+import { readFileSync } from 'node:fs';
 import { test, expect, ownedDesktopResources, retainOwnedDesktopResources } from './desktop-fixture';
 import { isolatedDatabase, environment } from './live-helpers';
 import { assertDefaultEncodingLiveTarget } from '../helpers/tableDefaultEncodingTarget';
@@ -23,6 +24,22 @@ async function assertCreateSettled(info: TestInfo): Promise<void> {
     if (after.application !== before.application || after.page !== before.page || after.closed || tasks.some(task => task.kind === 'schema.tableCreate.apply' && task.status !== 'completed')) throw Error('本例新建表apply或窗口终态未确认，保留库和原生现场');
   } catch (reason) { try { retainOwnedDesktopResources(info); } catch { /* 保留错误不覆盖未知首因。 */ } throw reason; }
 }
+/** 本用途先用无默认库的只读连接核Root身份；不进入会先建库的共享隔离helper。 */
+async function preflightCreateTarget(owner: Owner): Promise<void> {
+  owner.assertCurrent();
+  if (!environment.DBARK_TEST_HOST || !environment.DBARK_TEST_USER || !/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(environment.DBARK_TEST_EXPECTED_SERVER_UUID ?? '')) throw Error('Root尚未绑定本轮实际服务器UUID和测试账号');
+  const observer = await observe(owner, () => mysql.createConnection({ host: environment.DBARK_TEST_HOST, port: Number(environment.DBARK_TEST_PORT), user: environment.DBARK_TEST_USER, password: environment.DBARK_TEST_PASSWORD, charset: 'utf8mb4', connectTimeout: 15000, ...(environment.DBARK_TEST_TLS === '1' ? { ssl: { ca: readFileSync(environment.DBARK_TEST_CA!), rejectUnauthorized: true, verifyIdentity: true } } : {}) }));
+  let failure: unknown;
+  try {
+    const [facts] = await observe(owner, () => observer.query<RowDataPacket[]>('SELECT @@version AS version,@@version_compile_os AS os,@@lower_case_table_names AS names,@@server_uuid AS uuid'));
+    if (facts.length !== 1 || !/^8\.4\.11(?:[-+].*)?$/.test(String(facts[0].version)) || !['linux', 'debian-linux-gnu'].includes(String(facts[0].os).toLowerCase()) || ![0, '0'].includes(facts[0].names) || facts[0].uuid !== environment.DBARK_TEST_EXPECTED_SERVER_UUID) throw Error('Root尚未绑定本轮实际服务器UUID、准确8.4.11/Linux目标；未创建隔离库');
+  } catch (reason) { failure = reason; throw reason; }
+  finally {
+    // 预检收尾未知时停止，不把读取成功或取消ACK当成可继续建库的资源事实。
+    try { await observe(owner, () => observer.end()); }
+    catch (reason) { if (failure) throw new AggregateError([failure, reason], '原身份预检失败且只读连接收尾未确认', { cause: failure }); throw reason; }
+  }
+}
 /** 仅双门且非list才注册；Root未来独占正式执行，本文不构成实库通过证据。 */
 export function registerTableCreateUiTests() {
   test.use({ preserveOnUnconfirmedExit: true });
@@ -30,6 +47,7 @@ export function registerTableCreateUiTests() {
   test('新建表复用设计器、准确确认一次CREATE，主键唯一索引与精确默认经目录核对', async ({}, info) => {
     const owner = ownerOf(info); owner.assertCurrent();
     assertDefaultEncodingLiveTarget({ host: environment.DBARK_TEST_HOST, port: environment.DBARK_TEST_PORT, tlsFlag: environment.DBARK_TEST_TLS, caPath: environment.DBARK_TEST_CA });
+    await preflightCreateTarget(owner); owner.assertCurrent();
     await isolatedDatabase(async context => {
       owner.assertCurrent(); let failure: unknown;
       try {
