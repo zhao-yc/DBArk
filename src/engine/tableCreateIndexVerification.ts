@@ -5,29 +5,33 @@ import { structureTaskQuery, type StructureTaskContext } from './structureDefini
 import { tableDefinitionTokens } from './tableColumnDefinition';
 import { readTableIndexDefinition } from './tableIndexDefinition';
 import { deriveTrustedIndexColumn, crossCheckIndexStatistics, type IndexColumnMetadata } from './tableIndexMetadata';
+import { tableCreateMetadataInteger } from './tableCreateIndexFacts';
 import { qualified } from './sql';
+const blobCapacities = new Map<string, number>([['TINYBLOB', 255], ['BLOB', 65535], ['MEDIUMBLOB', 16777215], ['LONGBLOB', 4294967295]]);
 const literal = (value: string) => `CONVERT(X'${Buffer.from(value, 'utf8').toString('hex')}' USING utf8mb4)`;
 /** MySQL前缀新表独立核完整表选项；不扩Maria NULL字符集补证的白名单。 */
-function optionsMatch(document: TableColumnDefinitionDocument, design: TableCreateDraft, expectedCollation?: string): boolean {
+function readOptions(document: TableColumnDefinitionDocument, design: TableCreateDraft): Map<string, string> | undefined {
   const tokens = tableDefinitionTokens(document.tail.raw, document.context), values = new Map<string, string>(); let cursor = 1;
-  if (tokens[0]?.value !== ')') return false;
+  if (tokens[0]?.value !== ')') return undefined;
   while (cursor < tokens.length) {
     if (tokens[cursor].value === ';' && cursor === tokens.length - 1) break;
     let token = tokens[cursor++], defaulted = false;
     if (token?.kind === 'word' && token.value.toUpperCase() === 'DEFAULT') { defaulted = true; token = tokens[cursor++]; }
-    if (token?.kind !== 'word') return false;
+    if (token?.kind !== 'word') return undefined;
     let key = token.value.toUpperCase();
-    if (key === 'CHARACTER') { if (tokens[cursor++]?.value.toUpperCase() !== 'SET') return false; key = 'CHARSET'; }
-    if (!['ENGINE', 'CHARSET', 'COLLATE', 'ROW_FORMAT', 'COMMENT'].includes(key) || values.has(key) || defaulted && !['CHARSET', 'COLLATE'].includes(key)) return false;
+    if (key === 'CHARACTER') { if (tokens[cursor++]?.value.toUpperCase() !== 'SET') return undefined; key = 'CHARSET'; }
+    if (!['ENGINE', 'CHARSET', 'COLLATE', 'ROW_FORMAT', 'COMMENT'].includes(key) || values.has(key) || defaulted && !['CHARSET', 'COLLATE'].includes(key)) return undefined;
     if (tokens[cursor]?.value === '=') cursor++;
-    const value = tokens[cursor++]; if (!value || (key === 'COMMENT' ? value.kind !== 'string' : !['word', 'identifier'].includes(value.kind))) return false;
+    const value = tokens[cursor++]; if (!value || (key === 'COMMENT' ? value.kind !== 'string' : !['word', 'identifier'].includes(value.kind))) return undefined;
     values.set(key, value.value);
   }
-  return values.get('ENGINE')?.toUpperCase() === 'INNODB' && values.get('CHARSET') === design.charset && values.get('ROW_FORMAT')?.toUpperCase() === 'DYNAMIC' && (values.get('COMMENT') ?? '') === design.comment && (design.collation === undefined || values.get('COLLATE') === design.collation) && (expectedCollation === undefined || values.get('COLLATE') === expectedCollation);
+  if (values.get('ENGINE')?.toUpperCase() !== 'INNODB' || values.get('CHARSET') !== design.charset || values.get('ROW_FORMAT')?.toUpperCase() !== 'DYNAMIC' || (values.get('COMMENT') ?? '') !== design.comment || design.collation !== undefined && values.has('COLLATE') && values.get('COLLATE') !== design.collation) return undefined;
+  return values;
 }
 /** CREATE后的实际目录才可进入真实列适配器；完整SHOW和STATISTICS逐键独立复核。 */
 export async function verifyCreatedPrefixIndexes(context: StructureTaskContext, target: { database: string; table: string }, design: TableCreateDraft, plan: TableCreateIndexPlan, facts: TableCreatePrefixFacts, document: TableColumnDefinitionDocument): Promise<boolean> {
-  if (context.managed.status.dialect !== 'mysql' || plan.factsDigest !== facts.digest || !optionsMatch(document, design)) return false;
+  const options = readOptions(document, design);
+  if (context.managed.status.dialect !== 'mysql' || plan.factsDigest !== facts.digest || !options) return false;
   const parsed = readTableIndexDefinition(document);
   if (parsed.otherConstraintRanges.length || parsed.indexes.length !== plan.indexes.length) return false;
   for (const expected of plan.indexes) {
@@ -36,8 +40,16 @@ export async function verifyCreatedPrefixIndexes(context: StructureTaskContext, 
   }
   const condition = `TABLE_SCHEMA=${literal(target.database)} AND TABLE_NAME=${literal(target.table)}`;
   const tables = (await structureTaskQuery<{ name: string; engine: string; rowFormat: string; collation: string }[]>(context, `SELECT TABLE_NAME AS name,ENGINE AS engine,ROW_FORMAT AS rowFormat,TABLE_COLLATION AS collation FROM information_schema.TABLES WHERE ${condition} LIMIT 2`)).rows;
-  if (tables.length !== 1 || tables[0].name !== target.table || tables[0].engine?.toUpperCase() !== 'INNODB' || tables[0].rowFormat?.toUpperCase() !== 'DYNAMIC' || !tables[0].collation || design.collation !== undefined && tables[0].collation !== design.collation) return false;
-  if (!optionsMatch(document, design, tables[0].collation)) return false;
+  if (tables.length !== 1 || tables[0].name !== target.table || tables[0].engine?.toUpperCase() !== 'INNODB' || tables[0].rowFormat?.toUpperCase() !== 'DYNAMIC' || typeof tables[0].collation !== 'string' || !tables[0].collation || design.collation !== undefined && tables[0].collation !== design.collation) return false;
+  if (options.has('COLLATE')) {
+    if (options.get('COLLATE') !== tables[0].collation) return false;
+  } else {
+    // SHOW可省略字符集默认COLLATE；只由同一实际目录的准确默认值补证，不推断名称或普遍忽略。
+    // https://dev.mysql.com/doc/refman/8.4/en/information-schema-character-sets-table.html
+    const defaults = (await structureTaskQuery<{ name: string; collation: string; maxBytes: unknown }[]>(context, `SELECT CHARACTER_SET_NAME AS name,DEFAULT_COLLATE_NAME AS collation,MAXLEN AS maxBytes FROM information_schema.CHARACTER_SETS WHERE CHARACTER_SET_NAME=${literal(design.charset)} LIMIT 2`)).rows;
+    const charset = facts.charsets.find(value => value.name === design.charset);
+    if (!Array.isArray(defaults) || defaults.length !== 1 || defaults[0].name !== design.charset || defaults[0].collation !== tables[0].collation || !charset || tableCreateMetadataInteger(defaults[0].maxBytes) !== charset.maxBytes) return false;
+  }
   const columns = (await structureTaskQuery<IndexColumnMetadata[]>(context, `SELECT COLUMN_NAME,DATA_TYPE,COLUMN_TYPE,IS_NULLABLE,CHARACTER_SET_NAME,COLLATION_NAME,CHARACTER_MAXIMUM_LENGTH,CHARACTER_OCTET_LENGTH,EXTRA FROM information_schema.COLUMNS WHERE ${condition} ORDER BY ORDINAL_POSITION LIMIT 1001`)).rows;
   if (columns.length !== design.columns.length || columns.some((column, index) => column.COLUMN_NAME !== design.columns[index].name)) return false;
   // 所有实际列都核目录语义；只有键列另外授予索引成本能力，非键列不能被遗漏或伪造成计划键列。
@@ -46,6 +58,10 @@ export async function verifyCreatedPrefixIndexes(context: StructureTaskContext, 
     if (!definition || typeof metadata.DATA_TYPE !== 'string' || typeof metadata.EXTRA !== 'string' || !/^(?:(?:auto_increment|DEFAULT_GENERATED)\s*)*$/i.test(metadata.EXTRA)) return false;
     const charset = facts.charsets.find(value => value.name === metadata.CHARACTER_SET_NAME), character = /^(CHAR|VARCHAR|ENUM|SET|(?:TINY|MEDIUM|LONG)?TEXT)$/.test(metadata.DATA_TYPE.toUpperCase());
     if (character && (metadata.CHARACTER_SET_NAME !== design.charset || metadata.COLLATION_NAME !== tables[0].collation || !charset)) return false;
+    // 非键LOB同样证明子类型容量；不能让两个互相一致但同时缩小的目录长度冒充BLOB。
+    // https://dev.mysql.com/doc/refman/8.4/en/string-type-syntax.html
+    const capacity = blobCapacities.get(metadata.DATA_TYPE.toUpperCase());
+    if (capacity !== undefined && (metadata.CHARACTER_SET_NAME !== null || metadata.COLLATION_NAME !== null || tableCreateMetadataInteger(metadata.CHARACTER_MAXIMUM_LENGTH) !== capacity || tableCreateMetadataInteger(metadata.CHARACTER_OCTET_LENGTH) !== capacity)) return false;
     const actual = deriveTrustedIndexColumn(definition, metadata, { definitionContext: document.context, charsetMaxBytes: charset?.maxBytes });
     if (actual.column.generated || actual.column.hidden) return false;
     if (!expected) continue;
