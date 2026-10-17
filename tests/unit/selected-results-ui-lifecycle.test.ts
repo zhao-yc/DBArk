@@ -15,8 +15,9 @@ function lifecycle() {
   let closed = false, current = true;
   const retain = vi.fn(), exit = vi.fn(async () => { closed = true; });
   const owner = { assertCurrent(allowClosed = false) { if (!current || closed && !allowClosed) throw Error('所有者已改变'); }, closed: () => closed, retain, confirmExit: exit };
-  const state = new SelectedResultsUiLifecycle(owner);
-  return { state, owner, retain, exit, close: () => { closed = true; }, changeOwner: () => { current = false; } };
+  const info = { _startWallTime: 0, timeout: 120000, status: 'passed' }; let now = 0;
+  const state = new SelectedResultsUiLifecycle(owner, info, () => now);
+  return { state, owner, retain, exit, info, advance: (time: number) => { now = time; }, close: () => { closed = true; }, changeOwner: () => { current = false; } };
 }
 function probe() {
   const stream = { closed: false, once: vi.fn(), removeListener: vi.fn(), destroy: vi.fn(), end: vi.fn() };
@@ -94,6 +95,49 @@ describe('勾选行专项本例生命周期', () => {
   it('退出函数返回但未closed，不能证明退出成功', async () => {
     const { state, owner } = lifecycle(); owner.confirmExit.mockResolvedValue(undefined);
     await expect(state.finish(async () => terminalTasks())).rejects.toThrow('退出未确认'); expect(state.state.retained).toBe(true);
+  });
+  it('原期限到达但框架状态尚未改变，也不能迟到退出或重算120秒', async () => {
+    const f = lifecycle(); f.advance(119999); await f.state.observe(async () => 1); f.advance(120000);
+    await expect(f.state.finish(async () => terminalTasks())).rejects.toThrow('原120秒');
+    expect(f.exit).not.toHaveBeenCalled(); expect(f.retain).toHaveBeenCalledOnce();
+  });
+  it.each(['failed', 'timedOut', 'interrupted', 'skipped'])('框架%s即使未到期限也立即停链，恢复passed不复活', async status => {
+    const f = lifecycle(), action = vi.fn(async () => 1); f.info.status = status;
+    await expect(f.state.observe(action)).rejects.toThrow('框架状态'); f.info.status = 'passed';
+    await expect(f.state.finish(async () => terminalTasks())).rejects.toThrow('停链');
+    expect(action).not.toHaveBeenCalled(); expect(f.exit).not.toHaveBeenCalled(); expect(f.retain).toHaveBeenCalledOnce();
+  });
+  it('缺原起点、原预算变化或时钟倒退不能取得新预算', async () => {
+    const missing = lifecycle();
+    const state = new SelectedResultsUiLifecycle(missing.owner, { timeout: 120000, status: 'passed' }, () => 1);
+    await expect(state.observe(async () => 1)).rejects.toThrow('原120秒');
+    const changed = lifecycle(); changed.info.timeout = 240000;
+    await expect(changed.state.observe(async () => 1)).rejects.toThrow('原120秒'); changed.info.timeout = 120000;
+    await expect(changed.state.observe(async () => 1)).rejects.toThrow('停链');
+    const rollback = lifecycle(); rollback.advance(10); await rollback.state.observe(async () => 1); rollback.advance(9);
+    await expect(rollback.state.observe(async () => 1)).rejects.toThrow('原120秒');
+  });
+  it('任务列表在原期限之后返回，不发起退出', async () => {
+    const f = lifecycle(); let release!: () => void;
+    const finishing = f.state.finish(() => new Promise(resolve => { release = () => resolve(terminalTasks()); }));
+    const rejected = expect(finishing).rejects.toThrow('原120秒'); f.advance(120000); release(); await rejected;
+    expect(f.exit).not.toHaveBeenCalled(); expect(f.state.state.tasksVerified).toBe(false);
+  });
+  it('退出在原期限之后返回，allowClosed也不能发放成功证明', async () => {
+    const f = lifecycle(); f.owner.confirmExit.mockImplementation(async () => { f.advance(120000); f.close(); });
+    await expect(f.state.finish(async () => terminalTasks())).rejects.toThrow('原120秒');
+    f.state.endBody(); expect(f.state.state.exited).toBe(false); expect(() => f.state.afterEach()).toThrow('停链');
+  });
+  it('成功结束后的afterEach只核原成功事实，不重新开放observe、finish或allowClosed活动门', async () => {
+    const f = lifecycle(); await f.state.finish(async () => terminalTasks()); f.state.endBody(); f.advance(130000);
+    f.state.afterEach(); expect(f.exit).toHaveBeenCalledOnce(); expect(f.retain).not.toHaveBeenCalled();
+    expect(() => f.state.assertCurrent(true)).toThrow('活动已结束');
+    const action = vi.fn(async () => terminalTasks()); await expect(f.state.observe(action)).rejects.toThrow('停链');
+    await expect(f.state.finish(action)).rejects.toThrow('停链'); expect(action).not.toHaveBeenCalled(); expect(f.exit).toHaveBeenCalledOnce();
+  });
+  it('afterEach期间框架改为timedOut不能以此前closed忽略终态', async () => {
+    const f = lifecycle(); await f.state.finish(async () => terminalTasks()); f.state.endBody(); f.info.status = 'timedOut';
+    expect(() => f.state.afterEach()).toThrow('尚未确认'); expect(f.exit).toHaveBeenCalledOnce(); expect(f.retain).toHaveBeenCalledOnce();
   });
 });
 

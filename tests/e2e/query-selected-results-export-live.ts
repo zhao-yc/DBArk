@@ -6,6 +6,7 @@ import { test, expect, dataDir, ownedDesktopResources, retainOwnedDesktopResourc
 import { closeMysqlConnection } from '../../src/engine/connection';
 import { SelectedResultsUiLifecycle, probeSelectedResultsTarget, type SelectedResultsTarget } from '../helpers/selectedResultsExportUi';
 import { zh } from '../../src/renderer/locales/zh-CN';
+import { queryContextZh } from '../../src/renderer/locales/queryContext.zh-CN';
 
 /** 双门和显式RAM身份通过后才加载；本专项不导入建库helper，不执行任何DDL或DROP。 */
 export function registerSelectedResultsExport(binding: SelectedResultsTarget) {
@@ -28,7 +29,7 @@ export function registerSelectedResultsExport(binding: SelectedResultsTarget) {
       closed: () => ownedDesktopResources(info).closed,
       retain: () => retainOwnedDesktopResources(info),
       confirmExit: () => confirmOwnedDesktopExit(info),
-    });
+    }, info as TestInfo & { _startWallTime?: number });
     states.set(info, state);
     const observe = <T>(action: () => Promise<T>) => state.observe(action);
     try {
@@ -61,7 +62,7 @@ export function registerSelectedResultsExport(binding: SelectedResultsTarget) {
       expect(Boolean(profile && profile.name === connectionName && profile.host === binding.target.host && profile.port === binding.target.port && profile.user === binding.target.user && !profile.database && profile.rememberPassword === false && profile.password === undefined && profile.hasPassword === Boolean(binding.target.password) && !profile.ssh?.enabled && !profile.tls?.enabled)).toBe(true);
 
       // 使用全局新查询表单，明确留空默认库；不展开数据库，更不创建数据库或表。
-      await observe(() => page.getByRole('button', { name: zh.app.text014, exact: true }).click());
+      await observe(() => page.locator('.app-commandbar').getByRole('button', { name: zh.common.newQuery, exact: true }).click());
       const query = page.getByRole('dialog', { name: zh.common.newQuery, exact: true });
       await observe(() => query.getByLabel(zh.app.text049, { exact: true }).selectOption(profile!.id));
       await observe(() => query.getByLabel(zh.app.text050, { exact: true }).fill(''));
@@ -69,7 +70,7 @@ export function registerSelectedResultsExport(binding: SelectedResultsTarget) {
       await observe(() => query.getByRole('button', { name: zh.app.text053, exact: true }).click());
       await observe(() => expect(query).toBeHidden());
       const tab = page.locator('.query-tab:visible');
-      await observe(() => expect(tab.locator('[aria-label="当前查询默认库"]')).toHaveText(zh.query.text007));
+      await observe(() => expect(tab.locator('[aria-label="当前查询默认库"]')).toHaveText(queryContextZh.none));
 
       /** 真实键盘编辑及执行按钮；等待本次停止按钮恢复并核无错误，不注入查询结果。 */
       async function execute(sql: string) {
@@ -104,7 +105,7 @@ export function registerSelectedResultsExport(binding: SelectedResultsTarget) {
       await observe(() => expect(dialog.locator('.success-box')).toHaveText('已导出 2 行已返回结果。'));
       const actual = JSON.parse(await observe(() => readFile(file, 'utf8')));
       expect(actual.map((row: Record<string, unknown>) => row.id)).toEqual([1, 3]);
-      expect(actual[0].repeated).toBe('18446744073709551615'); expect(actual[0]['repeated [2]']).toBeNull();
+      expect(actual[0].repeated).toBe('18446744073709551615'); expect(actual[0]['repeated [3]']).toBeNull();
       expect(actual[0].bytes).toEqual({ type: 'binary', base64: 'AP8=' });
       expect(actual[1].repeated).toBe('0.12345678901234567890'); expect(actual[1].bytes).toBeNull();
       await observe(() => dialog.getByRole('button', { name: zh.common.done, exact: true }).click());
