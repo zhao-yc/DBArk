@@ -148,7 +148,8 @@ export function deriveTrustedIndexColumn(parsed: TableColumnDefinition, metadata
     const declared = /^(?:CHAR|VARCHAR|BINARY|VARBINARY)\((\d+)\)$/i.exec(columnType);
     if (declared && metadataInteger(declared[1], '原定义长度') !== length) throw new Error('目录长度与字段声明长度不一致');
     if (declared && !binary && octets !== length * unit) throw new Error('完整字符字段字节长度与真实 MAXLEN 不一致');
-    if (['VARCHAR', 'VARBINARY'].includes(type) || large) column.prefix = { kind: 'allowed', unit: binary ? 'bytes' : 'characters', maxLength: length };
+    // CHAR/BINARY沿用真实目录长度；字符前缀计字符，二进制前缀计字节，不默认声明长度。
+    if (['CHAR', 'VARCHAR', 'BINARY', 'VARBINARY'].includes(type) || large) column.prefix = { kind: 'allowed', unit: binary ? 'bytes' : 'characters', maxLength: length };
     else column.prefix = { kind: 'forbidden', reason: '该类型的前缀索引尚无本批实证' };
     if (!large && !['ENUM', 'SET'].includes(type)) column.fullKeyBytes = octets;
     if (['ENUM', 'SET'].includes(type)) reasons.push('枚举或集合的索引字节成本首批未证明');

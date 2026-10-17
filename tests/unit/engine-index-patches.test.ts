@@ -7,6 +7,7 @@ import { parseTableColumnDefinition } from '../../src/engine/tableColumnDefiniti
 import { readTableIndexDefinition } from '../../src/engine/tableIndexDefinition';
 import { validateCommand } from '../../src/shared/validation';
 import type { StructureTaskContext, StructureTaskOptions } from '../../src/engine/structureDefinition';
+import type { IndexColumnMetadata } from '../../src/engine/tableIndexMetadata';
 const mocks = vi.hoisted(() => ({ connect: vi.fn(), execute: vi.fn() }));
 vi.mock('../../src/engine/connection', () => ({ connect: mocks.connect, execute: mocks.execute }));
 import { Engine } from '../../src/engine';
@@ -17,6 +18,7 @@ let engine: Engine, events: TaskEvent[], source: string, afterSql: string, versi
 let connections: ManagedConnection[], sent: { id: number; sql: string }[], nextId: number, headers: Record<string, unknown>[], parts: Record<string, unknown>[];
 let held: { connection: ManagedConnection; complete(error?: Error): void } | undefined, warnings: number, generatedPrimaryKeys: number, pageSize: number, expressionConflict: boolean;
 let catalogSrid: number, sridHeadersAvailable: boolean;
+let fixedColumnMetadata: Map<string, IndexColumnMetadata>;
 /** 只替换数据库驱动；实际 Engine、短会话状态机、目录交叉读取、计划与后核验均执行生产代码。 */
 function managed(signal?: AbortSignal): ManagedConnection {
   const connection = new EventEmitter(), threadId = ++nextId; let mode = '', quote = 0, charset = 'utf8mb4', collation = 'utf8mb4_general_ci', fk = 0, unique = 0, gipk = 0;
@@ -35,7 +37,7 @@ function managed(signal?: AbortSignal): ManagedConnection {
       else if (sql.startsWith('SELECT @@server_uuid')) rows = [{ uuid: 'unit' }];
       else if (sql.startsWith('SHOW CREATE TABLE')) rows = [{ Table: 't', 'Create Table': source }];
       else if (sql.startsWith('SELECT c.CHARACTER_SET_NAME')) rows = [{ charset: 'utf8mb4', collation: 'utf8mb4_bin' }];
-      else if (sql.startsWith('SELECT COLUMN_NAME AS name,')) rows = document().columns.map(column => ({ name: column.name, nullable: column.nullable === false ? 'NO' : 'YES', extra: '', charset: column.type.raw === 'text' ? 'utf8mb4' : null, collation: column.type.raw === 'text' ? 'utf8mb4_bin' : null }));
+      else if (sql.startsWith('SELECT COLUMN_NAME AS name,')) rows = document().columns.map(column => { const fixed = fixedColumnMetadata.get(column.name); return { name: column.name, nullable: column.nullable === false ? 'NO' : 'YES', extra: '', charset: fixed ? fixed.CHARACTER_SET_NAME : column.type.raw === 'text' ? 'utf8mb4' : null, collation: fixed ? fixed.COLLATION_NAME : column.type.raw === 'text' ? 'utf8mb4_bin' : null }; });
       else if (sql.startsWith('SET SESSION foreign_key_checks')) { fk = 1; unique = 1; }
       else if (sql.startsWith('SELECT @@SESSION.foreign_key_checks')) rows = [{ fkChecks: fk, uniqueChecks: unique }];
       else if (sql.startsWith('SET SESSION show_gipk')) gipk = 1;
@@ -44,7 +46,7 @@ function managed(signal?: AbortSignal): ManagedConnection {
       else if (sql.startsWith('SELECT @@lower_case_table_names')) rows = [{ lowerCaseTableNames: 0, compileOs: 'Linux', pageSize }];
       else if (sql.startsWith('SELECT @@innodb_large_prefix')) rows = [{ largePrefix: 1 }];
       else if (sql.startsWith('SELECT ENGINE, ROW_FORMAT')) rows = [{ ENGINE: 'InnoDB', ROW_FORMAT: 'Dynamic' }];
-      else if (sql.startsWith('SELECT COLUMN_NAME, DATA_TYPE')) rows = document().columns.map(column => ({ COLUMN_NAME: column.name, DATA_TYPE: column.type.raw, COLUMN_TYPE: column.type.raw, IS_NULLABLE: column.nullable === false ? 'NO' : 'YES', EXTRA: '', CHARACTER_SET_NAME: column.type.raw === 'text' ? 'utf8mb4' : null, COLLATION_NAME: column.type.raw === 'text' ? 'utf8mb4_bin' : null, CHARACTER_MAXIMUM_LENGTH: column.type.raw === 'text' ? '65535' : null, CHARACTER_OCTET_LENGTH: column.type.raw === 'text' ? '65535' : null, ...(sql.includes(', SRS_ID') ? { SRS_ID: column.type.raw === 'point' ? catalogSrid : null } : {}) }));
+      else if (sql.startsWith('SELECT COLUMN_NAME, DATA_TYPE')) rows = document().columns.map(column => fixedColumnMetadata.get(column.name) ?? ({ COLUMN_NAME: column.name, DATA_TYPE: column.type.raw, COLUMN_TYPE: column.type.raw, IS_NULLABLE: column.nullable === false ? 'NO' : 'YES', EXTRA: '', CHARACTER_SET_NAME: column.type.raw === 'text' ? 'utf8mb4' : null, COLLATION_NAME: column.type.raw === 'text' ? 'utf8mb4_bin' : null, CHARACTER_MAXIMUM_LENGTH: column.type.raw === 'text' ? '65535' : null, CHARACTER_OCTET_LENGTH: column.type.raw === 'text' ? '65535' : null, ...(sql.includes(', SRS_ID') ? { SRS_ID: column.type.raw === 'point' ? catalogSrid : null } : {}) }));
       else if (sql.startsWith('SELECT CHARACTER_SET_NAME, MAXLEN')) rows = [{ CHARACTER_SET_NAME: 'utf8mb4', MAXLEN: 4 }];
       else if (sql.includes("TABLE_NAME = 'COLUMNS' AND COLUMN_NAME = 'SRS_ID'")) rows = sridHeadersAvailable ? [{ COLUMN_NAME: 'SRS_ID' }] : [];
       else if (sql.startsWith("SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = 'information_schema'")) rows = ['INDEX_NAME', 'COLUMN_NAME', 'SEQ_IN_INDEX', 'NON_UNIQUE', 'INDEX_TYPE', 'COLLATION', 'SUB_PART', 'INDEX_COMMENT', 'EXPRESSION', 'IS_VISIBLE'].map(COLUMN_NAME => ({ COLUMN_NAME }));
@@ -70,12 +72,45 @@ async function apply(value: TableIndexPreviewOutput, taskId = 'apply', acknowled
 beforeEach(async () => {
   source = original; afterSql = original.replace('`ia`', '`renamed`'); version = '8.4.11'; failSql = undefined; holdSql = undefined; closeFails = false;
   connections = []; sent = []; events = []; nextId = 0; headers = []; parts = []; held = undefined; warnings = 0; generatedPrimaryKeys = 0; pageSize = 16384; expressionConflict = false;
-  catalogSrid = 0; sridHeadersAvailable = true;
+  catalogSrid = 0; sridHeadersAvailable = true; fixedColumnMetadata = new Map();
   mocks.connect.mockReset().mockImplementation(async (_profile, _database, signal) => managed(signal));
   mocks.execute.mockReset().mockImplementation(async (_managed, sql) => { if (String(sql).startsWith('KILL CONNECTION')) held?.complete(Object.assign(new Error('命令取消终态'), { errno: 1317 })); return { rows: [] }; });
   engine = new Engine(event => events.push(event)); await engine.handle('connections.open', { id: profile.id, profile });
 });
 afterEach(async () => { closeFails = false; holdSql = undefined; held?.complete(new Error('单元收尾')); await engine.closeAll(); vi.restoreAllMocks(); });
+
+describe.each(['c', 'b'] as const)('已有表%s定长前缀的真实Engine纯驱动链路', name => {
+  /** 这里只增加本文件私有的合成目录回包，不修改共享fixture或真实入口。 */
+  function fixture(unique = false) {
+    source = "CREATE TABLE `t` (`id` int NOT NULL,`c` char(8) DEFAULT '原值',`b` binary(8),PRIMARY KEY (`id`),KEY `spare` (`id`)) ENGINE=InnoDB ROW_FORMAT=DYNAMIC";
+    fixedColumnMetadata.set('c', { COLUMN_NAME: 'c', DATA_TYPE: 'char', COLUMN_TYPE: 'char(8)', IS_NULLABLE: 'YES', EXTRA: '', CHARACTER_SET_NAME: 'utf8mb4', COLLATION_NAME: 'utf8mb4_bin', CHARACTER_MAXIMUM_LENGTH: '8', CHARACTER_OCTET_LENGTH: '32' });
+    fixedColumnMetadata.set('b', { COLUMN_NAME: 'b', DATA_TYPE: 'binary', COLUMN_TYPE: 'binary(8)', IS_NULLABLE: 'YES', EXTRA: '', CHARACTER_SET_NAME: null, COLLATION_NAME: null, CHARACTER_MAXIMUM_LENGTH: '8', CHARACTER_OCTET_LENGTH: '8' });
+    afterSql = source.replace(') ENGINE=', `,${unique ? 'UNIQUE ' : ''}KEY \`prefix_key\` (\`${name}\`(2)) COMMENT '') ENGINE=`);
+  }
+  /** 从正式get返回的引用及单位生成补丁，不用字段名直接绕开预览合同。 */
+  async function addition(unique = false) {
+    const snapshot = await get(), column = snapshot.columns.find(value => value.name === name)!;
+    expect(column.prefix).toEqual({ kind: 'allowed', unit: name === 'c' ? 'characters' : 'bytes', maxLength: 8 });
+    return preview(snapshot, [{ op: 'add', clientKey: 'fixed-prefix', definition: { name: 'prefix_key', kind: unique ? 'unique' : 'ordinary', method: 'BTREE', comment: '', keyParts: [{ columnRef: column.columnRef, prefixLength: 2, direction: 'asc' }] } }]);
+  }
+  it('正式命令只预览零DDL，准确确认后一次提交并完整后核，旧令牌不能重放', async () => {
+    fixture(); const value = await addition(); expect(sent.filter(item => item.sql.startsWith('ALTER'))).toHaveLength(0);
+    expect(await apply(value)).toMatchObject({ ddlSubmitted: true, ddlCompleted: true, definitionVerified: true });
+    await expect(apply(value, 'fixed-replay')).rejects.toThrow('已失效或已使用');
+    expect(sent.filter(item => item.sql.startsWith('ALTER'))).toHaveLength(1);
+    expect(source).toBe(afterSql); expect(connections.every(connection => vi.mocked(connection.close).mock.calls.length === 1)).toBe(true);
+  });
+  it('唯一前缀冲突1062保留失败，不降级索引、不补DROP、不重试，旧令牌仍消费', async () => {
+    fixture(true); const initial = source, value = await addition(true); expect(value.sql).toContain('UNIQUE INDEX `prefix_key`');
+    holdSql = /^ALTER TABLE/; const operation = apply(value, 'fixed-conflict').catch(error => error); await vi.waitFor(() => expect(held).toBeDefined());
+    held!.complete(Object.assign(new Error('合成唯一前缀值重复'), { errno: 1062, code: 'ER_DUP_ENTRY' })); held = undefined;
+    expect(await operation).toBeInstanceOf(Error); expect(source).toBe(initial);
+    await expect(apply(value, 'conflict-replay')).rejects.toThrow('已失效或已使用');
+    expect(sent.filter(item => item.sql.startsWith('ALTER'))).toHaveLength(1); expect(sent.some(item => /^DROP/.test(item.sql))).toBe(false);
+    expect(events.at(-1)).toMatchObject({ taskId: 'fixed-conflict', status: 'failed', indexPatch: { ddlSubmitted: true, ddlCompleted: false, definitionVerified: false } });
+    expect(connections.every(connection => vi.mocked(connection.close).mock.calls.length === 1)).toBe(true);
+  });
+});
 
 describe.each(['fulltext', 'spatial'] as const)('真实Engine的%s专属生命周期（驱动替身）', kind => {
   /** 夹具仅指定原DDL和期望DDL，生产代码负责目录交叉、引用、预览及一次性执行。 */
