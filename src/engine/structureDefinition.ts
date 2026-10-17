@@ -15,7 +15,7 @@ export interface StructureTaskOptions {
 }
 export interface StructureTaskHost { run<T>(connectionId: string, taskId: string, action: (context: StructureTaskContext) => Promise<T>, options: StructureTaskOptions): Promise<T>; }
 export interface StructureColumnEncoding { name: string; charset: string | null; collation: string | null; }
-export interface StructureDefinitionRead { source: string; context: TableDefinitionContext; originalMode: string; normalizedMode: string; identity: string; serverVersion: string; nullability: [string, boolean][]; encodings: StructureColumnEncoding[]; tableEncoding: { charset: string; collation: string }; }
+export interface StructureDefinitionRead { source: string; context: TableDefinitionContext; originalMode: string; normalizedMode: string; identity: string; serverVersion: string; nullability: [string, boolean][]; encodings: StructureColumnEncoding[]; tableEncoding: { charset: string; collation: string }; columnExtras?: [string, string][]; }
 
 const hash = (source: string): string => createHash('sha256').update(source).digest('hex');
 
@@ -91,7 +91,8 @@ export async function readStructureDefinition(context: StructureTaskContext, tar
     nullability.push([column.name, column.nullable === 'YES']);
   }
   const identity = hash(JSON.stringify({ hostname: before.hostname, port: before.port, serverId: before.serverId, currentUser: before.currentUser, uuid, dialect: managed.status.dialect, version: managed.status.version }));
-  return { source, context: definitionContext, originalMode, normalizedMode: modeRow.sqlMode, identity, serverVersion: managed.status.version, nullability, tableEncoding, encodings: metadata.map(({ name, charset, collation }) => ({ name, charset, collation })) };
+  // 保留已有EXTRA观测供复制用途交叉核生成属性；不改变通用字段编辑能力或生成器。
+  return { source, context: definitionContext, originalMode, normalizedMode: modeRow.sqlMode, identity, serverVersion: managed.status.version, nullability, tableEncoding, encodings: metadata.map(({ name, charset, collation }) => ({ name, charset, collation })), columnExtras: metadata.map(({ name, extra }) => [name, extra]) };
 }
 
 /** 同一读取快照中的目录真值与源码一起使用，不将缺省 NULL 误显示为未知或不可空。 */

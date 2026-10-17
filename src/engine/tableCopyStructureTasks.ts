@@ -1,3 +1,4 @@
+import { tableCopyGeneratedText } from '../shared/tableCopyStructureGenerated';
 import { randomUUID } from 'node:crypto';
 import type { ResultSetHeader } from 'mysql2';
 import { StructurePatchCache, structureCacheLimits, type StructureCacheScope } from './structurePatchCache';
@@ -10,7 +11,7 @@ import { tableCopyStructureRequiredAcknowledgements, tableCopyStructureConfirmat
 interface Snapshot extends TableCopyStructureRead { id: string; target: TableCopyStructureTarget; revision: number; expires: number; }
 interface Preview { snapshot: Snapshot; newName: string; sql: string; bytes: number; expires: number; }
 const progress = (): TableCopyStructureProgress => ({ phase: 'connecting', ddlSubmitted: false, ddlCompleted: false, definitionVerified: false, outcome: 'not-sent' });
-const warnings = ['仅同库创建空表，复制已核列、普通BTREE索引及表选项；不复制行数据、外键、触发器、授权或其它对象。', '首片不支持生成/隐藏字段、特殊索引、CHECK及已知依赖，不代表完整克隆数据库。', 'CREATE TABLE LIKE会隐式提交，事务回滚和取消不能撤销；断线或未知结果不会自动重放。', '请在维护窗口暂停并行DDL；重核不能消除外部并发窗口，目标同名由服务器拒绝，不覆盖、不自动改名。'];
+const warnings = ['仅同库创建空表，复制已核列、普通BTREE索引及表选项；不复制行数据、外键、触发器、授权或其它对象。', tableCopyGeneratedText.warning, 'CREATE TABLE LIKE会隐式提交，事务回滚和取消不能撤销；断线或未知结果不会自动重放。', '请在维护窗口暂停并行DDL；重核不能消除外部并发窗口，目标同名由服务器拒绝，不覆盖、不自动改名。'];
 /** 专用能力复用独立结构任务、全局有界缓存与源/目标锁，不接收客户端SQL。 */
 export class TableCopyStructureTasks {
   private readonly snapshots: StructureCacheScope<Snapshot>; private readonly previews: StructureCacheScope<Preview>;
@@ -28,7 +29,7 @@ export class TableCopyStructureTasks {
     const result = await this.host.run(input.connectionId, input.taskId, async context => {
       state.phase = 'reading'; context.report(); const target = { connectionId: input.connectionId, database: input.database, table: input.table }, read = await readTableCopyStructure(context, target);
       snapshot = { ...read, id: randomUUID(), target, revision: version, expires: this.now() + structureCacheLimits.ttlMs }; this.cache.capacity(snapshot.bytes, 'snapshot');
-      return { target, snapshotId: snapshot.id, expiresAt: new Date(snapshot.expires).toISOString(), ddlHash: tableCommentHash(read.source), sourceDdl: read.source, tableId: read.tableId, serverVersion: read.serverVersion, writable: !read.reasons.length && !!read.tableId && !!read.serverUuid, reasons: read.reasons, warnings: [...warnings], ...(read.autoIncrementPlan ? { autoIncrement: structuredClone(read.autoIncrementPlan) } : {}) };
+      return { target, snapshotId: snapshot.id, expiresAt: new Date(snapshot.expires).toISOString(), ddlHash: tableCommentHash(read.source), sourceDdl: read.source, tableId: read.tableId, serverVersion: read.serverVersion, writable: !read.reasons.length && !!read.tableId && !!read.serverUuid, reasons: read.reasons, warnings: [...warnings], ...(read.autoIncrementPlan ? { autoIncrement: structuredClone(read.autoIncrementPlan) } : {}), ...(read.generatedPlan ? { generatedColumns: structuredClone(read.generatedPlan.columns) } : {}) };
     }, { label: '读取复制表结构来源', purpose: 'tableCopyStructure', progress: state });
     this.snapshots.set(snapshot.id, snapshot); return result;
   }
@@ -41,7 +42,7 @@ export class TableCopyStructureTasks {
       state.phase = 'rechecking'; context.report(); assertTableCopyStructureUnchanged(snapshot, await readTableCopyStructure(context, snapshot.target)); await assertRenameDestinationAbsent(context, snapshot.target, plan.newName);
       if (this.snapshots.get(input.snapshotId) !== snapshot || snapshot.expires <= this.now()) throw Error('复制结构快照已释放或过期，未发布预览');
       value = { snapshot, ...plan, bytes: snapshot.bytes + Buffer.byteLength(plan.sql) + 4096, expires: snapshot.expires }; this.cache.capacity(value.bytes, 'preview');
-      return { target: { ...snapshot.target }, newName: plan.newName, previewToken: token, expiresAt: new Date(value.expires).toISOString(), ddlHash: tableCommentHash(snapshot.source), sql: plan.sql, warnings: [...warnings], requiredAcknowledgements: [...tableCopyStructureRequiredAcknowledgements(snapshot.autoIncrementPlan)], ...(snapshot.autoIncrementPlan ? { autoIncrement: structuredClone(snapshot.autoIncrementPlan) } : {}) };
+      return { target: { ...snapshot.target }, newName: plan.newName, previewToken: token, expiresAt: new Date(value.expires).toISOString(), ddlHash: tableCommentHash(snapshot.source), sql: plan.sql, warnings: [...warnings], requiredAcknowledgements: [...tableCopyStructureRequiredAcknowledgements(snapshot.autoIncrementPlan, snapshot.generatedPlan?.columns)], ...(snapshot.autoIncrementPlan ? { autoIncrement: structuredClone(snapshot.autoIncrementPlan) } : {}), ...(snapshot.generatedPlan ? { generatedColumns: structuredClone(snapshot.generatedPlan.columns) } : {}) };
     }, { label: '预览复制空表结构', purpose: 'tableCopyStructure', progress: state });
     if (this.snapshots.get(input.snapshotId) !== snapshot || snapshot.expires <= this.now()) throw Error('复制结构快照已释放或过期，未发布预览'); this.previews.set(token, value); return result;
   }
@@ -50,7 +51,7 @@ export class TableCopyStructureTasks {
     const value = this.previews.get(input.previewToken); this.previews.delete(input.previewToken); if (!value || value.expires <= this.now()) throw Error('复制结构预览已失效或已使用，未发送DDL');
     const snapshot = value.snapshot; this.releaseTokens({ snapshotId: snapshot.id });
     if (snapshot.revision !== this.revision(revision)) throw Error('连接配置已变化，未发送DDL');
-    const required = tableCopyStructureRequiredAcknowledgements(snapshot.autoIncrementPlan);
+    const required = tableCopyStructureRequiredAcknowledgements(snapshot.autoIncrementPlan, snapshot.generatedPlan?.columns);
     if (input.confirmation !== tableCopyStructureConfirmation(snapshot.target, value.newName) || !Array.isArray(input.acknowledgements) || input.acknowledgements.length !== required.length || new Set(input.acknowledgements).size !== input.acknowledgements.length || required.some(id => !input.acknowledgements.includes(id))) throw Error('准确新名或确认项不一致；预览已消费，未发送DDL');
     const newTarget = { ...snapshot.target, table: value.newName }, state = progress();
     return this.host.run(snapshot.target.connectionId, input.taskId, async context => {

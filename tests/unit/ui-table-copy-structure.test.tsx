@@ -43,6 +43,30 @@ async function mount(options: { strict?: boolean; get?: TableCopyStructureServic
 async function prepare() { await type('t_copy', text.newName); await click(text.preview); await type('db.t_copy'); await acknowledge(); }
 
 describe('复制结构真实对话框反例（内存ReactDOM，不冒充原生验收）', () => {
+  it.each(['VIRTUAL', 'STORED'] as const)('%s生成方式及准确表达式只读展示，专属确认不能省略', async storage => {
+    const generatedColumns = [{ name: 'g', storage, expression: '`a` + 9007199254740993.123456789012', referencedColumns: ['a'] }];
+    await mount({ get: async () => ({ ...snapshot(), generatedColumns }), preview: async () => ({ ...preview(), generatedColumns, requiredAcknowledgements: [...tableCopyStructureAcknowledgements, 'generated-columns-copy'] }) });
+    await type('t_copy', text.newName); await click(text.preview); await type('db.t_copy');
+    expect(document.body.textContent).toContain(storage === 'VIRTUAL' ? text.generatedVirtual : text.generatedStored); expect(document.body.textContent).toContain(generatedColumns[0].expression);
+    await act(async () => { for (const node of document.querySelectorAll('input[type="checkbox"]').slice(0, 3)) { node.checked = true; node.dispatchEvent(new MemoryEvent('click')); } });
+    expect(button(text.apply).disabled).toBe(true); expect(services.apply).not.toHaveBeenCalled();
+    await acknowledge(); await click(text.apply, true); expect(services.apply).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(services.apply).mock.calls[0][0].acknowledgements).toContain('generated-columns-copy');
+  });
+  it('生成列摘要或存储方式与快照不同，拒绝预览响应并释放能力', async () => {
+    const generatedColumns = [{ name: 'g', storage: 'VIRTUAL' as const, expression: '`a`+1', referencedColumns: ['a'] }];
+    await mount({ get: async () => ({ ...snapshot(), generatedColumns }), preview: async () => ({ ...preview(), generatedColumns: [{ ...generatedColumns[0], storage: 'STORED' }], requiredAcknowledgements: [...tableCopyStructureAcknowledgements, 'generated-columns-copy'] }) });
+    await type('t_copy', text.newName); await click(text.preview); expect(services.release).toHaveBeenCalledWith({ previewToken: 'p' }); expect(services.apply).not.toHaveBeenCalled();
+  });
+  it('生成与自增共存时五项逐一确认，两种专属风险不能互相替代', async () => {
+    const generatedColumns = [{ name: 'g', storage: 'STORED' as const, expression: '`a`+1', referencedColumns: ['a'] }];
+    const autoIncrement = { column: { name: 'id', type: 'bigint unsigned', maximum: '18446744073709551615' }, sourceValue: '9007199254740993', expectedNewValue: '1' as const };
+    await mount({ get: async () => ({ ...snapshot(), generatedColumns, autoIncrement }), preview: async () => ({ ...preview(), generatedColumns, autoIncrement, requiredAcknowledgements: [...tableCopyStructureAcknowledgements, 'auto-increment-copy', 'generated-columns-copy'] }) });
+    await type('t_copy', text.newName); await click(text.preview); await type('db.t_copy');
+    expect(document.querySelectorAll('input[type="checkbox"]')).toHaveLength(5);
+    await act(async () => { for (const node of document.querySelectorAll('input[type="checkbox"]').slice(0, 4)) { node.checked = true; node.dispatchEvent(new MemoryEvent('click')); } });
+    expect(button(text.apply).disabled).toBe(true); await acknowledge(); await click(text.apply); expect(vi.mocked(services.apply).mock.calls[0][0].acknowledgements).toHaveLength(5);
+  });
   it('打开只读能力不自动预览或投递SQL；准确确认前按钮禁用，预览SQL只读', async () => {
     await mount(); expect(services.preview).not.toHaveBeenCalled(); expect(services.apply).not.toHaveBeenCalled();
     await type('t_copy', text.newName); await click(text.preview); expect(button(text.apply).disabled).toBe(true); expect(document.querySelector('textarea[aria-label="预览SQL"]')!.getAttribute('readonly')).not.toBeNull();
