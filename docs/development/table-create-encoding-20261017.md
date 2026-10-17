@@ -31,3 +31,13 @@ node .cache/table-create-collation/list.cjs
 ```
 
 GUI、DB、SSH/200、CI、安装、构建、clipboard、私料读取及部署均为0。真实定义未运行；本片纯测或默认关闭定义不能替代MySQL/Maria各版本实际验收。Root须先独审，再独立授权和安排实测。尚未增加已有表转换、每列字符集选择或跨版本真实兼容证明。
+
+## 独审E5-COLLATION-01追加修复
+
+员工5最终报告将问题定为正式验收入口的条件性P2，生产编码配对路径未发现新增P1/P2。报告为 `.cache/employee5-review-table-create-collation-baaed6f-20261017/summary.json`，SHA256为 `961f6968739f5ae76b4306db3e717499bbff6dc8f193822cb1211be11deb12b1`。前提是共享保留通知在共享retained标记落定前抛异常，并非声称正常通知路径已经损坏。
+
+原 `baaed6f` 的两项真实注册函数反例均复现：预检观察未知后继续退出；原建库表单提交未知后，在空任务列表下继续退出并尝试DROP。原测试替身先设置共享标记再抛通知异常，不能覆盖此条件；现已纠正为通知先失败、共享标记仍未设置，并记录 `.cache/table-create-collation/retain-parent-red.json` 两红。
+
+新增仅属于本例的永久retained状态。retain先同步设置本地锁，再尽力通知共享夹具；通知异常被保留在边界内，不覆盖原请求首因，也不重试通知。own在任何共享资源读取前先核本地锁，allowClosed也不能绕过；原observe、finally及afterEach复用同一锁。活动超时先调用本例retain，通知失败或后来恢复、迟到close及activity结束都不能清除本地锁、重新观察、退出或DROP。原失败对象仍沿聚合首项及cause保留。
+
+本文件对应追加修复只修改正式定义、其纯测和本文档，不修改生产、共享fixture/helper/quit、原预算或生成列分支。正式入口43项纯测通过；员工5原样两条独立反例在当前源码下也通过。补充覆盖通知设置前失败、afterEach、活动超时、迟到close和通知能力恢复。类型检查及真正CLI列表通过，真实外部操作仍全部为0，仍待Root复审。

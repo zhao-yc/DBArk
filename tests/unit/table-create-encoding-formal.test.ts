@@ -35,9 +35,10 @@ function formal(changes: Changes = {}) {
     if (['focus', 'check', 'selectOption'].includes(String(key))) return async () => {};
     return () => locator(label);
   } });
-  const page = { locator: () => locator(), getByRole: (_name: string, options: { name: string }) => locator(options.name), evaluate: async () => [{ name: 'E2E dbark_encoding_' + uuid.replaceAll('-', ''), id: '合成连接' }] };
+  const page = { locator: () => locator(), getByRole: (_name: string, options: { name: string }) => locator(options.name), evaluate: async (callback: Function) => callback.toString().includes('tasks.list') ? [] : [{ name: 'E2E dbark_encoding_' + uuid.replaceAll('-', ''), id: '合成连接' }] };
   const own = (value: unknown) => { expect(value).toBe(info); if (retained) throw Error('合成归属已保留'); return { page: replacePage ? {} : page, application, closed }; };
-  const retain = () => { retained = true; calls.push('retain'); if (changes.retainThrows) throw Error('合成保留失败'); };
+  // 注入通知在共享状态落定之前失败；不能用先写retained的替身掩盖本地锁缺失。
+  const retain = () => { calls.push('retain'); if (changes.retainThrows) throw Error('合成保留失败'); retained = true; };
   const actualExpect = (value: any) => value?.__locator ? new Proxy({}, { get: () => async () => { if (changes.afterForm && value.__label === 'dbark_encoding_' + uuid.replaceAll('-', '')) mutate(); } }) : expect(value);
   const helperSource = readFileSync(new URL('../e2e/live-helpers.ts', import.meta.url), 'utf8'), tree = ts.createSourceFile('helper.ts', helperSource, ts.ScriptTarget.Latest, true);
   const helperBody = tree.statements.find(node => ts.isFunctionDeclaration(node) && node.name?.text === 'connectAndCreate')!.getText(tree);
@@ -74,8 +75,28 @@ function formal(changes: Changes = {}) {
     throw Error('拒绝实际导入：' + name);
   } };
   runInContext(compile(source), createContext(context)); context.exports.registerTableCreateEncodingUiTests();
-  return { calls, submissions, targets, stop, sourceStop, raw, helper, after: () => after({}, info), run: async () => { try { await cases[0]({}, info); } catch (reason) { return reason as any; } }, retained: () => retained, releaseClose: () => { expect(finishClose).toBeDefined(); finishClose!(); }, waitingClose: () => !!finishClose };
+  return { calls, submissions, targets, stop, sourceStop, raw, helper, clearNotificationFailure: () => { changes.retainThrows = false; }, after: () => after({}, info), run: async () => { try { await cases[0]({}, info); } catch (reason) { return reason as any; } }, retained: () => retained, releaseClose: () => { expect(finishClose).toBeDefined(); finishClose!(); }, waitingClose: () => !!finishClose };
 }
+
+/** 聚合收尾可有多层cause；最初请求错误必须保持原对象，不能被通知异常替换。 */
+function originalCause(reason: any): unknown { const seen = new Set(); while (reason && Object.hasOwn(reason, 'cause') && !seen.has(reason)) { seen.add(reason); expect(reason.errors[0]).toBe(reason.cause); reason = reason.cause; } return reason; }
+
+describe('保留通知设置前失败也必须本地停链（真实注册函数，仅RAM）', () => {
+  it('独审反例：预检观察未知加通知设置前异常，禁止退出及任何后续清理', async () => {
+    const f = formal({ queryUnknown: true, retainThrows: true }), reason = await f.run(); expect(originalCause(reason)).toBe(f.sourceStop); expect(f.retained()).toBe(false); expect(f.calls).not.toContain('exit'); expect(f.calls.some(sql => sql.startsWith('DROP'))).toBe(false); expect(f.calls).not.toContain('quit');
+    const before = f.calls.length; await expect(f.after()).rejects.toThrow('保留'); expect(f.calls).toHaveLength(before);
+  });
+  it('独审反例：原建库提交未知加通知设置前异常，不能用空任务列表放行DROP', async () => {
+    const f = formal({ retainThrows: true }), reason = await f.run(); expect(originalCause(reason)).toBe(f.stop); expect(f.submissions).toHaveLength(1); expect(f.retained()).toBe(false); expect(f.calls).not.toContain('exit'); expect(f.calls.some(sql => sql.startsWith('DROP'))).toBe(false);
+    const before = f.calls.length; await expect(f.after()).rejects.toThrow('保留'); expect(f.calls).toHaveLength(before);
+  });
+  it('活动超时先本地保留，通知异常及迟到close都不能重新建库', async () => {
+    const f = formal({ holdClose: true, retainThrows: true }), pending = f.run(); for (let index = 0; index < 50 && !f.waitingClose(); index++) await Promise.resolve(); expect(f.waitingClose()).toBe(true); await expect(f.after()).rejects.toThrow('仍活动'); f.releaseClose(); await pending; expect(f.submissions).toEqual([]); expect(f.calls).not.toContain('exit'); expect(f.calls.some(sql => sql.startsWith('DROP'))).toBe(false); await expect(f.after()).rejects.toThrow('保留');
+  });
+  it('通知能力恢复也不能清除本例永久保留标记或重试通知', async () => {
+    const f = formal({ retainThrows: true }); const reason = await f.run(); expect(originalCause(reason)).toBe(f.stop); const before = f.calls.length; f.clearNotificationFailure(); await expect(f.after()).rejects.toThrow('保留'); expect(f.calls).toHaveLength(before); expect(f.retained()).toBe(false);
+  });
+});
 
 describe('新表编码正式入口持续绑定本轮身份', () => {
   it('正常对照等待严格预检close后进入原建库表单', async () => {
