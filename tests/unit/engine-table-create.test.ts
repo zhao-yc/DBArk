@@ -102,7 +102,7 @@ describe('新建表真实Engine仅RAM驱动', () => {
     const first = await preview(await get()); hold = /^SELECT @@hostname/;
     const pending = apply(first, 'cancel-before-create').catch(reason => reason);
     await vi.waitFor(() => expect(held).toBeDefined()); await engine.handle('query.cancel', { taskId: 'cancel-before-create' });
-    expect(await pending).toBeInstanceOf(Error); expect(events.findLast(event => event.taskId === 'cancel-before-create')?.tableCreate).toMatchObject({ ddlSubmitted: false, outcome: 'not-sent' });
+    expect(await pending).toBeInstanceOf(Error); expect(events.filter(event => event.taskId === 'cancel-before-create').at(-1)?.tableCreate).toMatchObject({ ddlSubmitted: false, outcome: 'not-sent' });
     expect(sent.some(sql => sql.startsWith('CREATE TABLE'))).toBe(false);
     expect(connections.every(value => vi.mocked(value.close).mock.calls.length === 1 && (value.connection as any).stream.closed)).toBe(true);
     hold = undefined; await expect(apply(first, 'old-after-cancel')).rejects.toThrow('失效');
