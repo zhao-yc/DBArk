@@ -7,3 +7,5 @@ Root未来可单独运行 `pnpm exec vitest run --config vitest.integration.conf
 断言覆盖精确BIGINT/DECIMAL、JSON与文本引号/反斜杠/NUL/多字节、空与NULL BLOB、BIT64及日期/时间微秒，逐条INSERT零warning、真实解码及独立观察完整投影相等、源表不变。夹具不使用被测生成器造数。严格关闭复用生产close；清理复用已审 `cleanupD02Copy`。任何命令/创建/对象归属未知、未终态、严格关闭失败都不补DROP或重放；后续模式停链，交由Root核对。清库前要求精确两个普通表、注释、完整SHOW CREATE未变及无额外触发器/例程/事件。它不提供新表物理tableID归属保证，也不覆盖原生剪贴板、GUI、安装或跨平台体验。
 
 本提交仅准备代码和纯验证，实际DB/SSH/GUI/剪贴板/200/CI/安装/Docker/私料读取均为0。默认关闭的两项跳过不算实库通过；六实例实际回放均待Root统一安排。
+
+收尾首次await前先占住下一模式，下一模式在读取配置或重置归属前核对前例已可信完成。收尾捕获本例连接和归属；框架失败、原30秒期限已到或归属变化都禁止迟到DROP或重新放行。只有完整成功且仍在原期限内才解锁。`copy-insert-replay-hooks.test.ts`以真实钩子的RAM端口保留超时父红并覆盖迟到完成、正常/失败对照及归属异常替换，不延长时限或运行实库。
