@@ -18,16 +18,17 @@ async function closeEncodingObserver(observer: Connection) {
 /** 专属隔离壳绑定注册身份并传入原表单内部；不修改共享fixture/helper/退出规则。 */
 export function registerTableCreateEncodingUiTests() {
   const binding = bindTableCreateEncodingTarget(() => process.env, environment);
-  const states = new WeakMap<object, { active: boolean; check(): void }>();
+  const states = new WeakMap<object, { active: boolean; retain(): void; check(): void }>();
   test.use({ preserveOnUnconfirmedExit: true, trace: 'off', screenshot: 'off', video: 'off' }); test.describe.configure({ retries: 0 });
   // 超时不会等待原body的Promise结束；活动阶段必须先保留，阻止自动夹具抢先退出。
-  test.afterEach(async ({}, info) => { const state = states.get(info); if (!state || state.active) { retainOwnedDesktopResources(info); throw Error('新表编码用例或收尾仍活动，保留现场'); } state.check(); });
+  test.afterEach(async ({}, info) => { const state = states.get(info); if (!state || state.active) { if (state) state.retain(); else try { retainOwnedDesktopResources(info); } catch { /* 缺少本例状态也不能因通知失败而继续。 */ } throw Error('新表编码用例或收尾仍活动，保留现场'); } state.check(); });
   test('新表显式编码配对经准确预览一次创建，目录及精确默认值完整核验', async ({}, info) => {
     const captured = ownedDesktopResources(info), page = captured.page, target = binding.target, database = 'dbark_encoding_' + randomUUID().replaceAll('-', '');
-    /** 任意失败都先保留；保留自身失败不得覆盖最初首因。 */
-    const retain = () => { try { retainOwnedDesktopResources(info); } catch { /* 原因优先，不能继续退出清库。 */ } };
-    const own = (allowClosed = false) => { try { binding.assertCurrent(); const current = ownedDesktopResources(info); if (current.page !== page || current.application !== captured.application || !allowClosed && current.closed) throw Error('新表编码验收窗口归属未知'); return current; } catch (reason) { retain(); throw reason; } };
-    const activity = { active: true, check: () => { own(true); } }; states.set(info, activity);
+    let retained = false;
+    /** 先永久锁定本例，再尽力通知共享夹具；通知失败或恢复均不能解除本地保留或覆盖首因。 */
+    const retain = () => { if (retained) return; retained = true; try { retainOwnedDesktopResources(info); } catch { /* 原因优先，不重试通知或借通知失败继续清理。 */ } };
+    const own = (allowClosed = false) => { if (retained) throw Error('新表编码本例已停链保留，禁止继续观察、退出或清理'); try { binding.assertCurrent(); const current = ownedDesktopResources(info); if (current.page !== page || current.application !== captured.application || !allowClosed && current.closed) throw Error('新表编码验收窗口归属未知'); return current; } catch (reason) { retain(); throw reason; } };
+    const activity = { active: true, retain, check: () => { own(true); } }; states.set(info, activity);
     const observe = async <T>(action: () => Promise<T>, allowClosed = false): Promise<T> => { own(allowClosed); try { const value = await action(); own(allowClosed); return value; } catch (reason) { retain(); throw reason; } };
     const facts = async (connection: Connection) => { const [rows] = await observe(() => connection.query<RowDataPacket[]>('SELECT @@version AS version,@@version_compile_os AS os,@@lower_case_table_names AS names,@@server_uuid AS uuid')); expect(rows).toHaveLength(1); expect(String(rows[0].version)).toMatch(/^8\.4\.11(?:[-+].*)?$/); expect(['linux', 'debian-linux-gnu']).toContain(String(rows[0].os).toLowerCase()); expect([0, '0']).toContain(rows[0].names); expect(rows[0].uuid).toBe(target.uuid); };
     const options = { host: target.host, port: target.port, user: target.user, password: target.password, charset: 'utf8mb4', connectTimeout: 15000 };
