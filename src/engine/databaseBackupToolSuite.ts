@@ -61,8 +61,12 @@ export async function verifyDatabaseBackupToolSuite(root: string, approved: Data
   const manifest=structuredClone(approved),io=options.io??nativeIO,check=options.checkCancelled;
   const digest=databaseBackupSuiteSha256(manifest);
   if(digest!==manifest.suiteSha256||manifest.platform!==options.platform||manifest.arch!==options.arch)throw Error('备份工具固定清单或当前平台不匹配');
-  check();const directory=await io.realpath(resolve(root));check();
+  const entryPath=resolve(root);
+  check();const entryStamp=await io.stat(entryPath);check();
+  if(entryStamp.link||!entryStamp.directory)throw Error('备份工具原始根入口不允许链接或非目录');
+  const directory=await io.realpath(entryPath);check();
   const initialRoot=await io.stat(directory);check();if(initialRoot.link||!initialRoot.directory)throw Error('备份工具根目录无效');
+  if(initialRoot.identity!==entryStamp.identity)throw Error('备份工具根入口解析期间发生变化');
   const expected=new Map(manifest.files.map(file=>[file.path,file])),observed=new Set<string>();let entries=0;
   /** 禁止清单外文件、链接和目录逃逸；动态库与插件也必须逐字节属于相同固定套件。 */
   async function walk(path: string, depth: number): Promise<void> {
@@ -97,5 +101,7 @@ export async function verifyDatabaseBackupToolSuite(root: string, approved: Data
   }
   await walk(directory,0);
   check();if(observed.size!==expected.size||(await io.stat(directory)).identity!==initialRoot.identity)throw Error('备份工具套件不完整或根目录已变化');check();
+  const finalEntry=await io.stat(entryPath);check();const finalDirectory=await io.realpath(entryPath);check();
+  if(finalEntry.link||!finalEntry.directory||finalEntry.identity!==entryStamp.identity||finalDirectory!==directory)throw Error('备份工具原始根入口已换绑');
   return Object.freeze({id:manifest.id,family:manifest.family,version:manifest.version,suiteSha256:digest,dumpPath:join(directory,...manifest.dumpExecutable.split('/')),restorePath:join(directory,...manifest.restoreExecutable.split('/')),verifiedFiles:observed.size});
 }

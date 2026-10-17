@@ -25,6 +25,15 @@ function fixture(){
 }
 
 describe('备份原生工具完整套件核验',()=>{
+  it('原始根入口是链接时在解析前拒绝，核验期间入口换绑也不能沿用原套件',async()=>{
+    const linked=fixture(),stat=linked.io.stat;
+    linked.io.stat=async path=>({...await stat(path),link:path===linked.root});
+    linked.io.realpath=async()=>{throw Error('原始入口链接不应进入解析');};
+    await expect(verifyDatabaseBackupToolSuite(linked.root,linked.manifest,linked.options)).rejects.toThrow('原始根入口不允许链接');expect(linked.counts().opened).toBe(0);
+    const rebound=fixture(),original=rebound.io.realpath;let resolutions=0;
+    rebound.io.realpath=async path=>{if(path===rebound.root&&++resolutions===2)return path+'-rebound';return original(path);};
+    await expect(verifyDatabaseBackupToolSuite(rebound.root,rebound.manifest,rebound.options)).rejects.toThrow('根入口已换绑');expect(rebound.counts().closed).toBe(rebound.counts().opened);
+  });
   it('注册目录只列已核平台，未知ID不读IO，不能以自造同名工具清单替换官方摘要',async()=>{
     const f=fixture();expect(databaseBackupToolChoices('darwin','arm64')).toEqual([]);
     expect(databaseBackupToolChoices('win32','x64')).toEqual([{id:'mysql-8.4.11-win32-x64',family:'mysql',version:'8.4.11',label:'MySQL 8.4.11（x64）'}]);
