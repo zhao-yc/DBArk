@@ -140,10 +140,12 @@ export async function answerDialogs(answers: number[], application: ElectronAppl
 }
 
 /** 等待工作台完成初始化，避免在 preload 就绪、React 尚未装好保存监听时退出。 */
-export async function launchDesktop() {
+export async function launchDesktop(guard?: { assertCurrent(): void }) {
   const env: Record<string, string> = Object.fromEntries(Object.entries({ ...process.env, DBARK_USER_DATA: dataDir }).filter((entry): entry is [string, string] => entry[1] !== undefined));
   delete env.ELECTRON_RUN_AS_NODE;
   const executablePath = process.env.DBARK_EXECUTABLE_PATH;
+  // 显式用例在原生启动前同步复核绑定，覆盖临时目录创建期间的配置漂移；默认用例无额外门。
+  guard?.assertCurrent();
   desktop = await electron.launch({ ...(executablePath ? { executablePath, args: [] } : { args: ['.'] }), env, chromiumSandbox: true });
   const quitMarker='DBARK_E2E_QUIT_READY:'+randomUUID();let ready!:()=>void;quitReady=new Promise<void>(resolve=>{ready=resolve;});
   closed = false;
@@ -192,15 +194,18 @@ async function forceStopOwnProcess() {
 }
 
 /** 自动夹具随每个用例运行，不依赖模块首次导入时注册钩子，避免跨文件复用已关闭窗口。 */
-export const test = baseTest.extend<{ desktopLifetime: void; preserveOnUnconfirmedExit: boolean }>({
+export const test = baseTest.extend<{ desktopLifetime: void; preserveOnUnconfirmedExit: boolean; ownedDesktopLaunchGuard: { assertCurrent(): void } | undefined }>({
   preserveOnUnconfirmedExit: [false, { option: true }],
-  desktopLifetime: [async ({ trace, preserveOnUnconfirmedExit }, use, testInfo) => {
+  ownedDesktopLaunchGuard: [undefined, { option: true }],
+  desktopLifetime: [async ({ trace, preserveOnUnconfirmedExit, ownedDesktopLaunchGuard }, use, testInfo) => {
+    // 先检查再分配所属资源；只传检查端口，不把认证或目标对象放进fixture配置。
+    ownedDesktopLaunchGuard?.assertCurrent();
     if (preserveOnUnconfirmedExit) {
       const state: OwnedDesktopExit = { confirmed: false, retained: false, active: true, closed: false }; preservedDesktopExits.set(testInfo, state);
       snippetsDiagnosticsArmed = false; snippetsDiagnostics = createSnippetsNativeDiagnostics(trace, testInfo); pageErrors = [];
       const directory = await mkdtemp(join(tmpdir(), 'dbark-e2e-')); dataDir = directory;
       let failed = false, originalFailure: unknown;
-      try { await launchDesktop(); await bindOwnedDesktopExit(testInfo); await use(); }
+      try { await launchDesktop(ownedDesktopLaunchGuard); await bindOwnedDesktopExit(testInfo); await use(); }
       catch (reason) { failed = true; originalFailure = reason; throw reason; }
       finally {
         try {
@@ -231,7 +236,7 @@ export const test = baseTest.extend<{ desktopLifetime: void; preserveOnUnconfirm
     pageErrors = [];
     dataDir = await mkdtemp(join(tmpdir(), 'dbark-e2e-'));
     try {
-      await launchDesktop();
+      await launchDesktop(ownedDesktopLaunchGuard);
       await use();
     } finally {
       try {

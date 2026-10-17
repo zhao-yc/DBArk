@@ -18,23 +18,31 @@ export function bindColumnCollationInstalledTarget(read: () => Environment, argv
     || !win32.isAbsolute(executable) || !/^[A-Za-z]:[\\/]/u.test(executable) || win32.basename(executable).toLowerCase() !== 'dbark.exe' || /(?:^|[\\/])\.{1,2}(?:[\\/]|$)|[\r\n\0]/u.test(executable)
     || ![undefined,'','0'].includes(raw.DBARK_TEST_SSH) || ![undefined,''].includes(raw.DBARK_TEST_CA)) throw Error('列排序规则只允许Windows新安装DBArk、准确200/13384/MySQL8.4.11明文和本轮单类型marker库');
   const allowed = new Set<string>([...required,...optional]);
-  const forbidden = (key: string) => /^DBARK_(?:TEST_|COLUMN_COLLATION_|SSH_|TLS_|MTLS_|AUTH_|C02_|DEV_URL)/u.test(key) && (!allowed.has(key) || key === 'DBARK_C02_EXECUTABLE_PATH' && raw[key] !== executable)
-    || /^DBARK_.*(?:SSH|TLS|MTLS|AUTH|CERT)/iu.test(key) && !allowed.has(key)
-    || /^(?:SSH_AUTH_SOCK|SSH_AGENT_PID|NODE_EXTRA_CA_CERTS|NODE_TLS_REJECT_UNAUTHORIZED|MYSQL_PWD|MYSQL_TEST_LOGIN_FILE|DATABASE_URL|SSL_CERT_FILE|SSL_CERT_DIR|ELECTRON_RUN_AS_NODE)$/u.test(key);
-  if (Object.keys(raw).some(forbidden)) throw Error('列排序规则安装验收拒绝未知SSH/TLS/auth/证书或其它运行配置');
+  /** Windows环境名不分大小写；规范键的大小写别名和旁路配置均拒绝，每次检查使用当前快照。 */
+  function forbidden(current: Environment, key: string) {
+    const canonical = key.toUpperCase();
+    if (allowed.has(canonical)) return key !== canonical || canonical === 'DBARK_C02_EXECUTABLE_PATH' && current[key] !== executable;
+    return /^DBARK_(?:TEST_|COLUMN_COLLATION_|SSH_|TLS_|MTLS_|AUTH_|C02_|DEV_URL)/u.test(canonical)
+      || /^DBARK_.*(?:SSH|TLS|MTLS|AUTH|CERT)/u.test(canonical)
+      || /^(?:SSH_AUTH_SOCK|SSH_AGENT_PID|NODE_EXTRA_CA_CERTS|NODE_TLS_REJECT_UNAUTHORIZED|MYSQL_PWD|MYSQL_TEST_LOGIN_FILE|DATABASE_URL|SSL_CERT_FILE|SSL_CERT_DIR|ELECTRON_RUN_AS_NODE)$/u.test(canonical);
+  }
+  if (Object.keys(raw).some(key => forbidden(raw,key))) throw Error('列排序规则安装验收拒绝未知SSH/TLS/auth/证书或其它运行配置');
   /** 固定串行、零重试/重复、首错停链；CLI不能覆盖为其它记录或执行策略。 */
   function option(name: string, expected: string) {
     const values = argv.flatMap((value,index) => value === name ? [argv[index+1]] : value.startsWith(name+'=') ? [value.slice(name.length+1)] : []);
     if (values.length !== 1 || values[0] !== expected) throw Error('列排序规则安装验收必须显式固定'+name+'='+expected);
   }
   option('--trace','off'); option('--workers','1'); option('--retries','0'); option('--repeat-each','1'); option('--max-failures','1');
+  // 仅允许上述五个显式选项；配置、项目或其它CLI覆盖必须在启动controller中先行拒绝。
+  const allowedOptions = new Set(['--trace','--workers','--retries','--repeat-each','--max-failures']);
+  if (argv.some(value => value.startsWith('-') && !allowedOptions.has(value.split('=',1)[0]))) throw Error('列排序规则安装验收拒绝配置或其它CLI覆盖');
   const files = argv.filter(value => /\.spec\.[cm]?[jt]sx?$/u.test(value.replaceAll('\\','/')));
   if (files.length !== 1 || !/(?:^|\/)column-collation-installed\.spec\.ts$/u.test(files[0].replaceAll('\\','/'))) throw Error('列排序规则安装验收只允许本片单一spec');
   const fixed = [...required,...optional].map(key => ({ key, present: Object.hasOwn(raw,key), value: raw[key] })); let invalid = false;
   return {
     target: Object.freeze({ host:'192.168.31.200',port:13384,kind:kind as 'char'|'varchar',table:kind+'_subject',column:'payload',database:raw.DBARK_TEST_DATABASE!,marker,user:raw.DBARK_TEST_USER!,password:raw.DBARK_TEST_PASSWORD!,uuid:raw.DBARK_TEST_EXPECTED_SERVER_UUID!,executable,before,after }),
     /** 只要观察到身份漂移即永久停止，不因恢复环境值重新获得同一身份。 */
-    assertCurrent() { const current=read(); if (invalid || fixed.some(({key,present,value}) => Object.hasOwn(current,key)!==present || current[key]!==value) || Object.keys(current).some(forbidden)) { invalid=true; throw Error('列排序规则本轮资源身份已变化，保留现场并永久停链'); } },
+    assertCurrent() { const current=read(); if (invalid || fixed.some(({key,present,value}) => Object.hasOwn(current,key)!==present || current[key]!==value) || Object.keys(current).some(key => forbidden(current,key))) { invalid=true; throw Error('列排序规则本轮资源身份已变化，保留现场并永久停链'); } },
   };
 }
 export type ColumnCollationInstalledBinding = ReturnType<typeof bindColumnCollationInstalledTarget>;

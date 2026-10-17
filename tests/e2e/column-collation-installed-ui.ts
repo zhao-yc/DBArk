@@ -13,7 +13,7 @@ export function registerColumnCollationInstalledUi(binding: ColumnCollationInsta
   binding.assertCurrent();
   const runtime = require('./desktop-fixture') as typeof Desktop, test = runtime.test;
   let completed: { directory: string; kind: 'char'|'varchar'; normalExitConfirmed: true; applicationDefinitionVerified: true } | undefined;
-  test.use({ preserveOnUnconfirmedExit:true, trace:'off', screenshot:'off', video:'off' });
+  test.use({ preserveOnUnconfirmedExit:true, ownedDesktopLaunchGuard:{ assertCurrent:()=>binding.assertCurrent() }, trace:'off', screenshot:'off', video:'off' });
   test.describe.configure({ mode:'serial', timeout:120000, retries:0 });
 
   test(`Windows安装产物单身份${binding.target.kind.toUpperCase()}列排序规则四风险确认、单次执行和定义后核`,async({trace,screenshot,video},info)=>{

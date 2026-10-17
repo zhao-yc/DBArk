@@ -21,7 +21,7 @@ Root controller独占准确 `192.168.31.200:13384`、MySQL `8.4.11`、server_uui
 | `DBARK_C02_EXECUTABLE_PATH` | 可省略，存在时须与上一项逐字同值 |
 | `DBARK_TEST_SSH` / `DBARK_TEST_CA` | 省略或`0`/空，不接受SSH/TLS/证书 |
 
-未知 `DBARK_TEST_` / `DBARK_COLUMN_COLLATION_` 配置、SSH/TLS/auth/证书参数及常见旁路认证变量均拒绝；不读取`.env`或认证文件。Windows正式门采用显式平台与win32路径语义，Linux/macOS即使提供Windows字符串也在读取认证前拒绝。RAM测试显式传入模拟平台，不表示启动过该平台程序。
+未知 `DBARK_TEST_` / `DBARK_COLUMN_COLLATION_` 配置、SSH/TLS/auth/证书参数及常见旁路认证变量均拒绝；不读取`.env`或认证文件。Windows环境名按不区分大小写识别，要求已允许的键使用规范大写拼写；`dbark_dev_url` 等旁路及已允许键的大小写别名在初始绑定、后续快照均拒绝。观察到漂移即永久失效，恢复值也不重新获得身份。Windows正式门采用显式平台与win32路径语义，Linux/macOS即使提供Windows字符串也在读取认证前拒绝。RAM测试显式传入模拟平台，不表示启动过该平台程序。路径门仅验证路径形式，不能证明安装文件字节或来源。
 
 ## 真实UI定义
 
@@ -33,10 +33,14 @@ Root controller独占准确 `192.168.31.200:13384`、MySQL `8.4.11`、server_uui
 
 沿用原desktop-fixture strict owner，单case、serial、retry0、repeat1、首错停链，trace/screenshot/video全部off。每步核原TestInfo、原App/页面及固定身份；失败保留现场，不强退、不重启、不启动另一类型。成功先由原正常退出/PID消失握手完成，再只读确认原夹具已清除自己的临时profile目录。spec不含finally清理，NSIS安装/卸载与数据库精确清理由Root独占controller负责。
 
+本片通过 `ownedDesktopLaunchGuard` 只向原自动夹具传入绑定检查函数，不传目标或认证字段。夹具在分配资源前检查一次，在创建临时目录的异步等待后、原生 `electron.launch` 紧前同步复核一次；正文检查不能替代这两处。该选项默认未设置，其他用例沿用原行为，原owner及退出状态机不变。
+
 ## Root授权后的准确命令
 
 ```powershell
 node node_modules/@playwright/test/cli.js test tests/e2e/column-collation-installed.spec.ts --workers=1 --retries=0 --repeat-each=1 --max-failures=1 --trace=off
 ```
 
-入口在list/default先短路，不读认证、不加载owner/driver。本片新门测试65项通过，`tsc --noEmit`退出0，无凭据双门0/0和1/1的实际`--list`均退出0且只收集1项默认关闭定义。实际开发验证命令为 `node .cache/employee5-column-collation-installed-v3/run.cjs`、`node .cache/employee5-column-collation-installed-v3/typecheck.cjs`、同目录 `list.cjs 0` 与 `list.cjs 1`。原件与最终哈希保存在该ignored目录，前序版本保留。不运行GUI/DB/安装/认证/full/build，不推新ref，本地提交由Root统一审查整合推送。
+CLI仅接受上例五个固定选项，拒绝 `--config` / `-c`、项目选择及其他未知选项。Playwright先加载配置再收集spec，spec内的拒绝不能撤销替代配置的加载副作用；Root controller仍须在启动Playwright前核对固定命令及可信配置。
+
+入口在list/default先短路，不读认证、不加载owner/driver。原65项门测试、类型检查和双门列表记录保留在 `.cache/employee5-column-collation-installed-v3`，不能据此追认后来发现的三个缺口已经覆盖。本轮 `.cache/employee5-column-collation-installed-guard-v1` 保留原独审三红的定向复现；修后v2执行同三组断言及8项新对照，合计11绿，原独审其余5组未重跑。A8仅在派生RAM夹具调用处接入真实注册的 `test.use` 选项，原断言保持不变；断言核对、源快照和哈希随证据保留。实际命令为 `node .cache/employee5-column-collation-installed-guard-v2/run.cjs` 和同目录 `typecheck.cjs`，类型检查退出0。不运行GUI/DB/安装/认证/full/build，不推新ref，本地提交由Root统一审查整合推送。
