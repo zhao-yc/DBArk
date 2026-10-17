@@ -1,4 +1,5 @@
 import { readFileSync } from 'node:fs';
+import { isAbsolute, posix, resolve, win32 } from 'node:path';
 import { createContext, runInContext } from 'node:vm';
 import ts from 'typescript';
 import { describe, expect, it, vi } from 'vitest';
@@ -24,9 +25,9 @@ function collect(argv: string[], integration: string, details: string) {
   } });
   runInContext(compiled, context); return { loaded, reads, skip, bind, register };
 }
-/** 此处全部是假凭据和RAM环境；不读取process.env，也不连接目标。 */
+/** 此处全部是假凭据和RAM环境；绝对路径按宿主规则构造，不读取process.env、文件或连接目标。 */
 function environment(): Record<string, string | undefined> {
-  return { DBARK_INTEGRATION_ENABLED: '1', DBARK_QUERY_ROW_DETAILS_UI: '1', DBARK_TEST_HOST: '192.168.31.200', DBARK_TEST_PORT: '13384', DBARK_TEST_TLS: '0', DBARK_TEST_USER: 'RAM只读账号', DBARK_TEST_PASSWORD: 'RAM非真实密码', DBARK_TEST_EXPECTED_SERVER_UUID: '01234567-89ab-cdef-0123-456789abcdef', DBARK_TEST_DATABASE: 'dbark_row_details_' + 'a'.repeat(32), DBARK_QUERY_ROW_DETAILS_MARKER: 'a'.repeat(32), DBARK_EXECUTABLE_PATH: 'D:\\RAM\\DBArk.exe' };
+  return { DBARK_INTEGRATION_ENABLED: '1', DBARK_QUERY_ROW_DETAILS_UI: '1', DBARK_TEST_HOST: '192.168.31.200', DBARK_TEST_PORT: '13384', DBARK_TEST_TLS: '0', DBARK_TEST_USER: 'RAM只读账号', DBARK_TEST_PASSWORD: 'RAM非真实密码', DBARK_TEST_EXPECTED_SERVER_UUID: '01234567-89ab-cdef-0123-456789abcdef', DBARK_TEST_DATABASE: 'dbark_row_details_' + 'a'.repeat(32), DBARK_QUERY_ROW_DETAILS_MARKER: 'a'.repeat(32), DBARK_EXECUTABLE_PATH: resolve('RAM', 'DBArk.exe') };
 }
 
 describe('整行详情实库UI默认关闭与列表纯收集', () => {
@@ -47,8 +48,16 @@ describe('整行详情实库UI默认关闭与列表纯收集', () => {
 describe('准确Root目标与单向配置失效（纯RAM）', () => {
   it('仅准确目标、随机库及同值C02安装别名通过；不加载驱动或创建文件', () => {
     const raw = environment(); raw.DBARK_C02_EXECUTABLE_PATH = raw.DBARK_EXECUTABLE_PATH;
+    expect(isAbsolute(raw.DBARK_EXECUTABLE_PATH!)).toBe(true); expect(raw.DBARK_EXECUTABLE_PATH).toMatch(/\.exe$/iu);
     const binding = bindQueryRowDetailsUiTarget(() => raw, ['node', '--trace=off']); binding.assertCurrent();
     expect(binding.target).toMatchObject({ host: '192.168.31.200', port: 13384, marker: 'a'.repeat(32) }); expect(Object.isFrozen(binding.target)).toBe(true);
+  });
+  it('Windows盘符只在Windows路径规则下绝对，真实同一门仍按宿主规则接受或拒绝', () => {
+    const executable = win32.join('D:\\', 'RAM', 'DBArk.exe');
+    expect(win32.isAbsolute(executable)).toBe(true); expect(posix.isAbsolute(executable)).toBe(false);
+    // Linux合法RAM夹具只是宿主绝对.exe字符串，不证明Windows安装程序可以在Linux启动。
+    const bind = () => bindQueryRowDetailsUiTarget(() => ({ ...environment(), DBARK_EXECUTABLE_PATH: executable }), []);
+    if (isAbsolute(executable)) expect(bind).not.toThrow(); else expect(bind).toThrow('准确Windows安装产物');
   });
   it.each([
     ['DBARK_TEST_HOST', '127.0.0.1'], ['DBARK_TEST_PORT', '13484'], ['DBARK_TEST_TLS', '1'], ['DBARK_TEST_USER', ''], ['DBARK_TEST_PASSWORD', undefined],
