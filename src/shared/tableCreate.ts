@@ -11,6 +11,30 @@ export const tableCreateDesignSchema = z.object({
   foreignKeys: z.array(z.object({ name, columns, referencedDatabase: name, referencedTable: name, referencedColumns: columns, onUpdate: z.string().max(32), onDelete: z.string().max(32) }).strict()).max(1000),
 }).strict();
 export type TableCreateDesign = z.infer<typeof tableCreateDesignSchema>;
+/** 新表键部分独立于实际目录列；长度仅为待建请求，不能当作COLUMNS能力。 */
+export const tableCreateKeyPartSchema = z.object({ columnName: name, prefixLength: z.number().int().min(1).max(4294967295).optional() }).strict();
+/** 同一索引仅允许一种表示；旧整字段输入继续保持原合同。 */
+export const tableCreateIndexSchema = z.union([
+  z.object({ name, unique: z.boolean(), columns }).strict(),
+  z.object({ name, unique: z.boolean(), keyParts: z.array(tableCreateKeyPartSchema).min(1).max(16) }).strict(),
+]);
+export const tableCreateDraftSchema = tableCreateDesignSchema.extend({ indexes: z.array(tableCreateIndexSchema).max(1000) });
+export type TableCreateDraft = z.infer<typeof tableCreateDraftSchema>;
+export type TableCreateIndex = z.infer<typeof tableCreateIndexSchema>;
+export interface TableCreatePrefixFacts {
+  dialect: 'mysql'; serverVersion: string; pageSize: 16384; defaultRowFormat: 'DYNAMIC';
+  charsets: { name: string; maxBytes: number }[]; digest: string;
+}
+/** 复制键部分供新表规划，不构造已存在列的引用或目录事实。 */
+export function tableCreateIndexParts(index: TableCreateIndex): { columnName: string; prefixLength?: number }[] {
+  return 'keyParts' in index ? index.keyParts.map(part => ({ ...part })) : index.columns.map(columnName => ({ columnName }));
+}
+export function tableCreateHasPrefix(design: TableCreateDraft): boolean { return design.indexes.some(index => tableCreateIndexParts(index).some(part => part.prefixLength !== undefined)); }
+/** 只有全字段请求可进入旧生成/核验链，前缀不得被静默丢弃。 */
+export function tableCreateLegacyDesign(input: TableCreateDraft): TableCreateDesign {
+  const design = tableCreateDraftSchema.parse(input); if (tableCreateHasPrefix(design)) throw Error('前缀新表必须使用专属计划，不能降级为整字段索引');
+  return { ...design, indexes: design.indexes.map(index => ({ name: index.name, unique: index.unique, columns: tableCreateIndexParts(index).map(part => part.columnName) })) };
+}
 export interface TableCreateTarget { connectionId: string; database: string; table: string; }
 export interface TableCreateEncodingCatalog { candidates: TableEncodingPair[]; digest?: string; warnings: string[]; reasons: string[]; }
 export interface TableCreateGetInput { connectionId: string; database: string; taskId: string; includeEncodings?: boolean; }
