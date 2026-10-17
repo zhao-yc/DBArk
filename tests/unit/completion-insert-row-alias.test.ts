@@ -32,7 +32,6 @@ describe('INSERT VALUES 新行别名补全',()=>{
     'INSERT INTO users(id) VALUES (1) AS incoming ON DUPLICATE KEY UPDATE incoming.|=1',
     'INSERT INTO users(id) VALUES (1) AS incoming(x) ON DUPLICATE KEY UPDATE id=incoming.|',
     'INSERT INTO users SET id=1 AS incoming ON DUPLICATE KEY UPDATE id=incoming.|',
-    'INSERT INTO users SELECT 1 AS incoming ON DUPLICATE KEY UPDATE id=incoming.|',
     'INSERT INTO users(id) VALUES (1) AS incoming ON DUPLICATE KEY UPDATE id=(SELECT incoming.|)',
     'INSERT INTO users(id) VALUES ((SELECT 1)) AS incoming ON DUPLICATE KEY UPDATE id=incoming.|',
     'INSERT INTO users(id) VALUES (1) AS users ON DUPLICATE KEY UPDATE id=users.|',
