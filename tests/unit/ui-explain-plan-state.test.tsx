@@ -38,6 +38,8 @@ function fixture() {
   const frames: ReactElement[] = [], clearOutcome = vi.fn();
   // 本端口只核计划身份，结果选择回调保持关闭；执行路径仍清除真实选择实例。
   const context = createContext({ resultSelection: selection.resultSelection, selectionBinding: undefined, selectResultRows: vi.fn(() => false), require, exports: {}, tab, settings: { resultLimit: 10 }, busy: false, pin: null, outcome, result: outcome.results[0], resultIndex: 0,
+    // 此端口不打开列管理，普通结果的可见列随当前结果更新，不能捕获执行前的计划列。
+    get visibleColumns(): unknown[] { return context.result?.columns ?? []; },
     task: { current: 'original-plan-task' }, sessionId: 'original-session', sessionRef: { current: 'original-session' }, busyRef: { current: false }, cancelledQuery: { current: '' }, parameterSession: { current: '' }, explainSource: { current: 'SELECT 1' },
     editor: { current: { getModel: () => ({ getValue: () => 'SELECT 1' }) } }, connection: { database: 'db' }, useWorkspace: { getState: () => workspace }, invoke,
     setBusy: (value: boolean) => { context.busy = value; frames.push(context.render()); }, setOutcome: (value: any) => { clearOutcome(value); context.outcome = value; context.result = value?.results[0]; },
@@ -85,6 +87,7 @@ describe('非SQL忙碌期间的计划查看器身份', () => {
     const next = { results: [{ columns: [{ key: 'c0', name: 'value', type: 'LONG' }], rows: [{ c0: '2' }] }], elapsedMs: 2 };
     release(next); await running; expect(f.context.outcome).toBe(next); expect(f.child().type).toBe(ResultsGrid);
     expect((f.child() as ReactElement<{ rows: unknown }>).props.rows).toBe(next.results[0].rows);
+    expect((f.child() as ReactElement<{ columns: unknown }>).props.columns).toBe(next.results[0].columns);
     expect(f.invoke).toHaveBeenCalledWith('query.execute', expect.objectContaining({ sessionId: 'original-session', sql: 'SELECT 2', taskId: 'new-query-task' }));
   });
 
