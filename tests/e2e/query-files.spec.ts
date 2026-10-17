@@ -3,6 +3,7 @@ import { basename, join } from 'node:path';
 import iconv from 'iconv-lite';
 import type { FileChoice } from '../../src/shared/contracts';
 import { test, expect, desktop, page, dataDir, pageErrors, launchDesktop, quitDesktop } from './desktop-fixture';
+import { beginQueryFileSaveObservation } from '../helpers/queryFileSaveObservation';
 
 type Encoding = 'utf8' | 'utf16le' | 'gb18030';
 interface NativeFileCall { mode: 'open' | 'save'; title?: string; defaultPath?: string; filters?: { name: string; extensions: string[] }[]; }
@@ -40,14 +41,25 @@ async function authorizeFile(path: string, purpose: 'query' | 'import' | 'export
 
 /** 通过界面创建故意不可连接的离线配置，文件操作不得偷偷执行 SQL 或创建数据库任务。 */
 async function openOfflineQuery() {
+  // 只观察本次测试的原Page和应用；不在其它测试或迟到页面上补读诊断。
+  const owner = { page, desktop, dataDir, info: test.info() };
   await page.locator('.app-commandbar').getByRole('button', { name: '新建连接', exact: true }).click();
   const connection = page.getByRole('dialog', { name: '新建连接', exact: true });
   await connection.getByLabel('连接名称', { exact: true }).fill('SQL 文件离线验收');
   await connection.getByLabel('主机地址', { exact: true }).fill('127.0.0.1');
   await connection.getByLabel('端口', { exact: true }).fill('1');
   await connection.getByLabel('用户名', { exact: true }).fill('offline');
-  await connection.getByRole('button', { name: '保存连接', exact: true }).click();
-  await expect(connection).toBeHidden();
+  const observation = await beginQueryFileSaveObservation(owner.page, connection, () => {
+    if (page !== owner.page || desktop !== owner.desktop || dataDir !== owner.dataDir || test.info() !== owner.info || owner.page.isClosed()) throw Error('离线保存观察所属测试已失效');
+  });
+  try {
+    await connection.getByRole('button', { name: '保存连接', exact: true }).click();
+    await expect(connection).toBeHidden();
+  } catch (original) {
+    await observation.failure(original, (name, attachment) => owner.info.attach(name, attachment));
+  } finally {
+    await observation.detach();
+  }
   await page.locator('.app-commandbar').getByRole('button', { name: '新建查询', exact: true }).click();
   await page.getByRole('dialog', { name: '新建查询', exact: true }).getByRole('button', { name: '打开查询', exact: true }).click();
   await expect(page.locator('.query-tab:visible .monaco-editor')).toBeVisible();

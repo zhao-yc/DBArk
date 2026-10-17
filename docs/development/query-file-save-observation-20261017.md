@@ -1,5 +1,7 @@
 # SQL文件离线连接保存阶段被动观察
 
+Root后续整合已在`tests/e2e/query-files.spec.ts`的原`openOfflineQuery`接入观察器，捕获同一Page、Electron应用、dataDir和原TestInfo。原一次点击、原隐藏断言和原超时不变，成功只卸载，失败才附脱敏观察且重抛原错误。`run1440`的44项相关RAM检查、类型及默认关闭的5项测试列表通过；尚未执行新的原生检查，原Windows安装失败的原因仍未确认。
+
 本片从Root固定基线`70d0a069b14cfc1ef91d0c4d92f6c0b30103edfe`建立独立普通clone，分支`codex/employee2-query-file-save-observation-20261017`。只新增测试helper、专属RAM DOM单测及本文，不改产品、共享fixture或query-files.spec.ts。它用于补足原Windows安装验收第三例的保存阶段证据，不推断modal仍visible的根因，也不改变保存行为。
 
 ## Root接入位置
