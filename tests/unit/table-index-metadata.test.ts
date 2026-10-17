@@ -63,9 +63,9 @@ describe('索引可信能力与列目录适配', () => {
       expect(result.writable).toBe(true); expect(result.column.fullKeyBytes).toBeUndefined(); expect(result.column.prefix.kind).toBe('allowed');
     }
   });
-  it.each(['char', 'binary'])('%s 完整键可有长度证明，未验证前缀仍拒绝', type => {
+  it.each(['char', 'binary'])('%s 前缀按真实目录长度区分字符与字节，完整键预算保持', type => {
     const result = column(`v ${type}(4)`, metadata(`${type}(4)`, { CHARACTER_MAXIMUM_LENGTH: 4, CHARACTER_OCTET_LENGTH: type === 'char' ? 16 : 4, ...(type === 'char' ? { CHARACTER_SET_NAME: 'utf8mb4', COLLATION_NAME: 'utf8mb4_bin' } : {}) }), type === 'char' ? 4 : undefined);
-    expect(result.writable).toBe(true); expect(result.column.prefix.kind).toBe('forbidden');
+    expect(result.writable).toBe(true); expect(result.column.prefix).toEqual({ kind: 'allowed', unit: type === 'char' ? 'characters' : 'bytes', maxLength: 4 });
     expect(result.column.fullKeyBytes).toBe(type === 'char' ? 16 : 4);
   });
   it.each([

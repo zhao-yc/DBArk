@@ -36,11 +36,11 @@ function checkedDefinition(definition: Readonly<IndexDefinition>, snapshot: Inde
     if (!/^(?:TINYINT|SMALLINT|MEDIUMINT|INT|INTEGER|BIGINT|DECIMAL|NUMERIC|FLOAT|DOUBLE|BIT|CHAR|VARCHAR|BINARY|VARBINARY|DATE|YEAR|TIME|DATETIME|TIMESTAMP|ENUM|SET|(?:TINY|MEDIUM|LONG)?(?:TEXT|BLOB))$/.test(type)) throw new Error('字段类型的 BTREE 键能力尚未证明');
     let partBytes: number | undefined;
     if (part.prefixLength !== undefined) {
-      // 首批前缀只开放五基线实证的 VARCHAR、VARBINARY、TEXT/BLOB 系列；其他能力不能靠类型相似推断。
-      if (!['VARCHAR', 'VARBINARY'].includes(type) && !large) throw new Error('该字段类型的前缀索引尚未验证');
+      // 仅开放已适配目录语义的字符/二进制字符串；版本、表能力门及真实长度/总字节预算仍逐项核对。
+      if (!['CHAR', 'VARCHAR', 'BINARY', 'VARBINARY'].includes(type) && !large) throw new Error('该字段类型的前缀索引尚未验证');
       if (column.prefix.kind !== 'allowed') throw new Error('该字段不允许前缀或前缀能力未知');
       if (part.prefixLength > column.prefix.maxLength) throw new Error('索引前缀超过字段长度');
-      const binary = type === 'VARBINARY' || type.endsWith('BLOB');
+      const binary = ['BINARY', 'VARBINARY'].includes(type) || type.endsWith('BLOB');
       if (column.prefix.unit !== (binary ? 'bytes' : 'characters')) throw new Error('索引前缀单位与字段类型不一致');
       const unitBytes = binary ? 1 : column.charsetMaxBytes;
       if (!Number.isSafeInteger(unitBytes) || unitBytes! < 1) throw new Error('无法证明字符集最大字节数');
