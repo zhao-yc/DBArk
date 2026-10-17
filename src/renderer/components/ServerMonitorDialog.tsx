@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
-import { serverMonitorLimits, serverMonitorStatusNames } from '../../shared/serverMonitor';
+import { serverMonitorStatusNames } from '../../shared/serverMonitor';
 import { ServerMonitorController, type ServerMonitorServices, type ServerMonitorViewState } from '../serverMonitorController';
 import { serverMonitorZhCN as t } from '../serverMonitorZh';
 import { Modal } from './ui';
+import { ServerMonitorSessions } from './ServerMonitorSessions';
 import '../serverMonitor.css';
 
 export interface ServerMonitorDialogProps { open: boolean; connectionId: string; connectionRevision: number; services: ServerMonitorServices; onClose(): void; }
@@ -45,16 +46,8 @@ export function ServerMonitorDialog(props: ServerMonitorDialogProps) {
         <p className="server-monitor-time"><time>{snapshot.startedAt}</time> — <time>{snapshot.completedAt}</time></p>
         <h3>{t.summary}</h3>{snapshot.summary.status === 'unavailable' ? <p>{t.unavailable}：{snapshot.summary.reason}</p> : <dl>{Object.entries(t.fields).map(([key, label]) => <div key={key}><dt>{label}</dt><dd>{value(snapshot.summary.status === 'available' ? snapshot.summary.value[key as keyof typeof t.fields] : null)}</dd></div>)}</dl>}
         <h3>{t.status}</h3>{snapshot.globalStatus.status === 'unavailable' ? <p>{t.unavailable}：{snapshot.globalStatus.reason}</p> : <><dl>{snapshot.globalStatus.value.map(item => <div key={item.name}><dt>{t.counters[item.name]}（{item.name}）</dt><dd>{item.value}</dd></div>)}</dl><p>{t.missing}{serverMonitorStatusNames.filter(name => snapshot.globalStatus.status === 'available' && !snapshot.globalStatus.value.some(item => item.name === name)).join('、') || '—'}</p></>}
-        <h3>{t.sessions}</h3>{snapshot.sessions.status === 'unavailable' ? <p>{t.unavailable}：{snapshot.sessions.reason}</p> : <>
-          <p>{t.rows}：{Math.min(snapshot.sessions.value.rows.length, serverMonitorLimits.sessions)} / {snapshot.sessions.value.limit}</p>
-          {(snapshot.sessions.value.truncated || snapshot.sessions.value.rows.length > serverMonitorLimits.sessions) && <p>{t.limited}</p>}
-          {!snapshot.sessions.value.rows.length && <p>{t.noSessions}</p>}
-          <div className="server-monitor-table"><table><thead><tr>{t.sessionFields.map(label => <th key={label} scope="col">{label}</th>)}</tr></thead><tbody>{snapshot.sessions.value.rows.slice(0, serverMonitorLimits.sessions).map(row => <tr key={row.id}>
-            <td>{row.id}</td><td>{value(row.user)}</td><td>{value(row.host)}</td><td>{value(row.database)}</td><td>{value(row.command)}</td><td>{value(row.seconds)}</td><td>{value(row.state)}</td>
-            <td><details><summary>{t.sqlDetail}</summary><pre>{value(row.sql)}</pre></details><span>{value(row.sqlLength)}{row.sqlTruncated ? ` · ${t.sqlLimited}` : ''}</span></td>
-          </tr>)}</tbody></table></div>
-        </>}
       </>}
+      <ServerMonitorSessions key={JSON.stringify([connectionId,connectionRevision])} section={snapshot?.sessions} disabled={closing || !sameTarget}/>
       <footer><button type="button" disabled={closing} onClick={close}>{t.close}</button></footer>
     </section>
   </Modal>;
