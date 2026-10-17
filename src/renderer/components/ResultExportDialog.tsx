@@ -11,7 +11,7 @@ import { ErrorBox, Field, Modal } from './ui';
 import '../resultExport.css';
 
 /** 对话框持有打开时的不可变结果引用；导出不访问数据库，支持已断线的旧快照。 */
-export function ResultExportDialog({ result, tabId, onClose }: { result: QueryResult; tabId: string; onClose(): void }) {
+export function ResultExportDialog({ result, tabId, selected = false, onClose }: { result: QueryResult; tabId: string; selected?: boolean; onClose(): void }) {
   const data = useMemo(() => resultExportData(result), [result]);
   const columns = useMemo(() => resultExportColumns(data.columns), [data]);
   const sample = useMemo(() => data.rows.slice(0, 20), [data]);
@@ -40,9 +40,9 @@ export function ResultExportDialog({ result, tabId, onClose }: { result: QueryRe
   /** 写入或原子替换结束前保留对话框与任务进度，关闭不能绕过资源释放。 */
   function close() { if (!busyRef.current) onClose(); }
 
-  return <Modal title={zh.resultExport.title} wide onClose={close}>
+  return <Modal title={selected ? zh.resultExport.selectedTitle : zh.resultExport.title} wide onClose={close}>
     <div className="modal-content">
-      <div className="info-strip">{formatText(zh.resultExport.returnedRows, data.rows.length)}<br/>{zh.resultExport.returnedOnly}</div>
+      <div className="info-strip">{formatText(selected ? zh.resultExport.selectedRows : zh.resultExport.returnedRows, data.rows.length)}<br/>{selected ? zh.resultExport.selectedOnly : zh.resultExport.returnedOnly}</div>
       {data.truncated && <p className="warning-text">{zh.resultExport.truncated}</p>}
       <div className="form-grid">
         <Field label={zh.resultExport.format}><select aria-label={zh.resultExport.format} value={format} disabled={busy} onChange={event => { setFormat(event.target.value as typeof format); setFile(null); setDone(undefined); setTaskId(''); setError(''); }}><option value="csv">CSV</option><option value="json">JSON</option></select></Field>
