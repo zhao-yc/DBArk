@@ -1,0 +1,7 @@
+{
+  "sourceCommit": "5d220442aba1e59943f0ef65b2c90c079c6e870d",
+  "purpose": "固定换行与字号共存、Windows helper资源及中继增量，执行三平台源码及安装检查",
+  "systemClipboardRequested": false,
+  "databaseIntegrationRequested": false,
+  "publicationRequested": false
+}
