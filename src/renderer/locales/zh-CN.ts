@@ -238,6 +238,8 @@ export const zh = {
   },
   // 表设计和数据库对象定义。
   schema: {
+    literalNull: '文字 NULL',
+    literalNullLabel: '第{0}个字段：文字 NULL',
     text001: "请填写表名称。",
     text002: "表结构已更新",
     text003: "查看表定义 · {0}",

@@ -5,7 +5,7 @@ import type { TableCreateServices } from '../../src/renderer/tableCreateServices
 import type { TableCreateConfirmationProps } from '../../src/renderer/components/TableCreateConfirmation';
 import { tableCreateAcknowledgements, type TableCreateGetOutput, type TableCreatePreviewOutput } from '../../src/shared/tableCreate';
 import { tableCreateZh as text } from '../../src/renderer/locales/tableCreate.zh-CN';
-import { zh } from '../../src/renderer/locales/zh-CN';
+import { zh, formatText } from '../../src/renderer/locales/zh-CN';
 // 仅替换Monaco显示；React事件、状态、围栏、StrictMode和组件释放均运行生产组件。
 vi.mock('../../src/renderer/components/SqlEditor', () => ({ SqlEditor: ({ value, readOnly }: { value: string; readOnly: boolean }) => <textarea aria-label="预览SQL" readOnly={readOnly} value={value}/> }));
 let services: TableCreateServices;
@@ -128,5 +128,22 @@ describe('新建表真实ReactDOM的确认与生命周期（仅RAM）', () => {
     await mount(); await confirm(); const pending = deferred<Awaited<ReturnType<TableCreateServices['apply']>>>(); vi.mocked(services.apply).mockReturnValueOnce(pending.promise); await click(text.apply);
     await act(async () => { workspace.setState({ connectionVersions: { c: 2 } }); workspace.setState({ connectionVersions: { c: 1 } }); });
     await act(async () => pending.resolve({ target: preview().target, ddlSubmitted: true, ddlCompleted: true, definitionVerified: true, resourcesReleased: true, warnings: [] })); expect(created).not.toHaveBeenCalled(); expect(button(text.apply).disabled).toBe(true); expect(document.body.textContent).toContain(text.mismatch);
+  });
+});
+
+
+describe('文字NULL默认值的真实设计器（仅RAM）', () => {
+  it.each([true, false])('原NULL语义保留，文字NULL选择%s后预览精确区分字符串与空值', async asLiteral => {
+    await mount({ schema: true });
+    const name = document.querySelector('input')!;
+    await act(async () => { name.value = 'new_table'; name.dispatchEvent(new MemoryEvent('input')); });
+    const input = document.querySelector('input[aria-label="' + formatText(zh.schema.text022, 1) + '"]')!;
+    await act(async () => { input.value = 'NULL'; input.dispatchEvent(new MemoryEvent('input')); });
+    const literal = document.querySelector('input[aria-label="第1个字段：文字 NULL"]');
+    expect(literal).not.toBeNull();
+    await act(async () => { literal!.checked = true; literal!.dispatchEvent(new MemoryEvent('click')); });
+    if (!asLiteral) await act(async () => { literal!.checked = false; literal!.dispatchEvent(new MemoryEvent('click')); });
+    await click(zh.schema.text049);
+    expect(vi.mocked(services.preview).mock.calls.at(-1)![0].design.columns[0].defaultValue).toBe(asLiteral ? 'NULL' : null);
   });
 });
