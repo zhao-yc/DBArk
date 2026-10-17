@@ -33,7 +33,6 @@ node D:/svn/DBArk/node_modules/typescript/bin/tsc --noEmit
 ```
 
 本轮只运行上述原字节及新增对照和类型检查，没有重跑旧全套、应用构建或实际DB/GUI/OS/剪贴板，不读取凭据。本片结果不代表真实补验已通过；Root仍需独审和无旁观的正式补验，按原专属fixture与服务器线程边界独立收尾。精确提交、类型检查结果、测试/日志/源码 SHA256 记录于本任务 ignored `.cache/upsert-dot-ram/handoff.json`。
-# Root后续实证
+## Root后续实证
 
 Root 整合 `36d0562`，目录相关 37 项／合并类型／源码构建通过，独审三个原生等待与未知保留 RAM 对照通过。准确 MySQL 8.4.11 上的正式 Windows 点号自动补全、三列真实建议及精确插入已在无旁观 run1515 单次通过；原三次失败和诊断不改写，全部自有 fixture、线程及配置目录确认清理，见[正式复验](../../tests/integration/acceptance-upsert-completion-20261018.md)。本片不代替其它版本／平台／新安装或执行 UPSERT。
-
