@@ -1,3 +1,4 @@
+import { assertEditorFontSize, editorFontLimits, readEditorFontSize } from '../shared/editorFont';
 import { connectionTransferDocumentSchema, connectionTransferLimits, exportConnectionProfile, importConnectionProfile, importReplacementProfile, type ExportedConnectionProfile } from '../shared/connectionTransfer';
 import { connectionReplacementText } from '../shared/connectionTransferMessages';
 import { assertTlsPassphrase, tlsCredentialMessages } from '../shared/tlsCredentials';
@@ -19,7 +20,7 @@ import { bindSavedQuery, queryConnectionDigest } from './queryBinding';
 import { parseSavedQueryRecord } from './savedQuerySearchMatch';
 
 export interface SecretProtector { available(): boolean; encrypt(value: string): string; decrypt(value: string): string; }
-export const defaultSettings: AppSettings = { theme: 'dark', sidebarWidth: 270, resultLimit: 1000, pageSize: 200, dataTypeColors: false, tabs: [] };
+export const defaultSettings: AppSettings = { theme: 'dark', sidebarWidth: 270, resultLimit: 1000, pageSize: 200, dataTypeColors: false, editorFontSize: editorFontLimits.defaultSize, tabs: [] };
 /** 只由不可变预览生成，旧概要和单调修订共同约束最终原子替换。 */
 export interface ConnectionImportStorageOptions { expectedRevision: number; replacements: { sourceId: string; targetId: string; previous: ExportedConnectionProfile }[]; }
 
@@ -388,8 +389,8 @@ export class LocalStore {
   /** 合并默认偏好，兼容缺少新增配置字段的旧记录。 */
   settings(): AppSettings {
     const stored = this.records<AppSettings>('SELECT data FROM settings WHERE id=1')[0];
-    // 旧配置缺项或损坏标志一律关闭，不增加数据库迁移，也不从真值字符串猜偏好。
-    return { ...defaultSettings, ...stored, dataTypeColors: stored?.dataTypeColors === true };
+    // 旧颜色标志只认true；缺项或损坏字号回退13，不迁移数据库或隐式强转。
+    return { ...defaultSettings, ...stored, dataTypeColors: stored?.dataTypeColors === true, editorFontSize: readEditorFontSize(stored?.editorFontSize) };
   }
   /** 独立配置表按需创建，旧库无收藏时返回空配置，不把秘密或工作区 SQL 混入收藏。 */
   workbench(): WorkbenchSnapshot {
@@ -412,6 +413,8 @@ export class LocalStore {
   saveSettings(settings: AppSettings): void {
     // 直接存储入口同样拒绝非布尔值；未指定的旧调用仍兼容默认关闭。
     if (settings.dataTypeColors !== undefined && typeof settings.dataTypeColors !== 'boolean') throw new Error('类型颜色偏好必须是布尔值');
+    // 兼容缺项的旧调用；显式字号不得越界或借字符串/小数绕过IPC。
+    if (settings.editorFontSize !== undefined) assertEditorFontSize(settings.editorFontSize);
     this.mutate(() => this.db.run('INSERT INTO settings VALUES (1,?) ON CONFLICT(id) DO UPDATE SET data=excluded.data', [JSON.stringify(settings)])); }
   /** 关闭内存数据库并清除明文秘密，已成功保存的文件无需再次写入。 */
   close(): void { this.db.close(); this.volatileSecrets.clear(); }
