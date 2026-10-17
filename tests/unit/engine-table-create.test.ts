@@ -12,6 +12,7 @@ const profile: ConnectionProfile = { id: 'c', name: '离线新建表', group: ''
 const design = (): TableCreateDesign => ({ database: 'db', name: 'new`table', engine: 'InnoDB', charset: 'utf8mb4', comment: '', columns: [{ name: 'id', type: 'bigint unsigned', nullable: false, autoIncrement: true, comment: '' }, { name: 'amount', type: 'decimal(30,12)', nullable: false, autoIncrement: false, defaultValue: '123456789012345678.123456789012', comment: '' }], indexes: [{ name: 'PRIMARY', unique: true, columns: ['id'] }, { name: 'uq_amount', unique: true, columns: ['amount'] }], foreignKeys: [] });
 const definition = "CREATE TABLE `new``table` (`id` bigint unsigned NOT NULL AUTO_INCREMENT,`amount` decimal(30,12) NOT NULL DEFAULT '123456789012345678.123456789012',PRIMARY KEY (`id`),UNIQUE KEY `uq_amount` (`amount`)) ENGINE=InnoDB";
 let showDefinition: string | undefined;
+let catalogType: string | undefined, catalogDefault: string | null | undefined;
 let engine: Engine, events: TaskEvent[], sent: string[], connections: ManagedConnection[], sequence: number, uuid: string, mode: string, occupied: boolean, created: boolean, closeFails: boolean, badVerify: boolean, dialect: 'mysql' | 'mariadb', version: string;
 let hold: RegExp | undefined, held: { complete(error?: Error): void } | undefined, fail: RegExp | undefined, holdClose: boolean, releaseClose: (() => void) | undefined;
 /** 仅替换驱动，真实Engine、任务锁、缓存、SQL与取消/关闭代码均执行产品实现。 */
@@ -32,7 +33,7 @@ function managed(signal?: AbortSignal): ManagedConnection {
       else if (sql.startsWith('CREATE TABLE')) { created = true; rows = { affectedRows: 0, warningStatus: 0 }; }
       else if (sql.startsWith('SHOW CREATE TABLE')) rows = [{ 'Create Table': showDefinition ?? definition }];
       else if (sql.startsWith('SELECT t.TABLE_NAME')) rows = [{ name: 'new`table', engine: 'InnoDB', charset: 'utf8mb4', comment: '' }];
-      else if (sql.startsWith('SELECT COLUMN_NAME')) rows = [{ name: 'id', type: 'bigint unsigned', nullable: 'NO', defaultValue: null, extra: 'auto_increment', comment: '' }, { name: 'amount', type: badVerify ? 'decimal(20,2)' : 'decimal(30,12)', nullable: 'NO', defaultValue: dialect === 'mariadb' ? "'123456789012345678.123456789012'" : '123456789012345678.123456789012', extra: '', comment: '' }];
+      else if (sql.startsWith('SELECT COLUMN_NAME')) rows = [{ name: 'id', type: 'bigint unsigned', nullable: 'NO', defaultValue: null, extra: 'auto_increment', comment: '' }, { name: 'amount', type: catalogType ?? (badVerify ? 'decimal(20,2)' : 'decimal(30,12)'), nullable: 'NO', defaultValue: catalogDefault !== undefined ? catalogDefault : dialect === 'mariadb' ? "'123456789012345678.123456789012'" : '123456789012345678.123456789012', extra: '', comment: '' }];
       else if (sql.startsWith('SELECT INDEX_NAME')) rows = [{ name: 'PRIMARY', nonUnique: 0, column: 'id', sequence: 1 }, { name: 'uq_amount', nonUnique: 0, column: 'amount', sequence: 1 }];
       else { callback(Error('纯测试未声明SQL')); return; }
       callback(null, rows, []);
@@ -45,12 +46,31 @@ async function get(revision = 1): Promise<TableCreateGetOutput> { return engine.
 async function preview(snapshot: TableCreateGetOutput, draft = design()): Promise<TableCreatePreviewOutput> { return engine.handle('schema.tableCreate.preview', { snapshotId: snapshot.snapshotId, design: draft, taskId: 'preview-' + sequence, connectionRevision: 1 }); }
 async function apply(value: TableCreatePreviewOutput, taskId = 'apply', revision = 1, confirmation = 'db.new`table') { return engine.handle('schema.tableCreate.apply', { previewToken: value.previewToken, confirmation, acknowledgements: [...tableCreateAcknowledgements], taskId, connectionRevision: revision }); }
 beforeEach(async () => {
-  events = []; sent = []; connections = []; sequence = 0; uuid = 'server-1'; mode = ''; occupied = created = closeFails = badVerify = holdClose = false; hold = held = fail = releaseClose = undefined; showDefinition = undefined; dialect = 'mysql'; version = '8.4.11';
+  events = []; sent = []; connections = []; sequence = 0; uuid = 'server-1'; mode = ''; occupied = created = closeFails = badVerify = holdClose = false; hold = held = fail = releaseClose = undefined; showDefinition = catalogType = catalogDefault = undefined; dialect = 'mysql'; version = '8.4.11';
   driver.connect.mockReset().mockImplementation(async (_profile, _database, signal) => managed(signal)); driver.execute.mockReset().mockImplementation(async () => { held?.complete(Error('合成取消终态')); return { rows: [] }; });
   engine = new Engine(event => events.push(event)); await engine.handle('connections.open', { id: 'c', profile });
 });
 afterEach(async () => { closeFails = holdClose = false; releaseClose?.(); hold = undefined; held?.complete(Error('纯测试收尾')); await engine.closeAll(); vi.useRealTimers(); });
 describe('新建表真实Engine仅RAM驱动', () => {
+  it.each(['enum', 'set'])('%s文字量大小写及内部空白不能被规范化抹平', async kind => {
+    const draft = design(); draft.columns[1].type = `${kind}('A B','x')`; delete draft.columns[1].defaultValue;
+    catalogType = `${kind}('ab','x')`; catalogDefault = null;
+    showDefinition = definition.replace("decimal(30,12) NOT NULL DEFAULT '123456789012345678.123456789012'", `${catalogType} NOT NULL`);
+    expect(await apply(await preview(await get(), draft))).toMatchObject({ ddlCompleted: true, definitionVerified: false });
+  });
+  it.each(['mysql', 'mariadb'] as const)('%s的ENUM文字量保真，关键字/引号外空白可等价', async value => {
+    dialect = value; version = value === 'mysql' ? '8.4.11' : '10.11.19';
+    const draft = design(); draft.columns[1].type = "enum('A B','x''Y')"; delete draft.columns[1].defaultValue;
+    catalogType = "ENUM( 'A B', 'x''Y' )"; catalogDefault = null;
+    showDefinition = definition.replace("decimal(30,12) NOT NULL DEFAULT '123456789012345678.123456789012'", `${catalogType} NOT NULL`);
+    expect(await apply(await preview(await get(), draft))).toMatchObject({ ddlCompleted: true, definitionVerified: true });
+  });
+  it('SHOW保真而后读目录ENUM文字量不同也不合成核验成功', async () => {
+    const draft = design(); draft.columns[1].type = "enum('A B','x')"; delete draft.columns[1].defaultValue;
+    catalogType = "enum('ab','x')"; catalogDefault = null;
+    showDefinition = definition.replace("decimal(30,12) NOT NULL DEFAULT '123456789012345678.123456789012'", `${draft.columns[1].type} NOT NULL`);
+    expect(await apply(await preview(await get(), draft))).toMatchObject({ ddlCompleted: true, definitionVerified: false });
+  });
   it.each(['类型', '自增缺失', '自增多出'])('SHOW CREATE的%s已与设计及目录矛盾时只保留ACK', async kind => {
     showDefinition = kind === '类型' ? definition.replace('bigint unsigned', 'int unsigned') : kind === '自增缺失' ? definition.replace(' AUTO_INCREMENT', '') : definition.replace('decimal(30,12) NOT NULL', 'decimal(30,12) NOT NULL AUTO_INCREMENT');
     expect(await apply(await preview(await get()))).toMatchObject({ ddlCompleted: true, definitionVerified: false, resourcesReleased: true });

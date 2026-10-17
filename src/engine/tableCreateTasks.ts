@@ -3,7 +3,7 @@ import type { ResultSetHeader } from 'mysql2';
 import { StructurePatchCache, structureCacheLimits, type StructureCacheScope } from './structurePatchCache';
 import { structureTaskQuery as query, type StructureTaskContext, type StructureTaskHost } from './structureDefinition';
 import { buildDesign, qualified, mariaDefault, temporalDefault } from './sql';
-import { parseTableColumnDefinition } from './tableColumnDefinition';
+import { parseTableColumnDefinition, tableDefinitionTokens } from './tableColumnDefinition';
 import { definitionOmittingSqlModes } from '../shared/tableColumnPatches';
 import { tableCreateAcknowledgements, tableCreateConfirmation, tableCreateDesignSchema, tableCreateMessages as text, type TableCreateDesign, type TableCreateGetInput, type TableCreateGetOutput, type TableCreatePreviewInput, type TableCreatePreviewOutput, type TableCreateApplyInput, type TableCreateApplyOutput, type TableCreateReleaseInput, type TableCreateProgress } from '../shared/tableCreate';
 const hash = (value: unknown) => createHash('sha256').update(JSON.stringify(value)).digest('hex');
@@ -37,7 +37,14 @@ async function verify(context: StructureTaskContext, preview: Preview): Promise<
   if (preview.snapshot.mode.split(',').some(mode => (definitionOmittingSqlModes as readonly string[]).includes(mode.toUpperCase()))) return false;
   const document = parseTableColumnDefinition(String(ddl[0]['Create Table']), { dialect: context.managed.status.dialect, mode: { noBackslashEscapes: preview.snapshot.noBackslash, ansiQuotes: preview.snapshot.mode.split(',').includes('ANSI_QUOTES') } });
   if (document.table !== table || document.database !== undefined && document.database !== database || document.columns.length !== design.columns.length || document.items.filter(item => item.kind === 'constraint').length !== design.indexes.length || document.items.some(item => item.kind === 'constraint' && !['PRIMARY', 'UNIQUE', 'KEY', 'INDEX'].includes(item.constraintKind)) || document.columns.some(column => !column.type.known || column.attributes.some(attribute => !['nullable', 'default', 'comment', 'auto-increment'].includes(attribute.kind)))) return false;
-  const type = (value: string) => value.toLowerCase().replace(/\s+/g, '').replace(/^integer\b/, 'int').replace(/^(tinyint|smallint|mediumint|int|bigint)\(\d+\)/, '$1');
+  /** 仅规范化未引用关键字和无ZEROFILL整数显示宽度；ENUM/SET文字量逐字保留解码后的值。 */
+  const type = (value: string) => {
+    const tokens = tableDefinitionTokens(value, document.context).map(token => ({ kind: token.kind, value: token.kind === 'word' ? token.value.toUpperCase() : token.value }));
+    if (!tokens.length || tokens.some(token => !['word', 'number', 'string', 'symbol'].includes(token.kind))) throw Error('字段类型包含未证明的词法属性');
+    if (tokens[0].kind === 'word' && tokens[0].value === 'INTEGER') tokens[0].value = 'INT';
+    if (/^(TINYINT|SMALLINT|MEDIUMINT|INT|BIGINT)$/.test(tokens[0].value) && !tokens.some(token => token.kind === 'word' && token.value === 'ZEROFILL') && tokens[1]?.value === '(' && tokens[2]?.kind === 'number' && /^\d+$/.test(tokens[2].value) && tokens[3]?.value === ')') tokens.splice(1, 3);
+    return JSON.stringify(tokens);
+  };
   const temporal = (value: string) => value.toUpperCase().replace(/\(\)$/, '');
   // SHOW CREATE与目录必须同时支持本次设计，不能将两次不一致的读取拼成一次核验成功。
   if (document.columns.some((column, index) => {
