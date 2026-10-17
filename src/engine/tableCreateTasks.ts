@@ -4,6 +4,7 @@ import { StructurePatchCache, structureCacheLimits, type StructureCacheScope } f
 import { structureTaskQuery as query, type StructureTaskContext, type StructureTaskHost } from './structureDefinition';
 import { buildDesign, qualified, mariaDefault, temporalDefault } from './sql';
 import { parseTableColumnDefinition, tableDefinitionTokens } from './tableColumnDefinition';
+import { readTableIndexDefinition } from './tableIndexDefinition';
 import { definitionOmittingSqlModes } from '../shared/tableColumnPatches';
 import { tableCreateAcknowledgements, tableCreateConfirmation, tableCreateDesignSchema, tableCreateMessages as text, type TableCreateDesign, type TableCreateGetInput, type TableCreateGetOutput, type TableCreatePreviewInput, type TableCreatePreviewOutput, type TableCreateApplyInput, type TableCreateApplyOutput, type TableCreateReleaseInput, type TableCreateProgress } from '../shared/tableCreate';
 const hash = (value: unknown) => createHash('sha256').update(JSON.stringify(value)).digest('hex');
@@ -55,6 +56,12 @@ async function verify(context: StructureTaskContext, preview: Preview): Promise<
     if (/^(?:DATE|TIME|DATETIME|TIMESTAMP)\b/i.test(expected.type) && temporalDefault(expected.defaultValue)) return value.kind !== 'expression' || temporal(value.sql) !== temporal(expected.defaultValue);
     return value.kind !== 'literal' || value.value !== expected.defaultValue;
   })) return false;
+  // 设计器仅表达普通完整列索引；SHOW中的前缀、方法、方向及未知属性不能靠名称/列序补证。
+  const parsedIndexes = readTableIndexDefinition(document);
+  if (parsedIndexes.otherConstraintRanges.length || parsedIndexes.indexes.length !== design.indexes.length || design.indexes.some(expected => {
+    const actual = parsedIndexes.indexes.find(index => index.name === expected.name);
+    return !actual || actual.kind !== (expected.name === 'PRIMARY' ? 'primary' : expected.unique ? 'unique' : 'ordinary') || actual.method !== 'BTREE' || actual.comment !== '' || actual.opaqueReasons.length > 0 || actual.attributes.some(attribute => attribute.kind !== 'method') || actual.parts.length !== expected.columns.length || actual.parts.some((part, index) => part.columnName !== expected.columns[index] || part.prefixLength !== undefined || part.direction !== 'asc' || part.expressionSql !== undefined || part.opaqueReasons.length > 0);
+  })) return false;
   const tables = (await query<{ name: string; engine: string; charset: string; comment: string }[]>(context, `SELECT t.TABLE_NAME AS name,t.ENGINE AS engine,c.CHARACTER_SET_NAME AS charset,t.TABLE_COMMENT AS comment FROM information_schema.TABLES t LEFT JOIN information_schema.COLLATIONS c ON c.COLLATION_NAME=t.TABLE_COLLATION WHERE t.TABLE_SCHEMA=${literal(database)} AND t.TABLE_NAME=${literal(table)} LIMIT 2`)).rows;
   if (tables?.length !== 1 || tables[0].name !== table || tables[0].engine?.toUpperCase() !== design.engine.toUpperCase() || tables[0].charset !== design.charset || tables[0].comment !== design.comment) return false;
   const condition = `TABLE_SCHEMA=${literal(database)} AND TABLE_NAME=${literal(table)}`;
@@ -64,10 +71,14 @@ async function verify(context: StructureTaskContext, preview: Preview): Promise<
     const sameDefault = expected.defaultValue === undefined ? actualDefault === null : expected.defaultValue === null ? actualDefault === null : temporalDefault(expected.defaultValue) && /^(?:DATE|TIME|DATETIME|TIMESTAMP)\b/i.test(expected.type) ? String(actualDefault).toUpperCase().replace(/\(\)$/, '') === expected.defaultValue.toUpperCase().replace(/\(\)$/, '') : actualDefault === expected.defaultValue;
     return column.name !== expected.name || type(column.type) !== type(expected.type) || !['YES', 'NO'].includes(column.nullable) || (column.nullable === 'YES') !== expected.nullable || /auto_increment/i.test(column.extra) !== expected.autoIncrement || column.comment !== expected.comment || !sameDefault;
   })) return false;
-  const indexes = (await query<{ name: string; nonUnique: number; column: string; sequence: number }[]>(context, `SELECT INDEX_NAME AS name,NON_UNIQUE AS nonUnique,COLUMN_NAME AS \`column\`,SEQ_IN_INDEX AS sequence FROM information_schema.STATISTICS WHERE ${condition} ORDER BY INDEX_NAME,SEQ_IN_INDEX LIMIT 4097`)).rows;
+  const indexes = (await query<{ name: string; nonUnique: number; column: string; sequence: number; subPart: number | null; method: string; direction: string | null; comment: string }[]>(context, `SELECT INDEX_NAME AS name,NON_UNIQUE AS nonUnique,COLUMN_NAME AS \`column\`,SEQ_IN_INDEX AS sequence,SUB_PART AS subPart,INDEX_TYPE AS method,COLLATION AS direction,INDEX_COMMENT AS comment FROM information_schema.STATISTICS WHERE ${condition} ORDER BY INDEX_NAME,SEQ_IN_INDEX LIMIT 4097`)).rows;
   if (!Array.isArray(indexes) || indexes.length >= 4097) return false;
   const actual = new Map<string, { name: string; unique: boolean; columns: string[] }>();
-  for (const index of indexes) { const entry = actual.get(index.name) ?? { name: index.name, unique: !Number(index.nonUnique), columns: [] }; if (![0, 1].includes(Number(index.nonUnique)) || Number(index.sequence) !== entry.columns.length + 1) return false; entry.columns.push(index.column); actual.set(index.name, entry); }
+  for (const index of indexes) {
+    const entry = actual.get(index.name) ?? { name: index.name, unique: !Number(index.nonUnique), columns: [] };
+    if (typeof index.name !== 'string' || !index.name || typeof index.column !== 'string' || index.subPart !== null || index.method !== 'BTREE' || index.direction !== 'A' || index.comment !== '' || ![0, 1].includes(Number(index.nonUnique)) || entry.unique !== !Number(index.nonUnique) || Number(index.sequence) !== entry.columns.length + 1) return false;
+    entry.columns.push(index.column); actual.set(index.name, entry);
+  }
   if (actual.size !== design.indexes.length || design.indexes.some(index => JSON.stringify(actual.get(index.name)) !== JSON.stringify({ name: index.name, unique: index.name === 'PRIMARY' || index.unique, columns: index.columns }))) return false;
   // 外键仍允许按原生成器创建；首片不把未独立比对的FK目录宣称完整定义核验。
   return design.foreignKeys.length === 0;

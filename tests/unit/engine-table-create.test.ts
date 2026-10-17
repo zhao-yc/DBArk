@@ -13,6 +13,7 @@ const design = (): TableCreateDesign => ({ database: 'db', name: 'new`table', en
 const definition = "CREATE TABLE `new``table` (`id` bigint unsigned NOT NULL AUTO_INCREMENT,`amount` decimal(30,12) NOT NULL DEFAULT '123456789012345678.123456789012',PRIMARY KEY (`id`),UNIQUE KEY `uq_amount` (`amount`)) ENGINE=InnoDB";
 let showDefinition: string | undefined;
 let catalogType: string | undefined, catalogDefault: string | null | undefined;
+let indexChanges: Record<string, unknown>;
 let engine: Engine, events: TaskEvent[], sent: string[], connections: ManagedConnection[], sequence: number, uuid: string, mode: string, occupied: boolean, created: boolean, closeFails: boolean, badVerify: boolean, dialect: 'mysql' | 'mariadb', version: string;
 let hold: RegExp | undefined, held: { complete(error?: Error): void } | undefined, fail: RegExp | undefined, holdClose: boolean, releaseClose: (() => void) | undefined;
 /** 仅替换驱动，真实Engine、任务锁、缓存、SQL与取消/关闭代码均执行产品实现。 */
@@ -34,7 +35,7 @@ function managed(signal?: AbortSignal): ManagedConnection {
       else if (sql.startsWith('SHOW CREATE TABLE')) rows = [{ 'Create Table': showDefinition ?? definition }];
       else if (sql.startsWith('SELECT t.TABLE_NAME')) rows = [{ name: 'new`table', engine: 'InnoDB', charset: 'utf8mb4', comment: '' }];
       else if (sql.startsWith('SELECT COLUMN_NAME')) rows = [{ name: 'id', type: 'bigint unsigned', nullable: 'NO', defaultValue: null, extra: 'auto_increment', comment: '' }, { name: 'amount', type: catalogType ?? (badVerify ? 'decimal(20,2)' : 'decimal(30,12)'), nullable: 'NO', defaultValue: catalogDefault !== undefined ? catalogDefault : dialect === 'mariadb' ? "'123456789012345678.123456789012'" : '123456789012345678.123456789012', extra: '', comment: '' }];
-      else if (sql.startsWith('SELECT INDEX_NAME')) rows = [{ name: 'PRIMARY', nonUnique: 0, column: 'id', sequence: 1 }, { name: 'uq_amount', nonUnique: 0, column: 'amount', sequence: 1 }];
+      else if (sql.startsWith('SELECT INDEX_NAME')) rows = [{ name: 'PRIMARY', nonUnique: 0, column: 'id', sequence: 1, subPart: null, method: 'BTREE', direction: 'A', comment: '' }, { name: 'uq_amount', nonUnique: 0, column: 'amount', sequence: 1, subPart: null, method: 'BTREE', direction: 'A', comment: '', ...indexChanges }];
       else { callback(Error('纯测试未声明SQL')); return; }
       callback(null, rows, []);
     });
@@ -46,12 +47,29 @@ async function get(revision = 1): Promise<TableCreateGetOutput> { return engine.
 async function preview(snapshot: TableCreateGetOutput, draft = design()): Promise<TableCreatePreviewOutput> { return engine.handle('schema.tableCreate.preview', { snapshotId: snapshot.snapshotId, design: draft, taskId: 'preview-' + sequence, connectionRevision: 1 }); }
 async function apply(value: TableCreatePreviewOutput, taskId = 'apply', revision = 1, confirmation = 'db.new`table') { return engine.handle('schema.tableCreate.apply', { previewToken: value.previewToken, confirmation, acknowledgements: [...tableCreateAcknowledgements], taskId, connectionRevision: revision }); }
 beforeEach(async () => {
-  events = []; sent = []; connections = []; sequence = 0; uuid = 'server-1'; mode = ''; occupied = created = closeFails = badVerify = holdClose = false; hold = held = fail = releaseClose = undefined; showDefinition = catalogType = catalogDefault = undefined; dialect = 'mysql'; version = '8.4.11';
+  events = []; sent = []; connections = []; sequence = 0; uuid = 'server-1'; mode = ''; occupied = created = closeFails = badVerify = holdClose = false; hold = held = fail = releaseClose = undefined; showDefinition = catalogType = catalogDefault = undefined; indexChanges = {}; dialect = 'mysql'; version = '8.4.11';
   driver.connect.mockReset().mockImplementation(async (_profile, _database, signal) => managed(signal)); driver.execute.mockReset().mockImplementation(async () => { held?.complete(Error('合成取消终态')); return { rows: [] }; });
   engine = new Engine(event => events.push(event)); await engine.handle('connections.open', { id: 'c', profile });
 });
 afterEach(async () => { closeFails = holdClose = false; releaseClose?.(); hold = undefined; held?.complete(Error('纯测试收尾')); await engine.closeAll(); vi.useRealTimers(); });
 describe('新建表真实Engine仅RAM驱动', () => {
+  it.each(['前缀', '方法', '方向', '不可见', '注释'])('SHOW索引%s不同，即使目录投影同名同列也不报完整核验', async kind => {
+    const draft = design(); draft.columns[1].type = 'varchar(80)'; catalogType = 'varchar(80)';
+    const changed = kind === '前缀' ? '(`amount`(5))' : kind === '方法' ? '(`amount`) USING HASH' : kind === '方向' ? '(`amount` DESC)' : kind === '不可见' ? '(`amount`) INVISIBLE' : "(`amount`) COMMENT '不同'";
+    showDefinition = definition.replace('decimal(30,12)', 'varchar(80)').replace('UNIQUE KEY `uq_amount` (`amount`)', 'UNIQUE KEY `uq_amount` ' + changed);
+    expect(await apply(await preview(await get(), draft))).toMatchObject({ ddlCompleted: true, definitionVerified: false });
+    expect(sent.filter(sql => /^(CREATE|ALTER|DROP)/.test(sql))).toHaveLength(1);
+  });
+  it.each([{ subPart: 5 }, { subPart: undefined }, { method: 'HASH' }, { direction: 'D' }, { direction: null }, { comment: '不同' }])('目录索引属性%s与设计/SHOW矛盾或未知时不报完整核验', async changes => {
+    indexChanges = changes;
+    expect(await apply(await preview(await get()))).toMatchObject({ ddlCompleted: true, definitionVerified: false });
+  });
+  it.each(['mysql', 'mariadb'] as const)('%s普通完整列BTREE及显式ASC仍可共同核验', async value => {
+    dialect = value; version = value === 'mysql' ? '5.7.44' : '10.11.19';
+    showDefinition = definition.replace('UNIQUE KEY `uq_amount` (`amount`)', 'UNIQUE KEY `uq_amount` (`amount` ASC) USING BTREE');
+    expect(await apply(await preview(await get()))).toMatchObject({ ddlCompleted: true, definitionVerified: true });
+    expect(sent.find(sql => sql.startsWith('SELECT INDEX_NAME'))).toContain('SUB_PART AS subPart,INDEX_TYPE AS method,COLLATION AS direction');
+  });
   it.each(['enum', 'set'])('%s文字量大小写及内部空白不能被规范化抹平', async kind => {
     const draft = design(); draft.columns[1].type = `${kind}('A B','x')`; delete draft.columns[1].defaultValue;
     catalogType = `${kind}('ab','x')`; catalogDefault = null;
