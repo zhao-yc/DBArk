@@ -79,3 +79,19 @@ bulk使用按TestInfo键控的 `BatchDuplicatePreparation`，从原 `_startWallT
 本轮窄复核16通过、48未选择：原A3/A5安全断言、A4/A6合法对照共4项；新增启动真实自动fixture、真实WeakMap retain/active/替换、框架仍passed但原期限到达、字节核对耗时到期、内外await间保留且不覆盖下一owner目录、无hook原两次guard调用兼容，以及body结束后的到期/回退/原起点和启动准备保留共12项。原A3适配件只给VM的真实helper依赖补 `BatchDuplicatePreparation` import/导出，原断言与调度不改；原文件、报告、适配差异与SHA均封存。A5/A6原同字节先有一次2通过检查，最终4项按当前源码另核，不累加身份。
 
 仅运行 `vitest -t 'P2|A3|A4|A5|A6'` 的这些RAM端口和本轮一次类型检查；未执行真实Playwright、--list、Electron、GUI、端口、数据库、网络、.env或剪贴板。合法启动对照只到会立即拒绝的RAM原生端口，不称真实应用启动或退出已验。新的精确提交和type最终退出及全部原件摘要以本轮ignored `batch-duplicate-ui-fix/handoff.json` 为准，Root再交原审查者窄复核。
+
+## 6d07abc在途原生返回：准备完成后才发布
+
+原审查者对固定6d07abc复核为12绿1红，交接SHA256 `01286a8e33ebb9862ff1ac5f221a890525618f9bd01d0158649d113942f4f2ce`，原件及6d作者交接保留。目录前后门已正确，但旧 `desktop = await electron.launch(...)` 没有返回发布门，超时且afterEach保留后仍可能覆盖下一owner。Root明确授权本轮新增仅assertPreparation路径使用的私有prepared启动分支；旧无hook/default启动和原退出/强停/清理函数保持。
+
+`launchPreparedOwnedDesktop` 先捕获原共享句柄快照，全程仅持有本地app/page/quitReady、错误和对话框数组。native Promise返回后，在任何归属拒绝之前先把app及可同步取得的主PID登记至原state；因此失效晚包也不会丢失原生资源线索。随即核原WeakMap/TestInfo/active/retained/期限和共享快照，失败只保留原state，不发布、不继续原生动作、不退出或清理。
+
+will-quit监听安装、firstWindow、工作台就绪、初始回答协议和PID观察的每次await前后均核原owner；原page返回可保存在原state，但不发布全局page。所有准备完成、原时钟和原共享快照仍合法后，才在一个没有await的片段中发布desktop/page/dataDir/closed/quitReady及本例数组/诊断。自动夹具外层await恢复与use返回也重核新hook和原owner，不追认迟到主体。新路径不调用会提前写共享状态的旧launchDesktop/answerDialogs/bindOwnedDesktopExit；原函数正文保留，旧无hook仍走原调用链。
+
+close/console/pageerror回调捕获原app/page/state与本地ready；每次先核原owner和已发布的句柄身份。下一owner出现、期限失效或原state已保留/失活时，仅保留原state，不改变下一owner的closed、错误、对话框、ready或句柄，也不读取迟到console文本。合法同owner回调仍可记账，原正常退出协议及真实PID检查继续由旧退出实现执行。
+
+本轮仅原B5 retained安全反例1项和新增必要RAM对照9项，共10个不同身份通过。原例端口只补新私有准备函数的声明/计数（5→6）及RAM app.process主PID，B5安全断言、afterEach和调度未改。旧B5 normal期待“evaluate失败前已经发布全局desktop”不适用于此次完成后发布合同，原绿记录保持、未改期待；合法完整发布由新永久对照验证。其它原12绿、44、Root197或full/build均未重复。
+
+九项永久对照包含：native晚返回仍保存app/主PID；willQuit、firstWindow、工作台就绪、初始回答、metrics五个await晚包不继续动作/发布；合法app/page/ready及主/子PID一次发布；合法回调与下一owner出现后的迟到close/console/pageerror隔离；无hook仍调用原launch和原guard两次。原准备门测试只补新增私有函数的VM声明和原全局声明，未改旧断言，也未在本轮重跑它们。
+
+本轮一次 `tsc --noEmit` 退出0。所有原生、页面、目录、PID及回调均为RAM端口，没有启动真实Electron/Playwright/list、连接端口/数据库、读取.env/认证、网络、SSH/Docker、剪贴板、构建或安装。合法body对照在检查发布后主动保留RAM现场，不执行真实退出，不能把这些对照记为平台或实际资源终态验收。精确新提交、原件及端口适配摘要见ignored `batch-duplicate-prepared-fix/handoff.json`，本地commit不push，Root交原审查者复核后再安排整合验收。

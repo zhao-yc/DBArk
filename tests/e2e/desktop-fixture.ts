@@ -165,6 +165,66 @@ export async function launchDesktop(guard?: { assertCurrent(): void }) {
   if (snippetsDiagnosticsArmed) await snippetsDiagnostics?.start(snippetsDiagnosticPort(desktop, page), 'restart');
 }
 
+/** 仅新准备hook使用：先保留原生资源线索，全部准备完成后才一次发布共享句柄。 */
+async function launchPreparedOwnedDesktop(info: TestInfo, state: OwnedDesktopExit, directory: string, guard: { assertCurrent(): void }, diagnostics: SnippetsNativeDiagnostics | undefined): Promise<void> {
+  const previous = { desktop, page, dataDir, closed, quitReady, pageErrors, dialogCalls, snippetsDiagnostics, snippetsDiagnosticsArmed };
+  const errors: string[] = [], calls: RecordedDialog[] = [];
+  let application: ElectronApplication | undefined, preparedPage: Page | undefined, ready: Promise<void> | undefined, published = false;
+  /** 发布前核原共享快照，发布后只承认本app/page；保留墓碑永不追认下一owner。 */
+  const own = (allowClosed = false) => {
+    try {
+      guard.assertCurrent();
+      if (preservedDesktopExits.get(info) !== state || !state.active || state.retained) throw new Error('本例准备启动的所有权已失效');
+      if (published ? desktop !== application || page !== preparedPage || dataDir !== directory || quitReady !== ready || pageErrors !== errors || snippetsDiagnostics !== diagnostics || closed !== state.closed
+        : desktop !== previous.desktop || page !== previous.page || dataDir !== previous.dataDir || closed !== previous.closed || quitReady !== previous.quitReady || pageErrors !== previous.pageErrors || dialogCalls !== previous.dialogCalls || snippetsDiagnostics !== previous.snippetsDiagnostics || snippetsDiagnosticsArmed !== previous.snippetsDiagnosticsArmed) throw new Error('本例准备启动的共享句柄已属于其他owner');
+      if (!allowClosed && state.closed) throw new Error('本例准备启动的应用已经关闭');
+    } catch (reason) { state.retained = true; throw reason; }
+  };
+  try {
+    own();
+    const env: Record<string, string> = Object.fromEntries(Object.entries({ ...process.env, DBARK_USER_DATA: directory }).filter((entry): entry is [string, string] => entry[1] !== undefined));
+    delete env.ELECTRON_RUN_AS_NODE;
+    const executablePath = process.env.DBARK_EXECUTABLE_PATH;
+    own(); application = await electron.launch({ ...(executablePath ? { executablePath, args: [] } : { args: ['.'] }), env, chromiumSandbox: true });
+    // 即使原launch在超时后才返回，也先将app及可同步取得的主PID登记给原state，不能丢线索。
+    state.application = application;
+    const main = application.process()?.pid;
+    if (Number.isSafeInteger(main) && main! > 0) state.processIds = [...new Set([...(state.processIds ?? []), main!])];
+    own();
+    if (!Number.isSafeInteger(main) || main! <= 0) throw new Error('本例准备启动缺少可确认的主进程');
+    const localApplication = application, quitMarker = 'DBARK_E2E_QUIT_READY:' + randomUUID(); let resolveReady!: () => void;
+    ready = new Promise<void>(resolve => { resolveReady = resolve; }); state.ready = ready; state.diagnostics = diagnostics;
+    // 事件只操作当前原owner；失效后仅保留原state，不写下一例的closed/dialog/pageErrors。
+    state.onClose = () => { try { own(true); state.closed = true; if (published) closed = true; } catch { state.retained = true; } };
+    localApplication.on('close', state.onClose);
+    localApplication.on('console', message => {
+      try { own(true); const text = message.text(); if (text.startsWith('DBARK_E2E_DIALOG:')) (published ? dialogCalls : calls).push(JSON.parse(text.slice('DBARK_E2E_DIALOG:'.length))); if (text === quitMarker) resolveReady(); }
+      catch { state.retained = true; }
+    });
+    own(); await localApplication.evaluate(({ app }, marker) => { app.once('will-quit', () => console.log(marker)); }, quitMarker); own();
+    own(); preparedPage = await localApplication.firstWindow(); state.ownerPage = preparedPage; own();
+    const localPage = preparedPage;
+    localPage.on('pageerror', error => { try { own(true); errors.push(error.message); } catch { state.retained = true; } });
+    own(); await expect(localPage.locator('.app-statusbar')).toBeVisible({ timeout: 15000 }); own();
+    // 仅在本地app安装原有回答协议，不能调用会提前重置全局dialogCalls的旧answerDialogs。
+    own(); await localApplication.evaluate(({ dialog }, responses) => {
+      globalThis.__dbarkE2EDialogs = { answers: responses, calls: [] };
+      dialog.showMessageBox = (async (...args: unknown[]) => {
+        const options = args.at(-1) as Electron.MessageBoxOptions, response = globalThis.__dbarkE2EDialogs.answers.shift() ?? 0;
+        const call = { title: options.title, message: options.message, buttons: options.buttons, response };
+        globalThis.__dbarkE2EDialogs.calls.push(call); console.log('DBARK_E2E_DIALOG:' + JSON.stringify(call));
+        return { response, checkboxChecked: false };
+      }) as typeof dialog.showMessageBox;
+    }, []); own();
+    own(); const ids = await localApplication.evaluate(({ app }) => app.getAppMetrics().map(metric => metric.pid)); own();
+    if (!Array.isArray(ids) || !ids.length || ids.some(pid => !Number.isSafeInteger(pid) || pid <= 0)) throw new Error('本例准备启动的所属PID未知');
+    state.processIds = [...new Set([...(state.processIds ?? []), ...ids])];
+    // 最终发布没有await；所有原生准备、原时钟和原共享句柄核验都已完成。
+    own(); desktop = localApplication; page = localPage; dataDir = directory; closed = false; quitReady = ready;
+    pageErrors = errors; dialogCalls = calls; snippetsDiagnostics = diagnostics; snippetsDiagnosticsArmed = false; published = true;
+  } catch (reason) { state.retained = true; throw reason; }
+}
+
 /** 通过原生窗口或 app.quit 发起退出，保留调试通道直到保存握手和实际进程结束。 */
 export async function requestQuit(method: 'app' | 'window' = 'app') {
   await desktop.evaluate(({ app, BrowserWindow }, route) => {
@@ -214,7 +274,9 @@ export const test = baseTest.extend<{ desktopLifetime: void; preserveOnUnconfirm
           originalGuard.assertPreparation!(testInfo);
         } catch (reason) { state.retained = true; throw reason; }
       } } : originalGuard;
-      snippetsDiagnosticsArmed = false; snippetsDiagnostics = createSnippetsNativeDiagnostics(trace, testInfo); pageErrors = [];
+      // 新准备路径的诊断和目录也先留在本地，不能在launch晚回包时覆盖下一owner。
+      const preparedDiagnostics = originalGuard?.assertPreparation ? createSnippetsNativeDiagnostics(trace, testInfo) : undefined;
+      if (!originalGuard?.assertPreparation) { snippetsDiagnosticsArmed = false; snippetsDiagnostics = createSnippetsNativeDiagnostics(trace, testInfo); pageErrors = []; }
       // 显式新hook在目录await两侧都核原TestInfo/墓碑；旧路径不增加门或改变失败策略。
       const directory = originalGuard?.assertPreparation ? await (async () => {
         launchGuard!.assertCurrent();
@@ -223,9 +285,14 @@ export const test = baseTest.extend<{ desktopLifetime: void; preserveOnUnconfirm
       })() : await mkdtemp(join(tmpdir(), 'dbark-e2e-'));
       // 内层已核目录回包，外层await恢复仍可能晚于afterEach；先复核再写共享目录句柄。
       if (originalGuard?.assertPreparation) launchGuard!.assertCurrent();
-      dataDir = directory;
+      if (!originalGuard?.assertPreparation) dataDir = directory;
       let failed = false, originalFailure: unknown;
-      try { await launchDesktop(launchGuard); await bindOwnedDesktopExit(testInfo); await use(); }
+      try {
+        if (originalGuard?.assertPreparation) { await launchPreparedOwnedDesktop(testInfo, state, directory, launchGuard!, preparedDiagnostics); launchGuard!.assertCurrent(); ownedDesktopState(testInfo); }
+        else { await launchDesktop(launchGuard); await bindOwnedDesktopExit(testInfo); }
+        await use();
+        if (originalGuard?.assertPreparation) { launchGuard!.assertCurrent(); ownedDesktopState(testInfo); }
+      }
       catch (reason) { failed = true; originalFailure = reason; throw reason; }
       finally {
         try {
