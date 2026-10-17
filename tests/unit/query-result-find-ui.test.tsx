@@ -5,11 +5,11 @@ import type { DataRow, QueryResult, ResultColumn } from '../../src/shared/contra
 import { queryResultFindZh as text } from '../../src/renderer/locales/queryResultFind.zh-CN';
 import { queryResultColumnsZh as columnText } from '../../src/renderer/locales/queryResultColumns.zh-CN';
 import { zh } from '../../src/renderer/locales/zh-CN';
-const ports = vi.hoisted(() => ({ grids: [] as any[], scroll: vi.fn(), activate: vi.fn() }));
+const ports = vi.hoisted(() => ({ grids: [] as any[], scroll: vi.fn(), activate: vi.fn(), hostKey: 0 }));
 // 仅替换虚拟布局与Monaco端口，真实Grid/查找栏/QueryTab/store/导出窗口全部运行。
 vi.mock('react-data-grid', async () => {
-  const { useImperativeHandle } = await import('react');
-  return { SelectColumn: { key: 'select-row' }, DataGrid(props: any) { ports.grids.push(props); useImperativeHandle(props.ref, () => ({ element: null, scrollToCell: ports.scroll, setActivePosition: ports.activate }), []); return <div role="grid" tabIndex={0}/>; } };
+  const { useImperativeHandle, useRef } = await import('react');
+  return { SelectColumn: { key: 'select-row' }, DataGrid(props: any) { const host = useRef<HTMLDivElement>(null); ports.grids.push(props); useImperativeHandle(props.ref, () => ({ element: host.current, scrollToCell: ports.scroll, setActivePosition: ports.activate })); return <div key={ports.hostKey} ref={host} role="grid" tabIndex={0}/>; } };
 });
 vi.mock('../../src/renderer/components/SqlEditor', () => ({ SqlEditor: () => <div role="textbox" aria-label="RAM SQL编辑器"/> }));
 let Grid: typeof import('../../src/renderer/components/ResultsGrid')['ResultsGrid'];
@@ -39,7 +39,7 @@ beforeAll(async () => {
   ({ createRoot } = await import('react-dom/client')); ({ ResultsGrid: Grid } = await import('../../src/renderer/components/ResultsGrid'));
   ({ QueryTab } = await import('../../src/renderer/components/QueryTab')); ({ useWorkspace: store, flushSettings: flush } = await import('../../src/renderer/store'));
 });
-afterEach(async () => { if (root) { await act(async () => root!.unmount()); root = undefined; } vi.useRealTimers(); await flush(); delete (window as any).dbark; vi.restoreAllMocks(); ports.grids = []; ports.scroll.mockClear(); ports.activate.mockClear(); document.body.textContent = ''; });
+afterEach(async () => { if (root) { await act(async () => root!.unmount()); root = undefined; } vi.useRealTimers(); await flush(); delete (window as any).dbark; vi.restoreAllMocks(); ports.grids = []; ports.scroll.mockClear(); ports.activate.mockClear(); ports.hostKey = 0; document.body.textContent = ''; });
 afterAll(() => { for (const [name, descriptor] of globals) if (descriptor) Object.defineProperty(globalThis, name, descriptor); else Reflect.deleteProperty(globalThis, name); });
 function container() { const node = document.createElement('div'); document.body.appendChild(node); root = createRoot(node as any); }
 function button(name: string) { const node = document.querySelectorAll('button').find(node => node.textContent === name || node.getAttribute('aria-label') === name || name === zh.query.text010 && node.textContent.startsWith(name)); expect(node, '缺少按钮：' + name).toBeDefined(); return node!; }
@@ -120,4 +120,20 @@ it.each(['result','pin','layout','job','version','inactive','closed','modal','bi
   else { await act(async () => root!.unmount()); root = undefined; }
   await act(async () => old()); await settle(); await act(async () => old());
   expect(ports.scroll).not.toHaveBeenCalled(); expect(commands.filter(command => command === 'query.execute')).toHaveLength(1); expect(exports).toHaveLength(0); expect(ports.activate).not.toHaveBeenCalled();
+});
+
+
+it('宿主替换撤销对照：真实RDG式handle重发可连续导航，原宿主被替换后旧导航不可复活', async () => {
+  (window as any).dbark = { invoke: vi.fn(async () => undefined) }; store.setState({ settings: { theme: 'light' } as any }); container();
+  const rows = [{ a: 'hit', b: 'x' }, { a: 'x', b: 'hit' }], scope = {};
+  const render = () => act(async () => root!.render(<Grid columns={cols} rows={rows} selectionScope={scope} isCurrent={() => true}/>));
+  await render(); vi.useFakeTimers({ toFake: ['setTimeout','clearTimeout'] });
+  await click(text.open); await search('hit'); await settle(); await click(text.next); await click(text.next);
+  expect(ports.scroll.mock.calls).toEqual([[{ rowIdx: 0, idx: 1 }], [{ rowIdx: 1, idx: 2 }]]);
+  const old = callback(button(text.next)), originalHost = document.querySelector('[role="grid"]');
+  ports.hostKey++; await render(); expect(document.querySelector('[role="grid"]')).not.toBe(originalHost);
+  await act(async () => old()); await settle(); expect(ports.scroll).toHaveBeenCalledTimes(2);
+  ports.hostKey = 0; await render(); await act(async () => old()); expect(ports.scroll).toHaveBeenCalledTimes(2);
+  await click(text.open); await search('hit'); await settle(); await click(text.next); expect(ports.scroll).toHaveBeenCalledTimes(3);
+  expect(ports.activate).not.toHaveBeenCalled();
 });
