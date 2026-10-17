@@ -5,6 +5,7 @@ import { structureTaskQuery as query, type StructureTaskContext, type StructureT
 import { buildDesign, qualified, mariaDefault, temporalDefault } from './sql';
 import { parseTableColumnDefinition, tableDefinitionTokens } from './tableColumnDefinition';
 import { readTableIndexDefinition } from './tableIndexDefinition';
+import { readCreatedForeignKeys, verifyCreatedForeignKeyCatalog } from './tableCreateForeignKeyVerification';
 import { definitionOmittingSqlModes } from '../shared/tableColumnPatches';
 import { tableCreateAcknowledgements, tableCreateConfirmation, tableCreateDesignSchema, tableCreateMessages as text, type TableCreateDesign, type TableCreateGetInput, type TableCreateGetOutput, type TableCreatePreviewInput, type TableCreatePreviewOutput, type TableCreateApplyInput, type TableCreateApplyOutput, type TableCreateReleaseInput, type TableCreateProgress } from '../shared/tableCreate';
 const hash = (value: unknown) => createHash('sha256').update(JSON.stringify(value)).digest('hex');
@@ -30,14 +31,17 @@ async function absent(context: StructureTaskContext, database: string, table: st
   const rows = (await query<unknown[]>(context, `SELECT TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA=${literal(database)} AND TABLE_NAME=${literal(table)} LIMIT 2`)).rows;
   if (!Array.isArray(rows) || rows.length) throw Error(text.occupied);
 }
-/** 只读核指定新表的列与索引；未知规范化一律保守未核验，不能将同名对象归属反推为创建成功。 */
+/** 只读核指定新表的列、索引和外键；未知规范化一律保守未核验，不能反推同名对象归属。 */
 async function verify(context: StructureTaskContext, preview: Preview): Promise<boolean> {
   const { database, table } = preview.target, design = preview.design;
   const ddl = (await query<Record<string, unknown>[]>(context, `SHOW CREATE TABLE ${qualified(database, table)}`)).rows;
   if (ddl?.length !== 1 || typeof ddl[0]['Create Table'] !== 'string' || Buffer.byteLength(String(ddl[0]['Create Table'])) > 2 * 1024 * 1024) return false;
   if (preview.snapshot.mode.split(',').some(mode => (definitionOmittingSqlModes as readonly string[]).includes(mode.toUpperCase()))) return false;
   const document = parseTableColumnDefinition(String(ddl[0]['Create Table']), { dialect: context.managed.status.dialect, mode: { noBackslashEscapes: preview.snapshot.noBackslash, ansiQuotes: preview.snapshot.mode.split(',').includes('ANSI_QUOTES') } });
-  if (document.table !== table || document.database !== undefined && document.database !== database || document.columns.length !== design.columns.length || document.items.filter(item => item.kind === 'constraint').length !== design.indexes.length || document.items.some(item => item.kind === 'constraint' && !['PRIMARY', 'UNIQUE', 'KEY', 'INDEX'].includes(item.constraintKind)) || document.columns.some(column => !column.type.known || column.attributes.some(attribute => !['nullable', 'default', 'comment', 'auto-increment'].includes(attribute.kind)))) return false;
+  const foreignKeys = design.foreignKeys.length ? readCreatedForeignKeys(document, design, context.managed.status.version) : undefined;
+  // 只排除已按完整语义证明的FK原范围；未知约束和自动新增索引仍交给原索引守卫拒绝。
+  const indexDocument = foreignKeys ? { ...document, items: document.items.filter(item => !foreignKeys.foreignKeys.some(key => key.range.start === item.range.start && key.range.end === item.range.end)) } : document;
+  if (document.table !== table || document.database !== undefined && document.database !== database || document.columns.length !== design.columns.length || indexDocument.items.filter(item => item.kind === 'constraint').length !== design.indexes.length || indexDocument.items.some(item => item.kind === 'constraint' && !['PRIMARY', 'UNIQUE', 'KEY', 'INDEX'].includes(item.constraintKind)) || document.columns.some(column => !column.type.known || column.attributes.some(attribute => !['nullable', 'default', 'comment', 'auto-increment'].includes(attribute.kind)))) return false;
   /** 仅规范化未引用关键字和无ZEROFILL整数显示宽度；ENUM/SET文字量逐字保留解码后的值。 */
   const type = (value: string) => {
     const tokens = tableDefinitionTokens(value, document.context).map(token => ({ kind: token.kind, value: token.kind === 'word' ? token.value.toUpperCase() : token.value }));
@@ -57,7 +61,7 @@ async function verify(context: StructureTaskContext, preview: Preview): Promise<
     return value.kind !== 'literal' || value.value !== expected.defaultValue;
   })) return false;
   // 设计器仅表达普通完整列索引；SHOW中的前缀、方法、方向及未知属性不能靠名称/列序补证。
-  const parsedIndexes = readTableIndexDefinition(document);
+  const parsedIndexes = readTableIndexDefinition(indexDocument);
   if (parsedIndexes.otherConstraintRanges.length || parsedIndexes.indexes.length !== design.indexes.length || design.indexes.some(expected => {
     const actual = parsedIndexes.indexes.find(index => index.name === expected.name);
     return !actual || actual.kind !== (expected.name === 'PRIMARY' ? 'primary' : expected.unique ? 'unique' : 'ordinary') || actual.method !== 'BTREE' || actual.comment !== '' || actual.opaqueReasons.length > 0 || actual.attributes.some(attribute => attribute.kind !== 'method') || actual.parts.length !== expected.columns.length || actual.parts.some((part, index) => part.columnName !== expected.columns[index] || part.prefixLength !== undefined || part.direction !== 'asc' || part.expressionSql !== undefined || part.opaqueReasons.length > 0);
@@ -80,8 +84,8 @@ async function verify(context: StructureTaskContext, preview: Preview): Promise<
     entry.columns.push(index.column); actual.set(index.name, entry);
   }
   if (actual.size !== design.indexes.length || design.indexes.some(index => JSON.stringify(actual.get(index.name)) !== JSON.stringify({ name: index.name, unique: index.name === 'PRIMARY' || index.unique, columns: index.columns }))) return false;
-  // 外键仍允许按原生成器创建；首片不把未独立比对的FK目录宣称完整定义核验。
-  return design.foreignKeys.length === 0;
+  // 无FK路径不增加目录或SHOW读取；有FK时两套目录和复读SHOW全部完成才可报告完整核验。
+  return !foreignKeys || await verifyCreatedForeignKeyCatalog(context, { database, table }, document, foreignKeys);
 }
 /** 新建表独立用途，预览持有完整设计且有界；同步目标锁一直覆盖实际会话收尾。 */
 export class TableCreateTasks {

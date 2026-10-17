@@ -32,7 +32,7 @@ export const tableCreateMessages = {
   busy: '同一目标正在创建或上次收尾未确认，不能继续投递', size: '新建表设计超过2MiB预算',
   ack: '未取得可确认的CREATE响应；结果未知，请核对实际对象，不要重复执行',
   verify: 'CREATE已收到成功响应，但新表完整定义未核验；不要重复创建', cleanup: 'CREATE已收到成功响应，但连接或资源收尾未确认；请核对资源，不要重复创建',
-  foreignKeys: '外键仍按原设计器生成；本片尚未逐项比对外键及其隐式索引目录，创建ACK不等于完整定义核验。',
+  foreignKeys: '外键按原设计器生成；完整定义、两套目录和全部索引均已证明才报完整核验，目录、模式或隐式索引未知时只保留CREATE完成事实。',
   serverWarning: '服务器返回CREATE警告，请核对实际定义和服务器提示；不会自动重放。',
   labels: { get: '读取新表目标', preview: '预览新建表', apply: '创建新表' },
 } as const;
