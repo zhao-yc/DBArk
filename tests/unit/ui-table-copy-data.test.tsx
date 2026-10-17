@@ -21,6 +21,8 @@ beforeAll(async () => {
   Object.assign(window, { setTimeout, clearTimeout, confirm: vi.fn(() => true) });
   const create = document.createElement.bind(document);
   document.createElement = name => { const node = create(name); if (name === 'input') { let kind = 'text'; Object.defineProperty(node, 'type', { configurable: true, get: () => kind, set: value => { kind = value; node.attributes.set('type', value); } }); node.type = 'text'; }
+    // 原生textarea的defaultValue反射textContent；React初次挂载据此写value，不能依赖额外render补值。
+    if (name === 'textarea') Object.defineProperty(node, 'defaultValue', { configurable: true, get: () => node.textContent, set: value => { node.textContent = value; } });
     // React写HTML布尔属性；仅反射disabled读回，不推导产品状态。
     const set = node.setAttribute.bind(node), remove = node.removeAttribute.bind(node);
     node.setAttribute = (key, value) => { set(key.toLowerCase(), value); if (key === 'disabled') node.disabled = true; if (key === 'type') node.type = value; };
@@ -87,8 +89,16 @@ describe('结构及数据复制真实对话框（内存ReactDOM）', () => {
     expect(props.onApplied).toHaveBeenCalledWith(expect.objectContaining({ mode: 'structure-and-data' as const, target, newTarget: { ...target, table: 't_copy' }, ddlCompleted: true, definitionVerified: true })); expect(props.onExecutionUncertain).not.toHaveBeenCalled(); expect(button(text.apply).disabled).toBe(true); expect(services.apply).toHaveBeenCalledTimes(1);
   });
   it('首片不支持的来源完整定义只读展示，并明确显示原因', async () => {
+    // 固定同一毫秒，防止截止时间effect的后续render掩盖textarea初次挂载端口缺失；不推进任何timer。
+    vi.spyOn(Date, 'now').mockReturnValue(Date.UTC(2026, 9, 18));
     await mount({ get: async () => ({ ...snapshot(), writable: false, reasons: ['含自增列，首片只读'] }) });
     expect(document.querySelector('textarea[aria-label="预览SQL"]')!.value).toBe(snapshot().sourceDdl); expect(button(text.preview).disabled).toBe(true); expect(document.body.textContent).toContain('含自增列，首片只读'); expect(services.preview).not.toHaveBeenCalled();
+    expect(document.querySelector('textarea[aria-label="预览SQL"]')!.getAttribute('readonly')).not.toBeNull();
+  });
+  it('来源读取拒绝时保留原错误且不展示假DDL，不预览或执行', async () => {
+    const original = Error('来源读取明确拒绝'); await mount({ get: async () => { throw original; } });
+    expect(document.body.textContent).toContain(original.message); expect(document.querySelector('textarea[aria-label="预览SQL"]')).toBeNull();
+    expect(services.preview).not.toHaveBeenCalled(); expect(services.apply).not.toHaveBeenCalled(); expect(button(text.preview).disabled).toBe(true);
   });
   it('已有预览到期同步禁执行，不能借已填确认文字重放', async () => {
     const nativeSet = window.setTimeout, nativeClear = window.clearTimeout;
