@@ -116,7 +116,8 @@ export function registerSelectedResultsExport(binding: SelectedResultsTarget) {
       const bytes = await observe(() => readFile(file));
       if (format === 'json') {
         const actual = JSON.parse(bytes.toString('utf8'));
-        expect(actual.map((row: Record<string, unknown>) => row.id)).toEqual([1, 3]);
+        // 此UNION的实际协议列为LONGLONG；生产bigNumberStrings策略必须原样保持字符串。
+        expect(actual.map((row: Record<string, unknown>) => row.id)).toEqual(['1', '3']);
         expect(actual[0].repeated).toBe('18446744073709551615'); expect(actual[0]['repeated [3]']).toBeNull();
         expect(actual[0].bytes).toEqual({ type: 'binary', base64: 'AP8=' });
         expect(actual[1].repeated).toBe('0.12345678901234567890'); expect(actual[1].bytes).toBeNull();
