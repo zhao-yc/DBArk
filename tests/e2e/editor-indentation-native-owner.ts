@@ -1,6 +1,12 @@
 import type { ElectronApplication, Page } from '@playwright/test';
 
-export interface IndentNativeOwner { application: ElectronApplication; page: Page; ids: Set<number>; closed: boolean; confirmed: boolean; ready: boolean; errors: string[]; quitReady: Promise<void>; }
+/** 附件只保留本次失败需要的数字身份，不记录路径、URL、参数、环境或页面内容。 */
+export interface IndentNativeSourceDiagnostic {
+  phase: '启动来源' | '窗口准备' | '已准备来源'; complete: boolean;
+  expected: { launcherPid: number; mainPid?: number; platform: string; relation: '启动器父进程' | '同一进程'; window?: { id: number; contents: number } };
+  observed: { mainPid: number; parentPid: number; platform: string; metrics: number[]; window?: { id: number; contents: number; renderer: number; destroyed: boolean } };
+}
+export interface IndentNativeOwner { application: ElectronApplication; page: Page; ids: Set<number>; closed: boolean; confirmed: boolean; ready: boolean; errors: string[]; quitReady: Promise<void>; sourceDiagnostics?: IndentNativeSourceDiagnostic[]; }
 export interface IndentNativePort {
   assertCurrent(owner?: IndentNativeOwner): void; preflight(): Promise<void>; directory(): Promise<string>; assertDirectory(path: string): Promise<void>;
   launch(path: string): Promise<IndentNativeOwner>; prepare(owner: IndentNativeOwner): Promise<void>; record(owner: IndentNativeOwner): Promise<number[]>;
