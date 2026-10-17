@@ -158,7 +158,12 @@ export class DatabaseBackupExecutor {
       const committing = Promise.resolve().then(() => record.archive!.commit()).then(value => { record.commitSettled = true; return value; }, error => { record.commitSettled = true; throw error; });
       await this.wait(record, phase, committing, this.budgets.stageMs, false);
       const written = this.archiveState(record); if (!written?.fileCommitted || !record.commitStarted) { record.validArchive = false; throw Error('原子提交未提供边界或发布事实'); }
-    } catch (error) { this.fail(record, phase, error, true); }
+    } catch (error) {
+      this.fail(record, phase, error, true);
+      // 超时或故障后撤销尚未提交的执行权限，迟到回包只能保留原资源供显式清理。
+      // 不标记为用户取消；已进入不可取消的原子提交仍按真实发布事实收尾。
+      if (!record.commitStarted) record.controller.abort();
+    }
     if (record.failures.length && !this.archiveState(record)?.fileCommitted) {
       if (record.scope) { try { await this.requestStop(record); } catch (error) { this.fail(record, '停止失败 dump', error); } }
       await this.cleanupScope(record);

@@ -31,10 +31,11 @@ export class DatabaseBackupAtomicArchive {
   private cleanupConfirmed=false;
   private ownerInvalid=false;
 
-  /** reservation必须是任务同步登记后启动的AtomicFileTargetReservation.reserve原Promise，不能在清理时临时分配。 */
-  constructor(readonly owner:Owner,target:string,reservation:Promise<AtomicFileTargetReservation>,private readonly hooks:Hooks,private readonly io:AtomicFileIO=nativeAtomicFileIO,private readonly artifactToken?:string) {
+  /** reservation必须强引用已同步登记的原目标预留；不能在清理时临时分配。 */
+  constructor(readonly owner:Owner,target:string,reservation:Promise<AtomicFileTargetReservation>,private readonly hooks:Hooks,private readonly io:AtomicFileIO=nativeAtomicFileIO,private readonly artifactToken?:string,private readonly maxBytes=10*1024**3) {
     this.target=resolve(target);this.ownerValues=[owner.taskId,owner.planToken];
     if(!owner.taskId||!owner.planToken||owner.taskId.length>200||owner.planToken.length>200)throw Error('备份归档所属任务无效');
+    if(!Number.isSafeInteger(maxBytes)||maxBytes<1||maxBytes>10*1024**3)throw Error('备份归档文件预算无效');
     this.ready=reservation.then(value=>{this.reservation=value;this.reservationSettled=true;return value;},reason=>{this.reservationSettled=true;throw reason;});
     void this.ready.catch(()=>{});
   }
@@ -79,7 +80,7 @@ export class DatabaseBackupAtomicArchive {
   /** 先捕获目标预留及AtomicFile，再开始固定dump条目；任何迟到分配都保留在原实例。 */
   open():Promise<void>{return this.operation(['new'],async()=>{
     this.check();const reservation=await this.ready;this.check();
-    this.file=await AtomicFile.create(this.target,'utf8',()=>this.check(),()=>{this.boundary=true;this.hooks.onCommitStart();},this.trackedIO(),10*1024**3,reservation);
+    this.file=await AtomicFile.create(this.target,'utf8',()=>this.check(),()=>{this.hooks.onCommitStart();this.boundary=true;},this.trackedIO(),this.maxBytes,reservation);
     this.check();this.writer=new DatabaseBackupArchiveWriter(this.file,()=>this.check());await this.writer.startDump();this.check();this.state='open';
   });}
   /** 每片保持64KiB上限，真实背压沿writer和AtomicFile传递，不解码或重写SQL。 */

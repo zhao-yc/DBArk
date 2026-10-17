@@ -31,6 +31,11 @@ async function fixture(){
 }
 
 describe('备份归档与原子文件真实适配协议',()=>{
+  it('提交入口守卫拒绝时未发rename，仍可明确清理并保留原目标',async()=>{
+    const f=await fixture(),reason=Error('提交授权已撤销');await f.archive.open();await f.archive.writeDump(Buffer.from('SELECT 1;'));await f.archive.finish(manifest());
+    f.hooks.onCommitStart=()=>{throw reason;};await expect(f.archive.commit()).rejects.toBe(reason);expect(f.counts.rename).toBe(0);
+    expect((await f.archive.abort()).state).toBe('confirmed');expect((await f.archive.releaseTarget()).state).toBe('confirmed');expect(f.storage.get(f.target)!.toString()).toBe('原目标');
+  });
   it('短写完整消费，只有原子替换后发布，完整性检查保留原始dump字节',async()=>{
     const f=await fixture();f.control.shortWrite=7;
     const dump=Buffer.concat([Buffer.from('DELIMITER $$\r\n18446744073709551615\n'),Buffer.from([0,255,1])]);
