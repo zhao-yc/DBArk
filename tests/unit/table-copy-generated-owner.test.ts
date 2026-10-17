@@ -35,9 +35,10 @@ function formal(changes: Changes = {}) {
     if (['focus', 'check', 'selectOption'].includes(String(key))) return async () => {};
     return () => locator(label);
   } });
-  const page = { locator: () => locator(), getByRole: (_name: string, options: { name: string }) => locator(options.name), evaluate: async () => [{ name: 'E2E dbark_copy_' + uuid.replaceAll('-', ''), id: '合成连接' }] };
+  const page = { locator: () => locator(), getByRole: (_name: string, options: { name: string }) => locator(options.name), evaluate: async (callback: Function) => callback.toString().includes('tasks.list') ? [] : [{ name: 'E2E dbark_copy_' + uuid.replaceAll('-', ''), id: '合成连接' }] };
   const own = (value: unknown) => { expect(value).toBe(info); if (retained) throw Error('合成归属已保留'); return { page: replacePage ? {} : page, application, closed }; };
-  const retain = () => { retained = true; calls.push('retain'); if (changes.retainThrows) throw Error('合成保留失败'); };
+  // 注入共享状态落定前的通知失败，不能先写共享retained掩盖本地状态缺失。
+  const retain = () => { calls.push('retain'); if (changes.retainThrows) throw Error('合成保留失败'); retained = true; };
   const actualExpect = (value: any) => value?.__locator ? new Proxy({}, { get: () => async () => { if (changes.afterForm && value.__label === 'dbark_copy_' + uuid.replaceAll('-', '')) mutate(); } }) : expect(value);
   const helperSource = readFileSync(new URL('../e2e/live-helpers.ts', import.meta.url), 'utf8'), tree = ts.createSourceFile('helper.ts', helperSource, ts.ScriptTarget.Latest, true);
   const helperBody = tree.statements.find(node => ts.isFunctionDeclaration(node) && node.name?.text === 'connectAndCreate')!.getText(tree);
@@ -74,8 +75,26 @@ function formal(changes: Changes = {}) {
     throw Error('拒绝实际导入：' + name);
   } };
   runInContext(compile(source), createContext(context)); context.exports.registerTableCopyGeneratedUiTests();
-  return { calls, submissions, targets, stop, sourceStop, raw, helper, after: () => after({}, info), run: async () => { try { await cases[0]({}, info); } catch (reason) { return reason as any; } }, retained: () => retained, releaseClose: () => { expect(finishClose).toBeDefined(); finishClose!(); }, waitingClose: () => !!finishClose };
+  return { calls, submissions, targets, stop, sourceStop, raw, helper, clearNotificationFailure: () => { changes.retainThrows = false; }, after: () => after({}, info), run: async () => { try { await cases[0]({}, info); } catch (reason) { return reason as any; } }, retained: () => retained, releaseClose: () => { expect(finishClose).toBeDefined(); finishClose!(); }, waitingClose: () => !!finishClose };
 }
+
+/** 聚合首项与cause必须同指原异常对象；沿嵌套收尾仍能找到最初请求首因。 */
+function originalCause(reason: any): unknown { const seen = new Set(); while (reason && Object.hasOwn(reason, 'cause') && !seen.has(reason)) { seen.add(reason); expect(reason.errors[0]).toBe(reason.cause); reason = reason.cause; } return reason; }
+
+describe('生成列通知设置前失败的本地保留锁（真实注册函数，仅RAM）', () => {
+  it('预检未知加通知设置前失败，原首因保持且禁止退出、close及DROP', async () => {
+    const f = formal({ queryUnknown: true, retainThrows: true }), reason = await f.run(); expect(originalCause(reason)).toBe(f.sourceStop); expect(f.retained()).toBe(false); expect(f.calls).not.toContain('exit'); expect(f.calls).not.toContain('quit'); expect(f.calls.some(sql => sql.startsWith('DROP'))).toBe(false); const before = f.calls.length; await expect(f.after()).rejects.toThrow('保留'); expect(f.calls).toHaveLength(before);
+  });
+  it('原建库提交未知加通知设置前失败，空任务列表不能放行退出或DROP', async () => {
+    const f = formal({ retainThrows: true }), reason = await f.run(); expect(originalCause(reason)).toBe(f.stop); expect(f.submissions).toHaveLength(1); expect(f.retained()).toBe(false); expect(f.calls).not.toContain('exit'); expect(f.calls.some(sql => sql.startsWith('DROP'))).toBe(false); const before = f.calls.length; await expect(f.after()).rejects.toThrow('保留'); expect(f.calls).toHaveLength(before);
+  });
+  it('活动超时先本地保留，通知异常及迟到close不允许继续建库', async () => {
+    const f = formal({ holdClose: true, retainThrows: true }), pending = f.run(); for (let index = 0; index < 50 && !f.waitingClose(); index++) await Promise.resolve(); expect(f.waitingClose()).toBe(true); await expect(f.after()).rejects.toThrow('仍活动'); f.releaseClose(); await pending; expect(f.submissions).toEqual([]); expect(f.calls).not.toContain('exit'); expect(f.calls.some(sql => sql.startsWith('DROP'))).toBe(false); await expect(f.after()).rejects.toThrow('保留');
+  });
+  it('通知能力恢复不解除本例保留，afterEach不再尝试通知或其他动作', async () => {
+    const f = formal({ retainThrows: true }), reason = await f.run(); expect(originalCause(reason)).toBe(f.stop); const before = f.calls.length; f.clearNotificationFailure(); await expect(f.after()).rejects.toThrow('保留'); expect(f.calls).toHaveLength(before); expect(f.retained()).toBe(false);
+  });
+});
 
 describe('生成列正式入口持续绑定本轮身份', () => {
   it('正常对照等待严格预检close后进入原建库表单', async () => {
@@ -126,19 +145,22 @@ describe('生成列注册身份不能回填或重绑定', () => {
 });
 
 /** 提取真实专属清理，不导入桌面；任务、退出及观察结果分别作为RAM边界。 */
-function cleanupCase(change: { pending?: boolean; exitUnknown?: boolean; dropUnknown?: boolean; closeUnknown?: boolean; driftAfterExit?: boolean; wrongName?: boolean; primary?: unknown } = {}) {
+function cleanupCase(change: { pending?: boolean; exitUnknown?: boolean; dropUnknown?: boolean; closeUnknown?: boolean; driftAfterExit?: boolean; wrongName?: boolean; notificationUnknown?: boolean; primary?: unknown } = {}) {
   const tree = ts.createSourceFile('live.ts', source, ts.ScriptTarget.Latest, true);
   const body = tree.statements.filter(node => ts.isFunctionDeclaration(node) && ['cleanupGeneratedCase', 'closeGeneratedObserver'].includes(node.name?.text ?? '')).map(node => node.getText(tree)).join('\n');
   const calls: string[] = []; let closed = false, retained = false, identity = true;
   const own = (allowClosed = false) => { if (!identity || retained || closed && !allowClosed) throw Error('合成归属失效'); return { page: { evaluate: async () => { calls.push('tasks'); return [{ kind: 'schema.tableCopyStructure.apply', status: change.pending ? 'running' : 'completed' }]; } } }; };
   const stream = Object.assign(new EventEmitter(), { closed: false, end(callback: () => void) { queueMicrotask(() => { callback(); stream.closed = true; calls.push('close'); stream.emit('close'); }); }, destroy() { stream.closed = true; stream.emit('close'); } });
   const observer = { connection: Object.assign(new EventEmitter(), { stream, end(callback: (reason?: Error) => void) { queueMicrotask(() => callback(change.closeUnknown ? Error('合成关闭未知') : undefined)); }, destroy() { stream.destroy(); } }), query: async (sql: string) => { calls.push(sql.startsWith('DROP') ? 'drop' : 'absent'); if (change.dropUnknown && sql.startsWith('DROP')) throw Error('合成DROP未知'); return [[]]; } };
-  const context = { exports: {}, expect, closeMysqlConnection, retainOwnedDesktopResources() { retained = true; calls.push('retain'); }, confirmOwnedDesktopExit: async () => { calls.push('exit'); if (change.exitUnknown) throw Error('合成退出未知'); closed = true; if (change.driftAfterExit) identity = false; } };
+  const context = { exports: {}, expect, closeMysqlConnection, retainOwnedDesktopResources() { if (change.notificationUnknown) throw Error('合成通知失败'); retained = true; calls.push('retain'); }, confirmOwnedDesktopExit: async () => { calls.push('exit'); if (change.exitUnknown) throw Error('合成退出未知'); closed = true; if (change.driftAfterExit) identity = false; } };
   const vm = createContext(context); runInContext(compile(body + '\nglobalThis.cleanup=cleanupGeneratedCase;'), vm);
-  return { calls, run: () => (vm.cleanup as Function)({}, own, observer, change.wrongName ? 'unowned' : 'dbark_copy_' + uuid.replaceAll('-', ''), true, change.primary === undefined ? undefined : { reason: change.primary }) };
+  return { calls, after: () => own(true), run: () => (vm.cleanup as Function)({}, own, () => { retained = true; calls.push('retain'); if (change.notificationUnknown) throw Error('合成通知失败'); }, observer, change.wrongName ? 'unowned' : 'dbark_copy_' + uuid.replaceAll('-', ''), true, change.primary === undefined ? undefined : { reason: change.primary }) };
 }
 
 describe('生成列专属收尾只沿已证明事实推进', () => {
+  it('清理阶段首次拒绝也须走本例保留入口，通知抛错不替换任务首因', async () => {
+    const f = cleanupCase({ pending: true, notificationUnknown: true }); await expect(f.run()).rejects.toThrow('未确认终态'); expect(() => f.after()).toThrow('归属失效'); expect(f.calls).toEqual(['tasks', 'retain']);
+  });
   it('正常清理严格按任务终态、所属退出、DROP、核缺席、原生close顺序', async () => {
     const f = cleanupCase(); await f.run(); expect(f.calls).toEqual(['tasks', 'exit', 'drop', 'absent', 'close']);
   });

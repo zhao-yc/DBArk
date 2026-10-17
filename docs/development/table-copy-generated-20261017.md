@@ -56,4 +56,12 @@ node D:/svn/DBArk/node_modules/typescript/bin/tsc --noEmit
 
 用途自身的afterEach还核对整个用例及收尾活动状态：超时不会等待原Promise结束，若仍有等待则先保留，阻止自动fixture抢先退出；迟到close完成后也不能继续建库或清理。没有修改共享夹具或延长预算。
 
+## GEN-UI-R2条件性P2追加修复
+
+员工1窄补审handoff SHA256为 `7c50e3443534c5fa5dc2f8be4785997b485e346889f4ef9f3e76350f389123df`，只针对共享保留通知在落定共享retained之前抛错的条件，不否定生产生成列算法或原154维度结果。固定 `eacdcbc5ca90b1ab83eceb2caeb5099bd34fb044` 的实际注册、原表单与完整清理路径复现两红：预检未知后调用退出；建库提交未知后退出并尝试一次DROP。专项源仅重定位本地路径，未修改断言或替身；证据为 `.cache/copy-generated/retain-independent-parent-red.json` 与 `retain-parent-counterexamples.json`。
+
+每例新增永久本地retained，先落锁再尽力通知一次。own在读取共享归属之前核本地锁；observe、原表单失败、外层catch、专属cleanup及活动超时afterEach均调用同一retain入口。cleanup不再直接依赖共享通知标记；其首次发现任务、退出或观察未知时也先锁定本例。activity结束、allowClosed、空任务列表、配置或通知能力恢复均不能解除保留。通知异常不能替换原请求异常对象，聚合首项与cause保持。
+
+两条独审反例在修复后均通过；作者正式入口相关增量覆盖通知设置前失败、afterEach、活动超时、迟到close、通知能力恢复与清理阶段首次拒绝。仅复测本正式入口增量及类型/CLI列表，不重跑原154、作者424或Root大套。生产、共享fixture/live-helpers/quit、原120秒预算和0重试保持，真实外部操作仍为0。原eacd及旧独审原件保留，待Root复审。
+
 本轮GUI、DB、SSH/200、CI、安装、构建、clipboard及部署均为0，不读私料。函数/字符串/时间等复杂表达式、生成列链、其它版本和更多EXTRA组合仍缺项，已明确只读。Root须独审并在新的准确8.4.11隔离库实际核验，不能把本片开发/文档或父红新绿当作真实验收；不自动合并或修改R93候选。

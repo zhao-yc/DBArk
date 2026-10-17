@@ -18,7 +18,7 @@ async function closeGeneratedObserver(observer: Connection): Promise<void> {
 }
 
 /** 只清理本例已证明终态的资源；每个等待前后仍核固定身份，原首因保持在聚合首位。 */
-async function cleanupGeneratedCase(info: TestInfo, own: (allowClosed?: boolean) => ReturnType<typeof ownedDesktopResources>, observer: Connection | undefined, database: string, ownsName: boolean, primary?: { reason: unknown }): Promise<void> {
+async function cleanupGeneratedCase(info: TestInfo, own: (allowClosed?: boolean) => ReturnType<typeof ownedDesktopResources>, retain: () => void, observer: Connection | undefined, database: string, ownsName: boolean, primary?: { reason: unknown }): Promise<void> {
   try {
     own();
     const tasks = await own().page.evaluate(() => window.dbark.invoke('tasks.list', {})); own();
@@ -29,28 +29,32 @@ async function cleanupGeneratedCase(info: TestInfo, own: (allowClosed?: boolean)
     const [remaining] = await observer.query<RowDataPacket[]>('SELECT SCHEMA_NAME FROM information_schema.SCHEMATA WHERE SCHEMA_NAME=?', [database]); own(true); expect(remaining).toHaveLength(0);
     await closeGeneratedObserver(observer); own(true);
   } catch (reason) {
-    try { retainOwnedDesktopResources(info); } catch { /* 保留失败不能覆盖原首因。 */ }
+    try { retain(); } catch { /* 本例已先落本地锁；通知失败不能覆盖原首因。 */ }
     if (primary) throw new AggregateError([primary.reason, reason], '原生成列UI失败且隔离收尾未确认，保留现场', { cause: primary.reason }); throw reason;
   }
 }
 /** 只注册未执行定义；不修改共享fixture，ROOT须另行安排固定候选与实际服务器终态证明。 */
 export function registerTableCopyGeneratedUiTests() {
   const binding = bindTableCopyGeneratedTarget(() => process.env, environment);
-  const states = new WeakMap<object, { active: boolean; check(): void }>();
+  const states = new WeakMap<object, { active: boolean; retain(): void; check(): void }>();
   test.use({ preserveOnUnconfirmedExit: true, trace: 'off', screenshot: 'off', video: 'off' }); test.setTimeout(120000); test.describe.configure({ retries: 0 });
   // 超时不等待原body结束；用途先停链保留，禁止自动夹具抢先退出仍在等待的用例。
-  test.afterEach(async ({}, info) => { const state = states.get(info); if (!state || state.active) { retainOwnedDesktopResources(info); throw Error('生成列用例或收尾仍活动，保留现场'); } state.check(); });
+  test.afterEach(async ({}, info) => { const state = states.get(info); if (!state || state.active) { if (state) state.retain(); else try { retainOwnedDesktopResources(info); } catch { /* 缺少本例状态也不因通知失败继续。 */ } throw Error('生成列用例或收尾仍活动，保留现场'); } state.check(); });
   for (const storage of ['VIRTUAL', 'STORED'] as const) test('MySQL8.4.11普通生成列'+storage+'先展示DDL和准确确认，单次创建空表并保持源数据与结构', async ({}, info) => {
     const target = binding.target, captured = ownedDesktopResources(info), page = captured.page, database = 'dbark_copy_' + randomUUID().replaceAll('-', '');
+    let retained = false;
+    /** 本地永久落锁先于共享通知；通知失败、恢复和activity结束都不解除本例保留。 */
+    const retain = () => { if (retained) return; retained = true; try { retainOwnedDesktopResources(info); } catch { /* 只尽力通知一次，不能覆盖原首因或放行清理。 */ } };
     /** 固定窗口及注册身份共同组成owner；失效后不重新捕获目标，也不自动退出清库。 */
     const own = (allowClosed = false) => {
+      if (retained) throw Error('生成列本例已停链保留，禁止继续观察、退出或清理');
       try { binding.assertCurrent(); const current = ownedDesktopResources(info); if (current.page !== captured.page || current.application !== captured.application || !allowClosed && current.closed) throw Error('生成列验收窗口归属或关闭状态未知'); return current; }
-      catch (reason) { try { retainOwnedDesktopResources(info); } catch { /* 归属首因不能被保留失败覆盖。 */ } throw reason; }
+      catch (reason) { retain(); throw reason; }
     };
-    const activity = { active: true, check: () => { own(true); } }; states.set(info, activity);
+    const activity = { active: true, retain, check: () => { own(true); } }; states.set(info, activity);
     let observer: Connection | undefined, ownsName = false, primary: { reason: unknown } | undefined;
     /** 观察SQL未知或归属变化立即保留，禁止finally继续猜测清库。 */
-    const observe = async <T>(request: () => Promise<T>): Promise<T> => { own(); try { const value = await request(); own(); return value; } catch (reason) { try { retainOwnedDesktopResources(info); } catch { /* 观察请求的首因优先。 */ } throw reason; } };
+    const observe = async <T>(request: () => Promise<T>): Promise<T> => { own(); try { const value = await request(); own(); return value; } catch (reason) { retain(); throw reason; } };
     /** 准确四项事实不能用宽松数字转换补证；每个新物理观察连接都重核。 */
     const facts = async (connection: Connection) => {
       const [rows] = await observe(() => connection.query<RowDataPacket[]>('SELECT @@version AS version,@@version_compile_os AS os,@@lower_case_table_names AS names,@@server_uuid AS uuid'));
@@ -81,7 +85,7 @@ export function registerTableCopyGeneratedUiTests() {
       const [after] = await observe(() => connection.query<RowDataPacket[]>('SHOW CREATE TABLE ' + source)); const [rowsAfter] = await observe(() => connection.query<RowDataPacket[]>('SELECT id,note FROM ' + source)); const [created] = await observe(() => connection.query<RowDataPacket[]>('SHOW CREATE TABLE ' + destination)); const [empty] = await observe(() => connection.query<RowDataPacket[]>('SELECT 1 FROM ' + destination + ' LIMIT 1'));
       expect(after).toEqual(before); expect(rowsAfter).toEqual(rowsBefore); expect(empty).toHaveLength(0); const expectedDefinition = String(before[0]['Create Table']).replace('CREATE TABLE `copy_source`', 'CREATE TABLE `copy_destination`'); expect(created[0]['Create Table']).toBe(expectedDefinition);
       const tasks = await page.evaluate(() => window.dbark.invoke('tasks.list', {})); own(); expect(tasks.filter(task => task.kind === 'schema.tableCopyStructure.apply')).toHaveLength(1); await dialog.getByRole('button', { name: text.close, exact: true }).click(); own(); await expect(node.locator('.object-row').getByText('copy_destination', { exact: true })).toBeVisible(); own();
-    } catch (reason) { primary = { reason }; try { retainOwnedDesktopResources(info); } catch { /* 原UI/DDL失败保持为最终首因。 */ } throw reason; }
-    finally { try { await cleanupGeneratedCase(info, own, observer, database, ownsName, primary); } finally { activity.active = false; } }
+    } catch (reason) { primary = { reason }; retain(); throw reason; }
+    finally { try { await cleanupGeneratedCase(info, own, retain, observer, database, ownsName, primary); } finally { activity.active = false; } }
   });
 }
