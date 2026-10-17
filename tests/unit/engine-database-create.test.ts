@@ -13,10 +13,11 @@ let engine: Engine, events: TaskEvent[], sent: string[], connections: ManagedCon
 let uuid: string, mode: string, lowerNames: number, closeFails: boolean, fail: RegExp | undefined, hold: RegExp | undefined, fullNames: boolean;
 let catalog: { charset: string; collation: string; compiled: string }[], database: { name: string; charset: string; collation: string } | undefined;
 let held: { complete(error?: Error): void } | undefined, afterMismatch: boolean;
+let injectedUnknownClose = false;
 /** 仅替换驱动，实际Engine、短任务、目录、令牌、SQL和取消收尾执行产品代码。 */
 function managed(signal?: AbortSignal): ManagedConnection {
   const connection = new EventEmitter(), id = ++next;
-  const value = { connection, signal, profile, status: { version, dialect, connectionId: id }, broken: false, close: vi.fn(async () => { if (closeFails) throw Error('关闭失败'); }) } as unknown as ManagedConnection;
+  const value = { connection, signal, profile, status: { version, dialect, connectionId: id }, broken: false, close: vi.fn(async () => { if (closeFails) { injectedUnknownClose = true; throw Error('关闭失败'); } }) } as unknown as ManagedConnection;
   Object.assign(connection, { threadId: id, destroy: () => connection.emit('end'), query(sql: string, callback: (error: Error | null, rows?: unknown, fields?: unknown[]) => void) {
     sent.push(sql);
     const complete = (error?: Error) => queueMicrotask(() => {
@@ -40,13 +41,19 @@ async function get(revision = 1): Promise<DatabaseCreateGetOutput> { return engi
 async function preview(snapshot: DatabaseCreateGetOutput, name = '新`库', pair = { charset: 'utf8mb4', collation: 'utf8mb4_bin' }): Promise<DatabaseCreatePreviewOutput> { return engine.handle('schema.databaseCreate.preview', { snapshotId: snapshot.snapshotId, name, ...pair, taskId: 'preview-' + next, connectionRevision: 1 }); }
 async function apply(value: DatabaseCreatePreviewOutput, taskId = 'apply', revision = 1, confirmation = value.name, acknowledgements: string[] = [...databaseCreateAcknowledgements]) { return engine.handle('schema.databaseCreate.apply', { previewToken: value.previewToken, confirmation, acknowledgements, taskId, connectionRevision: revision }); }
 beforeEach(async () => {
+  injectedUnknownClose = false;
   events = []; sent = []; connections = []; next = 0; version = '8.4.11'; dialect = 'mysql'; uuid = 'server-1'; mode = ''; lowerNames = 0; closeFails = false; fail = hold = held = undefined; database = undefined; fullNames = false; afterMismatch = false;
   catalog = [{ charset: 'utf8mb4', collation: 'utf8mb4_bin', compiled: 'Yes' }, { charset: 'latin1', collation: 'latin1_bin', compiled: 'Yes' }];
   driver.connect.mockReset().mockImplementation(async (_profile, _database, signal) => managed(signal));
   driver.execute.mockReset().mockImplementation(async (_managed, sql) => { if (String(sql).startsWith('KILL CONNECTION')) held?.complete(Error('取消终态')); return { rows: [] }; });
   engine = new Engine(event => events.push(event)); await engine.handle('connections.open', { id: profile.id, profile });
 });
-afterEach(async () => { closeFails = false; hold = undefined; held?.complete(Error('测试收尾')); await engine.closeAll(); vi.useRealTimers(); });
+afterEach(async () => {
+  closeFails = false; hold = undefined; held?.complete(Error('测试收尾'));
+  // 此旧RAM端口没有资源facade；注入关闭未知后，恢复开关不能替代物理终态证明。
+  if (injectedUnknownClose) await expect(engine.closeAll()).rejects.toThrow('资源未确认释放'); else await engine.closeAll();
+  vi.useRealTimers();
+});
 describe('新建库实际Engine生命周期的离线驱动边界', () => {
   it('无默认库即可读真实配对；预览零写，单条创建、后核验和令牌消费', async () => {
     expect(profile.database).toBeUndefined(); const snapshot = await get(), value = await preview(snapshot);

@@ -13,13 +13,14 @@ const profile: ConnectionProfile = { id: 'comment-unit', name: '注释单元', g
 const original = "CREATE TABLE `t` (`id` bigint NOT NULL AUTO_INCREMENT,`s` varchar(80) CHARACTER SET latin1 COLLATE latin1_bin DEFAULT NULL,`g` int GENERATED ALWAYS AS (length(`s`)) STORED,PRIMARY KEY (`id`),KEY `prefix` (`s`(8))) ENGINE=InnoDB AUTO_INCREMENT=9007199254740993 DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin ROW_FORMAT=DYNAMIC COMMENT='原说明'";
 let engine: Engine, source: string, physicalId: string, version: string, dialect: 'mysql' | 'mariadb', mode: string, charset: string, catalogMismatch: boolean, warningCount: number;
 let nextId: number, sent: { id: number; sql: string }[], connections: ManagedConnection[], events: TaskEvent[], fail: RegExp | undefined, hold: RegExp | undefined, closeFails: boolean;
+let injectedUnknownClose = false;
 let afterAlterMode: string | undefined;
 let currentName: string, occupied: boolean, dependency: string, grants: string[], afterPhysicalId: string | undefined;
 let held: { complete(error?: Error): void } | undefined;
 /** 仅替换驱动；真实Engine、目录校验、预览、执行、取消和关闭路径均运行产品代码。 */
 function managed(signal?: AbortSignal): ManagedConnection {
   const connection = new EventEmitter(), threadId = ++nextId; let sqlMode = mode, quote = 0, encoding = '', collation = '';
-  const value = { connection, profile, signal, broken: false, status: { version, dialect, connectionId: threadId }, close: vi.fn(async () => { if (closeFails) throw new Error('关闭失败'); }) } as unknown as ManagedConnection;
+  const value = { connection, profile, signal, broken: false, status: { version, dialect, connectionId: threadId }, close: vi.fn(async () => { if (closeFails) { injectedUnknownClose = true; throw new Error('关闭失败'); } }) } as unknown as ManagedConnection;
   Object.assign(connection, { threadId, destroy: () => connection.emit('end'), query(sql: string, callback: (error: Error | null, rows?: unknown, fields?: unknown[]) => void) {
     sent.push({ id: threadId, sql });
     const complete = (error?: Error) => queueMicrotask(() => {
@@ -71,6 +72,7 @@ async function get(revision = 1): Promise<TableRenameGetOutput> { return engine.
 async function preview(snapshot: TableRenameGetOutput, newName = 'renamed'): Promise<TableRenamePreviewOutput> { return engine.handle('schema.tableRename.preview', { snapshotId: snapshot.snapshotId, newName, taskId: 'preview-' + nextId, connectionRevision: 1 }); }
 async function apply(value: TableRenamePreviewOutput, taskId = 'apply', revision = 1, acknowledgements = value.requiredAcknowledgements) { return engine.handle('schema.tableRename.apply', { previewToken: value.previewToken, taskId, connectionRevision: revision, acknowledgements }); }
 beforeEach(async () => {
+  injectedUnknownClose = false;
   currentName = 't'; occupied = false; dependency = ''; grants = ["GRANT ALL PRIVILEGES ON *.* TO 'test'@'host'"]; afterPhysicalId = undefined;
   source = original; physicalId = '9007199254740995'; version = '8.4.11'; dialect = 'mysql'; mode = ''; charset = 'utf8mb3'; catalogMismatch = false; warningCount = 0;
   nextId = 0; sent = []; connections = []; events = []; fail = undefined; hold = undefined; held = undefined; closeFails = false; afterAlterMode = undefined;
@@ -78,7 +80,12 @@ beforeEach(async () => {
   mock.execute.mockReset().mockImplementation(async (_managed, sql) => { if (String(sql).startsWith('KILL CONNECTION')) held?.complete(Object.assign(new Error('取消终态'), { errno: 1317 })); return { rows: [] }; });
   engine = new Engine(event => events.push(event)); await engine.handle('connections.open', { id: profile.id, profile });
 });
-afterEach(async () => { closeFails = false; hold = undefined; held?.complete(new Error('单元收尾')); await engine.closeAll(); vi.useRealTimers(); });
+afterEach(async () => {
+  closeFails = false; hold = undefined; held?.complete(new Error('单元收尾'));
+  // 此旧RAM端口没有资源facade；注入关闭未知后，恢复开关不能替代物理终态证明。
+  if (injectedUnknownClose) await expect(engine.closeAll()).rejects.toThrow('资源未确认释放'); else await engine.closeAll();
+  vi.useRealTimers();
+});
 
 describe('真实Engine表重命名生命周期（只替换驱动）', () => {
   it('员工3原反例：全局只读目录权限＋来源ALTER/DROP＋目标CREATE/INSERT，不要求来源CREATE/INSERT', async () => {

@@ -14,12 +14,13 @@ const targetProfile = { ...sourceProfile, id: 'target', host: 'invalid-target' }
 const target = (connectionId: string) => ({ connectionId, database: 'db', table: 't' });
 let engine: Engine, events: TaskEvent[], connections: ManagedConnection[], sent: string[], nextId: number, hold: string | undefined, closeFails: boolean;
 let held: { finish(error?: Error): void; connectionId: number } | undefined;
+let injectedUnknownClose = false;
 /** 替换驱动边界，实际执行引擎路由、独立会话、读取双检和复合取消。 */
 function managed(profile: ConnectionProfile, signal?: AbortSignal): ManagedConnection {
   const connection = new EventEmitter(), threadId = ++nextId;
   let quoted = 0, mode = '', charset = 'latin1', collation = 'latin1_swedish_ci';
   const definition = `CREATE TABLE \`t\` (\`id\` int${profile.id === 'source' ? ',`extra` int' : ''}) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin`;
-  const value = { profile, connection, signal, broken: false, status: { dialect: 'mysql', version: '8.4.11' }, close: vi.fn(async () => { if (closeFails) throw new Error('测试关闭失败'); }) } as unknown as ManagedConnection;
+  const value = { profile, connection, signal, broken: false, status: { dialect: 'mysql', version: '8.4.11' }, close: vi.fn(async () => { if (closeFails) { injectedUnknownClose = true; throw new Error('测试关闭失败'); } }) } as unknown as ManagedConnection;
   Object.assign(connection, { threadId, destroy: () => connection.emit('end'), query(sql: string, callback: (error: Error | null, rows?: unknown, fields?: unknown[]) => void) {
     sent.push(sql);
     const finish = (error?: Error) => queueMicrotask(() => {
@@ -44,11 +45,16 @@ function managed(profile: ConnectionProfile, signal?: AbortSignal): ManagedConne
 }
 const compare = (taskId = 'compare') => engine.handle('schema.compare', { taskId, source: target('source'), target: target('target'), sourceProfile, targetProfile, connectionRevision: 7 });
 beforeEach(() => {
+  injectedUnknownClose = false;
   events = []; connections = []; sent = []; nextId = 0; hold = undefined; held = undefined; closeFails = false;
   mocks.connect.mockReset().mockImplementation(async (profile, _database, signal) => managed(profile, signal)); mocks.execute.mockReset().mockResolvedValue({ rows: [] });
   engine = new Engine(event => events.push(event));
 });
-afterEach(async () => { closeFails = false; hold = undefined; held?.finish(new Error('测试收尾')); await engine.closeAll(); });
+afterEach(async () => {
+  closeFails = false; hold = undefined; held?.finish(new Error('测试收尾'));
+  // 此旧RAM端口没有资源facade；注入关闭未知后，恢复开关不能替代物理终态证明。
+  if (injectedUnknownClose) await expect(engine.closeAll()).rejects.toThrow('资源未确认释放'); else await engine.closeAll();
+});
 describe('结构比较正式引擎路由', () => {
   it('可信双连接读取两遍并逐侧严格关闭，只有公共任务终态且 SQL 不被执行', async () => {
     const result = await compare();
