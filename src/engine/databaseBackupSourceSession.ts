@@ -1,4 +1,5 @@
 import { types } from 'node:util';
+import type { Query } from 'mysql2';
 import { DatabaseBackupSourceLimitError, inspectDatabaseBackupSource, type DatabaseBackupSourceBinding, type DatabaseBackupSourceContext, type DatabaseBackupSourceInspection, type DatabaseBackupSourceRead } from './databaseBackupSource';
 import { DatabaseBackupSourceReader, type DatabaseBackupSourceNativeEvent, type DatabaseBackupSourceReadOperation, type DatabaseBackupSourceReaderOwner, type DatabaseBackupSourceReadStop } from './databaseBackupSourceReader';
 import type { StructureTaskContext } from './structureDefinition';
@@ -20,6 +21,7 @@ interface OperationRecord {
   readonly operation: DatabaseBackupSourceReadOperation;
   result: 'pending' | 'fulfilled' | 'rejected'; nativeEvent: DatabaseBackupSourceNativeEvent | null;
   accounting: 'not-started' | 'pending' | 'left' | 'unknown'; stopRequested: boolean; stopRequestFailed: boolean;
+  query: Query | null; nativeInvalidated: boolean;
 }
 function safeError(reason: Reason): Error {
   if (reason === 'limit') return new DatabaseBackupSourceLimitError('私有源检查超过原对象、元数据或读取次数预算，未返回部分检查');
@@ -59,6 +61,7 @@ export class DatabaseBackupSourceSession {
   readonly #hooks: DatabaseBackupSourceSessionHooks;
   readonly #inspection = deferred<DatabaseBackupSourceInspection>();
   readonly #operations: OperationRecord[] = [];
+  readonly #byOperation = new Map<DatabaseBackupSourceReadOperation, OperationRecord>();
   #reader: DatabaseBackupSourceReader | null = null;
   #current: OperationRecord | null = null;
   #chain: Promise<void> | null = null;
@@ -67,6 +70,11 @@ export class DatabaseBackupSourceSession {
   #reason: Reason | null = null;
   #started = false;
   #reading = false;
+  #invalidated = false;
+  #invalidationReason: Reason | null = null;
+  #invalidReads = 0;
+  #queryObservers = 0;
+  #connectionInvalidated = false;
   get inspection() { return this.#inspection.promise; }
 
   /** 仅捕获已登记上下文及有界源绑定，构造不触发任何读取或连接生命周期动作。 */
@@ -97,6 +105,7 @@ export class DatabaseBackupSourceSession {
   /** 每条读的前后与最终发布前复核原physical/signal/租约；失效永久封存。 */
   #check(): void {
     if (this.#reason) throw safeError(this.#reason);
+    if (this.#invalidated) throw safeError(this.#invalidationReason!);
     try { this.#ownerCurrent(); }
     catch { this.#stop('owner-invalid'); throw safeError('owner-invalid'); }
     try {
@@ -115,6 +124,8 @@ export class DatabaseBackupSourceSession {
       if (registration !== undefined) { void Promise.resolve(registration).catch(() => undefined); throw safeError('registration-failed'); }
       this.#check();
       this.#signal?.addEventListener('abort', this.#aborted, { once: true });
+      // 同一物理会话只登记一组故障观察，不给每条历史Query叠加连接监听。
+      this.#connection.on('error', this.#connectionFailed); this.#connection.on('end', this.#connectionFailed);
       const context: Context = { managed: this.#managed, checkCancelled: () => this.#check(), commandStarted: () => this.#commandStarted() };
       this.#reader = new DatabaseBackupSourceReader(context, this.#owner, {
         checkOwner: () => this.#ownerCurrent(), register: operation => this.#registerOperation(operation), requestStop: (operation, reason) => this.#requestStop(operation, reason),
@@ -126,8 +137,29 @@ export class DatabaseBackupSourceSession {
   /** Reader真正发送前保留每个原操作，成功或未知都不逐条驱逐。 */
   #registerOperation(operation: DatabaseBackupSourceReadOperation): void {
     if (this.#operations.length >= databaseBackupSourceSessionLimits.operations || this.#current) throw safeError('limit');
-    const record: OperationRecord = { operation, result: 'pending', nativeEvent: null, accounting: 'not-started', stopRequested: false, stopRequestFailed: false };
-    this.#operations.push(record); this.#current = record;
+    const record: OperationRecord = { operation, result: 'pending', nativeEvent: null, accounting: 'not-started', stopRequested: false, stopRequestFailed: false, query: null, nativeInvalidated: false };
+    this.#operations.push(record); this.#byOperation.set(operation, record); this.#current = record;
+  }
+  /** 一条原Query只加一个O(1)错误观察；不留原错误参数，已过门记录也不删除监听。 */
+  #watch(record: OperationRecord): void {
+    record.query = record.operation.query;
+    if (record.query) { this.#queryObservers++; record.query.on('error', () => this.#invalidate('native-unproven', record)); }
+    // Reader.start内可能先观察到同步错误；补核原快照，不能靠监听安装时刻漏掉失效。
+    const state = record.operation.snapshot();
+    if (state.queryErrored || state.connectionErrored || state.connectionEnded || state.accountingFailed) this.#invalidate('native-unproven', record);
+  }
+  /** 失效是永久资格标记；运行中停当前原读，已发布的Promise仅保留历史结果而不假装撤回。 */
+  #invalidate(reason: Reason, record?: OperationRecord): void {
+    if (record && !record.nativeInvalidated) { record.nativeInvalidated = true; this.#invalidReads++; }
+    this.#invalidated = true; this.#invalidationReason ??= reason;
+    if (this.#state !== 'completed') this.#stop(reason);
+  }
+  readonly #connectionFailed = (): void => { this.#connectionInvalidated = true; this.#invalidate('context-invalid'); };
+  /** 单条接纳核其原活快照，发布前再对全部记录仅做一遍O(n)复核。 */
+  #healthy(record: OperationRecord): boolean {
+    const state = record.operation.snapshot();
+    return record.result === 'fulfilled' && record.nativeEvent === 'query-end' && record.accounting === 'left' && !record.nativeInvalidated && Boolean(record.query) && record.query === record.operation.query
+      && state.reading === 'completed' && state.nativeEvent === 'query-end' && state.queryEnded && !state.queryErrored && !state.connectionErrored && !state.connectionEnded && !state.accountingFailed;
   }
   /** 本地结束回调只在Root原记账成功返回后标left；抛错保留unknown，不伪造已离开命令。 */
   #commandStarted(): () => void {
@@ -144,7 +176,7 @@ export class DatabaseBackupSourceSession {
   }
   /** 每个原操作最多向Root登记一次停止请求；所有返回都只是请求，不修改native/记账状态。 */
   #requestStop(operation: DatabaseBackupSourceReadOperation, reason: DatabaseBackupSourceReadStop): void {
-    const record = this.#operations.find(value => value.operation === operation); if (!record || record.stopRequested) return;
+    const record = this.#byOperation.get(operation); if (!record || record.stopRequested) return;
     record.stopRequested = true;
     try { const response: unknown = this.#hooks.requestStop(operation, reason); if (response !== undefined) { record.stopRequestFailed = true; void Promise.resolve(response).catch(() => { record.stopRequestFailed = true; }); } }
     catch { record.stopRequestFailed = true; }
@@ -157,6 +189,7 @@ export class DatabaseBackupSourceSession {
     try {
       const operation = this.#reader.start(this.#owner, statement), record = this.#current;
       if (!record || record.operation !== operation) throw safeError('native-unproven');
+      this.#watch(record);
       const result = operation.result.then(value => { record.result = 'fulfilled'; return { value } as const; }, error => {
         record.result = 'rejected'; this.#stop(error instanceof DatabaseBackupSourceLimitError ? 'limit' : 'read-failed'); return { error: true } as const;
       });
@@ -164,10 +197,8 @@ export class DatabaseBackupSourceSession {
       // result先拒绝会立即封存可见inspection，链本身仍留在原native Promise上等待晚事件。
       const [outcome, event] = await Promise.all([result, native]);
       this.#check();
-      const state = operation.snapshot();
-      if ('error' in outcome || outcome.value.complete !== true || state.reading !== 'completed') throw safeError('read-failed');
-      if (event !== 'query-end' || !state.queryEnded || state.queryErrored || state.connectionErrored || !operation.query) throw safeError('native-unproven');
-      if (record.accounting !== 'left' || state.accountingFailed) throw safeError('accounting-unproven');
+      if ('error' in outcome || outcome.value.complete !== true) throw safeError('read-failed');
+      if (event !== 'query-end' || !this.#healthy(record)) { this.#invalidate('native-unproven', record); throw safeError('native-unproven'); }
       this.#current = null; return outcome.value;
     } catch (error) {
       if (!this.#reason) this.#stop(error instanceof DatabaseBackupSourceLimitError ? 'limit' : 'read-failed');
@@ -179,7 +210,9 @@ export class DatabaseBackupSourceSession {
     try {
       const result = await inspectDatabaseBackupSource({ checkCancelled: () => this.#check(), read: this.#read }, this.#binding);
       this.#candidate = result; this.#check();
-      if (this.#operations.some(record => record.result !== 'fulfilled' || record.nativeEvent !== 'query-end' || record.accounting !== 'left') || result.actualLockHeld !== false) throw safeError('native-unproven');
+      const invalid = this.#operations.find(record => !this.#healthy(record));
+      if (invalid) { this.#invalidate('native-unproven', invalid); throw safeError('native-unproven'); }
+      if (result.actualLockHeld !== false) throw safeError('native-unproven');
       this.#state = 'completed'; this.#inspection.resolve(result);
     } catch (error) { if (!this.#reason) this.#stop(error instanceof DatabaseBackupSourceLimitError ? 'limit' : 'inspection-failed'); }
   }
@@ -193,18 +226,19 @@ export class DatabaseBackupSourceSession {
       catch { this.#requestStop(operation, reason === 'cancelled' ? 'cancelled' : 'lease-invalid'); }
     }
   }
-  readonly #aborted = (): void => this.#stop('cancelled');
+  readonly #aborted = (): void => this.#invalidate('cancelled');
   /** 取消只作用于本例原operation和Root停止钩子，没有取消ACK到serverClosed的转换。 */
-  cancel(owner: Owner): void { this.#sameOwner(owner); this.#stop('cancelled'); }
+  cancel(owner: Owner): void { this.#sameOwner(owner); this.#invalidate('cancelled'); }
   /** 显式私有诊断接口保留原操作、Query、Promise与迟到候选；不得交日志/renderer。 */
   retained(owner: Owner) {
     this.#sameOwner(owner);
     return { owner: this.#boundOwner, binding: this.#binding, inspection: this.inspection, chain: this.#chain, candidate: this.#candidate,
-      operations: this.#operations.map(record => ({ operation: record.operation, result: record.result, nativeEvent: record.nativeEvent, accounting: record.accounting, stopRequested: record.stopRequested, stopRequestFailed: record.stopRequestFailed })) };
+      operations: this.#operations.map(record => ({ operation: record.operation, result: record.result, nativeEvent: record.nativeEvent, accounting: record.accounting, stopRequested: record.stopRequested, stopRequestFailed: record.stopRequestFailed, nativeInvalidated: record.nativeInvalidated })) };
   }
   /** 通用快照只复制状态/计数，不读取私有结果Promise、源绑定或原Query。 */
   snapshot() {
     return Object.freeze({ state: this.#state, reason: this.#reason, started: this.#started, reading: this.#reading, operations: this.#operations.length,
+      invalidated: this.#invalidated, invalidationReason: this.#invalidationReason, invalidReads: this.#invalidReads, queryObservers: this.#queryObservers, connectionInvalidated: this.#connectionInvalidated,
       resultsPending: this.#operations.filter(record => record.result === 'pending').length, nativePending: this.#operations.filter(record => record.nativeEvent === null).length,
       commandsPending: this.#operations.filter(record => record.accounting === 'pending' || record.accounting === 'unknown').length,
       stopRequests: this.#operations.filter(record => record.stopRequested).length, stopRequestFailures: this.#operations.filter(record => record.stopRequestFailed).length });

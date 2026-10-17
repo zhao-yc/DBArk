@@ -56,6 +56,21 @@ function fixture(auto = true) {
 }
 
 describe('B01 私有源检查会话（RAM组合）', () => {
+  it('迟到失效窄对照：旧Query错同步停当前原读，已发布Promise只记历史失效不伪装撤回', async () => {
+    const f = fixture(false), promise = f.session.start(f.owner); f.finish(f.frames[0]);
+    for (let index = 0; index < 100 && f.frames.length < 2; index++) await Promise.resolve(); expect(f.frames).toHaveLength(2);
+    const old = f.session.retained(f.owner).operations[0], current = f.session.retained(f.owner).operations[1];
+    f.frames[0].query.emit('error', Error('RAM_RAW_ERROR')); f.frames[0].query.emit('error', Error('重复旧错'));
+    await expect(promise).rejects.toMatchObject({ reason: 'native-unproven' });
+    expect(f.session.snapshot()).toMatchObject({ state: 'failed', invalidated: true, invalidReads: 1, queryObservers: 2, nativePending: 1, commandsPending: 1 });
+    expect(f.hooks.requestStop).toHaveBeenCalledTimes(1); expect(f.hooks.requestStop.mock.calls[0][0]).toBe(current.operation); expect(f.rootFinished).toHaveBeenCalledTimes(1);
+    f.finish(f.frames[1]); await f.session.retained(f.owner).chain;
+    expect(f.frames).toHaveLength(2); expect(f.session.retained(f.owner).operations[0]).toMatchObject({ operation: old.operation, nativeEvent: 'query-end', accounting: 'left', nativeInvalidated: true }); expect(old.operation.snapshot().queryErrored).toBe(true); expect(f.rootFinished).toHaveBeenCalledTimes(2);
+    const g = fixture(), published = g.session.start(g.owner), report = await published;
+    expect(g.session.snapshot()).toMatchObject({ state: 'completed', invalidated: false, queryObservers: g.frames.length });
+    g.frames[0].query.emit('error', Error('RAM_RAW_ERROR')); expect(await published).toBe(report); expect(g.session.retained(g.owner).candidate).toBe(report);
+    expect(g.session.snapshot()).toMatchObject({ state: 'completed', invalidated: true, invalidationReason: 'native-unproven', invalidReads: 1 }); expect(g.hooks.requestStop).not.toHaveBeenCalled(); expect(JSON.stringify(g.session)).not.toContain('RAM_RAW_ERROR');
+  });
   it('完整Source顺序组合真实Query/Execute，稳定Promise先登记；每条原native与记账结束后才下一句', async () => {
     const f = fixture(); const promise = f.session.inspection;
     f.hooks.register.mockImplementation(session => { expect(session).toBe(f.session); expect(session.inspection).toBe(promise); expect(f.frames).toHaveLength(0); expect(() => session.start(f.owner)).toThrow(); });
