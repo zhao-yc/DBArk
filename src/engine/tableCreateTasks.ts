@@ -6,14 +6,31 @@ import { buildDesign, qualified, mariaDefault, temporalDefault } from './sql';
 import { parseTableColumnDefinition, tableDefinitionTokens } from './tableColumnDefinition';
 import { readTableIndexDefinition } from './tableIndexDefinition';
 import { readCreatedForeignKeys, verifyCreatedForeignKeyCatalog } from './tableCreateForeignKeyVerification';
+import { readTableDefaultEncodingCatalog } from './tableDefaultEncodingCatalog';
+import { readTableDefaultEncodingDefinition } from './tableDefaultEncodingSql';
+import { validateTableEncodingPair, sameTableEncodingPair } from '../shared/tableDefaultEncoding';
+import type { TableCreateEncodingCatalog } from '../shared/tableCreate';
 import { definitionOmittingSqlModes } from '../shared/tableColumnPatches';
 import { tableCreateAcknowledgements, tableCreateConfirmation, tableCreateDesignSchema, tableCreateMessages as text, type TableCreateDesign, type TableCreateGetInput, type TableCreateGetOutput, type TableCreatePreviewInput, type TableCreatePreviewOutput, type TableCreateApplyInput, type TableCreateApplyOutput, type TableCreateReleaseInput, type TableCreateProgress } from '../shared/tableCreate';
 const hash = (value: unknown) => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const literal = (value: string) => `CONVERT(X'${Buffer.from(value, 'utf8').toString('hex')}' USING utf8mb4)`;
 const progressOf = (): TableCreateProgress => ({ phase: 'connecting', ddlSubmitted: false, ddlCompleted: false, definitionVerified: false, outcome: 'not-sent' });
 interface Read { identity: string; serverKey: string; mode: string; noBackslash: boolean; bytes: number; version: string; lowerNames: number; }
-interface Snapshot extends Read { connectionId: string; database: string; revision: number; expires: number; }
+interface Snapshot extends Read { connectionId: string; database: string; revision: number; expires: number; encodings?: TableCreateEncodingCatalog; }
 interface Preview { snapshotId: string; snapshot: Snapshot; design: TableCreateDesign; target: { connectionId: string; database: string; table: string }; designDigest: string; sql: string; bytes: number; expires: number; }
+/** 选项只能来自完整实际目录；没有显式collation的旧调用不读取目录、不猜默认值。 */
+function selectedEncoding(design: TableCreateDesign, snapshot: Snapshot) {
+  if (design.collation === undefined) return;
+  const selection = validateTableEncodingPair({ charset: design.charset, collation: design.collation });
+  if (!snapshot.encodings?.digest || snapshot.encodings.reasons.length || !snapshot.encodings.candidates.some(pair => sameTableEncodingPair(pair, selection))) throw Error(text.encodingInvalid);
+  return selection;
+}
+/** 目录摘要含完整候选及警告；取消、权限、预算或目录变化均不能沿旧配对继续发送。 */
+async function recheckEncoding(context: StructureTaskContext, snapshot: Snapshot, design: TableCreateDesign) {
+  if (!selectedEncoding(design, snapshot)) return;
+  const current = await readTableDefaultEncodingCatalog(context);
+  if (current.digest !== snapshot.encodings!.digest) throw Error(text.encodingStale);
+}
 /** 读取实际会话、服务器与准确数据库目录；不切默认库，不读取已有表定义，不收缩普通MySQL/Maria能力。 */
 async function read(context: StructureTaskContext, database: string): Promise<Read> {
   if (['mysql', 'information_schema', 'performance_schema', 'sys'].includes(database.toLowerCase())) throw Error(text.database);
@@ -38,6 +55,10 @@ async function verify(context: StructureTaskContext, preview: Preview): Promise<
   if (ddl?.length !== 1 || typeof ddl[0]['Create Table'] !== 'string' || Buffer.byteLength(String(ddl[0]['Create Table'])) > 2 * 1024 * 1024) return false;
   if (preview.snapshot.mode.split(',').some(mode => (definitionOmittingSqlModes as readonly string[]).includes(mode.toUpperCase()))) return false;
   const document = parseTableColumnDefinition(String(ddl[0]['Create Table']), { dialect: context.managed.status.dialect, mode: { noBackslashEscapes: preview.snapshot.noBackslash, ansiQuotes: preview.snapshot.mode.split(',').includes('ANSI_QUOTES') } });
+  if (design.collation !== undefined) {
+    const actual = readTableDefaultEncodingDefinition(document.source, document.context);
+    if (actual.reasons.length || actual.charset !== design.charset || actual.collation !== design.collation) return false;
+  }
   const foreignKeys = design.foreignKeys.length ? readCreatedForeignKeys(document, design, context.managed.status.version) : undefined;
   // 只排除已按完整语义证明的FK原范围；未知约束和自动新增索引仍交给原索引守卫拒绝。
   const indexDocument = foreignKeys ? { ...document, items: document.items.filter(item => !foreignKeys.foreignKeys.some(key => key.range.start === item.range.start && key.range.end === item.range.end)) } : document;
@@ -66,8 +87,9 @@ async function verify(context: StructureTaskContext, preview: Preview): Promise<
     const actual = parsedIndexes.indexes.find(index => index.name === expected.name);
     return !actual || actual.kind !== (expected.name === 'PRIMARY' ? 'primary' : expected.unique ? 'unique' : 'ordinary') || actual.method !== 'BTREE' || actual.comment !== '' || actual.opaqueReasons.length > 0 || actual.attributes.some(attribute => attribute.kind !== 'method') || actual.parts.length !== expected.columns.length || actual.parts.some((part, index) => part.columnName !== expected.columns[index] || part.prefixLength !== undefined || part.direction !== 'asc' || part.expressionSql !== undefined || part.opaqueReasons.length > 0);
   })) return false;
-  const tables = (await query<{ name: string; engine: string; charset: string; comment: string }[]>(context, `SELECT t.TABLE_NAME AS name,t.ENGINE AS engine,c.CHARACTER_SET_NAME AS charset,t.TABLE_COMMENT AS comment FROM information_schema.TABLES t LEFT JOIN information_schema.COLLATIONS c ON c.COLLATION_NAME=t.TABLE_COLLATION WHERE t.TABLE_SCHEMA=${literal(database)} AND t.TABLE_NAME=${literal(table)} LIMIT 2`)).rows;
+  const tables = (await query<{ name: string; engine: string; charset: string; collation: string; comment: string }[]>(context, `SELECT t.TABLE_NAME AS name,t.ENGINE AS engine,c.CHARACTER_SET_NAME AS charset,t.TABLE_COLLATION AS collation,t.TABLE_COMMENT AS comment FROM information_schema.TABLES t LEFT JOIN information_schema.COLLATIONS c ON c.COLLATION_NAME=t.TABLE_COLLATION WHERE t.TABLE_SCHEMA=${literal(database)} AND t.TABLE_NAME=${literal(table)} LIMIT 2`)).rows;
   if (tables?.length !== 1 || tables[0].name !== table || tables[0].engine?.toUpperCase() !== design.engine.toUpperCase() || tables[0].charset !== design.charset || tables[0].comment !== design.comment) return false;
+  if (design.collation !== undefined && tables[0].collation !== design.collation) return false;
   const condition = `TABLE_SCHEMA=${literal(database)} AND TABLE_NAME=${literal(table)}`;
   const columns = (await query<{ name: string; type: string; nullable: string; defaultValue: string | null; extra: string; comment: string }[]>(context, `SELECT COLUMN_NAME AS name,COLUMN_TYPE AS type,IS_NULLABLE AS nullable,COLUMN_DEFAULT AS defaultValue,EXTRA AS extra,COLUMN_COMMENT AS comment FROM information_schema.COLUMNS WHERE ${condition} ORDER BY ORDINAL_POSITION LIMIT 1001`)).rows;
   if (!Array.isArray(columns) || columns.length !== design.columns.length || columns.some((column, index) => {
@@ -106,8 +128,13 @@ export class TableCreateTasks {
     const actualRevision = this.revision(revision), progress = progressOf(), id = randomUUID(); let snapshot!: Snapshot;
     const result = await this.host.run(input.connectionId, input.taskId, async context => {
       progress.phase = 'reading'; context.report(); const actual = await read(context, input.database);
-      snapshot = { ...actual, connectionId: input.connectionId, database: input.database, revision: actualRevision, expires: this.now() + structureCacheLimits.ttlMs }; this.cache.capacity(snapshot.bytes, 'snapshot');
-      return { target: { connectionId: input.connectionId, database: input.database }, snapshotId: id, expiresAt: new Date(snapshot.expires).toISOString(), serverVersion: actual.version, warnings: [...text.warnings] };
+      let encodings: TableCreateEncodingCatalog | undefined, catalogBytes = 0;
+      if (input.includeEncodings) {
+        try { const catalog = await readTableDefaultEncodingCatalog(context); catalogBytes = catalog.bytes; encodings = { candidates: catalog.candidates, digest: catalog.digest, warnings: catalog.warnings, reasons: [] }; }
+        catch { context.checkCancelled(); encodings = { candidates: [], warnings: [], reasons: [text.encodingUnavailable] }; }
+      }
+      snapshot = { ...actual, bytes: actual.bytes + catalogBytes, ...(encodings ? { encodings } : {}), connectionId: input.connectionId, database: input.database, revision: actualRevision, expires: this.now() + structureCacheLimits.ttlMs }; this.cache.capacity(snapshot.bytes, 'snapshot');
+      return { target: { connectionId: input.connectionId, database: input.database }, snapshotId: id, expiresAt: new Date(snapshot.expires).toISOString(), serverVersion: actual.version, warnings: [...text.warnings], ...(encodings ? { encodings: structuredClone(encodings) } : {}) };
     }, { label: text.labels.get, purpose: 'tableCreate', progress });
     this.snapshots.set(id, snapshot); return result;
   }
@@ -118,13 +145,15 @@ export class TableCreateTasks {
     const parsed = tableCreateDesignSchema.safeParse(input.design); if (!parsed.success) throw Error(text.invalid);
     const design = structuredClone(parsed.data); if (design.database !== snapshot.database) throw Error(text.invalid);
     const designDigest = hash(design); if (Buffer.byteLength(JSON.stringify(design)) > 2 * 1024 * 1024) throw Error(text.size);
-    const generated = buildDesign(design, undefined, snapshot.noBackslash); if (generated.statements.length !== 1 || !generated.sql.startsWith('CREATE TABLE ')) throw Error(text.invalid);
+    const encoding = selectedEncoding(design, snapshot);
+    const generated = buildDesign(design, undefined, snapshot.noBackslash, encoding); if (generated.statements.length !== 1 || !generated.sql.startsWith('CREATE TABLE ')) throw Error(text.invalid);
     const token = randomUUID(), preview: Preview = { snapshotId: input.snapshotId, snapshot, design, target: { connectionId: snapshot.connectionId, database: snapshot.database, table: design.name }, designDigest, sql: generated.sql, bytes: snapshot.bytes + Buffer.byteLength(JSON.stringify(design)) + Buffer.byteLength(generated.sql) + 2048, expires: snapshot.expires }, progress = progressOf();
     await this.host.run(snapshot.connectionId, input.taskId, async context => {
       progress.phase = 'rechecking'; context.report(); if ((await read(context, snapshot.database)).identity !== snapshot.identity) throw Error(text.identity); await absent(context, snapshot.database, design.name);
+      await recheckEncoding(context, snapshot, design);
     }, { label: text.labels.preview, purpose: 'tableCreate', progress });
     if (this.snapshots.get(input.snapshotId) !== snapshot || snapshot.expires <= this.now()) throw Error(text.stale);
-    this.previews.set(token, preview); return { target: { ...preview.target }, previewToken: token, expiresAt: new Date(preview.expires).toISOString(), designDigest, sql: preview.sql, warnings: [...text.warnings, ...(design.foreignKeys.length ? [text.foreignKeys] : [])], requiredAcknowledgements: [...tableCreateAcknowledgements] };
+    this.previews.set(token, preview); return { target: { ...preview.target }, previewToken: token, expiresAt: new Date(preview.expires).toISOString(), designDigest, sql: preview.sql, warnings: [...text.warnings, ...(design.foreignKeys.length ? [text.foreignKeys] : [])], requiredAcknowledgements: [...tableCreateAcknowledgements], ...(encoding ? { encoding: { selection: encoding, catalogDigest: snapshot.encodings!.digest! } } : {}) };
   }
   /** 第一次await前消费预览并占用目标；任何失败都不重放、覆盖或DROP补救。 */
   async apply(input: TableCreateApplyInput, revision: unknown): Promise<TableCreateApplyOutput> {
@@ -137,13 +166,14 @@ export class TableCreateTasks {
     try {
       const result = await this.host.run(snapshot.connectionId, input.taskId, async context => {
         progress.phase = 'rechecking'; context.report(); if ((await read(context, snapshot.database)).identity !== snapshot.identity) throw Error(text.identity); await absent(context, snapshot.database, preview.target.table);
+        await recheckEncoding(context, snapshot, preview.design);
         if (this.snapshots.get(preview.snapshotId) !== snapshot || preview.expires <= this.now()) throw Error(text.stale);
         progress.phase = 'executing'; context.report();
         const result = (await query<ResultSetHeader>(context, preview.sql, () => { progress.ddlSubmitted = true; progress.outcome = 'unknown'; context.report(); })).rows;
         if (!result || typeof result.affectedRows !== 'number') throw Error(text.ack);
         progress.ddlCompleted = true; progress.outcome = 'succeeded'; progress.phase = 'verifying'; context.report();
         output = { target: { ...preview.target }, ddlSubmitted: true, ddlCompleted: true, definitionVerified: false, resourcesReleased: false, warnings: [] };
-        try { output.definitionVerified = progress.definitionVerified = (await read(context, snapshot.database)).identity === snapshot.identity && await verify(context, preview); } catch { /* ACK事实已成立，后核失败不能变回未执行或自动重放。 */ }
+        try { await recheckEncoding(context, snapshot, preview.design); output.definitionVerified = progress.definitionVerified = (await read(context, snapshot.database)).identity === snapshot.identity && await verify(context, preview); } catch { /* ACK事实已成立，后核失败不能变回未执行或自动重放。 */ }
         if (!output.definitionVerified) output.warnings.push(text.verify); if (result.warningStatus) output.warnings.push(text.serverWarning);
         context.report(); this.releaseTokens({ snapshotId: preview.snapshotId }); return output;
       }, { label: text.labels.apply, purpose: 'tableCreate', progress, executionTarget: { database: snapshot.database, table: preview.target.table }, onResourcesReleased: () => { released = true; } });

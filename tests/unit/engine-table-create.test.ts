@@ -4,6 +4,7 @@ import type { ConnectionProfile, TaskEvent } from '../../src/shared/contracts';
 import type { ManagedConnection } from '../../src/engine/connection';
 import { tableCreateAcknowledgements, type TableCreateDesign, type TableCreateGetOutput, type TableCreatePreviewOutput } from '../../src/shared/tableCreate';
 import { validateCommand } from '../../src/shared/validation';
+import { buildDesign } from '../../src/engine/sql';
 const driver = vi.hoisted(() => ({ connect: vi.fn(), execute: vi.fn() }));
 vi.mock('../../src/engine/connection', async () => ({ ...await vi.importActual('../../src/engine/connection'), connect: driver.connect, execute: driver.execute }));
 import { closeMysqlConnection } from '../../src/engine/connection';
@@ -16,6 +17,7 @@ let catalogType: string | undefined, catalogDefault: string | null | undefined;
 let indexChanges: Record<string, unknown>;
 let foreignRules: unknown, foreignParts: unknown, foreignIndex: boolean, deniedForeign: 'rc' | 'kcu' | undefined;
 let laterDefinition: string | undefined, showReads: number, laterShowFails: boolean;
+let encodingCatalog: unknown[], tableCollation: string;
 let engine: Engine, events: TaskEvent[], sent: string[], connections: ManagedConnection[], sequence: number, uuid: string, mode: string, occupied: boolean, created: boolean, closeFails: boolean, badVerify: boolean, dialect: 'mysql' | 'mariadb', version: string;
 let hold: RegExp | undefined, held: { complete(error?: Error): void } | undefined, fail: RegExp | undefined, holdClose: boolean, releaseClose: (() => void) | undefined;
 /** 仅替换驱动，真实Engine、任务锁、缓存、SQL与取消/关闭代码均执行产品实现。 */
@@ -32,13 +34,14 @@ function managed(signal?: AbortSignal): ManagedConnection {
       if (sql.startsWith('SELECT @@hostname')) rows = [{ hostname: 'unit', port: 3306, serverId: 7, currentUser: 'unit@host', sqlMode: mode, lowerNames: 0, charset: 'utf8mb4', collation: 'utf8mb4_bin' }];
       else if (sql.startsWith('SELECT @@server_uuid')) rows = [{ uuid }];
       else if (sql.startsWith('SELECT SCHEMA_NAME')) rows = [{ name: 'db', charset: 'utf8mb4', collation: 'utf8mb4_bin' }];
+      else if (sql.startsWith('SELECT c.CHARACTER_SET_NAME')) rows = encodingCatalog;
       else if (sql.startsWith('SELECT TABLE_NAME')) rows = occupied || created ? [{ TABLE_NAME: 'new`table' }] : [];
       else if (sql.startsWith('CREATE TABLE')) { created = true; rows = { affectedRows: 0, warningStatus: 0 }; }
       else if (sql.startsWith('SHOW CREATE TABLE')) {
         if (showReads++ > 0 && laterShowFails) { callback(Error('合成后读SHOW未知')); return; }
         rows = [{ 'Create Table': showReads > 1 ? laterDefinition ?? showDefinition ?? definition : showDefinition ?? definition }];
       }
-      else if (sql.startsWith('SELECT t.TABLE_NAME')) rows = [{ name: 'new`table', engine: 'InnoDB', charset: 'utf8mb4', comment: '' }];
+      else if (sql.startsWith('SELECT t.TABLE_NAME')) rows = [{ name: 'new`table', engine: 'InnoDB', charset: 'utf8mb4', collation: tableCollation, comment: '' }];
       else if (sql.startsWith('SELECT COLUMN_NAME')) rows = [{ name: 'id', type: 'bigint unsigned', nullable: 'NO', defaultValue: null, extra: 'auto_increment', comment: '' }, { name: 'amount', type: catalogType ?? (badVerify ? 'decimal(20,2)' : 'decimal(30,12)'), nullable: 'NO', defaultValue: catalogDefault !== undefined ? catalogDefault : dialect === 'mariadb' ? "'123456789012345678.123456789012'" : '123456789012345678.123456789012', extra: '', comment: '' }];
       else if (sql.startsWith('SELECT INDEX_NAME')) rows = [{ name: 'PRIMARY', nonUnique: 0, column: 'id', sequence: 1, subPart: null, method: 'BTREE', direction: 'A', comment: '' }, { name: 'uq_amount', nonUnique: 0, column: 'amount', sequence: 1, subPart: null, method: 'BTREE', direction: 'A', comment: '', ...indexChanges }, ...(foreignIndex ? [{ name: 'ix_child', nonUnique: 1, column: 'id', sequence: 1, subPart: null, method: 'BTREE', direction: 'A', comment: '' }, { name: 'ix_child', nonUnique: 1, column: 'amount', sequence: 2, subPart: null, method: 'BTREE', direction: 'A', comment: '' }] : [])];
       else if (sql.includes('FROM information_schema.REFERENTIAL_CONSTRAINTS')) { if (deniedForeign === 'rc') { callback(Object.assign(Error('合成规则目录拒读'), { errno: 1142, code: 'ER_TABLEACCESS_DENIED_ERROR' })); return; } rows = foreignRules; }
@@ -68,9 +71,64 @@ function compositeForeignKey(): TableCreateDesign {
   return draft;
 }
 beforeEach(async () => {
+  encodingCatalog = [{ charset: 'utf8mb4', collation: 'utf8mb4_bin', compiled: 'Yes' }, { charset: 'utf8mb4', collation: 'utf8mb4_0900_ai_ci', compiled: 'Yes' }, { charset: 'latin1', collation: 'latin1_bin', compiled: 'Yes' }]; tableCollation = 'utf8mb4_bin';
   events = []; sent = []; connections = []; sequence = 0; uuid = 'server-1'; mode = ''; occupied = created = closeFails = badVerify = holdClose = false; hold = held = fail = releaseClose = undefined; showDefinition = catalogType = catalogDefault = laterDefinition = deniedForeign = undefined; indexChanges = {}; foreignRules = []; foreignParts = []; foreignIndex = laterShowFails = false; showReads = 0; dialect = 'mysql'; version = '8.4.11';
   driver.connect.mockReset().mockImplementation(async (_profile, _database, signal) => managed(signal)); driver.execute.mockReset().mockImplementation(async () => { held?.complete(Error('合成取消终态')); return { rows: [] }; });
   engine = new Engine(event => events.push(event)); await engine.handle('connections.open', { id: 'c', profile });
+});
+
+/** 新选项只经新表专用契约传输，真实Engine及单次令牌、后核和收尾路径保持。 */
+describe('新表实际编码目录配对（仅RAM驱动）', () => {
+  const getEncodings = () => engine.handle('schema.tableCreate.get', { connectionId: 'c', database: 'db', taskId: 'encoding-get-' + sequence, connectionRevision: 1, includeEncodings: true }) as Promise<TableCreateGetOutput>;
+  const explicit = () => ({ ...design(), collation: 'utf8mb4_bin' });
+  it('实际配对进入唯一CREATE，精度原文不变且SHOW和目录均核验后成功', async () => {
+    showDefinition = definition + ' DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin';
+    const s = await getEncodings(), p = await preview(s, explicit());
+    expect(s.encodings?.candidates).toHaveLength(3); expect(p.encoding).toEqual({ selection: { charset: 'utf8mb4', collation: 'utf8mb4_bin' }, catalogDigest: s.encodings!.digest }); expect(p.sql).toContain('DEFAULT CHARACTER SET=utf8mb4 COLLATE=utf8mb4_bin'); expect(p.sql).toContain('123456789012345678.123456789012');
+    expect(await apply(p)).toMatchObject({ ddlCompleted: true, definitionVerified: true, resourcesReleased: true }); expect(sent.filter(sql => /^(CREATE|ALTER|DROP)/.test(sql))).toEqual([p.sql]); expect(sent.filter(sql => sql.startsWith('SELECT c.CHARACTER_SET_NAME'))).toHaveLength(4); await expect(apply(p, 'again')).rejects.toThrow('失效');
+  });
+  it('旧调用不读取目录或追加COLLATE，显式字段不能套用旧快照', async () => {
+    const s = await get(), p = await preview(s); expect(p.sql).not.toContain('COLLATE='); expect(p.encoding).toBeUndefined(); expect(sent.some(sql => sql.startsWith('SELECT c.CHARACTER_SET_NAME'))).toBe(false); await expect(preview(s, explicit())).rejects.toThrow('配对');
+  });
+  it.each(['latin1_bin', 'UTF8MB4_BIN', 'utf8mb4_bin ', 'utf8mb4_bin;DROP TABLE x', ''])('不匹配或非法规则%s在DDL前拒绝', async collation => {
+    await expect(preview(await getEncodings(), { ...design(), collation })).rejects.toThrow(); expect(sent.some(sql => sql.startsWith('CREATE TABLE'))).toBe(false);
+  });
+  it('返回候选可变副本不能改写引擎持有配对', async () => {
+    const s = await getEncodings(); s.encodings!.candidates.push({ charset: 'utf8mb4', collation: 'made_up' }); await expect(preview(s, { ...design(), collation: 'made_up' })).rejects.toThrow('配对');
+  });
+  it('目录读取持有期间真实取消等待原请求终态，不发布快照或DDL', async () => {
+    hold = /^SELECT c.CHARACTER_SET_NAME/; const taskId = 'encoding-get-' + sequence, pending = getEncodings(); const rejected = pending.catch(reason => reason);
+    for (let index = 0; index < 100 && !held; index++) await Promise.resolve(); expect(held).toBeDefined(); await engine.handle('query.cancel', { taskId }); const reason = await rejected; expect(reason).toBeInstanceOf(Error); expect(events.filter(event => event.taskId === taskId).at(-1)?.status).toBe('cancelled'); expect(sent.some(sql => sql.startsWith('CREATE TABLE'))).toBe(false);
+  });
+  it('预览后目录权限撤销，旧令牌消费且DDL为零', async () => {
+    const p = await preview(await getEncodings(), explicit()); fail = /^SELECT c.CHARACTER_SET_NAME/; await expect(apply(p)).rejects.toThrow(); expect(sent.some(sql => sql.startsWith('CREATE TABLE'))).toBe(false); await expect(apply(p, 'again')).rejects.toThrow('失效');
+  });
+  it.each(['预览前', '执行前', 'ACK后'])('%s目录变化不套用旧摘要；ACK后只保留执行事实', async when => {
+    const s = await getEncodings(); if (when === '预览前') encodingCatalog.push({ charset: 'latin1', collation: 'latin1_swedish_ci', compiled: 'Yes' });
+    if (when === '预览前') { await expect(preview(s, explicit())).rejects.toThrow('目录已变化'); return; }
+    const p = await preview(s, explicit());
+    if (when === '执行前') encodingCatalog.pop();
+    else { hold = /^CREATE TABLE/; const pending = apply(p); for (let i = 0; i < 100 && !held; i++) await Promise.resolve(); expect(held).toBeDefined(); encodingCatalog.pop(); held!.complete(); const result = await pending; expect(result).toMatchObject({ ddlCompleted: true, definitionVerified: false }); return; }
+    await expect(apply(p)).rejects.toThrow('目录已变化'); expect(sent.some(sql => sql.startsWith('CREATE TABLE'))).toBe(false); await expect(apply(p, 'again')).rejects.toThrow('失效');
+  });
+  it.each(['权限拒读', '无候选', '未编译', '映射歧义', '超预算'])('%s显式不可用，旧行为仍可预览', async kind => {
+    if (kind === '权限拒读') fail = /^SELECT c.CHARACTER_SET_NAME/;
+    if (kind === '无候选') encodingCatalog = [];
+    if (kind === '未编译') encodingCatalog = [{ charset: 'utf8mb4', collation: 'utf8mb4_bin', compiled: 'No' }];
+    if (kind === '映射歧义') encodingCatalog = [{ charset: 'utf8mb4', collation: 'same', compiled: 'Yes' }, { charset: 'latin1', collation: 'same', compiled: 'Yes' }];
+    if (kind === '超预算') encodingCatalog = Array.from({ length: 8193 }, () => ({ charset: 'utf8mb4', collation: 'utf8mb4_bin', compiled: 'Yes' }));
+    const s = await getEncodings(); expect(s.encodings?.reasons).not.toHaveLength(0); await expect(preview(s, explicit())).rejects.toThrow('配对'); expect((await preview(s)).sql).not.toContain('COLLATE=');
+  });
+  it.each(['SHOW矛盾', 'SHOW缺省', '目录矛盾', '目录缺失'])('%s不能由另一证据补报核验成功', async kind => {
+    showDefinition = definition + (kind === 'SHOW缺省' ? '' : ' DEFAULT CHARSET=utf8mb4 COLLATE=' + (kind === 'SHOW矛盾' ? 'utf8mb4_0900_ai_ci' : 'utf8mb4_bin'));
+    if (kind === '目录矛盾') tableCollation = 'utf8mb4_0900_ai_ci'; if (kind === '目录缺失') tableCollation = undefined as any;
+    const result = await apply(await preview(await getEncodings(), explicit())); expect(result).toMatchObject({ ddlCompleted: true, definitionVerified: false });
+  });
+  it('新表参数不进入既有表ALTER，也不接受renderer在执行时改编码', () => {
+    expect(() => buildDesign(design(), {} as any, false, { charset: 'utf8mb4', collation: 'utf8mb4_bin' })).toThrow('已有对象'); expect(() => buildDesign({ ...design(), originalName: 'old' }, undefined, false, { charset: 'utf8mb4', collation: 'utf8mb4_bin' })).toThrow();
+    expect(() => validateCommand('schema.tableCreate.get', { connectionId: 'c', database: 'db', taskId: 't', includeEncodings: '1' })).toThrow(); expect(() => validateCommand('schema.tableCreate.apply', { previewToken: 'p', confirmation: 'db.t', acknowledgements: [...tableCreateAcknowledgements], taskId: 't', collation: 'utf8mb4_bin' })).toThrow();
+    expect(() => validateCommand('schema.preview', { connectionId: 'c', design: explicit() })).toThrow(); expect(() => buildDesign({ ...design(), originalName: '' }, undefined, false, { charset: 'utf8mb4', collation: 'utf8mb4_bin' })).toThrow();
+  });
 });
 
 describe('新建表外键实际定义后核（真实Engine，仅RAM驱动）', () => {

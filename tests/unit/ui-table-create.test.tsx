@@ -46,6 +46,42 @@ async function mount(options: { get?: TableCreateServices['get']; preview?: Tabl
   const container = document.createElement('div'); document.body.appendChild(container); root = createRoot(container as unknown as Element);
   await act(async () => root!.render(options.schema ? <SchemaDialog connectionId="c" database="db" onClose={close} onApplied={vi.fn()} onCreated={created} onDirtyChange={props.onDirtyChange}/> : options.strict ? <StrictMode><Component {...props}/></StrictMode> : <Component {...props}/>));
 }
+/** 只给实际ReactDOM提供服务器事实，不从产品生成器制造预期SQL。 */
+const encodingCatalog = () => ({ candidates: [{ charset: 'utf8mb4', collation: 'utf8mb4_bin' }, { charset: 'utf8mb4', collation: 'utf8mb4_0900_ai_ci' }, { charset: 'latin1', collation: 'latin1_bin' }], digest: 'b'.repeat(64), warnings: [], reasons: [] });
+async function selectEncoding(label: string, value: string) { const node = document.querySelector(`select[aria-label="${label}"]`)!; await act(async () => { node.value = value; node.dispatchEvent(new MemoryEvent('change')); }); }
+async function mountEncoding() {
+  await mount({ get: async input => ({ ...snapshot(), ...(input.includeEncodings ? { encodings: encodingCatalog() } : {}) }), preview: async input => ({ ...preview(), ...(input.design.collation ? { encoding: { selection: { charset: input.design.charset, collation: input.design.collation }, catalogDigest: 'b'.repeat(64) } } : {}) }) });
+  await click(text.encodingChoose);
+}
+async function choosePair() { await selectEncoding(text.charset, 'utf8mb4'); await selectEncoding(text.collation, 'utf8mb4_bin'); await click(text.preview); }
+
+describe('新建表配对选择的真实ReactDOM（仅RAM）', () => {
+  it('确认阶段仅列实际同字符集规则，未选完整配对没有预览或执行能力', async () => {
+    await mountEncoding(); expect(services.get).toHaveBeenLastCalledWith(expect.objectContaining({ includeEncodings: true })); expect(button(text.apply).disabled).toBe(true); await selectEncoding(text.charset, 'utf8mb4');
+    const select = document.querySelector(`select[aria-label="${text.collation}"]`)!; expect(select.querySelectorAll('option').map(node => node.value)).toEqual(['', 'utf8mb4_bin', 'utf8mb4_0900_ai_ci']); expect(button(text.preview).disabled).toBe(true);
+    await selectEncoding(text.collation, 'utf8mb4_bin'); await click(text.preview); expect(services.preview).toHaveBeenLastCalledWith(expect.objectContaining({ design: expect.objectContaining({ charset: 'utf8mb4', collation: 'utf8mb4_bin' }) })); await confirm(); await click(text.apply, true); expect(services.apply).toHaveBeenCalledTimes(1); expect(vi.mocked(services.apply).mock.calls[0][0]).not.toHaveProperty('collation');
+  });
+  it('切换字符集清空规则、旧预览和风险确认，原能力仍完整释放', async () => {
+    await mountEncoding(); await choosePair(); await confirm(); expect(button(text.apply).disabled).toBe(false); await selectEncoding(text.charset, 'latin1'); expect(button(text.apply).disabled).toBe(true); expect(document.querySelector(`select[aria-label="${text.collation}"]`)!.value).toBe(''); expect(document.querySelector('textarea')).toBeNull(); await click(text.back); expect(services.release).toHaveBeenCalledWith({ previewToken: 'p' }); expect(services.release).toHaveBeenCalledWith({ snapshotId: 's' }); expect(back).toHaveBeenCalledTimes(1);
+  });
+  it('重读目录摘要变化清空选择，不将旧选项自动迁移到新目录', async () => {
+    await mountEncoding(); vi.mocked(services.get).mockResolvedValueOnce({ ...snapshot(), encodings: { ...encodingCatalog(), digest: 'c'.repeat(64) } }); await choosePair(); expect(document.body.textContent).toContain(text.encodingStale); expect(button(text.apply).disabled).toBe(true); expect(document.querySelector(`select[aria-label="${text.charset}"]`)!.value).toBe('');
+  });
+  it('伪造或不匹配配对响应释放预览，不提供执行按钮能力', async () => {
+    await mountEncoding(); vi.mocked(services.preview).mockResolvedValueOnce({ ...preview('wrong'), encoding: { selection: { charset: 'latin1', collation: 'latin1_bin' }, catalogDigest: 'b'.repeat(64) } }); await choosePair(); expect(services.release).toHaveBeenCalledWith({ previewToken: 'wrong' }); expect(button(text.apply).disabled).toBe(true); expect(document.body.textContent).toContain(text.response);
+  });
+  it('元数据拒读仅使显式配对不可用，可主动回到原草稿行为', async () => {
+    await mountEncoding(); await click(text.encodingUseLegacy); vi.mocked(services.get).mockResolvedValueOnce({ ...snapshot(), encodings: { candidates: [], warnings: [], reasons: ['合成目录拒读'] } }); await click(text.encodingChoose); expect(document.body.textContent).toContain('合成目录拒读'); expect(button(text.apply).disabled).toBe(true); await click(text.encodingUseLegacy); expect(vi.mocked(services.preview).mock.calls.at(-1)![0].design).not.toHaveProperty('collation'); expect(document.body.textContent).toContain(text.encodingLegacy);
+  });
+  it('显式配对预览迟到且连接ABA时只释放，不能复活旧能力', async () => {
+    await mountEncoding(); const wait = deferred<TableCreatePreviewOutput>(); vi.mocked(services.preview).mockReturnValueOnce(wait.promise); await selectEncoding(text.charset, 'utf8mb4'); await selectEncoding(text.collation, 'utf8mb4_bin'); await click(text.preview);
+    await act(async () => { workspace.setState({ connectionVersions: { c: 2 } }); workspace.setState({ connectionVersions: { c: 1 } }); wait.resolve({ ...preview('late'), encoding: { selection: { charset: 'utf8mb4', collation: 'utf8mb4_bin' }, catalogDigest: 'b'.repeat(64) } }); }); expect(services.release).toHaveBeenCalledWith({ previewToken: 'late' }); expect(button(text.apply).disabled).toBe(true); expect(services.apply).not.toHaveBeenCalled();
+  });
+  it('新模式准备先等待原能力释放，释放失败不读新目录', async () => {
+    await mount(); const wait = deferred<void>(); vi.mocked(services.release).mockReturnValueOnce(wait.promise); await click(text.encodingChoose); expect(services.get).toHaveBeenCalledTimes(1); await act(async () => wait.reject(Error('合成释放失败'))); expect(services.get).toHaveBeenCalledTimes(1); expect(button(text.apply).disabled).toBe(true);
+  });
+});
+
 describe('新建表真实ReactDOM的确认与生命周期（仅RAM）', () => {
   it('预览只读、准确名称和风险确认后双击仅一次，不携带SQL', async () => {
     await mount(); expect(services.apply).not.toHaveBeenCalled(); expect(document.querySelector('textarea')?.getAttribute('readonly')).not.toBeNull(); await confirm('db.new_table '); expect(button(text.apply).disabled).toBe(true);

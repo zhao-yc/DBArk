@@ -302,7 +302,9 @@ export function columnType(value: string): string {
 }
 
 /** 以完整设计和现状生成结构差异；保留未变索引/外键，同名外键修改明确分步预览。 */
-export function buildDesign(design: TableDesign, original?: TableInfo, noBackslashEscapes = false): SqlPreview {
+export function buildDesign(design: TableDesign, original?: TableInfo, noBackslashEscapes = false, newTableEncoding?: { charset: string; collation: string }): SqlPreview {
+  // 仅新建用途可传显式配对；已有表即便误传也拒绝，不转成ALTER或数据编码转换。
+  if (newTableEncoding && (original || design.originalName !== undefined || newTableEncoding.charset !== design.charset || typeof newTableEncoding.collation !== 'string' || !/^[A-Za-z0-9_]{1,255}$/.test(newTableEncoding.collation))) throw new Error('显式新表编码选项无效或用于已有对象');
   if (!design.columns.length) throw new Error('表至少需要一个字段');
   const names = new Set(design.columns.map(column => column.name));
   if (names.size !== design.columns.length) throw new Error('字段名重复');
@@ -333,7 +335,7 @@ export function buildDesign(design: TableDesign, original?: TableInfo, noBacksla
     if (![key.onDelete, key.onUpdate].every(action => ['RESTRICT', 'CASCADE', 'SET NULL', 'NO ACTION'].includes(action.toUpperCase()))) throw new Error('外键动作无效');
     return `CONSTRAINT ${identifier(key.name)} FOREIGN KEY (${localColumns(key.columns)}) REFERENCES ${qualified(key.referencedDatabase, key.referencedTable)} (${key.referencedColumns.map(identifier).join(', ')}) ON DELETE ${key.onDelete.toUpperCase()} ON UPDATE ${key.onUpdate.toUpperCase()}`;
   });
-  const preserveCollation = original?.charset === design.charset ? original.collation : undefined;
+  const preserveCollation = newTableEncoding?.collation ?? (original?.charset === design.charset ? original.collation : undefined);
   if (preserveCollation && !/^[a-zA-Z0-9_]+$/.test(preserveCollation)) throw new Error('原表排序规则名称无效');
   const options = `ENGINE=${design.engine.toUpperCase()} DEFAULT CHARACTER SET=${design.charset}${preserveCollation ? ' COLLATE=' + preserveCollation : ''} COMMENT=${literal(design.comment)}`;
   let sql: string;
