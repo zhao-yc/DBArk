@@ -40,6 +40,7 @@ import {dataSearchInputSchema,dataSearchNextSchema,dataSearchReleaseSchema} from
 import {dataSearchCatalogueSchema} from './dataSearchCatalogue';
 import{dataSearchRecordReadSchema,dataSearchRecordsReleaseSchema}from'./dataSearchRecords';
 import { tableCopySourceReadSchema, tableCopySourceReleaseSchema } from './tableCopySource';
+import { copyInsertSqlInputSchema } from './copyInsertSql';
 import{savedQuerySearchInputSchema,savedQuerySearchNextSchema,savedQuerySearchReleaseSchema,savedQueryReadSchema}from'./savedQuerySearch';
 const queryDatabaseContext=z.discriminatedUnion('state',[z.object({state:z.literal('known'),database:z.string().min(1).max(256).refine(value=>!value.includes('\0')).nullable()}).strict(),z.object({state:z.literal('unknown')}).strict()]);
 const completionName=z.string().min(1).max(64).refine(completionIdentifier,'补全对象名必须是合法BMP标识符');
@@ -98,6 +99,7 @@ const tablePage = z.object({ ...target, page: z.number().int().min(1).max(100000
   catch (error) { context.addIssue({ code: 'custom', path: ['filters'], message: error instanceof Error ? error.message : '筛选条件无效' }); }
 });
 export const commandSchemas: Record<Command, z.ZodType> = {
+  'table.copyInsertSql': copyInsertSqlInputSchema,
   'workbench.get': empty, 'workbench.save': workbenchSaveSchema, 'workbench.resolve': workbenchTargetSchema, 'workbench.copyUri': workbenchTargetSchema,
   'queries.create': querySaveContentSchema, 'queries.updateSource': queryUpdateSourceSchema,
   'table.preferences.get': tablePreferenceTargetSchema, 'table.preferences.save': tablePreferenceSaveSchema, 'table.preferences.reset': tablePreferenceTargetSchema,
