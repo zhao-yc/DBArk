@@ -5,6 +5,7 @@ import {describe,it,expect,vi} from 'vitest';
 import {queryContextZh} from '../../src/renderer/locales/queryContext.zh-CN';
 import {queryStreamZh} from '../../src/renderer/locales/queryStreamExport.zh-CN';
 import {queryResultSelectionFixture} from '../fixtures/query-result-selection';
+import {QueryRowDetails} from '../../src/renderer/queryRowDetails';
 
 /** 执行真实组件内的发送函数，只隔离React与IPC边界，核对等待、取消和失败不发送写入。 */
 function fixture(){
@@ -12,7 +13,10 @@ function fixture(){
   const source=readFileSync(new URL('../../src/renderer/components/QueryTab.tsx',import.meta.url),'utf8'),file=ts.createSourceFile('QueryTab.tsx',source,ts.ScriptTarget.Latest,true,ts.ScriptKind.TSX),names=new Set(['runQuery','runStreamExport','prepareExecutionContext','cancelCurrentQuery','invalidateResultSelection']),functions:string[]=[];
   function visit(node:ts.Node){if(ts.isFunctionDeclaration(node)&&node.name&&names.has(node.name.text))functions.push(node.getText(file));ts.forEachChild(node,visit);}visit(file);if(functions.length!==5)throw Error('生产准备函数入口改变');
   const invoke=vi.fn(async(_command:string,_input?:unknown)=>({results:[]})),flushSettings=vi.fn(async()=>{}),ensureSession=vi.fn(async()=>'session'),rememberDatabase=vi.fn(),handleQueryError=vi.fn(async(_reason:unknown)=>{});let serial=0;
-  const context=createContext({resultSelection:selection.resultSelection,Error,queryContextZh,queryStreamZh,streamExportSource:'INSERT INTO subject VALUES(1)',streamCancelled:{current:''},streamParameterSession:{current:''},invoke,flushSettings,ensureSession,rememberDatabase,handleQueryError,errorMessage:(reason:unknown)=>reason instanceof Error?reason.message:String(reason),uid:()=>`task${++serial}`,
+  const context=createContext({resultSelection:selection.resultSelection,
+    // 只补齐真实初始详情控制器和React状态端口，不替换生产失效/执行函数。
+    rowDetails:new QueryRowDetails(),setRowDetail:vi.fn(),setActiveDetailRow:vi.fn(),
+    Error,queryContextZh,queryStreamZh,streamExportSource:'INSERT INTO subject VALUES(1)',streamCancelled:{current:''},streamParameterSession:{current:''},invoke,flushSettings,ensureSession,rememberDatabase,handleQueryError,errorMessage:(reason:unknown)=>reason instanceof Error?reason.message:String(reason),uid:()=>`task${++serial}`,
     busyRef:{current:false},cancelledQuery:{current:''},task:{current:''},parameterSession:{current:''},tab:{id:'tab'},settings:{resultLimit:10},useWorkspace:{getState:()=>({setBusy(){},setDirty(){}})},
     setBusy(){},setQueryRunning(){},setError(){},setSelectedPin(){},setShowPinSql(){},setOutcome(){},setStream(){},setResultIndex(){},setTransaction(){},setTransactionKnown(){}
   });
@@ -26,6 +30,7 @@ describe('查询上下文落盘与投递前取消',()=>{
     const f=fixture(),held=gate();f.flushSettings.mockImplementationOnce(()=>held.pending);
     const running=mode==='query'?f.handlers.runQuery('SELECT 1'):f.handlers.runStreamExport({taskId:'export'});
     expect(f.selection.resultSelection.count(f.selection.binding)).toBe(0);
+    expect(f.context.setRowDetail).toHaveBeenCalledWith(null);expect(f.context.setActiveDetailRow).toHaveBeenCalledWith(null);
     await vi.waitFor(()=>expect(f.flushSettings).toHaveBeenCalledOnce());expect(f.invoke).not.toHaveBeenCalled();
     held.release();await running;expect(f.invoke).toHaveBeenCalledOnce();
   });
@@ -33,6 +38,7 @@ describe('查询上下文落盘与投递前取消',()=>{
     const f=fixture();f.context.busyRef.current=true;
     await f.handlers.runQuery('SELECT 1');await expect(f.handlers.runStreamExport({taskId:'export'})).rejects.toThrow(queryStreamZh.blocked);
     expect(f.selection.resultSelection.count(f.selection.binding)).toBe(1);expect(f.invoke).not.toHaveBeenCalled();expect(f.ensureSession).not.toHaveBeenCalled();
+    expect(f.context.setRowDetail).not.toHaveBeenCalled();expect(f.context.setActiveDetailRow).not.toHaveBeenCalled();
   });
   it('恢复快照未落盘前不发送SQL，成功确认后仅发送一次',async()=>{
     const f=fixture(),held=gate();f.flushSettings.mockImplementationOnce(()=>held.pending);const running=f.handlers.runQuery('INSERT INTO subject VALUES(1)');await vi.waitFor(()=>expect(f.flushSettings).toHaveBeenCalledTimes(1));expect(f.rememberDatabase).toHaveBeenCalledWith({state:'unknown'});expect(f.invoke).not.toHaveBeenCalled();held.release();await running;expect(f.invoke).toHaveBeenCalledTimes(1);expect(f.invoke.mock.calls[0][0]).toBe('query.execute');expect(f.context.busyRef.current).toBe(false);

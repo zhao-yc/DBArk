@@ -7,6 +7,7 @@ import { currentStatementZh } from '../../src/renderer/locales/currentStatement.
 import { queryContextZh } from '../../src/renderer/locales/queryContext.zh-CN';
 import { queryConnectionDatabase, resolveQueryDatabase } from '../../src/shared/queryContext';
 import { queryResultSelectionFixture } from '../fixtures/query-result-selection';
+import { QueryRowDetails } from '../../src/renderer/queryRowDetails';
 
 const source = readFileSync(new URL('../../src/renderer/components/QueryTab.tsx', import.meta.url), 'utf8'), tree = ts.createSourceFile('QueryTab.tsx', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
 const names = new Set(['ensureSession', 'currentStatementScope', 'executeCurrentStatement', 'runQuery', 'prepareExecutionContext', 'querySource', 'execute', 'attachQueryEditor', 'invalidateResultSelection']), functions: string[] = [];
@@ -30,7 +31,10 @@ function fixture() {
   const invoke = vi.fn(async (command: string, _input?: any): Promise<any> => command === 'sessions.open' ? { sessionId: 'session' } : { results: [] }), flushSettings = vi.fn(async () => {}), handleQueryError = vi.fn(async (_reason: unknown) => {});
   let serial = 0;
   // 提取的真实编辑器接管函数也读取此初始ref；本例没有发起复制，保持组件useRef(null)原值。
-  const port = createContext({ duplicateIntent: { current: null }, resultSelection: selection.resultSelection, CurrentStatementIntent, currentStatementZh, queryContextZh, queryConnectionDatabase, resolveQueryDatabase, Error, document: { querySelector: () => modal ? {} : null },
+  const port = createContext({ duplicateIntent: { current: null }, resultSelection: selection.resultSelection,
+    // 与真实组件初始useRef一致：尚未打开行详情，但真实失效函数仍撤销控制器并清空两个React状态。
+    rowDetails: new QueryRowDetails(), setRowDetail: vi.fn(), setActiveDetailRow: vi.fn(),
+    CurrentStatementIntent, currentStatementZh, queryContextZh, queryConnectionDatabase, resolveQueryDatabase, Error, document: { querySelector: () => modal ? {} : null },
     useWorkspace: { getState: () => workspace, subscribe: (action: () => void) => listen('context', action).dispose }, tab: workspace.settings.tabs[0], settings: { resultLimit: 10 }, editor: { current: editor }, activeCurrentIntent: { current: null }, setSearchEditor: vi.fn(), sessionRef: { current: '' }, pendingSession: { current: null }, busyRef: { current: false }, cancelledQuery: { current: '' }, task: { current: '' }, parameterSession: { current: '' }, explainSource: { current: '' },
     invoke, flushSettings, handleQueryError, rememberDatabase: vi.fn(), uid: () => `task-${++serial}`, errorMessage: (reason: any) => reason.message, zh: { query: { text001: '请输入SQL' } },
     setSessionId: vi.fn(), setRecoveryDatabase: vi.fn(), setRecovery: vi.fn(), setBusy: vi.fn(), setQueryRunning: vi.fn(), setError: vi.fn(), setSelectedPin: vi.fn(), setShowPinSql: vi.fn(), setOutcome: vi.fn(), setStream: vi.fn(), setResultIndex: vi.fn(), setTransaction: vi.fn(), setTransactionKnown: vi.fn(),
@@ -48,6 +52,7 @@ describe('真实QueryTab当前语句异步意图', () => {
     const calls = f.invoke.mock.calls.filter(([command]) => command === 'query.execute'); expect(calls).toHaveLength(1); expect(calls[0][1]).toMatchObject({ sessionId: 'session', sql: expected, currentStatement: { offset: expected.indexOf('当前') } }); expect(calls[0][1].sql).not.toBe('SELECT selected');
     expect(f.model.getValue()).toBe(expected); expect([...f.listeners.values()].every(list => !list.size)).toBe(true);
     expect(f.selection.resultSelection.count(f.selection.binding)).toBe(0);
+    expect(f.port.setRowDetail).toHaveBeenCalledWith(null); expect(f.port.setActiveDetailRow).toHaveBeenCalledWith(null);
   });
   it.each(['connections.open', 'sessions.open', 'settings'] as const)('%s等待期间编辑再恢复原文仍不发送', async phase => {
     const f = fixture(), held = gate(), original = f.model.getValue();
