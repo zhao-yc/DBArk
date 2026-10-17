@@ -64,3 +64,20 @@ describe('已返回结果的有界字面查找', () => {
     const structural = new QueryResultFindScan(rows, columns.slice(0, 1), 'hit', true, () => true); rows.push({ a: 'new' }); expect(structural.current()).toBe(false); rows.pop(); expect(structural.current()).toBe(false);
   });
 });
+
+
+it('混合短长格的主片实际处理量不超过32768，余量不足时保留原offset到下一批', () => {
+  const short = 'q'.repeat(limits.chunkUnits - 1), long = 'r'.repeat(90000), query = 'missing';
+  let units = 0;
+  const slice = String.prototype.slice;
+  const spy = vi.spyOn(String.prototype, 'slice').mockImplementation(function (this: string, start = 0, end?: number) {
+    if (String(this) === short) units += Math.min(short.length, end ?? short.length) - start;
+    // 长格离尾部尚远，切片尾部重叠恰为查询长度；只计主片，不把重叠预算混进去。
+    if (String(this) === long) units += (end ?? long.length) - start - query.length;
+    return slice.call(this, start, end);
+  });
+  const scan = new QueryResultFindScan([{ a: short }, { a: long }], columns.slice(0, 1), query, true, () => true);
+  try { expect(scan.step().phase).toBe('searching'); } finally { spy.mockRestore(); }
+  expect(units).toBeLessThanOrEqual(limits.batchUnits); expect(units).toBe(32767);
+  expect(finish(scan)).toMatchObject({ phase: 'complete', count: 0, scannedCells: 2 });
+});

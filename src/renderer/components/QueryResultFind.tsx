@@ -13,14 +13,14 @@ interface Props { owner: object; rows: DataRow[]; columns: ResultColumn[]; grid:
 export function QueryResultFind({ owner, rows, columns, grid, isCurrent, onHit, children }: Props) {
   const latest = useRef({ owner, rows, columns, isCurrent }); latest.current = { owner, rows, columns, isCurrent };
   const alive = useRef(true), run = useRef<Run | undefined>(undefined), input = useRef<HTMLInputElement>(null);
-  const panel = useRef<object | undefined>(undefined);
+  const panel = useRef<object | undefined>(undefined), mountOwner = useRef<object | undefined>({});
   const [opened, setOpened] = useState<{ owner: object; token: object }>();
   const [query, setQuery] = useState(''), [sensitive, setSensitive] = useState(false);
   const [view, setView] = useState<{ run: Run; progress: QueryResultFindProgress; index: number }>();
   /** 原scope或父接纳门变化时仅撤销本地查找，不改变选择或业务资源。 */
   function own(): boolean { try { return alive.current && latest.current.owner === owner && latest.current.rows === rows && latest.current.columns === columns && isCurrent(); } catch { return false; } }
   function cancel() { const previous = run.current; if (!previous) return; previous.scan.cancel(); clearTimeout(previous.timer); run.current = undefined; }
-  useEffect(() => { alive.current = true; return () => { alive.current = false; cancel(); panel.current = undefined; }; }, []);
+  useEffect(() => { alive.current = true; mountOwner.current ??= {}; return () => { alive.current = false; mountOwner.current = undefined; cancel(); panel.current = undefined; }; }, []);
   useEffect(() => () => { if (run.current?.owner === owner) cancel(); }, [owner]);
   useEffect(() => { if (opened?.owner === owner && panel.current === opened.token && own()) input.current?.focus(); }, [opened, owner]);
   const visible = opened?.owner === owner && panel.current === opened.token;
@@ -34,9 +34,10 @@ export function QueryResultFind({ owner, rows, columns, grid, isCurrent, onHit, 
   function start(value: string, caseSensitive: boolean) {
     if (!panelCurrent() || run.current !== view?.run) return;
     cancel(); setQuery(value); setSensitive(caseSensitive); onHit(undefined);
-    const originalGrid = grid.current;
+    // RDG每次render重发handle；实例以本挂载/原scope及可取得的原宿主核验，导航使用最新handle。
+    const originalMount = mountOwner.current, originalElement = grid.current?.element;
     const next = { owner, index: -1 } as Run;
-    next.scan = new QueryResultFindScan(rows, columns, value, caseSensitive, () => run.current === next && own() && grid.current === originalGrid && originalGrid !== null);
+    next.scan = new QueryResultFindScan(rows, columns, value, caseSensitive, () => run.current === next && own() && originalMount !== undefined && mountOwner.current === originalMount && grid.current !== null && originalElement !== undefined && (originalElement === null || grid.current.element === originalElement && originalElement.ownerDocument.contains(originalElement)));
     run.current = next;
     setView({ run: next, progress: next.scan.progress(), index: -1 });
     const advance = () => {

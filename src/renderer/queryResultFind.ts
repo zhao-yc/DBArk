@@ -47,7 +47,10 @@ export class QueryResultFindScan {
           // NULL与空串保持显示语义；字符串含完整已返回原文；二进制只查有界显示预览。
           this.text = value && typeof value === 'object' ? cellPreview(value) : value === null ? 'NULL' : value === undefined ? '' : String(value);
         }
-        const end = Math.min(this.text.length, this.offset + queryResultFindLimits.chunkUnits);
+        const remaining = queryResultFindLimits.batchUnits - units;
+        // 余量装不下下一完整主片时先让出，不为凑满批次处理越界；原offset留给下一批。
+        if (Math.min(queryResultFindLimits.chunkUnits, this.text.length - this.offset) > remaining) break;
+        const end = Math.min(this.text.length, this.offset + queryResultFindLimits.chunkUnits, this.offset + remaining);
         const piece = this.text.slice(this.offset, Math.min(this.text.length, end + this.needle.length));
         units += Math.max(1, end - this.offset);
         const found = (this.caseSensitive ? piece : piece.toLowerCase()).includes(this.needle);
