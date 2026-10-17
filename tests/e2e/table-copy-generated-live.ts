@@ -36,7 +36,10 @@ async function cleanupGeneratedCase(info: TestInfo, own: (allowClosed?: boolean)
 /** 只注册未执行定义；不修改共享fixture，ROOT须另行安排固定候选与实际服务器终态证明。 */
 export function registerTableCopyGeneratedUiTests() {
   const binding = bindTableCopyGeneratedTarget(() => process.env, environment);
+  const states = new WeakMap<object, { active: boolean; check(): void }>();
   test.use({ preserveOnUnconfirmedExit: true, trace: 'off', screenshot: 'off', video: 'off' }); test.setTimeout(120000); test.describe.configure({ retries: 0 });
+  // 超时不等待原body结束；用途先停链保留，禁止自动夹具抢先退出仍在等待的用例。
+  test.afterEach(async ({}, info) => { const state = states.get(info); if (!state || state.active) { retainOwnedDesktopResources(info); throw Error('生成列用例或收尾仍活动，保留现场'); } state.check(); });
   for (const storage of ['VIRTUAL', 'STORED'] as const) test('MySQL8.4.11普通生成列'+storage+'先展示DDL和准确确认，单次创建空表并保持源数据与结构', async ({}, info) => {
     const target = binding.target, captured = ownedDesktopResources(info), page = captured.page, database = 'dbark_copy_' + randomUUID().replaceAll('-', '');
     /** 固定窗口及注册身份共同组成owner；失效后不重新捕获目标，也不自动退出清库。 */
@@ -44,6 +47,7 @@ export function registerTableCopyGeneratedUiTests() {
       try { binding.assertCurrent(); const current = ownedDesktopResources(info); if (current.page !== captured.page || current.application !== captured.application || !allowClosed && current.closed) throw Error('生成列验收窗口归属或关闭状态未知'); return current; }
       catch (reason) { try { retainOwnedDesktopResources(info); } catch { /* 归属首因不能被保留失败覆盖。 */ } throw reason; }
     };
+    const activity = { active: true, check: () => { own(true); } }; states.set(info, activity);
     let observer: Connection | undefined, ownsName = false, primary: { reason: unknown } | undefined;
     /** 观察SQL未知或归属变化立即保留，禁止finally继续猜测清库。 */
     const observe = async <T>(request: () => Promise<T>): Promise<T> => { own(); try { const value = await request(); own(); return value; } catch (reason) { try { retainOwnedDesktopResources(info); } catch { /* 观察请求的首因优先。 */ } throw reason; } };
@@ -78,6 +82,6 @@ export function registerTableCopyGeneratedUiTests() {
       expect(after).toEqual(before); expect(rowsAfter).toEqual(rowsBefore); expect(empty).toHaveLength(0); const expectedDefinition = String(before[0]['Create Table']).replace('CREATE TABLE `copy_source`', 'CREATE TABLE `copy_destination`'); expect(created[0]['Create Table']).toBe(expectedDefinition);
       const tasks = await page.evaluate(() => window.dbark.invoke('tasks.list', {})); own(); expect(tasks.filter(task => task.kind === 'schema.tableCopyStructure.apply')).toHaveLength(1); await dialog.getByRole('button', { name: text.close, exact: true }).click(); own(); await expect(node.locator('.object-row').getByText('copy_destination', { exact: true })).toBeVisible(); own();
     } catch (reason) { primary = { reason }; try { retainOwnedDesktopResources(info); } catch { /* 原UI/DDL失败保持为最终首因。 */ } throw reason; }
-    finally { await cleanupGeneratedCase(info, own, observer, database, ownsName, primary); }
+    finally { try { await cleanupGeneratedCase(info, own, observer, database, ownsName, primary); } finally { activity.active = false; } }
   });
 }

@@ -18,7 +18,7 @@ type Changes = { drift?: Drift; facts?: Record<string, unknown>; missingNative?:
 function formal(changes: Changes = {}) {
   const raw = environment(), helper = { ...raw }, calls: string[] = [], submissions: Record<string, string>[] = [], filled: Record<string, string> = {}, targets: Record<string, unknown>[] = [], cases: Function[] = [];
   const info = {}, application = {}, stop = Error('合成建库提交边界'), sourceStop = Error('合成源表DDL未知');
-  let retained = false, closed = false, didDrift = false, connectionCount = 0, finishClose: (() => void) | undefined, replacePage = false;
+  let retained = false, closed = false, didDrift = false, connectionCount = 0, finishClose: (() => void) | undefined, replacePage = false, after!: Function;
   const mutate = () => {
     if (didDrift) return; didDrift = true;
     if (changes.drift === 'helper目标') { helper.DBARK_TEST_HOST = '合成错误目标'; helper.DBARK_TEST_PORT = '19999'; }
@@ -60,7 +60,7 @@ function formal(changes: Changes = {}) {
       throw Error('拒绝未声明观察SQL');
     }, end: async () => { calls.push('promise-end'); } };
   };
-  const test = Object.assign((_name: string, body: Function) => cases.push(body), { use: vi.fn(), setTimeout: vi.fn(), describe: { configure: vi.fn() } });
+  const test = Object.assign((_name: string, body: Function) => cases.push(body), { use: vi.fn(), setTimeout: vi.fn(), describe: { configure: vi.fn() }, afterEach: (callback: Function) => { after = callback; } });
   const context = { exports: {} as Record<string, Function>, process: { env: raw }, require(name: string) {
     if (name === './table-copy-structure-live') return { cleanupTableCopyStructureCase: async () => { calls.push('old-cleanup'); } };
     if (name === './desktop-fixture') return { test, expect: actualExpect, ownedDesktopResources: own, retainOwnedDesktopResources: retain, confirmOwnedDesktopExit: async () => { calls.push('exit'); closed = true; } };
@@ -74,7 +74,7 @@ function formal(changes: Changes = {}) {
     throw Error('拒绝实际导入：' + name);
   } };
   runInContext(compile(source), createContext(context)); context.exports.registerTableCopyGeneratedUiTests();
-  return { calls, submissions, targets, stop, sourceStop, raw, helper, run: async () => { try { await cases[0]({}, info); } catch (reason) { return reason as any; } }, retained: () => retained, releaseClose: () => { expect(finishClose).toBeDefined(); finishClose!(); }, waitingClose: () => !!finishClose };
+  return { calls, submissions, targets, stop, sourceStop, raw, helper, after: () => after({}, info), run: async () => { try { await cases[0]({}, info); } catch (reason) { return reason as any; } }, retained: () => retained, releaseClose: () => { expect(finishClose).toBeDefined(); finishClose!(); }, waitingClose: () => !!finishClose };
 }
 
 describe('生成列正式入口持续绑定本轮身份', () => {
@@ -92,6 +92,9 @@ describe('生成列正式入口持续绑定本轮身份', () => {
   });
   it('原生close等待期间凭据漂移，close完成后仍不得重绑定建库', async () => {
     const f = formal({ holdClose: true }); const pending = f.run(); for (let index = 0; index < 50 && !f.waitingClose(); index++) await Promise.resolve(); expect(f.waitingClose()).toBe(true); f.helper.DBARK_TEST_PASSWORD = '合成等待期变化'; f.releaseClose(); await pending; expect(f.submissions).toEqual([]); expect(f.retained()).toBe(true); expect(f.calls).not.toContain('exit');
+  });
+  it('用例超时而close仍待定，afterEach先保留；迟到完成不能建库或自动退出', async () => {
+    const f = formal({ holdClose: true }); const pending = f.run(); for (let index = 0; index < 50 && !f.waitingClose(); index++) await Promise.resolve(); await expect(f.after()).rejects.toThrow('仍活动'); expect(f.retained()).toBe(true); f.releaseClose(); await pending; expect(f.submissions).toEqual([]); expect(f.calls).not.toContain('exit');
   });
   it('注册后原始配置变化，首次观察连接之前拒绝', async () => {
     const f = formal(); f.raw.DBARK_TEST_EXPECTED_SERVER_UUID = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee'; await f.run(); expect(f.targets).toEqual([]); expect(f.submissions).toEqual([]); expect(f.retained()).toBe(true);

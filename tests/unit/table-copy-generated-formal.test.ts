@@ -43,7 +43,7 @@ function formal(factsChange: Record<string, unknown> = {}, queryUnknown = false)
   const stream = Object.assign(new EventEmitter(), { closed: false, end(callback: () => void) { queueMicrotask(() => { callback(); stream.closed = true; calls.push('transport-close'); stream.emit('close'); }); }, destroy() { stream.closed = true; stream.emit('close'); } });
   const native = Object.assign(new EventEmitter(), { stream, end(callback: () => void) { calls.push('quit'); queueMicrotask(callback); }, destroy() { stream.destroy(); } });
   const observer = { connection: native, query: async (sql: string) => { calls.push(sql); if (queryUnknown) throw Error('合成读取未知'); return [[{ version: '8.4.11', os: 'Linux', names: 0, uuid, ...factsChange }]]; } };
-  const test = Object.assign((name: string, body: Function) => { cases.push({ name, body }); }, { use: vi.fn(), setTimeout: vi.fn(), describe: { configure: vi.fn() } });
+  const test = Object.assign((name: string, body: Function) => { cases.push({ name, body }); }, { use: vi.fn(), setTimeout: vi.fn(), describe: { configure: vi.fn() }, afterEach: vi.fn() });
   const context = createContext({ exports: {} as Record<string, Function>, process: { env: environment() }, require(name: string) {
     if (name === './desktop-fixture') return { test, expect, ownedDesktopResources: own, retainOwnedDesktopResources: retain, confirmOwnedDesktopExit: async () => { calls.push('exit'); resource.closed = true; } };
     if (name === 'node:crypto') return { randomUUID: () => uuid };
