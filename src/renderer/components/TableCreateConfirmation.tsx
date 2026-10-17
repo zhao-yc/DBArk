@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { tableCreateAcknowledgements, tableCreateConfirmation, tableCreateDesignSchema, type TableCreateApplyOutput, type TableCreateGetOutput, type TableCreatePreviewOutput, type TableCreateProgress } from '../../shared/tableCreate';
 import type { TableDesign } from '../../shared/contracts';
+import { sameTableEncodingPair, validateTableEncodingPair, type TableEncodingPair } from '../../shared/tableDefaultEncoding';
 import { IndexRequestFence } from '../indexPatches';
 import { tableCreateServices, type TableCreateServices } from '../tableCreateServices';
 import { tableCreateZh as text } from '../locales/tableCreate.zh-CN';
@@ -19,8 +20,11 @@ export function TableCreateConfirmation({ connectionId, design, onBack, onClose,
   const service = useRef(services); service.current = services;
   const fence = useRef(new IndexRequestFence()), alive = useRef(true), invalid = useRef(false), consumed = useRef(false), progress = useRef<TableCreateProgress | null>(null), activeTask = useRef<string | undefined>(undefined);
   const snapshots = useRef(new Set<string>()), tokens = useRef(new Set<string>()), releasing = useRef(new Map<string, Promise<void>>());
+  const acceptedPreview = useRef<TableCreatePreviewOutput | null>(null);
   const [snapshot, setSnapshot] = useState<TableCreateGetOutput | null>(null), [preview, setPreview] = useState<TableCreatePreviewOutput | null>(null), [busy, setBusy] = useState(false), [confirmation, setConfirmation] = useState(''), [acks, setAcks] = useState<ReadonlySet<string>>(new Set());
   const [error, setError] = useState(''), [outcome, setOutcome] = useState(''), [attempted, setAttempted] = useState(false), [unknown, setUnknown] = useState(false), [complete, setComplete] = useState(false), [, tick] = useState(0);
+  const [explicitEncoding, setExplicitEncoding] = useState(false), [selection, setSelection] = useState<TableEncodingPair>({ charset: '', collation: '' });
+  const encodingMode = useRef(false), encodingSelection = useRef(selection), catalog = useRef<TableCreateGetOutput['encodings']>(undefined);
   if (connectionId !== fixed.current.connectionId || version !== fixed.current.version || JSON.stringify(design) !== fixed.current.key) invalid.current = true;
   const validTime = (expires: string) => Number.isFinite(Date.parse(expires)) && Date.parse(expires) > Date.now();
   const expired = !!snapshot && !validTime(snapshot.expiresAt) || !!preview && !validTime(preview.expiresAt);
@@ -47,28 +51,51 @@ export function TableCreateConfirmation({ connectionId, design, onBack, onClose,
   }
   async function releaseAll() { const errors: string[] = []; for (const [kind, ids] of [['previewToken', tokens.current], ['snapshotId', snapshots.current]] as const) for (const id of [...ids]) try { await releaseOne(kind, id); } catch (reason) { errors.push(errorMessage(reason)); } if (errors.length) throw Error(errors.join('\n')); }
   /** 同步围栏覆盖准备、执行和全部释放等待；取消控制响应不提前解锁。 */
-  function begin(allowInvalid = false) { if (invalid.current && !allowInvalid) return; const guard = fence.current, value = guard.begin(uid()); if (!value) return; activeTask.current = value.taskId; setBusy(true); setError(''); progress.current = null; return { guard, ...value }; }
+  function begin(allowInvalid = false) { if (invalid.current && !allowInvalid) return; const guard = fence.current, value = guard.begin(uid()); if (!value) return; activeTask.current = value.taskId; setBusy(true); setError(''); progress.current = null; return { guard, ...value, intent: intent.current }; }
   type Operation = NonNullable<ReturnType<typeof begin>>;
-  const accepts = (op: Operation) => alive.current && op.guard === fence.current && op.guard.accepts(op) && !invalid.current;
+  const accepts = (op: Operation) => alive.current && op.guard === fence.current && op.guard.accepts(op) && !invalid.current && op.intent === intent.current;
   function finish(op: Operation) { op.guard.finish(op); if (alive.current && op.guard === fence.current) setBusy(false); }
   /** 初次只读准备；迟到或StrictMode旧代次只释放自己返回的能力。 */
   async function prepare() {
     const op = begin(); if (!op) return;
     try {
+      const chosen = encodingMode.current ? { ...encodingSelection.current } : undefined, previousDigest = catalog.current?.digest;
+      acceptedPreview.current = null; setPreview(null); setConfirmation(''); setAcks(new Set());
+      if (snapshots.current.size || tokens.current.size) { await releaseAll(); if (!accepts(op)) return; }
       const parsed = tableCreateDesignSchema.safeParse(fixed.current.design); if (!parsed.success) throw Error(text.invalidDesign); const draft = parsed.data;
-      const value = await service.current.get({ connectionId: fixed.current.connectionId, database: draft.database, taskId: op.taskId }); snapshots.current.add(value.snapshotId);
+      const value = await service.current.get({ connectionId: fixed.current.connectionId, database: draft.database, taskId: op.taskId, ...(chosen ? { includeEncodings: true } : {}) }); snapshots.current.add(value.snapshotId);
       if (!accepts(op) || value.target.connectionId !== fixed.current.connectionId || value.target.database !== draft.database || !validTime(value.expiresAt)) { await releaseOne('snapshotId', value.snapshotId); return; }
       setSnapshot(value);
+      if (chosen) {
+        const metadata = value.encodings;
+        catalog.current = undefined;
+        if (!metadata?.digest || metadata.reasons.length || !/^[a-f0-9]{64}$/.test(metadata.digest) || !metadata.candidates.length || metadata.candidates.length > 8192) throw Error(metadata?.reasons.join('\n') || text.encodingUnavailable);
+        const seen = new Set<string>();
+        for (const pair of metadata.candidates) { validateTableEncodingPair(pair); if (seen.has(pair.collation)) throw Error(text.response); seen.add(pair.collation); }
+        catalog.current = metadata;
+        if (previousDigest && previousDigest !== metadata.digest) { changeSelection({ charset: '', collation: '' }); throw Error(text.encodingStale); }
+        if (!chosen.charset || !chosen.collation) return;
+        if (!metadata.candidates.some(pair => sameTableEncodingPair(pair, chosen))) throw Error(text.encodingInvalid);
+        draft.charset = chosen.charset; draft.collation = chosen.collation;
+      }
       activeTask.current = uid();
       const next = await service.current.preview({ snapshotId: value.snapshotId, design: draft, taskId: activeTask.current }); tokens.current.add(next.previewToken);
       if (!accepts(op) || next.target.connectionId !== fixed.current.connectionId || next.target.database !== draft.database || next.target.table !== draft.name || !validTime(next.expiresAt) || next.requiredAcknowledgements.length !== tableCreateAcknowledgements.length || tableCreateAcknowledgements.some(id => !next.requiredAcknowledgements.includes(id))) { await releaseOne('previewToken', next.previewToken); if (accepts(op)) throw Error(text.response); return; }
-      setPreview(next);
+      if (chosen && (!next.encoding || next.encoding.catalogDigest !== value.encodings?.digest || !sameTableEncodingPair(next.encoding.selection, chosen)) || !chosen && next.encoding) { await releaseOne('previewToken', next.previewToken); throw Error(text.response); }
+      acceptedPreview.current = next; setPreview(next);
     } catch (reason) { if (alive.current && op.guard === fence.current) report(reason); } finally { finish(op); }
+  }
+  /** 配对变化同步撤销界面预览和确认；令牌仍由原集合负责，重新准备或离开时完整释放。 */
+  function changeSelection(pair: TableEncodingPair) { intent.current++; acceptedPreview.current = null; encodingSelection.current = pair; setSelection(pair); setPreview(null); setConfirmation(''); setAcks(new Set()); }
+  /** 显式模式只用于此新表确认，返回结构草稿后重新选择，不进入通用已有表ALTER。 */
+  function changeEncodingMode() {
+    if (!editable) return;
+    encodingMode.current = !encodingMode.current; setExplicitEncoding(encodingMode.current); catalog.current = undefined; changeSelection({ charset: '', collation: '' }); void prepare();
   }
   /** 服务器ACK与后核/收尾独立，刷新只针对最初目标；回调异常不能重放CREATE。 */
   function notify(result: TableCreateApplyOutput) { if (invalid.current) { report(text.mismatch); return; } try { completed.current(result, fixed.current.version); } catch (reason) { report(reason); } }
   async function apply() {
-    if (!editable || !preview || !snapshot || !confirmed || consumed.current || !validTime(preview.expiresAt) || !validTime(snapshot.expiresAt)) return;
+    if (!editable || !preview || acceptedPreview.current !== preview || !snapshot || !confirmed || consumed.current || !validTime(preview.expiresAt) || !validTime(snapshot.expiresAt)) return;
     const op = begin(); if (!op) return; consumed.current = true; setAttempted(true);
     try {
       const result = await service.current.apply({ previewToken: preview.previewToken, confirmation, acknowledgements: [...tableCreateAcknowledgements], taskId: op.taskId });
@@ -92,6 +119,10 @@ export function TableCreateConfirmation({ connectionId, design, onBack, onClose,
     <p>{text.target}：{fixed.current.label} · {fixed.current.design.database}.{fixed.current.design.name} · {snapshot?.serverVersion}</p>
     {invalid.current && <ErrorBox message={text.mismatch}/ >}{expired && <ErrorBox message={text.expired}/ >}
     {busy && !preview && <p role="status">{text.preparing}</p>}{snapshot?.warnings.map(value => <p key={value} className="warning-text">{value}</p>)}
+    <p>{explicitEncoding ? text.encodingExplicit : text.encodingLegacy}</p><button disabled={!editable} onClick={changeEncodingMode}>{explicitEncoding ? text.encodingUseLegacy : text.encodingChoose}</button>
+    {explicitEncoding && <><Field label={text.charset}><select aria-label={text.charset} value={selection.charset} disabled={!editable || !catalog.current?.digest} onChange={event => { if (editable) changeSelection({ charset: event.target.value, collation: '' }); }}><option value="">{text.encodingPlaceholder}</option>{[...new Set(catalog.current?.candidates.map(pair => pair.charset) ?? [])].map(value => <option key={value} value={value}>{value}</option>)}</select></Field>
+      <Field label={text.collation}><select aria-label={text.collation} value={selection.collation} disabled={!editable || !selection.charset} onChange={event => { if (editable) changeSelection({ charset: selection.charset, collation: event.target.value }); }}><option value="">{text.encodingPlaceholder}</option>{catalog.current?.candidates.filter(pair => pair.charset === selection.charset).map(pair => <option key={pair.collation} value={pair.collation}>{pair.collation}</option>)}</select></Field>
+      {catalog.current?.warnings.map(value => <p key={value} className="warning-text">{value}</p>)}<button disabled={!editable || !selection.charset || !selection.collation} onClick={() => void prepare()}>{text.preview}</button></>}
     {preview && <><h3>{text.sql}</h3><SqlEditor value={preview.sql} readOnly height={300}/><Field label={text.confirmation}><input aria-label={text.confirmation} value={confirmation} disabled={!editable} onChange={event => setConfirmation(event.target.value)}/></Field>
       {tableCreateAcknowledgements.map((id, index) => <label key={id}><input type="checkbox" checked={acks.has(id)} disabled={!editable} onChange={event => setAcks(current => { const next = new Set(current); if (event.target.checked) next.add(id); else next.delete(id); return next; })}/>{index ? text.ackCreate : text.ackDdl}</label>)}</>}
     {outcome && <p role="status">{outcome}</p>}<ErrorBox message={error}/>
