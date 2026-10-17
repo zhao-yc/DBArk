@@ -16,6 +16,8 @@ let catalogType: string | undefined, catalogDefault: string | null | undefined;
 let indexChanges: Record<string, unknown>;
 let foreignRules: unknown, foreignParts: unknown, foreignIndex: boolean, deniedForeign: 'rc' | 'kcu' | undefined;
 let laterDefinition: string | undefined, showReads: number, laterShowFails: boolean;
+let mysql57Facts: Record<string, unknown>, mysql57Engines: unknown, mysql57Charsets: unknown;
+let ordinaryIndex: boolean;
 let engine: Engine, events: TaskEvent[], sent: string[], connections: ManagedConnection[], sequence: number, uuid: string, mode: string, occupied: boolean, created: boolean, closeFails: boolean, badVerify: boolean, dialect: 'mysql' | 'mariadb', version: string;
 let hold: RegExp | undefined, held: { complete(error?: Error): void } | undefined, fail: RegExp | undefined, holdClose: boolean, releaseClose: (() => void) | undefined;
 /** 仅替换驱动，真实Engine、任务锁、缓存、SQL与取消/关闭代码均执行产品实现。 */
@@ -30,6 +32,9 @@ function managed(signal?: AbortSignal): ManagedConnection {
       if (error || fail?.test(sql)) { callback(error ?? Error('合成请求结果未知')); return; }
       let rows: unknown;
       if (sql.startsWith('SELECT @@hostname')) rows = [{ hostname: 'unit', port: 3306, serverId: 7, currentUser: 'unit@host', sqlMode: mode, lowerNames: 0, charset: 'utf8mb4', collation: 'utf8mb4_bin' }];
+      else if (sql.startsWith('SELECT @@version AS version,@@explicit_defaults_for_timestamp')) rows = [{ version, explicitTimestamp: 0, innodbStrict: 1, ...mysql57Facts }];
+      else if (sql.startsWith('SELECT ENGINE AS engine')) rows = mysql57Engines;
+      else if (sql.startsWith('SELECT CHARACTER_SET_NAME AS charset')) rows = mysql57Charsets;
       else if (sql.startsWith('SELECT @@server_uuid')) rows = [{ uuid }];
       else if (sql.startsWith('SELECT SCHEMA_NAME')) rows = [{ name: 'db', charset: 'utf8mb4', collation: 'utf8mb4_bin' }];
       else if (sql.startsWith('SELECT TABLE_NAME')) rows = occupied || created ? [{ TABLE_NAME: 'new`table' }] : [];
@@ -40,7 +45,7 @@ function managed(signal?: AbortSignal): ManagedConnection {
       }
       else if (sql.startsWith('SELECT t.TABLE_NAME')) rows = [{ name: 'new`table', engine: 'InnoDB', charset: 'utf8mb4', comment: '' }];
       else if (sql.startsWith('SELECT COLUMN_NAME')) rows = [{ name: 'id', type: 'bigint unsigned', nullable: 'NO', defaultValue: null, extra: 'auto_increment', comment: '' }, { name: 'amount', type: catalogType ?? (badVerify ? 'decimal(20,2)' : 'decimal(30,12)'), nullable: 'NO', defaultValue: catalogDefault !== undefined ? catalogDefault : dialect === 'mariadb' ? "'123456789012345678.123456789012'" : '123456789012345678.123456789012', extra: '', comment: '' }];
-      else if (sql.startsWith('SELECT INDEX_NAME')) rows = [{ name: 'PRIMARY', nonUnique: 0, column: 'id', sequence: 1, subPart: null, method: 'BTREE', direction: 'A', comment: '' }, { name: 'uq_amount', nonUnique: 0, column: 'amount', sequence: 1, subPart: null, method: 'BTREE', direction: 'A', comment: '', ...indexChanges }, ...(foreignIndex ? [{ name: 'ix_child', nonUnique: 1, column: 'id', sequence: 1, subPart: null, method: 'BTREE', direction: 'A', comment: '' }, { name: 'ix_child', nonUnique: 1, column: 'amount', sequence: 2, subPart: null, method: 'BTREE', direction: 'A', comment: '' }] : [])];
+      else if (sql.startsWith('SELECT INDEX_NAME')) rows = [{ name: 'PRIMARY', nonUnique: 0, column: 'id', sequence: 1, subPart: null, method: 'BTREE', direction: 'A', comment: '' }, { name: 'uq_amount', nonUnique: 0, column: 'amount', sequence: 1, subPart: null, method: 'BTREE', direction: 'A', comment: '', ...indexChanges }, ...(ordinaryIndex ? [{ name: 'ix_amount', nonUnique: 1, column: 'amount', sequence: 1, subPart: null, method: 'BTREE', direction: 'A', comment: '' }, { name: 'ix_amount', nonUnique: 1, column: 'id', sequence: 2, subPart: null, method: 'BTREE', direction: 'A', comment: '' }] : []), ...(foreignIndex ? [{ name: 'ix_child', nonUnique: 1, column: 'id', sequence: 1, subPart: null, method: 'BTREE', direction: 'A', comment: '' }, { name: 'ix_child', nonUnique: 1, column: 'amount', sequence: 2, subPart: null, method: 'BTREE', direction: 'A', comment: '' }] : [])];
       else if (sql.includes('FROM information_schema.REFERENTIAL_CONSTRAINTS')) { if (deniedForeign === 'rc') { callback(Object.assign(Error('合成规则目录拒读'), { errno: 1142, code: 'ER_TABLEACCESS_DENIED_ERROR' })); return; } rows = foreignRules; }
       else if (sql.includes('FROM information_schema.KEY_COLUMN_USAGE')) { if (deniedForeign === 'kcu') { callback(Object.assign(Error('合成列目录拒读'), { errno: 1143, code: 'ER_COLUMNACCESS_DENIED_ERROR' })); return; } rows = foreignParts; }
       else { callback(Error('纯测试未声明SQL')); return; }
@@ -68,9 +73,42 @@ function compositeForeignKey(): TableCreateDesign {
   return draft;
 }
 beforeEach(async () => {
+  mysql57Facts = {}; mysql57Engines = [{ engine: 'InnoDB', support: 'DEFAULT' }]; mysql57Charsets = [{ charset: 'latin1' }, { charset: 'utf8mb4' }]; ordinaryIndex = false;
   events = []; sent = []; connections = []; sequence = 0; uuid = 'server-1'; mode = ''; occupied = created = closeFails = badVerify = holdClose = false; hold = held = fail = releaseClose = undefined; showDefinition = catalogType = catalogDefault = laterDefinition = deniedForeign = undefined; indexChanges = {}; foreignRules = []; foreignParts = []; foreignIndex = laterShowFails = false; showReads = 0; dialect = 'mysql'; version = '8.4.11';
   driver.connect.mockReset().mockImplementation(async (_profile, _database, signal) => managed(signal)); driver.execute.mockReset().mockImplementation(async () => { held?.complete(Error('合成取消终态')); return { rows: [] }; });
   engine = new Engine(event => events.push(event)); await engine.handle('connections.open', { id: 'c', profile });
+});
+
+describe('准确5.7.44新表实际能力（真实Engine，仅RAM驱动）', () => {
+  it('普通列、主键、普通及唯一索引经准确CREATE与完整目录共同后核', async () => {
+    version = '5.7.44'; const draft = design(); ordinaryIndex = true; draft.indexes.push({ name: 'ix_amount', unique: false, columns: ['amount', 'id'] }); showDefinition = definition.replace('bigint unsigned', 'bigint(20) unsigned').replace(') ENGINE=InnoDB', ',KEY `ix_amount` (`amount`,`id`)) ENGINE=InnoDB');
+    const p = await preview(await get(), draft); expect(p.sql).toContain("DEFAULT '123456789012345678.123456789012'"); expect(p.sql).toContain('KEY `ix_amount` (`amount`, `id`)'); expect(await apply(p)).toMatchObject({ ddlCompleted: true, definitionVerified: true, resourcesReleased: true }); expect(sent.filter(sql => /^(CREATE|ALTER|DROP)/.test(sql))).toEqual([p.sql]);
+    expect(sent.some(sql => /information_schema_stats_expiry|sql_generate_invisible_primary_key|sql_require_primary_key|STATISTICS.*(?:IS_VISIBLE|EXPRESSION)/i.test(sql))).toBe(false); expect(sent.some(sql => /REFERENTIAL_CONSTRAINTS|KEY_COLUMN_USAGE/.test(sql))).toBe(false); expect(sent.filter(sql => sql.startsWith('SELECT @@version AS version,@@explicit_defaults_for_timestamp'))).toHaveLength(4); await expect(apply(p, 'again')).rejects.toThrow('失效');
+  });
+  it('父红：5.7旧隐式时间模式不能发送未明确默认的TIMESTAMP设计', async () => {
+    version = '5.7.44'; const draft = design(); draft.columns[1].type = 'timestamp'; delete draft.columns[1].defaultValue;
+    await expect(preview(await get(), draft)).rejects.toThrow(); expect(sent.some(sql => sql.startsWith('CREATE TABLE'))).toBe(false);
+  });
+  it('父红：不能从准确5.7.44向其他5.7补丁外推创建许可', async () => {
+    version = '5.7.43'; await expect((async () => preview(await get()))()).rejects.toThrow(); expect(sent.some(sql => sql.startsWith('CREATE TABLE'))).toBe(false);
+  });
+  it.each(['5.7.43', '5.7.45', '5.7.440', '5.7.44-MariaDB', '5.7.44\n', '5.7.44.1', '5.6.51'])('版本%s只读，不探测8.x变量或回退猜能力', async value => { version = value; await expect(get()).rejects.toThrow(); expect(sent.some(sql => sql.startsWith('SELECT @@version AS version,@@explicit_defaults_for_timestamp'))).toBe(false); expect(sent.some(sql => sql.startsWith('CREATE TABLE'))).toBe(false); });
+  it.each([{ explicitTimestamp: undefined }, { explicitTimestamp: false }, { explicitTimestamp: 'OFF' }, { innodbStrict: 0 }, { version: '8.0.46' }])('实际会话事实%s未知或矛盾不能发布能力', async change => { version = '5.7.44'; mysql57Facts = change; await expect(get()).rejects.toThrow(); expect(sent.some(sql => sql.startsWith('CREATE TABLE'))).toBe(false); });
+  it.each([[], [{ engine: 'InnoDB', support: 'NO' }], [{ engine: 'MyISAM', support: 'YES' }], [{ engine: 'InnoDB', support: 'YES' }, { engine: 'InnoDB', support: 'YES' }]].map(rows => ({ rows })))('InnoDB目录$rows不可证明则只读', async ({ rows }) => { version = '5.7.44'; mysql57Engines = rows; await expect(get()).rejects.toThrow(); });
+  it.each([[], [{ charset: 'utf8mb4' }, { charset: 'utf8mb4' }], [{ charset: 'bad;sql' }]].map(rows => ({ rows })))('字符集目录$rows未知不能冒充支持', async ({ rows }) => { version = '5.7.44'; mysql57Charsets = rows; await expect(get()).rejects.toThrow(); });
+  it.each(['会话', '引擎', '字符集'])('%s能力读取错误不吞错、不继续创建', async kind => { version = '5.7.44'; fail = kind === '会话' ? /^SELECT @@version AS version,@@explicit_defaults_for_timestamp/ : kind === '引擎' ? /^SELECT ENGINE AS engine/ : /^SELECT CHARACTER_SET_NAME AS charset/; await expect(get()).rejects.toThrow(); expect(sent.some(sql => sql.startsWith('CREATE TABLE'))).toBe(false); expect(connections.at(-1)?.close).toHaveBeenCalledTimes(1); });
+  it.each(['预览前', '执行前', 'ACK后'])('%s能力变化拒绝旧许可，ACK后仅保留完成事实', async when => {
+    version = '5.7.44'; const s = await get(); if (when === '预览前') { mysql57Facts.explicitTimestamp = 1; await expect(preview(s)).rejects.toThrow(); return; } const p = await preview(s);
+    if (when === '执行前') { mysql57Facts.explicitTimestamp = 1; await expect(apply(p)).rejects.toThrow(); expect(sent.some(sql => sql.startsWith('CREATE TABLE'))).toBe(false); }
+    else { hold = /^CREATE TABLE/; const pending = apply(p); for (let i = 0; i < 100 && !held; i++) await Promise.resolve(); expect(held).toBeDefined(); mysql57Facts.explicitTimestamp = 1; held!.complete(); expect(await pending).toMatchObject({ ddlCompleted: true, definitionVerified: false }); }
+    await expect(apply(p, 'again')).rejects.toThrow('失效');
+  });
+  it.each(['MyISAM', '未证明字符集', 'JSON默认值', 'TEXT默认值', '省略定义模式'])('设计%s不扩展新片边界', async kind => {
+    version = '5.7.44'; const draft = design(); if (kind === 'MyISAM') draft.engine = 'MyISAM'; if (kind === '未证明字符集') draft.charset = 'made_up'; if (kind.endsWith('默认值')) draft.columns[1].type = kind.startsWith('JSON') ? 'json' : 'text'; if (kind === '省略定义模式') mode = 'NO_FIELD_OPTIONS'; await expect(preview(await get(), draft)).rejects.toThrow(); expect(sent.some(sql => sql.startsWith('CREATE TABLE'))).toBe(false);
+  });
+  it('5.7能力查询取消等待真实请求终态，不发布能力', async () => {
+    version = '5.7.44'; hold = /^SELECT @@version AS version,@@explicit_defaults_for_timestamp/; const taskId = 'get-' + sequence, pending = get().catch(reason => reason); for (let i = 0; i < 100 && !held; i++) await Promise.resolve(); expect(held).toBeDefined(); await engine.handle('query.cancel', { taskId }); expect(await pending).toBeInstanceOf(Error); expect(events.filter(event => event.taskId === taskId).at(-1)?.status).toBe('cancelled');
+  });
 });
 
 describe('新建表外键实际定义后核（真实Engine，仅RAM驱动）', () => {

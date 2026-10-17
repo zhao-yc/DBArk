@@ -6,15 +6,16 @@ import { buildDesign, qualified, mariaDefault, temporalDefault } from './sql';
 import { parseTableColumnDefinition, tableDefinitionTokens } from './tableColumnDefinition';
 import { readTableIndexDefinition } from './tableIndexDefinition';
 import { readCreatedForeignKeys, verifyCreatedForeignKeyCatalog } from './tableCreateForeignKeyVerification';
+import { readMysql57CreateCapabilities, assertMysql57CreateDesign, type Mysql57CreateCapabilities } from './tableCreateMysql57';
 import { definitionOmittingSqlModes } from '../shared/tableColumnPatches';
 import { tableCreateAcknowledgements, tableCreateConfirmation, tableCreateDesignSchema, tableCreateMessages as text, type TableCreateDesign, type TableCreateGetInput, type TableCreateGetOutput, type TableCreatePreviewInput, type TableCreatePreviewOutput, type TableCreateApplyInput, type TableCreateApplyOutput, type TableCreateReleaseInput, type TableCreateProgress } from '../shared/tableCreate';
 const hash = (value: unknown) => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const literal = (value: string) => `CONVERT(X'${Buffer.from(value, 'utf8').toString('hex')}' USING utf8mb4)`;
 const progressOf = (): TableCreateProgress => ({ phase: 'connecting', ddlSubmitted: false, ddlCompleted: false, definitionVerified: false, outcome: 'not-sent' });
-interface Read { identity: string; serverKey: string; mode: string; noBackslash: boolean; bytes: number; version: string; lowerNames: number; }
+interface Read { identity: string; serverKey: string; mode: string; noBackslash: boolean; bytes: number; version: string; lowerNames: number; mysql57?: Mysql57CreateCapabilities; }
 interface Snapshot extends Read { connectionId: string; database: string; revision: number; expires: number; }
 interface Preview { snapshotId: string; snapshot: Snapshot; design: TableCreateDesign; target: { connectionId: string; database: string; table: string }; designDigest: string; sql: string; bytes: number; expires: number; }
-/** 读取实际会话、服务器与准确数据库目录；不切默认库，不读取已有表定义，不收缩普通MySQL/Maria能力。 */
+/** 读取实际会话与准确数据库；5.x追加准确能力门，8.x/Maria沿原路径，不切库或读取已有表定义。 */
 async function read(context: StructureTaskContext, database: string): Promise<Read> {
   if (['mysql', 'information_schema', 'performance_schema', 'sys'].includes(database.toLowerCase())) throw Error(text.database);
   const rows = (await query<Record<string, unknown>[]>(context, 'SELECT @@hostname AS hostname,@@port AS port,@@server_id AS serverId,CURRENT_USER() AS currentUser,@@sql_mode AS sqlMode,@@lower_case_table_names AS lowerNames,@@character_set_connection AS charset,@@collation_connection AS collation')).rows;
@@ -24,7 +25,9 @@ async function read(context: StructureTaskContext, database: string): Promise<Re
   if (context.managed.status.dialect === 'mysql') { const values = (await query<{ uuid: string }[]>(context, 'SELECT @@server_uuid AS uuid')).rows; if (values?.length !== 1 || !values[0].uuid) throw Error(text.identity); uuid = values[0].uuid; }
   const schemas = (await query<{ name: string; charset: string; collation: string }[]>(context, `SELECT SCHEMA_NAME AS name,DEFAULT_CHARACTER_SET_NAME AS charset,DEFAULT_COLLATION_NAME AS collation FROM information_schema.SCHEMATA WHERE SCHEMA_NAME=${literal(database)} LIMIT 2`)).rows;
   if (schemas?.length !== 1 || schemas[0].name !== database || !schemas[0].charset || !schemas[0].collation) throw Error(text.database);
-  return { identity: hash([row, uuid, context.managed.status.dialect, context.managed.status.version, schemas[0]]), serverKey: hash([row.hostname, row.port, row.serverId, uuid, context.managed.status.dialect]), mode: String(row.sqlMode), noBackslash: String(row.sqlMode).split(',').includes('NO_BACKSLASH_ESCAPES'), bytes: 8192, version: context.managed.status.version, lowerNames: Number(row.lowerNames) };
+  // 5.x不能仅凭通用列目录被当成已准备版本；准确5.7事实纳入每次身份重核，其他方言沿原边界。
+  const mysql57 = context.managed.status.dialect === 'mysql' && /^5(?:\.|$)/.test(context.managed.status.version) ? await readMysql57CreateCapabilities(context) : undefined;
+  return { identity: hash([row, uuid, context.managed.status.dialect, context.managed.status.version, schemas[0], ...(mysql57 ? [mysql57] : [])]), serverKey: hash([row.hostname, row.port, row.serverId, uuid, context.managed.status.dialect]), mode: String(row.sqlMode), noBackslash: String(row.sqlMode).split(',').includes('NO_BACKSLASH_ESCAPES'), bytes: 8192 + (mysql57 ? Buffer.byteLength(JSON.stringify(mysql57)) : 0), version: context.managed.status.version, lowerNames: Number(row.lowerNames), ...(mysql57 ? { mysql57 } : {}) };
 }
 /** 预查不替代CREATE自身的并发裁决，大小写映射由服务器实际目录决定。 */
 async function absent(context: StructureTaskContext, database: string, table: string): Promise<void> {
@@ -117,6 +120,7 @@ export class TableCreateTasks {
     if (!snapshot || snapshot.expires <= this.now() || snapshot.revision !== this.revision(revision)) throw Error(text.stale);
     const parsed = tableCreateDesignSchema.safeParse(input.design); if (!parsed.success) throw Error(text.invalid);
     const design = structuredClone(parsed.data); if (design.database !== snapshot.database) throw Error(text.invalid);
+    if (snapshot.mysql57) assertMysql57CreateDesign(design, snapshot.mysql57, snapshot.mode);
     const designDigest = hash(design); if (Buffer.byteLength(JSON.stringify(design)) > 2 * 1024 * 1024) throw Error(text.size);
     const generated = buildDesign(design, undefined, snapshot.noBackslash); if (generated.statements.length !== 1 || !generated.sql.startsWith('CREATE TABLE ')) throw Error(text.invalid);
     const token = randomUUID(), preview: Preview = { snapshotId: input.snapshotId, snapshot, design, target: { connectionId: snapshot.connectionId, database: snapshot.database, table: design.name }, designDigest, sql: generated.sql, bytes: snapshot.bytes + Buffer.byteLength(JSON.stringify(design)) + Buffer.byteLength(generated.sql) + 2048, expires: snapshot.expires }, progress = progressOf();
