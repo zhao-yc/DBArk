@@ -72,12 +72,18 @@ export function registerTableCreateUiTests() {
         await designer.getByRole('button', { name: zh.schema.text049, exact: true }).click(); owner.assertCurrent();
         const confirmation = page(owner).getByRole('dialog', { name: text.title, exact: true });
         await expect(confirmation.locator('.monaco-editor .view-lines')).toContainText('CREATE TABLE'); owner.assertCurrent();
+        // 预览只读：仅观察本例合成库的准确目标，任何apply之前都必须仍不存在。
+        const [absent] = await observe(owner, () => context.observer.query<RowDataPacket[]>('SELECT TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA=? AND TABLE_NAME=?', [context.database, 'daily_new_table'])); owner.assertCurrent();
+        expect(absent).toHaveLength(0);
         await confirmation.getByLabel(text.confirmation, { exact: true }).fill(context.database + '.daily_new_table '); owner.assertCurrent();
         for (const label of [text.ackDdl, text.ackCreate]) { await confirmation.getByRole('checkbox', { name: label, exact: true }).check(); owner.assertCurrent(); }
         await expect(confirmation.getByRole('button', { name: text.apply, exact: true })).toBeDisabled(); owner.assertCurrent();
         await confirmation.getByLabel(text.confirmation, { exact: true }).fill(context.database + '.daily_new_table'); owner.assertCurrent();
         await confirmation.getByRole('button', { name: text.apply, exact: true }).click(); owner.assertCurrent();
         await expect(confirmation.getByRole('status')).toHaveText(text.succeeded); owner.assertCurrent();
+        // 成功提示之外再核本例唯一apply及终态；任务读取未知同样停链保留现场。
+        const tasks = await observe(owner, () => page(owner).evaluate(() => window.dbark.invoke('tasks.list', {}))); owner.assertCurrent();
+        const applies = tasks.filter(task => task.kind === 'schema.tableCreate.apply'); expect(applies).toHaveLength(1); expect(applies[0].status).toBe('completed');
         await expect(confirmation.getByRole('button', { name: text.apply, exact: true })).toBeDisabled(); owner.assertCurrent();
         const [columns] = await observe(owner, () => context.observer.query<RowDataPacket[]>('SELECT COLUMN_NAME,COLUMN_TYPE,COLUMN_DEFAULT FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=? AND TABLE_NAME=? ORDER BY ORDINAL_POSITION', [context.database, 'daily_new_table'])); owner.assertCurrent();
         expect(columns.map(row => row.COLUMN_NAME)).toEqual(['id', 'amount']); expect(columns[1].COLUMN_DEFAULT).toBe('123456789012345678.123456789012');
@@ -85,6 +91,8 @@ export function registerTableCreateUiTests() {
         expect(indexes.map(row => [row.INDEX_NAME, Number(row.NON_UNIQUE)])).toEqual([['PRIMARY', 0], ['uq_amount', 0]]);
         await confirmation.getByRole('button', { name: text.close, exact: true }).click(); owner.assertCurrent();
         await expect(confirmation).toHaveCount(0); owner.assertCurrent();
+        // 仅核原连接对象树的准确新表，确认完成回调已刷新；不切换或重绑其它目标。
+        await expect(connection.locator('.object-row').getByText('daily_new_table', { exact: true })).toBeVisible(); owner.assertCurrent();
       } catch (reason) { failure = reason; throw reason; }
       finally {
         // 新用途不修改共享helper：在返回其收尾链前，本例先核专用apply成功终态；未知立即保留。
