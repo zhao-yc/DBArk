@@ -13,6 +13,7 @@ import { queryContextZh } from '../../src/renderer/locales/queryContext.zh-CN';
 import { ExplainPlanView } from '../../src/renderer/components/ExplainPlanView';
 import { ResultsGrid } from '../../src/renderer/components/ResultsGrid';
 import { queryResultSelectionFixture } from '../fixtures/query-result-selection';
+import { QueryRowDetails } from '../../src/renderer/queryRowDetails';
 
 // 仅隔离结果网格的DOM依赖，计划查看器、JSX元素和实际保存/执行函数均使用真实代码。
 vi.mock('../../src/renderer/components/ResultsGrid', () => ({ ResultsGrid: () => null }));
@@ -25,7 +26,7 @@ function fixture() {
   const source = readFileSync(new URL('../../src/renderer/components/QueryTab.tsx', import.meta.url), 'utf8'), file = ts.createSourceFile('QueryTab.tsx', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
   const functions: string[] = []; let body = '';
   function visit(node: ts.Node) {
-    if (ts.isFunctionDeclaration(node) && node.name && ['saveQuery', 'runQuery', 'invalidateResultSelection'].includes(node.name.text)) functions.push(node.getText(file));
+    if (ts.isFunctionDeclaration(node) && node.name && ['saveQuery', 'runQuery', 'invalidateResultSelection', 'selectActiveDetailRow', 'rowDetailAllowed'].includes(node.name.text)) functions.push(node.getText(file));
     if (ts.isJsxElement(node) && node.openingElement.attributes.properties.some(attribute => ts.isJsxAttribute(attribute) && attribute.name.getText(file) === 'className' && attribute.initializer && ts.isStringLiteral(attribute.initializer) && attribute.initializer.text === 'result-body')) body = node.getText(file);
     ts.forEachChild(node, visit);
   }
@@ -38,6 +39,8 @@ function fixture() {
   const frames: ReactElement[] = [], clearOutcome = vi.fn();
   // 本端口只核计划身份，结果选择回调保持关闭；执行路径仍清除真实选择实例。
   const context = createContext({ resultSelection: selection.resultSelection, selectionBinding: undefined, selectResultRows: vi.fn(() => false), require, exports: {}, tab, settings: { resultLimit: 10 }, busy: false, pin: null, outcome, result: outcome.results[0], resultIndex: 0,
+    // 真实初始控制器及未打开的派生视图；活动行回调也从组件AST提取，不另写处理器。
+    rowDetails: new QueryRowDetails(), setRowDetail: vi.fn(), setActiveDetailRow: vi.fn(), currentRowDetail: null, detailBinding: undefined, alive: { current: true }, connectionVersion: 0, document: { querySelector: () => null },
     // 此端口不打开列管理，普通结果的可见列随当前结果更新，不能捕获执行前的计划列。
     get visibleColumns(): unknown[] { return context.result?.columns ?? []; },
     task: { current: 'original-plan-task' }, sessionId: 'original-session', sessionRef: { current: 'original-session' }, busyRef: { current: false }, cancelledQuery: { current: '' }, parameterSession: { current: '' }, explainSource: { current: 'SELECT 1' },
@@ -50,7 +53,15 @@ function fixture() {
   });
   const code = functions.join('\n') + '\nglobalThis.render=()=>(' + body + ');globalThis.handlers={saveQuery,runQuery};';
   runInContext(ts.transpileModule(code, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX } }).outputText, context);
-  const child = () => (context.render() as ReactElement<{ children: ReactElement }>).props.children;
+  // 新增的真实详情容器只增加布局层；继续核对原ResultsGrid身份及原行列引用，不替换渲染表达式。
+  const child = () => {
+    const content = (context.render() as ReactElement<{ children: ReactElement<any> }>).props.children;
+    if (content.type !== 'div') return content;
+    expect(content.props.className).toBe('query-result-with-details');
+    const [grid, details] = content.props.children as [ReactElement<any>, unknown];
+    expect(grid.props.className).toBe('query-result-grid'); expect(details).toBeNull();
+    return grid.props.children as ReactElement;
+  };
   return { selection, context, invoke, frames, clearOutcome, outcome, child, save: context.handlers.saveQuery as (action: 'create' | 'update', name: string) => Promise<void>, execute: context.handlers.runQuery as (source: string) => Promise<void> };
 }
 
