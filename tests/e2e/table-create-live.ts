@@ -55,6 +55,9 @@ export function registerTableCreateUiTests() {
         expect(String(facts[0].version)).toMatch(/^8\.4\./); if (!environment.DBARK_TEST_EXPECTED_SERVER_UUID || facts[0].uuid !== environment.DBARK_TEST_EXPECTED_SERVER_UUID) throw Error('Root尚未绑定本轮实际服务器UUID');
         const connection = page(owner).locator('.connection-node').filter({ has: page(owner).getByRole('button', { name: context.connectionName, exact: true }) });
         const database = connection.locator('.database-row').filter({ has: page(owner).getByRole('button', { name: context.database, exact: true }) });
+        // 先实际展开原库目录，再验证创建后的刷新；聚焦折叠节点不代表目录已展开。
+        await database.getByRole('button', { name: context.database, exact: true }).click(); owner.assertCurrent();
+        await expect(database.getByRole('button', { name: context.database, exact: true })).toHaveAttribute('aria-expanded', 'true'); owner.assertCurrent();
         await database.getByRole('button', { name: context.database, exact: true }).focus(); owner.assertCurrent();
         await database.getByRole('button', { name: zh.sidebar.text017, exact: true }).click(); owner.assertCurrent();
         const designer = page(owner).getByRole('dialog', { name: formatText(zh.schema.text009, context.database), exact: true });
