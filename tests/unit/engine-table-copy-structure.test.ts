@@ -13,18 +13,23 @@ const original = "CREATE TABLE `t` (`id` bigint NOT NULL,`s` varchar(80) CHARACT
 let engine: Engine, definitions: Map<string, string>, ids: Map<string, string>, events: TaskEvent[], connections: ManagedConnection[], sent: string[], sequence: number;
 let version: string, uuid: string, os: string, lower: number, grants: string[], dependency: string, capability: { gipk: number; autocommit: number; partialRevokes: number }, nonempty: boolean, warning: number, closeFails: boolean;
 let fail: RegExp | undefined, hold: RegExp | undefined, held: { complete(error?: Error): void } | undefined, afterCreate: (() => void) | undefined;
+let initialMode: string;
+let counters: Map<string, unknown>, copiedAutoDefinition: string | undefined, expiry: string, columnTypeOverride: string | undefined, policy: Record<string, string>;
 let closing: Promise<void> | undefined, releaseClosing: (() => void) | undefined;
 /** 精确解析产品只读目录中的编码名称，预期DDL由测试独立断言，驱动不调用产品规划器。 */
 function nameOf(sql: string): string { const quoted = /^SHOW CREATE TABLE `db`\.`([^`]+)`/.exec(sql); if (quoted) return quoted[1]; const values = [...sql.matchAll(/X'([a-f0-9]*)'/g)].map(value => Buffer.from(value[1], 'hex').toString()); return values.at(-1)?.split('/').at(-1) ?? 't'; }
 /** 仅替换数据库驱动边界，完整读取、任务、缓存、锁、取消和关闭都运行真实Engine。 */
 function managed(signal?: AbortSignal): ManagedConnection {
-  const connection = new EventEmitter(), threadId = ++sequence; let mode = '', quote = 0, encoding = '', collation = '';
+  const connection = new EventEmitter(), threadId = ++sequence; let mode = initialMode, quote = 0, encoding = '', collation = '';
   const value = { connection, profile, signal, broken: false, status: { version, dialect: 'mysql', connectionId: threadId }, close: vi.fn(async () => { if (closing && definitions.has('t_copy')) await closing; if (closeFails) throw Error('关闭失败'); }) } as unknown as ManagedConnection;
   Object.assign(connection, { threadId, destroy: () => connection.emit('end'), query(sql: string, callback: (error: Error | null, rows?: unknown, fields?: unknown[]) => void) {
     sent.push(sql); const complete = (error?: Error) => queueMicrotask(() => {
       if (error || fail?.test(sql)) { callback(error ?? Error('模拟驱动失败')); return; }
       let rows: unknown = []; const name = nameOf(sql), source = definitions.get(name)!, context = { dialect: 'mysql' as const, mode: { noBackslashEscapes: mode.includes('NO_BACKSLASH_ESCAPES'), ansiQuotes: mode.includes('ANSI_QUOTES') } };
-      if (sql.startsWith('SET SESSION foreign_key_checks') || sql.startsWith('SET SESSION show_gipk')) rows = {};
+      if (sql === 'SET SESSION information_schema_stats_expiry = 0') rows = {};
+      else if (sql.startsWith('SELECT CAST(@@SESSION.information_schema_stats_expiry')) rows = [{ expiry }];
+      else if (sql.startsWith('SELECT CAST(@@SESSION.auto_increment_increment')) rows = [{ ...policy }];
+      else if (sql.startsWith('SET SESSION foreign_key_checks') || sql.startsWith('SET SESSION show_gipk')) rows = {};
       else if (sql.startsWith('SELECT @@SESSION.foreign_key_checks')) rows = [{ fk: 1, uq: 1 }];
       else if (sql.startsWith('SELECT @@SESSION.show_gipk')) rows = [{ show: 1 }];
       else if (sql.startsWith('SELECT @@SESSION.sql_mode AS sqlMode, @@hostname')) rows = [{ sqlMode: mode, hostname: 'offline', port: 3306, serverId: 7, currentUser: 'unit@host', connectionId: threadId, characterSetConnection: encoding, collationConnection: collation, quoteShowCreate: quote }];
@@ -36,8 +41,9 @@ function managed(signal?: AbortSignal): ManagedConnection {
       else if (sql.startsWith('SELECT @@SESSION.sql_generate')) rows = [{ ...capability }];
       else if (sql.startsWith('SHOW CREATE TABLE')) { if (!source) { callback(Error('对象不存在')); return; } rows = [{ Table: name, 'Create Table': source }]; }
       else if (sql.startsWith('SELECT c.CHARACTER_SET_NAME AS charset, t.TABLE_COLLATION')) rows = [{ charset: 'utf8mb4', collation: 'utf8mb4_bin' }];
+      else if (sql.startsWith('SELECT COLUMN_NAME AS name, DATA_TYPE')) rows = parseTableColumnDefinition(source, context).columns.map(column => ({ name: column.name, dataType: column.type.raw.split(/[ (]/)[0], columnType: columnTypeOverride ?? column.type.raw, extra: column.attributes.some(attribute => attribute.kind === 'auto-increment') ? 'auto_increment' : '' }));
       else if (sql.startsWith('SELECT COLUMN_NAME AS name')) rows = parseTableColumnDefinition(source, context).columns.map(column => ({ name: column.name, nullable: column.nullable === false ? 'NO' : 'YES', extra: column.attributes.some(attribute => attribute.kind === 'auto-increment') ? 'auto_increment' : '', charset: column.name === 's' ? 'latin1' : null, collation: column.name === 's' ? 'latin1_bin' : null }));
-      else if (sql.startsWith('SELECT TABLE_TYPE AS kind')) rows = [{ kind: 'BASE TABLE', engine: 'InnoDB', rowFormat: 'Dynamic', comment: readTableCommentDefinition(source, context).comment, autoIncrement: source.includes('AUTO_INCREMENT') ? '9' : null }];
+      else if (sql.startsWith('SELECT TABLE_TYPE AS kind')) rows = [{ kind: 'BASE TABLE', engine: 'InnoDB', rowFormat: 'Dynamic', comment: readTableCommentDefinition(source, context).comment, autoIncrement: counters.get(name) ?? null }];
       else if (sql.startsWith('SELECT @@version_compile_os')) rows = [{ os, lowerNames: lower }];
       else if (sql.startsWith('SELECT PARTITION_NAME')) rows = [{ name: dependency === 'partition' ? 'p0' : null }];
       else if (sql.startsWith('SELECT CAST(TABLE_ID AS CHAR)')) rows = [{ id: ids.get(name), name: 'db/' + name }];
@@ -50,7 +56,7 @@ function managed(signal?: AbortSignal): ManagedConnection {
       else if (sql.startsWith('CREATE TABLE')) {
         const match = /^CREATE TABLE `db`\.`([^`]+)` LIKE `db`\.`t`;$/u.exec(sql); if (!match) { callback(Error('非法测试DDL')); return; }
         if (definitions.has(match[1])) { callback(Error('服务器同名冲突')); return; }
-        definitions.set(match[1], definitions.get('t')!.replace('CREATE TABLE `t`', 'CREATE TABLE `' + match[1] + '`')); ids.set(match[1], '9007199254740997'); afterCreate?.(); rows = { affectedRows: 0, warningStatus: warning };
+        definitions.set(match[1], (copiedAutoDefinition ?? definitions.get('t')!).replace('CREATE TABLE `t`', 'CREATE TABLE `' + match[1] + '`')); counters.set(match[1], copiedAutoDefinition ? '1' : null); ids.set(match[1], '9007199254740997'); afterCreate?.(); rows = { affectedRows: 0, warningStatus: warning };
       }
       else if (/^SELECT 1 FROM `db`\.`[^`]+` LIMIT 1$/.test(sql)) rows = nonempty ? [{ 1: 1 }] : [];
       else { callback(Error('未定义离线端口：' + sql)); return; }
@@ -62,9 +68,15 @@ async function get(revision = 1): Promise<TableCopyStructureGetOutput> { return 
 async function preview(snapshot: TableCopyStructureGetOutput, newName = 't_copy'): Promise<TableCopyStructurePreviewOutput> { return engine.handle('schema.tableCopyStructure.preview', { snapshotId: snapshot.snapshotId, newName, taskId: 'preview-' + sequence, connectionRevision: 1 }); }
 async function apply(value: TableCopyStructurePreviewOutput, extra: Record<string, unknown> = {}) { return engine.handle('schema.tableCopyStructure.apply', { previewToken: value.previewToken, taskId: 'apply-' + sequence, connectionRevision: 1, confirmation: 'db.' + value.newName, acknowledgements: value.requiredAcknowledgements, ...extra }); }
 const writes = () => sent.filter(sql => /^(?:CREATE|ALTER|DROP|RENAME|INSERT|UPDATE|DELETE|TRUNCATE)\b/.test(sql));
+/** 独立原生语义fixture：固定目标定义不含表尾计数，不调用产品比较器生成期望。 */
+function autoSource(value: string) {
+  const bare = original.replace('bigint NOT NULL', 'bigint unsigned NOT NULL AUTO_INCREMENT').replace('DEFAULT NULL', "DEFAULT 'AUTO_INCREMENT=99'").replace('来源说明', 'AUTO_INCREMENT=88');
+  copiedAutoDefinition = bare; definitions.set('t', value === '1' ? bare : bare.replace('ENGINE=InnoDB', 'ENGINE=InnoDB AUTO_INCREMENT=' + value)); counters.set('t', value);
+}
 beforeEach(async () => {
   definitions = new Map([['t', original]]); ids = new Map([['t', '9007199254740995']]); events = []; connections = []; sent = []; sequence = 0;
   version = '8.4.11'; uuid = '11111111-2222-3333-4444-555555555555'; os = 'Linux'; lower = 0; grants = ["GRANT SELECT, SHOW VIEW, TRIGGER, PROCESS, CREATE ON *.* TO 'unit'@'host'"]; dependency = ''; capability = { gipk: 0, autocommit: 1, partialRevokes: 0 }; nonempty = false; warning = 0; closeFails = false; fail = hold = undefined; held = undefined; afterCreate = undefined;
+  initialMode = ''; counters = new Map([['t', null]]); copiedAutoDefinition = undefined; expiry = '0'; columnTypeOverride = undefined; policy = { sessionIncrement: '1', sessionOffset: '1', globalIncrement: '1', globalOffset: '1', lockMode: '2', readOnly: '0', superReadOnly: '0', innodbReadOnly: '0', forceRecovery: '0' };
   closing = undefined; releaseClosing = undefined;
   mock.connect.mockReset().mockImplementation(async (_profile, _database, signal) => managed(signal)); mock.execute.mockReset().mockImplementation(async (_managed, sql) => { if (String(sql).startsWith('KILL CONNECTION')) held?.complete(Error('取消终态')); return { rows: [] }; });
   engine = new Engine(event => events.push(event)); await engine.handle('connections.open', { id: profile.id, profile });
@@ -86,8 +98,7 @@ describe('真实Engine复制空表结构（仅替换驱动）', () => {
     if (kind === 'role') grants.push("GRANT 'role' TO 'unit'@'host'"); if (kind === 'missing-create') grants = ["GRANT SELECT, SHOW VIEW, TRIGGER, PROCESS ON *.* TO 'unit'@'host'"];
     expect((await get()).writable).toBe(false); expect(writes()).toEqual([]);
   });
-  it.each(['auto', 'check', 'fulltext', 'physical', 'generated', 'hidden'])('%s未证明源结构只读', async kind => {
-    if (kind === 'auto') definitions.set('t', original.replace('bigint NOT NULL', 'bigint NOT NULL AUTO_INCREMENT'));
+  it.each(['check', 'fulltext', 'physical', 'generated', 'hidden'])('%s未证明源结构只读', async kind => {
     if (kind === 'check') definitions.set('t', original.replace(',PRIMARY KEY', ',CONSTRAINT `positive` CHECK (`id` > 0),PRIMARY KEY'));
     if (kind === 'fulltext') definitions.set('t', original.replace('KEY `s_idx`', 'FULLTEXT KEY `s_idx`'));
     if (kind === 'physical') definitions.set('t', original + ' KEY_BLOCK_SIZE=8');
@@ -137,5 +148,40 @@ describe('真实Engine复制空表结构（仅替换驱动）', () => {
     let plan = await preview(await get()); await expect(apply(plan, { connectionRevision: 2 })).rejects.toThrow('连接');
     const snapshot = await get(); plan = await preview(snapshot); await engine.handle('schema.tableCopyStructure.release', { snapshotId: snapshot.snapshotId }); await expect(apply(plan)).rejects.toThrow('失效');
     plan = await preview(await get()); vi.spyOn(Date, 'now').mockReturnValue(Date.now() + 120001); await expect(apply(plan)).rejects.toThrow('失效'); expect(writes()).toEqual([]);
+  });
+  it.each(['42', '9007199254740993', '1'])('源计数%s：准确展示计划、保留自增属性及文字量，唯一CREATE后新计数明确为1', async value => {
+    autoSource(value); const snapshot = await get(); expect(snapshot.writable, snapshot.reasons.join('；')).toBe(true); expect(snapshot.autoIncrement).toMatchObject({ sourceValue: value, expectedNewValue: '1', column: { name: 'id', maximum: '18446744073709551615' } });
+    const plan = await preview(snapshot); expect(plan.autoIncrement).toEqual(snapshot.autoIncrement); expect(plan.requiredAcknowledgements).toContain('auto-increment-copy'); expect(writes()).toEqual([]);
+    const result = await apply(plan); expect(result).toMatchObject({ ddlCompleted: true, structureVerified: true, definitionVerified: true, counter: { state: 'matched', sourceValue: value, expectedValue: '1', actualValue: '1' }, after: { autoIncrement: '1' } }); expect(definitions.get('t_copy')).toBe(copiedAutoDefinition!.replace('CREATE TABLE `t`', 'CREATE TABLE `t_copy`')); expect(counters.get('t')).toBe(value); expect(writes()).toEqual([plan.sql]);
+  });
+  it.each(['value', 'metadata'])('自增来源%s在预览后变化零DDL，旧计数不能被结构比较豁免', async kind => {
+    autoSource('42'); const plan = await preview(await get()); counters.set('t', '43'); if (kind === 'value') definitions.set('t', definitions.get('t')!.replace('AUTO_INCREMENT=42', 'AUTO_INCREMENT=43'));
+    await expect(apply(plan)).rejects.toThrow(); expect(writes()).toEqual([]); await expect(apply(plan)).rejects.toThrow('失效');
+  });
+  it.each(['expiry', 'number', 'missing', 'omitted-nondefault', 'column', 'permission', 'sessionIncrement', 'sessionOffset', 'globalIncrement', 'readOnly', 'mode'])('自增能力%s未知/非默认只读，不要求ALTER或修计数', async kind => {
+    autoSource('42'); if (kind === 'mode') initialMode = 'NO_FIELD_OPTIONS'; if (kind === 'expiry') expiry = '86400'; if (kind === 'number') counters.set('t', 42); if (kind === 'missing') counters.set('t', null); if (kind === 'omitted-nondefault') definitions.set('t', definitions.get('t')!.replace(' AUTO_INCREMENT=42', '')); if (kind === 'column') columnTypeOverride = 'int'; if (kind === 'permission') grants = ["GRANT SELECT, SHOW VIEW, TRIGGER ON *.* TO 'unit'@'host'"]; if (Object.hasOwn(policy, kind)) policy[kind] = '2';
+    let writable = false; try { writable = (await get()).writable; } catch { /* 缺失或非字符串计数可在完整读取层直接拒绝。 */ } expect(writable).toBe(false); expect(writes()).toEqual([]);
+  });
+  it('缺少自增专属确认先消费令牌，绝不发送CREATE或第二DDL', async () => {
+    autoSource('42'); const plan = await preview(await get()); await expect(apply(plan, { acknowledgements: plan.requiredAcknowledgements.filter(value => value !== 'auto-increment-copy') })).rejects.toThrow('确认'); await expect(apply(plan)).rejects.toThrow('失效'); expect(writes()).toEqual([]);
+  });
+  it('自增来源同快照并发预览仍只允许一次CREATE', async () => {
+    autoSource('42'); const snapshot = await get(), a = await preview(snapshot), b = await preview(snapshot, 'other');
+    const results = await Promise.allSettled([apply(a), apply(b, { taskId: 'parallel-auto' })]); expect(results.filter(value => value.status === 'fulfilled')).toHaveLength(1); expect(writes()).toEqual([a.sql]);
+  });
+  it('自增来源执行前同步取消零CREATE；成功ACK后取消保留完成但计数未核验', async () => {
+    autoSource('42'); let plan = await preview(await get()), cancellation: Promise<unknown> | undefined;
+    (engine as unknown as { emit: (event: TaskEvent) => void }).emit = event => { events.push(event); if (!cancellation && event.tableCopyStructure?.phase === 'executing') cancellation = engine.handle('query.cancel', { taskId: event.taskId }); };
+    await expect(apply(plan)).rejects.toThrow(); await cancellation; expect(writes()).toEqual([]);
+    cancellation = undefined; (engine as unknown as { emit: (event: TaskEvent) => void }).emit = event => { events.push(event); if (!cancellation && event.tableCopyStructure?.phase === 'verifying') cancellation = engine.handle('query.cancel', { taskId: event.taskId }); };
+    plan = await preview(await get()); const result = await apply(plan); await cancellation; expect(result).toMatchObject({ ddlCompleted: true, definitionVerified: false, counter: { state: 'unverified' } }); expect(result.counter?.actualValue).toBeUndefined(); expect(writes()).toEqual([plan.sql]);
+  });
+  it.each(['2', '9007199254740994'])('新表准确计数%s不符时结构可独立核验，但不报告完整成功、不再发ALTER', async value => {
+    autoSource('42'); const plan = await preview(await get()); afterCreate = () => { counters.set('t_copy', value); definitions.set('t_copy', definitions.get('t_copy')!.replace('ENGINE=InnoDB', 'ENGINE=InnoDB AUTO_INCREMENT=' + value)); };
+    const result = await apply(plan); expect(result).toMatchObject({ ddlCompleted: true, structureVerified: true, definitionVerified: false, counter: { state: 'different', actualValue: value, expectedValue: '1' } }); expect(writes()).toEqual([plan.sql]); expect(result.verificationError).toContain('已完成');
+  });
+  it.each(['sourceCounter', 'missingTargetCounter', 'lostAttribute', 'targetDefault', 'type'])('自增后核%s变化保留已创建事实，不能剔除列/默认值或伪造计数', async kind => {
+    autoSource('42'); const plan = await preview(await get()); afterCreate = () => { if (kind === 'sourceCounter') { counters.set('t', '43'); definitions.set('t', definitions.get('t')!.replace('AUTO_INCREMENT=42', 'AUTO_INCREMENT=43')); } if (kind === 'missingTargetCounter') counters.set('t_copy', null); if (kind === 'lostAttribute') definitions.set('t_copy', definitions.get('t_copy')!.replace(' NOT NULL AUTO_INCREMENT', ' NOT NULL')); if (kind === 'targetDefault') definitions.set('t_copy', definitions.get('t_copy')!.replace('AUTO_INCREMENT=99', 'AUTO_INCREMENT=98')); if (kind === 'type') definitions.set('t_copy', definitions.get('t_copy')!.replace('bigint unsigned', 'bigint')); };
+    const result = await apply(plan); expect(result).toMatchObject({ ddlCompleted: true, definitionVerified: false }); if (kind === 'missingTargetCounter') expect(result.counter?.state).toBe('unverified'); expect(writes()).toEqual([plan.sql]);
   });
 });
