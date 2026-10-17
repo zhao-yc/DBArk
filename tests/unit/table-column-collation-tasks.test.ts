@@ -229,3 +229,19 @@ it('adapter读取未知目录错误不包装为能力关闭', async () => {
   // 没有伪造observed事实；真实共用查询因缺失传输端口抛错，adapter必须原样失败。
   await expect(readColumnCollationTaskFacts(context, f.target, f.state.current.base, f.state.current.references)).rejects.toThrow();
 });
+it('投影前真正Node事件循环已排队取消，get必须拒绝且不登记snapshot或preview', async () => {
+  const f = fixture(), error = new Error('get投影排队取消');
+  f.state.factHook = () => { setImmediate(() => f.controllers.at(-1)!.abort(error)); };
+  await expect(f.get()).rejects.toBe(error);
+  expect(f.sent.filter(sql => sql.includes('INNODB_TABLES'))).toHaveLength(2);
+  expect(f.scope('snapshot').size).toBe(0); expect(f.scope('preview').size).toBe(0); expect(f.state.closed).toBe(1);
+  expect(f.sent.filter(sql => sql.startsWith('ALTER'))).toHaveLength(0);
+});
+it('后核投影排队取消保留OK完成但不伪核验，apply令牌已消费', async () => {
+  const f = fixture(), value = await f.preview(await f.get());
+  f.state.factHook = () => { if (f.state.current.base.encodings[1].collation === 'utf8mb4_unicode_ci') setImmediate(() => f.controllers.at(-1)!.abort(new Error('后核投影取消'))); };
+  const output = await f.apply(value);
+  expect(output).toMatchObject({ ddlSubmitted: true, ddlCompleted: true, definitionVerified: false }); expect(output.verificationError).toMatch(/取消/);
+  expect(f.options.at(-1)?.columnPatch).toMatchObject({ ddlCompleted: true, definitionVerified: false, outcome: 'succeeded' });
+  await expect(f.apply(value)).rejects.toThrow('已使用'); expect(f.sent.filter(sql => sql.startsWith('ALTER'))).toHaveLength(1);
+});

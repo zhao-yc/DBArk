@@ -237,7 +237,7 @@ export class TableColumnPatchTasks {
         let columns = baseColumns, catalog: TableColumnGetOutput['collationCatalog'];
         let additional = 0;
         if (collation) {
-          columns = columnCollationTaskViews(baseColumns, read, collation); catalog = columnCollationTaskCatalog(collation);
+          columns = await columnCollationTaskViews(baseColumns, read, collation, context); catalog = columnCollationTaskCatalog(collation);
           additional = collation.bytes + Buffer.byteLength(JSON.stringify(catalog)) + Buffer.byteLength(JSON.stringify(columns.map(column => column.collation ?? null)));
           if (!this.fitsAdditional(baseBytes, additional)) { collation = undefined; columns = baseColumns; catalog = undefined; additional = 0; }
         }
@@ -347,8 +347,9 @@ export class TableColumnPatchTasks {
           const fresh = await readColumnCollationTaskFacts(context, snapshot.target, after, collationBefore.facts.references);
           if (fresh.kind !== 'ready') throw new Error('列排序规则后核目录不可用');
           const verified = verifyColumnCollationExecution(collationBefore.facts, fresh.value.facts, collationBefore.physical, fresh.value.physical, preview.plan);
+          const columns = await columnCollationTaskViews(views(document, snapshot.refs, after.serverVersion), after, fresh.value, context);
+          output.after = { ddlHash: hash(after.source), columns };
           output.definitionVerified = progress.definitionVerified = verified.definitionVerified;
-          output.after = { ddlHash: hash(after.source), columns: columnCollationTaskViews(views(document, snapshot.refs, after.serverVersion), after, fresh.value) };
           if (verified.tableIdChanged) output.warnings.push('服务器操作后物理表编号已变化；定义核验不据此判断执行算法。');
           if (!verified.definitionVerified) output.verificationError = 'DDL 已完成，但列排序规则专用后核未通过；请核对最新定义，不要重复执行。' + verified.reasons.slice(0, 8).join('；').slice(0, 2048);
         } else {

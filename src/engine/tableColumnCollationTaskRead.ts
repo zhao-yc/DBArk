@@ -5,6 +5,7 @@ import type { IndexReferenceNames } from './tableIndexRead';
 import type { StructureDefinitionRead, StructureTaskContext } from './structureDefinition';
 import type { TableColumnPatchTarget, TableColumnView } from '../shared/tableColumnPatches';
 import type { TableEncodingPair } from '../shared/tableDefaultEncoding';
+import { setImmediate as yieldEventLoop } from 'node:timers/promises';
 
 export type ColumnCollationObservedPhysical = Extract<ColumnCollationPhysicalResult, { status: 'observed' }>;
 /** 同一轮完整事实和前后物理观测，仅供Tasks内存快照使用。 */
@@ -62,8 +63,21 @@ export function columnCollationTaskCatalog(value: ColumnCollationTaskFacts): Tab
   return value.facts.catalog.candidates.map(pair => ({ charset: pair.charset, collation: pair.collation }));
 }
 
-/** current只取实际有效列编码；可编辑性必须通过真实候选的原范围门，不能使用权限布尔推断。 */
-export function columnCollationTaskViews(columns: TableColumnView[], base: StructureDefinitionRead, value: ColumnCollationTaskFacts): TableColumnView[] {
+/** 投影不能把取消、断线或已中止会话当成单列只读资格；沿用原context的取消原因。 */
+function projectionActive(context: StructureTaskContext): void {
+  context.checkCancelled();
+  if (context.managed.signal?.aborted) throw context.managed.signal.reason ?? new Error('列排序规则投影已取消');
+  if (context.managed.broken) throw new Error('列排序规则投影的结构连接已断开');
+}
+
+/** 真正让出Node事件循环，Promise微任务不足以处理已排队的取消事件。 */
+async function projectionTurn(context: StructureTaskContext): Promise<void> {
+  projectionActive(context); await yieldEventLoop(); projectionActive(context);
+}
+
+/** current与候选硬门保持；每四列及不足四列的尾批协作让出，完成前仍检查原任务终态。 */
+export async function columnCollationTaskViews(columns: TableColumnView[], base: StructureDefinitionRead, value: ColumnCollationTaskFacts, context: StructureTaskContext): Promise<TableColumnView[]> {
+  await projectionTurn(context);
   const encodings = new Map(base.encodings.map(encoding => [encoding.name, encoding]));
   const alternatives = new Map<string, TableEncodingPair[]>();
   for (const pair of value.facts.catalog.candidates) {
@@ -71,17 +85,25 @@ export function columnCollationTaskViews(columns: TableColumnView[], base: Struc
     if (list.length < 2) list.push(pair);
     alternatives.set(pair.charset, list);
   }
-  return columns.map(column => {
+  const projected: TableColumnView[] = [];
+  for (const [index, column] of columns.entries()) {
+    projectionActive(context);
     const encoding = encodings.get(column.name);
-    if (!encoding || !encoding.charset || !encoding.collation || base.encodings.filter(item => item.name === column.name).length !== 1) return column;
-    const current = { charset: encoding.charset, collation: encoding.collation };
-    const next = alternatives.get(current.charset)?.find(pair => pair.collation !== current.collation);
-    let access: NonNullable<TableColumnView['collation']>['access'] = { editable: false, reason: '当前列不满足普通无索引CHAR/VARCHAR、完整定义及目录权限范围' };
-    if (!next) access = { editable: false, reason: '当前字符集没有其它可用排序规则' };
+    if (!encoding || !encoding.charset || !encoding.collation || base.encodings.filter(item => item.name === column.name).length !== 1) projected.push(column);
     else {
-      // 此处只运行纯候选验证，不生成可执行授权；preview/apply仍独立重读全部事实。
-      try { buildColumnCollationDefinition(value.facts, column.columnRef, next); access = { editable: true }; } catch { /* 范围门拒绝仅使此列只读，不扩大原七属性能力。 */ }
+      const current = { charset: encoding.charset, collation: encoding.collation };
+      const next = alternatives.get(current.charset)?.find(pair => pair.collation !== current.collation);
+      let access: NonNullable<TableColumnView['collation']>['access'] = { editable: false, reason: '当前列不满足普通无索引CHAR/VARCHAR、完整定义及目录权限范围' };
+      if (!next) access = { editable: false, reason: '当前字符集没有其它可用排序规则' };
+      else {
+        // 仅纯候选范围验证可变为单列只读；任务终态检查必须位于此catch之外。
+        try { buildColumnCollationDefinition(value.facts, column.columnRef, next); access = { editable: true }; } catch { /* 不扩大原七属性能力。 */ }
+      }
+      projected.push({ ...column, collation: { current, access } });
     }
-    return { ...column, collation: { current, access } };
-  });
+    projectionActive(context);
+    if ((index + 1) % 4 === 0 || index === columns.length - 1) await projectionTurn(context);
+  }
+  projectionActive(context);
+  return projected;
 }
