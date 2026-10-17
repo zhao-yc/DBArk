@@ -1,5 +1,5 @@
 import { zh } from '../locales/zh-CN';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { DataGrid, SelectColumn, type Column } from 'react-data-grid';
 import type { CellValue, DataRow, ResultColumn, SortRule } from '../../shared/contracts';
 import { cellPreview, errorMessage, ownCell } from '../lib';
@@ -10,18 +10,28 @@ import { isBinaryCell } from '../binaryCell';
 import { DataTypeColor } from './DataTypeColor';
 import { useWorkspace } from '../store';
 import { cellClipboardType, encodeClipboard } from '../gridClipboard';
+import type { ResultGridSelection } from '../resultExport';
 
 /** 任意结果的协议BLOB也可能是TEXT；没有真实结构时只认显式字节包装，NULL仍常规展示。 */
 export function isResultBinaryCell(value: CellValue | undefined): boolean { return isBinaryCell(value); }
 
 /** 任意查询结果只读；支持单格或勾选记录复制，始终保留原始值用于剪贴板。 */
-export function ResultsGrid({ columns, rows, onActiveRowChange, sort, onSortChange }: { columns: ResultColumn[]; rows: DataRow[]; onActiveRowChange?: (row: DataRow | null) => void; sort?: SortRule[]; onSortChange?: (sort: SortRule[]) => void }) {
+export function ResultsGrid({ columns, rows, onActiveRowChange, sort, onSortChange, selectionScope, onSelectionChange }: { columns: ResultColumn[]; rows: DataRow[]; onActiveRowChange?: (row: DataRow | null) => void; sort?: SortRule[]; onSortChange?: (sort: SortRule[]) => void; selectionScope?: object; onSelectionChange?(selection: ResultGridSelection): void }) {
   const theme = useWorkspace(state => state.settings.theme);
   const dataTypeColors = useWorkspace(state => state.settings.dataTypeColors === true);
-  const [selectedRows, setSelectedRows] = useState<ReadonlySet<number>>(new Set());
+  const scope = useMemo(() => ({ columns, rows, selectionScope }), [columns, rows, selectionScope]);
+  const currentScope = useRef(scope); currentScope.current = scope;
+  const [selection, setSelection] = useState<{ scope: typeof scope; indices: ReadonlySet<number> }>();
+  const selectedRows = selection?.scope === scope ? selection.indices : new Set<number>();
+  /** 旧网格回调在首次effect前也不能覆盖新选择；复制仍沿用同一组当前勾选行。 */
+  function setSelectedRows(indices: ReadonlySet<number>) {
+    if (currentScope.current !== scope) return;
+    const next = new Set(indices); setSelection({ scope, indices: next });
+    onSelectionChange?.({ scope: selectionScope ?? scope, rows, columns, indices: next });
+  }
   const [binary, setBinary] = useState<{ row: DataRow; key: string; rows: DataRow[]; columns: ResultColumn[] } | null>(null);
   const rowIndexes = useMemo(() => new Map(rows.map((row, index) => [row, index])), [rows]);
-  useEffect(() => { setSelectedRows(new Set()); setBinary(null); onActiveRowChange?.(null); }, [columns, rows]);
+  useEffect(() => { setBinary(null); onActiveRowChange?.(null); }, [columns, rows]);
   /** 任意 SQL 结果仅打开只读查看器，绝不从列名推测写表定位或提供写入回调。 */
   function viewBinary(row: DataRow, key: string) { if (isResultBinaryCell(ownCell(row, key))) setBinary({ row, key, rows, columns }); }
   // 标题使用用户可见列名，值仍按唯一内部键定位；重复别名不能导致读取另一列。
