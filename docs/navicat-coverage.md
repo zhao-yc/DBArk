@@ -1,5 +1,7 @@
 # Navicat 全功能覆盖目标
 
+后续高频产品3ad已完成5606项完整单元、类型和构建，CSV选列及单表删除两个正式Windows源码界面身份已分别单次通过并核资源清零，见[整合与实库检查点](../tests/integration/acceptance-frequency-csv-drop-20261017.md)。DROP旧超时、Root一次定位错误及修正链均保留；最终测试头ef8仅改正式测试，不把旧失败改成通过。新功能及三格式取消修复尚未进入公开0.20标签，安装/macOS及取消MDL服务器逐ID终态继续。
+
 当前公开开发预览为[0.20](https://github.com/zhao-yc/DBArk/releases/tag/v0.20.0)：12附件、11独立SHA、1264源码blob已核对，公开Windows NSIS六项真实安装回归通过并完成卸载、六实例资源核零，见[公开后验收](../tests/integration/acceptance-v020-public-20261017.md)。表导出取消提交窗口已知问题保留，后续修复不计入本标签；下方旧发行状态均保留其历史来源。
 
 后续历史时间范围固定390d已完成49项相关回归、类型和构建及一项正式Windows界面，见[时间筛选实证](../tests/integration/acceptance-history-time-ui-20261017.md)。新功能、CSV修复的完整整合回归及实库继续，不以旧测试或纯检查代替。
