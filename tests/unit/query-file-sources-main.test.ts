@@ -9,6 +9,7 @@ import { createContext, runInContext } from 'node:vm';
 import ts from 'typescript';
 import { ColumnsMainCapabilities } from '../../src/main/columnsMainCapabilities';
 import { QueryFileSources } from '../../src/main/queryFileSources';
+import { QueryInsertExports } from '../../src/main/queryInsertExports';
 import { validateCommand } from '../../src/shared/validation';
 
 /** 提取实际Main函数及IPC回调，不复制业务分发或默认放行窗口门。 */
@@ -30,6 +31,12 @@ function mainPort() {
   const ramStore = { saveTask: (task: TaskRecord) => { records.push(task); }, queryFileSource: () => undefined, queryFileDocument: (id: string) => { if (id !== 'one') throw Error('未知文档'); return { token: document, tab }; }, queryFileSourceRecords: () => [], commitQueryFileSource: () => { throw Error('本例不得持久化'); }, releaseQueryFileSource: () => false, queryRecentFiles: () => [], queryRecentFile: () => undefined, forgetRecentFile: () => false };
   const service = new QueryFileSources({ store: ramStore, report: event => publish(event), choose: async () => { choices++; return choose(); }, reserve: async () => { throw Error('本例不得写文件'); } });
   const context = createContext({ structureTokens: new Map(), sessions: new Map(), connectionConfig: { assertAvailable: (id: unknown) => { if (id !== undefined) throw Error('本地任务状态不得建立数据库目标'); } }, taskCancelSnapshot, tasks: new Map(), store: ramStore, completionTasks: new Set(), tableApplyReceipts: undefined, pendingQueryHistory: new Map(), exportProgress: new Map(), structureProgress: new Map(), lastPersist: new Map(), persistAuxiliary: (action: () => void) => action(), persistedTaskMessage, columnsMain: owner, queryFileSources: service, window, rendererURL: frame.url, validateCommand, shuttingDown: false, rendererSettingsCurrent: true, rendererHasSettings: true, queryFileOperations: new Set(), Error, Promise });
+  // 仅补真实INSERT初始依赖，文件来源任务不被登记为INSERT；原query.cancel继续进入原服务。
+  context.queryInsertExports = new QueryInsertExports(new Map(), {
+    assert: value => owner.assertCapturedOwner(value), same: (left, right) => owner.sharesDocumentOwner(left, right),
+    revision: () => 0, session: id => context.sessions.get(id), closing: () => context.shuttingDown,
+    stop: async () => { throw Error('文件来源夹具未登记INSERT，不得停止数据库任务'); }
+  });
   const code = declarations.join('\n') + '\nglobalThis.handler = ' + callback + ';';
   runInContext(ts.transpileModule(code, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None } }).outputText, context);
   publish = event => context.taskEvent(event);
