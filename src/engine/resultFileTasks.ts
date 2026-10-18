@@ -5,6 +5,7 @@ import { AtomicFile, nativeAtomicFileIO, type AtomicFileIO } from './atomicFile'
 import { assertResultSqlData, resultSqlLimits, resultSqlSelectionSchema, type ResultSqlTarget } from '../shared/resultSql';
 import { resultSqlZh } from '../shared/resultSql.zh-CN';
 import { resultSqlRowWriter } from './resultSql';
+import { csvExportDelimiter } from '../shared/csvExport';
 
 export type ResultFileIO = AtomicFileIO;
 interface FileTask { cancelled: boolean; committing: boolean; done: Promise<void>; finish(): void; }
@@ -30,7 +31,7 @@ export class ResultFileTasks {
     if (!input.taskId || this.has(input.taskId)) throw new Error('任务编号为空或任务已在执行');
     if (!input.filePath) throw new Error('主进程未提供已授权文件路径');
     if (!['csv', 'json', 'sql'].includes(input.format)) throw new Error(resultSqlZh.formats);
-    validateResultExportData(input.result); const encoding = encodingName(input.encoding);
+    validateResultExportData(input.result); const encoding = encodingName(input.encoding), delimiter = csvExportDelimiter(input.format, input.csvDelimiter);
     let sqlTarget: ResultSqlTarget | undefined;
     if (input.format === 'sql') {
       const parsed = resultSqlSelectionSchema.safeParse(input.sql);
@@ -50,11 +51,11 @@ export class ResultFileTasks {
     try {
       file = await AtomicFile.create(input.filePath, encoding, checkCancelled, () => { task.committing = true; }, this.io, input.format === 'sql' ? resultSqlLimits.fileBytes : undefined);
       if (encoding === 'utf16le') await write('\uFEFF');
-      await write(input.format === 'sql' ? resultSqlZh.header : input.format === 'csv' ? columns.map(column => csvHeader(column.exportName)).join(',') + '\r\n' : '[\n');
+      await write(input.format === 'sql' ? resultSqlZh.header : input.format === 'csv' ? columns.map(column => csvHeader(column.exportName, delimiter)).join(delimiter) + '\r\n' : '[\n');
       for (const row of input.result.rows) {
         // 按列描述顺序取值，不能依赖行对象的枚举顺序；手工构造 JSON 键值对保留原型同名键。
         await write(sqlRow ? sqlRow(row) : input.format === 'csv'
-          ? columns.map(column => csvCell(row[column.key])).join(',') + '\r\n'
+          ? columns.map(column => csvCell(row[column.key], delimiter)).join(delimiter) + '\r\n'
           : (count ? ',\n' : '') + '{' + columns.map(column => JSON.stringify(column.exportName) + ':' + JSON.stringify(row[column.key])).join(',') + '}');
         count++;
         if (count % 250 === 0) this.emit({ taskId: input.taskId, status: 'running', progress: Math.floor(count / input.result.rows.length * 98), rows: count, message: `已写入 ${count}/${input.result.rows.length} 行` });

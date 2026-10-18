@@ -8,6 +8,7 @@ import { streamArray } from 'stream-json/streamers/StreamArray';
 import type { CellValue, DataRow } from '../shared/contracts';
 import { serializeCell } from './sql';
 import { csvImportDelimiter, type CsvImportDelimiter } from '../shared/csvImport';
+import type { CsvExportDelimiter } from '../shared/csvExport';
 
 /** 保存 JSON 数字的原始 token，避免经过 JavaScript 浮点数再序列化。 */
 class JsonNumber {
@@ -39,13 +40,13 @@ export function encodingName(encoding: string): string {
 }
 
 /** CSV 中 \\N 表示 NULL，反斜线开头的文本以额外反斜线转义，保持往返无歧义。 */
-export function csvCell(value: CellValue): string {
+export function csvCell(value: CellValue, delimiter: CsvExportDelimiter = ','): string {
   let text = value === null ? '\\N' : typeof value === 'object' ? 'base64:' + value.base64 : String(value);
   if (value !== null && text.startsWith('\\')) text = '\\' + text;
-  return !text.length || /[",\r\n]/.test(text) ? '"' + text.replaceAll('"', '""') + '"' : text;
+  return !text.length || /["\r\n]/.test(text) || text.includes(delimiter) ? '"' + text.replaceAll('"', '""') + '"' : text;
 }
 /** 标题行只执行 CSV 引号处理，不采用数据字段的 NULL/反斜线协议。 */
-export function csvHeader(name: string): string { return !name.length || /[",\r\n]/.test(name) ? '"' + name.replaceAll('"', '""') + '"' : name; }
+export function csvHeader(name: string, delimiter: CsvExportDelimiter = ','): string { return !name.length || /["\r\n]/.test(name) || name.includes(delimiter) ? '"' + name.replaceAll('"', '""') + '"' : name; }
 /** 还原 CSV 的 NULL 与首部反斜线协议，空字符串保持为空字符串。 */
 export function csvValue(value: string): CellValue {
   if (value === '\\N') return null;
