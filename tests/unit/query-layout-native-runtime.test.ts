@@ -9,7 +9,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { EditorIndentNativeRun, recordIndentNativePageError } from '../e2e/editor-indentation-native-owner';
 import { bindQueryLayoutNativeEnvironment } from '../e2e/query-layout-native-gate';
 import { sealEditorIndentLaunchIdentity } from '../e2e/editor-indentation-native-identity';
-import { observeNativeStartup } from '../e2e/editor-native-startup-diagnostics';
+import { observeNativeStartup, createNativeStartupWaits } from '../e2e/editor-native-startup-diagnostics';
 import { openNativeProgress } from '../../scripts/native-editor-progress.mjs';
 // 原提取夹具未开启诊断；若误开启只能使用显式RAM文件端口，禁止落到真实FS。
 const forbiddenProgressIO = new Proxy({}, { get() { throw Error('原VM夹具未配置RAM阶段文件端口'); } });
@@ -50,6 +50,7 @@ function fixture(mode: '正常' | '无握手关闭' | 'PID权限错误' | '链�
     }, readdir: async (path: string) => [...new Set([...bytes.keys()].filter(name => name.startsWith(path + (process.platform === 'win32' ? '\\' : '/'))).map(name => name.slice(path.length + 1).split(/[\\/]/)[0]))], readFile: async (path: string) => { if (!bytes.has(path)) throw Error('RAM未知文件'); return bytes.get(path)!; }, rm: removed,
     process: { env: environment, pid: platform === 'win32' ? 303 : 101, ppid: 101, platform, execPath: exe, resourcesPath: resources, kill: probe }, setTimeout: (callback: () => void) => callback(), console: { log: (message: string) => applications.at(-1).emit('console', { type: () => 'log', text: () => message }) },
   };
+  context.createNativeStartupWaits = createNativeStartupWaits;
   const approval = layout ? { manifestPath: platform === 'darwin' ? '/RAM-layout-approved.json' : manifestPath, approvedHash: wrongHash ? 'b'.repeat(64) : environment.DBARK_EDITOR_INDENT_MANIFEST_SHA256! } : undefined;
   if (layout) {
     // 跨平台模拟使用目标平台的合法清单输入；VFS仍由宿主path解析，只读RAM别名字节。

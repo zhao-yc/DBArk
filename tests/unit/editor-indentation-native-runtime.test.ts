@@ -9,7 +9,7 @@ import ts from 'typescript';
 import { describe, expect, it, vi } from 'vitest';
 import { EditorIndentNativeRun, recordIndentNativePageError } from '../e2e/editor-indentation-native-owner';
 import { sealEditorIndentLaunchIdentity } from '../e2e/editor-indentation-native-identity';
-import { observeNativeStartup, attachNativeStartupDiagnostics } from '../e2e/editor-native-startup-diagnostics';
+import { observeNativeStartup, attachNativeStartupDiagnostics, createNativeStartupWaits } from '../e2e/editor-native-startup-diagnostics';
 import { openNativeProgress } from '../../scripts/native-editor-progress.mjs';
 // 原提取夹具未开启诊断；若误开启只能使用显式RAM文件端口，禁止落到真实FS。
 const forbiddenProgressIO = new Proxy({}, { get() { throw Error('原VM夹具未配置RAM阶段文件端口'); } });
@@ -50,6 +50,7 @@ function fixture(mode: '正常' | '无握手关闭' | 'PID权限错误' | '链�
     }, readdir: async (path: string) => [...new Set([...bytes.keys()].filter(name => name.startsWith(path + (process.platform === 'win32' ? '\\' : '/'))).map(name => name.slice(path.length + 1).split(/[\\/]/)[0]))], readFile: async (path: string) => { if (!bytes.has(path)) throw Error('RAM未知文件'); return bytes.get(path)!; }, rm: removed,
     process: { env: environment, pid: platform === 'win32' ? 303 : 101, ppid: 101, platform, execPath: exe, resourcesPath: resources, kill: probe }, setTimeout: (callback: () => void) => callback(), console: { log: (message: string) => applications.at(-1).emit('console', { type: () => 'log', text: () => message }) },
   };
+  context.createNativeStartupWaits = createNativeStartupWaits;
   const run = runInNewContext(method('createEditorIndentNativeRun') + '\ncreateEditorIndentNativeRun(binding)', { ...context, binding: { assertCurrent } }) as EditorIndentNativeRun;
   return { run, launch, preflight, assertCurrent, removed, applications, probe, directory, bytes, exe, manifestPath, manifest, environment, context, root, project, appPath, resources, onLaunch: (hook: typeof applicationHook) => { applicationHook = hook; }, countOwned: () => ownedStats, pauseOwned: (at: number) => { blocked = at; waiting = new Promise(done => { released = done; }); return { entered: new Promise<void>(done => { entered = done; }), release: () => released() }; } };
 }
@@ -315,11 +316,11 @@ describe('本轮原生页面错误原始诊断', () => {
 
 
 /** 只重建原runtime函数及既有RAM端口；进度端口不写真实文件，不启动旧套件。 */
-function progressFixture(onRecord?: (stage: string) => void) {
+function progressFixture(onRecord?: (stage: string) => void, elapsedMs?: () => number | undefined) {
   const f = fixture(), records: { stage: string; state: any }[] = [];
   f.environment.DBARK_NATIVE_EDITOR_PROGRESS = '1'; f.environment.DBARK_NATIVE_EDITOR_PROGRESS_SHA256 = 'e'.repeat(64);
   const open = vi.fn((options: any) => ({ record(stage: string, state: any) { options.guard(); onRecord?.(stage); records.push({ stage, state: { ...state } }); options.guard(); } }));
-  const run = runInNewContext(method('createEditorIndentNativeRun') + '\ncreateEditorIndentNativeRun(binding)', { ...f.context, openNativeProgress: open, binding: { assertCurrent: f.assertCurrent } }) as EditorIndentNativeRun;
+  const run = runInNewContext(method('createEditorIndentNativeRun') + '\ncreateEditorIndentNativeRun(binding)', { ...f.context, createNativeStartupWaits, openNativeProgress: open, binding: { assertCurrent: f.assertCurrent, elapsedMs } }) as EditorIndentNativeRun;
   return { ...f, run, records, open };
 }
 
@@ -370,5 +371,47 @@ describe('本轮最小早期启动观察接线（RAM）', () => {
     f.applications[0].page.emit('pageerror', Error('迟到错误')); expect(JSON.stringify(owner.startupDiagnostics)).toBe(before);
     await attachNativeStartupDiagnostics({ attach, errors: [{ message: '原120秒超时' }] }, f.run); expect(attach).toHaveBeenCalledOnce();
     release(); expect(await pending).toBe(expired); expect(owner.confirmed).toBe(false); expect(f.removed).not.toHaveBeenCalled(); expect(f.applications[0].close).not.toHaveBeenCalled();
+  });
+});
+
+describe('原等待边界紧凑相对时点（RAM）', () => {
+  it('两次独立启动各三轮原扫描和两次来源调用完整编号，原prepare/退出/PID/清理仍闭合', async () => {
+    const f = progressFixture(undefined, () => 100), applications: any[] = [];
+    f.onLaunch(app => { app.evaluate = vi.fn(app.evaluate); app.firstWindow = vi.fn(app.firstWindow); applications.push(app); });
+    const first = await f.run.launch(); await f.run.close(first); const second = await f.run.launch(); await f.run.close(second); await f.run.finish();
+    const points = f.run.startupWaits!.data.points;
+    expect(points).toHaveLength(36); expect(points.filter(point => point[0] === 0).map(point => point[1])).toEqual([1, 2, 3, 4, 5, 6]);
+    expect(points.filter(point => point[0] === 2).map(point => point[1])).toEqual([1, 2, 3, 4]);
+    for (const call of [1, 2, 3, 4]) expect(points.filter(point => point[1] === call && point[0] >= 2).map(point => point[0])).toEqual([2, 4, 5, 6, 7, 3]);
+    expect(points.every(point => point[2] === 100)).toBe(true); expect(f.run.removed).toBe(true);
+    expect(applications.map(app => app.firstWindow.mock.calls.length)).toEqual([1, 1]);
+    const plain = fixture(); let baseline: any; plain.onLaunch(app => { app.evaluate = vi.fn(app.evaluate); baseline = app; });
+    const owner = await plain.run.launch(); await plain.run.close(owner);
+    expect(applications.map(app => app.evaluate.mock.calls.length)).toEqual([baseline.evaluate.mock.calls.length, baseline.evaluate.mock.calls.length]);
+  });
+
+  it.each([1, 2])('第%s次来源evaluate未返回时轨迹停在相应进入点；原墓碑后的迟到回包不写旧case或取得退出权', async call => {
+    const f = progressFixture(undefined, () => 80), expired = Error('原TestInfo已停链'); let entered!: () => void, release!: () => void;
+    const waiting = new Promise<void>(done => { release = done; }), start = new Promise<void>(done => { entered = done; });
+    f.onLaunch(app => {
+      const original = app.evaluate.bind(app); let sequence = 0;
+      app.evaluate = async (action: Function, argument: unknown) => { if (++sequence === call) { entered(); await waiting; } return original(action, argument); };
+      app.firstWindow = vi.fn(app.firstWindow);
+    });
+    const work = f.run.launch(), failure = expect(work).rejects.toBe(expired); await start;
+    expect(f.run.startupWaits!.data.points.at(-1)).toEqual([4, call, 80]);
+    expect(f.records.some(value => value.stage === 'prepare.hook')).toBe(false);
+    f.assertCurrent.mockImplementation(() => { throw expired; });
+    const attach = vi.fn(async () => {}); await attachNativeStartupDiagnostics({ attach, errors: [{ message: expired.message }] }, f.run);
+    const before = JSON.stringify(f.run.startupWaits!.data); release(); await failure;
+    expect(JSON.stringify(f.run.startupWaits!.data)).toBe(before); expect(f.applications[0].firstWindow).not.toHaveBeenCalled();
+    expect(f.applications[0].close).not.toHaveBeenCalled(); expect(f.removed).not.toHaveBeenCalled(); expect(f.run.retained).toBe(true);
+  });
+
+  it.each([{ enabled: false, argv: [] }, { enabled: true, argv: ['--list'] }])('等待观测默认/list门$argv不建立轨迹或读取新缓存，不打开进度端口', ({ enabled, argv }) => {
+    const f = fixture(), create = vi.fn(createNativeStartupWaits), open = vi.fn(() => { throw Error('门关闭不得做IO'); }), elapsedMs = vi.fn(() => 10);
+    if (enabled) f.environment.DBARK_NATIVE_EDITOR_PROGRESS = '1'; f.context.process.argv = argv;
+    const run = runInNewContext(method('createEditorIndentNativeRun') + '\ncreateEditorIndentNativeRun(binding)', { ...f.context, createNativeStartupWaits: create, openNativeProgress: open, binding: { assertCurrent: f.assertCurrent, elapsedMs } }) as EditorIndentNativeRun;
+    expect(run.startupWaits).toBeUndefined(); expect(create).not.toHaveBeenCalled(); expect(elapsedMs).not.toHaveBeenCalled(); expect(open).not.toHaveBeenCalled();
   });
 });
