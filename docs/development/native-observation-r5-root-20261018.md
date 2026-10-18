@@ -33,3 +33,7 @@ Root 又使用 Python 标准库独立核原 ZIP 大小／SHA、共 42 项 CRC、
 作者 17 文件／232 项及类型通过，另两个原专项列表只登记身份。Root 固定 `c6bc093` 的 `run1808-check-native-module-root.mjs` 为 18 文件／289 项通过、0 失败／跳过，类型退出 0；unit.log SHA-256：`844bbaa44533990a5dade34a33a1bc15f8aa90e8fe6c1e7f13eb282f6ca09ea0`。无产品或依赖变更，未复用旧 dist 作新构建。新 wire 源文件 SHA-256 为 `2cef0d09c992eff638b229257fb2f38a72d4200fab094a6dc8437c7304f62fef`；旧 `700608c4...` 仍只指原 R5 合同来源。实际三平台运行和原 Canceled／Mac 安装问题仍待新检查点验证。
 
 独立审查确认批准 runner 在 source／installed 路径都固定 cwd；原 CJS 复现失败，新 CJS 实际导入链及原／新 ESM 均通过。实际 SDK Connection.toImpl 的 RAM 映射与原日志缓存对象一致，三种可用模式生成同一 209 字节附件并由冻结读取器解码。首个对照因转换器复用文件名缓存失败，原记录保留；隔离虚拟文件名后才取得有效对照。独审交接 SHA-256：`e037cc1b60208affbdc83f4e9a08627238f77b0812b6b192828a02f50d7a0583`。附件合同和语义不变，可沿冻结 R5 合同读取下一轮新绑定；生产器合同来源 SHA 不假装是新文件 SHA，原 run／head／artifact 仍须全新精确绑定。
+
+## 第六轮已启动
+
+新普通克隆检查点 `08003fd3c1b9300e19703d1968c4645bc65eba7b` 基于已推送的源 `5cac4fd80fc2edb69be3df2fb65c2753506cdbbc`，仅新增一份准确来源及合同摘要 JSON。[新运行 39115617411](https://github.com/zhao-yc/DBArk/actions/runs/39115617411) 已开始，Windows x64、macOS arm64／x64 分别沿原源码／实际安装流程验证；零自动重试，不访问私网数据库或系统剪贴板，不公开发行。尚未取得本轮原生结果，原 R4／R5 不重跑或改写。
