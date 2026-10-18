@@ -4,6 +4,7 @@ import { queryLayoutZh as layoutText } from '../../src/renderer/locales/queryLay
 import { bindEditorIndentNativeCase } from './editor-indentation-native-gate';
 import { queryLayoutNativeActive, bindQueryLayoutNativeEnvironment } from './query-layout-native-gate';
 import type { EditorIndentNativeRun, IndentNativeOwner } from './editor-indentation-native-owner';
+import { resizeQueryLayoutNativeViewport } from './query-layout-native-viewport';
 
 const active = queryLayoutNativeActive(process.env, process.argv);
 const binding = active ? bindQueryLayoutNativeEnvironment(() => ({ env: process.env, args: process.argv, platform: process.platform })) : undefined;
@@ -19,6 +20,7 @@ test.afterEach(({}, info) => { cases.get(info)?.retain(); });
 const modifier = process.platform === 'darwin' ? 'Meta' : 'Control';
 const bottom = process.platform === 'darwin' ? 'Meta+ArrowDown' : 'Control+End';
 const redo = process.platform === 'darwin' ? 'Meta+Shift+z' : 'Control+y';
+const viewportScenes = new WeakMap<IndentNativeOwner, ReturnType<typeof resizeQueryLayoutNativeViewport>[]>();
 
 /** 官方公开API只做观察，沿已有原生caret基架在空白App/独立重启后启用，不替换产品模型。 */
 async function observe(run: EditorIndentNativeRun, owner: IndentNativeOwner) {
@@ -92,7 +94,9 @@ async function history(run: EditorIndentNativeRun, owner: IndentNativeOwner, ori
 /** 通过所属BrowserWindow官方API改变窗口尺寸，既不改DOM style也不伪造ResizeObserver。 */
 async function resize(run: EditorIndentNativeRun, owner: IndentNativeOwner, width: number, height: number) {
   const handle = await run.step(owner, () => owner.application.browserWindow(owner.page));
-  await run.step(owner, () => handle.evaluate((window, size) => { window.setMinimumSize(720, 320); window.setContentSize(size.width, size.height); }, { width, height }));
+  const scenes = viewportScenes.get(owner) ?? [];
+  const scene = await run.step(owner, () => handle.evaluate(resizeQueryLayoutNativeViewport, { width, height, scale: scenes[0]?.scale }));
+  scenes.push(scene); viewportScenes.set(owner, scenes);
 }
 /** 只读真实编辑区几何及可访问像素值，两者都要随正式分栏变化。 */
 async function geometry(run: EditorIndentNativeRun, owner: IndentNativeOwner) {
@@ -166,10 +170,10 @@ test('离线原生分栏：两查询独立拖动/键盘、取消/默认、视觉
     await expect.poll(() => geometry(run, second).then(value => value.height)).toBeCloseTo(390, 0);
     await select(run, second, 0, a); await expect.poll(() => geometry(run, second).then(value => value.height)).toBeCloseTo(300, 0); await select(run, second, 1, b); await expect.poll(() => geometry(run, second).then(value => value.height)).toBeCloseTo(390, 0);
     await noExecution(run, second); await run.close(second); await run.finish();
-    await info.attach('分栏原生终态', { body: Buffer.from(JSON.stringify({ accepted: true, normalOwners: run.owners.map(owner => ({ confirmed: owner.confirmed, willQuit: owner.ready, closed: owner.closed, recordedPids: owner.ids.size })), directoryRemoved: run.removed, schema: disk.schema, systemClipboard: 0, sqlExecution: 0 })), contentType: 'application/json' });
+    await info.attach('分栏原生终态', { body: Buffer.from(JSON.stringify({ accepted: true, normalOwners: run.owners.map(owner => ({ confirmed: owner.confirmed, willQuit: owner.ready, closed: owner.closed, recordedPids: owner.ids.size, viewportScenes: viewportScenes.get(owner) ?? [] })), directoryRemoved: run.removed, schema: disk.schema, systemClipboard: 0, sqlExecution: 0 })), contentType: 'application/json' });
   } catch (reason) {
     run.retained = true;
-    try { await info.attach('分栏原生保留现场', { body: Buffer.from(JSON.stringify({ directory: run.path, owners: run.owners.map(owner => ({ confirmed: owner.confirmed, willQuit: owner.ready, closed: owner.closed, ids: [...owner.ids], sourceDiagnostics: owner.sourceDiagnostics ?? [] })), automaticRetry: false, automaticForceStop: false, directoryRemoved: run.removed })), contentType: 'application/json' }); }
+    try { await info.attach('分栏原生保留现场', { body: Buffer.from(JSON.stringify({ directory: run.path, owners: run.owners.map(owner => ({ confirmed: owner.confirmed, willQuit: owner.ready, closed: owner.closed, ids: [...owner.ids], sourceDiagnostics: owner.sourceDiagnostics ?? [], pageErrors: owner.pageErrors ?? [], viewportScenes: viewportScenes.get(owner) ?? [] })), automaticRetry: false, automaticForceStop: false, directoryRemoved: run.removed })), contentType: 'application/json' }); }
     catch (attachment) { throw new AggregateError([reason, attachment], '分栏用例失败且现场附录失败', { cause: reason }); }
     throw reason;
   }

@@ -35,3 +35,11 @@
 新清单由原 `sealEditorIndentLaunchIdentity()` 直接消费，环境由原两个 gate 直接校验；安装 try/catch/finally 用原 AST 执行，系统安装/运行/删除仅为RAM端口。另做三个脚本 `node --check`、YAML 解析和唯一一次 `tsc --noEmit`，均通过。类型检查后仅文档及安装收尾缩进变化，无逻辑变化。
 
 没有运行 Electron、Playwright 实例/列表、网络、200、真实安装、数据库、剪贴板或项目 build；没有修改产品 src、版本、锁、Root/作者目录或推送。Root 复核后才可正式运行。
+
+## 首次真实CI失败的有限修正（工作流39089165148）
+
+原检查点为 `9e530da15a0ffe54197ccda860cd44f17967d3c8`。Windows缩进原报告SHA256为 `8b26275efaad117b7e1627e76e28293a65a421af347e16a7cef46d9cb3cf48c6`：已到只读预览后的页面无错断言，原错误名称为Canceled。原监听仅存name，没有message/stack，无法据此证明具体错误生产点；本片不猜测或改产品，只补原页面错误message/stack进失败附件，原errors数组及空数组断言仍保持。Canceled不会被过滤为成功。
+
+macOS arm64分栏原报告SHA256为 `f2299566f40eb982011ffa8c8c2f71437174ed5e0de3319bf9a360f67d143231`：最初maximum>410前置实际为226。原resize只setContentSize，未核实际内容尺寸；Electron44.7类型定义说明macOS默认不允许窗口大于屏幕。现在通过所属BrowserWindow官方getContentSize取得夹取值，固定首次缩放，使用webContents.setZoomFactor配合物理内容大小建立原1400×1000 CSS场景；缩小480及恢复共用同一缩放。真实场景没有建立则直接拒绝，不通过填DOM、缩小410期待或加等待蒙混。每次请求/实际窗口尺寸/缩放/CSS尺寸都保留在原附件中，原拖动、键盘、短屏、SQL/model/Undo及持久恢复断言不变。
+
+本片仅6个窗口RAM端口用例和2个原适配器pageerror用例通过，没有重跑旧适配器用例、消费者兼容、type/build/GUI/安装或CI。没有改consumer、清单、环境门、120秒期限、原owner类的退出/PID/清理实现。页面错误仍拒绝正常退出证明。原红报告不改写；场景修正是否在macOS实际通过仍待Root正式验证，Windows实际错误的生产点仍需补充后的原始堆栈才能继续定位，不能宣称两个真实失败均已闭环。

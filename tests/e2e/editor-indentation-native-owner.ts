@@ -6,7 +6,12 @@ export interface IndentNativeSourceDiagnostic {
   expected: { launcherPid: number; mainPid?: number; platform: string; relation: '启动器父进程' | '同一进程'; window?: { id: number; contents: number } };
   observed: { mainPid: number; parentPid: number; platform: string; metrics: number[]; window?: { id: number; contents: number; renderer: number; destroyed: boolean } };
 }
-export interface IndentNativeOwner { application: ElectronApplication; page: Page; ids: Set<number>; closed: boolean; confirmed: boolean; ready: boolean; errors: string[]; quitReady: Promise<void>; sourceDiagnostics?: IndentNativeSourceDiagnostic[]; }
+export interface IndentNativeOwner { application: ElectronApplication; page: Page; ids: Set<number>; closed: boolean; confirmed: boolean; ready: boolean; errors: string[]; quitReady: Promise<void>; sourceDiagnostics?: IndentNativeSourceDiagnostic[]; pageErrors?: { name: string; message: string; stack?: string }[]; }
+/** 保留原错误名称拒绝门，同时把原message/stack带进失败附件；Canceled也照常使原断言失败。 */
+export function recordIndentNativePageError(owner: Pick<IndentNativeOwner, 'errors' | 'pageErrors'>, error: Error): void {
+  owner.errors.push(error.name);
+  (owner.pageErrors ??= []).push({ name: error.name, message: error.message, ...(error.stack ? { stack: error.stack } : {}) });
+}
 export interface IndentNativePort {
   assertCurrent(owner?: IndentNativeOwner): void; preflight(): Promise<void>; directory(): Promise<string>; assertDirectory(path: string): Promise<void>;
   launch(path: string): Promise<IndentNativeOwner>; prepare(owner: IndentNativeOwner): Promise<void>; record(owner: IndentNativeOwner): Promise<number[]>;

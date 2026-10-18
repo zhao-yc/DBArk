@@ -8,7 +8,7 @@ import initSqlJs from 'sql.js';
 import type { AppSettings } from '../../src/shared/contracts';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
-import { EditorIndentNativeRun, type IndentNativeOwner, type IndentNativeSourceDiagnostic } from './editor-indentation-native-owner';
+import { EditorIndentNativeRun, recordIndentNativePageError, type IndentNativeOwner, type IndentNativeSourceDiagnostic } from './editor-indentation-native-owner';
 import { sealEditorIndentLaunchIdentity } from './editor-indentation-native-identity';
 
 /** 固定原脚本；完整授权由调用者在调用前和原Promise完成后共同检查。 */
@@ -121,7 +121,7 @@ export function createEditorIndentNativeRun(binding: { assertCurrent(): void }, 
       guard(owner); const own = captured.get(owner)!;
       await own.application.evaluate(({ app }, marker) => { app.once('will-quit', () => console.log(marker)); }, own.marker); guard(owner);
       const page = await own.application.firstWindow(); own.page = page; owner.page = page; guard(owner);
-      page.on('pageerror', error => owner.errors.push(error.name)); guard(owner);
+      page.on('pageerror', error => recordIndentNativePageError(owner, error)); guard(owner);
       await expect(page.locator('.app-statusbar')).toBeVisible({ timeout: 15000 }); guard(owner); await source(owner, true); guard(owner);
     },
     record: source,

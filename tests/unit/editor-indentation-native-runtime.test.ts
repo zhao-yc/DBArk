@@ -7,7 +7,7 @@ import { createRequire } from 'node:module';
 import { runInNewContext } from 'node:vm';
 import ts from 'typescript';
 import { describe, expect, it, vi } from 'vitest';
-import { EditorIndentNativeRun } from '../e2e/editor-indentation-native-owner';
+import { EditorIndentNativeRun, recordIndentNativePageError } from '../e2e/editor-indentation-native-owner';
 import { sealEditorIndentLaunchIdentity } from '../e2e/editor-indentation-native-identity';
 const url = new URL('../e2e/editor-indentation-native-runtime.ts', import.meta.url), source = readFileSync(url, 'utf8'), tree = ts.createSourceFile('runtime.ts', source, ts.ScriptTarget.Latest, true);
 function method(name: string) { const node = tree.statements.find(node => ts.isFunctionDeclaration(node) && node.name?.text === name)!; expect(node).toBeDefined(); return ts.transpileModule(node.getText(tree), { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS } }).outputText; }
@@ -37,7 +37,7 @@ function fixture(mode: '正常' | '无握手关闭' | 'PID权限错误' | '链�
   // 有限RAM采样模拟指标稍后就绪，不启动计时器、进程、窗口或系统探测。
   const poll = (read: () => unknown) => ({ toEqual: async (value: unknown) => expect(await read()).toEqual(value), toBe: async (value: unknown) => { let actual: unknown; for (let attempt = 0; attempt < 3; attempt++) { actual = await read(); if (actual === value) return; } expect(actual).toBe(value); } });
   const nativeExpect = Object.assign(() => ({ toBeVisible: async () => {} }), { poll });
-  const context: any = { exports: {}, EditorIndentNativeRun, sealEditorIndentLaunchIdentity, expect: nativeExpect, electron: { launch }, requireIndentOfflinePort: preflight, randomUUID: () => 'RAM-marker', WeakMap, Set, URL, fileURLToPath, dirname, basename, resolve, join, __dirname: join(project, 'tests/e2e'), tmpdir: () => parent,
+  const context: any = { exports: {}, EditorIndentNativeRun, recordIndentNativePageError, sealEditorIndentLaunchIdentity, expect: nativeExpect, electron: { launch }, requireIndentOfflinePort: preflight, randomUUID: () => 'RAM-marker', WeakMap, Set, URL, fileURLToPath, dirname, basename, resolve, join, __dirname: join(project, 'tests/e2e'), tmpdir: () => parent,
     realpath: async (path: string) => path, mkdtemp: async () => { exists = true; return directory; }, lstat: async (path: string) => {
       if (path === directory) { ownedStats++; if (ownedStats === blocked) { entered(); await waiting; } if (!exists) throw Object.assign(Error('不存在'), { code: 'ENOENT' }); return { isFile: () => false, isDirectory: () => true, isSymbolicLink: () => mode === '链接目录' }; }
       const file = bytes.has(path), dir = [root, resources, ...[...bytes.keys()].flatMap(path => { const names: string[] = []; while (dirname(path) !== path) { path = dirname(path); names.push(path); } return names; })].includes(path);
@@ -294,5 +294,16 @@ describe('run1616窄修：Windows启动器与窗口准备分阶段（RAM）', ()
     const f = fixture(); let calls = 0;
     f.onLaunch(app => { app.firstWindow = async () => { app.runtime.getAppMetrics = () => { calls++; f.run.retained = true; return []; }; return app.page; }; });
     await expect(f.run.launch()).rejects.toThrow('owner已失效'); expect(calls).toBe(1); expect(f.applications[0].close).not.toHaveBeenCalled(); expect(f.removed).not.toHaveBeenCalled();
+  });
+});
+
+
+// 只补本轮真实pageerror诊断接线，不重跑既有原生适配器/SDK用例。
+describe('本轮原生页面错误原始诊断', () => {
+  it.each(['Canceled', 'TypeError'])('原pageerror %s保留原名称/堆栈并继续拒绝正常退出证明', async name => {
+    const f = fixture(), owner = await f.run.launch(), error = new Error('合成原始错误'); error.name = name; error.stack = name + ': 合成原始错误\n    at originalProducer (original-asset.js:10:2)';
+    f.applications[0].page.emit('pageerror', error);
+    expect(owner.errors).toEqual([name]); expect(owner.pageErrors).toEqual([{ name, message: error.message, stack: error.stack }]);
+    await expect(f.run.close(owner)).rejects.toThrow('页面无错'); expect(owner.confirmed).toBe(false); expect(f.removed).not.toHaveBeenCalled();
   });
 });
