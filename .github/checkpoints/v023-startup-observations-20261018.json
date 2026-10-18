@@ -1,0 +1,11 @@
+{
+  "version": "0.23.0",
+  "source": "1282dc482fc8d5ad37351fa76b84c92acf0ddd08",
+  "purpose": "独立审查后的有界早期启动事件与相对时间，验证三平台源码和实际安装，保持全部原断言",
+  "previousRuns": ["39089165148", "39094458615"],
+  "retryPreviousRun": false,
+  "automaticRetry": 0,
+  "clipboard": false,
+  "privateDatabase": false,
+  "release": false
+}
