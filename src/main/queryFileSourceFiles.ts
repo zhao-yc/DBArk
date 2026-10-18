@@ -101,7 +101,14 @@ export async function writeBoundQueryFile(path: string, bytes: Buffer, expected:
   try {
     check(); progress?.('staging', 0, bytes.length); check(); let offset = 0;
     while (offset < bytes.length) { const result = await handle.write(bytes, offset, Math.min(64 * 1024, bytes.length - offset)); check(); if (!result.bytesWritten) throw new QueryFileSourceFailure('io', '临时文件写入未取得进展，原文件未替换'); offset += result.bytesWritten; progress?.('staging', offset, bytes.length); check(); }
-    await handle.sync(); check(); await handle.close(); closed = true; check();
+    // open的mode会被umask过滤；所有写入后显式恢复已有文件普通权限，再同步并读回证明。
+    if (expected) { await handle.chmod(expected.mode); check(); }
+    await handle.sync(); check();
+    if (expected) {
+      const staged = await handle.stat({ bigint: true }); check();
+      if (!staged.isFile() || Number(staged.mode & 0o777n) !== expected.mode) throw new QueryFileSourceFailure('io', '暂存文件普通权限未恢复，原文件未替换');
+    }
+    await handle.close(); closed = true; check();
     if (expected) {
       const current = await readQueryFileSnapshot(path, check, (_phase, processed, total) => progress?.('checking', processed, total)); check();
       if (current.path !== expected.path || current.digest !== expected.digest || !sameQueryFileVersion(current.identity, expected.identity)) throw new QueryFileSourceFailure('external-change', '保存前文件已变化，原文件未替换');
