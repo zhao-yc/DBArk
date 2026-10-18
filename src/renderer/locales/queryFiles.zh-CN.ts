@@ -1,5 +1,6 @@
 /** SQL 文件编辑文案集中在语言模块，方便后续与主语言包共同国际化。 */
 export const queryFilesZh = {
+  retryRecent: '重试读取最近列表',
   recent: '最近 SQL 文件', recentSelection: '最近的 SQL 文件', selectRecent: '请选择文件', openRecent: '打开选中的 SQL 文件', forgetRecent: '从最近列表移除', cancelRecent: '关闭', chooseAgain: '重新选择 SQL 文件', noRecent: '暂无最近 SQL 文件',
   recentHint: '最多保留20个最近成功使用的SQL文件。这里只显示本机记录，不检查文件或读取正文。请选择文件及编码后明确打开；失效路径可从列表移除或重新选择文件。',
   open: '打开 SQL 文件',

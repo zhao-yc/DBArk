@@ -158,6 +158,12 @@ function deferred() { let resolve!: (value: any) => void; const promise = new Pr
 
 describe('最近SQL文件真实工具栏/对话框/控制器接线（RAM）', () => {
   const recentId = '834573d5-d9f0-4f20-998a-78be62162755';
+  it('最近缓存读取失败不自动重试，用户明确重试仅重读元数据且不打开正文', async () => {
+    await mount(); let reads = 0;
+    hook = command => command === 'queryFileSources.recent' && ++reads === 1 ? Promise.reject(Error('RAM最近记录初始化未保存')) : undefined;
+    await click('最近 SQL 文件'); expect(document.body.textContent).toContain('RAM最近记录初始化未保存'); await act(async () => {}); expect(reads).toBe(1); expect(commands.some(item => item.command === 'queryFileSources.open')).toBe(false);
+    await click('重试读取最近列表'); expect(reads).toBe(2); expect(document.body.textContent).toContain('最近合成.sql'); expect(commands.some(item => item.command === 'queryFileSources.open')).toBe(false); expect(useWorkspace.getState().settings.tabs[0].sql).toBe('SELECT 初始;');
+  });
   it('文件菜单同样只打开元数据列表，不在进入时打开正文', async () => {
     await mount(); await act(async () => { for (const menu of menus) menu('recent-sql-file'); });
     expect(document.body.querySelector('[role="dialog"]')?.getAttribute('aria-label')).toBe('最近 SQL 文件'); expect(commands.filter(item => item.command === 'queryFileSources.recent')).toHaveLength(1); expect(commands.some(item => item.command === 'queryFileSources.open')).toBe(false);

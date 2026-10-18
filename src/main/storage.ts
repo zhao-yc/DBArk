@@ -544,13 +544,13 @@ export class LocalStore {
     for (const source of this.queryFileSourceRecords()) entries = rememberQueryFile(entries, source);
     return entries;
   }
-  /** 列表只读本地元数据；初次补齐后固定ID，关闭查询和重启不会丢失历史条目。 */
+  /** 只访问本地元数据；首次补齐会落盘固定ID，失败不交付临时ID，已有缓存再读取不写盘。 */
   queryRecentFiles(): PrivateQueryRecentFile[] {
     try {
       const entries = this.recentQueryFileRecords();
       if (!this.db.exec('SELECT id FROM query_file_recents WHERE id=1').length) this.mutate(() => this.db.run('INSERT INTO query_file_recents VALUES (1,?)', [JSON.stringify(entries)]));
       return entries;
-    } catch { throw Error('最近SQL文件记录不可读取，文件和草稿保持；请检查本地配置后重试'); }
+    } catch { throw Error('最近SQL文件记录不可读取或初始化未保存，文件和草稿保持；可关闭后使用普通文件入口，并在本地配置恢复后重试最近列表'); }
   }
   /** 仅Main由不透明ID解析已保存路径，未知或已移除的ID不能推断为任意路径。 */
   queryRecentFile(id: string): PrivateQueryRecentFile | undefined { return this.queryRecentFiles().find(item => item.id === id); }
@@ -593,14 +593,20 @@ export class LocalStore {
     if (!current && this.queryFileSourceRecords().length >= 100) throw Error('文件来源数量超过预算');
     this.mutate(() => {
       this.db.run('INSERT INTO query_file_sources VALUES (?,?,?,?) ON CONFLICT(tab_id) DO UPDATE SET id=excluded.id,revision=excluded.revision,data=excluded.data', [source.tabId, source.ref.id, source.ref.revision, JSON.stringify(source)]);
-      // 成功来源提交与最近元数据同一事务落盘，绝不因列出历史而读取或执行SQL正文。
-      const recent = rememberQueryFile(this.recentQueryFileRecords(), source);
-      this.db.run('INSERT INTO query_file_recents VALUES (1,?) ON CONFLICT(id) DO UPDATE SET data=excluded.data', [JSON.stringify(recent)]);
       const settings = this.settings();
       const openedSql = opened?.sql;
       if (openedSql !== undefined) settings.tabs = settings.tabs.map(tab => tab.id === source.tabId ? { ...tab, sql: openedSql } : tab);
       this.db.run('INSERT INTO settings VALUES (1,?) ON CONFLICT(id) DO UPDATE SET data=excluded.data', [JSON.stringify(settings)]);
     });
+    // 来源/settings的必需事务已成功落盘。可选历史在独立事务维护，不能回滚已确认的来源或改报文件失败。
+    try {
+      const previous = this.recentQueryFileRecords(), recent = rememberQueryFile(previous, source), payload = JSON.stringify(recent);
+      // 同一路径/编码已置顶时不新增配置写盘；首次初始化即使内容相同仍须保存稳定ID。
+      if (!this.db.exec('SELECT id FROM query_file_recents WHERE id=1').length || JSON.stringify(previous) !== payload) this.mutate(() => this.db.run('INSERT INTO query_file_recents VALUES (1,?) ON CONFLICT(id) DO UPDATE SET data=excluded.data', [payload]));
+    } catch {
+      // 仅降级新增历史维护；坏记录或上次有效列表保持，显式进入最近列表时仍按其真实状态读取/报错。
+      // 不重放文件写入，不自动清空坏缓存；上方必需事务的异常不在此catch范围内。
+    }
   }
   /** 精确释放授权与settings引用，旧revision或未知归属均不删除后来来源。 */
   releaseQueryFileSource(tabId: string, ref: QueryFileSourceRef): boolean {

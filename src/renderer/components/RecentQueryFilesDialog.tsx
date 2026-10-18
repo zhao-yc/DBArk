@@ -15,9 +15,17 @@ export function RecentQueryFilesDialog({ files, onClose }: { files: QueryFileSou
   const latest = useRef(files), active = useRef(false), alive = useRef(true); latest.current = files;
   useEffect(() => {
     alive.current = true;
-    void latest.current.recent().then(items => { if (alive.current) setEntries(items); }).catch(reason => { if (alive.current) setError(errorMessage(reason)); }).finally(() => { if (alive.current) setBusy(false); });
+    void load();
     return () => { alive.current = false; };
   }, []);
+  /** 初次列表可能初始化本地稳定ID；失败只显示错误，后续读取必须由用户明确重试。 */
+  async function load() {
+    if (active.current) return;
+    active.current = true; setBusy(true); setError('');
+    try { const items = await latest.current.recent(); if (alive.current) { setEntries(items); setSelected(''); } }
+    catch (reason) { if (alive.current) setError(errorMessage(reason)); }
+    finally { active.current = false; if (alive.current) setBusy(false); }
+  }
   /** 选择只切换展示和默认编码；显式点击打开才走原文件任务、占位文档及来源提交链路。 */
   function select(id: string) { setSelected(id); setEncoding(entries.find(item => item.id === id)?.encoding ?? 'utf8'); }
   /** 显式按钮只提交一次ID意图，晚返不更新已关闭的对话框，失败由原恢复入口处理。 */
@@ -37,5 +45,5 @@ export function RecentQueryFilesDialog({ files, onClose }: { files: QueryFileSou
     {!busy && !entries.length && <p>{text.noRecent}</p>}
     <Field label={text.encoding}><select value={encoding} disabled={busy || !selected} onChange={event => setEncoding(event.target.value as QueryFileEncoding)}><option value="utf8">{text.utf8}</option><option value="utf16le">{text.utf16le}</option><option value="gb18030">{text.gb18030}</option></select></Field>
     {busy && files.task && <QueryFileTaskProgress task={files.task}/>}<ErrorBox message={error}/>
-  </div><footer className="modal-footer"><button disabled={busy || !selected} onClick={() => void act('forget')}>{text.forgetRecent}</button><span className="grow"/>{busy && <Spinner/>}<button disabled={busy} onClick={onClose}>{text.cancelRecent}</button><button className="primary" disabled={busy || !selected} onClick={() => void act('open')}>{text.openRecent}</button></footer></Modal>, document.body);
+  </div><footer className="modal-footer"><button disabled={busy || !selected} onClick={() => void act('forget')}>{text.forgetRecent}</button>{error && <button disabled={busy} onClick={() => void load()}>{text.retryRecent}</button>}<span className="grow"/>{busy && <Spinner/>}<button disabled={busy} onClick={onClose}>{text.cancelRecent}</button><button className="primary" disabled={busy || !selected} onClick={() => void act('open')}>{text.openRecent}</button></footer></Modal>, document.body);
 }
