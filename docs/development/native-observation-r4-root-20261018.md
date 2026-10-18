@@ -55,3 +55,15 @@ x64 首次下载在 0 字节时以 TypeError 终止；Root 曾在下载仍运行
 作者交接 SHA-256 为 `c5b8359cff2701a4b801bbc38a89f53ff5f29170623688929b8b944b8061c244`。Root 通读精确替换、片段集合及实际 helper 接线，六个原失败／直接相关文件共 90 项通过、0 失败／跳过，unit.log SHA-256 `fd67f243a805eee76345d382b843c3baa87019c25e7e6c18b8478bbd67b2214f`。类型沿用固定作者退出码 0，Root 另证明 src／tests／scripts／package／锁文件／tsconfig 与该已类型检查作者相同，未重复运行同一类型检查；正式 e2e 夹具及产品没有变化。
 
 原 R4 完整失败保持；本次兼容修正另开仅 Linux 的完整检查，不提前称为全部通过，也不重跑 R4。Windows 取消链和 Mac 安装的阻塞仍分别处理，三平台下一轮尚未开启。
+
+## 旧 VM 完整复验及第五轮准备
+
+固定 `793a990ede7e8fecce05977c21a077df745c92a1` 的[新 Linux 完整检查](https://github.com/zhao-yc/DBArk/actions/runs/39110305743)已成功：500 文件／9180 通过／10 条件跳过，类型及构建成功，原生和发行跳过。原 job `117624819099` 日志 142042 字节，SHA-256 `74522057c57d9e4e445135300459e58d9e3cefa065ef7f24b4779772c135d6ef`。原 R4 的 52 失败不改写为通过。
+
+Monaco `2222cdd`／`5aff078` 整合为 `989a8a0`／`cea75d4`，同一 WordHighlighter 的 focus、cursor 和 restore 三处延时 Promise 只消费官方 CancellationError 实例，其余错误保留正式报告；高亮及恢复行为不关闭，未过滤 pageerror。正式补丁、精确版本及锁文件、开发／构建字节门均已接入，独审三组通过。交接／独审 SHA-256 分别为 `6dff81fe3af4cfa4b89086bdacc4d0e9cd15f920821828481b31f6018d75ac61`／`57ade8816fbf310e4108813e83cc641517aa4426cbb57918ca35d6258a74ad2a`，实际原生错误是否消失尚未证明。Root 先用私有副本复验八文件 113 项通过；首控制器误把私有 Monaco 副本当作完整工具目录，测试没有启动，原错误保留，随后只修 CLI 入口。
+
+三层观察作者 `98b3418f3467c0e7c1958ad937f506cd1557874e` 整合为 `d3c92a16b4d05dd434d205ad44c3e14c031e59f5`：只重放固定 Playwright1.64 原日志缓存、旁观原 child 流／既有 console；两个原 evaluate 内加有限枚举；显式开关下 Main app.info 在原 getVersion／platform／safeStorage／getPath 边界发固定标记。原 API 求值顺序、次数、返回和异常不变，不新增 RPC 或加密调用。旧 8KiB 正文最坏 8106 字节逐字保留；新附件独占 2KiB，双 owner／每 owner64事件，最坏 1192 字节。缺标记不能推出未调用，日志不签发 PID／退出／清理权限，也不能据此归因 Keychain。详见[观察合同](native-startup-wire-observation-20261018.md)。
+
+作者交接 SHA-256 `4c4073fcb02d4701141d9f2b484cbd05118b6bf4e9f20a5298b99750aabefcb9`，独审十五组 RAM／AST 通过，SHA-256 `5bba3e8053d178db19d62637d95dffc41547c18b878755312daee560f76d4140`。Root 组合 `node .cache/run1792-check-native-wire-root.mjs` 为 17 文件／285 项通过、0 失败／跳过，类型检查退出 0；unit.log SHA-256 `8169b6b841b92d45711f8c834664ca629c469933136e3365eb2c079cfe53a9ae`。原 37 个 await／55 次 guard、120 秒及 45 秒 worker 收尾不变，未运行本机 GUI、数据库或剪贴板。Root 本地旧 R4 构建保留，第五轮须从新源重新构建及打包。
+
+新 R5 数据读取器 SHA-256 `602098da2938bd0b260e80662df556f16bd95a3359ba9e848975d282c946bf84`，固定生产器 schema SHA-256 `700608c4b03b900442469a338cead77d35487c9746661cceb31ed5366d423f8d`。Root 通读增量并接收六个手工对照，坏枚举／Base64／重复键仍保留原超时与错误哈希；显式 R4 的真实 Windows 归档读取结果与旧输出完全相同，没有重标旧归档。接收证据 SHA-256 `13866e20c432694835a9005dd6460206ae8629dd3da7abaf8c57f8d1c1e8d69e`。读取合同接纳仍不等于原生通过，下一轮用新分支、新 run／head／artifact 绑定，不重跑旧 R4、不发布产品。
