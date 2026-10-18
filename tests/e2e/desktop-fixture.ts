@@ -1,5 +1,5 @@
 import { test as baseTest, expect, _electron as electron, type ElectronApplication, type Page, type TestInfo } from '@playwright/test';
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm } from 'node:fs/promises';
 import { basename, dirname, join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { execFile } from 'node:child_process';
@@ -254,7 +254,7 @@ async function forceStopOwnProcess() {
 }
 
 /** 自动夹具随每个用例运行，不依赖模块首次导入时注册钩子，避免跨文件复用已关闭窗口。 */
-export const test = baseTest.extend<{ desktopLifetime: void; preserveOnUnconfirmedExit: boolean; ownedDesktopLaunchGuard: { assertCurrent(): void; assertPreparation?(info: TestInfo): void } | undefined }>({
+export const test = baseTest.extend<{ desktopLifetime: void; preserveOnUnconfirmedExit: boolean; ownedDesktopLaunchGuard: { assertCurrent(): void; assertPreparation?(info: TestInfo): void; beforeDirectoryCreate?(info: TestInfo, directory: string): Promise<void> } | undefined }>({
   preserveOnUnconfirmedExit: [false, { option: true }],
   ownedDesktopLaunchGuard: [undefined, { option: true }],
   desktopLifetime: [async ({ trace, preserveOnUnconfirmedExit, ownedDesktopLaunchGuard }, use, testInfo) => {
@@ -280,7 +280,15 @@ export const test = baseTest.extend<{ desktopLifetime: void; preserveOnUnconfirm
       // 显式新hook在目录await两侧都核原TestInfo/墓碑；旧路径不增加门或改变失败策略。
       const directory = originalGuard?.assertPreparation ? await (async () => {
         launchGuard!.assertCurrent();
-        try { const created = await mkdtemp(join(tmpdir(), 'dbark-e2e-')); launchGuard!.assertCurrent(); return created; }
+        try {
+          // 仅显式登记hook使用已知名字：先持久登记，再原子创建；路径仍由本fixture决定。
+          if (originalGuard.beforeDirectoryCreate) {
+            const planned = join(tmpdir(), 'dbark-e2e-' + randomUUID().replaceAll('-', ''));
+            await originalGuard.beforeDirectoryCreate(testInfo, planned); launchGuard!.assertCurrent();
+            await mkdir(planned); launchGuard!.assertCurrent(); return planned;
+          }
+          const created = await mkdtemp(join(tmpdir(), 'dbark-e2e-')); launchGuard!.assertCurrent(); return created;
+        }
         catch (reason) { state.retained = true; throw reason; }
       })() : await mkdtemp(join(tmpdir(), 'dbark-e2e-'));
       // 内层已核目录回包，外层await恢复仍可能晚于afterEach；先复核再写共享目录句柄。
