@@ -4,6 +4,7 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync, realpathSync, writ
 import { dirname, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { collectIdentity, readApproval, sealApproval, sha256, writeOnce } from './native-editor-ci-identity.mjs';
+import { prepareNativeProgress } from './native-editor-progress.mjs';
 
 export const nativeSpecialties = Object.freeze([
   { name: 'indent', spec: 'tests/e2e/editor-indentation-native.spec.ts', gate: 'DBARK_EDITOR_INDENT_NATIVE_TEST', manifest: 'DBARK_EDITOR_INDENT_MANIFEST', attachment: '缩进原生终态' },
@@ -58,7 +59,7 @@ export function assertSpecialtyResult(report, specialty) {
   return proof;
 }
 /** 两项各开一个进程、各消费固定批准；首个失败停链，原现场始终保留。 */
-export function runNativeEditorSpecialties({ approval, output, parentEnv = process.env }, execute = executeOnce) {
+export function runNativeEditorSpecialties({ approval, output, parentEnv = process.env, diagnostics = false }, execute = executeOnce) {
   // 后续参数只取批准原字节，不使用调用者可修改的value副本选择项目或清单。
   approval = readApproval(approval.path, approval.sha256, approval.value.context);
   if (resolve(output) !== dirname(approval.path)) throw Error('专项输出不属于原批准目录');
@@ -70,14 +71,18 @@ export function runNativeEditorSpecialties({ approval, output, parentEnv = proce
     writeOnce(join(directory, 'started.json'), { phase: approval.value.phase, specialty: specialty.name, spec: specialty.spec, approvalSha256: approval.sha256, automaticRetry: false, automaticForceStop: false, cleanupAllowed: false });
     try {
       readApproval(approval.path, approval.sha256, approval.value.context);
+      const progress = diagnostics ? prepareNativeProgress({ manifestPath: approval.value.manifests[specialty.name].path, manifestSha256: approval.value.manifests[specialty.name].sha256 }) : undefined;
+      if (progress) writeOnce(join(directory, 'progress-identity.json'), progress);
       const env = specialtyEnvironment(parentEnv, specialty, approval, report);
+      if (progress) { env.DBARK_NATIVE_EDITOR_PROGRESS = '1'; env.DBARK_NATIVE_EDITOR_PROGRESS_SHA256 = progress.sha256; }
       const result = execute(process.execPath, [join(approval.value.project, 'node_modules/@playwright/test/cli.js'), 'test', specialty.spec, '--workers=1', '--retries=0', '--trace=off', '--reporter=list,json', '--output=' + join(directory, 'attachments')], { cwd: approval.value.project, env });
       saveCommand(directory, 'playwright', result); success(result);
       const proof = assertSpecialtyResult(JSON.parse(readFileSync(report, 'utf8')), specialty);
       readApproval(approval.path, approval.sha256, approval.value.context);
       writeOnce(join(directory, 'accepted.json'), { phase: approval.value.phase, specialty: specialty.name, proof }); proofs.push(proof);
     } catch (error) {
-      writeOnce(join(directory, 'failure.json'), { phase: approval.value.phase, specialty: specialty.name, message: String(error), automaticRetry: false, automaticForceStop: false, cleanupAllowed: false });
+      try { writeOnce(join(directory, 'failure.json'), { phase: approval.value.phase, specialty: specialty.name, message: String(error), automaticRetry: false, automaticForceStop: false, cleanupAllowed: false }); }
+      catch (diagnostic) { throw new AggregateError([error, diagnostic], '原专项失败且诊断记录失败', { cause: error }); }
       throw error;
     }
   }
@@ -106,7 +111,7 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
     const resources = realpathSync(process.platform === 'win32' ? join(dirname(executable), 'resources') : resolve(dirname(executable), '../Resources'));
     const output = join(project, 'test-results/native-editor-ci');
     const approval = buildSourceApproval({ project, output, context, executable, resources, currentContext: () => ciContext(project) });
-    runNativeEditorSpecialties({ approval, output });
+    runNativeEditorSpecialties({ approval, output, diagnostics: true });
     if (!process.env.GITHUB_OUTPUT) throw Error('同job批准输出路径缺失');
     appendFileSync(process.env.GITHUB_OUTPUT, 'source_approval=' + approval.path + '\nsource_approval_sha256=' + approval.sha256 + '\n');
   } catch (error) { console.error(error); process.exitCode = 1; }

@@ -10,6 +10,7 @@ import { tmpdir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 import { EditorIndentNativeRun, recordIndentNativePageError, type IndentNativeOwner, type IndentNativeSourceDiagnostic } from './editor-indentation-native-owner';
 import { sealEditorIndentLaunchIdentity } from './editor-indentation-native-identity';
+import { openNativeProgress, type NativeProgressStage, type NativeProgressWriter } from '../../scripts/native-editor-progress.mjs';
 
 /** 固定原脚本；完整授权由调用者在调用前和原Promise完成后共同检查。 */
 export async function requireIndentOfflinePort(env: NodeJS.ProcessEnv) {
@@ -38,6 +39,18 @@ export function createEditorIndentNativeRun(binding: { assertCurrent(): void }, 
     if (!own.quitting ? own.application.process() !== own.child : !own.window || !Number.isSafeInteger(own.main) || own.main! <= 0) throw Error('原应用启动器或退出来源证明已变化，保留资源');
   }
   const guard = (owner?: IndentNativeOwner, closed = false) => run.assert(owner, closed);
+  const progressActive = process.env.DBARK_NATIVE_EDITOR_PROGRESS === '1' && !(process.argv ?? []).some(value => value === '--list' || value.startsWith('--list='));
+  let progress: NativeProgressWriter | undefined;
+  let progressGuard = () => guard();
+  /** 仅消费已登记的数字状态；日志没有任何清理/退出/查PID权限，失败直接保留原资源。 */
+  function phase(stage: NativeProgressStage, owner?: IndentNativeOwner, closed = false) {
+    if (!progressActive) return;
+    progressGuard = () => guard(owner, closed); progressGuard();
+    progress ??= openNativeProgress({ enabled: true, listing: false, manifestPath: explicitApproval?.manifestPath ?? process.env.DBARK_EDITOR_INDENT_MANIFEST!, manifestSha256: explicitApproval?.approvedHash ?? process.env.DBARK_EDITOR_INDENT_MANIFEST_SHA256!, headerSha256: process.env.DBARK_NATIVE_EDITOR_PROGRESS_SHA256, guard: () => progressGuard() });
+    const pids = [...new Set(run.owners.flatMap(value => [...value.ids]))].sort((a, b) => a - b);
+    progress!.record(stage, { owners: run.owners.length, registeredPids: pids.length, pids, confirmedOwners: run.owners.filter(value => value.confirmed).length, readyOwners: run.owners.filter(value => value.ready).length, closedOwners: run.owners.filter(value => value.closed).length, retained: run.retained, removed: run.removed });
+    guard(owner, closed);
+  }
   /** 目录读取完成后先查完整门，随后才可继续下一次IO或launch/rm。 */
   async function assertDirectory(path: string) {
     guard(); const stat = await lstat(path); guard(); const actual = await realpath(path); guard();
@@ -46,6 +59,7 @@ export function createEditorIndentNativeRun(binding: { assertCurrent(): void }, 
   /** 清单摘要来自Root，首次捕获后不可用当时的新字节重签；每次启动前后复核。 */
   async function verified() {
     guard();
+    phase('scan.begin');
     if (!identity) {
       identity = await sealEditorIndentLaunchIdentity(explicitApproval ? explicitApproval.manifestPath : process.env.DBARK_EDITOR_INDENT_MANIFEST!, explicitApproval ? explicitApproval.approvedHash : process.env.DBARK_EDITOR_INDENT_MANIFEST_SHA256!, resolve(__dirname, '../..'), {
         stat: async path => { const value = await lstat(path); return { file: value.isFile(), directory: value.isDirectory(), link: value.isSymbolicLink() }; }, real: realpath, list: readdir, bytes: readFile,
@@ -53,6 +67,7 @@ export function createEditorIndentNativeRun(binding: { assertCurrent(): void }, 
     }
     await identity.assertCurrent(); guard();
     if (process.env.DBARK_EXECUTABLE_PATH && (identity.manifest.kind !== 'installed' || resolve(process.env.DBARK_EXECUTABLE_PATH) !== identity.manifest.executable)) throw Error('环境安装路径不匹配Root批准清单');
+    phase('scan.done');
     return identity;
   }
   /** 先保留原句柄返回的正PID线索，再核期限/来源；线索不认证main/window，也不授权退出、清理或终止。 */
@@ -106,7 +121,7 @@ export function createEditorIndentNativeRun(binding: { assertCurrent(): void }, 
     launch: async path => {
       await assertDirectory(path); guard(); const seal = await verified(); guard();
       const env = Object.fromEntries(Object.entries({ ...process.env, DBARK_USER_DATA: path }).filter((entry): entry is [string, string] => entry[1] !== undefined));
-      guard(); const application = await electron.launch({ executablePath: seal.manifest.executable, args: seal.manifest.kind === 'source' ? [seal.manifest.root] : [], cwd: seal.manifest.root, env, chromiumSandbox: true });
+      guard(); phase('launch.begin'); const application = await electron.launch({ executablePath: seal.manifest.executable, args: seal.manifest.kind === 'source' ? [seal.manifest.root] : [], cwd: seal.manifest.root, env, chromiumSandbox: true });
       // 即使原期限在launch等待时结束，也先登记原句柄及主PID，再停链；不能留下未登记实例。
       let ready!: () => void; const child = application.process(), main = child.pid, marker = 'DBARK_INDENT_QUIT:' + randomUUID();
       const owner: IndentNativeOwner = { application, page: undefined!, ids: new Set(main && Number.isSafeInteger(main) ? [main] : []), closed: false, confirmed: false, ready: false, errors: [], sourceDiagnostics: [], quitReady: new Promise(done => { ready = done; }) };
@@ -115,32 +130,37 @@ export function createEditorIndentNativeRun(binding: { assertCurrent(): void }, 
       // 只认原句柄的真实事件；公共closed/ready不能伪造私有阶段，提前退出立即永久停链。
       application.on('close', () => { own.closed = true; owner.closed = true; if (!own.quitting) run.retained = true; });
       application.on('console', message => { if (message.text() === marker) { own.willQuit = true; owner.ready = true; if (!own.quitting) run.retained = true; ready(); } });
-      guard(owner); if (!Number.isSafeInteger(main) || main! <= 0) throw Error('新应用主PID未知'); await verified(); guard(owner); await source(owner); guard(owner); return owner;
+      guard(owner); phase('launch.returned', owner); if (!Number.isSafeInteger(main) || main! <= 0) throw Error('新应用主PID未知'); await verified(); guard(owner); await source(owner); guard(owner); return owner;
     },
     prepare: async owner => {
       guard(owner); const own = captured.get(owner)!;
+      phase('prepare.hook', owner);
       await own.application.evaluate(({ app }, marker) => { app.once('will-quit', () => console.log(marker)); }, own.marker); guard(owner);
+      phase('prepare.window', owner);
       const page = await own.application.firstWindow(); own.page = page; owner.page = page; guard(owner);
       page.on('pageerror', error => recordIndentNativePageError(owner, error)); guard(owner);
-      await expect(page.locator('.app-statusbar')).toBeVisible({ timeout: 15000 }); guard(owner); await source(owner, true); guard(owner);
+      phase('prepare.statusbar', owner);
+      await expect(page.locator('.app-statusbar')).toBeVisible({ timeout: 15000 }); guard(owner); phase('prepare.metrics', owner); await source(owner, true); guard(owner); phase('prepare.done', owner);
     },
     record: source,
     quit: async owner => {
-      guard(owner); await source(owner); guard(owner);
+      guard(owner); phase('close.source', owner); await source(owner); guard(owner);
       const own = captured.get(owner)!;
       if (!own.window || !own.main || own.quitting || own.closed || own.willQuit) throw Error('原应用尚未取得可用的正常退出来源');
       const exited = own.application.waitForEvent('close', { timeout: 15000 }); void exited.catch(() => undefined);
       guard(owner); own.quitting = true; // 最后一次完整source之后、发起原quit之前封存，覆盖dispose早于close投递的间隙。
+      phase('close.request', owner, true);
       await own.application.evaluate(({ app }) => { setTimeout(() => app.quit(), 0); }); guard(owner, true);
+      phase('close.handshake', owner, true);
       await Promise.race([owner.quitReady, exited.then(() => { if (!owner.ready) throw Error('本owner关闭但未取得will-quit'); })]); guard(owner, true);
       if (!owner.ready) throw Error('本owner正常退出握手未知');
-      if (!owner.closed) { guard(owner, true); await own.application.close(); guard(owner, true); } await exited; guard(owner, true);
+      if (!owner.closed) { guard(owner, true); phase('close.application', owner, true); await own.application.close(); guard(owner, true); } phase('close.event', owner, true); await exited; guard(owner, true);
       if (!own.closed || !own.willQuit) throw Error('原应用真实关闭或正常退出握手未确认');
     },
     absent: async ids => {
-      guard(); let failure: unknown;
+      guard(); phase('close.pids'); let failure: unknown;
       await expect.poll(() => { try { guard(); return ids.filter(pid => { guard(); try { process.kill(pid, 0); return true; } catch (reason) { if ((reason as NodeJS.ErrnoException).code === 'ESRCH') return false; throw reason; } }); } catch (reason) { failure = reason; return []; } }, { timeout: 5000, message: '本owner全部已记录PID须明确不存在' }).toEqual([]);
-      guard(); if (failure) throw failure;
+      guard(); if (failure) throw failure; phase('close.done');
     },
     remove: async path => { await assertDirectory(path); guard(); await rm(path, { recursive: true, force: false }); guard(); try { await lstat(path); guard(); } catch (reason) { guard(); if ((reason as NodeJS.ErrnoException).code === 'ENOENT') return; throw reason; } throw Error('本例目录仍存在，未完成清理'); },
   }); return run;

@@ -43,3 +43,17 @@
 macOS arm64分栏原报告SHA256为 `f2299566f40eb982011ffa8c8c2f71437174ed5e0de3319bf9a360f67d143231`：最初maximum>410前置实际为226。原resize只setContentSize，未核实际内容尺寸；Electron44.7类型定义说明macOS默认不允许窗口大于屏幕。现在通过所属BrowserWindow官方getContentSize取得夹取值，固定首次缩放，使用webContents.setZoomFactor配合物理内容大小建立原1400×1000 CSS场景；缩小480及恢复共用同一缩放。真实场景没有建立则直接拒绝，不通过填DOM、缩小410期待或加等待蒙混。每次请求/实际窗口尺寸/缩放/CSS尺寸都保留在原附件中，原拖动、键盘、短屏、SQL/model/Undo及持久恢复断言不变。
 
 本片仅6个窗口RAM端口用例和2个原适配器pageerror用例通过，没有重跑旧适配器用例、消费者兼容、type/build/GUI/安装或CI。没有改consumer、清单、环境门、120秒期限、原owner类的退出/PID/清理实现。页面错误仍拒绝正常退出证明。原红报告不改写；场景修正是否在macOS实际通过仍待Root正式验证，Windows实际错误的生产点仍需补充后的原始堆栈才能继续定位，不能宣称两个真实失败均已闭环。
+
+## 原关键await前的持久阶段诊断
+
+同job的source CLI和启用专项的安装入口显式传 `diagnostics:true`，每个独立PW进程启动前，在本项已有目录独占创建 `progress.ndjson` 和 `progress-identity.json`；直接/RAM调用默认关闭。仅传开启门 `DBARK_NATIVE_EDITOR_PROGRESS=1` 及文件头摘要，不传输出路径。不要手工填写路径或重建旧日志。
+
+runtime从已批准的 `source/installed-indent/layout-manifest.json` 固定名称推导兄弟专项目录，核原manifest摘要、目录真实路径、普通文件、单链接、dev/ino及文件头。每次只以append模式打开同一文件，核FD身份、文件头和原长度；不跟链接、不创建替代文件、不截断、不覆盖旧序号，失败后原writer不复活。文件头只绑定固定阶段身份和批准摘要；后续仅固定阶段枚举、递增序号、已登记PID数字及数量、已确认/就绪/关闭数量和retained/removed布尔状态，不记录SQL、凭据、环境、URL或任意动作文字。
+
+覆盖 `scan.begin/done`、`launch.begin/returned`、`prepare.hook/window/statusbar/metrics/done`、`close.source/request/handshake/application/event/pids/done`。记录发生在原关键await前，后续promise不返回时最后一条进入记录也已落在本专项目录；不依赖catch才保存。所有runtime记录IO消费当前原owner/原TestInfo guard；迟到launch仍先按原规则登记句柄/PID，再被原guard停链，不能补写returned或借日志取得退出/清理权限。日志完全不参与成功consumer判据。
+
+记录失败停止当前原操作并保留资源；原native错误发生后不再补写阶段来覆盖其原因，FD关闭或failure.json写入同时失败时用AggregateError保留原cause。默认关闭或list连stat都不做；新增协议/运行端口测试完全使用内存IO，不写实际诊断文件。
+
+本次18个新增RAM用例及5个直接受影响旧例最终逐项通过；只选跑相关子集，没有重跑旧97整套、type/full/build/GUI。新CI提取夹具首轮2红为缺CommonJS/exports端口，修夹具后通过，原报告保留。两份直接提取runtime夹具显式补了新依赖及禁止真实FS的RAM端口。Root已修的query-layout-native-gate夹具0cc2a72保持在整合侧，本分支不回写其旧版本。
+
+Root操作：保留现有8005145/0cc2a72/f574c15的整合内容，只接纳本次新commit；经独审后建立新检查点单次运行。现有always上传整个test-results已覆盖阶段文件，不需扩大权限或移动到全局目录。先看progress最后阶段，再结合原report/owner附件判断；任何阶段数字都不替代原退出/PID/目录闭合证明。原39089165148不重试，三个原失败及0.23不可发布边界保持。

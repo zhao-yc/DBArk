@@ -6,9 +6,12 @@ import { createHash } from 'node:crypto';
 import { runInNewContext } from 'node:vm';
 import ts from 'typescript';
 import { describe, expect, it, vi } from 'vitest';
-import { EditorIndentNativeRun } from '../e2e/editor-indentation-native-owner';
+import { EditorIndentNativeRun, recordIndentNativePageError } from '../e2e/editor-indentation-native-owner';
 import { bindQueryLayoutNativeEnvironment } from '../e2e/query-layout-native-gate';
 import { sealEditorIndentLaunchIdentity } from '../e2e/editor-indentation-native-identity';
+import { openNativeProgress } from '../../scripts/native-editor-progress.mjs';
+// 原提取夹具未开启诊断；若误开启只能使用显式RAM文件端口，禁止落到真实FS。
+const forbiddenProgressIO = new Proxy({}, { get() { throw Error('原VM夹具未配置RAM阶段文件端口'); } });
 const url = new URL('../e2e/editor-indentation-native-runtime.ts', import.meta.url), source = readFileSync(url, 'utf8'), tree = ts.createSourceFile('runtime.ts', source, ts.ScriptTarget.Latest, true);
 function method(name: string) { const node = tree.statements.find(node => ts.isFunctionDeclaration(node) && node.name?.text === name)!; expect(node).toBeDefined(); return ts.transpileModule(node.getText(tree), { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS } }).outputText; }
 
@@ -37,7 +40,7 @@ function fixture(mode: '正常' | '无握手关闭' | 'PID权限错误' | '链�
   // 有限RAM采样模拟指标稍后就绪，不启动计时器、进程、窗口或系统探测。
   const poll = (read: () => unknown) => ({ toEqual: async (value: unknown) => expect(await read()).toEqual(value), toBe: async (value: unknown) => { let actual: unknown; for (let attempt = 0; attempt < 3; attempt++) { actual = await read(); if (actual === value) return; } expect(actual).toBe(value); } });
   const nativeExpect = Object.assign(() => ({ toBeVisible: async () => {} }), { poll });
-  const context: any = { exports: {}, EditorIndentNativeRun, sealEditorIndentLaunchIdentity, expect: nativeExpect, electron: { launch }, requireIndentOfflinePort: preflight, randomUUID: () => 'RAM-marker', WeakMap, Set, URL, fileURLToPath, dirname, basename, resolve, join, __dirname: join(project, 'tests/e2e'), tmpdir: () => parent,
+  const context: any = { exports: {}, openNativeProgress: (options: any) => openNativeProgress(options, forbiddenProgressIO), EditorIndentNativeRun, recordIndentNativePageError, sealEditorIndentLaunchIdentity, expect: nativeExpect, electron: { launch }, requireIndentOfflinePort: preflight, randomUUID: () => 'RAM-marker', WeakMap, Set, URL, fileURLToPath, dirname, basename, resolve, join, __dirname: join(project, 'tests/e2e'), tmpdir: () => parent,
     realpath: async (path: string) => path, mkdtemp: async () => { exists = true; return directory; }, lstat: async (path: string) => {
       if (path === directory) { ownedStats++; if (ownedStats === blocked) { entered(); await waiting; } if (!exists) throw Object.assign(Error('不存在'), { code: 'ENOENT' }); return { isFile: () => false, isDirectory: () => true, isSymbolicLink: () => mode === '链接目录' }; }
       const file = bytes.has(path), dir = [root, resources, ...[...bytes.keys()].flatMap(path => { const names: string[] = []; while (dirname(path) !== path) { path = dirname(path); names.push(path); } return names; })].includes(path);

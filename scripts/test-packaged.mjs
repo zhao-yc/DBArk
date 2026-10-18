@@ -146,7 +146,7 @@ try {
   if (packageProof) {
     const output = join(project, 'test-results/native-editor-ci');
     const approval = approveInstalled(packageProof, executable, output);
-    nativeResult = runNativeEditorSpecialties({ approval, output });
+    nativeResult = runNativeEditorSpecialties({ approval, output, diagnostics: true });
   }
   // 普通与C02专用夹具统一使用本次安装所得程序，覆盖父进程继承的旧路径。
   const env = { ...process.env, DBARK_EXECUTABLE_PATH: executable, DBARK_C02_EXECUTABLE_PATH: executable, DBARK_INTEGRATION_ENABLED: '0' };

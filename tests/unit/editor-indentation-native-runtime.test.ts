@@ -9,6 +9,9 @@ import ts from 'typescript';
 import { describe, expect, it, vi } from 'vitest';
 import { EditorIndentNativeRun, recordIndentNativePageError } from '../e2e/editor-indentation-native-owner';
 import { sealEditorIndentLaunchIdentity } from '../e2e/editor-indentation-native-identity';
+import { openNativeProgress } from '../../scripts/native-editor-progress.mjs';
+// 原提取夹具未开启诊断；若误开启只能使用显式RAM文件端口，禁止落到真实FS。
+const forbiddenProgressIO = new Proxy({}, { get() { throw Error('原VM夹具未配置RAM阶段文件端口'); } });
 const url = new URL('../e2e/editor-indentation-native-runtime.ts', import.meta.url), source = readFileSync(url, 'utf8'), tree = ts.createSourceFile('runtime.ts', source, ts.ScriptTarget.Latest, true);
 function method(name: string) { const node = tree.statements.find(node => ts.isFunctionDeclaration(node) && node.name?.text === name)!; expect(node).toBeDefined(); return ts.transpileModule(node.getText(tree), { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS } }).outputText; }
 
@@ -37,7 +40,7 @@ function fixture(mode: '正常' | '无握手关闭' | 'PID权限错误' | '链�
   // 有限RAM采样模拟指标稍后就绪，不启动计时器、进程、窗口或系统探测。
   const poll = (read: () => unknown) => ({ toEqual: async (value: unknown) => expect(await read()).toEqual(value), toBe: async (value: unknown) => { let actual: unknown; for (let attempt = 0; attempt < 3; attempt++) { actual = await read(); if (actual === value) return; } expect(actual).toBe(value); } });
   const nativeExpect = Object.assign(() => ({ toBeVisible: async () => {} }), { poll });
-  const context: any = { exports: {}, EditorIndentNativeRun, recordIndentNativePageError, sealEditorIndentLaunchIdentity, expect: nativeExpect, electron: { launch }, requireIndentOfflinePort: preflight, randomUUID: () => 'RAM-marker', WeakMap, Set, URL, fileURLToPath, dirname, basename, resolve, join, __dirname: join(project, 'tests/e2e'), tmpdir: () => parent,
+  const context: any = { exports: {}, openNativeProgress: (options: any) => openNativeProgress(options, forbiddenProgressIO), EditorIndentNativeRun, recordIndentNativePageError, sealEditorIndentLaunchIdentity, expect: nativeExpect, electron: { launch }, requireIndentOfflinePort: preflight, randomUUID: () => 'RAM-marker', WeakMap, Set, URL, fileURLToPath, dirname, basename, resolve, join, __dirname: join(project, 'tests/e2e'), tmpdir: () => parent,
     realpath: async (path: string) => path, mkdtemp: async () => { exists = true; return directory; }, lstat: async (path: string) => {
       if (path === directory) { ownedStats++; if (ownedStats === blocked) { entered(); await waiting; } if (!exists) throw Object.assign(Error('不存在'), { code: 'ENOENT' }); return { isFile: () => false, isDirectory: () => true, isSymbolicLink: () => mode === '链接目录' }; }
       const file = bytes.has(path), dir = [root, resources, ...[...bytes.keys()].flatMap(path => { const names: string[] = []; while (dirname(path) !== path) { path = dirname(path); names.push(path); } return names; })].includes(path);
@@ -305,5 +308,41 @@ describe('本轮原生页面错误原始诊断', () => {
     f.applications[0].page.emit('pageerror', error);
     expect(owner.errors).toEqual([name]); expect(owner.pageErrors).toEqual([{ name, message: error.message, stack: error.stack }]);
     await expect(f.run.close(owner)).rejects.toThrow('页面无错'); expect(owner.confirmed).toBe(false); expect(f.removed).not.toHaveBeenCalled();
+  });
+});
+
+
+/** 只重建原runtime函数及既有RAM端口；进度端口不写真实文件，不启动旧套件。 */
+function progressFixture(onRecord?: (stage: string) => void) {
+  const f = fixture(), records: { stage: string; state: any }[] = [];
+  f.environment.DBARK_NATIVE_EDITOR_PROGRESS = '1'; f.environment.DBARK_NATIVE_EDITOR_PROGRESS_SHA256 = 'e'.repeat(64);
+  const open = vi.fn((options: any) => ({ record(stage: string, state: any) { options.guard(); onRecord?.(stage); records.push({ stage, state: { ...state } }); options.guard(); } }));
+  const run = runInNewContext(method('createEditorIndentNativeRun') + '\ncreateEditorIndentNativeRun(binding)', { ...f.context, openNativeProgress: open, binding: { assertCurrent: f.assertCurrent } }) as EditorIndentNativeRun;
+  return { ...f, run, records, open };
+}
+
+describe('本轮原生阶段持久诊断端口', () => {
+  it('正常扫描/launch/prepare/close都在原动作之前登记数字状态', async () => {
+    const f = progressFixture(), original = f.launch.getMockImplementation()!;
+    f.launch.mockImplementation(async () => { expect(f.records.at(-1)?.stage).toBe('launch.begin'); return await original(); });
+    const owner = await f.run.launch(); expect(f.records.some(value => value.stage === 'prepare.done')).toBe(true);
+    await f.run.close(owner);
+    for (const stage of ['scan.begin','scan.done','launch.begin','launch.returned','prepare.hook','prepare.window','prepare.statusbar','prepare.metrics','prepare.done','close.source','close.request','close.handshake','close.event','close.pids','close.done']) expect(f.records.some(value => value.stage === stage),stage).toBe(true);
+    expect(f.records.find(value => value.stage === 'launch.returned')?.state.owners).toBe(1); expect(f.open).toHaveBeenCalledTimes(1); expect(owner.confirmed).toBe(true);
+  });
+  it('launch晚返回先登记原owner线索，再由原guard停链，不补写returned或清理', async () => {
+    const original = Error('原绑定失效'), f = progressFixture();
+    f.onLaunch(() => { f.assertCurrent.mockImplementation(() => { throw original; }); });
+    await expect(f.run.launch()).rejects.toBe(original); expect(f.run.owners).toHaveLength(1);
+    expect(f.records.some(value => value.stage === 'launch.begin')).toBe(true); expect(f.records.some(value => value.stage === 'launch.returned')).toBe(false);
+    expect(f.removed).not.toHaveBeenCalled(); expect(f.applications[0].close).not.toHaveBeenCalled();
+  });
+  it('阶段追加失败停止新launch而不取得退出/清理权', async () => {
+    const original = Error('原诊断追加失败'), f = progressFixture(stage => { if (stage === 'launch.begin') throw original; });
+    await expect(f.run.launch()).rejects.toBe(original); expect(f.launch).not.toHaveBeenCalled(); expect(f.removed).not.toHaveBeenCalled(); expect(f.run.retained).toBe(true);
+  });
+  it('原launch异常仍按同一对象传播，不被后续诊断写覆盖', async () => {
+    const original = Error('原launch异常'), f = progressFixture(); f.launch.mockRejectedValueOnce(original);
+    await expect(f.run.launch()).rejects.toBe(original); expect(f.records.at(-1)?.stage).toBe('launch.begin'); expect(f.removed).not.toHaveBeenCalled();
   });
 });
