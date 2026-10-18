@@ -1,7 +1,7 @@
 import React, { act } from 'react';
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { memoryDocument, MemoryEvent } from '../fixtures/memory-dom';
-const io = vi.hoisted(() => ({ source: '', start: 0, end: 0, multi: false, readOnly: false, events: [] as string[], editor: null as any, format: undefined as undefined | (() => void) }));
+const io = vi.hoisted(() => ({ source: '', start: 0, end: 0, multi: false, readOnly: false, events: [] as string[], editor: null as any, closeRequest: undefined as undefined | { tabId: string }, rerender: () => {}, format: undefined as undefined | (() => void) }));
 /** 只替换Monaco外界端口；真实QueryTab、store和DOM负责按钮、正文回传及副作用边界。 */
 vi.mock('../../src/renderer/components/SqlEditor', async () => {
   const { useEffect, createElement } = await import('react');
@@ -11,9 +11,10 @@ vi.mock('../../src/renderer/components/SqlEditor', async () => {
       io.source = props.value; let version = 1;
       const position = (offset: number) => { const lines = io.source.slice(0, offset).split('\n'); return { lineNumber: lines.length, column: lines.at(-1)!.length + 1 }; };
       const offset = (p: any) => io.source.split('\n').slice(0, p.lineNumber - 1).reduce((sum, line) => sum + line.length + 1, 0) + p.column - 1;
-      const range = (start: number, end: number) => ({ getStartPosition: () => position(start), getEndPosition: () => position(end), isEmpty: () => start === end });
+      const range = (start: number, end: number) => ({ startLineNumber: position(start).lineNumber, startColumn: position(start).column, endLineNumber: position(end).lineNumber, endColumn: position(end).column, selectionStartLineNumber: position(start).lineNumber, selectionStartColumn: position(start).column, positionLineNumber: position(end).lineNumber, positionColumn: position(end).column, getStartPosition: () => position(start), getEndPosition: () => position(end), isEmpty: () => start === end });
       const model = { isDisposed: () => false, getValue: () => io.source, getValueLength: () => io.source.length, getVersionId: () => version, getOffsetAt: offset, getFullModelRange: () => range(0, io.source.length), getEOL: () => '\n' };
-      io.editor = { getModel: () => model, getSelections: () => io.multi ? [range(0, 0), range(0, 0)] : [range(io.start, io.end)], getRawOptions: () => ({ readOnly: io.readOnly }), pushUndoStop: () => { io.events.push('undo-stop'); return true; }, executeEdits: (name: string, edits: any[]) => { io.events.push(name); for (const edit of edits) io.source = io.source.slice(0, offset(edit.range.getStartPosition())) + edit.text + io.source.slice(offset(edit.range.getEndPosition())); version++; props.onChange(io.source); return true; }, focus: () => io.events.push('focus') };
+      const subscribe = () => ({ dispose() {} });
+      io.editor = { onDidChangeModel: subscribe, onDidChangeModelContent: subscribe, onDidChangeCursorSelection: subscribe, onDidChangeConfiguration: subscribe, onDidDispose: subscribe, getModel: () => model, getSelections: () => io.multi ? [range(0, 0), range(0, 0)] : [range(io.start, io.end)], getRawOptions: () => ({ readOnly: io.readOnly }), pushUndoStop: () => { io.events.push('undo-stop'); return true; }, executeEdits: (name: string, edits: any[]) => { io.events.push(name); for (const edit of edits) io.source = io.source.slice(0, offset(edit.range.getStartPosition())) + edit.text + io.source.slice(offset(edit.range.getEndPosition())); version++; props.onChange(io.source); return true; }, focus: () => io.events.push('focus') };
       props.onReady?.(io.editor);
     }, []);
     return createElement('div');
@@ -28,10 +29,10 @@ afterEach(async () => { if (root) { await act(async () => root!.unmount()); root
 afterAll(() => { for (const [name, descriptor] of globals) if (descriptor) Object.defineProperty(globalThis, name, descriptor); else Reflect.deleteProperty(globalThis, name); });
 /** 格式化只允许普通草稿恢复写入；任何执行、建连、会话、历史或保存查询调用都失败。 */
 async function mount(source: string, start = 0, end = 0) {
-  io.start = start; io.end = end; io.multi = false; io.readOnly = false; io.events = []; commands = [];
+  io.closeRequest = undefined; io.start = start; io.end = end; io.multi = false; io.readOnly = false; io.events = []; commands = [];
   (window as any).dbark = { onTask: () => () => {}, onMenu: () => () => {}, invoke: async (command: string) => { commands.push(command); if (command === 'settings.save') return; throw Error('禁止格式化产生外界命令'); } };
   useWorkspace.setState({ settings: { theme: 'dark', sidebarWidth: 260, resultLimit: 1000, pageSize: 100, activeTabId: 't', tabs: [{ id: 't', kind: 'query', title: '合成查询', connectionId: 'c', sql: source, databaseContext: { state: 'known', database: null }, sourceBinding: { id: '来源', digest: 'a'.repeat(64), connectionId: 'c', context: { state: 'known', database: null } } }] }, connections: [{ id: 'c', name: '离线连接', dialect: 'mysql', host: 'offline.invalid', port: 1, user: 'offline', group: '', color: '' }], connectionVersions: {}, activeJobs: {}, dirtyTabs: {} });
-  function View() { const tab = useWorkspace(state => state.settings.tabs[0]); return <QueryTab tab={tab} onHistory={() => {}}/>; }
+  function View() { const [, tick] = React.useState(0); io.rerender = () => tick(value => value + 1); const tab = useWorkspace(state => state.settings.tabs[0]); return tab ? <QueryTab tab={tab} closeRequest={io.closeRequest} onHistory={() => {}}/> : null; }
   const node = document.createElement('div'); document.body.appendChild(node); root = createRoot(node as any); await act(async () => root!.render(<View/>));
 }
 async function click(entry: '按钮' | '快捷回调') { if (entry === '快捷回调') { expect(io.format).toBeTypeOf('function'); await act(async () => io.format!()); await flushSettings(); return; } const button = document.body.querySelectorAll('button').find(node => node.getAttribute('aria-label') === '格式化 SQL'); expect(button).toBeDefined(); await act(async () => button!.dispatchEvent(new MemoryEvent('click'))); await flushSettings(); }
@@ -43,7 +44,7 @@ describe.each(['按钮', '快捷回调'] as const)('真实QueryTab格式化%s', 
     const model = io.editor.getModel(), binding = useWorkspace.getState().settings.tabs[0].sourceBinding;
     await act(async () => useWorkspace.getState().updateSettings({ sqlKeywordCase: 'upper' }));
     expect(io.source).toBe(source); expect(io.events).toEqual([]); expect(io.editor.getModel()).toBe(model);
-    await click(entry); expect(io.events).toEqual(['undo-stop', 'dbark-sql-format', 'undo-stop', 'focus']); expect(io.editor.getModel()).toBe(model);
+    await click(entry); await vi.waitFor(() => expect(io.events).toHaveLength(4), { timeout: 10000 }); expect(io.events).toEqual(['undo-stop', 'dbark-sql-format', 'undo-stop', 'focus']); expect(io.editor.getModel()).toBe(model);
     expect(io.source).toContain('SELECT'); expect(io.source).toContain('MiXeD'); expect(io.source).toContain('t.order'); expect(io.source).toContain('count('); expect(io.source).toContain('@from');
     if (selected) { expect(io.source.startsWith(prefix)).toBe(true); expect(io.source.endsWith(suffix)).toBe(true); }
     expect(useWorkspace.getState().settings.tabs[0].sourceBinding).toBe(binding); expect(commands.filter(command => command !== 'settings.save')).toEqual([]);
@@ -73,4 +74,24 @@ describe.each(['按钮', '快捷回调'] as const)('真实QueryTab格式化%s', 
     let dialog: any; if (reason === '弹窗') { dialog = document.createElement('div'); dialog.setAttribute('role', 'dialog'); document.body.appendChild(dialog); }
     await click(entry); expect(io.source).toBe(source); expect(io.events).toEqual([]); expect(commands.filter(command => command !== 'settings.save')).toEqual([]); dialog?.parentNode?.removeChild(dialog);
   });
+});
+
+
+it.each(['切走切回', '关闭再取消', '选区漂移', '原owner被替换'] as const)('upper模块等待中的%s不能产生迟到编辑', async change => {
+  const formatting = await import('../../src/renderer/sqlFormatting'); let release!: () => void;
+  const waiting = new Promise<void>(done => { release = done; }), load = vi.spyOn(formatting, 'prepareSqlFormattingRoles').mockImplementation(() => waiting);
+  try {
+    await mount('select MiXeD from T;'); await act(async () => useWorkspace.getState().updateSettings({ sqlKeywordCase: 'upper' })); await click('按钮'); expect(load).toHaveBeenCalledOnce(); expect(io.events).toEqual([]);
+    if (change === '切走切回') await act(async () => { useWorkspace.getState().updateSettings({ activeTabId: 'other' }); useWorkspace.getState().updateSettings({ activeTabId: 't' }); });
+    if (change === '关闭再取消') { await act(async () => { io.closeRequest = { tabId: 't' }; io.rerender(); }); await act(async () => { io.closeRequest = undefined; io.rerender(); }); }
+    if (change === '选区漂移') io.start = io.end = 1;
+    if (change === '原owner被替换') await act(async () => useWorkspace.setState({ settings: { ...useWorkspace.getState().settings, tabs: useWorkspace.getState().settings.tabs.map(tab => ({ ...tab })) } }));
+    await act(async () => release()); expect(io.source).toBe('select MiXeD from T;'); expect(io.events).toEqual([]);
+  } finally { release?.(); load.mockRestore(); }
+});
+
+it('upper模块实际加载失败由原错误区显示，正文和Undo保持原样', async () => {
+  const formatting = await import('../../src/renderer/sqlFormatting'), failure = Error('模块加载实际失败'), load = vi.spyOn(formatting, 'prepareSqlFormattingRoles').mockRejectedValue(failure);
+  try { await mount('select MiXeD from T;'); await act(async () => useWorkspace.getState().updateSettings({ sqlKeywordCase: 'upper' })); await click('按钮'); await vi.waitFor(() => expect(document.body.textContent).toContain(failure.message)); expect(io.source).toBe('select MiXeD from T;'); expect(io.events).toEqual([]); }
+  finally { load.mockRestore(); }
 });

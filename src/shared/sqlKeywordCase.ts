@@ -7,3 +7,6 @@ export function readSqlKeywordCase(value: unknown): SqlKeywordCase { return valu
 export function assertSqlKeywordCaseWrite(settings: { sqlKeywordCase?: unknown }): void {
   if (Object.hasOwn(settings, 'sqlKeywordCase') && settings.sqlKeywordCase !== 'preserve' && settings.sqlKeywordCase !== 'upper') throw Error('SQL关键字大小写偏好必须为保持原样或大写');
 }
+
+/** 大写角色证明预算；独立于重解析器，默认入口只读取轻量常量。 */
+export const sqlKeywordRoleLimits = { sourceUnits: 32768, tokens: 2048 } as const;

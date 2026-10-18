@@ -1,6 +1,6 @@
-import { expect, it, vi } from 'vitest';
+import { beforeAll, expect, it, vi } from 'vitest';
 import { sqlFormattingNameRanges, sqlKeywordRoleLimits } from '../../src/renderer/sqlFormattingRoles';
-import { planSqlFormatting } from '../../src/renderer/sqlFormatting';
+import { planSqlFormatting, prepareSqlFormattingRoles } from '../../src/renderer/sqlFormatting';
 
 it.each([
   ['select offset, end from offset;', ['offset', 'end', 'offset']],
@@ -26,3 +26,6 @@ it('语法角色未知固定拒绝，不由第三方默认监听泄露原SQL', (
   try { expect(() => sqlFormattingNameRanges("select '合成私有正文")).toThrow(); expect(error).not.toHaveBeenCalled(); expect(log).not.toHaveBeenCalled(); }
   finally { error.mockRestore(); log.mockRestore(); }
 });
+
+// 这些对照明确操作upper，默认入口测试不调用此准备函数。
+beforeAll(async () => { await prepareSqlFormattingRoles(); });

@@ -1,5 +1,5 @@
-import { describe, expect, it, vi } from 'vitest';
-import { planSqlFormatting } from '../../src/renderer/sqlFormatting';
+import { beforeAll, describe, expect, it, vi } from 'vitest';
+import { planSqlFormatting, prepareSqlFormattingRoles } from '../../src/renderer/sqlFormatting';
 const mutation = vi.hoisted(() => ({ from: '', to: '' }));
 // 正常路径执行真实依赖；仅反例在原词法捕获后污染formatter输出，验证没有全局忽略大小写。
 vi.mock('sql-formatter', async original => {
@@ -74,3 +74,6 @@ it('Root第三条反例：DDL的大写关键字可用，但列名year/bit/name�
   const source = 'create table demo (year year, bit bit(1), name varchar(8));', result = upper(source)!.text;
   expect(result).toContain('CREATE TABLE'); expect(result).toContain('demo'); expect(result).toMatch(/year\s+year/); expect(result).toMatch(/bit\s+bit\(1\)/); expect(result).toMatch(/name\s+varchar\(8\)/);
 });
+
+// 这些对照明确操作upper，默认入口测试不调用此准备函数。
+beforeAll(async () => { await prepareSqlFormattingRoles(); });

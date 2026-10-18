@@ -3,10 +3,14 @@ import { format, formatDialect, mysql } from 'sql-formatter';
 import { completionLimits } from '../shared/sqlCompletion';
 import { sqlFormattingZh as text } from './locales/sqlFormatting.zh-CN';
 import { editorIndentationOptions } from '../shared/editorIndentation';
-import { sqlFormattingNameRanges, sqlKeywordRoleLimits } from './sqlFormattingRoles';
-import { readSqlKeywordCase } from '../shared/sqlKeywordCase';
+import { readSqlKeywordCase, sqlKeywordRoleLimits } from '../shared/sqlKeywordCase';
 
-interface FormattingPreferences { tabSize?: unknown; insertSpaces?: unknown; keywordCase?: unknown; }
+type RoleModule = typeof import('./sqlFormattingRoles');
+let preparedRoles: RoleModule | undefined;
+/** 仅显式大写入口调用；模块加载成功前上层必须保留原模型/选区/owner，默认入口不调用。 */
+export async function prepareSqlFormattingRoles(): Promise<void> { preparedRoles = await import('./sqlFormattingRoles'); }
+
+export interface FormattingPreferences { tabSize?: unknown; insertSpaces?: unknown; keywordCase?: unknown; }
 type FormatterToken = Parameters<NonNullable<typeof mysql.tokenizerOptions.postProcess>>[0][number];
 // 只列正式词法类型，不维护关键字单词表；函数/数据类型/变量/参数/标识符均不在其中。
 const keywordTypes = new Set<string>(['RESERVED_KEYWORD', 'RESERVED_KEYWORD_PHRASE', 'RESERVED_SET_OPERATION', 'RESERVED_CLAUSE', 'RESERVED_SELECT', 'RESERVED_JOIN', 'CASE', 'END', 'WHEN', 'ELSE', 'THEN', 'LIMIT', 'BETWEEN', 'AND', 'OR', 'XOR']);
@@ -101,7 +105,10 @@ export function planSqlFormatting(source: string, start: number, end: number, eo
   const keywordCase = readSqlKeywordCase(indentation.keywordCase);
   if (keywordCase === 'upper' && (source.length > sqlKeywordRoleLimits.sourceUnits || scans[0].tokens.length > sqlKeywordRoleLimits.tokens)) throw Error(text.limited);
   try {
-    if (keywordCase === 'upper') ({ formatted, eligible } = uppercaseFormatting(source, start, end, original, options, sqlFormattingNameRanges(source)));
+    if (keywordCase === 'upper') {
+      const roles = preparedRoles; if (!roles) throw Error(text.unavailable);
+      ({ formatted, eligible } = uppercaseFormatting(source, start, end, original, options, roles.sqlFormattingNameRanges(source)));
+    }
     else formatted = format(original.trim(), { language: 'mysql', tabWidth: options.tabSize, useTabs: !options.insertSpaces, keywordCase: 'preserve', identifierCase: 'preserve', functionCase: 'preserve', dataTypeCase: 'preserve' });
     formatted = formatted.trim().replace(/\r?\n/g, eol);
   }
