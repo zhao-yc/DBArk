@@ -47,7 +47,7 @@ describe('CSV 分隔符文件解析与严格合同', () => {
     const full = await records(path, ';'); expect(full).toHaveLength(22); expect(full[21]).toEqual({ id: '21', 内容: '第21;行' });
     for (const text of ['id;id\n1;2', 'id;\n1;2', 'id;内容\n1']) await expect(records(await fixture(text), ';')).rejects.toThrow();
   });
-  it('预览和导入仅接纳三种单字符及历史缺省，导出与其他格式拒绝分隔符或扩展参数', async () => {
+  it('预览导入及CSV导出接纳三种单字符与历史缺省，其他格式及扩展参数继续拒绝', async () => {
     const preview = { fileToken: 'f', format: 'csv', encoding: 'utf8' };
     const input = { ...preview, connectionId: 'c', database: 'db', table: 't', mapping: { id: 'id' }, taskId: 'task' };
     for (const [command, value] of [['files.preview', preview], ['files.import', input]] as const) {
@@ -61,7 +61,11 @@ describe('CSV 分隔符文件解析与严格合同', () => {
     const { mapping: _mapping, ...exportBase } = input;
     const exportInput = { ...exportBase, includeData: true, includeStructure: false };
     expect(validateCommand('files.export', exportInput)).toEqual(exportInput);
-    expect(() => validateCommand('files.export', { ...exportInput, csvDelimiter: ';' })).toThrow();
+    // CSV导出已开放相同枚举；保留对非法值、非CSV夹带及额外参数的拒绝保护。
+    for (const csvDelimiter of [',', ';', '\t']) expect(validateCommand('files.export', { ...exportInput, csvDelimiter })).toEqual({ ...exportInput, csvDelimiter });
+    for (const csvDelimiter of ['', '|', ';;', 'tab', '\n', null, undefined, 1, [';']]) expect(() => validateCommand('files.export', { ...exportInput, csvDelimiter })).toThrow();
+    for (const format of ['json', 'sql']) expect(() => validateCommand('files.export', { ...exportInput, format, csvDelimiter: ';' })).toThrow();
+    for (const extra of [{ header: false }, { autoDelimiter: true }, { filePath: '/secret' }]) expect(() => validateCommand('files.export', { ...exportInput, csvDelimiter: ';', ...extra })).toThrow();
     await expect(records(await fixture('id\n1'), '|' as CsvImportDelimiter)).rejects.toThrow('分隔符');
     const json = await fixture('[{"id":"1"}]');
     await expect(previewFile({ filePath: json, format: 'json', encoding: 'utf8', csvDelimiter: ';' })).rejects.toThrow('分隔符');
