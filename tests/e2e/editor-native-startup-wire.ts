@@ -1,5 +1,5 @@
 import { createRequire } from 'node:module';
-import { dirname } from 'node:path';
+import { dirname, join } from 'node:path';
 import { createHash } from 'node:crypto';
 import type { TestInfo } from '@playwright/test';
 
@@ -12,9 +12,9 @@ interface Sdk { version: string; implementation: any; }
 const stages = new Set([1, 2, 3, 4, 5, 6, 7, 8, 20, 21, 22, 23, 24, 30, 31, 32, 33, 99]);
 export const nativeStartupWireLimits = { events: 64, lineBytes: 256, attachmentBytes: 2048, dropped: 1024 } as const;
 
-/** 仅显式调用时读取版本元数据；只取同一个进程内SDK映射，不导入/启动Electron或创建RPC。 */
+/** 正式runner固定cwd为批准项目；以package.json兼容CJS/ESM，仅显式调用才读SDK元数据，不启动Electron或创建RPC。 */
 function fixedSdk(application: any): Sdk {
-  const require = createRequire(import.meta.url), metadata = require.resolve('playwright-core/package.json', { paths: [dirname(require.resolve('@playwright/test'))] }), version = require(metadata).version as string;
+  const require = createRequire(join(process.cwd(), 'package.json')), metadata = require.resolve('playwright-core/package.json', { paths: [dirname(require.resolve('@playwright/test'))] }), version = require(metadata).version as string;
   return { version, implementation: application._connection.toImpl(application) };
 }
 
