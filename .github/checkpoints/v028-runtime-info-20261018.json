@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "purpose": "0.28启动元信息修复及INSERT界面准备的Linux完整检查",
+  "applicationVersion": "0.28.0",
+  "productBuild": "5c29ce2fd3df7d6a0a1b1e03f2e08d5615704987",
+  "previousRoot": "c7375012d214ae2a5fe0f0cd932602c8d91800ea",
+  "localRelatedUnit": 215,
+  "serverWireExpectationUnit": 38,
+  "localTypeCheck": "通过",
+  "insertNativeAcceptance": "尚未通过；保留原失败，继续原保存表单定向诊断",
+  "nativeR7Scope": "0.23检查点3125cb2的三平台证据不能外推本版本",
+  "release": false
+}
