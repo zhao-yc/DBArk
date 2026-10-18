@@ -1,0 +1,11 @@
+{
+  "version": "0.23.0",
+  "source": "11969a9ff5da5ab5147efd1303dcc95b1b21f21a",
+  "purpose": "第四轮：保留原断言、期限与收尾，记录Mac既有等待边界及Windows原历史分页退出事件",
+  "previousRuns": ["39089165148", "39094458615", "39100233953"],
+  "retryPreviousRun": false,
+  "automaticRetry": 0,
+  "clipboard": false,
+  "privateDatabase": false,
+  "release": false
+}
