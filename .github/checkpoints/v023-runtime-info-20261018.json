@@ -1,0 +1,22 @@
+{
+  "version": 1,
+  "round": 7,
+  "purpose": "启动元信息分离后的三平台源码及实际安装原验收",
+  "rootBase": "deb199bfb8044d8351f05704248a199b982a1d0c",
+  "productPatch": "f34f926f583e6f6e44cbe3613eb7f744016abafd",
+  "authorPatch": "50dda8d39fc1b1471c98b454a2f08e939cde6637",
+  "previousRun": 39115617411,
+  "applicationVersion": "0.23.0",
+  "electronVersion": "44.7.0",
+  "rootRamTests": 196,
+  "rootTypecheckExit": 0,
+  "independentExtraReactTests": 5,
+  "independentHandoffSha256": "70d0be03d65e6f0c1381541dad12075a28a54421b58afbec8d2aa067542099fd",
+  "scope": [
+    "仅新增app.runtimeInfo并将App启动与显式加密能力检测分离",
+    "原app.info、LocalStore、真实凭据场景及原37await/55guard/120秒/45秒和观察预算保持",
+    "固定原缩进和分栏专项、旧回归及实际安装入口，不删凭据断言或以未知状态跳过",
+    "不代表Mac真实加解密已解决；原R6超时保留，准确阶段和终态另读实际报告",
+    "无私网数据库、剪贴板、系统Keychain修改、签名证书或公开发行"
+  ]
+}
