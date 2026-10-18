@@ -83,3 +83,7 @@ Root `node .cache/run1827-check-v027-encoding-root.mjs` 验证原保护、预览
 修后 `run1829` 固定 `8a8603f`，三次真实文件令牌／导入均已成功，字段映射失效与无映射拒绝也通过。最终独立读数在 7063ms 因排序期待失败：原 `SELECT CAST(id AS CHAR) AS id ... ORDER BY id` 按输出文本别名排序，原旁行 `7` 位于六个精确大整数之后；原差异只有同一旁行的位置。现仅给表设置 `source` 别名并按 `source.id` 原整数列排序，保留全部七行、精度、NULL、文字反斜线、二进制及旁行的完整深比较，不归因于产品数据错误，也不改为无序比较。
 
 该轮报告 SHA-256 `d6802a000c022810996e7a12dfc8246f916097f2d0069974253065a0822de19e`，仍为 0 通过／1 失败／1 串行跳过／0 重试，新表例未执行。报告、输入／临时目录和随机库原件保留，退出和清理未确认，不补发删除。此次仅 SQL 字符串和中文注释的窄修没有产品或类型变化，沿用前述 81 项／类型；实际完整通过须新轮两个原身份均成功，不能把三个导入成功计作该场景通过。
+
+第三轮 `run1830` 固定 `bce6544`：CSV 场景 6844ms 正式通过，journal 终态为 `desktop-cleaned`，原正常退出、限定文件／库清理及准确目录消失均完成。新表场景的三项非法组合及第一次真实 SQL 预览通过，随后在返回草稿时 `dialog.accept` 报 `Page.handleJavaScriptDialog: No dialog is showing`，5062ms 失败，worker 另有 45000ms teardown 超时；CREATE 尚未执行。整轮 1 通过／1 失败／0 重试，不称整轮通过，该例现场保留。
+
+现仅修确认回答适配：捕获原 page 内私有句柄，`window.confirm` 只接受准确提示一次并即时恢复，仍点真实返回按钮，核真实草稿；不再使用 CDP 二次回答，不算系统弹窗验收。Root `node .cache/run1831-check-v027-confirmation-root.mjs` 的 5 文件／84 项及类型通过，含准确／错误提示、旧回答重用、外来替换三项必要 RAM 反例；unit.log SHA-256 `dc7d019bd678aed1dec1912b5b67df4a2367c0e15464540fa7a2d8554b22dcdb`。产品、原期限、单次 DDL 和正常退出保护均未改；尚需新轮实际执行。

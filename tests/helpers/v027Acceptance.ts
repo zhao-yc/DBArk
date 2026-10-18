@@ -4,6 +4,15 @@ export const v027RunGate = 'DBARK_V027_NATIVE_ACCEPTANCE';
 export const v027ServerUuid = 'f568f70e-c730-11f1-8190-3e6c830dde01';
 export const v027Build = '50626ec69cc20df699c9073a29640510ef6bf36c';
 export const v027CaseNames = ['0.27 CSV分隔符、映射失效与正式文件导入', '0.27 新表时间属性、前缀索引与单次CREATE'] as const;
+/** 仅回答一次准确的返回草稿确认；真实按钮、草稿及DDL控制流不替换，调用时恢复原函数。 */
+export function v027DraftConfirmation(expected: string) {
+  const gate = { original: window.confirm, calls: 0, replacement: undefined as unknown as typeof window.confirm };
+  gate.replacement = message => {
+    if (window.confirm !== gate.replacement || gate.calls !== 0 || message !== expected) throw Error('0.27返回草稿确认提示或回答归属未知');
+    gate.calls++; window.confirm = gate.original; return true;
+  };
+  window.confirm = gate.replacement; return gate;
+}
 /** list先返回，不访问任何环境值；默认只读两道开关，不碰凭据或live模块。 */
 export function v027Active(env: Record<string, string | undefined>, args: readonly string[]): boolean {
   return !args.some(value => value === '--list' || value.startsWith('--list=')) && env[v027RunGate] === '1' && env.DBARK_INTEGRATION_ENABLED === '1';

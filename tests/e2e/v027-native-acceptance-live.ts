@@ -1,7 +1,7 @@
 import type { Page } from '@playwright/test';
 import type { RowDataPacket } from 'mysql2/promise';
 import { test, expect, v027AfterEach, type V027Context } from './v027-acceptance-fixture';
-import { v027CaseNames, v027CsvInput, v027CsvColumns } from '../helpers/v027Acceptance';
+import { v027CaseNames, v027CsvInput, v027CsvColumns, v027DraftConfirmation } from '../helpers/v027Acceptance';
 import { zh, formatText } from '../../src/renderer/locales/zh-CN';
 import { tableCreateZh as createText } from '../../src/renderer/locales/tableCreate.zh-CN';
 import { tableCreatePrefixZh as prefixText } from '../../src/renderer/locales/tableCreatePrefix.zh-CN';
@@ -120,15 +120,11 @@ export function registerV027Acceptance() {
         const [tables] = await ctx.step(() => ctx.connection.query<RowDataPacket[]>('SELECT TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA=? AND TABLE_NAME=?', [ctx.plan.schema, 'time_defaults'])); expect(tables).toHaveLength(0); expect((await audit(ctx)).calls['schema.tableCreate.apply']).toBe(0); await ctx.neighbor();
       };
       await preview(false);
-      // 原window.confirm仍由浏览器发出，仅接受本轮返回草稿的准确提示。
-      await ctx.step(async () => {
-        const prompt = ctx.owner.page.waitForEvent('dialog');
-        const click = confirmation.getByRole('button', { name: createText.back, exact: true }).click();
-        // click可能先失败，提前挂拒绝处理；原错误仍由下方await传播。
-        void click.catch(() => undefined);
-        const dialog = await prompt; ctx.check(); expect(dialog.type()).toBe('confirm'); expect(dialog.message()).toBe(createText.discard);
-        await dialog.accept(); ctx.check(); await click; ctx.check();
-      });
+      // Electron原生确认不能用CDP二次回答；只替换本次准确提示的回答，不作为系统弹窗验收。
+      const answer = await ctx.step(() => ctx.owner.page.evaluateHandle(v027DraftConfirmation, createText.discard));
+      await ctx.step(() => confirmation.getByRole('button', { name: createText.back, exact: true }).click());
+      await ctx.step(() => answer.evaluate(gate => { if (gate.calls !== 1 || window.confirm !== gate.original) throw Error('0.27返回草稿确认未恰好回答一次并恢复'); }));
+      await ctx.step(() => answer.dispose());
       await ctx.step(() => expect(confirmation).toBeHidden());
       await ctx.step(() => form.getByRole('button', { name: /^索引/ }).click()); await ctx.step(() => form.getByRole('button', { name: zh.schema.text036, exact: true }).click()); await ctx.step(() => field(zh.schema.text031, 2).fill('ix_code')); await ctx.step(() => form.getByLabel(prefixText.field(2, 1), { exact: true }).selectOption('code')); await ctx.step(() => form.getByLabel(prefixText.prefix(2, 1), { exact: true }).fill('12')); await preview(true);
       for (const label of [createText.ackDdl, createText.ackCreate]) await ctx.step(() => confirmation.getByRole('checkbox', { name: label, exact: true }).check()); await ctx.step(() => confirmation.getByLabel(createText.confirmation, { exact: true }).fill(ctx.plan.schema + '.time_defaults'));
