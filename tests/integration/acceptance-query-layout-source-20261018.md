@@ -30,3 +30,21 @@ Root固定2b76352的16个相关文件一次133项通过，无失败或跳过；�
 固定 `ddd9a8fde08f458964313a7677158b0647802860` 的[新完整CI39081092814](https://github.com/zhao-yc/DBArk/actions/runs/39081092814)、job117538002267随后成功：483文件、9001通过、10条件跳过，类型及构建成功，包含上述textarea夹具修正；原fa失败仍保留。日志 `run1628-ddd9a8f-full-ci-green.log` SHA256 `0c57e1937a8770ad1b993afd3e1a555ba0c99f346dea5efb365c9a12e7c3ab5c`。桌面及发行任务均跳过，不计作安装、原生GUI或公开发行。
 
 随后本分支前向接纳了原生准备器的作者ae800bd/557344a，Root对应9665d97/8b800f1；五个runtime/owner/gate/identity/相关测试文件与已验0.22来源逐字相同，SQLite预期仍为本分支的8。产品、脚本、包、锁及工作流与ddd9a8f未变，未重复本地测试/类型/构建；本测试代码增量不继承前述9001完整结果，另需新CI。0.22实际两次尝试、PID独审及已知键盘种子问题见[专用原生记录](acceptance-p0-native-preparation-20261018.md)，不外推为0.23布局GUI。
+
+## 4576920完整CI与新专用准备
+
+固定 `457692009dbe4363acc7d61cc877c1063c5ea23d` 的[完整CI39081966664](https://github.com/zhao-yc/DBArk/actions/runs/39081966664)、job117540590742全部成功：483文件、9022通过、10条件跳过，类型及构建成功。原日志 `run1636-4576920-full-ci-green.log` SHA256 `7ea1bcf9a98098e0dd04d442cb6166f4e91bb83474a9afab331d944ef3fb99a8`；桌面及发行job跳过。该数早于后续种子、退出句柄、动画观察和分栏专项增量。
+
+本分支随后接纳c99bec5/5b01ac4/66ae342，保留私有退出阶段与本分支SQLite8预期；它们在0.22的原失败和实际通过分别见专用原生记录，不将0.22通过算作本布局验收。作者cfe2a75对应Root `1ebf0d97902808e795418c9a752e25deb915052a`，新增独立默认关闭的分栏门、单个正式spec及factory可选批准清单；不伪造旧缩进门，不新增launch/期限/清理规则。
+
+独审6个唯一RAM对照通过：新门、迟到返回停链、显式清单与旧无参factory、原键鼠函数驱动真实Splitter/Lease，交接SHA256 `510ac63580b5e2a9cd5b14b0aff1b33ad9e2612d460ba0183f3215aeea7b1746`。Root合并后新门及共享runtime三文件65项通过，类型退出0；日志 `run1640-query-layout-native-integration/stdout.log` SHA256 `c89ae4c763fa009ba9704ba870897b2bee9992c2c609c8868228e6eed9c07ee9`。
+
+## Windows源码分栏专项通过
+
+产品src/scripts/package/lock与已成功构建的2b76352逐路径相同，没有重复构建。Root为本分支固定独立112文件编译清单，SHA256 `b754a96fd557585e00adf45ec04d40d7a3235a3f6b0e506a46e49f3caa834f8f`，正式每次启动仍核入口、全树及实际主进程/窗口来源。
+
+run1642固定1ebf0d9，在获准的沙箱外环境只执行一个正式Windows源码Electron用例：1通过、0失败、0跳过、0重试，约18.1秒。真实鼠标/键盘将A标签300→360→370、Escape取消不保存、恢复默认300；B标签300→340→390。切换保持各自高度和原模型/编辑器，正文/非空选区与真实Undo/Redo保持；缩小窗口只夹取可见高度，越过650毫秒防抖后完整settings不变，恢复窗口仍390。
+
+第一次正常退出后，独立读取SQLite8并逐项核标签/活动身份；第二个独立应用恢复A300/B390和原SQL。两次owner均confirmed/willQuit/closed=true，分别记录6及5个PID；原runtime确认全部消失后移除本例目录。终态directoryRemoved=true、schema=8，任务/历史/保存查询列表为空，无页面错误，SQL和系统剪贴板操作为0；未读取数据库凭据、连接200或运行安装器。
+
+原JSON `run1642-query-layout-native-source/stdout.json` SHA256 `3ffa15ad22a93611a86a3e1592ccb49f2c61d00eeb62c80592de57a4bc273997`。以上是本机Windows源码专项；当前头完整CI、安装包及macOS分栏专项仍待验，尚无0.23公开发行。
