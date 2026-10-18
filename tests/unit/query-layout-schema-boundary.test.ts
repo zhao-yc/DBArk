@@ -7,7 +7,25 @@ import {commandSchemas,validateCommand} from '../../src/shared/validation';
 import type {AppSettings} from '../../src/shared/contracts';
 const base=()=>({...defaultSettings,tabs:[{id:'q',kind:'query' as const,title:'原查询',connectionId:'ram',sql:'仅合成正文'}]});
 /** 运行原直接存储验证，仅把mutate/db写入替换为RAM记录，不创建SQLite或读取配置。 */
-function directPort(){const writes:Array<{sql:string;args:unknown[]}>=[];const receiver={mutate(action:()=>void){action();},db:{run(sql:string,args:unknown[]){writes.push({sql,args});}}};return {writes,save:(input:unknown)=>LocalStore.prototype.saveSettings.call(receiver as unknown as LocalStore,input as AppSettings)};}
+function directPort(){
+ const writes:Array<{sql:string;args:unknown[]}>=[];let settingsData:string|undefined;
+ const sources=new Map<string,{id:string;revision:number;data:string}>();
+ /** 只实现原存储器实际读取的两张RAM表；未知SQL拒绝，不能凭夹具默认值授予文件来源。 */
+ const db={
+  run(sql:string,args:unknown[]){if(sql!=='INSERT INTO settings VALUES (1,?) ON CONFLICT(id) DO UPDATE SET data=excluded.data')throw Error('越界RAM写入');writes.push({sql,args});settingsData=String(args[0]);},
+  prepare(sql:string){
+   if(sql!=='SELECT data FROM settings WHERE id=1'&&sql!=='SELECT id,revision,data FROM query_file_sources WHERE tab_id=?')throw Error('越界RAM读取');
+   let params:unknown[]=[],index=-1,freed=false;
+   const rows=():unknown[][]=>{if(freed)throw Error('RAM语句已释放');if(sql==='SELECT data FROM settings WHERE id=1')return settingsData===undefined?[]:[[settingsData]];const source=sources.get(String(params[0]));return source?[[source.id,source.revision,source.data]]:[];};
+   return {bind(value:unknown[]){params=value;index=-1;},step(){return ++index<rows().length;},get(){return [...rows()[index]];},getAsObject(){return {data:rows()[index].at(-1)};},free(){freed=true;}};
+  }
+ };
+ // 沿真实prototype提供settings/records/canonical/source/document方法，只替换RAM数据库与事务端口。
+ const receiver=Object.assign(Object.create(LocalStore.prototype),{db,queryFileDocuments:new Map<string,object>(),queryFileDocumentSnapshot:undefined,
+  mutate(action:()=>void){const previous=settingsData;try{action();}catch(error){settingsData=previous;throw error;}}
+ });
+ return {writes,save:(input:unknown)=>LocalStore.prototype.saveSettings.call(receiver as LocalStore,input as AppSettings)};
+}
 /** 原Main参数验证及settings.save分支逐字提取；只注入上述真实存储方法的RAM边界。 */
 function mainPort(save:(input:unknown)=>void){const source=readFileSync(new URL('../../src/main/index.ts',import.meta.url),'utf8'),tree=ts.createSourceFile('main.ts',source,ts.ScriptTarget.Latest,true);let validation='',clause='';
  function visit(n:ts.Node){if(ts.isFunctionDeclaration(n)&&n.name?.text==='validateMainCommand')validation=n.getText(tree);if(ts.isCaseClause(n)&&n.expression.getText(tree)==="'settings.save'")clause=n.getText(tree);ts.forEachChild(n,visit);}visit(tree);if(!validation||!clause)throw Error('未提取真实设置入口');

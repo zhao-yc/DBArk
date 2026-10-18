@@ -4,6 +4,7 @@ import ts from 'typescript';
 import { describe, expect, it, vi } from 'vitest';
 import { connectionReplacementAcknowledgements } from '../../src/shared/connectionTransfer';
 import { connectionsTransferZh as text } from '../../src/renderer/locales/connectionsTransfer.zh-CN';
+import { assertQueryFileSourceSettings, sameQueryFileSource } from '../../src/shared/queryFileSources';
 
 /** 只回放生产处理器和门表达式，不启动浏览器、DOM、Electron或原生剪贴板。 */
 function fixture() {
@@ -65,8 +66,9 @@ describe('C03确认与布局事实的纯回放', () => {
   it('标签身份即时保存而正文继续防抖，主进程不会只看到400ms前的空标签', () => {
     const source = readFileSync(new URL('../../src/renderer/store.ts', import.meta.url), 'utf8'), tree = ts.createSourceFile('store.ts', source, ts.ScriptTarget.Latest, true);
     let update = ''; function visit(node: ts.Node) { if (ts.isPropertyAssignment(node) && node.name.getText(tree) === 'updateSettings') update = node.initializer.getText(tree); ts.forEachChild(node, visit); } visit(tree); if (!update) throw Error('缺少生产布局更新器');
-    const current = { settings: { tabs: [] as unknown[] }, notify: vi.fn() }, invoke = vi.fn(async () => undefined), persist = vi.fn();
-    const port = createContext({ JSON, clearTimeout, saveTimer: undefined, get: () => current, set: (value: unknown) => Object.assign(current, value), invoke, persist, errorMessage: String });
+    const current = { settings: { tabs: [] as unknown[] }, queryFileDirty: {}, notify: vi.fn() }, invoke = vi.fn(async () => undefined), persist = vi.fn();
+    // 原更新器新增的来源验证与引用比较使用真实实现，不用空函数绕过校验。
+    const port = createContext({ JSON, clearTimeout, assertQueryFileSourceSettings, sameQueryFileSource, saveTimer: undefined, get: () => current, set: (value: unknown) => Object.assign(current, value), invoke, persist, errorMessage: String });
     runInContext(ts.transpileModule('globalThis.update=(' + update + ');', { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText, port);
     port.update({ tabs: [{ id: 'tab', connectionId: 'target', kind: 'table' }] }); expect(invoke).toHaveBeenCalledOnce(); expect(persist).not.toHaveBeenCalled();
     port.update({ tabs: [{ id: 'tab', connectionId: 'target', kind: 'table', sql: '正文变更' }] }); expect(invoke).toHaveBeenCalledOnce(); expect(persist).toHaveBeenCalledOnce();

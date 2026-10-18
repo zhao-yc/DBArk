@@ -6,6 +6,7 @@ import { ColumnsMainCapabilities } from '../../src/main/columnsMainCapabilities'
 import { TablePresetSources } from '../../src/main/tablePresets';
 import { validateCommand } from '../../src/shared/validation';
 import { SavedQuerySearchCancelled } from '../../src/main/savedQuerySearch';
+import { QueryFileSources } from '../../src/main/queryFileSources';
 
 /** 可控等待只替换broker物理边界，真实Main dispatch/helper/IPC保持原文。 */
 export function deferred<T = any>() { let resolve!: (value: T) => void, reject!: (error: Error) => void; const promise = new Promise<T>((yes, no) => { resolve = yes; reject = no; }); return { promise, resolve, reject }; }
@@ -68,6 +69,12 @@ export function mainColumnsHarness() {
     store: { saveTask() {}, connectionRevision: () => revision },
     broker: { request },
     taskEvent(event: any) { events.push(event); const value = event.columnPatch ?? event.indexPatch; if (value) progress.set(event.taskId, value); tasks.set(event.taskId, { ...tasks.get(event.taskId), status: event.status }); afterTask?.(); },
+  });
+  /** 字段夹具不登记文件授权；非本用途端口立即拒绝，导航失效仍执行真实文件来源实现。 */
+  const unavailableFilePort = (): never => { throw Error('字段所有权夹具未登记文件来源或文件IO权限'); };
+  context.queryFileSources = new QueryFileSources({
+    store: { queryFileSource: unavailableFilePort, queryFileDocument: unavailableFilePort, queryFileSourceRecords: unavailableFilePort, commitQueryFileSource: unavailableFilePort, releaseQueryFileSource: unavailableFilePort },
+    choose: unavailableFilePort, reserve: unavailableFilePort, report: unavailableFilePort
   });
   const capabilities = new ColumnsMainCapabilities(tokens, { currentWindow: () => context.window, rendererURL: context.rendererURL,
     connectionRevision: () => revision, assertAvailable: id => context.connectionConfig.assertAvailable(id), shuttingDown: () => context.shuttingDown,
