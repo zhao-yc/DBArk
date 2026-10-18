@@ -4,10 +4,11 @@ import { basename } from 'node:path';
 import { zh } from '../../src/renderer/locales/zh-CN';
 import { queryFilesZh as text } from '../../src/renderer/locales/queryFiles.zh-CN';
 import { bindEditorIndentNativeCase } from './editor-indentation-native-gate';
+import type { IndentNativeTestInfo } from './editor-indentation-native-gate';
 import { createEditorIndentNativeRun, readIndentNativeSettings } from './editor-indentation-native-runtime';
 import type { EditorIndentNativeRun, IndentNativeOwner } from './editor-indentation-native-owner';
 import { queryFilesNativeCases, type bindQueryFilesNativeEnvironment } from '../helpers/queryFilesNativeGate';
-import { recentSql, sourceSql, savedSql, draftSql, externalSql, utf16NativeBytes, installSqlFilesOpenAnswer, finishSqlFilesOpenAnswer } from '../helpers/queryFilesNative';
+import { recentSql, sourceSql, savedSql, draftSql, externalSql, utf16NativeBytes, installSqlFilesOpenAnswer, finishSqlFilesOpenAnswer, installSqlFilesDirtyExitAnswer, consumeSqlFilesDirtyExitAnswer } from '../helpers/queryFilesNative';
 import { QueryFilesNativeFiles } from '../helpers/queryFilesNativeFiles';
 
 type Binding = ReturnType<typeof bindQueryFilesNativeEnvironment>;
@@ -83,11 +84,40 @@ async function noSql(run: EditorIndentNativeRun, owner: IndentNativeOwner) {
   const tasks = await run.step(owner, () => owner.page.evaluate(() => window.dbark.invoke('tasks.list', {}))); expect(tasks.every(value => value.kind.startsWith('queryFileSources.') && value.status !== 'running')).toBe(true); expect(owner.errors).toEqual([]);
 }
 /** 第一次正常退出/PID后读原SQLite，再启动同一私有profile，活动标签和模型由产品自行恢复。 */
-async function restart(run: EditorIndentNativeRun, first: IndentNativeOwner, files: QueryFilesNativeFiles) {
-  const before = await workspace(run, first); await noSql(run, first); await run.close(first);
+async function restart(run: EditorIndentNativeRun, first: IndentNativeOwner, files: QueryFilesNativeFiles, dirtyClose?: () => Promise<unknown>) {
+  const before = await workspace(run, first); await noSql(run, first); if (dirtyClose) await dirtyClose(); else await run.close(first);
   const disk = await run.stopped(async path => { await files.assertDirectory(); return readIndentNativeSettings(path, () => run.assert()); }); expect(disk.schema).toBe(9); expect(disk.settings.tabs).toEqual(before.tabs); expect(disk.settings.activeTabId).toBe(before.activeTabId);
   const second = await run.launch(); await run.step(second, () => files.assertDirectory()); await observe(run, second); await expect.poll(() => settings(run, second).then(value => ({ tabs: value.tabs, activeTabId: value.activeTabId }))).toEqual({ tabs: before.tabs, activeTabId: before.activeTabId });
   const restored = await workspace(run, second); expect(restored.actual.map(value => value.sql)).toEqual(before.actual.map(value => value.sql)); return second;
+}
+
+/** 只给第二例这个owner的已知dirty原草稿退出一次；暂停原提示后再核父进程门，不改dirty或退出实现。 */
+async function closeDirtyOwner(run: EditorIndentNativeRun, owner: IndentNativeOwner, scope: { assertCurrent(): void }, info: IndentNativeTestInfo, witnesses: object[]) {
+  const application = owner.application, page = owner.page, before = await workspace(run, owner), dirty = before.tabs.map((tab, index) => ({ tab, index })).filter(value => value.tab.fileSourceBinding && value.tab.sql === draftSql);
+  expect(dirty).toHaveLength(1); await run.step(owner, () => expect(page.locator('.query-tab').nth(dirty[0].index).getByRole('status', { name: text.fileSource, exact: true })).toContainText(text.dirty)); await noSql(run, owner);
+  const handle = await run.step(owner, () => application.browserWindow(page)), window = await run.step(owner, () => handle.evaluate(value => ({ window: value.id, contents: value.webContents.id }))); await run.step(owner, () => handle.dispose());
+  const start = Object.hasOwn(info, '_startWallTime') ? info._startWallTime : Number(info.startTime), choice = { ...window, nonce: randomUUID(), deadline: Number(start) + 120000 };
+  const witness = { owner: run.owners.indexOf(owner), ...window, nonce: choice.nonce, pid: 0, pending: 0, consumed: 0, failed: false, completed: false }; witnesses.push(witness);
+  let installed: Awaited<ReturnType<typeof installSqlFilesDirtyExitAnswer>> | undefined, receipt: Awaited<ReturnType<typeof consumeSqlFilesDirtyExitAnswer>> | undefined, consuming: Promise<void> | undefined, failure: unknown, pending = 0, consumed = 0;
+  /** close在途不能再run.step；仅复核同一原owner和原TestInfo，关闭后也沿原私有退出事实检查。 */
+  function current() { scope.assertCurrent(); run.assert(owner, true); if (owner.application !== application || owner.page !== page) throw Error('dirty退出原owner/app/page漂移'); }
+  function preserve(reason: unknown) { failure ??= reason; witness.failed = true; run.retained = true; }
+  const listener = (message: { text(): string }) => {
+    const text = message.text();
+    try {
+      if (text === 'DBARK_SQL_FILES_DIRTY_PENDING:' + choice.nonce) {
+        current(); witness.pending = ++pending; if (pending !== 1 || consuming || !installed) throw Error('dirty退出提示重复或安装未确认');
+        consuming = (async () => { current(); receipt = await consumeSqlFilesDirtyExitAnswer(application, choice); current(); expect(receipt).toEqual({ pid: installed!.pid, ...window, calls: 1, restored: true, consumed: true }); })(); void consuming.catch(preserve);
+      } else if (text === 'DBARK_SQL_FILES_DIRTY_CONSUMED:' + choice.nonce) { current(); witness.consumed = ++consumed; if (consumed !== 1 || pending !== 1 || !consuming) throw Error('dirty退出消费重复或缺少原提示'); }
+      else if (text === 'DBARK_SQL_FILES_DIRTY_FAILED:' + choice.nonce) throw Error('原dirty退出提示/期限/窗口未知，保留现场');
+    } catch (reason) { preserve(reason); }
+  };
+  application.on('console', listener);
+  try {
+    installed = await run.step(owner, () => installSqlFilesDirtyExitAnswer(application, choice)); witness.pid = installed.pid; expect(await workspace(run, owner)).toEqual(before);
+    await run.close(owner); if (consuming) await consuming; current(); if (failure !== undefined) throw failure;
+    expect([pending, consumed, !!receipt]).toEqual([1, 1, true]); witness.completed = true; application.removeListener('console', listener); return receipt!;
+  } catch (reason) { preserve(reason); throw failure === reason || failure === undefined ? reason : new AggregateError([failure, reason], '原dirty退出失败及正常退出门失败', { cause: failure }); }
 }
 
 /** 两例均只注册本专项；生命周期、原TestInfo期限和正常退出门完整复用旧实现。 */
@@ -96,7 +126,7 @@ export function registerQueryFilesNative(binding: Binding) {
   const scopes = new WeakMap<TestInfo, ReturnType<typeof bindEditorIndentNativeCase>>(); test.afterEach(({}, info) => scopes.get(info)?.retain());
   for (const [scenario, name] of queryFilesNativeCases.entries()) test(name, async ({ trace, screenshot, video }, info) => {
     expect([trace, screenshot, video]).toEqual(['off', 'off', 'off']); const scope = bindEditorIndentNativeCase(info, binding, () => test.info()); scopes.set(info, scope); scope.assertCurrent();
-    const run = createEditorIndentNativeRun(scope, binding.approval); let files: QueryFilesNativeFiles | undefined, failure: unknown;
+    const run = createEditorIndentNativeRun(scope, binding.approval); let files: QueryFilesNativeFiles | undefined, failure: unknown; const dirtyExits: object[] = [];
     try {
       const first = await run.launch(); await observe(run, first); await offlineQuery(run, first); await write(run, first, "SELECT '最初草稿保持';"); const initial = await workspace(run, first);
       files = new QueryFilesNativeFiles(run.path!, () => run.assert()); await run.step(first, () => files!.start()); const path = files.paths.source;
@@ -123,13 +153,13 @@ export function registerQueryFilesNative(binding: Binding) {
         await run.step(first, () => recovery.getByRole('button', { name: text.reread, exact: true }).click()); await run.step(first, () => expect(recovery).toBeHidden()); await expect.poll(() => settings(run, first).then(value => value.tabs.length)).toBe(3); const reread = await workspace(run, first);
         expect(reread.tabs[1].id).toBe(fileTab.id); expect(reread.tabs[1].sql).toBe(draftSql); expect(reread.tabs[1].fileSourceBinding?.id).toBe(savedSource.ref.id); expect(reread.tabs[1].fileSourceBinding!.revision).toBeGreaterThan(savedSource.ref.revision); expect(reread.tabs[2]).toMatchObject({ sql: externalSql, title: basename(path) + text.rereadSuffix }); expect(reread.tabs[2].fileSourceBinding).toBeUndefined(); expect(reread.tabs[2].sourceBinding).toBeUndefined(); expect(reread.activeTabId).toBe(reread.tabs[2].id);
         expect({ ...reread.actual[1], visible: true }).toEqual(draft.actual[1]); expect(reread.actual[2].model).not.toBe(draft.actual[1].model); await bound(run, first, fileTab.id); expect((await run.step(first, () => files!.read(path, incoming))).bytes).toEqual(utf16NativeBytes(externalSql));
-        const second = await restart(run, first, files); const final = await workspace(run, second); expect(final.tabs[1].sql).toBe(draftSql); expect(final.tabs[2].sql).toBe(externalSql); await bound(run, second, fileTab.id); await run.step(second, () => files!.read(path, incoming)); await noSql(run, second); await run.close(second);
+        const second = await restart(run, first, files, () => closeDirtyOwner(run, first, scope, info, dirtyExits)); const final = await workspace(run, second); expect(final.tabs[1].sql).toBe(draftSql); expect(final.tabs[2].sql).toBe(externalSql); await bound(run, second, fileTab.id); await run.step(second, () => files!.read(path, incoming)); await noSql(run, second); await closeDirtyOwner(run, second, scope, info, dirtyExits); expect(dirtyExits).toHaveLength(2);
       }
       await files.closeHandles(); await run.stopped(() => files!.assertDirectory()); await run.finish(); expect(run.removed).toBe(true);
-      await info.attach('SQL文件原生准备终态', { body: Buffer.from(JSON.stringify({ scenario, version: '0.28.0', owners: run.owners.map(owner => ({ confirmed: owner.confirmed, willQuit: owner.ready, closed: owner.closed, pids: owner.ids.size })), files: files.records, directoryRemoved: run.removed, sqlExecution: 0, systemClipboard: 0, nativeDialogAnswerOnly: true })), contentType: 'application/json' });
+      await info.attach('SQL文件原生准备终态', { body: Buffer.from(JSON.stringify({ scenario, version: '0.28.0', owners: run.owners.map(owner => ({ confirmed: owner.confirmed, willQuit: owner.ready, closed: owner.closed, pids: owner.ids.size })), dirtyExits, files: files.records, directoryRemoved: run.removed, sqlExecution: 0, systemClipboard: 0, nativeDialogAnswerOnly: true })), contentType: 'application/json' });
     } catch (reason) {
       failure = reason; run.retained = true;
-      try { await info.attach('SQL文件原生保留现场', { body: Buffer.from(JSON.stringify({ directory: run.path, files: files?.records, owners: run.owners.map(owner => ({ confirmed: owner.confirmed, willQuit: owner.ready, closed: owner.closed, ids: [...owner.ids] })), automaticReplay: false, automaticForceStop: false, directoryRemoved: run.removed })), contentType: 'application/json' }); }
+      try { await info.attach('SQL文件原生保留现场', { body: Buffer.from(JSON.stringify({ directory: run.path, dirtyExits, files: files?.records, owners: run.owners.map(owner => ({ confirmed: owner.confirmed, willQuit: owner.ready, closed: owner.closed, ids: [...owner.ids] })), automaticReplay: false, automaticForceStop: false, directoryRemoved: run.removed })), contentType: 'application/json' }); }
       catch (attachment) { throw failure = new AggregateError([reason, attachment], '原失败与现场附录失败', { cause: reason }); } throw reason;
     } finally { try { await files?.closeHandles(); } catch (closing) { run.retained = true; throw new AggregateError(failure === undefined ? [closing] : [failure, closing], '原文件句柄关闭失败，保留首因', { cause: failure }); } }
   });
