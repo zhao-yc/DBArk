@@ -81,3 +81,11 @@ Root 当前普通克隆使用员工4的已验证私有 Monaco 副本，只读共
 Root `node .cache/run1805-verify-v028-stream-csv-root.mjs` 在固定 `3553750` 为 28 文件／402 项、0 失败／跳过，类型和源码构建成功。原 109 文件构建先移入本克隆 `.cache/dist-4f509e7-before-stream-csv` 并封存摘要，再生成新 109 文件。unit.log SHA-256：`d1b0dd645cd3612852fe9e731e094d5030d08275d409b050f39965b9c3582d15`；build.log：`02aa7ffbfbb8ff1f48111cd8de45393e02759ce956a98899ea455bf76f0dae65`。本批没有启动 Electron、数据库或剪贴板，没有安装包。前批 9790 项完整 CI 和六项 INSERT 后台实库按其准确源码保留，不能外推本增量；新完整检查、原生界面和实库验收继续，版本仍为未发行 0.28.0。
 
 随后固定 `5b697a81aba6c10609f931d97715d7397b087ee8` 的[完整 CI 39114937435](https://github.com/zhao-yc/DBArk/actions/runs/39114937435) 已成功：job `117638704941` 为 532 文件／9862 通过／10 条件跳过，类型及构建成功，桌面和发行跳过。原日志 155221 字节，SHA-256 `ceb63eea414f83cffeee54c37bdd9ac51e71865559cb499e1f313fa79cecde3a`。这覆盖上述流式 CSV 增量，未重跑旧失败，也不增加本版原生、安装或新增实库通过数。
+
+## 关键字偏好原生专项准备
+
+作者 `e03bf2a756f8f23fe617b794ed7ab09355e2d26e` 和 `06ca322095fcacdf152f7e3963c3f826091e9616` 接纳为 `39dcf4f`／`3778d37`，仅新增／修正测试、护栏及准备说明。两条默认关闭的身份计划验证真实偏好面板、保持／大写／小写、单次 Undo、迟到角色模块回包撤销、SQLite9 和同私有配置的独立重启。没有改变产品、原运行时、依赖、版本或工作流；当前 9862 项 CI 与既有构建的产品输入仍相同。
+
+原独审十二组确认三处准备边界：重启未核活动标签、listener 只查 Main 入口、failed 门仍可 detach。修正后独立重放十二组通过：错误活动 ID／可见 pane／模型／正文均拒绝；failed 门保留原 listener、私有状态和计数；扫描扩大到 src／scripts 受控源码。原 e03 证据保留；首审及复审交接 SHA-256 为 `212586b52ea4d7d2f79e5f9d4fd747abf17698c51b1b200008495d748c106472`／`e391978cfcce1e70495e6ce3d937fdf00d70c1866664bcb11b53427417db69f1`，作者修正交接 `e5f153e4b29c32598c5f210985c3d79f604a8bfcd1026ec76a0708f478c7b488`。
+
+Root `node .cache/run1810-check-keyword-native-root.mjs` 在 `3778d37` 为四文件／71 项、0 失败／跳过，类型通过；unit.log SHA-256 `292275522358a8963882ea30c9d37715d04c36049e38344e44f25d8f3d831fec`。没有运行 Playwright／列表、Electron、数据库或剪贴板，没有重复构建。新测试的真实选择器、快捷键、模块 file 请求、SQLite 与正常退出仍待验，准备不能计作原生通过。模块门不能读取／恢复 Electron 既有 listener，只有能确认测试独占 session 无既有 listener 时才能安排，受控源码扫描不能替代该前提，详见[准备范围](sql-keyword-case-native-preparation-20261018.md)。
