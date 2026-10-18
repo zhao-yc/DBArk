@@ -15,7 +15,8 @@ const { version } = JSON.parse(readFileSync(join(project, 'package.json'), 'utf8
 if (!/^[0-9]+\.[0-9]+\.[0-9]+(?:-[a-zA-Z0-9.-]+)?$/.test(version)) throw new Error('版本号不能用于安全定位安装产物');
 const artifact = join(project, 'release', 'DBArk-' + version + '-' + (platform === 'win32' ? 'win' : 'mac') + '-' + process.arch + '-unsigned.' + (platform === 'win32' ? 'exe' : 'dmg'));
 if (!existsSync(artifact)) throw new Error('未找到当前架构的安装产物，请先构建：' + artifact);
-const temporaryParent = realpathSync(tmpdir());
+// Windows的同步JS realpath会保留RUNNER~1；必须先取与runtime异步realpath一致的原生长路径再建安装根。
+const temporaryParent = realpathSync.native(tmpdir());
 const temporaryPrefix = 'dbark-package-e2e-';
 
 /** 以独立参数调用固定工具；不经 shell，也不把文件路径拼成命令文本。 */
@@ -68,8 +69,8 @@ function contained(target) {
 
 /** 删除、卸载或复制前核对根目录和目标的真实范围，拒绝链接替换与父目录跳转。 */
 function assertOwnedPath(target) {
-  if (dirname(temporary) !== temporaryParent || !basename(temporary).startsWith(temporaryPrefix) || lstatSync(temporary).isSymbolicLink() || realpathSync(temporary) !== temporary) throw new Error('临时根目录已改变，拒绝清理');
-  if (!contained(resolve(target)) || (existsSync(target) && !contained(realpathSync(target)))) throw new Error('目标真实路径超出本次验收目录');
+  if (dirname(temporary) !== temporaryParent || !basename(temporary).startsWith(temporaryPrefix) || lstatSync(temporary).isSymbolicLink() || realpathSync.native(temporary) !== temporary) throw new Error('临时根目录已改变，拒绝清理');
+  if (!contained(resolve(target)) || (existsSync(target) && !contained(realpathSync.native(target)))) throw new Error('目标真实路径超出本次验收目录');
 }
 
 /** NSIS 的 /D 与 _?= 必须最后出现且不加引号；独立参数数组加 verbatim 保留原生语义。 */

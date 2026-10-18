@@ -10,7 +10,8 @@ export function writeOnce(path, value) { writeFileSync(path, JSON.stringify(valu
 function canonical(path, directory = false) {
   if (!isAbsolute(path)) fail('路径必须为绝对路径');
   const value = resolve(path), stat = lstatSync(value);
-  if (stat.isSymbolicLink() || !(directory ? stat.isDirectory() : stat.isFile()) || realpathSync(value) !== value) fail('路径或类型变化');
+  // 与runtime的fs.promises.realpath使用同一原生语义，不批准Windows短路径别名。
+  if (stat.isSymbolicLink() || !(directory ? stat.isDirectory() : stat.isFile()) || realpathSync.native(value) !== value) fail('路径或类型变化');
   return value;
 }
 /** 保留根本身与跨盘/父目录拒绝语义。 */
