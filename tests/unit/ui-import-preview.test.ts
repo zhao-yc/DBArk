@@ -18,6 +18,37 @@ function tableInfo(table = 'items'): TableInfo {
 }
 
 describe('文件导入预览的异步上下文', () => {
+  it('分隔符属于预览身份，省略与显式逗号兼容，换参数即失效人工映射', async () => {
+    const csv: ImportPreviewContext = { ...context, format: 'csv' };
+    expect(importPreviewKey(csv)).toBe(importPreviewKey({ ...csv, csvDelimiter: ',' }));
+    expect(importPreviewKey(csv)).not.toBe(importPreviewKey({ ...csv, csvDelimiter: ';' }));
+    expect(importPreviewKey({ ...csv, csvDelimiter: ';' })).not.toBe(importPreviewKey({ ...csv, csvDelimiter: '\t' }));
+    const delayed = deferred<ImportSample>();
+    const controller = new ImportPreviewController({ metadata: async () => tableInfo(), preview: input => input.csvDelimiter === ';' ? delayed.promise : Promise.resolve(sample) }, () => {});
+    await controller.prepare(csv); controller.setMapping(csv, 'content', 'id');
+    const next = { ...csv, csvDelimiter: ';' as const };
+    // 副作用尚未运行时，按当前上下文检查已经不能执行旧快照。
+    expect(controller.ready(next)).toBeNull();
+    const pending = controller.prepare(next); expect(controller.ready(csv)).toBeNull();
+    delayed.resolve(sample); await pending;
+    expect(controller.ready(next)?.mapping).toEqual({ id: 'id', content: 'content', computed: '' });
+  });
+
+  it('分隔符逗号到分号再到逗号，迟到的第一轮不能覆盖最终样本与映射', async () => {
+    const csv = { ...context, format: 'csv' as const, csvDelimiter: ',' as const };
+    const first = deferred<ImportSample>(), second = deferred<ImportSample>(), third = deferred<ImportSample>();
+    const preview = vi.fn().mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise).mockReturnValueOnce(third.promise);
+    const controller = new ImportPreviewController({ metadata: async () => tableInfo(), preview }, () => {});
+    const a = controller.prepare(csv); await Promise.resolve(); await Promise.resolve();
+    expect(preview).toHaveBeenCalledTimes(1);
+    const b = controller.prepare({ ...csv, csvDelimiter: ';' }); await Promise.resolve(); await Promise.resolve();
+    const c = controller.prepare(csv); await Promise.resolve(); await Promise.resolve();
+    expect(preview).toHaveBeenCalledTimes(3);
+    third.resolve(sample); await c; controller.setMapping(csv, 'content', 'id');
+    first.resolve({ columns: ['旧逗号'], rows: [] }); second.resolve({ columns: ['旧分号'], rows: [] }); await Promise.all([a, b]);
+    expect(controller.ready(csv)?.sample).toEqual(sample); expect(controller.ready(csv)?.mapping.content).toBe('id');
+  });
+
   it('元数据晚到时没有空映射首轮预览，就绪样本与映射一次发布', async () => {
     const metadata = deferred<TableInfo>(); const preview = vi.fn().mockResolvedValue(sample); const published: ImportPreviewState[] = [];
     const controller = new ImportPreviewController({ metadata: () => metadata.promise, preview }, state => published.push(state));

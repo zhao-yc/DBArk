@@ -8,6 +8,7 @@ import { tableCopyStructureKnownAcknowledgements, validateTableCopyStructureName
 import { z } from 'zod';
 import { serverMonitorLimits, validateServerMonitorInput } from './serverMonitor';
 import { csvExportFieldLimits } from './csvExportFields';
+import { csvImportDelimiters } from './csvImport';
 import { taskCancelInputSchema } from './taskCancelState';
 import { tableApplyReceiptListSchema } from './tableApplyReceipt';
 import { tlsPassphraseMaxLength, tlsCredentialMessages, validTlsPassphrase } from './tlsCredentials';
@@ -235,8 +236,8 @@ export const commandSchemas: Record<Command, z.ZodType> = {
   'excel.export': z.object({ ...target, fileToken: id, taskId: id, scope: z.enum(['sample','all']).optional() }).strict(),
   'files.readQuery': z.object({ fileToken: id, encoding: z.enum(['utf8','utf16le','gb18030']) }).strict(),
   'files.writeQuery': z.object({ fileToken: id, encoding: z.enum(['utf8','utf16le','gb18030']), sql: text }).strict(),
-  'files.preview': z.object({ fileToken: id, format: z.enum(['csv','json']), encoding: z.enum(['utf8','utf16le','gb18030']) }).strict(),
-  'files.import': z.object({ ...fileOptions, mapping: ownRecord(z.string(), '导入映射') }).strict(),
+  'files.preview': z.object({ fileToken: id, format: z.enum(['csv','json']), encoding: z.enum(['utf8','utf16le','gb18030']), csvDelimiter: z.enum(csvImportDelimiters).optional() }).strict().refine(value => value.csvDelimiter === undefined || value.format === 'csv', '分隔符只适用于 CSV 导入'),
+  'files.import': z.object({ ...fileOptions, csvDelimiter: z.enum(csvImportDelimiters).optional(), mapping: ownRecord(z.string(), '导入映射') }).strict().refine(value => value.csvDelimiter === undefined || value.format === 'csv', '分隔符只适用于 CSV 导入'),
   'files.exportColumns': z.object({ ...target, taskId: id }).strict(),
   'files.releaseExportColumns': z.object({ catalogId: id }).strict(),
   'files.export': z.object({ ...fileOptions, includeStructure: z.boolean(), includeData: z.boolean(), csvSelection: z.object({ catalogId: id, columns: z.array(z.string().min(1).max(64).refine(value => !value.includes('\0'))).min(1).max(csvExportFieldLimits.columns).refine(value => new Set(value).size === value.length, 'CSV字段不能重复') }).strict().optional() }).strict().refine(value => !value.csvSelection || value.format === 'csv' && value.includeData, '字段选择只适用于CSV数据导出'),

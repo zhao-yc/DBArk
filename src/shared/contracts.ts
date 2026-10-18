@@ -3,6 +3,7 @@ import type { QueryRecentFileView } from './queryFileSources';
 import type { TableCopyDataGetInput, TableCopyDataGetOutput, TableCopyDataPreviewInput, TableCopyDataPreviewOutput, TableCopyDataApplyInput, TableCopyDataApplyOutput, TableCopyDataReleaseInput } from './tableCopyData';
 import type { TableCreateGetInput, TableCreateGetOutput, TableCreatePreviewInput, TableCreatePreviewOutput, TableCreateApplyInput, TableCreateApplyOutput, TableCreateReleaseInput } from './tableCreate';
 import type { CsvExportFieldsInput, CsvExportFieldsOutput, CsvExportSelection } from './csvExportFields';
+import type { CsvImportDelimiter } from './csvImport';
 import type { TableCopyStructureGetInput, TableCopyStructureGetOutput, TableCopyStructurePreviewInput, TableCopyStructurePreviewOutput, TableCopyStructureApplyInput, TableCopyStructureApplyOutput, TableCopyStructureReleaseInput } from './tableCopyStructure';
 /** 所有跨进程数据均为可结构化克隆的普通值，精确数值由驱动保留为字符串。 */
 import type { DatabaseCreateGetInput, DatabaseCreateGetOutput, DatabaseCreatePreviewInput, DatabaseCreatePreviewOutput, DatabaseCreateApplyInput, DatabaseCreateApplyOutput, DatabaseCreateReleaseInput } from './databaseCreate';
@@ -76,7 +77,7 @@ export interface TaskEvent { queryFileSource?: import('./queryFileSources').Quer
 export interface FileChoice { token: string; name: string; }
 export type QueryFileEncoding = 'utf8' | 'utf16le' | 'gb18030';
 export interface AppSettings { theme: 'dark' | 'light'; sidebarWidth: number; resultLimit: number; pageSize: number; dataTypeColors?: boolean; editorFontSize?: number; editorWordWrap?: boolean; editorTabSize?: number; editorInsertSpaces?: boolean; tabs: { id: string; kind: 'query' | 'table'; title: string; connectionId: string; database?: string; databaseContext?:QueryDatabaseContext; table?: string; sql?: string; sourceBinding?: QuerySourceBinding; /** 文件权限仅Main持有，与本地保存查询来源分开。 */ fileSourceBinding?: QueryFileSourceRef; /** 仅查询标签可保存的编辑区像素高度；缺项由读取合同回退300。 */ queryEditorHeight?: number }[]; activeTabId?: string; }
-export interface ImportOptions { connectionId: string; database: string; table: string; fileToken: string; format: 'csv' | 'json' | 'sql'; encoding: 'utf8' | 'utf16le' | 'gb18030'; mapping: Record<string, string>; taskId: string; }
+export interface ImportOptions { connectionId: string; database: string; table: string; fileToken: string; format: 'csv' | 'json' | 'sql'; encoding: 'utf8' | 'utf16le' | 'gb18030'; csvDelimiter?: CsvImportDelimiter; mapping: Record<string, string>; taskId: string; }
 export interface ExportOptions { csvSelection?: CsvExportSelection; connectionId: string; database: string; table: string; fileToken: string; format: 'csv' | 'json' | 'sql'; encoding: 'utf8' | 'utf16le' | 'gb18030'; includeStructure: boolean; includeData: boolean; taskId: string; }
 /** 仅包含已经返回的结果，不携带可触发数据库访问的 SQL、连接或会话。 */
 export interface ResultExportData { columns: Pick<ResultColumn, 'key' | 'name'>[]; rows: DataRow[]; truncated: boolean; }
@@ -189,7 +190,7 @@ export interface CommandMap {
   'excel.export': { input: ExcelExportRequest; output: { rows: number } };
   'files.readQuery': { input: { fileToken: string; encoding: QueryFileEncoding }; output: { sql: string; encoding: QueryFileEncoding } };
   'files.writeQuery': { input: { fileToken: string; encoding: QueryFileEncoding; sql: string }; output: void };
-  'files.preview': { input: { fileToken: string; format: 'csv' | 'json'; encoding: string }; output: { columns: string[]; rows: DataRow[] } };
+  'files.preview': { input: { fileToken: string; format: 'csv' | 'json'; encoding: string; csvDelimiter?: CsvImportDelimiter }; output: { columns: string[]; rows: DataRow[] } };
   'files.import': { input: ImportOptions; output: { rows: number; errors: string[] } };
   'files.exportColumns': { input: CsvExportFieldsInput; output: CsvExportFieldsOutput };
   'files.releaseExportColumns': { input: { catalogId: string }; output: void };

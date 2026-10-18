@@ -1,8 +1,10 @@
 import type { DataRow, TableInfo } from '../shared/contracts';
+import { csvImportDelimiter, type CsvImportDelimiter } from '../shared/csvImport';
 
 export interface ImportPreviewTarget { connectionId: string; database: string; table: string; }
 export interface ImportPreviewContext extends ImportPreviewTarget {
   fileToken: string; format: 'csv' | 'json'; encoding: 'utf8' | 'utf16le' | 'gb18030';
+  csvDelimiter?: CsvImportDelimiter;
 }
 export interface ImportSample { columns: string[]; rows: DataRow[]; }
 export interface ReadyImportPreview { key: string; status: 'ready'; info: TableInfo; sample: ImportSample; mapping: Record<string, string>; }
@@ -12,12 +14,12 @@ interface PreviewDependencies {
   preview: (context: ImportPreviewContext) => Promise<ImportSample>;
 }
 
-/** 元数据只按目标缓存，文件、格式和编码另行组成预览标识，避免跨表混用字段映射。 */
+/** 元数据只按目标缓存，文件、格式、编码和分隔符另行组成预览标识。 */
 function targetKey(target: ImportPreviewTarget): string { return JSON.stringify([target.connectionId, target.database, target.table]); }
 
 /** 使用结构化键避免名称分隔符碰撞；就绪判断在渲染阶段完成，不等待副作用失效旧状态。 */
 export function importPreviewKey(context: ImportPreviewContext): string {
-  return JSON.stringify([context.connectionId, context.database, context.table, context.fileToken, context.format, context.encoding]);
+  return JSON.stringify([context.connectionId, context.database, context.table, context.fileToken, context.format, context.encoding, csvImportDelimiter(context.format, context.csvDelimiter)]);
 }
 
 /** 只有完整匹配当前上下文的预览可见且可导入，旧预览和失败状态均不能借用旧映射。 */
