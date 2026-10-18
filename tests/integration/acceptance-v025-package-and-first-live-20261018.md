@@ -4,7 +4,7 @@
 
 Root 从固定 `e80b05a86ccda291a7a71381e98efbec13715540` 打包；产品编译仍来自 `66920f782873c35ab05870400874f7d2e2f42cfa`，108份活动编译文件在打包前封存。执行 `node node_modules/electron-builder/cli.js --win --x64 --publish never`，退出0，未重建产品、未生成密钥或证书。
 
-候选 `DBArk-0.25.0-win-x64-unsigned.exe` 为142,357,527字节，SHA256 `012611ceb932dd9d62be42ea1d6a6111d2c6f7a2e3d556d281ea4f542a4984ce`。同批 `app.asar` 为203,059,913字节，SHA256 `b33ee3d60cb45f568c3695c7be260ee59cd7f82a0c05a3bd761d6b3dfacaab38`。本地忽略收据 `run1688-v025-windows-package/artifacts.json` SHA256 `a5726b56ecb1d8bf03dcd3ac09bc4a3278cd27849b082598a7ae123ab01`。
+候选 `DBArk-0.25.0-win-x64-unsigned.exe` 为142,357,527字节，SHA256 `012611ceb932dd9d62be42ea1d6a6111d2c6f7a2e3d556d281ea4f542a4984ce`。同批 `app.asar` 为203,059,913字节，SHA256 `b33ee3d60cb45f568c3695c7be260ee59cd7f82a0c05a3bd761d6b3dfacaab38`。本地忽略收据 `run1688-v025-windows-package/artifacts.json` SHA256 `a5726b56ecb1d8bf03dcd3ac09bc4a0afea3278cd27849b082598a7ae123ab01`。
 
 这是未签名的本地候选，尚未安装、未发布。macOS 本版本候选亦未验收。
 
