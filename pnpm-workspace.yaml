@@ -5,3 +5,4 @@ allowBuilds:
   electron-winstaller: false
 patchedDependencies:
   mysql2@3.24.5: patches/mysql2@3.24.5.patch
+  monaco-editor@0.55.1: patches/monaco-editor@0.55.1.patch
