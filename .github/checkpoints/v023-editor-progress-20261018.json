@@ -1,0 +1,9 @@
+{
+  "version": "0.23.0",
+  "source": "a41903a5a25ec40042cfcb5c5cc47c7ccf89a7e6",
+  "purpose": "新一轮三平台缩进与分栏源码及实际安装诊断，保持原断言和正常退出要求",
+  "previousRun": "39089165148",
+  "retryPreviousRun": false,
+  "automaticRetry": 0,
+  "release": false
+}
