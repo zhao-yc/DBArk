@@ -44,12 +44,12 @@ export function tableCreateTimeDefaultMatches(expected: string, actual: unknown)
   const wanted = readControlledTimestampDefault(expected), observed = readControlledTimestampDefault(actual);
   return !!wanted && !!observed && wanted.precision === observed.precision;
 }
-/** COLUMNS.EXTRA仅接受可选DEFAULT_GENERATED与一条受控自动时间属性，未知后缀不能算核验通过。 */
+/** COLUMNS.EXTRA仅接受独立前置DEFAULT_GENERATED及完整时间属性，不删除中间标记来重组函数。 */
 export function tableCreateOnUpdateExtraMatches(column: TableCreateTimeColumn, extra: unknown): boolean {
   if (!Object.hasOwn(column, 'onUpdate')) return true;
-  if (typeof extra !== 'string' || extra.length > 512 || (extra.match(/\bDEFAULT_GENERATED\b/gi)?.length ?? 0) > 1) return false;
-  const value = extra.replace(/\bDEFAULT_GENERATED\b/gi, '').trim();
-  if (!column.onUpdate) return value === '';
-  const match = /^on\s+update\s+(.+)$/i.exec(value), actual = match && readControlledTimestampDefault(match[1]);
+  if (typeof extra !== 'string' || extra.length > 512) return false;
+  const value = extra.trim();
+  if (!column.onUpdate) return /^(?:DEFAULT_GENERATED)?$/i.test(value);
+  const match = /^(?:DEFAULT_GENERATED\s+)?on\s+update\s+(.+)$/i.exec(value), actual = match && readControlledTimestampDefault(match[1]);
   return !!actual && actual.precision === tableCreateTimeType(column.type)?.precision;
 }

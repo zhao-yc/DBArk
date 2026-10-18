@@ -58,3 +58,24 @@ describe('新表显式自动更新时间合同与SQL（离线）', () => {
     expect(tableCreateOnUpdateExtraMatches({ ...column, onUpdate: null }, 'on update CURRENT_TIMESTAMP(3)')).toBe(false);
   });
 });
+
+describe('EXTRA标记位置严格语法（离线）', () => {
+  it.each(['DEFAULT_GENERATED on update CURRENT_TIMESTAMP(3)', 'on update CURRENT_TIMESTAMP(3)', 'default_generated ON UPDATE current_timestamp(3)', 'DEFAULT_GENERATED on update NOW(3)'])('完整受控正例%s', extra => {
+    expect(tableCreateOnUpdateExtraMatches(draft().columns[0], extra)).toBe(true);
+  });
+  it.each([
+    'on update CURRENT_TIMESTAMP DEFAULT_GENERATED(3)',
+    'on update CURRENT_TIMESTAMP(3) DEFAULT_GENERATED',
+    'on DEFAULT_GENERATED update CURRENT_TIMESTAMP(3)',
+    'on update DEFAULT_GENERATED CURRENT_TIMESTAMP(3)',
+    'DEFAULT_GENERATED DEFAULT_GENERATED on update CURRENT_TIMESTAMP(3)',
+  ])('拒绝中间、末尾或重复标记%s，不能删除后重组函数', extra => {
+    expect(tableCreateOnUpdateExtraMatches(draft().columns[0], extra)).toBe(false);
+  });
+  it('零精度和明确null仍只接受完整语法', () => {
+    const column = draft('DATETIME(0)', 'CURRENT_TIMESTAMP(0)').columns[0];
+    for (const extra of ['on update CURRENT_TIMESTAMP', 'DEFAULT_GENERATED on update CURRENT_TIMESTAMP()']) expect(tableCreateOnUpdateExtraMatches(column, extra)).toBe(true);
+    for (const extra of ['', 'DEFAULT_GENERATED', 'default_generated']) expect(tableCreateOnUpdateExtraMatches({ ...column, onUpdate: null }, extra)).toBe(true);
+    for (const extra of ['DEFAULT_GENERATED DEFAULT_GENERATED', 'DEFAULT_GENERATED(0)', 'future_attribute DEFAULT_GENERATED']) expect(tableCreateOnUpdateExtraMatches({ ...column, onUpdate: null }, extra)).toBe(false);
+  });
+});

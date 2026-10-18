@@ -158,6 +158,24 @@ describe('新表受控自动时间实际Engine（仅RAM驱动）', () => {
   });
 });
 
+describe('新表EXTRA独立标记语法实际Engine（仅RAM驱动）', () => {
+  it.each(['DEFAULT_GENERATED on update CURRENT_TIMESTAMP(3)', 'on update CURRENT_TIMESTAMP(3)'])('完整语法%s仍完成SHOW和COLUMNS核验', async extra => {
+    const draft = timeDesign(), plan = await preview(await get(), draft); catalogExtra = extra;
+    expect(await apply(plan)).toMatchObject({ ddlCompleted: true, definitionVerified: true, resourcesReleased: true });
+    expect(sent.filter(sql => sql.startsWith('CREATE TABLE'))).toEqual([plan.sql]);
+  });
+  it.each([
+    'on update CURRENT_TIMESTAMP DEFAULT_GENERATED(3)',
+    'on update CURRENT_TIMESTAMP(3) DEFAULT_GENERATED',
+    'on DEFAULT_GENERATED update CURRENT_TIMESTAMP(3)',
+    'on update DEFAULT_GENERATED CURRENT_TIMESTAMP(3)',
+  ])('非法标记%s保留DDL完成但拒绝完整核验，不重放CREATE', async extra => {
+    const draft = timeDesign(), plan = await preview(await get(), draft); catalogExtra = extra;
+    expect(await apply(plan)).toMatchObject({ ddlCompleted: true, definitionVerified: false, resourcesReleased: true });
+    await expect(apply(plan, 'replay-extra')).rejects.toThrow(); expect(sent.filter(sql => sql.startsWith('CREATE TABLE'))).toEqual([plan.sql]);
+  });
+});
+
 describe('显式空串默认值沿原新表任务（仅RAM驱动）', () => {
   it.each(['mysql', 'mariadb'] as const)('%s空串经过合同、预览和目录后核完整保留', async family => {
     dialect = family; version = family === 'mysql' ? '8.4.11' : '10.11.19-MariaDB';
