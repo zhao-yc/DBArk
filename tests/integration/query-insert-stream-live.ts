@@ -176,7 +176,8 @@ export async function runQisCase(context: TestContext, kind: QisCase) {
       await step(() => running.done); expect(running.outcome?.ok).toBe(false); expect(running.pending).toBeUndefined(); expect(running.event?.status).toBe('failed'); expect(running.event?.queryExport?.fileCommitted).toBe(false); await file(target, targetIdentity); await noPartial();
     } else {
       const pending = await step(() => running.ready); expect(running.settled).toBe(false); expect(pending).toMatchObject({ totalRows: 301, shownRows: 20, encoding, target: { database: plan.database, table: 'target', columns: [...qisColumns] } });
-      expect(running.event?.queryExport?.phase).toBe('awaiting-confirmation'); expect(sourceExecutions).toBe(1); await file(target, targetIdentity); expect((await sql('SELECT COUNT(*) AS n FROM ' + table('target')))[0][0].n).toBe(0);
+      // COUNT为BIGINT，独立连接显式bigNumberStrings=true，应精确核字符串而非改驱动解码。
+      expect(running.event?.queryExport?.phase).toBe('awaiting-confirmation'); expect(sourceExecutions).toBe(1); await file(target, targetIdentity); expect((await sql('SELECT COUNT(*) AS n FROM ' + table('target')))[0][0].n).toBe('0');
       expect(partials.size).toBe(1); const staged = await file([...partials][0]); expect(staged.bytes.length).toBe(pending.bytes);
       const text = new TextDecoder(encoding === 'utf8' ? 'utf-8' : encoding === 'utf16le' ? 'utf-16le' : 'gb18030', { fatal: true }).decode(staged.bytes);
       expect(text.startsWith(pending.sql)).toBe(true); expect((text.match(/^INSERT INTO /gm) ?? []).length).toBe(301); expect((pending.sql.match(/^INSERT INTO /gm) ?? []).length).toBe(20); if (encoding === 'utf16le') expect([...staged.bytes.subarray(0, 2)]).toEqual([255, 254]);
@@ -193,7 +194,7 @@ export async function runQisCase(context: TestContext, kind: QisCase) {
         expect(running.outcome?.ok).toBe(true); expect(nativeCommands).toBe(commands); expect(connectAttempts).toBe(connections); expect(sourceExecutions).toBe(1);
         if (!running.outcome?.ok) throw Error('QIS导出未知'); expect(running.outcome.value).toMatchObject({ statementsCompleted: 1, fileCommitted: true }); expect(running.outcome.value.preview.results[0].rows).toHaveLength(200); expect(running.outcome.value.preview.results[0].truncated).toBe(true);
         await refusedConfirmation({ taskId: running.id, previewToken: pending.previewToken, confirmation: plan.database + '.target', acknowledged: true }); expect(nativeCommands).toBe(commands); expect(connectAttempts).toBe(connections);
-        targetIdentity = staged.identity; expect((await file(target, targetIdentity)).bytes).toEqual(staged.bytes); await noPartial(); expect((await sql('SELECT COUNT(*) AS n FROM ' + table('target')))[0][0].n).toBe(0);
+        targetIdentity = staged.identity; expect((await file(target, targetIdentity)).bytes).toEqual(staged.bytes); await noPartial(); expect((await sql('SELECT COUNT(*) AS n FROM ' + table('target')))[0][0].n).toBe('0');
         for (const mode of ['', ',NO_BACKSLASH_ESCAPES']) {
           const replay = await raw('replay-' + (mode ? 'nbe' : 'normal'), true); await facts(replay.connection);
           await step(() => replay.connection.query("SET SESSION sql_mode='STRICT_ALL_TABLES,NO_ENGINE_SUBSTITUTION" + mode + "',time_zone='+00:00'"));

@@ -84,3 +84,5 @@ node node_modules/vitest/vitest.mjs run --config vitest.integration.config.ts te
 固定Root `493dc2f` 的首次utf8实库尝试在第一条只读事实查询被拒绝，源SQL执行0、库/目录/partial创建0，另外五例未运行。原日志SHA-256为 `88944f447ac7b5633c1ba5711b0ec344b31e7213a4c93d7a1b1c1976c3de48e9`。Root随后三条只读查询确认MySQL8.4.11/Linux、原UUID及所有普通能力正确；旧线程43068已不存在，本例库和目录均未创建，新观察连接正常关闭。
 
 独立mysql2连接的默认握手位令其会话sql_mode多出IGNORE_SPACE，超出借用事实门的既有白名单。本修正只为独立观察/回放连接显式传 `flags: ['-IGNORE_SPACE']`；不放宽共享事实断言，不SET服务器配置，也不改产品驱动。原失败及journal保留，须用新nonce和新目录另开验证，不能将首例写成通过。
+
+后续固定 `d9fba31` 的新utf8单例已通过只读事实、造数及一次源查询，301行完整暂存到待确认阶段；随后断言将COUNT的规范字符串`'0'`期待为数字0而失败，未确认发布／回放，另五例未运行。独立连接原已设置`bigNumberStrings:true`，此修正只将两处COUNT空表期待改为严格`'0'`，保留驱动精度和所有文件／会话断言。原日志 SHA-256 `04ab430e03b03a45b0b68958fb27f6b49a00a5e763ee984de71f4a141886444d`，原随机库／目录／partial与journal保留，须先独立核归属再精确清理或作为原失败数据保留，不自动扩大删除。
