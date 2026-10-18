@@ -556,8 +556,8 @@ export class LocalStore {
     let token = this.queryFileDocuments.get(tabId); if (!token) { token = {}; this.queryFileDocuments.set(tabId, token); }
     return { token, tab: { ...tabs[0] } };
   }
-  /** 来源和settings引用在同一次本地事务落盘；打开时也核旧SQL，保存时不回填旧正文。 */
-  commitQueryFileSource(value: PrivateQueryFileSource, expected?: QueryFileSourceRef, opened?: { previousSql: string; sql: string }): void {
+  /** 读取先核旧SQL；只有首次打开提供sql接管占位，重读只原子更新来源而保留原文。 */
+  commitQueryFileSource(value: PrivateQueryFileSource, expected?: QueryFileSourceRef, opened?: { previousSql: string; sql?: string }): void {
     const source = privateQueryFileSourceSchema.parse(value), current = this.queryFileSource(source.tabId);
     if (!sameQueryFileSource(current?.ref, expected)) throw Error('文件来源修订已变化');
     const document = this.queryFileDocument(source.tabId);
@@ -566,7 +566,8 @@ export class LocalStore {
     this.mutate(() => {
       this.db.run('INSERT INTO query_file_sources VALUES (?,?,?,?) ON CONFLICT(tab_id) DO UPDATE SET id=excluded.id,revision=excluded.revision,data=excluded.data', [source.tabId, source.ref.id, source.ref.revision, JSON.stringify(source)]);
       const settings = this.settings();
-      if (opened) settings.tabs = settings.tabs.map(tab => tab.id === source.tabId ? { ...tab, sql: opened.sql } : tab);
+      const openedSql = opened?.sql;
+      if (openedSql !== undefined) settings.tabs = settings.tabs.map(tab => tab.id === source.tabId ? { ...tab, sql: openedSql } : tab);
       this.db.run('INSERT INTO settings VALUES (1,?) ON CONFLICT(id) DO UPDATE SET data=excluded.data', [JSON.stringify(settings)]);
     });
   }

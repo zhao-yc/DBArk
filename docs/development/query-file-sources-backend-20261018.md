@@ -6,7 +6,7 @@
 
 `CommandMap`、预加载白名单和共享校验声明六个命令：`queryFileSources.open/save/saveAs/status/release/cancel`。实际 Main IPC 对本前缀调用 `ColumnsMainCapabilities.capture`，绑定真实窗口、主frame对象、processId/frameToken及文档代次；文件操作在独立Main分支处理，不发送给数据库broker，不读取连接密码。每次异步返回及提交前重验窗口/查询文档/来源修订/取消，最终IPC发布再次核原窗口；所有小型文件操作复用 `queryFileOperations`，退出等待其结算。
 
-renderer必须先把 query tab 经既有 settings.save 保存，再调用文件来源命令。`status({tabId})` 只读私有本地记录，重启时不会自动stat/read外部文件；显式保存/重读时重新捕获当前真实文档并访问原授权路径。`open` 无source弹原生框，有source则明确重读原关联路径。打开期间正文发生变化或tab关闭后同ID重建，旧打开结果被拒绝。打开成功在本地原子保存来源及读取正文；renderer应按同一打开意图接管模型，不能覆盖之后的新输入。
+renderer必须先把 query tab 经既有 settings.save 保存，再调用文件来源命令。`status({tabId})` 只读私有本地记录，重启时不会自动stat/read外部文件；显式保存/重读时重新捕获当前真实文档并访问原授权路径。`open` 无source的首次打开弹原生框，原子保存来源并接管空占位SQL；有source重读只原子推进原标签来源/磁盘基线，保留原标签SQL，返回正文供UI新草稿使用。回包丢失或renderer崩溃时原SQL仍已保留，不依赖后续renderer flush补回。读取期间或提交前正文改变、tab关闭后同ID重建，旧读取均拒绝。renderer应按同一打开意图处理模型，不能覆盖之后的新输入。
 
 标签的 `fileSourceBinding` 仅为 `{id,revision}`。状态/打开/保存返回的 binding view 含 `ref/name/displayPath/encoding/bom/eol/savedSqlDigest`；displayPath仅供展示，六个命令均不接收路径。`savedSqlDigest` 是**点击时提交SQL完整合法UTF-8字节的SHA-256**，不先归一化EOL；打开时对应原始解码正文。文件原字节摘要另存于Main。共享 `queryFileSourceDigestPayload/queryFileSourceSqlDigest/queryFileSourceHasChanges` 给前后端同一算法：摘要前拒绝孤立代理项/NUL，正文中的U+FEFF保留，显式编码/BOM/EOL变化独立进入dirty。保存成功只推进该正文快照基线，不修改settings里后来编辑的SQL。renderer要比较实际模型和这一基线，不根据返回成功清空后来输入。
 
@@ -55,3 +55,11 @@ renderer必须先把 query tab 经既有 settings.save 保存，再调用文件�
 未执行GUI、Playwright（含list）、构建、端口/网络、Docker、真实用户文件、.env/凭据、外部数据库、剪贴板、发布或推送。测试文件只在本clone的专属目录，本地配置用sql.js夹具；首轮旧测试自动使用的沙箱临时目录错误单列保留，后续已限定为本clone。没有新增密钥或证书，无需重要文件备份。
 
 剩余验收：Root合同/安全与回归复核、员工3完整renderer链、Windows/macOS原生授权与权限/异常/退出/同文件并发/安装验证，以及上述文件系统竞态与元数据策略核准。本提交是后台交付，不是0.24完整产品或发行完成。
+
+## 重读保留原标签SQL的后续窄修
+
+父提交 `a131448d96dfc0f8a2b0f0ae5337feb3ccf2d8c5` 的真实LocalStore/原QueryFileSources/自有文件对照已证实：`open(source)`返回后、任何renderer flush之前，直接读已落盘SQLite即发现原标签SQL被外部新版替换。原红保留于本clone `.cache/sql-file-reread-fix/parent-red.log`，只选该一例，1红/2未选择。
+
+修复把“读后原文校验”与“正文接管”分开：两种读取仍在Main提交前及LocalStore内核对原SQL；只有无source初开传入待接管正文，带source重读只提交来源基线。原文保留与来源修订在同一本地原子事务内生效。未新增IPC字段/命令，未改renderer。
+
+`.cache/sql-file-reread-fix/fixed-three.log`只跑3个必要身份并全部通过：重读后无flush直接读盘及重启保持原文且来源推进；初开仍接管空占位；读取分块和recording提交门前的新输入均拒绝旧读、保持新SQL及旧来源修订。未重跑127、mode、类型或完整套件；这组配置SQLite及自有临时文件证据不替代GUI/IPC断线或安装实测。

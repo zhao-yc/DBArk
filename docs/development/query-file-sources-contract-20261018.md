@@ -4,7 +4,7 @@
 
 - 查询标签可持有 `fileSourceBinding: {id, revision}`。它只是引用；主进程私有来源表按 tabId 保存原生选择的路径、身份及文件基线。只有 query 标签可以持有，table 标签拒绝。
 - `QueryFileSourceView` 供显示，含 `ref/name/displayPath/encoding/bom/eol/savedSqlDigest`。`displayPath` 不是权限，也不能回传来授权写入。
-- `queryFileSources.open({tabId,encoding,source?})`：tab 必须先经 `settings.save` 保存为当前查询文档。没有 source 弹原生打开框；有 source 是用户明确要求重读当前关联原文件。返回 `opened` 的正文与 binding，或 `cancelled/blocked`。启动及 status 不读外部文件。
+- `queryFileSources.open({tabId,encoding,source?})`：tab 必须先经 `settings.save` 保存为当前查询文档。没有 source 的首次打开弹原生框，原子接管空占位标签SQL及文件来源；有 source 的显式重读只原子推进原标签的来源修订/磁盘基线，**保留原标签SQL**，返回正文由UI作为新草稿使用。重读返回后即使renderer崩溃或回包丢失，原SQL也不依赖后续renderer flush恢复。两种读取均校验读期间及来源提交前原文未变，变更则拒绝旧读。返回 `opened` 的正文与 binding，或 `cancelled/blocked`。启动及 status 不读外部文件。
 - `save({tabId,source,sql,eol?})`：对精确修订的关联保存点击时正文，默认 preserve。统一换行按文件原风格编码；混合换行正文未变保留原字节，正文编辑后 preserve 被拒绝，用户须明确选 lf/crlf/cr。BOM/编码按来源保持。
 - `saveAs({tabId,source?,sql,encoding,bom,eol})`：原生保存框授权新路径，显式选择编码/BOM/换行策略。source 存在时必须精确匹配，不能借另存覆盖另一标签刚建立的关联。
 - `status({tabId,source?})`：仅查看主进程私有记录，不访问外部文件；用于重启后的文档重新绑定。返回 `bound/unbound/blocked`。坏来源不删除查询正文。

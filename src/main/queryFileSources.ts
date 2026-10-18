@@ -84,13 +84,14 @@ export class QueryFileSources {
     }
   }
   /** 本地来源提交与文件写入分阶段；文件已写时配置失败必须明确报告，不能自动重放。 */
-  private commit(tabId: string, context: Context, snapshot: QueryFileSnapshot, encoding: QueryFileEncoding, sql: string, opened: boolean): PrivateQueryFileSource {
+  private commit(tabId: string, context: Context, snapshot: QueryFileSnapshot, encoding: QueryFileEncoding, sql: string, opened: boolean, adoptSql = opened): PrivateQueryFileSource {
     context.check(); context.report('recording'); context.check();
+    if (opened && (this.document(tabId).tab.sql ?? '') !== context.previousSql) throw new QueryFileSourceFailure('document-changed', '读取期间查询正文已编辑，保留当前输入');
     const decoded = decodeSourceSnapshot(snapshot, encoding), previous = context.expected;
     const revision = previous ? previous.ref.revision + 1 : 1;
     if (!Number.isSafeInteger(revision)) throw new QueryFileSourceFailure('storage', '文件来源修订已耗尽，请明确解除关联后重试');
     const source: PrivateQueryFileSource = { version: 1, tabId, connectionId: context.connectionId, ref: { id: previous?.ref.id ?? randomUUID(), revision }, path: snapshot.path, identity: snapshot.identity, fileDigest: snapshot.digest, savedSqlDigest: queryFileSqlDigest(sql), encoding: decoded.encoding, bom: queryFileBom(snapshot.bytes), eol: queryFileEol(decoded.sql) };
-    try { this.host.store.commitQueryFileSource(source, previous?.ref, opened ? { previousSql: context.previousSql, sql } : undefined); }
+    try { this.host.store.commitQueryFileSource(source, previous?.ref, opened ? { previousSql: context.previousSql, ...(adoptSql ? { sql } : {}) } : undefined); }
     catch { throw new QueryFileSourceFailure('storage', context.wrote === 'no' ? '来源记录未保存，查询正文保持' : '文件已写入，但本地来源记录未保存；请核对文件并重新读取，不能自动重试'); }
     context.expected = source; return source;
   }
@@ -104,7 +105,8 @@ export class QueryFileSources {
       if (!isAbsolute(path)) throw new QueryFileSourceFailure('io', '原生文件选择没有返回绝对目标');
       const snapshot = await readQueryFileSnapshot(path, context.check, context.report); context.check();
       if ((this.document(input.tabId).tab.sql ?? '') !== context.previousSql) throw new QueryFileSourceFailure('document-changed', '打开期间查询正文已编辑，保留当前输入');
-      const decoded = decodeSourceSnapshot(snapshot, input.encoding), source = this.commit(input.tabId, context, snapshot, decoded.encoding, decoded.sql, true);
+      // 重读只推进原标签的文件基线；返回正文供UI新草稿使用，不能先改写原标签SQL。
+      const decoded = decodeSourceSnapshot(snapshot, input.encoding), source = this.commit(input.tabId, context, snapshot, decoded.encoding, decoded.sql, true, !input.source);
       return { state: 'opened', binding: queryFileSourceView(source), sql: decoded.sql };
     });
   }
