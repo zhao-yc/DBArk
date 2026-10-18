@@ -14,10 +14,20 @@
 
 预览绑定完整快照摘要、编码和映射，主文档归属复用正式 Main 捕获器；预览两分钟过期，提交同步消费一次。配置变更、到期、重选文件和文档切换不能复用旧授权。逐行生成沿原有原子文件任务写入，失败或取消保留原目标；文本使用 UTF-8 十六进制，BLOB、NULL、空串和精确数值字符串分别保留。具体范围见[用户说明](../query-result-insert-sql.md)。
 
-作者交接读盘 SHA-256 为 `4fe39edf5b68108e1e414def770f21ad2d175f20e5d9d9f627f6909c15a13828`。Root 通读合同、Main 归属及消费、Engine 原子写与 React 代次处理；专门独立对照继续接收。
+作者交接读盘 SHA-256 为 `4fe39edf5b68108e1e414def770f21ad2d175f20e5d9d9f627f6909c15a13828`。Root 通读合同、Main 归属及消费、Engine 原子写与 React 代次处理。三组独立对照通过：手写 SQL 常量与真实文件字节核对精度／NULL／BLOB／Unicode；一次消费及配置 ABA；路径预约后原文档失效时零 Engine 投递并保留原文件。独立交接读盘 SHA-256 为 `71ca8ca674e4c303ca6a1efbc0e9100189b9837dd16ac23cb75d46cb1238de72`，不代替实际数据库对目标类型转换、字符集和约束的接受验证。
 
 ## 整合验证与交付边界
 
 固定产品源码 `04fda4f1512726cfca153a08266f2326baa666fd` 的 23 个相关测试文件共 261 项通过、0 失败、0 跳过，全项目类型检查退出码 0。控制器 `node .cache/run1751-verify-v028-root.mjs`，关闭环境文件读取，使用私有 TEMP/TMP 与缓存；未启动 Electron、数据库、Docker、端口或系统剪贴板。原日志 SHA-256 为 `f1599fd18d6c3bcfa35c2aee62fa4fe06a08b23288ea4be5f3f402b280b2098d`。作者与 Root 用例重叠，不相加。
 
-版本提交之后尚待完整 CI、正式构建及本版三平台原生和安装验收。本地 GUI 按用户之前的停止指令暂停。0.27 的 Windows 候选和 0.23 的原生诊断不计作本版证据；公开预览仍为 0.21.0。Q01、Q05 及 Navicat 全功能目标保持“部分”。
+本地 GUI 按用户之前的停止指令暂停。0.27 的 Windows 候选和 0.23 的原生诊断不计作本版证据；公开预览仍为 0.21.0。Q01、Q05 及 Navicat 全功能目标保持“部分”。
+
+## 正式构建与完整 CI
+
+固定 `581cce8d3a6baec87d06ab475805a45d94eca179` 执行一次 `node scripts/build.mjs`，产生 109 个编译文件；相对已经类型检查的 `04fda4f`，产品源码、脚本、锁文件和构建配置未改，package 仅提升版本。控制器为 `node .cache/run1752-build-v028-root.mjs`，构建日志 SHA-256 为 `658226ccbe57e24469c1b4e33d36dfdfe48fbef05637b840ccc74aeb8871c269`。
+
+只读正式 Vite 产物 AST 证明，整个 renderer 入口静态 JavaScript 为 5421878 字节，`sqlFormattingRoles` 动态块为 2056749 字节，不在入口静态导入链或 HTML 预加载中。动态块复用已有入口中的公共依赖，不能把其依赖闭包再累计为新增下载。`node .cache/run1753-read-v028-bundle-root.mjs` 的 graph.json SHA-256 为 `864a1d015b10feed4f119384e70f70ad16854f92855ee2217d2ed16e9ec7ab14`。完整 renderer 与前面的独立 RAM 入口范围不同，数值不直接比较，也不是原生启动耗时或内存证明。
+
+首次 [CI 39105132835](https://github.com/zhao-yc/DBArk/actions/runs/39105132835) 保留为失败：517 文件，9550 通过／1 失败／10 跳过，类型通过；旧 `ui-current-statement` 夹具抽取真实 `attachQueryEditor`，漏了新增 `formatting` 初始引用，编辑器变化分支抛 ReferenceError。原日志为 137265 字节，SHA-256 `7f1813536b96d69c719359004a65eb01ecd60fa664e8b8bc31b245a647ca1b6e`。`4236db0ded6a4e071cb7f4255f7aaee56b2af684` 仅补同组件初始 null 引用及中文注释，原断言和产品源码逐字不变；原文件 19 项通过，日志 SHA-256 为 `9f602f77e7912332e511caf7e5f438c916e81dd25bcd641ed6957941076a6f33`。
+
+修后固定 `4236db0` 的新 [CI 39105522660](https://github.com/zhao-yc/DBArk/actions/runs/39105522660) 已成功，job `117610406638` 为 517 文件／9551 通过／10 条件跳过，类型和构建成功。原日志 150453 字节，SHA-256 `8d1e45f1d3fe185a9c411d635bbdfd97e14b840f2b84c13c06122a26103af8b4`。这是新固定头运行，未重跑或改写原失败。桌面与发行步骤跳过；0.28 没有本地安装包、安装运行、三平台原生或实库新验收，也没有公开发行。
