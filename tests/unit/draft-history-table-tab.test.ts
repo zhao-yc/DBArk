@@ -14,6 +14,7 @@ import { pasteInsertZh } from '../../src/renderer/locales/pasteInsert.zh-CN';
 import { recordDuplicateZh } from '../../src/renderer/locales/recordDuplicate.zh-CN';
 import { recordViewZh } from '../../src/renderer/locales/recordViews.zh-CN';
 import { zh } from '../../src/renderer/locales/zh-CN';
+import { createStore } from 'zustand/vanilla';
 
 type Element = { type: unknown; props: Record<string, any> };
 const renderer = fileURLToPath(new URL('../../src/renderer', import.meta.url)), compiled = new Map<string, string>();
@@ -37,7 +38,19 @@ async function fixture(options: { batch?: boolean; plainKey?: boolean; lease?: b
   }
   const info: TableInfo = { database: 'db', name: 'items', objectKind: 'table', engine: 'InnoDB', primaryKey: ['id'], editableKey: ['id'], foreignKeys: [], indexes: [], ddl: '', columns: ['id', 'note', 'bytes', 'doc'].map(name => ({ name, type: name === 'bytes' ? 'blob' : 'text', nullable: true, defaultValue: null, extra: name === 'id' ? 'auto_increment' : '', generated: false, comment: '' })) };
   const tab = { id: '表页', kind: 'table', connectionId: '连接', database: 'db', table: 'items' };
-  const workspace = { settings: { activeTabId: tab.id, tabs: [tab], pageSize: 50, theme: 'dark' }, connections: [{ id: '连接', name: '合成连接' }], connectionVersions: { 连接: 1 }, setDirty: vi.fn(), setBusy: vi.fn(), setTableLayoutDraft: vi.fn(), notify: vi.fn(), updateSettings: vi.fn() };
+  const workspaceSeed = { settings: { activeTabId: tab.id, tabs: [tab], pageSize: 50, theme: 'dark' }, connections: [{ id: '连接', name: '合成连接' }], connectionVersions: { 连接: 1 }, activeJobs: {} as Record<string, boolean>, setDirty: vi.fn(), setBusy: vi.fn(), setTableLayoutDraft: vi.fn(), notify: vi.fn(), updateSettings: vi.fn() };
+  const stateApi = createStore<typeof workspaceSeed>(() => workspaceSeed);
+  // 保留旧例直接赋值的端口，但经真实Zustand setState发布不可变前后态，ABA不能等到render才观察。
+  const workspace = new Proxy(workspaceSeed, {
+    get(_target, key, receiver) {
+      const current = stateApi.getState();
+      if (key === 'settings' || key === 'connectionVersions' || key === 'activeJobs') return new Proxy(current[key], {
+        set(_branch, property, value) { stateApi.setState(state => ({ [key]: { ...state[key], [property]: value } } as Partial<typeof workspaceSeed>)); return true; }
+      });
+      return Reflect.get(current, key, receiver);
+    },
+    set(_target, key, value) { stateApi.setState({ [key]: value } as Partial<typeof workspaceSeed>); return true; }
+  });
   const source = { id: '18446744073709551615', note: '原值', bytes: { type: 'binary', base64: 'AAH/' }, doc: '{"x":1,"x":-0,"n":9007199254740993}' };
   if (options.plainKey) info.columns[0].extra = '';
   const sourceRows = options.batch ? [source, { ...source, id: '18446744073709551614', note: '' }] : [source];
@@ -51,7 +64,7 @@ async function fixture(options: { batch?: boolean; plainKey?: boolean; lease?: b
     if (command === 'table.preferences.get' || command === 'connections.open') return null;
     throw Error('未授权的RAM端口：' + command);
   });
-  const store = Object.assign((selector: (value: any) => any) => selector(workspace), { getState: () => workspace });
+  const store = Object.assign((selector: (value: any) => any) => selector(stateApi.getState()), stateApi);
   const context = createContext({ Error, Object, structuredClone, HTMLElement: Node, TextEncoder, TextDecoder, URL, atob, btoa, document: { querySelector: () => dialog ? {} : null }, window: { confirm: () => true } });
   const modules = new Map<string, { exports: any }>();
   function load(file: string): any {
@@ -96,10 +109,17 @@ async function fixture(options: { batch?: boolean; plainKey?: boolean; lease?: b
     grid().onCellKeyDown({ mode, row: grid().rows[0], column: { key: 'note' } }, event); await render(); return event;
   }
   await render(); expect(grid().rows).toHaveLength(options.batch ? 2 : 1);
-  return { render, click, change, press, grid, record, button, all, props, workspace, invoke, info, pageSource, preparePasteInsert: load(path.join(renderer, 'pasteInsert.ts')).preparePasteInsert, editor(value: boolean) { editor = value; }, modal(value: boolean) { dialog = value; }, failApply() { failApply = true; } };
+  return { render, click, change, press, grid, record, button, all, props, workspace, store, invoke, info, pageSource, preparePasteInsert: load(path.join(renderer, 'pasteInsert.ts')).preparePasteInsert, editor(value: boolean) { editor = value; }, modal(value: boolean) { dialog = value; }, failApply() { failApply = true; } };
 }
 
 describe('完整TableTab及记录控制器的RAM编辑历史', () => {
+  it('RAM订阅在render前同步交付独立前后态及ABA，取消订阅后停止交付', async () => {
+    const f = await fixture(), transitions: string[][] = [], calls = f.invoke.mock.calls.length;
+    const unsubscribe = f.store.subscribe((state, previous) => transitions.push([previous.settings.activeTabId, state.settings.activeTabId]));
+    f.workspace.settings.activeTabId = '其它'; f.workspace.settings.activeTabId = f.props.tab.id;
+    expect(transitions).toEqual([[f.props.tab.id, '其它'], ['其它', f.props.tab.id]]);
+    unsubscribe(); f.workspace.settings.activeTabId = '已取消订阅'; expect(transitions).toHaveLength(2); expect(f.invoke).toHaveBeenCalledTimes(calls);
+  });
   it('一次单格编辑及往返保持original/字节/JSON，撤销重做零额外IPC', async () => {
     const f = await fixture(), original = f.grid().rows[0].original; await f.change('精度900719925474099312345'); const calls = f.invoke.mock.calls.length;
     await f.click(text.undo); expect(f.grid().rows[0].data.note).toBe('原值'); await f.click(text.redo); expect(f.grid().rows[0].data.note).toBe('精度900719925474099312345'); expect(f.grid().rows[0].original).toBe(original); expect(f.grid().rows[0].data.bytes).toEqual({ type: 'binary', base64: 'AAH/' }); expect(f.invoke).toHaveBeenCalledTimes(calls);

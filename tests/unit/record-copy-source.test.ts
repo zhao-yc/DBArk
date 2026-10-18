@@ -43,6 +43,22 @@ const text = readFileSync(new URL('../../src/renderer/components/TableTab.tsx', 
 /** 直接执行生产入口和失效函数，异步仅替换IPC边界，验证第一个await之前的同步门。 */
 function visit(node: ts.Node) { if (ts.isFunctionDeclaration(node) && node.name && ['assertGridWritable', 'duplicateCurrentRow', 'readCompleteCopySource', 'invalidateCopyRead'].includes(node.name.text)) functions.set(node.name.text, node.getText(tree)); node.forEachChild(visit); }
 visit(tree);
+/** 断言原失效条件及其两个真实动作，不再把新增合法block误判为丢失旧接线。 */
+function invalidationGuard(kind: 'dirty' | 'selection') {
+  let body: ts.Block | undefined;
+  function find(node: ts.Node) {
+    if (kind === 'selection' && ts.isFunctionDeclaration(node) && node.name?.text === 'selectCurrentCell') body = node.body;
+    if (kind === 'dirty' && ts.isCallExpression(node) && node.expression.getText(tree) === 'useRecordViews' && node.arguments[0] && ts.isObjectLiteralExpression(node.arguments[0])) {
+      const property = node.arguments[0].properties.find(item => ts.isPropertyAssignment(item) && item.name.getText(tree) === 'onDirty');
+      if (property && ts.isPropertyAssignment(property) && ts.isArrowFunction(property.initializer) && ts.isBlock(property.initializer.body)) body = property.initializer.body;
+    }
+    node.forEachChild(find);
+  }
+  find(tree);
+  const guard = body?.statements.find((node): node is ts.IfStatement => ts.isIfStatement(node) && (kind === 'dirty' ? node.expression.getText(tree) === 'dirty' : node.expression.getText(tree).includes('selectionRef.current?.rowId')));
+  if (!guard || !ts.isBlock(guard.thenStatement)) throw Error('未找到实际失效条件及动作块');
+  return { condition: guard.expression.getText(tree), statements: guard.thenStatement.statements.map(statement => statement.getText(tree)), hasElse: !!guard.elseStatement };
+}
 function eventFixture() {
   const f = fixture(); let finish!: (result: TableCopySourceReadResult) => void; const calls: string[] = [], setRows = vi.fn(), setBusy = vi.fn(), setError = vi.fn(), setNotice = vi.fn();
   const record = { hasInput: () => false, dirty: false }, pending = new Promise<TableCopySourceReadResult>(resolve => { finish = resolve; }); let counter = 0;
@@ -55,5 +71,5 @@ describe('实际TableTab补取接线与不可复活门', () => {
   it('双击在首个await前被门阻止，正常回包仅一次追加且不调用apply', async () => { const f = eventFixture(), active = f.handlers.readCompleteCopySource(); expect(f.port.copyPendingRef.current).toBe(true); expect(f.port.blockedRef.current).toBe(true); await f.handlers.readCompleteCopySource(); expect(f.calls).toEqual(['table.copySourceRead']); f.finish(f.result); await active; expect(f.setRows).toHaveBeenCalledOnce(); expect(f.port.rowsRef.current).toHaveLength(2); expect(f.port.selectionRef.current).toBe(f.selection); expect(f.setNotice).toHaveBeenLastCalledWith(expect.stringContaining(f.result.readAt)); expect(f.port.copyPendingRef.current).toBe(false); });
   it.each(['cancel', 'unmount', 'input', 'grid', 'dialog', 'target-away-back', 'rows-away-back'])('%s迟到回包不追加、不自动重试', async condition => { const f = eventFixture(), active = f.handlers.readCompleteCopySource(); if (condition === 'cancel') { f.handlers.invalidateCopyRead(); f.handlers.invalidateCopyRead(); expect(f.calls.filter(command => command === 'query.cancel')).toHaveLength(1); } else if (condition === 'unmount') f.port.mounted.current = false; else if (condition === 'input') f.port.recordControllerRef.current.hasInput = () => true; else if (condition === 'grid') f.port.rootElement.current.querySelector = () => ({}); else if (condition === 'dialog') f.port.document.querySelector = () => ({}); else { f.handlers.invalidateCopyRead(); if (condition === 'target-away-back') { f.context.target.table = 'other'; f.context.target.table = 'records'; } else { const old = f.port.rowsRef.current; f.port.rowsRef.current = [...old]; f.port.rowsRef.current = old; } } expect(f.port.copyPendingRef.current).toBe(true); f.finish(f.result); await active; expect(f.setRows).not.toHaveBeenCalled(); expect(f.calls.filter(command => command === 'table.copySourceRead')).toHaveLength(1); expect(f.port.copyPendingRef.current).toBe(false); });
   it('缺列按钮实际调用补取，旧本地复制最终门仍拒绝部分行', async () => { const f = eventFixture(); f.handlers.duplicateCurrentRow(); expect(f.calls).toEqual(['table.copySourceRead']); expect(() => duplicateRecordDraft(f.rows, 'source', f.context, 'bad')).toThrow(); f.finish(f.result); await vi.waitFor(() => expect(f.setRows).toHaveBeenCalledOnce()); });
-  it('页面opt-in、租约映射、撤销与取消按钮接生产组件', () => { expect(text).toContain('copySource: true, taskId: sourceTaskId'); expect(text).toContain('copyRowRefs.current.set(row.id'); expect(text).toContain("invoke('table.copySourceRelease'"); expect(text).toContain('copyPageTask.current === sourceTaskId'); expect(text).toContain('if (dirty) invalidateCopyRead()'); expect(text).toContain('if (selectionRef.current?.rowId !== row?.id || selectionRef.current?.key !== key) invalidateCopyRead()'); expect(text).toContain('!copySourceReady'); expect(text).toContain('setDuplicateNotice(recordCopySourceZh.cancelling)'); });
+  it('页面opt-in、租约映射、撤销与取消按钮接生产组件', () => { expect(text).toContain('copySource: true, taskId: sourceTaskId'); expect(text).toContain('copyRowRefs.current.set(row.id'); expect(text).toContain("invoke('table.copySourceRelease'"); expect(text).toContain('copyPageTask.current === sourceTaskId'); expect(invalidationGuard('dirty')).toEqual({ condition: 'dirty', statements: ['invalidateCopyRead();', 'batchFillIntent.current?.invalidate();'], hasElse: false }); expect(invalidationGuard('selection')).toEqual({ condition: 'selectionRef.current?.rowId !== row?.id || selectionRef.current?.key !== key', statements: ['invalidateCopyRead();', 'batchFillIntent.current?.invalidate();'], hasElse: false }); expect(text).toContain('!copySourceReady'); expect(text).toContain('setDuplicateNotice(recordCopySourceZh.cancelling)'); });
 });
