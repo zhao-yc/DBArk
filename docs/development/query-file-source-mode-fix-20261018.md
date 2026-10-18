@@ -24,12 +24,12 @@
 
 | 设施与证据 | 可复用点 | 现有边界 |
 | --- | --- | --- |
-| [ExportReservations](D:/svn/DBArk/.cache/employee4-sql-file-binding-backend-20261018/src/main/exportReservations.ts:4)；[exportTargetKey](D:/svn/DBArk/.cache/employee4-sql-file-binding-backend-20261018/src/engine/atomicFile.ts:35) | 主进程跨写入口目标预约、真实父目录归一化、Windows大小写键、幂等释放；本片已在用 | 应用内互斥，不是跨进程CAS或ACL证明 |
-| [AtomicFile](D:/svn/DBArk/.cache/employee4-sql-file-binding-backend-20261018/src/engine/atomicFile.ts:60)、commit第125行、dispose第133行 | 同目录wx、短写/背压、同步、关闭、替换边界及精确清理；可参考既有IO端口扩展方式 | 原生IO第14行仍为Node open/rename/rm；WritableFile第7—9行没有chmod/stat/ACL端口，不能直接视作元数据保留实现 |
-| [DatabaseBackupAtomicArchive](D:/svn/DBArk/.cache/employee4-sql-file-binding-backend-20261018/src/engine/databaseBackupAtomicArchive.ts:55) | 捕获原句柄/close promise、rename pending/confirmed/unknown、原owner结算和严格关闭证明 | 备份归档任务范围；不提供用户SQL文件ACL复制或Windows原生替换API |
-| [Windows helper原生声明](D:/svn/DBArk/.cache/employee4-sql-file-binding-backend-20261018/src/engine/databaseBackupWindowsFiles.helper.cs:22)，Acl第75行、RequireAcl第85行、Protect第89行 | 现有CreateFileW/NtCreateFile相对父句柄创建、GetFileInformationByHandle/Ex物理身份、GetFinalPathNameByHandleW路径核对，以及GetSecurityInfo/SetSecurityInfo真实Owner/DACL读写和读回证明；可复用原生资源固定摘要/私有RPC/owner绑定架构 | 当前保护策略专用于备份秘密client.cnf：Owner及SYSTEM两条非继承FullControl ACE。不能直接用来覆盖用户SQL文件原有所有者、组、DACL与继承策略 |
-| [DatabaseBackupSecretWindowsProtection](D:/svn/DBArk/.cache/employee4-sql-file-binding-backend-20261018/src/engine/databaseBackupSecretFile.ts:27) 与 [Windows端口](D:/svn/DBArk/.cache/employee4-sql-file-binding-backend-20261018/src/engine/databaseBackupWindowsFiles.ts:165) | 真实identity/Owner/DACL/继承读回的typed证明；父目录只读核验，文件/新私有目录单独保护 | “保护为私有”与“保持任意现有用户文件元数据”是不同合同，后者尚未实现 |
-| [旧SQL另存](D:/svn/DBArk/.cache/employee4-sql-file-binding-backend-20261018/src/main/queryFiles.ts:71)；[LocalStore.flush](D:/svn/DBArk/.cache/employee4-sql-file-binding-backend-20261018/src/main/storage.ts:101) | 已有临时写/同步/rename和配置回滚模式，可作行为参照 | 未提供通用ACL/所有者/ADS保存机制；配置库固定mode不适合作为用户文件元数据合同 |
+| [ExportReservations](../../src/main/exportReservations.ts#L4)；[exportTargetKey](../../src/engine/atomicFile.ts#L35) | 主进程跨写入口目标预约、真实父目录归一化、Windows大小写键、幂等释放；本片已在用 | 应用内互斥，不是跨进程CAS或ACL证明 |
+| [AtomicFile](../../src/engine/atomicFile.ts#L60)、commit第125行、dispose第133行 | 同目录wx、短写/背压、同步、关闭、替换边界及精确清理；可参考既有IO端口扩展方式 | 原生IO第14行仍为Node open/rename/rm；WritableFile第7—9行没有chmod/stat/ACL端口，不能直接视作元数据保留实现 |
+| [DatabaseBackupAtomicArchive](../../src/engine/databaseBackupAtomicArchive.ts#L55) | 捕获原句柄/close promise、rename pending/confirmed/unknown、原owner结算和严格关闭证明 | 备份归档任务范围；不提供用户SQL文件ACL复制或Windows原生替换API |
+| [Windows helper原生声明](../../src/engine/databaseBackupWindowsFiles.helper.cs#L22)，Acl第75行、RequireAcl第85行、Protect第89行 | 现有CreateFileW/NtCreateFile相对父句柄创建、GetFileInformationByHandle/Ex物理身份、GetFinalPathNameByHandleW路径核对，以及GetSecurityInfo/SetSecurityInfo真实Owner/DACL读写和读回证明；可复用原生资源固定摘要/私有RPC/owner绑定架构 | 当前保护策略专用于备份秘密client.cnf：Owner及SYSTEM两条非继承FullControl ACE。不能直接用来覆盖用户SQL文件原有所有者、组、DACL与继承策略 |
+| [DatabaseBackupSecretWindowsProtection](../../src/engine/databaseBackupSecretFile.ts#L27) 与 [Windows端口](../../src/engine/databaseBackupWindowsFiles.ts#L165) | 真实identity/Owner/DACL/继承读回的typed证明；父目录只读核验，文件/新私有目录单独保护 | “保护为私有”与“保持任意现有用户文件元数据”是不同合同，后者尚未实现 |
+| [旧SQL另存](../../src/main/queryFiles.ts#L71)；[LocalStore.flush](../../src/main/storage.ts#L101) | 已有临时写/同步/rename和配置回滚模式，可作行为参照 | 未提供通用ACL/所有者/ADS保存机制；配置库固定mode不适合作为用户文件元数据合同 |
 
 对 `src` 与 `scripts` 精确检索 `ReplaceFileW`、`MoveFileExW`、`[IO.File]::Replace`、`File.Replace(`，本固定源码未命中。现有helper的SetFileInformationByHandle在第140行用于精确删除，不是通用替换。没有因此断言系统不支持这些API，只判定当前代码未接入这些入口。
 
