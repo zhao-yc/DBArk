@@ -50,3 +50,19 @@ launch 返回前、preload hook 安装前及订阅送达前存在缺采窗口。
 | macOS x64 | run1737-native-startup-x64-original.log／103234 | `7b14de8ed2600083870bf8537a1c2d5c78f7c92af1f0dbb23bc3668afa52a82d` |
 
 日志均位于主工作区 `.cache/parallel-integration`。GitHub 终态归档目录保存为 `run1730-native-startup-final-artifacts.json`，包含 Windows `12126228500`、arm64 `12126646894`、x64 `12126491998` 的固定大小、摘要及同一源码头。Windows 数据归档第一次下载在接收 0 字节时失败，原 `download.failed.json` 留存于 `run1730-native-startup-windows-download`；没有成功收据、CRC 或解压证据。两份 Mac 归档本轮尚未下载，不能把 GitHub 上传成功计作本地独立校验。
+
+## 网络恢复后的独立原件读取
+
+随后对无参数附件主机根路径的 Node／系统默认 HTTPS HEAD 对照均收到 HTTP 400，证明当时传输可达，不含认证或归档请求。Windows 使用全新 `run1740-native-startup-windows-download`，Mac 使用各自新的 `run1730-native-startup-mac-arm64-download`／`run1730-native-startup-mac-x64-download`，原零字节失败不覆盖。三份 ZIP 的网络流及落盘复读大小、SHA-256 与 GitHub 固定目录一致，逐项 CRC 通过；仅提取文本数据，没有执行附件。
+
+| 平台 | 归档大小／SHA-256 | 条目／文本提取 |
+| --- | --- | --- |
+| Windows | 2678618／`abbdd5b045568f366e8d26299e1e444bf54ab8f50a81bff2fbcb160e194fa1e0` | 70／24 |
+| arm64 | 3950879／`49dc1c9a79734d49cefb45c6c2fc78fb046c47ee7a6d6c141428e9c655e72c69` | 81／35 |
+| x64 | 5282707／`8a2f55badc4a21c54ca8bbf62f24857bdcb96241d63cd34ceddb707bec8ceb89` | 81／35 |
+
+启动观察是 Playwright report.json 内嵌的 base64 body 附件。Root 初次读取器只查独立 JSON，所得空列表是读取范围不足，不能当作无观察／无错误证据。现已按固定附件名、类型、规范 base64、8 KiB 字节上限和字段白名单有界读取，并保留原归档与报告摘要。Windows 两份源码观察、Mac 各两份源码观察和一份安装观察均已读取；新解码结果冻结在 `run1746-native-startup-read`。
+
+arm64 的安装观察在原 TestInfo 第 4076 毫秒记录 launch 返回及首次 file 页面，未准备完成；x64 为第 4863 毫秒。两者都没有 firstWindow／statusbar 时点，结合原 progress 均未进入 `prepare.hook`，所以正式 `firstWindow()` 尚未调用，不能描述成其调用后挂起。arm64 一条“启动来源”诊断证明至少一次主进程读取返回；仍不能区分第一次 assertActual 与第二次来源读取。x64没有该来源返回记录，不能定位到相同 RPC。scan.done 没有原时点，不能把耗时直接归因扫描或产品加载。
+
+Windows legacy 的 error-context.md 只有测试信息、错误和源码，没有 Page snapshot，仍无对话框选择或 UI 状态证明；源码可行路径不是本轮已证根因。两种 Mac 的源码缩进／分栏记录与安装失败分别保留，不跨阶段推断。下一步仅准备原扫描、来源调用及退出链的有界观测，保留全部原超时、校验和断言，不重试本次运行。
