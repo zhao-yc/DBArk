@@ -2,7 +2,7 @@ import type { Command } from './contracts';
 
 /** 预加载白名单不引入校验器或 Node 依赖；新增公开命令必须在编译时补齐。 */
 export const publicCommands: Record<Command, true> = {
-  'queryFileSources.open': true, 'queryFileSources.save': true, 'queryFileSources.saveAs': true, 'queryFileSources.status': true, 'queryFileSources.release': true,
+  'queryFileSources.cancel': true, 'queryFileSources.open': true, 'queryFileSources.save': true, 'queryFileSources.saveAs': true, 'queryFileSources.status': true, 'queryFileSources.release': true,
   'table.presets.list':true,'table.presets.save':true,'table.presets.delete':true,'table.presets.apply':true,
   'serverMonitor.read': true,
   'table.copyInsertSql': true,
