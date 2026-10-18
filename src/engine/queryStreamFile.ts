@@ -3,10 +3,13 @@ import { queryStreamExportLimits as limits, type QueryExportColumn, type QueryEx
 import { AtomicFile, type AtomicFileIO } from './atomicFile';
 import { csvCell, csvHeader } from './files';
 import { prepareQueryCsvZip, QueryCsvArchive } from './queryCsvZip';
+import { createQueryInsertFile } from './queryInsertFile';
 
 export interface QueryStreamFileOptions {
   filePath: string; format: QueryExportFormat; encoding: QueryFileEncoding; resultSelection: QueryExportSelection;
   checkCancelled(): void; onCommitStart(): void;
+  insertTarget?: import('../shared/queryInsertExport').QueryInsertTarget;
+  beforeInsertCommit?(sample:import('../shared/queryInsertExport').QueryInsertSample,bytes:number):Promise<void>;
 }
 export interface QueryStreamFile {
   write(frame: QueryExportFrame): Promise<void>; complete(): Promise<void>; abort(): Promise<void>;
@@ -30,6 +33,7 @@ function cellText(cell: CellValue, format: 'csv' | 'json'): string {
 
 /** 一次新执行的完整结果按有界帧顺序写出；这里不解析 SQL、不接触数据库。 */
 export async function createQueryStreamFile(input: QueryStreamFileOptions, io?: AtomicFileIO): Promise<QueryStreamFile> {
+  if(input.format==='sql')return createQueryInsertFile(input,io);
   if (!['json', 'csv', 'csv-zip'].includes(input.format) || (input.format !== 'csv' && input.resultSelection.kind !== 'all') || (input.format === 'csv' && (input.resultSelection.kind !== 'row-result' || !Number.isInteger(input.resultSelection.ordinal) || input.resultSelection.ordinal < 1 || input.resultSelection.ordinal > limits.results))) throw new Error('完整导出只支持JSON/CSV容器全部结果或CSV指定行结果集');
   if (input.format === 'csv-zip') await prepareQueryCsvZip(input.filePath, input.checkCancelled);
   const file = await AtomicFile.create(input.filePath, input.encoding, input.checkCancelled, input.onCommitStart, io, limits.fileBytes);

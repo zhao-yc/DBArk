@@ -1,5 +1,6 @@
 import { QueryFileSources } from './queryFileSources';
 import { ResultSqlPreviews } from './resultSqlPreviews';
+import { QueryInsertExports } from './queryInsertExports';
 import { resultSqlZh } from '../shared/resultSql.zh-CN';
 import { tableCreateMessages } from '../shared/tableCreate';
 import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, safeStorage } from 'electron';
@@ -72,6 +73,7 @@ const lastPersist = new Map<string, number>();
 const rendererURL = process.env.DBARK_DEV_URL ?? pathToFileURL(join(__dirname, '../renderer/index.html')).href;
 // 字段令牌只绑定真实IPC文档；回收仍使用原引擎精确release，不扩其他结构业务。
 const columnsMain = new ColumnsMainCapabilities(structureTokens, { currentWindow: () => window, rendererURL, connectionRevision: () => store.connectionRevision(), assertAvailable: id => connectionConfig.assertAvailable(id), shuttingDown: () => shuttingDown, release: input => broker.request('schema.columns.release', input) });
+const queryInsertExports=new QueryInsertExports(files,{assert:value=>columnsMain.assertCapturedOwner(value),same:(left,right)=>columnsMain.sharesDocumentOwner(left,right),revision:()=>store.connectionRevision(),session:id=>sessions.get(id),closing:()=>shuttingDown,stop:async taskId=>{const preparing=preparingTasks.get(taskId);if(preparing){preparing.cancelled=true;return;}return broker.request('query.cancel',{taskId});}});
 const tablePresetSources=new TablePresetSources({assert:value=>columnsMain.assertCapturedOwner(value),same:(left,right)=>columnsMain.sharesDocumentOwner(left,right)});
 const tablePresetReads=new Map<string,{cancelled:boolean;sent:boolean;stop?:Promise<unknown>}>();
 /** 仅真实Main调用持有发布门；成功结果直到IPC最后同步检查后才释放取消登记。 */
@@ -98,8 +100,11 @@ function persistAuxiliary(action: () => void): void {
   }
 }
 
+/** utility事件在进入原记录器前核INSERT owner；原任务概要仍记终态，敏感样例不交给新文档。 */
+function engineTaskEvent(event:TaskEvent):void{if(event.queryInsert&&!queryInsertExports.has(event.taskId))return;taskEvent(event,queryInsertExports.receive(event.taskId,event.queryInsert));}
+
 /** 任务进度只保留概要；分批结果直接传输，不把整批数据写入配置库。 */
-function taskEvent(event: TaskEvent): void {
+function taskEvent(event: TaskEvent, deliverInsert=true): void {
   if(completionTasks.has(event.taskId))return;
   if (event.tableApply) tableApplyReceipts?.receive(event.taskId, event.tableApply);
   if (event.status !== 'running' && tableApplyReceipts?.confirmed(event.taskId)) event = { ...event, status: 'completed', progress: 100, message: '服务器已确认目标事务提交；附加错误请查看提交记录' };
@@ -120,7 +125,7 @@ function taskEvent(event: TaskEvent): void {
       persistAuxiliary(() => store.saveTask(record)); lastPersist.set(event.taskId, Date.now());
     }
   }
-  if (window && !window.isDestroyed()) window.webContents.send('dbark:task', event);
+  if (deliverInsert && window && !window.isDestroyed()) window.webContents.send('dbark:task', event);
 }
 
 /** 文件只能来自用户打开/保存对话框；数据库进程收到的是主进程解析后的实际路径。 */
@@ -145,6 +150,14 @@ async function chooseResultSqlFile(input: any, owner: MainInvocation | undefined
   const selected = await chooseFile(input);
   try { columnsMain.assertCapturedOwner(owner); if (selected) resultSqlPreviews.bindFile(input.resultSqlPreviewId, owner!.owner.document, selected.token); return selected; }
   catch (error) { if (selected) files.delete(selected.token); throw error; }
+}
+
+/** 完整INSERT选择不执行SQL；原生等待两侧检查真实文档，迟到失败只删自己的令牌。 */
+async function chooseQueryInsertFile(input:any,owner:MainInvocation|undefined){
+  columnsMain.assertCapturedOwner(owner);if(shuttingDown)throw Error(resultSqlZh.shuttingDown);
+  const selected=await chooseFile(input);
+  try{columnsMain.assertCapturedOwner(owner);if(selected)queryInsertExports.bind(selected.token,owner!);return selected;}
+  catch(error){if(selected)files.delete(selected.token);throw error;}
 }
 
 /** 布局请求到达即先撤销空闲依据；包括校验失败，只有完整保存成功才恢复可信标签事实。 */
@@ -177,6 +190,10 @@ function registerQueryFileSourceTask(taskId: string, command: Command): void {
 
 /** 分派前检查配置保存锁，防止检查通过后另一个请求用旧凭据抢先建连。 */
 async function dispatch(command: Command, input: any, columns?: MainInvocation): Promise<unknown> {
+  if(command==='query.confirmInsertExport'){
+    // 最终确认先同步消费真实owner的发布令牌，随后仅向原引擎任务投递文件发布信号。
+    queryInsertExports.grant(input,columns);return broker.request(command,input);
+  }
   // 结果SQL预览与释放仅处理已返回快照，不经连接、任务或数据库broker。
   if (command === 'files.previewResultSql' || command === 'files.releaseResultSql') {
     columnsMain.assertCapturedOwner(columns);
@@ -323,6 +340,7 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
       finally{completionTasks.delete(input.taskId);}
     }
     case 'query.cancel': {
+      if(columns&&tasks.get(input.taskId)?.kind==='query.exportStream')queryInsertExports.assertOwned(input.taskId,columns);
       if(tablePresetReads.has(input.taskId))return cancelTablePresetRead(input.taskId);
       if(historyPages?.owns(input.taskId))return historyPages.cancel(input.taskId);
       if(savedQueryPages?.owns(input.taskId))return savedQueryPages.cancel(input.taskId);
@@ -344,7 +362,12 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
     case 'connections.importReview': if (shuttingDown) throw new Error('客户端正在退出，不能导入连接'); return connectionTransfer.review(input);
     case 'connections.importReviewRelease': return connectionTransfer.releaseReview(input);
     case 'connections.importApply': return queryFileOperation(() => connectionTransfer.applyBatch(input));
-    case 'connections.save': return connectionConfig.save(confirmConnectionFiles(input, store.connections().find(profile => profile.id === input.id), files));
+    case 'connections.save': {
+      // 保留原保存检查：被拒绝的配置修改不得先取消任务；成功保存后才撤销本片旧修订能力。
+      const saved=await connectionConfig.save(confirmConnectionFiles(input,store.connections().find(profile=>profile.id===input.id),files));
+      if([...tasks.values()].some(task=>task.kind==='query.exportStream'&&task.status==='running'))queryInsertExports.invalidateAll();
+      return saved;
+    }
     case 'connections.delete': await broker.request('connections.close', input); store.deleteConnection(input.id); return;
     case 'connections.open': input = { ...input, profile: store.resolveConnection(input.id) }; break;
     case 'connections.test': {
@@ -393,11 +416,11 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
       finally { stateFlushed = undefined; }
       return;
     }
-    case 'files.choose': return input.resultSqlPreviewId ? chooseResultSqlFile(input, columns) : chooseFile(input);
+    case 'files.choose': return input.queryInsertExport ? chooseQueryInsertFile(input,columns) : input.resultSqlPreviewId ? chooseResultSqlFile(input, columns) : chooseFile(input);
     case 'files.path': { const file = files.get(input.token); if (!file) throw new Error('文件选择已失效，请重新选择'); return file.path; }
     case 'files.readQuery': return queryFileOperation(() => readQueryFile(resolveFileToken(files, input.fileToken, 'query', 'sql'), input.encoding));
     case 'files.writeQuery': return queryFileOperation(() => writeSelectedQuery(input));
-    case 'query.exportStream': input = { ...input, filePath: resolveFileToken(files, input.fileToken, 'export', input.format === 'csv-zip' ? 'zip' : input.format) }; break;
+    case 'query.exportStream': if(input.format==='sql')columnsMain.assertCapturedOwner(columns);else input = { ...input, filePath: resolveFileToken(files,input.fileToken,'export',input.format==='csv-zip'?'zip':input.format) }; break;
     case 'excel.sheets':
     case 'excel.preview':
     case 'excel.import':
@@ -431,11 +454,13 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
   let sentToEngine = false;
   const previewConnectionRevision = command === 'table.preview' ? store.connectionRevision() : 0;
   try {
+    if(command==='query.exportStream'&&input.format==='sql')input={...input,filePath:queryInsertExports.begin(input,columns)};
     if (command === 'query.exportStream' || command === 'files.export' || command === 'files.exportResult' || command === 'excel.export') releaseTarget = await exportReservations.acquire(input.filePath);
     if (preparing.failure) throw new Error(preparing.failure);
     // 文件路径归一化期间的取消在主进程捕获，不能丢失后继续发送用户 SQL。
     if (preparing.cancelled) throw new Error('任务在准备阶段已取消，尚未发送用户 SQL；原目标文件保持不变');
     connectionConfig.assertAvailable(requestConnectionId);
+    if(command==='query.exportStream'&&input.format==='sql')queryInsertExports.assert(input.taskId);
     if (command === 'files.exportResult' && input.format === 'sql') columnsMain.assertCapturedOwner(columns);
   // 新建表在第一次等待前消费主进程能力；目的和修订仍由引擎独立核验。
   if (command === 'schema.tableCreate.apply' || command === 'schema.tableCopyData.apply') structureTokens.delete(input.previewToken);
@@ -492,7 +517,7 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
     if (taskId && tasks.get(taskId)?.status === 'running') taskEvent({ taskId, status: preparing.cancelled || error instanceof SavedQuerySearchCancelled ? 'cancelled' : 'failed', progress: 0, message, ...(structureCommand ? { [structurePurpose === 'tableCreate' ? 'tableCreate' : structurePurpose === 'tableCopyData' ? 'tableCopyData' : structurePurpose === 'tableCopyStructure' ? 'tableCopyStructure' : structurePurpose === 'databaseCreate' ? 'databaseCreate' : structurePurpose === 'tableRename' ? 'tableRename' : structurePurpose === 'tableAutoIncrement' ? 'tableAutoIncrement' : structurePurpose === 'tableDefaultEncoding' ? 'tableDefaultEncoding' : structurePurpose === 'tableDrop' ? 'tableDrop' : structurePurpose === 'tableTruncate' ? 'tableTruncate' : structurePurpose === 'tableComment' ? 'tableComment' : structurePurpose === 'indexes' ? 'indexPatch' : structurePurpose === 'foreignKeys' ? 'foreignKeyPatch' : 'columnPatch']: { phase: 'connecting' as const, ddlSubmitted: sentToEngine && command === structurePrefix + 'apply', ddlCompleted: false, definitionVerified: false, outcome: sentToEngine && command === structurePrefix + 'apply' ? 'unknown' as const : 'not-sent' as const, ...structureProgress.get(taskId) } } : {}), ...(command === 'query.exportStream' ? { queryExport: { phase: 'preparing' as const, statementsCompleted: 0, rowsWritten: 0, bytesWritten: 0, fileCommitted: false, ...exportProgress.get(taskId), sqlMayHaveExecuted: sentToEngine, transactionKnown: false } } : {}) });
     if (history && pendingHistory?.executionSqlReceived) persistAuxiliary(() => store.addHistory({ ...history, elapsedMs: Date.now() - start, error: persistedQueryError(command, message) }));
     throw error;
-  } finally { if (command === 'table.apply' && taskId) tableApplyReceipts.finish(taskId); if (command === structurePrefix + 'apply') structureTokens.delete(input.previewToken); if (taskId) { pendingQueryHistory.delete(taskId); preparingTasks.delete(taskId); exportProgress.delete(taskId); structureProgress.delete(taskId); } releaseTarget?.(); }
+  } finally { if (command === 'table.apply' && taskId) tableApplyReceipts.finish(taskId); if (command === structurePrefix + 'apply') structureTokens.delete(input.previewToken); if (taskId) { pendingQueryHistory.delete(taskId); preparingTasks.delete(taskId); exportProgress.delete(taskId); structureProgress.delete(taskId); } if(command==='query.exportStream'&&input.format==='sql')queryInsertExports.finish(input.taskId); releaseTarget?.(); }
 }
 
 /** 按平台生成中文原生菜单，查询快捷键统一发送给当前工作区。 */
@@ -513,6 +538,11 @@ function createMenu(): void {
 async function createWindow(): Promise<void> {
   window = new BrowserWindow({ width: 1440, height: 920, minWidth: 1024, minHeight: 680, show: false, backgroundColor: '#101319', title: 'DBArk', icon: app.isPackaged ? join(process.resourcesPath, 'icon.png') : join(__dirname, '../../build/icon.png'), webPreferences: { preload: join(__dirname, 'preload.cjs'), sandbox: true, contextIsolation: true, nodeIntegration: false, webSecurity: true, spellcheck: false } });
   columnsMain.trackWindow(window);
+  // 主文档换代立即撤销尚未确认的暂存发布，不依赖旧renderer继续发送取消。
+  window.webContents.on('did-start-navigation',details=>{if(details.isMainFrame&&!details.isSameDocument)queryInsertExports.invalidateAll();});
+  window.webContents.on('did-navigate',()=>queryInsertExports.invalidateAll());
+  window.webContents.on('render-process-gone',()=>queryInsertExports.invalidateAll());
+  window.webContents.on('destroyed',()=>queryInsertExports.invalidateAll());
   // 导航仅取消文件来源的在途意图，私有重启授权仍属于保存的查询文档。
   window.webContents.on('did-start-navigation', details => { if (details.isMainFrame && !details.isSameDocument) queryFileSources.invalidate(); });
   window.webContents.on('did-navigate', () => queryFileSources.invalidate());
@@ -597,7 +627,7 @@ else {
     const wasm = app.isPackaged ? join(process.resourcesPath, 'sql-wasm.wasm') : require.resolve('sql.js/dist/sql-wasm.wasm');
     store = await LocalStore.open(join(app.getPath('userData'), 'dbark.sqlite'), wasm, { available: () => safeStorage.isEncryptionAvailable(), encrypt: value => safeStorage.encryptString(value).toString('base64'), decrypt: value => safeStorage.decryptString(Buffer.from(value, 'base64')) });
     tableApplyReceipts = new TableApplyReceipts(store, () => persistAuxiliary(() => { throw Error('提交记录保存失败'); }));
-    broker = new EngineBroker(taskEvent, engineExited);
+    broker = new EngineBroker(engineTaskEvent, engineExited);
     connectionConfig = new ConnectionConfigManager(store, broker, {
       /** 主进程会话与尚未投递的长任务也必须为空；真实引擎继续检查建连、事务和独立任务。 */
       assertIdle: ids => {
@@ -624,8 +654,9 @@ else {
         if (!window || event.sender !== window.webContents || event.senderFrame !== window.webContents.mainFrame || event.senderFrame?.url !== rendererURL) throw new Error('不允许的请求来源');
         if (!payload || typeof payload !== 'object' || !('command' in payload) || !('input' in payload) || typeof payload.command !== 'string') throw new Error('请求格式无效');
         const fileCancel = Boolean(payload.command === 'query.cancel' && payload.input && typeof payload.input === 'object' && 'taskId' in payload.input && typeof payload.input.taskId === 'string' && tasks.get(payload.input.taskId)?.kind.startsWith('queryFileSources.'));
+        const insertRequest = payload.command==='query.confirmInsertExport' || payload.command==='query.exportStream' && !!payload.input && typeof payload.input==='object' && 'format' in payload.input && payload.input.format==='sql' || payload.command==='files.choose' && !!payload.input && typeof payload.input==='object' && 'queryInsertExport' in payload.input || payload.command==='query.cancel' && !!payload.input && typeof payload.input==='object' && 'taskId' in payload.input && typeof payload.input.taskId==='string' && queryInsertExports.has(payload.input.taskId);
         const resultSql = payload.command === 'files.previewResultSql' || payload.command === 'files.releaseResultSql' || (payload.command === 'files.exportResult' || payload.command === 'files.choose') && !!payload.input && typeof payload.input === 'object' && ('format' in payload.input && payload.input.format === 'sql') && (payload.command === 'files.exportResult' || 'resultSqlPreviewId' in payload.input);
-        if (payload.command.startsWith('schema.columns.')||payload.command.startsWith('table.presets.')||payload.command.startsWith('queryFileSources.')||fileCancel||resultSql) columns = columnsMain.capture(event);
+        if (payload.command.startsWith('schema.columns.')||payload.command.startsWith('table.presets.')||payload.command.startsWith('queryFileSources.')||fileCancel||resultSql||insertRequest) columns = columnsMain.capture(event);
         const input = validateMainCommand(payload.command, payload.input);
         const operation=dispatch(payload.command as Command,input,columns),local=payload.command==='search.savedQueries'||payload.command==='search.savedQueriesContinue'||payload.command==='queries.page'||payload.command==='queries.pageContinue'||payload.command==='history.page'||payload.command==='history.pageContinue';if(local)localSearchOperations.add(operation);
         try {
@@ -641,6 +672,7 @@ else {
             catch (error) { await columnsMain.rejectReply(columns, error); }
           }
           if (payload.command.startsWith('queryFileSources.') || fileCancel) columnsMain.assertCapturedOwner(columns);
+          if(insertRequest)columnsMain.assertCapturedOwner(columns);
           if (resultSql) try { columnsMain.assertCapturedOwner(columns); } catch (error) {
             // 仅撤销本次未发布的能力，迟到旧失败不能清掉同文档其他导出窗口的新预览。
             if (payload.command === 'files.previewResultSql' && result && typeof result === 'object' && 'previewId' in result && typeof result.previewId === 'string') resultSqlPreviews.release(result.previewId, columns!.owner.document);
