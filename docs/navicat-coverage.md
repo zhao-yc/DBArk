@@ -1,5 +1,7 @@
 # Navicat 全功能覆盖目标
 
+0.28 完整CSV／ZIP分隔符固定 `b40d9ec` 的真实后台18组合已通过：2格式×3编码×3分隔符、每例301行及源查询一次；独立后核18成功库／目录、54原线程释放，含首批共60精确ID缺席。原ZIP类型期待失败和现场保留，GUI／安装／其它版本／百万行继续，Q05／F01仍部分，见[实际分层范围](../tests/integration/acceptance-query-csv-delimiter-root-20261018.md)。0.27独立分支的两项Windows窗口也已完成，见[固定源码验收](https://github.com/zhao-yc/DBArk/blob/9dc13991c719bc22fc05502c2ad15a4a71360a64/tests/integration/acceptance-v027-native-root-20261018.md)，不转写为0.28安装结论。
+
 0.28 固定 `41282a0` 的 Windows 源码关键字偏好两条正式身份已零重试通过：保持／大写／小写、一次 Undo、迟到原模块回包拒绝、SQLite9 和独立重启活动 pane，四 owner 正常退出及成功目录清理完成。首轮定位失败与原目录保留，安装和 macOS 本能力仍待验，Q01 仍为部分，见[实际分层证据](../tests/integration/acceptance-sql-keyword-case-native-root-20261018.md)。
 
 0.28 完整单 CSV／CSV ZIP 分隔符增补 `3553750` 已整合：逗号默认保持，新增分号／Tab，标题／数据／ZIP 清单一致，原配置失效后重新选文件确认。Root 402 项／类型／新构建及独审 30 项通过；固定 `5b697a8` 完整 CI 39114937435 为 532 文件／9862 通过／10 条件跳过，类型及构建成功。新增量原生及实库仍待验，前批六项 INSERT 实库不能外推这次改动，见[准确记录](development/sql-workspace-root-20261018.md)。
