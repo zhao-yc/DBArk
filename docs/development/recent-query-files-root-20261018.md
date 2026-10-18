@@ -25,3 +25,11 @@ Root 在独立普通克隆、分支 `codex/p0-recent-sql-files-v026-20261018` �
 同一 `5547fd4` 执行一次 `node scripts/build.mjs` 成功，108份编译文件在打包前封存，没有重复类型检查、启动桌面或读取凭据。日志 `run1721-recent-files-source-build/build.log` SHA256 `8e9cd9d23a19f70b6db3bb1c9e46d2cce50ed92ab05aa550751eba6f6c5ccaff`。
 
 随后仅运行 `node node_modules/electron-builder/cli.js --win --x64 --publish never`，同源 Windows 未签名候选打包成功。安装器 `DBArk-0.26.0-win-x64-unsigned.exe` 为142,362,821字节，SHA256 `de4315a2cca56f8910cee08c03f43e9f0eab65c05b47fe6517da54ee490605c6`；`app.asar` 为203,081,186字节，SHA256 `2a5905defadc7eaf76ad3d0d0b95782ea733d7e25ffdfda9135fc79389902121`。本地忽略收据 `run1723-v026-windows-package/artifacts.json` SHA256 `4972bb7972d172449ceb1ca99b0bb2b59e9e1c38cf1903b302b039c8ce273d69`，未安装、未运行或公开发布，不声称 macOS 本版本已验。
+
+## 首次完整 CI 与旧夹具补正
+
+固定 `aa11344101406d3d7547cfc2af87eab7b74974f7` 的完整 CI `39097812022`／job `117587782307` 为504文件（503绿／1红）、9322通过／1失败／10条件跳过；类型通过，CI构建未执行。原日志 `run1726-recent-files-full-ci-original-red.log` SHA256 `0e022907e47faf8b3923beb48ce24d72d2c96451893105fa6e1e9e5fcd5ad6ba`，不与本机成功构建混作同一次检查。
+
+唯一失败在 `query-layout-storage.test.ts` 的旧schema7夹具：它由当前库构造旧库时只删除了后来新增的文件来源表，仍携带本版空的最近文件缓存表，故“原11表”实际变成12。Root `6f8a6a50dd9b5e50531002df842c28252adc9834` 仅在旧DDL构造阶段移除这两张新增表；原11表数量、逐表原文、失败写盘回滚和合成秘密门全部保持，并补核迁移后新的历史表为空。
+
+原失败文件完整一次7项通过、零跳过。日志 `run1727-old-schema-fixture-fixed/unit.log` SHA256 `5a56ed34084761ddc994a374df05fba3400b7672b63e566231e0c7ff9161b384`。产品源码、脚本、包、锁及构建输入与 `5547fd4` 相同，不重复构建或打包；修后完整 CI 尚待。原红记录保留，实际界面和安装边界不变。
