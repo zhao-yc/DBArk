@@ -5,6 +5,7 @@ import * as paths from 'node:path';
 import ts from 'typescript';
 import { expect, it, vi } from 'vitest';
 import { BatchDuplicatePreparation } from '../helpers/batchRecordDuplicateUi';
+import { assertHistoryExitObservationScope, beginHistoryExitObservation, historyExitObservationFor } from '../helpers/historyExitObservation';
 
 /** 所有原生、页面、目录及时间端口均为RAM；提取当前真实自动夹具和真实启动函数。 */
 function port(stage?: string, hook = true) {
@@ -33,7 +34,7 @@ function port(stage?: string, hook = true) {
   const launch = vi.fn(async () => { if (stage === 'native') { enter(); await pending; } if (!hook) throw Error('旧路径只到RAM原生边界'); return application; });
   const preparation = new BatchDuplicatePreparation(info, () => 1), guard = { assertCurrent: vi.fn(), ...(hook ? { assertPreparation(current: unknown) { if (current !== info) throw Error('TestInfo替换'); preparation.assertCurrent(); } } : {}) };
   const previous = { application: {}, page: {}, directory: 'C:\\RAM\\previous', errors: ['原错误'], calls: [{ message: '原回答' }], ready: Promise.resolve() };
-  const context: any = { exports: {}, Error, AggregateError, preservedDesktopExits: states, process: { env: {} }, electron: { launch }, createSnippetsNativeDiagnostics: () => undefined, snippetsDiagnosticsArmed: false, snippetsDiagnostics: undefined,
+  const context: any = { assertHistoryExitObservationScope, beginHistoryExitObservation, historyExitObservationFor, exports: {}, Error, AggregateError, preservedDesktopExits: states, process: { env: {} }, electron: { launch }, createSnippetsNativeDiagnostics: () => undefined, snippetsDiagnosticsArmed: false, snippetsDiagnostics: undefined,
     desktop: previous.application, page: previous.page, dataDir: previous.directory, pageErrors: previous.errors, dialogCalls: previous.calls, closed: true, quitReady: previous.ready,
     mkdtemp: vi.fn(async () => 'C:\\RAM\\dbark-e2e-prepared'), tmpdir: () => 'C:\\RAM', join: paths.join, rm: remove, randomUUID: () => 'RAM',
     console: { log: (text: string) => application.emit('console', { text: () => text }) },

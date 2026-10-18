@@ -4,6 +4,7 @@ import { win32 } from 'node:path';
 import ts from 'typescript';
 import { expect, it, vi } from 'vitest';
 import { bindColumnCollationInstalledTarget as bind } from '../helpers/columnCollationInstalledUi';
+import { assertHistoryExitObservationScope, beginHistoryExitObservation, historyExitObservationFor } from '../helpers/historyExitObservation';
 
 const desktop = readFileSync(new URL('../e2e/desktop-fixture.ts',import.meta.url),'utf8');
 const ui = readFileSync(new URL('../e2e/column-collation-installed-ui.ts',import.meta.url),'utf8');
@@ -40,7 +41,7 @@ function fixture(mkdir?:()=>Promise<string>) {
   }
   visit(tree);expect(functions).toHaveLength(4);expect(auto).not.toBe('');
   const launch=vi.fn(async()=>{throw Error('RAM原生边界拒绝，不启动应用');}),remove=vi.fn(),mkdtemp=vi.fn(mkdir??(async()=> 'C:\\RAM\\profile-new')),diagnostics=vi.fn(()=>undefined),states=new WeakMap();
-  const context=createContext({exports:{},Error,AggregateError,preservedDesktopExits:states,process:{env:environment()},electron:{launch},createSnippetsNativeDiagnostics:diagnostics,snippetsDiagnosticsArmed:false,snippetsDiagnostics:undefined,pageErrors:[],dataDir:undefined,desktop:undefined,page:undefined,closed:true,mkdtemp,tmpdir:()=> 'C:\\RAM',join:(...parts:string[])=>parts.join('\\'),dirname:win32.dirname,basename:win32.basename,resolve:win32.resolve,forceStopOwnProcess:vi.fn(),rm:remove});
+  const context=createContext({assertHistoryExitObservationScope,beginHistoryExitObservation,historyExitObservationFor,exports:{},Error,AggregateError,preservedDesktopExits:states,process:{env:environment()},electron:{launch},createSnippetsNativeDiagnostics:diagnostics,snippetsDiagnosticsArmed:false,snippetsDiagnostics:undefined,pageErrors:[],dataDir:undefined,desktop:undefined,page:undefined,closed:true,mkdtemp,tmpdir:()=> 'C:\\RAM',join:(...parts:string[])=>parts.join('\\'),dirname:win32.dirname,basename:win32.basename,resolve:win32.resolve,forceStopOwnProcess:vi.fn(),rm:remove});
   runInContext(compile(functions.join('\n')+'\nglobalThis.fixture='+auto+';'),context);
   const info={},body=vi.fn();
   return {launch,remove,mkdtemp,diagnostics,states,info,body,run:(options:unknown)=>context.fixture(options,body,info) as Promise<void>};

@@ -6,6 +6,8 @@ import { tmpdir } from 'node:os';
 import ts from 'typescript';
 import { describe, expect, it, vi } from 'vitest';
 import {databaseCreateZh as databaseText} from '../../src/renderer/locales/databaseCreate.zh-CN';
+import { assertHistoryExitObservationScope, beginHistoryExitObservation, historyExitObservationFor } from '../helpers/historyExitObservation';
+import { verifyHistoryExitCompatibility } from '../helpers/historyExitObservationCompatibility';
 
 /** 只解析生产夹具函数，不导入Electron、MySQL、live模块或任何认证配置。 */
 function source(file: string) { return ts.createSourceFile(file, readFileSync(new URL('../e2e/' + file, import.meta.url), 'utf8').replaceAll('\r\n', '\n'), ts.ScriptTarget.Latest, true); }
@@ -24,7 +26,7 @@ function fixture(options: { strict?: boolean; holdClose?: boolean; aliveAfterClo
   const desktop = { evaluate: vi.fn(async (call: Function) => { const source = String(call); if (source.includes('getAppMetrics')) return [101]; if (source.includes('__dbarkE2EDialogs')) order.push('answer'); if (source.includes('app.quit')) order.push('quit-request'); }), process: () => ({ pid: 101 }), on: (_event: string, listener: () => void) => listeners.add(listener), off: (_event: string, listener: () => void) => listeners.delete(listener), waitForEvent: vi.fn(() => close.promise), close: vi.fn(async () => { order.push('close-ack'); if (!options.holdClose) emitClose(); }) };
   const rm = vi.fn(async () => { order.push('rm'); }), force = vi.fn(async () => { order.push('force-default'); });
   const assertion = Object.assign((value: unknown) => expect(value), { poll: (read: () => unknown) => ({ toEqual: async (value: unknown) => { order.push('process-proof'); expect(read()).toEqual(value); } }) });
-  context = createContext({ Error, AggregateError, WeakMap, Number, Date, expect: assertion, desktop, closed: false, pageErrors: [], snippetsDiagnostics: undefined, snippetsDiagnosticsArmed: false, quitReady: Promise.resolve(),
+  context = createContext({ assertHistoryExitObservationScope, beginHistoryExitObservation, historyExitObservationFor, Error, AggregateError, WeakMap, Number, Date, expect: assertion, desktop, closed: false, pageErrors: [], snippetsDiagnostics: undefined, snippetsDiagnosticsArmed: false, quitReady: Promise.resolve(),
     createSnippetsNativeDiagnostics: () => undefined, mkdtemp: vi.fn(async () => join(tmpdir(), 'dbark-e2e-owned')), join, dirname, basename, resolve, tmpdir, rm, forceStopOwnProcess: force,
     launchDesktop: vi.fn(async () => { order.push('launch'); context.closed = false; }), requestQuit: vi.fn(async () => { order.push('quit-request'); }), answerDialogs: vi.fn(async () => { order.push('answer'); }),
     process: { kill: () => { if (options.aliveAfterClose) return true; throw Object.assign(Error('RAM端口确认进程已消失'), { code: 'ESRCH' }); } },
@@ -197,11 +199,12 @@ describe('新结构写入未确认成功时的停链',()=>{
 describe('默认路径固定968628d原文及本例显式选项', () => {
   it('旧清库finally与桌面自动夹具默认主体保留Git规范化字节，不改旧335路径', () => {
     const isolated = functions(liveSource, ['isolatedDatabase'])[0], oldTry = isolated.body!.statements.find(ts.isTryStatement)!, select = oldTry.finallyBlock!.statements[0] as ts.IfStatement;
-    const fn = lifetime(), body = fn.body as ts.Block, mode = body.statements[0] as ts.IfStatement;
+    // 原字节证据不替换为新golden：先剥离明确观察项并独立比对生命周期AST，再锁已审新原文。
+    const proof = verifyHistoryExitCompatibility(desktopSource);
     const hash = (value: string) => createHash('sha256').update(value).digest('hex');
     expect(hash(select.elseStatement!.getText(liveSource))).toBe('f19c4b4b1be278aff98a0081fb052bf415bd877350d279745805dc62c2303dc9');
-    expect(hash(desktopSource.text.slice(mode.end, body.end - 1))).toBe('b8284b726f3cf8cf347b0e483ad162115ea1b57369eb492f99410b7f5ed37cd4');
-    expect(hash(functions(desktopSource, ['quitDesktop'])[0].getText(desktopSource))).toBe('70ef0597565cd839b2b6c65db33fee9e26c25f8e8260851f860dbed909e75920');
+    expect(hash(proof.baseline.defaultLifetime)).toBe('b8284b726f3cf8cf347b0e483ad162115ea1b57369eb492f99410b7f5ed37cd4');
+    expect(hash(proof.baseline.quitDesktop)).toBe('70ef0597565cd839b2b6c65db33fee9e26c25f8e8260851f860dbed909e75920');
   });
   it('选项默认false，TRUNCATE和DROP正式UI显式声明true，原用例标题与期限不改', () => {
     const entry = readFileSync(new URL('../e2e/table-truncate-live.ts', import.meta.url), 'utf8'); expect(desktopSource.text).toContain('preserveOnUnconfirmedExit: [false, { option: true }]'); expect(entry).toContain('test.use({ preserveOnUnconfirmedExit: true })');
