@@ -11,6 +11,8 @@
 3. `test-packaged.mjs` 在安装前保存 `package-input.json`，固定同 job 源批准 hash、安装器/DMG hash、未安装 app 的完整合同字节。原有检测阻止覆盖现有安装。
 4. 安装后只批准真实 app：Windows 的 `Applications/DBArk.exe` 或复制后 `.app/Contents/MacOS/DBArk`；核与同 job 打包参考一致，再逐项运行两个原 spec，之后继续既有安装回归。
 
+普通源码回归显式输出到 `test-results/legacy-source`，启用专项的普通安装回归输出到 `test-results/legacy-installed`；它们与 `test-results/native-editor-ci` 为兄弟目录。Playwright会在启动时清空自己的outputDir，因此不得再对这些CI运行使用默认的整个test-results。每项专项仍只清自己的attachments目录；artifact继续整体上传test-results。未启用新专项的独立test:packaged保留旧默认输出参数。
+
 源码批准输出通过本 job 的 `GITHUB_OUTPUT` 传给安装步骤；上下文包含有效 checkout SHA、run_id、run_attempt、job、OS/架构、Node/Electron/Playwright/产品版本、锁文件摘要。批准 hash 的信任起点是审核后的工作流和有效 SHA，并非对任意本地文件自签即可获得批准。PR 自改工作流的运行记录不冒充受保护发行批准。
 
 清单遵守原严格 v1 合同：source 为 Electron 入口、default_app.asar、package.json、全部 dist 和原端口脚本；installed 为真实 app 入口、全部 resources（含 app.asar）及原端口脚本。此“完整”不扩大为 OS、全部 node_modules 或 Electron Framework 的供应链证明。

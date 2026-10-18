@@ -79,7 +79,8 @@ jobs:
         id: native-source
         run: node scripts/native-editor-ci.mjs source
       # 上一步已完成唯一build；不能再用test:e2e隐式重建并改变批准字节。
-      - run: pnpm exec playwright test
+      # 普通回归只能清自己的子目录，不能清掉同次批准和专项原始证据。
+      - run: pnpm exec playwright test --output=test-results/legacy-source
         env:
           # 已验的本地查询导航在三个原生平台执行；私网用例继续关闭。
           DBARK_INTEGRATION_ENABLED: '0'
