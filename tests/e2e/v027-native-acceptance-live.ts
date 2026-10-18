@@ -81,7 +81,12 @@ export function registerV027Acceptance() {
         expect((await audit(ctx)).calls['files.import']).toBe(index);
         await ctx.step(() => form.getByRole('combobox', { name: zh.transfer.csvDelimiter, exact: true }).selectOption(delimiter)); await ctx.step(() => expect(note()).toHaveValue('note'));
         if (index === 0) {
-          await ctx.step(() => note().selectOption('')); await ctx.step(() => form.getByRole('combobox', { name: zh.transfer.text009, exact: true }).selectOption('utf16le')); await ctx.step(() => expect(form.locator('.error-box')).toBeVisible()); await ctx.step(() => expect(form.getByRole('button', { name: zh.transfer.text028, exact: true })).toBeDisabled());
+          await ctx.step(() => note().selectOption('')); await ctx.step(() => form.getByRole('combobox', { name: zh.transfer.text009, exact: true }).selectOption('utf16le'));
+          // 该UTF-8样本按UTF-16LE读取会得到空字段预览，并不保证CSV解析报错；仍须拒绝沿用旧映射或发起导入。
+          await ctx.step(() => expect(form.getByRole('button', { name: zh.transfer.text028, exact: true })).toBeEnabled());
+          await ctx.step(() => expect(form.locator('.mapping-grid select')).toHaveCount(0)); await ctx.step(() => expect(note()).toHaveCount(0));
+          await ctx.step(() => form.getByRole('button', { name: zh.transfer.text028, exact: true }).click());
+          await ctx.step(() => expect(form.locator('.error-box')).toHaveText(zh.transfer.text001)); expect((await audit(ctx)).calls['files.import']).toBe(index);
           await ctx.step(() => form.getByRole('combobox', { name: zh.transfer.text009, exact: true }).selectOption('utf8')); await ctx.step(() => expect(note()).toHaveValue('note'));
         }
         await ctx.step(() => form.getByRole('button', { name: zh.transfer.text028, exact: true }).click()); await ctx.step(() => expect(form.locator('.success-box')).toContainText('2 行')); await ctx.step(() => expect(form.locator('.error-box')).toHaveCount(0)); await ctx.step(() => form.getByRole('button', { name: zh.common.done, exact: true }).click());
