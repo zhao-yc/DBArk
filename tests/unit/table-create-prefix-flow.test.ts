@@ -12,6 +12,7 @@ const design = (): TableCreateDraft => ({ database: 'db', name: 't', engine: 'In
 const ddl = "CREATE TABLE `t` (`id` bigint unsigned NOT NULL AUTO_INCREMENT,`v` varchar(1000) DEFAULT NULL,`b` varbinary(64) DEFAULT NULL,PRIMARY KEY (`id`),KEY `ix` (`v`(10),`id`),UNIQUE KEY `uq_b` (`b`(8))) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin ROW_FORMAT=DYNAMIC";
 let engine: Engine, commands: string[], events: TaskEvent[], created: boolean, sequence: number, showReads: number;
 let binaryPrefix: number | null, omitBinaryIndex: boolean, binaryColumnPatch: Record<string,unknown>;
+let timeColumns: Record<string, unknown>[], timeMetadata: Record<string, unknown>[];
 let page: number, maxBytes: number, rowFormat: string, actualDdl: string, changedShow: boolean, columnPatch: Record<string, unknown>, indexPatch: Record<string, unknown>, tablePatch: Record<string, unknown>;
 let hold: RegExp | undefined, release: (() => void) | undefined;
 /** 真实Engine、快照/令牌、SQL生成及后核；只将传输换成RAM驱动。 */
@@ -31,8 +32,8 @@ function managed(signal?: AbortSignal): ManagedConnection {
       else if (sql.startsWith('SHOW CREATE TABLE')) rows = [{ 'Create Table': ++showReads > 1 && changedShow ? actualDdl + ' COMMENT=\'外部改变\'' : actualDdl }];
       else if (sql.startsWith('SELECT t.TABLE_NAME')) rows = [{ name: 't', engine: 'InnoDB', charset: 'utf8mb4', collation: 'utf8mb4_bin', comment: '' }];
       else if (sql.startsWith('SELECT TABLE_NAME AS name,ENGINE')) rows = [{ name: 't', engine: 'InnoDB', rowFormat: 'Dynamic', collation: 'utf8mb4_bin', ...tablePatch }];
-      else if (sql.startsWith('SELECT COLUMN_NAME AS name')) rows = design().columns.map(column => ({ name: column.name, type: column.type, nullable: column.nullable ? 'YES' : 'NO', defaultValue: null, extra: column.autoIncrement ? 'auto_increment' : '', comment: '' }));
-      else if (sql.startsWith('SELECT COLUMN_NAME,DATA_TYPE')) rows = design().columns.map(column => ({ COLUMN_NAME: column.name, DATA_TYPE: column.type.split(/[ (]/)[0], COLUMN_TYPE: column.type, IS_NULLABLE: column.nullable ? 'YES' : 'NO', CHARACTER_SET_NAME: column.name === 'v' ? 'utf8mb4' : null, COLLATION_NAME: column.name === 'v' ? 'utf8mb4_bin' : null, CHARACTER_MAXIMUM_LENGTH: column.name === 'v' ? 1000 : column.name === 'b' ? 64 : null, CHARACTER_OCTET_LENGTH: column.name === 'v' ? 4000 : column.name === 'b' ? 64 : null, EXTRA: column.autoIncrement ? 'auto_increment' : '', ...(column.name === 'v' ? columnPatch : column.name === 'b' ? binaryColumnPatch : {}) }));
+      else if (sql.startsWith('SELECT COLUMN_NAME AS name')) rows = [...design().columns.map(column => ({ name: column.name, type: column.type, nullable: column.nullable ? 'YES' : 'NO', defaultValue: null, extra: column.autoIncrement ? 'auto_increment' : '', comment: '' })), ...timeColumns];
+      else if (sql.startsWith('SELECT COLUMN_NAME,DATA_TYPE')) rows = [...design().columns.map(column => ({ COLUMN_NAME: column.name, DATA_TYPE: column.type.split(/[ (]/)[0], COLUMN_TYPE: column.type, IS_NULLABLE: column.nullable ? 'YES' : 'NO', CHARACTER_SET_NAME: column.name === 'v' ? 'utf8mb4' : null, COLLATION_NAME: column.name === 'v' ? 'utf8mb4_bin' : null, CHARACTER_MAXIMUM_LENGTH: column.name === 'v' ? 1000 : column.name === 'b' ? 64 : null, CHARACTER_OCTET_LENGTH: column.name === 'v' ? 4000 : column.name === 'b' ? 64 : null, EXTRA: column.autoIncrement ? 'auto_increment' : '', ...(column.name === 'v' ? columnPatch : column.name === 'b' ? binaryColumnPatch : {}) })), ...timeMetadata];
       else if (sql.startsWith('SELECT INDEX_NAME,NON_UNIQUE')) rows = [['PRIMARY', 0, 'id', 1, null], ['ix', 1, 'v', 1, 10], ['ix', 1, 'id', 2, null], ['uq_b', 0, 'b', 1, binaryPrefix]].filter(([name]) => !omitBinaryIndex || name !== 'uq_b').map(([name, unique, column, order, prefix]) => ({ INDEX_NAME: name, NON_UNIQUE: unique, COLUMN_NAME: column, SEQ_IN_INDEX: order, SUB_PART: prefix, INDEX_TYPE: 'BTREE', COLLATION: 'A', INDEX_COMMENT: '', EXPRESSION: null, IS_VISIBLE: 'YES', ...(name === 'ix' && order === 1 ? indexPatch : {}) }));
       else { callback(Error('未授权RAM查询：' + sql)); return; }
       callback(null, rows);
@@ -41,11 +42,61 @@ function managed(signal?: AbortSignal): ManagedConnection {
   } });
   return { connection, signal, profile, status: { version: '8.4.11', dialect: 'mysql' }, broken: false, close: () => closeMysqlConnection(connection as any, true, false, 500) } as unknown as ManagedConnection;
 }
-beforeEach(async () => { commands = []; events = []; created = changedShow = false; sequence = showReads = 0; binaryPrefix = 8; omitBinaryIndex = false; binaryColumnPatch = {}; page = 16384; maxBytes = 4; rowFormat = 'dynamic'; actualDdl = ddl; columnPatch = indexPatch = tablePatch = {}; hold = release = undefined; driver.connect.mockReset().mockImplementation(async (_profile, _database, signal) => managed(signal)); engine = new Engine(event => events.push(event)); await engine.handle('connections.open', { id: 'c', profile }); });
+beforeEach(async () => { commands = []; events = []; timeColumns = []; timeMetadata = []; created = changedShow = false; sequence = showReads = 0; binaryPrefix = 8; omitBinaryIndex = false; binaryColumnPatch = {}; page = 16384; maxBytes = 4; rowFormat = 'dynamic'; actualDdl = ddl; columnPatch = indexPatch = tablePatch = {}; hold = release = undefined; driver.connect.mockReset().mockImplementation(async (_profile, _database, signal) => managed(signal)); engine = new Engine(event => events.push(event)); await engine.handle('connections.open', { id: 'c', profile }); });
 afterEach(async () => { release?.(); await engine.closeAll(); });
 async function get(prefix = true): Promise<TableCreateGetOutput> { return engine.handle('schema.tableCreate.get', { connectionId: 'c', database: 'db', taskId: 'get-' + sequence, connectionRevision: 1, ...(prefix ? { includePrefixFacts: true } : {}) }); }
 async function preview(value: TableCreateGetOutput, draft = design()): Promise<TableCreatePreviewOutput> { return engine.handle('schema.tableCreate.preview', { snapshotId: value.snapshotId, design: draft, taskId: 'preview-' + sequence, connectionRevision: 1 }); }
 async function apply(value: TableCreatePreviewOutput, revision = 1) { return engine.handle('schema.tableCreate.apply', { previewToken: value.previewToken, confirmation: 'db.t', acknowledgements: [...tableCreateAcknowledgements], taskId: 'apply-' + sequence, connectionRevision: revision }); }
+
+/** SHOW和两套COLUMNS记录单独手写，非键时间列不会伪装成计划索引列。 */
+function prefixWithTime(type = 'DATETIME', precision = 3, explicitNone = false): TableCreateDraft {
+  const input = design(), suffix = precision ? `(${precision})` : '', actualType = type.toLowerCase() + suffix;
+  input.columns.push({ name: 'updated_at', type: `${type}(${precision})`, nullable: true, autoIncrement: false, defaultValue: explicitNone ? null : `CURRENT_TIMESTAMP(${precision})`, comment: '', onUpdate: explicitNone ? null : { kind: 'expression', expression: 'current-timestamp', precision } });
+  const expression = `CURRENT_TIMESTAMP${suffix || '()'}`, extra = explicitNone ? '' : `DEFAULT_GENERATED on update ${expression}`;
+  timeColumns = [{ name: 'updated_at', type: actualType, nullable: 'YES', defaultValue: explicitNone ? null : expression, extra, comment: '' }];
+  timeMetadata = [{ COLUMN_NAME: 'updated_at', DATA_TYPE: type.toLowerCase(), COLUMN_TYPE: actualType, IS_NULLABLE: 'YES', CHARACTER_SET_NAME: null, COLLATION_NAME: null, CHARACTER_MAXIMUM_LENGTH: null, CHARACTER_OCTET_LENGTH: null, EXTRA: extra }];
+  actualDdl = ddl.replace(',PRIMARY KEY', ',`updated_at` ' + actualType + ' DEFAULT ' + (explicitNone ? 'NULL' : `${expression} ON UPDATE ${expression}`) + ',PRIMARY KEY');
+  return input;
+}
+
+describe('前缀索引加非键自动时间列实际Engine（仅RAM）', () => {
+  it.each([['DATETIME', 0], ['DATETIME', 3], ['DATETIME', 6], ['TIMESTAMP', 3]] as const)('%s(%s)同时完成完整列与索引后核，CREATE只投递一次', async (type, precision) => {
+    const input = prefixWithTime(type, precision), value = await preview(await get(), input);
+    expect(value.sql).toContain('KEY `ix` (`v`(10), `id`)'); expect(value.sql).toContain(`ON UPDATE CURRENT_TIMESTAMP${precision ? `(${precision})` : ''}`); expect(created).toBe(false);
+    expect(await apply(value)).toMatchObject({ ddlCompleted: true, definitionVerified: true, resourcesReleased: true });
+    expect(commands.filter(sql => sql.startsWith('CREATE TABLE'))).toEqual([value.sql]); expect(showReads).toBe(2);
+    expect(commands.some(sql => sql.startsWith('SELECT COLUMN_NAME,DATA_TYPE'))).toBe(true); expect(commands.some(sql => sql.startsWith('SELECT INDEX_NAME,NON_UNIQUE'))).toBe(true);
+    await expect(apply(value)).rejects.toThrow('失效'); expect(commands.filter(sql => sql.startsWith('CREATE TABLE'))).toHaveLength(1);
+  });
+  it('显式null的非键时间列保持不自动更新并完成完整后核', async () => {
+    const value = await preview(await get(), prefixWithTime('DATETIME', 3, true));
+    expect(value.sql).not.toContain('ON UPDATE'); expect((await apply(value)).definitionVerified).toBe(true); expect(showReads).toBe(2);
+  });
+  it.each([
+    { EXTRA: '' }, { EXTRA: 'DEFAULT_GENERATED' }, { EXTRA: 'on update CURRENT_TIMESTAMP(6)' }, { EXTRA: 'on update CURRENT_TIMESTAMP(3) future_attribute' },
+    { EXTRA: 'DEFAULT_GENERATED DEFAULT_GENERATED on update CURRENT_TIMESTAMP(3)' }, { EXTRA: 'on update NOW(3) STORED GENERATED' }, { EXTRA: undefined },
+    { COLUMN_TYPE: 'datetime(6)' }, { DATA_TYPE: 'timestamp' }, { IS_NULLABLE: 'NO' }, { CHARACTER_SET_NAME: 'utf8mb4', COLLATION_NAME: 'utf8mb4_bin' },
+    { CHARACTER_MAXIMUM_LENGTH: 3, CHARACTER_OCTET_LENGTH: 3 },
+  ])('独立完整目录时间元数据不符%j，保留ACK且不重放', async patch => {
+    const input = prefixWithTime(), value = await preview(await get(), input); Object.assign(timeMetadata[0], patch);
+    expect(await apply(value)).toMatchObject({ ddlCompleted: true, definitionVerified: false, resourcesReleased: true });
+    await expect(apply(value)).rejects.toThrow('失效'); expect(commands.filter(sql => sql.startsWith('CREATE TABLE'))).toEqual([value.sql]);
+  });
+  it.each(['SHOW遗漏', 'SHOW精度', '普通目录遗漏', '非键未知属性', '索引前缀错误', '隐式属性'] as const)('%s仍拒绝完整核验，不因接纳时间属性跳过原守卫', async mismatch => {
+    const input = prefixWithTime('DATETIME', 3, mismatch === '隐式属性');
+    if (mismatch === '隐式属性') delete input.columns.at(-1)!.onUpdate;
+    if (mismatch === '非键未知属性') { input.indexes.pop(); omitBinaryIndex = true; actualDdl = actualDdl.replace(',UNIQUE KEY `uq_b` (`b`(8))', ''); }
+    const value = await preview(await get(), input);
+    if (mismatch === 'SHOW遗漏') actualDdl = actualDdl.replace(' ON UPDATE CURRENT_TIMESTAMP(3)', '');
+    if (mismatch === 'SHOW精度') actualDdl = actualDdl.replace('ON UPDATE CURRENT_TIMESTAMP(3)', 'ON UPDATE CURRENT_TIMESTAMP(6)');
+    if (mismatch === '普通目录遗漏') timeColumns[0].extra = '';
+    if (mismatch === '非键未知属性') binaryColumnPatch = { EXTRA: 'future_attribute' };
+    if (mismatch === '索引前缀错误') indexPatch = { SUB_PART: 9 };
+    if (mismatch === '隐式属性') timeMetadata[0].EXTRA = 'on update CURRENT_TIMESTAMP(3)';
+    expect(await apply(value)).toMatchObject({ ddlCompleted: true, definitionVerified: false });
+    await expect(apply(value)).rejects.toThrow('失效'); expect(commands.filter(sql => sql.startsWith('CREATE TABLE'))).toHaveLength(1);
+  });
+});
 
 describe('新表前缀真实Engine链路（仅RAM驱动）', () => {
   it('准备与预览零DDL；准确结构化前缀、显式DYNAMIC和三套真实目录后核完成后才报完整', async () => {

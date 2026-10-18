@@ -1,5 +1,6 @@
 import type { TableCreateDraft, TableCreatePrefixFacts } from '../shared/tableCreate';
-import type { TableColumnDefinitionDocument } from '../shared/tableColumnPatches';
+import { readColumnOnUpdate, sameColumnOnUpdate, type TableColumnDefinitionDocument } from '../shared/tableColumnPatches';
+import { tableCreateOnUpdateExtraMatches } from '../shared/tableCreateOnUpdate';
 import type { TableCreateIndexPlan } from './tableCreateIndexPlan';
 import { structureTaskQuery, type StructureTaskContext } from './structureDefinition';
 import { tableDefinitionTokens } from './tableColumnDefinition';
@@ -54,8 +55,11 @@ export async function verifyCreatedPrefixIndexes(context: StructureTaskContext, 
   if (columns.length !== design.columns.length || columns.some((column, index) => column.COLUMN_NAME !== design.columns[index].name)) return false;
   // 所有实际列都核目录语义；只有键列另外授予索引成本能力，非键列不能被遗漏或伪造成计划键列。
   for (const metadata of columns) {
-    const expected = plan.columns.find(column => column.name === metadata.COLUMN_NAME), definition = document.columns.find(column => column.name === metadata.COLUMN_NAME);
-    if (!definition || typeof metadata.DATA_TYPE !== 'string' || typeof metadata.EXTRA !== 'string' || !/^(?:(?:auto_increment|DEFAULT_GENERATED)\s*)*$/i.test(metadata.EXTRA)) return false;
+    const expected = plan.columns.find(column => column.name === metadata.COLUMN_NAME), definition = document.columns.find(column => column.name === metadata.COLUMN_NAME), requested = design.columns.find(column => column.name === metadata.COLUMN_NAME);
+    if (!definition || !requested || typeof metadata.DATA_TYPE !== 'string' || typeof metadata.EXTRA !== 'string') return false;
+    // 仅本次显式时间属性按共享合同核SHOW和完整COLUMNS.EXTRA；旧省略路径保留原白名单。
+    const explicitTime = Object.hasOwn(requested, 'onUpdate');
+    if (explicitTime ? !tableCreateOnUpdateExtraMatches(requested, metadata.EXTRA) || !sameColumnOnUpdate(readColumnOnUpdate(definition), requested.onUpdate!, definition.type.raw) : !/^(?:(?:auto_increment|DEFAULT_GENERATED)\s*)*$/i.test(metadata.EXTRA)) return false;
     const charset = facts.charsets.find(value => value.name === metadata.CHARACTER_SET_NAME), character = /^(CHAR|VARCHAR|ENUM|SET|(?:TINY|MEDIUM|LONG)?TEXT)$/.test(metadata.DATA_TYPE.toUpperCase());
     if (character && (metadata.CHARACTER_SET_NAME !== design.charset || metadata.COLLATION_NAME !== tables[0].collation || !charset)) return false;
     // 非键LOB同样证明子类型容量；不能让两个互相一致但同时缩小的目录长度冒充BLOB。
@@ -63,7 +67,8 @@ export async function verifyCreatedPrefixIndexes(context: StructureTaskContext, 
     const capacity = blobCapacities.get(metadata.DATA_TYPE.toUpperCase());
     if (capacity !== undefined && (metadata.CHARACTER_SET_NAME !== null || metadata.COLLATION_NAME !== null || tableCreateMetadataInteger(metadata.CHARACTER_MAXIMUM_LENGTH) !== capacity || tableCreateMetadataInteger(metadata.CHARACTER_OCTET_LENGTH) !== capacity)) return false;
     const actual = deriveTrustedIndexColumn(definition, metadata, { definitionContext: document.context, charsetMaxBytes: charset?.maxBytes });
-    if (actual.column.generated || actual.column.hidden) return false;
+    // 非键时间列也必须通过原适配器的完整语义检查，不能把未知/生成/不可见列当作普通列。
+    if (actual.column.generated || actual.column.hidden || explicitTime && (!actual.writable || actual.reasons.length || actual.column.nullable !== requested.nullable)) return false;
     if (!expected) continue;
     if (expected.family === 'character' && charset?.maxBytes !== expected.unitBytes) return false;
     if (expected.family !== 'character' && (metadata.CHARACTER_SET_NAME !== null || metadata.COLLATION_NAME !== null)) return false;

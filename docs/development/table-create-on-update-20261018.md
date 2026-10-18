@@ -36,7 +36,7 @@
 
 仅对本次显式时间属性，把服务器`DATETIME`/`TIMESTAMP`与对应`(0)`、CURRENT_TIMESTAMP零精度的省略/空括号写法按相同精度核对。非零精度差异继续拒绝。旧省略路径的比较不变。
 
-后核失败保留`ddlCompleted:true`、`definitionVerified:false`，令牌已经消费，不自动重放CREATE、回滚或DROP。前缀分支已有的更严格完整列目录核验保持；无法证明的组合保守返回未核验。
+后核失败保留`ddlCompleted:true`、`definitionVerified:false`，令牌已经消费，不自动重放CREATE、回滚或DROP。前缀分支的完整列目录、完整索引、表选项及复读SHOW核验保持；显式非键时间列按同一受控合同核对，不再被旧EXTRA白名单一律误拒绝。
 
 ## 本轮验证与证据
 
@@ -59,3 +59,26 @@
 ```
 
 仍待Root集成和后续独立授权的真实服务器/原生UI验收；本轮未执行旧全套、构建或打包。创建初始fetch曾遇GitHub DNS失败，恢复后的本轮`git fetch origin`已成功；仍固定原授权基线，不合入其他任务或远端主分支。
+
+## 前缀索引与非键时间列组合补核
+
+Root独立审查指出原提交`36868c2ffacd4f55f221b64e904d9476c23091ab`遗漏前缀后核入口的EXTRA白名单。虽然外层时间属性核验正确，合法前缀索引加非键DATETIME自动更新时间仍会在CREATE成功后必然返回未核验；仅声明保守边界不能代替组合实现。本次在原分支追加修复，保留原提交。
+
+`verifyCreatedPrefixIndexes`只对本次草稿自有`onUpdate`键的字段使用共享EXTRA精度匹配器，并再次核对请求与SHOW的受控自动属性。省略新键仍走原EXTRA白名单。没有全局放宽EXTRA，也没有删去完整列、索引、表选项、字符/二进制长度或复读SHOW检查。
+
+`deriveTrustedIndexColumn`保持原实现：真实COLUMN_TYPE必须与SHOW完整类型一致，DATA_TYPE与类型首词一致，目录NULL/字符集/长度字段必须完整；已声明NULL、自增、生成、可见性与时间属性必须一致，时间精度不一致拒绝。未知附加属性、生成或不可见列不会形成可写语义证明。显式非键时间列也要求适配器无拒绝原因，并额外与请求草稿核对可空状态；因此SHOW省略NULL声明时，第二套COLUMNS的错误IS_NULLABLE仍会被拒绝。它不被加入计划索引列或授予新的前缀能力。
+
+组合沿原前缀能力门，仅MySQL 8.4.11、InnoDB、DYNAMIC、16KiB及已证明MAXLEN；时间列仍是非键列，本次不扩展时间列索引规划范围。
+
+新增真实Engine配RAM驱动的23项组合用例：DATETIME 0/3/6精度及TIMESTAMP(3)成功，显式null成功；独立完整目录中EXTRA缺失、错误精度、未知/生成属性、类型、NULL、字符目录矛盾均拒绝；另核SHOW缺失/精度错误、原普通目录缺失、其他非键未知属性、索引前缀错误和旧省略路径意外自动属性。成功与失败均检查一次CREATE，消费后的令牌不得重放。
+
+- 原始反例：`prefix-first-red.log`，4失败、19通过、35按名称筛选未运行；4个失败均是合法组合已CREATE而definitionVerified为false。补修前测试副本为`prefix-red-fixture.test.ts`，位于同一缓存目录。
+- 第一轮修复：`prefix-after-fix.log`，57通过、1失败，暴露SHOW省略NULL时独立目录可空状态未与请求比较；已补比较，未删除负例。
+- 最终窄测：`prefix-final.log`，三个文件共145项通过，含本文件原前缀回归、适配器及独立元数据补核。命令为下方所示。
+- 类型：`type-prefix-final.log`，`tsc --noEmit`退出0。差异检查通过。
+
+```powershell
+& 'C:\Users\zhao-\.fnm\node-versions\v24.17.0\installation\node.exe' D:/svn/DBArk/node_modules/vitest/vitest.mjs run tests/unit/table-create-prefix-flow.test.ts tests/unit/table-index-metadata.test.ts tests/unit/table-create-prefix-metadata.test.ts --reporter=verbose
+```
+
+上述补核日志均位于`.cache/table-create-on-update/`且不入Git。仅修改本组合后核、对应测试及本文，不进行GUI、实库、CI、构建、服务或Docker操作。
