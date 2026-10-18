@@ -7,7 +7,7 @@ import { readSqlKeywordCase, sqlKeywordRoleLimits } from '../shared/sqlKeywordCa
 
 type RoleModule = typeof import('./sqlFormattingRoles');
 let preparedRoles: RoleModule | undefined;
-/** 仅显式大写入口调用；模块加载成功前上层必须保留原模型/选区/owner，默认入口不调用。 */
+/** 仅显式大写/小写入口调用；模块加载成功前上层必须保留原模型/选区/owner，默认入口不调用。 */
 export async function prepareSqlFormattingRoles(): Promise<void> { preparedRoles = await import('./sqlFormattingRoles'); }
 
 export interface FormattingPreferences { tabSize?: unknown; insertSpaces?: unknown; keywordCase?: unknown; }
@@ -62,12 +62,12 @@ function atoms(source: string, ansiQuotes: boolean, noBackslashEscapes: boolean)
 }
 
 /** 通过公开方言postProcess取得原位置/正式类型，先执行依赖原后处理，不导入私有lexer。 */
-function uppercaseFormatting(source: string, start: number, end: number, original: string, options: { tabSize: number; insertSpaces: boolean }, names: { start: number; end: number }[]) {
+function keywordCaseFormatting(source: string, start: number, end: number, original: string, options: { tabSize: number; insertSpaces: boolean }, keywordCase: 'upper' | 'lower', names: { start: number; end: number }[]) {
   let captured: FormatterToken[] | undefined;
   const dialect = { ...mysql, tokenizerOptions: { ...mysql.tokenizerOptions, postProcess(tokens: FormatterToken[]) {
     captured = mysql.tokenizerOptions.postProcess?.(tokens) ?? tokens; return captured;
   } } };
-  const config = { tabWidth: options.tabSize, useTabs: !options.insertSpaces, keywordCase: 'upper' as const, identifierCase: 'preserve' as const, functionCase: 'preserve' as const, dataTypeCase: 'preserve' as const };
+  const config = { tabWidth: options.tabSize, useTabs: !options.insertSpaces, keywordCase, identifierCase: 'preserve' as const, functionCase: 'preserve' as const, dataTypeCase: 'preserve' as const };
   // 全上下文取词法类型，避免把选中的t.order后半段或函数名当作孤立关键字。
   const trimmed = source.trim(), offset = source.length - source.trimStart().length;
   const whole = formatDialect(trimmed, { ...config, dialect });
@@ -103,11 +103,11 @@ export function planSqlFormatting(source: string, start: number, end: number, eo
   // 仅显式格式化时使用当前缩进；更改偏好本身从不改写SQL。
   const options = editorIndentationOptions(indentation.tabSize, indentation.insertSpaces);
   const keywordCase = readSqlKeywordCase(indentation.keywordCase);
-  if (keywordCase === 'upper' && (source.length > sqlKeywordRoleLimits.sourceUnits || scans[0].tokens.length > sqlKeywordRoleLimits.tokens)) throw Error(text.limited);
+  if (keywordCase !== 'preserve' && (source.length > sqlKeywordRoleLimits.sourceUnits || scans[0].tokens.length > sqlKeywordRoleLimits.tokens)) throw Error(text.limited);
   try {
-    if (keywordCase === 'upper') {
+    if (keywordCase !== 'preserve') {
       const roles = preparedRoles; if (!roles) throw Error(text.unavailable);
-      ({ formatted, eligible } = uppercaseFormatting(source, start, end, original, options, roles.sqlFormattingNameRanges(source)));
+      ({ formatted, eligible } = keywordCaseFormatting(source, start, end, original, options, keywordCase, roles.sqlFormattingNameRanges(source)));
     }
     else formatted = format(original.trim(), { language: 'mysql', tabWidth: options.tabSize, useTabs: !options.insertSpaces, keywordCase: 'preserve', identifierCase: 'preserve', functionCase: 'preserve', dataTypeCase: 'preserve' });
     formatted = formatted.trim().replace(/\r?\n/g, eol);
@@ -123,8 +123,8 @@ export function planSqlFormatting(source: string, start: number, end: number, eo
       if (before.raw === value.raw) continue;
       while (range < eligible.length && eligible[range].end <= before.start) range++;
       const owner = eligible[range];
-      // 只允许ASCII原关键字原位大写，防止依赖Unicode忽略大小写把长s等名称认成关键字；其余逐字比较。
-      if (keywordCase !== 'upper' || before.kind !== 'word' || !/^[A-Za-z_]+$/.test(before.raw) || !owner || before.start < owner.start || before.end > owner.end || value.raw !== before.raw.toUpperCase()) fail();
+      // 只允许ASCII原关键字原位精确转为所选大小写，防止依赖Unicode忽略大小写把长s等名称认成关键字；其余逐字比较。
+      if (keywordCase === 'preserve' || before.kind !== 'word' || !/^[A-Za-z_]+$/.test(before.raw) || !owner || before.start < owner.start || before.end > owner.end || value.raw !== (keywordCase === 'upper' ? before.raw.toUpperCase() : before.raw.toLowerCase())) fail();
     }
   }
   return replacement === original ? null : { start, end, text: replacement };

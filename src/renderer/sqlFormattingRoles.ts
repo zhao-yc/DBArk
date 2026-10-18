@@ -2,7 +2,7 @@ import { MySQL } from 'dt-sql-parser/dist/parser/mysql/index';
 import { MySqlParserListener } from 'dt-sql-parser/dist/lib/mysql/MySqlParserListener';
 import { sqlFormattingZh as text } from './locales/sqlFormatting.zh-CN';
 
-// 大写模式需要额外语法角色证明，预算小于原仅排版模式；不扩大原安全范围。
+// 显式大小写模式需要额外语法角色证明，预算小于原仅排版模式；不扩大原安全范围。
 export { sqlKeywordRoleLimits } from '../shared/sqlKeywordCase';
 /** 默认错误监听可能打印输入；复用项目现有静默MySQL解析方式。 */
 class QuietFormattingMySQL extends MySQL {

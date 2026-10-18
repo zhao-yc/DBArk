@@ -38,14 +38,14 @@ async function mount(source: string, start = 0, end = 0) {
 async function click(entry: '按钮' | '快捷回调') { if (entry === '快捷回调') { expect(io.format).toBeTypeOf('function'); await act(async () => io.format!()); await flushSettings(); return; } const button = document.body.querySelectorAll('button').find(node => node.getAttribute('aria-label') === '格式化 SQL'); expect(button).toBeDefined(); await act(async () => button!.dispatchEvent(new MemoryEvent('click'))); await flushSettings(); }
 
 describe.each(['按钮', '快捷回调'] as const)('真实QueryTab格式化%s', entry => {
-  it.each([true, false])('关键字偏好沿真实入口用于选区/全文%s，改偏好本身不改模型且只产生原单次编辑事务', async selected => {
-    const prefix = 'select PriorValue from BeforeTable;\n', body = 'select MiXeD,t.order,count(a),@from from T t where t.id=1;', suffix = '\nselect Tail from AfterTable;', source = prefix + body + suffix;
+  it.each([['upper', true], ['upper', false], ['lower', true], ['lower', false]] as const)('关键字偏好%s沿真实入口用于选区/全文%s，改偏好本身不改模型且只产生原单次编辑事务', async (keywordCase, selected) => {
+    const prefix = 'select PriorValue from BeforeTable;\n', body = keywordCase === 'lower' ? 'SELECT MiXeD,t.order,count(a),@from FROM T t WHERE t.id=1;' : 'select MiXeD,t.order,count(a),@from from T t where t.id=1;', suffix = '\nselect Tail from AfterTable;', source = prefix + body + suffix;
     await mount(source, selected ? prefix.length : 0, selected ? prefix.length + body.length : 0);
     const model = io.editor.getModel(), binding = useWorkspace.getState().settings.tabs[0].sourceBinding;
-    await act(async () => useWorkspace.getState().updateSettings({ sqlKeywordCase: 'upper' }));
+    await act(async () => useWorkspace.getState().updateSettings({ sqlKeywordCase: keywordCase }));
     expect(io.source).toBe(source); expect(io.events).toEqual([]); expect(io.editor.getModel()).toBe(model);
     await click(entry); await vi.waitFor(() => expect(io.events).toHaveLength(4), { timeout: 10000 }); expect(io.events).toEqual(['undo-stop', 'dbark-sql-format', 'undo-stop', 'focus']); expect(io.editor.getModel()).toBe(model);
-    expect(io.source).toContain('SELECT'); expect(io.source).toContain('MiXeD'); expect(io.source).toContain('t.order'); expect(io.source).toContain('count('); expect(io.source).toContain('@from');
+    expect(io.source).toContain(keywordCase === 'upper' ? 'SELECT' : 'select'); expect(io.source).toContain('MiXeD'); expect(io.source).toContain('t.order'); expect(io.source).toContain('count('); expect(io.source).toContain('@from');
     if (selected) { expect(io.source.startsWith(prefix)).toBe(true); expect(io.source.endsWith(suffix)).toBe(true); }
     expect(useWorkspace.getState().settings.tabs[0].sourceBinding).toBe(binding); expect(commands.filter(command => command !== 'settings.save')).toEqual([]);
   });
@@ -77,11 +77,12 @@ describe.each(['按钮', '快捷回调'] as const)('真实QueryTab格式化%s', 
 });
 
 
-it.each(['切走切回', '关闭再取消', '选区漂移', '原owner被替换'] as const)('upper模块等待中的%s不能产生迟到编辑', async change => {
+describe.each(['upper', 'lower'] as const)('真实QueryTab%s加载等待', keywordCase => {
+it.each(['切走切回', '关闭再取消', '选区漂移', '原owner被替换'] as const)('显式大小写模块等待中的%s不能产生迟到编辑', async change => {
   const formatting = await import('../../src/renderer/sqlFormatting'); let release!: () => void;
   const waiting = new Promise<void>(done => { release = done; }), load = vi.spyOn(formatting, 'prepareSqlFormattingRoles').mockImplementation(() => waiting);
   try {
-    await mount('select MiXeD from T;'); await act(async () => useWorkspace.getState().updateSettings({ sqlKeywordCase: 'upper' })); await click('按钮'); expect(load).toHaveBeenCalledOnce(); expect(io.events).toEqual([]);
+    await mount('select MiXeD from T;'); await act(async () => useWorkspace.getState().updateSettings({ sqlKeywordCase: keywordCase })); await click('按钮'); expect(load).toHaveBeenCalledOnce(); expect(io.events).toEqual([]);
     if (change === '切走切回') await act(async () => { useWorkspace.getState().updateSettings({ activeTabId: 'other' }); useWorkspace.getState().updateSettings({ activeTabId: 't' }); });
     if (change === '关闭再取消') { await act(async () => { io.closeRequest = { tabId: 't' }; io.rerender(); }); await act(async () => { io.closeRequest = undefined; io.rerender(); }); }
     if (change === '选区漂移') io.start = io.end = 1;
@@ -90,8 +91,37 @@ it.each(['切走切回', '关闭再取消', '选区漂移', '原owner被替换']
   } finally { release?.(); load.mockRestore(); }
 });
 
-it('upper模块实际加载失败由原错误区显示，正文和Undo保持原样', async () => {
+it('显式大小写模块实际加载失败由原错误区显示，正文和Undo保持原样', async () => {
   const formatting = await import('../../src/renderer/sqlFormatting'), failure = Error('模块加载实际失败'), load = vi.spyOn(formatting, 'prepareSqlFormattingRoles').mockRejectedValue(failure);
-  try { await mount('select MiXeD from T;'); await act(async () => useWorkspace.getState().updateSettings({ sqlKeywordCase: 'upper' })); await click('按钮'); await vi.waitFor(() => expect(document.body.textContent).toContain(failure.message)); expect(io.source).toBe('select MiXeD from T;'); expect(io.events).toEqual([]); }
+  try { await mount('select MiXeD from T;'); await act(async () => useWorkspace.getState().updateSettings({ sqlKeywordCase: keywordCase })); await click('按钮'); await vi.waitFor(() => expect(document.body.textContent).toContain(failure.message)); expect(io.source).toBe('select MiXeD from T;'); expect(io.events).toEqual([]); }
   finally { load.mockRestore(); }
+});
+
+it.each(['偏好往返', '连接版本往返', '连接对象往返', '后台作业往返', '模态往返'] as const)('%s留下永久墓碑，原状态恢复也不能授权迟到编辑', async change => {
+  const formatting = await import('../../src/renderer/sqlFormatting'); let release!: () => void;
+  const load = vi.spyOn(formatting, 'prepareSqlFormattingRoles').mockImplementation(() => new Promise<void>(yes => { release = yes; }));
+  const originalObserver = Object.getOwnPropertyDescriptor(globalThis, 'MutationObserver'); let observer: { records: MutationRecord[] } | undefined;
+  /** 仅模拟浏览器排队的DOM记录；真实QueryTab执行takeRecords、模态扫描及墓碑判断。 */
+  class RamObserver {
+    records: MutationRecord[] = [];
+    constructor() { observer = this; }
+    observe() {}
+    takeRecords() { return this.records.splice(0); }
+    disconnect() {}
+  }
+  Object.defineProperty(globalThis, 'MutationObserver', { value: RamObserver, configurable: true });
+  try {
+    const source = 'SELECT MiXeD FROM T;'; await mount(source); await act(async () => useWorkspace.getState().updateSettings({ sqlKeywordCase: keywordCase })); await click('按钮'); expect(load).toHaveBeenCalledOnce();
+    await act(async () => {
+      const original = useWorkspace.getState();
+      if (change === '偏好往返') { original.updateSettings({ sqlKeywordCase: 'preserve' }); original.updateSettings({ sqlKeywordCase: keywordCase }); }
+      if (change === '连接版本往返') { useWorkspace.setState({ connectionVersions: { c: 1 } }); useWorkspace.setState({ connectionVersions: original.connectionVersions }); }
+      if (change === '连接对象往返') { useWorkspace.setState({ connections: original.connections.map(profile => ({ ...profile })) }); useWorkspace.setState({ connections: original.connections }); }
+      if (change === '后台作业往返') { original.setBusy('t', true); original.setBusy('t', false); }
+      if (change === '模态往返') { const modal = document.createElement('div'); modal.setAttribute('role', 'dialog'); observer!.records.push({ addedNodes: [modal] } as unknown as MutationRecord); }
+    });
+    await act(async () => release()); expect(io.source).toBe(source); expect(io.events).toEqual([]); expect(commands.filter(command => command !== 'settings.save')).toEqual([]);
+  } finally { release?.(); load.mockRestore(); if (originalObserver) Object.defineProperty(globalThis, 'MutationObserver', originalObserver); else Reflect.deleteProperty(globalThis, 'MutationObserver'); }
+});
+
 });
