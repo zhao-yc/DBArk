@@ -1,0 +1,21 @@
+{
+  "version": "0.23.0",
+  "round": 6,
+  "source": "5cac4fd80fc2edb69be3df2fb65c2753506cdbbc",
+  "purpose": "第六轮：先修复Playwright CommonJS模块加载，沿相同附件合同重新验证高亮取消和安装启动",
+  "previousRuns": ["39089165148", "39094458615", "39100233953", "39106267172", "39113054046"],
+  "retryPreviousRun": false,
+  "automaticRetry": 0,
+  "clipboard": false,
+  "privateDatabase": false,
+  "release": false,
+  "moduleFix": "9cb595dcea62c0c0b66d8d641ba3f03173e22643",
+  "moduleSourceSha256": "2cef0d09c992eff638b229257fb2f38a72d4200fab094a6dc8437c7304f62fef",
+  "monacoPatchSha256": "b9abd5505107b0934040c6ac1a3813d8b2af80e7f4ca849a496871a21ac5d095",
+  "markerContractProducer": "98b3418f3467c0e7c1958ad937f506cd1557874e",
+  "markerContractSourceSha256": "700608c4b03b900442469a338cead77d35487c9746661cceb31ed5366d423f8d",
+  "unchangedObservationBodySha256": "82429ac364e1c8ba419e741ae0ab1e3c44125ce887bc287e8a140849ae8bb867",
+  "readerSha256": "602098da2938bd0b260e80662df556f16bd95a3359ba9e848975d282c946bf84",
+  "independentReviewSha256": "e037cc1b60208affbdc83f4e9a08627238f77b0812b6b192828a02f50d7a0583",
+  "rootNarrowTests": 289
+}
