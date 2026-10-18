@@ -48,7 +48,7 @@ function fixture(scenario: QcsvCase, change?: (manifest: any, entries: [string, 
   const types = ['LONGLONG','LONGLONG','NEWDECIMAL','DATETIME','TIME','BLOB','BLOB','BLOB','BLOB','BLOB','JSON'];
   const columns = (names: readonly string[], types: string[]) => names.map((name,index) => ({position:index+1,name,exportName:name,type:types[index]}));
   const manifest = { format:'DBArk-query-csv-archive',version:1,encoding:scenario.encoding,csv:{delimiter:scenario.delimiter,recordDelimiter:'\r\n',null:'\\N',leadingBackslash:'double',binary:'base64:',header:'exportName',columnOrder:'position'},results:[
-    {kind:'rows',resultOrdinal:1,statementOrdinal:1,rowResultOrdinal:1,file:'results/rows-001.csv',columns:columns([qcsvEmptyHeader],['LONG']),rowsWritten:0,bytes:empty.length},
+    {kind:'rows',resultOrdinal:1,statementOrdinal:1,rowResultOrdinal:1,file:'results/rows-001.csv',columns:columns([qcsvEmptyHeader],['LONGLONG']),rowsWritten:0,bytes:empty.length},
     {kind:'status',resultOrdinal:2,statementOrdinal:2,affectedRows:0,insertId:'0',warningCount:0},
     {kind:'rows',resultOrdinal:3,statementOrdinal:3,rowResultOrdinal:2,file:'results/rows-002.csv',columns:columns(qcsvHeaders,types),rowsWritten:0,bytes:rows.length},
   ] };

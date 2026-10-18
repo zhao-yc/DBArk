@@ -31,7 +31,8 @@ export function assertQcsvOutput(bytes: Buffer, scenario: QcsvCase, fields: stri
   const columns = (names: readonly string[], values: string[]) => names.map((name, index) => ({ position: index + 1, name, exportName: name, type: values[index] }));
   // EOF警告计数在协议中可省略；出现时必须为0，不能忽略真实警告。
   const withoutZeroWarning = (row: Record<string, unknown>) => { const { warningCount, ...rest } = row; assert.ok(warningCount === undefined || warningCount === 0); return rest; };
-  assert.deepEqual(withoutZeroWarning(manifest.results[0]), { kind: 'rows', resultOrdinal: 1, statementOrdinal: 1, rowResultOrdinal: 1, file: 'results/rows-001.csv', columns: columns([qcsvEmptyHeader], ['LONG']), rowsWritten: 0, bytes: empty.length });
+  // 准确MySQL8.4.11的独立原驱动文本协议实测SELECT 0字段码8，即LONGLONG；不能以RAM种子的LONG自证。
+  assert.deepEqual(withoutZeroWarning(manifest.results[0]), { kind: 'rows', resultOrdinal: 1, statementOrdinal: 1, rowResultOrdinal: 1, file: 'results/rows-001.csv', columns: columns([qcsvEmptyHeader], ['LONGLONG']), rowsWritten: 0, bytes: empty.length });
   assert.deepEqual(manifest.results[1], { kind: 'status', resultOrdinal: 2, statementOrdinal: 2, affectedRows: 0, insertId: '0', warningCount: 0 });
   assert.deepEqual(withoutZeroWarning(manifest.results[2]), { kind: 'rows', resultOrdinal: 3, statementOrdinal: 3, rowResultOrdinal: 2, file: 'results/rows-002.csv', columns: columns(qcsvHeaders, types), rowsWritten: fields.length, bytes: rows.length });
   return { entries: entries.size, csvBytes: empty.length + rows.length };
