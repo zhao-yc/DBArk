@@ -1,5 +1,7 @@
 # Navicat 全功能覆盖目标
 
+0.23修后固定f574c15完整CI已成功：491文件/9099通过/10条件跳过，类型及构建成功。原Windows Canceled、macOS arm64分栏场景及macOS x64安装超时仍保留，新原生检查点继续；本版尚未公开，见[后续记录](../tests/integration/acceptance-query-layout-source-20261018.md)。
+
 0.23固定3d7c73e完整CI为490文件/9091通过/10跳过，类型及构建成功。后续三平台原生CI中macOS x64源码两专项通过，真实安装缩进超时；Windows源码Canceled及macOS arm64分栏场景失败均保留。测试场景和诊断有限修正后Root97项相关检查、类型通过，尚未证明原生问题全部解决，见[新检查点](../tests/integration/acceptance-query-layout-source-20261018.md)。当前公开仍为0.21。
 
 后续0.23独立分支已实现逐查询标签的编辑区高度恢复、可取消指针/键盘分隔条及配置库8迁移。固定4576920完整CI为483文件/9022通过/10条件跳过，类型及构建成功。随后固定1ebf0d9的Windows源码分栏专项单次通过：双标签真实鼠标/键盘、取消/默认、缩窗不改偏好、模型/正文/Undo、SQLite8及独立重启，两次正常退出及PID/目录清理完成，SQL/剪贴板操作为0。当前头完整CI、安装包和macOS专项仍待验，不能沿用0.22或0.21统计，见[整合及原生检查点](../tests/integration/acceptance-query-layout-source-20261018.md)。当前公开仍为0.21，0.22候选及本0.23均未新增发行。
