@@ -41,3 +41,13 @@ node D:\svn\DBArk\node_modules\typescript\bin\tsc --noEmit
 优先独审：Main新路由严格输入及零native访问；预加载白名单无扩权；hook同步锁和scope墓碑，尤其旧finally不能解开新锁；App偏好窗口只绑定显式按钮；原app.info/LocalStore及全部真实凭据E2E字节证据；原观察和身份合同未变。
 
 Root整合后另行授权准确安装专项，仍以原完整身份、准备、生命周期和正常退出证明通过，不能以“没有32/33”取代验收。之后真实凭据用例仍可能暴露原生Keychain前提；本补丁不会隐藏该问题，也不证明其已修复。
+
+## Root整合与独立复核
+
+作者固定 `50dda8d39fc1b1471c98b454a2f08e939cde6637` 从 `2f6e22a` 整合为 `f34f926f583e6f6e44cbe3613eb7f744016abafd`；两者完整工作树无差异。直接本地clone传输未成功，改用已验证增量bundle接纳同一固定提交，未改作者、重写历史或使用worktree。
+
+Root `node .cache/run1836-check-runtime-info-root.mjs` 的11文件／196项通过，0失败／跳过，类型退出0，unit.log SHA-256 `77a1fe36a46ae607b7b19664457c5b3d8babd08af9d16c4586b1d68143f99e2d`。未重建旧dist、未运行原生或系统加密；这些是新补丁的RAM／VM证据，不继承R6安装通过范围。
+
+独审固定同一作者头，原196项与5项独立React对照通过、类型通过；20份保护文件及7份关键真实E2E断言摘要保持，Main去掉新元信息分支后AST等价。独立调用新Main分支75次，safeStorage属性读取0；原37await／55guard、120s／45s和所有观察预算不变。独审交接SHA-256 `70d0be03d65e6f0c1381541dad12075a28a54421b58afbec8d2aa067542099fd`，未发现阻断项。计数有重叠，不加总为完整套件或原生验收。
+
+下一检查点仅把该修复带入新的三平台原生／实际安装运行；真实凭据测试保留，R6原超时及其证据不修改。R6只能确认执行到同步native调用前路径、预算内未确认正常返回；Main标记上限与上游早期日志可能不完整，不能据缺少32/33断言native永不返回或具体Keychain／签名原因。Electron实际版本44.7.0，依赖未变。
