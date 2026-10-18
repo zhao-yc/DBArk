@@ -24,6 +24,10 @@ function rowBytes(row: DraftRow, maximum: number): number {
 export function addedDraftHistoryBytes(row: DraftRow, maximum = draftHistoryLimits.bytes): number {
   return 96 + row.id.length * 2 + rowBytes(row, maximum);
 }
+/** 批量修改发布前与实际历史记录共用准确变化成本，保证整步可撤销，超限不先写草稿。 */
+export function changedDraftHistoryBytes(before: DraftRow, after: DraftRow, maximum = draftHistoryLimits.bytes): number {
+  return 96 + before.id.length * 2 + rowBytes(before, maximum) + rowBytes(after, maximum);
+}
 /** 值比较不解析JSON或数值；缺字段与显式undefined仍是不同结构。 */
 function sameValue(a: CellValue, b: CellValue): boolean { return Object.is(a, b) || !!a && !!b && typeof a === 'object' && typeof b === 'object' && a.type === b.type && a.base64 === b.base64; }
 function sameData(a: DataRow, b: DataRow): boolean {
@@ -64,7 +68,7 @@ export class DraftHistory {
     for (const [id, old] of prior) {
       const value = next.get(id);
       if (value && old.index === value.index && sameRow(old.row, value.row)) continue;
-      bytes += 96 + id.length * 2 + rowBytes(old.row, this.limits.bytes) + (value ? rowBytes(value.row, this.limits.bytes) : 0);
+      bytes += value ? changedDraftHistoryBytes(old.row, value.row, this.limits.bytes) : 96 + id.length * 2 + rowBytes(old.row, this.limits.bytes);
       if (bytes > this.limits.bytes) { this.clear(); this.anchor = after; this.notice = text.overflow; return; }
       patches.set(id, { before: old, after: value });
     }

@@ -7,6 +7,9 @@ import { duplicateRecordDraft, recordDuplicateReadonlyReason } from './recordDup
 import { recordCopyMetadataReason, type RecordCopyPage } from './recordCopySource';
 import type { RecordContext } from './recordViews';
 
+// 当前页批量草稿共用原类型/完整性/预算校验，不读取剪贴板或生成SQL。
+export { fields as assertRecordBatchFields, sameRow as sameRecordBatchRow, cellBytes as recordBatchCellBytes };
+
 /** 只读取普通自有数据属性；未知包装、访问器和缺值不具备整批复制资格。 */
 function fields(data: unknown): asserts data is DataRow {
   if (!data || typeof data !== 'object' || ![Object.prototype, null].includes(Object.getPrototypeOf(data))) throw Error(text.batchValue);
