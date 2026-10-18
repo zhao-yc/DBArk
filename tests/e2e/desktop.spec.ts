@@ -12,7 +12,7 @@ const sqlWasmFile = createRequire(__filename).resolve('sql.js/dist/sql-wasm.wasm
 test('桌面启动、存储、进程隔离与输入校验', async ({}, testInfo) => {
   await expect(page).toHaveTitle('DBArk');
   await page.screenshot({ path: testInfo.outputPath('desktop-welcome.png') });
-  const status = await page.evaluate(async () => ({ info: await window.dbark.invoke('app.info', {}), hasNode: 'require' in window, settings: await window.dbark.invoke('settings.get', {}) }));
+  const status = await page.evaluate(async () => ({ info: await window.dbark.invoke('app.runtimeInfo', {}), hasNode: 'require' in window, settings: await window.dbark.invoke('settings.get', {}) }));
   expect(status.info.version).toBe(sourceVersion); expect(status.hasNode).toBe(false); expect(status.settings.theme).toBe('dark');
   const connection = await page.evaluate(() => window.dbark.invoke('connections.save', { id: '', name: '自动化测试连接', group: '测试', color: '#40bb99', dialect: 'mysql', host: '127.0.0.1', port: 1, user: 'nobody', password: 'temporary-test-password', rememberPassword: false }));
   expect(connection.hasPassword).toBe(true); expect(connection.password).toBeUndefined();

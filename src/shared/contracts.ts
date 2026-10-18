@@ -95,6 +95,7 @@ export interface CommandMap {
   'table.preferences.get': { input: TablePreferenceTarget; output: TablePreferences | null };
   'table.preferences.save': { input: TablePreferenceTarget & { preferences: TablePreferences }; output: TablePreferences };
   'table.preferences.reset': { input: TablePreferenceTarget; output: void };
+  'app.runtimeInfo': { input: Record<string, never>; output: { version: string; platform: string; dataPath: string } };
   'app.info': { input: Record<string, never>; output: { version: string; platform: string; encryptionAvailable: boolean; dataPath: string } };
   'app.setDirty': { input: { dirty: boolean }; output: void };
   'connections.export': { input: { connectionIds: string[]; fileToken: string }; output: { count: number } };

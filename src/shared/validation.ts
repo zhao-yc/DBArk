@@ -116,7 +116,7 @@ export const commandSchemas: Record<Command, z.ZodType> = {
   'queries.create': querySaveContentSchema, 'queries.updateSource': queryUpdateSourceSchema,
   'table.preferences.get': tablePreferenceTargetSchema, 'table.preferences.save': tablePreferenceSaveSchema, 'table.preferences.reset': tablePreferenceTargetSchema,
   'schema.compare': schemaCompareInputSchema, 'schema.comparePreview': schemaComparePreviewSchema, 'schema.compareRelease': schemaCompareReleaseSchema,
-  'app.info': empty,
+  'app.runtimeInfo': empty, 'app.info': empty,
   'app.setDirty': z.object({ dirty: z.boolean() }).strict(),
   'connections.export': z.object({ connectionIds: z.array(id).min(1).max(connectionTransferLimits.connections), fileToken: id }).strict(),
   'connections.importPreview': z.object({ fileToken: id }).strict(),

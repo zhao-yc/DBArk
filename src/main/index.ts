@@ -275,6 +275,8 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
       if (preparing) { preparing.cancelled = true; return; }
       break;
     }
+    // 启动元信息只读Main属性；系统秘密能力必须由用户检测或真实凭据操作明确触发。
+    case 'app.runtimeInfo': return { version: app.getVersion(), platform: process.platform, dataPath: app.getPath('userData') };
     case 'app.info': {
       // 固定标记只观察原同步调用；各属性仍按原顺序求值，不新增加密调用或改变异常。
       nativeStartupInfoMarker(30);
