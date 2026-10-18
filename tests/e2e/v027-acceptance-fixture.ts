@@ -40,12 +40,19 @@ async function admission(info: TestInfo, options: { trace: unknown; screenshot: 
       ownerCheck();
       const entry = { seq: records.length + 1, stage, ...(stage === 'planned' ? { ...plan, files, runNonce: binding.target.nonce } : {}), ...extra }, bytes = Buffer.from(JSON.stringify(entry) + '\n');
       if (journalSize + bytes.length > 16384) throw Error('0.27资源登记超过16KiB');
-      const handle = await open(journalPath, records.length ? 'a' : 'wx', 0o600); life.check(true);
+      const handle = await open(journalPath, records.length ? 'a' : 'wx', 0o600);
+      let failed = false, originalFailure: unknown;
       try {
+        // 已取得原句柄后，期限检查也须落在finally覆盖内；晚回仅允许关闭该句柄。
+        life.check(true);
         const stat = await handle.stat(); life.check(true); const id = String(stat.dev) + ':' + String(stat.ino);
         if (!stat.isFile() || stat.nlink !== 1 || stat.size !== journalSize || journalIdentity && journalIdentity !== id) throw Error('0.27原登记文件身份变化');
         journalIdentity = id; await handle.writeFile(bytes); life.check(true); await handle.sync(); life.check(true);
-      } finally { await handle.close(); }
+      } catch (reason) { failed = true; originalFailure = reason; throw reason; }
+      finally {
+        try { await handle.close(); }
+        catch (closeFailure) { if (failed) throw new AggregateError([originalFailure, closeFailure], '0.27登记失败且原句柄关闭失败', { cause: originalFailure }); throw closeFailure; }
+      }
       ownerCheck(); const finalStat = await lstat(journalPath); ownerCheck();
       if (!finalStat.isFile() || finalStat.isSymbolicLink() || finalStat.nlink !== 1 || String(finalStat.dev) + ':' + String(finalStat.ino) !== journalIdentity || finalStat.size !== journalSize + bytes.length) throw Error('0.27登记路径身份或追加字节不符');
       journalSize += bytes.length; records.push(entry);
@@ -85,8 +92,16 @@ async function admission(info: TestInfo, options: { trace: unknown; screenshot: 
     async writeInputs(bodies: string[]) {
       if (bodies.length !== files.length) throw Error('0.27文件样本数量不符');
       for (const [index, path] of files.entries()) await ctx.step(async () => {
-        const handle = await open(path, 'wx', 0o600); life.check();
-        try { await handle.writeFile(bodies[index]); life.check(); await handle.sync(); life.check(); const stat = await handle.stat(); life.check(); identities.set(path, { dev: String(stat.dev), ino: String(stat.ino), hash: createHash('sha256').update(bodies[index]).digest('hex') }); } finally { await handle.close(); }
+        const handle = await open(path, 'wx', 0o600);
+        let failed = false, originalFailure: unknown;
+        try {
+          // open晚回仍释放原句柄，不因停链继续写入、sync或登记后续资源。
+          life.check(); await handle.writeFile(bodies[index]); life.check(); await handle.sync(); life.check(); const stat = await handle.stat(); life.check(); identities.set(path, { dev: String(stat.dev), ino: String(stat.ino), hash: createHash('sha256').update(bodies[index]).digest('hex') });
+        } catch (reason) { failed = true; originalFailure = reason; throw reason; }
+        finally {
+          try { await handle.close(); }
+          catch (closeFailure) { if (failed) throw new AggregateError([originalFailure, closeFailure], '0.27样本写入失败且原句柄关闭失败', { cause: originalFailure }); throw closeFailure; }
+        }
       });
       await record('files-created');
     },
@@ -99,8 +114,15 @@ async function admission(info: TestInfo, options: { trace: unknown; screenshot: 
       const [tables] = await ctx.step(() => ctx.connection.query<RowDataPacket[]>('SELECT TABLE_NAME AS name FROM information_schema.TABLES WHERE TABLE_SCHEMA=? ORDER BY TABLE_NAME', [plan.schema]), true); expect(tables.map(row => row.name).sort()).toEqual([...plan.tables].sort());
       for (const path of files) await ctx.step(async () => {
         const expected = identities.get(path), stat = await lstat(path); ctx.check(true);
-        if (!expected || !stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1 || String(stat.dev) !== expected.dev || String(stat.ino) !== expected.ino || stat.size > 8192 || await realpath(path) !== resolve(path)) throw Error('0.27原样本文件归属未知'); ctx.check(true);
-        const bytes = await readFile(path); ctx.check(true); if (createHash('sha256').update(bytes).digest('hex') !== expected.hash) throw Error('0.27样本文件字节变化'); await unlink(path); ctx.check(true);
+        /** 每次只接受首次写入的同一文件；内容相同不能代替dev/ino、链接与路径身份。 */
+        const assertOriginal = (value: typeof stat) => { if (!expected || !value.isFile() || value.isSymbolicLink() || value.nlink !== 1 || String(value.dev) !== expected.dev || String(value.ino) !== expected.ino || value.size < 0 || value.size > 8192) throw Error('0.27原样本文件归属未知'); };
+        assertOriginal(stat);
+        const beforePath = await realpath(path); ctx.check(true); if (beforePath !== resolve(path)) throw Error('0.27原样本文件规范路径变化');
+        const bytes = await readFile(path); ctx.check(true); if (createHash('sha256').update(bytes).digest('hex') !== expected!.hash) throw Error('0.27样本文件字节变化');
+        // readFile及realpath均可等待；删除前再核原路径和身份，漂移即停链，普通unlink不声称原子CAS。
+        const afterPath = await realpath(path); ctx.check(true); if (afterPath !== resolve(path)) throw Error('0.27原样本文件规范路径变化');
+        const after = await lstat(path); ctx.check(true); assertOriginal(after); if (after.size !== bytes.length) throw Error('0.27原样本文件长度变化');
+        await unlink(path); ctx.check(true);
         try { await lstat(path); throw Error('0.27样本文件仍残留'); } catch (reason) { ctx.check(true); if ((reason as NodeJS.ErrnoException).code !== 'ENOENT') throw reason; }
       }, true);
       await ctx.step(() => ctx.connection.query('DROP DATABASE `' + plan.schema + '`'), true);
