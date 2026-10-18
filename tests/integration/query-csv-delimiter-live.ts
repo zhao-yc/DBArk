@@ -1,6 +1,7 @@
 import { randomUUID, createHash } from 'node:crypto';
 import { resolve, join, dirname, basename } from 'node:path';
 import * as fs from 'node:fs/promises';
+import type { FileHandle } from 'node:fs/promises';
 import mysql from 'mysql2';
 import type { Connection as NativeConnection } from 'mysql2';
 import type { Connection as Observer, RowDataPacket } from 'mysql2/promise';
@@ -16,14 +17,28 @@ import { bindQcsvTarget, qcsvColumns, qcsvEmptyHeader, qcsvExpectedFields, qcsvH
 import { assertQcsvOutput } from '../helpers/queryCsvIntegrationAssertions';
 
 // 仅在真实原open之前登记partial；原参数、句柄、写入/提交/错误均透传，不模拟产品结果。
-const io = vi.hoisted(() => ({ beforeOpen: undefined as undefined | ((path: unknown) => Promise<void>) }));
+const io = vi.hoisted(() => ({
+  beforeOpen: undefined as undefined | ((path: unknown) => Promise<void>),
+  afterOpen: undefined as undefined | ((path: unknown, handle: FileHandle) => Promise<void>),
+  beforeRename: undefined as undefined | ((from: unknown, to: unknown) => Promise<void>),
+  afterRename: undefined as undefined | ((from: unknown, to: unknown) => Promise<void>),
+  beforeRemove: undefined as undefined | ((path: unknown) => Promise<void>),
+}));
 vi.mock('node:fs/promises', async original => {
   const actual = await original<typeof import('node:fs/promises')>();
-  return { ...actual, open: async (...args: Parameters<typeof actual.open>) => { await io.beforeOpen?.(args[0]); return actual.open(...args); } };
+  return { ...actual, open: async (...args: Parameters<typeof actual.open>) => {
+    await io.beforeOpen?.(args[0]); const handle = await actual.open(...args);
+    try { await io.afterOpen?.(args[0], handle); return handle; }
+    catch (reason) { return qcsvUsingHandle(handle, async () => { throw reason; }); }
+  }, rename: async (...args: Parameters<typeof actual.rename>) => {
+    await io.beforeRename?.(...args); const result = await actual.rename(...args); await io.afterRename?.(...args); return result;
+  }, rm: async (...args: Parameters<typeof actual.rm>) => { await io.beforeRemove?.(args[0]); return actual.rm(...args); } };
 });
 type Native = NativeConnection & { stream: { closed?: boolean; remoteAddress?: string; remotePort?: number } };
-type Owned = { role: string; native: Native; stream: Native['stream']; thread: number; normalClosed: boolean; managed?: ManagedConnection };
+type Owned = { role: string; native: Native; stream: Native['stream']; thread: number; normalClosed: boolean; initializing?: boolean; managed?: ManagedConnection };
+type Initialization = { role: string; natives: Owned[]; receipt?: NonNullable<ManagedConnection['resources']>; returned: boolean; failed: boolean; late: boolean };
 type Identity = { dev: string; ino: string; size: number; hash: string };
+type FileObject = Pick<Identity, 'dev' | 'ino'>;
 const hash = (value: string | Uint8Array) => createHash('sha256').update(value).digest('hex');
 const quote = (value: string) => '`' + value.replaceAll('`', '``') + '`';
 let halted = false;
@@ -42,17 +57,19 @@ export async function runQcsvCase(context: TestContext, scenario: QcsvCase) {
   const actualFs = await vi.importActual<typeof fs>('node:fs/promises'); life.check();
   const owned: Owned[] = [], partials = new Set<string>(), records: object[] = [], definitions = new Map<string, string>();
   let journalBytes = 0, journalId = '', cacheId = '', directoryId = '', targetIdentity: Identity | undefined;
+  let partialObject: FileObject | undefined, publication: Identity | undefined, published = false;
   let observer: Observer | undefined, observerOwner: Owned | undefined, source: Owned | undefined, engine: Engine | undefined, sessionId = '';
   let connectRole = 'engine-initial', connectAttempts = 0, sourceExecutions = 0, exporting = false, complete = false, databaseAck = false, closingEngine = false;
   let activeTask = '', taskSettled = false, latestEvent: TaskEvent | undefined;
   let sourceSql = '', expectedStatements: string[] = [];
   const exportCommands: { role: string; thread: number; method: string; sql: string }[] = [];
-  let restoreConnect: (() => void) | undefined, restoreFrames: (() => void) | undefined;
+  const initializations: Initialization[] = []; let initializing: Initialization | undefined;
+  let restoreConnect: (() => void) | undefined, restoreCreation: (() => void) | undefined, restoreFrames: (() => void) | undefined;
 
   /** 同一物理流、thread、profile和managed；正常close标记不能被相同thread新流替代。 */
   function check() {
     life.check();
-    for (const item of owned) if (item.native.stream !== item.stream || item.native.threadId !== item.thread || item.managed && (item.managed.connection !== item.native || item.managed.profile !== binding.profile || item.managed.broken && !item.normalClosed) || item.stream.closed && !item.normalClosed) { life.stop(); throw Error('QCSV原物理连接或流身份未知'); }
+    for (const item of owned) if (item.native.stream !== item.stream || (!item.initializing || item.thread > 0) && item.native.threadId !== item.thread || item.managed && (item.managed.connection !== item.native || item.managed.profile !== binding.profile || item.managed.broken && !item.normalClosed) || item.stream.closed && !item.normalClosed) { life.stop(); throw Error('QCSV原物理连接或流身份未知'); }
     if (source?.normalClosed && !closingEngine) { life.stop(); throw Error('QCSV原source会话提前关闭'); }
   }
   const step = <T>(action: () => Promise<T>) => life.step(async () => { check(); const value = await action(); check(); return value; });
@@ -78,7 +95,10 @@ export async function runQcsvCase(context: TestContext, scenario: QcsvCase) {
   /** 只旁观原query/execute；不更换结果、参数或解码，也不保存查询正文到日志。 */
   function observeNative(native: Native, role: string, managed?: ManagedConnection, acquired?: Owned) {
     const item: Owned = acquired ?? { role, native, stream: native.stream, thread: native.threadId!, normalClosed: false, managed };
-    if (acquired) item.thread = native.threadId!; else owned.push(item);
+    if (acquired) {
+      if (item.native !== native || item.stream !== native.stream || item.thread > 0 && item.thread !== native.threadId) { life.stop(); throw Error('QCSV初始化返回的原连接身份变化'); }
+      if (!item.thread) item.thread = native.threadId!; item.managed = managed; item.initializing = false;
+    } else owned.push(item);
     if (!item.stream || !Number.isSafeInteger(item.thread) || item.thread <= 0 || !['192.168.31.200', '::ffff:192.168.31.200'].includes(item.stream.remoteAddress ?? '') || item.stream.remotePort !== 13384 || owned.some(other => other !== item && other.thread === item.thread)) throw Error('QCSV原peer或线程身份未知');
     for (const method of ['query', 'execute'] as const) {
       const original = native[method];
@@ -90,6 +110,30 @@ export async function runQcsvCase(context: TestContext, scenario: QcsvCase) {
       };
     }
     return item;
+  }
+
+  /** 构造返回即登记同一native/stream；事件仅补首次thread及RAM线索，不写日记、不关闭或恢复资源。 */
+  function captureNative(native: Native, attempt: Initialization) {
+    const item: Owned = { role: attempt.role, native, stream: native.stream, thread: native.threadId ?? 0, normalClosed: false, initializing: true };
+    owned.push(item); attempt.natives.push(item);
+    const remember = () => {
+      attempt.late ||= life.state.retained || !life.state.active;
+      const thread = native.threadId;
+      if (native.stream !== item.stream || !item.stream || !Number.isSafeInteger(thread) || thread! <= 0 || item.thread > 0 && item.thread !== thread) { attempt.failed = true; life.stop(); return; }
+      if (!item.thread) item.thread = thread!;
+    };
+    native.on('connect', remember);
+    native.on('error', () => { attempt.failed = true; life.stop(); });
+    if (!item.stream || attempt.natives.length !== 1) { attempt.failed = true; life.stop(); }
+    return item;
+  }
+
+  /** 原回执只读快照进入失败附录；未知明确保留，不调用recover，也不从替代句柄补认证。 */
+  function initializationEvidence(attempt: Initialization) {
+    let resources: unknown;
+    try { resources = attempt.receipt?.snapshot(); } catch { resources = { inventoryUnknown: true }; }
+    return { role: attempt.role, receiptAvailable: !!attempt.receipt, returned: attempt.returned, failed: attempt.failed, late: attempt.late,
+      natives: attempt.natives.map(item => ({ thread: item.thread, observedThread: item.native.threadId ?? 0, streamClosed: item.stream?.closed === true })), resources };
   }
 
   /** 唯一独立observer采用-IGNORE_SPACE；先登记后建连，不补恢复连接。 */
@@ -109,14 +153,20 @@ export async function runQcsvCase(context: TestContext, scenario: QcsvCase) {
     if (!directoryId || !stat.isDirectory() || stat.isSymbolicLink() || path !== directory || String(stat.dev) + ':' + String(stat.ino) !== directoryId) throw Error('QCSV原目录身份变化');
   }
   /** 文件只读前后核同inode、规范路径、大小、nlink及可选摘要；上限2MiB。 */
-  async function file(path: string, expected?: Identity) {
+  async function file(path: string, expected?: Identity, object?: FileObject) {
     await ownedDirectory(); if (dirname(resolve(path)) !== directory) throw Error('QCSV文件越出本例目录');
     check(); const before = await actualFs.lstat(path); check(); const canonical = await actualFs.realpath(path); check();
-    if (!before.isFile() || before.isSymbolicLink() || before.nlink !== 1 || before.size > 2 * 1024 * 1024 || canonical !== resolve(path)) throw Error('QCSV文件类型、规范路径或预算未知');
+    if (!before.isFile() || before.isSymbolicLink() || before.nlink !== 1 || !Number.isSafeInteger(before.dev) || before.dev < 0 || !Number.isSafeInteger(before.ino) || before.ino <= 0 || before.size > 2 * 1024 * 1024 || canonical !== resolve(path) || object && (String(before.dev) !== object.dev || String(before.ino) !== object.ino)) throw Error('QCSV文件类型、原对象、规范路径或预算未知');
     const bytes = await actualFs.readFile(path); check(); const canonicalAfter = await actualFs.realpath(path); check(); const after = await actualFs.lstat(path); check();
     const identity = { dev: String(after.dev), ino: String(after.ino), size: after.size, hash: hash(bytes) };
     if (!after.isFile() || after.isSymbolicLink() || after.nlink !== 1 || canonicalAfter !== resolve(path) || after.dev !== before.dev || after.ino !== before.ino || after.size !== bytes.length || expected && JSON.stringify(identity) !== JSON.stringify(expected)) throw Error('QCSV文件读取期间身份或字节变化');
     await ownedDirectory(); return { bytes, identity };
+  }
+  /** 归属只从原open句柄取得一次，拒绝不精确的系统标识；路径快照不能签发新对象归属。 */
+  async function openedObject(handle: FileHandle): Promise<FileObject> {
+    const stat = await handle.stat(); check();
+    if (!stat.isFile() || stat.nlink !== 1 || !Number.isSafeInteger(stat.dev) || stat.dev < 0 || !Number.isSafeInteger(stat.ino) || stat.ino <= 0) throw Error('QCSV原open句柄身份未知');
+    return Object.freeze({ dev: String(stat.dev), ino: String(stat.ino) });
   }
   async function noPartial() {
     await ownedDirectory();
@@ -144,10 +194,30 @@ export async function runQcsvCase(context: TestContext, scenario: QcsvCase) {
     await record('directory-planned'); await step(() => actualFs.mkdir(directory)); const dir = await step(() => actualFs.lstat(directory)), real = await step(() => actualFs.realpath(directory));
     if (!dir.isDirectory() || dir.isSymbolicLink() || real !== directory) throw Error('QCSV原目录未知'); directoryId = String(dir.dev) + ':' + String(dir.ino); await record('directory-created', { identity: directoryId });
     await record('target-planned'); const handle = await actualFs.open(target, 'wx', 0o600), oldBytes = Buffer.from('DBArk-QCSV-old:' + plan.nonce);
-    await qcsvUsingHandle(handle, async () => { check(); await handle.writeFile(oldBytes); check(); await handle.sync(); check(); }); const initial = await file(target); expect(initial.bytes).toEqual(oldBytes); targetIdentity = initial.identity; await record('target-created', { identity: targetIdentity });
+    let oldObject: FileObject | undefined;
+    await qcsvUsingHandle(handle, async () => { check(); oldObject = await openedObject(handle); await handle.writeFile(oldBytes); check(); await handle.sync(); check(); }); const initial = await file(target, undefined, oldObject); expect(initial.bytes).toEqual(oldBytes); targetIdentity = initial.identity; await record('target-created', { identity: targetIdentity });
     io.beforeOpen = async path => {
       check(); if (typeof path !== 'string' || dirname(resolve(path)) !== directory || !basename(path).startsWith(plan.file + '.dbark-') || !/\.dbark-[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}\.partial$/.test(path) || partials.size >= 1) throw Error('QCSV拒绝未登记或重复partial');
       partials.add(path); await record('partial-planned', { name: basename(path) });
+    };
+    io.afterOpen = async (path, handle) => {
+      check(); if (typeof path !== 'string' || !partials.has(path) || partialObject) throw Error('QCSV原partial open归属未知');
+      partialObject = await openedObject(handle); await record('partial-opened', { name: basename(path), object: partialObject });
+    };
+    // 原rename前从已绑定partial读完整身份；发布后仅核该同一对象，不从最终路径重新认领。
+    io.beforeRename = async (from, to) => {
+      check(); if (typeof from !== 'string' || !partials.has(from) || to !== target || !partialObject || publication) throw Error('QCSV原发布边界未知');
+      publication = Object.freeze((await file(from, undefined, partialObject)).identity); await file(target, targetIdentity);
+      await record('publish-planned', { partial: basename(from), identity: publication });
+    };
+    io.afterRename = async (from, to) => {
+      check(); if (typeof from !== 'string' || !partials.has(from) || to !== target || !publication || !partialObject || published) throw Error('QCSV原发布回执未知');
+      await file(target, publication, partialObject); await record('published', { identity: publication }); published = true;
+    };
+    // 产品失败收尾同样只可移除原partial；不存在时透传原rm，替换或失效时保留当前路径。
+    io.beforeRemove = async path => {
+      check(); if (typeof path !== 'string' || !partials.has(path) || !partialObject) throw Error('QCSV原partial删除归属未知');
+      try { await file(path, undefined, partialObject); } catch (reason) { if ((reason as NodeJS.ErrnoException).code !== 'ENOENT') throw reason; await ownedDirectory(); }
     };
     await facts(); expect((await sql('SELECT SCHEMA_NAME FROM information_schema.SCHEMATA WHERE BINARY SCHEMA_NAME=BINARY ?', [plan.database]))[0]).toHaveLength(0);
     await record('database-planned'); const [created] = await sql('CREATE DATABASE ' + quote(plan.database) + ' CHARACTER SET utf8mb4 COLLATE utf8mb4_bin'); expect(created.affectedRows).toBe(1); databaseAck = true; await record('database-created');
@@ -161,11 +231,25 @@ export async function runQcsvCase(context: TestContext, scenario: QcsvCase) {
     expect((await sql('SELECT COUNT(*) AS n FROM ' + table('source')))[0][0].n).toBe('301');
     await record('seed-verified', { rows: 301, definitions: Object.fromEntries([...definitions].map(([name, ddl]) => [name, hash(ddl)])), expectedHash: hash(JSON.stringify(before)) });
 
+    const originalCreate = mysql.createConnection;
+    const creation = vi.spyOn(mysql, 'createConnection').mockImplementation((...args) => {
+      const native = originalCreate.apply(mysql, args); if (initializing) captureNative(native as unknown as Native, initializing); return native;
+    }); restoreCreation = () => creation.mockRestore();
     const original = driver.connect, spying = vi.spyOn(driver, 'connect').mockImplementation(async (...args) => {
       await record('connection-planned', { role: connectRole }); check(); if (connectAttempts >= 3) throw Error('QCSV连接数量超限'); connectAttempts++;
-      const managed = await original(...args), item = observeNative(managed.connection as unknown as Native, connectRole, managed), close = managed.close.bind(managed);
+      if (initializing) throw Error('QCSV初始化不得并发');
+      const attempt: Initialization = { role: connectRole, natives: [], returned: false, failed: false, late: false }; initializations.push(attempt); initializing = attempt;
+      try {
+      const managed = await original(args[0], args[1], args[2], receipt => {
+        if (attempt.receipt && attempt.receipt !== receipt) { attempt.failed = true; life.stop(); } else attempt.receipt = receipt;
+        const upstream = args[3]; upstream?.(receipt);
+      }); attempt.returned = true;
+      if (attempt.natives.length !== 1 || attempt.receipt !== managed.resources || !attempt.receipt) throw Error('QCSV原初始化回执或native归属未知');
+      const item = observeNative(managed.connection as unknown as Native, attempt.role, managed, attempt.natives[0]), close = managed.close.bind(managed); check();
       managed.close = async () => { check(); await close({ strict: true }); if (item.native.stream !== item.stream || item.stream.closed !== true) throw Error('QCSV原Engine流正常close未知'); item.normalClosed = true; };
-      await record('connection-returned', { role: item.role, thread: item.thread }); return managed;
+      await record('connection-returned', { role: item.role, thread: item.thread, receipt: true }); return managed;
+      } catch (reason) { attempt.failed = true; attempt.late ||= life.state.retained || !life.state.active; life.stop(); throw reason; }
+      finally { if (initializing === attempt) initializing = undefined; }
     }); restoreConnect = () => spying.mockRestore();
     engine = new Engine(event => { if (event.taskId === activeTask) { try { check(); latestEvent = event; } catch { life.stop(); } } });
     await invoke('connections.open', { id: binding.profile.id }); connectRole = 'source-session';
@@ -192,12 +276,14 @@ export async function runQcsvCase(context: TestContext, scenario: QcsvCase) {
     expect(output.preview.results[0].rows).toHaveLength(0); expect(output.preview.results[2].rows).toHaveLength(200); expect(output.preview.results[2].truncated).toBe(true);
     expect(latestEvent?.status).toBe('completed'); expect(latestEvent?.queryExport).toMatchObject({ rowsWritten: 301, statementsCompleted: 3, fileCommitted: true });
     expect(latestEvent?.queryExport?.peakBufferedRows).toBe(1); expect(latestEvent?.queryExport?.peakBufferedBytes).toBeGreaterThan(0); expect(latestEvent?.queryExport?.peakBufferedBytes).toBeLessThanOrEqual(1024 * 1024);
-    const saved = await file(target); targetIdentity = saved.identity; const verified = assertQcsvOutput(saved.bytes, scenario, before.map(qcsvExpectedFields));
+    if (!published || !publication || !partialObject) throw Error('QCSV缺少原partial发布证明');
+    const saved = await file(target, publication, partialObject); targetIdentity = publication; const verified = assertQcsvOutput(saved.bytes, scenario, before.map(qcsvExpectedFields));
     await noPartial(); await record('verified', { ...verified, bytes: saved.bytes.length, sourceExecutions, sourceThread: source.thread, identity: targetIdentity });
     expect(await rows()).toEqual(before); expect((await sql('SELECT id,note FROM ' + table('neighbor')))[0]).toEqual([{ id: 7, note: '旁行保持' }]);
 
     // 成功任务结算、同一Engine流正常关闭、精确线程后核之后，才取得本例资源删除权。
     expect(taskSettled).toBe(true); closingEngine = true; await step(() => engine!.closeAll()); expect(owned.filter(item => item.managed).every(item => item.normalClosed && item.stream.closed)).toBe(true); await record('engine-closed');
+    if (initializations.length !== 2 || initializations.some(attempt => attempt.failed || !attempt.returned || attempt.receipt?.snapshot().confirmedClosed !== true)) throw Error('QCSV原driver资源终态未确认');
     await facts(); const ids = owned.filter(item => item !== observerOwner).map(item => item.thread);
     expect((await sql('SELECT ID FROM information_schema.PROCESSLIST WHERE ID IN (' + ids.map(() => '?').join(',') + ')', ids))[0]).toHaveLength(0);
     if (!databaseAck || !targetIdentity || !directoryId) throw Error('QCSV原创建ACK或文件身份未知');
@@ -216,11 +302,11 @@ export async function runQcsvCase(context: TestContext, scenario: QcsvCase) {
     const finalDir = await step(() => actualFs.lstat(directory)); if (!finalDir.isDirectory() || finalDir.isSymbolicLink() || String(finalDir.dev) + ':' + String(finalDir.ino) !== directoryId || (await step(() => actualFs.readdir(directory))).length) throw Error('QCSV原目录身份或残留未知');
     await step(() => actualFs.rmdir(directory));
     try { await actualFs.lstat(directory); throw Error('QCSV原目录仍残留'); } catch (reason) { check(); if ((reason as NodeJS.ErrnoException).code !== 'ENOENT') throw reason; }
-    await record('cleaned'); io.beforeOpen = undefined; restoreFrames(); restoreConnect(); life.finish(); complete = true; halted = false;
+    await record('cleaned'); io.beforeOpen = io.afterOpen = io.beforeRename = io.afterRename = io.beforeRemove = undefined; restoreFrames(); restoreConnect(); restoreCreation(); life.finish(); complete = true; halted = false;
   } catch (reason) { life.stop(); throw reason; }
   finally {
     // 失败只留有界归属附录：绝不补发cancel/close/DROP、重连、重放或递归删旧目录。
-    console.log(JSON.stringify({ QCSV: plan.caseId, complete, nonce: plan.nonce, schema: plan.database, directory, target, journal, partials: [...partials].map(value => basename(value)), connections: owned.map(item => ({ role: item.role, thread: item.native.threadId ?? item.thread, normalClosed: item.normalClosed, streamClosed: item.stream?.closed === true })), retained: !complete, rows: 301, sourceExecutions, exportCommands: exportCommands.length, taskSettled }));
+    console.log(JSON.stringify({ QCSV: plan.caseId, complete, nonce: plan.nonce, schema: plan.database, directory, target, journal, partials: [...partials].map(value => basename(value)), partialObject, publication, published, connections: owned.map(item => ({ role: item.role, thread: item.thread, observedThread: item.native.threadId ?? 0, normalClosed: item.normalClosed, streamClosed: item.stream?.closed === true })), initializations: initializations.map(initializationEvidence), retained: !complete, rows: 301, sourceExecutions, exportCommands: exportCommands.length, taskSettled }));
     life.end(); if (!complete) halted = true;
   }
 }

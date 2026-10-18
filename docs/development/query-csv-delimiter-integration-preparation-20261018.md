@@ -73,3 +73,17 @@ node D:\svn\DBArk\node_modules\vitest\vitest.mjs run --config vitest.integration
 node D:\svn\DBArk\node_modules\vitest\vitest.mjs run tests/unit/query-csv-integration-policy.test.ts tests/unit/query-csv-integration-assertions.test.ts tests/unit/query-insert-integration-policy.test.ts
 node D:\svn\DBArk\node_modules\typescript\bin\tsc --noEmit
 ```
+
+## 员工2独审后的归属准备修正
+
+修正起点为作者固定`4b299d6472e19917fa30f09251d9d520d7e0be0d`，员工2另建普通clone及`codex/employee2-stream-csv-ownership-fix-20261018`分支。原独审交接SHA256为`7c5ae3902c056757ef77ee349dc808c724984f4a2a5cf70da075101a501a6dc2`；原反例及作者123项证据保持。本片只修改测试侧live观察器、新增必要RAM反例和本说明，不修改产品、旧helper、18场景、301行、源查询次数或原120秒预算。
+
+F1修正把归属从原partial的实际open句柄开始绑定：在原open返回后取一次安全精确的dev/ino，登记完成后仍返回同一原FileHandle，方法和原型不投影。原rename前只从该对象取得已完成文件的完整大小/hash，核旧目标仍是原文件并写前登记；委托原rename后再核发布的是同一对象。正式输出读取和清理仅使用这份已绑定身份，不再从最终路径认领新inode。发布前partial替换、rename回执前目标替换、首次读取前目标替换，即使301行字节完全相同也必须失败，不能unlink、DROP或启动后续case。产品失败收尾的原rm也先核同一partial；缺席时复核原目录后透传，不代产品删除归属未知的替换项。检查不提供跨进程路径CAS。
+
+F2修正在每次Engine原connect前保留真实原driver的资源回执，并透明旁观mysql2构造，创建返回即保留同一native和原stream；connect事件只补首次thread及RAM线索。原初始化返回必须对应这些原对象和同一回执，不能按新句柄、相同thread或新receipt追认。初始化抛错、握手失败、原任务结束后晚回、stream/receipt替换均留下原线索并停链；不调用recover、重连、强退或补关闭。已有上游回执回调收到同一对象一次，原构造参数和this保持。成功收尾另外核原回执confirmedClosed，不能只看close Promise。
+
+原driver的在途初始化行为不由本测试重写或伪造；这里只提前登记，未知时不放行后续动作。生命周期失效后不写日记或补清理，原finally仍只输出有界附录，增加原对象/发布身份和初始化回执摘要。正常成功才移除本例观察器。open后的登记失败只关闭尚未交给产品的原句柄；关闭也失败时保留两个原错误，不删除路径。
+
+新增`query-csv-integration-ownership.test.ts`提取正式函数，以RAM文件/驱动端口核原对象、替换、晚回及失败。原9组独审输入另在本clone忽略缓存重放：原F1同字节inode22→99输入现拒绝且unlink为0；原F2初始化失败输入现保留早期receipt并抛原错。其余矩阵及独立CSV/ZIP oracle不削弱。验证日志、原始首轮夹具/类型接线错误、修后结果及SHA位于`.cache/qcsv-ownership-fix-evidence/`。
+
+本轮真实集成入口、list、数据库、GUI、Electron、Playwright、SSH、端口、CI及依赖安装仍为0。实际模块绑定、原FileHandle/rename及真实driver回执是否按预期接通，以及18项真实数据库导出，由Root独审整合后另行验证；RAM通过不能作为这些原生或实库事实。
