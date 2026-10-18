@@ -1,7 +1,25 @@
-import{readFileSync}from'node:fs';import vm from'node:vm';import ts from'typescript';import{describe,expect,it,vi}from'vitest';
+import{readFileSync,readdirSync}from'node:fs';import{resolve,relative}from'node:path';import{fileURLToPath}from'node:url';import vm from'node:vm';import ts from'typescript';import{describe,expect,it,vi}from'vitest';
 import{compactSqlKeywordCaseNative,sqlKeywordCaseNativeSource}from'../helpers/sqlKeywordCaseNativeFixture';
 import{planSqlFormatting,prepareSqlFormattingRoles}from'../../src/renderer/sqlFormatting';
 const source=readFileSync(new URL('../e2e/sql-keyword-case-native.spec.ts',import.meta.url),'utf8');
+/** 只检查受控源码文本的命名引用；不冒充Electron session或第三方依赖的listener枚举。 */
+function listenerReferences(files:{path:string;text:string}[]){return files.filter(file=>/\bonBeforeRequest\b/.test(file.text)).map(file=>file.path);}
+/** 遍历全部src及scripts相关源码；链接或未知读取失败必须显式失败，不能静默跳过。 */
+function sourceInventory(){
+  const root=fileURLToPath(new URL('../../',import.meta.url)),files:{path:string;text:string}[]=[];
+  const visit=(directory:string)=>{for(const item of readdirSync(directory,{withFileTypes:true})){const path=resolve(directory,item.name);if(item.isSymbolicLink())throw Error('listener前提检查不接受源码链接');if(item.isDirectory())visit(path);else if(item.isFile()&&/\.(?:[cm]?[jt]sx?|ps1|sh)$/i.test(item.name))files.push({path:relative(root,path).replaceAll('\\','/'),text:readFileSync(path,'utf8')});}};
+  visit(resolve(root,'src'));visit(resolve(root,'scripts'));return files;
+}
+/** 提取正式恢复断言函数，RAM只提供只读settings/Monaco端口，不另写一套预期逻辑。 */
+function restorationHarness(){
+  const tree=ts.createSourceFile('native.ts',source,ts.ScriptTarget.Latest,true),node=tree.statements.find(value=>ts.isFunctionDeclaration(value)&&value.name?.text==='assertRestoredWorkspace');
+  if(!node)throw Error('缺少正式重启身份断言');
+  const saved={sqlKeywordCase:'upper',activeTabId:'first',tabs:[{id:'first',sql:'同样正文'},{id:'second',sql:'同样正文'}]},models=[{pane:0,editor:1,model:2,value:'同样正文'},{pane:1,editor:3,model:4,value:'同样正文'}];
+  const actual=structuredClone(saved);let visible={...models[0]};
+  const context=vm.createContext({exports:{},expect,settings:async()=>actual,snapshots:async()=>models,current:async()=>visible});
+  vm.runInContext(ts.transpileModule('exports.check='+node.getText(tree),{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText,context);
+  return{saved,actual,models,setVisible(value:typeof visible){visible=value;},check:()=>context.exports.check({}, {}, saved, models, 'upper')};
+}
 /** 提取正式app.evaluate回调，仅由RAM窗口/session端口接收，不导入Electron或Playwright。 */
 function gateHarness(){
   const tree=ts.createSourceFile('native.ts',source,ts.ScriptTarget.Latest,true),callbacks=new Map<string,string>();
@@ -27,5 +45,19 @@ describe('关键字原生固定预期和实际模块门（纯RAM端口）',()=>{
     const changed=gateHarness();changed.install();changed.request('file:///RAM/assets/sqlFormattingRoles-a.js');changed.changeContents();expect(()=>changed.act('release')).toThrow();
     const changedBeforeRequest=gateHarness();changedBeforeRequest.install();changedBeforeRequest.changeContents();expect(changedBeforeRequest.request('file:///RAM/assets/sqlFormattingRoles-a.js')).toHaveBeenCalledWith({cancel:true});expect(()=>changedBeforeRequest.act('release')).toThrow();
   });
-  it('基线Main没有其它onBeforeRequest拦截器，规格不会覆盖既有产品处理器',()=>{expect(readFileSync(new URL('../../src/main/index.ts',import.meta.url),'utf8')).not.toMatch(/webRequest\.onBeforeRequest/);});
+  it('释放后重复请求也永久失败，detach必须保留原listener和私有门线索',()=>{
+    const h=gateHarness();h.install();const original=h.request('file:///RAM/assets/sqlFormattingRoles-a.js');h.act('release');
+    expect(original).toHaveBeenCalledExactlyOnceWith({cancel:false});expect(h.request('file:///RAM/assets/sqlFormattingRoles-a.js')).toHaveBeenCalledWith({cancel:true});
+    expect(()=>h.act('detach')).toThrow();expect(h.act('summary')).toMatchObject({held:1,delivered:1,detached:false,failed:true});
+    expect(h.registrations).toHaveLength(1);expect(()=>h.install('新nonce不能覆盖旧失败门')).toThrow('原模块门仍存在');expect(original).toHaveBeenCalledOnce();
+  });
+  it('重启正式断言核对活动ID和唯一可见pane对应的真实模型，即使两标签正文相同',async()=>{const h=restorationHarness();expect(await h.check()).toEqual({activeTabId:'first',paneIndex:0,editor:1,model:2});});
+  it.each(['错误持久化活动ID','错误可见pane','错误可见模型','错误可见正文'])('重启%s必须被正式断言拒绝',async reason=>{
+    const h=restorationHarness();if(reason==='错误持久化活动ID')h.actual.activeTabId='second';if(reason==='错误可见pane')h.setVisible({...h.models[1]});if(reason==='错误可见模型')h.setVisible({...h.models[0],model:99});if(reason==='错误可见正文')h.setVisible({...h.models[0],value:'别的正文'});
+    await expect(h.check()).rejects.toThrow();
+  });
+  it('固定src/scripts没有onBeforeRequest命名引用，仅证明已扫描源码的静态前提',()=>{const files=sourceInventory();expect(files.some(file=>file.path==='src/main/index.ts')).toBe(true);expect(files.some(file=>file.path.startsWith('src/engine/'))).toBe(true);expect(files.some(file=>file.path.startsWith('scripts/'))).toBe(true);expect(listenerReferences(files)).toEqual([]);});
+  it('Main之外模块的括号访问或解构别名也不能逃过静态前提检查',()=>{
+    expect(listenerReferences([{path:'src/main/index.ts',text:'import "./feature";'},{path:'src/main/feature.ts',text:'const request=originalSession.webRequest;request["onBeforeRequest"]({},listener);'},{path:'scripts/launch.cjs',text:'const {onBeforeRequest:register}=request;register({},listener);'}])).toEqual(['src/main/feature.ts','scripts/launch.cjs']);
+  });
 });

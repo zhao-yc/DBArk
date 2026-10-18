@@ -9,7 +9,7 @@
 - 真实偏好面板首次默认为preserve；改变草稿再取消仍为preserve。保存upper/lower只改变偏好，不自动编辑SQL。
 - 真实Monaco输入和 `Alt+Shift+F` 格式化，固定四个关键字角色给出独立预期。未引用名称、反引号名称、字符串及两种注释必须保持原文；词法边界不能因排版归一化丢失。单次Undo精确恢复格式化前正文，Redo精确恢复结果，editor/model和EOL保持。
 - 首次upper/lower真实角色模块请求扣留期间，真实切到另一查询并切回，再原样放行。必须观察产品拒绝迟到结果，两个模型的身份、正文、版本和alternativeVersion均不变。
-- 显式切换upper/lower再恢复本例模式。首个实例正常退出后，原只读SQLite入口检查schema9、该模式、两个标签及活动标签；同私有目录独立重启恢复正文和偏好，再经实际格式化证明恢复模式生效。
+- 显式切换upper/lower再恢复本例模式。首个实例正常退出后，原只读SQLite入口检查schema9、该模式、两个标签及活动标签；同私有目录独立重启后，先核持久化activeTabId、标签顺序及正文，再核唯一可见pane的顺序、editor/model及正文确属保存的活动ID，不能先点击标签修复恢复状态。随后经实际格式化证明恢复模式生效。
 - 第二实例正常退出、原已记录PID全部确认不存在后，才沿原控制器删除精确所属目录。失败保留现场；不强停、不重试或延长期限。
 
 设置、历史和任务只通过原只读IPC观察。真实连接表单使用原 `127.0.0.1:1`、无密码无SSH概要；必须保留拒连提示，再由原继续按钮打开离线查询，不执行SQL。本文描述的是未来计划，本轮没有触及该端口。
@@ -24,12 +24,16 @@
 
 ## 真实模块回包门的边界
 
-新用例内的临时门只注册于已认证实例唯一BrowserWindow的原webContents.session，nonce及原窗口/webContents/session对象共同约束。它只扣留该webContents唯一的 `file:` 协议 `sqlFormattingRoles-<hash>.js` 原请求callback，其它请求原样放行。释放调用原callback，保持真实文件载荷；闭合后实际移除listener并删除私有门。默认/list不安装该门。
+新用例内的临时门只注册于已认证实例唯一BrowserWindow的原webContents.session，nonce及原窗口/webContents/session对象共同约束。它只扣留该webContents唯一的 `file:` 协议 `sqlFormattingRoles-<hash>.js` 原请求callback，其它请求原样放行。释放调用原callback，保持真实文件载荷；未失败且唯一回包已闭合后才实际移除listener并删除私有门。释放后再来重复请求也永久置failed，detach必须拒绝，保留原listener、私有门及计数线索。默认/list不安装该门。
 
-当前基线Main没有其它 `webRequest.onBeforeRequest` 注册，RAM护栏锁定此前提。未观察到唯一请求、请求重复、归属变化或回包未闭合都必须失败并保留现场，不能用已缓存模块或假延时替代。是否能在实际源码/安装入口观察到该file请求、平台协议行为以及真实选择器/快捷键仍待Root后续原生验证；RAM不能证明这部分成功。
+静态护栏递归检查全部src、scripts中的TS/JS源码及PowerShell/shell脚本，拒绝任何 `onBeforeRequest` 命名引用；括号访问、解构别名和Main入口以外模块均在此范围。链接或读取失败不得被静默忽略。这只证明本次扫描的受控文本没有该名字，不能证明第三方依赖、动态拼接代码或实际目标session没有listener，也不分析任意形式的等价动态代码。
+
+Electron没有提供本门可用的既有onBeforeRequest listener读取接口，本片没有取得、保存或恢复旧listener的能力；注册会替换旧listener，正常detach(null)也不能恢复它。Root整合后必须复核相关依赖及运行环境，只有能确认目标session没有既有listener时才安排此专项；不能把静态通过写成任意环境安全的运行时证明。
+
+未观察到唯一请求、请求重复、归属变化或回包未闭合都必须失败并保留现场，不能用已缓存模块或假延时替代。是否能在实际源码/安装入口观察到该file请求、平台协议行为以及真实选择器/快捷键仍待Root后续原生验证；RAM不能证明这部分成功。
 
 ## 本轮验证与交付边界
 
-仅运行Vitest纯RAM和 `tsc --noEmit`。RAM覆盖默认/list声明、凭据getter零读取、危险环境/CLI拒绝、清单漂移、原120秒与TestInfo墓碑、固定预期及保护片段、正式模块门的原回包/唯一性/归属/移除行为，并回归原格式化相关测试。最终数量和日志摘要见本clone `.cache/keyword-case-native-evidence/handoff.json`。
+首片仅运行Vitest纯RAM和 `tsc --noEmit`；原184项及原交接保持在 `.cache/keyword-case-native-evidence/handoff.json`。本次对员工2独审三处边界做最小修正，仅跑必要RAM及类型；新的数量和日志摘要见 `.cache/keyword-case-native-review-fix-evidence/handoff.json`。新增反例从正式恢复断言及Main门提取函数，检查错误活动ID、错误可见pane/模型/正文和释放后重复请求；静态前提检查扩到全部src/scripts相关源码。本次不复跑首片其它旧回归，不修改原运行时、原用例、预算、正常退出或真实文件载荷。
 
 实际Electron、GUI、Playwright（含list）、实库、SSH、Docker、端口探测、系统剪贴板和CI运行计数全部为0。没有新增密钥、证书或依赖安装，不读取1556，不修改共享依赖。RAM与类型通过只表示准备可供审查；Windows/macOS源码及安装入口的原生验收均未完成，由Root整合后另行安排。

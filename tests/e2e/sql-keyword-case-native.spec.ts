@@ -105,6 +105,18 @@ async function formatAndUndo(run: EditorIndentNativeRun, owner: IndentNativeOwne
   await run.step(owner, () => owner.page.keyboard.press(redo)); await expect.poll(() => current(run, owner).then(value => value.value)).toBe(after.value);
 }
 
+/** 重启后同时核持久化活动ID及实际唯一可见pane，不先点击标签修复错误恢复状态。 */
+async function assertRestoredWorkspace(run: EditorIndentNativeRun, owner: IndentNativeOwner, saved: Awaited<ReturnType<typeof settings>>, savedModels: Awaited<ReturnType<typeof snapshots>>, mode: SqlKeywordCase) {
+  const actual = await settings(run, owner);
+  expect(actual.sqlKeywordCase).toBe(mode); expect(actual.tabs).toEqual(saved.tabs); expect(actual.activeTabId).toBe(saved.activeTabId);
+  const paneIndex = saved.tabs.findIndex(tab => tab.id === saved.activeTabId); expect(paneIndex).toBeGreaterThanOrEqual(0);
+  const restored = await snapshots(run, owner, true); expect(restored).toHaveLength(saved.tabs.length);
+  expect(restored.map(value => value.pane)).toEqual(saved.tabs.map((_tab, index) => index));
+  expect(restored.map(value => value.value)).toEqual(savedModels.map(value => value.value));
+  const visible = await current(run, owner); expect(visible.pane).toBe(paneIndex); expect(visible).toEqual(restored[paneIndex]);
+  return { activeTabId: actual.activeTabId, paneIndex, editor: visible.editor, model: visible.model };
+}
+
 /** 扣留真实file模块请求的原callback，不替换响应、store、格式化器或编辑动作。 */
 async function installKeywordCaseModuleGate(run: EditorIndentNativeRun, owner: IndentNativeOwner, nonce: string) {
   return run.step(owner, () => owner.application.evaluate(({ BrowserWindow }, nonce) => {
@@ -115,7 +127,7 @@ async function installKeywordCaseModuleGate(run: EditorIndentNativeRun, owner: I
     const window = windows[0], contents = window.webContents, session = contents.session;
     let held = 0, delivered = 0, detached = false, failed = false, callback: ((value: { cancel: boolean }) => void) | undefined;
     const assert = () => { if (root.__keywordCaseModuleGate !== state || window.isDestroyed() || contents.isDestroyed() || window.webContents !== contents || contents.session !== session) throw Error('原模块门归属已失效'); };
-    const state: State = { nonce, summary: () => { assert(); return { held, delivered, detached, failed }; }, release() { assert(); if (failed || held !== 1 || delivered || !callback) throw Error('没有唯一原模块回包'); const original = callback; callback = undefined; delivered++; original({ cancel: false }); }, detach() { assert(); if (callback || held !== 1 || delivered !== 1) throw Error('原模块回包未闭合，不能移除门'); session.webRequest.onBeforeRequest(null); detached = true; const result = state.summary(); delete root.__keywordCaseModuleGate; return result; } };
+    const state: State = { nonce, summary: () => { assert(); return { held, delivered, detached, failed }; }, release() { assert(); if (failed || held !== 1 || delivered || !callback) throw Error('没有唯一原模块回包'); const original = callback; callback = undefined; delivered++; original({ cancel: false }); }, detach() { assert(); if (failed || callback || held !== 1 || delivered !== 1) throw Error('原模块门失败或回包未闭合，保留门及私有线索'); session.webRequest.onBeforeRequest(null); detached = true; const result = state.summary(); delete root.__keywordCaseModuleGate; return result; } };
     root.__keywordCaseModuleGate = state;
     session.webRequest.onBeforeRequest({ urls: ['<all_urls>'] }, (details, next) => {
       const url = new URL(details.url);
@@ -165,12 +177,12 @@ for (const restoredCase of ['upper', 'lower'] as const) test(`离线原生关键
     await expect.poll(() => settings(run, first).then(value => value.tabs.map(tab => tab.sql))).toEqual(savedModels.map(value => value.value));
     const saved = await settings(run, first); expect(saved.activeTabId).toBe(saved.tabs[0].id); await run.close(first);
     const disk = await run.stopped(path => runtime!.readIndentNativeSettings(path, () => run.assert())); expect(disk.schema).toBe(9); expect(disk.settings.sqlKeywordCase).toBe(restoredCase); expect(disk.settings.tabs).toEqual(saved.tabs); expect(disk.settings.activeTabId).toBe(saved.activeTabId);
-    const second = await run.launch(); await observe(run, second); expect((await settings(run, second)).sqlKeywordCase).toBe(restoredCase); expect((await settings(run, second)).tabs).toEqual(saved.tabs);
-    const restored = await snapshots(run, second, true); expect(restored.map(value => value.value)).toEqual(savedModels.map(value => value.value));
+    const second = await run.launch(); await observe(run, second);
+    const restartWitness = await assertRestoredWorkspace(run, second, saved, savedModels, restoredCase);
     await write(run, second, sqlKeywordCaseNativeSource()); await formatAndUndo(run, second, restoredCase);
     expect(await run.step(second, () => second.page.evaluate(() => window.dbark.invoke('history.list', {})))).toEqual([]); expect(await run.step(second, () => second.page.evaluate(() => window.dbark.invoke('tasks.list', {})))).toEqual([]);
     await run.close(second); await run.finish(); expect(run.removed).toBe(true);
-    await info.attach('关键字原生终态', { body: Buffer.from(JSON.stringify({ accepted: true, restoredCase, schema: 9, owners: run.owners.map(owner => ({ confirmed: owner.confirmed, willQuit: owner.ready, closed: owner.closed, recordedPids: owner.ids.size })), lateModule: { ...lateWitness, contextRoundTrip: true }, directoryRemoved: run.removed, systemClipboard: 0, sqlExecution: 0 })), contentType: 'application/json' });
+    await info.attach('关键字原生终态', { body: Buffer.from(JSON.stringify({ accepted: true, restoredCase, schema: 9, restart: restartWitness, owners: run.owners.map(owner => ({ confirmed: owner.confirmed, willQuit: owner.ready, closed: owner.closed, recordedPids: owner.ids.size })), lateModule: { ...lateWitness, contextRoundTrip: true }, directoryRemoved: run.removed, systemClipboard: 0, sqlExecution: 0 })), contentType: 'application/json' });
   } catch (reason) {
     run.retained = true;
     try { await info.attach('关键字原生保留现场', { body: Buffer.from(JSON.stringify({ directory: run.path, owners: run.owners.map(owner => ({ confirmed: owner.confirmed, willQuit: owner.ready, closed: owner.closed, ids: [...owner.ids] })), automaticRetry: false, automaticForceStop: false, directoryRemoved: run.removed })), contentType: 'application/json' }); }
