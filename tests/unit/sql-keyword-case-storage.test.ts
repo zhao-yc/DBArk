@@ -28,7 +28,7 @@ const legacy = (): AppSettings => ({ ...defaultSettings, theme: 'light', sidebar
 
 it('旧缺项保持默认原样，坏存量只局部读取回退，不写盘或改SQL', async () => {
   const f = await open(); close(f.store);
-  for (const patch of [{}, { sqlKeywordCase: 'lower' }, { sqlKeywordCase: null }, { sqlKeywordCase: 1 }]) {
+  for (const patch of [{}, { sqlKeywordCase: 'mixed' }, { sqlKeywordCase: null }, { sqlKeywordCase: 1 }]) {
     seed(f.path, { ...legacy(), ...patch }); const loaded = await open(f.path), before = readFileSync(f.path);
     const settings = loaded.store.settings(); expect(readSqlKeywordCase(settings.sqlKeywordCase)).toBe('preserve'); expect(settings.tabs).toEqual(legacy().tabs);
     expect(Object.hasOwn(settings, 'sqlKeywordCase')).toBe(Object.hasOwn(patch, 'sqlKeywordCase')); expect(readFileSync(f.path)).toEqual(before); close(loaded.store);
@@ -36,9 +36,9 @@ it('旧缺项保持默认原样，坏存量只局部读取回退，不写盘或�
   }
 });
 
-it('两种值经过正式IPC/LocalStore保存并真实重开，schema/其它偏好/SQL逐字保留', async () => {
+it('三种值经过正式IPC/LocalStore保存并真实重开，schema/其它偏好/SQL逐字保留', async () => {
   const f = await open();
-  for (const sqlKeywordCase of ['upper', 'preserve'] as const) {
+  for (const sqlKeywordCase of ['upper', 'lower', 'preserve'] as const) {
     const settings = { ...legacy(), sqlKeywordCase }; f.store.saveSettings(validateCommand('settings.save', settings) as AppSettings);
     const next = await open(f.path); expect(next.store.settings()).toEqual(settings); close(next.store);
     const db = new SQL.Database(readFileSync(f.path)); try { expect(db.exec('PRAGMA user_version')[0].values[0][0]).toBe(9); expect(db.exec('SELECT COUNT(*) FROM queries')[0].values[0][0]).toBe(0); } finally { db.close(); }
@@ -47,7 +47,7 @@ it('两种值经过正式IPC/LocalStore保存并真实重开，schema/其它偏�
 
 it('显式undefined/坏值两入口拒绝，未知字段仍strict拒绝，磁盘和配置不变', async () => {
   const f = await open(); f.store.saveSettings(legacy()); const before = readFileSync(f.path);
-  for (const value of [undefined, null, 'lower', 'UPPER', '', true, 1, {}, []]) {
+  for (const value of [undefined, null, 'mixed', 'UPPER', '', true, 1, {}, []]) {
     const input = { ...legacy(), sqlKeywordCase: value };
     expect(() => validateCommand('settings.save', input)).toThrow(); expect(() => f.store.saveSettings(input as any)).toThrow('大小写偏好');
   }

@@ -207,7 +207,7 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
       const workspace = useWorkspace.getState(), current = workspace.settings.tabs.find(item => item.id === tab.id), instance = editor.current;
       if (!alive.current || workspace.activeJobs[tab.id] || workspace.settings.activeTabId !== tab.id || current?.kind !== 'query' || !instance || instance.getModel()?.getValue() !== (current.sql ?? '')) throw new Error(sqlFormattingZh.unavailable);
       const preferences = { tabSize: workspace.settings.editorTabSize, insertSpaces: workspace.settings.editorInsertSpaces, keywordCase: workspace.settings.sqlKeywordCase };
-      if (readSqlKeywordCase(preferences.keywordCase) !== 'upper') { formatting.current?.dispose(); formatting.current = null; formatSqlEditor(instance, preferences); return; }
+      if (readSqlKeywordCase(preferences.keywordCase) === 'preserve') { formatting.current?.dispose(); formatting.current = null; formatSqlEditor(instance, preferences); return; }
       if (formatting.current || pendingSession.current || closeRequestRef.current || fileSource.isBusy()) throw Error(sqlFormattingZh.unavailable);
       const owner = current, profile = workspace.connections.find(item => item.id === owner.connectionId), version = workspace.connectionVersions[owner.connectionId] ?? 0, session = sessionRef.current;
       let operation: DeferredUpperSqlFormatting | undefined, observer: MutationObserver | undefined, modalSeen = false;

@@ -1,6 +1,6 @@
 import type * as monaco from 'monaco-editor';
 import { formatSqlEditor, prepareSqlFormattingRoles, type FormattingPreferences } from './sqlFormatting';
-import { sqlKeywordRoleLimits } from '../shared/sqlKeywordCase';
+import { readSqlKeywordCase, sqlKeywordRoleLimits } from '../shared/sqlKeywordCase';
 import { sqlFormattingZh as text } from './locales/sqlFormatting.zh-CN';
 
 interface FormattingPorts {
@@ -17,7 +17,7 @@ function selectionKey(editor: monaco.editor.IStandaloneCodeEditor): string {
   return JSON.stringify(key);
 }
 
-/** 只为显式upper模块加载保存一次编辑意图；失效后不可因原值恢复而复活。 */
+/** 沿用原类名兼容upper调用；显式upper/lower共享同一延迟编辑意图；失效后不可因原值恢复而复活。 */
 export class DeferredUpperSqlFormatting {
   readonly #editor: monaco.editor.IStandaloneCodeEditor;
   readonly #model: monaco.editor.ITextModel;
@@ -28,11 +28,12 @@ export class DeferredUpperSqlFormatting {
   readonly #subscriptions: Array<{ dispose(): void }> = [];
   #valid = true; #started = false; #failure: unknown;
   constructor(private readonly ports: FormattingPorts, preferences: FormattingPreferences) {
+    const keywordCase = readSqlKeywordCase(preferences.keywordCase); if (keywordCase === 'preserve') throw Error(text.unavailable);
     ports.assertCurrent(); const editor = ports.editor(), model = editor?.getModel();
     if (!editor || !model || model.isDisposed() || editor.getRawOptions().readOnly) throw Error(text.unavailable);
     if (model.getValueLength() > sqlKeywordRoleLimits.sourceUnits) throw Error(text.limited);
     this.#editor = editor; this.#model = model; this.#version = model.getVersionId(); this.#sql = model.getValue(); this.#selection = selectionKey(editor);
-    this.#preferences = { tabSize: preferences.tabSize, insertSpaces: preferences.insertSpaces, keywordCase: 'upper' };
+    this.#preferences = { tabSize: preferences.tabSize, insertSpaces: preferences.insertSpaces, keywordCase };
     const revoke = () => { this.#valid = false; };
     try {
       this.#subscriptions.push(editor.onDidChangeModel(revoke));
@@ -50,7 +51,7 @@ export class DeferredUpperSqlFormatting {
     this.ports.assertCurrent();
     if (this.ports.editor() !== this.#editor || this.#editor.getModel() !== this.#model || this.#model.isDisposed() || this.#model.getVersionId() !== this.#version || this.#model.getValue() !== this.#sql || this.#editor.getRawOptions().readOnly || selectionKey(this.#editor) !== this.#selection) throw Error(text.unavailable);
   }
-  /** 回包后先重核，再解除观察并同步执行原事务；没有角色证明时原planner仍拒绝upper。 */
+  /** 回包后先重核，再解除观察并同步执行原事务；没有角色证明时原planner仍拒绝大小写改写。 */
   async run(): Promise<boolean> {
     if (this.#started) throw Error(text.unavailable); this.#started = true; let failed = false, original: unknown;
     try {

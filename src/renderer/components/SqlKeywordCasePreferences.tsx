@@ -13,7 +13,7 @@ export function SqlKeywordCasePreferences() {
   /** 只合并这一字段，沿原settings队列落盘；迟到回包不能更新新弹窗或还原旧SQL。 */
   async function save() {
     if (!alive.current || pending.current) return;
-    if (draft !== 'preserve' && draft !== 'upper') { setError(text.invalidPreference); return; }
+    if (draft !== 'preserve' && draft !== 'upper' && draft !== 'lower') { setError(text.invalidPreference); return; }
     const token = {}; pending.current = token; setSaving(true); setError(''); setSaved(false);
     try {
       useWorkspace.getState().updateSettings({ sqlKeywordCase: draft }); await flushSettings();
@@ -24,7 +24,7 @@ export function SqlKeywordCasePreferences() {
   /** 改草稿不触发store、自动保存、编辑器或格式化。 */
   function change(value: string) { setDraft(value); setError(''); setSaved(false); }
   return <section className="full" aria-label={text.preferences}>
-    <h3>{text.preferences}</h3><Field label={text.keywordCase}><select aria-label={text.keywordCase} value={draft} disabled={saving} onChange={event => change(event.target.value)}><option value="preserve">{text.preserve}</option><option value="upper">{text.upper}</option></select></Field>
+    <h3>{text.preferences}</h3><Field label={text.keywordCase}><select aria-label={text.keywordCase} value={draft} disabled={saving} onChange={event => change(event.target.value)}><option value="preserve">{text.preserve}</option><option value="upper">{text.upper}</option><option value="lower">{text.lower}</option></select></Field>
     <p className="muted small">{text.preferenceHint}</p><p className="muted small">{text.resetHint}</p>
     <button type="button" disabled={saving} onClick={() => change(defaultSqlKeywordCase)}>{text.reset}</button><button type="button" disabled={saving} onClick={() => change(current)}>{text.cancelDraft}</button><button type="button" disabled={saving} onClick={() => void save()}>{saving ? text.saving : text.save}</button>
     {saved && <p role="status">{text.saved}</p>}<ErrorBox message={error}/>
