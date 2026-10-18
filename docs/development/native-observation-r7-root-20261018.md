@@ -2,10 +2,14 @@
 
 新的普通克隆分支 `codex/native-checkpoint-v023-runtime-info-20261018`，固定头 `3125cb2a0b06e427a1a32774bf8bae7c133c7184`。Root 来源 `deb199bfb8044d8351f05704248a199b982a1d0c`，实际产品补丁 `f34f926`（作者 `50dda8d`）。检查点只新增一个 JSON；无 worktree、主分支合并、版本／依赖／工作流／原观察预算改变。
 
-[R7 run 39120833145](https://github.com/zhao-yc/DBArk/actions/runs/39120833145)，attempt 1，push 事件已实际启动。首次元数据为 `in_progress`，尚无整轮或分平台通过结论。Windows x64、macOS arm64／x64 的源码、打包、真实安装和原凭据回归按实际阶段后续读取；不得以任务已提交代替实际验收。
+[R7 run 39120833145](https://github.com/zhao-yc/DBArk/actions/runs/39120833145)，attempt 1，现已终态 success。首次 `in_progress` 快照保留；本次结论来自终态原日志、三个测试记录 ZIP 及其真实报告的分层核验，详见[正式验收范围](../../tests/integration/acceptance-native-r7-root-20261018.md)。
 
 R7 仅移除 App 启动时主动同步加密能力探测：启动元信息走严格空输入 `app.runtimeInfo`；偏好初始“尚未检测”，用户明确检测仍调用原 `app.info`，真实凭据路径完全保留。Root 11 文件／196 RAM 及类型通过，独审原 196 和额外 5 项 React 对照通过，新 Main 分支 75 次读取 safeStorage 为 0；这些不算真实 Keychain 或安装证据，详见[实现与证据](application-runtime-info-20261018.md)。
 
 [R6 原失败](native-observation-r6-root-20261018.md)完整保留。两 Mac 记录只到同步 native 调用前 30／31、主体预算内未确认正常返回，不能断言永久阻塞或具体 Keychain／签名原因；Main 标记上限、上游早期日志不完整和跨通道顺序边界仍适用。R7 不删真实加密／重启断言，不将 unknown 作为通过或跳过条件，不新增系统 Keychain 操作、凭据、签名证书或公开发行。
 
-本检查点版本仍是 0.23.0、Electron 44.7.0，不能当作 0.27／0.28 新功能安装验收。实际安装未验、运行中或失败均须按原报告记录，不能借此前 Windows R6 成功填入本轮通过。
+本检查点版本仍是 0.23.0、Electron 44.7.0，不能当作 0.27／0.28 新功能安装验收。三平台源码缩进／分栏及实际安装缩进／分栏共 12 份专项报告全部通过、0 重试，24 个 owner 的正常退出、原 PID 与目录收尾证据完整。三平台源码／安装两轮回归分别各 76 通过、297 条件跳过，76 包含组件用例，不能称为 76 项完整业务流程。六轮均实际进入系统加密分支，准确凭据用例通过覆盖 SQLite 密文、重启解密及原驱动拒连检查。
+
+Linux 508 文件、9296 项通过、10 条件跳过，类型、构建和 4 项模块加载回归通过。剪贴板专项及开发预览发布 skipped；没有新公开发行、签名或公证证明。三份候选安装包资产本轮未另行下载核字节，归档中的真实安装清单已与同次打包参考逐相对路径／哈希核对。
+
+原测试记录 ZIP 的 GitHub digest、原件 SHA、全部 CRC／预算／路径及纯文本提取通过独审和 Root 独立标准 ZIP 核对；冻结 R5 读取器 SHA `602098da2938bd0b260e80662df556f16bd95a3359ba9e848975d282c946bf84` 未改，每平台重新读取与独审输出逐字段一致。Root 归档证明 SHA `71a75a923b9ad56ca784d8812b067faeb056090de478821e4da46135a4d24037`、读取器证明 `d4c698b481b1a66e92aa22f10f3064eceae7f83ca33732904bfac22a33bb2b52`、原日志及凭据断言顺序证明 `6c9840c16d3fadb657bf36ceb6ab4e382d4302232e19a2adc1eaf8da8e183b5d`。原 arm64 零字节网络下载失败保留，新目录下载成功属于下载恢复，不属于 CI 重跑。R6 两 Mac 原失败仍完整保留，未重新标为通过。
