@@ -30,6 +30,10 @@ beforeEach(async () => {
 });
 
 describe('同会话完整导出生命周期', () => {
+  it.each(['csv','csv-zip'].flatMap(format=>[',',';','\t'].map(csvDelimiter=>({format,csvDelimiter}))))('$format/$csvDelimiter只转交当前写入器，不增加SQL、连接或目录读取',async({format,csvDelimiter})=>{
+    const before=mocks.connect.mock.calls.length;await engine.handle('query.exportStream',{...input(),format,csvDelimiter,sql:'SELECT 1;SELECT 2',resultSelection:format==='csv'?{kind:'row-result',ordinal:2}:{kind:'all'}});
+    expect(options).toMatchObject({format,csvDelimiter});expect(mocks.create).toHaveBeenCalledOnce();expect(mocks.frames.mock.calls.map(call=>call[1])).toEqual(['SELECT 1','SELECT 2']);expect(new Set(mocks.frames.mock.calls.map(call=>call[0])).size).toBe(1);expect(mocks.connect).toHaveBeenCalledTimes(before);expect(mocks.execute).not.toHaveBeenCalled();expect(writer.complete).toHaveBeenCalledOnce();expect(writer.abort).toHaveBeenCalledOnce();
+  });
   it('脚本只发送一次，预览200行但文件消费全部，事务保持并释放目标文件锁', async () => {
     const output = await engine.handle('query.exportStream', { ...input(), sql: 'SELECT 1;SELECT 2' });
     expect(mocks.frames.mock.calls.map(call => call[1])).toEqual(['SELECT 1', 'SELECT 2']);

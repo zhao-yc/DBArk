@@ -1,4 +1,5 @@
 import type { CellValue, QueryOutcome, QueryFileEncoding } from './contracts';
+import type { CsvExportDelimiter } from './csvExport';
 import { sqlExecutableWords, type QueryParameter, type SqlLexicalMode } from './queryParameters';
 
 /** 完整流式导出与工作台预览分别限额；文件行不会整批跨 IPC 传输。 */
@@ -23,6 +24,8 @@ export type QueryExportSelection = { kind: 'all' } | { kind: 'row-result'; ordin
 export interface QueryStreamExportInput {
   sessionId: string; sql: string; taskId: string; fileToken: string;
   format: QueryExportFormat; encoding: QueryFileEncoding; protocol: QueryExportProtocol;
+  /** 仅CSV/CSV ZIP使用；省略仍为原逗号字节，其他格式禁止夹带。 */
+  csvDelimiter?: CsvExportDelimiter;
   resultSelection: QueryExportSelection; parameters?: QueryParameter[];
   insertTarget?: import('./queryInsertExport').QueryInsertTarget;
 }

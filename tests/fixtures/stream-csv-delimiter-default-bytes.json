@@ -1,0 +1,11 @@
+{
+  "baseline": "493dc2f94fb3d64f4f08ae516aa9aadbf4184801",
+  "hashes": {
+    "csv/utf8": "4eb7c8dfa2f601a648912012e5007862e97a7fdf23ae2962cc066229deec78da",
+    "csv-zip/utf8": "8252890b92fb23fa770b8547a11b5c9c24c87afb59bf7adfcb37283cb0a527b6",
+    "csv/utf16le": "a7581deb2fcf3db0ee8ac0c190df874af33a69fda0c9f00b58d1d347efbb4c1a",
+    "csv-zip/utf16le": "0eb594ef54ffc0925417ccba16f665e92f002347bbdf4f86eeada81447857609",
+    "csv/gb18030": "28aaaf27af92714a23693a685653579e302a5507bcc5de8e3a35a9dc7dd421cf",
+    "csv-zip/gb18030": "a2977a598fd38e05308e387bc6d07b1dd50d5776f3621c1f18a06255e0b410e1"
+  }
+}

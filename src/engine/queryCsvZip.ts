@@ -4,6 +4,7 @@ import { AtomicFile } from './atomicFile';
 import { encodingName } from './files';
 import { queryCsvResultFile, queryStreamExportLimits as limits, type QueryExportColumn, type QueryExportFrame } from '../shared/queryStreamExport';
 import type { QueryFileEncoding } from '../shared/contracts';
+import { csvExportDelimiter, type CsvExportDelimiter } from '../shared/csvExport';
 
 const crcTable = Uint32Array.from({ length: 256 }, (_, index) => { let value = index; for (let bit = 0; bit < 8; bit++) value = (value >>> 1) ^ (value & 1 ? 0xedb88320 : 0); return value >>> 0; });
 /** CRC按当前片段递增，既不读回临时包，也不保留已经消费的CSV行。 */
@@ -68,7 +69,7 @@ export class QueryCsvArchive {
   private readonly results: (RowManifest | StatusFrame)[] = [];
   private active?: RowManifest;
   private metadataBytes = 1024;
-  constructor(file: AtomicFile, private readonly encoding: QueryFileEncoding, private readonly checkCancelled: () => void) { encodingName(encoding); this.zip = new QueryZipWriter(file, checkCancelled); }
+  constructor(file: AtomicFile, private readonly encoding: QueryFileEncoding, private readonly checkCancelled: () => void, private readonly delimiter: CsvExportDelimiter = ',') { encodingName(encoding); csvExportDelimiter('csv', delimiter); this.zip = new QueryZipWriter(file, checkCancelled); }
   /** 每个CSV独立编码，UTF-16LE逐文件写BOM；包本身与清单不受CSV编码影响。 */
   async text(text: string): Promise<void> {
     this.checkCancelled(); const bytes = iconv.encode(text, this.encoding);
@@ -91,7 +92,7 @@ export class QueryCsvArchive {
   /** 完整执行后追加UTF-8清单并封闭ZIP；不缓存、压缩或重新读取任何结果行。 */
   async complete(): Promise<void> {
     if (this.active) throw new Error('CSV容器行集尚未结束');
-    const manifest = JSON.stringify({ format: 'DBArk-query-csv-archive', version: 1, encoding: this.encoding, csv: { delimiter: ',', recordDelimiter: '\r\n', null: '\\N', leadingBackslash: 'double', binary: 'base64:', header: 'exportName', columnOrder: 'position' }, results: this.results }) + '\n';
+    const manifest = JSON.stringify({ format: 'DBArk-query-csv-archive', version: 1, encoding: this.encoding, csv: { delimiter: this.delimiter, recordDelimiter: '\r\n', null: '\\N', leadingBackslash: 'double', binary: 'base64:', header: 'exportName', columnOrder: 'position' }, results: this.results }) + '\n';
     if (Buffer.byteLength(manifest) > limits.archiveManifestBytes) throw new Error('CSV容器清单超过8MiB，原目标文件保持不变');
     await this.zip.start('manifest.json'); await this.zip.write(Buffer.from(manifest, 'utf8')); await this.zip.end(); await this.zip.complete();
   }

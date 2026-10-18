@@ -4,9 +4,11 @@ import { AtomicFile, type AtomicFileIO } from './atomicFile';
 import { csvCell, csvHeader } from './files';
 import { prepareQueryCsvZip, QueryCsvArchive } from './queryCsvZip';
 import { createQueryInsertFile } from './queryInsertFile';
+import { csvExportDelimiter, type CsvExportDelimiter } from '../shared/csvExport';
 
 export interface QueryStreamFileOptions {
   filePath: string; format: QueryExportFormat; encoding: QueryFileEncoding; resultSelection: QueryExportSelection;
+  csvDelimiter?: CsvExportDelimiter;
   checkCancelled(): void; onCommitStart(): void;
   insertTarget?: import('../shared/queryInsertExport').QueryInsertTarget;
   beforeInsertCommit?(sample:import('../shared/queryInsertExport').QueryInsertSample,bytes:number):Promise<void>;
@@ -17,7 +19,7 @@ export interface QueryStreamFile {
 }
 
 /** 验证序列化字段预算，FLOAT/DOUBLE 允许精确 IEEE 数值，大整数类型由驱动保留字符串。 */
-function cellText(cell: CellValue, format: 'csv' | 'json'): string {
+function cellText(cell: CellValue, format: 'csv' | 'json', delimiter: CsvExportDelimiter): string {
   if (typeof cell === 'string') {
     if (cell.length > limits.fieldBytes || Buffer.byteLength(cell) > limits.fieldBytes) throw new Error('完整导出单个字段超过 8 MiB');
   } else if (cell !== null && typeof cell !== 'boolean' && typeof cell !== 'number') {
@@ -26,18 +28,20 @@ function cellText(cell: CellValue, format: 'csv' | 'json'): string {
     if (!/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/.test(cell.base64) || Buffer.from(cell.base64, 'base64').toString('base64') !== cell.base64) throw new Error('完整导出二进制字段必须使用规范 Base64');
   } else if (typeof cell === 'number' && !Number.isFinite(cell)) throw new Error('完整导出不支持非有限数值');
   if (cell === undefined) throw new Error('完整导出结果行字段缺失');
-  const text = format === 'json' ? JSON.stringify(cell) : csvCell(cell);
+  const text = format === 'json' ? JSON.stringify(cell) : csvCell(cell, delimiter);
   if (text === undefined || Buffer.byteLength(text) > limits.fieldBytes) throw new Error('完整导出序列化字段超过 8 MiB');
   return text;
 }
 
 /** 一次新执行的完整结果按有界帧顺序写出；这里不解析 SQL、不接触数据库。 */
 export async function createQueryStreamFile(input: QueryStreamFileOptions, io?: AtomicFileIO): Promise<QueryStreamFile> {
+  // 文件创建、SQL暂存或执行前先拒绝非法配置；完整INSERT仍沿原独立合同。
+  const delimiter = csvExportDelimiter(input.format === 'csv-zip' ? 'csv' : input.format, input.csvDelimiter);
   if(input.format==='sql')return createQueryInsertFile(input,io);
   if (!['json', 'csv', 'csv-zip'].includes(input.format) || (input.format !== 'csv' && input.resultSelection.kind !== 'all') || (input.format === 'csv' && (input.resultSelection.kind !== 'row-result' || !Number.isInteger(input.resultSelection.ordinal) || input.resultSelection.ordinal < 1 || input.resultSelection.ordinal > limits.results))) throw new Error('完整导出只支持JSON/CSV容器全部结果或CSV指定行结果集');
   if (input.format === 'csv-zip') await prepareQueryCsvZip(input.filePath, input.checkCancelled);
   const file = await AtomicFile.create(input.filePath, input.encoding, input.checkCancelled, input.onCommitStart, io, limits.fileBytes);
-  const archive = input.format === 'csv-zip' ? new QueryCsvArchive(file, input.encoding, input.checkCancelled) : undefined;
+  const archive = input.format === 'csv-zip' ? new QueryCsvArchive(file, input.encoding, input.checkCancelled, delimiter) : undefined;
   let active: { ordinal: number; columns: QueryExportColumn[]; selected: boolean; rows: number } | undefined;
   let resultCount = 0, rowResultCount = 0, written = 0, selectedFound = false, completed = false;
 
@@ -60,26 +64,26 @@ export async function createQueryStreamFile(input: QueryStreamFileOptions, io?: 
         });
         const selected = input.resultSelection.kind === 'all' || input.resultSelection.ordinal === frame.rowResultOrdinal;
         active = { ordinal: frame.resultOrdinal, columns, selected, rows: 0 }; if (selected) selectedFound = true;
-        if (archive) { await archive.start(frame, columns); await archive.text(columns.map(column => csvHeader(column.exportName)).join(',') + '\r\n'); }
+        if (archive) { await archive.start(frame, columns); await archive.text(columns.map(column => csvHeader(column.exportName, delimiter)).join(delimiter) + '\r\n'); }
         else if (input.format === 'json') {
           const metadata = { resultOrdinal: frame.resultOrdinal, statementOrdinal: frame.statementOrdinal, kind: 'rows', rowResultOrdinal: frame.rowResultOrdinal, columns: columns.map(({ key: _key, ...column }) => column) };
           await file.write((resultCount > 1 ? ',\n' : '\n') + JSON.stringify(metadata).slice(0, -1) + ',"rows":[\n');
-        } else if (selected) await file.write(columns.map(column => csvHeader(column.exportName)).join(',') + '\r\n');
+        } else if (selected) await file.write(columns.map(column => csvHeader(column.exportName, delimiter)).join(delimiter) + '\r\n');
         break;
       }
       case 'row': {
         if (!active || active.ordinal !== frame.resultOrdinal || !Array.isArray(frame.values) || frame.values.length !== active.columns.length) throw new Error('完整导出行与所属结果列不匹配');
         let size = 4; const parts: string[] = [];
         for (let index = 0; index < frame.values.length; index++) {
-          const text = cellText(frame.values[index], input.format === 'json' ? 'json' : 'csv');
+          const text = cellText(frame.values[index], input.format === 'json' ? 'json' : 'csv', delimiter);
           const part = input.format === 'json' ? JSON.stringify(active.columns[index].exportName) + ':' + text : text;
           size += Buffer.byteLength(part) + 1;
           if (size > limits.rowBytes) throw new Error('完整导出序列化单行超过 16 MiB');
           parts.push(part);
         }
         if (active.selected) {
-          if (archive) await archive.text(parts.join(',') + '\r\n');
-          else await file.write(input.format === 'json' ? (active.rows ? ',\n' : '') + '{' + parts.join(',') + '}' : parts.join(',') + '\r\n');
+          if (archive) await archive.text(parts.join(delimiter) + '\r\n');
+          else await file.write(input.format === 'json' ? (active.rows ? ',\n' : '') + '{' + parts.join(',') + '}' : parts.join(delimiter) + '\r\n');
           written++;
         }
         active.rows++; break;
