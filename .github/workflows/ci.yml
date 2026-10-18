@@ -14,10 +14,10 @@ on:
         default: false
 permissions:
   contents: read
-# 同一ref只保留最新非标签检查；标签按运行及重跑代次隔离，避免发行运行被替换或取消。
+# 原生专项按运行及代次隔离；新push不得取消正在采集的原失败现场。
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}-${{ startsWith(github.ref, 'refs/tags/') && format('{0}-{1}', github.run_id, github.run_attempt) || 'latest' }}
-  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+  group: ${{ github.workflow }}-${{ github.ref }}-${{ github.run_id }}-${{ github.run_attempt }}
+  cancel-in-progress: false
 jobs:
   checks:
     name: 类型与单元测试
@@ -48,15 +48,18 @@ jobs:
         include:
           - os: windows-latest
             label: Windows x64
-            command: pnpm dist:win
+            command: pnpm exec electron-builder --win --x64 --publish never
+            reference: release/win-unpacked/DBArk.exe
             artifact: Windows-x64
           - os: macos-latest
             label: macOS arm64
-            command: pnpm build && pnpm exec electron-builder --mac --arm64 --publish never
+            command: pnpm exec electron-builder --mac --arm64 --publish never
+            reference: release/mac-arm64/DBArk.app/Contents/MacOS/DBArk
             artifact: macOS-arm64
           - os: macos-15-intel
             label: macOS x64
-            command: pnpm build && pnpm exec electron-builder --mac --x64 --publish never
+            command: pnpm exec electron-builder --mac --x64 --publish never
+            reference: release/mac/DBArk.app/Contents/MacOS/DBArk
             artifact: macOS-x64
     runs-on: ${{ matrix.os }}
     steps:
@@ -72,7 +75,10 @@ jobs:
         run: node scripts/check-backup-windows-helper.mjs
       - name: 预检固定离线查询端口（仅127.0.0.1:1）
         run: node scripts/check-offline-query-port.mjs
-      - run: pnpm test:e2e
+      - name: 同次构建封存并单次验证源码缩进与分栏专项
+        id: native-source
+        run: node scripts/native-editor-ci.mjs source
+      - run: pnpm exec playwright test --output=test-results/legacy-source
         env:
           # 已验的本地查询导航在三个原生平台执行；私网用例继续关闭。
           DBARK_INTEGRATION_ENABLED: '0'
@@ -90,6 +96,10 @@ jobs:
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
       - run: pnpm test:packaged
         env:
+          DBARK_NATIVE_EDITOR_CI: '1'
+          DBARK_NATIVE_EDITOR_SOURCE_APPROVAL: ${{ steps.native-source.outputs.source_approval }}
+          DBARK_NATIVE_EDITOR_SOURCE_APPROVAL_SHA256: ${{ steps.native-source.outputs.source_approval_sha256 }}
+          DBARK_NATIVE_EDITOR_REFERENCE_EXECUTABLE: ${{ github.workspace }}/${{ matrix.reference }}
           DBARK_W03_SAVED_QUERY_NAVIGATION_TEST: '1'
           DBARK_EDITOR_FONT_NATIVE_TEST: '1'
           DBARK_QUERY_DUPLICATE_NATIVE_TEST: '1'
@@ -103,9 +113,9 @@ jobs:
             release/*.zip
             release/*.blockmap
       - uses: actions/upload-artifact@v4
-        if: failure()
+        if: always()
         with:
-          name: 测试记录-${{ matrix.artifact }}
+          name: 测试记录-${{ matrix.artifact }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: test-results/
   # 只在明确手动勾选时运行；两个夹具启动独立开发Electron，不计安装产品验收。
   native-clipboard-components:

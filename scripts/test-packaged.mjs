@@ -4,6 +4,8 @@ import { copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSy
 import { tmpdir } from 'node:os';
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { approveInstalled, preparePackageIdentity } from './native-editor-ci-identity.mjs';
+import { ciContext, packageCleanupAllowed, runNativeEditorSpecialties } from './native-editor-ci.mjs';
 
 const project = fileURLToPath(new URL('../', import.meta.url));
 const platform = process.platform;
@@ -13,7 +15,8 @@ const { version } = JSON.parse(readFileSync(join(project, 'package.json'), 'utf8
 if (!/^[0-9]+\.[0-9]+\.[0-9]+(?:-[a-zA-Z0-9.-]+)?$/.test(version)) throw new Error('版本号不能用于安全定位安装产物');
 const artifact = join(project, 'release', 'DBArk-' + version + '-' + (platform === 'win32' ? 'win' : 'mac') + '-' + process.arch + '-unsigned.' + (platform === 'win32' ? 'exe' : 'dmg'));
 if (!existsSync(artifact)) throw new Error('未找到当前架构的安装产物，请先构建：' + artifact);
-const temporaryParent = realpathSync(tmpdir());
+// Windows的同步JS realpath会保留RUNNER~1；必须先取与runtime异步realpath一致的原生长路径再建安装根。
+const temporaryParent = realpathSync.native(tmpdir());
 const temporaryPrefix = 'dbark-package-e2e-';
 
 /** 以独立参数调用固定工具；不经 shell，也不把文件路径拼成命令文本。 */
@@ -54,6 +57,9 @@ const applicationDirectory = join(temporary, 'Applications');
 const mountDirectory = join(temporary, 'mount');
 let installAttempted = false;
 let testFailure;
+let nativeResult;
+const nativeEnabled = process.env.DBARK_NATIVE_EDITOR_CI === '1';
+if (process.env.DBARK_NATIVE_EDITOR_CI !== undefined && !['0', '1'].includes(process.env.DBARK_NATIVE_EDITOR_CI)) throw Error('原生专项CI开关必须为0或1');
 
 /** 判断路径是否位于临时根目录内部，拒绝根本身、父级或其他磁盘。 */
 function contained(target) {
@@ -63,8 +69,8 @@ function contained(target) {
 
 /** 删除、卸载或复制前核对根目录和目标的真实范围，拒绝链接替换与父目录跳转。 */
 function assertOwnedPath(target) {
-  if (dirname(temporary) !== temporaryParent || !basename(temporary).startsWith(temporaryPrefix) || lstatSync(temporary).isSymbolicLink() || realpathSync(temporary) !== temporary) throw new Error('临时根目录已改变，拒绝清理');
-  if (!contained(resolve(target)) || (existsSync(target) && !contained(realpathSync(target)))) throw new Error('目标真实路径超出本次验收目录');
+  if (dirname(temporary) !== temporaryParent || !basename(temporary).startsWith(temporaryPrefix) || lstatSync(temporary).isSymbolicLink() || realpathSync.native(temporary) !== temporary) throw new Error('临时根目录已改变，拒绝清理');
+  if (!contained(resolve(target)) || (existsSync(target) && !contained(realpathSync.native(target)))) throw new Error('目标真实路径超出本次验收目录');
 }
 
 /** NSIS 的 /D 与 _?= 必须最后出现且不加引号；独立参数数组加 verbatim 保留原生语义。 */
@@ -115,6 +121,13 @@ function detachMac() {
 }
 
 try {
+  // 先封存同job安装输入及未安装app；不能先安装再从当时的新字节补签参考身份。
+  const packageProof = process.env.DBARK_NATIVE_EDITOR_CI === '1' ? preparePackageIdentity({
+    sourcePath: process.env.DBARK_NATIVE_EDITOR_SOURCE_APPROVAL,
+    sourceHash: process.env.DBARK_NATIVE_EDITOR_SOURCE_APPROVAL_SHA256,
+    referenceExecutable: process.env.DBARK_NATIVE_EDITOR_REFERENCE_EXECUTABLE,
+    context: ciContext(project), artifact, project, platform,
+  }) : undefined;
   console.log('正在验证真实安装产物：' + basename(artifact));
   const executable = platform === 'win32' ? installWindows() : installMac();
   assertOwnedPath(executable);
@@ -131,6 +144,11 @@ try {
     console.log('Windows helper安装资源摘要已核对（未执行协议）：' + actual);
   }
   console.log('正在运行离线安装程序回归：' + executable);
+  if (packageProof) {
+    const output = join(project, 'test-results/native-editor-ci');
+    const approval = approveInstalled(packageProof, executable, output);
+    nativeResult = runNativeEditorSpecialties({ approval, output });
+  }
   // 普通与C02专用夹具统一使用本次安装所得程序，覆盖父进程继承的旧路径。
   const env = { ...process.env, DBARK_EXECUTABLE_PATH: executable, DBARK_C02_EXECUTABLE_PATH: executable, DBARK_INTEGRATION_ENABLED: '0' };
   delete env.DBARK_DEV_URL;
@@ -138,17 +156,23 @@ try {
   if (env.DBARK_QUERY_CLOSE_OTHERS_NATIVE_TEST === '1') command(process.execPath, [join(project, 'scripts', 'check-offline-query-port.mjs')], { env, timeout: 10000 });
   // 执行当前源码的全部离线用例，避免新增偏好或配置功能遗漏随包验收；内网专属由显式开关跳过。
   // 首批196项源码套件实际耗时298秒；仅全套安装进程预算改为15分钟，单用例期限和断言不变。
-  command(process.execPath, [join(project, 'node_modules', '@playwright', 'test', 'cli.js'), 'test'], { env, timeout: 900000 });
+  // 新专项CI的普通回归只清独立子目录，不能删除native-editor-ci的批准和终态；旧独立调用保留默认参数。
+  command(process.execPath, [join(project, 'node_modules', '@playwright', 'test', 'cli.js'), 'test', ...(process.env.DBARK_NATIVE_EDITOR_CI === '1' ? ['--output=' + join(project, 'test-results/legacy-installed')] : [])], { env, timeout: 900000 });
 } catch (error) {
   testFailure = error;
 } finally {
   try {
-    if (installAttempted) { if (platform === 'win32') uninstallWindows(); else detachMac(); }
-    assertOwnedPath(applicationDirectory);
-    // 即使系统未返回预期的映像路径，也不能把仍处于其他文件系统的挂载点递归删除。
-    if (platform === 'darwin' && existsSync(mountDirectory) && statSync(mountDirectory).dev !== statSync(temporary).dev) throw new Error('挂载点仍位于其他文件系统，拒绝清理');
-    rmSync(temporary, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
-    console.log('本次测试安装及临时目录已清理');
+    if (!packageCleanupAllowed(nativeEnabled, nativeResult, testFailure)) {
+      // 不卸载、不分离、不删安装根；原用例保留的数据目录/PID仍以原附件为准，不补强停或重试。
+      console.error('原生专项退出证明缺失或回归失败，本次安装现场保留：' + temporary);
+    } else {
+      if (installAttempted) { if (platform === 'win32') uninstallWindows(); else detachMac(); }
+      assertOwnedPath(applicationDirectory);
+      // 即使系统未返回预期的映像路径，也不能把仍处于其他文件系统的挂载点递归删除。
+      if (platform === 'darwin' && existsSync(mountDirectory) && statSync(mountDirectory).dev !== statSync(temporary).dev) throw new Error('挂载点仍位于其他文件系统，拒绝清理');
+      rmSync(temporary, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+      console.log('本次测试安装及临时目录已清理');
+    }
   } catch (error) {
     console.error('安装清理失败，临时目录保留：' + temporary);
     testFailure = testFailure ? new AggregateError([testFailure, error], '验收与清理均发生错误') : error;
