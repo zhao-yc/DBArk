@@ -67,3 +67,9 @@ CSV 原生操作、实库最终数值／字节及跨版本验收尚未执行。�
 两项已复现的夹具缺口已修：open 晚回的期限检查受原句柄 finally 覆盖；读回样本后删除前再次核规范路径及 dev/ino，不能仅凭相同字节删除替换文件。普通 unlink 仍不提供跨进程原子 CAS 保证。原独审及原反例保留，修复交接 SHA-256 `cba06ede2cc47e7cfcfcdf1d127ed13285a7cc36322fb3646fab617745811890`。
 
 Root `node .cache/run1783-check-v027-preparation-root.mjs` 的两文件 61 项通过，0 失败／跳过；unit.log SHA-256 `97866a7bf744a556a9c01b95044a79f967597fbff8a4a7e0a4fa91f06df61de3`。产品 src／scripts／版本及锁文件未变，src／tests／scripts／package／锁文件／tsconfig 与已类型通过作者相同，采用该类型证据。没有启动 GUI、数据库、预检或剪贴板，两条真实执行次数仍为 0，本机窗口恢复许可仍待明确，不重复发起请求。
+
+## 窗口恢复后的观察连接窄修
+
+用户已明确恢复临时窗口验收。实跑前发现本片独立 mysql2 观察连接仍使用默认客户端 `IGNORE_SPACE` 标志，会改变新会话的 SQL 模式，与原严格事实门冲突；现显式使用 `flags: ['-IGNORE_SPACE']`，只保持服务端原模式，没有扩大事实门或设置服务器模式。产品与 `50626ec` 的构建输入不变。
+
+Root `node .cache/run1823-check-v027-observer-root.mjs` 的原两文件 61 项通过，0 失败／跳过，类型检查通过；unit.log SHA-256 `d3a8767cbff5f4c01a25113f7f977b783ce7c9f046496408b76b42dc413555b3`。本次窄修尚未启动 GUI 或数据库；下一步绑定冻结的 108 文件构建及新临时环境，执行原两项，不继承其它版本窗口通过结论。

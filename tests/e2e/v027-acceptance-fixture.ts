@@ -146,7 +146,8 @@ async function admission(info: TestInfo, options: { trace: unknown; screenshot: 
   contexts.set(info, ctx);
   try {
     await record('planned');
-    life.check(); native = mysql.createConnection({ host: binding.target.host, port: binding.target.port, user: binding.target.user, password: binding.target.password, charset: 'utf8mb4', supportBigNumbers: true, bigNumberStrings: true, dateStrings: true, connectTimeout: 10000 }) as unknown as Native;
+    // 独立观察连接不请求mysql2默认的IGNORE_SPACE，保留服务端原模式及严格事实门。
+    life.check(); native = mysql.createConnection({ host: binding.target.host, port: binding.target.port, user: binding.target.user, password: binding.target.password, charset: 'utf8mb4', supportBigNumbers: true, bigNumberStrings: true, dateStrings: true, flags: ['-IGNORE_SPACE'], connectTimeout: 10000 }) as unknown as Native;
     originalStream = native.stream; if (!originalStream) throw Error('0.27原驱动物理流缺失');
     observer = native.promise();
     await ctx.step(() => new Promise<void>((yes, no) => native!.connect(error => error ? no(error) : yes()))); await ctx.facts(); await record('server-admitted');
