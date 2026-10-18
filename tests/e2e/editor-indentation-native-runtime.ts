@@ -50,10 +50,16 @@ export function createEditorIndentNativeRun(binding: { assertCurrent(): void }):
     if (process.env.DBARK_EXECUTABLE_PATH && (identity.manifest.kind !== 'installed' || resolve(process.env.DBARK_EXECUTABLE_PATH) !== identity.manifest.executable)) throw Error('环境安装路径不匹配Root批准清单');
     return identity;
   }
+  /** 先保留原句柄返回的正PID线索，再核期限/来源；线索不认证main/window，也不授权退出、清理或终止。 */
+  function rememberObservedPids(owner: IndentNativeOwner, values: readonly number[]): void {
+    const own = captured.get(owner)!;
+    for (const pid of values) if (Number.isSafeInteger(pid) && pid > 0 && !own.pids.has(pid)) { own.pids.add(pid); owner.ids.add(pid); }
+  }
   /** 启动器与实际主进程分别封存；Windows Playwright 的 shell ChildProcess 不是应用主进程。 */
   async function sampleSource(owner: IndentNativeOwner): Promise<{ ids: number[]; complete: boolean }> {
     guard(owner); const own = captured.get(owner)!;
-    const actual = await own.application.evaluate(({ app, BrowserWindow }) => ({ executable: process.execPath, appPath: app.getAppPath(), resources: process.resourcesPath, packaged: app.isPackaged, pid: process.pid, parent: process.ppid, platform: process.platform, metrics: app.getAppMetrics().map(value => value.pid), windows: BrowserWindow.getAllWindows().map(window => ({ id: window.id, contents: window.webContents.id, renderer: window.webContents.getOSProcessId() })) })); guard(owner);
+    const actual = await own.application.evaluate(({ app, BrowserWindow }) => ({ executable: process.execPath, appPath: app.getAppPath(), resources: process.resourcesPath, packaged: app.isPackaged, pid: process.pid, parent: process.ppid, platform: process.platform, metrics: app.getAppMetrics().map(value => value.pid), windows: BrowserWindow.getAllWindows().map(window => ({ id: window.id, contents: window.webContents.id, renderer: window.webContents.getOSProcessId() })) }));
+    rememberObservedPids(owner, [actual.pid, ...actual.metrics, ...actual.windows.map(window => window.renderer)]); guard(owner);
     const diagnostic: IndentNativeSourceDiagnostic = { phase: !own.page ? '启动来源' : own.window ? '已准备来源' : '窗口准备', complete: false,
       expected: { launcherPid: own.launcher, mainPid: own.main, platform: process.platform, relation: process.platform === 'win32' ? '启动器父进程' : '同一进程', window: own.window && { ...own.window } },
       observed: { mainPid: actual.pid, parentPid: actual.parent, platform: actual.platform, metrics: actual.metrics.slice(0, 64) } };
@@ -61,12 +67,12 @@ export function createEditorIndentNativeRun(binding: { assertCurrent(): void }):
     await identity!.assertActual(actual); guard(owner);
     if (actual.platform !== process.platform || !Number.isSafeInteger(actual.pid) || actual.pid <= 0 || (process.platform === 'win32' ? actual.parent !== own.launcher || actual.pid === own.launcher : actual.pid !== own.launcher) || own.main !== undefined && actual.pid !== own.main) throw Error('本owner实际主进程与原启动器关系未知');
     own.main ??= actual.pid;
-    // 启动阶段仅签认已证实的进程来源，空/零metrics从不作为完整renderer证明，也不录入PID集合。
-    for (const pid of [own.launcher, own.main, ...actual.metrics.filter(pid => Number.isSafeInteger(pid) && pid > 0)]) { own.pids.add(pid); owner.ids.add(pid); }
+    // 归属只取上面的原来源门；完整renderer证明仍须下方原条件全部成立，不能从线索集合推导。
     let complete = false;
     if (own.page) {
       const handle = await own.application.browserWindow(own.page); guard(owner);
-      const window = await handle.evaluate(value => ({ id: value.id, contents: value.webContents.id, renderer: value.webContents.getOSProcessId(), url: value.webContents.getURL(), destroyed: value.isDestroyed() })); guard(owner);
+      const window = await handle.evaluate(value => ({ id: value.id, contents: value.webContents.id, renderer: value.webContents.getOSProcessId(), url: value.webContents.getURL(), destroyed: value.isDestroyed() }));
+      rememberObservedPids(owner, [window.renderer]); guard(owner);
       diagnostic.observed.window = { id: window.id, contents: window.contents, renderer: window.renderer, destroyed: window.destroyed };
       const url = new URL(window.url);
       if (window.destroyed || own.window && (own.window.id !== window.id || own.window.contents !== window.contents) || own.page.url() !== window.url || url.protocol !== 'file:' || url.search || url.hash || resolve(fileURLToPath(url)) !== join(identity!.manifest.appPath, 'dist/renderer/index.html')) throw Error('本owner返回页面来源未知');

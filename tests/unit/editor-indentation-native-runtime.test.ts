@@ -32,7 +32,7 @@ function fixture(mode: '正常' | '无握手关闭' | 'PID权限错误' | '链�
     application.evaluate = async (fn: Function, arg: unknown) => fn({ app: runtime, BrowserWindow: { getAllWindows: () => [window] } }, arg); application.firstWindow = async () => page; application.process = () => child; application.browserWindow = async (value: unknown) => { expect(value).toBe(page); return { evaluate: async (fn: Function) => fn(window) }; };
     application.waitForEvent = () => new Promise(done => application.once('close', done)); application.close = vi.fn(async () => { expect(runtime.listenerCount('will-quit')).toBe(0); application.emit('close'); }); applications.push(application); applicationHook(application); return application;
   });
-  const probe = vi.fn(() => { throw Object.assign(Error('合成探测'), { code: mode === 'PID权限错误' ? 'EPERM' : 'ESRCH' }); });
+  const probe = vi.fn((_pid: number, _signal: number) => { throw Object.assign(Error('合成探测'), { code: mode === 'PID权限错误' ? 'EPERM' : 'ESRCH' }); });
   // 有限RAM采样模拟指标稍后就绪，不启动计时器、进程、窗口或系统探测。
   const poll = (read: () => unknown) => ({ toEqual: async (value: unknown) => expect(await read()).toEqual(value), toBe: async (value: unknown) => { let actual: unknown; for (let attempt = 0; attempt < 3; attempt++) { actual = await read(); if (actual === value) return; } expect(actual).toBe(value); } });
   const nativeExpect = Object.assign(() => ({ toBeVisible: async () => {} }), { poll });
@@ -70,6 +70,52 @@ describe('缩进原生适配器的实际边界函数（RAM）', () => {
   it('真实适配器不能用非空主PID掩盖空metrics，退出前即停链保留', async () => {
     const f = fixture(), owner = await f.run.launch(); f.applications[0].runtime.getAppMetrics = () => [];
     await expect(f.run.close(owner)).rejects.toThrow('metrics PID未知'); expect(owner.confirmed).toBe(false); expect(f.applications[0].close).not.toHaveBeenCalled(); expect(f.removed).not.toHaveBeenCalled();
+  });
+});
+
+describe('run1622资源线索窄修（RAM）', () => {
+  it('主PID漂移仍拒绝并停链，但先留存本次已观察的正main与metrics', async () => {
+    const f = fixture(), owner = await f.run.launch(); f.context.process.pid = 909; f.applications[0].runtime.getAppMetrics = () => [{ pid: 202 }, { pid: 707 }];
+    await expect(f.run.close(owner)).rejects.toThrow('启动器关系未知'); expect(f.run.retained).toBe(true); expect(owner.confirmed).toBe(false);
+    expect(owner.ids.has(909)).toBe(true); expect(owner.ids.has(707)).toBe(true); expect(f.applications[0].close).not.toHaveBeenCalled(); expect(f.probe).not.toHaveBeenCalled(); expect(f.removed).not.toHaveBeenCalled();
+  });
+  it('短暂正renderer不在当前metrics也先保留，后续完整认证不抹掉该线索', async () => {
+    const f = fixture(); let samples = 0;
+    f.onLaunch(app => { const original = app.browserWindow; app.browserWindow = async (page: unknown) => { const handle = await original(page); return { evaluate: async (fn: Function) => ({ ...await handle.evaluate(fn), renderer: samples++ === 0 ? 505 : 202 }) }; }; });
+    const owner = await f.run.launch(); expect(owner.ids.has(505)).toBe(true); await f.run.close(owner);
+    expect(f.probe.mock.calls).toContainEqual([505, 0]); expect(f.probe.mock.calls.every(call => call[1] === 0)).toBe(true);
+  });
+  it('实际evaluate返回的窗口正PID即使后续消失，也作为原owner线索保留', async () => {
+    const f = fixture(); let samples = 0;
+    f.onLaunch(app => { const original = app.evaluate; app.evaluate = async (fn: Function, arg: unknown) => { const value = await original(fn, arg); return String(fn).includes('BrowserWindow') && samples++ === 0 ? { ...value, windows: [{ id: 1, contents: 11, renderer: 505 }] } : value; }; });
+    const owner = await f.run.launch(); expect(owner.ids.has(505)).toBe(true); await f.run.close(owner); expect(f.probe.mock.calls).toContainEqual([505, 0]);
+  });
+  it('候选renderer持续缺少完整认证时永久retain，线索不能授权退出或清理', async () => {
+    const f = fixture();
+    f.onLaunch(app => { const original = app.browserWindow; app.browserWindow = async (page: unknown) => { const handle = await original(page); return { evaluate: async (fn: Function) => ({ ...await handle.evaluate(fn), renderer: 505 }) }; }; });
+    await expect(f.run.launch()).rejects.toThrow(); const owner = f.run.owners[0]; expect(owner.ids.has(505)).toBe(true); expect(f.run.retained).toBe(true);
+    await expect(f.run.close(owner)).rejects.toThrow('owner已失效'); expect(owner.confirmed).toBe(false); expect(f.applications[0].close).not.toHaveBeenCalled(); expect(f.probe).not.toHaveBeenCalled(); expect(f.removed).not.toHaveBeenCalled();
+  });
+  it('实际evaluate返回时原门已失效，也先保留本次正main和metrics再拒绝', async () => {
+    const f = fixture(), owner = await f.run.launch(), app = f.applications[0], original = app.evaluate;
+    f.context.process.pid = 909; app.runtime.getAppMetrics = () => [{ pid: 707 }]; app.evaluate = async (fn: Function, arg: unknown) => { const value = await original(fn, arg); f.run.retained = true; return value; };
+    await expect(f.run.close(owner)).rejects.toThrow('owner已失效'); expect(owner.ids.has(909)).toBe(true); expect(owner.ids.has(707)).toBe(true); expect(app.close).not.toHaveBeenCalled(); expect(f.probe).not.toHaveBeenCalled(); expect(f.removed).not.toHaveBeenCalled();
+  });
+  it('窗口evaluate返回时原门已失效，也先保留正renderer再拒绝', async () => {
+    const f = fixture();
+    f.onLaunch(app => { const original = app.browserWindow; app.browserWindow = async (page: unknown) => { const handle = await original(page); return { evaluate: async (fn: Function) => { const value = await handle.evaluate(fn); f.run.retained = true; return { ...value, renderer: 505 }; } }; }; });
+    await expect(f.run.launch()).rejects.toThrow('owner已失效'); const owner = f.run.owners[0]; expect(owner.ids.has(505)).toBe(true); expect(owner.confirmed).toBe(false); expect(f.applications[0].close).not.toHaveBeenCalled(); expect(f.probe).not.toHaveBeenCalled(); expect(f.removed).not.toHaveBeenCalled();
+  });
+  it('来源诊断滚出12条后仍保留早期候选PID，后续metrics不能冲掉线索集合', async () => {
+    const f = fixture(); let samples = 0; const originalPoll = f.context.expect.poll;
+    f.context.expect.poll = (read: () => unknown, options: unknown) => ({ ...originalPoll(read, options), toBe: async (expected: unknown) => { let value: unknown; for (let index = 0; index < 16; index++) { value = await read(); if (value === expected) return; } expect(value).toBe(expected); } });
+    f.onLaunch(app => { const original = app.browserWindow; app.browserWindow = async (page: unknown) => { const handle = await original(page); return { evaluate: async (fn: Function) => ({ ...await handle.evaluate(fn), renderer: samples++ === 0 ? 505 : samples < 15 ? 0 : 202 }) }; }; });
+    const owner = await f.run.launch(); expect(owner.sourceDiagnostics).toHaveLength(12); expect(owner.sourceDiagnostics?.some(value => value.observed.window?.renderer === 505)).toBe(false); expect(owner.ids.has(505)).toBe(true);
+    await f.run.close(owner); expect(f.probe.mock.calls).toContainEqual([505, 0]); expect(f.probe.mock.calls.every(call => call[1] === 0)).toBe(true);
+  });
+  it('资源线索只纳入正安全整数，非法main和metrics仍按原来源门拒绝', async () => {
+    const f = fixture(); f.context.process.pid = Number.MAX_SAFE_INTEGER + 1; f.onLaunch(app => { app.runtime.getAppMetrics = () => [0, -1, NaN, Number.MAX_SAFE_INTEGER + 1, 202].map(pid => ({ pid })); });
+    await expect(f.run.launch()).rejects.toThrow(); const owner = f.run.owners[0]; expect([...owner.ids]).toEqual([101, 202]); expect(owner.confirmed).toBe(false); expect(f.run.retained).toBe(true); expect(f.applications[0].close).not.toHaveBeenCalled(); expect(f.probe).not.toHaveBeenCalled(); expect(f.removed).not.toHaveBeenCalled();
   });
 });
 
@@ -150,7 +196,7 @@ describe('run1616窄修：Windows启动器与窗口准备分阶段（RAM）', ()
   it('Windows实际父PID不符立即拒绝，附件保留精确observed与expected而不猜测', async () => {
     const f = fixture(); f.context.process.ppid = 999;
     await expect(f.run.launch()).rejects.toThrow('启动器关系未知'); const owner = f.run.owners[0];
-    expect(owner.sourceDiagnostics).toHaveLength(1); expect(owner.sourceDiagnostics?.[0]).toMatchObject({ complete: false, expected: { launcherPid: 101, relation: '启动器父进程' }, observed: { mainPid: 303, parentPid: 999, metrics: [202] } }); expect(owner.page).toBeUndefined(); expect([...owner.ids]).toEqual([101]);
+    expect(owner.sourceDiagnostics).toHaveLength(1); expect(owner.sourceDiagnostics?.[0]).toMatchObject({ complete: false, expected: { launcherPid: 101, relation: '启动器父进程' }, observed: { mainPid: 303, parentPid: 999, metrics: [202] } }); expect(owner.page).toBeUndefined(); expect([...owner.ids]).toEqual([101, 303, 202]);
   });
   it('已封存的实际主PID变化即拒绝，不因仍有相同父PID接受替代主进程', async () => {
     const f = fixture(), owner = await f.run.launch(); f.context.process.pid = 909;
