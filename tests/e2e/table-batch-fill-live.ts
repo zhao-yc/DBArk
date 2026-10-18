@@ -97,7 +97,8 @@ export function registerTableBatchFill(binding: BatchFillTarget): void {
             [id, ['selected_a', 'selected_b', 'control'][index], '原值' + index, '18446744073709551615', '12345678901234567890.120000', '2026-10-18 01:02:03.123456', ['00FF8000', '000100', 'FF00'][index], '{"n":9007199254740993,"s":"保留旁列"}']));
           /** 不通过JS数值或JSON解析核旁列；固定列序的SQL字符串/HEX快照覆盖所有三行。 */
           async function snapshot(): Promise<Snapshot[]> {
-            const [rows] = await checked(() => context.observer.query<Snapshot[]>(`SELECT CAST(id AS CHAR) AS id,code,note,CAST(big_value AS CHAR) AS big_value,CAST(amount AS CHAR) AS amount,DATE_FORMAT(stamp,'%Y-%m-%d %H:%i:%s.%f') AS stamp,HEX(payload) AS payload,CAST(doc AS CHAR CHARACTER SET utf8mb4) AS doc FROM ${qualified} ORDER BY id`));
+            // 排序指向原BIGINT列，避免同名CHAR投影别名将控制行按字典序放到前面。
+            const [rows] = await checked(() => context.observer.query<Snapshot[]>(`SELECT CAST(s.id AS CHAR) AS id,s.code,s.note,CAST(s.big_value AS CHAR) AS big_value,CAST(s.amount AS CHAR) AS amount,DATE_FORMAT(s.stamp,'%Y-%m-%d %H:%i:%s.%f') AS stamp,HEX(s.payload) AS payload,CAST(s.doc AS CHAR CHARACTER SET utf8mb4) AS doc FROM ${qualified} AS s ORDER BY s.id`));
             return rows;
           }
           const before = await snapshot();
