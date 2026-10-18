@@ -5,12 +5,15 @@ import {expect,it,vi} from 'vitest';
 import * as gate from '../e2e/query-layout-native-gate';
 import {bindEditorIndentNativeCase} from '../e2e/editor-indentation-native-gate';
 import {EditorIndentNativeRun,type IndentNativePort} from '../e2e/editor-indentation-native-owner';
+import * as viewport from '../e2e/query-layout-native-viewport';
 const source=readFileSync(new URL('../e2e/query-layout-native.spec.ts',import.meta.url),'utf8');
+const viewportSource=readFileSync(new URL('../e2e/query-layout-native-viewport.ts',import.meta.url),'utf8');
 const allowed=()=>({DBARK_QUERY_LAYOUT_NATIVE_TEST:'1',DBARK_INTEGRATION_ENABLED:'0',DBARK_QUERY_LAYOUT_MANIFEST:'C:/RAM-layout-approved.json',DBARK_QUERY_LAYOUT_MANIFEST_SHA256:'a'.repeat(64)});
 /** 真spec声明仅登记回调，runtime哨兵不会创建原生模块；所有环境是显式RAM对象。 */
 function declaration(env:NodeJS.ProcessEnv,args:string[]=[],create=vi.fn(()=>{throw Error('未提供RAM runtime');}),info:any={_startWallTime:0,timeout:120000,status:'passed',attach:vi.fn(async()=>{})},clock={now:0}){
  const callbacks:Function[]=[],hooks:Function[]=[],modules:string[]=[],skip=vi.fn(),use=vi.fn(),configure=vi.fn();const test=Object.assign((_title:string,body:Function)=>callbacks.push(body),{skip,use,afterEach:(fn:Function)=>hooks.push(fn),info:()=>info,describe:{configure}});
- const require=(name:string)=>{modules.push(name);if(name==='@playwright/test')return {test,expect};if(name==='./query-layout-native-gate')return gate;if(name==='./editor-indentation-native-gate')return {bindEditorIndentNativeCase:(original:any,environment:any,current:any)=>bindEditorIndentNativeCase(original,environment,current,()=>clock.now)};if(name==='./editor-indentation-native-runtime')return {createEditorIndentNativeRun:create};if(name.includes('/locales/'))return {};throw Error('不允许加载模块:'+name);};
+ // 场景helper是无顶层资源操作的真实纯模块；窗口/文件/网络仍不能在声明阶段取得。
+ const require=(name:string)=>{modules.push(name);if(name==='@playwright/test')return {test,expect};if(name==='./query-layout-native-gate')return gate;if(name==='./query-layout-native-viewport')return viewport;if(name==='./editor-indentation-native-gate')return {bindEditorIndentNativeCase:(original:any,environment:any,current:any)=>bindEditorIndentNativeCase(original,environment,current,()=>clock.now)};if(name==='./editor-indentation-native-runtime')return {createEditorIndentNativeRun:create};if(name.includes('/locales/'))return {};throw Error('不允许加载模块:'+name);};
  runInNewContext(ts.transpileModule(source,{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS}}).outputText,{exports:{},require,process:{env,argv:args,platform:'win32'},WeakMap,Buffer,Error,AggregateError});return {callbacks,hooks,modules,skip,use,configure,create,info,clock};
 }
 it('默认关闭和RAM模拟list均只登记一例，脏环境不加载runtime/owner/native模块',()=>{
@@ -40,5 +43,6 @@ it('真实case只有只读IPC及正式键鼠/窗口API，种子为无前导缩�
  const tree=ts.createSourceFile('spec.ts',source,ts.ScriptTarget.Latest,true),commands:string[]=[];let seed='';function visit(n:ts.Node){if(ts.isCallExpression(n)&&ts.isPropertyAccessExpression(n.expression)&&n.expression.name.text==='invoke'){expect(ts.isStringLiteral(n.arguments[0])).toBe(true);commands.push((n.arguments[0]as ts.StringLiteral).text);}if(ts.isVariableDeclaration(n)&&n.name.getText(tree)==='value'&&n.initializer?.getText(tree).startsWith('[`SELECT'))seed=n.initializer.getText(tree);ts.forEachChild(n,visit);}visit(tree);expect(commands.sort()).toEqual(['history.list','queries.list','settings.get','tasks.list']);
  const value=runInNewContext(seed,{label:'RAM'});expect(value.split('\n')).toHaveLength(46);expect(value.split('\n').every((line:string)=>line.length>0&&!/^\s/.test(line))).toBe(true);
  expect(source).not.toMatch(/desktop-fixture|\.setValue\(|\.setModel\(|\.updateOptions\(|\.executeEdits\(|\.setSelections?\(|setState\(|clipboard\.|\.screenshot\(|settings\.save|query\.execute/);
- expect(source).toContain('window.setContentSize(size.width, size.height)');expect(source).toContain('expect(disk.schema).toBe(8)');expect(source).toContain('await run.close(first)');expect(source).toContain('await run.close(second); await run.finish()');
+ // 原窗口尺寸接线移入官方API helper；同时核实际调用和helper，不能仅出现未调用的同名文本。
+ expect(source).toContain('handle.evaluate(resizeQueryLayoutNativeViewport,');expect(viewportSource).toContain('window.setContentSize(Math.ceil(input.width * scale), Math.ceil(input.height * scale))');expect(source).toContain('expect(disk.schema).toBe(8)');expect(source).toContain('await run.close(first)');expect(source).toContain('await run.close(second); await run.finish()');
 });
