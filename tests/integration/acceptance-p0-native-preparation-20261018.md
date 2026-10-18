@@ -25,3 +25,19 @@ Root七个相关文件122项一次通过，类型检查退出0。没有加载项
 `run1616`只执行了一次正式Windows源码离线缩进用例：0通过、1失败、0重试，约4.5秒，尚未进入缩进业务UI。首次native launch后、firstWindow准备前，runtime的实际主进程/metrics PID守卫拒绝；原异常没有逐项记录actual/expected，不能据此判断是PID错配、空metrics或暂态无效值，更不能宣称产品缩进缺陷。作者继续静态定位及补足必要诊断。原JSON SHA256 `051b7c4e7526581d458a683f45e92721b54d6eb2c734cbc868b50a26a7c37499`，stderr为空。
 
 原附件记录本例临时目录及一个已取得的主PID，未确认will-quit/close/正常退出，目录保留；随后观察未发现DBArk/Electron进程，不能以此补写正常退出成功。本控制器没有强停、自动重试或删除目录。未读取数据库凭据、连接200、执行SQL或使用系统剪贴板。新GUI增量未纳入91e3三平台统计；仍需修正后真实源码/安装及macOS专用验收。
+
+## Windows启动器与观察PID的后续修正
+
+本机锁定Playwright1.64.0的实现将Windows Electron命令交给shell，`application.process()`返回该启动器ChildProcess；不能与Electron内的`process.pid`直接判等。作者ae800bd对应Rootf6ed33b，分别封存launcher/main，并将完整metrics及renderer证明放到窗口准备后的有界采样；增加actual/expected诊断。不能用该静态根因回填run1616缺失的实际观测。
+
+独审11项为9绿2红，属于一个P2：来源漂移仍正确拒绝，但新观察的正main/renderer PID可能在拒绝前漏登资源线索。原红交接SHA256 `917f3661eb4c36bc282217b585d5193168cf28d9b4765f6392b7b5a397587bf4`。作者557344a对应Root `918e1d9a5ef213abb9b12e700ef9c6ff2a6ba093`，先留存原句柄返回的正安全整数PID，再核原期限及来源；集合不参与认证，不允许因此继续操作、退出、探测、清理或终止候选PID。诊断最多12条，历史PID集合仍只增不减。
+
+原审者窄复核5项全绿（原两红及三个必要对照），原红字节及断言保持，没有重跑其它原九绿，交接SHA256 `a0ad1d9ea93ef50560af087e4b8bf34ee7db9ef624d9fb0a7f4432f297b91064`。Root在918e1d9对runtime及旧DDL夹具两个完整文件一次63项通过、类型退出0；日志 `run1626-native-pid-retention-integration/stdout.log` SHA256 `eee9d798448413904a83a4cad6cb1b067fb9cfdb35e9ab6f4cfdd0e88d8850d8`。产品/脚本/包与25da相同，继续核同一112文件编译清单，没有重复构建。
+
+## 第二次正式尝试的实际边界
+
+固定918e1d9的run1627只执行一次、0重试：约12.7秒，0通过/1失败。已实际通过launcher/main父子关系、准确编译路径及窗口来源检查：launcher28104、main55040、父PID28104，window1/webContents1/renderer14668与metrics相互对应。该实际证据不代表其它平台或安装包。
+
+随后在偏好切换前的初始文本写入等待失败：多行`keyboard.insertText`在已有前导Tab的注释后给65行滚动注释增加两个空格；原SELECT精度文本、船形字符和原Tab仍在。种子期望与真实编辑器自动缩进行为不一致，不能据此认定偏好热更修改了正文。作者继续追锁定Monaco输入源码并修正键盘种子，原结果不删除。原JSON SHA256 `060df7fc99dd6b8f15e140f20341fbd8ea3649cf9531c1fc6ed31bdb150f5cc6`，stderr为空。
+
+原附件保留本例目录、五个已观察PID及完整来源诊断，没有will-quit/close/正常退出证明，目录不清理；随后未观察到DBArk/Electron进程，仍不能补写正常退出成功。本次没有读数据库凭据、连接200、执行SQL、动剪贴板、运行安装器或发布版本；原生功能与资源闭合继续验收。
