@@ -7,6 +7,7 @@ import { TablePresetSources } from '../../src/main/tablePresets';
 import { validateCommand } from '../../src/shared/validation';
 import { SavedQuerySearchCancelled } from '../../src/main/savedQuerySearch';
 import { QueryFileSources } from '../../src/main/queryFileSources';
+import { QueryInsertExports } from '../../src/main/queryInsertExports';
 
 /** 可控等待只替换broker物理边界，真实Main dispatch/helper/IPC保持原文。 */
 export function deferred<T = any>() { let resolve!: (value: T) => void, reject!: (error: Error) => void; const promise = new Promise<T>((yes, no) => { resolve = yes; reject = no; }); return { promise, resolve, reject }; }
@@ -80,6 +81,12 @@ export function mainColumnsHarness() {
     connectionRevision: () => revision, assertAvailable: id => context.connectionConfig.assertAvailable(id), shuttingDown: () => context.shuttingDown,
     release: input => request('schema.columns.release', input) });
   context.columnsMain = capabilities;
+  // 新Main wrapper/窗口监听读取真实INSERT归属表；初始无文件能力，不能以noop跳过撤销。
+  context.queryInsertExports = new QueryInsertExports(context.files, {
+    assert: value => capabilities.assertCapturedOwner(value), same: (left, right) => capabilities.sharesDocumentOwner(left, right),
+    revision: () => context.store.connectionRevision(), session: id => context.sessions.get(id), closing: () => context.shuttingDown,
+    stop: async taskId => { const preparing = context.preparingTasks.get(taskId); if (preparing) { preparing.cancelled = true; return; } return request('query.cancel', { taskId }); }
+  });
   // 导航和销毁执行原失效/取消函数；来源授权沿用同一真实owner，不能用空函数跳过。
   context.tablePresetSources = new TablePresetSources({ assert: value => capabilities.assertCapturedOwner(value), same: (left, right) => capabilities.sharesDocumentOwner(left, right) });
   runInContext(ts.transpileModule(productionParts(), { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText, context);
