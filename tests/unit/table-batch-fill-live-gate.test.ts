@@ -92,7 +92,8 @@ it('真实正式模块仅注册两例并交付严格准备门，不启动窗口�
   const exports: Record<string, any> = {};
   const live = readFileSync(new URL('../e2e/table-batch-fill-live.ts', import.meta.url), 'utf8');
   runInNewContext(compile(live), { exports, require(name: string) {
-    if (name === 'mysql2/promise') return { default: { createConnection: forbidden } };
+    if (name === 'mysql2') return { default: { createConnection: forbidden } };
+    if (name === '../../src/engine/connection') return { closeMysqlConnection: forbidden };
     if (name === './desktop-fixture') return { test, expect, ownedDesktopResources: forbidden, retainOwnedDesktopResources: forbidden };
     if (name === './live-helpers') return { environment: { ...env }, isolatedDatabase: forbidden };
     if (name === '../helpers/tableBatchFillLive') return { batchFillCaseNames, BatchFillPreparation };

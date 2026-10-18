@@ -11,7 +11,7 @@
 
 ## Root 未来运行前提
 
-本轮没有获得实际运行许可，也没有执行以下命令。Root 先独立核对 `deve-server.yinzon.com` 对应实际200服务器和隔离 MySQL 8.0 服务身份，再确认 `192.168.31.200:13384` 及本轮服务器 UUID。这里只准备这一准确目标；不自动改端口、开启TLS/SSH、建容器或退回其他服务。作者没有访问服务器、Docker、GUI、端口或系统剪贴板。
+本轮没有获得实际运行许可，也没有执行以下命令。Root 先独立核对 `deve-server.yinzon.com` 对应实际200服务器和隔离 MySQL 8.4 服务身份，再确认 `192.168.31.200:13384` 及本轮服务器 UUID。这里只准备这一准确目标；不自动改端口、开启TLS/SSH、建容器或退回其他服务。作者没有访问服务器、Docker、GUI、端口或系统剪贴板。
 
 在 Root 新整合分支完成必要类型检查和源码构建后，从该构建目录执行，采用正式 Electron／Playwright 窗口。当前专项只接收源码构建模式，不声称安装产物验收，不接受 `DBARK_DEV_URL` 或 `DBARK_EXECUTABLE_PATH`。正式 `desktop-fixture` 每例分配独立用户配置目录，不注入 renderer store/model，也不直接调用 `table.preview`、`table.apply` 代替用户入口。
 
@@ -41,14 +41,20 @@ node node_modules/@playwright/test/cli.js test tests/e2e/table-batch-fill.spec.t
 
 ## 资源归属、清理与停链
 
-本例在任何建库前建立一条只读探针，核实际 `@@server_uuid` 与 MySQL 8版本后关闭；原隔离fixture另持一个观察连接，进入表级准备前再次核 UUID。建库和连接建立沿 `live-helpers.isolatedDatabase` 的真实连接表单及准确建库确认流程；观察连接只创建本例表／三行、执行快照，以及第二例的一次明确外改。
+本例在任何建库前建立一条只读探针。探针先同步登记 mysql2 原生连接和原流，再通过同一连接的 Promise 包装读取身份；核实际 `@@server_uuid` 与 MySQL 8版本后，使用既有 `closeMysqlConnection(native, true)` 严格关闭并要求原 `stream.closed === true`。建连晚回包后即使期限／归属门已失效，仍关闭自己登记的原句柄；未建连成功的失败走该函数的 broken 路径，不发送无效QUIT。原流被替换或关闭未确认均报错，不以新连接追认。该关闭证明是本地原流关闭，不把COM_QUIT当作服务器ACK。
 
-成功后由原严格隔离fixture先确认本例 Electron 的退出及所属进程消失，再 `DROP DATABASE` 本例随机库并从 `information_schema.SCHEMATA` 核不存在，最后关闭观察连接。所属临时用户目录由原桌面fixture限定为系统临时目录的 `dbark-e2e-*` 后删除。每例只清理自己随机库与配置目录；不会触碰引擎测试库、其他成员资源或旧 run1556。两例成功时总共创建／删除两个随机库及两张表。
+原隔离fixture另持一个观察连接，进入表级准备前再次核 UUID。建库和连接建立沿 `live-helpers.isolatedDatabase` 的真实连接表单及准确建库确认流程；观察连接只创建本例表／三行、执行快照，以及第二例的一次明确外改。
 
-每次 UI／数据库 await 前后核原目标、原 TestInfo 期限和本例桌面归属。任何断言失败、目标漂移、未知事务／退出／清理结果或迟到回包均停链；正文失败先标记 `retainOwnedDesktopResources`，原fixture不继续退出、删库或强制杀进程。现场保留时由 Root 根据本例配置目录和实际随机库人工核对处理，不扩大清理范围；串行下一例不继续使用失败现场。不输出本轮凭据。
+成功后由原严格隔离fixture先确认本例 Electron 的退出及所属进程消失，再 `DROP DATABASE` 本例随机库并从 `information_schema.SCHEMATA` 核不存在，最后等待原观察连接的 `observer.end()` Promise。该旧观察连接没有新增原物理流close证明，不能与本次严格探针关闭混称。所属临时用户目录由原桌面fixture限定为系统临时目录的 `dbark-e2e-*` 后删除。每例只清理自己随机库与配置目录；不会触碰引擎测试库、其他成员资源或旧 run1556。两例成功时总共创建／删除两个随机库及两张表。
+
+新120秒门覆盖桌面准备hook以及本专项正文中 `checked()` 包围的UI／数据库等待；探针建连后也先核此门，失效则跳过正文并严格收尾原句柄。正文检测到断言失败、目标漂移、期限或归属失效时先标记 `retainOwnedDesktopResources`，原fixture随后停止自动退出、删库及强杀，串行后例不继续复用失败现场。
+
+共享 `live-helpers` 本轮不改：它自己的建连、连接／建库表单以及退出／删库／观察连接end等待只沿既有owner门，没有逐await调用新Preparation或目标绑定门；其正文之外的准备失败也不保证已提前retain。外层返回后的期限检查只能发现已经发生的迟到，不能追溯阻止此前清理。因此不能声称整个helper链均消费新120秒门，或所有准备／收尾失败都保留全部现场。现场确实保留时由 Root 根据本例配置目录和随机库人工核对处理，不扩大清理范围，也不输出本轮凭据。
 
 ## 本轮验证与未验边界
 
 仅运行 `tests/unit/table-batch-fill-live-gate.test.ts`：46项 RAM 对照通过。它们证明默认／单门／列表不加载实跑模块，明确参数才注册正式用例，拒绝旧目标、原型／访问器回填，观察到漂移或原期限失效后不会复活；真实正式注册器也在VM中核对为两例、串行、无重试和严格准备门，原生及数据库端口均为禁止调用的哨兵。这不证明两个 UI 用例或数据库业务验收通过。
+
+探针最小修正后，仅重跑受影响门控46项和新增 `table-batch-fill-probe-close.test.ts` 的3项，共49项通过。新增对照提取专项真实函数，使用真实mysql2与内存Duplex核正常QUIT／原流close、建连晚回包后仍收尾原句柄，以及握手失败走broken路径；没有联网或替换end/destroy结果。直接VM夹具补充了新增原生mysql2和既有关闭函数的禁止调用端口。没有重跑全量、类型或构建。
 
 尚未运行正式 Playwright（含列表）、真实200／数据库／GUI、类型检查、构建或完整套件；未推送。选择器、实际服务器、事务回执和退出清理仍须 Root 在新整合提交上实际核验。本准备没有更改任何 Main／engine 合同。原旧 run1556 仍不执行，也不绕过其门控。

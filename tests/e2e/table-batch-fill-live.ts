@@ -1,5 +1,7 @@
-import mysql, { type RowDataPacket, type ResultSetHeader } from 'mysql2/promise';
+import mysql, { type ConnectionOptions } from 'mysql2';
+import type { Connection as PromiseConnection, RowDataPacket, ResultSetHeader } from 'mysql2/promise';
 import type { Locator, TestInfo } from '@playwright/test';
+import { closeMysqlConnection } from '../../src/engine/connection';
 import { test, expect, ownedDesktopResources, retainOwnedDesktopResources } from './desktop-fixture';
 import { environment, isolatedDatabase } from './live-helpers';
 import { batchFillCaseNames, BatchFillPreparation, type BatchFillTarget } from '../helpers/tableBatchFillLive';
@@ -9,6 +11,35 @@ import { draftHistoryZh as history } from '../../src/renderer/locales/draftHisto
 import { zh, formatText } from '../../src/renderer/locales/zh-CN';
 
 interface Snapshot extends RowDataPacket { id: string; code: string; note: string | null; big_value: string; amount: string; stamp: string; payload: string; doc: string; }
+// mysql2公开Promise类型未声明运行时持有的原生连接，单独补充只读归属端口。
+type ProbeObserver = PromiseConnection & { readonly connection: Parameters<typeof closeMysqlConnection>[0] };
+
+/** 首次等待前登记原生连接与原流；即使建连晚回包或期限失效，也只收尾自己的原句柄。 */
+export async function withBatchFillProbe(options: ConnectionOptions, current: () => void, body: (observer: PromiseConnection) => Promise<void>): Promise<void> {
+  current();
+  const native = mysql.createConnection(options), stream = (native as unknown as { stream?: { closed?: boolean } }).stream;
+  let observer: ProbeObserver | undefined, connected = false, failure: { reason: unknown } | undefined;
+  try {
+    if (!stream) throw Error('批量填充探针缺少原物理流');
+    observer = native.promise() as ProbeObserver;
+    if (observer.connection !== native) throw Error('批量填充探针包装不属于原连接');
+    await new Promise<void>((resolve, reject) => native.connect(error => error ? reject(error) : resolve()));
+    connected = true; current();
+    await body(observer); current();
+  } catch (reason) { failure = { reason }; throw reason; }
+  finally {
+    try {
+      // 关闭不再受已失效的正文门拦截；原对象若被替换则保留现场，不能关闭替代连接。
+      if (stream && (native as unknown as { stream?: unknown }).stream !== stream) throw Error('批量填充探针原流已替换');
+      await closeMysqlConnection(native, true, !connected);
+      if (!stream || stream.closed !== true || (native as unknown as { stream?: unknown }).stream !== stream || observer && observer.connection !== native) throw Error('批量填充探针原流关闭未确认');
+    } catch (closeFailure) {
+      if (failure) throw new AggregateError([failure.reason, closeFailure], '批量填充预检失败且原探针关闭未确认', { cause: failure.reason });
+      throw closeFailure;
+    }
+  }
+  current();
+}
 
 /** 仅双门实跑时加载；沿原隔离库、真实表单和原preview/apply事务，不替换产品接口。 */
 export function registerTableBatchFill(binding: BatchFillTarget): void {
@@ -45,11 +76,10 @@ export function registerTableBatchFill(binding: BatchFillTarget): void {
     /** 在原fixture创建任何库之前核实际服务器；探针只读，不创建或删除资源。 */
     async function preflight() {
       const { host, port, user, password } = binding.target;
-      const observer = await checked(() => mysql.createConnection({ host, port, user, password, charset: 'utf8mb4', connectTimeout: 15000 }));
-      try {
+      await withBatchFillProbe({ host, port, user, password, charset: 'utf8mb4', connectTimeout: 15000 }, current, async observer => {
         const [rows] = await checked(() => observer.query<RowDataPacket[]>('SELECT @@server_uuid AS uuid, @@version AS version'));
         await checked(async () => { expect(rows).toHaveLength(1); expect(rows[0].uuid).toBe(binding.target.uuid); expect(rows[0].version).toMatch(/^8\./); });
-      } finally { await observer.end(); }
+      });
     }
     try {
       await preflight(); current();
