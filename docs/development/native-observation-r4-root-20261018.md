@@ -19,3 +19,9 @@ Windows 原历史分页目标的退出观察作者 `cae47894bd7a566bcae10f723e9f
 固定 `244006ae09f82893df23362de74b3b90f6fe4829` 的 12 个相关文件、168 项通过、0 失败、0 跳过，全项目类型检查退出码 0。命令为 `node .cache/run1754-verify-native-observations-root.mjs`，原 unit.log SHA-256 为 `80d1791774343d7a332bf8ea66ea5373c8315dfdec39724cb4a63b4eb3b4e147`。关闭环境文件、使用私有 TEMP/TMP；未启动本机 Electron、GUI、数据库、Docker、服务、端口或剪贴板。
 
 相对 `09c33b2` 的产品 src、构建脚本、版本、锁文件与工作流逐字不变。后续使用新普通克隆、新检查点分支和新绑定开展第四轮；旧第三轮读取器、绑定、解包数据与错误保持。第四轮证据读取器先离线验证新 waits 与退出附件合同，再接收新运行产物；当前本记录尚无第四轮运行结果。
+
+## 新检查点已经启动
+
+新普通克隆 `native-checkpoint-v023-waits-20261018` 固定头 `9057178829b892b6e820337e1b8341ba6e548758`，源 `11969a9ff5da5ab5147efd1303dcc95b1b21f21a`；唯一新增文件为检查点 JSON。新 [运行 39106267172](https://github.com/zhao-yc/DBArk/actions/runs/39106267172) 已开始，Windows x64、macOS arm64／x64 按原工作流独立执行。没有重跑旧运行、访问本机界面、私网数据库或剪贴板，也不发布产品；尚未得到终态或平台附件。
+
+读取器 SHA-256 `b957a49b5757d8659df533a99143b84faaf2bc1834565397f752523fb68edb63` 已通读接收，Root 两个手工 R4 对照通过：零 owner 的等待点可读，坏 Base64 拒绝但原超时及错误摘要保留。明确标记 R3 的真实 arm 原已验归档兼容读取成功，21 个 JSON、3 个观察附件，原失败保留；没有将旧 head／run 作为 R4。Root 接收 JSON 摘要为 `5c26fa79584a6d43dfc745c2aa4b88983cafa2bfa2f60f366cad92b1aee788aa`。读取器接收不代表原生验收通过，新平台附件仍须各自下载、摘要、CRC 和固定绑定后读取。
