@@ -30,10 +30,14 @@ function memoryPair(late = false) {
   const open = vi.fn((options: mysql.ConnectionOptions) => {
     native = mysql.createConnection({ ...options, stream, connectTimeout: 0 }); native.on('error', () => undefined);
     const connect = native.connect.bind(native);
-    vi.spyOn(native, 'connect').mockImplementation(callback => connect(error => {
-      release = () => callback(error);
-      if (late) ready(); else release();
-    }));
+    vi.spyOn(native, 'connect').mockImplementation(callback => {
+      // 内存握手必须接收真实回调；缺失时明确失败，不能静默跳过握手断言。
+      if (!callback) throw Error('内存对端缺少建连回调');
+      return connect(error => {
+        release = () => callback(error);
+        if (late) ready(); else release();
+      });
+    });
     return native;
   });
   return { open, stream, connected, events, release: () => release(), native: () => native, cleanup() { native?.destroy(); stream.destroy(); server.destroy(); serverStream.destroy(); } };
