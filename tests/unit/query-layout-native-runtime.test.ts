@@ -9,6 +9,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { EditorIndentNativeRun, recordIndentNativePageError } from '../e2e/editor-indentation-native-owner';
 import { bindQueryLayoutNativeEnvironment } from '../e2e/query-layout-native-gate';
 import { sealEditorIndentLaunchIdentity } from '../e2e/editor-indentation-native-identity';
+import { observeNativeStartup } from '../e2e/editor-native-startup-diagnostics';
 import { openNativeProgress } from '../../scripts/native-editor-progress.mjs';
 // 原提取夹具未开启诊断；若误开启只能使用显式RAM文件端口，禁止落到真实FS。
 const forbiddenProgressIO = new Proxy({}, { get() { throw Error('原VM夹具未配置RAM阶段文件端口'); } });
@@ -30,8 +31,9 @@ function fixture(mode: '正常' | '无握手关闭' | 'PID权限错误' | '链�
   const preflight = vi.fn(async () => {}), assertCurrent = vi.fn(), removed = vi.fn(async () => { exists = false; });
   const launch = vi.fn(async () => {
     const application = new EventEmitter() as any, runtime = new EventEmitter() as any, page = new EventEmitter() as any;
-    application.runtime = runtime; application.page = page; page.locator = () => ({}); page.url = () => pathToFileURL(join(appPath, 'dist/renderer/index.html')).href; runtime.getAppMetrics = () => [{ pid: 202 }]; runtime.getAppPath = () => appPath; runtime.isPackaged = installed;
-    const window = { id: 1, webContents: { id: 11, getOSProcessId: () => 202, getURL: () => page.url() }, isDestroyed: () => false }, child = { pid: 101 };
+    application.runtime = runtime; application.page = page;
+    const context = new EventEmitter() as any; context.pages = () => [page]; application.context = () => context; page.locator = () => ({}); page.url = () => pathToFileURL(join(appPath, 'dist/renderer/index.html')).href; runtime.getAppMetrics = () => [{ pid: 202 }]; runtime.getAppPath = () => appPath; runtime.isPackaged = installed;
+    const window = { id: 1, webContents: Object.assign(new EventEmitter(), { id: 11, getOSProcessId: () => 202, getURL: () => page.url() }), isDestroyed: () => false }, child = { pid: 101 };
     runtime.quit = () => { if (mode === '无握手关闭') application.emit('close'); else runtime.emit('will-quit'); };
     application.evaluate = async (fn: Function, arg: unknown) => fn({ app: runtime, BrowserWindow: { getAllWindows: () => [window] } }, arg); application.firstWindow = async () => page; application.process = () => child; application.browserWindow = async (value: unknown) => { expect(value).toBe(page); return { evaluate: async (fn: Function) => fn(window) }; };
     application.waitForEvent = () => new Promise(done => application.once('close', done)); application.close = vi.fn(async () => { expect(runtime.listenerCount('will-quit')).toBe(0); application.emit('close'); }); applications.push(application); applicationHook(application); return application;
@@ -40,13 +42,13 @@ function fixture(mode: '正常' | '无握手关闭' | 'PID权限错误' | '链�
   // 有限RAM采样模拟指标稍后就绪，不启动计时器、进程、窗口或系统探测。
   const poll = (read: () => unknown) => ({ toEqual: async (value: unknown) => expect(await read()).toEqual(value), toBe: async (value: unknown) => { let actual: unknown; for (let attempt = 0; attempt < 3; attempt++) { actual = await read(); if (actual === value) return; } expect(actual).toBe(value); } });
   const nativeExpect = Object.assign(() => ({ toBeVisible: async () => {} }), { poll });
-  const context: any = { exports: {}, openNativeProgress: (options: any) => openNativeProgress(options, forbiddenProgressIO), EditorIndentNativeRun, recordIndentNativePageError, sealEditorIndentLaunchIdentity, expect: nativeExpect, electron: { launch }, requireIndentOfflinePort: preflight, randomUUID: () => 'RAM-marker', WeakMap, Set, URL, fileURLToPath, dirname, basename, resolve, join, __dirname: join(project, 'tests/e2e'), tmpdir: () => parent,
+  const context: any = { exports: {}, openNativeProgress: (options: any) => openNativeProgress(options, forbiddenProgressIO), EditorIndentNativeRun, recordIndentNativePageError, observeNativeStartup, sealEditorIndentLaunchIdentity, expect: nativeExpect, electron: { launch }, requireIndentOfflinePort: preflight, randomUUID: () => 'RAM-marker', WeakMap, Set, URL, fileURLToPath, dirname, basename, resolve, join, __dirname: join(project, 'tests/e2e'), tmpdir: () => parent,
     realpath: async (path: string) => path, mkdtemp: async () => { exists = true; return directory; }, lstat: async (path: string) => {
       if (path === directory) { ownedStats++; if (ownedStats === blocked) { entered(); await waiting; } if (!exists) throw Object.assign(Error('不存在'), { code: 'ENOENT' }); return { isFile: () => false, isDirectory: () => true, isSymbolicLink: () => mode === '链接目录' }; }
       const file = bytes.has(path), dir = [root, resources, ...[...bytes.keys()].flatMap(path => { const names: string[] = []; while (dirname(path) !== path) { path = dirname(path); names.push(path); } return names; })].includes(path);
       if (!file && !dir) throw Object.assign(Error('不存在'), { code: 'ENOENT' }); return { isFile: () => file, isDirectory: () => dir && !file, isSymbolicLink: () => false };
     }, readdir: async (path: string) => [...new Set([...bytes.keys()].filter(name => name.startsWith(path + (process.platform === 'win32' ? '\\' : '/'))).map(name => name.slice(path.length + 1).split(/[\\/]/)[0]))], readFile: async (path: string) => { if (!bytes.has(path)) throw Error('RAM未知文件'); return bytes.get(path)!; }, rm: removed,
-    process: { env: environment, pid: platform === 'win32' ? 303 : 101, ppid: 101, platform, execPath: exe, resourcesPath: resources, kill: probe }, setTimeout: (callback: () => void) => callback(), console: { log: (message: string) => applications.at(-1).emit('console', { text: () => message }) },
+    process: { env: environment, pid: platform === 'win32' ? 303 : 101, ppid: 101, platform, execPath: exe, resourcesPath: resources, kill: probe }, setTimeout: (callback: () => void) => callback(), console: { log: (message: string) => applications.at(-1).emit('console', { type: () => 'log', text: () => message }) },
   };
   const approval = layout ? { manifestPath: platform === 'darwin' ? '/RAM-layout-approved.json' : manifestPath, approvedHash: wrongHash ? 'b'.repeat(64) : environment.DBARK_EDITOR_INDENT_MANIFEST_SHA256! } : undefined;
   if (layout) {

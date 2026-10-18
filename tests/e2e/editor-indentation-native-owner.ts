@@ -1,4 +1,5 @@
 import type { ElectronApplication, Page } from '@playwright/test';
+import type { NativeStartupDiagnostic } from './editor-native-startup-diagnostics';
 
 /** 附件只保留本次失败需要的数字身份，不记录路径、URL、参数、环境或页面内容。 */
 export interface IndentNativeSourceDiagnostic {
@@ -6,7 +7,7 @@ export interface IndentNativeSourceDiagnostic {
   expected: { launcherPid: number; mainPid?: number; platform: string; relation: '启动器父进程' | '同一进程'; window?: { id: number; contents: number } };
   observed: { mainPid: number; parentPid: number; platform: string; metrics: number[]; window?: { id: number; contents: number; renderer: number; destroyed: boolean } };
 }
-export interface IndentNativeOwner { application: ElectronApplication; page: Page; ids: Set<number>; closed: boolean; confirmed: boolean; ready: boolean; errors: string[]; quitReady: Promise<void>; sourceDiagnostics?: IndentNativeSourceDiagnostic[]; pageErrors?: { name: string; message: string; stack?: string }[]; }
+export interface IndentNativeOwner { application: ElectronApplication; page: Page; ids: Set<number>; closed: boolean; confirmed: boolean; ready: boolean; errors: string[]; quitReady: Promise<void>; sourceDiagnostics?: IndentNativeSourceDiagnostic[]; startupDiagnostics?: NativeStartupDiagnostic; pageErrors?: { name: string; message: string; stack?: string }[]; }
 /** 保留原错误名称拒绝门，同时把原message/stack带进失败附件；Canceled也照常使原断言失败。 */
 export function recordIndentNativePageError(owner: Pick<IndentNativeOwner, 'errors' | 'pageErrors'>, error: Error): void {
   owner.errors.push(error.name);

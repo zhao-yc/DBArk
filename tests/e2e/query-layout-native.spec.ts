@@ -15,8 +15,13 @@ test.skip(!active, '默认关闭：Root批准后才可开启DBARK_QUERY_LAYOUT_N
 test.use({ trace: 'off', screenshot: 'off', video: 'off' });
 test.describe.configure({ mode: 'serial', retries: 0, timeout: 120000 });
 const cases = new WeakMap<TestInfo, ReturnType<typeof bindEditorIndentNativeCase>>();
+const startupRuns = new WeakMap<TestInfo, EditorIndentNativeRun>();
 // 复用原TestInfo/原120秒期限；用例结束留下墓碑，迟到动作不得再次领取资源。
-test.afterEach(({}, info) => { cases.get(info)?.retain(); });
+test.afterEach(async ({}, info) => {
+  cases.get(info)?.retain();
+  // 原期限结束后只附加已收集的内存，不再访问SDK或资源；错误由框架保留。
+  const run = startupRuns.get(info); if (run) await runtime!.attachNativeStartupDiagnostics(info, run);
+});
 const modifier = process.platform === 'darwin' ? 'Meta' : 'Control';
 const bottom = process.platform === 'darwin' ? 'Meta+ArrowDown' : 'Control+End';
 const redo = process.platform === 'darwin' ? 'Meta+Shift+z' : 'Control+y';
@@ -144,7 +149,7 @@ async function noExecution(run: EditorIndentNativeRun, owner: IndentNativeOwner)
 test('离线原生分栏：两查询独立拖动/键盘、取消/默认、视觉夹取、原模型历史及SQLite独立重启', async ({ trace, screenshot, video }, info: TestInfo) => {
   expect(trace).toBe('off'); expect(screenshot).toBe('off'); expect(video).toBe('off');
   const scope = bindEditorIndentNativeCase(info, binding!, () => test.info()); cases.set(info, scope); scope.assertCurrent();
-  const run = runtime!.createEditorIndentNativeRun(scope, approval!);
+  const run = runtime!.createEditorIndentNativeRun(scope, approval!); startupRuns.set(info, run);
   try {
     const first = await run.launch(); await observe(run, first); await resize(run, first, 1400, 1000); await prepareQuery(run, first);
     const a = (await settings(run, first)).activeTabId!; expect(a).toBeTruthy(); const originalA = await seed(run, first, '分栏A');

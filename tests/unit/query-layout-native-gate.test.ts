@@ -1,3 +1,4 @@
+import { attachNativeStartupDiagnostics } from '../e2e/editor-native-startup-diagnostics';
 import {readFileSync} from 'node:fs';
 import {runInNewContext} from 'node:vm';
 import ts from 'typescript';
@@ -13,7 +14,7 @@ const allowed=()=>({DBARK_QUERY_LAYOUT_NATIVE_TEST:'1',DBARK_INTEGRATION_ENABLED
 function declaration(env:NodeJS.ProcessEnv,args:string[]=[],create=vi.fn(()=>{throw Error('未提供RAM runtime');}),info:any={_startWallTime:0,timeout:120000,status:'passed',attach:vi.fn(async()=>{})},clock={now:0}){
  const callbacks:Function[]=[],hooks:Function[]=[],modules:string[]=[],skip=vi.fn(),use=vi.fn(),configure=vi.fn();const test=Object.assign((_title:string,body:Function)=>callbacks.push(body),{skip,use,afterEach:(fn:Function)=>hooks.push(fn),info:()=>info,describe:{configure}});
  // 场景helper是无顶层资源操作的真实纯模块；窗口/文件/网络仍不能在声明阶段取得。
- const require=(name:string)=>{modules.push(name);if(name==='@playwright/test')return {test,expect};if(name==='./query-layout-native-gate')return gate;if(name==='./query-layout-native-viewport')return viewport;if(name==='./editor-indentation-native-gate')return {bindEditorIndentNativeCase:(original:any,environment:any,current:any)=>bindEditorIndentNativeCase(original,environment,current,()=>clock.now)};if(name==='./editor-indentation-native-runtime')return {createEditorIndentNativeRun:create};if(name.includes('/locales/'))return {};throw Error('不允许加载模块:'+name);};
+ const require=(name:string)=>{modules.push(name);if(name==='@playwright/test')return {test,expect};if(name==='./query-layout-native-gate')return gate;if(name==='./query-layout-native-viewport')return viewport;if(name==='./editor-indentation-native-gate')return {bindEditorIndentNativeCase:(original:any,environment:any,current:any)=>bindEditorIndentNativeCase(original,environment,current,()=>clock.now)};if(name==='./editor-indentation-native-runtime')return {attachNativeStartupDiagnostics,createEditorIndentNativeRun:create};if(name.includes('/locales/'))return {};throw Error('不允许加载模块:'+name);};
  runInNewContext(ts.transpileModule(source,{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS}}).outputText,{exports:{},require,process:{env,argv:args,platform:'win32'},WeakMap,Buffer,Error,AggregateError});return {callbacks,hooks,modules,skip,use,configure,create,info,clock};
 }
 it('默认关闭和RAM模拟list均只登记一例，脏环境不加载runtime/owner/native模块',()=>{

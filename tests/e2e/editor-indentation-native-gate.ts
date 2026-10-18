@@ -34,14 +34,19 @@ export function bindEditorIndentNativeCase(info: IndentNativeTestInfo, environme
   const internal = Object.hasOwn(info, '_startWallTime'), startObject = info.startTime;
   const readStart = () => internal ? typeof info._startWallTime === 'number' ? info._startWallTime : NaN : info.startTime instanceof Date ? Number(info.startTime) : NaN;
   const start = readStart(), timeout = info.timeout, deadline = start + 120000;
-  let retained = false, previous = now();
+  let retained = false, previous = now(), observedElapsed: number | undefined;
   return {
     retain() { retained = true; },
+    /** 只返回最近原门已验证的相对毫秒，不读取新时钟、不授予资源权限。 */
+    elapsedMs(): number | undefined {
+      const elapsed = observedElapsed;
+      return elapsed !== undefined && Number.isSafeInteger(elapsed) && elapsed >= 0 && elapsed < 120000 ? elapsed : undefined;
+    },
     assertCurrent() {
       try {
         environment.assertCurrent(); const instant = now();
         if (retained || currentInfo() !== info || Object.hasOwn(info, '_startWallTime') !== internal || info.startTime !== startObject || readStart() !== start || timeout !== 120000 || info.timeout !== timeout || !Number.isFinite(start) || !Number.isFinite(instant) || instant < start || instant < previous || instant >= deadline || info.status !== undefined && info.status !== 'passed') throw Error('缩进原生专项原TestInfo/期限已失效，保留资源');
-        previous = instant;
+        previous = instant; observedElapsed = instant - start;
       } catch (reason) { retained = true; throw reason; }
     },
   };

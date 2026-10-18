@@ -1,3 +1,4 @@
+import { attachNativeStartupDiagnostics } from '../e2e/editor-native-startup-diagnostics';
 import { readFileSync } from 'node:fs';
 import { runInNewContext } from 'node:vm';
 import ts from 'typescript';
@@ -13,7 +14,7 @@ function declare(env: NodeJS.ProcessEnv, args: string[]) {
   const require = vi.fn((name: string) => {
     if (name === '@playwright/test') return { test, expect };
     if (name === './editor-indentation-native-gate') return gate;
-    if (name === './editor-indentation-native-runtime') return { createEditorIndentNativeRun: create };
+    if (name === './editor-indentation-native-runtime') return { attachNativeStartupDiagnostics, createEditorIndentNativeRun: create };
     if (name.includes('/locales/')) return {};
     throw Error('声明阶段禁止加载原生模块：' + name);
   });
@@ -70,7 +71,7 @@ describe('修复复核：原spec期限/afterEach及独审UI断言缺口', () => 
     const require = (name: string) => {
       if (name === '@playwright/test') return { test, expect };
       if (name === './editor-indentation-native-gate') return { ...gate, bindEditorIndentNativeCase: (value: gate.IndentNativeTestInfo, environment: { assertCurrent(): void }, current: () => gate.IndentNativeTestInfo) => gate.bindEditorIndentNativeCase(value, environment, current, () => now) };
-      if (name === './editor-indentation-native-runtime') return { createEditorIndentNativeRun: (scope: { assertCurrent(): void }) => { port.assertCurrent = () => scope.assertCurrent(); return run; } };
+      if (name === './editor-indentation-native-runtime') return { attachNativeStartupDiagnostics, createEditorIndentNativeRun: (scope: { assertCurrent(): void }) => { port.assertCurrent = () => scope.assertCurrent(); return run; } };
       if (name.includes('/locales/')) return {}; throw Error('禁止原生模块');
     };
     runInNewContext(ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText, { exports: {}, require, process: { env: allowed(), argv: [], platform: 'win32' }, Buffer, AggregateError });

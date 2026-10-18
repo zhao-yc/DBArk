@@ -9,6 +9,8 @@ import type { AppSettings } from '../../src/shared/contracts';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 import { EditorIndentNativeRun, recordIndentNativePageError, type IndentNativeOwner, type IndentNativeSourceDiagnostic } from './editor-indentation-native-owner';
+import { observeNativeStartup } from './editor-native-startup-diagnostics';
+export { attachNativeStartupDiagnostics } from './editor-native-startup-diagnostics';
 import { sealEditorIndentLaunchIdentity } from './editor-indentation-native-identity';
 import { openNativeProgress, type NativeProgressStage, type NativeProgressWriter } from '../../scripts/native-editor-progress.mjs';
 
@@ -24,11 +26,11 @@ export async function readIndentNativeSettings(path: string, guard: () => void):
   finally { db.close(); }
 }
 /** 原生适配器所有资源await/副作用共享run+原TestInfo门，入口身份只取Root批准清单。 */
-export function createEditorIndentNativeRun(binding: { assertCurrent(): void }, approval?: { manifestPath: string; approvedHash: string }): EditorIndentNativeRun {
+export function createEditorIndentNativeRun(binding: { assertCurrent(): void; elapsedMs?(): number | undefined }, approval?: { manifestPath: string; approvedHash: string }): EditorIndentNativeRun {
   // 新专项可显式传Root批准清单；未传时保留原环境读取路径，不伪造旧专项开关。
   const explicitApproval = approval && Object.freeze({ manifestPath: approval.manifestPath, approvedHash: approval.approvedHash });
   let parent = '', run!: EditorIndentNativeRun, identity: Awaited<ReturnType<typeof sealEditorIndentLaunchIdentity>> | undefined;
-  const captured = new WeakMap<IndentNativeOwner, { application: IndentNativeOwner['application']; child: ReturnType<IndentNativeOwner['application']['process']>; launcher: number; main?: number; page?: IndentNativeOwner['page']; marker: string; window?: { id: number; contents: number }; pids: Set<number>; quitting: boolean; closed: boolean; willQuit: boolean }>();
+  const captured = new WeakMap<IndentNativeOwner, { application: IndentNativeOwner['application']; child: ReturnType<IndentNativeOwner['application']['process']>; launcher: number; main?: number; page?: IndentNativeOwner['page']; marker: string; window?: { id: number; contents: number }; pids: Set<number>; quitting: boolean; closed: boolean; willQuit: boolean; startup?: ReturnType<typeof observeNativeStartup> }>();
   /** 只做同步归属检查；run.assert再叠加sticky retained，避免递归调用授权门。 */
   function base(owner?: IndentNativeOwner) {
     binding.assertCurrent(); if (!owner) return;
@@ -125,22 +127,44 @@ export function createEditorIndentNativeRun(binding: { assertCurrent(): void }, 
       // 即使原期限在launch等待时结束，也先登记原句柄及主PID，再停链；不能留下未登记实例。
       let ready!: () => void; const child = application.process(), main = child.pid, marker = 'DBARK_INDENT_QUIT:' + randomUUID();
       const owner: IndentNativeOwner = { application, page: undefined!, ids: new Set(main && Number.isSafeInteger(main) ? [main] : []), closed: false, confirmed: false, ready: false, errors: [], sourceDiagnostics: [], quitReady: new Promise(done => { ready = done; }) };
-      const own = { application, child, launcher: main!, marker, pids: new Set(owner.ids), quitting: false, closed: false, willQuit: false };
+      const own: NonNullable<ReturnType<typeof captured.get>> = { application, child, launcher: main!, marker, pids: new Set(owner.ids), quitting: false, closed: false, willQuit: false };
       captured.set(owner, own); run.acquiredOwner(owner);
       // 只认原句柄的真实事件；公共closed/ready不能伪造私有阶段，提前退出立即永久停链。
       application.on('close', () => { own.closed = true; owner.closed = true; if (!own.quitting) run.retained = true; });
       application.on('console', message => { if (message.text() === marker) { own.willQuit = true; owner.ready = true; if (!own.quitting) run.retained = true; ready(); } });
-      guard(owner); phase('launch.returned', owner); if (!Number.isSafeInteger(main) || main! <= 0) throw Error('新应用主PID未知'); await verified(); guard(owner); await source(owner); guard(owner); return owner;
+      guard(owner);
+      if (progressActive) {
+        // 观察权限只查本地身份/原TestInfo，不调用SDK，拒绝后不再写旧case。
+        own.startup = observeNativeStartup(application, () => {
+          binding.assertCurrent();
+          if (run.retained || run.removed || run.owners.at(-1) !== owner || owner.application !== own.application || owner.page !== own.page || own.quitting || own.closed || owner.confirmed) throw Error('启动观察的原owner已失效');
+        }, marker, binding.elapsedMs);
+        owner.startupDiagnostics = own.startup.data;
+      }
+      phase('launch.returned', owner); if (!Number.isSafeInteger(main) || main! <= 0) throw Error('新应用主PID未知'); await verified(); guard(owner); await source(owner); guard(owner); return owner;
     },
     prepare: async owner => {
       guard(owner); const own = captured.get(owner)!;
       phase('prepare.hook', owner);
-      await own.application.evaluate(({ app }, marker) => { app.once('will-quit', () => console.log(marker)); }, own.marker); guard(owner);
+      await own.application.evaluate(({ app, BrowserWindow }, value) => {
+        const marker = typeof value === 'string' ? value : value.marker;
+        app.once('will-quit', () => console.log(marker));
+        if (typeof value !== 'string') {
+          // 仅复用这次原hook RPC；只发固定标记，不读取脚本路径、错误正文或参数。
+          let contents = 0, reports = 0;
+          const watch = (webContents: Electron.WebContents) => {
+            if (contents >= 4) return; contents++;
+            webContents.on('preload-error', () => { if (reports < 32) { reports++; console.log(marker + ':PRELOAD'); } });
+          };
+          BrowserWindow.getAllWindows().forEach(window => watch(window.webContents));
+          app.on('web-contents-created', (_event, webContents) => watch(webContents));
+        }
+      }, progressActive ? { marker: own.marker } : own.marker); guard(owner);
       phase('prepare.window', owner);
-      const page = await own.application.firstWindow(); own.page = page; owner.page = page; guard(owner);
+      const page = await own.application.firstWindow(); own.page = page; owner.page = page; guard(owner); own.startup?.firstWindow(page);
       page.on('pageerror', error => recordIndentNativePageError(owner, error)); guard(owner);
-      phase('prepare.statusbar', owner);
-      await expect(page.locator('.app-statusbar')).toBeVisible({ timeout: 15000 }); guard(owner); phase('prepare.metrics', owner); await source(owner, true); guard(owner); phase('prepare.done', owner);
+      phase('prepare.statusbar', owner); own.startup?.statusbar();
+      await expect(page.locator('.app-statusbar')).toBeVisible({ timeout: 15000 }); guard(owner); phase('prepare.metrics', owner); await source(owner, true); guard(owner); phase('prepare.done', owner); own.startup?.finish();
     },
     record: source,
     quit: async owner => {

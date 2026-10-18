@@ -9,6 +9,7 @@ import ts from 'typescript';
 import { describe, expect, it, vi } from 'vitest';
 import { EditorIndentNativeRun, recordIndentNativePageError } from '../e2e/editor-indentation-native-owner';
 import { sealEditorIndentLaunchIdentity } from '../e2e/editor-indentation-native-identity';
+import { observeNativeStartup, attachNativeStartupDiagnostics } from '../e2e/editor-native-startup-diagnostics';
 import { openNativeProgress } from '../../scripts/native-editor-progress.mjs';
 // 原提取夹具未开启诊断；若误开启只能使用显式RAM文件端口，禁止落到真实FS。
 const forbiddenProgressIO = new Proxy({}, { get() { throw Error('原VM夹具未配置RAM阶段文件端口'); } });
@@ -30,8 +31,9 @@ function fixture(mode: '正常' | '无握手关闭' | 'PID权限错误' | '链�
   const preflight = vi.fn(async () => {}), assertCurrent = vi.fn(), removed = vi.fn(async () => { exists = false; });
   const launch = vi.fn(async () => {
     const application = new EventEmitter() as any, runtime = new EventEmitter() as any, page = new EventEmitter() as any;
-    application.runtime = runtime; application.page = page; page.locator = () => ({}); page.url = () => pathToFileURL(join(appPath, 'dist/renderer/index.html')).href; runtime.getAppMetrics = () => [{ pid: 202 }]; runtime.getAppPath = () => appPath; runtime.isPackaged = installed;
-    const window = { id: 1, webContents: { id: 11, getOSProcessId: () => 202, getURL: () => page.url() }, isDestroyed: () => false }, child = { pid: 101 };
+    application.runtime = runtime; application.page = page;
+    const context = new EventEmitter() as any; context.pages = () => [page]; application.context = () => context; page.locator = () => ({}); page.url = () => pathToFileURL(join(appPath, 'dist/renderer/index.html')).href; runtime.getAppMetrics = () => [{ pid: 202 }]; runtime.getAppPath = () => appPath; runtime.isPackaged = installed;
+    const window = { id: 1, webContents: Object.assign(new EventEmitter(), { id: 11, getOSProcessId: () => 202, getURL: () => page.url() }), isDestroyed: () => false }, child = { pid: 101 };
     runtime.quit = () => { if (mode === '无握手关闭') application.emit('close'); else runtime.emit('will-quit'); };
     application.evaluate = async (fn: Function, arg: unknown) => fn({ app: runtime, BrowserWindow: { getAllWindows: () => [window] } }, arg); application.firstWindow = async () => page; application.process = () => child; application.browserWindow = async (value: unknown) => { expect(value).toBe(page); return { evaluate: async (fn: Function) => fn(window) }; };
     application.waitForEvent = () => new Promise(done => application.once('close', done)); application.close = vi.fn(async () => { expect(runtime.listenerCount('will-quit')).toBe(0); application.emit('close'); }); applications.push(application); applicationHook(application); return application;
@@ -40,13 +42,13 @@ function fixture(mode: '正常' | '无握手关闭' | 'PID权限错误' | '链�
   // 有限RAM采样模拟指标稍后就绪，不启动计时器、进程、窗口或系统探测。
   const poll = (read: () => unknown) => ({ toEqual: async (value: unknown) => expect(await read()).toEqual(value), toBe: async (value: unknown) => { let actual: unknown; for (let attempt = 0; attempt < 3; attempt++) { actual = await read(); if (actual === value) return; } expect(actual).toBe(value); } });
   const nativeExpect = Object.assign(() => ({ toBeVisible: async () => {} }), { poll });
-  const context: any = { exports: {}, openNativeProgress: (options: any) => openNativeProgress(options, forbiddenProgressIO), EditorIndentNativeRun, recordIndentNativePageError, sealEditorIndentLaunchIdentity, expect: nativeExpect, electron: { launch }, requireIndentOfflinePort: preflight, randomUUID: () => 'RAM-marker', WeakMap, Set, URL, fileURLToPath, dirname, basename, resolve, join, __dirname: join(project, 'tests/e2e'), tmpdir: () => parent,
+  const context: any = { exports: {}, openNativeProgress: (options: any) => openNativeProgress(options, forbiddenProgressIO), EditorIndentNativeRun, recordIndentNativePageError, observeNativeStartup, sealEditorIndentLaunchIdentity, expect: nativeExpect, electron: { launch }, requireIndentOfflinePort: preflight, randomUUID: () => 'RAM-marker', WeakMap, Set, URL, fileURLToPath, dirname, basename, resolve, join, __dirname: join(project, 'tests/e2e'), tmpdir: () => parent,
     realpath: async (path: string) => path, mkdtemp: async () => { exists = true; return directory; }, lstat: async (path: string) => {
       if (path === directory) { ownedStats++; if (ownedStats === blocked) { entered(); await waiting; } if (!exists) throw Object.assign(Error('不存在'), { code: 'ENOENT' }); return { isFile: () => false, isDirectory: () => true, isSymbolicLink: () => mode === '链接目录' }; }
       const file = bytes.has(path), dir = [root, resources, ...[...bytes.keys()].flatMap(path => { const names: string[] = []; while (dirname(path) !== path) { path = dirname(path); names.push(path); } return names; })].includes(path);
       if (!file && !dir) throw Object.assign(Error('不存在'), { code: 'ENOENT' }); return { isFile: () => file, isDirectory: () => dir && !file, isSymbolicLink: () => false };
     }, readdir: async (path: string) => [...new Set([...bytes.keys()].filter(name => name.startsWith(path + (process.platform === 'win32' ? '\\' : '/'))).map(name => name.slice(path.length + 1).split(/[\\/]/)[0]))], readFile: async (path: string) => { if (!bytes.has(path)) throw Error('RAM未知文件'); return bytes.get(path)!; }, rm: removed,
-    process: { env: environment, pid: platform === 'win32' ? 303 : 101, ppid: 101, platform, execPath: exe, resourcesPath: resources, kill: probe }, setTimeout: (callback: () => void) => callback(), console: { log: (message: string) => applications.at(-1).emit('console', { text: () => message }) },
+    process: { env: environment, pid: platform === 'win32' ? 303 : 101, ppid: 101, platform, execPath: exe, resourcesPath: resources, kill: probe }, setTimeout: (callback: () => void) => callback(), console: { log: (message: string) => applications.at(-1).emit('console', { type: () => 'log', text: () => message }) },
   };
   const run = runInNewContext(method('createEditorIndentNativeRun') + '\ncreateEditorIndentNativeRun(binding)', { ...context, binding: { assertCurrent } }) as EditorIndentNativeRun;
   return { run, launch, preflight, assertCurrent, removed, applications, probe, directory, bytes, exe, manifestPath, manifest, environment, context, root, project, appPath, resources, onLaunch: (hook: typeof applicationHook) => { applicationHook = hook; }, countOwned: () => ownedStats, pauseOwned: (at: number) => { blocked = at; waiting = new Promise(done => { released = done; }); return { entered: new Promise<void>(done => { entered = done; }), release: () => released() }; } };
@@ -344,5 +346,29 @@ describe('本轮原生阶段持久诊断端口', () => {
   it('原launch异常仍按同一对象传播，不被后续诊断写覆盖', async () => {
     const original = Error('原launch异常'), f = progressFixture(); f.launch.mockRejectedValueOnce(original);
     await expect(f.run.launch()).rejects.toBe(original); expect(f.records.at(-1)?.stage).toBe('launch.begin'); expect(f.removed).not.toHaveBeenCalled();
+  });
+});
+
+
+describe('本轮最小早期启动观察接线（RAM）', () => {
+  it('原firstWindow之前即捕获事件，诊断开启不增加evaluate/firstWindow次数或改变原错误断言', async () => {
+    const plain = fixture(), diagnostic = progressFixture();
+    for (const f of [plain, diagnostic]) f.onLaunch(app => { app.evaluate = vi.fn(app.evaluate); app.firstWindow = vi.fn(async () => { app.page.emit('pageerror', Error('合成早期错误')); return app.page; }); });
+    const old = await plain.run.launch(), owner = await diagnostic.run.launch();
+    expect(owner.startupDiagnostics).toMatchObject({ firstObservedUrl: 'file', firstWindowUrl: 'file', prepared: true, events: [{ kind: 'pageerror', page: 1 }] });
+    expect(old.startupDiagnostics).toBeUndefined(); expect(owner.errors).toEqual(old.errors);
+    expect(diagnostic.applications[0].evaluate.mock.calls.length).toBe(plain.applications[0].evaluate.mock.calls.length);
+    expect(diagnostic.applications[0].firstWindow).toHaveBeenCalledOnce();
+  });
+  it('原firstWindow等待内原TestInfo到期，afterEach仍能附内存且迟到返回不写旧case或领取退出权', async () => {
+    const f = progressFixture(), expired = Error('原期限已结束'); let enter!: () => void, release!: () => void;
+    const entered = new Promise<void>(done => { enter = done; }), pendingWindow = new Promise<void>(done => { release = done; });
+    f.onLaunch(app => { app.firstWindow = async () => { app.page.emit('pageerror', Error('等待内的早期错误')); enter(); await pendingWindow; return app.page; }; });
+    const pending = f.run.launch().catch(reason => reason); await entered;
+    const owner = f.run.owners[0], before = JSON.stringify(owner.startupDiagnostics), attach = vi.fn(async () => {});
+    f.assertCurrent.mockImplementation(() => { throw expired; });
+    f.applications[0].page.emit('pageerror', Error('迟到错误')); expect(JSON.stringify(owner.startupDiagnostics)).toBe(before);
+    await attachNativeStartupDiagnostics({ attach, errors: [{ message: '原120秒超时' }] }, f.run); expect(attach).toHaveBeenCalledOnce();
+    release(); expect(await pending).toBe(expired); expect(owner.confirmed).toBe(false); expect(f.removed).not.toHaveBeenCalled(); expect(f.applications[0].close).not.toHaveBeenCalled();
   });
 });

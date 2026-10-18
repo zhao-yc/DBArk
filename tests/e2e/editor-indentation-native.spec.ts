@@ -12,8 +12,13 @@ test.skip(!active, '默认关闭：Root审核后显式开启DBARK_EDITOR_INDENT_
 test.use({ trace: 'off', screenshot: 'off', video: 'off' });
 test.describe.configure({ mode: 'serial', retries: 0, timeout: 120000 });
 const cases = new WeakMap<TestInfo, ReturnType<typeof bindEditorIndentNativeCase>>();
+const startupRuns = new WeakMap<TestInfo, EditorIndentNativeRun>();
 // 无论成功、失败或超时都消费原TestInfo权限；迟到Promise不得借同一环境继续领取资源。
-test.afterEach(({}, info) => { cases.get(info)?.retain(); });
+test.afterEach(async ({}, info) => {
+  cases.get(info)?.retain();
+  // 原期限结束后只附加已收集的内存，不再访问SDK或资源；错误由框架保留。
+  const run = startupRuns.get(info); if (run) await runtime!.attachNativeStartupDiagnostics(info, run);
+});
 const modifier = process.platform === 'darwin' ? 'Meta' : 'Control';
 const bottom = process.platform === 'darwin' ? 'Meta+ArrowDown' : 'Control+End';
 const top = process.platform === 'darwin' ? 'Meta+ArrowUp' : 'Control+Home';
@@ -142,7 +147,7 @@ test('离线原生缩进：两种样式热更、真实Tab/Undo/选区、新模�
   // 实际解析选项先于端口、目录或Electron，CLI/配置不能暗中恢复录制。
   expect(trace).toBe('off'); expect(screenshot).toBe('off'); expect(video).toBe('off');
   const scope = bindEditorIndentNativeCase(info, binding!, () => test.info()); cases.set(info, scope); scope.assertCurrent();
-  const run = runtime!.createEditorIndentNativeRun(scope);
+  const run = runtime!.createEditorIndentNativeRun(scope); startupRuns.set(info, run);
   try {
     const first = await run.launch(); await observe(run, first); await prepareQuery(run, first);
     await seedOriginalTab(run, first); expect(await current(run, first)).toMatchObject({ tabSize: 2, indentSize: 2, insertSpaces: true, detectIndentation: false, readOnly: false });
