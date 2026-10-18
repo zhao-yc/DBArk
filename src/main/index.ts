@@ -350,6 +350,8 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
       if (preparing) { preparing.cancelled = true; return; }
       break;
     }
+    // 启动元信息不触发系统加密；保留原app.info用于显式检测及真实凭据能力。
+    case 'app.runtimeInfo': return { version: app.getVersion(), platform: process.platform, dataPath: app.getPath('userData') };
     case 'app.info': return { version: app.getVersion(), platform: process.platform, encryptionAvailable: safeStorage.isEncryptionAvailable(), dataPath: app.getPath('userData') };
     case 'app.setDirty': hasPendingEdits = input.dirty; return;
     case 'connections.list': return store.connections();

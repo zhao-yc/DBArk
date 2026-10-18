@@ -65,6 +65,10 @@ export const zh = {
   },
   // 工作台与偏好设置。
   app: {
+    encryptionUnchecked: '尚未检测系统凭据保护能力。',
+    checkEncryption: '检测系统凭据保护', encryptionChecking: '正在检测系统凭据保护能力…',
+    encryptionCheckFailed: '系统凭据保护检测失败：', runtimeInfoFailed: '读取应用信息失败：',
+    encryptionCheckInvalid: '系统凭据保护检测返回无效结果',
     text001: "任务仍在运行，请先停止任务再关闭标签。",
     text002: "此标签有待提交修改或活动事务。关闭将放弃修改并回滚未提交事务，是否继续？",
     text003: "关闭查询标签？请确认需要保留的 SQL 已使用“保存查询”保存。",

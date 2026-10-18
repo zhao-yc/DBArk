@@ -1,0 +1,147 @@
+{
+  "revision": "452850ab472c028377339c53331e451b949be180",
+  "version": "0.28.0",
+  "reviewedSource": "50dda8d39fc1b1471c98b454a2f08e939cde6637",
+  "appInfoCaseSha256": "b0749da27ba11a266bc61bcee5805ab322f37bf7723123a804bcca8d955e6425",
+  "mainAstSha256": "0cf38ed92644823363544529b3602a49c9434698fc7ce5acb16b7f488f779500",
+  "appAstSha256": "13ac1eb5d23ebb5ae7ee3e6969bcc79022b732f9c216b6d8fd9652b8bcf288b2",
+  "desktopCredentialTailSha256": "4f7da6a5151a3fe0447fbaced575b0604d8992e2a6e24e2caccdf9a1f14e3235",
+  "desktopBaselineSha256": "1bab303828e61ffb1da7d9ceaf4165371d9a4a06cc558cd9c82d51b3be6e9824",
+  "legacyDeclaration": "const [refreshVersion, setRefreshVersion] = useState(0); const [version, setVersion] = useState(bundledVersion); const [platform, setPlatform] = useState('win32'); const [encryptionAvailable, setEncryptionAvailable] = useState(true);",
+  "legacyStartupCall": "void invoke('app.info', {}).then(info => { setVersion(info.version); setPlatform(info.platform); setEncryptionAvailable(info.encryptionAvailable); }).catch(() => {});",
+  "legacyStatus": "<p className=\"full muted small\">{zh.app.text023}{encryptionAvailable ? zh.app.text024 : zh.app.text025}</p>",
+  "protectedFiles": [
+    {
+      "path": ".github/workflows/ci.yml",
+      "sha256": "11ba99f90e30fb39467975b9b3a7a9ccc10d46d2ab9c2ccf285afece9691e131"
+    },
+    {
+      "path": "package.json",
+      "sha256": "4508906c8bd3aa15bfbeef82723a1c922cfc006d94a343b6dc3ac2e8eebab2bc"
+    },
+    {
+      "path": "playwright.config.ts",
+      "sha256": "a6bf9fcf4efd64a528301c886bb82f4c83244f0e3590e1dd4fed51d988b26f2f"
+    },
+    {
+      "path": "pnpm-lock.yaml",
+      "sha256": "d66b7a695028dd27ef2610a526dfbabcf5a366fea423b25b17f518bad67c15ce"
+    },
+    {
+      "path": "src/main/preload.ts",
+      "sha256": "703c7b5afca18f56f661cdb13d98c0343ed05ae46cea0b471564f630c2efbc11"
+    },
+    {
+      "path": "src/main/storage.ts",
+      "sha256": "b2e4b75b7ce67bf1d86749527e951f73ab998dc6e61a9cf05ae6eb90ebab748a"
+    },
+    {
+      "path": "src/renderer/components/ConnectionDialog.tsx",
+      "sha256": "44bd3f78bf173007454898019d6a3c278b2713d10f2f74ab97f887d3a067bbbe"
+    },
+    {
+      "path": "src/renderer/components/ConnectionsTransferDialog.tsx",
+      "sha256": "1cf3234dab00cc1243b0b051af0d6a467209931dbcebc7c900bf00359e722fcc"
+    },
+    {
+      "path": "src/renderer/store.ts",
+      "sha256": "d5f81b20cab541b3f0b9f5d4bec74237af82969a37f87ce225801c560ad6ab2a"
+    },
+    {
+      "path": "tests/e2e/c02-mtls-desktop.ts",
+      "sha256": "6618171bc922c3a7890c9b7b1967b68418a22ded51852ebe5bba895625634632"
+    },
+    {
+      "path": "tests/e2e/c02-mtls-live.spec.ts",
+      "sha256": "57af0e6806d9244a4a1eb4032c2f96ceb7e2b51cf75df50d180fce689c99e044"
+    },
+    {
+      "path": "tests/e2e/c02-mtls-storage.ts",
+      "sha256": "675b2c33f0bf9689d19ed4ed7baadc1985f55813818018e70ef851f1d381be01"
+    },
+    {
+      "path": "tests/e2e/c02-mtls-ui-policy.ts",
+      "sha256": "01cbfeef4f0d8bd08d4bd333735022c5335deff33fb624f1311439a26de0aedf"
+    },
+    {
+      "path": "tests/e2e/c02-mtls-ui.ts",
+      "sha256": "163b2c6e47c40d47f7b48f0ded93b07e6363afaef856cf220b18daa1cddeadc1"
+    },
+    {
+      "path": "tests/e2e/c02-ssh-live.spec.ts",
+      "sha256": "0a7b8ad9b6bc0166816af5e007eafe113e0172495974cc24666e62168e8cd662"
+    },
+    {
+      "path": "tests/e2e/column-collation-installed-ui.ts",
+      "sha256": "a9800540d67c3d0abdcc3dc40092c3fa580bd57492368394be7d731558fdeae5"
+    },
+    {
+      "path": "tests/e2e/connection-replacement.spec.ts",
+      "sha256": "6fbc9eb275b66fb8a4d711d142e0c0191ea444c9fb83c6360f784d04d37e5e1c"
+    },
+    {
+      "path": "tests/e2e/connection-transfer.spec.ts",
+      "sha256": "3b35c9881016653d8256baeec1705906ddb5c258190d4cf4547b7b2739a3895b"
+    },
+    {
+      "path": "tests/e2e/desktop-fixture.ts",
+      "sha256": "25c3cd000ab38b7040360e3141a342ed46ced812c832e52782bac95bea6992ee"
+    },
+    {
+      "path": "tests/e2e/editor-indentation-native-gate.ts",
+      "sha256": "d0253c07d081b051606a9603c2b0f49fdd366af67225471149368135b4d90eb6"
+    },
+    {
+      "path": "tests/e2e/editor-indentation-native-identity.ts",
+      "sha256": "676a519a9e0c4369c1c23d40f491861ce1c17ba5eef8cb3d76faa6336644459d"
+    },
+    {
+      "path": "tests/e2e/editor-indentation-native-owner.ts",
+      "sha256": "0b7005864f219d748ea724e2c508289a5bf55cd5fb68554eebb2ac94d7ff51d4"
+    },
+    {
+      "path": "tests/e2e/editor-indentation-native-runtime.ts",
+      "sha256": "dc27cba846a8d6e171b7a3d260dedd9005cdfcab836cdfc07e1191bc29913db3"
+    },
+    {
+      "path": "tests/e2e/editor-indentation-native.spec.ts",
+      "sha256": "701eecf8f2938d4d2d8c093bb55076b9bfca85abec198ae25a2ac23f5cb6abf8"
+    },
+    {
+      "path": "tests/e2e/live-database.spec.ts",
+      "sha256": "e435e87413061735a2cf3eac0aebe1c1a2bdaf637eaa2a3f3d5115302e8ff116"
+    },
+    {
+      "path": "tests/e2e/query-layout-native-gate.ts",
+      "sha256": "0657ddca9cfe02e667c6315496d6015e4a642dff841806f1ef22f7ff451443ca"
+    },
+    {
+      "path": "tests/e2e/query-layout-native.spec.ts",
+      "sha256": "7d5415c934ecd3ec46eb02f2783d9f6852d974e12fb858f0c10ee1db5dd0139a"
+    },
+    {
+      "path": "tests/e2e/query-result-columns-live.ts",
+      "sha256": "e207a9087d0844e02c2eff6634ea333460faf8037f7be33f7772cb30ccd8b2c4"
+    },
+    {
+      "path": "tests/e2e/query-selected-results-export-live.ts",
+      "sha256": "ed43e29c320e59e190f33a4b8436c6f4bfa6452aed775f60362e7ae7cc9d20f6"
+    },
+    {
+      "path": "tests/e2e/server-monitor-live.ts",
+      "sha256": "f32b3ddc45ff56a974c168cefcc8fe69213c099e082bc563426f48bd7c82ca7b"
+    },
+    {
+      "path": "tests/e2e/sql-completion-insert-row-alias-ui.ts",
+      "sha256": "23359916efbf73cc04d11b278567fa2db76dc7a89e99f7395dacc5f4aef2797b"
+    },
+    {
+      "path": "tests/e2e/table-grid-preferences.spec.ts",
+      "sha256": "70f691cae8c24ea57e2868ef359f895448f2fc9cfb99fcab09ac37545facc210"
+    },
+    {
+      "path": "tests/e2e/table-preferences.spec.ts",
+      "sha256": "f4cb162ea93c93c1c3ef4a1410d1f4c71fca12eca262b141e48a8861e56abe4e"
+    }
+  ]
+}
