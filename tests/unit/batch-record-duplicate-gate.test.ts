@@ -4,6 +4,7 @@ import ts from 'typescript';
 import { expect, it, vi } from 'vitest';
 import { bindBatchDuplicateTarget, batchDuplicateTargetKeys, BatchDuplicatePreparation } from '../helpers/batchRecordDuplicateUi';
 import * as paths from 'node:path';
+import { assertHistoryExitObservationScope, beginHistoryExitObservation, historyExitObservationFor } from '../helpers/historyExitObservation';
 
 const source = readFileSync(new URL('../e2e/table-record-duplicate-batch.spec.ts', import.meta.url), 'utf8');
 const compile = (text: string) => ts.transpileModule(text, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText;
@@ -30,7 +31,7 @@ function preparationPort(hook = true) {
   visit(tree); if (functions.length !== 6 || !automatic) throw Error('启动准备未提取完整原函数');
   const info = { _startWallTime: 0, timeout: 120000, status: 'passed' }, states = new WeakMap<object, any>(), launch = vi.fn(async () => { throw Error('仅RAM原生边界'); }), remove = vi.fn(); let now = 1, resolve!: (value: string) => void;
   const directory = new Promise<string>(done => { resolve = done; }), preparation = new BatchDuplicatePreparation(info, () => now), guard = { assertCurrent: vi.fn(), ...(hook ? { assertPreparation: vi.fn((current: unknown) => { if (current !== info) throw Error('TestInfo被替换'); preparation.assertCurrent(); }) } : {}) };
-  const context: any = { exports: {}, Error, AggregateError, preservedDesktopExits: states, process: { env: {} }, electron: { launch }, createSnippetsNativeDiagnostics: () => undefined, snippetsDiagnosticsArmed: false, snippetsDiagnostics: undefined, pageErrors: [], dialogCalls: [], quitReady: undefined, dataDir: undefined, desktop: undefined, page: undefined, closed: true, mkdtemp: vi.fn(() => directory), tmpdir: () => 'C:\\RAM', join: paths.join, rm: remove };
+  const context: any = { assertHistoryExitObservationScope, beginHistoryExitObservation, historyExitObservationFor, exports: {}, Error, AggregateError, preservedDesktopExits: states, process: { env: {} }, electron: { launch }, createSnippetsNativeDiagnostics: () => undefined, snippetsDiagnosticsArmed: false, snippetsDiagnostics: undefined, pageErrors: [], dialogCalls: [], quitReady: undefined, dataDir: undefined, desktop: undefined, page: undefined, closed: true, mkdtemp: vi.fn(() => directory), tmpdir: () => 'C:\\RAM', join: paths.join, rm: remove };
   runInNewContext(compile(functions.join('\n') + '\nglobalThis.fixture=' + automatic + ';globalThis.retain=retainOwnedDesktopResources;'), context);
   return { info, states, launch, remove, guard, context, resolve, time: (value: number) => { now = value; }, start: () => context.fixture({ preserveOnUnconfirmedExit: true, ownedDesktopLaunchGuard: guard, trace: 'off' }, async () => { throw Error('不得进入实际body'); }, info).catch((reason: unknown) => reason) };
 }
