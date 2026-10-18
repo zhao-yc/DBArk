@@ -48,7 +48,7 @@ macOS arm64分栏原报告SHA256为 `f2299566f40eb982011ffa8c8c2f71437174ed5e0de
 
 同job的source CLI和启用专项的安装入口显式传 `diagnostics:true`，每个独立PW进程启动前，在本项已有目录独占创建 `progress.ndjson` 和 `progress-identity.json`；直接/RAM调用默认关闭。仅传开启门 `DBARK_NATIVE_EDITOR_PROGRESS=1` 及文件头摘要，不传输出路径。不要手工填写路径或重建旧日志。
 
-runtime从已批准的 `source/installed-indent/layout-manifest.json` 固定名称推导兄弟专项目录，核原manifest摘要、目录真实路径、普通文件、单链接、dev/ino及文件头。每次只以append模式打开同一文件，核FD身份、文件头和原长度；不跟链接、不创建替代文件、不截断、不覆盖旧序号，失败后原writer不复活。文件头只绑定固定阶段身份和批准摘要；后续仅固定阶段枚举、递增序号、已登记PID数字及数量、已确认/就绪/关闭数量和retained/removed布尔状态，不记录SQL、凭据、环境、URL或任意动作文字。
+runtime从已批准的 `source/installed-indent/layout-manifest.json` 固定名称推导兄弟专项目录，核原manifest摘要、目录真实路径、普通文件、单链接、dev/ino及文件头。每次只以append模式打开同一文件，核FD身份、文件头和原长度；不创建替代文件、不截断、不覆盖旧序号，观察到链接或身份漂移即拒绝，失败后原writer不复活。O_NOFOLLOW只覆盖最后组件，路径级检查不构成整个系统调用期间祖先目录不变的原子保证。文件头只绑定固定阶段身份和批准摘要；后续仅固定阶段枚举、递增序号、已登记PID数字及数量、已确认/就绪/关闭数量和retained/removed布尔状态，不记录SQL、凭据、环境、URL或任意动作文字。
 
 覆盖 `scan.begin/done`、`launch.begin/returned`、`prepare.hook/window/statusbar/metrics/done`、`close.source/request/handshake/application/event/pids/done`。记录发生在原关键await前，后续promise不返回时最后一条进入记录也已落在本专项目录；不依赖catch才保存。所有runtime记录IO消费当前原owner/原TestInfo guard；迟到launch仍先按原规则登记句柄/PID，再被原guard停链，不能补写returned或借日志取得退出/清理权限。日志完全不参与成功consumer判据。
 
@@ -57,3 +57,11 @@ runtime从已批准的 `source/installed-indent/layout-manifest.json` 固定名�
 本次18个新增RAM用例及5个直接受影响旧例最终逐项通过；只选跑相关子集，没有重跑旧97整套、type/full/build/GUI。新CI提取夹具首轮2红为缺CommonJS/exports端口，修夹具后通过，原报告保留。两份直接提取runtime夹具显式补了新依赖及禁止真实FS的RAM端口。Root已修的query-layout-native-gate夹具0cc2a72保持在整合侧，本分支不回写其旧版本。
 
 Root操作：保留现有8005145/0cc2a72/f574c15的整合内容，只接纳本次新commit；经独审后建立新检查点单次运行。现有always上传整个test-results已覆盖阶段文件，不需扩大权限或移动到全局目录。先看progress最后阶段，再结合原report/owner附件判断；任何阶段数字都不替代原退出/PID/目录闭合证明。原39089165148不重试，三个原失败及0.23不可发布边界保持。
+
+### 独审普通文件IO边界窄修
+
+36a8原独审的3个反例及原红报告保留，原测试文件逐字节纳入回归。manifest现在在FD打开后再次核大小，实际调用有上限的readSync，最多读取该FD已核长度（不超过8MiB）；读取中增长/截断再由FD与原路径大小/身份复核拒绝，不先无界读取再靠hash兜底。
+
+日志每次取得FD后、写前、写后均绑定原目录/路径与句柄，核普通文件、单链接、dev/ino和准确大小；关闭FD后还核最终路径，不再丢弃最终stat结果。观察到任何漂移都永久停writer。该修正不声称path级校核可消除所有未被观察的并发竞态，也不授予额外权限。
+
+本次只执行原3反例及健康对照4例、新有界读取/继续增长/最终大小/关闭后替换4例、必要迟到/写失败3例，共11唯一用例最终逐项通过；没有整套重跑。新原生方法提取夹具首次1红为Vitest改写的import引用名，改用原源码AST提取后仅重跑这一例通过。未重跑旧18/5整套、type/full/build/GUI/200，没有改变原阶段、期限、consumer或错误cause。

@@ -19,7 +19,7 @@ function fixture() {
     open(path: string, mode: string) { operations.push(['open', path, mode]); if (mode === 'create') { if (nodes.has(path)) throw Error('EEXIST'); add(path, false); } const node = nodes.get(path); if (!node) throw Error('RAM不存在'); const fd = ++fdSerial; handles.set(fd, { node, mode }); return fd; },
     fstat(fd: number) { return shape(handles.get(fd).node); },
     header(fd: number) { return handles.get(fd).node.bytes.subarray(0, 4096); },
-    bytes(fd: number) { if (fail.expireRead) allowed = false; return handles.get(fd).node.bytes; },
+    bytes(fd: number, maximum?: number) { if (fail.expireRead) allowed = false; return handles.get(fd).node.bytes.subarray(0, maximum ?? handles.get(fd).node.bytes.length); },
     append(fd: number, bytes: Buffer) { operations.push(['append', handles.get(fd).node.path]); if (fail.write) throw fail.write; const node = handles.get(fd).node; node.bytes = Buffer.concat([node.bytes, bytes]); return bytes.length; },
     close(fd: number) { const handle = handles.get(fd); handles.delete(fd); if (handle.mode === 'append' && fail.close) throw fail.close; },
   };
