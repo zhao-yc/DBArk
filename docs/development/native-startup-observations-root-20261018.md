@@ -34,3 +34,5 @@ node .cache/run1729-verify-native-startup-root.mjs
 launch 返回前、preload hook 安装前及订阅送达前存在缺采窗口。正式事件订阅有异步协议登记，本次没有增加其等待。相对时间复用原权限门已校验的起点和缓存，不增加新的等待，不缓存或放宽逐文件哈希。阶段差值不能直接证明哪个函数导致超时。
 
 本轮没有新的 Windows 安装、Mac 原生或私网数据库验收，也未公开发行 0.23。最新功能候选仍为 0.26；其源码 CI 与 Windows 构建结果按各自记录判断。
+
+新检查点 `2f0a9b6f70af409b069d2bf0dd3d0f7bb3b6929e` 已推送到 `codex/native-checkpoint-v023-startup-20261018`，启动独立工作流 [39100233953](https://github.com/zhao-yc/DBArk/actions/runs/39100233953)。本段记录启动时点，终态尚待读取；检查点与本整合树只差一份固定 JSON。Root 已准备仅验证摘要、CRC 提取记录及枚举／数字观察数据的本地读取器；不执行下载附件，也不把缺失附件解释为启动无错。
