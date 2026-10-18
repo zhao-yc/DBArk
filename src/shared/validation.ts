@@ -21,6 +21,8 @@ import{localSqlPageNextSchema,localSqlPageReleaseSchema}from'./localSqlPages';
 import { connectionFileRequirements, connectionImportApplySchema, connectionImportReviewSchema, connectionTransferLimits } from './connectionTransfer';
 import type { Command, ResultExportData } from './contracts';
 import { validateResultExportData } from './resultExport';
+import { assertResultSqlData, resultSqlTargetSchema, resultSqlSelectionSchema } from './resultSql';
+import { resultSqlZh } from './resultSql.zh-CN';
 import { FILTER_LIMITS, validateFilterRules, filterRuleSchema as filterRule, sortRulesSchema } from './filtering';
 import { tablePresetListSchema, tablePresetSaveSchema, tablePresetSelectSchema, tablePresetApplySchema } from './tablePresets';
 import { queryParameterTypes, validateQueryParameters } from './queryParameters';
@@ -228,7 +230,7 @@ export const commandSchemas: Record<Command, z.ZodType> = {
   'schema.foreignKeys.preview': z.object({ snapshotId: id, patches: z.unknown().transform(value => validateForeignKeyPatches(value)), taskId: id }).strict(),
   'schema.foreignKeys.apply': z.object({ previewToken: id, acknowledgements: z.array(z.enum(foreignKeyAcknowledgementIds)).max(20).refine(value => new Set(value).size === value.length, '外键确认项不能重复'), taskId: id }).strict(),
   'schema.foreignKeys.release': z.object({ snapshotId: id.optional(), previewToken: id.optional() }).strict().refine(value => Boolean(value.snapshotId || value.previewToken), '缺少待释放的外键结构令牌'),
-  'files.choose': z.object({ purpose: z.enum(['import','export','key','certificate','query','connection-import','connection-export']), format: z.string().optional(), suggestedName: z.string().optional() }).strict(),
+  'files.choose': z.object({ purpose: z.enum(['import','export','key','certificate','query','connection-import','connection-export']), format: z.string().optional(), suggestedName: z.string().optional(), resultSqlPreviewId: z.string().uuid().optional() }).strict().refine(value => !value.resultSqlPreviewId || value.purpose === 'export' && value.format === 'sql', resultSqlZh.filePurpose),
   'files.path': z.object({ token: id }).strict(),
   'excel.sheets': z.object({ fileToken: id, taskId: id }).strict(),
   'excel.preview': z.object({ ...excelSheet, taskId: id }).strict(),
@@ -241,7 +243,12 @@ export const commandSchemas: Record<Command, z.ZodType> = {
   'files.exportColumns': z.object({ ...target, taskId: id }).strict(),
   'files.releaseExportColumns': z.object({ catalogId: id }).strict(),
   'files.export': z.object({ ...fileOptions, includeStructure: z.boolean(), includeData: z.boolean(), csvSelection: z.object({ catalogId: id, columns: z.array(z.string().min(1).max(64).refine(value => !value.includes('\0'))).min(1).max(csvExportFieldLimits.columns).refine(value => new Set(value).size === value.length, 'CSV字段不能重复') }).strict().optional() }).strict().refine(value => !value.csvSelection || value.format === 'csv' && value.includeData, '字段选择只适用于CSV数据导出'),
-  'files.exportResult': z.object({ fileToken: id, format: z.enum(['csv','json']), encoding: z.enum(['utf8','utf16le','gb18030']), taskId: id, result: resultExportData }).strict(),
+  'files.exportResult': z.object({ fileToken: id, format: z.enum(['csv','json','sql']), encoding: z.enum(['utf8','utf16le','gb18030']), taskId: id, result: resultExportData, sql: resultSqlSelectionSchema.optional() }).strict().superRefine((value, context) => {
+    try { if (value.format === 'sql') { if (!value.sql) throw Error(resultSqlZh.previewRequired); assertResultSqlData(value.result, value.sql.target); if (value.sql.confirmation !== `${value.sql.target.database}.${value.sql.target.table}`) throw Error(resultSqlZh.confirmationMismatch); } else if (value.sql !== undefined) throw Error(resultSqlZh.nonSql); }
+    catch (error) { context.addIssue({ code: 'custom', message: error instanceof Error ? error.message : 'INSERT结果无效' }); }
+  }),
+  'files.previewResultSql': z.object({ result: resultExportData, target: resultSqlTargetSchema, encoding: z.enum(['utf8','utf16le','gb18030']) }).strict().superRefine((value, context) => { try { assertResultSqlData(value.result, value.target); } catch (error) { context.addIssue({ code: 'custom', message: error instanceof Error ? error.message : 'INSERT结果无效' }); } }),
+  'files.releaseResultSql': z.object({ previewId: z.string().uuid() }).strict(),
   'queries.list': empty, 'queries.save': z.object({ id, name, connectionId: id.optional(), database: name.optional(), databaseContext:queryDatabaseContext.optional(), sql: text, updatedAt: z.string() }).strict(), 'queries.delete': z.object({ id }).strict(),
   'snippets.list': empty, 'snippets.save': snippetSchema, 'snippets.delete': z.object({ id }).strict(),
   'history.list': z.object({ connectionId: id.optional() }).strict(), 'tasks.list': empty, 'tasks.cancelState': taskCancelInputSchema,

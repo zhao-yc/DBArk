@@ -81,7 +81,7 @@ export interface ImportOptions { connectionId: string; database: string; table: 
 export interface ExportOptions { csvSelection?: CsvExportSelection; connectionId: string; database: string; table: string; fileToken: string; format: 'csv' | 'json' | 'sql'; encoding: 'utf8' | 'utf16le' | 'gb18030'; includeStructure: boolean; includeData: boolean; taskId: string; }
 /** 仅包含已经返回的结果，不携带可触发数据库访问的 SQL、连接或会话。 */
 export interface ResultExportData { columns: Pick<ResultColumn, 'key' | 'name'>[]; rows: DataRow[]; truncated: boolean; }
-export interface ResultExportOptions { fileToken: string; format: 'csv' | 'json'; encoding: 'utf8' | 'utf16le' | 'gb18030'; taskId: string; result: ResultExportData; }
+export interface ResultExportOptions { fileToken: string; format: 'csv' | 'json' | 'sql'; encoding: 'utf8' | 'utf16le' | 'gb18030'; taskId: string; result: ResultExportData; sql?: import('./resultSql').ResultSqlSelection; }
 
 /** 请求映射是界面、主进程与数据库进程共同使用的唯一接口定义。 */
 export interface CommandMap {
@@ -182,7 +182,7 @@ export interface CommandMap {
   'schema.foreignKeys.preview': { input: TableForeignKeyPreviewInput; output: TableForeignKeyPreviewOutput };
   'schema.foreignKeys.apply': { input: TableForeignKeyApplyInput; output: TableForeignKeyApplyOutput };
   'schema.foreignKeys.release': { input: TableForeignKeyReleaseInput; output: void };
-  'files.choose': { input: { purpose: 'import' | 'export' | 'key' | 'certificate' | 'query' | 'connection-import' | 'connection-export'; format?: string; suggestedName?: string }; output: FileChoice | null };
+  'files.choose': { input: { purpose: 'import' | 'export' | 'key' | 'certificate' | 'query' | 'connection-import' | 'connection-export'; format?: string; suggestedName?: string; resultSqlPreviewId?: string }; output: FileChoice | null };
   'files.path': { input: { token: string }; output: string };
   'excel.sheets': { input: { fileToken: string; taskId: string }; output: ExcelSheet[] };
   'excel.preview': { input: { fileToken: string; taskId: string; sheetId: string; headerRow?: number; protocol: ExcelTextProtocol }; output: ExcelSheetPreview };
@@ -196,6 +196,8 @@ export interface CommandMap {
   'files.releaseExportColumns': { input: { catalogId: string }; output: void };
   'files.export': { input: ExportOptions; output: { rows: number } };
   'files.exportResult': { input: ResultExportOptions; output: { rows: number } };
+  'files.previewResultSql': { input: import('./resultSql').ResultSqlPreviewInput; output: import('./resultSql').ResultSqlPreview };
+  'files.releaseResultSql': { input: { previewId: string }; output: void };
   'queries.list': { input: Record<string, never>; output: SavedQuery[] };
   'snippets.list': { input: Record<string, never>; output: SqlSnippet[] };
   'snippets.save': { input: SqlSnippet; output: SqlSnippet };
