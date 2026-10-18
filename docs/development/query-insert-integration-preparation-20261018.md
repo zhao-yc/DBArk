@@ -78,3 +78,9 @@ node node_modules/vitest/vitest.mjs run --config vitest.integration.config.ts te
 ```
 
 本次离线日志与固定头/输入SHA交接位于本clone`.cache/qis-preparation-evidence/`。不因RAM或类型通过宣称实库/GUI或完整产品通过。
+
+## Root首次只读预检与观察连接修正
+
+固定Root `493dc2f` 的首次utf8实库尝试在第一条只读事实查询被拒绝，源SQL执行0、库/目录/partial创建0，另外五例未运行。原日志SHA-256为 `88944f447ac7b5633c1ba5711b0ec344b31e7213a4c93d7a1b1c1976c3de48e9`。Root随后三条只读查询确认MySQL8.4.11/Linux、原UUID及所有普通能力正确；旧线程43068已不存在，本例库和目录均未创建，新观察连接正常关闭。
+
+独立mysql2连接的默认握手位令其会话sql_mode多出IGNORE_SPACE，超出借用事实门的既有白名单。本修正只为独立观察/回放连接显式传 `flags: ['-IGNORE_SPACE']`；不放宽共享事实断言，不SET服务器配置，也不改产品驱动。原失败及journal保留，须用新nonce和新目录另开验证，不能将首例写成通过。

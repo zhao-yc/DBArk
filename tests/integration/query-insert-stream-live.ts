@@ -84,7 +84,8 @@ export async function runQisCase(context: TestContext, kind: QisCase) {
   /** 每条独立驱动连接写前登记用途，返回后立即记下原句柄；失败不另开恢复连接。 */
   async function raw(role: string, multi = false): Promise<{ owner: Owned; connection: Observer }> {
     await record('connection-planned', { role }); check(); if (connectAttempts >= 8) throw Error('QIS连接数量超限'); connectAttempts++;
-    const native = mysql.createConnection({ host: binding.profile.host, port: 13384, user: binding.profile.user, password: binding.profile.password, charset: 'utf8mb4', supportBigNumbers: true, bigNumberStrings: true, decimalNumbers: false, dateStrings: true, jsonStrings: true, multipleStatements: multi, connectTimeout: 10000 }) as unknown as Native;
+    // 独立观察/回放连接关闭mysql2默认IGNORE_SPACE握手位，保留严格只读事实门，不修改服务器配置。
+    const native = mysql.createConnection({ host: binding.profile.host, port: 13384, user: binding.profile.user, password: binding.profile.password, charset: 'utf8mb4', supportBigNumbers: true, bigNumberStrings: true, decimalNumbers: false, dateStrings: true, jsonStrings: true, multipleStatements: multi, flags: ['-IGNORE_SPACE'], connectTimeout: 10000 }) as unknown as Native;
     // 建连成功前仍保留原流线索，最终失败附录记录其真实thread（若已返回），不尝试强退。
     const acquired: Owned = { role, native, stream: native.stream, thread: native.threadId ?? 0, normalClosed: false }; owned.push(acquired);
     native.on('error', () => life.stop());
