@@ -1,0 +1,169 @@
+import mysql, { type RowDataPacket, type ResultSetHeader } from 'mysql2/promise';
+import type { Locator, TestInfo } from '@playwright/test';
+import { test, expect, ownedDesktopResources, retainOwnedDesktopResources } from './desktop-fixture';
+import { environment, isolatedDatabase } from './live-helpers';
+import { batchFillCaseNames, BatchFillPreparation, type BatchFillTarget } from '../helpers/tableBatchFillLive';
+import { recordBatchFillZh as fill } from '../../src/renderer/locales/recordBatchFill.zh-CN';
+import { recordViewZh as record } from '../../src/renderer/locales/recordViews.zh-CN';
+import { draftHistoryZh as history } from '../../src/renderer/locales/draftHistory.zh-CN';
+import { zh, formatText } from '../../src/renderer/locales/zh-CN';
+
+interface Snapshot extends RowDataPacket { id: string; code: string; note: string | null; big_value: string; amount: string; stamp: string; payload: string; doc: string; }
+
+/** 仅双门实跑时加载；沿原隔离库、真实表单和原preview/apply事务，不替换产品接口。 */
+export function registerTableBatchFill(binding: BatchFillTarget): void {
+  binding.assertHelper(environment);
+  const preparations = new WeakMap<TestInfo, BatchFillPreparation>();
+  test.describe.configure({ mode: 'serial', timeout: 120000, retries: 0 });
+  const launchGuard = {
+    assertPreparation(info: TestInfo) {
+      let preparation = preparations.get(info);
+      if (!preparation) { preparation = new BatchFillPreparation(info as TestInfo & { _startWallTime?: number }); preparations.set(info, preparation); }
+      preparation.assertCurrent();
+    },
+    assertCurrent() { binding.assertHelper(environment); },
+  };
+  test.use({ trace: 'off', screenshot: 'off', video: 'off', preserveOnUnconfirmedExit: true, ownedDesktopLaunchGuard: launchGuard });
+
+  for (const [scenario, name] of batchFillCaseNames.entries()) test(name, async ({}, info) => {
+    const captured = ownedDesktopResources(info), page = captured.page;
+    let ended = false;
+    /** 每次等待前后都核目标和本例桌面归属；失败或超时后的迟到回包不得继续后续写入。 */
+    function current() {
+      try {
+        launchGuard.assertPreparation(info);
+        binding.assertHelper(environment);
+        const owner = ownedDesktopResources(info);
+        if (ended || owner.page !== page || owner.application !== captured.application || owner.closed) throw Error('批量填充本例桌面已经失效');
+      } catch (reason) { retainOwnedDesktopResources(info); throw reason; }
+    }
+    async function checked<T>(operation: () => Promise<T>): Promise<T> {
+      current();
+      try { const result = await operation(); current(); return result; }
+      catch (reason) { retainOwnedDesktopResources(info); throw reason; }
+    }
+    /** 在原fixture创建任何库之前核实际服务器；探针只读，不创建或删除资源。 */
+    async function preflight() {
+      const { host, port, user, password } = binding.target;
+      const observer = await checked(() => mysql.createConnection({ host, port, user, password, charset: 'utf8mb4', connectTimeout: 15000 }));
+      try {
+        const [rows] = await checked(() => observer.query<RowDataPacket[]>('SELECT @@server_uuid AS uuid, @@version AS version'));
+        await checked(async () => { expect(rows).toHaveLength(1); expect(rows[0].uuid).toBe(binding.target.uuid); expect(rows[0].version).toMatch(/^8\./); });
+      } finally { await observer.end(); }
+    }
+    try {
+      await preflight(); current();
+      await isolatedDatabase(async context => {
+        try {
+          current();
+          if (!/^dbark_e2e_[a-z0-9_]+$/.test(context.database)) throw Error('批量填充拒绝非本例随机隔离库');
+          const qualified = `\`${context.database}\`.\`batch_fill_subject\``;
+          const [server] = await checked(() => context.observer.query<RowDataPacket[]>('SELECT @@server_uuid AS uuid'));
+          await checked(async () => expect(server[0].uuid).toBe(binding.target.uuid));
+          // 仅创建本例三行：两条选中、第三条控制；所有精确值以字符串/SQL字节表达。
+          await checked(() => context.observer.query(`CREATE TABLE ${qualified}(id BIGINT UNSIGNED PRIMARY KEY,code VARCHAR(24) NOT NULL UNIQUE,note TEXT NULL,big_value BIGINT UNSIGNED NOT NULL,amount DECIMAL(30,6) NOT NULL,stamp DATETIME(6) NOT NULL,payload VARBINARY(8) NOT NULL,doc JSON NOT NULL) ENGINE=InnoDB`));
+          for (const [index, id] of ['9007199254740993', '9007199254740995', '18446744073709551615'].entries()) await checked(() => context.observer.query(
+            `INSERT INTO ${qualified}(id,code,note,big_value,amount,stamp,payload,doc) VALUES(?,?,?,?,?,?,UNHEX(?),CAST(? AS JSON))`,
+            [id, ['selected_a', 'selected_b', 'control'][index], '原值' + index, '18446744073709551615', '12345678901234567890.120000', '2026-10-18 01:02:03.123456', ['00FF8000', '000100', 'FF00'][index], '{"n":9007199254740993,"s":"保留旁列"}']));
+          /** 不通过JS数值或JSON解析核旁列；固定列序的SQL字符串/HEX快照覆盖所有三行。 */
+          async function snapshot(): Promise<Snapshot[]> {
+            const [rows] = await checked(() => context.observer.query<Snapshot[]>(`SELECT CAST(id AS CHAR) AS id,code,note,CAST(big_value AS CHAR) AS big_value,CAST(amount AS CHAR) AS amount,DATE_FORMAT(stamp,'%Y-%m-%d %H:%i:%s.%f') AS stamp,HEX(payload) AS payload,CAST(doc AS CHAR CHARACTER SET utf8mb4) AS doc FROM ${qualified} ORDER BY id`));
+            return rows;
+          }
+          const before = await snapshot();
+          await checked(async () => {
+            expect(before).toHaveLength(3);
+            expect(before.map(row => row.id)).toEqual(['9007199254740993', '9007199254740995', '18446744073709551615']);
+            for (const row of before) { expect(row.big_value).toBe('18446744073709551615'); expect(row.amount).toBe('12345678901234567890.120000'); expect(row.stamp).toBe('2026-10-18 01:02:03.123456'); expect(row.doc).toContain('9007199254740993'); }
+            expect(before.map(row => row.payload)).toEqual(['00FF8000', '000100', 'FF00']);
+          });
+          const connection = page.locator('.connection-node').filter({ has: page.locator('.connection-row').getByRole('button', { name: context.connectionName, exact: true }) });
+          await checked(() => connection.locator('.connection-row').getByRole('button', { name: context.connectionName, exact: true }).focus());
+          await checked(() => connection.getByRole('button', { name: '刷新连接', exact: true }).click());
+          const database = connection.locator('.database-row').getByRole('button', { name: context.database, exact: true });
+          await checked(() => expect(database).toBeVisible());
+          if (await checked(() => database.getAttribute('aria-expanded')) !== 'true') await checked(() => database.click());
+          await checked(() => connection.locator('.object-row').getByText('batch_fill_subject', { exact: true }).click());
+          const table = page.locator('.table-tab:visible');
+          await checked(() => expect(table.locator('.context-bar')).toContainText('batch_fill_subject'));
+          await checked(() => expect(table.locator('.loading-overlay')).toHaveCount(0));
+          const row = (code: string) => table.locator('.results-grid [role="row"]').filter({ has: page.getByRole('gridcell', { name: code, exact: true }) });
+          /** 从实际列头读取坐标，避免checkbox列改变导致误读其他字段。 */
+          async function cell(source: Locator, key: string) {
+            const index = await checked(() => table.getByRole('columnheader').filter({ hasText: new RegExp('^' + key + '(?:\\s|$)') }).getAttribute('aria-colindex'));
+            if (!index || !/^\d+$/.test(index)) throw Error('批量填充缺少实际列坐标');
+            return source.locator(`[role="gridcell"][aria-colindex="${index}"]`);
+          }
+          const selected = before.slice(0, 2);
+          const order: { code: string; index: number }[] = [];
+          for (const source of selected) {
+            await checked(() => expect(row(source.code)).toHaveCount(1));
+            const index = await checked(() => row(source.code).getAttribute('aria-rowindex'));
+            if (!index || !/^\d+$/.test(index)) throw Error('批量填充缺少实际行坐标');
+            order.push({ code: source.code, index: Number(index) });
+            await checked(() => row(source.code).getByRole('checkbox').check());
+          }
+          if (order[0].index === order[1].index) throw Error('批量填充行坐标重复');
+          order.sort((a, b) => a.index - b.index);
+          await checked(() => expect(row('control').getByRole('checkbox')).not.toBeChecked());
+          await checked(() => table.getByRole('button', { name: fill.action, exact: true }).click());
+          const dialog = page.getByRole('dialog', { name: fill.title, exact: true });
+          await checked(() => expect(dialog).toContainText(formatText(fill.count, 2)));
+          await checked(() => dialog.getByLabel(fill.field, { exact: true }).selectOption('note'));
+          await checked(() => dialog.getByLabel(record.mode, { exact: true }).selectOption(scenario === 0 ? 'null' : 'text'));
+          if (scenario === 1) await checked(() => dialog.locator('.record-field-input').fill('整批待提交'));
+          await checked(() => dialog.getByRole('button', { name: fill.stage, exact: true }).click());
+          await checked(() => expect(dialog).toHaveCount(0));
+          const staged = scenario === 0 ? 'NULL' : '整批待提交';
+          async function checkDraft(value: string | undefined) {
+            await checked(() => expect(table.locator('.row-modified')).toHaveCount(value === undefined ? 0 : 2));
+            for (const source of selected) await checked(async () => expect(await cell(row(source.code), 'note')).toHaveText(value ?? source.note!));
+            await checked(async () => expect(await cell(row('control'), 'note')).toHaveText(before[2].note!));
+          }
+          await checkDraft(staged); await checked(async () => expect(await snapshot()).toEqual(before));
+          if (scenario === 0) {
+            await checked(() => table.getByRole('button', { name: history.undo, exact: false }).click());
+            await checkDraft(undefined); await checked(async () => expect(await snapshot()).toEqual(before));
+            await checked(() => table.getByRole('button', { name: history.redo, exact: false }).click());
+            await checkDraft(staged); await checked(async () => expect(await snapshot()).toEqual(before));
+          }
+          await checked(() => table.getByRole('button', { name: zh.table.text019, exact: true }).click());
+          const preview = page.getByRole('dialog', { name: zh.table.text031, exact: true });
+          await checked(() => expect(preview).toBeVisible());
+          await checked(() => expect(preview).toContainText(zh.table.text032 + '2' + zh.table.text033));
+          await checked(() => expect(preview.locator('.monaco-editor .view-lines')).toContainText('UPDATE'));
+          await checked(async () => expect(await snapshot()).toEqual(before));
+          let expected = before.map(source => ({ ...source, note: source.code === 'control' ? source.note : null }));
+          if (scenario === 1) {
+            // 外改实际网格顺序的第二条，让第一条已执行的修改也必须由同一事务回滚。
+            const changed = before.find(source => source.code === order[1].code)!;
+            const [result] = await checked(() => context.observer.query<ResultSetHeader>(`UPDATE ${qualified} SET note=? WHERE id=?`, ['外部已提交', changed.id]));
+            await checked(async () => expect(result.affectedRows).toBe(1));
+            expected = before.map(source => ({ ...source, note: source.id === changed.id ? '外部已提交' : source.note }));
+            await checked(async () => expect(await snapshot()).toEqual(expected));
+          }
+          await checked(() => preview.getByRole('button', { name: zh.common.confirmApply, exact: true }).click());
+          if (scenario === 0) {
+            await checked(() => expect(preview).toHaveCount(0));
+            await checked(() => expect(table.locator('.row-modified')).toHaveCount(0));
+            await checked(async () => expect(await snapshot()).toEqual(expected));
+            for (const source of selected) await checked(async () => expect(await cell(row(source.code), 'note')).toHaveText('NULL'));
+          } else {
+            await checked(() => expect(preview.locator('.error-box')).toContainText('数据并发冲突，目标表事务内整批修改已回滚'));
+            await checked(() => expect(preview).toContainText(record.applyAttempted));
+            await checked(() => expect(preview.getByRole('button', { name: zh.common.confirmApply, exact: true })).toBeDisabled());
+            // 有界观察连续三次真实快照；不点击第二次提交、不手动重放，也不以UI报错替代库核。
+            let stable = 0;
+            await checked(() => expect.poll(async () => { expect(await snapshot()).toEqual(expected); return ++stable; }, { intervals: [250], timeout: 3000 }).toBeGreaterThanOrEqual(3));
+            await checked(() => preview.getByRole('button', { name: zh.common.backToEdit, exact: true }).click());
+            await checked(() => expect(preview).toHaveCount(0)); await checkDraft(staged);
+            await checked(() => expect(table.getByRole('button', { name: history.undo, exact: false })).toBeDisabled());
+            await checked(() => expect(table.getByRole('button', { name: history.redo, exact: false })).toBeDisabled());
+            await checked(async () => expect(await snapshot()).toEqual(expected));
+          }
+        } catch (reason) { retainOwnedDesktopResources(info); throw reason; }
+      }, info, { captureFailureScreenshot: false });
+    } catch (reason) { retainOwnedDesktopResources(info); throw reason; }
+    finally { ended = true; }
+  });
+}
