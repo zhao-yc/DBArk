@@ -89,8 +89,14 @@ export class QueryInsertFile {
 export async function createQueryInsertFile(input: QueryStreamFileOptions,io?:AtomicFileIO):Promise<QueryStreamFile>{
   if(!input.insertTarget || !input.beforeInsertCommit || input.resultSelection.kind!=='all')throw Error(text.mapping);
   const target=queryInsertTargetSchema.parse(input.insertTarget);
-  const file=await AtomicFile.create(input.filePath,input.encoding,input.checkCancelled,input.onCommitStart,io,limits.fileBytes);
+  // 从open取得句柄起保护归属，不能等到prepare(true)才赋予清理依据。
+  const file=await AtomicFile.create(input.filePath,input.encoding,input.checkCancelled,input.onCommitStart,io,limits.fileBytes,undefined,true);
   const rows=new QueryInsertFile(target,sql=>file.write(sql));
-  try{if(input.encoding==='utf16le')await file.write('\uFEFF');await file.write(text.header);}catch(error){await file.dispose();throw error;}
+  try{if(input.encoding==='utf16le')await file.write('\uFEFF');await file.write(text.header);}
+  catch(error){
+    try{await file.dispose();}
+    catch(cleanup){throw new AggregateError([error,cleanup],'完整INSERT初始化失败且暂存清理未确认',{cause:error});}
+    throw error;
+  }
   return {write:frame=>{input.checkCancelled();return rows.consume(frame);},async complete(){const sample=rows.complete();await file.prepare(true);input.checkCancelled();await input.beforeInsertCommit!(sample,file.bytesWritten);input.checkCancelled();await file.commit();},abort:()=>file.dispose(),get rowsWritten(){return rows.rowsWritten;},get bytesWritten(){return file.bytesWritten;},get fileCommitted(){return file.fileCommitted;}};
 }

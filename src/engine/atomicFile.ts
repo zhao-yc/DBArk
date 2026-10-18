@@ -10,6 +10,8 @@ export interface WritableFile {
   write(buffer: Uint8Array, offset: number, length: number): Promise<{ bytesWritten: number }>;
   sync(): Promise<void>; close(): Promise<void>;
   identity?():Promise<string>;
+  /** 从原open句柄启用整段生命周期保护；返回只对原目录项有效的清理能力。 */
+  protectOwnership?():Promise<()=>Promise<void>>;
 }
 export interface AtomicFileIO {
   open(path: string): Promise<WritableFile>; rename(source: string, target: string): Promise<void>; remove(path: string): Promise<void>;
@@ -18,7 +20,51 @@ export interface AtomicFileIO {
 }
 /** 同一原句柄及目录项必须具有相同身份、字节数和修改代次，拒绝符号链接与被替换的暂存。 */
 function fileIdentity(value:BigIntStats):string{if(!value.isFile()||value.isSymbolicLink())throw Error(stagedText.identity);return [value.dev,value.ino,value.size,value.mtimeNs,value.ctimeNs].join(':');}
-export const nativeAtomicFileIO: AtomicFileIO = { open: async path => {const file=await open(path,'wx');return{write:(buffer,offset,length)=>file.write(buffer,offset,length),sync:()=>file.sync(),close:()=>file.close(),identity:async()=>fileIdentity(await file.stat({bigint:true}))};}, identity:async path=>fileIdentity(await lstat(path,{bigint:true})), parentIdentity:async path=>{const value=await lstat(await realpath(dirname(resolve(path))),{bigint:true});if(!value.isDirectory())throw Error(stagedText.targetIdentity);return[value.dev,value.ino].join(':');}, rename, remove: path => rm(path, { force: true }) };
+/** 原句柄固定dev/ino；只有本适配器成功写入才更新大小/时间代次，不从路径重新认领文件。 */
+async function openNativeFile(path:string):Promise<WritableFile>{
+  const file=await open(path,'wx');
+  let expected:string;
+  try{expected=fileIdentity(await file.stat({bigint:true}));}
+  catch(error){await file.close();throw error;}
+  let protecting=false,unknown=false,closed=false;
+  const object=expected.split(':').slice(0,2).join(':');
+  const handleIdentity=async()=>fileIdentity(await file.stat({bigint:true}));
+  const pathIdentity=async()=>fileIdentity(await lstat(path,{bigint:true}));
+  /** 任何已观察到的漂移永久撤销删除权；未知时仍关闭原句柄，但保留当前路径。 */
+  const check=async()=>{try{if(unknown||await handleIdentity()!==expected||await pathIdentity()!==expected)throw Error(stagedText.identity);}catch(error){unknown=true;throw error;}};
+  return{
+    async protectOwnership(){
+      protecting=true;await check();
+      return async()=>{
+        if(!closed||unknown)throw Error(stagedText.identity);
+        try{if(await pathIdentity()!==expected)throw Error(stagedText.identity);}
+        catch(error){if((error as NodeJS.ErrnoException).code==='ENOENT')return;throw error;}
+        await rm(path,{force:true});
+      };
+    },
+    async write(buffer,offset,length){
+      if(protecting)await check();
+      const result=await file.write(buffer,offset,length);
+      if(protecting){
+        // 快照在原写入回执内取得，外层等待期间的改写不能被下一次清理当成自有写入。
+        const next=await handleIdentity();
+        if(next.split(':').slice(0,2).join(':')!==object){unknown=true;throw Error(stagedText.identity);}
+        expected=next;await check();
+      }
+      return result;
+    },
+    async sync(){if(protecting)await check();await file.sync();if(protecting)await check();},
+    async close(){
+      if(closed)return;
+      let failure:unknown;
+      if(protecting)try{await check();}catch(error){failure=error;}
+      try{await file.close();closed=true;}catch(error){unknown=true;throw error;}
+      if(failure)throw failure;
+    },
+    identity:handleIdentity,
+  };
+}
+export const nativeAtomicFileIO: AtomicFileIO = {open:openNativeFile,identity:async path=>fileIdentity(await lstat(path,{bigint:true})),parentIdentity:async path=>{const value=await lstat(await realpath(dirname(resolve(path))),{bigint:true});if(!value.isDirectory())throw Error(stagedText.targetIdentity);return[value.dev,value.ino].join(':');},rename,remove:path=>rm(path,{force:true})};
 const activeTargets = new Set<string>();
 const targetReservations = new WeakMap<AtomicFileTargetReservation,{key:string;claimed:boolean;released:boolean}>();
 
@@ -50,6 +96,7 @@ export class AtomicFile {
   private file?: WritableFile;
   private created = false;
   private disposed = false;
+  private disposalFailure?:{reason:unknown};
   private committed = false;
   private prepared = false;
   private preparedIdentity?:string;
@@ -60,15 +107,16 @@ export class AtomicFile {
   private readonly temporary: string;
   private key = '';
   private ownsTarget = true;
+  private removeOwned?:()=>Promise<void>;
 
   /** 构造不进行 IO；只有 open 成功后才拥有临时文件的删除权。 */
-  private constructor(private readonly target: string, private readonly encoding: string, private readonly checkCancelled: () => void, private readonly onCommitStart: () => void, private readonly io: AtomicFileIO, private readonly maxBytes: number) {
+  private constructor(private readonly target: string, private readonly encoding: string, private readonly checkCancelled: () => void, private readonly onCommitStart: () => void, private readonly io: AtomicFileIO, private readonly maxBytes: number,private readonly protectOwnership:boolean) {
     this.temporary = `${target}.dbark-${randomUUID()}.partial`;
   }
 
   /** 创建或取消失败时释放目标锁，绝不删除未由本次 open 创建的文件。 */
-  static async create(target: string, encoding: string, checkCancelled: () => void, onCommitStart: () => void, io: AtomicFileIO = nativeAtomicFileIO, maxBytes = 10 * 1024 ** 3, reservation?: AtomicFileTargetReservation): Promise<AtomicFile> {
-    const writer = new AtomicFile(target, encodingName(encoding), checkCancelled, onCommitStart, io, maxBytes);
+  static async create(target: string, encoding: string, checkCancelled: () => void, onCommitStart: () => void, io: AtomicFileIO = nativeAtomicFileIO, maxBytes = 10 * 1024 ** 3, reservation?: AtomicFileTargetReservation,protectOwnership=false): Promise<AtomicFile> {
+    const writer = new AtomicFile(target, encodingName(encoding), checkCancelled, onCommitStart, io, maxBytes,protectOwnership);
     writer.key = await exportTargetKey(target);
     if(reservation){
       const state=targetReservations.get(reservation);
@@ -79,9 +127,16 @@ export class AtomicFile {
       activeTargets.add(writer.key);
     }
     try {
-      checkCancelled(); writer.file = await io.open(writer.temporary); writer.created = true; checkCancelled();
+      checkCancelled(); writer.file = await io.open(writer.temporary); writer.created = true;
+      // 取得句柄后先绑定原清理能力，再处理迟到取消，不能在prepare前出现无归属清理窗口。
+      if(protectOwnership){if(!writer.file.protectOwnership)throw Error(stagedText.identityUnavailable);writer.removeOwned=await writer.file.protectOwnership();}
+      checkCancelled();
       return writer;
-    } catch (error) { await writer.dispose(); throw error; }
+    } catch (error) {
+      try{await writer.dispose();}
+      catch(cleanup){throw new AggregateError([error,cleanup],`${error instanceof Error?error.message:'原子文件创建失败'}；原子文件清理未确认`,{cause:error});}
+      throw error;
+    }
   }
 
   /** 字节统计只包含真实完成的磁盘写入，提交标志只在 rename 成功后为真。 */
@@ -152,20 +207,32 @@ export class AtomicFile {
 
   /** 幂等关闭，仅清理自己创建且未提交的临时文件；目标锁直到清理结束才释放。 */
   async dispose(): Promise<void> {
-    if (this.disposed) return;
+    if (this.disposed){if(this.disposalFailure)throw this.disposalFailure.reason;return;}
     this.disposed = true;
     this.pending = []; this.pendingBytes = 0;
+    try{
+    let closeFailed=false,closeError:unknown;
     try { await this.file?.close(); }
+    catch(error){closeFailed=true;closeError=error;}
     finally {
       this.file = undefined;
       try {
+        if(closeFailed)throw closeError;
         if (this.created && !this.committed) {
+          if(this.protectOwnership){
+            if(!this.removeOwned)throw Error(stagedText.identityUnavailable);
+            await this.removeOwned();return;
+          }
           // 长等待后若目录项已被替换，只清理仍与原句柄相符的文件，不能删除外来文件。
           if(this.preparedIdentity && this.io.identity){try{if(await this.io.identity(this.temporary)!==this.preparedIdentity)return;}catch(error){if((error as NodeJS.ErrnoException).code==='ENOENT')return;throw error;}}
           await this.io.remove(this.temporary);
         }
       }
       finally { if (this.key && this.ownsTarget) activeTargets.delete(this.key); }
+    }
+    }catch(reason){
+      // 未确认的关闭/归属错误也是永久终态，后续abort不能伪报资源已清零。
+      this.disposalFailure={reason};throw reason;
     }
   }
 }
