@@ -29,6 +29,7 @@ import{HistoryPages}from'./historyPages';
 import { resolveWorkbenchTarget } from './workbench';
 import { objectUri } from '../shared/workbench';
 import { applyTablePreset, TablePresetSources } from './tablePresets';
+import { nativeStartupInfoMarker } from './nativeStartupDiagnostics';
 
 if (process.env.DBARK_USER_DATA) { mkdirSync(process.env.DBARK_USER_DATA, { recursive: true }); app.setPath('userData', process.env.DBARK_USER_DATA); }
 app.setName('DBArk');
@@ -274,7 +275,17 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
       if (preparing) { preparing.cancelled = true; return; }
       break;
     }
-    case 'app.info': return { version: app.getVersion(), platform: process.platform, encryptionAvailable: safeStorage.isEncryptionAvailable(), dataPath: app.getPath('userData') };
+    case 'app.info': {
+      // 固定标记只观察原同步调用；各属性仍按原顺序求值，不新增加密调用或改变异常。
+      nativeStartupInfoMarker(30);
+      const version = app.getVersion(), platform = process.platform;
+      nativeStartupInfoMarker(31);
+      const encryptionAvailable = safeStorage.isEncryptionAvailable();
+      nativeStartupInfoMarker(32);
+      const dataPath = app.getPath('userData');
+      nativeStartupInfoMarker(33);
+      return { version, platform, encryptionAvailable, dataPath };
+    }
     case 'app.setDirty': hasPendingEdits = input.dirty; return;
     case 'connections.list': return store.connections();
     case 'connections.export': return queryFileOperation(async () => {

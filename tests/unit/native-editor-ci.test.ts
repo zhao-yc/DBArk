@@ -34,6 +34,18 @@ function report(specialty: any, patch: Record<string, unknown> = {}) {
 }
 const port = { stat: async (path: string) => { const value = await lstat(path); return { file: value.isFile(), directory: value.isDirectory(), link: value.isSymbolicLink() }; }, real: realpath, list: readdir, bytes: readFile };
 
+it.each([false, true])('Main固定标记只由当前批准的诊断调用显式传递，diagnostics=%s不继承父环境开关', diagnostics => {
+  const f = fixture(), approval = f.approve();
+  const execute = vi.fn((_executable: string, _args: string[], options: any) => {
+    expect(options.env.DBARK_NATIVE_EDITOR_MAIN_DIAGNOSTICS).toBe(diagnostics ? '1' : undefined);
+    expect(options.env.DBARK_NATIVE_EDITOR_PROGRESS).toBe(diagnostics ? '1' : undefined);
+    const specialty = runner.nativeSpecialties[_args.includes(runner.nativeSpecialties[0].spec) ? 0 : 1];
+    writeFileSync(options.env.PLAYWRIGHT_JSON_OUTPUT_FILE, JSON.stringify(report(specialty))); return { status: 0, stdout: 'RAM子进程结果', stderr: '' };
+  });
+  runner.runNativeEditorSpecialties({ approval, output: f.output, parentEnv: { DBARK_NATIVE_EDITOR_MAIN_DIAGNOSTICS: '1' }, diagnostics }, execute);
+  expect(execute).toHaveBeenCalledTimes(2);
+});
+
 describe('原生专项CI同次构建批准及精确运行', () => {
   it('编译失败不签任何清单、不启动测试、不重试', () => {
     const f = fixture(), execute = vi.fn(() => ({ status: 1, stdout: '原编译失败', stderr: '' }));

@@ -1,5 +1,6 @@
 import type { ElectronApplication, Page, TestInfo } from '@playwright/test';
 import type { EditorIndentNativeRun } from './editor-indentation-native-owner';
+import { attachNativeStartupWires, stopNativeStartupWires } from './editor-native-startup-wire';
 
 type UrlKind = 'blank' | 'file' | 'devtools' | 'other';
 type EventKind = 'pageerror' | 'console-error' | 'crash' | 'preload-error';
@@ -72,7 +73,7 @@ export function observeNativeStartup(application: ElectronApplication, current: 
 }
 
 /** afterEach只序列化已捕获的内存；不调用owner、Page、Electron或文件系统端口。 */
-export async function attachNativeStartupDiagnostics(info: Pick<TestInfo, 'attach' | 'errors'>, run: Pick<EditorIndentNativeRun, 'owners' | 'startupWaits'>) {
+async function attachOriginalNativeStartupDiagnostics(info: Pick<TestInfo, 'attach' | 'errors'>, run: Pick<EditorIndentNativeRun, 'owners' | 'startupWaits'>) {
   try {
     // afterEach原scope已retain；先封存纯内存轨迹，迟到回包不能再补写该case。
     run.startupWaits?.seal();
@@ -87,4 +88,18 @@ export async function attachNativeStartupDiagnostics(info: Pick<TestInfo, 'attac
     if (info.errors.length) throw new AggregateError([...info.errors, attachment], '原测试失败且启动观察附件失败', { cause: info.errors[0] });
     throw attachment;
   }
+}
+
+/** 两份附件独立尝试，原8KiB正文逐字保留；任一收集/写入失败都保留原异常链。 */
+export async function attachNativeStartupDiagnostics(info: Pick<TestInfo, 'attach' | 'errors'>, run: Pick<EditorIndentNativeRun, 'owners' | 'startupWaits'>) {
+  stopNativeStartupWires(run);
+  let original: { error: unknown } | undefined;
+  try { await attachOriginalNativeStartupDiagnostics(info, run); } catch (error) { original = { error }; }
+  try { await attachNativeStartupWires(info, run); }
+  catch (failure) {
+    if (original) throw new AggregateError([original.error, failure], '原启动观察与固定标记附件均失败', { cause: original.error });
+    if (info.errors.length) throw new AggregateError([...info.errors, failure], '原测试失败且固定标记观察失败', { cause: info.errors[0] });
+    throw failure;
+  }
+  if (original) throw original.error;
 }
