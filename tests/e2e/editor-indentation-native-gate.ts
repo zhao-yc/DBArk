@@ -42,6 +42,10 @@ export function bindEditorIndentNativeCase(info: IndentNativeTestInfo, environme
       const elapsed = observedElapsed;
       return elapsed !== undefined && Number.isSafeInteger(elapsed) && elapsed >= 0 && elapsed < 120000 ? elapsed : undefined;
     },
+    /** 只读原TestInfo及墓碑，不读新时钟、不查环境、不发权限；观察者一旦失配自行永久封存。 */
+    observationActive(): boolean {
+      try { return !retained && currentInfo() === info && Object.hasOwn(info, '_startWallTime') === internal && info.startTime === startObject && readStart() === start && info.timeout === timeout && (info.status === undefined || info.status === 'passed'); } catch { return false; }
+    },
     assertCurrent() {
       try {
         environment.assertCurrent(); const instant = now();

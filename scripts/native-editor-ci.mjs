@@ -74,7 +74,7 @@ export function runNativeEditorSpecialties({ approval, output, parentEnv = proce
       const progress = diagnostics ? prepareNativeProgress({ manifestPath: approval.value.manifests[specialty.name].path, manifestSha256: approval.value.manifests[specialty.name].sha256 }) : undefined;
       if (progress) writeOnce(join(directory, 'progress-identity.json'), progress);
       const env = specialtyEnvironment(parentEnv, specialty, approval, report);
-      if (progress) { env.DBARK_NATIVE_EDITOR_PROGRESS = '1'; env.DBARK_NATIVE_EDITOR_PROGRESS_SHA256 = progress.sha256; }
+      if (progress) { env.DBARK_NATIVE_EDITOR_PROGRESS = '1'; env.DBARK_NATIVE_EDITOR_PROGRESS_SHA256 = progress.sha256; env.DBARK_NATIVE_EDITOR_MAIN_DIAGNOSTICS = '1'; }
       const result = execute(process.execPath, [join(approval.value.project, 'node_modules/@playwright/test/cli.js'), 'test', specialty.spec, '--workers=1', '--retries=0', '--trace=off', '--reporter=list,json', '--output=' + join(directory, 'attachments')], { cwd: approval.value.project, env });
       saveCommand(directory, 'playwright', result); success(result);
       const proof = assertSpecialtyResult(JSON.parse(readFileSync(report, 'utf8')), specialty);

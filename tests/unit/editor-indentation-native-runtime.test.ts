@@ -11,6 +11,8 @@ import { EditorIndentNativeRun, recordIndentNativePageError } from '../e2e/edito
 import { sealEditorIndentLaunchIdentity } from '../e2e/editor-indentation-native-identity';
 import { observeNativeStartup, attachNativeStartupDiagnostics, createNativeStartupWaits } from '../e2e/editor-native-startup-diagnostics';
 import { openNativeProgress } from '../../scripts/native-editor-progress.mjs';
+import { observeNativeStartupWire } from '../e2e/editor-native-startup-wire';
+import { nativeStartupSdkCollector } from '../fixtures/native-startup-sdk-collector';
 // 原提取夹具未开启诊断；若误开启只能使用显式RAM文件端口，禁止落到真实FS。
 const forbiddenProgressIO = new Proxy({}, { get() { throw Error('原VM夹具未配置RAM阶段文件端口'); } });
 const url = new URL('../e2e/editor-indentation-native-runtime.ts', import.meta.url), source = readFileSync(url, 'utf8'), tree = ts.createSourceFile('runtime.ts', source, ts.ScriptTarget.Latest, true);
@@ -316,13 +318,29 @@ describe('本轮原生页面错误原始诊断', () => {
 
 
 /** 只重建原runtime函数及既有RAM端口；进度端口不写真实文件，不启动旧套件。 */
-function progressFixture(onRecord?: (stage: string) => void, elapsedMs?: () => number | undefined) {
+function progressFixture(onRecord?: (stage: string) => void, elapsedMs?: () => number | undefined, observationActive?: () => boolean) {
   const f = fixture(), records: { stage: string; state: any }[] = [];
   f.environment.DBARK_NATIVE_EDITOR_PROGRESS = '1'; f.environment.DBARK_NATIVE_EDITOR_PROGRESS_SHA256 = 'e'.repeat(64);
   const open = vi.fn((options: any) => ({ record(stage: string, state: any) { options.guard(); onRecord?.(stage); records.push({ stage, state: { ...state } }); options.guard(); } }));
-  const run = runInNewContext(method('createEditorIndentNativeRun') + '\ncreateEditorIndentNativeRun(binding)', { ...f.context, createNativeStartupWaits, openNativeProgress: open, binding: { assertCurrent: f.assertCurrent, elapsedMs } }) as EditorIndentNativeRun;
+  const run = runInNewContext(method('createEditorIndentNativeRun') + '\ncreateEditorIndentNativeRun(binding)', { ...f.context, observeNativeStartupWire: (application: any, child: any, active: () => boolean) => observeNativeStartupWire(application, child, active, () => ({ version: '1.64.0', implementation: application.ramSdk })), createNativeStartupWaits, openNativeProgress: open, binding: { assertCurrent: f.assertCurrent, elapsedMs, ...(observationActive ? { observationActive } : {}) } }) as EditorIndentNativeRun;
   return { ...f, run, records, open };
 }
+
+it('原runtime完整接通早期SDK缓存、child流及既有console；两次source与hook不丢结束标记', async () => {
+  const f = progressFixture(undefined, () => 40, () => true), Collector = nativeStartupSdkCollector();
+  f.onLaunch(application => {
+    const child = application.process(); child.stdout = new EventEmitter(); child.stderr = new EventEmitter(); const collector = new Collector();
+    application.ramSdk = { _process: child, _browserContext: { _browser: { options: { name: 'electron', browserLogsCollector: collector } } } };
+    // 原launch回包前已经输出，console监听尚不存在，只能从实际SDK缓存重放。
+    collector.log('[pid=101][out] DBARK_STARTUP_V1:30');
+    f.context.console.log = (message: string) => { collector.log('[pid=101][out] ' + message); child.stdout.emit('data', Buffer.from(message + '\n')); application.emit('console', { type: () => 'log', text: () => message }); };
+  });
+  const owner = await f.run.launch(), data = owner.startupWire!.data;
+  expect(data.failed).toBe(false); expect(data.earlyCoverage).toBe(1); expect(data.events[0]).toEqual([1, 30]);
+  expect(data.events.filter(([channel, code]) => channel === 3 && code === 1)).toHaveLength(2);
+  expect(data.events).toContainEqual([3, 8]); expect(data.events).toContainEqual([5, 8]); expect(data.events).toContainEqual([3, 20]); expect(data.events).toContainEqual([5, 24]); expect(data.stopped).toBe(true);
+  expect(data.dropped).toBe(0); expect(owner.startupDiagnostics?.prepared).toBe(true);
+});
 
 describe('本轮原生阶段持久诊断端口', () => {
   it('正常扫描/launch/prepare/close都在原动作之前登记数字状态', async () => {
