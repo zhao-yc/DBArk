@@ -1,5 +1,17 @@
 # 查询分栏布局源码整合检查点
 
+## 三平台原生CI首次检查点与有限修正
+
+固定3d7c73e的完整CI39088982989/job117561439268已成功：490文件/9091通过/10条件跳过，类型及构建成功，解码日志`run1674-3d7c73e-full-ci-green.log` SHA256`005f65a96b2eafafc6705c2e5644984b81e70088ba4dad7f0ac52048254d7202`。只加运行标记的9e530da检查点触发CI39089165148，Linux job117561971255同样490/9091通过/10跳过、类型及构建成功，日志SHA256`d67b7af4d41e00cb14feff6ea7413ae4e77dcaade231c35e349eca6904e058ed`。
+
+该次桌面验收全部终态为失败，原件保留：Windows在源码缩进的只读预览后收到了pageerror名称Canceled，报告SHA256`8b26275efaad117b7e1627e76e28293a65a421af347e16a7cef46d9cb3cf48c6`，原记录缺少message/stack，生产原因未确认；macOS arm64源码缩进通过，但分栏初始maximum为226，未达到原`>410`前提，报告SHA256`f2299566f40eb982011ffa8c8c2f71437174ed5e0de3319bf9a360f67d143231`。不能将这些失败改写为已验。
+
+macOS x64的源码缩进和分栏各单次通过，原报告SHA256分别`4b58138101bf60a2b3578809c4b9b49593c5154edd89e7dfcb22a976013e7490`与`ffd45a8ad557353a225bac2d457d778d030432055fcd5af1fbfa7dc851e5a20d`；Root只读重消费两份原JSON，两个owner均有原正常退出/PID和清理证明，没有新增GUI。随后真实DMG安装成功、字节封存后，安装缩进单例120秒超时，另worker teardown45秒超时，未得到原owner失败附录或通过证明。安装报告SHA256`23e1470b76f20a6e516e05271035cc86b0ca149d004dc32c2c88e01b5595a17a`，原现场保留；安装后分栏未运行。
+
+员工c41c1f8对应Root`80051457aa6944519be66e3c148b6d5311171c38`，仅修改测试场景与错误诊断：从实际BrowserWindow内容尺寸固定缩放，通过官方zoom建立原CSS场景，原410、拖动高度、短屏和模型/持久化期待保持；css字段是content/zoom换算，真实DOM几何仍由原断言核对。保留原errors拒绝门，额外记录原错误message/stack，不过滤Canceled。作者8项、独立5项RAM对照通过，独立交接SHA256`7272e512f33059c9b5a09a3162fa1148e5b6d4bb287852a0dc9755dad81fdb2c`。
+
+Root固定8005145的5相关文件97项通过，类型退出0，日志`run1679-native-scene-integration/stdout.log` SHA256`962c3a80c509e7752212fb587b21b0028d9fb343ac41430b76c7f5301eb6cd58`。产品src、构建脚本、版本与锁未改，未重复本地构建。新原生检查点待运行；本片不声称已修复Windows实际Canceled或macOS安装超时，0.23仍未公开。
+
 日期：2026-10-18。固定Root `2b7635211dd29193ca6b33b81fe29ccd392bd66e`，分支 `codex/p0-query-layout-v023-20261018`，0.23.0开发中，SQLite配置库8。独立普通克隆，不使用worktree；未改0.22候选或主目录。
 
 真实QueryTab已接入指针/键盘分隔条，逐查询标签持久化编辑区高度；旧值缺省300，严格写入130–8192整数，只保存显式提交。可见高度按工作区收紧而不改偏好。取消、失去捕获、Escape、卸载及目标变化会释放手势与租约，迟到事件不回写；提交只合并最新当前标签，保留SQL、标题、关联来源及其它标签。
