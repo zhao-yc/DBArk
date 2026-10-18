@@ -76,7 +76,8 @@ export function registerQueryInsertUi(binding:QueryInsertUiTarget){
         wrap:driver=>driver.promise() as Observer,register:(driver,done)=>{driver.connect(error=>done(error??undefined));},connect:socket=>{socket.connect({host:binding.target.host,port:binding.target.port});},
       },resourceCheck));await step(()=>journal!.append('observer-connected',observerReceipt!.summary()));
       const [server]=await step(()=>observer.query<RowDataPacket[]>({sql:'SELECT @@server_uuid AS uuid,@@version AS version,@@version_compile_os AS os,@@lower_case_table_names AS names',timeout:10000}));
-      expect(server).toHaveLength(1);expect(Boolean(server[0].uuid===binding.target.uuid&&/^8\.4\.11(?:[-+ ]|$)/.test(server[0].version)&&server[0].os==='Linux'&&server[0].names===0)).toBe(true);
+      // 独立原协议核实该系统变量是LONGLONG；bigNumberStrings要求精确字符串，不能与number混判。
+      expect(server).toHaveLength(1);expect(Boolean(server[0].uuid===binding.target.uuid&&/^8\.4\.11(?:[-+ ]|$)/.test(server[0].version)&&server[0].os==='Linux'&&server[0].names==='0')).toBe(true);
       await step(()=>journal!.append('schema-planned'));const [schemaCreated]=await step(()=>observer.query<ResultSetHeader>({sql:`CREATE DATABASE \`${database}\` CHARACTER SET utf8mb4 COLLATE utf8mb4_bin`,timeout:10000}));expect(schemaCreated.affectedRows).toBe(1);databaseAck=true;await step(()=>journal!.append('schema-created'));
       await step(()=>observer.query({sql:`CREATE TABLE \`${database}\`.__insert_owner(nonce CHAR(32) PRIMARY KEY,case_hash CHAR(64),scenario INT) ENGINE=InnoDB COMMENT='${plan.comment}'`,timeout:10000}));
       await step(()=>observer.query({sql:`INSERT INTO \`${database}\`.__insert_owner VALUES(?,?,?)`,values:[plan.nonce,plan.caseHash,scenario],timeout:10000}));

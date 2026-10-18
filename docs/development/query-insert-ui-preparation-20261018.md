@@ -42,4 +42,4 @@
 
 仅窄Vitest RAM与 `tsc --noEmit`，日志和精确计数见本clone `.cache/insert-ui-preparation/handoff.json`。RAM只核声明、目标/期限/owner失效、正式对话框回答回调及手写预期与纯消费者的对照；不替代真实MySQL字段类型、会话变量、界面选择器、Main cap授权、操作系统原子替换、正常退出或资源清理验收。
 
-未启动GUI、Electron、实际Playwright（含list）、数据库连接、SSH、Docker、端口、剪贴板、CI或依赖安装。Root独审整合后再安排源模式原生窗口和服务器资源授权；本片只提交本地 `[skip ci]`，不推送。
+作者准备阶段未启动GUI、Electron、实际Playwright（含list）、数据库连接、SSH、Docker、端口、剪贴板、CI或依赖安装。本片作者只提交本地 `[skip ci]`，由Root整合；后续真实运行、失败及独立原协议类型修正见[统筹记录](query-insert-ui-root-20261018.md)。

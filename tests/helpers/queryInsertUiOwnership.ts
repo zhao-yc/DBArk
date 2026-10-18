@@ -92,7 +92,7 @@ export function expectedPreciseInsertUiFile(database:string){
 /** DROP前只认可原创建ACK、准确服务器、标记、完整集合及原数据，缺项/未知对象均拒绝。 */
 export function assertInsertUiSchema(plan:InsertUiPlan,ack:boolean,proof:{server:unknown;marker:unknown;tables:unknown;source:unknown;target:unknown;neighbor:unknown;unknown:unknown;definitions:unknown},definitions:Readonly<Record<string,string>>){
   assert.equal(ack,true,'INSERT UI缺少原CREATE ACK');
-  assert.deepEqual(proof.server,[{uuid:'f568f70e-c730-11f1-8190-3e6c830dde01',version:'8.4.11',os:'Linux',names:0}]);
+  assert.deepEqual(proof.server,[{uuid:'f568f70e-c730-11f1-8190-3e6c830dde01',version:'8.4.11',os:'Linux',names:'0'}]);
   assert.deepEqual(proof.marker,[{nonce:plan.nonce,case_hash:plan.caseHash,scenario:plan.scenario}]);
   assert.deepEqual(proof.tables,plan.tables.map(name=>({name,kind:'BASE TABLE',comment:plan.comment})));
   assert.deepEqual(proof.source,insertUiPreciseSource);assert.deepEqual(proof.target,[{n:'0'}]);assert.deepEqual(proof.neighbor,[{id:7,nonce:plan.nonce}]);assert.deepEqual(proof.unknown,{triggers:[],routines:[],events:[]});
