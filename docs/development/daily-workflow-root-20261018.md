@@ -59,3 +59,11 @@ CSV 原生操作、实库最终数值／字节及跨版本验收尚未执行。�
 本地候选 `release/run1747/DBArk-0.27.0-win-x64-unsigned.exe` 为 142370844 字节，SHA-256 `d8c9d8d674e2ec5b52ca6464da692912600628848b88fc9d1011a4e3f81342e8`；其 `win-unpacked/resources/app.asar` 为 203117489 字节，SHA-256 `700a0308b962751c8ede013e2225965f50f3842a755258568e369e6c27c86557`。四份产物均逐块复读大小和摘要，收据 `.cache/parallel-integration/run1747-v027-windows-package/artifacts.json` 的 SHA-256 为 `2b6d9f5eca21055195b50c201d83f071304468c9d4be197f13a0bd2206eca4e6`。
 
 本版没有实际安装／运行该候选，也没有本版 Mac 构建／验收、原生 CSV 和新表控件、实库最终存储或新密钥证书。0.23 独立诊断运行的三平台失败不转写成本版失败或通过；本版仍需自己的对应验收。
+
+## 两条真实验收的准备整合
+
+作者 `f814f115d317ca9f5a5bca6776dbebfdede300a1` 和独审 P2 修复 `406ef6adab4b4f787289af97d34f87fdda71598a` 整合为 `7d40e11`／`d3107bb10dcc6b620a09f7c1152280eb14fb1858`。准备包含 CSV 分隔符／映射失效与新表时间／前缀两条真实界面用例；双开关、准确 200:13384／MySQL8.4.11 UUID、固定产品 `50626ec` 及构建清单均需 Root 显式绑定。默认和 list 路径不加载 live 模块或读取凭据，资源在首次写入前登记，未知退出／身份时保留现场。具体范围见[准备说明](../acceptance-v027-preparation-20261018.md)。
+
+两项已复现的夹具缺口已修：open 晚回的期限检查受原句柄 finally 覆盖；读回样本后删除前再次核规范路径及 dev/ino，不能仅凭相同字节删除替换文件。普通 unlink 仍不提供跨进程原子 CAS 保证。原独审及原反例保留，修复交接 SHA-256 `cba06ede2cc47e7cfcfcdf1d127ed13285a7cc36322fb3646fab617745811890`。
+
+Root `node .cache/run1783-check-v027-preparation-root.mjs` 的两文件 61 项通过，0 失败／跳过；unit.log SHA-256 `97866a7bf744a556a9c01b95044a79f967597fbff8a4a7e0a4fa91f06df61de3`。产品 src／scripts／版本及锁文件未变，src／tests／scripts／package／锁文件／tsconfig 与已类型通过作者相同，采用该类型证据。没有启动 GUI、数据库、预检或剪贴板，两条真实执行次数仍为 0，本机窗口恢复许可仍待明确，不重复发起请求。
