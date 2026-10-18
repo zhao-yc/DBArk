@@ -16,6 +16,7 @@ const cases = new WeakMap<TestInfo, ReturnType<typeof bindEditorIndentNativeCase
 test.afterEach(({}, info) => { cases.get(info)?.retain(); });
 const modifier = process.platform === 'darwin' ? 'Meta' : 'Control';
 const bottom = process.platform === 'darwin' ? 'Meta+ArrowDown' : 'Control+End';
+const top = process.platform === 'darwin' ? 'Meta+ArrowUp' : 'Control+Home';
 const redo = process.platform === 'darwin' ? 'Meta+Shift+z' : 'Control+y';
 
 /** 官方公开API只做观察，沿已有原生caret基架在空白App/独立重启后启用，不替换产品模型。 */
@@ -48,6 +49,21 @@ async function write(run: EditorIndentNativeRun, owner: IndentNativeOwner, value
   const input = owner.page.locator('.query-tab:visible .monaco-editor').getByRole('textbox');
   await run.step(owner, () => input.focus()); await run.step(owner, () => owner.page.keyboard.press(`${modifier}+A`)); await run.step(owner, () => owner.page.keyboard.insertText(value));
   await expect.poll(async () => { const state = await settings(run, owner); return state.tabs.find(tab => tab.id === state.activeTabId)?.sql?.replaceAll('\r\n', '\n'); }).toBe(value);
+}
+/** 先输入无缩进多行种子，再用真实键盘补原Tab，避免后续换行继承该Tab；期望正文始终预先固定。 */
+async function seedOriginalTab(run: EditorIndentNativeRun, owner: IndentNativeOwner) {
+  const head = "SELECT '900719925474099312345', '🚢';\n", comment = '-- 原始Tab不能自动转换\n';
+  const tail = Array.from({ length: 65 }, (_, index) => '-- 缩进滚动探针 ' + index).join('\n');
+  const plain = head + comment + tail, expected = head + '\t' + comment + tail;
+  await write(run, owner, plain);
+  await run.step(owner, () => owner.page.locator('.query-tab:visible .monaco-editor').getByRole('textbox').focus());
+  await run.step(owner, () => owner.page.keyboard.press(top)); await run.step(owner, () => owner.page.keyboard.press('ArrowDown'));
+  const before = await current(run, owner); expect(before.value.replaceAll('\r\n', '\n')).toBe(plain);
+  expect(before.selections).toEqual([{ startLineNumber: 2, startColumn: 1, endLineNumber: 2, endColumn: 1, positionLineNumber: 2, positionColumn: 1 }]);
+  // 插入字面Tab而非Tab快捷键；后面没有换行输入，不触发多行缩进继承。
+  await run.step(owner, () => owner.page.keyboard.insertText('\t'));
+  await expect.poll(async () => { const state = await settings(run, owner); return state.tabs.find(tab => tab.id === state.activeTabId)?.sql?.replaceAll('\r\n', '\n'); }).toBe(expected);
+  expect((await current(run, owner)).value.replaceAll('\r\n', '\n')).toBe(expected);
 }
 /** 真正新建查询表单保留原端口拒连；不伪造连接成功，不建立SQL会话。 */
 async function newQuery(run: EditorIndentNativeRun, owner: IndentNativeOwner) {
@@ -104,8 +120,7 @@ test('离线原生缩进：两种样式热更、真实Tab/Undo/选区、新模�
   const run = runtime!.createEditorIndentNativeRun(scope);
   try {
     const first = await run.launch(); await observe(run, first); await prepareQuery(run, first);
-    const source = "SELECT '900719925474099312345', '🚢';\n\t-- 原始Tab不能自动转换\n" + Array.from({ length: 65 }, (_, index) => '-- 缩进滚动探针 ' + index).join('\n');
-    await write(run, first, source); expect(await current(run, first)).toMatchObject({ tabSize: 2, indentSize: 2, insertSpaces: true, detectIndentation: false, readOnly: false });
+    await seedOriginalTab(run, first); expect(await current(run, first)).toMatchObject({ tabSize: 2, indentSize: 2, insertSpaces: true, detectIndentation: false, readOnly: false });
     await run.step(first, () => first.page.keyboard.press(bottom)); await run.step(first, () => first.page.keyboard.insertText('\n-- 增量撤销探针'));
     const appended = (await current(run, first)).value; await run.step(first, () => first.page.keyboard.press(`${modifier}+z`)); const undone = (await current(run, first)).value; expect(undone).not.toBe(appended); await run.step(first, () => first.page.keyboard.press(redo)); expect((await current(run, first)).value).toBe(appended);
     for (let index = 0; index < 4; index++) await run.step(first, () => first.page.keyboard.press('Shift+ArrowLeft'));
