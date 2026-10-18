@@ -32,3 +32,9 @@ src/main/index.ts的rendererURL取__dirname相对dist路径，packaged WASM取pr
 ## 本片范围
 
 只有Windows规范路径生成/归属谓词窄修及定向离线验证；没有产品src、版本、锁、原spec/gate/identity/runtime、consumer或环境白名单变化，不扩展退出许可与清理目标范围。原Windows/arm64日志SHA已逐一核对；原报告/进度/清单及源终态按原字节保存于本人ignored证据目录。Root独审后才决定新检查点；本片不推送、不触发CI、不运行端口/实库/安装/GUI/200，不修改Root或原作者活动目录。
+
+## Root 整合验证
+
+Root 接纳为 `56c057c0887f00e0295ba0a74d377c732dfdc7f9`。六份实际脚本消费者一次67项通过、零跳过，完整类型检查退出0；无产品变化，不重复源码构建。忽略记录 `run1720-installed-native-paths-fixed/unit.log` SHA256 `2681631faccaf3a9287f1c44f687890ffe1c819cd347ad3b04ecd4da4d04f34e`。
+
+这只证明本机规范路径现象及有限离线合同，修后 Windows 安装专项尚未实跑，Mac 产品未改。第二检查点三平台安装失败和现场仍按[原结果](../../tests/integration/acceptance-native-editor-progress-r2-20261018.md)保留。x64 原 job 日志已读取，原 ZIP 下载失败，具体等待阶段尚未独立提取，不能借 arm64 作结论。
