@@ -1,4 +1,4 @@
-import { lstat, realpath, mkdir, open, readdir, unlink, rmdir, readFile } from 'node:fs/promises';
+import { lstat, realpath, mkdir, open, readdir, unlink, rmdir } from 'node:fs/promises';
 import type { BigIntStats } from 'node:fs';
 import { basename, join, resolve } from 'node:path';
 import { createHash } from 'node:crypto';
@@ -106,14 +106,61 @@ export async function installQueryFileNativeDialog(owner: IndentNativeOwner, fix
   }, { path: fixturePath, allowed }));
 }
 
-/** 只在原run.stopped内读SQLite9，不执行用户SQL；来源路径只与本fixture做精确比较。 */
-export async function readQueryFileNativeDatabase(path: string, guard: Guard) {
-  const SQL = await checked(guard, () => initSqlJs({ locateFile: () => require.resolve('sql.js/dist/sql-wasm.wasm') }));
-  const bytes = await checked(guard, () => readFile(join(path, 'dbark.sqlite'))), db = new SQL.Database(bytes);
+/** 只读原run登记目录的SQLite9；路径、父目录与同一只读句柄在读前后固定，不跟随文件链接。 */
+export async function readQueryFileNativeDatabase(path: string, guard: Guard, run: EditorIndentNativeRun) {
+  /** 原调用者仍须处于stopped；这里额外绑定原目录，不能以有效时间门读取另一个路径。 */
+  const authorize = () => { guard(); if (!run || run.path !== path || resolve(path) !== path || !basename(path).startsWith('dbark-indent-')) throw Error('SQLite读取缺少原run目录归属'); run.assert(); };
+  authorize();
+  const databasePath = join(path, 'dbark.sqlite'), limit = 16 * 1024 * 1024;
+  /** 父目录不允许链接、身份未知或路径重定向；固定版本也捕获读取期间的目录替换。 */
+  const parentStamp = (value: BigIntStats) => {
+    if (!value.isDirectory() || value.isSymbolicLink() || typeof value.dev !== 'bigint' || value.dev < 0n || typeof value.ino !== 'bigint' || value.ino <= 0n || typeof value.mtimeNs !== 'bigint' || typeof value.ctimeNs !== 'bigint') throw Error('SQLite父目录身份或链接未知');
+    return JSON.stringify([String(value.dev), String(value.ino), String(value.mtimeNs), String(value.ctimeNs)]);
+  };
+  /** 不把缺失的版本元数据字符串化为相同的unknown身份。 */
+  const fileStamp = (value: BigIntStats) => {
+    if (typeof value.dev !== 'bigint' || value.dev < 0n || typeof value.ino !== 'bigint' || typeof value.nlink !== 'bigint' || typeof value.size !== 'bigint' || typeof value.mtimeNs !== 'bigint' || typeof value.ctimeNs !== 'bigint') throw Error('SQLite文件版本身份未知');
+    return stamp(value);
+  };
+  const parent = parentStamp(await checked(authorize, () => lstat(path, { bigint: true })));
+  if (await checked(authorize, () => realpath(path)) !== path) throw Error('SQLite父目录真实路径不属于原run');
+  const named = await checked(authorize, () => lstat(databasePath, { bigint: true })), version = fileStamp(named);
+  if (named.size < 100n || named.size > BigInt(limit)) throw Error('SQLite证据大小不在有界读取范围');
+  if (await checked(authorize, () => realpath(databasePath)) !== databasePath) throw Error('SQLite文件真实路径或链接归属未知');
+  /** 每次路径复核仍使用首次封存的版本，不能给变化后的文件或父目录重新签名。 */
+  async function samePaths() {
+    if (parentStamp(await checked(authorize, () => lstat(path, { bigint: true }))) !== parent || await checked(authorize, () => realpath(path)) !== path) throw Error('SQLite父目录身份或真实路径已变化');
+    if (fileStamp(await checked(authorize, () => lstat(databasePath, { bigint: true }))) !== version || await checked(authorize, () => realpath(databasePath)) !== databasePath) throw Error('SQLite文件版本或真实路径已变化');
+  }
+  await samePaths(); authorize();
+  const file = await open(databasePath, 'r');
+  let db: InstanceType<Awaited<ReturnType<typeof initSqlJs>>['Database']> | undefined;
   try {
-    guard(); const sources = (db.exec('SELECT tab_id,id,revision,data FROM query_file_sources')[0]?.values ?? []).map(([tabId, id, revision, data]) => {
-      guard(); const value = privateQueryFileSourceSchema.parse(JSON.parse(String(data))); if (value.tabId !== tabId || value.ref.id !== id || value.ref.revision !== revision) throw Error('SQLite9来源索引与记录不一致'); return value;
+    authorize();
+    if (fileStamp(await checked(authorize, () => file.stat({ bigint: true }))) !== version) throw Error('SQLite只读句柄身份与原路径不一致');
+    await samePaths();
+    const bytes = Buffer.alloc(Number(named.size));
+    for (let offset = 0; offset < bytes.length;) {
+      const length = Math.min(64 * 1024, bytes.length - offset), result = await checked(authorize, () => file.read(bytes, offset, length, offset));
+      if (!Number.isSafeInteger(result.bytesRead) || result.bytesRead <= 0 || result.bytesRead > length) throw Error('SQLite读取截断或字节预算未知');
+      offset += result.bytesRead;
+    }
+    const end = await checked(authorize, () => file.read(Buffer.alloc(1), 0, 1, bytes.length));
+    if (end.bytesRead !== 0 || fileStamp(await checked(authorize, () => file.stat({ bigint: true }))) !== version) throw Error('SQLite读取期间版本或大小已变化');
+    await samePaths();
+    const SQL = await checked(authorize, () => initSqlJs({ locateFile: () => require.resolve('sql.js/dist/sql-wasm.wasm') }));
+    // WASM初始化也可能迟到；解析前再次核同一句柄和原路径，异常时绝不解析已取字节。
+    if (fileStamp(await checked(authorize, () => file.stat({ bigint: true }))) !== version) throw Error('SQLite解析前原句柄版本已变化');
+    await samePaths(); authorize(); db = new SQL.Database(bytes); authorize();
+    const sources = (db.exec('SELECT tab_id,id,revision,data FROM query_file_sources')[0]?.values ?? []).map(([tabId, id, revision, data]) => {
+      authorize(); const value = privateQueryFileSourceSchema.parse(JSON.parse(String(data))); if (value.tabId !== tabId || value.ref.id !== id || value.ref.revision !== revision) throw Error('SQLite9来源索引与记录不一致'); return value;
     });
-    return { schema: Number(db.exec('PRAGMA user_version')[0].values[0][0]), settings: JSON.parse(String(db.exec('SELECT data FROM settings WHERE id=1')[0].values[0][0])) as AppSettings, sources };
-  } finally { db.close(); }
+    const result = { schema: Number(db.exec('PRAGMA user_version')[0].values[0][0]), settings: JSON.parse(String(db.exec('SELECT data FROM settings WHERE id=1')[0].values[0][0])) as AppSettings, sources };
+    authorize(); return result;
+  } finally {
+    db?.close();
+    // 撤销后只允许关闭已取得的本句柄；关闭前后仍检查原门，不再做路径IO、解析或删除。
+    let revoked: unknown; try { authorize(); } catch (reason) { revoked = reason; }
+    await file.close(); if (revoked) throw revoked; authorize();
+  }
 }
