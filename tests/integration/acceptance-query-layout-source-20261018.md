@@ -26,3 +26,7 @@ Root固定2b76352的16个相关文件一次133项通过，无失败或跳过；�
 原fa63444唯一红仍保持：旧RAM textarea缺少defaultValue反射textContent，ReactDOM初次挂载因此未从默认文本初始化value，后续render可能掩盖它。作者固定Date.now稳定复现空value且完整DDL已在defaultValue、readonly和拒绝原因已呈现，以首次/同props再提交因果对照确认。没有通过增加等待、强制render或编辑器noop追绿。原日志 `run1620-fa63444-full-ci-original-red.log` SHA256 `946aebe837d932cbdd1ddda766910181d7e579e4c424f828a9ad58857fe6d033`。
 
 作者70eaead对应Root `d035b09e95e93fe8df1cdc2e15090008c3beb69f`，仅在该测试factory补浏览器默认文本反射、固定原红时钟并加只读/拒绝路径检查；63处原断言逐字保持，无产品改动。作者正式窄测3项、因果1项通过、类型一次通过，交接SHA256 `5f8f504ade04401c2c97765486dd480534749286cdfde182cd52f85767755588`。Root受影响完整文件一次22项通过，日志SHA256 `0d4cd8fedc0e00e6c68bcd71a1100ff4fdab0f966c686f1e1d78e7da983e53d0`；相关产品文件与fa一致，不重复本地类型/构建。原红、50e完整9000及修后22属于不同来源，不改写或累加为同一完整终态。
+
+固定 `ddd9a8fde08f458964313a7677158b0647802860` 的[新完整CI39081092814](https://github.com/zhao-yc/DBArk/actions/runs/39081092814)、job117538002267随后成功：483文件、9001通过、10条件跳过，类型及构建成功，包含上述textarea夹具修正；原fa失败仍保留。日志 `run1628-ddd9a8f-full-ci-green.log` SHA256 `0c57e1937a8770ad1b993afd3e1a555ba0c99f346dea5efb365c9a12e7c3ab5c`。桌面及发行任务均跳过，不计作安装、原生GUI或公开发行。
+
+随后本分支前向接纳了原生准备器的作者ae800bd/557344a，Root对应9665d97/8b800f1；五个runtime/owner/gate/identity/相关测试文件与已验0.22来源逐字相同，SQLite预期仍为本分支的8。产品、脚本、包、锁及工作流与ddd9a8f未变，未重复本地测试/类型/构建；本测试代码增量不继承前述9001完整结果，另需新CI。0.22实际两次尝试、PID独审及已知键盘种子问题见[专用原生记录](acceptance-p0-native-preparation-20261018.md)，不外推为0.23布局GUI。
