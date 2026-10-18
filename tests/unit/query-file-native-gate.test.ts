@@ -8,7 +8,7 @@ import { EditorIndentNativeRun, type IndentNativePort } from '../e2e/editor-inde
 import { queryFileNativeKeyProtocolHash } from '../e2e/query-file-native-key-protocol';
 const source = readFileSync(new URL('../e2e/query-file-native.spec.ts', import.meta.url), 'utf8');
 const fixtureSource = readFileSync(new URL('../e2e/query-file-native-fixture.ts', import.meta.url), 'utf8');
-const allowed = (): NodeJS.ProcessEnv => ({ DBARK_QUERY_FILE_NATIVE_TEST: '1', DBARK_INTEGRATION_ENABLED: '0', DBARK_QUERY_FILE_MANIFEST: 'C:/RAM-approved.json', DBARK_QUERY_FILE_MANIFEST_SHA256: 'a'.repeat(64), DBARK_QUERY_FILE_FIXTURE_SHA256: gate.queryFileNativeRecipeHash(), DBARK_QUERY_FILE_NATIVE_KEYS: 'root-v1', DBARK_QUERY_FILE_NATIVE_KEYS_SHA256: queryFileNativeKeyProtocolHash() });
+const allowed = (): NodeJS.ProcessEnv => ({ DBARK_QUERY_FILE_NATIVE_TEST: '1', DBARK_INTEGRATION_ENABLED: '0', DBARK_QUERY_FILE_MANIFEST: 'C:/RAM-approved.json', DBARK_QUERY_FILE_MANIFEST_SHA256: 'a'.repeat(64), DBARK_QUERY_FILE_FIXTURE_SHA256: gate.queryFileNativeRecipeHash(), DBARK_QUERY_FILE_NATIVE_KEYS: 'root-v2', DBARK_QUERY_FILE_NATIVE_KEYS_SHA256: queryFileNativeKeyProtocolHash() });
 
 /** 真spec声明只登记回调；所有runtime/fixture均为RAM哨兵，不加载Electron或执行list。 */
 function declaration(env: NodeJS.ProcessEnv, args: string[] = [], create = vi.fn(() => { throw Error('禁止取得真实runtime'); }), info: any = { _startWallTime: 0, timeout: 120000, status: 'passed', attach: vi.fn(async () => {}) }, clock = { now: 0 }) {
@@ -36,7 +36,9 @@ it('默认关闭及RAM模拟list只登记一例，不读取身份清单或加载
   }
 });
 it('独立manifest与固定fixture双审批，拒绝旧门、危险环境、错误平台及CLI替换', () => {
-  expect(() => gate.assertQueryFileNativeEnvironment(allowed(), [], 'win32')).not.toThrow(); expect(() => gate.assertQueryFileNativeEnvironment({ ...allowed(), DBARK_QUERY_FILE_MANIFEST: '/RAM/approved.json' }, [], 'darwin')).not.toThrow();
+  // 原文件环境的macOS范围保持不变；Windows Root按键审批不混入该独立环境对照。
+  const mac = allowed(); delete mac.DBARK_QUERY_FILE_NATIVE_KEYS; delete mac.DBARK_QUERY_FILE_NATIVE_KEYS_SHA256;
+  expect(() => gate.assertQueryFileNativeEnvironment(allowed(), [], 'win32')).not.toThrow(); expect(() => gate.assertQueryFileNativeEnvironment({ ...mac, DBARK_QUERY_FILE_MANIFEST: '/RAM/approved.json' }, [], 'darwin')).not.toThrow();
   for (const field of ['DBARK_DEV_URL', 'DBARK_USER_DATA', 'NODE_OPTIONS', 'NODE_PATH', 'ELECTRON_RUN_AS_NODE', 'DBARK_TEST_HOST', 'DBARK_AUTH_TOKEN', 'DBARK_SSH_KEY', 'DBARK_EDITOR_INDENT_MANIFEST', 'DBARK_QUERY_LAYOUT_MANIFEST', 'dbark_query_file_native_test']) expect(() => gate.assertQueryFileNativeEnvironment({ ...allowed(), [field]: '' }, [], 'win32')).toThrow();
   for (const change of [{ DBARK_QUERY_FILE_FIXTURE_SHA256: 'b'.repeat(64) }, { DBARK_QUERY_FILE_MANIFEST: 'relative.json' }, { DBARK_INTEGRATION_ENABLED: '1' }, { DBARK_QUERY_LAYOUT_NATIVE_TEST: '1' }, { DBARK_EDITOR_INDENT_NATIVE_TEST: '1' }]) expect(() => gate.assertQueryFileNativeEnvironment({ ...allowed(), ...change }, [], 'win32')).toThrow();
   for (const args of [['--trace', 'on'], ['--trace'], ['--trace=retain-on-failure'], ['--config=other.ts'], ['-cother.ts'], ['--ui'], ['--debug']]) expect(() => gate.assertQueryFileNativeEnvironment(allowed(), args, 'win32')).toThrow();

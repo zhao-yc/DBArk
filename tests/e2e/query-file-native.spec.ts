@@ -73,7 +73,7 @@ async function select(run: EditorIndentNativeRun, owner: IndentNativeOwner, id: 
 /** CtrlS必须推进真实来源修订且显示clean，不能借上一次toast或伪造文件返回值过关。 */
 async function save(run: EditorIndentNativeRun, owner: IndentNativeOwner, id: string, bridge: KeyBridge, stage: 'saved' | 'draft' | 'restarted') {
   const before = (await settings(run, owner)).tabs.find(tab => tab.id === id)!; expect(before.fileSourceBinding).toBeDefined();
-  await run.step(owner, () => bridge.request(owner, stage, id, before.fileSourceBinding!.revision));
+  await run.step(owner, () => bridge.request(owner, stage, id, before.fileSourceBinding!));
   await expect.poll(() => settings(run, owner).then(value => value.tabs.find(tab => tab.id === id)?.fileSourceBinding?.revision ?? 0)).toBeGreaterThan(before.fileSourceBinding!.revision);
   await run.step(owner, () => expect(owner.page.locator('.query-tab:visible').getByLabel(text.fileSource, { exact: true })).toContainText(text.clean));
 }
@@ -112,7 +112,7 @@ test('离线原生文件：关联编辑CtrlS、外改不覆盖、重读保留、
     await run.step(first, () => expect(first.page.locator('.query-tab:visible').getByLabel(text.fileSource, { exact: true })).toContainText(text.dirty)); await run.step(first, () => fixture!.verify('saved', () => run.assert(first), true));
     const externalFile = await run.step(first, () => fixture!.external(() => run.assert(first)));
     const beforeConflict = (await settings(run, first)).tabs.find(tab => tab.id === document.id)!;
-    await run.step(first, () => bridge!.request(first, 'external', document.id, beforeConflict.fileSourceBinding!.revision)); const recovery = first.page.getByRole('dialog', { name: text.recovery, exact: true });
+    await run.step(first, () => bridge!.request(first, 'external', document.id, beforeConflict.fileSourceBinding!)); const recovery = first.page.getByRole('dialog', { name: text.recovery, exact: true });
     await run.step(first, () => expect(recovery.locator('.error-box')).toContainText('原文件已被外部修改，请重读、另存或取消')); await run.step(first, () => expect(recovery).toContainText(text.wroteNo));
     expect(await run.step(first, () => fixture!.verify('external', () => run.assert(first), true))).toEqual(externalFile); expect(await current(run, first)).toEqual(draft);
     await run.step(first, () => recovery.getByRole('button', { name: text.reread, exact: true }).click()); await run.step(first, () => expect(recovery).toBeHidden());

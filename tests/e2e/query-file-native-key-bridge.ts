@@ -5,6 +5,7 @@ import { randomUUID } from 'node:crypto';
 import type { TestInfo } from '@playwright/test';
 import type { EditorIndentNativeRun, IndentNativeOwner } from './editor-indentation-native-owner';
 import { assertQueryFileNativeKeyApproval, queryFileNativeKeyProtocol as protocol, type QueryFileNativeKeyStage } from './query-file-native-key-protocol';
+import { observeQueryFileNativeDocument } from './query-file-native-document-observer';
 
 type Guard = () => void;
 /** 关闭已取得句柄是撤销后的唯一例外；其他每个异步操作前后都核原门。 */
@@ -35,7 +36,7 @@ export async function createQueryFileNativeKeyBridge(run: EditorIndentNativeRun,
   const deadline = start + 120000, caseId = info.testId, caseNonce = randomUUID(), root = run.path;
   const base = () => { scope.assertCurrent(); run.assert(); if (currentInfo() !== info || info.testId !== caseId || !root || run.path !== root || root !== resolve(root) || !basename(root).startsWith('dbark-indent-') || !caseId || !Number.isFinite(start) || info.timeout !== 120000) throw Error('按键桥原case或userdata归属未知'); };
   base(); const directory = join(root!, protocol.directory), known = new Map<string, string>(), observations = new Map<IndentNativeOwner, { owner: unknown; released: boolean }>();
-  const diagnostics: unknown[] = []; let sequence = 0, pending = false, failed = false, removed = false, originalTab: string | undefined;
+  const diagnostics: unknown[] = []; let sequence = 0, pending = false, failed = false, removed = false, originalTab: string | undefined, originalSource: string | undefined;
   /** 任何桥异常都永久停链，不重发，不把未知回执降格为继续等待。 */
   const guard = (owner?: IndentNativeOwner) => { base(); if (failed || removed) throw Error('按键桥已停链或清理'); if (owner) run.assert(owner); };
   const parent = identity(await checked(() => guard(), () => lstat(root!, { bigint: true })), true);
@@ -107,25 +108,40 @@ export async function createQueryFileNativeKeyBridge(run: EditorIndentNativeRun,
     }, { install, release }));
     check(); observations.set(owner, { owner: fixed, released: release }); return { owner: fixed, focus: { window: actualWindow, main, renderer } };
   }
+  /** 当前请求独立观察UI；每次settings读取及renderer核对都在原门内，发布后允许正常修订增长。 */
+  async function inspectDocument(owner: IndentNativeOwner, token: string, action: 'begin' | 'check' | 'end', expected: { tabId: string; sourceId: string; revision: number }, allowRevisionGrowth: boolean, check: Guard) {
+    if (action === 'begin') await checked(check, () => owner.page.evaluate(observeQueryFileNativeDocument, { action: 'begin', token, expected }));
+    const settings = await checked(check, () => owner.page.evaluate(() => window.dbark.invoke('settings.get', {})));
+    return checked(check, () => owner.page.evaluate(observeQueryFileNativeDocument, { action: action === 'begin' ? 'check' : action, token, settings, allowRevisionGrowth }));
+  }
   return {
     /** 仅缓存供失败附件使用；停链后不得借诊断再次连接窗口或读取路径。 */
     diagnostics,
-    async request(owner: IndentNativeOwner, stage: QueryFileNativeKeyStage, tabId: string, revision: number) {
+    async request(owner: IndentNativeOwner, stage: QueryFileNativeKeyStage, tabId: string, ref: { id: string; revision: number }) {
       const check = () => guard(owner);
       try {
-        check(); if (pending || protocol.stages[sequence] !== stage || !tabId || originalTab !== undefined && originalTab !== tabId || !Number.isSafeInteger(revision) || revision < 1 || (sequence < 3 ? run.owners.indexOf(owner) !== 0 : run.owners.indexOf(owner) !== 1) || observations.get(owner)?.released) throw Error('按键请求重复、错序或owner阶段未知');
-        originalTab ??= tabId;
+        check(); const sourceId = ref?.id, revision = ref?.revision;
+        if (pending || protocol.stages[sequence] !== stage || !tabId || originalTab !== undefined && originalTab !== tabId || !sourceId || originalSource !== undefined && originalSource !== sourceId || !Number.isSafeInteger(revision) || revision < 1 || (sequence < 3 ? run.owners.indexOf(owner) !== 0 : run.owners.indexOf(owner) !== 1) || observations.get(owner)?.released) throw Error('按键请求重复、错序或owner阶段未知');
+        originalTab ??= tabId; originalSource ??= sourceId;
         pending = true; await own(check);
+        const token = randomUUID(), expected = { tabId, sourceId, revision };
+        const activeDocument = await inspectDocument(owner, token, 'begin', expected, false, check); check();
         const before = await observe(owner, !observations.has(owner), false, check); check(); const number = sequence + 1, suffix = String(number).padStart(2, '0');
-        const request = { protocol: protocol.version, caseId, caseNonce, start, deadline, owner: before.owner, stage, tabId, revision, sequence: number, nonce: randomUUID(), key: protocol.key };
+        const request = { protocol: protocol.version, caseId, caseNonce, start, deadline, owner: before.owner, stage, tabId, sourceId, revision, sequence: number, nonce: token, key: protocol.key };
         const requestName = `request-${suffix}.json`, receiptName = `receipt-${suffix}.json`, pendingName = `receipt-${suffix}.pending`;
-        await publish(requestName, request, check); check(); diagnostics.push({ phase: '请求前', request, focus: before.focus });
+        await publish(requestName, request, check); await inspectDocument(owner, token, 'check', expected, false, check); check(); diagnostics.push({ phase: '请求前', request, activeDocument, focus: before.focus });
         check(); console.log('DBARK_QUERY_FILE_NATIVE_KEY_REQUEST ' + JSON.stringify({ requestPath: join(directory, requestName), receiptPath: join(directory, receiptName), pendingPath: join(directory, pendingName), request })); check();
         let value: unknown;
-        while ((value = await receipt(receiptName, check, [receiptName, pendingName])) === undefined) { await checked(check, () => new Promise<void>(done => setTimeout(done, 25))); }
+        do {
+          await inspectDocument(owner, token, 'check', expected, true, check);
+          value = await receipt(receiptName, check, [receiptName, pendingName]);
+          await inspectDocument(owner, token, 'check', expected, true, check);
+          if (value === undefined) await checked(check, () => new Promise<void>(done => setTimeout(done, 25)));
+        } while (value === undefined);
         check();
         if (canonical(value) !== canonical({ ...request, status: 'sent' })) throw Error('按键回执未知、重复、错序或身份不符，禁止重发');
-        await own(check); const after = await observe(owner, false, false, check); check(); diagnostics.push({ phase: '已收到发送回执', request, focus: after.focus });
+        await own(check); const completedDocument = await inspectDocument(owner, token, 'end', expected, true, check); check();
+        const after = await observe(owner, false, false, check); check(); diagnostics.push({ phase: '已收到发送回执', request, activeDocument: completedDocument, focus: after.focus });
         sequence = number; pending = false;
       } catch (reason) { failed = true; run.retained = true; throw reason; }
     },
