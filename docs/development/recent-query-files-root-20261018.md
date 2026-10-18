@@ -32,4 +32,6 @@ Root 在独立普通克隆、分支 `codex/p0-recent-sql-files-v026-20261018` �
 
 唯一失败在 `query-layout-storage.test.ts` 的旧schema7夹具：它由当前库构造旧库时只删除了后来新增的文件来源表，仍携带本版空的最近文件缓存表，故“原11表”实际变成12。Root `6f8a6a50dd9b5e50531002df842c28252adc9834` 仅在旧DDL构造阶段移除这两张新增表；原11表数量、逐表原文、失败写盘回滚和合成秘密门全部保持，并补核迁移后新的历史表为空。
 
-原失败文件完整一次7项通过、零跳过。日志 `run1727-old-schema-fixture-fixed/unit.log` SHA256 `5a56ed34084761ddc994a374df05fba3400b7672b63e566231e0c7ff9161b384`。产品源码、脚本、包、锁及构建输入与 `5547fd4` 相同，不重复构建或打包；修后完整 CI 尚待。原红记录保留，实际界面和安装边界不变。
+原失败文件完整一次7项通过、零跳过。日志 `run1727-old-schema-fixture-fixed/unit.log` SHA256 `5a56ed34084761ddc994a374df05fba3400b7672b63e566231e0c7ff9161b384`。产品源码、脚本、包、锁及构建输入与 `5547fd4` 相同，不重复构建或打包。原红记录保留，实际界面和安装边界不变。
+
+修后固定 `e7eebfc4eab05ee86232469dff1b0a29f55d1cc8` 的[完整 CI](https://github.com/zhao-yc/DBArk/actions/runs/39098712643)／job `117590381691` 已成功：504文件、9323通过、10项条件跳过，类型及构建成功。解码原日志 `run1728-v026-full-ci-fixed-green.log` SHA256 `711c5958d1e1876ae0050715988f47f651635045173bfe47ab1cd6ccbf1b1ba6`。桌面与发行 job 条件跳过，完整检查不替代实际窗口、安装、数据库或 macOS 验收，亦不表示0.26已公开发行。
