@@ -26,8 +26,8 @@ async function observe(run: EditorIndentNativeRun, owner: IndentNativeOwner) {
   await run.step(owner, () => expect(owner.page.locator('.app-statusbar')).toBeVisible());
 }
 /** 当前Monaco公开getter与独立WeakMap身份；不调用模型、正文、Undo或选区写入API。 */
-async function snapshots(run: EditorIndentNativeRun, owner: IndentNativeOwner, scope = '.query-tab', visible = true) {
-  return run.step(owner, () => owner.page.evaluate(({ scope, visible }) => {
+async function snapshots(run: EditorIndentNativeRun, owner: IndentNativeOwner, scope = '.query-tab', visible = true, observeAnimation = false) {
+  return run.step(owner, () => owner.page.evaluate(({ scope, visible, observeAnimation }) => {
     type Api = typeof import('monaco-editor');
     const root = window as Window & { monaco?: Api; __indentObservation?: { ids: WeakMap<object, number>; next: number } };
     if (!root.monaco?.editor.getEditors) throw Error('原生缩进专项缺少官方Monaco观察API');
@@ -35,15 +35,40 @@ async function snapshots(run: EditorIndentNativeRun, owner: IndentNativeOwner, s
     const id = (value: object) => { if (!registry.ids.has(value)) registry.ids.set(value, ++registry.next); return registry.ids.get(value)!; };
     return root.monaco.editor.getEditors().filter(editor => { const node = editor.getContainerDomNode(); return node.isConnected && node.closest(scope) && (!visible || node.getClientRects().length > 0 && getComputedStyle(node).visibility === 'visible'); }).map(editor => {
       const model = editor.getModel(); if (!model || model.isDisposed()) throw Error('原生缩进专项模型未知');
+      if (observeAnimation && typeof editor.hasPendingScrollAnimation !== 'function') throw Error('原生缩进专项缺少公共滚动动画getter');
       const options = model.getOptions(), raw = editor.getRawOptions() as import('monaco-editor').editor.IEditorOptions & import('monaco-editor').editor.IGlobalEditorOptions;
       const pane = editor.getContainerDomNode().closest('.tab-pane'), paneIndex = pane ? Array.from(document.querySelectorAll('.tab-content .tab-pane')).indexOf(pane) : -1;
-      return { editor: id(editor), model: id(model), paneIndex, value: model.getValue(), eol: model.getEOL(), version: model.getVersionId(), alternativeVersion: model.getAlternativeVersionId(), selections: editor.getSelections()?.map(selection => ({ startLineNumber: selection.startLineNumber, startColumn: selection.startColumn, endLineNumber: selection.endLineNumber, endColumn: selection.endColumn, positionLineNumber: selection.positionLineNumber, positionColumn: selection.positionColumn })), scrollTop: editor.getScrollTop(), scrollLeft: editor.getScrollLeft(), readOnly: raw.readOnly === true, tabSize: options.tabSize, indentSize: options.indentSize, insertSpaces: options.insertSpaces, detectIndentation: raw.detectIndentation };
+      return { editor: id(editor), model: id(model), paneIndex, value: model.getValue(), eol: model.getEOL(), version: model.getVersionId(), alternativeVersion: model.getAlternativeVersionId(), selections: editor.getSelections()?.map(selection => ({ startLineNumber: selection.startLineNumber, startColumn: selection.startColumn, endLineNumber: selection.endLineNumber, endColumn: selection.endColumn, positionLineNumber: selection.positionLineNumber, positionColumn: selection.positionColumn })), scrollTop: editor.getScrollTop(), scrollLeft: editor.getScrollLeft(), readOnly: raw.readOnly === true, tabSize: options.tabSize, indentSize: options.indentSize, insertSpaces: options.insertSpaces, detectIndentation: raw.detectIndentation, ...(observeAnimation ? { pendingAnimation: editor.hasPendingScrollAnimation() } : {}) };
     }).sort((a, b) => a.paneIndex - b.paneIndex || a.editor - b.editor);
-  }, { scope, visible }));
+  }, { scope, visible, observeAnimation }));
 }
 /** 只读原settings IPC；以主进程持久化观察防抖完成，不以DOM相似替代正文保存。 */
 async function settings(run: EditorIndentNativeRun, owner: IndentNativeOwner) { return run.step(owner, () => owner.page.evaluate(() => window.dbark.invoke('settings.get', {}))); }
 async function current(run: EditorIndentNativeRun, owner: IndentNativeOwner) { const values = await snapshots(run, owner); expect(values).toHaveLength(1); return values[0]; }
+type ScrollPoint = Pick<Awaited<ReturnType<typeof current>>, 'editor' | 'model' | 'scrollTop' | 'scrollLeft'>;
+type ScrollFrame = ScrollPoint & { pending: boolean; accepted: boolean };
+const scrollProofs = new WeakMap<IndentNativeOwner, { stage: string; samples: number; pendingSamples: number; first?: ScrollFrame; last?: ScrollFrame }[]>();
+/** 首次热更只接受连续两次无挂起且坐标一致的原子只读样本；保留首样本，不改写原期待。 */
+async function settledCurrent(run: EditorIndentNativeRun, owner: IndentNativeOwner, stage: '首次四空格前' | '首次四空格后') {
+  const proof: { stage: string; samples: number; pendingSamples: number; first?: ScrollFrame; last?: ScrollFrame } = { stage, samples: 0, pendingSamples: 0 };
+  const proofs = scrollProofs.get(owner) ?? []; proofs.push(proof); scrollProofs.set(owner, proofs);
+  const point = (value: ScrollPoint): ScrollPoint => ({ editor: value.editor, model: value.model, scrollTop: value.scrollTop, scrollLeft: value.scrollLeft });
+  let target: string | undefined, previous: ScrollPoint | undefined, result: Awaited<ReturnType<typeof current>> | undefined, failed = false, failure: unknown;
+  await expect.poll(async () => {
+    try {
+      proof.samples++; const values = await snapshots(run, owner, '.query-tab', true, true); expect(values).toHaveLength(1);
+      const { pendingAnimation, ...sample } = values[0], key = JSON.stringify([sample.editor, sample.model, sample.paneIndex]); target ??= key;
+      if (key !== target) throw Error('滚动等待的原编辑器或模型已变化');
+      if (typeof pendingAnimation !== 'boolean') throw Error('没有取得公共滚动动画状态');
+      const frame: ScrollFrame = { ...point(sample), pending: pendingAnimation, accepted: false }; proof.first ??= frame; proof.last = frame;
+      if (pendingAnimation) { proof.pendingSamples++; previous = undefined; return false; }
+      frame.accepted = !!previous && previous.scrollTop === sample.scrollTop && previous.scrollLeft === sample.scrollLeft; previous = point(sample);
+      if (frame.accepted) result = sample; return frame.accepted;
+    } catch (reason) { failed = true; failure = reason; return true; }
+  }, { timeout: 5000, intervals: [20, 50, 100], message: '首次偏好切换的原编辑器须无挂起滚动动画且取样坐标一致' }).toBe(true);
+  if (failed) throw failure; run.assert(owner);
+  if (!result) throw Error('没有取得原编辑器的稳定滚动样本'); return result;
+}
 /** 当前活动查询仅通过真实键盘输入，测试不会注入store或调用execute。 */
 async function write(run: EditorIndentNativeRun, owner: IndentNativeOwner, value: string) {
   const input = owner.page.locator('.query-tab:visible .monaco-editor').getByRole('textbox');
@@ -124,8 +149,8 @@ test('离线原生缩进：两种样式热更、真实Tab/Undo/选区、新模�
     await run.step(first, () => first.page.keyboard.press(bottom)); await run.step(first, () => first.page.keyboard.insertText('\n-- 增量撤销探针'));
     const appended = (await current(run, first)).value; await run.step(first, () => first.page.keyboard.press(`${modifier}+z`)); const undone = (await current(run, first)).value; expect(undone).not.toBe(appended); await run.step(first, () => first.page.keyboard.press(redo)); expect((await current(run, first)).value).toBe(appended);
     for (let index = 0; index < 4; index++) await run.step(first, () => first.page.keyboard.press('Shift+ArrowLeft'));
-    const before = await current(run, first); expect(before.selections?.some(selection => selection.startColumn !== selection.endColumn)).toBe(true);
-    await preference(run, first, 4, true); expect(contentSnapshot(await current(run, first))).toEqual(contentSnapshot(before));
+    const before = await settledCurrent(run, first, '首次四空格前'); expect(before.selections?.some(selection => selection.startColumn !== selection.endColumn)).toBe(true);
+    await preference(run, first, 4, true); expect(contentSnapshot(await settledCurrent(run, first, '首次四空格后'))).toEqual(contentSnapshot(before));
     await run.step(first, () => first.page.locator('.query-tab:visible .monaco-editor').getByRole('textbox').focus()); await run.step(first, () => first.page.keyboard.press(`${modifier}+z`)); expect((await current(run, first)).value).toBe(undone); await run.step(first, () => first.page.keyboard.press(redo)); expect((await current(run, first)).value).toBe(appended);
     await newQuery(run, first); await write(run, first, 'SELECT\n'); const fresh = await current(run, first); expect(fresh).toMatchObject({ tabSize: 4, indentSize: 4, insertSpaces: true, detectIndentation: false });
     await run.step(first, () => first.page.keyboard.press(bottom)); await run.step(first, () => first.page.keyboard.press('Tab')); expect((await current(run, first)).value).toBe(fresh.value + '    ');
@@ -144,10 +169,10 @@ test('离线原生缩进：两种样式热更、真实Tab/Undo/选区、新模�
     expect(await settings(run, second)).toMatchObject({ editorTabSize: 8, editorInsertSpaces: false, tabs: saved.tabs, activeTabId: saved.activeTabId });
     const restarted = await snapshots(run, second, '.query-tab', false); expect(restarted).toHaveLength(2); expect(restarted.map(value => [value.tabSize, value.indentSize, value.insertSpaces, value.readOnly, value.detectIndentation])).toEqual([[8, 8, false, false, false], [8, 8, false, false, false]]); expect(restarted.map(value => value.value)).toEqual(saved.tabs.map(tab => tab.sql));
     await readonlyPreview(run, second); await noExecution(run, second); await run.close(second); await run.finish();
-    await info.attach('缩进原生终态', { body: Buffer.from(JSON.stringify({ accepted: true, normalOwners: run.owners.map(owner => ({ confirmed: owner.confirmed, willQuit: owner.ready, closed: owner.closed, recordedPids: owner.ids.size })), directoryRemoved: run.removed, sqliteChecked: true, systemClipboard: 0, sqlExecution: 0 })), contentType: 'application/json' });
+    await info.attach('缩进原生终态', { body: Buffer.from(JSON.stringify({ accepted: true, normalOwners: run.owners.map(owner => ({ confirmed: owner.confirmed, willQuit: owner.ready, closed: owner.closed, recordedPids: owner.ids.size, scrollObservations: scrollProofs.get(owner) ?? [] })), directoryRemoved: run.removed, sqliteChecked: true, systemClipboard: 0, sqlExecution: 0 })), contentType: 'application/json' });
   } catch (reason) {
     run.retained = true;
-    try { await info.attach('缩进原生保留现场', { body: Buffer.from(JSON.stringify({ directory: run.path, owners: run.owners.map(owner => ({ confirmed: owner.confirmed, willQuit: owner.ready, closed: owner.closed, ids: [...owner.ids], sourceDiagnostics: owner.sourceDiagnostics ?? [] })), automaticRetry: false, automaticForceStop: false, directoryRemoved: run.removed })), contentType: 'application/json' }); }
+    try { await info.attach('缩进原生保留现场', { body: Buffer.from(JSON.stringify({ directory: run.path, owners: run.owners.map(owner => ({ confirmed: owner.confirmed, willQuit: owner.ready, closed: owner.closed, ids: [...owner.ids], sourceDiagnostics: owner.sourceDiagnostics ?? [], scrollObservations: scrollProofs.get(owner) ?? [] })), automaticRetry: false, automaticForceStop: false, directoryRemoved: run.removed })), contentType: 'application/json' }); }
     catch (attachment) { throw new AggregateError([reason, attachment], '缩进用例失败且现场附录失败', { cause: reason }); }
     throw reason;
   }
