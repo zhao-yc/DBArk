@@ -25,12 +25,15 @@ export async function readIndentNativeSettings(path: string, guard: () => void):
 /** 原生适配器所有资源await/副作用共享run+原TestInfo门，入口身份只取Root批准清单。 */
 export function createEditorIndentNativeRun(binding: { assertCurrent(): void }): EditorIndentNativeRun {
   let parent = '', run!: EditorIndentNativeRun, identity: Awaited<ReturnType<typeof sealEditorIndentLaunchIdentity>> | undefined;
-  const captured = new WeakMap<IndentNativeOwner, { application: IndentNativeOwner['application']; child: ReturnType<IndentNativeOwner['application']['process']>; launcher: number; main?: number; page?: IndentNativeOwner['page']; marker: string; window?: { id: number; contents: number }; pids: Set<number> }>();
+  const captured = new WeakMap<IndentNativeOwner, { application: IndentNativeOwner['application']; child: ReturnType<IndentNativeOwner['application']['process']>; launcher: number; main?: number; page?: IndentNativeOwner['page']; marker: string; window?: { id: number; contents: number }; pids: Set<number>; quitting: boolean; closed: boolean; willQuit: boolean }>();
   /** 只做同步归属检查；run.assert再叠加sticky retained，避免递归调用授权门。 */
   function base(owner?: IndentNativeOwner) {
     binding.assertCurrent(); if (!owner) return;
     const own = captured.get(owner);
-    if (!own || owner.application !== own.application || owner.page !== own.page || own.application.process() !== own.child || own.child.pid !== own.launcher || [...own.pids].some(pid => !owner.ids.has(pid))) throw Error('原应用/page/启动器PID身份已变化，保留资源');
+    if (!own || owner.application !== own.application || owner.page !== own.page || own.child.pid !== own.launcher || [...own.pids].some(pid => !owner.ids.has(pid))) throw Error('原应用/page/启动器PID身份已变化，保留资源');
+    if (owner.closed !== own.closed || owner.ready !== own.willQuit || own.closed && !own.quitting) throw Error('原应用正常退出阶段或握手标记已变化，保留资源');
+    // dispatcher会先于客户端close投递失效；只在原source已确认的私有quit阶段使用原缓存，不捕获或吞SDK异常。
+    if (!own.quitting ? own.application.process() !== own.child : !own.window || !Number.isSafeInteger(own.main) || own.main! <= 0) throw Error('原应用启动器或退出来源证明已变化，保留资源');
   }
   const guard = (owner?: IndentNativeOwner, closed = false) => run.assert(owner, closed);
   /** 目录读取完成后先查完整门，随后才可继续下一次IO或launch/rm。 */
@@ -105,8 +108,11 @@ export function createEditorIndentNativeRun(binding: { assertCurrent(): void }):
       // 即使原期限在launch等待时结束，也先登记原句柄及主PID，再停链；不能留下未登记实例。
       let ready!: () => void; const child = application.process(), main = child.pid, marker = 'DBARK_INDENT_QUIT:' + randomUUID();
       const owner: IndentNativeOwner = { application, page: undefined!, ids: new Set(main && Number.isSafeInteger(main) ? [main] : []), closed: false, confirmed: false, ready: false, errors: [], sourceDiagnostics: [], quitReady: new Promise(done => { ready = done; }) };
-      captured.set(owner, { application, child, launcher: main!, marker, pids: new Set(owner.ids) }); run.acquiredOwner(owner);
-      application.on('close', () => { owner.closed = true; }); application.on('console', message => { if (message.text() === marker) { owner.ready = true; ready(); } });
+      const own = { application, child, launcher: main!, marker, pids: new Set(owner.ids), quitting: false, closed: false, willQuit: false };
+      captured.set(owner, own); run.acquiredOwner(owner);
+      // 只认原句柄的真实事件；公共closed/ready不能伪造私有阶段，提前退出立即永久停链。
+      application.on('close', () => { own.closed = true; owner.closed = true; if (!own.quitting) run.retained = true; });
+      application.on('console', message => { if (message.text() === marker) { own.willQuit = true; owner.ready = true; if (!own.quitting) run.retained = true; ready(); } });
       guard(owner); if (!Number.isSafeInteger(main) || main! <= 0) throw Error('新应用主PID未知'); await verified(); guard(owner); await source(owner); guard(owner); return owner;
     },
     prepare: async owner => {
@@ -119,11 +125,15 @@ export function createEditorIndentNativeRun(binding: { assertCurrent(): void }):
     record: source,
     quit: async owner => {
       guard(owner); await source(owner); guard(owner);
-      const exited = owner.application.waitForEvent('close', { timeout: 15000 }); void exited.catch(() => undefined);
-      guard(owner); await owner.application.evaluate(({ app }) => { setTimeout(() => app.quit(), 0); }); guard(owner, true);
+      const own = captured.get(owner)!;
+      if (!own.window || !own.main || own.quitting || own.closed || own.willQuit) throw Error('原应用尚未取得可用的正常退出来源');
+      const exited = own.application.waitForEvent('close', { timeout: 15000 }); void exited.catch(() => undefined);
+      guard(owner); own.quitting = true; // 最后一次完整source之后、发起原quit之前封存，覆盖dispose早于close投递的间隙。
+      await own.application.evaluate(({ app }) => { setTimeout(() => app.quit(), 0); }); guard(owner, true);
       await Promise.race([owner.quitReady, exited.then(() => { if (!owner.ready) throw Error('本owner关闭但未取得will-quit'); })]); guard(owner, true);
       if (!owner.ready) throw Error('本owner正常退出握手未知');
-      if (!owner.closed) { guard(owner, true); await owner.application.close(); guard(owner, true); } await exited; guard(owner, true);
+      if (!owner.closed) { guard(owner, true); await own.application.close(); guard(owner, true); } await exited; guard(owner, true);
+      if (!own.closed || !own.willQuit) throw Error('原应用真实关闭或正常退出握手未确认');
     },
     absent: async ids => {
       guard(); let failure: unknown;
