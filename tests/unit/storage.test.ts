@@ -23,7 +23,7 @@ describe('配置与凭据持久化', () => {
       upgraded.addHistory({id:'h'+index,connectionId:profile.id,databaseContext:context,sql:'SELECT DATABASE()',startedAt:stamp,elapsedMs:1,success:true});
     }
     upgraded.saveSettings({...upgraded.settings(),tabs:[{id:'draft',kind:'query',title:'待确认草稿',connectionId:profile.id,databaseContext:{state:'unknown'},sql:'INSERT INTO subject VALUES(1)'}]});upgraded.close();
-    const persisted=new SQL.Database(readFileSync(path));expect(persisted.exec('PRAGMA user_version')[0].values[0][0]).toBe(8);expect(persisted.exec("SELECT * FROM queries WHERE id='legacy'")).toEqual(oldQueries);persisted.close();
+    const persisted=new SQL.Database(readFileSync(path));expect(persisted.exec('PRAGMA user_version')[0].values[0][0]).toBe(9);expect(persisted.exec("SELECT * FROM queries WHERE id='legacy'")).toEqual(oldQueries);persisted.close();
     const restored=await LocalStore.open(path,require.resolve('sql.js/dist/sql-wasm.wasm'),protector);
     expect(restored.queries().find(item=>item.id==='q1')?.databaseContext).toEqual({state:'known',database:null});expect(restored.history().find(item=>item.id==='h2')?.databaseContext).toEqual({state:'unknown'});expect(restored.settings().tabs[0].databaseContext).toEqual({state:'unknown'});restored.close();
   });

@@ -1,3 +1,4 @@
+import { QueryFileSources } from './queryFileSources';
 import { tableCreateMessages } from '../shared/tableCreate';
 import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, safeStorage } from 'electron';
 import { copyInsertSql } from './copyInsertSql';
@@ -38,6 +39,7 @@ let broker: EngineBroker;
 let tableApplyReceipts: TableApplyReceipts;
 let connectionConfig: ConnectionConfigManager;
 let connectionTransfer: ConnectionTransfer;
+let queryFileSources: QueryFileSources;
 let savedQuerySearches:SavedQuerySearches;
 let savedQueryPages:SavedQueryPages;
 let historyPages:HistoryPages;
@@ -141,8 +143,8 @@ function validateMainCommand(command: string, input: unknown) {
 }
 
 /** 正常退出等待已授权的小型文件操作，防止中途退出留下未关闭的临时文件。 */
-async function queryFileOperation<T>(action: () => Promise<T>): Promise<T> {
-  if (shuttingDown) throw new Error('客户端正在退出，不能开始文件操作');
+async function queryFileOperation<T>(action: () => Promise<T>, allowShutdown = false): Promise<T> {
+  if (shuttingDown && !allowShutdown) throw new Error('客户端正在退出，不能开始文件操作');
   const operation = action(); queryFileOperations.add(operation);
   try { return await operation; } finally { queryFileOperations.delete(operation); }
 }
@@ -154,12 +156,48 @@ async function writeSelectedQuery(input: { fileToken: string; sql: string; encod
   try { await writeQueryFile(path, input.sql, input.encoding); } finally { release(); }
 }
 
+/** 文件任务先持久化固定概要，禁止复用任何既有任务编号，不借用数据库连接。 */
+function registerQueryFileSourceTask(taskId: string, command: Command): void {
+  if (tasks.has(taskId)) throw Error('任务编号已使用，请创建新的文件任务');
+  const task: TaskRecord = { id: taskId, kind: command, status: 'running', progress: 0, message: '正在处理SQL文件；正文与路径未写入任务概要', startedAt: new Date().toISOString() };
+  try { store.saveTask(task); } catch { throw Error('本地文件任务记录未保存，尚未开始文件IO'); }
+  tasks.set(taskId, task);
+}
+
 /** 分派前检查配置保存锁，防止检查通过后另一个请求用旧凭据抢先建连。 */
 async function dispatch(command: Command, input: any, columns?: MainInvocation): Promise<unknown> {
   // 来源释放只撤销内存能力，配置保存和退出收尾时也必须可用，不建立任务或历史。
   if (command === 'table.copySourceRelease' || command === 'files.releaseExportColumns') return broker.request(command, input);
   // 确认与释放不新建连接或任务，不受配置保存锁阻塞；归属由引擎在取消前校验。
   if(command==='search.dataNext'||command==='search.dataRelease'||command==='search.recordsRelease')return broker.request(command,input);
+  // 文件来源独立使用Main授权，不经过数据库broker或连接配置保存。
+  if (command.startsWith('queryFileSources.')) {
+    const releasing = command === 'queryFileSources.release' || command === 'queryFileSources.cancel';
+    columnsMain.assertCapturedOwner(columns);
+    const scope = { document: columns!.owner.document, assertCurrent: () => {
+      columnsMain.assertCapturedOwner(columns);
+      if (!releasing && (shuttingDown || !rendererHasSettings || !rendererSettingsCurrent)) throw Error('查询文档配置尚未同步或客户端正在退出');
+    } };
+    scope.assertCurrent();
+    if (command === 'queryFileSources.open' || command === 'queryFileSources.save' || command === 'queryFileSources.saveAs') registerQueryFileSourceTask(input.taskId, command);
+    return queryFileOperation(async () => {
+      switch (command) {
+        case 'queryFileSources.cancel': return queryFileSources.cancel(input, scope);
+        case 'queryFileSources.open': return queryFileSources.open(input, scope);
+        case 'queryFileSources.save': return queryFileSources.save(input, scope);
+        case 'queryFileSources.saveAs': return queryFileSources.saveAs(input, scope);
+        case 'queryFileSources.status': return queryFileSources.status(input, scope);
+        case 'queryFileSources.release': return queryFileSources.release(input, scope);
+        default: throw Error('文件来源命令未声明');
+      }
+    }, releasing);
+  }
+  // 既有任务中心仍发送query.cancel；本地文件任务只在当前Main中精确撤销。
+  if (command === 'query.cancel' && tasks.get(input.taskId)?.kind.startsWith('queryFileSources.')) {
+    columnsMain.assertCapturedOwner(columns);
+    const scope = { document: columns!.owner.document, assertCurrent: () => columnsMain.assertCapturedOwner(columns) };
+    return queryFileOperation(() => queryFileSources.cancelTask(input.taskId, scope), true);
+  }
   const structurePurpose = command.startsWith('schema.tableCreate.') ? 'tableCreate' as const : command.startsWith('schema.tableCopyData.') ? 'tableCopyData' as const : command.startsWith('schema.tableCopyStructure.') ? 'tableCopyStructure' as const : command.startsWith('schema.databaseCreate.') ? 'databaseCreate' as const : command.startsWith('schema.tableRename.') ? 'tableRename' as const : command.startsWith('schema.tableAutoIncrement.') ? 'tableAutoIncrement' as const : command.startsWith('schema.tableDefaultEncoding.') ? 'tableDefaultEncoding' as const : command.startsWith('schema.tableDrop.') ? 'tableDrop' as const : command.startsWith('schema.tableTruncate.') ? 'tableTruncate' as const : command.startsWith('schema.tableComment.') ? 'tableComment' as const : command.startsWith('schema.columns.') ? 'columns' as const : command.startsWith('schema.indexes.') ? 'indexes' as const : command.startsWith('schema.foreignKeys.') ? 'foreignKeys' as const : undefined;
   const structureCommand = structurePurpose !== undefined, structurePrefix = structurePurpose ? `schema.${structurePurpose}.` : '';
   for (const [token, value] of structureTokens) if (value.expires <= Date.now()) structureTokens.delete(token);
@@ -327,7 +365,7 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
     case 'table.applyReceipt.list': return store.tableApplyReceipts(input);
     case 'table.applyReceipt.detail': return store.tableApplyReceipt(input.operationId);
     case 'tasks.list': return store.tasks();
-    case 'tasks.cancelState': return taskCancelSnapshot(input.taskIds, tasks, (id, operationId) => tableApplyReceipts.cancelState(id, operationId));
+    case 'tasks.cancelState': return taskCancelSnapshot(input.taskIds, tasks, (id, operationId) => tableApplyReceipts.cancelState(id, operationId)).map(item => tasks.get(item.taskId)?.status === 'running' && tasks.get(item.taskId)?.kind.startsWith('queryFileSources.') ? { ...item, state: queryFileSources.cancelState(item.taskId) } : item);
     case 'settings.get': rendererHasSettings = true; return store.settings();
     case 'settings.save': {
       try { store.saveSettings(input); rendererSettingsCurrent = true; stateFlushed?.resolve(); }
@@ -450,6 +488,11 @@ function createMenu(): void {
 async function createWindow(): Promise<void> {
   window = new BrowserWindow({ width: 1440, height: 920, minWidth: 1024, minHeight: 680, show: false, backgroundColor: '#101319', title: 'DBArk', icon: app.isPackaged ? join(process.resourcesPath, 'icon.png') : join(__dirname, '../../build/icon.png'), webPreferences: { preload: join(__dirname, 'preload.cjs'), sandbox: true, contextIsolation: true, nodeIntegration: false, webSecurity: true, spellcheck: false } });
   columnsMain.trackWindow(window);
+  // 导航仅取消文件来源的在途意图，私有重启授权仍属于保存的查询文档。
+  window.webContents.on('did-start-navigation', details => { if (details.isMainFrame && !details.isSameDocument) queryFileSources.invalidate(); });
+  window.webContents.on('did-navigate', () => queryFileSources.invalidate());
+  window.webContents.on('render-process-gone', () => queryFileSources.invalidate());
+  window.webContents.on('destroyed', () => queryFileSources.invalidate());
   window.webContents.on('did-start-navigation',details=>{if(details.isMainFrame&&!details.isSameDocument)invalidateTablePresetSources();});
   window.webContents.on('did-navigate',invalidateTablePresetSources);
   window.webContents.on('render-process-gone',invalidateTablePresetSources);
@@ -540,6 +583,12 @@ else {
         for (const [token, value] of structureTokens) if (ids.includes(value.connectionId)) structureTokens.delete(token);
       },
     });
+    queryFileSources = new QueryFileSources({ store, report: taskEvent, reserve: path => exportReservations.acquire(path), choose: async (mode, name) => {
+      if (!window) throw Error('文件选择窗口已关闭');
+      const filters = [{ name: 'SQL文件', extensions: ['sql'] }];
+      if (mode === 'open') { const result = await dialog.showOpenDialog(window, { title: '打开SQL文件', properties: ['openFile'], filters }); return result.canceled ? undefined : result.filePaths[0]; }
+      const result = await dialog.showSaveDialog(window, { title: '另存SQL文件', defaultPath: name ?? '查询.sql', filters }); return result.canceled ? undefined : result.filePath;
+    } });
     connectionTransfer = new ConnectionTransfer(store, Date.now, undefined, connectionConfig);
     savedQuerySearches=new SavedQuerySearches(store,join(__dirname,'savedQuerySearchWorker.cjs'),taskEvent);
     savedQueryPages=new SavedQueryPages(store,join(__dirname,'savedQuerySearchWorker.cjs'));
@@ -549,7 +598,8 @@ else {
       try {
         if (!window || event.sender !== window.webContents || event.senderFrame !== window.webContents.mainFrame || event.senderFrame?.url !== rendererURL) throw new Error('不允许的请求来源');
         if (!payload || typeof payload !== 'object' || !('command' in payload) || !('input' in payload) || typeof payload.command !== 'string') throw new Error('请求格式无效');
-        if (payload.command.startsWith('schema.columns.')||payload.command.startsWith('table.presets.')) columns = columnsMain.capture(event);
+        const fileCancel = Boolean(payload.command === 'query.cancel' && payload.input && typeof payload.input === 'object' && 'taskId' in payload.input && typeof payload.input.taskId === 'string' && tasks.get(payload.input.taskId)?.kind.startsWith('queryFileSources.'));
+        if (payload.command.startsWith('schema.columns.')||payload.command.startsWith('table.presets.')||payload.command.startsWith('queryFileSources.')||fileCancel) columns = columnsMain.capture(event);
         const input = validateMainCommand(payload.command, payload.input);
         const operation=dispatch(payload.command as Command,input,columns),local=payload.command==='search.savedQueries'||payload.command==='search.savedQueriesContinue'||payload.command==='queries.page'||payload.command==='queries.pageContinue'||payload.command==='history.page'||payload.command==='history.pageContinue';if(local)localSearchOperations.add(operation);
         try {
@@ -564,6 +614,7 @@ else {
             try { columnsMain.assertReply(columns); }
             catch (error) { await columnsMain.rejectReply(columns, error); }
           }
+          if (payload.command.startsWith('queryFileSources.') || fileCancel) columnsMain.assertCapturedOwner(columns);
           return { ok: true, result };
         } finally { columns?.presetPublication?.release();if(local)localSearchOperations.delete(operation); }
       } catch (error) {

@@ -58,11 +58,11 @@ describe('schema8迁移保护',()=>{
   const {store,file}=await fixture();store.saveQuery({id:'q',name:'旧查询',sql:'原文',updatedAt:'2026-10-18T00:00:00Z'});store.addHistory({id:'h',connectionId:profile.id,sql:'旧历史',startedAt:'2026-10-18T00:00:00Z',elapsedMs:1,success:true});store.saveSettings({...store.settings(),sidebarWidth:345});store.close();
   const SQL=await initSqlJs({locateFile:()=>wasm}),old=new SQL.Database(readFileSync(file));old.run('DROP TABLE table_presets;PRAGMA user_version=6');
   const tables=['connections','secrets','queries','history','settings','workbench','sql_snippets','table_preferences','tasks','table_apply_receipts'];const before=tables.map(name=>old.exec('SELECT * FROM '+name));writeFileSync(file,old.export());old.close();
-  const migrated=await LocalStore.open(file,wasm,protector);expect(migrated.tablePresets(target).entries).toEqual([]);migrated.close();const after=new SQL.Database(readFileSync(file));expect(after.exec('PRAGMA user_version')[0].values[0][0]).toBe(8);expect(tables.map(name=>after.exec('SELECT * FROM '+name))).toEqual(before);after.close();
+  const migrated=await LocalStore.open(file,wasm,protector);expect(migrated.tablePresets(target).entries).toEqual([]);migrated.close();const after=new SQL.Database(readFileSync(file));expect(after.exec('PRAGMA user_version')[0].values[0][0]).toBe(9);expect(tables.map(name=>after.exec('SELECT * FROM '+name))).toEqual(before);after.close();
  });
  it.each(['future','document','migration'] as const)('%s失败保持原文件字节，不猜测降级',async mode=>{
   const {store,file}=await fixture();store.close();const SQL=await initSqlJs({locateFile:()=>wasm}),db=new SQL.Database(readFileSync(file));
-  if(mode==='future')db.run('PRAGMA user_version=9');
+  if(mode==='future')db.run('PRAGMA user_version=10');
   if(mode==='document')db.run('INSERT INTO table_presets VALUES (?,?,?,?)',[target.connectionId,target.database,target.table,JSON.stringify({version:2,revision:0,entries:[]})]);
   if(mode==='migration')db.run('DROP TABLE table_presets;PRAGMA user_version=6');
   writeFileSync(file,db.export());db.close();if(mode==='migration')mkdirSync(file+'.tmp');const before=readFileSync(file);

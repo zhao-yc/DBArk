@@ -1,3 +1,5 @@
+import { assertQueryFileSourceSettings, queryFileSourceRefSchema, sameQueryFileSource, type QueryFileSourceRef } from '../shared/queryFileSources';
+import { privateQueryFileSourceSchema, type PrivateQueryFileSource } from './queryFileSourceRecords';
 import { assertQueryLayoutWrite, readQueryEditorHeight } from '../shared/queryLayout';
 import { assertEditorIndentationWrite, editorIndentationLimits, readEditorInsertSpaces, readEditorTabSize } from '../shared/editorIndentation';
 import { assertEditorWordWrap, defaultEditorWordWrap, readEditorWordWrap } from '../shared/editorWordWrap';
@@ -31,6 +33,8 @@ export interface ConnectionImportStorageOptions { expectedRevision: number; repl
 /** 小型配置库在内存中运行 SQLite，写入时原子替换文件；无需打包本机 ABI 模块。 */
 export class LocalStore {
   private connectionRevisionValue = 0;
+  private readonly queryFileDocuments = new Map<string, object>();
+  private queryFileDocumentSnapshot?: AppSettings['tabs'];
   private queryRevisionValue=0;
   private historyRevisionValue=0;
   private volatileSecrets = new Map<string, string>();
@@ -50,8 +54,8 @@ export class LocalStore {
   /** 版本迁移在事务中进行，失败时保留原磁盘文件。 */
   private migrate(): void {
     const version = Number(this.db.exec('PRAGMA user_version')[0]?.values[0]?.[0] ?? 0);
-    if (version > 8) throw new Error('配置库由更新版本的 DBArk 创建，请使用新版本打开');
-    // schema8保护新查询标签布局；旧0.22的严格合同不识别此字段，不能降级打开。
+    if (version > 9) throw new Error('配置库由更新版本的 DBArk 创建，请使用新版本打开');
+    // schema9新增按查询文档隔离的私有文件来源表；旧版本不可降级打开。
     // 未知方案版本或损坏文档在任何迁移落盘前拒绝，不能猜测降级或重写原文件。
     if (this.db.exec("SELECT 1 FROM sqlite_master WHERE type='table' AND name='table_presets'").length) {
       for (const document of this.records<unknown>('SELECT data FROM table_presets')) tablePresetDocumentSchema.parse(document);
@@ -71,7 +75,8 @@ export class LocalStore {
         CREATE TABLE IF NOT EXISTS table_preferences (connection_id TEXT NOT NULL, database_name TEXT NOT NULL, table_name TEXT NOT NULL, data TEXT NOT NULL, PRIMARY KEY(connection_id,database_name,table_name));
         CREATE TABLE IF NOT EXISTS table_apply_receipts (id TEXT PRIMARY KEY, data TEXT NOT NULL, started_at TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS table_presets (connection_id TEXT NOT NULL, database_name TEXT NOT NULL, table_name TEXT NOT NULL, data TEXT NOT NULL, PRIMARY KEY(connection_id,database_name,table_name));
-        PRAGMA user_version=8;`);
+        CREATE TABLE IF NOT EXISTS query_file_sources (tab_id TEXT PRIMARY KEY, id TEXT NOT NULL UNIQUE, revision INTEGER NOT NULL, data TEXT NOT NULL);
+        PRAGMA user_version=9;`);
     });
     for (const receipt of this.records<TableApplyReceipt>('SELECT data FROM table_apply_receipts').map(parseTableApplyReceipt)) if (receipt.phase !== 'terminal') this.saveTableApplyReceipt(interruptTableApplyReceipt(receipt));
     const confirmedEdits = new Map(this.records<TableApplyReceipt>('SELECT data FROM table_apply_receipts').map(parseTableApplyReceipt).filter(r => r.outcome === 'committed').map(r => [r.operationId, r]));
@@ -104,10 +109,10 @@ export class LocalStore {
     const snapshot = this.db.export();
     const secrets = new Map(this.volatileSecrets);
     try {
-      this.db.run('BEGIN'); action(); this.db.run('COMMIT'); this.flush();
+      this.db.run('BEGIN'); action(); this.db.run('COMMIT'); this.flush(); this.queryFileDocumentSnapshot = undefined;
     } catch (error) {
       try { this.db.run('ROLLBACK'); } catch { /* COMMIT 后的磁盘错误没有活动事务。 */ }
-      this.db.close(); this.db = this.reopen(snapshot); this.volatileSecrets = secrets;
+      this.db.close(); this.db = this.reopen(snapshot); this.volatileSecrets = secrets; this.queryFileDocumentSnapshot = undefined;
       throw new Error(`本地数据保存失败，修改未保存：${error instanceof Error ? error.message : String(error)}`);
     }
   }
@@ -468,7 +473,7 @@ export class LocalStore {
       const { queryEditorHeight: _height, ...unchanged } = tab; return unchanged;
     }) : stored?.tabs ?? defaultSettings.tabs;
     // 旧颜色标志只认true；缺项或损坏字号回退13，不迁移数据库或隐式强转。
-    return { ...defaultSettings, ...stored, tabs, dataTypeColors: stored?.dataTypeColors === true, editorFontSize: readEditorFontSize(stored?.editorFontSize), editorWordWrap: readEditorWordWrap(stored?.editorWordWrap), editorTabSize: readEditorTabSize(stored?.editorTabSize), editorInsertSpaces: readEditorInsertSpaces(stored?.editorInsertSpaces) };
+    return { ...defaultSettings, ...stored, tabs: this.queryFileCanonicalTabs(tabs), dataTypeColors: stored?.dataTypeColors === true, editorFontSize: readEditorFontSize(stored?.editorFontSize), editorWordWrap: readEditorWordWrap(stored?.editorWordWrap), editorTabSize: readEditorTabSize(stored?.editorTabSize), editorInsertSpaces: readEditorInsertSpaces(stored?.editorInsertSpaces) };
   }
   /** 独立配置表按需创建，旧库无收藏时返回空配置，不把秘密或工作区 SQL 混入收藏。 */
   workbench(): WorkbenchSnapshot {
@@ -492,13 +497,91 @@ export class LocalStore {
     // 新缩进字段缺项兼容旧调用；显式坏值先拒绝，不能进入事务或写盘。
     assertEditorIndentationWrite(settings);
     assertQueryLayoutWrite(settings);
+    assertQueryFileSourceSettings(settings);
     // 直接存储入口同样拒绝非布尔值；未指定的旧调用仍兼容默认关闭。
     if (settings.dataTypeColors !== undefined && typeof settings.dataTypeColors !== 'boolean') throw new Error('类型颜色偏好必须是布尔值');
     // 兼容缺项的旧调用；显式字号不得越界或借字符串/小数绕过IPC。
     if (settings.editorFontSize !== undefined) assertEditorFontSize(settings.editorFontSize);
     // 只兼容缺项，显式非法换行值必须在任何持久化变更前拒绝。
     if (settings.editorWordWrap !== undefined) assertEditorWordWrap(settings.editorWordWrap);
-    this.mutate(() => this.db.run('INSERT INTO settings VALUES (1,?) ON CONFLICT(id) DO UPDATE SET data=excluded.data', [JSON.stringify(settings)])); }
+    const previous = this.settings().tabs;
+    this.mutate(() => {
+      // 只删除可证明属于已移除文档的精确授权，损坏记录不猜测归属。
+      for (const tab of previous) {
+        let source: PrivateQueryFileSource | undefined;
+        try { source = this.queryFileSource(tab.id); } catch { continue; }
+        if (source && !settings.tabs.some(next => next.id === tab.id && next.kind === 'query' && next.connectionId === source!.connectionId)) this.db.run('DELETE FROM query_file_sources WHERE tab_id=? AND id=? AND revision=?', [tab.id, source.ref.id, source.ref.revision]);
+      }
+      const canonical = { ...settings, tabs: this.queryFileCanonicalTabs(settings.tabs) };
+      this.db.run('INSERT INTO settings VALUES (1,?) ON CONFLICT(id) DO UPDATE SET data=excluded.data', [JSON.stringify(canonical)]);
+    });
+    for (const tab of previous) if (!settings.tabs.some(next => next.id === tab.id && next.kind === tab.kind && next.connectionId === tab.connectionId)) this.queryFileDocuments.delete(tab.id);
+  }
+  /** 仅按本地私有表读取授权，坏记录只报错，不删除正文或猜测路径。 */
+  queryFileSource(tabId: string): PrivateQueryFileSource | undefined {
+    const statement = this.db.prepare('SELECT id,revision,data FROM query_file_sources WHERE tab_id=?');
+    try {
+      statement.bind([tabId]); if (!statement.step()) return undefined;
+      const [id, revision, data] = statement.get();
+      const source = privateQueryFileSourceSchema.parse(JSON.parse(String(data)));
+      if (source.tabId !== tabId || source.ref.id !== id || source.ref.revision !== revision) throw Error('文件来源索引与正文不一致');
+      return source;
+    } catch { throw Error('私有文件来源损坏，查询正文保持，请明确另行处理来源'); }
+    finally { statement.free(); }
+  }
+  /** 只供Main检查同文件另存冲突和预算，不进入公开配置接口。 */
+  queryFileSourceRecords(): PrivateQueryFileSource[] {
+    return this.db.exec('SELECT tab_id FROM query_file_sources')[0]?.values.map(([id]) => this.queryFileSource(String(id))!) ?? [];
+  }
+  /** settings展示仅由私有表投影引用，旧回包和renderer伪造引用不能覆盖权威修订。 */
+  private queryFileCanonicalTabs(tabs: AppSettings['tabs']): AppSettings['tabs'] {
+    return tabs.map(tab => {
+      if (!tab || typeof tab !== 'object') return tab;
+      const { fileSourceBinding: _untrusted, ...plain } = tab;
+      if (tab.kind !== 'query') return plain;
+      try {
+        const source = this.queryFileSource(tab.id);
+        if (!source || source.connectionId !== tab.connectionId) return plain;
+        // 明确建立文件来源时原子切换主来源；旧本地查询条目本身不删除。
+        const { sourceBinding: _localSource, ...fileTab } = plain; return { ...fileTab, fileSourceBinding: { ...source.ref } };
+      }
+      catch { return plain; }
+    });
+  }
+  /** 文档代次不受正文输入影响；关闭后同tabId重新打开不能借用旧操作。 */
+  queryFileDocument(tabId: string): { token: object; tab: AppSettings['tabs'][number] } {
+    // 分块IO的每个await都核文档，但不能每次重解析最多20MiB正文；任何本地事务后失效重取。
+    const tabs = (this.queryFileDocumentSnapshot ??= this.settings().tabs).filter(tab => tab.id === tabId);
+    if (tabs.length !== 1 || tabs[0].kind !== 'query') throw Error('查询文档不存在或身份不唯一');
+    let token = this.queryFileDocuments.get(tabId); if (!token) { token = {}; this.queryFileDocuments.set(tabId, token); }
+    return { token, tab: { ...tabs[0] } };
+  }
+  /** 来源和settings引用在同一次本地事务落盘；打开时也核旧SQL，保存时不回填旧正文。 */
+  commitQueryFileSource(value: PrivateQueryFileSource, expected?: QueryFileSourceRef, opened?: { previousSql: string; sql: string }): void {
+    const source = privateQueryFileSourceSchema.parse(value), current = this.queryFileSource(source.tabId);
+    if (!sameQueryFileSource(current?.ref, expected)) throw Error('文件来源修订已变化');
+    const document = this.queryFileDocument(source.tabId);
+    if (document.tab.connectionId !== source.connectionId || opened && (document.tab.sql ?? '') !== opened.previousSql) throw Error('查询文档已变化');
+    if (!current && this.queryFileSourceRecords().length >= 100) throw Error('文件来源数量超过预算');
+    this.mutate(() => {
+      this.db.run('INSERT INTO query_file_sources VALUES (?,?,?,?) ON CONFLICT(tab_id) DO UPDATE SET id=excluded.id,revision=excluded.revision,data=excluded.data', [source.tabId, source.ref.id, source.ref.revision, JSON.stringify(source)]);
+      const settings = this.settings();
+      if (opened) settings.tabs = settings.tabs.map(tab => tab.id === source.tabId ? { ...tab, sql: opened.sql } : tab);
+      this.db.run('INSERT INTO settings VALUES (1,?) ON CONFLICT(id) DO UPDATE SET data=excluded.data', [JSON.stringify(settings)]);
+    });
+  }
+  /** 精确释放授权与settings引用，旧revision或未知归属均不删除后来来源。 */
+  releaseQueryFileSource(tabId: string, ref: QueryFileSourceRef): boolean {
+    queryFileSourceRefSchema.parse(ref);
+    const current = this.queryFileSource(tabId); if (!current || !sameQueryFileSource(current.ref, ref)) return false;
+    this.mutate(() => {
+      this.db.run('DELETE FROM query_file_sources WHERE tab_id=? AND id=? AND revision=?', [tabId, ref.id, ref.revision]);
+      const settings = this.settings();
+      this.db.run('INSERT INTO settings VALUES (1,?) ON CONFLICT(id) DO UPDATE SET data=excluded.data', [JSON.stringify(settings)]);
+    });
+    return true;
+  }
+
   /** 关闭内存数据库并清除明文秘密，已成功保存的文件无需再次写入。 */
   close(): void { this.db.close(); this.volatileSecrets.clear(); }
 }

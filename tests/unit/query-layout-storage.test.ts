@@ -68,18 +68,18 @@ function populate(store:LocalStore){
  const target={connectionId:'ram',database:'db',table:'t'},snapshot=store.tablePresets(target);store.saveTablePreset({...target,source:snapshot.source,expectedRevision:snapshot.revision,bindingToken:randomUUID(),name:'原方案',configuration:{filters:[],filterMode:'all',sort:[]}});
 }
 /** 生成与基线DDL相同的真实schema7文件并记录每张表，不通过新字段写入伪造迁移。 */
-function oldSeven(file:string){edit(file,db=>{db.run('INSERT INTO secrets VALUES(?,?,?)',['ram','password','NON_SECRET_CIPHERTEXT_MARKER']);db.run('PRAGMA user_version=7');});const db=new SQL.Database(readFileSync(file));try{const tables=db.exec("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")[0].values.map(([name])=>String(name));return tables.map(name=>({name,rows:db.exec('SELECT * FROM '+name)}));}finally{db.close();}}
-it('真实旧schema7的11张表逐表原文保留原子升8，不读取合成秘密槽',async()=>{
+function oldSeven(file:string){edit(file,db=>{db.run('DROP TABLE IF EXISTS query_file_sources');db.run('INSERT INTO secrets VALUES(?,?,?)',['ram','password','NON_SECRET_CIPHERTEXT_MARKER']);db.run('PRAGMA user_version=7');});const db=new SQL.Database(readFileSync(file));try{const tables=db.exec("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")[0].values.map(([name])=>String(name));return tables.map(name=>({name,rows:db.exec('SELECT * FROM '+name)}));}finally{db.close();}}
+it('真实旧schema7的11张表逐表原文保留原子升9，不读取合成秘密槽',async()=>{
  const {file,store}=await fixture();populate(store);close(store);const before=oldSeven(file);expect(before).toHaveLength(11);expect(before.every(table=>table.rows[0]?.values.length>0)).toBe(true);
- const restored=await reopen(file);expect(restored.settings()).toEqual(original());const db=new SQL.Database(readFileSync(file));expect(db.exec('PRAGMA user_version')[0].values[0][0]).toBe(8);expect(before.map(({name})=>({name,rows:db.exec('SELECT * FROM '+name)}))).toEqual(before);db.close();
+ const restored=await reopen(file);expect(restored.settings()).toEqual(original());const db=new SQL.Database(readFileSync(file));expect(db.exec('PRAGMA user_version')[0].values[0][0]).toBe(9);expect(before.map(({name})=>({name,rows:db.exec('SELECT * FROM '+name)}))).toEqual(before);db.close();
 });
 it('旧7迁移真实写盘失败保持旧文件和版本，故障消除后可重试且旧11表内容不变',async()=>{
  const {file,store}=await fixture();populate(store);close(store);const old=oldSeven(file),before=readFileSync(file);mkdirSync(file+'.tmp');
  await expect(LocalStore.open(file,wasm,protector)).rejects.toThrow('修改未保存');expect(readFileSync(file)).toEqual(before);const failed=new SQL.Database(readFileSync(file));expect(failed.exec('PRAGMA user_version')[0].values[0][0]).toBe(7);failed.close();
- rmdirSync(file+'.tmp');await reopen(file);const db=new SQL.Database(readFileSync(file));expect(db.exec('PRAGMA user_version')[0].values[0][0]).toBe(8);expect(old.map(({name})=>({name,rows:db.exec('SELECT * FROM '+name)}))).toEqual(old);db.close();
+ rmdirSync(file+'.tmp');await reopen(file);const db=new SQL.Database(readFileSync(file));expect(db.exec('PRAGMA user_version')[0].values[0][0]).toBe(9);expect(old.map(({name})=>({name,rows:db.exec('SELECT * FROM '+name)}))).toEqual(old);db.close();
 });
-it('未来schema9在任何settings回退或迁移写入前拒绝，原文件字节保持',async()=>{
- const {file,store}=await fixture();close(store);edit(file,db=>{db.run('PRAGMA user_version=9');db.run('INSERT INTO settings VALUES(1,?)',[JSON.stringify({...original(),futureField:'保留'})]);});const before=readFileSync(file);await expect(LocalStore.open(file,wasm,protector)).rejects.toThrow('更新版本');expect(readFileSync(file)).toEqual(before);
+it('未来schema10在任何settings回退或迁移写入前拒绝，原文件字节保持',async()=>{
+ const {file,store}=await fixture();close(store);edit(file,db=>{db.run('PRAGMA user_version=10');db.run('INSERT INTO settings VALUES(1,?)',[JSON.stringify({...original(),futureField:'保留'})]);});const before=readFileSync(file);await expect(LocalStore.open(file,wasm,protector)).rejects.toThrow('更新版本');expect(readFileSync(file)).toEqual(before);
 });
 it('高度保存及失败回滚不改变连接/工作台修订和方案CAS，后来操作不夹带失败高度',async()=>{
  const {file,store}=await fixture();populate(store);const before=original(),target={connectionId:'ram',database:'db',table:'t'},snapshot=store.tablePresets(target),selected={...target,source:snapshot.source,expectedRevision:snapshot.revision,bindingToken:randomUUID(),id:snapshot.entries[0].id};

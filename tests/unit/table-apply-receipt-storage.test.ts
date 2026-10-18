@@ -53,7 +53,7 @@ describe('独立SQLite提交回执的恢复、容量与原子故障', () => {
     const { store, file } = await open(); store.addHistory({ id: 'history', connectionId: 'old', sql: 'SELECT 1', success: true, elapsedMs: 1, startedAt: new Date().toISOString() }); store.close();
     const SQL = await initSqlJs({ locateFile: () => wasm }), old = new SQL.Database(readFileSync(file)); const history = old.exec('SELECT * FROM history'); old.run('DROP TABLE table_apply_receipts; PRAGMA user_version=5'); writeFileSync(file, old.export()); old.close();
     const upgraded = await LocalStore.open(file, wasm, protector); expect(upgraded.history()[0].sql).toBe('SELECT 1'); upgraded.close();
-    const future = new SQL.Database(readFileSync(file)); expect(future.exec('PRAGMA user_version')[0].values[0][0]).toBe(8); expect(future.exec('SELECT * FROM history')).toEqual(history); future.run('PRAGMA user_version=9'); writeFileSync(file, future.export()); future.close();
+    const future = new SQL.Database(readFileSync(file)); expect(future.exec('PRAGMA user_version')[0].values[0][0]).toBe(9); expect(future.exec('SELECT * FROM history')).toEqual(history); future.run('PRAGMA user_version=10'); writeFileSync(file, future.export()); future.close();
     const before = readFileSync(file); await expect(LocalStore.open(file, wasm, protector)).rejects.toThrow('更新版本'); expect(readFileSync(file)).toEqual(before);
   });
   it('持久ACK恢复时通用任务也保持完成，仅按main回执编号关联而不按可复用taskId猜测', async () => {
