@@ -23,7 +23,9 @@ export async function readIndentNativeSettings(path: string, guard: () => void):
   finally { db.close(); }
 }
 /** 原生适配器所有资源await/副作用共享run+原TestInfo门，入口身份只取Root批准清单。 */
-export function createEditorIndentNativeRun(binding: { assertCurrent(): void }): EditorIndentNativeRun {
+export function createEditorIndentNativeRun(binding: { assertCurrent(): void }, approval?: { manifestPath: string; approvedHash: string }): EditorIndentNativeRun {
+  // 新专项可显式传Root批准清单；未传时保留原环境读取路径，不伪造旧专项开关。
+  const explicitApproval = approval && Object.freeze({ manifestPath: approval.manifestPath, approvedHash: approval.approvedHash });
   let parent = '', run!: EditorIndentNativeRun, identity: Awaited<ReturnType<typeof sealEditorIndentLaunchIdentity>> | undefined;
   const captured = new WeakMap<IndentNativeOwner, { application: IndentNativeOwner['application']; child: ReturnType<IndentNativeOwner['application']['process']>; launcher: number; main?: number; page?: IndentNativeOwner['page']; marker: string; window?: { id: number; contents: number }; pids: Set<number>; quitting: boolean; closed: boolean; willQuit: boolean }>();
   /** 只做同步归属检查；run.assert再叠加sticky retained，避免递归调用授权门。 */
@@ -45,7 +47,7 @@ export function createEditorIndentNativeRun(binding: { assertCurrent(): void }):
   async function verified() {
     guard();
     if (!identity) {
-      identity = await sealEditorIndentLaunchIdentity(process.env.DBARK_EDITOR_INDENT_MANIFEST!, process.env.DBARK_EDITOR_INDENT_MANIFEST_SHA256!, resolve(__dirname, '../..'), {
+      identity = await sealEditorIndentLaunchIdentity(explicitApproval ? explicitApproval.manifestPath : process.env.DBARK_EDITOR_INDENT_MANIFEST!, explicitApproval ? explicitApproval.approvedHash : process.env.DBARK_EDITOR_INDENT_MANIFEST_SHA256!, resolve(__dirname, '../..'), {
         stat: async path => { const value = await lstat(path); return { file: value.isFile(), directory: value.isDirectory(), link: value.isSymbolicLink() }; }, real: realpath, list: readdir, bytes: readFile,
       }, () => guard()); guard();
     }
