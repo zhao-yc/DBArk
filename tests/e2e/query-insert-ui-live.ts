@@ -1,13 +1,16 @@
 import mysql from 'mysql2';
 import type { RowDataPacket } from 'mysql2/promise';
+import type { ResultSetHeader } from 'mysql2';
 import type { ElectronApplication, TestInfo } from '@playwright/test';
-import { randomUUID } from 'node:crypto';
-import { lstat, realpath, readFile, readdir, writeFile } from 'node:fs/promises';
+import { randomUUID, createHash } from 'node:crypto';
+import { Socket } from 'node:net';
+import { lstat, realpath, readdir, open, type FileHandle } from 'node:fs/promises';
 import { join, resolve, basename } from 'node:path';
 import { closeMysqlConnection } from '../../src/engine/connection';
 import { test, expect, dataDir, ownedDesktopResources, retainOwnedDesktopResources, confirmOwnedDesktopExit, pageErrors } from './desktop-fixture';
 import { BatchFillPreparation } from '../helpers/tableBatchFillLive';
-import { QueryInsertUiScope, queryInsertUiCases, expectedInsertUiFile, insertUiDatabase, type QueryInsertUiTarget } from '../helpers/queryInsertUiLive';
+import { QueryInsertUiScope, queryInsertUiCases, insertUiDatabase, type QueryInsertUiTarget } from '../helpers/queryInsertUiLive';
+import { InsertUiObserverReceipt, connectInsertUiObserver, InsertUiOwnershipJournal, insertUiOwnershipPlan, captureInsertUiFile, verifyInsertUiFile, releaseInsertUiFile, expectedPreciseInsertUiFile as expectedInsertUiFile, insertUiPreciseSource, assertInsertUiSchema, type InsertUiFileReceipt } from '../helpers/queryInsertUiOwnership';
 import { zh } from '../../src/renderer/locales/zh-CN';
 import { queryStreamZh as stream } from '../../src/renderer/locales/queryStreamExport.zh-CN';
 import { queryInsertZh as insert } from '../../src/shared/queryInsertExport.zh-CN';
@@ -42,37 +45,60 @@ export function registerQueryInsertUi(binding:QueryInsertUiTarget){
   test.afterEach(({},info)=>{const scope=scopes.get(info);if(scope)scope.end();else retainOwnedDesktopResources(info);});
   for(const [scenario,name]of queryInsertUiCases.entries())test(name,async({},info)=>{
     const captured=ownedDesktopResources(info),page=captured.page,application=captured.application,directory=dataDir;
-    let native:ReturnType<typeof mysql.createConnection>|undefined,nativeStream:unknown,wrapper:{readonly connection:unknown}|undefined;
-    const database=insertUiDatabase('dbark_e2e_insert_'+randomUUID().replaceAll('-',''));
+    type Driver=ReturnType<typeof mysql.createConnection>&{stream:Socket};type Observer=ReturnType<Driver['promise']>&{connection:Driver};
+    let native:Driver|undefined,observerReceipt:InsertUiObserverReceipt<Socket,Driver,Observer>|undefined;
+    let targetHandle:FileHandle|undefined,partialHandle:FileHandle|undefined,targetReceipt:InsertUiFileReceipt|undefined,partialReceipt:InsertUiFileReceipt|undefined,journal:InsertUiOwnershipJournal|undefined;
+    let desktopConfirmed=false,databaseAck=false;
+    let originalFailure:unknown;
+    const plan=insertUiOwnershipPlan(scenario,randomUUID().replaceAll('-',''),createHash('sha256').update(info.testId+':'+scenario).digest('hex'));
+    const database=insertUiDatabase(plan.database),definitions:Record<string,string>={};
     const file=join(directory,'insert-native.sql'),original='本例原目标，确认发布之前必须逐字保持。\n';
     const scope=new QueryInsertUiScope(info as TestInfo&{_startWallTime?:number},()=>test.info(),binding,{
-      assertCurrent(allowClosed){const owner=ownedDesktopResources(info);if(owner.application!==application||owner.page!==page||dataDir!==directory||!allowClosed&&(owner.closed||page.isClosed())||native&&((native as unknown as {stream?:unknown}).stream!==nativeStream||wrapper?.connection!==native))throw Error('完整INSERT原app/page/目录/观察流归属已失效');},retain(){retainOwnedDesktopResources(info);},
+      assertCurrent(allowClosed){const owner=ownedDesktopResources(info);if(owner.application!==application||owner.page!==page||dataDir!==directory||!allowClosed&&(owner.closed||page.isClosed()))throw Error('完整INSERT原app/page/目录/观察流归属已失效');observerReceipt?.assertCurrent();},retain(){retainOwnedDesktopResources(info);},
     });scopes.set(info,scope);
     const step=<T>(action:()=>Promise<T>,closed=false)=>scope.step(action,closed);
+    const resourceCheck=()=>scope.assertCurrent(desktopConfirmed);
     try{
       scope.assertCurrent();
-      native=mysql.createConnection({host:binding.target.host,port:binding.target.port,user:binding.target.user,password:binding.target.password,charset:'utf8mb4',supportBigNumbers:true,bigNumberStrings:true,decimalNumbers:false,jsonStrings:true,connectTimeout:15000});
-      nativeStream=(native as unknown as {stream?:unknown}).stream;if(!nativeStream)throw Error('观察连接缺少原物理流');const observer=native.promise();
-      wrapper=observer as unknown as {connection:unknown};if(wrapper.connection!==native)throw Error('观察包装不属于原连接');
-      await step(()=>new Promise<void>((resolve,reject)=>native!.connect(error=>error?reject(error):resolve())));
-      const peer=nativeStream as {remoteAddress?:string;remotePort?:number};expect(Boolean(peer.remotePort===13384&&['192.168.31.200','::ffff:192.168.31.200'].includes(peer.remoteAddress??''))).toBe(true);
-      const [server]=await step(()=>observer.query<RowDataPacket[]>({sql:'SELECT @@server_uuid AS uuid,@@version AS version,@@version_compile_os AS os,@@lower_case_table_names AS names',timeout:10000}));
-      expect(server).toHaveLength(1);expect(Boolean(server[0].uuid===binding.target.uuid&&/^8\.4\.11(?:[-+ ]|$)/.test(server[0].version)&&server[0].os==='Linux'&&server[0].names===0)).toBe(true);
-      // 所有资源名称在DDL等待前已登记；不使用IF EXISTS清旧资源，失败只保留本例。
-      await step(()=>observer.query({sql:`CREATE DATABASE \`${database}\` CHARACTER SET utf8mb4 COLLATE utf8mb4_bin`,timeout:10000}));
-      await step(()=>observer.query({sql:`CREATE TABLE \`${database}\`.insert_source(id INT PRIMARY KEY,note TEXT NULL,big_value BIGINT UNSIGNED,amount DECIMAL(30,6),doc JSON,payload VARBINARY(8)) ENGINE=InnoDB`,timeout:10000}));
-      await step(()=>observer.query({sql:`CREATE TABLE \`${database}\`.insert_target(note TEXT NULL,big_value BIGINT UNSIGNED,amount DECIMAL(30,6),doc JSON,payload VARBINARY(8)) ENGINE=InnoDB`,timeout:10000}));
-      await step(()=>observer.query({sql:`INSERT INTO \`${database}\`.insert_source VALUES(1,NULL,18446744073709551615,12345678901234567890.120000,CAST('"abc"' AS JSON),X'00ff'),(2,'',9007199254740993,0.000001,CAST('null' AS JSON),X'')`,timeout:10000}));
-      /** 外部只读快照核源精确值及目标仍空，不在观察连接重放导出SQL。 */
-      async function databaseProof(){const [rows]=await step(()=>observer.query<RowDataPacket[]>({sql:`SELECT id,note,CAST(big_value AS CHAR) AS big_value,CAST(amount AS CHAR) AS amount,CAST(doc AS CHAR CHARACTER SET utf8mb4) AS doc,HEX(payload) AS payload FROM \`${database}\`.insert_source ORDER BY id`,timeout:10000}));expect(rows).toEqual([{id:1,note:null,big_value:'18446744073709551615',amount:'12345678901234567890.120000',doc:'"abc"',payload:'00FF'},{id:2,note:'',big_value:'9007199254740993',amount:'0.000001',doc:'null',payload:''}]);const [target]=await step(()=>observer.query<RowDataPacket[]>({sql:`SELECT CAST(COUNT(*) AS CHAR) AS n FROM \`${database}\`.insert_target`,timeout:10000}));expect(target[0].n).toBe('0');}
-      await databaseProof();
       const dirStat=await step(()=>lstat(directory,{bigint:true})),canonical=await step(()=>realpath(directory));
       expect(dirStat.isDirectory()&&!dirStat.isSymbolicLink()&&canonical===resolve(directory)).toBe(true);
-      /** 只认同一普通目录对象，不从替换后的同名路径重新取得读取权限。 */
-      async function directoryCurrent(){const stat=await step(()=>lstat(directory,{bigint:true}));expect([stat.dev,stat.ino,stat.isSymbolicLink()]).toEqual([dirStat.dev,dirStat.ino,false]);expect(await step(()=>realpath(directory))).toBe(canonical);}
-      /** 仅匹配本例准确目标的partial，不扫描或清理历史输出。 */
-      async function partials(){await directoryCurrent();return (await step(()=>readdir(directory))).filter(value=>value.startsWith(basename(file)+'.dbark-')&&value.endsWith('.partial'));}
-      await step(()=>writeFile(file,original,{flag:'wx'}));
+      /** 原目录跨所有文件与DROP前检查，不从同名路径重新认领。 */
+      async function directoryCurrent(closed=false){const stat=await step(()=>lstat(directory,{bigint:true}),closed);expect([stat.dev,stat.ino,stat.isSymbolicLink()]).toEqual([dirStat.dev,dirStat.ino,false]);expect(await step(()=>realpath(directory),closed)).toBe(canonical);}
+      async function partials(){await directoryCurrent();return(await step(()=>readdir(directory))).filter(value=>value.startsWith(basename(file)+'.dbark-')&&value.endsWith('.partial'));}
+      /** 每次读取都消费同一scope与原句柄回执，不从目标路径更新身份。 */
+      async function originalFile(receipt:InsertUiFileReceipt,path:string){await directoryCurrent();const bytes=await step(()=>verifyInsertUiFile(receipt,path,resourceCheck));await directoryCurrent();return bytes.toString('utf8');}
+      journal=new InsertUiOwnershipJournal(join(directory,'insert-ui2-'+plan.nonce+'.ownership.ndjson'),resourceCheck);
+      await step(()=>journal!.start(plan));await step(()=>journal!.append('paths-planned',{directory,file,partialRule:basename(file)+'.dbark-<UUID>.partial'}));
+      observerReceipt=new InsertUiObserverReceipt<Socket,Driver,Observer>(()=>scope.preserve());await step(()=>journal!.append('observer-planned'));
+      const observer=await step(()=>connectInsertUiObserver(observerReceipt!,{
+        allocate:()=>new Socket(),
+        construct:socket=>{native=mysql.createConnection({host:binding.target.host,port:binding.target.port,user:binding.target.user,password:binding.target.password,stream:socket,charset:'utf8mb4',supportBigNumbers:true,bigNumberStrings:true,decimalNumbers:false,jsonStrings:true,flags:['-IGNORE_SPACE'],connectTimeout:15000}) as Driver;return native;},
+        wrap:driver=>driver.promise() as Observer,register:(driver,done)=>{driver.connect(error=>done(error??undefined));},connect:socket=>{socket.connect({host:binding.target.host,port:binding.target.port});},
+      },resourceCheck));await step(()=>journal!.append('observer-connected',observerReceipt!.summary()));
+      const [server]=await step(()=>observer.query<RowDataPacket[]>({sql:'SELECT @@server_uuid AS uuid,@@version AS version,@@version_compile_os AS os,@@lower_case_table_names AS names',timeout:10000}));
+      expect(server).toHaveLength(1);expect(Boolean(server[0].uuid===binding.target.uuid&&/^8\.4\.11(?:[-+ ]|$)/.test(server[0].version)&&server[0].os==='Linux'&&server[0].names===0)).toBe(true);
+      await step(()=>journal!.append('schema-planned'));const [schemaCreated]=await step(()=>observer.query<ResultSetHeader>({sql:`CREATE DATABASE \`${database}\` CHARACTER SET utf8mb4 COLLATE utf8mb4_bin`,timeout:10000}));expect(schemaCreated.affectedRows).toBe(1);databaseAck=true;await step(()=>journal!.append('schema-created'));
+      await step(()=>observer.query({sql:`CREATE TABLE \`${database}\`.__insert_owner(nonce CHAR(32) PRIMARY KEY,case_hash CHAR(64),scenario INT) ENGINE=InnoDB COMMENT='${plan.comment}'`,timeout:10000}));
+      await step(()=>observer.query({sql:`INSERT INTO \`${database}\`.__insert_owner VALUES(?,?,?)`,values:[plan.nonce,plan.caseHash,scenario],timeout:10000}));
+      await step(()=>observer.query({sql:`CREATE TABLE \`${database}\`.insert_neighbor(id INT PRIMARY KEY,nonce CHAR(32)) ENGINE=InnoDB COMMENT='${plan.comment}'`,timeout:10000}));
+      await step(()=>observer.query({sql:`INSERT INTO \`${database}\`.insert_neighbor VALUES(7,?)`,values:[plan.nonce],timeout:10000}));
+      await step(()=>observer.query({sql:`CREATE TABLE \`${database}\`.insert_source(id INT PRIMARY KEY,note TEXT NULL,big_value BIGINT UNSIGNED,amount DECIMAL(30,6),doc JSON,payload VARBINARY(8)) ENGINE=InnoDB COMMENT='${plan.comment}'`,timeout:10000}));
+      await step(()=>observer.query({sql:`CREATE TABLE \`${database}\`.insert_target(note TEXT NULL,big_value BIGINT UNSIGNED,amount DECIMAL(30,6),doc JSON,payload VARBINARY(8)) ENGINE=InnoDB COMMENT='${plan.comment}'`,timeout:10000}));
+      for(const name of plan.tables){const [rows]=await step(()=>observer.query<RowDataPacket[]>({sql:`SHOW CREATE TABLE \`${database}\`.\`${name}\``,timeout:10000}));definitions[name]=String(rows[0]['Create Table']);}
+      await step(()=>observer.query({sql:`INSERT INTO \`${database}\`.insert_source VALUES(1,NULL,18446744073709551615,12345678901234567890.120000,CAST('9007199254740993' AS JSON),X'00ff'),(2,'',9007199254740993,0.000001,CAST('null' AS JSON),X'')`,timeout:10000}));
+      /** 独立CAST/HEX快照保留JSON原数字，导出生成文件从不执行到目标表。 */
+      async function databaseProof(closed=false){observerReceipt!.assertConnected();const [rows]=await step(()=>observer.query<RowDataPacket[]>({sql:`SELECT id,note,CAST(big_value AS CHAR) AS big_value,CAST(amount AS CHAR) AS amount,CAST(doc AS CHAR CHARACTER SET utf8mb4) AS doc,HEX(payload) AS payload FROM \`${database}\`.insert_source ORDER BY id`,timeout:10000}),closed);expect(rows).toEqual(insertUiPreciseSource);const [target]=await step(()=>observer.query<RowDataPacket[]>({sql:`SELECT CAST(COUNT(*) AS CHAR) AS n FROM \`${database}\`.insert_target`,timeout:10000}),closed);expect(target[0].n).toBe('0');return{source:rows,target};}
+      /** 完整集合、标记、结构与源邻表都匹配才允许DROP，随机名字不单独授予删除权。 */
+      async function namespaceProof(closed=false){
+        observerReceipt!.assertConnected();await directoryCurrent(closed);const query=(sql:string,values?:unknown[])=>step(()=>observer.query<RowDataPacket[]>({sql,values,timeout:10000}),closed);
+        const [server]=await query('SELECT @@server_uuid AS uuid,@@version AS version,@@version_compile_os AS os,@@lower_case_table_names AS names'),[marker]=await query(`SELECT nonce,case_hash,scenario FROM \`${database}\`.__insert_owner`),[tables]=await query('SELECT TABLE_NAME AS name,TABLE_TYPE AS kind,TABLE_COMMENT AS comment FROM information_schema.TABLES WHERE BINARY TABLE_SCHEMA=BINARY ? ORDER BY BINARY TABLE_NAME',[database]),values=await databaseProof(closed),[neighbor]=await query(`SELECT id,nonce FROM \`${database}\`.insert_neighbor ORDER BY id`);
+        const unknown={triggers:[] as RowDataPacket[],routines:[] as RowDataPacket[],events:[] as RowDataPacket[]},current:Record<string,string>={};
+        for(const [view,column,key]of [['TRIGGERS','TRIGGER_SCHEMA','triggers'],['ROUTINES','ROUTINE_SCHEMA','routines'],['EVENTS','EVENT_SCHEMA','events']]as const){const [rows]=await query(`SELECT 1 FROM information_schema.${view} WHERE BINARY ${column}=BINARY ?`,[database]);unknown[key]=rows;}
+        for(const name of plan.tables){const [rows]=await query(`SHOW CREATE TABLE \`${database}\`.\`${name}\``);current[name]=String(rows[0]['Create Table']);}
+        assertInsertUiSchema(plan,databaseAck,{server,marker,tables,...values,neighbor,unknown,definitions:current},definitions);
+      }
+      await namespaceProof();await step(()=>journal!.append('seed-verified',{rows:2,definitions:Object.fromEntries(Object.entries(definitions).map(([name,ddl])=>[name,createHash('sha256').update(ddl).digest('hex')]))}));
+      await step(()=>journal!.append('target-planned',{file}));await step(async()=>{targetHandle=await open(file,'wx+');});await step(()=>targetHandle!.writeFile(original));await step(()=>targetHandle!.sync());targetReceipt=await step(()=>captureInsertUiFile(file,targetHandle!,Buffer.from(original),resourceCheck));await step(()=>releaseInsertUiFile(targetReceipt!));await step(()=>journal!.append('target-created',{identity:targetReceipt!.identity}));
       await step(()=>page.locator('.app-commandbar').getByRole('button',{name:zh.common.newConnection,exact:true}).click());
       const form=page.getByRole('dialog',{name:zh.common.newConnection,exact:true}),connectionName='完整INSERT '+database;
       await step(()=>form.getByRole('combobox',{name:new RegExp('^'+zh.connections.text008)}).selectOption('mysql'));
@@ -98,24 +124,27 @@ export function registerQueryInsertUi(binding:QueryInsertUiTarget){
       await step(()=>dialog.getByRole('combobox',{name:new RegExp('^'+stream.encoding)}).selectOption('utf8'));
       for(const [label,value]of [[insert.database,database],[insert.table,'insert_target'],[insert.columns,'note\nbig_value\namount\ndoc\npayload']])await step(()=>dialog.getByLabel(label,{exact:true}).fill(value));
       const nonce=randomUUID();await step(()=>installInsertSaveAnswer(application,file,nonce));await step(()=>dialog.locator('.file-picker').click());expect(await step(()=>finishInsertSaveAnswer(application,nonce))).toEqual({calls:1,restored:true});
-      await step(()=>expect(dialog.locator('.file-picker')).toContainText(basename(file)));expect(await step(()=>readFile(file,'utf8'))).toBe(original);expect(await partials()).toEqual([]);expect(await step(grid)).toEqual(background);
+      await step(()=>expect(dialog.locator('.file-picker')).toContainText(basename(file)));expect(await originalFile(targetReceipt!,file)).toBe(original);expect(await partials()).toEqual([]);expect(await step(grid)).toEqual(background);
       await step(()=>dialog.getByRole('checkbox',{name:stream.acknowledge,exact:true}).check());await step(()=>dialog.getByRole('button',{name:insert.start,exact:true}).click());
       const sample=dialog.locator('pre[aria-label="'+insert.preview+'"]'),expected=expectedInsertUiFile(database);
       await step(()=>expect(sample).toBeVisible({timeout:20000}));expect(await step(()=>sample.textContent())).toBe(expected);
       await step(()=>expect(dialog.locator('section[aria-label="'+insert.preview+'"]')).toContainText(`完整2行；样例2行；暂存${Buffer.byteLength(expected)}字节；编码utf8；等待确认最多120秒。`));
-      expect(await step(()=>readFile(file,'utf8'))).toBe(original);const pending=await partials();expect(pending).toHaveLength(1);const temporary=join(directory,pending[0]);const temporaryStat=await step(()=>lstat(temporary));expect(temporaryStat.isFile()&&!temporaryStat.isSymbolicLink()).toBe(true);expect(await step(()=>readFile(temporary,'utf8'))).toBe(expected);await databaseProof();expect(await step(grid)).toEqual(background);
+      expect(await originalFile(targetReceipt!,file)).toBe(original);const pending=await partials();expect(pending).toHaveLength(1);const temporary=join(directory,pending[0]);await step(async()=>{partialHandle=await open(temporary,'r');});partialReceipt=await step(()=>captureInsertUiFile(temporary,partialHandle!,Buffer.from(expected),resourceCheck,file));expect(await originalFile(partialReceipt,temporary)).toBe(expected);await step(()=>releaseInsertUiFile(partialReceipt!));await step(()=>journal!.append('partial-frozen',{name:pending[0],identity:partialReceipt!.identity}));await databaseProof();expect(await step(grid)).toEqual(background);
       const tasks=await step(()=>page.evaluate(()=>window.dbark.invoke('tasks.list',{}))),created=tasks.filter(task=>task.kind==='query.exportStream'&&!beforeTasks.some(before=>before.id===task.id));expect(created).toHaveLength(1);const taskId=created[0].id;expect(created[0].status).toBe('running');
-      if(scenario===0){await step(()=>dialog.getByLabel(insert.confirmation,{exact:true}).fill(database+'.wrong'));await step(()=>dialog.getByRole('checkbox',{name:insert.acknowledge,exact:true}).check());await step(()=>expect(dialog.getByRole('button',{name:insert.publish,exact:true})).toBeDisabled());expect(await step(()=>readFile(file,'utf8'))).toBe(original);await step(()=>dialog.getByLabel(insert.confirmation,{exact:true}).fill(database+'.insert_target'));await step(()=>dialog.getByRole('button',{name:insert.publish,exact:true}).click());await step(()=>expect(dialog.locator('.success-box')).toHaveText(insert.completed));expect(await step(()=>readFile(file,'utf8'))).toBe(expected);}
-      else{await step(()=>dialog.getByRole('button',{name:stream.cancel,exact:true}).click());await step(()=>expect(dialog.locator('.error-box')).toContainText(/取消/));await step(()=>expect(dialog.getByRole('button',{name:stream.cancel,exact:true})).toBeDisabled());expect(await step(()=>readFile(file,'utf8'))).toBe(original);}
+      if(scenario===0){await step(()=>dialog.getByLabel(insert.confirmation,{exact:true}).fill(database+'.wrong'));await step(()=>dialog.getByRole('checkbox',{name:insert.acknowledge,exact:true}).check());await step(()=>expect(dialog.getByRole('button',{name:insert.publish,exact:true})).toBeDisabled());expect(await originalFile(targetReceipt!,file)).toBe(original);await step(()=>dialog.getByLabel(insert.confirmation,{exact:true}).fill(database+'.insert_target'));await step(()=>dialog.getByRole('button',{name:insert.publish,exact:true}).click());await step(()=>expect(dialog.locator('.success-box')).toHaveText(insert.completed));expect(await originalFile(partialReceipt!,file)).toBe(expected);}
+      else{await step(()=>dialog.getByRole('button',{name:stream.cancel,exact:true}).click());await step(()=>expect(dialog.locator('.error-box')).toContainText(/取消/));await step(()=>expect(dialog.getByRole('button',{name:stream.cancel,exact:true})).toBeDisabled());expect(await originalFile(targetReceipt!,file)).toBe(original);}
       await expect.poll(()=>step(()=>page.evaluate(()=>window.dbark.invoke('tasks.list',{}))).then(list=>list.find(task=>task.id===taskId)?.status)).toBe(scenario===0?'completed':'cancelled');expect(await partials()).toEqual([]);await databaseProof();
       await step(()=>dialog.locator('footer').getByRole('button',{name:zh.common.close,exact:true}).click());await step(()=>expect(dialog).toBeHidden());expect(await step(grid)).toEqual(background);
       // 只读查询始终走真实UI及同一会话；两行各求值一次为2，发布/取消/后续观察不得变成4。
       for(let observation=0;observation<3;observation++){await execute(counter);expect(await readCounter()).toEqual({session,runs:'2'});}
       const finalTasks=await step(()=>page.evaluate(()=>window.dbark.invoke('tasks.list',{})));expect(finalTasks.some(task=>task.status==='running')).toBe(false);expect(finalTasks.filter(task=>task.kind==='query.exportStream'&&!beforeTasks.some(before=>before.id===task.id)).map(task=>task.id)).toEqual([taskId]);expect(pageErrors).toEqual([]);
-      await step(()=>confirmOwnedDesktopExit(info),true);expect(ownedDesktopResources(info).closed).toBe(true);
+      await step(()=>confirmOwnedDesktopExit(info),true);expect(ownedDesktopResources(info).closed).toBe(true);desktopConfirmed=true;await namespaceProof(true);await step(()=>journal!.append('cleanup-verified',{database,target:targetReceipt!.identity,partial:partialReceipt!.identity}),true);
       await step(()=>observer.query({sql:`DROP DATABASE \`${insertUiDatabase(database)}\``,timeout:10000}),true);const [remaining]=await step(()=>observer.query<RowDataPacket[]>({sql:'SELECT SCHEMA_NAME FROM information_schema.SCHEMATA WHERE SCHEMA_NAME=?',values:[database],timeout:10000}),true);expect(remaining).toHaveLength(0);
-      await step(()=>closeMysqlConnection(native!,true),true);expect((nativeStream as {closed?:boolean}).closed).toBe(true);scope.complete();
+      await step(async()=>{await closeMysqlConnection(native!,true);observerReceipt!.confirmClosed();},true);await step(()=>journal!.append('database-dropped',{observer:observerReceipt!.summary()}),true);await step(async()=>{await info.attach('完整INSERT资源登记',{body:await journal!.snapshot(),contentType:'application/x-ndjson'});},true);scope.complete();
       await info.attach('完整INSERT专项终态',{body:Buffer.from(JSON.stringify({scenario,taskId,sessionUnchanged:true,rowEvaluations:2,backgroundPreserved:true,targetRows:0,normalExitConfirmed:true,databaseDropped:true,observerStreamClosed:true,directoryRemoval:'原fixture退出后收尾；尚未在body中删除',saveDialogAnswerOnly:true})),contentType:'application/json'});
-    }catch(reason){scope.preserve();try{await info.attach('完整INSERT保留现场',{body:Buffer.from(JSON.stringify({database,directory,file,automaticReplay:false,forceStop:false})),contentType:'application/json'});}catch(attachment){throw new AggregateError([reason,attachment],'专项失败且现场附录失败',{cause:reason});}throw reason;}
+    }catch(reason){originalFailure=reason;scope.preserve();try{await info.attach('完整INSERT保留现场',{body:Buffer.from(JSON.stringify({database,directory,file,plan,journal:journal?.summary(),observer:observerReceipt?.summary(),target:targetReceipt?.identity,partial:partialReceipt?.identity,targetHandleCaptured:!!targetHandle,partialHandleCaptured:!!partialHandle,automaticReplay:false,forceStop:false})),contentType:'application/json'});}catch(attachment){throw originalFailure=new AggregateError([reason,attachment],'专项失败且现场附录失败',{cause:reason});}throw reason;}finally{
+      const failures:unknown[]=[];for(const handle of [partialHandle,targetHandle,journal?.handle])if(handle)try{await handle.close();}catch(reason){failures.push(reason);}
+      if(failures.length){scope.preserve();throw new AggregateError(originalFailure===undefined?failures:[originalFailure,...failures],'INSERT UI原文件句柄关闭失败，保留首因与现场',{cause:originalFailure});}
+    }
   });
 }
