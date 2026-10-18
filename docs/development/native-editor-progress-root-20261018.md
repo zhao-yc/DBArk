@@ -15,3 +15,5 @@ Root 于2026年10月18日整合 `36a8daf` 和 `3a2658b`，形成 `d0a6004b077ca2
 新检查点 `d4fb6e4c18c6a0f8d6bf6b77e4d27ad0aee4a776` 已启动独立工作流 `39094458615`。其中 Linux job `117577887207` 成功：495文件、9125项通过、10项条件跳过，类型及构建成功。原日志 `.cache/parallel-integration/run1702-native-progress-linux-green.log` SHA256 `0e496a42045f4d471d5c0131deab1f21d7e225dd964037827234c4878df6313a`。与 Root 整合头只差固定检查点 JSON，不包含产品变化。
 
 记录时 Windows x64、macOS arm64／x64 的源码专项步骤均成功，仍在后续既有回归及实际安装链路中。原三平台失败不删除，完整平台结论和原始专项附件另行验收，不能用 Linux 完整检查或阶段日志代替。
+
+随后该运行终态为三平台安装专项失败；Windows 和 arm64 原 ZIP 已独立核摘要／CRC／原终态，x64 原 ZIP 下载失败，详细范围见[第二检查点实际结果](../../tests/integration/acceptance-native-editor-progress-r2-20261018.md)。本节前述“运行中”为记录时点，不代表最终通过。
