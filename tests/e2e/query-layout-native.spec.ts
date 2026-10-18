@@ -160,7 +160,7 @@ test('离线原生分栏：两查询独立拖动/键盘、取消/默认、视觉
     expect((await snapshots(run, first, '.query-tab', false)).map(content)).toEqual(stableModels);
     await resize(run, first, 1400, 1000); await expect.poll(() => geometry(run, first).then(value => value.height)).toBeCloseTo(390, 0); expect(await settings(run, first)).toEqual(beforeSmall);
     await noExecution(run, first); const saved = await settings(run, first); await run.close(first);
-    const disk = await run.stopped(path => runtime!.readIndentNativeSettings(path, () => run.assert())); expect(disk.schema).toBe(8); expect(disk.settings.tabs).toEqual(saved.tabs); expect(disk.settings.activeTabId).toBe(b);
+    const disk = await run.stopped(path => runtime!.readIndentNativeSettings(path, () => run.assert())); expect(disk.schema).toBe(9); expect(disk.settings.tabs).toEqual(saved.tabs); expect(disk.settings.activeTabId).toBe(b);
     const second = await run.launch(); expect(second.application).not.toBe(first.application); await observe(run, second); await resize(run, second, 1400, 1000);
     expect(await settings(run, second)).toMatchObject({ tabs: saved.tabs, activeTabId: b }); const restored = await snapshots(run, second, '.query-tab', false); expect(restored).toHaveLength(2); expect(restored.map(value => value.value)).toEqual(saved.tabs.map(tab => tab.sql));
     await expect.poll(() => geometry(run, second).then(value => value.height)).toBeCloseTo(390, 0);
