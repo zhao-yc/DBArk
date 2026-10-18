@@ -15,12 +15,13 @@ import { readTableDefaultEncodingDefinition } from './tableDefaultEncodingSql';
 import { validateTableEncodingPair, sameTableEncodingPair } from '../shared/tableDefaultEncoding';
 import type { TableCreateEncodingCatalog } from '../shared/tableCreate';
 import { readMysql57CreateCapabilities, assertMysql57CreateDesign, type Mysql57CreateCapabilities } from './tableCreateMysql57';
-import { definitionOmittingSqlModes } from '../shared/tableColumnPatches';
+import { definitionOmittingSqlModes, readColumnOnUpdate, sameColumnOnUpdate } from '../shared/tableColumnPatches';
+import { assertTableCreateOnUpdateVersion, tableCreateOnUpdateExtraMatches, tableCreateTimeDefaultMatches } from '../shared/tableCreateOnUpdate';
 import { tableCreateAcknowledgements, tableCreateConfirmation, tableCreateDesignSchema, tableCreateMessages as text, type TableCreateDesign, type TableCreateGetInput, type TableCreateGetOutput, type TableCreatePreviewInput, type TableCreatePreviewOutput, type TableCreateApplyInput, type TableCreateApplyOutput, type TableCreateReleaseInput, type TableCreateProgress } from '../shared/tableCreate';
 const hash = (value: unknown) => createHash('sha256').update(JSON.stringify(value)).digest('hex');
 const literal = (value: string) => `CONVERT(X'${Buffer.from(value, 'utf8').toString('hex')}' USING utf8mb4)`;
 const progressOf = (): TableCreateProgress => ({ phase: 'connecting', ddlSubmitted: false, ddlCompleted: false, definitionVerified: false, outcome: 'not-sent' });
-interface Read { identity: string; serverKey: string; mode: string; noBackslash: boolean; bytes: number; version: string; lowerNames: number; mysql57?: Mysql57CreateCapabilities; }
+interface Read { identity: string; serverKey: string; mode: string; noBackslash: boolean; bytes: number; version: string; dialect: 'mysql' | 'mariadb'; lowerNames: number; mysql57?: Mysql57CreateCapabilities; }
 interface Snapshot extends Read { connectionId: string; database: string; revision: number; expires: number; encodings?: TableCreateEncodingCatalog; prefixFacts?: TableCreatePrefixFacts; }
 interface Preview { snapshotId: string; snapshot: Snapshot; design: TableCreateDraft; prefixPlan?: TableCreateIndexPlan; target: { connectionId: string; database: string; table: string }; designDigest: string; sql: string; bytes: number; expires: number; }
 /** 选项只能来自完整实际目录；没有显式collation的旧调用不读取目录、不猜默认值。 */
@@ -53,7 +54,7 @@ async function read(context: StructureTaskContext, database: string): Promise<Re
   if (schemas?.length !== 1 || schemas[0].name !== database || !schemas[0].charset || !schemas[0].collation) throw Error(text.database);
   // 5.x不能仅凭通用列目录被当成已准备版本；准确5.7事实纳入每次身份重核，其他方言沿原边界。
   const mysql57 = context.managed.status.dialect === 'mysql' && /^5(?:\.|$)/.test(context.managed.status.version) ? await readMysql57CreateCapabilities(context) : undefined;
-  return { identity: hash([row, uuid, context.managed.status.dialect, context.managed.status.version, schemas[0], ...(mysql57 ? [mysql57] : [])]), serverKey: hash([row.hostname, row.port, row.serverId, uuid, context.managed.status.dialect]), mode: String(row.sqlMode), noBackslash: String(row.sqlMode).split(',').includes('NO_BACKSLASH_ESCAPES'), bytes: 8192 + (mysql57 ? Buffer.byteLength(JSON.stringify(mysql57)) : 0), version: context.managed.status.version, lowerNames: Number(row.lowerNames), ...(mysql57 ? { mysql57 } : {}) };
+  return { identity: hash([row, uuid, context.managed.status.dialect, context.managed.status.version, schemas[0], ...(mysql57 ? [mysql57] : [])]), serverKey: hash([row.hostname, row.port, row.serverId, uuid, context.managed.status.dialect]), mode: String(row.sqlMode), noBackslash: String(row.sqlMode).split(',').includes('NO_BACKSLASH_ESCAPES'), bytes: 8192 + (mysql57 ? Buffer.byteLength(JSON.stringify(mysql57)) : 0), version: context.managed.status.version, dialect: context.managed.status.dialect, lowerNames: Number(row.lowerNames), ...(mysql57 ? { mysql57 } : {}) };
 }
 /** 预查不替代CREATE自身的并发裁决，大小写映射由服务器实际目录决定。 */
 async function absent(context: StructureTaskContext, database: string, table: string): Promise<void> {
@@ -96,23 +97,27 @@ async function verify(context: StructureTaskContext, preview: Preview): Promise<
   const foreignKeys = design.foreignKeys.length ? readCreatedForeignKeys(document, tableCreateLegacyDesign(design), context.managed.status.version) : undefined;
   // 只排除已按完整语义证明的FK原范围；未知约束和自动新增索引仍交给原索引守卫拒绝。
   const indexDocument = foreignKeys ? { ...document, items: document.items.filter(item => !foreignKeys.foreignKeys.some(key => key.range.start === item.range.start && key.range.end === item.range.end)) } : document;
-  if (document.table !== table || document.database !== undefined && document.database !== database || document.columns.length !== design.columns.length || indexDocument.items.filter(item => item.kind === 'constraint').length !== design.indexes.length || indexDocument.items.some(item => item.kind === 'constraint' && !['PRIMARY', 'UNIQUE', 'KEY', 'INDEX'].includes(item.constraintKind)) || document.columns.some(column => !column.type.known || column.attributes.some(attribute => !['nullable', 'default', 'comment', 'auto-increment'].includes(attribute.kind)))) return false;
+  if (document.table !== table || document.database !== undefined && document.database !== database || document.columns.length !== design.columns.length || indexDocument.items.filter(item => item.kind === 'constraint').length !== design.indexes.length || indexDocument.items.some(item => item.kind === 'constraint' && !['PRIMARY', 'UNIQUE', 'KEY', 'INDEX'].includes(item.constraintKind)) || document.columns.some((column, index) => !column.type.known || column.attributes.some(attribute => !['nullable', 'default', 'comment', 'auto-increment', ...(design.columns[index].onUpdate ? ['on-update'] : [])].includes(attribute.kind)))) return false;
   /** 仅规范化未引用关键字和无ZEROFILL整数显示宽度；ENUM/SET文字量逐字保留解码后的值。 */
-  const type = (value: string) => {
+  const type = (value: string, controlledTime = false) => {
     const tokens = tableDefinitionTokens(value, document.context).map(token => ({ kind: token.kind, value: token.kind === 'word' ? token.value.toUpperCase() : token.value }));
     if (!tokens.length || tokens.some(token => !['word', 'number', 'string', 'symbol'].includes(token.kind))) throw Error('字段类型包含未证明的词法属性');
     if (tokens[0].kind === 'word' && tokens[0].value === 'INTEGER') tokens[0].value = 'INT';
     if (/^(TINYINT|SMALLINT|MEDIUMINT|INT|BIGINT)$/.test(tokens[0].value) && !tokens.some(token => token.kind === 'word' && token.value === 'ZEROFILL') && tokens[1]?.value === '(' && tokens[2]?.kind === 'number' && /^\d+$/.test(tokens[2].value) && tokens[3]?.value === ')') tokens.splice(1, 3);
+    // 仅本次显式时间属性把DATETIME(0)/TIMESTAMP(0)与服务器的省略零精度等价。
+    if (controlledTime && /^(DATETIME|TIMESTAMP)$/.test(tokens[0].value) && tokens.length === 4 && tokens[1].value === '(' && tokens[2].value === '0' && tokens[3].value === ')') tokens.splice(1, 3);
     return JSON.stringify(tokens);
   };
   const temporal = (value: string) => value.toUpperCase().replace(/\(\)$/, '');
   // SHOW CREATE与目录必须同时支持本次设计，不能将两次不一致的读取拼成一次核验成功。
   if (document.columns.some((column, index) => {
     const expected = design.columns[index], value = column.default;
-    if (column.name !== expected.name || type(column.type.raw) !== type(expected.type) || column.attributes.some(attribute => attribute.kind === 'auto-increment') !== expected.autoIncrement || column.comment !== undefined && column.comment !== expected.comment || column.nullable !== undefined && column.nullable !== expected.nullable) return true;
+    // 只接纳本次明确请求的时间属性；遗漏、多出、未知或精度变化均保留DDL完成但核验失败。
+    if (Object.hasOwn(expected, 'onUpdate') && !sameColumnOnUpdate(readColumnOnUpdate(column), expected.onUpdate!, column.type.raw)) return true;
+    if (column.name !== expected.name || type(column.type.raw, Object.hasOwn(expected, 'onUpdate')) !== type(expected.type, Object.hasOwn(expected, 'onUpdate')) || column.attributes.some(attribute => attribute.kind === 'auto-increment') !== expected.autoIncrement || column.comment !== undefined && column.comment !== expected.comment || column.nullable !== undefined && column.nullable !== expected.nullable) return true;
     if (expected.defaultValue === undefined) return value.kind !== 'none' && !(expected.nullable && value.kind === 'null');
     if (expected.defaultValue === null) return value.kind !== 'null';
-    if (/^(?:DATE|TIME|DATETIME|TIMESTAMP)\b/i.test(expected.type) && temporalDefault(expected.defaultValue)) return value.kind !== 'expression' || temporal(value.sql) !== temporal(expected.defaultValue);
+    if (/^(?:DATE|TIME|DATETIME|TIMESTAMP)\b/i.test(expected.type) && temporalDefault(expected.defaultValue)) return value.kind !== 'expression' || (Object.hasOwn(expected, 'onUpdate') ? !tableCreateTimeDefaultMatches(expected.defaultValue, value.sql) : temporal(value.sql) !== temporal(expected.defaultValue));
     return value.kind !== 'literal' || value.value !== expected.defaultValue;
   })) return false;
   if (!preview.prefixPlan) {
@@ -138,8 +143,8 @@ async function verify(context: StructureTaskContext, preview: Preview): Promise<
   const columns = (await query<{ name: string; type: string; nullable: string; defaultValue: string | null; extra: string; comment: string }[]>(context, `SELECT COLUMN_NAME AS name,COLUMN_TYPE AS type,IS_NULLABLE AS nullable,COLUMN_DEFAULT AS defaultValue,EXTRA AS extra,COLUMN_COMMENT AS comment FROM information_schema.COLUMNS WHERE ${condition} ORDER BY ORDINAL_POSITION LIMIT 1001`)).rows;
   if (!Array.isArray(columns) || columns.length !== design.columns.length || columns.some((column, index) => {
     const expected = design.columns[index], actualDefault = context.managed.status.dialect === 'mariadb' ? mariaDefault(column.defaultValue, preview.snapshot.noBackslash) : column.defaultValue;
-    const sameDefault = expected.defaultValue === undefined ? actualDefault === null : expected.defaultValue === null ? actualDefault === null : temporalDefault(expected.defaultValue) && /^(?:DATE|TIME|DATETIME|TIMESTAMP)\b/i.test(expected.type) ? String(actualDefault).toUpperCase().replace(/\(\)$/, '') === expected.defaultValue.toUpperCase().replace(/\(\)$/, '') : actualDefault === expected.defaultValue;
-    return column.name !== expected.name || type(column.type) !== type(expected.type) || !['YES', 'NO'].includes(column.nullable) || (column.nullable === 'YES') !== expected.nullable || /auto_increment/i.test(column.extra) !== expected.autoIncrement || column.comment !== expected.comment || !sameDefault;
+    const sameDefault = expected.defaultValue === undefined ? actualDefault === null : expected.defaultValue === null ? actualDefault === null : temporalDefault(expected.defaultValue) && /^(?:DATE|TIME|DATETIME|TIMESTAMP)\b/i.test(expected.type) ? Object.hasOwn(expected, 'onUpdate') ? tableCreateTimeDefaultMatches(expected.defaultValue, actualDefault) : String(actualDefault).toUpperCase().replace(/\(\)$/, '') === expected.defaultValue.toUpperCase().replace(/\(\)$/, '') : actualDefault === expected.defaultValue;
+    return column.name !== expected.name || type(column.type, Object.hasOwn(expected, 'onUpdate')) !== type(expected.type, Object.hasOwn(expected, 'onUpdate')) || !['YES', 'NO'].includes(column.nullable) || (column.nullable === 'YES') !== expected.nullable || /auto_increment/i.test(column.extra) !== expected.autoIncrement || column.comment !== expected.comment || !sameDefault || !tableCreateOnUpdateExtraMatches(expected, column.extra);
   })) return false;
   if (preview.prefixPlan) return !!preview.snapshot.prefixFacts && await verifyCreatedPrefixIndexes(context, preview.target, design, preview.prefixPlan, preview.snapshot.prefixFacts, document);
   const indexes = (await query<{ name: string; nonUnique: number; column: string; sequence: number; subPart: number | null; method: string; direction: string | null; comment: string }[]>(context, `SELECT INDEX_NAME AS name,NON_UNIQUE AS nonUnique,COLUMN_NAME AS \`column\`,SEQ_IN_INDEX AS sequence,SUB_PART AS subPart,INDEX_TYPE AS method,COLLATION AS direction,INDEX_COMMENT AS comment FROM information_schema.STATISTICS WHERE ${condition} ORDER BY INDEX_NAME,SEQ_IN_INDEX LIMIT 4097`)).rows;
@@ -190,6 +195,7 @@ export class TableCreateTasks {
     if (!snapshot || snapshot.expires <= this.now() || snapshot.revision !== this.revision(revision)) throw Error(text.stale);
     const parsed = tableCreateDraftSchema.safeParse(input.design); if (!parsed.success) throw Error(text.invalid);
     const design = structuredClone(parsed.data); if (design.database !== snapshot.database) throw Error(text.invalid);
+    assertTableCreateOnUpdateVersion(design.columns, snapshot.dialect, snapshot.version);
     if (snapshot.mysql57) assertMysql57CreateDesign(tableCreateLegacyDesign(design), snapshot.mysql57, snapshot.mode);
     const designDigest = hash(design); if (Buffer.byteLength(JSON.stringify(design)) > 2 * 1024 * 1024) throw Error(text.size);
     const encoding = selectedEncoding(design, snapshot);

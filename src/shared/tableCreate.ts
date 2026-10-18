@@ -1,12 +1,14 @@
 import { z } from 'zod';
 import type { TableColumnApplyProgress } from './tableColumnPatches';
 import type { TableEncodingPair } from './tableDefaultEncoding';
+import { columnOnUpdatePatchSchema } from './tableColumnPatches';
+import { assertTableCreateColumnOnUpdate } from './tableCreateOnUpdate';
 const name = z.string().min(1).max(64).refine(value => !/[\u0000-\u001f\u007f\ud800-\udfff]/.test(value) && !/\s$/u.test(value));
 const columns = z.array(name).min(1).max(1000);
 /** 原普通设计加新表专属可选配对；originalName、任意SQL和传输配置均不能混入新建能力。 */
 export const tableCreateDesignSchema = z.object({
   database: name, name, engine: z.string().min(1).max(64), charset: z.string().min(1).max(64), collation: z.string().regex(/^[A-Za-z0-9_]{1,255}$/).optional(), comment: z.string().max(65535),
-  columns: z.array(z.object({ name, type: z.string().min(1).max(256), nullable: z.boolean(), defaultValue: z.string().max(65535).nullable().optional(), autoIncrement: z.boolean(), comment: z.string().max(65535) }).strict()).min(1).max(1000),
+  columns: z.array(z.object({ name, type: z.string().min(1).max(256), nullable: z.boolean(), defaultValue: z.string().max(65535).nullable().optional(), autoIncrement: z.boolean(), comment: z.string().max(65535), onUpdate: columnOnUpdatePatchSchema.optional() }).strict().superRefine((column, context) => { try { assertTableCreateColumnOnUpdate(column); } catch (error) { context.addIssue({ code: 'custom', message: error instanceof Error ? error.message : '新表自动更新时间属性无效' }); } })).min(1).max(1000),
   indexes: z.array(z.object({ name, unique: z.boolean(), columns }).strict()).max(1000),
   foreignKeys: z.array(z.object({ name, columns, referencedDatabase: name, referencedTable: name, referencedColumns: columns, onUpdate: z.string().max(32), onDelete: z.string().max(32) }).strict()).max(1000),
 }).strict();
