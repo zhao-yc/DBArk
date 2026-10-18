@@ -48,3 +48,11 @@ run1642固定1ebf0d9，在获准的沙箱外环境只执行一个正式Windows�
 第一次正常退出后，独立读取SQLite8并逐项核标签/活动身份；第二个独立应用恢复A300/B390和原SQL。两次owner均confirmed/willQuit/closed=true，分别记录6及5个PID；原runtime确认全部消失后移除本例目录。终态directoryRemoved=true、schema=8，任务/历史/保存查询列表为空，无页面错误，SQL和系统剪贴板操作为0；未读取数据库凭据、连接200或运行安装器。
 
 原JSON `run1642-query-layout-native-source/stdout.json` SHA256 `3ffa15ad22a93611a86a3e1592ccb49f2c61d00eeb62c80592de57a4bc273997`。以上是本机Windows源码专项；当前头完整CI、安装包及macOS分栏专项仍待验，尚无0.23公开发行。
+
+## 三平台源码及安装专项接线
+
+作者d778fc7/577696a对应Root`7a933aa`/`f0a7c79a8c4d8c4218ebbd52093c57b586ec4a12`，将原缩进、分栏spec接入同job成功构建及真实安装后两阶段，各自独立门/子进程，仍复用原期限、owner和退出/PID闭合。安装输入先封存；安装后对实际app及同job打包参考核字节，NSIS不能充当app入口。失败不重试，不卸载/删除保留现场。
+
+独审发现原P1：后续普通Playwright默认清空test-results，会删除原批准/专项证据。原1红1绿保留，修复后源码/安装普通回归改为独立子输出，旧默认调用兼容；原审3项通过，交接SHA256`e60438fcbddfb98f5f6008842880244cccb1bc5733ac89d5f0c004624856b7ab`。Root1651仅用两个已保存原生JSON核新consumer兼容，两项通过，未新增GUI。
+
+Root固定f0a7c79的5个相关脚本/端口/安装路径单元文件46通过，类型退出0；日志`run1656-native-ci-integration/stdout.log` SHA256`6d89c9fa179d4060214c735558068a36b725f8af7eaab228e5119ef9e815c0a2`。未重复本地build，产品src/版本/锁未改。新CI/三平台源码及安装的真实终态尚待运行，接线和RAM检查不算12份专项证明，见[运行合同](../../docs/development/offline-special-native-ci-20261018.md)。
