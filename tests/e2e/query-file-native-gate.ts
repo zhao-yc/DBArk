@@ -1,5 +1,7 @@
 import { createHash } from 'node:crypto';
 import { win32, posix } from 'node:path';
+import { assertQueryFileNativeKeyApproval } from './query-file-native-key-protocol';
+export { assertQueryFileNativeKeyApproval } from './query-file-native-key-protocol';
 
 /** Root审核的是固定合成正文/路径配方，实际绝对路径只能由本run私有userdata派生。 */
 export const queryFileNativeRecipe = Object.freeze({
@@ -21,6 +23,7 @@ export function queryFileNativeActive(env: NodeJS.ProcessEnv, args: readonly str
 export function assertQueryFileNativeEnvironment(env: NodeJS.ProcessEnv, args: readonly string[], platform: string): void {
   if (!['win32', 'darwin'].includes(platform)) throw Error('文件原生专项仅支持Windows/macOS');
   if (env.DBARK_QUERY_FILE_NATIVE_TEST !== '1' || env.DBARK_INTEGRATION_ENABLED !== '0') throw Error('文件原生专项须独立门=1且integration=0');
+  if (Object.keys(env).some(key => key.toUpperCase().startsWith('DBARK_QUERY_FILE_NATIVE_KEYS'))) assertQueryFileNativeKeyApproval(env, platform);
   for (const prefix of ['DBARK_EDITOR_INDENT', 'DBARK_QUERY_LAYOUT']) {
     if (Object.hasOwn(env, prefix + '_NATIVE_TEST') && env[prefix + '_NATIVE_TEST'] !== '0') throw Error('旧原生门必须关闭');
     if (Object.hasOwn(env, prefix + '_MANIFEST') || Object.hasOwn(env, prefix + '_MANIFEST_SHA256')) throw Error('文件专项只能使用独立批准清单');

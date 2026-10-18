@@ -1,0 +1,59 @@
+文件原生 Ctrl+S 桥：Root 操作说明（仅 Windows，新 run）
+
+本说明不授权重新操作旧 run。桥本身不发按键、不点按钮、不发菜单事件。
+Computer Use 由 Root 独占；桥回执只描述发送，不代表保存或正常退出成功。
+
+启动前
+1. 独审当前测试提交，重新审批实际运行源码/编译身份和原 fixture 配方。
+2. 保留原离线门、integration=0、双 owner 退出/PID门及 120000ms 原 case 期限。
+3. 显式批准两个新变量（不接收任何桥路径变量）：
+   DBARK_QUERY_FILE_NATIVE_KEYS=root-v1
+   DBARK_QUERY_FILE_NATIVE_KEYS_SHA256=2341ed32fbfc2dfac59747cc0087ca29c6d660941eda7adc600a6db57acd4305
+4. Root 必须预先准备好 Computer Use 和实时日志读取；不要启动后再等人确认。
+   用现有 list reporter 实时读取 stdout（默认配置已是 list；可明确 --reporter=list）。
+   仅用 JSON reporter 会把 console 请求收进终态报告，不能用来实时握手。
+
+固定四次请求
+序号 1 saved：第一 owner，首次编辑后的保存。
+序号 2 external：第一 owner，外改后的保存冲突，不能发生覆盖。
+序号 3 draft：第一 owner，重读确认后明确保存保留的原草稿。
+序号 4 restarted：第二 owner，独立重启后的再次编辑保存。
+每个请求都只能发送一次 Control_L+s。其余输入仍由原 Playwright 键盘流程完成。
+
+每次处理
+1. 从本次仍有效 case 的实时 stdout 读取：
+   DBARK_QUERY_FILE_NATIVE_KEY_REQUEST {requestPath,receiptPath,pendingPath,request}
+   路径只允许本次已登记 userdata/query-file-native-keys 内的对应序号文件。
+   request-NN.json 已独占写好并封存；不要修改请求或历史回执。
+2. 比较原 case、caseNonce、start/deadline、owner、阶段、tabId、序号和唯一 nonce；
+   deadline 是原 Playwright 起点加 120000，不得用当前时间重算。
+   每次异步 UI 操作前后确认本次 case 仍在等待该请求且尚未失败/超期；
+   超期、无法确认当前请求、来源变化或未知发送结果时停链，不重新按键。
+3. 用 request.owner 的 mainPid/windowId/contentsId/rendererPid 和实际窗口核对来源。
+   nativeHandle 是 Electron getNativeWindowHandle 的十六进制字节；Windows 按小端解释 HWND。
+   Root 用 Computer Use 选唯一实际所属窗口并核对焦点，然后只发送一次 Control_L+s。
+   不通过菜单 API、按钮、renderer keydown 或保存 IPC 替代。
+4. 已确认发送后，回执是完整 request 对象额外加一个 status:"sent" 字段。
+   无法确认只允许 status:"unknown"，桥会失败保留；不能把 unknown 改为 sent 后再试。
+   不允许其他字段，不能借回执声称保存成功；不要加入 accepted:true。
+5. 回执必须 UTF-8 无 BOM，大小 <=16384 字节。用 CreateNew 独占写指定 pendingPath，
+   完整写入、flush、close 后原子改名到指定 receiptPath，禁止覆盖目标。
+   根/桥目录均须真实非链接目录，pending/receipt 为单链接普通文件；
+   只写当前一次回执，不能提前写后续序号。出现已存在或不明路径就停链。
+   pending 改名后不得残留。不要删除请求、回执、桥目录或 userdata。
+
+回执形状示意（不是待执行命令）
+   const receipt = { ...request, status: 'sent' }; // 仅 Root 真实发送后写入
+
+桥处理及诊断
+桥在每个资源 await 两侧复核原 case/期限/当前 owner。读取回执前后核目录 inode、
+文件非链接/单链接、大小、纳秒版本、同一只读句柄及真实路径；旧回执重写会停链。
+Root 发送回执后仍执行原 revision 增长/clean、全文、BOM/CRLF 字节及外改冲突断言。
+原窗口焦点、activeElement、Monaco 焦点和 save-query 接收计数仅作诊断，不能代替断言。
+成功和失败附件都携带已缓存 keyDiagnostics；失败后不再为附件连接窗口或读盘。
+
+清理与边界
+八个请求/回执文件必须保留到四阶段完成、两个 owner 的正常退出/全部 PID 不存在门闭合，
+随后 stopped 回调才会精确核验并删除八个文件及空桥目录，再沿原 fixture/userdata 清理。
+未知文件、链接、重复/错序、迟到、owner/审批变化、部分写入和未知回执均保留现场。
+RAM 测试不能证明真实按键、菜单接收、保存、操作系统文件选择器或正常退出已通过。

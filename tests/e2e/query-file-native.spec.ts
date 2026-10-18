@@ -2,7 +2,7 @@ import { test, expect, type TestInfo } from '@playwright/test';
 import { zh } from '../../src/renderer/locales/zh-CN';
 import { queryFilesZh as text } from '../../src/renderer/locales/queryFiles.zh-CN';
 import { bindEditorIndentNativeCase } from './editor-indentation-native-gate';
-import { bindQueryFileNativeEnvironment, queryFileNativeActive, queryFileNativeRecipe as recipe } from './query-file-native-gate';
+import { assertQueryFileNativeKeyApproval, bindQueryFileNativeEnvironment, queryFileNativeActive, queryFileNativeRecipe as recipe } from './query-file-native-gate';
 import type { EditorIndentNativeRun, IndentNativeOwner } from './editor-indentation-native-owner';
 
 const active = queryFileNativeActive(process.env, process.argv);
@@ -10,8 +10,11 @@ const binding = active ? bindQueryFileNativeEnvironment(() => ({ env: process.en
 const approval = active ? Object.freeze({ manifestPath: process.env.DBARK_QUERY_FILE_MANIFEST!, approvedHash: process.env.DBARK_QUERY_FILE_MANIFEST_SHA256! }) : undefined;
 type Runtime = typeof import('./editor-indentation-native-runtime');
 type Fixture = typeof import('./query-file-native-fixture');
+type Keys = typeof import('./query-file-native-key-bridge');
 const runtime: Runtime | undefined = active ? require('./editor-indentation-native-runtime') as Runtime : undefined;
 const native: Fixture | undefined = active ? require('./query-file-native-fixture') as Fixture : undefined;
+const keys: Keys | undefined = active ? require('./query-file-native-key-bridge') as Keys : undefined;
+type KeyBridge = Awaited<ReturnType<Keys['createQueryFileNativeKeyBridge']>>;
 test.skip(!active, '默认关闭：Root批准独立编译manifest及fixture配方后才可开启DBARK_QUERY_FILE_NATIVE_TEST=1，integration=0');
 test.use({ trace: 'off', screenshot: 'off', video: 'off' });
 test.describe.configure({ mode: 'serial', retries: 0, timeout: 120000 });
@@ -68,9 +71,9 @@ async function select(run: EditorIndentNativeRun, owner: IndentNativeOwner, id: 
   await run.step(owner, () => owner.page.locator('.tab-strip .tab-select').nth(index).click()); await expect.poll(() => settings(run, owner).then(value => value.activeTabId)).toBe(id);
 }
 /** CtrlS必须推进真实来源修订且显示clean，不能借上一次toast或伪造文件返回值过关。 */
-async function save(run: EditorIndentNativeRun, owner: IndentNativeOwner, id: string) {
+async function save(run: EditorIndentNativeRun, owner: IndentNativeOwner, id: string, bridge: KeyBridge, stage: 'saved' | 'draft' | 'restarted') {
   const before = (await settings(run, owner)).tabs.find(tab => tab.id === id)!; expect(before.fileSourceBinding).toBeDefined();
-  await run.step(owner, () => owner.page.keyboard.press(`${modifier}+s`));
+  await run.step(owner, () => bridge.request(owner, stage, id, before.fileSourceBinding!.revision));
   await expect.poll(() => settings(run, owner).then(value => value.tabs.find(tab => tab.id === id)?.fileSourceBinding?.revision ?? 0)).toBeGreaterThan(before.fileSourceBinding!.revision);
   await run.step(owner, () => expect(owner.page.locator('.query-tab:visible').getByLabel(text.fileSource, { exact: true })).toContainText(text.clean));
 }
@@ -88,10 +91,13 @@ async function settled(run: EditorIndentNativeRun, owner: IndentNativeOwner) {
 test('离线原生文件：关联编辑CtrlS、外改不覆盖、重读保留、SQLite9及独立重启恢复', async ({ trace, screenshot, video }, info: TestInfo) => {
   expect(trace).toBe('off'); expect(screenshot).toBe('off'); expect(video).toBe('off');
   const scope = bindEditorIndentNativeCase(info, binding!, () => test.info()); cases.set(info, scope); scope.assertCurrent();
+  assertQueryFileNativeKeyApproval(process.env, process.platform); scope.assertCurrent();
   const run = runtime!.createEditorIndentNativeRun(scope, approval);
   let fixture: Awaited<ReturnType<Fixture['createQueryFileNativeFixture']>> | undefined;
+  let bridge: KeyBridge | undefined;
   try {
     const first = await run.launch(); await observe(run, first); await prepare(run, first);
+    bridge = await run.step(first, () => keys!.createQueryFileNativeKeyBridge(run, scope, info, () => test.info()));
     fixture = await run.step(first, () => native!.createQueryFileNativeFixture(run, () => run.assert(first)));
     const originalFile = await run.step(first, () => fixture!.verify('initial', () => run.assert(first), true));
     const restoreFirstDialog = await run.step(first, () => native!.installQueryFileNativeDialog(first, fixture!, () => run.assert(first), 1));
@@ -101,11 +107,12 @@ test('离线原生文件：关联编辑CtrlS、外改不覆盖、重读保留、
     const opened = await settings(run, first), document = opened.tabs.find(tab => tab.fileSourceBinding)!; expect(document).toBeDefined(); expect(document.title).toBe(recipe.name); expect(document.sourceBinding).toBeUndefined();
     const selected = await current(run, first); expect(selected.value.replaceAll('\r\n', '\n')).toBe(recipe.initial);
     await run.step(first, () => expect(first.page.locator('.query-tab:visible').getByLabel(text.fileSource, { exact: true })).toContainText('UTF-8 / UTF-8 BOM / CRLF'));
-    await write(run, first, recipe.saved); await save(run, first, document.id); const savedFile = await run.step(first, () => fixture!.verify('saved', () => run.assert(first)));
+    await write(run, first, recipe.saved); await save(run, first, document.id, bridge, 'saved'); const savedFile = await run.step(first, () => fixture!.verify('saved', () => run.assert(first)));
     await write(run, first, recipe.draft); const draft = await current(run, first); expect([draft.editor, draft.model]).toEqual([selected.editor, selected.model]);
     await run.step(first, () => expect(first.page.locator('.query-tab:visible').getByLabel(text.fileSource, { exact: true })).toContainText(text.dirty)); await run.step(first, () => fixture!.verify('saved', () => run.assert(first), true));
     const externalFile = await run.step(first, () => fixture!.external(() => run.assert(first)));
-    await run.step(first, () => first.page.keyboard.press(`${modifier}+s`)); const recovery = first.page.getByRole('dialog', { name: text.recovery, exact: true });
+    const beforeConflict = (await settings(run, first)).tabs.find(tab => tab.id === document.id)!;
+    await run.step(first, () => bridge!.request(first, 'external', document.id, beforeConflict.fileSourceBinding!.revision)); const recovery = first.page.getByRole('dialog', { name: text.recovery, exact: true });
     await run.step(first, () => expect(recovery.locator('.error-box')).toContainText('原文件已被外部修改，请重读、另存或取消')); await run.step(first, () => expect(recovery).toContainText(text.wroteNo));
     expect(await run.step(first, () => fixture!.verify('external', () => run.assert(first), true))).toEqual(externalFile); expect(await current(run, first)).toEqual(draft);
     await run.step(first, () => recovery.getByRole('button', { name: text.reread, exact: true }).click()); await run.step(first, () => expect(recovery).toBeHidden());
@@ -114,21 +121,21 @@ test('离线原生文件：关联编辑CtrlS、外改不覆盖、重读保留、
     const original = reread.tabs.find(tab => tab.id === document.id)!; expect(original.sql?.replaceAll('\r\n', '\n')).toBe(recipe.draft); expect(original.fileSourceBinding!.id).toBe(document.fileSourceBinding!.id);
     const hidden = (await editors(run, first)).find(value => value.paneIndex === reread.tabs.findIndex(tab => tab.id === document.id)); expect(hidden).toEqual({ ...draft, visible: false });
     // 重读确认后明确保存原正文，使正常退出不需要替换退出确认框；上面的外改冲突未写事实已独立证明。
-    await select(run, first, document.id); await save(run, first, document.id); expect((await current(run, first)).value).toBe(draft.value); await run.step(first, () => fixture!.verify('draft', () => run.assert(first)));
-    const firstDialog = await run.step(first, restoreFirstDialog); await noExecution(run, first); const savedSettings = await settled(run, first); await run.close(first);
+    await select(run, first, document.id); await save(run, first, document.id, bridge, 'draft'); expect((await current(run, first)).value).toBe(draft.value); await run.step(first, () => fixture!.verify('draft', () => run.assert(first)));
+    const firstDialog = await run.step(first, restoreFirstDialog); await noExecution(run, first); const savedSettings = await settled(run, first); await run.step(first, () => bridge!.release(first)); await run.close(first);
     const disk = await run.stopped(path => native!.readQueryFileNativeDatabase(path, () => run.assert(), run)); expect(disk.schema).toBe(9); expect(disk.settings.tabs).toEqual(savedSettings.tabs); expect(disk.sources).toHaveLength(1); expect(disk.sources[0]).toMatchObject({ tabId: document.id, path: fixture.path, ref: savedSettings.tabs.find(tab => tab.id === document.id)!.fileSourceBinding, encoding: 'utf8', bom: 'utf8', eol: 'crlf' });
     const second = await run.launch(); expect(second.application).not.toBe(first.application); await observe(run, second);
     const restoreSecondDialog = await run.step(second, () => native!.installQueryFileNativeDialog(second, fixture!, () => run.assert(second), 0));
     expect((await settings(run, second)).tabs).toEqual(savedSettings.tabs); await select(run, second, document.id); await run.step(second, () => expect(second.page.locator('.query-tab:visible .monaco-editor').getByRole('textbox')).toBeEditable()); expect((await current(run, second)).value).toBe(draft.value);
     await run.step(second, () => expect(second.page.locator('.query-tab:visible').getByLabel(text.fileSource, { exact: true })).toContainText(recipe.name));
-    await write(run, second, recipe.restarted); await save(run, second, document.id); const restartedFile = await run.step(second, () => fixture!.verify('restarted', () => run.assert(second)));
-    const secondDialog = await run.step(second, restoreSecondDialog); await noExecution(run, second); const restartedSettings = await settled(run, second); await run.close(second);
+    await write(run, second, recipe.restarted); await save(run, second, document.id, bridge, 'restarted'); const restartedFile = await run.step(second, () => fixture!.verify('restarted', () => run.assert(second)));
+    const secondDialog = await run.step(second, restoreSecondDialog); await noExecution(run, second); const restartedSettings = await settled(run, second); await run.step(second, () => bridge!.release(second)); await run.close(second);
     const finalDisk = await run.stopped(path => native!.readQueryFileNativeDatabase(path, () => run.assert(), run)); expect(finalDisk.schema).toBe(9); expect(finalDisk.settings.tabs).toEqual(restartedSettings.tabs); expect(finalDisk.sources).toHaveLength(1); expect(finalDisk.sources[0].ref.id).toBe(disk.sources[0].ref.id); expect(finalDisk.sources[0].ref.revision).toBeGreaterThan(disk.sources[0].ref.revision);
-    await run.stopped(path => fixture!.cleanup(path, () => run.assert())); await run.finish();
-    await info.attach('文件原生终态', { body: Buffer.from(JSON.stringify({ accepted: true, schema: finalDisk.schema, originalFile, savedFile, externalFile, restartedFile, selection: [firstDialog, secondDialog], normalOwners: run.owners.map(owner => ({ confirmed: owner.confirmed, willQuit: owner.ready, closed: owner.closed, recordedPids: owner.ids.size })), fixtureRemoved: true, userdataRemoved: run.removed, sqlExecution: 0, systemClipboard: 0, osNativeSelectorProven: false })), contentType: 'application/json' });
+    await run.stopped(path => bridge!.cleanup(path)); await run.stopped(path => fixture!.cleanup(path, () => run.assert())); await run.finish();
+    await info.attach('文件原生终态', { body: Buffer.from(JSON.stringify({ accepted: true, schema: finalDisk.schema, originalFile, savedFile, externalFile, restartedFile, selection: [firstDialog, secondDialog], keyDiagnostics: bridge.diagnostics, keyBridgeRemoved: true, normalOwners: run.owners.map(owner => ({ confirmed: owner.confirmed, willQuit: owner.ready, closed: owner.closed, recordedPids: owner.ids.size })), fixtureRemoved: true, userdataRemoved: run.removed, sqlExecution: 0, systemClipboard: 0, osNativeSelectorProven: false })), contentType: 'application/json' });
   } catch (reason) {
     run.retained = true;
-    try { await info.attach('文件原生保留现场', { body: Buffer.from(JSON.stringify({ directory: run.path, fixture: fixture?.path, owners: run.owners.map(owner => ({ confirmed: owner.confirmed, willQuit: owner.ready, closed: owner.closed, ids: [...owner.ids], sourceDiagnostics: owner.sourceDiagnostics ?? [] })), automaticRetry: false, automaticForceStop: false, userdataRemoved: run.removed, osNativeSelectorProven: false })), contentType: 'application/json' }); }
+    try { await info.attach('文件原生保留现场', { body: Buffer.from(JSON.stringify({ directory: run.path, fixture: fixture?.path, keyDiagnostics: bridge?.diagnostics, owners: run.owners.map(owner => ({ confirmed: owner.confirmed, willQuit: owner.ready, closed: owner.closed, ids: [...owner.ids], sourceDiagnostics: owner.sourceDiagnostics ?? [] })), automaticRetry: false, automaticForceStop: false, userdataRemoved: run.removed, osNativeSelectorProven: false })), contentType: 'application/json' }); }
     catch (attachment) { throw new AggregateError([reason, attachment], '文件原生失败且现场附录失败', { cause: reason }); }
     throw reason;
   }

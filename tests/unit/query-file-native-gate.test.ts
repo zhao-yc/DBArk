@@ -5,9 +5,10 @@ import { expect, it, vi } from 'vitest';
 import * as gate from '../e2e/query-file-native-gate';
 import { bindEditorIndentNativeCase } from '../e2e/editor-indentation-native-gate';
 import { EditorIndentNativeRun, type IndentNativePort } from '../e2e/editor-indentation-native-owner';
+import { queryFileNativeKeyProtocolHash } from '../e2e/query-file-native-key-protocol';
 const source = readFileSync(new URL('../e2e/query-file-native.spec.ts', import.meta.url), 'utf8');
 const fixtureSource = readFileSync(new URL('../e2e/query-file-native-fixture.ts', import.meta.url), 'utf8');
-const allowed = (): NodeJS.ProcessEnv => ({ DBARK_QUERY_FILE_NATIVE_TEST: '1', DBARK_INTEGRATION_ENABLED: '0', DBARK_QUERY_FILE_MANIFEST: 'C:/RAM-approved.json', DBARK_QUERY_FILE_MANIFEST_SHA256: 'a'.repeat(64), DBARK_QUERY_FILE_FIXTURE_SHA256: gate.queryFileNativeRecipeHash() });
+const allowed = (): NodeJS.ProcessEnv => ({ DBARK_QUERY_FILE_NATIVE_TEST: '1', DBARK_INTEGRATION_ENABLED: '0', DBARK_QUERY_FILE_MANIFEST: 'C:/RAM-approved.json', DBARK_QUERY_FILE_MANIFEST_SHA256: 'a'.repeat(64), DBARK_QUERY_FILE_FIXTURE_SHA256: gate.queryFileNativeRecipeHash(), DBARK_QUERY_FILE_NATIVE_KEYS: 'root-v1', DBARK_QUERY_FILE_NATIVE_KEYS_SHA256: queryFileNativeKeyProtocolHash() });
 
 /** 真spec声明只登记回调；所有runtime/fixture均为RAM哨兵，不加载Electron或执行list。 */
 function declaration(env: NodeJS.ProcessEnv, args: string[] = [], create = vi.fn(() => { throw Error('禁止取得真实runtime'); }), info: any = { _startWallTime: 0, timeout: 120000, status: 'passed', attach: vi.fn(async () => {}) }, clock = { now: 0 }) {
@@ -20,6 +21,7 @@ function declaration(env: NodeJS.ProcessEnv, args: string[] = [], create = vi.fn
     if (name === './editor-indentation-native-gate') return { bindEditorIndentNativeCase: (original: any, environment: any, current: any) => bindEditorIndentNativeCase(original, environment, current, () => clock.now) };
     if (name === './editor-indentation-native-runtime') return { createEditorIndentNativeRun: create };
     if (name === './query-file-native-fixture') return {};
+    if (name === './query-file-native-key-bridge') return {};
     if (name.includes('/locales/')) return {};
     throw Error('不允许加载模块：' + name);
   };
