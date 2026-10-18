@@ -7,6 +7,7 @@ import { tableCopyDataMode, tableCopyDataAcknowledgements } from './tableCopyDat
 import { tableCreateDesignSchema, tableCreateDraftSchema, tableCreateAcknowledgements } from './tableCreate';
 import { tableCopyStructureKnownAcknowledgements, validateTableCopyStructureName } from './tableCopyStructure';
 import { z } from 'zod';
+import { queryInsertTargetSchema, queryInsertConfirmationSchema } from './queryInsertExport';
 import { serverMonitorLimits, validateServerMonitorInput } from './serverMonitor';
 import { csvExportFieldLimits } from './csvExportFields';
 import { csvImportDelimiters } from './csvImport';
@@ -162,10 +163,12 @@ export const commandSchemas: Record<Command, z.ZodType> = {
   'query.temporaryCompletion':z.discriminatedUnion('kind',[z.object({sessionId:id,database:completionName,prefix:completionPrefix,kind:z.literal('objects')}).strict(),z.object({sessionId:id,database:completionName,table:completionName,prefix:completionPrefix,kind:z.literal('columns')}).strict()]),
   'query.temporaryRead':z.object({sessionId:id,database:completionName,table:completionName,taskId:id}).strict(),
   'query.executeParameterized': z.object({ sessionId: id, sql: text.min(1), parameters: queryParameters, taskId: id, maxRows: z.number().int().min(1).max(100000) }).strict(),
-  'query.exportStream': z.object({ sessionId: id, sql: text.min(1), taskId: id, fileToken: id, format: z.enum(['csv', 'json', 'csv-zip']), encoding: z.enum(['utf8', 'utf16le', 'gb18030']), protocol: z.enum(['text-strict', 'binary-explicit']), resultSelection: z.discriminatedUnion('kind', [z.object({ kind: z.literal('all') }).strict(), z.object({ kind: z.literal('row-result'), ordinal: z.number().int().min(1).max(queryStreamExportLimits.results) }).strict()]), parameters: queryParameters.optional() }).strict().superRefine((input, context) => {
+  'query.exportStream': z.object({ sessionId: id, sql: text.min(1), taskId: id, fileToken: id, format: z.enum(['csv', 'json', 'csv-zip', 'sql']), insertTarget: queryInsertTargetSchema.optional(), encoding: z.enum(['utf8', 'utf16le', 'gb18030']), protocol: z.enum(['text-strict', 'binary-explicit']), resultSelection: z.discriminatedUnion('kind', [z.object({ kind: z.literal('all') }).strict(), z.object({ kind: z.literal('row-result'), ordinal: z.number().int().min(1).max(queryStreamExportLimits.results) }).strict()]), parameters: queryParameters.optional() }).strict().superRefine((input, context) => {
+    if ((input.format === 'sql') !== (input.insertTarget !== undefined)) context.addIssue({ code:'custom',path:['insertTarget'],message:'仅完整INSERT必须携带明确目标映射' });
     if (new TextEncoder().encode(input.sql).byteLength > queryStreamExportLimits.sqlBytes) context.addIssue({ code: 'custom', path: ['sql'], message: 'SQL 模板不能超过 20 MiB' });
     if ((input.format !== 'csv') !== (input.resultSelection.kind === 'all')) context.addIssue({ code: 'custom', path: ['resultSelection'], message: 'JSON和CSV容器必须导出全部结果；单CSV必须指定行结果序号' });
   }),
+  'query.confirmInsertExport': queryInsertConfirmationSchema,
   'query.cancel': z.object({ taskId: id }).strict(),
   'query.transaction': z.object({ sessionId: id, action: z.enum(['begin','commit','rollback']) }).strict(),
   'table.page': tablePage.safeExtend({ copySource: z.boolean().optional(), taskId: z.string().uuid().optional() }).superRefine((input, context) => {
@@ -232,7 +235,7 @@ export const commandSchemas: Record<Command, z.ZodType> = {
   'schema.foreignKeys.preview': z.object({ snapshotId: id, patches: z.unknown().transform(value => validateForeignKeyPatches(value)), taskId: id }).strict(),
   'schema.foreignKeys.apply': z.object({ previewToken: id, acknowledgements: z.array(z.enum(foreignKeyAcknowledgementIds)).max(20).refine(value => new Set(value).size === value.length, '外键确认项不能重复'), taskId: id }).strict(),
   'schema.foreignKeys.release': z.object({ snapshotId: id.optional(), previewToken: id.optional() }).strict().refine(value => Boolean(value.snapshotId || value.previewToken), '缺少待释放的外键结构令牌'),
-  'files.choose': z.object({ purpose: z.enum(['import','export','key','certificate','query','connection-import','connection-export']), format: z.string().optional(), suggestedName: z.string().optional(), resultSqlPreviewId: z.string().uuid().optional() }).strict().refine(value => !value.resultSqlPreviewId || value.purpose === 'export' && value.format === 'sql', resultSqlZh.filePurpose),
+  'files.choose': z.object({ purpose: z.enum(['import','export','key','certificate','query','connection-import','connection-export']), format: z.string().optional(), suggestedName: z.string().optional(), resultSqlPreviewId: z.string().uuid().optional(), queryInsertExport: z.literal(true).optional() }).strict().refine(value => !value.resultSqlPreviewId || value.purpose === 'export' && value.format === 'sql', resultSqlZh.filePurpose).refine(value => !value.queryInsertExport || value.purpose==='export' && value.format==='sql' && !value.resultSqlPreviewId,'完整INSERT只允许独立SQL保存用途'),
   'files.path': z.object({ token: id }).strict(),
   'excel.sheets': z.object({ fileToken: id, taskId: id }).strict(),
   'excel.preview': z.object({ ...excelSheet, taskId: id }).strict(),

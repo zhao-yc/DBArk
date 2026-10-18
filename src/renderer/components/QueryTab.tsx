@@ -307,7 +307,7 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
   async function runStreamExport(options: StreamExportOptions) {
     if (busyRef.current) throw new Error(queryStreamZh.blocked);
     const source = streamExportSource!;
-    invalidateResultSelection(); busyRef.current = true; streamCancelled.current = ''; setBusy(true); setQueryRunning(true); setError(''); setSelectedPin(''); setShowPinSql(false); setOutcome(null); setStream([]); setResultIndex(0); task.current = options.taskId;cancelledQuery.current=''; useWorkspace.getState().setBusy(tab.id, true);
+    invalidateResultSelection(); busyRef.current = true; streamCancelled.current = ''; setBusy(true); setQueryRunning(true); setError(''); if(options.format!=='sql'){setSelectedPin(''); setShowPinSql(false);setOutcome(null); setStream([]); setResultIndex(0);} task.current = options.taskId;cancelledQuery.current=''; useWorkspace.getState().setBusy(tab.id, true);
     try {
       const session = await ensureSession();
       if (streamCancelled.current === options.taskId) throw new Error(queryStreamZh.cancelledBeforeExecution);
@@ -315,7 +315,7 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
       await prepareExecutionContext();
       if(streamCancelled.current===options.taskId||cancelledQuery.current===options.taskId)throw new Error(queryContextZh.cancelledBeforeSend);
       const result = await invoke('query.exportStream', { ...options, sql: source, sessionId: session });
-      setOutcome(result.preview); setTransaction(result.transactionOpen ?? false); setTransactionKnown(result.transactionKnown); useWorkspace.getState().setDirty(tab.id, !result.transactionKnown || !!result.transactionOpen);
+      if(options.format!=='sql')setOutcome(result.preview); setTransaction(result.transactionOpen ?? false); setTransactionKnown(result.transactionKnown); useWorkspace.getState().setDirty(tab.id, !result.transactionKnown || !!result.transactionOpen);
       return result;
     } catch (reason) { await handleQueryError(reason); throw reason; }
     finally { busyRef.current = false; setBusy(false); setQueryRunning(false); useWorkspace.getState().setBusy(tab.id, false); }

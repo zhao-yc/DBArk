@@ -55,6 +55,9 @@ import { StructureExecutionLocks } from './structureExecutionLocks';
 import { parseTableColumnDefinition } from './tableColumnDefinition';
 import { assertStructureExportMode, assertTableStructureExportable } from '../shared/tableColumnPatches';
 import { createQueryStreamFile } from './queryStreamFile';
+import { QueryInsertConfirmations } from './queryInsertConfirmations';
+import { queryInsertTargetSchema } from '../shared/queryInsertExport';
+import { queryInsertZh } from '../shared/queryInsertExport.zh-CN';
 import { explainQuery } from './queryExplain';
 import { explainLimits } from '../shared/explain';
 import { consumeQueryFrames } from './queryStreamProtocol';
@@ -80,6 +83,7 @@ export class Engine {
   private readonly profiles = new Map<string, ConnectionProfile>();
   private readonly sessions = new Map<string, Session>();
   private readonly tasks = new Map<string, RunningTask>();
+  private readonly insertConfirmations=new QueryInsertConfirmations();
   private closing = false;
   private readonly independentTasks = new Map<string, IndependentTask>();
   private readonly independentResources = new IndependentTaskResources();
@@ -267,6 +271,7 @@ export class Engine {
         this.assertFile(input);
         return this.withSession(input.sessionId, managed => this.runTask(input.taskId, managed, '执行 SQL 并完整导出', task => this.exportQueryStream(task, input as QueryStreamExportInput & { filePath: string })));
       }
+      case 'query.confirmInsertExport':this.insertConfirmations.confirm({taskId:input.taskId,previewToken:input.previewToken,confirmation:input.confirmation});return;
       case 'query.parameterNames': return this.withSession(input.sessionId, async managed => {
         const mode = await this.sqlMode(managed);
         const preview = this.parameterPlan(input.sql, mode);
@@ -803,7 +808,7 @@ export class Engine {
     const task = this.tasks.get(id);
     if (!task) return;
     if (task.fileCommitStarted || task.tableApply?.commitMayHaveBeenSent) return;
-    task.cancelled = true;
+    task.cancelled = true;this.insertConfirmations.cancel(id);
     return this.stopTaskCommand(task);
   }
 
@@ -937,6 +942,8 @@ export class Engine {
     let lastProgress = 0;
     const progress: QueryExportProgress = task.queryExport = { phase: 'preparing', statementsCompleted: 0, rowsWritten: 0, bytesWritten: 0, fileCommitted: false, sqlMayHaveExecuted: false, transactionKnown: false, peakBufferedRows: 0, peakBufferedBytes: 0 };
     let writer: Awaited<ReturnType<typeof createQueryStreamFile>> | undefined;
+    /** 人工确认等待前后仍核原物理会话；发布前断线不借新连接，既有格式沿原取消策略。 */
+    const checkFile=()=>{this.checkCancelled(task);if(input.format==='sql'&&!task.fileCommitStarted&&(this.closing||task.managed.broken||this.sessions.get(input.sessionId)?.managed!==task.managed))throw Error(queryInsertZh.stale);};
     /** 状态仅来自原会话缓存，未确认时不把旧位冒充当前事务真值。 */
     const refresh = () => {
       progress.transactionKnown = !task.managed.broken && task.managed.serverStatus !== undefined && task.managed.transactionStateKnown !== false;
@@ -951,10 +958,11 @@ export class Engine {
       }
     };
     try {
-      if ((input.format !== 'csv') !== (input.resultSelection.kind === 'all') || !['csv', 'json', 'csv-zip'].includes(input.format)) throw new Error('JSON和CSV容器必须导出全部结果；单CSV必须指定行结果序号');
+      if ((input.format !== 'csv') !== (input.resultSelection.kind === 'all') || !['csv', 'json', 'csv-zip','sql'].includes(input.format)) throw new Error('JSON、CSV容器和INSERT必须导出全部结果；单CSV必须指定行结果序号');
+      if(input.format==='sql')queryInsertTargetSchema.parse(input.insertTarget);else if(input.insertTarget!==undefined)throw Error(queryInsertZh.nonSql);
       if (input.resultSelection.kind === 'row-result' && (!Number.isInteger(input.resultSelection.ordinal) || input.resultSelection.ordinal < 1 || input.resultSelection.ordinal > queryStreamExportLimits.results)) throw new Error('行结果序号必须在 1～200 之间');
       if (!['text-strict', 'binary-explicit'].includes(input.protocol)) throw new Error('完整导出的执行协议无效');
-      writer = await createQueryStreamFile({ filePath: input.filePath, format: input.format, encoding: input.encoding, resultSelection: input.resultSelection, checkCancelled: () => this.checkCancelled(task), onCommitStart: () => { task.fileCommitStarted = true; progress.phase = 'committing'; report(true); } });
+      writer = await createQueryStreamFile({ filePath: input.filePath, format: input.format, encoding: input.encoding, resultSelection: input.resultSelection, checkCancelled: checkFile, onCommitStart: () => { task.fileCommitStarted = true; progress.phase = 'committing'; report(true); },...(input.format==='sql'?{insertTarget:input.insertTarget,beforeInsertCommit:async(sample,bytes)=>{checkFile();progress.phase='awaiting-confirmation';await this.insertConfirmations.wait(task.id,sample,input.insertTarget!,input.encoding,bytes,queryInsert=>{refresh();this.emit({taskId:task.id,status:'running',progress:0,message:queryInsertZh.pending,queryExport:{...progress},queryInsert});});checkFile();}}:{}) });
       for await (const { statement, template, mode, ordinal } of this.queryStatements(task, input.sql, input.parameters)) {
         this.checkCancelled(task);
         const wire = queryExportWireProtocol(statement, input.protocol, mode);
@@ -1018,7 +1026,7 @@ export class Engine {
       const safeCode = typeof code === 'string' && /^[A-Z0-9_]+$/.test(code) ? `（${code}）` : '';
       const detail = input.parameters !== undefined ? `完整导出失败${safeCode}；错误详情可能包含参数值，已隐藏` : this.errorMessage(error);
       const cleanupDetail = cleanupFailed ? `；临时文件清理失败${input.parameters !== undefined ? '，错误详情已隐藏' : `：${this.errorMessage(cleanupError)}`}` : '';
-      throw new Error(`完整导出在${{ preparing: '准备', executing: '执行', writing: '写入', committing: '文件提交' }[progress.phase]}阶段失败；已完成 ${progress.statementsCompleted} 条 SQL。${progress.sqlMayHaveExecuted ? 'SQL 可能已执行，此前已提交操作保留，未自动回滚或重放。' : '尚未发送用户 SQL。'}${detail}${cleanupDetail}`);
+      throw new Error(`完整导出在${{ preparing: '准备', executing: '执行', writing: '写入', 'awaiting-confirmation':'等待发布确认', committing: '文件提交' }[progress.phase]}阶段失败；已完成 ${progress.statementsCompleted} 条 SQL。${progress.sqlMayHaveExecuted ? 'SQL 可能已执行，此前已提交操作保留，未自动回滚或重放。' : '尚未发送用户 SQL。'}${detail}${cleanupDetail}`);
     }
   }
 

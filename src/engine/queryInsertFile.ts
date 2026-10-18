@@ -4,6 +4,8 @@ import { queryStreamExportLimits as limits } from '../shared/queryStreamExport';
 import { queryInsertTargetSchema, queryInsertLimits, type QueryInsertSample, type QueryInsertTarget } from '../shared/queryInsertExport';
 import { queryInsertZh as text } from '../shared/queryInsertExport.zh-CN';
 import { identifier, qualified, exportLiteral } from './sql';
+import { AtomicFile, type AtomicFileIO } from './atomicFile';
+import type { QueryStreamFile, QueryStreamFileOptions } from './queryStreamFile';
 
 const integerTypes = new Set(['TINY', 'SHORT', 'LONG', 'INT24', 'YEAR']);
 const preciseTypes = new Set(['LONGLONG', 'DECIMAL', 'NEWDECIMAL']);
@@ -76,6 +78,19 @@ export class QueryInsertFile {
   /** 完整结束才交出真实样例；空结果也必须有列定义和结束帧。 */
   complete(): QueryInsertSample {
     if (!this.columns || !this.ended) throw Error(text.incomplete);
+    if(this.count && !this.sampleCount)throw Error(text.sample);
     return {sql:this.samples.join(''),shownRows:this.sampleCount,totalRows:this.count};
   }
+  /** 已等待成功写入的完整行数，不含预览截断。 */
+  get rowsWritten():number{return this.count;}
+}
+
+/** 与原CSV/JSON共用原子IO；完整暂存才交出真实样例，确认回调不能执行SQL。 */
+export async function createQueryInsertFile(input: QueryStreamFileOptions,io?:AtomicFileIO):Promise<QueryStreamFile>{
+  if(!input.insertTarget || !input.beforeInsertCommit || input.resultSelection.kind!=='all')throw Error(text.mapping);
+  const target=queryInsertTargetSchema.parse(input.insertTarget);
+  const file=await AtomicFile.create(input.filePath,input.encoding,input.checkCancelled,input.onCommitStart,io,limits.fileBytes);
+  const rows=new QueryInsertFile(target,sql=>file.write(sql));
+  try{if(input.encoding==='utf16le')await file.write('\uFEFF');await file.write(text.header);}catch(error){await file.dispose();throw error;}
+  return {write:frame=>{input.checkCancelled();return rows.consume(frame);},async complete(){const sample=rows.complete();await file.prepare(true);input.checkCancelled();await input.beforeInsertCommit!(sample,file.bytesWritten);input.checkCancelled();await file.commit();},abort:()=>file.dispose(),get rowsWritten(){return rows.rowsWritten;},get bytesWritten(){return file.bytesWritten;},get fileCommitted(){return file.fileCommitted;}};
 }

@@ -9,5 +9,7 @@ export const queryInsertTargetSchema = z.object({
   columns: z.array(resultSqlTargetSchema.shape.columns.element.shape.name).min(1).max(1024),
 }).strict().refine(target => new Set(target.columns.map(name => name.normalize('NFC').toLowerCase())).size === target.columns.length, text.mapping);
 export type QueryInsertTarget = z.infer<typeof queryInsertTargetSchema>;
-export const queryInsertLimits = { sampleRows: 20, sampleBytes: 4 * 1024 * 1024 } as const;
+export const queryInsertLimits = { sampleRows: 20, sampleBytes: 4 * 1024 * 1024, ttlMs: 120000, activeTasks:8 } as const;
 export interface QueryInsertSample { sql: string; shownRows: number; totalRows: number }
+export interface QueryInsertPending extends QueryInsertSample { previewToken: string; target: QueryInsertTarget; encoding: 'utf8'|'utf16le'|'gb18030'; bytes: number; expiresAt: string }
+export const queryInsertConfirmationSchema = z.object({ taskId:z.string().min(1).max(256),previewToken:z.string().uuid(),confirmation:z.string().max(129),acknowledged:z.literal(true) }).strict();

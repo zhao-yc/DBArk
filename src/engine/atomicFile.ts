@@ -1,17 +1,24 @@
 import { randomUUID } from 'node:crypto';
-import { open, realpath, rename, rm } from 'node:fs/promises';
+import { open, realpath, rename, rm, lstat } from 'node:fs/promises';
+import type { BigIntStats } from 'node:fs';
 import { basename, dirname, join, resolve } from 'node:path';
 import iconv from 'iconv-lite';
 import { encodingName } from './files';
+import { queryInsertZh as stagedText } from '../shared/queryInsertExport.zh-CN';
 
 export interface WritableFile {
   write(buffer: Uint8Array, offset: number, length: number): Promise<{ bytesWritten: number }>;
   sync(): Promise<void>; close(): Promise<void>;
+  identity?():Promise<string>;
 }
 export interface AtomicFileIO {
   open(path: string): Promise<WritableFile>; rename(source: string, target: string): Promise<void>; remove(path: string): Promise<void>;
+  identity?(path:string):Promise<string>;
+  parentIdentity?(path:string):Promise<string>;
 }
-export const nativeAtomicFileIO: AtomicFileIO = { open: path => open(path, 'wx'), rename, remove: path => rm(path, { force: true }) };
+/** 同一原句柄及目录项必须具有相同身份、字节数和修改代次，拒绝符号链接与被替换的暂存。 */
+function fileIdentity(value:BigIntStats):string{if(!value.isFile()||value.isSymbolicLink())throw Error(stagedText.identity);return [value.dev,value.ino,value.size,value.mtimeNs,value.ctimeNs].join(':');}
+export const nativeAtomicFileIO: AtomicFileIO = { open: async path => {const file=await open(path,'wx');return{write:(buffer,offset,length)=>file.write(buffer,offset,length),sync:()=>file.sync(),close:()=>file.close(),identity:async()=>fileIdentity(await file.stat({bigint:true}))};}, identity:async path=>fileIdentity(await lstat(path,{bigint:true})), parentIdentity:async path=>{const value=await lstat(await realpath(dirname(resolve(path))),{bigint:true});if(!value.isDirectory())throw Error(stagedText.targetIdentity);return[value.dev,value.ino].join(':');}, rename, remove: path => rm(path, { force: true }) };
 const activeTargets = new Set<string>();
 const targetReservations = new WeakMap<AtomicFileTargetReservation,{key:string;claimed:boolean;released:boolean}>();
 
@@ -44,6 +51,9 @@ export class AtomicFile {
   private created = false;
   private disposed = false;
   private committed = false;
+  private prepared = false;
+  private preparedIdentity?:string;
+  private preparedParentIdentity?:string;
   private bytes = 0;
   private pendingBytes = 0;
   private pending: Uint8Array[] = [];
@@ -121,11 +131,22 @@ export class AtomicFile {
     this.pending = []; this.pendingBytes = 0; await this.writeBuffer(buffer);
   }
 
-  /** 替换之前允许取消；替换开始后只能报告真实提交结果，不能声称撤销文件。 */
-  async commit(): Promise<void> {
+  /** 暂存同步并关闭句柄后可等待用户确认；保留本任务目标锁，不发布或重读数据。 */
+  async prepare(protectIdentity=false): Promise<void> {
     this.checkCancelled();
     if (!this.file || this.disposed || this.committed) throw new Error('文件写入器已关闭');
-    await this.flush(); await this.file.sync(); this.checkCancelled(); await this.file.close(); this.file = undefined; this.checkCancelled();
+    await this.flush(); await this.file.sync(); this.checkCancelled();
+    if(protectIdentity){if(!this.file.identity||!this.io.identity||!this.io.parentIdentity)throw Error(stagedText.identityUnavailable);this.preparedIdentity=await this.file.identity();this.preparedParentIdentity=await this.io.parentIdentity(this.target);if(await this.io.identity(this.temporary)!==this.preparedIdentity)throw Error(stagedText.identity);}
+    await this.file.close(); this.file = undefined; this.checkCancelled();
+    this.prepared = true;
+  }
+
+  /** 替换之前允许取消；替换开始后只能报告真实提交结果，不能声称撤销文件。 */
+  async commit(): Promise<void> {
+    if (!this.prepared) await this.prepare();
+    this.checkCancelled();
+    if (this.disposed || this.committed) throw new Error('文件写入器已关闭');
+    if(this.preparedIdentity){if(await exportTargetKey(this.target)!==this.key||await this.io.parentIdentity!(this.target)!==this.preparedParentIdentity||await this.io.identity!(this.temporary)!==this.preparedIdentity)throw Error(stagedText.targetIdentity);this.checkCancelled();}
     this.onCommitStart(); await this.io.rename(this.temporary, this.target); this.committed = true;
   }
 
@@ -137,7 +158,13 @@ export class AtomicFile {
     try { await this.file?.close(); }
     finally {
       this.file = undefined;
-      try { if (this.created && !this.committed) await this.io.remove(this.temporary); }
+      try {
+        if (this.created && !this.committed) {
+          // 长等待后若目录项已被替换，只清理仍与原句柄相符的文件，不能删除外来文件。
+          if(this.preparedIdentity && this.io.identity){try{if(await this.io.identity(this.temporary)!==this.preparedIdentity)return;}catch(error){if((error as NodeJS.ErrnoException).code==='ENOENT')return;throw error;}}
+          await this.io.remove(this.temporary);
+        }
+      }
       finally { if (this.key && this.ownsTarget) activeTargets.delete(this.key); }
     }
   }

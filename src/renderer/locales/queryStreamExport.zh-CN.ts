@@ -13,7 +13,7 @@ export const queryStreamZh = {
   cancel: '取消任务', cancelling: '已请求取消，等待执行与文件资源释放', completed: '完整文件已提交；查询区只显示有界预览（每个行结果最多 200 行），不是文件全部内容。',
   cancelledBeforeExecution: '已取消，尚未开始 SQL 执行。',
   progress: '导出任务进度', preparing: '准备文件与执行', executing: '执行 SQL', writing: '写入文件', committing: '原子提交文件',
-  summary: '完整文件结果摘要', rowSummary: '结果 {0}（行结果 {1}）：写入 {2} 行', statusSummary: '结果 {0}（执行状态）：影响 {1} 行；插入编号 {2}；警告 {3}',
+  'awaiting-confirmation':'完整暂存，等待确认发布', summary: '完整文件结果摘要', rowSummary: '结果 {0}（行结果 {1}）：写入 {2} 行', statusSummary: '结果 {0}（执行状态）：影响 {1} 行；插入编号 {2}；警告 {3}',
   stats: '完成语句 {0}；写入行 {1}；文件字节 {2}', executed: 'SQL 可能已经执行，文件取消或失败不能撤销写入。', unknown: '事务状态未知，请核对当前会话再决定提交或回滚。',
   ordinalInvalid: '行结果集序号必须是 1 到 200 的整数。', blocked: '当前标签仍有操作正在进行，请稍后重试。', sessionChanged: '参数识别时的会话已失效，请重新识别参数后再执行。',
 };

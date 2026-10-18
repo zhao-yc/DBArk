@@ -10,9 +10,9 @@ export const queryStreamExportLimits = {
   fileBytes: 10 * 1024 * 1024 * 1024,
   archiveManifestBytes: 8 * 1024 * 1024,
 } as const;
-export type QueryExportFormat = 'csv' | 'json' | 'csv-zip';
+export type QueryExportFormat = 'csv' | 'json' | 'csv-zip' | 'sql';
 /** 容器仍是原生保存对话框授权的单个ZIP文件，不能借CSV令牌改写其它类型。 */
-export function queryExportFileFormat(format: QueryExportFormat): 'csv' | 'json' | 'zip' { return format === 'csv-zip' ? 'zip' : format; }
+export function queryExportFileFormat(format: QueryExportFormat): 'csv' | 'json' | 'zip' | 'sql' { return format === 'csv-zip' ? 'zip' : format; }
 /** 所有包内文件名由有界序号生成，SQL、库表及列名都不参与路径。 */
 export function queryCsvResultFile(ordinal: number): string {
   if (!Number.isInteger(ordinal) || ordinal < 1 || ordinal > queryStreamExportLimits.results) throw new Error('CSV容器行结果序号必须在1～200之间');
@@ -24,6 +24,7 @@ export interface QueryStreamExportInput {
   sessionId: string; sql: string; taskId: string; fileToken: string;
   format: QueryExportFormat; encoding: QueryFileEncoding; protocol: QueryExportProtocol;
   resultSelection: QueryExportSelection; parameters?: QueryParameter[];
+  insertTarget?: import('./queryInsertExport').QueryInsertTarget;
 }
 export interface QueryExportColumn { position: number; key: string; name: string; exportName: string; type: string; }
 /** 结果序号在协议事件边界固定，异步写入不能借用后来到达的列定义。 */
@@ -37,7 +38,7 @@ export interface QueryExportResultSummary {
   rowsWritten: number; affectedRows?: number; insertId?: string; warningCount?: number;
 }
 export interface QueryExportProgress {
-  phase: 'preparing' | 'executing' | 'writing' | 'committing';
+  phase: 'preparing' | 'executing' | 'writing' | 'awaiting-confirmation' | 'committing';
   statementsCompleted: number; currentResultOrdinal?: number; rowsWritten: number; bytesWritten: number;
   fileCommitted: boolean; sqlMayHaveExecuted: boolean; transactionKnown: boolean; transactionOpen?: boolean;
   /** 待写数据行峰值；单个大行可超过队列软字节阈值，但仍受独立行硬限额约束。 */
