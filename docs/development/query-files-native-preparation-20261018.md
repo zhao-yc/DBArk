@@ -46,3 +46,11 @@ Root尚未提供本片的新构建清单，本片没有生成批准值，也不�
 同一原应用禁止重装或重复消费。未知标题/文字/按钮（包括强制退出提示）、第二次原wrapper调用、窗口/contents/app漂移、原期限失效均保留；父进程漂移在消费RPC前停链。失败附录保留本owner的安装PID、提示/消费计数和失败阶段，不兜底回答未知提示，不调用退出API或改共享生命周期。消费回执不代替正常退出：仍须由原run取得真实will-quit/close及全部原PID不存在，两次完成后才按原目录门清理。原dirty模型、文档、来源及重启后的原编辑正文继续保持。
 
 本次追加18项窄RAM反例，与原29项准备测试、原13项owner测试共60项通过，类型检查退出0。RAM直接执行原Main before-quit回调和本片原evaluate闭包，证明未确认时阻塞，确认后才沿原收尾推进且dirty/草稿事实未改变；不把它当作真实退出/PID验收。原e2f提交历史、`.cache/sql-files-native-prep` 原交接及127项日志保持，追加证据另存 `.cache/sql-files-dirty-exit-fix/handoff.json`。
+
+## run1871：模型EOL比较前提
+
+Root首次实际run1871在打开LF最近样本后失败：Main原文仍为LF，实际Monaco模型getter返回CRLF。报告SHA256为 `ed9dd8cbae67e6cf89af1a75b828cd1e7d6881387aa8a43ea72288e6802a68d3`，尚未进入dirty退出。这与原 `editorContentBridge.ts` 将受控props按实际 `model.getEOL()` 规范化且不回声Main的合同一致，不能因此修改全局EOL。
+
+本次只调整测试模型比较：每个模型getter的EOL必须明确为LF或CRLF；活动模型必须仍对应原Main活动标签，仅将该标签原stored.sql按既有Monaco规则转换成该实际EOL后精确比较。实际model.sql不做替换，不默认EOL；未知EOL、文字差异、缺少末尾行、实际模型换行与其声明不符，以及本片未允许的存储正文混合换行/裸CR均拒绝。
+
+Main的 `fileTab.sql === recentSql`、最近样本LF原文及独立字节、来源encoding/BOM/eol、模型对象/版本及前后完整快照、原dirty退出/窗口/PID与目录门继续保持；另明确核首个最近来源为UTF8/无BOM/LF。只补9项独立RAM正反例，与原29项准备回归共38项通过，类型检查以追加交接为准；不重跑GUI、网络、端口或全套，不触及Root另查的格式化入口比较。原失败报告、两份旧交接及原日志均保留，追加证据在 `.cache/sql-files-model-eol-fix/handoff.json`。

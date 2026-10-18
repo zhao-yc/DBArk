@@ -1,4 +1,5 @@
 import type { ElectronApplication } from '@playwright/test';
+import assert from 'node:assert/strict';
 
 export const recentSql = "-- 最近文件合成样本\nSELECT '原用户明确选择';\n";
 export const sourceSql = "-- 原UTF16LE文件\r\nSELECT '保存前';\r\n";
@@ -7,6 +8,15 @@ export const draftSql = "-- 外改后的原编辑草稿\r\nSELECT '必须保留'
 export const externalSql = "-- 外来文件原文\r\nSELECT '明确重读';\r\n";
 /** 独立手工UTF16LE+BOM字节，不借产品编码器或读取结果生成预期。 */
 export function utf16NativeBytes(sql: string) { return Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from(sql, 'utf16le')]); }
+
+/** 只按实际getter的已知EOL规范化存储正文；模型原文不改，混合/裸CR样本不在本片允许范围。 */
+export function assertSqlFilesModelText(stored: unknown, model: Readonly<{ sql: string; eol: unknown }>) {
+  if (typeof stored !== 'string' || model.eol !== '\n' && model.eol !== '\r\n') throw Error('SQL文件模型EOL或存储正文未知');
+  const endings = stored.match(/\r\n|\r|\n/g) ?? [];
+  if (endings.some(value => value === '\r' || value !== endings[0])) throw Error('SQL文件样本存在裸CR或混合换行，不能用模型规范化掩盖');
+  // 与editorContentBridge已声明的受控props规则一致；只变换期望侧，不处理实际模型正文。
+  assert.equal(model.sql, stored.replace(/\r\n|\r|\n/g, model.eol), '原模型正文与该标签存储正文不符');
+}
 
 /** 仅一次原OpenDialog回答；精确窗口/标题/SQL过滤器后立即恢复原函数，不替换IPC、授权、模型或结果。 */
 export async function installSqlFilesOpenAnswer(application: ElectronApplication, choice: { nonce: string; path?: string }) {

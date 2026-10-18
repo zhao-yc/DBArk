@@ -8,7 +8,7 @@ import type { IndentNativeTestInfo } from './editor-indentation-native-gate';
 import { createEditorIndentNativeRun, readIndentNativeSettings } from './editor-indentation-native-runtime';
 import type { EditorIndentNativeRun, IndentNativeOwner } from './editor-indentation-native-owner';
 import { queryFilesNativeCases, type bindQueryFilesNativeEnvironment } from '../helpers/queryFilesNativeGate';
-import { recentSql, sourceSql, savedSql, draftSql, externalSql, utf16NativeBytes, installSqlFilesOpenAnswer, finishSqlFilesOpenAnswer, installSqlFilesDirtyExitAnswer, consumeSqlFilesDirtyExitAnswer } from '../helpers/queryFilesNative';
+import { recentSql, sourceSql, savedSql, draftSql, externalSql, utf16NativeBytes, assertSqlFilesModelText, installSqlFilesOpenAnswer, finishSqlFilesOpenAnswer, installSqlFilesDirtyExitAnswer, consumeSqlFilesDirtyExitAnswer } from '../helpers/queryFilesNative';
 import { QueryFilesNativeFiles } from '../helpers/queryFilesNativeFiles';
 
 type Binding = ReturnType<typeof bindQueryFilesNativeEnvironment>;
@@ -25,14 +25,15 @@ async function models(run: EditorIndentNativeRun, owner: IndentNativeOwner) {
     const id = (value: object) => { if (!ids.ids.has(value)) ids.ids.set(value, ++ids.next); return ids.ids.get(value)!; };
     return root.monaco.editor.getEditors().filter(editor => editor.getContainerDomNode().isConnected && editor.getContainerDomNode().closest('.query-tab')).map(editor => {
       const node = editor.getContainerDomNode(), model = editor.getModel(); if (!model || model.isDisposed()) throw Error('原模型身份未知');
-      return { editor: id(editor), model: id(model), pane: Array.from(document.querySelectorAll('.tab-content .tab-pane')).indexOf(node.closest('.tab-pane')!), visible: node.getClientRects().length > 0 && getComputedStyle(node).visibility !== 'hidden', sql: model.getValue(), eol: model.getEOL(), version: model.getVersionId() };
+      const eol = model.getEOL(); if (eol !== '\n' && eol !== '\r\n') throw Error('原模型getter返回未知EOL');
+      return { editor: id(editor), model: id(model), pane: Array.from(document.querySelectorAll('.tab-content .tab-pane')).indexOf(node.closest('.tab-pane')!), visible: node.getClientRects().length > 0 && getComputedStyle(node).visibility !== 'hidden', sql: model.getValue(), eol, version: model.getVersionId() };
     }).sort((a, b) => a.pane - b.pane);
   }));
 }
 /** 唯一实际可见模型须对应原持久化活动标签，不先点击标签修复错误状态。 */
 async function workspace(run: EditorIndentNativeRun, owner: IndentNativeOwner) {
   const stored = await settings(run, owner), actual = await models(run, owner), visible = actual.filter(value => value.visible), index = stored.tabs.findIndex(tab => tab.id === stored.activeTabId);
-  expect(visible).toHaveLength(1); expect(visible[0].pane).toBe(index); expect(visible[0].sql).toBe(stored.tabs[index].sql); return { tabs: stored.tabs, activeTabId: stored.activeTabId, actual };
+  expect(visible).toHaveLength(1); expect(visible[0].pane).toBe(index); assertSqlFilesModelText(stored.tabs[index].sql, visible[0]); return { tabs: stored.tabs, activeTabId: stored.activeTabId, actual };
 }
 /** 打开官方只读getter并核实际Main版本；版本只是补充，入口仍先过完整批准manifest。 */
 async function observe(run: EditorIndentNativeRun, owner: IndentNativeOwner) {
@@ -133,8 +134,9 @@ export function registerQueryFilesNative(binding: Binding) {
       const originalIdentity = await run.step(first, () => files!.create(path, scenario === 0 ? Buffer.from(recentSql) : utf16NativeBytes(sourceSql))); await openFile(run, first, path);
       await expect.poll(() => settings(run, first).then(value => value.tabs.length)).toBe(2); const opened = await workspace(run, first), fileTab = opened.tabs.find(value => value.id === opened.activeTabId)!;
       expect(opened.tabs[0]).toEqual(initial.tabs[0]); expect(fileTab.id).not.toBe(initial.activeTabId); expect(fileTab.sql).toBe(scenario === 0 ? recentSql : sourceSql); expect(opened.actual[0]).toEqual({ ...initial.actual[0], visible: false });
-      const source = await bound(run, first, fileTab.id); expect(source.displayPath).toBe(path); await run.step(first, () => files!.read(path, originalIdentity));
+      const source = await bound(run, first, fileTab.id); expect(source.displayPath).toBe(path); expect((await run.step(first, () => files!.read(path, originalIdentity))).bytes).toEqual(scenario === 0 ? Buffer.from(recentSql) : utf16NativeBytes(sourceSql));
       if (scenario === 0) {
+        expect(source).toMatchObject({ encoding: 'utf8', bom: 'none', eol: 'lf' });
         const selected = await recent(run, first, path); await run.step(first, () => selected.dialog.getByRole('button', { name: text.cancelRecent, exact: true }).click()); expect(await workspace(run, first)).toEqual(opened);
         const again = await recent(run, first, path, selected.id); await run.step(first, () => again.dialog.getByRole('button', { name: text.openRecent, exact: true }).click()); await run.step(first, () => expect(again.dialog).toBeHidden()); await expect.poll(() => settings(run, first).then(value => value.tabs.length)).toBe(3);
         const reopened = await workspace(run, first); expect(reopened.tabs.slice(0, 2)).toEqual(opened.tabs); expect(reopened.tabs[2].sql).toBe(recentSql); expect(reopened.tabs[2].id).not.toBe(fileTab.id); expect(reopened.actual.slice(0, 2).map(value => ({ ...value, visible: false }))).toEqual(opened.actual.map(value => ({ ...value, visible: false }))); await bound(run, first, reopened.activeTabId!);
