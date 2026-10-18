@@ -93,7 +93,8 @@ export function registerV027Acceptance() {
       }
       const observed = await audit(ctx); expect(observed.issued).toBe(3); expect(observed.calls['files.import']).toBe(3); expect(observed.success['files.import']).toBe(3); expect(new Set(observed.delimiters)).toEqual(new Set([0, 1, 2]));
       const expected = [{ id: '7', amount: '7.000000000000', nullable_text: null, empty_text: '', payload: '00FF10', note: '原旁行' }, ...samples.flatMap(sample => sample.expected)];
-      await ctx.finish(async closed => { const [rows] = await ctx.step(() => ctx.connection.query<RowDataPacket[]>('SELECT CAST(id AS CHAR) AS id,CAST(amount AS CHAR) AS amount,nullable_text,empty_text,HEX(payload) AS payload,note FROM ' + qualified + ' ORDER BY id'), closed); expect(rows).toEqual(expected); await ctx.neighbor(closed); }, 3);
+      // 按原整数列排序；未限定的id会绑定CAST输出别名，导致旁行7按文本排到大整数后。
+      await ctx.finish(async closed => { const [rows] = await ctx.step(() => ctx.connection.query<RowDataPacket[]>('SELECT CAST(id AS CHAR) AS id,CAST(amount AS CHAR) AS amount,nullable_text,empty_text,HEX(payload) AS payload,note FROM ' + qualified + ' AS source ORDER BY source.id'), closed); expect(rows).toEqual(expected); await ctx.neighbor(closed); }, 3);
     } catch (reason) { ctx.life.stop(); throw reason; }
   });
 
