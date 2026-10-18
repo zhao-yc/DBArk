@@ -1,18 +1,19 @@
 import React, { act } from 'react';
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { memoryDocument, MemoryEvent } from '../fixtures/memory-dom';
-const io = vi.hoisted(() => ({ source: '', start: 0, end: 0, multi: false, readOnly: false, events: [] as string[], editor: null as any, closeRequest: undefined as undefined | { tabId: string }, rerender: () => {}, format: undefined as undefined | (() => void) }));
+const io = vi.hoisted(() => ({ source: '', eol: '\n', start: 0, end: 0, multi: false, readOnly: false, events: [] as string[], editor: null as any, closeRequest: undefined as undefined | { tabId: string }, rerender: () => {}, format: undefined as undefined | (() => void) }));
 /** 只替换Monaco外界端口；真实QueryTab、store和DOM负责按钮、正文回传及副作用边界。 */
 vi.mock('../../src/renderer/components/SqlEditor', async () => {
   const { useEffect, createElement } = await import('react');
   return { SqlEditor(props: any) {
     io.format = props.onFormat;
     useEffect(() => {
-      io.source = props.value; let version = 1;
-      const position = (offset: number) => { const lines = io.source.slice(0, offset).split('\n'); return { lineNumber: lines.length, column: lines.at(-1)!.length + 1 }; };
-      const offset = (p: any) => io.source.split('\n').slice(0, p.lineNumber - 1).reduce((sum, line) => sum + line.length + 1, 0) + p.column - 1;
+      // 与Monaco及正文桥原合同一致：模型只暴露自身EOL，初始化不回传为用户修改。
+      io.source = props.value.replace(/\r\n|\r|\n/g, io.eol); let version = 1;
+      const position = (offset: number) => { const lines = io.source.slice(0, offset).split(io.eol); return { lineNumber: lines.length, column: lines.at(-1)!.length + 1 }; };
+      const offset = (p: any) => io.source.split(io.eol).slice(0, p.lineNumber - 1).reduce((sum, line) => sum + line.length + io.eol.length, 0) + p.column - 1;
       const range = (start: number, end: number) => ({ startLineNumber: position(start).lineNumber, startColumn: position(start).column, endLineNumber: position(end).lineNumber, endColumn: position(end).column, selectionStartLineNumber: position(start).lineNumber, selectionStartColumn: position(start).column, positionLineNumber: position(end).lineNumber, positionColumn: position(end).column, getStartPosition: () => position(start), getEndPosition: () => position(end), isEmpty: () => start === end });
-      const model = { isDisposed: () => false, getValue: () => io.source, getValueLength: () => io.source.length, getVersionId: () => version, getOffsetAt: offset, getFullModelRange: () => range(0, io.source.length), getEOL: () => '\n' };
+      const model = { isDisposed: () => false, getValue: () => io.source, getValueLength: () => io.source.length, getVersionId: () => version, getOffsetAt: offset, getFullModelRange: () => range(0, io.source.length), getEOL: () => io.eol };
       const subscribe = () => ({ dispose() {} });
       io.editor = { onDidChangeModel: subscribe, onDidChangeModelContent: subscribe, onDidChangeCursorSelection: subscribe, onDidChangeConfiguration: subscribe, onDidDispose: subscribe, getModel: () => model, getSelections: () => io.multi ? [range(0, 0), range(0, 0)] : [range(io.start, io.end)], getRawOptions: () => ({ readOnly: io.readOnly }), pushUndoStop: () => { io.events.push('undo-stop'); return true; }, executeEdits: (name: string, edits: any[]) => { io.events.push(name); for (const edit of edits) io.source = io.source.slice(0, offset(edit.range.getStartPosition())) + edit.text + io.source.slice(offset(edit.range.getEndPosition())); version++; props.onChange(io.source); return true; }, focus: () => io.events.push('focus') };
       props.onReady?.(io.editor);
@@ -28,8 +29,8 @@ beforeAll(async () => { document = memoryDocument(); ({ createRoot } = await imp
 afterEach(async () => { if (root) { await act(async () => root!.unmount()); root = undefined; } await flushSettings(); });
 afterAll(() => { for (const [name, descriptor] of globals) if (descriptor) Object.defineProperty(globalThis, name, descriptor); else Reflect.deleteProperty(globalThis, name); });
 /** 格式化只允许普通草稿恢复写入；任何执行、建连、会话、历史或保存查询调用都失败。 */
-async function mount(source: string, start = 0, end = 0) {
-  io.closeRequest = undefined; io.start = start; io.end = end; io.multi = false; io.readOnly = false; io.events = []; commands = [];
+async function mount(source: string, start = 0, end = 0, eol = '\n') {
+  io.closeRequest = undefined; io.eol = eol; io.start = start; io.end = end; io.multi = false; io.readOnly = false; io.events = []; commands = [];
   (window as any).dbark = { onTask: () => () => {}, onMenu: () => () => {}, invoke: async (command: string) => { commands.push(command); if (command === 'settings.save') return; throw Error('禁止格式化产生外界命令'); } };
   useWorkspace.setState({ settings: { theme: 'dark', sidebarWidth: 260, resultLimit: 1000, pageSize: 100, activeTabId: 't', tabs: [{ id: 't', kind: 'query', title: '合成查询', connectionId: 'c', sql: source, databaseContext: { state: 'known', database: null }, sourceBinding: { id: '来源', digest: 'a'.repeat(64), connectionId: 'c', context: { state: 'known', database: null } } }] }, connections: [{ id: 'c', name: '离线连接', dialect: 'mysql', host: 'offline.invalid', port: 1, user: 'offline', group: '', color: '' }], connectionVersions: {}, activeJobs: {}, dirtyTabs: {} });
   function View() { const [, tick] = React.useState(0); io.rerender = () => tick(value => value + 1); const tab = useWorkspace(state => state.settings.tabs[0]); return tab ? <QueryTab tab={tab} closeRequest={io.closeRequest} onHistory={() => {}}/> : null; }
@@ -38,6 +39,29 @@ async function mount(source: string, start = 0, end = 0) {
 async function click(entry: '按钮' | '快捷回调') { if (entry === '快捷回调') { expect(io.format).toBeTypeOf('function'); await act(async () => io.format!()); await flushSettings(); return; } const button = document.body.querySelectorAll('button').find(node => node.getAttribute('aria-label') === '格式化 SQL'); expect(button).toBeDefined(); await act(async () => button!.dispatchEvent(new MemoryEvent('click'))); await flushSettings(); }
 
 describe.each(['按钮', '快捷回调'] as const)('真实QueryTab格式化%s', entry => {
+  it.each([['\n', '\r\n', 'preserve'], ['\n', '\r\n', 'upper'], ['\n', '\r\n', 'lower'], ['\r\n', '\n', 'preserve'], ['\r\n', '\n', 'upper'], ['\r\n', '\n', 'lower']] as const)('模型EOL与来源换行不同：来源%j/模型%j/偏好%s仍经原事务格式化', async (sourceEol, modelEol, keywordCase) => {
+    const source = "select a,b,'原文😀'" + sourceEol + 'from sample where id=1;'; await mount(source, 0, 0, modelEol);
+    await act(async () => useWorkspace.getState().updateSettings({ sqlKeywordCase: keywordCase }));
+    const before = useWorkspace.getState(), binding = before.settings.tabs[0].sourceBinding, model = io.editor.getModel();
+    expect(before.settings.tabs[0].sql).toBe(source); expect(io.source).toBe(source.replace(/\r\n|\r|\n/g, modelEol)); expect(io.events).toEqual([]);
+    await click(entry); await vi.waitFor(() => expect(io.events).toHaveLength(4), { timeout: 10000 });
+    expect(io.events).toEqual(['undo-stop', 'dbark-sql-format', 'undo-stop', 'focus']); expect(io.editor.getModel()).toBe(model); expect(model.getEOL()).toBe(modelEol);
+    expect(io.source).toContain("'原文😀'"); expect(io.source).not.toBe(source.replace(/\r\n|\r|\n/g, modelEol)); expect(io.source.replaceAll(modelEol, '')).not.toMatch(/[\r\n]/);
+    const after = useWorkspace.getState(); expect(after.settings.tabs[0].sql).toBe(io.source); expect(after.settings.tabs[0].sourceBinding).toBe(binding); expect(after.activeJobs).toEqual(before.activeJobs); expect(after.dirtyTabs).toEqual(before.dirtyTabs); expect(commands.filter(command => command !== 'settings.save')).toEqual([]);
+  });
+  it('模型EOL等价的混合换行只格式化选区，区外正文和同一模型保持', async () => {
+    const prefix = 'select Outside;\r', body = 'select a,b\nfrom sample where id=1;', suffix = '\r\nselect Tail;', normalizedPrefix = 'select Outside;\r\n', normalizedBody = body.replaceAll('\n', '\r\n');
+    await mount(prefix + body + suffix, normalizedPrefix.length, normalizedPrefix.length + normalizedBody.length, '\r\n'); const model = io.editor.getModel();
+    await click(entry); expect(io.source.startsWith(normalizedPrefix)).toBe(true); expect(io.source.endsWith(suffix)).toBe(true); expect(io.editor.getModel()).toBe(model); expect(io.events).toEqual(['undo-stop', 'dbark-sql-format', 'undo-stop', 'focus']);
+  });
+  it.each(['空格', '标点', '字符', '缺换行'] as const)('模型EOL比较不能吞掉%s正文差异', async change => {
+    const source = 'select a,b\nfrom sample;'; await mount(source, 0, 0, '\r\n'); const original = io.source;
+    if (change === '空格') io.source = original.replace('a,b', 'a, b'); if (change === '标点') io.source = original.replace('a,b', 'a+b'); if (change === '字符') io.source = original.replace('sample', 'another'); if (change === '缺换行') io.source = original.replace('\r\n', ' ');
+    const changed = io.source; await click(entry); expect(io.source).toBe(changed); expect(io.events).toEqual([]); expect(useWorkspace.getState().settings.tabs[0].sql).toBe(source); expect(commands.filter(command => command !== 'settings.save')).toEqual([]);
+  });
+  it('模型EOL未声明为LF或CRLF时保留原正文且拒绝格式化', async () => {
+    await mount('select a,b from sample;'); io.eol = '\r'; const source = io.source; await click(entry); expect(io.source).toBe(source); expect(io.events).toEqual([]); expect(commands.filter(command => command !== 'settings.save')).toEqual([]);
+  });
   it.each([['upper', true], ['upper', false], ['lower', true], ['lower', false]] as const)('关键字偏好%s沿真实入口用于选区/全文%s，改偏好本身不改模型且只产生原单次编辑事务', async (keywordCase, selected) => {
     const prefix = 'select PriorValue from BeforeTable;\n', body = keywordCase === 'lower' ? 'SELECT MiXeD,t.order,count(a),@from FROM T t WHERE t.id=1;' : 'select MiXeD,t.order,count(a),@from from T t where t.id=1;', suffix = '\nselect Tail from AfterTable;', source = prefix + body + suffix;
     await mount(source, selected ? prefix.length : 0, selected ? prefix.length + body.length : 0);

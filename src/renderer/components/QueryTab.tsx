@@ -205,7 +205,9 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
     if (busyRef.current || document.querySelector('[role="dialog"]')) return;
     try {
       const workspace = useWorkspace.getState(), current = workspace.settings.tabs.find(item => item.id === tab.id), instance = editor.current;
-      if (!alive.current || workspace.activeJobs[tab.id] || workspace.settings.activeTabId !== tab.id || current?.kind !== 'query' || !instance || instance.getModel()?.getValue() !== (current.sql ?? '')) throw new Error(sqlFormattingZh.unavailable);
+      const model = instance?.getModel(), eol = model?.getEOL();
+      // 与正文桥的受控同步采用同一模型EOL；只比较，不回写或吞掉其它正文差异。
+      if (!alive.current || workspace.activeJobs[tab.id] || workspace.settings.activeTabId !== tab.id || current?.kind !== 'query' || !instance || !model || (eol !== '\n' && eol !== '\r\n') || model.getValue() !== (current.sql ?? '').replace(/\r\n|\r|\n/g, eol)) throw new Error(sqlFormattingZh.unavailable);
       const preferences = { tabSize: workspace.settings.editorTabSize, insertSpaces: workspace.settings.editorInsertSpaces, keywordCase: workspace.settings.sqlKeywordCase };
       if (readSqlKeywordCase(preferences.keywordCase) === 'preserve') { formatting.current?.dispose(); formatting.current = null; formatSqlEditor(instance, preferences); return; }
       if (formatting.current || pendingSession.current || closeRequestRef.current || fileSource.isBusy()) throw Error(sqlFormattingZh.unavailable);
