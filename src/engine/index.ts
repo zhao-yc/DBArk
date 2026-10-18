@@ -403,7 +403,7 @@ export class Engine {
       case 'schema.foreignKeys.preview': return this.foreignKeyPatches.preview(input as any, input.connectionRevision);
       case 'schema.foreignKeys.apply': return this.foreignKeyPatches.apply(input as any, input.connectionRevision);
       case 'schema.foreignKeys.release': return this.foreignKeyPatches.releaseTokens(input);
-      case 'files.preview': this.assertFile(input); return previewFile(input as { filePath: string; format: 'csv' | 'json'; encoding: string });
+      case 'files.preview': this.assertFile(input); return previewFile(input as Parameters<typeof previewFile>[0]);
       case 'excel.sheets':
       case 'excel.preview': {
         this.assertFile(input);
@@ -1180,7 +1180,7 @@ export class Engine {
     let committed = 0, pending = 0, sourceLine = 0, committing = false;
     await this.statement(task, 'START TRANSACTION');
     try {
-      for await (const row of records ?? readRecords(input.filePath, input.format, input.encoding)) {
+      for await (const row of records ?? readRecords(input.filePath, input.format, input.encoding, input.csvDelimiter)) {
         this.checkCancelled(task); sourceLine++;
         const values = mapping.map(([source, target]) => {
           if (!Object.hasOwn(row, source)) throw new Error(`源记录缺少字段：${source}`);

@@ -425,6 +425,12 @@ export const zh = {
   },
   // 文件导入导出。
   transfer: {
+    csvImportFormat: 'CSV',
+    csvDelimiter: 'CSV 分隔符',
+    csvDelimiterComma: '逗号（,）',
+    csvDelimiterSemicolon: '分号（;）',
+    csvDelimiterTab: '制表符（Tab）',
+    csvHeaderRequired: '首行必须为表头。修改分隔符后会重新预览，请再次确认字段映射。',
     text001: "请至少映射一个导入字段。",
     text002: "多个源字段不能映射到同一目标字段。",
     text003: "请至少选择表结构或表数据。",

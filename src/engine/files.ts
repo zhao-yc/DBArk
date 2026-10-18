@@ -7,6 +7,7 @@ import { parser } from 'stream-json';
 import { streamArray } from 'stream-json/streamers/StreamArray';
 import type { CellValue, DataRow } from '../shared/contracts';
 import { serializeCell } from './sql';
+import { csvImportDelimiter, type CsvImportDelimiter } from '../shared/csvImport';
 
 /** 保存 JSON 数字的原始 token，避免经过 JavaScript 浮点数再序列化。 */
 class JsonNumber {
@@ -52,7 +53,8 @@ export function csvValue(value: string): CellValue {
 }
 
 /** JSON 顶层必须是对象数组；数字保留原始字符串，避免大整数在解析阶段舍入。 */
-export async function* readRecords(filePath: string, format: 'csv' | 'json', encoding: string): AsyncGenerator<DataRow> {
+export async function* readRecords(filePath: string, format: 'csv' | 'json', encoding: string, delimiter?: CsvImportDelimiter): AsyncGenerator<DataRow> {
+  const selectedDelimiter = csvImportDelimiter(format, delimiter);
   const source = createReadStream(filePath);
   const decoder = iconv.decodeStream(encodingName(encoding)) as Transform;
   const numberTokens = new Transform({ objectMode: true,
@@ -62,7 +64,7 @@ export async function* readRecords(filePath: string, format: 'csv' | 'json', enc
     callback(null, token.name === 'numberValue' ? { name: 'stringValue', value: new JsonNumber(token.value) } : token.name === 'keyValue' ? { ...token, value: jsonKeyPrefix + token.value } : token);
   } });
   const output = format === 'csv'
-    ? parse({ columns: false, bom: true, skip_empty_lines: true, max_record_size: 64 * 1024 * 1024 })
+    ? parse({ columns: false, delimiter: selectedDelimiter, bom: true, skip_empty_lines: true, max_record_size: 64 * 1024 * 1024 })
     : streamArray({ highWaterMark: 16 });
   const completed = format === 'csv' ? pipeline(source, decoder, output) : pipeline(source, decoder, parser(), numberTokens, output);
   // 避免迭代器尚未挂接时上游读取错误成为未处理的 Promise rejection。
@@ -107,9 +109,9 @@ export async function* readText(filePath: string, encoding: string): AsyncGenera
 }
 
 /** 只读取前 20 条记录用于字段映射，提前结束时由生成器释放文件句柄。 */
-export async function previewFile(input: { filePath: string; format: 'csv' | 'json'; encoding: string }): Promise<{ columns: string[]; rows: DataRow[] }> {
+export async function previewFile(input: { filePath: string; format: 'csv' | 'json'; encoding: string; csvDelimiter?: CsvImportDelimiter }): Promise<{ columns: string[]; rows: DataRow[] }> {
   const rows: DataRow[] = [], columns = new Set<string>();
-  for await (const row of readRecords(input.filePath, input.format, input.encoding)) {
+  for await (const row of readRecords(input.filePath, input.format, input.encoding, input.csvDelimiter)) {
     rows.push(row); Object.keys(row).forEach(name => columns.add(name));
     if (rows.length >= 20) break;
   }
