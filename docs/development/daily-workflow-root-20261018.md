@@ -47,3 +47,15 @@ CSV 原生操作、实库最终数值／字节及跨版本验收尚未执行。�
 在固定 `f4c928e` 上执行 11 个直接受影响文件，428 项通过、0 失败、0 跳过，完整类型检查退出 0。实际命令为 `node .cache/run1741-verify-table-create-time-root.mjs`，采用隔离临时目录／缓存且关闭环境文件读取。主工作区日志 `.cache/parallel-integration/run1741-table-create-on-update-root/unit.log` 的 SHA-256 为 `e3579eee5515134463552f3ea804170d73660390e38b0c3a2e21f8bdb81c18d3`。该数字与作者窄测有重叠，不相加为全套。
 
 至本节时点，未运行本版 GUI、实库、安装、macOS 或 Docker。版本提升只改 package 版本与文档，不冒充新的类型、完整 CI 或安装验收。关键字大写因默认静态加载开销仍在独立修复，尚未进入本组合。
+
+## 0.27 组合完整检查与本地候选
+
+固定产品头 `50626ec69cc20df699c9073a29640510ef6bf36c` 的 [CI 39102440563](https://github.com/zhao-yc/DBArk/actions/runs/39102440563) 已成功。job `117601295204` 的 508 个文件、9439 项通过、10 项条件跳过，类型与构建成功；桌面和发行条件步骤跳过。原日志 `.cache/parallel-integration/run1748-v027-full-ci-green.log` 为 135641 字节，SHA-256 `a9a8bc682a109d016f4200e6ad4b03f1849d3a671ce9dc8cf6b4337bb3a0a8c9`。
+
+同一产品头本地仅执行一次 `node scripts/build.mjs`，产生 108 个编译文件。构建前核对 `f4c928e` 的单元／类型证明，之后产品源码、脚本、锁文件和构建配置没有变化，package 只提升版本；没有重复 tsc 或运行桌面。控制器为 `node .cache/run1744-build-v027-source-root.mjs`，编译树逐项封存在 `.cache/parallel-integration/run1744-v027-source-build/compiled.json`。构建日志 SHA-256 为 `9c33a794e81e9d7555c156cf78fe73af6092aca7595945c1c816d17f8b7efa1b`。
+
+首次 Windows 打包 `run1745` 在沙箱内因 `ENOTFOUND github.com` 失败，原日志、状态和部分目录保留。核对原失败后使用允许联网的新入口 `node .cache/run1747-package-v027-win-root.mjs --actual`，仍输入同一冻结编译树，只将输出改为 `release/run1747`。实际命令为 electron-builder `--win --x64 --publish never --config.directories.output=release/run1747`；签名身份自动发现关闭，没有安装或发布。
+
+本地候选 `release/run1747/DBArk-0.27.0-win-x64-unsigned.exe` 为 142370844 字节，SHA-256 `d8c9d8d674e2ec5b52ca6464da692912600628848b88fc9d1011a4e3f81342e8`；其 `win-unpacked/resources/app.asar` 为 203117489 字节，SHA-256 `700a0308b962751c8ede013e2225965f50f3842a755258568e369e6c27c86557`。四份产物均逐块复读大小和摘要，收据 `.cache/parallel-integration/run1747-v027-windows-package/artifacts.json` 的 SHA-256 为 `2b6d9f5eca21055195b50c201d83f071304468c9d4be197f13a0bd2206eca4e6`。
+
+本版没有实际安装／运行该候选，也没有本版 Mac 构建／验收、原生 CSV 和新表控件、实库最终存储或新密钥证书。0.23 独立诊断运行的三平台失败不转写成本版失败或通过；本版仍需自己的对应验收。

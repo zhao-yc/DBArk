@@ -4,7 +4,7 @@
 
 ## 安装和升级
 
-Windows 使用 `DBArk-版本-win-x64-unsigned.exe` 安装。macOS 构建按 arm64（Apple Silicon）和 x64（Intel）区分。当前为开发预览：Windows 无发行签名，macOS 仅 ad-hoc 签名、未公证。三种架构已完成原生构建与随包应用测试，实体 macOS 设备的 Gatekeeper 首次安装仍待单独验证。
+Windows 使用 `DBArk-版本-win-x64-unsigned.exe` 安装。macOS 构建按 arm64（Apple Silicon）和 x64（Intel）区分，各版本的签名、公证及实际安装范围以对应发布说明为准。0.27 目前只生成本地 Windows 未签名候选，本版安装、macOS 和实库验收尚未完成；早期版本的三平台结果不能作为本版通过证明，公开下载仍以 0.21 发布页为准。
 
 首版采用手动升级：退出 DBArk 后安装新版，配置库保留在当前用户的应用数据目录。升级、卸载或迁移前，退出应用并备份整个用户配置目录，包含 `dbark.sqlite` 及目录内其他文件；密码密文依赖原电脑的系统账户，迁移后通常需要重新输入密码。不要把配置库上传到公共仓库。
 
