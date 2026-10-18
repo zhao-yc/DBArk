@@ -1,5 +1,15 @@
 # Navicat 全功能覆盖目标
 
+## 当前统筹检查点（2026-10-18）
+
+0.28 固定 `6c86986` 的完整 Linux CI 已通过：542 文件、10119 项通过、10 条件跳过，类型与构建成功；本轮桌面／安装／预览发布均条件跳过，详见[准确 CI 范围](development/sql-workspace-linux-ci-20261018.md)。同一产品新构建 `5c29ce2` 的 Windows／MySQL8.4 正式 INSERT 发布和等待确认取消两例已通过，成功随机库、目录及原观察线程外部后核释放；旧表单失败根因未确认、现场保留，见[实际实证](../tests/integration/acceptance-query-insert-ui-root-20261018.md)。
+
+0.23 独立分支 R7 已完成三平台源码／实际安装缩进和分栏共12份专项、24 owner正常退出及目录收尾，六轮真实系统加密／重启解密通过，见[固定来源](https://github.com/zhao-yc/DBArk/blob/ba534193acd6364622bc99edd1553f84a58b1c84/tests/integration/acceptance-native-r7-root-20261018.md)。其证据不能转写为0.28通过。当前继续补齐0.28严格原生CI接线及最近SQL／来源文件保存的两例真实验收，不新增完整工作包或公开发行计数。
+
+## 分版本进度记录
+
+以下段落保留各固定提交当时的实现与验收状态；其中“最新”“未验”仅相对于对应检查点。评估当前交付优先读取上面的统筹检查点及其实际证据，不把旧通过叠加或外推给新产品。
+
 0.28 完整CSV／ZIP分隔符固定 `b40d9ec` 的真实后台18组合已通过：2格式×3编码×3分隔符、每例301行及源查询一次；独立后核18成功库／目录、54原线程释放，含首批共60精确ID缺席。原ZIP类型期待失败和现场保留，GUI／安装／其它版本／百万行继续，Q05／F01仍部分，见[实际分层范围](../tests/integration/acceptance-query-csv-delimiter-root-20261018.md)。0.27独立分支的两项Windows窗口也已完成，见[固定源码验收](https://github.com/zhao-yc/DBArk/blob/9dc13991c719bc22fc05502c2ad15a4a71360a64/tests/integration/acceptance-v027-native-root-20261018.md)，不转写为0.28安装结论。
 
 0.28 固定 `41282a0` 的 Windows 源码关键字偏好两条正式身份已零重试通过：保持／大写／小写、一次 Undo、迟到原模块回包拒绝、SQLite9 和独立重启活动 pane，四 owner 正常退出及成功目录清理完成。首轮定位失败与原目录保留，安装和 macOS 本能力仍待验，Q01 仍为部分，见[实际分层证据](../tests/integration/acceptance-sql-keyword-case-native-root-20261018.md)。
