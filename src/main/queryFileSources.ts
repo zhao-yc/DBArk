@@ -6,9 +6,11 @@ import type { QueryFileEncoding, TaskEvent } from '../shared/contracts';
 import type { TaskCancelState } from '../shared/taskCancelState';
 import { queryFileSourceOpenSchema, queryFileSourceSaveSchema, queryFileSourceSaveAsSchema, queryFileSourceStatusSchema, queryFileSourceReleaseSchema, queryFileSourceCancelSchema, sameQueryFileSource, type QueryFileSourceRef, type QueryFileSourceOpenInput, type QueryFileSourceOpenResult, type QueryFileSourceSaveInput, type QueryFileSourceSaveAsInput, type QueryFileSourceSaveResult, type QueryFileSourceStatusInput, type QueryFileSourceStatus, type QueryFileSourceReleaseInput, type QueryFileSourceBlocked, type QueryFileSourceCancelInput, type QueryFileSourceProgress } from '../shared/queryFileSources';
 import { queryFileSourceView, type PrivateQueryFileSource } from './queryFileSourceRecords';
+import { queryRecentFilesSchema, queryRecentFileForgetSchema, type QueryRecentFileView } from '../shared/queryFileSources';
+import { queryRecentFileView } from './queryFileRecents';
 import { QueryFileSourceFailure, readQueryFileSnapshot, assertQueryFileVersion, encodeBoundQueryFile, decodeSourceSnapshot, queryFileSqlDigest, queryFileBom, queryFileEol, queryFileIsMissing, queryFileTargetAbsent, writeBoundQueryFile, type QueryFileSnapshot } from './queryFileSourceFiles';
 
-type SourceStore = Pick<LocalStore, 'queryFileSource' | 'queryFileDocument' | 'queryFileSourceRecords' | 'commitQueryFileSource' | 'releaseQueryFileSource'>;
+type SourceStore = Pick<LocalStore, 'queryFileSource' | 'queryFileDocument' | 'queryFileSourceRecords' | 'commitQueryFileSource' | 'releaseQueryFileSource' | 'queryRecentFiles' | 'queryRecentFile' | 'forgetRecentFile'>;
 /** scope必须由真实Main IPC文档捕获，不能由renderer或缺省true构造。 */
 export interface QueryFileSourceScope { readonly document: object; assertCurrent(): void; }
 export interface QueryFileSourceHost {
@@ -100,7 +102,9 @@ export class QueryFileSources {
     const input = queryFileSourceOpenSchema.parse(raw);
     return this.run(input.tabId, input.taskId, 'open', input.source, !!input.source, scope, async context => {
       context.report('choosing'); context.check();
-      const path = input.source ? context.expected?.path : await this.host.choose('open'); context.check();
+      const recent = input.recentId ? this.host.store.queryRecentFile(input.recentId) : undefined;
+      if (input.recentId && !recent) throw new QueryFileSourceFailure('missing', '最近文件记录已移除，请重新选择SQL文件；原查询输入保持');
+      const path = input.source ? context.expected?.path : recent ? recent.path : await this.host.choose('open'); context.check();
       if (!path) return { state: 'cancelled' };
       if (!isAbsolute(path)) throw new QueryFileSourceFailure('io', '原生文件选择没有返回绝对目标');
       const snapshot = await readQueryFileSnapshot(path, context.check, context.report); context.check();
@@ -109,6 +113,16 @@ export class QueryFileSources {
       const decoded = decodeSourceSnapshot(snapshot, input.encoding), source = this.commit(input.tabId, context, snapshot, decoded.encoding, decoded.sql, true, !input.source);
       return { state: 'opened', binding: queryFileSourceView(source), sql: decoded.sql };
     });
+  }
+  /** 用户打开最近列表时只投影Main元数据，不探测文件存在、不读取正文或建立连接。 */
+  recent(raw: { tabId: string }, scope: QueryFileSourceScope): QueryRecentFileView[] {
+    const input = queryRecentFilesSchema.parse(raw); scope.assertCurrent(); this.document(input.tabId);
+    const result = this.host.store.queryRecentFiles().map(queryRecentFileView); scope.assertCurrent(); return result;
+  }
+  /** 明确移除只改变有界历史；当前来源和磁盘文件保持。 */
+  forgetRecent(raw: { tabId: string; recentId: string }, scope: QueryFileSourceScope): { removed: boolean } {
+    const input = queryRecentFileForgetSchema.parse(raw); scope.assertCurrent(); this.document(input.tabId);
+    const removed = this.host.store.forgetRecentFile(input.recentId); scope.assertCurrent(); return { removed };
   }
   /** 关联保存只持有原授权路径，保存快照与当前编辑正文各自独立。 */
   async save(raw: QueryFileSourceSaveInput, scope: QueryFileSourceScope): Promise<QueryFileSourceSaveResult> {

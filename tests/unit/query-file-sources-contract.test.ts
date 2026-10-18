@@ -5,6 +5,13 @@ import { createHash } from 'node:crypto';
 const taskId = 'c57b1521-fd1b-4f9e-9fb0-5dec1476d524';
 const source = { id: '367cce95-2a1c-4e6f-9900-ae03d5ac0d07', revision: 1 };
 describe('SQL文件来源合同', () => {
+  it('最近文件只接收不透明ID，与重读互斥，列表和移除不接收路径', () => {
+    expect(validateCommand('queryFileSources.open', { tabId: 'a', taskId, encoding: 'gb18030', recentId: source.id })).toMatchObject({ recentId: source.id });
+    expect(() => validateCommand('queryFileSources.open', { tabId: 'a', taskId, encoding: 'utf8', recentId: source.id, source })).toThrow();
+    expect(validateCommand('queryFileSources.recent', { tabId: 'a' })).toEqual({ tabId: 'a' });
+    expect(() => validateCommand('queryFileSources.recent', { tabId: 'a', path: '任意路径' })).toThrow();
+    expect(() => validateCommand('queryFileSources.forgetRecent', { tabId: 'a', recentId: source.id, path: '任意路径' })).toThrow();
+  });
   it('打开与保存不接收renderer路径或展示字段', () => {
     expect(queryFileSourceOpenSchema.safeParse({ tabId: 'a', taskId, encoding: 'utf8', path: '任意路径' }).success).toBe(false);
     expect(queryFileSourceSaveSchema.safeParse({ tabId: 'a', taskId, source, sql: '', displayPath: '任意路径' }).success).toBe(false);

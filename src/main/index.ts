@@ -184,6 +184,8 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
       switch (command) {
         case 'queryFileSources.cancel': return queryFileSources.cancel(input, scope);
         case 'queryFileSources.open': return queryFileSources.open(input, scope);
+        case 'queryFileSources.recent': return queryFileSources.recent(input, scope);
+        case 'queryFileSources.forgetRecent': return queryFileSources.forgetRecent(input, scope);
         case 'queryFileSources.save': return queryFileSources.save(input, scope);
         case 'queryFileSources.saveAs': return queryFileSources.saveAs(input, scope);
         case 'queryFileSources.status': return queryFileSources.status(input, scope);
@@ -476,7 +478,7 @@ function createMenu(): void {
   const mac = process.platform === 'darwin';
   const menu: Electron.MenuItemConstructorOptions[] = [
     ...(mac ? [{ label: 'DBArk', submenu: [{ label: '关于 DBArk', role: 'about' }, { type: 'separator' }, { label: '隐藏 DBArk', role: 'hide' }, { label: '退出 DBArk', role: 'quit' }] } as Electron.MenuItemConstructorOptions] : []),
-    { label: '文件', submenu: [{ label: '新建连接', accelerator: 'CmdOrCtrl+Shift+N', click: action('new-connection') }, { label: '新建查询', accelerator: 'CmdOrCtrl+N', click: action('new-query') }, { label: '打开 SQL 文件', accelerator: 'CmdOrCtrl+O', click: action('open-sql-file') }, { label: '另存 SQL 文件', accelerator: 'CmdOrCtrl+Shift+S', click: action('save-sql-file') }, { label: '保存查询', accelerator: 'CmdOrCtrl+S', click: action('save-query') }, { type: 'separator' }, { label: '退出', role: 'quit' }] },
+    { label: '文件', submenu: [{ label: '新建连接', accelerator: 'CmdOrCtrl+Shift+N', click: action('new-connection') }, { label: '新建查询', accelerator: 'CmdOrCtrl+N', click: action('new-query') }, { label: '打开 SQL 文件', accelerator: 'CmdOrCtrl+O', click: action('open-sql-file') }, { label: '最近 SQL 文件', click: action('recent-sql-file') }, { label: '另存 SQL 文件', accelerator: 'CmdOrCtrl+Shift+S', click: action('save-sql-file') }, { label: '保存查询', accelerator: 'CmdOrCtrl+S', click: action('save-query') }, { type: 'separator' }, { label: '退出', role: 'quit' }] },
     { label: '编辑', submenu: [{ label: '撤销', role: 'undo' }, { label: '重做', role: 'redo' }, { type: 'separator' }, { label: '剪切', role: 'cut' }, { label: '复制', role: 'copy' }, { label: '粘贴', role: 'paste' }, { label: '全选', role: 'selectAll' }] },
     { label: '查询', submenu: [{ label: '执行查询', accelerator: 'CmdOrCtrl+Enter', click: action('execute') },{label:'全库搜索',accelerator:'CmdOrCtrl+Shift+F',click:action('structure-search')}] },
     { label: '视图', submenu: [{ label: '切换明暗主题', click: action('toggle-theme') }, { label: '放大', role: 'zoomIn' }, { label: '缩小', role: 'zoomOut' }, { label: '重置缩放', role: 'resetZoom' }, { label: '全屏', role: 'togglefullscreen' }] }

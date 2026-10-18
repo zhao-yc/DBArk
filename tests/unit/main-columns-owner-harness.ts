@@ -73,7 +73,7 @@ export function mainColumnsHarness() {
   /** 字段夹具不登记文件授权；非本用途端口立即拒绝，导航失效仍执行真实文件来源实现。 */
   const unavailableFilePort = (): never => { throw Error('字段所有权夹具未登记文件来源或文件IO权限'); };
   context.queryFileSources = new QueryFileSources({
-    store: { queryFileSource: unavailableFilePort, queryFileDocument: unavailableFilePort, queryFileSourceRecords: unavailableFilePort, commitQueryFileSource: unavailableFilePort, releaseQueryFileSource: unavailableFilePort },
+    store: { queryFileSource: unavailableFilePort, queryFileDocument: unavailableFilePort, queryFileSourceRecords: unavailableFilePort, commitQueryFileSource: unavailableFilePort, releaseQueryFileSource: unavailableFilePort, queryRecentFiles: unavailableFilePort, queryRecentFile: unavailableFilePort, forgetRecentFile: unavailableFilePort },
     choose: unavailableFilePort, reserve: unavailableFilePort, report: unavailableFilePort
   });
   const capabilities = new ColumnsMainCapabilities(tokens, { currentWindow: () => context.window, rendererURL: context.rendererURL,

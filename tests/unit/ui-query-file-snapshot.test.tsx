@@ -129,6 +129,8 @@ async function mount(bound = false) {
     commands.push({ command, input }); const pending = hook?.(command, input); if (pending) return pending;
     if (command === 'settings.save') return;
     if (command === 'queryFileSources.status') return fileView ? { state: 'bound', binding: fileView } : { state: 'unbound' };
+    if (command === 'queryFileSources.recent') return [{ id: '834573d5-d9f0-4f20-998a-78be62162755', name: '最近合成.sql', displayPath: '仅用于本机展示/最近合成.sql', encoding: 'gb18030' }];
+    if (command === 'queryFileSources.forgetRecent') return { removed: true };
     if (command === 'queryFileSources.saveAs' || command === 'queryFileSources.save') { const result = saved(input.sql, (fileView?.ref.revision ?? 0) + 1); fileView = result.binding; return result; }
     if (command === 'queryFileSources.open') { fileView = sourceView('SELECT 文件打开;', (fileView?.ref.revision ?? 0) + 1); return { state: 'opened', binding: fileView, sql: 'SELECT 文件打开;' }; }
     if (command === 'queryFileSources.release') return { released: true };
@@ -153,6 +155,31 @@ async function select(label: string, value: string) {
   expect(node).toBeDefined(); await act(async () => { node!.value = value; node!.dispatchEvent(new MemoryEvent('change')); });
 }
 function deferred() { let resolve!: (value: any) => void; const promise = new Promise<any>(done => { resolve = done; }); return { promise, resolve }; }
+
+describe('最近SQL文件真实工具栏/对话框/控制器接线（RAM）', () => {
+  const recentId = '834573d5-d9f0-4f20-998a-78be62162755';
+  it('文件菜单同样只打开元数据列表，不在进入时打开正文', async () => {
+    await mount(); await act(async () => { for (const menu of menus) menu('recent-sql-file'); });
+    expect(document.body.querySelector('[role="dialog"]')?.getAttribute('aria-label')).toBe('最近 SQL 文件'); expect(commands.filter(item => item.command === 'queryFileSources.recent')).toHaveLength(1); expect(commands.some(item => item.command === 'queryFileSources.open')).toBe(false);
+  });
+  it('仅明确确认才打开所选ID，沿新文档与任务链路，原草稿及当前连接上下文保留', async () => {
+    await mount(); await act(async () => useWorkspace.getState().updateTab('t', { databaseContext: { state: 'known', database: '当前库' }, sql: 'SELECT 原草稿;' }));
+    await click('最近 SQL 文件'); expect(commands.filter(item => item.command === 'queryFileSources.recent')).toHaveLength(1); expect(commands.some(item => item.command === 'queryFileSources.open')).toBe(false);
+    await select('最近的 SQL 文件', recentId); expect(commands.some(item => item.command === 'queryFileSources.open')).toBe(false); await select('文件编码', 'utf16le'); await click('打开选中的 SQL 文件');
+    const request = commands.find(item => item.command === 'queryFileSources.open')!; expect(request.input).toMatchObject({ recentId, encoding: 'utf16le', taskId: uuid() }); expect(request.input.tabId).not.toBe('t'); expect(Object.keys(request.input).sort()).toEqual(['encoding', 'recentId', 'tabId', 'taskId']);
+    const tabs = useWorkspace.getState().settings.tabs; expect(tabs.find(tab => tab.id === 't')).toMatchObject({ sql: 'SELECT 原草稿;' }); expect(tabs.find(tab => tab.id === request.input.tabId)).toMatchObject({ sql: 'SELECT 文件打开;', connectionId: 'c', databaseContext: { state: 'known', database: '当前库' }, fileSourceBinding: fileView.ref });
+    expect(commands.some(item => /^(connections\.open|sessions\.open|query\.execute)/.test(item.command))).toBe(false);
+  });
+  it('移除只发元数据ID，不打开文件或删除草稿', async () => {
+    await mount(); await click('最近 SQL 文件'); await select('最近的 SQL 文件', recentId); await click('从最近列表移除');
+    expect(commands.filter(item => item.command === 'queryFileSources.forgetRecent')).toEqual([{ command: 'queryFileSources.forgetRecent', input: { tabId: 't', recentId } }]); expect(commands.some(item => item.command === 'queryFileSources.open')).toBe(false); expect(useWorkspace.getState().settings.tabs[0].sql).toBe('SELECT 初始;'); expect(document.body.textContent).toContain('暂无最近 SQL 文件');
+  });
+  it('失效路径明确给出重新选择入口，失败占位移除且原草稿保持', async () => {
+    await mount(); hook = command => command === 'queryFileSources.open' ? Promise.resolve({ state: 'blocked', reason: 'missing', wrote: 'no', message: '合成最近文件已不存在' }) : undefined;
+    await click('最近 SQL 文件'); await select('最近的 SQL 文件', recentId); await click('打开选中的 SQL 文件'); expect(document.body.textContent).toContain('合成最近文件已不存在'); expect(useWorkspace.getState().settings.tabs).toHaveLength(1); expect(useWorkspace.getState().settings.tabs[0].sql).toBe('SELECT 初始;');
+    await click('重新选择 SQL 文件'); hook = undefined; await click('选择并打开 SQL 文件'); const requests = commands.filter(item => item.command === 'queryFileSources.open'); expect(requests).toHaveLength(2); expect(requests[0].input.recentId).toBe(recentId); expect(requests[1].input.recentId).toBeUndefined(); expect(requests[1].input.path).toBeUndefined();
+  });
+});
 /** 仅向已订阅的真实任务监听器发布RAM进度，阶段不直接修改组件或store。 */
 function fileEvent(phase: NonNullable<TaskEvent['queryFileSource']>['phase'], cancellable = true, wrote: 'no' | 'yes' | 'unknown' = 'no') {
   const request = commands.filter(item => ['queryFileSources.save', 'queryFileSources.saveAs', 'queryFileSources.open'].includes(item.command)).at(-1)!;

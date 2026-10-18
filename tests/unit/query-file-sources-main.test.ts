@@ -27,7 +27,7 @@ function mainPort() {
   owner.trackWindow(window as never);
   const document = {}, tab = { id: 'one', kind: 'query' as const, title: '查询', connectionId: 'ram', sql: '' };
   let choose: () => Promise<string | undefined> = async () => undefined, choices = 0;
-  const ramStore = { saveTask: (task: TaskRecord) => { records.push(task); }, queryFileSource: () => undefined, queryFileDocument: (id: string) => { if (id !== 'one') throw Error('未知文档'); return { token: document, tab }; }, queryFileSourceRecords: () => [], commitQueryFileSource: () => { throw Error('本例不得持久化'); }, releaseQueryFileSource: () => false };
+  const ramStore = { saveTask: (task: TaskRecord) => { records.push(task); }, queryFileSource: () => undefined, queryFileDocument: (id: string) => { if (id !== 'one') throw Error('未知文档'); return { token: document, tab }; }, queryFileSourceRecords: () => [], commitQueryFileSource: () => { throw Error('本例不得持久化'); }, releaseQueryFileSource: () => false, queryRecentFiles: () => [], queryRecentFile: () => undefined, forgetRecentFile: () => false };
   const service = new QueryFileSources({ store: ramStore, report: event => publish(event), choose: async () => { choices++; return choose(); }, reserve: async () => { throw Error('本例不得写文件'); } });
   const context = createContext({ structureTokens: new Map(), sessions: new Map(), connectionConfig: { assertAvailable: (id: unknown) => { if (id !== undefined) throw Error('本地任务状态不得建立数据库目标'); } }, taskCancelSnapshot, tasks: new Map(), store: ramStore, completionTasks: new Set(), tableApplyReceipts: undefined, pendingQueryHistory: new Map(), exportProgress: new Map(), structureProgress: new Map(), lastPersist: new Map(), persistAuxiliary: (action: () => void) => action(), persistedTaskMessage, columnsMain: owner, queryFileSources: service, window, rendererURL: frame.url, validateCommand, shuttingDown: false, rendererSettingsCurrent: true, rendererHasSettings: true, queryFileOperations: new Set(), Error, Promise });
   const code = declarations.join('\n') + '\nglobalThis.handler = ' + callback + ';';
@@ -41,6 +41,13 @@ it('正式Main状态分发复用真实窗口捕获且不访问broker；子frame�
   expect(await main.request('queryFileSources.status', { tabId: 'one' }, { ...main.frame })).toMatchObject({ ok: false });
   expect(await main.request('queryFileSources.open', { taskId: randomUUID(), tabId: 'one', encoding: 'utf8', path: '任意路径' })).toMatchObject({ ok: false });
   expect(main.choices()).toBe(0);
+});
+it('最近元数据通过真实Main窗口门，不登记文件任务、不弹框、不访问数据库broker', async () => {
+  const main = mainPort(); expect(await main.request('queryFileSources.recent', { tabId: 'one' })).toEqual({ ok: true, result: [] });
+  expect(await main.request('queryFileSources.forgetRecent', { tabId: 'one', recentId: randomUUID() })).toEqual({ ok: true, result: { removed: false } });
+  expect(await main.request('queryFileSources.recent', { tabId: 'one' }, { ...main.frame })).toMatchObject({ ok: false });
+  expect(await main.request('queryFileSources.recent', { tabId: '不存在的标签' })).toMatchObject({ ok: false });
+  expect(main.records).toEqual([]); expect(main.choices()).toBe(0);
 });
 it('正式Main打开在原生选择晚返时遭同URL导航，原文档不能交付或建立权限', async () => {
   const main = mainPort(); let resume!: () => void, entered!: () => void; const entry = new Promise<void>(resolve => { entered = resolve; });

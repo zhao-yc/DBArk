@@ -1,4 +1,5 @@
 import type { QueryFileSourceRef, QueryFileSourceOpenInput, QueryFileSourceOpenResult, QueryFileSourceSaveInput, QueryFileSourceSaveAsInput, QueryFileSourceSaveResult, QueryFileSourceStatusInput, QueryFileSourceStatus, QueryFileSourceReleaseInput, QueryFileSourceCancelInput } from './queryFileSources';
+import type { QueryRecentFileView } from './queryFileSources';
 import type { TableCopyDataGetInput, TableCopyDataGetOutput, TableCopyDataPreviewInput, TableCopyDataPreviewOutput, TableCopyDataApplyInput, TableCopyDataApplyOutput, TableCopyDataReleaseInput } from './tableCopyData';
 import type { TableCreateGetInput, TableCreateGetOutput, TableCreatePreviewInput, TableCreatePreviewOutput, TableCreateApplyInput, TableCreateApplyOutput, TableCreateReleaseInput } from './tableCreate';
 import type { CsvExportFieldsInput, CsvExportFieldsOutput, CsvExportSelection } from './csvExportFields';
@@ -84,6 +85,8 @@ export interface ResultExportOptions { fileToken: string; format: 'csv' | 'json'
 /** 请求映射是界面、主进程与数据库进程共同使用的唯一接口定义。 */
 export interface CommandMap {
   'queryFileSources.open': { input: QueryFileSourceOpenInput; output: QueryFileSourceOpenResult };
+  'queryFileSources.recent': { input: { tabId: string }; output: QueryRecentFileView[] };
+  'queryFileSources.forgetRecent': { input: { tabId: string; recentId: string }; output: { removed: boolean } };
   'queryFileSources.save': { input: QueryFileSourceSaveInput; output: QueryFileSourceSaveResult };
   'queryFileSources.saveAs': { input: QueryFileSourceSaveAsInput; output: QueryFileSourceSaveResult };
   'queryFileSources.status': { input: QueryFileSourceStatusInput; output: QueryFileSourceStatus };

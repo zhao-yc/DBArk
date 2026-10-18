@@ -11,6 +11,7 @@ import { queryFilesZh as text } from '../locales/queryFiles.zh-CN';
 import type { QueryFileSourceController } from '../useQueryFileSource';
 import { ErrorBox, Field, Modal, Spinner } from './ui';
 import { QueryFileTaskProgress } from './QueryFileTaskProgress';
+import { RecentQueryFilesDialog } from './RecentQueryFilesDialog';
 
 /** 选择编码与换行后由Main原生选择路径；renderer从不接收或回传授权路径。 */
 export function QueryFilesDialog({ mode, files, onClose }: { mode: 'open' | 'save'; files: QueryFileSourceController; onClose(): void }) {
@@ -48,15 +49,15 @@ export function QueryFileSourceCaption({ tab, files }: { tab: WorkspaceTab; file
 
 /** 工具栏保留独立文件另存与本地查询库入口；快捷键“保存查询”的来源路由由QueryTab处理。 */
 export function QueryFileActions({ tab, files }: { tab: WorkspaceTab; files: QueryFileSourceController }) {
-  const [mode, setMode] = useState<'open' | 'save' | null>(null);
+  const [mode, setMode] = useState<'open' | 'save' | 'recent' | null>(null);
   useEffect(() => window.dbark?.onMenu(action => {
     if (useWorkspace.getState().settings.activeTabId !== tab.id || document.querySelector('[role="dialog"]') || files.isBusy()) return;
-    if (action === 'open-sql-file') setMode('open'); if (action === 'save-sql-file') setMode('save');
+    if (action === 'open-sql-file') setMode('open'); if (action === 'save-sql-file') setMode('save'); if (action === 'recent-sql-file') setMode('recent');
   }), [tab.id, files]);
   useEffect(() => { if (files.problem) setMode(null); }, [files.problem]);
   const problem = files.problem;
-  return <><button disabled={files.busy} title={text.open} aria-label={text.open} onClick={() => setMode('open')}><FolderOpen size={15}/></button><button disabled={files.busy} title={text.saveAs} aria-label={text.saveAs} onClick={() => { files.dismiss(); setMode('save'); }}><FileDown size={15}/></button>{mode && <QueryFilesDialog mode={mode} files={files} onClose={() => setMode(null)}/>}
+  return <><button disabled={files.busy} title={text.open} aria-label={text.open} onClick={() => setMode('open')}><FolderOpen size={15}/></button><button disabled={files.busy} title={text.recent} aria-label={text.recent} onClick={() => { files.dismiss(); setMode('recent'); }}>{text.recent}</button><button disabled={files.busy} title={text.saveAs} aria-label={text.saveAs} onClick={() => { files.dismiss(); setMode('save'); }}><FileDown size={15}/></button>{mode === 'recent' ? <RecentQueryFilesDialog files={files} onClose={() => setMode(null)}/> : mode && <QueryFilesDialog mode={mode} files={files} onClose={() => setMode(null)}/>}
     {files.busy && files.task && !mode && !problem && <QueryFileTaskProgress task={files.task}/>}
-    {problem && createPortal(<Modal title={text.recovery} onClose={() => { if (!files.isBusy()) files.dismiss(); }}><div className="modal-content"><ErrorBox message={problem.message}/>{files.busy && files.task && <QueryFileTaskProgress task={files.task}/>}<p>{problem.wrote === 'no' ? text.wroteNo : problem.wrote === 'yes' ? text.wroteYes : text.wroteUnknown}</p><p className="muted small">{text.rereadHint}</p></div><footer className="modal-footer">{files.busy && <Spinner/>}<button disabled={files.busy} onClick={files.dismiss}>{zh.common.cancel}</button><span className="grow"/>{tab.fileSourceBinding && <button disabled={files.busy} onClick={() => void files.reread()}>{text.reread}</button>}<button disabled={files.busy} onClick={() => { files.dismiss(); setMode('save'); }}>{text.saveAs}</button></footer></Modal>, document.body)}
+    {problem && createPortal(<Modal title={text.recovery} onClose={() => { if (!files.isBusy()) files.dismiss(); }}><div className="modal-content"><ErrorBox message={problem.message}/>{files.busy && files.task && <QueryFileTaskProgress task={files.task}/>}<p>{problem.wrote === 'no' ? text.wroteNo : problem.wrote === 'yes' ? text.wroteYes : text.wroteUnknown}</p><p className="muted small">{text.rereadHint}</p></div><footer className="modal-footer">{files.busy && <Spinner/>}<button disabled={files.busy} onClick={files.dismiss}>{zh.common.cancel}</button><span className="grow"/><button disabled={files.busy} onClick={() => { files.dismiss(); setMode('open'); }}>{text.chooseAgain}</button>{tab.fileSourceBinding && <button disabled={files.busy} onClick={() => void files.reread()}>{text.reread}</button>}<button disabled={files.busy} onClick={() => { files.dismiss(); setMode('save'); }}>{text.saveAs}</button></footer></Modal>, document.body)}
   </>;
 }

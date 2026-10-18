@@ -110,7 +110,7 @@ export function useQueryFileSource(tab: WorkspaceTab, capture: () => Readonly<Wo
   }
 
   /** 打开前注册独立空文档且保存身份；失败只移除未改动的占位文档，不动原查询。 */
-  async function open(encoding: QueryFileEncoding): Promise<boolean> {
+  async function open(encoding: QueryFileEncoding, recentId?: string): Promise<boolean> {
     if (active.current || !ownsView()) return false;
     active.current = true; setBusy(true); setProblem(undefined);
     const original = current();
@@ -125,7 +125,7 @@ export function useQueryFileSource(tab: WorkspaceTab, capture: () => Readonly<Wo
       await flushSettings();
       if (!originalJob.owns() || !targetJob.owns()) throw Error(text.changed);
       work = beginTask({ ...target }, 'open');
-      const result = await invoke('queryFileSources.open', { tabId: target.id, taskId: work.taskId, encoding }); work.finish(result);
+      const result = await invoke('queryFileSources.open', { tabId: target.id, taskId: work.taskId, encoding, ...(recentId ? { recentId } : {}) }); work.finish(result);
       if (result.state === 'blocked') { if (ownsView()) setProblem(result); return false; }
       if (result.state === 'cancelled' || !work.owner.documentCurrent()) return false;
       const state = useWorkspace.getState(), existing = state.settings.tabs.find(item => item.id === target.id);
@@ -166,6 +166,10 @@ export function useQueryFileSource(tab: WorkspaceTab, capture: () => Readonly<Wo
     } catch (reason) { work?.finish({ state: 'blocked', message: text.uncertain, wrote: 'unknown' }); if (ownsView()) uncertain(reason); return false; }
     finally { lease?.dispose(); const released = job?.release(); active.current = false; if (ownsView()) { setBusy(false); if (released && !useWorkspace.getState().activeJobs[tab.id]) publishBusy(false); } }
   }
-  return { view: metadata, dirty, busy, task, problem, save, open, reread, dismiss: () => setProblem(undefined), isBusy: () => active.current };
+  /** 列表与移除只走Main的元数据接口，路径留在展示状态，不写入settings或localStorage。 */
+  async function recent() { await flushSettings(); if (!ownsView() || !current()) throw Error(text.changed); return invoke('queryFileSources.recent', { tabId: tab.id }); }
+  /** 明确移除历史不释放当前文件来源，不读取或删除实际文件。 */
+  async function forgetRecent(recentId: string) { await flushSettings(); if (!ownsView() || !current()) throw Error(text.changed); return invoke('queryFileSources.forgetRecent', { tabId: tab.id, recentId }); }
+  return { view: metadata, dirty, busy, task, problem, save, open, recent, forgetRecent, reread, dismiss: () => setProblem(undefined), isBusy: () => active.current };
 }
 export type QueryFileSourceController = ReturnType<typeof useQueryFileSource>;

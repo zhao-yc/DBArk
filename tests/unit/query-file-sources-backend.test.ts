@@ -40,6 +40,45 @@ async function fixture(bytes = Buffer.from('select 1;\n'), tabIds = ['one']) {
 function opened(result: QueryFileSourceOpenResult): QueryFileSourceView { expect(result.state).toBe('opened'); if (result.state !== 'opened') throw Error(JSON.stringify(result)); return result.binding; }
 function saved(result: QueryFileSourceSaveResult): QueryFileSourceView { expect(result.state).toBe('saved'); if (result.state !== 'saved') throw Error(JSON.stringify(result)); return result.binding; }
 
+describe('最近SQL文件真实Main/SQLite/文件接线（仅本clone合成文件）', () => {
+  it('旧schema9无缓存表时兼容补齐既有关联，启动与列出都不探测已删除的SQL文件', async () => {
+    const f = await fixture(); const binding = opened(await f.service.open({ tabId: 'one', taskId: randomUUID(), encoding: 'utf8' }, f.scope)); f.store.close(); stores.delete(f.store);
+    // 本例合成配置退回升级前的schema9形状，真实用户配置和Root原生run均不参与。
+    const old = new SQL.Database(readFileSync(f.database)); try { old.run('DROP TABLE query_file_recents'); writeFileSync(f.database, old.export()); } finally { old.close(); }
+    rmSync(f.path); const store = await LocalStore.open(f.database, wasm, protector); stores.add(store); const service = new QueryFileSources({ ...f.host, store });
+    expect(store.queryFileSource('one')?.ref).toEqual(binding.ref); expect(service.recent({ tabId: 'one' }, f.scope)).toEqual([{ id: expect.any(String), name: '脚本.sql', displayPath: f.path, encoding: 'utf8' }]);
+    const stored = new SQL.Database(readFileSync(f.database)); try { expect(stored.exec('PRAGMA user_version')[0].values[0][0]).toBe(9); } finally { stored.close(); }
+  });
+  it('成功来源进入最近列表，关闭关联和独立重启后仍可明确选择ID打开，不再弹文件框', async () => {
+    const f = await fixture(Buffer.from("select '中文😀';\r\n")); opened(await f.service.open({ taskId: randomUUID(), tabId: 'one', encoding: 'utf8' }, f.scope));
+    const entries = f.service.recent({ tabId: 'one' }, f.scope); expect(entries).toHaveLength(1); expect(Object.keys(entries[0]).sort()).toEqual(['displayPath', 'encoding', 'id', 'name']);
+    f.store.saveSettings({ ...f.store.settings(), tabs: [{ id: 'two', kind: 'query', title: '新草稿', connectionId: 'ram', sql: '' }] }); f.store.close(); stores.delete(f.store);
+    const store = await LocalStore.open(f.database, wasm, protector); stores.add(store); const service = new QueryFileSources({ ...f.host, store, choose: async () => { throw Error('最近选择不应弹原生框'); } });
+    expect(service.recent({ tabId: 'two' }, f.scope)).toEqual(entries);
+    const result = await service.open({ tabId: 'two', taskId: randomUUID(), encoding: 'utf8', recentId: entries[0].id }, f.scope); expect(result).toMatchObject({ state: 'opened', sql: "select '中文😀';\r\n" });
+    expect(store.settings().tabs[0].fileSourceBinding).toBeDefined(); expect(store.settings().tabs[0].sql).toBe("select '中文😀';\r\n"); expect(store.queries()).toEqual([]); expect(store.history()).toEqual([]);
+  });
+  it('列出已删除路径不读取正文，明确打开才报告missing且保留草稿；移除不影响当前来源', async () => {
+    const f = await fixture(); const binding = opened(await f.service.open({ tabId: 'one', taskId: randomUUID(), encoding: 'utf8' }, f.scope)); const entry = f.service.recent({ tabId: 'one' }, f.scope)[0];
+    rmSync(f.path); expect(f.service.recent({ tabId: 'one' }, f.scope)[0]).toEqual(entry); const before = f.store.settings().tabs;
+    expect(await f.service.open({ tabId: 'one', taskId: randomUUID(), encoding: 'utf8', recentId: entry.id }, f.scope)).toMatchObject({ state: 'blocked', reason: 'missing', wrote: 'no' }); expect(f.store.settings().tabs).toEqual(before);
+    expect(f.service.forgetRecent({ tabId: 'one', recentId: entry.id }, f.scope)).toEqual({ removed: true }); expect(f.service.recent({ tabId: 'one' }, f.scope)).toEqual([]); expect(f.store.queryFileSource('one')?.ref).toEqual(binding.ref);
+    expect(await f.service.open({ tabId: 'one', taskId: randomUUID(), encoding: 'utf8', recentId: entry.id }, f.scope)).toMatchObject({ state: 'blocked', reason: 'missing' });
+  });
+  it('最近文件最多20条，同一路径再次成功打开置顶且ID不变，移除不会删除文件', async () => {
+    const f = await fixture();
+    for (let index = 0; index < 24; index++) { const path = join(f.directory, `合成-${index}.sql`); writeFileSync(path, `select '${index}';`); f.choose(path); opened(await f.service.open({ tabId: 'one', taskId: randomUUID(), encoding: 'utf8' }, f.scope)); }
+    const entries = f.service.recent({ tabId: 'one' }, f.scope); expect(entries).toHaveLength(20); expect(entries[0].name).toBe('合成-23.sql'); const prior = entries.find(item => item.name === '合成-10.sql')!;
+    f.choose(prior.displayPath); opened(await f.service.open({ tabId: 'one', taskId: randomUUID(), encoding: 'utf8' }, f.scope)); expect(f.service.recent({ tabId: 'one' }, f.scope)[0].id).toBe(prior.id);
+    f.service.forgetRecent({ tabId: 'one', recentId: prior.id }, f.scope); expect(readFileSync(prior.displayPath, 'utf8')).toBe("select '10';"); expect(f.store.queryFileSource('one')?.path).toBe(prior.displayPath);
+  });
+  it('最近列表保留最后成功解码编码，重新打开仍沿BOM与无损解码门', async () => {
+    const sql = "select '中文';\r\n", f = await fixture(Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from(sql, 'utf16le')]));
+    opened(await f.service.open({ tabId: 'one', taskId: randomUUID(), encoding: 'utf8' }, f.scope)); const entry = f.service.recent({ tabId: 'one' }, f.scope)[0]; expect(entry.encoding).toBe('utf16le');
+    const result = await f.service.open({ tabId: 'one', taskId: randomUUID(), encoding: entry.encoding, recentId: entry.id }, f.scope); expect(result).toMatchObject({ state: 'opened', sql, binding: { encoding: 'utf16le', bom: 'utf16le', eol: 'crlf' } });
+  });
+});
+
 describe('SQL文件来源后台完整路径', () => {
   it('无编辑按保存仍先核磁盘：外改删除替换及双tab先存后另一tab原样保存均拒绝', async () => {
     const original = 'select 1;\n';

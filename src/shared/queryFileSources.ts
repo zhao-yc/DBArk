@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import type { QueryFileEncoding } from './contracts';
 
-export const queryFileSourceLimits = { bytes: 20 * 1024 * 1024, sqlUnits: 20_000_000, sources: 100 } as const;
+export const queryFileSourceLimits = { bytes: 20 * 1024 * 1024, sqlUnits: 20_000_000, sources: 100, recents: 20 } as const;
 const id = z.string().uuid();
 export const queryFileSourceRefSchema = z.object({ id, revision: z.number().int().min(1).max(Number.MAX_SAFE_INTEGER) }).strict();
 /** 文件权限仅由主进程保存；标签持有不可解释的来源及单调修订。 */
@@ -30,8 +30,12 @@ export type QueryFileSourceStatus = { state: 'bound'; binding: QueryFileSourceVi
 const tabId = z.string().min(1).max(200), encoding = z.enum(['utf8', 'utf16le', 'gb18030']);
 const taskId = z.string().uuid();
 const sql = z.string().max(queryFileSourceLimits.sqlUnits).refine(value => { try { assertQueryFileSourceSql(value); return true; } catch { return false; } }, 'SQL正文包含NUL或非法Unicode'), eol = z.enum(['preserve', 'lf', 'crlf', 'cr']);
-/** 无 source 弹原生打开框；有 source 表示用户明确重读原文件，不在启动或 status 时访问文件。 */
-export const queryFileSourceOpenSchema = z.object({ tabId, taskId, encoding, source: queryFileSourceRefSchema.optional() }).strict();
+/** 无source/recentId才弹原生框；source为明确重读，recentId为明确选择Main历史，启动和status不访问文件。 */
+export const queryFileSourceOpenSchema = z.object({ tabId, taskId, encoding, source: queryFileSourceRefSchema.optional(), recentId: id.optional() }).strict().refine(value => !(value.source && value.recentId), '重读来源与最近文件不能同时选择');
+/** 最近条目只返回显示信息和Main生成的ID，打开时不接收展示路径。 */
+export interface QueryRecentFileView { id: string; name: string; displayPath: string; encoding: QueryFileEncoding; }
+export const queryRecentFilesSchema = z.object({ tabId }).strict();
+export const queryRecentFileForgetSchema = z.object({ tabId, recentId: id }).strict();
 export const queryFileSourceSaveSchema = z.object({ tabId, taskId, source: queryFileSourceRefSchema, sql, eol: eol.optional() }).strict();
 /** 另存同样由原生选择授权，不能接收 renderer 路径；source 存在时必须精确匹配当前关联。 */
 export const queryFileSourceSaveAsSchema = z.object({ tabId, taskId, source: queryFileSourceRefSchema.optional(), sql, encoding, bom: z.enum(['none', 'utf8', 'utf16le']), eol }).strict().refine(value => value.bom === 'none' || value.bom === value.encoding, 'BOM与编码不匹配');

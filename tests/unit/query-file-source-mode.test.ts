@@ -48,7 +48,7 @@ function fixture() {
   const token = {}, events: TaskEvent[] = []; let commits = 0, reservations = 0;
   const scope: QueryFileSourceScope = { document: {}, assertCurrent: () => { if (ram.cancelled) throw Error('原文档已取消'); } };
   const service = new QueryFileSources({
-    store: { queryFileSource: () => source, queryFileSourceRecords: () => [source], queryFileDocument: () => ({ token, tab: { id: 'one', kind: 'query', title: 'RAM', connectionId: 'ram', sql: '当前输入' } }), commitQueryFileSource: value => { commits++; source = value; }, releaseQueryFileSource: () => { throw Error('本例不释放私有来源'); } },
+    store: { queryFileSource: () => source, queryFileSourceRecords: () => [source], queryFileDocument: () => ({ token, tab: { id: 'one', kind: 'query', title: 'RAM', connectionId: 'ram', sql: '当前输入' } }), commitQueryFileSource: value => { commits++; source = value; }, releaseQueryFileSource: () => { throw Error('本例不释放私有来源'); }, queryRecentFiles: () => { throw Error('本例不访问最近记录'); }, queryRecentFile: () => { throw Error('本例不访问最近记录'); }, forgetRecentFile: () => { throw Error('本例不访问最近记录'); } },
     choose: async () => { throw Error('保存不得弹原生框'); }, report: event => events.push(event), reserve: async () => { reservations++; return () => { reservations--; }; }
   });
   return { original, events, commits: () => commits, reservations: () => reservations, save: () => service.save({ tabId: 'one', taskId: randomUUID(), source: source.ref, sql: '新内容\n' }, scope) };

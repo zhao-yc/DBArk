@@ -1,5 +1,6 @@
 import { assertQueryFileSourceSettings, queryFileSourceRefSchema, sameQueryFileSource, type QueryFileSourceRef } from '../shared/queryFileSources';
 import { privateQueryFileSourceSchema, type PrivateQueryFileSource } from './queryFileSourceRecords';
+import { privateQueryRecentFilesSchema, rememberQueryFile, type PrivateQueryRecentFile } from './queryFileRecents';
 import { assertQueryLayoutWrite, readQueryEditorHeight } from '../shared/queryLayout';
 import { assertEditorIndentationWrite, editorIndentationLimits, readEditorInsertSpaces, readEditorTabSize } from '../shared/editorIndentation';
 import { assertEditorWordWrap, defaultEditorWordWrap, readEditorWordWrap } from '../shared/editorWordWrap';
@@ -76,6 +77,8 @@ export class LocalStore {
         CREATE TABLE IF NOT EXISTS table_apply_receipts (id TEXT PRIMARY KEY, data TEXT NOT NULL, started_at TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS table_presets (connection_id TEXT NOT NULL, database_name TEXT NOT NULL, table_name TEXT NOT NULL, data TEXT NOT NULL, PRIMARY KEY(connection_id,database_name,table_name));
         CREATE TABLE IF NOT EXISTS query_file_sources (tab_id TEXT PRIMARY KEY, id TEXT NOT NULL UNIQUE, revision INTEGER NOT NULL, data TEXT NOT NULL);
+        -- 最近列表仅为可选元数据缓存，旧schema9客户端可忽略，不改变文件来源的存储合同。
+        CREATE TABLE IF NOT EXISTS query_file_recents (id INTEGER PRIMARY KEY CHECK(id=1), data TEXT NOT NULL);
         PRAGMA user_version=9;`);
     });
     for (const receipt of this.records<TableApplyReceipt>('SELECT data FROM table_apply_receipts').map(parseTableApplyReceipt)) if (receipt.phase !== 'terminal') this.saveTableApplyReceipt(interruptTableApplyReceipt(receipt));
@@ -533,6 +536,31 @@ export class LocalStore {
   queryFileSourceRecords(): PrivateQueryFileSource[] {
     return this.db.exec('SELECT tab_id FROM query_file_sources')[0]?.values.map(([id]) => this.queryFileSource(String(id))!) ?? [];
   }
+  /** 可选元数据缓存向后兼容schema9；首次显式读取从现有Main来源补齐，不探测任何SQL文件。 */
+  private recentQueryFileRecords(): PrivateQueryRecentFile[] {
+    const record = this.records<unknown>('SELECT data FROM query_file_recents WHERE id=1')[0];
+    if (record !== undefined) return privateQueryRecentFilesSchema.parse(record);
+    let entries: PrivateQueryRecentFile[] = [];
+    for (const source of this.queryFileSourceRecords()) entries = rememberQueryFile(entries, source);
+    return entries;
+  }
+  /** 列表只读本地元数据；初次补齐后固定ID，关闭查询和重启不会丢失历史条目。 */
+  queryRecentFiles(): PrivateQueryRecentFile[] {
+    try {
+      const entries = this.recentQueryFileRecords();
+      if (!this.db.exec('SELECT id FROM query_file_recents WHERE id=1').length) this.mutate(() => this.db.run('INSERT INTO query_file_recents VALUES (1,?)', [JSON.stringify(entries)]));
+      return entries;
+    } catch { throw Error('最近SQL文件记录不可读取，文件和草稿保持；请检查本地配置后重试'); }
+  }
+  /** 仅Main由不透明ID解析已保存路径，未知或已移除的ID不能推断为任意路径。 */
+  queryRecentFile(id: string): PrivateQueryRecentFile | undefined { return this.queryRecentFiles().find(item => item.id === id); }
+  /** 移除仅修改最近记录，不删除磁盘文件，也不释放任何当前标签的文件来源。 */
+  forgetRecentFile(id: string): boolean {
+    const entries = this.queryRecentFiles(), next = entries.filter(item => item.id !== id);
+    if (next.length === entries.length) return false;
+    this.mutate(() => this.db.run('INSERT INTO query_file_recents VALUES (1,?) ON CONFLICT(id) DO UPDATE SET data=excluded.data', [JSON.stringify(next)]));
+    return true;
+  }
   /** settings展示仅由私有表投影引用，旧回包和renderer伪造引用不能覆盖权威修订。 */
   private queryFileCanonicalTabs(tabs: AppSettings['tabs']): AppSettings['tabs'] {
     return tabs.map(tab => {
@@ -565,6 +593,9 @@ export class LocalStore {
     if (!current && this.queryFileSourceRecords().length >= 100) throw Error('文件来源数量超过预算');
     this.mutate(() => {
       this.db.run('INSERT INTO query_file_sources VALUES (?,?,?,?) ON CONFLICT(tab_id) DO UPDATE SET id=excluded.id,revision=excluded.revision,data=excluded.data', [source.tabId, source.ref.id, source.ref.revision, JSON.stringify(source)]);
+      // 成功来源提交与最近元数据同一事务落盘，绝不因列出历史而读取或执行SQL正文。
+      const recent = rememberQueryFile(this.recentQueryFileRecords(), source);
+      this.db.run('INSERT INTO query_file_recents VALUES (1,?) ON CONFLICT(id) DO UPDATE SET data=excluded.data', [JSON.stringify(recent)]);
       const settings = this.settings();
       const openedSql = opened?.sql;
       if (openedSql !== undefined) settings.tabs = settings.tabs.map(tab => tab.id === source.tabId ? { ...tab, sql: openedSql } : tab);
