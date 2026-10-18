@@ -4,6 +4,8 @@ import { copyFileSync, existsSync, lstatSync, mkdirSync, mkdtempSync, readFileSy
 import { tmpdir } from 'node:os';
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { approveInstalled, preparePackageIdentity } from './native-editor-ci-identity.mjs';
+import { ciContext, packageCleanupAllowed, runNativeEditorSpecialties } from './native-editor-ci.mjs';
 
 const project = fileURLToPath(new URL('../', import.meta.url));
 const platform = process.platform;
@@ -54,6 +56,9 @@ const applicationDirectory = join(temporary, 'Applications');
 const mountDirectory = join(temporary, 'mount');
 let installAttempted = false;
 let testFailure;
+let nativeResult;
+const nativeEnabled = process.env.DBARK_NATIVE_EDITOR_CI === '1';
+if (process.env.DBARK_NATIVE_EDITOR_CI !== undefined && !['0', '1'].includes(process.env.DBARK_NATIVE_EDITOR_CI)) throw Error('原生专项CI开关必须为0或1');
 
 /** 判断路径是否位于临时根目录内部，拒绝根本身、父级或其他磁盘。 */
 function contained(target) {
@@ -115,6 +120,13 @@ function detachMac() {
 }
 
 try {
+  // 先封存同job安装输入及未安装app；不能先安装再从当时的新字节补签参考身份。
+  const packageProof = process.env.DBARK_NATIVE_EDITOR_CI === '1' ? preparePackageIdentity({
+    sourcePath: process.env.DBARK_NATIVE_EDITOR_SOURCE_APPROVAL,
+    sourceHash: process.env.DBARK_NATIVE_EDITOR_SOURCE_APPROVAL_SHA256,
+    referenceExecutable: process.env.DBARK_NATIVE_EDITOR_REFERENCE_EXECUTABLE,
+    context: ciContext(project), artifact, project, platform,
+  }) : undefined;
   console.log('正在验证真实安装产物：' + basename(artifact));
   const executable = platform === 'win32' ? installWindows() : installMac();
   assertOwnedPath(executable);
@@ -131,6 +143,11 @@ try {
     console.log('Windows helper安装资源摘要已核对（未执行协议）：' + actual);
   }
   console.log('正在运行离线安装程序回归：' + executable);
+  if (packageProof) {
+    const output = join(project, 'test-results/native-editor-ci');
+    const approval = approveInstalled(packageProof, executable, output);
+    nativeResult = runNativeEditorSpecialties({ approval, output });
+  }
   // 普通与C02专用夹具统一使用本次安装所得程序，覆盖父进程继承的旧路径。
   const env = { ...process.env, DBARK_EXECUTABLE_PATH: executable, DBARK_C02_EXECUTABLE_PATH: executable, DBARK_INTEGRATION_ENABLED: '0' };
   delete env.DBARK_DEV_URL;
@@ -143,12 +160,17 @@ try {
   testFailure = error;
 } finally {
   try {
-    if (installAttempted) { if (platform === 'win32') uninstallWindows(); else detachMac(); }
-    assertOwnedPath(applicationDirectory);
-    // 即使系统未返回预期的映像路径，也不能把仍处于其他文件系统的挂载点递归删除。
-    if (platform === 'darwin' && existsSync(mountDirectory) && statSync(mountDirectory).dev !== statSync(temporary).dev) throw new Error('挂载点仍位于其他文件系统，拒绝清理');
-    rmSync(temporary, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
-    console.log('本次测试安装及临时目录已清理');
+    if (!packageCleanupAllowed(nativeEnabled, nativeResult, testFailure)) {
+      // 不卸载、不分离、不删安装根；原用例保留的数据目录/PID仍以原附件为准，不补强停或重试。
+      console.error('原生专项退出证明缺失或回归失败，本次安装现场保留：' + temporary);
+    } else {
+      if (installAttempted) { if (platform === 'win32') uninstallWindows(); else detachMac(); }
+      assertOwnedPath(applicationDirectory);
+      // 即使系统未返回预期的映像路径，也不能把仍处于其他文件系统的挂载点递归删除。
+      if (platform === 'darwin' && existsSync(mountDirectory) && statSync(mountDirectory).dev !== statSync(temporary).dev) throw new Error('挂载点仍位于其他文件系统，拒绝清理');
+      rmSync(temporary, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+      console.log('本次测试安装及临时目录已清理');
+    }
   } catch (error) {
     console.error('安装清理失败，临时目录保留：' + temporary);
     testFailure = testFailure ? new AggregateError([testFailure, error], '验收与清理均发生错误') : error;
