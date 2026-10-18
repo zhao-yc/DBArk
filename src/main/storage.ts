@@ -1,3 +1,4 @@
+import { assertSqlKeywordCaseWrite, readSqlKeywordCase } from '../shared/sqlKeywordCase';
 import { assertQueryFileSourceSettings, queryFileSourceRefSchema, sameQueryFileSource, type QueryFileSourceRef } from '../shared/queryFileSources';
 import { privateQueryFileSourceSchema, type PrivateQueryFileSource } from './queryFileSourceRecords';
 import { privateQueryRecentFilesSchema, rememberQueryFile, type PrivateQueryRecentFile } from './queryFileRecents';
@@ -476,7 +477,7 @@ export class LocalStore {
       const { queryEditorHeight: _height, ...unchanged } = tab; return unchanged;
     }) : stored?.tabs ?? defaultSettings.tabs;
     // 旧颜色标志只认true；缺项或损坏字号回退13，不迁移数据库或隐式强转。
-    return { ...defaultSettings, ...stored, tabs: this.queryFileCanonicalTabs(tabs), dataTypeColors: stored?.dataTypeColors === true, editorFontSize: readEditorFontSize(stored?.editorFontSize), editorWordWrap: readEditorWordWrap(stored?.editorWordWrap), editorTabSize: readEditorTabSize(stored?.editorTabSize), editorInsertSpaces: readEditorInsertSpaces(stored?.editorInsertSpaces) };
+    return { ...defaultSettings, ...stored, tabs: this.queryFileCanonicalTabs(tabs), dataTypeColors: stored?.dataTypeColors === true, editorFontSize: readEditorFontSize(stored?.editorFontSize), editorWordWrap: readEditorWordWrap(stored?.editorWordWrap), editorTabSize: readEditorTabSize(stored?.editorTabSize), editorInsertSpaces: readEditorInsertSpaces(stored?.editorInsertSpaces), ...(stored && Object.hasOwn(stored, 'sqlKeywordCase') ? { sqlKeywordCase: readSqlKeywordCase(stored.sqlKeywordCase) } : {}) };
   }
   /** 独立配置表按需创建，旧库无收藏时返回空配置，不把秘密或工作区 SQL 混入收藏。 */
   workbench(): WorkbenchSnapshot {
@@ -499,6 +500,7 @@ export class LocalStore {
   saveSettings(settings: AppSettings): void {
     // 新缩进字段缺项兼容旧调用；显式坏值先拒绝，不能进入事务或写盘。
     assertEditorIndentationWrite(settings);
+    assertSqlKeywordCaseWrite(settings);
     assertQueryLayoutWrite(settings);
     assertQueryFileSourceSettings(settings);
     // 直接存储入口同样拒绝非布尔值；未指定的旧调用仍兼容默认关闭。

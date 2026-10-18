@@ -37,6 +37,18 @@ async function mount(source: string, start = 0, end = 0) {
 async function click(entry: '按钮' | '快捷回调') { if (entry === '快捷回调') { expect(io.format).toBeTypeOf('function'); await act(async () => io.format!()); await flushSettings(); return; } const button = document.body.querySelectorAll('button').find(node => node.getAttribute('aria-label') === '格式化 SQL'); expect(button).toBeDefined(); await act(async () => button!.dispatchEvent(new MemoryEvent('click'))); await flushSettings(); }
 
 describe.each(['按钮', '快捷回调'] as const)('真实QueryTab格式化%s', entry => {
+  it.each([true, false])('关键字偏好沿真实入口用于选区/全文%s，改偏好本身不改模型且只产生原单次编辑事务', async selected => {
+    const prefix = 'select PriorValue from BeforeTable;\n', body = 'select MiXeD,t.order,count(a),@from from T t where t.id=1;', suffix = '\nselect Tail from AfterTable;', source = prefix + body + suffix;
+    await mount(source, selected ? prefix.length : 0, selected ? prefix.length + body.length : 0);
+    const model = io.editor.getModel(), binding = useWorkspace.getState().settings.tabs[0].sourceBinding;
+    await act(async () => useWorkspace.getState().updateSettings({ sqlKeywordCase: 'upper' }));
+    expect(io.source).toBe(source); expect(io.events).toEqual([]); expect(io.editor.getModel()).toBe(model);
+    await click(entry); expect(io.events).toEqual(['undo-stop', 'dbark-sql-format', 'undo-stop', 'focus']); expect(io.editor.getModel()).toBe(model);
+    expect(io.source).toContain('SELECT'); expect(io.source).toContain('MiXeD'); expect(io.source).toContain('t.order'); expect(io.source).toContain('count('); expect(io.source).toContain('@from');
+    if (selected) { expect(io.source.startsWith(prefix)).toBe(true); expect(io.source.endsWith(suffix)).toBe(true); }
+    expect(useWorkspace.getState().settings.tabs[0].sourceBinding).toBe(binding); expect(commands.filter(command => command !== 'settings.save')).toEqual([]);
+  });
+
   it.each([[8, true], [4, false]] as const)('显式操作使用当前全局宽度%s/空格%s，不自动格式化或新增副作用', async (editorTabSize, editorInsertSpaces) => {
     const source = 'select a,b from 表 where id=1;'; await mount(source);
     await act(async () => useWorkspace.getState().updateSettings({ editorTabSize, editorInsertSpaces }));

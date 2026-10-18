@@ -1,3 +1,4 @@
+import { readSqlKeywordCase } from '../shared/sqlKeywordCase';
 import { editorIndentationLimits, readEditorInsertSpaces, readEditorTabSize } from '../shared/editorIndentation';
 import { defaultEditorWordWrap, readEditorWordWrap } from '../shared/editorWordWrap';
 import { editorFontLimits, readEditorFontSize } from '../shared/editorFont';
@@ -75,7 +76,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
   initialize: async () => {
     try {
       const [settings, connections, tasks] = await Promise.all([invoke('settings.get', {}), invoke('connections.list', {}), invoke('tasks.list', {})]);
-      set({ settings: { ...defaults, ...settings, editorFontSize: readEditorFontSize(settings.editorFontSize), editorWordWrap: readEditorWordWrap(settings.editorWordWrap), editorTabSize: readEditorTabSize(settings.editorTabSize), editorInsertSpaces: readEditorInsertSpaces(settings.editorInsertSpaces) }, connections, tasks, ready: true });
+      set({ settings: { ...defaults, ...settings, editorFontSize: readEditorFontSize(settings.editorFontSize), editorWordWrap: readEditorWordWrap(settings.editorWordWrap), editorTabSize: readEditorTabSize(settings.editorTabSize), editorInsertSpaces: readEditorInsertSpaces(settings.editorInsertSpaces), ...(Object.hasOwn(settings, 'sqlKeywordCase') ? { sqlKeywordCase: readSqlKeywordCase(settings.sqlKeywordCase) } : {}) }, connections, tasks, ready: true });
     } catch (error) { set({ ready: true }); get().notify(errorMessage(error), true); }
   },
   /** 连接编辑成功后整体替换概要列表，不缓存表单中的明文秘密。 */
