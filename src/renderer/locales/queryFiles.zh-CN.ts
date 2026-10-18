@@ -28,4 +28,9 @@ export const queryFilesZh = {
   uncertain: '保存结果未能确认，草稿已保留。',
   unavailable: '当前正文或工作区状态尚未就绪，文件未保存，草稿继续保留。',
   restoreFailed: '文件已保存，但标签来源状态未能持久化。请保留草稿并先核对文件。',
+  taskTitle: 'SQL 文件操作', taskWaiting: '等待文件操作阶段确认', taskSaved: 'SQL 文件保存已确认', taskOpened: 'SQL 文件读取已确认', taskCancelled: 'SQL 文件操作已取消，草稿继续保留',
+  taskPhases: { choosing: '等待原生文件选择', reading: '正在读取文件', checking: '正在核对文件来源', staging: '正在暂存文件内容', replacing: '正在替换文件，已进入提交点', verifying: '正在核对写入结果', recording: '正在记录文件来源', terminal: '文件操作已结算' },
+  cancelOperation: '取消文件操作', cancelPending: '取消请求已发送，等待实际结算', cancelConfirmed: '取消请求已确认，等待原操作结果', cancelDenied: '当前任务不能取消，等待最终结果', cancelUnknown: '取消结果未确认，等待原操作结果',
+  taskBytes: '已处理字节', releaseFailed: '查询库副本已创建，但文件来源未能解除。原草稿与来源继续保留，请核对后处理。',
+  libraryRetained: '查询库副本已保存；当前来源或草稿已变化，未关联该副本，现有内容继续保留。',
 };

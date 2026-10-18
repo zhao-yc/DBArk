@@ -10,6 +10,7 @@ import { zh } from '../locales/zh-CN';
 import { queryFilesZh as text } from '../locales/queryFiles.zh-CN';
 import type { QueryFileSourceController } from '../useQueryFileSource';
 import { ErrorBox, Field, Modal, Spinner } from './ui';
+import { QueryFileTaskProgress } from './QueryFileTaskProgress';
 
 /** 选择编码与换行后由Main原生选择路径；renderer从不接收或回传授权路径。 */
 export function QueryFilesDialog({ mode, files, onClose }: { mode: 'open' | 'save'; files: QueryFileSourceController; onClose(): void }) {
@@ -32,7 +33,7 @@ export function QueryFilesDialog({ mode, files, onClose }: { mode: 'open' | 'sav
     <div className="modal-content"><p className="muted small">{mode === 'open' ? text.openHint : text.optionsHint}</p>
       <Field label={text.encoding}><select value={encoding} disabled={busy} onChange={event => changeEncoding(event.target.value as QueryFileEncoding)}><option value="utf8">{text.utf8}</option><option value="utf16le">{text.utf16le}</option><option value="gb18030">{text.gb18030}</option></select></Field>
       {mode === 'save' && <><Field label={text.bom}><select value={bom} disabled={busy} onChange={event => setBom(event.target.value as QueryFileBom)}><option value="none">{text.noBom}</option>{encoding !== 'gb18030' && <option value={encoding}>{encoding === 'utf8' ? text.utf8 : text.utf16le} BOM</option>}</select></Field><Field label={text.eol}><select value={eol} disabled={busy} onChange={event => setEol(event.target.value as QueryFileEolPolicy)}><option value="preserve">{text.preserve}</option><option value="lf">{text.lf}</option><option value="crlf">{text.crlf}</option><option value="cr">{text.cr}</option></select></Field></>}
-      <p className="muted small">{text.limitHint}</p><ErrorBox message={error}/>
+      <p className="muted small">{text.limitHint}</p>{busy && files.task && <QueryFileTaskProgress task={files.task}/>}<ErrorBox message={error}/>
     </div><footer className="modal-footer"><span className="grow"/>{busy && <Spinner/>}<button disabled={busy} onClick={onClose}>{zh.common.cancel}</button><button className="primary" disabled={busy} onClick={() => void choose()}>{mode === 'open' ? <FolderOpen size={14}/> : <FileDown size={14}/>}{mode === 'open' ? text.openAction : text.saveAction}</button></footer>
   </Modal>, document.body);
 }
@@ -55,6 +56,7 @@ export function QueryFileActions({ tab, files }: { tab: WorkspaceTab; files: Que
   useEffect(() => { if (files.problem) setMode(null); }, [files.problem]);
   const problem = files.problem;
   return <><button disabled={files.busy} title={text.open} aria-label={text.open} onClick={() => setMode('open')}><FolderOpen size={15}/></button><button disabled={files.busy} title={text.saveAs} aria-label={text.saveAs} onClick={() => { files.dismiss(); setMode('save'); }}><FileDown size={15}/></button>{mode && <QueryFilesDialog mode={mode} files={files} onClose={() => setMode(null)}/>}
-    {problem && createPortal(<Modal title={text.recovery} onClose={() => { if (!files.isBusy()) files.dismiss(); }}><div className="modal-content"><ErrorBox message={problem.message}/><p>{problem.wrote === 'no' ? text.wroteNo : problem.wrote === 'yes' ? text.wroteYes : text.wroteUnknown}</p><p className="muted small">{text.rereadHint}</p></div><footer className="modal-footer">{files.busy && <Spinner/>}<button disabled={files.busy} onClick={files.dismiss}>{zh.common.cancel}</button><span className="grow"/>{tab.fileSourceBinding && <button disabled={files.busy} onClick={() => void files.reread()}>{text.reread}</button>}<button disabled={files.busy} onClick={() => { files.dismiss(); setMode('save'); }}>{text.saveAs}</button></footer></Modal>, document.body)}
+    {files.busy && files.task && !mode && !problem && <QueryFileTaskProgress task={files.task}/>}
+    {problem && createPortal(<Modal title={text.recovery} onClose={() => { if (!files.isBusy()) files.dismiss(); }}><div className="modal-content"><ErrorBox message={problem.message}/>{files.busy && files.task && <QueryFileTaskProgress task={files.task}/>}<p>{problem.wrote === 'no' ? text.wroteNo : problem.wrote === 'yes' ? text.wroteYes : text.wroteUnknown}</p><p className="muted small">{text.rereadHint}</p></div><footer className="modal-footer">{files.busy && <Spinner/>}<button disabled={files.busy} onClick={files.dismiss}>{zh.common.cancel}</button><span className="grow"/>{tab.fileSourceBinding && <button disabled={files.busy} onClick={() => void files.reread()}>{text.reread}</button>}<button disabled={files.busy} onClick={() => { files.dismiss(); setMode('save'); }}>{text.saveAs}</button></footer></Modal>, document.body)}
   </>;
 }

@@ -7,7 +7,9 @@ import type { AppSettings, ConnectionProfile, TaskEvent, TaskRecord } from '../s
 import { errorMessage, invoke, uid } from './lib';
 import type { ConnectionSelection } from './connectionChanges';
 import { completionServerFacts } from './completionServerFacts';
-import { sameQueryFileSource } from '../shared/queryFileSources';
+import { assertQueryFileSourceSettings, sameQueryFileSource } from '../shared/queryFileSources';
+import type { QueryFileTaskState } from './queryFileTasks';
+import { queryFilesZh } from './locales/queryFiles.zh-CN';
 
 export type WorkspaceTab = AppSettings['tabs'][number];
 const defaults: AppSettings = { theme: 'dark', sidebarWidth: 260, resultLimit: 1000, pageSize: 100, dataTypeColors: false, editorFontSize: editorFontLimits.defaultSize, editorWordWrap: defaultEditorWordWrap, editorTabSize: editorIndentationLimits.defaultTabSize, editorInsertSpaces: editorIndentationLimits.defaultInsertSpaces, tabs: [] };
@@ -20,6 +22,7 @@ interface WorkspaceState {
   notice?: { text: string; error: boolean }; selection?: ConnectionSelection; activeJobs: Record<string, boolean>; dirtyTabs: Record<string, boolean>; connectionVersions: Record<string, number>;
   tableLayoutDrafts: Record<string, boolean>; setTableLayoutDraft(id: string, dirty: boolean): void;
   queryFileDirty: Record<string, boolean>; setQueryFileDirty(id: string, dirty: boolean, snapshot: WorkspaceTab): void;
+  queryFileTasks: Record<string, QueryFileTaskState>; setQueryFileTask(task: QueryFileTaskState): void;
   initialize: () => Promise<void>; setConnections: (connections: ConnectionProfile[]) => void;
   invalidateConnection: (connectionId: string) => void;
   updateSettings: (update: Partial<AppSettings>) => void; openTab: (tab: Omit<WorkspaceTab, 'id'> & { id?: string }) => void;
@@ -54,7 +57,14 @@ export async function flushSettings(): Promise<void> {
 
 /** 界面状态仅保存连接概要和工作区配置，数据库密码不进入全局界面存储。 */
 export const useWorkspace = create<WorkspaceState>((set, get) => ({
-  ready: false, settings: defaults, connections: [], tasks: [], activeJobs: {}, dirtyTabs: {}, connectionVersions: {}, tableLayoutDrafts: {}, queryFileDirty: {},
+  ready: false, settings: defaults, connections: [], tasks: [], activeJobs: {}, dirtyTabs: {}, connectionVersions: {}, tableLayoutDrafts: {}, queryFileDirty: {}, queryFileTasks: {},
+  /** 文件任务保留进度合同与取消状态，不保存SQL或路径；终态由真实文件结果推进。 */
+  setQueryFileTask: task => set(state => {
+    const previous = state.tasks.find(item => item.id === task.taskId), record: TaskRecord = { id: task.taskId, kind: queryFilesZh.taskTitle, status: task.status, progress: task.progress, message: task.message, startedAt: previous?.startedAt ?? task.startedAt };
+    const tasks = [record, ...state.tasks.filter(item => item.id !== task.taskId)].slice(0, 200), queryFileTasks = { ...state.queryFileTasks, [task.taskId]: task };
+    for (const id of Object.keys(queryFileTasks)) if (!tasks.some(item => item.id === id) && !queryFileTasks[id].running) delete queryFileTasks[id];
+    return { tasks, queryFileTasks };
+  }),
   /** 文件正文dirty与事务dirty独立，未知摘要也保持dirty；该缓存不持久化。 */
   setQueryFileDirty: (id, dirty, snapshot) => {
     const current = get().settings.tabs.find(tab => tab.id === id);
@@ -78,6 +88,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
   /** 合并并立即展示配置修改，由持久化层合并连续写盘请求。 */
   updateSettings: update => {
     const previous = get().settings, settings = { ...previous, ...update }, queryFileDirty = { ...get().queryFileDirty };
+    assertQueryFileSourceSettings(settings);
     // SQL或修订变化先同步标dirty，再等待摘要确认；关闭/退出不能借用上一次正文的clean缓存。
     for (const tab of settings.tabs) {
       const before = previous.tabs.find(item => item.id === tab.id);
@@ -119,9 +130,14 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
   setTableLayoutDraft: (id, dirty) => set(state => ({ tableLayoutDrafts: { ...state.tableLayoutDrafts, [id]: dirty } })),
   /** 仅保留任务概要，不把查询数据批次复制进全局任务历史。 */
   onTask: event => set(state => {
+    // 已终态的文件任务不被迟到事件复活或改写；原RPC仍可通过专用收尾发布真实事实。
+    if (state.queryFileTasks[event.taskId]?.running === false) return {};
     const previous = state.tasks.find(task => task.id === event.taskId);
-    const task: TaskRecord = { id: event.taskId, kind: previous?.kind ?? zh.workspace.text001, startedAt: previous?.startedAt ?? new Date().toISOString(), ...previous, status: event.status, progress: event.progress, message: event.message };
-    return { tasks: [task, ...state.tasks.filter(item => item.id !== event.taskId)].slice(0, 200) };
+    const task: TaskRecord = { id: event.taskId, kind: previous?.kind ?? (event.queryFileSource ? queryFilesZh.taskTitle : zh.workspace.text001), startedAt: previous?.startedAt ?? new Date().toISOString(), ...previous, status: event.status, progress: event.progress, message: event.queryFileSource ? queryFilesZh.taskPhases[event.queryFileSource.phase] : event.message };
+    const value = event.queryFileSource, queryFileTasks = { ...state.queryFileTasks };
+    // 未持有本窗口操作租约的文件事件也明确分类，但不能借普通SQL取消命令获取取消权。
+    if (value) queryFileTasks[event.taskId] = { taskId: event.taskId, tabId: value.tabId, operation: value.operation, phase: value.phase, bytesProcessed: value.bytesProcessed, ...(value.totalBytes === undefined ? {} : { totalBytes: value.totalBytes }), wrote: value.wrote, cancellable: false, running: event.status === 'running', committed: value.wrote !== 'no' || ['replacing', 'verifying', 'recording'].includes(value.phase), cancelState: 'denied', status: event.status, progress: event.progress, message: task.message, startedAt: task.startedAt };
+    return { tasks: [task, ...state.tasks.filter(item => item.id !== event.taskId)].slice(0, 200), queryFileTasks };
   })
 }));
 

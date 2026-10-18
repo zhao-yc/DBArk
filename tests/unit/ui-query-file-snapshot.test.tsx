@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto';
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { memoryDocument, MemoryEvent } from '../fixtures/memory-dom';
 import { ContentEditorPort, ContentModelPort } from './editor-content-test-ports';
+import type { TaskEvent } from '../../src/shared/contracts';
 
 const io = vi.hoisted(() => ({ editor: null as any }));
 /** 只替换Monaco端口；保存入口、正文桥、ReactDOM和工作区store均为真实实现。 */
@@ -16,6 +17,7 @@ vi.mock('../../src/renderer/components/SqlEditor', async () => {
     useLayoutEffect(() => { current.current?.sync(); }, [props.value, props.readOnly]);
     useEffect(() => {
       const editor = new ContentEditorPort(new ContentModelPort(props.value));
+      (editor as any).getSelection = () => null;
       const bridge = editorContentBridge(editor as any, () => ({ value: latest.current.value, readOnly: !!latest.current.readOnly, onChange: (sql: string) => latest.current.onChange?.(sql) }), () => {});
       current.current = bridge; io.editor = editor; props.onReady?.(editor);
       return () => { bridge.dispose(); editor.dispose(); current.current = undefined; };
@@ -23,13 +25,86 @@ vi.mock('../../src/renderer/components/SqlEditor', async () => {
     return createElement('div', { 'aria-label': '文件保存的RAM编辑器端口' });
   } };
 });
+
+describe('追加任务合同的真实UI接线（RAM）', () => {
+  it('未持有本窗口租约的文件任务也分类到文件进度，不能借普通SQL取消', async () => {
+    await mount(); const id = crypto.randomUUID();
+    await act(async () => useWorkspace.getState().onTask({ taskId: id, status: 'running', progress: 10, message: '不可展示的系统路径', queryFileSource: { tabId: '其它文档', operation: 'open', phase: 'reading', bytesProcessed: 10, wrote: 'no', cancellable: true } }));
+    await act(async () => showTaskCenter()); const center = document.body.querySelectorAll('[role="dialog"]').find(node => node.getAttribute('aria-label') === '任务中心')!;
+    expect(center.textContent).toContain('正在读取文件'); expect(center.textContent).not.toContain('不可展示'); const cancel = center.querySelectorAll('button').find(node => node.textContent === '取消文件操作')!;
+    await act(async () => cancel.dispatchEvent(new MemoryEvent('click'))); expect(commands.some(item => item.command === 'query.cancel' || item.command === 'queryFileSources.cancel' || item.command === 'tasks.cancelState')).toBe(false);
+    await act(async () => useWorkspace.getState().onTask({ taskId: id, status: 'completed', progress: 100, message: '不可展示的系统路径', queryFileSource: { tabId: '其它文档', operation: 'open', phase: 'terminal', bytesProcessed: 20, wrote: 'no', cancellable: false } })); expect(useWorkspace.getState().queryFileTasks[id].running).toBe(false);
+  });
+  it('每次保存/另存都有新UUID并在invoke前已订阅；任务中心精确取消而不走SQL取消', async () => {
+    const editor = await mount(true), pending = deferred(); let id = '';
+    hook = command => {
+      if (command === 'queryFileSources.save') { expect(taskListeners.size).toBeGreaterThanOrEqual(2); id = fileEvent('staging'); return pending.promise; }
+      return undefined;
+    };
+    await act(async () => { for (const menu of menus) menu('save-query'); }); await act(async () => showTaskCenter());
+    const center = document.body.querySelectorAll('[role="dialog"]').find(node => node.getAttribute('aria-label') === '任务中心')!;
+    expect(center.textContent).toContain('123 / 456'); expect(center.textContent).not.toContain('不可展示');
+    const cancel = center.querySelectorAll('button').find(node => node.textContent === '取消文件操作')!;
+    await act(async () => cancel.dispatchEvent(new MemoryEvent('click'))); await act(async () => cancel.dispatchEvent(new MemoryEvent('click')));
+    expect(commands.filter(item => item.command === 'queryFileSources.cancel')).toEqual([{ command: 'queryFileSources.cancel', input: { tabId: 't', taskId: id } }]); expect(commands.some(item => item.command === 'query.cancel' || item.command === 'tasks.cancelState')).toBe(false);
+    await act(async () => editor.nativeInput('SELECT 取消期间新草稿;')); await act(async () => pending.resolve({ state: 'cancelled' }));
+    expect(useWorkspace.getState().settings.tabs[0]).toMatchObject({ sql: 'SELECT 取消期间新草稿;', fileSourceBinding: sourceView().ref }); expect(useWorkspace.getState().queryFileTasks[id]).toMatchObject({ status: 'cancelled', wrote: 'no', running: false });
+  });
+  it('用户先请求取消、随后进入替换提交点且Main返回不能取消，最终saved仍是已写成功', async () => {
+    await mount(true); const pending = deferred(), cancellation = deferred(); let id = '';
+    hook = command => command === 'queryFileSources.save' ? (id = fileEvent('staging'), pending.promise) : command === 'queryFileSources.cancel' ? cancellation.promise : undefined;
+    await act(async () => { for (const menu of menus) menu('save-query'); }); await click('取消文件操作'); await act(async () => { fileEvent('replacing', false, 'yes'); fileEvent('staging', true, 'no'); cancellation.resolve({ cancelled: false }); });
+    await click('取消文件操作'); expect(commands.filter(item => item.command === 'queryFileSources.cancel')).toHaveLength(1);
+    await act(async () => { const result = saved('SELECT 初始;'); fileView = result.binding; pending.resolve(result); });
+    expect(useWorkspace.getState().queryFileTasks[id]).toMatchObject({ status: 'completed', wrote: 'yes', running: false }); expect(useWorkspace.getState().settings.tabs[0].fileSourceBinding?.revision).toBe(2); expect(useWorkspace.getState().notice?.text).toContain('SQL 文件已保存');
+  });
+  it.each(['关闭重建', '换来源', '换来源ABA', '换数据库'] as const)('%s发精确取消，迟到已写回包不触碰新文档或新来源', async kind => {
+    await mount(true); const pending = deferred(); let id = '';
+    hook = command => command === 'queryFileSources.save' ? (id = fileEvent('staging'), pending.promise) : undefined;
+    await act(async () => { for (const menu of menus) menu('save-query'); });
+    if (kind === '关闭重建') { await act(async () => useWorkspace.getState().closeTab('t')); await act(async () => { useWorkspace.getState().openTab({ id: 't', kind: 'query', connectionId: 'c', title: '新文档', sql: 'SELECT 新文档;' }); useWorkspace.getState().setBusy('t', true); }); }
+    else await act(async () => {
+      if (kind === '换数据库') useWorkspace.getState().updateTab('t', { databaseContext: { state: 'known', database: '新库' }, sql: 'SELECT 新库草稿;' });
+      else { useWorkspace.getState().updateTab('t', { fileSourceBinding: { ...sourceView().ref, revision: 77 }, sql: 'SELECT 新来源草稿;' }); if (kind === '换来源ABA') useWorkspace.getState().updateTab('t', { fileSourceBinding: sourceView().ref }); }
+    });
+    await act(async () => pending.resolve(saved('SELECT 初始;')));
+    expect(commands.filter(item => item.command === 'queryFileSources.cancel')).toEqual([{ command: 'queryFileSources.cancel', input: { tabId: 't', taskId: id } }]); expect(useWorkspace.getState().queryFileTasks[id]).toMatchObject({ status: 'completed', wrote: 'yes' }); const tab = useWorkspace.getState().settings.tabs[0];
+    if (kind === '关闭重建') { expect(tab).toMatchObject({ title: '新文档', sql: 'SELECT 新文档;' }); expect(Object.hasOwn(tab, 'fileSourceBinding')).toBe(false); expect(useWorkspace.getState().activeJobs.t).toBe(true); }
+    if (kind === '换来源') expect(tab).toMatchObject({ sql: 'SELECT 新来源草稿;', fileSourceBinding: { revision: 77 } }); if (kind === '换来源ABA') expect(tab.fileSourceBinding?.revision).toBe(1); if (kind === '换数据库') expect(tab).toMatchObject({ sql: 'SELECT 新库草稿;', databaseContext: { state: 'known', database: '新库' }, fileSourceBinding: sourceView().ref });
+  });
+  it('相同SQL另存格式仍发送任务，后续明确保存使用另一个UUID', async () => {
+    await mount(true); await click('另存 SQL 文件'); await select('文件编码', 'utf16le'); await select('字节顺序标记（BOM）', 'utf16le'); await select('换行策略', 'crlf'); await click('选择并保存 SQL 文件');
+    await act(async () => { for (const menu of menus) menu('save-query'); }); const requests = commands.filter(item => ['queryFileSources.saveAs', 'queryFileSources.save'].includes(item.command));
+    expect(requests).toHaveLength(2); for (const item of requests) expect(item.input.taskId).toEqual(uuid()); expect(new Set(requests.map(item => item.input.taskId)).size).toBe(2); expect(requests[0].input).toMatchObject({ sql: 'SELECT 初始;', encoding: 'utf16le', bom: 'utf16le', eol: 'crlf' }); expect(requests.every(item => !Object.hasOwn(item.input, 'displayPath') && !Object.hasOwn(item.input, 'path'))).toBe(true);
+  });
+  it('文件转查询库先release再移除字段，release等待期间的新编辑仍保留', async () => {
+    const editor = await mount(true), pending = deferred(), library = { id: 'q', digest: 'a'.repeat(64), context: { state: 'legacy' as const } };
+    hook = command => command === 'queries.create' ? Promise.resolve({ source: library, name: '库副本' }) : command === 'queryFileSources.release' ? pending.promise : undefined;
+    await click('另存到本地查询库'); await click('另存为新查询'); expect(useWorkspace.getState().settings.tabs[0].fileSourceBinding).toEqual(sourceView().ref); expect(useWorkspace.getState().settings.tabs[0].sourceBinding).toBeUndefined();
+    await act(async () => editor.nativeInput('SELECT 释放期间新正文;')); await act(async () => pending.resolve({ released: true }));
+    const tab = useWorkspace.getState().settings.tabs[0]; expect(tab).toMatchObject({ sql: 'SELECT 释放期间新正文;', sourceBinding: library }); expect(Object.hasOwn(tab, 'fileSourceBinding')).toBe(false);
+    const releaseIndex = commands.findIndex(item => item.command === 'queryFileSources.release'), saveIndex = commands.findIndex(item => item.command === 'settings.save' && item.input.tabs.some((tab: any) => tab.sourceBinding?.id === 'q')); expect(saveIndex).toBeGreaterThan(releaseIndex);
+  });
+  it('release未获确认不移除文件来源；直接store双主来源写入在本地即拒绝', async () => {
+    await mount(true); const library = { id: 'q', digest: 'a'.repeat(64), context: { state: 'legacy' as const } };
+    expect(() => useWorkspace.getState().updateTab('t', { sourceBinding: library })).toThrow('不能同时'); expect(useWorkspace.getState().settings.tabs[0].sourceBinding).toBeUndefined();
+    hook = command => command === 'queries.create' ? Promise.resolve({ source: library, name: '库副本' }) : command === 'queryFileSources.release' ? Promise.resolve({ released: false }) : undefined;
+    await click('另存到本地查询库'); await click('另存为新查询'); expect(document.body.textContent).toContain('文件来源未能解除'); expect(useWorkspace.getState().settings.tabs[0]).toMatchObject({ sql: 'SELECT 初始;', fileSourceBinding: sourceView().ref }); expect(useWorkspace.getState().settings.tabs[0].sourceBinding).toBeUndefined();
+  });
+  it('共享摘要拒绝非法代理项，原文仍留在编辑器且不会创建文件任务', async () => {
+    const editor = await mount(true); await act(async () => editor.nativeInput('SELECT \ud800'));
+    await act(async () => { for (const menu of menus) menu('save-query'); }); expect(editor.getValue()).toBe('SELECT \ud800'); expect(useWorkspace.getState().settings.tabs[0].sql).toBe('SELECT \ud800'); expect(commands.filter(item => item.command === 'queryFileSources.save')).toEqual([]); expect(useWorkspace.getState().queryFileDirty.t).toBe(true);
+  });
+});
 let document: ReturnType<typeof memoryDocument>, createRoot: typeof import('react-dom/client')['createRoot'], root: ReturnType<typeof createRoot> | undefined;
 let QueryTab: typeof import('../../src/renderer/components/QueryTab')['QueryTab'], useWorkspace: typeof import('../../src/renderer/store')['useWorkspace'], flushSettings: typeof import('../../src/renderer/store')['flushSettings'];
+let TasksDialog: typeof import('../../src/renderer/components/ActivityDialog')['TasksDialog'], showTaskCenter: () => void, taskListeners: Set<(event: TaskEvent) => void>;
 let commands: Array<{ command: string; input: any }>, menus: Set<(action: string) => void>, hook: undefined | ((command: string, input: any) => Promise<any> | undefined);
 let fileView: any, completed: boolean[], startClose: () => void;
 const sqlDigest = (sql: string) => createHash('sha256').update(sql).digest('hex');
 const sourceView = (sql = 'SELECT 初始;', revision = 1, name = '合成.sql') => ({ ref: { id: '11111111-1111-4111-8111-111111111111', revision }, name, displayPath: 'RAM展示目录/' + name, encoding: 'utf8', bom: 'none', eol: 'lf', savedSqlDigest: sqlDigest(sql) });
 const saved = (sql: string, revision = 2, name = '合成.sql') => ({ state: 'saved', binding: sourceView(sql, revision, name), savedSqlDigest: sqlDigest(sql), unchanged: false });
+const uuid = () => expect.stringMatching(/^[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}$/);
 const globals = ['window', 'document', 'navigator', 'IS_REACT_ACT_ENVIRONMENT'].map(name => [name, Object.getOwnPropertyDescriptor(globalThis, name)] as const);
 beforeAll(async () => {
   document = memoryDocument();
@@ -42,26 +117,28 @@ beforeAll(async () => {
     return node;
   };
   ({ createRoot } = await import('react-dom/client')); ({ QueryTab } = await import('../../src/renderer/components/QueryTab')); ({ useWorkspace, flushSettings } = await import('../../src/renderer/store'));
+  ({ TasksDialog } = await import('../../src/renderer/components/ActivityDialog'));
 });
 afterEach(async () => { if (root) { await act(async () => root!.unmount()); root = undefined; } await flushSettings(); hook = undefined; });
 afterAll(() => { for (const [name, descriptor] of globals) if (descriptor) Object.defineProperty(globalThis, name, descriptor); else Reflect.deleteProperty(globalThis, name); });
 
 /** Main、原生选择和文件写入全部为RAM端口，拒绝SQL执行、建连及其它外界命令。 */
 async function mount(bound = false) {
-  commands = []; menus = new Set(); hook = undefined; completed = []; fileView = bound ? sourceView() : undefined;
-  (window as any).dbark = { onTask: () => () => {}, onMenu: (listener: (action: string) => void) => { menus.add(listener); return () => menus.delete(listener); }, invoke: async (command: string, input: any) => {
+  commands = []; menus = new Set(); taskListeners = new Set(); hook = undefined; completed = []; fileView = bound ? sourceView() : undefined;
+  (window as any).dbark = { onTask: (listener: (event: TaskEvent) => void) => { taskListeners.add(listener); return () => { taskListeners.delete(listener); }; }, onMenu: (listener: (action: string) => void) => { menus.add(listener); return () => menus.delete(listener); }, invoke: async (command: string, input: any) => {
     commands.push({ command, input }); const pending = hook?.(command, input); if (pending) return pending;
     if (command === 'settings.save') return;
     if (command === 'queryFileSources.status') return fileView ? { state: 'bound', binding: fileView } : { state: 'unbound' };
     if (command === 'queryFileSources.saveAs' || command === 'queryFileSources.save') { const result = saved(input.sql, (fileView?.ref.revision ?? 0) + 1); fileView = result.binding; return result; }
     if (command === 'queryFileSources.open') { fileView = sourceView('SELECT 文件打开;', (fileView?.ref.revision ?? 0) + 1); return { state: 'opened', binding: fileView, sql: 'SELECT 文件打开;' }; }
     if (command === 'queryFileSources.release') return { released: true };
+    if (command === 'queryFileSources.cancel') return { cancelled: true };
     throw Error('禁止外界调用：' + command);
   } };
-  useWorkspace.setState({ settings: { theme: 'dark', sidebarWidth: 260, resultLimit: 1000, pageSize: 100, activeTabId: 't', tabs: [{ id: 't', kind: 'query', connectionId: 'c', title: '合成查询', sql: 'SELECT 初始;', ...(bound ? { fileSourceBinding: fileView.ref } : {}) }] }, connections: [{ id: 'c', name: '合成连接', group: '', color: '', dialect: 'mysql', host: 'offline.invalid', port: 1, user: 'offline' }], activeJobs: {}, dirtyTabs: {}, queryFileDirty: {}, connectionVersions: {}, notice: undefined });
+  useWorkspace.setState({ settings: { theme: 'dark', sidebarWidth: 260, resultLimit: 1000, pageSize: 100, activeTabId: 't', tabs: [{ id: 't', kind: 'query', connectionId: 'c', title: '合成查询', sql: 'SELECT 初始;', ...(bound ? { fileSourceBinding: fileView.ref } : {}) }] }, connections: [{ id: 'c', name: '合成连接', group: '', color: '', dialect: 'mysql', host: 'offline.invalid', port: 1, user: 'offline' }], activeJobs: {}, dirtyTabs: {}, queryFileDirty: {}, queryFileTasks: {}, tasks: [], connectionVersions: {}, notice: undefined });
   function View() {
-    const tabs = useWorkspace(state => state.settings.tabs), [request, setRequest] = React.useState<any>(); startClose = () => setRequest({ tabId: 't' });
-    return tabs.map(tab => <section key={tab.id} hidden={tab.id !== useWorkspace.getState().settings.activeTabId}><QueryTab tab={tab} closeRequest={tab.id === 't' ? request : undefined} onCloseRequestFinished={(_request, close) => { completed.push(close); setRequest(undefined); if (close) useWorkspace.getState().closeTab(tab.id); }} onHistory={() => {}}/></section>);
+    const tabs = useWorkspace(state => state.settings.tabs), [request, setRequest] = React.useState<any>(), [tasks, setTasks] = React.useState(false); startClose = () => setRequest({ tabId: 't' }); showTaskCenter = () => setTasks(true);
+    return <>{tabs.map(tab => <section key={tab.id} hidden={tab.id !== useWorkspace.getState().settings.activeTabId}><QueryTab tab={tab} closeRequest={tab.id === 't' ? request : undefined} onCloseRequestFinished={(_request, close) => { completed.push(close); setRequest(undefined); if (close) useWorkspace.getState().closeTab(tab.id); }} onHistory={() => {}}/></section>)}{tasks && <TasksDialog onClose={() => setTasks(false)}/>}</>;
   }
   const node = document.createElement('div'); document.body.appendChild(node); root = createRoot(node as any); await act(async () => root!.render(<View/>));
   return io.editor as ContentEditorPort & { model: ContentModelPort };
@@ -76,12 +153,38 @@ async function select(label: string, value: string) {
   expect(node).toBeDefined(); await act(async () => { node!.value = value; node!.dispatchEvent(new MemoryEvent('change')); });
 }
 function deferred() { let resolve!: (value: any) => void; const promise = new Promise<any>(done => { resolve = done; }); return { promise, resolve }; }
+/** 仅向已订阅的真实任务监听器发布RAM进度，阶段不直接修改组件或store。 */
+function fileEvent(phase: NonNullable<TaskEvent['queryFileSource']>['phase'], cancellable = true, wrote: 'no' | 'yes' | 'unknown' = 'no') {
+  const request = commands.filter(item => ['queryFileSources.save', 'queryFileSources.saveAs', 'queryFileSources.open'].includes(item.command)).at(-1)!;
+  const event: TaskEvent = { taskId: request.input.taskId, status: 'running', progress: 30, message: '不可展示的进度路径/SQL', queryFileSource: { tabId: request.input.tabId, operation: request.command.split('.').at(-1) as any, phase, bytesProcessed: 123, totalBytes: 456, cancellable, wrote } };
+  for (const listener of [...taskListeners]) listener(event);
+  return request.input.taskId as string;
+}
+/** 真实主执行按钮，保留其busy检查；RAM桥接仍会记录每次SQL发送。 */
+async function executeButton() {
+  const button = document.body.querySelectorAll('button').find(node => node.querySelector('kbd')?.textContent === '⌘ / Ctrl ↵');
+  expect(button).toBeDefined(); await act(async () => button!.dispatchEvent(new MemoryEvent('click')));
+}
+
+describe('P2文件作业不得清除查询自己的busy（真实UI与RAM）', () => {
+  it.each(['另存', '打开', '重读'] as const)('查询尚未返回时%s获取失败，原查询保持互斥；实际完成后才能再次执行', async mode => {
+    await mount(true); const query = deferred();
+    hook = command => command === 'connections.open' || command === 'sessions.close' ? Promise.resolve(undefined) : command === 'sessions.open' ? Promise.resolve({ sessionId: 'RAM会话' }) : command === 'query.completionState' ? Promise.resolve({ databaseKnown: true, database: null }) : command === 'query.execute' ? query.promise : undefined;
+    await executeButton(); expect(commands.filter(item => item.command === 'query.execute')).toHaveLength(1); expect(useWorkspace.getState().activeJobs.t).toBe(true);
+    await click(mode === '打开' ? '打开 SQL 文件' : '另存 SQL 文件'); await click(mode === '打开' ? '选择并打开 SQL 文件' : '选择并保存 SQL 文件');
+    if (mode === '重读') await click('重读为新草稿');
+    expect(useWorkspace.getState().activeJobs.t).toBe(true); expect(commands.filter(item => ['queryFileSources.save', 'queryFileSources.saveAs', 'queryFileSources.open'].includes(item.command))).toEqual([]);
+    await click('取消'); await act(async () => { for (const menu of menus) menu('execute'); }); expect(commands.filter(item => item.command === 'query.execute')).toHaveLength(1); expect(useWorkspace.getState().activeJobs.t).toBe(true);
+    await act(async () => query.resolve({ results: [] })); expect(useWorkspace.getState().activeJobs.t).toBe(false);
+    await executeButton(); expect(commands.filter(item => item.command === 'query.execute')).toHaveLength(2);
+  });
+});
 
 describe('真实QueryTab与文件另存的正文捕获接线（RAM）', () => {
   it('关联文件的菜单保存直接使用原引用写回，不打开查询库或路径选择', async () => {
     const editor = await mount(true); editor.model.deferred = true; editor.nativeInput('SELECT 文件新正文;');
     await act(async () => { for (const menu of menus) menu('save-query'); });
-    expect(commands.filter(item => item.command === 'queryFileSources.save')).toEqual([{ command: 'queryFileSources.save', input: { tabId: 't', source: sourceView().ref, sql: 'SELECT 文件新正文;' } }]);
+    expect(commands.filter(item => item.command === 'queryFileSources.save')).toEqual([{ command: 'queryFileSources.save', input: { tabId: 't', taskId: uuid(), source: sourceView().ref, sql: 'SELECT 文件新正文;' } }]);
     expect(commands.some(item => item.command.startsWith('queries.') || item.command === 'queryFileSources.saveAs')).toBe(false); expect(document.body.querySelectorAll('[role="dialog"]')).toHaveLength(0);
     expect(useWorkspace.getState().settings.tabs[0].fileSourceBinding?.revision).toBe(2);
     await act(async () => { await new Promise(done => setTimeout(done, 130)); }); expect(useWorkspace.getState().queryFileDirty.t).toBe(false); expect(document.body.textContent).toContain('文件正文已保存');
@@ -108,7 +211,7 @@ describe('真实QueryTab与文件另存的正文捕获接线（RAM）', () => {
     expect(commands.filter(item => item.command === 'queryFileSources.saveAs')).toHaveLength(1);
     await act(async () => { editor.nativeInput('SELECT 选择期间新草稿;'); editor.model.flush(); });
     await act(async () => { const result = saved('SELECT 点击时最新, \'😀\';', 1); fileView = result.binding; choice.resolve(result); });
-    expect(commands.filter(item => item.command === 'queryFileSources.saveAs')).toEqual([{ command: 'queryFileSources.saveAs', input: { tabId: 't', encoding: 'utf8', bom: 'none', eol: 'preserve', sql: 'SELECT 点击时最新, \'😀\';' } }]);
+    expect(commands.filter(item => item.command === 'queryFileSources.saveAs')).toEqual([{ command: 'queryFileSources.saveAs', input: { tabId: 't', taskId: uuid(), encoding: 'utf8', bom: 'none', eol: 'preserve', sql: 'SELECT 点击时最新, \'😀\';' } }]);
     expect(useWorkspace.getState().settings.tabs[0].sql).toBe('SELECT 选择期间新草稿;'); expect(editor.setValueCalls).toBe(0); expect(editor.undoStops).toBe(0);
     expect(useWorkspace.getState().settings.tabs[0].fileSourceBinding).toEqual(fileView.ref); expect(commands.every(item => ['settings.save', 'queryFileSources.status', 'queryFileSources.saveAs'].includes(item.command))).toBe(true);
   });
@@ -135,7 +238,7 @@ describe('真实QueryTab与文件另存的正文捕获接线（RAM）', () => {
     const tabs = useWorkspace.getState().settings.tabs, opened = tabs.find(item => item.id !== 't')!;
     expect(tabs.find(item => item.id === 't')).toMatchObject({ sql: 'SELECT 初始;', sourceBinding: library }); expect(opened).toMatchObject({ sql: 'SELECT 文件打开;', fileSourceBinding: fileView.ref, title: '合成.sql' }); expect(Object.hasOwn(opened, 'sourceBinding')).toBe(false);
     const readIndex = commands.findIndex(item => item.command === 'queryFileSources.open'); expect(readIndex).toBeGreaterThan(0); expect(commands.slice(0, readIndex).some(item => item.command === 'settings.save' && item.input.tabs.some((tab: any) => tab.id === opened.id))).toBe(true);
-    expect(commands[readIndex].input).toEqual({ tabId: opened.id, encoding: 'utf8' });
+    expect(commands[readIndex].input).toEqual({ tabId: opened.id, taskId: uuid(), encoding: 'utf8' });
   });
   it('另存文件切换主来源，移除查询库键，不改变当前正文或分栏高度', async () => {
     await mount(); await act(async () => useWorkspace.getState().updateTab('t', { sourceBinding: { id: 'q', digest: 'a'.repeat(64), context: { state: 'legacy' } }, queryEditorHeight: 420 }));
@@ -144,7 +247,7 @@ describe('真实QueryTab与文件另存的正文捕获接线（RAM）', () => {
   });
   it.each([['utf8', 'utf8', 'lf'], ['utf16le', 'utf16le', 'crlf'], ['gb18030', 'none', 'cr']] as const)('另存显式选择%s/%s/%s，只发送编码BOM换行和opaque来源', async (encoding, bom, eol) => {
     await mount(true); await click('另存 SQL 文件'); await select('文件编码', encoding); await select('字节顺序标记（BOM）', bom); await select('换行策略', eol); await click('选择并保存 SQL 文件');
-    expect(commands.filter(item => item.command === 'queryFileSources.saveAs')).toEqual([{ command: 'queryFileSources.saveAs', input: { tabId: 't', source: sourceView().ref, sql: 'SELECT 初始;', encoding, bom, eol } }]);
+    expect(commands.filter(item => item.command === 'queryFileSources.saveAs')).toEqual([{ command: 'queryFileSources.saveAs', input: { tabId: 't', taskId: uuid(), source: sourceView().ref, sql: 'SELECT 初始;', encoding, bom, eol } }]);
   });
   it('文件标签显式另存查询库后仅有查询库来源，并精确释放旧文件引用', async () => {
     await mount(true); const library = { id: 'q', digest: 'a'.repeat(64), context: { state: 'legacy' as const } };
@@ -212,6 +315,6 @@ describe('真实QueryTab与文件另存的正文捕获接线（RAM）', () => {
     await act(async () => { for (const menu of menus) menu('save-query'); }); await click('重读为新草稿');
     const tabs = useWorkspace.getState().settings.tabs; expect(tabs.find(item => item.id === 't')).toMatchObject({ sql: 'SELECT 保留原草稿;', fileSourceBinding: fileView.ref }); const copy = tabs.find(item => item.id !== 't')!;
     expect(copy.sql).toBe('SELECT 文件打开;'); expect(copy.title).toContain('重读副本，未关联'); expect(Object.hasOwn(copy, 'fileSourceBinding')).toBe(false); expect(Object.hasOwn(copy, 'sourceBinding')).toBe(false);
-    expect(commands.filter(item => item.command === 'queryFileSources.open')).toEqual([{ command: 'queryFileSources.open', input: { tabId: 't', source: sourceView().ref, encoding: 'utf8' } }]);
+    expect(commands.filter(item => item.command === 'queryFileSources.open')).toEqual([{ command: 'queryFileSources.open', input: { tabId: 't', taskId: uuid(), source: sourceView().ref, encoding: 'utf8' } }]);
   });
 });

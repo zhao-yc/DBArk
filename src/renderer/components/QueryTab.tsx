@@ -408,18 +408,23 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
       if (action === 'update' && !current.sourceBinding) throw Error(queryBindingZh.unbound);
       const result = action === 'update' ? await invoke('queries.updateSource', { source: current.sourceBinding!, content }) : await invoke('queries.create', content);
       // 成功后才推进所见摘要；仅更新仍存在的原标签，绝不替换会话、事务或结果。
-      const workspace = useWorkspace.getState();
+      const workspace = useWorkspace.getState(); let sourceApplied = true;
       if (fileLease) {
         // 文件标签显式另存查询库后原子切换主来源；旧回包不能夺走后来建立的文件关联。
-        fileLease.apply((_before, adoptTitle) => workspace.updateSettings({ tabs: workspace.settings.tabs.map(item => item.id === tab.id ? querySourceTab(item, { sourceBinding: result.source, ...(adoptTitle ? { title: result.name } : {}) }, 'library') : item) }));
+        if (fileLease.current()) {
+          const released = await invoke('queryFileSources.release', { tabId: tab.id, source: current.fileSourceBinding! }).catch(() => { throw Error(queryFilesZh.releaseFailed); });
+          if (!released.released) throw Error(queryFilesZh.releaseFailed);
+        }
+        sourceApplied = fileLease.apply((_before, adoptTitle) => {
+          const latest = useWorkspace.getState(); latest.updateSettings({ tabs: latest.settings.tabs.map(item => item.id === tab.id ? querySourceTab(item, { sourceBinding: result.source, ...(adoptTitle ? { title: result.name } : {}) }, 'library') : item) });
+        });
       } else if ((!intent || intent.ownsView()) && workspace.settings.tabs.some(item => item.id === tab.id)) {
         const before=workspace.settings.tabs.find(item=>item.id===tab.id)!,patch={title:result.name,sourceBinding:result.source};
         if(request?.mutate)request.mutate(before,patch,()=>workspace.updateTab(tab.id,patch));else workspace.updateTab(tab.id,patch);
       }
-      if (!intent || intent.ownsView()) setSave(false); workspace.notify(action === 'update' ? queryBindingZh.saved : queryBindingZh.created);
+      if (!intent || intent.ownsView()) setSave(false); workspace.notify(!sourceApplied ? queryFilesZh.libraryRetained : action === 'update' ? queryBindingZh.saved : queryBindingZh.created, !sourceApplied);
       let restored = true;
       await flushSettings().catch(reason => { restored = false; workspace.notify(queryBindingZh.restoreFailed + errorMessage(reason), true); });
-      if (current.fileSourceBinding && restored && !useWorkspace.getState().settings.tabs.find(item => item.id === tab.id)?.fileSourceBinding) await invoke('queryFileSources.release', { tabId: tab.id, source: current.fileSourceBinding }).catch(() => workspace.notify(queryFilesZh.retained, true));
       return { restored, busyUnchanged: !job || job.owns() };
     }
     finally {
