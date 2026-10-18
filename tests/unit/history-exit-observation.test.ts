@@ -77,6 +77,16 @@ describe('原TestInfo绑定的有界退出观察', () => {
     const b = beginHistoryExitObservation(true, next.info, 'off')!; expect(historyExitObservationFor(first.info)).toBe(a); expect(historyExitObservationFor(owner().info)).toBeUndefined(); await b.finish();
   });
 
+  it('旧默认续链迟到进入无info入口时不得借用新记录器，显式目标仍可观察', async () => {
+    const next = owner(), observation = beginHistoryExitObservation(true, next.info, 'off')!, targetApp = {}, oldDefaultApp = {};
+    observation.bind(targetApp);
+    const omitted = historyExitObservationFor(undefined);
+    expect(omitted).toBeUndefined(); omitted?.bind(oldDefaultApp); omitted?.mark(oldDefaultApp, 'request-app');
+    expect(historyExitObservationFor(next.info)).toBe(observation);
+    await observation.finish(); expect(next.output().applications).toBe(1);
+    expect(next.output().events.map((event: any) => event.kind)).toEqual(['observation-start', 'application-bound', 'observation-end']);
+  });
+
   it('附件失败仍抛出同一个原错误，仅加入固定注记，不输出异常内容', async () => {
     const failure = Error('原退出超时'), own = owner(vi.fn(async () => { throw Error('附件错误包含路径和秘密'); }));
     const observation = beginHistoryExitObservation(true, own.info, 'off')!;

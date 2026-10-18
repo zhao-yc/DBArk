@@ -26,8 +26,8 @@ export function beginHistoryExitObservation(enabled: boolean, info: TestInfo, tr
 /** 只返回本例正在运行的记录器；调用者仍在await前捕获它，迟到回包不能改绑下一例。 */
 export function currentHistoryExitObservation(): HistoryExitObservation | undefined { return current; }
 
-/** 显式用例跨await仍按原TestInfo取记录器；找不到时不能借用当前其他用例。 */
-export function historyExitObservationFor(info: TestInfo | undefined): HistoryExitObservation | undefined { return info === undefined ? current : owners.get(info); }
+/** 仅显式原TestInfo可取记录器；旧默认续链无info时不得借用后来开启的全局世代。 */
+export function historyExitObservationFor(info: TestInfo | undefined): HistoryExitObservation | undefined { return info === undefined ? undefined : owners.get(info); }
 
 /** 记录既有事件及固定分类，不读取页面、进程、产品状态或任何待保存正文。 */
 export class HistoryExitObservation {
