@@ -32,8 +32,8 @@ function fixture() {
   const editor = { getModel: () => activeModel, getPosition: () => ({ lineNumber: 1, column: offset + 1 }), getSelection: () => ({}), onDidChangeModel: (action: () => void) => listen('model', action), onDidDispose: (action: () => void) => listen('editorDispose', action), onDidChangeCursorPosition: (action: () => void) => listen('caret', action) };
   const invoke = vi.fn(async (command: string, _input?: any): Promise<any> => command === 'sessions.open' ? { sessionId: 'session' } : { results: [] }), flushSettings = vi.fn(async () => {}), handleQueryError = vi.fn(async (_reason: unknown) => {});
   let serial = 0;
-  // 提取的真实编辑器接管函数也读取此初始ref；本例没有发起复制，保持组件useRef(null)原值。
-  const port = createContext({ duplicateIntent: { current: null }, resultSelection: selection.resultSelection,
+  // 真实编辑器接管函数读取复制和格式化引用；本例均未发起，保持组件useRef(null)原值。
+  const port = createContext({ duplicateIntent: { current: null }, formatting: { current: null }, resultSelection: selection.resultSelection,
     // 与真实组件初始useRef一致：尚未打开行详情，但真实失效函数仍撤销控制器并清空两个React状态。
     rowDetails: new QueryRowDetails(), setRowDetail: vi.fn(), setActiveDetailRow: vi.fn(),
     CurrentStatementIntent, currentStatementZh, queryContextZh, queryConnectionDatabase, resolveQueryDatabase, Error, document: { querySelector: () => modal ? {} : null },
