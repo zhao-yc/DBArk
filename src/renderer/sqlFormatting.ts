@@ -1,13 +1,21 @@
 import type * as monaco from 'monaco-editor';
-import { format } from 'sql-formatter';
+import { format, formatDialect, mysql } from 'sql-formatter';
 import { completionLimits } from '../shared/sqlCompletion';
 import { sqlFormattingZh as text } from './locales/sqlFormatting.zh-CN';
 import { editorIndentationOptions } from '../shared/editorIndentation';
+import { sqlFormattingNameRanges, sqlKeywordRoleLimits } from './sqlFormattingRoles';
+import { readSqlKeywordCase } from '../shared/sqlKeywordCase';
+
+interface FormattingPreferences { tabSize?: unknown; insertSpaces?: unknown; keywordCase?: unknown; }
+type FormatterToken = Parameters<NonNullable<typeof mysql.tokenizerOptions.postProcess>>[0][number];
+// 只列正式词法类型，不维护关键字单词表；函数/数据类型/变量/参数/标识符均不在其中。
+const keywordTypes = new Set<string>(['RESERVED_KEYWORD', 'RESERVED_KEYWORD_PHRASE', 'RESERVED_SET_OPERATION', 'RESERVED_CLAUSE', 'RESERVED_SELECT', 'RESERVED_JOIN', 'CASE', 'END', 'WHEN', 'ELSE', 'THEN', 'LIMIT', 'BETWEEN', 'AND', 'OR', 'XOR']);
+const functionNames = new Set(mysql.tokenizerOptions.reservedFunctionNames);
 
 interface Atom { start: number; end: number; kind: string; raw: string; gapSensitive?: boolean; }
 const whitespace = (char: string) => /[\t\n\r\f ]/.test(char);
 const word = (char: string) => /[A-Za-z0-9_$\u0080-\uffff]/.test(char);
-const fail = () => { throw new Error(text.unsafe); };
+const fail = (): never => { throw new Error(text.unsafe); };
 
 /** 有界词法校验只用于确认排版未改变原始token，不把它当作SQL语法解析或执行器。 */
 function atoms(source: string, ansiQuotes: boolean, noBackslashEscapes: boolean): Atom[] {
@@ -49,8 +57,37 @@ function atoms(source: string, ansiQuotes: boolean, noBackslashEscapes: boolean)
   if (depth !== 0) fail(); return out;
 }
 
+/** 通过公开方言postProcess取得原位置/正式类型，先执行依赖原后处理，不导入私有lexer。 */
+function uppercaseFormatting(source: string, start: number, end: number, original: string, options: { tabSize: number; insertSpaces: boolean }, names: { start: number; end: number }[]) {
+  let captured: FormatterToken[] | undefined;
+  const dialect = { ...mysql, tokenizerOptions: { ...mysql.tokenizerOptions, postProcess(tokens: FormatterToken[]) {
+    captured = mysql.tokenizerOptions.postProcess?.(tokens) ?? tokens; return captured;
+  } } };
+  const config = { tabWidth: options.tabSize, useTabs: !options.insertSpaces, keywordCase: 'upper' as const, identifierCase: 'preserve' as const, functionCase: 'preserve' as const, dataTypeCase: 'preserve' as const };
+  // 全上下文取词法类型，避免把选中的t.order后半段或函数名当作孤立关键字。
+  const trimmed = source.trim(), offset = source.length - source.trimStart().length;
+  const whole = formatDialect(trimmed, { ...config, dialect });
+  if (!captured || captured.length > completionLimits.tokens) return fail();
+  const tokens = captured.filter(token => !['LINE_COMMENT', 'BLOCK_COMMENT'].includes(token.type));
+  const eligible: { start: number; end: number }[] = []; let previousEnd = offset, nameIndex = 0;
+  for (let index = 0; index < tokens.length; index++) {
+    const token = tokens[index], from = offset + token.start, to = from + token.raw.length;
+    if (!Number.isSafeInteger(from) || from < previousEnd || to > source.length || source.slice(from, to) !== token.raw) fail();
+    previousEnd = to;
+    if (!keywordTypes.has(token.type) || from < start || to > end) continue;
+    while (nameIndex < names.length && names[nameIndex].end <= from) nameIndex++;
+    if (names[nameIndex] && names[nameIndex].start < to && names[nameIndex].end > from) continue;
+    const before = tokens[index - 1], after = tokens[index + 1];
+    // 限定名称即使被词法器标为关键字也不能改；INSERT()等复用关键字的函数上下文不放宽。
+    if (before?.type === 'PROPERTY_ACCESS_OPERATOR' || after?.type === 'PROPERTY_ACCESS_OPERATOR' || after?.type === 'OPEN_PAREN' && functionNames.has(token.text)) continue;
+    eligible.push({ start: from, end: to });
+  }
+  const formatted = start === 0 && end === source.length ? whole : format(original.trim(), { ...config, language: 'mysql' });
+  return { formatted, eligible };
+}
+
 /** 四种引号模式均保持token原文及敏感空白；任何疑点都在修改模型前拒绝。 */
-export function planSqlFormatting(source: string, start: number, end: number, eol: string = '\n', indentation: { tabSize?: unknown; insertSpaces?: unknown } = {}): { start: number; end: number; text: string } | null {
+export function planSqlFormatting(source: string, start: number, end: number, eol: string = '\n', indentation: FormattingPreferences = {}): { start: number; end: number; text: string } | null {
   if (source.length > completionLimits.sourceUnits) throw new Error(text.limited);
   if (source.includes('\0') || !Number.isInteger(start) || !Number.isInteger(end) || start < 0 || end < start || end > source.length || !['\n', '\r\n'].includes(eol)) fail();
   const scans = [false, true].flatMap(ansi => [false, true].map(escapes => ({ ansi, escapes, tokens: atoms(source, ansi, escapes) })));
@@ -58,20 +95,36 @@ export function planSqlFormatting(source: string, start: number, end: number, eo
   if (source[start - 1] === '\r' && source[start] === '\n' || source[end - 1] === '\r' && source[end] === '\n') throw new Error(text.selection);
   const original = source.slice(start, end), leading = /^[\t\n\r\f ]*/.exec(original)![0], trailing = /[\t\n\r\f ]*$/.exec(original)![0];
   if (!original.trim()) return null;
-  let formatted: string;
+  let formatted: string, eligible: { start: number; end: number }[] = [];
   // 仅显式格式化时使用当前缩进；更改偏好本身从不改写SQL。
   const options = editorIndentationOptions(indentation.tabSize, indentation.insertSpaces);
-  try { formatted = format(original.trim(), { language: 'mysql', tabWidth: options.tabSize, useTabs: !options.insertSpaces, keywordCase: 'preserve', identifierCase: 'preserve', functionCase: 'preserve', dataTypeCase: 'preserve' }).trim().replace(/\r?\n/g, eol); }
+  const keywordCase = readSqlKeywordCase(indentation.keywordCase);
+  if (keywordCase === 'upper' && (source.length > sqlKeywordRoleLimits.sourceUnits || scans[0].tokens.length > sqlKeywordRoleLimits.tokens)) throw Error(text.limited);
+  try {
+    if (keywordCase === 'upper') ({ formatted, eligible } = uppercaseFormatting(source, start, end, original, options, sqlFormattingNameRanges(source)));
+    else formatted = format(original.trim(), { language: 'mysql', tabWidth: options.tabSize, useTabs: !options.insertSpaces, keywordCase: 'preserve', identifierCase: 'preserve', functionCase: 'preserve', dataTypeCase: 'preserve' });
+    formatted = formatted.trim().replace(/\r?\n/g, eol);
+  }
   catch { throw new Error(text.failed); }
   const replacement = leading + formatted + trailing, next = source.slice(0, start) + replacement + source.slice(end);
   if (next.length > completionLimits.sourceUnits) throw new Error(text.limited);
-  const signature = (tokens: Atom[]) => JSON.stringify(tokens.map(({ kind, raw, gapSensitive }) => [kind, raw, gapSensitive]));
-  for (const scan of scans) if (signature(scan.tokens) !== signature(atoms(next, scan.ansi, scan.escapes))) fail();
+  for (const scan of scans) {
+    const after = atoms(next, scan.ansi, scan.escapes); if (after.length !== scan.tokens.length) fail(); let range = 0;
+    for (let index = 0; index < scan.tokens.length; index++) {
+      const before = scan.tokens[index], value = after[index];
+      if (before.kind !== value.kind || before.gapSensitive !== value.gapSensitive) fail();
+      if (before.raw === value.raw) continue;
+      while (range < eligible.length && eligible[range].end <= before.start) range++;
+      const owner = eligible[range];
+      // 只允许ASCII原关键字原位大写，防止依赖Unicode忽略大小写把长s等名称认成关键字；其余逐字比较。
+      if (keywordCase !== 'upper' || before.kind !== 'word' || !/^[A-Za-z_]+$/.test(before.raw) || !owner || before.start < owner.start || before.end > owner.end || value.raw !== before.raw.toUpperCase()) fail();
+    }
+  }
   return replacement === original ? null : { start, end, text: replacement };
 }
 
 /** 只用Monaco编辑事务改当前模型；两侧undo stop使一次撤销/重做与前后键入分离。 */
-export function formatSqlEditor(editor: monaco.editor.IStandaloneCodeEditor, indentation: { tabSize?: unknown; insertSpaces?: unknown } = {}): boolean {
+export function formatSqlEditor(editor: monaco.editor.IStandaloneCodeEditor, indentation: FormattingPreferences = {}): boolean {
   const model = editor.getModel(), selections = editor.getSelections();
   if (!model || model.isDisposed() || editor.getRawOptions().readOnly) throw new Error(text.unavailable);
   if (model.getValueLength() > completionLimits.sourceUnits) throw new Error(text.limited);
