@@ -25,3 +25,25 @@ Windows 原历史分页目标的退出观察作者 `cae47894bd7a566bcae10f723e9f
 新普通克隆 `native-checkpoint-v023-waits-20261018` 固定头 `9057178829b892b6e820337e1b8341ba6e548758`，源 `11969a9ff5da5ab5147efd1303dcc95b1b21f21a`；唯一新增文件为检查点 JSON。新 [运行 39106267172](https://github.com/zhao-yc/DBArk/actions/runs/39106267172) 已开始，Windows x64、macOS arm64／x64 按原工作流独立执行。没有重跑旧运行、访问本机界面、私网数据库或剪贴板，也不发布产品；尚未得到终态或平台附件。
 
 读取器 SHA-256 `b957a49b5757d8659df533a99143b84faaf2bc1834565397f752523fb68edb63` 已通读接收，Root 两个手工 R4 对照通过：零 owner 的等待点可读，坏 Base64 拒绝但原超时及错误摘要保留。明确标记 R3 的真实 arm 原已验归档兼容读取成功，21 个 JSON、3 个观察附件，原失败保留；没有将旧 head／run 作为 R4。Root 接收 JSON 摘要为 `5c26fa79584a6d43dfc745c2aa4b88983cafa2bfa2f60f366cad92b1aee788aa`。读取器接收不代表原生验收通过，新平台附件仍须各自下载、摘要、CRC 和固定绑定后读取。
+
+## 第四轮终态与原始数据
+
+本轮已经终止为失败，发行跳过，没有重跑旧运行。Linux 类型通过，完整单元为 499 文件／9119 通过／52 失败／10 条件跳过；失败位于 batch-record-duplicate-gate、batch-record-duplicate-prepared-launch、column-collation-installed-launch-gate、truncate-exit-preserve 四个原单元文件，包含新增观察 helper 未注入旧 VM 引起的 ReferenceError 及旧源码锁差异，修复与复验继续。原 job `117612660943` 日志为 222720 字节，SHA-256 `b47e24716252dab57277ae67586ab1bd56c11b8c113f55893c03bbf3c5c8fa53`，不能将窄回归通过写成本次完整通过。
+
+Windows job `117612660939` 在源码缩进专项失败；单例 9754ms，owner1 已准备，firstWindow 为 3240ms。预览后的 noExecution 检查发现累计 pageerror 的名称为 `Canceled`，原空错误断言保留；该位置不能独立证明错误的精确触发时刻。后续第二 owner、分栏、legacy 和安装均未运行。原日志 19444 字节，SHA-256 `e86b370930cd3cffb01e8d4e2d8ff106215b80ddadfc68d662e1593d6a5fd111`。Root 冻结 `index-Dxokct1G.js` 为 5367170 字节，SHA-256 `292c2828dbfc0fd7d1a6130c1487975df1d3f4d3a2a53a174c15519b0ae4966f`，与原运行清单完全相同；六个栈帧映射至 Delayer.cancel／dispose、DisposableStore 和 WordHighlighter.dispose。取消链已有实际函数 RAM 证据，保持高亮能力的最小修复及原生复验继续，未过滤原 pageerror。
+
+两个 Mac 的源码缩进／分栏专项和 legacy 均通过（各 76 通过／297 条件跳过），各自打包成功，安装缩进单例均 120 秒超时并有原 45 秒 worker 收尾超时；这不是本版安装通过。arm64 的两个来源 evaluate／assertActual 在 4254ms 前均返回，进度最后到 prepare.hook，未到 prepare.window；该 hook 的 RPC 在有效期限内没有后续完成证据。x64 最后一条等待点为首个来源 evaluate 进入（12688ms），有效期限内无返回点。两个实例均尚未调用 firstWindow，不能再将它们笼统称为“等待窗口”；阻塞原因尚未确认，也不能把缺少返回点解释为超时后永不返回。
+
+三份 ZIP 已各自核 GitHub 摘要、落盘复读与逐项 CRC，只提取文本，不执行附件。Windows 15 条目／15 文本；两 Mac 各 81 条目／35 文本。固定归档如下：
+
+| 平台 | Artifact | 字节 | SHA-256 |
+| --- | --- | --- | --- |
+| Windows | 12128557786 | 31105 | 338b6cc7c4c66dda0f8492d71ee3ffd4f264797cfe04513dbf70935c017843c7 |
+| macOS arm64 | 12129135975 | 3952505 | 177072409084954cb1240901d5ee1610491bb0dd5ea6f9a451e46e5bc91579e1 |
+| macOS x64 | 12128862408 | 5281337 | 7c33961abf35088f1cef0314154e4138f7322464a6efde50efa79bd67723bbf8 |
+
+新读取器三个固定绑定均接收数据合同并保留原失败；这只表示解析与完整性通过。Root 的 read.json 摘要依次为 Windows `6255c002cbe1b049f8eaf1072df0256542de2635e9e71c815789e55324c073ca`、arm64 `1d243d6b618f32841ba41177059ab3f29a6dcd4cabfa03c7ead8968525fa06bb`、x64 `294e1d24699d41968c00bed7daa6c26bbbf9f842b506da508fd72ebf30d8ba44`。
+
+x64 首次下载在 0 字节时以 TypeError 终止；Root 曾在下载仍运行时提前触发提取，仅因收据未产生而退出，未写提取目录。确认原下载终态后，以无凭据 HEAD 核对两个文件主机可达，重新向连接器获取引用，在全新 run1773 目录下载同一固定归档成功；原失败目录与记录保留，没有自动覆盖或重启原 CI。所有临时地址均只走无回显 stdin，未写文件、参数或环境。完整终态封存在 `.cache/parallel-integration/run1775-native-r4-terminal.json`。
+
+本轮属于 0.23 独立诊断，不作为 0.28 或其它候选的原生通过证明。本机 GUI、实库及剪贴板均未操作，目标继续进行。
