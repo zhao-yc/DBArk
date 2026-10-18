@@ -64,3 +64,15 @@ pnpm exec playwright test tests/e2e/v027-native-acceptance.spec.ts --workers=1 -
 仅执行`tests/unit/v027-acceptance-policy.test.ts`和`tsc --noEmit`。unit通过VM/RAM执行真实声明、目录分配表达式、登记函数及收尾方法；验证默认/list零live加载、固定目标漂移、原期限和迟到停链、写前登记、独立CSV解析、退出/marker/表集合/文件不符时零删除。不安装依赖，不运行原大套。
 
 结果与原始初轮失败及最终结果分别保存于clone的`.cache/v027-preparation-evidence/`。最终交接给出固定提交、离线测试计数和证据SHA；真实选择器、实际GUI定位、数据库端行为、正常退出和实际无残留均等待Root另开真实验收，不能记为通过。
+
+## f814独审两项P2的追加修复
+
+本片仅修原验收夹具的两处已证缺口，不启动真实验收。独审原件和原红例脚本保留不动，本任务在`.cache/v027-p2-fix-evidence/`冻结副本并适配同样的RAM输入。
+
+记录文件与样本文件的`open`回包后，原期限检查均移入该已取得句柄的`try/finally`范围。期限刚失效时只关闭该原句柄，不继续写、sync、登记或删除资源；原动作与关闭同时失败时用AggregateError保留两份原错误及首因。关闭失败不覆盖原期限/写入失败。
+
+样本`readFile`完成并核字节哈希后，先再次核规范路径，再`lstat`核原dev/ino、普通文件、非符号链接、单链接及有界大小，并核长度与刚读字节一致，才进入原`unlink`。因此同路径同字节但inode改变也停链，后续unlink、DROP、完成均为0。删除仍是普通路径unlink：最后一次身份复核与实际unlink之间存在竞态窗口，本片没有跨进程原子CAS保证，也没有新增物理reader、扩大删除范围或清理权。
+
+追加17项纯RAM回归与原44项保护测试共61项通过，类型检查通过。独审脚本适配副本的3组检查全部通过：16个断言加7条观测。原120秒late-open输入两处均为open=1、close=1、write/sync=0；同字节inode11→99输入为unlink=0、DROP=0、complete=false。正常对照及原退出未知/marker不符/额外表拒绝继续保留。
+
+适配第一次遗漏父提交的`desktop-parent.ts`副本，脚本在加载阶段ENOENT退出，尚未执行三组检查；补齐原父文件后通过。初次错误日志保留，不将复制的旧红例报告当作新复核。除固定对象标签和新fixture快照/hash外，原独审RAM输入、动作和断言均未修改；独审原件内容哈希在交接时重新核对。
