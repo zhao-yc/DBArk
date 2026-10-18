@@ -82,3 +82,21 @@ Root独立审查指出原提交`36868c2ffacd4f55f221b64e904d9476c23091ab`遗漏�
 ```
 
 上述补核日志均位于`.cache/table-create-on-update/`且不入Git。仅修改本组合后核、对应测试及本文，不进行GUI、实库、CI、构建、服务或Docker操作。
+
+## EXTRA标记位置严格核对
+
+独立审查另发现：原匹配器先删除EXTRA任意位置的DEFAULT_GENERATED，会把非法`on update CURRENT_TIMESTAMP DEFAULT_GENERATED(3)`重组成合法时间函数；普通新表完整后核也可能因此误报成功。
+
+现使用完整语法匹配：自动更新存在时，只接受可选单个独立前置`DEFAULT_GENERATED`，随后必须为完整`on update`及共享受控时间函数；匹配期间不删除任何子串。中间、末尾、重复标记、拼接或未知后缀均不能通过。显式不自动更新只接受空EXTRA或单个独立DEFAULT_GENERATED标记。省略新键的旧路径保持。
+
+新增合同和实际Engine测试包含完整前置标记、无标记、大小写、受控NOW目录别名、零精度及显式null正例。四类非法位置分别放在函数与精度间、尾部、ON与UPDATE间及UPDATE与函数间；实际Engine均要求保留DDL已完成、拒绝完整核验，令牌不可重放且只发一次CREATE。
+
+- 原红日志`extra-first-red.log`：8失败、8通过、197筛选未运行；四类反例在共享匹配和真实Engine后核各失败一次。原测试副本`extra-red-domain.test.ts`、`extra-red-engine.test.ts`保留，修复前后用例不变。
+- 最终`extra-final.log`：93项通过、178筛选未运行，覆盖新反例、原受控合同、普通时间创建链及前缀加非键时间列组合。
+- `type-extra-final.log`：`tsc --noEmit`退出0；差异检查通过。
+
+```powershell
+& 'C:\Users\zhao-\.fnm\node-versions\v24.17.0\installation\node.exe' D:/svn/DBArk/node_modules/vitest/vitest.mjs run tests/unit/table-create-on-update.test.ts tests/unit/engine-table-create.test.ts tests/unit/table-create-prefix-flow.test.ts -t '新表显式自动更新时间|EXTRA标记位置|新表受控自动时间实际Engine|新表EXTRA独立标记语法|前缀索引加非键自动时间列实际Engine' --reporter=verbose
+```
+
+本次不重写原提交历史，不扩展服务器范围或时间前缀键；未进行原生UI、实库、CI、构建、服务、Docker或安装验收。员工4原独立脚本仍由Root安排修后独立重跑。
