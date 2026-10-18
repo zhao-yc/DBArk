@@ -110,7 +110,7 @@ export async function createQueryFileNativeKeyBridge(run: EditorIndentNativeRun,
   }
   /** 当前请求独立观察UI；每次settings读取及renderer核对都在原门内，发布后允许正常修订增长。 */
   async function inspectDocument(owner: IndentNativeOwner, token: string, action: 'begin' | 'check' | 'end', expected: { tabId: string; sourceId: string; revision: number }, allowRevisionGrowth: boolean, check: Guard) {
-    if (action === 'begin') await checked(check, () => owner.page.evaluate(observeQueryFileNativeDocument, { action: 'begin', token, expected }));
+    if (action === 'begin') await checked(check, () => owner.page.evaluate(observeQueryFileNativeDocument, { action: 'begin' as const, token, expected }));
     const settings = await checked(check, () => owner.page.evaluate(() => window.dbark.invoke('settings.get', {})));
     return checked(check, () => owner.page.evaluate(observeQueryFileNativeDocument, { action: action === 'begin' ? 'check' : action, token, settings, allowRevisionGrowth }));
   }
