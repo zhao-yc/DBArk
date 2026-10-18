@@ -14,6 +14,7 @@ const design = (): TableCreateDesign => ({ database: 'db', name: 'new`table', en
 const definition = "CREATE TABLE `new``table` (`id` bigint unsigned NOT NULL AUTO_INCREMENT,`amount` decimal(30,12) NOT NULL DEFAULT '123456789012345678.123456789012',PRIMARY KEY (`id`),UNIQUE KEY `uq_amount` (`amount`)) ENGINE=InnoDB";
 let showDefinition: string | undefined;
 let catalogType: string | undefined, catalogDefault: string | null | undefined;
+let catalogExtra: string, catalogNullable: string;
 let indexChanges: Record<string, unknown>;
 let foreignRules: unknown, foreignParts: unknown, foreignIndex: boolean, deniedForeign: 'rc' | 'kcu' | undefined;
 let laterDefinition: string | undefined, showReads: number, laterShowFails: boolean;
@@ -48,7 +49,7 @@ function managed(signal?: AbortSignal): ManagedConnection {
         rows = [{ 'Create Table': showReads > 1 ? laterDefinition ?? showDefinition ?? definition : showDefinition ?? definition }];
       }
       else if (sql.startsWith('SELECT t.TABLE_NAME')) rows = [{ name: 'new`table', engine: 'InnoDB', charset: 'utf8mb4', collation: tableCollation, comment: '' }];
-      else if (sql.startsWith('SELECT COLUMN_NAME')) rows = [{ name: 'id', type: 'bigint unsigned', nullable: 'NO', defaultValue: null, extra: 'auto_increment', comment: '' }, { name: 'amount', type: catalogType ?? (badVerify ? 'decimal(20,2)' : 'decimal(30,12)'), nullable: 'NO', defaultValue: catalogDefault !== undefined ? catalogDefault : dialect === 'mariadb' ? "'123456789012345678.123456789012'" : '123456789012345678.123456789012', extra: '', comment: '' }];
+      else if (sql.startsWith('SELECT COLUMN_NAME')) rows = [{ name: 'id', type: 'bigint unsigned', nullable: 'NO', defaultValue: null, extra: 'auto_increment', comment: '' }, { name: 'amount', type: catalogType ?? (badVerify ? 'decimal(20,2)' : 'decimal(30,12)'), nullable: catalogNullable, defaultValue: catalogDefault !== undefined ? catalogDefault : dialect === 'mariadb' ? "'123456789012345678.123456789012'" : '123456789012345678.123456789012', extra: catalogExtra, comment: '' }];
       else if (sql.startsWith('SELECT INDEX_NAME')) rows = [{ name: 'PRIMARY', nonUnique: 0, column: 'id', sequence: 1, subPart: null, method: 'BTREE', direction: 'A', comment: '' }, { name: 'uq_amount', nonUnique: 0, column: 'amount', sequence: 1, subPart: null, method: 'BTREE', direction: 'A', comment: '', ...indexChanges }, ...(ordinaryIndex ? [{ name: 'ix_amount', nonUnique: 1, column: 'amount', sequence: 1, subPart: null, method: 'BTREE', direction: 'A', comment: '' }, { name: 'ix_amount', nonUnique: 1, column: 'id', sequence: 2, subPart: null, method: 'BTREE', direction: 'A', comment: '' }] : []), ...(foreignIndex ? [{ name: 'ix_child', nonUnique: 1, column: 'id', sequence: 1, subPart: null, method: 'BTREE', direction: 'A', comment: '' }, { name: 'ix_child', nonUnique: 1, column: 'amount', sequence: 2, subPart: null, method: 'BTREE', direction: 'A', comment: '' }] : [])];
       else if (sql.includes('FROM information_schema.REFERENTIAL_CONSTRAINTS')) { if (deniedForeign === 'rc') { callback(Object.assign(Error('合成规则目录拒读'), { errno: 1142, code: 'ER_TABLEACCESS_DENIED_ERROR' })); return; } rows = foreignRules; }
       else if (sql.includes('FROM information_schema.KEY_COLUMN_USAGE')) { if (deniedForeign === 'kcu') { callback(Object.assign(Error('合成列目录拒读'), { errno: 1143, code: 'ER_COLUMNACCESS_DENIED_ERROR' })); return; } rows = foreignParts; }
@@ -77,7 +78,7 @@ function compositeForeignKey(): TableCreateDesign {
   return draft;
 }
 beforeEach(async () => {
-  injectedUnknownClose = false;
+  injectedUnknownClose = false; catalogExtra = ''; catalogNullable = 'NO';
   encodingCatalog = [{ charset: 'utf8mb4', collation: 'utf8mb4_bin', compiled: 'Yes' }, { charset: 'utf8mb4', collation: 'utf8mb4_0900_ai_ci', compiled: 'Yes' }, { charset: 'latin1', collation: 'latin1_bin', compiled: 'Yes' }]; tableCollation = 'utf8mb4_bin';
   mysql57Facts = {}; mysql57Engines = [{ engine: 'InnoDB', support: 'DEFAULT' }]; mysql57Charsets = [{ charset: 'latin1' }, { charset: 'utf8mb4' }]; ordinaryIndex = false;
   events = []; sent = []; connections = []; sequence = 0; uuid = 'server-1'; mode = ''; occupied = created = closeFails = badVerify = holdClose = false; hold = held = fail = releaseClose = undefined; showDefinition = catalogType = catalogDefault = laterDefinition = deniedForeign = undefined; indexChanges = {}; foreignRules = []; foreignParts = []; foreignIndex = laterShowFails = false; showReads = 0; dialect = 'mysql'; version = '8.4.11';
@@ -86,6 +87,77 @@ beforeEach(async () => {
 });
 
 /** 空串继续使用现有合同与生成器；真实任务模型核SHOW及目录，不借客户端改SQL。 */
+/** 时间字段的SHOW与目录独立手写，避免用待测生成器伪造后核证据。 */
+function timeDesign(type = 'DATETIME', precision = 3, explicitNone = false): TableCreateDesign {
+  const draft = design(), suffix = precision ? `(${precision})` : '';
+  Object.assign(draft.columns[1], { type: `${type}(${precision})`, nullable: true, defaultValue: explicitNone ? null : `CURRENT_TIMESTAMP(${precision})`, onUpdate: explicitNone ? null : { kind: 'expression', expression: 'current-timestamp', precision } });
+  catalogType = type.toLowerCase() + suffix; catalogNullable = 'YES'; catalogDefault = explicitNone ? null : `current_timestamp${suffix || '()'}`;
+  catalogExtra = explicitNone ? '' : `DEFAULT_GENERATED on update CURRENT_TIMESTAMP${suffix || '()'}`;
+  showDefinition = 'CREATE TABLE `new``table` (`id` bigint unsigned NOT NULL AUTO_INCREMENT,`amount` ' + catalogType + ' DEFAULT ' + (explicitNone ? 'NULL' : `current_timestamp${suffix || '()'} ON UPDATE current_timestamp${suffix || '()'}`) + ',PRIMARY KEY (`id`),UNIQUE KEY `uq_amount` (`amount`)) ENGINE=InnoDB';
+  return draft;
+}
+
+describe('新表受控自动时间实际Engine（仅RAM驱动）', () => {
+  it.each(['DATETIME', 'TIMESTAMP'])('%s的0/3/6精度在预览、单次CREATE和SHOW加目录后核一致', async type => {
+    for (const precision of [0, 3, 6]) {
+      created = false; showReads = 0;
+      const draft = timeDesign(type, precision), plan = await preview(await get(), draft);
+      expect(plan.sql).toContain(`\`amount\` ${type}(${precision}) NULL DEFAULT CURRENT_TIMESTAMP(${precision}) ON UPDATE CURRENT_TIMESTAMP${precision ? `(${precision})` : ''}`);
+      const before = sent.filter(sql => sql.startsWith('CREATE TABLE')).length;
+      const result = await apply(plan, 'apply-time-' + precision);
+      expect(result).toMatchObject({ ddlSubmitted: true, ddlCompleted: true, definitionVerified: true, resourcesReleased: true });
+      expect(sent.filter(sql => sql.startsWith('CREATE TABLE')).slice(before)).toEqual([plan.sql]);
+      await expect(apply(plan, 'replay-time-' + precision)).rejects.toThrow();
+      expect(sent.filter(sql => sql.startsWith('CREATE TABLE')).length).toBe(before + 1);
+    }
+  });
+  it.each([['mysql', '5.7.44'], ['mysql', '8.0.46'], ['mariadb', '10.11.19-MariaDB'], ['mariadb', '11.4.13-MariaDB']] as const)('准确%s/%s沿原能力与后核链创建', async (family, release) => {
+    dialect = family; version = release;
+    const draft = timeDesign('DATETIME', 6), plan = await preview(await get(), draft);
+    expect(sent.some(sql => sql.startsWith('CREATE TABLE'))).toBe(false);
+    expect((await apply(plan)).definitionVerified).toBe(true);
+  });
+  it.each(['8.4.12', '8.0.45'])('未开放版本%s只拒绝新属性，旧省略预览保持可用', async release => {
+    version = release; const draft = timeDesign(); const snapshot = await get();
+    await expect(preview(snapshot, draft)).rejects.toThrow('服务器版本');
+    delete draft.columns[1].onUpdate; expect((await preview(snapshot, draft)).sql).not.toContain('ON UPDATE');
+    expect(sent.some(sql => sql.startsWith('CREATE TABLE'))).toBe(false);
+  });
+  it('5.7 TIMESTAMP仍服从原explicit_defaults_for_timestamp能力，不自动修改会话', async () => {
+    version = '5.7.44'; const draft = timeDesign('TIMESTAMP');
+    await expect(preview(await get(), draft)).rejects.toThrow();
+    expect(sent.some(sql => /^(CREATE TABLE|SET )/.test(sql))).toBe(false);
+  });
+  it('显式null不附加自动属性，DEFAULT NULL仍可完整核验', async () => {
+    const draft = timeDesign('DATETIME', 3, true), plan = await preview(await get(), draft);
+    expect(plan.sql).not.toContain('ON UPDATE'); expect((await apply(plan)).definitionVerified).toBe(true);
+  });
+  it.each(['nullable-null', 'not-null-current'] as const)('%s的受控默认组合可核验自动更新，不混同SQL NULL与省略', async combination => {
+    const draft = timeDesign();
+    if (combination === 'nullable-null') {
+      draft.columns[1].defaultValue = null; catalogDefault = null;
+      showDefinition = showDefinition!.replace('DEFAULT current_timestamp(3)', 'DEFAULT NULL');
+    } else {
+      draft.columns[1].nullable = false; catalogNullable = 'NO';
+      showDefinition = showDefinition!.replace('datetime(3) DEFAULT', 'datetime(3) NOT NULL DEFAULT');
+    }
+    const plan = await preview(await get(), draft); expect(plan.sql).toContain('ON UPDATE CURRENT_TIMESTAMP(3)');
+    expect((await apply(plan)).definitionVerified).toBe(true); expect(sent.filter(sql => sql.startsWith('CREATE TABLE'))).toHaveLength(1);
+  });
+  it.each(['show-missing', 'show-precision', 'extra-missing', 'extra-precision', 'extra-unknown', 'default-precision', 'none-extra'] as const)('%s仅保留CREATE完成事实，二次投递拒绝', async mismatch => {
+    const draft = timeDesign('DATETIME', 3, mismatch === 'none-extra'), plan = await preview(await get(), draft);
+    if (mismatch === 'show-missing') showDefinition = showDefinition!.replace(' ON UPDATE current_timestamp(3)', '');
+    if (mismatch === 'show-precision') showDefinition = showDefinition!.replace('ON UPDATE current_timestamp(3)', 'ON UPDATE current_timestamp(6)');
+    if (mismatch === 'extra-missing') catalogExtra = 'DEFAULT_GENERATED';
+    if (mismatch === 'extra-precision') catalogExtra = 'on update CURRENT_TIMESTAMP(6)';
+    if (mismatch === 'extra-unknown') catalogExtra += ' STORED GENERATED';
+    if (mismatch === 'default-precision') catalogDefault = 'current_timestamp(6)';
+    if (mismatch === 'none-extra') catalogExtra = 'on update CURRENT_TIMESTAMP(3)';
+    expect(await apply(plan)).toMatchObject({ ddlCompleted: true, definitionVerified: false, resourcesReleased: true });
+    await expect(apply(plan, 'replay')).rejects.toThrow(); expect(sent.filter(sql => sql.startsWith('CREATE TABLE'))).toHaveLength(1);
+  });
+});
+
 describe('显式空串默认值沿原新表任务（仅RAM驱动）', () => {
   it.each(['mysql', 'mariadb'] as const)('%s空串经过合同、预览和目录后核完整保留', async family => {
     dialect = family; version = family === 'mysql' ? '8.4.11' : '10.11.19-MariaDB';

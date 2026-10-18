@@ -1,6 +1,7 @@
 import { tableCreateDraftSchema, type TableCreateDraft, type TableCreatePrefixFacts } from '../shared/tableCreate';
 import { planTableCreateIndexes } from './tableCreateIndexPlan';
 import type { CellValue, ColumnInfo, DataRow, FilterMode, FilterRule, RowChange, SortRule, SqlPreview, TableDesign, TableInfo } from '../shared/contracts';
+import { tableCreateOnUpdateSql, type TableCreateTimeColumn } from '../shared/tableCreateOnUpdate';
 import { validateFilterRules } from '../shared/filtering';
 import { validateReferenceValues } from '../shared/references';
 
@@ -304,19 +305,22 @@ export function columnType(value: string): string {
 }
 
 /** 新旧设计共用同一列渲染规则，默认值及类型处理不能因索引入口分叉。 */
-function renderDesignColumn(column: TableDesign['columns'][number], noBackslashEscapes: boolean): string {
+function renderDesignColumn(column: TableDesign['columns'][number] & TableCreateTimeColumn, noBackslashEscapes: boolean): string {
   let sql = `${identifier(column.name)} ${columnType(column.type)} ${column.nullable ? 'NULL' : 'NOT NULL'}`;
   if (column.defaultValue !== undefined) {
     const value = column.defaultValue;
     sql += ' DEFAULT ' + (value === null ? 'NULL' : /^(?:DATE|DATETIME|TIMESTAMP|TIME)\b/i.test(column.type) && temporalDefault(value) ? value.toUpperCase() : stringLiteral(value, noBackslashEscapes));
   }
   if (column.autoIncrement) sql += ' AUTO_INCREMENT';
+  sql += tableCreateOnUpdateSql(column);
   if (column.comment) sql += ' COMMENT ' + stringLiteral(column.comment, noBackslashEscapes);
   return sql;
 }
 
 /** 以完整设计和现状生成结构差异；保留未变索引/外键，同名外键修改明确分步预览。 */
 export function buildDesign(design: TableDesign, original?: TableInfo, noBackslashEscapes = false, newTableEncoding?: { charset: string; collation: string }): SqlPreview {
+  // 新键只属于新表专属合同，旧整表ALTER不能借额外属性扩展写能力。
+  if ((original || design.originalName !== undefined) && design.columns.some(column => Object.hasOwn(column, 'onUpdate'))) throw Error('新表自动更新时间不能用于旧整表ALTER入口');
   // 仅新建用途可传显式配对；已有表即便误传也拒绝，不转成ALTER或数据编码转换。
   if (newTableEncoding && (original || design.originalName !== undefined || newTableEncoding.charset !== design.charset || typeof newTableEncoding.collation !== 'string' || !/^[A-Za-z0-9_]{1,255}$/.test(newTableEncoding.collation))) throw new Error('显式新表编码选项无效或用于已有对象');
   if (!design.columns.length) throw new Error('表至少需要一个字段');
