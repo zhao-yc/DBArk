@@ -37,3 +37,5 @@ Root 又使用 Python 标准库独立核原 ZIP 大小／SHA、共 42 项 CRC、
 ## 第六轮已启动
 
 新普通克隆检查点 `08003fd3c1b9300e19703d1968c4645bc65eba7b` 基于已推送的源 `5cac4fd80fc2edb69be3df2fb65c2753506cdbbc`，仅新增一份准确来源及合同摘要 JSON。[新运行 39115617411](https://github.com/zhao-yc/DBArk/actions/runs/39115617411) 已开始，Windows x64、macOS arm64／x64 分别沿原源码／实际安装流程验证；零自动重试，不访问私网数据库或系统剪贴板，不公开发行。尚未取得本轮原生结果，原 R4／R5 不重跑或改写。
+
+后续第六轮已经终止：三平台源码及打包成功，Windows 实际安装专项和通用回归通过；两个 Mac 的 installed-indent 仍超时。十份原报告、297 项 CRC 和原加密能力检查边界的准确结果见[第六轮终态](native-observation-r6-root-20261018.md)，本节“已开始”保留其当时状态。
