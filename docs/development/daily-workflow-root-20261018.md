@@ -87,3 +87,5 @@ Root `node .cache/run1827-check-v027-encoding-root.mjs` 验证原保护、预览
 第三轮 `run1830` 固定 `bce6544`：CSV 场景 6844ms 正式通过，journal 终态为 `desktop-cleaned`，原正常退出、限定文件／库清理及准确目录消失均完成。新表场景的三项非法组合及第一次真实 SQL 预览通过，随后在返回草稿时 `dialog.accept` 报 `Page.handleJavaScriptDialog: No dialog is showing`，5062ms 失败，worker 另有 45000ms teardown 超时；CREATE 尚未执行。整轮 1 通过／1 失败／0 重试，不称整轮通过，该例现场保留。
 
 现仅修确认回答适配：捕获原 page 内私有句柄，`window.confirm` 只接受准确提示一次并即时恢复，仍点真实返回按钮，核真实草稿；不再使用 CDP 二次回答，不算系统弹窗验收。Root `node .cache/run1831-check-v027-confirmation-root.mjs` 的 5 文件／84 项及类型通过，含准确／错误提示、旧回答重用、外来替换三项必要 RAM 反例；unit.log SHA-256 `dc7d019bd678aed1dec1912b5b67df4a2367c0e15464540fa7a2d8554b22dcdb`。产品、原期限、单次 DDL 和正常退出保护均未改；尚需新轮实际执行。
+
+第四轮 `run1833` 固定 `8e24448`，CSV 再次 7122ms 正式通过并正常清理；新表在 7138ms 已完成三项拒绝、两次真实 SQL 预览、精确确认及单次 CREATE，SHOW/COLUMNS 均通过，但目录索引核对期待数值 `12`，实际独立驱动 `bigNumberStrings` 返回字符串 `'12'`，故该例仍失败。现只将该精确期待改为 `'12'`，保留原驱动精度选项和完整索引深比较，不转换大数或放宽类型；原报告及该例现场保留，不声称正常退出／清理。普通 SQL 字符串／标量期待窄修沿用前述 84 项及类型；产品构建、原期限及其它断言无变更，新轮须核完整终态。
