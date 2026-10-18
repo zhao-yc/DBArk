@@ -3,7 +3,7 @@ import { MySqlParserListener } from 'dt-sql-parser/dist/lib/mysql/MySqlParserLis
 import { sqlFormattingZh as text } from './locales/sqlFormatting.zh-CN';
 
 // 大写模式需要额外语法角色证明，预算小于原仅排版模式；不扩大原安全范围。
-export const sqlKeywordRoleLimits = { sourceUnits: 32768, tokens: 2048 } as const;
+export { sqlKeywordRoleLimits } from '../shared/sqlKeywordCase';
 /** 默认错误监听可能打印输入；复用项目现有静默MySQL解析方式。 */
 class QuietFormattingMySQL extends MySQL {
   override createLexer(...args: Parameters<MySQL['createLexer']>) { return super.createLexer(args[0], args[1] ?? (() => {})); }

@@ -12,6 +12,8 @@ import { QuerySaveCloseIntent, type QueryCloseRequest } from '../queryCloseInten
 import { queryCloseZh } from '../locales/queryClose.zh-CN';
 import type * as monaco from 'monaco-editor';
 import { formatSqlEditor } from '../sqlFormatting';
+import { DeferredUpperSqlFormatting } from '../sqlFormattingDeferred';
+import { readSqlKeywordCase } from '../../shared/sqlKeywordCase';
 import { sqlFormattingZh } from '../locales/sqlFormatting.zh-CN';
 import { Play, Square, AlignLeft, Save, History, Gauge, ChevronDown, Check, RotateCcw, LockKeyhole, Pin, X, Download, BookOpen, Braces, Copy } from 'lucide-react';
 import type { QueryOutcome, QueryResult } from '../../shared/contracts';
@@ -65,10 +67,11 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
   const alive = useRef(true), closeRequestRef = useRef(closeRequest); closeRequestRef.current = closeRequest;
   const closeIntent = useRef<QuerySaveCloseIntent | undefined>(undefined);
   const closeBusy = useRef<WorkspaceBusyLease | undefined>(undefined);
+  const formatting = useRef<DeferredUpperSqlFormatting | null>(null);
   const duplicateIntent = useRef<QueryDuplicateIntent | null>(null); const [duplicating, setDuplicating] = useState(false);
   const [closePhase, setClosePhase] = useState<'choose' | 'save' | null>(null);
-  useEffect(() => { alive.current = true; return () => { alive.current = false; duplicateIntent.current?.dispose(); if (closeIntent.current) { closeIntent.current.dispose(); closeBusy.current?.release(); } }; }, []);
-  useEffect(() => { closeIntent.current?.dispose(); setClosePhase(closeRequest ? 'choose' : null); }, [closeRequest]);
+  useEffect(() => { alive.current = true; return () => { alive.current = false; formatting.current?.dispose(); formatting.current = null; duplicateIntent.current?.dispose(); if (closeIntent.current) { closeIntent.current.dispose(); closeBusy.current?.release(); } }; }, []);
+  useEffect(() => { formatting.current?.dispose(); closeIntent.current?.dispose(); setClosePhase(closeRequest ? 'choose' : null); }, [closeRequest]);
   const settings = useWorkspace(state => state.settings); const connection = useWorkspace(state => state.connections.find(profile => profile.id === tab.connectionId));
   const [sessionId, setSessionId] = useState(''); const sessionRef = useRef(''); const pendingSession = useRef<Promise<string> | null>(null);
   const [busy, setBusy] = useState(false); const busyRef = useRef(false); const task = useRef(''); const [transaction, setTransaction] = useState(false);
@@ -203,7 +206,28 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
     try {
       const workspace = useWorkspace.getState(), current = workspace.settings.tabs.find(item => item.id === tab.id), instance = editor.current;
       if (!alive.current || workspace.activeJobs[tab.id] || workspace.settings.activeTabId !== tab.id || current?.kind !== 'query' || !instance || instance.getModel()?.getValue() !== (current.sql ?? '')) throw new Error(sqlFormattingZh.unavailable);
-      formatSqlEditor(instance, { tabSize: workspace.settings.editorTabSize, insertSpaces: workspace.settings.editorInsertSpaces, keywordCase: workspace.settings.sqlKeywordCase });
+      const preferences = { tabSize: workspace.settings.editorTabSize, insertSpaces: workspace.settings.editorInsertSpaces, keywordCase: workspace.settings.sqlKeywordCase };
+      if (readSqlKeywordCase(preferences.keywordCase) !== 'upper') { formatting.current?.dispose(); formatting.current = null; formatSqlEditor(instance, preferences); return; }
+      if (formatting.current || pendingSession.current || closeRequestRef.current || fileSource.isBusy()) throw Error(sqlFormattingZh.unavailable);
+      const owner = current, profile = workspace.connections.find(item => item.id === owner.connectionId), version = workspace.connectionVersions[owner.connectionId] ?? 0, session = sessionRef.current;
+      let operation: DeferredUpperSqlFormatting | undefined, observer: MutationObserver | undefined, modalSeen = false;
+      // 模态窗口即使打开又关闭也留下墓碑；提交前同步取出尚未投递的记录。
+      const inspectModals = (records: MutationRecord[]) => { if (records.some(record => Array.from(record.addedNodes).some(node => node.nodeType === 1 && ((node as Element).getAttribute('role') === 'dialog' || (node as Element).querySelector('[role="dialog"]'))))) modalSeen = true; };
+      operation = new DeferredUpperSqlFormatting({
+        editor: () => editor.current,
+        assertCurrent() {
+          if (observer) inspectModals(observer.takeRecords());
+          const latest = useWorkspace.getState(), target = latest.settings.tabs.find(item => item.id === tab.id);
+          if (!alive.current || operation && formatting.current !== operation || target !== owner || latest.connections.find(item => item.id === owner.connectionId) !== profile || (latest.connectionVersions[owner.connectionId] ?? 0) !== version || sessionRef.current !== session || latest.settings.activeTabId !== tab.id || latest.activeJobs[tab.id] || busyRef.current || pendingSession.current || closeRequestRef.current || fileSource.isBusy() || modalSeen || document.querySelector('[role="dialog"]') || latest.settings.sqlKeywordCase !== preferences.keywordCase || latest.settings.editorTabSize !== preferences.tabSize || latest.settings.editorInsertSpaces !== preferences.insertSpaces) throw Error(sqlFormattingZh.unavailable);
+        },
+        subscribe(changed) {
+          const unsubscribe = useWorkspace.subscribe(changed);
+          if (typeof MutationObserver !== 'undefined') { observer = new MutationObserver(records => { inspectModals(records); if (modalSeen) changed(); }); observer.observe(document.body, { childList: true, subtree: true }); }
+          return () => { unsubscribe(); observer?.disconnect(); observer = undefined; };
+        },
+      }, preferences);
+      formatting.current = operation; const captured = operation;
+      return captured.run().catch(reason => { if (alive.current && formatting.current === captured && useWorkspace.getState().settings.tabs.find(item => item.id === tab.id) === owner) setError(errorMessage(reason)); }).finally(() => { if (formatting.current === captured) formatting.current = null; });
     } catch (reason) { setError(errorMessage(reason)); }
   }
   /** 复制仅占本地意图，不占SQL任务、不清结果；关闭/换连/新作业会永久撤销等待中的复制。 */
@@ -239,7 +263,7 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
   }
   /** 编辑器实例被替换时立即撤销旧意图，旧实例迟到销毁或随后换回也不能复活。 */
   function attachQueryEditor(instance: monaco.editor.IStandaloneCodeEditor) {
-    if (editor.current !== instance) { activeCurrentIntent.current?.dispose(); duplicateIntent.current?.dispose(); }
+    if (editor.current !== instance) { formatting.current?.dispose(); formatting.current = null; activeCurrentIntent.current?.dispose(); duplicateIntent.current?.dispose(); }
     editor.current = instance; setSearchEditor(instance);
   }
   /** 直接读workspace和session同步引用，不等待React重新渲染才能拒绝旧连接或旧草稿。 */
