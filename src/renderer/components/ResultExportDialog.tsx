@@ -11,6 +11,8 @@ import { useWorkspace } from '../store';
 import { ResultsGrid } from './ResultsGrid';
 import { ErrorBox, Field, Modal } from './ui';
 import '../resultExport.css';
+import { csvExportOptions, type CsvExportDelimiter } from '../../shared/csvExport';
+import { CsvExportDelimiterField } from './CsvExportDelimiter';
 
 /** 仅处理打开时的已返回/勾选快照，SQL目标全部显式填写；不访问连接或重新执行查询。 */
 export function ResultExportDialog({ result, tabId, selected = false, onClose }: { result: QueryResult; tabId: string; selected?: boolean; onClose(): void }) {
@@ -19,6 +21,7 @@ export function ResultExportDialog({ result, tabId, selected = false, onClose }:
   const data = useMemo(() => resultExportData(fixed.current), []), columns = useMemo(() => resultExportColumns(data.columns), [data]);
   const sample = useMemo(() => data.rows.slice(0, 20), [data]);
   const [format, setFormat] = useState<ResultExportOptions['format']>('csv'), [encoding, setEncoding] = useState<ResultExportOptions['encoding']>('utf8');
+  const [csvDelimiter, setCsvDelimiter] = useState<CsvExportDelimiter>(',');
   const [target, setTarget] = useState<ResultSqlTarget>(() => ({ database: '', table: '', columns: data.columns.map(column => ({ key: column.key, name: '' })) }));
   const [preview, setPreview] = useState<ResultSqlPreview | null>(null), previewRef = useRef<ResultSqlPreview | null>(null);
   const [confirmation, setConfirmation] = useState(''), [acknowledged, setAcknowledged] = useState(false);
@@ -28,7 +31,7 @@ export function ResultExportDialog({ result, tabId, selected = false, onClose }:
   const task = useWorkspace(state => state.tasks.find(item => item.id === taskId));
   const releases = useRef(new Set<string>()), pending = useRef(new Map<string, Promise<void>>());
   const renderedRevision = revision.current;
-  const config = useRef({ format, encoding, target, confirmation, acknowledged }); config.current = { format, encoding, target, confirmation, acknowledged };
+  const config = useRef({ format, encoding, target, confirmation, acknowledged, csvDelimiter }); config.current = { format, encoding, target, confirmation, acknowledged, csvDelimiter };
   /** 事件同时核实例存活、结果身份及同步代次，恢复相同配置不能复活旧回调。 */
   const current = (ticket: number) => alive.current && !invalid.current && ticket === revision.current;
   const validPreview = () => !!previewRef.current && Date.parse(previewRef.current.expiresAt) > Date.now();
@@ -89,7 +92,7 @@ export function ResultExportDialog({ result, tabId, selected = false, onClose }:
     if (chosen.format === 'sql' && (!validPreview() || chosen.confirmation !== `${chosen.target.database}.${chosen.target.table}` || !chosen.acknowledged)) return;
     busyRef.current = true; consumed.current = true; setBusy(true); setError(''); const id = uid(); activeTask.current = id; setTaskId(id); useWorkspace.getState().setBusy(tabId, true);
     try {
-      const output = await invoke('files.exportResult', { fileToken: fileRef.current.token, format: chosen.format, encoding: chosen.encoding, taskId: id, result: data, ...(chosen.format === 'sql' ? { sql: { target: chosen.target, previewId: lease!.previewId, confirmation: chosen.confirmation, acknowledged: true as const } } : {}) });
+      const output = await invoke('files.exportResult', { fileToken: fileRef.current.token, format: chosen.format, encoding: chosen.encoding, ...csvExportOptions(chosen.format, chosen.csvDelimiter), taskId: id, result: data, ...(chosen.format === 'sql' ? { sql: { target: chosen.target, previewId: lease!.previewId, confirmation: chosen.confirmation, acknowledged: true as const } } : {}) });
       if (current(ticket)) setDone(output.rows);
     } catch (reason) {
       if (chosen.format === 'sql') { previewRef.current = null; fileRef.current = null; if (alive.current) { setPreview(null); setFile(null); } void release(lease!.previewId).catch(() => {}); }
@@ -107,6 +110,7 @@ export function ResultExportDialog({ result, tabId, selected = false, onClose }:
       <Field label={zh.resultExport.format}><select aria-label={zh.resultExport.format} value={format} disabled={busy} onChange={event => { const value = event.target.value; if (value !== format && ['csv','json','sql'].includes(value)) change(renderedRevision, () => setFormat(value as typeof format)); }}><option value="csv">CSV</option><option value="json">JSON</option><option value="sql">INSERT SQL</option></select></Field>
       <Field label={zh.resultExport.encoding}><select aria-label={zh.resultExport.encoding} value={encoding} disabled={busy} onChange={event => { const value = event.target.value; if (value !== encoding && ['utf8','utf16le','gb18030'].includes(value)) change(renderedRevision, () => setEncoding(value as typeof encoding)); }}><option value="utf8">UTF-8</option><option value="utf16le">UTF-16LE</option><option value="gb18030">GB18030</option></select></Field>
       {format === 'sql' && <><Field label={sqlText.database}><input aria-label={sqlText.database} value={target.database} disabled={busy} onChange={event => change(renderedRevision, () => setTarget({ ...target, database: event.target.value }))}/></Field><Field label={sqlText.table}><input aria-label={sqlText.table} value={target.table} disabled={busy} onChange={event => change(renderedRevision, () => setTarget({ ...target, table: event.target.value }))}/></Field></>}
+      {format === 'csv' && <CsvExportDelimiterField value={csvDelimiter} disabled={busy} onChange={value => { if (value !== csvDelimiter) change(renderedRevision, () => setCsvDelimiter(value)); }}/>}
     </div>
     <button className="file-picker" disabled={busy || picking || invalid.current || format === 'sql' && !preview} onClick={() => void chooseFile(renderedRevision)}><Download size={24}/><span><strong>{file?.name ?? zh.resultExport.chooseFile}</strong><small>{zh.resultExport.atomicFile}</small></span><ArrowRight size={16}/></button>
     <h3>{zh.resultExport.columnMapping}</h3><p className="muted small">{format === 'sql' ? sqlText.mapping : zh.resultExport.columnRule}</p>

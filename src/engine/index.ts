@@ -37,6 +37,7 @@ import { TableCopySources } from './tableCopySources';
 import { tableCopySourceLimits } from '../shared/tableCopySource';
 import {queryDatabaseFromSession} from '../shared/queryContext';
 import { csvCell, csvHeader, encodingName, previewFile, readRecords, readText } from './files';
+import { csvExportDelimiter } from '../shared/csvExport';
 import { ResultFileTasks } from './resultFileTasks';
 import { TableColumnPatchTasks } from './tableColumnPatchTasks';
 import { TableIndexPatchTasks } from './tableIndexPatchTasks';
@@ -1272,7 +1273,7 @@ export class Engine {
   private async exportFile(task: RunningTask, input: Input, projection?: CsvExportFieldSnapshot & { selected: string[] }): Promise<{ rows: number }> {
     if (!['csv', 'json', 'sql'].includes(input.format)) throw new Error('不支持的导出格式');
     if (!input.includeData && !(input.format === 'sql' && input.includeStructure)) throw new Error('请选择导出数据，或以 SQL 格式导出结构');
-    const encoding = encodingName(input.encoding); let selectedTransaction = false;
+    const encoding = encodingName(input.encoding), delimiter = csvExportDelimiter(input.format, input.csvDelimiter); let selectedTransaction = false;
     try {
     if (projection) {
       // 同一独立会话先取得事务MDL再重读目录；LIMIT 0不读取行值，DDL不能在核对后换列。
@@ -1316,7 +1317,7 @@ export class Engine {
         if (input.includeStructure) await write(info.ddl + ';\n\n');
       }
       if (input.includeData) {
-        if (input.format === 'csv') await write(dataColumns.map(column => csvHeader(column.name)).join(',') + '\r\n');
+        if (input.format === 'csv') await write(dataColumns.map(column => csvHeader(column.name, delimiter)).join(delimiter) + '\r\n');
         if (input.format === 'json') await write('[\n');
         if (!projection) { await this.statement(task, 'SET TRANSACTION ISOLATION LEVEL REPEATABLE READ'); await this.statement(task, 'START TRANSACTION WITH CONSISTENT SNAPSHOT'); }
         // 表头写入和事务准备都可能等待；真正标记在途并发送SELECT前重核，已接受取消不能启动新流。
@@ -1331,7 +1332,7 @@ export class Engine {
             this.checkCancelled(task);
             if (projection && (!Array.isArray(raw) || raw.length !== dataColumns.length)) throw Error('CSV实际行字段与已核目录不一致，未替换目标文件');
             const row = Object.fromEntries(dataColumns.map((column, index) => [column.name, serializeCell((raw as unknown[])[index])]));
-            if (input.format === 'csv') await write(dataColumns.map(column => csvCell(row[column.name])).join(',') + '\r\n');
+            if (input.format === 'csv') await write(dataColumns.map(column => csvCell(row[column.name], delimiter)).join(delimiter) + '\r\n');
             else if (input.format === 'json') await write((count ? ',\n' : '') + JSON.stringify(row));
             else await write(`INSERT INTO ${identifier(input.table)} (${dataColumns.map(column => identifier(column.name)).join(', ')}) VALUES (${dataColumns.map(column => exportLiteral(row[column.name])).join(', ')});\n`);
             count++;
