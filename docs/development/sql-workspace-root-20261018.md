@@ -57,3 +57,13 @@ Root 另复现表导出旧选择失败污染新配置反馈：真实 React 两�
 Root 在固定 `6ab4652` 通读 Main 实际 IPC／导航归属、会话与配置撤销、Engine 单次执行／等待唤醒、严格序列化及 React 确认互斥。独立脚本基于原 SHA 固定审查输入，只更换 Root 源码位置并单独记录清理拒绝；四阶段真实文件对照、原正式导出方法单次执行与确认、Main 映射／编码／TTL／一次消费三组均通过。两条原 P1 现在保留原目标、外来目录项与移走原件，并明确报告清理未确认，未覆盖原红证据。
 
 控制器 `node .cache/run1781-verify-v028-insert-root.mjs` 另运行 19 文件／265 项，0 失败／跳过，全项目类型检查退出 0；unit.log SHA-256 `2b3a28162221bfa5031254d618aadb441f45e3177472038144074fc39ebf71f1`，独立 evidence.json `262ffe143e1552ab8cd94e42a60ba9164dc099683de3d02fea67abc38f2ba2cf`。关闭环境文件读取并使用私有 TEMP/TMP，没有运行 GUI、数据库或剪贴板。前批 9669 项完整 CI 不覆盖此新增源码，新完整检查继续；实际协议还原、百万行、原生保存、安装与跨平台仍待验。Q05 与全功能目标保持部分完成。
+
+## 完整检查首败、旧依赖接线和高亮取消修复
+
+固定 `2cf39e0` 的[首次流式完整 CI](https://github.com/zhao-yc/DBArk/actions/runs/39111319636)为 526 文件／9721 通过／5 失败／10 跳过，类型通过，构建跳过。原 job `117627881543` 日志 139983 字节，SHA-256 `8957f33bc9628d8c7932ce38bb57c716abf542ae8985a217982cc25c1e3409b1`。失败均是 main-columns-owner 和 query-file-sources-main 旧 VM 漏注入真实 `QueryInsertExports`；作者原 5 红复现保留，`3d675ba04fcedef86bc7a857821cfc97f16d377f` 整合为 `4f509e7`，补真实初始表与 owner／会话／修订／撤销端口，原断言及产品／e2e 未改，另加 4 项拒绝反例。交接 SHA-256 `097d038e1c7503e80db8107f6ce50f3657943ac71743484437c0f03564b012a5`。
+
+同时接纳已独审的 Monaco `2222cdd`／`5aff078` 为 `d3a015f`／`06e7101`。同一 WordHighlighter 的 focus、cursor、restore 三处延时 Promise 只消费官方 CancellationError 实例；普通及伪同名错误仍走正式报告，高亮和恢复能力保持。固定版本、正式 pnpm patch／锁文件、Vite 开发及构建字节门均已接入，缺补丁拒绝构建；详见[修复说明](../implementation-notes/monaco-word-highlighter-canceled.md)。独审 SHA-256 `57ade8816fbf310e4108813e83cc641517aa4426cbb57918ca35d6258a74ad2a`，只读三组及 restore 原红／修后绿不代替原生验收。
+
+Root 当前普通克隆使用员工4的已验证私有 Monaco 副本，只读共享其它依赖；原依赖联接备份在本克隆缓存，主目录依赖仍为上游原 SHA `507b02c2395b05aedcc3d512c6f7653bcf0e8205d4bc7af92398eafd61b31c89`。固定 `4f509e79f7627003e570a6f9b71266969d1cd060` 的 `node .cache/run1786-verify-v028-combined-root.mjs` 为 24 文件／311 项通过、0 失败／跳过，类型和正式源码构建成功。109 个旧构建先移入本克隆缓存并封存清单，随后产生本次新 109 文件；没有打包或运行。unit.log SHA-256 `c163139a9004bae355fa9d776c416435457832dc9db938c650bd467901070607`，build.log `f5d8bf7e0cd5a0aafff8d3d66fb2ba53165bf9b7e6ec5757588a9d3b46a97777`。
+
+后台实库准备 `66c1369308d73ee6e16bf03fb11ddb0c27432edb` 整合为 `4c1affc9e0b50f3cfffc3cef2709318de348ae2d`，只新增六场景测试及说明，产品与上述构建逐字相同。Root 单文件 37 项护栏及类型通过，unit.log SHA-256 `2450e87583be43fb6c0c4722030959290314421fe9344f10b04b925e4370da70`；交接 SHA-256 `15e00ce1d4247542e3af250689f39918990b037c4116e48fd252fc106824eff5`。真实执行仍为 0；先核 200 身份、准确 MySQL8.4.11 UUID和既有隔离凭据后，再单独启用。准备不继承 GUI／安装／百万行或跨版本结论，新完整 CI 继续。
