@@ -7,6 +7,7 @@ import { promisify } from 'node:util';
 import {randomUUID} from 'node:crypto';
 import { createSnippetsNativeDiagnostics, snippetsDiagnosticPort } from './snippets-native-diagnostics';
 import type { SnippetsNativeDiagnostics } from '../helpers/snippetsNativeDiagnostics';
+import { assertHistoryExitObservationScope, beginHistoryExitObservation, historyExitObservationFor, type HistoryExitObservation } from '../helpers/historyExitObservation';
 
 interface RecordedDialog { title?: string; message: string; buttons?: string[]; response: number; }
 declare global { var __dbarkE2EDialogs: { answers: number[]; calls: RecordedDialog[] }; }
@@ -140,20 +141,22 @@ export async function answerDialogs(answers: number[], application: ElectronAppl
 }
 
 /** 等待工作台完成初始化，避免在 preload 就绪、React 尚未装好保存监听时退出。 */
-export async function launchDesktop(guard?: { assertCurrent(): void }) {
+export async function launchDesktop(guard?: { assertCurrent(): void }, observationInfo?: TestInfo) {
+  const exitObservation = historyExitObservationFor(observationInfo);
   const env: Record<string, string> = Object.fromEntries(Object.entries({ ...process.env, DBARK_USER_DATA: dataDir }).filter((entry): entry is [string, string] => entry[1] !== undefined));
   delete env.ELECTRON_RUN_AS_NODE;
   const executablePath = process.env.DBARK_EXECUTABLE_PATH;
   // 显式用例在原生启动前同步复核绑定，覆盖临时目录创建期间的配置漂移；默认用例无额外门。
   guard?.assertCurrent();
   desktop = await electron.launch({ ...(executablePath ? { executablePath, args: [] } : { args: ['.'] }), env, chromiumSandbox: true });
+  const observedApplication = desktop; exitObservation?.bind(observedApplication);
   const quitMarker='DBARK_E2E_QUIT_READY:'+randomUUID();let ready!:()=>void;quitReady=new Promise<void>(resolve=>{ready=resolve;});
   closed = false;
-  desktop.on('close', () => { closed = true; });
+  desktop.on('close', () => { closed = true; exitObservation?.mark(observedApplication, 'close'); });
   desktop.on('console', message => {
     const text = message.text();
-    if (text.startsWith('DBARK_E2E_DIALOG:')) dialogCalls.push(JSON.parse(text.slice('DBARK_E2E_DIALOG:'.length)) as RecordedDialog);
-    if(text===quitMarker)ready();
+    if (text.startsWith('DBARK_E2E_DIALOG:')) { const call = JSON.parse(text.slice('DBARK_E2E_DIALOG:'.length)) as RecordedDialog; dialogCalls.push(call); exitObservation?.dialog(observedApplication, call); }
+    if(text===quitMarker){ exitObservation?.mark(observedApplication, 'will-quit-marker'); ready(); exitObservation?.mark(observedApplication, 'quit-ready'); }
   });
   // 只观察实际will-quit，不阻止退出；收到此标记前保存守卫与原生对话框都已完成。
   await desktop.evaluate(({app},marker)=>{app.once('will-quit',()=>console.log(marker));},quitMarker);
@@ -226,22 +229,35 @@ async function launchPreparedOwnedDesktop(info: TestInfo, state: OwnedDesktopExi
 }
 
 /** 通过原生窗口或 app.quit 发起退出，保留调试通道直到保存握手和实际进程结束。 */
-export async function requestQuit(method: 'app' | 'window' = 'app') {
-  await desktop.evaluate(({ app, BrowserWindow }, route) => {
-    setTimeout(() => route === 'window' ? BrowserWindow.getAllWindows()[0].close() : app.quit(), 0);
-  }, method);
+export async function requestQuit(method: 'app' | 'window' = 'app', observationContext?: { observation: HistoryExitObservation | undefined; application: ElectronApplication }) {
+  // 内部调用携带await前的观察归属；仅记录，不改原来的退出目标与RPC。
+  const exitObservation = observationContext ? observationContext.observation : historyExitObservationFor(undefined), observedApplication = observationContext?.application ?? desktop;
+  exitObservation?.mark(observedApplication, method === 'window' ? 'request-window' : 'request-app');
+  try {
+    await desktop.evaluate(({ app, BrowserWindow }, route) => {
+      setTimeout(() => route === 'window' ? BrowserWindow.getAllWindows()[0].close() : app.quit(), 0);
+    }, method);
+    exitObservation?.mark(observedApplication, 'request-returned');
+  } catch (reason) { exitObservation?.mark(observedApplication, 'request-error'); throw reason; }
 }
 
 /** 先验证真实退出守卫到will-quit，再用公开close断开测试调试连接，仍核所有实际进程退出。 */
-export async function quitDesktop(method: 'app' | 'window' = 'app') {
-  if (snippetsDiagnostics) { snippetsDiagnostics.mark('before-quit'); await snippetsDiagnostics.stop(); }
-  const processIds = await desktop.evaluate(({ app }) => app.getAppMetrics().map(metric => metric.pid));
-  const exited = desktop.waitForEvent('close', { timeout: 12000 });
-  // 不在保存对话框之前脱离调试，否则会丢失实际回答证据；取消和保存失败继续保留调试通道。
-  await requestQuit(method);await Promise.race([quitReady,exited]);
-  if(!closed)await desktop.close();
-  await exited;
-  await expect.poll(() => processIds.filter(pid => { try { process.kill(pid, 0); return true; } catch { return false; } }), { timeout: 5000, message: '本次 Electron 启动的子进程应全部释放' }).toEqual([]);
+export async function quitDesktop(method: 'app' | 'window' = 'app', observationInfo?: TestInfo) {
+  const exitObservation = historyExitObservationFor(observationInfo), observedApplication = desktop;
+  exitObservation?.mark(observedApplication, 'quit-start');
+  try {
+    if (snippetsDiagnostics) { snippetsDiagnostics.mark('before-quit'); await snippetsDiagnostics.stop(); }
+    const processIds = await desktop.evaluate(({ app }) => app.getAppMetrics().map(metric => metric.pid));
+    exitObservation?.mark(observedApplication, 'close-wait-start');
+    const exited = desktop.waitForEvent('close', { timeout: 12000 });
+    // 不在保存对话框之前脱离调试，否则会丢失实际回答证据；取消和保存失败继续保留调试通道。
+    await requestQuit(method, { observation: exitObservation, application: observedApplication });await Promise.race([quitReady,exited]);
+    exitObservation?.mark(observedApplication, 'quit-race-returned');
+    if(!closed){ exitObservation?.mark(observedApplication, 'desktop-close-enter'); await desktop.close(); exitObservation?.mark(observedApplication, 'desktop-close-returned'); }
+    await exited;
+    await expect.poll(() => processIds.filter(pid => { try { process.kill(pid, 0); return true; } catch { return false; } }), { timeout: 5000, message: '本次 Electron 启动的子进程应全部释放' }).toEqual([]);
+    exitObservation?.mark(observedApplication, 'quit-complete');
+  } catch (reason) { exitObservation?.mark(observedApplication, 'quit-error'); throw reason; }
 }
 
 /** 失败兜底只终止本次 launch 的进程树，不按进程名清理其他 Electron 应用。 */
@@ -254,10 +270,15 @@ async function forceStopOwnProcess() {
 }
 
 /** 自动夹具随每个用例运行，不依赖模块首次导入时注册钩子，避免跨文件复用已关闭窗口。 */
-export const test = baseTest.extend<{ desktopLifetime: void; preserveOnUnconfirmedExit: boolean; ownedDesktopLaunchGuard: { assertCurrent(): void; assertPreparation?(info: TestInfo): void } | undefined }>({
+export const test = baseTest.extend<{ desktopLifetime: void; preserveOnUnconfirmedExit: boolean; historyExitObservation: boolean; ownedDesktopLaunchGuard: { assertCurrent(): void; assertPreparation?(info: TestInfo): void } | undefined }>({
   preserveOnUnconfirmedExit: [false, { option: true }],
+  historyExitObservation: [false, { option: true }],
   ownedDesktopLaunchGuard: [undefined, { option: true }],
-  desktopLifetime: [async ({ trace, preserveOnUnconfirmedExit, ownedDesktopLaunchGuard }, use, testInfo) => {
+  desktopLifetime: [async ({ trace, preserveOnUnconfirmedExit, ownedDesktopLaunchGuard, historyExitObservation }, use, testInfo) => {
+    assertHistoryExitObservationScope(historyExitObservation, testInfo, trace);
+    if (historyExitObservation && preserveOnUnconfirmedExit) throw new Error('历史退出观察只允许原默认退出夹具');
+    // 默认/严格用例只失效前一观察世代，不启动记录器或任何IO。
+    if (!historyExitObservation) beginHistoryExitObservation(false, testInfo, trace);
     if (preserveOnUnconfirmedExit) {
       // 检查端口仅在显式strict分支生效，并在分配所属资源前复核；默认分支保留原文。
       // 旧strict路径保留原调用时点；只有新准备hook需要先登记本例真实墓碑。
@@ -322,23 +343,28 @@ export const test = baseTest.extend<{ desktopLifetime: void; preserveOnUnconfirm
     snippetsDiagnostics = createSnippetsNativeDiagnostics(trace, testInfo);
     pageErrors = [];
     dataDir = await mkdtemp(join(tmpdir(), 'dbark-e2e-'));
+    const exitObservation = beginHistoryExitObservation(historyExitObservation, testInfo, trace);
     try {
-      await launchDesktop();
+      await launchDesktop(undefined, testInfo);
       await use();
     } finally {
+      exitObservation?.beginTeardown(); let teardownCompleted = false;
       try {
-        if (snippetsDiagnostics) await snippetsDiagnostics.finish(testInfo.status !== testInfo.expectedStatus);
-        if (!closed) {
-          // 仅清理阶段允许放弃本例留下的草稿，具体退出测试自行核对对话框和保存结果。
-          await answerDialogs([1, 1]);
-          await quitDesktop();
+        try {
+          if (snippetsDiagnostics) await snippetsDiagnostics.finish(testInfo.status !== testInfo.expectedStatus);
+          if (!closed) {
+            // 仅清理阶段允许放弃本例留下的草稿，具体退出测试自行核对对话框和保存结果。
+            await answerDialogs([1, 1]);
+            await quitDesktop('app', testInfo);
+          }
+        } finally {
+          await forceStopOwnProcess();
+          // 删除前核对绝对路径，确保只能移除本测试创建的临时目录。
+          if (dirname(resolve(dataDir)) !== resolve(tmpdir()) || !basename(dataDir).startsWith('dbark-e2e-')) throw new Error('拒绝清理测试临时目录以外的路径');
+          await rm(dataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
         }
-      } finally {
-        await forceStopOwnProcess();
-        // 删除前核对绝对路径，确保只能移除本测试创建的临时目录。
-        if (dirname(resolve(dataDir)) !== resolve(tmpdir()) || !basename(dataDir).startsWith('dbark-e2e-')) throw new Error('拒绝清理测试临时目录以外的路径');
-        await rm(dataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
-      }
+        teardownCompleted = true;
+      } finally { if (exitObservation) { exitObservation.endTeardown(teardownCompleted); await exitObservation.finish(); } }
     }
   }, { auto: true }]
 });
