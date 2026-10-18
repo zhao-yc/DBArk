@@ -89,3 +89,11 @@ Root `node .cache/run1805-verify-v028-stream-csv-root.mjs` 在固定 `3553750` �
 原独审十二组确认三处准备边界：重启未核活动标签、listener 只查 Main 入口、failed 门仍可 detach。修正后独立重放十二组通过：错误活动 ID／可见 pane／模型／正文均拒绝；failed 门保留原 listener、私有状态和计数；扫描扩大到 src／scripts 受控源码。原 e03 证据保留；首审及复审交接 SHA-256 为 `212586b52ea4d7d2f79e5f9d4fd747abf17698c51b1b200008495d748c106472`／`e391978cfcce1e70495e6ce3d937fdf00d70c1866664bcb11b53427417db69f1`，作者修正交接 `e5f153e4b29c32598c5f210985c3d79f604a8bfcd1026ec76a0708f478c7b488`。
 
 Root `node .cache/run1810-check-keyword-native-root.mjs` 在 `3778d37` 为四文件／71 项、0 失败／跳过，类型通过；unit.log SHA-256 `292275522358a8963882ea30c9d37715d04c36049e38344e44f25d8f3d831fec`。没有运行 Playwright／列表、Electron、数据库或剪贴板，没有重复构建。新测试的真实选择器、快捷键、模块 file 请求、SQLite 与正常退出仍待验，准备不能计作原生通过。模块门不能读取／恢复 Electron 既有 listener，只有能确认测试独占 session 无既有 listener 时才能安排，受控源码扫描不能替代该前提，详见[准备范围](sql-keyword-case-native-preparation-20261018.md)。
+
+### 首次真实入口与标题栏定位修正
+
+Root 固定 `dafda32` 对 109 个已有编译文件逐一核原 `3553750` 构建摘要，随后封存 Electron／默认 app／端口预检／package 及完整编译树共 113 文件，清单 SHA-256 `52473855345ae90f31c77e436323ff250521da248b5e1f97a4aa68f81352db5e`。Main 外部加载面为 Electron、Node 内建和五类数据处理包，实际七包运行依赖闭包共 923 份 JS／TS 未见 webRequest 命名引用，证明 SHA-256 `ea33f40eca3e4759eb0b02786530279332391a0bddf17c9df6515544d56c4635`。仅使用本例新配置及无外部预加载的受控 Main；这不是任意动态代码或第三方插件的运行期 listener 枚举。
+
+`run1813-keyword-native-live-root.mjs --actual` 首次真实 upper 身份在进入偏好之前，因错误地从命令栏查“偏好设置”超时，35.5 秒失败；lower 串行未跑。原报告 SHA-256 `380ff466d61d8ae624202871ad89eacc3a75ffefab4a6cfba3762e39d932f5d5` 保留。原五个 PID 随后只读核对为当前均不存在，不能据此追认正常 will-quit／close；原失败目录保留，没有退出、强杀或清理。后核回执 SHA-256 `a67cdfa786e22ce130fd6266eebbb3d8bdfe35fdb7ceb70f37bfb1420918e2bb`。
+
+真实 App 标题栏与编译输入均确认偏好按钮属于 `.app-titlebar`，Root 仅修该测试定位及中文注释，原功能断言和产品保持。两份直接相关 RAM 测试 43 项通过，日志 SHA-256 `b3d5b6ef19e31ff89ab4ce123a5f0f04e11300f95972178c1132a8d19a436afe`；未重复类型及产品构建。修后两项真实入口另开新运行，首轮失败不改写为通过。

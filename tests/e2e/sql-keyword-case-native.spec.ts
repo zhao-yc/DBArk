@@ -74,7 +74,8 @@ async function prepareQuery(run: EditorIndentNativeRun, owner: IndentNativeOwner
 /** 默认、草稿取消和显式保存均通过真实偏好面板；偏好变更本身不得编辑正文。 */
 async function preference(run: EditorIndentNativeRun, owner: IndentNativeOwner, mode?: SqlKeywordCase) {
   const before = await snapshots(run, owner, true), page = owner.page;
-  await run.step(owner, () => page.locator('.app-commandbar').getByRole('button', { name: zh.app.text009, exact: true }).click());
+  // 偏好按钮属于真实标题栏；命令栏只含查询、连接和编辑器入口。
+  await run.step(owner, () => page.locator('.app-titlebar').getByRole('button', { name: zh.app.text009, exact: true }).click());
   const dialog = page.getByRole('dialog', { name: zh.app.text009, exact: true }), section = dialog.getByRole('region', { name: text.preferences, exact: true });
   if (mode) {
     await run.step(owner, () => section.getByLabel(text.keywordCase, { exact: true }).selectOption(mode));
