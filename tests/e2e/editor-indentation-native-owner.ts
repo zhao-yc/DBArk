@@ -1,5 +1,5 @@
 import type { ElectronApplication, Page } from '@playwright/test';
-import type { NativeStartupDiagnostic } from './editor-native-startup-diagnostics';
+import type { NativeStartupDiagnostic, NativeStartupWaitRecorder } from './editor-native-startup-diagnostics';
 
 /** 附件只保留本次失败需要的数字身份，不记录路径、URL、参数、环境或页面内容。 */
 export interface IndentNativeSourceDiagnostic {
@@ -21,6 +21,7 @@ export interface IndentNativePort {
 /** 每次应用独立持有退出/PID事实，未知时只保留现场；不借通用夹具的强停兜底。 */
 export class EditorIndentNativeRun {
   readonly owners: IndentNativeOwner[] = [];
+  startupWaits?: NativeStartupWaitRecorder;
   path?: string; retained = false; removed = false; private pending = false; private directoryIdentity?: string;
   constructor(private readonly port: IndentNativePort) {}
   /** 已获得的资源先登记再判断权限，迟到返回也不能丢掉需保留的实例/目录。 */

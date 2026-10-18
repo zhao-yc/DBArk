@@ -11,6 +11,22 @@ export interface NativeStartupDiagnostic {
   events: { kind: EventKind; page: number; elapsedMs?: number }[]; dropped: number; prepared: boolean;
 }
 
+/** 阶段0/1扫描进入/返回，2/3来源进入/返回，4/5evaluate进入/返回，6/7实际路径核验进入/返回。 */
+export type NativeStartupWaitStage = 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7;
+export interface NativeStartupWaitData { version: 1; points: [NativeStartupWaitStage, number, number][]; dropped: number; }
+export interface NativeStartupWaitRecorder { readonly data: NativeStartupWaitData; record(stage: NativeStartupWaitStage, call: number): void; seal(): void; }
+/** 仅由原guard之后同步调用；只取已验证时钟缓存和本地墓碑，不调用权限门、SDK或新时钟。 */
+export function createNativeStartupWaits(elapsedMs: (() => number | undefined) | undefined, alive: () => boolean): NativeStartupWaitRecorder {
+  const data: NativeStartupWaitData = { version: 1, points: [], dropped: 0 }; let sealed = false;
+  return { data, seal() { sealed = true; }, record(stage, call) {
+    if (sealed) return;
+    if (!alive()) { sealed = true; return; }
+    const elapsed = elapsedMs?.();
+    if (!Number.isSafeInteger(stage) || stage < 0 || stage > 7 || !Number.isSafeInteger(call) || call < 1 || call > 8 || elapsed === undefined || !Number.isSafeInteger(elapsed) || elapsed < 0 || elapsed >= 120000) return;
+    if (data.points.length < 64) data.points.push([stage, call, elapsed]); else data.dropped = Math.min(1024, data.dropped + 1);
+  } };
+}
+
 /** 本地缓存URL只分类，不解析/输出其中的路径、查询参数或正文。 */
 function urlKind(value: string): UrlKind {
   return value === 'about:blank' || !value ? 'blank' : value.startsWith('file:') ? 'file' : value.startsWith('devtools:') ? 'devtools' : 'other';
@@ -56,11 +72,14 @@ export function observeNativeStartup(application: ElectronApplication, current: 
 }
 
 /** afterEach只序列化已捕获的内存；不调用owner、Page、Electron或文件系统端口。 */
-export async function attachNativeStartupDiagnostics(info: Pick<TestInfo, 'attach' | 'errors'>, run: Pick<EditorIndentNativeRun, 'owners'>) {
-  const owners = run.owners.slice(0, 2).flatMap((owner, index) => owner.startupDiagnostics ? [{ owner: index + 1, startup: owner.startupDiagnostics, sourceDiagnostics: (owner.sourceDiagnostics ?? []).slice(-1) }] : []);
-  if (!owners.length) return;
-  const body = Buffer.from(JSON.stringify({ version: 1, owners }));
+export async function attachNativeStartupDiagnostics(info: Pick<TestInfo, 'attach' | 'errors'>, run: Pick<EditorIndentNativeRun, 'owners' | 'startupWaits'>) {
   try {
+    // afterEach原scope已retain；先封存纯内存轨迹，迟到回包不能再补写该case。
+    run.startupWaits?.seal();
+    const owners = run.owners.slice(0, 2).flatMap((owner, index) => owner.startupDiagnostics ? [{ owner: index + 1, startup: owner.startupDiagnostics, sourceDiagnostics: (owner.sourceDiagnostics ?? []).slice(-1) }] : []);
+    const waits = run.startupWaits?.data;
+    if (!owners.length && !waits?.points.length) return;
+    const body = Buffer.from(JSON.stringify({ version: 1, owners, ...(waits?.points.length ? { waits } : {}) }));
     if (body.byteLength > 8192) throw Error('启动观察附件超过固定字节上限');
     await info.attach('原生启动有界观察', { body, contentType: 'application/json' });
   }

@@ -9,7 +9,7 @@ import type { AppSettings } from '../../src/shared/contracts';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 import { EditorIndentNativeRun, recordIndentNativePageError, type IndentNativeOwner, type IndentNativeSourceDiagnostic } from './editor-indentation-native-owner';
-import { observeNativeStartup } from './editor-native-startup-diagnostics';
+import { observeNativeStartup, createNativeStartupWaits } from './editor-native-startup-diagnostics';
 export { attachNativeStartupDiagnostics } from './editor-native-startup-diagnostics';
 import { sealEditorIndentLaunchIdentity } from './editor-indentation-native-identity';
 import { openNativeProgress, type NativeProgressStage, type NativeProgressWriter } from '../../scripts/native-editor-progress.mjs';
@@ -30,7 +30,7 @@ export function createEditorIndentNativeRun(binding: { assertCurrent(): void; el
   // 新专项可显式传Root批准清单；未传时保留原环境读取路径，不伪造旧专项开关。
   const explicitApproval = approval && Object.freeze({ manifestPath: approval.manifestPath, approvedHash: approval.approvedHash });
   let parent = '', run!: EditorIndentNativeRun, identity: Awaited<ReturnType<typeof sealEditorIndentLaunchIdentity>> | undefined;
-  const captured = new WeakMap<IndentNativeOwner, { application: IndentNativeOwner['application']; child: ReturnType<IndentNativeOwner['application']['process']>; launcher: number; main?: number; page?: IndentNativeOwner['page']; marker: string; window?: { id: number; contents: number }; pids: Set<number>; quitting: boolean; closed: boolean; willQuit: boolean; startup?: ReturnType<typeof observeNativeStartup> }>();
+  const captured = new WeakMap<IndentNativeOwner, { application: IndentNativeOwner['application']; child: ReturnType<IndentNativeOwner['application']['process']>; launcher: number; main?: number; page?: IndentNativeOwner['page']; marker: string; window?: { id: number; contents: number }; pids: Set<number>; quitting: boolean; closed: boolean; willQuit: boolean; startup?: ReturnType<typeof observeNativeStartup>; waitSource?: number }>();
   /** 只做同步归属检查；run.assert再叠加sticky retained，避免递归调用授权门。 */
   function base(owner?: IndentNativeOwner) {
     binding.assertCurrent(); if (!owner) return;
@@ -42,6 +42,8 @@ export function createEditorIndentNativeRun(binding: { assertCurrent(): void; el
   }
   const guard = (owner?: IndentNativeOwner, closed = false) => run.assert(owner, closed);
   const progressActive = process.env.DBARK_NATIVE_EDITOR_PROGRESS === '1' && !(process.argv ?? []).some(value => value === '--list' || value.startsWith('--list='));
+  const waits = progressActive ? createNativeStartupWaits(binding.elapsedMs, () => !run.retained && !run.removed) : undefined;
+  let scanCall = 0, sourceCall = 0;
   let progress: NativeProgressWriter | undefined;
   let progressGuard = () => guard();
   /** 仅消费已登记的数字状态；日志没有任何清理/退出/查PID权限，失败直接保留原资源。 */
@@ -52,6 +54,9 @@ export function createEditorIndentNativeRun(binding: { assertCurrent(): void; el
     const pids = [...new Set(run.owners.flatMap(value => [...value.ids]))].sort((a, b) => a - b);
     progress!.record(stage, { owners: run.owners.length, registeredPids: pids.length, pids, confirmedOwners: run.owners.filter(value => value.confirmed).length, readyOwners: run.owners.filter(value => value.ready).length, closedOwners: run.owners.filter(value => value.closed).length, retained: run.retained, removed: run.removed });
     guard(owner, closed);
+    // 原phase的最后一次guard已验证时钟；不添加门调用或诊断文件写入。
+    if (stage === 'scan.begin') { scanCall = Math.min(9, scanCall + 1); waits?.record(0, scanCall); }
+    else if (stage === 'scan.done') waits?.record(1, scanCall);
   }
   /** 目录读取完成后先查完整门，随后才可继续下一次IO或launch/rm。 */
   async function assertDirectory(path: string) {
@@ -80,13 +85,19 @@ export function createEditorIndentNativeRun(binding: { assertCurrent(): void; el
   /** 启动器与实际主进程分别封存；Windows Playwright 的 shell ChildProcess 不是应用主进程。 */
   async function sampleSource(owner: IndentNativeOwner): Promise<{ ids: number[]; complete: boolean }> {
     guard(owner); const own = captured.get(owner)!;
+    // own.page尚未设置时，依次是本owner的launch来源与controller.record来源；准备/退出采样不扩范围。
+    const call = waits && !own.page ? (sourceCall = Math.min(9, sourceCall + 1)) : undefined;
+    if (call !== undefined) { own.waitSource = call; waits!.record(2, call); waits!.record(4, call); }
     const actual = await own.application.evaluate(({ app, BrowserWindow }) => ({ executable: process.execPath, appPath: app.getAppPath(), resources: process.resourcesPath, packaged: app.isPackaged, pid: process.pid, parent: process.ppid, platform: process.platform, metrics: app.getAppMetrics().map(value => value.pid), windows: BrowserWindow.getAllWindows().map(window => ({ id: window.id, contents: window.webContents.id, renderer: window.webContents.getOSProcessId() })) }));
     rememberObservedPids(owner, [actual.pid, ...actual.metrics, ...actual.windows.map(window => window.renderer)]); guard(owner);
+    if (call !== undefined) waits!.record(5, call);
     const diagnostic: IndentNativeSourceDiagnostic = { phase: !own.page ? '启动来源' : own.window ? '已准备来源' : '窗口准备', complete: false,
       expected: { launcherPid: own.launcher, mainPid: own.main, platform: process.platform, relation: process.platform === 'win32' ? '启动器父进程' : '同一进程', window: own.window && { ...own.window } },
       observed: { mainPid: actual.pid, parentPid: actual.parent, platform: actual.platform, metrics: actual.metrics.slice(0, 64) } };
     const diagnostics = owner.sourceDiagnostics ??= []; diagnostics.push(diagnostic); if (diagnostics.length > 12) diagnostics.shift();
+    if (call !== undefined) waits!.record(6, call);
     await identity!.assertActual(actual); guard(owner);
+    if (call !== undefined) waits!.record(7, call);
     if (actual.platform !== process.platform || !Number.isSafeInteger(actual.pid) || actual.pid <= 0 || (process.platform === 'win32' ? actual.parent !== own.launcher || actual.pid === own.launcher : actual.pid !== own.launcher) || own.main !== undefined && actual.pid !== own.main) throw Error('本owner实际主进程与原启动器关系未知');
     own.main ??= actual.pid;
     // 归属只取上面的原来源门；完整renderer证明仍须下方原条件全部成立，不能从线索集合推导。
@@ -114,6 +125,7 @@ export function createEditorIndentNativeRun(binding: { assertCurrent(): void; el
     }
     const result = await sampleSource(owner); guard(owner);
     if (captured.get(owner)!.page && !result.complete) throw Error('本owner实际metrics PID未知或renderer来源未证实');
+    const own = captured.get(owner)!; if (!own.page && own.waitSource !== undefined) waits?.record(3, own.waitSource);
     return result.ids;
   }
   run = new EditorIndentNativeRun({
@@ -187,5 +199,5 @@ export function createEditorIndentNativeRun(binding: { assertCurrent(): void; el
       guard(); if (failure) throw failure; phase('close.done');
     },
     remove: async path => { await assertDirectory(path); guard(); await rm(path, { recursive: true, force: false }); guard(); try { await lstat(path); guard(); } catch (reason) { guard(); if ((reason as NodeJS.ErrnoException).code === 'ENOENT') return; throw reason; } throw Error('本例目录仍存在，未完成清理'); },
-  }); return run;
+  }); if (waits) run.startupWaits = waits; return run;
 }
