@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 import { dirname, basename, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { createHash } from 'node:crypto';
+import { createRequire } from 'node:module';
 import { runInNewContext } from 'node:vm';
 import ts from 'typescript';
 import { describe, expect, it, vi } from 'vitest';
@@ -47,6 +48,93 @@ function fixture(mode: '正常' | '无握手关闭' | 'PID权限错误' | '链�
   const run = runInNewContext(method('createEditorIndentNativeRun') + '\ncreateEditorIndentNativeRun(binding)', { ...context, binding: { assertCurrent } }) as EditorIndentNativeRun;
   return { run, launch, preflight, assertCurrent, removed, applications, probe, directory, bytes, exe, manifestPath, manifest, environment, context, root, project, appPath, resources, onLaunch: (hook: typeof applicationHook) => { applicationHook = hook; }, countOwned: () => ownedStats, pauseOwned: (at: number) => { blocked = at; waiting = new Promise(done => { released = done; }); return { entered: new Promise<void>(done => { entered = done; }), release: () => released() }; } };
 }
+
+let sdkSource: { methods: Map<string, string>; toImpl: string; closeCallback: string; sha256: string } | undefined;
+/** 仅抽取锁定主包真实方法，不加载Playwright或创建真实连接；所有映射/事件均为RAM。 */
+function actualSdkSource() {
+  if (sdkSource) return sdkSource;
+  const require = createRequire(import.meta.url), packagePath = require.resolve('playwright-core/package.json', { paths: [dirname(require.resolve('@playwright/test'))] });
+  expect(JSON.parse(readFileSync(packagePath, 'utf8')).version).toBe('1.64.0');
+  const source = readFileSync(join(dirname(packagePath), 'lib/coreBundle.js'), 'utf8'), tree = ts.createSourceFile('sdk.js', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.JS);
+  const classes = new Map<string, ts.ClassExpression>(); let toImpl = '', closeCallback = '';
+  function visit(node: ts.Node) {
+    if (ts.isBinaryExpression(node) && ts.isClassExpression(node.right) && ['Dispatcher', 'ElectronApplication', 'ElectronApplication2', 'ElectronApplicationDispatcher'].includes(node.left.getText(tree))) classes.set(node.left.getText(tree), node.right);
+    if (ts.isBinaryExpression(node) && node.left.getText(tree) === 'clientConnection.toImpl' && ts.isArrowFunction(node.right)) toImpl = node.right.getText(tree);
+    ts.forEachChild(node, visit);
+  }
+  visit(tree); const methods = new Map<string, string>();
+  for (const [owner, name] of [['ElectronApplication', 'process'], ['ElectronApplication2', 'process'], ['Dispatcher', '_dispose'], ['Dispatcher', '_disposeRecursively']]) {
+    const method = classes.get(owner)?.members.find(node => ts.isMethodDeclaration(node) && node.name.getText(tree) === name);
+    if (!method) throw Error('锁定SDK原方法缺失'); methods.set(owner + '.' + name, method.getText(tree));
+  }
+  const constructor = classes.get('ElectronApplicationDispatcher')?.members.find(ts.isConstructorDeclaration); if (!constructor) throw Error('锁定SDK原构造器缺失');
+  function findClose(node: ts.Node) { if (ts.isCallExpression(node) && node.expression.getText(tree) === 'this.addObjectListener' && node.arguments[0]?.getText(tree) === 'ElectronApplication.Events.Close' && ts.isArrowFunction(node.arguments[1])) closeCallback = node.arguments[1].getText(tree); ts.forEachChild(node, findClose); }
+  findClose(constructor); if (!toImpl || !closeCallback) throw Error('锁定SDK原映射或关闭回调缺失');
+  return sdkSource = { methods, toImpl, closeCallback, sha256: createHash('sha256').update(source).digest('hex') };
+}
+/** 复用原client process/server process/toImpl/dispose/close回调，显式分离服务端dispose和客户端close投递。 */
+function disposedSdk(application: any) {
+  const source = actualSdkSource(), child = application.process(), map = new Map(), client: any = {}, server: any = { _process: child }, queued: string[] = [];
+  const method = (owner: string, name: string, context: Record<string, unknown> = {}) => runInNewContext('({' + source.methods.get(owner + '.' + name)! + '})[' + JSON.stringify(name) + ']', context);
+  server.process = method('ElectronApplication', 'process'); server.closeReason = () => undefined;
+  const dispatcher: any = { _object: server, _guid: 'RAM-owned-app', _disposed: false, _eventListeners: [], _dispatchers: new Map(), _gcBucket: 'ElectronApplication', connection: { _dispatcherByGuid: map, _dispatcherByObject: new Map(), _dispatchersByBucket: new Map(), sendDispose: () => queued.push('dispose') }, _onDispose() {}, _dispatchEvent: (event: string) => queued.push(event) };
+  dispatcher._disposeRecursively = method('Dispatcher', '_disposeRecursively', { assert: (value: boolean) => { if (!value) throw Error('重复dispose'); }, eventsHelper: { removeEventListeners: () => {} } });
+  dispatcher._dispose = method('Dispatcher', '_dispose', { TargetClosedError: Error });
+  client.toImpl = runInNewContext('(' + source.toImpl + ')', { Connection: class {}, clientConnection: client, dispatcherConnection: dispatcher.connection });
+  application._guid = dispatcher._guid; application._connection = client;
+  const raw = method('ElectronApplication2', 'process'); application.process = vi.fn(function (this: unknown) { return raw.call(this); }); map.set(dispatcher._guid, dispatcher);
+  const callback = runInNewContext('(function(){return ' + source.closeCallback + ';})').call(dispatcher);
+  return { child, getter: application.process as ReturnType<typeof vi.fn>, rawGetter: () => raw.call(application), dispose: () => callback(), deliver: () => { for (const event of queued.splice(0)) if (event === 'close') application.emit('close'); }, sha256: source.sha256 };
+}
+
+describe('关闭SDK生命周期窄修（RAM）', () => {
+  it('原具体反例：真实SDK映射dispose并投递close后，同一所属正常退出应可完成', async () => {
+    const f = fixture(); let sdk!: ReturnType<typeof disposedSdk>;
+    f.onLaunch(app => { sdk = disposedSdk(app); }); const owner = await f.run.launch(); let readsAtDispose = 0;
+    f.applications[0].close = vi.fn(async () => { sdk.dispose(); readsAtDispose = sdk.getter.mock.calls.length; sdk.deliver(); });
+    await f.run.close(owner); expect(owner.confirmed).toBe(true); expect(f.run.retained).toBe(false); expect(sdk.getter).toHaveBeenCalledTimes(readsAtDispose); expect(() => sdk.rawGetter()).toThrow('_object');
+    expect(sdk.sha256).toBe('2325ca4c1c83070e89dc49fb82525508f0a68e0cf12e2a624277968da216b7e0'); expect(f.probe).toHaveBeenCalledTimes(3); expect(f.removed).not.toHaveBeenCalled();
+  });
+  it('合法quit已发起但客户端close尚未投递时，dispose间隙也只用已封存来源', async () => {
+    const f = fixture(); let sdk!: ReturnType<typeof disposedSdk>;
+    f.onLaunch(app => { sdk = disposedSdk(app); }); const owner = await f.run.launch(), app = f.applications[0], original = app.evaluate; let readsAtDispose = 0, gap = false;
+    app.evaluate = async (fn: Function, arg: unknown) => { const value = await original(fn, arg); if (String(fn).includes('setTimeout')) { sdk.dispose(); readsAtDispose = sdk.getter.mock.calls.length; gap = !owner.closed; expect(() => sdk.rawGetter()).toThrow('_object'); } return value; };
+    app.close = vi.fn(async () => { expect(owner.ready).toBe(true); expect(owner.closed).toBe(false); sdk.deliver(); });
+    await f.run.close(owner); expect(gap).toBe(true); expect(owner.confirmed).toBe(true); expect(sdk.getter).toHaveBeenCalledTimes(readsAtDispose); expect(app.close).toHaveBeenCalledOnce(); expect(f.probe).toHaveBeenCalledTimes(3); expect(f.removed).not.toHaveBeenCalled();
+  });
+  it('正常quit阶段之外的SDK映射失效仍传播真实TypeError并永久停链', async () => {
+    const f = fixture(); let sdk!: ReturnType<typeof disposedSdk>;
+    f.onLaunch(app => { sdk = disposedSdk(app); }); const owner = await f.run.launch(); sdk.dispose();
+    await expect(f.run.close(owner)).rejects.toMatchObject({ name: 'TypeError' }); expect(f.run.retained).toBe(true); expect(owner.confirmed).toBe(false); expect(f.applications[0].close).not.toHaveBeenCalled(); expect(f.probe).not.toHaveBeenCalled(); expect(f.removed).not.toHaveBeenCalled();
+  });
+  it('伪造公共closed不能进入私有quit阶段或以缓存身份放行已失效SDK', async () => {
+    const f = fixture(); let sdk!: ReturnType<typeof disposedSdk>;
+    f.onLaunch(app => { sdk = disposedSdk(app); }); const owner = await f.run.launch(); owner.closed = true; sdk.dispose();
+    await expect(f.run.close(owner)).rejects.toThrow('退出阶段'); expect(owner.confirmed).toBe(false); expect(f.run.retained).toBe(true); expect(f.applications[0].close).not.toHaveBeenCalled(); expect(f.probe).not.toHaveBeenCalled(); expect(f.removed).not.toHaveBeenCalled();
+  });
+  it('正常quit前真实close永久停链，改回公共closed也不能恢复', async () => {
+    const f = fixture(); let sdk!: ReturnType<typeof disposedSdk>;
+    f.onLaunch(app => { sdk = disposedSdk(app); }); const owner = await f.run.launch(); sdk.dispose(); sdk.deliver(); expect(f.run.retained).toBe(true); owner.closed = false;
+    await expect(f.run.close(owner)).rejects.toThrow('退出阶段'); expect(owner.confirmed).toBe(false); expect(f.applications[0].close).not.toHaveBeenCalled(); expect(f.probe).not.toHaveBeenCalled(); expect(f.removed).not.toHaveBeenCalled();
+  });
+  it.each(['application', 'page', 'childPid'] as const)('关闭阶段%s漂移仍拒绝，不能因SDK已dispose省略原资源身份', async target => {
+    const f = fixture(); let sdk!: ReturnType<typeof disposedSdk>;
+    f.onLaunch(app => { sdk = disposedSdk(app); }); const owner = await f.run.launch(), app = f.applications[0];
+    app.close = vi.fn(async () => { sdk.dispose(); if (target === 'application') owner.application = {} as typeof owner.application; if (target === 'page') owner.page = {} as typeof owner.page; if (target === 'childPid') sdk.child.pid = 999; sdk.deliver(); });
+    await expect(f.run.close(owner)).rejects.toThrow('身份已变化'); expect(owner.confirmed).toBe(false); expect(f.run.retained).toBe(true); expect(app.close).toHaveBeenCalledOnce(); expect(f.probe).not.toHaveBeenCalled(); expect(f.removed).not.toHaveBeenCalled();
+  });
+  it('私有关闭已确认后仍消费原TestInfo门，原授权失效就不查PID或清理', async () => {
+    const f = fixture(); let sdk!: ReturnType<typeof disposedSdk>;
+    f.onLaunch(app => { sdk = disposedSdk(app); }); const owner = await f.run.launch(), app = f.applications[0];
+    app.close = vi.fn(async () => { sdk.dispose(); sdk.deliver(); f.assertCurrent.mockImplementation(() => { throw Error('原TestInfo授权已失效'); }); });
+    await expect(f.run.close(owner)).rejects.toThrow('原TestInfo授权已失效'); expect(owner.ready).toBe(true); expect(owner.closed).toBe(true); expect(owner.confirmed).toBe(false); expect(f.run.retained).toBe(true); expect(f.probe).not.toHaveBeenCalled(); expect(f.removed).not.toHaveBeenCalled();
+  });
+  it('没有原will-quit握手的真实close仍拒绝，不吞SDK生命周期错误补签正常退出', async () => {
+    const f = fixture(); let sdk!: ReturnType<typeof disposedSdk>;
+    f.onLaunch(app => { sdk = disposedSdk(app); }); const owner = await f.run.launch(), app = f.applications[0]; app.runtime.quit = () => { sdk.dispose(); sdk.deliver(); };
+    await expect(f.run.close(owner)).rejects.toThrow('未取得will-quit'); expect(owner.ready).toBe(false); expect(owner.closed).toBe(true); expect(owner.confirmed).toBe(false); expect(f.run.retained).toBe(true); expect(app.close).not.toHaveBeenCalled(); expect(f.probe).not.toHaveBeenCalled(); expect(f.removed).not.toHaveBeenCalled();
+  });
+});
 describe('缩进原生适配器的实际边界函数（RAM）', () => {
   it('固定脚本唯一参数、正常子进程完成前不通过；失败原样拒绝', async () => {
     let done!: () => void; const child = vi.fn(() => new Promise<void>(yes => { done = yes; })), executable = {};
