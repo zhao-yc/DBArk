@@ -1,4 +1,6 @@
 import { QueryFileSources } from './queryFileSources';
+import { ResultSqlPreviews } from './resultSqlPreviews';
+import { resultSqlZh } from '../shared/resultSql.zh-CN';
 import { tableCreateMessages } from '../shared/tableCreate';
 import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, safeStorage } from 'electron';
 import { copyInsertSql } from './copyInsertSql';
@@ -56,6 +58,7 @@ const sessions = new Map<string, { connectionId: string }>();
 // 历史上下文由引擎在会话互斥内报告，不能由渲染进程提供或从较早的标签状态推测。
 const pendingQueryHistory = new Map<string, { entry: HistoryEntry; currentStatement: boolean; executionSqlReceived: boolean }>();
 const files = new Map<string, { path: string; purpose: string; format?: string }>();
+const resultSqlPreviews = new ResultSqlPreviews(files);
 const queryFileOperations = new Set<Promise<unknown>>();
 const exportReservations = new ExportReservations();
 const preparingTasks = new Map<string, { cancelled: boolean; failure?: string; connectionIds?: string[] }>();
@@ -136,6 +139,14 @@ async function chooseFile(input: any): Promise<{ token: string; name: string } |
   return { token, name: basename(filePath) };
 }
 
+/** SQL结果文件选择绑定本主文档和准确预览；原生对话框等待中撤销的映射不能领取迟到令牌。 */
+async function chooseResultSqlFile(input: any, owner: MainInvocation | undefined) {
+  columnsMain.assertCapturedOwner(owner); resultSqlPreviews.beginChoice(input.resultSqlPreviewId, owner!.owner.document);
+  const selected = await chooseFile(input);
+  try { columnsMain.assertCapturedOwner(owner); if (selected) resultSqlPreviews.bindFile(input.resultSqlPreviewId, owner!.owner.document, selected.token); return selected; }
+  catch (error) { if (selected) files.delete(selected.token); throw error; }
+}
+
 /** 布局请求到达即先撤销空闲依据；包括校验失败，只有完整保存成功才恢复可信标签事实。 */
 function validateMainCommand(command: string, input: unknown) {
   if (command === 'settings.save') rendererSettingsCurrent = false;
@@ -166,6 +177,13 @@ function registerQueryFileSourceTask(taskId: string, command: Command): void {
 
 /** 分派前检查配置保存锁，防止检查通过后另一个请求用旧凭据抢先建连。 */
 async function dispatch(command: Command, input: any, columns?: MainInvocation): Promise<unknown> {
+  // 结果SQL预览与释放仅处理已返回快照，不经连接、任务或数据库broker。
+  if (command === 'files.previewResultSql' || command === 'files.releaseResultSql') {
+    columnsMain.assertCapturedOwner(columns);
+    if (command === 'files.releaseResultSql') return resultSqlPreviews.release(input.previewId, columns!.owner.document);
+    if (shuttingDown) throw Error(resultSqlZh.shuttingDown);
+    return resultSqlPreviews.issue(input, columns!.owner.document);
+  }
   // 来源释放只撤销内存能力，配置保存和退出收尾时也必须可用，不建立任务或历史。
   if (command === 'table.copySourceRelease' || command === 'files.releaseExportColumns') return broker.request(command, input);
   // 确认与释放不新建连接或任务，不受配置保存锁阻塞；归属由引擎在取消前校验。
@@ -375,7 +393,7 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
       finally { stateFlushed = undefined; }
       return;
     }
-    case 'files.choose': return chooseFile(input);
+    case 'files.choose': return input.resultSqlPreviewId ? chooseResultSqlFile(input, columns) : chooseFile(input);
     case 'files.path': { const file = files.get(input.token); if (!file) throw new Error('文件选择已失效，请重新选择'); return file.path; }
     case 'files.readQuery': return queryFileOperation(() => readQueryFile(resolveFileToken(files, input.fileToken, 'query', 'sql'), input.encoding));
     case 'files.writeQuery': return queryFileOperation(() => writeSelectedQuery(input));
@@ -388,6 +406,10 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
     case 'files.import':
     case 'files.export':
     case 'files.exportResult': {
+      if (command === 'files.exportResult' && input.format === 'sql') {
+        columnsMain.assertCapturedOwner(columns);
+        input = { ...input, filePath: resultSqlPreviews.consume(input, columns!.owner.document) }; break;
+      }
       const expected = command === 'files.export' || command === 'files.exportResult' ? 'export' : 'import';
       input = { ...input, filePath: resolveFileToken(files, input.fileToken, expected) }; break;
     }
@@ -414,6 +436,7 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
     // 文件路径归一化期间的取消在主进程捕获，不能丢失后继续发送用户 SQL。
     if (preparing.cancelled) throw new Error('任务在准备阶段已取消，尚未发送用户 SQL；原目标文件保持不变');
     connectionConfig.assertAvailable(requestConnectionId);
+    if (command === 'files.exportResult' && input.format === 'sql') columnsMain.assertCapturedOwner(columns);
   // 新建表在第一次等待前消费主进程能力；目的和修订仍由引擎独立核验。
   if (command === 'schema.tableCreate.apply' || command === 'schema.tableCopyData.apply') structureTokens.delete(input.previewToken);
     if (command === 'table.apply') {
@@ -505,7 +528,7 @@ async function createWindow(): Promise<void> {
   window.webContents.session.setPermissionCheckHandler(() => false);
   window.once('ready-to-show', () => window?.show());
   window.on('close', event => { if (!shutdownComplete) { event.preventDefault(); app.quit(); } });
-  window.on('closed', () => { window = undefined; files.clear(); });
+  window.on('closed', () => { window = undefined; resultSqlPreviews.clear(); files.clear(); });
   await window.loadURL(rendererURL);
 }
 
@@ -601,7 +624,8 @@ else {
         if (!window || event.sender !== window.webContents || event.senderFrame !== window.webContents.mainFrame || event.senderFrame?.url !== rendererURL) throw new Error('不允许的请求来源');
         if (!payload || typeof payload !== 'object' || !('command' in payload) || !('input' in payload) || typeof payload.command !== 'string') throw new Error('请求格式无效');
         const fileCancel = Boolean(payload.command === 'query.cancel' && payload.input && typeof payload.input === 'object' && 'taskId' in payload.input && typeof payload.input.taskId === 'string' && tasks.get(payload.input.taskId)?.kind.startsWith('queryFileSources.'));
-        if (payload.command.startsWith('schema.columns.')||payload.command.startsWith('table.presets.')||payload.command.startsWith('queryFileSources.')||fileCancel) columns = columnsMain.capture(event);
+        const resultSql = payload.command === 'files.previewResultSql' || payload.command === 'files.releaseResultSql' || (payload.command === 'files.exportResult' || payload.command === 'files.choose') && !!payload.input && typeof payload.input === 'object' && ('format' in payload.input && payload.input.format === 'sql') && (payload.command === 'files.exportResult' || 'resultSqlPreviewId' in payload.input);
+        if (payload.command.startsWith('schema.columns.')||payload.command.startsWith('table.presets.')||payload.command.startsWith('queryFileSources.')||fileCancel||resultSql) columns = columnsMain.capture(event);
         const input = validateMainCommand(payload.command, payload.input);
         const operation=dispatch(payload.command as Command,input,columns),local=payload.command==='search.savedQueries'||payload.command==='search.savedQueriesContinue'||payload.command==='queries.page'||payload.command==='queries.pageContinue'||payload.command==='history.page'||payload.command==='history.pageContinue';if(local)localSearchOperations.add(operation);
         try {
@@ -617,6 +641,12 @@ else {
             catch (error) { await columnsMain.rejectReply(columns, error); }
           }
           if (payload.command.startsWith('queryFileSources.') || fileCancel) columnsMain.assertCapturedOwner(columns);
+          if (resultSql) try { columnsMain.assertCapturedOwner(columns); } catch (error) {
+            // 仅撤销本次未发布的能力，迟到旧失败不能清掉同文档其他导出窗口的新预览。
+            if (payload.command === 'files.previewResultSql' && result && typeof result === 'object' && 'previewId' in result && typeof result.previewId === 'string') resultSqlPreviews.release(result.previewId, columns!.owner.document);
+            if (payload.command === 'files.choose' && input && typeof input === 'object' && 'resultSqlPreviewId' in input && typeof input.resultSqlPreviewId === 'string') resultSqlPreviews.release(input.resultSqlPreviewId, columns!.owner.document);
+            throw error;
+          }
           return { ok: true, result };
         } finally { columns?.presetPublication?.release();if(local)localSearchOperations.delete(operation); }
       } catch (error) {

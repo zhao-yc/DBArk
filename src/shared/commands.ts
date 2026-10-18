@@ -44,6 +44,7 @@ export const publicCommands: Record<Command, true> = {
   'files.exportColumns': true, 'files.releaseExportColumns': true,
   'files.choose': true, 'files.path': true, 'files.preview': true, 'files.import': true, 'files.export': true, 'files.exportResult': true,
   'files.readQuery': true, 'files.writeQuery': true,
+  'files.previewResultSql': true, 'files.releaseResultSql': true,
   'excel.sheets': true, 'excel.preview': true, 'excel.import': true, 'excel.export': true,
   'snippets.list': true, 'snippets.save': true, 'snippets.delete': true,
   'queries.list': true, 'queries.save': true, 'queries.delete': true, 'history.list': true, 'tasks.list': true, 'settings.get': true, 'settings.save': true
