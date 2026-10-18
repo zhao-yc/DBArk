@@ -37,6 +37,8 @@ export function wordHighlighterHarness(core:Awaited<ReturnType<typeof monacoWord
   contribution=new scope.exports.Contribution(editor,{}, {documentHighlightProvider:{ordered:()=>[provider]},multiDocumentHighlightProvider:{ordered:()=>[]}}, {getFocusedCodeEditor:()=>focused?editor:null,listCodeEditors:()=>[editor]}, {createModelReference:async()=>({object:{textEditorModel:model},dispose(){references++;}})}, {getValue:()=>0,onDidChangeConfiguration:subscribe('configuration')}, {error(error:unknown){reported.push(error);}});
   return{common,editor,contribution,get highlighter(){return contribution.wordHighlighter;},reported,notifications,ranges,get requests(){return requests;},get references(){return references;},get hasHighlights(){return context;},
     fire(event:'focus'|'cursor'){focused=true;events.get(event).fire({source:'api',reason:3});},
+    /** 沿实际Contribution恢复入口，保留其硬编码250毫秒恢复高亮延时。 */
+    restore(){focused=true;contribution.restoreViewState(true);},
     unbind(){focused=false;active=false;events.get('model').fire({oldModelUrl:model.uri,newModelUrl:null});},
     dispose(){focused=false;contribution.dispose();for(const emitter of emitters)emitter.dispose();}};
 }

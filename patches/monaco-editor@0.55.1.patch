@@ -1,5 +1,5 @@
 diff --git a/esm/vs/editor/contrib/wordHighlighter/browser/wordHighlighter.js b/esm/vs/editor/contrib/wordHighlighter/browser/wordHighlighter.js
-index 9687c56..eb76f5a 100644
+index 9687c56..c0200da 100644
 --- a/esm/vs/editor/contrib/wordHighlighter/browser/wordHighlighter.js
 +++ b/esm/vs/editor/contrib/wordHighlighter/browser/wordHighlighter.js
 @@ -2,7 +2,7 @@ import { localize2 } from '../../../../nls.js';
@@ -39,3 +39,17 @@ index 9687c56..eb76f5a 100644
              }
          }));
          this.toUnhook.add(editor.onDidChangeModelContent((e) => {
+@@ -257,7 +267,12 @@ let WordHighlighter = class WordHighlighter {
+             return;
+         }
+         this.runDelayer.cancel();
+-        this.runDelayer.trigger(() => { this._run(false, delay); });
++        this.runDelayer.trigger(() => { this._run(false, delay); }).catch(error => {
++            // 仅消费本延时Promise的真实取消；其它错误继续走Monaco正式报告通道。
++            if (!(error instanceof CancellationError)) {
++                errorHandler.onUnexpectedError(error);
++            }
++        });
+     }
+     stop() {
+         if (this.occurrencesHighlightEnablement === 'off') {
