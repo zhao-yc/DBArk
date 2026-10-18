@@ -1,5 +1,7 @@
 # 关键字大小写偏好原生验收准备
 
+后续 Root 在修正真实标题栏定位后，固定 `41282a0` 的 Windows 源码两条正式身份已零重试通过，包含默认／大小写、一次 Undo、迟到原模块回包、SQLite9 和独立重启活动身份。原首败和准确观察边界见[实际验收](../../tests/integration/acceptance-sql-keyword-case-native-root-20261018.md)。以下保留准备阶段当时事实，安装包与 macOS 仍未验。
+
 本片基于Root 0.28已公开提交 `2cf39e0c22001f33c707dcba1d87b4376f22231a`，在普通独立clone、分支 `codex/employee4-keyword-case-native-prep-20261018` 准备。只新增用例、独立门、纯样例和RAM护栏，不修改产品、原原生用例、运行时、工作流或任何现有文件。本轮未运行原生验收。
 
 ## 两个原生用例的计划

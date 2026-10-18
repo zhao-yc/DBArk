@@ -97,3 +97,5 @@ Root 固定 `dafda32` 对 109 个已有编译文件逐一核原 `3553750` 构建
 `run1813-keyword-native-live-root.mjs --actual` 首次真实 upper 身份在进入偏好之前，因错误地从命令栏查“偏好设置”超时，35.5 秒失败；lower 串行未跑。原报告 SHA-256 `380ff466d61d8ae624202871ad89eacc3a75ffefab4a6cfba3762e39d932f5d5` 保留。原五个 PID 随后只读核对为当前均不存在，不能据此追认正常 will-quit／close；原失败目录保留，没有退出、强杀或清理。后核回执 SHA-256 `a67cdfa786e22ce130fd6266eebbb3d8bdfe35fdb7ceb70f37bfb1420918e2bb`。
 
 真实 App 标题栏与编译输入均确认偏好按钮属于 `.app-titlebar`，Root 仅修该测试定位及中文注释，原功能断言和产品保持。两份直接相关 RAM 测试 43 项通过，日志 SHA-256 `b3d5b6ef19e31ff89ab4ce123a5f0f04e11300f95972178c1132a8d19a436afe`；未重复类型及产品构建。修后两项真实入口另开新运行，首轮失败不改写为通过。
+
+修后固定 `41282a0` 的新 run1818 已两项通过，10.589／10.710 秒，总 22.134 秒，0 重试／跳过。真实默认／大写／小写、单次 Undo／Redo、原 file 模块回包的跨标签迟到拒绝、SQLite9 和同目录独立重启的活动身份均已核；四 owner 正常退出及原 PID 门、两个成功目录清理通过，原失败现场保留。Root 原报告后核和独立 113 文件／923 依赖源码／七份转换缓存复核一致。准确摘要和观察前提见[实证](../../tests/integration/acceptance-sql-keyword-case-native-root-20261018.md)，本结论不扩展为安装或 macOS 通过。
