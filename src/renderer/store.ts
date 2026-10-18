@@ -7,6 +7,7 @@ import type { AppSettings, ConnectionProfile, TaskEvent, TaskRecord } from '../s
 import { errorMessage, invoke, uid } from './lib';
 import type { ConnectionSelection } from './connectionChanges';
 import { completionServerFacts } from './completionServerFacts';
+import { sameQueryFileSource } from '../shared/queryFileSources';
 
 export type WorkspaceTab = AppSettings['tabs'][number];
 const defaults: AppSettings = { theme: 'dark', sidebarWidth: 260, resultLimit: 1000, pageSize: 100, dataTypeColors: false, editorFontSize: editorFontLimits.defaultSize, editorWordWrap: defaultEditorWordWrap, editorTabSize: editorIndentationLimits.defaultTabSize, editorInsertSpaces: editorIndentationLimits.defaultInsertSpaces, tabs: [] };
@@ -18,6 +19,7 @@ interface WorkspaceState {
   ready: boolean; settings: AppSettings; connections: ConnectionProfile[]; tasks: TaskRecord[];
   notice?: { text: string; error: boolean }; selection?: ConnectionSelection; activeJobs: Record<string, boolean>; dirtyTabs: Record<string, boolean>; connectionVersions: Record<string, number>;
   tableLayoutDrafts: Record<string, boolean>; setTableLayoutDraft(id: string, dirty: boolean): void;
+  queryFileDirty: Record<string, boolean>; setQueryFileDirty(id: string, dirty: boolean, snapshot: WorkspaceTab): void;
   initialize: () => Promise<void>; setConnections: (connections: ConnectionProfile[]) => void;
   invalidateConnection: (connectionId: string) => void;
   updateSettings: (update: Partial<AppSettings>) => void; openTab: (tab: Omit<WorkspaceTab, 'id'> & { id?: string }) => void;
@@ -52,7 +54,13 @@ export async function flushSettings(): Promise<void> {
 
 /** 界面状态仅保存连接概要和工作区配置，数据库密码不进入全局界面存储。 */
 export const useWorkspace = create<WorkspaceState>((set, get) => ({
-  ready: false, settings: defaults, connections: [], tasks: [], activeJobs: {}, dirtyTabs: {}, connectionVersions: {}, tableLayoutDrafts: {},
+  ready: false, settings: defaults, connections: [], tasks: [], activeJobs: {}, dirtyTabs: {}, connectionVersions: {}, tableLayoutDrafts: {}, queryFileDirty: {},
+  /** 文件正文dirty与事务dirty独立，未知摘要也保持dirty；该缓存不持久化。 */
+  setQueryFileDirty: (id, dirty, snapshot) => {
+    const current = get().settings.tabs.find(tab => tab.id === id);
+    if (!current || (current.sql ?? '') !== (snapshot.sql ?? '') || !sameQueryFileSource(current.fileSourceBinding, snapshot.fileSourceBinding)) return;
+    set(state => ({ queryFileDirty: { ...state.queryFileDirty, [id]: dirty } }));
+  },
   /** 并行恢复本地配置、连接概要和任务记录；加载失败仍保留可显示错误的工作台。 */
   initialize: async () => {
     try {
@@ -69,7 +77,15 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
   }));},
   /** 合并并立即展示配置修改，由持久化层合并连续写盘请求。 */
   updateSettings: update => {
-    const previous = get().settings, settings = { ...previous, ...update }; set({ settings });
+    const previous = get().settings, settings = { ...previous, ...update }, queryFileDirty = { ...get().queryFileDirty };
+    // SQL或修订变化先同步标dirty，再等待摘要确认；关闭/退出不能借用上一次正文的clean缓存。
+    for (const tab of settings.tabs) {
+      const before = previous.tabs.find(item => item.id === tab.id);
+      if (tab.fileSourceBinding && (!before || (before.sql ?? '') !== (tab.sql ?? '') || !sameQueryFileSource(before.fileSourceBinding, tab.fileSourceBinding))) queryFileDirty[tab.id] = true;
+      if (!tab.fileSourceBinding) delete queryFileDirty[tab.id];
+    }
+    for (const id of Object.keys(queryFileDirty)) if (!settings.tabs.some(tab => tab.id === id)) delete queryFileDirty[id];
+    set({ settings, queryFileDirty });
     // 标签身份立即投递到主进程；正文仍防抖。相同IPC通道中该事实先于随后发起的导入确认，不能留下400ms空闲窗口。
     const identities = (value: AppSettings) => JSON.stringify(value.tabs.map(tab => [tab.id, tab.connectionId, tab.kind]));
     if (identities(previous) !== identities(settings)) { clearTimeout(saveTimer); saveTimer = undefined; void invoke('settings.save', settings).catch(error => get().notify(errorMessage(error), true)); }
