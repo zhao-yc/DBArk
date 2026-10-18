@@ -25,7 +25,7 @@ beforeAll(async () => {
 });
 afterEach(async () => { if (root) { await act(async () => root!.unmount()); root = undefined; } });
 afterAll(() => { for (const [name, descriptor] of globals) if (descriptor) Object.defineProperty(globalThis, name, descriptor); else Reflect.deleteProperty(globalThis, name); });
-function deferred<T>() { let resolve!: (value: T) => void; const promise = new Promise<T>(done => { resolve = done; }); return { promise, resolve }; }
+function deferred<T>() { let resolve!: (value: T) => void, reject!: (reason: Error) => void; const promise = new Promise<T>((done, fail) => { resolve = done; reject = fail; }); return { promise, resolve, reject }; }
 /** 真实勾选快照先去除隐藏列与未选行，组件只接收原投影合同。 */
 function selectedResult() {
   const value: QueryResult = { columns: [{ key: 'id', name: 'id', type: 'bigint' }, { key: 'raw', name: 'raw', type: 'blob' }, { key: 'hidden', name: '隐藏', type: 'text' }], rows: [{ id: '未选', raw: '', hidden: '不可写出' }, { id: '9007199254740993', raw: { type: 'binary', base64: 'AAH/' }, hidden: '不可写出' }], statement: '原查询不得执行或传递', elapsedMs: 0, truncated: true };
@@ -63,6 +63,12 @@ describe.each(['table', 'result'] as const)('%s真实CSV导出表单', kind => {
   it('逗号→分号→逗号不能接纳迟到选择，即使配置原值恢复', async () => {
     const held = deferred<any>(); await mount(kind, () => held.promise); await choose(); await change(delimiter(), ';'); await change(delimiter(), ',');
     await act(async () => { held.resolve({ token: '迟到文件', name: 'old.csv' }); }); expect(execute().disabled).toBe(true); expect(exports(kind)).toHaveLength(0);
+  });
+  it('分隔符变化后的迟到选择失败不能污染当前配置反馈', async () => {
+    const held = deferred<any>(); await mount(kind, () => held.promise); await choose(); await change(delimiter(), ';');
+    await act(async () => { held.reject(Error('旧配置选择失败')); });
+    expect(calls.invoke.mock.calls.filter(([command]) => command === 'files.choose')).toHaveLength(1);
+    expect(document.querySelectorAll('div').filter(node => node.getAttribute('role') === 'alert')).toHaveLength(0); expect(delimiter().value).toBe(';'); expect(execute().disabled).toBe(true); expect(exports(kind)).toHaveLength(0);
   });
   it('已排队旧执行在分隔符ABA和新选文件后仍不可用，新回调才可执行', async () => {
     await mount(kind); await choose(); const old = queuedClick(execute()); await change(delimiter(), ';'); await change(delimiter(), ','); await choose();

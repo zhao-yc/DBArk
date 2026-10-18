@@ -68,7 +68,8 @@ export function TransferDialog({ mode, connectionId, database, table, onClose }:
     if (busyRef.current || renderedExportRevision !== exportRevision.current) return;
     const generation = ++choosing.current, key = formKeyRef.current;
     try { const choice = await invoke('files.choose', { purpose: mode, format, suggestedName: `${table}.${format}` }); if (busyRef.current || generation !== choosing.current || key !== formKeyRef.current || renderedExportRevision !== exportRevision.current) return; if (choice) { setFile(choice); setDone(undefined); setFailureDetails([]); setTaskId(''); setError(''); } }
-    catch (reason) { setError(errorMessage(reason)); }
+    // 迟到失败与迟到成功使用同一归属门，不能覆盖后来分隔符或文件配置的反馈。
+    catch (reason) { if (!busyRef.current && generation === choosing.current && key === formKeyRef.current && renderedExportRevision === exportRevision.current) setError(errorMessage(reason)); }
   }
   /** 每次显式重试使用新任务编号，保留已提交行数与逐行失败明细。 */
   async function execute() {
