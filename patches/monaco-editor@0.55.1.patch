@@ -1,0 +1,41 @@
+diff --git a/esm/vs/editor/contrib/wordHighlighter/browser/wordHighlighter.js b/esm/vs/editor/contrib/wordHighlighter/browser/wordHighlighter.js
+index 9687c56..eb76f5a 100644
+--- a/esm/vs/editor/contrib/wordHighlighter/browser/wordHighlighter.js
++++ b/esm/vs/editor/contrib/wordHighlighter/browser/wordHighlighter.js
+@@ -2,7 +2,7 @@ import { localize2 } from '../../../../nls.js';
+ import { alert } from '../../../../base/browser/ui/aria/aria.js';
+ import { Delayer, first, createCancelablePromise } from '../../../../base/common/async.js';
+ import { CancellationToken } from '../../../../base/common/cancellation.js';
+-import { onUnexpectedError, onUnexpectedExternalError } from '../../../../base/common/errors.js';
++import { CancellationError, errorHandler, onUnexpectedError, onUnexpectedExternalError } from '../../../../base/common/errors.js';
+ import { DisposableStore, Disposable } from '../../../../base/common/lifecycle.js';
+ import { ResourceMap } from '../../../../base/common/map.js';
+ import { matchesScheme, Schemas } from '../../../../base/common/network.js';
+@@ -171,7 +171,12 @@ let WordHighlighter = class WordHighlighter {
+                 // Leave some form of early exit check here if you wish to continue being a cursor position change listener ;)
+                 return;
+             }
+-            this.runDelayer.trigger(() => { this._onPositionChanged(e); });
++            this.runDelayer.trigger(() => { this._onPositionChanged(e); }).catch(error => {
++                // 仅消费本延时Promise的真实取消；其它错误继续走Monaco正式报告通道。
++                if (!(error instanceof CancellationError)) {
++                    errorHandler.onUnexpectedError(error);
++                }
++            });
+         }));
+         this.toUnhook.add(editor.onDidFocusEditorText((e) => {
+             if (this.occurrencesHighlightEnablement === 'off') {
+@@ -179,7 +184,12 @@ let WordHighlighter = class WordHighlighter {
+                 return;
+             }
+             if (!this.workerRequest) {
+-                this.runDelayer.trigger(() => { this._run(); });
++                this.runDelayer.trigger(() => { this._run(); }).catch(error => {
++                    // 仅消费本延时Promise的真实取消；其它错误继续走Monaco正式报告通道。
++                    if (!(error instanceof CancellationError)) {
++                        errorHandler.onUnexpectedError(error);
++                    }
++                });
+             }
+         }));
+         this.toUnhook.add(editor.onDidChangeModelContent((e) => {

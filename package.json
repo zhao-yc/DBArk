@@ -27,7 +27,7 @@
     "exceljs": "4.4.0",
     "iconv-lite": "^0.7.0",
     "lucide-react": "^0.577.0",
-    "monaco-editor": "^0.55.1",
+    "monaco-editor": "0.55.1",
     "mysql2": "3.24.5",
     "react": "19.3.0",
     "react-data-grid": "7.0.0-beta.61",
