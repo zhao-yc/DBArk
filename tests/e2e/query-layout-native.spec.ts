@@ -102,6 +102,9 @@ async function resize(run: EditorIndentNativeRun, owner: IndentNativeOwner, widt
   const handle = await run.step(owner, () => owner.application.browserWindow(owner.page));
   const identity = await run.step(owner, () => handle.evaluate(window => ({ id: window.id, contents: window.webContents.id })));
   await run.step(owner, () => handle.evaluate((window, size) => { window.setMinimumSize(720, 320); window.setContentSize(size.width, size.height); }, { width, height }));
+  // 系统保留旧小窗口原点会令放大后的外框越过workArea；移动真实原窗口，不缩客户区或伪造视口。
+  // 独立step核尺寸返回后的原期限，失效时不能继续定位或补读几何。
+  await run.step(owner, () => handle.evaluate(window => window.center()));
   let previous: string | undefined;
   await expect.poll(async () => {
     const native = await run.step(owner, () => owner.application.evaluate(readQueryLayoutNativeWindow, identity));
