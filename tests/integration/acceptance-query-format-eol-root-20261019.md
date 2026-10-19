@@ -11,3 +11,5 @@
 准备的原 `1ff6700` 曾有两项真实缺口：完整LF保存查询直接创建新模型，会检测为LF，不能覆盖Windows差异；一个浏览器闭包串联两个Main写调用，中途无父门。独审及最小RAM反例 SHA `6d43028f07afbfc125c6c4f602f5b481443aa4e202750b28977e5d2d7f058a13` 保留，未拿该版本实跑。作者 `3df19a1` 改为正式LF文件placeholder、独立UI动作及真实dirty退出；Root整合为 `07b2580`／`1747d40`，仅5个新增准备文件，产品、原37 await／52 guard运行器及复用文件护栏不变。Root新准备／退出护栏2文件52项及类型通过，日志 SHA `4c1c75a0b2d23af76dfcb4c85176cec2523aa34a03696efdaf631912eebe07d4`；Root独立准备复核 SHA `4d549eb0b11c427dacf5ef437dd575f74a1eb97bf6a535b3d7cecba902e6a2eb`。这些RAM计数有交叠，不叠加为实际原生总数。
 
 本轮只用固定127.0.0.1:1原拒连／原socket关闭及无密码离线概要，无私网数据库、Docker、系统剪贴板或录像。它不验证Ctrl/Cmd+S保存菜单、macOS、安装包或Undo回到磁盘clean体验；三平台CI `39189445206`仍失败，不能据此宣称完整CI或发行通过。Q01／Q03保持“部分”。
+
+员工3另行只读核对原报告、receipt、固定源码、完整113对象和11份审查摘要，交接 SHA-256 `66d368bd72d0b394a0af668c1c17e8c37f46369daffdef2d17a66a04e54ae471`、复核证明 SHA `a22075ba68c8db295e58aa6ae0ae5030b0c2b469e6e36ccc530f1dcedd66fa63`。两例见证、单次撤销、真实dirty退出与正常owner收尾均和原件一致；只检查成功目录当前缺席，未重读已删除文件，也未外推完整PID列表、快捷键保存、macOS或安装验收。
