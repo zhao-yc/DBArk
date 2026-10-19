@@ -51,6 +51,9 @@ jobs:
         env:
           MODE_KEEPER_RUNNER_ENVIRONMENT: ${{ runner.environment }}
         run: node scripts/macos-mode-keeper-ci.mjs source
+      - name: 输出本轮生产者已写证据摘要
+        if: always()
+        run: node scripts/print-macos-mode-keeper-evidence.mjs
       - name: 保留原报告及keeper证据
         id: evidence
         if: always()
