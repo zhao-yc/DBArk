@@ -42,11 +42,47 @@ async function observe(run: EditorIndentNativeRun, owner: IndentNativeOwner) {
   await run.step(owner, () => owner.page.reload()); await run.step(owner, () => expect(owner.page.locator('.app-statusbar')).toBeVisible());
 }
 /** 正式无密码表单；原runtime预检必须已证明127.0.0.1:1拒连及原close，才有本例资源。 */
-async function offlineQuery(run: EditorIndentNativeRun, owner: IndentNativeOwner) {
+async function offlineQuery(run: EditorIndentNativeRun, owner: IndentNativeOwner, info: TestInfo) {
   const page = owner.page; await run.step(owner, () => page.locator('.app-commandbar').getByRole('button', { name: zh.common.newConnection, exact: true }).click());
   const form = page.getByRole('dialog', { name: zh.common.newConnection, exact: true });
   for (const [label, value] of [[zh.connections.text006, 'SQL文件原生离线'], [zh.connections.text009, '127.0.0.1'], [zh.connections.text010, '1'], [zh.common.user, 'offline'], [zh.connections.text011, ''], [zh.connections.text012, '']]) await run.step(owner, () => form.getByLabel(label, { exact: true }).fill(value));
-  await run.step(owner, () => form.getByRole('checkbox', { name: zh.connections.text016, exact: true }).uncheck()); await run.step(owner, () => form.getByRole('button', { name: zh.connections.text036, exact: true }).click()); await run.step(owner, () => expect(form).toBeHidden());
+  await run.step(owner, () => form.getByRole('checkbox', { name: zh.connections.text016, exact: true }).uncheck());
+  // 仅观察原DOM事件与校验状态；不触发校验、代交表单、替换IPC或改变等待期限。
+  await run.step(owner, () => form.evaluate(node => {
+    const root = window as Window & { __sqlFilesFormDiagnostic?: { finish(): unknown } };
+    if (root.__sqlFilesFormDiagnostic) throw Error('同一窗口已有表单观测，拒绝覆盖');
+    const events: object[] = [], names = ['pointerdown', 'pointerup', 'click', 'submit', 'invalid']; let overflow = false;
+    /** 只采类型、布尔、布局和按钮文案，不采输入正文或秘密。 */
+    const snapshot = () => ({ connected: node.isConnected, focused: document.hasFocus(), visibility: document.visibilityState,
+      fields: Array.from(node.querySelectorAll<HTMLInputElement>('input')).map(input => ({ type: input.type, valid: input.validity.valid, missing: input.validity.valueMissing, range: input.validity.rangeOverflow || input.validity.rangeUnderflow, step: input.validity.stepMismatch, typeMismatch: input.validity.typeMismatch, badInput: input.validity.badInput })),
+      buttons: Array.from(node.querySelectorAll('button')).map(button => { const rect = button.getBoundingClientRect(); return { text: button.textContent?.slice(0, 128), type: button.type, disabled: button.disabled, originalForm: button.form === node.querySelector('form'), originalDocument: button.ownerDocument === document, formConnected: button.form?.isConnected ?? false, x: rect.x, y: rect.y, width: rect.width, height: rect.height }; }),
+      error: Array.from(node.querySelectorAll('.error-box')).map(value => value.textContent?.slice(0, 512)) });
+    const before = snapshot();
+    /** 捕获与冒泡分别记录，区分未产生提交、原生invalid与React实际preventDefault。 */
+    const listener = (event: Event) => {
+      if (!(event.target instanceof Element) || !node.contains(event.target)) return;
+      if (events.length >= 128) { overflow = true; return; }
+      events.push({ type: event.type, phase: event.eventPhase, trusted: event.isTrusted, prevented: event.defaultPrevented, target: event.target.tagName, button: event.target.closest('button')?.textContent?.slice(0, 128) });
+    };
+    for (const name of names) { document.addEventListener(name, listener, true); document.addEventListener(name, listener); }
+    root.__sqlFilesFormDiagnostic = { finish() { for (const name of names) { document.removeEventListener(name, listener, true); document.removeEventListener(name, listener); } return { before, events, after: snapshot(), overflow }; } };
+  }));
+  await run.step(owner, async () => {
+    let originalFailure: unknown;
+    try { await form.getByRole('button', { name: zh.connections.text036, exact: true }).click(); run.assert(owner); await expect(form).toBeHidden(); }
+    catch (reason) { originalFailure = reason; throw reason; }
+    finally {
+      try {
+        // 原断言失败尚未离开同一step时读取证据；失效或过期owner不能继续读页面。
+        run.assert(owner); const diagnostic = await page.evaluate(() => { const root = window as Window & { __sqlFilesFormDiagnostic?: { finish(): unknown } }; if (!root.__sqlFilesFormDiagnostic) throw Error('原表单观测缺失'); const value = root.__sqlFilesFormDiagnostic.finish(); delete root.__sqlFilesFormDiagnostic; return value; }); run.assert(owner);
+        await info.attach('离线连接原表单事件观测', { body: Buffer.from(JSON.stringify(diagnostic)), contentType: 'application/json' }); run.assert(owner);
+      } catch (reason) {
+        if (!originalFailure) throw reason;
+        // 诊断失败只能附注，不能覆盖原点击或原断言错误，也不能为取证重开失效页面。
+        info.annotations.push({ type: '表单观测未完成', description: reason instanceof Error ? reason.message : String(reason) });
+      }
+    }
+  });
   const profiles = await run.step(owner, () => page.evaluate(() => window.dbark.invoke('connections.list', {})));
   expect(profiles).toHaveLength(1); expect(profiles[0]).toMatchObject({ host: '127.0.0.1', port: 1, user: 'offline', rememberPassword: false }); expect(Boolean(profiles[0].hasPassword || profiles[0].ssh?.enabled || profiles[0].tls?.enabled)).toBe(false);
   await run.step(owner, () => page.locator('.app-commandbar').getByRole('button', { name: zh.common.newQuery, exact: true }).click()); const query = page.getByRole('dialog', { name: zh.common.newQuery, exact: true });
@@ -130,7 +166,7 @@ export function registerQueryFilesNative(binding: Binding) {
     expect([trace, screenshot, video]).toEqual(['off', 'off', 'off']); const scope = bindEditorIndentNativeCase(info, binding, () => test.info()); scopes.set(info, scope); scope.assertCurrent();
     const run = createEditorIndentNativeRun(scope, binding.approval); let files: QueryFilesNativeFiles | undefined, failure: unknown; const dirtyExits: object[] = [];
     try {
-      const first = await run.launch(); await observe(run, first); await offlineQuery(run, first); await write(run, first, "SELECT '最初草稿保持';"); const initial = await workspace(run, first);
+      const first = await run.launch(); await observe(run, first); await offlineQuery(run, first, info); await write(run, first, "SELECT '最初草稿保持';"); const initial = await workspace(run, first);
       files = new QueryFilesNativeFiles(run.path!, () => run.assert()); await run.step(first, () => files!.start()); const path = files.paths.source;
       const originalIdentity = await run.step(first, () => files!.create(path, scenario === 0 ? Buffer.from(recentSql) : utf16NativeBytes(sourceSql))); await openFile(run, first, path);
       await expect.poll(() => settings(run, first).then(value => value.tabs.length)).toBe(2); const opened = await workspace(run, first), fileTab = opened.tabs.find(value => value.id === opened.activeTabId)!;
