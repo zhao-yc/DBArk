@@ -7,11 +7,13 @@ import { fileURLToPath } from 'node:url';
 import { approveInstalled, preparePackageIdentity } from './native-editor-ci-identity.mjs';
 import { ciContext, packageCleanupAllowed, runNativeEditorSpecialties } from './native-editor-ci.mjs';
 import { fileFirstModelCleanupAllowed, runNativeFileFirstModel } from './native-file-first-model-ci.mjs';
+import { macInstalledCleanupNonce, confirmMacInstalledCleanup } from './macos-installed-cleanup-lease.mjs';
 
 const project = fileURLToPath(new URL('../', import.meta.url));
 const platform = process.platform;
 if (!['win32', 'darwin'].includes(platform)) throw new Error('安装产物验收只支持 Windows 和 macOS');
 if (!['x64', 'arm64'].includes(process.arch)) throw new Error('安装产物验收只支持 x64 和 arm64');
+const macCleanupNonce = macInstalledCleanupNonce(process.argv.slice(2), platform, process.arch, process.env, process);
 const { version } = JSON.parse(readFileSync(join(project, 'package.json'), 'utf8'));
 if (!/^[0-9]+\.[0-9]+\.[0-9]+(?:-[a-zA-Z0-9.-]+)?$/.test(version)) throw new Error('版本号不能用于安全定位安装产物');
 const artifact = join(project, 'release', 'DBArk-' + version + '-' + (platform === 'win32' ? 'win' : 'mac') + '-' + process.arch + '-unsigned.' + (platform === 'win32' ? 'exe' : 'dmg'));
@@ -167,6 +169,11 @@ try {
   testFailure = error;
 } finally {
   try {
+    // 模式失效或父进程失联时绝不卸载；普通安装入口仍沿原门，不新增等待。
+    if (macCleanupNonce && packageCleanupAllowed(nativeEnabled, nativeResult, testFailure) && fileFirstModelCleanupAllowed(fileFirstModelResult)) {
+      try { await confirmMacInstalledCleanup(process, macCleanupNonce); }
+      catch (error) { testFailure = error; }
+    }
     if (!packageCleanupAllowed(nativeEnabled, nativeResult, testFailure) || nativeEnabled && !fileFirstModelCleanupAllowed(fileFirstModelResult)) {
       // 不卸载、不分离、不删安装根；原用例保留的数据目录/PID仍以原附件为准，不补强停或重试。
       console.error('原生专项退出证明缺失或回归失败，本次安装现场保留：' + temporary);
@@ -184,3 +191,4 @@ try {
   }
 }
 if (testFailure) { console.error(testFailure); process.exitCode = 1; }
+if (macCleanupNonce && process.connected) process.disconnect();

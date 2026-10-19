@@ -1,0 +1,82 @@
+name: 0.28 Mac arm64真实安装缺项验收
+on:
+  push:
+    branches:
+      - codex/v028-serial-closeout-20261019
+    paths:
+      - .github/workflows/v028-macos-installed.yml
+      - scripts/build-v028-macos-install-source.mjs
+      - scripts/macos-mode-keeper-ci.mjs
+      - scripts/macos-installed-cleanup-lease.mjs
+permissions:
+  contents: read
+concurrency:
+  group: v028-arm64-installed-${{ github.run_id }}-${{ github.run_attempt }}
+  cancel-in-progress: false
+jobs:
+  arm64-installed:
+    runs-on: macos-latest
+    timeout-minutes: 25
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - run: corepack enable
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm exec install-electron
+      - name: 固定原arm64系统身份并编译显示保有器
+        run: |
+          set -euo pipefail
+          mkdir -p .cache/macos-mode-keeper
+          {
+            /usr/bin/sw_vers
+            /usr/bin/uname -m
+            printf 'ImageOS=%s\nImageVersion=%s\n' "${ImageOS:-未知}" "${ImageVersion:-未知}"
+          } > .cache/macos-mode-keeper/context.log 2>&1
+          cat .cache/macos-mode-keeper/context.log
+          test "$(/usr/bin/uname -m)" = arm64
+          /usr/bin/xcrun swiftc scripts/macos-mode-keeper.swift -o .cache/macos-mode-keeper/keeper > .cache/macos-mode-keeper/compile.log 2>&1
+          cat .cache/macos-mode-keeper/compile.log
+      - name: 同次源码构建批准（不重复源码六项原生测试）
+        env:
+          MODE_KEEPER_RUNNER_ENVIRONMENT: ${{ runner.environment }}
+        run: node scripts/build-v028-macos-install-source.mjs
+      - name: 构建本次未发布arm64安装候选
+        run: pnpm exec electron-builder --mac --arm64 --publish never
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+      - name: 原600秒租约内执行DMG安装六项及原离线回归
+        env:
+          MODE_KEEPER_RUNNER_ENVIRONMENT: ${{ runner.environment }}
+        run: node scripts/macos-mode-keeper-ci.mjs installed
+      - name: 输出本轮生产者已写证据
+        if: always()
+        run: node scripts/print-macos-mode-keeper-evidence.mjs
+      - name: 仅成功后保留未发布安装候选
+        uses: actions/upload-artifact@v4
+        with:
+          name: v028-macOS-arm64-installed-${{ github.run_id }}-${{ github.run_attempt }}-unsigned
+          path: |
+            release/*.dmg
+            release/*.zip
+          if-no-files-found: error
+          retention-days: 14
+      - name: 保留原安装报告及显示保有证据
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: v028-macOS-arm64-installed-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            .cache/macos-mode-keeper/*.log
+            .cache/macos-mode-keeper/*.json
+            .cache/macos-mode-keeper/*.jsonl
+            test-results/
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 14

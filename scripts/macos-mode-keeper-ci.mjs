@@ -11,8 +11,17 @@ import { assertFileFirstModelResult } from './native-file-first-model-ci.mjs';
 
 /** 参数门先于资源；不提供通用命令、任意可执行路径或本地模式切换入口。 */
 export function requireKeeperCI(args, platform, arch, env) {
-  assert.deepEqual(args, ['source']); assert.equal(platform, 'darwin'); assert.equal(arch, 'arm64');
-  assert.equal(env.GITHUB_ACTIONS, 'true'); assert.equal(env.GITHUB_REF, 'refs/heads/codex/macos-mode-keeper-20261019');
+  requireKeeperContext(args, platform, arch, env, 'source', 'refs/heads/codex/macos-mode-keeper-20261019');
+}
+/** 安装模式仅开放本次串行分支的独立arm64 job；不能扩大到Intel/本机或任意命令。 */
+export function requireInstalledKeeperCI(args, platform, arch, env) {
+  requireKeeperContext(args, platform, arch, env, 'installed', 'refs/heads/codex/v028-serial-closeout-20261019');
+  assert.equal(env.GITHUB_JOB, 'arm64-installed');
+}
+/** 两个入口分别核真实分支上下文，不改写环境来冒充原源码门。 */
+function requireKeeperContext(args, platform, arch, env, phase, ref) {
+  assert.deepEqual(args, [phase]); assert.equal(platform, 'darwin'); assert.equal(arch, 'arm64');
+  assert.equal(env.GITHUB_ACTIONS, 'true'); assert.equal(env.GITHUB_REF, ref);
   assert.equal(env.MODE_KEEPER_RUNNER_ENVIRONMENT,'github-hosted');
   assert.match(env.GITHUB_SHA ?? '', /^[a-f0-9]{40}$/);
   for (const name of ['GITHUB_RUN_ID','GITHUB_RUN_ATTEMPT','GITHUB_JOB']) assert.match(env[name] ?? '', /^[a-zA-Z0-9_-]+$/);
@@ -20,8 +29,9 @@ export function requireKeeperCI(args, platform, arch, env) {
 }
 
 /** 只消费原native CLI的成功链，不补SDK/PID/SQLite观察，也不把原失败改写成成功。 */
-export function requireOriginalCompletion(value) {
-  assert.equal(value.phase,'source'); assert.equal(value.cleanupAllowed,true); assert.equal(value.automaticRetry,false);
+export function requireOriginalCompletion(value, phase = 'source') {
+  assert.ok(['source', 'installed'].includes(phase));
+  assert.equal(value.phase,phase); assert.equal(value.cleanupAllowed,true); assert.equal(value.automaticRetry,false);
   assert.equal(value.proofs.length,2);
   for (const proof of value.proofs) {
     assert.equal(proof.accepted,true); assert.equal(proof.directoryRemoved,true);
@@ -59,17 +69,22 @@ export function requireOriginalLayoutGeometry(report, plan) {
 
 /** keeper与native分别持有原进程句柄；永不kill应用、runner或未知PID。 */
 async function run() {
-  requireKeeperCI(process.argv.slice(2),process.platform,process.arch,process.env);
+  const phase = process.argv[2];
+  (phase === 'installed' ? requireInstalledKeeperCI : requireKeeperCI)(process.argv.slice(2),process.platform,process.arch,process.env);
   const project = fileURLToPath(new URL('../',import.meta.url)), output = join(project,'.cache/macos-mode-keeper');
   // 在任何显示资源之前绑定本job的原checkout；只读Git检查，不替代后续原CI批准。
   const head=spawnSync('git',['rev-parse','HEAD'],{cwd:project,encoding:'utf8'});
   const dirty=spawnSync('git',['status','--porcelain','--untracked-files=no'],{cwd:project,encoding:'utf8'});
   assert.equal(head.status,0);assert.equal(head.stdout.trim(),process.env.GITHUB_SHA);
   assert.equal(dirty.status,0);assert.equal(dirty.stdout.trim(),'');
+  // installed必须已在本job构建并封存源码批准；不重复已核准的源码六项原生测试。
+  const sourcePath=join(project,'test-results/native-editor-ci/source-approval.json');
+  const installedSourceHash=phase==='installed' ? createHash('sha256').update(readFileSync(sourcePath)).digest('hex') : undefined;
+  if (phase==='installed') assert.equal(readApproval(sourcePath,installedSourceHash,ciContext(project)).value.phase,'source');
   mkdirSync(output,{recursive:true});
   const nonce = randomBytes(32).toString('hex'), start = performance.now();
   let state = {nonce,seq:0,last:start,deadline:start+keeperLimits.leaseSeconds*1000,phase:'starting',failed:false};
-  let fault, bytes = 0, buffer = Buffer.alloc(0), readyResolve, readyReject, nativeRunning = false, keeperEnded = false, nativeResult, originalProofsConsumed=false, fileResult, fileProofsConsumed=false;
+  let fault, bytes = 0, buffer = Buffer.alloc(0), readyResolve, readyReject, nativeRunning = false, keeperEnded = false, nativeResult, originalProofsConsumed=false, fileResult, fileProofsConsumed=false, installedCleanupAuthorized=false;
   const journal = join(output,'keeper.jsonl'); writeFileSync(journal,'',{flag:'wx'});
   const ready = new Promise((done,reject)=>{readyResolve=done;readyReject=reject;}); void ready.catch(()=>{});
   const keeper = spawn(join(output,'keeper'),['--hold','600',nonce],{cwd:project,stdio:['pipe','pipe','inherit']});
@@ -114,47 +129,88 @@ async function run() {
     assert.ok(!fault && !keeperEnded && performance.now()<state.deadline);
     nativeRunning=true;
     // 原脚本完整保留：同次构建/批准、缩进后分栏、原TestInfo期限、断言及退出证明均不改。
-    const native=spawn(process.execPath,['scripts/native-editor-ci.mjs','source'],{cwd:project,env:process.env,stdio:'inherit'});
+    const native=spawn(process.execPath,phase==='source' ? ['scripts/native-editor-ci.mjs','source'] : ['scripts/test-packaged.mjs','--mac-installed-keeper',nonce],{cwd:project,env:phase==='source' ? process.env : {
+      ...process.env, DBARK_NATIVE_EDITOR_CI:'1', DBARK_NATIVE_EDITOR_SOURCE_APPROVAL:sourcePath,
+      DBARK_NATIVE_EDITOR_SOURCE_APPROVAL_SHA256:installedSourceHash,
+      DBARK_NATIVE_EDITOR_REFERENCE_EXECUTABLE:join(project,'release/mac-arm64/DBArk.app/Contents/MacOS/DBArk'),
+      DBARK_W03_SAVED_QUERY_NAVIGATION_TEST:'1', DBARK_EDITOR_FONT_NATIVE_TEST:'1',
+      DBARK_QUERY_DUPLICATE_NATIVE_TEST:'1', DBARK_QUERY_CLOSE_OTHERS_NATIVE_TEST:'1',
+    },stdio:phase==='source' ? 'inherit' : ['inherit','inherit','inherit','ipc']});
+    if (phase==='installed') native.on('message', async message => {
+      try {
+        assert.deepEqual(message,{type:'dbark-mac-cleanup-request',nonce});
+        assert.ok(nativeRunning && !installedCleanupAuthorized && !fault && !keeperEnded && performance.now()<state.deadline);
+        // 子进程只在原专项和legacy全部成功后请求；先消费原退出证明，再恢复显示，最后允许规范卸载。
+        requireOriginalCompletion(JSON.parse(readFileSync(join(project,'test-results/native-editor-ci/installed-completed.json'),'utf8')),'installed');
+        const layout=join(project,'test-results/native-editor-ci/installed-layout');
+        const layoutBytes=readFileSync(join(layout,'report.json'));
+        assert.equal(JSON.parse(readFileSync(join(layout,'accepted.json'),'utf8')).reportSha256,createHash('sha256').update(layoutBytes).digest('hex'));
+        requireOriginalLayoutGeometry(JSON.parse(layoutBytes.toString('utf8')),state.plan);
+        const installedPath=join(project,'test-results/native-editor-ci/installed-approval.json');
+        const installedHash=createHash('sha256').update(readFileSync(installedPath)).digest('hex');
+        const installed=readApproval(installedPath,installedHash,ciContext(project));
+        assert.equal(installed.value.phase,'installed'); assert.equal(installed.value.provenance.sourceApproval,installedSourceHash);
+        const directory=join(project,'test-results/native-file-first-model-ci/installed');
+        const raw=readFileSync(join(directory,'report.json'));
+        const accepted=JSON.parse(readFileSync(join(directory,'accepted.json'),'utf8'));
+        assert.equal(accepted.phase,'installed'); assert.equal(accepted.approvalSha256,installedHash); assert.deepEqual(accepted.context,installed.value.context);
+        assert.equal(accepted.reportSha256,createHash('sha256').update(raw).digest('hex'));
+        assert.equal(accepted.cleanupAllowed,true); assert.deepEqual(accepted.proofs,assertFileFirstModelResult(JSON.parse(raw.toString('utf8'))));
+        nativeRunning=false; state={...state,phase:'releasing'};
+        keeper.stdin.write(JSON.stringify({action:'release',nonce})+'\n');
+        const restored=await exited;
+        assert.ok(!fault && state.phase==='restored' && restored.code===0 && restored.signal===null);
+        installedCleanupAuthorized=true;
+        native.send({type:'dbark-mac-cleanup-approved',nonce,restored:true},error=>{if(error) retain('安装清理确认通道失效');});
+      } catch (error) { retain(error instanceof Error ? error.message : '安装清理握手失败'); }
+    });
     const result=await new Promise(done=>{native.once('error',()=>done({code:null,signal:'启动失败'}));native.once('close',(code,signal)=>done({code,signal}));});
     nativeRunning=false; nativeResult=result;
-    assert.equal(result.code,0); assert.equal(result.signal,null); assert.ok(!fault && !keeperEnded && performance.now()<state.deadline);
-    requireOriginalCompletion(JSON.parse(readFileSync(join(project,'test-results/native-editor-ci/source-completed.json'),'utf8')));
-    const layoutDirectory=join(project,'test-results/native-editor-ci/source-layout');
+    const completionSpaceValid=()=>phase==='installed' ? !fault && installedCleanupAuthorized && keeperEnded && state.phase==='restored' : !fault && !keeperEnded && performance.now()<state.deadline;
+    assert.equal(result.code,0); assert.equal(result.signal,null); assert.ok(completionSpaceValid());
+    requireOriginalCompletion(JSON.parse(readFileSync(join(project,`test-results/native-editor-ci/${phase}-completed.json`),'utf8')),phase);
+    const layoutDirectory=join(project,`test-results/native-editor-ci/${phase}-layout`);
     const reportBytes=readFileSync(join(layoutDirectory,'report.json'));
     const accepted=JSON.parse(readFileSync(join(layoutDirectory,'accepted.json'),'utf8'));
     assert.equal(accepted.reportSha256,createHash('sha256').update(reportBytes).digest('hex'));
     requireOriginalLayoutGeometry(JSON.parse(reportBytes.toString('utf8')),state.plan);
     originalProofsConsumed=true;
-    assert.ok(!fault && !keeperEnded && performance.now()<state.deadline);
+    assert.ok(completionSpaceValid());
     // 同一源码批准交给现有四例CLI；不重build、不重签清单、不继承其它原生门。
-    const sourcePath=join(project,'test-results/native-editor-ci/source-approval.json');
     const sourceHash=createHash('sha256').update(readFileSync(sourcePath)).digest('hex');
     const sourceApproval=readApproval(sourcePath,sourceHash,ciContext(project));
     assert.equal(sourceApproval.value.phase,'source');
-    assert.ok(!fault && !keeperEnded && performance.now()<state.deadline);
-    nativeRunning=true;
-    const files=spawn(process.execPath,['scripts/native-file-first-model-ci.mjs','source'],{cwd:project,env:{...process.env,DBARK_NATIVE_EDITOR_SOURCE_APPROVAL:sourcePath,DBARK_NATIVE_EDITOR_SOURCE_APPROVAL_SHA256:sourceHash},stdio:'inherit'});
-    fileResult=await new Promise(done=>{files.once('error',()=>done({code:null,signal:'启动失败'}));files.once('close',(code,signal)=>done({code,signal}));});
-    nativeRunning=false;
-    assert.equal(fileResult.code,0); assert.equal(fileResult.signal,null);
-    assert.ok(!fault && !keeperEnded && performance.now()<state.deadline);
-    const fileDirectory=join(project,'test-results/native-file-first-model-ci/source');
+    assert.ok(completionSpaceValid());
+    if (phase==='source') {
+      nativeRunning=true;
+      const files=spawn(process.execPath,['scripts/native-file-first-model-ci.mjs','source'],{cwd:project,env:{...process.env,DBARK_NATIVE_EDITOR_SOURCE_APPROVAL:sourcePath,DBARK_NATIVE_EDITOR_SOURCE_APPROVAL_SHA256:sourceHash},stdio:'inherit'});
+      fileResult=await new Promise(done=>{files.once('error',()=>done({code:null,signal:'启动失败'}));files.once('close',(code,signal)=>done({code,signal}));});
+      nativeRunning=false;
+      assert.equal(fileResult.code,0); assert.equal(fileResult.signal,null);
+    }
+    assert.ok(completionSpaceValid());
+    const phaseApprovalBytes=readFileSync(join(project,`test-results/native-editor-ci/${phase}-approval.json`));
+    const phaseApproval=JSON.parse(phaseApprovalBytes.toString('utf8'));
+    assert.equal(phaseApproval.phase,phase); assert.deepEqual(phaseApproval.context,sourceApproval.value.context);
+    if (phase==='installed') assert.equal(phaseApproval.provenance.sourceApproval,sourceHash);
+    const phaseHash=createHash('sha256').update(phaseApprovalBytes).digest('hex');
+    const fileDirectory=join(project,`test-results/native-file-first-model-ci/${phase}`);
     const fileReportBytes=readFileSync(join(fileDirectory,'report.json'));
     const fileAccepted=JSON.parse(readFileSync(join(fileDirectory,'accepted.json'),'utf8'));
-    assert.equal(fileAccepted.phase,'source'); assert.equal(fileAccepted.approvalSha256,sourceHash);
+    assert.equal(fileAccepted.phase,phase); assert.equal(fileAccepted.approvalSha256,phaseHash);
     assert.deepEqual(fileAccepted.context,sourceApproval.value.context);
     assert.equal(fileAccepted.reportSha256,createHash('sha256').update(fileReportBytes).digest('hex'));
     assert.equal(fileAccepted.cleanupAllowed,true); assert.equal(fileAccepted.automaticRetry,false);
     assert.deepEqual(fileAccepted.proofs,assertFileFirstModelResult(JSON.parse(fileReportBytes.toString('utf8'))));
     readApproval(sourcePath,sourceHash,ciContext(project)); fileProofsConsumed=true;
-    assert.ok(!fault && !keeperEnded && performance.now()<state.deadline);
-    state={...state,phase:'releasing'}; keeper.stdin.write(JSON.stringify({action:'release',nonce})+'\n');
+    assert.ok(completionSpaceValid());
+    if (phase==='source') { state={...state,phase:'releasing'}; keeper.stdin.write(JSON.stringify({action:'release',nonce})+'\n'); }
   } catch (error) { retain(error instanceof Error ? error.message : '父控制器失败'); }
   finally { clearTimeout(timer); }
   // 先等待原native CLI自然返回，再等待keeper。失败不恢复显示、不强停应用；session模式供原证据上传期间继续保留。
   const result=await exited;
   const accepted=!fault && originalProofsConsumed && fileProofsConsumed && state.phase==='restored' && result.code===0 && result.signal===null;
-  writeFileSync(join(output,'receipt.json'),JSON.stringify({accepted,fault:fault??null,keeper:result,modeScope:'forSession',originalNativeCLIResult:nativeResult??null,originalProofsConsumed,originalFileCLIResult:fileResult??null,fileProofsConsumed,allFailureEvidenceCompleteConfirmed:false,artifactUploadConfirmed:false,keeperExitRestorationRequested:false,normalRestoreObservedBeforeKeeperExit:state.phase==='restored',postKeeperExitRestoreObserved:false,applicationForceStop:false,nativeOriginalAssertionsUnchanged:true,evidenceBoundary:'仅原CLI返回后已写出的文件可供下一步upload-artifact读取；中断可能没有完整report，未知应用/profile未补读。上传成功须以后续step的artifact-id/digest另证，不由本receipt冒充。'},null,2)+'\n',{flag:'wx'});
+  writeFileSync(join(output,'receipt.json'),JSON.stringify({accepted,phase,fault:fault??null,keeper:result,modeScope:'forSession',originalNativeCLIResult:nativeResult??null,originalProofsConsumed,originalFileCLIResult:fileResult??null,fileProofsConsumed,allFailureEvidenceCompleteConfirmed:false,artifactUploadConfirmed:false,keeperExitRestorationRequested:false,normalRestoreObservedBeforeKeeperExit:state.phase==='restored',postKeeperExitRestoreObserved:false,applicationForceStop:false,nativeOriginalAssertionsUnchanged:true,evidenceBoundary:'仅原CLI返回后已写出的文件可供下一步upload-artifact读取；installed四例由原test-packaged内部执行，不伪造独立CLI结果。中断可能没有完整report，未知应用/profile未补读。上传成功须以后续step的artifact-id/digest另证，不由本receipt冒充。'},null,2)+'\n',{flag:'wx'});
   if (!accepted) throw Error('模式保有/原native/恢复证明未完整闭合；原失败保留');
 }
 

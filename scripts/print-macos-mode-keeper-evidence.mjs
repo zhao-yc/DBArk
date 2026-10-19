@@ -27,7 +27,8 @@ export function summarizeKeeperJournal(bytes) {
 function printEvidence() {
   assert.equal(process.argv.length, 2);
   assert.equal(process.env.GITHUB_ACTIONS, 'true');
-  assert.equal(process.env.GITHUB_REF, 'refs/heads/codex/macos-mode-keeper-20261019');
+  assert.ok(process.env.GITHUB_REF === 'refs/heads/codex/macos-mode-keeper-20261019' ||
+    process.env.GITHUB_REF === 'refs/heads/codex/v028-serial-closeout-20261019' && process.env.GITHUB_JOB === 'arm64-installed');
   const directory = fileURLToPath(new URL('../.cache/macos-mode-keeper/', import.meta.url));
   for (const name of ['plan.json', 'keeper.jsonl', 'receipt.json']) {
     const path = join(directory, name); let descriptor;
