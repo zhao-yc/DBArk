@@ -8,6 +8,8 @@
 
 R8之后的旧文件任务／来源／恢复窗口／schema合同校正与真实窗口尺寸完成门，已整合至`c221d98`，Root的7文件59项窄RAM及类型通过，产品及受保护运行器不变。原arm64的226不因增加观测而改判通过，三平台源码和安装仍须新的checkpoint验证，见[本次测试整合边界](testing/v028-legacy-layout-integration-20261019.md)。
 
+上述修正的新R9已一次推送启动：[39194270038](https://github.com/zhao-yc/DBArk/actions/runs/39194270038)，固定`95e6863`、首次运行，产品仍为`e0fa1dd`源码。三平台源码专项和Linux完整检查已开始；这是启动快照，未取得原生／安装终态，完整工作包和发行状态保持。
+
 上一个完整 Linux 检查点 `6c86986` 已通过：542 文件、10119 项通过、10 条件跳过，类型与构建成功；该轮桌面／安装／预览发布均条件跳过，详见[准确 CI 范围](development/sql-workspace-linux-ci-20261018.md)。同一产品构建 `5c29ce2` 的 Windows／MySQL8.4 正式 INSERT 发布和等待确认取消两例已通过，成功随机库、目录及原观察线程外部后核释放；旧表单失败根因未确认、现场保留，见[实际实证](../tests/integration/acceptance-query-insert-ui-root-20261018.md)。
 
 0.23 独立分支 R7 已完成三平台源码／实际安装缩进和分栏共12份专项、24 owner正常退出及目录收尾，六轮真实系统加密／重启解密通过，见[固定来源](https://github.com/zhao-yc/DBArk/blob/ba534193acd6364622bc99edd1553f84a58b1c84/tests/integration/acceptance-native-r7-root-20261018.md)。其证据不能转写为0.28通过。当前继续补齐0.28严格原生CI接线及最近SQL／来源文件保存的两例真实验收，不新增完整工作包或公开发行计数。
