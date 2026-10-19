@@ -4,7 +4,7 @@
   "publicVersion": "0.21.0",
   "publicCommit": "5bb840958625563eed444f92cd05bf91c66234f2",
   "packageCount": 80,
-  "scope": "桌面MySQL/MariaDB；Web不在本版交付",
+  "scope": "桌面MySQL/MariaDB；Web不在本版交付；发行方案A/B尚未批准，不自动缩减原门",
   "statusDefinitions": {
     "A": "已公开可用，但仅限该行明确支持范围",
     "B": "已有代码或部分证据，尚未完整交付或尚未公开",
@@ -12,10 +12,48 @@
   },
   "subfunctionCounts": {
     "A": 51,
-    "B": 29,
-    "C": 115
+    "B": 30,
+    "C": 114
   },
   "countsAreCompletionPercentage": false,
+  "deliveryAudit": "docs/releases/v0.28.0-feature-delivery-audit-20261020.md",
+  "deliveryStateRules": {
+    "P": "A类仅在每行明确范围内已公开可用，沿公开0.21及原准确证据；本轮不重验全部行为",
+    "V": "B类行内具有本候选准确证据的限定已验未发切片；仅下列索引范围，不能升级整行",
+    "I": "B类有代码或部分证据但未完整交付的范围；同一子ID内可与V并存",
+    "N": "C类用户能力未在冻结bf产品实现；不表示封存0.29完全无原型"
+  },
+  "candidateVerifiedSlices": [
+    {
+      "childId": "Q01.4",
+      "verified": "Windows源码/NSIS及Mac arm64源码/DMG原六项；Windows关键字upper/lower源码和安装各两例",
+      "incomplete": "Mac关键字重启后失败、lower及安装未执行；Intel未闭环",
+      "evidence": [
+        "tests/integration/acceptance-v028-windows-success-20261019.md",
+        "tests/integration/acceptance-v028-macos-arm64-20261019.md",
+        "tests/integration/acceptance-v028-keyword-20261019.md"
+      ]
+    },
+    {
+      "childId": "Q03.4",
+      "verified": "Windows源码/NSIS及Mac arm64源码/DMG四例内来源保存切片；Windows源码ddeed3c真实系统Ctrl+S",
+      "incomplete": "Windows安装系统Ctrl+S绑定失败且Root发键0；Mac系统Cmd+S未验；Intel未闭环",
+      "evidence": [
+        "tests/integration/acceptance-v028-windows-success-20261019.md",
+        "tests/integration/acceptance-v028-macos-arm64-20261019.md",
+        "docs/development/v028-windows-system-source-20261019.md",
+        "tests/integration/acceptance-v028-windows-system-installed-20261019.md"
+      ]
+    },
+    {
+      "childId": "W01.2",
+      "verified": "Q01.4/Q03.4中相同缩进、分栏、文件模型及Windows源码系统键切片，不重复累计",
+      "incomplete": "全平台闭环缺Intel、Windows安装系统Ctrl+S及Mac系统Cmd+S",
+      "evidence": [
+        "tests/integration/acceptance-v028-release-matrix-20261019.md"
+      ]
+    }
+  ],
   "packages": [
     {
       "id": "C01",
@@ -651,9 +689,9 @@
         {
           "id": "D01.2",
           "status": "C",
-          "name": "查询结果新增单列排序与命名筛选方案",
+          "name": "查询结果新增单列排序/筛选",
           "entry": null,
-          "limit": "0.29另线，不将表分页排序混为查询结果新排序",
+          "limit": "0.29另线；不将表服务端分页排序、命名表方案或COLLATION混为查询结果新排序/筛选",
           "evidence": [
             "docs/navicat-coverage.md",
             "src/shared/contracts.ts"
@@ -899,13 +937,15 @@
         },
         {
           "id": "D06.4",
-          "status": "C",
-          "name": "0.29命名筛选等新扩展",
-          "entry": null,
-          "limit": "封存另线，未作为本版入口",
+          "status": "B",
+          "name": "命名表筛选/排序方案",
+          "entry": "src/renderer/components/TablePresetPanel.tsx",
+          "limit": "bf已含表页平面条件/all-any/排序方案及本机持久化；公开0.21不含，旧局部合同证据不等于专用GUI/实库或当前完整安装交付",
           "evidence": [
-            "docs/navicat-coverage.md",
-            "src/shared/contracts.ts"
+            "docs/development/named-table-presets.md",
+            "tests/integration/acceptance-p0-presets-indent-20261018.md",
+            "docs/releases/v0.22.0.md",
+            "docs/releases/v0.28.0-feature-delivery-audit-20261020.md"
           ]
         }
       ],

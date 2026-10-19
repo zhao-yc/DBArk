@@ -4,7 +4,7 @@
 
 ## 固定范围
 
-产品候选固定 bf08645a28fceb5d1d40ba16f013bb78e7a7c0a2，版本0.28.0。已核 src、package.json、pnpm-lock.yaml 与 f27c85ad98bca8232360de595440fe1cd5e3bd29 无差异。结果排序、含列名复制和后续新增备份/片段功能明确排除，进入0.29独立线。
+产品候选固定 bf08645a28fceb5d1d40ba16f013bb78e7a7c0a2，版本0.28.0。已核 src、package.json、pnpm-lock.yaml 与 f27c85ad98bca8232360de595440fe1cd5e3bd29 无差异。查询结果新增排序/筛选、含列名复制和后续新增备份/片段功能明确排除，进入0.29独立线。命名表筛选/排序方案已在bf中，有旧局部证据但专用GUI/实库未完整交付，不能与后续查询结果筛选混淆。
 
 产品Git对象：src tree 20ff372f4cbc5c466e79d847afda2cb57f55426e；package.json blob 3ff5c4d3b652bb0cc8de0e2584c26119869792da；pnpm-lock.yaml blob f4e286fab9eb730c5f4880d6cb08fead0bf8e608。这些是Git SHA1标识，实际字节SHA256另由候选清单封存。
 
@@ -13,6 +13,8 @@
 后续每次执行必须另记准确验收HEAD、编译/源或安装批准摘要、run/job/artifact及原报告摘要；不能以产品相同跳过该核对，不能把文档HEAD变化写成新增产品版本。
 
 ## 当前矩阵（审查材料已齐，仍有验收阻断）
+
+2026-10-20仅补齐[最后发布阻断表与A/B方案](../../docs/releases/v0.28.0-final-decision-20261020.md)及[四层功能复核](../../docs/releases/v0.28.0-feature-delivery-audit-20261020.md)。两方案都未批准、未就绪，未新增验收结果：原完整范围继续阻断，A所列例外必须由人类明确接受，不能把失败改为通过。
 
 | 验收项 | 已有准确证据 | 本候选待完成的闭环 |
 | --- | --- | --- |
@@ -28,7 +30,7 @@
 | 关键字大小写当前候选专项 | eb171c2/run39265643127：Windows源码/原NSIS实际安装各2通过、8正常owner，113/119字节完整对照，规范卸载。Mac源码upper在重启后再次格式化5秒断言失败，lower未运行、安装未执行；原失败目录和第二owner未知保持 | 整体run失败；独立回读39267183253核原ZIP/CRC、批准、全部报告及119参照。Mac根因尚未确认，不能改判或盲目重跑，[完整分层实证](acceptance-v028-keyword-20261019.md) |
 | 离线开发组件剪贴板 | 独立开发夹具与安装产品不同 | 如执行手动CI组件门，单列12项；不能计安装/系统保存验收 |
 | 安装候选与公开源码资产 | Windows两文件与Mac arm64 DMG/ZIP共4实际文件已在独立只读CI核ZIP长度/SHA/全部CRC，DMG/EXE绑定原安装输入；Mac ZIP内部741成员CRC通过但未单独安装 | 完整[可审矩阵](../../docs/releases/v0.28.0-release-review-assets.json)及[候选摘要](../../docs/releases/v0.28.0-candidate-SHA256SUMS.txt)已备；x64、最终源码/全量公开清单仍缺。Windows本机现已核两原ZIP；Mac本机仍未核，API digest与下载校验分记 |
-| 功能清单 | 原80个唯一ID含AI01至AI04，已逐项核入口/范围/证据，形成195条A/B/C子功能；A类25个入口均在公开0.21标签源码存在 | [可读清单](../../docs/releases/v0.28.0-feature-status.md)及JSON均已备；备份/Excel/内部SQLite/Web边界单列，不以测试数作完成功能比例 |
+| 功能清单 | 原80个唯一ID含AI01至AI04，195条子ID保持；命名表方案D06.4从C纠正为B后A51/B30/C114；A类25个入口均在公开0.21标签源码存在 | [可读清单](../../docs/releases/v0.28.0-feature-status.md)及JSON、四层复核均已备；B的候选已验切片不等于整行交付，代码纠错不新增验收；备份/Excel/内部SQLite/Web边界单列 |
 | 发布准备/最终发布 | [发行说明](../../docs/releases/v0.28.0.md)、[最终审核材料与发布后计划](../../docs/releases/v0.28.0-release-review.md)及资产清单已备；当前releaseReady=false | Mac关键字、安装系统CtrlS、Intel及Mac系统输入等阻断尚在，不能认定0.28完成。最终tag/release/main交原统筹审核，本轮未执行；不开始0.29 |
 
 ## 资源与证据规则
@@ -38,3 +40,5 @@
 Docker仅允许核实际连接身份后的server-200；本接班尚未执行Docker或数据库。新密钥/证书如确需生成，须按通用约定备份；当前没有生成。
 
 代码push允许用于新隔离CI，不代表主分支整合、发布或生产部署授权。验收脚本修复与本矩阵的更新不授权增加产品功能。
+
+本轮停止点：仅文档提交推送；不启动测试/CI/构建/安装/系统输入/Docker，不新增工具或输入链，不处理旧失败现场，不执行tag/release/main。后续动作以最后决定表中的具体范围与授权为准。

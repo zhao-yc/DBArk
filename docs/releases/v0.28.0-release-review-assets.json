@@ -9,6 +9,42 @@
   "lockBlob": "f4e286fab9eb730c5f4880d6cb08fead0bf8e608",
   "finalTag": null,
   "finalReleaseCommit": null,
+  "finalDecision": "docs/releases/v0.28.0-final-decision-20261020.md",
+  "featureDeliveryAudit": "docs/releases/v0.28.0-feature-delivery-audit-20261020.md",
+  "unavailableRequiredSemantics": "required保留原完整发行范围；requiredByPlan仅描述待批准A/B提案，不代表已准许删除资产或缩减原门",
+  "releasePlans": {
+    "approvedPlan": null,
+    "A": {
+      "approved": false,
+      "scope": "仅Windows x64与Mac arm64开发预览；需明确接受已知失败及未验例外，尚未改变原门",
+      "requiredExistingAssetPaths": [
+        "DBArk-0.28.0-win-x64-unsigned.exe",
+        "DBArk-0.28.0-mac-arm64-unsigned.dmg"
+      ],
+      "optionalExistingAssetPaths": [
+        "DBArk-0.28.0-win-x64-unsigned.exe.blockmap"
+      ],
+      "excludedPlatforms": ["macos-x64"],
+      "excludedFormats": ["macos-arm64-application-zip", "macos-blockmap"],
+      "requiredExplicitExceptions": [
+        "接受原Mac arm64包仍含根因未定的关键字真实失败，完整关键字流程不列已验证能力",
+        "Windows安装系统Ctrl+S及Mac系统Cmd+S不作已验承诺",
+        "此次0.28不覆盖Intel，不改动原0.21资产"
+      ],
+      "ready": false
+    },
+    "B": {
+      "approved": false,
+      "scope": "保持原完整三平台及原系统保存门，等待剩余专项和外部原生执行条件",
+      "requiredPlatforms": ["windows-x64", "macos-arm64", "macos-x64"],
+      "ready": false
+    },
+    "commonUnresolved": [
+      "最终发布提交/tag、对应源码ZIP及全量SHA清单未确定",
+      "原候选提升路线未批准，当前标签CI重构建三平台且要求至少6项，不能直接用于最小A",
+      "原artifact保留期前的最终可访问性与精确字节留存、发布后公开下载验收尚待执行"
+    ]
+  },
   "validationHost": "Windows原ZIP现另有本机完整字节/CRC与实际119文件核对；Mac仍按原生CI及Ubuntu回读；系统保存失败独立记载",
   "assets": [
     {
@@ -79,36 +115,42 @@
       "platform": "macos-arm64",
       "name": "DMG/ZIP的blockmap",
       "required": false,
+      "requiredByPlan": {"A": false, "B": false},
       "reason": "现候选归档未包含；如最终发行选用须单独取得、核SHA并绑定对应文件"
     },
     {
       "platform": "macos-x64",
       "name": "DBArk-0.28.0-mac-x64-unsigned.dmg",
       "required": true,
+      "requiredByPlan": {"A": false, "B": true},
       "reason": "本版x64原生/安装矩阵环境阻断，无核准资产"
     },
     {
       "platform": "macos-x64",
       "name": "DBArk-0.28.0-mac-x64-unsigned.zip",
       "required": true,
+      "requiredByPlan": {"A": false, "B": true},
       "reason": "无核准资产；不能用arm64替代"
     },
     {
       "platform": "macos-x64",
       "name": "DMG/ZIP的blockmap",
       "required": false,
+      "requiredByPlan": {"A": false, "B": false},
       "reason": "本版没有对应核准候选"
     },
     {
       "platform": "source",
       "name": "DBArk-0.28.0-source.zip",
       "required": true,
+      "requiredByPlan": {"A": true, "B": true},
       "reason": "最终发布提交/tag尚未决定，不能以产品提交或文档头假装最终公开源码"
     },
     {
       "platform": "all",
       "name": "SHA256SUMS.txt",
       "required": true,
+      "requiredByPlan": {"A": true, "B": true},
       "reason": "最终全量资产未齐；候选摘要文本仅含已核4个文件，不作为正式公开清单"
     }
   ],
