@@ -34,3 +34,7 @@ node D:/svn/DBArk/node_modules/typescript/bin/tsc --noEmit
 Root在后续结果分支整合排序和复制后，补充真实QueryTab的组合反例：列布局、DECIMAL降序、勾选矩阵及活动单元格复制使用同一视图，恢复原顺序撤销旧选择，原SQL仅执行一次。独审另发现布局或二进制模态关闭后，RDG同坐标不再次发送活动位置通知，复制按钮无法恢复；原2例已在Root复现失败。现由当前有效的显式单元格click重新核原行列，旧按钮与回调仍失效，不复活旧缓存。修后同2例通过。
 
 固定`df66f9f`及受记录的工作文件执行`run1938`：16文件198项、零失败/跳过，类型检查通过；包含实际安装RDG的`setPosition/isSamePosition/handleMouseEvent/createCellEvent`函数和真实React入口，布局/滚动/Document端口仍为RAM。单元日志SHA256为`3d01a7ce29dfea6c825de2407c2a582c49126692bd6896ba8da908af470c2cfe`。当前用户提示仅调整了活动单元格/勾选矩阵的准确措辞；未增加系统剪贴板、原生、构建或安装通过结论。
+
+修复固定为`ff1a115266e99e996cade0486a85f0478e3dc3c7`，员工5另做14项独立反例、零失败/跳过，接纳限定静态及RAM范围；handoff摘要`51110bedc80d1436f00ec7bf58c86758edabd0462dfe9f493057d54b5c663082`。后续固定`4eec67c3d87a8b45812aad82dee532a94d496310`的[完整Linux首次运行39211790383](https://github.com/zhao-yc/DBArk/actions/runs/39211790383)成功：564文件、10673通过/10条件跳过，类型与构建成功，213.33秒。Root保存job117926592085原解码日志161201字节，SHA256为`593e87eaa4af36d03e6bf5b499071d9d025586be3e086202e0d9bd71655720f2`。其后仅README和文档变化，原生、安装及系统剪贴板在该CI条件跳过。
+
+该完整检查覆盖当前单列排序与含列名复制组合；多列排序`f279aaf`仍独审待整合，不在此通过数内。0.28冻结候选保持`bf08645`，本次没有发布新版本。
