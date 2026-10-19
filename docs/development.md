@@ -2,6 +2,8 @@
 
 日常改动优先使用 [本地定向检查](development/local-checks.md)：`pnpm check:local -- tests/unit/具体文件.test.ts`；需要普通构建时增加 `--build`。类型检查只执行一次，原生、实库和发行验收继续沿各自入口执行。
 
+当前以开发为主，发行暂缓。查询结果新增[复制（含列名）](development/query-result-header-copy-20261020.md)，先完成本地定向验证，原生与安装验收分别记录。
+
 0.16 开发源码将配置库升级到 schema5，以保存查询默认库的已知、无库和未知状态。升级前退出所有实例并备份完整用户配置目录；旧客户端会拒读新版库，回退必须使用升级前的备份，不得手动修改版本号。第三检查点证据见[查询上下文验收](../tests/integration/acceptance-q03-query-context-20261015.md)。
 
 ## 目录
