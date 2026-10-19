@@ -1,7 +1,9 @@
 import assert from 'node:assert/strict';
 import { isDeepStrictEqual } from 'node:util';
 
-export const keeperLimits = Object.freeze({ leaseSeconds: 600, minimumVisibleWidth: 1440, minimumVisibleHeight: 1100, contentWidth: 1400, contentHeight: 1000 });
+// 工作区边距只作启动前预算；最终仍须原报告证明完整1400×1000客户区及整个窗口位于workArea内。
+// 原job实测模式9可见高度1091，不能沿用低分辨率下菜单栏/Dock占用不变的1100估算。
+export const keeperLimits = Object.freeze({ leaseSeconds: 600, minimumVisibleWidth: 1400 + 40, minimumVisibleHeight: 1000 + 50, contentWidth: 1400, contentHeight: 1000 });
 
 /** 只允许已知from/to的CG与AppKit异步过渡；第三种模式/矩形不是可等待状态。 */
 export function classifyModeTransition(snapshot, from, to, requireSpace) {

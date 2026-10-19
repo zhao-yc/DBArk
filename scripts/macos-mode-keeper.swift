@@ -14,6 +14,8 @@ guard args.count == 4, args[1] == "--hold", args[2] == "600",
 FileHandle.standardError.write(Data("本候选仅面向arm64\n".utf8)); exit(78)
 #endif
 let nonce = args[3], deadline = ProcessInfo.processInfo.systemUptime + 600
+// 与纯策略同一预算；真正的窗口外框/客户区和workArea仍由原native几何断言验收。
+let minimumVisibleWidth: Double = 1400 + 40, minimumVisibleHeight: Double = 1000 + 50
 let environment = ProcessInfo.processInfo.environment
 guard environment["GITHUB_ACTIONS"] == "true", environment["GITHUB_REF"] == "refs/heads/codex/macos-mode-keeper-20261019",
       environment["MODE_KEEPER_RUNNER_ENVIRONMENT"] == "github-hosted" else {
@@ -107,7 +109,7 @@ func stable(_ display: CGDirectDisplayID, _ selected: CGDisplayMode, from: CGDis
         guard fromMode || toMode, fromFrame || toFrame,
               visible["width"]! <= Double(max(fromData["logicalWidth"] as! Int, targetData["logicalWidth"] as! Int)),
               visible["height"]! <= Double(max(fromData["logicalHeight"] as! Int, targetData["logicalHeight"] as! Int)) else { throw NSError(domain: "显示已漂移到第三种未知状态", code: 1) }
-        let valid = toMode && toFrame && (!requireSpace || visible["width"]! >= 1440 && visible["height"]! >= 1100)
+        let valid = toMode && toFrame && (!requireSpace || visible["width"]! >= minimumVisibleWidth && visible["height"]! >= minimumVisibleHeight)
         if !valid {
             guard from != nil else { throw NSError(domain: "稳定保有期间显示漂移", code: 1) }
             emit("transition", ["snapshot": value.data])
@@ -152,8 +154,8 @@ while !retained && ProcessInfo.processInfo.systemUptime < deadline {
                 let width = targetData["logicalWidth"] as! Int, height = targetData["logicalHeight"] as! Int
                 guard targetData["pixelWidth"] as! Int == width, targetData["pixelHeight"] as! Int == height, targetData["refreshRate"] as! Double == 60 else { throw NSError(domain: "模式尺寸或频率未知", code: 1) }
                 let screen = (fresh.data["displays"] as! [[String: Any]])[0], frame = screen["framePoints"] as! [String: Double], visible = screen["visibleFramePoints"] as! [String: Double]
-                guard Double(width) - (frame["width"]! - visible["width"]!) >= 1440,
-                      Double(height) - (frame["height"]! - visible["height"]!) >= 1100 else { throw NSError(domain: "候选可见余量不足", code: 1) }
+                guard Double(width) - (frame["width"]! - visible["width"]!) >= minimumVisibleWidth,
+                      Double(height) - (frame["height"]! - visible["height"]!) >= minimumVisibleHeight else { throw NSError(domain: "候选可见余量不足", code: 1) }
                 selected = target; try configure(fresh.display, target); applied = true
                 let value = try stable(fresh.display, target, from: original.current, requireSpace: true); emit("ready", ["snapshot": value])
             } else if action == "release", applied, Set(command.keys) == ["action", "nonce"], let original = before {

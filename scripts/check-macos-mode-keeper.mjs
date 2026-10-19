@@ -36,6 +36,9 @@ check('CG已更新但NSScreen仍为原矩形是已知等待态',()=>assert.equal
 check('已知过渡帧不提前放行native也不重发apply',()=>assert.equal(acceptKeeperEvent(selected,{nonce,seq:2,type:'transition',snapshot:lag},12).phase,'selected'));
 check('CG仍为原模式而NSScreen已更新同样可等待',()=>{const inverse=clone(snapshot);inverse.displays[0].currentMode=clone(reference.displays[0].currentMode);assert.equal(classifyModeTransition(inverse,reference.displays[0].currentMode,plan.mode,true),'waiting');});
 check('CG和NSScreen均为目标且余量充足才ready',()=>assert.equal(classifyModeTransition(snapshot,reference.displays[0].currentMode,plan.mode,true),'ready'));
+// 39238157450原日志实测mode9的visibleFrame为1600×1091；此处只验证准入，不冒充窗口通过。
+check('原job实测1091可见高度可进入原1000客户区实测',()=>{const actual=clone(snapshot);actual.displays[0].visibleFramePoints={x:0,y:78,width:1600,height:1091};assert.equal(classifyModeTransition(actual,reference.displays[0].currentMode,plan.mode,true),'ready');assert.equal(acceptKeeperEvent(selected,{...readyEvent,snapshot:actual},12).phase,'ready');});
+check('1050辅助预算以下即使模式已更新仍不能ready',()=>{const small=clone(snapshot);small.displays[0].visibleFramePoints.height=1049;assert.equal(classifyModeTransition(small,reference.displays[0].currentMode,plan.mode,true),'waiting');assert.throws(()=>acceptKeeperEvent(selected,{...readyEvent,snapshot:small},12));});
 check('第三种CG模式不是可等待过渡',()=>{const bad=clone(lag);bad.displays[0].currentMode=clone(reference.displays[0].availableModes[10]);assert.throws(()=>classifyModeTransition(bad,reference.displays[0].currentMode,plan.mode,true));});
 check('第三种NSScreen矩形不是可等待过渡',()=>{const bad=clone(lag);bad.displays[0].framePoints.height=900;assert.throws(()=>classifyModeTransition(bad,reference.displays[0].currentMode,plan.mode,true));});
 check('等待中过渡帧换了显示器也拒绝',()=>{const bad=clone(lag);bad.displays[0].displayID=2;assert.throws(()=>acceptKeeperEvent(selected,{nonce,seq:2,type:'transition',snapshot:bad},12));});
