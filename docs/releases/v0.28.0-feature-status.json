@@ -406,7 +406,7 @@
           "status": "B",
           "name": "0.28文件来源保存与系统Ctrl/Cmd+S",
           "entry": "src/renderer/components/QueryFilesDialog.tsx",
-          "limit": "Windows源码系统输入已验；安装及Mac系统输入未闭环，版本未公开",
+          "limit": "Windows源码系统输入已验；本机安装119字节已核，但窗口绑定失败、Root输入0次，Mac系统输入仍未闭环，版本未公开",
           "evidence": [
             "docs/navicat-coverage.md",
             "tests/integration/acceptance-v028-release-matrix-20261019.md",
@@ -1190,7 +1190,7 @@
           "status": "B",
           "name": "0.28新文件系统保存与新布局全平台闭环",
           "entry": "src/renderer/App.tsx",
-          "limit": "Windows源码CtrlS有真实证据；安装CtrlS/Mac CmdS/x64仍缺项",
+          "limit": "Windows源码CtrlS有真实证据；本机安装输入窗口绑定失败、Root输入0次，Mac CmdS与x64仍缺项",
           "evidence": [
             "docs/navicat-coverage.md",
             "tests/integration/acceptance-v028-release-matrix-20261019.md"

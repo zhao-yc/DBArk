@@ -1,5 +1,7 @@
 # 0.28 当前系统输入缺项与接收边界
 
+最新：用户已明确回复授权。本机现已通过固定GitHub官方API接收原Windows候选及证据ZIP，完整长度/SHA/落盘重读/全部CRC均通过；实际NSIS安装后119相对文件及SHA与原批准全部一致。新nonce05033c30在Sky激活/恢复窗口时失败，Root未发系统键、未写ack；原120秒测试与45秒worker收尾超时，退出未知、安装和数据目录保留，见[准确记录](../../tests/integration/acceptance-v028-windows-system-installed-20261019.md)。以下接收阻断段落保留此前历史，不再作为当前缺文件结论。
+
 Windows源码系统Ctrl+S已有固定`ddeed3c`、nonce `18c06a58`的单次真实输入及两个正常owner证据，继续按[原记录](v028-windows-system-source-20261019.md)读取。本次没有重跑源码用例，也没有把格式化快捷键或页面keydown当作系统保存。
 
 Windows安装版尚未验。本机专用Windows系统输入工具已能枚举应用/窗口；未检测到本任务可复用的DBArk安装。安装前准备接收原成功候选artifact12184231827（142818435字节，ZIP SHA256 `066ec0ed921c59168800161d85d3e0cf6c0bcbe814069d1cf9d3df315b88746f`），尚未接收到本机文件，未执行安装、创建新nonce/ready/ack或发送系统键。

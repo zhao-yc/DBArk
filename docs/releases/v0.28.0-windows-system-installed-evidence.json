@@ -1,0 +1,248 @@
+{
+  "version": "0.28.0",
+  "productCommit": "bf08645a28fceb5d1d40ba16f013bb78e7a7c0a2",
+  "testHead": "6d04d86c170b80332675b8f9ec746fc0b0c0e0da",
+  "nonce": "05033c30-fe74-4798-aaad-c34355056c4b",
+  "status": "实际安装身份已核，系统输入控制失败，验收未通过",
+  "accepted": false,
+  "localWindowsZipValidated": true,
+  "localAllZipCrcValidated": true,
+  "originalRunId": 39244695054,
+  "originalCandidateArtifactId": 12184231827,
+  "originalEvidenceArtifactId": 12184037042,
+  "downloadMethod": "用户明确授权后，经既有Git Credential Manager认证读取固定GitHub官方API；存储重定向去认证；未使用MCP签名地址终端通道",
+  "credentialsPrinted": false,
+  "newCredentialsCreated": false,
+  "archives": {
+    "candidate": {
+      "bytes": 142818435,
+      "sha256": "066ec0ed921c59168800161d85d3e0cf6c0bcbe814069d1cf9d3df315b88746f"
+    },
+    "evidence": {
+      "bytes": 5340007,
+      "sha256": "d7eb06a765753b584d8e77a21dd4a42a40439338fc65892fafe95d3bfb435176"
+    }
+  },
+  "downloadReceiptSha256": "cb71e2b1dd07f6163f7f5d35aeef2f012f459cf5fe0526436d9c1d8d552ea0a3",
+  "crcReceiptSha256": "93cde89b9f4227e4229bba18e08064729cc1dbf83116e57dd16776218324487e",
+  "installed": {
+    "files": 119,
+    "allRelativeFilesMatchedOriginal": true,
+    "manifestSha256": "d0889ec80cd5e959baebc6783ca5a0ac218065f888a24875e1de053c735e82bc",
+    "originalManifestSha256": "37dc01fa8a68bce958d67789356765bfe09932c05d3eaef09d00d90de548a2d6",
+    "artifactSha256": "9b98642db34cee99453e671e23f78af11821ae6314e51fbd39ffc718754d62fe",
+    "temporary": "C:\\Users\\zhao-\\AppData\\Local\\Temp\\dbark-system-installed-sooMDr",
+    "executable": "C:\\Users\\zhao-\\AppData\\Local\\Temp\\dbark-system-installed-sooMDr\\Applications\\DBArk.exe"
+  },
+  "input": {
+    "operator": "Root",
+    "reviewer": "Root",
+    "independentHumanReview": false,
+    "skyWindowId": 1905846,
+    "readySha256": "003d9fcf486d706a81691b644b57fa7977d5b2d0ac073a32865d2876c9e39287",
+    "plannedRequests": 1,
+    "operatorSystemKeyRequestsSent": 0,
+    "pageKeyboardSaveRequests": 0,
+    "physicalKeyCountMeasured": false,
+    "ackWritten": false,
+    "activationError": "foreground window did not report a process id",
+    "recoveryMatchCount": 0,
+    "inputIntentSha256": "06e2610056a7f53217ba34f7dfc8104c95857a191218a09f774e7c06e8dcc028"
+  },
+  "report": {
+    "sha256": "42a448372f0e902a52a0b584a497153579a22844164eea8c0766693c0df6422b",
+    "status": "timedOut",
+    "retry": 0,
+    "stats": {
+      "startTime": "2026-10-19T15:25:09.394Z",
+      "duration": 166550.34900000002,
+      "expected": 0,
+      "skipped": 0,
+      "unexpected": 1,
+      "flaky": 0
+    },
+    "testDeadlineMs": 120000,
+    "workerTeardownTimeoutMs": 45000,
+    "workerTeardownFailed": true
+  },
+  "receiptSha256": "5ffb9b86f928ae511a8a3f7e0378d5d80c165cf493dddbf9116d5672ac6a1e8a",
+  "driverSha256": "3149a8dc1652dbfb3f3e4b347cdd492343f43c786b20506a3d604bb9733eb963",
+  "prepareDriverSha256": "953a59df71a38cb6b425f7a052f9c37f95633d6dc6729057fec5b0007d8ab471",
+  "ackDriverSha256": "ed9805df7a3049dac662b10ff3e8de874c86aac046da525fb8b371cbaf05c126",
+  "retained": {
+    "directory": "C:\\Users\\zhao-\\AppData\\Local\\Temp\\dbark-indent-aaG3ku",
+    "owners": [
+      {
+        "confirmed": false,
+        "closed": false,
+        "willQuit": false,
+        "ids": [
+          32648,
+          32676,
+          57972,
+          29416,
+          63356
+        ]
+      }
+    ],
+    "installationCleanupAttempted": false,
+    "normalExitConfirmed": false,
+    "sqliteValidated": false,
+    "restartValidated": false,
+    "oldScenesTouched": false,
+    "automaticRetry": false,
+    "automaticForceStop": false
+  },
+  "producerProofs": [
+    {
+      "name": "系统快捷键握手停链保留",
+      "value": {
+        "records": [
+          {
+            "stage": "ready",
+            "nonce": "05033c30-fe74-4798-aaad-c34355056c4b",
+            "readySha256": "003d9fcf486d706a81691b644b57fa7977d5b2d0ac073a32865d2876c9e39287",
+            "deadline": 1792423630330,
+            "externalInputRequests": 1,
+            "window": 1,
+            "contents": 1
+          },
+          {
+            "stage": "retained"
+          }
+        ],
+        "designatedInputOperator": "Root",
+        "reviewer": "Root",
+        "pageKeyboardSaveRequests": 0,
+        "physicalKeyCountMeasured": false,
+        "automaticRetry": false
+      }
+    },
+    {
+      "name": "单次文件保存快捷键保留现场",
+      "value": {
+        "presses": 0,
+        "mainWindow": {
+          "window": 1,
+          "contents": 1,
+          "windowFocused": true,
+          "contentsFocused": true,
+          "destroyed": false
+        },
+        "mainFrames": [
+          {
+            "stage": 1,
+            "menuExists": true,
+            "saveCount": 1,
+            "seq": 1,
+            "window": 1,
+            "contents": 1
+          },
+          {
+            "stage": 2,
+            "depth": 0,
+            "target": false,
+            "enabled": true,
+            "visible": true,
+            "accelerator": 0,
+            "seq": 2,
+            "window": 1,
+            "contents": 1
+          },
+          {
+            "stage": 2,
+            "depth": 1,
+            "target": true,
+            "enabled": true,
+            "visible": true,
+            "accelerator": 1,
+            "seq": 3,
+            "window": 1,
+            "contents": 1
+          },
+          {
+            "stage": 0,
+            "seq": 4,
+            "window": 1,
+            "contents": 1
+          }
+        ],
+        "events": [
+          {
+            "stage": "before",
+            "view": {
+              "documentFocused": true,
+              "editorFocused": true,
+              "modalCount": 0,
+              "visiblePanes": 1,
+              "pane": 1,
+              "saveDisabled": false,
+              "openDisabled": false,
+              "editorBusy": false
+            }
+          }
+        ],
+        "observationFailed": false,
+        "directory": "C:\\Users\\zhao-\\AppData\\Local\\Temp\\dbark-indent-aaG3ku",
+        "files": [
+          {
+            "stage": "paths-planned",
+            "paths": {
+              "source": "C:\\Users\\zhao-\\AppData\\Local\\Temp\\dbark-indent-aaG3ku\\native-source.sql",
+              "missing": "C:\\Users\\zhao-\\AppData\\Local\\Temp\\dbark-indent-aaG3ku\\native-missing.sql",
+              "replacement": "C:\\Users\\zhao-\\AppData\\Local\\Temp\\dbark-indent-aaG3ku\\native-replacement.sql"
+            }
+          },
+          {
+            "stage": "directory-captured",
+            "dev": "1087125929",
+            "ino": "19703248370504966"
+          },
+          {
+            "stage": "write-planned",
+            "path": "C:\\Users\\zhao-\\AppData\\Local\\Temp\\dbark-indent-aaG3ku\\native-source.sql",
+            "size": 62,
+            "hash": "4cbe7be77f1bc25070372abbf80b3b4b467a7c7425a739633f86a2c1e1688144"
+          },
+          {
+            "stage": "original-handle-captured",
+            "path": "C:\\Users\\zhao-\\AppData\\Local\\Temp\\dbark-indent-aaG3ku\\native-source.sql",
+            "identity": {
+              "dev": "1087125929",
+              "ino": "20829148277339314",
+              "size": 62,
+              "hash": "4cbe7be77f1bc25070372abbf80b3b4b467a7c7425a739633f86a2c1e1688144"
+            }
+          },
+          {
+            "stage": "created",
+            "path": "C:\\Users\\zhao-\\AppData\\Local\\Temp\\dbark-indent-aaG3ku\\native-source.sql",
+            "identity": {
+              "dev": "1087125929",
+              "ino": "20829148277339314",
+              "size": 62,
+              "hash": "4cbe7be77f1bc25070372abbf80b3b4b467a7c7425a739633f86a2c1e1688144"
+            }
+          }
+        ],
+        "owners": [
+          {
+            "confirmed": false,
+            "closed": false,
+            "willQuit": false,
+            "ids": [
+              32648,
+              32676,
+              57972,
+              29416,
+              63356
+            ]
+          }
+        ],
+        "automaticRetry": false,
+        "fallback": false,
+        "nativeMenuClickObserved": false
+      }
+    }
+  ]
+}

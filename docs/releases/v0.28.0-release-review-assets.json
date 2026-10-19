@@ -9,7 +9,7 @@
   "lockBlob": "f4e286fab9eb730c5f4880d6cb08fead0bf8e608",
   "finalTag": null,
   "finalReleaseCommit": null,
-  "validationHost": "GitHub-hosted原生runner及Ubuntu只读回读；操作者本机未收到安装ZIP",
+  "validationHost": "Windows原ZIP现另有本机完整字节/CRC与实际119文件核对；Mac仍按原生CI及Ubuntu回读；系统保存失败独立记载",
   "assets": [
     {
       "path": "DBArk-0.28.0-win-x64-unsigned.exe",
@@ -114,11 +114,20 @@
   ],
   "blockers": [
     "Mac arm64关键字源码重启后再次格式化未达到原预期；安装关键字未执行",
-    "Windows安装系统CtrlS本机下载被安全门阻断，尚未安装/输入",
+    "Windows安装系统CtrlS实际119字节已核；窗口绑定失败，Root系统键0次，原120秒超时，现场保留",
     "Intel标准宿主未找到满足原空间门的模式；本版源码/安装未闭环",
     "macOS系统CmdS未验，当前系统输入门仅Windows",
     "最终标签CI与候选提升方式须统筹决定；现专用keeper严格限定接班分支，不能直接外推tag成功"
   ],
   "candidateHashList": "docs/releases/v0.28.0-candidate-SHA256SUMS.txt",
-  "featureInventory": "docs/releases/v0.28.0-feature-status.json"
+  "featureInventory": "docs/releases/v0.28.0-feature-status.json",
+  "localWindowsReadback": {
+    "candidateArtifactId": 12184231827,
+    "evidenceArtifactId": 12184037042,
+    "localZipValidated": true,
+    "allArchiveMemberCrcValidated": true,
+    "downloadReceiptSha256": "cb71e2b1dd07f6163f7f5d35aeef2f012f459cf5fe0526436d9c1d8d552ea0a3",
+    "crcReceiptSha256": "93cde89b9f4227e4229bba18e08064729cc1dbf83116e57dd16776218324487e"
+  },
+  "windowsSystemCtrlSEvidence": "docs/releases/v0.28.0-windows-system-installed-evidence.json"
 }

@@ -1,6 +1,6 @@
 # 0.28串行收口与后续暂停
 
-最新状态：Windows及Mac arm64六项/普通回归分层闭环；Windows新关键字源码/安装各两例通过，Mac关键字重启后再次格式化失败、安装未执行。Intel标准宿主空间不足，本机下载门阻断安装系统CtrlS，Mac系统CmdS未验。[最终审核材料](../releases/v0.28.0-release-review.md)与80项清单已备，仍不能认定版本完成。下文旧准备/待确认状态保留其发生时范围，当前以[矩阵](../../tests/integration/acceptance-v028-release-matrix-20261019.md)为准。
+最新状态：Windows及Mac arm64六项/普通回归分层闭环；Windows新关键字源码/安装各两例通过，Mac关键字重启后再次格式化失败、安装未执行。Intel标准宿主空间不足，Windows本机原ZIP/119安装文件已核，系统CtrlS因窗口绑定失败、0次Root系统键而原期限失败，Mac系统CmdS未验。[最终审核材料](../releases/v0.28.0-release-review.md)与80项清单已备，仍不能认定版本完成。下文旧准备/待确认状态保留其发生时范围，当前以[矩阵](../../tests/integration/acceptance-v028-release-matrix-20261019.md)为准。
 
 用户最新指令取代此前并行扩展安排：由Root唯一串行推进，只完成当前冻结0.28约定验收和正式发行，然后暂停后续功能开发，待用户从清单逐项选择。不得继续把0.29功能加入候选。
 
