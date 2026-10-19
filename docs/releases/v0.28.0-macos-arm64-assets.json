@@ -95,6 +95,16 @@
     "apiDigest": "sha256:0b27924c76aa67e4b98884a378032109df3a2ec7ebf485dacd1803947e4f683b",
     "independentlyDownloaded": false
   },
-  "boundary": "原DMG实际安装已验；应用ZIP只核字节及内部741成员CRC，未独立安装；未公开Release。",
+  "localMacReadback": {
+    "candidateArtifactId": 12188064300,
+    "localZipValidated": true,
+    "allArchiveMemberCrcValidated": true,
+    "applicationZipAllMemberCrcValidated": true,
+    "applicationZipMembers": 741,
+    "downloadReceiptSha256": "f2961e2e6e429268f7d76ebf6794fe1eab47ccdf5221f2497c9b48d488e1d233",
+    "crcReceiptSha256": "6ebb5ca01b44d1c99a00c1c7d4295f87afc73059031ef51ed28f1d540b4365b1",
+    "newInstallationPerformed": false
+  },
+  "boundary": "原DMG实际安装已验；本轮增加本机原归档/DMG/ZIP字节及CRC留存，不增加安装或系统输入证据；应用ZIP仍未独立安装，未公开Release。",
   "keywordEvidence": "docs/releases/v0.28.0-keyword-evidence.json"
 }

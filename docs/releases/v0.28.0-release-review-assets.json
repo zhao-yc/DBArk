@@ -40,12 +40,12 @@
       "ready": false
     },
     "commonUnresolved": [
-      "最终发布提交/tag、对应源码ZIP及全量SHA清单未确定",
+      "最终发布提交/tag及资产集合尚未批准；已有4a87提议源码与A三文件摘要",
       "原候选提升路线未批准，当前标签CI重构建三平台且要求至少6项，不能直接用于最小A",
-      "原artifact保留期前的最终可访问性与精确字节留存、发布后公开下载验收尚待执行"
+      "核准原字节已完成本机留存；待批准发行后的独立公开下载验收"
     ]
   },
-  "validationHost": "Windows原ZIP现另有本机完整字节/CRC与实际119文件核对；Mac仍按原生CI及Ubuntu回读；系统保存失败独立记载",
+  "validationHost": "Windows/Mac原归档均有本机完整字节与CRC留存；提议源码已逐Git blob核对。原生、实际安装及系统输入仍按各自原证据，未增加安装结论",
   "assets": [
     {
       "path": "DBArk-0.28.0-win-x64-unsigned.exe",
@@ -144,19 +144,19 @@
       "name": "DBArk-0.28.0-source.zip",
       "required": true,
       "requiredByPlan": {"A": true, "B": true},
-      "reason": "最终发布提交/tag尚未决定，不能以产品提交或文档头假装最终公开源码"
+      "reason": "4a87提议源码ZIP已在本机核CRC及2192个Git blob，但最终发布提交/tag未批准，仍不是最终公开源码"
     },
     {
       "platform": "all",
       "name": "SHA256SUMS.txt",
       "required": true,
       "requiredByPlan": {"A": true, "B": true},
-      "reason": "最终全量资产未齐；候选摘要文本仅含已核4个文件，不作为正式公开清单"
+      "reason": "已有A三文件提案摘要与五文件留存摘要；最终资产集合和范围未批准，缺Intel，不能作为正式全量公开清单"
     }
   ],
   "blockers": [
     "Mac arm64关键字源码重启后再次格式化未达到原预期；安装关键字未执行",
-    "Windows安装系统CtrlS实际119字节已核；窗口绑定失败，Root系统键0次，原120秒超时，现场保留",
+    "Windows安装系统CtrlS实际119文件身份已核；窗口绑定失败，Root系统键0次，原120秒超时，现场保留",
     "Intel标准宿主未找到满足原空间门的模式；本版源码/安装未闭环",
     "macOS系统CmdS未验，当前系统输入门仅Windows",
     "最终标签CI与候选提升方式须统筹决定；现专用keeper严格限定接班分支，不能直接外推tag成功"
@@ -171,5 +171,41 @@
     "downloadReceiptSha256": "cb71e2b1dd07f6163f7f5d35aeef2f012f459cf5fe0526436d9c1d8d552ea0a3",
     "crcReceiptSha256": "93cde89b9f4227e4229bba18e08064729cc1dbf83116e57dd16776218324487e"
   },
+  "localMacReadback": {
+    "candidateArtifactId": 12188064300,
+    "localZipValidated": true,
+    "allArchiveMemberCrcValidated": true,
+    "applicationZipAllMemberCrcValidated": true,
+    "applicationZipMembers": 741,
+    "downloadReceiptSha256": "f2961e2e6e429268f7d76ebf6794fe1eab47ccdf5221f2497c9b48d488e1d233",
+    "crcReceiptSha256": "6ebb5ca01b44d1c99a00c1c7d4295f87afc73059031ef51ed28f1d540b4365b1",
+    "newInstallationPerformed": false
+  },
+  "proposedSource": {
+    "path": "DBArk-0.28.0-source.zip",
+    "commit": "4a87a4787b0cab154787a69a45662f1c724edb2c",
+    "bytes": 7163537,
+    "sha256": "40ad7a77583b7d1373bfa2e1807a7c452a9dcfc5f1ff835372470e96be464f2a",
+    "allMemberCrcValidated": true,
+    "gitBlobFilesMatched": 2192,
+    "receiptSha256": "c47c3fdd04aeee7dde6fe69b8ee1ebcf6c8afbda845567593ccf73e958f36071",
+    "approved": false,
+    "published": false
+  },
+  "proposedHashLists": [
+    {
+      "path": "docs/releases/v0.28.0-proposed-A-SHA256SUMS.txt",
+      "assets": 3,
+      "sha256": "a79483aa1c21967092d16728d932adf399b3901cd5b1090e41dc6bd392405521",
+      "approved": false
+    },
+    {
+      "path": "docs/releases/v0.28.0-retained-SHA256SUMS.txt",
+      "assets": 5,
+      "sha256": "0a15d790bb285ece080a77bf80cde56cf0d50d6f2f8a6939f42dc15d356a58a7",
+      "approved": false
+    }
+  ],
+  "localPreparation": "docs/releases/v0.28.0-local-preparation-20261020.md",
   "windowsSystemCtrlSEvidence": "docs/releases/v0.28.0-windows-system-installed-evidence.json"
 }

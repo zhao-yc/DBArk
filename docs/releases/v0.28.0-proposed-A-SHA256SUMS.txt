@@ -1,0 +1,3 @@
+d415a686d0a9d1d001dd57b45380007b27beb362b6f91de0cdb84e6fe5ad6c99  DBArk-0.28.0-mac-arm64-unsigned.dmg
+40ad7a77583b7d1373bfa2e1807a7c452a9dcfc5f1ff835372470e96be464f2a  DBArk-0.28.0-source.zip
+9b98642db34cee99453e671e23f78af11821ae6314e51fbd39ffc718754d62fe  DBArk-0.28.0-win-x64-unsigned.exe
