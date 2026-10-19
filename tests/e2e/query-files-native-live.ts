@@ -120,9 +120,15 @@ async function noSql(run: EditorIndentNativeRun, owner: IndentNativeOwner) {
   expect(await run.step(owner, () => owner.page.evaluate(() => window.dbark.invoke('history.list', {})))).toEqual([]);
   const tasks = await run.step(owner, () => owner.page.evaluate(() => window.dbark.invoke('tasks.list', {}))); expect(tasks.every(value => value.kind.startsWith('queryFileSources.') && value.status !== 'running')).toBe(true); expect(owner.errors).toEqual([]);
 }
+/** 原来源摘要异步检查完成且标签无脏标记后才走无提示退出；不确认提示或改写dirty。 */
+async function cleanFileSources(run: EditorIndentNativeRun, owner: IndentNativeOwner) {
+  const state = await settings(run, owner);
+  for (const [index, tab] of state.tabs.entries()) if (tab.fileSourceBinding) await run.step(owner, () => expect(owner.page.locator('.query-tab').nth(index).getByRole('status', { name: text.fileSource, exact: true, includeHidden: true })).toContainText(text.clean));
+  await run.step(owner, () => expect(owner.page.locator('.workspace-tab-button .dirty-dot')).toHaveCount(0));
+}
 /** 第一次正常退出/PID后读原SQLite，再启动同一私有profile，活动标签和模型由产品自行恢复。 */
 async function restart(run: EditorIndentNativeRun, first: IndentNativeOwner, files: QueryFilesNativeFiles, dirtyClose?: () => Promise<unknown>) {
-  const before = await workspace(run, first); await noSql(run, first); if (dirtyClose) await dirtyClose(); else await run.close(first);
+  const before = await workspace(run, first); await noSql(run, first); if (dirtyClose) await dirtyClose(); else { await cleanFileSources(run, first); await noSql(run, first); await run.close(first); }
   const disk = await run.stopped(async path => { await files.assertDirectory(); return readIndentNativeSettings(path, () => run.assert()); }); expect(disk.schema).toBe(9); expect(disk.settings.tabs).toEqual(before.tabs); expect(disk.settings.activeTabId).toBe(before.activeTabId);
   const second = await run.launch(); await run.step(second, () => files.assertDirectory()); await observe(run, second); await expect.poll(() => settings(run, second).then(value => ({ tabs: value.tabs, activeTabId: value.activeTabId }))).toEqual({ tabs: before.tabs, activeTabId: before.activeTabId });
   const restored = await workspace(run, second); expect(restored.actual).toHaveLength(before.actual.length);
@@ -185,7 +191,7 @@ export function registerQueryFilesNative(binding: Binding) {
         const recovery = first.page.getByRole('dialog', { name: text.recovery, exact: true }); await run.step(first, () => expect(recovery).toContainText(text.wroteNo)); await run.step(first, () => expect(recovery.locator('.error-box')).toContainText(/文件|来源/)); await expect.poll(() => settings(run, first).then(value => value.tabs.length)).toBe(3); expect(await workspace(run, first)).toEqual(reopened);
         await run.step(first, () => recovery.getByRole('button', { name: zh.common.cancel, exact: true }).click()); await run.step(first, () => files!.move(files!.paths.missing, path, originalIdentity));
         const second = await restart(run, first, files), restored = await recent(run, second, path, selected.id); await run.step(second, () => restored.dialog.getByRole('button', { name: text.openRecent, exact: true }).click()); await run.step(second, () => expect(restored.dialog).toBeHidden()); await expect.poll(() => settings(run, second).then(value => value.tabs.length)).toBe(4);
-        const final = await workspace(run, second); expect(final.tabs.slice(0, 3)).toEqual(reopened.tabs); expect(final.tabs[3].sql).toBe(recentSql); await bound(run, second, final.activeTabId!); await run.step(second, () => files!.read(path, originalIdentity)); await noSql(run, second); await run.close(second);
+        const final = await workspace(run, second); expect(final.tabs.slice(0, 3)).toEqual(reopened.tabs); expect(final.tabs[3].sql).toBe(recentSql); await bound(run, second, final.activeTabId!); await run.step(second, () => files!.read(path, originalIdentity)); await noSql(run, second); await cleanFileSources(run, second); await noSql(run, second); await run.close(second);
       } else {
         expect(source).toMatchObject({ encoding: 'utf16le', bom: 'utf16le', eol: 'crlf' }); await write(run, first, savedSql); await run.step(first, () => expect(first.page.locator('.query-tab:visible').getByRole('status', { name: text.fileSource, exact: true })).toContainText(text.dirty)); await run.step(first, () => first.page.keyboard.press(modifier + '+s'));
         await run.step(first, () => expect(first.page.locator('.query-tab:visible').getByRole('status', { name: text.fileSource, exact: true })).toContainText(text.clean)); const saved = await run.step(first, () => files!.read(path)); expect(saved.bytes).toEqual(utf16NativeBytes(savedSql)); const savedSource = await bound(run, first, fileTab.id); expect(savedSource.ref.id).toBe(source.ref.id); expect(savedSource.ref.revision).toBeGreaterThan(source.ref.revision); expect(savedSource).toMatchObject({ encoding: 'utf16le', bom: 'utf16le', eol: 'crlf' });
