@@ -125,7 +125,10 @@ async function restart(run: EditorIndentNativeRun, first: IndentNativeOwner, fil
   const before = await workspace(run, first); await noSql(run, first); if (dirtyClose) await dirtyClose(); else await run.close(first);
   const disk = await run.stopped(async path => { await files.assertDirectory(); return readIndentNativeSettings(path, () => run.assert()); }); expect(disk.schema).toBe(9); expect(disk.settings.tabs).toEqual(before.tabs); expect(disk.settings.activeTabId).toBe(before.activeTabId);
   const second = await run.launch(); await run.step(second, () => files.assertDirectory()); await observe(run, second); await expect.poll(() => settings(run, second).then(value => ({ tabs: value.tabs, activeTabId: value.activeTabId }))).toEqual({ tabs: before.tabs, activeTabId: before.activeTabId });
-  const restored = await workspace(run, second); expect(restored.actual.map(value => value.sql)).toEqual(before.actual.map(value => value.sql)); return second;
+  const restored = await workspace(run, second); expect(restored.actual).toHaveLength(before.actual.length);
+  // 重启产生独立模型，EOL可重新检测；Main/SQLite原草稿已逐字核对，所有新模型按各自实际EOL核完整正文。
+  for (const [index, model] of restored.actual.entries()) { expect(model.pane).toBe(before.actual[index].pane); assertSqlFilesModelText(before.tabs[model.pane].sql, model); }
+  return second;
 }
 
 /** 只给第二例这个owner的已知dirty原草稿退出一次；暂停原提示后再核父进程门，不改dirty或退出实现。 */
