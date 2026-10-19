@@ -1,0 +1,60 @@
+name: 0.28 Intel标准宿主只读空间核对
+on:
+  push:
+    branches:
+      - codex/v028-serial-closeout-20261019
+    paths:
+      - .github/workflows/v028-x64-environment.yml
+      - scripts/v028-probe-macos-display.swift
+permissions:
+  contents: read
+concurrency:
+  group: v028-x64-environment-${{ github.run_id }}-${{ github.run_attempt }}
+  cancel-in-progress: false
+jobs:
+  x64-environment:
+    name: 只读Intel · ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 8
+    strategy:
+      max-parallel: 1
+      fail-fast: false
+      matrix:
+        os: [macos-15-intel, macos-26-intel]
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: 原生Intel系统上下文与冻结产品
+        run: |
+          set -euo pipefail
+          mkdir -p .cache/v028-x64-environment
+          {
+            /usr/bin/sw_vers
+            /usr/bin/uname -m
+            printf 'ImageOS=%s\nImageVersion=%s\n' "${ImageOS:-未知}" "${ImageVersion:-未知}"
+            /usr/bin/xcrun swiftc --version
+            git rev-parse HEAD HEAD:src HEAD:package.json HEAD:pnpm-lock.yaml
+          } > .cache/v028-x64-environment/context.log 2>&1
+          cat .cache/v028-x64-environment/context.log
+          test "$(/usr/bin/uname -m)" = x86_64
+          test "$(git rev-parse HEAD:src)" = 20ff372f4cbc5c466e79d847afda2cb57f55426e
+      - name: 编译并单次只读枚举（不切模式、不创建产品窗口）
+        env:
+          MODE_KEEPER_RUNNER_ENVIRONMENT: ${{ runner.environment }}
+        run: |
+          set -euo pipefail
+          /usr/bin/xcrun swiftc scripts/v028-probe-macos-display.swift -o .cache/v028-x64-environment/probe > .cache/v028-x64-environment/compile.log 2>&1
+          .cache/v028-x64-environment/probe > .cache/v028-x64-environment/inventory.json 2> .cache/v028-x64-environment/stderr.log
+          cat .cache/v028-x64-environment/inventory.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: v028-x64-environment-${{ matrix.os }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .cache/v028-x64-environment/
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 14

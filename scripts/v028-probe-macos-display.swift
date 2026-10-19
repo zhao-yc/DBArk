@@ -33,6 +33,24 @@ func describeMode(_ value: CGDisplayMode) -> [String: Any] {
             "refreshRate": value.refreshRate, "ioFlags": value.ioFlags]
 }
 
+/** 按Apple公开sysctl语义区分原生/翻译/未知；ENOENT记录为字段缺失，不吞掉其它错误。 */
+func processTranslationObservation() -> [String: Any] {
+    var translated: Int32 = 0
+    var length = MemoryLayout<Int32>.size
+    errno = 0
+    let result = sysctlbyname("sysctl.proc_translated", &translated, &length, nil, 0)
+    let observedError = errno
+    if result == 0 {
+        guard length == MemoryLayout<Int32>.size, translated == 0 || translated == 1 else {
+            fail("原生/翻译状态形状未知")
+        }
+        guard translated == 0 else { fail("本次进程为Rosetta翻译，不可作为原生Intel证据") }
+        return ["translated": false, "sysctlAvailable": true, "rawValue": Int(translated)]
+    }
+    guard result == -1, observedError == ENOENT else { fail("原生/翻译状态读取失败，不能推断为原生") }
+    return ["translated": false, "sysctlAvailable": false, "errno": Int(observedError)]
+}
+
 // 参数门先于任何显示器访问；没有apply、切换、隐藏窗口或调试入口。
 guard CommandLine.arguments.count == 1 else { fail("本工具仅允许无参数只读枚举", code: 64) }
 #if arch(arm64)
@@ -44,11 +62,16 @@ fail("本诊断只支持Mac arm64/x64")
 #endif
 // 只读接班诊断也限新GitHub托管临时job，拒绝本机/共享或自托管执行。
 let approvalEnvironment = ProcessInfo.processInfo.environment
+let originalDiagnosticBranch = approvalEnvironment["GITHUB_REF"] == "refs/heads/codex/macos-mode-keeper-20261019"
+let serialIntelDiagnostic = approvalEnvironment["GITHUB_REF"] == "refs/heads/codex/v028-serial-closeout-20261019" &&
+    approvalEnvironment["GITHUB_JOB"] == "x64-environment" && architecture == "x64"
 guard approvalEnvironment["GITHUB_ACTIONS"] == "true",
-      approvalEnvironment["GITHUB_REF"] == "refs/heads/codex/macos-mode-keeper-20261019",
+      originalDiagnosticBranch || serialIntelDiagnostic,
       approvalEnvironment["MODE_KEEPER_RUNNER_ENVIRONMENT"] == "github-hosted" else {
     fail("只读诊断须本次隔离GitHub托管job")
 }
+
+let translationObservation = processTranslationObservation()
 
 let screens = NSScreen.screens
 guard !screens.isEmpty, screens.count <= 16 else { fail("活动显示器缺失或超过16个的枚举预算") }
@@ -78,6 +101,7 @@ for screen in screens {
 // 仅取两个明确的runner镜像字段；不输出整个环境、显示器名称、UUID或序列号。
 let environment = ProcessInfo.processInfo.environment
 let context: [String: Any] = ["architecture": architecture,
+                            "translationObservation": translationObservation,
                             "operatingSystemVersion": ProcessInfo.processInfo.operatingSystemVersionString,
                             "imageOS": environment["ImageOS"] ?? "未知",
                             "imageVersion": environment["ImageVersion"] ?? "未知",
