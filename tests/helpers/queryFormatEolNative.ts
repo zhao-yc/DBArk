@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { posix, win32 } from 'node:path';
 
-export const formatEolCases = ['按钮首次格式化：保存查询LF与模型实际EOL，单次Undo及重启', '快捷键首次格式化：保存查询LF与模型实际EOL，单次Undo及重启'] as const;
+export const formatEolCases = ['按钮首次格式化：LF来源文件与placeholder模型实际EOL，单次Undo及重启', '快捷键首次格式化：LF来源文件与placeholder模型实际EOL，单次Undo及重启'] as const;
 export const formatEolSource = 'select 1,2\nfrom sample where id=1;';
 // 手写独立预期，不从formatter、模型结果或格式化后的store制造答案。
 export const formatEolExpected = 'select\n  1,\n  2\nfrom\n  sample\nwhere\n  id = 1;';
@@ -33,11 +33,11 @@ export function bindFormatEolEnvironment(read: () => { env: NodeJS.ProcessEnv; a
   return Object.freeze({ approval: Object.freeze({ manifestPath: original.manifestPath, approvedHash: original.approvedHash }), assertCurrent() { try { if (retained || inspect().signature !== original.signature) throw Error('格式化EOL原环境已失效'); } catch (reason) { retained = true; throw reason; } } });
 }
 export interface FormatEolModel { id: number; value: string; eol: string; version: number; changes: number; focused: boolean; selections: { start: number; end: number }[] | undefined; }
-/** 原保存查询和Main草稿仍须是原LF；只把期望映射到已声明模型EOL，不改任一来源。 */
-export function assertFormatEolInitial(saved: string, draft: string, model: FormatEolModel, platform: string) {
-  assert.equal(saved, formatEolSource); assert.equal(draft, formatEolSource);
+/** 原来源文件和Main草稿仍须是原LF；期望只映射到placeholder已声明EOL，不改来源或模型。 */
+export function assertFormatEolInitial(fileSql: string, draft: string, model: FormatEolModel, platform: string) {
+  assert.equal(fileSql, formatEolSource); assert.equal(draft, formatEolSource);
   assert.ok(model.eol === '\n' || model.eol === '\r\n'); assert.equal(model.value, formatEolSource.replaceAll('\n', model.eol));
   assert.ok(Number.isSafeInteger(model.id) && model.id > 0 && Number.isSafeInteger(model.version) && model.version > 0); assert.equal(model.changes, 0);
   if (platform === 'win32') assert.equal(model.eol, '\r\n', 'Windows本例必须实际观察CRLF；不能把LF/LF冒称修复差异覆盖');
-  return Object.freeze({ savedLf: true, draftLf: true, modelEol: model.eol, mismatched: model.eol === '\r\n', userEditsBeforeFormat: 0 });
+  return Object.freeze({ fileLf: true, draftLf: true, modelEol: model.eol, mismatched: model.eol === '\r\n', userEditsBeforeFormat: 0 });
 }
