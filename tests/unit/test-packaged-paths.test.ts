@@ -45,7 +45,8 @@ function runProbe(input: typeof cases[number], executableExists = true, helperMo
   });
   const command = vi.fn((_executable: string, args: string[], _options?: { env?: Record<string, string>; timeout?: number; windowsVerbatimArguments?: boolean }) => { if(preflightFails && args[0]===path.join(project,'scripts','check-offline-query-port.mjs'))throw Error('合成固定端口预检失败');return ''; });
   const owned: string[] = [];
-  const execute = () => runInNewContext(probe, {
+  // 保留实际安装函数及完整执行块；异步包装仅支持原脚本新增的模式恢复等待。
+  const execute = async () => await runInNewContext('(async () => {' + probe + '})()', {
     platform: input.platform, process: { arch: input.arch, env: inherited, execPath: node },
     project, artifact: path.join(project, input.platform === 'win32' ? '安装程序.exe' : '安装映像.dmg'),
     applicationDirectory: input.directory, mountDirectory: path.join(path.dirname(input.directory), '只读挂载'),
@@ -59,22 +60,22 @@ function runProbe(input: typeof cases[number], executableExists = true, helperMo
 }
 
 describe('真实安装执行器统一普通及C02可执行路径', () => {
-  it.each(cases)('$platform/$arch门1才紧邻Playwright执行同一固定预检，仍保留环境归一',input=>{
-    const f=runProbe(input,true,'normal','1');f.execute();const calls=f.command.mock.calls.filter(([executable])=>executable===f.node),path=input.platform==='win32'?win32:posix;
+  it.each(cases)('$platform/$arch门1才紧邻Playwright执行同一固定预检，仍保留环境归一',async input=>{
+    const f=runProbe(input,true,'normal','1');await f.execute();const calls=f.command.mock.calls.filter(([executable])=>executable===f.node),path=input.platform==='win32'?win32:posix;
     expect(calls).toHaveLength(2);expect(calls[0][1]).toEqual([path.join(f.project,'scripts','check-offline-query-port.mjs')]);expect(calls[0][2]?.timeout).toBe(10000);
     expect(calls[1][1]).toEqual([path.join(f.project,'node_modules','@playwright','test','cli.js'),'test']);expect(calls[1][2]?.timeout).toBe(900000);
     for(const call of calls){expect(call[2]?.env).toMatchObject({DBARK_EXECUTABLE_PATH:input.executable,DBARK_C02_EXECUTABLE_PATH:input.executable,DBARK_INTEGRATION_ENABLED:'0',DBARK_QUERY_CLOSE_OTHERS_NATIVE_TEST:'1'});expect(Object.hasOwn(call[2]!.env!,'DBARK_DEV_URL')).toBe(false)}
     expect(f.command.mock.calls.indexOf(calls[1])).toBe(f.command.mock.calls.indexOf(calls[0])+1);
   });
-  it.each([undefined,'0','','true'])('安装门%s不做预检，仅执行原Playwright路径',gate=>{
-    const f=runProbe(cases[0],true,'normal',gate);f.execute();expect(f.command.mock.calls.filter(([executable])=>executable===f.node)).toHaveLength(1);
+  it.each([undefined,'0','','true'])('安装门%s不做预检，仅执行原Playwright路径',async gate=>{
+    const f=runProbe(cases[0],true,'normal',gate);await f.execute();expect(f.command.mock.calls.filter(([executable])=>executable===f.node)).toHaveLength(1);
     expect(f.command.mock.calls.some(([,args])=>args[0]?.includes('check-offline-query-port'))).toBe(false);
   });
-  it('预检失败明确阻止Playwright启动，不回退或重试',()=>{
-    const f=runProbe(cases[0],true,'normal','1',true);expect(f.execute).toThrow('合成固定端口预检失败');const calls=f.command.mock.calls.filter(([executable])=>executable===f.node);expect(calls).toHaveLength(1);expect(calls[0][1][0]).toContain('check-offline-query-port.mjs');
+  it('预检失败明确阻止Playwright启动，不回退或重试',async()=>{
+    const f=runProbe(cases[0],true,'normal','1',true);await expect(f.execute()).rejects.toThrow('合成固定端口预检失败');const calls=f.command.mock.calls.filter(([executable])=>executable===f.node);expect(calls).toHaveLength(1);expect(calls[0][1][0]).toContain('check-offline-query-port.mjs');
   });
-  it.each(cases)('$platform/$arch将安装所得准确路径覆盖两个继承值，保留原环境及离线门', input => {
-    const f = runProbe(input); f.execute();
+  it.each(cases)('$platform/$arch将安装所得准确路径覆盖两个继承值，保留原环境及离线门', async input => {
+    const f = runProbe(input); await f.execute();
     const invocation = f.command.mock.calls.find(([executable]) => executable === f.node);
     expect(invocation).toBeDefined();
     const [, args, options] = invocation!;
@@ -95,14 +96,14 @@ describe('真实安装执行器统一普通及C02可执行路径', () => {
       expect(f.read.mock.calls.map(([target]) => target)).toEqual([f.helper, f.sourceHelper]);
     } else { expect(f.stat).not.toHaveBeenCalled(); expect(f.read).not.toHaveBeenCalled(); }
   });
-  it('安装所得程序不存在时拒绝启动测试，不回退到继承的两种路径', () => {
+  it('安装所得程序不存在时拒绝启动测试，不回退到继承的两种路径', async () => {
     const f = runProbe(cases[0], false);
-    expect(f.execute).toThrow('安装产物中缺少 DBArk 可执行文件');
+    await expect(f.execute()).rejects.toThrow('安装产物中缺少 DBArk 可执行文件');
     expect(f.command.mock.calls.some(([executable]) => executable === f.node)).toBe(false);
   });
-  it.each(['missing', 'symlink', 'directory', 'oversize', 'changed'] as const)('Windows helper资源%s时拒绝运行测试，不回退到继承路径', mode => {
+  it.each(['missing', 'symlink', 'directory', 'oversize', 'changed'] as const)('Windows helper资源%s时拒绝运行测试，不回退到继承路径', async mode => {
     const f = runProbe(cases[0], true, mode);
-    expect(f.execute).toThrow(mode === 'missing' ? '合成资源不存在' : mode === 'changed' ? '摘要不一致' : '资源无效');
+    await expect(f.execute()).rejects.toThrow(mode === 'missing' ? '合成资源不存在' : mode === 'changed' ? '摘要不一致' : '资源无效');
     expect(f.command.mock.calls.some(([executable]) => executable === f.node)).toBe(false);
     if (mode !== 'changed') expect(f.read).not.toHaveBeenCalled();
   });

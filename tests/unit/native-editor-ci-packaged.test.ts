@@ -64,16 +64,18 @@ describe('原安装脚本完整收尾与CI接线', () => {
   it.each(['first-model-failed', 'first-model-unknown', 'first-model-footer-bad'] as const)('%s停止legacy并保留原安装根，不能借原两专项清理', async mode => {
     const f = await probe(mode); expect(f.native).toHaveBeenCalledOnce(); expect(f.firstModel).toHaveBeenCalledOnce(); expect(f.context.command).not.toHaveBeenCalled(); expect(f.context.testFailure).toBeDefined(); expect(f.cleanup).not.toHaveBeenCalled();
   });
-  it('Mac显示恢复未知时，即使原专项和legacy成功也保留安装根', async () => {
+  it('Mac原专项成功但显示恢复未知时，不启动legacy且保留安装根', async () => {
     const f = await probe('accepted', 'failed');
     expect(f.context.confirmMacInstalledCleanup).toHaveBeenCalledOnce(); expect(f.context.testFailure).toBeDefined(); expect(f.cleanup).not.toHaveBeenCalled();
+    expect(f.context.command).not.toHaveBeenCalled();
   });
-  it('Mac显示恢复确认后才执行原规范清理；原回归失败不请求确认', async () => {
+  it('Mac先恢复显示再运行legacy；legacy失败仍保留安装根', async () => {
     const good = await probe('accepted', 'accepted');
     expect(good.context.testFailure).toBeUndefined(); expect(good.cleanup).toHaveBeenCalledTimes(2);
     expect(good.context.confirmMacInstalledCleanup.mock.invocationCallOrder[0]).toBeLessThan(good.cleanup.mock.invocationCallOrder[0]);
+    expect(good.context.confirmMacInstalledCleanup.mock.invocationCallOrder[0]).toBeLessThan(good.context.command.mock.invocationCallOrder[0]);
     const bad = await probe('later-failed', 'accepted');
-    expect(bad.context.confirmMacInstalledCleanup).not.toHaveBeenCalled(); expect(bad.cleanup).not.toHaveBeenCalled();
+    expect(bad.context.confirmMacInstalledCleanup).toHaveBeenCalledOnce(); expect(bad.cleanup).not.toHaveBeenCalled();
   });
   it('CI三架构使用同次build直接打包，安装消费同job源批准，证据总上传且不自动取消', () => {
     const workflow = readFileSync(new URL('../../.github/workflows/ci.yml', import.meta.url), 'utf8');

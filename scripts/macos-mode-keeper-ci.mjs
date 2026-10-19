@@ -140,7 +140,7 @@ async function run() {
       try {
         assert.deepEqual(message,{type:'dbark-mac-cleanup-request',nonce});
         assert.ok(nativeRunning && !installedCleanupAuthorized && !fault && !keeperEnded && performance.now()<state.deadline);
-        // 子进程只在原专项和legacy全部成功后请求；先消费原退出证明，再恢复显示，最后允许规范卸载。
+        // 六项需要大客户区的原专项完成后先恢复显示；legacy随后独立运行，原成功门继续控制最终卸载。
         requireOriginalCompletion(JSON.parse(readFileSync(join(project,'test-results/native-editor-ci/installed-completed.json'),'utf8')),'installed');
         const layout=join(project,'test-results/native-editor-ci/installed-layout');
         const layoutBytes=readFileSync(join(layout,'report.json'));

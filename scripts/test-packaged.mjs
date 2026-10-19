@@ -155,6 +155,8 @@ try {
     // 原两专项成功后才运行独立四例；仍消费本job原installed批准，不重建或重签。
     fileFirstModelResult = runNativeFileFirstModel({ project, approval, phase: 'installed', output: join(project, 'test-results/native-file-first-model-ci') });
     if (!fileFirstModelCleanupAllowed(fileFirstModelResult)) throw Error('文件首次模型四例终态未知，保留安装现场');
+    // 大客户区仅供原六项专项；成功后先确认原模式恢复，再执行普通legacy，最终清理仍须legacy成功。
+    if (macCleanupNonce) await confirmMacInstalledCleanup(process, macCleanupNonce);
   }
   // 普通与C02专用夹具统一使用本次安装所得程序，覆盖父进程继承的旧路径。
   const env = { ...process.env, DBARK_EXECUTABLE_PATH: executable, DBARK_C02_EXECUTABLE_PATH: executable, DBARK_INTEGRATION_ENABLED: '0' };
@@ -169,11 +171,6 @@ try {
   testFailure = error;
 } finally {
   try {
-    // 模式失效或父进程失联时绝不卸载；普通安装入口仍沿原门，不新增等待。
-    if (macCleanupNonce && packageCleanupAllowed(nativeEnabled, nativeResult, testFailure) && fileFirstModelCleanupAllowed(fileFirstModelResult)) {
-      try { await confirmMacInstalledCleanup(process, macCleanupNonce); }
-      catch (error) { testFailure = error; }
-    }
     if (!packageCleanupAllowed(nativeEnabled, nativeResult, testFailure) || nativeEnabled && !fileFirstModelCleanupAllowed(fileFirstModelResult)) {
       // 不卸载、不分离、不删安装根；原用例保留的数据目录/PID仍以原附件为准，不补强停或重试。
       console.error('原生专项退出证明缺失或回归失败，本次安装现场保留：' + temporary);

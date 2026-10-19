@@ -13,7 +13,7 @@ export function macInstalledCleanupNonce(args, platform, arch, env, channel) {
   return args[1];
 }
 
-/** 原测试全部成功后才请求确认；无确认/错nonce/断线均拒绝卸载，保留安装现场。 */
+/** 原六项专项成功后请求模式恢复；无确认不运行legacy，最终卸载仍由legacy成功门控制。 */
 export function confirmMacInstalledCleanup(channel, nonce) {
   return new Promise((resolve, reject) => {
     let finished = false;

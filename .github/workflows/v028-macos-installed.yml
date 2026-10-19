@@ -9,6 +9,7 @@ on:
       - scripts/macos-mode-keeper-ci.mjs
       - scripts/macos-installed-cleanup-lease.mjs
       - scripts/macos-mode-keeper.swift
+      - scripts/test-packaged.mjs
 permissions:
   contents: read
 concurrency:
@@ -52,7 +53,7 @@ jobs:
         run: pnpm exec electron-builder --mac --arm64 --publish never
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
-      - name: 原600秒租约内执行DMG安装六项及原离线回归
+      - name: 原600秒租约内执行DMG安装六项，恢复原模式后运行legacy
         env:
           MODE_KEEPER_RUNNER_ENVIRONMENT: ${{ runner.environment }}
         run: node scripts/macos-mode-keeper-ci.mjs installed
