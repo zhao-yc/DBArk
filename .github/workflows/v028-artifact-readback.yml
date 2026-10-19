@@ -23,9 +23,9 @@ jobs:
       # 仅下载固定旧run的已上传产物；不访问失败VM或执行归档中的程序。
       - uses: actions/download-artifact@v4
         with:
-          name: macos-mode-keeper-39238645769-1
+          name: macos-mode-keeper-39239873392-1
           github-token: ${{ github.token }}
-          run-id: 39238645769
-          path: .cache/macos-artifact-readback-39238645769
+          run-id: 39239873392
+          path: .cache/macos-artifact-readback-39239873392
       - name: 原来源、报告摘要与实际窗口坐标
         run: node scripts/read-v028-macos-artifact.mjs

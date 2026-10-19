@@ -9,7 +9,7 @@ function readOriginalReports() {
   assert.equal(process.argv.length, 2);
   assert.equal(process.env.GITHUB_ACTIONS, 'true');
   assert.equal(process.env.GITHUB_REF, 'refs/heads/codex/v028-serial-closeout-20261019');
-  const root = realpathSync(fileURLToPath(new URL('../.cache/macos-artifact-readback-39238645769/', import.meta.url)));
+  const root = realpathSync(fileURLToPath(new URL('../.cache/macos-artifact-readback-39239873392/', import.meta.url)));
   /** 文件只能来自归档根内的普通单链接JSON；大小有界并按原字节计算摘要。 */
   function original(name) {
     const path = join(root, name), stat = lstatSync(path);
@@ -20,8 +20,8 @@ function readOriginalReports() {
     return { value, sha256: createHash('sha256').update(bytes).digest('hex'), bytes: bytes.length };
   }
   const approval = original('test-results/native-editor-ci/source-approval.json');
-  assert.equal(approval.value.context.commit, 'a6974cfaf24d10fe53ab65bdccb0ce810a26088e');
-  assert.equal(String(approval.value.context.runId), '39238645769');
+  assert.equal(approval.value.context.commit, '9c083b959bb1c54a4566c60595599c4634b39208');
+  assert.equal(String(approval.value.context.runId), '39239873392');
   assert.equal(approval.value.context.arch, 'arm64'); assert.equal(approval.value.context.platform, 'darwin');
   console.log('DBARK_ARCHIVED_SOURCE:' + JSON.stringify({ sha256: approval.sha256, context: approval.value.context }));
   const completed = original('test-results/native-editor-ci/source-completed.json');
