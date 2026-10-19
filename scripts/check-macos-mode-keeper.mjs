@@ -1,0 +1,57 @@
+import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { selectModeCandidate, acceptKeeperEvent } from './macos-mode-keeper-policy.mjs';
+import { requireKeeperCI, requireOriginalCompletion, requireOriginalLayoutGeometry } from './macos-mode-keeper-ci.mjs';
+
+// 仅离线校验已授权原JSON，必须显式传原文件及其SHA；不导入或执行Swift/AppKit/native模块。
+assert.equal(process.argv.length,4); assert.match(process.argv[3],/^[a-f0-9]{64}$/);
+const bytes=readFileSync(process.argv[2]); assert.equal(createHash('sha256').update(bytes).digest('hex'),process.argv[3]);
+const reference=JSON.parse(bytes.toString('utf8')), clone=value=>structuredClone(value), cases=[];
+/** 每例真实调用将用于CI的纯策略或协议函数，错误路径不接任何资源端口。 */
+function check(name,run) { run(); cases.push(name); }
+function rejectInventory(name,change) { check(name,()=>{const value=clone(reference);change(value);assert.throws(()=>selectModeCandidate(value));}); }
+check('准确stdout参考仅提出mode9候选，估算可见1600x1106',()=>{const plan=selectModeCandidate(reference);assert.equal(plan.mode.modeID,9);assert.deepEqual(plan.estimatedVisible,{width:1600,height:1106});});
+rejectInventory('1920x1080扣原94点后不足，不能替代mode9',v=>{v.displays[0].availableModes=v.displays[0].availableModes.filter(m=>m.modeID!==9);v.displays[0].availableModeCount=11;});
+rejectInventory('镜像版本变化先拒绝',v=>{v.context.imageVersion='其他版本';});
+rejectInventory('多屏未知拓扑拒绝',v=>{v.displays.push(clone(v.displays[0]));});
+rejectInventory('未知2倍缩放不按像素猜DIP',v=>{v.displays[0].backingScaleFactor=2;});
+rejectInventory('模式逻辑单位与原屏幕不对应拒绝',v=>{v.displays[0].framePoints.height=769;});
+rejectInventory('API列表数量不完整拒绝',v=>{v.displays[0].availableModeCount=13;});
+rejectInventory('相同modeID歧义拒绝',v=>{v.displays[0].availableModes[0].modeID=9;});
+rejectInventory('模式像素/逻辑比例变化拒绝',v=>{v.displays[0].availableModes[9].pixelHeight=2400;});
+rejectInventory('可见区大于原屏幕的坏数据拒绝',v=>{v.displays[0].visibleFramePoints.height=900;});
+rejectInventory('未知显示器身份拒绝',v=>{delete v.displays[0].displayID;});
+rejectInventory('原模式不在当次系统列表则不冒险切换',v=>{v.displays[0].currentMode.modeID=99;});
+const env={GITHUB_ACTIONS:'true',GITHUB_REF:'refs/heads/codex/macos-mode-keeper-20261019',GITHUB_SHA:'a'.repeat(40),GITHUB_RUN_ID:'1',GITHUB_RUN_ATTEMPT:'1',GITHUB_JOB:'keeper'};
+check('准确CI参数静态端口通过且不创建资源',()=>requireKeeperCI(['source'],'darwin','arm64',env));
+for (const [name,args,platform,arch,change] of [['默认无参数拒绝',[],'darwin','arm64',{}],['Windows入口拒绝',['source'],'win32','x64',{}],['错误分支拒绝',['source'],'darwin','arm64',{GITHUB_REF:'refs/heads/main'}],['本地入口拒绝',['source'],'darwin','arm64',{GITHUB_ACTIONS:'false'}],['外部原生门在模式准备前拒绝',['source'],'darwin','arm64',{DBARK_QUERY_LAYOUT_NATIVE_TEST:'1'}]]) check(name,()=>assert.throws(()=>requireKeeperCI(args,platform,arch,{...env,...change})));
+const plan=selectModeCandidate(reference), nonce='b'.repeat(64), initial={nonce,seq:0,last:10,deadline:1000,phase:'starting',failed:false};
+const inventory={nonce,seq:1,type:'inventory',snapshot:reference};
+const inventoried=acceptKeeperEvent(initial,inventory,11), selected={...inventoried,phase:'selected',plan,original:reference.displays[0]};
+const snapshot=clone(reference), display=snapshot.displays[0];display.currentMode=clone(plan.mode);display.framePoints={x:0,y:0,width:1600,height:1200};display.visibleFramePoints={x:0,y:63,width:1600,height:1106};display.mirrored=false;
+const readyEvent={nonce,seq:2,type:'ready',snapshot}; const ready=acceptKeeperEvent(selected,readyEvent,12);
+check('ready必须有切换后的真实模式及可见余量',()=>assert.equal(ready.phase,'ready'));
+check('原租约到期不接迟到ready',()=>assert.throws(()=>acceptKeeperEvent(selected,readyEvent,1000)));
+check('单调时钟回退拒绝',()=>assert.throws(()=>acceptKeeperEvent(selected,readyEvent,9)));
+check('错误nonce拒绝',()=>assert.throws(()=>acceptKeeperEvent(selected,{...readyEvent,nonce:'c'.repeat(64)},12)));
+check('重放序号拒绝',()=>assert.throws(()=>acceptKeeperEvent(ready,readyEvent,13)));
+check('mode9仍未获得足够可见高度则拒绝',()=>{const bad=clone(readyEvent);bad.snapshot.displays[0].visibleFramePoints.height=1000;assert.throws(()=>acceptKeeperEvent(selected,bad,12));});
+check('保有期间mode改变拒绝',()=>{const bad={nonce,seq:3,type:'pulse',snapshot:clone(snapshot)};bad.snapshot.displays[0].currentMode.modeID=3;assert.throws(()=>acceptKeeperEvent(ready,bad,13));});
+check('释放命令已发但在途正常pulse仍接受',()=>{const next=acceptKeeperEvent({...ready,phase:'releasing'},{nonce,seq:3,type:'pulse',snapshot},13);assert.equal(next.phase,'releasing');});
+check('原native未闭合不接受restored',()=>assert.throws(()=>acceptKeeperEvent(ready,{nonce,seq:3,type:'restored',originalModeRestoredBeforeExit:true},13)));
+check('失败状态不能靠restored改绿',()=>assert.throws(()=>acceptKeeperEvent({...ready,failed:true,phase:'releasing'},{nonce,seq:3,type:'restored',originalModeRestoredBeforeExit:true},13)));
+check('keeper自报失败保持失败',()=>assert.throws(()=>acceptKeeperEvent(ready,{nonce,seq:3,type:'failed',reason:'租约结束'},13)));
+check('恢复必须读回原模式且不声称退出后已验',()=>assert.equal(acceptKeeperEvent({...ready,phase:'releasing'},{nonce,seq:3,type:'restored',snapshot:reference,originalModeRestoredBeforeExit:true,postExitRestorationObserved:false},13).phase,'restored'));
+check('只写restored标志但仍为候选模式拒绝',()=>assert.throws(()=>acceptKeeperEvent({...ready,phase:'releasing'},{nonce,seq:3,type:'restored',snapshot,originalModeRestoredBeforeExit:true,postExitRestorationObserved:false},13)));
+const owner={confirmed:true,willQuit:true,closed:true,recordedPids:5}, proof={accepted:true,directoryRemoved:true,sqlExecution:0,systemClipboard:0,normalOwners:[owner,owner]};
+const completed={phase:'source',cleanupAllowed:true,automaticRetry:false,proofs:[{...proof,sqliteChecked:true},{...proof,schema:9}]};
+check('仅原两个专项及四owner证明闭合才允许正常释放',()=>requireOriginalCompletion(completed));
+check('owner退出未知不得靠恢复清理改绿',()=>{const bad=clone(completed);bad.proofs[1].normalOwners[0].confirmed=false;assert.throws(()=>requireOriginalCompletion(bad));});
+check('分栏schema不为9拒绝',()=>{const bad=clone(completed);bad.proofs[1].schema=8;assert.throws(()=>requireOriginalCompletion(bad));});
+const sizeAttachments=[1000,480,1000,1000].map(height=>({name:'分栏原生窗口尺寸',contentType:'application/json',body:Buffer.from(JSON.stringify({stable:true,requested:{width:1400,height},actual:{width:1400,height},page:{viewport:{width:1400,height,devicePixelRatio:1}},native:{actual:[1400,height],diagnostics:{zoomFactor:1,bounds:{x:50,y:40,width:1400,height:height+29},contentBounds:{x:50,y:69,width:1400,height},display:{bounds:{x:0,y:0,width:1600,height:1200},workArea:{x:0,y:31,width:1600,height:1106},scaleFactor:1}}}})).toString('base64')}));
+const report={errors:[],suites:[{specs:[{tests:[{results:[{status:'passed',retry:0,attachments:sizeAttachments}]}]}]}]};
+check('原报告四次完整尺寸与workArea必须实际成立',()=>assert.equal(requireOriginalLayoutGeometry(report,plan),4));
+check('原测试pass但实际客户区仍645也拒绝',()=>{const bad=clone(report);const a=bad.suites[0].specs[0].tests[0].results[0].attachments[0];const v=JSON.parse(Buffer.from(a.body,'base64'));v.actual.height=645;a.body=Buffer.from(JSON.stringify(v)).toString('base64');assert.throws(()=>requireOriginalLayoutGeometry(bad,plan));});
+check('显示支持列表不能代替原窗口workArea证明',()=>{const bad=clone(report);const a=bad.suites[0].specs[0].tests[0].results[0].attachments[0];const v=JSON.parse(Buffer.from(a.body,'base64'));v.native.diagnostics=null;a.body=Buffer.from(JSON.stringify(v)).toString('base64');assert.throws(()=>requireOriginalLayoutGeometry(bad,plan));});
+console.log(JSON.stringify({passed:cases.length,referenceSHA256:process.argv[3],cases,actualMacCompile:false,modeChanges:0,nativeRuns:0},null,2));

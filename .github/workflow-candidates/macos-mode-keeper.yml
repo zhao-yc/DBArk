@@ -1,0 +1,72 @@
+# 审阅候选：此目录不由GitHub执行。Root审定后才能移入workflows并授权一次push。
+# 当前仅源码缩进+分栏；不覆盖员工1四例首次文件模型或安装接线。
+name: macOS arm64临时模式保有与原布局候选
+on:
+  push:
+    branches:
+      - codex/macos-mode-keeper-20261019
+permissions:
+  contents: read
+concurrency:
+  group: macos-mode-keeper-${{ github.run_id }}-${{ github.run_attempt }}
+  cancel-in-progress: false
+jobs:
+  keeper:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/codex/macos-mode-keeper-20261019'
+    runs-on: macos-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      # 沿原CI准备项目依赖；没有第三方显示工具或驱动安装。
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - run: corepack enable
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm exec install-electron
+      - name: 固定系统上下文与keeper编译
+        run: |
+          set -euo pipefail
+          mkdir -p .cache/macos-mode-keeper
+          {
+            /usr/bin/sw_vers
+            /usr/bin/uname -m
+            printf 'ImageOS=%s\nImageVersion=%s\n' "${ImageOS:-未知}" "${ImageVersion:-未知}"
+            /usr/bin/xcrun swiftc --version
+          } > .cache/macos-mode-keeper/context.log 2>&1
+          cat .cache/macos-mode-keeper/context.log
+          test "$(/usr/bin/uname -m)" = arm64
+          if /usr/bin/xcrun swiftc scripts/macos-mode-keeper.swift -o .cache/macos-mode-keeper/keeper > .cache/macos-mode-keeper/compile.log 2>&1; then
+            cat .cache/macos-mode-keeper/compile.log
+          else
+            cat .cache/macos-mode-keeper/compile.log
+            exit 1
+          fi
+      - name: 一次租约覆盖原源码构建及缩进分栏链
+        run: node scripts/macos-mode-keeper-ci.mjs source
+      - name: 保留原报告及keeper证据
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-mode-keeper-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            .cache/macos-mode-keeper/context.log
+            .cache/macos-mode-keeper/compile.log
+            .cache/macos-mode-keeper/keeper.jsonl
+            .cache/macos-mode-keeper/plan.json
+            .cache/macos-mode-keeper/receipt.json
+            test-results/native-editor-ci/*.json
+            test-results/native-editor-ci/*.log
+            test-results/native-editor-ci/*/report.json
+            test-results/native-editor-ci/*/accepted.json
+            test-results/native-editor-ci/*/failure.json
+            test-results/native-editor-ci/*/started.json
+            test-results/native-editor-ci/*/*.log
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 14
