@@ -7,4 +7,3 @@ else {
   const binding = bindSystemShortcutEnvironment(() => ({ env: process.env, args: process.argv, platform: process.platform, cwd: process.cwd() }));
   (require('./query-file-system-shortcut-native-live') as typeof import('./query-file-system-shortcut-native-live')).registerSystemShortcutNative(binding);
 }
-

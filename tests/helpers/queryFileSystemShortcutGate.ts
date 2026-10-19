@@ -37,4 +37,3 @@ export function bindSystemShortcutEnvironment(read: () => { env: NodeJS.ProcessE
     assertCurrent() { try { if (retained || inspect().signature !== original.signature) throw Error('系统快捷键原环境已失效'); } catch (reason) { retained = true; throw reason; } },
   });
 }
-

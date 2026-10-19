@@ -157,4 +157,3 @@ describe('共享live保留原保存验收及系统输入边界', () => {
     expect(live.match(/keyboard\.press\(process\.platform === 'darwin' \? 'Meta\+s' : 'Control\+s'\)/g)).toHaveLength(1);
   });
 });
-

@@ -144,4 +144,3 @@ export class SystemShortcutHandshake {
     } catch (reason) { this.stopped = true; this.records.push(Object.freeze({ stage: 'retained' })); throw reason; }
   }
 }
-
