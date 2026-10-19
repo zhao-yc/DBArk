@@ -1,0 +1,57 @@
+name: 0.28 冻结候选关键字缺项专项
+on:
+  push:
+    branches: [codex/v028-serial-closeout-20261019]
+    paths:
+      - .github/workflows/v028-keyword-native.yml
+      - scripts/v028-keyword-native-ci.mjs
+      - scripts/v028-keyword-download.py
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: v028-keyword-${{ github.run_id }}-${{ github.run_attempt }}
+  cancel-in-progress: false
+jobs:
+  keyword-native:
+    name: 关键字 · ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      max-parallel: 1
+      fail-fast: false
+      matrix:
+        os: [windows-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - run: corepack enable
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm exec install-electron
+      - name: 通过官方API接收固定成功候选及原身份（不访问旧VM）
+        run: python scripts/v028-keyword-download.py
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PYTHONIOENCODING: utf-8
+      - name: 同次源码批准、113运行字节对照及两项关键字
+        run: node scripts/v028-keyword-native-ci.mjs source
+        env:
+          KEYWORD_RUNNER_ENVIRONMENT: ${{ runner.environment }}
+      - name: 原安装器实际安装、原清单逐文件对照及两项关键字
+        run: node scripts/v028-keyword-native-ci.mjs installed
+        env:
+          KEYWORD_RUNNER_ENVIRONMENT: ${{ runner.environment }}
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: v028-keyword-${{ matrix.os }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            test-results/v028-keyword/
+            .cache/v028-keyword-input/archive-receipt.json
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 14
