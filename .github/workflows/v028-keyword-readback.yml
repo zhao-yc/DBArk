@@ -1,0 +1,33 @@
+name: 0.28关键字原报告只读核对
+on:
+  push:
+    branches: [codex/v028-serial-closeout-20261019]
+    paths:
+      - .github/workflows/v028-keyword-readback.yml
+      - scripts/v028-keyword-readback.py
+      - scripts/v028-keyword-readback.mjs
+permissions:
+  contents: read
+  actions: read
+jobs:
+  keyword-readback:
+    runs-on: ubuntu-latest
+    timeout-minutes: 6
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - run: python3 scripts/v028-keyword-readback.py
+        env:
+          GH_TOKEN: ${{ github.token }}
+      - run: node scripts/v028-keyword-readback.mjs
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: v028-keyword-readback-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .cache/v028-keyword-readback/
+          include-hidden-files: true
+          if-no-files-found: warn
