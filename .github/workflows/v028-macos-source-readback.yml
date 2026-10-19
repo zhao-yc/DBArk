@@ -1,0 +1,37 @@
+name: 0.28 Mac源码原生与普通回归身份只读核对
+on:
+  push:
+    branches:
+      - codex/v028-serial-closeout-20261019
+    paths:
+      - .github/workflows/v028-macos-source-readback.yml
+      - scripts/read-v028-macos-source-identity.py
+      - scripts/read-v028-macos-source-identity.mjs
+permissions:
+  contents: read
+  actions: read
+jobs:
+  readback:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: 两份固定源码证据原ZIP摘要及CRC
+        run: python3 scripts/read-v028-macos-source-identity.py
+        env:
+          GH_TOKEN: ${{ github.token }}
+      - name: 原六项与新legacy的完整运行字节集合一致
+        run: node scripts/read-v028-macos-source-identity.mjs
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: v028-Mac-source-identity-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .cache/macos-source-identity-readback-39258588418/
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 14
