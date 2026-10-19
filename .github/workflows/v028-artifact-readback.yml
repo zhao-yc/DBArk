@@ -7,13 +7,14 @@ on:
       - .github/workflows/v028-artifact-readback.yml
       - scripts/read-v028-macos-artifact.mjs
       - scripts/read-v028-windows-artifact.mjs
+      - scripts/read-v028-windows-success-archive.py
 permissions:
   contents: read
   actions: read
 jobs:
   readback:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
         with:
@@ -21,12 +22,16 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '24'
-      # 仅下载固定旧run的已上传产物；不访问失败VM或执行归档中的程序。
-      - uses: actions/download-artifact@v4
+      # 仅消费已结束的固定成功运行；旧失败归档和旧 VM 不动。
+      - name: 固定成功归档的独立字节摘要和CRC
+        run: python3 scripts/read-v028-windows-success-archive.py
+        env:
+          GH_TOKEN: ${{ github.token }}
+      - name: 留存本次接收的原ZIP与资产摘要
+        if: always()
+        uses: actions/upload-artifact@v4
         with:
-          name: v028-Windows-evidence-39242374243-1
-          github-token: ${{ github.token }}
-          run-id: 39242374243
-          path: .cache/windows-artifact-readback-39242374243
-      - name: 原来源、报告摘要与实际窗口坐标
-        run: node scripts/read-v028-windows-artifact.mjs
+          name: v028-Windows-readback-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .cache/windows-success-readback-39244695054/
+          if-no-files-found: warn
+          retention-days: 14
