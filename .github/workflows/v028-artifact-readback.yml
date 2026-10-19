@@ -8,6 +8,7 @@ on:
       - scripts/read-v028-macos-artifact.mjs
       - scripts/read-v028-windows-artifact.mjs
       - scripts/read-v028-windows-success-archive.py
+      - scripts/read-v028-windows-success-reports.mjs
 permissions:
   contents: read
   actions: read
@@ -27,6 +28,8 @@ jobs:
         run: python3 scripts/read-v028-windows-success-archive.py
         env:
           GH_TOKEN: ${{ github.token }}
+      - name: 原批准与源码安装专项原终态
+        run: node scripts/read-v028-windows-success-reports.mjs
       - name: 留存本次接收的原ZIP与资产摘要
         if: always()
         uses: actions/upload-artifact@v4

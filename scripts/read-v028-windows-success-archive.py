@@ -39,7 +39,7 @@ def main():
     head = '4a2bcd423a26f5fe6fe094ee30656a58fb7d3035'
     repository = 'https://api.github.com/repos/zhao-yc/DBArk'
     root = Path('.cache/windows-success-readback-39244695054')
-    root.mkdir(exist_ok=False)
+    root.mkdir(parents=True, exist_ok=False)
     records = []
     for artifact_id, kind, size, digest in [
         (12184037042, 'evidence', 5340007, 'd7eb06a765753b584d8e77a21dd4a42a40439338fc65892fafe95d3bfb435176'),
