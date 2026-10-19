@@ -17,14 +17,14 @@ const nativeHelper = readFileSync(new URL('../helpers/queryLayoutNativeWindow.ts
 const pageGeometry = (maximum = 614) => ({ viewport: { width: 1400, height: 1000, devicePixelRatio: 2 }, tab: { x: 0, y: 132, width: 1100, height: 844 }, editor: { x: 0, y: 213, width: 1100, height: Math.min(300, maximum) }, separator: { minimum: 130, maximum, value: Math.min(300, maximum) }, children: [{ classes: 'toolbar', rect: { x: 0, y: 169, width: 1100, height: 44 } }] });
 
 /** 原controller.step核每个await两侧；只有系统窗口/页面/附件端口是RAM。 */
-function fixture(options: { sizes?: number[][]; viewports?: number[][]; maxima?: number[]; attachmentFails?: boolean; expire?: 'identity' | 'set' | 'get' | 'page' | 'attach'; wrongWindow?: boolean; wrongContents?: boolean; diagnosticFails?: boolean } = {}) {
+function fixture(options: { sizes?: number[][]; viewports?: number[][]; maxima?: number[]; attachmentFails?: boolean; expire?: 'identity' | 'set' | 'center' | 'get' | 'page' | 'attach'; wrongWindow?: boolean; wrongContents?: boolean; diagnosticFails?: boolean } = {}) {
   const { sizes = [[1400, 1000]], viewports, maxima = [614], attachmentFails = false } = options;
   const attachments: Array<{ name: string; value: any }> = [], annotations: unknown[] = [], polls: Array<{ timeout: number; expected: unknown; attempts: number }> = [];
   let alive = true, index = 0, currentSize = sizes[0];
   const expire = (stage: typeof options.expire) => { if (options.expire === stage) alive = false; };
   const getContentSize = vi.fn(() => { currentSize = sizes[Math.min(index++, sizes.length - 1)]; expire('get'); return currentSize; });
   const getDisplayMatching = vi.fn(() => ({ id: 9, bounds: { x: 0, y: 0, width: 1920, height: 1200 }, workArea: { x: 0, y: 30, width: 1920, height: 1100 }, scaleFactor: 2 }));
-  const native = { id: 1, webContents: { id: 2, getZoomFactor: vi.fn(() => 1) }, isDestroyed: vi.fn(() => false), setMinimumSize: vi.fn(), setContentSize: vi.fn(() => { expire('set'); }), getContentSize,
+  const native = { id: 1, webContents: { id: 2, getZoomFactor: vi.fn(() => 1) }, isDestroyed: vi.fn(() => false), setMinimumSize: vi.fn(), setContentSize: vi.fn(() => { expire('set'); }), center: vi.fn(() => { expire('center'); }), getContentSize,
     getBounds: vi.fn(() => { if (options.diagnosticFails) throw Error('合成补充诊断失败'); return { x: 0, y: 30, width: currentSize[0], height: currentSize[1] + 35 }; }),
     getContentBounds: vi.fn(() => ({ x: 0, y: 65, width: currentSize[0], height: currentSize[1] })), getMinimumSize: vi.fn(() => [720, 320]),
   };
@@ -62,6 +62,17 @@ it('只发一次原请求，连续真实一致样本后才完成尺寸观察', a
   expect(f.attachments.map(value => value.value.actual.height)).toEqual([612, 1000, 1000]);
   expect(f.attachments.map(value => value.value.stable)).toEqual([false, false, true]); expect(f.run.retained).toBe(false);
 });
+it('同一原窗口完成尺寸请求后只居中一次，不能沿用小窗口原y造成外框越界', async () => {
+  const f = fixture(); await f.resize();
+  expect(f.native.center).toHaveBeenCalledOnce();
+  expect(f.native.center.mock.invocationCallOrder[0]).toBeGreaterThan(f.native.setContentSize.mock.invocationCallOrder[0]);
+  expect(f.native.center.mock.invocationCallOrder[0]).toBeLessThan(f.native.getContentSize.mock.invocationCallOrder[0]);
+});
+it('尺寸返回后原scope失效不能继续居中；居中报错不能继续读取几何', async () => {
+  const stale = fixture({ expire: 'set' }); await expect(stale.resize()).rejects.toThrow('原scope已失效'); expect(stale.native.center).not.toHaveBeenCalled();
+  const broken = fixture(); broken.native.center.mockImplementationOnce(() => { throw Error('合成原窗口定位失败'); });
+  await expect(broken.resize()).rejects.toThrow('合成原窗口定位失败'); expect(broken.native.getContentSize).not.toHaveBeenCalled(); expect(broken.attachments).toEqual([]);
+});
 it.each([942, 645])('OS实得%s高度可完成观察，但仍须真实原>410准入', async actual => {
   const f = fixture({ sizes: [[1400, actual]], maxima: [410] }); await f.resize(); await expect(f.ready()).rejects.toThrow();
   expect(f.attachments[0].value.requested).toEqual({ width: 1400, height: 1000 }); expect(f.attachments[0].value.actual.height).toBe(actual);
@@ -86,7 +97,7 @@ it('native读回后原scope失效，不能追加页面或附件观察', async ()
   const f = fixture({ expire: 'get' }); await expect(f.resize()).rejects.toThrow('原scope已失效');
   expect(f.evaluate).not.toHaveBeenCalled(); expect(f.attachments).toEqual([]); expect(f.run.retained).toBe(true);
 });
-it.each(['identity', 'set', 'page', 'attach'] as const)('%s异步返回后scope过期，不能继续下一动作', async expire => {
+it.each(['identity', 'set', 'center', 'page', 'attach'] as const)('%s异步返回后scope过期，不能继续下一动作', async expire => {
   const f = fixture({ expire, attachmentFails: expire === 'attach' }); await expect(f.resize()).rejects.toThrow('原scope已失效'); expect(f.run.retained).toBe(true);
   if (expire === 'identity') expect(f.native.setContentSize).not.toHaveBeenCalled();
   if (expire === 'identity' || expire === 'set') expect(f.applicationEvaluate).not.toHaveBeenCalled();
