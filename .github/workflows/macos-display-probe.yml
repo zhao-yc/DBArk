@@ -1,0 +1,75 @@
+name: macOS arm64只读显示模式枚举
+
+# 仅精确诊断分支push触发；不接PR、手动调用、标签或其他员工分支。
+on:
+  push:
+    branches:
+      - codex/macos-display-probe-20261019
+
+permissions:
+  contents: read
+
+# 保留每次诊断原件，不因新push取消前一次运行。
+concurrency:
+  group: macos-display-probe-${{ github.run_id }}-${{ github.run_attempt }}
+  cancel-in-progress: false
+
+jobs:
+  enumerate:
+    if: github.event_name == 'push' && github.ref == 'refs/heads/codex/macos-display-probe-20261019'
+    runs-on: macos-latest
+    timeout-minutes: 5
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: 仅检出固定枚举源码
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          sparse-checkout: scripts/probe-macos-display.swift
+          sparse-checkout-cone-mode: false
+      - name: 记录系统及镜像上下文
+        run: |
+          set -euo pipefail
+          mkdir -p .cache/macos-display-probe
+          {
+            /usr/bin/sw_vers
+            /usr/bin/uname -m
+            printf 'ImageOS=%s\nImageVersion=%s\n' "${ImageOS:-未知}" "${ImageVersion:-未知}"
+            /usr/bin/xcrun swiftc --version
+          } > .cache/macos-display-probe/context.log 2>&1
+          cat .cache/macos-display-probe/context.log
+          test "$(/usr/bin/uname -m)" = arm64
+      - name: 使用系统已有Swift编译一次
+        run: |
+          set -euo pipefail
+          if /usr/bin/xcrun swiftc scripts/probe-macos-display.swift -o .cache/macos-display-probe/probe > .cache/macos-display-probe/compile.log 2>&1; then
+            cat .cache/macos-display-probe/compile.log
+          else
+            cat .cache/macos-display-probe/compile.log
+            exit 1
+          fi
+      - name: 只读枚举一次并输出JSON
+        run: |
+          set -euo pipefail
+          if .cache/macos-display-probe/probe > .cache/macos-display-probe/display-inventory.json 2> .cache/macos-display-probe/probe.log; then
+            cat .cache/macos-display-probe/probe.log
+            cat .cache/macos-display-probe/display-inventory.json
+          else
+            cat .cache/macos-display-probe/probe.log
+            exit 1
+          fi
+      - name: 保留JSON与原始日志
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-display-probe-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            .cache/macos-display-probe/context.log
+            .cache/macos-display-probe/compile.log
+            .cache/macos-display-probe/probe.log
+            .cache/macos-display-probe/display-inventory.json
+          if-no-files-found: error
+          retention-days: 14
+          include-hidden-files: true
