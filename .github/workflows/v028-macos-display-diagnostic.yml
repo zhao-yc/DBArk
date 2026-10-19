@@ -1,0 +1,84 @@
+name: 0.28 Mac编译与只读显示诊断
+on:
+  push:
+    branches:
+      - codex/macos-mode-keeper-20261019
+    paths:
+      - '.github/workflows/v028-macos-display-diagnostic.yml'
+      - 'scripts/v028-probe-macos-display.swift'
+      - 'scripts/macos-mode-keeper.swift'
+permissions:
+  contents: read
+concurrency:
+  group: v028-macos-diagnostic-${{ github.run_id }}-${{ github.run_attempt }}
+  cancel-in-progress: false
+jobs:
+  inspect:
+    name: 只读诊断 · ${{ matrix.label }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            label: arm64
+          - os: macos-15-intel
+            label: x64
+    defaults:
+      run:
+        shell: bash
+    env:
+      MODE_KEEPER_RUNNER_ENVIRONMENT: ${{ runner.environment }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: 原始系统上下文与固定候选
+        run: |
+          set -euo pipefail
+          mkdir -p .cache/v028-macos-diagnostic
+          {
+            /usr/bin/sw_vers
+            /usr/bin/uname -m
+            printf 'ImageOS=%s\nImageVersion=%s\n' "${ImageOS:-未知}" "${ImageVersion:-未知}"
+            /usr/bin/xcrun swiftc --version
+            git rev-parse HEAD
+            git rev-parse HEAD:src HEAD:package.json HEAD:pnpm-lock.yaml
+          } > .cache/v028-macos-diagnostic/context.log 2>&1
+          cat .cache/v028-macos-diagnostic/context.log
+      - name: 编译原session keeper（不执行保有或配置）
+        run: |
+          set -euo pipefail
+          if /usr/bin/xcrun swiftc scripts/macos-mode-keeper.swift -o .cache/v028-macos-diagnostic/keeper > .cache/v028-macos-diagnostic/keeper-compile.log 2>&1; then
+            cat .cache/v028-macos-diagnostic/keeper-compile.log
+          else
+            cat .cache/v028-macos-diagnostic/keeper-compile.log
+            exit 1
+          fi
+      - name: 编译并单次执行只读枚举（无模式切换、无窗口）
+        run: |
+          set -euo pipefail
+          /usr/bin/xcrun swiftc scripts/v028-probe-macos-display.swift -o .cache/v028-macos-diagnostic/probe > .cache/v028-macos-diagnostic/probe-compile.log 2>&1
+          .cache/v028-macos-diagnostic/probe > .cache/v028-macos-diagnostic/inventory.json 2> .cache/v028-macos-diagnostic/probe-stderr.log
+          cat .cache/v028-macos-diagnostic/inventory.json
+      - name: 保存本次只读诊断原件
+        id: evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: v028-macos-diagnostic-${{ matrix.label }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .cache/v028-macos-diagnostic/*.log
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 14
+      - name: 保存当次完整枚举
+        id: inventory
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: v028-macos-inventory-${{ matrix.label }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: .cache/v028-macos-diagnostic/inventory.json
+          include-hidden-files: true
+          if-no-files-found: warn
+          retention-days: 14
