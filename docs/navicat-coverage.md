@@ -2,6 +2,8 @@
 
 ## 当前统筹检查点（2026-10-19）
 
+最新人工安排为Root串行收口冻结0.28并在版本完成后暂停，五员工停止新增任务，0.29在途代码封存。产品基线仍为`bf08645`，原生/实际安装/正式发行要求未删；新Windows离线环境预检已通过，保存及Mac阻断继续逐项核。见[当前有效范围和接班证据](development/v028-serial-closeout-20261019.md)。下列记录保留各历史检查点范围，不代表并行计划仍在执行。
+
 最新整合`8b6bdea`完整Linux首次运行39206282767已成功：560文件、10590通过／10条件跳过，类型与构建成功；原0f失败保持，桌面及安装不外推。Mac独立只读枚举确认当前1024×768／scale1、visibleFrame1024×674，并支持1600×1200等模式；未切换，后续仍实测原布局目标，见[完整CI终态](../tests/integration/acceptance-query-file-first-model-root-20261019.md)和[Mac枚举准确来源](testing/macos-display-probe-root-20261019.md)。
 
 首次文件模型及格式化历史产品`f27c85a`已完成Root280项／类型、新109文件构建及113封存；固定`0f655b3`的Windows源码四例`run1924`单次全部通过，覆盖LF／CRLF×按钮／快捷键、普通编辑与格式化Undo clean、Redo选区、SQLite9及独立重启，8个原owner正常收尾。原`run1918`的Redo失败及现场保持，见[准确实际证据](../tests/integration/acceptance-query-file-first-model-root-20261019.md)。本能力安装及macOS仍待验，Q01／Q03和公开发行计数保持。

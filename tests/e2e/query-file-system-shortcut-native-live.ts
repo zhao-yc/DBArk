@@ -6,7 +6,7 @@ import { SystemShortcutHandshake, type SystemShortcutDriver } from '../helpers/q
 export function registerSystemShortcutNative(binding: ReturnType<typeof bindSystemShortcutEnvironment>) {
   const driver: SystemShortcutDriver = {
     caseTitle: systemShortcutCase,
-    operator: '员工1',
+    operator: 'Root',
     async waitForInput(request, current, info) {
       const handshake = new SystemShortcutHandshake(binding.handshake, current);
       try {
