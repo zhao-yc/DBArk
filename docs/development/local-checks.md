@@ -47,3 +47,5 @@ pnpm check:local -- --build tests/unit/local-check.test.ts tests/unit/sql-keywor
 | 入口总计 | 退出码 0 | 95.65 秒 |
 
 另核 `node --check scripts/check-local.mjs`、帮助入口及 `git diff --check`。默认沙箱的 Corepack 缓存不可用且 DNS 受限，本轮安装和代表性检查在已获准的本机执行环境完成；上述直接 Node 入口可复用已安装依赖。未运行 GUI、安装、实库或系统输入，未增加平台验收结论。收口克隆仍为原干净 `4a87a47`，冻结的源码、package 和锁文件三个对象保持原身份。
+
+后台固定提交 `4000fc2782de175fad99883d9bd99b4f34aa8b03` 的 [CI 39286562944](https://github.com/zhao-yc/DBArk/actions/runs/39286562944)、job `118174584033` 已结束成功。原日志核得 564 个文件、10686 项通过、10 项条件跳过，包含新增入口 6 项；类型检查与普通构建通过。该结果属于准确 Linux 源码检查，平台、安装及发行作业未执行，不扩大上述本机证据范围；本段后续文档提交也不冒充新的代码验收头。
