@@ -1,0 +1,71 @@
+{
+  "version": "0.28.0",
+  "status": "未发布候选",
+  "productCommit": "bf08645a28fceb5d1d40ba16f013bb78e7a7c0a2",
+  "testHead": "4a2bcd423a26f5fe6fe094ee30656a58fb7d3035",
+  "runId": 39244695054,
+  "jobId": 118033672863,
+  "readback": {
+    "head": "f30c2aaad0cc49cfdfe7e0cf7aa4d1f3fedb3e23",
+    "runId": 39250949911,
+    "jobId": 118054308810,
+    "host": "GitHub-hosted Ubuntu",
+    "rootLocalZipValidated": false
+  },
+  "archives": [
+    {
+      "artifactId": 12184037042,
+      "name": "v028-Windows-evidence-39244695054-1",
+      "apiBytes": 5340007,
+      "apiDigest": "sha256:d7eb06a765753b584d8e77a21dd4a42a40439338fc65892fafe95d3bfb435176",
+      "receivedBytes": 5340007,
+      "receivedSha256": "d7eb06a765753b584d8e77a21dd4a42a40439338fc65892fafe95d3bfb435176",
+      "allMemberCrcValidated": true,
+      "memberCount": 137,
+      "expiresAt": "2026-11-02T11:50:22Z"
+    },
+    {
+      "artifactId": 12184231827,
+      "name": "v028-Windows-x64-39244695054-1-unsigned",
+      "apiBytes": 142818435,
+      "apiDigest": "sha256:066ec0ed921c59168800161d85d3e0cf6c0bcbe814069d1cf9d3df315b88746f",
+      "receivedBytes": 142818435,
+      "receivedSha256": "066ec0ed921c59168800161d85d3e0cf6c0bcbe814069d1cf9d3df315b88746f",
+      "allMemberCrcValidated": true,
+      "memberCount": 2,
+      "expiresAt": "2026-11-02T11:50:17Z",
+      "files": [
+        {
+          "path": "DBArk-0.28.0-win-x64-unsigned.exe",
+          "bytes": 142664620,
+          "sha256": "9b98642db34cee99453e671e23f78af11821ae6314e51fbd39ffc718754d62fe",
+          "crc32": "db727690"
+        },
+        {
+          "path": "DBArk-0.28.0-win-x64-unsigned.exe.blockmap",
+          "bytes": 149494,
+          "sha256": "ba3f6dd08518c65085a49e0fb7ac3b21ed87defcc65cca30d4429a5b8ea9a5b4",
+          "crc32": "19a30406"
+        }
+      ]
+    }
+  ],
+  "sourceApprovalSha256": "76f18838b0269daf103e9d3d40f718575f029bc751c23ed413082c2de6dc9385",
+  "installedApprovalSha256": "486a3828ea9753a7cb2a3b6a3d60e7c82c3366aa3686311a0fa5a0dafd798e45",
+  "packageInputSha256": "1f5276b9a59fff70479a3ee9838a7ce857babe964abb872e2e57cbcb3ff66bf9",
+  "readbackCopy": {
+    "artifactId": 12186075522,
+    "bytes": 296343560,
+    "apiDigest": "sha256:2c337818eb077ca1a7be1f13d0bcfd5e91ba959dc8f70ba58fb2a6727d592c0a",
+    "independentlyDownloaded": false
+  },
+  "remaining": [
+    "关键字大小写当前候选专项",
+    "Windows安装版系统Ctrl+S",
+    "macOS arm64安装",
+    "macOS x64源码与安装",
+    "macOS真实系统Cmd+S",
+    "其余矩阵约定实库与GUI边界",
+    "最终发行审核"
+  ]
+}

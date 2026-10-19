@@ -2,6 +2,8 @@
 
 ## 当前统筹检查点（2026-10-19）
 
+Windows冻结0.28测试头`4a2bcd4`已完成源码和真实NSIS安装各6项专项，共24个正常owner；legacy各76通过/313条件跳过，包含组件层。原run39244695054的候选/证据经新只读回读39250949911核ZIP字节、SHA及全部CRC，安装器与同次封存输入一致。关键字两项和系统保存等legacy跳过仍记未验，不增加完整工作包或公开发行计数，详见[Windows闭环](../tests/integration/acceptance-v028-windows-success-20261019.md)。本轮只修改证据/回读脚本，不加入0.29能力；Mac安装和x64等仍待补。
+
 最新人工安排为Root串行收口冻结0.28并在版本完成后暂停，五员工已封存，0.29不继续开发。产品仍为`bf08645`，原生/实际安装/发行门保持。Windows源码系统Ctrl+S、原字节/来源/SQLite9/独立重启及两正常owner通过；`4d41e1b`完整Linux561文件/10643通过/10条件跳过，类型与构建成功，桌面/安装/发行跳过。Mac arm64固定`689b352`的run39240838841已完成源码缩进/分栏和首次文件模型四例，Root回读39242022204核原报告、12正常owner、原模式恢复及归档摘要；不算安装或Mac系统CmdS。Windows专用run39242374243缩进通过、分栏在新增居中操作后实际1008×655未达原1400宽度，安装未执行；修正已限定居中仅Mac，182项及类型通过，新实际验收待运行。见[当前有效范围与矩阵](development/v028-serial-closeout-20261019.md)及[Windows系统保存](development/v028-windows-system-source-20261019.md)。下列记录保留历史来源，不代表并行计划仍执行。
 
 最新整合`8b6bdea`完整Linux首次运行39206282767已成功：560文件、10590通过／10条件跳过，类型与构建成功；原0f失败保持，桌面及安装不外推。Mac独立只读枚举确认当前1024×768／scale1、visibleFrame1024×674，并支持1600×1200等模式；未切换，后续仍实测原布局目标，见[完整CI终态](../tests/integration/acceptance-query-file-first-model-root-20261019.md)和[Mac枚举准确来源](testing/macos-display-probe-root-20261019.md)。
