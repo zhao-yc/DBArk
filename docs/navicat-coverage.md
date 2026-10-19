@@ -2,7 +2,7 @@
 
 ## 当前统筹检查点（2026-10-19）
 
-新产品`65ce201`的首次文件模型已完成Root相关260项、类型、新109文件构建及113运行输入封存。四例Windows实际验收`run1918`为0通过／1失败／3跳过：首例已观察完整LF初模型、普通编辑Undo clean及首次格式化Undo clean，但Redo选区恢复不一致；独立重启和正常退出未完成，继续修复，见[原始失败及准确边界](../tests/integration/acceptance-query-file-first-model-root-20261019.md)。新产品完整Linux原有三处夹具失败已窄修，合并分栏补丁后Root121项及类型通过，新完整CI仍待运行。Q01／Q03及公开发行计数保持。
+新产品`65ce201`的首次文件模型已完成Root相关260项、类型、新109文件构建及113运行输入封存。四例Windows实际验收`run1918`为0通过／1失败／3跳过：首例已观察完整LF初模型、普通编辑Undo clean及首次格式化Undo clean，但Redo选区恢复不一致；独立重启和正常退出未完成，见[原始失败及准确边界](../tests/integration/acceptance-query-file-first-model-root-20261019.md)。三夹具及分栏整合`1bb0f9f`的完整Linux首次运行39202556896已成功：554文件／10431通过／10条件跳过，类型与构建成功。后续格式化事务增量`f27c85a`另完成Root280项／类型、新109文件构建及113封存，真实窗口仍待新独立验收；不继承前一完整CI计数。Q01／Q03及公开发行计数保持。
 
 旧产品`e0fa1dd`的R9 Windows源码／真实安装缩进及分栏四份原专项已由Root独立下载原报告复核，8个owner正常收尾；该整轮仍因Linux和两个macOS失败而失败。该Windows范围不转给新产品，也不是Root独立下载安装器验收，见[固定R9 Windows实证](../tests/integration/acceptance-native-r9-windows-root-20261019.md)。以下记录保留各原检查点的当时范围。
 
