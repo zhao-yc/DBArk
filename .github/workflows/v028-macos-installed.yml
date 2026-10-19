@@ -8,6 +8,7 @@ on:
       - scripts/build-v028-macos-install-source.mjs
       - scripts/macos-mode-keeper-ci.mjs
       - scripts/macos-installed-cleanup-lease.mjs
+      - scripts/macos-mode-keeper.swift
 permissions:
   contents: read
 concurrency:

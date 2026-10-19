@@ -17,9 +17,12 @@ let nonce = args[3], deadline = ProcessInfo.processInfo.systemUptime + 600
 // 与纯策略同一预算；真正的窗口外框/客户区和workArea仍由原native几何断言验收。
 let minimumVisibleWidth: Double = 1400 + 40, minimumVisibleHeight: Double = 1000 + 50
 let environment = ProcessInfo.processInfo.environment
-guard environment["GITHUB_ACTIONS"] == "true", environment["GITHUB_REF"] == "refs/heads/codex/macos-mode-keeper-20261019",
+// 源码旧入口与本次安装入口分别绑定真实分支；安装仍只限指定的arm64托管job。
+let sourceBranch = environment["GITHUB_REF"] == "refs/heads/codex/macos-mode-keeper-20261019"
+let installedJob = environment["GITHUB_REF"] == "refs/heads/codex/v028-serial-closeout-20261019" && environment["GITHUB_JOB"] == "arm64-installed"
+guard environment["GITHUB_ACTIONS"] == "true", sourceBranch || installedJob,
       environment["MODE_KEEPER_RUNNER_ENVIRONMENT"] == "github-hosted" else {
-    FileHandle.standardError.write(Data("会话作用域仅限本诊断分支的隔离GitHub托管job\n".utf8)); exit(78)
+    FileHandle.standardError.write(Data("会话作用域仅限已批准源码分支或指定arm64安装托管job\n".utf8)); exit(78)
 }
 var seq = 0, retained = false
 
