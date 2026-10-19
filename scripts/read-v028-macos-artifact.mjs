@@ -3,13 +3,14 @@ import { createHash } from 'node:crypto';
 import { lstatSync, readFileSync, realpathSync } from 'node:fs';
 import { resolve, join, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { assertFileFirstModelResult } from './native-file-first-model-ci.mjs';
 
 /** 只读固定原归档JSON，不加载归档代码、连接旧VM或补取SDK/SQLite/PID。 */
 function readOriginalReports() {
   assert.equal(process.argv.length, 2);
   assert.equal(process.env.GITHUB_ACTIONS, 'true');
   assert.equal(process.env.GITHUB_REF, 'refs/heads/codex/v028-serial-closeout-20261019');
-  const root = realpathSync(fileURLToPath(new URL('../.cache/macos-artifact-readback-39239873392/', import.meta.url)));
+  const root = realpathSync(fileURLToPath(new URL('../.cache/macos-artifact-readback-39240838841/', import.meta.url)));
   /** 文件只能来自归档根内的普通单链接JSON；大小有界并按原字节计算摘要。 */
   function original(name) {
     const path = join(root, name), stat = lstatSync(path);
@@ -20,8 +21,8 @@ function readOriginalReports() {
     return { value, sha256: createHash('sha256').update(bytes).digest('hex'), bytes: bytes.length };
   }
   const approval = original('test-results/native-editor-ci/source-approval.json');
-  assert.equal(approval.value.context.commit, '9c083b959bb1c54a4566c60595599c4634b39208');
-  assert.equal(String(approval.value.context.runId), '39239873392');
+  assert.equal(approval.value.context.commit, '689b35247a3a5c3345f5c0e754c5ae0742e1a33c');
+  assert.equal(String(approval.value.context.runId), '39240838841');
   assert.equal(approval.value.context.arch, 'arm64'); assert.equal(approval.value.context.platform, 'darwin');
   console.log('DBARK_ARCHIVED_SOURCE:' + JSON.stringify({ sha256: approval.sha256, context: approval.value.context }));
   const completed = original('test-results/native-editor-ci/source-completed.json');
@@ -44,6 +45,19 @@ function readOriginalReports() {
     if (specialty === 'layout') assert.equal(geometry.length, 4);
     console.log('DBARK_ARCHIVED_REPORT:' + JSON.stringify({ specialty, reportSha256: report.sha256, reportBytes: report.bytes, status: result.status, retry: result.retry, stats: report.value.stats, accepted: accepted.value, geometry }));
   }
+  const files = original('test-results/native-file-first-model-ci/source/report.json');
+  const fileAccepted = original('test-results/native-file-first-model-ci/source/accepted.json');
+  const proofs = assertFileFirstModelResult(files.value);
+  assert.equal(fileAccepted.value.phase, 'source'); assert.equal(fileAccepted.value.approvalSha256, approval.sha256);
+  assert.deepEqual(fileAccepted.value.context, approval.value.context);
+  assert.equal(fileAccepted.value.reportSha256, files.sha256);
+  assert.equal(fileAccepted.value.cleanupAllowed, true); assert.equal(fileAccepted.value.automaticRetry, false);
+  assert.deepEqual(fileAccepted.value.proofs, proofs);
+  console.log('DBARK_ARCHIVED_FILES:' + JSON.stringify({ reportSha256: files.sha256, reportBytes: files.bytes, acceptedSha256: fileAccepted.sha256, stats: files.value.stats, proofs: proofs.map(proof => ({
+    caseKey: proof.caseKey, entry: proof.entry, sourceEol: proof.sourceEol, accepted: proof.accepted,
+    ordinarySingleUndo: proof.ordinarySingleUndo, formatSingleUndo: proof.formatSingleUndo, sqliteSchema: proof.sqliteSchema,
+    directoryRemoved: proof.directoryRemoved, normalOwners: proof.normalOwners, identity: proof.identity,
+  })) }));
   console.log('DBARK_ARCHIVED_BOUNDARY:' + JSON.stringify({ oldRunReplayed: false, originalVMAccessed: false, applicationProbed: false, cleanupRequested: false, rootLocalZipValidated: false }));
 }
 
