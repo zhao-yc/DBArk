@@ -1,4 +1,4 @@
-// 候选实现：当前仅供Root审阅，尚未在Mac编译/运行；无窗口或应用强停入口。
+// 仅用于隔离GitHub-hosted验收，编译和运行结论须以本轮原报告为准；无窗口或应用强停入口。
 import AppKit
 import CoreGraphics
 import Foundation
@@ -31,6 +31,11 @@ func emit(_ type: String, _ payload: [String: Any] = [:]) {
 /** 失败后只保留已有内存并自退；session作用域不因本进程退出改变仍存活应用的显示现场。 */
 func retain(_ reason: String) {
     if !retained { retained = true; emit("failed", ["reason": reason, "failureDisplayRetention": "forSession保持到当前登录会话自然结束；本进程不恢复或强停应用", "applicationForceStop": false]) }
+}
+/** 保留自有检查的错误域与状态码；不输出环境或系统本地化错误中的任意细节。 */
+func retainError(_ stage: String, _ error: Error) {
+    let reason = error as NSError
+    retain(stage + "：" + String(reason.domain.prefix(256)) + "（" + String(reason.code) + "）")
 }
 func active() throws {
     if retained || ProcessInfo.processInfo.systemUptime >= deadline { throw NSError(domain: "租约失效", code: 1) }
@@ -115,12 +120,12 @@ func stable(_ display: CGDirectDisplayID, _ selected: CGDisplayMode, from: CGDis
 }
 
 var before: (data: [String: Any], display: CGDirectDisplayID, current: CGDisplayMode, modes: [CGDisplayMode])?
-do { before = try snapshot(); emit("inventory", ["snapshot": before!.data]) } catch { retain("首次只读显示证明失败") }
+do { before = try snapshot(); emit("inventory", ["snapshot": before!.data]) } catch { retainError("首次只读显示证明失败", error) }
 var selected: CGDisplayMode?, applied = false, input = Data(), lastPulse = ProcessInfo.processInfo.systemUptime
 while !retained && ProcessInfo.processInfo.systemUptime < deadline {
     if !retained && applied && ProcessInfo.processInfo.systemUptime - lastPulse >= 1 {
         do { let value = try stable(before!.display, selected!, requireSpace: true); emit("pulse", ["snapshot": value]); lastPulse = ProcessInfo.processInfo.systemUptime }
-        catch { retain("保有期间显示证明失效") }
+        catch { retainError("保有期间显示证明失效", error) }
     }
     // 只读stdin协议；EOF/坏帧永久失败，不把父进程消失解释为正常释放。
     var descriptor = pollfd(fd: STDIN_FILENO, events: Int16(POLLIN | POLLHUP), revents: 0)
@@ -162,7 +167,7 @@ while !retained && ProcessInfo.processInfo.systemUptime < deadline {
                 let value = try stable(original.display, originals[0], from: selected!, requireSpace: false)
                 emit("restored", ["snapshot": value, "originalModeRestoredBeforeExit": true, "postExitRestorationObserved": false]); exit(0)
             } else { retain("命令或阶段错误") }
-        } catch { retain("系统事务或原模式证明失败") }
+        } catch { retainError("系统事务或原模式证明失败", error) }
     }
 }
 if !retained { retain("原600秒租约届满") }
