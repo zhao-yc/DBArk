@@ -46,3 +46,13 @@ Main 最多32份正常帧，溢出最多追加一份数字 fault 后本地解绑
 Electron 固定44.7.0官方资料：[web-contents.md](https://raw.githubusercontent.com/electron/electron/v44.7.0/docs/api/web-contents.md)。文档说明 before-input-event 在页面 keydown/keyup 前发出，preventDefault 可同时阻止页面事件和菜单快捷键；sendInputEvent 承诺向页面发送输入，且所属窗口需要焦点。它没有承诺与系统键或菜单执行等价。本补丁没有运行或替换 sendInputEvent。
 
 Root 独审本地提交、bundle 与 RAM/类型证据后，再决定是否为全新 profile 建立清单并批准新的单次执行。本准备不证明 Ctrl/Cmd+S、Main 输入、原生菜单、安装版或 macOS 已经通过。
+
+## 626之后的安装期限增量修正
+
+员工4独审 MIP-1 指出626的安装闭包只在整段窗口/菜单读取后复核原期限：窗口 webContents 或菜单 label getter 跨deadline时，仍会继续后续getter。旧626提交、原handoff和原bundle保留，本修正另建提交，不将原102项通过改写成已覆盖此反例。
+
+窗口fromId、销毁状态、window/contents身份链、应用菜单、每层items/label/submenu、enabled/visible/accelerator以及每次listener注册，分别通过本地checked在前后复核同一deadline、有限单调时钟和closed/state墓碑。晚回只拒绝，不能继续下一getter、注册或ready帧。submenu及菜单状态只读取一次，后续用本地值；没有增加期限或改变原120秒预算。原事件回调仍无窗口/SDK补读。
+
+未注册时失败只清除本地标记，不能为了清理调用SDK。开始注册前先设置同一原deadline的本地timer；若注册本身晚回，只解绑已发起的自身EventEmitter listener，不读窗口、不退出owner、不派发保存或补SDK。未知/倒退时钟下也不发fault正文，观察清理异常不能打断产品输入。
+
+新增27项原闭包RAM反例逐项覆盖19个SDK读取节点、timer及3个注册节点晚回、NaN/Infinity/时钟倒退和单调有效时钟正例，核跨时后lateSDKReads=0、无后续注册/ready、无派发。原44项Main观察、30项快捷键准备及28项owner/期限门继续复核；本地5文件129项及类型检查通过。证据只写新的 `.cache/main-probe-deadline-fix-evidence`，不覆盖626原件；仍未运行GUI、原生案例、Playwright/list、端口、DB或CI，也未推送。

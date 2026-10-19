@@ -69,23 +69,26 @@ export async function installMainProbe(application: ElectronApplication, choice:
     type State = { nonce: string; deadline: number; window: number; contents: number; dispose(emit: boolean): void };
     const root = globalThis as typeof globalThis & { __queryFileMainProbe?: State };
     const now = Date.now();
-    if (root.__queryFileMainProbe || !/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/.test(choice.nonce) || !Number.isSafeInteger(choice.window) || choice.window <= 0 || !Number.isSafeInteger(choice.contents) || choice.contents <= 0 || !Number.isFinite(choice.deadline) || choice.deadline <= now || choice.deadline - now > 120000) throw Error('Main观察所属或期限未知');
-    const candidate = BrowserWindow.fromId(choice.window);
-    if (!candidate || candidate.isDestroyed()) throw Error('Main观察原窗口未知');
-    const window = candidate;
-    const contents = window.webContents;
-    if (window.id !== choice.window || contents.id !== choice.contents || contents.isDestroyed()) throw Error('Main观察原contents未知');
+    if (root.__queryFileMainProbe || !/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/.test(choice.nonce) || !Number.isSafeInteger(choice.window) || choice.window <= 0 || !Number.isSafeInteger(choice.contents) || choice.contents <= 0 || !Number.isFinite(now) || !Number.isFinite(choice.deadline) || choice.deadline <= now || choice.deadline - now > 120000) throw Error('Main观察所属或期限未知');
     let disposed = false, closed = false, seq = 0, previous = now, timer: ReturnType<typeof setTimeout> | undefined;
+    const subscriptions: Array<() => void> = [];
     const state: State = { nonce: choice.nonce, deadline: choice.deadline, window: choice.window, contents: choice.contents, dispose };
-    /** 安装步骤跨截止或发生本地停链后不能再登记新listener。 */
-    function active() { if (disposed || closed || root.__queryFileMainProbe !== state || Date.now() >= choice.deadline) throw Error('Main观察安装期限已失效'); }
+    /** 同一原期限、单调时钟和本地墓碑；同步getter晚回也不得发起下一次读取。 */
+    function active() {
+      const instant = Date.now();
+      if (disposed || closed || root.__queryFileMainProbe !== state || !Number.isFinite(instant) || instant < previous || instant >= choice.deadline) throw Error('Main观察安装期限已失效');
+      previous = instant;
+    }
+    /** 每个SDK读取或注册分别核前后，不能只在整段菜单遍历之后判过期。 */
+    function checked<T>(action: () => T): T { active(); const result = action(); active(); return result; }
     /** 解绑仅使用安装时捕获的EventEmitter；无窗口getter、退出、清理或保存派发。 */
     function dispose(emit: boolean) {
       if (disposed) return;
       try { if (emit) send({ stage: 4 }); }
       finally {
         disposed = true; if (timer) clearTimeout(timer);
-        contents.removeListener('before-input-event', input); contents.removeListener('destroyed', close); window.removeListener('closed', close);
+        // 只解绑确已发起的本地订阅；未注册时不能在失败后访问捕获SDK。
+        for (const off of subscriptions.splice(0)) off();
         if (root.__queryFileMainProbe === state) delete root.__queryFileMainProbe;
       }
     }
@@ -94,6 +97,11 @@ export async function installMainProbe(application: ElectronApplication, choice:
     /** 观察异常不向产品事件抛出，只输出无正文的失败帧并永久本地解绑。 */
     function fault() {
       if (disposed) return;
+      const instant = Date.now();
+      if (!Number.isFinite(instant) || instant < previous || instant >= choice.deadline || closed) {
+        try { dispose(false); } catch { /* 失效时仅本地解绑，不能向产品事件传播观察故障。 */ }
+        return;
+      }
       try { process.stdout.write('DBARK_FILE_MAIN:' + choice.nonce + ':' + JSON.stringify({ stage: 5, seq: ++seq, window: choice.window, contents: choice.contents }) + '\n'); }
       catch { /* stdout失败不能改变产品输入分派。 */ }
       finally { try { dispose(false); } catch { /* 只保留观察器故障，不向原输入链抛出。 */ } }
@@ -124,25 +132,41 @@ export async function installMainProbe(application: ElectronApplication, choice:
       } catch { fault(); }
     }
     /** 快照仅在安装RPC里读真实应用菜单；有界遍历，不调用click，不改enabled/accelerator。 */
-    const menu = Menu.getApplicationMenu(), found: Electron.MenuItem[][] = []; let visited = 0;
+    const found: Electron.MenuItem[][] = []; let visited = 0;
     function visit(items: Electron.MenuItem[], ancestors: Electron.MenuItem[]) {
+      active();
       if (ancestors.length > 8) throw Error('菜单层级未知');
-      for (const item of items) { if (++visited > 128) throw Error('菜单数量未知'); const path = [...ancestors, item]; if (item.label === '保存查询') found.push(path); if (item.submenu) visit(item.submenu.items, path); }
+      for (const item of items) {
+        active(); if (++visited > 128) throw Error('菜单数量未知'); const path = [...ancestors, item];
+        if (checked(() => item.label) === '保存查询') found.push(path);
+        const submenu = checked(() => item.submenu);
+        if (submenu) visit(checked(() => submenu.items), path);
+      }
     }
     root.__queryFileMainProbe = state;
     try {
-      if (menu) visit(menu.items, []);
+      const window = checked(() => BrowserWindow.fromId(choice.window));
+      if (!window || checked(() => window.isDestroyed())) throw Error('Main观察原窗口未知');
+      const contents = checked(() => window.webContents);
+      const id = checked(() => window.id), contentsId = checked(() => contents.id);
+      if (id !== choice.window || contentsId !== choice.contents || checked(() => contents.isDestroyed())) throw Error('Main观察原contents未知');
+      const menu = checked(() => Menu.getApplicationMenu());
+      if (menu) visit(checked(() => menu.items), []);
       active();
       send({ stage: 1, menuExists: menu !== null, saveCount: found.length });
       if (found.length === 1) found[0].forEach((item, depth, path) => {
         active();
-        if (typeof item.enabled !== 'boolean' || typeof item.visible !== 'boolean') throw Error('菜单状态未知');
-        const accelerator = item.accelerator, names = ['CmdOrCtrl+S', 'CommandOrControl+S', 'Ctrl+S', 'Control+S', 'Cmd+S', 'Command+S', 'Super+S'];
-        send({ stage: 2, depth, target: depth === path.length - 1, enabled: item.enabled, visible: item.visible, accelerator: accelerator == null || accelerator === '' ? 0 : names.includes(accelerator) ? names.indexOf(accelerator) + 1 : 8 });
+        const enabled = checked(() => item.enabled), visible = checked(() => item.visible);
+        if (typeof enabled !== 'boolean' || typeof visible !== 'boolean') throw Error('菜单状态未知');
+        const accelerator = checked(() => item.accelerator), names = ['CmdOrCtrl+S', 'CommandOrControl+S', 'Ctrl+S', 'Control+S', 'Cmd+S', 'Command+S', 'Super+S'];
+        send({ stage: 2, depth, target: depth === path.length - 1, enabled, visible, accelerator: accelerator == null || accelerator === '' ? 0 : names.includes(accelerator) ? names.indexOf(accelerator) + 1 : 8 });
       });
       active();
-      contents.on('before-input-event', input); contents.once('destroyed', close); window.once('closed', close);
-      timer = setTimeout(() => dispose(false), choice.deadline - Date.now()); send({ stage: 0 });
+      timer = setTimeout(() => dispose(false), choice.deadline - Date.now()); active();
+      checked(() => { subscriptions.push(() => contents.removeListener('before-input-event', input)); contents.on('before-input-event', input); });
+      checked(() => { subscriptions.push(() => contents.removeListener('destroyed', close)); contents.once('destroyed', close); });
+      checked(() => { subscriptions.push(() => window.removeListener('closed', close)); window.once('closed', close); });
+      send({ stage: 0 });
       active();
       return { nonce: choice.nonce, installed: true, window: choice.window, contents: choice.contents };
     } catch { dispose(false); throw Error('Main观察安装失败，保留现场'); }
