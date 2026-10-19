@@ -20,7 +20,9 @@ function begin() { return store.beginQueryFileOpen(store.useWorkspace.getState()
 it('空标签/阶段和原文/绑定/解除阶段各自原子；所有settings.save都不携带内存owner', async () => {
   const states: any[] = [], off = store.useWorkspace.subscribe(state => states.push({ tab: state.settings.tabs.find(tab => tab.id === '占位'), opening: state.queryFileOpenings['占位'] }));
   const lease = begin(); expect(lease.current()).toBe(true); expect(states[0].opening.target).toBe(states[0].tab); expect(states[0].tab.sql).toBe('');
+  expect(store.wasQueryFileOpenTarget(states[0].tab)).toBe(true); expect(store.wasQueryFileOpenTarget({ ...states[0].tab })).toBe(false);
   expect(lease.apply('甲\n乙\n', binding)).toBe(true); expect(states.at(-1)).toMatchObject({ tab: { sql: '甲\n乙\n', fileSourceBinding: source } }); expect(states.at(-1).opening).toBeUndefined();
+  expect(store.wasQueryFileOpenTarget(states[0].tab)).toBe(true); expect(store.wasQueryFileOpenTarget(states.at(-1).tab)).toBe(false);
   expect(states.every(state => !state.tab || state.tab.fileSourceBinding || state.opening?.target === state.tab)).toBe(true);
   lease.dispose(true); expect(store.useWorkspace.getState().settings.tabs).toHaveLength(2); await store.flushSettings();
   expect(io.invoke.mock.calls.every(([, settings]) => !('queryFileOpenings' in settings))).toBe(true); off();

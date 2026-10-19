@@ -103,7 +103,7 @@ let document: ReturnType<typeof memoryDocument>, createRoot: typeof import('reac
 let QueryTab: typeof import('../../src/renderer/components/QueryTab')['QueryTab'], useWorkspace: typeof import('../../src/renderer/store')['useWorkspace'], flushSettings: typeof import('../../src/renderer/store')['flushSettings'];
 let TasksDialog: typeof import('../../src/renderer/components/ActivityDialog')['TasksDialog'], showTaskCenter: () => void, taskListeners: Set<(event: TaskEvent) => void>;
 let commands: Array<{ command: string; input: any }>, menus: Set<(action: string) => void>, hook: undefined | ((command: string, input: any) => Promise<any> | undefined);
-let fileView: any, completed: boolean[], startClose: () => void, frozenFileTab: any;
+let fileView: any, completed: boolean[], startClose: () => void, frozenFileTab: any, withholdFileTabs = false;
 const sqlDigest = (sql: string) => createHash('sha256').update(sql).digest('hex');
 const sourceView = (sql = 'SELECT 初始;', revision = 1, name = '合成.sql') => ({ ref: { id: '11111111-1111-4111-8111-111111111111', revision }, name, displayPath: 'RAM展示目录/' + name, encoding: 'utf8', bom: 'none', eol: 'lf', savedSqlDigest: sqlDigest(sql) });
 const saved = (sql: string, revision = 2, name = '合成.sql') => ({ state: 'saved', binding: sourceView(sql, revision, name), savedSqlDigest: sqlDigest(sql), unchanged: false });
@@ -127,7 +127,7 @@ afterAll(() => { for (const [name, descriptor] of globals) if (descriptor) Objec
 
 /** Main、原生选择和文件写入全部为RAM端口，拒绝SQL执行、建连及其它外界命令。 */
 async function mount(bound = false) {
-  commands = []; menus = new Set(); taskListeners = new Set(); hook = undefined; completed = []; fileView = bound ? sourceView() : undefined; io.entries = []; frozenFileTab = undefined;
+  commands = []; menus = new Set(); taskListeners = new Set(); hook = undefined; completed = []; fileView = bound ? sourceView() : undefined; io.entries = []; frozenFileTab = undefined; withholdFileTabs = false;
   (window as any).dbark = { onTask: (listener: (event: TaskEvent) => void) => { taskListeners.add(listener); return () => { taskListeners.delete(listener); }; }, onMenu: (listener: (action: string) => void) => { menus.add(listener); return () => menus.delete(listener); }, invoke: async (command: string, input: any) => {
     commands.push({ command, input }); const pending = hook?.(command, input); if (pending) return pending;
     if (command === 'settings.save') return;
@@ -143,7 +143,7 @@ async function mount(bound = false) {
   useWorkspace.setState({ settings: { theme: 'dark', sidebarWidth: 260, resultLimit: 1000, pageSize: 100, activeTabId: 't', tabs: [{ id: 't', kind: 'query', connectionId: 'c', title: '合成查询', sql: 'SELECT 初始;', ...(bound ? { fileSourceBinding: fileView.ref } : {}) }] }, connections: [{ id: 'c', name: '合成连接', group: '', color: '', dialect: 'mysql', host: 'offline.invalid', port: 1, user: 'offline' }], activeJobs: {}, dirtyTabs: {}, queryFileDirty: {}, queryFileTasks: {}, tasks: [], connectionVersions: {}, notice: undefined });
   function View() {
     const tabs = useWorkspace(state => state.settings.tabs), [request, setRequest] = React.useState<any>(), [tasks, setTasks] = React.useState(false); startClose = () => setRequest({ tabId: 't' }); showTaskCenter = () => setTasks(true);
-    return <>{tabs.map(tab => <section key={tab.id} hidden={tab.id !== useWorkspace.getState().settings.activeTabId}><QueryTab tab={frozenFileTab?.id === tab.id ? frozenFileTab : tab} closeRequest={tab.id === 't' ? request : undefined} onCloseRequestFinished={(_request, close) => { completed.push(close); setRequest(undefined); if (close) useWorkspace.getState().closeTab(tab.id); }} onHistory={() => {}}/></section>)}{tasks && <TasksDialog onClose={() => setTasks(false)}/>}</>;
+    return <>{tabs.map(tab => <section key={tab.id} hidden={tab.id !== useWorkspace.getState().settings.activeTabId}>{withholdFileTabs && tab.id !== 't' ? null : <QueryTab tab={frozenFileTab?.id === tab.id ? frozenFileTab : tab} closeRequest={tab.id === 't' ? request : undefined} onCloseRequestFinished={(_request, close) => { completed.push(close); setRequest(undefined); if (close) useWorkspace.getState().closeTab(tab.id); }} onHistory={() => {}}/>}</section>)}{tasks && <TasksDialog onClose={() => setTasks(false)}/>}</>;
   }
   const node = document.createElement('div'); document.body.appendChild(node); root = createRoot(node as any); await act(async () => root!.render(<View/>));
   return io.editor as ContentEditorPort & { model: ContentModelPort };
@@ -169,6 +169,20 @@ describe('新文件占位首次模型与操作世代（真实store/hook/QueryTab
     expect(request).toBeDefined(); return { original, pending, targetId: request.input.tabId, taskId: request.input.taskId };
   }
   function opened(sql = 'SELECT 文件原文;\n') { fileView = sourceView(sql); return { state: 'opened', sql, binding: fileView }; }
+  it('首次挂载错过文件阶段而父props仍旧时不创建空模型（组件输入边界）', async () => {
+    const original = await mount(), pending = deferred(); withholdFileTabs = true;
+    hook = command => command === 'queryFileSources.open' ? pending.promise : undefined;
+    await click('打开 SQL 文件'); await click('选择并打开 SQL 文件');
+    const targetId = commands.find(item => item.command === 'queryFileSources.open')!.input.tabId;
+    frozenFileTab = useWorkspace.getState().settings.tabs.find(tab => tab.id === targetId);
+    const sql = 'SELECT 首次完整原文;\n'; await act(async () => pending.resolve(opened(sql)));
+    expect(useWorkspace.getState().queryFileOpenings[targetId]).toBeUndefined(); expect(io.entries).toHaveLength(1);
+    // 这是明确构造的父组件输入边界，不声称已在实际App调度或原生窗口复现。
+    withholdFileTabs = false; await act(async () => useWorkspace.getState().updateSettings({ tabs: [...useWorkspace.getState().settings.tabs], activeTabId: targetId }));
+    expect(io.entries).toHaveLength(1); expect(io.entries[0].editor).toBe(original);
+    frozenFileTab = undefined; await act(async () => useWorkspace.getState().updateSettings({ tabs: [...useWorkspace.getState().settings.tabs], activeTabId: targetId }));
+    expect(io.entries).toHaveLength(2); expect(io.entries[1].initial).toBe(sql); expect(io.entries[1].editor.model.getEOL()).toBe('\n');
+  });
   it('隐藏或选中占位期间均零新模型；完整LF全文第一次建模，正文恢复后原严格摘要clean', async () => {
     const f = await waiting(); expect(io.entries).toHaveLength(1); expect(io.entries[0].editor).toBe(f.original);
     await act(async () => useWorkspace.getState().updateSettings({ activeTabId: f.targetId })); expect(io.entries).toHaveLength(1); expect(document.body.textContent).toContain('正在打开 SQL 文件');

@@ -18,7 +18,7 @@ import { sqlFormattingZh } from '../locales/sqlFormatting.zh-CN';
 import { Play, Square, AlignLeft, Save, History, Gauge, ChevronDown, Check, RotateCcw, LockKeyhole, Pin, X, Download, BookOpen, Braces, Copy } from 'lucide-react';
 import type { QueryOutcome, QueryResult } from '../../shared/contracts';
 import { errorMessage, invoke, uid } from '../lib';
-import { acquireWorkspaceBusy, flushSettings,useWorkspace, type WorkspaceTab, type WorkspaceBusyLease } from '../store';
+import { acquireWorkspaceBusy, flushSettings,useWorkspace, wasQueryFileOpenTarget, type WorkspaceTab, type WorkspaceBusyLease } from '../store';
 import { SqlEditor,type SqlCompletionStatus } from './SqlEditor';
 import {SavedQueryMatchNavigation} from './SavedQueryMatchNavigation';
 import type {SavedQueryNavigationSource} from '../../shared/savedQuerySearch';
@@ -82,7 +82,7 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
   const [completionStatus,setCompletionStatus]=useState<SqlCompletionStatus>('idle');const connectionVersion=useWorkspace(state=>state.connectionVersions[tab.connectionId]??0);
   const layoutRoot=useRef<HTMLDivElement>(null),layoutEditorId=useId();
   // 原子提交后父props可能尚未刷新；仅本文件占位首次挂载需等到当前完整标签，避免瞬间创建旧空模型。
-  const firstFileOpen=useRef(useWorkspace.getState().queryFileOpenings[tab.id]?.target===tab), fileModelAttached=useRef(false);
+  const firstFileOpen=useRef(wasQueryFileOpenTarget(tab)), fileModelAttached=useRef(false);
   const fileOpening=useWorkspace(state=>state.queryFileOpenings[tab.id]?.target===tab || firstFileOpen.current && !fileModelAttached.current && state.settings.tabs.find(item=>item.id===tab.id)!==tab);
   const layoutMaximum=useQueryLayoutMaximum(layoutRoot,queryLayoutLimits.maxEditorHeight);
   const [editorPreview,setEditorPreview]=useState<number|null>(null);
