@@ -93,4 +93,3 @@ it.each(['selection','layout','result','pin','version','job','inactive','modal',
   else {await act(async()=>root!.unmount());root=undefined;}
   await act(async()=>stale()); expect(port.execute).not.toHaveBeenCalled(); expect(port.writes).toEqual([]);
 });
-
