@@ -8,7 +8,8 @@ import { assertQueryFileSourceSql } from '../shared/queryFileSources';
 export function captureQueryFileSnapshot(editor: monaco.editor.IStandaloneCodeEditor | null, read: () => WorkspaceTab | undefined): Readonly<WorkspaceTab> {
   const before = read();
   if (!editor || before?.kind !== 'query') throw Error(zh.editor.bodyUnavailable);
-  const sql = flushEditorContent(editor, before.sql ?? '');
+  // 原SQL摘要是文件保存基线；未编辑的受控EOL等价模型不能因捕获而回写草稿。
+  const sql = flushEditorContent(editor, before.sql ?? '', 'preserve-equivalent-draft-eol');
   assertQueryFileSourceSql(sql);
   const current = read();
   if (!current || (current.sql ?? '') !== sql) throw Error(zh.editor.bodyUnavailable);
