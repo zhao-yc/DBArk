@@ -1,0 +1,124 @@
+{
+  "version": "0.28.0",
+  "status": "审查材料已准备，验收有阻断，禁止据此认定已发行",
+  "published": false,
+  "releaseReady": false,
+  "productCommit": "bf08645a28fceb5d1d40ba16f013bb78e7a7c0a2",
+  "srcTree": "20ff372f4cbc5c466e79d847afda2cb57f55426e",
+  "packageBlob": "3ff5c4d3b652bb0cc8de0e2584c26119869792da",
+  "lockBlob": "f4e286fab9eb730c5f4880d6cb08fead0bf8e608",
+  "finalTag": null,
+  "finalReleaseCommit": null,
+  "validationHost": "GitHub-hosted原生runner及Ubuntu只读回读；操作者本机未收到安装ZIP",
+  "assets": [
+    {
+      "path": "DBArk-0.28.0-win-x64-unsigned.exe",
+      "bytes": 142664620,
+      "sha256": "9b98642db34cee99453e671e23f78af11821ae6314e51fbd39ffc718754d62fe",
+      "crc32": "db727690",
+      "platform": "windows-x64",
+      "artifactId": 12184231827,
+      "runId": 39244695054,
+      "jobId": 118033672863,
+      "testHead": "4a2bcd423a26f5fe6fe094ee30656a58fb7d3035",
+      "archiveSha256": "066ec0ed921c59168800161d85d3e0cf6c0bcbe814069d1cf9d3df315b88746f",
+      "archiveCrcValidated": true,
+      "published": false,
+      "installation": "已按本候选原报告实际安装；剩余专项单列"
+    },
+    {
+      "path": "DBArk-0.28.0-win-x64-unsigned.exe.blockmap",
+      "bytes": 149494,
+      "sha256": "ba3f6dd08518c65085a49e0fb7ac3b21ed87defcc65cca30d4429a5b8ea9a5b4",
+      "crc32": "19a30406",
+      "platform": "windows-x64",
+      "artifactId": 12184231827,
+      "runId": 39244695054,
+      "jobId": 118033672863,
+      "testHead": "4a2bcd423a26f5fe6fe094ee30656a58fb7d3035",
+      "archiveSha256": "066ec0ed921c59168800161d85d3e0cf6c0bcbe814069d1cf9d3df315b88746f",
+      "archiveCrcValidated": true,
+      "published": false,
+      "installation": "辅助文件，不作为安装程序"
+    },
+    {
+      "path": "DBArk-0.28.0-mac-arm64-unsigned.zip",
+      "bytes": 170300524,
+      "sha256": "2e2ef573daaa5f0273aef887d6e56a2eed5f452c45af73c5abf014f47e521f8d",
+      "crc32": "9afebc2f",
+      "applicationZipAllMemberCrcValidated": true,
+      "applicationZipMembers": 741,
+      "platform": "macos-arm64",
+      "artifactId": 12188064300,
+      "runId": 39256090941,
+      "jobId": 118071627233,
+      "testHead": "3fd87bb98555ba042f303762ee7a314582cb18d1",
+      "archiveSha256": "6d72842063537d7b3313973574a627d01a7dda1bf5266a122bd6badd5e2ac2bc",
+      "archiveCrcValidated": true,
+      "published": false,
+      "installation": "只核字节和内部741成员CRC，未独立安装"
+    },
+    {
+      "path": "DBArk-0.28.0-mac-arm64-unsigned.dmg",
+      "bytes": 170177733,
+      "sha256": "d415a686d0a9d1d001dd57b45380007b27beb362b6f91de0cdb84e6fe5ad6c99",
+      "crc32": "9b284be9",
+      "platform": "macos-arm64",
+      "artifactId": 12188064300,
+      "runId": 39256090941,
+      "jobId": 118071627233,
+      "testHead": "3fd87bb98555ba042f303762ee7a314582cb18d1",
+      "archiveSha256": "6d72842063537d7b3313973574a627d01a7dda1bf5266a122bd6badd5e2ac2bc",
+      "archiveCrcValidated": true,
+      "published": false,
+      "installation": "已按本候选原报告实际安装；剩余专项单列"
+    }
+  ],
+  "unavailable": [
+    {
+      "platform": "macos-arm64",
+      "name": "DMG/ZIP的blockmap",
+      "required": false,
+      "reason": "现候选归档未包含；如最终发行选用须单独取得、核SHA并绑定对应文件"
+    },
+    {
+      "platform": "macos-x64",
+      "name": "DBArk-0.28.0-mac-x64-unsigned.dmg",
+      "required": true,
+      "reason": "本版x64原生/安装矩阵环境阻断，无核准资产"
+    },
+    {
+      "platform": "macos-x64",
+      "name": "DBArk-0.28.0-mac-x64-unsigned.zip",
+      "required": true,
+      "reason": "无核准资产；不能用arm64替代"
+    },
+    {
+      "platform": "macos-x64",
+      "name": "DMG/ZIP的blockmap",
+      "required": false,
+      "reason": "本版没有对应核准候选"
+    },
+    {
+      "platform": "source",
+      "name": "DBArk-0.28.0-source.zip",
+      "required": true,
+      "reason": "最终发布提交/tag尚未决定，不能以产品提交或文档头假装最终公开源码"
+    },
+    {
+      "platform": "all",
+      "name": "SHA256SUMS.txt",
+      "required": true,
+      "reason": "最终全量资产未齐；候选摘要文本仅含已核4个文件，不作为正式公开清单"
+    }
+  ],
+  "blockers": [
+    "Mac arm64关键字源码重启后再次格式化未达到原预期；安装关键字未执行",
+    "Windows安装系统CtrlS本机下载被安全门阻断，尚未安装/输入",
+    "Intel标准宿主未找到满足原空间门的模式；本版源码/安装未闭环",
+    "macOS系统CmdS未验，当前系统输入门仅Windows",
+    "最终标签CI与候选提升方式须统筹决定；现专用keeper严格限定接班分支，不能直接外推tag成功"
+  ],
+  "candidateHashList": "docs/releases/v0.28.0-candidate-SHA256SUMS.txt",
+  "featureInventory": "docs/releases/v0.28.0-feature-status.json"
+}

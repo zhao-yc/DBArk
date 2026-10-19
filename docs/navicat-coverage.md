@@ -2,7 +2,11 @@
 
 ## 当前统筹检查点（2026-10-19）
 
-Windows冻结0.28测试头`4a2bcd4`已完成源码和真实NSIS安装各6项专项，共24个正常owner；legacy各76通过/313条件跳过，包含组件层。原run39244695054的候选/证据经新只读回读39250949911核ZIP字节、SHA及全部CRC，安装器与同次封存输入一致。关键字两项和系统保存等legacy跳过仍记未验，不增加完整工作包或公开发行计数，详见[Windows闭环](../tests/integration/acceptance-v028-windows-success-20261019.md)。Mac arm64也已核3fd真实DMG安装六项/12正常owner、恢复/清理、legacy76/313及候选/证据ZIP完整字节/CRC，见[Mac闭环](../tests/integration/acceptance-v028-macos-arm64-20261019.md)；源码普通legacy和x64等仍待补。本轮只修改验收脚本/证据，不加入0.29能力。
+80个唯一工作包已按实际入口、限制与证据整理为[195条A/B/C子功能](releases/v0.28.0-feature-status.md)，包含AI01至AI04；A类25个代码入口已核存在于公开0.21标签，不以测试数当完成功能比例。[可审资产、发行说明及发布后计划](releases/v0.28.0-release-review.md)已齐备。Mac新关键字在重启后再次格式化失败、安装系统CtrlS下载受阻、Intel空间与Mac系统输入仍缺，0.28不能认定完成或可发行；完整Linux固定02e69为563文件/10680通过/10跳过、类型及构建成功。0.29仍封存。
+
+Windows冻结0.28测试头`4a2bcd4`已完成源码和真实NSIS安装各6项专项，共24个正常owner；legacy各76通过/313条件跳过，包含组件层。原run39244695054的候选/证据经新只读回读39250949911核ZIP字节、SHA及全部CRC，安装器与同次封存输入一致。legacy内关键字条件跳过保持；新增独立关键字源码/安装各2项已通过，安装系统保存仍未验，不增加完整工作包或公开发行计数，详见[Windows闭环](../tests/integration/acceptance-v028-windows-success-20261019.md)。Mac arm64也已核3fd真实DMG安装六项/12正常owner、恢复/清理、legacy76/313及候选/证据ZIP完整字节/CRC，见[Mac闭环](../tests/integration/acceptance-v028-macos-arm64-20261019.md)；源码普通legacy也已闭合，x64仍环境阻断。本轮只修改验收脚本/证据，不加入0.29能力。
+
+## 历史检查点（以下为各自当时状态）
 
 最新人工安排为Root串行收口冻结0.28并在版本完成后暂停，五员工已封存，0.29不继续开发。产品仍为`bf08645`，原生/实际安装/发行门保持。Windows源码系统Ctrl+S、原字节/来源/SQLite9/独立重启及两正常owner通过；`4d41e1b`完整Linux561文件/10643通过/10条件跳过，类型与构建成功，桌面/安装/发行跳过。Mac arm64固定`689b352`的run39240838841已完成源码缩进/分栏和首次文件模型四例，Root回读39242022204核原报告、12正常owner、原模式恢复及归档摘要；不算安装或Mac系统CmdS。Windows专用run39242374243缩进通过、分栏在新增居中操作后实际1008×655未达原1400宽度，安装未执行；修正已限定居中仅Mac，182项及类型通过，新实际验收待运行。见[当前有效范围与矩阵](development/v028-serial-closeout-20261019.md)及[Windows系统保存](development/v028-windows-system-source-20261019.md)。下列记录保留历史来源，不代表并行计划仍执行。
 

@@ -1,0 +1,266 @@
+{
+  "version": "0.28.0",
+  "productCommit": "bf08645a28fceb5d1d40ba16f013bb78e7a7c0a2",
+  "testHead": "eb171c2aea239f10ab170cbc8f47318fa12bbe64",
+  "runId": 39265643127,
+  "overallConclusion": "failure",
+  "jobs": {
+    "windows": 118104387550,
+    "macosArm64": 118104387921
+  },
+  "readback": {
+    "head": "02e69f8748820cb5124fb907f51a688683b1466d",
+    "runId": 39267183253,
+    "jobId": 118109711603,
+    "host": "GitHub-hosted Ubuntu",
+    "testsReplayed": false,
+    "oldVmAccessed": false,
+    "localZipValidated": false
+  },
+  "archives": [
+    {
+      "platform": "windows",
+      "artifactId": 12193651442,
+      "bytes": 73725,
+      "sha256": "e734d623ff5b18c66cb27141ac2e5f7b41cc22de041ec3ae200faa947e269d9e",
+      "crcValidated": true
+    },
+    {
+      "platform": "macos",
+      "artifactId": 12192148660,
+      "bytes": 44098,
+      "sha256": "24105dab20523d3dc0256e09a8f08b6d4f873796f14f1102ab327c2b070c8e02",
+      "crcValidated": true
+    }
+  ],
+  "phases": [
+    {
+      "platform": "windows",
+      "phase": "source",
+      "accepted": true,
+      "approvalSha256": "52fe912e8028cdbab0c525d93aefd0b538bd6e73d0d7ed22545d31852672d1aa",
+      "manifestSha256": "8bed67d2069fa4a2f64ff3dcd32e7b9ac424e9c45ee3f3428f1f2463e85157a5",
+      "manifestFiles": 113,
+      "reportSha256": "0cec6c67548d116f91f226592417dd86739588a77fd4f55e86c0c1eb333fbc93",
+      "receiptSha256": "041df3722973486a7a3d25dddf322024d43419add1c3101cf46fe6407d9a3e6e",
+      "proofs": [
+        {
+          "accepted": true,
+          "restoredCase": "upper",
+          "schema": 9,
+          "restart": {
+            "activeTabId": "c8fdf5ed-5f96-4140-ad20-544b1f738268",
+            "paneIndex": 0,
+            "editor": 1,
+            "model": 2
+          },
+          "owners": [
+            {
+              "confirmed": true,
+              "willQuit": true,
+              "closed": true,
+              "recordedPids": 6
+            },
+            {
+              "confirmed": true,
+              "willQuit": true,
+              "closed": true,
+              "recordedPids": 5
+            }
+          ],
+          "lateModule": {
+            "held": 1,
+            "delivered": 1,
+            "detached": true,
+            "failed": false,
+            "contextRoundTrip": true
+          },
+          "directoryRemoved": true,
+          "systemClipboard": 0,
+          "sqlExecution": 0
+        },
+        {
+          "accepted": true,
+          "restoredCase": "lower",
+          "schema": 9,
+          "restart": {
+            "activeTabId": "439300f8-e3b2-42ff-801f-881e1de9a152",
+            "paneIndex": 0,
+            "editor": 1,
+            "model": 2
+          },
+          "owners": [
+            {
+              "confirmed": true,
+              "willQuit": true,
+              "closed": true,
+              "recordedPids": 6
+            },
+            {
+              "confirmed": true,
+              "willQuit": true,
+              "closed": true,
+              "recordedPids": 5
+            }
+          ],
+          "lateModule": {
+            "held": 1,
+            "delivered": 1,
+            "detached": true,
+            "failed": false,
+            "contextRoundTrip": true
+          },
+          "directoryRemoved": true,
+          "systemClipboard": 0,
+          "sqlExecution": 0
+        }
+      ]
+    },
+    {
+      "platform": "windows",
+      "phase": "installed",
+      "accepted": true,
+      "approvalSha256": "c42ef3c9e8a33527d7fb12d89eceb9e9d9e5b9ea3271ebac38df90e868cec249",
+      "manifestSha256": "df048e9584752aadfa3674932d2d13b1cba5ca5271ea4c78cf48c8670cb6d083",
+      "manifestFiles": 119,
+      "reportSha256": "2f94bbc7a5761f866f480a1933023e1bea482a306a8414e22690e6e36ba8f2d0",
+      "receiptSha256": "c18a827f848c51d1d6e9b004d78f91f62384dcac55c4d7cd7e6adefa0e4ba268",
+      "proofs": [
+        {
+          "accepted": true,
+          "restoredCase": "upper",
+          "schema": 9,
+          "restart": {
+            "activeTabId": "9883cdbb-80bd-4585-b949-9290b569ffe7",
+            "paneIndex": 0,
+            "editor": 1,
+            "model": 2
+          },
+          "owners": [
+            {
+              "confirmed": true,
+              "willQuit": true,
+              "closed": true,
+              "recordedPids": 6
+            },
+            {
+              "confirmed": true,
+              "willQuit": true,
+              "closed": true,
+              "recordedPids": 5
+            }
+          ],
+          "lateModule": {
+            "held": 1,
+            "delivered": 1,
+            "detached": true,
+            "failed": false,
+            "contextRoundTrip": true
+          },
+          "directoryRemoved": true,
+          "systemClipboard": 0,
+          "sqlExecution": 0
+        },
+        {
+          "accepted": true,
+          "restoredCase": "lower",
+          "schema": 9,
+          "restart": {
+            "activeTabId": "09fe018d-e477-4d00-8ec8-648c5c822b7f",
+            "paneIndex": 0,
+            "editor": 1,
+            "model": 2
+          },
+          "owners": [
+            {
+              "confirmed": true,
+              "willQuit": true,
+              "closed": true,
+              "recordedPids": 6
+            },
+            {
+              "confirmed": true,
+              "willQuit": true,
+              "closed": true,
+              "recordedPids": 5
+            }
+          ],
+          "lateModule": {
+            "held": 1,
+            "delivered": 1,
+            "detached": true,
+            "failed": false,
+            "contextRoundTrip": true
+          },
+          "directoryRemoved": true,
+          "systemClipboard": 0,
+          "sqlExecution": 0
+        }
+      ]
+    },
+    {
+      "platform": "macos",
+      "phase": "source",
+      "accepted": false,
+      "approvalSha256": "d519d90c2bf0deaca5625a20888bb787b08b0ed34b5a5232bf526dacd6dc724d",
+      "manifestSha256": "9077db7bfdc21b14ddd6db8004efebc096eb9d5108be8b050ff55e55be9be12a",
+      "manifestFiles": 113,
+      "reportSha256": "8dc14b60b5bc28d0a06e4a72de40bf0795999047bbc4b0227f15739f7ca28ebe",
+      "stats": {
+        "startTime": "2026-10-19T14:08:55.139Z",
+        "duration": 29516.831,
+        "expected": 0,
+        "skipped": 1,
+        "unexpected": 1,
+        "flaky": 0
+      },
+      "scene": {
+        "directory": "/private/var/folders/n6/hn37q6pj7sj_9dmqqc2113800000gn/T/dbark-indent-NRAJM9",
+        "owners": [
+          {
+            "confirmed": true,
+            "willQuit": true,
+            "closed": true,
+            "ids": [
+              2446,
+              2552,
+              2553,
+              2556,
+              2590
+            ]
+          },
+          {
+            "confirmed": false,
+            "willQuit": false,
+            "closed": false,
+            "ids": [
+              2777,
+              2781,
+              2782,
+              2783
+            ]
+          }
+        ],
+        "automaticRetry": false,
+        "automaticForceStop": false,
+        "directoryRemoved": false
+      },
+      "installedExecuted": false,
+      "oldSceneAccessed": false
+    }
+  ],
+  "windowsCleanup": {
+    "completed": true,
+    "temporary": "C:\\Users\\runneradmin\\AppData\\Local\\Temp\\dbark-keyword-install-m4diLJ",
+    "originalSixReplayed": false,
+    "legacyReplayed": false,
+    "systemSaveKeyPressed": false
+  },
+  "readbackCopy": {
+    "artifactId": 12192478934,
+    "bytes": 196409,
+    "apiDigest": "sha256:884d0eabd0d036a4a84fd08fb43aa460c6884b31c34821d523122b5b04d18726",
+    "independentlyDownloaded": false
+  },
+  "systemSaveKeyPressed": false
+}

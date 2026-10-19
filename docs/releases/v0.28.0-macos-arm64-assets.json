@@ -95,5 +95,6 @@
     "apiDigest": "sha256:0b27924c76aa67e4b98884a378032109df3a2ec7ebf485dacd1803947e4f683b",
     "independentlyDownloaded": false
   },
-  "boundary": "原DMG实际安装已验；应用ZIP只核字节及内部741成员CRC，未独立安装；未公开Release。"
+  "boundary": "原DMG实际安装已验；应用ZIP只核字节及内部741成员CRC，未独立安装；未公开Release。",
+  "keywordEvidence": "docs/releases/v0.28.0-keyword-evidence.json"
 }

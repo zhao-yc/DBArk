@@ -1,0 +1,4 @@
+9b98642db34cee99453e671e23f78af11821ae6314e51fbd39ffc718754d62fe  DBArk-0.28.0-win-x64-unsigned.exe
+ba3f6dd08518c65085a49e0fb7ac3b21ed87defcc65cca30d4429a5b8ea9a5b4  DBArk-0.28.0-win-x64-unsigned.exe.blockmap
+2e2ef573daaa5f0273aef887d6e56a2eed5f452c45af73c5abf014f47e521f8d  DBArk-0.28.0-mac-arm64-unsigned.zip
+d415a686d0a9d1d001dd57b45380007b27beb362b6f91de0cdb84e6fe5ad6c99  DBArk-0.28.0-mac-arm64-unsigned.dmg

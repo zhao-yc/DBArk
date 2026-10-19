@@ -60,12 +60,12 @@
     "independentlyDownloaded": false
   },
   "remaining": [
-    "关键字大小写当前候选专项",
     "Windows安装版系统Ctrl+S",
-    "macOS arm64安装",
+    "Mac arm64关键字重启后失败及安装阶段未执行",
     "macOS x64源码与安装",
     "macOS真实系统Cmd+S",
     "其余矩阵约定实库与GUI边界",
     "最终发行审核"
-  ]
+  ],
+  "keywordEvidence": "docs/releases/v0.28.0-keyword-evidence.json"
 }

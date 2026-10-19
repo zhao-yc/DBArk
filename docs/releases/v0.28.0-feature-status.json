@@ -1,0 +1,3134 @@
+{
+  "version": "0.28.0",
+  "productCommit": "bf08645a28fceb5d1d40ba16f013bb78e7a7c0a2",
+  "publicVersion": "0.21.0",
+  "publicCommit": "5bb840958625563eed444f92cd05bf91c66234f2",
+  "packageCount": 80,
+  "scope": "桌面MySQL/MariaDB；Web不在本版交付",
+  "statusDefinitions": {
+    "A": "已公开可用，但仅限该行明确支持范围",
+    "B": "已有代码或部分证据，尚未完整交付或尚未公开",
+    "C": "冻结产品尚未实现该行对应用户功能"
+  },
+  "subfunctionCounts": {
+    "A": 51,
+    "B": 29,
+    "C": 115
+  },
+  "countsAreCompletionPercentage": false,
+  "packages": [
+    {
+      "id": "C01",
+      "name": "连接配置/分组/搜索/颜色/布局",
+      "uiEntry": "工作台新建/编辑连接、连接侧栏与标签布局",
+      "entry": "src/renderer/components/ConnectionDialog.tsx",
+      "publicEntryBlob": "bd42737dc4cc7272ef32668765d00ae1ad3ad174",
+      "children": [
+        {
+          "id": "C01.1",
+          "status": "A",
+          "name": "MySQL/MariaDB连接表单、测试连接",
+          "entry": "src/renderer/components/ConnectionDialog.tsx",
+          "limit": "已有公开入口；仅支持声明的两个协议家族",
+          "evidence": [
+            "docs/releases/v0.21.0.md",
+            "tests/integration/acceptance-v021-published-20261018.md",
+            "tests/integration/acceptance-sidebar-async-20261016.md"
+          ]
+        },
+        {
+          "id": "C01.2",
+          "status": "A",
+          "name": "连接分组、名称搜索与颜色",
+          "entry": "src/renderer/components/ConnectionDialog.tsx",
+          "limit": "侧栏操作；公开桌面范围，不等同云同步",
+          "evidence": [
+            "docs/releases/v0.21.0.md",
+            "tests/integration/acceptance-v021-published-20261018.md",
+            "tests/integration/acceptance-sidebar-async-20261016.md"
+          ]
+        },
+        {
+          "id": "C01.3",
+          "status": "A",
+          "name": "工作台标签及布局恢复",
+          "entry": "src/renderer/components/ConnectionDialog.tsx",
+          "limit": "公开0.21的既有布局；不把0.28 schema9增量算已公开",
+          "evidence": [
+            "docs/releases/v0.21.0.md",
+            "tests/integration/acceptance-v021-published-20261018.md",
+            "tests/integration/acceptance-sidebar-async-20261016.md"
+          ]
+        },
+        {
+          "id": "C01.4",
+          "status": "B",
+          "name": "所有平台完整连接及恢复组合",
+          "entry": "src/renderer/components/ConnectionDialog.tsx",
+          "limit": "macOS私网、失效凭据及更多版本组合未完整闭环",
+          "evidence": [
+            "docs/navicat-coverage.md",
+            "tests/integration/acceptance-v028-release-matrix-20261019.md",
+            "tests/integration/acceptance-sidebar-async-20261016.md"
+          ]
+        }
+      ],
+      "historicalEvidence": "基础配置与布局恢复已验；0.16修正USE后布局库、无库/未知和schema5保护，Windows源码、本机及公开NSIS147项含实际重启通过。0.18修复侧栏迟到响应、重复加载及修改后旧关闭屏障，3361单元/类型/构建、5项受控App时序和8次实库表属性界面通过，见[侧栏实证](../tests/integration/acceptance-sidebar-async-20261016.md)。0.18已公开，macOS实库及完整连接生命周期继续"
+    },
+    {
+      "id": "C02",
+      "name": "SSH/TLS 与安全凭据",
+      "uiEntry": "连接编辑表单的SSH/TLS与记住密码配置",
+      "entry": "src/renderer/components/ConnectionDialog.tsx",
+      "publicEntryBlob": "bd42737dc4cc7272ef32668765d00ae1ad3ad174",
+      "children": [
+        {
+          "id": "C02.1",
+          "status": "A",
+          "name": "SSH密码及未加密/加密私钥认证",
+          "entry": "src/renderer/components/ConnectionDialog.tsx",
+          "limit": "Windows既有准确OpenSSH与公开安装范围；口令不外泄",
+          "evidence": [
+            "docs/releases/v0.21.0.md",
+            "tests/integration/acceptance-v021-published-20261018.md",
+            "tests/integration/acceptance-c02-mtls-ui-20261016.md",
+            "tests/integration/acceptance-c02-ssh-ui-20261016.md",
+            "tests/integration/acceptance-c02-isolated-openssh-20261016.md"
+          ]
+        },
+        {
+          "id": "C02.2",
+          "status": "A",
+          "name": "严格TLS CA、客户端证书及私钥口令",
+          "entry": "src/renderer/components/ConnectionDialog.tsx",
+          "limit": "Windows既有准确MySQL/严格TLS范围；保持SAN与权限检查",
+          "evidence": [
+            "docs/releases/v0.21.0.md",
+            "tests/integration/acceptance-v021-published-20261018.md",
+            "tests/integration/acceptance-c02-mtls-ui-20261016.md",
+            "tests/integration/acceptance-c02-ssh-ui-20261016.md",
+            "tests/integration/acceptance-c02-isolated-openssh-20261016.md"
+          ]
+        },
+        {
+          "id": "C02.3",
+          "status": "A",
+          "name": "safeStorage及会话回退",
+          "entry": "src/renderer/components/ConnectionDialog.tsx",
+          "limit": "公开持久凭据路径；加密不可用仅保留会话，不保证跨系统密文迁移",
+          "evidence": [
+            "docs/releases/v0.21.0.md",
+            "tests/integration/acceptance-v021-published-20261018.md",
+            "tests/integration/acceptance-c02-mtls-ui-20261016.md",
+            "tests/integration/acceptance-c02-ssh-ui-20261016.md",
+            "tests/integration/acceptance-c02-isolated-openssh-20261016.md"
+          ]
+        },
+        {
+          "id": "C02.4",
+          "status": "B",
+          "name": "完整系统加密不可用与macOS私网组合",
+          "entry": "src/renderer/components/ConnectionDialog.tsx",
+          "limit": "已有保护代码；缺完整实库/原生矩阵",
+          "evidence": [
+            "docs/navicat-coverage.md",
+            "tests/integration/acceptance-v028-release-matrix-20261019.md",
+            "tests/integration/acceptance-c02-mtls-ui-20261016.md",
+            "tests/integration/acceptance-c02-ssh-ui-20261016.md",
+            "tests/integration/acceptance-c02-isolated-openssh-20261016.md"
+          ]
+        }
+      ],
+      "historicalEvidence": "SSH密码/私钥口令及基本双向TLS已有基础实现。0.18开发源码新增加密客户端私钥口令与独立秘密槽，拒绝孤立UTF16并保留有效Unicode/1024字节边界；严格CA/IP SAN、REQUIRE X509和缺/错/正确口令已验。主目录Windows正式表单/utility/原生safeStorage/真实重启恢复/仅清TLS及不记住回退两项真实GUI通过，无回调核心复验通过，3267单元与类型通过、相关资源核零，见[TLS正式实证](../tests/integration/acceptance-c02-mtls-ui-20261016.md)。既有未加密私钥SSH在13384/严格TLS13484各1正式UI复合用例通过，含错指纹拒绝、utility、真实退出及无补填重启，原密钥摘要不变、资源核零；3422完整单元与类型通过，见[SSH实证](../tests/integration/acceptance-c02-ssh-ui-20261016.md)。密码SSH/加密私钥口令已补隔离OpenSSH两端口四项核心和公开Windows两端口各四场景，含原生加密/真实重启/仅清SSH及仅会话，资源核零，见[隔离SSH实证](../tests/integration/acceptance-c02-isolated-openssh-20261016.md)。系统加密不可用、macOS私网及其它组合继续；0.18已公开"
+    },
+    {
+      "id": "C03",
+      "name": "配置导入导出/复制",
+      "uiEntry": "工作台连接导入导出窗口及连接复制",
+      "entry": "src/renderer/components/ConnectionsTransferDialog.tsx",
+      "publicEntryBlob": "13498c3718e440c298a279e9e8c21a09b3ab5856",
+      "children": [
+        {
+          "id": "C03.1",
+          "status": "A",
+          "name": "复制连接与概要JSON导出",
+          "entry": "src/renderer/components/ConnectionsTransferDialog.tsx",
+          "limit": "白名单概要，不带秘密或生效认证文件路径",
+          "evidence": [
+            "docs/releases/v0.21.0.md",
+            "tests/integration/acceptance-v021-published-20261018.md",
+            "tests/integration/acceptance-p0-workflows-20261016.md"
+          ]
+        },
+        {
+          "id": "C03.2",
+          "status": "A",
+          "name": "预览后新增/跳过导入",
+          "entry": "src/renderer/components/ConnectionsTransferDialog.tsx",
+          "limit": "已有公开0.7入口；pendingFiles防止误连",
+          "evidence": [
+            "docs/releases/v0.21.0.md",
+            "tests/integration/acceptance-v021-published-20261018.md",
+            "tests/integration/acceptance-p0-workflows-20261016.md"
+          ]
+        },
+        {
+          "id": "C03.3",
+          "status": "B",
+          "name": "已有ID受控替换与完整迁移",
+          "entry": "src/renderer/components/ConnectionsTransferDialog.tsx",
+          "limit": "已有受控替换及Windows源码证据；认证文件/会话/任务等未完整交付",
+          "evidence": [
+            "docs/navicat-coverage.md",
+            "tests/integration/acceptance-v028-release-matrix-20261019.md",
+            "tests/integration/acceptance-p0-workflows-20261016.md"
+          ]
+        }
+      ],
+      "historicalEvidence": "0.7.0 首批白名单复制、所选概要 JSON 导出及不可变预览新增/跳过；不带秘密或生效认证路径，pendingFiles/schema4 阻止误连。418单元、本机完整56项、三平台源码/实际安装各22离线项及公开12资产/209源码blob通过，公开Windows完整56项通过；后续开发头407已加入已有ID的明确受控替换，211项相关纯验证及独审通过；Windows源码正式3项验证目标/风险、合成会话凭据清除、ABA及CAS，见[高频工作流](../tests/integration/acceptance-p0-workflows-20261016.md)。尚未独立发布，真实持久加密/认证文件、会话任务及其它格式/macOS组合继续"
+    },
+    {
+      "id": "C04",
+      "name": "连接资源生命周期",
+      "uiEntry": "连接关闭/重连、连接配置修改及查询标签退出",
+      "entry": "src/renderer/connectionChanges.ts",
+      "publicEntryBlob": "d35fbd5eb7ae497bf79c18194961d4aabce33b7b",
+      "children": [
+        {
+          "id": "C04.1",
+          "status": "A",
+          "name": "取消、断线及目标变化不重放",
+          "entry": "src/renderer/connectionChanges.ts",
+          "limit": "Windows公开检查点；未知写入保留核对状态",
+          "evidence": [
+            "docs/releases/v0.21.0.md",
+            "tests/integration/acceptance-v021-published-20261018.md"
+          ]
+        },
+        {
+          "id": "C04.2",
+          "status": "A",
+          "name": "未知默认库显式重连与会话释放",
+          "entry": "src/renderer/connectionChanges.ts",
+          "limit": "既有MySQL/MariaDB实库范围",
+          "evidence": [
+            "docs/releases/v0.21.0.md",
+            "tests/integration/acceptance-v021-published-20261018.md"
+          ]
+        },
+        {
+          "id": "C04.3",
+          "status": "B",
+          "name": "macOS完整实库生命周期矩阵",
+          "entry": "src/renderer/connectionChanges.ts",
+          "limit": "不能以离线legacy或Windows结果代替",
+          "evidence": [
+            "docs/navicat-coverage.md",
+            "tests/integration/acceptance-v028-release-matrix-20261019.md"
+          ]
+        }
+      ],
+      "historicalEvidence": "原取消、断线、改目标不重放已验；0.16未知库显式确认重连、真实KILL后零自动写入、发送前落盘及准备取消均通过Windows源码、本机及公开NSIS147项，终态资源清零。macOS实库矩阵待验"
+    },
+    {
+      "id": "Q01",
+      "name": "SQL 高亮/补全/格式化/搜索替换",
+      "uiEntry": "查询编辑器、格式化按钮/Alt或Option+Shift+F及编辑器偏好",
+      "entry": "src/renderer/components/SqlEditor.tsx",
+      "publicEntryBlob": "307a43e49fc0dfa6e2ff7c97949d6dbaa065c634",
+      "children": [
+        {
+          "id": "Q01.1",
+          "status": "A",
+          "name": "Monaco高亮、查找替换及基础格式化",
+          "entry": "src/renderer/components/SqlEditor.tsx",
+          "limit": "公开桌面入口；格式化只改选区或全文，保留单次撤销",
+          "evidence": [
+            "docs/releases/v0.21.0.md",
+            "tests/integration/acceptance-v021-published-20261018.md",
+            "docs/plans/sql-semantic-completion.md",
+            "tests/integration/acceptance-q01-release-candidate-20261015.md",
+            "docs/development/q01-named-window-scope-20261016.md",
+            "tests/integration/acceptance-v020-preparation-20261017.md"
+          ]
+        },
+        {
+          "id": "Q01.2",
+          "status": "A",
+          "name": "语义Worker与受支持作用域补全",
+          "entry": "src/renderer/components/SqlEditor.tsx",
+          "limit": "按既有版本能力及真实元数据降级；不是完整SQL语义",
+          "evidence": [
+            "docs/releases/v0.21.0.md",
+            "tests/integration/acceptance-v021-published-20261018.md",
+            "docs/plans/sql-semantic-completion.md",
+            "tests/integration/acceptance-q01-release-candidate-20261015.md",
+            "docs/development/q01-named-window-scope-20261016.md",
+            "tests/integration/acceptance-v020-preparation-20261017.md"
+          ]
+        },
+        {
+          "id": "Q01.3",
+          "status": "B",
+          "name": "完整窗口/LATERAL/例程与其它驱动语义",
+          "entry": "src/renderer/components/SqlEditor.tsx",
+          "limit": "已有部分实现及准确专项；未完整覆盖",
+          "evidence": [
+            "docs/navicat-coverage.md",
+            "tests/integration/acceptance-v028-release-matrix-20261019.md",
+            "docs/plans/sql-semantic-completion.md",
+            "tests/integration/acceptance-q01-release-candidate-20261015.md",
+            "docs/development/q01-named-window-scope-20261016.md",
+            "tests/integration/acceptance-v020-preparation-20261017.md"
+          ]
+        },
+        {
+          "id": "Q01.4",
+          "status": "B",
+          "name": "关键字大小写、首次文件模型及新缩进/分栏",
+          "entry": "src/renderer/components/SqlEditor.tsx",
+          "limit": "冻结0.28新增/修正，尚未公开；原生与安装看本版独立证据",
+          "evidence": [
+            "docs/navicat-coverage.md",
+            "tests/integration/acceptance-v028-release-matrix-20261019.md",
+            "docs/plans/sql-semantic-completion.md",
+            "tests/integration/acceptance-q01-release-candidate-20261015.md",
+            "docs/development/q01-named-window-scope-20261016.md",
+            "tests/integration/acceptance-v020-preparation-20261017.md"
+          ]
+        }
+      ],
+      "historicalEvidence": "0.16已有语义Worker、真实上下文、会话临时对象/遮蔽/实际读取、视图确认及隐藏字段部分状态，新增普通ORDER/GROUP/HAVING输出别名、字符串引用及UNION首输出。2089单元、六实例四套后端275通过13条件跳过，Windows源码147分两轮完整覆盖、本机及公开NSIS各原147完整通过，注册/资源核零。固定b366cae标签三平台源码/实际安装各24离线通过123私网跳过，12公开资产/608源码文件一致。完整窗口/LATERAL/例程及其它边界继续，原失败保留，见[补全计划](plans/sql-semantic-completion.md)与[发行验收](../tests/integration/acceptance-q01-release-candidate-20261015.md) ；后续30fc6af新增当前查询块裸OVER窗口名候选及版本能力隔离，已纳入903f953的5020单元/类型/构建，新命名窗口两项实库界面仍待执行，见[实现边界](development/q01-named-window-scope-20261016.md) ；5abf435修复原离线字段门回归并增加CALL过程名补全，5073单元/类型/构建通过，0.20候选内容核对完成；新安装/实库及CI终态继续，见[准备记录](../tests/integration/acceptance-v020-preparation-20261017.md)"
+    },
+    {
+      "id": "Q02",
+      "name": "选区/脚本/多结果/取消/事务",
+      "uiEntry": "查询工具栏执行选区/当前语句/全部、取消及事务按钮",
+      "entry": "src/renderer/components/QueryTab.tsx",
+      "publicEntryBlob": "060039c24853e8f27149600e96065af2d92338e0",
+      "children": [
+        {
+          "id": "Q02.1",
+          "status": "A",
+          "name": "选区、当前语句、全部脚本执行",
+          "entry": "src/renderer/components/QueryTab.tsx",
+          "limit": "已有公开0.19/0.21入口；当前语句沿DELIMITER和真实模型意图",
+          "evidence": [
+            "docs/releases/v0.21.0.md",
+            "tests/integration/acceptance-v021-published-20261018.md",
+            "tests/integration/acceptance-v019-common-source-20261016.md"
+          ]
+        },
+        {
+          "id": "Q02.2",
+          "status": "A",
+          "name": "多结果、取消、事务及独立会话",
+          "entry": "src/renderer/components/QueryTab.tsx",
+          "limit": "既有MySQL/MariaDB范围；取消不撤销已执行SQL，不自动重放",
+          "evidence": [
+            "docs/releases/v0.21.0.md",
+            "tests/integration/acceptance-v021-published-20261018.md",
+            "tests/integration/acceptance-v019-common-source-20261016.md"
+          ]
+        },
+        {
+          "id": "Q02.3",
+          "status": "B",
+          "name": "全驱动/版本/平台完整执行矩阵",
+          "entry": "src/renderer/components/QueryTab.tsx",
+          "limit": "macOS私网及其它协议未完成",
+          "evidence": [
+            "docs/navicat-coverage.md",
+            "tests/integration/acceptance-v028-release-matrix-20261019.md",
+            "tests/integration/acceptance-v019-common-source-20261016.md"
+          ]
+        }
+      ],
+      "historicalEvidence": "DELIMITER、临时表、隔离、回滚与释放已有公开验收；CALL模式/状态矛盾已在0.4.0修复并通过五库及公开Windows安装回归。0.19准备候选新增当前语句按钮及Ctrl/Cmd+Shift+Enter，Windows源码在MySQL8.4五项真实界面通过，含原选区/全部、真实片段历史、过程体、拒绝输入及事务状态，见[常用操作实证](../tests/integration/acceptance-v019-common-source-20261016.md)。0.19已公开且核对安装包来源，该能力的Windows同一候选实装已纳入原317身份计划；macOS私网及其它驱动/版本继续"
+    },
+    {
+      "id": "Q03",
+      "name": "历史/保存查询/SQL 文件编辑",
+      "uiEntry": "历史/保存查询窗口、SQL文件打开/另存及查询标签关闭",
+      "entry": "src/renderer/components/QueryFilesDialog.tsx",
+      "publicEntryBlob": "beded8f61b9851f4851ce971eedd21cbe79f7c3a",
+      "children": [
+        {
+          "id": "Q03.1",
+          "status": "A",
+          "name": "历史分页/筛选和保存查询浏览",
+          "entry": "src/renderer/components/QueryFilesDialog.tsx",
+          "limit": "公开入口按原数据库上下文与摘要保护打开/删除",
+          "evidence": [
+            "docs/releases/v0.21.0.md",
+            "tests/integration/acceptance-v021-published-20261018.md",
+            "tests/integration/acceptance-query-pages-20261015.md",
+            "docs/q03-query-binding.md",
+            "tests/integration/acceptance-query-close-undo-20261017.md",
+            "docs/development/q03-save-close-20261016.md",
+            "tests/integration/acceptance-q03-query-context-20261015.md"
+          ]
+        },
+        {
+          "id": "Q03.2",
+          "status": "A",
+          "name": "SQL文件三编码打开/另存",
+          "entry": "src/renderer/components/QueryFilesDialog.tsx",
+          "limit": "已有公开0.3范围；文件操作不执行SQL",
+          "evidence": [
+            "docs/releases/v0.21.0.md",
+            "tests/integration/acceptance-v021-published-20261018.md",
+            "tests/integration/acceptance-query-pages-20261015.md",
+            "docs/q03-query-binding.md",
+            "tests/integration/acceptance-query-close-undo-20261017.md",
+            "docs/development/q03-save-close-20261016.md",
+            "tests/integration/acceptance-q03-query-context-20261015.md"
+          ]
+        },
+        {
+          "id": "Q03.3",
+          "status": "A",
+          "name": "查询复制及关闭其它查询",
+          "entry": "src/renderer/components/QueryFilesDialog.tsx",
+          "limit": "公开0.21入口；保存/取消/冲突时停止，不静默丢草稿",
+          "evidence": [
+            "docs/releases/v0.21.0.md",
+            "tests/integration/acceptance-v021-published-20261018.md",
+            "tests/integration/acceptance-query-pages-20261015.md",
+            "docs/q03-query-binding.md",
+            "tests/integration/acceptance-query-close-undo-20261017.md",
+            "docs/development/q03-save-close-20261016.md",
+            "tests/integration/acceptance-q03-query-context-20261015.md"
+          ]
+        },
+        {
+          "id": "Q03.4",
+          "status": "B",
+          "name": "0.28文件来源保存与系统Ctrl/Cmd+S",
+          "entry": "src/renderer/components/QueryFilesDialog.tsx",
+          "limit": "Windows源码系统输入已验；安装及Mac系统输入未闭环，版本未公开",
+          "evidence": [
+            "docs/navicat-coverage.md",
+            "tests/integration/acceptance-v028-release-matrix-20261019.md",
+            "tests/integration/acceptance-query-pages-20261015.md",
+            "docs/q03-query-binding.md",
+            "tests/integration/acceptance-query-close-undo-20261017.md",
+            "docs/development/q03-save-close-20261016.md",
+            "tests/integration/acceptance-q03-query-context-20261015.md"
+          ]
+        },
+        {
+          "id": "Q03.5",
+          "status": "C",
+          "name": "文件外部修改重载的新完整流程",
+          "entry": null,
+          "limit": "0.29另线封存，不属于冻结产品交付",
+          "evidence": [
+            "docs/navicat-coverage.md",
+            "src/shared/contracts.ts"
+          ]
+        }
+      ],
+      "historicalEvidence": "三编码打开/另存随0.3.0公开；0.16修正历史执行前库、保存当前库、重开/重启的无库与未知，Windows源码、本机及公开NSIS147项通过，标签三平台离线通过。0.17开发中保存查询浏览改为复合键概要分页、完整文字筛选和摘要保护打开/删除，2210单元及Windows源码/真实NSIS各39项通过，含原上下文3项，资源核零，见[分页验收](../tests/integration/acceptance-query-pages-20261015.md)。执行历史后续见下方新增检查点，关联编辑/另存后续已有[来源绑定](q03-query-binding.md)及第二/第三批实证；开发头73c8196新增保存后关闭三选及迟到草稿/作业保护，独审176项相关测试与6项对抗通过，ROOT整合4827单元/类型/构建通过；后续3192开发头的Windows源码四项完整界面已通过，含原失败修正与资源核零，见[关闭及撤销验收](../tests/integration/acceptance-query-close-undo-20261017.md)；新安装仍待验，本能力未进入公开0.19，详见[开发边界](development/q03-save-close-20261016.md)。其它工作流与macOS私网继续，前期依据见[第三检查点](../tests/integration/acceptance-q03-query-context-20261015.md)"
+    },
+    {
+      "id": "Q04",
+      "name": "固定结果",
+      "uiEntry": "查询结果工具栏的固定结果和固定快照浏览",
+      "entry": "src/renderer/queryPins.ts",
+      "publicEntryBlob": "3a9abc0bf51d0a29936937a90378803c7890a976",
+      "children": [
+        {
+          "id": "Q04.1",
+          "status": "A",
+          "name": "固定已返回成功结果与只读浏览",
+          "entry": "src/renderer/queryPins.ts",
+          "limit": "每标签5组/16MiB；保原SQL、精度与截断标记，退出释放",
+          "evidence": [
+            "docs/releases/v0.21.0.md",
+            "tests/integration/acceptance-v021-published-20261018.md"
+          ]
+        }
+      ],
+      "historicalEvidence": "0.2.0 Windows 实库/实装：原 SQL、精度、截断标记、释放；只保留已返回数据"
+    },
+    {
+      "id": "Q05",
+      "name": "结果集导出",
+      "uiEntry": "查询结果导出及新执行并完整导出窗口",
+      "entry": "src/renderer/components/QueryStreamExportDialog.tsx",
+      "publicEntryBlob": "84b339d38a5443ed5a34f3cfbbc545e0af3cc07f",
+      "children": [
+        {
+          "id": "Q05.1",
+          "status": "A",
+          "name": "已返回/勾选/固定结果CSV和JSON导出",
+          "entry": "src/renderer/components/QueryStreamExportDialog.tsx",
+          "limit": "公开0.3/0.21范围；列名消歧、独立任务、取消及原文件保护",
+          "evidence": [
+            "docs/releases/v0.21.0.md",
+            "tests/integration/acceptance-v021-published-20261018.md",
+            "tests/integration/acceptance-q01-release-candidate-20261015.md",
+            "tests/integration/acceptance-q05-million-archive-ui-20261016.md",
+            "tests/integration/acceptance-parallel-fourth-20261016.md",
+            "docs/development/q05-million-csv-archive-manual.md",
+            "docs/development/query-multi-csv-archive.md"
+          ]
+        },
+        {
+          "id": "Q05.2",
+          "status": "A",
+          "name": "同会话新执行CSV/JSON及多CSV ZIP64",
+          "entry": "src/renderer/components/QueryStreamExportDialog.tsx",
+          "limit": "既有公开范围；Windows百万行有准确来源，200结果/10GiB容器限制",
+          "evidence": [
+            "docs/releases/v0.21.0.md",
+            "tests/integration/acceptance-v021-published-20261018.md",
+            "tests/integration/acceptance-q01-release-candidate-20261015.md",
+            "tests/integration/acceptance-q05-million-archive-ui-20261016.md",
+            "tests/integration/acceptance-parallel-fourth-20261016.md",
+            "docs/development/q05-million-csv-archive-manual.md",
+            "docs/development/query-multi-csv-archive.md"
+          ]
+        },
+        {
+          "id": "Q05.3",
+          "status": "B",
+          "name": "新INSERT SQL结果/完整流式导出",
+          "entry": "src/renderer/components/QueryStreamExportDialog.tsx",
+          "limit": "冻结0.28，有Engine/Windows源码准确证据；新安装及完整矩阵未闭环",
+          "evidence": [
+            "docs/navicat-coverage.md",
+            "tests/integration/acceptance-v028-release-matrix-20261019.md",
+            "tests/integration/acceptance-q01-release-candidate-20261015.md",
+            "tests/integration/acceptance-q05-million-archive-ui-20261016.md",
+            "tests/integration/acceptance-parallel-fourth-20261016.md",
+            "docs/development/q05-million-csv-archive-manual.md",
+            "docs/development/query-multi-csv-archive.md"
+          ]
+        },
+        {
+          "id": "Q05.4",
+          "status": "B",
+          "name": "CSV分隔符扩展",
+          "entry": "src/renderer/components/QueryStreamExportDialog.tsx",
+          "limit": "冻结0.28三编码×分隔符×格式实库18组合；GUI/安装/其它版本及百万行另验",
+          "evidence": [
+            "docs/navicat-coverage.md",
+            "tests/integration/acceptance-v028-release-matrix-20261019.md",
+            "tests/integration/acceptance-q01-release-candidate-20261015.md",
+            "tests/integration/acceptance-q05-million-archive-ui-20261016.md",
+            "tests/integration/acceptance-parallel-fourth-20261016.md",
+            "docs/development/q05-million-csv-archive-manual.md",
+            "docs/development/query-multi-csv-archive.md"
+          ]
+        },
+        {
+          "id": "Q05.5",
+          "status": "B",
+          "name": "强杀恢复、全平台/格式/版本导出闭环",
+          "entry": "src/renderer/components/QueryStreamExportDialog.tsx",
+          "limit": "部分保护已实现，不等同所有故障与数据规模已验",
+          "evidence": [
+            "docs/navicat-coverage.md",
+            "tests/integration/acceptance-v028-release-matrix-20261019.md",
+            "tests/integration/acceptance-q01-release-candidate-20261015.md",
+            "tests/integration/acceptance-q05-million-archive-ui-20261016.md",
+            "tests/integration/acceptance-parallel-fourth-20261016.md",
+            "docs/development/q05-million-csv-archive-manual.md",
+            "docs/development/query-multi-csv-archive.md"
+          ]
+        }
+      ],
+      "historicalEvidence": "已返回结果/固定快照及同会话明确新执行、JSON全结果/CSV指定行集、背压、取消断线与退出已有公开检查点。0.16源码、本机及公开NSIS的CSV/JSON各逐行验证100万行，精度/顺序/Unicode正确，待写峰值1行73字节、预览200；原完整147项及资源核验见[发行验收](../tests/integration/acceptance-q01-release-candidate-20261015.md)。0.17同次新执行的多CSV ZIP64具备顺序流式写出、位置映射/状态清单、10GiB/200结果及原子替换；六组合核心各20通过/1百万行条件跳过、MySQL8.4真实界面9项通过，实际系统tar小包及4297328968字节真实ZIP64独立校验通过。后续MySQL8.4引擎层真实百万行ZIP、取消及失败保护复合验收通过，1000001行/5协议结果/136780886字节，独立Python逐行/CRC校验，待写峰值1行148字节、资源核零；不改变先前六条件跳过统计。0.18 Windows源码正式GUI百万行ZIP补充1项已通过，实际1000001行/136780880字节、队列峰值1行148字节，独立Python逐行/CRC及一次执行核对通过，见[正式UI实证](../tests/integration/acceptance-q05-million-archive-ui-20261016.md)；公开安装包百万行ZIP、强杀恢复及macOS等仍待验，见[第四批验收](../tests/integration/acceptance-parallel-fourth-20261016.md)、[百万行入口](development/q05-million-csv-archive-manual.md)与[容器边界](development/query-multi-csv-archive.md)"
+    },
+    {
+      "id": "Q06",
+      "name": "片段/参数查询",
+      "uiEntry": "查询工具栏的片段库和参数查询窗口",
+      "entry": "src/renderer/components/SnippetsDialog.tsx",
+      "publicEntryBlob": "f3570cf5f84f602ad08a973410dfbf0490b0aaa7",
+      "children": [
+        {
+          "id": "Q06.1",
+          "status": "A",
+          "name": "本地片段库、预览及插入",
+          "entry": "src/renderer/components/SnippetsDialog.tsx",
+          "limit": "独立记录、搜索/分组；既有公开范围，不建立会话",
+          "evidence": [
+            "docs/releases/v0.21.0.md",
+            "tests/integration/acceptance-v021-published-20261018.md"
+          ]
+        },
+        {
+          "id": "Q06.2",
+          "status": "A",
+          "name": "九类型:name值参数查询",
+          "entry": "src/renderer/components/SnippetsDialog.tsx",
+          "limit": "MySQL/MariaDB已有准确公开检查点；不是SQL标识符任意拼接",
+          "evidence": [
+            "docs/releases/v0.21.0.md",
+            "tests/integration/acceptance-v021-published-20261018.md"
+          ]
+        },
+        {
+          "id": "Q06.3",
+          "status": "B",
+          "name": "macOS完整实库参数矩阵",
+          "entry": "src/renderer/components/SnippetsDialog.tsx",
+          "limit": "三平台离线通过不能代替实库",
+          "evidence": [
+            "docs/navicat-coverage.md",
+            "tests/integration/acceptance-v028-release-matrix-20261019.md"
+          ]
+        },
+        {
+          "id": "Q06.4",
+          "status": "C",
+          "name": "片段JSON新导入导出",
+          "entry": null,
+          "limit": "0.29另线封存，本版不交付",
+          "evidence": [
+            "docs/navicat-coverage.md",
+            "src/shared/contracts.ts"
+          ]
+        }
+      ],
+      "historicalEvidence": "0.3.0 独立片段库、九类型 :name、动态模式、部分提交与隐私已有五库核心、Windows 实库和公开安装验收；三平台原生离线通过，macOS 实库未验"
+    },
+    {
+      "id": "Q07",
+      "name": "可视化执行计划",
+      "uiEntry": "查询执行计划入口及计划树/原文区域",
+      "entry": "src/renderer/components/ExplainPlanView.tsx",
+      "publicEntryBlob": "d7d8d7ea2d1f67a71b24bfbe1d1acbfae35b67ad",
+      "children": [
+        {
+          "id": "Q07.1",
+          "status": "A",
+          "name": "原会话JSON计划树与原文回退",
+          "entry": "src/renderer/components/ExplainPlanView.tsx",
+          "limit": "公开0.17后范围；估算成本不是实际耗时",
+          "evidence": [
+            "docs/releases/v0.21.0.md",
+            "tests/integration/acceptance-v021-published-20261018.md",
+            "tests/integration/acceptance-parallel-third-20261016.md"
+          ]
+        },
+        {
+          "id": "Q07.2",
+          "status": "B",
+          "name": "复杂计划节点语义、权限和取消全组合",
+          "entry": "src/renderer/components/ExplainPlanView.tsx",
+          "limit": "现有部分展示及守卫；未形成全平台完整矩阵",
+          "evidence": [
+            "docs/navicat-coverage.md",
+            "tests/integration/acceptance-v028-release-matrix-20261019.md",
+            "tests/integration/acceptance-parallel-third-20261016.md"
+          ]
+        }
+      ],
+      "historicalEvidence": "0.17开发中已有原会话JSON树、服务器包含关系、估算指标/原文及明确文本回退；保存/来源更新/另存/CAS期间状态保持通过六组合界面分轮验收及Windows同一候选实装，见[第三批验收](../tests/integration/acceptance-parallel-third-20261016.md)。复杂节点语义、权限/取消组合及新macOS安装等仍待补齐，不能把估计成本当耗时"
+    },
+    {
+      "id": "D01",
+      "name": "分页/虚拟表格/筛选排序",
+      "uiEntry": "表数据页的筛选/排序/分页及跳页控件",
+      "entry": "src/renderer/components/TableTab.tsx",
+      "publicEntryBlob": "85498f87c8f0535fe8072e479b82b32f5ce6acbf",
+      "children": [
+        {
+          "id": "D01.1",
+          "status": "A",
+          "name": "服务端分页/筛选/排序与虚拟滚动",
+          "entry": "src/renderer/components/TableTab.tsx",
+          "limit": "公开Windows百万行滚动跳页及五基线范围；变化数据不保证快照一致",
+          "evidence": [
+            "docs/releases/v0.21.0.md",
+            "tests/integration/acceptance-v021-published-20261018.md"
+          ]
+        },
+        {
+          "id": "D01.2",
+          "status": "C",
+          "name": "查询结果新增单列排序与命名筛选方案",
+          "entry": null,
+          "limit": "0.29另线，不将表分页排序混为查询结果新排序",
+          "evidence": [
+            "docs/navicat-coverage.md",
+            "src/shared/contracts.ts"
+          ]
+        }
+      ],
+      "historicalEvidence": "0.2.0 五基线筛选、Windows 实库/实装百万行滚动跳页；变化数据不保证快照分页"
+    },
+    {
+      "id": "D02",
+      "name": "网格编辑/复制粘贴/集中提交",
+      "uiEntry": "表数据网格编辑、复制/粘贴、预览及集中提交",
+      "entry": "src/renderer/components/TableTab.tsx",
+      "publicEntryBlob": "85498f87c8f0535fe8072e479b82b32f5ce6acbf",
+      "children": [
+        {
+          "id": "D02.1",
+          "status": "A",
+          "name": "网格增删改草稿、可靠键与集中提交",
+          "entry": "src/renderer/components/TableTab.tsx",
+          "limit": "完整旧值比较、冲突整批回滚；无可靠唯一键及非InnoDB只读",
+          "evidence": [
+            "docs/releases/v0.21.0.md",
+            "tests/integration/acceptance-v021-published-20261018.md",
+            "tests/integration/acceptance-d06-current-and-key-guards-20261016.md",
+            "tests/integration/acceptance-p0-workflows-20261016.md",
+            "tests/integration/acceptance-query-close-undo-20261017.md"
+          ]
+        },
+        {
+          "id": "D02.2",
+          "status": "A",
+          "name": "有界复制/粘贴及复制行新增草稿",
+          "entry": "src/renderer/components/TableTab.tsx",
+          "limit": "既有公开支持范围；完整源补取受目录/权限/类型预算限制，预览后才提交",
+          "evidence": [
+            "docs/releases/v0.21.0.md",
+            "tests/integration/acceptance-v021-published-20261018.md",
+            "tests/integration/acceptance-d06-current-and-key-guards-20261016.md",
+            "tests/integration/acceptance-p0-workflows-20261016.md",
+            "tests/integration/acceptance-query-close-undo-20261017.md"
+          ]
+        },
+        {
+          "id": "D02.3",
+          "status": "B",
+          "name": "全部原生粘贴/输入法/类型及平台组合",
+          "entry": "src/renderer/components/TableTab.tsx",
+          "limit": "存在代码与分层证据；合成paste不能替代全部系统输入",
+          "evidence": [
+            "docs/navicat-coverage.md",
+            "tests/integration/acceptance-v028-release-matrix-20261019.md",
+            "tests/integration/acceptance-d06-current-and-key-guards-20261016.md",
+            "tests/integration/acceptance-p0-workflows-20261016.md",
+            "tests/integration/acceptance-query-close-undo-20261017.md"
+          ]
+        },
+        {
+          "id": "D02.4",
+          "status": "C",
+          "name": "新增含列名复制等0.29操作",
+          "entry": null,
+          "limit": "本版不纳入另线未完成代码",
+          "evidence": [
+            "docs/navicat-coverage.md",
+            "src/shared/contracts.ts"
+          ]
+        }
+      ],
+      "historicalEvidence": "基础草稿预览、可靠键、完整旧值冲突检测已有公开检查点；后续发现0.17源码在MySQL5.7的UINT64最大键重复谓词可能误报冲突。0.18源码已去重并保留文本键字节及非键原值保护，六组合36真实Engine/12正式D06界面通过，3337单元、类型与构建通过，见[原行实证](../tests/integration/acceptance-d06-current-and-key-guards-20261016.md)。修复已随0.18公开，安装产品与原候选字节相同。后续开发头407新增有界粘贴为新增草稿，保留typed NULL/字节/JSON和DEFAULT，明确预览/暂存，零自动写入；行预算反例已独立父红新绿，Windows源码3项正式界面通过，见[高频工作流](../tests/integration/acceptance-p0-workflows-20261016.md)。本轮粘贴为手工输入及合成paste；后续3192开发头已提供有界按操作撤销/重做，修复无blur卸载占门，4894单元/类型/构建及Windows源码原两项界面通过，见[关闭及撤销验收](../tests/integration/acceptance-query-close-undo-20261017.md)。原生粘贴、新安装与完整其它平台矩阵继续，本批尚未独立发布"
+    },
+    {
+      "id": "D03",
+      "name": "文本/JSON/NULL/二进制精度",
+      "uiEntry": "表单元格/记录值编辑与只读结果详情",
+      "entry": "src/renderer/components/RecordValueEditor.tsx",
+      "publicEntryBlob": "ed735e4f7d9aacabae5034c75bb70bc91529bc8b",
+      "children": [
+        {
+          "id": "D03.1",
+          "status": "A",
+          "name": "精确整数/金额/时间微秒与文本",
+          "entry": "src/renderer/components/RecordValueEditor.tsx",
+          "limit": "MySQL/MariaDB已证明类型范围；不经JS浮点重算",
+          "evidence": [
+            "docs/releases/v0.21.0.md",
+            "tests/integration/acceptance-v021-published-20261018.md"
+          ]
+        },
+        {
+          "id": "D03.2",
+          "status": "A",
+          "name": "NULL、JSON大数与二进制区分",
+          "entry": "src/renderer/components/RecordValueEditor.tsx",
+          "limit": "保留空串、字节及合法原型同名列；预算外不假装完整",
+          "evidence": [
+            "docs/releases/v0.21.0.md",
+            "tests/integration/acceptance-v021-published-20261018.md"
+          ]
+        }
+      ],
+      "historicalEvidence": "整数金额、时间微秒、JSON 大数及原型同名列"
+    },
+    {
+      "id": "D04",
+      "name": "表单/树/JSON 记录视图",
+      "uiEntry": "表数据记录表单、树及JSON视图",
+      "entry": "src/renderer/components/RecordFormPanel.tsx",
+      "publicEntryBlob": "31950cba6ff7f0babbccaa402791372662e62517",
+      "children": [
+        {
+          "id": "D04.1",
+          "status": "A",
+          "name": "普通记录表单与跨页连续浏览",
+          "entry": "src/renderer/components/RecordFormPanel.tsx",
+          "limit": "公开0.11/0.19范围；草稿/输入缓冲阻止跨页",
+          "evidence": [
+            "docs/releases/v0.21.0.md",
+            "tests/integration/acceptance-v021-published-20261018.md",
+            "tests/integration/acceptance-d04-record-structure-input-20261015.md",
+            "tests/integration/acceptance-parallel-fourth-20261016.md"
+          ]
+        },
+        {
+          "id": "D04.2",
+          "status": "A",
+          "name": "只读树、整行JSON、节点值及部分结构编辑",
+          "entry": "src/renderer/components/RecordFormPanel.tsx",
+          "limit": "公开0.12至0.15支持范围；共用草稿和原预览提交",
+          "evidence": [
+            "docs/releases/v0.21.0.md",
+            "tests/integration/acceptance-v021-published-20261018.md",
+            "tests/integration/acceptance-d04-record-structure-input-20261015.md",
+            "tests/integration/acceptance-parallel-fourth-20261016.md"
+          ]
+        },
+        {
+          "id": "D04.3",
+          "status": "B",
+          "name": "完整对象成员移动、批量、模板及恢复",
+          "entry": "src/renderer/components/RecordFormPanel.tsx",
+          "limit": "已有部分实现与专项；不能将上述支持范围称完整D04",
+          "evidence": [
+            "docs/navicat-coverage.md",
+            "tests/integration/acceptance-v028-release-matrix-20261019.md",
+            "tests/integration/acceptance-d04-record-structure-input-20261015.md",
+            "tests/integration/acceptance-parallel-fourth-20261016.md"
+          ]
+        },
+        {
+          "id": "D04.4",
+          "status": "C",
+          "name": "跨表关联树通用工作流",
+          "entry": null,
+          "limit": "未提供完整入口",
+          "evidence": [
+            "docs/navicat-coverage.md",
+            "src/shared/contracts.ts"
+          ]
+        }
+      ],
+      "historicalEvidence": "0.11普通表单、0.12投影、0.13整行、0.14节点值及0.15结构操作分别公开。0.15正式1801单元、五基线新增界面50次、Windows源码/本机及公开NSIS原完整各126项通过；两轮三平台源码/真实安装各22离线通过、104私网跳过，12资产/544源码blob一致，见[结构验收](../tests/integration/acceptance-d04-record-structure-input-20261015.md)。0.17已接通保留原词法及有序身份的对象成员移动，MySQL8.4三个真实界面用例通过，见[第四批验收](../tests/integration/acceptance-parallel-fourth-20261016.md)。新安装、跨页、关联树、模板、批量及持久恢复仍待完成"
+    },
+    {
+      "id": "D05",
+      "name": "外键值选择/关联导航",
+      "uiEntry": "表外键字段的值选择和关联浏览",
+      "entry": "src/renderer/referenceChanges.ts",
+      "publicEntryBlob": "0f693785291ace0729c02351d8601d7ecbea7b67",
+      "children": [
+        {
+          "id": "D05.1",
+          "status": "A",
+          "name": "复合外键值选择、NULL清空及关联浏览",
+          "entry": "src/renderer/referenceChanges.ts",
+          "limit": "公开0.4范围；确认前重核父行/元数据，只形成草稿",
+          "evidence": [
+            "docs/releases/v0.21.0.md",
+            "tests/integration/acceptance-v021-published-20261018.md",
+            "tests/integration/acceptance-d05-permission-supplement-20261016.md"
+          ]
+        },
+        {
+          "id": "D05.2",
+          "status": "B",
+          "name": "无可靠父表唯一键及更多平台权限组合",
+          "entry": "src/renderer/referenceChanges.ts",
+          "limit": "无可靠非空唯一键父表仍拒绝；macOS实库未完整验证",
+          "evidence": [
+            "docs/navicat-coverage.md",
+            "tests/integration/acceptance-v028-release-matrix-20261019.md",
+            "tests/integration/acceptance-d05-permission-supplement-20261016.md"
+          ]
+        }
+      ],
+      "historicalEvidence": "0.4.0复合外键、NULL、跨库、权限、取消及草稿保护五库核心及公开Windows完整实装已验，三平台原生离线安装通过。0.18获增补授权，MySQL8.4源码正式界面补跑父表拒读/可空复合键清空草稿及预览后提交1项通过，临时用户、库和线程核零，见[限权补充](../tests/integration/acceptance-d05-permission-supplement-20261016.md)；不回填0.17安装245项历史。macOS实库、无可靠非空唯一键父表及本例新安装/其它组合继续"
+    },
+    {
+      "id": "D06",
+      "name": "网格查找替换/表偏好",
+      "uiEntry": "表数据页内查找替换窗口与表偏好",
+      "entry": "src/renderer/pageFindReplace.ts",
+      "publicEntryBlob": "b408c0895186fb0b7182c5500e665d6cb8a60d73",
+      "children": [
+        {
+          "id": "D06.1",
+          "status": "A",
+          "name": "页内查找替换与列偏好",
+          "entry": "src/renderer/pageFindReplace.ts",
+          "limit": "已公开页内文本范围；替换仅成草稿，NULL/DEFAULT独立，列显隐/宽度/顺序可保存",
+          "evidence": [
+            "docs/releases/v0.21.0.md",
+            "tests/integration/acceptance-v021-published-20261018.md",
+            "tests/integration/acceptance-d06-current-and-key-guards-20261016.md",
+            "tests/integration/acceptance-d06-capture-and-late-20261016.md"
+          ]
+        },
+        {
+          "id": "D06.2",
+          "status": "A",
+          "name": "有界正则与捕获组展开",
+          "entry": "src/renderer/pageFindReplace.ts",
+          "limit": "按准确已公开版本范围；默认关闭的展开及预算保护保留",
+          "evidence": [
+            "docs/releases/v0.21.0.md",
+            "tests/integration/acceptance-v021-published-20261018.md",
+            "tests/integration/acceptance-d06-current-and-key-guards-20261016.md",
+            "tests/integration/acceptance-d06-capture-and-late-20261016.md"
+          ]
+        },
+        {
+          "id": "D06.3",
+          "status": "B",
+          "name": "完整输入法、类型与平台实库矩阵",
+          "entry": "src/renderer/pageFindReplace.ts",
+          "limit": "不跨页替换，不把SQL显示当WHERE语义证据",
+          "evidence": [
+            "docs/navicat-coverage.md",
+            "tests/integration/acceptance-v028-release-matrix-20261019.md",
+            "tests/integration/acceptance-d06-current-and-key-guards-20261016.md",
+            "tests/integration/acceptance-d06-capture-and-late-20261016.md"
+          ]
+        },
+        {
+          "id": "D06.4",
+          "status": "C",
+          "name": "0.29命名筛选等新扩展",
+          "entry": null,
+          "limit": "封存另线，未作为本版入口",
+          "evidence": [
+            "docs/navicat-coverage.md",
+            "src/shared/contracts.ts"
+          ]
+        }
+      ],
+      "historicalEvidence": "0.6页内查找/草稿及列偏好、0.17有界Worker正则/零宽已有公开检查点；0.18补单处前进、键盘及ABA/组合/选择守卫，既有六组合12次正式UI及36原行核心见[前期实证](../tests/integration/acceptance-d06-current-and-key-guards-20261016.md)。默认关闭的捕获组展开及分配前完整预算已接入，3478完整单元、最终类型与新构建通过；六组合18次捕获产品UI及加强交付时钟后的8项真实组件通过，SQL显示辅助不单独证明WHERE语义，见[捕获实证](../tests/integration/acceptance-d06-capture-and-late-20261016.md)。新安装、实体输入法、macOS实库及更多驱动/类型继续；0.18已公开"
+    },
+    {
+      "id": "D07",
+      "name": "图像/Hex/Web/BFile 编辑查看",
+      "uiEntry": "表或结果单元格的字节/图像查看器",
+      "entry": "src/renderer/components/BinaryCellViewer.tsx",
+      "publicEntryBlob": "d112d95ae54918ee7bf0cfa82f9ccc9b0385e573",
+      "children": [
+        {
+          "id": "D07.1",
+          "status": "A",
+          "name": "有界图像/Hex查看和可靠表草稿暂存",
+          "entry": "src/renderer/components/BinaryCellViewer.tsx",
+          "limit": "公开0.17后范围；任意SQL结果始终只读，真实字节包装与唯一列键定位",
+          "evidence": [
+            "docs/releases/v0.21.0.md",
+            "tests/integration/acceptance-v021-published-20261018.md",
+            "tests/integration/acceptance-parallel-third-20261016.md"
+          ]
+        },
+        {
+          "id": "D07.2",
+          "status": "C",
+          "name": "Web/BFile专用编辑查看",
+          "entry": null,
+          "limit": "尚未提供相应用户驱动/文件工作流",
+          "evidence": [
+            "docs/navicat-coverage.md",
+            "src/shared/contracts.ts"
+          ]
+        },
+        {
+          "id": "D07.3",
+          "status": "B",
+          "name": "全部驱动/格式及平台实库矩阵",
+          "entry": "src/renderer/components/BinaryCellViewer.tsx",
+          "limit": "已实现查看路径不等同全部内容类型已验",
+          "evidence": [
+            "docs/navicat-coverage.md",
+            "tests/integration/acceptance-v028-release-matrix-20261019.md",
+            "tests/integration/acceptance-parallel-third-20261016.md"
+          ]
+        }
+      ],
+      "historicalEvidence": "0.17开发中已有有界图像/Hex查看及可靠表草稿暂存，任意SQL结果始终只读、按真实字节包装区分TEXT/LONGTEXT和空字节，重复列名按唯一键定位。六组合类型界面及Windows同一候选实装通过，见[第三批验收](../tests/integration/acceptance-parallel-third-20261016.md)；Web/BFile、其它驱动/格式和平台实库等仍待做"
+    },
+    {
+      "id": "D08",
+      "name": "类型颜色/编辑会话历史",
+      "uiEntry": "偏好中的类型颜色及表提交回执窗口",
+      "entry": "src/renderer/components/TableApplyReceiptsDialog.tsx",
+      "publicEntryBlob": "546c82e1abde4d2ae87c54bb1c8db4039459b52f",
+      "children": [
+        {
+          "id": "D08.1",
+          "status": "A",
+          "name": "可选类型颜色",
+          "entry": "src/renderer/components/TableApplyReceiptsDialog.tsx",
+          "limit": "公开0.21范围；默认关闭，类型不可靠降级，偏好持久化",
+          "evidence": [
+            "docs/releases/v0.21.0.md",
+            "tests/integration/acceptance-v021-published-20261018.md",
+            "tests/integration/acceptance-p0-workflows-20261016.md",
+            "tests/integration/acceptance-table-apply-receipts-20261017.md"
+          ]
+        },
+        {
+          "id": "D08.2",
+          "status": "B",
+          "name": "编辑提交回执/会话历史完整恢复",
+          "entry": "src/renderer/components/TableApplyReceiptsDialog.tsx",
+          "limit": "已有回执、单次预览和部分真实CUD/重启证据；ACK丢失/写盘失败及完整安装矩阵未闭环",
+          "evidence": [
+            "docs/navicat-coverage.md",
+            "tests/integration/acceptance-v028-release-matrix-20261019.md",
+            "tests/integration/acceptance-p0-workflows-20261016.md",
+            "tests/integration/acceptance-table-apply-receipts-20261017.md"
+          ]
+        }
+      ],
+      "historicalEvidence": "后续开发头407已有可选类型颜色，默认关闭、可靠类型/歧义降级、偏好持久化及原值保持；147项相关纯验证及独审、Windows源码2项正式界面通过，含亮暗设置/真实重启/重置及表与SQL结果，见[高频工作流](../tests/integration/acceptance-p0-workflows-20261016.md)。后续903f953已接入独立持久提交回执、单次预览绑定及可靠取消阶段；5020单元/类型/构建、Windows源码两项离线与两项13384真实CUD/重启/冲突回滚界面通过，资源核零，见[回执实证](../tests/integration/acceptance-table-apply-receipts-20261017.md)。真实ACK丢失/写盘失败、完整类型/高对比/缩放、新安装与其它平台继续，本批尚未独立发布"
+    },
+    {
+      "id": "O01",
+      "name": "数据库/表设计",
+      "uiEntry": "对象树建库/建表、表设计及各专用属性窗口",
+      "entry": "src/renderer/components/SchemaDialog.tsx",
+      "publicEntryBlob": "5e1b5ad90b54dcea8fe4fe451c6071f9423bd53c",
+      "children": [
+        {
+          "id": "O01.1",
+          "status": "A",
+          "name": "数据库与表创建、普通字段差异编辑",
+          "entry": "src/renderer/components/SchemaDialog.tsx",
+          "limit": "公开支持的MySQL/MariaDB版本/类型范围；预览、明确确认、执行前再核",
+          "evidence": [
+            "docs/releases/v0.21.0.md",
+            "tests/integration/acceptance-v021-published-20261018.md",
+            "tests/integration/acceptance-o01-table-properties-20261016.md",
+            "tests/integration/acceptance-o01-rename-root-20261016.md",
+            "tests/integration/acceptance-o01-auto-w03-root-20261016.md",
+            "tests/integration/acceptance-o01-foreign-keys-20261014.md",
+            "tests/integration/acceptance-parallel-fourth-20261016.md"
+          ]
+        },
+        {
+          "id": "O01.2",
+          "status": "A",
+          "name": "BTREE主键/索引及复合外键",
+          "entry": "src/renderer/components/SchemaDialog.tsx",
+          "limit": "公开0.9/0.10与后续受控扩展；未知属性只读，DDL不保证原子",
+          "evidence": [
+            "docs/releases/v0.21.0.md",
+            "tests/integration/acceptance-v021-published-20261018.md",
+            "tests/integration/acceptance-o01-table-properties-20261016.md",
+            "tests/integration/acceptance-o01-rename-root-20261016.md",
+            "tests/integration/acceptance-o01-auto-w03-root-20261016.md",
+            "tests/integration/acceptance-o01-foreign-keys-20261014.md",
+            "tests/integration/acceptance-parallel-fourth-20261016.md"
+          ]
+        },
+        {
+          "id": "O01.3",
+          "status": "A",
+          "name": "受控表备注/默认编码/重命名/自增及复制",
+          "entry": "src/renderer/components/SchemaDialog.tsx",
+          "limit": "公开0.18至0.21支持范围；具体版本限制、复制非原子与复杂依赖限制保留",
+          "evidence": [
+            "docs/releases/v0.21.0.md",
+            "tests/integration/acceptance-v021-published-20261018.md",
+            "tests/integration/acceptance-o01-table-properties-20261016.md",
+            "tests/integration/acceptance-o01-rename-root-20261016.md",
+            "tests/integration/acceptance-o01-auto-w03-root-20261016.md",
+            "tests/integration/acceptance-o01-foreign-keys-20261014.md",
+            "tests/integration/acceptance-parallel-fourth-20261016.md"
+          ]
+        },
+        {
+          "id": "O01.4",
+          "status": "B",
+          "name": "0.22至0.28单列排序规则等新增表设计",
+          "entry": "src/renderer/components/SchemaDialog.tsx",
+          "limit": "有源码/部分实证但未公开，不借0.21公开资产背书",
+          "evidence": [
+            "docs/navicat-coverage.md",
+            "tests/integration/acceptance-v028-release-matrix-20261019.md",
+            "tests/integration/acceptance-o01-table-properties-20261016.md",
+            "tests/integration/acceptance-o01-rename-root-20261016.md",
+            "tests/integration/acceptance-o01-auto-w03-root-20261016.md",
+            "tests/integration/acceptance-o01-foreign-keys-20261014.md",
+            "tests/integration/acceptance-parallel-fourth-20261016.md"
+          ]
+        },
+        {
+          "id": "O01.5",
+          "status": "B",
+          "name": "复杂类型转换和特殊表属性完整覆盖",
+          "entry": "src/renderer/components/SchemaDialog.tsx",
+          "limit": "现有设计器仍有只读和降级范围",
+          "evidence": [
+            "docs/navicat-coverage.md",
+            "tests/integration/acceptance-v028-release-matrix-20261019.md",
+            "tests/integration/acceptance-o01-table-properties-20261016.md",
+            "tests/integration/acceptance-o01-rename-root-20261016.md",
+            "tests/integration/acceptance-o01-auto-w03-root-20261016.md",
+            "tests/integration/acceptance-o01-foreign-keys-20261014.md",
+            "tests/integration/acceptance-parallel-fourth-20261016.md"
+          ]
+        }
+      ],
+      "historicalEvidence": "0.8字段、0.9 BTREE/主键、0.9.1取消保护、0.10外键及0.17受控FULLTEXT/SPATIAL均已有公开检查点，原证据分别保留。0.18开发源码新增普通表备注和表默认字符集/排序规则专用编辑，两切片六组合核心分别各24项通过；Windows正式Electron四项在六组合共24次通过，含180px窄栏、严格TLS、预览零DDL和原列/数据保持，主目录3239单元、类型及构建通过，旧失败与核零见[表属性实证](../tests/integration/acceptance-o01-table-properties-20261016.md)。0.18另增同库表重命名，MySQL8.0.30以上的8.0分支及8.4可写，5.7/Maria本片只读；六组合核心18通过/18条件跳过、正式UI12通过/6条件跳过，3571完整单元、类型及新构建通过，未知两端URI及刷新保护见[重命名实证](../tests/integration/acceptance-o01-rename-root-20261016.md)。0.18另增受控下一自增值，仅上调已有整数自增列；六组合核心18通过/18条件跳过、Windows正式UI15通过/3条件跳过，三个可写实例实际观察MDL后取消且不重放；完整3763及新增MDL20项、类型与新构建通过，见[自增与导航实证](../tests/integration/acceptance-o01-auto-w03-root-20261016.md)。0.18已公开，旧版本写能力、完整列转换、其它表属性、复杂特殊属性、新安装与macOS实库仍待验；前期见[外键](../tests/integration/acceptance-o01-foreign-keys-20261014.md)及[第四批](../tests/integration/acceptance-parallel-fourth-20261016.md)"
+    },
+    {
+      "id": "O02",
+      "name": "视图/过程/函数/触发器/事件",
+      "uiEntry": "对象树对应对象的定义编辑窗口",
+      "entry": "src/renderer/components/QueryTab.tsx",
+      "publicEntryBlob": "060039c24853e8f27149600e96065af2d92338e0",
+      "children": [
+        {
+          "id": "O02.1",
+          "status": "A",
+          "name": "视图、过程、函数、触发器及事件定义",
+          "entry": "src/renderer/components/QueryTab.tsx",
+          "limit": "公开MySQL/MariaDB Windows逐类读/编辑/执行/刷新范围；其它驱动另列未实现",
+          "evidence": [
+            "docs/releases/v0.21.0.md",
+            "tests/integration/acceptance-v021-published-20261018.md"
+          ]
+        }
+      ],
+      "historicalEvidence": "0.2.0 Windows 实库/实装逐类读取编辑执行刷新，实际结果断言；其它驱动尚未实现"
+    },
+    {
+      "id": "O03",
+      "name": "结构 SQL 预览",
+      "uiEntry": "表设计/结构修改的SQL预览与明确执行",
+      "entry": "src/renderer/components/SchemaDialog.tsx",
+      "publicEntryBlob": "5e1b5ad90b54dcea8fe4fe451c6071f9423bd53c",
+      "children": [
+        {
+          "id": "O03.1",
+          "status": "A",
+          "name": "结构SQL预览及明确执行",
+          "entry": "src/renderer/components/SchemaDialog.tsx",
+          "limit": "既有公开范围；展示隐式提交和失败说明，不许诺DDL事务回滚",
+          "evidence": [
+            "docs/releases/v0.21.0.md",
+            "tests/integration/acceptance-v021-published-20261018.md"
+          ]
+        }
+      ],
+      "historicalEvidence": "预览后执行，隐式提交及失败说明"
+    },
+    {
+      "id": "F01",
+      "name": "CSV/JSON/SQL 文件任务",
+      "uiEntry": "表导入/导出窗口及SQL文件执行任务",
+      "entry": "src/renderer/components/TransferDialog.tsx",
+      "publicEntryBlob": "87f43acd8057ddb62dedf3692a717c0f8d8aa285",
+      "children": [
+        {
+          "id": "F01.1",
+          "status": "A",
+          "name": "CSV/JSON映射、编码、批次及SQL文件任务",
+          "entry": "src/renderer/components/TransferDialog.tsx",
+          "limit": "既有公开正常导入/导出范围；失败不会撤销已提交批次",
+          "evidence": [
+            "docs/releases/v0.21.0.md",
+            "tests/integration/acceptance-v021-published-20261018.md"
+          ]
+        },
+        {
+          "id": "F01.2",
+          "status": "A",
+          "name": "受控结构/数据SQL导出",
+          "entry": "src/renderer/components/TransferDialog.tsx",
+          "limit": "无法可靠保真时拒绝并保原文件；不是整库备份",
+          "evidence": [
+            "docs/releases/v0.21.0.md",
+            "tests/integration/acceptance-v021-published-20261018.md"
+          ]
+        },
+        {
+          "id": "F01.3",
+          "status": "B",
+          "name": "特殊结构与全部格式/驱动往返矩阵",
+          "entry": "src/renderer/components/TransferDialog.tsx",
+          "limit": "Maria表达式默认/旧二进制默认等按具体保护边界，不称通用保真",
+          "evidence": [
+            "docs/navicat-coverage.md",
+            "tests/integration/acceptance-v028-release-matrix-20261019.md"
+          ]
+        }
+      ],
+      "historicalEvidence": "常规映射、编码、进度、取消、错误与恢复已验；0.7 及更早含结构 SQL 对部分 Maria 表达式默认及旧版二进制文字默认存在已证保真缺口。0.8 已公开保护拒绝不可靠结构并保原文件，纯数据和视图路径分别验证；其它格式/驱动仍有缺项"
+    },
+    {
+      "id": "W01",
+      "name": "快捷键/主题/标签/退出",
+      "uiEntry": "工作台主题、标签、快捷键及关闭/退出确认",
+      "entry": "src/renderer/App.tsx",
+      "publicEntryBlob": "bf880ba1d83c50e02f1a66da33593f5d2dbcc2e4",
+      "children": [
+        {
+          "id": "W01.1",
+          "status": "A",
+          "name": "明暗主题、标签、既有快捷键及退出保护",
+          "entry": "src/renderer/App.tsx",
+          "limit": "公开0.21桌面范围；保存失败阻止关闭",
+          "evidence": [
+            "docs/releases/v0.21.0.md",
+            "tests/integration/acceptance-v021-published-20261018.md"
+          ]
+        },
+        {
+          "id": "W01.2",
+          "status": "B",
+          "name": "0.28新文件系统保存与新布局全平台闭环",
+          "entry": "src/renderer/App.tsx",
+          "limit": "Windows源码CtrlS有真实证据；安装CtrlS/Mac CmdS/x64仍缺项",
+          "evidence": [
+            "docs/navicat-coverage.md",
+            "tests/integration/acceptance-v028-release-matrix-20261019.md"
+          ]
+        }
+      ],
+      "historicalEvidence": "各平台，原生确认及保存失败保护"
+    },
+    {
+      "id": "W02",
+      "name": "收藏/虚拟分组/专注/对象 URI",
+      "uiEntry": "工作台收藏/分组管理、专注及应用内对象链接",
+      "entry": "src/renderer/components/Workbench.tsx",
+      "publicEntryBlob": "0bb55c669fb162ccf81a9c23540ca762af31c4c1",
+      "children": [
+        {
+          "id": "W02.1",
+          "status": "A",
+          "name": "收藏/虚拟分组/专注及应用内对象URI",
+          "entry": "src/renderer/components/Workbench.tsx",
+          "limit": "已有公开工作台范围；保持连接及草稿归属",
+          "evidence": [
+            "docs/releases/v0.21.0.md",
+            "tests/integration/acceptance-v021-published-20261018.md",
+            "tests/integration/acceptance-parallel-integration-20261016.md",
+            "tests/integration/acceptance-parallel-fourth-20261016.md"
+          ]
+        },
+        {
+          "id": "W02.2",
+          "status": "B",
+          "name": "系统URI协议注册与全平台外部唤起",
+          "entry": "src/renderer/components/Workbench.tsx",
+          "limit": "源码/应用内链接不等同系统注册完整交付",
+          "evidence": [
+            "docs/navicat-coverage.md",
+            "tests/integration/acceptance-v028-release-matrix-20261019.md",
+            "tests/integration/acceptance-parallel-integration-20261016.md",
+            "tests/integration/acceptance-parallel-fourth-20261016.md"
+          ]
+        }
+      ],
+      "historicalEvidence": "0.17开发中已接入收藏/虚拟分组/专注/对象URI、连接辨识及最新导航意图，前期依据见[首批集成](../tests/integration/acceptance-parallel-integration-20261016.md)。第四批新查询接管迟到表/定义/错误已通过6个受控回包App用例及1个MySQL8.4真实双连接用例；明确会话回填落盘后保留旧标签完整快照断言，见[第四批验收](../tests/integration/acceptance-parallel-fourth-20261016.md)。系统协议注册、新安装/macOS及公开发行仍未完成"
+    },
+    {
+      "id": "W03",
+      "name": "全库搜索",
+      "uiEntry": "工作台全库搜索及保存查询全文搜索窗口",
+      "entry": "src/renderer/components/SavedQuerySearchDialog.tsx",
+      "publicEntryBlob": "23c011270c654ba4e5ba9fe7ddcc31bebc51df0c",
+      "children": [
+        {
+          "id": "W03.1",
+          "status": "A",
+          "name": "结构名/定义正文/分页数据/本地保存查询搜索",
+          "entry": "src/renderer/components/SavedQuerySearchDialog.tsx",
+          "limit": "已有公开范围，按权限降级、分页预算与准确对象/连接修订定位",
+          "evidence": [
+            "docs/releases/v0.21.0.md",
+            "tests/integration/acceptance-v021-published-20261018.md",
+            "tests/integration/acceptance-query-pages-20261015.md",
+            "tests/integration/acceptance-w03-saved-query-search-20261015.md",
+            "tests/integration/acceptance-w03-definition-search-20261015.md",
+            "tests/integration/acceptance-w03-record-navigation-20261015.md",
+            "tests/integration/acceptance-o01-auto-w03-root-20261016.md",
+            "docs/plans/database-search.md"
+          ]
+        },
+        {
+          "id": "W03.2",
+          "status": "A",
+          "name": "有限命中高亮与前后导航",
+          "entry": "src/renderer/components/SavedQuerySearchDialog.tsx",
+          "limit": "公开0.18/0.19支持范围；不能可靠定位时整组明确降级",
+          "evidence": [
+            "docs/releases/v0.21.0.md",
+            "tests/integration/acceptance-v021-published-20261018.md",
+            "tests/integration/acceptance-query-pages-20261015.md",
+            "tests/integration/acceptance-w03-saved-query-search-20261015.md",
+            "tests/integration/acceptance-w03-definition-search-20261015.md",
+            "tests/integration/acceptance-w03-record-navigation-20261015.md",
+            "tests/integration/acceptance-o01-auto-w03-root-20261016.md",
+            "docs/plans/database-search.md"
+          ]
+        },
+        {
+          "id": "W03.3",
+          "status": "B",
+          "name": "全部对象权限、可编辑导航及macOS私网组合",
+          "entry": "src/renderer/components/SavedQuerySearchDialog.tsx",
+          "limit": "未形成全数据库/版本/平台完整闭环",
+          "evidence": [
+            "docs/navicat-coverage.md",
+            "tests/integration/acceptance-v028-release-matrix-20261019.md",
+            "tests/integration/acceptance-query-pages-20261015.md",
+            "tests/integration/acceptance-w03-saved-query-search-20261015.md",
+            "tests/integration/acceptance-w03-definition-search-20261015.md",
+            "tests/integration/acceptance-w03-record-navigation-20261015.md",
+            "tests/integration/acceptance-o01-auto-w03-root-20261016.md",
+            "docs/plans/database-search.md"
+          ]
+        }
+      ],
+      "historicalEvidence": "0.17开发中已有结构名称、定义正文、分页数据搜索、权限降级、首批只读记录定位及本地查询全文/概要浏览。当前2210单元、Windows源码/真实NSIS各39项通过，新增最小原生窗口正常点击和错误明细可见性修复，冻结归档一致、六实例及本机资源核零，见[分页及布局验收](../tests/integration/acceptance-query-pages-20261015.md)。本地正则/光标见[本地全文验收](../tests/integration/acceptance-w03-saved-query-search-20261015.md)；旧定义六实例66/名称54及导航276见[定义](../tests/integration/acceptance-w03-definition-search-20261015.md)和[导航](../tests/integration/acceptance-w03-record-navigation-20261015.md)，身份仍限明示Linux/ASCII/非分区InnoDB及目录权限。0.18本地保存查询正文增加最多200处高亮/前后导航和Unicode零宽，绑定摘要/连接修订/实际模型，CRLF不能无损定位时整组明确降级；Windows新4项及原5项离线搜索9通过/1原实库条件跳过，400ms保存观测原失败及窄修保留，见[本批实证](../tests/integration/acceptance-o01-auto-w03-root-20261016.md)。其它对象/权限、可编辑导航、定义内行列与多处高亮、执行历史分页、SSH、完整桌面及本批macOS私网/公开发行继续，见[搜索计划](plans/database-search.md)"
+    },
+    {
+      "id": "R01",
+      "name": "PostgreSQL",
+      "uiEntry": "当前无相应正式用户入口",
+      "entry": null,
+      "publicEntryBlob": null,
+      "children": [
+        {
+          "id": "R01.1",
+          "status": "C",
+          "name": "PostgreSQL连接及会话",
+          "entry": null,
+          "limit": "会话、schema、序列、类型、函数、约束与驱动完整矩阵",
+          "evidence": [
+            "docs/navicat-coverage.md",
+            "src/shared/contracts.ts"
+          ]
+        },
+        {
+          "id": "R01.2",
+          "status": "C",
+          "name": "schema/序列/类型/约束及函数",
+          "entry": null,
+          "limit": "会话、schema、序列、类型、函数、约束与驱动完整矩阵",
+          "evidence": [
+            "docs/navicat-coverage.md",
+            "src/shared/contracts.ts"
+          ]
+        }
+      ],
+      "historicalEvidence": "会话、schema、序列、类型、函数、约束与驱动完整矩阵"
+    },
+    {
+      "id": "R02",
+      "name": "SQLite",
+      "uiEntry": "当前无相应正式用户入口",
+      "entry": null,
+      "publicEntryBlob": null,
+      "children": [
+        {
+          "id": "R02.1",
+          "status": "C",
+          "name": "用户SQLite文件数据库连接",
+          "entry": null,
+          "limit": "用户数据库驱动，文件锁、只读、事务和恢复；内部sql.js仅存配置/历史/任务，不是用户SQLite驱动",
+          "evidence": [
+            "docs/navicat-coverage.md",
+            "src/shared/contracts.ts"
+          ]
+        },
+        {
+          "id": "R02.2",
+          "status": "C",
+          "name": "锁、只读、事务与恢复",
+          "entry": null,
+          "limit": "用户数据库驱动，文件锁、只读、事务和恢复；内部sql.js仅存配置/历史/任务，不是用户SQLite驱动",
+          "evidence": [
+            "docs/navicat-coverage.md",
+            "src/shared/contracts.ts"
+          ]
+        }
+      ],
+      "historicalEvidence": "用户数据库驱动，文件锁、只读、事务和恢复"
+    },
+    {
+      "id": "M01",
+      "name": "同类/跨类型传输",
+      "uiEntry": "当前无相应正式用户入口",
+      "entry": null,
+      "publicEntryBlob": null,
+      "children": [
+        {
+          "id": "M01.1",
+          "status": "C",
+          "name": "同类数据库传输",
+          "entry": null,
+          "limit": "结构数据映射、预览、批次、取消、错误与精度",
+          "evidence": [
+            "docs/navicat-coverage.md",
+            "src/shared/contracts.ts"
+          ]
+        },
+        {
+          "id": "M01.2",
+          "status": "C",
+          "name": "跨类型结构及数据映射",
+          "entry": null,
+          "limit": "结构数据映射、预览、批次、取消、错误与精度",
+          "evidence": [
+            "docs/navicat-coverage.md",
+            "src/shared/contracts.ts"
+          ]
+        },
+        {
+          "id": "M01.3",
+          "status": "C",
+          "name": "传输预览/取消/错误恢复",
+          "entry": null,
+          "limit": "结构数据映射、预览、批次、取消、错误与精度",
+          "evidence": [
+            "docs/navicat-coverage.md",
+            "src/shared/contracts.ts"
+          ]
+        }
+      ],
+      "historicalEvidence": "结构数据映射、预览、批次、取消、错误与精度"
+    },
+    {
+      "id": "M02",
+      "name": "结构比较同步",
+      "uiEntry": "工作台结构比较窗口、差异选择及SQL审查稿",
+      "entry": "src/renderer/components/SchemaCompareDialog.tsx",
+      "publicEntryBlob": "c46422c08ff53d515a01b22fc309269c56618b6d",
+      "children": [
+        {
+          "id": "M02.1",
+          "status": "A",
+          "name": "两表原定义只读比较与SQL审查稿",
+          "entry": "src/renderer/components/SchemaCompareDialog.tsx",
+          "limit": "公开0.17/0.21支持范围；分类/状态/名称筛选及定义展开",
+          "evidence": [
+            "docs/releases/v0.21.0.md",
+            "tests/integration/acceptance-v021-published-20261018.md",
+            "tests/integration/acceptance-parallel-integration-20261016.md"
+          ]
+        },
+        {
+          "id": "M02.2",
+          "status": "C",
+          "name": "自动执行结构同步",
+          "entry": null,
+          "limit": "没有同步执行入口；方向/依赖/完整对象/目标再检查未交付",
+          "evidence": [
+            "docs/navicat-coverage.md",
+            "src/shared/contracts.ts"
+          ]
+        }
+      ],
+      "historicalEvidence": "0.17开发中已有两表原定义比较、差异分类及受限SQL审查稿，六实例读取/预览保护24项通过，见[首批集成](../tests/integration/acceptance-parallel-integration-20261016.md)。尚不能执行同步；完整对象/方向/依赖及目标再检查继续，外键全库名称可用性未知时拒绝危险混合脚本"
+    },
+    {
+      "id": "M03",
+      "name": "数据比较同步",
+      "uiEntry": "当前无相应正式用户入口",
+      "entry": null,
+      "publicEntryBlob": null,
+      "children": [
+        {
+          "id": "M03.1",
+          "status": "C",
+          "name": "差异分页及键筛选",
+          "entry": null,
+          "limit": "键/筛选、差异分页、冲突，选择增删改",
+          "evidence": [
+            "docs/navicat-coverage.md",
+            "src/shared/contracts.ts"
+          ]
+        },
+        {
+          "id": "M03.2",
+          "status": "C",
+          "name": "选择增删改同步",
+          "entry": null,
+          "limit": "键/筛选、差异分页、冲突，选择增删改",
+          "evidence": [
+            "docs/navicat-coverage.md",
+            "src/shared/contracts.ts"
+          ]
+        },
+        {
+          "id": "M03.3",
+          "status": "C",
+          "name": "冲突与目标再核",
+          "entry": null,
+          "limit": "键/筛选、差异分页、冲突，选择增删改",
+          "evidence": [
+            "docs/navicat-coverage.md",
+            "src/shared/contracts.ts"
+          ]
+        }
+      ],
+      "historicalEvidence": "键/筛选、差异分页、冲突，选择增删改"
+    },
+    {
+      "id": "M04",
+      "name": "跨库记录复制",
+      "uiEntry": "当前无相应正式用户入口",
+      "entry": null,
+      "publicEntryBlob": null,
+      "children": [
+        {
+          "id": "M04.1",
+          "status": "C",
+          "name": "跨库记录映射",
+          "entry": null,
+          "limit": "类型映射，形成目标草稿，避免误贴原连接",
+          "evidence": [
+            "docs/navicat-coverage.md",
+            "src/shared/contracts.ts"
+          ]
+        },
+        {
+          "id": "M04.2",
+          "status": "C",
+          "name": "目标草稿与明确提交",
+          "entry": null,
+          "limit": "类型映射，形成目标草稿，避免误贴原连接",
+          "evidence": [
+            "docs/navicat-coverage.md",
+            "src/shared/contracts.ts"
+          ]
+        }
+      ],
+      "historicalEvidence": "类型映射，形成目标草稿，避免误贴原连接"
+    },
+    {
+      "id": "B01",
+      "name": "常用数据库备份恢复",
+      "uiEntry": "当前无正式备份执行入口；仅有Root私有准备组件和内部运行模块",
+      "entry": "src/renderer/components/DatabaseBackupDialog.tsx",
+      "publicEntryBlob": null,
+      "children": [
+        {
+          "id": "B01.1",
+          "status": "B",
+          "name": "MySQL/MariaDB备份准备及内部运行模块",
+          "entry": "src/renderer/components/DatabaseBackupDialog.tsx",
+          "limit": "存在私有准备组件/原生工具/归档/锁代码；App未接该Dialog，且组件无执行按钮，不算已交付备份",
+          "evidence": [
+            "docs/navicat-coverage.md",
+            "tests/integration/acceptance-v028-release-matrix-20261019.md"
+          ]
+        },
+        {
+          "id": "B01.2",
+          "status": "B",
+          "name": "备份恢复预检与原生文件保护",
+          "entry": "src/renderer/components/DatabaseBackupDialog.tsx",
+          "limit": "存在内部实现及局部证据；真实备份→恢复→数据比对→资源闭合尚未交付",
+          "evidence": [
+            "docs/navicat-coverage.md",
+            "tests/integration/acceptance-v028-release-matrix-20261019.md"
+          ]
+        },
+        {
+          "id": "B01.3",
+          "status": "C",
+          "name": "PostgreSQL/SQLite/Redis整库备份恢复",
+          "entry": null,
+          "limit": "对应用户数据库驱动尚未实现；表导出不能替代本项",
+          "evidence": [
+            "docs/navicat-coverage.md",
+            "src/shared/contracts.ts"
+          ]
+        }
+      ],
+      "historicalEvidence": "MySQL/MariaDB/PostgreSQL/SQLite/Redis 分别验证；表导出不能代替整库备份"
+    },
+    {
+      "id": "B02",
+      "name": "备份转 SQL/SQL 与 Redis 文件",
+      "uiEntry": "SQL文件导入执行；转换和Redis任务无入口",
+      "entry": "src/renderer/components/TransferDialog.tsx",
+      "publicEntryBlob": "87f43acd8057ddb62dedf3692a717c0f8d8aa285",
+      "children": [
+        {
+          "id": "B02.1",
+          "status": "A",
+          "name": "受控SQL文件执行任务",
+          "entry": "src/renderer/components/TransferDialog.tsx",
+          "limit": "既有公开入口，执行本身受会话/取消与已提交结果边界约束",
+          "evidence": [
+            "docs/releases/v0.21.0.md",
+            "tests/integration/acceptance-v021-published-20261018.md"
+          ]
+        },
+        {
+          "id": "B02.2",
+          "status": "C",
+          "name": "备份格式转换为SQL及Redis文件任务",
+          "entry": null,
+          "limit": "无完整用户入口，不能拿SQL导入替代格式转换",
+          "evidence": [
+            "docs/navicat-coverage.md",
+            "src/shared/contracts.ts"
+          ]
+        }
+      ],
+      "historicalEvidence": "SQL 执行已验；补转换及 Redis 命令任务"
+    },
+    {
+      "id": "S01",
+      "name": "用户/角色/授权撤销",
+      "uiEntry": "当前无相应正式用户入口",
+      "entry": null,
+      "publicEntryBlob": null,
+      "children": [
+        {
+          "id": "S01.1",
+          "status": "C",
+          "name": "用户及角色管理",
+          "entry": null,
+          "limit": "真实权限、预览、权限不足与当前账号保护",
+          "evidence": [
+            "docs/navicat-coverage.md",
+            "src/shared/contracts.ts"
+          ]
+        },
+        {
+          "id": "S01.2",
+          "status": "C",
+          "name": "授权/撤销与当前账号保护",
+          "entry": null,
+          "limit": "真实权限、预览、权限不足与当前账号保护",
+          "evidence": [
+            "docs/navicat-coverage.md",
+            "src/shared/contracts.ts"
+          ]
+        }
+      ],
+      "historicalEvidence": "真实权限、预览、权限不足与当前账号保护"
+    },
+    {
+      "id": "S02",
+      "name": "服务器/会话/命令监控",
+      "uiEntry": "工作台服务器监控入口，先选正式连接",
+      "entry": "src/renderer/components/ServerMonitorEntry.tsx",
+      "publicEntryBlob": "2325bdc4be4c19506e5ef804428b7ea770ccaee0",
+      "children": [
+        {
+          "id": "S02.1",
+          "status": "A",
+          "name": "只读概要、固定状态及有限会话",
+          "entry": "src/renderer/components/ServerMonitorEntry.tsx",
+          "limit": "公开0.21入口，正式连接选择/独立任务/串行刷新/本地筛选排序；非原子快照",
+          "evidence": [
+            "docs/releases/v0.21.0.md",
+            "tests/integration/acceptance-v021-published-20261018.md",
+            "docs/development/server-monitor-integration-20261017.md",
+            "docs/development/independent-task-resource-recovery-20261017.md"
+          ]
+        },
+        {
+          "id": "S02.2",
+          "status": "C",
+          "name": "结束他人会话与权限管理操作",
+          "entry": null,
+          "limit": "当前监控只读，取消自身读取不等同终止别的会话",
+          "evidence": [
+            "docs/navicat-coverage.md",
+            "src/shared/contracts.ts"
+          ]
+        },
+        {
+          "id": "S02.3",
+          "status": "B",
+          "name": "全平台/版本/权限监控矩阵",
+          "entry": "src/renderer/components/ServerMonitorEntry.tsx",
+          "limit": "部分实际链路已有证据，未完整交付所有监控类型",
+          "evidence": [
+            "docs/navicat-coverage.md",
+            "tests/integration/acceptance-v028-release-matrix-20261019.md",
+            "docs/development/server-monitor-integration-20261017.md",
+            "docs/development/independent-task-resource-recovery-20261017.md"
+          ]
+        }
+      ],
+      "historicalEvidence": "已接正式连接选择、概要/固定状态/有限会话、串行刷新及只读独立任务；源码与RAM证据见[接线边界](development/server-monitor-integration-20261017.md)、[资源隔离与退出](development/independent-task-resource-recovery-20261017.md)，实库/原生/安装待验；取消读取与结束他人会话区分"
+    },
+    {
+      "id": "F02",
+      "name": "Excel",
+      "uiEntry": "表导入/导出窗口选择Excel（XLSX）",
+      "entry": "src/renderer/components/ConnectedExcelTransferDialog.tsx",
+      "publicEntryBlob": "a52c1a0f91d525bf3a95a744356aa00f80fe4dba",
+      "children": [
+        {
+          "id": "F02.1",
+          "status": "A",
+          "name": "有界XLSX读取、工作表/字段映射及流式导出",
+          "entry": "src/renderer/components/ConnectedExcelTransferDialog.tsx",
+          "limit": "已公开的普通XLSX支持范围；MySQL8.4实际1201行往返和六组合精度等有准确旧来源",
+          "evidence": [
+            "docs/releases/v0.21.0.md",
+            "tests/integration/acceptance-v021-published-20261018.md",
+            "tests/integration/acceptance-parallel-second-20261016.md"
+          ]
+        },
+        {
+          "id": "F02.2",
+          "status": "B",
+          "name": "完整工作表/类型/取消/原生macOS矩阵",
+          "entry": "src/renderer/components/ConnectedExcelTransferDialog.tsx",
+          "limit": "已有代码和局部证据；Excel整体保持部分，不称全部格式完成",
+          "evidence": [
+            "docs/navicat-coverage.md",
+            "tests/integration/acceptance-v028-release-matrix-20261019.md",
+            "tests/integration/acceptance-parallel-second-20261016.md"
+          ]
+        },
+        {
+          "id": "F02.3",
+          "status": "C",
+          "name": "XLS及公式重算",
+          "entry": null,
+          "limit": "不支持旧XLS与Excel计算引擎",
+          "evidence": [
+            "docs/navicat-coverage.md",
+            "src/shared/contracts.ts"
+          ]
+        }
+      ],
+      "historicalEvidence": "0.17开发中已有XLSX有界读取、工作表/字段映射及流式导出；MySQL8.4实际1201行往返及六实例文件精度/真实警告批次回滚已验，后者174项包含XLSX/CSV/JSON，见[第二批验收](../tests/integration/acceptance-parallel-second-20261016.md)。完整工作表/类型/公式与取消矩阵、原生macOS及公开发行仍待完成"
+    },
+    {
+      "id": "D09",
+      "name": "数据概况/剖析",
+      "uiEntry": "当前无相应正式用户入口",
+      "entry": null,
+      "publicEntryBlob": null,
+      "children": [
+        {
+          "id": "D09.1",
+          "status": "C",
+          "name": "NULL/分布/抽样概况",
+          "entry": null,
+          "limit": "NULL、分布、抽样范围、服务端聚合及取消",
+          "evidence": [
+            "docs/navicat-coverage.md",
+            "src/shared/contracts.ts"
+          ]
+        },
+        {
+          "id": "D09.2",
+          "status": "C",
+          "name": "服务端聚合及取消",
+          "entry": null,
+          "limit": "NULL、分布、抽样范围、服务端聚合及取消",
+          "evidence": [
+            "docs/navicat-coverage.md",
+            "src/shared/contracts.ts"
+          ]
+        }
+      ],
+      "historicalEvidence": "NULL、分布、抽样范围、服务端聚合及取消"
+    },
+    {
+      "id": "R03",
+      "name": "SQL Server",
+      "uiEntry": "当前无相应正式用户入口",
+      "entry": null,
+      "publicEntryBlob": null,
+      "children": [
+        {
+          "id": "R03.1",
+          "status": "C",
+          "name": "SQL Server连接与批次",
+          "entry": null,
+          "limit": "schema、身份列、批次、程序与驱动矩阵",
+          "evidence": [
+            "docs/navicat-coverage.md",
+            "src/shared/contracts.ts"
+          ]
+        },
+        {
+          "id": "R03.2",
+          "status": "C",
+          "name": "schema/身份列/程序/类型",
+          "entry": null,
+          "limit": "schema、身份列、批次、程序与驱动矩阵",
+          "evidence": [
+            "docs/navicat-coverage.md",
+            "src/shared/contracts.ts"
+          ]
+        }
+      ],
+      "historicalEvidence": "schema、身份列、批次、程序与驱动矩阵"
+    },
+    {
+      "id": "R04",
+      "name": "Oracle",
+      "uiEntry": "当前无相应正式用户入口",
+      "entry": null,
+      "publicEntryBlob": null,
+      "children": [
+        {
+          "id": "R04.1",
+          "status": "C",
+          "name": "Oracle服务名/TNS连接",
+          "entry": null,
+          "limit": "服务名/TNS、序列、包、类型、LOB 与精度",
+          "evidence": [
+            "docs/navicat-coverage.md",
+            "src/shared/contracts.ts"
+          ]
+        },
+        {
+          "id": "R04.2",
+          "status": "C",
+          "name": "序列/包/LOB/类型",
+          "entry": null,
+          "limit": "服务名/TNS、序列、包、类型、LOB 与精度",
+          "evidence": [
+            "docs/navicat-coverage.md",
+            "src/shared/contracts.ts"
+          ]
+        }
+      ],
+      "historicalEvidence": "服务名/TNS、序列、包、类型、LOB 与精度"
+    },
+    {
+      "id": "R05",
+      "name": "MongoDB",
+      "uiEntry": "当前无相应正式用户入口",
+      "entry": null,
+      "publicEntryBlob": null,
+      "children": [
+        {
+          "id": "R05.1",
+          "status": "C",
+          "name": "MongoDB连接/集合及索引",
+          "entry": null,
+          "limit": "集合、索引、BSON、树/JSON、查找与聚合",
+          "evidence": [
+            "docs/navicat-coverage.md",
+            "src/shared/contracts.ts"
+          ]
+        },
+        {
+          "id": "R05.2",
+          "status": "C",
+          "name": "BSON文档/查找/聚合",
+          "entry": null,
+          "limit": "集合、索引、BSON、树/JSON、查找与聚合",
+          "evidence": [
+            "docs/navicat-coverage.md",
+            "src/shared/contracts.ts"
+          ]
+        }
+      ],
+      "historicalEvidence": "集合、索引、BSON、树/JSON、查找与聚合"
+    },
+    {
+      "id": "R06",
+      "name": "Redis/Cluster/Sentinel",
+      "uiEntry": "当前无相应正式用户入口",
+      "entry": null,
+      "publicEntryBlob": null,
+      "children": [
+        {
+          "id": "R06.1",
+          "status": "C",
+          "name": "Redis键/TTL/SCAN及命令",
+          "entry": null,
+          "limit": "键、TTL、扫描、命令、重定向与取消",
+          "evidence": [
+            "docs/navicat-coverage.md",
+            "src/shared/contracts.ts"
+          ]
+        },
+        {
+          "id": "R06.2",
+          "status": "C",
+          "name": "Cluster重定向",
+          "entry": null,
+          "limit": "键、TTL、扫描、命令、重定向与取消",
+          "evidence": [
+            "docs/navicat-coverage.md",
+            "src/shared/contracts.ts"
+          ]
+        },
+        {
+          "id": "R06.3",
+          "status": "C",
+          "name": "Sentinel发现与取消",
+          "entry": null,
+          "limit": "键、TTL、扫描、命令、重定向与取消",
+          "evidence": [
+            "docs/navicat-coverage.md",
+            "src/shared/contracts.ts"
+          ]
+        }
+      ],
+      "historicalEvidence": "键、TTL、扫描、命令、重定向与取消"
+    },
+    {
+      "id": "O04",
+      "name": "可视化查询/视图/查找/聚合构建",
+      "uiEntry": "当前无相应正式用户入口",
+      "entry": null,
+      "publicEntryBlob": null,
+      "children": [
+        {
+          "id": "O04.1",
+          "status": "C",
+          "name": "可视化JOIN/条件/排序查询构建",
+          "entry": null,
+          "limit": "JOIN、条件、排序、聚合及代码预览",
+          "evidence": [
+            "docs/navicat-coverage.md",
+            "src/shared/contracts.ts"
+          ]
+        },
+        {
+          "id": "O04.2",
+          "status": "C",
+          "name": "视图/查找/聚合构建及代码预览",
+          "entry": null,
+          "limit": "JOIN、条件、排序、聚合及代码预览",
+          "evidence": [
+            "docs/navicat-coverage.md",
+            "src/shared/contracts.ts"
+          ]
+        }
+      ],
+      "historicalEvidence": "JOIN、条件、排序、聚合及代码预览"
+    },
+    {
+      "id": "O05",
+      "name": "重构/语义代码辅助",
+      "uiEntry": "当前无相应正式用户入口",
+      "entry": null,
+      "publicEntryBlob": null,
+      "children": [
+        {
+          "id": "O05.1",
+          "status": "C",
+          "name": "引用/声明/悬停及错误定位",
+          "entry": null,
+          "limit": "引用、声明、悬停、错误、重命名保留注释字符串",
+          "evidence": [
+            "docs/navicat-coverage.md",
+            "src/shared/contracts.ts"
+          ]
+        },
+        {
+          "id": "O05.2",
+          "status": "C",
+          "name": "语义重构与安全重命名",
+          "entry": null,
+          "limit": "引用、声明、悬停、错误、重命名保留注释字符串",
+          "evidence": [
+            "docs/navicat-coverage.md",
+            "src/shared/contracts.ts"
+          ]
+        }
+      ],
+      "historicalEvidence": "引用、声明、悬停、错误、重命名保留注释字符串"
+    },
+    {
+      "id": "E01",
+      "name": "ER 关系查看",
+      "uiEntry": "当前无相应正式用户入口",
+      "entry": null,
+      "publicEntryBlob": null,
+      "children": [
+        {
+          "id": "E01.1",
+          "status": "C",
+          "name": "真实外键ER关系查看",
+          "entry": null,
+          "limit": "真实外键、复合关系、对象选择、缩放刷新",
+          "evidence": [
+            "docs/navicat-coverage.md",
+            "src/shared/contracts.ts"
+          ]
+        },
+        {
+          "id": "E01.2",
+          "status": "C",
+          "name": "复合关系/对象选择/缩放刷新",
+          "entry": null,
+          "limit": "真实外键、复合关系、对象选择、缩放刷新",
+          "evidence": [
+            "docs/navicat-coverage.md",
+            "src/shared/contracts.ts"
+          ]
+        }
+      ],
+      "historicalEvidence": "真实外键、复合关系、对象选择、缩放刷新"
+    },
+    {
+      "id": "A01",
+      "name": "编排/本地计划任务",
+      "uiEntry": "当前无相应正式用户入口",
+      "entry": null,
+      "publicEntryBlob": null,
+      "children": [
+        {
+          "id": "A01.1",
+          "status": "C",
+          "name": "跨连接任务编排",
+          "entry": null,
+          "limit": "跨连接依赖、失败策略、进度、重复运行控制",
+          "evidence": [
+            "docs/navicat-coverage.md",
+            "src/shared/contracts.ts"
+          ]
+        },
+        {
+          "id": "A01.2",
+          "status": "C",
+          "name": "本地计划/重复运行及失败策略",
+          "entry": null,
+          "limit": "跨连接依赖、失败策略、进度、重复运行控制",
+          "evidence": [
+            "docs/navicat-coverage.md",
+            "src/shared/contracts.ts"
+          ]
+        }
+      ],
+      "historicalEvidence": "跨连接依赖、失败策略、进度、重复运行控制"
+    },
+    {
+      "id": "A02",
+      "name": "通知/导出附件",
+      "uiEntry": "当前无相应正式用户入口",
+      "entry": null,
+      "publicEntryBlob": null,
+      "children": [
+        {
+          "id": "A02.1",
+          "status": "C",
+          "name": "用户配置的通知发送",
+          "entry": null,
+          "limit": "用户配置后发送，秘密隔离及实际结果",
+          "evidence": [
+            "docs/navicat-coverage.md",
+            "src/shared/contracts.ts"
+          ]
+        },
+        {
+          "id": "A02.2",
+          "status": "C",
+          "name": "导出附件与秘密隔离",
+          "entry": null,
+          "limit": "用户配置后发送，秘密隔离及实际结果",
+          "evidence": [
+            "docs/navicat-coverage.md",
+            "src/shared/contracts.ts"
+          ]
+        }
+      ],
+      "historicalEvidence": "用户配置后发送，秘密隔离及实际结果"
+    },
+    {
+      "id": "G01",
+      "name": "数据生成",
+      "uiEntry": "当前无相应正式用户入口",
+      "entry": null,
+      "publicEntryBlob": null,
+      "children": [
+        {
+          "id": "G01.1",
+          "status": "C",
+          "name": "有约束数据生成",
+          "entry": null,
+          "limit": "约束、分布、参照完整性、预览及取消",
+          "evidence": [
+            "docs/navicat-coverage.md",
+            "src/shared/contracts.ts"
+          ]
+        },
+        {
+          "id": "G01.2",
+          "status": "C",
+          "name": "分布/参照完整性与预览取消",
+          "entry": null,
+          "limit": "约束、分布、参照完整性、预览及取消",
+          "evidence": [
+            "docs/navicat-coverage.md",
+            "src/shared/contracts.ts"
+          ]
+        }
+      ],
+      "historicalEvidence": "约束、分布、参照完整性、预览及取消"
+    },
+    {
+      "id": "G02",
+      "name": "数据脱敏",
+      "uiEntry": "当前无相应正式用户入口",
+      "entry": null,
+      "publicEntryBlob": null,
+      "children": [
+        {
+          "id": "G02.1",
+          "status": "C",
+          "name": "一致性脱敏",
+          "entry": null,
+          "limit": "一致性、关系、复制目标、预览与恢复边界",
+          "evidence": [
+            "docs/navicat-coverage.md",
+            "src/shared/contracts.ts"
+          ]
+        },
+        {
+          "id": "G02.2",
+          "status": "C",
+          "name": "关联关系及复制目标预览",
+          "entry": null,
+          "limit": "一致性、关系、复制目标、预览与恢复边界",
+          "evidence": [
+            "docs/navicat-coverage.md",
+            "src/shared/contracts.ts"
+          ]
+        }
+      ],
+      "historicalEvidence": "一致性、关系、复制目标、预览与恢复边界"
+    },
+    {
+      "id": "G03",
+      "name": "数据字典",
+      "uiEntry": "当前无相应正式用户入口",
+      "entry": null,
+      "publicEntryBlob": null,
+      "children": [
+        {
+          "id": "G03.1",
+          "status": "C",
+          "name": "库/模型数据字典",
+          "entry": null,
+          "limit": "库/模型、注释、模板、PDF 输出和任务",
+          "evidence": [
+            "docs/navicat-coverage.md",
+            "src/shared/contracts.ts"
+          ]
+        },
+        {
+          "id": "G03.2",
+          "status": "C",
+          "name": "注释/模板/PDF任务",
+          "entry": null,
+          "limit": "库/模型、注释、模板、PDF 输出和任务",
+          "evidence": [
+            "docs/navicat-coverage.md",
+            "src/shared/contracts.ts"
+          ]
+        }
+      ],
+      "historicalEvidence": "库/模型、注释、模板、PDF 输出和任务"
+    },
+    {
+      "id": "N01",
+      "name": "MongoDB 管道/结构分析",
+      "uiEntry": "当前无相应正式用户入口",
+      "entry": null,
+      "publicEntryBlob": null,
+      "children": [
+        {
+          "id": "N01.1",
+          "status": "C",
+          "name": "MongoDB聚合管道编辑运行",
+          "entry": null,
+          "limit": "编辑运行、抽样推断、索引和结构差异",
+          "evidence": [
+            "docs/navicat-coverage.md",
+            "src/shared/contracts.ts"
+          ]
+        },
+        {
+          "id": "N01.2",
+          "status": "C",
+          "name": "抽样结构/索引及差异分析",
+          "entry": null,
+          "limit": "编辑运行、抽样推断、索引和结构差异",
+          "evidence": [
+            "docs/navicat-coverage.md",
+            "src/shared/contracts.ts"
+          ]
+        }
+      ],
+      "historicalEvidence": "编辑运行、抽样推断、索引和结构差异"
+    },
+    {
+      "id": "N02",
+      "name": "Redis Pub/Sub",
+      "uiEntry": "当前无相应正式用户入口",
+      "entry": null,
+      "publicEntryBlob": null,
+      "children": [
+        {
+          "id": "N02.1",
+          "status": "C",
+          "name": "Redis专用Pub/Sub连接",
+          "entry": null,
+          "limit": "专用连接、订阅、消息上限与退出释放",
+          "evidence": [
+            "docs/navicat-coverage.md",
+            "src/shared/contracts.ts"
+          ]
+        },
+        {
+          "id": "N02.2",
+          "status": "C",
+          "name": "有界消息与退出释放",
+          "entry": null,
+          "limit": "专用连接、订阅、消息上限与退出释放",
+          "evidence": [
+            "docs/navicat-coverage.md",
+            "src/shared/contracts.ts"
+          ]
+        }
+      ],
+      "historicalEvidence": "专用连接、订阅、消息上限与退出释放"
+    },
+    {
+      "id": "R07",
+      "name": "Snowflake",
+      "uiEntry": "当前无相应正式用户入口",
+      "entry": null,
+      "publicEntryBlob": null,
+      "children": [
+        {
+          "id": "R07.1",
+          "status": "C",
+          "name": "Snowflake账号/仓库/角色认证",
+          "entry": null,
+          "limit": "账号/仓库/角色、认证、元数据、查询及任务",
+          "evidence": [
+            "docs/navicat-coverage.md",
+            "src/shared/contracts.ts"
+          ]
+        },
+        {
+          "id": "R07.2",
+          "status": "C",
+          "name": "元数据/查询及任务",
+          "entry": null,
+          "limit": "账号/仓库/角色、认证、元数据、查询及任务",
+          "evidence": [
+            "docs/navicat-coverage.md",
+            "src/shared/contracts.ts"
+          ]
+        }
+      ],
+      "historicalEvidence": "账号/仓库/角色、认证、元数据、查询及任务"
+    },
+    {
+      "id": "R08",
+      "name": "兼容厂商",
+      "uiEntry": "当前无相应正式用户入口",
+      "entry": null,
+      "publicEntryBlob": null,
+      "children": [
+        {
+          "id": "R08.1",
+          "status": "C",
+          "name": "OceanBase/TiDB厂商能力矩阵",
+          "entry": null,
+          "limit": "OceanBase/TiDB/Fujitsu/Dameng/KingbaseES/IvorySQL/Garnet/openGauss/GaussDB 逐项能力及证据",
+          "evidence": [
+            "docs/navicat-coverage.md",
+            "src/shared/contracts.ts"
+          ]
+        },
+        {
+          "id": "R08.2",
+          "status": "C",
+          "name": "Fujitsu/Dameng/KingbaseES能力矩阵",
+          "entry": null,
+          "limit": "OceanBase/TiDB/Fujitsu/Dameng/KingbaseES/IvorySQL/Garnet/openGauss/GaussDB 逐项能力及证据",
+          "evidence": [
+            "docs/navicat-coverage.md",
+            "src/shared/contracts.ts"
+          ]
+        },
+        {
+          "id": "R08.3",
+          "status": "C",
+          "name": "IvorySQL/Garnet/openGauss/GaussDB能力矩阵",
+          "entry": null,
+          "limit": "OceanBase/TiDB/Fujitsu/Dameng/KingbaseES/IvorySQL/Garnet/openGauss/GaussDB 逐项能力及证据",
+          "evidence": [
+            "docs/navicat-coverage.md",
+            "src/shared/contracts.ts"
+          ]
+        }
+      ],
+      "historicalEvidence": "OceanBase/TiDB/Fujitsu/Dameng/KingbaseES/IvorySQL/Garnet/openGauss/GaussDB 逐项能力及证据"
+    },
+    {
+      "id": "R09",
+      "name": "托管数据库",
+      "uiEntry": "普通MySQL/MariaDB连接表单填写托管实例端点",
+      "entry": "src/renderer/components/ConnectionDialog.tsx",
+      "publicEntryBlob": "bd42737dc4cc7272ef32668765d00ae1ad3ad174",
+      "children": [
+        {
+          "id": "R09.1",
+          "status": "A",
+          "name": "云托管实例的普通MySQL协议连接",
+          "entry": "src/renderer/components/ConnectionDialog.tsx",
+          "limit": "仅使用现有MySQL/MariaDB连接能力；未承诺各厂商专属认证",
+          "evidence": [
+            "docs/releases/v0.21.0.md",
+            "tests/integration/acceptance-v021-published-20261018.md"
+          ]
+        },
+        {
+          "id": "R09.2",
+          "status": "C",
+          "name": "AWS/Azure/Google/Oracle等专属认证与管理",
+          "entry": null,
+          "limit": "没有逐厂商产品矩阵；Atlas/Redis Cloud需各自驱动",
+          "evidence": [
+            "docs/navicat-coverage.md",
+            "src/shared/contracts.ts"
+          ]
+        }
+      ],
+      "historicalEvidence": "AWS/Azure/Google/Oracle/Atlas/Redis Cloud/阿里/腾讯/华为适用认证与限制；现仅普通 MySQL 协议"
+    },
+    {
+      "id": "C05",
+      "name": "HTTP 隧道",
+      "uiEntry": "当前无相应正式用户入口",
+      "entry": null,
+      "publicEntryBlob": null,
+      "children": [
+        {
+          "id": "C05.1",
+          "status": "C",
+          "name": "HTTP隧道自主协议",
+          "entry": null,
+          "limit": "自主协议、权限、TLS、超时及并发",
+          "evidence": [
+            "docs/navicat-coverage.md",
+            "src/shared/contracts.ts"
+          ]
+        },
+        {
+          "id": "C05.2",
+          "status": "C",
+          "name": "权限/TLS/超时及并发",
+          "entry": null,
+          "limit": "自主协议、权限、TLS、超时及并发",
+          "evidence": [
+            "docs/navicat-coverage.md",
+            "src/shared/contracts.ts"
+          ]
+        }
+      ],
+      "historicalEvidence": "自主协议、权限、TLS、超时及并发"
+    },
+    {
+      "id": "C06",
+      "name": "PAM/LDAP/Kerberos/Windows AD",
+      "uiEntry": "当前无相应正式用户入口",
+      "entry": null,
+      "publicEntryBlob": null,
+      "children": [
+        {
+          "id": "C06.1",
+          "status": "C",
+          "name": "PAM/LDAP认证",
+          "entry": null,
+          "limit": "分驱动平台验证，不可用组合明示",
+          "evidence": [
+            "docs/navicat-coverage.md",
+            "src/shared/contracts.ts"
+          ]
+        },
+        {
+          "id": "C06.2",
+          "status": "C",
+          "name": "Kerberos/Windows AD认证",
+          "entry": null,
+          "limit": "分驱动平台验证，不可用组合明示",
+          "evidence": [
+            "docs/navicat-coverage.md",
+            "src/shared/contracts.ts"
+          ]
+        }
+      ],
+      "historicalEvidence": "分驱动平台验证，不可用组合明示"
+    },
+    {
+      "id": "F03",
+      "name": "TXT/XML",
+      "uiEntry": "当前无相应正式用户入口",
+      "entry": null,
+      "publicEntryBlob": null,
+      "children": [
+        {
+          "id": "F03.1",
+          "status": "C",
+          "name": "TXT文件映射往返",
+          "entry": null,
+          "limit": "字段、转义、编码与流式任务",
+          "evidence": [
+            "docs/navicat-coverage.md",
+            "src/shared/contracts.ts"
+          ]
+        },
+        {
+          "id": "F03.2",
+          "status": "C",
+          "name": "XML文件映射往返",
+          "entry": null,
+          "limit": "字段、转义、编码与流式任务",
+          "evidence": [
+            "docs/navicat-coverage.md",
+            "src/shared/contracts.ts"
+          ]
+        }
+      ],
+      "historicalEvidence": "字段、转义、编码与流式任务"
+    },
+    {
+      "id": "F04",
+      "name": "ODBC/Access/DBF/Parquet",
+      "uiEntry": "当前无相应正式用户入口",
+      "entry": null,
+      "publicEntryBlob": null,
+      "children": [
+        {
+          "id": "F04.1",
+          "status": "C",
+          "name": "ODBC/Access数据任务",
+          "entry": null,
+          "limit": "系统适用性、类型映射、文件往返",
+          "evidence": [
+            "docs/navicat-coverage.md",
+            "src/shared/contracts.ts"
+          ]
+        },
+        {
+          "id": "F04.2",
+          "status": "C",
+          "name": "DBF文件往返",
+          "entry": null,
+          "limit": "系统适用性、类型映射、文件往返",
+          "evidence": [
+            "docs/navicat-coverage.md",
+            "src/shared/contracts.ts"
+          ]
+        },
+        {
+          "id": "F04.3",
+          "status": "C",
+          "name": "Parquet文件往返",
+          "entry": null,
+          "limit": "系统适用性、类型映射、文件往返",
+          "evidence": [
+            "docs/navicat-coverage.md",
+            "src/shared/contracts.ts"
+          ]
+        }
+      ],
+      "historicalEvidence": "系统适用性、类型映射、文件往返"
+    },
+    {
+      "id": "B03",
+      "name": "MongoDump/Restore",
+      "uiEntry": "当前无相应正式用户入口",
+      "entry": null,
+      "publicEntryBlob": null,
+      "children": [
+        {
+          "id": "B03.1",
+          "status": "C",
+          "name": "MongoDump工具备份",
+          "entry": null,
+          "limit": "工具版本、参数、任务、实际恢复及权限",
+          "evidence": [
+            "docs/navicat-coverage.md",
+            "src/shared/contracts.ts"
+          ]
+        },
+        {
+          "id": "B03.2",
+          "status": "C",
+          "name": "MongoRestore真实恢复",
+          "entry": null,
+          "limit": "工具版本、参数、任务、实际恢复及权限",
+          "evidence": [
+            "docs/navicat-coverage.md",
+            "src/shared/contracts.ts"
+          ]
+        }
+      ],
+      "historicalEvidence": "工具版本、参数、任务、实际恢复及权限"
+    },
+    {
+      "id": "B04",
+      "name": "Oracle Data Pump",
+      "uiEntry": "当前无相应正式用户入口",
+      "entry": null,
+      "publicEntryBlob": null,
+      "children": [
+        {
+          "id": "B04.1",
+          "status": "C",
+          "name": "Oracle Data Pump导出",
+          "entry": null,
+          "limit": "服务端目录/权限/版本、任务及恢复",
+          "evidence": [
+            "docs/navicat-coverage.md",
+            "src/shared/contracts.ts"
+          ]
+        },
+        {
+          "id": "B04.2",
+          "status": "C",
+          "name": "Data Pump导入/服务端目录及权限",
+          "entry": null,
+          "limit": "服务端目录/权限/版本、任务及恢复",
+          "evidence": [
+            "docs/navicat-coverage.md",
+            "src/shared/contracts.ts"
+          ]
+        }
+      ],
+      "historicalEvidence": "服务端目录/权限/版本、任务及恢复"
+    },
+    {
+      "id": "B05",
+      "name": "SQL Server 原生备份",
+      "uiEntry": "当前无相应正式用户入口",
+      "entry": null,
+      "publicEntryBlob": null,
+      "children": [
+        {
+          "id": "B05.1",
+          "status": "C",
+          "name": "SQL Server完整/差异/日志备份",
+          "entry": null,
+          "limit": "服务端路径、完整/差异/日志、版本与恢复",
+          "evidence": [
+            "docs/navicat-coverage.md",
+            "src/shared/contracts.ts"
+          ]
+        },
+        {
+          "id": "B05.2",
+          "status": "C",
+          "name": "实际恢复/版本兼容",
+          "entry": null,
+          "limit": "服务端路径、完整/差异/日志、版本与恢复",
+          "evidence": [
+            "docs/navicat-coverage.md",
+            "src/shared/contracts.ts"
+          ]
+        }
+      ],
+      "historicalEvidence": "服务端路径、完整/差异/日志、版本与恢复"
+    },
+    {
+      "id": "O06",
+      "name": "PL/SQL、PL/pgSQL 调试",
+      "uiEntry": "当前无相应正式用户入口",
+      "entry": null,
+      "publicEntryBlob": null,
+      "children": [
+        {
+          "id": "O06.1",
+          "status": "C",
+          "name": "PL/SQL断点步进/局部值",
+          "entry": null,
+          "limit": "断点/步进/局部值、权限及释放",
+          "evidence": [
+            "docs/navicat-coverage.md",
+            "src/shared/contracts.ts"
+          ]
+        },
+        {
+          "id": "O06.2",
+          "status": "C",
+          "name": "PL/pgSQL断点步进/局部值",
+          "entry": null,
+          "limit": "断点/步进/局部值、权限及释放",
+          "evidence": [
+            "docs/navicat-coverage.md",
+            "src/shared/contracts.ts"
+          ]
+        }
+      ],
+      "historicalEvidence": "断点/步进/局部值、权限及释放"
+    },
+    {
+      "id": "L01",
+      "name": "概念/逻辑/物理/混合模型",
+      "uiEntry": "当前无相应正式用户入口",
+      "entry": null,
+      "publicEntryBlob": null,
+      "children": [
+        {
+          "id": "L01.1",
+          "status": "C",
+          "name": "概念/逻辑/物理/混合模型",
+          "entry": null,
+          "limit": "自主格式，关系/维度/Data Vault 方法、属性验证",
+          "evidence": [
+            "docs/navicat-coverage.md",
+            "src/shared/contracts.ts"
+          ]
+        },
+        {
+          "id": "L01.2",
+          "status": "C",
+          "name": "关系/维度/Data Vault方法及自主格式",
+          "entry": null,
+          "limit": "自主格式，关系/维度/Data Vault 方法、属性验证",
+          "evidence": [
+            "docs/navicat-coverage.md",
+            "src/shared/contracts.ts"
+          ]
+        }
+      ],
+      "historicalEvidence": "自主格式，关系/维度/Data Vault 方法、属性验证"
+    },
+    {
+      "id": "L02",
+      "name": "图形及批量模型编辑",
+      "uiEntry": "当前无相应正式用户入口",
+      "entry": null,
+      "publicEntryBlob": null,
+      "children": [
+        {
+          "id": "L02.1",
+          "status": "C",
+          "name": "图形/关系/字段批量模型编辑",
+          "entry": null,
+          "limit": "关系、图形、字段、命名/词汇、布局、撤销",
+          "evidence": [
+            "docs/navicat-coverage.md",
+            "src/shared/contracts.ts"
+          ]
+        },
+        {
+          "id": "L02.2",
+          "status": "C",
+          "name": "命名词汇/布局/撤销",
+          "entry": null,
+          "limit": "关系、图形、字段、命名/词汇、布局、撤销",
+          "evidence": [
+            "docs/navicat-coverage.md",
+            "src/shared/contracts.ts"
+          ]
+        }
+      ],
+      "historicalEvidence": "关系、图形、字段、命名/词汇、布局、撤销"
+    },
+    {
+      "id": "L03",
+      "name": "库/SQL 反向工程",
+      "uiEntry": "当前无相应正式用户入口",
+      "entry": null,
+      "publicEntryBlob": null,
+      "children": [
+        {
+          "id": "L03.1",
+          "status": "C",
+          "name": "库反向工程",
+          "entry": null,
+          "limit": "方言解析、对象选择、同步差异、解析失败提示",
+          "evidence": [
+            "docs/navicat-coverage.md",
+            "src/shared/contracts.ts"
+          ]
+        },
+        {
+          "id": "L03.2",
+          "status": "C",
+          "name": "SQL反向工程与解析失败处理",
+          "entry": null,
+          "limit": "方言解析、对象选择、同步差异、解析失败提示",
+          "evidence": [
+            "docs/navicat-coverage.md",
+            "src/shared/contracts.ts"
+          ]
+        }
+      ],
+      "historicalEvidence": "方言解析、对象选择、同步差异、解析失败提示"
+    },
+    {
+      "id": "L04",
+      "name": "正向工程",
+      "uiEntry": "当前无相应正式用户入口",
+      "entry": null,
+      "publicEntryBlob": null,
+      "children": [
+        {
+          "id": "L04.1",
+          "status": "C",
+          "name": "模型生成数据库",
+          "entry": null,
+          "limit": "数据库/文件输出、同步预览、依赖与错误",
+          "evidence": [
+            "docs/navicat-coverage.md",
+            "src/shared/contracts.ts"
+          ]
+        },
+        {
+          "id": "L04.2",
+          "status": "C",
+          "name": "模型生成文件及同步预览",
+          "entry": null,
+          "limit": "数据库/文件输出、同步预览、依赖与错误",
+          "evidence": [
+            "docs/navicat-coverage.md",
+            "src/shared/contracts.ts"
+          ]
+        }
+      ],
+      "historicalEvidence": "数据库/文件输出、同步预览、依赖与错误"
+    },
+    {
+      "id": "L05",
+      "name": "模型比较/转换/输出",
+      "uiEntry": "当前无相应正式用户入口",
+      "entry": null,
+      "publicEntryBlob": null,
+      "children": [
+        {
+          "id": "L05.1",
+          "status": "C",
+          "name": "模型比较/驱动转换",
+          "entry": null,
+          "limit": "工作区差异、驱动映射、PDF/图片及字典",
+          "evidence": [
+            "docs/navicat-coverage.md",
+            "src/shared/contracts.ts"
+          ]
+        },
+        {
+          "id": "L05.2",
+          "status": "C",
+          "name": "PDF/图片/字典输出",
+          "entry": null,
+          "limit": "工作区差异、驱动映射、PDF/图片及字典",
+          "evidence": [
+            "docs/navicat-coverage.md",
+            "src/shared/contracts.ts"
+          ]
+        }
+      ],
+      "historicalEvidence": "工作区差异、驱动映射、PDF/图片及字典"
+    },
+    {
+      "id": "I01",
+      "name": "BI 数据源/计算字段",
+      "uiEntry": "当前无相应正式用户入口",
+      "entry": null,
+      "publicEntryBlob": null,
+      "children": [
+        {
+          "id": "I01.1",
+          "status": "C",
+          "name": "BI数据源/计算字段",
+          "entry": null,
+          "limit": "实库、权限、刷新、缓存、指标与数据范围",
+          "evidence": [
+            "docs/navicat-coverage.md",
+            "src/shared/contracts.ts"
+          ]
+        },
+        {
+          "id": "I01.2",
+          "status": "C",
+          "name": "权限/刷新/缓存/指标",
+          "entry": null,
+          "limit": "实库、权限、刷新、缓存、指标与数据范围",
+          "evidence": [
+            "docs/navicat-coverage.md",
+            "src/shared/contracts.ts"
+          ]
+        }
+      ],
+      "historicalEvidence": "实库、权限、刷新、缓存、指标与数据范围"
+    },
+    {
+      "id": "I02",
+      "name": "BI 图表",
+      "uiEntry": "当前无相应正式用户入口",
+      "entry": null,
+      "publicEntryBlob": null,
+      "children": [
+        {
+          "id": "I02.1",
+          "status": "C",
+          "name": "BI二十多种图表配置",
+          "entry": null,
+          "limit": "20 多种图表逐种配置及真实数据验证",
+          "evidence": [
+            "docs/navicat-coverage.md",
+            "src/shared/contracts.ts"
+          ]
+        },
+        {
+          "id": "I02.2",
+          "status": "C",
+          "name": "各图表真实数据验证",
+          "entry": null,
+          "limit": "20 多种图表逐种配置及真实数据验证",
+          "evidence": [
+            "docs/navicat-coverage.md",
+            "src/shared/contracts.ts"
+          ]
+        }
+      ],
+      "historicalEvidence": "20 多种图表逐种配置及真实数据验证"
+    },
+    {
+      "id": "I03",
+      "name": "BI 多页仪表板",
+      "uiEntry": "当前无相应正式用户入口",
+      "entry": null,
+      "publicEntryBlob": null,
+      "children": [
+        {
+          "id": "I03.1",
+          "status": "C",
+          "name": "BI多页仪表板布局",
+          "entry": null,
+          "limit": "布局对齐、全局参数、交互、刷新及演示",
+          "evidence": [
+            "docs/navicat-coverage.md",
+            "src/shared/contracts.ts"
+          ]
+        },
+        {
+          "id": "I03.2",
+          "status": "C",
+          "name": "全局参数/交互/刷新演示",
+          "entry": null,
+          "limit": "布局对齐、全局参数、交互、刷新及演示",
+          "evidence": [
+            "docs/navicat-coverage.md",
+            "src/shared/contracts.ts"
+          ]
+        }
+      ],
+      "historicalEvidence": "布局对齐、全局参数、交互、刷新及演示"
+    },
+    {
+      "id": "H01",
+      "name": "项目/成员协作",
+      "uiEntry": "当前无相应正式用户入口",
+      "entry": null,
+      "publicEntryBlob": null,
+      "children": [
+        {
+          "id": "H01.1",
+          "status": "C",
+          "name": "项目/成员及自主服务",
+          "entry": null,
+          "limit": "自主服务、身份权限、审计、冲突、离线",
+          "evidence": [
+            "docs/navicat-coverage.md",
+            "src/shared/contracts.ts"
+          ]
+        },
+        {
+          "id": "H01.2",
+          "status": "C",
+          "name": "权限/审计/冲突/离线",
+          "entry": null,
+          "limit": "自主服务、身份权限、审计、冲突、离线",
+          "evidence": [
+            "docs/navicat-coverage.md",
+            "src/shared/contracts.ts"
+          ]
+        }
+      ],
+      "historicalEvidence": "自主服务、身份权限、审计、冲突、离线"
+    },
+    {
+      "id": "H02",
+      "name": "连接/查询/片段/分组/偏好同步",
+      "uiEntry": "当前无相应正式用户入口",
+      "entry": null,
+      "publicEntryBlob": null,
+      "children": [
+        {
+          "id": "H02.1",
+          "status": "C",
+          "name": "连接/查询/片段同步",
+          "entry": null,
+          "limit": "同步范围、秘密、冲突、恢复",
+          "evidence": [
+            "docs/navicat-coverage.md",
+            "src/shared/contracts.ts"
+          ]
+        },
+        {
+          "id": "H02.2",
+          "status": "C",
+          "name": "分组/偏好同步与秘密冲突恢复",
+          "entry": null,
+          "limit": "同步范围、秘密、冲突、恢复",
+          "evidence": [
+            "docs/navicat-coverage.md",
+            "src/shared/contracts.ts"
+          ]
+        }
+      ],
+      "historicalEvidence": "同步范围、秘密、冲突、恢复"
+    },
+    {
+      "id": "H03",
+      "name": "BI/模型/管道工作区同步",
+      "uiEntry": "当前无相应正式用户入口",
+      "entry": null,
+      "publicEntryBlob": null,
+      "children": [
+        {
+          "id": "H03.1",
+          "status": "C",
+          "name": "BI/模型/管道工作区同步",
+          "entry": null,
+          "limit": "版本、访问控制、冲突、大小限制",
+          "evidence": [
+            "docs/navicat-coverage.md",
+            "src/shared/contracts.ts"
+          ]
+        },
+        {
+          "id": "H03.2",
+          "status": "C",
+          "name": "版本/访问控制/大小及冲突",
+          "entry": null,
+          "limit": "版本、访问控制、冲突、大小限制",
+          "evidence": [
+            "docs/navicat-coverage.md",
+            "src/shared/contracts.ts"
+          ]
+        }
+      ],
+      "historicalEvidence": "版本、访问控制、冲突、大小限制"
+    },
+    {
+      "id": "AI01",
+      "name": "对话/模型提供方",
+      "uiEntry": "当前无相应正式用户入口",
+      "entry": null,
+      "publicEntryBlob": null,
+      "children": [
+        {
+          "id": "AI01.1",
+          "status": "C",
+          "name": "对话与模型提供方/自有密钥",
+          "entry": null,
+          "limit": "自有密钥、结构附件、模型比较、多对话及分支",
+          "evidence": [
+            "docs/navicat-coverage.md",
+            "src/shared/contracts.ts"
+          ]
+        },
+        {
+          "id": "AI01.2",
+          "status": "C",
+          "name": "结构附件/模型比较",
+          "entry": null,
+          "limit": "自有密钥、结构附件、模型比较、多对话及分支",
+          "evidence": [
+            "docs/navicat-coverage.md",
+            "src/shared/contracts.ts"
+          ]
+        },
+        {
+          "id": "AI01.3",
+          "status": "C",
+          "name": "多对话与分支",
+          "entry": null,
+          "limit": "自有密钥、结构附件、模型比较、多对话及分支",
+          "evidence": [
+            "docs/navicat-coverage.md",
+            "src/shared/contracts.ts"
+          ]
+        }
+      ],
+      "historicalEvidence": "自有密钥、结构附件、模型比较、多对话及分支"
+    },
+    {
+      "id": "AI02",
+      "name": "代码到编辑器/快捷动作",
+      "uiEntry": "当前无相应正式用户入口",
+      "entry": null,
+      "publicEntryBlob": null,
+      "children": [
+        {
+          "id": "AI02.1",
+          "status": "C",
+          "name": "代码审阅后送编辑器",
+          "entry": null,
+          "limit": "先审阅再执行，自定义/固定动作、权限及错误",
+          "evidence": [
+            "docs/navicat-coverage.md",
+            "src/shared/contracts.ts"
+          ]
+        },
+        {
+          "id": "AI02.2",
+          "status": "C",
+          "name": "自定义及固定AI快捷动作",
+          "entry": null,
+          "limit": "先审阅再执行，自定义/固定动作、权限及错误",
+          "evidence": [
+            "docs/navicat-coverage.md",
+            "src/shared/contracts.ts"
+          ]
+        }
+      ],
+      "historicalEvidence": "先审阅再执行，自定义/固定动作、权限及错误"
+    },
+    {
+      "id": "AI03",
+      "name": "SQL 解释/优化/格式化/转换/修错",
+      "uiEntry": "当前无相应正式用户入口",
+      "entry": null,
+      "publicEntryBlob": null,
+      "children": [
+        {
+          "id": "AI03.1",
+          "status": "C",
+          "name": "AI SQL解释/优化",
+          "entry": null,
+          "limit": "上下文、驱动测试，禁止泄露秘密和自动执行",
+          "evidence": [
+            "docs/navicat-coverage.md",
+            "src/shared/contracts.ts"
+          ]
+        },
+        {
+          "id": "AI03.2",
+          "status": "C",
+          "name": "AI格式化/转换/修错",
+          "entry": null,
+          "limit": "上下文、驱动测试，禁止泄露秘密和自动执行",
+          "evidence": [
+            "docs/navicat-coverage.md",
+            "src/shared/contracts.ts"
+          ]
+        }
+      ],
+      "historicalEvidence": "上下文、驱动测试，禁止泄露秘密和自动执行"
+    },
+    {
+      "id": "AI04",
+      "name": "表/模型设计、注释及填充",
+      "uiEntry": "当前无相应正式用户入口",
+      "entry": null,
+      "publicEntryBlob": null,
+      "children": [
+        {
+          "id": "AI04.1",
+          "status": "C",
+          "name": "AI表/模型设计",
+          "entry": null,
+          "limit": "先预览，生成变更走可靠提交路径",
+          "evidence": [
+            "docs/navicat-coverage.md",
+            "src/shared/contracts.ts"
+          ]
+        },
+        {
+          "id": "AI04.2",
+          "status": "C",
+          "name": "AI注释及数据填充",
+          "entry": null,
+          "limit": "先预览，生成变更走可靠提交路径",
+          "evidence": [
+            "docs/navicat-coverage.md",
+            "src/shared/contracts.ts"
+          ]
+        }
+      ],
+      "historicalEvidence": "先预览，生成变更走可靠提交路径"
+    },
+    {
+      "id": "P01",
+      "name": "Linux 客户端",
+      "uiEntry": "当前无相应正式用户入口",
+      "entry": null,
+      "publicEntryBlob": null,
+      "children": [
+        {
+          "id": "P01.1",
+          "status": "C",
+          "name": "Linux正式客户端构建/安装",
+          "entry": null,
+          "limit": "官方平台能力纳入后续；现 Windows/macOS 桌面",
+          "evidence": [
+            "docs/navicat-coverage.md",
+            "src/shared/contracts.ts"
+          ]
+        },
+        {
+          "id": "P01.2",
+          "status": "C",
+          "name": "Linux桌面用户验收",
+          "entry": null,
+          "limit": "官方平台能力纳入后续；现 Windows/macOS 桌面",
+          "evidence": [
+            "docs/navicat-coverage.md",
+            "src/shared/contracts.ts"
+          ]
+        }
+      ],
+      "historicalEvidence": "官方平台能力纳入后续；现 Windows/macOS 桌面"
+    },
+    {
+      "id": "P02",
+      "name": "发行签名/公证",
+      "uiEntry": "当前无相应正式用户入口",
+      "entry": null,
+      "publicEntryBlob": null,
+      "children": [
+        {
+          "id": "P02.1",
+          "status": "C",
+          "name": "Windows发行签名",
+          "entry": null,
+          "limit": "合法证书及原生验证；现预览明确无发行签名",
+          "evidence": [
+            "docs/navicat-coverage.md",
+            "src/shared/contracts.ts"
+          ]
+        },
+        {
+          "id": "P02.2",
+          "status": "C",
+          "name": "macOS发行签名与公证",
+          "entry": null,
+          "limit": "合法证书及原生验证；现预览明确无发行签名",
+          "evidence": [
+            "docs/navicat-coverage.md",
+            "src/shared/contracts.ts"
+          ]
+        }
+      ],
+      "historicalEvidence": "合法证书及原生验证；现预览明确无发行签名"
+    }
+  ]
+}
