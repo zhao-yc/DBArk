@@ -1,7 +1,8 @@
 import { mkdir, open, readFile, readdir, writeFile } from 'node:fs/promises';
 import { basename, join } from 'node:path';
 import iconv from 'iconv-lite';
-import type { FileChoice } from '../../src/shared/contracts';
+import type { FileChoice, TaskRecord } from '../../src/shared/contracts';
+import { queryFileSourceRefSchema } from '../../src/shared/queryFileSources';
 import { test, expect, desktop, page, dataDir, pageErrors, launchDesktop, quitDesktop } from './desktop-fixture';
 import { beginQueryFileSaveObservation } from '../helpers/queryFileSaveObservation';
 
@@ -90,10 +91,13 @@ async function storedTabs(count: number) {
   return (await page.evaluate(() => window.dbark.invoke('settings.get', {}))).tabs;
 }
 
-/** 离线文件操作不得生成查询历史或数据库任务；不以伪造事务状态冒充实库事务验收。 */
-async function expectNoSqlExecution() {
+/** 文件任务的类别、数量及终态必须准确匹配；其他任务和任何查询历史均不允许出现。 */
+async function expectNoSqlExecution(expected: { kind: 'queryFileSources.open' | 'queryFileSources.saveAs'; status: TaskRecord['status'] }[] = []) {
   const state = await page.evaluate(async () => ({ tasks: await window.dbark.invoke('tasks.list', {}), history: await window.dbark.invoke('history.list', {}) }));
-  expect(state.tasks).toEqual([]); expect(state.history).toEqual([]); expect(pageErrors).toEqual([]);
+  expect(state.tasks.map(({ kind, status }) => ({ kind, status })).sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b)))).toEqual([...expected].sort((a, b) => JSON.stringify(a).localeCompare(JSON.stringify(b))));
+  expect(new Set(state.tasks.map(task => task.id)).size).toBe(expected.length);
+  expect(state.tasks.every(task => task.finishedAt && task.status !== 'running')).toBe(true);
+  expect(state.history).toEqual([]); expect(pageErrors).toEqual([]);
 }
 
 /** 请求经过真实 preload/参数校验/授权处理，返回错误文字供各负例断言。 */
@@ -130,20 +134,25 @@ test.describe('离线 SQL 文件打开与另存', () => {
       expect(tabs[0]).toEqual(original);
       expect(tabs.at(-1)).toMatchObject({ kind: 'query', connectionId: original.connectionId, sql: source });
       expect(tabs.at(-1)!.id).not.toBe(original.id);
+      expect(tabs.at(-1)!.title).toBe(example.name);
+      expect(queryFileSourceRefSchema.parse(tabs.at(-1)!.fileSourceBinding)).toEqual({ id: expect.any(String), revision: 1 });
+      expect(tabs.at(-1)!.sourceBinding).toBeUndefined();
+      expect(new Set(tabs.slice(1).map(tab => tab.fileSourceBinding!.id)).size).toBe(index + 1);
       await expect(page.locator('.query-tab:visible .monaco-editor .view-lines')).toContainText('中文文件往返');
       const token = await authorizeFile(file, 'query');
       expect(await page.evaluate(input => window.dbark.invoke('files.readQuery', input), { fileToken: token.token, encoding: example.requested })).toEqual({ sql: source, encoding: example.actual });
     }
+    const beforeCancel = await storedTabs(4);
     await chooseNativeFile('open');
     const cancelled = await fileDialog('open', 'utf8');
     await cancelled.getByRole('button', { name: '选择并打开 SQL 文件', exact: true }).click();
     await expect(cancelled).toBeVisible();
     await expect(page.locator('.workspace-tab-button')).toHaveCount(4);
-    expect((await storedTabs(4))[0]).toEqual(original);
+    expect(await storedTabs(4)).toEqual(beforeCancel);
     await cancelled.getByRole('button', { name: '取消', exact: true }).click();
     const calls = await desktop.evaluate(() => globalThis.__dbarkQueryFileCalls);
     expect(calls.every(call => call.mode === 'open' && call.filters?.[0]?.extensions.includes('sql'))).toBe(true);
-    await expectNoSqlExecution();
+    await expectNoSqlExecution([...Array.from({ length: 3 }, () => ({ kind: 'queryFileSources.open' as const, status: 'completed' as const })), { kind: 'queryFileSources.open', status: 'cancelled' }]);
     await page.screenshot({ path: testInfo.outputPath('query-file-independent-tabs.png') });
   });
 
@@ -153,19 +162,28 @@ test.describe('离线 SQL 文件打开与另存', () => {
     await openOfflineQuery(); await writeEditor(editorSource);
     const [original] = await storedTabs(1);
     const directory = join(dataDir, 'saved-query-files'); await mkdir(directory);
+    let previousBinding = original.fileSourceBinding;
     for (const encoding of ['utf8', 'utf16le', 'gb18030'] as const) {
       const target = join(directory, `${encoding}.sql`); await writeFile(target, '旧文件内容不得追加');
       await chooseNativeFile('save', target);
       const modal = await fileDialog('save', encoding);
+      // 正式另存支持独立选择BOM；明确保留原用例的UTF16LE带BOM字节要求。
+      await modal.getByRole('combobox', { name: '字节顺序标记（BOM）', exact: true }).selectOption(encoding === 'utf16le' ? 'utf16le' : 'none');
       await modal.getByRole('button', { name: '选择并保存 SQL 文件', exact: true }).click();
       await expect(modal).toBeHidden();
       const expected = encoding === 'utf16le' ? Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from(editorSource, 'utf16le')]) : iconv.encode(editorSource, encoding);
       expect(await readFile(target)).toEqual(expected);
-      expect((await storedTabs(1))[0]).toEqual(original);
+      const [saved] = await storedTabs(1), binding = queryFileSourceRefSchema.parse(saved.fileSourceBinding);
+      expect(saved).toEqual({ ...original, title: `${encoding}.sql`, fileSourceBinding: binding });
+      expect(binding).toEqual({ id: previousBinding?.id ?? expect.any(String), revision: (previousBinding?.revision ?? 0) + 1 });
+      previousBinding = binding;
+      const status = await page.evaluate(input => window.dbark.invoke('queryFileSources.status', input), { tabId: saved.id, source: binding });
+      expect(status).toMatchObject({ state: 'bound', binding: { ref: binding, name: `${encoding}.sql`, encoding, bom: encoding === 'utf16le' ? 'utf16le' : 'none' } });
       const selected = await authorizeFile(target, 'query');
       expect(await page.evaluate(input => window.dbark.invoke('files.readQuery', input), { fileToken: selected.token, encoding })).toEqual({ sql: editorSource, encoding });
     }
     const callsBeforeCancel = await desktop.evaluate(() => globalThis.__dbarkQueryFileCalls.length);
+    const beforeCancel = await storedTabs(1);
     await chooseNativeFile('save');
     const cancelled = await fileDialog('save', 'utf8');
     await cancelled.getByRole('button', { name: '选择并保存 SQL 文件', exact: true }).click();
@@ -173,12 +191,13 @@ test.describe('离线 SQL 文件打开与另存', () => {
     await expect.poll(() => desktop.evaluate(() => globalThis.__dbarkQueryFileCalls.length)).toBe(callsBeforeCancel + 1);
     expect(await readFile(join(directory, 'utf8.sql'), 'utf8')).toBe(editorSource);
     await cancelled.getByRole('button', { name: '取消', exact: true }).click();
+    expect(await storedTabs(1)).toEqual(beforeCancel);
     expect((await readdir(directory)).sort()).toEqual(['gb18030.sql', 'utf16le.sql', 'utf8.sql']);
     const calls = await desktop.evaluate(() => globalThis.__dbarkQueryFileCalls.filter(call => call.mode === 'save'));
     // 覆盖提示由操作系统的原生 SaveDialog 负责；路径 stub 只能证明选项和实际替换，不声称验证系统提示交互。
     expect(calls).toHaveLength(4);
     expect(calls.every(call => call.filters?.[0]?.extensions.includes('sql'))).toBe(true);
-    await expectNoSqlExecution();
+    await expectNoSqlExecution([...Array.from({ length: 3 }, () => ({ kind: 'queryFileSources.saveAs' as const, status: 'completed' as const })), { kind: 'queryFileSources.saveAs', status: 'cancelled' }]);
     await page.screenshot({ path: testInfo.outputPath('query-file-saved.png') });
   });
 
@@ -191,21 +210,31 @@ test.describe('离线 SQL 文件打开与另存', () => {
     try { await handle.truncate(20 * 1024 * 1024 + 1); } finally { await handle.close(); }
     const be = join(directory, '大端.sql'); await writeFile(be, Buffer.from([0xfe, 0xff, 0, 0x53]));
     const nul = join(directory, '非文本.sql'); await writeFile(nul, Buffer.from('SELECT\0 1;'));
-    for (const example of [{ file: encoded, error: /无效编码/ }, { file: be, error: /UTF-16BE/ }, { file: nul, error: /NUL/ }, { file: big, error: /20 MiB/ }]) {
+    // 来源读取器固定编码失败消息，超限在读取正文前单独拒绝；不接受任意错误或旧窗口。
+    const encodingError = '文件编码无法无损读取或内容不适合SQL编辑';
+    for (const example of [{ file: encoded, error: encodingError }, { file: be, error: encodingError }, { file: nul, error: encodingError }, { file: big, error: 'SQL文件超过20MiB，未读写文件正文' }]) {
       await chooseNativeFile('open', example.file);
       const modal = await fileDialog('open', 'utf8');
       await modal.getByRole('button', { name: '选择并打开 SQL 文件', exact: true }).click();
-      await expect(modal.locator('.error-box')).toContainText(example.error);
+      const recovery = page.getByRole('dialog', { name: '文件保存需要处理', exact: true });
+      await expect(modal).toBeHidden();
+      await expect(recovery.locator('.error-box')).toHaveText(example.error);
+      await expect(recovery.getByText('本次未写入文件。', { exact: true })).toBeVisible();
+      await expect(recovery.getByRole('button', { name: '重新选择 SQL 文件', exact: true })).toBeEnabled();
       await expect(page.locator('.workspace-tab-button')).toHaveCount(1);
       expect((await storedTabs(1))[0]).toEqual(original);
-      await modal.getByRole('button', { name: '取消', exact: true }).click();
+      await recovery.getByRole('button', { name: '取消', exact: true }).click();
+      await expect(recovery).toBeHidden();
     }
     await chooseNativeFile('open', encoded);
     const recovered = await fileDialog('open', 'gb18030');
     await recovered.getByRole('button', { name: '选择并打开 SQL 文件', exact: true }).click();
     await expect(recovered).toBeHidden();
     const tabs = await storedTabs(2); expect(tabs[0]).toEqual(original); expect(tabs[1].sql).toBe(source);
-    await expectNoSqlExecution();
+    expect(tabs[1].id).not.toBe(original.id); expect(tabs[1].title).toBe('国标.sql');
+    expect(queryFileSourceRefSchema.parse(tabs[1].fileSourceBinding)).toEqual({ id: expect.any(String), revision: 1 });
+    expect(tabs[1].sourceBinding).toBeUndefined();
+    await expectNoSqlExecution([...Array.from({ length: 4 }, () => ({ kind: 'queryFileSources.open' as const, status: 'failed' as const })), { kind: 'queryFileSources.open', status: 'completed' }]);
   });
 
   test('IPC 拒绝失效与错用途令牌，保存失败保留原目标并清理临时文件', async () => {
