@@ -32,8 +32,8 @@ function fixture() {
   const editor = { getModel: () => activeModel, getPosition: () => ({ lineNumber: 1, column: offset + 1 }), getSelection: () => ({}), onDidChangeModel: (action: () => void) => listen('model', action), onDidDispose: (action: () => void) => listen('editorDispose', action), onDidChangeCursorPosition: (action: () => void) => listen('caret', action) };
   const invoke = vi.fn(async (command: string, _input?: any): Promise<any> => command === 'sessions.open' ? { sessionId: 'session' } : { results: [] }), flushSettings = vi.fn(async () => {}), handleQueryError = vi.fn(async (_reason: unknown) => {});
   let serial = 0;
-  // 真实编辑器接管函数读取复制和格式化引用；本例均未发起，保持组件useRef(null)原值。
-  const port = createContext({ duplicateIntent: { current: null }, formatting: { current: null }, resultSelection: selection.resultSelection,
+  // 对应真实组件的useRef：复制/格式化尚未发起，模型挂载标记初始false，仍执行真实接管函数。
+  const port = createContext({ duplicateIntent: { current: null }, formatting: { current: null }, fileModelAttached: { current: false }, resultSelection: selection.resultSelection,
     // 与真实组件初始useRef一致：尚未打开行详情，但真实失效函数仍撤销控制器并清空两个React状态。
     rowDetails: new QueryRowDetails(), setRowDetail: vi.fn(), setActiveDetailRow: vi.fn(),
     CurrentStatementIntent, currentStatementZh, queryContextZh, queryConnectionDatabase, resolveQueryDatabase, Error, document: { querySelector: () => modal ? {} : null },
@@ -70,7 +70,7 @@ describe('真实QueryTab当前语句异步意图', () => {
     else if (changed === 'active') { f.workspace.settings.activeTabId = 'other'; f.emit('context'); f.workspace.settings.activeTabId = 'tab'; f.emit('context'); }
     else if (changed === 'draft') { f.workspace.settings.tabs[0].sql = '外部新草稿'; f.emit('context'); }
     else if (changed === 'model') { f.swap({}); f.swap(f.model); }
-    else if (changed === 'editor') { f.port.handlers.attachQueryEditor({}); f.port.handlers.attachQueryEditor(f.editor); }
+    else if (changed === 'editor') { expect(f.port.fileModelAttached.current).toBe(false); f.port.handlers.attachQueryEditor({}); f.port.handlers.attachQueryEditor(f.editor); expect(f.port.fileModelAttached.current).toBe(true); }
     else if (changed === 'caret') { f.move(1); }
     else if (changed === 'closed') { f.workspace.settings.tabs = []; f.emit('context'); }
     else if (changed === 'cancelled') f.port.cancelledQuery.current = f.port.task.current;

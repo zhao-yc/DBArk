@@ -53,7 +53,7 @@ describe('首次编辑前的LF/实际EOL证明', () => {
 });
 
 describe('FEN-1/FEN-2的真实创建链与原门回归', () => {
-  it('锁定Monaco原_getEOL证明完整LF新建返回LF；空placeholder采用Win CRLF，原桥异步加载仍无回声', () => {
+  it('Monaco原_getEOL区分完整LF创建和旧空模型后装入，后者仅为FEN-1因果反例', () => {
     const require = createRequire(import.meta.url), source = readFileSync(join(dirname(require.resolve('monaco-editor/package.json')), 'esm/vs/editor/common/model/pieceTreeTextBuffer/pieceTreeTextBufferBuilder.js'), 'utf8'), tree = ts.createSourceFile('builder.js', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.JS); let method = '';
     function visit(node: ts.Node) { if (ts.isMethodDeclaration(node) && node.name.getText(tree) === '_getEOL') method = node.getText(tree); ts.forEachChild(node, visit); } visit(tree); expect(method).not.toBe('');
     const getEol = runInNewContext('({' + method + '})._getEOL') as (this: object, fallback: number) => string;
@@ -63,9 +63,11 @@ describe('FEN-1/FEN-2的真实创建链与原门回归', () => {
     const bridge = editorContentBridge(editor as any, () => props, () => {}); props = { ...props, value: formatEolSource }; bridge.sync();
     expect(original.getValue()).toBe(formatEolSource.replaceAll('\n', '\r\n')); expect(original.getEOL()).toBe(empty); expect(change).not.toHaveBeenCalled(); expect(editor.setValueCalls).toBe(0); expect(original.controlledEdits).toBe(1); bridge.dispose();
   });
-  it('正式文件产品先建空placeholder再await来源RPC，live用此入口且不再创建保存查询', () => {
+  it('正式文件先原子登记占位再await来源RPC，完整正文经lease提交；旧live入口保持', () => {
     const product = readFileSync(new URL('../../src/renderer/useQueryFileSource.ts', import.meta.url), 'utf8'), start = product.indexOf('async function open('), body = product.slice(start, product.indexOf('/** 显式重读', start));
-    const stages = ["sql: ''", 'latest.updateSettings({ tabs:', 'await flushSettings()', "await invoke('queryFileSources.open'", 'sql: result.sql'].map(value => body.indexOf(value)); expect(stages.every(value => value >= 0)).toBe(true); expect([...stages].sort((a,b) => a-b)).toEqual(stages);
+    // 当前产品的占位是Main登记/防迟到阶段，不等于先创建空Monaco；旧live的Windows CRLF期待不在这里改写。
+    const stages = ["sql: ''", 'opening = beginQueryFileOpen(origin, target, ownsView)', 'await flushSettings()', "await invoke('queryFileSources.open'", 'opening.apply(result.sql, result.binding)'].map(value => body.indexOf(value)); expect(stages.every(value => value >= 0)).toBe(true); expect([...stages].sort((a,b) => a-b)).toEqual(stages);
+    expect(body.indexOf('!opening.current()')).toBeGreaterThan(stages[2]); expect(body.indexOf('!opening.current()')).toBeLessThan(stages[3]);
     const live = readFileSync(new URL('../e2e/query-format-eol-native-live.ts', import.meta.url), 'utf8'); expect(live).toContain('openFileSource(run, first, path)'); expect(live).not.toContain('openSavedSource'); expect(live).not.toContain("invoke('queries.create'"); expect(live).not.toContain("invoke('connections.save'");
   });
   it('每个evaluate最多一条Main RPC，禁止测试在浏览器异步闭包串行写后才回父门', () => {

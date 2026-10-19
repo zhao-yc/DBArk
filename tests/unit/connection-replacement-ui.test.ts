@@ -2,9 +2,34 @@ import { readFileSync } from 'node:fs';
 import { createContext, runInContext } from 'node:vm';
 import ts from 'typescript';
 import { describe, expect, it, vi } from 'vitest';
+import { createStore } from 'zustand/vanilla';
 import { connectionReplacementAcknowledgements } from '../../src/shared/connectionTransfer';
 import { connectionsTransferZh as text } from '../../src/renderer/locales/connectionsTransfer.zh-CN';
-import { assertQueryFileSourceSettings, sameQueryFileSource } from '../../src/shared/queryFileSources';
+import { assertQueryFileSourceSettings, assertQueryFileSourceSql, sameQueryFileSource } from '../../src/shared/queryFileSources';
+import { queryFilesZh } from '../../src/renderer/locales/queryFiles.zh-CN';
+
+/** 提取真实统一提交/持久化/打开lease；Zustand与校验器真实执行，仅IPC和计时器为RAM。 */
+function settingsFixture() {
+  const source = readFileSync(new URL('../../src/renderer/store.ts', import.meta.url), 'utf8'), tree = ts.createSourceFile('store.ts', source, ts.ScriptTarget.Latest, true);
+  const names = new Set(['commitWorkspaceSettings', 'persist', 'beginQueryFileOpen', 'wasQueryFileOpenTarget']), functions: string[] = []; let update = '';
+  function visit(node: ts.Node) {
+    if (ts.isFunctionDeclaration(node) && node.name && names.has(node.name.text)) functions.push(node.getText(tree));
+    if (ts.isPropertyAssignment(node) && node.name.getText(tree) === 'updateSettings') update = node.initializer.getText(tree);
+    ts.forEachChild(node, visit);
+  }
+  visit(tree); if (functions.length !== names.size || !update) throw Error('缺少真实配置提交或文件打开函数');
+  const invoke = vi.fn(async (_command: string, _input: unknown) => undefined), notify = vi.fn();
+  const store = createStore<any>(() => ({ settings: { tabs: [] }, queryFileDirty: {}, queryFileOpenings: {}, dirtyTabs: {}, connections: [{ id: 'target' }], connectionVersions: { target: 0 }, notify }));
+  let sequence = 0;
+  const timers = new Map<number, () => void>(), schedule = vi.fn((action: () => void, _delay: number) => { const id = ++sequence; timers.set(id, action); return id; });
+  const port = createContext({ exports: {}, JSON, Error, WeakSet, queryFileOpenTargets: new WeakSet(), useWorkspace: store, assertQueryFileSourceSettings, assertQueryFileSourceSql, sameQueryFileSource, queryFilesZh, invoke, errorMessage: String, saveTimer: undefined,
+    setTimeout: schedule, clearTimeout: (id: number | undefined) => { if (id !== undefined) timers.delete(id); },
+  });
+  runInContext(ts.transpileModule(functions.join('\n') + '\nglobalThis.update=(' + update + ');', { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS } }).outputText, port);
+  // 观察包装仍调用提取的真实persist，不能用空stub绕过400ms正文保存。
+  const realPersist = port.persist, persist = vi.fn((settings: unknown) => realPersist(settings)); port.persist = persist;
+  return { port, store, invoke, persist, schedule, timers, drain: () => { for (const [id, action] of [...timers]) { timers.delete(id); action(); } } };
+}
 
 /** 只回放生产处理器和门表达式，不启动浏览器、DOM、Electron或原生剪贴板。 */
 function fixture() {
@@ -64,13 +89,31 @@ describe('C03确认与布局事实的纯回放', () => {
     expect(f.port.setDecisions).toHaveBeenCalledWith([{ sourceId: 'same', action: 'skip' }, { sourceId: 'fresh', action: 'add' }]); expect(f.port.setStaged).toHaveBeenCalledWith(false);
   });
   it('标签身份即时保存而正文继续防抖，主进程不会只看到400ms前的空标签', () => {
-    const source = readFileSync(new URL('../../src/renderer/store.ts', import.meta.url), 'utf8'), tree = ts.createSourceFile('store.ts', source, ts.ScriptTarget.Latest, true);
-    let update = ''; function visit(node: ts.Node) { if (ts.isPropertyAssignment(node) && node.name.getText(tree) === 'updateSettings') update = node.initializer.getText(tree); ts.forEachChild(node, visit); } visit(tree); if (!update) throw Error('缺少生产布局更新器');
-    const current = { settings: { tabs: [] as unknown[] }, queryFileDirty: {}, notify: vi.fn() }, invoke = vi.fn(async () => undefined), persist = vi.fn();
-    // 原更新器新增的来源验证与引用比较使用真实实现，不用空函数绕过校验。
-    const port = createContext({ JSON, clearTimeout, assertQueryFileSourceSettings, sameQueryFileSource, saveTimer: undefined, get: () => current, set: (value: unknown) => Object.assign(current, value), invoke, persist, errorMessage: String });
-    runInContext(ts.transpileModule('globalThis.update=(' + update + ');', { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText, port);
+    const { port, invoke, persist, schedule, timers, drain } = settingsFixture();
     port.update({ tabs: [{ id: 'tab', connectionId: 'target', kind: 'table' }] }); expect(invoke).toHaveBeenCalledOnce(); expect(persist).not.toHaveBeenCalled();
     port.update({ tabs: [{ id: 'tab', connectionId: 'target', kind: 'table', sql: '正文变更' }] }); expect(invoke).toHaveBeenCalledOnce(); expect(persist).toHaveBeenCalledOnce();
+    expect(schedule).toHaveBeenCalledExactlyOnceWith(expect.any(Function), 400); expect(timers.size).toBe(1);
+    drain(); expect(invoke).toHaveBeenCalledTimes(2); expect(invoke.mock.calls[1]).toEqual(['settings.save', { tabs: [{ id: 'tab', connectionId: 'target', kind: 'table', sql: '正文变更' }] }]);
+  });
+  it('文件占位与opening原子登记，完整来源正文与解除阶段同次提交', () => {
+    const f = settingsFixture(), origin = { id: 'origin', kind: 'query', connectionId: 'target', sql: '原查询' }, target = { id: 'file', kind: 'query', connectionId: 'target', sql: '' };
+    f.port.update({ tabs: [origin], activeTabId: origin.id }); f.invoke.mockClear();
+    const notifications: any[] = []; f.store.subscribe(state => notifications.push(state));
+    const lease = f.port.beginQueryFileOpen(origin, target, () => true);
+    expect(notifications).toHaveLength(1); expect(notifications[0].settings.tabs[1]).toBe(target); expect(notifications[0].queryFileOpenings.file.target).toBe(target);
+    expect(f.invoke).toHaveBeenCalledExactlyOnceWith('settings.save', expect.objectContaining({ tabs: [origin, target] })); expect(f.port.wasQueryFileOpenTarget(target)).toBe(true);
+    const sql = 'SELECT 1;\nSELECT 2;', binding = { ref: { id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', revision: 1 }, name: '完整LF.sql' };
+    expect(lease.apply(sql, binding)).toBe(true); expect(notifications).toHaveLength(2);
+    const loaded = notifications[1].settings.tabs[1]; expect(loaded).not.toBe(target); expect(loaded).toMatchObject({ id: target.id, sql, fileSourceBinding: binding.ref });
+    expect(notifications[1].queryFileOpenings.file).toBeUndefined(); expect(notifications[1].settings.activeTabId).toBe(target.id); expect(notifications[1].queryFileDirty.file).toBe(true);
+    expect(f.port.wasQueryFileOpenTarget(loaded)).toBe(false); expect(lease.apply('迟到正文', binding)).toBe(false);
+  });
+  it.each(['view', 'connection'] as const)('打开期间%s父门失效后恢复也不能消费原文回包', changed => {
+    const f = settingsFixture(), origin = { id: 'origin', kind: 'query', connectionId: 'target', sql: '原查询' }, target = { id: 'file', kind: 'query', connectionId: 'target', sql: '' }; let alive = true;
+    f.port.update({ tabs: [origin], activeTabId: origin.id }); const lease = f.port.beginQueryFileOpen(origin, target, () => alive);
+    if (changed === 'view') { alive = false; expect(lease.current()).toBe(false); alive = true; }
+    else { f.store.setState({ connectionVersions: { target: 1 } }); f.store.setState({ connectionVersions: { target: 0 } }); }
+    expect(lease.current()).toBe(false); expect(lease.apply('迟到正文', { name: '迟到.sql', ref: { id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', revision: 1 } })).toBe(false);
+    expect(f.store.getState().settings.tabs[1]).toBe(target); expect(target.sql).toBe(''); lease.dispose(true); expect(f.store.getState().settings.tabs).toEqual([origin]);
   });
 });
