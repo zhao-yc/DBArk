@@ -28,8 +28,6 @@ jobs:
     defaults:
       run:
         shell: bash
-    env:
-      MODE_KEEPER_RUNNER_ENVIRONMENT: ${{ runner.environment }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -57,6 +55,8 @@ jobs:
             exit 1
           fi
       - name: 编译并单次执行只读枚举（无模式切换、无窗口）
+        env:
+          MODE_KEEPER_RUNNER_ENVIRONMENT: ${{ runner.environment }}
         run: |
           set -euo pipefail
           /usr/bin/xcrun swiftc scripts/v028-probe-macos-display.swift -o .cache/v028-macos-diagnostic/probe > .cache/v028-macos-diagnostic/probe-compile.log 2>&1
