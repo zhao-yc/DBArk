@@ -5,6 +5,7 @@ import { createEditorIndentNativeRun, readIndentNativeSettings } from './editor-
 import type { EditorIndentNativeRun, IndentNativeOwner } from './editor-indentation-native-owner';
 import { type bindShortcutNativeEnvironment, shortcutNativeCase } from '../helpers/queryFileShortcutGate';
 import { installShortcutObservation, detachShortcutObservation, ShortcutEventLog } from '../helpers/queryFileShortcutObservation';
+import { installMainProbe, detachMainProbe, MainProbeLog } from '../helpers/queryFileMainProbe';
 import { QueryFilesNativeFiles } from '../helpers/queryFilesNativeFiles';
 import { sourceSql, savedSql, utf16NativeBytes, installSqlFilesOpenAnswer, finishSqlFilesOpenAnswer } from '../helpers/queryFilesNative';
 import { zh } from '../../src/renderer/locales/zh-CN';
@@ -60,7 +61,8 @@ export function registerShortcutNative(binding: ReturnType<typeof bindShortcutNa
   test(shortcutNativeCase, async ({ trace, screenshot, video }, info) => {
     expect([trace, screenshot, video]).toEqual(['off', 'off', 'off']); const scope = bindEditorIndentNativeCase(info, binding, () => test.info()); scopes.set(info, scope);
     const run = createEditorIndentNativeRun(scope, binding.approval); let files: QueryFilesNativeFiles | undefined, failure: unknown, log: ShortcutEventLog | undefined, removeConsole: (() => void) | undefined;
-    let mainWindow: object | undefined, observationFailure: unknown, presses = 0;
+    let mainWindow: { window: number; contents: number; windowFocused: boolean; contentsFocused: boolean; destroyed: boolean } | undefined, observationFailure: unknown, presses = 0;
+    let mainLog: MainProbeLog | undefined, removeMain: (() => void) | undefined;
     try {
       const first = await run.launch(); await observe(run, first); await offlineQuery(run, first);
       files = new QueryFilesNativeFiles(run.path!, () => run.assert()); await run.step(first, () => files!.start()); const path = files.paths.source, original = await run.step(first, () => files!.create(path, utf16NativeBytes(sourceSql)));
@@ -79,6 +81,16 @@ export function registerShortcutNative(binding: ReturnType<typeof bindShortcutNa
       first.page.on('console', listener); removeConsole = () => first.page.removeListener('console', listener);
       // 原窗口来源与前台焦点分别记录；此处只读，不补focus或调用菜单。
       const handle = await run.step(first, () => first.application.browserWindow(first.page)); mainWindow = await run.step(first, () => handle.evaluate(window => ({ window: window.id, contents: window.webContents.id, windowFocused: window.isFocused(), contentsFocused: window.webContents.isFocused(), destroyed: window.isDestroyed() }))); await run.step(first, () => handle.dispose());
+      // 与原runtime已完成来源证明逐项相等；不能把另一个窗口的Main输入混入本例。
+      const proven = first.sourceDiagnostics?.filter(value => value.complete && value.observed.window).at(-1)?.observed.window;
+      expect(proven).toMatchObject({ id: mainWindow.window, contents: mainWindow.contents, destroyed: false }); expect(mainWindow.destroyed).toBe(false);
+      const mainChoice = { nonce: randomUUID(), deadline: choice.deadline, window: mainWindow.window, contents: mainWindow.contents };
+      mainLog = new MainProbeLog(mainChoice, () => { scope.assertCurrent(); run.assert(first); });
+      run.assert(first); const stdout = first.application.process().stdout; run.assert(first); if (!stdout) throw Error('Main原stdout未知');
+      const mainListener = (chunk: Buffer) => { try { mainLog!.ingest(chunk); } catch { observationFailure ??= Error('Main被动观察失效'); run.retained = true; mainLog!.stop(); } };
+      stdout.on('data', mainListener); removeMain = () => stdout.removeListener('data', mainListener);
+      expect(await run.step(first, () => installMainProbe(first.application, mainChoice))).toEqual({ nonce: mainChoice.nonce, installed: true, window: mainChoice.window, contents: mainChoice.contents });
+      await expect.poll(() => { scope.assertCurrent(); run.assert(first); return mainLog!.frames.filter(frame => frame.stage === 0).length; }).toBe(1);
       expect(await run.step(first, () => installShortcutObservation(first.page, choice))).toEqual({ nonce: choice.nonce, installed: true });
       await expect.poll(() => { scope.assertCurrent(); run.assert(first); return log!.events.filter(event => event.stage === 'before').length; }).toBe(1);
       presses++; await run.step(first, () => first.page.keyboard.press(process.platform === 'darwin' ? 'Meta+s' : 'Control+s'));
@@ -86,7 +98,9 @@ export function registerShortcutNative(binding: ReturnType<typeof bindShortcutNa
       await run.step(first, () => expect(first.page.locator('.query-tab:visible').getByRole('status', { name: text.fileSource, exact: true })).toContainText(text.clean));
       expect(await run.step(first, () => detachShortcutObservation(first.page, choice))).toEqual({ nonce: choice.nonce, detached: true });
       await expect.poll(() => { scope.assertCurrent(); run.assert(first); return log!.events.filter(event => event.stage === 'detached').length; }).toBe(1);
-      if (observationFailure !== undefined) throw observationFailure; log.stop(); removeConsole(); removeConsole = undefined;
+      expect(await run.step(first, () => detachMainProbe(first.application, mainChoice))).toEqual({ nonce: mainChoice.nonce, detached: true });
+      await expect.poll(() => { scope.assertCurrent(); run.assert(first); return mainLog!.frames.filter(frame => frame.stage === 4).length; }).toBe(1);
+      if (observationFailure !== undefined) throw observationFailure; mainLog.stop(); removeMain(); removeMain = undefined; log.stop(); removeConsole(); removeConsole = undefined;
       expect(presses).toBe(1); expect(log.events.filter(event => event.stage === 'menu' && event.command === 'save-query')).toHaveLength(1);
       const saved = await run.step(first, () => files!.read(path)); expect(saved.bytes).toEqual(utf16NativeBytes(savedSql));
       const after = await settings(run, first); expect(after.tabs[0]).toEqual(before.tabs[0]); expect(after.activeTabId).toBe(tab.id); expect(after.tabs[1]).toEqual({ ...before.tabs[1], fileSourceBinding: { id: baseline.binding.ref.id, revision: baseline.binding.ref.revision + 1 } });
@@ -99,12 +113,12 @@ export function registerShortcutNative(binding: ReturnType<typeof bindShortcutNa
       const restarted = await model(run, second); expect(restarted.sql).toBe(expectedSql.replace(/\r\n|\r|\n/g, restarted.eol)); expect((await run.step(second, () => files!.read(path, saved.identity))).bytes).toEqual(utf16NativeBytes(savedSql));
       await run.step(second, () => expect(second.page.locator('.query-tab:visible').getByRole('status', { name: text.fileSource, exact: true })).toContainText(text.clean)); await noSql(run, second); await run.close(second);
       await run.stopped(() => files!.closeHandles()); await run.stopped(() => files!.assertDirectory()); await run.finish();
-      await info.attach('单次文件保存快捷键终态', { body: Buffer.from(JSON.stringify({ presses, mainWindow, events: log.events, sourceRef: status.binding.ref, fileIdentity: saved.identity, sqliteSchema: disk.schema, normalOwners: run.owners.map(owner => ({ confirmed: owner.confirmed, closed: owner.closed, willQuit: owner.ready, pids: owner.ids.size })), directoryRemoved: run.removed, nativeMenuClickObserved: false, menuWrapper: false, sqlExecution: 0, systemClipboard: 0 })), contentType: 'application/json' });
+      await info.attach('单次文件保存快捷键终态', { body: Buffer.from(JSON.stringify({ presses, mainWindow, mainFrames: mainLog.frames, events: log.events, sourceRef: status.binding.ref, fileIdentity: saved.identity, sqliteSchema: disk.schema, normalOwners: run.owners.map(owner => ({ confirmed: owner.confirmed, closed: owner.closed, willQuit: owner.ready, pids: owner.ids.size })), directoryRemoved: run.removed, nativeMenuClickObserved: false, menuWrapper: false, sqlExecution: 0, systemClipboard: 0 })), contentType: 'application/json' });
     } catch (reason) {
-      failure = reason; run.retained = true; log?.stop(); removeConsole?.(); removeConsole = undefined;
+      failure = reason; run.retained = true; mainLog?.stop(); removeMain?.(); removeMain = undefined; log?.stop(); removeConsole?.(); removeConsole = undefined;
       // 原失败优先：只附加父进程已收到的内存记录，不在失败后evaluate/截图/读SQLite补证。
-      try { await info.attach('单次文件保存快捷键保留现场', { body: Buffer.from(JSON.stringify({ presses, mainWindow, events: log?.events ?? [], observationFailed: observationFailure !== undefined, directory: run.path, files: files?.records, owners: run.owners.map(owner => ({ confirmed: owner.confirmed, closed: owner.closed, willQuit: owner.ready, ids: [...owner.ids] })), automaticRetry: false, fallback: false, nativeMenuClickObserved: false })), contentType: 'application/json' }); }
+      try { await info.attach('单次文件保存快捷键保留现场', { body: Buffer.from(JSON.stringify({ presses, mainWindow, mainFrames: mainLog?.frames ?? [], events: log?.events ?? [], observationFailed: observationFailure !== undefined, directory: run.path, files: files?.records, owners: run.owners.map(owner => ({ confirmed: owner.confirmed, closed: owner.closed, willQuit: owner.ready, ids: [...owner.ids] })), automaticRetry: false, fallback: false, nativeMenuClickObserved: false })), contentType: 'application/json' }); }
       catch (attachment) { throw new AggregateError([reason, attachment], '原快捷键失败与内存附录失败', { cause: reason }); } throw reason;
-    } finally { log?.stop(); removeConsole?.(); try { await files?.closeHandles(); } catch (closing) { run.retained = true; throw new AggregateError(failure === undefined ? [closing] : [failure, closing], '快捷键原文件句柄关闭失败', { cause: failure }); } }
+    } finally { mainLog?.stop(); removeMain?.(); log?.stop(); removeConsole?.(); try { await files?.closeHandles(); } catch (closing) { run.retained = true; throw new AggregateError(failure === undefined ? [closing] : [failure, closing], '快捷键原文件句柄关闭失败', { cause: failure }); } }
   });
 }
