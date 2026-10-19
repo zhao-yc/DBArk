@@ -33,6 +33,8 @@ pnpm exec install-electron
 pnpm dev
 ```
 
+日常修改可执行 `pnpm check:local -- tests/unit/具体文件.test.ts`，需要普通构建时增加 `--build`。入口依次完成一次类型检查和明确的单元测试，不启动客户端；详见[本地优先开发检查](docs/development/local-checks.md)。
+
 开发页面固定使用 `127.0.0.1:5186`，端口被占用时会明确报错。终端显示 Vite 与客户端日志；关闭客户端或在运行终端按 Ctrl+C 停止。修改主进程或数据库引擎后需重启开发命令，界面修改支持热更新。
 
 ## 日常操作

@@ -11,6 +11,7 @@
     "dev": "node scripts/dev.mjs",
     "build": "tsc --noEmit && node scripts/build.mjs",
     "typecheck": "tsc --noEmit",
+    "check:local": "node scripts/check-local.mjs",
     "test": "vitest run",
     "test:integration": "vitest run --config vitest.integration.config.ts",
     "test:e2e": "pnpm build && playwright test",
