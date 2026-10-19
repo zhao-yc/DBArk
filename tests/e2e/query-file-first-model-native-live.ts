@@ -108,7 +108,7 @@ export function registerFileFirstModelNative(binding: ReturnType<typeof bindFile
   const scopes = new WeakMap<TestInfo, ReturnType<typeof bindEditorIndentNativeCase>>(); test.afterEach(({}, info) => scopes.get(info)?.retain());
   for (const value of fileFirstModelCases) test(value.title, async ({ trace, screenshot, video }, info) => {
     expect([trace, screenshot, video]).toEqual(['off', 'off', 'off']); const scope = bindEditorIndentNativeCase(info, binding, () => test.info()); scopes.set(info, scope);
-    const run = createEditorIndentNativeRun(scope, binding.approval), witnesses: object[] = []; let files: QueryFilesNativeFiles | undefined;
+    const run = createEditorIndentNativeRun(scope, binding.approval), witnesses: object[] = []; let files: QueryFilesNativeFiles | undefined, failure: unknown;
     try {
       const first = await run.launch(); await observe(run, first); await prepareOfflineQuery(run, first, value.key);
       files = new QueryFilesNativeFiles(run.path!, () => run.assert()); await run.step(first, () => files!.start());
@@ -147,11 +147,15 @@ export function registerFileFirstModelNative(binding: ReturnType<typeof bindFile
       await run.stopped(() => files!.assertDirectory()); await run.finish(); expect(run.removed).toBe(true);
       await info.attach('文件首次模型原生终态', { body: Buffer.from(JSON.stringify({ caseKey: value.key, entry: value.entry, sourceEol: value.eol, identity, witnesses, files: files.records, accepted: true, ordinarySingleUndo: true, formatSingleUndo: true, sqliteSchema: disk.schema, directoryRemoved: run.removed, normalOwners: run.owners.map(owner => ({ confirmed: owner.confirmed, willQuit: owner.ready, closed: owner.closed, recordedPids: owner.ids.size })), sqlExecution: 0, queryLibraryWrites: 0, systemClipboard: 0, dirtyAnswerInstalled: false })), contentType: 'application/json' });
     } catch (reason) {
-      run.retained = true;
+      failure = reason; run.retained = true;
       // 只附父端已经持有的内存；失败后不读SDK、窗口、文件、PID或SQLite，不补清理。
       try { await info.attach('文件首次模型保留现场', { body: Buffer.from(JSON.stringify({ caseKey: value.key, witnesses, files: files?.records, directory: run.path, directoryRemoved: run.removed, owners: run.owners.map(owner => ({ confirmed: owner.confirmed, willQuit: owner.ready, closed: owner.closed, ids: [...owner.ids], sourceDiagnostics: owner.sourceDiagnostics ?? [] })), automaticRetry: false, automaticForceStop: false, dirtyAnswerInstalled: false })), contentType: 'application/json' }); }
-      catch (attachment) { throw new AggregateError([reason, attachment], '文件首次模型原失败及内存附录失败', { cause: reason }); }
+      catch (attachment) { failure = new AggregateError([reason, attachment], '文件首次模型原失败及内存附录失败', { cause: reason }); throw failure; }
       throw reason;
+    } finally {
+      // 仅关闭已经持有的自有FD；不核路径、读文件、退出未知owner或清理目录。
+      try { await files?.closeHandles(); }
+      catch (closing) { run.retained = true; throw new AggregateError(failure === undefined ? [closing] : [failure, closing], '文件首次模型原失败及句柄关闭失败', { cause: failure }); }
     }
   });
 }

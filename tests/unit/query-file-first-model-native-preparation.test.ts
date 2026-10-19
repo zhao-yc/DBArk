@@ -14,6 +14,26 @@ import { queryFilesZh } from '../../src/renderer/locales/queryFiles.zh-CN';
 
 const declaration = readFileSync(new URL('../e2e/query-file-first-model-native.spec.ts', import.meta.url), 'utf8');
 const live = readFileSync(new URL('../e2e/query-file-first-model-native-live.ts', import.meta.url), 'utf8');
+
+/** 回放真实catch/finally，只替换主体为原失败；四组合均须关闭已有句柄并保留全部错误。 */
+it.each([[false, false], [true, false], [false, true], [true, true]])('原失败、附录失败%s与关闭失败%s均保留且不补读', async (attachmentFails, closeFails) => {
+  const tree = ts.createSourceFile('live.ts', live, ts.ScriptTarget.Latest, true); let envelope: ts.TryStatement | undefined;
+  function visit(node: ts.Node) { if (ts.isTryStatement(node) && node.catchClause?.getText(tree).includes("info.attach('文件首次模型保留现场'") && node.finallyBlock) envelope = node; ts.forEachChild(node, visit); }
+  visit(tree); expect(envelope).toBeDefined();
+  const body = ts.factory.createBlock([ts.factory.createThrowStatement(ts.factory.createIdentifier('original'))], true);
+  const action = ts.factory.updateTryStatement(envelope!, body, envelope!.catchClause, envelope!.finallyBlock);
+  const source = ts.createPrinter().printNode(ts.EmitHint.Unspecified, action, tree);
+  const original = Error('原断言失败'), attachment = Error('附录失败'), closing = Error('关闭失败'), forbidden = vi.fn(() => { throw Error('不得补读SDK或路径'); });
+  const closeHandles = vi.fn(async () => { if (closeFails) throw closing; });
+  const files = { records: [], closeHandles, read: forbidden, assertDirectory: forbidden }, run = { retained: false, removed: false, path: 'RAM已知目录', owners: [], close: forbidden, finish: forbidden };
+  const info = { attach: vi.fn(async () => { if (attachmentFails) throw attachment; }) };
+  const code = ts.transpileModule('(async()=>{let failure;'+source+'})()', { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
+  const result = runInNewContext(code, { original, files, run, info, value: { key: 'RAM' }, witnesses: [], AggregateError, Buffer });
+  let rejected: unknown; try { await result; } catch (reason) { rejected = reason; }
+  const flatten = (error: unknown): unknown[] => error instanceof AggregateError ? error.errors.flatMap(flatten) : [error];
+  expect(flatten(rejected)).toEqual([original, ...(attachmentFails ? [attachment] : []), ...(closeFails ? [closing] : [])]);
+  expect(closeHandles).toHaveBeenCalledOnce(); expect(info.attach).toHaveBeenCalledOnce(); expect(run.retained).toBe(true); expect(forbidden).not.toHaveBeenCalled();
+});
 const compile = (source: string) => ts.transpileModule(source, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS } }).outputText;
 /** 合成环境只给门作语法验证；不读取清单、不冒充Root批准。 */
 function environment() { return { DBARK_FILE_FIRST_MODEL_NATIVE_TEST: '1', DBARK_FILE_FIRST_MODEL_NATIVE_APPROVED: '1', DBARK_INTEGRATION_ENABLED: '0', DBARK_FILE_FIRST_MODEL_MANIFEST: 'C:\\future\\root-approved.json', DBARK_FILE_FIRST_MODEL_MANIFEST_SHA256: 'a'.repeat(64) } as NodeJS.ProcessEnv; }
@@ -83,7 +103,10 @@ it('原准备函数晚回后不能进入第二个UI动作，不新增超时或�
 it('每个evaluate至多一个Main RPC，保留120秒/零重试和clean正常退出，无新setter/dirty回答', () => {
   const tree = ts.createSourceFile('live.ts', live, ts.ScriptTarget.Latest, true); let callbacks = 0;
   function visit(node: ts.Node) { if (ts.isCallExpression(node) && node.expression.getText(tree).endsWith('.evaluate') && node.arguments[0]) { let count = 0; function inspect(child: ts.Node) { if (ts.isCallExpression(child) && child.expression.getText(tree) === 'window.dbark.invoke') count++; ts.forEachChild(child, inspect); } inspect(node.arguments[0]); expect(count).toBeLessThanOrEqual(1); callbacks++; } ts.forEachChild(node, visit); } visit(tree); expect(callbacks).toBeGreaterThan(6);
-  expect(live).toContain('timeout: 120000, retries: 0'); expect(live).not.toMatch(/\.(?:setValue|setEOL|setModel|setSelection|setSelections|setViewportSize)\s*\(/); expect(live).not.toContain('DirtyExitAnswer'); expect(live).not.toContain('query-format-eol-native'); expect(live).not.toContain('finally');
+  expect(live).toContain('timeout: 120000, retries: 0'); expect(live).not.toMatch(/\.(?:setValue|setEOL|setModel|setSelection|setSelections|setViewportSize)\s*\(/); expect(live).not.toContain('DirtyExitAnswer'); expect(live).not.toContain('query-format-eol-native');
+  // finally只可关闭已经持有的FD，不能借收尾补读SDK/路径、关闭owner或删除目录。
+  const blocks: ts.Block[] = []; function find(node: ts.Node) { if (ts.isTryStatement(node) && node.finallyBlock) blocks.push(node.finallyBlock); ts.forEachChild(node, find); } find(tree); expect(blocks).toHaveLength(1);
+  const calls: string[] = []; function collect(node: ts.Node) { if (ts.isCallExpression(node)) calls.push(node.expression.getText(tree)); ts.forEachChild(node, collect); } collect(blocks[0]); expect(calls).toEqual(['files?.closeHandles']);
 });
 
 /** 执行真实观察函数，只有官方editor/model getter与事件参数是RAM，不加载Monaco或DOM。 */

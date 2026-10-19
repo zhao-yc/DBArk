@@ -1,5 +1,7 @@
 # 文件首次模型独立原生验收准备
 
+Root独审补充发现失败分支尚未关闭已持有文件句柄；真实执行前已补finally，仅关闭自有FD，不重新核路径、不读文件、不退出未知owner或删除目录。原断言、附录失败及关闭失败全部保留，四种错误组合回放真实catch/finally验证；原无阻断审查结论须连同此补充读取，不能绕过该修正实跑。
+
 本准备固定从产品切片`300fae79047107dc2d27c69ac4e8aae0fdde6403`开始，只新增测试。未构建、未启动GUI、未运行Playwright（包括list）、未连接端口/数据库、未执行CI、未安装依赖或推送。Root须在独审整合产品、新构建和完整封存后另行授权真实执行。门的合成RAM输入不是批准，默认关闭用例数也不是通过数。
 
 独立声明文件为`tests/e2e/query-file-first-model-native.spec.ts`。它登记均匀LF/CRLF乘格式化按钮/快捷键共4个独立case。每个原TestInfo分别领取自己的私有目录、文件原写句柄身份、Main来源引用、OpenDialog nonce和两次应用启动。默认/list不加载live/runtime。执行需`DBARK_FILE_FIRST_MODEL_NATIVE_TEST=1`、`DBARK_FILE_FIRST_MODEL_NATIVE_APPROVED=1`、`DBARK_INTEGRATION_ENABLED=0`及Root未来的绝对`DBARK_FILE_FIRST_MODEL_MANIFEST`与原`DBARK_FILE_FIRST_MODEL_MANIFEST_SHA256`；拒绝旧门、认证、外部入口、预加载、别名和录制。Windows/macOS入口遵循原runtime的真实完整树身份校验。
