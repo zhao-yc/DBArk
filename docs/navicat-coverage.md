@@ -2,7 +2,9 @@
 
 ## 当前统筹检查点（2026-10-19）
 
-新产品`65ce201`的首次文件模型已完成Root相关260项、类型、新109文件构建及113运行输入封存。四例Windows实际验收`run1918`为0通过／1失败／3跳过：首例已观察完整LF初模型、普通编辑Undo clean及首次格式化Undo clean，但Redo选区恢复不一致；独立重启和正常退出未完成，见[原始失败及准确边界](../tests/integration/acceptance-query-file-first-model-root-20261019.md)。三夹具及分栏整合`1bb0f9f`的完整Linux首次运行39202556896已成功：554文件／10431通过／10条件跳过，类型与构建成功。后续格式化事务增量`f27c85a`另完成Root280项／类型、新109文件构建及113封存，真实窗口仍待新独立验收；不继承前一完整CI计数。Q01／Q03及公开发行计数保持。
+首次文件模型及格式化历史产品`f27c85a`已完成Root280项／类型、新109文件构建及113封存；固定`0f655b3`的Windows源码四例`run1924`单次全部通过，覆盖LF／CRLF×按钮／快捷键、普通编辑与格式化Undo clean、Redo选区、SQLite9及独立重启，8个原owner正常收尾。原`run1918`的Redo失败及现场保持，见[准确实际证据](../tests/integration/acceptance-query-file-first-model-root-20261019.md)。本能力安装及macOS仍待验，Q01／Q03和公开发行计数保持。
+
+三夹具及分栏整合`1bb0f9f`的完整Linux首次运行39202556896成功：554文件／10431通过／10条件跳过，类型与构建成功。随后`0f655b3`完整Linux39203597956为554文件通过／1失败，10438通过／1失败／10跳过，类型通过、构建跳过；失败是复制表结构只读来源定义展示，正在定位，不能将前轮绿色或本地四例通过外推给完整CI，见同一[原失败记录](../tests/integration/acceptance-query-file-first-model-root-20261019.md)。
 
 旧产品`e0fa1dd`的R9 Windows源码／真实安装缩进及分栏四份原专项已由Root独立下载原报告复核，8个owner正常收尾；该整轮仍因Linux和两个macOS失败而失败。该Windows范围不转给新产品，也不是Root独立下载安装器验收，见[固定R9 Windows实证](../tests/integration/acceptance-native-r9-windows-root-20261019.md)。以下记录保留各原检查点的当时范围。
 
