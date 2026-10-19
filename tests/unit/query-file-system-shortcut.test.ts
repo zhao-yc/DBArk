@@ -137,6 +137,13 @@ describe('系统握手原父门与固定文件身份', () => {
     await expect(f.handshake.wait(request())).rejects.toThrow('原父门失效');
     expect(ram.calls.slice(-1)).toEqual(['close:' + readyPath]); expect(ram.calls.some(x => x.startsWith('write:'))).toBe(false); expect(f.wait).not.toHaveBeenCalled();
   });
+  it('SYS-1原目录在open等待中替换时首写前拒绝，只关闭零字节句柄', async () => {
+    const f = fixture(); ram.mutate = (op, name) => { if (op === 'open-wx' && name === readyPath) ram.directoryIno = 99n; };
+    await expect(f.handshake.wait(request())).rejects.toThrow('原目录身份变化');
+    expect(ram.files.get(readyPath)!.data.length).toBe(0);
+    expect(ram.calls.some(x => x.startsWith('write:') || x.startsWith('sync:'))).toBe(false);
+    expect(ram.calls.slice(-1)).toEqual(['close:' + readyPath]); expect(f.wait).not.toHaveBeenCalled();
+  });
   it('原写入/父门错误与句柄关闭错误都保留，不借清理替代原失败', async () => {
     const f = fixture(); ram.closeFails = true; ram.mutate = (op, name) => { if (op === 'open-wx' && name === readyPath) f.revoke(); };
     await expect(f.handshake.wait(request())).rejects.toThrow(AggregateError); expect(ram.calls.slice(-1)).toEqual(['close:' + readyPath]);

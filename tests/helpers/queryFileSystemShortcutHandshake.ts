@@ -77,7 +77,14 @@ export class SystemShortcutHandshake {
     await this.directoryCurrent(deadline); this.check(deadline);
     const handle = await open(this.readyPath, 'wx'); let failure: unknown;
     try {
-      this.check(deadline); await this.checked(deadline, () => handle.writeFile(bytes)); await this.checked(deadline, () => handle.sync());
+      // SYS-1：open等待也可能换目录；取得句柄后、首写前复核原目录及固定名/句柄。
+      this.check(deadline); await this.directoryCurrent(deadline);
+      const opened = await this.checked(deadline, () => handle.stat({ bigint: true })); this.same(opened);
+      if (opened.size !== 0n) throw Error('系统ready新句柄不是空文件');
+      const initialName = await this.checked(deadline, () => lstat(this.readyPath, { bigint: true })); this.same(initialName, opened);
+      if (await this.checked(deadline, () => realpath(this.readyPath)) !== this.readyPath) throw Error('系统ready首写前规范路径变化');
+      // 仅关闭已证open等待缺口，不宣称覆盖最后检查之后的一切并发FS竞态。
+      await this.checked(deadline, () => handle.writeFile(bytes)); await this.checked(deadline, () => handle.sync());
       const own = await this.checked(deadline, () => handle.stat({ bigint: true }));
       const named = await this.checked(deadline, () => lstat(this.readyPath, { bigint: true }));
       this.same(own); this.same(named, own); if (own.size !== BigInt(bytes.length)) throw Error('系统ready未完整写入');

@@ -77,6 +77,8 @@ await writeFile(approvedAckPath, JSON.stringify(ack) + '\n', { flag: 'wx', encod
 
 ready 或 ack 是链接、硬链接、规范路径变化、同字节异 inode 替换、读取中修改、短读、超预算、重复 JSON 字段、旧 nonce、错摘要、错来源/窗口/PID/revision、早到/迟到、failed/unknown、父门失效或时钟回滚，都永久停链。25毫秒等待只是同期限内查找唯一固定 ack 名称，不是重试系统输入；一旦有 ack 就只解析一次，不接受纠正后继续。
 
+SYS-1窄审反例确认open等待期间目录替换会先写后拒绝；发布验收分支增加取得句柄后的首写前复核，要求原目录、固定名称及空白新句柄一致，错误时零write/零sync、只关闭已得句柄。该修复只关闭已证等待缺口，不宣称消除所有文件系统并发竞态。Sky Window.id是不透明工具标识，不能当作Electron BrowserWindow.id；实际输入前仍须核唯一源窗口和PID对应。
+
 ack 是 Root 的外部请求结果声明，不是 OS 真实按键数实测。报告明确分开 externalInputRequests=1、pageKeyboardSaveRequests=0、Main/DOM 各自被动观察数，physicalKeyCountMeasured=false。before-input-event 和 DOM 保存 keydown 必须各一条、无 Shift/Alt/Meta/重复/输入法状态，save-query 菜单通知一条，完成且 wrote=yes 的保存任务通知一条。
 
 ## 后续完整验收与保留规则
