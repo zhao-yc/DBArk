@@ -52,4 +52,6 @@
 
 本轮候选artifact12188064300为339815801字节，API digest `6d72842063537d7b3313973574a627d01a7dda1bf5266a122bd6badd5e2ac2bc`；证据artifact12189350924为3953102字节，API digest `62ba852f2569e95cf93abc3d7fcd498bbf89f64f39bfb66e07ddb244c8fe4ab6`。这些尚待独立接收ZIP/CRC和原报告摘要核准，不冒称API摘要即本机校验。旧5a失败及其安装根边界保持。
 
+该“待核”为原job完成时状态。固定44dcf7b的只读回读39258845618/job118080923876现已成功，在GitHub-hosted Ubuntu独立核两ZIP字节/SHA和全部CRC、应用ZIP内部741成员CRC；DMG SHA256 `d415a686d0a9d1d001dd57b45380007b27beb362b6f91de0cdb84e6fe5ad6c99`与原package-input一致，source/installed批准、原三份报告、12正常owner、原几何和116帧正常恢复均核。本机接收摘要`.cache/serial-evidence/macos-installed-3fd-accepted.json` SHA256 `dabc1e27397420de55f705107cafd37e0e21ae64f8a372df0aa7f79f449054bc`，本机ZIP未核。准确证据和资产分别见[Mac实证](../../tests/integration/acceptance-v028-macos-arm64-20261019.md)、[资产清单](../releases/v0.28.0-macos-arm64-assets.json)。
+
 下一缺项为当前候选arm64源码普通legacy。独立`v028-macos-source-legacy.yml`仅在前一实际安装结束后触发，按固定产品三对象核对→127.0.0.1:1原预检→同job构建并封存source批准→原普通回归→再次核批准字节执行。该入口不切换显示、不安装、不重复689已核的六项源码专项，失败总上传原证据；原字体/导航/复制/关闭其它查询等门与Windows源码legacy保持。新入口语法及YAML核对通过，实际结果待新job。

@@ -1,0 +1,79 @@
+{
+  "version": "0.28.0",
+  "status": "未发布候选",
+  "productCommit": "bf08645a28fceb5d1d40ba16f013bb78e7a7c0a2",
+  "installedHead": "3fd87bb98555ba042f303762ee7a314582cb18d1",
+  "runId": 39256090941,
+  "jobId": 118071627233,
+  "sourceNative": {
+    "head": "689b35247a3a5c3345f5c0e754c5ae0742e1a33c",
+    "runId": 39240838841,
+    "jobId": 118020965684,
+    "approvalSha256": "7fa47612c9b3601943e391eba0872cda43f2829d433a036fa601640a90caeeb2",
+    "fileReportSha256": "87565d1f13503513b96d45aa76a8f8c0d0d1434f45ab0308219a1986e5d183f5",
+    "sourceSixReplayed": false
+  },
+  "sourceLegacy": {
+    "head": "0f39cf69b149a1466fa097deec554f4ff0e2f59d",
+    "runId": 39258588418,
+    "jobId": 118080052594,
+    "status": "进行中"
+  },
+  "readback": {
+    "head": "44dcf7b89d56c043586bb63b9f069db979ffedc4",
+    "runId": 39258845618,
+    "jobId": 118080923876,
+    "host": "GitHub-hosted Ubuntu",
+    "rootLocalZipValidated": false
+  },
+  "archives": [
+    {
+      "artifactId": 12189350924,
+      "name": "v028-macOS-arm64-installed-evidence-39256090941-1",
+      "apiBytes": 3953102,
+      "apiDigest": "sha256:62ba852f2569e95cf93abc3d7fcd498bbf89f64f39bfb66e07ddb244c8fe4ab6",
+      "receivedBytes": 3953102,
+      "receivedSha256": "62ba852f2569e95cf93abc3d7fcd498bbf89f64f39bfb66e07ddb244c8fe4ab6",
+      "allMemberCrcValidated": true,
+      "expiresAt": "2026-11-02T13:13:16Z"
+    },
+    {
+      "artifactId": 12188064300,
+      "name": "v028-macOS-arm64-installed-39256090941-1-unsigned",
+      "apiBytes": 339815801,
+      "apiDigest": "sha256:6d72842063537d7b3313973574a627d01a7dda1bf5266a122bd6badd5e2ac2bc",
+      "receivedBytes": 339815801,
+      "receivedSha256": "6d72842063537d7b3313973574a627d01a7dda1bf5266a122bd6badd5e2ac2bc",
+      "allMemberCrcValidated": true,
+      "expiresAt": "2026-11-02T13:13:02Z",
+      "files": [
+        {
+          "path": "DBArk-0.28.0-mac-arm64-unsigned.zip",
+          "bytes": 170300524,
+          "sha256": "2e2ef573daaa5f0273aef887d6e56a2eed5f452c45af73c5abf014f47e521f8d",
+          "crc32": "9afebc2f",
+          "applicationZipAllMemberCrcValidated": true,
+          "applicationZipMembers": 741
+        },
+        {
+          "path": "DBArk-0.28.0-mac-arm64-unsigned.dmg",
+          "bytes": 170177733,
+          "sha256": "d415a686d0a9d1d001dd57b45380007b27beb362b6f91de0cdb84e6fe5ad6c99",
+          "crc32": "9b284be9"
+        }
+      ]
+    }
+  ],
+  "sourceApprovalSha256": "9032e58b44d0ca6b1dde4a19536210acc76b8ac062c5130c8cde316762a643a6",
+  "installedApprovalSha256": "cf5835543d6473b053c0d18825a3e551db1d1ef3dd4beb92c4192a2f95b645ab",
+  "packageInputSha256": "68876564aa2e2acfc8baca4060776da442c5afc299317999b94fdf77467eae34",
+  "normalRestoreObserved": true,
+  "modeReceiptSha256": "041c57d9aaf3dfdb0768880125c96343d42dac84c31b9bc10efca6f7ebadb3d9",
+  "readbackCopy": {
+    "artifactId": 12188987112,
+    "bytes": 687626396,
+    "apiDigest": "sha256:0b27924c76aa67e4b98884a378032109df3a2ec7ebf485dacd1803947e4f683b",
+    "independentlyDownloaded": false
+  },
+  "boundary": "原DMG实际安装已验；应用ZIP只核字节及内部741成员CRC，未独立安装；未公开Release。"
+}
