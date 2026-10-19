@@ -6,6 +6,8 @@
 
 本轮重新执行的 53 项系统保存针对性单元测试、TypeScript 检查、源码构建均退出 0。构建日志 SHA256 为 `c2e77240bd41fe712b14e7b6636c35aa0099acd857f35b0f8e4db824ccedc52f`，单元日志为 `2d48d2dc8808d8f508bd5e522cf83a0a43e257944f0b4719a46265a5357e59d6`。运行清单覆盖 113 个文件，SHA256 为 `e6ca1b55ca08f796070ed4b880af376b0270aa7994a0d93545170102f154604e`。
 
+随后固定文档/测试头 `4d41e1b73ec03d226a7aeeb5f2dfff10a4be3ea0` 的完整Linux CI [39237855605](https://github.com/zhao-yc/DBArk/actions/runs/39237855605) / job `118011213539` 成功：561文件、10643项通过、10条件跳过，类型与构建成功。Root保留原解码日志163234字节，SHA256 `f140be3cebde0b019e8e272be9edda51c13ad282fbaa6ee20c7f4f505c4d7b15`；桌面、组件剪贴板、安装和发行任务均跳过。这项CI和前述Windows系统输入分别记录，不互相替代。
+
 固定 `127.0.0.1:1` 在授权提升环境单次预检得到 ECONNREFUSED 并关闭原 socket。集成数据库开关为 0；不含数据库凭据、不执行 SQL、不使用系统剪贴板。
 
 ## 原失败与控制步骤修正
