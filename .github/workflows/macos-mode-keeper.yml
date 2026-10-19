@@ -1,6 +1,6 @@
 # Root已批准：仅新GitHub-hosted临时arm64 job，forSession失败保留，不用于本机或自托管。
-# 本次只执行单次源码缩进+分栏；不覆盖首次文件四例或installed，不把source绿色转给安装。
-name: 0.28 Mac arm64单次源码与原布局
+# 同一原600秒租约覆盖源码缩进/分栏及首次文件四例；不把source绿色转给installed。
+name: 0.28 Mac arm64源码布局及首次文件模型
 on:
   push:
     branches:
@@ -47,7 +47,7 @@ jobs:
             cat .cache/macos-mode-keeper/compile.log
             exit 1
           fi
-      - name: 一次租约覆盖原源码构建及缩进分栏链
+      - name: 一次租约覆盖原源码构建布局及首次文件四例
         env:
           MODE_KEEPER_RUNNER_ENVIRONMENT: ${{ runner.environment }}
         run: node scripts/macos-mode-keeper-ci.mjs source
@@ -73,6 +73,11 @@ jobs:
             test-results/native-editor-ci/*/failure.json
             test-results/native-editor-ci/*/started.json
             test-results/native-editor-ci/*/*.log
+            test-results/native-file-first-model-ci/source/report.json
+            test-results/native-file-first-model-ci/source/accepted.json
+            test-results/native-file-first-model-ci/source/failure.json
+            test-results/native-file-first-model-ci/source/started.json
+            test-results/native-file-first-model-ci/source/*.log
           include-hidden-files: true
           if-no-files-found: error
           retention-days: 14
