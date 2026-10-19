@@ -1,6 +1,23 @@
 import assert from 'node:assert/strict';
+import { isDeepStrictEqual } from 'node:util';
 
-export const keeperLimits = Object.freeze({ leaseSeconds: 600, failureHoldSeconds: 15, minimumVisibleWidth: 1440, minimumVisibleHeight: 1100, contentWidth: 1400, contentHeight: 1000 });
+export const keeperLimits = Object.freeze({ leaseSeconds: 600, minimumVisibleWidth: 1440, minimumVisibleHeight: 1100, contentWidth: 1400, contentHeight: 1000 });
+
+/** 只允许已知from/to的CG与AppKit异步过渡；第三种模式/矩形不是可等待状态。 */
+export function classifyModeTransition(snapshot, from, to, requireSpace) {
+  assert.equal(snapshot.displays.length,1);
+  const display=snapshot.displays[0], frame=display.framePoints, visible=display.visibleFramePoints;
+  assert.equal(display.mirrored,false); assert.equal(display.backingScaleFactor,1);
+  const fromMode=isDeepStrictEqual(display.currentMode,from), toMode=isDeepStrictEqual(display.currentMode,to);
+  assert.ok(fromMode || toMode,'CG已漂移到未知模式');
+  const fromFrame=frame.width===from.logicalWidth && frame.height===from.logicalHeight;
+  const toFrame=frame.width===to.logicalWidth && frame.height===to.logicalHeight;
+  assert.ok(fromFrame || toFrame,'AppKit已漂移到未知矩形');
+  assert.ok(Number.isFinite(visible.width) && Number.isFinite(visible.height) && visible.width>0 && visible.height>0);
+  assert.ok(visible.width<=Math.max(from.logicalWidth,to.logicalWidth) && visible.height<=Math.max(from.logicalHeight,to.logicalHeight));
+  const enough=!requireSpace || visible.width>=keeperLimits.minimumVisibleWidth && visible.height>=keeperLimits.minimumVisibleHeight;
+  return toMode && toFrame && enough ? 'ready' : 'waiting';
+}
 
 /** 仅从当次完整列表提出候选；可见区估算不是模式切换或原生客户区已验。 */
 export function selectModeCandidate(inventory) {
@@ -35,13 +52,19 @@ export function selectModeCandidate(inventory) {
 export function acceptKeeperEvent(state, event, now) {
   assert.ok(!state.failed && Number.isFinite(now) && now >= state.last && now < state.deadline, '原keeper租约失效');
   assert.equal(event.nonce, state.nonce); assert.equal(event.seq, state.seq + 1);
-  assert.ok(['inventory','ready','pulse','restored','failed'].includes(event.type));
+  assert.ok(['inventory','transition','ready','pulse','restored','failed'].includes(event.type));
   if (event.type === 'failed') throw Error('keeper原失败：' + event.reason);
   if (event.type === 'inventory') assert.equal(state.phase, 'starting');
+  else if (event.type === 'transition') {
+    assert.ok(['selected','releasing'].includes(state.phase));
+    assert.equal(event.snapshot.displays[0].displayID,state.original.displayID);
+    assert.equal(classifyModeTransition(event.snapshot,state.phase==='selected'?state.original.currentMode:state.plan.mode,state.phase==='selected'?state.plan.mode:state.original.currentMode,state.phase==='selected'),'waiting');
+  }
   else if (event.type === 'ready' || event.type === 'pulse') {
     if (event.type === 'ready') assert.equal(state.phase, 'selected');
     else assert.ok(['ready','releasing'].includes(state.phase));
     const display = event.snapshot.displays[0];
+    assert.equal(display.displayID,state.plan.displayID);
     assert.deepEqual(display.currentMode, state.plan.mode); assert.equal(display.backingScaleFactor, 1);
     assert.equal(display.mirrored, false); assert.equal(event.snapshot.displays.length, 1);
     assert.ok(display.visibleFramePoints.width >= keeperLimits.minimumVisibleWidth && display.visibleFramePoints.height >= keeperLimits.minimumVisibleHeight);
@@ -52,5 +75,5 @@ export function acceptKeeperEvent(state, event, now) {
     assert.deepEqual(event.snapshot.displays[0].currentMode,state.original.currentMode);
     assert.equal(event.snapshot.displays[0].displayID,state.original.displayID);
   }
-  return { ...state, seq: event.seq, last: now, phase: event.type === 'inventory' ? 'inventoried' : event.type === 'pulse' ? state.phase : event.type };
+  return { ...state, seq: event.seq, last: now, phase: event.type === 'inventory' ? 'inventoried' : ['pulse','transition'].includes(event.type) ? state.phase : event.type };
 }

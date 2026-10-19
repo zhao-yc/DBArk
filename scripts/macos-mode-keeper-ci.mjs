@@ -1,4 +1,4 @@
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { randomBytes, createHash } from 'node:crypto';
 import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { resolve, join } from 'node:path';
@@ -10,6 +10,7 @@ import { keeperLimits, selectModeCandidate, acceptKeeperEvent } from './macos-mo
 export function requireKeeperCI(args, platform, arch, env) {
   assert.deepEqual(args, ['source']); assert.equal(platform, 'darwin'); assert.equal(arch, 'arm64');
   assert.equal(env.GITHUB_ACTIONS, 'true'); assert.equal(env.GITHUB_REF, 'refs/heads/codex/macos-mode-keeper-20261019');
+  assert.equal(env.MODE_KEEPER_RUNNER_ENVIRONMENT,'github-hosted');
   assert.match(env.GITHUB_SHA ?? '', /^[a-f0-9]{40}$/);
   for (const name of ['GITHUB_RUN_ID','GITHUB_RUN_ATTEMPT','GITHUB_JOB']) assert.match(env[name] ?? '', /^[a-zA-Z0-9_-]+$/);
   for (const key of Object.keys(env)) assert.ok(!/^(DBARK_|NODE_OPTIONS$|NODE_PATH$|ELECTRON_RUN_AS_NODE$|DYLD_|LD_PRELOAD$)/i.test(key), '模式准备前拒绝外部入口/原生门/预加载环境');
@@ -57,10 +58,15 @@ export function requireOriginalLayoutGeometry(report, plan) {
 async function run() {
   requireKeeperCI(process.argv.slice(2),process.platform,process.arch,process.env);
   const project = fileURLToPath(new URL('../',import.meta.url)), output = join(project,'.cache/macos-mode-keeper');
+  // 在任何显示资源之前绑定本job的原checkout；只读Git检查，不替代后续原CI批准。
+  const head=spawnSync('git',['rev-parse','HEAD'],{cwd:project,encoding:'utf8'});
+  const dirty=spawnSync('git',['status','--porcelain','--untracked-files=no'],{cwd:project,encoding:'utf8'});
+  assert.equal(head.status,0);assert.equal(head.stdout.trim(),process.env.GITHUB_SHA);
+  assert.equal(dirty.status,0);assert.equal(dirty.stdout.trim(),'');
   mkdirSync(output,{recursive:true});
   const nonce = randomBytes(32).toString('hex'), start = performance.now();
   let state = {nonce,seq:0,last:start,deadline:start+keeperLimits.leaseSeconds*1000,phase:'starting',failed:false};
-  let fault, bytes = 0, buffer = Buffer.alloc(0), readyResolve, readyReject, nativeRunning = false, keeperEnded = false;
+  let fault, bytes = 0, buffer = Buffer.alloc(0), readyResolve, readyReject, nativeRunning = false, keeperEnded = false, nativeResult, originalProofsConsumed=false;
   const journal = join(output,'keeper.jsonl'); writeFileSync(journal,'',{flag:'wx'});
   const ready = new Promise((done,reject)=>{readyResolve=done;readyReject=reject;}); void ready.catch(()=>{});
   const keeper = spawn(join(output,'keeper'),['--hold','600',nonce],{cwd:project,stdio:['pipe','pipe','inherit']});
@@ -107,7 +113,7 @@ async function run() {
     // 原脚本完整保留：同次构建/批准、缩进后分栏、原TestInfo期限、断言及退出证明均不改。
     const native=spawn(process.execPath,['scripts/native-editor-ci.mjs','source'],{cwd:project,env:process.env,stdio:'inherit'});
     const result=await new Promise(done=>{native.once('error',()=>done({code:null,signal:'启动失败'}));native.once('close',(code,signal)=>done({code,signal}));});
-    nativeRunning=false;
+    nativeRunning=false; nativeResult=result;
     assert.equal(result.code,0); assert.equal(result.signal,null); assert.ok(!fault && !keeperEnded && performance.now()<state.deadline);
     requireOriginalCompletion(JSON.parse(readFileSync(join(project,'test-results/native-editor-ci/source-completed.json'),'utf8')));
     const layoutDirectory=join(project,'test-results/native-editor-ci/source-layout');
@@ -115,14 +121,15 @@ async function run() {
     const accepted=JSON.parse(readFileSync(join(layoutDirectory,'accepted.json'),'utf8'));
     assert.equal(accepted.reportSha256,createHash('sha256').update(reportBytes).digest('hex'));
     requireOriginalLayoutGeometry(JSON.parse(reportBytes.toString('utf8')),state.plan);
+    originalProofsConsumed=true;
     assert.ok(!fault && !keeperEnded && performance.now()<state.deadline);
     state={...state,phase:'releasing'}; keeper.stdin.write(JSON.stringify({action:'release',nonce})+'\n');
   } catch (error) { retain(error instanceof Error ? error.message : '父控制器失败'); }
   finally { clearTimeout(timer); }
-  // 原应用失败不强停；只等待自有keeper按租约/失败15秒自退，恢复不作为产品通过证据。
+  // 先等待原native CLI自然返回，再等待keeper。失败不恢复显示、不强停应用；session模式供原证据上传期间继续保留。
   const result=await exited;
   const accepted=!fault && state.phase==='restored' && result.code===0 && result.signal===null;
-  writeFileSync(join(output,'receipt.json'),JSON.stringify({accepted,fault:fault??null,keeper:result,normalRestoreObservedBeforeKeeperExit:state.phase==='restored',postKeeperExitRestoreObserved:false,applicationForceStop:false,nativeOriginalAssertionsUnchanged:true},null,2)+'\n',{flag:'wx'});
+  writeFileSync(join(output,'receipt.json'),JSON.stringify({accepted,fault:fault??null,keeper:result,modeScope:'forSession',originalNativeCLIResult:nativeResult??null,originalProofsConsumed,allFailureEvidenceCompleteConfirmed:false,artifactUploadConfirmed:false,keeperExitRestorationRequested:false,normalRestoreObservedBeforeKeeperExit:state.phase==='restored',postKeeperExitRestoreObserved:false,applicationForceStop:false,nativeOriginalAssertionsUnchanged:true,evidenceBoundary:'仅原CLI返回后已写出的文件可供下一步upload-artifact读取；中断可能没有完整report，未知应用/profile未补读。上传成功须以后续step的artifact-id/digest另证，不由本receipt冒充。'},null,2)+'\n',{flag:'wx'});
   if (!accepted) throw Error('模式保有/原native/恢复证明未完整闭合；原失败保留');
 }
 

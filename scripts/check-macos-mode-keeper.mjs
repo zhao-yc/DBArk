@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
-import { selectModeCandidate, acceptKeeperEvent } from './macos-mode-keeper-policy.mjs';
+import { selectModeCandidate, acceptKeeperEvent, classifyModeTransition } from './macos-mode-keeper-policy.mjs';
 import { requireKeeperCI, requireOriginalCompletion, requireOriginalLayoutGeometry } from './macos-mode-keeper-ci.mjs';
 
 // 仅离线校验已授权原JSON，必须显式传原文件及其SHA；不导入或执行Swift/AppKit/native模块。
@@ -23,7 +23,7 @@ rejectInventory('模式像素/逻辑比例变化拒绝',v=>{v.displays[0].availa
 rejectInventory('可见区大于原屏幕的坏数据拒绝',v=>{v.displays[0].visibleFramePoints.height=900;});
 rejectInventory('未知显示器身份拒绝',v=>{delete v.displays[0].displayID;});
 rejectInventory('原模式不在当次系统列表则不冒险切换',v=>{v.displays[0].currentMode.modeID=99;});
-const env={GITHUB_ACTIONS:'true',GITHUB_REF:'refs/heads/codex/macos-mode-keeper-20261019',GITHUB_SHA:'a'.repeat(40),GITHUB_RUN_ID:'1',GITHUB_RUN_ATTEMPT:'1',GITHUB_JOB:'keeper'};
+const env={GITHUB_ACTIONS:'true',GITHUB_REF:'refs/heads/codex/macos-mode-keeper-20261019',GITHUB_SHA:'a'.repeat(40),GITHUB_RUN_ID:'1',GITHUB_RUN_ATTEMPT:'1',GITHUB_JOB:'keeper',MODE_KEEPER_RUNNER_ENVIRONMENT:'github-hosted'};
 check('准确CI参数静态端口通过且不创建资源',()=>requireKeeperCI(['source'],'darwin','arm64',env));
 for (const [name,args,platform,arch,change] of [['默认无参数拒绝',[],'darwin','arm64',{}],['Windows入口拒绝',['source'],'win32','x64',{}],['错误分支拒绝',['source'],'darwin','arm64',{GITHUB_REF:'refs/heads/main'}],['本地入口拒绝',['source'],'darwin','arm64',{GITHUB_ACTIONS:'false'}],['外部原生门在模式准备前拒绝',['source'],'darwin','arm64',{DBARK_QUERY_LAYOUT_NATIVE_TEST:'1'}]]) check(name,()=>assert.throws(()=>requireKeeperCI(args,platform,arch,{...env,...change})));
 const plan=selectModeCandidate(reference), nonce='b'.repeat(64), initial={nonce,seq:0,last:10,deadline:1000,phase:'starting',failed:false};
@@ -31,6 +31,17 @@ const inventory={nonce,seq:1,type:'inventory',snapshot:reference};
 const inventoried=acceptKeeperEvent(initial,inventory,11), selected={...inventoried,phase:'selected',plan,original:reference.displays[0]};
 const snapshot=clone(reference), display=snapshot.displays[0];display.currentMode=clone(plan.mode);display.framePoints={x:0,y:0,width:1600,height:1200};display.visibleFramePoints={x:0,y:63,width:1600,height:1106};display.mirrored=false;
 const readyEvent={nonce,seq:2,type:'ready',snapshot}; const ready=acceptKeeperEvent(selected,readyEvent,12);
+const lag=clone(reference);lag.displays[0].mirrored=false;lag.displays[0].currentMode=clone(plan.mode);
+check('CG已更新但NSScreen仍为原矩形是已知等待态',()=>assert.equal(classifyModeTransition(lag,reference.displays[0].currentMode,plan.mode,true),'waiting'));
+check('已知过渡帧不提前放行native也不重发apply',()=>assert.equal(acceptKeeperEvent(selected,{nonce,seq:2,type:'transition',snapshot:lag},12).phase,'selected'));
+check('CG仍为原模式而NSScreen已更新同样可等待',()=>{const inverse=clone(snapshot);inverse.displays[0].currentMode=clone(reference.displays[0].currentMode);assert.equal(classifyModeTransition(inverse,reference.displays[0].currentMode,plan.mode,true),'waiting');});
+check('CG和NSScreen均为目标且余量充足才ready',()=>assert.equal(classifyModeTransition(snapshot,reference.displays[0].currentMode,plan.mode,true),'ready'));
+check('第三种CG模式不是可等待过渡',()=>{const bad=clone(lag);bad.displays[0].currentMode=clone(reference.displays[0].availableModes[10]);assert.throws(()=>classifyModeTransition(bad,reference.displays[0].currentMode,plan.mode,true));});
+check('第三种NSScreen矩形不是可等待过渡',()=>{const bad=clone(lag);bad.displays[0].framePoints.height=900;assert.throws(()=>classifyModeTransition(bad,reference.displays[0].currentMode,plan.mode,true));});
+check('等待中过渡帧换了显示器也拒绝',()=>{const bad=clone(lag);bad.displays[0].displayID=2;assert.throws(()=>acceptKeeperEvent(selected,{nonce,seq:2,type:'transition',snapshot:bad},12));});
+check('过渡等待不延长原租约',()=>assert.throws(()=>acceptKeeperEvent(selected,{nonce,seq:2,type:'transition',snapshot:lag},1000)));
+check('恢复时原模式已更新但NSScreen仍为候选可等待',()=>{const value=clone(snapshot);value.displays[0].currentMode=clone(reference.displays[0].currentMode);assert.equal(classifyModeTransition(value,plan.mode,reference.displays[0].currentMode,false),'waiting');});
+check('session作用域拒绝self-hosted环境',()=>assert.throws(()=>requireKeeperCI(['source'],'darwin','arm64',{...env,MODE_KEEPER_RUNNER_ENVIRONMENT:'self-hosted'})));
 check('ready必须有切换后的真实模式及可见余量',()=>assert.equal(ready.phase,'ready'));
 check('原租约到期不接迟到ready',()=>assert.throws(()=>acceptKeeperEvent(selected,readyEvent,1000)));
 check('单调时钟回退拒绝',()=>assert.throws(()=>acceptKeeperEvent(selected,readyEvent,9)));

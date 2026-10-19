@@ -1,5 +1,5 @@
 {
-  "状态": "Root审阅候选，未在Mac编译、未切模式、未执行CI；workflow-candidates目录不自动执行",
+  "状态": "Root审阅的forSession修订候选，未在Mac编译、未切模式、未执行CI；workflow-candidates目录不自动执行",
   "基线": "8b6bdea014221ae5fc64ebedef5827a7edbd8b91",
   "原枚举": {
     "run": 39206829471,
@@ -15,27 +15,39 @@
     "从当次keeper进程的公开API完整枚举选择，不把原mode9或displayID1写死当作未来身份；参考JSON仅用于离线策略校验。",
     "只接受同镜像、arm64、单活动非镜像主屏、scale1及清楚的点/像素对应；变化或未知先失败。",
     "用当前frame-visibleFrame差值估算候选，要求至少1440x1100可见余量；按最小模式面积选择。原样本选择1600x1200，估计可见1600x1106；1920x1080估计986点高不足。估算不代表实测。",
-    "只提交一次系统已枚举模式，不生成模式、不调zoom、viewport、DOM或产品。提交后最多5秒取得两次相同原模式和真实可见区域；保有期间每秒再验证。",
+    "只提交一次系统已枚举模式，不生成模式、不调zoom、viewport、DOM或产品。提交后最多5秒取得两次相同原模式和真实可见区域；保有期间每秒再验证。CG已到目标而NSScreen仍在原矩形，或反向的已知异步过渡可以等待；仅允许from/to两套模式及矩形，第三种模式/矩形、拓扑/缩放漂移立即失败，不重复configure。稳定保有阶段不借过渡等待容忍模式回退。",
     "原native构建/批准/缩进+分栏脚本、同owner/TestInfo期限、maximum>410、360/370/340/390、480收缩/1000恢复、SQLite9与退出链逐字保留。",
     "原CLI完整成功后再消费原分栏报告的四次stable尺寸附件：1400x1000、1400x480、1400x1000、1400x1000必须真实达到，原窗口/workArea/DIP/zoom诊断必须有效且窗口在workArea内；稳定的645不得通过候选外围门。报告绑定原accepted中的SHA。"
   ],
   "生命周期与失败": [
-    "使用CGBeginDisplayConfiguration、CGConfigureDisplayWithDisplayMode、CGCompleteDisplayConfiguration(.forAppOnly)，不使用session/permanent或CGRestorePermanentDisplayConfiguration。",
+    "原forAppOnly方案会在keeper自退时撤销配置，不能满足上传前保留未知应用现场，故本修订改为CGCompleteDisplayConfiguration(.forSession)。它不是永久设置；只允许明确的github-hosted临时job上下文，禁止本机/self-hosted，实际启用仍待Root审定。",
     "同一Swift进程保有配置，600秒单调期限不可续租。Node只握原keeper和原native CLI句柄，不kill应用、runner或未知PID。",
     "正常链只有原native成功且两专项四owner正常退出证明闭合，才发release；keeper确认原显示器及原模式仍在当次列表，再临时恢复原模式并稳定读回，最后exit0。",
-    "恢复读回是keeper退出前观察。Apple对forAppOnly的承诺是进程结束后回到当前登录会话配置；退出后未再探测，不声称与此前瞬时模式严格相同。",
-    "原native非零、EOF、坏帧、模式漂移、原期限结束永久停链；失败后只用已有内存记录，不再做显示SDK读取或显式模式恢复。keeper最多再保有15秒（不超过原600秒），随后以78自退；OS自动恢复仅为文档预期、未实测。",
-    "有界自退不可兼得无限期保留失败时显示状态：自退后系统可能改变仍存活未知应用的显示环境。此副作用必须作为失败证据边界记录，不能声称原显示场景始终不变，也不能据此改绿原失败。",
+    "正常恢复读回是keeper退出前观察，恢复也用forSession显式设回捕获的原系统模式。session配置不因keeper退出而撤销；退出后未再探测，不声称已测得其后状态。",
+    "原native非零、EOF、坏帧、模式漂移、原期限结束永久停链；失败后只用已有内存记录，不再做显示SDK读取或显式恢复，keeper以78自退。forSession生命周期覆盖当前登录会话，故keeper自退不会主动撤销配置，不需要赌原报告或artifact在15秒内上传完。",
+    "失败后显示会话保留当时状态供原child自然结束及artifact上传，不发模式恢复、退出登录、VM重启/销毁或应用强停。GitHub托管每job使用新VM；最终会话/VM由平台自然处置，具体终止时间没有独立测量，也不作为应用正常退出证明。",
     "模式API是同步系统调用，调用内部卡死不能由调用前后期限门抢占；父控制器不强停未知应用或伪造恢复。runner/job截止或系统异常退出均属于未知终态，不能获得通过。",
     "Swift未提交事务在configure失败/到期时仅释放自有token；complete调用后不重用token、不循环补偿或换模式。"
   ],
+  "原失败证据持久化的准确边界": [
+    "Playwright原report与内嵌附件由原child写出。原child异常中断时report可能缺失或不完整；不得声称所有原始失败证据已完整保存。",
+    "原native-editor-ci在spawnSync返回后先用saveCommand写playwright.stdout.log和stderr.log，再检查退出码；失败分支另写failure.json。写盘失败仍是失败；原Node CLI close不代表未知Electron owner已退出。",
+    "控制器先等原Node CLI自然返回，不发送kill或关闭未知应用；再写自有receipt/journal。这只是VM内文件写入完成边界，不宣称磁盘掉电持久化，也未补读未知应用/profile、SDK或PID。",
+    "receipt明确记录allFailureEvidenceCompleteConfirmed=false及artifactUploadConfirmed=false。只有后续upload-artifact成功并给出artifact-id/digest，才能称该上传路径集合已交服务端；这仍不是ZIP独立下载/CRC或内容独审。",
+    "候选CI将原JSON/log及自有journal/receipt全部列入always上传；上传后单独打印outcome/id/digest。原native失败不会被后续成功上传改绿。上传失败/取消/job截止都保留失败或未知结论。",
+    "在上述阶段之间没有主动显示恢复或应用强停；session作用域使keeper寿命与上传耗时解耦。系统原生调用卡死等平台异常仍可能导致缺证，不能以免责声明声称已满足全部证据保存。"
+  ],
   "官方支持与推断": {
     "forAppOnly": "https://developer.apple.com/documentation/coregraphics/cgconfigureoption/forapponly?language=objc",
+    "forSession": "https://developer.apple.com/documentation/coregraphics/cgconfigureoption/forsession?language=objc",
+    "GitHub新VM上下文": "https://docs.github.com/en/actions/reference/runners/github-hosted-runners",
+    "AppKit屏幕变化通知": "https://developer.apple.com/documentation/appkit/nsapplication/didchangescreenparametersnotification",
     "事务模式": "https://developer.apple.com/documentation/coregraphics/cgconfiguredisplaywithdisplaymode(_:_:_:_:)",
     "直接Set模式差异": "https://developer.apple.com/documentation/coregraphics/cgdisplaysetdisplaymode(_:_:_:)",
     "恢复永久配置不同于捕获原瞬时模式": "https://developer.apple.com/documentation/coregraphics/cgrestorepermanentdisplayconfiguration()",
-    "支持事实": "forAppOnly随当前应用生命期保有，结束回到当前登录会话；直接Set文档描述回到永久设置；事务配置镜像集合可能连带其他屏，因此候选明确拒绝镜像/多屏。",
+    "支持事实": "forAppOnly随当前应用生命期保有；forSession随当前登录会话保有、会话结束后回到最后永久配置；直接Set文档描述回到永久设置。候选不用永久配置/恢复永久API；事务可能影响镜像集合，因此拒绝镜像/多屏。",
     "推断": "旧94点损失可用于保守选候选，但模式切换后菜单/Dock/缩放可能变化；只靠列表不能证明实际切换或原生布局已通过。",
+    "时序边界": "官方AppKit文档说明显示配置改变时在main actor发布通知；本次资料没有承诺CG事务返回与NSScreen getter同刻一致或5秒内更新。已知from/to过渡是候选的保守等待规则，由RAM覆盖，5秒是自身上界，不是OS保证；实际更新仍待Mac测量。",
     "未验": "新增Swift编译、事务支持、真实切换/恢复、NSScreen更新时序、原窗口真实客户区及本候选R10全链。"
   },
   "范围": "新普通clone和独立分支；只新增文件；不复写旧probe、不改Root/原CI/产品/native脚本/原证据，不碰员工1四例首次文件模型及安装CI；当前无push/CI/GUI/模式变化/下载。",

@@ -48,8 +48,11 @@ jobs:
             exit 1
           fi
       - name: 一次租约覆盖原源码构建及缩进分栏链
+        env:
+          MODE_KEEPER_RUNNER_ENVIRONMENT: ${{ runner.environment }}
         run: node scripts/macos-mode-keeper-ci.mjs source
       - name: 保留原报告及keeper证据
+        id: evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
@@ -70,3 +73,12 @@ jobs:
           include-hidden-files: true
           if-no-files-found: error
           retention-days: 14
+      - name: 明确归档上传终态
+        if: always()
+        env:
+          UPLOAD_OUTCOME: ${{ steps.evidence.outcome }}
+          UPLOAD_ID: ${{ steps.evidence.outputs.artifact-id }}
+          UPLOAD_DIGEST: ${{ steps.evidence.outputs.artifact-digest }}
+        run: |
+          printf 'upload-outcome=%s\nartifact-id=%s\nartifact-digest=%s\n' "$UPLOAD_OUTCOME" "$UPLOAD_ID" "$UPLOAD_DIGEST"
+          test "$UPLOAD_OUTCOME" = success
