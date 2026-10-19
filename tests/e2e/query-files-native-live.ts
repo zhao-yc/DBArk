@@ -95,7 +95,8 @@ async function restart(run: EditorIndentNativeRun, first: IndentNativeOwner, fil
 /** 只给第二例这个owner的已知dirty原草稿退出一次；暂停原提示后再核父进程门，不改dirty或退出实现。 */
 async function closeDirtyOwner(run: EditorIndentNativeRun, owner: IndentNativeOwner, scope: { assertCurrent(): void }, info: IndentNativeTestInfo, witnesses: object[]) {
   const application = owner.application, page = owner.page, before = await workspace(run, owner), dirty = before.tabs.map((tab, index) => ({ tab, index })).filter(value => value.tab.fileSourceBinding && value.tab.sql === draftSql);
-  expect(dirty).toHaveLength(1); await run.step(owner, () => expect(page.locator('.query-tab').nth(dirty[0].index).getByRole('status', { name: text.fileSource, exact: true })).toContainText(text.dirty)); await noSql(run, owner);
+  // 重读后来源草稿位于非活动标签；只读核对其脏标记，不切换当前标签或改写草稿。
+  expect(dirty).toHaveLength(1); await run.step(owner, () => expect(page.locator('.query-tab').nth(dirty[0].index).getByRole('status', { name: text.fileSource, exact: true, includeHidden: true })).toContainText(text.dirty)); await noSql(run, owner);
   const handle = await run.step(owner, () => application.browserWindow(page)), window = await run.step(owner, () => handle.evaluate(value => ({ window: value.id, contents: value.webContents.id }))); await run.step(owner, () => handle.dispose());
   const start = Object.hasOwn(info, '_startWallTime') ? info._startWallTime : Number(info.startTime), choice = { ...window, nonce: randomUUID(), deadline: Number(start) + 120000 };
   const witness = { owner: run.owners.indexOf(owner), ...window, nonce: choice.nonce, pid: 0, pending: 0, consumed: 0, failed: false, completed: false }; witnesses.push(witness);
