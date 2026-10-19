@@ -45,3 +45,11 @@
 对应修正仅把确认等待移到原六项之后、legacy之前，600秒租约、原测试期限和原断言不变。新安装入口先恢复显示，再跑原legacy；两者均成功才规范清理。48项相关检查与完整类型检查通过，两个VM夹具改用async包装以执行原完整控制块，原断言保留。下一次仅在新隔离job验证此必要调度差异，不重试或补清旧运行；源码六项仍复用既有689证明。
 
 安装版系统保存、关键字专项和x64不由这次接线证明；最终状态仍以[验收矩阵](../../tests/integration/acceptance-v028-release-matrix-20261019.md)及后续原报告更新为准。
+
+## 第三轮原job成功，归档独立回读继续
+
+固定`3fd87bb98555ba042f303762ee7a314582cb18d1`的[run39256090941/job118071627233](https://github.com/zhao-yc/DBArk/actions/runs/39256090941/job/118071627233)已成功。原六项后恢复到1024×768原模式，journal116帧最后为restored；receipt accepted=true、原test-packaged退出0、原两专项/四例证明已消费，正常恢复在keeper退出之前完成。随后原legacy76通过/313跳过（8.8分钟），13:13:00.930Z原脚本确认测试安装及临时目录已清理。原receipt SHA256 `041c57d9aaf3dfdb0768880125c96343d42dac84c31b9bc10efca6f7ebadb3d9`；源/安装普通回归和已核原生六项仍分层计证。
+
+本轮候选artifact12188064300为339815801字节，API digest `6d72842063537d7b3313973574a627d01a7dda1bf5266a122bd6badd5e2ac2bc`；证据artifact12189350924为3953102字节，API digest `62ba852f2569e95cf93abc3d7fcd498bbf89f64f39bfb66e07ddb244c8fe4ab6`。这些尚待独立接收ZIP/CRC和原报告摘要核准，不冒称API摘要即本机校验。旧5a失败及其安装根边界保持。
+
+下一缺项为当前候选arm64源码普通legacy。独立`v028-macos-source-legacy.yml`仅在前一实际安装结束后触发，按固定产品三对象核对→127.0.0.1:1原预检→同job构建并封存source批准→原普通回归→再次核批准字节执行。该入口不切换显示、不安装、不重复689已核的六项源码专项，失败总上传原证据；原字体/导航/复制/关闭其它查询等门与Windows源码legacy保持。新入口语法及YAML核对通过，实际结果待新job。

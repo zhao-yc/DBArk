@@ -1,0 +1,68 @@
+name: 0.28 Mac arm64源码普通回归缺项
+on:
+  push:
+    branches:
+      - codex/v028-serial-closeout-20261019
+    paths:
+      - .github/workflows/v028-macos-source-legacy.yml
+      - scripts/v028-macos-source-legacy.mjs
+permissions:
+  contents: read
+concurrency:
+  group: v028-arm64-source-legacy-${{ github.run_id }}-${{ github.run_attempt }}
+  cancel-in-progress: false
+jobs:
+  arm64-source-legacy:
+    runs-on: macos-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - run: corepack enable
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm exec install-electron
+      - name: 核准冻结产品与真实arm64宿主
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(uname -m)" = arm64
+          test "$(git rev-parse HEAD:src)" = 20ff372f4cbc5c466e79d847afda2cb57f55426e
+          test "$(git rev-parse HEAD:package.json)" = 3ff5c4d3b652bb0cc8de0e2584c26119869792da
+          test "$(git rev-parse HEAD:pnpm-lock.yaml)" = f4e286fab9eb730c5f4880d6cb08fead0bf8e608
+      - name: 固定离线端口单次预检
+        run: node scripts/check-offline-query-port.mjs
+      - name: 同次构建并封存源码字节（不重复六项原生专项）
+        id: source-build
+        run: node scripts/v028-macos-source-legacy.mjs build
+        env:
+          SOURCE_LEGACY_RUNNER_ENVIRONMENT: ${{ runner.environment }}
+      - name: 原源码普通回归前复核批准
+        run: node scripts/v028-macos-source-legacy.mjs verify
+        env:
+          SOURCE_LEGACY_RUNNER_ENVIRONMENT: ${{ runner.environment }}
+          SOURCE_LEGACY_APPROVAL_SHA256: ${{ steps.source-build.outputs.approval_sha256 }}
+      - name: 原源码普通回归（原模式，不切显示器）
+        run: pnpm exec playwright test --output=test-results/legacy-source
+        env:
+          DBARK_INTEGRATION_ENABLED: '0'
+          DBARK_W03_SAVED_QUERY_NAVIGATION_TEST: '1'
+          DBARK_EDITOR_FONT_NATIVE_TEST: '1'
+          DBARK_QUERY_DUPLICATE_NATIVE_TEST: '1'
+          DBARK_QUERY_CLOSE_OTHERS_NATIVE_TEST: '1'
+          DBARK_SNIPPETS_NATIVE_DIAGNOSTICS: '1'
+      - name: 回归后复核源码批准未漂移
+        run: node scripts/v028-macos-source-legacy.mjs verify
+        env:
+          SOURCE_LEGACY_RUNNER_ENVIRONMENT: ${{ runner.environment }}
+          SOURCE_LEGACY_APPROVAL_SHA256: ${{ steps.source-build.outputs.approval_sha256 }}
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: v028-macOS-arm64-source-legacy-${{ github.run_id }}-${{ github.run_attempt }}
+          path: test-results/
+          if-no-files-found: warn
+          retention-days: 14

@@ -20,7 +20,7 @@
 | Windows源码缩进/分栏 | 固定4a2bcd4/run39244695054/job118033672863两专项通过；回读39250949911核同次批准、原footer/报告摘要及4个正常owner，原尺寸断言保持 | 本项已闭环；旧df03281分栏1008×655失败及未知退出仍保留，不由新成功改判 |
 | Windows源码首次模型/格式化四例 | 同一4a2/run源码批准，LF/CRLF×按钮/格式化快捷键4通过、8正常owner；原文件身份、schema9、独立重启及目录均核 | 本项已闭环；不计作系统保存快捷键通过 |
 | Windows真实安装 | 原NSIS DBArk-0.28.0-win-x64-unsigned.exe实际安装，installed批准绑定同次源码及安装前参考；缩进/分栏/四例6通过、12正常owner；legacy76通过/313跳过；规范卸载及临时根清理 | 本范围已闭环，详见[Windows准确记录](acceptance-v028-windows-success-20261019.md)；系统CtrlS安装、关键字及其余条件门仍未验 |
-| macOS arm64源码/安装 | 689源码六项与12正常owner已核；5a4ca1b/run39253421880的installed六项也通过、12正常owner，legacy76通过/313跳过，但整体因600秒租约届满/恢复失败而失败，原安装根保留。只读回读39255801179核原报告及ZIP/CRC，见[安装记录](../../docs/development/v028-macos-installed-20261019.md) | 调整为六项后恢复显示再跑原legacy，须新隔离job闭合显示恢复/安装清理及候选资产；旧失败不改判，不重复已核源码六项，不转作系统CmdS通过 |
+| macOS arm64源码/安装 | 689源码六项与12正常owner已核；新3fd87bb/run39256090941/job118071627233已成功：原安装六项、正常显示恢复、legacy76通过/313跳过及规范清理。旧5a租约失败及原安装根边界保持，见[安装记录](../../docs/development/v028-macos-installed-20261019.md) | 本轮安装候选/原证据ZIP独立字节/SHA/CRC及原报告回读待核；源码普通legacy另以新job补验，不重复689六项，不转作系统CmdS或关键字通过 |
 | macOS x64源码/安装 | 旧R9与未知/失败保持 | 同上，必须以本架构原报告确认，不借arm64替代 |
 | SQL文件系统CtrlS保存 | 固定ddeed3c的Windows源码新nonce18c06a58单次实测通过：系统输入一次、原字节/revision/任务/SQLite9/重启及两正常owner闭合；原run1929和首轮控制标签错误失败分别保留 | 对应真实安装场景仍待执行，不以源码代替；详见本轮源码实测记录 |
 | macOS真实系统CmdS | 新系统输入门仅Windows；源码机制研究不算实测 | 未验，不把CDP或Windows系统输入计为Mac通过；发布决策须明确该边界 |
