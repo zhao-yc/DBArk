@@ -114,6 +114,16 @@ describe('复制结构真实对话框反例（内存ReactDOM，不冒充原生�
     await mount({ get: async () => ({ ...snapshot(), writable: false, reasons: ['含自增列，首片只读'] }) });
     expect(document.querySelector('textarea[aria-label="预览SQL"]')!.value).toBe(snapshot().sourceDdl); expect(button(text.preview).disabled).toBe(true); expect(document.body.textContent).toContain('含自增列，首片只读'); expect(services.preview).not.toHaveBeenCalled();
   });
+  it.each(['稳定', '递增'] as const)('受控%s时钟下延后完成get，来源提交须展示完整只读定义', async mode => {
+    // 稳定时钟不触发setClock重渲染，递增时钟触发原effect；两种都不能靠等待补正文。
+    let tick = 0; vi.spyOn(Date, 'now').mockImplementation(() => 1900000000000 + (mode === '递增' ? tick++ : 0)); const pending = deferred<TableCopyStructureGetOutput>();
+    await mount({ get: () => pending.promise }); expect(document.querySelector('textarea[aria-label="预览SQL"]')).toBeNull();
+    await act(async () => pending.resolve({ ...snapshot(), writable: false, reasons: ['含自增列，首片只读'] }));
+    const source = document.querySelector('textarea[aria-label="预览SQL"]')!;
+    expect(source.value).toBe(snapshot().sourceDdl); expect(source.getAttribute('readonly')).not.toBeNull();
+    expect(button(text.preview).disabled).toBe(true); expect(document.body.textContent).toContain('含自增列，首片只读');
+    expect(services.get).toHaveBeenCalledTimes(1); expect(services.preview).not.toHaveBeenCalled(); expect(services.apply).not.toHaveBeenCalled();
+  });
   it('已有预览到期同步禁执行，不能借已填确认文字重放', async () => {
     const nativeSet = window.setTimeout, nativeClear = window.clearTimeout;
     vi.useFakeTimers(); Object.assign(window, { setTimeout, clearTimeout });

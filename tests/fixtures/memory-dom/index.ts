@@ -24,6 +24,8 @@ export class MemoryNode {
   get nextSibling() { const list = this.parentNode?.childNodes ?? []; return list[list.indexOf(this) + 1] ?? null; }
   get textContent(): string { return this.text + this.childNodes.map(node => node.textContent).join(''); }
   set textContent(value: string) { for (const node of this.childNodes) node.parentNode = null; this.childNodes = []; this.text = String(value ?? ''); }
+  /** textarea默认值取直接文本子节点；不能把嵌套元素或注释正文混入默认值。 */
+  get childTextContent(): string { return this.text + this.childNodes.filter(node => node.nodeType === 3).map(node => node.nodeValue).join(''); }
   get nodeValue() { return this.text; }
   set nodeValue(value: string) { this.text = value; }
   appendChild(child: MemoryNode) { return this.insertBefore(child, null); }
@@ -45,10 +47,19 @@ export class MemoryNode {
   querySelectorAll(selector: string): MemoryNode[] { const result: MemoryNode[] = []; const matches = (node: MemoryNode) => selector.split(',').some(part => { const s = part.trim(); if (s.includes(':not(:disabled)') && node.disabled) return false; const tag = s.match(/^[a-z]+/)?.[0]; if (tag && node.tagName !== tag.toUpperCase()) return false; const attr = s.match(/\[([^=\]]+)(?:="([^"]*)")?\]/); if (attr && (attr[2] === undefined ? !node.attributes.has(attr[1]) : node.getAttribute(attr[1]) !== attr[2])) return false; return !!tag || !!attr; }); const walk = (node: MemoryNode) => { for (const child of node.childNodes) { if (child.nodeType === 1 && matches(child)) result.push(child); walk(child); } }; walk(this); return result; }
   querySelector(selector: string) { return this.querySelectorAll(selector)[0] ?? null; }
 }
+/** 只补HTML textarea的默认子文本、dirty值及LF读回合同；不扩展input或模拟浏览器布局。 */
+function textareaValue(node: MemoryNode): void {
+  let dirty = false, raw = '';
+  Object.defineProperties(node, {
+    defaultValue: { configurable: true, enumerable: true, get: () => node.childTextContent, set: (value: string) => { node.textContent = String(value); } },
+    // pristine时子文本变化立即可见；写value即变dirty，后续默认值不能覆盖当前编辑值。
+    value: { configurable: true, enumerable: true, get: () => (dirty ? raw : node.childTextContent).replace(/\r\n?/g, '\n'), set: (value: string) => { raw = String(value ?? ''); dirty = true; } },
+  });
+}
 export class MemoryDocument extends MemoryNode {
   documentElement: MemoryNode; body: MemoryNode; activeElement: MemoryNode; defaultView: unknown;
   constructor() { super('#document', 9); this.ownerDocument = this; this.documentElement = this.createElement('html'); this.body = this.createElement('body'); this.appendChild(this.documentElement); this.documentElement.appendChild(this.body); this.activeElement = this.body; }
-  createElement(name: string) { const node = new MemoryNode(name); node.ownerDocument = this; return node; }
+  createElement(name: string) { const node = new MemoryNode(name); node.ownerDocument = this; if (node.tagName === 'TEXTAREA') textareaValue(node); return node; }
   createElementNS(ns: string, name: string) { const node = this.createElement(name); node.namespaceURI = ns; return node; }
   createTextNode(text: string) { const node = new MemoryNode('#text', 3); node.ownerDocument = this; node.nodeValue = text; return node; }
   getSelection() { return { rangeCount: 0 }; }
