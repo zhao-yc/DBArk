@@ -1,4 +1,4 @@
-name: 0.28 已归档Mac报告只读回读
+name: 0.28 已归档原生报告只读回读
 on:
   push:
     branches:
@@ -6,6 +6,7 @@ on:
     paths:
       - .github/workflows/v028-artifact-readback.yml
       - scripts/read-v028-macos-artifact.mjs
+      - scripts/read-v028-windows-artifact.mjs
 permissions:
   contents: read
   actions: read
@@ -23,9 +24,9 @@ jobs:
       # 仅下载固定旧run的已上传产物；不访问失败VM或执行归档中的程序。
       - uses: actions/download-artifact@v4
         with:
-          name: macos-mode-keeper-39240838841-1
+          name: v028-Windows-evidence-39242374243-1
           github-token: ${{ github.token }}
-          run-id: 39240838841
-          path: .cache/macos-artifact-readback-39240838841
+          run-id: 39242374243
+          path: .cache/windows-artifact-readback-39242374243
       - name: 原来源、报告摘要与实际窗口坐标
-        run: node scripts/read-v028-macos-artifact.mjs
+        run: node scripts/read-v028-windows-artifact.mjs
