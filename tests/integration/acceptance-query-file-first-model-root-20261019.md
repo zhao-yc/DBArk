@@ -69,4 +69,14 @@ Root固定 `f27c85a` 在新普通clone首次构建109文件成功，新运行树
 
 与上述Windows源码专项分开，完整 [Linux检查39203597956](https://github.com/zhao-yc/DBArk/actions/runs/39203597956) 首次运行失败：job `117901551805`，555文件中554通过／1失败；10438项通过／1失败／10条件跳过，总10449，159.16秒。类型成功、构建跳过，桌面及发布未执行。
 
-原失败为 `ui-table-copy-structure.test.tsx:115`，首片不支持来源的只读定义期望完整CREATE TABLE，textarea.value实际为空。当前尚未确认原因，正在独立任务分支定位；不能先认作无关波动，也不重跑原CI求绿。原完整日志SHA256 `a1b27ae72703b6e09a0aa8cd53d3265b2db663ace81daa98ae5e1a7f9f97d7f9`，API、日志及失败统计均已封存。前一 `1bb0f9f` 完整通过和本次四例通过不覆盖这一失败。
+原失败为 `ui-table-copy-structure.test.tsx:115`，首片不支持来源的只读定义期望完整CREATE TABLE，textarea.value实际为空。该原轮没有逐次渲染轨迹，后续可控端口反例及修正见下节；不重跑原CI求绿。原完整日志SHA256 `a1b27ae72703b6e09a0aa8cd53d3265b2db663ace81daa98ae5e1a7f9f97d7f9`，API、日志及失败统计均已封存。前一 `1bb0f9f` 完整通过和本次四例通过不覆盖这一失败。
+
+## 持续CI接线与内存端口修正整合
+
+员工1 `5601179` 接入独立四例consumer，Root整合为 `9567b7b`。源码消费同job原批准及同一完整运行树；真实安装在原缩进／分栏通过后运行四例，再进入legacy。新四例不完整或后续legacy失败均保留安装根。原native-editor-ci／identity、四例正文、37 await／52 guard、schema9保持，不重签批准或另build。作者175项及类型通过，独审11个RAM场景通过，handoff SHA256 `3875050f4dd9cc7e3e785c59191e7e0d9a99d501b19dcf5cf9207fe339051c27`。
+
+Root还将run1924的准确原报告交给该consumer只读回放，四个唯一key及8个原owner全部接纳，consumer源码SHA256 `0b3c874b24e2133ee5b9b41201f4e6c65afa8ee069d4c0ffa02cdd79c0f9311a`。这是实际报告格式兼容验证，未启动原生、未生成批准，不增加执行或安装通过数。
+
+员工2 `305d135` 补齐memory-dom textarea默认子文本／value初始化及dirty值语义，Root整合为 `29f342e`。原对话框、其控制器及旧失败断言在两基线逐字相同；稳定／递增时钟配对反例表明，额外重渲染可掩盖旧端口初始化缺失。仅改fixture与测试，不改产品或延长超时，见[可控原因及准确分批验证](../../docs/testing/memory-dom-textarea-initialization-20261019.md)。作者目标34项、49直接使用文件699项分批及类型通过；首轮EPERM和beforeAll超时原件保留，未写成整轮全绿。
+
+Root在 `29f342e4053644285a0378f7ce8d8a2f68eb8657` 合并相关14文件342项／0失败／0跳过，类型通过；原f27产品运行树113封存保持。当前只增加CI执行脚本，产品src／依赖不变。新完整Linux、三平台源码与实际安装CI仍须各自终态，不能用342项或新接线替代。Mac显示模式先做真实枚举，不降低原分栏目标或用viewport伪造显示空间。

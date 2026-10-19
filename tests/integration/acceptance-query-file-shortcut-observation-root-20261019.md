@@ -11,3 +11,21 @@ Root独立外部后核只读原目录及精确源文件，源文件仍为62字�
 员工3只读独审交接SHA为`41ee70af794441c02a0f4c28c11320c1c6c00f8d19c93a5474815b8a8bea9d36`，原报告、113封存及5份审查摘要匹配；未访问SDK、失败source／SQLite，未重跑。准备从作者`d116d79`整合为`91194d5`，仅6个新文件；Root3文件56项RAM及类型通过，日志SHA`a729e332c9dab9cfed0f3b8409c082187fa105ae46ded07f5559516e90456c3e`、独立准备审查SHA`4b2348e7ad742402e0bd4c3a698057ed47ccedb07b8e67a864c46612fd10f112`。这些不替代本项失败，也不改写原run1893失败或run1896工具栏保存成功。
 
 本轮没有私网数据库、Docker、系统剪贴板或录像。macOS、安装、真实系统按键到Main菜单的完整因果链仍未验。下一步应继续区分输入通道和原菜单通知环节；不能因为测试未收到菜单消息直接增加可能双发保存的兜底。
+
+## run1929：新产品的 Main 被动分层观察
+
+固定测试 `2b038f0f0a12ba277dd5cb45a83dc557f0be2f6e`、产品构建 `f27c85ad98bca8232360de595440fe1cd5e3bd29`、新113运行树清单 `84de969207d661a1b881e4543a1ca49471166fd66d2dc7f3d451193b433e32dd`，使用新私有目录、新文件及新owner。未重跑run1906、未修改产品handler或其失败现场。
+
+Main探针先复核原来源证明中的window／contents身份，仅被动订阅该原webContents的before-input-event和原stdout；安装中的各次getter／注册分别核原期限。补丁作者129项与独审9个反例通过。Root另在原catch/finally证实附录与关闭同时失败会丢附录错误，修正后相关6文件133项及类型通过；三错误列表有直接断言，cause链由源码独审确认，未声称已有直接cause断言。该三文件独审SHA256 `dacf6851fe3a862b73b2409d57bb15d7be0eed79b0cbbd42505de34db853787b`。
+
+原报告SHA256 `d3eba2edf119ed3d9d8e396779dcfd2dff1026b7082ed666178dc7d36ec6a8c1`，退出1、0通过／1失败／0跳过／0重试，body9954毫秒、整轮56282.751毫秒；另有原45000毫秒worker teardown timeout。正常退出链未执行到，不将其写成15秒正常退出门实际超时。113运行树封存保持，无录制、剪贴板、私网数据库或Docker。
+
+只按一次Ctrl+S。原window1／contents1有焦点且未销毁；页面before和keydown均为document／editor有焦点，无模态窗、保存／打开按钮可用、editorBusy=false，keydown的ctrl=true，其余meta／shift／alt／repeat／composing=false。
+
+原Main附录精确记录4帧：菜单存在、唯一保存项；父项与保存项均enabled=true／visible=true；父项未配置accelerator，保存项枚举1=`CmdOrCtrl+S`；安装ready。没有收到符合本探针S＋Ctrl/Meta过滤条件的输入帧，不能扩写为“所有Main输入事件均未发生”。页面只有before和keydown，未观测公开onMenu或保存任务通知，observationFailed=false。
+
+原5000毫秒保存断言持续读到dirty而失败。菜单配置快照不证明系统注册或click执行；输入过滤记录缺席也不能独自证明CDP是唯一根因。没有读取其它listener是否preventDefault，不用该结果修改DOM快捷键或自动重发保存。
+
+原附件中owner的confirmed／willQuit／closed均false，记录PID为61624、25356、42560、40496、63444；其正常退出仍未知，目录未删除。原文件创建记录为62字节、dev4031449971／ino844424933478372，创建摘要仍为 `4cbe7be77f1bc25070372abbf80b3b4b467a7c7425a739633f86a2c1e1688144`。本轮失败后未补读该文件、SDK、PID或SQLite，不能把创建记录写成按键后的磁盘完整性后核；也未补解绑、强停或清理未知owner。
+
+下一步按固定Electron／Chromium／Playwright源码核输入通道，再决定独立技术夹具或真实系统按键的验证方案。此诊断没有证明Ctrl+S已保存，Windows安装／macOS及真实系统按键链继续待验。
