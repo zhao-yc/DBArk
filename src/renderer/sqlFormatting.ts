@@ -141,6 +141,11 @@ export function formatSqlEditor(editor: monaco.editor.IStandaloneCodeEditor, ind
   if (!plan) return false;
   if (editor.getModel() !== model || model.isDisposed() || model.getVersionId() !== version) throw new Error(text.unavailable);
   editor.pushUndoStop();
-  const changed = editor.executeEdits('dbark-sql-format', [{ range, text: plan.text, forceMoveMarkers: true }], selection.isEmpty() ? undefined : inverse => inverse.map(({ range }) => selection.setStartPosition(range.startLineNumber, range.startColumn).setEndPosition(range.endLineNumber, range.endColumn)));
+  const changed = editor.executeEdits('dbark-sql-format', [{ range, text: plan.text, forceMoveMarkers: true }], inverse => inverse.map(({ range }) => {
+    if (!selection.isEmpty()) return selection.setStartPosition(range.startLineNumber, range.startColumn).setEndPosition(range.endLineNumber, range.endColumn);
+    // 全文替换后的末尾光标必须随事务写入历史，否则首次标记移动后 Redo 没有结束选区。
+    // Selection 的 setter 保留方向；重复收敛到末尾，也覆盖全文缩短、旧光标晚于新末尾的情况。
+    return selection.setEndPosition(range.endLineNumber, range.endColumn).setStartPosition(range.endLineNumber, range.endColumn).setEndPosition(range.endLineNumber, range.endColumn);
+  }));
   editor.pushUndoStop(); if (!changed) throw new Error(text.unavailable); editor.focus(); return true;
 }
