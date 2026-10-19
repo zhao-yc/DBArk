@@ -17,7 +17,7 @@ function fixture(){
  // 真实详情初始无绑定；失效仍调用真实控制器及空值状态回执。
  const resultSorter=new QueryResultSort(),sortBinding=resultSorter.bind(result,['current',1]);
  const context=createContext({resultSorter,sortBinding,initialBinding:binding,resultSelection,rowDetails:new QueryRowDetails(),setRowDetail:vi.fn(),setActiveDetailRow:vi.fn(),zh,tab,workspace,useWorkspace:{getState:()=>workspace},connectionVersion:1,alive:{current:true},busyRef:{current:false},document:{querySelector:()=>null},setExportSelected:vi.fn(),setExportResult:vi.fn(),refreshResultSelection:vi.fn(),setError:vi.fn(),errorMessage:(reason:any)=>reason.message});
- const code=`(function(){const selectionBinding=initialBinding;${['resultSelectionAllowed','selectResultRows','exportSelectedRows','invalidateResultSelection'].map(name=>functions.get(name)!.getText(tree)).join('\n')}return{selectResultRows,exportSelectedRows,invalidateResultSelection};})()`;
+ const code=`(function(){const selectionBinding=initialBinding;${['resultViewCurrent','resultSelectionAllowed','selectResultRows','exportSelectedRows','invalidateResultSelection'].map(name=>functions.get(name)!.getText(tree)).join('\n')}return{selectResultRows,exportSelectedRows,invalidateResultSelection};})()`;
  const handlers=runInContext(ts.transpileModule(code,{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText,context);
  return{result,resultSelection,binding,workspace,context,handlers,select(){return handlers.selectResultRows({scope:binding,rows:result.rows,columns:result.columns,indices:new Set([1])});}};
 }

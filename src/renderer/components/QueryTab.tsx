@@ -514,10 +514,14 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
   // 详情绑定当前行视图的完整原列；排序只改行序，不把visibleColumns当成全部返回字段。
   const detailBinding = rowDetails.bind(settings.activeTabId === tab.id && !resultModal ? exportable : undefined, [tab.id, ...resultContext]);
   const currentRowDetail = rowDetail && rowDetails.valid(rowDetail) ? rowDetail : null;
+  /** 排序预算只禁排序；未取得排序租约时仍核准确原结果，原能力另核各自租约和预算。 */
+  function resultViewCurrent(expected: QueryResult | undefined): boolean {
+    return !!expected && (sortBinding ? resultSorter.view(sortBinding)?.result === expected : sourceExportable === expected);
+  }
   /** 直接读原工作区防止标签/连接/忙态ABA；内联region不放宽已有modal保护。 */
   function rowDetailAllowed(binding: QueryRowDetailsBinding | undefined): boolean {
     const workspace = useWorkspace.getState(), current = workspace.settings.tabs.find(item => item.id === tab.id);
-    return alive.current && !busyRef.current && !workspace.activeJobs[tab.id] && workspace.settings.activeTabId === tab.id && current?.kind === 'query' && current.connectionId === tab.connectionId && (workspace.connectionVersions[current.connectionId] ?? 0) === connectionVersion && !document.querySelector('[role="dialog"]') && resultSorter.view(sortBinding)?.result === binding?.result && rowDetails.current(binding);
+    return alive.current && !busyRef.current && !workspace.activeJobs[tab.id] && workspace.settings.activeTabId === tab.id && current?.kind === 'query' && current.connectionId === tab.connectionId && (workspace.connectionVersions[current.connectionId] ?? 0) === connectionVersion && !document.querySelector('[role="dialog"]') && resultViewCurrent(binding?.result) && rowDetails.current(binding);
   }
   /** 活动位置独立于勾选；RDG的视图rowIdx只用于同一视图binding，不索引原source.rows。 */
   function selectActiveDetailRow(index: number | null): void {
@@ -550,7 +554,7 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
   /** 同步读取真实工作区和操作引用；关闭、连接修订或迟到按钮均不能借旧绑定导出。 */
   function resultSelectionAllowed(binding: ResultSelectionBinding | undefined): boolean {
     const workspace = useWorkspace.getState(), current = workspace.settings.tabs.find(item => item.id === tab.id);
-    return alive.current && !busyRef.current && !workspace.activeJobs[tab.id] && workspace.settings.activeTabId === tab.id && current?.kind === 'query' && current.connectionId === tab.connectionId && (workspace.connectionVersions[current.connectionId] ?? 0) === connectionVersion && !document.querySelector('[role="dialog"]') && resultSorter.view(sortBinding)?.result === binding?.result && resultSelection.current(binding);
+    return alive.current && !busyRef.current && !workspace.activeJobs[tab.id] && workspace.settings.activeTabId === tab.id && current?.kind === 'query' && current.connectionId === tab.connectionId && (workspace.connectionVersions[current.connectionId] ?? 0) === connectionVersion && !document.querySelector('[role="dialog"]') && resultViewCurrent(binding?.result) && resultSelection.current(binding);
   }
   /** 网格只交付当前准确数组的选择，验证失败清空选择，不能回退成全结果导出。 */
   function selectResultRows(selection: ResultGridSelection): boolean {
@@ -581,7 +585,7 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
   }
   /** 只忽略本owner唯一模态；其它窗口、任务、连接修订和失效绑定均终止本次管理。 */
   function columnManagerCurrent(lease:ColumnLease):boolean {
-    if(columnLeaseRef.current!==lease||!resultSelection.current(lease.binding)||resultSorter.view(sortBinding)?.result!==lease.binding.result)return false;
+    if(columnLeaseRef.current!==lease||!resultSelection.current(lease.binding)||!resultViewCurrent(lease.binding.result))return false;
     const workspace=useWorkspace.getState(),current=workspace.settings.tabs.find(item=>item.id===tab.id),owned=document.querySelector(`[data-query-columns-owner="${lease.owner}"]`)?.querySelector('[role="dialog"]');
     return alive.current&&!busyRef.current&&!workspace.activeJobs[tab.id]&&workspace.settings.activeTabId===tab.id&&current?.kind==='query'&&current.connectionId===tab.connectionId&&(workspace.connectionVersions[current.connectionId]??0)===connectionVersion&&!closeRequest&&Array.from(document.querySelectorAll('[role="dialog"]')).every(node=>node===owned);
   }

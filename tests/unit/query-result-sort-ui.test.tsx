@@ -29,8 +29,9 @@ beforeAll(async()=>{
 afterEach(async()=>{vi.useRealTimers();if(root){await act(async()=>root!.unmount());root=undefined;}await flush();delete(window as any).dbark;vi.restoreAllMocks();ports.grids=[];ports.scroll.mockClear();document.body.textContent='';});
 afterAll(()=>{for(const[name,descriptor]of globals)if(descriptor)Object.defineProperty(globalThis,name,descriptor);else Reflect.deleteProperty(globalThis,name);});
 /** 只返回本地常量；query.execute是RAM服务端口，禁止网络、DB、实际文件或剪贴板。 */
-async function mount(){
+async function mount(prepare?: (result: QueryResult) => void){
   commands=[];exports=[];original={columns:[{key:'id',name:'同名',type:'LONGLONG'},{key:'value',name:'同名',type:'NEWDECIMAL'},{key:'words',name:'原文',type:'VAR_STRING'},{key:'bytes',name:'字节',type:'BLOB'}],rows:[{id:'18446744073709551615',value:'0.12345678901234567891',words:'晚行',bytes:{type:'binary',base64:'AA=='}},{id:'9007199254740993',value:'0.12345678901234567890',words:'中行',bytes:{type:'binary',base64:'AP8='}},{id:'2',value:'-0.00000000000000000001',words:'早行',bytes:{type:'binary',base64:''}}],truncated:true,elapsedMs:1,statement:'SELECT 原SQL'};
+  prepare?.(original);
   (window as any).dbark={onMenu:()=>()=>{},onTask:(callback:any)=>{events=callback;return()=>{};},invoke:async(command:string,input:any)=>{commands.push(command);if(['settings.save','connections.open','sessions.close'].includes(command))return;if(command==='sessions.open')return{sessionId:'s'};if(command==='query.completionState')return{databaseKnown:true,database:null,temporaryObjects:[]};if(command==='query.execute')return{results:[original,{...original,rows:original.rows.slice().reverse()}],elapsedMs:1,transactionOpen:false};if(command==='files.choose')return{token:'ram',name:'内存文件'};if(command==='files.exportResult'){exports.push(structuredClone(input));return{rows:input.result.rows.length};}throw Error('禁止外界命令：'+command);}};
   store.setState({settings:{theme:'light',sidebarWidth:260,resultLimit:1000,pageSize:100,activeTabId:'q',tabs:[{id:'q',kind:'query',connectionId:'c',title:'查询',sql:'SELECT 原SQL',databaseContext:{state:'known',database:null}}]},connections:[{id:'c',name:'RAM',group:'',color:'',dialect:'mysql',host:'offline.invalid',port:1,user:'ram'}],connectionVersions:{c:1},activeJobs:{},dirtyTabs:{}});
   function Harness(){return store(s=>s.settings.tabs).map(tab=><QueryTab key={tab.id} tab={tab} onHistory={()=>{}}/>);}const container=document.createElement('div');document.body.appendChild(container);root=createRoot(container as any);await act(async()=>root!.render(<Harness/>));await click(zh.query.text010);
@@ -93,4 +94,21 @@ it('锁定RDG的实际Enter/空格列头处理经真实QueryTab回调完成升�
 it('其它网格的服务端排序和关联选择仍按原接口回传，不接本地类型准入',async()=>{
   await mount();const row={g:'原关联对象'},onRow=vi.fn(),onSort=vi.fn();await act(async()=>root!.render(<Grid columns={[{key:'g',name:'几何',type:'GEOMETRY'}]} rows={[row]} sort={[]} onSortChange={onSort} onActiveRowChange={onRow}/>));
   expect(grid().columns[0].sortable).toBe(true);await act(async()=>{grid().onSortColumnsChange([{columnKey:'g',direction:'ASC'}]);grid().onActivePositionChange({row,rowIdx:0});});expect(onSort).toHaveBeenCalledWith([{column:'g',direction:'ASC'}]);expect(onRow).toHaveBeenLastCalledWith(row);
+});
+
+
+/** 读取真实QueryTab的父端口，区分既有网格门与新排序来源门，不自造控制器。 */
+function queryResultPort(){let fiber:any=document.querySelector('[role="grid"]');fiber=fiber[Object.keys(fiber).find(key=>key.startsWith('__reactFiber$'))!];while(fiber&&fiber.type!==Grid)fiber=fiber.return;expect(fiber).toBeDefined();return fiber.memoizedProps;}
+/** 原网格超过1024列已有选择租约限制；此处单独验证原详情父端口4096列契约。 */
+it.each([1025,4096])('%i列超排序预算保留原详情父端口，源漂移即时撤销且恢复不复活',async count=>{
+  await mount(result=>{result.columns=Array.from({length:count},(_,i)=>({key:'c'+i,name:'字段'+i,type:'VAR_STRING'}));result.rows=[Object.fromEntries(result.columns.map((c,i)=>[c.key,'原字段'+i]))];});
+  const old=grid();expect(old.rows).toBe(original.rows);expect(old.columns.every((c:any)=>!c.sortable)).toBe(true);expect(document.body.textContent).toContain(text.budget);
+  expect(button(zh.resultExport.title).disabled).toBe(true);expect(button(columnsText.open).disabled).toBe(true);
+  await act(async()=>queryResultPort().onActiveRowIndexChange(0));await click(detailsText.open);expect(document.body.textContent).toContain('原字段0');await click(detailsText.close);
+  await act(async()=>queryResultPort().onActiveRowIndexChange(0));const node=button(detailsText.open),props=Object.keys(node).find(key=>key.startsWith('__reactProps$'))!,action=(node as any)[props].onClick;
+  const sourceRows=original.rows;original.rows=sourceRows.slice();await act(async()=>action());expect(document.querySelector('[role="region"]')).toBeNull();original.rows=sourceRows;await act(async()=>action());expect(document.querySelector('[role="region"]')).toBeNull();expect(commands.filter(c=>c==='query.execute')).toHaveLength(1);
+});
+it.each(['rows','columns'] as const)('超过原功能%s预算仍仅浏览，不能借排序回退扩大选择/导出/详情',async mode=>{
+  await mount(result=>{if(mode==='rows')result.rows=Array.from({length:100001},(_,i)=>({...result.rows[0],id:String(i)}));else{result.columns=Array.from({length:4097},(_,i)=>({key:'c'+i,name:'字段'+i,type:'VAR_STRING'}));result.rows=[Object.fromEntries(result.columns.map(c=>[c.key,'原值']))];}});
+  const current=grid();expect(current.rows).toBe(original.rows);expect(current.columns.every((c:any)=>!c.sortable)).toBe(true);expect(button(zh.resultExport.title).disabled).toBe(true);expect(button(columnsText.open).disabled).toBe(true);await act(async()=>current.onActivePositionChange({row:current.rows[0],rowIdx:0}));expect(button(detailsText.open).disabled).toBe(true);expect(copy(current).size).toBe(0);expect(commands.filter(c=>c==='query.execute')).toHaveLength(1);
 });
