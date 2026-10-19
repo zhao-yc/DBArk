@@ -2,7 +2,9 @@
 
 ## 当前统筹检查点（2026-10-19）
 
-0.28 已整合文件捕获原换行保留、格式化准入和严格源码／安装原生CI接线；固定 `e0fa1dd` 本地24文件／459项、类型及新109文件构建成功。同一产品的最近SQL及来源保存两项Windows源码流程已分别取得实际通过，四个owner正常收尾、成功目录删除；首例所在整轮仍退出1，第二例独立运行绿色，按钮保存不含原生快捷键，见[正式文件验收](../tests/integration/acceptance-query-files-root-20261019.md)。本版原生CI `39189445206` 的Linux检查成功，三桌面任务失败、安装未执行；初次格式化／Undo与安装／macOS仍待对应验证。不新增完整工作包或公开发行计数，原失败均保留，见[当前证据与边界](development/query-files-native-root-20261018.md)。
+0.28 已整合文件捕获原换行保留、格式化准入和严格源码／安装原生CI接线；固定 `e0fa1dd` 本地24文件／459项、类型及新109文件构建成功。同一产品的最近SQL及来源保存两项Windows源码流程已分别取得实际通过，四个owner正常收尾、成功目录删除；首例所在整轮仍退出1，第二例独立运行绿色，按钮保存不含原生快捷键，见[正式文件验收](../tests/integration/acceptance-query-files-root-20261019.md)。本版原生CI `39189445206` 的Linux检查成功，三桌面任务失败、安装未执行；安装／macOS与保存菜单快捷键仍待对应验证。不新增完整工作包或公开发行计数，原失败均保留，见[当前证据与边界](development/query-files-native-root-20261018.md)。
+
+同一 `e0fa1dd` 产品的首次格式化按钮／快捷键两例Windows源码已完整绿色：真实文件／Main LF、模型CRLF、触发前零编辑，一次Undo及Redo／Undo、SQLite9独立重启和四owner正常收尾完成。仅恢复模型正文；按当前原摘要规则回传CRLF后相对磁盘LF仍dirty，不冒称磁盘clean体验已解决。见[准确格式化实证](../tests/integration/acceptance-query-format-eol-root-20261019.md)。R8完整Linux为549文件／10253通过／10跳过，类型与构建成功；原生及安装失败边界保持，Q01／Q03仍为“部分”。
 
 上一个完整 Linux 检查点 `6c86986` 已通过：542 文件、10119 项通过、10 条件跳过，类型与构建成功；该轮桌面／安装／预览发布均条件跳过，详见[准确 CI 范围](development/sql-workspace-linux-ci-20261018.md)。同一产品构建 `5c29ce2` 的 Windows／MySQL8.4 正式 INSERT 发布和等待确认取消两例已通过，成功随机库、目录及原观察线程外部后核释放；旧表单失败根因未确认、现场保留，见[实际实证](../tests/integration/acceptance-query-insert-ui-root-20261018.md)。
 

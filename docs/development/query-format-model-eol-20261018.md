@@ -9,3 +9,5 @@
 新增24项真实QueryTab/ReactDOM RAM回归覆盖按钮和快捷回调、LF/CRLF双向差异、默认保留及显式upper/lower、混合换行选区、真实正文差异拒绝和未知模型EOL拒绝。父版为14失败、10通过（原54项按名称过滤未运行）；修后连同原UI54项、正文桥、格式器、延迟意图和快捷键共149项通过，零跳过。原正文桥/formatter/deferred/来源文件实现字节不变，不改Undo策略或原来源引用。
 
 本轮只运行RAM组件/单元回归和类型检查，没有GUI、Electron、Playwright含list、文件来源实际保存、端口/网络、数据库、CI或依赖安装。用户文件与原来源字节没有被本片读取或改写，不能据RAM宣称原生LF文件场景已验收。Root整合后仍需真实打开LF文件、按钮及快捷格式化、撤销/重做、来源dirty/保存/外改保护的原生复核。只创建本地中文 `[skip ci]` 提交，不推送。
+
+2026-10-19后续：同一产品构建的Windows源码首次格式化按钮／快捷键两例已实际通过，真实LF文件／Main与CRLF模型、一次Undo、独立重启及四owner正常收尾均有原件。仅恢复模型正文，仍不声称Undo回到磁盘clean状态、保存Ctrl/Cmd+S、macOS或安装已验，见[正式实证](../../tests/integration/acceptance-query-format-eol-root-20261019.md)。
