@@ -5,6 +5,7 @@ import { bindEditorIndentNativeCase } from './editor-indentation-native-gate';
 import { queryLayoutNativeActive, bindQueryLayoutNativeEnvironment } from './query-layout-native-gate';
 import type { EditorIndentNativeRun, IndentNativeOwner } from './editor-indentation-native-owner';
 import { readQueryLayoutNativeGeometry } from '../helpers/queryLayoutNativeGeometry';
+import { readQueryLayoutNativeWindow } from '../helpers/queryLayoutNativeWindow';
 
 const active = queryLayoutNativeActive(process.env, process.argv);
 const binding = active ? bindQueryLayoutNativeEnvironment(() => ({ env: process.env, args: process.argv, platform: process.platform })) : undefined;
@@ -96,16 +97,23 @@ async function attachGeometry(run: EditorIndentNativeRun, owner: IndentNativeOwn
     info.annotations.push({ type: '分栏几何附件失败', description: '原尺寸与布局断言继续保留；未额外访问窗口。' });
   }));
 }
-/** 官方窗口请求不等于完成；同一原期限内最多5秒读真实内容尺寸，未达到仍失败保留。 */
+/** 保留原尺寸请求；最多5秒确认同一真实窗口/视口一致且连续稳定，空间仍由原布局门核验。 */
 async function resize(run: EditorIndentNativeRun, owner: IndentNativeOwner, width: number, height: number, info: TestInfo) {
   const handle = await run.step(owner, () => owner.application.browserWindow(owner.page));
+  const identity = await run.step(owner, () => handle.evaluate(window => ({ id: window.id, contents: window.webContents.id })));
   await run.step(owner, () => handle.evaluate((window, size) => { window.setMinimumSize(720, 320); window.setContentSize(size.width, size.height); }, { width, height }));
+  let previous: string | undefined;
   await expect.poll(async () => {
-    const actual = await run.step(owner, () => handle.evaluate(window => window.getContentSize()));
+    const native = await run.step(owner, () => owner.application.evaluate(readQueryLayoutNativeWindow, identity));
+    const actual = native.actual;
     const page = await run.step(owner, () => owner.page.evaluate(readQueryLayoutNativeGeometry));
-    await attachGeometry(run, owner, info, '分栏原生窗口尺寸', { requested: { width, height }, actual: { width: actual[0], height: actual[1] }, page });
-    return actual;
-  }, { timeout: 5000, intervals: [100, 200, 400], message: '原生内容窗口须真实达到请求尺寸；未达到不能继续分栏验收' }).toEqual([width, height]);
+    const valid = actual.length === 2 && actual[0] === width && Number.isSafeInteger(actual[1]) && actual[1] > 0 && actual[1] <= height && page.viewport.width === actual[0] && page.viewport.height === actual[1] && Number.isFinite(page.viewport.devicePixelRatio) && page.viewport.devicePixelRatio > 0;
+    const sample = JSON.stringify({ actual, viewport: page.viewport, diagnostics: native.diagnostics });
+    const stable = valid && previous === sample;
+    previous = valid ? sample : undefined;
+    await attachGeometry(run, owner, info, '分栏原生窗口尺寸', { requested: { width, height }, actual: { width: actual[0], height: actual[1] }, page, native, stable });
+    return stable;
+  }, { timeout: 5000, intervals: [100, 200, 400], message: '原生内容宽度须达到原请求，实际有效高度不得超过请求；窗口/视口须一致且连续稳定，后续仍核原布局目标' }).toBe(true);
 }
 /** 只读真实编辑区几何及可访问像素值，两者都要随正式分栏变化。 */
 async function geometry(run: EditorIndentNativeRun, owner: IndentNativeOwner) {
