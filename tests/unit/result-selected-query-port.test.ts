@@ -4,6 +4,7 @@ import ts from 'typescript';
 import { describe, expect, it, vi } from 'vitest';
 import { ResultExportSelection } from '../../src/renderer/resultExport';
 import { QueryRowDetails } from '../../src/renderer/queryRowDetails';
+import { QueryResultSort } from '../../src/renderer/queryResultSort';
 import { zh } from '../../src/renderer/locales/zh-CN';
 
 const source=readFileSync(new URL('../../src/renderer/components/QueryTab.tsx',import.meta.url),'utf8'),tree=ts.createSourceFile('QueryTab.tsx',source,ts.ScriptTarget.Latest,true,ts.ScriptKind.TSX);
@@ -14,8 +15,9 @@ function fixture(){
  const result={columns:[{key:'c0',name:'值',type:'TEXT'}],rows:[{c0:'甲'},{c0:'乙'}],elapsedMs:0,truncated:true,statement:'private SQL'},resultSelection=new ResultExportSelection(),binding=resultSelection.bind(result,['current',1])!;
  const tab={id:'q',connectionId:'c',kind:'query'},workspace={settings:{activeTabId:'q',tabs:[tab]},connectionVersions:{c:1},activeJobs:{} as Record<string,unknown>};
  // 真实详情初始无绑定；失效仍调用真实控制器及空值状态回执。
- const context=createContext({initialBinding:binding,resultSelection,rowDetails:new QueryRowDetails(),setRowDetail:vi.fn(),setActiveDetailRow:vi.fn(),zh,tab,workspace,useWorkspace:{getState:()=>workspace},connectionVersion:1,alive:{current:true},busyRef:{current:false},document:{querySelector:()=>null},setExportSelected:vi.fn(),setExportResult:vi.fn(),refreshResultSelection:vi.fn(),setError:vi.fn(),errorMessage:(reason:any)=>reason.message});
- const code=`(function(){const selectionBinding=initialBinding;${['resultSelectionAllowed','selectResultRows','exportSelectedRows','invalidateResultSelection'].map(name=>functions.get(name)!.getText(tree)).join('\n')}return{selectResultRows,exportSelectedRows,invalidateResultSelection};})()`;
+ const resultSorter=new QueryResultSort(),sortBinding=resultSorter.bind(result,['current',1]);
+ const context=createContext({resultSorter,sortBinding,initialBinding:binding,resultSelection,rowDetails:new QueryRowDetails(),setRowDetail:vi.fn(),setActiveDetailRow:vi.fn(),zh,tab,workspace,useWorkspace:{getState:()=>workspace},connectionVersion:1,alive:{current:true},busyRef:{current:false},document:{querySelector:()=>null},setExportSelected:vi.fn(),setExportResult:vi.fn(),refreshResultSelection:vi.fn(),setError:vi.fn(),errorMessage:(reason:any)=>reason.message});
+ const code=`(function(){const selectionBinding=initialBinding;${['resultViewCurrent','resultSelectionAllowed','selectResultRows','exportSelectedRows','invalidateResultSelection'].map(name=>functions.get(name)!.getText(tree)).join('\n')}return{selectResultRows,exportSelectedRows,invalidateResultSelection};})()`;
  const handlers=runInContext(ts.transpileModule(code,{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText,context);
  return{result,resultSelection,binding,workspace,context,handlers,select(){return handlers.selectResultRows({scope:binding,rows:result.rows,columns:result.columns,indices:new Set([1])});}};
 }

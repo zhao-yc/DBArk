@@ -10,6 +10,7 @@ import { queryResultColumnsZh as text } from '../../src/renderer/locales/queryRe
 import { zh } from '../../src/renderer/locales/zh-CN';
 import { validateResultExportData } from '../../src/shared/resultExport';
 import { queryResultCopyZh as copyText } from '../../src/renderer/locales/queryResultCopy.zh-CN';
+import { queryResultSortZh as sortText } from '../../src/renderer/locales/queryResultSort.zh-CN';
 const grids=vi.hoisted(()=>({all:[] as any[]}));
 // 只替换Monaco和虚拟网格的外界渲染端口，真实QueryTab／管理器／导出窗口／store均运行。
 vi.mock('react-data-grid',()=>({DataGrid:(props:any)=>{grids.all.push(props);return null;},SelectColumn:{key:'select-row'}}));
@@ -96,6 +97,32 @@ it.each(['selection','layout','result','pin','version','job','inactive','modal',
   else if(change==='modal'){const node=document.createElement('div');node.setAttribute('role','dialog');document.body.appendChild(node);node.parentNode!.removeChild(node);await act(async()=>{for(const observer of [...observers])observer([{addedNodes:[node]}]);});}
   else {await act(async()=>root!.unmount());root=undefined;}
   await act(async()=>stale()); expect(port.execute).not.toHaveBeenCalled(); expect(port.writes).toEqual([]);
+});
+
+// Root组合验收：分别通过的排序与复制功能仍须共享同一实际视图，显示下标不能错指原行。
+it('列布局后精确排序与含列名复制共用当前视图；恢复顺序撤销旧选择且不重发SQL', async () => {
+  await mount(); const port = clipboardPort(), before = structuredClone(original);
+  await layout(); await act(async()=>mainGrid().onSelectedRowsChange(new Set([0])));
+  const stale = callback(button(copyText.action));
+  await act(async()=>mainGrid().onSortColumnsChange([{columnKey:'d',direction:'DESC'}]));
+  const sorted = grids.all.at(-1)!;
+  expect(sorted.rows[0]).toBe(original.rows[1]); expect(sorted.rows[1]).toBe(original.rows[0]);
+  expect(sorted.columns.filter((c:any)=>c.key!=='select-row').map((c:any)=>c.key)).toEqual(['b','__proto__','d','n']);
+  expect(button(copyText.action).disabled).toBe(true);
+  await act(async()=>stale()); expect(port.execute).not.toHaveBeenCalled();
+  await act(async()=>sorted.onSelectedRowsChange(new Set([1,0]))); await click(copyText.action);
+  expect(JSON.parse(port.writes[0].get('application/x-dbark-cells')!).rows).toEqual([
+    ['字节','同名','同名','空值'],
+    [{type:'binary',base64:''},'','1.00000000000000000001',null],
+    [{type:'binary',base64:'AP8='},'18446744073709551615','0.12345678901234567890',''],
+  ]);
+  await act(async()=>grids.all.at(-1)!.onSelectedRowsChange(new Set()));
+  await act(async()=>grids.all.at(-1)!.onActivePositionChange({row:sorted.rows[0],rowIdx:0,column:{key:'d'}}));
+  await click(copyText.action);
+  expect(JSON.parse(port.writes[1].get('application/x-dbark-cells')!).rows).toEqual([['同名'],['1.00000000000000000001']]);
+  await click(sortText.clear); expect(grids.all.at(-1)!.rows).toBe(original.rows);
+  expect(button(copyText.action).disabled).toBe(true); expect(original).toEqual(before);
+  expect(commands.filter(c=>c==='query.execute')).toHaveLength(1); expect(exports).toEqual([]);
 });
 
 /** 运行已安装RDG的实际位置/鼠标事件函数；仅布局滚动与React状态端口在RAM。 */
