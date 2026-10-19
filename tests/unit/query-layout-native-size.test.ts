@@ -17,7 +17,7 @@ const nativeHelper = readFileSync(new URL('../helpers/queryLayoutNativeWindow.ts
 const pageGeometry = (maximum = 614) => ({ viewport: { width: 1400, height: 1000, devicePixelRatio: 2 }, tab: { x: 0, y: 132, width: 1100, height: 844 }, editor: { x: 0, y: 213, width: 1100, height: Math.min(300, maximum) }, separator: { minimum: 130, maximum, value: Math.min(300, maximum) }, children: [{ classes: 'toolbar', rect: { x: 0, y: 169, width: 1100, height: 44 } }] });
 
 /** 原controller.step核每个await两侧；只有系统窗口/页面/附件端口是RAM。 */
-function fixture(options: { sizes?: number[][]; viewports?: number[][]; maxima?: number[]; attachmentFails?: boolean; expire?: 'identity' | 'set' | 'center' | 'get' | 'page' | 'attach'; wrongWindow?: boolean; wrongContents?: boolean; diagnosticFails?: boolean } = {}) {
+function fixture(options: { platform?: 'darwin' | 'win32'; sizes?: number[][]; viewports?: number[][]; maxima?: number[]; attachmentFails?: boolean; expire?: 'identity' | 'set' | 'center' | 'get' | 'page' | 'attach'; wrongWindow?: boolean; wrongContents?: boolean; diagnosticFails?: boolean } = {}) {
   const { sizes = [[1400, 1000]], viewports, maxima = [614], attachmentFails = false } = options;
   const attachments: Array<{ name: string; value: any }> = [], annotations: unknown[] = [], polls: Array<{ timeout: number; expected: unknown; attempts: number }> = [];
   let alive = true, index = 0, currentSize = sizes[0];
@@ -51,7 +51,7 @@ function fixture(options: { sizes?: number[][]; viewports?: number[][]; maxima?:
   const nativeCode = ts.transpileModule(nativeHelper, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS } }).outputText;
   const readNative = runInNewContext(nativeCode + '\nexports.readQueryLayoutNativeWindow', { exports: {} });
   const code = ts.transpileModule(functions + '\nglobalThis.actions={resize,readyMaximum};', { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
-  const actions = runInNewContext(code + '\nactions', { expect: { poll }, Buffer, readQueryLayoutNativeGeometry() {}, readQueryLayoutNativeWindow: readNative }) as { resize(run: EditorIndentNativeRun, owner: IndentNativeOwner, width: number, height: number, info: unknown): Promise<void>; readyMaximum(run: EditorIndentNativeRun, owner: IndentNativeOwner, info: unknown): Promise<void> };
+  const actions = runInNewContext(code + '\nactions', { expect: { poll }, Buffer, process: { platform: options.platform ?? 'darwin' }, readQueryLayoutNativeGeometry() {}, readQueryLayoutNativeWindow: readNative }) as { resize(run: EditorIndentNativeRun, owner: IndentNativeOwner, width: number, height: number, info: unknown): Promise<void>; readyMaximum(run: EditorIndentNativeRun, owner: IndentNativeOwner, info: unknown): Promise<void> };
   return { resize: (height = 1000) => actions.resize(run, owner, 1400, height, info), ready: () => actions.readyMaximum(run, owner, info), run, owner, native, evaluate, applicationEvaluate, getDisplayMatching, attachments, annotations, polls };
 }
 
@@ -67,6 +67,11 @@ it('同一原窗口完成尺寸请求后只居中一次，不能沿用小窗口�
   expect(f.native.center).toHaveBeenCalledOnce();
   expect(f.native.center.mock.invocationCallOrder[0]).toBeGreaterThan(f.native.setContentSize.mock.invocationCallOrder[0]);
   expect(f.native.center.mock.invocationCallOrder[0]).toBeLessThan(f.native.getContentSize.mock.invocationCallOrder[0]);
+});
+it('Windows保留原尺寸设置，不继承Mac居中准备而触发系统尺寸收缩', async () => {
+  const f = fixture({ platform: 'win32' }); await f.resize();
+  expect(f.native.setContentSize).toHaveBeenCalledExactlyOnceWith(1400, 1000); expect(f.native.center).not.toHaveBeenCalled();
+  expect(f.attachments.at(-1)?.value).toMatchObject({ actual: { width: 1400, height: 1000 }, stable: true });
 });
 it('尺寸返回后原scope失效不能继续居中；居中报错不能继续读取几何', async () => {
   const stale = fixture({ expire: 'set' }); await expect(stale.resize()).rejects.toThrow('原scope已失效'); expect(stale.native.center).not.toHaveBeenCalled();
