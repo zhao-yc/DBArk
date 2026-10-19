@@ -3,7 +3,7 @@ import type { QueryFileEncoding } from '../shared/contracts';
 import type { QueryFileBom, QueryFileEolPolicy, QueryFileSourceBlocked, QueryFileSourceView } from '../shared/queryFileSources';
 import { queryFileSourceHasChanges, sameQueryFileSource } from '../shared/queryFileSources';
 import { QueryFileTaskOperation, type QueryFileTaskState } from './queryFileTasks';
-import { acquireWorkspaceBusy, flushSettings, useWorkspace, type WorkspaceTab } from './store';
+import { acquireWorkspaceBusy, beginQueryFileOpen, flushSettings, useWorkspace, type WorkspaceTab, type QueryFileOpenLease } from './store';
 import { invoke, uid } from './lib';
 import { QuerySourceLease, querySourceTab } from './querySourceLease';
 import { queryFilesZh as text } from './locales/queryFiles.zh-CN';
@@ -29,9 +29,9 @@ export function useQueryFileSource(tab: WorkspaceTab, capture: () => Readonly<Wo
   /** 文档卸载只取消自己发出的精确任务，不能释放新来源或清除新编辑。 */
   useEffect(() => () => { for (const owner of operations.current) { owner.documentCurrent(); void owner.cancel(true); } }, []);
   /** 每次调用新建UUID并先订阅，再向Main发送任务；任务中心只看到无路径/SQL的结构化进度。 */
-  function beginTask(snapshot: Readonly<WorkspaceTab>, operation: QueryFileTaskState['operation']) {
+  function beginTask(snapshot: Readonly<WorkspaceTab>, operation: QueryFileTaskState['operation'], ownsDocument = ownsView) {
     const taskId = uid(), owner = new QueryFileTaskOperation(snapshot, taskId, operation, {
-      read: () => useWorkspace.getState().settings.tabs.find(item => item.id === snapshot.id), ownsView,
+      read: () => useWorkspace.getState().settings.tabs.find(item => item.id === snapshot.id), ownsView: ownsDocument,
       subscribeDocument: changed => useWorkspace.subscribe(changed), subscribeTask: changed => window.dbark?.onTask(changed) ?? (() => {}),
       cancel: input => invoke('queryFileSources.cancel', input),
       publish: value => { useWorkspace.getState().setQueryFileTask(value); if (ownsView()) setTask(value); }
@@ -116,26 +116,25 @@ export function useQueryFileSource(tab: WorkspaceTab, capture: () => Readonly<Wo
     const original = current();
     if (!original) { active.current = false; setBusy(false); return false; }
     const target: WorkspaceTab = { id: uid(), kind: 'query', connectionId: original.connectionId, title: text.opening, sql: '', ...(original.database === undefined ? {} : { database: original.database }), ...(original.databaseContext === undefined ? {} : { databaseContext: original.databaseContext }) };
-    let originalJob: ReturnType<typeof acquireWorkspaceBusy> | undefined, targetJob: ReturnType<typeof acquireWorkspaceBusy> | undefined, opened = false, work: ReturnType<typeof beginTask> | undefined;
+    let originalJob: ReturnType<typeof acquireWorkspaceBusy> | undefined, targetJob: ReturnType<typeof acquireWorkspaceBusy> | undefined, opening: QueryFileOpenLease | undefined, opened = false, work: ReturnType<typeof beginTask> | undefined;
     try {
       capture();
       originalJob = acquireWorkspaceBusy(tab.id);
       publishBusy(true);
-      const latest = useWorkspace.getState(); latest.updateSettings({ tabs: [...latest.settings.tabs, target] }); targetJob = acquireWorkspaceBusy(target.id);
+      const origin = current(); if (!origin) throw Error(text.changed);
+      opening = beginQueryFileOpen(origin, target, ownsView); targetJob = acquireWorkspaceBusy(target.id);
       await flushSettings();
-      if (!originalJob.owns() || !targetJob.owns()) throw Error(text.changed);
-      work = beginTask({ ...target }, 'open');
+      if (!originalJob.owns() || !targetJob.owns() || !opening.current()) throw Error(text.changed);
+      work = beginTask({ ...target }, 'open', () => ownsView() && opening?.current() === true);
       const result = await invoke('queryFileSources.open', { tabId: target.id, taskId: work.taskId, encoding, ...(recentId ? { recentId } : {}) }); work.finish(result);
       if (result.state === 'blocked') { if (ownsView()) setProblem(result); return false; }
       if (result.state === 'cancelled' || !work.owner.documentCurrent()) return false;
-      const state = useWorkspace.getState(), existing = state.settings.tabs.find(item => item.id === target.id);
-      if (!originalJob.owns() || !targetJob.owns() || !existing || existing.kind !== 'query' || existing.connectionId !== target.connectionId || existing.fileSourceBinding || existing.sourceBinding) return false;
-      state.updateSettings({ tabs: state.settings.tabs.map(item => item.id === target.id ? { ...item, ...(item.title === target.title ? { title: result.binding.name } : {}), ...(item.sql === '' ? { sql: result.sql } : {}), fileSourceBinding: result.binding.ref } : item), activeTabId: target.id });
+      if (!originalJob.owns() || !targetJob.owns() || !opening.apply(result.sql, result.binding)) return false;
       opened = true; await flushSettings(); return true;
     } catch (reason) { work?.finish({ state: 'blocked', message: text.uncertain, wrote: 'unknown' }); if (ownsView()) uncertain(reason); return false; }
     finally {
-      const state = useWorkspace.getState(), remove = !opened && targetJob?.owns() && state.settings.tabs.find(item => item.id === target.id) === target;
-      targetJob?.release(); const released = originalJob?.release(); if (remove) state.closeTab(target.id);
+      opening?.dispose(!opened && targetJob?.owns() === true);
+      targetJob?.release(); const released = originalJob?.release();
       active.current = false; if (ownsView()) { setBusy(false); if (released && !useWorkspace.getState().activeJobs[tab.id]) publishBusy(false); }
     }
   }

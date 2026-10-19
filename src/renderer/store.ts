@@ -8,7 +8,7 @@ import type { AppSettings, ConnectionProfile, TaskEvent, TaskRecord } from '../s
 import { errorMessage, invoke, uid } from './lib';
 import type { ConnectionSelection } from './connectionChanges';
 import { completionServerFacts } from './completionServerFacts';
-import { assertQueryFileSourceSettings, sameQueryFileSource } from '../shared/queryFileSources';
+import { assertQueryFileSourceSettings, assertQueryFileSourceSql, sameQueryFileSource, type QueryFileSourceView } from '../shared/queryFileSources';
 import type { QueryFileTaskState } from './queryFileTasks';
 import { queryFilesZh } from './locales/queryFiles.zh-CN';
 
@@ -24,6 +24,7 @@ interface WorkspaceState {
   tableLayoutDrafts: Record<string, boolean>; setTableLayoutDraft(id: string, dirty: boolean): void;
   queryFileDirty: Record<string, boolean>; setQueryFileDirty(id: string, dirty: boolean, snapshot: WorkspaceTab): void;
   queryFileTasks: Record<string, QueryFileTaskState>; setQueryFileTask(task: QueryFileTaskState): void;
+  queryFileOpenings: Record<string, QueryFileOpening>;
   initialize: () => Promise<void>; setConnections: (connections: ConnectionProfile[]) => void;
   invalidateConnection: (connectionId: string) => void;
   updateSettings: (update: Partial<AppSettings>) => void; openTab: (tab: Omit<WorkspaceTab, 'id'> & { id?: string }) => void;
@@ -31,6 +32,74 @@ interface WorkspaceState {
   select: (selection: WorkspaceState['selection']) => void; notify: (text: string, error?: boolean) => void;
   setBusy: (id: string, busy: boolean) => void; setDirty: (id: string, dirty: boolean) => void;
   onTask: (event: TaskEvent) => void;
+}
+
+/** 仅本次打开持有的内存身份；不会进入settings、SQLite或文件来源合同。 */
+interface QueryFileOpening { readonly target: WorkspaceTab; readonly origin: WorkspaceTab; readonly connection: ConnectionProfile; readonly version: number; }
+export interface QueryFileOpenLease { current(): boolean; apply(sql: string, binding: QueryFileSourceView): boolean; dispose(removeUnchanged?: boolean): void; }
+
+/** 统一配置提交与原持久化顺序，允许文件打开阶段与标签在同一store通知中切换。 */
+function commitWorkspaceSettings(update: Partial<AppSettings>, openings = useWorkspace.getState().queryFileOpenings): void {
+  const state = useWorkspace.getState(), previous = state.settings, settings = { ...previous, ...update }, queryFileDirty = { ...state.queryFileDirty };
+  assertQueryFileSourceSettings(settings);
+  // SQL或修订变化先同步标dirty，再等待摘要确认；关闭/退出不能借用上一次正文的clean缓存。
+  for (const tab of settings.tabs) {
+    const before = previous.tabs.find(item => item.id === tab.id);
+    if (tab.fileSourceBinding && (!before || (before.sql ?? '') !== (tab.sql ?? '') || !sameQueryFileSource(before.fileSourceBinding, tab.fileSourceBinding))) queryFileDirty[tab.id] = true;
+    if (!tab.fileSourceBinding) delete queryFileDirty[tab.id];
+  }
+  for (const id of Object.keys(queryFileDirty)) if (!settings.tabs.some(tab => tab.id === id)) delete queryFileDirty[id];
+  useWorkspace.setState({ settings, queryFileDirty, queryFileOpenings: openings });
+  // 标签身份立即投递；正文仍防抖，保持原settings.save通道及400毫秒合并规则。
+  const identities = (value: AppSettings) => JSON.stringify(value.tabs.map(tab => [tab.id, tab.connectionId, tab.kind]));
+  if (identities(previous) !== identities(settings)) { clearTimeout(saveTimer); saveTimer = undefined; void invoke('settings.save', settings).catch(error => useWorkspace.getState().notify(errorMessage(error), true)); }
+  else persist(settings);
+}
+
+/** 新文件占位尚未创建编辑器；完整原文与来源就位后才一次解除，旧回包不能接管新文档。 */
+export function beginQueryFileOpen(origin: WorkspaceTab, target: WorkspaceTab, ownsView: () => boolean): QueryFileOpenLease {
+  const initial = useWorkspace.getState(), connection = initial.connections.find(item => item.id === origin.connectionId);
+  if (!ownsView() || !connection || initial.settings.tabs.find(item => item.id === origin.id) !== origin || initial.settings.tabs.some(item => item.id === target.id) || initial.queryFileOpenings[target.id] || target.kind !== 'query' || target.sql !== '' || target.connectionId !== origin.connectionId || target.sourceBinding || target.fileSourceBinding) throw Error(queryFilesZh.changed);
+  const opening: QueryFileOpening = Object.freeze({ target, origin, connection, version: initial.connectionVersions[origin.connectionId] ?? 0 });
+  let valid = true, pristine = true, settled = false;
+  const context = (tab: WorkspaceTab) => JSON.stringify([tab.database ?? null, tab.databaseContext ?? null]);
+  /** 观察每次实际通知，正文/标题可继续变化；来源、连接或目标离开后永久失效，防止ABA。 */
+  const inspect = (state: WorkspaceState): boolean => {
+    const current = state.settings.tabs.find(item => item.id === origin.id);
+    if (state.queryFileOpenings[target.id] !== opening || state.settings.tabs.find(item => item.id === target.id) !== target || state.dirtyTabs[target.id]) pristine = false;
+    if (!pristine || !ownsView() || !current || current.kind !== 'query' || current.connectionId !== origin.connectionId || current.sourceBinding !== origin.sourceBinding || !sameQueryFileSource(current.fileSourceBinding, origin.fileSourceBinding) || context(current) !== context(origin) || state.connections.find(item => item.id === connection.id) !== connection || (state.connectionVersions[connection.id] ?? 0) !== opening.version) valid = false;
+    return valid && !settled;
+  };
+  const off = useWorkspace.subscribe(state => { inspect(state); });
+  try { commitWorkspaceSettings({ tabs: [...initial.settings.tabs, target] }, { ...initial.queryFileOpenings, [target.id]: opening }); }
+  catch (reason) { settled = true; off(); const state = useWorkspace.getState(); if (state.queryFileOpenings[target.id] === opening) { const next = { ...state.queryFileOpenings }; delete next[target.id]; useWorkspace.setState({ queryFileOpenings: next }); } throw reason; }
+  return {
+    /** 每次读取复核并保留失效墓碑；恢复同值不能重新领取原权限。 */
+    current: () => inspect(useWorkspace.getState()),
+    /** 消费一次原文回包；正文、来源和首次模型阶段必须同一次提交。 */
+    apply(sql, binding) {
+      if (!inspect(useWorkspace.getState())) return false;
+      assertQueryFileSourceSql(sql);
+      const state = useWorkspace.getState(), openings = { ...state.queryFileOpenings }; delete openings[target.id];
+      const loaded = { ...target, sql, title: binding.name, fileSourceBinding: binding.ref };
+      assertQueryFileSourceSettings({ tabs: [loaded] });
+      settled = true; off();
+      commitWorkspaceSettings({ tabs: state.settings.tabs.map(item => item === target ? loaded : item), activeTabId: target.id }, openings);
+      return true;
+    },
+    /** 仅解除本owner阶段，且只有从未改变的目标才保留删除资格。 */
+    dispose(removeUnchanged = false) {
+      inspect(useWorkspace.getState());
+      // 来源失效仍可移除本操作从未改变的空占位；目标曾离开/改动则永久失去删除权。
+      const remove = removeUnchanged && pristine && !settled; settled = true; off();
+      const state = useWorkspace.getState(); if (state.queryFileOpenings[target.id] !== opening) return;
+      const openings = { ...state.queryFileOpenings }; delete openings[target.id];
+      if (remove) {
+        const index = state.settings.tabs.indexOf(target), tabs = state.settings.tabs.filter(item => item !== target);
+        commitWorkspaceSettings({ tabs, activeTabId: state.settings.activeTabId === target.id ? tabs[Math.max(0, index - 1)]?.id : state.settings.activeTabId }, openings);
+      } else useWorkspace.setState({ queryFileOpenings: openings });
+    }
+  };
 }
 
 /** 合并连续编辑再保存，避免 SQL 输入每个字符都触发磁盘写入。 */
@@ -58,7 +127,7 @@ export async function flushSettings(): Promise<void> {
 
 /** 界面状态仅保存连接概要和工作区配置，数据库密码不进入全局界面存储。 */
 export const useWorkspace = create<WorkspaceState>((set, get) => ({
-  ready: false, settings: defaults, connections: [], tasks: [], activeJobs: {}, dirtyTabs: {}, connectionVersions: {}, tableLayoutDrafts: {}, queryFileDirty: {}, queryFileTasks: {},
+  ready: false, settings: defaults, connections: [], tasks: [], activeJobs: {}, dirtyTabs: {}, connectionVersions: {}, tableLayoutDrafts: {}, queryFileDirty: {}, queryFileTasks: {}, queryFileOpenings: {},
   /** 文件任务保留进度合同与取消状态，不保存SQL或路径；终态由真实文件结果推进。 */
   setQueryFileTask: task => set(state => {
     const previous = state.tasks.find(item => item.id === task.taskId), record: TaskRecord = { id: task.taskId, kind: queryFilesZh.taskTitle, status: task.status, progress: task.progress, message: task.message, startedAt: previous?.startedAt ?? task.startedAt };
@@ -87,22 +156,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     selection: state.selection?.connectionId === connectionId ? { connectionId } : state.selection
   }));},
   /** 合并并立即展示配置修改，由持久化层合并连续写盘请求。 */
-  updateSettings: update => {
-    const previous = get().settings, settings = { ...previous, ...update }, queryFileDirty = { ...get().queryFileDirty };
-    assertQueryFileSourceSettings(settings);
-    // SQL或修订变化先同步标dirty，再等待摘要确认；关闭/退出不能借用上一次正文的clean缓存。
-    for (const tab of settings.tabs) {
-      const before = previous.tabs.find(item => item.id === tab.id);
-      if (tab.fileSourceBinding && (!before || (before.sql ?? '') !== (tab.sql ?? '') || !sameQueryFileSource(before.fileSourceBinding, tab.fileSourceBinding))) queryFileDirty[tab.id] = true;
-      if (!tab.fileSourceBinding) delete queryFileDirty[tab.id];
-    }
-    for (const id of Object.keys(queryFileDirty)) if (!settings.tabs.some(tab => tab.id === id)) delete queryFileDirty[id];
-    set({ settings, queryFileDirty });
-    // 标签身份立即投递到主进程；正文仍防抖。相同IPC通道中该事实先于随后发起的导入确认，不能留下400ms空闲窗口。
-    const identities = (value: AppSettings) => JSON.stringify(value.tabs.map(tab => [tab.id, tab.connectionId, tab.kind]));
-    if (identities(previous) !== identities(settings)) { clearTimeout(saveTimer); saveTimer = undefined; void invoke('settings.save', settings).catch(error => get().notify(errorMessage(error), true)); }
-    else persist(settings);
-  },
+  updateSettings: update => commitWorkspaceSettings(update),
   /** 相同数据表复用已有标签，SQL 查询始终新建独立标签和会话。 */
   openTab: candidate => {
     const current = get().settings;

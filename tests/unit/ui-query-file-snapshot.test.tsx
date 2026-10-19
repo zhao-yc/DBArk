@@ -5,7 +5,7 @@ import { memoryDocument, MemoryEvent } from '../fixtures/memory-dom';
 import { ContentEditorPort, ContentModelPort } from './editor-content-test-ports';
 import type { TaskEvent } from '../../src/shared/contracts';
 
-const io = vi.hoisted(() => ({ editor: null as any }));
+const io = vi.hoisted(() => ({ editor: null as any, entries: [] as Array<{ editor: any; initial: string }> }));
 /** 只替换Monaco端口；保存入口、正文桥、ReactDOM和工作区store均为真实实现。 */
 vi.mock('../../src/renderer/components/SqlEditor', async () => {
   const { createElement, useEffect, useLayoutEffect, useRef } = await import('react');
@@ -16,10 +16,13 @@ vi.mock('../../src/renderer/components/SqlEditor', async () => {
     useLayoutEffect(() => { latest.current = props; });
     useLayoutEffect(() => { current.current?.sync(); }, [props.value, props.readOnly]);
     useEffect(() => {
-      const editor = new ContentEditorPort(new ContentModelPort(props.value));
+      // RAM模拟空模型采用Windows默认CRLF；完整正文按Monaco的行尾多数规则检测。
+      const endings: string[] = props.value.match(/\r\n|\r|\n/g) ?? [], cr = endings.filter(value => value !== '\n').length;
+      const eol = !endings.length || cr > endings.length / 2 ? '\r\n' : '\n';
+      const editor = new ContentEditorPort(new ContentModelPort(props.value, eol));
       (editor as any).getSelection = () => null;
       const bridge = editorContentBridge(editor as any, () => ({ value: latest.current.value, readOnly: !!latest.current.readOnly, onChange: (sql: string) => latest.current.onChange?.(sql) }), () => {});
-      current.current = bridge; io.editor = editor; props.onReady?.(editor);
+      current.current = bridge; io.editor = editor; io.entries.push({ editor, initial: props.value }); props.onReady?.(editor);
       return () => { bridge.dispose(); editor.dispose(); current.current = undefined; };
     }, []);
     return createElement('div', { 'aria-label': '文件保存的RAM编辑器端口' });
@@ -100,7 +103,7 @@ let document: ReturnType<typeof memoryDocument>, createRoot: typeof import('reac
 let QueryTab: typeof import('../../src/renderer/components/QueryTab')['QueryTab'], useWorkspace: typeof import('../../src/renderer/store')['useWorkspace'], flushSettings: typeof import('../../src/renderer/store')['flushSettings'];
 let TasksDialog: typeof import('../../src/renderer/components/ActivityDialog')['TasksDialog'], showTaskCenter: () => void, taskListeners: Set<(event: TaskEvent) => void>;
 let commands: Array<{ command: string; input: any }>, menus: Set<(action: string) => void>, hook: undefined | ((command: string, input: any) => Promise<any> | undefined);
-let fileView: any, completed: boolean[], startClose: () => void;
+let fileView: any, completed: boolean[], startClose: () => void, frozenFileTab: any;
 const sqlDigest = (sql: string) => createHash('sha256').update(sql).digest('hex');
 const sourceView = (sql = 'SELECT 初始;', revision = 1, name = '合成.sql') => ({ ref: { id: '11111111-1111-4111-8111-111111111111', revision }, name, displayPath: 'RAM展示目录/' + name, encoding: 'utf8', bom: 'none', eol: 'lf', savedSqlDigest: sqlDigest(sql) });
 const saved = (sql: string, revision = 2, name = '合成.sql') => ({ state: 'saved', binding: sourceView(sql, revision, name), savedSqlDigest: sqlDigest(sql), unchanged: false });
@@ -124,7 +127,7 @@ afterAll(() => { for (const [name, descriptor] of globals) if (descriptor) Objec
 
 /** Main、原生选择和文件写入全部为RAM端口，拒绝SQL执行、建连及其它外界命令。 */
 async function mount(bound = false) {
-  commands = []; menus = new Set(); taskListeners = new Set(); hook = undefined; completed = []; fileView = bound ? sourceView() : undefined;
+  commands = []; menus = new Set(); taskListeners = new Set(); hook = undefined; completed = []; fileView = bound ? sourceView() : undefined; io.entries = []; frozenFileTab = undefined;
   (window as any).dbark = { onTask: (listener: (event: TaskEvent) => void) => { taskListeners.add(listener); return () => { taskListeners.delete(listener); }; }, onMenu: (listener: (action: string) => void) => { menus.add(listener); return () => menus.delete(listener); }, invoke: async (command: string, input: any) => {
     commands.push({ command, input }); const pending = hook?.(command, input); if (pending) return pending;
     if (command === 'settings.save') return;
@@ -140,7 +143,7 @@ async function mount(bound = false) {
   useWorkspace.setState({ settings: { theme: 'dark', sidebarWidth: 260, resultLimit: 1000, pageSize: 100, activeTabId: 't', tabs: [{ id: 't', kind: 'query', connectionId: 'c', title: '合成查询', sql: 'SELECT 初始;', ...(bound ? { fileSourceBinding: fileView.ref } : {}) }] }, connections: [{ id: 'c', name: '合成连接', group: '', color: '', dialect: 'mysql', host: 'offline.invalid', port: 1, user: 'offline' }], activeJobs: {}, dirtyTabs: {}, queryFileDirty: {}, queryFileTasks: {}, tasks: [], connectionVersions: {}, notice: undefined });
   function View() {
     const tabs = useWorkspace(state => state.settings.tabs), [request, setRequest] = React.useState<any>(), [tasks, setTasks] = React.useState(false); startClose = () => setRequest({ tabId: 't' }); showTaskCenter = () => setTasks(true);
-    return <>{tabs.map(tab => <section key={tab.id} hidden={tab.id !== useWorkspace.getState().settings.activeTabId}><QueryTab tab={tab} closeRequest={tab.id === 't' ? request : undefined} onCloseRequestFinished={(_request, close) => { completed.push(close); setRequest(undefined); if (close) useWorkspace.getState().closeTab(tab.id); }} onHistory={() => {}}/></section>)}{tasks && <TasksDialog onClose={() => setTasks(false)}/>}</>;
+    return <>{tabs.map(tab => <section key={tab.id} hidden={tab.id !== useWorkspace.getState().settings.activeTabId}><QueryTab tab={frozenFileTab?.id === tab.id ? frozenFileTab : tab} closeRequest={tab.id === 't' ? request : undefined} onCloseRequestFinished={(_request, close) => { completed.push(close); setRequest(undefined); if (close) useWorkspace.getState().closeTab(tab.id); }} onHistory={() => {}}/></section>)}{tasks && <TasksDialog onClose={() => setTasks(false)}/>}</>;
   }
   const node = document.createElement('div'); document.body.appendChild(node); root = createRoot(node as any); await act(async () => root!.render(<View/>));
   return io.editor as ContentEditorPort & { model: ContentModelPort };
@@ -155,6 +158,88 @@ async function select(label: string, value: string) {
   expect(node).toBeDefined(); await act(async () => { node!.value = value; node!.dispatchEvent(new MemoryEvent('change')); });
 }
 function deferred() { let resolve!: (value: any) => void; const promise = new Promise<any>(done => { resolve = done; }); return { promise, resolve }; }
+
+describe('新文件占位首次模型与操作世代（真实store/hook/QueryTab与RAM）', () => {
+  /** 原生读取仅用待决IPC；用户仍从正式打开入口进入，不直接调用控制器。 */
+  async function waiting() {
+    const original = await mount(), pending = deferred();
+    hook = command => command === 'queryFileSources.open' ? pending.promise : undefined;
+    await click('打开 SQL 文件'); await click('选择并打开 SQL 文件');
+    const request = commands.find(item => item.command === 'queryFileSources.open')!;
+    expect(request).toBeDefined(); return { original, pending, targetId: request.input.tabId, taskId: request.input.taskId };
+  }
+  function opened(sql = 'SELECT 文件原文;\n') { fileView = sourceView(sql); return { state: 'opened', sql, binding: fileView }; }
+  it('隐藏或选中占位期间均零新模型；完整LF全文第一次建模，正文恢复后原严格摘要clean', async () => {
+    const f = await waiting(); expect(io.entries).toHaveLength(1); expect(io.entries[0].editor).toBe(f.original);
+    await act(async () => useWorkspace.getState().updateSettings({ activeTabId: f.targetId })); expect(io.entries).toHaveLength(1); expect(document.body.textContent).toContain('正在打开 SQL 文件');
+    const sql = 'SELECT 文件原文;\n'; await act(async () => f.pending.resolve(opened(sql)));
+    expect(io.entries).toHaveLength(2); const added = io.entries[1]; expect(added.initial).toBe(sql); expect(added.editor.model.getEOL()).toBe('\n'); expect(added.editor.model.controlledEdits).toBe(0);
+    expect(useWorkspace.getState().queryFileOpenings).toEqual({}); expect(useWorkspace.getState().settings.tabs.find(tab => tab.id === f.targetId)).toMatchObject({ sql, fileSourceBinding: fileView.ref });
+    await act(async () => { await new Promise(done => setTimeout(done, 150)); }); expect(useWorkspace.getState().queryFileDirty[f.targetId]).toBe(false);
+    await act(async () => added.editor.nativeInput('SELECT 修改后;\n')); await act(async () => { await new Promise(done => setTimeout(done, 150)); }); expect(useWorkspace.getState().queryFileDirty[f.targetId]).toBe(true);
+    // RAM恢复实际正文只验证桥接/摘要接线；不冒充真实键盘Undo或原生撤销栈验收。
+    await act(async () => added.editor.nativeInput(sql)); await act(async () => { await new Promise(done => setTimeout(done, 150)); }); expect(useWorkspace.getState().queryFileDirty[f.targetId]).toBe(false);
+    expect(io.entries[1]).toBe(added); expect(io.entries[0].editor).toBe(f.original);
+  });
+  it.each(['甲\r\n乙\r\n', '甲\r\n乙\n丙\r'])('首次完整原文%s不改Main正文与保存摘要，已有模型不重建', async sql => {
+    const f = await waiting(); await act(async () => f.pending.resolve(opened(sql)));
+    expect(io.entries).toHaveLength(2); expect(io.entries[1].initial).toBe(sql); expect(useWorkspace.getState().settings.tabs.find(tab => tab.id === f.targetId)?.sql).toBe(sql); expect(fileView.savedSqlDigest).toBe(sqlDigest(sql));
+    expect(io.entries[0].editor).toBe(f.original);
+  });
+  it('阶段已解除但父props仍停留旧空标签时继续等待；props更新后首次模型才接收原文', async () => {
+    const f = await waiting(); frozenFileTab = useWorkspace.getState().settings.tabs.find(tab => tab.id === f.targetId);
+    await act(async () => f.pending.resolve(opened())); expect(useWorkspace.getState().queryFileOpenings).toEqual({}); expect(io.entries).toHaveLength(1);
+    frozenFileTab = undefined; await act(async () => useWorkspace.getState().updateSettings({ tabs: [...useWorkspace.getState().settings.tabs] }));
+    expect(io.entries).toHaveLength(2); expect(io.entries[1].initial).toBe('SELECT 文件原文;\n'); expect(io.entries[0].editor).toBe(f.original);
+  });
+  it.each(['取消', '拒绝', 'RPC失败'] as const)('%s移除本操作未改动空占位，不创建空模型', async reason => {
+    const f = await waiting();
+    await act(async () => f.pending.resolve(reason === '取消' ? { state: 'cancelled' } : reason === '拒绝' ? { state: 'blocked', reason: 'missing', wrote: 'no', message: '文件缺失' } : Promise.reject(Error('RAM读取拒绝'))));
+    expect(io.entries).toHaveLength(1); expect(useWorkspace.getState().settings.tabs).toHaveLength(1); expect(useWorkspace.getState().queryFileOpenings).toEqual({}); expect(useWorkspace.getState().settings.tabs[0].sql).toBe('SELECT 初始;');
+  });
+  it('首轮flush失败不发打开RPC，清理仅本空占位且不创建模型', async () => {
+    await mount(); let failed = false;
+    hook = (command, input) => command === 'settings.save' && input.tabs.length === 2 ? (failed = true, Promise.reject(Error('RAM首次保存失败'))) : undefined;
+    await click('打开 SQL 文件'); await click('选择并打开 SQL 文件'); hook = undefined;
+    expect(failed).toBe(true); expect(commands.some(item => item.command === 'queryFileSources.open')).toBe(false); expect(io.entries).toHaveLength(1); expect(useWorkspace.getState().settings.tabs).toHaveLength(1); expect(useWorkspace.getState().queryFileOpenings).toEqual({});
+  });
+  it('成功原子发布后flush失败仍保留完整文件正文和来源，不回滚或重建模型', async () => {
+    const f = await waiting(), result = opened();
+    hook = (command, input) => command === 'settings.save' && input.tabs.some((tab: any) => tab.id === f.targetId && tab.fileSourceBinding) ? Promise.reject(Error('RAM成功后保存失败')) : undefined;
+    await act(async () => f.pending.resolve(result)); hook = undefined;
+    expect(useWorkspace.getState().settings.tabs.find(tab => tab.id === f.targetId)).toMatchObject({ sql: result.sql, fileSourceBinding: result.binding.ref }); expect(useWorkspace.getState().queryFileOpenings).toEqual({});
+    expect(io.entries).toHaveLength(2); expect(io.entries[1].initial).toBe(result.sql); expect(document.body.textContent).toContain('保存结果未能确认');
+  });
+  it.each(['连接修订', '原来源ABA', '关闭原标签'] as const)('%s精确取消旧task，迟到回包不绑定，未改动占位可归本owner收尾', async change => {
+    const f = await waiting();
+    await act(async () => {
+      const state = useWorkspace.getState();
+      if (change === '连接修订') state.invalidateConnection('c');
+      if (change === '原来源ABA') { state.updateTab('t', { fileSourceBinding: sourceView().ref }); const tab = useWorkspace.getState().settings.tabs.find(item => item.id === 't')!; const next = { ...tab }; delete next.fileSourceBinding; state.updateSettings({ tabs: useWorkspace.getState().settings.tabs.map(item => item.id === 't' ? next : item) }); }
+      if (change === '关闭原标签') state.closeTab('t');
+    });
+    await act(async () => f.pending.resolve(opened()));
+    expect(commands.filter(item => item.command === 'queryFileSources.cancel')).toContainEqual({ command: 'queryFileSources.cancel', input: { tabId: f.targetId, taskId: f.taskId } });
+    expect(useWorkspace.getState().settings.tabs.find(tab => tab.id === f.targetId)).toBeUndefined(); expect(useWorkspace.getState().queryFileOpenings).toEqual({}); expect(io.entries).toHaveLength(1);
+  });
+  it('目标外部草稿先变化则首次模型属于新稿；旧回包不覆盖、不清其它busy', async () => {
+    const f = await waiting(); await act(async () => { useWorkspace.getState().updateTab(f.targetId, { sql: '外部新稿\n', title: '新稿' }); useWorkspace.getState().setBusy(f.targetId, true); });
+    expect(io.entries).toHaveLength(2); expect(io.entries[1].initial).toBe('外部新稿\n'); await act(async () => f.pending.resolve(opened()));
+    expect(useWorkspace.getState().settings.tabs.find(tab => tab.id === f.targetId)).toMatchObject({ sql: '外部新稿\n', title: '新稿' }); expect(useWorkspace.getState().settings.tabs.find(tab => tab.id === f.targetId)?.fileSourceBinding).toBeUndefined(); expect(useWorkspace.getState().activeJobs[f.targetId]).toBe(true); expect(io.entries).toHaveLength(2); expect(useWorkspace.getState().queryFileOpenings).toEqual({});
+  });
+  it('关闭目标后同id新来源/新busy仍属于新文档，旧打开回包不能覆盖或收尾', async () => {
+    const f = await waiting(); await act(async () => {
+      const state = useWorkspace.getState(); state.closeTab(f.targetId); state.openTab({ id: f.targetId, kind: 'query', connectionId: 'c', title: '同id新文档', sql: '新来源正文\n', fileSourceBinding: { ...sourceView().ref, revision: 77 } }); state.setBusy(f.targetId, true);
+    });
+    const before = useWorkspace.getState().settings.tabs.find(tab => tab.id === f.targetId); await act(async () => f.pending.resolve(opened()));
+    expect(useWorkspace.getState().settings.tabs.find(tab => tab.id === f.targetId)).toBe(before); expect(before?.fileSourceBinding?.revision).toBe(77); expect(useWorkspace.getState().activeJobs[f.targetId]).toBe(true); expect(useWorkspace.getState().queryFileOpenings).toEqual({}); expect(io.entries).toHaveLength(2);
+  });
+  it('已有模型在保存绑定修订、恢复配置和通用busy变化中保持，不借新占位路径重建', async () => {
+    const editor = await mount(true); await act(async () => { for (const menu of menus) menu('save-query'); }); expect(io.entries).toHaveLength(1); expect(io.entries[0].editor).toBe(editor);
+    await act(async () => { const state = useWorkspace.getState(); state.updateSettings({ tabs: state.settings.tabs.map(tab => ({ ...tab })) }); state.setBusy('t', true); state.setBusy('t', false); });
+    expect(io.entries).toHaveLength(1); expect(io.entries[0].editor).toBe(editor); expect(useWorkspace.getState().queryFileOpenings).toEqual({});
+  });
+});
 
 describe('最近SQL文件真实工具栏/对话框/控制器接线（RAM）', () => {
   const recentId = '834573d5-d9f0-4f20-998a-78be62162755';
