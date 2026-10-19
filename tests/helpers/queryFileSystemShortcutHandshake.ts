@@ -16,6 +16,7 @@ export interface SystemShortcutReceipt {
 }
 export interface SystemShortcutDriver {
   caseTitle: string;
+  operator: string;
   waitForInput(request: SystemShortcutRequest, current: () => void, info: Pick<TestInfo, 'attach'>): Promise<SystemShortcutReceipt>;
 }
 type Stamp = { dev: bigint; ino: bigint; size: bigint; mtimeNs: bigint; ctimeNs: bigint };

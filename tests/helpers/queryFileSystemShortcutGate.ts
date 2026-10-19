@@ -1,6 +1,6 @@
 import { win32 } from 'node:path';
 
-export const systemShortcutCase = '单次系统Ctrl+S：Root原生输入、UTF16LE来源完整保存及独立重启';
+export const systemShortcutCase = '单次系统Ctrl+S：指定操作者原生输入、UTF16LE来源完整保存及独立重启';
 const gate = 'DBARK_QUERY_FILE_SYSTEM_SHORTCUT_NATIVE_TEST', approval = 'DBARK_QUERY_FILE_SYSTEM_SHORTCUT_NATIVE_APPROVED';
 /** 默认/list只登记，不读目录、清单、live或进程；访问器不构成批准。 */
 export function systemShortcutActive(env: NodeJS.ProcessEnv, args: readonly string[]) {
