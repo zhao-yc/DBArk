@@ -2,6 +2,8 @@
 
 ## 当前统筹检查点（2026-10-19）
 
+声明依赖修正`701ba17`的新完整Linux检查已成功：551文件、10296项通过、10条件跳过，类型和构建成功；桌面／安装／发行均条件跳过，见[固定检查范围](development/sql-workspace-linux-ci-20261019.md)。后续`91194d5`仅新增快捷键观测准备，本地56项及类型通过；单次Windows实际Ctrl+S收到页面keydown，但未观测到preload菜单／保存任务通知，保存断言失败，旧源文件原62字节与身份保持。根因和正常退出仍未确认，见[原始失败观察](../tests/integration/acceptance-query-file-shortcut-observation-root-20261019.md)。不据此增加完整工作包或发行计数。
+
 0.28 已整合文件捕获原换行保留、格式化准入和严格源码／安装原生CI接线；固定 `e0fa1dd` 本地24文件／459项、类型及新109文件构建成功。同一产品的最近SQL及来源保存两项Windows源码流程已分别取得实际通过，四个owner正常收尾、成功目录删除；首例所在整轮仍退出1，第二例独立运行绿色，按钮保存不含原生快捷键，见[正式文件验收](../tests/integration/acceptance-query-files-root-20261019.md)。本版原生CI `39189445206` 的Linux检查成功，三桌面任务失败、安装未执行；安装／macOS与保存菜单快捷键仍待对应验证。不新增完整工作包或公开发行计数，原失败均保留，见[当前证据与边界](development/query-files-native-root-20261018.md)。
 
 同一 `e0fa1dd` 产品的首次格式化按钮／快捷键两例Windows源码已完整绿色：真实文件／Main LF、模型CRLF、触发前零编辑，一次Undo及Redo／Undo、SQLite9独立重启和四owner正常收尾完成。仅恢复模型正文；按当前原摘要规则回传CRLF后相对磁盘LF仍dirty，不冒称磁盘clean体验已解决。见[准确格式化实证](../tests/integration/acceptance-query-format-eol-root-20261019.md)。R8完整Linux为549文件／10253通过／10跳过，类型与构建成功；原生及安装失败边界保持，Q01／Q03仍为“部分”。

@@ -1,0 +1,13 @@
+# 单次文件保存快捷键：Windows源码失败观察
+
+2026-10-19，Root固定测试头`91194d5326782267ad50971b5e96dbf03c882bb8`、原0.28.0产品构建`e0fa1dd127eeb9d932ae14e097848a45b2833cfb`及完整113输入封存`82b50ed08a7f7ef7f841413e9fce85705fc7a4df4d69b1a01ea13096c98a2bd8`，执行一项新的临时Windows源码用例。原报告SHA-256为`e92f7e8b55d630fafd93fe3772d250afa80769dd4dfc67e09766286c390f3479`：退出1，0通过／1失败／0跳过／0重试，主体10.470秒，总56.757秒，另有原45秒worker teardown timeout。保存断言和全局收尾错误分开保留，不能称保存成功或正常退出。
+
+正式文件入口打开自有UTF16LE+BOM／CRLF文件，真实键盘改稿后只按一次Ctrl+S，没有按钮兜底、手动菜单click、菜单包装、保存IPC重发或产品handler修改。保存前原window1／webContents1均有焦点；页面观察前和keydown瞬间均为document／editor有焦点、无模态窗、保存／打开按钮可用、editorBusy=false。实际收到一个ctrl=true、meta／shift／alt／repeat／composing均false的keydown。观察器只有before和keydown两条记录，没有公开onMenu或保存任务回调，且没有观察器错误。随后原5秒保存断言持续看到未保存状态而失败。
+
+上述记录能定位到“页面已经收到按键，但本观察器未收到preload菜单通知”，不能唯一证明Main菜单click未发生、CDP不支持菜单、订阅丢失或某个产品门是根因。UI disabled／busy仅是界面投影。静态接线仍为原生菜单`CmdOrCtrl+S`发送`save-query`，preload公开转发后QueryTab再按活动标签／模态／文件busy门路由。Electron官方分别描述菜单accelerator和renderer键盘事件；本用例没有直接观察Main菜单click，不把两条机制推断成同一事件证明。[官方快捷键说明](https://www.electronjs.org/docs/latest/tutorial/keyboard-shortcuts)
+
+Root独立外部后核只读原目录及精确源文件，源文件仍为62字节、dev4031449971／ino562949956745259、摘要`4cbe7be77f1bc25070372abbf80b3b4b467a7c7425a739633f86a2c1e1688144`，目录身份保持，未读SQLite、未清理或强停。五个原PID当前缺席，原owner的confirmed／willQuit／closed仍为false，不能倒填正常收尾。后核证明SHA为`2f0e2e4adc54ef2c06c384ffc04d81169136aa94ebd4e4b34e4e8916ade09524`。
+
+员工3只读独审交接SHA为`41ee70af794441c02a0f4c28c11320c1c6c00f8d19c93a5474815b8a8bea9d36`，原报告、113封存及5份审查摘要匹配；未访问SDK、失败source／SQLite，未重跑。准备从作者`d116d79`整合为`91194d5`，仅6个新文件；Root3文件56项RAM及类型通过，日志SHA`a729e332c9dab9cfed0f3b8409c082187fa105ae46ded07f5559516e90456c3e`、独立准备审查SHA`4b2348e7ad742402e0bd4c3a698057ed47ccedb07b8e67a864c46612fd10f112`。这些不替代本项失败，也不改写原run1893失败或run1896工具栏保存成功。
+
+本轮没有私网数据库、Docker、系统剪贴板或录像。macOS、安装、真实系统按键到Main菜单的完整因果链仍未验。下一步应继续区分输入通道和原菜单通知环节；不能因为测试未收到菜单消息直接增加可能双发保存的兜底。
