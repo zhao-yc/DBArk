@@ -4,6 +4,7 @@ import { queryLayoutZh as layoutText } from '../../src/renderer/locales/queryLay
 import { bindEditorIndentNativeCase } from './editor-indentation-native-gate';
 import { queryLayoutNativeActive, bindQueryLayoutNativeEnvironment } from './query-layout-native-gate';
 import type { EditorIndentNativeRun, IndentNativeOwner } from './editor-indentation-native-owner';
+import { readQueryLayoutNativeGeometry } from '../helpers/queryLayoutNativeGeometry';
 
 const active = queryLayoutNativeActive(process.env, process.argv);
 const binding = active ? bindQueryLayoutNativeEnvironment(() => ({ env: process.env, args: process.argv, platform: process.platform })) : undefined;
@@ -89,19 +90,37 @@ async function history(run: EditorIndentNativeRun, owner: IndentNativeOwner, ori
   await run.step(owner, () => owner.page.keyboard.press(`${modifier}+z`)); expect((await current(run, owner)).value).toBe(original.undone);
   await run.step(owner, () => owner.page.keyboard.press(redo)); expect((await current(run, owner)).value).toBe(original.appended);
 }
-/** 通过所属BrowserWindow官方API改变窗口尺寸，既不改DOM style也不伪造ResizeObserver。 */
-async function resize(run: EditorIndentNativeRun, owner: IndentNativeOwner, width: number, height: number) {
+/** 在当前有效动作内附数字证据；附件失败只记通用注解，不遮盖原尺寸或断言错误。 */
+async function attachGeometry(run: EditorIndentNativeRun, owner: IndentNativeOwner, info: TestInfo, name: string, value: unknown) {
+  await run.step(owner, () => info.attach(name, { body: Buffer.from(JSON.stringify(value)), contentType: 'application/json' }).catch(() => {
+    info.annotations.push({ type: '分栏几何附件失败', description: '原尺寸与布局断言继续保留；未额外访问窗口。' });
+  }));
+}
+/** 官方窗口请求不等于完成；同一原期限内最多5秒读真实内容尺寸，未达到仍失败保留。 */
+async function resize(run: EditorIndentNativeRun, owner: IndentNativeOwner, width: number, height: number, info: TestInfo) {
   const handle = await run.step(owner, () => owner.application.browserWindow(owner.page));
   await run.step(owner, () => handle.evaluate((window, size) => { window.setMinimumSize(720, 320); window.setContentSize(size.width, size.height); }, { width, height }));
+  await expect.poll(async () => {
+    const actual = await run.step(owner, () => handle.evaluate(window => window.getContentSize()));
+    const page = await run.step(owner, () => owner.page.evaluate(readQueryLayoutNativeGeometry));
+    await attachGeometry(run, owner, info, '分栏原生窗口尺寸', { requested: { width, height }, actual: { width: actual[0], height: actual[1] }, page });
+    return actual;
+  }, { timeout: 5000, intervals: [100, 200, 400], message: '原生内容窗口须真实达到请求尺寸；未达到不能继续分栏验收' }).toEqual([width, height]);
 }
 /** 只读真实编辑区几何及可访问像素值，两者都要随正式分栏变化。 */
 async function geometry(run: EditorIndentNativeRun, owner: IndentNativeOwner) {
-  return run.step(owner, () => owner.page.evaluate(() => {
-    const tab = document.querySelector<HTMLElement>('.tab-pane:not([hidden]) .query-tab');
-    const editor = tab?.querySelector<HTMLElement>('.sql-editor-wrap'), separator = tab?.querySelector('[role="separator"]');
-    if (!editor || !separator) throw Error('分栏专项找不到实际编辑区或分隔条');
-    return { height: editor.getBoundingClientRect().height, value: Number(separator.getAttribute('aria-valuenow')), maximum: Number(separator.getAttribute('aria-valuemax')) };
-  }));
+  const observed = await run.step(owner, () => owner.page.evaluate(readQueryLayoutNativeGeometry));
+  const { maximum, value } = observed.separator;
+  if (!observed.editor || maximum === null || value === null) throw Error('分栏专项找不到实际编辑区或分隔条几何');
+  return { height: observed.editor.height, value, maximum, observed };
+}
+/** 允许真实ResizeObserver在原5秒内完成；410物理准入及后续精确拖动目标不降低。 */
+async function readyMaximum(run: EditorIndentNativeRun, owner: IndentNativeOwner, info: TestInfo) {
+  await expect.poll(async () => {
+    const value = await geometry(run, owner);
+    await attachGeometry(run, owner, info, '分栏原生准入几何', value.observed);
+    return value.maximum;
+  }, { timeout: 5000, intervals: [100, 200, 400], message: '原生查询区须具备大于410像素的真实分栏空间' }).toBeGreaterThan(410);
 }
 /** 固定目标标签的持久偏好只读观察；主进程settings不是DOM相似度。 */
 async function height(run: EditorIndentNativeRun, owner: IndentNativeOwner, id: string) { return (await settings(run, owner)).tabs.find(tab => tab.id === id)?.queryEditorHeight; }
@@ -142,9 +161,9 @@ test('离线原生分栏：两查询独立拖动/键盘、取消/默认、视觉
   const scope = bindEditorIndentNativeCase(info, binding!, () => test.info()); cases.set(info, scope); scope.assertCurrent();
   const run = runtime!.createEditorIndentNativeRun(scope, approval!);
   try {
-    const first = await run.launch(); await observe(run, first); await resize(run, first, 1400, 1000); await prepareQuery(run, first);
+    const first = await run.launch(); await observe(run, first); await resize(run, first, 1400, 1000, info); await prepareQuery(run, first);
     const a = (await settings(run, first)).activeTabId!; expect(a).toBeTruthy(); const originalA = await seed(run, first, '分栏A');
-    expect((await geometry(run, first)).maximum).toBeGreaterThan(410);
+    await readyMaximum(run, first, info);
     await drag(run, first, 60); await expect.poll(() => height(run, first, a)).toBe(360); expect(content(await current(run, first))).toEqual(content(originalA.selected));
     await key(run, first, 'ArrowDown'); await expect.poll(() => height(run, first, a)).toBe(370); expect(content(await current(run, first))).toEqual(content(originalA.selected));
     const beforeCancel = await settings(run, first); await drag(run, first, 80, true); await unchangedAfterDebounce(run, first, beforeCancel); expect(content(await current(run, first))).toEqual(content(originalA.selected));
@@ -156,12 +175,12 @@ test('离线原生分栏：两查询独立拖动/键盘、取消/默认、视觉
     await select(run, first, 0, a); expect((await current(run, first)).model).toBe(originalA.selected.model); expect((await current(run, first)).editor).toBe(originalA.selected.editor); await expect.poll(() => geometry(run, first).then(value => value.value)).toBe(300);
     await select(run, first, 1, b); const beforeSmall = await settings(run, first), stableModels = (await snapshots(run, first, '.query-tab', false)).map(content);
     expect(beforeSmall.tabs.map(tab => [tab.id, tab.queryEditorHeight])).toEqual([[a, 300], [b, 390]]);
-    await resize(run, first, 1400, 480); await expect.poll(() => geometry(run, first).then(value => value.height)).toBeLessThan(390); await unchangedAfterDebounce(run, first, beforeSmall);
+    await resize(run, first, 1400, 480, info); await expect.poll(() => geometry(run, first).then(value => value.height)).toBeLessThan(390); await unchangedAfterDebounce(run, first, beforeSmall);
     expect((await snapshots(run, first, '.query-tab', false)).map(content)).toEqual(stableModels);
-    await resize(run, first, 1400, 1000); await expect.poll(() => geometry(run, first).then(value => value.height)).toBeCloseTo(390, 0); expect(await settings(run, first)).toEqual(beforeSmall);
+    await resize(run, first, 1400, 1000, info); await expect.poll(() => geometry(run, first).then(value => value.height)).toBeCloseTo(390, 0); expect(await settings(run, first)).toEqual(beforeSmall);
     await noExecution(run, first); const saved = await settings(run, first); await run.close(first);
     const disk = await run.stopped(path => runtime!.readIndentNativeSettings(path, () => run.assert())); expect(disk.schema).toBe(9); expect(disk.settings.tabs).toEqual(saved.tabs); expect(disk.settings.activeTabId).toBe(b);
-    const second = await run.launch(); expect(second.application).not.toBe(first.application); await observe(run, second); await resize(run, second, 1400, 1000);
+    const second = await run.launch(); expect(second.application).not.toBe(first.application); await observe(run, second); await resize(run, second, 1400, 1000, info);
     expect(await settings(run, second)).toMatchObject({ tabs: saved.tabs, activeTabId: b }); const restored = await snapshots(run, second, '.query-tab', false); expect(restored).toHaveLength(2); expect(restored.map(value => value.value)).toEqual(saved.tabs.map(tab => tab.sql));
     await expect.poll(() => geometry(run, second).then(value => value.height)).toBeCloseTo(390, 0);
     await select(run, second, 0, a); await expect.poll(() => geometry(run, second).then(value => value.height)).toBeCloseTo(300, 0); await select(run, second, 1, b); await expect.poll(() => geometry(run, second).then(value => value.height)).toBeCloseTo(390, 0);
