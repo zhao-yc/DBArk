@@ -17,7 +17,27 @@
     "head": "0f39cf69b149a1466fa097deec554f4ff0e2f59d",
     "runId": 39258588418,
     "jobId": 118080052594,
-    "status": "进行中"
+    "status": "通过，76通过/313条件跳过",
+    "passed": 76,
+    "skipped": 313,
+    "approvalSha256": "d9d754105d243d7abd209c8f6aa5bc0b43ff7ccfacb1f6bd5d571e718c1c5cdf",
+    "manifestSha256": "9077db7bfdc21b14ddd6db8004efebc096eb9d5108be8b050ff55e55be9be12a",
+    "identicalRuntimeFilesWithNative": 113,
+    "artifactId": 12189941128,
+    "receivedZipBytes": 3901394,
+    "receivedZipSha256": "9015341298554c24b3ccccad4ca8d279688169613cf43c662ac659cc60df9c63",
+    "allMemberCrcValidated": true
+  },
+  "sourceIdentityReadback": {
+    "head": "610948f6fd8d211c34f7689f49eb4ba12152ea8c",
+    "runId": 39260328180,
+    "jobId": 118085975276,
+    "host": "GitHub-hosted Ubuntu",
+    "nativeArtifactId": 12181093082,
+    "nativeReceivedZipBytes": 42049,
+    "nativeReceivedZipSha256": "b8c38327b28b5b543ef3e3831710fa4011f4836e0962bf83ee180d32906abb6c",
+    "rootLocalZipValidated": false,
+    "sourceSixReplayed": false
   },
   "readback": {
     "head": "44dcf7b89d56c043586bb63b9f069db979ffedc4",

@@ -6,7 +6,11 @@
 
 已核源码六项继续采用`689b35247a3a5c3345f5c0e754c5ae0742e1a33c`的[run39240838841/job118020965684](https://github.com/zhao-yc/DBArk/actions/runs/39240838841/job/118020965684)，源码批准SHA256 `7fa47612c9b3601943e391eba0872cda43f2829d433a036fa601640a90caeeb2`。缩进、分栏及LF/CRLF×按钮/格式化快捷键四例，共6例、12个正常owner；原schema9、独立重启、几何及恢复均已核。四例原报告SHA256 `87565d1f13503513b96d45aa76a8f8c0d0d1434f45ab0308219a1986e5d183f5`；本机接班摘要SHA256 `ce8df5e8da68b0e71b928f36ed84ab98c0a52babcdf7a7dec2c0db299eaf2a20`。本轮没有重复这些源码六项。
 
-当前源码普通legacy另外由`0f39cf69b149a1466fa097deec554f4ff0e2f59d`的[run39258588418/job118080052594](https://github.com/zhao-yc/DBArk/actions/runs/39258588418/job/118080052594)补验，仍在进行中。新job原模式、固定离线预检、同次构建封存source批准及回归前后字节复核；无显示模式切换或安装，也不重新运行689六项。终态未回读之前不计通过。
+源码普通legacy由`0f39cf69b149a1466fa097deec554f4ff0e2f59d`的[run39258588418/job118080052594](https://github.com/zhao-yc/DBArk/actions/runs/39258588418/job/118080052594)单次通过：76通过/313条件跳过、7.8分钟。原模式、固定离线预检、同次构建封存source批准及回归前后字节复核均成功；无显示模式切换或安装，也未重新运行689六项。source批准SHA256 `d9d754105d243d7abd209c8f6aa5bc0b43ff7ccfacb1f6bd5d571e718c1c5cdf`，构建输出、回归前与回归后原日志三次一致。
+
+固定610948f的[只读身份回读39260328180/job118085975276](https://github.com/zhao-yc/DBArk/actions/runs/39260328180/job/118085975276)独立接收原689 artifact12181093082（42049字节，SHA256 `b8c38327b28b5b543ef3e3831710fa4011f4836e0962bf83ee180d32906abb6c`）与新0f39 artifact12189941128（3901394字节，SHA256 `9015341298554c24b3ccccad4ca8d279688169613cf43c662ac659cc60df9c63`），两ZIP全部CRC通过。原六项与新普通回归的完整113份运行字节/相对路径逐项相同，source manifest均为`9077db7bfdc21b14ddd6db8004efebc096eb9d5108be8b050ff55e55be9be12a`，也与本轮3fd安装来源的source manifest一致。只消费原报告，不重跑源码六项；本机接收摘要`.cache/serial-evidence/macos-source-0f39-identity.json` SHA256 `1b6616a458c1a0a259682e4d02953a00c2d8776288e70f9ac5ca307e46c5f674`，ZIP校验宿主仍为GitHub-hosted Ubuntu。
+
+源码与安装的389个legacy登记用例逐行提取核对，每阶段76通过/313跳过，文件/行号/状态及每spec计数与[Windows完整129spec表](acceptance-v028-windows-success-20261019.md)逐项相同。条件跳过仍保持；本机完整提取清单`.cache/serial-evidence/macos-arm64-legacy-case-inventory.json` SHA256 `e9498ed0204091b824f4b0aeb520e086764476f1b736cc366cd205f36fe7c665`，不计为额外测试。
 
 ## 本轮真实DMG安装
 
@@ -48,4 +52,4 @@
 
 首轮cfadb2d/run39252503731在Swift旧分支门前拒绝，未安装；第二轮5a4ca1b/run39253421880的原六项和legacy虽通过，但模式租约届满、恢复失败、原安装根保留，整轮仍为失败。它们的原件、未知现场及独立回读均保持，未用第三轮成功改判或补清。原因及修正见[完整串行记录](../../docs/development/v028-macos-installed-20261019.md)。
 
-本证据不覆盖macOS x64、真实系统Cmd+S、当前关键字专项、实库驱动版本矩阵、公开下载后安装或最终发行。源码普通legacy仍需上述独立新job终态；所有剩余项继续按总矩阵逐项记录。
+本证据不覆盖macOS x64、真实系统Cmd+S、当前关键字专项、实库驱动版本矩阵、公开下载后安装或最终发行。Mac arm64本项源码六项/源码legacy/DMG安装六项/安装legacy与独立资产回读已闭合；其余专项继续按总矩阵逐项记录。
