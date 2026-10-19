@@ -56,3 +56,7 @@ Root 独审本地提交、bundle 与 RAM/类型证据后，再决定是否为全
 未注册时失败只清除本地标记，不能为了清理调用SDK。开始注册前先设置同一原deadline的本地timer；若注册本身晚回，只解绑已发起的自身EventEmitter listener，不读窗口、不退出owner、不派发保存或补SDK。未知/倒退时钟下也不发fault正文，观察清理异常不能打断产品输入。
 
 新增27项原闭包RAM反例逐项覆盖19个SDK读取节点、timer及3个注册节点晚回、NaN/Infinity/时钟倒退和单调有效时钟正例，核跨时后lateSDKReads=0、无后续注册/ready、无派发。原44项Main观察、30项快捷键准备及28项owner/期限门继续复核；本地5文件129项及类型检查通过。证据只写新的 `.cache/main-probe-deadline-fix-evidence`，不覆盖626原件；仍未运行GUI、原生案例、Playwright/list、端口、DB或CI，也未推送。
+
+## Root整合后的双故障保留修正
+
+Root在当前原catch/finally上回放原断言、内存附录和自有FD关闭的四种错误组合，证实附录与关闭同时失败时，finally会覆盖尚未保留的附录错误：原3项通过／1项失败。仅将附录聚合错误同步赋给原failure变量，继续沿原throw及finally，完整保留原断言、附录及关闭错误；不增加任何SDK读取、按键、保存、owner退出或现场清理。反例执行真实live的catch/finally，主体仅替换为确定原失败；文本／路径／SDK仍是明确禁止的RAM端口。此修正不改原保存断言或任一旧原生失败记录。

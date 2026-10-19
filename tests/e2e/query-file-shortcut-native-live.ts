@@ -118,7 +118,8 @@ export function registerShortcutNative(binding: ReturnType<typeof bindShortcutNa
       failure = reason; run.retained = true; mainLog?.stop(); removeMain?.(); removeMain = undefined; log?.stop(); removeConsole?.(); removeConsole = undefined;
       // 原失败优先：只附加父进程已收到的内存记录，不在失败后evaluate/截图/读SQLite补证。
       try { await info.attach('单次文件保存快捷键保留现场', { body: Buffer.from(JSON.stringify({ presses, mainWindow, mainFrames: mainLog?.frames ?? [], events: log?.events ?? [], observationFailed: observationFailure !== undefined, directory: run.path, files: files?.records, owners: run.owners.map(owner => ({ confirmed: owner.confirmed, closed: owner.closed, willQuit: owner.ready, ids: [...owner.ids] })), automaticRetry: false, fallback: false, nativeMenuClickObserved: false })), contentType: 'application/json' }); }
-      catch (attachment) { throw new AggregateError([reason, attachment], '原快捷键失败与内存附录失败', { cause: reason }); } throw reason;
+      // finally仍可能关闭失败；同步保留附录错误，不能被后一层聚合覆盖。
+      catch (attachment) { failure = new AggregateError([reason, attachment], '原快捷键失败与内存附录失败', { cause: reason }); throw failure; } throw reason;
     } finally { mainLog?.stop(); removeMain?.(); log?.stop(); removeConsole?.(); try { await files?.closeHandles(); } catch (closing) { run.retained = true; throw new AggregateError(failure === undefined ? [closing] : [failure, closing], '快捷键原文件句柄关闭失败', { cause: failure }); } }
   });
 }
