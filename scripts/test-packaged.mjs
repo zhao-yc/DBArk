@@ -6,6 +6,7 @@ import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'nod
 import { fileURLToPath } from 'node:url';
 import { approveInstalled, preparePackageIdentity } from './native-editor-ci-identity.mjs';
 import { ciContext, packageCleanupAllowed, runNativeEditorSpecialties } from './native-editor-ci.mjs';
+import { fileFirstModelCleanupAllowed, runNativeFileFirstModel } from './native-file-first-model-ci.mjs';
 
 const project = fileURLToPath(new URL('../', import.meta.url));
 const platform = process.platform;
@@ -58,6 +59,7 @@ const mountDirectory = join(temporary, 'mount');
 let installAttempted = false;
 let testFailure;
 let nativeResult;
+let fileFirstModelResult;
 const nativeEnabled = process.env.DBARK_NATIVE_EDITOR_CI === '1';
 if (process.env.DBARK_NATIVE_EDITOR_CI !== undefined && !['0', '1'].includes(process.env.DBARK_NATIVE_EDITOR_CI)) throw Error('原生专项CI开关必须为0或1');
 
@@ -148,6 +150,9 @@ try {
     const output = join(project, 'test-results/native-editor-ci');
     const approval = approveInstalled(packageProof, executable, output);
     nativeResult = runNativeEditorSpecialties({ approval, output });
+    // 原两专项成功后才运行独立四例；仍消费本job原installed批准，不重建或重签。
+    fileFirstModelResult = runNativeFileFirstModel({ project, approval, phase: 'installed', output: join(project, 'test-results/native-file-first-model-ci') });
+    if (!fileFirstModelCleanupAllowed(fileFirstModelResult)) throw Error('文件首次模型四例终态未知，保留安装现场');
   }
   // 普通与C02专用夹具统一使用本次安装所得程序，覆盖父进程继承的旧路径。
   const env = { ...process.env, DBARK_EXECUTABLE_PATH: executable, DBARK_C02_EXECUTABLE_PATH: executable, DBARK_INTEGRATION_ENABLED: '0' };
@@ -162,7 +167,7 @@ try {
   testFailure = error;
 } finally {
   try {
-    if (!packageCleanupAllowed(nativeEnabled, nativeResult, testFailure)) {
+    if (!packageCleanupAllowed(nativeEnabled, nativeResult, testFailure) || nativeEnabled && !fileFirstModelCleanupAllowed(fileFirstModelResult)) {
       // 不卸载、不分离、不删安装根；原用例保留的数据目录/PID仍以原附件为准，不补强停或重试。
       console.error('原生专项退出证明缺失或回归失败，本次安装现场保留：' + temporary);
     } else {

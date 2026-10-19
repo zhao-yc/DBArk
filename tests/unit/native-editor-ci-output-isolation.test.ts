@@ -39,7 +39,9 @@ function fixture() {
   const files = ['source-approval.json', 'installed-approval.json', 'source-indent-manifest.json', 'installed-layout-manifest.json', 'source-indent/report.json', 'installed-layout/accepted.json'];
   const bytes = Buffer.from('合成批准及原专项终态，不可被普通回归删除');
   for (const name of files) { mkdirSync(dirname(join(evidence, name)), { recursive: true }); writeFileSync(join(evidence, name), bytes); }
-  return { project, evidence, files, bytes };
+  const firstModelEvidence = join(project, 'test-results/native-file-first-model-ci'), firstModelFiles = ['source/report.json', 'source/accepted.json', 'installed/report.json', 'installed/accepted.json', 'installed/failure.json'];
+  for (const name of firstModelFiles) { mkdirSync(dirname(join(firstModelEvidence, name)), { recursive: true }); writeFileSync(join(firstModelEvidence, name), bytes); }
+  return { project, evidence, files, bytes, firstModelEvidence, firstModelFiles };
 }
 /** 在RAM中读取实际安装参数，不另造一个与产品脚本无关的理想参数数组。 */
 function argumentsFor(project: string, enabled: boolean) { return runInNewContext(installedArguments, { project, join, process: { env: enabled ? { DBARK_NATIVE_EDITOR_CI: '1' } : {} } }) as string[]; }
@@ -58,6 +60,8 @@ describe('原PW清理下源码与安装回归的输出隔离', () => {
     expect(existsSync(disposable)).toBe(false);
     for (const name of f.files) expect(existsSync(join(f.evidence, name)), '原批准/专项证据应保留：' + name).toBe(true);
     for (const name of f.files) expect(readFileSync(join(f.evidence, name))).toEqual(f.bytes);
+    // 同一原SDK清理也必须保留新四例原报告/receipt/失败记录，不靠另写理想清理器证明。
+    for (const name of f.firstModelFiles) expect(readFileSync(join(f.firstModelEvidence, name))).toEqual(f.bytes);
   });
   it('未启用新专项的独立安装调用保持旧默认参数', () => {
     const f = fixture(); expect(argumentsFor(f.project, false)).toEqual([join(f.project, 'node_modules/@playwright/test/cli.js'), 'test']);

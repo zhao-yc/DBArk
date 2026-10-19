@@ -78,6 +78,11 @@ jobs:
       - name: 同次构建封存并单次验证源码缩进与分栏专项
         id: native-source
         run: node scripts/native-editor-ci.mjs source
+      - name: 同job原源码批准验证首次文件模型四例
+        run: node scripts/native-file-first-model-ci.mjs source
+        env:
+          DBARK_NATIVE_EDITOR_SOURCE_APPROVAL: ${{ steps.native-source.outputs.source_approval }}
+          DBARK_NATIVE_EDITOR_SOURCE_APPROVAL_SHA256: ${{ steps.native-source.outputs.source_approval_sha256 }}
       - run: pnpm exec playwright test --output=test-results/legacy-source
         env:
           # 已验的本地查询导航在三个原生平台执行；私网用例继续关闭。

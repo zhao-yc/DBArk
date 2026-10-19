@@ -15,3 +15,13 @@ Root独审补充发现失败分支尚未关闭已持有文件句柄；真实执�
 所有实际UI、SDK和Main RPC分别经过原`run.step`；自带父门的launch/close/stopped/finish继续沿原生命周期，避免嵌套busy。renderer evaluate每个最多一条Main RPC。失败只附父端已经取得的内存记录，不在catch/finally补读SDK、窗口、文件、PID或SQLite，不自动重试、强停、清理或回答未知提示。附件失败与原失败一并保留。
 
 窄RAM只执行声明、独立门、golden/过渡断言、实际getter观察函数和原失败/晚回编排；原生、文件和SDK边界均为明确RAM端口。真实EOL-only与混合行尾防护仍保留原RAM，不冒称本4例覆盖。旧R1900源码、期待、原件和既有证据完全保持；这4例是新产品行为的待执行准备，不追认旧结果。
+
+## 持续三平台源码与实际安装CI接线准备
+
+新增`scripts/native-file-first-model-ci.mjs`只消费同job原`readApproval`、`ciContext`和indent清单，复核完整运行树，不build、不下载SDK、不改写或重签批准。原源码缩进/分栏producer成功输出批准后，工作流用独立step运行四例；实际安装由原`test-packaged.mjs`在原两专项成功后、legacy及清理之前调用。未启用原安装CI开关的独立调用保持原行为。
+
+CLI只选择`query-file-first-model-native.spec.ts`，原JSON的四例则须来自正式`query-file-first-model-native-live.ts`（testDir短路径或精确仓库相对路径），不接受其他绝对同名路径、错spec、额外/重复标题或caseKey。四例必须各一次、零skip/retry/errors，并有完整`文件首次模型原生终态`：每例两个正常owner、SQLite9、目录移除、原文件身份与八个见证、普通编辑/格式化单次Undo，以及零剪贴板/SQL/查询库写入和未安装dirty应答。原四例行为断言不改。
+
+报告与日志分别写入`test-results/native-file-first-model-ci/source`及`installed`；receipt绑定阶段、选择spec、正式live文件、四个case、原报告SHA、原批准SHA、原manifest和同job上下文。与`native-editor-ci`及`legacy-source/legacy-installed`隔离，原always上传涵盖新目录。非零/未知退出先于绿色JSON拒绝；任何新四例失败、终态未知或后续legacy失败，都不卸载、分离或删除安装根，不重试、强停或覆盖首个失败。
+
+子进程只继承桌面所需环境，固定新双门、integration=0及原清单；安装入口仅从该原installed清单读取。认证、外部入口、录制、访问器及别名拒绝，其他CI控制不继承给专项。默认/list在读取批准或启动资源前拒绝。本接线及RAM报告不是四例真实通过；原run1918的格式化Redo选区失败和旧R9记录保留，须等产品修复、Root独审及新构建后另做真实三平台源码/实际安装验收。
