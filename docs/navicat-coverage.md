@@ -2,6 +2,8 @@
 
 ## 当前统筹检查点（2026-10-19）
 
+0.29多列优先级排序已整合为`3adc89c`，保留含列名复制与同坐标重选修复；Root新增组合反例后17文件228项及类型通过，员工5独立16项静态/RAM接纳。此前10673项完整检查仅覆盖单列阶段，多列新完整/原生/安装仍待验。0.28冻结候选不变，见[准确多列整合范围](development/query-result-multisort-root-20261019.md)。
+
 0.28候选冻结为`bf08645a28fceb5d1d40ba16f013bb78e7a7c0a2`，由员工1专职承接完整CI、三平台源码/实际安装和发行准备。单列结果排序与含列名复制进入独立0.29线；Root整合预算回归和同坐标复制修复后，相关198项/类型及员工5独立14项通过。固定`4eec67c`的[完整Linux首次运行](https://github.com/zhao-yc/DBArk/actions/runs/39211790383)成功：564文件/10673通过/10条件跳过，类型与构建成功，原生/安装/系统剪贴板未执行。多列排序另在独审，不继承本次数量。片段JSON传输、完整备份执行两条产品线已启动，见[固定范围、分工及验收清单](development/team-delivery-20261019.md)及[准确组合证据](development/query-result-header-copy-20261019.md)，不增加完整工作包或公开发行计数。
 
 最新整合`8b6bdea`完整Linux首次运行39206282767已成功：560文件、10590通过／10条件跳过，类型与构建成功；原0f失败保持，桌面及安装不外推。Mac独立只读枚举确认当前1024×768／scale1、visibleFrame1024×674，并支持1600×1200等模式；未切换，后续仍实测原布局目标，见[完整CI终态](../tests/integration/acceptance-query-file-first-model-root-20261019.md)和[Mac枚举准确来源](testing/macos-display-probe-root-20261019.md)。
