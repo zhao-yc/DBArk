@@ -90,7 +90,9 @@ it('关闭后同ID重建属于新文档，旧预览拒绝而新检查可用', as
   const original = f.store.queryFileDocument('one'), tab = original.tab;
   expect(original.generation).toBeGreaterThan(0);
   f.store.saveSettings({ ...f.store.settings(), tabs: [] });
-  f.store.saveSettings({ ...f.store.settings(), tabs: [{ ...tab, fileSourceBinding: undefined }] });
+  // 未关联草稿应移除来源字段；显式undefined会被现有持久配置合同拒绝。
+  const { fileSourceBinding: _oldSource, ...unbound } = tab;
+  f.store.saveSettings({ ...f.store.settings(), tabs: [unbound] });
   const rebuilt = f.store.queryFileDocument('one');
   expect(rebuilt.token).not.toBe(original.token); expect(rebuilt.generation).toBe(0);
   expect(f.store.queryFileSource('one')).toBeUndefined(); expect(persistedSql(f.database)).toBe(f.draft);
