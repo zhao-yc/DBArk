@@ -35,10 +35,20 @@ GUI 使用自有合成文件，保留同一真实 Monaco 模型；覆盖预览�
 - 修前 ece279c 的持久化反例 3 过／1 失败；修后 860fa6d 同四项全部通过，原测试 blob 保持。未到达断言不计为已验证。
 - c3a6b63 的两个真实 Monaco 异常回滚反例失败；b17b92d 的七项真实模型检查通过。其余权限分类及 RAM 模型端口回归在 7b7b003 保持断言下转绿，310 项相关检查通过／1 项 POSIX 跳过。
 - ed7e743 新增重建夹具误传显式 undefined 被既有来源校验拒绝；603dc5a 移除字段，未放宽校验或断言，五项持久化检查全部通过。
-- 完整 Windows 套件启动前的首次外部 PID 检查失败；PID 复用的身份对照及完整套件结果另行记录，不能以硬编码的通过字段替代原证据。
+- 完整 Windows 套件启动前的首次外部 PID 检查退出 1，原失败文件保持。套件先于后续完整身份补证启动的执行顺序偏差明确保留；硬编码的通过字段不作为证据。后续对照确认：16908 由原 cmd 复用为新 conhost；15792 在原终核 16:26:34.630146Z 明确不存在，新检查 shell 于 16:30:24.218005Z 才创建，其子进程 13720 同属新检查。未操作这些新进程，也未重跑套件。
 
 本轮未使用 SSH、Docker、数据库凭据或系统剪贴板。系统输入、安装包、macOS 重载及 ACL／所有者／附加流等文件元数据未验。源码检查不代表这些范围通过；Q03 仍为部分，暂不发布。
 
 ## 完整 Windows 回归
 
-唯一原队列 PID 10472，准确 603dc5a，所有 DBARK 门关闭，使用原配置执行 `node node_modules/vitest/vitest.mjs run --reporter=json`。结果及最终源码／构建／Git／原进程检查待读回；不重新启动原队列。
+唯一原队列 PID 10472，准确 603dc5a，所有 DBARK 门关闭，使用原配置执行 `node node_modules/vitest/vitest.mjs run --reporter=json`。退出 0，244.568 秒，584 个文件，11212 项通过／0 失败／1 项 POSIX 跳过，stderr 为空。无 worker、期限或断言覆盖，无重试。
+
+终核 Git 干净、573 个源码／109 个构建文件哈希不变，已记录原进程及直接子进程均缺席，15 份封存文件校验通过。原生报告的 1327 个 suite 不是文件数；584 为 testResults 文件数。唯一跳过为 POSIX 普通权限真实文件用例。
+
+完整套件原目录：`C:\Users\tester\Documents\Codex\2026-10-20\hi\outputs\query-file-reload-full-603dc5a-vm-20261021`。Root 已读取原命令输出中的原计数及最终身份记录；摘要来自 VM 元数据，本机未下载复算：
+
+- `full-original.json`：`5a888a29355615c806dbc39fb5cb3c3b254812b047a03956ed5b8256f0e113b4`。
+- `full-suite-result.json`：`1f91276ac9b807eba80a91827582dda32996a450b7029164ea0d455dfb48a46e`。
+- 首次失败预检：`3f732b0ac04cb43f5b9dc54c00d884c4e40dd51d7551af29a11aac7a2c5a16cc`；后续只读身份对照为 `prior-process-final-check-cross-reference.json`。
+
+本轮按 main 交付已验源码，后续仅文档提交，产品源码树保持上述值。安装及其他平台仍按本记录的未验范围推进，不增加完整工作包或发行计数。

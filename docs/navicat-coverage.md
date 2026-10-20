@@ -2,7 +2,7 @@
 
 ## 当前开发安排（2026-10-21）
 
-继续[SQL源文件外改检查与当前草稿重载](development/query-file-reload-integration-20261020.md)：显式预览和替换确认，取消保留草稿；Main回包丢失不先覆盖唯一持久草稿，原Monaco保留正文／换行及普通撤销历史。最终补已关闭文档状态释放及同ID重建隔离，603dc5a的Linux类型／584文件11203项／构建通过，10平台跳过；Windows类型／65项相关／构建及真实文件GUI1/1通过，573源码与109构建哈希、原owner退出封存已读回，见[准确记录](../tests/integration/acceptance-query-file-reload-603dc5a-20261021.md)。Windows完整套件已确认单次启动PID10472，终态及数字PID复用对照待读回。远端失联保留原队列，不重发或改回本机测试；尚未合入main，不增加完整工作包或发行计数，暂不发布。
+新增[SQL源文件外改检查与当前草稿重载](development/query-file-reload-integration-20261020.md)：显式预览和替换确认，取消保留草稿；Main回包丢失不先覆盖唯一持久草稿，原Monaco保留正文／换行及普通撤销历史。关闭文档释放重载状态，同ID重建拒绝旧预览。603dc5a的Linux类型／584文件11203项／构建通过，10平台跳过；Windows类型／65项相关／构建、真实文件GUI1/1及完整11212项通过／1项POSIX跳过，573源码与109构建哈希不变，原owner及进程终核通过，见[准确记录](../tests/integration/acceptance-query-file-reload-603dc5a-20261021.md)。首次外部数字PID预检失败和补证顺序偏差保留，后续只读对照完整；远端失联期间未重复原队列。按main交付源码，安装、macOS及系统输入未验，不增加完整工作包或发行计数，暂不发布。
 
 新增[从当前单元格追加筛选条件](development/query-result-cell-filter-20261020.md)：原值预填到现有草稿，显式应用才生效；现有OR整组保留，再与新条件AND组合。按唯一键、原位置及标量精度捕获，NULL与空文本分离，漂移撤销旧动作，不执行SQL。固定57f62a4的Linux类型／580文件11144通过、10平台跳过／构建，以及WIN11-TEST类型／368项／新构建、单次原实库GUI、Python独立文件读回与完整11153通过、1平台跳过均通过。恢复SSH255由离线对照定位测试子进程缺少PROGRAMDATA，修正后严格身份探针通过，原失败保留；准确本轮进程、Git及构建终核通过，见[准确本批验收](../tests/integration/acceptance-query-result-cell-57f62a4-20261020.md)。按main交付已验源码，安装、macOS实库等范围不外推，不增加完整工作包计数，暂不发布。
 
