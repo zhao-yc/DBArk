@@ -66,6 +66,39 @@ describe('已返回结果本地条件语义与原行身份',()=>{
   it('负零、前导零和小数尾零是数学相等值，未改变原字符串',()=>{
     const f=fixture('DECIMAL',['-0.0','000.000','0','1.000']);expect(f.apply([rule('eq','+0.000')]).sourceIndices).toEqual([0,1,2]);expect(f.source.rows[0].k).toBe('-0.0');
   });
+  it.each([
+    ['DECIMAL','.12345678901234567890','0.12345678901234567890','0.12345678901234567891'],
+    ['NEWDECIMAL',' +1. ','1.000','1.00000000000000000001'],
+    ['NUMERIC','-.5','-0.5000','-0.49999999999999999999'],
+    ['DECIMAL UNSIGNED','+.5','0.5','0.50000000000000000001'],
+    ['DECIMAL','-.0','-0.000','0.00000000000000000001'],
+    ['FLOAT','.5',0.5,0.6],['DOUBLE','1.e2',100,101],['DOUBLE','-.5e-2',-0.005,-0.004],
+  ] as [string,string,CellValue,CellValue][])('%s小数简写%s只规范化比较输入，保存原条件及精度', (type,input,value,next)=>{
+    const f=fixture(type,[value,next,null]),saved=structuredClone(f.source),view=f.apply([rule('eq',input)]);
+    expect(view.sourceIndices).toEqual([0]); expect(view.rules[0].value).toBe(input);
+    expect(view.result.rows[0]).toBe(f.source.rows[0]);expect(f.source).toEqual(saved);
+    expect(f.apply([rule('gt',input)]).sourceIndices).toEqual([1]);
+  });
+  it.each([['BIGINT','.5'],['INT','1.'],['DECIMAL','.'],['DECIMAL','1.e2'],['DECIMAL','1e2'],['DECIMAL','1.2.'],['DOUBLE','.e2'],['DECIMAL UNSIGNED','-.1'],['DOUBLE','.5e9999']] as const)('%s简写不扩大整数、科学精确数、符号或非法值准入：%s',(type,input)=>{
+    const f=fixture(type,[null]),before=f.filter.view(f.binding);
+    expect(()=>f.apply([rule('eq',input)])).toThrow(text.value);expect(f.filter.view(f.binding)).toBe(before);
+  });
+  it.each(['.5','1.'])('返回的DECIMAL原值%s仍须通过原严格协议格式，不借条件简写修补数据',value=>{
+    const f=fixture('DECIMAL',[value]),before=f.filter.view(f.binding);
+    expect(()=>f.apply([rule('eq',value)])).toThrow(text.value);expect(f.filter.view(f.binding)).toBe(before);
+    const sort=new QueryResultSort(),binding=sort.bind(f.source,[])!;
+    expect(()=>sort.apply(binding,sort.view(binding)!,{column:'k',direction:'ASC'})).toThrow();
+  });
+  it('文本条件不规范化；小数区间和成员列表共享输入准入但保留各自原文',()=>{
+    const literal=fixture('TEXT',['.5','0.5']);expect(literal.apply([rule('eq','.5')]).sourceIndices).toEqual([0]);
+    const f=fixture('DECIMAL',['0.49999999999999999999','0.5','1.000',null]);
+    const range=f.apply([{...rule('between','.5'),upper:'1.'}]);expect(range.sourceIndices).toEqual([1,2]);expect(range.rules[0]).toEqual({...rule('between','.5'),upper:'1.'});
+    const list=f.apply([{...rule('in'),values:['.5','1.']}]);expect(list.sourceIndices).toEqual([1,2]);expect(list.rules[0].values).toEqual(['.5','1.']);
+  });
+  it('补零后的完整DECIMAL输入仍受原4096单位键上限约束，失败保留旧投影',()=>{
+    const f=fixture('DECIMAL',['0']),before=f.filter.view(f.binding),input='.'+'1'.repeat(queryResultFilterLimits.valueUnits-1);
+    expect(input.length).toBe(queryResultFilterLimits.valueUnits);expect(()=>f.apply([rule('eq',input)])).toThrow(text.value);expect(f.filter.view(f.binding)).toBe(before);
+  });
   it('AND/OR按完整条件求值，无条件保留全部，逐条移除回到原视图',()=>{
     const f=fixture();expect(f.apply([rule('eq','a'),rule('eq','B','group')],'AND').sourceIndices).toEqual([]);expect(f.apply([rule('eq','a'),rule('eq','B','group')],'OR').sourceIndices).toEqual([0,1,3]);expect(f.apply([rule('eq','a')]).sourceIndices).toEqual([0]);expect(f.apply([],'OR').result).toBe(f.source);
   });

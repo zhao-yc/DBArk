@@ -396,6 +396,16 @@ it('区间面板与多列排序、勾选复制和导出共用精确原行映射�
   await click(zh.resultExport.selectedTitle);await click(zh.resultExport.chooseFile);await click(zh.resultExport.start);
   expect(exports[0].result.rows).toEqual([original.rows[2],original.rows[1]]);expect(original).toEqual(saved);expect(commands.filter(command=>command==='query.execute')).toHaveLength(1);
 });
+it('小数简写经真实筛选面板应用，重开保留输入；排序、复制和导出仍使用精确原值',async()=>{
+  await mount();const saved=structuredClone(original),input='.12345678901234567890';
+  await click(filterText.open);await addFilterRule(1,'value','gte',input);await click(filterText.apply);
+  await headerAction('value');expect(grid().rows).toEqual([original.rows[1],original.rows[0]]);
+  await click(filterText.open);expect(document.querySelector('[aria-label="'+filterText.input+' 1"]')!.value).toBe(input);await click(filterText.cancel);
+  await act(async()=>grid().onSelectedRowsChange(new Set([0,1])));
+  expect(JSON.parse(copy().get('application/x-dbark-cells')!).rows.map((row:any)=>row[1])).toEqual(['0.12345678901234567890','0.12345678901234567891']);
+  await click(zh.resultExport.selectedTitle);await click(zh.resultExport.chooseFile);await click(zh.resultExport.start);
+  expect(exports[0].result.rows).toEqual([original.rows[1],original.rows[0]]);expect(original).toEqual(saved);expect(commands.filter(command=>command==='query.execute')).toHaveLength(1);
+});
 it('离开区间移除上限并撤销旧输入，重新进入时须重新填写；文本字段不提供区间',async()=>{
   await mountMulti();await click(filterText.open);await addRangeRule('id','between','2','9007199254740993');
   const oldUpper=reactProps(document.querySelector('[aria-label="'+filterText.upper+' 1"]')).onChange;

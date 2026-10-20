@@ -1,5 +1,7 @@
 # 已返回查询结果的本地条件筛选
 
+后继开发候选接纳[小数简写条件输入](development/query-result-filter-decimal-input-20261021.md)：DECIMAL 可写 `.5`、`1.`，浮点类型另可写 `.5e2`／`1.e2`；保留条件原文和原结果精度，只规范化比较输入。尚未完成独立检查，不属于当前7f窗口验收或main交付，暂不发布。
+
 条件面板内可按 Ctrl+Enter（macOS：⌘+Enter）显式应用草稿，Esc取消；普通Enter保留输入行为，输入法组合和长按重复不触发命令。取消保持原过滤及排序，应用沿原来源租约重置旧选择。固定3fedb46已完成Linux类型／单元／构建、Windows类型／301定向／新构建、一次实库组合窗口、Python读回及完整11284通过／1项平台跳过，见[准确验收](../tests/integration/acceptance-query-result-sort-filter-3fedb46-20261021.md)。按main交付源码，原生输入法、系统输入、安装及macOS新组合未验，暂不发布。
 
 开发分支新增[复制筛选条件](development/query-result-filter-duplicate-20261021.md)：在条件旁点击“复制条件”，副本紧随原条件并留在同组，区间、候选值和大小写选项一并保留；编辑副本后仍须显式应用。组合输入和32条总上限保持，旧按钮不能修改新草稿。b8112a6的Linux类型／589文件11310通过、10平台跳过／构建成功，含新增6项RAM用例；Windows及后继窗口尚待验证，不视为main已交付能力。

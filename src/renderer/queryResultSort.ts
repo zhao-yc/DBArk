@@ -89,7 +89,13 @@ export function queryResultFilterKind(column: ResultColumn): 'text' | 'ordered' 
 /** 条件输入只按声明类型准入；仅原本浮点类型允许转有限number，精确数值保留字符串。 */
 export function queryResultFilterLiteral(column: ResultColumn, value: string): CellValue {
   const type=kind(column.type);if(!type)throw Error(text.type);
-  const raw=type==='text'?value:value.trim();let literal:CellValue=raw;
+  let raw=type==='text'?value:value.trim();
+  // 仅补条件输入省略的整数或小数部分，保留符号及全部精度；返回值解析仍使用原严格格式。
+  if(type==='decimal'||type==='float'){
+    const short=(type==='float'?/^([+-]?)(?:(\d+)\.(\d*)|\.(\d+))([eE][+-]?\d+)?$/:/^([+-]?)(?:(\d+)\.(\d*)|\.(\d+))$/).exec(raw);
+    if(short)raw=short[1]+(short[2]??'0')+'.'+(short[3]||short[4]||'0')+(short[5]??'');
+  }
+  let literal:CellValue=raw;
   if(type==='float'){if(!/^[+-]?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?$/.test(raw))throw Error(text.value);literal=Number(raw);}
   key(literal,type,column.type.trim().toUpperCase().endsWith(' UNSIGNED'));return literal;
 }
