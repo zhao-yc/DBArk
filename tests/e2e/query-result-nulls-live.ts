@@ -16,7 +16,7 @@ export function registerQueryResultNullsUi(binding:QueryResultColumnsUiTarget):v
  const cases=new Map<TestInfo,{life:QueryResultColumnsUiLifetime;observer?:mysql.Connection;native?:any;stream?:any}>();let halted=false;
  test.use({preserveOnUnconfirmedExit:true,trace:'off',screenshot:'off',video:'off'});test.setTimeout(120000);test.describe.configure({retries:0});
  test.afterEach(({},info)=>{const current=cases.get(info);if(!current){halted=true;retainOwnedDesktopResources(info);throw Error('结果列未建立本例owner，保留现场');}try{current.life.afterEach();cases.delete(info);}catch(reason){halted=true;throw reason;}});
- test('准确13384真实App逐列NULL位置、精度、多列优先级及复制导出一致',async({trace,screenshot,video},info)=>{
+ test('准确13384真实App逐列NULL位置、精度、多列优先级、筛选快捷键及复制导出一致',async({trace,screenshot,video},info)=>{
   if(halted)throw Error('结果列前例已保留资源，停止后续用例');
   const captured=ownedDesktopResources(info),page=captured.page,application=captured.application,directory=dataDir;
   const life=new QueryResultColumnsUiLifetime({check(allowClosed){binding.assertCurrent();const now=ownedDesktopResources(info);if(now.page!==page||now.application!==application||!allowClosed&&now.closed)throw Error('结果列原owner已变化');},closed:()=>ownedDesktopResources(info).closed,retain:()=>{halted=true;retainOwnedDesktopResources(info);},async exit(){life.check();await application.evaluate(readQueryResultColumnsAudit);life.check();await application.evaluate(guardQueryResultColumnsExitAnswers);life.check();await confirmOwnedDesktopExit(info);}},info as TestInfo&{_startWallTime?:number});
@@ -101,6 +101,14 @@ export function registerQueryResultNullsUi(binding:QueryResultColumnsUiTarget):v
     await observe(()=>panel.getByRole('textbox',{name:filterText.input+' '+index,exact:true}).fill(value));
    }
    await observe(()=>panel.getByRole('combobox',{name:filterText.mode,exact:true}).selectOption('OR'));await observe(()=>panel.getByRole('button',{name:filterText.apply,exact:true}).click());await observe(()=>expect.poll(ids).toEqual(['1','3']));
+   // 真实App窗口按键：Esc只放弃新草稿，普通Enter不提交，Ctrl/Cmd+Enter明确应用；不访问系统剪贴板。
+   await observe(()=>tab.getByRole('button',{name:filterText.open,exact:true}).click());
+   const firstCondition=panel.getByRole('textbox',{name:filterText.input+' 1',exact:true});
+   await observe(()=>firstCondition.fill('2'));await observe(()=>page.keyboard.press('Escape'));await observe(()=>expect(panel).toBeHidden());await observe(()=>expect.poll(ids).toEqual(['1','3']));
+   await observe(()=>tab.getByRole('button',{name:filterText.open,exact:true}).click());await observe(()=>expect(firstCondition).toHaveValue('1'));
+   await observe(()=>firstCondition.fill('2'));await observe(()=>page.keyboard.press('Enter'));await observe(()=>expect(panel).toBeVisible());await observe(()=>expect.poll(ids).toEqual(['1','3']));
+   await observe(()=>page.keyboard.press(`${modifier}+Enter`));await observe(()=>expect(panel).toBeHidden());await observe(()=>expect.poll(ids).toEqual(['2','3']));
+   await observe(()=>tab.getByRole('button',{name:filterText.open,exact:true}).click());await observe(()=>firstCondition.fill('1'));await observe(()=>page.keyboard.press(`${modifier}+Enter`));await observe(()=>expect(panel).toBeHidden());await observe(()=>expect.poll(ids).toEqual(['1','3']));
    for(const index of [3,2])await observe(()=>grid.locator('[role="row"][aria-rowindex="'+index+'"]').getByRole('checkbox').check());
    await observe(()=>expect(selected).toBeEnabled());
    // 合成copy事件只读取本页DataTransfer，不执行复制按钮或覆盖系统剪贴板。
