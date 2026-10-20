@@ -103,7 +103,18 @@ WIN11-TEST安全快进到准确7f，source及构建输入与1f8一致，复用�
 
 Root读取同一原任务确认：身份工具PID17468的30项通过；首次CIM、观察器ready及独立CLI身份捕获通过后才启动GUI。launcher PID10996创建于北京时间07:17:36.866（CIM毫秒），观察器PID17240原生创建07:17:36.9355763，正式CLI PID1956创建07:17:38.950（CIM毫秒）。CLI退出1，用时11.599秒、retry0；首错位于 `query-result-sort-case-live.ts:58:84`，5000毫秒等待后clientHeight仍254、期待至少264。
 
-App查询成功且queries=1已通过，排序、筛选、复制及导出均未到达，CSV／JSON均ENOENT。新控制观察器正常退出，12个本例新进程身份终核零匹配；这不等于原owner正常退出或数据库观察连接原native／stream同流关闭获证，二者仍unknown。新profile `dbark-e2e-ObjQus` 保留，只记元数据。正式失败、工具转义准备错误及旧6592／13504未知保持；不重跑、改尺寸、降门槛、补采样或清理。以上为Root读取的测试会话回报，封存清单与原件摘要尚待最终回报。
+App查询成功且queries=1已通过，排序、筛选、复制及导出均未到达，CSV／JSON均ENOENT。新控制观察器正常退出，12个本例新进程身份终核零匹配；这不等于原owner正常退出或数据库观察连接原native／stream同流关闭获证，二者仍unknown。新profile `dbark-e2e-ObjQus` 保留，只记元数据。正式失败、工具转义准备错误及旧6592／13504未知保持；不重跑、改尺寸、降门槛、补采样或清理。
+
+最终回报确认同一任务已完成封存：source574／tests1304／dist109、Git及原三套封存均未变，64份新封存校验和秘密扫描通过，RAM三项保留。三项原生语法门各执行一次且exit0；控制器PID11512创建07:17:36.630（CIM毫秒）、exit1，launcher exit1转发原GUI失败、观察器exit0。native JSON为120000毫秒／failed／retry0／duration9017毫秒、unexpected1／skipped0／flaky0；11.599秒是正式CLI耗时，不与用例duration混算。未执行Python或full。
+
+真实viewport／window尺寸、分栏minimum／valuenow、结果body／工具栏／grid矩形均未记录，context无Page snapshot，未补采。原件目录为 `outputs/query-result-sort-case-gui-7fcb0e3-vm-20261021`；以下为Root读取VM最终报告的摘要，未下载复算：
+
+| 原件 | SHA256 |
+| --- | --- |
+| gui-original.json | `18f3721b19c7416d9108e61fad4058e438f56c41c432afd99fb66c5730d8af2e` |
+| gui-stage-report.json | `9b27b6f344d320e93fab13a515289e9722c5adaa0573b5d2ae82103b3e70753d` |
+| error-context.md | `558e5a7abda50e9889fe0e1789f903a5f90d7d17956a23bfd4db6379e2b29420` |
+| SHA256SUMS.txt | `aecf0cb645a34f04e67feeb4cf6c5b2b77ac93ddca1bd4da3fdbca6527dc9936` |
 
 静态布局合同另留网格内容96像素，原clientHeight264来自七行全部可见的测试假设；254本身不足以认定产品布局错误。须继续核对已有几何原件，并审查虚拟滚动下如何完整读取七行及保持手写顺序断言，不能把未到达的功能算通过。
 
