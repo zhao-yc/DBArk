@@ -63,4 +63,18 @@ Root随后仅派发同一1f8源码／构建的一次独立GUI，metadata为 `out
 
 GUI原句柄自然退出1、52.479秒，原生结果1失败／0通过／0跳过，并有worker teardown超时。原生数据库observer与外部进程观察器是两条链路，不能混同；normal owner退出、原数据库observer同native／stream关闭、进程后代及profile身份当前未确认。原目录与原件保留，不补清理，不重跑，Python读回／full未启动。
 
-随后原阶段回报确认：首错为 `query.execute` 原处理器返回失败，审计随即停链；底层错误正文没有单独导出，排序、筛选及文件导出的后续成功断言未到达，CSV／JSON仍ENOENT。源码574／测试1302／dist109及Git终核通过，不能据此猜测SQL或产品根因。Root已请求直接展开原JSON／context首错文本，并在原件封存后另授权一次独立原七行常量SELECT诊断：新mysql2连接先核同一准确目标，原SQL不改，成功或失败都停止，只释放这次新连接。它不属于GUI复验，不触碰原失败App或observer，不把诊断成功计作窗口通过；当前尚无该诊断终态。
+随后原阶段回报确认：首错为 `query.execute` 原处理器返回失败，审计随即停链；底层错误正文没有单独导出，排序、筛选及文件导出的后续成功断言未到达，CSV／JSON仍ENOENT。源码574／测试1302／dist109及Git终核通过。原生首错为“结果列原目标／修订／IPC已变化，永久停链：原处理器失败回包：query.execute”，正式调用点 `query-result-sort-case-live.ts:55:90`；没有expected／actual字段，context无Page snapshot，worker另报 `Worker teardown timeout of 45000ms exceeded`。24份原件及全部未知字段保留，不把外部观察器错误推作App失败原因。
+
+## 原SQL独立诊断与夹具修正
+
+Root另行授权只读诊断，从固定1f8源码AST提取原1213字节SQL，不执行helper、改SQL或试修正版。独立新mysql2连接先核MySQL8.4.11／Linux／13384／names=0／准确UUID，探针及原SELECT各一次，得到真实driver错误 `ER_CANT_AGGREGATE_NCOLLATIONS`／errno1271／sqlState HY000，message为 `Illegal mix of collations for operation 'UNION'`。原App handler的底层错误仍未单独捕获，这个独立结果不冒充它的原错误正文。
+
+诊断时间为2026-10-21 06:37:34.015–06:37:34.116（北京时间）。只关闭本次新连接，其原native／stream正常关闭、未强制销毁；原失败App／observer／profile未触碰，未知状态不变。源574／测试1302／dist109、Git及原GUI封存未变，错误272字节且秘密扫描通过，17份封存全部校验通过。目录为 `outputs/query-result-sort-case-sql-diagnostic-1f8fc19-vm-20261021`；以下为VM原件摘要，Root读取回报，未下载复算：
+
+| 原件 | SHA256 |
+| --- | --- |
+| driver-error.json | `f62f08e255dac7d2189c42c56c2641f6f543724d3858a83ff7c0686454a617dd` |
+| sql-diagnostic-report.json | `4b8a553e8eb9ba7173f06044415405be24361fd9a4a55e36b1d1e76c884e0653` |
+| SHA256SUMS.txt | `3792fc3e651c4c66c1432a1794228568d8d75f465f94e4b68a2bb2f7cf496d97` |
+
+后继仅把夹具七个UNION分支的21处文本表达式显式转换为utf8mb4并采用同一utf8mb4_bin；SQL变为1944字节。ID、a／A、两种Unicode原文、NULL／空串、大数、小数、日期／负TIME、二进制值和四行文件期待不改，服务端仍只按ID排序，本地比较器／IPC／产品树260625aa不变。先验证准确提交的Linux检查，再独立执行修正原常量SQL；真实窗口仍须另验，不把夹具修改或原诊断当成通过，也不放宽原断言、期限和收尾。
