@@ -20,7 +20,13 @@ let environment = ProcessInfo.processInfo.environment
 // 源码旧入口与本次安装入口分别绑定真实分支；安装仍只限指定的arm64托管job。
 let sourceBranch = environment["GITHUB_REF"] == "refs/heads/codex/macos-mode-keeper-20261019"
 let installedJob = environment["GITHUB_REF"] == "refs/heads/codex/v028-serial-closeout-20261019" && environment["GITHUB_JOB"] == "arm64-installed"
-guard environment["GITHUB_ACTIONS"] == "true", sourceBranch || installedJob,
+let desktopRef = environment["GITHUB_REF"] ?? ""
+// 常规CI独立核对仓库、工作流、事件和真实ref，不改写环境来穿过旧入口。
+let desktopJob = environment["GITHUB_REPOSITORY"] == "zhao-yc/DBArk" && environment["GITHUB_JOB"] == "desktop" &&
+    ["refs/heads/main", "refs/heads/codex/query-result-range-filter-20261020"].contains(desktopRef) &&
+    environment["GITHUB_WORKFLOW_REF"] == "zhao-yc/DBArk/.github/workflows/ci.yml@" + desktopRef &&
+    ["push", "workflow_dispatch"].contains(environment["GITHUB_EVENT_NAME"] ?? "")
+guard environment["GITHUB_ACTIONS"] == "true", sourceBranch || installedJob || desktopJob,
       environment["MODE_KEEPER_RUNNER_ENVIRONMENT"] == "github-hosted" else {
     FileHandle.standardError.write(Data("会话作用域仅限已批准源码分支或指定arm64安装托管job\n".utf8)); exit(78)
 }

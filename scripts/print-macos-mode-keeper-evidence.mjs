@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto';
 import { closeSync, fstatSync, lstatSync, openSync, readFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { isDesktopKeeperContext } from './macos-installed-cleanup-lease.mjs';
 
 /** 只投影生产者已经写出的模式帧，不枚举显示器、读取应用或改变失败现场。 */
 export function summarizeKeeperJournal(bytes) {
@@ -25,13 +26,15 @@ export function summarizeKeeperJournal(bytes) {
 
 /** 仅固定三个生产者文件；文件变化或链接不作稳定证据，绝不读取资料目录或SDK。 */
 function printEvidence() {
-  assert.equal(process.argv.length, 2);
+  const desktop = isDesktopKeeperContext(process.env), phase = desktop ? process.argv[2] : undefined;
+  assert.equal(process.argv.length, desktop ? 3 : 2);
+  if (desktop) assert.ok(['source', 'installed'].includes(phase));
   assert.equal(process.env.GITHUB_ACTIONS, 'true');
-  assert.ok(process.env.GITHUB_REF === 'refs/heads/codex/macos-mode-keeper-20261019' ||
+  assert.ok(desktop || process.env.GITHUB_REF === 'refs/heads/codex/macos-mode-keeper-20261019' ||
     process.env.GITHUB_REF === 'refs/heads/codex/v028-serial-closeout-20261019' && process.env.GITHUB_JOB === 'arm64-installed');
-  const directory = fileURLToPath(new URL('../.cache/macos-mode-keeper/', import.meta.url));
+  const directory = fileURLToPath(new URL(`../.cache/macos-mode-keeper/${desktop ? phase + '/' : ''}`, import.meta.url));
   for (const name of ['plan.json', 'keeper.jsonl', 'receipt.json']) {
-    const path = join(directory, name); let descriptor;
+    const path = join(directory, name), file = desktop ? `${phase}/${name}` : name; let descriptor;
     try {
       const before = lstatSync(path, { bigint: true });
       assert.ok(before.isFile() && !before.isSymbolicLink() && before.nlink === 1n && before.size <= 8n * 1024n * 1024n, '生产者文件身份或预算不符');
@@ -48,10 +51,10 @@ function printEvidence() {
         const parsed = JSON.parse(bytes.toString('utf8'));
         value = name === 'plan.json' ? { plan: parsed.plan, context: parsed.inventory?.context } : parsed;
       }
-      console.log('DBARK_MODE_EVIDENCE:' + JSON.stringify({ file: name, bytes: bytes.length, sha256: createHash('sha256').update(bytes).digest('hex'), value }));
+      console.log('DBARK_MODE_EVIDENCE:' + JSON.stringify({ file, bytes: bytes.length, sha256: createHash('sha256').update(bytes).digest('hex'), value }));
     } catch (error) {
       if (error.code !== 'ENOENT') throw error;
-      console.log('DBARK_MODE_EVIDENCE:' + JSON.stringify({ file: name, missing: true, evidenceProven: false }));
+      console.log('DBARK_MODE_EVIDENCE:' + JSON.stringify({ file, missing: true, evidenceProven: false }));
     } finally { if (descriptor !== undefined) closeSync(descriptor); }
   }
 }

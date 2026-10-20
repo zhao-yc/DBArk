@@ -8,15 +8,22 @@ import { keeperLimits, selectModeCandidate, acceptKeeperEvent } from './macos-mo
 import { ciContext } from './native-editor-ci.mjs';
 import { readApproval } from './native-editor-ci-identity.mjs';
 import { assertFileFirstModelResult } from './native-file-first-model-ci.mjs';
+import { isDesktopKeeperContext } from './macos-installed-cleanup-lease.mjs';
 
 /** 参数门先于资源；不提供通用命令、任意可执行路径或本地模式切换入口。 */
 export function requireKeeperCI(args, platform, arch, env) {
-  requireKeeperContext(args, platform, arch, env, 'source', 'refs/heads/codex/macos-mode-keeper-20261019');
+  requireKeeperContext(args, platform, arch, env, 'source', isDesktopKeeperContext(env) ? env.GITHUB_REF : 'refs/heads/codex/macos-mode-keeper-20261019');
 }
 /** 安装模式仅开放本次串行分支的独立arm64 job；不能扩大到Intel/本机或任意命令。 */
 export function requireInstalledKeeperCI(args, platform, arch, env) {
-  requireKeeperContext(args, platform, arch, env, 'installed', 'refs/heads/codex/v028-serial-closeout-20261019');
-  assert.equal(env.GITHUB_JOB, 'arm64-installed');
+  requireKeeperContext(args, platform, arch, env, 'installed', isDesktopKeeperContext(env) ? env.GITHUB_REF : 'refs/heads/codex/v028-serial-closeout-20261019');
+  if (!isDesktopKeeperContext(env)) assert.equal(env.GITHUB_JOB, 'arm64-installed');
+}
+/** 同一desktop job的两个非续期租约分目录写证据，共享已编译程序，不覆盖源码原件。 */
+export function keeperRunPaths(project, phase, env) {
+  assert.ok(['source', 'installed'].includes(phase));
+  const root = join(project, '.cache/macos-mode-keeper');
+  return Object.freeze({ output: isDesktopKeeperContext(env) ? join(root, phase) : root, executable: join(root, 'keeper') });
 }
 /** 两个入口分别核真实分支上下文，不改写环境来冒充原源码门。 */
 function requireKeeperContext(args, platform, arch, env, phase, ref) {
@@ -71,7 +78,7 @@ export function requireOriginalLayoutGeometry(report, plan) {
 async function run() {
   const phase = process.argv[2];
   (phase === 'installed' ? requireInstalledKeeperCI : requireKeeperCI)(process.argv.slice(2),process.platform,process.arch,process.env);
-  const project = fileURLToPath(new URL('../',import.meta.url)), output = join(project,'.cache/macos-mode-keeper');
+  const project = fileURLToPath(new URL('../',import.meta.url)), {output, executable} = keeperRunPaths(project, phase, process.env);
   // 在任何显示资源之前绑定本job的原checkout；只读Git检查，不替代后续原CI批准。
   const head=spawnSync('git',['rev-parse','HEAD'],{cwd:project,encoding:'utf8'});
   const dirty=spawnSync('git',['status','--porcelain','--untracked-files=no'],{cwd:project,encoding:'utf8'});
@@ -87,7 +94,7 @@ async function run() {
   let fault, bytes = 0, buffer = Buffer.alloc(0), readyResolve, readyReject, nativeRunning = false, keeperEnded = false, nativeResult, originalProofsConsumed=false, fileResult, fileProofsConsumed=false, installedCleanupAuthorized=false;
   const journal = join(output,'keeper.jsonl'); writeFileSync(journal,'',{flag:'wx'});
   const ready = new Promise((done,reject)=>{readyResolve=done;readyReject=reject;}); void ready.catch(()=>{});
-  const keeper = spawn(join(output,'keeper'),['--hold','600',nonce],{cwd:project,stdio:['pipe','pipe','inherit']});
+  const keeper = spawn(executable,['--hold','600',nonce],{cwd:project,stdio:['pipe','pipe','inherit']});
   /** 任意故障单向停链；只给已捕获的keeper写retain，不向原native发退出或清理命令。 */
   function retain(reason) {
     if (fault) return; fault = String(reason); state = {...state,failed:true}; readyReject(Error(fault));

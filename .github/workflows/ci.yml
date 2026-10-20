@@ -75,10 +75,46 @@ jobs:
         run: node scripts/check-backup-windows-helper.mjs
       - name: 预检固定离线查询端口（仅127.0.0.1:1）
         run: node scripts/check-offline-query-port.mjs
+      - name: 标记准确main或候选托管arm64显示租约上下文
+        id: mac-keeper-context
+        if: >-
+          runner.os == 'macOS' && runner.arch == 'ARM64' &&
+          (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/codex/query-result-range-filter-20261020') &&
+          (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+        shell: bash
+        run: echo 'enabled=true' >> "$GITHUB_OUTPUT"
+      - name: 编译既有Mac显示租约程序并记录实际镜像
+        if: steps.mac-keeper-context.outputs.enabled == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p .cache/macos-mode-keeper
+          {
+            /usr/bin/sw_vers
+            /usr/bin/uname -m
+            printf 'ImageOS=%s\nImageVersion=%s\n' "${ImageOS:-未知}" "${ImageVersion:-未知}"
+            /usr/bin/xcrun swiftc --version
+          } > .cache/macos-mode-keeper/context.log 2>&1
+          cat .cache/macos-mode-keeper/context.log
+          test "$(/usr/bin/uname -m)" = arm64
+          if /usr/bin/xcrun swiftc scripts/macos-mode-keeper.swift -o .cache/macos-mode-keeper/keeper > .cache/macos-mode-keeper/compile.log 2>&1; then
+            cat .cache/macos-mode-keeper/compile.log
+          else
+            cat .cache/macos-mode-keeper/compile.log
+            exit 1
+          fi
       - name: 同次构建封存并单次验证源码缩进与分栏专项
         id: native-source
+        if: steps.mac-keeper-context.outputs.enabled != 'true'
         run: node scripts/native-editor-ci.mjs source
+      - name: 原源码六专项在独立600秒显示租约内执行并恢复
+        id: native-source-keeper
+        if: steps.mac-keeper-context.outputs.enabled == 'true'
+        run: node scripts/macos-mode-keeper-ci.mjs source
+        env:
+          MODE_KEEPER_RUNNER_ENVIRONMENT: ${{ runner.environment }}
       - name: 同job原源码批准验证首次文件模型四例
+        if: steps.mac-keeper-context.outputs.enabled != 'true'
         run: node scripts/native-file-first-model-ci.mjs source
         env:
           DBARK_NATIVE_EDITOR_SOURCE_APPROVAL: ${{ steps.native-source.outputs.source_approval }}
@@ -100,6 +136,7 @@ jobs:
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
       - run: pnpm test:packaged
+        if: steps.mac-keeper-context.outputs.enabled != 'true'
         env:
           DBARK_NATIVE_EDITOR_CI: '1'
           DBARK_NATIVE_EDITOR_SOURCE_APPROVAL: ${{ steps.native-source.outputs.source_approval }}
@@ -109,6 +146,16 @@ jobs:
           DBARK_EDITOR_FONT_NATIVE_TEST: '1'
           DBARK_QUERY_DUPLICATE_NATIVE_TEST: '1'
           DBARK_QUERY_CLOSE_OTHERS_NATIVE_TEST: '1'
+      - name: 原安装六专项在另一600秒显示租约内执行并恢复
+        if: steps.mac-keeper-context.outputs.enabled == 'true'
+        run: node scripts/macos-mode-keeper-ci.mjs installed
+        env:
+          MODE_KEEPER_RUNNER_ENVIRONMENT: ${{ runner.environment }}
+      - name: 只读输出两阶段生产者已写的显示租约证据
+        if: always() && steps.mac-keeper-context.outputs.enabled == 'true'
+        run: |
+          node scripts/print-macos-mode-keeper-evidence.mjs source
+          node scripts/print-macos-mode-keeper-evidence.mjs installed
       - uses: actions/upload-artifact@v4
         with:
           name: DBArk-${{ matrix.artifact }}-未发行签名
@@ -122,6 +169,17 @@ jobs:
         with:
           name: 测试记录-${{ matrix.artifact }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: test-results/
+      - name: 单独保留两阶段显示租约原件
+        uses: actions/upload-artifact@v4
+        if: always() && steps.mac-keeper-context.outputs.enabled == 'true'
+        with:
+          name: Mac显示租约-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            .cache/macos-mode-keeper/context.log
+            .cache/macos-mode-keeper/compile.log
+            .cache/macos-mode-keeper/source/
+            .cache/macos-mode-keeper/installed/
+          include-hidden-files: true
   # 只在明确手动勾选时运行；两个夹具启动独立开发Electron，不计安装产品验收。
   native-clipboard-components:
     name: 离线开发组件原生剪贴板 · ${{ matrix.label }}

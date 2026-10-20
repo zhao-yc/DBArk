@@ -1,5 +1,13 @@
 import assert from 'node:assert/strict';
 
+/** 常规CI只开放本仓库main及既有候选分支的desktop托管job；不冒充旧冻结分支。 */
+export function isDesktopKeeperContext(env) {
+  return env.GITHUB_REPOSITORY === 'zhao-yc/DBArk' && env.GITHUB_JOB === 'desktop' &&
+    ['refs/heads/main', 'refs/heads/codex/query-result-range-filter-20261020'].includes(env.GITHUB_REF) &&
+    env.GITHUB_WORKFLOW_REF === `zhao-yc/DBArk/.github/workflows/ci.yml@${env.GITHUB_REF}` &&
+    ['push', 'workflow_dispatch'].includes(env.GITHUB_EVENT_NAME);
+}
+
 /** 仅本次原生arm64子进程可要求显示租约恢复确认；普通安装入口不启用此门。 */
 export function macInstalledCleanupNonce(args, platform, arch, env, channel) {
   if (!args.length) return undefined;
@@ -7,8 +15,8 @@ export function macInstalledCleanupNonce(args, platform, arch, env, channel) {
   assert.match(args[1], /^[a-f0-9]{64}$/);
   assert.equal(platform, 'darwin'); assert.equal(arch, 'arm64');
   assert.equal(env.GITHUB_ACTIONS, 'true'); assert.equal(env.MODE_KEEPER_RUNNER_ENVIRONMENT, 'github-hosted');
-  assert.equal(env.GITHUB_REF, 'refs/heads/codex/v028-serial-closeout-20261019');
-  assert.equal(env.GITHUB_JOB, 'arm64-installed'); assert.equal(env.DBARK_NATIVE_EDITOR_CI, '1');
+  assert.ok(isDesktopKeeperContext(env) || env.GITHUB_REF === 'refs/heads/codex/v028-serial-closeout-20261019' && env.GITHUB_JOB === 'arm64-installed');
+  assert.equal(env.DBARK_NATIVE_EDITOR_CI, '1');
   assert.equal(typeof channel.send, 'function'); assert.equal(channel.connected, true);
   return args[1];
 }

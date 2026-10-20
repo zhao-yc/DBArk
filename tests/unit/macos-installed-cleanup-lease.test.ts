@@ -1,4 +1,5 @@
 import { EventEmitter } from 'node:events';
+import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 // 只加载定义并使用内存IPC；不编译、启动应用、读取批准或切换显示器。
@@ -14,6 +15,52 @@ function channel() {
 }
 
 describe('Mac安装显示租约清理门', () => {
+  /** 新CI上下文用真实仓库/工作流/ref组合，不复用冻结分支的环境声明。 */
+  function desktop(ref='refs/heads/main') {
+    return { ...base, GITHUB_REPOSITORY:'zhao-yc/DBArk', GITHUB_REF:ref, GITHUB_JOB:'desktop', GITHUB_EVENT_NAME:'push', GITHUB_WORKFLOW_REF:`zhao-yc/DBArk/.github/workflows/ci.yml@${ref}` };
+  }
+  it.each(['refs/heads/main','refs/heads/codex/query-result-range-filter-20261020'])('准确desktop上下文%s分别接受源码和安装，仍拒绝阶段串用', ref => {
+    const env=desktop(ref);
+    expect(lease.isDesktopKeeperContext(env)).toBe(true);
+    expect(()=>keeper.requireKeeperCI(['source'],'darwin','arm64',env)).not.toThrow();
+    expect(()=>keeper.requireInstalledKeeperCI(['installed'],'darwin','arm64',env)).not.toThrow();
+    expect(()=>keeper.requireKeeperCI(['installed'],'darwin','arm64',env)).toThrow();
+    expect(()=>keeper.requireInstalledKeeperCI(['source'],'darwin','arm64',env)).toThrow();
+    expect(lease.macInstalledCleanupNonce(['--mac-installed-keeper',nonce],'darwin','arm64',{...env,DBARK_NATIVE_EDITOR_CI:'1'},channel())).toBe(nonce);
+  });
+  it.each([
+    {GITHUB_REPOSITORY:'other/DBArk'}, {GITHUB_JOB:'keeper'}, {GITHUB_REF:'refs/heads/other'},
+    {GITHUB_EVENT_NAME:'pull_request'}, {GITHUB_EVENT_NAME:'schedule'}, {GITHUB_WORKFLOW_REF:'zhao-yc/DBArk/.github/workflows/other.yml@refs/heads/main'},
+    {GITHUB_WORKFLOW_REF:'zhao-yc/DBArk/.github/workflows/ci.yml@refs/heads/other'}, {GITHUB_WORKFLOW_REF:undefined},
+  ])('新上下文拒绝错误仓库/job/ref/工作流事件：%j', patch => {
+    const env={...desktop(),...patch};expect(lease.isDesktopKeeperContext(env)).toBe(false);
+    expect(()=>keeper.requireKeeperCI(['source'],'darwin','arm64',env)).toThrow();
+    expect(()=>keeper.requireInstalledKeeperCI(['installed'],'darwin','arm64',env)).toThrow();
+    expect(()=>lease.macInstalledCleanupNonce(['--mac-installed-keeper',nonce],'darwin','arm64',{...env,DBARK_NATIVE_EDITOR_CI:'1'},channel())).toThrow();
+  });
+  it.each([
+    {MODE_KEEPER_RUNNER_ENVIRONMENT:'self-hosted'}, {GITHUB_ACTIONS:'false'}, {GITHUB_SHA:'bad'},
+    {GITHUB_RUN_ID:''}, {DBARK_INTEGRATION_ENABLED:'0'}, {NODE_OPTIONS:''}, {DYLD_INSERT_LIBRARIES:''},
+  ])('准确main仍拒绝非托管身份、坏运行号和模式准备前外部入口：%j', patch => {
+    const env={...desktop(),...patch};
+    expect(()=>keeper.requireKeeperCI(['source'],'darwin','arm64',env)).toThrow();
+    expect(()=>keeper.requireInstalledKeeperCI(['installed'],'darwin','arm64',env)).toThrow();
+  });
+  it('手动候选运行不改写ref；PR合并ref、标签、Windows和Intel仍不开放显示入口',()=>{
+    const env={...desktop('refs/heads/codex/query-result-range-filter-20261020'),GITHUB_EVENT_NAME:'workflow_dispatch'};
+    expect(()=>keeper.requireKeeperCI(['source'],'darwin','arm64',env)).not.toThrow();
+    for(const ref of ['refs/pull/1/merge','refs/tags/v0.28.0'])expect(()=>keeper.requireKeeperCI(['source'],'darwin','arm64',desktop(ref))).toThrow();
+    for(const [platform,arch] of [['win32','x64'],['darwin','x64'],['linux','arm64']])expect(()=>keeper.requireKeeperCI(['source'],platform,arch,env)).toThrow();
+  });
+  it('同job源码和安装证据分目录，旧冻结job路径保持且不接受任意阶段作为路径',()=>{
+    const source=keeper.keeperRunPaths('ram-project','source',desktop()),installed=keeper.keeperRunPaths('ram-project','installed',desktop());
+    expect(source.output).toBe(join('ram-project','.cache/macos-mode-keeper/source'));
+    expect(installed.output).toBe(join('ram-project','.cache/macos-mode-keeper/installed'));
+    expect(source.output).not.toBe(installed.output);expect(source.executable).toBe(installed.executable);
+    expect(source.executable).toBe(join('ram-project','.cache/macos-mode-keeper/keeper'));
+    expect(keeper.keeperRunPaths('ram-project','installed',base).output).toBe(join('ram-project','.cache/macos-mode-keeper'));
+    expect(()=>keeper.keeperRunPaths('ram-project','../source',desktop())).toThrow();
+  });
   it('普通入口关闭时不要求IPC，不开放新的资源入口', () => {
     expect(lease.macInstalledCleanupNonce([], 'win32', 'x64', {}, {})).toBeUndefined();
   });
