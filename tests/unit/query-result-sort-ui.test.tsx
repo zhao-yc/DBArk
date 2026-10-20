@@ -196,3 +196,22 @@ it.each(['inactive','new','result','version','job','modal','unmount','append'])(
 it('筛选：空结果仍显示原返回/过滤数量，可清除恢复，所有已返回导出不会回退原始全量',async()=>{
   await mountMulti();await filterGroup('无匹配');expect(grid().rows).toEqual([]);expect(document.body.textContent).toContain(filterText.counts(3,0));await click(zh.resultExport.title);await click(zh.resultExport.chooseFile);await click(zh.resultExport.start);expect(exports[0].result.rows).toEqual([]);expect(exports[0].rows).toBeUndefined();expect(commands.filter(c=>c==='query.execute')).toHaveLength(1);
 });
+
+it.each(['selected','all'] as const)('筛选和多列排序在%s连续导出模态前后保持，旧选择仍撤销',async mode=>{
+  await mountMulti();await filterGroup();await headerAction('group');await headerAction('id',{ctrlKey:true});
+  // 导出预览另有网格；查询区域总传完整排序数组，不能将最后渲染的预览当背景视图。
+  const viewGrid=()=>[...ports.grids].reverse().find(props=>Array.isArray(props.sortColumns))!;
+  const displayed=viewGrid().rows,rules=viewGrid().sortColumns,saved=structuredClone(original);
+  const expected=displayed.map((row:any)=>row.id);expect(expected).toEqual(['2','9007199254740993']);
+  for(const format of ['csv','json']){
+    if(mode==='selected')await act(async()=>viewGrid().onSelectedRowsChange(new Set([1,0])));
+    const old=viewGrid();await click(mode==='selected'?zh.resultExport.selectedTitle:zh.resultExport.title);
+    // 导出锁只撤销操作权限，不能把背后的过滤视图替换成原始全集。
+    expect(viewGrid().rows).toBe(displayed);expect(viewGrid().sortColumns).toEqual(rules);expect(copy(old).size).toBe(0);
+    await setFilterField(zh.resultExport.format,format);await click(zh.resultExport.chooseFile);await click(zh.resultExport.start);
+    expect(exports.at(-1).result.rows.map((row:any)=>row.id)).toEqual(expected);await click(zh.common.done);
+    expect(viewGrid().rows).toBe(displayed);expect(viewGrid().sortColumns).toEqual(rules);expect(viewGrid().selectedRows.size).toBe(0);
+    expect(copy(old).size).toBe(0);expect(document.body.textContent).toContain(filterText.counts(3,2));
+  }
+  expect(original).toEqual(saved);expect(commands.filter(command=>command==='query.execute')).toHaveLength(1);
+});

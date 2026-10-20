@@ -504,6 +504,8 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
   // 保存类互斥不卸载计划查看器；实际新执行在 runQuery 内清空 outcome，仍走原结果生命周期。
   const results = queryRunning ? stream : outcome?.results ?? stream; const pin = pins.find(item => item.id === selectedPin); const sourceResult = pin?.result ?? results[resultIndex];
   const sourceExportable = exportableQueryResult(busy, outcome, resultIndex, pin?.result);
+  // 结果快照的寿命独立于模态/保存锁；只有新查询才撤销数据来源，操作权限仍走原忙态守卫。
+  const viewSource = exportableQueryResult(queryRunning, outcome, resultIndex, pin?.result);
   const resultContext=[outcome,resultIndex,selectedPin,task.current,connectionVersion,tab.connectionId];
   const layoutMatches=!!columnLayout&&columnLayout.result===sourceResult&&columnLayout.context.length===resultContext.length&&columnLayout.context.every((value,index)=>Object.is(value,resultContext[index]));
   const visibleColumns=useMemo(()=>{
@@ -513,12 +515,12 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
   },[sourceResult,columnLayout,layoutMatches]);
   const resultModal=!!closeRequest||!!exportResult||save||showPinSql||showSnippets||parameterSource!==null||streamExportSource!==null||sessionObjects||recovery;
   // 先过滤原快照，再排序过滤行；源映射显式合成，所有消费者只索引同一最终视图。
-  const filterBinding=resultFilter.bind(settings.activeTabId===tab.id&&!resultModal?sourceExportable:undefined,resultContext,visibleColumns);
+  const filterBinding=resultFilter.bind(viewSource,resultContext,visibleColumns);
   const filterView=resultFilter.view(filterBinding);
-  const sortBinding = resultSorter.bind(settings.activeTabId === tab.id && !resultModal ? filterView?.result ?? sourceExportable : undefined, resultContext, visibleColumns);
+  const sortBinding = resultSorter.bind(filterView?.result ?? viewSource, resultContext, visibleColumns);
   const sortView = resultSorter.view(sortBinding);
   const displayedView=useMemo(()=>queryResultFilteredSortView(filterView,sortView),[filterView,sortView]);
-  const result = displayedView?.result ?? sourceResult,exportable=displayedView?.result ?? sourceExportable;
+  const result = displayedView?.result ?? sourceResult,exportable=sourceExportable ? displayedView?.result ?? sourceExportable : undefined;
   const activeFilterLease=filterLease&&filterLeaseRef.current===filterLease&&resultFilter.view(filterLease.binding)===filterLease.view?filterLease:null;
   if(filterLease&&!activeFilterLease&&filterLeaseRef.current===filterLease)filterLeaseRef.current=null;
   const selectionBinding = resultSelection.bind(settings.activeTabId === tab.id&&!resultModal ? exportable : undefined, resultContext, visibleColumns);
