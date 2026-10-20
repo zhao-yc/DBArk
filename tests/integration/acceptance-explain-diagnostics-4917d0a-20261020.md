@@ -26,6 +26,8 @@ state SHA256为 `39e899923da92b0dced29ec400fbfe0e4b002232c790df866f30950cad4621a
 
 ## 独立CI与边界
 
-[首次push CI39403583333](https://github.com/zhao-yc/DBArk/actions/runs/39403583333)类型、577文件11083通过／10原win32条件跳过及构建通过，223.63秒。[原生CI39404469208](https://github.com/zhao-yc/DBArk/actions/runs/39404469208)只派发一次：ARM源码／安装legacy各80通过、314跳过；Intel安装阶段尚在运行。Windows在既有敏感文件helper检查停止，尚未进入GUI，不能宣称该整轮通过。
+[首次push CI39403583333](https://github.com/zhao-yc/DBArk/actions/runs/39403583333)类型、577文件11083通过／10原win32条件跳过及构建通过，223.63秒。[原生CI39404469208](https://github.com/zhao-yc/DBArk/actions/runs/39404469208)只派发一次：ARM和Intel源码／安装legacy均各80通过、314跳过。开发会话核原日志，Intel执行计划源码6.9秒、安装5.7秒，未复现旧超时；成功按原retain策略不留失败诊断，不外推Mac正向采集。Windows在既有敏感文件helper检查停止，尚未进入GUI，整轮仍失败，发布跳过。
 
 虚拟机最终Git干净、所属准确PID无残留，109个构建文件哈希不变；未连接数据库、SSH、Docker或使用系统剪贴板。此记录证明Windows诊断能够采集真实上下文，不证明旧Intel偶发超时或另一次Windows查找替换失败的根因已修复。安装、实库、系统输入及全平台完成均不外推；暂不发布。
+
+诊断源码及前述验收记录已于 `f4dd93d4fea2ef7a3d6861618e2764ca0f0f9fd2` 推送main，主目录快进同步；该交付提交只在已验4917d0a上追加文档，不继承候选ref的CI身份。

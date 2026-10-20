@@ -2,7 +2,7 @@
 
 ## 当前开发安排（2026-10-20）
 
-继续定位[Intel执行计划点击超时](development/explain-native-stability-20261020.md)：旧ZIP已独立核对，只有runner trace，尚不能确认原生窗口或帧状态。复用现有有界记录器补真实context及自身窗口观察，不改原断言、点击、期限或产品。固定4917d0a通过Linux11083项／类型／构建，Windows78定向／新构建／原GUI及完整11092通过、1平台跳过；独立正向采集含127个真实浏览器帧，见[准确验收](../tests/integration/acceptance-explain-diagnostics-4917d0a-20261020.md)。原生CI的ARM通过、Intel安装仍在运行，Windows停于既有helper检查；不将诊断有效写成旧偶发根因已修复，暂不发布。
+继续定位[Intel执行计划点击超时](development/explain-native-stability-20261020.md)：旧ZIP已独立核对，只有runner trace，尚不能确认原生窗口或帧状态。复用现有有界记录器补真实context及自身窗口观察，不改原断言、点击、期限或产品。固定4917d0a通过Linux11083项／类型／构建，Windows78定向／新构建／原GUI及完整11092通过、1平台跳过；独立正向采集含127个真实浏览器帧，见[准确验收](../tests/integration/acceptance-explain-diagnostics-4917d0a-20261020.md)。原生CI的ARM与Intel源码／安装legacy均各80通过、314跳过，Windows停于既有helper检查，整轮失败；已按main交付诊断，不将诊断有效写成旧偶发根因已修复，暂不发布。
 
 常规Mac arm64 CI已接入[现有显示租约](development/macos-main-display-lease-20261020.md)。固定8e41972在候选原生CI中源码／同次DMG安装各六项及24正常owner通过，两阶段原实际几何与模式恢复已独立核对原ZIP，见[准确范围](../tests/integration/acceptance-macos-main-display-8e41972-20261020.md)。Windows job成功；整轮仍因Intel执行计划离线组件点击超时失败，原因与trace待读回，不追认旧Mac失败或全平台完成，不增加发行计数。
 

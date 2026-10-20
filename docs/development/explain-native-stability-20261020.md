@@ -26,6 +26,6 @@
 
 另已读回main43c8bf6的39400232119：ARM job成功，Intel原源码／安装legacy各80通过、314跳过，未复现旧点击超时；这不是根因已修的证据。该次Windows原legacy为79通过／314跳过／1失败，在`page-find-replace-offline.spec.ts:26`初始化时未找到“当前页查找替换”按钮。开发会话已独立下载artifact12254704372：2674072字节、SHA256 `78455c094b39c4ad3a6537c1f6d45c1112aeaee7093bf91f3a7e3d9a201f716b`，原嵌套trace同样只有testRunner和源文件，没有浏览器上下文，原因未确认，不将整轮视为通过。
 
-诊断原生CI39404469208的Windows job118566924212在进入UI前即停于既有`check-backup-windows-helper.mjs`。原日志约60秒后仅报告“C#编译或原进程关闭未确认”，没有terminal code／signal／流状态，不直接归因为C#源码编译错误；test-results尚不存在，未上传原artifact。该检查脚本和产品helper本候选未改，原45秒执行计划场景并未运行。ARM源码／安装legacy各80通过、314跳过；Intel安装阶段尚在运行，整轮不记通过。
+诊断原生CI39404469208的Windows job118566924212在进入UI前即停于既有`check-backup-windows-helper.mjs`。原日志约60秒后仅报告“C#编译或原进程关闭未确认”，没有terminal code／signal／流状态，不直接归因为C#源码编译错误；test-results尚不存在，未上传原artifact。该检查脚本和产品helper本候选未改，原45秒执行计划场景并未运行。ARM和Intel源码／安装legacy均各80通过、314跳过；整轮仍失败、发布跳过。Intel执行计划源码6.9秒、安装5.7秒，未复现旧超时，不将其作为根因修复证明。
 
 WIN11-TEST已完成4917d0a的78项定向／类型／新构建、单次原GUI及完整11092通过／1平台跳过；另一次独立trace=on正向采集通过，原ZIP有127个实际BrowserContext帧，详见[固定源码验收](../../tests/integration/acceptance-explain-diagnostics-4917d0a-20261020.md)。这只确认诊断链路有效，不确认Intel旧偶发根因已修复。
