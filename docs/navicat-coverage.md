@@ -2,7 +2,7 @@
 
 ## 当前开发安排（2026-10-20）
 
-新增[文本筛选大小写选项](development/query-result-filter-case-20261020.md)候选：默认保持敏感，每条文本条件可显式采用Unicode小写映射，支持分组及多值；原文、排序和导出不变。原文及映射共用预算，超限完整拒绝；Windows固定源码验证待执行，暂不发布，不增加完整工作包计数。
+新增[文本筛选大小写选项](development/query-result-filter-case-20261020.md)候选：默认保持敏感，每条文本条件可显式采用Unicode小写映射，支持分组及多值；原文、排序和导出不变。固定b89e6fd的Linux类型／578文件11106通过、10平台跳过／构建及Windows类型／310定向／新构建通过。实库整例停于原排序列头点击超时，新增大小写步骤未达，未生成文件、未运行Windows完整单元；原失败封存，候选尚未合main，暂不发布，不增加完整工作包计数。
 
 继续定位[Intel执行计划点击超时](development/explain-native-stability-20261020.md)：旧ZIP已独立核对，只有runner trace，尚不能确认原生窗口或帧状态。复用现有有界记录器补真实context及自身窗口观察，不改原断言、点击、期限或产品。固定4917d0a通过Linux11083项／类型／构建，Windows78定向／新构建／原GUI及完整11092通过、1平台跳过；独立正向采集含127个真实浏览器帧，见[准确验收](../tests/integration/acceptance-explain-diagnostics-4917d0a-20261020.md)。原生CI的ARM与Intel源码／安装legacy均各80通过、314跳过，Windows停于既有helper检查，整轮失败；已按main交付诊断，不将诊断有效写成旧偶发根因已修复，暂不发布。
 
