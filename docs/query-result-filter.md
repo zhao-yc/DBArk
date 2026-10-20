@@ -1,6 +1,6 @@
 # 已返回查询结果的本地条件筛选
 
-新增[文本大小写选项候选](development/query-result-filter-case-20261020.md)：文本条件默认敏感，可逐条勾选“忽略大小写”，使用无区域设置的Unicode小写映射。支持分组和多值，复制、导出及排序保留原文；固定b89e6fd正在独立验证，尚不计为实库或原生通过，暂不发布。
+新增[文本大小写选项](development/query-result-filter-case-20261020.md)：文本条件默认敏感，可逐条勾选“忽略大小写”，使用无区域设置的Unicode小写映射，支持分组和多值，保留原文及排序规则。固定74c59bf同时修复短窗口工具条挤掉表头：Windows类型／301项／新构建、一次实库整例、Python文件读回及完整11125通过、1平台跳过；Linux11116通过、10平台跳过／类型／构建通过，见[准确增量验收](../tests/integration/acceptance-query-result-case-74c59bf-20261020.md)。按main交付源码，安装及macOS本组合未验，暂不发布。
 
 新增[嵌套分组条件](development/query-result-filter-groups-20261020.md)：每组独立AND／OR，可组合“（A或B）同时C”，最多32条条件、16组（含根）、8层；空子组拒绝应用。固定ceb607a的Windows类型／329定向／新构建、实库分组后复制导出及独立读回、完整11061通过／1平台跳过均通过，见[准确增量证据](../tests/integration/acceptance-query-result-groups-ceb607a-20261020.md)。按main交付，暂不发布。
 
