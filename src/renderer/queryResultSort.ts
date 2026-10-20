@@ -5,7 +5,9 @@ export const queryResultSortLimits = { rows: 100000, columns: 1024, cells: 20000
 type Kind = 'integer' | 'decimal' | 'float' | 'text' | 'date' | 'datetime' | 'time';
 type Exact = { negative: boolean; whole: string; fraction: string };
 type Key = null | number | string | Exact;
-export interface QueryResultSortView { readonly result: QueryResult; readonly sourceIndices: readonly number[]; readonly rules: readonly SortRule[]; }
+/** 仅本地快照使用的空值位置；不扩展服务端ORDER BY或共享IPC排序合同。 */
+export type QueryResultSortRule = SortRule & { nulls?: 'FIRST' | 'LAST' };
+export interface QueryResultSortView { readonly result: QueryResult; readonly sourceIndices: readonly number[]; readonly rules: readonly QueryResultSortRule[]; }
 export interface QueryResultSortBinding {
   readonly source: QueryResult; readonly rows: QueryResult['rows']; readonly rowRefs: readonly QueryResult['rows'][number][];
   readonly columns: QueryResult['columns']; readonly columnRefs: readonly ResultColumn[]; readonly metadata: readonly ResultColumn[]; readonly visible: ResultColumn[];
@@ -101,7 +103,7 @@ export class QueryResultSort {
   private projection?: QueryResultSortView;
   private values?: { column: ResultColumn; values: CellValue[] }[];
   /** 只冻结本地索引、完整优先级与视图容器，绝不冻结或克隆原行对象。 */
-  private project(binding: QueryResultSortBinding, sourceIndices: number[], rules: readonly SortRule[] = []): QueryResultSortView {
+  private project(binding: QueryResultSortBinding, sourceIndices: number[], rules: readonly QueryResultSortRule[] = []): QueryResultSortView {
     const frozenRules=Object.freeze(rules.map(rule=>Object.freeze({...rule})));
     if (!rules.length) return Object.freeze({result:binding.source,sourceIndices:Object.freeze(sourceIndices),rules:frozenRules});
     const rows = sourceIndices.map(i=>binding.rows[i]); Object.freeze(rows);
@@ -145,24 +147,31 @@ export class QueryResultSort {
   /** 只返回同一活租约的冻结视图，旧调用不反向撤销较新binding。 */
   view(binding: QueryResultSortBinding | undefined): QueryResultSortView | undefined { return this.current(binding) ? this.projection : undefined; }
   /** 全部键共用文本/单元格预算；按优先级逐键比较，最终并列只按原返回位置稳定打破。 */
-  apply(binding: QueryResultSortBinding, previous: QueryResultSortView, rules: readonly SortRule[] | SortRule = []): QueryResultSortView {
+  apply(binding: QueryResultSortBinding, previous: QueryResultSortView, rules: readonly QueryResultSortRule[] | QueryResultSortRule = []): QueryResultSortView {
     if (!this.current(binding) || this.projection !== previous) throw failure();
     // 单列调用保留原内部入口兼容；界面传入现有SortRule[]，不得截成最后一列。
-    const next: readonly SortRule[]=Array.isArray(rules) ? rules : [rules as SortRule];
+    const next: readonly QueryResultSortRule[]=Array.isArray(rules) ? rules : [rules as QueryResultSortRule];
     if (!next.length) { this.values=undefined; return this.projection=this.project(binding,binding.rows.map((_,i)=>i)); }
     if (next.length>binding.visible.length || new Set(next.map(rule=>rule.column)).size!==next.length) throw Error(text.rules);
     if (next.length*binding.rows.length>queryResultSortLimits.cells) throw Error(text.budget);
     const admitted=next.map(rule=>{
       const column=binding.visible.find(c=>c.key===rule.column),type=column&&kind(column.type);
       if (!column || !type || !['ASC','DESC'].includes(rule.direction)) throw Error(text.type);
+      if (rule.nulls !== undefined && rule.nulls !== 'FIRST' && rule.nulls !== 'LAST') throw Error(text.nullsInvalid);
       const reason=binding.reasons.get(column.key); if (reason) throw Error(reason);
-      return {column,type,direction:rule.direction};
+      return {column,type,direction:rule.direction,nulls:rule.nulls};
     });
     let units=0;
     const values=admitted.map(({column})=>({column,values:binding.rows.map(row=>{const value=cell(row,column);units+=typeof value==='string'?value.length:1;if(units>queryResultSortLimits.units)throw Error(text.budget);return value;})}));
     const keys=admitted.map(({column,type},i)=>values[i].values.map(value=>key(value,type,column.type.trim().toUpperCase().endsWith(' UNSIGNED')))), sourceIndices=binding.rows.map((_,i)=>i);
     sourceIndices.sort((a,b)=>{
-      for(let i=0;i<admitted.length;i++){const order=(admitted[i].direction==='ASC'?1:-1)*compare(keys[i][a],keys[i][b]);if(order)return order;}
+      for(let i=0;i<admitted.length;i++){
+        const left=keys[i][a],right=keys[i][b],rule=admitted[i];
+        // 显式空值位置独立于升降序；两个NULL仍交给下一优先级，空串不视为NULL。
+        const nullOrder=left===right?0:left===null?-1:right===null?1:undefined;
+        const order=rule.nulls&&nullOrder!==undefined?(rule.nulls==='FIRST'?1:-1)*nullOrder:(rule.direction==='ASC'?1:-1)*compare(left,right);
+        if(order)return order;
+      }
       return a-b;
     });
     if (!this.current(binding) || this.projection!==previous) throw failure();

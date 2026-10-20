@@ -1,7 +1,8 @@
 import { zh } from '../locales/zh-CN';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { DataGrid, SelectColumn, type DataGridHandle, type Column } from 'react-data-grid';
-import type { CellValue, DataRow, ResultColumn, SortRule } from '../../shared/contracts';
+import type { CellValue, DataRow, ResultColumn } from '../../shared/contracts';
+import type { QueryResultSortRule } from '../queryResultSort';
 import { cellPreview, errorMessage, ownCell } from '../lib';
 import { BinaryCellViewer } from './BinaryCellViewer';
 import { Modal } from './ui';
@@ -23,7 +24,7 @@ import { queryResultFilterZh as filterText } from '../locales/queryResultFilter.
 export function isResultBinaryCell(value: CellValue | undefined): boolean { return isBinaryCell(value); }
 
 /** 任意查询结果只读；支持单格或勾选记录复制，始终保留原始值用于剪贴板。 */
-export function ResultsGrid({ columns, rows, onActiveRowChange, onActiveRowIndexChange, sort, onSortChange, sortReasons, selectionScope, onSelectionChange, isCurrent, onFilterCell }: { columns: ResultColumn[]; rows: DataRow[]; onActiveRowChange?: (row: DataRow | null) => void; onActiveRowIndexChange?: (index: number | null) => void; sort?: SortRule[]; onSortChange?: (sort: SortRule[]) => void; sortReasons?: ReadonlyMap<string, string | undefined>; selectionScope?: object; onSelectionChange?(selection: ResultGridSelection): boolean; isCurrent?(): boolean;onFilterCell?(cell:QueryResultCopyCell,operator:CellFilterOperator):void }) {
+export function ResultsGrid({ columns, rows, onActiveRowChange, onActiveRowIndexChange, sort, onSortChange, sortReasons, selectionScope, onSelectionChange, isCurrent, onFilterCell }: { columns: ResultColumn[]; rows: DataRow[]; onActiveRowChange?: (row: DataRow | null) => void; onActiveRowIndexChange?: (index: number | null) => void; sort?: QueryResultSortRule[]; onSortChange?: (sort: QueryResultSortRule[]) => void; sortReasons?: ReadonlyMap<string, string | undefined>; selectionScope?: object; onSelectionChange?(selection: ResultGridSelection): boolean; isCurrent?(): boolean;onFilterCell?(cell:QueryResultCopyCell,operator:CellFilterOperator):void }) {
   const theme = useWorkspace(state => state.settings.theme);
   const dataTypeColors = useWorkspace(state => state.settings.dataTypeColors === true);
   const [gridRevision,setGridRevision]=useState(0), gridRevisionRef=useRef(0);
@@ -34,6 +35,11 @@ export function ResultsGrid({ columns, rows, onActiveRowChange, onActiveRowIndex
   useEffect(()=>{alive.current=true;return()=>{alive.current=false;currentScope.current=null;};},[]);
   /** 全部网格回调核同一准确scope及父接纳门，不能在切换／模态／卸载后复制旧数据。 */
   function actionCurrent():boolean {if(!alive.current||currentScope.current!==scope||gridRevisionRef.current!==gridRevision)return false;try{return !isCurrent||isCurrent()===true;}catch{return false;}}
+  /** RDG只回传列和方向；同一活列继承NULL位置，删除后重加则回到默认。 */
+  function changeSortColumns(next:readonly {columnKey:string;direction:'ASC'|'DESC'}[]):void{
+    if(!actionCurrent())return;
+    onSortChange?.(next.map(rule=>{const nulls=sort?.find(previous=>previous.column===rule.columnKey)?.nulls;return{column:rule.columnKey,direction:rule.direction,...(nulls?{nulls}:{})};}));
+  }
   const gridRef = useRef<DataGridHandle | null>(null);
   const [findHit, setFindHit] = useState<{ scope: typeof scope; hit: QueryResultFindHit }>();
   const activeHit = findHit?.scope === scope && findHit.hit.scan.current() && actionCurrent() ? findHit.hit.match : undefined;
@@ -89,7 +95,7 @@ export function ResultsGrid({ columns, rows, onActiveRowChange, onActiveRowIndex
   // 标题使用用户可见列名，值仍按唯一内部键定位；重复别名不能导致读取另一列。
   const binaryColumn = binary ? columns.find(column => column.key === binary.key) : undefined;
   const gridColumns = useMemo<Column<DataRow>[]>(() => [...(onActiveRowChange ? [] : [SelectColumn]), ...columns.map<Column<DataRow>>((column, index) => ({ key: column.key, name: column.name, cellClass: row => activeHit?.row === rowIndexes.get(row) && activeHit?.column === index ? 'query-result-find-hit' : undefined, resizable: true, minWidth: 110, width: 170, sortable: !!onSortChange && !sortReasons?.get(column.key), renderHeaderCell: () => <span title={sortReasons?.get(column.key) ?? (onSortChange ? sortText.keyboard : column.type)}>{column.name}<small className="column-type">{column.type}</small>{sort?.find(rule => rule.column === column.key) && <span aria-label={sort.find(rule => rule.column === column.key)!.direction === 'ASC' ? sortText.ascending : sortText.descending} title={sortText.priority(sort.findIndex(rule => rule.column === column.key)+1,column.name)}>{sort.findIndex(rule => rule.column === column.key)+1}{sort.find(rule => rule.column === column.key)!.direction === 'ASC' ? ' ↑' : ' ↓'}</span>}</span>, renderCell: ({ row, tabIndex }) => <DataTypeColor enabled={dataTypeColors} selected={tabIndex === 0 || selectedRows.has(rowIndexes.get(row)!)} value={row[column.key]} type={column.type} source="protocol" className={row[column.key] === null ? 'null-value' : ''} title={cellPreview(row[column.key])}>{cellPreview(row[column.key])}</DataTypeColor> }))], [columns, onActiveRowChange, onSortChange, sort, sortReasons, activeHit, dataTypeColors, dataTypeColors ? selectedRows : null, dataTypeColors ? rowIndexes : null]);
-  const grid = <DataGrid<DataRow, unknown, number> ref={gridRef} className={`results-grid rdg-${theme}`} columns={gridColumns} rows={rows} onCellClick={selectionScope && isCurrent && !onActiveRowChange ? ({ row, rowIdx, column }) => captureCopyCell(row, rowIdx, column) : undefined} onCellDoubleClick={({ row, column }) => viewBinary(row, column.key)} onCellKeyDown={({ row, column }, event) => { if (row && column && event.key === 'Enter' && !event.nativeEvent.isComposing && isResultBinaryCell(ownCell(row, column.key))) { event.preventGridDefault(); event.preventDefault(); viewBinary(row, column.key); } }} rowHeight={32} headerRowHeight={40} rowKeyGetter={row => rowIndexes.get(row)!} selectedRows={selectedRows} onSelectedRowsChange={setSelectedRows} onActivePositionChange={({ row, rowIdx, column }) => { if (!actionCurrent()) return; captureCopyCell(row, rowIdx, column); onActiveRowChange?.(row ?? null); onActiveRowIndexChange?.(row && Number.isSafeInteger(rowIdx) && rowIdx >= 0 && rows[rowIdx] === row ? rowIdx : null); }} sortColumns={sort?.map(rule => ({ columnKey: rule.column, direction: rule.direction }))} onSortColumnsChange={next => {if(actionCurrent())onSortChange?.(next.map(rule => ({ column: rule.columnKey, direction: rule.direction })));}} onCellCopy={({ row, column }, event) => {
+  const grid = <DataGrid<DataRow, unknown, number> ref={gridRef} className={`results-grid rdg-${theme}`} columns={gridColumns} rows={rows} onCellClick={selectionScope && isCurrent && !onActiveRowChange ? ({ row, rowIdx, column }) => captureCopyCell(row, rowIdx, column) : undefined} onCellDoubleClick={({ row, column }) => viewBinary(row, column.key)} onCellKeyDown={({ row, column }, event) => { if (row && column && event.key === 'Enter' && !event.nativeEvent.isComposing && isResultBinaryCell(ownCell(row, column.key))) { event.preventGridDefault(); event.preventDefault(); viewBinary(row, column.key); } }} rowHeight={32} headerRowHeight={40} rowKeyGetter={row => rowIndexes.get(row)!} selectedRows={selectedRows} onSelectedRowsChange={setSelectedRows} onActivePositionChange={({ row, rowIdx, column }) => { if (!actionCurrent()) return; captureCopyCell(row, rowIdx, column); onActiveRowChange?.(row ?? null); onActiveRowIndexChange?.(row && Number.isSafeInteger(rowIdx) && rowIdx >= 0 && rows[rowIdx] === row ? rowIdx : null); }} sortColumns={sort?.map(rule => ({ columnKey: rule.column, direction: rule.direction }))} onSortColumnsChange={changeSortColumns} onCellCopy={({ row, column }, event) => {
     event.preventDefault();
     if(!actionCurrent()||!rowIndexes.has(row)||!selectedRows.size&&!columns.some(item=>item.key===column.key))return;
     try {

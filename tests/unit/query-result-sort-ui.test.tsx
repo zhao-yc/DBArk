@@ -41,7 +41,38 @@ function grid(){return ports.grids.at(-1)!;}
 function button(name:string){const node=document.querySelectorAll('button').find(node=>node.textContent===name||node.getAttribute('aria-label')===name||name===zh.query.text010&&node.textContent.startsWith(name)||name===zh.resultExport.chooseFile&&node.textContent.includes(name));expect(node,'缺少按钮：'+name).toBeDefined();return node!;}
 async function click(name:string){const node=button(name);expect(node.disabled).toBe(false);await act(async()=>node.dispatchEvent(new MemoryEvent('click')));}
 async function sort(column='id',direction:'ASC'|'DESC'='ASC'){const before=grid();await act(async()=>before.onSortColumnsChange([{columnKey:column,direction}]));}
+/** 使用真实优先级控件；保留RAM外界端口，不能把此检查当成原生窗口或系统输入。 */
+async function nullPosition(order:number,name:string,value:''|'FIRST'|'LAST'){
+  const node=document.querySelector('[aria-label="'+text.nulls(order,name)+'"]')!;expect(node).not.toBeNull();expect(node.disabled).toBe(false);
+  await act(async()=>reactProps(node).onChange({target:{value}}));
+}
 function copy(current=grid()){const data=new Map<string,string>();current.onCellCopy({row:current.rows[0],column:{key:'id'}},{preventDefault(){},clipboardData:{setData:(key:string,value:string)=>data.set(key,value)}});return data;}
+
+it('NULL位置控件独立于真实列头升降序，旧回调拒绝，复制和导出仍保留准确原行',async()=>{
+  await mount(result=>{result.rows[0].id=null;});await sort();
+  expect(grid().rows).toEqual([original.rows[0],original.rows[2],original.rows[1]]);
+  await nullPosition(1,'同名','LAST');expect(grid().rows).toEqual([original.rows[2],original.rows[1],original.rows[0]]);
+  const oldSelect=document.querySelector('[aria-label="'+text.nulls(1,'同名')+'"]')!,oldChange=reactProps(oldSelect).onChange;
+  await headerAction('id');expect(grid().rows).toEqual([original.rows[1],original.rows[2],original.rows[0]]);
+  await act(async()=>oldChange({target:{value:'FIRST'}}));expect(grid().rows).toEqual([original.rows[1],original.rows[2],original.rows[0]]);
+  expect(document.querySelector('[aria-label="'+text.nulls(1,'同名')+'"]')!.value).toBe('LAST');
+  await act(async()=>grid().onSelectedRowsChange(new Set([0,1,2])));
+  expect(JSON.parse(copy().get('application/x-dbark-cells')!).rows.map((row:any[])=>row[0])).toEqual(['9007199254740993','2',null]);
+  await click(zh.resultExport.selectedTitle);await click(zh.resultExport.chooseFile);await click(zh.resultExport.start);
+  expect(exports[0].result.rows.map((row:any)=>row.id)).toEqual(['9007199254740993','2',null]);expect(commands.filter(command=>command==='query.execute')).toHaveLength(1);
+});
+
+it('各列NULL选项随优先级移动，Ctrl追加及方向切换保留，恢复默认和原序明确生效',async()=>{
+  await mountMulti();original.rows[0].group=null;original.rows[1].group=null;
+  await headerAction('group');await nullPosition(1,'分组','LAST');await headerAction('id',{ctrlKey:true});
+  expect(grid().rows).toEqual([original.rows[2],original.rows[0],original.rows[1]]);
+  await click(text.changeDirection(2,'编号'));expect(grid().rows).toEqual([original.rows[2],original.rows[1],original.rows[0]]);
+  await click(text.later(1,'分组'));expect(document.querySelector('[aria-label="'+text.nulls(2,'分组')+'"]')!.value).toBe('LAST');
+  expect(grid().rows).toEqual([original.rows[1],original.rows[2],original.rows[0]]);
+  await click(text.earlier(2,'分组'));await nullPosition(1,'分组','');
+  expect(grid().rows).toEqual([original.rows[1],original.rows[0],original.rows[2]]);
+  await click(text.clear);expect(grid().rows).toBe(original.rows);expect(document.querySelector('[aria-label="'+text.nulls(1,'分组')+'"]')).toBeNull();
+});
 
 it('列头三态排序保留源行/列与SQL，精确排序后选择复制和导出共用视图顺序',async()=>{
   await mount();const rawRows=original.rows,saved=structuredClone(original),sql=store.getState().settings.tabs[0].sql;expect(grid().columns.find((c:any)=>c.key==='id').sortable).toBe(true);expect(grid().columns.find((c:any)=>c.key==='bytes').sortable).toBe(false);
