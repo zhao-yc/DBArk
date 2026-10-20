@@ -40,7 +40,7 @@ it('检查只读且dirty明确；确认仅提交文件基线与新ref，原草�
 it.each(['utf8-bom', 'utf16le-bom', 'gb18030', 'mixed', 'cr', 'empty'])('编码/BOM/EOL及完整SQL沿原政策：%s', async kind => {
   const f = fixture(), sql = kind === 'empty' ? '' : kind === 'mixed' ? '甲\r\n乙\n丙\r' : kind === 'cr' ? '甲\r乙\r' : '甲\r\n乙\r\n';
   if (kind === 'gb18030') f.source.encoding = 'gb18030';
-  disk.bytes = kind === 'utf16le-bom' ? Buffer.concat([Buffer.from([255, 254]), Buffer.from(sql, 'utf16le')]) : kind === 'utf8-bom' ? Buffer.concat([Buffer.from([239, 187, 191]), Buffer.from(sql)]) : kind === 'gb18030' ? iconv.encode(sql, 'gb18030') : Buffer.from(sql); disk.clock++;
+  disk.bytes = kind === 'utf16le-bom' ? Buffer.concat([Buffer.from([255, 254]), Buffer.from(sql, 'utf16le')]) : kind === 'utf8-bom' ? Buffer.concat([Buffer.from([239, 187, 191]), Buffer.from(sql)]) : kind === 'gb18030' ? Buffer.from(iconv.encode(sql, 'gb18030')) : Buffer.from(sql); disk.clock++;
   const p = await f.preview(), result = await f.service.reload({ ...f.input(), previewId: p.previewId }, f.scope); expect(result).toMatchObject({ state: 'reloaded', sql }); expect(f.source.savedSqlDigest).toBe(queryFileSqlDigest(sql));
 });
 it('同父目录单链接普通文件的原子替换明确显示replaced，只有确认才接纳新inode', async () => {

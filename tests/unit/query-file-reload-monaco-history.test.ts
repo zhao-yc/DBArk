@@ -14,7 +14,7 @@ function port(initial: string, initialEol: string) {
   const history:any[]=[];let selections:any[]=[new Selection(1,2,1,2)];
   const off=()=>({dispose(){}}),language={onDidChange:off,getLanguageConfiguration:()=>({})};
   const tokenization={onDidChangeLanguage:off,onDidChangeLanguageConfiguration:off,onDidChangeTokens:off,getLanguageId:()=> 'plaintext',handleDidChangeContent(){},handleDidChangeAttached(){},dispose(){}};
-  const model=new TextModel(initial,'plaintext',{...TextModel.DEFAULT_CREATION_OPTIONS,defaultEOL:initialEol==='\r\n'?2:1,bracketPairColorizationOptions:{enabled:false,independentColorPoolPerBracketType:false}},null,{getLastElement:()=>history[index-1],pushElement(element:any){history.splice(index);history.push(element);index++;},getElements:()=>({past:[],future:[]}),createSnapshot:()=>({}),removeElements(){}},{requestRichLanguageFeatures(){}},language,{createInstance:()=>tokenization});
+  const model=new TextModel(initial,'plaintext',{...TextModel.DEFAULT_CREATION_OPTIONS,defaultEOL:initialEol==='\r\n'?2:1,bracketPairColorizationOptions:{enabled:false,independentColorPoolPerBracketType:false}},null,{getLastElement:()=>history[index-1],pushElement(element:any){history.splice(index);history.push(element);index++;},getElements:()=>({past:history.slice(0,index),future:history.slice(index)}),canUndo:()=>index>0,undo(){history[--index].undo();},createSnapshot:()=>({}),removeElements(){}},{requestRichLanguageFeatures(){}},language,{createInstance:()=>tokenization});
   const undo=model._applyUndo.bind(model),redo=model._applyRedo.bind(model);
   model._applyUndo=(...args:any[])=>{undo(...args);if(args[3])selections=args[3];};model._applyRedo=(...args:any[])=>{redo(...args);if(args[3])selections=args[3];};
   const cursor={_model:model,getSelections:()=>selections,setSelections(_event:unknown,_source:unknown,value:any){selections=value;}};
@@ -41,4 +41,14 @@ it('混合/裸CR文件原文和基线保留，模型采用LF；取消无编辑�
 it('正文版本或props离开原值永久阻止旧确认，不改新文本；相同正文重载不新增历史项', () => {
   const p = port('SELECT 1;\n', '\n'), held = beginEditorReload(p.editor, p.props()); p.type('x'); expect(held.current()).toBe(false); expect(held.apply('旧结果', () => {})).toBe(false); held.dispose(); expect(p.text()).toContain('x'); p.bridge.dispose();
   const same = port('SELECT 1;\n', '\n'), before = same.history(), lease = beginEditorReload(same.editor, same.props()); lease.apply(same.props(), () => {}); lease.dispose(); expect(same.history()).toBe(before); same.bridge.dispose();
+});
+it.each([['\r\n','\n'],['\n','\n']])('接纳回调抛错后恢复原正文/EOL及此前普通编辑历史，%j→%j', async (beforeEol,afterEol) => {
+  const old='select 1;'+beforeEol,p=port(old,beforeEol);p.type('x');
+  const draft=p.text(),selection=p.selected(),held=beginEditorReload(p.editor,p.props()),failure=Error('本例注入工作区接纳失败');
+  let captured:unknown;
+  try{await held.apply('SELECT 2;'+afterEol,()=>{throw failure;});}catch(reason){captured=reason;}
+  held.dispose();
+  expect(captured).toBe(failure);expect(p.text()).toBe(draft);expect(p.props()).toBe(draft);expect(p.eol()).toBe(beforeEol);expect(p.selected()).toEqual(selection);expect(p.readonly()).toBe(false);
+  // 失败回滚不能让此前的普通编辑被新的补写历史遮住，也不能清空原Undo栈。
+  p.undo();expect(p.text()).toBe(old);p.redo();expect(p.text()).toBe(draft);p.bridge.dispose();
 });
