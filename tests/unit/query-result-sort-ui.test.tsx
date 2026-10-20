@@ -213,6 +213,28 @@ it('筛选：空结果仍显示原返回/过滤数量，可清除恢复，所有
   await mountMulti();await filterGroup('无匹配');expect(grid().rows).toEqual([]);expect(document.body.textContent).toContain(filterText.counts(3,0));await click(zh.resultExport.title);await click(zh.resultExport.chooseFile);await click(zh.resultExport.start);expect(exports[0].result.rows).toEqual([]);expect(exports[0].rows).toBeUndefined();expect(commands.filter(c=>c==='query.execute')).toHaveLength(1);
 });
 
+it('片段库打开和关闭保留筛选及多列排序，旧选择撤销且不会额外执行SQL',async()=>{
+  await mountMulti();await filterGroup();await headerAction('group');await headerAction('id',{ctrlKey:true});
+  const displayed=grid().rows,rules=grid().sortColumns,saved=structuredClone(original);
+  await act(async()=>grid().onSelectedRowsChange(new Set([0])));const old=grid();
+  // 片段列表仅使用明确RAM端口；真实QueryTab、父弹窗和结果视图仍共同运行。
+  const invoke=(window as any).dbark.invoke;
+  (window as any).dbark.invoke=async(command:string,input:unknown)=>{if(command==='snippets.list'){commands.push(command);return [];}return invoke(command,input);};
+  await click(zh.snippets.title);const dialog=document.querySelector('[role="dialog"]')!;expect(dialog).not.toBeNull();
+  await act(async()=>{for(const observer of observers)observer([{addedNodes:[dialog]}]);});
+  expect(grid().rows).toBe(displayed);expect(grid().sortColumns).toEqual(rules);expect(copy(old).size).toBe(0);
+  expect(button(zh.resultExport.title).disabled).toBe(true);expect(document.body.textContent).toContain(filterText.counts(3,2));
+  await click(zh.common.close);await act(async()=>{for(const observer of observers)observer([{addedNodes:[]}]);});
+  expect(document.querySelector('[role="dialog"]')).toBeNull();expect(grid().rows).toBe(displayed);expect(grid().sortColumns).toEqual(rules);
+  expect(grid().selectedRows.size).toBe(0);expect(copy(old).size).toBe(0);
+  await act(async()=>grid().onSelectedRowsChange(new Set([0])));
+  expect(JSON.parse(copy().get('application/x-dbark-cells')!).rows[0][1]).toBe('2');
+  await click(zh.resultExport.selectedTitle);await click(zh.resultExport.chooseFile);await click(zh.resultExport.start);
+  expect(exports[0].result.rows.map((row:any)=>row.id)).toEqual(['2']);expect(original).toEqual(saved);
+  expect(commands.filter(command=>command==='snippets.list')).toHaveLength(1);expect(commands.filter(command=>command==='query.execute')).toHaveLength(1);
+  expect(commands.some(command=>command.startsWith('snippets.transfer')||command.startsWith('query.transaction'))).toBe(false);
+});
+
 it.each(['selected','all'] as const)('筛选和多列排序在%s连续导出模态前后保持，旧选择仍撤销',async mode=>{
   await mountMulti();await filterGroup();await headerAction('group');await headerAction('id',{ctrlKey:true});
   // 导出预览另有网格；查询区域总传完整排序数组，不能将最后渲染的预览当背景视图。
