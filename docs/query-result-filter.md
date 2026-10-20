@@ -1,6 +1,6 @@
 # 已返回查询结果的本地条件筛选
 
-后续新增[多值匹配开发候选](development/query-result-members-filter-20261020.md)：逐项输入，原精度、NULL及预算策略保持。尚未运行本候选测试或实库窗口；原3a85b58队列及其证据不转计给此增量，暂不发布。
+新增[多值匹配](development/query-result-members-filter-20261020.md)：逐项输入，原精度、NULL及预算策略保持。固定ac629f3已在WIN11-TEST通过类型、313项定向、新构建、扩展实库界面及CSV／JSON独立读回，完整11045通过／1平台跳过；[准确增量证据](../tests/integration/acceptance-query-result-members-ac629f3-20261020.md)与旧批次分别记录，按main交付源码，暂不发布。
 
 本轮从封存但未交付的 `f37a7c3` 提取实现，整合到 `codex/query-result-multisort-filter-20261020`；基线为 `39d3ed2`，同时接入多列排序。只读取旧员工副本的固定提交，保留原副本、冻结 0.28 和原生验收现场。当前以开发为主，暂不发布。
 
