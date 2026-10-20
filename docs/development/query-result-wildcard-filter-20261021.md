@@ -47,3 +47,5 @@ Root第二次路径规划的字面exports不符合原helper第13行的固定base
 随后独立Python读回在内容断言前失败：PID14516、退出1、0.608秒，第13行lstat／fstat的dev、ino、size、mtime_ns、ctime_ns元组比较不一致，stdout为空，stderr摘要8739360492cabf99d1a4964ecf2d48cd99050fdc71fd1f59a9f04a1cdb039630。具体差异字段尚未确认，不能推断文件被改或归因Python／Windows语义；不能将其算为内容校验通过。已要求只读保留原脚本与错误，采集Python实际版本、路径／原句柄各字段、原导出摘要和Node独立句柄对照，不调用产品解码、不重跑GUI／读取验收或继续full。远端随后再次不可用，诊断结果及完整套件启动均未确认，保持原队列不重复派发。
 
 基线main0ee5886的三平台源码／同次安装legacy CI已全部通过，ARM两阶段六专项／24原owner及显示恢复原件已静态独立核对，见[基线原件审计](../../tests/integration/acceptance-main-0ee5886-ci-20261021.md)。该证据不替代本通配候选的Python独立内容读回、Windows完整回归、新安装或macOS实库，当前不合入main，暂不发布。
+
+后续恢复后，Root读到原诊断完整输出：Python3.12.14仅跨lstat／fstat的ctime_ns不同，各自API前后稳定；身份、大小、修改及创建时间一致，Node独立路径／句柄全部字段稳定，两文件摘要与原封存一致。诊断没有解码内容。已批准保留原失败、另存v2验证器：ctime按各API自身前后核对，跨API身份及其余字段、原inode、摘要、字面内容期待全部保持，Node另做前后核验；只运行一次v2，成功后才准入原唯一Windows完整回归。具体原值及摘要见上面的准确验收记录，当前新结果未确认，不重跑GUI。

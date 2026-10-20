@@ -36,6 +36,10 @@ GUI原JSON SHA256 `fdbbb14ee91ad26105794015903a360c4c8779de81b5b4416ef0ac70aad7f
 
 Python标准库首次独立读回退出1、0.608秒，PID14516；第13行路径lstat与原句柄fstat的身份／时间戳元组比较失败，CSV／JSON内容断言未到达。原stderr摘要 `8739360492cabf99d1a4964ecf2d48cd99050fdc71fd1f59a9f04a1cdb039630`。原脚本及失败保持，具体差异字段尚未确认，未推断文件变化或平台原因；已仅派发原字段、Python版本、原字节摘要和Node句柄的只读诊断，未批准更改断言直接转绿。
 
-远端再次不可用，诊断、独立内容读回及完整套件均未闭合。完整队列没有确认的启动记录，Root已要求停止后序；只有GUI／Python／原进程／Git／源码与构建终核通过后，才能清除全部DBARK变量按原配置执行一次完整Vitest。后续先核原队列，不因观察失败重复派发。
+远端恢复后，Root已读取原只读诊断命令的完整输出：Python3.12.14，CSV／JSON的路径lstat与句柄fstat仅ctime_ns不同；各API自身前后完全稳定，dev／ino／nlink／size／mtime_ns／birthtime_ns一致。CSV路径ctime为1792517766941435500，句柄为1792517766948992700；JSON分别为1792517767895922300和1792517767898862600。Node24.19.0的路径和句柄四检查点全部字段一致，其ctime等于Python句柄值，birthtime等于Python路径ctime；不将两个API的不同ctime表示误报为内容变化。
+
+两文件原摘要也一致：CSV177字节，SHA256 `a8d7e0d2949aec1d5ba342b1cd6bb9c30d98901c1edacbb17fc021c5a8cf9048`；JSON321字节，SHA256 `fd0979ab54e513de5b565d11a2dfa1174cccc4b18393a8d338b813c26aeb4678`。比较基准是首次Python失败后封存的export-file-identities.json，原GUI没有输出字节摘要；这次诊断没有解码或验证内容，不能代替独立内容读回。
+
+Root据此批准另存v2验证脚本，原脚本及失败不改：ctime改为各自同API的前后严格核对，跨API继续逐字段核身份、大小、修改及创建时间；另核原inode和封存摘要，原CSV／JSON字面期待及内容断言逐字保持。Node在v2前后独立核原路径／句柄元数据和摘要，不删除检查换取通过。v2仅运行一次，失败停；全部读回及原进程／Git／574源码和109构建终核通过后，才能清除全部DBARK变量按原配置执行唯一完整Vitest。当前v2结果及full启动尚未确认，先核原队列，不因观察失败重复派发。
 
 新安装包、macOS通配实库、其他数据库基线与系统输入未验。基线main0ee5886三平台CI及ARM原件静态审计[另行记录](acceptance-main-0ee5886-ci-20261021.md)，不能替代本候选的新能力验收。Q07仍为部分，暂不发布。
