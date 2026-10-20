@@ -73,6 +73,21 @@ it.each(['success','failure'] as const)('取消IPC失败仍等原导出%s，不�
   expect(prematurelyUnlocked).toBe(false);expect(requests).toBe(1);expect(button(zh.common.close).disabled).toBe(false);
   expect(document.body.textContent).toContain(outcome==='success'?text.exported(1):'原导出失败');
 });
+it.each([
+  ['success', 'committing'], ['success', 'rejected'], ['failure', 'committing'], ['failure', 'rejected']
+] as const)('原导出%s已结算后，迟到取消%s不能覆盖真实结局或恢复等待提示', async (outcome, cancellation) => {
+  const exporting = deferred<{ count: number }>(), cancelling = deferred<{ cancelled: boolean }>();
+  await mount((command, input) => command === 'snippets.transferExport' ? exporting.promise : command === 'snippets.transferCancel' && !input.close ? cancelling.promise : undefined);
+  await click(button(text.export)); await click(button(text.cancel));
+  // 两个请求均来自同一代次；原操作先结束，取消回包此时还没有到达。
+  await act(async () => outcome === 'success' ? exporting.resolve({ count: 1 }) : exporting.reject(Error('原导出终态失败')));
+  const unlocked = !button(zh.common.close).disabled && !button(text.export).disabled;
+  await act(async () => cancellation === 'committing' ? cancelling.resolve({ cancelled: false }) : cancelling.reject(Error('迟到取消错误')));
+  // 所有异步请求先结算再断言，失败报告不会遗留悬挂的测试承诺。
+  expect(unlocked).toBe(true); expect(button(zh.common.close).disabled).toBe(false);
+  expect(document.body.textContent).toContain(outcome === 'success' ? text.exported(1) : '原导出终态失败');
+  expect(document.body.textContent).not.toContain(text.committing); expect(document.body.textContent).not.toContain('迟到取消错误');
+});
 it('原片段尚未保存时必须先处理丢弃确认，取消保留编辑且不申请文件能力', async () => {
   await mount(); await click(label('选择片段：片段一')); await click(button(zh.snippets.edit));
   await act(async () => { const description = document.body.querySelectorAll('textarea')[0]; description.value = '尚未保存'; description.dispatchEvent(new MemoryEvent('input')); });
