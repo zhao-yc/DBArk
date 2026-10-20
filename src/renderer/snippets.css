@@ -13,4 +13,9 @@
 .snippet-description { white-space: pre-wrap; overflow-wrap: anywhere; }
 .snippet-confirm { border: 1px solid var(--line); padding: 12px; margin-top: 10px; }
 .snippet-confirm button { margin-right: 8px; }
+.snippet-transfer { border-block: 1px solid var(--line); padding-block: 10px; margin-block: 10px; }
+.snippet-transfer button { margin-right: 8px; }
+.snippet-transfer-entry { padding: 10px; border: 1px solid var(--line); margin-block: 8px; }
+.snippet-transfer-entry label { display: flex; gap: 12px; align-items: center; margin-block: 8px; }
+.snippet-transfer-entry pre { max-height: 220px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
 @media (max-width: 720px) { .snippet-layout { grid-template-columns: 170px minmax(0, 1fr); } }

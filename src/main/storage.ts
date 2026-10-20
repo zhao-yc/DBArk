@@ -17,6 +17,7 @@ import { dirname } from 'node:path';
 import { randomUUID, createHash } from 'node:crypto';
 import type { AppSettings, ConnectionProfile, HistoryEntry, SavedQuery, SqlSnippet, TaskRecord } from '../shared/contracts';
 import { validateSnippetBudget } from '../shared/snippets';
+import { validateSnippetCollection, snippetTransferZh } from '../shared/snippetTransfer';
 import { tablePreferenceSaveSchema, tablePreferenceTargetSchema, tablePreferencesSchema, tablePreferenceTargetChanged, validateTablePreferenceBudget, type TablePreferenceTarget, type TablePreferences } from '../shared/tablePreferences';
 import{savedQuerySearchLimits}from'../shared/savedQuerySearch';
 import type{SavedQueryPagePosition}from'../shared/savedQueryPages';
@@ -39,6 +40,7 @@ export class LocalStore {
   private queryFileDocumentSnapshot?: AppSettings['tabs'];
   private queryRevisionValue=0;
   private historyRevisionValue=0;
+  private snippetRevisionValue = 0;
   private volatileSecrets = new Map<string, string>();
   /** 绑定数据库、文件路径及系统凭据保护器；仅由 open 创建已迁移的存储实例。 */
   private constructor(private db: Database, private path: string, private protector: SecretProtector, private reopen: (data: Uint8Array) => Database) {}
@@ -356,10 +358,27 @@ export class LocalStore {
   saveSnippet(input: SqlSnippet): SqlSnippet {
     const snippet = validateSnippetBudget(this.snippets(), { ...input, updatedAt: new Date().toISOString() });
     this.mutate(() => this.db.run('INSERT INTO sql_snippets VALUES (?,?,?) ON CONFLICT(id) DO UPDATE SET data=excluded.data,updated_at=excluded.updated_at', [snippet.id, JSON.stringify(snippet), snippet.updatedAt]));
+    this.snippetRevisionValue++;
     return snippet;
   }
   /** 删除片段不会改动查询正文、历史或连接。 */
-  deleteSnippet(id: string): void { this.mutate(() => this.db.run('DELETE FROM sql_snippets WHERE id=?', [id])); }
+  deleteSnippet(id: string): void { this.mutate(() => this.db.run('DELETE FROM sql_snippets WHERE id=?', [id])); this.snippetRevisionValue++; }
+  /** 修订只在成功落盘后推进，片段往返修改也使旧导入预览失效。 */
+  snippetRevision(): number { return this.snippetRevisionValue; }
+  /** 一批替换/新增共用原mutate的内存快照、事务及原子文件替换；失败不留下部分行。 */
+  applySnippetBatch(input: SqlSnippet[], revision: number, current: () => void): void {
+    current(); if (revision !== this.snippetRevisionValue) throw Error(snippetTransferZh.stale);
+    const incoming = validateSnippetCollection(input), ids = new Set(incoming.map(s => s.id));
+    validateSnippetCollection([...this.snippets().filter(s => !ids.has(s.id)), ...incoming]);
+    if (!incoming.length) return;
+    const timestamp = new Date().toISOString();
+    this.mutate(() => {
+      current(); if (revision !== this.snippetRevisionValue) throw Error(snippetTransferZh.stale);
+      for (const snippet of incoming) { const saved = { ...snippet, updatedAt: timestamp }; this.db.run('INSERT INTO sql_snippets VALUES (?,?,?) ON CONFLICT(id) DO UPDATE SET data=excluded.data,updated_at=excluded.updated_at', [saved.id, JSON.stringify(saved), timestamp]); }
+      current();
+    });
+    this.snippetRevisionValue++;
+  }
   /** 查询正文和来源连接一起原子保存。 */
   saveQuery(query: SavedQuery): void { this.mutate(() => this.db.run('INSERT INTO queries VALUES (?,?,?) ON CONFLICT(id) DO UPDATE SET data=excluded.data,updated_at=excluded.updated_at', [query.id, JSON.stringify(query), query.updatedAt]));this.queryRevisionValue++; }
   /** 来源身份只读取当前连接的公开路由字段，不通过 resolveConnection 解密凭据。 */

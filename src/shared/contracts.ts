@@ -1,5 +1,6 @@
 import type { QueryFileSourceRef, QueryFileSourceOpenInput, QueryFileSourceOpenResult, QueryFileSourceSaveInput, QueryFileSourceSaveAsInput, QueryFileSourceSaveResult, QueryFileSourceStatusInput, QueryFileSourceStatus, QueryFileSourceReleaseInput, QueryFileSourceCancelInput } from './queryFileSources';
 import type { QueryRecentFileView } from './queryFileSources';
+import type { SnippetTransferDecision, SnippetTransferPreview, SnippetTransferResult } from './snippetTransfer';
 import type { TableCopyDataGetInput, TableCopyDataGetOutput, TableCopyDataPreviewInput, TableCopyDataPreviewOutput, TableCopyDataApplyInput, TableCopyDataApplyOutput, TableCopyDataReleaseInput } from './tableCopyData';
 import type { TableCreateGetInput, TableCreateGetOutput, TableCreatePreviewInput, TableCreatePreviewOutput, TableCreateApplyInput, TableCreateApplyOutput, TableCreateReleaseInput } from './tableCreate';
 import type { CsvExportFieldsInput, CsvExportFieldsOutput, CsvExportSelection } from './csvExportFields';
@@ -205,6 +206,11 @@ export interface CommandMap {
   'snippets.list': { input: Record<string, never>; output: SqlSnippet[] };
   'snippets.save': { input: SqlSnippet; output: SqlSnippet };
   'snippets.delete': { input: { id: string }; output: void };
+  'snippets.transferOpen': { input: Record<string, never>; output: { scopeId: string } };
+  'snippets.transferPreview': { input: { scopeId: string }; output: SnippetTransferPreview | null };
+  'snippets.transferExport': { input: { scopeId: string }; output: { count: number } | null };
+  'snippets.transferApply': { input: { scopeId: string; previewId: string; decisions: SnippetTransferDecision[] }; output: SnippetTransferResult };
+  'snippets.transferCancel': { input: { scopeId: string; close?: boolean }; output: { cancelled: boolean } };
   'queries.save': { input: SavedQuery; output: void };
   'queries.delete': { input: { id: string }; output: void };
   'history.list': { input: { connectionId?: string }; output: HistoryEntry[] };

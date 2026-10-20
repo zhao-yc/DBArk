@@ -1,4 +1,5 @@
 import { assertSqlKeywordCaseWrite } from './sqlKeywordCase';
+import { snippetTransferSchemas } from './snippetTransfer';
 import { assertQueryFileSourceSettings, queryFileSourceRefSchema, queryFileSourceOpenSchema, queryFileSourceSaveSchema, queryFileSourceSaveAsSchema, queryFileSourceStatusSchema, queryFileSourceReleaseSchema, queryFileSourceCancelSchema, queryRecentFilesSchema, queryRecentFileForgetSchema } from './queryFileSources';
 import { assertQueryLayoutWrite, queryLayoutLimits } from './queryLayout';
 import { assertEditorIndentationWrite, editorIndentationLimits } from './editorIndentation';
@@ -258,6 +259,7 @@ export const commandSchemas: Record<Command, z.ZodType> = {
   'files.releaseResultSql': z.object({ previewId: z.string().uuid() }).strict(),
   'queries.list': empty, 'queries.save': z.object({ id, name, connectionId: id.optional(), database: name.optional(), databaseContext:queryDatabaseContext.optional(), sql: text, updatedAt: z.string() }).strict(), 'queries.delete': z.object({ id }).strict(),
   'snippets.list': empty, 'snippets.save': snippetSchema, 'snippets.delete': z.object({ id }).strict(),
+  ...snippetTransferSchemas,
   'history.list': z.object({ connectionId: id.optional() }).strict(), 'tasks.list': empty, 'tasks.cancelState': taskCancelInputSchema,
   'history.page':historyPageInputSchema,'history.pageContinue':localSqlPageNextSchema,'history.pageRelease':localSqlPageReleaseSchema,'history.read':historyReadSchema,'history.readError':historyErrorReadSchema,
   'queryFileSources.recent': queryRecentFilesSchema, 'queryFileSources.forgetRecent': queryRecentFileForgetSchema,
