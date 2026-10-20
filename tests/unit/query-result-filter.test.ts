@@ -163,9 +163,12 @@ describe('多值成员按原类型和预算匹配',()=>{
     ['DECIMAL',['0.12345678901234567890','0.12345678901234567891',null],'0.12345678901234567891'],
     ['DATETIME',['2026-10-20 12:00:00.000001','2026-10-20 12:00:00.000002',null],'2026-10-20 12:00:00.000002'],
     ['TIME',['-100:00:00.000001','-99:59:59.999999',null],'-99:59:59.999999'],
-    ['DOUBLE',['1.5','2.5',null],'2.5'],
-  ] as [string,CellValue[],string][])('%s成员复用精确比较而非浮点或日期转换',(type,values,input)=>{
+    ['DOUBLE',[1.5,2.5,null],'2.5'],
+  ] as [string,CellValue[],string][])('%s成员按原协议类型比较并保持NULL独立',(type,values,input)=>{
     const f=fixture(type,values),inside=f.apply([members([input,input])]);expect(inside.sourceIndices).toEqual([1]);expect(inside.result.rows[0]).toBe(f.source.rows[1]);expect(f.apply([members([input],'notIn')]).sourceIndices).toEqual([0]);
+  });
+  it('浮点源若错误返回字符串则明确拒绝，不扩大原比较器的数值协议',()=>{
+    const f=fixture('DOUBLE',['1.5',2.5]),before=f.filter.view(f.binding);expect(()=>f.apply([members(['2.5'])])).toThrow(text.value);expect(f.filter.view(f.binding)).toBe(before);
   });
   it.each([[undefined],[null],[[]],[['1',2]],[new Array(2)]] as [unknown][])('非法成员%j完整拒绝并保留上次视图',values=>{
     const f=fixture('BIGINT',['1','2']),before=f.apply([rule('eq','1')]);expect(()=>f.apply([{...members([]),values} as QueryResultFilterRule])).toThrow(text.invalid);expect(f.filter.view(f.binding)).toBe(before);
