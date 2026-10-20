@@ -33,3 +33,7 @@ WIN11-TEST原六文件队列仍固定NULL候选5b4e7c3，远程连接暂不可�
 恢复连接后原队列已取得终态：fetch PID15964退出128、5.168秒，GitHub TLS unexpected EOF；Git净且仍fcc8530，六文件／构建未启动，无测试PID和新哈希图，原20份封存及profile／输出身份匹配。Root保留原失败，另派准确3fedb46的全新六文件／类型／构建阶段，metadata为outputs/query-result-sort-filter-3fedb46-vm-20261021；预计301项，以原JSON为准。远端分支已含后继大小写排序94e94be，VM必须核对历史准确3fed而不跟随最新头，失败即停不重试，不自动接续GUI或full。此处只记录任务已接受，不当作运行或通过证据。
 
 独立交付基线 `ab27fb1eefd03ea16ba36c912bb2dddf114d306c` 仅在组合上同步main93aedd3的已验文档；src树仍ddd3c518，源码／e2e／unit／scripts／CI／依赖清单与3fedb46逐项无差异。该基线不包含后继文本大小写排序，可在组合全部验收后单独交付main，不必混入尚未窗口验收的94e94be。
+
+WIN11-TEST准确3fedb46的本阶段已回报成功：PID15252退出0、96.176秒，六文件301通过／0失败／0跳过，类型和构建通过；Git净、测试文件未变、574源码／109dist图匹配、原进程及子进程身份缺席、24份封存校验通过。整数键JSON序列化准备错误及数组修复均保留，PID／时间对照另存在prior-records-and-process-check-2.json，没有改产品或测试断言。
+
+Root随后仅派发一次同构建GUI，metadata为outputs/query-result-sort-filter-gui-3fedb46-vm-20261021，目标子目录及两输出须新ENOENT且仅case创建；先查24份封存／源构建图／原进程和RAM布尔。原301终态不等于窗口通过。最后可读检查点为前24份及进程身份复核通过、源构建图与RAM检查中；此后连接不可访问，尚未收到GUI原PID或终态，不将失联解释为停止或重启理由。Python读回／full仍未派发，后继大小写窗口也未启动，不跟随分支新头。
