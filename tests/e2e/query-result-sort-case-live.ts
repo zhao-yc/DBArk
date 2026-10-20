@@ -7,6 +7,7 @@ import { closeMysqlConnection } from '../../src/engine/connection';
 import { QueryResultColumnsUiLifetime,assertQueryResultColumnsUiIdentity,closeQueryResultColumnsObserver,guardQueryResultColumnsExitAnswers,installQueryResultColumnsAudit,readQueryResultColumnsAudit,answerQueryResultColumnsSave,type QueryResultColumnsUiTarget } from '../helpers/queryResultColumnsUi';
 import { queryResultColumnsZh as text } from '../../src/renderer/locales/queryResultColumns.zh-CN';
 import { queryResultSortCaseSql,queryResultSortCaseHeaders,verifyQueryResultSortCaseCopy,verifyQueryResultSortCaseFile } from '../helpers/queryResultSortCaseUi';
+import { readQueryResultSortCaseGrid } from '../helpers/queryResultSortCaseGrid';
 import { zh } from '../../src/renderer/locales/zh-CN';
 import { queryResultSortZh as sortText } from '../../src/renderer/locales/queryResultSort.zh-CN';
 import { queryResultFilterZh as filterText } from '../../src/renderer/locales/queryResultFilter.zh-CN';
@@ -17,7 +18,7 @@ export function registerQueryResultSortCaseUi(binding:QueryResultColumnsUiTarget
  const cases=new Map<TestInfo,{life:QueryResultColumnsUiLifetime;observer?:mysql.Connection;native?:any;stream?:any}>();let halted=false;
  test.use({preserveOnUnconfirmedExit:true,trace:'off',screenshot:'off',video:'off'});test.setTimeout(120000);test.describe.configure({retries:0});
  test.afterEach(({},info)=>{const current=cases.get(info);if(!current){halted=true;retainOwnedDesktopResources(info);throw Error('结果列未建立本例owner，保留现场');}try{current.life.afterEach();cases.delete(info);}catch(reason){halted=true;throw reason;}});
- test('准确13384真实App文本大小写、Unicode、NULL、精度及原文复制导出一致',async({trace,screenshot,video},info)=>{
+ test('准确13384真实App文本大小写、Unicode、NULL、小数简写及原文复制导出一致',async({trace,screenshot,video},info)=>{
   if(halted)throw Error('结果列前例已保留资源，停止后续用例');
   const captured=ownedDesktopResources(info),page=captured.page,application=captured.application,directory=dataDir;
   const life=new QueryResultColumnsUiLifetime({check(allowClosed){binding.assertCurrent();const now=ownedDesktopResources(info);if(now.page!==page||now.application!==application||!allowClosed&&now.closed)throw Error('结果列原owner已变化');},closed:()=>ownedDesktopResources(info).closed,retain:()=>{halted=true;retainOwnedDesktopResources(info);},async exit(){life.check();await application.evaluate(readQueryResultColumnsAudit);life.check();await application.evaluate(guardQueryResultColumnsExitAnswers);life.check();await confirmOwnedDesktopExit(info);}},info as TestInfo&{_startWallTime?:number});
@@ -55,11 +56,19 @@ export function registerQueryResultSortCaseUi(binding:QueryResultColumnsUiTarget
    await observe(()=>tab.getByRole('button',{name:zh.query.text011,exact:true}).click());await observe(()=>expect(tab.getByRole('button',{name:zh.common.stop,exact:true})).toBeDisabled({timeout:20000}));await observe(()=>expect(tab.locator('.error-box')).toHaveCount(0));
    const before=await observe(()=>page.evaluate(async()=>(await window.dbark.invoke('history.list',{})).map(row=>row.id).sort()));expect((await observe(()=>application.evaluate(readQueryResultColumnsAudit))).queries).toBe(1);
    const grid=tab.locator('.result-body .results-grid'),heads=grid.locator('[role="columnheader"]:has(.column-type)');
-   await observe(()=>expect.poll(()=>grid.evaluate(element=>element.clientHeight)).toBeGreaterThanOrEqual(264));
    const selected=tab.getByRole('button',{name:zh.resultExport.selectedTitle,exact:true}),manage=page.getByRole('dialog',{name:text.title,exact:true});
    const modifier=process.platform==='darwin'?'Meta':'Control';
-   /** 固定ID始终为首数据列；只读真实DOM，不读取内部props或产品排序器。 */
-   const ids=()=>observe(()=>grid.locator('[role="row"][aria-rowindex] [role="gridcell"][aria-colindex="2"]').allTextContents());
+   /** 完整矩阵沿真实虚拟表格滚动读取；每次保存实际几何，不借视口高度代替七行验证。 */
+   let readingNumber=0;
+   const ids=()=>observe(async()=>{
+    const number=++readingNumber;
+    const geometry=await grid.evaluate(element=>{
+     const rect=(node:Element|null)=>{if(!node)return null;const value=node.getBoundingClientRect();return{top:value.top,left:value.left,width:value.width,height:value.height};},tab=element.closest('.query-tab'),separator=tab?.querySelector('[role="separator"]');
+     return{viewport:{width:innerWidth,height:innerHeight},grid:{rect:rect(element),clientHeight:element.clientHeight,scrollHeight:element.scrollHeight,rowCount:element.getAttribute('aria-rowcount')},editor:rect(tab?.querySelector('.sql-editor-wrap')??null),splitter:{minimum:separator?.getAttribute('aria-valuemin'),value:separator?.getAttribute('aria-valuenow')},chrome:Array.from(tab?.children??[]).map(node=>({className:node.className,rect:rect(node)}))};
+    });
+    await info.attach(`grid-layout-${number}`,{body:Buffer.from(JSON.stringify(geometry)),contentType:'application/json'});
+    const reading=await grid.evaluate(readQueryResultSortCaseGrid);await info.attach(`grid-order-${number}`,{body:Buffer.from(JSON.stringify(reading)),contentType:'application/json'});return reading.ids;
+   });
    /** 每次只显示本轮需要的列，避免依赖屏幕分辨率或横向虚拟列是否已挂载。 */
    async function columns(visible:readonly number[]):Promise<void>{
     await observe(()=>tab.getByRole('button',{name:text.open,exact:true}).click());
@@ -93,6 +102,17 @@ export function registerQueryResultSortCaseUi(binding:QueryResultColumnsUiTarget
    await observe(()=>tab.getByRole('button',{name:sortText.clear,exact:true}).click());await observe(()=>expect.poll(ids).toEqual(['1','2','3','4','5','6','7']));
    await columns([0,1,2,3,4,5,6,7]);
    const panel=tab.getByRole('region',{name:filterText.title,exact:true});
+   // 两个小数简写只改变条件输入：1.上限排除原值1.00000000000000000001，不按浮点近似。
+   await observe(()=>tab.getByRole('button',{name:filterText.open,exact:true}).click());await observe(()=>panel.getByRole('button',{name:filterText.add,exact:true}).click());
+   await observe(()=>panel.getByRole('combobox',{name:filterText.column+' 1',exact:true}).selectOption({index:3}));
+   await observe(()=>panel.getByRole('combobox',{name:filterText.operator+' 1',exact:true}).selectOption('between'));
+   await observe(()=>panel.getByRole('textbox',{name:filterText.lower+' 1',exact:true}).fill('.12345678901234567890'));await observe(()=>panel.getByRole('textbox',{name:filterText.upper+' 1',exact:true}).fill('1.'));
+   await observe(()=>panel.getByRole('button',{name:filterText.apply,exact:true}).click());await observe(()=>expect.poll(ids).toEqual(['1','6','7']));
+   await observe(()=>tab.getByRole('button',{name:filterText.open,exact:true}).click());
+   await observe(()=>expect(panel.getByRole('textbox',{name:filterText.lower+' 1',exact:true})).toHaveValue('.12345678901234567890'));await observe(()=>expect(panel.getByRole('textbox',{name:filterText.upper+' 1',exact:true})).toHaveValue('1.'));
+   await observe(()=>panel.getByRole('combobox',{name:filterText.operator+' 1',exact:true}).selectOption('notBetween'));
+   await observe(()=>panel.getByRole('button',{name:filterText.apply,exact:true}).click());await observe(()=>expect.poll(ids).toEqual(['3']));
+   await observe(()=>tab.getByRole('button',{name:filterText.clear,exact:true}).click());await observe(()=>expect.poll(ids).toEqual(['1','2','3','4','5','6','7']));
    // 手写微秒边界：日期上端点及负TIME下端点包含行2，闭区间之外只含行3，均排除NULL。
    for(const [column,lower,upper] of [[4,'2026-10-21 12:00:00.000000','2026-10-21 12:00:00.000001'],[5,'-100:00:00.000001','-100:00:00.000000']] as const){
     await observe(()=>tab.getByRole('button',{name:filterText.open,exact:true}).click());
