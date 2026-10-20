@@ -16,7 +16,7 @@ export function registerQueryResultOrganizeUi(binding:QueryResultColumnsUiTarget
  const cases=new Map<TestInfo,{life:QueryResultColumnsUiLifetime;observer?:mysql.Connection;native?:any;stream?:any}>();let halted=false;
  test.use({preserveOnUnconfirmedExit:true,trace:'off',screenshot:'off',video:'off'});test.setTimeout(120000);test.describe.configure({retries:0});
  test.afterEach(({},info)=>{const current=cases.get(info);if(!current){halted=true;retainOwnedDesktopResources(info);throw Error('结果列未建立本例owner，保留现场');}try{current.life.afterEach();cases.delete(info);}catch(reason){halted=true;throw reason;}});
- test('准确13384真实App多列排序与七种文本筛选、空结果及CSV／JSON范围一致',async({trace,screenshot,video},info)=>{
+ test('准确13384真实App多列排序与文本和精确区间筛选、空结果及CSV／JSON范围一致',async({trace,screenshot,video},info)=>{
   if(halted)throw Error('结果列前例已保留资源，停止后续用例');
   const captured=ownedDesktopResources(info),page=captured.page,application=captured.application,directory=dataDir;
   const life=new QueryResultColumnsUiLifetime({check(allowClosed){binding.assertCurrent();const now=ownedDesktopResources(info);if(now.page!==page||now.application!==application||!allowClosed&&now.closed)throw Error('结果列原owner已变化');},closed:()=>ownedDesktopResources(info).closed,retain:()=>{halted=true;retainOwnedDesktopResources(info);},async exit(){life.check();await application.evaluate(readQueryResultColumnsAudit);life.check();await application.evaluate(guardQueryResultColumnsExitAnswers);life.check();await confirmOwnedDesktopExit(info);}},info as TestInfo&{_startWallTime?:number});
@@ -62,14 +62,15 @@ export function registerQueryResultOrganizeUi(binding:QueryResultColumnsUiTarget
    await observe(()=>tab.getByRole('button',{name:sortText.earlier(2,'repeated'),exact:true}).click());await observe(()=>expect.poll(ids).toEqual(['1','3','2']));
    const panel=tab.getByRole('region',{name:filterText.title,exact:true});
    /** 通过真实受控条件输入修改草稿；字段按当前可见序号选择，重复别名不作身份。 */
-   async function addRule(index:number,column:number,operator:string,value:string){
+   async function addRule(index:number,column:number,operator:string,value:string,upper?:string){
     await observe(()=>panel.getByRole('button',{name:filterText.add,exact:true}).click());
     await observe(()=>panel.getByRole('combobox',{name:filterText.column+' '+index,exact:true}).selectOption({index:column}));
     await observe(()=>panel.getByRole('combobox',{name:filterText.operator+' '+index,exact:true}).selectOption(operator));
-    const input=panel.getByRole('textbox',{name:filterText.input+' '+index,exact:true});
+    const range=operator==='between'||operator==='notBetween',input=panel.getByRole('textbox',{name:(range?filterText.lower:filterText.input)+' '+index,exact:true});
     if(['empty','notEmpty','null','notNull'].includes(operator)){
      await observe(()=>expect(input).toBeDisabled());await observe(()=>expect(input).toHaveValue(''));
     }else await observe(()=>input.fill(value));
+    if(range)await observe(()=>panel.getByRole('textbox',{name:filterText.upper+' '+index,exact:true}).fill(upper!));
    }
    await observe(()=>tab.getByRole('button',{name:filterText.open,exact:true}).click());await addRule(1,3,'lte','1.00000000000000000001');
    await observe(()=>expect.poll(ids).toEqual(['1','3','2']));await observe(()=>panel.getByRole('button',{name:filterText.cancel,exact:true}).click());await observe(()=>expect.poll(ids).toEqual(['1','3','2']));
@@ -91,6 +92,24 @@ export function registerQueryResultOrganizeUi(binding:QueryResultColumnsUiTarget
     await observe(()=>expect(tab.locator('.query-result-filter-bar')).toContainText(filterText.counts(3,expected.length)));
     await observe(()=>tab.getByRole('button',{name:filterText.clear,exact:true}).click());await observe(()=>expect.poll(ids).toEqual(['1','2','3']));
    }
+   // 仍使用原三行常量、准确目标和一次SQL；大整数及高精度小数的两端独立输入，不增加文件任务。
+   for(const [column,operator,lower,upper,expected] of [
+    [2,'between','9007199254740993','18446744073709551615',['1','3']],
+    [2,'notBetween','9007199254740993','18446744073709551615',['2']],
+    [3,'between','0.12345678901234567890','1.00000000000000000001',['1','3']],
+    [3,'notBetween','0.12345678901234567890','1.00000000000000000001',['2']],
+    [3,'between','1.00000000000000000001','1.00000000000000000001',['3']],
+   ] as const){
+    await observe(()=>tab.getByRole('button',{name:filterText.open,exact:true}).click());await addRule(1,column,operator,lower,upper);
+    await observe(()=>panel.getByRole('button',{name:filterText.apply,exact:true}).click());await observe(()=>expect.poll(ids).toEqual(expected));
+    await observe(()=>expect(tab.locator('.query-result-filter-bar')).toContainText(filterText.counts(3,expected.length)));
+    await observe(()=>tab.getByRole('button',{name:filterText.clear,exact:true}).click());await observe(()=>expect.poll(ids).toEqual(['1','2','3']));
+   }
+   // 颠倒端点不清空原视图；原面板修正后再应用，不能由产品偷偷交换边界。
+   await observe(()=>tab.getByRole('button',{name:filterText.open,exact:true}).click());await addRule(1,2,'between','18446744073709551615','9007199254740993');
+   await observe(()=>panel.getByRole('button',{name:filterText.apply,exact:true}).click());await observe(()=>expect(tab).toContainText(filterText.rangeOrder));await observe(()=>expect.poll(ids).toEqual(['1','2','3']));
+   await observe(()=>panel.getByRole('textbox',{name:filterText.upper+' 1',exact:true}).fill('18446744073709551615'));await observe(()=>panel.getByRole('button',{name:filterText.apply,exact:true}).click());await observe(()=>expect.poll(ids).toEqual(['1']));
+   await observe(()=>tab.getByRole('button',{name:filterText.clear,exact:true}).click());await observe(()=>expect.poll(ids).toEqual(['1','2','3']));
    await observe(()=>tab.getByRole('button',{name:filterText.open,exact:true}).click());await addRule(1,3,'lte','1.00000000000000000001');await observe(()=>panel.getByRole('button',{name:filterText.apply,exact:true}).click());await observe(()=>expect.poll(ids).toEqual(['1','3']));
    await observe(()=>expect(tab.locator('.query-result-filter-bar')).toContainText(filterText.counts(3,2)));
    for(const index of [3,2])await observe(()=>grid.locator('[role="row"][aria-rowindex="'+index+'"]').getByRole('checkbox').check());
