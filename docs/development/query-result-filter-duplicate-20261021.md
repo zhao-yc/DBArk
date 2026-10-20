@@ -36,4 +36,31 @@
 
 原终核在 `2026-10-20T22:01:24.819Z` 因纯数字PID缺席门而 `passed:false`：唯一匹配为17780、父728、`msedge.exe`，CIM创建值 `/Date(1792533601630)/`。原已记进程最后快照无匹配，但该纯PID门失败保留，未重跑或重采样。Root将新CIM时间规范化为 `2026-10-20T22:00:01.630Z`，晚于原GUI记录的缺席时间 `2026-10-20T21:14:11.1536686Z`，可确认此数字已被新身份复用；不能只以不同格式时间字符串不相等作为依据。
 
-Root仅授权另存对既有记录的离线身份对照，核对其余ID／直接子进程及封存；当前尚待完整报告和该补证终态，不把原失败改写为通过。误带点路径的ENOENT、构造／封存错误及快进进程创建时间等未捕获字段仍须保留，不补造。没有GUI、full、SQL、SSH、Docker、安装、系统输入或剪贴板动作，暂不合入main或发布。
+Root仅授权另存对既有记录的离线身份对照，核对其余ID／直接子进程及封存；首次停止时尚待完整报告和该补证终态，不把原失败改写为通过。误带点路径的ENOENT、构造／封存错误及快进进程创建时间等未捕获字段仍须保留，不补造。本阶段没有GUI、full、SQL、SSH、Docker、安装、系统输入或剪贴板动作，暂不合入main或发布。
+
+## 离线补证与下一窗口
+
+后继只读补证已完成，按整数UTC时间确认：旧node创建 `2026-10-20T21:04:10.830Z` ＜ 原缺席 `21:14:11.1536686Z` ＜ 新Edge创建 `22:00:01.630Z` ＜ 原快照 `22:01:24.819Z`。同一原快照其余已记ID及直接子进程均零匹配，44份原封存未变；原阶段报告和终核 `passed:false` 原样保留。Root接受原定向／类型／构建结果与独立身份补证，不追认原纯PID门通过。
+
+原类型PID13348于21:57:52.5434058 UTC创建，退出0／38.482秒；五文件PID16988于21:58:39.9120721创建，退出0／13.457秒、实际189通过／0失败／0跳过；构建PID3408于21:59:18.7315371创建，退出0／55.354秒。实际命令为 `node node_modules/typescript/bin/tsc --noEmit`、指定五文件的 `node node_modules/vitest/vitest.mjs run … --reporter=json`、`node scripts/build.mjs`。原RAM三项明确捕获为true，补证没有重查RAM；快进和原GUI observer创建时间仍unknown。
+
+下列摘要来自VM原报告及终核，Root已读回报，未下载原件复算。原目录为 `outputs/query-result-sort-case-1f8fc19-vm-20261021`；补证另存同级后缀 `-offline-identity-review` 目录：
+
+| 原件 | SHA256 |
+| --- | --- |
+| stage-result.json（原失败报告） | `e0f8f443b181a8dfba571b046f0606aff8ab90f5755f10c52d904a13be0bb635` |
+| SHA256SUMS.txt（原44份） | `1051c698293479588adfaceff34fbd110619c49ee4833f4fd53f302c3df97562` |
+| offline-normalized-identity-review.json | `7b24057a71755bf933458e0b5df1ebd755208b9a6e749400df062764694cc8c2` |
+| 补证SHA256SUMS.txt | `44bbf4392152515f47b91b52fcc65b9ed3b963bf058e95e40d55914175f78e38` |
+
+Root随后仅派发同一1f8源码／构建的一次独立GUI，metadata为 `outputs/query-result-sort-case-gui-1f8fc19-vm-20261021`。原七行常量、手写顺序及四行文件期待、120秒／零重试不变；新子目录须由formal case独占创建，不预建。先查原44份与补证、源／构建及已记进程身份，只有本阶段可取新的身份快照；不重复原测试。首次派发时尚无GUI终态，Python四行读回／full未派发，不将消息送达记为通过。
+
+开发中的[封存身份比对工具](../testing/recorded-process-identity.md)仅另线验证，不加载到固定1f8或改其验收门，产品树保持260625aa；本候选仍未合入main，暂不发布。
+
+## 首次组合窗口失败
+
+预检两套封存、源574／测试1302／构建109、RAM目标／凭据／UUID及14项合同通过，新导出子目录和两文件均为ENOENT后，唯一GUI PID6592启动。其外部进程观察器PID13504因控制端漏带 `-ExecutionPolicy Bypass` 被PowerShell拒绝；原CLI和观察器创建时间未捕获，保持unknown。未重启观察器或补采进程。
+
+GUI原句柄自然退出1、52.479秒，原生结果1失败／0通过／0跳过，并有worker teardown超时。原生数据库observer与外部进程观察器是两条链路，不能混同；normal owner退出、原数据库observer同native／stream关闭、进程后代及profile身份当前未确认。原目录与原件保留，不补清理，不重跑，Python读回／full未启动。
+
+随后原阶段回报确认：首错为 `query.execute` 原处理器返回失败，审计随即停链；底层错误正文没有单独导出，排序、筛选及文件导出的后续成功断言未到达，CSV／JSON仍ENOENT。源码574／测试1302／dist109及Git终核通过，不能据此猜测SQL或产品根因。Root已请求直接展开原JSON／context首错文本，并在原件封存后另授权一次独立原七行常量SELECT诊断：新mysql2连接先核同一准确目标，原SQL不改，成功或失败都停止，只释放这次新连接。它不属于GUI复验，不触碰原失败App或observer，不把诊断成功计作窗口通过；当前尚无该诊断终态。
