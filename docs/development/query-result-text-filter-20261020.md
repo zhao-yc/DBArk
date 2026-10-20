@@ -40,7 +40,7 @@ node node_modules/vitest/vitest.mjs run --maxWorkers=2 --reporter=json --outputF
 
 新增QueryTab用例仍使用RAM数据库端口和虚拟网格；证明边界只到真实组件与视图管线，不是原生窗口、真实数据库或系统剪贴板。新条件仍须实际Electron界面验收：同一查询返回非空、空串、NULL、空格、通配符文字和Unicode等不同原行；逐项选择新条件，核预览取消、AND／OR、空结果、输入禁用／恢复、随后多列排序及连续CSV／JSON原行顺序。须独立解析实际导出文件，确认未再次执行SQL或产生额外历史。沿用现有桌面／退出能力，不为测试增加宿主、helper或框架。
 
-原生用例扩展另固定 `9e9812a1485d935d30674f6fe706d0a77c03c180`：只改原 `query-result-organize-live.ts`，新标题“准确13384真实App多列排序与七种文本筛选、空结果及CSV／JSON范围一致”。复用原SQL的CHAR编号和空文本列，逐项检查新增七条件、禁用的条件输入及清除，最后仍走原多列排序、连续CSV／JSON和独立文件核验。spec门、helper、常量SQL、目标、120秒期限、零重试、原退出夹具和文件期望不变；没有新helper／宿主／框架。该提交与7c4b9da的产品源码、单元、依赖、锁文件相同，但新live用例尚未类型检查或运行；旧原生报告不能转记为新七条件通过。Unicode、空白和文本NULL等扩展原生组合仍单列待验。
+原生用例扩展另固定 `9e9812a1485d935d30674f6fe706d0a77c03c180`：只改原 `query-result-organize-live.ts`，新标题“准确13384真实App多列排序与七种文本筛选、空结果及CSV／JSON范围一致”。复用原SQL的CHAR编号和空文本列，逐项检查新增七条件、禁用的条件输入及清除，最后仍走原多列排序、连续CSV／JSON和独立文件核验。spec门、helper、常量SQL、目标、120秒期限、零重试、原退出夹具和文件期望不变；没有新helper／宿主／框架。该提交与7c4b9da的产品源码、单元、依赖、锁文件相同，已完成下述VM类型检查，live用例尚未运行；旧原生报告不能转记为新七条件通过。Unicode、空白和文本NULL等扩展原生组合仍单列待验。
 
 本批不授予额外数据库权限或凭据迁移。若需要200实库，先确认VM可用的已授权专用连接；Docker只在核对实际服务器身份后使用200，绝不使用VM本机Docker。系统键盘、剪贴板及共享剪贴板隔离、安装包、macOS和真实性能均另列，不能由最小启动或本批内存测试替代。
 
@@ -60,3 +60,11 @@ node node_modules/vitest/vitest.mjs run --maxWorkers=2 --reporter=json --outputF
 | `SHA256SUMS.txt` | `e8e3aed9e0b6fa5da04eba4010af5b45382e7729cdb0c1420e446654425ce5ab` |
 
 测试机已核12份证据文件、工作区干净，原任务匹配进程及观察过的PID均无残留。构建依赖注释／大chunk提示保留，原退出码仍为0。这是Windows虚拟机的源码类型、单元和普通构建证据，未启动本候选GUI或实库，不替代9e9812a的新原生步骤、安装、系统输入／剪贴板、macOS或性能验收。
+
+## 原生增量类型与连接盘点（9e9812a）
+
+开发会话已直接读取“dbark测试”的完成报告：同一 `WIN11-TEST\tester`、同一普通克隆，测试分支 `codex/vm-query-result-native-preflight-20261020`，完整HEAD为9e9812a。15项受保护路径的Git对象与7c4b9da相同；Node24.19.0、pnpm12.11.2、TypeScript5.9.3，单次 `node node_modules/typescript/bin/tsc --noEmit` 退出0，36.99秒。测试机报告工作区干净、任务进程结束，无提交／推送；本次没有重跑单元或构建。
+
+只读盘点显示该VM的进程／用户／系统环境均未配置本用例连接及显式运行门，三个可缺省项也未设置。Windows OpenSSH9.5p2存在，但标准用户和系统SSH配置文件不存在，未发现明确的 `server-200` 别名。没有尝试SSH登录、数据库、Docker或GUI，也未复制凭据；因此下一步先补齐该VM的已授权专用连接，配置存在本身仍不能视为身份、权限或真实界面通过。仅配置缺失不阻塞不依赖数据库的片段库验收。
+
+本批报告目录为 `C:\Users\tester\Documents\Codex\2026-10-20\hi\outputs\query-result-text-filter-native-preflight-20261020`。完成报告列出 `native-preflight-result.json`、`typecheck-result.json` 和 `SHA256SUMS.txt`；完整结果SHA256为 `e7776aef8fd414b5b34eaf1e586199f018d39f9beb0b90739e94e59012e83c78`。该摘要来源为测试会话最终报告，原件尚未独立取回复算，不扩展为原生或实库证据。此后所有占用电脑的测试仍固定在本“dbark测试”会话，不转交其它测试聊天。
