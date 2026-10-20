@@ -24,7 +24,7 @@ function fixture() {
   let tab = { id: 't', kind: 'query' as const, title: '原草稿', connectionId: 'c', sql: disk.bytes.toString(), fileSourceBinding: current.ref }, token = {}, generation = 0, available = true, commits = 0, fail = false, now = 100;
   const store: QueryFileSourceHost['store'] = {
     queryFileDocument: () => ({ token, tab: { ...tab }, generation }), queryFileSource: () => structuredClone(current), queryFileSourceRecords: () => [current],
-    commitQueryFileSource(source, expected, opened) { if (fail || expected?.revision !== current.ref.revision || opened?.previousSql !== tab.sql) throw Error('RAM事务拒绝'); commits++; current = structuredClone(source); if (opened?.sql !== undefined) tab = { ...tab, sql: opened.sql, fileSourceBinding: source.ref }; },
+    commitQueryFileSource(source, expected, opened) { if (fail || expected?.revision !== current.ref.revision || opened?.previousSql !== tab.sql) throw Error('RAM事务拒绝'); commits++; current = structuredClone(source); tab = { ...tab, fileSourceBinding: source.ref, ...(opened?.sql === undefined ? {} : { sql: opened.sql }) }; },
     releaseQueryFileSource: () => false, queryRecentFiles: () => [], queryRecentFile: () => undefined, forgetRecentFile: () => false,
   };
   const host = { store, report: vi.fn(), choose: vi.fn(async () => path), reserve: vi.fn(async () => () => {}) }, scope = { document: {}, assertCurrent() { if (!available) throw Error('RAM窗口失效'); } }, service = new QueryFileSources(host, () => now);
@@ -32,9 +32,9 @@ function fixture() {
   return { service, scope, host, input, get source() { return current; }, get tab() { return tab; }, get commits() { return commits; }, dirty() { tab = { ...tab, sql: '未保存草稿\r\n' }; generation++; }, aba() { generation += 2; }, invalidate() { available = false; }, recreate() { token = {}; }, expire() { now += queryFileReloadLimits.lifetime; }, fail() { fail = true; }, legacy() { delete current.parent; }, async preview() { const p = await service.checkExternal(input(), scope); expect(p.state).toBe('preview'); return p as QueryFileExternalPreview; } };
 }
 afterEach(() => { Object.assign(disk, { bytes: Buffer.from('SELECT 1;\n'), ino: 10n, parentIno: 2n, clock: 1n, closes: 0, reads: 0, opens: 0, code: '', link: false, parentLink: false, canonical: true, gate: undefined }); });
-it('检查只读且dirty明确；确认一次提交原文、EOL/BOM及新ref，零选择、零文件写入', async () => {
+it('检查只读且dirty明确；确认仅提交文件基线与新ref，原草稿待renderer接纳，零文件写入', async () => {
   const f = fixture(); f.dirty(); disk.bytes = Buffer.from('SELECT 2;\r\n'); disk.clock++; const p = await f.preview(); expect(p).toMatchObject({ change: 'modified', dirty: true, binding: { eol: 'crlf' } }); expect(f.commits).toBe(0); expect(f.source.ref.revision).toBe(1);
-  const result = await f.service.reload({ ...f.input(), previewId: p.previewId }, f.scope); expect(result).toMatchObject({ state: 'reloaded', sql: 'SELECT 2;\r\n', binding: { ref: { revision: 2 }, savedSqlDigest: queryFileSqlDigest('SELECT 2;\r\n') } }); expect(f.commits).toBe(1); expect(f.tab.sql).toBe('SELECT 2;\r\n'); expect(f.host.choose).not.toHaveBeenCalled(); expect(f.host.reserve).not.toHaveBeenCalled();
+  const result = await f.service.reload({ ...f.input(), previewId: p.previewId }, f.scope); expect(result).toMatchObject({ state: 'reloaded', sql: 'SELECT 2;\r\n', binding: { ref: { revision: 2 }, savedSqlDigest: queryFileSqlDigest('SELECT 2;\r\n') } }); expect(f.commits).toBe(1); expect(f.tab.sql).toBe('未保存草稿\r\n'); expect(f.tab.fileSourceBinding).toEqual(f.source.ref); expect(f.host.choose).not.toHaveBeenCalled(); expect(f.host.reserve).not.toHaveBeenCalled();
   expect((await f.service.reload({ ...f.input(), previewId: p.previewId }, f.scope)).state).toBe('blocked'); expect(f.commits).toBe(1);
 });
 it.each(['utf8-bom', 'utf16le-bom', 'gb18030', 'mixed', 'cr', 'empty'])('编码/BOM/EOL及完整SQL沿原政策：%s', async kind => {

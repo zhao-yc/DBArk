@@ -220,7 +220,8 @@ export class QueryFileSources {
       const snapshot = await readQueryFileSnapshot(source.path, check, context.report); check();
       if (!sameQueryFileParent(source.parent, snapshot.parent) || !sameQueryFileParent(preview!.snapshot.parent!, snapshot.parent) || snapshot.digest !== preview!.snapshot.digest || !sameQueryFileVersion(snapshot.identity, preview!.snapshot.identity)) throw new QueryFileSourceFailure('external-change', reloadText.expired);
       const decoded = decodeSourceSnapshot(snapshot, source.encoding); check();
-      const next = this.commit(input.tabId, context, snapshot, decoded.encoding, decoded.sql, true, true);
+      // 回包可能丢失、模型可能失效；Main只推进来源基线，renderer接纳之前保留用户唯一持久草稿。
+      const next = this.commit(input.tabId, context, snapshot, decoded.encoding, decoded.sql, true, false);
       return { state: 'reloaded', sql: decoded.sql, binding: queryFileSourceView(next) };
     });
   }
