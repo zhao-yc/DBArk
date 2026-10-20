@@ -77,4 +77,22 @@ Root另行授权只读诊断，从固定1f8源码AST提取原1213字节SQL，不
 | sql-diagnostic-report.json | `4b8a553e8eb9ba7173f06044415405be24361fd9a4a55e36b1d1e76c884e0653` |
 | SHA256SUMS.txt | `3792fc3e651c4c66c1432a1794228568d8d75f465f94e4b68a2bb2f7cf496d97` |
 
-后继仅把夹具七个UNION分支的21处文本表达式显式转换为utf8mb4并采用同一utf8mb4_bin；SQL变为1944字节。ID、a／A、两种Unicode原文、NULL／空串、大数、小数、日期／负TIME、二进制值和四行文件期待不改，服务端仍只按ID排序，本地比较器／IPC／产品树260625aa不变。先验证准确提交的Linux检查，再独立执行修正原常量SQL；真实窗口仍须另验，不把夹具修改或原诊断当成通过，也不放宽原断言、期限和收尾。
+后继仅把夹具七个UNION分支的21处文本表达式显式转换为utf8mb4并采用同一utf8mb4_bin；SQL变为1944字节。ID、a／A、两种Unicode原文、NULL／空串、大数、小数、日期／负TIME、二进制值和四行文件期待不改，服务端仍只按ID排序，本地比较器／IPC／产品树260625aa不变。类型门通过后，独立只读SQL验证与Linux剩余单元／构建并行；两项均须通过才进入新窗口。不把夹具修改或原诊断当成通过，也不放宽原断言、期限和收尾。
+
+## 修正版7f的独立检查
+
+准确 `7fcb0e36a0f15c3d0fdfa96a08b4d9b8833c877a` 的[Linux CI39510434567](https://github.com/zhao-yc/DBArk/actions/runs/39510434567)、job118929805000已成功。Root读取原日志：类型／590文件11340通过、10平台跳过／构建成功，单元200.67秒、Vite31.40秒；UI109项及身份工具30项包含在总计中，原生、剪贴板、发布job跳过，不是GUI或实库执行证据。
+
+WIN11-TEST安全快进到准确7f，source及构建输入与1f8一致，复用原109文件构建；新测试清单实际1304份。固定目标的身份探针和修正版SELECT各一次，全部8列顺序、7行原序、字面值及原生类型零差异；实际为28个字符串、25个null、3个Buffer，Unicode分别保持U+0130与U+0069／U+0307。没有把错误类型转换为字符串或借产品比较器生成期待。
+
+时间为2026-10-21 06:52:48.006–06:52:48.146（北京时间）。本次新native／stream正常关闭、未强制销毁；源码574、测试1304、构建109前后不变，Git净，31份封存校验通过。原GUI／1271及全部unknown保留，未执行GUI／full。目录为 `outputs/query-result-sort-case-sql-7fcb0e3-vm-20261021`，摘要来自VM回报，Root未下载复算：
+
+| 原件 | SHA256 |
+| --- | --- |
+| sql-validation-report.json | `b3a02d6df67f911829107d4fb7300c2fcbb46c75bf326777ed1aa100a095b2d1` |
+| typed-seven-row-result-and-comparison.json | `99bcb79bac5e1f837d13036a2b83ed37fb100e818bdca9606b61a7445d882480` |
+| SHA256SUMS.txt | `0257e768f29e4c02e6f7fe89524542cb4155116cec3b9816d3e07946ade77279` |
+
+两项检查通过后，Root仅派发同一7f源码／构建的新独立GUI，metadata为 `outputs/query-result-sort-case-gui-7fcb0e3-vm-20261021`。先在VM单次执行身份工具的单文件单元；通过后，PowerShell脚本／控制器须先语法检查，使用明确的NoProfile／NonInteractive／ExecutionPolicy Bypass，真实观察器ready、活着及自身创建时间已捕获、首个CIM成功后才启动正式Playwright。可用等待stdin的独占launcher作为先观察的稳定根；launcher、观察器与正式CLI身份及结果须分开，不替代原CLI JSON。未ready不启动App，仅通过预定义abort正常退出本例尚未启动测试的控制进程，不强停未知进程。
+
+仍为原120秒／零重试／原矩阵及四行文件期待，先核旧封存与当前源／测试／构建，不fetch或重建。原6592／13504及profile、observer的未知不补造或清理。当前只确认新任务送达，尚无单文件或GUI终态；Python四行读回及full仍未派发，不视为窗口通过。
