@@ -40,6 +40,10 @@ IPC 变更同步更新契约、校验及调用方；保持沙箱和上下文隔�
 
 Vitest：`tests/unit/`、`tests/integration/`，命名 `*.test.ts`，组件另用 `.tsx`；Playwright：`tests/e2e/*.spec.ts`。覆盖本次解析、精度、定位和迁移变更；配置见 `docs/development.md`。
 
+所有需要占用电脑的测试统一交给独立虚拟机 `WIN11-TEST` 的 [dbark测试](thread://01a156d5-b3bf-75f2-a9e8-1c8d1a55effc?hostId=remote-control%3Aenv_e_6ad61bed56648326b45447a0681db5d0) 会话，包括 Windows 类型检查、单元测试、构建、界面、安装包、系统输入和剪贴板验收。本机负责代码开发和静态审查，不运行上述测试。
+
+测试会话串行执行指定提交，保留原始日志、退出码、平台及未验范围；失败时回报开发会话，不自行改动产品、断言或验收门槛。会话暂时不可访问时保留任务状态，不重复派发或改回本机执行。
+
 实库配置专用连接及 `DBARK_INTEGRATION_ENABLED=1`。Docker 仅用 `ssh server-200`，每次核对主机；不用本机 Docker，仅操作授权隔离资源。
 
 分别记录源码、安装包、实库结果及平台、跳过项；保留原生门槛和失败现场。文档修改运行 `git diff --check`。
