@@ -6,6 +6,8 @@ import {queryContextZh} from '../../src/renderer/locales/queryContext.zh-CN';
 import {queryStreamZh} from '../../src/renderer/locales/queryStreamExport.zh-CN';
 import {queryResultSelectionFixture} from '../fixtures/query-result-selection';
 import {QueryRowDetails} from '../../src/renderer/queryRowDetails';
+import {CompletionServerFacts} from '../../src/renderer/completionServerFacts';
+import type {ConnectionStatus} from '../../src/shared/contracts';
 
 /** 执行真实组件内的发送函数，只隔离React与IPC边界，核对等待、取消和失败不发送写入。 */
 function fixture(){
@@ -27,6 +29,57 @@ function fixture(){
 }
 /** 手动控制真实异步边界，不能靠固定sleep期待取消恰好发生在投递前。 */
 function gate(){let release!:()=>void;const pending=new Promise<void>(resolve=>{release=resolve;});return{pending,release};}
+
+/** 手动安排真实新建查询effect的建连和目录回包；不启动React、客户端或数据库。 */
+function newQueryDirectoryFixture(){
+  const source=readFileSync(new URL('../../src/renderer/App.tsx',import.meta.url),'utf8'),file=ts.createSourceFile('App.tsx',source,ts.ScriptTarget.Latest,true,ts.ScriptKind.TSX);
+  const component=file.statements.find((node):node is ts.FunctionDeclaration=>ts.isFunctionDeclaration(node)&&node.name?.text==='NewQueryDialog');
+  const effects:ts.ArrowFunction[]=[];
+  function visit(node:ts.Node){if(ts.isCallExpression(node)&&ts.isIdentifier(node.expression)&&node.expression.text==='useEffect'&&ts.isArrowFunction(node.arguments[0]))effects.push(node.arguments[0]);ts.forEachChild(node,visit);}
+  if(!component)throw Error('生产新建查询入口改变');visit(component);if(effects.length!==1)throw Error('生产新建查询effect数量改变');
+  const opened=valueGate<ConnectionStatus>(),directory=valueGate<string[]>(),cache=new CompletionServerFacts(),workspace={connectionVersions:{c:0} as Record<string,number>};
+  const invoke=vi.fn((command:string,_input:unknown)=>{if(command==='connections.open')return opened.pending;if(command==='metadata.databases')return directory.pending;throw Error('非预期RAM命令');});
+  const setDatabases=vi.fn(),setBusy=vi.fn(),setError=vi.fn(),context=createContext({connectionId:'c',completionServerFacts:cache,useWorkspace:{getState:()=>workspace},invoke,setDatabases,setBusy,setError,errorMessage:(reason:unknown)=>reason instanceof Error?reason.message:String(reason)});
+  runInContext(ts.transpileModule('globalThis.cleanup=('+effects[0].getText(file)+')();',{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText,context);
+  return{opened,directory,cache,workspace,invoke,setDatabases,setBusy,setError,cleanup:context.cleanup as()=>void};
+}
+/** 回包由用例显式释放，不以固定等待或网络快慢制造生命周期窗口。 */
+function valueGate<T>(){let release!:(value:T)=>void,reject!:(reason:unknown)=>void;const pending=new Promise<T>((yes,no)=>{release=yes;reject=no;});return{pending,release,reject};}
+/** 回包释放后让本轮Promise链排空；使用明确事件循环回合，不猜测网络或固定等待时长。 */
+async function settleDirectoryCallbacks(){await new Promise<void>(resolve=>setImmediate(resolve));}
+const directoryStatus:ConnectionStatus={dialect:'mysql',version:'8.4.11'};
+
+describe('新建查询目录读取的真实effect生命周期',()=>{
+  it('当前窗口依次建连和读目录，原事实与项目仅提交一次',async()=>{
+    const f=newQueryDirectoryFixture();expect(f.invoke.mock.calls).toEqual([['connections.open',{id:'c'}]]);f.opened.release(directoryStatus);await f.opened.pending;
+    expect(f.invoke.mock.calls).toEqual([['connections.open',{id:'c'}],['metadata.databases',{connectionId:'c'}]]);f.directory.release(['原库']);await vi.waitFor(()=>expect(f.setBusy).toHaveBeenLastCalledWith(false));
+    expect(f.setDatabases.mock.calls).toEqual([[[]],[['原库']]]);expect(f.cache.get('c',0)).toEqual(directoryStatus);expect(f.setError).not.toHaveBeenCalled();f.cleanup();
+  });
+  it('窗口已关闭，迟到建连不得继续读取目录或发布事实',async()=>{
+    const f=newQueryDirectoryFixture();f.cleanup();f.opened.release(directoryStatus);await f.opened.pending;await settleDirectoryCallbacks();
+    expect(f.invoke.mock.calls).toEqual([['connections.open',{id:'c'}]]);expect(f.cache.get('c',0)).toBeUndefined();expect(f.setDatabases.mock.calls).toEqual([[[]]]);expect(f.setError).not.toHaveBeenCalled();
+  });
+  it('建连期间连接修订变化，迟到结果不得读取新目标目录',async()=>{
+    const f=newQueryDirectoryFixture();f.workspace.connectionVersions.c=1;f.opened.release(directoryStatus);await f.opened.pending;await settleDirectoryCallbacks();
+    expect(f.invoke.mock.calls).toEqual([['connections.open',{id:'c'}]]);expect(f.cache.get('c',0)).toBeUndefined();f.cleanup();
+  });
+  it('目录已发送后关闭窗口，迟到项目不会写入已关闭界面',async()=>{
+    const f=newQueryDirectoryFixture();f.opened.release(directoryStatus);await f.opened.pending;expect(f.invoke).toHaveBeenCalledTimes(2);f.cleanup();f.directory.release(['迟到库']);await f.directory.pending;await settleDirectoryCallbacks();
+    expect(f.setDatabases.mock.calls).toEqual([[[]]]);expect(f.cache.get('c',0)).toEqual(directoryStatus);expect(f.setError).not.toHaveBeenCalled();
+  });
+  it('旧窗口关闭后同修订新ticket已完成，旧回包不能读目录或覆盖新事实',async()=>{
+    const f=newQueryDirectoryFixture();f.cleanup();const next=f.cache.begin('c',0);f.cache.complete(next,{dialect:'mysql',version:'8.4.12'});f.opened.release(directoryStatus);await f.opened.pending;await settleDirectoryCallbacks();
+    expect(f.invoke).toHaveBeenCalledOnce();expect(f.cache.get('c',0)?.version).toBe('8.4.12');expect(f.setDatabases.mock.calls).toEqual([[[]]]);
+  });
+  it('已关闭窗口的建连失败不发布错误或重新请求',async()=>{
+    const f=newQueryDirectoryFixture();f.cleanup();const reason=Error('RAM建连失败');f.opened.reject(reason);await expect(f.opened.pending).rejects.toBe(reason);await settleDirectoryCallbacks();
+    expect(f.invoke).toHaveBeenCalledOnce();expect(f.setError).not.toHaveBeenCalled();expect(f.cache.get('c',0)).toBeUndefined();
+  });
+  it('当前目录失败仍显示原错误并保留已取得的服务器事实',async()=>{
+    const f=newQueryDirectoryFixture();f.opened.release(directoryStatus);await f.opened.pending;const reason=Error('RAM目录拒绝');f.directory.reject(reason);await expect(f.directory.pending).rejects.toBe(reason);await vi.waitFor(()=>expect(f.setBusy).toHaveBeenLastCalledWith(false));
+    expect(f.invoke).toHaveBeenCalledTimes(2);expect(f.setError).toHaveBeenCalledWith('RAM目录拒绝');expect(f.cache.get('c',0)).toEqual(directoryStatus);f.cleanup();
+  });
+});
 describe('查询上下文落盘与投递前取消',()=>{
   it.each(['query','stream'] as const)('%s真实执行首次等待前撤销原勾选，配置落盘仍可独立等待',async mode=>{
     const f=fixture(),held=gate();f.flushSettings.mockImplementationOnce(()=>held.pending);
