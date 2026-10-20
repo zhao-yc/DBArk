@@ -49,3 +49,5 @@ React 的 generation/alive 防止卸载、取消或旧请求迟到后复活预�
 已在运行的完整回归按原门结算：576 文件全部通过、10925 项通过、0 失败、1 Windows 不适用的 POSIX 条件跳过，141.10 秒；未修改测试或超时。报告 `.cache/snippet-transfer-full-unit.json`，SHA256 `c575fd94a9315c87b7f54ce40ff71210328a0b6afcc02a8f598c126fa2bd927d`。其余协调器、入口和 React 用例仍使用明确的内存边界，不等同 Electron 原生验收。
 
 后续所有 Windows 类型/单元/构建、GUI/安装/输入测试改由 WIN11-TEST 执行；本机只继续产品开发和静态审阅，不再新开测试。虚拟机最小验证尚待协调确认，本候选标为待虚拟机验收。片段新原生文件选择、跨真实 IPC 的导入导出/退出、系统剪贴板及安装包尚未验证；不将候选推送或已结算的旧本机结果当作测试迁移完成。
+
+虚拟机应获取固定 `e31420bf325a1dfef676b5864b7d64a1a1061736`，[精确交接与命令](development/snippet-transfer-vm-handoff-20261020.md)已备；协调确认最小环境前不接续测试。
