@@ -2,9 +2,10 @@
 
 ## 当前开发安排（2026-10-21）
 
-新增[每列NULL排序位置开发候选](development/query-result-null-order-20261021.md)：多列优先级可逐列选择默认／NULL在前／NULL在后，显式位置独立于方向，双NULL继续比较下一列，精度、原行及旧回调保护保持。e251a0c的Linux类型通过，11247单元通过／2个新RAM控件断言失败／10平台跳过，原日志保留。已定位测试文件的单选互斥端口缺失，4dff1f9修端口后原控件及复制／导出已通过，完整11249通过／1新增端口用例收尾失败／10平台跳过；3394d07仅补该用例正常准备，保留原期待及产品树，后继Linux类型／586文件11250项／构建全部通过，10平台跳过，见[准确范围](../tests/integration/acceptance-query-result-null-order-3394d07-20261021.md)。Windows原通配队列仍固定63，不切到本候选；新窗口、安装及macOS未验，尚未合入main，暂不发布，不增加完整工作包计数。
+新增[每列NULL排序位置开发候选](development/query-result-null-order-20261021.md)：多列优先级可逐列选择默认／NULL在前／NULL在后，显式位置独立于方向，双NULL继续比较下一列，精度、原行及旧回调保护保持。e251a0c的Linux类型通过，11247单元通过／2个新RAM控件断言失败／10平台跳过，原日志保留。已定位测试文件的单选互斥端口缺失，4dff1f9修端口后原控件及复制／导出已通过，完整11249通过／1新增端口用例收尾失败／10平台跳过；3394d07仅补该用例正常准备，保留原期待及产品树，后继Linux类型／586文件11250项／构建全部通过，10平台跳过，见[准确范围](../tests/integration/acceptance-query-result-null-order-3394d07-20261021.md)。通配源码已按main交付；本候选窗口用例fcc8530另通过Linux类型／586文件11250单元／构建，10平台跳过，Windows定向及新构建原队列进行中；新窗口、安装及macOS未验，尚未合入main，暂不发布，不增加完整工作包计数。
 
-新增[已返回结果文本通配筛选候选](development/query-result-wildcard-filter-20261021.md)：独立正反通配方式，固定%／_及反斜杠转义，Unicode码点匹配和有界状态机，原字面比较、NULL、精度及投影租约保持。63fb0f6已通过Linux类型／585文件11229项／构建，10平台跳过；Windows修后类型／89项UI／构建及13384独立后继GUI1/1通过。原复制选择和首次EEXIST准备失败保持；首次Python读回在内容断言前失败，原只读诊断已确认仅跨API的ctime表示不同，各自稳定、Node字段和两文件摘要一致。已按同API前后核对修正验证方法，保留身份、摘要和全部内容期待；v2内容读回及完整Windows回归待闭合，见[准确记录](../tests/integration/acceptance-query-result-wildcard-63fb0f6-20261021.md)。远端不可用时保留原队列，未重复派发。尚未合入main，暂不发布，不增加完整工作包计数。
+新增[已返回结果文本通配筛选](development/query-result-wildcard-filter-20261021.md)：独立正反通配方式，固定%／_及反斜杠转义，Unicode码点匹配和有界状态机，原字面比较、NULL、精度及投影租约保持。63fb0f6通过Linux类型／585文件11229项／构建，10平台跳过；Windows类型／89项接线／构建、13384独立后继GUI1/1、Python独立文件读回及完整585文件11238通过／1项POSIX跳过均通过。原复制选择、首次EEXIST、跨API时间戳及读回脚本准备失败保留，原断言不变，见[准确记录](../tests/integration/acceptance-query-result-wildcard-63fb0f6-20261021.md)。Git及574源码／109构建哈希和原进程身份终核通过，原旧profile仍保留；按main交付源码。新安装、macOS和系统输入未验，不混入后继NULL排序候选，暂不发布，不增加完整工作包计数。
+
 
 新增[SQL源文件外改检查与当前草稿重载](development/query-file-reload-integration-20261020.md)：显式预览和替换确认，取消保留草稿；Main回包丢失不先覆盖唯一持久草稿，原Monaco保留正文／换行及普通撤销历史。关闭文档释放重载状态，同ID重建拒绝旧预览。603dc5a的Linux类型／584文件11203项／构建通过，10平台跳过；Windows类型／65项相关／构建、真实文件GUI1/1及完整11212项通过／1项POSIX跳过，573源码与109构建哈希不变，原owner及进程终核通过，见[准确记录](../tests/integration/acceptance-query-file-reload-603dc5a-20261021.md)。首次外部数字PID预检失败和补证顺序偏差保留，后续只读对照完整；远端失联期间未重复原队列。按main交付源码，安装、macOS及系统输入未验，不增加完整工作包或发行计数，暂不发布。
 
