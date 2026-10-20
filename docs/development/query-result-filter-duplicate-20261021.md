@@ -96,3 +96,11 @@ WIN11-TEST安全快进到准确7f，source及构建输入与1f8一致，复用�
 两项检查通过后，Root仅派发同一7f源码／构建的新独立GUI，metadata为 `outputs/query-result-sort-case-gui-7fcb0e3-vm-20261021`。先在VM单次执行身份工具的单文件单元；通过后，PowerShell脚本／控制器须先语法检查，使用明确的NoProfile／NonInteractive／ExecutionPolicy Bypass，真实观察器ready、活着及自身创建时间已捕获、首个CIM成功后才启动正式Playwright。可用等待stdin的独占launcher作为先观察的稳定根；launcher、观察器与正式CLI身份及结果须分开，不替代原CLI JSON。未ready不启动App，仅通过预定义abort正常退出本例尚未启动测试的控制进程，不强停未知进程。
 
 仍为原120秒／零重试／原矩阵及四行文件期待，先核旧封存与当前源／测试／构建，不fetch或重建。原6592／13504及profile、observer的未知不补造或清理。当前只确认新任务送达，尚无单文件或GUI终态；Python四行读回及full仍未派发，不视为窗口通过。
+
+## 后继审计诊断改进候选
+
+远程连接不可达期间保留上述7f任务，不重复派发或改回本机执行。静态检查发现主进程失败协议仅含错误文本，原审计器全部归为“原处理器失败回包”，首次窗口因而没有保留可用的错误分类。
+
+后继候选仅在测试审计器内精确识别 `Illegal mix of collations for operation 'UNION'`，报告固定中文分类“UNION文本排序规则冲突”。不输出原正文、SQL、路径、凭据或服务器信息；只检查自有数据属性，不调用错误访问器、继承属性或任意对象转换。未知及带额外内容的近似文本仍使用原通用失败。分类不是errno或SQLSTATE的捕获证据，不能替代driver原件。
+
+首次失败停链、查询次数、会话句柄保留、pending释放及成功审计返回形状保持。新增7项隔离RAM用例覆盖固定分类、未知／近似正文、对象／null、访问器及继承属性；尚待独立CI检查，未作为Windows或实库证据。产品源码和当前7f窗口队列不变，本候选不自动切换测试机或重跑旧失败，不合入main或发布。

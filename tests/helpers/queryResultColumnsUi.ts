@@ -111,6 +111,12 @@ export function installQueryResultColumnsAudit({ipcMain}: {ipcMain:any},target:Q
   const state:any={invalid:false,revision:0,pending:0,queries:0,exports:[] as string[],chosen:[] as string[],session:'',sessionClaim:undefined,tokens:{} as Record<string,string>,last:Date.now(),check:undefined};
   // 只保留首次拒绝的固定分类，不记录请求、SQL、配置、文件路径或服务端错误正文。
   const reject=(reason='既有停链')=>{state.invalid=true;state.failure??=reason;throw Error('结果列原目标／修订／IPC已变化，永久停链：'+state.failure);};
+  // 主进程失败回包只有文本；仅精确识别已证实的固定错误，不读取访问器或回显任意正文。
+  const replyFailure=(response:unknown):string=>{
+    if(!response||typeof response!=='object')return '';
+    const error=Object.getOwnPropertyDescriptor(response,'error');
+    return error&&Object.hasOwn(error,'value')&&error.value==="Illegal mix of collations for operation 'UNION'"?'（UNION文本排序规则冲突）':'';
+  };
   state.check=()=>{const now=Date.now();if(state.invalid)reject();if(root.__dbarkQueryResultColumnsAudit!==state||handlers.get('dbark:request')!==wrapped)reject('审计归属');if(!Number.isFinite(target.deadline)||!Number.isFinite(now)||now<state.last||now>=target.deadline)reject('原期限或时钟');state.last=now;};
   const wrapped=async(event:any,payload:any)=>{
     if(event.sender?.id!==target.senderId)return original(event,payload);
@@ -141,7 +147,9 @@ export function installQueryResultColumnsAudit({ipcMain}: {ipcMain:any},target:Q
       // 先保留原回包和句柄，再核归属：停链后的真实资源仍留在原claim，不绑定、不补关。
       if(sessionClaim){sessionClaim.response=response;if(typeof response?.result?.sessionId==='string')sessionClaim.returnedSessionId=response.result.sessionId;}
       state.check();
-      if(sessionClaim&&(state.sessionClaim!==sessionClaim||event.sender!==sessionClaim.sender||event.sender?.id!==sessionClaim.senderId||target.senderId!==sessionClaim.senderId||target.profileId!==sessionClaim.profileId||input.connectionId!==sessionClaim.profileId||input.database||state.revision!==sessionClaim.revision))reject('会话回包归属');if(response?.ok!==true)reject('原处理器失败回包：'+command);if(command==='files.choose'){if(typeof response.result?.token!=='string'||!response.result.token||response.result.name!=='visible-selected.'+input.format)reject('文件选择回包');state.tokens[input.format]=response.result.token;}if(command==='sessions.open'){if(typeof response.result?.sessionId!=='string'||!response.result.sessionId)reject('会话回包');state.session=response.result.sessionId;}if(command==='connections.open'&&(response.result?.dialect!=='mysql'||!/^8\.4\.11(?:[-+][^\s]+)?$/.test(response.result?.version??'')))reject('连接方言或版本回包');return response;}
+      if(sessionClaim&&(state.sessionClaim!==sessionClaim||event.sender!==sessionClaim.sender||event.sender?.id!==sessionClaim.senderId||target.senderId!==sessionClaim.senderId||target.profileId!==sessionClaim.profileId||input.connectionId!==sessionClaim.profileId||input.database||state.revision!==sessionClaim.revision))reject('会话回包归属');
+      if(response?.ok!==true)reject('原处理器失败回包：'+command+replyFailure(response));
+      if(command==='files.choose'){if(typeof response.result?.token!=='string'||!response.result.token||response.result.name!=='visible-selected.'+input.format)reject('文件选择回包');state.tokens[input.format]=response.result.token;}if(command==='sessions.open'){if(typeof response.result?.sessionId!=='string'||!response.result.sessionId)reject('会话回包');state.session=response.result.sessionId;}if(command==='connections.open'&&(response.result?.dialect!=='mysql'||!/^8\.4\.11(?:[-+][^\s]+)?$/.test(response.result?.version??'')))reject('连接方言或版本回包');return response;}
     catch(reason){state.invalid=true;state.failure??='原处理器抛出：'+command;throw reason;}finally{state.pending--;}
   };
   root.__dbarkQueryResultColumnsAudit=state;handlers.set('dbark:request',wrapped);state.check();

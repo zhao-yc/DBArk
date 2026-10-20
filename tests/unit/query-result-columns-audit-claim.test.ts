@@ -47,4 +47,34 @@ describe('结果列审计session单次领取修复（最小RAM对照）', () => 
     expect(f.state.sessionClaim).toBe(claim); expect(f.original).toHaveBeenCalledOnce();
     expect(f.original.mock.calls.map(([, payload]) => payload.command)).toEqual(['sessions.open']);
   });
+
+  it('准确UNION排序规则失败只补固定分类；仍消费一次查询并永久停链', async () => {
+    const f = fixture(), session = f.call();
+    f.waiting[0]({ ok: true, result: { sessionId: 'original-session' } }); await session;
+    f.original.mockResolvedValueOnce({ ok: false, error: "Illegal mix of collations for operation 'UNION'" });
+    const input = { sessionId: 'original-session', sql: queryResultColumnsSql };
+    await expect(f.call('query.execute', input)).rejects.toThrow('原处理器失败回包：query.execute（UNION文本排序规则冲突）');
+    expect({ queries: f.state.queries, pending: f.state.pending, invalid: f.state.invalid, exports: f.state.exports }).toEqual({ queries: 1, pending: 0, invalid: true, exports: [] });
+    await expect(f.call('query.execute', input)).rejects.toThrow('UNION文本排序规则冲突');
+    expect(f.original.mock.calls.map(([, payload]) => payload.command)).toEqual(['sessions.open', 'query.execute']);
+  });
+
+  it.each(['任意错误含RAM秘密', "Illegal mix of collations for operation 'UNION' RAM秘密", { toString() { throw Error('不得转换任意错误对象'); } }, null])('未知正文或近似错误不进入分类和后续诊断（%#）', async error => {
+    const f = fixture(), pending = f.call(), reply = { ok: false, error };
+    f.waiting[0](reply);
+    await expect(pending).rejects.toThrow(/^结果列原目标／修订／IPC已变化，永久停链：原处理器失败回包：sessions.open$/);
+    expect(f.state.failure).toBe('原处理器失败回包：sessions.open');
+    expect(f.state.sessionClaim.response).toBe(reply); expect(f.state.session).toBe('');
+    await expect(f.call()).rejects.toThrow(/回包：sessions.open$/); expect(f.original).toHaveBeenCalledOnce();
+  });
+
+  it.each(['accessor', 'inherited'] as const)('诊断忽略%s错误正文，不执行getter或暴露继承文本', async kind => {
+    const f = fixture(), pending = f.call(), getter = vi.fn(() => { throw Error('RAM秘密访问器'); });
+    const reply = kind === 'accessor' ? Object.defineProperty({ ok: false }, 'error', { get: getter })
+      : Object.assign(Object.create({ error: "Illegal mix of collations for operation 'UNION'" }), { ok: false });
+    f.waiting[0](reply);
+    await expect(pending).rejects.toThrow(/回包：sessions.open$/);
+    expect(getter).not.toHaveBeenCalled(); expect(f.state.failure).toBe('原处理器失败回包：sessions.open');
+    expect(f.state.pending).toBe(0); expect(f.state.invalid).toBe(true); expect(f.original).toHaveBeenCalledOnce();
+  });
 });
