@@ -10,6 +10,7 @@ import { zh } from '../../src/renderer/locales/zh-CN';
 import { queryResultSortZh as sortText } from '../../src/renderer/locales/queryResultSort.zh-CN';
 import { queryResultFilterZh as filterText } from '../../src/renderer/locales/queryResultFilter.zh-CN';
 import { queryResultCopyZh as copyText } from '../../src/renderer/locales/queryResultCopy.zh-CN';
+import { captureQueryResultGridLayout } from '../helpers/queryResultGridLayout';
 
 /** 仅双门和Root显式RAM绑定后注册；原native及owner强引用保留，失败不进入补清理。 */
 export function registerQueryResultOrganizeUi(binding:QueryResultColumnsUiTarget):void {
@@ -56,6 +57,8 @@ export function registerQueryResultOrganizeUi(binding:QueryResultColumnsUiTarget
    const modifier=process.platform==='darwin'?'Meta':'Control';
    /** 只读当前真实DOM顺序，不读取React内部行或复用产品比较器生成期望。 */
    const ids=()=>observe(()=>grid.locator('[role="row"][aria-rowindex] [role="gridcell"][aria-colindex="3"]').allTextContents());
+   // 原点击前只读保存固定网格/列头的几何与命中；不保存认证表单、SQL、单元格或DOM快照。
+   const layout=await observe(()=>grid.evaluate(captureQueryResultGridLayout,4));await observe(()=>info.attach('首次排序列头几何',{body:JSON.stringify(layout),contentType:'application/json'}));
    await observe(()=>heads.nth(2).click());await observe(()=>expect.poll(ids).toEqual(['2','3','1']));
    await observe(()=>heads.nth(3).click({modifiers:[modifier]}));await observe(()=>expect(tab.getByRole('list',{name:sortText.priorities,exact:true}).getByRole('listitem')).toHaveCount(2));
    await observe(()=>expect.poll(ids).toEqual(['2','3','1']));
