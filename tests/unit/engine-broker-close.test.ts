@@ -5,9 +5,9 @@ vi.mock('electron', () => ({ utilityProcess: { fork: ports.fork } }));
 import { EngineBroker } from '../../src/main/broker';
 
 /** 只替换utility process的消息/退出端口，Broker的请求及退出代码保持真实。 */
-function fixture() {
+function fixture(start = true) {
   const child = Object.assign(new EventEmitter(), { postMessage: vi.fn(), kill: vi.fn(() => { child.emit('exit', 0); return true; }) });
-  ports.fork.mockReturnValueOnce(child); const failed = vi.fn(), broker = new EngineBroker(vi.fn(), failed); broker.start();
+  ports.fork.mockReturnValueOnce(child); const failed = vi.fn(), broker = new EngineBroker(vi.fn(), failed); if (start) broker.start();
   const respond = (error?: string) => { const sent = child.postMessage.mock.calls.at(-1)![0]; child.emit('message', { id: sent.id, ...(error ? { error } : { result: undefined }) }); };
   return { child, broker, failed, respond };
 }
@@ -37,5 +37,40 @@ describe('数据库进程普通退出与显式强退', () => {
   });
   it('没有引擎时退出不会为收尾临时启动新的进程', async () => {
     const broker = new EngineBroker(vi.fn(), vi.fn()); await broker.close(); broker.forceClose(); expect(ports.fork).not.toHaveBeenCalled();
+  });
+});
+
+describe('保存连接配置时按需启动数据库进程', () => {
+  it.each([false, true])('未启动引擎时准备保存不创建数据库进程，传输变更=%s', async transportChanged => {
+    const { broker, child, respond, failed } = fixture(false);
+    const pending = broker.request('__connections.prepareSave', { id: 'offline', profile: { id: 'offline' }, transportChanged });
+    // 修前仍回答原请求，避免反例因悬挂等待污染下一条；断言检查真实进程启动次数。
+    if (child.postMessage.mock.calls.length) respond();
+    await expect(pending).resolves.toBeUndefined();
+    expect(ports.fork).not.toHaveBeenCalled(); expect(child.postMessage).not.toHaveBeenCalled(); expect(failed).not.toHaveBeenCalled();
+  });
+  it('本地保存准备之后首次数据库操作仍发送原请求，不重放保存或写操作', async () => {
+    const { broker, child, respond } = fixture(false);
+    const prepare = broker.request('__connections.prepareSave', { id: 'offline', profile: { id: 'offline' } });
+    if (child.postMessage.mock.calls.length) respond();
+    await prepare;
+    const input = { sessionId: 'session', sql: 'SELECT 1' }, query = broker.request('query.execute', input);
+    const message = child.postMessage.mock.calls.at(-1)![0]; respond(); await query;
+    expect(ports.fork).toHaveBeenCalledOnce();
+    expect(child.postMessage).toHaveBeenCalledOnce(); expect(message).toMatchObject({ command: 'query.execute', input }); expect(message.input).toBe(input);
+  });
+  it('已有引擎必须等待原进程核验，忙会话拒绝原样传回且不终止进程', async () => {
+    const { broker, child, respond, failed } = fixture(), input = { id: 'active', profile: { id: 'active' }, transportChanged: true };
+    let settled = false;
+    const pending = broker.request('__connections.prepareSave', input); void pending.then(() => { settled = true; }, () => { settled = true; });
+    await Promise.resolve(); expect(settled).toBe(false);
+    expect(child.postMessage.mock.calls[0][0]).toMatchObject({ command: '__connections.prepareSave', input });
+    respond('该连接仍有打开的会话'); await expect(pending).rejects.toThrow('仍有打开的会话');
+    expect(ports.fork).toHaveBeenCalledOnce(); expect(child.kill).not.toHaveBeenCalled(); expect(failed).not.toHaveBeenCalled();
+  });
+  it.each([{}, { id: 'one', profile: { id: 'other' } }])('无可靠配置身份时仍由原引擎拒绝，不能走空引擎捷径：%j', async input => {
+    const { broker, child, respond } = fixture(false), pending = broker.request('__connections.prepareSave', input);
+    respond('主进程未提供有效连接配置'); await expect(pending).rejects.toThrow('未提供有效连接配置');
+    expect(ports.fork).toHaveBeenCalledOnce(); expect(child.postMessage).toHaveBeenCalledOnce();
   });
 });
