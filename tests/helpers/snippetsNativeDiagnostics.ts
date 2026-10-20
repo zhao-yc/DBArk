@@ -110,7 +110,7 @@ export class SnippetsNativeDiagnostics {
   }
 
   /** 阶段标记是同步旁观，不插入点击前等待、重试或窗口前台操作。 */
-  mark(phase: 'initial-ready' | 'restart-ready' | 'before-copy' | 'before-copy-save' | 'before-copy-edit' | 'after-copy-edit' | 'before-quit' | 'test-failed' | 'test-finished') {
+  mark(phase: 'initial-ready' | 'restart-ready' | 'before-copy' | 'before-copy-save' | 'before-copy-edit' | 'after-copy-edit' | 'before-plan-table' | 'after-plan-table' | 'before-quit' | 'test-failed' | 'test-finished') {
     if (!this.policy.enabled || this.finished) return;
     this.phase = phase;
     if (this.markers.length < snippetsDiagnosticLimits.markers) this.markers.push({ atMs: this.elapsed(), phase });

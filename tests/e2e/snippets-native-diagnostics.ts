@@ -6,7 +6,7 @@ interface RafObserver { requested: number; delivered: number; pending: boolean; 
 type DiagnosticWindow = Window & { __dbarkSnippetDiagnosticRaf?: RafObserver };
 
 /** 只提取白名单状态；不读取输入值、SQL、文件或生产 store，不保存页面文本。 */
-export function sampleSnippetsRenderer(scene: 'snippets' | 'explain' = 'snippets'): RendererSample {
+export function sampleSnippetsRenderer(scene: 'snippets' | 'explain' | void = 'snippets'): RendererSample {
   const root = window as DiagnosticWindow;
   const raf = root.__dbarkSnippetDiagnosticRaf ??= { requested: 0, delivered: 0, pending: false, lastTimestamp: null };
   const frame = { requested: raf.requested, delivered: raf.delivered, pending: raf.pending, lastTimestamp: raf.lastTimestamp };
@@ -61,7 +61,7 @@ function nativeDiagnosticPort(desktop: ElectronApplication, page: Page, windowId
       if (!window || window.isDestroyed()) throw Error('执行计划原窗口已不存在');
       return [{ id: window.id, visible: window.isVisible(), focused: window.isFocused(), minimized: window.isMinimized(), maximized: window.isMaximized(), fullScreen: window.isFullScreen(), bounds: window.getBounds(), contentBounds: window.getContentBounds(), webContentsId: window.webContents.id, backgroundThrottling: window.webContents.getBackgroundThrottling() }];
     }, windowId),
-    renderer: () => windowId === undefined ? page.evaluate(sampleSnippetsRenderer) : page.evaluate(sampleSnippetsRenderer, 'explain'),
+    renderer: () => windowId === undefined ? page.evaluate(sampleSnippetsRenderer) : page.evaluate(sampleSnippetsRenderer, 'explain' as const),
     dispose: () => page.evaluate(disposeSnippetsRenderer)
   };
 }

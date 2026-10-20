@@ -25,6 +25,11 @@ describe('执行计划次级窗口诊断边界',()=>{
     expect(snippetsDiagnosticPolicy({...explainInput(),env:{DBARK_SNIPPETS_NATIVE_DIAGNOSTICS:'1'}}).enabled).toBe(false);
     expect(explainDiagnosticPolicy(explainInput('off')).enabled).toBe(false);
   });
+  it('真实记录器标记表格切换前后并保存对应采样，不使用片段操作名冒充',async()=>{
+    const {port,output,diagnostic}=fixture();await diagnostic.start(port,'initial');diagnostic.mark('before-plan-table');diagnostic.mark('after-plan-table');await diagnostic.finish(true);
+    const summary=output.summary.mock.calls[0][0] as {markers:{phase:string}[];samples:{phase:string}[]};
+    expect(summary.markers.map(value=>value.phase)).toContain('before-plan-table');expect(summary.markers.map(value=>value.phase)).toContain('after-plan-table');expect(summary.samples.map(value=>value.phase)).toContain('before-plan-table');expect(summary.samples.map(value=>value.phase)).toContain('after-plan-table');
+  });
   it.each(['DBARK_INTEGRATION_ENABLED','DBARK_TEST_PASSWORD','DBARK_TEST_HOST','DBARK_C02_PRIVATE_KEY','DBARK_SSH_PASSWORD','DBARK_MTLS_CERT'])('执行计划也拒绝实库配置%s，不输出凭据值',key=>{
     const env={DBARK_EXPLAIN_NATIVE_DIAGNOSTICS:'1',[key]:key==='DBARK_INTEGRATION_ENABLED'?'1':'不能输出的私密值'};
     expect(()=>explainDiagnosticPolicy({...explainInput(),env})).toThrow('执行计划原生诊断拒绝实库或私网测试环境');
