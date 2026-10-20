@@ -13,9 +13,9 @@ Root仅读取GitHub原日志、下载ZIP并用Python标准库静态解析数据�
 | Linux job118818415455 | 类型／585文件11229通过、10平台跳过／构建通过；单元231.14秒，Vite33.72秒 |
 | Windows job118818415259 | 源码legacy80通过／315跳过、7.3分钟，NSIS打包完成；安装阶段文件首次模型3通过／1失败，后序未完成，job失败 |
 | Intel macOS job118818415026 | 安装依赖通过，在install-electron下载阶段报Undici TypeError: terminated，job失败；客户端构建／桌面和安装测试未到达 |
-| ARM macOS job118818415384 | 最后一次读取仍在运行，没有据此验收终态 |
+| ARM macOS job118818415384 | job成功；源码legacy80通过／315跳过、8.8分钟，同次DMG真实安装legacy80通过／315跳过、7.5分钟 |
 
-Intel单job重试请求被GitHub以“整轮仍在运行”拒绝，没有启动新attempt；当前保留原下载失败，等待当前运行终态。Windows失败与Intel下载问题分开，不凭重跑计划将原job改成成功，暂不发布。
+首次Intel单job重试请求被GitHub以“整轮仍在运行”拒绝，没有启动新attempt。ARM完成后，Root仅请求重跑原Intel失败job，已被接受；attempt2的新Intel job118833967012正在运行，尚无客户端或安装终态。原下载失败保留，Windows已证安装失败不重写为通过；其他job的沿用状态也不另加验收计数，暂不发布。
 
 ## Windows原件静态审计
 
@@ -27,4 +27,4 @@ installed/report.json原摘要 `db523c2e4ce1a85fbab23bd238e4a2499c8164fc9cc7cf90
 
 第四例没有第二owner或独立重启成功证明，directoryRemoved=false、accepted缺项，原failure.json明确automaticRetry／automaticForceStop／cleanupAllowed均false。错误同时检查TestInfo身份、开始时间、时钟顺序、原120秒及状态；没有记录具体失效分支，不能按12.898秒的案例时长推断超时、时钟回退或产品内容故障。保留原失败和现场，不放宽守卫或原断言换取通过。
 
-Windows helper安装资源摘要475b78748fcf1f9990c58d5926792ae978de71d1962f2e729805f0c35af45606已由原脚本核对，未执行协议。当前没有完整Windows同次安装legacy通过证据，也没有Intel或ARM终态接纳；不增加发行、完整工作包或新平台功能通过计数。
+Windows helper安装资源摘要475b78748fcf1f9990c58d5926792ae978de71d1962f2e729805f0c35af45606已由原脚本核对，未执行协议。当前没有完整Windows同次安装legacy或Intel终态通过证据。ARM常规源码／安装日志已通过，但本次没有独立下载ARM专项附件，也没有新通配私网或NULL排序能力的macOS窗口证据；不增加发行、完整工作包或新功能平台通过计数。
