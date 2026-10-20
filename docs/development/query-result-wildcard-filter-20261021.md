@@ -22,14 +22,28 @@
 
 筛选先于排序，复制、详情、查找和导出沿用原投影视图及源位置；原行／列／上下文租约不变，被排除行漂移也撤销旧视图。重开保留条件草稿，输入法及旧回调保护继续生效。
 
-## 待验证
+## 验证与原始失败
 
 新增控制器语义／预算／漂移及独立短模式预言机用例；真实 QueryTab RAM 接线检查通配／字面切换、错误修正、大小写和复制导出。既有 13384 实库 GUI 仅追加原三行常量的通配条件及非法模式修正，不增加 SQL、目标或文件；原案例及期望保持。
 
-尚未运行类型、单元、构建、GUI、实库、安装包或平台验收。本机只静态审阅及 `git diff --check`；所有 Windows 测试交 WIN11-TEST 串行按固定提交执行，不把新增测试文件视为已通过。
+初始候选只做静态审阅及 `git diff --check`，不把新增测试文件视为已通过。所有 Windows 测试交 WIN11-TEST 串行按固定提交执行，实际结果按下文固定提交分别记录；安装及其他平台的新功能验收继续。
 
 首次固定320b88e的WIN11-TEST七文件入口退出1、46.618秒：314通过／1失败／0跳过，构建未执行。唯一失败在新增RAM界面用例219行，复制操作尚未勾选整行，因此按单元格复制只得到ID，检查第三列bark得到undefined；后面的导出断言未到达。补上原网格公开选择事件后再复制，原bark期待及导出断言不变，不修改产品复制语义。新修正待复验，不据此计作整合通过。
 
 固定修正63fb0f6的[Linux CI39461498265](https://github.com/zhao-yc/DBArk/actions/runs/39461498265)已成功：Root直接读取job118761826846原日志，585文件全部通过，11229项通过／10平台跳过，135.95秒，类型及构建通过。产品源码与320b88e相同，只有新复制用例的选择步骤及文档改变；原bark及后续导出断言通过。桌面、剪贴板与发布job均跳过，不据Linux结果推断Windows或实库通过。
 
 已向WIN11-TEST派发唯一63fb0f6类型／UI文件／构建队列，要求先封存320b原失败、核终态和进程身份后准确快进，再仅运行 `node scripts/check-local.mjs --build tests/unit/query-result-sort-ui.test.tsx`。发送回执长时间未返回，Root停止等待该回执，未重发；之后wait_threads明确报告host及durable不可用。队列是否已接收、启动及PID未确认，后续必须先核原队列，不能因观察失败重复执行；本机没有替代测试。暂不合入main，不增加完整子能力或发行计数，实库及完整Windows回归继续待验。
+
+后续恢复后，测试会话明确确认“未收到63队列、未启动、无PID”，Root才正式重新派发。准确63fb0f6的UI文件／类型／构建单次全部通过：89/89、无跳过，退出0、100.891秒，PID16640；类型38.39秒、测试阶段10.43秒、构建51.97秒。574源码与109构建完整哈希匹配、Git净、原进程及后代身份缺席，21份封存文件校验通过。产品源码树为675ffa2320aba0f55e21ccef2b2eee349531ff9c。
+
+首次实库GUI在测试准备阶段失败：退出1、5.408秒、0通过／1失败，PID16068。测试准备提前创建了用例要独占创建的导出目录，第30行mkdir发生EEXIST，第31行的observer／native／stream及之后App查询和导出均未到达。只读核对确认原进程及后代已缺席，原profile `dbark-e2e-AN2ge5` 保留且身份不变，正常退出未确认；不追认原strict退出，也不删除失败目录。
+
+更正仅限运行准备：新metadata父目录由runner建立，target.output使用其尚不存在且符合既有命名合同的子目录，由用例原recursive:false的mkdir唯一创建；CSV／JSON及Playwright输出路径分离。启动前须读取原ENOENT并冻结父目录身份，未改产品、断言或期限，不用recursive:true掩盖错误，不复用或删除原目录。Root明确授权一次独立后继GUI，仍固定63产品／测试和原构建、原120秒／单worker／零自动重试；使用已恢复的内存凭据，不重复SSH／Docker。首次EEXIST和新运行分开记录，不能将整个流程表述为仅尝试一次。
+
+Root第二次路径规划的字面exports不符合原helper第13行的固定basename合同，已在启动前阻止，没有新GUI。更正为metadata父目录下 `dbark-query-columns-8f4ed22938984b13a0cfa85b655482a6`，文件名按原合同严格为 `visible-selected.csv`／`visible-selected.json`，目录本身仍不得预建。原错误规划的ENOENT记录保留，新准确路径另记；原helper校验没有放宽，也没有为此重建产品。
+
+独立后继GUI已通过：PID15304，退出0、23.933秒，用例22.894598秒，1通过／0失败／跳过／flaky，stderr为空。Root已读取原命令元数据及进程观察结果，原strict正常退出、observer同流关闭和任务终态检查通过，末次已记原进程均缺席。GUI原JSON摘要fdbbb14ee91ad26105794015903a360c4c8779de81b5b4416ef0ac70aad7f6a5，详细[准确验收记录](../../tests/integration/acceptance-query-result-wildcard-63fb0f6-20261021.md)与首次准备失败分开保存。
+
+随后独立Python读回在内容断言前失败：PID14516、退出1、0.608秒，第13行lstat／fstat的dev、ino、size、mtime_ns、ctime_ns元组比较不一致，stdout为空，stderr摘要8739360492cabf99d1a4964ecf2d48cd99050fdc71fd1f59a9f04a1cdb039630。具体差异字段尚未确认，不能推断文件被改或归因Python／Windows语义；不能将其算为内容校验通过。已要求只读保留原脚本与错误，采集Python实际版本、路径／原句柄各字段、原导出摘要和Node独立句柄对照，不调用产品解码、不重跑GUI／读取验收或继续full。远端随后再次不可用，诊断结果及完整套件启动均未确认，保持原队列不重复派发。
+
+基线main0ee5886的三平台源码／同次安装legacy CI已全部通过，ARM两阶段六专项／24原owner及显示恢复原件已静态独立核对，见[基线原件审计](../../tests/integration/acceptance-main-0ee5886-ci-20261021.md)。该证据不替代本通配候选的Python独立内容读回、Windows完整回归、新安装或macOS实库，当前不合入main，暂不发布。
