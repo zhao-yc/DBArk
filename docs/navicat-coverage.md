@@ -2,7 +2,7 @@
 
 ## 当前开发安排（2026-10-20）
 
-继续补齐[分组条件开发候选](development/query-result-filter-groups-20261020.md)：独立AND／OR及嵌套子组、空子组拒绝、稳定节点草稿和全部叶条件预算，尚待新固定提交的Windows及独立CI验证。原多值批次证据不转计，不增加完整工作包或公开发行计数。
+新增[嵌套分组条件](development/query-result-filter-groups-20261020.md)：独立AND／OR、空子组拒绝、稳定节点草稿和全部叶条件预算。固定ceb607a的Windows类型／329定向／新构建、分组后复制和两格式导出的1项实库整例、独立读回、严格收尾及完整11061通过／1平台跳过均通过；独立Linux类型／577文件／11052通过／10条件跳过／构建成功，见[准确本批验收](../tests/integration/acceptance-query-result-groups-ceb607a-20261020.md)。按main交付源码，不外推日期时间分组GUI、安装或macOS，不增加完整工作包或公开发行计数，暂不发布。
 
 新增[结果多值匹配](development/query-result-members-filter-20261020.md)：逐项填写文本／精确数值／时间成员，正反列表均排除NULL，成员冻结与总比较预算保持。固定9b06ef1的独立Linux CI类型、576文件／11036通过／10条件跳过及构建成功；运行输入相同的ac629f3随后在WIN11-TEST通过类型／313定向／新构建、1项扩展实库窗口、独立CSV／JSON读回、严格收尾及完整11045通过／1平台跳过，见[准确增量验收](../tests/integration/acceptance-query-result-members-ac629f3-20261020.md)。按main交付源码；日期时间成员GUI、安装包及macOS不外推，不增加完整工作包或公开发行计数，暂不发布。
 
