@@ -38,9 +38,10 @@ export class QueryFileSources {
   invalidate(): void { this.reloadPreviews.clear(); for (const state of this.active.values()) state.cancelled = true; }
 
   /** 固定中文状态不泄漏原始文件错误；文件已写和未写不能混淆。 */
-  private failure(error: unknown, wrote: Context['wrote']): QueryFileSourceBlocked {
+  private failure(error: unknown, wrote: Context['wrote'], readPermission = false): QueryFileSourceBlocked {
     if (error instanceof QueryFileSourceFailure) return { state: 'blocked', reason: error.reason, message: error.message, wrote };
-    const permission = !!error && typeof error === 'object' && 'code' in error && (error.code === 'EACCES' || error.code === 'EPERM'), missing = queryFileIsMissing(error);
+    // 新检查/重载细分读权限错误；既有保存/chmod失败的io合同保持，不能扩大为新的错误类别。
+    const permission = readPermission && !!error && typeof error === 'object' && 'code' in error && (error.code === 'EACCES' || error.code === 'EPERM'), missing = queryFileIsMissing(error);
     return { state: 'blocked', reason: wrote !== 'no' ? 'uncertain' : missing ? 'missing' : permission ? 'permission' : 'io', message: wrote !== 'no' ? '文件可能已经写入，后续核对未完成；请核对文件，不要自动重试' : missing ? reloadText.missing : permission ? reloadText.permission : reloadText.io, wrote };
   }
   /** 存储错误与文件IO分开，坏私有记录不允许推断为不存在。 */
@@ -84,7 +85,7 @@ export class QueryFileSources {
         }
       };
       state.context = context; context.check(); report(operation === 'save' ? 'reading' : 'choosing'); context.check(); outcome = await action(context); context.check(); return outcome;
-    } catch (error) { outcome = this.failure(error, context?.wrote ?? 'no'); return outcome; }
+    } catch (error) { outcome = this.failure(error, context?.wrote ?? 'no', operation === 'check' || operation === 'reload'); return outcome; }
     finally {
       if (this.active.get(tabId) === state) this.active.delete(tabId);
       if (this.runningTasks.get(taskId) === state) this.runningTasks.delete(taskId);

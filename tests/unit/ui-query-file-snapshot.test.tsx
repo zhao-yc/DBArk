@@ -168,7 +168,7 @@ describe('0.29真实QueryTab外部检查与当前草稿重载（RAM）', () => {
     const editor = await mount(true), model = editor.model;
     const edits = model.pushEditOperations.bind(model); model.pushEditOperations = (before, values, cursor) => values.length ? edits(before, values, cursor) : cursor([]);
     // 本组只给原RAM模型补充重载所需公开方法，Undo/EOL历史由独立真实Monaco栈用例验证。
-    Object.assign(model, { pushEOL(value: number) { model.eol = value === 1 ? '\r\n' : '\n'; model.edit(model.value); }, getPositionAt(offset: number) { const lines = model.value.slice(0, offset).split(model.eol); return { lineNumber: lines.length, column: lines.at(-1)!.length + 1 }; } });
+    Object.assign(model, { getAlternativeVersionId() { return model.getVersionId(); }, pushEOL(value: number) { model.eol = value === 1 ? '\r\n' : '\n'; model.edit(model.value); }, getPositionAt(offset: number) { const lines = model.value.slice(0, offset).split(model.eol); return { lineNumber: lines.length, column: lines.at(-1)!.length + 1 }; } });
     hook = command => command === 'queryFileSources.checkExternal' ? pending?.promise ?? Promise.resolve(checked()) : command === 'queryFileSources.reload' ? applying?.promise ?? Promise.resolve({ state: 'reloaded', sql: external, binding: { ...sourceView(external, 2), eol: 'crlf' } }) : command === 'queryFileSources.discardReload' ? Promise.resolve({ discarded: true }) : undefined;
     await click(reloadText.check);
     if (!pending) await vi.waitFor(async () => { await act(async () => {}); expect(document.body.textContent).toContain(reloadText.dirty); });

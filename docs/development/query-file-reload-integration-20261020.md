@@ -25,3 +25,7 @@
 模型修复采用公开Undo接口，按原alternativeVersion及模型身份只回滚本次最多两个历史组；不使用setValue清栈或补写正文伪造恢复。调用方等待异步Undo结算，提前dispose不解锁；归属、版本或恢复状态不明时锁住编辑器，不覆盖新内容。原正常断言只适配异步返回；两项失败反例断言保持，再补回滚途中dispose的只读锁检查。当前新修复仍待VM验证，正式文件窗口和完整流程未验，不合入main。
 
 独立的main abda551原生CI39445647603四个检查／桌面job已成功，剪贴板及发布跳过；这是上批快捷筛选源码的CI结果，不是本重载候选通过证据。
+
+固定b17b92d的WIN11-TEST类型通过；16文件299项中296通过／2失败／1项POSIX跳过，入口退出1、53.985秒，构建未执行。真实Monaco七项和Main RAM26项全部通过，验证了模型回滚及提前dispose仍锁住模型。剩余失败为旧保存chmod错误被新分类成permission，以及UI RAM模型缺少getAlternativeVersionId导致来源未推进。修复限定新增读操作的权限分类，并补UI端口getter；原错误、修订和后序断言保持。
+
+新增默认关闭的 `tests/e2e/query-file-reload.spec.ts`：无明确开关、owner、源码时不加载live，list也不分配资源。Root须先固定Git及构建，再给独立UUID和准确提交。单例使用原严格desktop owner／退出协议、只读Monaco getter及自有合成文件，通过真实UI检查预览取消、原模型正文／EOL重载、三步Undo／Redo和预览后再次外改拒绝；只回答一次原生文件选择，不替换文件IPC或编解码，不执行SQL或使用系统剪贴板。失败保留所属进程／目录，不另行兜底清理。当前该新入口及门测试未执行，不计为GUI通过。
