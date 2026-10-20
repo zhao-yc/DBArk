@@ -1,9 +1,10 @@
 import type { CellValue, QueryResult, ResultColumn } from '../shared/contracts';
 import { queryResultFilterKind, queryResultFilterKey, queryResultFilterLiteral, compareQueryResultFilterKeys, type QueryResultSortView } from './queryResultSort';
 import { queryResultFilterZh as text } from './locales/queryResultFilter.zh-CN';
+import { compileQueryResultWildcard } from './queryResultWildcard';
 
 export const queryResultFilterLimits = Object.freeze({ rows:100000, columns:1024, conditions:32, groups:16, depth:8, members:128, work:2000000, textWork:32*1024*1024, valueUnits:4096, units:8*1024*1024 });
-export type QueryResultFilterOperator = 'contains'|'notContains'|'startsWith'|'notStartsWith'|'endsWith'|'notEndsWith'|'empty'|'notEmpty'|'eq'|'ne'|'gt'|'gte'|'lt'|'lte'|'between'|'notBetween'|'in'|'notIn'|'null'|'notNull';
+export type QueryResultFilterOperator = 'contains'|'notContains'|'startsWith'|'notStartsWith'|'endsWith'|'notEndsWith'|'like'|'notLike'|'empty'|'notEmpty'|'eq'|'ne'|'gt'|'gte'|'lt'|'lte'|'between'|'notBetween'|'in'|'notIn'|'null'|'notNull';
 export type QueryResultFilterMode = 'AND'|'OR';
 export interface QueryResultFilterRule { column:string;operator:QueryResultFilterOperator;value:string;upper?:string;values?:readonly string[];ignoreCase?:boolean; }
 export interface QueryResultFilterGroup { readonly mode:QueryResultFilterMode;readonly children:readonly (QueryResultFilterRule|QueryResultFilterGroup)[]; }
@@ -72,7 +73,7 @@ export function appendQueryResultFilterRule(expression:QueryResultFilterGroup,ru
 /** 比较方式来自协议类型；未知/二进制元数据仍可做NULL判断，不按外观猜类型。 */
 export function queryResultFilterOperators(column:ResultColumn):readonly QueryResultFilterOperator[]{
   const kind=queryResultFilterKind(column);
-  return kind==='text'?['contains','notContains','startsWith','notStartsWith','endsWith','notEndsWith','eq','ne','in','notIn','empty','notEmpty','null','notNull']:kind?['eq','ne','gt','gte','lt','lte','between','notBetween','in','notIn','null','notNull']:['null','notNull'];
+  return kind==='text'?['contains','notContains','startsWith','notStartsWith','endsWith','notEndsWith','like','notLike','eq','ne','in','notIn','empty','notEmpty','null','notNull']:kind?['eq','ne','gt','gte','lt','lte','between','notBetween','in','notIn','null','notNull']:['null','notNull'];
 }
 /** NULL、空文本和列表条件不接受隐藏单值；面板与控制器共用同一输入要求。 */
 export function queryResultFilterNeedsValue(operator:QueryResultFilterOperator):boolean{return !['null','notNull','empty','notEmpty','in','notIn'].includes(operator);}
@@ -134,7 +135,9 @@ export class QueryResultFilter {
     });
     const comparisons=rules.reduce((sum,rule,index)=>sum+(memberSets[index]?.length??(queryResultFilterNeedsUpper(rule.operator)?2:1)),0);
     if(comparisons*binding.rows.length>queryResultFilterLimits.work)throw Error(text.budget);
-    let units=0;
+    let units=0,textWork=0;
+    /** 通配状态转移与既有比较共享工作预算；编译和空结果也核模式，不能跳过无效输入。 */
+    function spendWildcard(work:number):void{ textWork+=work;if(textWork>queryResultFilterLimits.textWork)throw Error(text.budget); }
     /** 使用无locale的Unicode小写映射；原文与映射文本共同计费，扩展长度也受原上限限制。 */
     function fold(value:string):string{const folded=value.toLowerCase();units+=folded.length;if(folded.length>queryResultFilterLimits.valueUnits||units>queryResultFilterLimits.units)throw Error(text.budget);return folded;}
     const compiled=rules.map((rule,index)=>{
@@ -157,7 +160,8 @@ export class QueryResultFilter {
       if(rule.ignoreCase){literal=members?null:fold(literal as string);key=literal;members=members?.map(member=>{const literal=fold(member.literal as string);return{...member,literal,key:literal};});}
       // 下限大于上限时完整拒绝，不能猜测交换端点或把否定区间变成全量结果。
       if(range&&compareQueryResultFilterKeys(key,upperKey)>0)throw Error(text.rangeOrder);
-      return{rule,column,nullable,range,literal,key,upper,upperKey,members};
+      const wildcard=rule.operator==='like'||rule.operator==='notLike'?compileQueryResultWildcard(literal as string,spendWildcard):undefined;
+      return{rule,column,nullable,range,literal,key,upper,upperKey,members,wildcard};
     });
     const snapshots:Snapshot[]=[...new Map(compiled.map(c=>[c.column.key,c.column])).values()].map(column=>{const values=binding.rows.map(row=>cell(row,column));return{column,values,binary:values.map(binaryStamp)};});
     const prepared=new Map(snapshots.map(s=>{
@@ -167,9 +171,8 @@ export class QueryResultFilter {
     // 同一文本列的忽略大小写键只生成一次；大小写敏感条件继续使用原键。
     const folded=new Map<string,(string|null)[]>(snapshots.filter(s=>compiled.some(c=>c.column===s.column&&c.rule.ignoreCase)).map(s=>[s.column.key,s.values.map(value=>value===null?null:fold(value as string))]));
     const data=new Map(snapshots.map(s=>[s.column.key,s.values])),indices:number[]=[];
-    let textWork=0;
     for(let i=0;i<binding.rows.length;i++){
-      const matches=compiled.map(({rule,column,nullable,range,literal,key,upper,upperKey,members})=>{
+      const matches=compiled.map(({rule,column,nullable,range,literal,key,upper,upperKey,members,wildcard})=>{
         const value=data.get(column.key)![i];if(nullable)return rule.operator==='null'?value===null:value!==null;if(value===null)return false;
         const comparable=rule.ignoreCase?folded.get(column.key)![i]:value,cellKey=rule.ignoreCase?comparable as string:prepared.get(column.key)![i];
         // 包含及其否定按最坏匹配量计费；前后缀按原文和条件长度计费，共用同一工作预算。
@@ -184,6 +187,10 @@ export class QueryResultFilter {
         textWork+=containing?(input?Math.max(1,size)*input:1):size+input;
         if(range)textWork+=size+(typeof upper==='string'?upper.length:1);
         if(textWork>queryResultFilterLimits.textWork)throw Error(text.budget);
+        if(wildcard){
+          if(typeof comparable!=='string')throw Error(text.value);
+          const matched=wildcard(comparable);return rule.operator==='notLike'?!matched:matched;
+        }
         if(containing||starting||ending){
           if(typeof comparable!=='string'||typeof literal!=='string')throw Error(text.value);
           // 可选小写映射后仍按字面匹配；否定排除NULL，不解析正则或SQL通配符。

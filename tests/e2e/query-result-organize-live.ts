@@ -89,12 +89,17 @@ export function registerQueryResultOrganizeUi(binding:QueryResultColumnsUiTarget
    for(const [column,operator,value,expected] of [
     [1,'notContains','2',['1','3']],[1,'startsWith','1',['1']],[1,'notStartsWith','1',['2','3']],
     [1,'endsWith','3',['3']],[1,'notEndsWith','3',['1','2']],[5,'empty','',['1','2','3']],[5,'notEmpty','',[]],
+    [1,'like','_',['1','2','3']],[1,'like','%1',['1']],[1,'notLike','%1',['2','3']],
+    [1,'like','\\_',[]],[5,'like','%',['1','2','3']],[5,'notLike','_',['1','2','3']],
    ] as const){
     await observe(()=>tab.getByRole('button',{name:filterText.open,exact:true}).click());await addRule(1,column,operator,value);
     await observe(()=>panel.getByRole('button',{name:filterText.apply,exact:true}).click());await observe(()=>expect.poll(ids).toEqual(expected));
     await observe(()=>expect(tab.locator('.query-result-filter-bar')).toContainText(filterText.counts(3,expected.length)));
     await observe(()=>tab.getByRole('button',{name:filterText.clear,exact:true}).click());await observe(()=>expect.poll(ids).toEqual(['1','2','3']));
    }
+   // 非法通配转义不改变原视图；在同一草稿修正后才应用，仍只有原一次SQL。
+   await observe(()=>tab.getByRole('button',{name:filterText.open,exact:true}).click());await addRule(1,1,'like','\\');await observe(()=>panel.getByRole('button',{name:filterText.apply,exact:true}).click());await observe(()=>expect(tab).toContainText(filterText.patternInvalid));await observe(()=>expect.poll(ids).toEqual(['1','2','3']));
+   await observe(()=>panel.getByRole('textbox',{name:filterText.input+' 1',exact:true}).fill('%1'));await observe(()=>panel.getByRole('button',{name:filterText.apply,exact:true}).click());await observe(()=>expect.poll(ids).toEqual(['1']));await observe(()=>tab.getByRole('button',{name:filterText.clear,exact:true}).click());await observe(()=>expect.poll(ids).toEqual(['1','2','3']));
    // 仍使用原三行常量、准确目标和一次SQL；大整数及高精度小数的两端独立输入，不增加文件任务。
    for(const [column,operator,lower,upper,expected] of [
     [2,'between','9007199254740993','18446744073709551615',['1','3']],

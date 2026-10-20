@@ -212,6 +212,18 @@ it('忽略大小写可用于嵌套组和多值，切换否定保持选项并排�
   await mount(result=>{result.rows[0].words='Ark';result.rows[1].words='ARK';result.rows[2].words=null;});await click(filterText.open);await click(filterText.addGroup);await configureGroupedRule(1,'words','eq','ark');await toggleFilterCase(1,true);await setFilterField(filterText.operator+' 1','in');expect(document.querySelector('[aria-label="'+filterText.ignoreCase(1)+'"]')!.checked).toBe(true);await click(filterText.apply);expect(grid().rows).toEqual([original.rows[0],original.rows[1]]);
   await click(filterText.open);await setFilterField(filterText.operator+' 1','notIn');await click(filterText.apply);expect(grid().rows).toEqual([]);
 });
+it('通配筛选显式选择、重开保留模式及大小写，原行复制导出仍共享视图',async()=>{
+  await mount(result=>{result.rows[0].words='Ark';result.rows[1].words='ARK';result.rows[2].words='bark';});
+  await click(filterText.open);await addFilterRule(1,'words','like','a_k');expect(document.body.textContent).toContain(filterText.patternHint);await toggleFilterCase(1,true);await click(filterText.apply);expect(grid().rows).toEqual([original.rows[0],original.rows[1]]);
+  await click(filterText.open);expect(document.querySelector('[aria-label="'+filterText.input+' 1"]')!.value).toBe('a_k');expect(document.querySelector('[aria-label="'+filterText.ignoreCase(1)+'"]')!.checked).toBe(true);await setFilterField(filterText.operator+' 1','notLike');await click(filterText.apply);expect(grid().rows).toEqual([original.rows[2]]);
+  expect(JSON.parse(copy().get('application/x-dbark-cells')!).rows[0][2]).toBe('bark');await click(zh.resultExport.title);await click(zh.resultExport.chooseFile);await click(zh.resultExport.start);expect(exports[0].result.rows).toEqual([original.rows[2]]);expect(commands.filter(command=>command==='query.execute')).toHaveLength(1);
+});
+it('非法通配模式保留原视图及草稿，修正后可应用，切换包含恢复字面含义',async()=>{
+  await mount(result=>{result.rows[0].words='A%';result.rows[1].words='A_';result.rows[2].words='Ax';});
+  await click(filterText.open);await addFilterRule(1,'words','like','A\\');await click(filterText.apply);expect(document.body.textContent).toContain(filterText.patternInvalid);expect(grid().rows).toEqual(original.rows);
+  await setFilterField(filterText.input+' 1','A%');await click(filterText.apply);expect(grid().rows).toEqual(original.rows);
+  await click(filterText.open);await setFilterField(filterText.operator+' 1','contains');expect(document.querySelector('.query-result-filter-pattern-hint')).toBeNull();await click(filterText.apply);expect(grid().rows).toEqual([original.rows[0]]);expect(commands.filter(command=>command==='query.execute')).toHaveLength(1);
+});
 it('组合输入期间大小写复选禁用，旧回调也不能应用迟到开关',async()=>{
   await mount(result=>{result.rows[0].words='ARK';});await click(filterText.open);await addFilterRule(1,'words','eq','ark');const input=document.querySelector('[aria-label="'+filterText.input+' 1"]')!,old=reactProps(document.querySelector('[aria-label="'+filterText.ignoreCase(1)+'"]')).onChange;
   await act(async()=>reactProps(input).onCompositionStart());expect(document.querySelector('[aria-label="'+filterText.ignoreCase(1)+'"]')!.disabled).toBe(true);await act(async()=>old({target:{checked:true}}));await act(async()=>reactProps(input).onCompositionEnd());expect(document.querySelector('[aria-label="'+filterText.ignoreCase(1)+'"]')!.checked).toBe(false);await click(filterText.apply);expect(grid().rows).toEqual([]);
