@@ -16,7 +16,7 @@ export function registerQueryResultOrganizeUi(binding:QueryResultColumnsUiTarget
  const cases=new Map<TestInfo,{life:QueryResultColumnsUiLifetime;observer?:mysql.Connection;native?:any;stream?:any}>();let halted=false;
  test.use({preserveOnUnconfirmedExit:true,trace:'off',screenshot:'off',video:'off'});test.setTimeout(120000);test.describe.configure({retries:0});
  test.afterEach(({},info)=>{const current=cases.get(info);if(!current){halted=true;retainOwnedDesktopResources(info);throw Error('结果列未建立本例owner，保留现场');}try{current.life.afterEach();cases.delete(info);}catch(reason){halted=true;throw reason;}});
- test('准确13384真实App多列排序与文本、区间和多值筛选、空结果及CSV／JSON范围一致',async({trace,screenshot,video},info)=>{
+ test('准确13384真实App多列排序与文本、区间、多值及分组筛选、空结果及CSV／JSON范围一致',async({trace,screenshot,video},info)=>{
   if(halted)throw Error('结果列前例已保留资源，停止后续用例');
   const captured=ownedDesktopResources(info),page=captured.page,application=captured.application,directory=dataDir;
   const life=new QueryResultColumnsUiLifetime({check(allowClosed){binding.assertCurrent();const now=ownedDesktopResources(info);if(now.page!==page||now.application!==application||!allowClosed&&now.closed)throw Error('结果列原owner已变化');},closed:()=>ownedDesktopResources(info).closed,retain:()=>{halted=true;retainOwnedDesktopResources(info);},async exit(){life.check();await application.evaluate(readQueryResultColumnsAudit);life.check();await application.evaluate(guardQueryResultColumnsExitAnswers);life.check();await confirmOwnedDesktopExit(info);}},info as TestInfo&{_startWallTime?:number});
@@ -122,6 +122,15 @@ export function registerQueryResultOrganizeUi(binding:QueryResultColumnsUiTarget
     await observe(()=>panel.getByRole('button',{name:filterText.apply,exact:true}).click());await observe(()=>expect.poll(ids).toEqual(expected));await observe(()=>expect(tab.locator('.query-result-filter-bar')).toContainText(filterText.counts(3,expected.length)));
     await observe(()=>tab.getByRole('button',{name:filterText.clear,exact:true}).click());await observe(()=>expect.poll(ids).toEqual(['1','2','3']));
    }
+   /** 分组自带的条件只配置真实输入，不能调用根添加按钮改变所在组。 */
+   async function configureGroupRule(index:number,column:number,operator:string,value:string){
+    await observe(()=>panel.getByRole('combobox',{name:filterText.column+' '+index,exact:true}).selectOption({index:column}));await observe(()=>panel.getByRole('combobox',{name:filterText.operator+' '+index,exact:true}).selectOption(operator));await observe(()=>panel.getByRole('textbox',{name:filterText.input+' '+index,exact:true}).fill(value));
+   }
+   // （id=1或id=2）同时满足金额上限，只留下1；平铺AND或OR均不是这个结果。
+   await observe(()=>tab.getByRole('button',{name:filterText.open,exact:true}).click());await observe(()=>panel.getByRole('button',{name:filterText.addGroup,exact:true}).click());await configureGroupRule(1,1,'eq','1');await observe(()=>panel.getByRole('button',{name:filterText.addInGroup('1'),exact:true}).click());await configureGroupRule(2,1,'eq','2');await addRule(3,3,'lte','1.00000000000000000001');await observe(()=>panel.getByRole('button',{name:filterText.apply,exact:true}).click());await observe(()=>expect.poll(ids).toEqual(['1']));
+   await observe(()=>tab.getByRole('button',{name:filterText.open,exact:true}).click());await observe(()=>expect(panel.getByRole('combobox',{name:filterText.groupMode('1'),exact:true})).toHaveValue('OR'));await observe(()=>panel.getByRole('button',{name:filterText.cancel,exact:true}).click());await observe(()=>tab.getByRole('button',{name:filterText.clear,exact:true}).click());
+   // AND根内嵌OR组，再嵌AND子组；整数、小数仍走声明类型的原精确比较。
+   await observe(()=>tab.getByRole('button',{name:filterText.open,exact:true}).click());await observe(()=>panel.getByRole('button',{name:filterText.addGroup,exact:true}).click());await configureGroupRule(1,1,'eq','1');await observe(()=>panel.getByRole('button',{name:filterText.addGroupInGroup('1'),exact:true}).click());await observe(()=>panel.getByRole('combobox',{name:filterText.groupMode('1.1'),exact:true}).selectOption('AND'));await configureGroupRule(2,1,'eq','3');await observe(()=>panel.getByRole('button',{name:filterText.addInGroup('1.1'),exact:true}).click());await configureGroupRule(3,3,'gt','0');await observe(()=>panel.getByRole('button',{name:filterText.apply,exact:true}).click());await observe(()=>expect.poll(ids).toEqual(['1','3']));await observe(()=>tab.getByRole('button',{name:filterText.clear,exact:true}).click());
    await observe(()=>tab.getByRole('button',{name:filterText.open,exact:true}).click());await addRule(1,3,'lte','1.00000000000000000001');await observe(()=>panel.getByRole('button',{name:filterText.apply,exact:true}).click());await observe(()=>expect.poll(ids).toEqual(['1','3']));
    await observe(()=>expect(tab.locator('.query-result-filter-bar')).toContainText(filterText.counts(3,2)));
    for(const index of [3,2])await observe(()=>grid.locator('[role="row"][aria-rowindex="'+index+'"]').getByRole('checkbox').check());

@@ -2,11 +2,12 @@ import type { CellValue, QueryResult, ResultColumn } from '../shared/contracts';
 import { queryResultFilterKind, queryResultFilterKey, queryResultFilterLiteral, compareQueryResultFilterKeys, type QueryResultSortView } from './queryResultSort';
 import { queryResultFilterZh as text } from './locales/queryResultFilter.zh-CN';
 
-export const queryResultFilterLimits = Object.freeze({ rows:100000, columns:1024, conditions:32, members:128, work:2000000, textWork:32*1024*1024, valueUnits:4096, units:8*1024*1024 });
+export const queryResultFilterLimits = Object.freeze({ rows:100000, columns:1024, conditions:32, groups:16, depth:8, members:128, work:2000000, textWork:32*1024*1024, valueUnits:4096, units:8*1024*1024 });
 export type QueryResultFilterOperator = 'contains'|'notContains'|'startsWith'|'notStartsWith'|'endsWith'|'notEndsWith'|'empty'|'notEmpty'|'eq'|'ne'|'gt'|'gte'|'lt'|'lte'|'between'|'notBetween'|'in'|'notIn'|'null'|'notNull';
 export type QueryResultFilterMode = 'AND'|'OR';
 export interface QueryResultFilterRule { column:string;operator:QueryResultFilterOperator;value:string;upper?:string;values?:readonly string[]; }
-export interface QueryResultFilterView { readonly result:QueryResult;readonly sourceIndices:readonly number[];readonly rules:readonly Readonly<QueryResultFilterRule>[];readonly mode:QueryResultFilterMode; }
+export interface QueryResultFilterGroup { readonly mode:QueryResultFilterMode;readonly children:readonly (QueryResultFilterRule|QueryResultFilterGroup)[]; }
+export interface QueryResultFilterView { readonly result:QueryResult;readonly sourceIndices:readonly number[];readonly rules:readonly Readonly<QueryResultFilterRule>[];readonly mode:QueryResultFilterMode;readonly expression:QueryResultFilterGroup; }
 export interface QueryResultFilterBinding {
   readonly source:QueryResult;readonly rows:QueryResult['rows'];readonly columns:ResultColumn[];readonly rowRefs:readonly QueryResult['rows'][number][];readonly columnRefs:readonly ResultColumn[];
   readonly metadata:readonly ResultColumn[];readonly truncated:boolean;readonly context:readonly unknown[];readonly visible:ResultColumn[];readonly visibleRefs:readonly ResultColumn[];
@@ -15,6 +16,52 @@ type Snapshot = { column:ResultColumn;values:CellValue[];binary:readonly (readon
 /** 字节仅留自有属性描述符的值身份，NULL条件也可发现原包装漂移，不解码/调用getter。 */
 function binaryStamp(value:CellValue):readonly unknown[]|undefined{return value&&typeof value==='object'?[Object.getOwnPropertyDescriptor(value,'type')?.value,Object.getOwnPropertyDescriptor(value,'base64')?.value]:undefined;}
 const fail=()=>Error(text.stale);
+type FilterShape={readonly mode:QueryResultFilterMode;readonly children:readonly (number|FilterShape)[]};
+/** 分组只接受自有数据属性；先限制深度、节点和条件数，再读取有界子数组，拒绝循环及空子组。 */
+function prepareExpression(expression:QueryResultFilterGroup):{rules:QueryResultFilterRule[];shape:FilterShape}{
+  const rules:QueryResultFilterRule[]=[],ancestors=new Set<object>();let groups=0;
+  function own(node:object,key:string,required=false):unknown{
+    const descriptor=Object.getOwnPropertyDescriptor(node,key);
+    if(!descriptor){if(required)throw Error(text.invalid);return undefined;}
+    if(!('value'in descriptor))throw Error(text.invalid);return descriptor.value;
+  }
+  function group(node:QueryResultFilterGroup,depth:number):FilterShape{
+    if(!node||typeof node!=='object'||Array.isArray(node))throw Error(text.invalid);
+    if(depth>queryResultFilterLimits.depth||++groups>queryResultFilterLimits.groups)throw Error(text.budget);
+    if(ancestors.has(node))throw Error(text.invalid);
+    const mode=own(node,'mode',true),source=own(node,'children',true);
+    if(mode!=='AND'&&mode!=='OR'||!Array.isArray(source)||['column','operator','value','upper','values'].some(key=>Object.hasOwn(node,key)))throw Error(text.invalid);
+    const count=source.length;
+    if(!Number.isSafeInteger(count)||count<0)throw Error(text.invalid);
+    if(count>queryResultFilterLimits.conditions+queryResultFilterLimits.groups)throw Error(text.budget);
+    if(!count&&depth>1)throw Error(text.emptyGroup);
+    ancestors.add(node);const children:(number|FilterShape)[]=[];
+    for(let index=0;index<count;index++){
+      const child=own(source,String(index),true);
+      if(!child||typeof child!=='object'||Array.isArray(child))throw Error(text.invalid);
+      if(Object.hasOwn(child,'children'))children.push(group(child as QueryResultFilterGroup,depth+1));
+      else{
+        if(rules.length>=queryResultFilterLimits.conditions)throw Error(text.budget);
+        if(Object.hasOwn(child,'mode'))throw Error(text.invalid);
+        const rule={column:own(child,'column',true),operator:own(child,'operator',true),value:own(child,'value',true),upper:own(child,'upper'),values:own(child,'values')} as QueryResultFilterRule;
+        children.push(rules.length);rules.push(rule);
+      }
+    }
+    if(source.length!==count)throw Error(text.invalid);
+    ancestors.delete(node);return Object.freeze({mode,children:Object.freeze(children)});
+  }
+  return{rules,shape:group(expression,1)};
+}
+/** 所有叶条件先完整验证和计费；布尔组合只读取已计算结果，不跳过坏值或预算。 */
+function matchExpression(shape:FilterShape,matches:readonly boolean[]):boolean{
+  if(!shape.children.length)return true;
+  const values=shape.children.map(child=>typeof child==='number'?matches[child]:matchExpression(child,matches));
+  return shape.mode==='AND'?values.every(Boolean):values.some(Boolean);
+}
+/** 冻结分组与已规范化的独立条件，避免面板重开后改变已生效树。 */
+function freezeExpression(shape:FilterShape,rules:readonly Readonly<QueryResultFilterRule>[]):QueryResultFilterGroup{
+  return Object.freeze({mode:shape.mode,children:Object.freeze(shape.children.map(child=>typeof child==='number'?rules[child]:freezeExpression(child,rules)))});
+}
 /** 比较方式来自协议类型；未知/二进制元数据仍可做NULL判断，不按外观猜类型。 */
 export function queryResultFilterOperators(column:ResultColumn):readonly QueryResultFilterOperator[]{
   const kind=queryResultFilterKind(column);
@@ -51,14 +98,21 @@ export class QueryResultFilter {
   /** 只提供同一有效租约视图。 */
   view(binding:QueryResultFilterBinding|undefined):QueryResultFilterView|undefined{return this.current(binding)?this.projection:undefined;}
   /** 无条件返回准确原source；有条件仅创建冻结的原行引用数组与源位置映射。 */
-  private project(binding:QueryResultFilterBinding,rules:readonly QueryResultFilterRule[],mode:QueryResultFilterMode,indices:number[]):QueryResultFilterView{
+  private project(binding:QueryResultFilterBinding,rules:readonly QueryResultFilterRule[],mode:QueryResultFilterMode,indices:number[],shape:FilterShape={mode,children:rules.map((_,index)=>index)}):QueryResultFilterView{
     const rows=rules.length?Object.freeze(indices.map(i=>binding.rows[i])) as unknown as QueryResult['rows']:binding.rows;
-    return Object.freeze({result:rules.length?Object.freeze({...binding.source,rows}):binding.source,sourceIndices:Object.freeze(indices),rules:Object.freeze(rules.map(r=>Object.freeze({...r,...(r.values?{values:Object.freeze([...r.values])}:{})}))),mode});
+    const saved=Object.freeze(rules.map(r=>Object.freeze({...r,...(r.values?{values:Object.freeze([...r.values])}:{})})));
+    return Object.freeze({result:rules.length?Object.freeze({...binding.source,rows}):binding.source,sourceIndices:Object.freeze(indices),rules:saved,mode,expression:freezeExpression(shape,saved)});
   }
-  /** 全条件先准入再完整扫描；不短路绕过坏值或总预算，失败不部分采用草稿。 */
+  /** 保留原平铺AND／OR入口，统一进入有界分组执行，不维护第二套比较器。 */
   apply(binding:QueryResultFilterBinding,previous:QueryResultFilterView,rules:readonly QueryResultFilterRule[],mode:QueryResultFilterMode):QueryResultFilterView{
-    if(!this.current(binding)||this.projection!==previous)throw fail();if(!['AND','OR'].includes(mode))throw Error(text.invalid);
+    if(!this.current(binding)||this.projection!==previous)throw fail();
     if(rules.length>queryResultFilterLimits.conditions)throw Error(text.budget);
+    return this.applyExpression(binding,previous,{mode,children:rules});
+  }
+  /** 全树先准入再完整扫描；分组不增加原叶条件或比较预算，失败保留旧视图。 */
+  applyExpression(binding:QueryResultFilterBinding,previous:QueryResultFilterView,expression:QueryResultFilterGroup):QueryResultFilterView{
+    if(!this.current(binding)||this.projection!==previous)throw fail();
+    const {rules,shape}=prepareExpression(expression),mode=shape.mode;
     // 成员数先受硬上限约束再读取，每项必须是自有数据属性；稀疏值或访问器不能跳过验证。
     const memberSets=rules.map(rule=>{
       if(!queryResultFilterNeedsValues(rule.operator)){if(rule.values!==undefined)throw Error(text.invalid);return undefined;}
@@ -126,10 +180,10 @@ export class QueryResultFilter {
         }
         return rule.operator==='eq'||rule.operator==='empty'?order===0:rule.operator==='ne'||rule.operator==='notEmpty'?order!==0:rule.operator==='gt'?order>0:rule.operator==='gte'?order>=0:rule.operator==='lt'?order<0:order<=0;
       });
-      if(!compiled.length||(mode==='AND'?matches.every(Boolean):matches.some(Boolean)))indices.push(i);
+      if(matchExpression(shape,matches))indices.push(i);
     }
     if(!this.current(binding)||this.projection!==previous)throw fail();this.snapshots=snapshots;
-    return this.projection=this.project(binding,compiled.map(({rule,members})=>members?{...rule,values:members.map(member=>member.input)}:rule),mode,indices);
+    return this.projection=this.project(binding,compiled.map(({rule,members})=>members?{...rule,values:members.map(member=>member.input)}:rule),mode,indices,shape);
   }
 }
 /** 排序位置相对过滤结果；这里显式合成为原返回位置，仍共享同一个最终QueryResult容器。 */

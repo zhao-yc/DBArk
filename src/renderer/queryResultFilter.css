@@ -4,6 +4,9 @@
 .query-result-filter-panel { padding: 8px 10px; border-block: 1px solid var(--line); font-size: 12px; }
 .query-result-filter-panel p { margin: 4px 0; color: var(--muted); }
 .query-result-filter-conditions { max-height: 220px; overflow: auto; }
+.query-result-filter-group { min-width: 0; margin: 6px 0 6px 8px; padding: 6px 8px; border: 1px solid var(--line); border-radius: 4px; }
+.query-result-filter-group legend { color: var(--muted); }
+.query-result-filter-group-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 .query-result-filter-condition { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 5px 0; }
 .query-result-filter-condition select { max-width: min(340px, 100%); }
 .query-result-filter-condition input { flex: 1; min-width: 140px; }
