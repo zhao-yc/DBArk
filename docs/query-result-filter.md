@@ -1,5 +1,7 @@
 # 已返回查询结果的本地条件筛选
 
+条件面板内可按 Ctrl+Enter（macOS：⌘+Enter）显式应用草稿，Esc取消；普通Enter保留输入行为，输入法组合和长按重复不触发命令。取消保持原过滤及排序，应用沿原来源租约重置旧选择。固定3fedb46已完成Linux类型／单元／构建、Windows类型／301定向／新构建、一次实库组合窗口、Python读回及完整11284通过／1项平台跳过，见[准确验收](../tests/integration/acceptance-query-result-sort-filter-3fedb46-20261021.md)。按main交付源码，原生输入法、系统输入、安装及macOS新组合未验，暂不发布。
+
 新增[文本大小写选项](development/query-result-filter-case-20261020.md)：文本条件默认敏感，可逐条勾选“忽略大小写”，使用无区域设置的Unicode小写映射，支持分组和多值，保留原文及排序规则。固定74c59bf同时修复短窗口工具条挤掉表头：Windows类型／301项／新构建、一次实库整例、Python文件读回及完整11125通过、1平台跳过；Linux11116通过、10平台跳过／类型／构建通过，见[准确增量验收](../tests/integration/acceptance-query-result-case-74c59bf-20261020.md)。按main交付源码，安装及macOS本组合未验，暂不发布。
 
 新增[嵌套分组条件](development/query-result-filter-groups-20261020.md)：每组独立AND／OR，可组合“（A或B）同时C”，最多32条条件、16组（含根）、8层；空子组拒绝应用。固定ceb607a的Windows类型／329定向／新构建、实库分组后复制导出及独立读回、完整11061通过／1平台跳过均通过，见[准确增量证据](../tests/integration/acceptance-query-result-groups-ceb607a-20261020.md)。按main交付，暂不发布。
