@@ -39,6 +39,10 @@ VM 元数据目录为 `outputs/query-result-sort-filter-3fedb46-vm-20261021` 和
 
 阶段 stderr 为构建注释及分块警告，不是空日志。GUI 后 Git 净、574源码和109构建哈希不变，原 CLI、观察进程及已记后代身份缺席。原 CLI 创建时间有观察记录；观察进程自身创建时间未捕获，不能把事后数字 PID 缺席当作该缺失字段。
 
+原 GUI 子目录为 `dbark-query-columns-264b7a0796d24be387f61b7f7f49860b`：`visible-selected.csv` 257字节、SHA256 `76743bd4a3c57946eb02dd7e38d579aa8c6842c60a4eec41f7540af69bd1d9a4`；`visible-selected.json` 449字节、SHA256 `6fd9c71661565e39971a246057b2bf84fe8a3650700f6dbbb26ada964a7c9646`。这些是 GUI 后控制器封存值，不是导出生产者出具的摘要，也不代替独立内容解析。
+
+读回队列原 turn `01a15b34-7a25-70c2-9389-b0038449d5f8` 因远程 compact 网络解码错误而明确 failed。最后命令 `exec-930782ca-6cc2-439a-94cd-0cdcaf60fee0` 退出0、665毫秒：23份 GUI manifest、两文件属性／大小／无重解析点及原进程缺席通过，创建现有读回目录的 `preflight-original-gui-files-process.json`；该命令没有运行 reader 或 full。Root读原终态后，只授权先检查现有 start/result 与进程句柄再接续未执行阶段，没有重跑 GUI 或删除旧目录。未收到后继终态前，读回和完整回归仍保持未验。
+
 ## 保留的失败与记录限制
 
 - 原 fcc8530 窗口在活动草稿联合预检失败，未执行 App 查询；持久草稿693／694字符的末尾额外单引号已只读取证，但原页面文本及具体自动配对原因未确认。后继只改用已有可见编辑器合成 paste 准备，原 SQL、期待、期限及产品不因此改变。见[原失败记录](acceptance-query-result-nulls-fcc8530-20261021.md)。

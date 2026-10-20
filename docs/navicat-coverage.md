@@ -2,6 +2,8 @@
 
 ## 当前开发安排（2026-10-21）
 
+开发分支新增[复制结果筛选条件](development/query-result-filter-duplicate-20261021.md)：同组插入独立副本，保留区间、候选值及大小写选项；输入法、旧草稿和32条总上限保护保持。b8112a6的Linux类型／589文件11310通过、10平台跳过／构建成功，6项新增用例含在总计内。后继窗口交集用例已准备，Windows尚未验、不合入main；原3fed组合GUI已通过，独立读回队列的远程压缩网络失败已保留并从原预检后接续，见[组合记录](../tests/integration/acceptance-query-result-sort-filter-3fedb46-20261021.md)。暂不发布，不增加完整工作包计数。
+
 新增[每列NULL排序位置开发候选](development/query-result-null-order-20261021.md)：多列优先级可逐列选择默认／NULL在前／NULL在后，显式位置独立于方向，双NULL继续比较下一列，精度、原行及旧回调保护保持。e251a0c的Linux类型通过，11247单元通过／2个新RAM控件断言失败／10平台跳过，原日志保留。已定位测试文件的单选互斥端口缺失，4dff1f9修端口后原控件及复制／导出已通过，完整11249通过／1新增端口用例收尾失败／10平台跳过；3394d07仅补该用例正常准备，保留原期待及产品树，后继Linux类型／586文件11250项／构建全部通过，10平台跳过，见[准确范围](../tests/integration/acceptance-query-result-null-order-3394d07-20261021.md)。通配源码已按main交付；本候选窗口用例fcc8530另通过Linux类型／586文件11250单元／构建，10平台跳过，Windows类型／276定向／新构建通过；首轮窗口止于活动草稿联合预检、尚未执行App查询，原因待只读诊断，读回和完整回归未启动，见[本轮准确记录](../tests/integration/acceptance-query-result-nulls-fcc8530-20261021.md)；新窗口、安装及macOS未验，尚未合入main，暂不发布，不增加完整工作包计数。
 
 main准确f505f6b的[原生CI及独立原件核对](../tests/integration/acceptance-main-f505f6b-ci-20261021.md)已闭合：Linux类型／586文件11246通过、10平台跳过／构建成功；Windows x64、macOS arm64及x64的源码／同次真实安装legacy均各80通过、315条件跳过。三平台每阶段六专项及12正常owner的原report／accepted已独立核对，ARM两代显示租约的实测几何及退出前恢复另已核实。仅覆盖本轮离线范围，不含后继NULL排序／筛选快捷键组合、私网驱动或系统输入；旧4dae140安装失败保留，具体根因未被本次成功倒推。组合候选及WIN11-TEST原队列继续，不增加完整工作包或公开发行计数，暂不发布。
