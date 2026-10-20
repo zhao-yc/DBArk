@@ -38,3 +38,13 @@ Windows helper安装资源摘要475b78748fcf1f9990c58d5926792ae978de71d1962f2e72
 该候选不解释旧Windows失败，也不恢复或清理旧profile。NULL排序窗口准备失败仍由WIN11-TEST在固定fcc8530现场独立取证，不切换其提交、不重复原队列；原失败断言与期限不变。暂不发布。
 
 守卫诊断按main交付f505f6b413d991dba8a383d97dc2f184fa43be82后，[原生CI39484974797](https://github.com/zhao-yc/DBArk/actions/runs/39484974797)的Linux job118842911856另已通过。Root实际读取原日志：类型、586文件11246通过／10平台跳过、构建通过，单元223.81秒，Vite32.37秒；17项诊断测试已包含在完整计数中。产品树仍675ffa2320aba0f55e21ccef2b2eee349531ff9c。Windows、ARM及Intel原生job尚在执行，此处不记为全平台通过，原4dae安装失败不被覆盖。
+
+## 原4dae140的Intel单job重跑终态
+
+attempt2的Intel job118833967012已成功。Root读取原日志：源码legacy80通过／315跳过、11.1分钟；同次未发行签名DMG真实安装legacy80通过／315跳过、9.9分钟，原脚本报告本次安装及临时目录清理。原下载失败仍保留，重跑来源仍是4dae140，不归到后继f505f6b或NULL／快捷键候选。
+
+Root另下载测试记录artifact12294007618到自有忽略目录：10656813字节，SHA256 `492d073c81e1716706759b9dc5ca182961b9dda92db45b9851f90a9f8f3caa45` 与上传记录一致。ZIP共137项、解压大小11435771字节，全部CRC一致；仅在内存解析报告及JSON附件，没有解压执行程序。静态审计摘要位于 `.cache/ci-4dae140-audit-20261021/intel-first-model-static-audit.json`，原件不入库。
+
+source/report.json摘要 `e9dea6de3664a64e7a3f2385dc5e4e514540982f0296bc5ad723a804ecd48118`，4通过、0跳过／失败／flaky，74.208秒。installed/report.json摘要 `77cdbee44135913703c05248fd40d65a375311706170971a5e8b051c73141867`，4通过、0跳过／失败／flaky，88.981453秒。两阶段accepted均引用各自原report摘要，automaticRetry=false；每阶段LF／CRLF×按钮／快捷键四例均retry=0、accepted及directoryRemoved=true，各有两个confirmed／willQuit／closed正常owner。逐例均记录初始模型、普通编辑与一次Undo、格式化与一次Undo／Redo、最终Undo及独立重启clean；ordinarySingleUndo／formatSingleUndo=true，SQL执行、查询库写入和系统剪贴板均为0。
+
+这八项专项与两组legacy80分别记录，不作为额外工作包完成数。只完成Intel本次离线源码／真实安装范围；原Windows安装失败仍未通过，Mac私网驱动及NULL排序、筛选快捷键能力未据此验收，暂不发布。
