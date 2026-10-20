@@ -1,6 +1,6 @@
 .query-tab{overflow-y:auto;min-width:0}
 .query-tab>.sql-editor-wrap{min-height:0}
-.query-tab>.result-body{min-height:96px}
+.query-tab>.result-body{min-height:var(--query-result-min-height,96px)}
 .query-layout-bar{height:18px;display:flex;align-items:stretch;gap:6px;flex-shrink:0;background:var(--surface);border-block:1px solid var(--line-soft)}
 .query-layout-handle{flex:1;min-width:30px;cursor:row-resize;touch-action:none;position:relative}
 .query-layout-handle:after{content:"";position:absolute;left:calc(50% - 18px);top:6px;width:36px;border-top:2px solid var(--muted)}
