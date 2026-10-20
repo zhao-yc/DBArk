@@ -155,6 +155,45 @@ function reactProps(node:any){return node[Object.keys(node).find(key=>key.starts
 async function setFilterField(label:string,value:string){const node=document.querySelector('[aria-label="'+label+'"]')!;expect(node).not.toBeNull();await act(async()=>{node.value=value;node.dispatchEvent(new MemoryEvent(node.tagName==='SELECT'?'change':'input'));});}
 async function addFilterRule(index:number,column:string,operator:string,value=''){await click(filterText.add);await setFilterField(filterText.column+' '+index,column);await setFilterField(filterText.operator+' '+index,operator);if(!['null','notNull','empty','notEmpty'].includes(operator))await setFilterField(filterText.input+' '+index,value);}
 async function filterGroup(value='A'){await click(filterText.open);await addFilterRule(1,'group','eq',value);await click(filterText.apply);}
+/** 只操作真实条件面板的两个独立输入，不调用筛选控制器来伪造界面结果。 */
+async function addRangeRule(column:string,operator:'between'|'notBetween',lower:string,upper:string){
+  await click(filterText.add);await setFilterField(filterText.column+' 1',column);await setFilterField(filterText.operator+' 1',operator);
+  await setFilterField(filterText.lower+' 1',lower);await setFilterField(filterText.upper+' 1',upper);
+}
+it('区间面板与多列排序、勾选复制和导出共用精确原行映射，重开保留两个端点',async()=>{
+  await mountMulti();const saved=structuredClone(original);await click(filterText.open);await addRangeRule('id','between','2','9007199254740993');await click(filterText.apply);
+  await headerAction('group');await headerAction('id',{ctrlKey:true});expect(grid().rows).toEqual([original.rows[2],original.rows[1]]);
+  await click(filterText.open);expect(document.querySelector('[aria-label="'+filterText.lower+' 1"]')!.value).toBe('2');expect(document.querySelector('[aria-label="'+filterText.upper+' 1"]')!.value).toBe('9007199254740993');await click(filterText.cancel);
+  await act(async()=>grid().onSelectedRowsChange(new Set([0,1])));expect(JSON.parse(copy().get('application/x-dbark-cells')!).rows.map((row:any)=>row[1])).toEqual(['2','9007199254740993']);
+  await click(zh.resultExport.selectedTitle);await click(zh.resultExport.chooseFile);await click(zh.resultExport.start);
+  expect(exports[0].result.rows).toEqual([original.rows[2],original.rows[1]]);expect(original).toEqual(saved);expect(commands.filter(command=>command==='query.execute')).toHaveLength(1);
+});
+it('离开区间移除上限并撤销旧输入，重新进入时须重新填写；文本字段不提供区间',async()=>{
+  await mountMulti();await click(filterText.open);await addRangeRule('id','between','2','9007199254740993');
+  const oldUpper=reactProps(document.querySelector('[aria-label="'+filterText.upper+' 1"]')).onChange;
+  await setFilterField(filterText.operator+' 1','eq');await act(async()=>oldUpper({target:{value:'不能写回'}}));expect(document.querySelector('[aria-label="'+filterText.upper+' 1"]')).toBeNull();
+  expect(document.querySelector('[aria-label="'+filterText.input+' 1"]')!.value).toBe('2');await click(filterText.apply);expect(grid().rows).toEqual([original.rows[2]]);
+  await click(filterText.open);await setFilterField(filterText.operator+' 1','between');expect(document.querySelector('[aria-label="'+filterText.upper+' 1"]')!.value).toBe('');
+  await setFilterField(filterText.column+' 1','words');expect(document.querySelector('[aria-label="'+filterText.upper+' 1"]')).toBeNull();expect(document.querySelector('[aria-label="'+filterText.operator+' 1"]')!.textContent).not.toContain(filterText.operators.between);
+  await click(filterText.apply);expect(grid().rows).toEqual(original.rows);expect(commands.filter(command=>command==='query.execute')).toHaveLength(1);
+});
+it('颠倒区间保留原排序和草稿，纠正上限后才替换结果',async()=>{
+  await mountMulti();await headerAction('id');const before=grid().rows;await click(filterText.open);await addRangeRule('id','between','9007199254740993','2');await click(filterText.apply);
+  expect(grid().rows).toBe(before);expect(grid().sortColumns).toEqual([{columnKey:'id',direction:'ASC'}]);expect(document.body.textContent).toContain(filterText.rangeOrder);expect(document.querySelector('[aria-label="'+filterText.title+'"]')).not.toBeNull();
+  await setFilterField(filterText.upper+' 1','9007199254740993');await click(filterText.apply);expect(grid().rows).toEqual([original.rows[1]]);expect(grid().sortColumns).toEqual([]);expect(document.body.textContent).not.toContain(filterText.rangeOrder);
+});
+it('不介于面板排除NULL和闭区间端点，保留区间外的原行',async()=>{
+  await mount(result=>{result.rows[0].value=null;});await click(filterText.open);await addRangeRule('value','notBetween','0.12345678901234567890','0.12345678901234567890');await click(filterText.apply);
+  expect(grid().rows).toEqual([original.rows[2]]);expect(grid().rows[0]).toBe(original.rows[2]);expect(commands.filter(command=>command==='query.execute')).toHaveLength(1);
+});
+it('上限组合输入期间不应用，组合结束后按原精度使用最终上限',async()=>{
+  await mountMulti();await click(filterText.open);await addRangeRule('amount','between','0.12345678901234567890','0.12345678901234567890');
+  let upper=document.querySelector('[aria-label="'+filterText.upper+' 1"]')!;const apply=reactProps(button(filterText.apply)).onClick;
+  await act(async()=>reactProps(upper).onCompositionStart());expect(button(filterText.apply).disabled).toBe(true);
+  await act(async()=>{reactProps(upper).onChange({target:{value:'0.12345678901234567891'}});apply();});expect(grid().rows).toBe(original.rows);
+  upper=document.querySelector('[aria-label="'+filterText.upper+' 1"]')!;await act(async()=>reactProps(upper).onCompositionEnd());await click(filterText.apply);expect(grid().rows).toEqual(original.rows);expect(document.querySelector('[aria-label="'+filterText.title+'"]')).toBeNull();
+  await click(filterText.open);expect(document.querySelector('[aria-label="'+filterText.upper+' 1"]')!.value).toBe('0.12345678901234567891');await click(filterText.cancel);expect(commands.filter(command=>command==='query.execute')).toHaveLength(1);
+});
 it.each([
   ['notContains','甲',[0]],['startsWith','甲',[2,1]],['notStartsWith','甲',[0]],['endsWith','早行',[2]],['notEndsWith','早行',[0,1]]
 ] as const)('文本条件%s通过实际面板应用，随后排序、复制与导出仍共享同一视图',async(operator,value,indices)=>{

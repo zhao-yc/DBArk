@@ -89,6 +89,66 @@ describe('已返回结果本地条件语义与原行身份',()=>{
     const f=fixture('BIGINT',['1','坏值']);expect(()=>f.apply([rule('eq','A','group'),rule('eq','1')],'OR')).toThrow(text.value);expect(()=>f.apply([rule('eq','永不匹配','group'),rule('eq','1')],'AND')).toThrow(text.value);
   });
 });
+describe('精确数值和时间区间筛选',()=>{
+  it.each([
+    ['BIGINT',['9007199254740992','9007199254740993','18446744073709551615',null],'9007199254740993','18446744073709551615'],
+    ['DECIMAL',['-0.00000000000000000001','0.12345678901234567890','0.12345678901234567891',null],'0.12345678901234567890','0.12345678901234567891'],
+    ['DATE',['0000-00-00','2026-10-19','2026-10-20',null],'2026-10-19','2026-10-20'],
+    ['DATETIME',['2026-10-19 12:00:00.000000','2026-10-19 12:00:00.000001','2026-10-19 12:00:00.000002',null],'2026-10-19 12:00:00.000001','2026-10-19 12:00:00.000002'],
+    ['TIME',['-100:00:00.000002','-100:00:00.000001','00:00:00',null],'-100:00:00.000001','00:00:00'],
+    ['DOUBLE',[-1.5,0.1,0.2,null],'0.1','0.2'],
+  ] as const)('%s区间包含两端，否定区间排除两端和NULL，不更改原源',(type,values,value,upper)=>{
+    const f=fixture(type,[...values]),saved=structuredClone(f.source);
+    const inside=f.apply([{...rule('between',value),upper}]);expect(inside.sourceIndices).toEqual([1,2]);
+    expect(inside.result.rows).toEqual([f.source.rows[1],f.source.rows[2]]);expect(inside.result.rows[0]).toBe(f.source.rows[1]);
+    expect(f.apply([{...rule('notBetween',value),upper}]).sourceIndices).toEqual([0]);expect(f.source).toEqual(saved);
+  });
+  it('数学上相等的两端与负零保持精度，OR只有显式NULL条件才纳入NULL',()=>{
+    const f=fixture('DECIMAL',['-0','0.000','0.00000000000000000001',null]);
+    expect(f.apply([{...rule('between',' -0.000 '),upper:' +0.0 '}]).sourceIndices).toEqual([0,1]);
+    expect(f.apply([{...rule('notBetween','0.0'),upper:'-0'},rule('null')],'OR').sourceIndices).toEqual([2,3]);
+  });
+  it.each(['between','notBetween'] as const)('%s上下限颠倒即使没有行或OR已满足也完整拒绝',operator=>{
+    for(const values of [[],['1']] as CellValue[][]){const f=fixture('BIGINT',values),before=f.filter.view(f.binding)!;
+      expect(()=>f.apply([rule('notNull'),{...rule(operator,'2'),upper:'1'}],'OR')).toThrow(text.rangeOrder);expect(f.filter.view(f.binding)).toBe(before);
+    }
+  });
+  it.each([undefined,null,1] as const)('上限缺失或不是原文字符串（%s）不采用部分条件',upper=>{
+    const f=fixture('BIGINT',['1']),before=f.filter.view(f.binding)!;
+    expect(()=>f.apply([{...rule('between','0'),upper} as unknown as QueryResultFilterRule])).toThrow(text.invalid);expect(f.filter.view(f.binding)).toBe(before);
+  });
+  it.each([['BIGINT',''],['BIGINT UNSIGNED','-1'],['TIME','839:00:00'],['DATETIME','2026-10-19T12:00:00Z'],['DOUBLE','Infinity']] as const)('%s的非法上限%s仍按原类型拒绝',(type,upper)=>{
+    const lower=type==='TIME'?'00:00:00':type==='DATETIME'?'2026-10-19 12:00:00':'0',f=fixture(type,[null]),before=f.filter.view(f.binding)!;
+    expect(()=>f.apply([{...rule('between',lower),upper}])).toThrow(text.value);expect(f.filter.view(f.binding)).toBe(before);
+  });
+  it.each(['TEXT','JSON','BIT','GEOMETRY','未知'])('%s不能借区间条件获得数值比较资格',type=>{
+    const f=fixture(type,[null]);for(const operator of ['between','notBetween'] as const){expect(queryResultFilterOperators(f.source.columns[0])).not.toContain(operator);expect(()=>f.apply([{...rule(operator,'0'),upper:'1'}])).toThrow(text.invalid);}
+  });
+  it.each(['eq','null'] as const)('切换至%s后不得保留隐藏上限',operator=>{
+    const f=fixture('BIGINT',['1']);expect(()=>f.apply([{...rule(operator,operator==='null'?'':'1'),upper:'2'}])).toThrow(text.invalid);
+  });
+  it('上下限都计入输入预算，区间按两个比较计费且不改变旧视图',()=>{
+    const f=fixture('BIGINT',['1']),before=f.filter.view(f.binding)!;
+    expect(()=>f.apply([{...rule('between','0'),upper:'9'.repeat(4097)}])).toThrow(text.budget);expect(f.filter.view(f.binding)).toBe(before);
+    const g=fixture('BIGINT',Array.from({length:100000},()=>null)),range={...rule('between','0'),upper:'1'};
+    const boundary=g.apply(Array.from({length:10},()=>range));expect(boundary.result.rows).toEqual([]);
+    expect(()=>g.apply([...Array.from({length:10},()=>range),rule('null')])).toThrow(text.budget);expect(g.filter.view(g.binding)).toBe(boundary);
+  });
+  it('超过条件数先拒绝，不为统计区间工作量读取超限规则',()=>{
+    const f=fixture(),operator=vi.fn(()=>'between'),rules=Array.from({length:33},()=>Object.defineProperty({...rule('eq')},'operator',{get:operator}));
+    expect(()=>f.apply(rules)).toThrow(text.budget);expect(operator).not.toHaveBeenCalled();
+  });
+  it('区间两端共用字符工作预算，不能只计算下限的比较工作',()=>{
+    const value='5'.repeat(4096),f=fixture('DECIMAL',Array.from({length:1000},()=>value)),before=f.filter.view(f.binding)!;
+    expect(()=>f.apply(Array.from({length:3},()=>({...rule('between','0'),upper:'9'.repeat(4096)})))).toThrow(text.budget);expect(f.filter.view(f.binding)).toBe(before);
+  });
+  it('已应用上限冻结且排除行漂移仍撤销，恢复值不能复活原区间',()=>{
+    const f=fixture('BIGINT',['1','2','3']),range={...rule('between','2'),upper:'3'},view=f.apply([range]);range.upper='99';
+    expect(view.rules[0].upper).toBe('3');expect(Object.isFrozen(view.rules[0])).toBe(true);
+    f.source.rows[0].k='2';expect(f.filter.view(f.binding)).toBeUndefined();f.source.rows[0].k='1';expect(()=>f.filter.apply(f.binding,view,[],'AND')).toThrow(text.stale);
+  });
+});
+
 describe('筛选工作预算与单向租约',()=>{
   it('总条件/总单元格工作预算先拒绝，不扩大既有行列范围',()=>{
     const f=fixture();expect(()=>f.apply(Array.from({length:33},()=>rule('null')))).toThrow(text.budget);const g=fixture('TEXT',Array.from({length:100000},()=>null));expect(()=>g.apply(Array.from({length:21},()=>rule('null')))).toThrow(text.budget);g.source.rows.push({k:null,group:'A'});expect(g.filter.bind(g.source,[])).toBeUndefined();

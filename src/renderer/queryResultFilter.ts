@@ -3,9 +3,9 @@ import { queryResultFilterKind, queryResultFilterKey, queryResultFilterLiteral, 
 import { queryResultFilterZh as text } from './locales/queryResultFilter.zh-CN';
 
 export const queryResultFilterLimits = Object.freeze({ rows:100000, columns:1024, conditions:32, work:2000000, textWork:32*1024*1024, valueUnits:4096, units:8*1024*1024 });
-export type QueryResultFilterOperator = 'contains'|'notContains'|'startsWith'|'notStartsWith'|'endsWith'|'notEndsWith'|'empty'|'notEmpty'|'eq'|'ne'|'gt'|'gte'|'lt'|'lte'|'null'|'notNull';
+export type QueryResultFilterOperator = 'contains'|'notContains'|'startsWith'|'notStartsWith'|'endsWith'|'notEndsWith'|'empty'|'notEmpty'|'eq'|'ne'|'gt'|'gte'|'lt'|'lte'|'between'|'notBetween'|'null'|'notNull';
 export type QueryResultFilterMode = 'AND'|'OR';
-export interface QueryResultFilterRule { column:string;operator:QueryResultFilterOperator;value:string; }
+export interface QueryResultFilterRule { column:string;operator:QueryResultFilterOperator;value:string;upper?:string; }
 export interface QueryResultFilterView { readonly result:QueryResult;readonly sourceIndices:readonly number[];readonly rules:readonly Readonly<QueryResultFilterRule>[];readonly mode:QueryResultFilterMode; }
 export interface QueryResultFilterBinding {
   readonly source:QueryResult;readonly rows:QueryResult['rows'];readonly columns:ResultColumn[];readonly rowRefs:readonly QueryResult['rows'][number][];readonly columnRefs:readonly ResultColumn[];
@@ -18,10 +18,12 @@ const fail=()=>Error(text.stale);
 /** 比较方式来自协议类型；未知/二进制元数据仍可做NULL判断，不按外观猜类型。 */
 export function queryResultFilterOperators(column:ResultColumn):readonly QueryResultFilterOperator[]{
   const kind=queryResultFilterKind(column);
-  return kind==='text'?['contains','notContains','startsWith','notStartsWith','endsWith','notEndsWith','eq','ne','empty','notEmpty','null','notNull']:kind?['eq','ne','gt','gte','lt','lte','null','notNull']:['null','notNull'];
+  return kind==='text'?['contains','notContains','startsWith','notStartsWith','endsWith','notEndsWith','eq','ne','empty','notEmpty','null','notNull']:kind?['eq','ne','gt','gte','lt','lte','between','notBetween','null','notNull']:['null','notNull'];
 }
 /** NULL和空文本条件不接受隐藏的原值；面板与控制器共用同一输入要求。 */
 export function queryResultFilterNeedsValue(operator:QueryResultFilterOperator):boolean{return !['null','notNull','empty','notEmpty'].includes(operator);}
+/** 区间使用独立上下限原文，不复用分隔符或把精确值转成浮点数。 */
+export function queryResultFilterNeedsUpper(operator:QueryResultFilterOperator):boolean{return operator==='between'||operator==='notBetween';}
 /** 只读取自有数据属性；访问器不执行，NULL判断也不解码二进制。 */
 function cell(row:QueryResult['rows'][number],column:ResultColumn):CellValue {const d=Object.getOwnPropertyDescriptor(row,column.key);if(!d||!('value'in d))throw Error(text.value);return d.value;}
 /** 当前完整源的单向租约；过滤保存原行引用，连被排除行的活动条件键也观察漂移。 */
@@ -54,13 +56,25 @@ export class QueryResultFilter {
   /** 全条件先准入再完整扫描；不短路绕过坏值或总预算，失败不部分采用草稿。 */
   apply(binding:QueryResultFilterBinding,previous:QueryResultFilterView,rules:readonly QueryResultFilterRule[],mode:QueryResultFilterMode):QueryResultFilterView{
     if(!this.current(binding)||this.projection!==previous)throw fail();if(!['AND','OR'].includes(mode))throw Error(text.invalid);
-    if(rules.length>queryResultFilterLimits.conditions||rules.length*binding.rows.length>queryResultFilterLimits.work)throw Error(text.budget);
+    if(rules.length>queryResultFilterLimits.conditions)throw Error(text.budget);
+    const comparisons=rules.reduce((sum,rule)=>sum+(queryResultFilterNeedsUpper(rule.operator)?2:1),0);
+    if(comparisons*binding.rows.length>queryResultFilterLimits.work)throw Error(text.budget);
     let units=0;
     const compiled=rules.map(rule=>{
       const column=binding.visible.find(c=>c.key===rule.column);if(!column||!queryResultFilterOperators(column).includes(rule.operator)||typeof rule.value!=='string')throw Error(text.invalid);
-      const nullable=rule.operator==='null'||rule.operator==='notNull';if(!queryResultFilterNeedsValue(rule.operator)&&rule.value!=='')throw Error(text.invalid);
-      if(rule.value.length>queryResultFilterLimits.valueUnits)throw Error(text.budget);units+=rule.value.length;if(units>queryResultFilterLimits.units)throw Error(text.budget);
-      try{const literal=nullable?null:queryResultFilterLiteral(column,rule.value);return{rule,column,nullable,literal,key:nullable?null:queryResultFilterKey(column,literal!)};}catch{throw Error(text.value);}
+      const nullable=rule.operator==='null'||rule.operator==='notNull',range=queryResultFilterNeedsUpper(rule.operator);
+      if((!queryResultFilterNeedsValue(rule.operator)&&rule.value!=='')||(range?typeof rule.upper!=='string':rule.upper!==undefined))throw Error(text.invalid);
+      for(const value of range?[rule.value,rule.upper!]:[rule.value]){
+        if(value.length>queryResultFilterLimits.valueUnits)throw Error(text.budget);units+=value.length;if(units>queryResultFilterLimits.units)throw Error(text.budget);
+      }
+      let literal:CellValue|null,upper:CellValue|null,key:ReturnType<typeof queryResultFilterKey>|null,upperKey:ReturnType<typeof queryResultFilterKey>|null;
+      try{
+        literal=nullable?null:queryResultFilterLiteral(column,rule.value);key=nullable?null:queryResultFilterKey(column,literal!);
+        upper=range?queryResultFilterLiteral(column,rule.upper!):null;upperKey=range?queryResultFilterKey(column,upper!):null;
+      }catch{throw Error(text.value);}
+      // 下限大于上限时完整拒绝，不能猜测交换端点或把否定区间变成全量结果。
+      if(range&&compareQueryResultFilterKeys(key,upperKey)>0)throw Error(text.rangeOrder);
+      return{rule,column,nullable,range,literal,key,upper,upperKey};
     });
     const snapshots:Snapshot[]=[...new Map(compiled.map(c=>[c.column.key,c.column])).values()].map(column=>{const values=binding.rows.map(row=>cell(row,column));return{column,values,binary:values.map(binaryStamp)};});
     const prepared=new Map(snapshots.map(s=>{
@@ -70,12 +84,14 @@ export class QueryResultFilter {
     const data=new Map(snapshots.map(s=>[s.column.key,s.values])),indices:number[]=[];
     let textWork=0;
     for(let i=0;i<binding.rows.length;i++){
-      const matches=compiled.map(({rule,column,nullable,literal,key})=>{
+      const matches=compiled.map(({rule,column,nullable,range,literal,key,upper,upperKey})=>{
         const value=data.get(column.key)![i];if(nullable)return rule.operator==='null'?value===null:value!==null;if(value===null)return false;
         // 包含及其否定按最坏匹配量计费；前后缀按原文和条件长度计费，共用同一工作预算。
         const size=typeof value==='string'?value.length:1,input=typeof literal==='string'?literal.length:1;
         const containing=rule.operator==='contains'||rule.operator==='notContains',starting=rule.operator==='startsWith'||rule.operator==='notStartsWith',ending=rule.operator==='endsWith'||rule.operator==='notEndsWith';
-        textWork+=containing?(input?Math.max(1,size)*input:1):size+input;if(textWork>queryResultFilterLimits.textWork)throw Error(text.budget);
+        textWork+=containing?(input?Math.max(1,size)*input:1):size+input;
+        if(range)textWork+=size+(typeof upper==='string'?upper.length:1);
+        if(textWork>queryResultFilterLimits.textWork)throw Error(text.budget);
         if(containing||starting||ending){
           if(typeof value!=='string'||typeof literal!=='string')throw Error(text.value);
           // 只按UTF-16原文匹配；否定仍排除前面已处理的NULL，不解析正则或SQL通配符。
@@ -83,6 +99,10 @@ export class QueryResultFilter {
           return rule.operator==='notContains'||rule.operator==='notStartsWith'||rule.operator==='notEndsWith'?!matched:matched;
         }
         const order=compareQueryResultFilterKeys(prepared.get(column.key)![i],key);
+        if(range){
+          const upperOrder=compareQueryResultFilterKeys(prepared.get(column.key)![i],upperKey);
+          return rule.operator==='between'?order>=0&&upperOrder<=0:order<0||upperOrder>0;
+        }
         return rule.operator==='eq'||rule.operator==='empty'?order===0:rule.operator==='ne'||rule.operator==='notEmpty'?order!==0:rule.operator==='gt'?order>0:rule.operator==='gte'?order>=0:rule.operator==='lt'?order<0:order<=0;
       });
       if(!compiled.length||(mode==='AND'?matches.every(Boolean):matches.some(Boolean)))indices.push(i);
