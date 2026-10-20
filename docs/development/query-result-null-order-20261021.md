@@ -25,3 +25,11 @@ ResultsGrid从RDG列头回传规则时，按同一内部列key保留已存在规
 修正提交4dff1f9645d5779d05bc189eb3004416d41d01f3，产品树与e251a0c同为55f6b63d3d71ecc77180bb16bf7cc6c56f58ce2a。首次推送明确网络失败，Root核远端仍为e251后才重试，成功推送。[后继CI39474099136](https://github.com/zhao-yc/DBArk/actions/runs/39474099136)的job118805455808类型通过，完整11249通过／1失败／10平台跳过，206.91秒，构建跳过。原两项控件LAST及后序复制／导出断言已通过；唯一失败是新增端口用例没有建立RAM桥接，公共afterEach的flushSettings收到“请通过DBArk桌面应用打开工作台”。只给该用例补正常mount准备，不放宽公共收尾或原期待。后继准确提交的完整检查仍待执行，不将定向行为转绿写作全套通过。
 
 固定3394d07f55d433ba5ad3ddf165bc9bb710ab03c5的[第三轮CI39474946525](https://github.com/zhao-yc/DBArk/actions/runs/39474946525)已成功，Root直接读取job118808371453原日志：类型、586文件11250项通过／10平台跳过、构建全部通过，单元141.54秒，Vite24.64秒。原控件文件92项及NULL控制器18项已包含在完整计数中，不能另加；产品树与前两轮相同。桌面、剪贴板和发布job跳过，Windows、真实GUI、安装及macOS新能力仍未验。准确范围见[验收记录](../../tests/integration/acceptance-query-result-null-order-3394d07-20261021.md)，当前不合入main，暂不发布。
+
+## 独立真实窗口用例准备
+
+新增 `query-result-nulls.spec.ts`／`query-result-nulls-live.ts` 及人工常量期待 `queryResultNullsUi.ts`。列表或关闭态不加载实库，需同时开启integration、columns及NULL专项三门，仍绑定同一200／13384准确UUID、RAM凭据、无数据库／SSH／TLS及本例独占输出目录。专项开关漂移也永久停链。
+
+一次常量SELECT包含三行和八列，不读表或存储函数，不创建资源或写数据。原生控件检查文本空串与NULL字样、无符号大数、精确小数、微秒日期和负TIME的四种方向／NULL位置组合；双NULL通过第二优先级，Ctrl方向切换和规则移动保留各列选项，恢复默认和原序独立验证。通过既有列布局每次只显示ID和本轮列，不修改分辨率或依赖横向虚拟列挂载；最终恢复八列、筛选原行1/3，合成页内复制及两格式文件均按独立字面期待验证。
+
+沿用原120秒、零重试、准确owner／native／stream、唯一SQL／两文件任务及严格正常收尾。trace／截图／视频关闭，避免认证表单入档；复制只使用DataTransfer，不是系统剪贴板。当前只是源码准备及静态审阅，新增测试未执行，不继承3394d07的类型／完整计数。须由Root在前序通配队列终核后派发准确后继提交，尚未启动此GUI。
