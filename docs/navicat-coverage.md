@@ -2,6 +2,8 @@
 
 ## 当前开发安排（2026-10-21）
 
+main准确c40a97e的[三平台原生CI及原件独立核对](../tests/integration/acceptance-main-c40a97e-ci-20261021.md)已闭合：Linux类型／587文件11275通过、10平台跳过／构建成功；Windows x64、macOS arm64及x64的源码／同次实际安装legacy均各80通过、316条件跳过。每个平台每阶段六专项、12正常owner及原report／accepted／四文件proof已逐份核对，四ZIP长度／SHA／CRC一致；ARM两代显示租约的实测几何和退出前恢复通过，原receipt缺失／false字段不回填。本轮仅离线源码及CI安装范围，不转作新NULL／快捷键的macOS或安装版私网GUI，后继1f8失败另线保留；不增加完整工作包或发行计数，暂不发布。
+
 多列NULL位置与结果筛选快捷键组合已按main交付源码。固定3fedb46通过Linux类型／587文件11275通过、10平台跳过／构建，Windows类型／301定向／新构建、1项实库整例、Python独立CSV／JSON读回及完整587文件11284通过／1项POSIX跳过均通过；574源码／109构建、Git、原进程及30份封存终核通过，见[本批准确验收](../tests/integration/acceptance-query-result-sort-filter-3fedb46-20261021.md)。独立基线ab27fb1运行与测试输入一致，不混入后继文本排序大小写或复制条件；旧失败和元数据缺失保留。新安装、macOS及系统输入未验，不增加完整工作包或发行计数，暂不发布。下段保留NULL候选的历史检查点。
 
 新增[每列NULL排序位置开发候选](development/query-result-null-order-20261021.md)：多列优先级可逐列选择默认／NULL在前／NULL在后，显式位置独立于方向，双NULL继续比较下一列，精度、原行及旧回调保护保持。e251a0c的Linux类型通过，11247单元通过／2个新RAM控件断言失败／10平台跳过，原日志保留。已定位测试文件的单选互斥端口缺失，4dff1f9修端口后原控件及复制／导出已通过，完整11249通过／1新增端口用例收尾失败／10平台跳过；3394d07仅补该用例正常准备，保留原期待及产品树，后继Linux类型／586文件11250项／构建全部通过，10平台跳过，见[准确范围](../tests/integration/acceptance-query-result-null-order-3394d07-20261021.md)。通配源码已按main交付；本候选窗口用例fcc8530另通过Linux类型／586文件11250单元／构建，10平台跳过，Windows类型／276定向／新构建通过；首轮窗口止于活动草稿联合预检、尚未执行App查询，原因待只读诊断，读回和完整回归未启动，见[本轮准确记录](../tests/integration/acceptance-query-result-nulls-fcc8530-20261021.md)；新窗口、安装及macOS未验，尚未合入main，暂不发布，不增加完整工作包计数。
