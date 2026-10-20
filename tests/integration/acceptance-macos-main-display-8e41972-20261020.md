@@ -29,6 +29,21 @@
 
 8e41972的首次push检查39394246346已核原日志：类型／577文件／11071通过／10原win32条件跳过／构建成功，216.95秒，Mac纯协议38项通过。原生39395258185的Windows x64、arm64和checks job成功，但整轮因Intel Mac legacy源码失败而失败，发布job跳过，未重跑。
 
-Intel原job `118536307560` 日志为79通过、314跳过、1失败；`tests/e2e/explain-view.spec.ts:32` 的“计划结果表格”点击等待visible／enabled／stable超时30秒。原因未确认，未修改该组件或放宽测试；artifact 12252865232下载未完成，不将其SHA或trace计为已独立核对。后续须读原trace定位，保留旧失败。
+Intel原job `118536307560` 日志为79通过、314跳过、1失败；`tests/e2e/explain-view.spec.ts:32` 的“计划结果表格”点击等待visible／enabled／stable超时30秒。原因未确认，未修改该组件或放宽测试。artifact 12252865232后续已独立下载核对，只有runner trace，详见[原件及诊断](../../docs/development/explain-native-stability-20261020.md)，保留旧失败。
 
-本批只交付已验ARM显示接线，不代表三平台全功能、私网实库、系统输入、签名／公证或发行完成。main实际上下文的新CI仍须单独读回，不继承候选ref的运行身份；旧两轮main分栏失败不追认为通过。暂不发布。
+本批只交付已验ARM显示接线，不代表三平台全功能、私网实库、系统输入、签名／公证或发行完成。main实际上下文单独读回见下，不继承候选ref的运行身份；旧两轮main分栏失败不追认为通过。暂不发布。
+
+## 后续准确main上下文
+
+main `43c8bf648373c098d4477545c8fa8c206a4c51b7` 的[CI39400232119](https://github.com/zhao-yc/DBArk/actions/runs/39400232119) ARM原件已另行下载并独立复算，不沿用8e41972运行身份：
+
+| 原artifact | 字节 | SHA256 |
+| --- | --- | --- |
+| 12255427200，ARM原件 | 7888187 | `95d35361e000a44946ae25c698a95c522e1d50a803d4b2c76adc010fde354d4b` |
+| 12255731787，模式租约 | 10621 | `73dcae87e3d6e1c8591bde3ff1da87fe950e4eb461a562fcb6686e0939112045` |
+
+两个原批准均绑定准确main、该run及darwin arm64：源码批准SHA256 `19f6a31618c703854390763bd69a2e03e7c334ab7ba5a754839a0a015f7a1312`，安装批准 `52e22f5b73417b07c22ce9df83cbc567243a0076d0afa8b16a58edb897cce9ed`，后者绑定前者。两阶段各六项单次通过、各12正常owner，共24，错误和重试均0；SQL执行和系统剪贴板均0。
+
+源码及安装实际几何均1400×1000／左栏480／SQL区1000／结果区1000；viewport、原生窗口及client bounds一致，workArea 1600×1091、scale=1，完整窗口在其内。两段租约accepted、keeper退出0且无fault；源码197帧、安装97帧，序号连续、nonce一致、无failed，末帧均恢复原模式3，恢复观察发生在keeper退出前。没有宣称退出后再观察，也未在开发机独立安装该DMG。
+
+同次Intel源码／安装legacy各80通过、314跳过；Windows查找替换初始化失败，整轮仍失败。新单次通过不证明旧Intel偶发根因已修复，旧main失败仍保留，暂不发布。
