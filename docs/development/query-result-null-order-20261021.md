@@ -23,3 +23,5 @@ ResultsGrid从RDG列头回传规则时，按同一内部列key保留已存在规
 静态定位发现本文件内存option把selected作为普通字段，React单选更新只选中新项，依赖浏览器自动取消旧项；本端口留下原默认项与新项同时selected，select.value读取第一个空项。只补本测试文件的单选互斥端口，另加端口反例；原两项LAST期待、排序、复制和导出断言不改，产品源码不改。修正后类型／完整单元／构建尚待新CI，不把夹具修正视为已通过或真实浏览器验收。
 
 修正提交4dff1f9645d5779d05bc189eb3004416d41d01f3，产品树与e251a0c同为55f6b63d3d71ecc77180bb16bf7cc6c56f58ce2a。首次推送明确网络失败，Root核远端仍为e251后才重试，成功推送。[后继CI39474099136](https://github.com/zhao-yc/DBArk/actions/runs/39474099136)的job118805455808类型通过，完整11249通过／1失败／10平台跳过，206.91秒，构建跳过。原两项控件LAST及后序复制／导出断言已通过；唯一失败是新增端口用例没有建立RAM桥接，公共afterEach的flushSettings收到“请通过DBArk桌面应用打开工作台”。只给该用例补正常mount准备，不放宽公共收尾或原期待。后继准确提交的完整检查仍待执行，不将定向行为转绿写作全套通过。
+
+固定3394d07f55d433ba5ad3ddf165bc9bb710ab03c5的[第三轮CI39474946525](https://github.com/zhao-yc/DBArk/actions/runs/39474946525)已成功，Root直接读取job118808371453原日志：类型、586文件11250项通过／10平台跳过、构建全部通过，单元141.54秒，Vite24.64秒。原控件文件92项及NULL控制器18项已包含在完整计数中，不能另加；产品树与前两轮相同。桌面、剪贴板和发布job跳过，Windows、真实GUI、安装及macOS新能力仍未验。准确范围见[验收记录](../../tests/integration/acceptance-query-result-null-order-3394d07-20261021.md)，当前不合入main，暂不发布。
