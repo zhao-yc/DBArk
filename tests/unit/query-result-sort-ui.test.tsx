@@ -162,7 +162,7 @@ async function addMemberRule(column:string,values:readonly string[],operator='in
 }
 it('多值面板与排序、复制、导出共用精确原行，重开保留独立成员',async()=>{
   await mountMulti();await click(filterText.open);await addMemberRule('id',['9007199254740993','2']);await click(filterText.apply);await headerAction('group');await headerAction('id',{ctrlKey:true});expect(grid().rows).toEqual([original.rows[2],original.rows[1]]);
-  await click(filterText.open);expect(document.querySelector('[aria-label="'+filterText.member(1,1)+'"]')!.value).toBe('9007199254740993');expect(document.querySelector('[aria-label="'+filterText.member(1,2)+'"]')!.value).toBe('2');await click(filterText.cancel);
+  await click(filterText.open);expect(document.querySelector('[aria-label="'+filterText.member(1,1)+'"]')!.value).toBe('9007199254740993');expect(document.querySelector('[aria-label="'+filterText.member(1,2)+'"]')!.value).toBe('2');await setFilterField(filterText.member(1,1),'1');await click(filterText.cancel);expect(grid().rows).toEqual([original.rows[2],original.rows[1]]);await click(filterText.open);expect(document.querySelector('[aria-label="'+filterText.member(1,1)+'"]')!.value).toBe('9007199254740993');await click(filterText.cancel);
   await act(async()=>grid().onSelectedRowsChange(new Set([0,1])));expect(JSON.parse(copy().get('application/x-dbark-cells')!).rows.map((row:any)=>row[1])).toEqual(['2','9007199254740993']);await click(zh.resultExport.selectedTitle);await click(zh.resultExport.chooseFile);await click(zh.resultExport.start);expect(exports[0].result.rows).toEqual([original.rows[2],original.rows[1]]);expect(commands.filter(c=>c==='query.execute')).toHaveLength(1);
 });
 it('成员移除和切换操作撤销旧输入，重新进入列表不复活隐藏成员',async()=>{

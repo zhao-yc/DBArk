@@ -167,7 +167,7 @@ describe('多值成员按原类型和预算匹配',()=>{
   ] as [string,CellValue[],string][])('%s成员复用精确比较而非浮点或日期转换',(type,values,input)=>{
     const f=fixture(type,values),inside=f.apply([members([input,input])]);expect(inside.sourceIndices).toEqual([1]);expect(inside.result.rows[0]).toBe(f.source.rows[1]);expect(f.apply([members([input],'notIn')]).sourceIndices).toEqual([0]);
   });
-  it.each([undefined,null,[],['1',2],new Array(2)] as unknown[])('非法成员%j完整拒绝并保留上次视图',values=>{
+  it.each([[undefined],[null],[[]],[['1',2]],[new Array(2)]] as [unknown][])('非法成员%j完整拒绝并保留上次视图',values=>{
     const f=fixture('BIGINT',['1','2']),before=f.apply([rule('eq','1')]);expect(()=>f.apply([{...members([]),values} as QueryResultFilterRule])).toThrow(text.invalid);expect(f.filter.view(f.binding)).toBe(before);
   });
   it('没有行或OR已满足也验证每个成员，不提前采用成功项',()=>{
@@ -178,6 +178,8 @@ describe('多值成员按原类型和预算匹配',()=>{
     const f=fixture(),getter=vi.fn(()=> 'a'),values=['a'];Object.defineProperty(values,0,{get:getter});expect(()=>f.apply([members(values)])).toThrow(text.invalid);expect(getter).not.toHaveBeenCalled();
     const huge=new Array(129);Object.defineProperty(huge,0,{get:getter});expect(()=>f.apply([members(huge)])).toThrow(text.budget);expect(getter).not.toHaveBeenCalled();
     expect(()=>f.apply([{...rule('eq','a'),values:['a']}])).toThrow(text.invalid);expect(()=>f.apply([{...members(['a']),value:'隐藏单值'}])).toThrow(text.invalid);expect(()=>f.apply([{...members(['a']),upper:'隐藏上限'}])).toThrow(text.invalid);
+    const raw=['a'],iterator=vi.fn(()=>{throw Error('不能读取调用方迭代器');});Object.defineProperty(raw,Symbol.iterator,{value:iterator});expect(f.apply([members(raw)]).sourceIndices).toEqual([0]);expect(iterator).not.toHaveBeenCalled();
+    const before=f.filter.view(f.binding),changing=new Proxy(['a'],{getOwnPropertyDescriptor(target,key){if(key==='0')target.push('b');return Reflect.getOwnPropertyDescriptor(target,key);}});expect(()=>f.apply([members(changing)])).toThrow(text.invalid);expect(f.filter.view(f.binding)).toBe(before);
   });
   it('每成员计入原行比较及共同字符工作预算，重复和早命中不绕过上限',()=>{
     const f=fixture('BIGINT',Array.from({length:100000},()=>null)),boundary=f.apply([members(Array(20).fill('1'))]);expect(boundary.result.rows).toEqual([]);expect(()=>f.apply([members(Array(21).fill('1'))])).toThrow(text.budget);expect(f.filter.view(f.binding)).toBe(boundary);

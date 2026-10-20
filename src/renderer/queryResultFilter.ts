@@ -62,9 +62,11 @@ export class QueryResultFilter {
     // 成员数先受硬上限约束再读取，每项必须是自有数据属性；稀疏值或访问器不能跳过验证。
     const memberSets=rules.map(rule=>{
       if(!queryResultFilterNeedsValues(rule.operator)){if(rule.values!==undefined)throw Error(text.invalid);return undefined;}
-      if(!Array.isArray(rule.values)||!rule.values.length)throw Error(text.invalid);if(rule.values.length>queryResultFilterLimits.members)throw Error(text.budget);
+      const source=rule.values;if(!Array.isArray(source))throw Error(text.invalid);const count=source.length;
+      if(!Number.isSafeInteger(count)||count<1)throw Error(text.invalid);if(count>queryResultFilterLimits.members)throw Error(text.budget);
       const values:string[]=[];
-      for(let index=0;index<rule.values.length;index++){const item=Object.getOwnPropertyDescriptor(rule.values,index);if(!item||!('value'in item)||typeof item.value!=='string')throw Error(text.invalid);values.push(item.value);}
+      for(let index=0;index<count;index++){const item=Object.getOwnPropertyDescriptor(source,index);if(!item||!('value'in item)||typeof item.value!=='string')throw Error(text.invalid);values.push(item.value);}
+      if(source.length!==count)throw Error(text.invalid);
       return values;
     });
     const comparisons=rules.reduce((sum,rule,index)=>sum+(memberSets[index]?.length??(queryResultFilterNeedsUpper(rule.operator)?2:1)),0);
