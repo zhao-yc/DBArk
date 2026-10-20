@@ -1,6 +1,6 @@
 # 已返回查询结果的多列排序
 
-新开发增量为[每列NULL位置](development/query-result-null-order-20261021.md)：优先级列表可独立选择默认／在前／在后，显式位置不随升降序变化，两个NULL继续比较下一列。固定3394d07已通过Linux类型／586文件11250单元／构建，10平台跳过；原两轮测试准备失败保留。Windows、实际窗口与新安装尚未验，尚未合入main，暂不发布。
+新增[每列NULL位置](development/query-result-null-order-20261021.md)：优先级列表可独立选择默认／在前／在后，显式位置不随升降序变化，两个NULL继续比较下一列。与筛选快捷键组合的固定3fedb46已通过Linux类型／11275单元／构建、Windows类型／301定向／新构建、一次实库窗口、Python文件读回及完整11284通过／1项POSIX跳过，见[组合验收](../tests/integration/acceptance-query-result-sort-filter-3fedb46-20261021.md)。按独立基线ab27fb1交付main，原准备失败和旧窗口失败保留；新安装及macOS未验，不包含后继文本排序大小写选项，暂不发布。
 
 后继固定74c59bf修复短窗口的表头不可点击：网格另留96像素，复制、查找及状态栏按实际高度额外计费。Windows原实库整例的多列排序、大小写及分组筛选、复制和CSV／JSON导出通过，独立文件读回及完整11125通过、1平台跳过，见[本批验收](../tests/integration/acceptance-query-result-case-74c59bf-20261020.md)。按main交付源码；安装、macOS和本组合百万行未外推，暂不发布。
 
