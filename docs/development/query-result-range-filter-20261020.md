@@ -41,3 +41,5 @@ node scripts/check-local.mjs --build tests/unit/query-result-filter.test.ts test
 在既有 `query-result-organize-live.ts` 追加五组大整数／小数双端点（含相等端点）和颠倒端点纠正步骤。原七种文本条件、空结果、多列优先级、连续CSV／JSON、一次查询／两文件审计及正常退出断言保留；仍是一个复合客户端用例，不能按断言数计作多项安装验收。未改原SQL、输出期望、shared helper、desktop fixture、120秒期限或零重试。
 
 该增量仅为后续准备，不改变已排队固定5b1c468的RAM验收范围。应先在5b1c468完成原七条件专属实库路径并核资源终态，再固定包含本增量的SHA做一次类型检查和扩展用例；产品文件与5b1c468相同，可复用其构建但须逐项核哈希。尚未类型检查或执行；不声称新增日期时间区间获得GUI／实库证据，原常量SQL没有日期时间列。
+
+后续远端连接状态列表明确WIN11-TEST不可访问，尚未读回排队的归一化SSH／Docker元数据终态，没有重跑测试或把观察失败记成任务终止。[固定队列与main接续记录](query-result-vm-main-handoff-20261020.md)汇总已验来源、恢复顺序及仅静态完成的合入检查；main尚未合入。
