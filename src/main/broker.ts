@@ -34,6 +34,12 @@ export class EngineBroker {
 
   /** 以独立编号关联响应；发送失败立即清理等待记录。 */
   request(command: string, input: unknown): Promise<any> {
+    // 冷引擎没有可失效的会话、缓存或任务；保存本地配置不应为检查空状态加载驱动进程。
+    // 仅认可主进程提供的同一连接身份；已有进程、退出中或仍有等待请求时继续走真实引擎屏障。
+    if (command === '__connections.prepareSave' && !this.child && !this.stopping && !this.closePending && !this.pending.size) {
+      const candidate = input as { id?: unknown; profile?: { id?: unknown } } | null;
+      if (candidate && typeof candidate.id === 'string' && candidate.id && candidate.profile?.id === candidate.id) return Promise.resolve();
+    }
     this.start();
     const id = randomUUID();
     return new Promise((resolve, reject) => {
