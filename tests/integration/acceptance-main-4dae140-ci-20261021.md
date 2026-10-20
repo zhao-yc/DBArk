@@ -36,3 +36,5 @@ Windows helper安装资源摘要475b78748fcf1f9990c58d5926792ae978de71d1962f2e72
 新增17项RAM用例检查失败分支、原时钟、失效后输入恢复仍拒绝、状态getter读取次数、成功路径属性读取次序和失败短路。静态审查及 `git diff --check` 通过；准确72c0950的[Linux CI39483984163](https://github.com/zhao-yc/DBArk/actions/runs/39483984163)、job118839526773已成功，Root实际读取原日志：类型／586文件11246项通过、10平台跳过／构建通过，单元235.59秒，新增17项全部通过，Vite35.72秒。本机未运行测试或桌面。该分支的原生、剪贴板和发布job均跳过，不能作为Windows／macOS实际守卫失败诊断或新安装验收。
 
 该候选不解释旧Windows失败，也不恢复或清理旧profile。NULL排序窗口准备失败仍由WIN11-TEST在固定fcc8530现场独立取证，不切换其提交、不重复原队列；原失败断言与期限不变。暂不发布。
+
+守卫诊断按main交付f505f6b413d991dba8a383d97dc2f184fa43be82后，[原生CI39484974797](https://github.com/zhao-yc/DBArk/actions/runs/39484974797)的Linux job118842911856另已通过。Root实际读取原日志：类型、586文件11246通过／10平台跳过、构建通过，单元223.81秒，Vite32.37秒；17项诊断测试已包含在完整计数中。产品树仍675ffa2320aba0f55e21ccef2b2eee349531ff9c。Windows、ARM及Intel原生job尚在执行，此处不记为全平台通过，原4dae安装失败不被覆盖。
