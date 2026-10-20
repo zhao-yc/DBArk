@@ -5,8 +5,8 @@ export const queryResultSortLimits = { rows: 100000, columns: 1024, cells: 20000
 type Kind = 'integer' | 'decimal' | 'float' | 'text' | 'date' | 'datetime' | 'time';
 type Exact = { negative: boolean; whole: string; fraction: string };
 type Key = null | number | string | Exact;
-/** 仅本地快照使用的空值位置；不扩展服务端ORDER BY或共享IPC排序合同。 */
-export type QueryResultSortRule = SortRule & { nulls?: 'FIRST' | 'LAST' };
+/** 仅本地快照使用的空值位置和文本选项；不扩展服务端ORDER BY或共享IPC排序合同。 */
+export type QueryResultSortRule = SortRule & { nulls?: 'FIRST' | 'LAST'; ignoreCase?: boolean };
 export interface QueryResultSortView { readonly result: QueryResult; readonly sourceIndices: readonly number[]; readonly rules: readonly QueryResultSortRule[]; }
 export interface QueryResultSortBinding {
   readonly source: QueryResult; readonly rows: QueryResult['rows']; readonly rowRefs: readonly QueryResult['rows'][number][];
@@ -30,6 +30,8 @@ function kind(type: string): Kind | undefined {
   if (base === 'DATETIME' || base === 'TIMESTAMP') return 'datetime';
   if (base === 'TIME') return 'time';
 }
+/** 仅明确文本类型可选择大小写比较；不从单元格外观或列名猜测。 */
+export function queryResultSortSupportsIgnoreCase(column: ResultColumn): boolean { return kind(column.type) === 'text'; }
 /** 精确十进制按数字文本比较；负零与前导/尾随零归一，但不改原值。 */
 function exact(value: string, integer: boolean): Exact {
   if (!(integer ? /^[+-]?\d+$/ : /^[+-]?\d+(?:\.\d+)?$/).test(value)) throw Error(text.value);
@@ -158,12 +160,20 @@ export class QueryResultSort {
       const column=binding.visible.find(c=>c.key===rule.column),type=column&&kind(column.type);
       if (!column || !type || !['ASC','DESC'].includes(rule.direction)) throw Error(text.type);
       if (rule.nulls !== undefined && rule.nulls !== 'FIRST' && rule.nulls !== 'LAST') throw Error(text.nullsInvalid);
+      if (rule.ignoreCase !== undefined && (typeof rule.ignoreCase !== 'boolean' || type !== 'text')) throw Error(text.caseInvalid);
       const reason=binding.reasons.get(column.key); if (reason) throw Error(reason);
-      return {column,type,direction:rule.direction,nulls:rule.nulls};
+      return {column,type,direction:rule.direction,nulls:rule.nulls,ignoreCase:rule.ignoreCase};
     });
     let units=0;
     const values=admitted.map(({column})=>({column,values:binding.rows.map(row=>{const value=cell(row,column);units+=typeof value==='string'?value.length:1;if(units>queryResultSortLimits.units)throw Error(text.budget);return value;})}));
-    const keys=admitted.map(({column,type},i)=>values[i].values.map(value=>key(value,type,column.type.trim().toUpperCase().endsWith(' UNSIGNED')))), sourceIndices=binding.rows.map((_,i)=>i);
+    const keys=admitted.map(({column,type,ignoreCase},i)=>values[i].values.map(value=>{
+      const parsed=key(value,type,column.type.trim().toUpperCase().endsWith(' UNSIGNED'));
+      // 只转换控制器自有文本键；原文与转换结果共同消耗原预算，NULL与其它类型不参与转换。
+      if(ignoreCase&&typeof parsed==='string'){
+        const folded=parsed.toLowerCase();units+=folded.length;if(units>queryResultSortLimits.units)throw Error(text.budget);return folded;
+      }
+      return parsed;
+    })), sourceIndices=binding.rows.map((_,i)=>i);
     sourceIndices.sort((a,b)=>{
       for(let i=0;i<admitted.length;i++){
         const left=keys[i][a],right=keys[i][b],rule=admitted[i];

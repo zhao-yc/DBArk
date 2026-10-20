@@ -35,10 +35,10 @@ export function ResultsGrid({ columns, rows, onActiveRowChange, onActiveRowIndex
   useEffect(()=>{alive.current=true;return()=>{alive.current=false;currentScope.current=null;};},[]);
   /** 全部网格回调核同一准确scope及父接纳门，不能在切换／模态／卸载后复制旧数据。 */
   function actionCurrent():boolean {if(!alive.current||currentScope.current!==scope||gridRevisionRef.current!==gridRevision)return false;try{return !isCurrent||isCurrent()===true;}catch{return false;}}
-  /** RDG只回传列和方向；同一活列继承NULL位置，删除后重加则回到默认。 */
+  /** RDG只回传列和方向；同一活列继承NULL位置及大小写选项，删除后重加则回到默认。 */
   function changeSortColumns(next:readonly {columnKey:string;direction:'ASC'|'DESC'}[]):void{
     if(!actionCurrent())return;
-    onSortChange?.(next.map(rule=>{const nulls=sort?.find(previous=>previous.column===rule.columnKey)?.nulls;return{column:rule.columnKey,direction:rule.direction,...(nulls?{nulls}:{})};}));
+    onSortChange?.(next.map(rule=>{const previous=sort?.find(previous=>previous.column===rule.columnKey);return{column:rule.columnKey,direction:rule.direction,...(previous?.nulls?{nulls:previous.nulls}:{}),...(previous?.ignoreCase!==undefined?{ignoreCase:previous.ignoreCase}:{})};}));
   }
   const gridRef = useRef<DataGridHandle | null>(null);
   const [findHit, setFindHit] = useState<{ scope: typeof scope; hit: QueryResultFindHit }>();

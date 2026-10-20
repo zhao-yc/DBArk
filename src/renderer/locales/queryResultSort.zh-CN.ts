@@ -1,5 +1,5 @@
 export const queryResultSortZh = {
-  scope: '仅排序当前已返回快照，不重发 SQL；文本按 UTF-16 代码单元、时间按已返回字段比较，不采用数据库排序规则。',
+  scope: '仅排序当前已返回快照，不重发 SQL；文本默认区分大小写，按 UTF-16 代码单元比较；时间按已返回字段比较，不采用数据库排序规则。',
   truncated: '结果已截断，排序不包含未返回记录。',
   keyboard: '点击列头或按 Enter／空格依次升序、降序、清除；按住 Ctrl／Cmd 可追加、切换或移除该列。规则按所列优先级依次比较。',
   selection: '排序变化会清空旧勾选、查找及行详情。',
@@ -11,6 +11,10 @@ export const queryResultSortZh = {
   nullsDefault: 'NULL默认位置', nullsFirst: 'NULL在前', nullsLast: 'NULL在后',
   nullsHint: '默认升序NULL在前、降序在后；显式位置不随升降序变化，仅作用于当前已返回结果。空文本不是NULL。',
   nullsInvalid: 'NULL位置必须为默认、在前或在后，原排序保持。',
+  ignoreCase: (order: number, name: string) => `第${order}优先级“${name}”忽略大小写`,
+  ignoreCaseLabel: '忽略大小写',
+  caseHint: '仅此文本排序键采用无区域设置的Unicode小写映射，再按UTF-16代码单元比较；不去重音或规范化，不采用数据库排序规则，不改变原文。转换结果也计入原文本预算。',
+  caseInvalid: '大小写选项必须是文本列的布尔值，原排序保持。',
   remove: (order: number, name: string) => `移除第${order}优先级“${name}”`,
   earlier: (order: number, name: string) => `提高第${order}优先级“${name}”`,
   later: (order: number, name: string) => `降低第${order}优先级“${name}”`,
