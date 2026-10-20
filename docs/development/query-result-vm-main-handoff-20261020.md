@@ -2,9 +2,9 @@
 
 ## 当前状态
 
-2026-10-20，开发普通克隆为 `D:\svn\DBArk\.cache\snippet-transfer-20261020`，任务分支 `codex/query-result-range-filter-20261020`；当前固定产品候选为已推送的3a85b58，未合入main、未发布。后续按用户最新规则：通过本批必要验收后合入并推送main，任务分支只是过程；不另建开发分支，不使用工作树。
+2026-10-20，开发普通克隆为 `D:\svn\DBArk\.cache\snippet-transfer-20261020`，任务分支 `codex/query-result-range-filter-20261020`；固定产品3a85b58及仅文档后继a980343已完成必要验收，按用户规则快进main交付并记录[原件范围](../../tests/integration/acceptance-query-result-organize-3a85b58-20261020.md)，暂不发布。后续候选仍在原开发分支验证，不另建开发分支或使用工作树。
 
-当前3a85b58的Ubuntu首次CI已直接读回运行／job／步骤和原解码日志：类型、576文件／11012通过／10原平台条件跳过及构建成功，桌面与发布job跳过。[准确验证范围](new-query-directory-lifetime-20261020.md)保留来源，不替代Windows界面或实库。WIN11-TEST最新条件队列已送达，最近可读回合 `01a157fa-e471-7c00-8a42-ad81ffec91a8` 当时仍在收尾7216ee1阶段；随后read／wait及列表报告该主机不可访问，3a85b58是否已经执行尚未确认，原队列保留，不重复启动。
+当前3a85b58的Ubuntu首次CI已直接读回运行／job／步骤和原解码日志：类型、576文件／11012通过／10原平台条件跳过及构建成功，桌面与发布job跳过。此前远程观察中断没有重复启动；现已读回同一队列回合 `01a157ff-2d2b-7412-a5f7-2dcc7c435c54` 的真实终态及后续只读原件清单：Windows289定向／新构建、1项复合实库GUI、独立读回和完整11021通过／1平台跳过，严格资源收尾通过。平台和范围分别保留，不将旧两轮失败改写为通过。
 
 唯一测试会话为WIN11-TEST的“dbark测试”，线程 `01a156d5-b3bf-75f2-a9e8-1c8d1a55effc`，主机 `remote-control:env_e_6ad61bed56648326b45447a0681db5d0`。此前read／wait失败，连接列表曾记录该远端 `thread_list_unavailable`；用户要求重试后，已重新读回原回合 `01a15767-5769-7f22-92f2-74142fd98cd4`，确认完成、会话空闲。
 
