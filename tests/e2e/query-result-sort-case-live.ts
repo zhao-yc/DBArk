@@ -91,9 +91,24 @@ export function registerQueryResultSortCaseUi(binding:QueryResultColumnsUiTarget
    await observe(()=>heads.nth(1).click());await observe(()=>expect(caseControl(1)).toHaveCount(0));await observe(()=>expect.poll(ids).toEqual(['1','2','3','4','5','6','7']));
    await observe(()=>heads.nth(1).click());await observe(()=>expect(caseControl(1)).not.toBeChecked());await observe(()=>expect(tab.getByRole('combobox',{name:sortText.nulls(1,'text_value'),exact:true})).toHaveValue(''));await observe(()=>expect.poll(ids).toEqual(['4','5','3','2','1','7','6']));
    await observe(()=>tab.getByRole('button',{name:sortText.clear,exact:true}).click());await observe(()=>expect.poll(ids).toEqual(['1','2','3','4','5','6','7']));
-   // 导出四个原文：a/A与İ/i+组合点；按明确成员选择，不从排序器生成文件期待。
-   await columns([0,1,2,3,4,5,6,7]);await observe(()=>tab.getByRole('button',{name:filterText.open,exact:true}).click());
+   await columns([0,1,2,3,4,5,6,7]);
    const panel=tab.getByRole('region',{name:filterText.title,exact:true});
+   // 手写微秒边界：日期上端点及负TIME下端点包含行2，闭区间之外只含行3，均排除NULL。
+   for(const [column,lower,upper] of [[4,'2026-10-21 12:00:00.000000','2026-10-21 12:00:00.000001'],[5,'-100:00:00.000001','-100:00:00.000000']] as const){
+    await observe(()=>tab.getByRole('button',{name:filterText.open,exact:true}).click());
+    if(column===4)await observe(()=>panel.getByRole('button',{name:filterText.add,exact:true}).click());
+    await observe(()=>panel.getByRole('combobox',{name:filterText.column+' 1',exact:true}).selectOption({index:column}));
+    await observe(()=>panel.getByRole('combobox',{name:filterText.operator+' 1',exact:true}).selectOption('between'));
+    await observe(()=>panel.getByRole('textbox',{name:filterText.lower+' 1',exact:true}).fill(lower));await observe(()=>panel.getByRole('textbox',{name:filterText.upper+' 1',exact:true}).fill(upper));
+    await observe(()=>panel.getByRole('button',{name:filterText.apply,exact:true}).click());await observe(()=>expect.poll(ids).toEqual(['2']));
+    await observe(()=>tab.getByRole('button',{name:filterText.open,exact:true}).click());
+    await observe(()=>panel.getByRole('combobox',{name:filterText.operator+' 1',exact:true}).selectOption('notBetween'));
+    await observe(()=>expect(panel.getByRole('textbox',{name:filterText.lower+' 1',exact:true})).toHaveValue(lower));await observe(()=>expect(panel.getByRole('textbox',{name:filterText.upper+' 1',exact:true})).toHaveValue(upper));
+    await observe(()=>panel.getByRole('button',{name:filterText.apply,exact:true}).click());await observe(()=>expect.poll(ids).toEqual(['3']));
+   }
+   await observe(()=>tab.getByRole('button',{name:filterText.clear,exact:true}).click());await observe(()=>expect.poll(ids).toEqual(['1','2','3','4','5','6','7']));
+   // 导出四个原文：a/A与İ/i+组合点；按明确成员选择，不从排序器生成文件期待。
+   await observe(()=>tab.getByRole('button',{name:filterText.open,exact:true}).click());
    await observe(()=>panel.getByRole('button',{name:filterText.add,exact:true}).click());
    await observe(()=>panel.getByRole('combobox',{name:filterText.column+' 1',exact:true}).selectOption({index:0}));
    await observe(()=>panel.getByRole('combobox',{name:filterText.operator+' 1',exact:true}).selectOption('in'));
