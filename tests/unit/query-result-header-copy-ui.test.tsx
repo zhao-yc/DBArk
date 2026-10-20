@@ -11,6 +11,7 @@ import { zh } from '../../src/renderer/locales/zh-CN';
 import { validateResultExportData } from '../../src/shared/resultExport';
 import { queryResultCopyZh as copyText } from '../../src/renderer/locales/queryResultCopy.zh-CN';
 import { queryResultSortZh as sortText } from '../../src/renderer/locales/queryResultSort.zh-CN';
+import { queryResultFilterZh as filterText } from '../../src/renderer/locales/queryResultFilter.zh-CN';
 const grids=vi.hoisted(()=>({all:[] as any[]}));
 // 只替换Monaco和虚拟网格的外界渲染端口，真实QueryTab／管理器／导出窗口／store均运行。
 vi.mock('react-data-grid',()=>({DataGrid:(props:any)=>{grids.all.push(props);return null;},SelectColumn:{key:'select-row'}}));
@@ -28,7 +29,8 @@ beforeAll(async()=>{
 afterEach(async()=>{if(root){await act(async()=>root!.unmount());root=undefined;}await flush();delete(window as any).dbark;vi.restoreAllMocks();grids.all=[];});
 afterAll(()=>{for(const[name,descriptor]of globals)if(descriptor)Object.defineProperty(globalThis,name,descriptor);else Reflect.deleteProperty(globalThis,name);});
 /** 只给真实查询端口合成响应；所有文件选择、写入和settings保存都是RAM事件。 */
-async function mount(){commands=[];exports=[];original={columns:[{key:'__proto__',name:'同名',type:'BIGINT'},{key:'d',name:'同名',type:'DECIMAL'},{key:'n',name:'空值',type:'TEXT'},{key:'b',name:'字节',type:'BLOB'},{key:'secret',name:'隐藏内容',type:'TEXT'}],rows:[JSON.parse('{"__proto__":"18446744073709551615","d":"0.12345678901234567890","n":"","b":{"type":"binary","base64":"AP8="},"secret":"秘密"}'),JSON.parse('{"__proto__":"","d":"1.00000000000000000001","n":null,"b":{"type":"binary","base64":""},"secret":"秘密"}')],truncated:true,elapsedMs:1,statement:'SELECT RAM'};second={...original,columns:[{key:'next',name:'新结果',type:'TEXT'}],rows:[{next:'新值'}]};
+async function mount(multiple = false){commands=[];exports=[];original={columns:[{key:'__proto__',name:'同名',type:'BIGINT'},{key:'d',name:'同名',type:'DECIMAL'},{key:'n',name:'空值',type:'TEXT'},{key:'b',name:'字节',type:'BLOB'},{key:'secret',name:'隐藏内容',type:'TEXT'}],rows:[JSON.parse('{"__proto__":"18446744073709551615","d":"0.12345678901234567890","n":"","b":{"type":"binary","base64":"AP8="},"secret":"秘密"}'),JSON.parse('{"__proto__":"","d":"1.00000000000000000001","n":null,"b":{"type":"binary","base64":""},"secret":"秘密"}')],truncated:true,elapsedMs:1,statement:'SELECT RAM'};second={...original,columns:[{key:'next',name:'新结果',type:'TEXT'}],rows:[{next:'新值'}]};
+ if(multiple){ original.rows[0].n='同组';original.rows[1].n='同组';original.rows.push(JSON.parse('{"__proto__":"3","d":"0.50000000000000000000","n":"同组","b":{"type":"binary","base64":"AA=="},"secret":"秘密"}')); }
  (window as any).dbark={onTask:()=>()=>{},onMenu:()=>()=>{},invoke:async(command:string,input:any)=>{commands.push(command);if(command==='settings.save'||command==='connections.open'||command==='sessions.close')return;if(command==='sessions.open')return {sessionId:'s'};if(command==='query.completionState')return {databaseKnown:true,database:null,temporaryObjects:[]};if(command==='query.execute')return {results:[original,second],elapsedMs:1,transactionOpen:false};if(command==='files.choose')return {token:'ram-file',name:'内存文件'};if(command==='files.exportResult'){validateResultExportData(input.result);exports.push(structuredClone(input));return {rows:input.result.rows.length};}throw Error('禁止外界命令：'+command);}};
  store.setState({settings:{theme:'light',sidebarWidth:260,resultLimit:1000,pageSize:100,activeTabId:'q',tabs:[{id:'q',kind:'query',connectionId:'c',title:'查询',sql:'SELECT RAM',databaseContext:{state:'known',database:null}}]},connections:[{id:'c',name:'RAM',group:'',color:'',dialect:'mysql',host:'offline.invalid',port:1,user:'ram'}],connectionVersions:{c:1},activeJobs:{},dirtyTabs:{}});
  function Harness(){const tabs=store(state=>state.settings.tabs);return tabs.map(tab=><QueryTab key={tab.id} tab={tab} onHistory={()=>{}}/>);}const container=document.createElement('div');document.body.appendChild(container);root=createRoot(container as any);await act(async()=>root!.render(<Harness/>));await click(zh.query.text010);
@@ -56,6 +58,52 @@ function clipboardPort() {
   Object.defineProperty(document, 'execCommand', { configurable: true, value: execute });
   return { writes, execute };
 }
+
+/** 通过真实条件面板的受控输入设置草稿，不直接调用过滤控制器。 */
+async function conditionField(label: string, value: string) {
+  const node = document.querySelector(`[aria-label="${label}"]`)!;
+  expect(node).not.toBeNull();
+  await act(async () => { node.value = value; node.dispatchEvent(new MemoryEvent(node.tagName === 'SELECT' ? 'change' : 'input')); });
+}
+
+it.each(['clear', 'excluded'] as const)('筛选后多列排序的含列名复制使用同一可见矩阵，%s撤销旧动作', async mode => {
+  await mount(true); const port = clipboardPort(), before = structuredClone(original); await layout();
+  await act(async () => mainGrid().onSelectedRowsChange(new Set([0])));
+  const beforeFilter = callback(button(copyText.action)); await click(filterText.open);
+  await act(async () => beforeFilter()); expect(port.writes).toHaveLength(0);
+  await click(filterText.add); await conditionField(filterText.column + ' 1', 'd');
+  await conditionField(filterText.operator + ' 1', 'gte'); await conditionField(filterText.input + ' 1', '0.5');
+  await click(filterText.apply);
+  const filtered = grids.all.at(-1)!; expect(filtered.rows).toEqual([original.rows[1], original.rows[2]]);
+  await act(async () => filtered.onSortColumnsChange([{ columnKey: 'n', direction: 'ASC' }, { columnKey: 'd', direction: 'ASC' }]));
+  const sorted = grids.all.at(-1)!; expect(sorted.rows).toEqual([original.rows[2], original.rows[1]]);
+  await act(async () => sorted.onSelectedRowsChange(new Set([1, 0]))); await click(copyText.action);
+  expect(JSON.parse(port.writes[0].get('application/x-dbark-cells')!).rows).toEqual([
+    ['字节', '同名', '同名', '空值'],
+    [{ type: 'binary', base64: 'AA==' }, '3', '0.50000000000000000000', '同组'],
+    [{ type: 'binary', base64: '' }, '', '1.00000000000000000001', '同组'],
+  ]);
+  expect(port.writes[0].get('text/plain')).not.toContain('秘密'); expect(original).toEqual(before);
+  const stale = callback(button(copyText.action));
+  if (mode === 'clear') {
+    await click(filterText.clear); expect(grids.all.at(-1)!.rows).toBe(original.rows);
+    expect(grids.all.at(-1)!.sortColumns).toEqual([]); expect(button(copyText.action).disabled).toBe(true);
+  } else {
+    original.rows[0].d = '2.00000000000000000001'; await act(async () => stale());
+    original.rows[0].d = before.rows[0].d;
+  }
+  await act(async () => stale()); expect(port.writes).toHaveLength(1);
+  expect(commands.filter(command => command === 'query.execute')).toHaveLength(1); expect(exports).toEqual([]);
+});
+
+it('筛选为空时含列名复制禁用，旧按钮不能复制被排除的原行', async () => {
+  await mount(true); const port = clipboardPort();
+  await act(async () => mainGrid().onSelectedRowsChange(new Set([0]))); const stale = callback(button(copyText.action));
+  await click(filterText.open); await click(filterText.add); await conditionField(filterText.column + ' 1', 'd');
+  await conditionField(filterText.operator + ' 1', 'gt'); await conditionField(filterText.input + ' 1', '2'); await click(filterText.apply);
+  expect(grids.all.at(-1)!.rows).toEqual([]); expect(button(copyText.action).disabled).toBe(true);
+  await act(async () => stale()); expect(port.writes).toEqual([]);
+});
 
 it('真实QueryTab列显隐重排后点击含列名复制，所选矩阵与旧复制保持各自格式且无SQL重放', async () => {
   await mount(); const port = clipboardPort(), before = structuredClone(original);
@@ -158,4 +206,23 @@ it.each(['layout','binary'] as const)('%s撤销后同坐标点击可重新领取
   expect(notifications.count).toBe(before);expect(button(copyText.action).disabled).toBe(false);
   await click(copyText.action);expect(port.writes[0].get('text/plain')).toBe(mode==='layout'?'乙\nB':'字节\n0x00');
   await act(async()=>stale());expect(port.writes).toHaveLength(1);
+});
+
+it('多列排序的次级精确键决定复制顺序；次级值漂移即时拒绝旧含列名复制',async()=>{
+  await mount(true);const port=clipboardPort(),before=structuredClone(original);await layout();
+  await act(async()=>mainGrid().onSortColumnsChange([{columnKey:'n',direction:'ASC'},{columnKey:'d',direction:'DESC'}]));
+  const sorted=grids.all.at(-1)!;
+  expect(sorted.sortColumns).toEqual([{columnKey:'n',direction:'ASC'},{columnKey:'d',direction:'DESC'}]);
+  expect(sorted.rows).toEqual([original.rows[1],original.rows[2],original.rows[0]]);
+  await act(async()=>sorted.onSelectedRowsChange(new Set([2,0])));await click(copyText.action);
+  expect(JSON.parse(port.writes[0].get('application/x-dbark-cells')!).rows).toEqual([
+    ['字节','同名','同名','空值'],
+    [{type:'binary',base64:''},'','1.00000000000000000001','同组'],
+    [{type:'binary',base64:'AP8='},'18446744073709551615','0.12345678901234567890','同组'],
+  ]);
+  expect(original).toEqual(before);const stale=callback(button(copyText.action));
+  // 无React重绘也要校验每个已应用键，不能凭首键或原显示下标继续复制。
+  original.rows[2].d='2.00000000000000000001';await act(async()=>stale());expect(port.writes).toHaveLength(1);
+  original.rows[2].d=before.rows[2].d;await act(async()=>stale());expect(port.writes).toHaveLength(1);
+  expect(commands.filter(c=>c==='query.execute')).toHaveLength(1);expect(exports).toEqual([]);
 });

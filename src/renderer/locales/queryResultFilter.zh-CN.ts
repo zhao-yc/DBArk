@@ -1,0 +1,17 @@
+export const queryResultFilterZh = {
+  open: '筛选已返回结果', title: '本地条件筛选', scope: '仅筛选当前已返回快照，不重发 SQL。筛选先于排序；应用或清除会重置排序、勾选、查找及行详情。',
+  truncated: '原结果已截断，筛选不包含未返回记录。',
+  counts: (source: number, matched: number) => `原返回 ${source} 行，筛选后 ${matched} 行`,
+  mode: '条件组合', and: '全部满足（AND）', or: '任一满足（OR）', column: '筛选字段', operator: '比较方式', input: '条件原值',
+  add: '添加条件', apply: '应用筛选', cancel: '取消筛选草稿', clear: '清除全部筛选', clearDraft: '清空条件草稿',
+  remove: (index: number) => `移除第${index}条筛选条件`, condition: (index: number) => `第${index}条筛选条件`,
+  operators: { contains:'文本包含',eq:'等于',ne:'不等于',gt:'大于',gte:'大于或等于',lt:'小于',lte:'小于或等于',null:'为 NULL',notNull:'非 NULL' },
+  empty: '没有条件时保留全部已返回行；空串是独立原值，不等于 NULL。',
+  hint: '文本按 UTF-16 原文比较，不使用正则；数值和时间按字段类型比较，精确整数、小数及微秒保持原精度。未知类型和二进制只允许 NULL 判断。',
+  composing: '输入法组合尚未结束，请完成输入后应用。',
+  unavailable: '当前结果超出筛选预算或缺少可靠的原行列身份，不能筛选。',
+  stale: '筛选所属结果已变化，请从当前结果重新打开条件面板。',
+  invalid: '筛选条件无效、字段已隐藏或比较方式不适用于该字段。',
+  value: '条件值或返回值与字段类型不匹配；未知类型、二进制不能执行原值比较。',
+  budget: '筛选超过行列、条件、总比较工作或文本预算，请减少返回数据或条件。',
+} as const;

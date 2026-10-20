@@ -1,6 +1,8 @@
-# 已返回查询结果的列头排序
+# 已返回查询结果的多列排序
 
-本轮从已封存的 `e5cfcca`、`df66f9f` 提取排序及预算拒绝修复，接入 `codex/query-result-sort-20261020`；基线为已完成含列名复制的 `fe5e5c7`。独立普通克隆串行开发，不修改 0.28 冻结候选、旧副本或失败现场。只改变 SQL 工作区已经返回、执行完毕的结果视图。点击可排序列头，或将键盘焦点放在列头后按 Enter／空格，依次升序、降序、清除；“恢复原返回顺序”也可清除。一次只按一列排序，Ctrl/Cmd 组合也不隐含多列规则。
+当前开发分支为 `codex/query-result-multisort-filter-20261020`，基线 `39d3ed2`；从封存 `3adc89c` 接入多列优先级排序，并整合本地条件筛选，保留含列名复制及同格重选修复。独立普通克隆串行开发，不修改 0.28 冻结候选、旧副本或失败现场。只改变 SQL 工作区已经返回、执行完毕的结果视图，暂不发布。
+
+点击列头或在列头按 Enter／空格，依次升序、降序、清除；按住 Ctrl／Cmd 可追加、切换或移除该列，完整规则按所列优先级逐键比较。优先级列表可以提高/降低优先级、切换方向、移除单条规则；“恢复原返回顺序”清除排序，有筛选时恢复筛选后的原顺序。应用或清除筛选另会重置排序。
 
 界面明确显示当前范围：不重发SQL，不改ORDER BY，不读取未返回记录，不采用数据库collation。截断结果单独提示。规则为NULL升序在前、降序在后；空串独立于NULL；相等键在两个方向都保持原返回次序。文本（包括JSON原文、ENUM/SET和字符串形式的BLOB/TEXT）按UTF-16代码单元比较，不做拼音、大小写折叠或JSON解析。
 
@@ -14,7 +16,7 @@
 
 ## 行身份和既有接口
 
-QueryResultSort保留source结果、源行／列引用及sourceIndices。排序只创建冻结的索引向量、行引用数组与QueryResult视图容器，原row对象、原columns数组、源SQL和数据都不克隆或修改；清除返回原结果对象。固定结果仍由原快照逻辑从原结果创建，不把显示排序写回固定快照本体。
+QueryResultSort保留source结果、源行／列引用及sourceIndices。排序只创建冻结的索引向量、完整规则数组、行引用数组与QueryResult视图容器，原row对象、原columns数组、源SQL和数据都不克隆或修改；清除返回当前排序来源对象。筛选先于排序，最终行位置显式合成为原查询返回位置。固定结果仍由原快照逻辑从原结果创建，不把显示排序写回固定快照本体。
 
 QueryTab让原ResultExportSelection、QueryRowDetails、ResultsGrid及QueryResultFind共同绑定这份视图。RDG rowIdx和ResultGridSelection.indices只索引同一view.rows；显示第一行若来自source第3行，复制、查找、详情、勾选与导出拿到的仍是那个原行引用。详情翻行沿视图次序，完整原列保持。所有导出继续走既有显式确认窗口；本功能没有新增任何IPC、文件或剪贴板调用。
 
@@ -24,7 +26,11 @@ QueryTab让原ResultExportSelection、QueryRowDetails、ResultsGrid及QueryResul
 
 共享接口保持：ResultGridSelection、ResultSelectionBinding、导出IPC、gridClipboard及ResultsGrid原复制／选择事件体不变。ResultsGrid仅增加可选sortReasons供本入口显示准入原因，继续复用原sort/onSortChange；其它消费者的服务端排序不接本地规则。本轮已与含列名复制整合，两者使用当前 grid.rows 及原 selectionScope，选择下标不重新索引 outcome.results 的源 rows；保留布局和字节查看器关闭后的同格重新选择修复。
 
-## 验证边界
+## 本轮验证边界
+
+本轮定向验证为 16 文件 267 项全部通过、无跳过，类型检查和普通构建通过；完整复查 570 文件全部通过、10867 项通过、1 平台条件跳过。新增筛选/多列排序/含列名复制组合反例，覆盖空结果、清除筛选、排除行漂移及旧动作拒绝。完整命令、首次失败与本轮证据见[整合记录](development/query-result-multisort-filter-20261020.md)。以下 178 项为上轮单列排序检查点，不转算为当前原生验收。
+
+## 上轮单列排序检查点（保留来源）
 
 规则单元验证精度、时间、NULL／空串、稳定性、预算、隐藏字段及原身份；React测试运行真实QueryTab、store、选择、查找、详情和导出对话框，仅虚拟布局与Monaco为内存端口。键盘测试提取本机锁定RDG包的实际HeaderCell.onKeyDown/onSort，连接真实QueryTab回调，在RAM验证Enter／空格三态，不宣称实际窗口键盘验收。原两个声明VM只补真实QueryResultSort依赖端口，不删原断言。
 
