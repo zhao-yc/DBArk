@@ -8,6 +8,8 @@ Windows 源码客户端的[实库结果整理验收](../tests/integration/accept
 
 后续[SQL 片段 JSON 导入导出](snippet-transfer-0.29.md)开发候选已接入差异预览、明确整批确认及原子文件发布，取消失败/退出等待缺口已修补。四条新增桌面用例 `tests/e2e/snippet-transfer.spec.ts` 已编写、尚未运行，只替换系统文件选择框回答；实际原生选择框和应用重启另列验收。新的 Windows 检查和桌面验收统一交 WIN11-TEST，候选推送不代表该虚拟机或安装包通过。
 
+静态审阅另补原导出终态后迟到取消的代次失效修复，候选 `f173f41`；四项先行反例 `16366df` 尚待 VM 红绿验证。旧候选的本机通过结果不覆盖此修改，[交接说明](development/snippet-transfer-vm-handoff-20261020.md)记录固定 SHA、相同断言和真实原生边界。
+
 0.16 开发源码将配置库升级到 schema5，以保存查询默认库的已知、无库和未知状态。升级前退出所有实例并备份完整用户配置目录；旧客户端会拒读新版库，回退必须使用升级前的备份，不得手动修改版本号。第三检查点证据见[查询上下文验收](../tests/integration/acceptance-q03-query-context-20261015.md)。
 
 ## 目录

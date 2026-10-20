@@ -8,12 +8,22 @@
 - 原测试机基线：`915d3dcb3ee44731c1a703bdb04179754d027b45`。
 - 候选分支：`codex/snippet-transfer-20261020`。
 - 功能提交：`e31420bf325a1dfef676b5864b7d64a1a1061736`，基线之上只有一个功能提交，19 个本任务文件。
-- 本次待验完整候选：`c843f92861a125084dc3a6418a717fe48828d304`。在功能和交接文档之上新增 `tests/e2e/snippet-transfer.spec.ts` 四条桌面用例，未改产品、依赖或既有夹具。这四条尚未运行，类型检查也须由测试机完成，不能沿用旧 SHA 的通过结果。
+- 四条桌面用例提交：`c843f92861a125084dc3a6418a717fe48828d304`，文件为 `tests/e2e/snippet-transfer.spec.ts`。
+- 终态后迟到取消的反例候选：`16366dfb3e6543d22aebb582c4c7ff5a4b7dd0e5`，只新增四项 React 回归，产品仍为修补前逻辑；尚未实测失败。
+- 本次待验完整候选：`f173f4146460c01df8b9cf21fa7965e33e97de4a`，终态统一推进代次，使迟到取消回包不能覆盖原操作结局。未改依赖、锁文件或既有夹具。新增测试、修复、类型和构建均须由测试机验证，不能沿用旧 SHA 的通过结果。
 - 仅提取 `fa5a47b` 固定增量，新增取消失败/退出等待修复和真实 SQLite/文件测试；旧六份 dirty/untracked 没有带入。依赖及锁文件、QueryTab/ResultsGrid、原桌面 fixture、原退出协议和发布工作流不改。
 
 既有普通克隆先核远端、当前分支及 dirty；仅在工作区干净且无运行中的验收时切到专用测试分支并固定完整 SHA，不覆盖未知改动、不 stash/reset、不用工作树。确认准确 Node24、pnpm12.11.2 与锁文件；基线已有的本克隆依赖可复用，不连接业务库、不运行虚拟机本机 Docker、不复制原电脑凭据。
 
 ## 最小定向入口
+
+最小接入经协调确认后，先在干净且无运行验收的普通克隆固定反例候选 `16366dfb3e6543d22aebb582c4c7ff5a4b7dd0e5`，单次执行以下文件，保留原退出码与 JSON。静态推演预期新四项失败，**不是已取得的红灯证据**；若观察不同，报告真实结果并交回开发，不改断言或原样重试：
+
+```powershell
+node node_modules/vitest/vitest.mjs run tests/unit/snippet-transfer.react.test.tsx --maxWorkers=1 --reporter=json --outputFile=.cache/snippet-late-cancel-before.json
+```
+
+收尾完成且工作区干净后，固定修复候选 `f173f4146460c01df8b9cf21fa7965e33e97de4a`。两个候选的该测试文件字节相同，SHA256 为 `b9107a8d305ac28017da9ee0966e6a8dfc0740c35c6ec7664eb26a8969d9cb0c`；确认 SHA 后再执行下述入口，不带入测试机的源码修改。
 
 在准确候选根目录执行，原始退出码与日志必须保留；类型只运行一次，随后指定测试与构建：
 
@@ -21,7 +31,7 @@
 node scripts/check-local.mjs --build tests/unit/snippet-transfer.test.ts tests/unit/snippet-transfer-main-ram.test.ts tests/unit/snippet-transfer-main-entry-ram.test.ts tests/unit/snippet-transfer-storage-ram.test.ts tests/unit/snippet-transfer.react.test.tsx tests/unit/snippet-transfer-sqlite-storage.test.ts tests/unit/snippets.test.ts
 ```
 
-当前用例数为 7 文件 64 项，其中 SQLite/临时磁盘 4 项。平台/运行时若实际数量不同应报告原结果，不为匹配数字更改测试。
+旧功能候选为 7 文件 64 项，其中 SQLite/临时磁盘 4 项；当前新增四项迟到取消回归，静态计数预计 68 项，实际以 VM 结果为准。平台/运行时若实际数量不同应报告原结果，不为匹配数字更改测试。
 
 上述通过后，以较少并行度执行同一完整集合，适配测试机 4 逻辑处理器/8GB，保留原用例及超时：
 
