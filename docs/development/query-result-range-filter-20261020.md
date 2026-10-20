@@ -28,13 +28,13 @@ VM原件保留在 `C:\Users\tester\Documents\Codex\2026-10-20\hi\outputs\query-r
 
 同一提交的 [GitHub Actions 39366884755](https://github.com/zhao-yc/DBArk/actions/runs/39366884755) 已直接读取运行与job/step元数据：首次push运行成功，Ubuntu的安装依赖、类型、单元和构建步骤均成功。桌面、开发组件剪贴板及发布job全部跳过；未读到Linux日志中的具体用例计数，不据此推断三平台或发布成功。
 
-固定候选 `5b1c468b9183f45971eb37397637e1f8fa67201f` 已推送；等待“dbark测试”当前报告收尾及排队SSH身份核对真实终态，随后在同一干净普通克隆创建独立测试任务分支，单次运行：
+固定候选 `5b1c468b9183f45971eb37397637e1f8fa67201f` 已推送；“dbark测试”已在同一普通克隆完成以下入口及完整回归，不再运行：
 
 ```powershell
 node scripts/check-local.mjs --build tests/unit/query-result-filter.test.ts tests/unit/query-result-sort.test.ts tests/unit/query-result-multisort.test.ts tests/unit/query-result-sort-ui.test.tsx tests/unit/query-result-header-copy-ui.test.tsx
 ```
 
-失败保留原始日志与退出码，开发会话修复，不放宽断言或重试。通过并确认资源收尾后再执行完整单元。新GUI／实库用例须在此前七种文本条件验收及准确服务器身份门均满足后安排，不能用RAM结果替代；不写系统剪贴板。原生文件选择、安装、macOS及其它数据库版本均未验，不增加完整工作包或公开版本计数。
+失败保留原始日志与退出码，开发会话修复，不放宽断言或重试。新GUI／实库用例须在此前七种文本条件验收及准确服务器身份门均满足后安排，不能用RAM结果替代；不写系统剪贴板。原生文件选择、安装、macOS及其它数据库版本均未验，不增加完整工作包或公开版本计数。
 
 ## 原生用例准备（尚未执行）
 
@@ -42,4 +42,4 @@ node scripts/check-local.mjs --build tests/unit/query-result-filter.test.ts test
 
 该增量仅为后续准备，不改变已排队固定5b1c468的RAM验收范围。应先在5b1c468完成原七条件专属实库路径并核资源终态，再固定包含本增量的SHA做一次类型检查和扩展用例；产品文件与5b1c468相同，可复用其构建但须逐项核哈希。尚未类型检查或执行；不声称新增日期时间区间获得GUI／实库证据，原常量SQL没有日期时间列。
 
-后续远端连接状态列表明确WIN11-TEST不可访问，尚未读回排队的归一化SSH／Docker元数据终态，没有重跑测试或把观察失败记成任务终止。[固定队列与main接续记录](query-result-vm-main-handoff-20261020.md)汇总已验来源、恢复顺序及仅静态完成的合入检查；main尚未合入。
+此前WIN11-TEST连接中断没有触发重跑。用户要求重试后已读回原队列全部终态：归一化SSH身份、精确隔离容器及UUID核对通过，无所属进程残留。已在同一会话安排原文本条件GUI通过后再执行76449f9扩展用例，尚未取得结果；沿用现有测试分支及已核哈希构建。[固定队列与main接续记录](query-result-vm-main-handoff-20261020.md)记录实际原件与恢复顺序；main尚未合入。
