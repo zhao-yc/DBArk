@@ -4,6 +4,7 @@ import { SNIPPET_LIMITS, snippetSchema } from './snippets';
 
 export const snippetTransferLimits = { bytes: 4 * 1024 * 1024, lifetime: 10 * 60 * 1000, sessions: 32 } as const;
 export const snippetTransferZh = {
+  region: '片段文件导入导出',
   export: '导出片段 JSON', import: '导入片段 JSON', preview: '片段导入差异预览', confirm: '确认导入所选更改', cancel: '取消传输', closePreview: '取消本次导入',
   invalid: '片段文件格式无效：仅支持 DBArk-snippets 版本 1、最多500条、4 MiB UTF-8 JSON，禁止未知字段和重复ID。',
   reserved: 'builtin- 开头的ID保留给内置模板，不能导入或覆盖；请先复制为用户片段。',

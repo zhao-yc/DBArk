@@ -66,7 +66,8 @@ export function SnippetTransferPanel({ blocked, authorize, onActive, onApplied }
     } catch (reason) { if (alive.current && generation.current === turn) setError(errorMessage(reason)); }
     finally { if (alive.current && generation.current === turn) finish(); }
   }
-  return <section className="snippet-transfer" aria-label={text.preview}>
+  // 外层标识文件操作区，只有实际差异区域使用预览名称，避免同名区域和空预览误报。
+  return <section className="snippet-transfer" aria-label={text.region}>
     <div><button disabled={blocked || !!busy || !!preview || cancelling} onClick={() => request('export')}>{text.export}</button><button disabled={blocked || !!busy || !!preview || cancelling} onClick={() => request('import')}>{text.import}</button>{(busy || preview) && <button disabled={busy === 'apply' || cancelling} onClick={() => void cancel()}>{preview ? text.closePreview : text.cancel}</button>}</div>
     <p className="muted small">{text.hint}</p><ErrorBox message={error}/>{message && <p role="status">{message}</p>}
     {preview && <div role="region" aria-label={text.preview}><h3>{text.preview}</h3>{preview.entries.map(entry => <article key={entry.snippet.id} className="snippet-transfer-entry">
