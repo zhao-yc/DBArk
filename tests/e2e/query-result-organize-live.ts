@@ -16,7 +16,7 @@ export function registerQueryResultOrganizeUi(binding:QueryResultColumnsUiTarget
  const cases=new Map<TestInfo,{life:QueryResultColumnsUiLifetime;observer?:mysql.Connection;native?:any;stream?:any}>();let halted=false;
  test.use({preserveOnUnconfirmedExit:true,trace:'off',screenshot:'off',video:'off'});test.setTimeout(120000);test.describe.configure({retries:0});
  test.afterEach(({},info)=>{const current=cases.get(info);if(!current){halted=true;retainOwnedDesktopResources(info);throw Error('结果列未建立本例owner，保留现场');}try{current.life.afterEach();cases.delete(info);}catch(reason){halted=true;throw reason;}});
- test('准确13384真实App多列排序与条件筛选、空结果及CSV／JSON范围一致',async({trace,screenshot,video},info)=>{
+ test('准确13384真实App多列排序与七种文本筛选、空结果及CSV／JSON范围一致',async({trace,screenshot,video},info)=>{
   if(halted)throw Error('结果列前例已保留资源，停止后续用例');
   const captured=ownedDesktopResources(info),page=captured.page,application=captured.application,directory=dataDir;
   const life=new QueryResultColumnsUiLifetime({check(allowClosed){binding.assertCurrent();const now=ownedDesktopResources(info);if(now.page!==page||now.application!==application||!allowClosed&&now.closed)throw Error('结果列原owner已变化');},closed:()=>ownedDesktopResources(info).closed,retain:()=>{halted=true;retainOwnedDesktopResources(info);},async exit(){life.check();await application.evaluate(readQueryResultColumnsAudit);life.check();await application.evaluate(guardQueryResultColumnsExitAnswers);life.check();await confirmOwnedDesktopExit(info);}},info as TestInfo&{_startWallTime?:number});
@@ -66,7 +66,10 @@ export function registerQueryResultOrganizeUi(binding:QueryResultColumnsUiTarget
     await observe(()=>panel.getByRole('button',{name:filterText.add,exact:true}).click());
     await observe(()=>panel.getByRole('combobox',{name:filterText.column+' '+index,exact:true}).selectOption({index:column}));
     await observe(()=>panel.getByRole('combobox',{name:filterText.operator+' '+index,exact:true}).selectOption(operator));
-    await observe(()=>panel.getByRole('textbox',{name:filterText.input+' '+index,exact:true}).fill(value));
+    const input=panel.getByRole('textbox',{name:filterText.input+' '+index,exact:true});
+    if(['empty','notEmpty','null','notNull'].includes(operator)){
+     await observe(()=>expect(input).toBeDisabled());await observe(()=>expect(input).toHaveValue(''));
+    }else await observe(()=>input.fill(value));
    }
    await observe(()=>tab.getByRole('button',{name:filterText.open,exact:true}).click());await addRule(1,3,'lte','1.00000000000000000001');
    await observe(()=>expect.poll(ids).toEqual(['1','3','2']));await observe(()=>panel.getByRole('button',{name:filterText.cancel,exact:true}).click());await observe(()=>expect.poll(ids).toEqual(['1','3','2']));
@@ -78,6 +81,16 @@ export function registerQueryResultOrganizeUi(binding:QueryResultColumnsUiTarget
    await observe(()=>heads.nth(5).click());await observe(()=>heads.nth(3).click({modifiers:[modifier]}));await observe(()=>heads.nth(3).click({modifiers:[modifier]}));await observe(()=>expect(tab.getByRole('list',{name:sortText.priorities,exact:true}).getByRole('listitem')).toHaveCount(2));await observe(()=>expect.poll(ids).toEqual(['3','1']));
    await observe(()=>tab.getByRole('button',{name:sortText.clear,exact:true}).click());await observe(()=>expect.poll(ids).toEqual(['1','3']));
    await observe(()=>tab.getByRole('button',{name:filterText.clear,exact:true}).click());await observe(()=>expect.poll(ids).toEqual(['1','2','3']));
+   // 复用原常量SQL中的CHAR编号与空文本列，逐项核新条件；不增加查询、目标或文件。
+   for(const [column,operator,value,expected] of [
+    [1,'notContains','2',['1','3']],[1,'startsWith','1',['1']],[1,'notStartsWith','1',['2','3']],
+    [1,'endsWith','3',['3']],[1,'notEndsWith','3',['1','2']],[5,'empty','',['1','2','3']],[5,'notEmpty','',[]],
+   ] as const){
+    await observe(()=>tab.getByRole('button',{name:filterText.open,exact:true}).click());await addRule(1,column,operator,value);
+    await observe(()=>panel.getByRole('button',{name:filterText.apply,exact:true}).click());await observe(()=>expect.poll(ids).toEqual(expected));
+    await observe(()=>expect(tab.locator('.query-result-filter-bar')).toContainText(filterText.counts(3,expected.length)));
+    await observe(()=>tab.getByRole('button',{name:filterText.clear,exact:true}).click());await observe(()=>expect.poll(ids).toEqual(['1','2','3']));
+   }
    await observe(()=>tab.getByRole('button',{name:filterText.open,exact:true}).click());await addRule(1,3,'lte','1.00000000000000000001');await observe(()=>panel.getByRole('button',{name:filterText.apply,exact:true}).click());await observe(()=>expect.poll(ids).toEqual(['1','3']));
    await observe(()=>expect(tab.locator('.query-result-filter-bar')).toContainText(filterText.counts(3,2)));
    for(const index of [3,2])await observe(()=>grid.locator('[role="row"][aria-rowindex="'+index+'"]').getByRole('checkbox').check());
