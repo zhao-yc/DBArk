@@ -28,3 +28,11 @@ installed/report.json原摘要 `db523c2e4ce1a85fbab23bd238e4a2499c8164fc9cc7cf90
 第四例没有第二owner或独立重启成功证明，directoryRemoved=false、accepted缺项，原failure.json明确automaticRetry／automaticForceStop／cleanupAllowed均false。错误同时检查TestInfo身份、开始时间、时钟顺序、原120秒及状态；没有记录具体失效分支，不能按12.898秒的案例时长推断超时、时钟回退或产品内容故障。保留原失败和现场，不放宽守卫或原断言换取通过。
 
 Windows helper安装资源摘要475b78748fcf1f9990c58d5926792ae978de71d1962f2e729805f0c35af45606已由原脚本核对，未执行协议。当前没有完整Windows同次安装legacy或Intel终态通过证据。ARM常规源码／安装日志已通过，但本次没有独立下载ARM专项附件，也没有新通配私网或NULL排序能力的macOS窗口证据；不增加发行、完整工作包或新功能平台通过计数。
+
+## 后继守卫诊断
+
+`72c0950c3b214feedb688ca7e06f15666494e4c4` 仅修改测试守卫和新增RAM回归：原联合条件按原短路次序逐项检查，错误补充首个失败分支与已捕获的start／instant／previous／deadline。诊断不额外读取TestInfo字段，不输出标题、SQL、路径或任意状态值，不修改120秒期限、环境检查、失效永久保留、重试或清理规则。上游环境异常对象仍直接上抛。
+
+新增17项RAM用例检查失败分支、原时钟、失效后输入恢复仍拒绝、状态getter读取次数、成功路径属性读取次序和失败短路。静态审查及 `git diff --check` 通过；准确72c0950的[Linux CI39483984163](https://github.com/zhao-yc/DBArk/actions/runs/39483984163)、job118839526773已成功，Root实际读取原日志：类型／586文件11246项通过、10平台跳过／构建通过，单元235.59秒，新增17项全部通过，Vite35.72秒。本机未运行测试或桌面。该分支的原生、剪贴板和发布job均跳过，不能作为Windows／macOS实际守卫失败诊断或新安装验收。
+
+该候选不解释旧Windows失败，也不恢复或清理旧profile。NULL排序窗口准备失败仍由WIN11-TEST在固定fcc8530现场独立取证，不切换其提交、不重复原队列；原失败断言与期限不变。暂不发布。
