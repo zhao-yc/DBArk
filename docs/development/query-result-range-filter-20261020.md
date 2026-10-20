@@ -4,7 +4,7 @@
 
 普通克隆 `D:\svn\DBArk\.cache\snippet-transfer-20261020`，任务分支 `codex/query-result-range-filter-20261020`，基线 `4a3f341f15cf6c7e6264ad8800e793ca4e129b6c`。不使用工作树、不合并主分支、不发布。产品独立实现，不据此宣称本机Navicat 17.0.8已验证。
 
-此前连接按需启动候选b45383a已在WIN11-TEST通过类型、8文件206项定向和构建；原四条Electron用例单次全部通过、零重试／跳过，报告21.50秒。完整集合仍在同次运行，原偶发保存超时的根因未证实。上述候选不包含本次区间功能，不能转计本次通过；原失败现场与单次诊断保留。
+此前连接按需启动候选b45383a已在WIN11-TEST通过类型、8文件206项定向和构建；原四条Electron用例单次全部通过、零重试／跳过，报告21.50秒。完整576文件／10972通过／1平台跳过、退出0、345.93秒，所属窗口和进程结束；原偶发保存超时的根因仍未证实。上述候选不包含本次区间功能，不能转计本次通过；原失败现场与单次诊断保留。
 
 ## 产品行为
 
@@ -22,7 +22,7 @@
 
 本机仅静态审查与 `git diff --check`。既有控制器文件增加端点／精度／NULL／预算／租约用例，既有真实QueryTab RAM文件增加面板、多个排序规则、复制／导出、端点切换和上限输入法用例，不修改旧断言。没有本轮运行结果。
 
-等待“dbark测试”当前b45383a完整回归及排队SSH身份核对真实终态，随后再固定本候选SHA单次运行：
+固定候选 `5b1c468b9183f45971eb37397637e1f8fa67201f` 已推送；等待“dbark测试”当前报告收尾及排队SSH身份核对真实终态，随后在同一干净普通克隆创建独立测试任务分支，单次运行：
 
 ```powershell
 node scripts/check-local.mjs --build tests/unit/query-result-filter.test.ts tests/unit/query-result-sort.test.ts tests/unit/query-result-multisort.test.ts tests/unit/query-result-sort-ui.test.tsx tests/unit/query-result-header-copy-ui.test.tsx
