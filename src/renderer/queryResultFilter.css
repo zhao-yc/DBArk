@@ -7,4 +7,7 @@
 .query-result-filter-condition { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin: 5px 0; }
 .query-result-filter-condition select { max-width: min(340px, 100%); }
 .query-result-filter-condition input { flex: 1; min-width: 140px; }
+.query-result-filter-members { flex: 1 1 240px; min-width: min(240px, 100%); }
+.query-result-filter-member { display: flex; align-items: center; gap: 6px; margin: 4px 0; }
+.query-result-filter-member textarea { flex: 1; min-width: 140px; min-height: 32px; max-height: 120px; resize: vertical; }
 .query-result-filter-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 8px; }

@@ -149,6 +149,54 @@ describe('精确数值和时间区间筛选',()=>{
   });
 });
 
+describe('多值成员按原类型和预算匹配',()=>{
+  /** 每个值独立传入，绝不借CSV或SQL字符串解析生产期待。 */
+  const members=(values:readonly string[],operator:'in'|'notIn'='in'):QueryResultFilterRule=>({...rule(operator),values});
+  it('文本成员保留空串、换行、逗号、引号、大小写和Unicode，正反均排除NULL',()=>{
+    const f=fixture('TEXT',['','a,b','a\nb',"'a'",'NULL',null,'A','é','e\u0301']),values=['','a,b','a\nb',"'a'",'NULL','e\u0301'];
+    expect(f.apply([members(values)]).sourceIndices).toEqual([0,1,2,3,4,8]);expect(f.apply([members(values,'notIn')]).sourceIndices).toEqual([6,7]);
+    expect(f.apply([members(values),rule('null')],'OR').sourceIndices).toEqual([0,1,2,3,4,5,8]);
+  });
+  it.each([
+    ['BIGINT',['9007199254740992','9007199254740993',null],'9007199254740993'],
+    ['BIGINT UNSIGNED',['18446744073709551614','18446744073709551615',null],'18446744073709551615'],
+    ['DECIMAL',['0.12345678901234567890','0.12345678901234567891',null],'0.12345678901234567891'],
+    ['DATETIME',['2026-10-20 12:00:00.000001','2026-10-20 12:00:00.000002',null],'2026-10-20 12:00:00.000002'],
+    ['TIME',['-100:00:00.000001','-99:59:59.999999',null],'-99:59:59.999999'],
+    ['DOUBLE',['1.5','2.5',null],'2.5'],
+  ] as [string,CellValue[],string][])('%s成员复用精确比较而非浮点或日期转换',(type,values,input)=>{
+    const f=fixture(type,values),inside=f.apply([members([input,input])]);expect(inside.sourceIndices).toEqual([1]);expect(inside.result.rows[0]).toBe(f.source.rows[1]);expect(f.apply([members([input],'notIn')]).sourceIndices).toEqual([0]);
+  });
+  it.each([undefined,null,[],['1',2],new Array(2)] as unknown[])('非法成员%j完整拒绝并保留上次视图',values=>{
+    const f=fixture('BIGINT',['1','2']),before=f.apply([rule('eq','1')]);expect(()=>f.apply([{...members([]),values} as QueryResultFilterRule])).toThrow(text.invalid);expect(f.filter.view(f.binding)).toBe(before);
+  });
+  it('没有行或OR已满足也验证每个成员，不提前采用成功项',()=>{
+    const f=fixture('BIGINT',['1']),before=f.filter.view(f.binding)!;expect(()=>f.apply([rule('notNull'),members(['1','坏值'])],'OR')).toThrow(text.value);expect(f.filter.view(f.binding)).toBe(before);
+    const g=fixture('DECIMAL',[]);expect(()=>g.apply([members(['NaN'])])).toThrow(text.value);
+  });
+  it('成员访问器不执行，超128项先拒绝且不读取成员，单值不接受隐藏成员或上限',()=>{
+    const f=fixture(),getter=vi.fn(()=> 'a'),values=['a'];Object.defineProperty(values,0,{get:getter});expect(()=>f.apply([members(values)])).toThrow(text.invalid);expect(getter).not.toHaveBeenCalled();
+    const huge=new Array(129);Object.defineProperty(huge,0,{get:getter});expect(()=>f.apply([members(huge)])).toThrow(text.budget);expect(getter).not.toHaveBeenCalled();
+    expect(()=>f.apply([{...rule('eq','a'),values:['a']}])).toThrow(text.invalid);expect(()=>f.apply([{...members(['a']),value:'隐藏单值'}])).toThrow(text.invalid);expect(()=>f.apply([{...members(['a']),upper:'隐藏上限'}])).toThrow(text.invalid);
+  });
+  it('每成员计入原行比较及共同字符工作预算，重复和早命中不绕过上限',()=>{
+    const f=fixture('BIGINT',Array.from({length:100000},()=>null)),boundary=f.apply([members(Array(20).fill('1'))]);expect(boundary.result.rows).toEqual([]);expect(()=>f.apply([members(Array(21).fill('1'))])).toThrow(text.budget);expect(f.filter.view(f.binding)).toBe(boundary);
+    const value='x'.repeat(4096),g=fixture('TEXT',Array(1000).fill(value)),before=g.filter.view(g.binding)!;expect(()=>g.apply([members(Array(5).fill(value))])).toThrow(text.budget);expect(g.filter.view(g.binding)).toBe(before);
+    expect(()=>g.apply([members(['x'.repeat(4097)])])).toThrow(text.budget);
+  });
+  it('所有成员共享输入预算，源只计一次而重复成员仍计比较工作',()=>{
+    const f=fixture('TEXT',[]),values=Array(128).fill('x'.repeat(4096));expect(()=>f.apply(Array.from({length:17},()=>members(values)))).toThrow(text.budget);
+  });
+  it.each(['未知','GEOMETRY'])('%s只保留NULL判断，不提供列表',type=>{
+    const f=fixture(type,[null]);expect(queryResultFilterOperators(f.source.columns[0])).not.toContain('in');expect(()=>f.apply([members(['x'])])).toThrow(text.invalid);
+  });
+  it('二进制包装不解码为文本列表；冻结独立成员副本，排除行漂移仍永久撤销',()=>{
+    const bytes=fixture('BLOB',[{type:'binary',base64:'AA=='}]);expect(()=>bytes.apply([members(['AA=='])])).toThrow(text.value);
+    const f=fixture('TEXT',['a','b']),values=['a'],view=f.apply([members(values)]);values[0]='b';expect(view.rules[0].values).toEqual(['a']);expect(Object.isFrozen(view.rules[0].values)).toBe(true);
+    f.source.rows[1].k='a';expect(f.filter.view(f.binding)).toBeUndefined();f.source.rows[1].k='b';expect(()=>f.filter.apply(f.binding,view,[],'AND')).toThrow(text.stale);
+  });
+});
+
 describe('筛选工作预算与单向租约',()=>{
   it('总条件/总单元格工作预算先拒绝，不扩大既有行列范围',()=>{
     const f=fixture();expect(()=>f.apply(Array.from({length:33},()=>rule('null')))).toThrow(text.budget);const g=fixture('TEXT',Array.from({length:100000},()=>null));expect(()=>g.apply(Array.from({length:21},()=>rule('null')))).toThrow(text.budget);g.source.rows.push({k:null,group:'A'});expect(g.filter.bind(g.source,[])).toBeUndefined();

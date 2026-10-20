@@ -155,6 +155,30 @@ function reactProps(node:any){return node[Object.keys(node).find(key=>key.starts
 async function setFilterField(label:string,value:string){const node=document.querySelector('[aria-label="'+label+'"]')!;expect(node).not.toBeNull();await act(async()=>{node.value=value;node.dispatchEvent(new MemoryEvent(node.tagName==='SELECT'?'change':'input'));});}
 async function addFilterRule(index:number,column:string,operator:string,value=''){await click(filterText.add);await setFilterField(filterText.column+' '+index,column);await setFilterField(filterText.operator+' '+index,operator);if(!['null','notNull','empty','notEmpty'].includes(operator))await setFilterField(filterText.input+' '+index,value);}
 async function filterGroup(value='A'){await click(filterText.open);await addFilterRule(1,'group','eq',value);await click(filterText.apply);}
+/** 独立成员通过真实面板逐项输入，保留逗号和换行，不直调控制器。 */
+async function addMemberRule(column:string,values:readonly string[],operator='in'){
+  await click(filterText.add);await setFilterField(filterText.column+' 1',column);await setFilterField(filterText.operator+' 1',operator);
+  for(let index=0;index<values.length;index++){if(index)await click(filterText.addMember(1));await setFilterField(filterText.member(1,index+1),values[index]);}
+}
+it('多值面板与排序、复制、导出共用精确原行，重开保留独立成员',async()=>{
+  await mountMulti();await click(filterText.open);await addMemberRule('id',['9007199254740993','2']);await click(filterText.apply);await headerAction('group');await headerAction('id',{ctrlKey:true});expect(grid().rows).toEqual([original.rows[2],original.rows[1]]);
+  await click(filterText.open);expect(document.querySelector('[aria-label="'+filterText.member(1,1)+'"]')!.value).toBe('9007199254740993');expect(document.querySelector('[aria-label="'+filterText.member(1,2)+'"]')!.value).toBe('2');await click(filterText.cancel);
+  await act(async()=>grid().onSelectedRowsChange(new Set([0,1])));expect(JSON.parse(copy().get('application/x-dbark-cells')!).rows.map((row:any)=>row[1])).toEqual(['2','9007199254740993']);await click(zh.resultExport.selectedTitle);await click(zh.resultExport.chooseFile);await click(zh.resultExport.start);expect(exports[0].result.rows).toEqual([original.rows[2],original.rows[1]]);expect(commands.filter(c=>c==='query.execute')).toHaveLength(1);
+});
+it('成员移除和切换操作撤销旧输入，重新进入列表不复活隐藏成员',async()=>{
+  await mountMulti();await click(filterText.open);await addMemberRule('id',['1','2']);const old=reactProps(document.querySelector('[aria-label="'+filterText.member(1,1)+'"]')).onChange;await click(filterText.removeMember(1,1));await act(async()=>old({target:{value:'9007199254740993'}}));expect(document.querySelector('[aria-label="'+filterText.member(1,1)+'"]')!.value).toBe('2');
+  await setFilterField(filterText.operator+' 1','notIn');expect(document.querySelector('[aria-label="'+filterText.member(1,1)+'"]')!.value).toBe('2');await click(filterText.apply);expect(grid().rows).toEqual([original.rows[0],original.rows[1]]);
+  await click(filterText.open);await setFilterField(filterText.operator+' 1','eq');expect(document.querySelector('[aria-label="'+filterText.input+' 1"]')!.value).toBe('');await setFilterField(filterText.operator+' 1','in');expect(document.querySelector('[aria-label="'+filterText.member(1,1)+'"]')!.value).toBe('');await setFilterField(filterText.column+' 1','words');expect(document.querySelector('[aria-label="'+filterText.member(1,1)+'"]')).toBeNull();await click(filterText.cancel);
+});
+it('成员输入法组合阻止应用和增删，完成后采用最后原文并排除NULL',async()=>{
+  await mount(result=>{result.rows[0].words='a,b\n值';result.rows[1].words=null;result.rows[2].words='其他';});await click(filterText.open);await addMemberRule('words',['']);let input=document.querySelector('[aria-label="'+filterText.member(1,1)+'"]')!;
+  await act(async()=>reactProps(input).onCompositionStart());expect(button(filterText.apply).disabled).toBe(true);expect(button(filterText.addMember(1)).disabled).toBe(true);await act(async()=>reactProps(input).onChange({target:{value:'a,b\n值'}}));input=document.querySelector('[aria-label="'+filterText.member(1,1)+'"]')!;await act(async()=>reactProps(input).onCompositionEnd());await click(filterText.apply);expect(grid().rows).toEqual([original.rows[0]]);
+  await click(filterText.open);await setFilterField(filterText.operator+' 1','notIn');await click(filterText.apply);expect(grid().rows).toEqual([original.rows[2]]);expect(commands.filter(c=>c==='query.execute')).toHaveLength(1);
+});
+it('无效数字成员保留原排序和草稿，改正后原面板才应用',async()=>{
+  await mountMulti();await headerAction('id');const before=grid().rows;await click(filterText.open);await addMemberRule('id',['2','坏值']);await click(filterText.apply);expect(grid().rows).toBe(before);expect(grid().sortColumns).toEqual([{columnKey:'id',direction:'ASC'}]);expect(document.body.textContent).toContain(filterText.value);
+  await setFilterField(filterText.member(1,2),'9007199254740993');await click(filterText.apply);expect(grid().rows).toEqual([original.rows[1],original.rows[2]]);expect(grid().sortColumns).toEqual([]);
+});
 /** 只操作真实条件面板的两个独立输入，不调用筛选控制器来伪造界面结果。 */
 async function addRangeRule(column:string,operator:'between'|'notBetween',lower:string,upper:string){
   await click(filterText.add);await setFilterField(filterText.column+' 1',column);await setFilterField(filterText.operator+' 1',operator);
