@@ -1,6 +1,7 @@
 import type { PlaywrightWorkerOptions } from '@playwright/test';
 
 export const snippetsDiagnosticTitle = '离线片段分组搜索编辑复制删除、重启持久化、纯文本插入撤销与模态快捷键';
+export const explainDiagnosticTitle = '执行计划离线组件：键盘、缺失指标、未知节点、长文本和最小窗口';
 export const snippetsDiagnosticLimits = { samples: 128, markers: 32, errors: 16, intervalMs: 500, drainMs: 300, traceMs: 5000 } as const;
 type TraceSetting = PlaywrightWorkerOptions['trace'];
 type TraceMode = Exclude<TraceSetting, object>;
@@ -14,11 +15,19 @@ export interface SnippetsDiagnosticPolicy {
 
 /** 只接受本离线用例和实际解析后的 trace；不读取凭据文件，也不输出环境变量值。 */
 export function snippetsDiagnosticPolicy(input: { env: NodeJS.ProcessEnv; trace: TraceSetting; retry: number; file: string; title: string }): SnippetsDiagnosticPolicy {
+  return nativeDiagnosticPolicy(input, 'DBARK_SNIPPETS_NATIVE_DIAGNOSTICS', '/tests/e2e/snippets.spec.ts', snippetsDiagnosticTitle, '片段');
+}
+/** 执行计划只开放自身离线用例，不能借用片段标题或扩大到实库页面。 */
+export function explainDiagnosticPolicy(input: { env: NodeJS.ProcessEnv; trace: TraceSetting; retry: number; file: string; title: string }): SnippetsDiagnosticPolicy {
+  return nativeDiagnosticPolicy(input, 'DBARK_EXPLAIN_NATIVE_DIAGNOSTICS', '/tests/e2e/explain-view.spec.ts', explainDiagnosticTitle, '执行计划');
+}
+/** 两个入口共用原trace保留及隐私规则，真实file/title和开关分别校验。 */
+function nativeDiagnosticPolicy(input: { env: NodeJS.ProcessEnv; trace: TraceSetting; retry: number; file: string; title: string }, gate: string, file: string, title: string, label: string): SnippetsDiagnosticPolicy {
   const mode = typeof input.trace === 'object' ? input.trace.mode : input.trace;
   const policy: SnippetsDiagnosticPolicy = { enabled: false, mode, retry: input.retry, screenshots: typeof input.trace === 'object' ? input.trace.screenshots !== false : true, snapshots: typeof input.trace === 'object' ? input.trace.snapshots ?? true : true };
-  if (input.env.DBARK_SNIPPETS_NATIVE_DIAGNOSTICS !== '1' || !input.file.replaceAll('\\', '/').endsWith('/tests/e2e/snippets.spec.ts') || input.title !== snippetsDiagnosticTitle) return policy;
+  if (input.env[gate] !== '1' || !input.file.replaceAll('\\', '/').endsWith(file) || input.title !== title) return policy;
   // 显式诊断与实库配置不能并用；仅检查键是否配置，不读取其值或 .cache/dbark-test.env。
-  if (input.env.DBARK_INTEGRATION_ENABLED === '1' || Object.keys(input.env).some(key => /^DBARK_(?:TEST_|C02_|SSH_|MTLS_)/.test(key))) throw new Error('片段原生诊断拒绝实库或私网测试环境，请使用独立离线进程');
+  if (input.env.DBARK_INTEGRATION_ENABLED === '1' || Object.keys(input.env).some(key => /^DBARK_(?:TEST_|C02_|SSH_|MTLS_)/.test(key))) throw new Error(label + '原生诊断拒绝实库或私网测试环境，请使用独立离线进程');
   policy.enabled = mode === 'on' || mode === 'retain-on-failure' || mode === 'retain-on-failure-and-retries' || mode === 'retain-on-first-failure' && input.retry === 0 || (mode === 'on-first-retry' || mode === 'retry-with-trace') && input.retry === 1 || mode === 'on-all-retries' && input.retry > 0;
   return policy;
 }
@@ -29,12 +38,13 @@ export function retainSnippetsDiagnostics(policy: SnippetsDiagnosticPolicy, fail
 }
 
 export interface DiagnosticRect { x: number; y: number; width: number; height: number; }
-export interface NativeWindowSample { id: number; visible: boolean; focused: boolean; minimized: boolean; maximized: boolean; fullScreen: boolean; bounds: DiagnosticRect; contentBounds: DiagnosticRect; }
+export interface NativeWindowSample { id: number; visible: boolean; focused: boolean; minimized: boolean; maximized: boolean; fullScreen: boolean; bounds: DiagnosticRect; contentBounds: DiagnosticRect; webContentsId?: number; backgroundThrottling?: boolean; }
 export interface RendererSample {
   visibility: string; focused: boolean; width: number; height: number;
   raf: { requested: number; delivered: number; pending: boolean; lastTimestamp: number | null };
   dialog: DiagnosticRect | null;
   edit: { count: number; disabled: boolean | null; rect: DiagnosticRect | null };
+  target?: { count: number; disabled: boolean | null; rect: DiagnosticRect | null; display: string | null; visibility: string | null; pointerEvents: string | null; opacity: string | null; hitTag: string | null; };
 }
 export interface SnippetsDiagnosticPort {
   startTrace(options: { screenshots: boolean; snapshots: SnippetsDiagnosticPolicy['snapshots']; sources: false }): Promise<void>;

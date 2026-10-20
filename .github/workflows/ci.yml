@@ -132,6 +132,8 @@ jobs:
           DBARK_QUERY_CLOSE_OTHERS_NATIVE_TEST: '1'
           # 仅源码 E2E 的固定离线片段用例采集；安装验收与实库用例不继承此门。
           DBARK_SNIPPETS_NATIVE_DIAGNOSTICS: '1'
+          # 只采集原执行计划离线用例的实际context及窗口，不传入安装或实库流程。
+          DBARK_EXPLAIN_NATIVE_DIAGNOSTICS: '1'
       - run: ${{ matrix.command }}
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'

@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { SnippetsNativeDiagnostics, retainSnippetsDiagnostics, snippetsDiagnosticLimits, snippetsDiagnosticPolicy, snippetsDiagnosticTitle, type NativeWindowSample, type RendererSample, type SnippetsDiagnosticPort } from '../helpers/snippetsNativeDiagnostics';
-import { disposeSnippetsRenderer, sampleSnippetsRenderer, snippetsDiagnosticPort } from '../e2e/snippets-native-diagnostics';
+import { SnippetsNativeDiagnostics, retainSnippetsDiagnostics, snippetsDiagnosticLimits, snippetsDiagnosticPolicy, snippetsDiagnosticTitle, explainDiagnosticPolicy, explainDiagnosticTitle, type NativeWindowSample, type RendererSample, type SnippetsDiagnosticPort } from '../helpers/snippetsNativeDiagnostics';
+import { disposeSnippetsRenderer, sampleSnippetsRenderer, snippetsDiagnosticPort, explainDiagnosticPort } from '../e2e/snippets-native-diagnostics';
 import type { ElectronApplication, Page, PlaywrightWorkerOptions } from '@playwright/test';
 
 const input = (trace: PlaywrightWorkerOptions['trace'] = 'retain-on-failure', retry = 0) => ({ env: { DBARK_SNIPPETS_NATIVE_DIAGNOSTICS: '1' }, trace, retry, file: 'D:\\clone\\tests\\e2e\\snippets.spec.ts', title: snippetsDiagnosticTitle });
@@ -13,6 +13,49 @@ function fixture(trace: PlaywrightWorkerOptions['trace'] = 'retain-on-failure', 
   return { port, output, diagnostic: new SnippetsNativeDiagnostics(snippetsDiagnosticPolicy(input(trace, retry)), output) };
 }
 afterEach(() => { vi.useRealTimers(); vi.unstubAllGlobals(); });
+
+describe('执行计划次级窗口诊断边界',()=>{
+  const explainInput=(trace:PlaywrightWorkerOptions['trace']='retain-on-failure')=>({env:{DBARK_EXPLAIN_NATIVE_DIAGNOSTICS:'1'},trace,retry:0,file:'D:/clone/tests/e2e/explain-view.spec.ts',title:explainDiagnosticTitle});
+  it('自身开关、文件及完整标题同时匹配；不能冒充片段入口，trace off不采集',()=>{
+    expect(explainDiagnosticPolicy(explainInput()).enabled).toBe(true);
+    expect(explainDiagnosticPolicy({...explainInput(),env:{}}).enabled).toBe(false);
+    expect(explainDiagnosticPolicy({...explainInput(),env:{DBARK_SNIPPETS_NATIVE_DIAGNOSTICS:'1'}}).enabled).toBe(false);
+    expect(explainDiagnosticPolicy({...explainInput(),file:'D:/clone/tests/e2e/snippets.spec.ts'}).enabled).toBe(false);
+    expect(explainDiagnosticPolicy({...explainInput(),title:snippetsDiagnosticTitle}).enabled).toBe(false);
+    expect(snippetsDiagnosticPolicy({...explainInput(),env:{DBARK_SNIPPETS_NATIVE_DIAGNOSTICS:'1'}}).enabled).toBe(false);
+    expect(explainDiagnosticPolicy(explainInput('off')).enabled).toBe(false);
+  });
+  it.each(['DBARK_INTEGRATION_ENABLED','DBARK_TEST_PASSWORD','DBARK_TEST_HOST','DBARK_C02_PRIVATE_KEY','DBARK_SSH_PASSWORD','DBARK_MTLS_CERT'])('执行计划也拒绝实库配置%s，不输出凭据值',key=>{
+    const env={DBARK_EXPLAIN_NATIVE_DIAGNOSTICS:'1',[key]:key==='DBARK_INTEGRATION_ENABLED'?'1':'不能输出的私密值'};
+    expect(()=>explainDiagnosticPolicy({...explainInput(),env})).toThrow('执行计划原生诊断拒绝实库或私网测试环境');
+    try{explainDiagnosticPolicy({...explainInput(),env});}catch(error){expect(String(error)).not.toContain('不能输出的私密值');}
+  });
+  it('私网凭据getter不读取，继承实际截图／DOM及失败保留策略',()=>{
+    const env={DBARK_EXPLAIN_NATIVE_DIAGNOSTICS:'1'};Object.defineProperty(env,'DBARK_TEST_PASSWORD',{enumerable:true,get(){throw Error('不得读取');}});
+    expect(()=>explainDiagnosticPolicy({...explainInput(),env})).toThrow('拒绝实库或私网测试环境');
+    const policy=explainDiagnosticPolicy(explainInput({mode:'retain-on-failure',screenshots:false,snapshots:false}));expect(policy).toMatchObject({enabled:true,screenshots:false,snapshots:false});expect(retainSnippetsDiagnostics(policy,false)).toBe(false);expect(retainSnippetsDiagnostics(policy,true)).toBe(true);
+  });
+  it('仅观察自身BrowserWindow及真实节流开关，不枚举或调整其他窗口',async()=>{
+    const all=vi.fn(()=>{throw Error('不能枚举其它窗口');}),from=vi.fn((id:number)=>{expect(id).toBe(44);return {id:44,isDestroyed:()=>false,isVisible:()=>true,isFocused:()=>false,isMinimized:()=>false,isMaximized:()=>false,isFullScreen:()=>false,getBounds:()=>native[0].bounds,getContentBounds:()=>native[0].contentBounds,webContents:{id:55,getBackgroundThrottling:()=>true}};});
+    const tracing={_isTracing:false},desktop={context:()=>({tracing}),evaluate:async(fn:Function,id:unknown)=>fn({BrowserWindow:{fromId:from,getAllWindows:all}},id)} as unknown as ElectronApplication;
+    const evaluate=vi.fn(async()=>renderer),port=explainDiagnosticPort(desktop,{evaluate} as unknown as Page,44);
+    expect(await port.native()).toEqual([{...native[0],id:44,webContentsId:55,backgroundThrottling:true}]);expect(from).toHaveBeenCalledExactlyOnceWith(44);expect(all).not.toHaveBeenCalled();
+    await port.renderer();expect(evaluate).toHaveBeenCalledExactlyOnceWith(sampleSnippetsRenderer,'explain');await port.dispose();expect(evaluate).toHaveBeenLastCalledWith(disposeSnippetsRenderer);
+  });
+  it('原窗口消失时拒绝采样，不回退其他窗口；坏ID先于context访问拒绝',async()=>{
+    const context=vi.fn(()=>({tracing:{_isTracing:false}})),desktop={context,evaluate:async(fn:Function,id:unknown)=>fn({BrowserWindow:{fromId:()=>null}},id)} as unknown as ElectronApplication;
+    expect(()=>explainDiagnosticPort(desktop,{} as Page,NaN)).toThrow('窗口ID无效');expect(context).not.toHaveBeenCalled();
+    await expect(explainDiagnosticPort(desktop,{} as Page,44).native()).rejects.toThrow('原窗口已不存在');
+  });
+  it('目标只投影按钮几何和固定样式；rAF单个待交付，不读取SQL或输入原值',()=>{
+    const frames=new Map<number,FrameRequestCallback>(),request=vi.fn((callback:FrameRequestCallback)=>{frames.set(frames.size+1,callback);return frames.size;}),cancel=vi.fn();
+    const button={textContent:'计划结果表格',disabled:false,getBoundingClientRect:()=>({x:100,y:40,width:100,height:26})};Object.defineProperty(button,'value',{get(){throw Error('不许读取原值');}});
+    const hit=vi.fn(()=>({tagName:'SPAN'}));vi.stubGlobal('window',{});vi.stubGlobal('innerWidth',1024);vi.stubGlobal('innerHeight',648);vi.stubGlobal('requestAnimationFrame',request);vi.stubGlobal('cancelAnimationFrame',cancel);
+    vi.stubGlobal('getComputedStyle',()=>({display:'inline-flex',visibility:'visible',pointerEvents:'auto',opacity:'1'}));vi.stubGlobal('document',{visibilityState:'visible',hasFocus:()=>false,querySelector:()=>null,querySelectorAll:(selector:string)=>{expect(selector).toBe('.explain-toolbar button');return [button];},elementFromPoint:hit});
+    const first=sampleSnippetsRenderer('explain');expect(first.target).toEqual({count:1,disabled:false,rect:{x:100,y:40,width:100,height:26},display:'inline-flex',visibility:'visible',pointerEvents:'auto',opacity:'1',hitTag:'SPAN'});expect(hit).toHaveBeenCalledWith(150,53);expect(first.edit.count).toBe(0);
+    sampleSnippetsRenderer('explain');expect(request).toHaveBeenCalledTimes(1);frames.get(1)!(42);const next=sampleSnippetsRenderer('explain');expect(next.raf).toMatchObject({requested:1,delivered:1,pending:false,lastTimestamp:42});expect(request).toHaveBeenCalledTimes(2);disposeSnippetsRenderer();expect(cancel).toHaveBeenCalledExactlyOnceWith(2);expect((window as any).__dbarkSnippetDiagnosticRaf).toBeUndefined();
+  });
+});
 
 describe('片段专项诊断隐私门', () => {
   it('默认关闭，文件和完整用例标题同时精确匹配，未知门值不启用', () => {

@@ -2,9 +2,12 @@ import { build } from 'esbuild';
 import { writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { test, expect, desktop, dataDir } from './desktop-fixture';
+import { createExplainNativeDiagnostics, explainDiagnosticPort } from './snippets-native-diagnostics';
+import { explainDiagnosticTitle } from '../helpers/snippetsNativeDiagnostics';
 
 /** 独立沙箱窗口渲染真实组件和样式；这里验证交互，不模拟实库结果通过。 */
-test('执行计划离线组件：键盘、缺失指标、未知节点、长文本和最小窗口', async ({}, testInfo) => {
+test(explainDiagnosticTitle, async ({ trace }, testInfo) => {
+  const diagnostic = createExplainNativeDiagnostics(trace, testInfo);
   const bundle = join(dataDir, 'explain-view.js'), html = join(dataDir, 'explain-view.html');
   await build({ entryPoints: ['tests/e2e/explain-view.fixture.tsx'], outfile: bundle, bundle: true, platform: 'browser', format: 'iife', jsx: 'automatic', define: { 'process.env.NODE_ENV': '"test"' } });
   await writeFile(html, '<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src \'self\'; style-src \'self\' \'unsafe-inline\'; script-src \'self\';"><link rel="stylesheet" href="explain-view.css"><title>执行计划离线交互验收</title><body><div id="root" style="height:100vh;width:100vw;overflow:auto"></div><script src="explain-view.js"></script></body></html>');
@@ -15,7 +18,9 @@ test('执行计划离线组件：键盘、缺失指标、未知节点、长文�
     await window.loadFile(path); window.focus(); return window.id;
   }, html);
   const view = await opening, errors: string[] = []; view.on('pageerror', error => errors.push(error.message));
+  let failed = false;
   try {
+    await diagnostic?.start(explainDiagnosticPort(desktop, view, windowId), 'initial');
     await expect(view.getByRole('tree', { name: '树形计划' })).toBeVisible();
     const root = view.getByRole('treeitem').first(); await root.focus();
     await root.press('ArrowRight'); await expect(view.getByRole('treeitem').nth(1)).toBeFocused();
@@ -29,7 +34,9 @@ test('执行计划离线组件：键盘、缺失指标、未知节点、长文�
     await expect(view.getByLabel('节点详情')).toContainText('future_operation');
     await view.getByRole('button', { name: '原始输出', exact: true }).click(); await expect(view.getByRole('tree')).toHaveCount(0);
     await expect(view.getByLabel('原始输出', { exact: true })).toContainText('future_operation');
+    diagnostic?.mark('before-plan-table');
     await view.getByRole('button', { name: '计划结果表格', exact: true }).click(); await expect(view.getByRole('grid')).toBeVisible();
+    diagnostic?.mark('after-plan-table');
     expect(await view.evaluate(() => (window as unknown as { explainFixture: { textRequests: number } }).explainFixture.textRequests)).toBe(0);
     await view.getByRole('button', { name: '获取文本计划', exact: true }).click();
     expect(await view.evaluate(() => (window as unknown as { explainFixture: { textRequests: number } }).explainFixture.textRequests)).toBe(1);
@@ -53,5 +60,10 @@ test('执行计划离线组件：键盘、缺失指标、未知节点、长文�
     await view.evaluate(() => (window as unknown as { explainFixture: { render(kind: string): void } }).explainFixture.render('invalid'));
     await expect(view.getByRole('status')).toBeVisible(); await expect(view.getByLabel('原始输出', { exact: true })).toContainText('未知的计划');
     expect(errors).toEqual([]);
-  } finally { await desktop.evaluate(({ BrowserWindow }, id) => BrowserWindow.fromId(id)?.destroy(), windowId); }
+  } catch (error) { failed = true; throw error; }
+  finally {
+    // 原窗口关闭前封存自身context；诊断故障不替代原用例失败，不停止其它记录器。
+    await diagnostic?.finish(failed);
+    await desktop.evaluate(({ BrowserWindow }, id) => BrowserWindow.fromId(id)?.destroy(), windowId);
+  }
 });
