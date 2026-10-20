@@ -38,6 +38,30 @@ describe('原TestInfo期限／owner和同流收尾',()=>{
 /** 在隔离VM中运行将序列化到Electron的真实函数；原handler只返回RAM对象。 */
 function audit(){let now=0;const original=vi.fn(async(_event:any,payload:any)=>({ok:true,result:payload.command==='sessions.open'?{sessionId:'s'}:payload.command==='connections.open'?{version:'8.4.11',dialect:'mysql'}:payload.command==='files.choose'?{token:payload.input.format,name:'visible-selected.'+payload.input.format}:{rows:2}})),handlers=new Map([['dbark:request',original]]);const context:any={Date:{now:()=>now},ipcMain:{_invokeHandlers:handlers},target:{senderId:1,profileId:'c',tabId:'q',sql:queryResultColumnsSql,deadline:120000}};runInNewContext(`(${installQueryResultColumnsAudit.toString()})({ipcMain},target)`,context);const invoke=(command:string,input:any={})=>handlers.get('dbark:request')!({sender:{id:1}},{command,input});return {context,original,handlers,invoke,state:context.__dbarkQueryResultColumnsAudit,time:(value:number)=>{now=value;}};}
 describe('本例IPC观察器只委托准确原请求',()=>{
+ it('首次目标拒绝分类保留，后续时钟变化和检查不能抹去原失败或委托请求',async()=>{
+  const f=audit();await expect(f.invoke('settings.save',{activeTabId:'q',tabs:[{id:'q',kind:'query',connectionId:'c',sql:'RAM私有正文'}]})).rejects.toThrow('永久停链：工作区目标');
+  f.time(120001);expect(()=>f.state.check()).toThrow('永久停链：工作区目标');await expect(f.invoke('tasks.list')).rejects.toThrow('工作区目标');
+  expect(f.state.failure).toBe('工作区目标');expect(f.state.revision).toBe(1);expect(f.original).not.toHaveBeenCalled();
+ });
+ it('连接版本回包拒绝只保留分类，不将原始回包写入诊断',async()=>{
+  const f=audit();f.original.mockResolvedValueOnce({ok:true,result:{version:'8.4.12',dialect:'mysql'}});
+  await expect(f.invoke('connections.open',{id:'c'})).rejects.toThrow('连接方言或版本回包');expect(()=>f.state.check()).toThrow('连接方言或版本回包');
+  expect(f.state.failure).toBe('连接方言或版本回包');expect(f.state.pending).toBe(0);expect(f.state.session).toBe('');expect(f.original).toHaveBeenCalledOnce();
+ });
+ it('失败回包记录已许可命令，后续请求仍永久拒绝且不委托',async()=>{
+  const f=audit();f.original.mockResolvedValueOnce({ok:false,result:{rows:0}});
+  await expect(f.invoke('connections.open',{id:'c'})).rejects.toThrow('原处理器失败回包：connections.open');await expect(f.invoke('tasks.list')).rejects.toThrow('原处理器失败回包：connections.open');
+  expect(f.state.failure).toBe('原处理器失败回包：connections.open');expect(f.state.pending).toBe(0);expect(f.original).toHaveBeenCalledOnce();
+ });
+ it('原处理器异常保持同一个错误，后续检查只给固定分类且不保存异常正文',async()=>{
+  const f=audit(),reason=Error('RAM原错误正文');f.original.mockRejectedValueOnce(reason);
+  await expect(f.invoke('tasks.list')).rejects.toBe(reason);expect(()=>f.state.check()).toThrow('原处理器抛出：tasks.list');
+  expect(f.state.failure).toBe('原处理器抛出：tasks.list');expect(f.state.pending).toBe(0);expect(f.original).toHaveBeenCalledOnce();
+ });
+ it.each([['query.sessionState','未许可命令：query.sessionState'],['RAM私有命令内容','未许可命令']])('拒绝%s时仅固定协议名称可见，既不回显任意字符串也不扩大允许名单',async(command,expected)=>{
+  const f=audit();await expect(f.invoke(command,{private:'RAM私有输入'})).rejects.toThrow(expected);expect(f.state.failure).toBe(expected);
+  await expect(f.invoke('tasks.list')).rejects.toThrow(expected);expect(f.original).not.toHaveBeenCalled();
+ });
  it('一条原SQL和两次格式请求原样委托，不伪造结果，重复SQL立刻永久拒绝',async()=>{const f=audit();await f.invoke('sessions.open',{connectionId:'c'});await f.invoke('query.execute',{sessionId:'s',sql:queryResultColumnsSql});for(const format of ['csv','json']){await f.invoke('files.choose',{purpose:'export',format});const response=await f.invoke('files.exportResult',{format,encoding:'utf8',fileToken:format});expect(response).toEqual({ok:true,result:{rows:2}});}expect(f.state.queries).toBe(1);expect(f.state.exports).toEqual(['csv','json']);await expect(f.invoke('query.execute',{sessionId:'s',sql:queryResultColumnsSql})).rejects.toThrow('永久');expect(f.original.mock.calls.filter(([,p])=>p.command==='query.execute')).toHaveLength(1);});
  it.each(['connections.save','connections.delete','query.executeParameterized','schema.apply'])('修订或扩大路径%s不委托，改回也永久停链',async command=>{const f=audit();await expect(f.invoke(command,{})).rejects.toThrow();await expect(f.invoke('tasks.list')).rejects.toThrow('永久');expect(f.original).not.toHaveBeenCalled();});
  it('标签/SQL上下文ABA或handler替换均不能恢复；另sender原样委托不接管其它owner',async()=>{const f=audit();const wrapped=f.handlers.get('dbark:request')!;await wrapped({sender:{id:99}},{command:'foreign',input:{}});expect(f.original).toHaveBeenCalledOnce();await expect(f.invoke('settings.save',{activeTabId:'q',tabs:[{id:'q',kind:'query',connectionId:'c',sql:'改变'}]})).rejects.toThrow();await expect(f.invoke('settings.save',{activeTabId:'q',tabs:[{id:'q',kind:'query',connectionId:'c',sql:queryResultColumnsSql}]})).rejects.toThrow();const next=audit();next.handlers.set('dbark:request',next.original);expect(()=>next.state.check()).toThrow();next.handlers.set('dbark:request',wrapped);expect(()=>next.state.check()).toThrow();});

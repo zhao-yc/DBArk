@@ -109,34 +109,40 @@ export function installQueryResultColumnsAudit({ipcMain}: {ipcMain:any},target:Q
   const root=globalThis as any,handlers=ipcMain._invokeHandlers,original=handlers?.get('dbark:request');
   if(!Number.isSafeInteger(target.senderId)||target.senderId<=0||typeof target.profileId!=='string'||!target.profileId||typeof target.tabId!=='string'||!target.tabId||typeof target.sql!=='string'||!target.sql||!Number.isFinite(target.deadline)||target.deadline<=Date.now()||typeof original!=='function'||root.__dbarkQueryResultColumnsAudit)throw Error('结果列IPC观察器归属未知');
   const state:any={invalid:false,revision:0,pending:0,queries:0,exports:[] as string[],chosen:[] as string[],session:'',sessionClaim:undefined,tokens:{} as Record<string,string>,last:Date.now(),check:undefined};
-  const reject=()=>{state.invalid=true;throw Error('结果列原目标／修订／IPC已变化，永久停链');};
-  state.check=()=>{const now=Date.now();if(state.invalid||root.__dbarkQueryResultColumnsAudit!==state||handlers.get('dbark:request')!==wrapped||!Number.isFinite(target.deadline)||!Number.isFinite(now)||now<state.last||now>=target.deadline)reject();state.last=now;};
+  // 只保留首次拒绝的固定分类，不记录请求、SQL、配置、文件路径或服务端错误正文。
+  const reject=(reason='既有停链')=>{state.invalid=true;state.failure??=reason;throw Error('结果列原目标／修订／IPC已变化，永久停链：'+state.failure);};
+  state.check=()=>{const now=Date.now();if(state.invalid)reject();if(root.__dbarkQueryResultColumnsAudit!==state||handlers.get('dbark:request')!==wrapped)reject('审计归属');if(!Number.isFinite(target.deadline)||!Number.isFinite(now)||now<state.last||now>=target.deadline)reject('原期限或时钟');state.last=now;};
   const wrapped=async(event:any,payload:any)=>{
     if(event.sender?.id!==target.senderId)return original(event,payload);
     state.check();const command=payload?.command,input=payload?.input;let sessionClaim:any;
     // 所有连接修改和其它执行路径均永久撤销；不依赖配置改回后的相等值推断原修订。
-    if(typeof command!=='string'||!input)reject();
-    if(command==='settings.save'){const tab=input.tabs?.find((tab:any)=>tab.id===target.tabId);if(input.activeTabId!==target.tabId||tab?.kind!=='query'||tab.connectionId!==target.profileId||tab.sql!==target.sql){state.revision++;reject();}}
-    else if(command==='connections.open'){if(input.id!==target.profileId)reject();}
+    if(typeof command!=='string'||!input)reject('请求形状');
+    if(command==='settings.save'){const tab=input.tabs?.find((tab:any)=>tab.id===target.tabId);if(input.activeTabId!==target.tabId||tab?.kind!=='query'||tab.connectionId!==target.profileId||tab.sql!==target.sql){state.revision++;reject('工作区目标');}}
+    else if(command==='connections.open'){if(input.id!==target.profileId)reject('连接目标');}
     else if(command==='sessions.open'){
-      if(input.connectionId!==target.profileId||input.database||state.session||state.sessionClaim)reject();
+      if(input.connectionId!==target.profileId||input.database||state.session||state.sessionClaim)reject('会话领取');
       // 首次委托前同步消费，失败或迟到均不回退；重复请求不能穿过await窗口。
       sessionClaim={sender:event.sender,senderId:target.senderId,profileId:target.profileId,revision:state.revision,response:undefined,returnedSessionId:''};
       state.sessionClaim=sessionClaim;
     }
-    else if(command==='query.execute'){if(input.sql!==target.sql||!state.session||input.sessionId!==state.session||state.queries!==0)reject();state.queries++;}
-    else if(command==='files.choose'){if(input.purpose!=='export'||!['csv','json'].includes(input.format)||state.chosen.includes(input.format))reject();state.chosen.push(input.format);}
-    else if(command==='files.exportResult'){if(!['csv','json'].includes(input.format)||state.exports.includes(input.format)||!state.chosen.includes(input.format)||input.encoding!=='utf8'||input.fileToken!==state.tokens[input.format])reject();state.exports.push(input.format);}
-    else if(['query.completionState','sessions.close'].includes(command)){if(!state.session||input.sessionId!==state.session)reject();}
-    else if(command==='metadata.completion'){if(input.connectionId!==target.profileId)reject();}
-    else if(!['settings.get','connections.list','history.list','tasks.list'].includes(command)){if(command.startsWith('connections.'))state.revision++;reject();}
+    else if(command==='query.execute'){if(input.sql!==target.sql||!state.session||input.sessionId!==state.session||state.queries!==0)reject('查询目标或次数');state.queries++;}
+    else if(command==='files.choose'){if(input.purpose!=='export'||!['csv','json'].includes(input.format)||state.chosen.includes(input.format))reject('文件选择');state.chosen.push(input.format);}
+    else if(command==='files.exportResult'){if(!['csv','json'].includes(input.format)||state.exports.includes(input.format)||!state.chosen.includes(input.format)||input.encoding!=='utf8'||input.fileToken!==state.tokens[input.format])reject('文件导出');state.exports.push(input.format);}
+    else if(['query.completionState','sessions.close'].includes(command)){if(!state.session||input.sessionId!==state.session)reject('会话目标');}
+    else if(command==='metadata.completion'){if(input.connectionId!==target.profileId)reject('元数据目标');}
+    else if(!['settings.get','connections.list','history.list','tasks.list'].includes(command)){
+      if(command.startsWith('connections.'))state.revision++;
+      // 只显示固定的已知协议名称，任意请求字符串不能借诊断进入报告；名单不授予委托权限。
+      const known=['query.sessionState','query.parameterNames','query.executeParameterized','query.explain','query.cancel','query.temporaryRead','query.transaction','query.exportStream','connections.save','connections.delete','metadata.databases','metadata.tables','schema.apply','snippets.list'];
+      reject('未许可命令'+(known.includes(command)?'：'+command:''));
+    }
     state.pending++;
     try {const response=await original(event,payload);
       // 先保留原回包和句柄，再核归属：停链后的真实资源仍留在原claim，不绑定、不补关。
       if(sessionClaim){sessionClaim.response=response;if(typeof response?.result?.sessionId==='string')sessionClaim.returnedSessionId=response.result.sessionId;}
       state.check();
-      if(sessionClaim&&(state.sessionClaim!==sessionClaim||event.sender!==sessionClaim.sender||event.sender?.id!==sessionClaim.senderId||target.senderId!==sessionClaim.senderId||target.profileId!==sessionClaim.profileId||input.connectionId!==sessionClaim.profileId||input.database||state.revision!==sessionClaim.revision))reject();if(response?.ok!==true)reject();if(command==='files.choose'){if(typeof response.result?.token!=='string'||!response.result.token||response.result.name!=='visible-selected.'+input.format)reject();state.tokens[input.format]=response.result.token;}if(command==='sessions.open'){if(typeof response.result?.sessionId!=='string'||!response.result.sessionId)reject();state.session=response.result.sessionId;}if(command==='connections.open'&&(response.result?.dialect!=='mysql'||!/^8\.4\.11(?:[-+][^\s]+)?$/.test(response.result?.version??'')))reject();return response;}
-    catch(reason){state.invalid=true;throw reason;}finally{state.pending--;}
+      if(sessionClaim&&(state.sessionClaim!==sessionClaim||event.sender!==sessionClaim.sender||event.sender?.id!==sessionClaim.senderId||target.senderId!==sessionClaim.senderId||target.profileId!==sessionClaim.profileId||input.connectionId!==sessionClaim.profileId||input.database||state.revision!==sessionClaim.revision))reject('会话回包归属');if(response?.ok!==true)reject('原处理器失败回包：'+command);if(command==='files.choose'){if(typeof response.result?.token!=='string'||!response.result.token||response.result.name!=='visible-selected.'+input.format)reject('文件选择回包');state.tokens[input.format]=response.result.token;}if(command==='sessions.open'){if(typeof response.result?.sessionId!=='string'||!response.result.sessionId)reject('会话回包');state.session=response.result.sessionId;}if(command==='connections.open'&&(response.result?.dialect!=='mysql'||!/^8\.4\.11(?:[-+][^\s]+)?$/.test(response.result?.version??'')))reject('连接方言或版本回包');return response;}
+    catch(reason){state.invalid=true;state.failure??='原处理器抛出：'+command;throw reason;}finally{state.pending--;}
   };
   root.__dbarkQueryResultColumnsAudit=state;handlers.set('dbark:request',wrapped);state.check();
 }
