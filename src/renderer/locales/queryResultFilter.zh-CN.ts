@@ -11,6 +11,7 @@ export const queryResultFilterZh = {
   membersHint:'每个输入框填写一个候选值；空文本、换行、逗号和引号均保留原文，不解析 SQL。列表正反条件都排除 NULL。', addValue:'添加候选值',
   member:(condition:number,member:number)=>`第${condition}条条件第${member}个候选值`,removeMember:(condition:number,member:number)=>`移除第${condition}条条件第${member}个候选值`,addMember:(condition:number)=>`为第${condition}条条件添加候选值`,memberCount:(count:number,maximum:number)=>`${count} / ${maximum} 个候选值`,
   add: '添加条件', apply: '应用筛选', cancel: '取消筛选草稿', clear: '清除全部筛选', clearDraft: '清空条件草稿',
+  cellEquals:'追加等值条件',cellNotEquals:'追加排除条件',cellHint:'将当前单元格作为新条件，与现有条件整体按 AND 组合。先审阅草稿，应用后生效；不重发 SQL。',cellUnavailable:'请选择支持比较的当前单元格；字节、未知原值或过长值不能直接填入筛选条件。',
   remove: (index: number) => `移除第${index}条筛选条件`, condition: (index: number) => `第${index}条筛选条件`,
   operators: { contains:'文本包含',notContains:'文本不包含',startsWith:'文本开头为',notStartsWith:'文本开头不是',endsWith:'文本结尾为',notEndsWith:'文本结尾不是',empty:'为空文本',notEmpty:'非空文本',eq:'等于',ne:'不等于',gt:'大于',gte:'大于或等于',lt:'小于',lte:'小于或等于',between:'介于（含两端）',notBetween:'不介于（排除两端）',in:'属于候选值列表',notIn:'不属于候选值列表',null:'为 NULL',notNull:'非 NULL' },
   empty: '没有条件时保留全部已返回行；空串是独立原值，不等于 NULL。',

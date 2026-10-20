@@ -2,6 +2,8 @@
 
 ## 当前开发安排（2026-10-20）
 
+新增[从当前单元格追加筛选条件](development/query-result-cell-filter-20261020.md)候选：原值预填到现有草稿，显式应用才生效；现有OR整组保留，再与新条件AND组合。按唯一键、原位置及标量精度捕获，NULL与空文本分离，漂移撤销旧动作，不执行SQL。当前仅静态审阅，固定源码验证待执行，暂不发布，不增加完整工作包计数。
+
 新增[文本筛选大小写选项与短窗口布局修复](development/query-result-filter-case-20261020.md)：默认保持敏感，每条文本条件可显式采用Unicode小写映射，支持分组及多值，保留原文及排序规则。原窗口揭示96像素结果区被内部工具条挤为28，固定74c59bf改为按实际工具条额外留空间；原2反例修前失败／修后同断言转绿。Linux类型／579文件11116通过、10平台跳过／构建，Windows类型／301项／新构建、原实库整例、Python文件读回及完整11125通过、1平台跳过均通过，原几何网格96／client88、五点命中表头，见[本批验收](../tests/integration/acceptance-query-result-case-74c59bf-20261020.md)。按main交付源码，旧失败及未确认收尾保留，不外推新安装、macOS或系统输入；暂不发布，不增加完整工作包计数。
 
 继续定位[Intel执行计划点击超时](development/explain-native-stability-20261020.md)：旧ZIP已独立核对，只有runner trace，尚不能确认原生窗口或帧状态。复用现有有界记录器补真实context及自身窗口观察，不改原断言、点击、期限或产品。固定4917d0a通过Linux11083项／类型／构建，Windows78定向／新构建／原GUI及完整11092通过、1平台跳过；独立正向采集含127个真实浏览器帧，见[准确验收](../tests/integration/acceptance-explain-diagnostics-4917d0a-20261020.md)。原生CI的ARM与Intel源码／安装legacy均各80通过、314跳过，Windows停于既有helper检查，整轮失败；已按main交付诊断，不将诊断有效写成旧偶发根因已修复，暂不发布。

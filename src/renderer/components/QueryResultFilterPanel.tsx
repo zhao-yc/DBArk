@@ -20,8 +20,8 @@ function expressionOf(group:DraftGroup):QueryResultFilterGroup{
   return{mode:group.mode,children:group.children.map(child=>child.kind==='group'?expressionOf(child):{...child.rule,...(child.rule.values?{values:[...child.rule.values]}:{})})};
 }
 /** 内联条件树不扫描结果、不触发SQL；只有显式应用才交给父级有界控制器。 */
-export function QueryResultFilterPanel({binding,initial,isCurrent,onApply,onClose}:{binding:QueryResultFilterBinding;initial:QueryResultFilterView;isCurrent():boolean;onApply(expression:QueryResultFilterGroup):void;onClose():void}){
-  const sequence=useRef(0),[draft,setDraft]=useState<DraftGroup>(()=>copyDraft(initial.expression??{mode:initial.mode,children:initial.rules},()=>sequence.current++));
+export function QueryResultFilterPanel({binding,initial,seed,isCurrent,onApply,onClose}:{binding:QueryResultFilterBinding;initial:QueryResultFilterView;seed?:QueryResultFilterGroup;isCurrent():boolean;onApply(expression:QueryResultFilterGroup):void;onClose():void}){
+  const sequence=useRef(0),[draft,setDraft]=useState<DraftGroup>(()=>copyDraft(seed??initial.expression??{mode:initial.mode,children:initial.rules},()=>sequence.current++));
   const live=useRef(draft),invalid=useRef(false),composition=useRef(false),[composing,setComposing]=useState(false);live.current=draft;
   /** 首次失效永久拒绝，旧回调不能写入另一棵草稿或移除后占据相同位置的节点。 */
   function current(expected=live.current):boolean{if(invalid.current)return false;let okay=false;try{okay=isCurrent()===true;}catch{}if(!okay)invalid.current=true;return okay&&live.current===expected;}

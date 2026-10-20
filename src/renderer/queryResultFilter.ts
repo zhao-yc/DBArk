@@ -62,6 +62,13 @@ function matchExpression(shape:FilterShape,matches:readonly boolean[]):boolean{
 function freezeExpression(shape:FilterShape,rules:readonly Readonly<QueryResultFilterRule>[]):QueryResultFilterGroup{
   return Object.freeze({mode:shape.mode,children:Object.freeze(shape.children.map(child=>typeof child==='number'?rules[child]:freezeExpression(child,rules)))});
 }
+/** 为已生效条件追加AND叶；OR根保留为括号子组，开草稿前先核全部结构预算，不扫描结果。 */
+export function appendQueryResultFilterRule(expression:QueryResultFilterGroup,rule:QueryResultFilterRule):QueryResultFilterGroup{
+  const previous=prepareExpression(expression),addition=prepareExpression({mode:'AND',children:[rule]}),index=previous.rules.length;
+  const shape:FilterShape=!previous.shape.children.length?{mode:'AND',children:[index]}:previous.shape.mode==='AND'?{mode:'AND',children:[...previous.shape.children,index]}:{mode:'AND',children:[previous.shape,index]};
+  const next=freezeExpression(shape,[...previous.rules,...addition.rules].map(item=>Object.freeze({...item})));
+  prepareExpression(next);return next;
+}
 /** 比较方式来自协议类型；未知/二进制元数据仍可做NULL判断，不按外观猜类型。 */
 export function queryResultFilterOperators(column:ResultColumn):readonly QueryResultFilterOperator[]{
   const kind=queryResultFilterKind(column);
