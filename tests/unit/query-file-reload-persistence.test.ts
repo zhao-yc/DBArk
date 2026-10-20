@@ -84,3 +84,22 @@ it('预览后再次外改拒绝提交且令牌不能重用，原草稿及来源�
   expect(persistedSql(f.database)).toBe(f.draft);
   expect((await f.service.reload({ ...input, taskId: randomUUID() }, f.scope)).state).toBe('blocked');
 });
+
+it('关闭后同ID重建属于新文档，旧预览拒绝而新检查可用', async () => {
+  const f = await fixture(), preview = previewed(await f.service.checkExternal(f.input(), f.scope));
+  const original = f.store.queryFileDocument('one'), tab = original.tab;
+  expect(original.generation).toBeGreaterThan(0);
+  f.store.saveSettings({ ...f.store.settings(), tabs: [] });
+  f.store.saveSettings({ ...f.store.settings(), tabs: [{ ...tab, fileSourceBinding: undefined }] });
+  const rebuilt = f.store.queryFileDocument('one');
+  expect(rebuilt.token).not.toBe(original.token); expect(rebuilt.generation).toBe(0);
+  expect(f.store.queryFileSource('one')).toBeUndefined(); expect(persistedSql(f.database)).toBe(f.draft);
+  const reopened = opened(await f.service.open({ tabId: 'one', taskId: randomUUID(), encoding: 'utf8' }, f.scope));
+  const input = () => ({ tabId: 'one', taskId: randomUUID(), source: reopened.binding.ref, draftDigest: queryFileSqlDigest(f.disk) });
+  const before = readFileSync(f.database);
+  expect((await f.service.reload({ ...input(), previewId: preview.previewId }, f.scope)).state).toBe('blocked');
+  expect(readFileSync(f.database)).toEqual(before); expect(readFileSync(f.target, 'utf8')).toBe(f.disk);
+  const fresh = previewed(await f.service.checkExternal(input(), f.scope));
+  expect((await f.service.reload({ ...input(), previewId: fresh.previewId }, f.scope)).state).toBe('reloaded');
+  expect(persistedSql(f.database)).toBe(f.disk); expect(f.choose).toHaveBeenCalledTimes(2);
+});

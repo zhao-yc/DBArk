@@ -542,7 +542,10 @@ export class LocalStore {
     });
     for (const tab of previous) {
       const next = settings.tabs.find(next => next.id === tab.id);
-      if (!next || next.kind !== tab.kind || next.connectionId !== tab.connectionId) this.queryFileDocuments.delete(tab.id);
+      if (!next || next.kind !== tab.kind || next.connectionId !== tab.connectionId) {
+        // 文档令牌已经失效，关闭或重建后不再保留其重载世代，避免随历史标签累计。
+        this.queryFileDocuments.delete(tab.id); this.queryFileReloadGenerations.delete(tab.id); continue;
+      }
       // 成功的SQL/上下文/来源往返也推进重载世代；现有保存租约仍允许正文继续编辑。
       if (!next || next.sql !== tab.sql || next.connectionId !== tab.connectionId || next.database !== tab.database || JSON.stringify(next.databaseContext) !== JSON.stringify(tab.databaseContext) || !sameQueryFileSource(next.fileSourceBinding, tab.fileSourceBinding) || next.sourceBinding !== tab.sourceBinding) this.queryFileReloadGenerations.set(tab.id, (this.queryFileReloadGenerations.get(tab.id) ?? 0) + 1);
     }
