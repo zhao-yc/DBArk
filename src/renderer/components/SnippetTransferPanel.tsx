@@ -13,8 +13,8 @@ export function SnippetTransferPanel({ blocked, authorize, onActive, onApplied }
   /** 关闭只属于本弹窗的能力；卸载后的失败不恢复UI或触发自动重试。 */
   function release(id: string) { void invoke('snippets.transferCancel', { scopeId: id, close: true }).catch(() => {}); }
   useEffect(() => { alive.current = true; return () => { alive.current = false; generation.current++; if (scope.current) release(scope.current); scope.current = undefined; }; }, []);
-  /** 当前操作完成后统一解除父锁并丢弃一次性预览。 */
-  function finish() { if (scope.current) release(scope.current); scope.current = undefined; locked.current = false; setBusy(null); setPreview(null); setCancelling(false); callbacks.current.onActive(false); }
+  /** 终态先使本代次所有迟到回包失效，再统一解除父锁并丢弃一次性预览。 */
+  function finish() { generation.current++; if (scope.current) release(scope.current); scope.current = undefined; locked.current = false; setBusy(null); setPreview(null); setCancelling(false); callbacks.current.onActive(false); }
   /** 必须经父弹窗的未保存确认后才申请Main文档能力。 */
   function request(mode: 'import' | 'export') {
     if (blocked || locked.current) return;
@@ -50,7 +50,7 @@ export function SnippetTransferPanel({ blocked, authorize, onActive, onApplied }
         if (!alive.current || generation.current !== turn) return;
         if (!result.cancelled) { setMessage(text.committing); return; }
       }
-      generation.current++; finish();
+      finish();
     } catch (reason) {
       // 取消请求失败不代表原传输结束；保留代次、scope及父锁，等待原操作的真实结局。
       if (alive.current && generation.current === turn) setError(errorMessage(reason));
