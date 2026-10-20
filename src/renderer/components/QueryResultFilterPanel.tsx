@@ -1,4 +1,4 @@
-import { useRef, useState, type ReactNode } from 'react';
+import { useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
 import type { QueryResultFilterBinding, QueryResultFilterGroup, QueryResultFilterOperator, QueryResultFilterRule, QueryResultFilterView } from '../queryResultFilter';
 import { queryResultFilterLimits, queryResultFilterNeedsUpper, queryResultFilterNeedsValue, queryResultFilterNeedsValues, queryResultFilterOperators, queryResultFilterSupportsIgnoreCase } from '../queryResultFilter';
 import { queryResultFilterZh as text } from '../locales/queryResultFilter.zh-CN';
@@ -40,6 +40,17 @@ export function QueryResultFilterPanel({binding,initial,seed,isCurrent,onApply,o
   /** 输入法组合不会变成应用或跨面板解锁。 */
   function beginComposition():void{if(current(draft)){composition.current=true;setComposing(true);}}
   function endComposition():void{if(current()){composition.current=false;setComposing(false);}}
+  /** 按钮与显式快捷键共用原草稿租约，组合输入结束前不得提交。 */
+  function applyDraft():void{if(current(draft)&&!composition.current)onApply(expressionOf(draft));}
+  /** 只处理面板内的明确命令；普通Enter保留输入／按钮原行为，输入法确认和长按不提交。 */
+  function keyDown(event:KeyboardEvent<HTMLElement>):void{
+    if(composition.current||event.nativeEvent.isComposing||event.keyCode===229)return;
+    const apply=event.key==='Enter'&&(event.ctrlKey||event.metaKey)&&!event.altKey&&!event.shiftKey;
+    if(!apply&&event.key!=='Escape')return;
+    event.preventDefault();event.stopPropagation();
+    if(event.repeat)return;
+    if(apply)applyDraft();else if(current(draft))onClose();
+  }
   const valid=current(),numbers=new Map<number,number>();let groups=0;
   /** 展示编号按树顺序连续排列，编辑身份始终使用稳定ID而非展示位置。 */
   function count(group:DraftGroup):void{groups++;for(const child of group.children)if(child.kind==='group')count(child);else numbers.set(child.id,numbers.size+1);}
@@ -57,5 +68,5 @@ export function QueryResultFilterPanel({binding,initial,seed,isCurrent,onApply,o
       {members&&<div className="query-result-filter-members"><p>{text.membersHint}</p>{(rule.values??[]).map((value,member)=><div className="query-result-filter-member" key={member}><textarea rows={1} aria-label={text.member(index,member+1)} value={value} maxLength={queryResultFilterLimits.valueUnits} disabled={!valid} onChange={event=>changeRule(group.id,id,rule=>({...rule,values:rule.values?.map((value,position)=>position===member?event.target.value:value)}),true)} onCompositionStart={beginComposition} onCompositionEnd={endComposition}/><button aria-label={text.removeMember(index,member+1)} disabled={!valid||composing||(rule.values?.length??0)<=1} onClick={()=>changeRule(group.id,id,rule=>({...rule,values:rule.values?.filter((_,position)=>position!==member)}))}>×</button></div>)}<button aria-label={text.addMember(index)} disabled={!valid||composing||(rule.values?.length??0)>=queryResultFilterLimits.members} onClick={()=>changeRule(group.id,id,rule=>({...rule,values:[...(rule.values??[]),'']}))}>{text.addValue}</button><span className="muted">{text.memberCount(rule.values?.length??0,queryResultFilterLimits.members)}</span></div>}
       <button disabled={!valid||composing} aria-label={text.remove(index)} onClick={()=>replace(editGroup(draft,group.id,node=>({...node,children:node.children.filter(node=>node.id!==id)})))}>×</button>{(rule.operator==='like'||rule.operator==='notLike')&&<p className="query-result-filter-pattern-hint">{text.patternHint}</p>}</div>;
   })}{path&&!group.children.length&&<p>{text.emptyGroup}</p>}{path&&groupActions(group,path,depth)}</>;}
-  return <section role="region" aria-label={text.title} className="query-result-filter-panel" onKeyDown={event=>{if(event.key==='Escape'&&!composition.current&&!event.nativeEvent.isComposing&&current()){event.preventDefault();onClose();}}}><strong>{text.title}</strong><p>{text.hint}</p><p>{text.groupsHint}</p><div className="query-result-filter-conditions">{renderGroup(draft,'',1)}</div>{!draft.children.length&&<p>{text.empty}</p>}{!valid&&<ErrorBox message={text.stale}/>}<div className="query-result-filter-actions">{groupActions(draft,'',1)}<button disabled={!valid||composing||!draft.children.length} onClick={()=>replace({...draft,children:[]})}>{text.clearDraft}</button><span className="grow"/>{composing&&<span>{text.composing}</span>}<button onClick={onClose}>{text.cancel}</button><button className="primary" disabled={!valid||composing} onClick={()=>{if(current(draft)&&!composition.current)onApply(expressionOf(draft));}}>{text.apply}</button></div></section>;
+  return <section role="region" aria-label={text.title} className="query-result-filter-panel" onKeyDown={keyDown}><strong>{text.title}</strong><p>{text.hint}</p><p>{text.groupsHint}</p><p>{text.shortcuts}</p><div className="query-result-filter-conditions">{renderGroup(draft,'',1)}</div>{!draft.children.length&&<p>{text.empty}</p>}{!valid&&<ErrorBox message={text.stale}/>}<div className="query-result-filter-actions">{groupActions(draft,'',1)}<button disabled={!valid||composing||!draft.children.length} onClick={()=>replace({...draft,children:[]})}>{text.clearDraft}</button><span className="grow"/>{composing&&<span>{text.composing}</span>}<button onClick={onClose}>{text.cancel}</button><button className="primary" aria-keyshortcuts="Control+Enter Meta+Enter" disabled={!valid||composing} onClick={applyDraft}>{text.apply}</button></div></section>;
 }

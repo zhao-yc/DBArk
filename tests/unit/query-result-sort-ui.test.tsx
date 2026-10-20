@@ -152,12 +152,40 @@ it('多列：活动规则中途准入失败不部分排序，也不改变勾选/
 });
 /** 筛选UI仍使用真实QueryTab和真实条件面板，仅通过RAM事件修改受控输入。 */
 function reactProps(node:any){return node[Object.keys(node).find(key=>key.startsWith('__reactProps$'))!];}
+/** 仅替代React键盘事件端口；真实面板及QueryTab处理草稿、选择和SQL调用。 */
+function filterKey(options:Record<string,unknown>={}){return{key:'Enter',ctrlKey:false,metaKey:false,altKey:false,shiftKey:false,repeat:false,keyCode:13,nativeEvent:{isComposing:false},preventDefault:vi.fn(),stopPropagation:vi.fn(),...options};}
 async function setFilterField(label:string,value:string){const node=document.querySelector('[aria-label="'+label+'"]')!;expect(node).not.toBeNull();await act(async()=>{node.value=value;node.dispatchEvent(new MemoryEvent(node.tagName==='SELECT'?'change':'input'));});}
 async function addFilterRule(index:number,column:string,operator:string,value=''){await click(filterText.add);await setFilterField(filterText.column+' '+index,column);await setFilterField(filterText.operator+' '+index,operator);if(!['null','notNull','empty','notEmpty'].includes(operator))await setFilterField(filterText.input+' '+index,value);}
 /** 配置已由分组创建的真实叶输入，不直调控制器或借根添加按钮改变树位置。 */
 async function configureGroupedRule(index:number,column:string,operator:string,value:string){await setFilterField(filterText.column+' '+index,column);await setFilterField(filterText.operator+' '+index,operator);await setFilterField(filterText.input+' '+index,value);}
 /** 真实ResultsGrid处理原活动位置；这里只替代虚拟布局，不读写系统剪贴板。 */
 async function chooseFilterCell(index:number,key:string){const port=grid();await act(async()=>port.onActivePositionChange({row:port.rows[index],rowIdx:index,column:{key}}));}
+it.each(['ctrlKey','metaKey'])('筛选快捷键：%s+Enter显式应用原草稿，清除旧选择且不重复执行SQL',async modifier=>{
+  await mountMulti();await act(async()=>grid().onSelectedRowsChange(new Set([0])));await click(filterText.open);await addFilterRule(1,'group','eq','A');
+  const panel=document.querySelector('[aria-label="'+filterText.title+'"]')!,key=reactProps(panel).onKeyDown,event=filterKey({[modifier]:true});
+  expect(document.body.textContent).toContain(filterText.shortcuts);await act(async()=>key(event));
+  expect(event.preventDefault).toHaveBeenCalledOnce();expect(event.stopPropagation).toHaveBeenCalledOnce();expect(grid().rows).toEqual([original.rows[1],original.rows[2]]);expect(grid().selectedRows.size).toBe(0);expect(document.querySelector('[aria-label="'+filterText.title+'"]')).toBeNull();
+  const applied=grid().rows;await act(async()=>key(filterKey({[modifier]:true})));expect(grid().rows).toBe(applied);expect(commands.filter(value=>value==='query.execute')).toHaveLength(1);
+});
+it('筛选快捷键：普通Enter、其它修饰键及长按不提交，单次明确命令才生效',async()=>{
+  await mountMulti();await click(filterText.open);await addFilterRule(1,'group','eq','B');const key=reactProps(document.querySelector('[aria-label="'+filterText.title+'"]')).onKeyDown;
+  for(const options of [{},{ctrlKey:true,altKey:true},{metaKey:true,shiftKey:true},{ctrlKey:true,repeat:true}]){const event=filterKey(options);await act(async()=>key(event));expect(grid().rows).toBe(original.rows);if(!options.repeat){expect(event.preventDefault).not.toHaveBeenCalled();expect(event.stopPropagation).not.toHaveBeenCalled();}}
+  await act(async()=>key(filterKey({ctrlKey:true})));expect(grid().rows).toEqual([original.rows[0]]);expect(commands.filter(value=>value==='query.execute')).toHaveLength(1);
+});
+it.each(['composition','native','229'])('筛选快捷键：%s输入法确认不应用或取消，完成后才接受命令',async mode=>{
+  await mountMulti();await click(filterText.open);await addFilterRule(1,'words','contains','甲组');const input=document.querySelector('[aria-label="'+filterText.input+' 1"]')!,panel=document.querySelector('[aria-label="'+filterText.title+'"]')!;
+  if(mode==='composition')await act(async()=>reactProps(input).onCompositionStart());const key=reactProps(panel).onKeyDown,extra=mode==='native'?{nativeEvent:{isComposing:true}}:mode==='229'?{keyCode:229}:{};
+  for(const options of [{ctrlKey:true},{key:'Escape',keyCode:27}]){const event=filterKey({...options,...extra});await act(async()=>key(event));expect(event.preventDefault).not.toHaveBeenCalled();expect(event.stopPropagation).not.toHaveBeenCalled();expect(grid().rows).toBe(original.rows);expect(document.querySelector('[aria-label="'+filterText.title+'"]')).not.toBeNull();}
+  if(mode==='composition')await act(async()=>reactProps(input).onCompositionEnd());await act(async()=>reactProps(document.querySelector('[aria-label="'+filterText.title+'"]')).onKeyDown(filterKey({metaKey:true})));expect(grid().rows).toEqual([original.rows[1],original.rows[2]]);expect(commands.filter(value=>value==='query.execute')).toHaveLength(1);
+});
+it('筛选快捷键：Escape只取消新草稿，旧面板命令不能应用或关闭后来面板',async()=>{
+  await mountMulti();await filterGroup('A');const applied=grid().rows;await click(filterText.open);await setFilterField(filterText.input+' 1','B');const old=reactProps(document.querySelector('[aria-label="'+filterText.title+'"]')).onKeyDown,event=filterKey({key:'Escape',keyCode:27});await act(async()=>old(event));expect(grid().rows).toBe(applied);expect(event.preventDefault).toHaveBeenCalledOnce();expect(event.stopPropagation).toHaveBeenCalledOnce();
+  await click(filterText.open);await setFilterField(filterText.input+' 1','B');const current=document.querySelector('[aria-label="'+filterText.title+'"]');await act(async()=>{old(filterKey({ctrlKey:true}));old(filterKey({key:'Escape',keyCode:27}));});expect(document.querySelector('[aria-label="'+filterText.title+'"]')).toBe(current);expect(grid().rows).toBe(applied);await click(filterText.apply);expect(grid().rows).toEqual([original.rows[0]]);expect(commands.filter(value=>value==='query.execute')).toHaveLength(1);
+});
+it('筛选快捷键：连接修订ABA后旧回调永久拒绝，不复用恢复后的行或SQL',async()=>{
+  await mountMulti();await click(filterText.open);await addFilterRule(1,'group','eq','A');const old=reactProps(document.querySelector('[aria-label="'+filterText.title+'"]')).onKeyDown;
+  await act(async()=>{store.setState({connectionVersions:{c:2}});store.setState({connectionVersions:{c:1}});});const before=grid().rows;await act(async()=>old(filterKey({ctrlKey:true})));expect(grid().rows).toBe(before);expect(commands.filter(value=>value==='query.execute')).toHaveLength(1);
+});
 it('当前单格可快捷填入精确条件，草稿取消保持原视图，旧按钮不能重放',async()=>{
   await mount();expect(button(filterText.cellEquals).disabled).toBe(true);await sort('id','DESC');const before=grid().rows;await chooseFilterCell(0,'value');const stale=reactProps(button(filterText.cellEquals)).onClick;await click(filterText.cellEquals);
   expect(document.querySelector('[aria-label="'+filterText.column+' 1"]')!.value).toBe('value');expect(document.querySelector('[aria-label="'+filterText.input+' 1"]')!.value).toBe('0.12345678901234567891');expect(grid().rows).toBe(before);await click(filterText.cancel);expect(grid().rows).toBe(before);expect(grid().sortColumns).toEqual([{columnKey:'id',direction:'DESC'}]);await act(async()=>stale());expect(document.querySelector('[aria-label="'+filterText.title+'"]')).toBeNull();
