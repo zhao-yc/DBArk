@@ -40,7 +40,23 @@ export function bindEditorIndentNativeCase(info: IndentNativeTestInfo, environme
     assertCurrent() {
       try {
         environment.assertCurrent(); const instant = now();
-        if (retained || currentInfo() !== info || Object.hasOwn(info, '_startWallTime') !== internal || info.startTime !== startObject || readStart() !== start || timeout !== 120000 || info.timeout !== timeout || !Number.isFinite(start) || !Number.isFinite(instant) || instant < start || instant < previous || instant >= deadline || info.status !== undefined && info.status !== 'passed') throw Error('缩进原生专项原TestInfo/期限已失效，保留资源');
+        // 逐项保持原联合守卫的短路顺序和属性读取次数；诊断仅使用已捕获标量，不再次读取TestInfo。
+        const reject = (branch: string): never => {
+          throw Error(`缩进原生专项原TestInfo/期限已失效，保留资源；分支=${branch}；start=${start}；instant=${instant}；previous=${previous}；deadline=${deadline}`);
+        };
+        if (retained) reject('retained');
+        if (currentInfo() !== info) reject('different-info');
+        if (Object.hasOwn(info, '_startWallTime') !== internal) reject('start-field-changed');
+        if (info.startTime !== startObject) reject('start-object-changed');
+        if (readStart() !== start) reject('start-value-changed');
+        if (timeout !== 120000) reject('original-timeout');
+        if (info.timeout !== timeout) reject('timeout-changed');
+        if (!Number.isFinite(start)) reject('invalid-start');
+        if (!Number.isFinite(instant)) reject('invalid-clock');
+        if (instant < start) reject('before-start');
+        if (instant < previous) reject('clock-reversed');
+        if (instant >= deadline) reject('deadline');
+        if (info.status !== undefined && info.status !== 'passed') reject('status');
         previous = instant;
       } catch (reason) { retained = true; throw reason; }
     },
