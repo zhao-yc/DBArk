@@ -24,3 +24,11 @@ Root审阅后仅启动一次，原PID11332，2026-10-20T18:58:02.941Z至18:58:13
 原进程观察末次记录均缺席，Git净，574源码和109构建哈希不变；数字PID缺席不等于正常owner／observer同流关闭已证。保留本例profile `dbark-e2e-brLB7y`，dev3929143778、inode1125899906883764，原输出目录及错误不删除、不复用。VM封存20份文件均匹配，报告摘要 `e7382517fd845d5f7ff8a65d327246aeb0ad65b202d29bd9fcaf3335c6697cf3`。
 
 已只派发原错误快照与本例身份匹配的settings草稿只读诊断，比较类型、长度、摘要、换行及首个差异。不得读取或打印凭据、扫描其他profile、启动替代窗口、延长期限、修改断言或重跑GUI。未取得实际差异前保持失败，当前不合入main、不发布，不增加完整Navicat工作包计数。新安装和macOS的NULL能力仍未验。
+
+## 原现场只读诊断与后继准备
+
+WIN11-TEST原只读诊断已完成，Root实际收到终态：profile身份匹配、原进程缺席；error-context只有错误及源码，没有页面快照，不能证明原Monaco可见文本。准确profile的dbark.sqlite仅在SQL.js内存副本读取settings id=1；活动tab为query，id等于activeTabId，connectionId非空。未读取connections，因此连接ID与原profile是否相等仍未证。
+
+SQL均为string，无CR／LF；期望693字符、实际694，首差异索引693：期望EOF、实际单引号。期望SHA256 `b10f407a1c8d5010f1d45ec11a5a59ce7265b7137927016ea829d481dfa70818`，实际 `bccf8cacf495ed22fd4a41bc32e5649b5cb83310e1bef961c76a932acfa44851`。诊断未启动App、实库、测试或清理。持久化不相等已证，具体输入／自动配对根因尚未独立复现，不能声称产品已修复。
+
+后继只调整本用例SQL准备，复用已有参数查询用例的可见textbox聚焦、全选／删除、页内ClipboardEvent paste路径；不读写系统剪贴板、不调用模型／store修改。原693字符常量、settings完整相等、连接匹配、排序矩阵、复制／文件期待及所有期限保持。同步main的守卫诊断后产品树仍55f6b63d3d71ecc77180bb16bf7cc6c56f58ce2a；新提交须独立类型／单元／构建和新目录单次窗口验证，不复用旧profile或输出，不将准备改动写成GUI通过。暂不发布。
