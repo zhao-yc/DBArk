@@ -1,5 +1,6 @@
 import { beforeEach, expect, it, vi } from 'vitest';
 import { randomUUID } from 'node:crypto';
+import { dirname } from 'node:path';
 import { QueryFileSources, type QueryFileSourceScope } from '../../src/main/queryFileSources';
 import { queryFileBytesDigest, queryFileSqlDigest } from '../../src/main/queryFileSourceFiles';
 import type { PrivateQueryFileSource } from '../../src/main/queryFileSourceRecords';
@@ -17,7 +18,9 @@ vi.mock('node:fs/promises', () => {
     return { isFile: () => true, nlink: 1n, ino: file.ino, dev: 1n, size: BigInt(file.bytes.length), mtimeNs: file.mtime, ctimeNs: file.ctime, mode: BigInt(0o100000 | mode) };
   };
   return {
-    lstat: async (path: string) => stat(path), realpath: async (path: string) => { get(path); return path; },
+    // 新父目录守卫也使用同一RAM目标；原权限、写入顺序和精确清理断言保持。
+    lstat: async (path: string) => path === dirname(ram.target) ? { isDirectory: () => true, isSymbolicLink: () => false, ino: 900n, dev: 1n } : stat(path),
+    realpath: async (path: string) => { if (path !== dirname(ram.target)) get(path); return path; },
     open: async (path: string, flags: string, mode = 0o666) => {
       if (flags === 'wx') { if (ram.files.has(path)) throw Error('RAM临时文件已存在'); ram.files.set(path, { bytes: Buffer.alloc(0), mode: mode & ~0o022, ino: ++ram.serial, mtime: 2n, ctime: 2n }); ram.log.push('open:' + (mode & ~0o022).toString(8)); }
       const file = get(path); let cursor = 0;

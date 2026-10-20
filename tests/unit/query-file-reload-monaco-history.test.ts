@@ -18,7 +18,7 @@ function port(initial: string, initialEol: string) {
   const undo=model._applyUndo.bind(model),redo=model._applyRedo.bind(model);
   model._applyUndo=(...args:any[])=>{undo(...args);if(args[3])selections=args[3];};model._applyRedo=(...args:any[])=>{redo(...args);if(args[3])selections=args[3];};
   const cursor={_model:model,getSelections:()=>selections,setSelections(_event:unknown,_source:unknown,value:any){selections=value;}};
-  const editor:any={getModel:()=>model,getSelections:()=>selections,getRawOptions:()=>({readOnly:readonly}),updateOptions(value:any){readonly=value.readOnly;},onDidChangeModel:off,onDidDispose:off};
+  const editor:any={getModel:()=>model,getSelections:()=>selections,setSelections(value:any){selections=value;},getRawOptions:()=>({readOnly:readonly}),updateOptions(value:any){readonly=value.readOnly;},onDidChangeModel:off,onDidDispose:off};
   const bridge=editorContentBridge(editor,()=>props,()=>{});
   return {editor,model,bridge,props:()=>props.value,setProps(value:string){props.value=value;bridge.sync();},text:()=>model.getValue(),eol:()=>model.getEOL(),readonly:()=>readonly,selected:()=>selections.map(s=>[s.selectionStartLineNumber,s.selectionStartColumn,s.positionLineNumber,s.positionColumn]),history:()=>history.length,
     type(text:string){CursorsController.prototype.executeEdits.call(cursor,{},'type',[{range:selections[0],text}],(inverse:any[])=>inverse.map(({range})=>Selection.fromPositions(range.getEndPosition())));model.pushStackElement();},
@@ -28,19 +28,19 @@ it.each([['\n', '\r\n'], ['\r\n', '\n']])('重载保留同一模型及普通历�
   const old = 'select 1;' + beforeEol, next = 'SELECT 2;' + afterEol + '-- 外部' + afterEol, p = port(old, beforeEol), originalModel = p.model;
   p.type('x'); const draft = p.text(), beforeSelection = p.selected();
   const held = beginEditorReload(p.editor, p.props()); expect(p.readonly()).toBe(true); let binding = { revision: 1, savedSqlDigest: await queryFileSourceSqlDigest(old) };
-  expect(held.apply(next, () => { binding = { revision: 2, savedSqlDigest: '' }; p.setProps(next); })).toBe(true); held.dispose(); binding.savedSqlDigest = await queryFileSourceSqlDigest(next);
+  expect(await held.apply(next, () => { binding = { revision: 2, savedSqlDigest: '' }; p.setProps(next); })).toBe(true); held.dispose(); binding.savedSqlDigest = await queryFileSourceSqlDigest(next);
   expect(p.model).toBe(originalModel); expect(p.text()).toBe(next); expect(p.eol()).toBe(afterEol); expect(p.readonly()).toBe(false);
   p.undo(); expect(p.text()).toBe(draft.replace(/\r\n|\r|\n/g, afterEol)); expect(p.eol()).toBe(afterEol); expect(p.selected()).toEqual(beforeSelection); expect(await queryFileSourceSqlDigest(p.props())).not.toBe(binding.savedSqlDigest); expect(binding.revision).toBe(2);
   p.undo(); expect(p.text()).toBe(draft); expect(p.eol()).toBe(beforeEol); expect(p.selected()).toEqual(beforeSelection);
   p.redo(); expect(p.eol()).toBe(afterEol); p.redo(); expect(p.text()).toBe(next); expect(p.selected()).toHaveLength(1); p.undo(); p.undo(); p.undo(); expect(p.text()).toBe(old); p.redo(); expect(p.text()).toBe(draft); p.redo(); p.redo(); expect(p.text()).toBe(next); p.bridge.dispose();
 });
-it('混合/裸CR文件原文和基线保留，模型采用LF；取消无编辑，旧受控回包不能解除模型锁', () => {
+it('混合/裸CR文件原文和基线保留，模型采用LF；取消无编辑，旧受控回包不能解除模型锁', async () => {
   const p = port('SELECT 1;\n', '\n'), history = p.history(), held = beginEditorReload(p.editor, p.props()); p.bridge.sync(); expect(p.readonly()).toBe(true); held.dispose(); expect(p.text()).toBe('SELECT 1;\n'); expect(p.history()).toBe(history);
-  const reloading = beginEditorReload(p.editor, p.props()), raw = '甲\r\n乙\n丙\r'; reloading.apply(raw, () => p.setProps(raw)); reloading.dispose(); expect(p.props()).toBe(raw); expect(p.text()).toBe('甲\n乙\n丙\n'); expect(p.eol()).toBe('\n'); p.undo(); expect(p.text()).toBe('SELECT 1;\n'); p.bridge.dispose();
+  const reloading = beginEditorReload(p.editor, p.props()), raw = '甲\r\n乙\n丙\r'; await reloading.apply(raw, () => p.setProps(raw)); reloading.dispose(); expect(p.props()).toBe(raw); expect(p.text()).toBe('甲\n乙\n丙\n'); expect(p.eol()).toBe('\n'); p.undo(); expect(p.text()).toBe('SELECT 1;\n'); p.bridge.dispose();
 });
-it('正文版本或props离开原值永久阻止旧确认，不改新文本；相同正文重载不新增历史项', () => {
-  const p = port('SELECT 1;\n', '\n'), held = beginEditorReload(p.editor, p.props()); p.type('x'); expect(held.current()).toBe(false); expect(held.apply('旧结果', () => {})).toBe(false); held.dispose(); expect(p.text()).toContain('x'); p.bridge.dispose();
-  const same = port('SELECT 1;\n', '\n'), before = same.history(), lease = beginEditorReload(same.editor, same.props()); lease.apply(same.props(), () => {}); lease.dispose(); expect(same.history()).toBe(before); same.bridge.dispose();
+it('正文版本或props离开原值永久阻止旧确认，不改新文本；相同正文重载不新增历史项', async () => {
+  const p = port('SELECT 1;\n', '\n'), held = beginEditorReload(p.editor, p.props()); p.type('x'); expect(held.current()).toBe(false); expect(await held.apply('旧结果', () => {})).toBe(false); held.dispose(); expect(p.text()).toContain('x'); p.bridge.dispose();
+  const same = port('SELECT 1;\n', '\n'), before = same.history(), lease = beginEditorReload(same.editor, same.props()); await lease.apply(same.props(), () => {}); lease.dispose(); expect(same.history()).toBe(before); same.bridge.dispose();
 });
 it.each([['\r\n','\n'],['\n','\n']])('接纳回调抛错后恢复原正文/EOL及此前普通编辑历史，%j→%j', async (beforeEol,afterEol) => {
   const old='select 1;'+beforeEol,p=port(old,beforeEol);p.type('x');
@@ -51,4 +51,13 @@ it.each([['\r\n','\n'],['\n','\n']])('接纳回调抛错后恢复原正文/EOL�
   expect(captured).toBe(failure);expect(p.text()).toBe(draft);expect(p.props()).toBe(draft);expect(p.eol()).toBe(beforeEol);expect(p.selected()).toEqual(selection);expect(p.readonly()).toBe(false);
   // 失败回滚不能让此前的普通编辑被新的补写历史遮住，也不能清空原Undo栈。
   p.undo();expect(p.text()).toBe(old);p.redo();expect(p.text()).toBe(draft);p.bridge.dispose();
+});
+it('回滚尚未结算时dispose保持原模型只读，完成后才释放且不丢普通编辑', async () => {
+  const old='select 1;\r\n',p=port(old,'\r\n');p.type('x');
+  const draft=p.text(),held=beginEditorReload(p.editor,p.props()),failure=Error('本例接纳失败并提前释放');
+  const pending=held.apply('SELECT 2;\n',()=>{throw failure;});
+  held.dispose();expect(p.readonly()).toBe(true);
+  await expect(pending).rejects.toBe(failure);
+  expect(p.text()).toBe(draft);expect(p.eol()).toBe('\r\n');expect(p.readonly()).toBe(false);
+  p.undo();expect(p.text()).toBe(old);p.bridge.dispose();
 });

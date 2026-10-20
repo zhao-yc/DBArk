@@ -3,7 +3,7 @@ import { zh } from './locales/zh-CN';
 
 export type EditorContentFlushPolicy = 'preserve-equivalent-draft-eol';
 const bodyFlushers = new WeakMap<monaco.editor.IStandaloneCodeEditor, (expected?: string, policy?: EditorContentFlushPolicy) => string>();
-export interface EditorReloadLease { current(): boolean; apply(sql: string, commit: () => void): boolean; dispose(): void; }
+export interface EditorReloadLease { current(): boolean; apply(sql: string, commit: () => void): Promise<boolean>; dispose(): void; }
 const reloaders = new WeakMap<monaco.editor.IStandaloneCodeEditor, (expected: string) => EditorReloadLease>();
 /** 只对正式存活正文桥申请模型锁，不从旧tab正文创建替代模型。 */
 export function beginEditorReload(editor: monaco.editor.IStandaloneCodeEditor, expected: string): EditorReloadLease {
@@ -103,17 +103,33 @@ export function editorContentBridge(editor: monaco.editor.IStandaloneCodeEditor,
   /** 预览期间锁原模型；EOL与正文各保留独立历史项，再同步提交同一份工作区来源。 */
   function beginReload(expected: string): EditorReloadLease {
     if (reload || flush(expected, 'preserve-equivalent-draft-eol') !== expected || !lease) throw Error(zh.editor.bodyUnavailable);
-    const item = lease, model = item.model, version = model.getVersionId(), held = { valid: true }; reload = held; let applied = false;
+    const item = lease, model = item.model, version = model.getVersionId(), held = { valid: true }; reload = held;
+    let applied = false, applying = false, disposeRequested = false, rollbackFailed = false;
     const valid = () => {
       if (!owns(item) || reload !== held || model.getVersionId() !== version || current().value !== expected) held.valid = false;
       return held.valid;
     };
+    /** 异步Undo尚未结算时继续锁原模型；未知归属的失败不能用受控补写覆盖外来编辑。 */
+    function finishDispose() {
+      if (applying || reload !== held) return;
+      reload = undefined;
+      if (owns(item)) { if (rollbackFailed) availability(false); else if (!applied) sync(); else availability(true); }
+    }
     availability(true);
     return {
       current: valid,
-      apply(sql, commit) {
-        if (!valid()) return false;
-        item.syncing = true;
+      async apply(sql, commit) {
+        if (applying || !valid()) return false;
+        const before = { value: model.getValue(), eol: model.getEOL(), alternative: model.getAlternativeVersionId(), selections: editor.getSelections() };
+        let ownedVersion = model.getVersionId();
+        /** 每个公开模型编辑至多推进一次版本；重入修改或失效不能被认领为本次可撤销操作。 */
+        const edit = (action: () => void) => {
+          const previous = model.getVersionId(); action();
+          const next = model.getVersionId();
+          if (!owns(item) || next < previous || next > previous + 1 || current().value !== expected) rollbackFailed = true;
+          ownedVersion = next;
+        };
+        applying = true; item.syncing = true;
         try {
           model.pushStackElement();
           // Monaco模型只支持LF/CRLF，裸CR/混合原文仍由工作区及来源摘要逐字保留。
@@ -121,17 +137,39 @@ export function editorContentBridge(editor: monaco.editor.IStandaloneCodeEditor,
           const differs = model.getEOL() !== eol || model.getValue() !== sql.replace(/\r\n|\r|\n/g, eol);
           // Monaco历史的文字偏移不跨EOL压缩。分隔两步，否则CRLF→LF重做可能留下多余换行。
           // pushEOL自身写入null选区，前后公开空编辑保留该独立步骤的选区与方向。
-          if (differs && model.getEOL() !== eol) { const selections = editor.getSelections(); model.pushEditOperations(selections, [], () => selections); model.pushEOL(eol === '\r\n' ? 1 : 0); model.pushEditOperations(selections, [], () => selections); model.pushStackElement(); }
-          if (model.getValue() !== sql.replace(/\r\n|\r|\n/g, eol)) model.pushEditOperations(editor.getSelections(), [{ range: model.getFullModelRange(), text: sql, forceMoveMarkers: true }], () => {
+          if (differs && model.getEOL() !== eol) { const selections = editor.getSelections(); edit(() => model.pushEditOperations(selections, [], () => selections)); edit(() => model.pushEOL(eol === '\r\n' ? 1 : 0)); edit(() => model.pushEditOperations(selections, [], () => selections)); model.pushStackElement(); }
+          if (model.getValue() !== sql.replace(/\r\n|\r|\n/g, eol)) edit(() => model.pushEditOperations(editor.getSelections(), [{ range: model.getFullModelRange(), text: sql, forceMoveMarkers: true }], () => {
             const end = model.getPositionAt(model.getValueLength());
             return [{ selectionStartLineNumber: end.lineNumber, selectionStartColumn: end.column, positionLineNumber: end.lineNumber, positionColumn: end.column }] as monaco.Selection[];
-          });
+          }));
           model.pushStackElement();
+          if (rollbackFailed || !owns(item) || !held.valid || model.getVersionId() !== ownedVersion || model.getValue() !== sql.replace(/\r\n|\r|\n/g, eol)) throw Error(zh.editor.bodyUnavailable);
           item.controlledThrough = model.getVersionId(); item.syncedValue = sql; item.syncedVersion = model.getVersionId(); item.publishedValue = undefined;
           commit(); applied = true; held.valid = false; return true;
-        } finally { item.controlledThrough = model.getVersionId(); item.syncing = false; }
+        } catch (reason) {
+          held.valid = false;
+          try {
+            if (rollbackFailed || !owns(item) || current().value !== expected || model.getVersionId() !== ownedVersion) throw Error(zh.editor.bodyUnavailable);
+            model.pushStackElement();
+            // 只撤销本次最多两个历史组，不用setValue清栈，也不把恢复正文追加成新的历史项。
+            for (let count = 0; model.getAlternativeVersionId() !== before.alternative && count < 2; count++) {
+              if (!owns(item) || model.getVersionId() !== ownedVersion || !model.canUndo()) throw Error(zh.editor.bodyUnavailable);
+              await model.undo();
+              if (!owns(item) || current().value !== expected || model.getVersionId() > ownedVersion + 1) throw Error(zh.editor.bodyUnavailable);
+              ownedVersion = model.getVersionId();
+            }
+            if (model.getAlternativeVersionId() !== before.alternative || model.getValue() !== before.value || model.getEOL() !== before.eol) throw Error(zh.editor.bodyUnavailable);
+            if (before.selections) editor.setSelections(before.selections);
+            item.syncedValue = expected; item.syncedVersion = model.getVersionId(); item.publishedValue = undefined;
+          } catch { rollbackFailed = true; if (owns(item)) availability(false); }
+          throw reason;
+        } finally {
+          if (!model.isDisposed()) item.controlledThrough = model.getVersionId();
+          item.syncing = false; applying = false;
+          if (disposeRequested) finishDispose();
+        }
       },
-      dispose() { held.valid = false; if (reload !== held) return; reload = undefined; if (owns(item)) { if (!applied) sync(); else availability(true); } },
+      dispose() { held.valid = false; disposeRequested = true; finishDispose(); },
     };
   }
   try {

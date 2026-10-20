@@ -224,7 +224,7 @@ export function useQueryFileSource(tab: WorkspaceTab, capture: () => Readonly<Wo
       const result = await invoke('queryFileSources.reload', { tabId: tab.id, taskId: intent.work.taskId, source: intent.snapshot.fileSourceBinding!, draftDigest, previewId: intent.preview.previewId }); intent.work.finish(result.state === 'reloaded' ? { state: 'opened' } : result); intent.work = undefined;
       if (result.state === 'blocked') { if (reloadIntent.current === intent && ownsView()) setProblem(result); return false; }
       if (reloadIntent.current !== intent || reloadPort?.current?.() === false || !intent.valid || !intent.job.owns() || !ownsView() || !intent.model.current() || await queryFileSourceSqlDigest(result.sql) !== result.binding.savedSqlDigest) throw Error(reloadText.changed);
-      const applied = intent.model.apply(result.sql, () => { useWorkspace.getState().updateTab(tab.id, { sql: result.sql, fileSourceBinding: result.binding.ref }); setView(result.binding); setChecked({ sql: result.sql, baseline: result.binding.savedSqlDigest, dirty: false }); });
+      const applied = await intent.model.apply(result.sql, () => { useWorkspace.getState().updateTab(tab.id, { sql: result.sql, fileSourceBinding: result.binding.ref }); setView(result.binding); setChecked({ sql: result.sql, baseline: result.binding.savedSqlDigest, dirty: false }); });
       if (!applied) throw Error(reloadText.changed);
       try { await flushSettings(); } catch { setProblem({ state: 'blocked', reason: 'storage', message: reloadText.restore, wrote: 'no' }); }
       useWorkspace.getState().notify(reloadText.success); return true;

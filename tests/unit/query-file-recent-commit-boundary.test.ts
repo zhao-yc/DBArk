@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { createRequire } from 'node:module';
-import { resolve } from 'node:path';
+import { dirname, resolve } from 'node:path';
 import initSqlJs from 'sql.js';
 import { afterEach, beforeAll, expect, it, vi } from 'vitest';
 import { LocalStore, defaultSettings } from '../../src/main/storage';
@@ -8,6 +8,12 @@ import { QueryFileSources } from '../../src/main/queryFileSources';
 import { rememberQueryFile } from '../../src/main/queryFileRecents';
 
 const io = vi.hoisted(() => ({ snapshot: null as any, reads: 0, writes: 0 }));
+/** 新目录读取端口同样只认已登记RAM目标，不将可选历史专项变成真实文件访问。 */
+vi.mock('node:fs/promises', () => ({
+  realpath: async (path: string) => { if (path !== io.snapshot?.path && path !== dirname(io.snapshot?.path ?? '')) throw Error('未知RAM路径'); return path; },
+  lstat: async (path: string) => { if (path !== dirname(io.snapshot?.path ?? '')) throw Error('未知RAM目录'); return { isDirectory: () => true, isSymbolicLink: () => false, ino: 900n, dev: 1n }; },
+  open: async () => { throw Error('本例不能打开真实文件'); }, rename: async () => { throw Error('本例不能重命名真实文件'); }, rm: async () => { throw Error('本例不能删除真实文件'); },
+}));
 /** 文件字节为RAM；实际编码、来源提交、SQL.js事务及恢复快照均执行生产实现。 */
 vi.mock('../../src/main/queryFileSourceFiles', async () => {
   const original: any = await vi.importActual('../../src/main/queryFileSourceFiles');
