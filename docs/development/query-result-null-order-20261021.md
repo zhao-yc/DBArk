@@ -37,3 +37,5 @@ ResultsGrid从RDG列头回传规则时，按同一内部列key保留已存在规
 准确fcc8530ebeee8f0f77fb3fb81d8806abd6dfa30f的[CI39476897179](https://github.com/zhao-yc/DBArk/actions/runs/39476897179)另已成功：Root直接读取job118815078516原日志，类型、586文件11250通过／10平台跳过及构建全部通过，单元208.98秒，Vite30.53秒，控件92项和NULL控制器18项均通过。新实库窗口默认门关闭，未据此执行GUI；Windows另派发同一fcc的五文件／类型／新构建队列，原PID3608，尚待终态。
 
 通配筛选已按main的4dae140完成交付。后继分支同步该提交时，仅覆盖表相邻两段状态发生冲突，保留NULL候选条目和main的通配最终证据后完成合并；相对fcc仅文档变化，产品树仍为55f6b63d3d71ecc77180bb16bf7cc6c56f58ce2a。VM仍固定fcc，不跟随这些文档或合并提交，实际窗口和新安装证据待补。
+
+Windows准确fcc的五文件／类型／新构建通过：PID3608，退出0、96.870秒，276项通过、无失败或跳过。首次NULL窗口PID11332退出1、10.906秒，首错在42行活动tab／连接／SQL联合预检，尚未执行App常量查询或到达NULL矩阵。原profile与输出保留，原进程缺席、574源码和109构建哈希不变，正常owner及observer同流关闭未确认。已只读诊断原快照和本例草稿，原因未确认，不修改断言或重跑；读回及full保持未启动，见[准确阶段记录](../../tests/integration/acceptance-query-result-nulls-fcc8530-20261021.md)。
