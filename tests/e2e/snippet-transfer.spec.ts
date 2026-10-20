@@ -1,7 +1,7 @@
 import { mkdir, readFile, readdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { SqlSnippet } from '../../src/shared/contracts';
-import { test, expect, desktop, page, dataDir, pageErrors } from './desktop-fixture';
+import { test, expect, desktop, page, dataDir, pageErrors, ownedDesktopResources, retainOwnedDesktopResources } from './desktop-fixture';
 
 interface FileChoiceCall { mode: 'import' | 'export'; title?: string; extensions: string[]; parented: boolean; }
 declare global { var __dbarkSnippetTransferChoices: FileChoiceCall[]; }
@@ -38,8 +38,52 @@ async function openLibrary() {
   await connection.getByLabel('主机地址', { exact: true }).fill('127.0.0.1');
   await connection.getByLabel('端口', { exact: true }).fill('1');
   await connection.getByLabel('用户名', { exact: true }).fill('offline');
+  const info = test.info(), owner = ownedDesktopResources(info);
+  // 只旁观原保存IPC的命令名和起止时间，不读取输入、认证或改写业务回包。
+  await desktop.evaluate(({ ipcMain }) => {
+    const root = globalThis as any, handlers = (ipcMain as any)._invokeHandlers, original = handlers?.get('dbark:request');
+    if (root.__dbarkConnectionSaveObservation || typeof original !== 'function') throw Error('连接保存观察归属未知');
+    const state: any = { events: [], overflow: false, original, wrapped: undefined };
+    state.wrapped = async (event: any, payload: any) => {
+      if (!['connections.save', 'connections.list'].includes(payload?.command)) return original(event, payload);
+      const record: any = { command: payload.command, started: Date.now() };
+      if (state.events.length < 64) state.events.push(record); else state.overflow = true;
+      try { const reply = await original(event, payload); record.finished = Date.now(); record.ok = reply?.ok === true; return reply; }
+      catch (reason) { record.finished = Date.now(); record.rejected = true; throw reason; }
+    };
+    root.__dbarkConnectionSaveObservation = state; handlers.set('dbark:request', state.wrapped);
+  });
+  // 捕获真实点击/提交事件而不阻止默认行为，验证是否到达表单提交入口。
+  await page.evaluate(() => {
+    const form = document.querySelector('[role="dialog"][aria-label="新建连接"] form');
+    if (!form) throw Error('连接保存观察未找到原表单');
+    const state: any = { clicks: [], submits: [] }; (window as any).__dbarkConnectionSaveObservation = state;
+    form.addEventListener('click', event => { if (event.target instanceof Element && event.target.closest('button[type="submit"]')) { const record = { at: Date.now(), trusted: event.isTrusted, prevented: event.defaultPrevented }; state.clicks.push(record); queueMicrotask(() => { record.prevented = event.defaultPrevented; }); } }, true);
+    form.addEventListener('submit', event => { const record = { at: Date.now(), trusted: event.isTrusted, prevented: event.defaultPrevented }; state.submits.push(record); queueMicrotask(() => { record.prevented = event.defaultPrevented; }); }, true);
+  });
+  if (ownedDesktopResources(info).application !== owner.application || ownedDesktopResources(info).page !== owner.page) { retainOwnedDesktopResources(info); throw Error('连接保存观察失去原窗口'); }
   await connection.getByRole('button', { name: '保存连接', exact: true }).click();
-  await expect(connection).toBeHidden();
+  let saveFailure: { reason: unknown } | undefined;
+  try { await expect(connection).toBeHidden(); } catch (reason) { saveFailure = { reason }; }
+  try {
+    if (ownedDesktopResources(info).application !== owner.application || ownedDesktopResources(info).page !== owner.page) throw Error('连接保存观察失去原窗口');
+    const renderer = await page.evaluate(() => {
+      const dialog = document.querySelector('[role="dialog"][aria-label="新建连接"]');
+      return { at: Date.now(), visible: !!dialog, events: (window as any).__dbarkConnectionSaveObservation,
+        fields: Array.from(dialog?.querySelectorAll('input') ?? []).flatMap(input => { const label = input.closest('label')?.textContent?.trim() ?? ''; return ['连接名称', '主机地址', '端口', '用户名'].includes(label) ? [{ label, value: input.value, valid: input.validity.valid, validation: input.validationMessage }] : []; }),
+        buttons: Array.from(dialog?.querySelectorAll('button') ?? []).map(button => ({ text: button.textContent, type: button.type, disabled: button.disabled })),
+        errors: Array.from(dialog?.querySelectorAll('.error-box') ?? []).map(node => node.textContent), credentialsExcluded: true };
+    });
+    const main = await desktop.evaluate(({ ipcMain }) => {
+      const root = globalThis as any, state = root.__dbarkConnectionSaveObservation, handlers = (ipcMain as any)._invokeHandlers;
+      if (!state || handlers?.get('dbark:request') !== state.wrapped) throw Error('连接保存原观察器已变化');
+      handlers.set('dbark:request', state.original); delete root.__dbarkConnectionSaveObservation;
+      return { at: Date.now(), events: state.events.map((event: any) => ({ ...event })), overflow: state.overflow, restored: true };
+    });
+    if (ownedDesktopResources(info).application !== owner.application || ownedDesktopResources(info).page !== owner.page) throw Error('连接保存观察失去原窗口');
+    await info.attach('connection-save-observation', { body: JSON.stringify({ renderer, main }), contentType: 'application/json' });
+  } catch (reason) { retainOwnedDesktopResources(info); throw saveFailure ? new AggregateError([saveFailure.reason, reason], '连接保存失败且观察未完成') : reason; }
+  if (saveFailure) throw saveFailure.reason;
   await page.locator('.app-commandbar').getByRole('button', { name: '新建查询', exact: true }).click();
   await page.getByRole('dialog', { name: '新建查询', exact: true }).getByRole('button', { name: '打开查询', exact: true }).click();
   await expect(page.locator('.query-tab:visible .monaco-editor')).toBeVisible();
