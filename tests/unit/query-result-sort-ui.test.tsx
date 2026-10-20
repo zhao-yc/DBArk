@@ -153,8 +153,24 @@ it('多列：活动规则中途准入失败不部分排序，也不改变勾选/
 /** 筛选UI仍使用真实QueryTab和真实条件面板，仅通过RAM事件修改受控输入。 */
 function reactProps(node:any){return node[Object.keys(node).find(key=>key.startsWith('__reactProps$'))!];}
 async function setFilterField(label:string,value:string){const node=document.querySelector('[aria-label="'+label+'"]')!;expect(node).not.toBeNull();await act(async()=>{node.value=value;node.dispatchEvent(new MemoryEvent(node.tagName==='SELECT'?'change':'input'));});}
-async function addFilterRule(index:number,column:string,operator:string,value=''){await click(filterText.add);await setFilterField(filterText.column+' '+index,column);await setFilterField(filterText.operator+' '+index,operator);if(!['null','notNull'].includes(operator))await setFilterField(filterText.input+' '+index,value);}
+async function addFilterRule(index:number,column:string,operator:string,value=''){await click(filterText.add);await setFilterField(filterText.column+' '+index,column);await setFilterField(filterText.operator+' '+index,operator);if(!['null','notNull','empty','notEmpty'].includes(operator))await setFilterField(filterText.input+' '+index,value);}
 async function filterGroup(value='A'){await click(filterText.open);await addFilterRule(1,'group','eq',value);await click(filterText.apply);}
+it.each([
+  ['notContains','甲',[0]],['startsWith','甲',[2,1]],['notStartsWith','甲',[0]],['endsWith','早行',[2]],['notEndsWith','早行',[0,1]]
+] as const)('文本条件%s通过实际面板应用，随后排序、复制与导出仍共享同一视图',async(operator,value,indices)=>{
+  await mountMulti();const saved=structuredClone(original);await click(filterText.open);await addFilterRule(1,'words',operator,value);await click(filterText.apply);await headerAction('id');
+  expect(grid().rows).toEqual(indices.map(index=>original.rows[index]));
+  await act(async()=>grid().onSelectedRowsChange(new Set(indices.map((_,index)=>index))));
+  expect(JSON.parse(copy().get('application/x-dbark-cells')!).rows.map((row:any)=>row[1])).toEqual(indices.map(index=>original.rows[index].id));
+  await click(zh.resultExport.selectedTitle);await click(zh.resultExport.chooseFile);await click(zh.resultExport.start);
+  expect(exports[0].result.rows).toEqual(indices.map(index=>original.rows[index]));expect(original).toEqual(saved);expect(commands.filter(command=>command==='query.execute')).toHaveLength(1);expect(commands.some(command=>command.startsWith('query.transaction'))).toBe(false);
+});
+it.each(['empty','notEmpty'] as const)('文本条件%s清空并禁用原值输入，切回等于后仍区分空文本和NULL',async operator=>{
+  await mount(result=>{result.rows[0].words='';result.rows[1].words=null;result.rows[2].words=' ';});await click(filterText.open);await addFilterRule(1,'words','eq','不能隐藏的旧值');await setFilterField(filterText.operator+' 1',operator);
+  const input=document.querySelector('[aria-label="'+filterText.input+' 1"]')!;expect(input.disabled).toBe(true);expect(input.value).toBe('');await click(filterText.apply);
+  expect(grid().rows).toEqual([original.rows[operator==='empty'?0:2]]);await click(filterText.open);await setFilterField(filterText.operator+' 1','eq');
+  const restored=document.querySelector('[aria-label="'+filterText.input+' 1"]')!;expect(restored.disabled).toBe(false);expect(restored.value).toBe('');await click(filterText.apply);expect(grid().rows).toEqual([original.rows[0]]);expect(commands.filter(command=>command==='query.execute')).toHaveLength(1);
+});
 it('筛选：真实面板草稿不改结果，取消不改已生效排序，AND/OR条件应用有原返回/过滤计数',async()=>{
   await mountMulti();await headerAction('id');const before=grid().rows;await click(filterText.open);await addFilterRule(1,'group','eq','A');expect(grid().rows).toBe(before);await click(filterText.cancel);expect(grid().rows).toBe(before);expect(grid().sortColumns).toEqual([{columnKey:'id',direction:'ASC'}]);
   await click(filterText.open);await addFilterRule(1,'group','eq','A');await addFilterRule(2,'id','gt','9007199254740992');await click(filterText.apply);expect(grid().rows).toEqual([original.rows[1]]);expect(grid().sortColumns).toEqual([]);expect(document.body.textContent).toContain(filterText.counts(3,1));expect(document.body.textContent).toContain(filterText.truncated);
