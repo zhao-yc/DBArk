@@ -211,6 +211,41 @@ async function addFilterRule(index:number,column:string,operator:string,value=''
 async function configureGroupedRule(index:number,column:string,operator:string,value:string){await setFilterField(filterText.column+' '+index,column);await setFilterField(filterText.operator+' '+index,operator);await setFilterField(filterText.input+' '+index,value);}
 /** 真实ResultsGrid处理原活动位置；这里只替代虚拟布局，不读写系统剪贴板。 */
 async function chooseFilterCell(index:number,key:string){const port=grid();await act(async()=>port.onActivePositionChange({row:port.rows[index],rowIdx:index,column:{key}}));}
+it('复制筛选条件：区间副本留在原子组并紧随原条件，编辑副本不提交或改变原端点',async()=>{
+  await mountMulti();const saved=structuredClone(original);await click(filterText.open);await click(filterText.addGroup);
+  await setFilterField(filterText.column+' 1','id');await setFilterField(filterText.operator+' 1','between');await setFilterField(filterText.lower+' 1','9007199254740993');await setFilterField(filterText.upper+' 1','9007199254740993');await addFilterRule(2,'group','eq','A');
+  await click(filterText.duplicate(1));expect(document.querySelector('[aria-label="'+filterText.column+' 2"]')!.value).toBe('id');expect(document.querySelector('[aria-label="'+filterText.column+' 3"]')!.value).toBe('group');
+  expect(document.querySelector('[aria-label="'+filterText.upper+' 2"]')!.value).toBe('9007199254740993');await setFilterField(filterText.lower+' 2','2');await setFilterField(filterText.upper+' 2','2');
+  expect(document.querySelector('[aria-label="'+filterText.lower+' 1"]')!.value).toBe('9007199254740993');expect(document.querySelector('[aria-label="'+filterText.upper+' 1"]')!.value).toBe('9007199254740993');expect(grid().rows).toBe(original.rows);
+  await click(filterText.apply);expect(grid().rows).toEqual([original.rows[1],original.rows[2]]);expect(original).toEqual(saved);expect(commands.filter(value=>value==='query.execute')).toHaveLength(1);
+});
+it('复制筛选条件：列表和大小写选项独立保留，编辑副本后复制导出仍使用原文',async()=>{
+  await mount(result=>{result.rows[0].words='a';result.rows[1].words='A';result.rows[2].words='B';});const saved=structuredClone(original);await click(filterText.open);await click(filterText.add);
+  await setFilterField(filterText.column+' 1','words');await setFilterField(filterText.operator+' 1','in');await setFilterField(filterText.member(1,1),'a');await click(filterText.addMember(1));await setFilterField(filterText.member(1,2),'未匹配');
+  await act(async()=>reactProps(document.querySelector('[aria-label="'+filterText.ignoreCase(1)+'"]')).onChange({target:{checked:true}}));await click(filterText.duplicate(1));
+  expect(document.querySelector('[aria-label="'+filterText.ignoreCase(2)+'"]')!.checked).toBe(true);expect(document.querySelector('[aria-label="'+filterText.member(2,1)+'"]')!.value).toBe('a');
+  await setFilterField(filterText.member(2,1),'b');await click(filterText.removeMember(2,2));expect(document.querySelector('[aria-label="'+filterText.member(1,1)+'"]')!.value).toBe('a');expect(document.querySelector('[aria-label="'+filterText.member(1,2)+'"]')!.value).toBe('未匹配');
+  await setFilterField(filterText.mode,'OR');expect(grid().rows).toBe(original.rows);await click(filterText.apply);expect(grid().rows).toEqual(original.rows);await sort();await act(async()=>grid().onSelectedRowsChange(new Set([0,1,2])));
+  expect(JSON.parse(copy().get('application/x-dbark-cells')!).rows.map((row:any[])=>row[2])).toEqual(['B','A','a']);await click(zh.resultExport.selectedTitle);await click(zh.resultExport.chooseFile);await click(zh.resultExport.start);expect(exports[0].result.rows.map((row:any)=>row.words)).toEqual(['B','A','a']);expect(original).toEqual(saved);expect(commands.filter(value=>value==='query.execute')).toHaveLength(1);
+});
+it('复制筛选条件：双击旧回调最多一次，达到32条禁用，移除后旧回调不能重新填满',async()=>{
+  await mount();await click(filterText.open);await addFilterRule(1,'id','eq','18446744073709551615');const first=reactProps(button(filterText.duplicate(1))).onClick;await act(async()=>{first();first();});expect(document.querySelector('[aria-label="'+filterText.condition(3)+'"]')).toBeNull();
+  for(let count=3;count<=31;count++)await click(filterText.duplicate(1));const old=reactProps(button(filterText.duplicate(1))).onClick;await click(filterText.duplicate(1));expect(button(filterText.duplicate(1)).disabled).toBe(true);
+  await act(async()=>old());expect(document.querySelector('[aria-label="'+filterText.condition(33)+'"]')).toBeNull();await click(filterText.remove(32));expect(button(filterText.duplicate(1)).disabled).toBe(false);await act(async()=>old());expect(document.querySelector('[aria-label="'+filterText.condition(32)+'"]')).toBeNull();
+  await click(filterText.apply);expect(grid().rows).toEqual([original.rows[0]]);expect(commands.filter(value=>value==='query.execute')).toHaveLength(1);
+});
+it('复制筛选条件：组合输入不复制，移除后的旧按钮不能复制同编号新条件',async()=>{
+  await mount();await click(filterText.open);await addFilterRule(1,'words','eq','晚行');let input=document.querySelector('[aria-label="'+filterText.input+' 1"]')!;const old=reactProps(button(filterText.duplicate(1))).onClick;
+  await act(async()=>reactProps(input).onCompositionStart());expect(button(filterText.duplicate(1)).disabled).toBe(true);await act(async()=>old());expect(document.querySelector('[aria-label="'+filterText.condition(2)+'"]')).toBeNull();
+  input=document.querySelector('[aria-label="'+filterText.input+' 1"]')!;await act(async()=>reactProps(input).onCompositionEnd());await click(filterText.remove(1));await addFilterRule(1,'id','eq','2');await act(async()=>old());expect(document.querySelector('[aria-label="'+filterText.condition(2)+'"]')).toBeNull();
+  await click(filterText.apply);expect(grid().rows).toEqual([original.rows[2]]);expect(commands.filter(value=>value==='query.execute')).toHaveLength(1);
+});
+it.each(['cancel','revision'] as const)('复制筛选条件：%s后旧面板按钮不能修改重开草稿',async mode=>{
+  await mount();await click(filterText.open);await addFilterRule(1,'id','eq','2');const old=reactProps(button(filterText.duplicate(1))).onClick;
+  if(mode==='cancel'){await click(filterText.cancel);await click(filterText.open);await addFilterRule(1,'words','eq','晚行');}
+  else await act(async()=>{store.setState({connectionVersions:{c:2}});store.setState({connectionVersions:{c:1}});});
+  await act(async()=>old());expect(document.querySelector('[aria-label="'+filterText.condition(2)+'"]')).toBeNull();expect(grid().rows).toBe(original.rows);expect(commands.filter(value=>value==='query.execute')).toHaveLength(1);
+});
 it('文本排序大小写：只在文本列显示控件，方向/NULL/优先级保留，移除后重加恢复默认',async()=>{
   await mount(result=>{result.rows[0].words='a';result.rows[1].words='B';result.rows[2].words='A';});await headerAction('id');expect(document.querySelector('[aria-label="'+text.ignoreCase(1,'同名')+'"]')).toBeNull();
   await headerAction('words');expect(grid().rows).toEqual([original.rows[2],original.rows[1],original.rows[0]]);await toggleSortCase(1,'原文',true);expect(grid().rows).toEqual([original.rows[0],original.rows[2],original.rows[1]]);
