@@ -58,7 +58,8 @@ async function nullPosition(order:number,name:string,value:''|'FIRST'|'LAST'){
 }
 function copy(current=grid()){const data=new Map<string,string>();current.onCellCopy({row:current.rows[0],column:{key:'id'}},{preventDefault(){},clipboardData:{setData:(key:string,value:string)=>data.set(key,value)}});return data;}
 
-it('本文件内存单选端口选中新项时取消旧项，value读取准确当前项',()=>{
+it('本文件内存单选端口选中新项时取消旧项，value读取准确当前项',async()=>{
+  await mount();
   const select=document.createElement('select'),first=document.createElement('option'),last=document.createElement('option');
   first.value='FIRST';last.value='LAST';select.appendChild(first);select.appendChild(last);
   (first as any).selected=true;(last as any).selected=true;
