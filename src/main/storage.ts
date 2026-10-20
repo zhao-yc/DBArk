@@ -37,6 +37,7 @@ export interface ConnectionImportStorageOptions { expectedRevision: number; repl
 export class LocalStore {
   private connectionRevisionValue = 0;
   private readonly queryFileDocuments = new Map<string, object>();
+  private readonly queryFileReloadGenerations = new Map<string, number>();
   private queryFileDocumentSnapshot?: AppSettings['tabs'];
   private queryRevisionValue=0;
   private historyRevisionValue=0;
@@ -539,7 +540,12 @@ export class LocalStore {
       const canonical = { ...settings, tabs: this.queryFileCanonicalTabs(settings.tabs) };
       this.db.run('INSERT INTO settings VALUES (1,?) ON CONFLICT(id) DO UPDATE SET data=excluded.data', [JSON.stringify(canonical)]);
     });
-    for (const tab of previous) if (!settings.tabs.some(next => next.id === tab.id && next.kind === tab.kind && next.connectionId === tab.connectionId)) this.queryFileDocuments.delete(tab.id);
+    for (const tab of previous) {
+      const next = settings.tabs.find(next => next.id === tab.id);
+      if (!next || next.kind !== tab.kind || next.connectionId !== tab.connectionId) this.queryFileDocuments.delete(tab.id);
+      // 成功的SQL/上下文/来源往返也推进重载世代；现有保存租约仍允许正文继续编辑。
+      if (!next || next.sql !== tab.sql || next.connectionId !== tab.connectionId || next.database !== tab.database || JSON.stringify(next.databaseContext) !== JSON.stringify(tab.databaseContext) || !sameQueryFileSource(next.fileSourceBinding, tab.fileSourceBinding) || next.sourceBinding !== tab.sourceBinding) this.queryFileReloadGenerations.set(tab.id, (this.queryFileReloadGenerations.get(tab.id) ?? 0) + 1);
+    }
   }
   /** 仅按本地私有表读取授权，坏记录只报错，不删除正文或猜测路径。 */
   queryFileSource(tabId: string): PrivateQueryFileSource | undefined {
@@ -598,12 +604,12 @@ export class LocalStore {
     });
   }
   /** 文档代次不受正文输入影响；关闭后同tabId重新打开不能借用旧操作。 */
-  queryFileDocument(tabId: string): { token: object; tab: AppSettings['tabs'][number] } {
+  queryFileDocument(tabId: string): { token: object; tab: AppSettings['tabs'][number]; generation?: number } {
     // 分块IO的每个await都核文档，但不能每次重解析最多20MiB正文；任何本地事务后失效重取。
     const tabs = (this.queryFileDocumentSnapshot ??= this.settings().tabs).filter(tab => tab.id === tabId);
     if (tabs.length !== 1 || tabs[0].kind !== 'query') throw Error('查询文档不存在或身份不唯一');
     let token = this.queryFileDocuments.get(tabId); if (!token) { token = {}; this.queryFileDocuments.set(tabId, token); }
-    return { token, tab: { ...tabs[0] } };
+    return { token, tab: { ...tabs[0] }, generation: this.queryFileReloadGenerations.get(tabId) ?? 0 };
   }
   /** 读取先核旧SQL；只有首次打开提供sql接管占位，重读只原子更新来源而保留原文。 */
   commitQueryFileSource(value: PrivateQueryFileSource, expected?: QueryFileSourceRef, opened?: { previousSql: string; sql?: string }): void {

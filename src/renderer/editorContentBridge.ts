@@ -3,6 +3,12 @@ import { zh } from './locales/zh-CN';
 
 export type EditorContentFlushPolicy = 'preserve-equivalent-draft-eol';
 const bodyFlushers = new WeakMap<monaco.editor.IStandaloneCodeEditor, (expected?: string, policy?: EditorContentFlushPolicy) => string>();
+export interface EditorReloadLease { current(): boolean; apply(sql: string, commit: () => void): boolean; dispose(): void; }
+const reloaders = new WeakMap<monaco.editor.IStandaloneCodeEditor, (expected: string) => EditorReloadLease>();
+/** 只对正式存活正文桥申请模型锁，不从旧tab正文创建替代模型。 */
+export function beginEditorReload(editor: monaco.editor.IStandaloneCodeEditor, expected: string): EditorReloadLease {
+  const begin = reloaders.get(editor); if (!begin) throw Error(zh.editor.bodyUnavailable); return begin(expected);
+}
 /** 只通过当前存活正文桥flush，不以旧tab.sql、选区或受控sync替代模型全文。 */
 export function flushEditorContent(editor: monaco.editor.IStandaloneCodeEditor, expectedDraft?: string, policy?: EditorContentFlushPolicy): string {
   const flush = bodyFlushers.get(editor); if (!flush) throw Error(zh.editor.bodyUnavailable); return flush(expectedDraft, policy);
@@ -14,11 +20,12 @@ interface ModelLease { model: monaco.editor.ITextModel; valid: boolean; syncing:
 /** 单实例只转发真实正文事件；受控props另走有明确抑制范围的编辑，不补发既有模型正文。 */
 export function editorContentBridge(editor: monaco.editor.IStandaloneCodeEditor, current: () => EditorContentProps, publishReady: (ready: boolean) => void) {
   let closed = false, editorAlive = true, ready = false, lease: ModelLease | undefined;
+  let reload: { valid: boolean } | undefined;
   const subscriptions: monaco.IDisposable[] = [];
   /** 就绪发布与原生readonly同源；任何失效先锁住输入，再通知界面。 */
   function availability(next: boolean) {
     ready = next;
-    if (editorAlive) editor.updateOptions({ readOnly: !next || current().readOnly });
+    if (editorAlive) editor.updateOptions({ readOnly: !next || current().readOnly || !!reload });
     publishReady(next);
   }
   /** 旧模型监听先失效再释放，已排队的旧事件也不能写入新标签回调。 */
@@ -32,6 +39,7 @@ export function editorContentBridge(editor: monaco.editor.IStandaloneCodeEditor,
     const item = lease;
     if (!item || !owns(item)) { if (!closed) availability(false); return; }
     const props = current(), model = item.model;
+    if (reload) { editor.updateOptions({ readOnly: true }); return; }
     if (!ready || props.readOnly) editor.updateOptions({ readOnly: true });
     // Monaco将输入换行统一为模型EOL；等价的外部换行不能导致反复整篇编辑。
     const desired = props.value.replace(/\r\n|\r|\n/g, model.getEOL());
@@ -66,6 +74,8 @@ export function editorContentBridge(editor: monaco.editor.IStandaloneCodeEditor,
     if (closed) return; closed = true; releaseModel();
     const currentBridge = bodyFlushers.get(editor);
     if (currentBridge === flush) bodyFlushers.delete(editor);
+    if (reloaders.get(editor) === beginReload) reloaders.delete(editor);
+    if (reload) reload.valid = false;
     for (const item of subscriptions) item.dispose();
     // 同一editor已由新桥接管时，旧桥只能释放自身，不能锁住新桥或发布旧就绪状态。
     if (!currentBridge || currentBridge === flush) availability(false); else ready = false;
@@ -90,6 +100,40 @@ export function editorContentBridge(editor: monaco.editor.IStandaloneCodeEditor,
     if (!owns(item) || item.model.getVersionId() !== version || item.model.getValue() !== value) throw Error(zh.editor.bodyUnavailable);
     return preserveDraft ? props.value : value;
   }
+  /** 预览期间锁原模型；EOL与正文各保留独立历史项，再同步提交同一份工作区来源。 */
+  function beginReload(expected: string): EditorReloadLease {
+    if (reload || flush(expected, 'preserve-equivalent-draft-eol') !== expected || !lease) throw Error(zh.editor.bodyUnavailable);
+    const item = lease, model = item.model, version = model.getVersionId(), held = { valid: true }; reload = held; let applied = false;
+    const valid = () => {
+      if (!owns(item) || reload !== held || model.getVersionId() !== version || current().value !== expected) held.valid = false;
+      return held.valid;
+    };
+    availability(true);
+    return {
+      current: valid,
+      apply(sql, commit) {
+        if (!valid()) return false;
+        item.syncing = true;
+        try {
+          model.pushStackElement();
+          // Monaco模型只支持LF/CRLF，裸CR/混合原文仍由工作区及来源摘要逐字保留。
+          const eol = /\r\n/.test(sql) && !/(^|[^\r])\n|\r(?!\n)/.test(sql) ? '\r\n' : '\n';
+          const differs = model.getEOL() !== eol || model.getValue() !== sql.replace(/\r\n|\r|\n/g, eol);
+          // Monaco历史的文字偏移不跨EOL压缩。分隔两步，否则CRLF→LF重做可能留下多余换行。
+          // pushEOL自身写入null选区，前后公开空编辑保留该独立步骤的选区与方向。
+          if (differs && model.getEOL() !== eol) { const selections = editor.getSelections(); model.pushEditOperations(selections, [], () => selections); model.pushEOL(eol === '\r\n' ? 1 : 0); model.pushEditOperations(selections, [], () => selections); model.pushStackElement(); }
+          if (model.getValue() !== sql.replace(/\r\n|\r|\n/g, eol)) model.pushEditOperations(editor.getSelections(), [{ range: model.getFullModelRange(), text: sql, forceMoveMarkers: true }], () => {
+            const end = model.getPositionAt(model.getValueLength());
+            return [{ selectionStartLineNumber: end.lineNumber, selectionStartColumn: end.column, positionLineNumber: end.lineNumber, positionColumn: end.column }] as monaco.Selection[];
+          });
+          model.pushStackElement();
+          item.controlledThrough = model.getVersionId(); item.syncedValue = sql; item.syncedVersion = model.getVersionId(); item.publishedValue = undefined;
+          commit(); applied = true; held.valid = false; return true;
+        } finally { item.controlledThrough = model.getVersionId(); item.syncing = false; }
+      },
+      dispose() { held.valid = false; if (reload !== held) return; reload = undefined; if (owns(item)) { if (!applied) sync(); else availability(true); } },
+    };
+  }
   try {
     editor.updateOptions({ readOnly: true });
     subscriptions.push(editor.onDidChangeModel(bindModel));
@@ -97,5 +141,6 @@ export function editorContentBridge(editor: monaco.editor.IStandaloneCodeEditor,
     bindModel();
   } catch (reason) { dispose(); throw reason; }
   bodyFlushers.set(editor, flush);
+  reloaders.set(editor, beginReload);
   return { sync, flush, dispose, get ready() { return ready; } };
 }

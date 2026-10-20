@@ -4,6 +4,8 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest
 import { memoryDocument, MemoryEvent } from '../fixtures/memory-dom';
 import { ContentEditorPort, ContentModelPort } from './editor-content-test-ports';
 import type { TaskEvent } from '../../src/shared/contracts';
+import { queryFileReloadZh as reloadText } from '../../src/shared/queryFileReload.zh-CN';
+import { queryFileTextDifference } from '../../src/shared/queryFileReload';
 
 const io = vi.hoisted(() => ({ editor: null as any, entries: [] as Array<{ editor: any; initial: string }> }));
 /** 只替换Monaco端口；保存入口、正文桥、ReactDOM和工作区store均为真实实现。 */
@@ -158,6 +160,51 @@ async function select(label: string, value: string) {
   expect(node).toBeDefined(); await act(async () => { node!.value = value; node!.dispatchEvent(new MemoryEvent('change')); });
 }
 function deferred() { let resolve!: (value: any) => void; const promise = new Promise<any>(done => { resolve = done; }); return { promise, resolve }; }
+
+describe('0.29真实QueryTab外部检查与当前草稿重载（RAM）', () => {
+  const external = "-- 外部<img>\r\nSELECT '🚢';\r\n";
+  const checked = () => ({ state: 'preview', previewId: '22222222-2222-4222-8222-222222222222', expiresAt: Date.now() + 10000, change: 'replaced', dirty: true, binding: { ...sourceView(external), eol: 'crlf' }, difference: queryFileTextDifference('SELECT 初始;', external) });
+  async function start(pending?: ReturnType<typeof deferred>, applying?: ReturnType<typeof deferred>) {
+    const editor = await mount(true), model = editor.model;
+    const edits = model.pushEditOperations.bind(model); model.pushEditOperations = (before, values, cursor) => values.length ? edits(before, values, cursor) : cursor([]);
+    // 本组只给原RAM模型补充重载所需公开方法，Undo/EOL历史由独立真实Monaco栈用例验证。
+    Object.assign(model, { pushEOL(value: number) { model.eol = value === 1 ? '\r\n' : '\n'; model.edit(model.value); }, getPositionAt(offset: number) { const lines = model.value.slice(0, offset).split(model.eol); return { lineNumber: lines.length, column: lines.at(-1)!.length + 1 }; } });
+    hook = command => command === 'queryFileSources.checkExternal' ? pending?.promise ?? Promise.resolve(checked()) : command === 'queryFileSources.reload' ? applying?.promise ?? Promise.resolve({ state: 'reloaded', sql: external, binding: { ...sourceView(external, 2), eol: 'crlf' } }) : command === 'queryFileSources.discardReload' ? Promise.resolve({ discarded: true }) : undefined;
+    await click(reloadText.check);
+    if (!pending) await vi.waitFor(async () => { await act(async () => {}); expect(document.body.textContent).toContain(reloadText.dirty); });
+    return editor;
+  }
+  async function accept() {
+    const checkbox = document.body.querySelectorAll('input').find(node => node.type === 'checkbox'); expect(checkbox).toBeDefined();
+    await act(async () => { checkbox!.checked = true; checkbox!.dispatchEvent(new MemoryEvent('click')); });
+  }
+  it('显示有界只读差异与dirty确认，预览零保存；确认只更新原模型及ref/EOL/摘要', async () => {
+    const editor = await start(), originalModel = editor.model; expect(editor.readOnly).toBe(true); expect(commands.some(c => c.command === 'queryFileSources.reload')).toBe(false); expect(document.body.textContent).toContain(reloadText.dirty); expect(document.body.querySelectorAll('img')).toHaveLength(0);
+    const confirm = document.body.querySelectorAll('button').find(node => node.textContent === reloadText.confirm)!; expect(confirm.getAttribute('disabled')).not.toBeNull();
+    await accept(); await click(reloadText.confirm); await vi.waitFor(async () => { await act(async () => {}); expect(useWorkspace.getState().settings.tabs[0].fileSourceBinding?.revision).toBe(2); }); expect(editor.model).toBe(originalModel); expect(editor.model.getValue()).toBe(external); expect(editor.model.getEOL()).toBe('\r\n'); expect(editor.readOnly).toBe(false);
+    expect(useWorkspace.getState().settings.tabs[0]).toMatchObject({ sql: external, fileSourceBinding: { revision: 2 } }); expect(editor.setValueCalls).toBe(0); expect(io.entries).toHaveLength(1); expect(commands.some(c => c.command.startsWith('query.') || c.command === 'queryFileSources.save')).toBe(false);
+  });
+  it('取消预览原模型/来源/SQL都不变，解锁；并不启动执行或保存', async () => {
+    const editor = await start(), old = useWorkspace.getState().settings.tabs[0]; await click(reloadText.cancel); expect(editor.model.getValue()).toBe('SELECT 初始;'); expect(useWorkspace.getState().settings.tabs[0]).toBe(old); expect(editor.readOnly).toBe(false); expect(commands.some(c => c.command === 'queryFileSources.reload')).toBe(false);
+  });
+  it('执行中不读源文件，不清除查询自己的busy；预览期间执行菜单也被挡住', async () => {
+    const editor = await start(); await act(async () => { for (const menu of menus) menu('execute'); }); expect(commands.some(c => c.command === 'query.execute')).toBe(false); await click(reloadText.cancel);
+    await act(async () => useWorkspace.getState().setBusy('t', true)); await click(reloadText.check); expect(commands.filter(c => c.command === 'queryFileSources.checkExternal')).toHaveLength(1); expect(useWorkspace.getState().activeJobs.t).toBe(true); expect(editor.readOnly).toBe(false);
+  });
+  it.each(['新正文', '正文ABA', '连接修订', '切换标签', '关闭请求'])('%s取消旧预览，迟到检查不复活或覆盖当前草稿', async kind => {
+    const pending = deferred(), editor = await start(pending);
+    await act(async () => {
+      const state = useWorkspace.getState(); if (kind === '新正文' || kind === '正文ABA') { state.updateTab('t', { sql: '后来的输入' }); if (kind === '正文ABA') state.updateTab('t', { sql: 'SELECT 初始;' }); }
+      if (kind === '连接修订') useWorkspace.setState({ connectionVersions: { c: 1 } }); if (kind === '切换标签') state.updateSettings({ activeTabId: '另一个标签' }); if (kind === '关闭请求') startClose();
+    });
+    await act(async () => pending.resolve(checked())); expect(commands.some(c => c.command === 'queryFileSources.reload')).toBe(false); expect(useWorkspace.getState().settings.tabs[0].fileSourceBinding?.revision).toBe(1); expect(editor.model.getValue()).not.toBe(external);
+  });
+  it('确认在途期间新输入使旧回包失效，不能覆盖新草稿或旧来源；不自动重试', async () => {
+    const pending = deferred(), editor = await start(undefined, pending); await accept(); await click(reloadText.confirm); await vi.waitFor(async () => { await act(async () => {}); expect(commands.filter(c => c.command === 'queryFileSources.reload')).toHaveLength(1); });
+    await act(async () => useWorkspace.getState().updateTab('t', { sql: '更新的草稿\n' })); await act(async () => pending.resolve({ state: 'reloaded', sql: external, binding: { ...sourceView(external, 2), eol: 'crlf' } }));
+    expect(useWorkspace.getState().settings.tabs[0]).toMatchObject({ sql: '更新的草稿\n', fileSourceBinding: { revision: 1 } }); expect(editor.model.getValue()).toBe('更新的草稿\r\n'); expect(commands.filter(c => c.command === 'queryFileSources.reload')).toHaveLength(1);
+  });
+});
 
 describe('新文件占位首次模型与操作世代（真实store/hook/QueryTab与RAM）', () => {
   /** 原生读取仅用待决IPC；用户仍从正式打开入口进入，不直接调用控制器。 */

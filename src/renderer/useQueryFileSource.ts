@@ -8,6 +8,11 @@ import { invoke, uid } from './lib';
 import { QuerySourceLease, querySourceTab } from './querySourceLease';
 import { queryFilesZh as text } from './locales/queryFiles.zh-CN';
 import type { QueryCloseRequest } from './queryCloseIntent';
+import type * as monaco from 'monaco-editor';
+import { beginEditorReload, type EditorReloadLease } from './editorContentBridge';
+import { queryFileSourceSqlDigest } from '../shared/queryFileSources';
+import type { QueryFileExternalPreview } from '../shared/queryFileReload';
+import { queryFileReloadZh as reloadText } from '../shared/queryFileReload.zh-CN';
 
 export interface QueryFileOptions { encoding: QueryFileEncoding; bom: QueryFileBom; eol: QueryFileEolPolicy; }
 export interface QueryFileSaveReceipt { saved: boolean; restored: boolean; applied: boolean; busyUnchanged: boolean; }
@@ -15,19 +20,22 @@ const unsuccessful: QueryFileSaveReceipt = { saved: false, restored: false, appl
 export { queryFileSourceSqlDigest as queryFileSqlDigest } from '../shared/queryFileSources';
 
 /** 文件来源仅使用不透明引用；status不读外部文件，重读与写入均须用户显式触发。 */
-export function useQueryFileSource(tab: WorkspaceTab, capture: () => Readonly<WorkspaceTab>, ownsView: () => boolean, publishBusy: (value: boolean) => void) {
+export function useQueryFileSource(tab: WorkspaceTab, capture: () => Readonly<WorkspaceTab>, ownsView: () => boolean, publishBusy: (value: boolean) => void, reloadPort?: { editor(): monaco.editor.IStandaloneCodeEditor | null; available(): boolean; current?(): boolean }) {
   const [view, setView] = useState<QueryFileSourceView>();
   const [problem, setProblem] = useState<QueryFileSourceBlocked>();
   const [busy, setBusy] = useState(false), active = useRef(false);
   const [checked, setChecked] = useState<{ sql: string; baseline: string; dirty: boolean }>();
   const [task, setTask] = useState<QueryFileTaskState>();
   const operations = useRef(new Set<QueryFileTaskOperation>());
+  const [reloadPreview, setReloadPreview] = useState<QueryFileExternalPreview>(), [reloadApplying, setReloadApplying] = useState(false), [reloadActive, setReloadActive] = useState(false);
+  const reloadIntent = useRef<{ snapshot: Readonly<WorkspaceTab>; model: EditorReloadLease; job: ReturnType<typeof acquireWorkspaceBusy>; valid: boolean; applying: boolean; off(): void; preview?: QueryFileExternalPreview; work?: ReturnType<typeof beginTask> } | undefined>(undefined);
   const current = () => useWorkspace.getState().settings.tabs.find(item => item.id === tab.id);
   const source = tab.fileSourceBinding;
   const metadata = view && sameQueryFileSource(view.ref, source) ? view : undefined;
   const dirty = !!source && (!metadata || checked?.sql !== (tab.sql ?? '') || checked.baseline !== metadata.savedSqlDigest || checked.dirty);
   /** 文档卸载只取消自己发出的精确任务，不能释放新来源或清除新编辑。 */
-  useEffect(() => () => { for (const owner of operations.current) { owner.documentCurrent(); void owner.cancel(true); } }, []);
+  useEffect(() => () => { for (const owner of operations.current) { owner.documentCurrent(); void owner.cancel(true); } const intent = reloadIntent.current; if (intent) { intent.valid = false; releaseReload(intent); } }, []);
+  useEffect(() => { if (reloadIntent.current && reloadPort?.current?.() === false && !reloadIntent.current.applying) void cancelReload(); });
   /** 每次调用新建UUID并先订阅，再向Main发送任务；任务中心只看到无路径/SQL的结构化进度。 */
   function beginTask(snapshot: Readonly<WorkspaceTab>, operation: QueryFileTaskState['operation'], ownsDocument = ownsView) {
     const taskId = uid(), owner = new QueryFileTaskOperation(snapshot, taskId, operation, {
@@ -165,10 +173,68 @@ export function useQueryFileSource(tab: WorkspaceTab, capture: () => Readonly<Wo
     } catch (reason) { work?.finish({ state: 'blocked', message: text.uncertain, wrote: 'unknown' }); if (ownsView()) uncertain(reason); return false; }
     finally { lease?.dispose(); const released = job?.release(); active.current = false; if (ownsView()) { setBusy(false); if (released && !useWorkspace.getState().activeJobs[tab.id]) publishBusy(false); } }
   }
+  /** 释放本次模型锁、作业和一次性预览；取消不更新SQL、来源或磁盘。 */
+  function releaseReload(intent: NonNullable<typeof reloadIntent.current>) {
+    if (reloadIntent.current !== intent) return; reloadIntent.current = undefined; intent.off(); intent.model.dispose();
+    if (intent.preview && intent.snapshot.fileSourceBinding) void invoke('queryFileSources.discardReload', { tabId: tab.id, source: intent.snapshot.fileSourceBinding, previewId: intent.preview.previewId }).catch(() => {});
+    const released = intent.job.release(); active.current = false;
+    if (ownsView()) { setBusy(false); setReloadPreview(undefined); setReloadApplying(false); setReloadActive(false); if (released && !useWorkspace.getState().activeJobs[tab.id]) publishBusy(false); }
+  }
+  /** 预览可取消；确认RPC发出后只等待真实结果，不能声称撤销已确认的来源。 */
+  async function cancelReload() {
+    const intent = reloadIntent.current; if (!intent || intent.applying) return; intent.valid = false;
+    try { await intent.work?.owner.cancel(true); } finally { releaseReload(intent); }
+  }
+  /** 用户显式检查，整个预览期间锁住同一模型和执行入口；无后台watch或失焦读盘。 */
+  async function checkExternal() {
+    if (active.current || !ownsView() || !reloadPort?.available() || useWorkspace.getState().settings.activeTabId !== tab.id) return false;
+    let intent: NonNullable<typeof reloadIntent.current> | undefined;
+    try {
+      const snapshot = capture(), editor = reloadPort.editor(); if (!snapshot.fileSourceBinding || !editor) throw Error(reloadText.changed);
+      const model = beginEditorReload(editor, snapshot.sql ?? ''); let job: ReturnType<typeof acquireWorkspaceBusy>;
+      try { job = acquireWorkspaceBusy(tab.id); } catch (error) { model.dispose(); throw error; }
+      intent = { snapshot, model, job, valid: true, applying: false, off() {} }; reloadIntent.current = intent;
+      const owned = intent, connectionVersion = useWorkspace.getState().connectionVersions[snapshot.connectionId] ?? 0;
+      const context = (value: Readonly<WorkspaceTab>) => JSON.stringify([value.database, value.databaseContext]);
+      intent.off = useWorkspace.subscribe(() => {
+        const state = useWorkspace.getState(), value = current();
+        if (!value || state.settings.activeTabId !== tab.id || value.connectionId !== snapshot.connectionId || (state.connectionVersions[snapshot.connectionId] ?? 0) !== connectionVersion || value.sql !== snapshot.sql || context(value) !== context(snapshot) || !sameQueryFileSource(value.fileSourceBinding, snapshot.fileSourceBinding) || value.sourceBinding !== snapshot.sourceBinding || !job.owns()) { owned.valid = false; if (!owned.applying) void cancelReload(); }
+      });
+      active.current = true; setBusy(true); setReloadActive(true); setProblem(undefined); publishBusy(true);
+      await flushSettings(); if (reloadIntent.current !== intent || reloadPort?.current?.() === false || !intent.valid || !model.current() || !ownsView()) throw Error(reloadText.changed);
+      const draftDigest = await queryFileSourceSqlDigest(snapshot.sql ?? ''); if (!intent.valid || !model.current()) throw Error(reloadText.changed);
+      intent.work = beginTask(snapshot, 'check');
+      const result = await invoke('queryFileSources.checkExternal', { tabId: tab.id, taskId: intent.work.taskId, source: snapshot.fileSourceBinding, draftDigest }); intent.work.finish(result.state === 'preview' ? { state: 'opened' } : result); intent.work = undefined;
+      if (result.state === 'blocked') { if (reloadIntent.current === intent && ownsView()) setProblem(result); return false; }
+      intent.preview = result;
+      if (!intent.valid || !model.current() || !ownsView()) throw Error(reloadText.changed);
+      setReloadPreview(result); return true;
+    } catch { intent?.work?.finish({ state: 'blocked', message: reloadText.changed, wrote: 'no' }); if (reloadIntent.current === intent && ownsView()) setProblem({ state: 'blocked', reason: 'document-changed', message: reloadText.changed, wrote: 'no' }); return false; }
+    finally { if (intent && (!intent.preview || !intent.valid)) releaseReload(intent); }
+  }
+  /** 唯一确认入口；Main提交成功后，同步提交原模型全文/EOL及同一份来源ref与摘要。 */
+  async function confirmReload() {
+    const intent = reloadIntent.current; if (!intent || !intent.preview || intent.applying) return false;
+    intent.applying = true; setReloadApplying(true);
+    try {
+      if (reloadIntent.current !== intent || reloadPort?.current?.() === false || !intent.valid || !intent.model.current() || !intent.job.owns() || !ownsView()) throw Error(reloadText.changed);
+      await flushSettings(); if (!intent.valid || !intent.model.current()) throw Error(reloadText.changed);
+      const draftDigest = await queryFileSourceSqlDigest(intent.snapshot.sql ?? ''); if (!intent.valid || !intent.model.current()) throw Error(reloadText.changed);
+      intent.work = beginTask(intent.snapshot, 'reload');
+      const result = await invoke('queryFileSources.reload', { tabId: tab.id, taskId: intent.work.taskId, source: intent.snapshot.fileSourceBinding!, draftDigest, previewId: intent.preview.previewId }); intent.work.finish(result.state === 'reloaded' ? { state: 'opened' } : result); intent.work = undefined;
+      if (result.state === 'blocked') { if (reloadIntent.current === intent && ownsView()) setProblem(result); return false; }
+      if (reloadIntent.current !== intent || reloadPort?.current?.() === false || !intent.valid || !intent.job.owns() || !ownsView() || !intent.model.current() || await queryFileSourceSqlDigest(result.sql) !== result.binding.savedSqlDigest) throw Error(reloadText.changed);
+      const applied = intent.model.apply(result.sql, () => { useWorkspace.getState().updateTab(tab.id, { sql: result.sql, fileSourceBinding: result.binding.ref }); setView(result.binding); setChecked({ sql: result.sql, baseline: result.binding.savedSqlDigest, dirty: false }); });
+      if (!applied) throw Error(reloadText.changed);
+      try { await flushSettings(); } catch { setProblem({ state: 'blocked', reason: 'storage', message: reloadText.restore, wrote: 'no' }); }
+      useWorkspace.getState().notify(reloadText.success); return true;
+    } catch { intent.work?.finish({ state: 'blocked', message: reloadText.changed, wrote: 'no' }); if (reloadIntent.current === intent && ownsView()) setProblem({ state: 'blocked', reason: 'document-changed', message: reloadText.changed, wrote: 'no' }); return false; }
+    finally { releaseReload(intent); }
+  }
   /** 列表与移除只走Main的元数据接口，路径留在展示状态，不写入settings或localStorage。 */
   async function recent() { await flushSettings(); if (!ownsView() || !current()) throw Error(text.changed); return invoke('queryFileSources.recent', { tabId: tab.id }); }
   /** 明确移除历史不释放当前文件来源，不读取或删除实际文件。 */
   async function forgetRecent(recentId: string) { await flushSettings(); if (!ownsView() || !current()) throw Error(text.changed); return invoke('queryFileSources.forgetRecent', { tabId: tab.id, recentId }); }
-  return { view: metadata, dirty, busy, task, problem, save, open, recent, forgetRecent, reread, dismiss: () => setProblem(undefined), isBusy: () => active.current };
+  return { view: metadata, dirty, busy, task, problem, save, open, recent, forgetRecent, reread, reloadPreview, reloadActive, reloadApplying, checkExternal, confirmReload, cancelReload, dismiss: () => setProblem(undefined), isBusy: () => active.current };
 }
 export type QueryFileSourceController = ReturnType<typeof useQueryFileSource>;

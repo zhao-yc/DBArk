@@ -1,3 +1,4 @@
+import type { QueryFileCheckInput, QueryFileCheckResult, QueryFileReloadInput, QueryFileReloadResult, QueryFileDiscardInput } from './queryFileReload';
 import type { QueryFileSourceRef, QueryFileSourceOpenInput, QueryFileSourceOpenResult, QueryFileSourceSaveInput, QueryFileSourceSaveAsInput, QueryFileSourceSaveResult, QueryFileSourceStatusInput, QueryFileSourceStatus, QueryFileSourceReleaseInput, QueryFileSourceCancelInput } from './queryFileSources';
 import type { QueryRecentFileView } from './queryFileSources';
 import type { SnippetTransferDecision, SnippetTransferPreview, SnippetTransferResult } from './snippetTransfer';
@@ -87,6 +88,9 @@ export interface ResultExportOptions { fileToken: string; format: 'csv' | 'json'
 
 /** 请求映射是界面、主进程与数据库进程共同使用的唯一接口定义。 */
 export interface CommandMap {
+  'queryFileSources.checkExternal': { input: QueryFileCheckInput; output: QueryFileCheckResult };
+  'queryFileSources.reload': { input: QueryFileReloadInput; output: QueryFileReloadResult };
+  'queryFileSources.discardReload': { input: QueryFileDiscardInput; output: { discarded: boolean } };
   'queryFileSources.open': { input: QueryFileSourceOpenInput; output: QueryFileSourceOpenResult };
   'queryFileSources.recent': { input: { tabId: string }; output: QueryRecentFileView[] };
   'queryFileSources.forgetRecent': { input: { tabId: string; recentId: string }; output: { removed: boolean } };

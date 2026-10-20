@@ -221,16 +221,19 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
   if(command==='search.dataNext'||command==='search.dataRelease'||command==='search.recordsRelease')return broker.request(command,input);
   // 文件来源独立使用Main授权，不经过数据库broker或连接配置保存。
   if (command.startsWith('queryFileSources.')) {
-    const releasing = command === 'queryFileSources.release' || command === 'queryFileSources.cancel';
+    const releasing = command === 'queryFileSources.release' || command === 'queryFileSources.cancel' || command === 'queryFileSources.discardReload';
     columnsMain.assertCapturedOwner(columns);
     const scope = { document: columns!.owner.document, assertCurrent: () => {
       columnsMain.assertCapturedOwner(columns);
       if (!releasing && (shuttingDown || !rendererHasSettings || !rendererSettingsCurrent)) throw Error('查询文档配置尚未同步或客户端正在退出');
     } };
     scope.assertCurrent();
-    if (command === 'queryFileSources.open' || command === 'queryFileSources.save' || command === 'queryFileSources.saveAs') registerQueryFileSourceTask(input.taskId, command);
+    if (command === 'queryFileSources.open' || command === 'queryFileSources.save' || command === 'queryFileSources.saveAs' || command === 'queryFileSources.checkExternal' || command === 'queryFileSources.reload') registerQueryFileSourceTask(input.taskId, command);
     return queryFileOperation(async () => {
       switch (command) {
+        case 'queryFileSources.checkExternal': return queryFileSources.checkExternal(input, scope);
+        case 'queryFileSources.reload': return queryFileSources.reload(input, scope);
+        case 'queryFileSources.discardReload': return queryFileSources.discardReload(input, scope);
         case 'queryFileSources.cancel': return queryFileSources.cancel(input, scope);
         case 'queryFileSources.open': return queryFileSources.open(input, scope);
         case 'queryFileSources.recent': return queryFileSources.recent(input, scope);

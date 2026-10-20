@@ -10,7 +10,7 @@ export class QueryFileSourceFailure extends Error {
   /** 固定原因与中文消息，不把系统路径、SQL或原始IO异常透传至IPC。 */
   constructor(readonly reason: QueryFileSourceReason, message: string) { super(message); }
 }
-export interface QueryFileSnapshot { path: string; bytes: Buffer; identity: PrivateQueryFileSource['identity']; mode: number; digest: string; }
+export interface QueryFileSnapshot { path: string; bytes: Buffer; identity: PrivateQueryFileSource['identity']; mode: number; digest: string; parent?: { path: string; dev: string; ino: string }; }
 export type QueryFileIoProgress = (phase: 'reading' | 'checking' | 'staging' | 'replacing' | 'verifying', bytes: number, total: number) => void;
 /** SQL基线以点击时完整正文计算，不经过Number、JSON解析或换行归一化。 */
 export function queryFileSqlDigest(sql: string): string { return createHash('sha256').update(queryFileSourceDigestPayload(sql)).digest('hex'); }

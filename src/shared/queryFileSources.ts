@@ -10,7 +10,7 @@ export type QueryFileBom = 'none' | 'utf8' | 'utf16le';
 export type QueryFileEol = 'none' | 'lf' | 'crlf' | 'cr' | 'mixed';
 export type QueryFileEolPolicy = 'preserve' | 'lf' | 'crlf' | 'cr';
 export interface QueryFileSourceProgress {
-  tabId: string; operation: 'open' | 'save' | 'saveAs'; phase: 'choosing' | 'reading' | 'checking' | 'staging' | 'replacing' | 'verifying' | 'recording' | 'terminal';
+  tabId: string; operation: 'open' | 'save' | 'saveAs' | 'check' | 'reload'; phase: 'choosing' | 'reading' | 'checking' | 'staging' | 'replacing' | 'verifying' | 'recording' | 'terminal';
   bytesProcessed: number; totalBytes?: number; wrote: 'no' | 'yes' | 'unknown'; cancellable: boolean;
 }
 /** displayPath 仅供展示，任何请求均不得将其用作授权路径。 */
@@ -18,7 +18,7 @@ export interface QueryFileSourceView {
   ref: QueryFileSourceRef; name: string; displayPath: string; encoding: QueryFileEncoding;
   bom: QueryFileBom; eol: QueryFileEol; savedSqlDigest: string;
 }
-export type QueryFileSourceReason = 'not-bound' | 'stale-source' | 'document-changed' | 'external-change' | 'missing' | 'identity-changed' | 'busy' | 'mixed-eol' | 'encoding' | 'io' | 'storage' | 'uncertain';
+export type QueryFileSourceReason = 'not-bound' | 'stale-source' | 'document-changed' | 'external-change' | 'missing' | 'identity-changed' | 'busy' | 'mixed-eol' | 'encoding' | 'permission' | 'io' | 'storage' | 'uncertain';
 /** wrote 区分未写、文件已写和无法确认；失败绝不能自动重试写入。 */
 export interface QueryFileSourceBlocked { state: 'blocked'; reason: QueryFileSourceReason; message: string; wrote: 'no' | 'yes' | 'unknown'; }
 export interface QueryFileSourceOpened { state: 'opened'; binding: QueryFileSourceView; sql: string; }

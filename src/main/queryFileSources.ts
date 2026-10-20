@@ -8,7 +8,12 @@ import { queryFileSourceOpenSchema, queryFileSourceSaveSchema, queryFileSourceSa
 import { queryFileSourceView, type PrivateQueryFileSource } from './queryFileSourceRecords';
 import { queryRecentFilesSchema, queryRecentFileForgetSchema, type QueryRecentFileView } from '../shared/queryFileSources';
 import { queryRecentFileView } from './queryFileRecents';
-import { QueryFileSourceFailure, readQueryFileSnapshot, assertQueryFileVersion, encodeBoundQueryFile, decodeSourceSnapshot, queryFileSqlDigest, queryFileBom, queryFileEol, queryFileIsMissing, queryFileTargetAbsent, writeBoundQueryFile, type QueryFileSnapshot } from './queryFileSourceFiles';
+import { QueryFileSourceFailure, assertQueryFileVersion, encodeBoundQueryFile, decodeSourceSnapshot, queryFileSqlDigest, queryFileBom, queryFileEol, queryFileIsMissing, queryFileTargetAbsent, writeBoundQueryFile, type QueryFileSnapshot } from './queryFileSourceFiles';
+
+import { readReloadableQueryFile as readQueryFileSnapshot, queryFileParent, sameQueryFileParent } from './queryFileReloadFiles';
+import { queryFileReloadSchemas, queryFileReloadLimits, queryFileTextDifference, type QueryFileCheckInput, type QueryFileCheckResult, type QueryFileReloadInput, type QueryFileReloadResult, type QueryFileDiscardInput } from '../shared/queryFileReload';
+import { queryFileReloadZh as reloadText } from '../shared/queryFileReload.zh-CN';
+import { sameQueryFileVersion } from './queryFileSourceFiles';
 
 type SourceStore = Pick<LocalStore, 'queryFileSource' | 'queryFileDocument' | 'queryFileSourceRecords' | 'commitQueryFileSource' | 'releaseQueryFileSource' | 'queryRecentFiles' | 'queryRecentFile' | 'forgetRecentFile'>;
 /** scope必须由真实Main IPC文档捕获，不能由renderer或缺省true构造。 */
@@ -24,17 +29,19 @@ interface Context { expected?: PrivateQueryFileSource; previousSql: string; conn
 
 /** 来源只在Main持久化；每次显式操作重新绑定当前真实文档及原始授权。 */
 export class QueryFileSources {
+  private readonly reloadPreviews = new Map<string, { id: string; scope: object; token: object; generation: number | undefined; source: QueryFileSourceRef; draft: string; snapshot: Omit<QueryFileSnapshot, 'bytes'>; expires: number }>();
   private readonly active = new Map<string, Active>();
   private readonly runningTasks = new Map<string, Active>();
-  constructor(private readonly host: QueryFileSourceHost) {}
+  constructor(private readonly host: QueryFileSourceHost, private readonly now = Date.now) {}
 
   /** 导航/崩溃仅撤销当前活动意图，不宽删已保存文档的重启授权。 */
-  invalidate(): void { for (const state of this.active.values()) state.cancelled = true; }
+  invalidate(): void { this.reloadPreviews.clear(); for (const state of this.active.values()) state.cancelled = true; }
 
   /** 固定中文状态不泄漏原始文件错误；文件已写和未写不能混淆。 */
   private failure(error: unknown, wrote: Context['wrote']): QueryFileSourceBlocked {
     if (error instanceof QueryFileSourceFailure) return { state: 'blocked', reason: error.reason, message: error.message, wrote };
-    return { state: 'blocked', reason: queryFileIsMissing(error) ? 'missing' : wrote === 'no' ? 'io' : 'uncertain', message: wrote === 'no' ? '文件不可访问或操作未完成，查询输入保持，请核对权限或明确重读、另存' : '文件可能已经写入，后续核对未完成；请核对文件，不要自动重试', wrote };
+    const permission = !!error && typeof error === 'object' && 'code' in error && (error.code === 'EACCES' || error.code === 'EPERM'), missing = queryFileIsMissing(error);
+    return { state: 'blocked', reason: wrote !== 'no' ? 'uncertain' : missing ? 'missing' : permission ? 'permission' : 'io', message: wrote !== 'no' ? '文件可能已经写入，后续核对未完成；请核对文件，不要自动重试' : missing ? reloadText.missing : permission ? reloadText.permission : reloadText.io, wrote };
   }
   /** 存储错误与文件IO分开，坏私有记录不允许推断为不存在。 */
   private source(tabId: string): PrivateQueryFileSource | undefined {
@@ -47,7 +54,7 @@ export class QueryFileSources {
     catch { throw new QueryFileSourceFailure('document-changed', '原查询文档已关闭或身份不唯一，旧操作不再有效'); }
   }
   /** 每个tab只允许一个在途操作，所有await复核原文档、来源及取消状态。 */
-  private async run<T extends QueryFileSourceOpenResult | QueryFileSourceSaveResult>(tabId: string, taskId: string, operation: QueryFileSourceProgress['operation'], ref: QueryFileSourceRef | undefined, requireRef: boolean, scope: QueryFileSourceScope, action: (context: Context) => Promise<T>): Promise<T | QueryFileSourceBlocked> {
+  private async run<T extends QueryFileSourceOpenResult | QueryFileSourceSaveResult | QueryFileCheckResult | QueryFileReloadResult>(tabId: string, taskId: string, operation: QueryFileSourceProgress['operation'], ref: QueryFileSourceRef | undefined, requireRef: boolean, scope: QueryFileSourceScope, action: (context: Context) => Promise<T>): Promise<T | QueryFileSourceBlocked> {
     if (this.runningTasks.has(taskId)) throw Error('文件任务编号已在使用，未取消或改变原任务');
     let finish!: () => void; const state: Active = { cancelled: false, source: undefined, tabId, taskId, document: scope.document, phase: 'checking', done: new Promise<void>(resolve => { finish = resolve; }), finish: () => finish() };
     let context: Context | undefined, outcome: T | QueryFileSourceBlocked | undefined, lastProgress = 0;
@@ -81,7 +88,7 @@ export class QueryFileSources {
     finally {
       if (this.active.get(tabId) === state) this.active.delete(tabId);
       if (this.runningTasks.get(taskId) === state) this.runningTasks.delete(taskId);
-      const status = outcome?.state === 'saved' || outcome?.state === 'opened' ? 'completed' : outcome?.state === 'cancelled' || state.cancelled && (context?.wrote ?? 'no') === 'no' ? 'cancelled' : 'failed';
+      const status = outcome?.state === 'saved' || outcome?.state === 'opened' || outcome?.state === 'preview' || outcome?.state === 'reloaded' ? 'completed' : outcome?.state === 'cancelled' || state.cancelled && (context?.wrote ?? 'no') === 'no' ? 'cancelled' : 'failed';
       report('terminal', 0, undefined, status, outcome?.state === 'blocked' ? outcome.message : status === 'completed' ? 'SQL文件任务已完成；正文与路径未写入任务概要' : 'SQL文件任务已取消，原输入保持'); state.finish();
     }
   }
@@ -92,7 +99,7 @@ export class QueryFileSources {
     const decoded = decodeSourceSnapshot(snapshot, encoding), previous = context.expected;
     const revision = previous ? previous.ref.revision + 1 : 1;
     if (!Number.isSafeInteger(revision)) throw new QueryFileSourceFailure('storage', '文件来源修订已耗尽，请明确解除关联后重试');
-    const source: PrivateQueryFileSource = { version: 1, tabId, connectionId: context.connectionId, ref: { id: previous?.ref.id ?? randomUUID(), revision }, path: snapshot.path, identity: snapshot.identity, fileDigest: snapshot.digest, savedSqlDigest: queryFileSqlDigest(sql), encoding: decoded.encoding, bom: queryFileBom(snapshot.bytes), eol: queryFileEol(decoded.sql) };
+    const source: PrivateQueryFileSource = { version: 1, tabId, connectionId: context.connectionId, ref: { id: previous?.ref.id ?? randomUUID(), revision }, path: snapshot.path, ...(snapshot.parent ? { parent: snapshot.parent } : previous?.parent && previous.path === snapshot.path ? { parent: previous.parent } : {}), identity: snapshot.identity, fileDigest: snapshot.digest, savedSqlDigest: queryFileSqlDigest(sql), encoding: decoded.encoding, bom: queryFileBom(snapshot.bytes), eol: queryFileEol(decoded.sql) };
     try { this.host.store.commitQueryFileSource(source, previous?.ref, opened ? { previousSql: context.previousSql, ...(adoptSql ? { sql } : {}) } : undefined); }
     catch { throw new QueryFileSourceFailure('storage', context.wrote === 'no' ? '来源记录未保存，查询正文保持' : '文件已写入，但本地来源记录未保存；请核对文件并重新读取，不能自动重试'); }
     context.expected = source; return source;
@@ -104,7 +111,9 @@ export class QueryFileSources {
       context.report('choosing'); context.check();
       const recent = input.recentId ? this.host.store.queryRecentFile(input.recentId) : undefined;
       if (input.recentId && !recent) throw new QueryFileSourceFailure('missing', '最近文件记录已移除，请重新选择SQL文件；原查询输入保持');
-      const path = input.source ? context.expected?.path : recent ? recent.path : await this.host.choose('open'); context.check();
+      const chosen = input.source ? context.expected?.path : recent ? recent.path : await this.host.choose('open'); context.check();
+      if (chosen && !isAbsolute(chosen)) throw new QueryFileSourceFailure('io', '原生文件选择没有返回绝对目标');
+      const path = chosen && !input.source ? await realpath(chosen) : chosen; context.check();
       if (!path) return { state: 'cancelled' };
       if (!isAbsolute(path)) throw new QueryFileSourceFailure('io', '原生文件选择没有返回绝对目标');
       const snapshot = await readQueryFileSnapshot(path, context.check, context.report); context.check();
@@ -135,6 +144,7 @@ export class QueryFileSources {
         if (queryFileSqlDigest(input.sql) === source.savedSqlDigest && (input.eol ?? 'preserve') === 'preserve') return { state: 'saved', binding: queryFileSourceView(source), savedSqlDigest: source.savedSqlDigest, unchanged: true };
         const bytes = encodeBoundQueryFile(input.sql, source.encoding, source.bom, source.eol, input.eol ?? 'preserve');
         const written = await writeBoundQueryFile(source.path, bytes, snapshot, context.check, state => { context.wrote = state; }, context.report); context.check();
+        if (!sameQueryFileParent(snapshot.parent, await queryFileParent(source.path, context.check))) throw new QueryFileSourceFailure('identity-changed', reloadText.identity); written.parent = snapshot.parent;
         const next = this.commit(input.tabId, context, written, source.encoding, input.sql, false);
         return { state: 'saved', binding: queryFileSourceView(next), savedSqlDigest: next.savedSqlDigest, unchanged: false };
       } finally { release(); }
@@ -164,13 +174,63 @@ export class QueryFileSources {
         }
         const previousEol = context.expected?.eol ?? queryFileEol(input.sql);
         const bytes = encodeBoundQueryFile(input.sql, input.encoding, input.bom, previousEol, input.eol);
+        const parent = await queryFileParent(path, context.check); context.check();
         const written = await writeBoundQueryFile(path, bytes, expected, context.check, state => { context.wrote = state; }, context.report); context.check();
+        if (!sameQueryFileParent(parent, await queryFileParent(path, context.check))) throw new QueryFileSourceFailure('identity-changed', reloadText.identity); written.parent = parent;
         const next = this.commit(input.tabId, context, written, input.encoding, input.sql, false);
         return { state: 'saved', binding: queryFileSourceView(next), savedSqlDigest: next.savedSqlDigest, unchanged: false };
       } finally { release(); }
     });
   }
   /** 状态不读取/探测外部文件，重启授权只从私有表重新绑定当前文档。 */
+  async checkExternal(raw: QueryFileCheckInput, scope: QueryFileSourceScope): Promise<QueryFileCheckResult> {
+    const input = queryFileReloadSchemas['queryFileSources.checkExternal'].parse(raw);
+    return this.run(input.tabId, input.taskId, 'check', input.source, true, scope, async context => {
+      const source = context.expected, document = this.document(input.tabId);
+      if (!source) throw new QueryFileSourceFailure('not-bound', reloadText.changed);
+      if (!source.parent) throw new QueryFileSourceFailure('identity-changed', reloadText.legacy);
+      const check = () => { context.check(); const current = this.document(input.tabId); if (current.token !== document.token || current.generation !== document.generation || (current.tab.sql ?? '') !== context.previousSql) throw new QueryFileSourceFailure('document-changed', reloadText.changed); };
+      check(); if (queryFileSqlDigest(context.previousSql) !== input.draftDigest) throw new QueryFileSourceFailure('document-changed', reloadText.changed);
+      this.reloadPreviews.delete(input.tabId);
+      const snapshot = await readQueryFileSnapshot(source.path, check, context.report); check();
+      if (!sameQueryFileParent(source.parent, snapshot.parent) || snapshot.identity.dev !== source.identity.dev) throw new QueryFileSourceFailure('identity-changed', reloadText.identity);
+      const decoded = decodeSourceSnapshot(snapshot, source.encoding), { bytes: _bytes, ...version } = snapshot;
+      for (const [id, value] of this.reloadPreviews) if (value.expires <= this.now()) this.reloadPreviews.delete(id);
+      if (this.reloadPreviews.size >= queryFileReloadLimits.previews) throw new QueryFileSourceFailure('busy', reloadText.expired);
+      const id = randomUUID(), expires = this.now() + queryFileReloadLimits.lifetime;
+      this.reloadPreviews.set(input.tabId, { id, scope: scope.document, token: document.token, generation: document.generation, source: { ...source.ref }, draft: input.draftDigest, snapshot: version, expires });
+      const binding = { ...queryFileSourceView(source), encoding: decoded.encoding, bom: queryFileBom(snapshot.bytes), eol: queryFileEol(decoded.sql), savedSqlDigest: queryFileSqlDigest(decoded.sql) };
+      const change = snapshot.identity.ino !== source.identity.ino ? 'replaced' : snapshot.digest !== source.fileDigest || !sameQueryFileVersion(snapshot.identity, source.identity) ? 'modified' : 'same';
+      return { state: 'preview', previewId: id, expiresAt: expires, change, dirty: input.draftDigest !== source.savedSqlDigest, binding, difference: queryFileTextDifference(context.previousSql, decoded.sql) };
+    });
+  }
+  /** 只消费Main原版本；确认前重新读原授权路径，任何漂移失败都不推进来源或SQL。 */
+  async reload(raw: QueryFileReloadInput, scope: QueryFileSourceScope): Promise<QueryFileReloadResult> {
+    const input = queryFileReloadSchemas['queryFileSources.reload'].parse(raw), candidate = this.reloadPreviews.get(input.tabId);
+    const preview = candidate?.scope === scope.document && candidate.id === input.previewId && sameQueryFileSource(candidate.source, input.source) ? candidate : undefined;
+    if (preview) this.reloadPreviews.delete(input.tabId);
+    return this.run(input.tabId, input.taskId, 'reload', input.source, true, scope, async context => {
+      const document = this.document(input.tabId);
+      const check = () => {
+        context.check(); const current = this.document(input.tabId);
+        if (!preview || preview.id !== input.previewId || preview.scope !== scope.document || preview.expires <= this.now() || preview.token !== current.token || preview.generation !== current.generation || preview.draft !== input.draftDigest || !sameQueryFileSource(preview.source, input.source) || (current.tab.sql ?? '') !== context.previousSql || current.token !== document.token) throw new QueryFileSourceFailure('document-changed', reloadText.expired);
+      };
+      check(); if (queryFileSqlDigest(context.previousSql) !== input.draftDigest) throw new QueryFileSourceFailure('document-changed', reloadText.changed);
+      const source = context.expected; if (!source?.parent) throw new QueryFileSourceFailure('identity-changed', reloadText.legacy);
+      const snapshot = await readQueryFileSnapshot(source.path, check, context.report); check();
+      if (!sameQueryFileParent(source.parent, snapshot.parent) || !sameQueryFileParent(preview!.snapshot.parent!, snapshot.parent) || snapshot.digest !== preview!.snapshot.digest || !sameQueryFileVersion(snapshot.identity, preview!.snapshot.identity)) throw new QueryFileSourceFailure('external-change', reloadText.expired);
+      const decoded = decodeSourceSnapshot(snapshot, source.encoding); check();
+      const next = this.commit(input.tabId, context, snapshot, decoded.encoding, decoded.sql, true, true);
+      return { state: 'reloaded', sql: decoded.sql, binding: queryFileSourceView(next) };
+    });
+  }
+  /** 放弃只删除同文档、同来源、同令牌的预览，不释放持久化路径授权。 */
+  discardReload(raw: QueryFileDiscardInput, scope: QueryFileSourceScope): { discarded: boolean } {
+    const input = queryFileReloadSchemas['queryFileSources.discardReload'].parse(raw); scope.assertCurrent(); const preview = this.reloadPreviews.get(input.tabId);
+    if (!preview || preview.id !== input.previewId || preview.scope !== scope.document || !sameQueryFileSource(preview.source, input.source)) return { discarded: false };
+    this.reloadPreviews.delete(input.tabId); return { discarded: true };
+  }
+  /** 状态本身仍不读取外部文件。 */
   status(raw: QueryFileSourceStatusInput, scope: QueryFileSourceScope): QueryFileSourceStatus {
     const input = queryFileSourceStatusSchema.parse(raw);
     try {
@@ -201,6 +261,7 @@ export class QueryFileSources {
   async release(raw: QueryFileSourceReleaseInput, scope: QueryFileSourceScope): Promise<{ released: boolean }> {
     const input = queryFileSourceReleaseSchema.parse(raw); scope.assertCurrent();
     const current = this.source(input.tabId); if (!current || !sameQueryFileSource(current.ref, input.source)) return { released: false };
+    this.reloadPreviews.delete(input.tabId);
     const active = this.active.get(input.tabId);
     if (active && sameQueryFileSource(active.source, input.source)) { active.cancelled = true; await active.done; scope.assertCurrent(); }
     try { return { released: this.host.store.releaseQueryFileSource(input.tabId, input.source) }; }

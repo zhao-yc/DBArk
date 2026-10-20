@@ -102,7 +102,7 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
   const [sessionObjects,setSessionObjects]=useState(false);
   const [recovery,setRecovery]=useState(false);const [recoveryDatabase,setRecoveryDatabase]=useState('');
   const editor = useRef<monaco.editor.IStandaloneCodeEditor | null>(null);
-  const fileSource = useQueryFileSource(tab, () => captureQueryFileSnapshot(editor.current, () => useWorkspace.getState().settings.tabs.find(item => item.id === tab.id)), () => alive.current, value => { busyRef.current = value; setBusy(value); });
+  const fileSource = useQueryFileSource(tab, () => captureQueryFileSnapshot(editor.current, () => useWorkspace.getState().settings.tabs.find(item => item.id === tab.id)), () => alive.current, value => { busyRef.current = value; setBusy(value); }, { editor: () => editor.current, available: () => !busyRef.current && !pendingSession.current && !closeRequestRef.current && !formatting.current, current: () => !pendingSession.current && !closeRequestRef.current && !formatting.current });
   const activeCurrentIntent = useRef<CurrentStatementIntent | null>(null);
   const [searchEditor,setSearchEditor]=useState<monaco.editor.IStandaloneCodeEditor|null>(null);
   const [pins, setPins] = useState<PinnedQueryResult[]>([]); const [selectedPin, setSelectedPin] = useState(''); const pinSequence = useRef(0);
