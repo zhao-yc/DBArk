@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { runInNewContext } from 'node:vm';
 import ts from 'typescript';
-import { memoryDocument, MemoryEvent } from '../fixtures/memory-dom';
+import { memoryDocument, MemoryEvent, type MemoryNode } from '../fixtures/memory-dom';
 import type { QueryResult } from '../../src/shared/contracts';
 import { queryResultSortZh as text } from '../../src/renderer/locales/queryResultSort.zh-CN';
 import { queryResultFindZh as findText } from '../../src/renderer/locales/queryResultFind.zh-CN';
@@ -21,9 +21,19 @@ let QueryTab:typeof import('../../src/renderer/components/QueryTab')['QueryTab']
 let document:ReturnType<typeof memoryDocument>,createRoot:typeof import('react-dom/client')['createRoot'],root:ReturnType<typeof createRoot>|undefined;
 let original:QueryResult,commands:string[],exports:any[],observers:Set<Function>,events:((event:any)=>void)|undefined;
 const globals=['window','document','navigator','IS_REACT_ACT_ENVIRONMENT','MutationObserver','Element'].map(name=>[name,Object.getOwnPropertyDescriptor(globalThis,name)] as const);
+/** 单选option选中时取消同级旧项；React依赖此DOM语义，普通布尔字段会留下多个选中项。 */
+function installMemoryOption(node:MemoryNode):void{
+  let selected=false;
+  Object.defineProperty(node,'selected',{configurable:true,get:()=>selected,set:value=>{
+    selected=!!value;
+    if(selected&&node.parentNode?.tagName==='SELECT'&&!(node.parentNode as any).multiple)
+      for(const sibling of node.parentNode.childNodes)if(sibling!==node&&sibling.tagName==='OPTION')(sibling as any).selected=false;
+  }});
+  Object.defineProperty(node,'value',{configurable:true,get:()=>node.attributes.get('value')??node.textContent,set:value=>node.attributes.set('value',value)});
+}
 beforeAll(async()=>{
   document=memoryDocument();(document as any).oninput=null;Object.assign(window,{setTimeout,clearTimeout,confirm:()=>true});const create=document.createElement.bind(document);
-  document.createElement=name=>{const node=create(name);if(name==='input'){let kind='text';Object.defineProperty(node,'type',{configurable:true,get:()=>kind,set:value=>{kind=value;node.attributes.set('type',value);}});}if(name==='option')Object.defineProperty(node,'value',{configurable:true,get:()=>node.attributes.get('value')??node.textContent,set:value=>node.attributes.set('value',value)});if(name==='select'){Object.defineProperty(node,'options',{get:()=>node.querySelectorAll('option')});Object.defineProperty(node,'value',{configurable:true,get:()=>node.querySelectorAll('option').find(option=>(option as any).selected)?.value??'',set:value=>{for(const option of node.querySelectorAll('option'))(option as any).selected=option.value===value;}});}const set=node.setAttribute.bind(node),remove=node.removeAttribute.bind(node);node.setAttribute=(key,value)=>{set(key.toLowerCase(),value);if(key==='disabled')node.disabled=true;};node.removeAttribute=key=>{remove(key.toLowerCase());if(key==='disabled')node.disabled=false;};return node;};
+  document.createElement=name=>{const node=create(name);if(name==='input'){let kind='text';Object.defineProperty(node,'type',{configurable:true,get:()=>kind,set:value=>{kind=value;node.attributes.set('type',value);}});}if(name==='option')installMemoryOption(node);if(name==='select'){Object.defineProperty(node,'options',{get:()=>node.querySelectorAll('option')});Object.defineProperty(node,'value',{configurable:true,get:()=>node.querySelectorAll('option').find(option=>(option as any).selected)?.value??'',set:value=>{for(const option of node.querySelectorAll('option'))(option as any).selected=option.value===value;}});}const set=node.setAttribute.bind(node),remove=node.removeAttribute.bind(node);node.setAttribute=(key,value)=>{set(key.toLowerCase(),value);if(key==='disabled')node.disabled=true;};node.removeAttribute=key=>{remove(key.toLowerCase());if(key==='disabled')node.disabled=false;};return node;};
   observers=new Set();(globalThis as any).Element=create('div').constructor;(globalThis as any).MutationObserver=class{constructor(private callback:Function){observers.add(callback);}observe(){}disconnect(){observers.delete(this.callback);}};
   ({createRoot}=await import('react-dom/client'));({QueryTab}=await import('../../src/renderer/components/QueryTab'));({ResultsGrid:Grid}=await import('../../src/renderer/components/ResultsGrid'));({useWorkspace:store,flushSettings:flush}=await import('../../src/renderer/store'));
 });
@@ -41,7 +51,46 @@ function grid(){return ports.grids.at(-1)!;}
 function button(name:string){const node=document.querySelectorAll('button').find(node=>node.textContent===name||node.getAttribute('aria-label')===name||name===zh.query.text010&&node.textContent.startsWith(name)||name===zh.resultExport.chooseFile&&node.textContent.includes(name));expect(node,'缺少按钮：'+name).toBeDefined();return node!;}
 async function click(name:string){const node=button(name);expect(node.disabled).toBe(false);await act(async()=>node.dispatchEvent(new MemoryEvent('click')));}
 async function sort(column='id',direction:'ASC'|'DESC'='ASC'){const before=grid();await act(async()=>before.onSortColumnsChange([{columnKey:column,direction}]));}
+/** 使用真实优先级控件；保留RAM外界端口，不能把此检查当成原生窗口或系统输入。 */
+async function nullPosition(order:number,name:string,value:''|'FIRST'|'LAST'){
+  const node=document.querySelector('[aria-label="'+text.nulls(order,name)+'"]')!;expect(node).not.toBeNull();expect(node.disabled).toBe(false);
+  await act(async()=>reactProps(node).onChange({target:{value}}));
+}
 function copy(current=grid()){const data=new Map<string,string>();current.onCellCopy({row:current.rows[0],column:{key:'id'}},{preventDefault(){},clipboardData:{setData:(key:string,value:string)=>data.set(key,value)}});return data;}
+
+it('本文件内存单选端口选中新项时取消旧项，value读取准确当前项',async()=>{
+  await mount();
+  const select=document.createElement('select'),first=document.createElement('option'),last=document.createElement('option');
+  first.value='FIRST';last.value='LAST';select.appendChild(first);select.appendChild(last);
+  (first as any).selected=true;(last as any).selected=true;
+  expect((first as any).selected).toBe(false);expect((last as any).selected).toBe(true);expect(select.value).toBe('LAST');
+});
+
+it('NULL位置控件独立于真实列头升降序，旧回调拒绝，复制和导出仍保留准确原行',async()=>{
+  await mount(result=>{result.rows[0].id=null;});await sort();
+  expect(grid().rows).toEqual([original.rows[0],original.rows[2],original.rows[1]]);
+  await nullPosition(1,'同名','LAST');expect(grid().rows).toEqual([original.rows[2],original.rows[1],original.rows[0]]);
+  const oldSelect=document.querySelector('[aria-label="'+text.nulls(1,'同名')+'"]')!,oldChange=reactProps(oldSelect).onChange;
+  await headerAction('id');expect(grid().rows).toEqual([original.rows[1],original.rows[2],original.rows[0]]);
+  await act(async()=>oldChange({target:{value:'FIRST'}}));expect(grid().rows).toEqual([original.rows[1],original.rows[2],original.rows[0]]);
+  expect(document.querySelector('[aria-label="'+text.nulls(1,'同名')+'"]')!.value).toBe('LAST');
+  await act(async()=>grid().onSelectedRowsChange(new Set([0,1,2])));
+  expect(JSON.parse(copy().get('application/x-dbark-cells')!).rows.map((row:any[])=>row[0])).toEqual(['9007199254740993','2',null]);
+  await click(zh.resultExport.selectedTitle);await click(zh.resultExport.chooseFile);await click(zh.resultExport.start);
+  expect(exports[0].result.rows.map((row:any)=>row.id)).toEqual(['9007199254740993','2',null]);expect(commands.filter(command=>command==='query.execute')).toHaveLength(1);
+});
+
+it('各列NULL选项随优先级移动，Ctrl追加及方向切换保留，恢复默认和原序明确生效',async()=>{
+  await mountMulti();original.rows[0].group=null;original.rows[1].group=null;
+  await headerAction('group');await nullPosition(1,'分组','LAST');await headerAction('id',{ctrlKey:true});
+  expect(grid().rows).toEqual([original.rows[2],original.rows[0],original.rows[1]]);
+  await click(text.changeDirection(2,'编号'));expect(grid().rows).toEqual([original.rows[2],original.rows[1],original.rows[0]]);
+  await click(text.later(1,'分组'));expect(document.querySelector('[aria-label="'+text.nulls(2,'分组')+'"]')!.value).toBe('LAST');
+  expect(grid().rows).toEqual([original.rows[1],original.rows[2],original.rows[0]]);
+  await click(text.earlier(2,'分组'));await nullPosition(1,'分组','');
+  expect(grid().rows).toEqual([original.rows[1],original.rows[0],original.rows[2]]);
+  await click(text.clear);expect(grid().rows).toBe(original.rows);expect(document.querySelector('[aria-label="'+text.nulls(1,'分组')+'"]')).toBeNull();
+});
 
 it('列头三态排序保留源行/列与SQL，精确排序后选择复制和导出共用视图顺序',async()=>{
   await mount();const rawRows=original.rows,saved=structuredClone(original),sql=store.getState().settings.tabs[0].sql;expect(grid().columns.find((c:any)=>c.key==='id').sortable).toBe(true);expect(grid().columns.find((c:any)=>c.key==='bytes').sortable).toBe(false);
