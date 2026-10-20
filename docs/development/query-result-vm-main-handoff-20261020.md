@@ -2,7 +2,9 @@
 
 ## 当前状态
 
-2026-10-20，开发普通克隆为 `D:\svn\DBArk\.cache\snippet-transfer-20261020`，任务分支 `codex/query-result-range-filter-20261020`；截至b2089a4源码候选已推送，未合入main、未发布。后续按用户最新规则：通过本批必要验收后合入并推送main，任务分支只是过程；不另建开发分支，不使用工作树。
+2026-10-20，开发普通克隆为 `D:\svn\DBArk\.cache\snippet-transfer-20261020`，任务分支 `codex/query-result-range-filter-20261020`；当前固定产品候选为已推送的3a85b58，未合入main、未发布。后续按用户最新规则：通过本批必要验收后合入并推送main，任务分支只是过程；不另建开发分支，不使用工作树。
+
+当前3a85b58的Ubuntu首次CI已直接读回运行／job／步骤和原解码日志：类型、576文件／11012通过／10原平台条件跳过及构建成功，桌面与发布job跳过。[准确验证范围](new-query-directory-lifetime-20261020.md)保留来源，不替代Windows界面或实库。WIN11-TEST最新条件队列已送达，最近可读回合 `01a157fa-e471-7c00-8a42-ad81ffec91a8` 当时仍在收尾7216ee1阶段；随后read／wait及列表报告该主机不可访问，3a85b58是否已经执行尚未确认，原队列保留，不重复启动。
 
 唯一测试会话为WIN11-TEST的“dbark测试”，线程 `01a156d5-b3bf-75f2-a9e8-1c8d1a55effc`，主机 `remote-control:env_e_6ad61bed56648326b45447a0681db5d0`。此前read／wait失败，连接列表曾记录该远端 `thread_list_unavailable`；用户要求重试后，已重新读回原回合 `01a15767-5769-7f22-92f2-74142fd98cd4`，确认完成、会话空闲。
 
