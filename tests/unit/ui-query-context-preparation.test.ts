@@ -55,9 +55,13 @@ describe('新建查询目录读取的真实effect生命周期',()=>{
     expect(f.invoke.mock.calls).toEqual([['connections.open',{id:'c'}],['metadata.databases',{connectionId:'c'}]]);f.directory.release(['原库']);await vi.waitFor(()=>expect(f.setBusy).toHaveBeenLastCalledWith(false));
     expect(f.setDatabases.mock.calls).toEqual([[[]],[['原库']]]);expect(f.cache.get('c',0)).toEqual(directoryStatus);expect(f.setError).not.toHaveBeenCalled();f.cleanup();
   });
-  it('窗口已关闭，迟到建连不得继续读取目录或发布事实',async()=>{
+  it('窗口已关闭，迟到建连不得继续读取目录',async()=>{
     const f=newQueryDirectoryFixture();f.cleanup();f.opened.release(directoryStatus);await f.opened.pending;await settleDirectoryCallbacks();
-    expect(f.invoke.mock.calls).toEqual([['connections.open',{id:'c'}]]);expect(f.cache.get('c',0)).toBeUndefined();expect(f.setDatabases.mock.calls).toEqual([[[]]]);expect(f.setError).not.toHaveBeenCalled();
+    expect(f.invoke.mock.calls).toEqual([['connections.open',{id:'c'}]]);expect(f.setDatabases.mock.calls).toEqual([[[]]]);expect(f.setError).not.toHaveBeenCalled();
+  });
+  it('已关闭窗口的同修订建连事实继续供首次执行前补全复用，且不追加目录',async()=>{
+    const f=newQueryDirectoryFixture();f.cleanup();f.opened.release(directoryStatus);await f.opened.pending;await settleDirectoryCallbacks();
+    expect(f.cache.get('c',0)).toEqual(directoryStatus);expect(f.invoke.mock.calls).toEqual([['connections.open',{id:'c'}]]);expect(f.setDatabases.mock.calls).toEqual([[[]]]);
   });
   it('建连期间连接修订变化，迟到结果不得读取新目标目录',async()=>{
     const f=newQueryDirectoryFixture();f.workspace.connectionVersions.c=1;f.opened.release(directoryStatus);await f.opened.pending;await settleDirectoryCallbacks();
@@ -66,6 +70,11 @@ describe('新建查询目录读取的真实effect生命周期',()=>{
   it('目录已发送后关闭窗口，迟到项目不会写入已关闭界面',async()=>{
     const f=newQueryDirectoryFixture();f.opened.release(directoryStatus);await f.opened.pending;expect(f.invoke).toHaveBeenCalledTimes(2);f.cleanup();f.directory.release(['迟到库']);await f.directory.pending;await settleDirectoryCallbacks();
     expect(f.setDatabases.mock.calls).toEqual([[[]]]);expect(f.cache.get('c',0)).toEqual(directoryStatus);expect(f.setError).not.toHaveBeenCalled();
+  });
+  it.each(['success','failure'] as const)('目录已发送后修订改变，迟到%s不会写入旧目录或错误',async mode=>{
+    const f=newQueryDirectoryFixture();f.opened.release(directoryStatus);await f.opened.pending;expect(f.invoke).toHaveBeenCalledTimes(2);f.workspace.connectionVersions.c=1;
+    if(mode==='success'){f.directory.release(['旧修订库']);await f.directory.pending;}else{const reason=Error('旧修订错误');f.directory.reject(reason);await expect(f.directory.pending).rejects.toBe(reason);}await settleDirectoryCallbacks();
+    expect(f.setDatabases.mock.calls).toEqual([[[]]]);expect(f.setError).not.toHaveBeenCalled();expect(f.invoke).toHaveBeenCalledTimes(2);f.cleanup();
   });
   it('旧窗口关闭后同修订新ticket已完成，旧回包不能读目录或覆盖新事实',async()=>{
     const f=newQueryDirectoryFixture();f.cleanup();const next=f.cache.begin('c',0);f.cache.complete(next,{dialect:'mysql',version:'8.4.12'});f.opened.release(directoryStatus);await f.opened.pending;await settleDirectoryCallbacks();

@@ -437,15 +437,16 @@ function NewQueryDialog({ onClose }: { onClose: () => void }) {
     let alive=true;setDatabases([]);if(!connectionId)return;setBusy(true);
     // 复用原有建连结果，不新增能力探测SQL；旧连接修订的迟到结果不能填充新草稿。
     const revision=useWorkspace.getState().connectionVersions[connectionId]??0,ticket=completionServerFacts.begin(connectionId,revision);
-    // 派发目录前复核原窗口和修订；关闭后的建连回包不再追加后台读取。
-    const current=()=>alive&&(useWorkspace.getState().connectionVersions[connectionId]??0)===revision;
+    // 原修订的已完成建连事实供首次执行前补全复用；目录和界面动作另受窗口生命周期限制。
+    const sameRevision=()=>(useWorkspace.getState().connectionVersions[connectionId]??0)===revision,current=()=>alive&&sameRevision();
     void invoke('connections.open',{id:connectionId}).then(status=>{
-      if(!current()){completionServerFacts.fail(ticket);return;}
+      if(!sameRevision()){completionServerFacts.fail(ticket);return;}
       completionServerFacts.complete(ticket,status);
+      if(!alive)return;
       return invoke('metadata.databases',{connectionId});
     }).then(items=>{if(current()&&items!==undefined)setDatabases(items);}).catch(reason=>{completionServerFacts.fail(ticket);if(current())setError(errorMessage(reason));}).finally(()=>{if(alive)setBusy(false);});
-    // 仅结束本ticket的pending；已完成事实及新窗口ticket继续由原缓存保护。
-    return()=>{alive=false;completionServerFacts.fail(ticket);};
+    // 关闭撤销后续目录和界面动作；在途建连仍按原ticket落定，不新增请求或覆盖新ticket。
+    return()=>{alive=false;};
   },[connectionId]);
   return <Modal title={zh.common.newQuery} onClose={onClose}><form onSubmit={event => { event.preventDefault(); if (connectionId) { useWorkspace.getState().openTab({ kind: 'query', title: zh.common.unnamedQuery, connectionId, database: database || undefined, sql: '' }); onClose(); } }}><div className="modal-content form-grid"><Field label={zh.app.text049} full><select value={connectionId} onChange={event => { setConnectionId(event.target.value); setDatabase(''); setError(''); }}>{connections.map(profile => <option value={profile.id} key={profile.id}>{profile.name}</option>)}</select></Field><Field label={zh.app.text050} full><input list="query-databases" value={database} onChange={event => setDatabase(event.target.value)} placeholder={busy ? zh.app.text051 : zh.app.text052}/><datalist id="query-databases">{databases.map(name => <option key={name} value={name}/>)}</datalist></Field><ErrorBox message={error}/></div><footer className="modal-footer"><span className="grow"/><button type="button" onClick={onClose}>{zh.common.cancel}</button><button className="primary" type="submit" disabled={!connectionId}>{zh.app.text053}<ArrowRight size={14}/></button></footer></form></Modal>;
 }
