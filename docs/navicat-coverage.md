@@ -1,5 +1,7 @@
 # Navicat 全功能覆盖目标
 
+高频结果筛选新增七项文本条件的独立开发候选 `7c4b9da`：不包含、开头／结尾及其否定、空文本／非空文本。原NULL、原文、预算及视图映射规则保持，新增语义与真实QueryTab内存回归已编写；类型／单元／构建／GUI均待WIN11-TEST验证。详见[交接记录](development/query-result-text-filter-20261020.md)，不增加验收、完整工作包或公开交付计数。
+
 ## 当前开发安排（2026-10-20）
 
 用户已明确暂缓发行、优先开发，不再以 0.28 的发行 A/B 选择阻塞后续功能。保持原冻结候选和已知失败，串行接入高频功能。本开发线已接入[查询结果复制（含列名）](development/query-result-header-copy-20261020.md)、[多列精确排序](query-result-sort.md)及[本地条件筛选](query-result-filter.md)：筛选先于排序，复制、详情、查找及导出共享同一视图，BIGINT/DECIMAL 不转浮点数，空筛选结果不回退全集。首次整合的本地证据见[整合记录](development/query-result-multisort-filter-20261020.md)。后续 Windows 源码、MySQL8.4/13384 实库界面发现并修复导出模态清空筛选，固定 `72e3035` 新窗口完整案例、连续 CSV/JSON 与 Python 独立读回通过，原失败现场保留；完整回归 570 文件全部通过、10869 项通过、1 平台条件跳过，见[实际验收](../tests/integration/acceptance-query-result-organize-20261020.md)。系统剪贴板、安装包、其他基线及 macOS 尚未验证。不据此增加公开交付或完整工作包计数；片段传输继续单独接入验证。
