@@ -101,6 +101,15 @@ export function registerQueryResultSortCaseUi(binding:QueryResultColumnsUiTarget
     if(member>1)await observe(()=>panel.getByRole('button',{name:filterText.addMember(1),exact:true}).click());
     await observe(()=>panel.getByRole('textbox',{name:filterText.member(1,member),exact:true}).fill(value));
    }
+   // 只复制真实条件草稿；改副本后AND交集必须生效，重开确认原成员未被改写。
+   await observe(()=>panel.getByRole('button',{name:filterText.duplicate(1),exact:true}).click());
+   for(const [member,value] of [[1,'1'],[2,'3'],[3,'6'],[4,'7']] as const)await observe(()=>expect(panel.getByRole('textbox',{name:filterText.member(2,member),exact:true})).toHaveValue(value));
+   await observe(()=>panel.getByRole('textbox',{name:filterText.member(2,1),exact:true}).fill('5'));
+   await observe(()=>expect(panel.getByRole('textbox',{name:filterText.member(1,1),exact:true})).toHaveValue('1'));
+   await observe(()=>panel.getByRole('button',{name:filterText.apply,exact:true}).click());await observe(()=>expect.poll(ids).toEqual(['3','6','7']));
+   await observe(()=>tab.getByRole('button',{name:filterText.open,exact:true}).click());
+   await observe(()=>expect(panel.getByRole('textbox',{name:filterText.member(1,1),exact:true})).toHaveValue('1'));await observe(()=>expect(panel.getByRole('textbox',{name:filterText.member(2,1),exact:true})).toHaveValue('5'));
+   await observe(()=>panel.getByRole('button',{name:filterText.remove(2),exact:true}).click());
    await observe(()=>panel.getByRole('button',{name:filterText.apply,exact:true}).click());await observe(()=>expect.poll(ids).toEqual(['1','3','6','7']));
    for(const index of [5,4,3,2])await observe(()=>grid.locator('[role="row"][aria-rowindex="'+index+'"]').getByRole('checkbox').check());
    await observe(()=>expect(selected).toBeEnabled());
