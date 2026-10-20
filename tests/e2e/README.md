@@ -1,5 +1,7 @@
 # 桌面回归
 
+结果多列排序/条件筛选的真实客户端入口为 `query-result-organize.spec.ts`，默认关闭。显式设置 `DBARK_INTEGRATION_ENABLED=1`、`DBARK_QUERY_RESULT_COLUMNS_UI=1`、`DBARK_QUERY_RESULT_ORGANIZE_UI=1`，并满足 `queryResultColumnsUiKeys` 的准确 200/13384 身份、认证及独占 CSV/JSON 输出配置后，运行 `node node_modules/@playwright/test/cli.js test tests/e2e/query-result-organize.spec.ts --workers=1 --retries=0 --reporter=json`。认证表单全程关闭 trace/截图/视频；只执行常量 SELECT，copy 仅为页内合成事件。原期限及失败保留策略不变，详见[实际验收](../integration/acceptance-query-result-organize-20261020.md)。
+
 默认运行实际 Electron 主进程、沙箱渲染进程及数据库 utility process。每个用例创建独立的临时 `userData`，通过 `app.quit()` 或 `BrowserWindow.close()` 退出，并等待启动期间的进程全部释放。原生退出确认框由测试自动回答，状态保存和失败恢复均执行应用真实代码。
 
 原生 CI 冷启动安装产物时，工作台状态栏的就绪等待上限为 15 秒；仍要求状态栏真实可见，不跳过页面错误、隔离接口或沙箱检查，也不自动重试失败用例。

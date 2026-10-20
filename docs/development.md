@@ -4,6 +4,8 @@
 
 当前以开发为主，发行暂缓。查询结果已接入[复制（含列名）](development/query-result-header-copy-20261020.md)、[多列精确排序](query-result-sort.md)和[本地条件筛选](query-result-filter.md)。本轮[整合与操作说明](development/query-result-multisort-filter-20261020.md)记录本地证据，原生与安装验收分别记录。
 
+Windows 源码客户端的[实库结果整理验收](../tests/integration/acceptance-query-result-organize-20261020.md)已补齐，包含实际发现并修复的连续导出筛选丢失；新窗口与 CSV/JSON 通过，旧失败现场保持。安装与其他平台范围继续单列。
+
 0.16 开发源码将配置库升级到 schema5，以保存查询默认库的已知、无库和未知状态。升级前退出所有实例并备份完整用户配置目录；旧客户端会拒读新版库，回退必须使用升级前的备份，不得手动修改版本号。第三检查点证据见[查询上下文验收](../tests/integration/acceptance-q03-query-context-20261015.md)。
 
 ## 目录
