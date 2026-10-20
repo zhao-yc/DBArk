@@ -2,7 +2,7 @@
 
 ## 当前开发安排（2026-10-21）
 
-后继[数值筛选小数简写](development/query-result-filter-decimal-input-20261021.md)候选148bb40通过Linux类型／590文件11369单元／构建、10平台跳过，保留原条件及DECIMAL精度。Windows和GUI未验；原7f窗口在查询成功后因clientHeight254小于264停链，排序／筛选／文件断言未到达，见[原记录](development/query-result-filter-duplicate-20261021.md)。当前不合入main或发布，不增加完整工作包计数。
+后继[数值筛选小数简写](development/query-result-filter-decimal-input-20261021.md)候选148bb40通过Linux类型／590文件11369单元／构建、10平台跳过，保留原条件及DECIMAL精度。原7f窗口在查询成功后因clientHeight254小于264停链，排序／筛选／文件断言未到达，见[原记录](development/query-result-filter-duplicate-20261021.md)。后继338a06b改用[有界虚拟滚动读取完整七行](testing/query-result-sort-case-grid.md)，保留手写矩阵及四行文件期待，Linux类型／591文件11380单元／构建通过、10平台跳过；原264失败不改记成功。Windows准备进行中，GUI未验，当前不合入main或发布，不增加完整工作包计数。
 
 main准确c40a97e的[三平台原生CI及原件独立核对](../tests/integration/acceptance-main-c40a97e-ci-20261021.md)已闭合：Linux类型／587文件11275通过、10平台跳过／构建成功；Windows x64、macOS arm64及x64的源码／同次实际安装legacy均各80通过、316条件跳过。每个平台每阶段六专项、12正常owner及原report／accepted／四文件proof已逐份核对，四ZIP长度／SHA／CRC一致；ARM两代显示租约的实测几何和退出前恢复通过，原receipt缺失／false字段不回填。本轮仅离线源码及CI安装范围，不转作新NULL／快捷键的macOS或安装版私网GUI，后继1f8失败另线保留；不增加完整工作包或发行计数，暂不发布。
 

@@ -19,4 +19,8 @@
 
 产品树仍为148bb40的585875a1c1dc39062cf65969a6f063342809536c。原1944字节SQL、七行八列、大小写／NULL／日期／负TIME／复制条件矩阵和四行文件期待不变，原120秒／零重试、一查询两导出三任务及原owner／DB观察流收尾保持。后继另加小数简写区间：`.12345678901234567890`至`1.`包含1／6／7，闭区间外只有3，均排除NULL；重开保留输入原文。
 
-尚待独立Linux检查；WIN11-TEST原7f任务已终态封存，不重跑或更新旧profile。新固定提交须先完成Windows类型／相关单元及新构建，再由Root另派独立GUI，不能沿用原109文件构建。Windows、Python独立读回、完整回归及main整合均未完成，暂不发布。
+准确 `338a06b0366248cac93dd7c0d5cbe680e908b2e4` 的[Linux CI39516804309](https://github.com/zhao-yc/DBArk/actions/runs/39516804309)、job118950803755已成功。Root读取原日志：类型／591文件11380通过、10平台跳过／构建成功，单元170.61秒、Vite28.45秒。新增读取器11项通过，QueryTab组合110项通过，均含在总计内；原生、剪贴板及发布job跳过，不是GUI或私网证据。
+
+WIN11-TEST原7f任务已终态封存，不重跑或更新旧profile。Root另派准确338的Windows准备，metadata为 `outputs/query-result-sort-case-grid-check-338a06b-vm-20261021`：先核四套封存、旧图及Git，安全快进后移除子进程环境全部DBARK变量，仅一次八文件check-local，包含类型及新构建。须先通过新控制实例语法门／ready／首CIM，分别留存本次控制器、launcher、观察器及正式CLI身份；原7f的109文件构建不复用。当前只确认该准备回合已开始，尚无检查CLI句柄或终态。
+
+Windows准备通过后仍由Root另派独立GUI；Python独立读回、完整回归及main整合均未完成，暂不发布。不能将原7f高度失败或本轮RAM读取器通过改记为七行实际窗口成功。
