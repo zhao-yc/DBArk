@@ -216,7 +216,7 @@ it('通配筛选显式选择、重开保留模式及大小写，原行复制导�
   await mount(result=>{result.rows[0].words='Ark';result.rows[1].words='ARK';result.rows[2].words='bark';});
   await click(filterText.open);await addFilterRule(1,'words','like','a_k');expect(document.body.textContent).toContain(filterText.patternHint);await toggleFilterCase(1,true);await click(filterText.apply);expect(grid().rows).toEqual([original.rows[0],original.rows[1]]);
   await click(filterText.open);expect(document.querySelector('[aria-label="'+filterText.input+' 1"]')!.value).toBe('a_k');expect(document.querySelector('[aria-label="'+filterText.ignoreCase(1)+'"]')!.checked).toBe(true);await setFilterField(filterText.operator+' 1','notLike');await click(filterText.apply);expect(grid().rows).toEqual([original.rows[2]]);
-  expect(JSON.parse(copy().get('application/x-dbark-cells')!).rows[0][2]).toBe('bark');await click(zh.resultExport.title);await click(zh.resultExport.chooseFile);await click(zh.resultExport.start);expect(exports[0].result.rows).toEqual([original.rows[2]]);expect(commands.filter(command=>command==='query.execute')).toHaveLength(1);
+  await act(async()=>grid().onSelectedRowsChange(new Set([0])));expect(JSON.parse(copy().get('application/x-dbark-cells')!).rows[0][2]).toBe('bark');await click(zh.resultExport.title);await click(zh.resultExport.chooseFile);await click(zh.resultExport.start);expect(exports[0].result.rows).toEqual([original.rows[2]]);expect(commands.filter(command=>command==='query.execute')).toHaveLength(1);
 });
 it('非法通配模式保留原视图及草稿，修正后可应用，切换包含恢复字面含义',async()=>{
   await mount(result=>{result.rows[0].words='A%';result.rows[1].words='A_';result.rows[2].words='Ax';});
