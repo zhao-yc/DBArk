@@ -59,3 +59,5 @@ node scripts/check-local.mjs --build tests/unit/query-result-sort-case-grid.test
 导出位于本GUI目录的 `dbark-query-columns-a8fd48da6bc1e558dd3296ebd8f8979a` 子目录。同一338的首次独立Python四行读回位于 `outputs/query-result-sort-case-readback-338a06b-vm-20261021`：Python16172退出1，文件打开时身份比较失败，未进入内容解析，完整Vitest未启动。停链终核原文件及图／Git／旧封存未变，具体stat差异未知；详见[独立读回修正记录](query-result-sort-case-readback.md)。main未整合、暂不发布。后继Q01帧关键字候选bcb1420／0757803不归入本批证据，`4bd2fd3`仍为本批固定交付检查点。
 
 后继补充[四行标准库独立读回工具](query-result-sort-case-readback.md)，只为GUI成功后的准确原文件和SHA提供可复用入口。49c109f的Linux Python16项、另591文件11380项及类型／构建通过、10平台跳过；实件读回另记，不修改当前固定338准备任务或沿用旧两行期待。
+
+后继准确39读回器的新Windows代次已通过合成20项／1原权限跳过、原四行独立读回及固定338完整591文件11389项／1POSIX跳过；文件、图、Git、七套旧封存和本例身份终核通过。连接恢复后续读原回合completed终态，209份最终封存逐项SHA通过，解释器Python3.12.14及20角色原记录另存，见[源码交付与封存记录](../../tests/integration/acceptance-query-result-sort-case-338a06b-20261021.md)。旧失败及unknown保持；产品树不变，排序筛选源码与39读回器修正单独整合main，Q01后继另留开发分支，暂不发布。
