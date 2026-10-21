@@ -3,7 +3,7 @@ import {createContext,runInContext,runInNewContext} from 'node:vm';
 import ts from 'typescript';
 import {describe,expect,it} from 'vitest';
 import {CompletionWorkerClient} from '../../src/renderer/completionWorkerClient';
-import {resolveCompletionContext,completionContextCapabilities} from '../../src/renderer/completionContext';
+import {resolveCompletionContext,completionContextCapabilities,sameCompletionScope} from '../../src/renderer/completionContext';
 import {completionLimits} from '../../src/shared/sqlCompletion';
 
 type Payload=Blob|{title:string;url:string};
@@ -22,11 +22,11 @@ const helperSource=readFileSync(new URL('../e2e/monaco-caret.ts',import.meta.url
 const compiled=ts.transpileModule(helperSource,{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS}}).outputText;
 const blob=(value:string,type='text/plain')=>new Blob([value],{type});
 const editorSource=readFileSync(new URL('../../src/renderer/components/SqlEditor.tsx',import.meta.url),'utf8');
-const editorTree=ts.createSourceFile('SqlEditor.tsx',editorSource,ts.ScriptTarget.Latest,true,ts.ScriptKind.TSX);let providerText='';
+const editorTree=ts.createSourceFile('SqlEditor.tsx',editorSource,ts.ScriptTarget.Latest,true,ts.ScriptKind.TSX);let providerText='',scopeCurrentText='';
 /** 真实provider只作辅助传输回放；位置证明必须读取按键事件当时的当前模型。 */
-function visitProvider(node:ts.Node){if(ts.isPropertyAssignment(node)&&node.name.getText(editorTree)==='provideCompletionItems')providerText=node.initializer.getText(editorTree);ts.forEachChild(node,visitProvider);}
-visitProvider(editorTree);if(!providerText)throw Error('缺少真实provider');
-const providerCode=ts.transpileModule('const extracted='+providerText,{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText;
+function visitProvider(node:ts.Node){if(ts.isVariableDeclaration(node)&&node.name.getText(editorTree)==='scopeCurrent'&&node.initializer)scopeCurrentText=node.initializer.getText(editorTree);if(ts.isPropertyAssignment(node)&&node.name.getText(editorTree)==='provideCompletionItems')providerText=node.initializer.getText(editorTree);ts.forEachChild(node,visitProvider);}
+visitProvider(editorTree);if(!providerText||!scopeCurrentText)throw Error('缺少真实provider或作用域门');
+const providerCode=ts.transpileModule('const scopeCurrent='+scopeCurrentText+';const extracted='+providerText,{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText;
 
 /** 执行锁定Monaco官方包围选区判定，不另写首括号与非空选区的理想分支。 */
 function officialSurroundSelection(){
@@ -70,7 +70,8 @@ function replay(initial:Entry[],options:Options={}){
   context.document={addEventListener:(name:string,callback:(event:unknown)=>void,capture:boolean)=>{expect(name).toBe('keydown');expect(capture).toBe(true);listeners.push(callback);}};
   context.dbark={invoke:async(command:string)=>{if(command==='settings.get')return{activeTabId:'query',tabs:hasQuery?[{id:'query',sql:options.preparedSqlOverride??modelSource}]:[]};if(command==='connections.list')return options.startupDirty?[{id:'合成既有连接'}]:[];if(command==='tasks.list'||command==='history.list')return[];throw Error('禁止其它IPC');}};
   const client=new CompletionWorkerClient(()=>new (context.Worker as typeof RendererWorker)() as unknown as Worker);
-  const environment={disposed:false,readOnly:false,editorRef:{current:{getModel:()=>model}},active:undefined,statusRef:{current:()=>undefined},completion:{connectionId:'合成连接',connectionVersion:0},completionServerFacts:{get:()=>undefined},completionLimits,AbortController,resolveCompletionContext,completionContextCapabilities,worker:client};
+  const completion={connectionId:'合成连接',connectionVersion:0};
+  const environment={aliveRef:{current:true},propsRef:{current:{readOnly:false}},completionRef:{current:completion},sameCompletionScope,hover:undefined,disposed:false,readOnly:false,editorRef:{current:{getModel:()=>model}},active:undefined,statusRef:{current:()=>undefined},completion,completionServerFacts:{get:()=>undefined},completionLimits,AbortController,resolveCompletionContext,completionContextCapabilities,worker:client};
   const provider=runInNewContext('(function(env){with(env){'+providerCode+';return extracted;}})',{})(environment) as (model:unknown,position:{offset:number},context:unknown,token:unknown)=>Promise<unknown>;
   const token={isCancellationRequested:false,onCancellationRequested:()=>({dispose(){}})};
   const desktop={evaluate:async(callback:(api:{clipboard:typeof clipboard},argument:unknown)=>unknown,argument?:unknown)=>callback({clipboard},argument)};
