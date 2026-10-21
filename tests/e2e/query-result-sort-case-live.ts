@@ -133,6 +133,10 @@ export function registerQueryResultSortCaseUi(binding:QueryResultColumnsUiTarget
    await observe(()=>panel.getByRole('combobox',{name:filterText.column+' 1',exact:true}).selectOption({index:3}));
    await observe(()=>panel.getByRole('combobox',{name:filterText.operator+' 1',exact:true}).selectOption('between'));
    await observe(()=>panel.getByRole('textbox',{name:filterText.lower+' 1',exact:true}).fill('.12345678901234567890'));await observe(()=>panel.getByRole('textbox',{name:filterText.upper+' 1',exact:true}).fill('1.'));
+   // 组合Esc不能误关已输入的草稿；使用所属原生输入框，后续仍走原应用及精确结果断言。
+   await observe(()=>panel.getByRole('textbox',{name:filterText.lower+' 1',exact:true}).press('Shift+Escape'));
+   await observe(()=>expect(panel).toBeVisible());
+   await observe(()=>expect(panel.getByRole('textbox',{name:filterText.lower+' 1',exact:true})).toHaveValue('.12345678901234567890'));await observe(()=>expect(panel.getByRole('textbox',{name:filterText.upper+' 1',exact:true})).toHaveValue('1.'));
    await observe(()=>panel.getByRole('button',{name:filterText.apply,exact:true}).click());await observe(()=>expect.poll(ids).toEqual(['1','6','7']));
    await observe(()=>tab.getByRole('button',{name:filterText.open,exact:true}).click());
    await observe(()=>expect(panel.getByRole('textbox',{name:filterText.lower+' 1',exact:true})).toHaveValue('.12345678901234567890'));await observe(()=>expect(panel.getByRole('textbox',{name:filterText.upper+' 1',exact:true})).toHaveValue('1.'));

@@ -496,6 +496,29 @@ it('筛选快捷键：普通Enter、其它修饰键及长按不提交，单次�
   for(const options of [{},{ctrlKey:true,altKey:true},{metaKey:true,shiftKey:true},{ctrlKey:true,repeat:true}]){const event=filterKey(options);await act(async()=>key(event));expect(grid().rows).toBe(original.rows);if(!options.repeat){expect(event.preventDefault).not.toHaveBeenCalled();expect(event.stopPropagation).not.toHaveBeenCalled();}}
   await act(async()=>key(filterKey({ctrlKey:true})));expect(grid().rows).toEqual([original.rows[0]]);expect(commands.filter(value=>value==='query.execute')).toHaveLength(1);
 });
+it('筛选快捷键：子控件已消费的应用或取消不穿透，原筛选及重做历史保持',async()=>{
+  await mountMulti();await filterGroup('A');await sort('id','DESC');await click(historyText.undo);const applied=grid().rows;
+  await click(filterText.open);await setFilterField(filterText.input+' 1','B');const panel=document.querySelector('[aria-label="'+filterText.title+'"]')!,key=reactProps(panel).onKeyDown;
+  for(const options of [{ctrlKey:true},{metaKey:true},{key:'Escape',keyCode:27}]){
+    const event=filterKey({...options,defaultPrevented:true});await act(async()=>key(event));
+    expect(event.preventDefault).not.toHaveBeenCalled();expect(event.stopPropagation).not.toHaveBeenCalled();
+    expect(document.querySelector('[aria-label="'+filterText.title+'"]')).toBe(panel);expect(grid().rows).toBe(applied);
+    expect(document.querySelector('[aria-label="'+filterText.input+' 1"]')!.value).toBe('B');
+  }
+  await act(async()=>key(filterKey({key:'Escape',keyCode:27})));expect(button(historyText.redo).disabled).toBe(false);expect(grid().rows).toBe(applied);
+  expect(commands.filter(value=>value==='query.execute')).toHaveLength(1);
+});
+it('筛选快捷键：带修饰键的Escape保留草稿，随后明确应用仍可撤销回原筛选',async()=>{
+  await mountMulti();await filterGroup('A');const applied=grid().rows;
+  await click(filterText.open);await setFilterField(filterText.input+' 1','B');const panel=document.querySelector('[aria-label="'+filterText.title+'"]')!,key=reactProps(panel).onKeyDown;
+  for(const modifier of ['ctrlKey','metaKey','altKey','shiftKey']){
+    const event=filterKey({key:'Escape',keyCode:27,[modifier]:true});await act(async()=>key(event));
+    expect(event.preventDefault).not.toHaveBeenCalled();expect(event.stopPropagation).not.toHaveBeenCalled();
+    expect(document.querySelector('[aria-label="'+filterText.title+'"]')).toBe(panel);expect(grid().rows).toBe(applied);
+  }
+  await act(async()=>key(filterKey({ctrlKey:true})));expect(grid().rows).toEqual([original.rows[0]]);
+  await click(historyText.undo);expect(grid().rows).toEqual(applied);expect(commands.filter(value=>value==='query.execute')).toHaveLength(1);
+});
 it.each(['composition','native','229'])('筛选快捷键：%s输入法确认不应用或取消，完成后才接受命令',async mode=>{
   await mountMulti();await click(filterText.open);await addFilterRule(1,'words','contains','甲组');const input=document.querySelector('[aria-label="'+filterText.input+' 1"]')!,panel=document.querySelector('[aria-label="'+filterText.title+'"]')!;
   if(mode==='composition')await act(async()=>reactProps(input).onCompositionStart());const key=reactProps(panel).onKeyDown,extra=mode==='native'?{nativeEvent:{isComposing:true}}:mode==='229'?{keyCode:229}:{};

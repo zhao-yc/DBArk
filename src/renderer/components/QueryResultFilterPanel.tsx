@@ -78,11 +78,12 @@ export function QueryResultFilterPanel({binding,initial,seed,isCurrent,onApply,o
   function endComposition():void{if(current()){composition.current=false;setComposing(false);}}
   /** 按钮与显式快捷键共用原草稿租约，组合输入结束前不得提交。 */
   function applyDraft():void{if(current(draft)&&!composition.current)onApply(expressionOf(draft));}
-  /** 只处理面板内的明确命令；普通Enter保留输入／按钮原行为，输入法确认和长按不提交。 */
+  /** 只处理未被子控件消费的明确命令；普通Enter、组合Esc、输入法确认和长按不提交。 */
   function keyDown(event:KeyboardEvent<HTMLElement>):void{
-    if(composition.current||event.nativeEvent.isComposing||event.keyCode===229)return;
+    if(event.defaultPrevented||composition.current||event.nativeEvent.isComposing||event.keyCode===229)return;
     const apply=event.key==='Enter'&&(event.ctrlKey||event.metaKey)&&!event.altKey&&!event.shiftKey;
-    if(!apply&&event.key!=='Escape')return;
+    const cancel=event.key==='Escape'&&!event.ctrlKey&&!event.metaKey&&!event.altKey&&!event.shiftKey;
+    if(!apply&&!cancel)return;
     event.preventDefault();event.stopPropagation();
     if(event.repeat)return;
     if(apply)applyDraft();else if(current(draft))onClose();
