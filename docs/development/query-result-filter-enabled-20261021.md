@@ -29,3 +29,5 @@ node scripts/check-local.mjs --build tests/unit/query-result-filter-enabled.test
 后继在原`query-result-sort-case-live.ts`保留整例，仅追加实际启停复选框与重开草稿验证：停用副本、OR忽略停用叶、全部停用、仅重启副本、恢复AND交集，再沿原路径导出四行。所有ID期待独立手写，复用原虚拟网格读取、一次SQL／两次文件导出／历史不变及严格收尾，不改120秒、零重试、原复制和文件读回断言，不新建数据库用户。后继类型26.77秒、原默认关闭门／虚拟网格／大小写三个文件37项通过、Vitest0.864秒；这些是准备，不是本次真实窗口结果，也不属于12c的原CI范围。
 
 以上是源码、内存组件与开发构建证据，不是原生GUI、实库、安装包或macOS的本能力验收。Q01的0a4实库窗口回合固定另一准确提交，不能计作本能力通过。后续完整CI及单项客户端验收另记，Navicat工作包仍部分，暂不发布。
+
+整合版c449506已保留上述筛选启停产品及904组合用例，src树0eb5a6922e7ecc8ff75b0bdddc1c6e597d25c6d2；Q01独立0a4 GUI已通过，整合类型／七文件265项／构建也通过。筛选启停的新GUI和条件独立读回按[固定Windows操作单](../testing/query-result-filter-enabled-c449506-vm.md)执行，不能用Q01窗口结果替代。
