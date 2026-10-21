@@ -17,3 +17,5 @@
 原监督句柄和字节日志保留于`.cache/filter-scrollbar-fixed-20261021/`，stdout SHA256 `a5ed5ac23f433baa66313173b07b95ec7007a86080ebcd6677818f694be445dc`，stderr `e073854a60aba060efc1240612fa2b3f4e5f4a8a93beb0075c1c2b4faffac6bf`。子环境无DBARK_*，保留原Rollup和大分块警告；本机无GUI、数据库或系统剪贴板操作。
 
 以上是源码／RAM反例与构建证据。真实原GUI须在新准确头按同一断言复验，不能用本记录代替；安装、macOS与其它数据库另验，暂不发布。
+
+准确修正头9139a279aab434cbe5dd146094a14a073abd1aba、src a022d8d8e441316acac80828a52c21be7a72c889已推main。[CI39550343640](https://github.com/zhao-yc/DBArk/actions/runs/39550343640)的Linux job119057856453已成功：Python21项／0.181秒，类型、594文件11515项通过／10平台条件跳过、Vitest143.88秒及构建／Vite23.69秒通过，三平台继续。VM准确复验消息返回队列超时，随后主机观察不可达，是否送达未知；未重复派发、未在本机重跑GUI，继续核同一任务状态。

@@ -8,6 +8,15 @@ import { tableGridZh as text } from '../../src/renderer/locales/tableGrid.zh-CN'
 
 let server: ViteDevServer, app: ElectronApplication, page: Page, directory: string, url: string;
 const errors: string[] = [];
+const startupLimit=128*1024;
+let startup={stdout:[] as Buffer[],stderr:[] as Buffer[],sizes:{stdout:0,stderr:0},truncated:{stdout:false,stderr:false}};
+let startupProcess:ReturnType<ElectronApplication['process']>|undefined,startupPage:Page|undefined;
+/** 只保留本轮离线子进程的原始字节，标记截断；失败时附证据，不重试或提高就绪门。 */
+function captureStartup(target:typeof startup,channel:'stdout'|'stderr',value:Buffer|string):void{
+  const bytes=Buffer.isBuffer(value)?value:Buffer.from(value),remaining=startupLimit-target.sizes[channel];
+  if(bytes.length>remaining)target.truncated[channel]=true;
+  if(remaining>0){const kept=Buffer.from(bytes.subarray(0,remaining));target[channel].push(kept);target.sizes[channel]+=kept.length;}
+}
 const panel = () => page.getByRole('region', { name: text.find, exact: true });
 const preview = () => page.getByRole('dialog', { name: text.replaceTitle, exact: true });
 test.beforeAll(async () => {
@@ -19,13 +28,20 @@ test.beforeAll(async () => {
 });
 test.afterAll(async () => { await server?.close(); });
 test.beforeEach(async () => {
+  startup={stdout:[],stderr:[],sizes:{stdout:0,stderr:0},truncated:{stdout:false,stderr:false}};startupProcess=undefined;startupPage=undefined;
   errors.length = 0; directory = await mkdtemp(join(tmpdir(), 'dbark-find-e2e-'));
   const env: Record<string, string> = Object.fromEntries(Object.entries({ ...process.env, DBARK_FIND_FIXTURE_URL: url, DBARK_FIND_FIXTURE_DATA: directory }).filter((entry): entry is [string, string] => entry[1] !== undefined)); delete env.ELECTRON_RUN_AS_NODE;
   app = await electron.launch({ args: ['tests/fixtures/page-find-replace/electron.cjs'], env, chromiumSandbox: true });
-  page = await app.firstWindow(); page.on('pageerror', reason => errors.push(reason.message));
+  const ownStartup=startup;startupProcess=app.process();startupProcess.stdout?.on('data',value=>captureStartup(ownStartup,'stdout',value));startupProcess.stderr?.on('data',value=>captureStartup(ownStartup,'stderr',value));
+  page = await app.firstWindow();startupPage=page; page.on('pageerror', reason => errors.push(reason.message));
   await expect(page.getByRole('button', { name: text.find, exact: true })).toBeEnabled({ timeout: 30000 });
 });
-test.afterEach(async () => {
+test.afterEach(async ({},info) => {
+  if(info.status!==info.expectedStatus){
+    await info.attach('离线夹具启动-stdout',{body:Buffer.concat(startup.stdout),contentType:'text/plain'});
+    await info.attach('离线夹具启动-stderr',{body:Buffer.concat(startup.stderr),contentType:'text/plain'});
+    await info.attach('离线夹具启动状态',{body:Buffer.from(JSON.stringify({pid:startupProcess?.pid,exitCode:startupProcess?.exitCode,signalCode:startupProcess?.signalCode,url:startupPage?.url(),pageClosed:startupPage?.isClosed(),rendererErrors:errors,sizes:startup.sizes,truncated:startup.truncated})),contentType:'application/json'});
+  }
   await app?.close();
   if (dirname(resolve(directory)) !== resolve(tmpdir()) || !basename(directory).startsWith('dbark-find-e2e-')) throw new Error('拒绝清理夹具目录之外的路径');
   await rm(directory, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });

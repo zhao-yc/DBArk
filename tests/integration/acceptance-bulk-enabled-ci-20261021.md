@@ -23,3 +23,5 @@ Linux job119045264388：Python21项通过／0.189秒，类型、593文件11481�
 Root下载准确测试归档12321987469，2668609字节，SHA256 `62ad869aba532bedc6e174b991a8f2f0f7d3077892f1cdeaaf23c4108890a6b1` 与上传metadata一致；71项／解压总量预算内全部CRC通过，读取原error-context，没有执行归档或重跑job。原件在`.cache/bulk-3005511-windows-failed.zip`，不入库。系统PATH的Python为不可启动的WindowsApps别名，改用bundled Python；首次控制台GBK编码报错保持，UTF8重新读取原件不改内容。
 
 本条记录时其它300平台终态另记；其WIN11-TEST专用[批量GUI原失败](acceptance-query-result-filter-bulk-3005511-20261021.md)为不同失败和资源范围。后续修正须保留原断言与旧失败，不通过跳过／提高超时／降低门槛收口，暂不发布。
+
+后续核实300的macOS x64 job119048166186及arm64 job119048166292均success；Windows仍failure、发布跳过，没有重跑原job。新[离线启动诊断](../../docs/testing/page-find-startup-diagnostics-20261021.md)只补证据，原根因仍未知。
