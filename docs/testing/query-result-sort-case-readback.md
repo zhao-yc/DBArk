@@ -42,4 +42,8 @@ WIN11-TEST固定338a06b的准备回合已通过类型／363定向／新构建及
 
 准确39的[Linux CI39525029394](https://github.com/zhao-yc/DBArk/actions/runs/39525029394)、job118977538869已成功。Root读取原日志：Python21项通过、0.275秒；另有Vitest592文件11419通过／10跳过、235.38秒，类型及构建通过、Vite33.67秒。全部新增Windows语义合成反例和真实临时CLI反例包含在Python21项内；Linux运行仍不是Windows实件读回，后续Q01运行码也未被338的GUI验收覆盖。原生、剪贴板及发布job跳过。
 
-后继bcb1420／0757803的Q01源码不进入本批。main整合及新安装／macOS未完成，暂不发布。
+## 准确39的新Windows代次
+
+新代次保持产品338，目录为 `outputs/query-result-sort-case-readback-v2-39e9b24-vm-20261021`。实际Python合成21项中20通过／1原符号链接权限跳过；Python13820真实读回exit0、0.358072秒，完整原stdout确认四行八列及18字符串／11NULL／3二进制、stableRead=true和383／827字节的原两SHA。其后原配置完整Vitest由Node12760执行，exit0、305.3707793秒，591文件11389通过／0失败／1项POSIX跳过，stderr为空。
+
+最终文件／图／Git、七套旧封存及原进程身份终核已回报通过，RAM三项保留；新代次最后的汇总报告和manifest尚未取回，远程连接不可用，不把阶段成功冒称封存闭合。准确产品、原始full摘要、保留失败及源码整合范围见[338交付记录](../../tests/integration/acceptance-query-result-sort-case-338a06b-20261021.md)。39修正与记录单独整合main，后继Q01源码不进入本批；新安装／macOS未验，暂不发布。
