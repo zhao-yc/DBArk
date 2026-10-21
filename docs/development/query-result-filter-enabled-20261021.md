@@ -32,8 +32,10 @@ node scripts/check-local.mjs --build tests/unit/query-result-filter-enabled.test
 
 整合版c449506已保留上述筛选启停产品及904组合用例，src树0eb5a6922e7ecc8ff75b0bdddc1c6e597d25c6d2；Q01独立0a4 GUI已通过，整合类型／七文件265项／构建也通过。筛选启停的新GUI和条件独立读回按[固定Windows操作单](../testing/query-result-filter-enabled-c449506-vm.md)执行，不能用Q01窗口结果替代。
 
-准确c449的[CI39541666500](https://github.com/zhao-yc/DBArk/actions/runs/39541666500)已取得Linux类型／593文件11478通过、10平台跳过／构建成功，三平台原生仍待终态。新操作单短消息派发返回“Codex app-server is not available”，后续状态查询也报告WIN11-TEST不可达；尚未取得新回合或进程的启动确认，保留待确认状态，不据此重复派发或在本机重开同轮。原Q01回合已完成，不属于本次未确认任务。
+准确c449的[CI39541666500](https://github.com/zhao-yc/DBArk/actions/runs/39541666500)已取得Linux类型／593文件11478通过、10平台跳过／构建成功，三平台原生现全部success。各source及同次实际安装legacy80通过／317条件跳过，六专项与四ZIP已逐份核对，见[整合版原件记录](../../tests/integration/acceptance-main-c449506-ci-20261021.md)。最初新操作单短消息返回“Codex app-server is not available”，当时未取得新回合或进程确认，保留不确定状态而未在两端重复启动；原Q01回合已完成，不属于该次请求。
 
 后续独立只读回合01a15ca8-9bf7-7f11-ae38-66ed2fa5eca3于北京时间12:12:10确认：未见请求本体、目标目录不存在、无对应活进程。随后短消息正式派发取得确认，新回合01a15caa-1ba6-7991-9ddd-44b01498d9f8已读取准确6097操作单并核原0a4干净及目标src树，开始前置封存核对。此阶段不算准备或GUI通过；迟到请求须合并同一任务，不重复启动。
 
 该回合现已completed并保留80封存：类型39.62秒、四文件144项全通过／0失败／0跳过、测试12.53秒、新构建51.41秒，原CLI15408退出0、103.939秒；身份预检native／stream正常关闭，576源码／1312测试／109新dist、十套旧封存及旧两文件终核通过。外层直接加载含参数属性的TS合同失败，GUI与读回均未启动，未生成nonce；没有对应独立GUI CLI退出码，不记作产品失败。Root用项目esbuild生成.cjs已在Node24验证控制合同可加载，源合同／产品／用例均未改；后续仅按[控制加载修正续验单](../testing/query-result-filter-enabled-control-resume-20261021.md)继续尚未启动的GUI及条件读回，不重跑准备，不回改原错误或80封存。
+
+续验已由回合01a15cbc-93a9-77b0-9a11-2a5ef0d26d1c确认接收并读取准确cee22f4操作单；产品保持c449，先核十一套旧封存和已通过的新图，再仅修外层.cjs加载。当前尚无本能力正式GUI或独立读回结果，远程观察中断不作为重复启动依据。

@@ -44,4 +44,4 @@ Windows准备d155同产品的类型、24文件699项及新构建已另封存78�
 
 原日志在`.cache/q01-enabled-merged-20261021/`，stdout摘要5ba3a2be4aa18a4943620e31f4581c1980698d1a2283d221da6cc0551ecccb21，stderr摘要b7b49deb47291ec895bb313635131ff90cd6ba86543958be40dcf0272b8b76b4，保留Rollup注释及大分块警告。此为合并源码检查，不是把两项功能合并后的新GUI结果；新完整CI和筛选启停实库范围仍独立验收。
 
-准确main整合提交`c4495066f4f570fbff69769ea377f442c66a0aea`已推送，src树`0eb5a6922e7ecc8ff75b0bdddc1c6e597d25c6d2`。[CI39541666500](https://github.com/zhao-yc/DBArk/actions/runs/39541666500)的Linux job119030571609已success：Python21项、0.304秒，类型／593文件11478通过、10平台跳过／构建成功；单元174.00秒，Vite27.29秒。三平台原生job仍在运行，原生剪贴板job跳过，不先报最终通过。
+准确main整合提交`c4495066f4f570fbff69769ea377f442c66a0aea`已推送，src树`0eb5a6922e7ecc8ff75b0bdddc1c6e597d25c6d2`。[CI39541666500](https://github.com/zhao-yc/DBArk/actions/runs/39541666500)的Linux job119030571609已success：Python21项、0.304秒，类型／593文件11478通过、10平台跳过／构建成功；单元174.00秒，Vite27.29秒。三平台原生job现已全部success，各source及同次实际安装legacy80通过／317条件跳过，六专项／四ZIP及ARM显示恢复已独立核对，见[整合版CI原件记录](acceptance-main-c449506-ci-20261021.md)。原生剪贴板及发布job跳过，本轮离线安装不作为窗口帧私网全矩阵证据。
