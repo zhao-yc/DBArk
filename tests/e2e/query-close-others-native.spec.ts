@@ -49,12 +49,20 @@ async function settings(info: TestInfo) {
 async function queries(info: TestInfo) {
   const value = await desktop(info).page.evaluate(() => window.dbark.invoke('queries.list', {})); desktop(info); return value;
 }
-/** 真实键盘是草稿正文唯一输入路径，随后等实际settings保存。 */
-async function write(info: TestInfo, sql: string) {
-  const { page } = desktop(info), input = page.locator('.query-tab:visible .monaco-editor').getByRole('textbox');
+/** 设置落盘不代表新Monaco已挂载；先核准确标签及正式正文桥就绪，再走真实键盘。 */
+async function write(info: TestInfo, sql: string, expectedTabId?: string) {
+  const { page } = desktop(info), before = await settings(info), tabId = expectedTabId ?? before.activeTabId;
+  const index = before.tabs.findIndex(tab => tab.id === tabId); expect(index).toBeGreaterThanOrEqual(0);
+  await expect.poll(() => settings(info).then(value => value.activeTabId)).toBe(tabId);
+  const pane = page.locator('.tab-content > .tab-pane').nth(index);
+  await expect(pane).toBeVisible(); desktop(info);
+  await expect(pane.locator('.sql-editor-wrap > [aria-busy]')).toHaveAttribute('aria-busy', 'false'); desktop(info);
+  const input = pane.locator('.sql-editor-wrap .monaco-editor').getByRole('textbox');
+  await expect(input).toBeVisible(); desktop(info); await expect(input).toBeEditable(); desktop(info);
+  expect((await settings(info)).activeTabId).toBe(tabId);
   await input.focus(); desktop(info); await page.keyboard.press(`${modifier}+A`); desktop(info);
   await page.keyboard.insertText(sql); desktop(info);
-  await expect.poll(async () => { const value = await settings(info); return value.tabs.find(tab => tab.id === value.activeTabId)?.sql?.replaceAll('\r\n', '\n'); }).toBe(sql);
+  await expect.poll(async () => { const value = await settings(info); expect(value.activeTabId).toBe(tabId); return value.tabs.find(tab => tab.id === tabId)?.sql?.replaceAll('\r\n', '\n'); }).toBe(sql);
 }
 /** 用真实标签按钮切换，再以持久化ID核对准确前端身份。 */
 async function select(info: TestInfo, tab: Tab) {
@@ -98,10 +106,10 @@ async function threeDrafts(info: TestInfo) {
   await write(info, aSql);
   const a = (await settings(info)).tabs[0];
   await page.locator('.query-tab:visible').getByRole('button', { name: duplicate.action, exact: true }).click(); desktop(info);
-  await expect.poll(() => settings(info).then(value => value.tabs.length)).toBe(2); await write(info, bSql);
+  await expect.poll(() => settings(info).then(value => value.tabs.length)).toBe(2); await write(info, bSql, (await settings(info)).tabs[1].id);
   const b = (await settings(info)).tabs[1];
   await page.locator('.query-tab:visible').getByRole('button', { name: duplicate.action, exact: true }).click(); desktop(info);
-  await expect.poll(() => settings(info).then(value => value.tabs.length)).toBe(3); await write(info, cSql);
+  await expect.poll(() => settings(info).then(value => value.tabs.length)).toBe(3); await write(info, cSql, (await settings(info)).tabs[2].id);
   const value = await settings(info), c = value.tabs[2];
   expect(value.tabs).toEqual([a, b, c]); expect(value.activeTabId).toBe(c.id);
   expect(new Set(value.tabs.map(tab => tab.id)).size).toBe(3);
