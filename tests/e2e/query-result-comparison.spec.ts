@@ -47,7 +47,15 @@ function register(binding: QueryResultColumnsUiTarget): void {
       await step(() => query.getByRole('combobox', { name: new RegExp('^' + zh.app.text049) }).selectOption(profile.id)); await step(() => query.getByLabel(zh.app.text050, { exact: true }).fill('')); await step(() => query.getByRole('button', { name: zh.app.text053, exact: true }).click()); await step(() => expect(query).toBeHidden());
       const tab = page.locator('.query-tab:visible');
       /** 编辑器只用真实输入；每次全文替换后等正式设置读回，避免捕获旧草稿。 */
-      async function edit(sql: string) { await step(() => tab.locator('.monaco-editor').getByRole('textbox').focus()); await step(() => page.keyboard.press(`${process.platform === 'darwin' ? 'Meta' : 'Control'}+A`)); await step(() => page.keyboard.insertText(sql)); await step(() => expect.poll(async () => { const settings = await step(() => page.evaluate(() => window.dbark.invoke('settings.get', {}))); return settings.tabs.find(item => item.id === settings.activeTabId)?.sql; }).toBe(sql)); }
+      async function edit(sql: string) {
+        const mac=process.platform==='darwin';
+        // 全选之后先真实清空并等正式读回，不能仅凭按过快捷键就假定整段已替换。
+        const window=await step(()=>application.browserWindow(page));await step(()=>window.evaluate(window=>window.focus()));await step(()=>window.dispose());
+        await step(()=>tab.locator('.monaco-editor').getByRole('textbox').focus());
+        await step(()=>page.keyboard.press(mac?'Meta+ArrowUp':'Control+Home'));await step(()=>page.keyboard.press(mac?'Meta+Shift+ArrowDown':'Control+Shift+End'));await step(()=>page.keyboard.press('Backspace'));
+        const body=async()=>{const settings=await step(()=>page.evaluate(()=>window.dbark.invoke('settings.get',{})));return settings.tabs.find(item=>item.id===settings.activeTabId)?.sql??'';};
+        await step(()=>expect.poll(body).toBe(''));await step(()=>page.keyboard.insertText(sql));await step(()=>expect.poll(body).toBe(sql));
+      }
       await edit(comparisonLeftSql);
       const settings = await step(() => page.evaluate(() => window.dbark.invoke('settings.get', {}))), tabId = settings.activeTabId;
       if (typeof tabId !== 'string' || !tabId) throw Error('本例查询标签身份未确认');
