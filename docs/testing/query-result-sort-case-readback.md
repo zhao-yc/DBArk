@@ -46,4 +46,4 @@ WIN11-TEST固定338a06b的准备回合已通过类型／363定向／新构建及
 
 新代次保持产品338，目录为 `outputs/query-result-sort-case-readback-v2-39e9b24-vm-20261021`。实际Python合成21项中20通过／1原符号链接权限跳过；Python13820真实读回exit0、0.358072秒，完整原stdout确认四行八列及18字符串／11NULL／3二进制、stableRead=true和383／827字节的原两SHA。其后原配置完整Vitest由Node12760执行，exit0、305.3707793秒，591文件11389通过／0失败／1项POSIX跳过，stderr为空。
 
-最终文件／图／Git、七套旧封存及原进程身份终核已回报通过，RAM三项保留；新代次最后的汇总报告和manifest尚未取回，远程连接不可用，不把阶段成功冒称封存闭合。准确产品、原始full摘要、保留失败及源码整合范围见[338交付记录](../../tests/integration/acceptance-query-result-sort-case-338a06b-20261021.md)。39修正与记录单独整合main，后继Q01源码不进入本批；新安装／macOS未验，暂不发布。
+最终文件／图／Git、七套旧封存及原进程身份终核通过，RAM三项保留。连接恢复后已续读原回合completed终态：Python3.12.14、20个阶段角色原记录、209份封存逐项SHA校验通过。报告摘要 `e4ac263bddca3a684f680291e4a7602b980f8fe1a6d139a0fa02d9783f17eb93`，manifest摘要 `7317a4c41983af4ea63f64b740a2f37067a014577b1d5181c1c31a7a479dbcb0`；Root未下载复算VM原件，不改首次49失败。准确产品、原始full／读回摘要、角色记录及源码整合范围见[338交付记录](../../tests/integration/acceptance-query-result-sort-case-338a06b-20261021.md)。39修正与记录单独整合main，后继Q01源码不进入本批；新安装／macOS未验，暂不发布。

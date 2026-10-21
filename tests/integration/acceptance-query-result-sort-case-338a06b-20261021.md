@@ -1,4 +1,4 @@
-# 排序筛选338源码交付与待补封存
+# 排序筛选338源码交付与Windows封存
 
 ## 准确来源
 
@@ -24,11 +24,22 @@ full原CLI创建于北京时间2026-10-21 09:38:37.9715616，来自退出前保�
 
 原读回／full目录为 `C:\Users\tester\Documents\Codex\2026-10-20\hi\outputs\query-result-sort-case-readback-v2-39e9b24-vm-20261021`；full原字节文件为其 `full/full-original.json`、`full/full-stderr.log`。Root读取了VM原监督记录及阶段回报，没有下载复算这些VM原件。GUI和准备的各原件摘要见[窗口记录](../../docs/testing/query-result-sort-case-grid.md)。
 
-## 已核收尾与尚缺原件
+## 已核收尾与最终封存
 
 VM最终只读核对已回报通过：source574／tests1306／dist109、Git、七套旧封存及原两文件七字段／长度／SHA均未变；本例已记录的192个PID候选按原身份终核零匹配，所有阶段角色exit0，RAM目标／凭据／准确UUID三项保留。旧封存数量分别为24／17／31／64／66／112／63。
 
-VM随后正在汇总最后一份封存报告时，远程连接不可用。Root尚未取回新代次最终manifest数量／SHA、汇总报告SHA、完整角色创建记录和解释器版本；不把上述阶段通过写成整批封存已闭合，不重跑、不清洗或改造原件，也不转回开发机测试。原测试回合 `01a15c0b-2072-7652-b387-95cb6878758f` 保留，恢复后只续读原回合补齐原件。
+main交付时VM正在汇总封存且远程连接不可用，当时只确认阶段及资源终核通过。恢复后Root续读原回合 `01a15c0b-2072-7652-b387-95cb6878758f` 的completed终态：209份封存逐项SHA校验通过、无不匹配；解释器为Python3.12.14，20个阶段角色的原身份／退出记录已保存。本轮全部按授权各执行一次，没有重跑、清洗通道或转回开发机测试。
+
+以下原件位于同一新代次根目录，摘要来自VM终态回报，Root未下载复算或重签：
+
+| 原件 | SHA256 |
+| --- | --- |
+| readback-v2-full-report.json | `e4ac263bddca3a684f680291e4a7602b980f8fe1a6d139a0fa02d9783f17eb93` |
+| SHA256SUMS.txt | `7317a4c41983af4ea63f64b740a2f37067a014577b1d5181c1c31a7a479dbcb0` |
+| reader/python-stdout.json | `035dc9789e6ca5cfe3898bf93a5b18c5e1f181c91e349f2c1d8196c97e181257` |
+| all-stage-role-identities-and-exits.json | `2b6c5f3350a855914207b8180bfe1161f0f0d2c4b9f72e180d4aea05b020ab4f` |
+
+版本进程13696、合成10404、回读13820和full12760均原生exit0；完整角色身份及时间以原封存为准，不将当前PID反查或展示时间舍入回填为历史精度。原两文件仍为383／827字节及原摘要，既有失败和unknown不改判。
 
 ## 旧失败及范围
 
