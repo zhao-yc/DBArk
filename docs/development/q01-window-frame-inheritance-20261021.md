@@ -27,3 +27,11 @@
 RANGE投影及Unicode位置修正位于准确 `81f3a42d2cfa220319ecfda697f0e7959c11de32`，产品树 `44853a769acc789cf3884dc1b495c1633ea42ead`；[CI39528508065](https://github.com/zhao-yc/DBArk/actions/runs/39528508065)、job118988696432已成功。Root读取原日志：Python21项、0.218秒；另有Vitest592文件11458通过／10跳过、172.75秒，类型及构建通过、Vite26.58秒。帧分析76项、真实构建Worker3项均通过，包含原失败两／三段RANGE完整原文、Unicode引用窗口、标量父表达式、嵌套阻断及非法名称链，不回改旧失败。原生、剪贴板与发布job跳过。本次静态核39至当前的两份Python脚本无差异，WIN11-TEST仍只验原338与独立39读回器，其后续full不覆盖本能力。
 
 后继在原 `sql-completion-window.spec.ts` 私网窗口用例中保留五个旧场景，追加两步：内联OVER继承基窗口后补CURRENT、命名child追加帧时补PRECEDING。原输入保留右侧suffix，接受必须完整替换为真正不同的正文，避免用无文本变化的接受冒充Undo证明。真实Monaco按键接受后须完整SQL一致，原生Undo／Redo各核正文与任务／历史不变，再执行保留的接受模型；两步独立预期均为20／30／30。沿用原服务器能力门、三行隔离表、150秒及原清理路径，不新增数据库用户、格式或测试开关。这些新增UI场景仅准备，尚未实际执行，也不属于81原Linux或338原GUI。
+
+2026-10-21 Windows准备：准确d155d76的原CLI进程13832已退出0；类型检查39.18秒，24文件699项全部通过、无失败或跳过，普通新构建50.99秒，原生总计122.954秒。该阶段消息已读到，最终文件／旧封存／进程终核及报告尚待原回合返回，不能先视为最终验收。
+
+后继准确`0a4b23faf4f631d8204ef48f4fd79e6eb4059753`只给本文件实库describe开启既有`preserveOnUnconfirmedExit`选项，产品树仍为44853a769acc789cf3884dc1b495c1633ea42ead。既有strict实库清理在确认同一owner正常退出之后才删除本例随机库，退出不明则保留原现场。原五个场景、两步新帧场景、断言、超时及默认其它用例不改。
+
+远程连接不稳后按用户新授权，在开发机仅执行一次`node scripts/check-local.mjs tests/unit/completion-window-frame.test.ts tests/unit/completion-window-worker.test.ts`：类型49.43秒、2文件81项全通过、Vitest8.27秒，CLI进程20316于02:57:03.1838847Z创建，60.7853369秒后退出0。未执行构建、GUI或SQL；子进程没有DBARK_*变量。原stdout／stderr独立字节文件在`.cache/q01-0a4b23f-local-20261021/`，SHA分别为c2c7afa883b231d1ed0faea520da12fbcb0cc551b20443b35a37d20dc4346bec及空文件e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855。外层PowerShell控制输出出现两行VoidTaskResult，未混入这两份独立原生日志；保留原观察，不重跑检查。
+
+测试会话本轮报告过含凭据RAM对象误输出到工具结果，当前暴露范围仍待只读脱敏核对；不能用本地或CI成功宣称该事件已处置，也不在文档复制敏感对象。主分支排序筛选已另行交付，后继Q01仍待真实GUI和完整平台验收，暂不发布。
