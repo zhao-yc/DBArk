@@ -23,8 +23,25 @@
 
 WIN11-TEST原7f任务已终态封存，不重跑或更新旧profile。Root另派准确338的Windows准备，metadata为 `outputs/query-result-sort-case-grid-check-338a06b-vm-20261021`：先核四套封存、旧图及Git，安全快进后移除子进程环境全部DBARK变量，仅一次八文件check-local，包含类型及新构建。须先通过新控制实例语法门／ready／首CIM，分别留存本次控制器、launcher、观察器及正式CLI身份；原7f的109文件构建不复用。
 
-Root后续读取到原CLI13552退出0、111.659秒：类型39.71秒，八文件363通过／0失败／0跳过、14.17秒，新构建57.68秒。控制器、launcher和观察器均正常退出；源码574／测试1306前后不变，新构建109文件与旧图分列，Git净，23个本例新进程身份终核零匹配。当前四套旧封存复核及最终SHA清单仍待最终回报，不把准备阶段通过当成GUI成功。
+Root已读取最终回报：原CLI13552退出0、111.659秒，类型39.71秒，八文件363通过／0失败／0跳过、14.17秒，新构建57.68秒。控制器14488／launcher14024／观察器16512／CLI均exit0，创建记录已保存，ready及首CIM通过后才启动check。源码574／测试1306前后不变，新构建109文件与旧图分列，Git净，23个本例新进程身份终核零匹配；四套旧封存未变，本轮66份封存校验通过，RAM三项保留。stdout为原文本，stderr既有Rollup／chunk警告保留；不把准备阶段通过当成GUI成功。
 
-Windows准备通过后仍由Root另派独立GUI；Python独立读回、完整回归及main整合均未完成，暂不发布。不能将原7f高度失败或本轮RAM读取器通过改记为七行实际窗口成功。
+实际命令（子环境移除全部DBARK变量，原worker／超时不改）：
+
+```text
+node scripts/check-local.mjs --build tests/unit/query-result-sort-case-grid.test.ts tests/unit/query-result-sort-case-gate.test.ts tests/unit/query-result-sort-case.test.ts tests/unit/query-result-filter.test.ts tests/unit/query-result-sort-ui.test.tsx tests/unit/query-result-columns-audit-claim.test.ts tests/unit/query-result-columns-ui-preparation.test.ts tests/unit/recorded-process-identity.test.ts
+```
+
+以下摘要来自VM原最终报告，Root未下载复算；目录为 `outputs/query-result-sort-case-grid-check-338a06b-vm-20261021`：
+
+| 原件 | SHA256 |
+| --- | --- |
+| stage-result.json | `5a5cb3085b1170b1825200d80100fb8775ab18bd4d39fbc726a62b3d6de90713` |
+| check-stdout.log | `7ef7c349ddcd6093ad8ab5831c2f4d28efed910cba3ef0de600c9aa4f2e11452` |
+| check-stderr.log | `5cd93a38703c97fd6f8521da509fa752582269f38016d600eb413bcb68570967` |
+| source-hashes.json | `2679d0be6984f693f8ff65b9841974964ac6966a2e70b242c662092f999d02ba` |
+| dist-hashes.json | `542a6e1aa43ebdaa87614866d7d49c614b95f90f6288509e6370ad4c7d7ac151` |
+| SHA256SUMS.txt | `e7efb0fdf17acd523f2f2a57fc15554ff6dcda30191ef2f47d142d71d41abb05` |
+
+准备通过后，Root已另派固定338及本轮新构建的独立GUI，metadata为 `outputs/query-result-sort-case-grid-gui-338a06b-vm-20261021`；先核本轮66及旧封存和完整图，再使用新nonce及经语法／ready门的新控制实例，正式120秒／零重试，失败或成功均封存后停止。当前仅确认送达，尚无GUI句柄或结果。Python独立读回、完整回归及main整合均未完成，暂不发布；原7f高度失败及全部unknown保持。
 
 后继补充[四行标准库独立读回工具](query-result-sort-case-readback.md)，只为GUI成功后的准确原文件和SHA提供可复用入口。49c109f的Linux Python16项、另591文件11380项及类型／构建通过、10平台跳过；实件读回另记，不修改当前固定338准备任务或沿用旧两行期待。

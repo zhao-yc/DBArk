@@ -22,4 +22,4 @@ Linux CI在原类型／Vitest／构建前新增 `python3 -I -B tests/python/test
 
 准确 `49c109ff49663f8896f322d9c85208a1a6aa09fd` 的[Linux CI39518836049](https://github.com/zhao-yc/DBArk/actions/runs/39518836049)、job118957437136已成功。Root读取原日志：Python16项全部通过、0.215秒；另有Vitest591文件11380通过、10平台跳过、222.41秒，类型及构建通过、Vite31.13秒。两个框架分列统计，`-O`失败脱敏及真实CLI只读反例包含在16项内；原生、剪贴板和发布job跳过。
 
-WIN11-TEST仍执行固定338a06b的原准备回合，本增量不切换该队列。尚无真实四行文件读回证据，不读取旧失败的ENOENT文件或profile，不自动启动GUI／完整回归；暂不发布。
+WIN11-TEST固定338a06b的准备回合已通过类型／363定向／新构建及66份封存，Root另派同一338的独立GUI，本增量不切换该队列。尚无真实四行文件读回证据，不读取旧失败的ENOENT文件或profile，不自动启动读回／完整回归；暂不发布。
