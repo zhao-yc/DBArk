@@ -59,6 +59,12 @@ async function nullPosition(order:number,name:string,value:''|'FIRST'|'LAST'){
 }
 function copy(current=grid()){const data=new Map<string,string>();current.onCellCopy({row:current.rows[0],column:{key:'id'}},{preventDefault(){},clipboardData:{setData:(key:string,value:string)=>data.set(key,value)}});return data;}
 
+/** 调用正式网格键盘端口和真实整理控制器；仅DOM及RDG事件包装来自RAM，不发送系统按键。 */
+async function historyGridKey(options:Record<string,unknown>={},current=grid(),args:Record<string,unknown>={}){
+  const event={key:'z',ctrlKey:true,metaKey:false,altKey:false,shiftKey:false,repeat:false,defaultPrevented:false,keyCode:90,nativeEvent:{isComposing:false},target:document.querySelector('[role="grid"]'),isGridDefaultPrevented:()=>false,preventGridDefault:vi.fn(),preventDefault:vi.fn(),stopPropagation:vi.fn(),...options};
+  await act(async()=>current.onCellKeyDown({mode:'ACTIVE',column:current.columns.find((column:any)=>column.key!=='select-row'),row:current.rows[0],rowIdx:current.rows.length?0:-1,...args},event));return event;
+}
+
 /** 操作真实排序草稿控件；RAM仅替代浏览器DOM及外部服务，不代替父级排序与历史。 */
 async function sortDraftField(label: string, value: string | boolean) {
   const node = document.querySelector('[aria-label="' + label + '"]')!; expect(node).not.toBeNull(); expect(node.disabled).toBe(false);
@@ -776,6 +782,43 @@ it.each(['selected','all'] as const)('筛选和多列排序在%s连续导出模�
 });
 
 
+it.each(['ctrlKey','metaKey'])('网格整理快捷键：%s撤销及重做原排序／空筛选，严格保留单次SQL',async modifier=>{
+  await mount();await sort();const sorted=[original.rows[2],original.rows[1],original.rows[0]];
+  await click(filterText.open);await addFilterRule(1,'id','eq','0');await click(filterText.apply);expect(grid().rows).toEqual([]);
+  const command={ctrlKey:false,[modifier]:true},undo=await historyGridKey(command);expect(undo.preventGridDefault).toHaveBeenCalledOnce();expect(undo.preventDefault).toHaveBeenCalledOnce();expect(undo.stopPropagation).toHaveBeenCalledOnce();expect(grid().rows).toEqual(sorted);
+  await historyGridKey(command);expect(grid().rows).toBe(original.rows);
+  await historyGridKey({...command,shiftKey:true});expect(grid().rows).toEqual(sorted);
+  await historyGridKey(modifier==='ctrlKey'?{key:'y'}:{...command,shiftKey:true});expect(grid().rows).toEqual([]);
+  expect(commands.filter(command=>command==='query.execute')).toHaveLength(1);
+});
+it('网格整理快捷键：输入、输入法、旧消费事件和其它组合不改变视图，长按只消费不跨步',async()=>{
+  await mount();await sort();const sorted=grid().rows,editable=document.createElement('span');(editable as any).isContentEditable=true;
+  for(const options of [{ctrlKey:false},{altKey:true},{key:'y',shiftKey:true},{key:'y',ctrlKey:false,metaKey:true},{defaultPrevented:true},{nativeEvent:{isComposing:true}},{keyCode:229},{isGridDefaultPrevented:()=>true},...['input','textarea','select'].map(tag=>({target:document.createElement(tag)})),{target:editable}]){
+    const event=await historyGridKey(options);expect(event.preventDefault).not.toHaveBeenCalled();expect(event.preventGridDefault).not.toHaveBeenCalled();expect(event.stopPropagation).not.toHaveBeenCalled();expect(grid().rows).toBe(sorted);
+  }
+  const editing=await historyGridKey({},grid(),{mode:'EDIT'});expect(editing.preventDefault).not.toHaveBeenCalled();expect(grid().rows).toBe(sorted);
+  const repeat=await historyGridKey({repeat:true});expect(repeat.preventDefault).toHaveBeenCalledOnce();expect(grid().rows).toBe(sorted);
+  await historyGridKey();expect(grid().rows).toBe(original.rows);expect(commands.filter(command=>command==='query.execute')).toHaveLength(1);
+});
+it('网格整理快捷键：旧渲染、排序草稿和连接ABA不能撤销当前结果',async()=>{
+  await mount();await sort();await sort('id','DESC');const old=grid();await click(text.panelTitle);const sorted=grid().rows;
+  const blocked=await historyGridKey({},old);expect(blocked.preventDefault).not.toHaveBeenCalled();expect(grid().rows).toBe(sorted);
+  await click(text.panelCancel);await historyGridKey({},old);expect(grid().rows).toBe(sorted);
+  const previous=grid(),event={key:'z',ctrlKey:true,metaKey:false,altKey:false,shiftKey:false,repeat:false,defaultPrevented:false,keyCode:90,nativeEvent:{isComposing:false},target:document.querySelector('[role="grid"]'),isGridDefaultPrevented:()=>false,preventGridDefault:vi.fn(),preventDefault:vi.fn(),stopPropagation:vi.fn()},args={mode:'ACTIVE',column:previous.columns.find((column:any)=>column.key==='id'),row:previous.rows[0],rowIdx:0};
+  await act(async()=>{previous.onCellKeyDown(args,event);previous.onCellKeyDown(args,event);});expect(grid().sortColumns).toEqual([{columnKey:'id',direction:'ASC'}]);
+  const before=grid();await act(async()=>{store.setState({connectionVersions:{c:2}});store.setState({connectionVersions:{c:1}});});const unchanged=grid().rows;
+  await historyGridKey({},before);expect(grid().rows).toBe(unchanged);expect(commands.filter(command=>command==='query.execute')).toHaveLength(1);
+});
+it('网格整理快捷键：撤销清空旧勾选及旧复制，重做后导出仍保留精确当前行序',async()=>{
+  await mount();await sort();await act(async()=>grid().onSelectedRowsChange(new Set([0,1])));const old=grid();await historyGridKey();expect(grid().rows).toBe(original.rows);expect(grid().selectedRows.size).toBe(0);expect(copy(old).size).toBe(0);
+  await historyGridKey({key:'y'});await act(async()=>grid().onSelectedRowsChange(new Set([0,1])));
+  const typed=JSON.parse(copy().get('application/x-dbark-cells')!);expect(typed.rows.map((row:any[])=>row[0])).toEqual(['2','9007199254740993']);
+  await click(zh.resultExport.selectedTitle);await click(zh.resultExport.chooseFile);await click(zh.resultExport.start);expect(exports[0].result.rows.map((row:any)=>row.id)).toEqual(['2','9007199254740993']);expect(commands.filter(command=>command==='query.execute')).toHaveLength(1);
+});
+it('共享表格的活动行回调模式不接收整理快捷键，即使误传历史接口也不触发',async()=>{
+  await mount();const onHistoryTravel=vi.fn();await act(async()=>root!.render(<Grid columns={original.columns} rows={original.rows} selectionScope={{}} isCurrent={()=>true} onActiveRowChange={()=>{}} onHistoryTravel={onHistoryTravel}/>));
+  const event=await historyGridKey();expect(onHistoryTravel).not.toHaveBeenCalled();expect(event.preventDefault).not.toHaveBeenCalled();
+});
 it('整理历史：排序与筛选按整步撤销重做，恢复准确原行和空结果，不新增SQL',async()=>{
   await mount();const saved=structuredClone(original);expect(button(historyText.undo).disabled).toBe(true);expect(button(historyText.redo).disabled).toBe(true);
   await sort();expect(grid().rows).toEqual([original.rows[2],original.rows[1],original.rows[0]]);

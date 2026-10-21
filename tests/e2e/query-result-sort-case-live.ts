@@ -98,6 +98,10 @@ export function registerQueryResultSortCaseUi(binding:QueryResultColumnsUiTarget
    await observe(()=>sortPanel.getByRole('combobox',{name:sortText.panelField(2),exact:true}).focus());
    await observe(()=>sortPanel.getByRole('combobox',{name:sortText.panelField(2),exact:true}).press(`${modifier}+Enter`));
    await observe(()=>expect(sortPanel).toBeHidden());await observe(()=>expect.poll(ids).toEqual(['5','3','1','2','7','6','4']));
+   // 聚焦真实结果ID单元格；网格快捷键沿同一整理历史，不把编辑器撤销当成结果恢复。
+   const historyCell=grid.locator('[role="row"][aria-rowindex="2"] [role="gridcell"][aria-colindex="2"]');
+   await observe(()=>historyCell.click());await observe(()=>historyCell.press(`${modifier}+z`));await observe(()=>expect.poll(ids).toEqual(['1','2','3','4','5','6','7']));
+   await observe(()=>historyCell.click());await observe(()=>historyCell.press(process.platform==='darwin'?'Meta+Shift+z':'Control+y'));await observe(()=>expect.poll(ids).toEqual(['5','3','1','2','7','6','4']));
    await observe(()=>tab.getByRole('button',{name:historyText.undo,exact:true}).click());await observe(()=>expect.poll(ids).toEqual(['1','2','3','4','5','6','7']));
    await observe(()=>tab.getByRole('button',{name:historyText.redo,exact:true}).click());await observe(()=>expect.poll(ids).toEqual(['5','3','1','2','7','6','4']));
    await observe(()=>tab.getByRole('button',{name:sortText.panelTitle,exact:true}).click());

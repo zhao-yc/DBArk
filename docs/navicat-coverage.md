@@ -6,6 +6,8 @@
 
 结果筛选补充[键盘事件保护](development/query-result-filter-keyboard-20261022.md)：子控件已消费的事件及带修饰键Esc不误应用或关闭草稿，保持原筛选与整理历史。两项新增回归先失败，修正后类型、四文件171项及构建通过；真实窗口追加Shift+Esc草稿保持断言尚未执行。与VM固定741回合分开，不增加完整工作包计数，暂不发布。
 
+结果网格新增[整理撤销／重做快捷键](development/query-result-history-keyboard-20261022.md)：Ctrl／⌘+Z、Ctrl／⌘+Shift+Z及Windows Ctrl+Y沿原完整历史，不抢输入框或编辑器撤销，旧租约和长按拒绝。类型、四文件200项及构建通过，真实单元格键盘路径已准备尚未执行。VM此前741回合仅克隆TLS前置失败，GUI确定未启动；新固定提交另安排，旧失败与范围保留，暂不发布。
+
 高频对象设计补齐[结构化JSON字段创建与识别](development/table-column-json-20261021.md)：共享严格类型、表单、预览及后核验，MariaDB只认完整本列JSON_VALID与实际固定编码；原依赖和默认值限制保持。类型／9文件208项／构建及[六组合真实Engine](../tests/integration/acceptance-column-json-six-20261021.md)通过，12个表场景、78条原连接真实关闭、六随机库精确清理。准确9d713bb8的[WIN11-TEST窗口](../tests/integration/acceptance-column-json-ui-9d713bb-20261022.md)单例通过真实新增／零DDL预览／一次应用／类型重读／原行及正常退出，四辅助关闭及随机库精确清理；新安装／macOS另验；O01及完整工作包计数不增，暂不发布。
 
 新建连接新增[从MySQL／MariaDB URI填入](development/connection-uri-20261021.md)：明确用户、一次百分号解码、IDN／IPv6及端口，拒绝不认识的查询／TLS参数；只填表、清除URI输入、密码默认仅会话，复制来源传输及秘密不带往新目标。完整本机11664项／1平台跳过、最终类型／63定向及构建通过；准确491f81e3的[本机Windows实库整例](../tests/integration/acceptance-connection-uri-491f81e-20261021.md)通过URI拒绝参数／填入及明确保存，并继续原字段悬停／模板／查询／参数／草稿恢复、正常退出与数据定义保持／精确清库。安装／macOS及其它版本另验，C01／C03仍部分，暂不发布。
