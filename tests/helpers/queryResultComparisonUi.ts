@@ -24,7 +24,12 @@ export function installComparisonAudit({ ipcMain }: { ipcMain: any }, target: Co
       const tabs = own(input, 'tabs'), active = own(input, 'activeTabId');
       if (!Array.isArray(tabs) || tabs.length !== 1 || active !== target.tabId) reject('工作区目标');
       const tab = tabs[0], sql = own(tab, 'sql');
-      if (own(tab, 'id') !== target.tabId || own(tab, 'kind') !== 'query' || own(tab, 'connectionId') !== target.profileId || !(state.queries === 0 ? sql === target.sqls[0] : state.queries === 1 ? [target.sqls[0], '', target.sqls[1]].includes(sql) : sql === target.sqls[1])) { state.revision++; reject('工作区来源'); }
+      if (own(tab, 'id') !== target.tabId || own(tab, 'kind') !== 'query' || own(tab, 'connectionId') !== target.profileId || !(state.queries === 0 ? sql === target.sqls[0] : state.queries === 1 ? [target.sqls[0], '', target.sqls[1]].includes(sql) : sql === target.sqls[1])) {
+        state.revision++;
+        // 只记录类型、长度和对本例公开常量的匹配事实，不记录正文、标识值或认证。
+        const facts={phase:state.queries,tab:own(tab,'id')===target.tabId,kind:own(tab,'kind')==='query',connection:own(tab,'connectionId')===target.profileId,type:typeof sql,length:typeof sql==='string'?sql.length:-1,left:sql===target.sqls[0],right:sql===target.sqls[1],empty:sql==='',leftPrefix:typeof sql==='string'&&sql.startsWith(target.sqls[0]),rightPrefix:typeof sql==='string'&&sql.startsWith(target.sqls[1]),newline:typeof sql==='string'&&/[\r\n]/.test(sql)};
+        reject('工作区来源 '+JSON.stringify(facts));
+      }
     } else if (command === 'sessions.open') {
       fields(input, ['connectionId', 'database']);
       if (own(input, 'connectionId') !== target.profileId || input.database || state.session || state.sessionClaim) reject('会话领取');

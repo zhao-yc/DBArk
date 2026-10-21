@@ -95,3 +95,11 @@ it('任务证据缺失时永久保留，不在finally补退出或关闭未知观
   const life = new comparison.QueryResultComparisonLifetime(owner, { _startWallTime: 0, timeout: 120000, status: 'passed' }, () => 1);
   await expect(life.finish(async () => [], closeObserver)).rejects.toThrow(); life.endBody(); expect(() => life.afterEach()).toThrow(); expect(owner.retain).toHaveBeenCalledOnce(); expect(owner.exit).not.toHaveBeenCalled(); expect(closeObserver).not.toHaveBeenCalled();
 });
+
+it('来源分类只保留匹配事实与长度，失败信息不带未授权正文或身份值',async()=>{
+ const f=audit(),secret='PRIVATE_SQL_SENTINEL_NEVER_LOG';let message='';
+ try{await f.send('settings.save',{activeTabId:'t',tabs:[{id:'t',kind:'query',connectionId:'c',sql:secret}]});}catch(reason){message=String((reason as Error).message);}
+ expect(message).toContain('工作区来源 ');expect(message).not.toContain(secret);expect(f.original).not.toHaveBeenCalled();
+ const facts=JSON.parse(message.slice(message.indexOf('{')));expect(facts).toEqual({phase:0,tab:true,kind:true,connection:true,type:'string',length:secret.length,left:false,right:false,empty:false,leftPrefix:false,rightPrefix:false,newline:false});
+ await expect(f.send('tasks.list',{})).rejects.toThrow('停链');
+});
