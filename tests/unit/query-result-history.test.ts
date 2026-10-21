@@ -11,6 +11,17 @@ function fixture() {
   return { source, history, binding };
 }
 describe('当前结果排序筛选的有界撤销历史', () => {
+  it('整份配置原子应用新控制器后保留历史，旧票据作废，原样应用不丢重做', () => {
+    const { source, history, binding } = fixture(); history.record(binding, sorted('ASC'));
+    const old = history.target(binding, -1)!, owner = {};
+    history.record(binding, sorted('DESC'), owner);
+    expect(history.bind(source, source.columns, ['a'], sorted('DESC'), owner)).toBe(binding);
+    expect(() => history.commit(old)).toThrow();
+    history.commit(history.target(binding, -1)!); expect(history.target(binding, 1)!.configuration).toEqual(sorted('DESC'));
+    const nextOwner = {}; history.record(binding, sorted('ASC'), nextOwner);
+    expect(history.bind(source, source.columns, ['a'], sorted('ASC'), nextOwner)).toBe(binding);
+    expect(history.target(binding, 1)!.configuration).toEqual(sorted('DESC'));
+  });
   it('按整次操作往返，票据不提前移动游标，配置副本深冻结', () => {
     const { history, binding } = fixture(), next = sorted('ASC'); history.record(binding, next);
     (next.sort[0] as any).direction = 'DESC'; const undo = history.target(binding, -1)!;

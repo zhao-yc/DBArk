@@ -7,6 +7,7 @@ import ts from 'typescript';
 import { memoryDocument, MemoryEvent, type MemoryNode } from '../fixtures/memory-dom';
 import type { QueryResult } from '../../src/shared/contracts';
 import { queryResultHistoryZh as historyText } from '../../src/renderer/locales/queryResultHistory.zh-CN';
+import { queryResultMemoryZh as memoryText } from '../../src/renderer/locales/queryResultMemory.zh-CN';
 import { queryResultSortZh as text } from '../../src/renderer/locales/queryResultSort.zh-CN';
 import { queryResultFindZh as findText } from '../../src/renderer/locales/queryResultFind.zh-CN';
 import { queryRowDetailsZh as detailsText } from '../../src/renderer/locales/queryRowDetails.zh-CN';
@@ -49,6 +50,89 @@ async function mount(prepare?: (result: QueryResult) => void){
   function Harness(){return store(s=>s.settings.tabs).map(tab=><QueryTab key={tab.id} tab={tab} onHistory={()=>{}}/>);}const container=document.createElement('div');document.body.appendChild(container);root=createRoot(container as any);await act(async()=>root!.render(<Harness/>));await click(zh.query.text010);
 }
 function grid(){return ports.grids.at(-1)!;}
+it.each(['failed', 'no-columns'] as const)('暂存整理：后续查询%s仍显示暂存并允许主动丢弃', async mode => {
+  await mount(); await sort(); await click(memoryText.save); const oldDiscard = reactProps(button(memoryText.clear)).onClick;
+  const previous = window.dbark.invoke; (window.dbark as any).invoke = async (command: any, input: any) => {
+    if (command === 'query.execute') { if (mode === 'failed') throw Error('本例预期SQL失败'); return { results: [{ columns: [], rows: [], affectedRows: 0, elapsedMs: 0, statement: '状态结果' }], elapsedMs: 0 }; }
+    return previous(command, input);
+  };
+  await click(zh.query.text010); expect(document.body.textContent).toContain(memoryText.saved); expect(button(memoryText.apply).disabled).toBe(true);
+  await act(async () => oldDiscard()); expect(document.body.textContent).toContain(memoryText.saved);
+  await click(memoryText.clear); expect(document.body.textContent).not.toContain(memoryText.saved);
+});
+it('暂存整理：新查询后显式整份应用，多列排序和筛选一次撤销/重做，旧选择不复活', async () => {
+  await mountMulti(); await filterGroup(); await headerAction('group'); await headerAction('id', { ctrlKey: true });
+  const expected = [...grid().rows], sorted = [...grid().sortColumns]; await act(async () => grid().onSelectedRowsChange(new Set([0])));
+  await click(memoryText.save); expect(grid().selectedRows.size).toBe(1);
+  const old = grid(); await click(zh.query.text010); expect(grid().rows).toBe(original.rows); expect(button(historyText.undo).disabled).toBe(true);
+  await click(memoryText.apply); expect(grid().rows).toEqual(expected); expect(grid().sortColumns).toEqual(sorted);
+  expect(grid().selectedRows.size).toBe(0); expect(copy(old).size).toBe(0);
+  await click(historyText.undo); expect(grid().rows).toBe(original.rows); expect(grid().sortColumns).toEqual([]);
+  await click(historyText.redo); expect(grid().rows).toEqual(expected); expect(grid().sortColumns).toEqual(sorted);
+  await act(async () => grid().onSelectedRowsChange(new Set([0, 1])));
+  await click(zh.resultExport.selectedTitle); await click(zh.resultExport.chooseFile); await click(zh.resultExport.start);
+  expect(exports[0].result.rows.map((row: any) => row.id)).toEqual(['2', '9007199254740993']);
+  expect(exports[0].result.rows[1].amount).toBe('0.12345678901234567891');
+  expect(commands.filter(command => command === 'query.execute')).toHaveLength(2);
+});
+
+it('暂存整理：完整NULL位置、大小写、停用条件原文在重新执行后保留', async () => {
+  await mount(); await click(filterText.open); await addFilterRule(1, 'id', 'eq', '保留的停用原文'); await enableFilterRule(1, false); await click(filterText.apply);
+  await sort('words'); await toggleSortCase(1, '原文', true); await nullPosition(1, '原文', 'LAST'); await click(memoryText.save);
+  await click(zh.query.text010); await click(memoryText.apply);
+  expect(document.querySelector('[aria-label="' + text.nulls(1, '原文') + '"]')!.value).toBe('LAST');
+  expect(document.querySelector('[aria-label="' + text.ignoreCase(1, '原文') + '"]')!.checked).toBe(true);
+  await click(filterText.open); expect(document.querySelector('[aria-label="' + filterText.enabled(1) + '"]')!.checked).toBe(false);
+  expect(document.querySelector('[aria-label="' + filterText.input + ' 1"]')!.value).toBe('保留的停用原文');
+  expect(commands.filter(command => command === 'query.execute')).toHaveLength(2);
+});
+
+it('暂存整理：新结果空匹配保持空，可撤销恢复新原行，丢弃不改视图或SQL', async () => {
+  await mountMulti(); await filterGroup('没有匹配'); await click(memoryText.save); await click(zh.query.text010);
+  await click(memoryText.apply); expect(grid().rows).toEqual([]); await click(memoryText.clear); expect(grid().rows).toEqual([]);
+  expect(document.body.textContent).not.toContain(memoryText.saved); await click(historyText.undo); expect(grid().rows).toBe(original.rows);
+  expect(commands.filter(command => command === 'query.execute')).toHaveLength(2);
+});
+
+it('暂存整理：替换后旧应用/丢弃回调无效，原样应用保留重做', async () => {
+  await mount(); await sort(); await click(memoryText.save);
+  const apply = reactProps(button(memoryText.apply)).onClick, discard = reactProps(button(memoryText.clear)).onClick;
+  await sort('id', 'DESC'); await click(memoryText.save); const descending = grid().rows;
+  await act(async () => { apply(); discard(); }); expect(grid().rows).toBe(descending); expect(document.body.textContent).toContain(memoryText.saved);
+  await click(historyText.undo); await click(memoryText.apply); expect(grid().rows).toEqual(descending);
+  await click(historyText.undo); expect(grid().sortColumns).toEqual([{ columnKey: 'id', direction: 'ASC' }]);
+  await click(memoryText.save); await click(memoryText.apply); expect(button(historyText.redo).disabled).toBe(false);
+  await click(historyText.redo); expect(grid().rows).toEqual(descending);
+});
+
+it.each(['key', 'name', 'type', 'order'] as const)('暂存整理：新结果%s变化禁用完整应用，当前行及暂存保持', async change => {
+  await mount(); await sort(); await click(memoryText.save);
+  if (change === 'order') original.columns.reverse(); else original.columns[0][change] = '改变';
+  await click(zh.query.text010); const rows = grid().rows; expect(button(memoryText.apply).disabled).toBe(true);
+  await act(async () => reactProps(button(memoryText.apply)).onClick()); expect(document.body.textContent).toContain(memoryText.mismatch);
+  expect(grid().rows).toBe(rows); expect(button(historyText.undo).disabled).toBe(true); expect(document.body.textContent).toContain(memoryText.saved);
+});
+
+it('暂存整理：新行精度格式不兼容时整体拒绝，不丢暂存或移动整理历史', async () => {
+  await mount(); await sort(); await click(memoryText.save); original.rows[0].id = '无法解析的整数';
+  await click(zh.query.text010); const rows = grid().rows; await click(memoryText.apply);
+  expect(grid().rows).toBe(rows); expect(grid().sortColumns).toEqual([]); expect(button(historyText.undo).disabled).toBe(true);
+  expect(document.body.textContent).toContain(memoryText.saved); expect(commands.filter(command => command === 'query.execute')).toHaveLength(2);
+});
+
+it.each(['inactive', 'new', 'result', 'version', 'job', 'modal'] as const)('暂存整理：%s变化后旧保存/应用/丢弃回调不能重放', async mode => {
+  await mount(); await sort(); await click(memoryText.save);
+  const save = reactProps(button(memoryText.save)).onClick, apply = reactProps(button(memoryText.apply)).onClick, discard = reactProps(button(memoryText.clear)).onClick, settings = store.getState().settings;
+  if (mode === 'new') await click(zh.query.text010);
+  if (mode === 'result') await click(zh.query.text017 + '2');
+  if (mode === 'inactive') await act(async () => { store.setState({ settings: { ...settings, activeTabId: 'other' } }); store.setState({ settings }); });
+  if (mode === 'version') await act(async () => { store.setState({ connectionVersions: { c: 2 } }); store.setState({ connectionVersions: { c: 1 } }); });
+  if (mode === 'job') await act(async () => { store.getState().setBusy('q', true); store.getState().setBusy('q', false); });
+  if (mode === 'modal') { const node = document.createElement('div'); node.setAttribute('role', 'dialog'); document.body.appendChild(node); node.parentNode!.removeChild(node); await act(async () => { for (const observer of observers) observer([{ addedNodes: [node] }]); }); }
+  const rows = grid().rows; await act(async () => { save(); apply(); discard(); }); expect(grid().rows).toBe(rows);
+  expect(document.body.textContent.includes(memoryText.saved)).toBe(mode !== 'version');
+  if (mode === 'inactive') { await click(memoryText.apply); expect(grid().sortColumns).toEqual([{ columnKey: 'id', direction: 'ASC' }]); }
+});
 function button(name:string){const node=document.querySelectorAll('button').find(node=>node.textContent===name||node.getAttribute('aria-label')===name||name===zh.query.text010&&node.textContent.startsWith(name)||name===zh.resultExport.chooseFile&&node.textContent.includes(name));expect(node,'缺少按钮：'+name).toBeDefined();return node!;}
 async function click(name:string){const node=button(name);expect(node.disabled).toBe(false);await act(async()=>node.dispatchEvent(new MemoryEvent('click')));}
 async function sort(column='id',direction:'ASC'|'DESC'='ASC'){const before=grid();await act(async()=>before.onSortColumnsChange([{columnKey:column,direction}]));}

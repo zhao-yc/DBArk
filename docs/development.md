@@ -1,6 +1,8 @@
 # 开发与测试
 
-所有占用电脑的测试统一在独立WIN11-TEST的“dbark测试”会话串行执行，本机只开发和静态审查。当前[高频查询工作流整合](development/query-result-snippet-integration-20261020.md)接入七种文本筛选和片段JSON候选；各独立候选的通过不自动视为整合通过，固定整合提交仍须单独验证，暂不发布。
+所有占用电脑的测试优先在独立WIN11-TEST的“dbark测试”会话串行执行。用户已授权连接不稳定时在本机接续；先确认原测试未启动或已结束，记录实际平台与未验范围。当前[高频查询工作流整合](development/query-result-snippet-integration-20261020.md)接入七种文本筛选和片段JSON候选；各独立候选的通过不自动视为整合通过，固定整合提交仍须单独验证，暂不发布。
+
+结果新增[暂存整理／应用暂存](development/query-result-memory-20261022.md)：标签内存保存完整筛选和多列排序，新查询后手动应用，完整元数据与预算核验后一次发布并接通原整理撤销。命名方案及跨启动持久化仍待实现，暂不发布。
 
 日常改动优先使用 [本地定向检查](development/local-checks.md)：`pnpm check:local -- tests/unit/具体文件.test.ts`；需要普通构建时增加 `--build`。类型检查只执行一次，原生、实库和发行验收继续沿各自入口执行。
 

@@ -2,6 +2,8 @@
 
 ## 当前开发安排（2026-10-22）
 
+查询结果新增[暂存整理／应用暂存](development/query-result-memory-20261022.md)：同一标签内存保留完整筛选与多列排序，由用户明确应用到字段和可见列一致的新结果；完整试算成功才发布，可一次撤销。无SQL自动重放，暂无命名、跨标签或跨启动方案；本轮验证独立记录，不增加完整工作包计数，暂不发布。
+
 安装验收的墙钟回退误拒绝已转为[原TestInfo单调期限](development/native-original-monotonic-deadline-20261022.md)：沿原起点与120秒，不以当前时间补签；仍拒绝缺失／漂移、单调回退和超时。eb0ea00c的Windows源码正式首次模型四例、八正常owner和113原字节复核通过，后继合法负时间域另有305项RAM检查。旧741安装失败、后继安装及macOS结果分别保留，不增加功能／发行计数，暂不发布。
 
 查询结果新增[多列排序面板](development/query-result-sort-panel-20261022.md)：独立草稿集中设置完整优先级、NULL及大小写，分页保留全部规则；一次应用保持筛选并接通整理撤销，预算拒绝保持原视图及草稿。原精确比较与旧视图保护保持，Linux完整11682通过／10跳过；首次VM及62诊断的应用前失败继续保留。[小数底边读取修正](../tests/integration/acceptance-query-sort-grid-fractional-20261022.md)有22项定向及独立1.75缩放实验；741仅克隆TLS失败，GUI未启动。后继准确2cdf5a6d的[本机Windows实库整例与独立导出读回](../tests/integration/acceptance-query-sort-history-2cdf5a6-20261022.md)已通过全部面板及原流程，原App／观察流正常关闭；本机整数视口、VM小数几何、安装和macOS分别记录，暂不发布。

@@ -35,9 +35,11 @@ export class QueryResultHistory {
     return binding;
   }
   /** 只在原操作成功后记一整步；原样应用保留重做，超额不截断条件或改变当前视图。 */
-  record(binding: QueryResultHistoryBinding | undefined, configuration: QueryResultOrganization): void {
+  record(binding: QueryResultHistoryBinding | undefined, configuration: QueryResultOrganization, owner: unknown = this.owner): void {
     if (!binding || binding !== this.binding) throw Error(text.stale);
     const next = snapshot(configuration);
+    // 原子应用新控制器后沿用同一历史；所有旧控制器票据同时失活。
+    if (this.owner !== owner) { this.owner = owner; this.revision++; }
     if (!next) { this.items = []; this.cursor = 0; this.revision++; this.limited = true; return; }
     if (this.items[this.cursor]?.key === next.key) return;
     this.items = this.items.slice(0, this.cursor + 1); this.items.push(next);

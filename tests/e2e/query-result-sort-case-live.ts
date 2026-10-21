@@ -13,6 +13,7 @@ import { queryResultSortZh as sortText } from '../../src/renderer/locales/queryR
 import { queryResultFilterZh as filterText } from '../../src/renderer/locales/queryResultFilter.zh-CN';
 import { queryLayoutZh as layoutText } from '../../src/renderer/locales/queryLayout.zh-CN';
 import { queryResultHistoryZh as historyText } from '../../src/renderer/locales/queryResultHistory.zh-CN';
+import { queryResultMemoryZh as memoryText } from '../../src/renderer/locales/queryResultMemory.zh-CN';
 
 /** 仅三门和Root显式RAM绑定后注册；原native及owner强引用保留，失败不进入补清理。 */
 export function registerQueryResultSortCaseUi(binding:QueryResultColumnsUiTarget):void {
@@ -247,6 +248,23 @@ export function registerQueryResultSortCaseUi(binding:QueryResultColumnsUiTarget
    await observe(()=>tab.getByRole('button',{name:filterText.open,exact:true}).click());
    await observe(()=>panel.getByRole('button',{name:filterText.remove(2),exact:true}).click());
    await observe(()=>panel.getByRole('button',{name:filterText.apply,exact:true}).click());await observe(()=>expect.poll(ids).toEqual(['1','3','6','7']));
+   // 原单条常量SQL之后，显式暂存完整筛选＋两列排序；清空、应用、撤销重做均只改变本地视图。
+   await observe(()=>tab.getByRole('button',{name:sortText.panelTitle,exact:true}).click());
+   await observe(()=>sortPanel.getByRole('button',{name:sortText.panelAdd,exact:true}).click());
+   await observe(()=>sortPanel.getByRole('combobox',{name:sortText.panelField(1),exact:true}).selectOption({index:0}));
+   await observe(()=>sortPanel.getByRole('button',{name:sortText.panelAdd,exact:true}).click());
+   await observe(()=>sortPanel.getByRole('combobox',{name:sortText.panelField(2),exact:true}).selectOption({index:1}));
+   await observe(()=>sortPanel.getByRole('checkbox',{name:sortText.panelCase(2),exact:true}).check());
+   await observe(()=>sortPanel.getByRole('combobox',{name:sortText.panelNulls(2),exact:true}).selectOption('LAST'));
+   await observe(()=>sortPanel.getByRole('button',{name:sortText.panelApply,exact:true}).click());await observe(()=>expect.poll(ids).toEqual(['1','3','6','7']));
+   await observe(()=>tab.getByRole('button',{name:memoryText.save,exact:true}).click());
+   await observe(()=>tab.getByRole('button',{name:sortText.clear,exact:true}).click());await observe(()=>tab.getByRole('button',{name:filterText.clear,exact:true}).click());
+   await observe(()=>expect.poll(ids).toEqual(['1','2','3','4','5','6','7']));
+   await observe(()=>tab.getByRole('button',{name:memoryText.apply,exact:true}).click());await observe(()=>expect.poll(ids).toEqual(['1','3','6','7']));
+   await observe(()=>expect(caseControl(2)).toBeChecked());await observe(()=>expect(tab.getByRole('combobox',{name:sortText.nulls(2,'text_value'),exact:true})).toHaveValue('LAST'));
+   await observe(()=>tab.getByRole('button',{name:historyText.undo,exact:true}).click());await observe(()=>expect.poll(ids).toEqual(['1','2','3','4','5','6','7']));
+   await observe(()=>tab.getByRole('button',{name:historyText.redo,exact:true}).click());await observe(()=>expect.poll(ids).toEqual(['1','3','6','7']));
+   await observe(()=>tab.getByRole('button',{name:memoryText.clear,exact:true}).click());await observe(()=>expect.poll(ids).toEqual(['1','3','6','7']));
    for(const index of [5,4,3,2])await observe(()=>grid.locator('[role="row"][aria-rowindex="'+index+'"]').getByRole('checkbox').check());
    await observe(()=>expect(selected).toBeEnabled());
    // 合成copy事件只读取本页DataTransfer，不执行复制按钮或覆盖系统剪贴板。
