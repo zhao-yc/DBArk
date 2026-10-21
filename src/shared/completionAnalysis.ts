@@ -4,6 +4,7 @@ import {completionLexicalContext,completionIdentifier,completionAliasIdentifier,
 import {completionLimits} from './sqlCompletion';
 import{completionQueryBranches,completionBranchAt,completionOutputContext}from'./completionQueryScope';
 import{completionWindowContext}from'./completionWindowScope';
+import { completionWindowFrameKeywords } from './completionWindowFrame';
 import { completionNamedWindows } from './completionNamedWindows';
 import { completionProcedureScope } from './completionProcedureScope';
 import{completionLateralTokens,completionLateralScope,completionLateralAllows}from'./completionLateralScope';
@@ -121,7 +122,15 @@ export function analyzeCompletion(source:string,offset:number,mode:CompletionLex
     // 哨兵替换会隐藏正在编辑的ROWS等词；原词只用于停止边界，不还原进AST或生成关系。
     const targetToken=lexical.tokens.find(token=>token.start===lexical.target.start&&token.end===lexical.target.end);
     // 仅新增继承路径要求当前分支完整语法；使用独立静默解析器，不改变已收集实体或回显SQL。
-    let expansions=0,truncated=false;const branches=completionQueryBranches(queries,normalizedTokens),windowContext=completionWindowContext(branches,normalizedTokens,normalized.caret,targetToken?.kind==='word'?targetToken.value:undefined,(start,end)=>new QuietMySQL().validate(normalized.text.slice(start,end)).length===0);
+    let expansions=0,truncated=false;const branches=completionQueryBranches(queries,normalizedTokens),windowContext=completionWindowContext(branches,normalizedTokens,normalized.caret,targetToken?.kind==='word'?targetToken.value:undefined,(start,end)=>new QuietMySQL().validate(normalized.text.slice(start,end)).length===0,
+      capabilities.windowFunctions===true&&!lexical.target.quoted&&!lexical.target.qualifiers.length?(open,end)=>completionWindowFrameKeywords(normalizedTokens,normalized.caret,lexical.target.prefix,open,end,value=>{
+        const candidate=normalized.text.slice(0,normalized.caret)+value+normalized.text.slice(normalized.caret+normalized.sentinel.length);
+        return lexical.tokens.every(token=>token.closed)&&candidate.length<=completionLimits.sourceUnits&&new QuietMySQL().validate(candidate).length===0;
+      }):undefined);
+    if(windowContext&&typeof windowContext==='object'){
+      if(completionOutputContext(branches,normalizedTokens,normalized.caret)?.union)return{status:'blocked',reason:'syntax'};
+      return{status:'ready',target:lexical.target,syntax:[],keywords:windowContext.frameKeywords,relations:[],localRelations:[],columnMode:'expression',incomplete:false};
+    }
     if(windowContext==='unsupported')return{status:'blocked',reason:'syntax'};
     // 既有窗口字段只分析当前文本的关系/投影，不代表服务器支持执行；新增窗口名称在下方单独核对能力。
     const lateral=completionLateralScope(tables,branches,normalizedTokens);if(lateral.status==='blocked'||hasLateral&&!lateral.boundaries.length)return{status:'blocked',reason:'syntax'};

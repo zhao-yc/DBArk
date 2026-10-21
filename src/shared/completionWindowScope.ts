@@ -7,7 +7,7 @@ const symbol=(token:CompletionToken|undefined,value:string)=>token?.kind==='symb
 const name=(token:CompletionToken|undefined)=>token?.kind==='word'||token?.kind==='identifier';
 
 /** 仅识别当前SELECT已有窗口中的表达式边界；有界继承只定位字段，不创建关系或扩展目录权限。 */
-export function completionWindowContext(branches:CompletionQueryBranch[],tokens:CompletionToken[],at:number,targetWord?:string,validate?:(start:number,end:number)=>boolean):'expression'|'unsupported'|undefined{
+export function completionWindowContext(branches:CompletionQueryBranch[],tokens:CompletionToken[],at:number,targetWord?:string,validate?:(start:number,end:number)=>boolean,frame?:(open:number,close:number|undefined)=>string[]|undefined):'expression'|'unsupported'|{frameKeywords:string[]}|undefined{
   const branch=branches.filter(item=>item.select.start<=at&&at<=item.end).sort((a,b)=>b.select.depth-a.select.depth||b.select.start-a.select.start)[0];
   const stack:number[]=[],close=new Map<number,number>();
   for(let index=0;index<tokens.length;index++){if(symbol(tokens[index],'('))stack.push(index);else if(symbol(tokens[index],')')){const open=stack.pop();if(open!==undefined)close.set(open,index);}}
@@ -21,6 +21,7 @@ export function completionWindowContext(branches:CompletionQueryBranch[],tokens:
   // 先检查所有外层帧：恢复解析可能没有分支，帧内嵌套表达式也不能借函数或字段目录。
   for(const open of containers){
     if(!word(tokens[open-1],'OVER')&&!named(open))continue;
+    const keywords=frame?.(open,close.get(open));if(keywords?.length)return{frameKeywords:keywords};
     // 点号后的保留字仍是合法字段名，例如u.rows；不能把它误当作帧子句。
     if(tokens.slice(open+1,close.get(open)).some((token,index,list)=>token.depth===tokens[open].depth+1&&token.start<=at&&!symbol(list[index-1],'.')&&token.kind==='word'&&['ROWS','RANGE','GROUPS','EXCLUDE'].includes((token.start===at?targetWord??token.value:token.value).toUpperCase())))return'unsupported';
   }

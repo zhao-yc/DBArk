@@ -15,4 +15,13 @@ describe('本地Worker窗口能力白名单', () => {
       expect(messages.at(-1)).toMatchObject(index === 5 ? { id: index + 1, result: { status: 'ready', windowNames: ['win'], relations: [], syntax: [] } } : { id: index + 1, result: { status: 'blocked', reason: 'capability' } });
     }
   });
+  it('真实Worker只交付本地帧关键字和原替换范围，不携带目录来源',()=>{
+    const bundle=buildSync({entryPoints:['src/renderer/completion.worker.ts'],bundle:true,write:false,platform:'browser',format:'iife',target:'es2022',logLevel:'silent'}).outputFiles[0].text;
+    const messages:any[]=[],port:any={postMessage:(value:unknown)=>messages.push(structuredClone(value))};
+    runInNewContext(bundle,{self:port,console:{error(){throw Error('不得回显SQL');},warn(){},log(){}},setTimeout,clearTimeout},{timeout:8000});
+    const marked='SELECT SUM(v) OVER(ORDER BY id ROWS BETWEEN 1 PRECEDING AND CUR|RENT ROW) FROM users';
+    port.onmessage({data:{id:1,source:marked.replace('|',''),offset:marked.indexOf('|'),mode:{},capabilities:{windowFunctions:true}}});
+    expect(messages.at(-1)).toMatchObject({id:1,result:{status:'ready',syntax:[],relations:[],keywords:['CURRENT']}});
+    expect(messages.at(-1).result.target).toMatchObject({start:marked.indexOf('CUR|'),end:marked.indexOf('CUR|')+7,prefix:'CUR',qualifiers:[],quoted:false});
+  });
 });
