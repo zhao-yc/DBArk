@@ -169,7 +169,7 @@ test('真实表页嵌套筛选：精确值、两页、排序、停用子组及�
     for (const index of [1, 2]) { count = (await state()).pages.length; await step(() => table.getByRole('checkbox', { name: enabledText.enabled(index), exact: true }).check()); await settled(count + 1); }
     expect((await state()).pages.at(-1)?.ids).toEqual(ordered);
     // 方案仅经本机实际控件保存、关闭重开后领取新来源；不直接读写SQLite。
-    const shelf = table.locator('section').filter({ has: table.getByRole('textbox', { name: presets.name, exact: true }) }), presetName = '本例嵌套条件与排序';
+    const shelf = table.getByRole('region', { name: presets.title, exact: true }), presetName = '本例嵌套条件与排序';
     await step(() => shelf.getByRole('textbox', { name: presets.name, exact: true }).fill(presetName));
     await step(() => shelf.getByRole('button', { name: presets.save, exact: true }).click()); await step(() => expect(shelf).toContainText(presets.saved));
     count = (await state()).pages.length; await step(() => table.getByRole('button', { name: zh.common.clearAll, exact: true }).click()); await settled(count + 1);
