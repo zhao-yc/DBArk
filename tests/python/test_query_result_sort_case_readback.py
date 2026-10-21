@@ -2,11 +2,14 @@
 import hashlib
 import importlib.util
 import json
+import os
 from pathlib import Path
+import stat
 import subprocess
 import sys
 import tempfile
 import unittest
+from types import SimpleNamespace
 from unittest.mock import patch
 
 SCRIPT = Path(__file__).resolve().parents[2] / 'scripts' / 'testing' / 'verify-query-result-sort-case.py'
@@ -181,6 +184,77 @@ class ReadbackTests(unittest.TestCase):
                 self.skipTest('当前平台不允许创建合成符号链接')
             with self.assertRaises(READER.VerificationError):
                 READER.verify_files(csv_path, json_path, digest(CSV), digest(JSON))
+
+    def test_windows_binding_uses_birthtime_without_discarding_ctime(self):
+        """合成跨接口ctime差异可绑定，任一原接口的ctime仍进入完整快照。"""
+        path = SimpleNamespace(st_dev=9, st_ino=11, st_size=383, st_mtime_ns=500, st_ctime_ns=100, st_birthtime_ns=100)
+        handle = SimpleNamespace(**dict(vars(path), st_ctime_ns=200))
+        with patch.object(READER, 'WINDOWS', True):
+            self.assertEqual(READER.binding_stamp(path), READER.binding_stamp(handle))
+            self.assertNotEqual(READER.stamp(path), READER.stamp(handle))
+            for key in ['st_dev', 'st_ino', 'st_size', 'st_mtime_ns', 'st_birthtime_ns']:
+                with self.subTest(field=key):
+                    changed = SimpleNamespace(**dict(vars(handle), **{key: getattr(handle, key) + 1}))
+                    self.assertNotEqual(READER.binding_stamp(path), READER.binding_stamp(changed))
+        with patch.object(READER, 'WINDOWS', False):
+            self.assertNotEqual(READER.binding_stamp(path), READER.binding_stamp(handle))
+
+    def test_legacy_windows_binding_requires_matching_ctime(self):
+        """无birthtime的旧Windows保持原ctime比较，不猜测缺失字段。"""
+        path = SimpleNamespace(st_dev=9, st_ino=11, st_size=383, st_mtime_ns=500, st_ctime_ns=100)
+        handle = SimpleNamespace(**dict(vars(path), st_ctime_ns=200))
+        with patch.object(READER, 'WINDOWS', True):
+            self.assertEqual(READER.binding_stamp(path), READER.stamp(path))
+            self.assertNotEqual(READER.binding_stamp(path), READER.binding_stamp(handle))
+
+    def test_windows_read_keeps_separate_path_and_handle_ctime(self):
+        """真实有界读取配合合成Windows句柄ctime，修复跨接口假阳性。"""
+        with tempfile.TemporaryDirectory() as directory:
+            csv_path, _ = self.files(directory)
+            original = os.fstat
+            def by_handle(descriptor):
+                """只改变合成返回对象，原文件及操作系统元数据均不修改。"""
+                value = original(descriptor)
+                birth = getattr(value, 'st_birthtime_ns', value.st_ctime_ns)
+                return SimpleNamespace(st_dev=value.st_dev, st_ino=value.st_ino, st_size=value.st_size,
+                                       st_mtime_ns=value.st_mtime_ns, st_ctime_ns=birth + 100,
+                                       st_birthtime_ns=birth, st_mode=value.st_mode,
+                                       st_file_attributes=getattr(value, 'st_file_attributes', 0))
+            with patch.object(READER, 'WINDOWS', True), patch.object(READER.os, 'fstat', by_handle):
+                raw, _ = READER.read_pinned(csv_path)
+            self.assertEqual(raw, CSV)
+
+    def test_handle_drift_or_reparse_is_still_rejected(self):
+        """同句柄ctime／birthtime漂移及重解析属性不能因跨接口兼容而漏检。"""
+        with tempfile.TemporaryDirectory() as directory:
+            csv_path, _ = self.files(directory)
+            value = csv_path.stat()
+            def snapshot():
+                """按当前合成输入构造元数据反例，不放宽真实文件读取。"""
+                return SimpleNamespace(**dict(st_dev=value.st_dev, st_ino=value.st_ino, st_size=value.st_size,
+                    st_mtime_ns=value.st_mtime_ns, st_ctime_ns=value.st_ctime_ns,
+                    st_birthtime_ns=getattr(value, 'st_birthtime_ns', value.st_ctime_ns),
+                    st_mode=value.st_mode, st_file_attributes=0))
+            for field in ['st_ctime_ns', 'st_birthtime_ns', 'st_file_attributes', 'st_mode']:
+                changed = vars(snapshot()).copy()
+                changed[field] = 0x400 if field == 'st_file_attributes' else stat.S_IFIFO if field == 'st_mode' else changed[field] + 1
+                with self.subTest(field=field), patch.object(READER, 'WINDOWS', True), patch.object(READER.os, 'fstat', side_effect=[snapshot(), SimpleNamespace(**changed)]):
+                    with self.assertRaisesRegex(READER.VerificationError, '文件读取期间已变化'):
+                        READER.read_pinned(csv_path)
+
+    def test_path_ctime_drift_is_still_rejected(self):
+        """Windows路径快照的ctime也独立核验，不能只比对句柄。"""
+        with tempfile.TemporaryDirectory() as directory:
+            csv_path, _ = self.files(directory)
+            value = csv_path.lstat()
+            fields = dict(st_dev=value.st_dev, st_ino=value.st_ino, st_size=value.st_size,
+                          st_mtime_ns=value.st_mtime_ns, st_ctime_ns=value.st_ctime_ns,
+                          st_birthtime_ns=getattr(value, 'st_birthtime_ns', value.st_ctime_ns),
+                          st_mode=value.st_mode, st_file_attributes=getattr(value, 'st_file_attributes', 0))
+            changed = dict(fields, st_ctime_ns=value.st_ctime_ns + 1)
+            with patch.object(READER, 'WINDOWS', True), patch.object(type(csv_path), 'lstat', side_effect=[SimpleNamespace(**fields), SimpleNamespace(**changed)]):
+                with self.assertRaisesRegex(READER.VerificationError, '原文件路径已被替换'):
+                    READER.read_pinned(csv_path)
 
 
 if __name__ == '__main__':

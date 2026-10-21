@@ -56,6 +56,6 @@ node scripts/check-local.mjs --build tests/unit/query-result-sort-case-grid.test
 | gui-stage-report.json | `35234f498f172cbb2e32ed6c9106c8c50dd7592da263834e1d67551eb1289d98` |
 | SHA256SUMS.txt | `e3e04f49431340a9afbb27d998dea34acd2931341e755e8f39b1aaec9fe9db54` |
 
-导出位于本GUI目录的 `dbark-query-columns-a8fd48da6bc1e558dd3296ebd8f8979a` 子目录。Root已另派同一338的独立Python四行读回，通过后一次完整Vitest，metadata为 `outputs/query-result-sort-case-readback-338a06b-vm-20261021`；当前只确认送达，尚无新句柄或结果，main未整合、暂不发布。后继Q01帧关键字候选bcb1420不归入本批证据，`4bd2fd3`仍为本批固定交付检查点。
+导出位于本GUI目录的 `dbark-query-columns-a8fd48da6bc1e558dd3296ebd8f8979a` 子目录。同一338的首次独立Python四行读回位于 `outputs/query-result-sort-case-readback-338a06b-vm-20261021`：Python16172退出1，文件打开时身份比较失败，未进入内容解析，完整Vitest未启动。停链终核原文件及图／Git／旧封存未变，具体stat差异未知；详见[独立读回修正记录](query-result-sort-case-readback.md)。main未整合、暂不发布。后继Q01帧关键字候选bcb1420／0757803不归入本批证据，`4bd2fd3`仍为本批固定交付检查点。
 
 后继补充[四行标准库独立读回工具](query-result-sort-case-readback.md)，只为GUI成功后的准确原文件和SHA提供可复用入口。49c109f的Linux Python16项、另591文件11380项及类型／构建通过、10平台跳过；实件读回另记，不修改当前固定338准备任务或沿用旧两行期待。

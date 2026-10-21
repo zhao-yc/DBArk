@@ -26,4 +26,14 @@ WIN11-TEST固定338a06b的准备回合已通过类型／363定向／新构建及
 
 准确49脚本由Root静态读取Git原始blob复算：Git blob为 `7940470887003318e3568152f5ec7723eb8bb52c`，7669字节，SHA256为 `9c4ecd332305bc3c72a631c89de71d53c06d5c33e0f65ea1f7f7ebe67265de22`。VM仅允许提取该脚本到新metadata目录，不checkout／merge49；若缺Git对象，仅一次获取准确49对象。读取两个已封存文件的原SHA，不重用旧两行夹具或profile。
 
-当前只确认读回／full请求送达，尚无真实四行独立读回结果；后继bcb1420的Q01源码不进入本批。main整合及新安装／macOS未完成，暂不发布。
+## 首次Windows读回失败与兼容修正
+
+固定338产品源码的首次独立读回已失败：准确49脚本的Python16172退出1，原正文为 `{"passed": false, "error": "文件打开时身份已变化"}`，停在85行的lstat／fstat快照比较，尚未解析CSV或JSON。完整Vitest依门未启动。停链只读终核确认原两文件身份、长度和SHA不变，源码574／测试1306／构建109及Git、六套旧封存不变，本例进程身份终核零匹配。最终报告及新封存摘要待另行记录。
+
+监督器转发stdout后混入两行 `System.Threading.Tasks.VoidTaskResult`；该原通道保留，不能清洗后冒称原生纯JSON。准确Python的PID及创建时间已在原.NET句柄退出前保存。原失败没有记录两组stat tuple，具体不等字段仍未知，不能用后继实验回填。
+
+[CPython官方问题157671](https://github.com/python/cpython/issues/157671)记录Windows部分版本路径stat将ctime映射为创建时间，而fstat保留元数据变更时间；[Python文档](https://docs.python.org/3.14/library/os.html#os.stat_result.st_birthtime_ns)明确提供birthtime创建时间。此处据此修正跨接口比较，不声称已确诊旧失败的具体字段：Windows具备birthtime时，跨路径／句柄以设备、inode、大小、mtime和birthtime绑定；旧Windows及POSIX保持原时间语义。原路径ctime与原句柄ctime分别在各自接口内前后完整核对，birthtime、普通文件／重解析属性、原SHA及完整值检查也保留。
+
+新增5项Python反例，覆盖合成Windows跨接口ctime差异、旧版本无birthtime、真实有界读取的合成句柄差异、句柄ctime／birthtime／类型／重解析属性漂移，以及路径ctime漂移。总21项待CI与WIN11-TEST验证；未在开发机运行。后继应提取新准确脚本及测试到新metadata代次，产品工作树仍为338；先合成检查，通过后另一次真实四行读回，再依门完整Vitest。旧失败及所有旧封存保持。
+
+后继bcb1420／0757803的Q01源码不进入本批。main整合及新安装／macOS未完成，暂不发布。
