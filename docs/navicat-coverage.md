@@ -2,6 +2,8 @@
 
 ## 当前开发安排（2026-10-21）
 
+批量启停首次真实窗口发现[滚动条空间遗漏](development/query-result-filter-scrollbar-20261021.md)：原外高96.857而客户区89，原96门拒绝，后续分组／导出未到达。修正按实际滚动条与边框差额预留、观察本网格，父版本两反例失败／修后156项、类型及构建通过；原spec／读取器／期待均不改，待新GUI。原300的251封存与关闭unknown保持；准确b61三平台CI日志成功和后继300离线启动失败[分层记录](../tests/integration/acceptance-bulk-enabled-ci-20261021.md)，不互相覆盖。
+
 高频SQL补全新增[INSERT SET新行别名](development/q01-insert-set-row-alias-20261021.md)：复用既有目标字段和MySQL版本能力，保留原替换范围、默认库及局部名边界。类型／10文件342项／构建通过；实库、原生及安装另验，Q01仍部分，不增加完整工作包或发行计数。
 
 单条筛选启停准确c449的[Windows实库GUI及独立读回](../tests/integration/acceptance-query-result-filter-enabled-c449506-20261021.md)已完成：原一整例、62网格附件、两文件读回及严格资源终核通过，249封存终核通过。只修外层控制加载，不改产品或原断言；后继批量按钮另在准确3005511串行验收，不混记。当前操作说明见[排序筛选速查](query-results-guide.md)，暂不发布，完整工作包计数保持。

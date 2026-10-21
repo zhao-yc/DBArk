@@ -1,5 +1,9 @@
 # 筛选草稿批量启用与停用
 
+后继准确3005511的[Windows首次GUI](../../tests/integration/acceptance-query-result-filter-bulk-3005511-20261021.md)已失败停链：147项准备通过，停用草稿后原网格客户区89低于96门，未完成该步ID比较，取消／分组／导出／Python未到达。原251封存及unknown资源事实保持。产品[滚动条空间修正](query-result-filter-scrollbar-20261021.md)已按原几何构造父红新绿，类型／156项／构建通过；同一原GUI须新准确头复验，不放宽门。
+
+准确b61的[完整CI日志记录](../../tests/integration/acceptance-bulk-enabled-ci-20261021.md)已四检查job成功，三平台源码／同次安装legacy均80通过／317条件跳过；本轮未独立审计其成功ZIP。后继300的Windows离线查找夹具启动失败另记，不用b61通过覆盖，不视为批量功能GUI通过。
+
 固定源码提交`b61b19271ebd213fa22e9f65040f70e34e356b7f`已推送main，src树`97162ea158e662ab09b8b25c97ecad1b563c3cef`；[完整CI39546340655](https://github.com/zhao-yc/DBArk/actions/runs/39546340655)已启动，最终结果另记，不沿用c449的CI代替本批。
 
 ## 实际入口
