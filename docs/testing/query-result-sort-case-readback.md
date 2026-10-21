@@ -22,4 +22,8 @@ Linux CI在原类型／Vitest／构建前新增 `python3 -I -B tests/python/test
 
 准确 `49c109ff49663f8896f322d9c85208a1a6aa09fd` 的[Linux CI39518836049](https://github.com/zhao-yc/DBArk/actions/runs/39518836049)、job118957437136已成功。Root读取原日志：Python16项全部通过、0.215秒；另有Vitest591文件11380通过、10平台跳过、222.41秒，类型及构建通过、Vite31.13秒。两个框架分列统计，`-O`失败脱敏及真实CLI只读反例包含在16项内；原生、剪贴板和发布job跳过。
 
-WIN11-TEST固定338a06b的准备回合已通过类型／363定向／新构建及66份封存，Root另派同一338的独立GUI，本增量不切换该队列。尚无真实四行文件读回证据，不读取旧失败的ENOENT文件或profile，不自动启动读回／完整回归；暂不发布。
+WIN11-TEST固定338a06b的准备回合已通过类型／363定向／新构建及66份封存；其GUI已1/1通过，四行原文件和112份封存已返回，见[本批记录](query-result-sort-case-grid.md)。Root另派同一338的独立读回，通过后一次完整Vitest，本增量不切换产品工作树。
+
+准确49脚本由Root静态读取Git原始blob复算：Git blob为 `7940470887003318e3568152f5ec7723eb8bb52c`，7669字节，SHA256为 `9c4ecd332305bc3c72a631c89de71d53c06d5c33e0f65ea1f7f7ebe67265de22`。VM仅允许提取该脚本到新metadata目录，不checkout／merge49；若缺Git对象，仅一次获取准确49对象。读取两个已封存文件的原SHA，不重用旧两行夹具或profile。
+
+当前只确认读回／full请求送达，尚无真实四行独立读回结果；后继bcb1420的Q01源码不进入本批。main整合及新安装／macOS未完成，暂不发布。
