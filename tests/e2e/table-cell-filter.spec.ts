@@ -51,6 +51,8 @@ test('真实表页按单元格原值读取全表：跨页精确小数、空串�
     await step(() => connection.locator('.object-row').getByText('subject', { exact: true }).click());
     const tab = page.locator('.table-tab:visible'), grid = tab.locator('.results-grid'), filter = tab.locator('.filter-panel');
     const ids = () => step(() => grid.locator('[role="row"][aria-rowindex] [role="gridcell"][aria-colindex="2"]').allTextContents());
+    // 新profile的默认页大小不承担本例前提；用正式入口明确选50，仍保留原50行断言。
+    await step(() => tab.getByRole('combobox', { name: zh.table.text021, exact: true }).selectOption('50'));
     await step(() => expect.poll(async () => (await state()).pages.at(-1)?.ids?.length).toBe(50));
     await step(() => tab.getByRole('columnheader', { name: /^id/ }).click());
     await step(() => expect.poll(async () => (await state()).pages.at(-1)?.input.sort).toEqual([{ column: 'id', direction: 'ASC' }]));
