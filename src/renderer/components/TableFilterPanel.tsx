@@ -5,18 +5,22 @@ import { errorMessage } from '../lib';
 import { zh, formatText } from '../locales/zh-CN';
 import { emptyFilterDraft, filterDraftFromRule, filterOperatorLabels, filterRuleFromDraft, filterRuleSummary, replaceFilterRule, type FilterDraft, type FilterMode } from '../tableFilters';
 import { ErrorBox } from './ui';
+import { tableCellFilterZh as cellText } from '../locales/tableCellFilter.zh-CN';
 
 interface Props {
   children?:ReactNode;
+  seed?: FilterDraft;
   columns: string[]; filters: FilterRule[]; mode: FilterMode; disabled: boolean;
   onFiltersChange: (filters: FilterRule[]) => boolean;
   onModeChange: (mode: FilterMode) => boolean;
 }
 
 /** 编辑区只维护待应用条件；父组件确认草稿处理后，才替换已应用规则并重新读取服务器。 */
-export function TableFilterPanel({ columns, filters, mode, disabled, onFiltersChange, onModeChange, children }: Props) {
-  const [draft, setDraft] = useState(() => emptyFilterDraft(columns[0] ?? ''));
+export function TableFilterPanel({ columns, filters, mode, disabled, onFiltersChange, onModeChange, children, seed }: Props) {
+  const [draft, setDraft] = useState(() => seed ? { ...seed } : emptyFilterDraft(columns[0] ?? ''));
   const [editing, setEditing] = useState<number | null>(null); const [error, setError] = useState('');
+  /** 每次显式带入独立草稿；不调用父层应用、不改变现有规则或数据页。 */
+  useEffect(() => { if (seed) { setDraft({ ...seed }); setEditing(null); setError(''); } }, [seed]);
   useEffect(() => { if (!columns.includes(draft.column)) setDraft(current => ({ ...current, column: columns[0] ?? '' })); }, [columns, draft.column]);
   const isSet = draft.operator === 'IN' || draft.operator === 'NOT IN';
   const isRange = draft.operator === 'BETWEEN'; const isNull = draft.operator === 'IS NULL' || draft.operator === 'IS NOT NULL';
@@ -42,6 +46,7 @@ export function TableFilterPanel({ columns, filters, mode, disabled, onFiltersCh
   }
   return <div className="filter-panel expanded-filter-panel">
     {children}
+    {seed && <p className="filter-value-hint">{cellText.staged}</p>}
     <div className="filter-mode-row"><label>{zh.table.filterModeLabel}<select aria-label={zh.table.filterModeLabel} value={mode} disabled={disabled} onChange={event => onModeChange(event.target.value as FilterMode)}><option value="all">{zh.table.filterModeAll}</option><option value="any">{zh.table.filterModeAny}</option></select></label><button disabled={disabled || !filters.length} onClick={() => { if (onFiltersChange([])) cancelEdit(); }}>{zh.common.clearAll}</button></div>
     <form className="filter-rule-form" onSubmit={event => { event.preventDefault(); applyCondition(); }}>
       <div className="filter-inputs"><select aria-label={zh.table.text009} value={draft.column} disabled={disabled} onChange={event => changeDraft({ column: event.target.value })}>{columns.map(column => <option key={column}>{column}</option>)}</select><select aria-label={zh.table.filterOperatorLabel} value={draft.operator} disabled={disabled} onChange={event => changeDraft({ operator: event.target.value as FilterRule['operator'] })}>{Object.entries(filterOperatorLabels).map(([operator, label]) => <option key={operator} value={operator}>{label}</option>)}</select>
