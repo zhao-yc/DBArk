@@ -147,6 +147,7 @@ export function assertTableStructureExportable(document: TableColumnDefinitionDo
 const name = z.string().min(1).max(64).refine(value => !value.includes('\0'), '名称不能包含 NUL');
 const ref = z.string().min(1).max(200);
 export const columnTypePatchSchema = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('json') }).strict(),
   z.object({ kind: z.literal('integer'), type: z.enum(['TINYINT', 'SMALLINT', 'MEDIUMINT', 'INT', 'BIGINT']), unsigned: z.boolean() }).strict(),
   z.object({ kind: z.literal('decimal'), precision: z.number().int().min(1).max(65), scale: z.number().int().min(0).max(38), unsigned: z.boolean() }).strict(),
   z.object({ kind: z.literal('float'), type: z.enum(['FLOAT', 'DOUBLE']), unsigned: z.boolean() }).strict(),

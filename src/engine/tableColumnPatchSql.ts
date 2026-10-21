@@ -27,6 +27,7 @@ function typeSql(type: ColumnTypePatch, noBackslashEscapes: boolean): string {
     case 'bit': return `BIT(${type.length})`;
     case 'string': return `${type.type}(${type.length})`;
     case 'large': return type.type;
+    case 'json': return 'JSON';
     case 'temporal': return type.type + (type.precision === undefined ? '' : `(${type.precision})`);
     case 'enumeration': return `${type.type}(${type.values.map(value => stringLiteral(value, noBackslashEscapes)).join(',')})`;
   }
@@ -154,6 +155,7 @@ export function buildTableColumnPatchSql(document: TableColumnDefinitionDocument
   const mysql57 = document.context.dialect === 'mysql' && version[1] === '5';
   const largeDefaultUnsupported = mysql57 || (document.context.dialect === 'mysql' && version[1] === '8' && version[2] === '0' && Number(version[3]) < 13);
   const patches = validateColumnPatches(input, document.context.dialect === 'mysql' ? 30 : 38);
+  if (mysql57 && Number(version[3]) < 8 && patches.some(patch => patch.kind === 'add' ? patch.type.kind === 'json' : patch.kind === 'alter' && patch.changes.type?.kind === 'json')) throw new Error('当前MySQL版本尚未确认支持原生JSON字段，未发送DDL');
   // 新配对绝不能落到旧属性重述路径而被忽略；须由专用事实/计划/后核闭环处理。
   if (patches.some(patch => patch.kind === 'alter' && Object.hasOwn(patch.changes, 'collation'))) throw new Error('列排序规则必须使用专用受控计划，旧字段计划器未发送DDL');
   if (document.database !== undefined && document.database !== options.database) throw new Error('表定义数据库与目标不一致');

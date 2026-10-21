@@ -2,6 +2,8 @@
 
 ## 当前开发安排（2026-10-21）
 
+高频对象设计补齐[结构化JSON字段创建与识别](development/table-column-json-20261021.md)：共享严格类型、表单、预览及后核验，MariaDB只认完整本列JSON_VALID与实际固定编码；原依赖和默认值限制保持。类型／9文件208项／构建及[六组合真实Engine](../tests/integration/acceptance-column-json-six-20261021.md)通过，12个表场景、78条原连接真实关闭、六随机库精确清理。独立VM只读执行已恢复，JSON窗口及安装／macOS本能力待验；O01及完整工作包计数不增，暂不发布。
+
 新建连接新增[从MySQL／MariaDB URI填入](development/connection-uri-20261021.md)：明确用户、一次百分号解码、IDN／IPv6及端口，拒绝不认识的查询／TLS参数；只填表、清除URI输入、密码默认仅会话，复制来源传输及秘密不带往新目标。完整本机11664项／1平台跳过、最终类型／63定向及构建通过；准确491f81e3的[本机Windows实库整例](../tests/integration/acceptance-connection-uri-491f81e-20261021.md)通过URI拒绝参数／填入及明确保存，并继续原字段悬停／模板／查询／参数／草稿恢复、正常退出与数据定义保持／精确清库。安装／macOS及其它版本另验，C01／C03仍部分，暂不发布。
 
 准确b4a22208的[完整CI回归](development/main-ci-regression-39617503113-20261021.md)发现Linux光标RAM测试15项缺失新增闭包依赖，Windows固定C#编译预检失败。提取正式作用域门并保持原断言后48项光标及19项Worker通过；Windows本机原／诊断版编译均通过，但原runner根因未证，新增固定阶段证据不降低60秒和签名／关闭门。完整单元首轮本机五项Worker构建超时保留，两worker完整复验11664通过／1平台跳过，修正提交b0a3aa0d的CI39621803878已通过Linux类型／609文件11616通过（10跳过）／构建，三平台原生终态继续；不把本机定向通过外推为完整CI或安装成功，暂不发布。

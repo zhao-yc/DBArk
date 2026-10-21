@@ -30,9 +30,9 @@ const evidenceJson = (value: unknown): string => JSON.stringify(value, (_key, it
 const initialProgress = (): TableColumnApplyProgress => ({ phase: 'connecting', ddlSubmitted: false, ddlCompleted: false, definitionVerified: false, outcome: 'not-sent' });
 
 /** 投影使用服务端快照引用及共享能力，不把名称对象当字典，也不泄露物理连接编号。 */
-function views(document: TableColumnDefinitionDocument, refs: Map<string, string>, serverVersion: string, unreliable = new Set<string>()): TableColumnView[] {
+function views(document: TableColumnDefinitionDocument, refs: Map<string, string>, serverVersion: string, unreliable = new Set<string>(), encodings: ColumnEncoding[] = []): TableColumnView[] {
   const byName = new Map([...refs].map(([ref, name]) => [name, ref]));
-  return document.columns.map(column => ({ columnRef: byName.get(column.name) ?? randomUUID(), name: column.name, ordinal: column.ordinal, typeSql: column.type.raw, editableType: editableColumnType(column, document.context), nullable: column.nullable,
+  return document.columns.map(column => ({ columnRef: byName.get(column.name) ?? randomUUID(), name: column.name, ordinal: column.ordinal, typeSql: column.type.raw, editableType: editableColumnType(column, document.context, encodings.find(encoding => encoding.name === column.name)), nullable: column.nullable,
     // 只改变显示投影，不把损失字节的文本伪装成原值；内部可定位 DEFAULT 仍允许显式专用覆盖。
     default: hasUnprovenBinaryDefault(column) ? { kind: 'opaque' as const, sql: column.attributes.find(attribute => attribute.kind === 'default')!.raw, reason: '二进制默认值的原始字节不可证明，请显式选择新默认值或删除默认值' } : column.default,
     comment: column.comment, rawDefinition: column.raw, ...(readColumnOnUpdate(column) === undefined ? {} : { onUpdate: readColumnOnUpdate(column) }), access: { ...columnPatchAccess(column, document.context.dialect, serverVersion), ...(unreliable.has(column.name) ? { onUpdate: { editable: false, reason: '自动更新时间目录与原定义不一致，不能修改该属性' } } : {}) } }));
@@ -112,8 +112,8 @@ function defaultMatches(request: ColumnDefaultPatch, column: TableColumnDefiniti
   return requested === observed;
 }
 /** 受控类型比较容忍服务器省略零小数秒；不忽略 unsigned、枚举大小写或数值精度。 */
-function typeMatches(request: ColumnTypePatch, column: TableColumnDefinition, context: TableDefinitionContext): boolean {
-  const actual = editableColumnType(column, context); if (!actual) return false;
+function typeMatches(request: ColumnTypePatch, column: TableColumnDefinition, context: TableDefinitionContext, encoding?: ColumnEncoding): boolean {
+  const actual = editableColumnType(column, context, encoding); if (!actual) return false;
   const normalize = (value: ColumnTypePatch) => value.kind === 'temporal' && !['DATE', 'YEAR'].includes(value.type) ? { ...value, precision: value.precision ?? 0 } : value;
   return JSON.stringify(normalize(request)) === JSON.stringify(normalize(actual));
 }
@@ -149,10 +149,14 @@ function verifyAfter(preview: LegacyPreview, document: TableColumnDefinitionDocu
     // 跨族类型转换可把未改数字默认值 7 规范为字符串 '7'；仅已知默认语义可比较，不放宽复杂表达式。
     const priorDefault = before?.default;
     const defaultCanonicalized = Boolean(changes.type && priorDefault && (priorDefault.kind === 'none' || priorDefault.kind === 'null' || (priorDefault.kind === 'literal' && priorDefault.introducer === undefined && priorDefault.valueType !== 'binary')) && defaultMatches(priorDefault as ColumnDefaultPatch, after, document.context, afterEncoding));
+    // JSON是明确请求的类型：MariaDB必须同时证明LONGTEXT、固定编码及本列完整JSON_VALID；旁列和其它类型不豁免。
+    const addedJson = patch.kind === 'add' && patch.type.kind === 'json' && typeMatches(patch.type, after, document.context, afterEncoding);
+    const jsonEncoding = addedJson && !!afterEncoding && (afterEncoding.charset === 'utf8mb4' && afterEncoding.collation === 'utf8mb4_bin' || document.context.dialect === 'mysql' && afterEncoding.charset === null && afterEncoding.collation === null);
+    const jsonAttribute = (kind: string): boolean => jsonEncoding && document.context.dialect === 'mariadb' && ['charset', 'collation', 'check'].includes(kind);
     // 新增字段没有旧片段可作证据；出现未请求的生成、自增或其它属性时不能报完整核验成功。
-    if (patch.kind === 'add' && after.attributes.some(attribute => !['nullable', 'default', 'comment'].includes(attribute.kind) && !(attribute.kind === 'on-update' && patch.onUpdate != null) && !addedEncodingAttribute(attribute.kind))) return false;
+    if (patch.kind === 'add' && after.attributes.some(attribute => !['nullable', 'default', 'comment'].includes(attribute.kind) && !(attribute.kind === 'on-update' && patch.onUpdate != null) && !addedEncodingAttribute(attribute.kind) && !jsonAttribute(attribute.kind))) return false;
     if (patch.kind === 'add' && !sameColumnOnUpdate(readColumnOnUpdate(after), patch.onUpdate ?? null, after.type.raw)) return false;
-    if (afterEncoding?.charset && !inheritedEncoding) return false;
+    if (afterEncoding?.charset && !inheritedEncoding && !jsonEncoding) return false;
     if (changes.nullable !== undefined && after.nullable !== changes.nullable) return false;
     if (changes.comment !== undefined && (after.comment ?? '') !== changes.comment) return false;
     // 原字段的未改属性逐项相等；专用改名不会要求重述危险表达式。
@@ -169,7 +173,7 @@ function verifyAfter(preview: LegacyPreview, document: TableColumnDefinitionDocu
       }
       if (!changes.type && !sameFragment(before.type.raw, after.type.raw, document.context)) return false;
     }
-    if (changes.type && !typeMatches(changes.type, after, document.context)) return false;
+    if (changes.type && !typeMatches(changes.type, after, document.context, afterEncoding)) return false;
     if (changes.default && !defaultMatches(changes.default, after, document.context, afterEncoding)) return false;
     if (patch.kind === 'alter' && Object.hasOwn(patch.changes, 'onUpdate') && !sameColumnOnUpdate(readColumnOnUpdate(after), patch.changes.onUpdate, after.type.raw)) return false;
   }
@@ -231,7 +235,7 @@ export class TableColumnPatchTasks {
         const unreliable = await onUpdateCatalog(context, target, document);
         const bytes = Buffer.byteLength(read.source) + Buffer.byteLength(JSON.stringify([...refs])) + Buffer.byteLength(JSON.stringify(read.nullability)) + Buffer.byteLength(JSON.stringify(read.encodings)) + 2048;
         this.capacity(bytes, 'snapshot');
-        baseBytes = bytes; baseColumns = views(document, refs, read.serverVersion, unreliable);
+        baseBytes = bytes; baseColumns = views(document, refs, read.serverVersion, unreliable, read.encodings);
         const collationRead = await readColumnCollationTaskFacts(context, target, read, { columns: refs, indexes: new Map() });
         let collation = collationRead.kind === 'ready' ? collationRead.value : undefined;
         let columns = baseColumns, catalog: TableColumnGetOutput['collationCatalog'];
@@ -348,7 +352,7 @@ export class TableColumnPatchTasks {
             const fresh = await readColumnCollationTaskFacts(context, snapshot.target, after, collationBefore.facts.references);
             if (fresh.kind !== 'ready') throw new Error('列排序规则后核目录不可用');
             const verified = verifyColumnCollationExecution(collationBefore.facts, fresh.value.facts, collationBefore.physical, fresh.value.physical, preview.plan);
-            const columns = await columnCollationTaskViews(views(document, snapshot.refs, after.serverVersion), after, fresh.value, context);
+            const columns = await columnCollationTaskViews(views(document, snapshot.refs, after.serverVersion, new Set(), after.encodings), after, fresh.value, context);
             // Promise完成与await恢复之间仍可能取消；发布后核结果前重查原任务，不能撤销已收到的OK。
             context.checkCancelled();
             if (context.managed.signal?.aborted) throw context.managed.signal.reason ?? new Error('列排序规则后核已取消');
@@ -361,7 +365,7 @@ export class TableColumnPatchTasks {
             const unreliable = await onUpdateCatalog(context, snapshot.target, document);
             const unreliableRequestedTime = preview.patches.some(patch => patch.kind === 'add' ? unreliable.has(patch.name) : patch.kind === 'alter' && Object.hasOwn(patch.changes, 'onUpdate') && unreliable.has(snapshot.refs.get(patch.columnRef)!));
             output.definitionVerified = progress.definitionVerified = after.identity === current.identity && after.normalizedMode === current.normalizedMode && verifyAfter(preview, document, after) && !unreliableRequestedTime;
-            output.after = { ddlHash: hash(after.source), columns: views(document, new Map(preview.plan.finalColumns.map(column => [column.columnRef, column.name])), after.serverVersion, unreliable) };
+            output.after = { ddlHash: hash(after.source), columns: views(document, new Map(preview.plan.finalColumns.map(column => [column.columnRef, column.name])), after.serverVersion, unreliable, after.encodings) };
             if (document.columns.some(hasUnprovenBinaryDefault)) output.warnings.push('二进制默认值仍以不能证明原始字节的文本显示；DDL 已完成，但这些字段的默认值未核验，不能据此自动重建或重复执行。');
             if (!output.definitionVerified) output.verificationError = 'DDL 已完成，但定义变更及未改属性尚未全部核验一致，请核对最新定义；不要重复执行';
           }

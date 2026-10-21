@@ -441,3 +441,23 @@ describe('字段结构短会话与一次性计划', () => {
     expect(await apply(await preview(await get(), { default: { kind: 'literal', valueType: 'binary', value: '00ff' } }))).toMatchObject({ ddlCompleted: true, definitionVerified: false });
   });
 });
+
+
+describe('JSON新增的真实Engine计划和独立后核验',()=>{
+  it.each(['mysql','mariadb'] as const)('%s新增JSON须证明实际类型、编码及校验后才报告核验成功',async dialect=>{
+    serverDialect=dialect;tableEncodingOverride={charset:'utf8mb4',collation:'utf8mb4_general_ci'};columnEncodingOverride={charset:'utf8mb4',collation:'utf8mb4_bin'};
+    const tail=' ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci';source='CREATE TABLE t(id int NOT NULL)'+tail;
+    const snapshot=await get(),patch={kind:'add',clientKey:'json',name:'v',type:{kind:'json'},nullable:true,default:{kind:'none'},comment:'JSON字段',position:{kind:'last'}};
+    const planned=await engine.handle('schema.columns.preview',{snapshotId:snapshot.snapshotId,patches:[patch],taskId:'preview-json',connectionRevision:1});expect(planned.requiredAcknowledgements).toContain('ddl-implicit-commit');expect(sent.some(item=>item.sql.startsWith('ALTER TABLE'))).toBe(false);
+    ddlAfter=(dialect==='mysql'?"CREATE TABLE t(id int NOT NULL,v json DEFAULT NULL COMMENT 'JSON字段')":"CREATE TABLE t(id int NOT NULL,v longtext CHARACTER SET utf8mb4 COLLATE utf8mb4_bin DEFAULT NULL COMMENT 'JSON字段' CHECK (json_valid(v)))")+tail;
+    const output:TableColumnApplyOutput=await apply(planned);expect(output).toMatchObject({ddlCompleted:true,definitionVerified:true});expect(output.after!.columns.find(column=>column.name==='v')!.editableType).toEqual({kind:'json'});expect(sent.filter(item=>item.sql.startsWith('ALTER TABLE'))).toHaveLength(1);
+  });
+  it.each(['缺少校验','错误字段','额外OR表达式','错误目录编码'])('MariaDB JSON后核验拒绝%s，不把DDL已完成改成可重放',async variant=>{
+    serverDialect='mariadb';tableEncodingOverride={charset:'utf8mb4',collation:'utf8mb4_general_ci'};columnEncodingOverride={charset:'utf8mb4',collation:variant==='错误目录编码'?'utf8mb4_general_ci':'utf8mb4_bin'};
+    const tail=' ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci';source='CREATE TABLE t(id int NOT NULL)'+tail;const snapshot=await get();
+    const planned=await engine.handle('schema.columns.preview',{snapshotId:snapshot.snapshotId,patches:[{kind:'add',clientKey:'json',name:'v',type:{kind:'json'},nullable:true,default:{kind:'none'},comment:'',position:{kind:'last'}}],taskId:'preview-json-negative',connectionRevision:1});
+    const check=variant==='缺少校验'?'':variant==='错误字段'?' CHECK (json_valid(id))':variant==='额外OR表达式'?' CHECK (json_valid(v) OR 1)':' CHECK (json_valid(v))';
+    ddlAfter='CREATE TABLE t(id int NOT NULL,v longtext CHARACTER SET utf8mb4 COLLATE utf8mb4_bin DEFAULT NULL'+check+')'+tail;
+    expect(await apply(planned)).toMatchObject({ddlCompleted:true,definitionVerified:false});await expect(apply(planned,'repeat-json')).rejects.toThrow('已使用');expect(sent.filter(item=>item.sql.startsWith('ALTER TABLE'))).toHaveLength(1);
+  });
+});

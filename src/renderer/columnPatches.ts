@@ -88,6 +88,7 @@ export function editableColumnDefault(value: ReadColumnDefault): ColumnDefaultPa
 export function defaultColumnType(kind: ColumnTypePatch['kind']): ColumnTypePatch {
   switch (kind) {
     case 'integer': return { kind, type: 'INT', unsigned: false }; case 'decimal': return { kind, precision: 10, scale: 0, unsigned: false }; case 'float': return { kind, type: 'FLOAT', unsigned: false };
+    case 'json': return { kind };
     case 'bit': return { kind, length: 1 }; case 'string': return { kind, type: 'VARCHAR', length: 255 }; case 'large': return { kind, type: 'TEXT' }; case 'temporal': return { kind, type: 'DATETIME' }; case 'enumeration': return { kind, type: 'ENUM', values: [''] };
   }
 }
@@ -95,6 +96,7 @@ export function defaultColumnType(kind: ColumnTypePatch['kind']): ColumnTypePatc
 export function columnTypeLabel(type: ColumnTypePatch): string {
   switch (type.kind) {
     case 'integer': case 'float': return type.type + (type.unsigned ? ' UNSIGNED' : ''); case 'decimal': return `DECIMAL(${type.precision},${type.scale})${type.unsigned ? ' UNSIGNED' : ''}`;
+    case 'json': return 'JSON';
     case 'bit': return `BIT(${type.length})`; case 'string': return `${type.type}(${type.length})`; case 'large': return type.type; case 'temporal': return type.type + (type.precision === undefined ? '' : `(${type.precision})`); case 'enumeration': return `${type.type}(${type.values.map(value => JSON.stringify(value)).join(',')})`;
   }
 }

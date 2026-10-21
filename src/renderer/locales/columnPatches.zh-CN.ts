@@ -21,6 +21,7 @@ export const columnPatchZh = {
   ackDependencies: '我已经核对外部视图、触发器、例程及应用 SQL 的字段名依赖，系统不能证明这些依赖完整。',
   ackConversion: '我确认类型转换或收紧可空约束可能失败、产生警告或改变现有数据，不会自动修正原数据。',
   unsupportedAck: '当前版本不支持此风险确认：{0}。本次计划不能执行，请使用支持该风险的版本重新预览。',
+  json: 'JSON', jsonHint: 'MySQL使用原生JSON；MariaDB使用带JSON_VALID校验的utf8mb4_bin LONGTEXT。默认值仅支持无默认值或可空字段的SQL NULL；已有约束依赖仍按原规则保护。',
   integer: '整数', decimal: 'DECIMAL', float: 'FLOAT / DOUBLE', bit: 'BIT', string: 'CHAR / VARCHAR / BINARY', large: 'TEXT / BLOB', temporal: '日期与时间', enumeration: 'ENUM / SET',
   readonly: '该属性只读', deleted: '将删除', added: '将新增', changed: '将修改', unchanged: '未修改', deleteRisk: '删除将永久移除该字段数据，DDL不能通过事务回滚恢复；需核对外部依赖。',
   discard: '重新读取或关闭将放弃尚未应用的字段差异，是否继续？', resetUnknown: '先核对服务器实际定义；重新读取不会重放旧 DDL。', targetChanged: '目标或连接配置已变化，本次窗口不能继续预览或执行，请关闭后重新打开。', previewMismatch: '预览目标或原定义与当前快照不一致，未应用任何 DDL。', expired: '快照或预览已过期，请重新读取并生成预览。',

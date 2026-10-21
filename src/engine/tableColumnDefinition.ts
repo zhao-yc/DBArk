@@ -226,13 +226,27 @@ export function tableDefinitionTokens(source: string, context: TableDefinitionCo
   return tokenize(source, context);
 }
 
+/** MariaDB的JSON别名须完整保有二进制排序规则和本列JSON_VALID校验；不从LONGTEXT或备注猜类型。 */
+function mariaJsonAlias(column: TableColumnDefinition, context: TableDefinitionContext, encoding?: { charset: string | null; collation: string | null }): boolean {
+  if (context.dialect !== 'mariadb' || column.type.raw.trim().toUpperCase() !== 'LONGTEXT') return false;
+  const charset = column.attributes.find(attribute => attribute.kind === 'charset'), collation = column.attributes.find(attribute => attribute.kind === 'collation'), check = column.attributes.find(attribute => attribute.kind === 'check');
+  if (!check) return false;
+  if (encoding && (encoding.charset !== 'utf8mb4' || encoding.collation !== 'utf8mb4_bin')) return false;
+  if ((!charset || !collation) && !encoding) return false;
+  const chars = tableDefinitionTokens(charset?.raw ?? 'CHARACTER SET utf8mb4', context).map(token => token.value.toUpperCase()).filter(value => value !== '='), coll = tableDefinitionTokens(collation?.raw ?? 'COLLATE utf8mb4_bin', context).map(token => token.value.toUpperCase()).filter(value => value !== '=');
+  if (chars.join(' ') !== 'CHARACTER SET UTF8MB4' && chars.join(' ') !== 'CHARSET UTF8MB4' || coll.join(' ') !== 'COLLATE UTF8MB4_BIN') return false;
+  const tokens = tableDefinitionTokens(check.raw, context);
+  return tokens.length === 7 && tokens[0].kind === 'word' && tokens[0].value.toUpperCase() === 'CHECK' && tokens[1].value === '(' && tokens[2].kind === 'word' && tokens[2].value.toUpperCase() === 'JSON_VALID' && tokens[3].value === '(' && ['word', 'identifier'].includes(tokens[4].kind) && tokens[4].value === column.name && tokens[5].value === ')' && tokens[6].value === ')';
+}
+
 /** 只投影能由受控编辑模型完整表示的常用类型，不把未知修饰符或枚举值大小写抹掉。 */
-export function editableColumnType(column: TableColumnDefinition, context: TableDefinitionContext): ColumnTypePatch | undefined {
+export function editableColumnType(column: TableColumnDefinition, context: TableDefinitionContext, encoding?: { charset: string | null; collation: string | null }): ColumnTypePatch | undefined {
   const tokens = tableDefinitionTokens(column.type.raw, context), type = tokens[0]?.value.toUpperCase();
   const text = tokens.map(token => token.kind === 'word' ? token.value.toUpperCase() : token.value).join('');
   let value: unknown;
   let match: RegExpExecArray | null;
-  if ((match = /^(TINYINT|SMALLINT|MEDIUMINT|INT|INTEGER|BIGINT)(?:\(\d+\))?(UNSIGNED)?$/.exec(text))) value = { kind: 'integer', type: match[1] === 'INTEGER' ? 'INT' : match[1], unsigned: Boolean(match[2]) };
+  if (context.dialect === 'mysql' && text === 'JSON' || mariaJsonAlias(column, context, encoding)) value = { kind: 'json' };
+  else if ((match = /^(TINYINT|SMALLINT|MEDIUMINT|INT|INTEGER|BIGINT)(?:\(\d+\))?(UNSIGNED)?$/.exec(text))) value = { kind: 'integer', type: match[1] === 'INTEGER' ? 'INT' : match[1], unsigned: Boolean(match[2]) };
   else if ((match = /^(?:DECIMAL|NUMERIC)\((\d+),(\d+)\)(UNSIGNED)?$/.exec(text))) value = { kind: 'decimal', precision: Number(match[1]), scale: Number(match[2]), unsigned: Boolean(match[3]) };
   else if ((match = /^(FLOAT|DOUBLE)(UNSIGNED)?$/.exec(text))) value = { kind: 'float', type: match[1], unsigned: Boolean(match[2]) };
   else if ((match = /^BIT(?:\((\d+)\))?$/.exec(text))) value = { kind: 'bit', length: Number(match[1] ?? 1) };
