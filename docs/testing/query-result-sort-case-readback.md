@@ -28,12 +28,18 @@ WIN11-TEST固定338a06b的准备回合已通过类型／363定向／新构建及
 
 ## 首次Windows读回失败与兼容修正
 
-固定338产品源码的首次独立读回已失败：准确49脚本的Python16172退出1，原正文为 `{"passed": false, "error": "文件打开时身份已变化"}`，停在85行的lstat／fstat快照比较，尚未解析CSV或JSON。完整Vitest依门未启动。停链只读终核确认原两文件身份、长度和SHA不变，源码574／测试1306／构建109及Git、六套旧封存不变，本例进程身份终核零匹配。最终报告及新封存摘要待另行记录。
+固定338产品源码的首次独立读回已失败：准确49脚本的Python16172退出1，原正文片段为 `{"passed": false, "error": "文件打开时身份已变化"}`，停在85行的lstat／fstat快照比较，尚未解析CSV或JSON。完整Vitest依门未启动。Python原.NET句柄记录创建时间为北京时间2026-10-21 08:53:43.5240852、0.5945962秒；ready及首CIM先通过。控制器17984／launcher4732／监督器15680均exit1，观察器16040 exit0；七个本例PID身份终核零匹配。原两文件身份、383／827字节和SHA不变，源码574／测试1306／构建109、Git及六套旧封存不变，RAM三项保留，63份新封存通过。
 
-监督器转发stdout后混入两行 `System.Threading.Tasks.VoidTaskResult`；该原通道保留，不能清洗后冒称原生纯JSON。准确Python的PID及创建时间已在原.NET句柄退出前保存。原失败没有记录两组stat tuple，具体不等字段仍未知，不能用后继实验回填。
+监督器转发stdout后混入两行 `System.Threading.Tasks.VoidTaskResult`，没有独立纯Python stdout原文件；包装器executable字段还误沿用Node，实际CIM身份为PowerShell。这些原记录保留，不能清洗或回改。原失败没有记录两组stat tuple，具体不等字段仍未知，不能用后继实验回填。
+
+原件均位于 `outputs/query-result-sort-case-readback-338a06b-vm-20261021`，以下来自VM回报，Root未下载复算：`reader-original.json`（混合原通道）SHA256为 `46c6fdc44e4729fb16baf36e94d55d344e27fe5ed5e71ad7302c0ee69699f09e`；`readback-full-report.json` 为 `19da09707cf6a96c0e62a261dc7ded2cf0dcd5608daf42cf3da97046546a23f5`；`SHA256SUMS.txt` 为 `c7731790d115227c5c852a7f429581f7645b66c21f5937218e1b060971064694`。
 
 [CPython官方问题157671](https://github.com/python/cpython/issues/157671)记录Windows部分版本路径stat将ctime映射为创建时间，而fstat保留元数据变更时间；[Python文档](https://docs.python.org/3.14/library/os.html#os.stat_result.st_birthtime_ns)明确提供birthtime创建时间。此处据此修正跨接口比较，不声称已确诊旧失败的具体字段：Windows具备birthtime时，跨路径／句柄以设备、inode、大小、mtime和birthtime绑定；旧Windows及POSIX保持原时间语义。原路径ctime与原句柄ctime分别在各自接口内前后完整核对，birthtime、普通文件／重解析属性、原SHA及完整值检查也保留。
 
-新增5项Python反例，覆盖合成Windows跨接口ctime差异、旧版本无birthtime、真实有界读取的合成句柄差异、句柄ctime／birthtime／类型／重解析属性漂移，以及路径ctime漂移。总21项待CI与WIN11-TEST验证；未在开发机运行。后继应提取新准确脚本及测试到新metadata代次，产品工作树仍为338；先合成检查，通过后另一次真实四行读回，再依门完整Vitest。旧失败及所有旧封存保持。
+新增5项Python反例，覆盖合成Windows跨接口ctime差异、旧版本无birthtime、真实有界读取的合成句柄差异、句柄ctime／birthtime／类型／重解析属性漂移，以及路径ctime漂移。总21项Linux已通过，WIN11-TEST待验证；未在开发机运行。后继提取新准确脚本及测试到新metadata代次，产品工作树仍为338；先合成检查，通过后另一次真实四行读回，再依门完整Vitest。旧失败及所有旧封存保持。
+
+修正提交 `39e9b247d4fcdf670dfe2ca5a4a07ea9538889ed`；Root只读取Git原始Buffer复算来源，不执行Python：脚本blob `0912a2271330d84d6fe1bb315165e907cfbfc8d6`、8589字节、SHA256 `7b927e233725cb6a1be4c7bd81813df1f169c17a661176116c35488a32f0b7a0`；测试blob `521c55e8d3ee5349c9b20ea1cea5e17431af748c`、16430字节、SHA256 `466dd2dad8dfb953d859555d8b77c18d55c8d05a34e6c06105e2dcbcb32dc82a`。候选Linux CI为39525029394；后继VM不checkout该提交的Q01代码。
+
+准确39的[Linux CI39525029394](https://github.com/zhao-yc/DBArk/actions/runs/39525029394)、job118977538869已成功。Root读取原日志：Python21项通过、0.275秒；另有Vitest592文件11419通过／10跳过、235.38秒，类型及构建通过、Vite33.67秒。全部新增Windows语义合成反例和真实临时CLI反例包含在Python21项内；Linux运行仍不是Windows实件读回，后续Q01运行码也未被338的GUI验收覆盖。原生、剪贴板及发布job跳过。
 
 后继bcb1420／0757803的Q01源码不进入本批。main整合及新安装／macOS未完成，暂不发布。
