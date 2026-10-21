@@ -20,4 +20,6 @@ stdout只输出结构化校验报告，校验成功退出0、校验失败退出1
 
 Linux CI在原类型／Vitest／构建前新增 `python3 -I -B tests/python/test_query_result_sort_case_readback.py`，不安装依赖，不更改原生平台或发行门。Python16项与Vitest统计分列，不合并为同框架数量。
 
-当前尚待独立CI。WIN11-TEST仍执行固定338a06b的原准备回合，本增量不切换该队列。尚无真实四行文件读回证据，不读取旧失败的ENOENT文件或profile，不自动启动GUI／完整回归；暂不发布。
+准确 `49c109ff49663f8896f322d9c85208a1a6aa09fd` 的[Linux CI39518836049](https://github.com/zhao-yc/DBArk/actions/runs/39518836049)、job118957437136已成功。Root读取原日志：Python16项全部通过、0.215秒；另有Vitest591文件11380通过、10平台跳过、222.41秒，类型及构建通过、Vite31.13秒。两个框架分列统计，`-O`失败脱敏及真实CLI只读反例包含在16项内；原生、剪贴板和发布job跳过。
+
+WIN11-TEST仍执行固定338a06b的原准备回合，本增量不切换该队列。尚无真实四行文件读回证据，不读取旧失败的ENOENT文件或profile，不自动启动GUI／完整回归；暂不发布。
