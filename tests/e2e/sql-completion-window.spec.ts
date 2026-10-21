@@ -70,6 +70,8 @@ test('离线集合和帧边界：实际Worker停止，合法分支窗口仍可�
 });
 
 test.describe('200隔离实库：窗口字段接受后执行',()=>{
+  // 本轮实库窗口复用既有严格收尾；退出未确认时保留原应用和隔离库，不进入旧自动清理路径。
+  test.use({preserveOnUnconfirmedExit:true});
   test.skip(!enabled,'需要统筹显式启用200隔离数据库');
   test('按服务器能力验证OVER和命名WINDOW，MySQL5.7明确跳过',async({},info)=>{
     test.setTimeout(150000);await isolatedDatabase(async({observer,database})=>{
