@@ -1,5 +1,5 @@
 import { mkdir,readFile,stat } from 'node:fs/promises';
-import { relative,isAbsolute } from 'node:path';
+import { relative,isAbsolute,join } from 'node:path';
 import mysql from 'mysql2/promise';
 import type { TestInfo } from '@playwright/test';
 import { test,expect,dataDir,ownedDesktopResources,retainOwnedDesktopResources,confirmOwnedDesktopExit,pageErrors } from './desktop-fixture';
@@ -17,11 +17,11 @@ import { queryResultSelectedFilterZh as selectedFilterText } from '../../src/ren
 import { queryResultStatisticsZh as statisticsText } from '../../src/renderer/locales/queryResultStatistics.zh-CN';
 
 /** 仅显式门和Root的RAM绑定后注册；可选命名方案沿用原native、owner和失败保留规则。 */
-export function registerQueryResultOrganizeUi(binding:QueryResultColumnsUiTarget,options?:{presets?:true;selectedFilter?:true;statistics?:true}):void {
+export function registerQueryResultOrganizeUi(binding:QueryResultColumnsUiTarget,options?:{presets?:true;selectedFilter?:true;statistics?:true;excel?:true}):void {
  const cases=new Map<TestInfo,{life:QueryResultColumnsUiLifetime;observer?:mysql.Connection;native?:any;stream?:any}>();let halted=false;
  test.use({preserveOnUnconfirmedExit:true,trace:'off',screenshot:'off',video:'off'});test.setTimeout(120000);test.describe.configure({retries:0});
  test.afterEach(({},info)=>{const current=cases.get(info);if(!current){halted=true;retainOwnedDesktopResources(info);throw Error('结果列未建立本例owner，保留现场');}try{current.life.afterEach();cases.delete(info);}catch(reason){halted=true;throw reason;}});
- test(options?.statistics?'准确13384真实App列统计精确整数小数、勾选范围及CSV／JSON范围一致':options?.selectedFilter?'准确13384真实App勾选精确值筛选草稿、保留多列排序及CSV／JSON范围一致':'准确13384真实App多列排序与文本、区间、多值及分组筛选、空结果及CSV／JSON范围一致',async({trace,screenshot,video},info)=>{
+ test(options?.excel?'准确13384真实App整理后勾选精确行列的CSV／XLSX导出':options?.statistics?'准确13384真实App列统计精确整数小数、勾选范围及CSV／JSON范围一致':options?.selectedFilter?'准确13384真实App勾选精确值筛选草稿、保留多列排序及CSV／JSON范围一致':'准确13384真实App多列排序与文本、区间、多值及分组筛选、空结果及CSV／JSON范围一致',async({trace,screenshot,video},info)=>{
   if(halted)throw Error('结果列前例已保留资源，停止后续用例');
   const captured=ownedDesktopResources(info),page=captured.page,application=captured.application,directory=dataDir;
   const life=new QueryResultColumnsUiLifetime({check(allowClosed){binding.assertCurrent();const now=ownedDesktopResources(info);if(now.page!==page||now.application!==application||!allowClosed&&now.closed)throw Error('结果列原owner已变化');},closed:()=>ownedDesktopResources(info).closed,retain:()=>{halted=true;retainOwnedDesktopResources(info);},async exit(){life.check();await application.evaluate(readQueryResultColumnsAudit);life.check();await application.evaluate(guardQueryResultColumnsExitAnswers);life.check();await confirmOwnedDesktopExit(info);}},info as TestInfo&{_startWallTime?:number});
@@ -46,7 +46,7 @@ export function registerQueryResultOrganizeUi(binding:QueryResultColumnsUiTarget
    const tab=page.locator('.query-tab:visible');await observe(()=>tab.locator('.monaco-editor').getByRole('textbox').focus());await observe(()=>page.keyboard.press(`${process.platform==='darwin'?'Meta':'Control'}+A`));await observe(()=>page.keyboard.insertText(queryResultColumnsSql));
    let tabId='';await observe(()=>expect.poll(async()=>{const settings=await observe(()=>page.evaluate(()=>window.dbark.invoke('settings.get',{})));const own=settings.tabs.find(tab=>tab.id===settings.activeTabId);if(own?.kind==='query'&&own.connectionId===profile!.id&&own.sql===queryResultColumnsSql){tabId=own.id;return true;}return false;}).toBe(true));
    const ownerWindow=await observe(()=>application.browserWindow(page));const senderId=await observe(()=>ownerWindow.evaluate(window=>window.webContents.id));await observe(()=>ownerWindow.dispose());
-   await observe(()=>application.evaluate(installQueryResultColumnsAudit,{senderId,profileId:profile!.id,tabId,sql:queryResultColumnsSql,deadline:(info as TestInfo&{_startWallTime?:number})._startWallTime!+120000,...(options?.presets?{presets:true as const}:{})}));armed=true;
+   await observe(()=>application.evaluate(installQueryResultColumnsAudit,{senderId,profileId:profile!.id,tabId,sql:queryResultColumnsSql,deadline:(info as TestInfo&{_startWallTime?:number})._startWallTime!+120000,...(options?.presets?{presets:true as const}:{}),...(options?.excel?{excel:true as const}:{})}));armed=true;
    await observe(()=>tab.getByRole('button',{name:zh.query.text011,exact:true}).click());await observe(()=>expect(tab.getByRole('button',{name:zh.common.stop,exact:true})).toBeDisabled({timeout:20000}));await observe(()=>expect(tab.locator('.error-box')).toHaveCount(0));
    const before=await observe(()=>page.evaluate(async()=>(await window.dbark.invoke('history.list',{})).map(row=>row.id).sort()));expect((await observe(()=>application.evaluate(readQueryResultColumnsAudit))).queries).toBe(1);
    /** 只读真实DOM表头；数据列的原名与小号类型标签分离，不取内部网格props代替渲染验收。 */
@@ -280,14 +280,20 @@ export function registerQueryResultOrganizeUi(binding:QueryResultColumnsUiTarget
    // 合成copy事件只读取本页DataTransfer，不执行复制按钮或覆盖系统剪贴板。
    const cell=grid.locator('[role="row"][aria-rowindex="2"] [role="gridcell"][aria-colindex="3"]');await observe(()=>cell.click());
    const copied=await observe(()=>cell.evaluate(cell=>{const data=new DataTransfer(),event=new ClipboardEvent('copy',{bubbles:true,cancelable:true,clipboardData:data});if(event.clipboardData!==data)throw Error('合成ClipboardEvent未保留RAM数据');cell.dispatchEvent(event);return {prevented:event.defaultPrevented,typed:data.getData('application/x-dbark-cells'),text:data.getData('text/plain')};}));verifyQueryResultColumnsCopy(copied);
-   for(const format of ['csv','json'] as const){
+   for(const format of (options?.excel?['csv','xlsx']:['csv','json']) as readonly ('csv'|'json'|'xlsx')[]){
+    const output=format==='xlsx'?join(binding.target.output,'visible-selected.xlsx'):binding.target[format];
     await observe(()=>selected.click());const dialog=page.getByRole('dialog',{name:zh.resultExport.selectedTitle,exact:true});
-    await observe(()=>expect(dialog).toContainText('勾选的 2 行'));await observe(()=>dialog.getByRole('combobox',{name:zh.resultExport.format,exact:true}).selectOption(format));await observe(()=>dialog.getByRole('combobox',{name:zh.resultExport.encoding,exact:true}).selectOption('utf8'));
-    await observe(()=>application.evaluate(answerQueryResultColumnsSave,{senderId,path:binding.target[format]}));await observe(()=>dialog.locator('.file-picker').click());await observe(()=>dialog.getByRole('button',{name:zh.resultExport.start,exact:true}).click());await observe(()=>expect(dialog.locator('.success-box')).toHaveText('已导出 2 行已返回结果。'));
-    if((await observe(()=>stat(binding.target[format]))).size>32768)throw Error('本例输出超出常量结果读取预算');verifyQueryResultColumnsFile(format,await observe(()=>readFile(binding.target[format])));await observe(()=>dialog.getByRole('button',{name:zh.common.done,exact:true}).click());
+    await observe(()=>expect(dialog).toContainText('勾选的 2 行'));await observe(()=>dialog.getByRole('combobox',{name:zh.resultExport.format,exact:true}).selectOption(format));
+    if(format==='xlsx'){await observe(()=>expect(dialog.getByRole('combobox',{name:zh.resultExport.encoding,exact:true})).toBeDisabled());await observe(()=>expect(dialog.getByRole('combobox',{name:zh.resultExport.encoding,exact:true})).toHaveValue('utf8'));}
+    else await observe(()=>dialog.getByRole('combobox',{name:zh.resultExport.encoding,exact:true}).selectOption('utf8'));
+    await observe(()=>application.evaluate(answerQueryResultColumnsSave,{senderId,path:output}));await observe(()=>dialog.locator('.file-picker').click());await observe(()=>dialog.getByRole('button',{name:zh.resultExport.start,exact:true}).click());await observe(()=>expect(dialog.locator('.success-box')).toHaveText('已导出 2 行已返回结果。'));
+    if((await observe(()=>stat(output))).size>32768)throw Error('本例输出超出常量结果读取预算');
+    if(format!=='xlsx')verifyQueryResultColumnsFile(format,await observe(()=>readFile(output)));
+    else{const bytes=await observe(()=>readFile(output));expect(bytes.subarray(0,4).toString('hex')).toBe('504b0304');}
+    await observe(()=>dialog.getByRole('button',{name:zh.common.done,exact:true}).click());
     if(format==='csv'){await observe(()=>expect(selected).toBeDisabled());for(const index of [3,2])await observe(()=>grid.locator('[role="row"][aria-rowindex="'+index+'"]').getByRole('checkbox').check());}
    }
-   expect(await observe(()=>page.evaluate(async()=>(await window.dbark.invoke('history.list',{})).map(row=>row.id).sort()))).toEqual(before);const audit=await observe(()=>application.evaluate(readQueryResultColumnsAudit));expect(audit).toEqual({queries:1,exports:['csv','json'],pending:0,revision:0,...(options?.presets?{presets:{list:3,save:2,rename:1,read:1,delete:1,total:8}}:{})});if(options?.presets)await observe(()=>info.attach('命名方案实际IPC计数',{body:JSON.stringify(audit.presets),contentType:'application/json'}));expect(pageErrors).toEqual([]);
+   expect(await observe(()=>page.evaluate(async()=>(await window.dbark.invoke('history.list',{})).map(row=>row.id).sort()))).toEqual(before);const audit=await observe(()=>application.evaluate(readQueryResultColumnsAudit));expect(audit).toEqual({queries:1,exports:options?.excel?['csv','xlsx']:['csv','json'],pending:0,revision:0,...(options?.presets?{presets:{list:3,save:2,rename:1,read:1,delete:1,total:8}}:{})});if(options?.presets)await observe(()=>info.attach('命名方案实际IPC计数',{body:JSON.stringify(audit.presets),contentType:'application/json'}));if(options?.excel)await observe(()=>info.attach('结果Excel实际IPC计数',{body:JSON.stringify(audit),contentType:'application/json'}));expect(pageErrors).toEqual([]);
    await life.finish(()=>page.evaluate(()=>window.dbark.invoke('tasks.list',{})),()=>closeQueryResultColumnsObserver(current.observer! as mysql.Connection&{connection?:unknown},current.native,current.stream,()=>life.check(true),native=>closeMysqlConnection(native,true,false,life.remaining(1000))));
   }catch(reason){life.preserve();throw reason;}finally{life.endBody();}
  });

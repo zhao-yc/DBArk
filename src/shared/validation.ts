@@ -26,6 +26,8 @@ import{localSqlPageNextSchema,localSqlPageReleaseSchema}from'./localSqlPages';
 import { connectionFileRequirements, connectionImportApplySchema, connectionImportReviewSchema, connectionTransferLimits } from './connectionTransfer';
 import type { Command, ResultExportData } from './contracts';
 import { validateResultExportData } from './resultExport';
+import { assertResultExcelData } from './resultExcel';
+import { resultExcelZh } from './resultExcel.zh-CN';
 import { assertResultSqlData, resultSqlTargetSchema, resultSqlSelectionSchema } from './resultSql';
 import { resultSqlZh } from './resultSql.zh-CN';
 import { FILTER_LIMITS, validateFilterGroup, assertFilterGroupInput, filterGroupSchema, filterRuleSchema as filterRule, sortRulesSchema } from './filtering';
@@ -258,10 +260,15 @@ export const commandSchemas: Record<Command, z.ZodType> = {
   'files.exportColumns': z.object({ ...target, taskId: id }).strict(),
   'files.releaseExportColumns': z.object({ catalogId: id }).strict(),
   'files.export': z.object({ ...fileOptions, includeStructure: z.boolean(), includeData: z.boolean(), csvDelimiter: z.enum(csvExportDelimiters).optional(), csvSelection: z.object({ catalogId: id, columns: z.array(z.string().min(1).max(64).refine(value => !value.includes('\0'))).min(1).max(csvExportFieldLimits.columns).refine(value => new Set(value).size === value.length, 'CSV字段不能重复') }).strict().optional() }).strict().refine(value => !value.csvSelection || value.format === 'csv' && value.includeData, '字段选择只适用于CSV数据导出').refine(value => !Object.hasOwn(value, 'csvDelimiter') || value.format === 'csv' && value.csvDelimiter !== undefined, '分隔符仅适用于CSV导出，且必须为逗号、分号或Tab'),
-  'files.exportResult': z.object({ fileToken: id, format: z.enum(['csv','json','sql']), encoding: z.enum(['utf8','utf16le','gb18030']), csvDelimiter: z.enum(csvExportDelimiters).optional(), taskId: id, result: resultExportData, sql: resultSqlSelectionSchema.optional() }).strict().superRefine((value, context) => {
+  'files.exportResult': z.object({ fileToken: id, format: z.enum(['csv','json','sql','xlsx']), encoding: z.enum(['utf8','utf16le','gb18030']), csvDelimiter: z.enum(csvExportDelimiters).optional(), taskId: id, result: resultExportData, sql: resultSqlSelectionSchema.optional() }).strict().superRefine((value, context) => {
     if (Object.hasOwn(value, 'csvDelimiter') && (value.format !== 'csv' || value.csvDelimiter === undefined)) context.addIssue({ code: 'custom', message: '分隔符仅适用于CSV导出，且必须为逗号、分号或Tab' });
     try { if (value.format === 'sql') { if (!value.sql) throw Error(resultSqlZh.previewRequired); assertResultSqlData(value.result, value.sql.target); if (value.sql.confirmation !== `${value.sql.target.database}.${value.sql.target.table}`) throw Error(resultSqlZh.confirmationMismatch); } else if (value.sql !== undefined) throw Error(resultSqlZh.nonSql); }
     catch (error) { context.addIssue({ code: 'custom', message: error instanceof Error ? error.message : 'INSERT结果无效' }); }
+    if (value.format === 'xlsx') {
+      if (value.encoding !== 'utf8') context.addIssue({ code: 'custom', message: resultExcelZh.utf8Only });
+      if (Object.hasOwn(value, 'sql')) context.addIssue({ code: 'custom', message: resultExcelZh.invalid });
+      try { assertResultExcelData(value.result); } catch (error) { context.addIssue({ code: 'custom', message: error instanceof Error ? error.message : resultExcelZh.invalid }); }
+    }
   }),
   'files.previewResultSql': z.object({ result: resultExportData, target: resultSqlTargetSchema, encoding: z.enum(['utf8','utf16le','gb18030']) }).strict().superRefine((value, context) => { try { assertResultSqlData(value.result, value.target); } catch (error) { context.addIssue({ code: 'custom', message: error instanceof Error ? error.message : 'INSERT结果无效' }); } }),
   'files.releaseResultSql': z.object({ previewId: z.string().uuid() }).strict(),

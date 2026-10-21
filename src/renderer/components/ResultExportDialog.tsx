@@ -4,6 +4,8 @@ import type { FileChoice, ResultExportData, ResultExportOptions } from '../../sh
 import { resultExportColumns } from '../../shared/resultExport';
 import { assertResultSqlData, type ResultSqlPreview, type ResultSqlTarget } from '../../shared/resultSql';
 import { resultSqlZh as sqlText } from '../../shared/resultSql.zh-CN';
+import { assertResultExcelData } from '../../shared/resultExcel';
+import { resultExcelZh as excelText } from '../../shared/resultExcel.zh-CN';
 import { zh, formatText } from '../locales/zh-CN';
 import { invoke, errorMessage, uid } from '../lib';
 import { resultExportData } from '../resultExport';
@@ -22,6 +24,8 @@ export function ResultExportDialog({ result, tabId, selected = false, scope = 'q
   const data = useMemo(() => resultExportData(fixed.current), []), columns = useMemo(() => resultExportColumns(data.columns), [data]);
   const sample = useMemo(() => data.rows.slice(0, 20), [data]);
   const [format, setFormat] = useState<ResultExportOptions['format']>('csv'), [encoding, setEncoding] = useState<ResultExportOptions['encoding']>('utf8');
+  // 完整快照先准入，不能只检查20行示例后为坏值打开文件保存窗口。
+  const excelError = useMemo(() => { if (format !== 'xlsx') return ''; try { assertResultExcelData(data); return ''; } catch (reason) { return errorMessage(reason); } }, [format, data]);
   const [csvDelimiter, setCsvDelimiter] = useState<CsvExportDelimiter>(',');
   const [target, setTarget] = useState<ResultSqlTarget>(() => ({ database: '', table: '', columns: data.columns.map(column => ({ key: column.key, name: '' })) }));
   const [preview, setPreview] = useState<ResultSqlPreview | null>(null), previewRef = useRef<ResultSqlPreview | null>(null);
@@ -77,6 +81,7 @@ export function ResultExportDialog({ result, tabId, selected = false, scope = 'q
   /** 原生保存选择与准确预览绑定，映射变更期间返回的旧选择不能发布。 */
   async function chooseFile(ticket: number) {
     if (!current(ticket) || busyRef.current || pickRef.current || config.current.format === 'sql' && !validPreview()) return;
+    if (config.current.format === 'xlsx') { try { assertResultExcelData(data); } catch (reason) { report(reason); return; } }
     ticket = ++revision.current;
     const chosen = config.current, lease = previewRef.current; pickRef.current = true; setPicking(true);
     if (chosen.format === 'sql') { fileRef.current = null; setFile(null); }
@@ -91,9 +96,11 @@ export function ResultExportDialog({ result, tabId, selected = false, scope = 'q
     if (!current(ticket) || !fileRef.current || busyRef.current || pickRef.current || prepareRef.current || consumed.current) return;
     const chosen = config.current, lease = previewRef.current;
     if (chosen.format === 'sql' && (!validPreview() || chosen.confirmation !== `${chosen.target.database}.${chosen.target.table}` || !chosen.acknowledged)) return;
+    // 写任务入口再核整份Excel约束，固定编码不依赖先前文本格式或DOM禁用状态。
+    if (chosen.format === 'xlsx') { try { assertResultExcelData(data); } catch (reason) { report(reason); return; } }
     busyRef.current = true; consumed.current = true; setBusy(true); setError(''); const id = uid(); activeTask.current = id; setTaskId(id); useWorkspace.getState().setBusy(tabId, true);
     try {
-      const output = await invoke('files.exportResult', { fileToken: fileRef.current.token, format: chosen.format, encoding: chosen.encoding, ...csvExportOptions(chosen.format, chosen.csvDelimiter), taskId: id, result: data, ...(chosen.format === 'sql' ? { sql: { target: chosen.target, previewId: lease!.previewId, confirmation: chosen.confirmation, acknowledged: true as const } } : {}) });
+      const output = await invoke('files.exportResult', { fileToken: fileRef.current.token, format: chosen.format, encoding: chosen.format === 'xlsx' ? 'utf8' : chosen.encoding, ...csvExportOptions(chosen.format, chosen.csvDelimiter), taskId: id, result: data, ...(chosen.format === 'sql' ? { sql: { target: chosen.target, previewId: lease!.previewId, confirmation: chosen.confirmation, acknowledged: true as const } } : {}) });
       if (current(ticket)) setDone(output.rows);
     } catch (reason) {
       if (chosen.format === 'sql') { previewRef.current = null; fileRef.current = null; if (alive.current) { setPreview(null); setFile(null); } void release(lease!.previewId).catch(() => {}); }
@@ -108,18 +115,19 @@ export function ResultExportDialog({ result, tabId, selected = false, scope = 'q
     <div className="info-strip">{scope === 'table' ? (selected ? tableText.selectedRows : tableText.pageRows)(data.rows.length) : formatText(selected ? zh.resultExport.selectedRows : zh.resultExport.returnedRows, data.rows.length)}<br/>{scope === 'table' ? tableText.scope : selected ? zh.resultExport.selectedOnly : zh.resultExport.returnedOnly}</div>
     {data.truncated && <p className="warning-text">{zh.resultExport.truncated}</p>}
     <div className="form-grid">
-      <Field label={zh.resultExport.format}><select aria-label={zh.resultExport.format} value={format} disabled={busy} onChange={event => { const value = event.target.value; if (value !== format && ['csv','json','sql'].includes(value)) change(renderedRevision, () => setFormat(value as typeof format)); }}><option value="csv">CSV</option><option value="json">JSON</option><option value="sql">INSERT SQL</option></select></Field>
-      <Field label={zh.resultExport.encoding}><select aria-label={zh.resultExport.encoding} value={encoding} disabled={busy} onChange={event => { const value = event.target.value; if (value !== encoding && ['utf8','utf16le','gb18030'].includes(value)) change(renderedRevision, () => setEncoding(value as typeof encoding)); }}><option value="utf8">UTF-8</option><option value="utf16le">UTF-16LE</option><option value="gb18030">GB18030</option></select></Field>
+      <Field label={zh.resultExport.format}><select aria-label={zh.resultExport.format} value={format} disabled={busy} onChange={event => { const value = event.target.value; if (value !== format && ['csv','json','sql','xlsx'].includes(value)) change(renderedRevision, () => { setFormat(value as typeof format); if (value === 'xlsx') setEncoding('utf8'); }); }}><option value="csv">CSV</option><option value="json">JSON</option><option value="sql">INSERT SQL</option><option value="xlsx">{excelText.format}</option></select></Field>
+      <Field label={zh.resultExport.encoding}><select aria-label={zh.resultExport.encoding} value={format === 'xlsx' ? 'utf8' : encoding} disabled={busy || format === 'xlsx'} onChange={event => { const value = event.target.value; if (config.current.format !== 'xlsx' && value !== encoding && ['utf8','utf16le','gb18030'].includes(value)) change(renderedRevision, () => setEncoding(value as typeof encoding)); }}><option value="utf8">UTF-8</option><option value="utf16le">UTF-16LE</option><option value="gb18030">GB18030</option></select></Field>
       {format === 'sql' && <><Field label={sqlText.database}><input aria-label={sqlText.database} value={target.database} disabled={busy} onChange={event => change(renderedRevision, () => setTarget({ ...target, database: event.target.value }))}/></Field><Field label={sqlText.table}><input aria-label={sqlText.table} value={target.table} disabled={busy} onChange={event => change(renderedRevision, () => setTarget({ ...target, table: event.target.value }))}/></Field></>}
       {format === 'csv' && <CsvExportDelimiterField value={csvDelimiter} disabled={busy} onChange={value => { if (value !== csvDelimiter) change(renderedRevision, () => setCsvDelimiter(value)); }}/>}
     </div>
-    <button className="file-picker" disabled={busy || picking || invalid.current || format === 'sql' && !preview} onClick={() => void chooseFile(renderedRevision)}><Download size={24}/><span><strong>{file?.name ?? zh.resultExport.chooseFile}</strong><small>{zh.resultExport.atomicFile}</small></span><ArrowRight size={16}/></button>
+    {format === 'xlsx' && <section aria-label={excelText.format}><p>{excelText.encoding}</p><p>{excelText.notice}</p><p>{excelText.numbers}</p><p>{excelText.nulls}</p><p>{excelText.binary}</p><p>{excelText.limits}</p></section>}
+    <button className="file-picker" disabled={busy || picking || invalid.current || !!excelError || format === 'sql' && !preview} onClick={() => void chooseFile(renderedRevision)}><Download size={24}/><span><strong>{file?.name ?? zh.resultExport.chooseFile}</strong><small>{zh.resultExport.atomicFile}</small></span><ArrowRight size={16}/></button>
     <h3>{zh.resultExport.columnMapping}</h3><p className="muted small">{format === 'sql' ? sqlText.mapping : zh.resultExport.columnRule}</p>
     <div className="result-export-columns"><table><thead><tr><th>{zh.resultExport.columnPosition}</th><th>{zh.resultExport.originalColumn}</th><th>{format === 'sql' ? sqlText.targetColumn : zh.resultExport.outputColumn}</th></tr></thead><tbody>{columns.map((column, index) => <tr key={column.key}><td>{index + 1}</td><td>{column.name || zh.resultExport.emptyName}</td><td>{format === 'sql' ? <input aria-label={sqlText.column(index + 1)} value={target.columns[index].name} disabled={busy} onChange={event => change(renderedRevision, () => setTarget({ ...target, columns: target.columns.map((value, position) => position === index ? { ...value, name: event.target.value } : value) }))}/> : column.exportName}</td></tr>)}</tbody></table></div>
-    <p className="muted small">{format === 'sql' ? sqlText.protocol : format === 'csv' ? zh.resultExport.csvProtocol : zh.resultExport.jsonProtocol}</p>
+    {format !== 'xlsx' && <p className="muted small">{format === 'sql' ? sqlText.protocol : format === 'csv' ? zh.resultExport.csvProtocol : zh.resultExport.jsonProtocol}</p>}
     {format === 'sql' && <><button disabled={busy || preparing || invalid.current} onClick={() => void prepare(renderedRevision)}>{sqlText.preview}</button>{preview && <><p>{sqlText.previewScope(preview.shownRows, preview.totalRows)}</p><pre className="result-sql-preview" aria-label={sqlText.preview}>{preview.sql}</pre><Field label={sqlText.confirmation}><input aria-label={sqlText.confirmation} disabled={busy} value={confirmation} onChange={event => { if (current(renderedRevision) && !busyRef.current) setConfirmation(event.target.value); }}/></Field><label><input type="checkbox" aria-label={sqlText.acknowledge} checked={acknowledged} disabled={busy} onChange={event => { if (current(renderedRevision) && !busyRef.current) setAcknowledged(event.target.checked); }}/>{sqlText.acknowledge}</label></>}</>}
     <h3>{zh.resultExport.preview}</h3><div className="sample-grid"><ResultsGrid columns={columns.map(column => ({ key: column.key, name: column.exportName, type: '' }))} rows={sample}/></div>
     {task && <div className="transfer-progress"><div><span>{task.message}</span><strong>{Math.round(task.progress)}%</strong></div><progress max="100" value={task.progress}/></div>}
-    {done !== undefined && <div className="success-box"><CheckCircle2 size={16}/>{formatText(zh.resultExport.completed, done)}</div>}<ErrorBox message={invalid.current ? sqlText.changed : error}/>
-  </div><footer className="modal-footer"><button disabled={busy} onClick={() => void close()}>{done === undefined ? zh.common.close : zh.common.done}</button><span className="grow"/>{busy ? <button onClick={() => void invoke('query.cancel', { taskId }).catch(report)}><Square size={13}/>{zh.resultExport.cancel}</button> : <button className="primary" disabled={!file || done !== undefined || !sqlReady || invalid.current || picking || preparing} onClick={() => void execute(renderedRevision)}>{zh.resultExport.start}<ArrowRight size={14}/></button>}</footer></Modal>;
+    {done !== undefined && <div className="success-box"><CheckCircle2 size={16}/>{formatText(zh.resultExport.completed, done)}</div>}<ErrorBox message={invalid.current ? sqlText.changed : excelError || error}/>
+  </div><footer className="modal-footer"><button disabled={busy} onClick={() => void close()}>{done === undefined ? zh.common.close : zh.common.done}</button><span className="grow"/>{busy ? <button onClick={() => void invoke('query.cancel', { taskId }).catch(report)}><Square size={13}/>{zh.resultExport.cancel}</button> : <button className="primary" disabled={!file || done !== undefined || !sqlReady || invalid.current || !!excelError || picking || preparing} onClick={() => void execute(renderedRevision)}>{zh.resultExport.start}<ArrowRight size={14}/></button>}</footer></Modal>;
 }

@@ -103,7 +103,7 @@ export function verifyQueryResultColumnsCopy(value:unknown):void {
   assert.equal(record.text,'0x00ff\t1\t18446744073709551615\t0.12345678901234567890\tNULL\t\n0x\t3\t9007199254740993\t1.00000000000000000001\tNULL\t');
 }
 
-export interface QueryColumnsAuditTarget { senderId:number;profileId:string;tabId:string;sql:string;deadline:number;presets?:true; }
+export interface QueryColumnsAuditTarget { senderId:number;profileId:string;tabId:string;sql:string;deadline:number;presets?:true;excel?:true; }
 /** 仅序列化至本例Electron主进程，旁观原handler真实结果；未知/写请求在原处理器前拒绝，不伪造成功。 */
 export function installQueryResultColumnsAudit({ipcMain}: {ipcMain:any},target:QueryColumnsAuditTarget):void {
   const root=globalThis as any,handlers=ipcMain._invokeHandlers,original=handlers?.get('dbark:request');
@@ -115,6 +115,9 @@ export function installQueryResultColumnsAudit({ipcMain}: {ipcMain:any},target:Q
   const presetSteps=['list','save','rename','list','read','list','save','delete'];
   const presetTokens=new Set<string>();
   if(target.presets!==undefined&&target.presets!==true)reject('方案授权形状');
+  // 独立三门XLSX例仅替换第二个文件格式；默认旧例仍只授权CSV和JSON。
+  if(target.excel!==undefined&&target.excel!==true||target.excel&&target.presets)reject('Excel授权形状');
+  const exportFormats=target.excel?['csv','xlsx']:['csv','json'];
   if(target.presets)state.presets={list:0,save:0,rename:0,read:0,delete:0,total:0};
   /** 描述符先行读取并复制普通数据，拒绝访问器、额外字段和循环；后续只序列化可信副本。 */
   const dataRecord=(value:any,allowed:string[],required=allowed):any=>{
@@ -225,8 +228,8 @@ export function installQueryResultColumnsAudit({ipcMain}: {ipcMain:any},target:Q
       state.sessionClaim=sessionClaim;
     }
     else if(command==='query.execute'){if(input.sql!==target.sql||!state.session||input.sessionId!==state.session||state.queries!==0)reject('查询目标或次数');state.queries++;}
-    else if(command==='files.choose'){if(input.purpose!=='export'||!['csv','json'].includes(input.format)||state.chosen.includes(input.format))reject('文件选择');state.chosen.push(input.format);}
-    else if(command==='files.exportResult'){if(!['csv','json'].includes(input.format)||state.exports.includes(input.format)||!state.chosen.includes(input.format)||input.encoding!=='utf8'||input.fileToken!==state.tokens[input.format])reject('文件导出');state.exports.push(input.format);}
+    else if(command==='files.choose'){if(input.purpose!=='export'||!exportFormats.includes(input.format)||state.chosen.includes(input.format))reject('文件选择');state.chosen.push(input.format);}
+    else if(command==='files.exportResult'){if(!exportFormats.includes(input.format)||state.exports.includes(input.format)||!state.chosen.includes(input.format)||input.encoding!=='utf8'||input.fileToken!==state.tokens[input.format]||input.format==='xlsx'&&(input.csvDelimiter!==undefined||input.sql!==undefined))reject('文件导出');state.exports.push(input.format);}
     else if(['query.completionState','sessions.close'].includes(command)){if(!state.session||input.sessionId!==state.session)reject('会话目标');}
     else if(command==='metadata.completion'){if(input.connectionId!==target.profileId)reject('元数据目标');}
     else if(!['settings.get','connections.list','history.list','tasks.list'].includes(command)){

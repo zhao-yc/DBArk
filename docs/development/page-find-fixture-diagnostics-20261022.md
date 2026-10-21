@@ -16,3 +16,9 @@
 | 原生五例 JSON | `41392ea5cd658fbf471420564a4508c183082ee1d36aeb6d7f41cda9da7f10b1` |
 
 以上都是源码夹具与本机原生证据，不代表安装版、macOS 或原 CI 的同机复现。未发布、未操作数据库或系统剪贴板。
+
+## 后续固定编译阶段诊断
+
+Windows helper 预检原 SIGNATURE_BEGIN 与 SOURCE_READ 之间实际还包含路径计算、签名调用、结果判断和编码初始化，现有日志不足以证明超时发生在 Authenticode API 内部。脚本仅新增 PATH_READY／CALL_BEGIN／CALL_RETURN／ACCEPTED／ENCODING_READY 固定标记，失败时另记源长度和原 stdin finish／close 的单调相对时间；stdin 关闭不代表子进程已读完源码。
+
+原环境、Get-AuthenticodeSignature、Valid 与 Microsoft signer 要求、60 秒、三流关闭和成功后的精确清理门均保留。执行真实脚本、只替换进程／文件边界的 18 项 RAM 回归通过，覆盖缺失／乱序标记、超时、三流、日志上限；本轮没有运行新 PowerShell 预检，因此不将它记作真实编译成功。后继准确 d292452f 的 CI 39689687468 已越过原签名预检并进入原生测试，原失败根因仍未证明。

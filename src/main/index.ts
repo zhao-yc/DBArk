@@ -479,7 +479,8 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
         input = { ...input, filePath: resultSqlPreviews.consume(input, columns!.owner.document) }; break;
       }
       const expected = command === 'files.export' || command === 'files.exportResult' ? 'export' : 'import';
-      input = { ...input, filePath: resolveFileToken(files, input.fileToken, expected) }; break;
+      // 已返回XLSX只消费本窗口明确选择的Excel文件能力，不借其它导出格式令牌。
+      input = { ...input, filePath: resolveFileToken(files, input.fileToken, expected, command === 'files.exportResult' && input.format === 'xlsx' ? 'xlsx' : undefined) }; break;
     }
   }
   const taskId: string | undefined = command !== 'query.cancel' ? input.taskId : undefined;
