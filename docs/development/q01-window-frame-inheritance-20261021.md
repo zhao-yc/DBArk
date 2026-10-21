@@ -10,7 +10,7 @@
 
 继承只能添加属性，不覆盖排序；引用已有窗口时不添加分区，被引用链不能已有帧。未知、重复、循环、祖先／兄弟／外部CTE名称、尾逗号及冲突均停止，不向字段或函数目录回退。限定字段名的保留字不作为属性词。名称最多256个，引用深度沿用64；完整原文、词法、Worker期限及既有精确偏移比较保持。
 
-同时从完整候选核窗口所在子句：SELECT、当前块ORDER及真正WINDOW定义允许，WHERE／GROUP／HAVING拒绝；集合全局ORDER沿用0757803的有效AST反例门。对本文引用的语义依据可查[MySQL命名窗口](https://dev.mysql.com/doc/refman/8.4/en/window-functions-named-windows.html)及[MariaDB4011—4013错误](https://mariadb.com/docs/server/reference/error-codes/mariadb-error-codes-4000-to-4099)。语法候选不是服务器执行或字段类型正确性证明。
+同时从完整候选核窗口所在子句：SELECT、当前块ORDER及真正WINDOW定义允许，WHERE／GROUP／HAVING拒绝；同块窗口不能嵌入另一个窗口定义，独立子查询仍按自己的查询块判断。集合全局ORDER沿用0757803的有效AST反例门。对本文引用的语义依据可查[MySQL命名窗口](https://dev.mysql.com/doc/refman/8.4/en/window-functions-named-windows.html)及[MariaDB4011—4013错误](https://mariadb.com/docs/server/reference/error-codes/mariadb-error-codes-4000-to-4099)。语法候选不是服务器执行或字段类型正确性证明。
 
 ## 检查与交付边界
 

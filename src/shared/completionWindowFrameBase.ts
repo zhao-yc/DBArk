@@ -11,6 +11,17 @@ export function completionWindowFramePosition(branches: CompletionQueryBranch[],
   const branch = branches.filter(item => item.select.start < openStart && openStart < item.end)
     .sort((a, b) => b.select.depth - a.select.depth || b.select.start - a.select.start)[0];
   if (!branch) return false;
+  const open = tokens.findIndex(token => token.start === openStart && symbol(token, '('));
+  if (open < 0) return false;
+  const definition = (index: number) => tokens[index].depth === branch.select.depth && word(tokens[index - 1], 'AS') && !!key(tokens[index - 2]);
+  const parents: number[] = [];
+  for (let index = 0; index < open; index++) {
+    if (tokens[index].start <= branch.select.start) continue;
+    if (symbol(tokens[index], '(')) parents.push(index);
+    else if (symbol(tokens[index], ')')) parents.pop();
+  }
+  // 同查询块不能把窗口嵌在另一个窗口定义里；独立子查询此前的父括号不参与本块判断。
+  if (parents.some(index => word(tokens[index - 1], 'OVER') || definition(index))) return false;
   let clause = 'SELECT';
   for (let index = 0; index < tokens.length && tokens[index].start < openStart; index++) {
     const token = tokens[index];
@@ -18,7 +29,7 @@ export function completionWindowFramePosition(branches: CompletionQueryBranch[],
     if (['FROM', 'WHERE', 'HAVING', 'WINDOW', 'LIMIT', 'INTO', 'FOR'].some(value => word(token, value))) clause = token.value.toUpperCase();
     if ((word(token, 'ORDER') || word(token, 'GROUP')) && word(tokens[index + 1], 'BY')) clause = token.value.toUpperCase();
   }
-  return ['SELECT', 'ORDER', 'WINDOW'].includes(clause);
+  return clause === 'WINDOW' ? definition(open) : ['SELECT', 'ORDER'].includes(clause);
 }
 
 /** 只在完整候选语法成立后核当前查询块的帧继承；不生成目录目标或猜测服务器名称规则。 */

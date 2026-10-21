@@ -130,6 +130,8 @@ describe('窗口帧关键字本地补全', () => {
     'SELECT v FROM users GROUP BY SUM(v) OVER(ROWS CUR|RENT ROW)',
     'SELECT v FROM users HAVING SUM(v) OVER(ROWS CUR|RENT ROW)>0',
     'SELECT v FROM users WHERE SUM(v) OVER(base ROWS CUR|RENT ROW)>0 WINDOW base AS()',
+    'SELECT SUM(v) OVER(ORDER BY SUM(v) OVER(ROWS CUR|RENT ROW)) FROM users',
+    'SELECT SUM(v) OVER w FROM users WINDOW w AS(ORDER BY SUM(v) OVER(ROWS CUR|RENT ROW))',
   ])('未知／循环／冲突／祖先与不合法帧位置不能恢复或借目录：%s', marked => {
     expect(analyzeCompletion(marked.replace('|', ''), marked.indexOf('|'), {}, { windowFunctions: true }).status).toBe('blocked');
   });
