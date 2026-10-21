@@ -2,6 +2,8 @@
 
 ## 当前开发安排（2026-10-21）
 
+高频结果筛选新增[逐条启用／停用](development/query-result-filter-enabled-20261021.md)：保留条件草稿，停用叶及仅含停用叶的组不参与AND／OR，全部停用恢复准确原结果；重新启用校验原值，活动键漂移保护保持。类型及9文件391项、修复本机冻结依赖后的普通构建和23项Monaco补丁检查通过；首次构建补丁门失败原件保留。当前仅源码／RAM组件／构建证据，真实GUI、安装与macOS继续，不增加完整工作包或发行计数，暂不发布。
+
 排序／筛选后继按main交付源码：每列文本大小写、复制条件及小数简写的产品树保持585875a1，与准确338实际验收一致。Windows类型／363定向／新构建、独立GUI1项、39读回器合成20通过／1原权限跳过、原四行CSV／JSON独立读回，以及完整591文件11389通过／1POSIX跳过均通过，最终文件／图／Git、旧封存和进程身份终核通过。连接恢复后续读原回合completed终态，209份最终封存逐项SHA校验通过，原报告及20角色记录的路径／摘要已返回，见[本批准确记录](../tests/integration/acceptance-query-result-sort-case-338a06b-20261021.md)。main准确3eb4e9f的[三平台原生CI及原件核对](../tests/integration/acceptance-main-3eb4e9f-ci-20261021.md)已闭合：Linux类型／591文件11380通过、10平台跳过／构建成功；Windows及两种macOS架构源码／同次实际安装legacy均各80通过、317条件跳过，六专项原report与四ZIP长度／SHA／CRC一致，ARM独立显示租约实测及退出前恢复通过。该离线安装范围不外推为新排序筛选的macOS私网GUI。原7f高度、1f8排序规则及首次Python身份比较失败均保留，不回填旧unknown；后继Q01另留开发分支。暂不发布，不增加完整工作包计数。以下保留前期检查点。
 
 main准确c40a97e的[三平台原生CI及原件独立核对](../tests/integration/acceptance-main-c40a97e-ci-20261021.md)已闭合：Linux类型／587文件11275通过、10平台跳过／构建成功；Windows x64、macOS arm64及x64的源码／同次实际安装legacy均各80通过、316条件跳过。每个平台每阶段六专项、12正常owner及原report／accepted／四文件proof已逐份核对，四ZIP长度／SHA／CRC一致；ARM两代显示租约的实测几何和退出前恢复通过，原receipt缺失／false字段不回填。本轮仅离线源码及CI安装范围，不转作新NULL／快捷键的macOS或安装版私网GUI，后继1f8失败另线保留；不增加完整工作包或发行计数，暂不发布。

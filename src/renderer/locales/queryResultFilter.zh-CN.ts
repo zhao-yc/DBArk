@@ -16,6 +16,8 @@ export const queryResultFilterZh = {
   cellEquals:'追加等值条件',cellNotEquals:'追加排除条件',cellHint:'将当前单元格作为新条件，与现有条件整体按 AND 组合。先审阅草稿，应用后生效；不重发 SQL。',cellUnavailable:'请选择支持比较的当前单元格；字节、未知原值或过长值不能直接填入筛选条件。',
   remove: (index: number) => `移除第${index}条筛选条件`, condition: (index: number) => `第${index}条筛选条件`,
   duplicateLabel:'复制条件',duplicate:(index:number)=>`复制第${index}条筛选条件`,
+  enabledLabel:'启用',enabled:(index:number)=>`启用第${index}条筛选条件`,
+  enabledHint:'取消勾选可保留条件并暂时停用；停用条件及仅含停用条件的组不参与AND／OR。全部停用时显示全部已返回行，不重发SQL。重新启用后会重新校验条件值。',
   operators: { contains:'文本包含',notContains:'文本不包含',startsWith:'文本开头为',notStartsWith:'文本开头不是',endsWith:'文本结尾为',notEndsWith:'文本结尾不是',like:'文本通配匹配',notLike:'文本不通配匹配',empty:'为空文本',notEmpty:'非空文本',eq:'等于',ne:'不等于',gt:'大于',gte:'大于或等于',lt:'小于',lte:'小于或等于',between:'介于（含两端）',notBetween:'不介于（排除两端）',in:'属于候选值列表',notIn:'不属于候选值列表',null:'为 NULL',notNull:'非 NULL' },
   empty: '没有条件时保留全部已返回行；空串是独立原值，不等于 NULL。',
   hint: '文本默认区分大小写，可为每条文本比较勾选“忽略大小写”（Unicode小写映射）；仅“通配匹配”解析%和_，其它文本比较保持字面含义。不使用正则或数据库排序规则。文本否定条件也排除NULL，空文本与NULL不同。数值和时间按字段类型及原精度比较；小数支持 .5、1. 简写，科学计数法仅限浮点字段。介于包含两端，不介于排除整个闭区间，两者均排除NULL。未知类型和二进制只允许NULL判断。',

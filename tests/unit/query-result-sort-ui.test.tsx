@@ -201,6 +201,26 @@ it('多列：活动规则中途准入失败不部分排序，也不改变勾选/
 });
 /** 筛选UI仍使用真实QueryTab和真实条件面板，仅通过RAM事件修改受控输入。 */
 function reactProps(node:any){return node[Object.keys(node).find(key=>key.startsWith('__reactProps$'))!];}
+/** 走真实条件组件的受控启停入口；仅DOM宿主由内存实现。 */
+async function enableFilterRule(index:number,enabled:boolean){const node=document.querySelector('[aria-label="'+filterText.enabled(index)+'"]')!;expect(node).not.toBeNull();await act(async()=>reactProps(node).onChange({target:{checked:enabled}}));}
+
+it('条件启停：停用保留原值与草稿，应用恢复原行，重开启用后重新筛选且不执行SQL',async()=>{
+  await mount();await sort();await act(async()=>grid().onSelectedRowsChange(new Set([0])));await click(filterText.open);await addFilterRule(1,'id','eq','2');await enableFilterRule(1,false);
+  expect(document.querySelector('[aria-label="'+filterText.input+' 1"]')!.value).toBe('2');await click(filterText.apply);expect(grid().rows).toBe(original.rows);expect(grid().sortColumns).toEqual([]);expect(grid().selectedRows.size).toBe(0);
+  await click(filterText.open);expect(document.querySelector('[aria-label="'+filterText.enabled(1)+'"]')!.checked).toBe(false);await enableFilterRule(1,true);await click(filterText.apply);expect(grid().rows).toEqual([original.rows[2]]);expect(commands.filter(command=>command==='query.execute')).toHaveLength(1);
+});
+it('条件启停：复制、修改字段和取消均保留停用状态，重新启用坏值拒绝并保留旧视图',async()=>{
+  await mount();await click(filterText.open);await addFilterRule(1,'id','eq','尚未填写');await enableFilterRule(1,false);await click(filterText.duplicate(1));expect(document.querySelector('[aria-label="'+filterText.enabled(2)+'"]')!.checked).toBe(false);
+  await setFilterField(filterText.column+' 2','words');expect(document.querySelector('[aria-label="'+filterText.enabled(2)+'"]')!.checked).toBe(false);await click(filterText.apply);expect(grid().rows).toBe(original.rows);
+  await click(filterText.open);await enableFilterRule(1,true);await click(filterText.cancel);await click(filterText.open);expect(document.querySelector('[aria-label="'+filterText.enabled(1)+'"]')!.checked).toBe(false);
+  await enableFilterRule(1,true);const before=grid().rows;await click(filterText.apply);expect(grid().rows).toBe(before);expect(document.body.textContent).toContain(filterText.value);expect(document.querySelector('[aria-label="'+filterText.title+'"]')).not.toBeNull();await setFilterField(filterText.input+' 1','2');await click(filterText.apply);expect(grid().rows).toEqual([original.rows[2]]);
+});
+it('条件启停：输入法组合和旧根回调不能改动当前草稿或移除后同编号条件',async()=>{
+  await mount();await click(filterText.open);await addFilterRule(1,'id','eq','2');const old=reactProps(document.querySelector('[aria-label="'+filterText.enabled(1)+'"]')).onChange,input=document.querySelector('[aria-label="'+filterText.input+' 1"]')!;
+  await act(async()=>reactProps(input).onCompositionStart());expect(document.querySelector('[aria-label="'+filterText.enabled(1)+'"]')!.disabled).toBe(true);await act(async()=>old({target:{checked:false}}));expect(document.querySelector('[aria-label="'+filterText.enabled(1)+'"]')!.checked).toBe(true);
+  await act(async()=>reactProps(document.querySelector('[aria-label="'+filterText.input+' 1"]')).onCompositionEnd());await enableFilterRule(1,false);await act(async()=>old({target:{checked:true}}));expect(document.querySelector('[aria-label="'+filterText.enabled(1)+'"]')!.checked).toBe(false);
+  await click(filterText.remove(1));await addFilterRule(1,'words','eq','晚行');await act(async()=>old({target:{checked:false}}));expect(document.querySelector('[aria-label="'+filterText.enabled(1)+'"]')!.checked).toBe(true);expect(commands.filter(command=>command==='query.execute')).toHaveLength(1);
+});
 /** 仅替代React键盘事件端口；真实面板及QueryTab处理草稿、选择和SQL调用。 */
 function filterKey(options:Record<string,unknown>={}){return{key:'Enter',ctrlKey:false,metaKey:false,altKey:false,shiftKey:false,repeat:false,keyCode:13,nativeEvent:{isComposing:false},preventDefault:vi.fn(),stopPropagation:vi.fn(),...options};}
 /** 仅通过已渲染的真实排序控件切换，不直接调用比较控制器或改原行。 */
