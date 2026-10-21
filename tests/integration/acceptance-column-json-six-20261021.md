@@ -4,6 +4,8 @@
 
 本机Windows／`D:\svn\DBArk`，候选基线`0e488b77c2ff0ad186bddbdf7c49990d579ec10a`，产品差异SHA256 `89f15ece76c9844fa0c6e86b3a059eabfeccaedef58d35042c86d8dd7fcc310e`（PowerShell对`git diff HEAD -- src | Out-String`的UTF-8字节计量）。全六组合前后同一差异，不在运行中改产品。最终integration用例SHA256 `0d6b31e37d8e0a5a2884e587871c0f4a83d65132e756eeb1801b638507e0a87f`。
 
+候选最终提交`9d713bb83d45a29aa00513d688a1349d68622610`，src树`553b4b7f3ce1430a48e88074a3b46e869b0e23e1`。提交后对`git diff 0e488b77 HEAD -- src | Out-String`按相同方式复算，仍为上述产品差异SHA；不将后来文档提交当作重复数据库执行。
+
 每次Docker在同一次SSH先核Server-200／root／IP及socket，移除目标覆盖、显式`unix:///var/run/docker.sock`，只读inspect唯一DBArk容器和准确端口。既有认证只留RAM及子进程env，不落盘、回显或放入argv。用例再核容器hostname及端口对应的实际版本／方言，13484明确严格TLS及既有CA。只建随机`dbark_jsoncol_*`库，不改全局模式、用户权限或业务资源。
 
 串行命令`node node_modules/vitest/vitest.mjs run --config vitest.integration.config.ts tests/integration/engine-json-columns.integration.test.ts --reporter=json --outputFile=<各自目录>/report.json`。只旁观真实connect工厂，原参数／原函数仍执行真实网络并返回原ManagedConnection；捕获其原线程及只读资源facade，没有替换服务器回包。每组合30秒，失败保库并停后续，成功精确清理。

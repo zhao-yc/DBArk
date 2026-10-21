@@ -19,3 +19,11 @@ CI39551052101的Windows job119060095139在`threeDrafts`准备第二份正文时�
 原字节记录`.cache/close-others-ready-live-20261021/`：stdout SHA256 `d4035dffec376efc8598d7c60283a3db99bc5641f6d2dad8a6a2e9291a23ec11`，stderr `e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855`，result `36a828ec2162b14b6c54148253056db02332f04b6614fc35745753d0d4a42091`。Git及产品源码未变；不提交原始日志或profile。
 
 本轮无SQL执行、实库、SSH、Docker或系统剪贴板。仅证明本机源码宿主两个既有流程，新安装和macOS另验，原CI失败保留，不改变完整工作包计数，暂不发布。
+
+## 2026-10-22后继输入准备失败
+
+准确9d713bb8的CI39630666516，Windows作业119327726197止于首例`write`的原5秒持久正文核对：目标为原保存来源A，实际仍空，尚未点击保存、也未到关闭业务断言。原legacy为78通过／1失败／322跳过／1未运行，安装未执行；不能称保存记录丢失。失败ZIP12359611696实际2681072字节，SHA256 `e575bcf934b0059175e5a9bef9372e118bedbafeb5dde04eec4253e32288c68a`，独立下载及全条目CRC通过，保留`.cache/ci-json-windows-failed-12359611696-receipt.zip`。
+
+准备增加正文输入框的实际持焦检查，分别位于focus后及全选后；可见／可编辑不足以证明焦点。保持原真实键盘、正文断言、120秒、零重试及失败保留，产品src不改。该有界前置检查不证明原CI焦点丢失的具体来源已经确认，后继原生结果另记。
+
+远程中断期间，本机`node scripts/check-local.mjs tests/unit/query-close-others-native-gate.test.ts`退出0，类型30.12秒、原五项门测试通过，总32.89秒；未重复构建。固定离线端口首次受限沙箱EACCES不放行，正常权限下ECONNREFUSED及原socket关闭通过，CIM未发现DBArk／Electron进程。此时VM连接恢复，原生两例仍优先交VM串行排在JSON回合之后；本机尚未启动该GUI。

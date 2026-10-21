@@ -60,7 +60,9 @@ async function write(info: TestInfo, sql: string, expectedTabId?: string) {
   const input = pane.locator('.sql-editor-wrap .monaco-editor').getByRole('textbox');
   await expect(input).toBeVisible(); desktop(info); await expect(input).toBeEditable(); desktop(info);
   expect((await settings(info)).activeTabId).toBe(tabId);
-  await input.focus(); desktop(info); await page.keyboard.press(`${modifier}+A`); desktop(info);
+  // 对话框关闭后的焦点恢复可晚于可见/可编辑；两次原生按键之间也核准确输入框持焦。
+  await input.focus(); desktop(info); await expect(input).toBeFocused(); desktop(info);
+  await page.keyboard.press(`${modifier}+A`); desktop(info); await expect(input).toBeFocused(); desktop(info);
   await page.keyboard.insertText(sql); desktop(info);
   await expect.poll(async () => { const value = await settings(info); expect(value.activeTabId).toBe(tabId); return value.tabs.find(tab => tab.id === tabId)?.sql?.replaceAll('\r\n', '\n'); }).toBe(sql);
 }
