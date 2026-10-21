@@ -2,6 +2,8 @@
 
 ## 当前开发安排（2026-10-21）
 
+INSERT SET补全准确bd74859已取得[Root本机Windows实库界面](../tests/integration/acceptance-insert-set-ui-bd74859-20261021.md)：一个真实整例含VALUES／普通SET／嵌套SET，建议、接受、Undo／Redo和任务历史保持通过；真实服务器仅三次PREPARE、正文零执行，空表及随机库精确清理、辅助连接、2054输入和21封存终核通过。远程不稳按已授权回退执行，不是VM／安装／macOS证据；批量筛选9139派发独立保持未知，不重复本机运行该轮。Q01及完整工作包计数保持，暂不发布。
+
 批量启停首次真实窗口发现[滚动条空间遗漏](development/query-result-filter-scrollbar-20261021.md)：原外高96.857而客户区89，原96门拒绝，后续分组／导出未到达。修正按实际滚动条与边框差额预留、观察本网格，父版本两反例失败／修后156项、类型及构建通过；原spec／读取器／期待均不改，待新GUI。原300的251封存与关闭unknown保持；准确b61三平台CI日志成功和后继300离线启动失败[分层记录](../tests/integration/acceptance-bulk-enabled-ci-20261021.md)，不互相覆盖。
 
 高频SQL补全新增[INSERT SET新行别名](development/q01-insert-set-row-alias-20261021.md)：复用既有目标字段和MySQL版本能力，保留原替换范围、默认库及局部名边界。类型／10文件342项／构建通过；实库、原生及安装另验，Q01仍部分，不增加完整工作包或发行计数。

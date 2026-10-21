@@ -1,5 +1,7 @@
 # VALUES／SET 新行别名界面验收
 
+准确bd74859已取得[本机Windows实际结果](../../tests/integration/acceptance-insert-set-ui-bd74859-20261021.md)：原Node CLI20820退出0、28.658秒，一个整例三场景及真实服务器三条仅PREPARE通过，正文零执行；随机库精确清理、原输入及21封存终核通过。不是WIN11-TEST、安装或macOS证据，下文保留原操作范围。
+
 ## 固定内容
 
 原 `sql-completion-insert-row-alias.spec.ts` 默认关闭及`--list`短路保持。沿同一真实窗口，在原VALUES场景后增加普通SET、嵌套COALESCE／CAST的SET，共一个整例、三场景。每场景实际输入点号，核对来自专属subject的id／note／created_at三列建议，接受note后核原SQL，再真实Undo／Redo核精确正文，任务身份／状态及历史编号保持。附件只在各断言通过后记录场景布尔，不打印配置或认证。
