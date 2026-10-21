@@ -72,4 +72,3 @@ test('真实表页导出当前页及勾选快照：零重查、原序、精确�
     await runtime.confirmOwnedDesktopExit(info); expect(runtime.ownedDesktopResources(info).closed).toBe(true);
   } catch (reason) { runtime.retainOwnedDesktopResources(info); throw reason; }
 });
-
