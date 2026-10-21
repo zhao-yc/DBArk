@@ -24,9 +24,9 @@ node scripts/check-local.mjs --build tests/unit/query-result-filter-enabled.test
 
 ## 唯一实库 GUI
 
-准备全部通过后，原新dist及构建输入保持。只使用已有RAM中200／13384的认证和准确UUID，先独立只读身份预检并确认native／stream正常关闭。禁止SSH／Docker、用户权限变更、凭据轮换或落盘。正式GUI子环境清除旧DBARK_*后，仅重建queryResultColumnsUiKeys合同的必要RAM字段；host为既有192.168.31.200、port13384、TLS0，设置INTEGRATION_ENABLED、QUERY_RESULT_COLUMNS_UI、QUERY_RESULT_SORT_CASE_UI三个门为1，不带SSH、默认库、CA或EXECUTABLE_PATH。helper/raw取同一显式快照，不修改原父helper路径或凭据。
+准备全部通过后，原新dist及构建输入保持。只使用已有RAM中200／13384的认证和准确UUID，先独立只读身份预检并确认native／stream正常关闭。禁止SSH／Docker、用户权限变更、凭据轮换或落盘。正式GUI子环境清除旧DBARK_*后，仅重建queryResultColumnsUiKeys合同的必要RAM字段；DBARK_TEST_HOST为既有192.168.31.200、DBARK_TEST_PORT为13384、DBARK_TEST_TLS为0，设置DBARK_INTEGRATION_ENABLED、DBARK_QUERY_RESULT_COLUMNS_UI、DBARK_QUERY_RESULT_SORT_CASE_UI三个门为1，不带SSH、默认库、CA或EXECUTABLE_PATH。helper/raw取同一显式快照，不修改原父helper路径或凭据。
 
-在本metadata下生成一次新的`dbark-query-columns-<32位小写hex>`输出路径，设置OUT_DIR及其中`visible-selected.csv`／`visible-selected.json`的准确答案；两个文件及nonce目录预先不存在，由原用例创建。不能使用或覆盖旧两文件。仅一次：
+在本metadata下生成一次新的`dbark-query-columns-<32位小写hex>`输出路径，设置DBARK_QUERY_COLUMNS_OUT_DIR，以及DBARK_QUERY_COLUMNS_CSV_PATH／DBARK_QUERY_COLUMNS_JSON_PATH分别为其中`visible-selected.csv`／`visible-selected.json`的准确答案；两个文件及nonce目录预先不存在，由原用例创建。不能使用或覆盖旧两文件。仅一次：
 
 ```sh
 node node_modules/@playwright/test/cli.js test tests/e2e/query-result-sort-case.spec.ts --reporter=json
