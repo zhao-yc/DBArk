@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { ArrowRight, CheckCircle2, Download, Square } from 'lucide-react';
-import type { FileChoice, QueryResult, ResultExportOptions } from '../../shared/contracts';
+import type { FileChoice, ResultExportData, ResultExportOptions } from '../../shared/contracts';
 import { resultExportColumns } from '../../shared/resultExport';
 import { assertResultSqlData, type ResultSqlPreview, type ResultSqlTarget } from '../../shared/resultSql';
 import { resultSqlZh as sqlText } from '../../shared/resultSql.zh-CN';
@@ -13,9 +13,10 @@ import { ErrorBox, Field, Modal } from './ui';
 import '../resultExport.css';
 import { csvExportOptions, type CsvExportDelimiter } from '../../shared/csvExport';
 import { CsvExportDelimiterField } from './CsvExportDelimiter';
+import { tablePageExportZh as tableText } from '../locales/tablePageExport.zh-CN';
 
 /** 仅处理打开时的已返回/勾选快照，SQL目标全部显式填写；不访问连接或重新执行查询。 */
-export function ResultExportDialog({ result, tabId, selected = false, onClose }: { result: QueryResult; tabId: string; selected?: boolean; onClose(): void }) {
+export function ResultExportDialog({ result, tabId, selected = false, scope = 'query', onClose }: { result: ResultExportData; tabId: string; selected?: boolean; scope?: 'query' | 'table'; onClose(): void }) {
   const fixed = useRef(result), alive = useRef(true), invalid = useRef(false), revision = useRef(0);
   if (result !== fixed.current) invalid.current = true;
   const data = useMemo(() => resultExportData(fixed.current), []), columns = useMemo(() => resultExportColumns(data.columns), [data]);
@@ -103,8 +104,8 @@ export function ResultExportDialog({ result, tabId, selected = false, onClose }:
   /** 写入与原子替换等待期间不关闭；其余关闭先完成精确能力释放。 */
   async function close() { if (busyRef.current) return; revision.current++; if (previewRef.current) releases.current.add(previewRef.current.previewId); previewRef.current = null; fileRef.current = null; setPreview(null); setFile(null); try { await drain(); if (alive.current) onClose(); } catch (reason) { report(reason); } }
   const sqlReady = format !== 'sql' || !!preview && validPreview() && confirmation === `${target.database}.${target.table}` && acknowledged;
-  return <Modal title={selected ? zh.resultExport.selectedTitle : zh.resultExport.title} wide onClose={() => void close()}><div className="modal-content">
-    <div className="info-strip">{formatText(selected ? zh.resultExport.selectedRows : zh.resultExport.returnedRows, data.rows.length)}<br/>{selected ? zh.resultExport.selectedOnly : zh.resultExport.returnedOnly}</div>
+  return <Modal title={scope === 'table' ? selected ? tableText.selected : tableText.page : selected ? zh.resultExport.selectedTitle : zh.resultExport.title} wide onClose={() => void close()}><div className="modal-content">
+    <div className="info-strip">{scope === 'table' ? (selected ? tableText.selectedRows : tableText.pageRows)(data.rows.length) : formatText(selected ? zh.resultExport.selectedRows : zh.resultExport.returnedRows, data.rows.length)}<br/>{scope === 'table' ? tableText.scope : selected ? zh.resultExport.selectedOnly : zh.resultExport.returnedOnly}</div>
     {data.truncated && <p className="warning-text">{zh.resultExport.truncated}</p>}
     <div className="form-grid">
       <Field label={zh.resultExport.format}><select aria-label={zh.resultExport.format} value={format} disabled={busy} onChange={event => { const value = event.target.value; if (value !== format && ['csv','json','sql'].includes(value)) change(renderedRevision, () => setFormat(value as typeof format)); }}><option value="csv">CSV</option><option value="json">JSON</option><option value="sql">INSERT SQL</option></select></Field>

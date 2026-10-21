@@ -11,7 +11,7 @@ export function exportableQueryResult(busy: boolean, outcome: QueryOutcome | nul
 }
 
 /** 导出只投影必要列属性并复用不可变行引用，不复制整表或传输原 SQL。 */
-export function resultExportData(result: QueryResult): ResultExportData {
+export function resultExportData(result: ResultExportData): ResultExportData {
   return { columns: result.columns.map(({ key, name }) => ({ key, name })), rows: result.rows, truncated: result.truncated };
 }
 
