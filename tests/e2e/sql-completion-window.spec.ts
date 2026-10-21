@@ -83,12 +83,21 @@ test.describe('200隔离实库：窗口字段接受后执行',()=>{
         ['SELECT s.id,ROW_NUMBER() OVER w AS ranking FROM window_subject s WINDOW w AS(PARTITION BY cat|suffix ORDER BY s.id) ORDER BY s.id','category','SELECT s.id,ROW_NUMBER() OVER w AS ranking FROM window_subject s WINDOW w AS(PARTITION BY `s`.`category` ORDER BY s.id) ORDER BY s.id',3,['1','2','1']],
         ['SELECT s.id,ROW_NUMBER() OVER w AS ranking FROM window_subject s WINDOW w AS(ORDER BY s.amo|suffix) ORDER BY s.id','amount','SELECT s.id,ROW_NUMBER() OVER w AS ranking FROM window_subject s WINDOW w AS(ORDER BY s.`amount`) ORDER BY s.id',3,['2','1','3']],
         ['SELECT s.id,s.amount AS amount_output FROM window_subject s ORDER BY SUM(s.amount) OVER(ORDER BY amo|suffix)','amount','SELECT s.id,s.amount AS amount_output FROM window_subject s ORDER BY SUM(s.amount) OVER(ORDER BY `s`.`amount`)',2,['2','1','3']],
+        ['SELECT s.id,SUM(s.amount) OVER(base ROWS BETWEEN UNBOUNDED PRECEDING AND CUR|suffix ROW) AS running FROM window_subject s WINDOW base AS(PARTITION BY s.category ORDER BY s.id) ORDER BY s.id','CURRENT','SELECT s.id,SUM(s.amount) OVER(base ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS running FROM window_subject s WINDOW base AS(PARTITION BY s.category ORDER BY s.id) ORDER BY s.id',3,['20','30','30']],
+        ['SELECT s.id,SUM(s.amount) OVER child AS running FROM window_subject s WINDOW base AS(PARTITION BY s.category),child AS(base ORDER BY s.id ROWS 1 PRE|suffix) ORDER BY s.id','PRECEDING','SELECT s.id,SUM(s.amount) OVER child AS running FROM window_subject s WINDOW base AS(PARTITION BY s.category),child AS(base ORDER BY s.id ROWS 1 PRECEDING) ORDER BY s.id',3,['20','30','30']],
       ]as const){
         let phase='会话来源核验';
         try{
           if(completed)await confirmWindowSource(database);
           phase='接受补全';
           const before=await page.evaluate(async()=>({tasks:await window.dbark.invoke('tasks.list',{}),history:await window.dbark.invoke('history.list',{})}));await atCaret(marked);await choose(label);await expectSql(expected);expect(await page.evaluate(async()=>({tasks:await window.dbark.invoke('tasks.list',{}),history:await window.dbark.invoke('history.list',{})}))).toEqual(before);
+          // 两类新帧候选必须通过真实撤销／重做后仍为原接受结果，期间不能执行正文。
+          if(label==='CURRENT'||label==='PRECEDING'){
+            await page.keyboard.press(`${modifier}+Z`);await expectSql(marked.replace('|',''));
+            expect(await page.evaluate(async()=>({tasks:await window.dbark.invoke('tasks.list',{}),history:await window.dbark.invoke('history.list',{})}))).toEqual(before);
+            await page.keyboard.press(process.platform==='darwin'?'Meta+Shift+Z':'Control+Y');await expectSql(expected);
+            expect(await page.evaluate(async()=>({tasks:await window.dbark.invoke('tasks.list',{}),history:await window.dbark.invoke('history.list',{})}))).toEqual(before);
+          }
           // 执行补全后保留的真实模型，不能重新填入预期SQL替代产品结果。
           phase='执行接受后的SQL';
           await query().getByRole('button',{name:'执行全部',exact:true}).click();await expect(query().getByRole('button',{name:'停止',exact:true})).toBeDisabled({timeout:20000});await expect(query().locator('.error-box')).toHaveCount(0);await expect(query().locator(`.result-body [role="gridcell"][aria-colindex="${column}"]`)).toHaveText([...values]);

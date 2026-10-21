@@ -154,4 +154,15 @@ describe('窗口帧关键字本地补全', () => {
   ])('未知／循环／冲突／祖先与不合法帧位置不能恢复或借目录：%s', marked => {
     expect(analyzeCompletion(marked.replace('|', ''), marked.indexOf('|'), {}, { windowFunctions: true }).status).toBe('blocked');
   });
+  it.each([
+    ['SELECT SUM(v) OVER(base ROWS BETWEEN UNBOUNDED PRECEDING AND CUR|suffix ROW) FROM users WINDOW base AS(ORDER BY id)', 'CURRENT', 'SELECT SUM(v) OVER(base ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) FROM users WINDOW base AS(ORDER BY id)'],
+    ['SELECT SUM(v) OVER child FROM users WINDOW base AS(PARTITION BY category),child AS(base ORDER BY id ROWS 1 PRE|suffix)', 'PRECEDING', 'SELECT SUM(v) OVER child FROM users WINDOW base AS(PARTITION BY category),child AS(base ORDER BY id ROWS 1 PRECEDING)'],
+  ])('UI原生输入的完整suffix替换保留其它SQL：%s', async (marked, keyword, expected) => {
+    const h = await suggest(marked);
+    expect(h.items.items.map(item => item.insertText)).toEqual([keyword]);
+    const accepted = h.source.slice(0, h.result.target.start) + keyword + h.source.slice(h.result.target.end);
+    expect(accepted).toBe(expected);
+    expect(accepted).not.toBe(h.source);
+    expect(new MySQL().validate(accepted)).toEqual([]);
+  });
 });
