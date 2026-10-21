@@ -104,6 +104,8 @@ export function queryResultFilterKey(column: ResultColumn, value: CellValue): Ke
   const type=kind(column.type);if(!type)throw Error(text.type);return key(value,type,column.type.trim().toUpperCase().endsWith(' UNSIGNED'));
 }
 export { compare as compareQueryResultFilterKeys };
+/** 统计只读复用原类型分类，不扩大排序或筛选的准入语义。 */
+export { kind as queryResultSortKind };
 
 /** 当前结果单向租约与行索引投影；复用原选择/查找/详情合同，不向行中注入伪造主键。 */
 export class QueryResultSort {

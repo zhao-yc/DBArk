@@ -1,0 +1,18 @@
+export const queryResultStatisticsZh = {
+  open: '列统计', title: '列统计', close: '关闭', cancel: '取消统计',
+  column: '统计列', scope: '统计范围', all: '当前结果全部行', selected: '当前结果勾选行',
+  hint: 'NULL 单独计数且不计入不同值；文本按 UTF-16 代码单元比较，不使用数据库 collation；时间只比较原字段，不做时区换算。',
+  notice: '仅统计已经返回且当前筛选后的结果，不重发 SQL，不代表数据库全表。',
+  truncated: '当前结果已截断，统计仅覆盖已返回部分。', scanning: '正在统计当前列…',
+  progress: (processed: number, total: number) => `已处理 ${processed} / ${total} 行`,
+  count: '行数', nonNull: '非 NULL', nulls: 'NULL', distinct: '非空不同值',
+  min: '最小值', max: '最大值', sum: '合计', average: '平均值', approximate: '近似结果', reason: '值指标说明',
+  floatInput: '浮点原值已由数据库驱动以 number 返回；以下十进制计算不能恢复此前丢失的精度。',
+  averageRounded: '有限小数平均值精确扩展且至少保留原值最大小数位；仅循环小数平均值按原值最大小数位与 18 位中的较大者保留小数，恰好一半时向远离零的方向舍入。',
+  unavailable: '—',
+  unsupported: '字节或未知类型仅提供行数、非 NULL 和 NULL 计数，不计算值指标。',
+  value: '列中存在不符合声明类型的原值；仅提供计数，未发布部分值指标。',
+  invalid: '当前列、原行或勾选身份无效，请重新选择。',
+  stale: '统计来源的行列、元数据、原值或勾选已变化，请重新统计。',
+  budget: '当前列统计超过 100000 行、1024 列、单值 4096 字符或原文总计 8 Mi 单元预算，未截断或发布部分结果。',
+} as const;

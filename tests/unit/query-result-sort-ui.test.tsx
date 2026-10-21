@@ -15,6 +15,7 @@ import { queryResultColumnsZh as columnsText } from '../../src/renderer/locales/
 import { zh } from '../../src/renderer/locales/zh-CN';
 import { queryResultFilterZh as filterText } from '../../src/renderer/locales/queryResultFilter.zh-CN';
 import { queryResultPresetsZh as presetsText } from '../../src/renderer/locales/queryResultPresets.zh-CN';
+import { queryResultStatisticsZh as statisticsText } from '../../src/renderer/locales/queryResultStatistics.zh-CN';
 import { queryResultSelectedFilterZh as selectedFilterText } from '../../src/renderer/locales/queryResultSelectedFilter.zh-CN';
 import { queryResultPresetSnapshotSchema, queryResultPresetValueSchema, type QueryResultPresetSnapshot } from '../../src/shared/queryResultPresets';
 const ports=vi.hoisted(()=>({grids:[] as any[],scroll:vi.fn()}));
@@ -1292,4 +1293,60 @@ it.each(['version', 'inactive', 'job', 'result', 'modal'] as const)('命名方�
   });
   const rows = grid().rows; await act(async () => resolve(port.state().entries[0].value));
   expect(grid().rows).toBe(rows); expect(grid().sortColumns).toEqual([]); expect(button(historyText.undo).disabled).toBe(true);
+});
+
+/** 等待实际统计组件的分批定时器；不调用聚合器重算期望值。 */
+async function statisticsReady():Promise<void>{
+  for(let attempt=0;attempt<20&&!document.querySelector('[aria-label="'+statisticsText.sum+'"]');attempt++)await act(async()=>{await new Promise(resolve=>setTimeout(resolve,5));});
+  expect(document.querySelector('[aria-label="'+statisticsText.sum+'"]')).not.toBeNull();
+}
+function statistic(label:string):string{return document.querySelector('[aria-label="'+label+'"]')!.textContent;}
+it('列统计：无活动格时统计首列，精确BIGINT总和与循环平均数不经Number',async()=>{
+  await mount();const rows=grid().rows;await click(statisticsText.open);await statisticsReady();
+  expect(statistic(statisticsText.count)).toBe('3');expect(statistic(statisticsText.nonNull)).toBe('3');expect(statistic(statisticsText.nulls)).toBe('0');expect(statistic(statisticsText.distinct)).toBe('3');
+  expect(statistic(statisticsText.sum)).toBe('18455751272964292610');expect(statistic(statisticsText.average)).toContain('6151917090988097536.666666666666666667');
+  expect(document.body.textContent).toContain(statisticsText.truncated);await click(zh.common.close);expect(grid().rows).toBe(rows);expect(commands.filter(c=>c==='query.execute')).toHaveLength(1);expect(exports).toEqual([]);
+});
+it('列统计：默认已接纳勾选快照，切换列和全部范围保留20位DECIMAL与原结果',async()=>{
+  await mount();await act(async()=>grid().onSelectedRowsChange(new Set([2,0])));await chooseFilterCell(1,'value');const rows=grid().rows;
+  await click(statisticsText.open);await statisticsReady();expect(statistic(statisticsText.count)).toBe('2');expect(statistic(statisticsText.sum)).toBe('0.12345678901234567890');expect(statistic(statisticsText.average)).toBe('0.06172839450617283945');
+  await setFilterField('统计范围','all');await statisticsReady();expect(statistic(statisticsText.count)).toBe('3');expect(statistic(statisticsText.sum)).toBe('0.24691357802469135780');expect(statistic(statisticsText.average)).toBe('0.08230452600823045260');
+  await setFilterField('统计列','id');await statisticsReady();expect(statistic(statisticsText.sum)).toBe('18455751272964292610');
+  await setFilterField('统计范围','selected');await statisticsReady();expect(statistic(statisticsText.sum)).toBe('18446744073709551617');expect(statistic(statisticsText.average)).toBe('9223372036854775808.5');
+  await click(zh.common.close);expect(grid().rows).toBe(rows);expect(grid().selectedRows.size).toBe(0);expect(commands.filter(c=>c==='query.execute')).toHaveLength(1);
+});
+it('列统计：只统计实际筛选视图，关闭不新增整理历史或重复执行SQL',async()=>{
+  await mount();await chooseFilterCell(1,'id');await click(filterText.cellEquals);await click(filterText.apply);const rows=grid().rows;expect(rows).toHaveLength(1);
+  await click(statisticsText.open);await statisticsReady();expect(statistic(statisticsText.sum)).toBe('9007199254740993');expect(statistic(statisticsText.count)).toBe('1');await click(zh.common.close);expect(grid().rows).toBe(rows);
+  await click(historyText.undo);expect(grid().rows).toBe(original.rows);expect(commands.filter(c=>c==='query.execute')).toHaveLength(1);
+});
+it('列统计：空查询结果仍可显示零计数，全部NULL与空文本不混淆',async()=>{
+  await mount(result=>{result.rows=[];});await click(statisticsText.open);await statisticsReady();expect(statistic(statisticsText.count)).toBe('0');expect(statistic(statisticsText.nonNull)).toBe('0');expect(statistic(statisticsText.distinct)).toBe('0');await click(zh.common.close);
+});
+it('列统计：BLOB仅计数，不解码二进制或提供伪造聚合',async()=>{
+  await mount();await chooseFilterCell(0,'bytes');await click(statisticsText.open);await statisticsReady();expect(statistic(statisticsText.count)).toBe('3');expect(statistic(statisticsText.nonNull)).toBe('3');expect(statistic(statisticsText.sum)).toBe('—');expect(statistic(statisticsText.distinct)).toBe('—');expect(commands.filter(c=>c==='query.execute')).toHaveLength(1);
+});
+it.each(['selection','column'] as const)('列统计：%s变化后旧按钮不能借新选择开窗口',async mode=>{
+  await mount();await act(async()=>grid().onSelectedRowsChange(new Set([0])));await chooseFilterCell(0,'id');const old=reactProps(button(statisticsText.open)).onClick;
+  if(mode==='selection')await act(async()=>grid().onSelectedRowsChange(new Set([1])));else await chooseFilterCell(0,'value');await act(async()=>old());
+  expect(document.querySelector('[data-query-result-statistics-owner]')).toBeNull();await click(statisticsText.open);await statisticsReady();expect(statistic(statisticsText.sum)).toBe(mode==='selection'?'9007199254740993':'0.12345678901234567891');
+});
+it('列统计：伪造父选择回执拒绝，空集合也不能覆盖已有勾选',async()=>{
+  await mount();await act(async()=>grid().onSelectedRowsChange(new Set([0,2])));const container=document.querySelectorAll('div').find(node=>reactProps(node)?.className==='query-result-grid')!,component=(reactProps(container).children as any).props;
+  await act(async()=>component.onStatistics(original.columns[0],new Set([1])));expect(document.querySelector('[data-query-result-statistics-owner]')).toBeNull();
+  await act(async()=>component.onStatistics(original.columns[0],new Set()));expect(document.querySelector('[data-query-result-statistics-owner]')).toBeNull();expect(grid().selectedRows.size).toBe(2);
+});
+it.each(['标签ABA','连接ABA','忙态ABA','新查询','新结果','外来模态'] as const)('列统计：%s撤销原窗口，旧关闭不能影响后来窗口',async mode=>{
+  await mount();await click(statisticsText.open);await statisticsReady();const close=reactProps(button(zh.common.close)).onClick,saved=store.getState().settings;
+  if(mode==='标签ABA')await act(async()=>{store.setState({settings:{...saved,activeTabId:'other'}});store.setState({settings:saved});});
+  if(mode==='连接ABA')await act(async()=>{store.setState({connectionVersions:{c:2}});store.setState({connectionVersions:{c:1}});});
+  if(mode==='忙态ABA')await act(async()=>{store.getState().setBusy('q',true);store.getState().setBusy('q',false);});
+  if(mode==='新查询'){await click(zh.query.text010);expect(commands.filter(c=>c==='query.execute')).toHaveLength(1);await click(zh.common.close);await click(zh.query.text010);}if(mode==='新结果')await click(zh.query.text017+'2');
+  if(mode==='外来模态'){const node=document.createElement('div');node.setAttribute('role','dialog');document.body.appendChild(node);node.parentNode!.removeChild(node);await act(async()=>{for(const observer of observers)observer([{addedNodes:[node]}]);});}
+  expect(document.querySelector('[data-query-result-statistics-owner]')).toBeNull();await click(statisticsText.open);await statisticsReady();const owner=document.querySelector('[data-query-result-statistics-owner]')!.getAttribute('data-query-result-statistics-owner');await act(async()=>close());expect(document.querySelector('[data-query-result-statistics-owner]')!.getAttribute('data-query-result-statistics-owner')).toBe(owner);
+});
+it('列统计：所属模态观察不自我撤销，原列值漂移终止已完成指标',async()=>{
+  await mount();await click(statisticsText.open);await statisticsReady();const dialog=document.querySelector('[role="dialog"]')!;
+  await act(async()=>{for(const observer of observers)observer([{addedNodes:[dialog]}]);});expect(statistic(statisticsText.count)).toBe('3');
+  original.rows[0].id='改值';await act(async()=>store.setState({settings:{...store.getState().settings,resultLimit:999}}));expect(document.querySelector('[aria-label="'+statisticsText.sum+'"]')).toBeNull();
 });

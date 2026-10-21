@@ -14,13 +14,14 @@ import { queryResultCopyZh as copyText } from '../../src/renderer/locales/queryR
 import { captureQueryResultGridLayout } from '../helpers/queryResultGridLayout';
 import { queryResultPresetsZh as presetText } from '../../src/renderer/locales/queryResultPresets.zh-CN';
 import { queryResultSelectedFilterZh as selectedFilterText } from '../../src/renderer/locales/queryResultSelectedFilter.zh-CN';
+import { queryResultStatisticsZh as statisticsText } from '../../src/renderer/locales/queryResultStatistics.zh-CN';
 
 /** 仅显式门和Root的RAM绑定后注册；可选命名方案沿用原native、owner和失败保留规则。 */
-export function registerQueryResultOrganizeUi(binding:QueryResultColumnsUiTarget,options?:{presets?:true;selectedFilter?:true}):void {
+export function registerQueryResultOrganizeUi(binding:QueryResultColumnsUiTarget,options?:{presets?:true;selectedFilter?:true;statistics?:true}):void {
  const cases=new Map<TestInfo,{life:QueryResultColumnsUiLifetime;observer?:mysql.Connection;native?:any;stream?:any}>();let halted=false;
  test.use({preserveOnUnconfirmedExit:true,trace:'off',screenshot:'off',video:'off'});test.setTimeout(120000);test.describe.configure({retries:0});
  test.afterEach(({},info)=>{const current=cases.get(info);if(!current){halted=true;retainOwnedDesktopResources(info);throw Error('结果列未建立本例owner，保留现场');}try{current.life.afterEach();cases.delete(info);}catch(reason){halted=true;throw reason;}});
- test(options?.selectedFilter?'准确13384真实App勾选精确值筛选草稿、保留多列排序及CSV／JSON范围一致':'准确13384真实App多列排序与文本、区间、多值及分组筛选、空结果及CSV／JSON范围一致',async({trace,screenshot,video},info)=>{
+ test(options?.statistics?'准确13384真实App列统计精确整数小数、勾选范围及CSV／JSON范围一致':options?.selectedFilter?'准确13384真实App勾选精确值筛选草稿、保留多列排序及CSV／JSON范围一致':'准确13384真实App多列排序与文本、区间、多值及分组筛选、空结果及CSV／JSON范围一致',async({trace,screenshot,video},info)=>{
   if(halted)throw Error('结果列前例已保留资源，停止后续用例');
   const captured=ownedDesktopResources(info),page=captured.page,application=captured.application,directory=dataDir;
   const life=new QueryResultColumnsUiLifetime({check(allowClosed){binding.assertCurrent();const now=ownedDesktopResources(info);if(now.page!==page||now.application!==application||!allowClosed&&now.closed)throw Error('结果列原owner已变化');},closed:()=>ownedDesktopResources(info).closed,retain:()=>{halted=true;retainOwnedDesktopResources(info);},async exit(){life.check();await application.evaluate(readQueryResultColumnsAudit);life.check();await application.evaluate(guardQueryResultColumnsExitAnswers);life.check();await confirmOwnedDesktopExit(info);}},info as TestInfo&{_startWallTime?:number});
@@ -113,6 +114,44 @@ export function registerQueryResultOrganizeUi(binding:QueryResultColumnsUiTarget
     await observe(()=>expect(panel.getByRole('textbox',{name:filterText.input+' 1',exact:true})).toBeDisabled());
     await observe(()=>panel.getByRole('button',{name:filterText.cancel,exact:true}).click());await observe(()=>expect.poll(ids).toEqual(['1','3','2']));
    }
+   if(options?.statistics){
+    const statistics=page.getByRole('dialog',{name:statisticsText.title,exact:true});
+    /** 只核真实可见指标；所有期待均由本例固定SQL的原文字面值独立计算。 */
+    async function metric(name:string,value:string){await observe(()=>expect(statistics.getByLabel(name,{exact:true})).toHaveText(value));}
+    /** 当前列来自真实原格；打开后范围与列都通过正式可见选择器调整。 */
+    async function statisticsColumn(key:string){await observe(()=>statistics.getByRole('combobox',{name:statisticsText.column,exact:true}).selectOption(key));}
+    await observe(()=>grid.locator('[role="row"][aria-rowindex="2"] [role="gridcell"][aria-colindex="4"]').click());
+    await observe(()=>tab.getByRole('button',{name:statisticsText.open,exact:true}).click());await observe(()=>expect(statistics).toBeVisible());
+    await observe(()=>expect(page.locator('[data-query-result-statistics-owner]')).toHaveCount(1));
+    await observe(()=>expect(statistics.getByRole('note')).toHaveCount(0));
+    await observe(()=>expect(statistics.getByRole('combobox',{name:statisticsText.scope,exact:true})).toHaveValue('all'));
+    await statisticsColumn('c1');
+    await metric(statisticsText.count,'3');await metric(statisticsText.nonNull,'3');await metric(statisticsText.nulls,'0');await metric(statisticsText.distinct,'3');
+    await metric(statisticsText.min,'2');await metric(statisticsText.max,'18446744073709551615');await metric(statisticsText.sum,'18455751272964292610');await metric(statisticsText.average,'6151917090988097536.666666666666666667');
+    await observe(()=>expect(statistics.getByText(statisticsText.averageRounded,{exact:true})).toBeVisible());
+    await statisticsColumn('c2');
+    await metric(statisticsText.distinct,'3');await metric(statisticsText.min,'0.12345678901234567890');await metric(statisticsText.max,'2.00000000000000000000');
+    await metric(statisticsText.sum,'3.12345678901234567891');await metric(statisticsText.average,'1.04115226300411522630');
+    // 原常量SQL的全NULL、空文本、字节列，只核各自可证明范围；不将字节解释成文本或数值。
+    await statisticsColumn('c3');await metric(statisticsText.count,'3');await metric(statisticsText.nonNull,'0');await metric(statisticsText.nulls,'3');await metric(statisticsText.distinct,'0');
+    await statisticsColumn('c4');await metric(statisticsText.nonNull,'3');await metric(statisticsText.nulls,'0');await metric(statisticsText.distinct,'1');await metric(statisticsText.min,'');await metric(statisticsText.max,'');
+    await statisticsColumn('c5');await metric(statisticsText.count,'3');await metric(statisticsText.nonNull,'2');await metric(statisticsText.nulls,'1');
+    await metric(statisticsText.distinct,statisticsText.unavailable);await metric(statisticsText.sum,statisticsText.unavailable);
+    await observe(()=>statistics.getByRole('button',{name:statisticsText.close,exact:true}).click());await observe(()=>expect(statistics).toBeHidden());
+    // 排序后不连续的第一、第三行是id1和id2；新打开默认使用捕获勾选，不重新执行SQL。
+    for(const index of [2,4])await observe(()=>grid.locator('[role="row"][aria-rowindex="'+index+'"]').getByRole('checkbox').check());
+    await observe(()=>grid.locator('[role="row"][aria-rowindex="2"] [role="gridcell"][aria-colindex="4"]').click());
+    await observe(()=>tab.getByRole('button',{name:statisticsText.open,exact:true}).click());
+    await observe(()=>expect(statistics.getByRole('combobox',{name:statisticsText.scope,exact:true})).toHaveValue('selected'));
+    await statisticsColumn('c1');await metric(statisticsText.count,'2');await metric(statisticsText.nonNull,'2');await metric(statisticsText.distinct,'2');
+    await metric(statisticsText.min,'2');await metric(statisticsText.max,'18446744073709551615');await metric(statisticsText.sum,'18446744073709551617');await metric(statisticsText.average,'9223372036854775808.5');
+    await observe(()=>expect(statistics.getByText(statisticsText.averageRounded,{exact:true})).toHaveCount(0));
+    await statisticsColumn('c2');await metric(statisticsText.sum,'2.12345678901234567890');await metric(statisticsText.average,'1.06172839450617283945');
+    await observe(()=>statistics.getByRole('combobox',{name:statisticsText.scope,exact:true}).selectOption('all'));await metric(statisticsText.count,'3');await metric(statisticsText.sum,'3.12345678901234567891');
+    await observe(()=>statistics.getByRole('combobox',{name:statisticsText.scope,exact:true}).selectOption('selected'));await metric(statisticsText.count,'2');await metric(statisticsText.sum,'2.12345678901234567890');
+    await observe(()=>statistics.getByRole('button',{name:statisticsText.close,exact:true}).click());await observe(()=>expect(statistics).toBeHidden());
+    await observe(()=>expect.poll(ids).toEqual(['1','3','2']));await observe(()=>expect(tab.getByRole('list',{name:sortText.priorities,exact:true}).getByRole('listitem')).toHaveCount(2));
+   }
    await observe(()=>tab.getByRole('button',{name:filterText.open,exact:true}).click());await addRule(1,3,'lte','1.00000000000000000001');
    await observe(()=>expect.poll(ids).toEqual(['1','3','2']));await observe(()=>panel.getByRole('button',{name:filterText.cancel,exact:true}).click());await observe(()=>expect.poll(ids).toEqual(['1','3','2']));
    await observe(()=>tab.getByRole('button',{name:filterText.open,exact:true}).click());await addRule(1,3,'lte','1.00000000000000000001');await addRule(2,1,'eq','2');
@@ -195,6 +234,24 @@ export function registerQueryResultOrganizeUi(binding:QueryResultColumnsUiTarget
    const nullCell=grid.locator('[role="row"][aria-rowindex="2"] [role="gridcell"][aria-colindex="6"]');await observe(()=>nullCell.click());await observe(()=>tab.getByRole('button',{name:filterText.cellEquals,exact:true}).click());await observe(()=>expect(panel.getByRole('combobox',{name:filterText.operator+' 4',exact:true})).toHaveValue('null'));await observe(()=>expect(panel.getByRole('textbox',{name:filterText.input+' 4',exact:true})).toBeDisabled());await observe(()=>panel.getByRole('button',{name:filterText.cancel,exact:true}).click());await observe(()=>expect.poll(ids).toEqual(['1','3']));
    await observe(()=>nullCell.click());await observe(()=>tab.getByRole('button',{name:filterText.cellEquals,exact:true}).click());await observe(()=>panel.getByRole('button',{name:filterText.apply,exact:true}).click());await observe(()=>expect.poll(ids).toEqual(['1','3']));
    await observe(()=>expect(tab.locator('.query-result-filter-bar')).toContainText(filterText.counts(3,2)));
+   if(options?.statistics){
+    // 此时完整源仍返回3行，已生效筛选只显示id1/id3；all必须统计筛选后的两行。
+    const statistics=page.getByRole('dialog',{name:statisticsText.title,exact:true});
+    await observe(()=>grid.locator('[role="row"][aria-rowindex="2"] [role="gridcell"][aria-colindex="4"]').click());
+    await observe(()=>tab.getByRole('button',{name:statisticsText.open,exact:true}).click());
+    await observe(()=>expect(statistics.getByRole('combobox',{name:statisticsText.scope,exact:true})).toHaveValue('all'));
+    await observe(()=>statistics.getByRole('combobox',{name:statisticsText.column,exact:true}).selectOption('c1'));
+    await observe(()=>expect(statistics.getByLabel(statisticsText.count,{exact:true})).toHaveText('2'));
+    await observe(()=>expect(statistics.getByLabel(statisticsText.sum,{exact:true})).toHaveText('18455751272964292608'));
+    await observe(()=>expect(statistics.getByLabel(statisticsText.average,{exact:true})).toHaveText('9227875636482146304'));
+    // 精确有限均值可以比原20位尺度多一位，不能舍掉最后的5或标成近似。
+    await observe(()=>statistics.getByRole('combobox',{name:statisticsText.column,exact:true}).selectOption('c2'));
+    await observe(()=>expect(statistics.getByLabel(statisticsText.sum,{exact:true})).toHaveText('1.12345678901234567891'));
+    await observe(()=>expect(statistics.getByLabel(statisticsText.average,{exact:true})).toHaveText('0.561728394506172839455'));
+    await observe(()=>expect(statistics.getByText(statisticsText.averageRounded,{exact:true})).toHaveCount(0));
+    await observe(()=>statistics.getByRole('button',{name:statisticsText.close,exact:true}).click());await observe(()=>expect(statistics).toBeHidden());
+    await observe(()=>expect.poll(ids).toEqual(['1','3']));
+   }
    if(options?.presets){
     // 只从真实列头和选项建立多列排序；命名方案通过原IPC持久化，禁用内部状态注入。
     await observe(()=>heads.nth(1).click());await observe(()=>heads.nth(3).click({modifiers:[modifier]}));
