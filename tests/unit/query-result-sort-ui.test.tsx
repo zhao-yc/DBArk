@@ -204,6 +204,32 @@ function reactProps(node:any){return node[Object.keys(node).find(key=>key.starts
 /** 走真实条件组件的受控启停入口；仅DOM宿主由内存实现。 */
 async function enableFilterRule(index:number,enabled:boolean){const node=document.querySelector('[aria-label="'+filterText.enabled(index)+'"]')!;expect(node).not.toBeNull();await act(async()=>reactProps(node).onChange({target:{checked:enabled}}));}
 
+it('批量启停：保留所有层级和原值，显式应用前不改视图，全部重启恢复原组合',async()=>{
+  await mount();await click(filterText.open);expect(button(filterText.enableAll).disabled).toBe(true);expect(button(filterText.disableAll).disabled).toBe(true);
+  await click(filterText.addGroup);await configureGroupedRule(1,'id','eq','2');await click(filterText.addGroupInGroup('1'));await configureGroupedRule(2,'id','eq','18446744073709551615');await addFilterRule(3,'id','eq','2');await click(filterText.apply);expect(grid().rows).toEqual([original.rows[2]]);
+  await click(filterText.open);expect(button(filterText.enableAll).disabled).toBe(true);const before=grid().rows;await click(filterText.disableAll);expect(grid().rows).toBe(before);
+  for(const index of [1,2,3])expect(document.querySelector('[aria-label="'+filterText.enabled(index)+'"]')!.checked).toBe(false);
+  expect(document.querySelector('[aria-label="'+filterText.input+' 2"]')!.value).toBe('18446744073709551615');expect(button(filterText.disableAll).disabled).toBe(true);await click(filterText.apply);expect(grid().rows).toBe(original.rows);
+  await click(filterText.open);expect(document.querySelector('[aria-label="'+filterText.groupMode('1')+'"]')!.value).toBe('OR');expect(document.querySelector('[aria-label="'+filterText.groupMode('1.1')+'"]')!.value).toBe('OR');await click(filterText.enableAll);
+  for(const index of [1,2,3])expect(document.querySelector('[aria-label="'+filterText.enabled(index)+'"]')!.checked).toBe(true);
+  await click(filterText.apply);expect(grid().rows).toEqual([original.rows[2]]);expect(commands.filter(command=>command==='query.execute')).toHaveLength(1);
+});
+it('批量启停：取消不改变已应用状态，草稿变更后旧批量回调不能重新覆盖',async()=>{
+  await mount();await click(filterText.open);await addFilterRule(1,'id','eq','2');await addFilterRule(2,'id','eq','2');const oldDisable=reactProps(button(filterText.disableAll)).onClick;await enableFilterRule(1,false);
+  await act(async()=>oldDisable());expect(document.querySelector('[aria-label="'+filterText.enabled(2)+'"]')!.checked).toBe(true);await click(filterText.apply);
+  await click(filterText.open);await click(filterText.enableAll);await click(filterText.cancel);await click(filterText.open);
+  expect(document.querySelector('[aria-label="'+filterText.enabled(1)+'"]')!.checked).toBe(false);expect(document.querySelector('[aria-label="'+filterText.enabled(2)+'"]')!.checked).toBe(true);
+  const oldEnable=reactProps(button(filterText.enableAll)).onClick;await click(filterText.remove(1));await addFilterRule(2,'id','eq','9007199254740993');await act(async()=>oldEnable());expect(document.querySelector('[aria-label="'+filterText.input+' 2"]')!.value).toBe('9007199254740993');
+  await click(filterText.apply);expect(grid().rows).toEqual([]);expect(commands.filter(command=>command==='query.execute')).toHaveLength(1);
+});
+it('批量启停：输入法组合阻止批量修改，重启无效草稿不覆盖原生效视图',async()=>{
+  await mount();await click(filterText.open);await addFilterRule(1,'id','eq','2');await addFilterRule(2,'id','eq','未填写');await enableFilterRule(2,false);
+  const disable=reactProps(button(filterText.disableAll)).onClick,enable=reactProps(button(filterText.enableAll)).onClick,input=document.querySelector('[aria-label="'+filterText.input+' 1"]')!;
+  await act(async()=>reactProps(input).onCompositionStart());expect(button(filterText.enableAll).disabled).toBe(true);expect(button(filterText.disableAll).disabled).toBe(true);await act(async()=>{disable();enable();});expect(document.querySelector('[aria-label="'+filterText.enabled(1)+'"]')!.checked).toBe(true);expect(document.querySelector('[aria-label="'+filterText.enabled(2)+'"]')!.checked).toBe(false);
+  await act(async()=>reactProps(document.querySelector('[aria-label="'+filterText.input+' 1"]')).onCompositionEnd());await click(filterText.disableAll);await click(filterText.apply);expect(grid().rows).toBe(original.rows);
+  await click(filterText.open);await click(filterText.enableAll);const before=grid().rows;await click(filterText.apply);expect(grid().rows).toBe(before);expect(document.body.textContent).toContain(filterText.value);expect(document.querySelector('[aria-label="'+filterText.title+'"]')).not.toBeNull();await click(filterText.cancel);await click(filterText.open);expect(document.querySelector('[aria-label="'+filterText.enabled(1)+'"]')!.checked).toBe(false);expect(commands.filter(command=>command==='query.execute')).toHaveLength(1);
+});
+
 it('条件启停：停用保留原值与草稿，应用恢复原行，重开启用后重新筛选且不执行SQL',async()=>{
   await mount();await sort();await act(async()=>grid().onSelectedRowsChange(new Set([0])));await click(filterText.open);await addFilterRule(1,'id','eq','2');await enableFilterRule(1,false);
   expect(document.querySelector('[aria-label="'+filterText.input+' 1"]')!.value).toBe('2');await click(filterText.apply);expect(grid().rows).toBe(original.rows);expect(grid().sortColumns).toEqual([]);expect(grid().selectedRows.size).toBe(0);

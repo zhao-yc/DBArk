@@ -47,6 +47,18 @@ export function QueryResultFilterPanel({binding,initial,seed,isCurrent,onApply,o
       children.splice(index+1,0,{id:sequence.current++,kind:'rule',rule});return{...group,children};
     }));
   }
+  /** 批量启停只修改当前草稿的启用位；保留所有层级、稳定ID、成员与原文，不应用或扫描结果。 */
+  function setAllEnabled(enabled:boolean):void{
+    if(!current(draft)||composition.current||!numbers.size||(enabled?enabledCount===numbers.size:enabledCount===0))return;
+    function change(group:DraftGroup):DraftGroup{
+      return{...group,children:group.children.map(child=>{
+        if(child.kind==='group')return change(child);
+        const{enabled:previous,...rule}=child.rule;
+        return{...child,rule:enabled?rule:{...rule,enabled:false}};
+      })};
+    }
+    replace(change(draft));
+  }
   /** 输入法组合不会变成应用或跨面板解锁。 */
   function beginComposition():void{if(current(draft)){composition.current=true;setComposing(true);}}
   function endComposition():void{if(current()){composition.current=false;setComposing(false);}}
@@ -61,12 +73,14 @@ export function QueryResultFilterPanel({binding,initial,seed,isCurrent,onApply,o
     if(event.repeat)return;
     if(apply)applyDraft();else if(current(draft))onClose();
   }
-  const valid=current(),numbers=new Map<number,number>();let groups=0;
+  const valid=current(),numbers=new Map<number,number>();let groups=0,enabledCount=0;
   /** 展示编号按树顺序连续排列，编辑身份始终使用稳定ID而非展示位置。 */
-  function count(group:DraftGroup):void{groups++;for(const child of group.children)if(child.kind==='group')count(child);else numbers.set(child.id,numbers.size+1);}
+  function count(group:DraftGroup):void{groups++;for(const child of group.children)if(child.kind==='group')count(child);else{numbers.set(child.id,numbers.size+1);if(child.rule.enabled!==false)enabledCount++;}}
   count(draft);
   /** 各组独立组合；新增子组自带一个可见条件，空子组应用时由控制器明确拒绝。 */
-  function groupActions(group:DraftGroup,path:string,depth:number){return <div className="query-result-filter-group-actions"><button disabled={!valid||composing||numbers.size>=queryResultFilterLimits.conditions||!binding.visible.length} onClick={()=>replace(editGroup(draft,group.id,node=>({...node,children:[...node.children,newRule()]})))}>{path?text.addInGroup(path):text.add}</button><button disabled={!valid||composing||numbers.size>=queryResultFilterLimits.conditions||groups>=queryResultFilterLimits.groups||depth>=queryResultFilterLimits.depth||!binding.visible.length} onClick={()=>replace(editGroup(draft,group.id,node=>({...node,children:[...node.children,{id:sequence.current++,kind:'group',mode:'OR',children:[newRule()]}]})))}>{path?text.addGroupInGroup(path):text.addGroup}</button></div>;}
+  function groupActions(group:DraftGroup,path:string,depth:number){return <div className="query-result-filter-group-actions"><button disabled={!valid||composing||numbers.size>=queryResultFilterLimits.conditions||!binding.visible.length} onClick={()=>replace(editGroup(draft,group.id,node=>({...node,children:[...node.children,newRule()]})))}>{path?text.addInGroup(path):text.add}</button><button disabled={!valid||composing||numbers.size>=queryResultFilterLimits.conditions||groups>=queryResultFilterLimits.groups||depth>=queryResultFilterLimits.depth||!binding.visible.length} onClick={()=>replace(editGroup(draft,group.id,node=>({...node,children:[...node.children,{id:sequence.current++,kind:'group',mode:'OR',children:[newRule()]}]})))}>{path?text.addGroupInGroup(path):text.addGroup}</button>
+    {!path&&<><button type="button" aria-label={text.enableAll} title={text.bulkHint} disabled={!valid||composing||enabledCount===numbers.size} onClick={()=>setAllEnabled(true)}>{text.enableAllLabel}</button><button type="button" aria-label={text.disableAll} title={text.bulkHint} disabled={!valid||composing||enabledCount===0} onClick={()=>setAllEnabled(false)}>{text.disableAllLabel}</button></>}
+  </div>;}
   /** 递归渲染深度受草稿构造和控制器双重限制，不拼接SQL或解析括号文本。 */
   function renderGroup(group:DraftGroup,path:string,depth:number):ReactNode{let childGroup=0;return <><label>{path?text.groupMode(path):text.mode}<select aria-label={path?text.groupMode(path):text.mode} value={group.mode} disabled={!valid||composing} onChange={event=>replace(editGroup(draft,group.id,node=>({...node,mode:event.target.value as QueryResultFilterGroup['mode']})))}><option value="AND">{text.and}</option><option value="OR">{text.or}</option></select></label>{group.children.map(child=>{
     if(child.kind==='group'){const childPath=path?`${path}.${++childGroup}`:String(++childGroup);return <fieldset className="query-result-filter-group" aria-label={text.group(childPath)} key={child.id}><legend>{text.group(childPath)}</legend>{renderGroup(child,childPath,depth+1)}<button aria-label={text.removeGroup(childPath)} disabled={!valid||composing} onClick={()=>replace(editGroup(draft,group.id,node=>({...node,children:node.children.filter(node=>node.id!==child.id)})))}>{text.removeGroup(childPath)}</button></fieldset>;}
