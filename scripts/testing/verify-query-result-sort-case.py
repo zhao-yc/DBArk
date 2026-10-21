@@ -11,6 +11,7 @@ import stat
 import sys
 
 LIMIT = 32768
+WINDOWS = sys.platform == 'win32'
 HEADERS = ['id', 'text_value', 'big_value', 'exact_value', 'moment_value', 'duration_value', 'group_value', 'bytes']
 CSV_ROWS = [
     ['1', 'a', '18446744073709551615', '0.12345678901234567890', '\\N', '\\N', '\\N', 'base64:AP8='],
@@ -67,8 +68,14 @@ def verify_bytes(csv_bytes, json_bytes, csv_sha256, json_sha256):
 
 
 def stamp(value):
-    """保存文件设备号、inode、大小及纳秒时间。"""
+    """保存同一种stat接口的完整快照，ctime绝不跨接口混用。"""
     return value.st_dev, value.st_ino, value.st_size, value.st_mtime_ns, value.st_ctime_ns
+
+
+def binding_stamp(value):
+    """跨路径／句柄绑定身份；Windows新版本以明确birthtime对齐创建时间。"""
+    creation = getattr(value, 'st_birthtime_ns', value.st_ctime_ns) if WINDOWS else value.st_ctime_ns
+    return value.st_dev, value.st_ino, value.st_size, value.st_mtime_ns, creation
 
 
 def regular(value):
@@ -82,13 +89,18 @@ def read_pinned(path):
     require(regular(before) and 0 < before.st_size <= LIMIT, '输入须为有界普通文件')
     descriptor = os.open(path, os.O_RDONLY | getattr(os, 'O_NOFOLLOW', 0) | getattr(os, 'O_BINARY', 0))
     try:
-        require(stamp(os.fstat(descriptor)) == stamp(before), '文件打开时身份已变化')
+        opened = os.fstat(descriptor)
+        require(regular(opened) and binding_stamp(opened) == binding_stamp(before), '文件打开时身份已变化')
         with os.fdopen(descriptor, 'rb', closefd=False) as source:
             raw = source.read(LIMIT + 1)
-        require(len(raw) == before.st_size and stamp(os.fstat(descriptor)) == stamp(before), '文件读取期间已变化')
+        after = os.fstat(descriptor)
+        require(len(raw) == before.st_size and regular(after) and stamp(after) == stamp(opened)
+                and binding_stamp(after) == binding_stamp(opened), '文件读取期间已变化')
     finally:
         os.close(descriptor)
-    require(stamp(path.lstat()) == stamp(before), '原文件路径已被替换')
+    after_path = path.lstat()
+    require(regular(after_path) and stamp(after_path) == stamp(before)
+            and binding_stamp(after_path) == binding_stamp(before), '原文件路径已被替换')
     return raw, before
 
 
@@ -105,8 +117,12 @@ def verify_files(csv_path, json_path, csv_sha256, json_sha256):
     csv_bytes, csv_identity = read_pinned(csv_path)
     json_bytes, json_identity = read_pinned(json_path)
     result = verify_bytes(csv_bytes, json_bytes, csv_sha256, json_sha256)
-    require(stamp(csv_path.lstat()) == stamp(csv_identity) and stamp(json_path.lstat()) == stamp(json_identity), '两文件读取后原路径或内容已变化')
-    require(stamp(parent.lstat()) == stamp(before), '本例目录读取期间已变化')
+    csv_after, json_after = csv_path.lstat(), json_path.lstat()
+    require(all(regular(after) and stamp(after) == stamp(original)
+                and binding_stamp(after) == binding_stamp(original)
+                for after, original in [(csv_after, csv_identity), (json_after, json_identity)]), '两文件读取后原路径或内容已变化')
+    parent_after = parent.lstat()
+    require(stamp(parent_after) == stamp(before) and binding_stamp(parent_after) == binding_stamp(before), '本例目录读取期间已变化')
     result['stableRead'] = True
     result['identities'] = {'csv': [str(value) for value in stamp(csv_identity)], 'json': [str(value) for value in stamp(json_identity)]}
     return result
