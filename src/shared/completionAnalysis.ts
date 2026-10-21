@@ -120,9 +120,18 @@ export function analyzeCompletion(source:string,offset:number,mode:CompletionLex
     if(insertRow){
       if(insertRow==='unsupported')return{status:'blocked',reason:'syntax'};
       if(capabilities.insertRowAliases!==true)return{status:'blocked',reason:'capability'};
-      const target=tables.filter(entity=>entity.belongStmt.stmtContextType==='insertStmt'&&entity.position.startIndex===insertRow.targetStart);
+      // 固定解析库把SET末尾普通函数后的AS误判；只在内部AST投影给已确认的赋值表达式加括号，DEFAULT保持独立。
+      // 表头位置和原替换范围不变；检查新投影预算、完整语法与同一目标表，不改用户SQL或执行文本。
+      let checkedText=normalized.text,checkedCaret=normalized.caret;
+      for(const value of [...(insertRow.setValues??[])].reverse())checkedText=checkedText.slice(0,value.start)+'('+checkedText.slice(value.start,value.end)+')'+checkedText.slice(value.end);
+      checkedCaret+=(insertRow.setValues?.length??0)*2;
+      if(insertRow.setValues&&completionLexicalContext(checkedText,checkedCaret,{ansiQuotes:false,noBackslashEscapes:true}).status!=='ready')return{status:'blocked',reason:'budget'};
+      const checked=insertRow.setValues?new QuietMySQL():parser,checkedBefore=checkedText.slice(0,checkedCaret).split('\n'),checkedPosition={lineNumber:checkedBefore.length,column:checkedBefore.at(-1)!.length+1};
+      const checkedEntities=insertRow.setValues?checked.getAllEntities(checkedText,checkedPosition)??[]:entities;
+      if(checkedEntities.length>completionLimits.tokens)return{status:'blocked',reason:'budget'};
+      const target=checkedEntities.filter(entity=>entity.entityContextType==='table'&&entity.belongStmt.stmtContextType==='insertStmt'&&entity.position.startIndex===insertRow.targetStart);
       // 词法范围必须与真实 AST 目标一致；哨兵只能修复正在编辑的名称，不能补造其它缺失语法。
-      if(target.length!==1||lexical.tokens.some(token=>!token.closed&&token.start!==lexical.target.start)||parser.validate(normalized.text).length)return{status:'blocked',reason:'syntax'};
+      if(target.length!==1||lexical.tokens.some(token=>!token.closed&&token.start!==lexical.target.start)||checked.validate(checkedText).length)return{status:'blocked',reason:'syntax'};
       const parts=entityName(target[0].text);if(!parts?.length||parts.length>2||parts.includes(normalized.sentinel))return{status:'blocked',reason:'syntax'};
       const database=parts.length===2?parts[0]:undefined,table=parts.at(-1)!;
       return{status:'ready',target:lexical.target,syntax:['column'],keywords:[],relations:[{name:insertRow.name,source:'table',database,table,aliased:true,columns:[],catalogs:[{database,table}],incomplete:false}],localRelations:[],columnMode:'expression',incomplete:false};

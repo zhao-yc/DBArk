@@ -23,13 +23,14 @@ it.each([
   'INSERT INTO sales(amount) VALUES(CAST(1 AS DECIMAL(10,2))),(CAST(2 AS DECIMAL)) AS `DECIMAL` ON DUPLICATE KEY UPDATE amount=`DECIMAL`.am§',
   'INSERT INTO sales(amount) VALUES(1) AS `DECIMAL` ON DUPLICATE KEY UPDATE amount=CAST(`DECIMAL`.am§ AS DECIMAL)',
   "INSERT INTO sales(amount) VALUES(CONCAT('AS DECIMAL',1)) /* AS DECIMAL */ AS `DECIMAL` ON DUPLICATE KEY UPDATE amount=`DECIMAL`.am§",
-])('仅VALUES尾部AS声明真实行别名，表达式内同名AS不干扰：%s',async text=>{
+  'INSERT INTO sales SET amount=CAST(1 AS DECIMAL) AS incoming ON DUPLICATE KEY UPDATE amount=incoming.am§',
+])('仅VALUES／SET尾部AS声明真实行别名，表达式内同名AS不干扰：%s',async text=>{
   const result=await complete(text);expect(result.analysis.status).toBe('ready');expect(result.requests).toEqual([{kind:'columns',database:'active',table:'sales',prefix:'am'}]);expect(result.items).toContainEqual(expect.objectContaining({kind:'column',insertText:'`amount`'}));
 });
 
 it.each([
   'INSERT INTO sales(amount) VALUES(CAST(1 AS DECIMAL)) AS incoming(x) ON DUPLICATE KEY UPDATE amount=incoming.am§',
-  'INSERT INTO sales SET amount=CAST(1 AS DECIMAL) AS incoming ON DUPLICATE KEY UPDATE amount=incoming.am§',
+  'INSERT INTO sales SET amount=CAST(1 AS DECIMAL) AS incoming(x) ON DUPLICATE KEY UPDATE amount=incoming.am§',
   'INSERT INTO sales(amount) VALUES(1) AS incoming ON DUPLICATE KEY UPDATE amount=(SELECT incoming.am§)',
   'INSERT INTO sales(amount VALUES(1) AS incoming ON DUPLICATE KEY UPDATE amount=incoming.am§',
   'INSERT INTO sales(amount) VALUES(incoming.am§) AS incoming ON DUPLICATE KEY UPDATE amount=1',

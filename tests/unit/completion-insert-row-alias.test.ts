@@ -19,11 +19,13 @@ async function stopped(marked:string,capabilities:Parameters<typeof analyzeCompl
 function workerBundle(){return buildSync({entryPoints:['src/renderer/completion.worker.ts'],bundle:true,write:false,platform:'browser',format:'iife',target:'es2022',logLevel:'silent'}).outputFiles[0].text;}
 function workerPort(bundle:string){const messages:any[]=[],self:{postMessage:(data:unknown)=>void;onmessage?:(event:{data:unknown})=>void}={postMessage:data=>messages.push(structuredClone(data))};runInNewContext(bundle,{self,console:{error:()=>{throw Error('不能输出 SQL');},warn:()=>{},log:()=>{}},setTimeout,clearTimeout},{timeout:8000});return{messages,self};}
 
-describe('INSERT VALUES 新行别名补全',()=>{
+describe('INSERT VALUES／SET 新行别名补全',()=>{
   it.each([
     sql,
     'INSERT INTO app.users(id,name) VALUES (1,\'甲\'),(2,\'乙\') AS incoming ON DUPLICATE KEY UPDATE id=1,name=COALESCE(incoming.|,name)',
     'INSERT IGNORE app.users VALUE (1,\'甲\') AS incoming ON DUPLICATE KEY UPDATE name=(incoming.|)',
+    'INSERT INTO app.users SET id=1,name=\'甲\' AS incoming ON DUPLICATE KEY UPDATE name=incoming.|',
+    'INSERT INTO app.users SET id=1 AS incoming ON DUPLICATE KEY UPDATE id=incoming.|',
   ])('单行、多行及普通表达式只读真实目标表：%s',async marked=>{const a=ready(marked),d=directory(),result=await completionSuggestions(a,'wrong',d);expect(a.syntax).toEqual(['column']);expect(a.relations).toMatchObject([{name:'incoming',source:'table',database:'app',table:'users',aliased:true,columns:[]}]);expect(d.load).toHaveBeenCalledExactlyOnceWith({kind:'columns',database:'app',table:'users',prefix:''},undefined);expect(result.items.map(item=>item.label)).toEqual(['name','created_at']);expect(result.items.map(item=>item.insertText)).toEqual(['`name`','`created_at`']);});
   it('UTF16 范围保留原文与后缀，引用库表和带点别名保持单段名称',async()=>{const marked='/* 😀 */ INSERT INTO `app.db`.`user.table`(id) VALUES (1) AS `new.row` ON DUPLICATE KEY UPDATE name=`new.row`.`na|suffix`',a=ready(marked),d=directory(),result=await completionSuggestions(a,'wrong',d);expect(a.target).toMatchObject({start:marked.indexOf('`na'),end:marked.replace('|','').length,prefix:'na',qualifiers:['new.row'],quoted:true});expect(d.load).toHaveBeenCalledExactlyOnceWith({kind:'columns',database:'app.db',table:'user.table',prefix:'na'},undefined);expect(result.items.map(item=>item.insertText)).toEqual(['`name`']);});
   it('默认库只用于未限定目标表，未知默认库不猜测字段',async()=>{const a=ready(sql.replace('app.users','users')),d=directory();expect((await completionSuggestions(a,undefined,d)).items).toEqual([]);expect(d.load).not.toHaveBeenCalled();await completionSuggestions(a,'current',d);expect(d.load).toHaveBeenCalledExactlyOnceWith({kind:'columns',database:'current',table:'users',prefix:''},undefined);});
@@ -31,7 +33,7 @@ describe('INSERT VALUES 新行别名补全',()=>{
     'INSERT INTO users(id) VALUES (incoming.|) AS incoming ON DUPLICATE KEY UPDATE id=1',
     'INSERT INTO users(id) VALUES (1) AS incoming ON DUPLICATE KEY UPDATE incoming.|=1',
     'INSERT INTO users(id) VALUES (1) AS incoming(x) ON DUPLICATE KEY UPDATE id=incoming.|',
-    'INSERT INTO users SET id=1 AS incoming ON DUPLICATE KEY UPDATE id=incoming.|',
+    'INSERT INTO users SET id=1 AS incoming(x) ON DUPLICATE KEY UPDATE id=incoming.|',
     'INSERT INTO users(id) VALUES (1) AS incoming ON DUPLICATE KEY UPDATE id=(SELECT incoming.|)',
     'INSERT INTO users(id) VALUES ((SELECT 1)) AS incoming ON DUPLICATE KEY UPDATE id=incoming.|',
     'INSERT INTO users(id) VALUES (1) AS users ON DUPLICATE KEY UPDATE id=users.|',

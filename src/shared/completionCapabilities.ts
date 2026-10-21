@@ -7,7 +7,7 @@ export function completionCapabilitiesForServer(dialect:unknown,serverVersion:un
   if(typeof serverVersion!=='string'||serverVersion.length>128)return disabled;
   if(dialect==='mysql'){
     const version=/^8\.(0|[1-9]\d{0,2})\.(0|[1-9]\d{0,2})(?:-(?:log|commercial|debug))?$/.exec(serverVersion);
-    // VALUES 新行别名从 MySQL 8.0.19 起支持，仍沿用已认可的版本及厂商格式。
+    // VALUES／SET新行别名从MySQL8.0.19起支持，仍沿用已认可的版本及厂商格式。
     return{lateralDerivedTables:!!version&&(Number(version[1])>0||Number(version[2])>=14),windowFunctions:!!version&&(Number(version[1])>0||Number(version[2])>=2),insertRowAliases:!!version&&(Number(version[1])>0||Number(version[2])>=19)};
   }
   // 仅已核验MariaDB家族的10.2+/11.x；兼容前缀可去掉，未知厂商/主版本继续关闭。
