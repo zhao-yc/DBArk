@@ -20,6 +20,7 @@
 - **候选值列表**：逐项填写，逗号、换行及引号保留原文，空文本是独立值。
 - **文本通配**：`%` 匹配任意长度，`_` 匹配一个 Unicode 码点；`\%`、`\_`、`\\` 匹配对应文字。其它文本比较按字面处理。
 - **复制条件**：在原条件后生成独立副本，区间、成员和大小写选项保留。
+- **移动条件**：有多个组时，在条件的“分组”选择框中选择最外层或子组，原条件移至目标组末尾，原值与启用状态保持。点击应用才生效；空源组需补条件或移除。
 - **暂时停用**：取消条件的“启用”勾选，保留原值。“全部停用／全部启用”覆盖所有子组，仍须应用；全部停用后显示全部已返回行。
 - **按单元格追加**：选择单元格，点击“追加等值条件”或“追加排除条件”，审阅草稿后应用。
 
@@ -33,4 +34,4 @@
 
 ## 验证范围
 
-详细来源见[排序](query-result-sort.md)、[筛选](query-result-filter.md)和[批量启停](development/query-result-filter-bulk-enabled-20261021.md)。单条启停的 [Windows 实库续验](../tests/integration/acceptance-query-result-filter-enabled-c449506-20261021.md)已通过；批量按钮已有类型、143项定向及构建证据，真实窗口／安装及各平台范围分别记录，不以本文代替验收。当前暂不发布。
+详细来源见[排序](query-result-sort.md)、[筛选](query-result-filter.md)、[批量启停](development/query-result-filter-bulk-enabled-20261021.md)和[跨组移动](development/query-result-filter-move-20261021.md)。准确21c164f的[本机Windows实库整例及独立CSV／JSON读回](../tests/integration/acceptance-filter-move-ui-21c164f-20261021.md)已通过，含多列排序、条件启停、批量启停和跨组移动；原300失败及旧9139未验不追认。安装版、macOS和其它驱动另验，当前暂不发布。
