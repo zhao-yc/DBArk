@@ -13,13 +13,14 @@ import { queryResultFilterZh as filterText } from '../../src/renderer/locales/qu
 import { queryResultCopyZh as copyText } from '../../src/renderer/locales/queryResultCopy.zh-CN';
 import { captureQueryResultGridLayout } from '../helpers/queryResultGridLayout';
 import { queryResultPresetsZh as presetText } from '../../src/renderer/locales/queryResultPresets.zh-CN';
+import { queryResultSelectedFilterZh as selectedFilterText } from '../../src/renderer/locales/queryResultSelectedFilter.zh-CN';
 
 /** 仅显式门和Root的RAM绑定后注册；可选命名方案沿用原native、owner和失败保留规则。 */
-export function registerQueryResultOrganizeUi(binding:QueryResultColumnsUiTarget,options?:{presets?:true}):void {
+export function registerQueryResultOrganizeUi(binding:QueryResultColumnsUiTarget,options?:{presets?:true;selectedFilter?:true}):void {
  const cases=new Map<TestInfo,{life:QueryResultColumnsUiLifetime;observer?:mysql.Connection;native?:any;stream?:any}>();let halted=false;
  test.use({preserveOnUnconfirmedExit:true,trace:'off',screenshot:'off',video:'off'});test.setTimeout(120000);test.describe.configure({retries:0});
  test.afterEach(({},info)=>{const current=cases.get(info);if(!current){halted=true;retainOwnedDesktopResources(info);throw Error('结果列未建立本例owner，保留现场');}try{current.life.afterEach();cases.delete(info);}catch(reason){halted=true;throw reason;}});
- test('准确13384真实App多列排序与文本、区间、多值及分组筛选、空结果及CSV／JSON范围一致',async({trace,screenshot,video},info)=>{
+ test(options?.selectedFilter?'准确13384真实App勾选精确值筛选草稿、保留多列排序及CSV／JSON范围一致':'准确13384真实App多列排序与文本、区间、多值及分组筛选、空结果及CSV／JSON范围一致',async({trace,screenshot,video},info)=>{
   if(halted)throw Error('结果列前例已保留资源，停止后续用例');
   const captured=ownedDesktopResources(info),page=captured.page,application=captured.application,directory=dataDir;
   const life=new QueryResultColumnsUiLifetime({check(allowClosed){binding.assertCurrent();const now=ownedDesktopResources(info);if(now.page!==page||now.application!==application||!allowClosed&&now.closed)throw Error('结果列原owner已变化');},closed:()=>ownedDesktopResources(info).closed,retain:()=>{halted=true;retainOwnedDesktopResources(info);},async exit(){life.check();await application.evaluate(readQueryResultColumnsAudit);life.check();await application.evaluate(guardQueryResultColumnsExitAnswers);life.check();await confirmOwnedDesktopExit(info);}},info as TestInfo&{_startWallTime?:number});
@@ -79,6 +80,38 @@ export function registerQueryResultOrganizeUi(binding:QueryResultColumnsUiTarget
      await observe(()=>expect(input).toBeDisabled());await observe(()=>expect(input).toHaveValue(''));
     }else await observe(()=>input.fill(value));
     if(range)await observe(()=>panel.getByRole('textbox',{name:filterText.upper+' '+index,exact:true}).fill(upper!));
+   }
+   if(options?.selectedFilter){
+    const fromSelection=tab.getByRole('button',{name:selectedFilterText.open,exact:true});
+    /** 当前排序为1、3、2；只通过真实网格勾选不连续的第一和第三行，并明确指定BIGINT列。 */
+    async function chooseExactValues(){
+     for(const index of [2,4])await observe(()=>grid.locator('[role="row"][aria-rowindex="'+index+'"]').getByRole('checkbox').check());
+     await observe(()=>grid.locator('[role="row"][aria-rowindex="2"] [role="gridcell"][aria-colindex="4"]').click());
+     await observe(()=>expect(fromSelection).toBeEnabled());await observe(()=>fromSelection.click());await observe(()=>expect(panel).toBeVisible());
+    }
+    /** 候选值直接核真实受控输入；大整数保持完整原文，不读取内部props或执行控制器。 */
+    async function expectExactDraft(){
+     await observe(()=>expect(panel.getByRole('combobox',{name:filterText.column+' 1',exact:true})).toHaveValue('c1'));
+     await observe(()=>expect(panel.getByRole('combobox',{name:filterText.operator+' 1',exact:true})).toHaveValue('in'));
+     await observe(()=>expect(panel.getByRole('textbox',{name:filterText.member(1,1),exact:true})).toHaveValue('18446744073709551615'));
+     await observe(()=>expect(panel.getByRole('textbox',{name:filterText.member(1,2),exact:true})).toHaveValue('2'));
+     await observe(()=>expect(panel.getByRole('textbox',{name:filterText.member(1,3),exact:true})).toHaveCount(0));
+    }
+    await chooseExactValues();await expectExactDraft();await observe(()=>expect.poll(ids).toEqual(['1','3','2']));
+    await observe(()=>panel.getByRole('button',{name:filterText.cancel,exact:true}).click());await observe(()=>expect(panel).toBeHidden());await observe(()=>expect.poll(ids).toEqual(['1','3','2']));
+    // 打开草稿已撤销原勾选；取消后必须重新明确选行，不能沿用旧选择。
+    await chooseExactValues();await expectExactDraft();await observe(()=>panel.getByRole('button',{name:filterText.apply,exact:true}).click());
+    await observe(()=>expect(panel).toBeHidden());await observe(()=>expect.poll(ids).toEqual(['1','2']));
+    await observe(()=>expect(tab.getByRole('list',{name:sortText.priorities,exact:true}).getByRole('listitem')).toHaveCount(2));
+    await observe(()=>tab.getByRole('button',{name:historyText.undo,exact:true}).click());await observe(()=>expect.poll(ids).toEqual(['1','3','2']));
+    await observe(()=>tab.getByRole('button',{name:historyText.redo,exact:true}).click());await observe(()=>expect.poll(ids).toEqual(['1','2']));
+    // 清筛选保留原两级排序，再将全NULL列勾选值生成为独立NULL条件草稿并取消。
+    await observe(()=>tab.getByRole('button',{name:filterText.clear,exact:true}).click());await observe(()=>expect.poll(ids).toEqual(['1','3','2']));
+    for(const index of [2,4])await observe(()=>grid.locator('[role="row"][aria-rowindex="'+index+'"]').getByRole('checkbox').check());
+    await observe(()=>grid.locator('[role="row"][aria-rowindex="2"] [role="gridcell"][aria-colindex="6"]').click());await observe(()=>fromSelection.click());
+    await observe(()=>expect(panel.getByRole('combobox',{name:filterText.operator+' 1',exact:true})).toHaveValue('null'));
+    await observe(()=>expect(panel.getByRole('textbox',{name:filterText.input+' 1',exact:true})).toBeDisabled());
+    await observe(()=>panel.getByRole('button',{name:filterText.cancel,exact:true}).click());await observe(()=>expect.poll(ids).toEqual(['1','3','2']));
    }
    await observe(()=>tab.getByRole('button',{name:filterText.open,exact:true}).click());await addRule(1,3,'lte','1.00000000000000000001');
    await observe(()=>expect.poll(ids).toEqual(['1','3','2']));await observe(()=>panel.getByRole('button',{name:filterText.cancel,exact:true}).click());await observe(()=>expect.poll(ids).toEqual(['1','3','2']));

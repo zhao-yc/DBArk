@@ -61,13 +61,25 @@ function matchExpression(shape:FilterShape,matches:readonly (boolean|undefined)[
 function freezeExpression(shape:FilterShape,rules:readonly Readonly<QueryResultFilterRule>[]):QueryResultFilterGroup{
   return Object.freeze({mode:shape.mode,children:Object.freeze(shape.children.map(child=>typeof child==='number'?rules[child]:freezeExpression(child,rules)))});
 }
-/** 为已生效条件追加AND叶；OR根保留为括号子组，开草稿前先核全部结构预算，不扫描结果。 */
-export function appendQueryResultFilterRule(expression:QueryResultFilterGroup,rule:QueryResultFilterRule):QueryResultFilterGroup{
-  const previous=prepareExpression(expression),addition=prepareExpression({mode:'AND',children:[rule]}),index=previous.rules.length;
-  const shape:FilterShape=!previous.shape.children.length?{mode:'AND',children:[index]}:previous.shape.mode==='AND'?{mode:'AND',children:[...previous.shape.children,index]}:{mode:'AND',children:[previous.shape,index]};
-  const next=freezeExpression(shape,[...previous.rules,...addition.rules].map(item=>Object.freeze({...item})));
-  prepareExpression(next);return next;
+/** 为已有完整表达式追加AND节点；保留原OR括号与停用原文，最终树先整体核预算再成为草稿。 */
+export function appendQueryResultFilterNode(expression:QueryResultFilterGroup,node:QueryResultFilterRule|QueryResultFilterGroup):QueryResultFilterGroup{
+  const previous=prepareExpression(expression),addition=prepareExpression({mode:'AND',children:[node]}),offset=previous.rules.length;
+  /** 新节点的叶编号与原树错开，只遍历已经有界准入的内部形状。 */
+  function shift(child:number|FilterShape):number|FilterShape{return typeof child==='number'?child+offset:{mode:child.mode,children:child.children.map(shift)};}
+  const appended=shift(addition.shape.children[0]);
+  const shape:FilterShape=!previous.shape.children.length?{mode:'AND',children:[appended]}:previous.shape.mode==='AND'?{mode:'AND',children:[...previous.shape.children,appended]}:{mode:'AND',children:[previous.shape,appended]};
+  const rules=[...previous.rules,...addition.rules].map(item=>{
+    if(item.values===undefined)return Object.freeze({...item});
+    if(!Array.isArray(item.values))throw Error(text.invalid);
+    if(item.values.length>queryResultFilterLimits.members)throw Error(text.budget);
+    const values:string[]=[];
+    for(let index=0;index<item.values.length;index++){const descriptor=Object.getOwnPropertyDescriptor(item.values,String(index));if(!descriptor||!('value'in descriptor)||typeof descriptor.value!=='string')throw Error(text.invalid);values.push(descriptor.value);}
+    return Object.freeze({...item,values:Object.freeze(values)});
+  });
+  const next=freezeExpression(shape,rules);prepareExpression(next);return next;
 }
+/** 原单格追加入口继续走相同AND语义与最终树预算，不另建比较或组合逻辑。 */
+export function appendQueryResultFilterRule(expression:QueryResultFilterGroup,rule:QueryResultFilterRule):QueryResultFilterGroup{return appendQueryResultFilterNode(expression,rule);}
 /** 比较方式来自协议类型；未知/二进制元数据仍可做NULL判断，不按外观猜类型。 */
 export function queryResultFilterOperators(column:ResultColumn):readonly QueryResultFilterOperator[]{
   const kind=queryResultFilterKind(column);

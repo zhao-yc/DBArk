@@ -20,16 +20,18 @@ import { queryResultSortZh as sortText } from '../locales/queryResultSort.zh-CN'
 import { captureQueryResultCellFilter, currentQueryResultCellFilter, type CellFilterOperator, type QueryResultCellFilterCapture } from '../queryResultCellFilter';
 import { queryResultFilterZh as filterText } from '../locales/queryResultFilter.zh-CN';
 import { queryResultHistoryZh as historyText } from '../locales/queryResultHistory.zh-CN';
+import { captureQueryResultSelectedFilter, currentQueryResultSelectedFilter, type QueryResultSelectedFilterCapture } from '../queryResultSelectedFilter';
+import { queryResultSelectedFilterZh as selectedFilterText } from '../locales/queryResultSelectedFilter.zh-CN';
 
 /** 任意结果的协议BLOB也可能是TEXT；没有真实结构时只认显式字节包装，NULL仍常规展示。 */
 export function isResultBinaryCell(value: CellValue | undefined): boolean { return isBinaryCell(value); }
 
 /** 任意查询结果只读；支持单格或勾选记录复制，始终保留原始值用于剪贴板。 */
-export function ResultsGrid({ columns, rows, onActiveRowChange, onActiveRowIndexChange, sort, onSortChange, sortReasons, selectionScope, onSelectionChange, isCurrent, onFilterCell, onHistoryTravel }: { columns: ResultColumn[]; rows: DataRow[]; onActiveRowChange?: (row: DataRow | null) => void; onActiveRowIndexChange?: (index: number | null) => void; sort?: QueryResultSortRule[]; onSortChange?: (sort: QueryResultSortRule[]) => void; sortReasons?: ReadonlyMap<string, string | undefined>; selectionScope?: object; onSelectionChange?(selection: ResultGridSelection): boolean; isCurrent?(): boolean;onFilterCell?(cell:QueryResultCopyCell,operator:CellFilterOperator):void;onHistoryTravel?(direction:-1|1):void }) {
+export function ResultsGrid({ columns, rows, onActiveRowChange, onActiveRowIndexChange, sort, onSortChange, sortReasons, selectionScope, onSelectionChange, isCurrent, onFilterCell, onFilterSelected, onHistoryTravel }: { columns: ResultColumn[]; rows: DataRow[]; onActiveRowChange?: (row: DataRow | null) => void; onActiveRowIndexChange?: (index: number | null) => void; sort?: QueryResultSortRule[]; onSortChange?: (sort: QueryResultSortRule[]) => void; sortReasons?: ReadonlyMap<string, string | undefined>; selectionScope?: object; onSelectionChange?(selection: ResultGridSelection): boolean; isCurrent?(): boolean;onFilterCell?(cell:QueryResultCopyCell,operator:CellFilterOperator):void;onFilterSelected?(capture:QueryResultSelectedFilterCapture):void;onHistoryTravel?(direction:-1|1):void }) {
   const theme = useWorkspace(state => state.settings.theme);
   const dataTypeColors = useWorkspace(state => state.settings.dataTypeColors === true);
   const [gridRevision,setGridRevision]=useState(0), gridRevisionRef=useRef(0);
-  const filterCapable=!!onFilterCell&&!onActiveRowChange;
+  const filterCapable=!!(onFilterCell||onFilterSelected)&&!onActiveRowChange;
   const scope = useMemo(() => ({ columns, rows, selectionScope,filterCapable }), [columns, rows, selectionScope,gridRevision,filterCapable]);
   const currentScope = useRef<typeof scope|null>(scope); currentScope.current = scope;
   const alive=useRef(true);
@@ -49,7 +51,18 @@ export function ResultsGrid({ columns, rows, onActiveRowChange, onActiveRowIndex
   const [headerCell, setHeaderCell] = useState<{ scope: typeof scope; cell: QueryResultCopyCell }>();
   const copyRevisionRef = useRef(0), copyRevision = copyRevisionRef.current;
   const filterCellRef=useRef<{scope:typeof scope;capture:QueryResultCellFilterCapture}|undefined>(undefined);
+  const copyCellRef=useRef<{scope:typeof scope;cell:QueryResultCopyCell}|undefined>(undefined);
+  const selectedRowsRef=useRef<{scope:typeof scope;indices:ReadonlySet<number>}|undefined>(undefined);
+  const selectedFilterRef=useRef<{scope:typeof scope;revision:number;capture:QueryResultSelectedFilterCapture}|undefined>(undefined);
+  const selectedFilterErrorRef=useRef('');
   const activeCopyCell = headerCell?.scope === scope ? headerCell.cell : undefined;
+  /** 仅在明确换列或父级接纳新勾选后捕获；不在旧按钮点击时读取后来选择。 */
+  function captureSelectedFilter(cell:typeof copyCellRef.current,indices:ReadonlySet<number>):void{
+    selectedFilterRef.current=undefined;selectedFilterErrorRef.current='';
+    if(!onFilterSelected||!cell||cell.scope!==scope||!indices.size)return;
+    try{selectedFilterRef.current={scope,revision:copyRevisionRef.current,capture:captureQueryResultSelectedFilter(columns,rows,cell.cell,indices)};}
+    catch(reason){selectedFilterErrorRef.current=errorMessage(reason);}
+  }
   /** 同坐标重选不一定通知活动位置；显式点击仍须重新核验当前行列。 */
   function captureCopyCell(row: DataRow | undefined, rowIdx: number, column?: { key: string }) {
     if (!actionCurrent() || !selectionScope || !isCurrent || onActiveRowChange) return;
@@ -57,6 +70,8 @@ export function ResultsGrid({ columns, rows, onActiveRowChange, onActiveRowIndex
     const next=row && Number.isSafeInteger(rowIdx) && rowIdx >= 0 && rows[rowIdx] === row && (!column || columns.some(item => item.key === column.key)) ? { scope, cell: { index: rowIdx, row, column: columns.find(item => item.key === column?.key) } } : undefined;
     filterCellRef.current=undefined;
     if(onFilterCell&&next)try{filterCellRef.current={scope,capture:captureQueryResultCellFilter(columns,rows,next.cell)};}catch{/* 不支持的原值仅禁用快捷填入，不影响原复制或查看。 */}
+    copyCellRef.current=next;
+    captureSelectedFilter(next,selectedRowsRef.current?.scope===scope?selectedRowsRef.current.indices:new Set());
     setHeaderCell(next);
   }
   /** 旧网格回调在首次effect前也不能覆盖新选择；复制仍沿用同一组当前勾选行。 */
@@ -66,7 +81,7 @@ export function ResultsGrid({ columns, rows, onActiveRowChange, onActiveRowIndex
     // 导出父级须明确接纳同一选择；模态或任务门拒绝时保留原勾选，避免显示与文件范围分离。
     if (onSelectionChange && onSelectionChange({ scope: selectionScope ?? scope, rows, columns, indices: next }) !== true) return;
     if (!actionCurrent()) return;
-    copyRevisionRef.current++; setSelection({ scope, indices: next });
+    copyRevisionRef.current++;selectedRowsRef.current={scope,indices:next};captureSelectedFilter(copyCellRef.current,next);setSelection({ scope, indices: next });
   }
   /** 既有选择接口不变；新入口独立核渲染代次，旧按钮不能复制后来变更之前的行/列。 */
   function copyWithHeaders() {
@@ -86,6 +101,18 @@ export function ResultsGrid({ columns, rows, onActiveRowChange, onActiveRowIndex
   function filterFromCell(operator:CellFilterOperator):void{
     if(copyRevisionRef.current!==copyRevision||!filterCellCurrent(filterCell)||!onFilterCell)return;
     onFilterCell(filterCell!.capture.cell,operator);
+  }
+  /** 选择、列、原值或作用域失效后永久丢弃本次捕获，恢复旧值不能复活旧按钮。 */
+  function selectedFilterCurrent(expected:typeof selectedFilterRef.current):boolean{
+    if(!expected||selectedFilterRef.current!==expected||expected.scope!==scope||expected.revision!==copyRevisionRef.current||!actionCurrent())return false;
+    if(currentQueryResultSelectedFilter(expected.capture,columns,rows))return true;
+    selectedFilterRef.current=undefined;selectedFilterErrorRef.current=selectedFilterText.unavailable;return false;
+  }
+  const selectedFilter=selectedFilterRef.current,selectedFilterAllowed=!!onFilterSelected&&selectedFilterCurrent(selectedFilter);
+  /** 子网格只提出准确原值捕获，父查询另核已接纳勾选和完整结构后才开审核草稿。 */
+  function filterFromSelected():void{
+    if(copyRevisionRef.current!==copyRevision||!selectedFilterCurrent(selectedFilter)||!onFilterSelected)return;
+    onFilterSelected(selectedFilter!.capture);
   }
   const [binary, setBinary] = useState<{ row: DataRow; key: string; rows: DataRow[]; columns: ResultColumn[] } | null>(null);
   const binaryRef=useRef(binary);binaryRef.current=binary;
@@ -121,5 +148,5 @@ export function ResultsGrid({ columns, rows, onActiveRowChange, onActiveRowIndex
       const content=encodeClipboard(values);event.clipboardData.setData('text/plain',content.text);event.clipboardData.setData(cellClipboardType,content.typed);
     }catch(reason){useWorkspace.getState().notify(errorMessage(reason),true);}
   }} renderers={{ noRowsFallback: <div className="grid-empty">{zh.common.noMatchingData}</div> }}/>;
-  return <>{selectionScope && isCurrent && !onActiveRowChange ? <div className="query-result-copy-region"><div className="query-result-copy-actions"><button type="button" title={copyText.hint} disabled={!actionCurrent() || !selectedRows.size && !activeCopyCell} onClick={copyWithHeaders}>{copyText.action}</button>{onFilterCell&&<><button type="button" title={filterCellAllowed?filterText.cellHint:filterText.cellUnavailable} disabled={!filterCellAllowed} onClick={()=>filterFromCell('eq')}>{filterText.cellEquals}</button><button type="button" title={filterCellAllowed?filterText.cellHint:filterText.cellUnavailable} disabled={!filterCellAllowed} onClick={()=>filterFromCell('ne')}>{filterText.cellNotEquals}</button></>}</div><QueryResultFind owner={scope} rows={rows} columns={columns} grid={gridRef} isCurrent={actionCurrent} onHit={hit => { if (currentScope.current === scope && alive.current) setFindHit(hit ? { scope, hit } : undefined); }}>{grid}</QueryResultFind></div> : grid}{binary && binaryColumn && binary.rows === rows && binary.columns === columns && <Modal title={`${binaryCellZh.title}：${binaryColumn.name}`} onClose={() => {if(alive.current&&currentScope.current===scope&&binaryRef.current===binary){gridRevisionRef.current++;setGridRevision(gridRevisionRef.current);setBinary(null);}}} wide><div className="modal-content"><BinaryCellViewer value={ownCell(binary.row, binary.key)} reason={binaryCellZh.readonly}/></div></Modal>}</>;
+  return <>{selectionScope && isCurrent && !onActiveRowChange ? <div className="query-result-copy-region"><div className="query-result-copy-actions"><button type="button" title={copyText.hint} disabled={!actionCurrent() || !selectedRows.size && !activeCopyCell} onClick={copyWithHeaders}>{copyText.action}</button>{onFilterCell&&<><button type="button" title={filterCellAllowed?filterText.cellHint:filterText.cellUnavailable} disabled={!filterCellAllowed} onClick={()=>filterFromCell('eq')}>{filterText.cellEquals}</button><button type="button" title={filterCellAllowed?filterText.cellHint:filterText.cellUnavailable} disabled={!filterCellAllowed} onClick={()=>filterFromCell('ne')}>{filterText.cellNotEquals}</button></>}{onFilterSelected&&<button type="button" title={selectedFilterAllowed?selectedFilterText.hint:selectedFilterErrorRef.current||selectedFilterText.unavailable} disabled={!selectedFilterAllowed} onClick={filterFromSelected}>{selectedFilterText.open}</button>}</div><QueryResultFind owner={scope} rows={rows} columns={columns} grid={gridRef} isCurrent={actionCurrent} onHit={hit => { if (currentScope.current === scope && alive.current) setFindHit(hit ? { scope, hit } : undefined); }}>{grid}</QueryResultFind></div> : grid}{binary && binaryColumn && binary.rows === rows && binary.columns === columns && <Modal title={`${binaryCellZh.title}：${binaryColumn.name}`} onClose={() => {if(alive.current&&currentScope.current===scope&&binaryRef.current===binary){gridRevisionRef.current++;setGridRevision(gridRevisionRef.current);setBinary(null);}}} wide><div className="modal-content"><BinaryCellViewer value={ownCell(binary.row, binary.key)} reason={binaryCellZh.readonly}/></div></Modal>}</>;
 }
