@@ -18,6 +18,6 @@ node scripts/check-local.mjs --build tests/unit/table-filter-enabled.test.ts tes
 
 ## 窗口验证
 
-`table-sort-panel.spec.ts`在原14f174d4已通过的完整排序流程后，新增单条／批量启停、任一模式、编辑停用条件、恢复启用与排序保持，仍为120秒／零重试、最多16次正式分页。原断言保留，用例自管新随机库与121行夹具；成功正常退出后复核完整数据／定义，精确删库并核三条辅助连接。新启停专项尚未实际运行，原14f排序通过不外推给本批；安装、macOS及其它组合继续，暂不发布。
+`table-sort-panel.spec.ts`在原14f174d4已通过的完整排序流程后，新增单条／批量启停、任一模式、编辑停用条件、恢复启用与排序保持，仍为120秒／零重试、最多16次正式分页。准确62224ddc的[本机Windows源码实库单例](../../tests/integration/acceptance-table-filter-template-62224dd-20261021.md)现已通过：CLI52172 exit0／11.9646107秒，16次正式分页，121行及定义保持、正常退出、精确清库与三条辅助连接关闭。安装、macOS及其它组合继续，暂不发布。
 
-准确313bcb577e439180125511f6d22adcd3a781faac、src树dcffb43a5c7875c8badeb267efbace70ed6ed8a1已推main。向WIN11-TEST派发新头的排序／启停、修正模板两例串行验收时，工具返回`App server request expired while queued`；尚未确认受理，不声明启动或未启动。原c54失败现场保留，本机未重复新回合；恢复后先核测试会话是否收到该准确头，再决定是否继续派发。原副本及dist保持，为新回合使用普通独立测试副本和既有冻结依赖，不用worktree。
+准确313bcb577e439180125511f6d22adcd3a781faac、src树dcffb43a5c7875c8badeb267efbace70ed6ed8a1已推main。首次向WIN11-TEST派发两例时返回`App server request expired while queued`。后续核原c54 completed且远程读取失败，成功发送取消后由Root按授权回退；测试会话明确确认未启动任何313新回合、无原生PID。新成功轮固定62224ddc，未重复VM回合，旧c54副本、App、库及日志保持。
