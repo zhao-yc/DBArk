@@ -41,6 +41,7 @@ import type { SchemaCompareInput, SchemaCompareResult, SchemaComparePreviewInput
 import type { QuerySourceBinding, QuerySaveContent, QuerySaveResult } from './queryBinding';
 import type { TableCopyPageSources, TableCopySourceReadInput, TableCopySourceReadResult, TableCopySourceReleaseInput } from './tableCopySource';
 import type { CopyInsertSqlInput } from './copyInsertSql';
+import type { ConnectionOrganizationApply, ConnectionOrganizationSnapshot } from './connectionOrganization';
 import type { QueryResultPresetTarget, QueryResultPresetSave, QueryResultPresetSelect, QueryResultPresetRename, QueryResultPresetSnapshot, QueryResultPresetValue } from './queryResultPresets';
 export type CellValue = string | number | boolean | null | { type: 'binary'; base64: string };
 export type DataRow = Record<string, CellValue>;
@@ -129,6 +130,8 @@ export interface CommandMap {
   'connections.importReviewRelease': { input: { previewToken: string; confirmationToken: string }; output: void };
   'connections.importApply': { input: ConnectionImportApply; output: ConnectionImportResult };
   'connections.list': { input: Record<string, never>; output: ConnectionProfile[] };
+  'connections.organizationGet': { input: Record<string, never>; output: ConnectionOrganizationSnapshot };
+  'connections.organizationApply': { input: ConnectionOrganizationApply; output: ConnectionOrganizationSnapshot };
   'connections.save': { input: ConnectionProfile; output: ConnectionProfile };
   'connections.delete': { input: { id: string }; output: void };
   'connections.test': { input: ConnectionProfile; output: ConnectionStatus };

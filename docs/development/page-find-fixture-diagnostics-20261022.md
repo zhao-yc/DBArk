@@ -22,3 +22,5 @@
 Windows helper 预检原 SIGNATURE_BEGIN 与 SOURCE_READ 之间实际还包含路径计算、签名调用、结果判断和编码初始化，现有日志不足以证明超时发生在 Authenticode API 内部。脚本仅新增 PATH_READY／CALL_BEGIN／CALL_RETURN／ACCEPTED／ENCODING_READY 固定标记，失败时另记源长度和原 stdin finish／close 的单调相对时间；stdin 关闭不代表子进程已读完源码。
 
 原环境、Get-AuthenticodeSignature、Valid 与 Microsoft signer 要求、60 秒、三流关闭和成功后的精确清理门均保留。执行真实脚本、只替换进程／文件边界的 18 项 RAM 回归通过，覆盖缺失／乱序标记、超时、三流、日志上限；本轮没有运行新 PowerShell 预检，因此不将它记作真实编译成功。后继准确 d292452f 的 CI 39689687468 已越过原签名预检并进入原生测试，原失败根因仍未证明。
+
+该运行后续已全部终结：Linux `119532500031`、Windows `119532499822`、macOS arm64 `119532500202` 与 macOS x64 `119532500007` job 均 success，两个可选 job skipped。此处只记录该准确旧提交的 CI 终态，未以 job 状态代替附件／安装原件独立核对，亦不覆盖后继 XLSX 或连接整理的新提交。原超时根因仍未证明，发布 job 实际跳过。

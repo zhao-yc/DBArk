@@ -24,6 +24,7 @@ import{savedQueryPageInputSchema,savedQueryPageNextSchema,savedQueryPageReleaseS
 import{historyPageInputSchema,historyReadSchema,historyErrorReadSchema}from'./historyPages';
 import{localSqlPageNextSchema,localSqlPageReleaseSchema}from'./localSqlPages';
 import { connectionFileRequirements, connectionImportApplySchema, connectionImportReviewSchema, connectionTransferLimits } from './connectionTransfer';
+import { connectionOrganizationGetSchema, connectionOrganizationApplySchema } from './connectionOrganization';
 import type { Command, ResultExportData } from './contracts';
 import { validateResultExportData } from './resultExport';
 import { assertResultExcelData } from './resultExcel';
@@ -142,6 +143,7 @@ export const commandSchemas: Record<Command, z.ZodType> = {
   'connections.importReviewRelease': z.object({ previewToken: id, confirmationToken: id }).strict(),
   'connections.importApply': connectionImportApplySchema,
   'connections.list': empty, 'connections.save': connectionSchema, 'connections.test': connectionSchema,
+  'connections.organizationGet': connectionOrganizationGetSchema, 'connections.organizationApply': connectionOrganizationApplySchema,
   'connections.delete': z.object({ id }).strict(), 'connections.open': z.object({ id }).strict(), 'connections.close': z.object({ id }).strict(),
   'serverMonitor.read': z.object({ connectionId: id, taskId: id, sessionLimit: z.number().int().min(1).max(serverMonitorLimits.sessions).optional() }).strict().superRefine((value, context) => {
     // IPC先拒绝额外范围，内核继续复用同一标识及预算校验。

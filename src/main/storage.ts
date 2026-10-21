@@ -8,6 +8,8 @@ import { assertEditorWordWrap, defaultEditorWordWrap, readEditorWordWrap } from 
 import { assertEditorFontSize, editorFontLimits, readEditorFontSize } from '../shared/editorFont';
 import { connectionTransferDocumentSchema, connectionTransferLimits, exportConnectionProfile, importConnectionProfile, importReplacementProfile, type ExportedConnectionProfile } from '../shared/connectionTransfer';
 import { connectionReplacementText } from '../shared/connectionTransferMessages';
+import { connectionOrganizationApplySchema, connectionOrganizationDefaultColor, type ConnectionOrganizationApply, type ConnectionOrganizationSnapshot } from '../shared/connectionOrganization';
+import { connectionOrganizationZh } from '../shared/connectionOrganization.zh-CN';
 import { assertTlsPassphrase, tlsCredentialMessages } from '../shared/tlsCredentials';
 import { parseTableApplyReceipt, interruptTableApplyReceipt, tableApplyReceiptLimits, type TableApplyReceipt, type TableApplyReceiptListInput, type TableApplyReceiptPage } from '../shared/tableApplyReceipt';
 import { persistedTaskMessage } from './taskPrivacy';
@@ -197,6 +199,33 @@ export class LocalStore {
 
   /** 任意成功的连接配置或认证变更都会让导入预览失效，失败写盘不改变版本。 */
   connectionRevision(): number { return this.connectionRevisionValue; }
+
+  /** 只读取公开概要与同一主进程全局修订，不解密凭据、不建立连接，也不对列表做隐式截断。 */
+  connectionOrganization(): ConnectionOrganizationSnapshot { return { revision: this.connectionRevisionValue, connections: this.connections() }; }
+
+  /** 整批CAS后仅改原SQLite JSON的显示元数据；全部目标先存在，随后一次事务落盘，失败不推进修订。 */
+  applyConnectionOrganization(input: ConnectionOrganizationApply): ConnectionOrganizationSnapshot {
+    const request = connectionOrganizationApplySchema.parse(input);
+    if (request.expectedRevision !== this.connectionRevisionValue) throw Error(connectionOrganizationZh.stale);
+    if (this.connectionRevisionValue >= Number.MAX_SAFE_INTEGER) throw Error(connectionOrganizationZh.revisionLimit);
+    const profiles = request.ids.map(id => {
+      const profile = this.records<ConnectionProfile>('SELECT data FROM connections WHERE id=?', [id])[0];
+      if (!profile || profile.id !== id) throw Error(connectionOrganizationZh.missing);
+      return profile;
+    });
+    // Main在此同步方法前逐id调用manager.assertAvailable；本方法不委派单项save/resolve或Broker。
+    this.mutate(() => {
+      if (request.expectedRevision !== this.connectionRevisionValue) throw Error(connectionOrganizationZh.stale);
+      for (const profile of profiles) {
+        const next = { ...profile };
+        if (request.changes.group !== undefined) next.group = request.changes.group;
+        if (request.changes.color !== undefined) next.color = request.changes.color ?? connectionOrganizationDefaultColor;
+        this.db.run('UPDATE connections SET data=? WHERE id=?', [JSON.stringify(next), profile.id]);
+      }
+    });
+    this.connectionRevisionValue++;
+    return this.connectionOrganization();
+  }
 
   /** 来源只取主进程已保存的连接概要，不解密凭据；摘要不会持久化认证文件路径原文。 */
   private tablePresetSource(target: TablePresetTarget): TablePresetSource {

@@ -2,6 +2,7 @@ import { QueryFileSources } from './queryFileSources';
 import { ResultSqlPreviews } from './resultSqlPreviews';
 import { QueryInsertExports } from './queryInsertExports';
 import { resultSqlZh } from '../shared/resultSql.zh-CN';
+import { connectionOrganizationZh } from '../shared/connectionOrganization.zh-CN';
 import { tableCreateMessages } from '../shared/tableCreate';
 import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, safeStorage } from 'electron';
 import { copyInsertSql } from './copyInsertSql';
@@ -407,6 +408,16 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
     case 'connections.importReview': if (shuttingDown) throw new Error('客户端正在退出，不能导入连接'); return connectionTransfer.review(input);
     case 'connections.importReviewRelease': return connectionTransfer.releaseReview(input);
     case 'connections.importApply': return queryFileOperation(() => connectionTransfer.applyBatch(input));
+    case 'connections.organizationGet':
+      if (shuttingDown) throw Error('客户端正在退出，不能读取连接整理');
+      return store.connectionOrganization();
+    case 'connections.organizationApply':
+      if (shuttingDown) throw Error('客户端正在退出，不能整理连接');
+      // 同步核完整批次，没有await或凭据解析，不能跨过正在保存的连接配置。
+      for (const id of input.ids) connectionConfig.assertAvailable(id);
+      // INSERT 导出能力绑定全局修订；等原请求 finally 释放账本后才允许整理，不主动取消导出。
+      if ([...tasks.values()].some(task => task.kind === 'query.exportStream' && queryInsertExports.has(task.id))) throw Error(connectionOrganizationZh.busyExport);
+      return store.applyConnectionOrganization(input);
     case 'connections.save': {
       // 保留原保存检查：被拒绝的配置修改不得先取消任务；成功保存后才撤销本片旧修订能力。
       const saved=await connectionConfig.save(confirmConnectionFiles(input,store.connections().find(profile=>profile.id===input.id),files));
