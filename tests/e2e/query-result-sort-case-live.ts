@@ -12,6 +12,7 @@ import { zh } from '../../src/renderer/locales/zh-CN';
 import { queryResultSortZh as sortText } from '../../src/renderer/locales/queryResultSort.zh-CN';
 import { queryResultFilterZh as filterText } from '../../src/renderer/locales/queryResultFilter.zh-CN';
 import { queryLayoutZh as layoutText } from '../../src/renderer/locales/queryLayout.zh-CN';
+import { queryResultHistoryZh as historyText } from '../../src/renderer/locales/queryResultHistory.zh-CN';
 
 /** 仅三门和Root显式RAM绑定后注册；原native及owner强引用保留，失败不进入补清理。 */
 export function registerQueryResultSortCaseUi(binding:QueryResultColumnsUiTarget):void {
@@ -83,7 +84,30 @@ export function registerQueryResultSortCaseUi(binding:QueryResultColumnsUiTarget
    }
    const caseControl=(order:number)=>tab.getByRole('checkbox',{name:sortText.ignoreCase(order,'text_value'),exact:true});
    // 比较顺序全部手写；只读取真实网格DOM，Unicode的两个原文不得合并或回写。
-   await columns([0,1,2,3]);await observe(()=>heads.nth(1).click());await observe(()=>expect.poll(ids).toEqual(['4','5','3','2','1','7','6']));
+   await columns([0,1,2,3]);
+   // 独立排序草稿一次配置多列；预览零重查，应用、取消、撤销及恢复原序都读真实网格。
+   const sortPanel=tab.getByRole('region',{name:sortText.panelTitle,exact:true});
+   await observe(()=>tab.getByRole('button',{name:sortText.panelTitle,exact:true}).click());
+   await observe(()=>sortPanel.getByRole('button',{name:sortText.panelAdd,exact:true}).click());
+   await observe(()=>sortPanel.getByRole('combobox',{name:sortText.panelField(1),exact:true}).selectOption({index:1}));
+   await observe(()=>sortPanel.getByRole('checkbox',{name:sortText.panelCase(1),exact:true}).check());
+   await observe(()=>sortPanel.getByRole('combobox',{name:sortText.panelNulls(1),exact:true}).selectOption('LAST'));
+   await observe(()=>sortPanel.getByRole('button',{name:sortText.panelAdd,exact:true}).click());
+   await observe(()=>sortPanel.getByRole('combobox',{name:sortText.panelField(2),exact:true}).selectOption({index:2}));
+   await observe(()=>expect.poll(ids).toEqual(['1','2','3','4','5','6','7']));
+   await observe(()=>sortPanel.getByRole('button',{name:sortText.panelApply,exact:true}).click());
+   await observe(()=>expect(sortPanel).toBeHidden());await observe(()=>expect.poll(ids).toEqual(['5','3','1','2','7','6','4']));
+   await observe(()=>tab.getByRole('button',{name:historyText.undo,exact:true}).click());await observe(()=>expect.poll(ids).toEqual(['1','2','3','4','5','6','7']));
+   await observe(()=>tab.getByRole('button',{name:historyText.redo,exact:true}).click());await observe(()=>expect.poll(ids).toEqual(['5','3','1','2','7','6','4']));
+   await observe(()=>tab.getByRole('button',{name:sortText.panelTitle,exact:true}).click());
+   await observe(()=>expect(sortPanel.getByRole('checkbox',{name:sortText.panelCase(1),exact:true})).toBeChecked());
+   await observe(()=>sortPanel.getByRole('combobox',{name:sortText.panelDirection(2),exact:true}).selectOption('DESC'));
+   await observe(()=>sortPanel.getByRole('button',{name:sortText.panelEarlier(2),exact:true}).click());
+   await observe(()=>sortPanel.getByRole('button',{name:sortText.panelCancel,exact:true}).click());await observe(()=>expect.poll(ids).toEqual(['5','3','1','2','7','6','4']));
+   await observe(()=>tab.getByRole('button',{name:sortText.panelTitle,exact:true}).click());
+   await observe(()=>sortPanel.getByRole('button',{name:sortText.panelClear,exact:true}).click());await observe(()=>sortPanel.getByRole('button',{name:sortText.panelApply,exact:true}).click());
+   await observe(()=>expect.poll(ids).toEqual(['1','2','3','4','5','6','7']));
+   await observe(()=>heads.nth(1).click());await observe(()=>expect.poll(ids).toEqual(['4','5','3','2','1','7','6']));
    await observe(()=>caseControl(1).check());await observe(()=>expect(caseControl(1)).toBeChecked());await observe(()=>expect.poll(ids).toEqual(['4','5','1','3','2','6','7']));
    await observe(()=>heads.nth(1).click());await observe(()=>expect(caseControl(1)).toBeChecked());await observe(()=>expect.poll(ids).toEqual(['6','7','2','1','3','5','4']));
    await nulls(1,'text_value','FIRST');await observe(()=>expect.poll(ids).toEqual(['4','6','7','2','1','3','5']));

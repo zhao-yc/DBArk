@@ -59,6 +59,104 @@ async function nullPosition(order:number,name:string,value:''|'FIRST'|'LAST'){
 }
 function copy(current=grid()){const data=new Map<string,string>();current.onCellCopy({row:current.rows[0],column:{key:'id'}},{preventDefault(){},clipboardData:{setData:(key:string,value:string)=>data.set(key,value)}});return data;}
 
+/** 操作真实排序草稿控件；RAM仅替代浏览器DOM及外部服务，不代替父级排序与历史。 */
+async function sortDraftField(label: string, value: string | boolean) {
+  const node = document.querySelector('[aria-label="' + label + '"]')!; expect(node).not.toBeNull(); expect(node.disabled).toBe(false);
+  await act(async () => reactProps(node).onChange({ target: typeof value === 'boolean' ? { checked: value } : { value } }));
+}
+
+it('多列排序草稿保留筛选，一次应用完整优先级，原文精度、选择导出及整理撤销一致', async () => {
+  await mountMulti(); const saved = structuredClone(original);
+  await click(filterText.open); await addFilterRule(1, 'group', 'eq', 'A'); await click(filterText.apply);
+  const filtered = grid().rows; await click(text.panelTitle); await click(text.panelAdd);
+  await sortDraftField(text.panelField(1), 'amount'); await sortDraftField(text.panelDirection(1), 'DESC');
+  await click(text.panelAdd); await sortDraftField(text.panelField(2), 'id');
+  expect(grid().rows).toBe(filtered); expect(commands.filter(command => command === 'query.execute')).toHaveLength(1);
+  expect(button(filterText.open).disabled).toBe(true); expect(button(columnsText.open).disabled).toBe(true); expect(copy().size).toBe(0);
+  await click(text.panelApply); expect(grid().rows).toEqual([original.rows[1], original.rows[2]]);
+  expect(grid().sortColumns).toEqual([{ columnKey: 'amount', direction: 'DESC' }, { columnKey: 'id', direction: 'ASC' }]);
+  await click(historyText.undo); expect(grid().rows).toEqual(filtered); expect(grid().sortColumns).toEqual([]);
+  await click(historyText.redo); expect(grid().sortColumns).toHaveLength(2);
+  await act(async () => grid().onSelectedRowsChange(new Set([0, 1])));
+  const typed = JSON.parse(copy().get('application/x-dbark-cells')!); expect(typed.rows.map((row: any[]) => row[1])).toEqual(['9007199254740993', '2']);
+  await click(zh.resultExport.selectedTitle); await click(zh.resultExport.chooseFile); await click(zh.resultExport.start);
+  expect(exports[0].result.rows.map((row: any) => row.amount)).toEqual(['0.12345678901234567891', '0.12345678901234567890']);
+  expect(original).toEqual(saved); expect(commands.filter(command => command === 'query.execute')).toHaveLength(1);
+});
+
+it('排序草稿改方向、NULL及大小写并移动优先级，取消不改变原规则和重做历史', async () => {
+  await mountMulti(); await sort('group'); await sort('id'); await click(historyText.undo);
+  const rows = grid().rows; await click(text.panelTitle);
+  await sortDraftField(text.panelNulls(1), 'LAST'); await sortDraftField(text.panelCase(1), true); await sortDraftField(text.panelDirection(1), 'DESC');
+  await click(text.panelAdd); await sortDraftField(text.panelField(2), 'id'); await click(text.panelEarlier(2));
+  expect(document.querySelector('[aria-label="' + text.panelNulls(2) + '"]')!.value).toBe('LAST');
+  expect(document.querySelector('[aria-label="' + text.panelCase(2) + '"]')!.checked).toBe(true);
+  expect(grid().rows).toBe(rows); await click(text.panelCancel); expect(grid().rows).toBe(rows); expect(button(historyText.redo).disabled).toBe(false);
+  await click(text.panelTitle); expect(document.querySelector('[aria-label="' + text.panelNulls(1) + '"]')!.value).toBe('');
+  await click(text.panelClear); await click(text.panelApply); expect(grid().rows).toBe(original.rows); await click(historyText.undo);
+  // 整理撤销重新建立视图数组，但每个原行引用及顺序必须相同；取消草稿仍要求原数组身份保持。
+  expect(grid().rows).toEqual(rows); grid().rows.forEach((row: any, index: number) => expect(row).toBe(rows[index]));
+});
+
+it('排序草稿按唯一内部列键区分同名列，拒绝重复、非法方向和二进制，不发布部分排序', async () => {
+  await mount(); await click(text.panelTitle); await click(text.panelAdd); await click(text.panelAdd);
+  await sortDraftField(text.panelField(2), 'id'); expect(document.body.textContent).toContain(text.rules); expect(document.querySelector('[aria-label="' + text.panelField(2) + '"]')!.value).toBe('value');
+  await sortDraftField(text.panelField(2), 'bytes'); expect(document.body.textContent).toContain(text.type);
+  await sortDraftField(text.panelDirection(1), '不认识的方向'); expect(grid().sortColumns).toEqual([]);
+  await sortDraftField(text.panelDirection(1), 'DESC'); await click(text.panelApply);
+  expect(grid().sortColumns).toEqual([{ columnKey: 'id', direction: 'DESC' }, { columnKey: 'value', direction: 'ASC' }]);
+  expect(grid().rows[0]).toBe(original.rows[0]); expect(commands.filter(command => command === 'query.execute')).toHaveLength(1);
+});
+
+it('排序草稿跨十项分页不裁剪原完整规则，跨页优先级移动保留NULL选项', async () => {
+  await mount(result => { result.columns = Array.from({ length: 12 }, (_, i) => ({ key: 'c' + i, name: '同名', type: 'INT' })); result.rows = [Object.fromEntries(result.columns.map(column => [column.key, '1']))]; });
+  await click(text.panelTitle); for (let i = 0; i < 12; i++) await click(text.panelAdd);
+  expect(document.querySelector('[aria-label="' + text.panelField(11) + '"]')!.value).toBe('c10');
+  await sortDraftField(text.panelNulls(11), 'LAST'); await click(text.panelEarlier(11));
+  expect(document.querySelector('[aria-label="' + text.panelField(10) + '"]')!.value).toBe('c10'); expect(document.querySelector('[aria-label="' + text.panelNulls(10) + '"]')!.value).toBe('LAST');
+  const oldPage = reactProps(button(text.panelApply)).onClick; await click(text.panelNext); await act(async () => oldPage()); expect(grid().sortColumns).toEqual([]);
+  await click(text.panelApply); expect(grid().sortColumns).toHaveLength(12); expect(grid().sortColumns[9].columnKey).toBe('c10');
+  await click(text.panelTitle); await click(text.panelNext); expect(document.querySelector('[aria-label="' + text.panelField(12) + '"]')!.value).toBe('c11');
+});
+
+it.each(['连接ABA', '标签切换', '新查询', '新结果'] as const)('排序草稿%s后旧应用／取消不能影响后继面板', async change => {
+  await mount(); await click(text.panelTitle); await click(text.panelAdd); const oldApply = reactProps(button(text.panelApply)).onClick, oldCancel = reactProps(button(text.panelCancel)).onClick;
+  if (change === '连接ABA') await act(async () => { store.setState({ connectionVersions: { c: 2 } }); store.setState({ connectionVersions: { c: 1 } }); });
+  if (change === '标签切换') await act(async () => { store.getState().updateSettings({ activeTabId: 'other' }); store.getState().updateSettings({ activeTabId: 'q' }); });
+  if (change === '新查询') await click(zh.query.text010);
+  if (change === '新结果') { await click(zh.query.text017 + '2'); await click(zh.query.text017 + '1'); }
+  await click(text.panelTitle); await click(text.panelAdd); await sortDraftField(text.panelField(1), 'value');
+  await act(async () => { oldApply(); oldCancel(); }); expect(document.querySelector('[aria-label="' + text.panelField(1) + '"]')!.value).toBe('value');
+  expect(grid().sortColumns).toEqual([]); await click(text.panelApply); expect(grid().sortColumns).toEqual([{ columnKey: 'value', direction: 'ASC' }]);
+});
+
+it('组合输入及旧渲染回调不能提交或覆盖排序草稿，取消也不重放', async () => {
+  await mount(); await click(text.panelTitle); await click(text.panelAdd); const oldApply = reactProps(button(text.panelApply)).onClick;
+  await sortDraftField(text.panelDirection(1), 'DESC'); await act(async () => oldApply()); expect(grid().sortColumns).toEqual([]);
+  let panel = document.querySelector('[aria-label="' + text.panelTitle + '"]')!;
+  await act(async () => reactProps(panel).onCompositionStart()); expect(button(text.panelApply).disabled).toBe(true);
+  await act(async () => reactProps(button(text.panelApply)).onClick()); expect(grid().sortColumns).toEqual([]);
+  panel = document.querySelector('[aria-label="' + text.panelTitle + '"]')!; await act(async () => reactProps(panel).onCompositionEnd());
+  await click(text.panelApply); expect(grid().sortColumns).toEqual([{ columnKey: 'id', direction: 'DESC' }]);
+});
+
+it('排序草稿实际应用大小写和独立NULL位置，组合次级精确大数仍保留原行', async () => {
+  await mount(result => { result.rows[0].id = null; result.rows[0].words = 'A'; result.rows[1].words = 'a'; result.rows[2].words = 'a'; });
+  const saved = structuredClone(original); await click(text.panelTitle); await click(text.panelAdd); await sortDraftField(text.panelField(1), 'words'); await sortDraftField(text.panelCase(1), true);
+  await click(text.panelAdd); await sortDraftField(text.panelField(2), 'id'); await sortDraftField(text.panelDirection(2), 'DESC'); await sortDraftField(text.panelNulls(2), 'FIRST');
+  await click(text.panelApply); expect(grid().rows).toEqual([original.rows[0], original.rows[1], original.rows[2]]); grid().rows.forEach((row: any, index: number) => expect(row).toBe(original.rows[index]));
+  expect(document.querySelector('[aria-label="' + text.ignoreCase(1, '原文') + '"]')!.checked).toBe(true); expect(document.querySelector('[aria-label="' + text.nulls(2, '同名') + '"]')!.value).toBe('FIRST');
+  expect(original).toEqual(saved); expect(commands.filter(command => command === 'query.execute')).toHaveLength(1);
+});
+
+it('完整排序超文本预算保留原视图及可修改草稿，明确关闭大小写转换后单次成功', async () => {
+  await mount(result => { result.columns = [{ key: 'id', name: '原文一', type: 'TEXT' }, { key: 'value', name: '原文二', type: 'TEXT' }]; result.rows = Array.from({ length: 1000 }, (_, index) => ({ id: 'A'.repeat(4090) + String(index).padStart(6, '0'), value: 'B'.repeat(4096) })); });
+  await click(text.panelTitle); await click(text.panelAdd); await sortDraftField(text.panelCase(1), true); await click(text.panelAdd);
+  await click(text.panelApply); expect(document.body.textContent).toContain(text.budget); expect(grid().rows).toBe(original.rows); expect(grid().sortColumns).toEqual([]); expect(button(text.panelApply).disabled).toBe(false);
+  await sortDraftField(text.panelCase(1), false); await click(text.panelApply); expect(grid().sortColumns).toHaveLength(2); expect(grid().rows[999]).toBe(original.rows[999]);
+  expect(commands.filter(command => command === 'query.execute')).toHaveLength(1);
+});
+
 it('本文件内存单选端口选中新项时取消旧项，value读取准确当前项',async()=>{
   await mount();
   const select=document.createElement('select'),first=document.createElement('option'),last=document.createElement('option');

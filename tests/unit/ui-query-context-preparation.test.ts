@@ -19,7 +19,7 @@ function fixture(){
     // 只补齐真实初始详情控制器和React状态端口，不替换生产失效/执行函数。
     rowDetails:new QueryRowDetails(),setRowDetail:vi.fn(),setActiveDetailRow:vi.fn(),
     // 对应未打开筛选面板的真实初始引用，不替换原撤销函数或投递断言。
-    filterLeaseRef:{current:null},setFilterLease:vi.fn(),
+    sortLeaseRef:{current:null},setSortLease:vi.fn(),filterLeaseRef:{current:null},setFilterLease:vi.fn(),
     Error,queryContextZh,queryStreamZh,streamExportSource:'INSERT INTO subject VALUES(1)',streamCancelled:{current:''},streamParameterSession:{current:''},invoke,flushSettings,ensureSession,rememberDatabase,handleQueryError,errorMessage:(reason:unknown)=>reason instanceof Error?reason.message:String(reason),uid:()=>`task${++serial}`,
     busyRef:{current:false},cancelledQuery:{current:''},task:{current:''},parameterSession:{current:''},tab:{id:'tab'},settings:{resultLimit:10},useWorkspace:{getState:()=>({setBusy(){},setDirty(){}})},
     setBusy(){},setQueryRunning(){},setError(){},setSelectedPin(){},setShowPinSql(){},setOutcome(){},setStream(){},setResultIndex(){},setTransaction(){},setTransactionKnown(){}

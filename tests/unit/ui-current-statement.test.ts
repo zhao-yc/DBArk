@@ -37,7 +37,7 @@ function fixture() {
     // 与真实组件初始useRef一致：尚未打开行详情，但真实失效函数仍撤销控制器并清空两个React状态。
     rowDetails: new QueryRowDetails(), setRowDetail: vi.fn(), setActiveDetailRow: vi.fn(),
     // 尚未打开筛选草稿；真实撤销函数仍使用组件的引用及状态端口。
-    filterLeaseRef: { current: null }, setFilterLease: vi.fn(),
+    sortLeaseRef: { current: null }, setSortLease: vi.fn(), filterLeaseRef: { current: null }, setFilterLease: vi.fn(),
     CurrentStatementIntent, currentStatementZh, queryContextZh, queryConnectionDatabase, resolveQueryDatabase, Error, document: { querySelector: () => modal ? {} : null },
     useWorkspace: { getState: () => workspace, subscribe: (action: () => void) => listen('context', action).dispose }, tab: workspace.settings.tabs[0], settings: { resultLimit: 10 }, editor: { current: editor }, activeCurrentIntent: { current: null }, setSearchEditor: vi.fn(), sessionRef: { current: '' }, pendingSession: { current: null }, busyRef: { current: false }, cancelledQuery: { current: '' }, task: { current: '' }, parameterSession: { current: '' }, explainSource: { current: '' },
     invoke, flushSettings, handleQueryError, rememberDatabase: vi.fn(), uid: () => `task-${++serial}`, errorMessage: (reason: any) => reason.message, zh: { query: { text001: '请输入SQL' } },

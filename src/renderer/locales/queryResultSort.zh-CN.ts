@@ -1,4 +1,9 @@
 export const queryResultSortZh = {
+  panelTitle: '多列排序', panelHint: '先编辑独立排序草稿，再一次应用；保留当前筛选，不执行或重发SQL。取消保留原排序，应用后可撤销整理。', panelEmpty: '当前草稿使用原返回顺序。',
+  panelField: (order: number) => `排序草稿第${order}字段`, panelDirection: (order: number) => `排序草稿第${order}方向`, panelNulls: (order: number) => `排序草稿第${order}NULL位置`, panelCase: (order: number) => `排序草稿第${order}忽略大小写`,
+  panelAdd: '添加排序字段', panelClear: '清空排序草稿', panelCancel: '取消排序草稿', panelApply: '应用排序草稿', panelDeclined: '排序未应用，原视图保持；请核对当前结果及排序预算。',
+  panelPrevious: '上一页排序规则', panelNext: '下一页排序规则', panelPage: (page: number, total: number) => `排序规则第${page}／${total}页`,
+  panelEarlier: (order: number) => `提高排序草稿第${order}优先级`, panelLater: (order: number) => `降低排序草稿第${order}优先级`, panelRemove: (order: number) => `移除排序草稿第${order}字段`,
   scope: '仅排序当前已返回快照，不重发 SQL；文本默认区分大小写，按 UTF-16 代码单元比较；时间按已返回字段比较，不采用数据库排序规则。',
   truncated: '结果已截断，排序不包含未返回记录。',
   keyboard: '点击列头或按 Enter／空格依次升序、降序、清除；按住 Ctrl／Cmd 可追加、切换或移除该列。规则按所列优先级依次比较。',
