@@ -63,6 +63,17 @@ describe('七行窗口矩阵的有界虚拟滚动读取（RAM）', () => {
     const f = fixture(); f.options.frozen = true; await expect(f.read()).rejects.toThrow('完整行序');
     expect(f.scrolls.length).toBeLessThanOrEqual(8); expect(f.frames()).toBeLessThanOrEqual(18);
   });
+  it('失败诊断只保留有界几何及行下标，不泄露单元格正文或扩大八页预算', async () => {
+    const f = fixture(96, ['不可写入失败诊断的正文', '2', '3', '4', '5', '6', '7']); f.options.frozen = true;
+    const error = await f.read().catch(reason => reason as Error); expect(error).toHaveProperty('message', expect.any(String));
+    const message = (error as Error).message; expect(message).not.toContain('不可写入失败诊断的正文');
+    const detail = JSON.parse(message.slice(message.indexOf('：') + 1)); expect(detail.phase).toBe('rows');
+    expect(detail.pages.length).toBeLessThanOrEqual(8); expect(detail.rejectedCells.length).toBeLessThanOrEqual(12);
+    expect(f.scrolls.length).toBeLessThanOrEqual(8);
+    const stalled = fixture(96); stalled.options.frozen = true;
+    const stopped = await stalled.read().catch(reason => reason as Error), bounded = JSON.parse((stopped as Error).message.split('：')[1]);
+    expect(bounded.phase).toBe('page-bound'); expect(bounded.pages).toHaveLength(8); expect(bounded.rejectedCells).toHaveLength(12);
+  });
   it('末行从未渲染时失败，不按计数补造ID或使用内部数据', async () => {
     const f = fixture(); f.options.omitted = 6; await expect(f.read()).rejects.toThrow('完整行序');
     expect(f.grid.scrollTop).toBe(10); expect(f.scrolls).toEqual([0, 10]);
