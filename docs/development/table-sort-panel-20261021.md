@@ -25,3 +25,7 @@ node scripts/check-local.mjs --build tests/unit/table-sort.test.ts tests/unit/ta
 开发及本机检查期间，原c54b0f29查询模板回合的WIN11-TEST曾再次不可达，本轮没有重复或接续它的实库GUI。连接恢复后，原CLI16472已报告exit0，类型／12项／新构建通过并核实Server-200身份；原GUI及资源终态继续单列等待，不外推给新排序面板。原失败及资源不追认完成，不清理归属未知资源。
 
 本排序面板的Windows实库窗口、安装包、macOS及其它驱动／版本仍待独立验收；恢复远程后先核原回合，再串行测试准确提交。不增加完整工作包或发行计数，暂不发布。
+
+新增`tests/e2e/table-sort-panel.spec.ts`独立实库用例：双门`DBARK_INTEGRATION_ENABLED=1`／`DBARK_TABLE_SORT_UI=1`，仅接收准确200/13384及新随机`dbark_tablesort_*`库。用例自行创建121行夹具，验证第三页回首页、多列实际顺序、精确筛选保持、调整优先级、取消保留本页草稿、手动恢复及清空／未改规则零额外查询。120秒、零重试，失败保留；成功正常退出后核定义／完整数据未改，再精确删库并核三条辅助连接。
+
+新用例的最终类型检查退出0，`node node_modules/@playwright/test/cli.js test tests/e2e/table-sort-panel.spec.ts --list`退出0且仅1例；默认／列表不读取认证或加载桌面。此为准备证据，不代表实库执行。原c54回合仍固定原头；本用例的新库和窗口不接续或重跑原轮。
