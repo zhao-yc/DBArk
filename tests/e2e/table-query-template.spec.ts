@@ -1,3 +1,5 @@
+import { connectionUriZh } from '../../src/renderer/locales/connectionUri.zh-CN';
+import { connectionUriErrors } from '../../src/shared/connectionUri';
 import { test as baseTest, expect, type TestInfo } from '@playwright/test';
 import { zh } from '../../src/renderer/locales/zh-CN';
 import { tableQueryTemplateZh as text } from '../../src/renderer/locales/tableQueryTemplate.zh-CN';
@@ -78,7 +80,16 @@ test('真实表结构模板及字段悬停：安全属性、SELECT执行、UPDAT
       const [ddl] = await connection.query<any[]>('SHOW CREATE TABLE ' + qualified), [rows] = await connection.query<any[]>('SELECT * FROM ' + qualified + ' ORDER BY id'); expect(rows).toHaveLength(61); definition = digest(ddl); data = digest(rows);
     });
     await step(() => page.locator('.app-commandbar').getByRole('button', { name: zh.common.newConnection, exact: true }).click()); const form = page.getByRole('dialog', { name: zh.common.newConnection, exact: true }), connectionName = '查询模板本例';
-    for (const [label, value] of [[zh.connections.text006, connectionName], [zh.connections.text009, target!.host!], [zh.connections.text010, target!.port!], [zh.common.user, target!.user!], [zh.connections.text011, target!.password!], [zh.connections.text012, target!.database!]]) await step(() => form.getByLabel(label, { exact: true }).fill(value));
+    await step(() => form.getByLabel(zh.connections.text006, { exact: true }).fill(connectionName));
+    // 正式URI入口先拒绝不支持的加密参数，随后只填表；原连接、查询及草稿整例继续。
+    await step(() => form.getByRole('button', { name: connectionUriZh.open, exact: true }).click());
+    await step(() => form.getByLabel(connectionUriZh.title, { exact: true }).fill('mysql://fixture:unused@offline.invalid/?ssl=true'));
+    await step(() => form.getByRole('button', { name: connectionUriZh.apply, exact: true }).click()); await step(() => expect(form.locator('.error-box')).toHaveText(connectionUriErrors.options));
+    await step(() => expect(form.getByLabel(zh.connections.text009, { exact: true })).toHaveValue('127.0.0.1')); await step(() => expect(form.getByRole('button', { name: zh.connections.text036, exact: true })).toBeDisabled());
+    const uri = 'mysql://' + encodeURIComponent(target!.user!) + ':' + encodeURIComponent(target!.password!) + '@' + target!.host! + ':' + target!.port! + '/' + encodeURIComponent(target!.database!);
+    await step(() => form.getByLabel(connectionUriZh.title, { exact: true }).fill(uri)); await step(() => form.getByRole('button', { name: connectionUriZh.apply, exact: true }).click()); await step(() => expect(form.getByLabel(connectionUriZh.title, { exact: true })).toHaveCount(0));
+    for (const [label, value] of [[zh.connections.text009, target!.host!], [zh.connections.text010, target!.port!], [zh.common.user, target!.user!], [zh.connections.text011, target!.password!], [zh.connections.text012, target!.database!]]) await step(() => expect(form.getByLabel(label, { exact: true })).toHaveValue(value));
+    await step(() => expect(form.getByLabel(zh.connections.text016, { exact: true })).not.toBeChecked()); expect(await step(() => page.evaluate(() => window.dbark.invoke('connections.list', {})))).toHaveLength(0);
     await step(() => form.getByRole('combobox', { name: new RegExp('^' + zh.connections.text008) }).selectOption('mysql')); await step(() => form.getByLabel(zh.connections.text016, { exact: true }).uncheck()); await step(() => form.getByRole('button', { name: zh.connections.text036, exact: true }).click()); await step(() => expect(form).toBeHidden());
     const profiles = await step(() => page.evaluate(() => window.dbark.invoke('connections.list', {}))); expect(profiles).toHaveLength(1); const profile = profiles[0]; expect(profile.database).toBe(target!.database!); expect(profile.rememberPassword).toBe(false); expect(profile.password).toBeUndefined();
     const select = text.generatedComment + `\nSELECT\n  \`id\`,\n  \`amount\`,\n  \`note\`,\n  \`bin\`\nFROM \`${target!.database!}\`.\`subject\`\nLIMIT 1000;`;
@@ -123,6 +134,6 @@ test('真实表结构模板及字段悬停：安全属性、SELECT执行、UPDAT
       expect(created && /^dbark_querytemplate_[a-f0-9]{32}$/.test(target!.database!)).toBe(true); await connection.query('DROP DATABASE ' + databaseSql);
     }, true);
     await auxiliary('verify-absence', async connection => { const [databases] = await connection.execute<any[]>('SELECT SCHEMA_NAME FROM information_schema.SCHEMATA WHERE SCHEMA_NAME=?', [target!.database!]), [threads] = await connection.execute<any[]>('SELECT ID FROM information_schema.PROCESSLIST WHERE DB=? OR ID=? OR ID=?', [target!.database!, preparedThread, cleanupThread]); expect(databases).toHaveLength(0); expect(threads).toHaveLength(0); }, true);
-    await info.attach('表结构SQL模板', { body: Buffer.from(JSON.stringify({ generated: 4, fieldHoverVerified: true, hoverMarkupSafe: true, selectExecuted: true, parameterNames: 4, draftPreserved: true, draftRestored: true, noAutomaticExecution: true, noWrites: true, audit: final, definitionUnchanged: true, fixtureRows: 61, fixtureDataUnchanged: true, databaseRemoved: true, closes })), contentType: 'application/json' });
+    await info.attach('表结构SQL模板', { body: Buffer.from(JSON.stringify({ connectionUriVerified: true, generated: 4, fieldHoverVerified: true, hoverMarkupSafe: true, selectExecuted: true, parameterNames: 4, draftPreserved: true, draftRestored: true, noAutomaticExecution: true, noWrites: true, audit: final, definitionUnchanged: true, fixtureRows: 61, fixtureDataUnchanged: true, databaseRemoved: true, closes })), contentType: 'application/json' });
   } catch (reason) { runtime.retainOwnedDesktopResources(info); await info.attach('模板隔离资源保留', { body: Buffer.from(JSON.stringify({ database: target!.database!, created, automaticCleanup: false, closes })), contentType: 'application/json' }); throw reason; }
 });
