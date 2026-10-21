@@ -1,5 +1,7 @@
 # 已返回查询结果的本地条件筛选
 
+当前 main 的操作步骤见[查询结果排序与筛选速查](query-results-guide.md)，包含单条和全部启停。下文保留各准确提交当时的开发与验收记录；其中“候选／待验”只对应所列历史提交，最新批量按钮范围见[本批记录](development/query-result-filter-bulk-enabled-20261021.md)。源码交付与安装包发布分别记录，当前暂不发布。
+
 后继开发候选接纳[小数简写条件输入](development/query-result-filter-decimal-input-20261021.md)：DECIMAL 可写 `.5`、`1.`，浮点类型另可写 `.5e2`／`1.e2`；保留条件原文和原结果精度，只规范化比较输入。148bb40通过独立Linux类型／11369单元／构建，10平台跳过；Windows及GUI未验，不属于7f窗口验收或main交付，暂不发布。
 
 条件面板内可按 Ctrl+Enter（macOS：⌘+Enter）显式应用草稿，Esc取消；普通Enter保留输入行为，输入法组合和长按重复不触发命令。取消保持原过滤及排序，应用沿原来源租约重置旧选择。固定3fedb46已完成Linux类型／单元／构建、Windows类型／301定向／新构建、一次实库组合窗口、Python读回及完整11284通过／1项平台跳过，见[准确验收](../tests/integration/acceptance-query-result-sort-filter-3fedb46-20261021.md)。按main交付源码，原生输入法、系统输入、安装及macOS新组合未验，暂不发布。

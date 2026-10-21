@@ -71,6 +71,7 @@ pnpm dist:mac
 
 - [技术架构](docs/architecture.md)
 - [中文使用指南](docs/user-guide.md)
+- [查询结果排序与筛选速查](docs/query-results-guide.md)
 - [功能对照](docs/feature-matrix.md)
 - [REA 分析证据](docs/reverse-engineering.md)
 - [开发与测试](docs/development.md)
