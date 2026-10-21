@@ -1,6 +1,6 @@
 # 已返回结果筛选条件启停
 
-固定源码提交`12c08ad52a638bfced8101c71bfdb4cb84071765`已推送main，产品树`7ad1c2e8a71ff6de9fc4bba933584960174f96a7`；[完整CI39539815211](https://github.com/zhao-yc/DBArk/actions/runs/39539815211)已启动。当前Linux类型单元及Windows／macOS arm64／x64原生job仍进行中，不先报通过；原生剪贴板job跳过。
+固定源码提交`12c08ad52a638bfced8101c71bfdb4cb84071765`已推送main，产品树`7ad1c2e8a71ff6de9fc4bba933584960174f96a7`；[完整CI39539815211](https://github.com/zhao-yc/DBArk/actions/runs/39539815211)的Linux job119024747003已success：Python21项、0.267秒，类型／592文件11398通过、10平台跳过／构建成功；单元134.98秒、Vite21.85秒。Windows及两种macOS架构原生job尚待终态；原生剪贴板job跳过。
 
 ## 实际行为
 
@@ -25,5 +25,7 @@ node scripts/check-local.mjs --build tests/unit/query-result-filter-enabled.test
 其后只重试`node scripts/build.mjs`：退出0、34.7652117秒、Vite33.93秒；保留Rollup注释和大分块警告。另运行Monaco补丁门及实际WordHighlighter取消的两个测试文件，23项全部通过、1.96秒。未重跑已通过的391项。新启停控制器覆盖组合省略、全部停用、坏草稿重启、独立冻结、原值读取隔离、漂移及预算；RAM组件覆盖复制、字段变更、取消、输入法、旧回调、原行与零额外SQL。
 
 ## 待验范围
+
+后继在原`query-result-sort-case-live.ts`保留整例，仅追加实际启停复选框与重开草稿验证：停用副本、OR忽略停用叶、全部停用、仅重启副本、恢复AND交集，再沿原路径导出四行。所有ID期待独立手写，复用原虚拟网格读取、一次SQL／两次文件导出／历史不变及严格收尾，不改120秒、零重试、原复制和文件读回断言，不新建数据库用户。后继类型26.77秒、原默认关闭门／虚拟网格／大小写三个文件37项通过、Vitest0.864秒；这些是准备，不是本次真实窗口结果，也不属于12c的原CI范围。
 
 以上是源码、内存组件与开发构建证据，不是原生GUI、实库、安装包或macOS的本能力验收。Q01的0a4实库窗口回合固定另一准确提交，不能计作本能力通过。后续完整CI及单项客户端验收另记，Navicat工作包仍部分，暂不发布。

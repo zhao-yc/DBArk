@@ -18,7 +18,7 @@ export function registerQueryResultSortCaseUi(binding:QueryResultColumnsUiTarget
  const cases=new Map<TestInfo,{life:QueryResultColumnsUiLifetime;observer?:mysql.Connection;native?:any;stream?:any}>();let halted=false;
  test.use({preserveOnUnconfirmedExit:true,trace:'off',screenshot:'off',video:'off'});test.setTimeout(120000);test.describe.configure({retries:0});
  test.afterEach(({},info)=>{const current=cases.get(info);if(!current){halted=true;retainOwnedDesktopResources(info);throw Error('结果列未建立本例owner，保留现场');}try{current.life.afterEach();cases.delete(info);}catch(reason){halted=true;throw reason;}});
- test('准确13384真实App文本大小写、Unicode、NULL、小数简写及原文复制导出一致',async({trace,screenshot,video},info)=>{
+ test('准确13384真实App文本大小写、Unicode、NULL、小数简写、条件启停及原文复制导出一致',async({trace,screenshot,video},info)=>{
   if(halted)throw Error('结果列前例已保留资源，停止后续用例');
   const captured=ownedDesktopResources(info),page=captured.page,application=captured.application,directory=dataDir;
   const life=new QueryResultColumnsUiLifetime({check(allowClosed){binding.assertCurrent();const now=ownedDesktopResources(info);if(now.page!==page||now.application!==application||!allowClosed&&now.closed)throw Error('结果列原owner已变化');},closed:()=>ownedDesktopResources(info).closed,retain:()=>{halted=true;retainOwnedDesktopResources(info);},async exit(){life.check();await application.evaluate(readQueryResultColumnsAudit);life.check();await application.evaluate(guardQueryResultColumnsExitAnswers);life.check();await confirmOwnedDesktopExit(info);}},info as TestInfo&{_startWallTime?:number});
@@ -144,6 +144,29 @@ export function registerQueryResultSortCaseUi(binding:QueryResultColumnsUiTarget
    await observe(()=>panel.getByRole('button',{name:filterText.apply,exact:true}).click());await observe(()=>expect.poll(ids).toEqual(['3','6','7']));
    await observe(()=>tab.getByRole('button',{name:filterText.open,exact:true}).click());
    await observe(()=>expect(panel.getByRole('textbox',{name:filterText.member(1,1),exact:true})).toHaveValue('1'));await observe(()=>expect(panel.getByRole('textbox',{name:filterText.member(2,1),exact:true})).toHaveValue('5'));
+   /** 真实复选框保留当前条件；每次应用后独立核对网格ID，不从控制器推导期待。 */
+   async function enableCondition(index:number,value:boolean):Promise<void>{
+    const checkbox=panel.getByRole('checkbox',{name:filterText.enabled(index),exact:true});
+    await observe(()=>checkbox.setChecked(value));await observe(()=>value?expect(checkbox).toBeChecked():expect(checkbox).not.toBeChecked());
+   }
+   await enableCondition(2,false);
+   await observe(()=>panel.getByRole('button',{name:filterText.apply,exact:true}).click());await observe(()=>expect.poll(ids).toEqual(['1','3','6','7']));
+   await observe(()=>tab.getByRole('button',{name:filterText.open,exact:true}).click());
+   await observe(()=>expect(panel.getByRole('checkbox',{name:filterText.enabled(2),exact:true})).not.toBeChecked());
+   await observe(()=>expect(panel.getByRole('textbox',{name:filterText.member(2,1),exact:true})).toHaveValue('5'));
+   await observe(()=>panel.getByRole('combobox',{name:filterText.mode,exact:true}).selectOption('OR'));
+   await observe(()=>panel.getByRole('button',{name:filterText.apply,exact:true}).click());await observe(()=>expect.poll(ids).toEqual(['1','3','6','7']));
+   await observe(()=>tab.getByRole('button',{name:filterText.open,exact:true}).click());await enableCondition(1,false);
+   await observe(()=>panel.getByRole('button',{name:filterText.apply,exact:true}).click());await observe(()=>expect.poll(ids).toEqual(['1','2','3','4','5','6','7']));
+   await observe(()=>tab.getByRole('button',{name:filterText.open,exact:true}).click());
+   await observe(()=>expect(panel.getByRole('checkbox',{name:filterText.enabled(1),exact:true})).not.toBeChecked());
+   await observe(()=>expect(panel.getByRole('textbox',{name:filterText.member(1,1),exact:true})).toHaveValue('1'));
+   await enableCondition(2,true);
+   await observe(()=>panel.getByRole('button',{name:filterText.apply,exact:true}).click());await observe(()=>expect.poll(ids).toEqual(['3','5','6','7']));
+   await observe(()=>tab.getByRole('button',{name:filterText.open,exact:true}).click());await enableCondition(1,true);
+   await observe(()=>panel.getByRole('combobox',{name:filterText.mode,exact:true}).selectOption('AND'));
+   await observe(()=>panel.getByRole('button',{name:filterText.apply,exact:true}).click());await observe(()=>expect.poll(ids).toEqual(['3','6','7']));
+   await observe(()=>tab.getByRole('button',{name:filterText.open,exact:true}).click());
    await observe(()=>panel.getByRole('button',{name:filterText.remove(2),exact:true}).click());
    await observe(()=>panel.getByRole('button',{name:filterText.apply,exact:true}).click());await observe(()=>expect.poll(ids).toEqual(['1','3','6','7']));
    for(const index of [5,4,3,2])await observe(()=>grid.locator('[role="row"][aria-rowindex="'+index+'"]').getByRole('checkbox').check());
