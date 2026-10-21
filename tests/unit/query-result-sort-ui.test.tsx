@@ -50,6 +50,81 @@ async function mount(prepare?: (result: QueryResult) => void){
   function Harness(){return store(s=>s.settings.tabs).map(tab=><QueryTab key={tab.id} tab={tab} onHistory={()=>{}}/>);}const container=document.createElement('div');document.body.appendChild(container);root=createRoot(container as any);await act(async()=>root!.render(<Harness/>));await click(zh.query.text010);
 }
 function grid(){return ports.grids.at(-1)!;}
+it('筛选排序联动：原样应用筛选保留重做，旧重做闭包不能跨控制器替换重放', async () => {
+  await mount(); await sort(); await click(filterText.open); await addFilterRule(1, 'id', 'gt', '2'); await click(filterText.apply);
+  await click(historyText.undo); expect(grid().rows).toEqual([original.rows[2], original.rows[1], original.rows[0]]);
+  const redo = reactProps(button(historyText.redo)).onClick;
+  await click(filterText.open); await click(filterText.apply); expect(button(historyText.redo).disabled).toBe(false);
+  await act(async () => redo()); expect(grid().rows).toEqual([original.rows[2], original.rows[1], original.rows[0]]);
+  await click(historyText.redo); expect(grid().rows).toEqual([original.rows[1], original.rows[0]]); expect(grid().sortColumns).toEqual([{ columnKey: 'id', direction: 'ASC' }]);
+  expect(commands.filter(command => command === 'query.execute')).toHaveLength(1);
+});
+it('筛选排序联动：清除筛选触发Unicode映射总预算时保留旧条件和排序，显式清排序后可清筛选', async () => {
+  await mount(result => { result.columns = [result.columns[0], result.columns[2]]; result.rows = Array.from({ length: 1000 }, (_, index) => ({ id: String(index), words: 'İ'.repeat(4000) })); });
+  await click(filterText.open); await addFilterRule(1, 'id', 'eq', '0'); await click(filterText.apply);
+  await sort('words'); await toggleSortCase(1, '原文', true); const rows = grid().rows;
+  await click(filterText.clear); expect(grid().rows).toBe(rows); expect(grid().sortColumns).toEqual([{ columnKey: 'words', direction: 'ASC' }]);
+  expect(document.body.textContent).toContain(text.budget); expect(document.querySelector('[aria-label="' + text.ignoreCase(1, '原文') + '"]')!.checked).toBe(true);
+  await click(text.clear); await click(filterText.clear); expect(grid().rows).toBe(original.rows); expect(grid().rows).toHaveLength(1000);
+  expect(commands.filter(command => command === 'query.execute')).toHaveLength(1);
+});
+
+it('筛选排序联动：草稿期间排序键漂移后即使恢复也拒旧应用，旧草稿不能恢复旧优先级', async () => {
+  await mountMulti(); await sort(); await click(filterText.open); await addFilterRule(1, 'group', 'eq', 'A');
+  const apply = reactProps(button(filterText.apply)).onClick, rows = grid().rows, value = original.rows[1].id;
+  original.rows[1].id = '3'; await act(async () => apply()); expect(grid().rows).toBe(rows); expect(grid().rows).toHaveLength(3);
+  original.rows[1].id = value; await act(async () => apply()); expect(grid().rows).toBe(rows); expect(grid().rows).toHaveLength(3);
+  await click(filterText.cancel); await act(async () => apply()); expect(grid().rows).toHaveLength(3);
+  expect(commands.filter(command => command === 'query.execute')).toHaveLength(1);
+});
+it('筛选排序联动：应用筛选保留完整多列优先级、NULL及大小写，一次撤销并保持精确原文', async () => {
+  await mountMulti(); const before = structuredClone(original);
+  original.rows[1].words = null;
+  await headerAction('words'); await toggleSortCase(1, '原文', true); await nullPosition(1, '原文', 'LAST'); await headerAction('id', { ctrlKey: true });
+  const sorted = [...grid().rows], rules = [...grid().sortColumns];
+  await click(filterText.open); await addFilterRule(1, 'group', 'eq', 'A'); await click(filterText.apply);
+  expect(grid().sortColumns).toEqual(rules); expect(grid().rows).toEqual([original.rows[2], original.rows[1]]);
+  expect(document.querySelector('[aria-label="' + text.nulls(1, '原文') + '"]')!.value).toBe('LAST');
+  expect(document.querySelector('[aria-label="' + text.ignoreCase(1, '原文') + '"]')!.checked).toBe(true);
+  await click(historyText.undo); expect(grid().rows).toEqual(sorted); expect(grid().sortColumns).toEqual(rules);
+  await click(historyText.redo); expect(grid().rows).toEqual([original.rows[2], original.rows[1]]);
+  await act(async () => grid().onSelectedRowsChange(new Set([0, 1]))); await click(zh.resultExport.selectedTitle);
+  await click(zh.resultExport.chooseFile); await click(zh.resultExport.start);
+  expect(exports[0].result.rows[1].id).toBe('9007199254740993'); expect(exports[0].result.rows[1].amount).toBe('0.12345678901234567891');
+  before.rows[1].words = null; expect(original).toEqual(before); expect(commands.filter(command => command === 'query.execute')).toHaveLength(1);
+});
+
+it('筛选排序联动：清除筛选保留多列排序，旧选择撤销，撤销恢复前一完整视图', async () => {
+  await mountMulti(); await filterGroup(); await headerAction('group'); await headerAction('id', { ctrlKey: true });
+  const filtered = [...grid().rows], rules = [...grid().sortColumns]; await act(async () => grid().onSelectedRowsChange(new Set([0]))); const old = grid();
+  await click(filterText.clear); expect(grid().sortColumns).toEqual(rules); expect(grid().rows).toEqual([original.rows[2], original.rows[1], original.rows[0]]);
+  expect(grid().selectedRows.size).toBe(0); expect(copy(old).size).toBe(0);
+  await click(historyText.undo); expect(grid().rows).toEqual(filtered); expect(grid().sortColumns).toEqual(rules);
+  await click(historyText.redo); expect(grid().rows).toEqual([original.rows[2], original.rows[1], original.rows[0]]);
+  expect(commands.filter(command => command === 'query.execute')).toHaveLength(1);
+});
+
+it.each(['clear', 'draft'] as const)('筛选排序联动：%s扩大到无效排序值时完整拒绝，保留旧视图、规则、选择及历史', async mode => {
+  await mount(result => { result.rows[0].id = '不是整数'; });
+  await click(filterText.open); await addFilterRule(1, 'words', 'eq', '中行'); await click(filterText.apply); await sort();
+  await act(async () => grid().onSelectedRowsChange(new Set([0]))); const old = grid(), rows = old.rows;
+  if (mode === 'clear') await click(filterText.clear);
+  else { await click(filterText.open); await click(filterText.clearDraft); await click(filterText.apply); }
+  expect(grid().rows).toBe(rows); expect(grid().sortColumns).toEqual([{ columnKey: 'id', direction: 'ASC' }]);
+  expect(document.body.textContent).toContain(text.value);
+  if (mode === 'draft') { expect(document.querySelector('[aria-label="' + filterText.title + '"]')).not.toBeNull(); await click(filterText.cancel); }
+  else { expect(grid().selectedRows.size).toBe(1); expect(copy(old).size).toBeGreaterThan(0); }
+  await click(historyText.undo); expect(grid().rows).toEqual([original.rows[1]]); expect(grid().sortColumns).toEqual([]);
+  await click(historyText.redo); expect(grid().rows).toBeDefined(); expect(grid().sortColumns).toEqual([{ columnKey: 'id', direction: 'ASC' }]);
+  expect(commands.filter(command => command === 'query.execute')).toHaveLength(1);
+});
+
+it('筛选排序联动：全部排序列均不支持时仍可应用NULL筛选，不扩大排序准入', async () => {
+  await mount(result => { result.columns = result.columns.map(column => ({ ...column, type: '未知类型' })); result.rows[0].id = null; });
+  await click(filterText.open); await addFilterRule(1, 'id', 'null'); await click(filterText.apply);
+  expect(grid().rows).toEqual([original.rows[0]]); expect(grid().sortColumns).toEqual([]);
+  await click(filterText.clear); expect(grid().rows).toBe(original.rows); expect(commands.filter(command => command === 'query.execute')).toHaveLength(1);
+});
 it.each(['failed', 'no-columns'] as const)('暂存整理：后续查询%s仍显示暂存并允许主动丢弃', async mode => {
   await mount(); await sort(); await click(memoryText.save); const oldDiscard = reactProps(button(memoryText.clear)).onClick;
   const previous = window.dbark.invoke; (window.dbark as any).invoke = async (command: any, input: any) => {
@@ -495,9 +570,9 @@ it('批量启停：输入法组合阻止批量修改，重启无效草稿不覆�
   await click(filterText.open);await click(filterText.enableAll);const before=grid().rows;await click(filterText.apply);expect(grid().rows).toBe(before);expect(document.body.textContent).toContain(filterText.value);expect(document.querySelector('[aria-label="'+filterText.title+'"]')).not.toBeNull();await click(filterText.cancel);await click(filterText.open);expect(document.querySelector('[aria-label="'+filterText.enabled(1)+'"]')!.checked).toBe(false);expect(commands.filter(command=>command==='query.execute')).toHaveLength(1);
 });
 
-it('条件启停：停用保留原值与草稿，应用恢复原行，重开启用后重新筛选且不执行SQL',async()=>{
+it('条件启停：停用保留原值与草稿，应用恢复全部行且保留排序，重开启用后重新筛选且不执行SQL',async()=>{
   await mount();await sort();await act(async()=>grid().onSelectedRowsChange(new Set([0])));await click(filterText.open);await addFilterRule(1,'id','eq','2');await enableFilterRule(1,false);
-  expect(document.querySelector('[aria-label="'+filterText.input+' 1"]')!.value).toBe('2');await click(filterText.apply);expect(grid().rows).toBe(original.rows);expect(grid().sortColumns).toEqual([]);expect(grid().selectedRows.size).toBe(0);
+  expect(document.querySelector('[aria-label="'+filterText.input+' 1"]')!.value).toBe('2');await click(filterText.apply);expect(grid().rows).toEqual([original.rows[2],original.rows[1],original.rows[0]]);expect(grid().sortColumns).toEqual([{columnKey:'id',direction:'ASC'}]);expect(grid().selectedRows.size).toBe(0);
   await click(filterText.open);expect(document.querySelector('[aria-label="'+filterText.enabled(1)+'"]')!.checked).toBe(false);await enableFilterRule(1,true);await click(filterText.apply);expect(grid().rows).toEqual([original.rows[2]]);expect(commands.filter(command=>command==='query.execute')).toHaveLength(1);
 });
 it('条件启停：复制、修改字段和取消均保留停用状态，重新启用坏值拒绝并保留旧视图',async()=>{
@@ -654,8 +729,8 @@ it('嵌套子组独立组合且移除整组撤销其旧输入和删除回调',as
   await mount();await click(filterText.open);await click(filterText.addGroup);await configureGroupedRule(1,'id','eq','2');await click(filterText.addGroupInGroup('1'));await setFilterField(filterText.groupMode('1.1'),'AND');await configureGroupedRule(2,'id','eq','18446744073709551615');await click(filterText.addInGroup('1.1'));await configureGroupedRule(3,'value','gt','0');await click(filterText.apply);expect(grid().rows).toEqual([original.rows[0],original.rows[2]]);
   await click(filterText.open);const oldInput=reactProps(document.querySelector('[aria-label="'+filterText.input+' 2"]')).onChange,oldDelete=reactProps(button(filterText.removeGroup('1.1'))).onClick;await click(filterText.removeGroup('1.1'));await click(filterText.addGroupInGroup('1'));await configureGroupedRule(2,'id','eq','9007199254740993');await act(async()=>{oldInput({target:{value:'2'}});oldDelete();});expect(document.querySelector('[aria-label="'+filterText.input+' 2"]')!.value).toBe('9007199254740993');await click(filterText.apply);expect(grid().rows).toEqual([original.rows[1],original.rows[2]]);
 });
-it('空子组保留原排序并显示错误，补条件后才应用，清空根恢复准确原source',async()=>{
-  await mount();await sort();const before=grid().rows;await click(filterText.open);await click(filterText.addGroup);await click(filterText.remove(1));await click(filterText.apply);expect(document.body.textContent).toContain(filterText.emptyGroup);expect(grid().rows).toBe(before);expect(grid().sortColumns).toEqual([{columnKey:'id',direction:'ASC'}]);await click(filterText.addInGroup('1'));await configureGroupedRule(1,'id','eq','2');await click(filterText.apply);expect(grid().rows).toEqual([original.rows[2]]);await click(filterText.open);await click(filterText.clearDraft);await click(filterText.apply);expect(grid().rows).toBe(original.rows);
+it('空子组保留原排序并显示错误，补条件后才应用，清空根保留完整排序和全部原行',async()=>{
+  await mount();await sort();const before=grid().rows;await click(filterText.open);await click(filterText.addGroup);await click(filterText.remove(1));await click(filterText.apply);expect(document.body.textContent).toContain(filterText.emptyGroup);expect(grid().rows).toBe(before);expect(grid().sortColumns).toEqual([{columnKey:'id',direction:'ASC'}]);await click(filterText.addInGroup('1'));await configureGroupedRule(1,'id','eq','2');await click(filterText.apply);expect(grid().rows).toEqual([original.rows[2]]);await click(filterText.open);await click(filterText.clearDraft);await click(filterText.apply);expect(grid().rows).toEqual([original.rows[2],original.rows[1],original.rows[0]]);expect(grid().sortColumns).toEqual([{columnKey:'id',direction:'ASC'}]);
 });
 it('分组增删和应用在输入法组合期间受阻，完成后按最后输入匹配且不执行新SQL',async()=>{
   await mount();await click(filterText.open);await click(filterText.addGroup);await configureGroupedRule(1,'words','eq','早行');let input=document.querySelector('[aria-label="'+filterText.input+' 1"]')!;const oldApply=reactProps(button(filterText.apply)).onClick;await act(async()=>reactProps(input).onCompositionStart());expect(button(filterText.addGroup).disabled).toBe(true);expect(button(filterText.removeGroup('1')).disabled).toBe(true);expect(button(filterText.apply).disabled).toBe(true);await act(async()=>{reactProps(input).onChange({target:{value:'晚行'}});oldApply();});expect(grid().rows).toBe(original.rows);input=document.querySelector('[aria-label="'+filterText.input+' 1"]')!;await act(async()=>reactProps(input).onCompositionEnd());await click(filterText.apply);expect(grid().rows).toEqual([original.rows[0]]);expect(commands.filter(c=>c==='query.execute')).toHaveLength(1);
@@ -715,7 +790,7 @@ it('成员输入法组合阻止应用和增删，完成后采用最后原文并�
 });
 it('无效数字成员保留原排序和草稿，改正后原面板才应用',async()=>{
   await mountMulti();await headerAction('id');const before=grid().rows;await click(filterText.open);await addMemberRule('id',['2','坏值']);await click(filterText.apply);expect(grid().rows).toBe(before);expect(grid().sortColumns).toEqual([{columnKey:'id',direction:'ASC'}]);expect(document.body.textContent).toContain(filterText.value);
-  await setFilterField(filterText.member(1,2),'9007199254740993');await click(filterText.apply);expect(grid().rows).toEqual([original.rows[1],original.rows[2]]);expect(grid().sortColumns).toEqual([]);
+  await setFilterField(filterText.member(1,2),'9007199254740993');await click(filterText.apply);expect(grid().rows).toEqual([original.rows[2],original.rows[1]]);expect(grid().sortColumns).toEqual([{columnKey:'id',direction:'ASC'}]);
 });
 /** 只操作真实条件面板的两个独立输入，不调用筛选控制器来伪造界面结果。 */
 async function addRangeRule(column:string,operator:'between'|'notBetween',lower:string,upper:string){
@@ -752,7 +827,7 @@ it('离开区间移除上限并撤销旧输入，重新进入时须重新填写�
 it('颠倒区间保留原排序和草稿，纠正上限后才替换结果',async()=>{
   await mountMulti();await headerAction('id');const before=grid().rows;await click(filterText.open);await addRangeRule('id','between','9007199254740993','2');await click(filterText.apply);
   expect(grid().rows).toBe(before);expect(grid().sortColumns).toEqual([{columnKey:'id',direction:'ASC'}]);expect(document.body.textContent).toContain(filterText.rangeOrder);expect(document.querySelector('[aria-label="'+filterText.title+'"]')).not.toBeNull();
-  await setFilterField(filterText.upper+' 1','9007199254740993');await click(filterText.apply);expect(grid().rows).toEqual([original.rows[1]]);expect(grid().sortColumns).toEqual([]);expect(document.body.textContent).not.toContain(filterText.rangeOrder);
+  await setFilterField(filterText.upper+' 1','9007199254740993');await click(filterText.apply);expect(grid().rows).toEqual([original.rows[1]]);expect(grid().sortColumns).toEqual([{columnKey:'id',direction:'ASC'}]);expect(document.body.textContent).not.toContain(filterText.rangeOrder);
 });
 it('不介于面板排除NULL和闭区间端点，保留区间外的原行',async()=>{
   await mount(result=>{result.rows[0].value=null;});await click(filterText.open);await addRangeRule('value','notBetween','0.12345678901234567890','0.12345678901234567890');await click(filterText.apply);
@@ -784,8 +859,8 @@ it.each(['empty','notEmpty'] as const)('文本条件%s清空并禁用原值输�
 });
 it('筛选：真实面板草稿不改结果，取消不改已生效排序，AND/OR条件应用有原返回/过滤计数',async()=>{
   await mountMulti();await headerAction('id');const before=grid().rows;await click(filterText.open);await addFilterRule(1,'group','eq','A');expect(grid().rows).toBe(before);await click(filterText.cancel);expect(grid().rows).toBe(before);expect(grid().sortColumns).toEqual([{columnKey:'id',direction:'ASC'}]);
-  await click(filterText.open);await addFilterRule(1,'group','eq','A');await addFilterRule(2,'id','gt','9007199254740992');await click(filterText.apply);expect(grid().rows).toEqual([original.rows[1]]);expect(grid().sortColumns).toEqual([]);expect(document.body.textContent).toContain(filterText.counts(3,1));expect(document.body.textContent).toContain(filterText.truncated);
-  await click(filterText.open);await setFilterField(filterText.mode,'OR');await click(filterText.apply);expect(grid().rows).toEqual([original.rows[1],original.rows[2]]);await click(filterText.clear);expect(grid().rows).toBe(original.rows);expect(commands.filter(c=>c==='query.execute')).toHaveLength(1);
+  await click(filterText.open);await addFilterRule(1,'group','eq','A');await addFilterRule(2,'id','gt','9007199254740992');await click(filterText.apply);expect(grid().rows).toEqual([original.rows[1]]);expect(grid().sortColumns).toEqual([{columnKey:'id',direction:'ASC'}]);expect(document.body.textContent).toContain(filterText.counts(3,1));expect(document.body.textContent).toContain(filterText.truncated);
+  await click(filterText.open);await setFilterField(filterText.mode,'OR');await click(filterText.apply);expect(grid().rows).toEqual([original.rows[2],original.rows[1]]);await click(filterText.clear);expect(grid().rows).toEqual([original.rows[0],original.rows[2],original.rows[1]]);expect(commands.filter(c=>c==='query.execute')).toHaveLength(1);
 });
 it.each([['id','gt','9007199254740992',1],['amount','eq','0.12345678901234567890',2],['stamp','eq','2026-10-19 12:00:00.000001',2],['duration','lt','-100:00:00.000000',2]] as const)('筛选：真实面板%s比较保留大数/小数/微秒/负时间',async(column,operator,value,sourceIndex)=>{
   await mountMulti();await click(filterText.open);await addFilterRule(1,column,operator,value);await click(filterText.apply);expect(grid().rows).toEqual([original.rows[sourceIndex]]);expect(commands.filter(c=>c==='query.execute')).toHaveLength(1);
@@ -801,9 +876,9 @@ it('筛选：逐条移除/清空草稿使用稳定条件身份，迟到旧输入
 it('筛选：过滤后多列排序、勾选复制及导出共同使用原行视图，变更撤销旧选择',async()=>{
   await mountMulti();const saved=structuredClone(original),sourceRows=original.rows;await filterGroup();await headerAction('group');await headerAction('id',{ctrlKey:true});expect(grid().rows).toEqual([original.rows[2],original.rows[1]]);await act(async()=>grid().onSelectedRowsChange(new Set([0])));const old=grid();expect(JSON.parse(copy().get('application/x-dbark-cells')!).rows[0][1]).toBe('2');await click(zh.resultExport.selectedTitle);await click(zh.resultExport.chooseFile);await click(zh.resultExport.start);expect(exports[0].result.rows.map((row:any)=>row.id)).toEqual(['2']);expect(original).toEqual(saved);expect(original.rows).toBe(sourceRows);expect(commands.filter(c=>c==='query.execute')).toHaveLength(1);expect(copy(old).size).toBe(0);
 });
-it('筛选：查找/详情沿过滤后排序的同一视图，清除筛选恢复原序和原列引用',async()=>{
+it('筛选：查找/详情沿过滤后排序的同一视图，清除筛选保留排序和原列引用',async()=>{
   await mountMulti();await filterGroup();await headerAction('id');await act(async()=>grid().onActivePositionChange({row:grid().rows[0],rowIdx:0}));await click(detailsText.open);expect(document.body.textContent).toContain('甲组早行');await click(detailsText.next);expect(document.body.textContent).toContain('甲组晚行');await click(detailsText.close);
-  vi.useFakeTimers({toFake:['setTimeout','clearTimeout']});await click(findText.open);const input=document.querySelector('input[aria-label="'+findText.input+'"]')!;await act(async()=>{input.value='甲组早行';input.dispatchEvent(new MemoryEvent('input'));});await act(async()=>{await vi.runAllTimersAsync();});await click(findText.next);expect(ports.scroll).toHaveBeenLastCalledWith({rowIdx:0,idx:6});vi.useRealTimers();await click(filterText.clear);expect(grid().rows).toBe(original.rows);expect(grid().sortColumns).toEqual([]);expect(grid().columns.filter((c:any)=>c.key!=='select-row').map((c:any)=>c.key)).toEqual(original.columns.map(c=>c.key));
+  vi.useFakeTimers({toFake:['setTimeout','clearTimeout']});await click(findText.open);const input=document.querySelector('input[aria-label="'+findText.input+'"]')!;await act(async()=>{input.value='甲组早行';input.dispatchEvent(new MemoryEvent('input'));});await act(async()=>{await vi.runAllTimersAsync();});await click(findText.next);expect(ports.scroll).toHaveBeenLastCalledWith({rowIdx:0,idx:6});vi.useRealTimers();await click(filterText.clear);expect(grid().rows).toEqual([original.rows[0],original.rows[2],original.rows[1]]);expect(grid().sortColumns).toEqual([{columnKey:'id',direction:'ASC'}]);expect(grid().columns.filter((c:any)=>c.key!=='select-row').map((c:any)=>c.key)).toEqual(original.columns.map(c=>c.key));
 });
 it('筛选：被排除行的条件键在React更新前漂移也撤销旧复制/导出/详情，恢复不复活',async()=>{
   await mountMulti();await filterGroup();await headerAction('id');await act(async()=>grid().onSelectedRowsChange(new Set([0])));await act(async()=>grid().onActivePositionChange({row:grid().rows[0],rowIdx:0}));const old=grid(),exportAction=reactProps(button(zh.resultExport.selectedTitle)).onClick,detailAction=reactProps(button(detailsText.open)).onClick;original.rows[0].group='A';expect(copy(old).size).toBe(0);await act(async()=>{exportAction();detailAction();});expect(document.querySelector('[role="dialog"]')).toBeNull();expect(document.querySelector('[role="region"]')).toBeNull();original.rows[0].group='B';expect(copy(old).size).toBe(0);await act(async()=>exportAction());expect(exports).toEqual([]);
@@ -915,7 +990,7 @@ it('整理历史：排序与筛选按整步撤销重做，恢复准确原行和�
 });
 it('整理历史：NULL位置、大小写及筛选停用原文保留，取消草稿不记步',async()=>{
   await mount();await sort('words');await toggleSortCase(1,'原文',true);await nullPosition(1,'原文','LAST');
-  await click(filterText.open);await addFilterRule(1,'id','eq','未启用的精确原文');await enableFilterRule(1,false);await click(filterText.apply);expect(grid().rows).toEqual(original.rows);
+  await click(filterText.open);await addFilterRule(1,'id','eq','未启用的精确原文');await enableFilterRule(1,false);await click(filterText.apply);expect(grid().rows).toEqual([original.rows[1],original.rows[2],original.rows[0]]);expect(grid().sortColumns).toEqual([{columnKey:'words',direction:'ASC'}]);
   await click(historyText.undo);expect(grid().sortColumns).toEqual([{columnKey:'words',direction:'ASC'}]);
   expect(document.querySelector('[aria-label="'+text.nulls(1,'原文')+'"]')!.value).toBe('LAST');expect(document.querySelector('[aria-label="'+text.ignoreCase(1,'原文')+'"]')!.checked).toBe(true);
   await click(filterText.open);await click(filterText.cancel);expect(button(historyText.redo).disabled).toBe(false);

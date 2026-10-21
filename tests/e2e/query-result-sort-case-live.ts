@@ -258,8 +258,15 @@ export function registerQueryResultSortCaseUi(binding:QueryResultColumnsUiTarget
    await observe(()=>sortPanel.getByRole('combobox',{name:sortText.panelNulls(2),exact:true}).selectOption('LAST'));
    await observe(()=>sortPanel.getByRole('button',{name:sortText.panelApply,exact:true}).click());await observe(()=>expect.poll(ids).toEqual(['1','3','6','7']));
    await observe(()=>tab.getByRole('button',{name:memoryText.save,exact:true}).click());
-   await observe(()=>tab.getByRole('button',{name:sortText.clear,exact:true}).click());await observe(()=>tab.getByRole('button',{name:filterText.clear,exact:true}).click());
+   // 重新应用筛选及清除筛选均保留完整两列规则；每次恢复仍只改当前返回行视图。
+   await observe(()=>tab.getByRole('button',{name:filterText.open,exact:true}).click());await observe(()=>panel.getByRole('button',{name:filterText.apply,exact:true}).click());
+   await observe(()=>expect.poll(ids).toEqual(['1','3','6','7']));await observe(()=>expect(tab.getByRole('list',{name:sortText.priorities,exact:true}).getByRole('listitem')).toHaveCount(2));await observe(()=>expect(caseControl(2)).toBeChecked());
+   await observe(()=>tab.getByRole('button',{name:filterText.clear,exact:true}).click());
    await observe(()=>expect.poll(ids).toEqual(['1','2','3','4','5','6','7']));
+   await observe(()=>expect(tab.getByRole('list',{name:sortText.priorities,exact:true}).getByRole('listitem')).toHaveCount(2));await observe(()=>expect(caseControl(2)).toBeChecked());await observe(()=>expect(tab.getByRole('combobox',{name:sortText.nulls(2,'text_value'),exact:true})).toHaveValue('LAST'));
+   await observe(()=>tab.getByRole('button',{name:historyText.undo,exact:true}).click());await observe(()=>expect.poll(ids).toEqual(['1','3','6','7']));
+   await observe(()=>tab.getByRole('button',{name:historyText.redo,exact:true}).click());await observe(()=>expect.poll(ids).toEqual(['1','2','3','4','5','6','7']));
+   await observe(()=>tab.getByRole('button',{name:sortText.clear,exact:true}).click());await observe(()=>expect.poll(ids).toEqual(['1','2','3','4','5','6','7']));
    await observe(()=>tab.getByRole('button',{name:memoryText.apply,exact:true}).click());await observe(()=>expect.poll(ids).toEqual(['1','3','6','7']));
    await observe(()=>expect(caseControl(2)).toBeChecked());await observe(()=>expect(tab.getByRole('combobox',{name:sortText.nulls(2,'text_value'),exact:true})).toHaveValue('LAST'));
    await observe(()=>tab.getByRole('button',{name:historyText.undo,exact:true}).click());await observe(()=>expect.poll(ids).toEqual(['1','2','3','4','5','6','7']));

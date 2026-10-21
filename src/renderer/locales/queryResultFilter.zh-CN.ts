@@ -1,5 +1,5 @@
 export const queryResultFilterZh = {
-  open: '筛选已返回结果', title: '本地条件筛选', scope: '仅筛选当前已返回快照，不重发 SQL。筛选先于排序；应用或清除会重置排序、勾选、查找及行详情。',
+  open: '筛选已返回结果', title: '本地条件筛选', scope: '仅筛选当前已返回快照，不重发 SQL。筛选先于排序；应用或清除保留多列排序，重置勾选、查找及行详情。',
   truncated: '原结果已截断，筛选不包含未返回记录。',
   counts: (source: number, matched: number) => `原返回 ${source} 行，筛选后 ${matched} 行`,
   mode: '条件组合', and: '全部满足（AND）', or: '任一满足（OR）', column: '筛选字段', operator: '比较方式', input: '条件原值',

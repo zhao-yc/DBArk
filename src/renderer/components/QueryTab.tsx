@@ -119,7 +119,7 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
   const resultSorter = resultSorterRef.current, resultFilter = resultFilterRef.current;
   const resultHistory = useRef(new QueryResultHistory()).current;
   const resultMemoryRef = useRef<QueryResultMemory | undefined>(undefined), resultMemory = resultMemoryRef.current;
-  type FilterLease={binding:QueryResultFilterBinding;view:QueryResultFilterView;seed?:QueryResultFilterGroup};
+  type FilterLease={binding:QueryResultFilterBinding;view:QueryResultFilterView;sortBinding:QueryResultSortBinding;sortView:QueryResultSortView;seed?:QueryResultFilterGroup};
   type SortLease = { binding: QueryResultSortBinding; view: QueryResultSortView; filterBinding: QueryResultFilterBinding; filterView: QueryResultFilterView };
   const [sortLease, setSortLease] = useState<SortLease | null>(null), sortLeaseRef = useRef<SortLease | null>(null);
   const [filterLease,setFilterLease]=useState<FilterLease|null>(null),filterLeaseRef=useRef<FilterLease|null>(null);
@@ -533,7 +533,7 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
   const historyBinding = resultHistory.bind(viewSource, visibleColumns, resultContext, filterView && sortView ? { expression: filterView.expression, sort: sortView.rules } : undefined, filterBinding);
   const displayedView=useMemo(()=>queryResultFilteredSortView(filterView,sortView),[filterView,sortView]);
   const result = displayedView?.result ?? sourceResult,exportable=sourceExportable ? displayedView?.result ?? sourceExportable : undefined;
-  const activeFilterLease=filterLease&&filterLeaseRef.current===filterLease&&resultFilter.view(filterLease.binding)===filterLease.view?filterLease:null;
+  const activeFilterLease=filterLease&&filterLeaseRef.current===filterLease&&resultFilter.view(filterLease.binding)===filterLease.view&&resultSorter.view(filterLease.sortBinding)===filterLease.sortView?filterLease:null;
   if(filterLease&&!activeFilterLease&&filterLeaseRef.current===filterLease)filterLeaseRef.current=null;
   const activeSortLease = sortLease && sortLeaseRef.current === sortLease && resultSorter.view(sortLease.binding) === sortLease.view && resultFilter.view(sortLease.filterBinding) === sortLease.filterView ? sortLease : null;
   if (sortLease && !activeSortLease && sortLeaseRef.current === sortLease) sortLeaseRef.current = null;
@@ -570,33 +570,44 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
   function closeRowDetail(view: QueryRowDetailsView): void { if (rowDetailAllowed(view.binding) && rowDetails.close(view)) setRowDetail(null); }
   /** 面板独立草稿租约；同步核源、工作区和模态，取消/切换后旧应用不可重放。 */
   function filterPanelCurrent(lease:FilterLease):boolean{
-    if(sortLeaseRef.current||filterLeaseRef.current!==lease||resultFilter.view(lease.binding)!==lease.view)return false;
+    if(sortLeaseRef.current||filterLeaseRef.current!==lease||resultFilterRef.current.view(lease.binding)!==lease.view||resultSorterRef.current.view(lease.sortBinding)!==lease.sortView)return false;
     const workspace=useWorkspace.getState(),current=workspace.settings.tabs.find(item=>item.id===tab.id);
-    return alive.current&&!busyRef.current&&!workspace.activeJobs[tab.id]&&workspace.settings.activeTabId===tab.id&&current?.kind==='query'&&current.connectionId===tab.connectionId&&(workspace.connectionVersions[current.connectionId]??0)===connectionVersion&&!document.querySelector('[role="dialog"]');
+    return alive.current&&!busyRef.current&&!workspace.activeJobs[tab.id]&&workspace.settings.activeTabId===tab.id&&current?.kind==='query'&&current.connectionId===tab.connectionId&&(workspace.connectionVersions[current.connectionId]??0)===connectionVersion&&!columnLeaseRef.current&&!document.querySelector('[role="dialog"]');
   }
   /** 打开只撤销旧选择；取消不修改过滤、排序和原SQL。 */
   function openFilterPanel():void{showFilterPanel();}
   /** 已生效view仍作租约依据；快捷条件只改变独立初始草稿，不冒充已应用视图。 */
   function showFilterPanel(seed?:QueryResultFilterGroup):void{
-    if(!filterBinding||!filterView||!resultSelectionAllowed(selectionBinding))return;
-    invalidateResultSelection();const lease={binding:filterBinding,view:filterView,seed};filterLeaseRef.current=lease;setFilterLease(lease);refreshResultSelection(value=>value+1);
+    if(!filterBinding||!filterView||!sortBinding||!sortView||!resultSelectionAllowed(selectionBinding))return;
+    invalidateResultSelection();const lease={binding:filterBinding,view:filterView,sortBinding,sortView,seed};filterLeaseRef.current=lease;setFilterLease(lease);refreshResultSelection(value=>value+1);
   }
   /** 原显示位置对应原行及可见唯一键，追加AND保留旧OR括号；结构超限时完整保留原视图。 */
   function openCellFilter(cell:QueryResultCopyCell,operator:CellFilterOperator):void{
     if(!filterBinding||!filterView||!result||!resultSelectionAllowed(selectionBinding))return;
     try{const capture=captureQueryResultCellFilter(visibleColumns,result.rows,cell),seed=appendQueryResultFilterRule(filterView.expression,queryResultCellFilterRule(capture,operator));showFilterPanel(seed);}catch(reason){setError(errorMessage(reason));}
   }
-  /** 应用先完整有界验证；成功才撤销旧排序/选择，并以过滤后的原行引用建立新排序来源。 */
+  /** 新筛选与已有完整排序共同试算；两者均成功且来源仍有效才一次发布并记一整步。 */
+  function replaceResultFilter(expression:QueryResultFilterGroup,sort:readonly QueryResultSortRule[],isCurrent:()=>boolean):void{
+    if(!viewSource||!historyBinding||!isCurrent())return;
+    try{
+      const prepared=prepareQueryResultOrganization(viewSource,resultContext,visibleColumns,{expression,sort});
+      if(!isCurrent())return;
+      const next={expression:prepared.filter.view(prepared.filterBinding)!.expression,sort:prepared.sorter.view(prepared.sortBinding)!.rules};
+      resultHistory.record(historyBinding,next,prepared.filterBinding);
+      resultFilter.invalidate();resultSorter.invalidate();resultFilterRef.current=prepared.filter;resultSorterRef.current=prepared.sorter;
+      setError('');invalidateResultSelection();refreshResultSelection(value=>value+1);
+    }catch(reason){setError(errorMessage(reason));}
+  }
+  /** 草稿租约同时绑定排序视图，不能在新筛选失败时丢掉NULL、大小写或旧优先级。 */
   function applyFilterRules(lease:FilterLease,expression:QueryResultFilterGroup):void{
-    if(!filterPanelCurrent(lease))return;
-    try{const next=resultFilter.applyExpression(lease.binding,lease.view,expression);resultHistory.record(historyBinding,{expression:next.expression,sort:[]});setError('');resultSorter.invalidate();invalidateResultSelection();refreshResultSelection(value=>value+1);}catch(reason){setError(errorMessage(reason));}
+    replaceResultFilter(expression,lease.sortView.rules,()=>filterPanelCurrent(lease));
   }
   /** 旧取消只关闭自己的草稿，不影响较新面板。 */
   function closeFilterPanel(lease:FilterLease):void{if(filterLeaseRef.current!==lease)return;sortLeaseRef.current=null;setSortLease(null);filterLeaseRef.current=null;setFilterLease(null);invalidateResultSelection();refreshResultSelection(value=>value+1);}
-  /** 清除通过同一控制器回到原返回行；不得变成重新执行或全量数据库读取。 */
+  /** 清除只移除筛选；在全部原返回行上保留原排序，排序失败时完整保留旧视图。 */
   function clearResultFilter():void{
-    if(!filterBinding||!filterView||!resultSelectionAllowed(selectionBinding))return;
-    try{const next=resultFilter.apply(filterBinding,filterView,[],'AND');resultHistory.record(historyBinding,{expression:next.expression,sort:[]});setError('');resultSorter.invalidate();invalidateResultSelection();refreshResultSelection(value=>value+1);}catch(reason){setError(errorMessage(reason));}
+    if(!filterBinding||!filterView||!sortView)return;
+    replaceResultFilter({mode:'AND',children:[]},sortView.rules,()=>resultSelectionAllowed(selectionBinding));
   }
   /** 独立排序草稿同时绑定原排序及筛选视图；结果、列布局和工作区变代后不复活。 */
   function sortPanelCurrent(lease: SortLease): boolean {
