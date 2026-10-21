@@ -44,12 +44,20 @@ function normalize(source:string,context:CompletionLexicalContext){
   do{sentinel='__dbark_caret_'+serial+++'__';}while(names.has(sentinel));
   let text='',previous=context.statement.start,caret=-1,inserted=false;const origins=new Map<number,CompletionToken>();
   const gap=(end:number)=>{text+=source.slice(previous,end).replace(/[^\r\n]/g,' ');previous=end;};
-  for(const token of context.tokens){
+  /** 固定解析库未将RANGE纳入限定段标识符；仅给合法名称链投影加引用，不修补用户／系统变量。 */
+  const qualifiedRange=(index:number)=>{
+    const tokens=context.tokens,identifier=(at:number)=>nameToken(tokens[at]);
+    if(!keyword(tokens[index],'RANGE')||tokens[index-1]?.value!=='.'||!identifier(index-2))return false;
+    let head=index-2;
+    if(tokens[head-1]?.value==='.'&&identifier(head-2))head-=2;
+    return!['.','@',':'].includes(tokens[head-1]?.value??'');
+  };
+  for(const[index,token]of context.tokens.entries()){
     if(!inserted&&context.target.start<=token.start){gap(context.target.start);caret=text.length;text+=sentinel;inserted=true;previous=context.target.end;}
     if(token.start<context.target.end&&token.end>context.target.start)continue;
     if(previous>token.start)continue;
     gap(token.start);
-    origins.set(text.length,token);text+=token.kind==='identifier'?quoteCompletionAlias(token.value):token.kind==='string'?"'0'":source.slice(token.start,token.end);previous=token.end;
+    origins.set(text.length,token);text+=token.kind==='identifier'||qualifiedRange(index)?quoteCompletionAlias(token.value):token.kind==='string'?"'0'":source.slice(token.start,token.end);previous=token.end;
   }
   if(!inserted){gap(context.target.start);caret=text.length;text+=sentinel;previous=context.target.end;}
   gap(context.statement.end);

@@ -55,6 +55,13 @@ describe('窗口帧关键字本地补全', () => {
     const h = await suggest('SELECT SUM(v) OVER w FROM users WINDOW w AS(ORDER BY id ROWS BETWEEN UNBOUNDED PRECEDING AND CUR|RENT ROW)');
     expect(h.items.items.map(item => item.insertText)).toEqual(['CURRENT']); expect(h.result.windowNames).toBeUndefined();
   });
+  it.each([
+    'SELECT SUM(v) OVER `窗口 名` FROM users WINDOW `窗口 名` AS(ROWS CUR|RENT ROW)',
+    'SELECT COALESCE(SUM(v) OVER(ROWS CUR|RENT ROW),0) FROM users',
+  ])('位置守卫保留原引用名称及普通标量父表达式：%s', async marked => {
+    const h = await suggest(marked);
+    expect(h.items.items.map(item => item.insertText)).toEqual(['CURRENT']);
+  });
   it.each([{ ansiQuotes: false, noBackslashEscapes: false }, { ansiQuotes: false, noBackslashEscapes: true }, { ansiQuotes: true, noBackslashEscapes: false }, { ansiQuotes: true, noBackslashEscapes: true }])('词法模式%j不改变原文或目标范围', async mode => {
     const h = await suggest('SELECT SUM(v) OVER(ORDER BY id ROWS BETWEEN 1 PRECEDING AND CUR|RENT ROW) FROM `lib.x`.`table.y`', { windowFunctions: true }, mode);
     expect(h.items.items.map(item => item.insertText)).toEqual(['CURRENT']);
@@ -98,7 +105,6 @@ describe('窗口帧关键字本地补全', () => {
     'SELECT SUM(v) OVER child FROM users WINDOW base AS(ORDER BY id),child AS(base ROWS CUR|RENT ROW)',
     'SELECT SUM(v) OVER(`base` ROWS CUR|RENT ROW) FROM users WINDOW `base` AS(ORDER BY id)',
     'SELECT SUM(v) OVER(base RANGE CUR|RENT ROW) FROM users WINDOW base AS(ORDER BY id)',
-    'SELECT SUM(u.v) OVER(base ROWS CUR|RENT ROW) FROM users u WINDOW base AS(PARTITION BY u.rows ORDER BY u.range)',
     'SELECT (SELECT SUM(v) OVER(base ROWS CUR|RENT ROW) FROM orders WINDOW base AS(ORDER BY id)) FROM users WINDOW base AS(ROWS CURRENT ROW)',
     'SELECT id FROM users WINDOW base AS() ORDER BY SUM(v) OVER(base ROWS CUR|RENT ROW)',
     'SELECT SUM(v) OVER(base ROWS CUR|RENT ROW) FROM users WINDOW base AS() UNION ALL SELECT 1',
@@ -107,6 +113,17 @@ describe('窗口帧关键字本地补全', () => {
     const h = await suggest(marked);
     expect(h.items.items.map(item => item.insertText)).toEqual(['CURRENT']);
     expect(new MySQL().validate(h.source)).toEqual([]);
+  });
+  it.each([
+    'SELECT SUM(u.v) OVER(base ROWS CUR|RENT ROW) FROM users u WINDOW base AS(PARTITION BY u.rows ORDER BY u.range)',
+    'SELECT SUM(db.users.v) OVER(base ROWS CUR|RENT ROW) FROM db.users WINDOW base AS(PARTITION BY db.users.rows ORDER BY db.users.range)',
+  ])('限定保留字RANGE不冒充属性或丢失原文：%s', async marked => {
+    // 固定4.5.1的uid规则包含ROWS而缺RANGE；保留原始失败SQL，不把夹具改成引用字段。
+    expect(new MySQL().validate(marked.replace('|', ''))).not.toEqual([]);
+    const h = await suggest(marked);
+    expect(h.items.items.map(item => item.insertText)).toEqual(['CURRENT']);
+    expect(h.source).toBe(marked.replace('|', ''));
+    expect(h.source.slice(h.result.target.start, h.result.target.end)).toBe('CURRENT');
   });
   it.each([
     'SELECT SUM(v) OVER(unknown ROWS CUR|RENT ROW) FROM users WINDOW base AS()',
@@ -132,6 +149,8 @@ describe('窗口帧关键字本地补全', () => {
     'SELECT v FROM users WHERE SUM(v) OVER(base ROWS CUR|RENT ROW)>0 WINDOW base AS()',
     'SELECT SUM(v) OVER(ORDER BY SUM(v) OVER(ROWS CUR|RENT ROW)) FROM users',
     'SELECT SUM(v) OVER w FROM users WINDOW w AS(ORDER BY SUM(v) OVER(ROWS CUR|RENT ROW))',
+    'SELECT u..range,SUM(v) OVER(ROWS CUR|RENT ROW) FROM users u',
+    'SELECT db.other.u.range,SUM(v) OVER(ROWS CUR|RENT ROW) FROM users u',
   ])('未知／循环／冲突／祖先与不合法帧位置不能恢复或借目录：%s', marked => {
     expect(analyzeCompletion(marked.replace('|', ''), marked.indexOf('|'), {}, { windowFunctions: true }).status).toBe('blocked');
   });

@@ -13,7 +13,9 @@ export function completionWindowFramePosition(branches: CompletionQueryBranch[],
   if (!branch) return false;
   const open = tokens.findIndex(token => token.start === openStart && symbol(token, '('));
   if (open < 0) return false;
-  const definition = (index: number) => tokens[index].depth === branch.select.depth && word(tokens[index - 1], 'AS') && !!key(tokens[index - 2]);
+  // 此处只识别语法位置，不解析继承名；原有Unicode／带空格引用名不能被ASCII继承限制误拦。
+  const definition = (index: number) => tokens[index].depth === branch.select.depth && word(tokens[index - 1], 'AS')
+    && ['word', 'identifier'].includes(tokens[index - 2]?.kind ?? '');
   const parents: number[] = [];
   for (let index = 0; index < open; index++) {
     if (tokens[index].start <= branch.select.start) continue;
