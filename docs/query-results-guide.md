@@ -45,3 +45,5 @@
 ## 验证范围
 
 详细来源见[排序](query-result-sort.md)、[筛选](query-result-filter.md)、[批量启停](development/query-result-filter-bulk-enabled-20261021.md)和[跨组移动](development/query-result-filter-move-20261021.md)。准确21c164f的[本机Windows实库整例及独立CSV／JSON读回](../tests/integration/acceptance-filter-move-ui-21c164f-20261021.md)已通过，含多列排序、条件启停、批量启停和跨组移动；原300失败及旧9139未验不追认。后继整理撤销／重做准确b4a22208的[Windows实库整例及两文件独立读回](../tests/integration/acceptance-query-result-history-b4a2220-20261021.md)也已通过。安装版、macOS和其它驱动另验，当前暂不发布。
+
+最新准确2cdf5a6d的[本机Windows源码实库整例及独立读回](../tests/integration/acceptance-query-sort-history-2cdf5a6-20261022.md)已覆盖独立多列排序面板、Ctrl+Enter／Esc、结果单元格Ctrl+Z／Ctrl+Y及筛选输入框Shift+Esc，并完成全部原筛选、四行CSV／JSON和正常退出。其它按键组合、VM小数视口、安装及macOS未据此补验；旧失败保留。

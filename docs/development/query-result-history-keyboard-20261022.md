@@ -25,3 +25,5 @@
 此前741回合现已确认仅克隆失败：原PID7708，UTC2026-10-21T18:07:00.7816049Z至18:07:06.4633107Z，exit128／5.676秒，schannel接收TLS握手失败。目标克隆不存在，安装、检查、列表、GUI和凭据获取均未开始；报告 `...\hi\outputs\query-sort-7410f68-vm-20261022\setup-stop-result.json` SHA256 `d3e612ba4fdf9820005aaaca63a5c44433f606835716202b397433ae254140da`。与更早699／62的真实GUI失败分别保留。
 
 后继先仅诊断Git OpenSSL后端，证书校验开启、全局配置不改；等待新固定提交安排完整串行回合。本轮安装／macOS及真实窗口未验，暂不发布。
+
+后继准确2cdf5a6d已按授权回退完成[本机Windows源码实库整例及独立CSV／JSON读回](../../tests/integration/acceptance-query-sort-history-2cdf5a6-20261022.md)：原单次整例通过，Ctrl+Z／Ctrl+Y、排序面板及筛选Shift+Esc均到达，原按钮路径也保持；原App及观察流正常关闭，27封存项和2113输入复核通过。Ctrl+Shift+Z、Meta及安装范围不外推，VM整数／小数几何证据分开，暂不发布。

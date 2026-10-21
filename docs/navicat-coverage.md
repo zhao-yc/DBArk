@@ -2,11 +2,11 @@
 
 ## 当前开发安排（2026-10-22）
 
-查询结果新增[多列排序面板](development/query-result-sort-panel-20261022.md)：独立草稿集中设置完整优先级、NULL及大小写，分页保留全部规则；一次应用保持筛选并接通整理撤销，预算拒绝保持原视图及草稿。原精确比较与旧视图保护保持，Linux完整11682通过／10跳过；首次VM及62诊断均在应用前的七行原序读取失败，原现场保留。[小数底边读取修正](../tests/integration/acceptance-query-sort-grid-fractional-20261022.md)已通过22项定向及独立隐藏Chromium的1.75缩放复现／修复实验，完整窗口另以7410f68固定提交在VM新克隆验收，不追认原失败。源码与原生范围分别记录，不外推安装成功，暂不发布。
+查询结果新增[多列排序面板](development/query-result-sort-panel-20261022.md)：独立草稿集中设置完整优先级、NULL及大小写，分页保留全部规则；一次应用保持筛选并接通整理撤销，预算拒绝保持原视图及草稿。原精确比较与旧视图保护保持，Linux完整11682通过／10跳过；首次VM及62诊断的应用前失败继续保留。[小数底边读取修正](../tests/integration/acceptance-query-sort-grid-fractional-20261022.md)有22项定向及独立1.75缩放实验；741仅克隆TLS失败，GUI未启动。后继准确2cdf5a6d的[本机Windows实库整例与独立导出读回](../tests/integration/acceptance-query-sort-history-2cdf5a6-20261022.md)已通过全部面板及原流程，原App／观察流正常关闭；本机整数视口、VM小数几何、安装和macOS分别记录，暂不发布。
 
-结果筛选补充[键盘事件保护](development/query-result-filter-keyboard-20261022.md)：子控件已消费的事件及带修饰键Esc不误应用或关闭草稿，保持原筛选与整理历史。两项新增回归先失败，修正后类型、四文件171项及构建通过；真实窗口追加Shift+Esc草稿保持断言尚未执行。与VM固定741回合分开，不增加完整工作包计数，暂不发布。
+结果筛选补充[键盘事件保护](development/query-result-filter-keyboard-20261022.md)：子控件已消费的事件及带修饰键Esc不误应用或关闭草稿，保持原筛选与整理历史。两项新增回归先失败，修正后类型、四文件171项及构建通过；准确2cdf5a6d的本机Windows实库整例已通过实际文本框Shift+Esc、原精确端点及原导出流程，其它消费／修饰情形仍为RAM证据，安装和macOS另验，不增加完整工作包计数，暂不发布。
 
-结果网格新增[整理撤销／重做快捷键](development/query-result-history-keyboard-20261022.md)：Ctrl／⌘+Z、Ctrl／⌘+Shift+Z及Windows Ctrl+Y沿原完整历史，不抢输入框或编辑器撤销，旧租约和长按拒绝。类型、四文件200项及构建通过，真实单元格键盘路径已准备尚未执行。VM此前741回合仅克隆TLS前置失败，GUI确定未启动；新固定提交另安排，旧失败与范围保留，暂不发布。
+结果网格新增[整理撤销／重做快捷键](development/query-result-history-keyboard-20261022.md)：Ctrl／⌘+Z、Ctrl／⌘+Shift+Z及Windows Ctrl+Y沿原完整历史，不抢输入框或编辑器撤销，旧租约和长按拒绝。类型、四文件200项及构建通过；准确2cdf5a6d的本机Windows实库整例已通过原单元格Ctrl+Z／Ctrl+Y、原按钮恢复及CSV／JSON独立读回，27封存和2113输入核对通过。其它组合及安装／macOS另验，旧失败与范围保留，暂不发布。
 
 高频对象设计补齐[结构化JSON字段创建与识别](development/table-column-json-20261021.md)：共享严格类型、表单、预览及后核验，MariaDB只认完整本列JSON_VALID与实际固定编码；原依赖和默认值限制保持。类型／9文件208项／构建及[六组合真实Engine](../tests/integration/acceptance-column-json-six-20261021.md)通过，12个表场景、78条原连接真实关闭、六随机库精确清理。准确9d713bb8的[WIN11-TEST窗口](../tests/integration/acceptance-column-json-ui-9d713bb-20261022.md)单例通过真实新增／零DDL预览／一次应用／类型重读／原行及正常退出，四辅助关闭及随机库精确清理；新安装／macOS另验；O01及完整工作包计数不增，暂不发布。
 
