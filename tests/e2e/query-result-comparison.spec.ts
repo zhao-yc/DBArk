@@ -64,8 +64,8 @@ function register(binding: QueryResultColumnsUiTarget): void {
         await step(()=>expect.poll(body).toBe(''));
         await step(()=>tab.locator('.monaco-editor').getByRole('textbox').evaluate((element, value) => {
           const data = new DataTransfer(); data.setData('text/plain', value);
-          // Monaco增强粘贴会补读系统resources；明确空URI列表后只消费本次内存内容。
-          data.setData('text/uri-list', '');
+          // 注释项解析为零URI；空字符串反而会被Monaco解释为根路径，不能使用。
+          data.setData('text/uri-list', '# DBArk RAM paste');
           if (document.activeElement !== element || data.files.length !== 0 || [...data.types].sort().join('|') !== 'text/plain|text/uri-list') throw Error('内存粘贴目标或格式不符');
           const event = new ClipboardEvent('paste', { bubbles: true, cancelable: true, clipboardData: data });
           if (event.clipboardData !== data) throw Error('内存粘贴数据身份不符');
