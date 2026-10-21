@@ -125,7 +125,14 @@ export function analyzeCompletion(source:string,offset:number,mode:CompletionLex
     let expansions=0,truncated=false;const branches=completionQueryBranches(queries,normalizedTokens),windowContext=completionWindowContext(branches,normalizedTokens,normalized.caret,targetToken?.kind==='word'?targetToken.value:undefined,(start,end)=>new QuietMySQL().validate(normalized.text.slice(start,end)).length===0,
       capabilities.windowFunctions===true&&!lexical.target.quoted&&!lexical.target.qualifiers.length?(open,end)=>completionWindowFrameKeywords(normalizedTokens,normalized.caret,lexical.target.prefix,open,end,value=>{
         const candidate=normalized.text.slice(0,normalized.caret)+value+normalized.text.slice(normalized.caret+normalized.sentinel.length);
-        return lexical.tokens.every(token=>token.closed)&&candidate.length<=completionLimits.sourceUnits&&new QuietMySQL().validate(candidate).length===0;
+        if(!lexical.tokens.every(token=>token.closed)||candidate.length>completionLimits.sourceUnits)return false;
+        const checked=new QuietMySQL();if(checked.validate(candidate).length)return false;
+        // 哨兵使原帧语法不完整时AST范围可能提前结束；集合全局ORDER须从有效候选重新核作用域。
+        const candidateLexical=completionLexicalContext(candidate,normalized.caret,{ansiQuotes:false,noBackslashEscapes:true},completionLimits.aliasUnits);
+        if(candidateLexical.status!=='ready')return false;
+        const candidateEntities=checked.getAllEntities(candidate,position)??[];if(candidateEntities.length>completionLimits.tokens)return false;
+        const candidateBranches=completionQueryBranches(candidateEntities.filter(entity=>entity.entityContextType==='queryResult') as CommonEntityContext[],candidateLexical.tokens);
+        return completionOutputContext(candidateBranches,candidateLexical.tokens,normalized.caret)?.union!==true;
       }):undefined);
     if(windowContext&&typeof windowContext==='object'){
       if(completionOutputContext(branches,normalizedTokens,normalized.caret)?.union)return{status:'blocked',reason:'syntax'};

@@ -69,6 +69,8 @@ describe('窗口帧关键字本地补全', () => {
     'SELECT SUM(v) OVER(ORDER BY id ROWS BETWEEN 1.5 PRE|CEDING AND CURRENT ROW) FROM users',
     'SELECT SUM(v) OVER(ORDER BY id ROWS BETWEEN 1 PRECEDING AND CUR|RENT ROW) FROM users WHERE',
     'SELECT id FROM users UNION SELECT id FROM orders ORDER BY SUM(id) OVER(ROWS CUR|RENT ROW)',
+    '(SELECT id FROM users) UNION ALL (SELECT id FROM orders) ORDER BY SUM(id) OVER(ROWS CUR|RENT ROW)',
+    'SELECT id FROM users UNION ALL SELECT id FROM orders ORDER BY SUM(id) OVER(ORDER BY id ROWS CUR|RENT ROW)',
   ])('不完整或尚不支持的边界不借目录恢复：%s', marked => {
     expect(analyzeCompletion(marked.replace('|', ''), marked.indexOf('|'), {}, { windowFunctions: true }).status).toBe('blocked');
   });
@@ -83,5 +85,11 @@ describe('窗口帧关键字本地补全', () => {
   it('帧前的限定字段继续走原来源分析，关键字不能抢占字段位置', () => {
     const marked='SELECT SUM(v) OVER(ORDER BY u.row|suffix ROWS UNBOUNDED PRECEDING) FROM users u',a=analyzeCompletion(marked.replace('|',''),marked.indexOf('|'),{},{windowFunctions:true});
     expect(a).toMatchObject({status:'ready',relations:[{name:'u',table:'users'}]});
+  });
+  it.each([
+    'SELECT SUM(v) OVER(ROWS CUR|RENT ROW) FROM users UNION ALL SELECT 1',
+    'SELECT 1 UNION ALL SELECT SUM(v) OVER(ROWS CUR|RENT ROW) FROM users',
+  ])('集合分支内的合法帧保持可补全，不一律拒绝UNION：%s',async marked=>{
+    const h=await suggest(marked);expect(h.items.items.map(item=>item.insertText)).toEqual(['CURRENT']);
   });
 });
