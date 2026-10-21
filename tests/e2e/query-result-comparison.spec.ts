@@ -33,6 +33,13 @@ function register(binding: QueryResultColumnsUiTarget): void {
     const step = <T,>(action: () => Promise<T>) => life.observe(async () => { if (armed) await application.evaluate(readComparisonAudit); const result = await action(); if (armed) await application.evaluate(readComparisonAudit); return result; });
     try {
       life.check(); expect([trace, screenshot, video]).toEqual(['off', 'off', 'off']);
+      // 仅封闭本例独占页面的剪贴板接口；内存粘贴不得读取或覆盖系统剪贴板。
+      await step(() => page.evaluate(() => {
+        let attempts = 0;
+        const blocked = async () => { attempts++; throw Error('本例禁止访问系统剪贴板'); };
+        Object.defineProperty(navigator, 'clipboard', { value: Object.freeze({ read: blocked, readText: blocked, write: blocked, writeText: blocked }), configurable: false });
+        Object.defineProperty(window, '__dbarkComparisonClipboardAttempts', { get: () => attempts, configurable: false });
+      }));
       const nested = relative(runtime.dataDir, binding.target.output); if (!nested.startsWith('..') && !isAbsolute(nested)) throw Error('独占输出不得位于fixture自动清理目录');
       await step(() => mkdir(binding.target.output, { recursive: false }));
       await step(async () => { observer = await mysql.createConnection({ host: binding.target.host, port: binding.target.port, user: binding.target.user, password: binding.target.password, connectTimeout: 15000 }); native = (observer as any).connection; stream = native?.stream; if (!native || !stream) throw Error('观察连接原生归属未知'); });
@@ -46,7 +53,7 @@ function register(binding: QueryResultColumnsUiTarget): void {
       await step(() => page.locator('.app-commandbar').getByRole('button', { name: zh.common.newQuery, exact: true }).click()); const query = page.getByRole('dialog', { name: zh.common.newQuery, exact: true });
       await step(() => query.getByRole('combobox', { name: new RegExp('^' + zh.app.text049) }).selectOption(profile.id)); await step(() => query.getByLabel(zh.app.text050, { exact: true }).fill('')); await step(() => query.getByRole('button', { name: zh.app.text053, exact: true }).click()); await step(() => expect(query).toBeHidden());
       const tab = page.locator('.query-tab:visible');
-      /** 编辑器只用真实输入；每次全文替换后等正式设置读回，避免捕获旧草稿。 */
+      /** 清空后派发内存粘贴，经过编辑器正式paste处理，不直接写model或工作区。 */
       async function edit(sql: string) {
         const mac=process.platform==='darwin';
         // 全选之后先真实清空并等正式读回，不能仅凭按过快捷键就假定整段已替换。
@@ -54,7 +61,18 @@ function register(binding: QueryResultColumnsUiTarget): void {
         await step(()=>tab.locator('.monaco-editor').getByRole('textbox').focus());
         await step(()=>page.keyboard.press(mac?'Meta+ArrowUp':'Control+Home'));await step(()=>page.keyboard.press(mac?'Meta+Shift+ArrowDown':'Control+Shift+End'));await step(()=>page.keyboard.press('Backspace'));
         const body=async()=>{const settings=await step(()=>page.evaluate(()=>window.dbark.invoke('settings.get',{})));return settings.tabs.find(item=>item.id===settings.activeTabId)?.sql??'';};
-        await step(()=>expect.poll(body).toBe(''));await step(()=>page.keyboard.insertText(sql));await step(()=>expect.poll(body).toBe(sql));
+        await step(()=>expect.poll(body).toBe(''));
+        await step(()=>tab.locator('.monaco-editor').getByRole('textbox').evaluate((element, value) => {
+          const data = new DataTransfer(); data.setData('text/plain', value);
+          // Monaco增强粘贴会补读系统resources；明确空URI列表后只消费本次内存内容。
+          data.setData('text/uri-list', '');
+          if (document.activeElement !== element || data.files.length !== 0 || [...data.types].sort().join('|') !== 'text/plain|text/uri-list') throw Error('内存粘贴目标或格式不符');
+          const event = new ClipboardEvent('paste', { bubbles: true, cancelable: true, clipboardData: data });
+          if (event.clipboardData !== data) throw Error('内存粘贴数据身份不符');
+          element.dispatchEvent(event);
+          if (!event.defaultPrevented) throw Error('编辑器未接管本次内存粘贴');
+        }, sql));
+        await step(()=>expect.poll(body).toBe(sql));
       }
       await edit(comparisonLeftSql);
       const settings = await step(() => page.evaluate(() => window.dbark.invoke('settings.get', {}))), tabId = settings.activeTabId;
@@ -84,6 +102,7 @@ function register(binding: QueryResultColumnsUiTarget): void {
       }
       await step(() => comparison.getByRole('button', { name: zh.common.close, exact: true }).click()); await step(() => expect(comparison).toBeHidden());
       const audit = await step(() => application.evaluate(readComparisonAudit)); expect(audit).toEqual({ queries: 2, pending: 0, revision: 0 }); expect(runtime.pageErrors).toEqual([]);
+      expect(await step(() => page.evaluate(() => (window as unknown as { __dbarkComparisonClipboardAttempts: number }).__dbarkComparisonClipboardAttempts))).toBe(0);
       await step(() => info.attach('固定结果对比原始计数', { body: JSON.stringify(audit), contentType: 'application/json' }));
       await life.finish(() => page.evaluate(() => window.dbark.invoke('tasks.list', {})), () => closeQueryResultColumnsObserver(observer! as import('mysql2/promise').Connection & { connection?: unknown }, native, stream, () => life.check(true), value => closeMysqlConnection(value, true, false, life.remaining(1000))));
     } catch (reason) { life.preserve(); throw reason; } finally { life.endBody(); }
