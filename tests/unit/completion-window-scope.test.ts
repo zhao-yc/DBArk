@@ -26,9 +26,11 @@ describe('普通SELECT窗口字段作用域',()=>{
   it.each([
     'SELECT ROW_NUMBER() OVER(base ORDER BY u.|) FROM users u',
     'SELECT ROW_NUMBER() OVER w FROM users u WINDOW base AS(ORDER BY u.id),w AS(base ORDER BY u.|)',
+  ])('未知或覆盖排序的继承窗口不猜字段：%s',marked=>{expect(analyzeCompletion(marked.replace('|',''),marked.indexOf('|'),{},{windowFunctions:true})).toMatchObject({status:'blocked'});});
+  it.each([
     'SELECT ROW_NUMBER() OVER(ORDER BY u.id ROWS | PRECEDING) FROM users u',
     'SELECT ROW_NUMBER() OVER(ORDER BY u.id RANGE BETWEEN | PRECEDING AND CURRENT ROW) FROM users u',
-  ])('未知或覆盖排序的继承窗口及帧边界不猜字段：%s',marked=>{expect(analyzeCompletion(marked.replace('|',''),marked.indexOf('|'),{},{windowFunctions:true})).toMatchObject({status:'blocked'});});
+  ])('帧边界只提供完整UNBOUNDED关键字，不猜字段：%s',async marked=>{const a=analyze(marked),d=directory(),r=await completionSuggestions(a,'db',d);expect(a).toMatchObject({syntax:[],relations:[],keywords:['UNBOUNDED']});expect(r.items.map(item=>item.insertText)).toEqual(['UNBOUNDED']);expect(d.load).not.toHaveBeenCalled();});
   it('窗口子查询自己的ORDER仍能使用自己的输出别名',()=>{const a=analyze('SELECT u.id AS outer_alias FROM users u ORDER BY SUM(u.id) OVER(ORDER BY (SELECT 1 AS inner_alias ORDER BY inn|suffix))');expect(a.outputAliases?.aliases).toEqual(['inner_alias']);});
   it('已取消窗口补全不读取目录，不改变目录预算',async()=>{const d=directory(),controller=new AbortController();controller.abort();const r=await completionSuggestions(analyze('SELECT ROW_NUMBER() OVER(ORDER BY u.|) FROM users u'),'db',d,controller.signal);expect(r.items).toEqual([]);expect(d.load).not.toHaveBeenCalled();});
   it.each([
@@ -53,13 +55,13 @@ describe('普通SELECT窗口字段作用域',()=>{
     catalog.confirm('db','window_subject',null);expect((await suggest()).items.some(item=>item.insertText==='`s`.`amount`')).toBe(true);
   });
   it.each([
-    'SELECT ROW_NUMBER() OVER(ORDER BY u.id ROWS BETWEEN UNBOUNDED PRECEDING AND CUR|RENT ROW) FROM users u',
-    'SELECT ROW_NUMBER() OVER(ORDER BY u.id ROWS BETWEEN UNB|OUNDED PRECEDING AND CURRENT ROW) FROM users u',
-    'SELECT ROW_NUMBER() OVER(ORDER BY u.id ROWS BETWEEN 1 PRE|CEDING AND CURRENT ROW) FROM users u',
-    'SELECT ROW_NUMBER() OVER(ORDER BY u.id ROWS BETWEEN CEI|L(2) PRECEDING AND CURRENT ROW) FROM users u',
-    'SELECT ROW_NUMBER() OVER(ORDER BY u.id ROWS BETWEEN 1 PRECEDING AND u.use|suffix FOLLOWING) FROM users u',
-    'SELECT ROW_NUMBER() OVER(ORDER BY u.id ROW|S BETWEEN 1 PRECEDING AND CURRENT ROW) FROM users u',
-    'SELECT ROW_NUMBER() OVER w FROM users u WINDOW w AS(ORDER BY u.id RANGE BETWEEN UNBOUNDED PRECEDING AND CUR|RENT ROW)',
-    'SELECT ROW_NUMBER() OVER(ORDER BY u.id ROWS BETWEEN (SELECT 1 AS inner_alias ORDER BY inn|suffix) PRECEDING AND CURRENT ROW) FROM users u',
-  ])('帧位置即使解析恢复丢失分支也停止，不请求字段或函数目录：%s',async marked=>{const a=analyzeCompletion(marked.replace('|',''),marked.indexOf('|'),{},{windowFunctions:true}),d=directory();if(a.status==='ready')await completionSuggestions(a,'db',d);expect(d.load).not.toHaveBeenCalled();expect(a.status).toBe('blocked');});
+    ['SELECT ROW_NUMBER() OVER(ORDER BY u.id ROWS BETWEEN UNBOUNDED PRECEDING AND CUR|RENT ROW) FROM users u','CURRENT'],
+    ['SELECT ROW_NUMBER() OVER(ORDER BY u.id ROWS BETWEEN UNB|OUNDED PRECEDING AND CURRENT ROW) FROM users u','UNBOUNDED'],
+    ['SELECT ROW_NUMBER() OVER(ORDER BY u.id ROWS BETWEEN 1 PRE|CEDING AND CURRENT ROW) FROM users u','PRECEDING'],
+    ['SELECT ROW_NUMBER() OVER(ORDER BY u.id ROWS BETWEEN CEI|L(2) PRECEDING AND CURRENT ROW) FROM users u',undefined],
+    ['SELECT ROW_NUMBER() OVER(ORDER BY u.id ROWS BETWEEN 1 PRECEDING AND u.use|suffix FOLLOWING) FROM users u',undefined],
+    ['SELECT ROW_NUMBER() OVER(ORDER BY u.id ROW|S BETWEEN 1 PRECEDING AND CURRENT ROW) FROM users u','ROWS'],
+    ['SELECT ROW_NUMBER() OVER w FROM users u WINDOW w AS(ORDER BY u.id RANGE BETWEEN UNBOUNDED PRECEDING AND CUR|RENT ROW)','CURRENT'],
+    ['SELECT ROW_NUMBER() OVER(ORDER BY u.id ROWS BETWEEN (SELECT 1 AS inner_alias ORDER BY inn|suffix) PRECEDING AND CURRENT ROW) FROM users u',undefined],
+  ] as const)('帧位置不请求字段或函数目录：%s',async(marked,keyword)=>{const a=analyzeCompletion(marked.replace('|',''),marked.indexOf('|'),{},{windowFunctions:true}),d=directory();if(a.status==='ready')await completionSuggestions(a,'db',d);expect(d.load).not.toHaveBeenCalled();if(keyword)expect(a).toMatchObject({status:'ready',syntax:[],relations:[],keywords:[keyword]});else expect(a.status).toBe('blocked');});
 });

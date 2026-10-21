@@ -42,6 +42,8 @@ WIN11-TEST固定338a06b的准备回合已通过类型／363定向／新构建及
 
 准确39的[Linux CI39525029394](https://github.com/zhao-yc/DBArk/actions/runs/39525029394)、job118977538869已成功。Root读取原日志：Python21项通过、0.275秒；另有Vitest592文件11419通过／10跳过、235.38秒，类型及构建通过、Vite33.67秒。全部新增Windows语义合成反例和真实临时CLI反例包含在Python21项内；Linux运行仍不是Windows实件读回，后续Q01运行码也未被338的GUI验收覆盖。原生、剪贴板及发布job跳过。
 
+历史检查点中，后继bcb1420／0757803的Q01源码不进入本批，当时main整合及新安装／macOS尚未完成；以下记录随后返回的Windows封存，Q01仍单独验收，暂不发布。
+
 ## 准确39的新Windows代次
 
 新代次保持产品338，目录为 `outputs/query-result-sort-case-readback-v2-39e9b24-vm-20261021`。实际Python合成21项中20通过／1原符号链接权限跳过；Python13820真实读回exit0、0.358072秒，完整原stdout确认四行八列及18字符串／11NULL／3二进制、stableRead=true和383／827字节的原两SHA。其后原配置完整Vitest由Node12760执行，exit0、305.3707793秒，591文件11389通过／0失败／1项POSIX跳过，stderr为空。

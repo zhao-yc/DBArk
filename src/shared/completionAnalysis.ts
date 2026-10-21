@@ -4,6 +4,8 @@ import {completionLexicalContext,completionIdentifier,completionAliasIdentifier,
 import {completionLimits} from './sqlCompletion';
 import{completionQueryBranches,completionBranchAt,completionOutputContext}from'./completionQueryScope';
 import{completionWindowContext}from'./completionWindowScope';
+import { completionWindowFrameKeywords } from './completionWindowFrame';
+import { completionWindowFrameBase, completionWindowFramePosition } from './completionWindowFrameBase';
 import { completionNamedWindows } from './completionNamedWindows';
 import { completionProcedureScope } from './completionProcedureScope';
 import{completionLateralTokens,completionLateralScope,completionLateralAllows}from'./completionLateralScope';
@@ -42,12 +44,20 @@ function normalize(source:string,context:CompletionLexicalContext){
   do{sentinel='__dbark_caret_'+serial+++'__';}while(names.has(sentinel));
   let text='',previous=context.statement.start,caret=-1,inserted=false;const origins=new Map<number,CompletionToken>();
   const gap=(end:number)=>{text+=source.slice(previous,end).replace(/[^\r\n]/g,' ');previous=end;};
-  for(const token of context.tokens){
+  /** 固定解析库未将RANGE纳入限定段标识符；仅给合法名称链投影加引用，不修补用户／系统变量。 */
+  const qualifiedRange=(index:number)=>{
+    const tokens=context.tokens,identifier=(at:number)=>nameToken(tokens[at]);
+    if(!keyword(tokens[index],'RANGE')||tokens[index-1]?.value!=='.'||!identifier(index-2))return false;
+    let head=index-2;
+    if(tokens[head-1]?.value==='.'&&identifier(head-2))head-=2;
+    return!['.','@',':'].includes(tokens[head-1]?.value??'');
+  };
+  for(const[index,token]of context.tokens.entries()){
     if(!inserted&&context.target.start<=token.start){gap(context.target.start);caret=text.length;text+=sentinel;inserted=true;previous=context.target.end;}
     if(token.start<context.target.end&&token.end>context.target.start)continue;
     if(previous>token.start)continue;
     gap(token.start);
-    origins.set(text.length,token);text+=token.kind==='identifier'?quoteCompletionAlias(token.value):token.kind==='string'?"'0'":source.slice(token.start,token.end);previous=token.end;
+    origins.set(text.length,token);text+=token.kind==='identifier'||qualifiedRange(index)?quoteCompletionAlias(token.value):token.kind==='string'?"'0'":source.slice(token.start,token.end);previous=token.end;
   }
   if(!inserted){gap(context.target.start);caret=text.length;text+=sentinel;previous=context.target.end;}
   gap(context.statement.end);
@@ -121,7 +131,24 @@ export function analyzeCompletion(source:string,offset:number,mode:CompletionLex
     // 哨兵替换会隐藏正在编辑的ROWS等词；原词只用于停止边界，不还原进AST或生成关系。
     const targetToken=lexical.tokens.find(token=>token.start===lexical.target.start&&token.end===lexical.target.end);
     // 仅新增继承路径要求当前分支完整语法；使用独立静默解析器，不改变已收集实体或回显SQL。
-    let expansions=0,truncated=false;const branches=completionQueryBranches(queries,normalizedTokens),windowContext=completionWindowContext(branches,normalizedTokens,normalized.caret,targetToken?.kind==='word'?targetToken.value:undefined,(start,end)=>new QuietMySQL().validate(normalized.text.slice(start,end)).length===0);
+    let expansions=0,truncated=false;const branches=completionQueryBranches(queries,normalizedTokens),windowContext=completionWindowContext(branches,normalizedTokens,normalized.caret,targetToken?.kind==='word'?targetToken.value:undefined,(start,end)=>new QuietMySQL().validate(normalized.text.slice(start,end)).length===0,
+      capabilities.windowFunctions===true&&!lexical.target.quoted&&!lexical.target.qualifiers.length?(open,end)=>completionWindowFrameKeywords(normalizedTokens,normalized.caret,lexical.target.prefix,open,end,(value,inherited)=>{
+        const candidate=normalized.text.slice(0,normalized.caret)+value+normalized.text.slice(normalized.caret+normalized.sentinel.length);
+        if(!lexical.tokens.every(token=>token.closed)||candidate.length>completionLimits.sourceUnits)return false;
+        const checked=new QuietMySQL();if(checked.validate(candidate).length)return false;
+        // 哨兵使原帧语法不完整时AST范围可能提前结束；集合全局ORDER须从有效候选重新核作用域。
+        const candidateLexical=completionLexicalContext(candidate,normalized.caret,{ansiQuotes:false,noBackslashEscapes:true},completionLimits.aliasUnits);
+        if(candidateLexical.status!=='ready')return false;
+        const candidateEntities=checked.getAllEntities(candidate,position)??[];if(candidateEntities.length>completionLimits.tokens)return false;
+        const candidateBranches=completionQueryBranches(candidateEntities.filter(entity=>entity.entityContextType==='queryResult') as CommonEntityContext[],candidateLexical.tokens);
+        return completionOutputContext(candidateBranches,candidateLexical.tokens,normalized.caret)?.union!==true
+          &&completionWindowFramePosition(candidateBranches,candidateLexical.tokens,normalizedTokens[open].start)
+          &&(!inherited||completionWindowFrameBase(candidateBranches,candidateLexical.tokens,normalizedTokens[open].start));
+      }):undefined);
+    if(windowContext&&typeof windowContext==='object'){
+      if(completionOutputContext(branches,normalizedTokens,normalized.caret)?.union)return{status:'blocked',reason:'syntax'};
+      return{status:'ready',target:lexical.target,syntax:[],keywords:windowContext.frameKeywords,relations:[],localRelations:[],columnMode:'expression',incomplete:false};
+    }
     if(windowContext==='unsupported')return{status:'blocked',reason:'syntax'};
     // 既有窗口字段只分析当前文本的关系/投影，不代表服务器支持执行；新增窗口名称在下方单独核对能力。
     const lateral=completionLateralScope(tables,branches,normalizedTokens);if(lateral.status==='blocked'||hasLateral&&!lateral.boundaries.length)return{status:'blocked',reason:'syntax'};
