@@ -188,6 +188,26 @@ export function registerQueryResultSortCaseUi(binding:QueryResultColumnsUiTarget
    for(const [condition,value] of [[1,'1'],[2,'5']] as const)await observe(()=>expect(panel.getByRole('textbox',{name:filterText.member(condition,1),exact:true})).toHaveValue(value));
    await observe(()=>expect(panel.getByRole('textbox',{name:filterText.input+' 3',exact:true})).toHaveValue('3'));
    await observe(()=>panel.getByRole('button',{name:filterText.apply,exact:true}).click());await observe(()=>expect.poll(ids).toEqual(['3']));
+   // 真实分组选框保留条件B的成员与稳定身份：先取消，再实际移入／移出，原结果只在应用后改变。
+   await observe(()=>tab.getByRole('button',{name:filterText.open,exact:true}).click());
+   await observe(()=>panel.getByRole('combobox',{name:filterText.destination(2),exact:true}).focus());
+   await observe(()=>panel.getByRole('combobox',{name:filterText.destination(2),exact:true}).selectOption({label:filterText.group('1')}));
+   await observe(()=>expect(panel.getByRole('combobox',{name:filterText.destination(3),exact:true})).toBeFocused());
+   await observe(()=>expect(panel.getByRole('combobox',{name:filterText.destination(3),exact:true}).locator('option:checked')).toHaveText(filterText.group('1')));
+   await observe(()=>expect(panel.getByRole('textbox',{name:filterText.member(3,1),exact:true})).toHaveValue('5'));await observe(()=>expect.poll(ids).toEqual(['3']));
+   await observe(()=>panel.getByRole('button',{name:filterText.cancel,exact:true}).click());
+   await observe(()=>tab.getByRole('button',{name:filterText.open,exact:true}).click());
+   await observe(()=>expect(panel.getByRole('combobox',{name:filterText.destination(2),exact:true}).locator('option:checked')).toHaveText(filterText.rootGroup));
+   await observe(()=>panel.getByRole('combobox',{name:filterText.destination(2),exact:true}).focus());
+   await observe(()=>panel.getByRole('combobox',{name:filterText.destination(2),exact:true}).selectOption({label:filterText.group('1')}));
+   await observe(()=>panel.getByRole('button',{name:filterText.apply,exact:true}).click());await observe(()=>expect.poll(ids).toEqual(['3','6','7']));
+   await observe(()=>tab.getByRole('button',{name:filterText.open,exact:true}).click());
+   await observe(()=>expect(panel.getByRole('textbox',{name:filterText.member(3,1),exact:true})).toHaveValue('5'));
+   await observe(()=>panel.getByRole('combobox',{name:filterText.destination(3),exact:true}).focus());
+   await observe(()=>panel.getByRole('combobox',{name:filterText.destination(3),exact:true}).selectOption({label:filterText.rootGroup}));
+   await observe(()=>expect(panel.getByRole('combobox',{name:filterText.destination(3),exact:true})).toBeFocused());
+   await observe(()=>expect(panel.getByRole('combobox',{name:filterText.destination(3),exact:true}).locator('option:checked')).toHaveText(filterText.rootGroup));
+   await observe(()=>panel.getByRole('button',{name:filterText.apply,exact:true}).click());await observe(()=>expect.poll(ids).toEqual(['3']));
    await observe(()=>tab.getByRole('button',{name:filterText.open,exact:true}).click());await observe(()=>panel.getByRole('button',{name:filterText.removeGroup('1'),exact:true}).click());
    await observe(()=>panel.getByRole('button',{name:filterText.apply,exact:true}).click());await observe(()=>expect.poll(ids).toEqual(['3','6','7']));
    await observe(()=>tab.getByRole('button',{name:filterText.open,exact:true}).click());

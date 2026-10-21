@@ -1,4 +1,4 @@
-import { useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
+import { useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
 import type { QueryResultFilterBinding, QueryResultFilterGroup, QueryResultFilterOperator, QueryResultFilterRule, QueryResultFilterView } from '../queryResultFilter';
 import { queryResultFilterLimits, queryResultFilterNeedsUpper, queryResultFilterNeedsValue, queryResultFilterNeedsValues, queryResultFilterOperators, queryResultFilterSupportsIgnoreCase } from '../queryResultFilter';
 import { queryResultFilterZh as text } from '../locales/queryResultFilter.zh-CN';
@@ -23,6 +23,9 @@ function expressionOf(group:DraftGroup):QueryResultFilterGroup{
 export function QueryResultFilterPanel({binding,initial,seed,isCurrent,onApply,onClose}:{binding:QueryResultFilterBinding;initial:QueryResultFilterView;seed?:QueryResultFilterGroup;isCurrent():boolean;onApply(expression:QueryResultFilterGroup):void;onClose():void}){
   const sequence=useRef(0),[draft,setDraft]=useState<DraftGroup>(()=>copyDraft(seed??initial.expression??{mode:initial.mode,children:initial.rules},()=>sequence.current++));
   const live=useRef(draft),invalid=useRef(false),composition=useRef(false),[composing,setComposing]=useState(false);live.current=draft;
+  const destinations=useRef(new Map<number,HTMLSelectElement>()),focusAfterMove=useRef<number|null>(null);
+  /** 跨组会重新挂载条件；只为原先聚焦的选择框恢复焦点，失效面板不抢其它窗口的输入。 */
+  useLayoutEffect(()=>{const id=focusAfterMove.current;focusAfterMove.current=null;if(id!==null&&current())destinations.current.get(id)?.focus();});
   /** 首次失效永久拒绝，旧回调不能写入另一棵草稿或移除后占据相同位置的节点。 */
   function current(expected=live.current):boolean{if(invalid.current)return false;let okay=false;try{okay=isCurrent()===true;}catch{}if(!okay)invalid.current=true;return okay&&live.current===expected;}
   /** 同步更新根身份；组合输入期间仅允许所属输入框更新原文。 */
@@ -46,6 +49,17 @@ export function QueryResultFilterPanel({binding,initial,seed,isCurrent,onApply,o
       const children=group.children.slice(),rule={...source.rule,...(source.rule.values?{values:[...source.rule.values]}:{})};
       children.splice(index+1,0,{id:sequence.current++,kind:'rule',rule});return{...group,children};
     }));
+  }
+  /** 只在当前草稿内移动原叶节点；保留稳定ID及完整原值，空原组仍由既有应用校验明确处理。 */
+  function moveRule(parent:number,id:number,destination:string):void{
+    if(!current(draft)||composition.current||!/^(0|[1-9]\d*)$/.test(destination))return;
+    const target=Number(destination);if(!Number.isSafeInteger(target)||target===parent||!groupNames.has(target))return;
+    let source:DraftRule|undefined;
+    function find(group:DraftGroup):void{if(group.id===parent){const node=group.children.find(child=>child.kind==='rule'&&child.id===id);if(node?.kind==='rule')source=node;}else for(const node of group.children)if(node.kind==='group')find(node);}
+    find(draft);if(!source)return;
+    const control=destinations.current.get(id);if(control&&control.ownerDocument.activeElement===control)focusAfterMove.current=id;
+    const removed=editGroup(draft,parent,group=>({...group,children:group.children.filter(child=>child.id!==id)}));
+    replace(editGroup(removed,target,group=>({...group,children:[...group.children,source!]})));
   }
   /** 批量启停只修改当前草稿的启用位；保留所有层级、稳定ID、成员与原文，不应用或扫描结果。 */
   function setAllEnabled(enabled:boolean):void{
@@ -73,9 +87,9 @@ export function QueryResultFilterPanel({binding,initial,seed,isCurrent,onApply,o
     if(event.repeat)return;
     if(apply)applyDraft();else if(current(draft))onClose();
   }
-  const valid=current(),numbers=new Map<number,number>();let groups=0,enabledCount=0;
+  const valid=current(),numbers=new Map<number,number>(),groupNames=new Map<number,string>();let groups=0,enabledCount=0;
   /** 展示编号按树顺序连续排列，编辑身份始终使用稳定ID而非展示位置。 */
-  function count(group:DraftGroup):void{groups++;for(const child of group.children)if(child.kind==='group')count(child);else{numbers.set(child.id,numbers.size+1);if(child.rule.enabled!==false)enabledCount++;}}
+  function count(group:DraftGroup,path=''):void{groups++;groupNames.set(group.id,path?text.group(path):text.rootGroup);let childGroup=0;for(const child of group.children)if(child.kind==='group')count(child,path?path+'.'+(++childGroup):String(++childGroup));else{numbers.set(child.id,numbers.size+1);if(child.rule.enabled!==false)enabledCount++;}}
   count(draft);
   /** 各组独立组合；新增子组自带一个可见条件，空子组应用时由控制器明确拒绝。 */
   function groupActions(group:DraftGroup,path:string,depth:number){return <div className="query-result-filter-group-actions"><button disabled={!valid||composing||numbers.size>=queryResultFilterLimits.conditions||!binding.visible.length} onClick={()=>replace(editGroup(draft,group.id,node=>({...node,children:[...node.children,newRule()]})))}>{path?text.addInGroup(path):text.add}</button><button disabled={!valid||composing||numbers.size>=queryResultFilterLimits.conditions||groups>=queryResultFilterLimits.groups||depth>=queryResultFilterLimits.depth||!binding.visible.length} onClick={()=>replace(editGroup(draft,group.id,node=>({...node,children:[...node.children,{id:sequence.current++,kind:'group',mode:'OR',children:[newRule()]}]})))}>{path?text.addGroupInGroup(path):text.addGroup}</button>
@@ -87,6 +101,7 @@ export function QueryResultFilterPanel({binding,initial,seed,isCurrent,onApply,o
     const{id,rule}=child,index=numbers.get(id)!,column=binding.visible.find(c=>c.key===rule.column)!,operators=queryResultFilterOperators(column),needsValue=queryResultFilterNeedsValue(rule.operator),range=queryResultFilterNeedsUpper(rule.operator),members=queryResultFilterNeedsValues(rule.operator);
     return <div className="query-result-filter-condition" key={id} aria-label={text.condition(index)}><span>{index}</span><label className="query-result-filter-enable" title={text.enabledHint}><input type="checkbox" aria-label={text.enabled(index)} checked={rule.enabled!==false} disabled={!valid||composing} onChange={event=>changeRule(group.id,id,rule=>{const{enabled,...base}=rule;return event.target.checked?base:{...base,enabled:false};})}/>{text.enabledLabel}</label><select aria-label={`${text.column} ${index}`} value={rule.column} disabled={!valid||composing} onChange={event=>{const next=binding.visible.find(c=>c.key===event.target.value);if(next)changeRule(group.id,id,rule=>({column:next.key,operator:queryResultFilterOperators(next)[0],value:'',...(rule.enabled===false?{enabled:false}:{})}));}}>{binding.visible.map((c,i)=><option key={c.key} value={c.key}>{i+1}. {c.name} · {c.type}</option>)}</select><select aria-label={`${text.operator} ${index}`} value={rule.operator} disabled={!valid||composing} onChange={event=>changeOperator(group.id,id,event.target.value as QueryResultFilterOperator)}>{operators.map(operator=><option key={operator} value={operator}>{text.operators[operator]}</option>)}</select>
       {queryResultFilterSupportsIgnoreCase(column,rule.operator)&&<label title={text.ignoreCaseHint}><input type="checkbox" aria-label={text.ignoreCase(index)} checked={rule.ignoreCase===true} disabled={!valid||composing} onChange={event=>changeRule(group.id,id,rule=>{const{ignoreCase,...base}=rule;return event.target.checked?{...base,ignoreCase:true}:base;})}/>{text.ignoreCaseLabel}</label>}
+      {groups>1&&<label className="query-result-filter-destination" title={text.moveHint}>{text.destinationLabel}<select aria-label={text.destination(index)} value={String(group.id)} disabled={!valid||composing} ref={node=>{if(node)destinations.current.set(id,node);else destinations.current.delete(id);}} onChange={event=>{if(current(draft)&&!composition.current)moveRule(group.id,id,event.target.value);}}>{[...groupNames].map(([id,label])=><option key={id} value={String(id)}>{label}</option>)}</select></label>}
       {!members&&<input aria-label={`${range?text.lower:text.input} ${index}`} placeholder={range?text.lower:undefined} value={rule.value} maxLength={queryResultFilterLimits.valueUnits} disabled={!valid||!needsValue} onChange={event=>changeRule(group.id,id,rule=>({...rule,value:event.target.value}),true)} onCompositionStart={beginComposition} onCompositionEnd={endComposition}/>}
       {range&&<input aria-label={`${text.upper} ${index}`} placeholder={text.upper} value={rule.upper??''} maxLength={queryResultFilterLimits.valueUnits} disabled={!valid} onChange={event=>changeRule(group.id,id,rule=>({...rule,upper:event.target.value}),true)} onCompositionStart={beginComposition} onCompositionEnd={endComposition}/>}
       {members&&<div className="query-result-filter-members"><p>{text.membersHint}</p>{(rule.values??[]).map((value,member)=><div className="query-result-filter-member" key={member}><textarea rows={1} aria-label={text.member(index,member+1)} value={value} maxLength={queryResultFilterLimits.valueUnits} disabled={!valid} onChange={event=>changeRule(group.id,id,rule=>({...rule,values:rule.values?.map((value,position)=>position===member?event.target.value:value)}),true)} onCompositionStart={beginComposition} onCompositionEnd={endComposition}/><button aria-label={text.removeMember(index,member+1)} disabled={!valid||composing||(rule.values?.length??0)<=1} onClick={()=>changeRule(group.id,id,rule=>({...rule,values:rule.values?.filter((_,position)=>position!==member)}))}>×</button></div>)}<button aria-label={text.addMember(index)} disabled={!valid||composing||(rule.values?.length??0)>=queryResultFilterLimits.members} onClick={()=>changeRule(group.id,id,rule=>({...rule,values:[...(rule.values??[]),'']}))}>{text.addValue}</button><span className="muted">{text.memberCount(rule.values?.length??0,queryResultFilterLimits.members)}</span></div>}

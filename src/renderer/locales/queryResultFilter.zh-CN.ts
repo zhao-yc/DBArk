@@ -7,6 +7,8 @@ export const queryResultFilterZh = {
   addGroup:'添加条件组',group:(path:string)=>`条件组 ${path}`,groupMode:(path:string)=>`条件组 ${path} 的组合`,removeGroup:(path:string)=>`移除条件组 ${path}`,addInGroup:(path:string)=>`在条件组 ${path} 中添加条件`,addGroupInGroup:(path:string)=>`在条件组 ${path} 中添加子组`,
   groupsHint:'每组可独立选择 AND／OR，并可添加子组。例如：（条件 A 或 B）同时满足条件 C。全部最多32条条件、16组（含最外层）、8层；空子组须补条件或移除。',
   emptyGroup:'条件组不能为空，请添加条件或移除该组。',
+  rootGroup:'最外层条件组',destinationLabel:'分组',destination:(index:number)=>`第${index}条筛选条件的分组`,
+  moveHint:'将条件移到所选组末尾，只修改草稿并保留原值和启用状态；应用后生效。原组为空时请补条件或移除该组。',
   patternHint:'仅通配匹配：% 匹配任意长度，_ 匹配一个Unicode码点（包括换行）；\\%、\\_、\\\\分别匹配文字%、_、反斜杠。整段匹配，否定也排除NULL。忽略大小写时先对原文及模式做Unicode小写映射，再按映射后的码点匹配。',
   patternInvalid:'通配模式的反斜杠只能转义%、_或反斜杠，且不能单独结尾；原筛选保持。',
   lower: '条件下限（含）', upper: '条件上限（含）', rangeOrder: '区间下限不能大于上限，请核对条件原值。',

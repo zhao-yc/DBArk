@@ -203,6 +203,38 @@ it('多列：活动规则中途准入失败不部分排序，也不改变勾选/
 function reactProps(node:any){return node[Object.keys(node).find(key=>key.startsWith('__reactProps$'))!];}
 /** 走真实条件组件的受控启停入口；仅DOM宿主由内存实现。 */
 async function enableFilterRule(index:number,enabled:boolean){const node=document.querySelector('[aria-label="'+filterText.enabled(index)+'"]')!;expect(node).not.toBeNull();await act(async()=>reactProps(node).onChange({target:{checked:enabled}}));}
+/** 从真实分组选项读取目标，不按内部ID或显示编号推导节点身份；聚焦模拟键盘选择。 */
+async function moveFilterRule(index:number,label:string){const node=document.querySelector('[aria-label="'+filterText.destination(index)+'"]')!;expect(node).not.toBeNull();expect(node.disabled).toBe(false);const option=node.querySelectorAll('option').find(option=>option.textContent===label);expect(option).toBeDefined();node.focus();await act(async()=>reactProps(node).onChange({target:{value:option!.value}}));}
+/** 读取真实选择框的当前组名，既验证受控value也验证选项单选互斥。 */
+function filterRuleGroup(index:number){const node=document.querySelector('[aria-label="'+filterText.destination(index)+'"]')!;expect(node).not.toBeNull();return node.querySelectorAll('option').find(option=>option.value===node.value)?.textContent;}
+
+it('移动筛选条件：原交集改为括号内OR，只改草稿并保留精确原值和键盘焦点',async()=>{
+  await mount();const saved=structuredClone(original);await click(filterText.open);await addFilterRule(1,'value','gt','0.00000000000000000000');await click(filterText.addGroup);await configureGroupedRule(2,'id','eq','18446744073709551615');await addFilterRule(3,'id','eq','9007199254740993');await click(filterText.apply);expect(grid().rows).toEqual([]);
+  await click(filterText.open);await moveFilterRule(3,filterText.group('1'));expect(filterRuleGroup(3)).toBe(filterText.group('1'));expect(grid().rows).toEqual([]);
+  expect(document.activeElement).toBe(document.querySelector('[aria-label="'+filterText.destination(3)+'"]'));expect(document.querySelector('[aria-label="'+filterText.input+' 1"]')!.value).toBe('0.00000000000000000000');expect(document.querySelector('[aria-label="'+filterText.input+' 3"]')!.value).toBe('9007199254740993');
+  await click(filterText.apply);expect(grid().rows).toEqual([original.rows[0],original.rows[1]]);expect(copy().size).toBeGreaterThan(0);expect(original).toEqual(saved);expect(commands.filter(command=>command==='query.execute')).toHaveLength(1);
+});
+it('移动筛选条件：嵌套组保留成员、区间、大小写和停用状态，取消恢复原树',async()=>{
+  await mount();await click(filterText.open);await click(filterText.addGroup);await setFilterField(filterText.column+' 1','value');await setFilterField(filterText.operator+' 1','between');await setFilterField(filterText.lower+' 1','.12345678901234567890');await setFilterField(filterText.upper+' 1','.12345678901234567891');
+  await click(filterText.addGroupInGroup('1'));await configureGroupedRule(2,'words','contains','行');await act(async()=>reactProps(document.querySelector('[aria-label="'+filterText.ignoreCase(2)+'"]')).onChange({target:{checked:true}}));await enableFilterRule(2,false);
+  await click(filterText.add);await setFilterField(filterText.column+' 3','id');await setFilterField(filterText.operator+' 3','in');await setFilterField(filterText.member(3,1),'18446744073709551615');await click(filterText.addMember(3));await setFilterField(filterText.member(3,2),'9007199254740993');await click(filterText.apply);expect(grid().rows).toEqual([original.rows[0],original.rows[1]]);
+  await click(filterText.open);await moveFilterRule(3,filterText.group('1.1'));expect(filterRuleGroup(3)).toBe(filterText.group('1.1'));expect(document.querySelector('[aria-label="'+filterText.member(3,1)+'"]')!.value).toBe('18446744073709551615');expect(document.querySelector('[aria-label="'+filterText.member(3,2)+'"]')!.value).toBe('9007199254740993');
+  expect(document.querySelector('[aria-label="'+filterText.enabled(2)+'"]')!.checked).toBe(false);expect(document.querySelector('[aria-label="'+filterText.ignoreCase(2)+'"]')!.checked).toBe(true);expect(document.querySelector('[aria-label="'+filterText.lower+' 1"]')!.value).toBe('.12345678901234567890');
+  await click(filterText.cancel);await click(filterText.open);expect(filterRuleGroup(3)).toBe(filterText.rootGroup);expect(filterRuleGroup(2)).toBe(filterText.group('1.1'));expect(grid().rows).toEqual([original.rows[0],original.rows[1]]);expect(commands.filter(command=>command==='query.execute')).toHaveLength(1);
+});
+it('移动筛选条件：移出后空原组明确拒绝，移除空组后可应用且不存在隐式删除',async()=>{
+  await mount();await click(filterText.open);await click(filterText.addGroup);await configureGroupedRule(1,'id','eq','2');await click(filterText.apply);const before=grid().rows;await click(filterText.open);
+  await moveFilterRule(1,filterText.rootGroup);expect(filterRuleGroup(1)).toBe(filterText.rootGroup);expect(document.body.textContent).toContain(filterText.emptyGroup);await click(filterText.apply);expect(grid().rows).toBe(before);expect(document.querySelector('[aria-label="'+filterText.title+'"]')).not.toBeNull();
+  await click(filterText.removeGroup('1'));expect(document.querySelector('[aria-label="'+filterText.destination(1)+'"]')).toBeNull();await click(filterText.apply);expect(grid().rows).toEqual([original.rows[2]]);expect(commands.filter(command=>command==='query.execute')).toHaveLength(1);
+});
+it('移动筛选条件：无效目标和输入法不改草稿，旧回调先拒绝再读取事件，组编号复用不复活',async()=>{
+  await mount();await click(filterText.open);await addFilterRule(1,'id','eq','2');await click(filterText.addGroup);await configureGroupedRule(2,'id','eq','2');
+  const first=document.querySelector('[aria-label="'+filterText.destination(1)+'"]')!,old=reactProps(first).onChange,originalGroup=first.value;
+  for(const value of ['', '-1','01','NaN','Infinity','99999999999999','3x'])await act(async()=>old({target:{value}}));expect(first.value).toBe(originalGroup);expect(filterRuleGroup(1)).toBe(filterText.rootGroup);
+  const stale={get target():never{throw Error('被拒绝的旧事件不能读取新控件原值');}},input=document.querySelector('[aria-label="'+filterText.input+' 1"]')!;await act(async()=>reactProps(input).onCompositionStart());expect(first.disabled).toBe(true);await act(async()=>old(stale));await act(async()=>reactProps(document.querySelector('[aria-label="'+filterText.input+' 1"]')).onCompositionEnd());
+  await moveFilterRule(1,filterText.group('1'));await act(async()=>old(stale));expect(filterRuleGroup(2)).toBe(filterText.group('1'));const beforeRemove=reactProps(document.querySelector('[aria-label="'+filterText.destination(1)+'"]')).onChange;
+  await click(filterText.removeGroup('1'));await click(filterText.addGroup);await configureGroupedRule(1,'id','eq','9007199254740993');await act(async()=>beforeRemove(stale));expect(document.querySelector('[aria-label="'+filterText.input+' 1"]')!.value).toBe('9007199254740993');await click(filterText.apply);expect(grid().rows).toEqual([original.rows[1]]);expect(commands.filter(command=>command==='query.execute')).toHaveLength(1);
+});
 
 it('批量启停：保留所有层级和原值，显式应用前不改视图，全部重启恢复原组合',async()=>{
   await mount();await click(filterText.open);expect(button(filterText.enableAll).disabled).toBe(true);expect(button(filterText.disableAll).disabled).toBe(true);

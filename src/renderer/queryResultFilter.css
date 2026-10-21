@@ -18,3 +18,5 @@
 .query-result-filter-member textarea { flex: 1; min-width: 140px; min-height: 32px; max-height: 120px; resize: vertical; }
 .query-result-filter-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-top: 8px; }
 .query-result-filter-enable { white-space: nowrap; }
+.query-result-filter-condition .query-result-filter-destination { flex: 0 1 220px; min-width: min(160px, 100%); }
+.query-result-filter-destination select { flex: 1; min-width: 0; }
