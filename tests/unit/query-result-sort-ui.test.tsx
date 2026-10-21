@@ -14,6 +14,8 @@ import { queryRowDetailsZh as detailsText } from '../../src/renderer/locales/que
 import { queryResultColumnsZh as columnsText } from '../../src/renderer/locales/queryResultColumns.zh-CN';
 import { zh } from '../../src/renderer/locales/zh-CN';
 import { queryResultFilterZh as filterText } from '../../src/renderer/locales/queryResultFilter.zh-CN';
+import { queryResultPresetsZh as presetsText } from '../../src/renderer/locales/queryResultPresets.zh-CN';
+import { queryResultPresetSnapshotSchema, queryResultPresetValueSchema, type QueryResultPresetSnapshot } from '../../src/shared/queryResultPresets';
 const ports=vi.hoisted(()=>({grids:[] as any[],scroll:vi.fn()}));
 // 仅虚拟布局/Monaco由RAM替代；真实QueryTab、选择/复制/查找/详情/导出及store均运行。
 vi.mock('react-data-grid',async()=>{const {useImperativeHandle,useRef}=await import('react');return{SelectColumn:{key:'select-row'},DataGrid(props:any){const host=useRef<HTMLDivElement>(null);ports.grids.push(props);useImperativeHandle(props.ref,()=>({element:host.current,scrollToCell:ports.scroll}));return <div ref={host} role="grid"/>;}};});
@@ -1018,4 +1020,119 @@ it('整理历史：撤销清空勾选和旧复制，重做后的复制及导出�
   await click(historyText.redo);expect(button(zh.resultExport.selectedTitle).disabled).toBe(true);await act(async()=>grid().onSelectedRowsChange(new Set([0,1])));
   const typed=JSON.parse(copy().get('application/x-dbark-cells')!);expect(typed.rows.map((row:any[])=>row[0])).toEqual(['2','9007199254740993']);expect(typed.rows[1][1]).toBe('0.12345678901234567890');
   await click(zh.resultExport.selectedTitle);await click(zh.resultExport.chooseFile);await click(zh.resultExport.start);expect(exports[0].result.rows.map((row:any)=>row.id)).toEqual(['2','9007199254740993']);expect(exports[0].result.rows[1].value).toBe('0.12345678901234567890');await click(zh.common.done);expect(button(historyText.undo).disabled).toBe(false);await click(historyText.undo);expect(grid().rows).toBe(original.rows);expect(commands.filter(command=>command==='query.execute')).toHaveLength(1);
+});
+
+/** 仅替代本地IPC传输；实际持久化、来源令牌和Main发布门禁另由真实SQLite/Main测试覆盖。 */
+function installPresetPort() {
+  const previous = window.dbark.invoke;
+  let state: QueryResultPresetSnapshot = queryResultPresetSnapshotSchema.parse({ version: 1, revision: 0, entries: [], source: { connectionRevision: 1, connectionDigest: 'a'.repeat(64) }, bindingToken: '00000000-0000-4000-8000-000000000001' });
+  let nextId = 2;
+  const calls: { command: string; input: any }[] = [];
+  (window.dbark as any).invoke = async (command: any, input: any) => {
+    if (!command.startsWith('result.presets.')) return previous(command, input);
+    commands.push(command); calls.push({ command, input: structuredClone(input) });
+    if (command === 'result.presets.list') return structuredClone(state);
+    if (input.expectedRevision !== state.revision || input.bindingToken !== state.bindingToken) throw Error('本例过期方案修订');
+    if (command === 'result.presets.read') return structuredClone(state.entries.find(entry => entry.id === input.id)!.value);
+    const entries = structuredClone(state.entries);
+    if (command === 'result.presets.save') {
+      const entry = { id: input.replaceId ?? `00000000-0000-4000-8000-${String(nextId++).padStart(12, '0')}`, name: input.name, connectionDigest: state.source.connectionDigest, value: queryResultPresetValueSchema.parse(input.value) };
+      const index = entries.findIndex(item => item.id === entry.id); if (index < 0) entries.push(entry); else entries[index] = entry;
+    } else if (command === 'result.presets.rename') entries.find(entry => entry.id === input.id)!.name = input.name;
+    else if (command === 'result.presets.delete') entries.splice(entries.findIndex(entry => entry.id === input.id), 1);
+    else throw Error('本例禁止未知方案命令');
+    state = queryResultPresetSnapshotSchema.parse({ ...state, revision: state.revision + 1, entries }); return structuredClone(state);
+  };
+  return { calls, state: () => state, replace: (next: QueryResultPresetSnapshot) => { state = queryResultPresetSnapshotSchema.parse(next); } };
+}
+/** 使用已渲染方案字段；不直接向QueryTab注入方案或调用其私有控制器。 */
+async function savePreset(name = '常用整理') { await click(presetsText.open); await setFilterField(presetsText.name, name); await click(presetsText.create); }
+async function choosePreset(id: string) { await setFilterField(presetsText.choose, id); }
+
+it('命名方案：完整多列和筛选跨查询应用，一次撤销重做，复制导出保留原精度', async () => {
+  await mountMulti(); const port = installPresetPort(), originalCopy = structuredClone(original);
+  await filterGroup(); await headerAction('group'); await headerAction('id', { ctrlKey: true });
+  const expected = [...grid().rows], sorted = [...grid().sortColumns]; await savePreset();
+  expect(port.state().entries[0].value.configuration.sort).toHaveLength(2);
+  expect(JSON.stringify(port.state())).not.toContain('SELECT 原SQL'); expect(JSON.stringify(port.state())).not.toContain('甲组晚行');
+  await click(zh.common.close); await click(zh.query.text010); const old = grid();
+  await click(presetsText.open); await choosePreset(port.state().entries[0].id); await click(presetsText.apply);
+  expect(grid().rows).toEqual(expected); expect(grid().sortColumns).toEqual(sorted); expect(copy(old).size).toBe(0);
+  await click(historyText.undo); expect(grid().rows).toBe(original.rows); expect(grid().sortColumns).toEqual([]);
+  await click(historyText.redo); expect(grid().rows).toEqual(expected);
+  await act(async () => grid().onSelectedRowsChange(new Set([0, 1])));
+  const typed = JSON.parse(copy().get('application/x-dbark-cells')!); expect(typed.rows[1][1]).toBe('9007199254740993');
+  await click(zh.resultExport.selectedTitle); await click(zh.resultExport.chooseFile); await click(zh.resultExport.start);
+  expect(exports[0].result.rows[1].amount).toBe('0.12345678901234567891'); expect(original).toEqual(originalCopy);
+  expect(commands.filter(command => command === 'query.execute')).toHaveLength(2);
+});
+
+it('命名方案：嵌套表达式、停用原文及NULL/大小写完整保存恢复，不平铺分组', async () => {
+  await mount(); const port = installPresetPort();
+  await click(filterText.open); await click(filterText.addGroup); await configureGroupedRule(1, 'id', 'eq', '不是整数但已停用'); await enableFilterRule(1, false);
+  await addFilterRule(2, 'words', 'notNull'); await click(filterText.apply); await sort('words'); await nullPosition(1, '原文', 'FIRST'); await toggleSortCase(1, '原文', true);
+  await savePreset(); const value = port.state().entries[0].value;
+  expect(value.configuration.expression.children[0]).toMatchObject({ mode: 'OR', children: [{ enabled: false, value: '不是整数但已停用' }] });
+  expect(value.configuration.sort).toEqual([{ column: 'words', direction: 'ASC', nulls: 'FIRST', ignoreCase: true }]);
+  await click(zh.common.close); await click(zh.query.text010); await click(presetsText.open); await choosePreset(port.state().entries[0].id); await click(presetsText.apply);
+  expect(document.querySelector('[aria-label="' + text.nulls(1, '原文') + '"]')!.value).toBe('FIRST');
+  expect(document.querySelector('[aria-label="' + text.ignoreCase(1, '原文') + '"]')!.checked).toBe(true);
+  await click(filterText.open); expect(document.querySelector('[aria-label="' + filterText.groupMode('1') + '"]')!.value).toBe('OR');
+  expect(document.querySelector('[aria-label="' + filterText.input + ' 1"]')!.value).toBe('不是整数但已停用');
+  expect(document.querySelector('[aria-label="' + filterText.enabled(1) + '"]')!.checked).toBe(false);
+});
+
+it.each(['type', 'name', 'order', 'visible', 'connection'] as const)('命名方案：%s不匹配拒绝应用且不改变当前结果', async mode => {
+  await mount(); const port = installPresetPort(); await sort(); await savePreset(); await click(zh.common.close); await click(zh.query.text010);
+  const snapshot = structuredClone(port.state());
+  if (mode === 'connection') snapshot.entries[0].connectionDigest = 'b'.repeat(64);
+  else if (mode === 'visible') snapshot.entries[0].value = { ...snapshot.entries[0].value, visible: snapshot.entries[0].value.visible.slice(1), configuration: { ...snapshot.entries[0].value.configuration, sort: [] } };
+  else if (mode === 'order') snapshot.entries[0].value = { ...snapshot.entries[0].value, columns: [...snapshot.entries[0].value.columns].reverse() };
+  else { snapshot.entries[0].value.columns[0][mode] = '变化'; snapshot.entries[0].value.visible[0][mode] = '变化'; }
+  port.replace(snapshot); const rows = grid().rows; await click(presetsText.open); await choosePreset(snapshot.entries[0].id);
+  expect(button(presetsText.apply).disabled).toBe(true); await act(async () => reactProps(button(presetsText.apply)).onClick());
+  expect(grid().rows).toBe(rows); expect(port.calls.some(call => call.command === 'result.presets.read')).toBe(false);
+  expect(document.body.textContent).toContain(mode === 'connection' ? presetsText.connectionChanged : presetsText.mismatch);
+});
+
+it('命名方案：完整试算失败保留当前视图和历史，不发布部分排序', async () => {
+  await mount(); const port = installPresetPort(); await sort(); await savePreset(); await click(zh.common.close);
+  original.rows[0].id = '新查询无效整数'; await click(zh.query.text010); const rows = grid().rows;
+  await click(presetsText.open); await choosePreset(port.state().entries[0].id); await click(presetsText.apply);
+  expect(grid().rows).toBe(rows); expect(grid().sortColumns).toEqual([]); expect(button(historyText.undo).disabled).toBe(true);
+  expect(document.body.textContent).toContain(text.value); expect(document.body.textContent).toContain(presetsText.refreshNeeded);
+});
+
+it('命名方案：同连接另一标签显式读取应用，原标签整理保持独立', async () => {
+  await mount(); const port = installPresetPort(); await sort('id', 'DESC'); await savePreset(); await click(zh.common.close);
+  const settings = store.getState().settings;
+  await act(async () => store.setState({ settings: { ...settings, activeTabId: 'q2', tabs: [...settings.tabs, { id: 'q2', kind: 'query', connectionId: 'c', title: '第二标签', sql: 'SELECT 原SQL', databaseContext: { state: 'known', database: null } }] } }));
+  const tabs = () => document.querySelectorAll('div').filter(node => node.getAttribute('class')?.split(' ').includes('query-tab'));
+  const second = tabs()[1];
+  /** 两标签仍真实挂载，仅按宿主节点选择当前标签的控件，避免全局同名按钮误点。 */
+  async function currentClick(name: string) { const node = second.querySelectorAll('button').find(node => node.textContent === name || name === zh.query.text010 && node.textContent.startsWith(name)); expect(node).toBeDefined(); expect(node!.disabled).toBe(false); await act(async () => node!.dispatchEvent(new MemoryEvent('click'))); }
+  await currentClick(zh.query.text010); expect(grid().sortColumns).toEqual([]); await currentClick(presetsText.open);
+  await choosePreset(port.state().entries[0].id); await click(presetsText.apply);
+  expect(grid().sortColumns).toEqual([{ columnKey: 'id', direction: 'DESC' }]);
+  expect(grid().rows.map((row: any) => row.id)).toEqual(['18446744073709551615', '9007199254740993', '2']);
+  await act(async () => store.setState({ settings: { ...store.getState().settings, activeTabId: 'q' } }));
+  const first = tabs()[0]; expect(first.textContent).toContain(text.priority(1, '同名'));
+  expect(port.calls.every(call => call.input.connectionId === 'c')).toBe(true); expect(commands.filter(command => command === 'query.execute')).toHaveLength(2);
+});
+
+it.each(['version', 'inactive', 'job', 'result', 'modal'] as const)('命名方案：%s期间的迟到回读不能复活旧结果', async mode => {
+  await mount(); const port = installPresetPort(); await sort(); await savePreset(); await click(zh.common.close); await click(zh.query.text010);
+  await click(presetsText.open); await choosePreset(port.state().entries[0].id);
+  const previous = window.dbark.invoke; let resolve!: (value: unknown) => void;
+  (window.dbark as any).invoke = (command: any, input: any) => command === 'result.presets.read' ? new Promise(done => { resolve = done; }) : previous(command, input);
+  await click(presetsText.apply); expect(resolve).toBeDefined(); const settings = store.getState().settings;
+  await act(async () => {
+    if (mode === 'version') { store.setState({ connectionVersions: { c: 2 } }); store.setState({ connectionVersions: { c: 1 } }); }
+    if (mode === 'inactive') { store.setState({ settings: { ...settings, activeTabId: 'other' } }); store.setState({ settings }); }
+    if (mode === 'job') { store.getState().setBusy('q', true); store.getState().setBusy('q', false); }
+    if (mode === 'result') reactProps(button(zh.query.text017 + '2')).onClick();
+    if (mode === 'modal') { const node = document.createElement('div'); node.setAttribute('role', 'dialog'); document.body.appendChild(node); for (const observer of observers) observer([{ addedNodes: [node] }]); node.parentNode!.removeChild(node); }
+  });
+  const rows = grid().rows; await act(async () => resolve(port.state().entries[0].value));
+  expect(grid().rows).toBe(rows); expect(grid().sortColumns).toEqual([]); expect(button(historyText.undo).disabled).toBe(true);
 });

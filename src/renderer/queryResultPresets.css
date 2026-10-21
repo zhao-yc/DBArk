@@ -1,0 +1,6 @@
+.query-result-presets label { display: grid; gap: 5px; margin-block: 10px; }
+.query-result-preset-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-block: 12px; }
+.query-result-preset-preview { max-height: 260px; overflow: auto; border: 1px solid var(--line); border-radius: 4px; padding: 10px; overflow-wrap: anywhere; }
+.query-result-preset-preview h3 { font-size: 13px; margin-block: 10px 4px; }
+.query-result-preset-preview ul, .query-result-preset-preview ol { padding-inline-start: 18px; }
+.query-result-preset-preview li { margin-block: 4px; white-space: pre-wrap; }

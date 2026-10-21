@@ -35,6 +35,7 @@ import{HistoryPages}from'./historyPages';
 import { resolveWorkbenchTarget } from './workbench';
 import { objectUri } from '../shared/workbench';
 import { applyTablePreset, TablePresetSources } from './tablePresets';
+import { QueryResultPresetSources } from './queryResultPresetSources';
 
 if (process.env.DBARK_USER_DATA) { mkdirSync(process.env.DBARK_USER_DATA, { recursive: true }); app.setPath('userData', process.env.DBARK_USER_DATA); }
 app.setName('DBArk');
@@ -78,9 +79,10 @@ const rendererURL = process.env.DBARK_DEV_URL ?? pathToFileURL(join(__dirname, '
 const columnsMain = new ColumnsMainCapabilities(structureTokens, { currentWindow: () => window, rendererURL, connectionRevision: () => store.connectionRevision(), assertAvailable: id => connectionConfig.assertAvailable(id), shuttingDown: () => shuttingDown, release: input => broker.request('schema.columns.release', input) });
 const queryInsertExports=new QueryInsertExports(files,{assert:value=>columnsMain.assertCapturedOwner(value),same:(left,right)=>columnsMain.sharesDocumentOwner(left,right),revision:()=>store.connectionRevision(),session:id=>sessions.get(id),closing:()=>shuttingDown,stop:async taskId=>{const preparing=preparingTasks.get(taskId);if(preparing){preparing.cancelled=true;return;}return broker.request('query.cancel',{taskId});}});
 const tablePresetSources=new TablePresetSources({assert:value=>columnsMain.assertCapturedOwner(value),same:(left,right)=>columnsMain.sharesDocumentOwner(left,right)});
+const resultPresetSources=new QueryResultPresetSources({assert:value=>columnsMain.assertCapturedOwner(value),same:(left,right)=>columnsMain.sharesDocumentOwner(left,right)});
 const tablePresetReads=new Map<string,{cancelled:boolean;sent:boolean;stop?:Promise<unknown>}>();
 /** 仅真实Main调用持有发布门；成功结果直到IPC最后同步检查后才释放取消登记。 */
-type MainInvocation = ColumnsInvocation & {presetPublication?:{pendingStop():Promise<unknown>|undefined;settledStop(stop:Promise<unknown>):void;assertCurrent():void;release():void}};
+type MainInvocation = ColumnsInvocation & {resultPresetPublication?:()=>void;presetPublication?:{pendingStop():Promise<unknown>|undefined;settledStop(stop:Promise<unknown>):void;assertCurrent():void;release():void}};
 /** 取消只指向本片已登记的独立metadata任务；原请求仍等待utility严格资源结算。 */
 function cancelTablePresetRead(taskId:string):Promise<unknown> {
   const state=tablePresetReads.get(taskId);if(!state)return Promise.resolve();
@@ -89,6 +91,7 @@ function cancelTablePresetRead(taskId:string):Promise<unknown> {
 }
 /** 来源销毁不依赖旧渲染进程继续发IPC；收尾失败由仍在等待的原请求保留。 */
 function invalidateTablePresetSources():void {
+  resultPresetSources.invalidate();
   tablePresetSources.invalidate();for(const taskId of tablePresetReads.keys())void cancelTablePresetRead(taskId).catch(()=>undefined);
 }
 
@@ -273,6 +276,29 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
   if (command === 'serverMonitor.read' && shuttingDown) throw new Error('客户端正在退出，不能刷新服务器监控');
   if (command === 'schema.compare') { connectionConfig.assertAvailable(input.source.connectionId); connectionConfig.assertAvailable(input.target.connectionId); }
   switch (command) {
+    case 'result.presets.list':
+    case 'result.presets.save':
+    case 'result.presets.rename':
+    case 'result.presets.delete': {
+      if(shuttingDown)throw Error('客户端正在退出，不能操作结果整理方案');
+      columnsMain.assertCapturedOwner(columns);
+      if(command!=='result.presets.list')resultPresetSources.assert(columns,input);
+      const snapshot=command==='result.presets.list'?store.queryResultPresets(input):command==='result.presets.save'?store.saveQueryResultPreset(input):command==='result.presets.rename'?store.renameQueryResultPreset(input):store.deleteQueryResultPreset(input);
+      const result=resultPresetSources.issue(columns,input,snapshot);
+      // 返回IPC之前最后核对真实主文档、当前连接及准确文档修订；不把迟到列表当可应用事实。
+      columns!.resultPresetPublication=()=>{
+        resultPresetSources.assert(columns,{...input,bindingToken:result.bindingToken,source:result.source});connectionConfig.assertAvailable(input.connectionId);
+        const current=store.queryResultPresets({connectionId:input.connectionId});
+        if(current.revision!==result.revision||current.source.connectionRevision!==result.source.connectionRevision||current.source.connectionDigest!==result.source.connectionDigest)throw Error('方案或连接配置已变化，请刷新后重试');
+      };
+      return result;
+    }
+    case 'result.presets.read': {
+      if(shuttingDown)throw Error('客户端正在退出，不能读取结果整理方案');
+      resultPresetSources.assert(columns,input);const result=store.selectedQueryResultPreset(input);
+      columns!.resultPresetPublication=()=>{resultPresetSources.assert(columns,input);connectionConfig.assertAvailable(input.connectionId);store.selectedQueryResultPreset(input);};
+      return result;
+    }
     case 'table.presets.list':
       if(shuttingDown)throw Error('客户端正在退出，不能读取方案');
       return tablePresetSources.issue(columns,input,store.tablePresets(input));
@@ -681,13 +707,14 @@ else {
         const fileCancel = Boolean(payload.command === 'query.cancel' && payload.input && typeof payload.input === 'object' && 'taskId' in payload.input && typeof payload.input.taskId === 'string' && tasks.get(payload.input.taskId)?.kind.startsWith('queryFileSources.'));
         const insertRequest = payload.command==='query.confirmInsertExport' || payload.command==='query.exportStream' && !!payload.input && typeof payload.input==='object' && 'format' in payload.input && payload.input.format==='sql' || payload.command==='files.choose' && !!payload.input && typeof payload.input==='object' && 'queryInsertExport' in payload.input || payload.command==='query.cancel' && !!payload.input && typeof payload.input==='object' && 'taskId' in payload.input && typeof payload.input.taskId==='string' && queryInsertExports.has(payload.input.taskId);
         const resultSql = payload.command === 'files.previewResultSql' || payload.command === 'files.releaseResultSql' || (payload.command === 'files.exportResult' || payload.command === 'files.choose') && !!payload.input && typeof payload.input === 'object' && ('format' in payload.input && payload.input.format === 'sql') && (payload.command === 'files.exportResult' || 'resultSqlPreviewId' in payload.input);
-        if (payload.command.startsWith('schema.columns.')||payload.command.startsWith('table.presets.')||payload.command.startsWith('queryFileSources.')||fileCancel||resultSql||insertRequest||payload.command.startsWith('snippets.transfer')) columns = columnsMain.capture(event);
+        if (payload.command.startsWith('schema.columns.')||payload.command.startsWith('table.presets.')||payload.command.startsWith('result.presets.')||payload.command.startsWith('queryFileSources.')||fileCancel||resultSql||insertRequest||payload.command.startsWith('snippets.transfer')) columns = columnsMain.capture(event);
         const input = validateMainCommand(payload.command, payload.input);
         const operation=dispatch(payload.command as Command,input,columns),local=payload.command==='search.savedQueries'||payload.command==='search.savedQueriesContinue'||payload.command==='queries.page'||payload.command==='queries.pageContinue'||payload.command==='history.page'||payload.command==='history.pageContinue';if(local)localSearchOperations.add(operation);
         // 片段文件操作及清理全部结算后才允许退出关闭存储，复用现有文件操作等待集合。
         const snippetTransferOperation=payload.command.startsWith('snippets.transfer');if(snippetTransferOperation)queryFileOperations.add(operation);
         try {
           const result = await operation;
+          if(payload.command.startsWith('result.presets.')){columnsMain.assertCapturedOwner(columns);columns?.resultPresetPublication?.();}
           if(payload.command.startsWith('table.presets.')){
             // dispatch成功到IPC发布之间仍允许取消；新取消必须结算，最后检查之后不能再await。
             const publication=columns?.presetPublication;let stop=publication?.pendingStop();

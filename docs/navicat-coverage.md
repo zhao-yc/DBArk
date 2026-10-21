@@ -2,6 +2,8 @@
 
 ## 当前开发安排（2026-10-22）
 
+查询结果新增[命名整理方案](development/query-result-presets-20261022.md)：按连接在本机保存完整嵌套筛选、多列优先级、NULL及大小写，支持预览、新建、明确覆盖、仅重命名、删除和手动应用。元数据、连接来源、原文档、修订与结果租约分别复核，完整试算成功才一次发布并接通撤销。真实SQLite重启／配额／回滚、实际Main IPC与最终回包及React回归已补；原生／安装／macOS范围另验，不增加完整工作包计数，暂不发布。
+
 查询结果[筛选与完整排序联动](development/query-result-filter-preserve-sort-20261022.md)：应用／清除筛选保持原多列优先级、NULL 和大小写；扩大结果导致非法排序值或预算失败时整份拒绝，保留原视图及历史。类型／构建及准确9469ed2a的[Windows两个实库整例及两组独立导出读回](../tests/integration/acceptance-filter-preserve-sort-9469ed2a-20261022.md)通过，原单条SQL与正常关闭保持。完整Linux的复制旧行序断言失败已记录，修正完整矩阵后七文件383项通过，新完整CI另验；失败原子性为RAM证据，安装／macOS另验，不增加完整工作包计数，暂不发布。
 
 查询结果新增[暂存整理／应用暂存](development/query-result-memory-20261022.md)：同一标签内存保留完整筛选与多列排序，由用户明确应用到字段和可见列一致的新结果；完整试算成功才发布，可一次撤销。类型／六文件357项／构建及准确6e365406的[本机Windows实库整例与独立读回](../tests/integration/acceptance-query-result-memory-6e365406-20261022.md)通过：原单条SQL、两列NULL／大小写、暂存／恢复、原4行CSV／JSON及正常关闭。新查询复用为React RAM证据，安装／macOS另验；暂无命名、跨标签或跨启动方案，不增加完整工作包计数，暂不发布。

@@ -103,7 +103,7 @@ export function verifyQueryResultColumnsCopy(value:unknown):void {
   assert.equal(record.text,'0x00ff\t1\t18446744073709551615\t0.12345678901234567890\tNULL\t\n0x\t3\t9007199254740993\t1.00000000000000000001\tNULL\t');
 }
 
-export interface QueryColumnsAuditTarget { senderId:number;profileId:string;tabId:string;sql:string;deadline:number; }
+export interface QueryColumnsAuditTarget { senderId:number;profileId:string;tabId:string;sql:string;deadline:number;presets?:true; }
 /** 仅序列化至本例Electron主进程，旁观原handler真实结果；未知/写请求在原处理器前拒绝，不伪造成功。 */
 export function installQueryResultColumnsAudit({ipcMain}: {ipcMain:any},target:QueryColumnsAuditTarget):void {
   const root=globalThis as any,handlers=ipcMain._invokeHandlers,original=handlers?.get('dbark:request');
@@ -111,6 +111,98 @@ export function installQueryResultColumnsAudit({ipcMain}: {ipcMain:any},target:Q
   const state:any={invalid:false,revision:0,pending:0,queries:0,exports:[] as string[],chosen:[] as string[],session:'',sessionClaim:undefined,tokens:{} as Record<string,string>,last:Date.now(),check:undefined};
   // 只保留首次拒绝的固定分类，不记录请求、SQL、配置、文件路径或服务端错误正文。
   const reject=(reason='既有停链')=>{state.invalid=true;state.failure??=reason;throw Error('结果列原目标／修订／IPC已变化，永久停链：'+state.failure);};
+  // 可选方案流程只允许真实UI的固定八步；默认用例没有任何方案命令授权。
+  const presetSteps=['list','save','rename','list','read','list','save','delete'];
+  const presetTokens=new Set<string>();
+  if(target.presets!==undefined&&target.presets!==true)reject('方案授权形状');
+  if(target.presets)state.presets={list:0,save:0,rename:0,read:0,delete:0,total:0};
+  /** 描述符先行读取并复制普通数据，拒绝访问器、额外字段和循环；后续只序列化可信副本。 */
+  const dataRecord=(value:any,allowed:string[],required=allowed):any=>{
+    if(!value||typeof value!=='object'||Array.isArray(value))reject('方案对象边界');
+    const prototype=Object.getPrototypeOf(value);if(prototype!==null&&Object.getPrototypeOf(prototype)!==null)reject('方案对象原型');
+    const keys=Reflect.ownKeys(value);if(keys.some(key=>typeof key!=='string'||!allowed.includes(key))||required.some(key=>!Object.hasOwn(value,key)))reject('方案对象字段');
+    const copy:any={};for(const key of keys as string[]){const descriptor=Object.getOwnPropertyDescriptor(value,key);if(!descriptor||!Object.hasOwn(descriptor,'value')||!descriptor.enumerable)reject('方案访问器');Object.defineProperty(copy,key,{value:descriptor!.value,enumerable:true,writable:true});}return copy;
+  };
+  const dataArray=(value:any,max:number,min=0):any[]=>{
+    if(!Array.isArray(value))reject('方案数组');const prototype=Object.getPrototypeOf(value);if(!prototype||Object.getPrototypeOf(Object.getPrototypeOf(prototype))!==null)reject('方案数组原型');const length=Object.getOwnPropertyDescriptor(value,'length')?.value;
+    if(!Number.isSafeInteger(length)||length<min||length>max||Reflect.ownKeys(value).length!==length+1)reject('方案数组边界');
+    const copy=[];for(let index=0;index<length;index++){const descriptor=Object.getOwnPropertyDescriptor(value,String(index));if(!descriptor||!Object.hasOwn(descriptor,'value')||!descriptor.enumerable)reject('方案数组访问器');copy.push(descriptor!.value);}return copy;
+  };
+  const string=(value:any,min:number,max:number):string=>{if(typeof value!=='string'||value.length<min||value.length>max)reject('方案文本边界');return value;};
+  const revision=(value:any):number=>{if(!Number.isSafeInteger(value)||value<0||value>=Number.MAX_SAFE_INTEGER)reject('方案修订');return value;};
+  const uuid=(value:any):string=>{if(typeof value!=='string'||!/^[a-f0-9]{8}-[a-f0-9]{4}-[1-8][a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/i.test(value))reject('方案编号');return value;};
+  const digest=(value:any):string=>{if(typeof value!=='string'||!/^[a-f0-9]{64}$/.test(value))reject('方案来源摘要');return value;};
+  const source=(value:any):any=>{const copy=dataRecord(value,['connectionRevision','connectionDigest']);return {connectionRevision:revision(copy.connectionRevision),connectionDigest:digest(copy.connectionDigest)};};
+  const name=(value:any):string=>{const copy=string(value,1,80);if(copy!==copy.trim()||/[\u0000-\u001f\u007f-\u009f]/u.test(copy))reject('方案名称');return copy;};
+  /** 本地配置不含SQL、行、路径；字段来自原查询真实回包，表达式和排序保持有界完整结构。 */
+  const presetValue=(value:any):any=>{
+    const copy=dataRecord(value,['columns','visible','configuration']);let units=0,groups=0,rules=0;const seen=new Set();
+    const literal=(value:any,min=0,max=4096)=>{const result=string(value,min,max);units+=result.length;if(units>128*1024)reject('方案文本预算');return result;};
+    const columns=(value:any)=>{const result=dataArray(value,1024,1).map(item=>{const c=dataRecord(item,['key','name','type']);return {key:literal(c.key,1),name:literal(c.name),type:literal(c.type,0,256)};});if(new Set(result.map(c=>c.key)).size!==result.length)reject('方案重复字段');return result;};
+    const all=columns(copy.columns),visible=columns(copy.visible),available=new Set(visible.map(c=>c.key));
+    if(!state.queryColumns||JSON.stringify(all)!==JSON.stringify(state.queryColumns)||visible.some(c=>!all.some(other=>other.key===c.key&&other.name===c.name&&other.type===c.type)))reject('方案原查询字段');
+    const operators=['contains','notContains','startsWith','notStartsWith','endsWith','notEndsWith','like','notLike','empty','notEmpty','eq','ne','gt','gte','lt','lte','between','notBetween','in','notIn','null','notNull'];
+    const group=(value:any,depth:number):any=>{
+      if(depth>8||++groups>16||seen.has(value))reject('方案分组预算');seen.add(value);
+      const g=dataRecord(value,['mode','children']);if(!['AND','OR'].includes(g.mode))reject('方案分组模式');
+      const children=dataArray(g.children,48,depth===1?0:1).map(child=>{
+        if(child&&typeof child==='object'&&Object.hasOwn(child,'children'))return group(child,depth+1);
+        if(++rules>32)reject('方案条件预算');const r=dataRecord(child,['column','operator','value','upper','values','ignoreCase','enabled'],['column','operator','value']);
+        const column=literal(r.column,1),operator=string(r.operator,1,32),result:any={column,operator,value:literal(r.value)};
+        if(!available.has(column)||!operators.includes(operator))reject('方案条件字段');
+        const range=['between','notBetween'].includes(operator),list=['in','notIn'].includes(operator);
+        if(range)result.upper=literal(r.upper);else if(r.upper!==undefined)reject('方案区间字段');
+        if(list)result.values=dataArray(r.values,128,1).map(item=>literal(item));else if(r.values!==undefined)reject('方案集合字段');
+        if((list||['null','notNull','empty','notEmpty'].includes(operator))&&result.value!=='')reject('方案空条件值');
+        for(const option of ['ignoreCase','enabled'])if(r[option]!==undefined){if(typeof r[option]!=='boolean')reject('方案条件选项');result[option]=r[option];}return result;
+      });seen.delete(value);return {mode:g.mode,children};
+    };
+    const config=dataRecord(copy.configuration,['expression','sort']),expression=group(config.expression,1),sort=dataArray(config.sort,1024).map(item=>{
+      const r=dataRecord(item,['column','direction','nulls','ignoreCase'],['column','direction']),result:any={column:literal(r.column,1),direction:r.direction};
+      if(!available.has(result.column)||!['ASC','DESC'].includes(r.direction))reject('方案排序字段');
+      if(r.nulls!==undefined){if(!['FIRST','LAST'].includes(r.nulls))reject('方案NULL位置');result.nulls=r.nulls;}
+      if(r.ignoreCase!==undefined){if(typeof r.ignoreCase!=='boolean')reject('方案排序选项');result.ignoreCase=r.ignoreCase;}return result;
+    });if(new Set(sort.map(r=>r.column)).size!==sort.length)reject('方案重复排序');
+    const result={columns:all,visible,configuration:{expression,sort}};if(JSON.stringify(result).length>128*1024)reject('方案总文本预算');return result;
+  };
+  const presetSnapshot=(value:any):any=>{
+    const copy=dataRecord(value,['version','revision','entries','source','bindingToken']);if(copy.version!==1)reject('方案版本');
+    const entries=dataArray(copy.entries,100).map(item=>{const e=dataRecord(item,['id','name','connectionDigest','value']);return {id:uuid(e.id),name:name(e.name),connectionDigest:digest(e.connectionDigest),value:presetValue(e.value)};});
+    if(new Set(entries.map(e=>e.id)).size!==entries.length||new Set(entries.map(e=>e.name)).size!==entries.length)reject('方案重复条目');
+    return {version:1,revision:revision(copy.revision),entries,source:source(copy.source),bindingToken:uuid(copy.bindingToken)};
+  };
+  /** 每步在await前消费；token/source/CAS只取原handler已成功返回的快照。 */
+  const presetRequest=(command:string,input:any):any=>{
+    const kind=command.slice('result.presets.'.length),counts=state.presets,previous=state.presetSnapshot;
+    if(!counts||state.presetPending||presetSteps[counts.total]!==kind||state.queries!==1)reject('方案命令授权或次数');
+    const fields=kind==='list'?['connectionId']:['connectionId','source','expectedRevision','bindingToken',...(kind==='save'?['name','value',...(counts.save?['replaceId']:[])]:kind==='rename'?['id','name']:['id'])];
+    const copy=dataRecord(input,fields);if(copy.connectionId!==target.profileId)reject('方案原连接');
+    if(kind!=='list'){
+      if(!previous||revision(copy.expectedRevision)!==previous.revision||uuid(copy.bindingToken)!==previous.bindingToken||JSON.stringify(source(copy.source))!==JSON.stringify(previous.source))reject('方案CAS或绑定');
+      if(kind==='save'){copy.value=presetValue(copy.value);if(name(copy.name)!==(counts.save?'本例嵌套整理方案已改名':'本例嵌套整理方案'))reject('方案保存名称');if(counts.save&&uuid(copy.replaceId)!==previous.entries[0]?.id)reject('方案覆盖编号');}
+      else if(uuid(copy.id)!==previous.entries[0]?.id)reject('方案所选编号');
+      if(kind==='rename'&&name(copy.name)!=='本例嵌套整理方案已改名')reject('方案重命名');
+    }
+    counts[kind]++;counts.total++;state.presetPending=true;return {kind,input:copy,previous};
+  };
+  const presetReply=(claim:any,response:any):void=>{
+    const {kind,input,previous}=claim;
+    if(kind==='read'){if(JSON.stringify(presetValue(response))!==JSON.stringify(previous.entries[0].value))reject('方案读取完整值');}
+    else {
+      const next=presetSnapshot(response);
+      if(presetTokens.has(next.bindingToken))reject('方案回包旧令牌');presetTokens.add(next.bindingToken);
+      if(kind==='list'){
+        if(!previous){if(next.entries.length)reject('方案本例初始非空');}
+        else if(next.revision!==previous.revision||JSON.stringify(next.source)!==JSON.stringify(previous.source)||JSON.stringify(next.entries)!==JSON.stringify(previous.entries))reject('方案列表漂移');
+      }else{
+        if(next.revision!==previous.revision+1||JSON.stringify(next.source)!==JSON.stringify(previous.source))reject('方案变更修订');
+        const expected=kind==='delete'?[]:kind==='rename'?[{...previous.entries[0],name:input.name}]:[{id:input.replaceId??next.entries[0]?.id,name:input.name,connectionDigest:previous.source.connectionDigest,value:input.value}];
+        if(JSON.stringify(next.entries)!==JSON.stringify(expected))reject('方案真实变更回包');
+      }
+      state.presetSnapshot=next;
+    }
+    state.presetPending=false;
+  };
   // 主进程失败回包只有文本；仅精确识别已证实的固定错误，不读取访问器或回显任意正文。
   const replyFailure=(response:unknown):string=>{
     if(!response||typeof response!=='object')return '';
@@ -120,10 +212,11 @@ export function installQueryResultColumnsAudit({ipcMain}: {ipcMain:any},target:Q
   state.check=()=>{const now=Date.now();if(state.invalid)reject();if(root.__dbarkQueryResultColumnsAudit!==state||handlers.get('dbark:request')!==wrapped)reject('审计归属');if(!Number.isFinite(target.deadline)||!Number.isFinite(now)||now<state.last||now>=target.deadline)reject('原期限或时钟');state.last=now;};
   const wrapped=async(event:any,payload:any)=>{
     if(event.sender?.id!==target.senderId)return original(event,payload);
-    state.check();const command=payload?.command,input=payload?.input;let sessionClaim:any;
+    state.check();const command=payload?.command,input=payload?.input;let sessionClaim:any,presetClaim:any;
     // 所有连接修改和其它执行路径均永久撤销；不依赖配置改回后的相等值推断原修订。
     if(typeof command!=='string'||!input)reject('请求形状');
-    if(command==='settings.save'){const tab=input.tabs?.find((tab:any)=>tab.id===target.tabId);if(input.activeTabId!==target.tabId||tab?.kind!=='query'||tab.connectionId!==target.profileId||tab.sql!==target.sql){state.revision++;reject('工作区目标');}}
+    if(['result.presets.list','result.presets.save','result.presets.rename','result.presets.read','result.presets.delete'].includes(command))presetClaim=presetRequest(command,input);
+    else if(command==='settings.save'){const tab=input.tabs?.find((tab:any)=>tab.id===target.tabId);if(input.activeTabId!==target.tabId||tab?.kind!=='query'||tab.connectionId!==target.profileId||tab.sql!==target.sql){state.revision++;reject('工作区目标');}}
     else if(command==='connections.open'){if(input.id!==target.profileId)reject('连接目标');}
     else if(command==='sessions.open'){
       if(input.connectionId!==target.profileId||input.database||state.session||state.sessionClaim)reject('会话领取');
@@ -149,14 +242,16 @@ export function installQueryResultColumnsAudit({ipcMain}: {ipcMain:any},target:Q
       state.check();
       if(sessionClaim&&(state.sessionClaim!==sessionClaim||event.sender!==sessionClaim.sender||event.sender?.id!==sessionClaim.senderId||target.senderId!==sessionClaim.senderId||target.profileId!==sessionClaim.profileId||input.connectionId!==sessionClaim.profileId||input.database||state.revision!==sessionClaim.revision))reject('会话回包归属');
       if(response?.ok!==true)reject('原处理器失败回包：'+command+replyFailure(response));
+      if(command==='query.execute'&&target.presets){const result=response.result?.results;if(!Array.isArray(result)||result.length!==1||!Array.isArray(result[0]?.columns)||result[0].columns.length!==7)reject('方案原查询回包');state.queryColumns=result[0].columns.map((column:any)=>{const c=dataRecord(column,['key','name','type']);return {key:string(c.key,1,4096),name:string(c.name,0,4096),type:string(c.type,0,256)};});}
+      if(presetClaim)presetReply(presetClaim,response.result);
       if(command==='files.choose'){if(typeof response.result?.token!=='string'||!response.result.token||response.result.name!=='visible-selected.'+input.format)reject('文件选择回包');state.tokens[input.format]=response.result.token;}if(command==='sessions.open'){if(typeof response.result?.sessionId!=='string'||!response.result.sessionId)reject('会话回包');state.session=response.result.sessionId;}if(command==='connections.open'&&(response.result?.dialect!=='mysql'||!/^8\.4\.11(?:[-+][^\s]+)?$/.test(response.result?.version??'')))reject('连接方言或版本回包');return response;}
     catch(reason){state.invalid=true;state.failure??='原处理器抛出：'+command;throw reason;}finally{state.pending--;}
   };
   root.__dbarkQueryResultColumnsAudit=state;handlers.set('dbark:request',wrapped);state.check();
 }
 /** 读取本例活审计状态，不从任务名字猜测执行次数，也不输出认证或查询内容。 */
-export function readQueryResultColumnsAudit():{queries:number;exports:string[];pending:number;revision:number} {
- const state=(globalThis as any).__dbarkQueryResultColumnsAudit;if(!state||typeof state.check!=='function')throw Error('结果列IPC观察器失去归属');state.check();return {queries:state.queries,exports:[...state.exports],pending:state.pending,revision:state.revision};
+export function readQueryResultColumnsAudit():{queries:number;exports:string[];pending:number;revision:number;presets?:{list:number;save:number;rename:number;read:number;delete:number;total:number}} {
+ const state=(globalThis as any).__dbarkQueryResultColumnsAudit;if(!state||typeof state.check!=='function')throw Error('结果列IPC观察器失去归属');state.check();return {queries:state.queries,exports:[...state.exports],pending:state.pending,revision:state.revision,...(state.presets?{presets:{...state.presets}}:{})};
 }
 
 /** Root显式保存答案仅供捕获窗口使用一次；恢复原函数，不授予其它窗口或任意路径。 */

@@ -1,13 +1,11 @@
 import type { CellValue, QueryResult, ResultColumn } from '../shared/contracts';
+import type { QueryResultFilterOperator, QueryResultFilterMode, QueryResultFilterRule, QueryResultFilterGroup } from '../shared/queryResultPresets';
+export type { QueryResultFilterOperator, QueryResultFilterMode, QueryResultFilterRule, QueryResultFilterGroup } from '../shared/queryResultPresets';
 import { queryResultFilterKind, queryResultFilterKey, queryResultFilterLiteral, compareQueryResultFilterKeys, type QueryResultSortView } from './queryResultSort';
 import { queryResultFilterZh as text } from './locales/queryResultFilter.zh-CN';
 import { compileQueryResultWildcard } from './queryResultWildcard';
 
 export const queryResultFilterLimits = Object.freeze({ rows:100000, columns:1024, conditions:32, groups:16, depth:8, members:128, work:2000000, textWork:32*1024*1024, valueUnits:4096, units:8*1024*1024 });
-export type QueryResultFilterOperator = 'contains'|'notContains'|'startsWith'|'notStartsWith'|'endsWith'|'notEndsWith'|'like'|'notLike'|'empty'|'notEmpty'|'eq'|'ne'|'gt'|'gte'|'lt'|'lte'|'between'|'notBetween'|'in'|'notIn'|'null'|'notNull';
-export type QueryResultFilterMode = 'AND'|'OR';
-export interface QueryResultFilterRule { column:string;operator:QueryResultFilterOperator;value:string;upper?:string;values?:readonly string[];ignoreCase?:boolean;enabled?:boolean; }
-export interface QueryResultFilterGroup { readonly mode:QueryResultFilterMode;readonly children:readonly (QueryResultFilterRule|QueryResultFilterGroup)[]; }
 export interface QueryResultFilterView { readonly result:QueryResult;readonly sourceIndices:readonly number[];readonly rules:readonly Readonly<QueryResultFilterRule>[];readonly mode:QueryResultFilterMode;readonly expression:QueryResultFilterGroup; }
 export interface QueryResultFilterBinding {
   readonly source:QueryResult;readonly rows:QueryResult['rows'];readonly columns:ResultColumn[];readonly rowRefs:readonly QueryResult['rows'][number][];readonly columnRefs:readonly ResultColumn[];

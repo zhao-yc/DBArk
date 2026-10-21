@@ -4,6 +4,7 @@ import ts from 'typescript';
 import { vi } from 'vitest';
 import { ColumnsMainCapabilities } from '../../src/main/columnsMainCapabilities';
 import { TablePresetSources } from '../../src/main/tablePresets';
+import { QueryResultPresetSources } from '../../src/main/queryResultPresetSources';
 import { validateCommand } from '../../src/shared/validation';
 import { SavedQuerySearchCancelled } from '../../src/main/savedQuerySearch';
 import { QueryFileSources } from '../../src/main/queryFileSources';
@@ -89,6 +90,7 @@ export function mainColumnsHarness() {
   });
   // 导航和销毁执行原失效/取消函数；来源授权沿用同一真实owner，不能用空函数跳过。
   context.tablePresetSources = new TablePresetSources({ assert: value => capabilities.assertCapturedOwner(value), same: (left, right) => capabilities.sharesDocumentOwner(left, right) });
+  context.resultPresetSources = new QueryResultPresetSources({ assert: value => capabilities.assertCapturedOwner(value), same: (left, right) => capabilities.sharesDocumentOwner(left, right) });
   runInContext(ts.transpileModule(productionParts(), { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText, context);
   // createWindow在首个await前同步建立窗口及真实owner监听，RAM loadURL不操作GUI。
   void context.actual.createWindow();

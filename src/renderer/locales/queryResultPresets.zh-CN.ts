@@ -1,0 +1,16 @@
+export const queryResultPresetsZh = {
+  open: '整理方案', title: '命名整理方案',
+  scope: '保存完整筛选、多列排序和字段身份，供同一连接的查询标签使用；关闭客户端后仍保留。方案包含条件原值，不包含SQL正文或结果行。',
+  hint: '应用只处理当前已返回行，不重发SQL；可用结果整理撤销一次恢复。',
+  choose: '选择整理方案', placeholder: '请选择方案', name: '方案名称',
+  create: '保存为新方案', overwrite: '用当前整理覆盖所选', rename: '仅重命名所选', remove: '删除所选方案', apply: '应用所选方案', refresh: '刷新方案列表',
+  empty: '此连接尚无整理方案，可为当前整理输入名称并保存。',
+  current: '当前整理', preview: '所选方案预览', filters: '筛选表达式', sort: '排序优先级', noFilters: '无筛选条件', noSort: '按原返回顺序', disabled: '停用', ignoreCase: '忽略大小写', asc: '升序', desc: '降序', nullFirst: 'NULL在前', nullLast: 'NULL在后', nullDefault: 'NULL按默认位置',
+  stale: '当前结果或连接已变化，请关闭后从当前结果重新打开。',
+  changed: '方案或请求状态已变化，请刷新列表后重试。',
+  mismatch: '方案的完整字段或可见列与当前结果不一致，未应用。',
+  connectionChanged: '方案保存后的连接配置已变化，不能直接应用；可用当前整理明确覆盖。',
+  refreshNeeded: '请先刷新方案列表，未自动重试上次操作。',
+  working: '正在处理整理方案…',
+  summary: (columns: number, visible: number) => `共${columns}个字段，${visible}个可见字段`,
+} as const;

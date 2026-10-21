@@ -30,6 +30,7 @@ import { assertResultSqlData, resultSqlTargetSchema, resultSqlSelectionSchema } 
 import { resultSqlZh } from './resultSql.zh-CN';
 import { FILTER_LIMITS, validateFilterRules, filterRuleSchema as filterRule, sortRulesSchema } from './filtering';
 import { tablePresetListSchema, tablePresetSaveSchema, tablePresetSelectSchema, tablePresetApplySchema } from './tablePresets';
+import { queryResultPresetListSchema, queryResultPresetSaveSchema, queryResultPresetSelectSchema, queryResultPresetRenameSchema } from './queryResultPresets';
 import { queryParameterTypes, validateQueryParameters } from './queryParameters';
 import { snippetSchema } from './snippets';
 import { validateReferenceValues } from './references';
@@ -119,6 +120,7 @@ const settingsRawWriteSchema = z.unknown().superRefine((raw, context) => {
 });
 
 export const commandSchemas: Record<Command, z.ZodType> = {
+  'result.presets.list': queryResultPresetListSchema, 'result.presets.save': queryResultPresetSaveSchema, 'result.presets.rename': queryResultPresetRenameSchema, 'result.presets.delete': queryResultPresetSelectSchema, 'result.presets.read': queryResultPresetSelectSchema,
   'table.presets.list':tablePresetListSchema,'table.presets.save':tablePresetSaveSchema,'table.presets.delete':tablePresetSelectSchema,'table.presets.apply':tablePresetApplySchema,
   'table.copyInsertSql': copyInsertSqlInputSchema,
   'workbench.get': empty, 'workbench.save': workbenchSaveSchema, 'workbench.resolve': workbenchTargetSchema, 'workbench.copyUri': workbenchTargetSchema,

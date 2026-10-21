@@ -1,9 +1,10 @@
 import type { QueryResult, ResultColumn } from '../shared/contracts';
-import { QueryResultFilter, type QueryResultFilterGroup } from './queryResultFilter';
-import { QueryResultSort, type QueryResultSortRule } from './queryResultSort';
+import type { QueryResultOrganization } from '../shared/queryResultPresets';
+export type { QueryResultOrganization } from '../shared/queryResultPresets';
+import { QueryResultFilter } from './queryResultFilter';
+import { QueryResultSort } from './queryResultSort';
 import { queryResultHistoryZh as text } from './locales/queryResultHistory.zh-CN';
 
-export interface QueryResultOrganization { readonly expression: QueryResultFilterGroup; readonly sort: readonly QueryResultSortRule[]; }
 interface Snapshot { readonly configuration: QueryResultOrganization; readonly key: string; }
 export interface QueryResultHistoryBinding { readonly source: QueryResult; readonly visible: readonly ResultColumn[]; readonly context: readonly unknown[]; }
 interface Ticket { readonly binding: QueryResultHistoryBinding; readonly revision: number; readonly index: number; readonly configuration: QueryResultOrganization; }

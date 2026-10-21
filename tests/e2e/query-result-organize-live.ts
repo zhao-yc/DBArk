@@ -12,9 +12,10 @@ import { queryResultHistoryZh as historyText } from '../../src/renderer/locales/
 import { queryResultFilterZh as filterText } from '../../src/renderer/locales/queryResultFilter.zh-CN';
 import { queryResultCopyZh as copyText } from '../../src/renderer/locales/queryResultCopy.zh-CN';
 import { captureQueryResultGridLayout } from '../helpers/queryResultGridLayout';
+import { queryResultPresetsZh as presetText } from '../../src/renderer/locales/queryResultPresets.zh-CN';
 
-/** 仅双门和Root显式RAM绑定后注册；原native及owner强引用保留，失败不进入补清理。 */
-export function registerQueryResultOrganizeUi(binding:QueryResultColumnsUiTarget):void {
+/** 仅显式门和Root的RAM绑定后注册；可选命名方案沿用原native、owner和失败保留规则。 */
+export function registerQueryResultOrganizeUi(binding:QueryResultColumnsUiTarget,options?:{presets?:true}):void {
  const cases=new Map<TestInfo,{life:QueryResultColumnsUiLifetime;observer?:mysql.Connection;native?:any;stream?:any}>();let halted=false;
  test.use({preserveOnUnconfirmedExit:true,trace:'off',screenshot:'off',video:'off'});test.setTimeout(120000);test.describe.configure({retries:0});
  test.afterEach(({},info)=>{const current=cases.get(info);if(!current){halted=true;retainOwnedDesktopResources(info);throw Error('结果列未建立本例owner，保留现场');}try{current.life.afterEach();cases.delete(info);}catch(reason){halted=true;throw reason;}});
@@ -43,7 +44,7 @@ export function registerQueryResultOrganizeUi(binding:QueryResultColumnsUiTarget
    const tab=page.locator('.query-tab:visible');await observe(()=>tab.locator('.monaco-editor').getByRole('textbox').focus());await observe(()=>page.keyboard.press(`${process.platform==='darwin'?'Meta':'Control'}+A`));await observe(()=>page.keyboard.insertText(queryResultColumnsSql));
    let tabId='';await observe(()=>expect.poll(async()=>{const settings=await observe(()=>page.evaluate(()=>window.dbark.invoke('settings.get',{})));const own=settings.tabs.find(tab=>tab.id===settings.activeTabId);if(own?.kind==='query'&&own.connectionId===profile!.id&&own.sql===queryResultColumnsSql){tabId=own.id;return true;}return false;}).toBe(true));
    const ownerWindow=await observe(()=>application.browserWindow(page));const senderId=await observe(()=>ownerWindow.evaluate(window=>window.webContents.id));await observe(()=>ownerWindow.dispose());
-   await observe(()=>application.evaluate(installQueryResultColumnsAudit,{senderId,profileId:profile!.id,tabId,sql:queryResultColumnsSql,deadline:(info as TestInfo&{_startWallTime?:number})._startWallTime!+120000}));armed=true;
+   await observe(()=>application.evaluate(installQueryResultColumnsAudit,{senderId,profileId:profile!.id,tabId,sql:queryResultColumnsSql,deadline:(info as TestInfo&{_startWallTime?:number})._startWallTime!+120000,...(options?.presets?{presets:true as const}:{})}));armed=true;
    await observe(()=>tab.getByRole('button',{name:zh.query.text011,exact:true}).click());await observe(()=>expect(tab.getByRole('button',{name:zh.common.stop,exact:true})).toBeDisabled({timeout:20000}));await observe(()=>expect(tab.locator('.error-box')).toHaveCount(0));
    const before=await observe(()=>page.evaluate(async()=>(await window.dbark.invoke('history.list',{})).map(row=>row.id).sort()));expect((await observe(()=>application.evaluate(readQueryResultColumnsAudit))).queries).toBe(1);
    /** 只读真实DOM表头；数据列的原名与小号类型标签分离，不取内部网格props代替渲染验收。 */
@@ -161,6 +162,29 @@ export function registerQueryResultOrganizeUi(binding:QueryResultColumnsUiTarget
    const nullCell=grid.locator('[role="row"][aria-rowindex="2"] [role="gridcell"][aria-colindex="6"]');await observe(()=>nullCell.click());await observe(()=>tab.getByRole('button',{name:filterText.cellEquals,exact:true}).click());await observe(()=>expect(panel.getByRole('combobox',{name:filterText.operator+' 4',exact:true})).toHaveValue('null'));await observe(()=>expect(panel.getByRole('textbox',{name:filterText.input+' 4',exact:true})).toBeDisabled());await observe(()=>panel.getByRole('button',{name:filterText.cancel,exact:true}).click());await observe(()=>expect.poll(ids).toEqual(['1','3']));
    await observe(()=>nullCell.click());await observe(()=>tab.getByRole('button',{name:filterText.cellEquals,exact:true}).click());await observe(()=>panel.getByRole('button',{name:filterText.apply,exact:true}).click());await observe(()=>expect.poll(ids).toEqual(['1','3']));
    await observe(()=>expect(tab.locator('.query-result-filter-bar')).toContainText(filterText.counts(3,2)));
+   if(options?.presets){
+    // 只从真实列头和选项建立多列排序；命名方案通过原IPC持久化，禁用内部状态注入。
+    await observe(()=>heads.nth(1).click());await observe(()=>heads.nth(3).click({modifiers:[modifier]}));
+    await observe(()=>tab.getByRole('combobox',{name:sortText.nulls(1,'id'),exact:true}).selectOption('LAST'));
+    await observe(()=>tab.getByRole('checkbox',{name:sortText.ignoreCase(1,'id'),exact:true}).check());
+    await observe(()=>tab.getByRole('combobox',{name:sortText.nulls(2,'repeated'),exact:true}).selectOption('FIRST'));
+    await observe(()=>expect.poll(ids).toEqual(['1','3']));
+    const presets=page.getByRole('dialog',{name:presetText.title,exact:true}),preview=presets.getByRole('region',{name:presetText.preview,exact:true});
+    const initialName='本例嵌套整理方案',renamed='本例嵌套整理方案已改名';
+    await observe(()=>tab.getByRole('button',{name:presetText.open,exact:true}).click());await observe(()=>expect(presets).toBeVisible());
+    await observe(()=>presets.getByRole('textbox',{name:presetText.name,exact:true}).fill(initialName));await observe(()=>presets.getByRole('button',{name:presetText.create,exact:true}).click());
+    await observe(()=>expect(preview).toBeVisible());await observe(()=>expect(preview.locator('strong')).toContainText([initialName,filterText.and,filterText.or]));
+    await observe(()=>expect(preview).toContainText('1.00000000000000000001'));await observe(()=>expect(preview).toContainText('"1"'));await observe(()=>expect(preview).toContainText('"3"'));await observe(()=>expect(preview).toContainText(filterText.operators.null));
+    await observe(()=>expect(preview.locator('ol > li')).toHaveText(['id · '+presetText.asc+' · '+presetText.nullLast+' · '+presetText.ignoreCase,'repeated · '+presetText.asc+' · '+presetText.nullFirst]));
+    await observe(()=>presets.getByRole('textbox',{name:presetText.name,exact:true}).fill(renamed));await observe(()=>presets.getByRole('button',{name:presetText.rename,exact:true}).click());await observe(()=>expect(presets.getByRole('combobox',{name:presetText.choose,exact:true}).locator('option:checked')).toHaveText(renamed));
+    await observe(()=>presets.getByRole('button',{name:zh.common.close,exact:true}).click());await observe(()=>expect(presets).toBeHidden());
+    await observe(()=>tab.getByRole('button',{name:filterText.clear,exact:true}).click());await observe(()=>tab.getByRole('button',{name:sortText.clear,exact:true}).click());await observe(()=>expect.poll(ids).toEqual(['1','2','3']));
+    await observe(()=>tab.getByRole('button',{name:presetText.open,exact:true}).click());await observe(()=>presets.getByRole('combobox',{name:presetText.choose,exact:true}).selectOption({label:renamed}));await observe(()=>presets.getByRole('button',{name:presetText.apply,exact:true}).click());await observe(()=>expect(presets).toBeHidden());await observe(()=>expect.poll(ids).toEqual(['1','3']));
+    await observe(()=>tab.getByRole('button',{name:historyText.undo,exact:true}).click());await observe(()=>expect.poll(ids).toEqual(['1','2','3']));await observe(()=>expect(tab.getByRole('list',{name:sortText.priorities,exact:true})).toHaveCount(0));
+    await observe(()=>tab.getByRole('button',{name:historyText.redo,exact:true}).click());await observe(()=>expect.poll(ids).toEqual(['1','3']));await observe(()=>expect(tab.getByRole('list',{name:sortText.priorities,exact:true}).getByRole('listitem')).toHaveCount(2));
+    // 应用后第三次打开领取新token；仍在原窗口明确覆盖再删除，不能通过测试直接写存储。
+    await observe(()=>tab.getByRole('button',{name:presetText.open,exact:true}).click());await observe(()=>presets.getByRole('combobox',{name:presetText.choose,exact:true}).selectOption({label:renamed}));await observe(()=>presets.getByRole('button',{name:presetText.overwrite,exact:true}).click());await observe(()=>presets.getByRole('button',{name:presetText.remove,exact:true}).click());await observe(()=>expect(presets).toContainText(presetText.empty));await observe(()=>presets.getByRole('button',{name:zh.common.close,exact:true}).click());await observe(()=>expect.poll(ids).toEqual(['1','3']));
+   }
    for(const index of [3,2])await observe(()=>grid.locator('[role="row"][aria-rowindex="'+index+'"]').getByRole('checkbox').check());
    await observe(()=>expect(selected).toBeEnabled());
    // 合成copy事件只读取本页DataTransfer，不执行复制按钮或覆盖系统剪贴板。
@@ -173,7 +197,7 @@ export function registerQueryResultOrganizeUi(binding:QueryResultColumnsUiTarget
     if((await observe(()=>stat(binding.target[format]))).size>32768)throw Error('本例输出超出常量结果读取预算');verifyQueryResultColumnsFile(format,await observe(()=>readFile(binding.target[format])));await observe(()=>dialog.getByRole('button',{name:zh.common.done,exact:true}).click());
     if(format==='csv'){await observe(()=>expect(selected).toBeDisabled());for(const index of [3,2])await observe(()=>grid.locator('[role="row"][aria-rowindex="'+index+'"]').getByRole('checkbox').check());}
    }
-   expect(await observe(()=>page.evaluate(async()=>(await window.dbark.invoke('history.list',{})).map(row=>row.id).sort()))).toEqual(before);const audit=await observe(()=>application.evaluate(readQueryResultColumnsAudit));expect(audit).toEqual({queries:1,exports:['csv','json'],pending:0,revision:0});expect(pageErrors).toEqual([]);
+   expect(await observe(()=>page.evaluate(async()=>(await window.dbark.invoke('history.list',{})).map(row=>row.id).sort()))).toEqual(before);const audit=await observe(()=>application.evaluate(readQueryResultColumnsAudit));expect(audit).toEqual({queries:1,exports:['csv','json'],pending:0,revision:0,...(options?.presets?{presets:{list:3,save:2,rename:1,read:1,delete:1,total:8}}:{})});if(options?.presets)await observe(()=>info.attach('命名方案实际IPC计数',{body:JSON.stringify(audit.presets),contentType:'application/json'}));expect(pageErrors).toEqual([]);
    await life.finish(()=>page.evaluate(()=>window.dbark.invoke('tasks.list',{})),()=>closeQueryResultColumnsObserver(current.observer! as mysql.Connection&{connection?:unknown},current.native,current.stream,()=>life.check(true),native=>closeMysqlConnection(native,true,false,life.remaining(1000))));
   }catch(reason){life.preserve();throw reason;}finally{life.endBody();}
  });

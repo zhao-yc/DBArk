@@ -26,6 +26,7 @@ import { emptyWorkbench, workbenchDocumentSchema, workbenchSaveSchema, type Work
 import { querySaveContentSchema, queryUpdateSourceSchema, sameSavedQueryContext, savedQueryOriginContext, type QuerySaveContent, type QuerySaveResult } from '../shared/queryBinding';
 import { bindSavedQuery, queryConnectionDigest } from './queryBinding';
 import { tablePresetDocumentSchema, tablePresetListSchema, tablePresetSaveSchema, tablePresetSelectSchema, validateTablePresetBudget, type TablePresetTarget, type TablePresetSource, type TablePresetStoredSnapshot as TablePresetSnapshot, type TablePresetSelect } from '../shared/tablePresets';
+import { queryResultPresetDocumentSchema, queryResultPresetListSchema, queryResultPresetSaveSchema, queryResultPresetSelectSchema, queryResultPresetRenameSchema, validateQueryResultPresetBudget, type QueryResultPresetSource, type QueryResultPresetStoredSnapshot, type QueryResultPresetValue, type QueryResultPresetSelect, type QueryResultPresetSave, type QueryResultPresetRename } from '../shared/queryResultPresets';
 import { parseSavedQueryRecord } from './savedQuerySearchMatch';
 
 export interface SecretProtector { available(): boolean; encrypt(value: string): string; decrypt(value: string): string; }
@@ -65,6 +66,8 @@ export class LocalStore {
     if (this.db.exec("SELECT 1 FROM sqlite_master WHERE type='table' AND name='table_presets'").length) {
       for (const document of this.records<unknown>('SELECT data FROM table_presets')) tablePresetDocumentSchema.parse(document);
     }
+    // 可选元数据也须先完整校验；坏文档不能被迁移或任务恢复写盘掩盖。
+    if (this.db.exec("SELECT 1 FROM sqlite_master WHERE type='table' AND name='query_result_presets'").length) this.validateQueryResultPresetCollection();
     this.mutate(() => {
       this.db.run(`CREATE TABLE IF NOT EXISTS connections (id TEXT PRIMARY KEY, data TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS secrets (connection_id TEXT NOT NULL, name TEXT NOT NULL, value TEXT NOT NULL, PRIMARY KEY(connection_id,name));
@@ -83,6 +86,8 @@ export class LocalStore {
         CREATE TABLE IF NOT EXISTS query_file_sources (tab_id TEXT PRIMARY KEY, id TEXT NOT NULL UNIQUE, revision INTEGER NOT NULL, data TEXT NOT NULL);
         -- 最近列表仅为可选元数据缓存，旧schema9客户端可忽略，不改变文件来源的存储合同。
         CREATE TABLE IF NOT EXISTS query_file_recents (id INTEGER PRIMARY KEY CHECK(id=1), data TEXT NOT NULL);
+        -- 查询结果整理方案是可选schema9元数据，不改变旧客户端的原生版本门槛。
+        CREATE TABLE IF NOT EXISTS query_result_presets (connection_id TEXT PRIMARY KEY, data TEXT NOT NULL);
         PRAGMA user_version=9;`);
     });
     for (const receipt of this.records<TableApplyReceipt>('SELECT data FROM table_apply_receipts').map(parseTableApplyReceipt)) if (receipt.phase !== 'terminal') this.saveTableApplyReceipt(interruptTableApplyReceipt(receipt));
@@ -254,6 +259,97 @@ export class LocalStore {
     return entry.configuration;
   }
 
+  /** 来源从真实已保存连接计算；不读取凭据，也不信任界面传入的摘要。 */
+  private queryResultPresetSource(connectionId: string): QueryResultPresetSource {
+    const profile = this.records<ConnectionProfile>('SELECT data FROM connections WHERE id=?', [connectionId])[0];
+    if (!profile) throw Error('方案连接已删除，请重新选择连接');
+    return { connectionRevision: this.connectionRevisionValue, connectionDigest: queryConnectionDigest(profile) };
+  }
+
+  /** 完整读取单连接文档；即使最后一项删除也保留修订，防止旧CAS再次生效。 */
+  queryResultPresets(raw: unknown): QueryResultPresetStoredSnapshot {
+    const target = queryResultPresetListSchema.parse(raw), source = this.queryResultPresetSource(target.connectionId);
+    const document = this.records<unknown>('SELECT data FROM query_result_presets WHERE connection_id=?', [target.connectionId])[0];
+    return { ...queryResultPresetDocumentSchema.parse(document ?? { version: 1, revision: 0, entries: [] }), source };
+  }
+
+  /** 全库预算包括空文档墓碑、连接键及原始JSON的UTF-8字节，不截断内容。 */
+  private validateQueryResultPresetCollection(replacement?: { connectionId: string; data: string }): void {
+    const statement = this.db.prepare('SELECT connection_id,data FROM query_result_presets');
+    let connections = replacement ? 1 : 0, entries = 0, bytes = replacement ? Buffer.byteLength(replacement.connectionId + replacement.data, 'utf8') : 0;
+    if (replacement) entries = queryResultPresetDocumentSchema.parse(JSON.parse(replacement.data)).entries.length;
+    try {
+      while (statement.step()) {
+        const row = statement.get(), connectionId = String(row[0]), data = String(row[1]);
+        queryResultPresetListSchema.parse({ connectionId });
+        const document = queryResultPresetDocumentSchema.parse(JSON.parse(data));
+        if (replacement?.connectionId === connectionId) continue;
+        connections++; entries += document.entries.length; bytes += Buffer.byteLength(connectionId + data, 'utf8');
+      }
+    } finally { statement.free(); }
+    validateQueryResultPresetBudget(connections, entries, bytes);
+  }
+
+  /** 在同步事务内核对全局连接修订、连接内容摘要和文档修订，覆盖来源变化及ABA。 */
+  private checkedQueryResultPresets(input: QueryResultPresetSelect | QueryResultPresetSave | QueryResultPresetRename): QueryResultPresetStoredSnapshot {
+    const current = this.queryResultPresets({ connectionId: input.connectionId });
+    if (current.revision !== input.expectedRevision || current.source.connectionRevision !== input.source.connectionRevision || current.source.connectionDigest !== input.source.connectionDigest) throw Error('方案或连接配置已变化，请刷新后重试');
+    return current;
+  }
+
+  /** 校验文档和全库预算后写入；调用方必须在mutate内执行，失败恢复原内存及文件。 */
+  private writeQueryResultPresets(connectionId: string, snapshot: QueryResultPresetStoredSnapshot): void {
+    const document = queryResultPresetDocumentSchema.parse({ version: 1, revision: snapshot.revision, entries: snapshot.entries }), data = JSON.stringify(document);
+    this.validateQueryResultPresetCollection({ connectionId, data });
+    this.db.run('INSERT INTO query_result_presets VALUES (?,?) ON CONFLICT(connection_id) DO UPDATE SET data=excluded.data', [connectionId, data]);
+  }
+
+  /** 新建与覆盖均显式提交完整值；覆盖可改名，但不能占用其他编号的名称。 */
+  saveQueryResultPreset(raw: unknown): QueryResultPresetStoredSnapshot {
+    const input = queryResultPresetSaveSchema.parse(raw); let result!: QueryResultPresetStoredSnapshot;
+    this.mutate(() => {
+      const current = this.checkedQueryResultPresets(input);
+      if (input.replaceId && !current.entries.some(entry => entry.id === input.replaceId)) throw Error('方案已删除，请刷新后重试');
+      if (current.entries.some(entry => entry.name === input.name && entry.id !== input.replaceId)) throw Error('同名方案已存在，请选择其它名称或明确覆盖');
+      const entry = { id: input.replaceId ?? randomUUID(), name: input.name, connectionDigest: current.source.connectionDigest, value: input.value };
+      result = { ...current, revision: current.revision + 1, entries: input.replaceId ? current.entries.map(item => item.id === input.replaceId ? entry : item) : [...current.entries, entry] };
+      this.writeQueryResultPresets(input.connectionId, result);
+    });
+    return result;
+  }
+
+  /** 重命名仅修改名称，保留完整值及旧来源摘要，不能借此重新签发失效方案。 */
+  renameQueryResultPreset(raw: unknown): QueryResultPresetStoredSnapshot {
+    const input = queryResultPresetRenameSchema.parse(raw); let result!: QueryResultPresetStoredSnapshot;
+    this.mutate(() => {
+      const current = this.checkedQueryResultPresets(input);
+      if (!current.entries.some(entry => entry.id === input.id)) throw Error('方案已删除，请刷新后重试');
+      if (current.entries.some(entry => entry.id !== input.id && entry.name === input.name)) throw Error('同名方案已存在，请选择其它名称');
+      result = { ...current, revision: current.revision + 1, entries: current.entries.map(entry => entry.id === input.id ? { ...entry, name: input.name } : entry) };
+      this.writeQueryResultPresets(input.connectionId, result);
+    });
+    return result;
+  }
+
+  /** 删除精确编号并推进文档修订；空文档仍写盘保留墓碑。 */
+  deleteQueryResultPreset(raw: unknown): QueryResultPresetStoredSnapshot {
+    const input = queryResultPresetSelectSchema.parse(raw); let result!: QueryResultPresetStoredSnapshot;
+    this.mutate(() => {
+      const current = this.checkedQueryResultPresets(input);
+      if (!current.entries.some(entry => entry.id === input.id)) throw Error('方案已删除，请刷新后重试');
+      result = { ...current, revision: current.revision + 1, entries: current.entries.filter(entry => entry.id !== input.id) };
+      this.writeQueryResultPresets(input.connectionId, result);
+    });
+    return result;
+  }
+
+  /** 只返回已保存的完整整理值；连接变化后的旧项整份拒绝，必须明确覆盖才能恢复。 */
+  selectedQueryResultPreset(raw: unknown): QueryResultPresetValue {
+    const input = queryResultPresetSelectSchema.parse(raw), current = this.checkedQueryResultPresets(input), entry = current.entries.find(item => item.id === input.id);
+    if (!entry || entry.connectionDigest !== current.source.connectionDigest) throw Error('方案来源连接已失效，请重新显式保存或覆盖');
+    return entry.value;
+  }
+
   /** 白名单批次在同一事务内新增/受控替换；替换绝不走缺省保留秘密的普通保存路径。 */
   importConnections(input: ExportedConnectionProfile[], allowIncomplete: boolean, options?: ConnectionImportStorageOptions): ConnectionProfile[] {
     const document = connectionTransferDocumentSchema.parse({ format: 'DBArk-connections', version: 1, connections: input });
@@ -301,6 +397,7 @@ export class LocalStore {
       this.db.run('DELETE FROM connections WHERE id=?', [id]); this.db.run('DELETE FROM secrets WHERE connection_id=?', [id]);
       this.db.run('DELETE FROM table_preferences WHERE connection_id=?', [id]);
       this.db.run('DELETE FROM table_presets WHERE connection_id=?', [id]);
+      this.db.run('DELETE FROM query_result_presets WHERE connection_id=?', [id]);
       for (const key of this.volatileSecrets.keys()) if (key.startsWith(`${id}\0`)) this.volatileSecrets.delete(key);
     });
     this.connectionRevisionValue++;

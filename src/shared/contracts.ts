@@ -41,6 +41,7 @@ import type { SchemaCompareInput, SchemaCompareResult, SchemaComparePreviewInput
 import type { QuerySourceBinding, QuerySaveContent, QuerySaveResult } from './queryBinding';
 import type { TableCopyPageSources, TableCopySourceReadInput, TableCopySourceReadResult, TableCopySourceReleaseInput } from './tableCopySource';
 import type { CopyInsertSqlInput } from './copyInsertSql';
+import type { QueryResultPresetTarget, QueryResultPresetSave, QueryResultPresetSelect, QueryResultPresetRename, QueryResultPresetSnapshot, QueryResultPresetValue } from './queryResultPresets';
 export type CellValue = string | number | boolean | null | { type: 'binary'; base64: string };
 export type DataRow = Record<string, CellValue>;
 export type ObjectKind = 'table' | 'view' | 'procedure' | 'function' | 'trigger' | 'event';
@@ -88,6 +89,11 @@ export interface ResultExportOptions { fileToken: string; format: 'csv' | 'json'
 
 /** 请求映射是界面、主进程与数据库进程共同使用的唯一接口定义。 */
 export interface CommandMap {
+  'result.presets.list': { input: QueryResultPresetTarget; output: QueryResultPresetSnapshot };
+  'result.presets.save': { input: QueryResultPresetSave; output: QueryResultPresetSnapshot };
+  'result.presets.rename': { input: QueryResultPresetRename; output: QueryResultPresetSnapshot };
+  'result.presets.delete': { input: QueryResultPresetSelect; output: QueryResultPresetSnapshot };
+  'result.presets.read': { input: QueryResultPresetSelect; output: QueryResultPresetValue };
   'queryFileSources.checkExternal': { input: QueryFileCheckInput; output: QueryFileCheckResult };
   'queryFileSources.reload': { input: QueryFileReloadInput; output: QueryFileReloadResult };
   'queryFileSources.discardReload': { input: QueryFileDiscardInput; output: { discarded: boolean } };

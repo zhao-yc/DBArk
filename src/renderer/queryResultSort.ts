@@ -1,12 +1,12 @@
-import type { CellValue, QueryResult, ResultColumn, SortRule } from '../shared/contracts';
+import type { CellValue, QueryResult, ResultColumn } from '../shared/contracts';
+import type { QueryResultSortRule } from '../shared/queryResultPresets';
+export type { QueryResultSortRule } from '../shared/queryResultPresets';
 import { queryResultSortZh as text } from './locales/queryResultSort.zh-CN';
 
 export const queryResultSortLimits = { rows: 100000, columns: 1024, cells: 2000000, valueUnits: 4096, units: 8 * 1024 * 1024 } as const;
 type Kind = 'integer' | 'decimal' | 'float' | 'text' | 'date' | 'datetime' | 'time';
 type Exact = { negative: boolean; whole: string; fraction: string };
 type Key = null | number | string | Exact;
-/** 仅本地快照使用的空值位置和文本选项；不扩展服务端ORDER BY或共享IPC排序合同。 */
-export type QueryResultSortRule = SortRule & { nulls?: 'FIRST' | 'LAST'; ignoreCase?: boolean };
 export interface QueryResultSortView { readonly result: QueryResult; readonly sourceIndices: readonly number[]; readonly rules: readonly QueryResultSortRule[]; }
 export interface QueryResultSortBinding {
   readonly source: QueryResult; readonly rows: QueryResult['rows']; readonly rowRefs: readonly QueryResult['rows'][number][];
