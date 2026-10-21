@@ -58,20 +58,21 @@ function frame(tokens: CompletionToken[], depth: number): boolean {
 }
 
 /** 已确认的OVER／WINDOW括号内生成固定帧关键字，整条替换语句仍须通过原解析器。 */
-export function completionWindowFrameKeywords(tokens: CompletionToken[], at: number, prefix: string, open: number, close: number | undefined, validate: (value: string) => boolean): string[] | undefined {
+export function completionWindowFrameKeywords(tokens: CompletionToken[], at: number, prefix: string, open: number, close: number | undefined, validate: (value: string, inherited: boolean) => boolean): string[] | undefined {
   if (close === undefined || !['SELECT', 'WITH'].some(value => word(tokens[0], value))) return;
   const current = tokens.findIndex(token => token.start === at), depth = tokens[open].depth + 1;
   if (current <= open || current >= close || tokens[current].depth !== depth || tokens[current].kind !== 'word') return;
   const body = tokens.slice(open + 1, close), position = current - open - 1, result: string[] = [];
-  // 带基窗口引用的继承继续使用原保守边界，不借关键字路径绕过其完整性检查。
-  if (position !== 0 && !['PARTITION', 'ORDER', 'ROWS', 'RANGE'].some(value => word(body[0], value))) return;
+  const inherited = position > 0 && !['PARTITION', 'ORDER', 'ROWS', 'RANGE'].some(value => word(body[0], value));
+  // 继承仅接受有界ASCII名称；完整候选另核当前查询块的定义链与属性冲突。
+  if (inherited && (position === 0 || !['word', 'identifier'].includes(body[0].kind) || !/^[A-Za-z_][A-Za-z0-9_$]{0,63}$/.test(body[0].value))) return;
   for (const candidate of candidates) {
     if (!candidate.toLowerCase().startsWith(prefix.toLowerCase())) continue;
     const replacement = candidate.split(' ').map(value => ({ ...tokens[current], value }));
     const next = [...body.slice(0, position), ...replacement, ...body.slice(position + 1)];
     const starts = next.flatMap((token, index) => token.depth === depth && !((next[index - 1]?.kind === 'symbol') && next[index - 1].value === '.') && ['ROWS', 'RANGE'].some(value => word(token, value)) ? [index] : []);
     if (starts.length !== 1 || position < starts[0] || !frame(next.slice(starts[0]), depth)) continue;
-    if (validate(candidate)) result.push(candidate);
+    if (validate(candidate, inherited)) result.push(candidate);
   }
   return result.length ? result : undefined;
 }

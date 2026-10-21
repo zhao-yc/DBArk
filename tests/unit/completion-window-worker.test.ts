@@ -24,4 +24,14 @@ describe('本地Worker窗口能力白名单', () => {
     expect(messages.at(-1)).toMatchObject({id:1,result:{status:'ready',syntax:[],relations:[],keywords:['CURRENT']}});
     expect(messages.at(-1).result.target).toMatchObject({start:marked.indexOf('CUR|'),end:marked.indexOf('CUR|')+7,prefix:'CUR',qualifiers:[],quoted:false});
   });
+  it('真实Worker核帧基窗口的定义链，未知引用不能被语法就绪冒充', () => {
+    const bundle = buildSync({ entryPoints: ['src/renderer/completion.worker.ts'], bundle: true, write: false, platform: 'browser', format: 'iife', target: 'es2022', logLevel: 'silent' }).outputFiles[0].text;
+    const messages: any[] = [], port: any = { postMessage: (value: unknown) => messages.push(structuredClone(value)) };
+    runInNewContext(bundle, { self: port, console: { error() { throw Error('不得回显SQL'); }, warn() {}, log() {} }, setTimeout, clearTimeout }, { timeout: 8000 });
+    for (const [index, base] of ['w1', 'unknown'].entries()) {
+      const marked = `SELECT SUM(v) OVER(${base} ROWS CUR|RENT ROW) FROM users WINDOW w0 AS(PARTITION BY category),w1 AS(w0 ORDER BY id)`;
+      port.onmessage({ data: { id: index + 1, source: marked.replace('|', ''), offset: marked.indexOf('|'), mode: {}, capabilities: { windowFunctions: true } } });
+      expect(messages.at(-1)).toMatchObject(index === 0 ? { id: 1, result: { status: 'ready', syntax: [], relations: [], keywords: ['CURRENT'] } } : { id: 2, result: { status: 'blocked', reason: 'syntax' } });
+    }
+  });
 });

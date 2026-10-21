@@ -5,6 +5,7 @@ import {completionLimits} from './sqlCompletion';
 import{completionQueryBranches,completionBranchAt,completionOutputContext}from'./completionQueryScope';
 import{completionWindowContext}from'./completionWindowScope';
 import { completionWindowFrameKeywords } from './completionWindowFrame';
+import { completionWindowFrameBase, completionWindowFramePosition } from './completionWindowFrameBase';
 import { completionNamedWindows } from './completionNamedWindows';
 import { completionProcedureScope } from './completionProcedureScope';
 import{completionLateralTokens,completionLateralScope,completionLateralAllows}from'./completionLateralScope';
@@ -123,7 +124,7 @@ export function analyzeCompletion(source:string,offset:number,mode:CompletionLex
     const targetToken=lexical.tokens.find(token=>token.start===lexical.target.start&&token.end===lexical.target.end);
     // 仅新增继承路径要求当前分支完整语法；使用独立静默解析器，不改变已收集实体或回显SQL。
     let expansions=0,truncated=false;const branches=completionQueryBranches(queries,normalizedTokens),windowContext=completionWindowContext(branches,normalizedTokens,normalized.caret,targetToken?.kind==='word'?targetToken.value:undefined,(start,end)=>new QuietMySQL().validate(normalized.text.slice(start,end)).length===0,
-      capabilities.windowFunctions===true&&!lexical.target.quoted&&!lexical.target.qualifiers.length?(open,end)=>completionWindowFrameKeywords(normalizedTokens,normalized.caret,lexical.target.prefix,open,end,value=>{
+      capabilities.windowFunctions===true&&!lexical.target.quoted&&!lexical.target.qualifiers.length?(open,end)=>completionWindowFrameKeywords(normalizedTokens,normalized.caret,lexical.target.prefix,open,end,(value,inherited)=>{
         const candidate=normalized.text.slice(0,normalized.caret)+value+normalized.text.slice(normalized.caret+normalized.sentinel.length);
         if(!lexical.tokens.every(token=>token.closed)||candidate.length>completionLimits.sourceUnits)return false;
         const checked=new QuietMySQL();if(checked.validate(candidate).length)return false;
@@ -132,7 +133,9 @@ export function analyzeCompletion(source:string,offset:number,mode:CompletionLex
         if(candidateLexical.status!=='ready')return false;
         const candidateEntities=checked.getAllEntities(candidate,position)??[];if(candidateEntities.length>completionLimits.tokens)return false;
         const candidateBranches=completionQueryBranches(candidateEntities.filter(entity=>entity.entityContextType==='queryResult') as CommonEntityContext[],candidateLexical.tokens);
-        return completionOutputContext(candidateBranches,candidateLexical.tokens,normalized.caret)?.union!==true;
+        return completionOutputContext(candidateBranches,candidateLexical.tokens,normalized.caret)?.union!==true
+          &&completionWindowFramePosition(candidateBranches,candidateLexical.tokens,normalizedTokens[open].start)
+          &&(!inherited||completionWindowFrameBase(candidateBranches,candidateLexical.tokens,normalizedTokens[open].start));
       }):undefined);
     if(windowContext&&typeof windowContext==='object'){
       if(completionOutputContext(branches,normalizedTokens,normalized.caret)?.union)return{status:'blocked',reason:'syntax'};

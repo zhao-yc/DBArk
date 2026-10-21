@@ -63,7 +63,6 @@ describe('窗口帧关键字本地补全', () => {
   it.each([
     'SELECT SUM(v) OVER(ORDER BY id ROWS BETWEEN CEI|L(2) PRECEDING AND CURRENT ROW) FROM users',
     'SELECT SUM(v) OVER(ORDER BY id ROWS BETWEEN 1 PRECEDING AND u.fo|suffix FOLLOWING) FROM users u',
-    'SELECT SUM(v) OVER(base ORDER BY id ROWS CUR|RENT ROW) FROM users WINDOW base AS()',
     'SELECT SUM(v) OVER(ORDER BY id GROUPS CUR|RENT ROW) FROM users',
     'SELECT SUM(v) OVER(ORDER BY id RANGE BETWEEN INTERVAL 1 DAY PRECEDING AND CUR|RENT ROW) FROM users',
     'SELECT SUM(v) OVER(ORDER BY id ROWS BETWEEN 1.5 PRE|CEDING AND CURRENT ROW) FROM users',
@@ -91,5 +90,47 @@ describe('窗口帧关键字本地补全', () => {
     'SELECT 1 UNION ALL SELECT SUM(v) OVER(ROWS CUR|RENT ROW) FROM users',
   ])('集合分支内的合法帧保持可补全，不一律拒绝UNION：%s',async marked=>{
     const h=await suggest(marked);expect(h.items.items.map(item=>item.insertText)).toEqual(['CURRENT']);
+  });
+  it.each([
+    'SELECT SUM(v) OVER(base ORDER BY id ROWS CUR|RENT ROW) FROM users WINDOW base AS()',
+    'SELECT SUM(v) OVER(base ROWS CUR|RENT ROW) FROM users WINDOW base AS(PARTITION BY category ORDER BY id)',
+    'SELECT SUM(v) OVER(w2 ROWS CUR|RENT ROW) FROM users WINDOW w0 AS(PARTITION BY category),w1 AS(w0 ORDER BY id),w2 AS(w1)',
+    'SELECT SUM(v) OVER child FROM users WINDOW base AS(ORDER BY id),child AS(base ROWS CUR|RENT ROW)',
+    'SELECT SUM(v) OVER(`base` ROWS CUR|RENT ROW) FROM users WINDOW `base` AS(ORDER BY id)',
+    'SELECT SUM(v) OVER(base RANGE CUR|RENT ROW) FROM users WINDOW base AS(ORDER BY id)',
+    'SELECT SUM(u.v) OVER(base ROWS CUR|RENT ROW) FROM users u WINDOW base AS(PARTITION BY u.rows ORDER BY u.range)',
+    'SELECT (SELECT SUM(v) OVER(base ROWS CUR|RENT ROW) FROM orders WINDOW base AS(ORDER BY id)) FROM users WINDOW base AS(ROWS CURRENT ROW)',
+    'SELECT id FROM users WINDOW base AS() ORDER BY SUM(v) OVER(base ROWS CUR|RENT ROW)',
+    'SELECT SUM(v) OVER(base ROWS CUR|RENT ROW) FROM users WINDOW base AS() UNION ALL SELECT 1',
+    'SELECT 1 UNION ALL SELECT SUM(v) OVER(base ROWS CUR|RENT ROW) FROM users WINDOW base AS()',
+  ])('同块空／分区／排序窗口及向前定义链可添加帧且零目录读取：%s', async marked => {
+    const h = await suggest(marked);
+    expect(h.items.items.map(item => item.insertText)).toEqual(['CURRENT']);
+    expect(new MySQL().validate(h.source)).toEqual([]);
+  });
+  it.each([
+    'SELECT SUM(v) OVER(unknown ROWS CUR|RENT ROW) FROM users WINDOW base AS()',
+    'SELECT SUM(v) OVER(base ROWS CUR|RENT ROW) FROM users WINDOW base AS(base)',
+    'SELECT SUM(v) OVER(base ROWS CUR|RENT ROW) FROM users WINDOW base AS(next),next AS(base)',
+    'SELECT SUM(v) OVER(base ROWS CUR|RENT ROW) FROM users WINDOW base AS(next),next AS()',
+    'SELECT SUM(v) OVER(base ROWS CUR|RENT ROW) FROM users WINDOW base AS(),BASE AS()',
+    'SELECT SUM(v) OVER(base PARTITION BY id ROWS CUR|RENT ROW) FROM users WINDOW base AS()',
+    'SELECT SUM(v) OVER(base ORDER BY id ROWS CUR|RENT ROW) FROM users WINDOW base AS(ORDER BY id)',
+    'SELECT SUM(v) OVER(base ROWS CUR|RENT ROW) FROM users WINDOW base AS(ROWS CURRENT ROW)',
+    'SELECT SUM(v) OVER(w1 ROWS CUR|RENT ROW) FROM users WINDOW w0 AS(ROWS CURRENT ROW),w1 AS(w0)',
+    'SELECT SUM(v) OVER(w1 ROWS CUR|RENT ROW) FROM users WINDOW w0 AS(ORDER BY id),w1 AS(w0 ORDER BY category)',
+    'SELECT SUM(v) OVER(base ROWS CUR|RENT ROW) FROM users WINDOW base AS(`窗口`)',
+    'SELECT SUM(v) OVER(base ROWS CUR|RENT ROW) FROM users WINDOW base AS(`unknown`)',
+    'SELECT SUM(v) OVER(child ROWS CUR|RENT ROW) FROM users WINDOW base AS(),child AS(base PARTITION BY id)',
+    'SELECT (SELECT SUM(v) OVER(base ROWS CUR|RENT ROW) FROM users) WINDOW base AS()',
+    'SELECT 1 FROM users WINDOW base AS() UNION ALL SELECT SUM(v) OVER(base ROWS CUR|RENT ROW) FROM users',
+    'WITH q AS(SELECT SUM(v) OVER(base ROWS CUR|RENT ROW) FROM users) SELECT * FROM q WINDOW base AS()',
+    'SELECT SUM(v) OVER(base ROWS CUR|RENT ROW) FROM users WINDOW base AS(ORDER BY id),',
+    'SELECT v FROM users WHERE SUM(v) OVER(ROWS CUR|RENT ROW)>0',
+    'SELECT v FROM users GROUP BY SUM(v) OVER(ROWS CUR|RENT ROW)',
+    'SELECT v FROM users HAVING SUM(v) OVER(ROWS CUR|RENT ROW)>0',
+    'SELECT v FROM users WHERE SUM(v) OVER(base ROWS CUR|RENT ROW)>0 WINDOW base AS()',
+  ])('未知／循环／冲突／祖先与不合法帧位置不能恢复或借目录：%s', marked => {
+    expect(analyzeCompletion(marked.replace('|', ''), marked.indexOf('|'), {}, { windowFunctions: true }).status).toBe('blocked');
   });
 });
