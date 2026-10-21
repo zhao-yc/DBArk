@@ -25,17 +25,25 @@ export async function readQueryResultSortCaseGrid(grid: HTMLElement): Promise<Qu
   const count = Number(countText) - 1, height = grid.clientHeight, content = grid.scrollHeight, width = grid.clientWidth;
   diagnostics.phase = 'minimum-geometry';
   if (![height, content, width].every(Number.isFinite) || height < 96 || width <= 0 || content < 40 + count * 32) reject();
+  const initialBounds = grid.getBoundingClientRect(), outerHeight = grid.offsetHeight;
+  const initialStyle = view!.getComputedStyle(grid);
+  const borderTop = Number.parseFloat(initialStyle.borderTopWidth), borderBottom = Number.parseFloat(initialStyle.borderBottomWidth);
+  if (![initialBounds.height, initialBounds.width, outerHeight, borderTop, borderBottom].every(Number.isFinite) || initialBounds.height <= 0 || initialBounds.width <= 0 || borderTop < 0 || borderBottom < 0) reject();
+  // clientHeight取整会漏掉缩放后的末行。无上下边框及占位横滚动条时，真实矩形底边就是裁切底边；其余情况保留原保守客户区。
+  const exactBottom = borderTop === 0 && borderBottom === 0 && outerHeight === height;
   /** 一次矩阵读取期间原网格及行数保持；漂移不拼接成貌似完整的成功矩阵。 */
   const current = (): void => {
     diagnostics.phase = 'stable-geometry';
     if (!grid.isConnected || grid.getAttribute('aria-rowcount') !== countText || grid.clientHeight !== height || grid.scrollHeight !== content || grid.clientWidth !== width) reject();
+    const bounds = grid.getBoundingClientRect(), style = view!.getComputedStyle(grid);
+    if (bounds.height !== initialBounds.height || bounds.width !== initialBounds.width || grid.offsetHeight !== outerHeight || Number.parseFloat(style.borderTopWidth) !== borderTop || Number.parseFloat(style.borderBottomWidth) !== borderBottom) reject();
   };
   const seen = new Map<number, string>(), pages: QueryResultSortCaseGridReading['pages'] = [];
   grid.scrollTo({ top: 0, left: 0, behavior: 'instant' });
   for (let step = 0; step < 8; step++) {
     await frames(); current();
     diagnostics.phase = 'header';
-    const bounds = grid.getBoundingClientRect(), bottom = bounds.top + grid.clientTop + height;
+    const bounds = grid.getBoundingClientRect(), bottom = exactBottom ? bounds.bottom : bounds.top + grid.clientTop + height;
     const headers = Array.from(grid.querySelectorAll<HTMLElement>('[role="columnheader"]'));
     if (!headers.length) reject();
     const headerBottom = Math.max(...headers.map(header => header.getBoundingClientRect().bottom));

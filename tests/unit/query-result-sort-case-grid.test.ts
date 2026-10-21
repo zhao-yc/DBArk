@@ -4,18 +4,22 @@ import { readQueryResultSortCaseGrid } from '../helpers/queryResultSortCaseGrid'
 
 /** 仅模拟虚拟行和裁切矩形；不启动浏览器、不读取产品排序器或向系统发送输入。 */
 function fixture(height = 254, ids = ['4', '5', '1', '3', '2', '6', '7']) {
-  const options = { frozen: false, omitted: -1, duplicate: false, conflicting: false, drift: false, content: Math.max(height, 40 + ids.length * 32) };
+  const options = { frozen: false, omitted: -1, duplicate: false, conflicting: false, drift: false, content: Math.max(height, 40 + ids.length * 32), actualHeight: height, outerHeight: height, borderTop: 0, borderBottom: 0, maxScroll: undefined as number | undefined, fractionalDrift: false };
   const scrolls: number[] = []; let top = 0, frames = 0;
   const bounds = (y: number, h: number, x = 100, width = 400) => ({ top: y, bottom: y + h, height: h, left: x, right: x + width, width });
   const grid = {
     clientHeight: height, clientWidth: 400, clientTop: 0, clientLeft: 0, isConnected: true,
+    get offsetHeight() { return options.outerHeight; },
     get scrollHeight() { return options.content; }, get scrollTop() { return top; },
-    ownerDocument: { defaultView: { requestAnimationFrame(callback: () => void) { frames++; Promise.resolve().then(callback); return frames; } } },
+    ownerDocument: { defaultView: {
+      requestAnimationFrame(callback: () => void) { frames++; Promise.resolve().then(callback); return frames; },
+      getComputedStyle() { return { borderTopWidth: `${options.borderTop}px`, borderBottomWidth: `${options.borderBottom}px` }; },
+    } },
     getAttribute(name: string) { if (name !== 'aria-rowcount') throw Error('未知属性读取'); return String(ids.length + 1 + (options.drift && scrolls.length > 0 ? 1 : 0)); },
-    getBoundingClientRect: () => bounds(100, height),
+    getBoundingClientRect: () => bounds(100, options.actualHeight + (options.fractionalDrift && scrolls.length > 0 ? 0.125 : 0)),
     scrollTo(position: { top: number; left: number; behavior: string }) {
       expect(position.left).toBe(0); expect(position.behavior).toBe('instant'); scrolls.push(position.top);
-      if (!options.frozen) top = Math.max(0, Math.min(options.content - height, position.top));
+      if (!options.frozen) top = Math.max(0, Math.min(options.maxScroll ?? options.content - height, position.top));
     },
     querySelectorAll(selector: string) {
       if (selector === '[role="columnheader"]') return [{ getBoundingClientRect: () => bounds(100, 40) }];
@@ -51,6 +55,24 @@ describe('七行窗口矩阵的有界虚拟滚动读取（RAM）', () => {
     const f = fixture(96), result = await f.read();
     expect(result.ids).toEqual(['4', '5', '1', '3', '2', '6', '7']);
     expect(result.pages.length).toBeLessThanOrEqual(8); expect(f.scrolls).toEqual([0, 32, 64, 96, 128, 160, 168, 0]);
+  });
+  it('整数客户区97与真实97.2857像素并存时，在原八页内读到完全可见末行', async () => {
+    const f = fixture(97); f.options.actualHeight = 97.28572082519531; f.options.maxScroll = 166.85714721679688;
+    const result = await f.read();
+    expect(result.ids).toEqual(['4', '5', '1', '3', '2', '6', '7']);
+    expect(result.pages).toHaveLength(7); expect(result.pages[6]).toEqual({ top: 166.85714721679688, indices: [6] });
+    expect(f.scrolls).toEqual([0, 32, 64, 96, 128, 160, 167, 0]);
+  });
+  it.each(['border', 'scrollbar', 'clipped'] as const)('%s不能借真实外框底边接纳被遮挡的末行', async kind => {
+    const f = fixture(97); f.options.actualHeight = 97.28572082519531; f.options.maxScroll = 166.85714721679688;
+    if (kind === 'border') f.options.borderBottom = 0.28572082519531;
+    if (kind === 'scrollbar') { f.options.outerHeight = 112; f.options.actualHeight += 15; }
+    if (kind === 'clipped') f.options.maxScroll = 166.6;
+    await expect(f.read()).rejects.toThrow('完整行序'); expect(f.scrolls.length).toBeLessThanOrEqual(8);
+  });
+  it('客户区整数不变时也拒绝真实小数矩形漂移', async () => {
+    const f = fixture(97); f.options.fractionalDrift = true;
+    await expect(f.read()).rejects.toThrow('stable-geometry'); expect(f.scrolls).toEqual([0]);
   });
   it.each([{ ids: [] }, { ids: ['3'] }, { ids: ['1', '3', '6', '7'] }])('空及过滤后的矩阵仍读取准确行数（$ids）', async ({ ids }) => {
     const result = await fixture(254, ids).read(); expect(result.ids).toEqual(ids); expect(result.dataRows).toBe(ids.length);
