@@ -1,6 +1,6 @@
 # 已返回结果筛选条件启停
 
-固定源码提交`12c08ad52a638bfced8101c71bfdb4cb84071765`已推送main，产品树`7ad1c2e8a71ff6de9fc4bba933584960174f96a7`；[完整CI39539815211](https://github.com/zhao-yc/DBArk/actions/runs/39539815211)的Linux job119024747003已success：Python21项、0.267秒，类型／592文件11398通过、10平台跳过／构建成功；单元134.98秒、Vite21.85秒。Windows及两种macOS架构原生job尚待终态；原生剪贴板job跳过。
+固定源码提交`12c08ad52a638bfced8101c71bfdb4cb84071765`已推送main，产品树`7ad1c2e8a71ff6de9fc4bba933584960174f96a7`；[完整CI39539815211](https://github.com/zhao-yc/DBArk/actions/runs/39539815211)的Linux job119024747003已success：Python21项、0.267秒，类型／592文件11398通过、10平台跳过／构建成功；单元134.98秒、Vite21.85秒。三平台原生job现均completed／success，各source及同次实际安装legacy80通过／317条件跳过，六专项及四份ZIP已逐份静态核对，见[准确CI原件记录](../../tests/integration/acceptance-main-12c08ad-ci-20261021.md)。原生剪贴板及发布job跳过，不转作新启停实库GUI证据。
 
 ## 实际行为
 
@@ -33,3 +33,5 @@ node scripts/check-local.mjs --build tests/unit/query-result-filter-enabled.test
 整合版c449506已保留上述筛选启停产品及904组合用例，src树0eb5a6922e7ecc8ff75b0bdddc1c6e597d25c6d2；Q01独立0a4 GUI已通过，整合类型／七文件265项／构建也通过。筛选启停的新GUI和条件独立读回按[固定Windows操作单](../testing/query-result-filter-enabled-c449506-vm.md)执行，不能用Q01窗口结果替代。
 
 准确c449的[CI39541666500](https://github.com/zhao-yc/DBArk/actions/runs/39541666500)已取得Linux类型／593文件11478通过、10平台跳过／构建成功，三平台原生仍待终态。新操作单短消息派发返回“Codex app-server is not available”，后续状态查询也报告WIN11-TEST不可达；尚未取得新回合或进程的启动确认，保留待确认状态，不据此重复派发或在本机重开同轮。原Q01回合已完成，不属于本次未确认任务。
+
+后续独立只读回合01a15ca8-9bf7-7f11-ae38-66ed2fa5eca3于北京时间12:12:10确认：未见请求本体、目标目录不存在、无对应活进程。随后短消息正式派发取得确认，新回合01a15caa-1ba6-7991-9ddd-44b01498d9f8已读取准确6097操作单并核原0a4干净及目标src树，开始前置封存核对。此阶段不算准备或GUI通过；迟到请求须合并同一任务，不重复启动。
