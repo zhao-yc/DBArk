@@ -66,6 +66,8 @@ export interface ResultColumn { key: string; name: string; type: string; }
 export interface QueryResult { columns: ResultColumn[]; rows: DataRow[]; affectedRows?: number; insertId?: string; warningCount?: number; truncated: boolean; elapsedMs: number; statement: string; }
 export interface QueryOutcome { results: QueryResult[]; elapsedMs: number; transactionOpen?: boolean; explain?: ExplainPlan; }
 export type FilterMode = 'all' | 'any';
+/** 数字引用同一filters数组位置；每条条件（含停用）在完整树中恰好出现一次。 */
+export interface FilterGroup { readonly mode: FilterMode; readonly children: readonly (number | FilterGroup)[]; }
 export interface FilterRule { column: string; operator: '=' | '!=' | '>' | '>=' | '<' | '<=' | 'LIKE' | 'NOT LIKE' | 'IN' | 'NOT IN' | 'BETWEEN' | 'IS NULL' | 'IS NOT NULL'; value?: string; values?: string[]; /** 缺省启用；停用保留原条件但不参与本次筛选，仍计入全部预算。 */ enabled?: boolean; }
 export interface SortRule { column: string; direction: 'ASC' | 'DESC'; }
 export interface TablePage { rows: DataRow[]; columns: ResultColumn[]; hasMore: boolean; page: number; pageSize: number; /** 显式复制页在同一MDL内读取的目录身份；缺失时只能查看。 */ copyMetadataKey?: string; copySource?: TableCopyPageSources; }
@@ -170,13 +172,13 @@ export interface CommandMap {
   'query.confirmInsertExport': { input: import('zod').infer<typeof import('./queryInsertExport').queryInsertConfirmationSchema>; output: void };
   'query.cancel': { input: { taskId: string }; output: void };
   'query.transaction': { input: { sessionId: string; action: 'begin' | 'commit' | 'rollback' }; output: void };
-  'table.page': { input: { connectionId: string; database: string; table: string; page: number; pageSize: number; filters: FilterRule[]; filterMode?: FilterMode; sort: SortRule[]; copySource?: boolean; taskId?: string }; output: TablePage };
+  'table.page': { input: { connectionId: string; database: string; table: string; page: number; pageSize: number; filters: FilterRule[]; filterMode?: FilterMode; filterGroup?: FilterGroup; sort: SortRule[]; copySource?: boolean; taskId?: string }; output: TablePage };
   'table.copySourceRead': { input: TableCopySourceReadInput; output: TableCopySourceReadResult };
   'table.copySourceRelease': { input: TableCopySourceReleaseInput; output: void };
   /** 只生成并复制受限的已加载表行 INSERT，不访问数据库。 */
   'table.copyInsertSql': { input: CopyInsertSqlInput; output: void };
   /** 目标仅由服务器来源表的外键解析；值元组保留精确字符串及二进制，不以普通文本筛选代替关联。 */
-  'table.referencePage': { input: { connectionId: string; database: string; table: string; foreignKeyName: string; matchValues?: CellValue[]; page: number; pageSize: number; filters: FilterRule[]; filterMode?: FilterMode; sort: SortRule[]; taskId: string }; output: { source: TableInfo; foreignKey: ForeignKeyInfo; target: TableInfo; page: TablePage } };
+  'table.referencePage': { input: { connectionId: string; database: string; table: string; foreignKeyName: string; matchValues?: CellValue[]; page: number; pageSize: number; filters: FilterRule[]; filterMode?: FilterMode; filterGroup?: FilterGroup; sort: SortRule[]; taskId: string }; output: { source: TableInfo; foreignKey: ForeignKeyInfo; target: TableInfo; page: TablePage } };
   'table.preview': { input: { connectionId: string; database: string; table: string; changes: RowChange[] }; output: SqlPreview & { previewId?: string; previewExpiresAt?: string } };
   'table.apply': { input: { connectionId: string; database: string; table: string; changes: RowChange[]; taskId: string; previewId?: string }; output: { affectedRows: number; receiptId?: string; receiptSaved?: boolean; cleanupWarning?: boolean } };
   'schema.preview': { input: { connectionId: string; design: TableDesign }; output: SqlPreview };

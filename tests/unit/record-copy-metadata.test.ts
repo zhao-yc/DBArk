@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { createContext, runInContext } from 'node:vm';
 import ts from 'typescript';
 import { describe, expect, it, vi } from 'vitest';
-import type { TableInfo, TablePage } from '../../src/shared/contracts';
+import type { FilterGroup, TableInfo, TablePage } from '../../src/shared/contracts';
 import { tableCopyMetadataKey, type TableCopySourceReadResult } from '../../src/shared/tableCopySource';
 import { beginRecordCopyRead, consumeRecordCopyRead, recordCopyMetadataReason, recordCopySourceReady } from '../../src/renderer/recordCopySource';
 import { recordReadonlyReason, recordTargetKey } from '../../src/renderer/recordViews';
@@ -46,14 +46,14 @@ if (!activePosition || !cellClick || !selectionSync) throw Error('缺少真实�
 const code = ts.transpileModule(functions.join('\n') + '\nconst load=' + load + ';globalThis.handlers={load,copy:duplicateCurrentRow,read:readCompleteCopySource,context:getRecordContext,navigate:navigateRecordPage,invalidate:invalidateCopyRead,activePosition:(' + activePosition + '),cellClick:(' + cellClick + '),renderSelection:()=>{' + selectionSync + '},resize:(' + resize + '),disabled:()=>(' + disabled + '),environment:()=>{const copyValues=' + copyValues + ';' + environment + '}};', { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
 
 /** 仅模拟IO；旧目录id/note，新来源页声明新增hidden INVISIBLE，服务器回包由测试显式结束。 */
-async function fixture(mode: 'mismatch' | 'matching' | 'unavailable' | 'local' = 'mismatch') {
+async function fixture(mode: 'mismatch' | 'matching' | 'unavailable' | 'local' = 'mismatch', filterGroup: FilterGroup | undefined = undefined) {
   const old: TableInfo = { database: 'db', name: 'records', engine: 'InnoDB', objectKind: 'table', ddl: '', primaryKey: ['id'], editableKey: ['id'], indexes: [], foreignKeys: [], columns: [{ name: 'id', type: 'int', nullable: false, extra: 'auto_increment', generated: false, defaultValue: null, comment: '' }, { name: 'note', type: 'text', nullable: true, extra: '', generated: false, defaultValue: null, comment: '' }] };
   const fresh = structuredClone(old); fresh.columns.push({ ...fresh.columns[1], name: 'hidden', extra: 'INVISIBLE', defaultValue: '默认值' });
   const metadata = mode === 'matching' ? fresh : old, actual = mode === 'local' ? old : fresh;
   const page: TablePage = { copyMetadataKey: tableCopyMetadataKey(actual), page: 1, pageSize: 50, hasMore: false, columns: [{ key: 'id', name: 'id', type: 'int' }, { key: 'note', name: 'note', type: 'text' }], rows: [{ id: 1, note: '源记录' }], ...(mode === 'local' ? {} : { copySource: mode === 'unavailable' ? { status: 'unavailable' as const, reason: 'identity-permission' as const, missingColumns: ['hidden'] } : { status: 'ready' as const, pageRef: randomUUID(), rowRefs: [randomUUID()], expiresAt: Date.now() + 300000, metadataKey: tableCopyMetadataKey(fresh), missingColumns: ['hidden'] } }) };
   const base = { connectionId: 'conn', database: 'db', table: 'records' }, setRowsState = vi.fn(); let finish!: (result: TableCopySourceReadResult) => void;
   const pending = new Promise<TableCopySourceReadResult>(resolve => { finish = resolve; });
-  const invoke = vi.fn(async (command: string) => { if (command === 'metadata.table') return metadata; if (command === 'table.page') return page; if (command === 'table.copySourceRead') return pending; if (['connections.open', 'table.copySourceRelease', 'query.cancel'].includes(command)) return undefined; throw Error('不应调用:' + command); });
+  const invoke = vi.fn(async (command: string, _input?: unknown) => { if (command === 'metadata.table') return metadata; if (command === 'table.page') return page; if (command === 'table.copySourceRead') return pending; if (['connections.open', 'table.copySourceRelease', 'query.cancel'].includes(command)) return undefined; throw Error('不应调用:' + command); });
   const uid = vi.fn(randomUUID), record = { hasInput: () => false, dirty: false };
   // 组合后的load保留D04真实导航门；本组为普通读取，不建立跨页票据。
   const tab = { id: 'tab', ...base }, workspace = { settings: { tabs: [tab], activeTabId: tab.id }, connectionVersions: { conn: 1 }, setBusy: vi.fn(), setDirty: vi.fn() };
@@ -66,6 +66,12 @@ async function fixture(mode: 'mismatch' | 'matching' | 'unavailable' | 'local' =
     setRowsState, setError: vi.fn(), setCopyPending: vi.fn(), setDuplicateNotice: vi.fn(), setSelectedRows: vi.fn(), setSelection: vi.fn(), setExternalStale: vi.fn(), setBusy: vi.fn(), setInfo: vi.fn(), setPage: vi.fn(),
     recordReadonlyReason, recordTargetKey, tableCopyMetadataKey, recordCopyMetadataReason, recordCopySourceReady, recordDuplicateReadonlyReason, duplicateRecordDraft, beginRecordCopyRead, consumeRecordCopyRead, collectChanges, errorMessage, formatText, recordDuplicateZh, recordCopySourceZh, recordViewZh,
   });
+  // 缺省平铺与实际分组都由同一load读取；同步范围引用模拟组件本轮渲染。
+  port.filterGroup = filterGroup; port.recordPageScopeRef.current.value.filterGroup = filterGroup;
+  if (filterGroup) {
+    port.filters = [{ column: 'id', operator: '>=', value: '1' }, { column: 'note', operator: '=', value: '源记录' }, { column: 'note', operator: 'IS NULL' }];
+    port.recordPageScopeRef.current.value.filters = port.filters;
+  }
   port.setInfo = (value: TableInfo) => { port.info = value; port.recordContextRef.current.info = value; }; port.setPage = (value: TablePage) => { port.page = value; port.recordContextRef.current.loaded = !!value; };
   port.setCopyPending = vi.fn((value: boolean) => { port.blocked = value; });
   // React状态与同步引用分别观察；真实setter既接收对象，也接收函数式更新。
@@ -132,6 +138,23 @@ describe('复制补取的同坐标通知与令牌', () => {
 });
 
 describe('7660目录/页结构竞态的实际入口回归', () => {
+  it('不同括号重新load交付新分组，原分组恢复也不能消费旧复制原值', async () => {
+    const original: FilterGroup = { mode: 'all', children: [0, { mode: 'any', children: [1, 2] }] };
+    const changed: FilterGroup = { mode: 'all', children: [{ mode: 'any', children: [0, 1] }, 2] };
+    const f = await fixture('matching', original), p = f.port, pending = p.handlers.read(), oldRows = p.rowsRef.current;
+    p.filterGroup = changed; p.recordPageScopeRef.current.value.filterGroup = changed;
+    await p.handlers.load();
+    const input = f.invoke.mock.calls.find(([command]) => command === 'table.page')![1] as unknown as { filterGroup: FilterGroup; filters: unknown[] };
+    expect(input.filterGroup).toBe(changed); expect(input.filters).toBe(p.filters);
+    expect(p.copyReadIntent.current.invalidated).toBe(true);
+    const rows = p.rowsRef.current, writes = f.setRowsState.mock.calls.length;
+    expect(rows).not.toBe(oldRows);
+    p.filterGroup = original; p.recordPageScopeRef.current.value.filterGroup = original; f.render(); f.finish(); await pending;
+    expect(p.rowsRef.current).toBe(rows); expect(rows).toHaveLength(1); expect(rows[0].data).toEqual({ id: 1, note: '源记录' });
+    expect(f.setRowsState).toHaveBeenCalledTimes(writes);
+    expect(f.invoke.mock.calls.filter(([command]) => command === 'query.cancel')).toHaveLength(1);
+    expect(f.invoke.mock.calls.filter(([command]) => command === 'table.copySourceRead')).toHaveLength(1);
+  });
   it('补取占门期间D04跨页和布局都不变，重复取消只发一次且迟到完整回包不追加', async () => {
     const f = await fixture('matching'), p = f.port, originalRows = p.rowsRef.current;
     p.record.formOpen = true; p.record.draft = { rowId: originalRows[0].id }; p.recordControllerRef.current.formOpen = true;

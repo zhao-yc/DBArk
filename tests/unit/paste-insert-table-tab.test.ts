@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { createContext, runInContext } from 'node:vm';
 import ts from 'typescript';
 import { describe, expect, it, vi } from 'vitest';
-import type { TableInfo } from '../../src/shared/contracts';
+import type { FilterGroup, TableInfo } from '../../src/shared/contracts';
 import { PasteInsertIntent, preparePasteInsert } from '../../src/renderer/pasteInsert';
 import { captureRecordPagePreview, recordReadonlyReason, recordTargetKey, type RecordContext } from '../../src/renderer/recordViews';
 import { assertCopiedRecordKeys } from '../../src/renderer/recordDuplicate';
@@ -24,7 +24,7 @@ visit(tree);
 const code = ts.transpileModule(functions.join('\n') + '\nglobalThis.actions={open:openPasteInsert,stage:stagePasteInsert,close:closePasteInsert,preview:makePreview,render:()=>{const pasteInsertValues=' + scope + ';' + invalidate + '}};', { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
 
 /** 正式处理器原文运行；仅用合成工作区、状态setter和IPC端口，不启动应用/数据库。 */
-function fixture() {
+function fixture(filterGroup: FilterGroup | undefined = undefined) {
   const info: TableInfo = { database: 'db', name: 'items', objectKind: 'table', engine: 'InnoDB', ddl: '', primaryKey: ['id'], editableKey: ['id'], foreignKeys: [], indexes: [], columns: [
     { name: 'id', type: 'bigint', nullable: false, defaultValue: null, extra: 'auto_increment', generated: false, comment: '' },
     { name: 'note', type: 'text', nullable: true, defaultValue: null, extra: '', generated: false, comment: '' }
@@ -41,6 +41,9 @@ function fixture() {
     selectedRows: new Set(['old']), selectionRef: { current: { rowId: 'old', key: 'note' } }, setSelection: vi.fn(), setSelectedRows: vi.fn(), uid: vi.fn(() => 'new-' + ++id), setRows,
     setPasteInsertDialog: vi.fn(), setError: vi.fn(), setDuplicateNotice: vi.fn(), invoke, blockedRef: { current: false }, previewingRef: { current: false }, applyingRef: { current: false }, preview: null, referenceCount: { current: 0 }, loadGeneration: { current: 1 }, recordContextRef: { current }, setPreviewing: vi.fn(), setPreview: vi.fn(), loadingCount: { current: 0 }, preferencesLock: { current: false }, copyPendingRef: { current: false }
   });
+  // 真实渲染范围显式包含缺省分组；有分组场景保持叶规则与树完整对应。
+  port.filterGroup = filterGroup;
+  if (filterGroup) port.filters = [{ column: 'id', operator: '>=', value: '1' }, { column: 'note', operator: '=', value: '源记录' }, { column: 'note', operator: 'IS NULL' }];
   setRows.mockImplementation(value => { port.rowsRef.current = value; });
   runInContext(code, port); port.actions.render(); port.actions.open();
   return { port, current, info, workspace, row, original, intent: port.pasteInsertIntent.current as PasteInsertIntent, setRows, invoke };
@@ -72,6 +75,14 @@ describe('TableTab新增入口的真实处理器回放', () => {
     const f = fixture(), old = f.port.page, plan = preparePasteInsert(f.info, [['a']], ['note']);
     f.port.page = {}; f.port.actions.render(); f.port.page = old; f.port.actions.render();
     expect(() => f.port.actions.stage(f.intent, plan)).toThrow(); expect(f.port.uid).not.toHaveBeenCalled();
+  });
+  it('相同叶的括号变化经实际渲染撤销粘贴计划，恢复原分组也不复活', () => {
+    const original: FilterGroup = { mode: 'all', children: [0, { mode: 'any', children: [1, 2] }] };
+    const changed: FilterGroup = { mode: 'all', children: [{ mode: 'any', children: [0, 1] }, 2] };
+    const f = fixture(original), plan = preparePasteInsert(f.info, [['a']], ['note']), rows = f.port.rowsRef.current, selection = f.port.selectionRef.current;
+    f.port.filterGroup = changed; f.port.actions.render(); f.port.filterGroup = original; f.port.actions.render();
+    expect(() => f.port.actions.stage(f.intent, plan)).toThrow(); expect(f.port.uid).not.toHaveBeenCalled(); expect(f.setRows).not.toHaveBeenCalled();
+    expect(f.port.rowsRef.current).toBe(rows); expect(f.port.selectionRef.current).toBe(selection); expect(f.row.original).toBe(f.original); expect(f.row.data.note).toBe('旧草稿'); expect(f.invoke).not.toHaveBeenCalled();
   });
   it('显式自增键冲突经原makePreview在发送SQL预览前拒绝', async () => {
     const f = fixture(); f.port.actions.stage(f.intent, preparePasteInsert(f.info, [['7']], ['id']));

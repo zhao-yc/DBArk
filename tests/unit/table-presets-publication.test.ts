@@ -10,6 +10,8 @@ import {LocalStore} from '../../src/main/storage';
 import {ColumnsMainCapabilities} from '../../src/main/columnsMainCapabilities';
 import {TablePresetSources,applyTablePreset} from '../../src/main/tablePresets';
 import {validateTablePresetColumns} from '../../src/shared/tablePresets';
+import type {TablePresetConfiguration} from '../../src/shared/tablePresets';
+import type {FilterGroup} from '../../src/shared/contracts';
 import {createPresetDialogGuard} from '../../src/renderer/tablePresetDialogs';
 
 const dirs:string[]=[],stores:LocalStore[]=[],target={connectionId:'ram',database:'ram_db',table:'payload_table'};
@@ -70,18 +72,19 @@ function parentPort(){
  function visit(node:ts.Node){if(ts.isFunctionDeclaration(node)&&names.includes(node.name?.text??''))declarations.push(node.getText(tree));ts.forEachChild(node,visit);}visit(tree);expect(declarations).toHaveLength(names.length);
  let modal=false,records:MutationRecord[]=[];const disconnect=vi.fn();
  class Observer{observe=vi.fn();disconnect=disconnect;takeRecords(){const result=records;records=[];return result;}}
- const setters={setFilters:vi.fn(),setFilterMode:vi.fn(),setSort:vi.fn(),setPageIndex:vi.fn()};
+ let publishedGroup:FilterGroup|undefined={mode:'all',children:[0]};const validated:TablePresetConfiguration[]=[];
+ const setters={setFilters:vi.fn(),setFilterMode:vi.fn(),setFilterGroup:vi.fn((value:FilterGroup|undefined)=>{publishedGroup=value;}),setSort:vi.fn(),setPageIndex:vi.fn()};
  const document={body:{},querySelector:()=>modal?{}:null},record={hasInput:()=>false,reset:vi.fn()},confirm=vi.fn(()=>true),cancel=vi.fn();
  // 本例没有批量窗口，但提取的真实setter仍须能读取原可空意图引用；不改变原方案/ABA期待。
- const context:any=createContext({...setters,batchFillIntent:{current:null},document,record,window:{confirm},recordPages:{cancel},collectChanges:()=>[],recordViewZh:{discardPage:'RAM确认'},presetUiEpoch:{current:0},createPresetDialogGuard:(value:any)=>createPresetDialogGuard(value,Observer as any),validateTablePresetColumns,mounted:{current:true},base:target,connectionVersion:1,refreshVersion:0,info:{columns:[{name:'payload'}]},rowsRef:{current:[]},loadGeneration:{current:2},externalStale:false,activeGridEditor:{current:null},presetApplyScope:{current:null},blockedRef:{current:false},showPreferences:false,referenceCount:{current:0},referenceDialog:null});
+ const context:any=createContext({...setters,batchFillIntent:{current:null},document,record,window:{confirm},recordPages:{cancel},collectChanges:()=>[],recordViewZh:{discardPage:'RAM确认'},presetUiEpoch:{current:0},createPresetDialogGuard:(value:any)=>createPresetDialogGuard(value,Observer as any),validateTablePresetColumns:(value:TablePresetConfiguration,columns:readonly string[])=>{const next=validateTablePresetColumns(value,columns);validated.push(next);return next;},mounted:{current:true},base:target,connectionVersion:1,refreshVersion:0,info:{columns:[{name:'payload'}]},rowsRef:{current:[]},loadGeneration:{current:2},externalStale:false,activeGridEditor:{current:null},presetApplyScope:{current:null},blockedRef:{current:false},showPreferences:false,referenceCount:{current:0},referenceDialog:null});
  context.setShowPreferencesState=(value:boolean)=>{context.showPreferences=value;};context.setReferenceDialogState=(value:any)=>{context.referenceDialog=value;};
  runInContext(ts.transpileModule(declarations.join('\n')+'\nglobalThis.prepare=preparePresetApply;globalThis.apply=applyNamedPreset;globalThis.preferences=setShowPreferences;globalThis.reference=setReferenceDialog;',{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText,context);
- return {context,setters,record,confirm,cancel,disconnect,modal:(value:boolean)=>{modal=value;},mutate:(value:MutationRecord[])=>{records.push(...value);}};
+ return {context,setters,record,confirm,cancel,disconnect,validated,publishedGroup:()=>publishedGroup,modal:(value:boolean)=>{modal=value;},mutate:(value:MutationRecord[])=>{records.push(...value);}};
 }
 it.each(['dialog','preferences','reference','activity'] as const)('晚%s上下文无副作用拒绝，不重确认或清后来窗口/输入',mode=>{
  const f=parentPort();expect(f.context.prepare()).toBe(true);const resets=f.record.reset.mock.calls.length,cancels=f.cancel.mock.calls.length;
  if(mode==='dialog')f.modal(true);if(mode==='preferences')f.context.preferences(true);if(mode==='reference')f.context.reference({newContext:true});if(mode==='activity')f.context.referenceCount.current=1;
- expect(f.context.apply(configuration)).toBe(false);expect(f.setters.setFilters).not.toHaveBeenCalled();expect(f.record.reset).toHaveBeenCalledTimes(resets);expect(f.cancel).toHaveBeenCalledTimes(cancels);expect(f.confirm).not.toHaveBeenCalled();
+ expect(f.context.apply(configuration)).toBe(false);expect(f.setters.setFilters).not.toHaveBeenCalled();expect(f.setters.setFilterGroup).not.toHaveBeenCalled();expect(f.record.reset).toHaveBeenCalledTimes(resets);expect(f.cancel).toHaveBeenCalledTimes(cancels);expect(f.confirm).not.toHaveBeenCalled();
  if(mode==='preferences')expect(f.context.showPreferences).toBe(true);if(mode==='reference')expect(f.context.referenceDialog).toEqual({newContext:true});
 });
 it.each(['dialog','role','preferences','reference'] as const)('%s ABA即使恢复原值也永久拒绝',mode=>{
@@ -91,9 +94,17 @@ it.each(['dialog','role','preferences','reference'] as const)('%s ABA即使恢�
  const node={nodeType:1,getAttribute:()=>mode==='dialog'?'dialog':null,querySelector:()=>null};
  if(mode==='dialog')f.mutate([{type:'childList',addedNodes:[node],removedNodes:[]} as any,{type:'childList',addedNodes:[],removedNodes:[node]} as any]);
  if(mode==='role')f.mutate([{type:'attributes',target:node,oldValue:'dialog'} as any]);
- expect(f.context.apply(configuration)).toBe(false);expect(f.context.apply(configuration)).toBe(false);expect(f.setters.setFilters).not.toHaveBeenCalled();expect(f.disconnect).toHaveBeenCalledOnce();
+ expect(f.context.apply(configuration)).toBe(false);expect(f.context.apply(configuration)).toBe(false);expect(f.setters.setFilters).not.toHaveBeenCalled();expect(f.setters.setFilterGroup).not.toHaveBeenCalled();expect(f.disconnect).toHaveBeenCalledOnce();
 });
 it('无新增上下文仍整份应用一次，普通DOM变更不误伤',()=>{
  const f=parentPort();expect(f.context.prepare()).toBe(true);f.mutate([{type:'childList',addedNodes:[{nodeType:1,getAttribute:()=>null,querySelector:()=>null}],removedNodes:[]} as any]);
  expect(f.context.apply(configuration)).toBe(true);expect(f.context.apply(configuration)).toBe(false);expect(f.setters.setFilters).toHaveBeenCalledExactlyOnceWith(configuration.filters);
+ expect(f.setters.setFilterGroup).toHaveBeenCalledExactlyOnceWith(undefined);expect(f.publishedGroup()).toBeUndefined();
+});
+it('真实TableTab入口发布核验后的完整嵌套group，不把旧平铺或原数组另作来源',()=>{
+ const f=parentPort(),nested:TablePresetConfiguration={...configuration,filterGroup:{mode:'all',children:[{mode:'any',children:[0]}]}};
+ expect(f.context.prepare()).toBe(true);expect(f.context.apply(nested)).toBe(true);expect(f.context.apply(nested)).toBe(false);
+ expect(f.validated).toHaveLength(1);expect(f.setters.setFilterGroup).toHaveBeenCalledExactlyOnceWith(nested.filterGroup);
+ expect(f.publishedGroup()).toBe(f.validated[0].filterGroup);expect(f.publishedGroup()).not.toBe(nested.filterGroup);expect(Object.isFrozen(f.publishedGroup())).toBe(true);
+ expect(f.setters.setFilters).toHaveBeenCalledExactlyOnceWith(nested.filters);expect(f.setters.setFilterMode).toHaveBeenCalledExactlyOnceWith('all');expect(f.setters.setSort).toHaveBeenCalledExactlyOnceWith(nested.sort);expect(f.setters.setPageIndex).toHaveBeenCalledExactlyOnceWith(1);
 });

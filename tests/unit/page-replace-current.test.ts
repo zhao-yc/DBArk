@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { createContext, runInContext } from 'node:vm';
 import ts from 'typescript';
 import { describe, expect, it, vi } from 'vitest';
-import type { TableInfo } from '../../src/shared/contracts';
+import type { FilterGroup, TableInfo } from '../../src/shared/contracts';
 import { collectChanges, type DraftRow } from '../../src/renderer/dataChanges';
 import { applyPageReplacement, findPageCellsInWorker, nextPageOccurrenceAfterReplacement, pageOccurrences, pageReplaceWritable, previewPageReplacement, previewPageReplacementInWorker, type PageFindOptions, type PageOccurrence, type PageReplacement } from '../../src/renderer/pageFindReplace';
 import type { PageFindRequest, PageFindResult } from '../../src/renderer/pageFindWorkerClient';
@@ -31,8 +31,10 @@ function fixture() {
   const row: DraftRow = { id: 'uuid-1', data: { ...data, other: '已有草稿' }, original: structuredClone(data), inserted: false, deleted: false }, other: DraftRow = { ...row, id: 'uuid-2', data: { ...data, id: '9007199254740993', note: 'old' }, original: { ...data, id: '9007199254740993', note: 'old' } };
   const keys = ['note', 'other', 'nil', 'bytes', 'amount', 'generated'], state: RecordContext = { target: { connectionId: 'c', database: 'd', table: 't' }, connectionVersion: 1, generation: 3, info, loaded: true, busy: false, stale: false };
   let input = false;
-  // 本组没有打开批量填充，按生产useRef(null)提供依赖，实际选择失效函数仍原样执行。
+  // 本组没有打开批量填充；筛选分组也按生产缺省值显式提供，真实失效函数仍原样执行。
+  const filterGroup: FilterGroup | undefined = undefined;
   const parent = createContext({ batchFillIntent: { current: null }, copyReadIntent: { current: null }, invoke: vi.fn(async () => undefined), rowsRef: { current: [row, other] }, selectionRef: { current: { rowId: row.id, key: 'note' } }, record: { dirty: false, hasInput: () => input, formOpen: false }, blocked: false, page: { columns: keys.map(key => ({ key })) }, document: { querySelector: () => null }, setSelection: vi.fn(), getRecordContext: () => state, blockedRef: { current: false }, rootElement: { current: { querySelector: vi.fn(() => null) } }, recordReadonlyReason, recordTargetKey, recordViewZh, tableGridZh: text, applyPageReplacement, visibleKeys: keys, refreshVersion: 0, pageIndex: 1, pageSize: 100, sort: [], filters: [], filterMode: 'all', pageFindContext: { current: { values: [], generation: 0 } }, setRows: vi.fn(), setError: vi.fn() });
+  parent.filterGroup = filterGroup;
   parent.setRows.mockImplementation((rows: DraftRow[]) => { parent.rowsRef.current = rows; }); runInContext(parentCode, parent);
   const timers: (() => void)[] = [], worker = vi.fn(async (request: PageFindRequest): Promise<PageFindResult> => request.operation === 'find' ? { status: 'ready', operation: 'find', matches: findPageCellsInWorker(request.rows, request.keys, request.options) } : { status: 'ready', operation: 'preview', preview: previewPageReplacementInWorker(request.rows, request.keys, request.options, request.replacement!, request.info!, request.generation, request.only) });
   const snapshot = { rows: parent.rowsRef.current, keys, info, generation: parent.pageFindGeneration(), options, disabled: false, replaceDisabled: false };
@@ -84,6 +86,21 @@ describe('替换当前一次与匹配移动', () => {
 });
 
 describe('TableTab最终应用复用真实RecordContext和完整旧值', () => {
+  it('同叶不同括号改变实际查找代次，恢复原分组也不能复活旧单处计划', () => {
+    const f = fixture(), original: FilterGroup = { mode: 'all', children: [0, { mode: 'any', children: [1, 2] }] };
+    const changed: FilterGroup = { mode: 'all', children: [{ mode: 'any', children: [0, 1] }, 2] };
+    f.parent.filters = [{ column: 'id', operator: '>=', value: '1' }, { column: 'note', operator: 'LIKE', value: '%old%' }, { column: 'nil', operator: 'IS NULL' }];
+    f.parent.filterGroup = original;
+    const generation = f.parent.pageFindGeneration(), only = f.panel.occurrences[1] as PageOccurrence, token = f.parent.selectionRef.current;
+    const plan = previewPageReplacement(f.parent.rowsRef.current, f.keys, options, '新', f.info, generation, only);
+    f.parent.filterGroup = changed;
+    expect(f.parent.pageFindGeneration()).toBeGreaterThan(generation);
+    expect(() => f.parent.applyPagePlan(plan, only, token)).toThrow();
+    f.parent.filterGroup = original;
+    expect(f.parent.pageFindGeneration()).toBeGreaterThan(generation + 1);
+    expect(() => f.parent.applyPagePlan(plan, only, token)).toThrow();
+    expect(f.parent.setRows).not.toHaveBeenCalled(); expect(f.parent.rowsRef.current[0]).toBe(f.row); expect(f.row.data.note).toBe('😀old前old后old');
+  });
   it('切换选择执行真实来源失效函数，恢复坐标也只请求一次取消', () => {
     const f = fixture(), intent = { taskId: 'copy-source-task', invalidated: false, consumed: false, cancelSent: false }; f.parent.copyReadIntent.current = intent;
     f.parent.selectCurrentCell(f.other, 'note'); f.parent.selectCurrentCell(f.row, 'note');

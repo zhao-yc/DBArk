@@ -28,7 +28,7 @@ import type { Command, ResultExportData } from './contracts';
 import { validateResultExportData } from './resultExport';
 import { assertResultSqlData, resultSqlTargetSchema, resultSqlSelectionSchema } from './resultSql';
 import { resultSqlZh } from './resultSql.zh-CN';
-import { FILTER_LIMITS, validateFilterRules, filterRuleSchema as filterRule, sortRulesSchema } from './filtering';
+import { FILTER_LIMITS, validateFilterGroup, assertFilterGroupInput, filterGroupSchema, filterRuleSchema as filterRule, sortRulesSchema } from './filtering';
 import { tablePresetListSchema, tablePresetSaveSchema, tablePresetSelectSchema, tablePresetApplySchema } from './tablePresets';
 import { queryResultPresetListSchema, queryResultPresetSaveSchema, queryResultPresetSelectSchema, queryResultPresetRenameSchema } from './queryResultPresets';
 import { queryParameterTypes, validateQueryParameters } from './queryParameters';
@@ -108,10 +108,15 @@ const resultExportData = z.custom<ResultExportData>().superRefine((value, contex
   catch (error) { context.addIssue({ code: 'custom', message: error instanceof Error ? error.message : '结果导出数据无效' }); }
 });
 /** IPC 同时约束单项形状及整个集合体积，错误由共享校验返回中文说明。 */
-const tablePage = z.object({ ...target, page: z.number().int().min(1).max(10000000), pageSize: z.number().int().min(1).max(1000), filters: z.array(filterRule).max(FILTER_LIMITS.conditions), filterMode: z.enum(['all','any']).optional(), sort: sortRulesSchema }).strict().superRefine((input, context) => {
-  try { validateFilterRules(input.filters, input.filterMode); }
+const tablePage = z.object({ ...target, page: z.number().int().min(1).max(10000000), pageSize: z.number().int().min(1).max(1000), filters: z.array(filterRule).max(FILTER_LIMITS.conditions), filterMode: z.enum(['all','any']).optional(), filterGroup:filterGroupSchema.optional(), sort: sortRulesSchema }).strict().superRefine((input, context) => {
+  try { validateFilterGroup(input.filters, input.filterMode, input.filterGroup); }
   catch (error) { context.addIssue({ code: 'custom', path: ['filters'], message: error instanceof Error ? error.message : '筛选条件无效' }); }
 });
+/** 构成最终分页schema后再包原始输入门，safeExtend仍共用同一严格字段与交叉校验。 */
+function guardedTablePage<S extends z.ZodType>(schema:S){return z.unknown().transform((input,context):z.output<S>=>{
+  try{assertFilterGroupInput(input);return schema.parse(input);}
+  catch(reason){context.addIssue({code:'custom',message:reason instanceof Error?reason.message:'筛选条件无效'});return z.NEVER;}
+});}
 /** 先检查原输入，再交给对象schema；解析后的自有字段无法证明原型来源。 */
 const settingsRawWriteSchema = z.unknown().superRefine((raw, context) => {
   if (!raw || typeof raw !== 'object') return;
@@ -176,14 +181,14 @@ export const commandSchemas: Record<Command, z.ZodType> = {
   'query.confirmInsertExport': queryInsertConfirmationSchema,
   'query.cancel': z.object({ taskId: id }).strict(),
   'query.transaction': z.object({ sessionId: id, action: z.enum(['begin','commit','rollback']) }).strict(),
-  'table.page': tablePage.safeExtend({ copySource: z.boolean().optional(), taskId: z.string().uuid().optional() }).superRefine((input, context) => {
+  'table.page': guardedTablePage(tablePage.safeExtend({ copySource: z.boolean().optional(), taskId: z.string().uuid().optional() }).superRefine((input, context) => {
     if (input.copySource && !input.taskId || input.taskId && !input.copySource) context.addIssue({ code: 'custom', message: '来源表页必须同时显式启用copySource并提供独立任务UUID' });
-  }),
+  })),
   'table.copySourceRead': tableCopySourceReadSchema,
   'table.copySourceRelease': tableCopySourceReleaseSchema,
-  'table.referencePage': tablePage.safeExtend({ foreignKeyName: name, matchValues: z.array(cell).optional(), taskId: id }).superRefine((input, context) => {
+  'table.referencePage': guardedTablePage(tablePage.safeExtend({ foreignKeyName: name, matchValues: z.array(cell).optional(), taskId: id }).superRefine((input, context) => {
     if (input.matchValues !== undefined) try { validateReferenceValues(input.matchValues); } catch (error) { context.addIssue({ code: 'custom', path: ['matchValues'], message: error instanceof Error ? error.message : '关联值无效' }); }
-  }),
+  })),
   'table.applyReceipt.list': tableApplyReceiptListSchema, 'table.applyReceipt.detail': z.object({ operationId: z.uuid() }).strict(),
   'table.preview': z.object({ ...target, changes }).strict(), 'table.apply': z.object({ ...target, changes, taskId: id, previewId: z.uuid().optional() }).strict(),
   'schema.preview': z.object({ connectionId: id, design: z.object({ database: name, name, originalName: name.optional(), engine: name, charset: name, comment: z.string(), columns: z.array(z.object({ name, originalName: name.optional(), type: name, nullable: z.boolean(), defaultValue: z.string().nullable().optional(), autoIncrement: z.boolean(), comment: z.string() }).strict()).min(1).max(1000), indexes: z.array(index), foreignKeys: z.array(foreignKey) }).strict() }).strict(),

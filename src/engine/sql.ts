@@ -1,8 +1,8 @@
 import { tableCreateDraftSchema, type TableCreateDraft, type TableCreatePrefixFacts } from '../shared/tableCreate';
 import { planTableCreateIndexes } from './tableCreateIndexPlan';
-import type { CellValue, ColumnInfo, DataRow, FilterMode, FilterRule, RowChange, SortRule, SqlPreview, TableDesign, TableInfo } from '../shared/contracts';
+import type { CellValue, ColumnInfo, DataRow, FilterGroup, FilterMode, FilterRule, RowChange, SortRule, SqlPreview, TableDesign, TableInfo } from '../shared/contracts';
 import { tableCreateOnUpdateSql, type TableCreateTimeColumn } from '../shared/tableCreateOnUpdate';
-import { validateFilterRules } from '../shared/filtering';
+import { copyFilterRules, validateFilterGroup } from '../shared/filtering';
 import { validateReferenceValues } from '../shared/references';
 
 /** 标识符始终作为标识符引用，不允许空值、NUL 或超过 MySQL 限制的名称。 */
@@ -208,15 +208,16 @@ function filterParameter(column: ColumnInfo, value: string, pattern: boolean): s
 }
 
 /** 排序与筛选严格使用元数据白名单，值独立绑定；条件与整组均加括号保证组合语义。 */
-export function buildPageSql(info: TableInfo, page: number, pageSize: number, filters: FilterRule[], sort: SortRule[], filterMode: FilterMode = 'all'): { sql: string; params: CellValue[] } {
+export function buildPageSql(info: TableInfo, page: number, pageSize: number, filters: FilterRule[], sort: SortRule[], filterMode: FilterMode = 'all', filterGroup?:FilterGroup): { sql: string; params: CellValue[] } {
   if (!Number.isSafeInteger(page) || page < 1 || page > 10000000 || !Number.isSafeInteger(pageSize) || pageSize < 1 || pageSize > 1000 || !Number.isSafeInteger((page - 1) * pageSize)) throw new Error('分页参数无效，页号范围为 1～10000000，页大小范围为 1～1000');
-  validateFilterRules(filters, filterMode);
+  const admitted=copyFilterRules(filters),group=validateFilterGroup(admitted,filterMode,filterGroup);
   if (!Array.isArray(sort) || sort.length > 20) throw new Error('排序规则不能超过 20 条');
   const columns = new Map(info.columns.map(column => [column.name, column]));
   const params: CellValue[] = [];
   // 停用只排除谓词及参数；目录校验和总预算仍覆盖保留的所有条件。
-  for (const filter of filters) if (!columns.has(filter.column)) throw new Error(`未知筛选字段：${filter.column}`);
-  const clauses = filters.filter(filter => filter.enabled !== false).map(filter => {
+  for (const filter of admitted) if (!columns.has(filter.column)) throw new Error(`未知筛选字段：${filter.column}`);
+  /** 叶参数在实际遍历到该叶时才绑定，嵌套分组保持DFS顺序及原精确占位符。 */
+  const clause = (filter:FilterRule):string => {
     const metadata = columns.get(filter.column);
     if (!metadata) throw new Error(`未知筛选字段：${filter.column}`);
     const column = identifier(filter.column);
@@ -226,14 +227,21 @@ export function buildPageSql(info: TableInfo, page: number, pageSize: number, fi
     if (filter.operator === 'IN' || filter.operator === 'NOT IN') return `${column} ${filter.operator} (${filter.values!.map(parameter).join(', ')})`;
     if (filter.operator === 'BETWEEN') return `${column} BETWEEN ${parameter(filter.values![0])} AND ${parameter(filter.values![1])}`;
     return `${column} ${filter.operator} ${parameter(filter.value ?? '')}`;
-  });
+  };
+  /** 全停用子树省略，不能让空OR变成真或用缺省谓词放宽其它分支。 */
+  function grouped(node:FilterGroup):string|undefined{
+    const children=node.children.map(child=>typeof child==='number'?(admitted[child].enabled===false?undefined:`(${clause(admitted[child])})`):grouped(child)).filter((value):value is string=>value!==undefined);
+    return children.length?'('+children.join(node.mode==='all'?' AND ':' OR ')+')':undefined;
+  }
+  // 未提供group时沿用旧字节模板，旧平铺参数仍严格按filters顺序。
+  const where=group?grouped(group):(()=>{const clauses=admitted.filter(filter=>filter.enabled!==false).map(clause);return clauses.length?'('+clauses.map(clause=>`(${clause})`).join(filterMode==='all'?' AND ':' OR ')+')':undefined;})();
   // 非唯一排序补上可靠行键作为并列项顺序，避免跳页时相同排序值的行随机换位。
   const order = [...sort, ...info.editableKey.filter(column => !sort.some(rule => rule.column === column)).map(column => ({ column, direction: 'ASC' as const }))];
   const orderSql = order.map(rule => {
     if (!columns.has(rule.column) || !['ASC', 'DESC'].includes(rule.direction)) throw new Error('排序字段或方向无效');
     return `${identifier(rule.column)} ${rule.direction}`;
   }).join(', ');
-  return { sql: `SELECT * FROM ${qualified(info.database, info.name)}${clauses.length ? ' WHERE (' + clauses.map(clause => `(${clause})`).join(filterMode === 'all' ? ' AND ' : ' OR ') + ')' : ''}${orderSql ? ' ORDER BY ' + orderSql : ''} LIMIT ${pageSize + 1} OFFSET ${(page - 1) * pageSize}`, params };
+  return { sql: `SELECT * FROM ${qualified(info.database, info.name)}${where?' WHERE '+where:''}${orderSql ? ' ORDER BY ' + orderSql : ''} LIMIT ${pageSize + 1} OFFSET ${(page - 1) * pageSize}`, params };
 }
 
 /** 全旧值比较避免丢失更新；唯一键是可靠定位的必要条件，不能仅凭 LIMIT 1 写入。 */

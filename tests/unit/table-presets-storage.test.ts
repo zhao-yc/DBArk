@@ -17,6 +17,28 @@ const packet=(snapshot:TablePresetStoredSnapshot)=>({...target,source:snapshot.s
 async function fixture(){const dir=mkdtempSync(join(tmpdir(),'dbark-preset-'));dirs.push(dir);const file=join(dir,'local.sqlite'),store=await LocalStore.open(file,wasm,protector);store.saveConnection(profile);return {file,store};}
 afterEach(()=>{for(const dir of dirs.splice(0))rmSync(dir,{recursive:true,force:true});});
 describe('命名方案真实SQLite、CAS与原子持久化',()=>{
+ it('真实SQLite关闭重开保留嵌套组与停用原文；旧缺省不补group，读取仍核CAS',async()=>{
+  const {file,store}=await fixture(),nested:TablePresetConfiguration={...config,filters:config.filters.map((rule,index)=>({...rule,...(index===1?{enabled:false}:{})})),filterGroup:{mode:'any',children:[{mode:'all',children:[1]},0]}};
+  const grouped=store.saveTablePreset({...packet(store.tablePresets(target)),name:'完整嵌套组',configuration:nested});
+  const saved=store.saveTablePreset({...packet(grouped),name:'旧平铺缺省',configuration:config});store.close();
+  const reopened=await LocalStore.open(file,wasm,protector);
+  try{
+   const current=reopened.tablePresets(target),entry=current.entries.find(item=>item.name==='完整嵌套组')!,legacy=current.entries.find(item=>item.name==='旧平铺缺省')!;
+   expect(current.entries).toEqual(saved.entries);expect(entry.id).toBe(grouped.entries[0].id);expect(entry.configuration).toEqual(nested);expect(legacy.configuration).toEqual(config);expect(Object.hasOwn(legacy.configuration,'filterGroup')).toBe(false);
+   const read=reopened.selectedTablePreset({...packet(current),id:entry.id});expect(read).toEqual(nested);expect(Object.isFrozen(read.filterGroup)).toBe(true);expect(read.filters[1].enabled).toBe(false);
+   expect(()=>reopened.selectedTablePreset({...packet(current),expectedRevision:grouped.revision,id:entry.id})).toThrow('变化');
+   expect(reopened.selectedTablePreset({...packet(current),id:legacy.id})).toEqual(config);
+  }finally{reopened.close();}
+ });
+ it('嵌套组缺停用叶及真实写盘失败均保留原文档和原文件，不借失败产生新CAS',async()=>{
+  const {file,store}=await fixture(),nested:TablePresetConfiguration={...config,filters:config.filters.map((rule,index)=>({...rule,...(index===1?{enabled:false}:{})})),filterGroup:{mode:'any',children:[{mode:'all',children:[1]},0]}};
+  const current=store.saveTablePreset({...packet(store.tablePresets(target)),name:'保留基线',configuration:config}),before=readFileSync(file);
+  try{
+   expect(()=>store.saveTablePreset({...packet(current),name:'漏叶组',configuration:{...nested,filterGroup:{mode:'any',children:[0]}}})).toThrow('恰好出现一次');expect(store.tablePresets(target)).toEqual(current);expect(readFileSync(file)).toEqual(before);
+   mkdirSync(file+'.tmp');expect(()=>store.saveTablePreset({...packet(current),name:'写盘失败组',configuration:nested})).toThrow('未保存');expect(store.tablePresets(target)).toEqual(current);expect(readFileSync(file)).toEqual(before);
+   rmSync(file+'.tmp',{recursive:true});const saved=store.saveTablePreset({...packet(current),name:'成功嵌套组',configuration:nested});expect(saved.revision).toBe(current.revision+1);expect(saved.entries.map(item=>item.name)).toEqual(['保留基线','成功嵌套组']);expect(saved.entries[1].configuration).toEqual(nested);
+  }finally{store.close();}
+ });
  it('停用条件、原始集合及排序真实落盘后重启保持',async()=>{
   const {file,store}=await fixture(),configuration={...config,filters:config.filters.map(rule=>({...rule,enabled:false}))};
   const saved=store.saveTablePreset({...packet(store.tablePresets(target)),name:'保留停用条件',configuration});store.close();

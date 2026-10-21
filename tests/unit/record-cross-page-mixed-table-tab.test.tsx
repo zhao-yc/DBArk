@@ -8,7 +8,7 @@ import { tableGridZh } from '../../src/renderer/locales/tableGrid.zh-CN';
 import { maxTablePage } from '../../src/renderer/tableFilters';
 import { duplicateRecordDraft, recordDuplicateReadonlyReason } from '../../src/renderer/recordDuplicate';
 import { recordDuplicateZh } from '../../src/renderer/locales/recordDuplicate.zh-CN';
-import type { TableInfo } from '../../src/shared/contracts';
+import type { FilterGroup, TableInfo } from '../../src/shared/contracts';
 import { recordCopyMetadataReason, recordCopySourceReady } from '../../src/renderer/recordCopySource';
 import { tableCopyMetadataKey } from '../../src/shared/tableCopySource';
 import { recordTargetKey } from '../../src/renderer/recordViews';
@@ -39,10 +39,10 @@ function visit(node: ts.Node) {
 visit(tree);
 
 /** 使用实际导航 helper 和生产 TableTab 方法，不另写一套跨页或选择令牌判断。 */
-function fixture() {
+function fixture(filterGroup: FilterGroup | undefined = undefined) {
   const rows = [{ id: '原页本地UUID', data: { id: '50', text: '原值' }, original: { id: '50', text: '原值' }, inserted: false, deleted: false }];
   const base = { connectionId: '连接', database: '库', table: '表' }, tab = { id: '活动页', ...base };
-  const value = { target: base, connectionVersion: 4, refreshVersion: 2, pageSize: 50, filters: [{ column: 'id', operator: '>=', value: '1' }], filterMode: 'all', sort: [{ column: 'id', direction: 'ASC' }] };
+  const value = { target: base, connectionVersion: 4, refreshVersion: 2, pageSize: 50, filters: [{ column: 'id', operator: '>=', value: '1' }, ...(filterGroup ? [{ column: 'text', operator: '=', value: '新值一' }, { column: 'text', operator: 'IS NULL' }] : [])], filterMode: 'all', filterGroup, sort: [{ column: 'id', direction: 'ASC' }] };
   const workspace = { settings: { tabs: [tab], activeTabId: tab.id }, connectionVersions: { [base.connectionId]: 4 }, setBusy: vi.fn() };
   const gate = new RecordPageNavigation(), reset = vi.fn(), select = vi.fn((_: string, activate: () => void) => { activate(); return true; });
   let sequence = 0;
@@ -124,6 +124,27 @@ describe('D04与现有TableTab工具的混合正负向接线', () => {
     expect(calls.map((call: unknown[]) => call[0])).toEqual(['connections.open', 'metadata.table', 'table.page', 'connections.open', 'metadata.table', 'table.page']);
     expect(calls.filter((call: unknown[]) => call[0] === 'table.page').map((call: [string, object]) => call[1])).toEqual([2, 1].map(page => ({ ...c.base, page, pageSize: 50, filters: c.filters, filterMode: 'all', sort: c.sort, copySource: true, taskId: page === 2 ? '新页本地UUID-1' : '新页本地UUID-3' })));
     expect(c.window.confirm).not.toHaveBeenCalled(); expect(c.applyPageReplacement).not.toHaveBeenCalled();
+  });
+  it('嵌套范围通过原load完整交付分组，成功回包才能兑换跨页选择', async () => {
+    const group: FilterGroup = { mode: 'all', children: [0, { mode: 'any', children: [1, 2] }] };
+    const f = fixture(group), c = f.context, scope = c.getRecordPageContext().scope;
+    f.navigate(); await f.load(); f.consume();
+    const input = c.invoke.mock.calls.find(([command]: [string]) => command === 'table.page')![1];
+    expect(input).toMatchObject({ ...c.base, page: 2, pageSize: 50, filters: c.filters, filterMode: 'all', filterGroup: group, sort: c.sort, copySource: true });
+    expect(input.filterGroup).toBe(group); expect(c.getRecordPageContext().scope).toBe(scope);
+    expect(f.select).toHaveBeenCalledExactlyOnceWith('新页本地UUID-2', expect.any(Function)); expect(f.gate.pending).toBe(false);
+  });
+  it('同叶不同括号的范围经过实际load也不兑换旧跨页票据', async () => {
+    const original: FilterGroup = { mode: 'all', children: [0, { mode: 'any', children: [1, 2] }] };
+    const changed: FilterGroup = { mode: 'all', children: [{ mode: 'any', children: [0, 1] }, 2] };
+    const f = fixture(original), c = f.context, scope = c.getRecordPageContext().scope;
+    f.navigate(); c.filterGroup = changed; c.recordPageScopeRef.current.value.filterGroup = changed;
+    expect(c.getRecordPageContext().scope).not.toBe(scope);
+    await f.load();
+    expect(c.invoke.mock.calls.find(([command]: [string]) => command === 'table.page')![1].filterGroup).toBe(changed);
+    c.filterGroup = original; c.recordPageScopeRef.current.value.filterGroup = original; f.consume();
+    expect(c.getRecordPageContext().scope).toBe(scope); expect(f.select).not.toHaveBeenCalled();
+    expect(c.selectionRef.current).toBeUndefined(); expect(f.gate.pending).toBe(false);
   });
   it.each(['previewing', 'preview', 'busy', 'referenceBusy', 'applying', 'preferencesPending', '布局面板', '模态', '外键读取'])('%s阻止跨页且四种表工具维持独立busy保护', kind => {
     const f = fixture(), c = f.context;

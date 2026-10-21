@@ -37,3 +37,9 @@ Root 复读本轮 `.cache/query-result-selected-filter-ui-local-20261022/manifes
 ## 边界
 
 本轮为本机 Windows 源码客户端及指定 MySQL 8.4 实库。混合 NULL／空串、预算和旧回调反例为真实 React 控制器 RAM 证据；安装包、macOS、其它版本及 10 万行极限界面耗时另验。新 CI 另行回收，暂不发布，不增加完整 Navicat 工作包计数。
+
+## 后续 CI 的准确来源
+
+文档头 `3a53efb87b9d97da347463f2f5bc587cb0e71948` 的 [run 39675410751](https://github.com/zhao-yc/DBArk/actions/runs/39675410751) 已读回：Linux job `119483853313` 类型、完整单元、构建成功，625 文件通过，12103 项通过、10 项平台跳过，单元 183.57 秒，Vite 26.61 秒。其产品树与上述实测相同，修复后的 Linux 平台夹具已实际通过。
+
+arm64 job `119483853774` 为 cancelled，元数据为 runner_id=0、runner_name 为空、steps 为空；joblogs 返回 `404 BlobNotFound`，没有可确认的实际步骤或测试失败。取消原因、动作及执行阶段未知，不能把日志不存在当作取消原因。Windows／Intel 本次读回仍在运行；没有重跑原 job。原材料在 `.cache/ci-3a53efb8-readback-20261022`，Linux 解码日志 SHA-256 `45ed5bfc5515b3844751929d67cd5df7a6de1df8a0ba6d1dd1b46033d191e8a9`，arm 状态观察 JSON `2894167bdff52d874ef82888b7b9cd8d056ea8d56df367e6810fe6aef1b9c38a`。该 CI 不包含后续表数据嵌套筛选。

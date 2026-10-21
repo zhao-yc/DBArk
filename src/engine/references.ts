@@ -1,4 +1,4 @@
-import type { CellValue, ColumnInfo, FilterMode, FilterRule, ForeignKeyInfo, SortRule, TableInfo } from '../shared/contracts';
+import type { CellValue, ColumnInfo, FilterGroup, FilterMode, FilterRule, ForeignKeyInfo, SortRule, TableInfo } from '../shared/contracts';
 import { referenceColumn, validateReferenceValues } from '../shared/references';
 import { buildPageSql, exportLiteral, identifier, inlineParameters, qualified, typedCellPlaceholder } from './sql';
 
@@ -97,9 +97,9 @@ function referenceLiteral(column: ColumnInfo, value: Exclude<CellValue, null>): 
 }
 
 /** 在普通分页 SQL 的筛选组外追加关联条件，ANY 筛选不能放宽关联范围。 */
-export function buildReferencePageSql(target: TableInfo, foreignKey: ForeignKeyInfo, matchValues: CellValue[] | undefined, page: number, pageSize: number, filters: FilterRule[], sort: SortRule[], filterMode?: FilterMode): string {
+export function buildReferencePageSql(target: TableInfo, foreignKey: ForeignKeyInfo, matchValues: CellValue[] | undefined, page: number, pageSize: number, filters: FilterRule[], sort: SortRule[], filterMode?: FilterMode, filterGroup?:FilterGroup): string {
   if (!target.editableKey.length || !target.indexes.some(index => index.unique && index.columns.length === target.editableKey.length && index.columns.every((name, index) => referenceColumn(target, name).name === target.editableKey[index])) || target.editableKey.some(name => referenceColumn(target, name).nullable)) throw new Error('关联目标表没有可靠的非空唯一键，暂不支持稳定分页，请使用 SQL 查询查看');
-  const statement = buildPageSql(target, page, pageSize, filters, sort, filterMode);
+  const statement = buildPageSql(target, page, pageSize, filters, sort, filterMode, filterGroup);
   const sql = inlineParameters(statement.sql, statement.params);
   if (matchValues === undefined) return sql;
   validateReferenceValues(matchValues);

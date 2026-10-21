@@ -29,6 +29,14 @@ const info: TableInfo = { database: '库', name: '记录', objectKind: 'table', 
 const recordContext: RecordContext = { target: scopeValue.target, generation: 10, connectionVersion: 2, info, loaded: true, busy: false, stale: false };
 
 describe('记录表单跨页意图', () => {
+  it('同叶、同根模式但不同括号仍是新范围，不能兑换原页自动选行；旧缺省范围保持原序列化', () => {
+    const filters = [{ column: 'id', operator: '=' as const, value: '1' }, { column: 'id', operator: '=' as const, value: '2' }, { column: 'payload', operator: 'IS NOT NULL' as const }];
+    const first = recordPageScope({ ...scopeValue, filters, filterGroup: { mode: 'all', children: [2, { mode: 'any', children: [0, 1] }] } });
+    const changed = recordPageScope({ ...scopeValue, filters, filterGroup: { mode: 'all', children: [0, { mode: 'any', children: [1, 2] }] } });
+    expect(first).not.toBe(changed); expect(recordPageScope({ ...scopeValue, filterGroup: undefined })).toBe(scope);
+    const gate = new RecordPageNavigation(); expect(begin(gate, { ...context, scope: first }).kind).toBe('ready');
+    expect(gate.claim({ ...context, scope: changed, page: 2, generation: 12 })).toBeUndefined(); expect(gate.pending).toBe(false);
+  });
   it('51条/50分页正向选新页首条，反向选前页末条；一次加载只兑换一次', () => {
     const { gate, ticket, loaded } = loading(), next = rows(51, 1);
     expect(gate.complete(ticket, loaded, next)).toBe(true);

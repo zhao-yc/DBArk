@@ -10,6 +10,7 @@ import { tableSortZh as sortText } from '../../src/renderer/locales/tableSort.zh
 import { recordViewZh } from '../../src/renderer/locales/recordViews.zh-CN';
 import { buildPageSql } from '../../src/engine/sql';
 import { tableFilterEnabledZh as enabledText } from '../../src/renderer/locales/tableFilterEnabled.zh-CN';
+import { tableFilterGroupsZh as groupText } from '../../src/renderer/locales/tableFilterGroups.zh-CN';
 
 const grid = vi.hoisted(() => ({ props: null as any, rows: [] as DraftRow[] }));
 // 只替换网格/Monaco外界渲染端口；TableTab、类型编辑器、弹窗、store与历史运行生产代码。
@@ -81,6 +82,67 @@ async function applyCondition() { const form = document.querySelector('form[clas
 function field(label: string) { const node = document.querySelector(`[aria-label="${label}"]`); expect(node).not.toBeNull(); return node!; }
 /** 只取得旧React按钮闭包用于迟到投递反例，不改产品状态。 */
 function callback(node: MemoryNode): Function { const key = Object.keys(node).find(key => key.startsWith('__reactProps$')); if (!key) throw Error('没有真实React事件'); return (node as any)[key].onClick; }
+
+/** 现有条件沿实际单格入口建立，不向父组件私有状态注入协议。 */
+async function prepareGroupRules() {
+  for (const [row, key] of [[0, 'id'], [2, 'id'], [0, 'num']] as const) { await selectCell(row, key); await click(text.equal); await applyCondition(); }
+}
+/** 下拉目标读取真实option标签，稳定节点ID不与条件序号或显示路径混用。 */
+async function moveGroupRule(index: number, path = '1') {
+  const select = field(groupText.destination(index)), target = select.querySelectorAll('option').find(option => option.textContent === groupText.group(path));
+  expect(target).toBeDefined(); await chooseSort(groupText.destination(index), target!.value);
+}
+/** 草稿期间只组合括号，不向RAM IPC发送分页或写SQL。 */
+async function stageNestedGroup() {
+  await click(groupText.open); await click(groupText.addGroup()); await moveGroupRule(1); await moveGroupRule(2);
+}
+
+describe('表页嵌套筛选的实际父组件接线（RAM分页端口）', () => {
+  it('独立组合草稿显式应用才从第一页重查，保留完整多列排序和精确参数顺序', async () => {
+    const info = await mount(); await prepareGroupRules();
+    await act(async () => grid.props.onSortColumnsChange([{ columnKey: 'num', direction: 'DESC' }, { columnKey: 'id', direction: 'ASC' }]));
+    const count = pages.length; await stageNestedGroup(); expect(pages).toHaveLength(count);
+    await click(groupText.apply); expect(pages).toHaveLength(count + 1);
+    const input = pages.at(-1); expect(input).toMatchObject({ page: 1, filterMode: 'all', filterGroup: { mode: 'all', children: [2, { mode: 'any', children: [0, 1] }] }, sort: [{ column: 'num', direction: 'DESC' }, { column: 'id', direction: 'ASC' }] });
+    const built = buildPageSql(info, input.page, input.pageSize, input.filters, input.sort, input.filterMode, input.filterGroup);
+    expect(built.params).toEqual(['0.00000000000000000000001', '1', '3']); expect(built.sql).toContain(' OR '); expect(built.sql).toContain(' AND ');
+    expect(document.querySelector(`[aria-label="${groupText.structure}"]`)!.textContent).toBe('(条件3 且 (条件1 或 条件2))'); expect(previews).toEqual([]); expect(commands.includes('table.apply')).toBe(false);
+  });
+  it('取消不改第三页或原筛选；确认应用新组合才回第一页', async () => {
+    await mount(); await prepareGroupRules(); const jump = field(zh.table.pageJumpLabel);
+    await act(async () => { jump.value = '3'; jump.dispatchEvent(new MemoryEvent('input')); });
+    await act(async () => document.querySelector('form[class="page-jump"]')!.dispatchEvent(new MemoryEvent('submit'))); expect(pages.at(-1).page).toBe(3);
+    const count = pages.length; await stageNestedGroup(); await click(groupText.cancel); expect(pages).toHaveLength(count); expect(pages.at(-1).filterGroup).toBeUndefined();
+    await stageNestedGroup(); await click(groupText.apply); expect(pages.at(-1).page).toBe(1); expect(pages).toHaveLength(count + 1);
+  });
+  it('启停、删除重编号、新增和清空均不平铺已有括号，全停用子组不放宽其它条件', async () => {
+    const info = await mount(); await prepareGroupRules(); await stageNestedGroup(); await click(groupText.apply);
+    await enableRule(1, false); await enableRule(2, false); const input = pages.at(-1);
+    expect(input.filterGroup).toEqual({ mode: 'all', children: [2, { mode: 'any', children: [0, 1] }] });
+    expect(buildPageSql(info, 1, 50, input.filters, [], input.filterMode, input.filterGroup).params).toEqual(['0.00000000000000000000001']);
+    await click(zh.table.filterRemoveCondition.replace('{0}', '1')); expect(pages.at(-1).filterGroup).toEqual({ mode: 'all', children: [1, { mode: 'any', children: [0] }] });
+    await selectCell(0, 'note'); await click(text.equal); await applyCondition(); expect(pages.at(-1).filterGroup).toEqual({ mode: 'all', children: [1, { mode: 'any', children: [0] }, 2] });
+    await click(zh.common.clearAll); expect(pages.at(-1).filters).toEqual([]); expect(pages.at(-1).filterGroup).toBeUndefined();
+  });
+  it('拒绝丢弃表数据草稿时不分页且组合草稿保留，明确同意后只读取一次', async () => {
+    await mount(); await prepareGroupRules(); const originalConfirm = window.confirm, confirm = vi.fn(() => false); window.confirm = confirm;
+    try {
+      const first = grid.rows[0]; await act(async () => grid.props.onRowsChange([{ ...first, data: { ...first.data, note: '原数据草稿' } }, ...grid.rows.slice(1)]));
+      const count = pages.length; await stageNestedGroup(); await click(groupText.apply); expect(confirm).toHaveBeenCalledWith(recordViewZh.discardPage); expect(pages).toHaveLength(count); expect(grid.rows[0].data.note).toBe('原数据草稿'); expect(document.body.textContent).toContain(groupText.declined);
+      confirm.mockReturnValue(true); await click(groupText.apply); expect(pages).toHaveLength(count + 1); expect(pages.at(-1).filterGroup).toBeDefined(); expect(grid.rows[0].data.note).toBe('原1');
+    } finally { window.confirm = originalConfirm; }
+  });
+  it.each(['connection', 'tab', 'job', 'modal'] as const)('%s变化后旧分组不能复活，关闭重开才可创建新草稿', async kind => {
+    await mount(); await prepareGroupRules(); await stageNestedGroup(); const old = callback(button(groupText.apply)), count = pages.length;
+    await act(async () => {
+      if (kind === 'connection') { store.setState({ connectionVersions: { 连接: 2 } }); store.setState({ connectionVersions: { 连接: 1 } }); }
+      if (kind === 'tab') { const settings = store.getState().settings; store.setState({ settings: { ...settings, activeTabId: '别的标签' } }); store.setState({ settings }); }
+      if (kind === 'job') { store.getState().setBusy('表页', true); store.getState().setBusy('表页', false); }
+      if (kind === 'modal') { const modal = document.createElement('div'); modal.setAttribute('role', 'dialog'); document.body.appendChild(modal); old(); modal.parentNode!.removeChild(modal); }
+    });
+    await act(async () => old()); expect(pages).toHaveLength(count); await click(groupText.cancel); await stageNestedGroup(); await act(async () => old()); expect(pages).toHaveLength(count); await click(groupText.apply); expect(pages).toHaveLength(count + 1);
+  });
+});
 
 describe('真实React表页按单元格预填全表筛选RAM', () => {
   it('选择精确小数先带入可审阅草稿，显式添加才参数化请求；修改不进入写SQL', async () => {

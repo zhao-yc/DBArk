@@ -1,13 +1,18 @@
 import { z } from 'zod';
-import { filterRuleSchema, sortRulesSchema, validateFilterRules, FILTER_LIMITS } from './filtering';
+import { filterRuleSchema, filterGroupSchema, assertFilterGroupInput, sortRulesSchema, validateFilterGroup, FILTER_LIMITS } from './filtering';
 import { tablePreferenceTargetSchema } from './tablePreferences';
 
 export const tablePresetLimits = { name:80, perTarget:20, targets:500, entries:500, entryBytes:65536, totalBytes:4*1024*1024 } as const;
 const revision = z.number().int().min(0).max(Number.MAX_SAFE_INTEGER-1);
 const digest = z.string().regex(/^[a-f0-9]{64}$/u);
-export const tablePresetConfigurationSchema = z.object({ filters:z.array(filterRuleSchema).max(FILTER_LIMITS.conditions), filterMode:z.enum(['all','any']), sort:sortRulesSchema }).strict().superRefine((value,context)=>{
-  try { validateFilterRules(value.filters,value.filterMode); }
+const configurationShape = z.object({ filters:z.array(filterRuleSchema).max(FILTER_LIMITS.conditions), filterMode:z.enum(['all','any']), filterGroup:filterGroupSchema.optional(), sort:sortRulesSchema }).strict().superRefine((value,context)=>{
+  try { validateFilterGroup(value.filters,value.filterMode,value.filterGroup); }
   catch(reason){context.addIssue({code:'custom',message:reason instanceof Error?reason.message:'筛选条件无效'});}
+});
+/** 先核原始自有分组，不允许对象schema把继承或访问器变成缺省平铺；旧缺项不补树。 */
+export const tablePresetConfigurationSchema = z.unknown().transform((input,context):z.output<typeof configurationShape>=>{
+  try { assertFilterGroupInput(input);return configurationShape.parse(input); }
+  catch(reason){context.addIssue({code:'custom',message:reason instanceof Error?reason.message:'筛选条件无效'});return z.NEVER;}
 });
 const name = z.string().min(1).max(tablePresetLimits.name).refine(value=>value.trim().length>0&&!/[\u0000-\u001f\u007f]/u.test(value),'方案名不能为空或包含控制字符');
 const entry = z.object({id:z.string().uuid(),name,connectionDigest:digest,configuration:tablePresetConfigurationSchema}).strict().superRefine((value,context)=>{

@@ -330,7 +330,7 @@ export class Engine {
         return this.withCopySourceTask(input.connectionId, input.taskId, context => this.tableCopySources.page(context, input as CommandMap['table.page']['input'], (managed, sql, page, pageSize, binary) => this.readPage(managed, sql, page, pageSize, binary, true)));
       } else return this.withConnection(input.connectionId, async managed => {
         const info = await metadata.tableInfo(managed, input.database, input.table);
-        const statement = buildPageSql(info, input.page, input.pageSize, input.filters, input.sort, input.filterMode);
+        const statement = buildPageSql(info, input.page, input.pageSize, input.filters, input.sort, input.filterMode, input.filterGroup);
         // 筛选值用十六进制字面量嵌入已验证模板，避免文本协议受 SQL 转义模式影响。
         const sql = inlineParameters(statement.sql, statement.params);
         return this.readPage(managed, sql, input.page, input.pageSize, info.columns.some(column => /^(?:FLOAT|DOUBLE|REAL)\b/i.test(column.type)));
@@ -343,7 +343,7 @@ export class Engine {
         const current = matches[0];
         const target = await metadata.tableInfo(managed, current.referencedDatabase, current.referencedTable);
         const foreignKey = canonicalReference(source, current, target);
-        const sql = buildReferencePageSql(target, foreignKey, input.matchValues, input.page, input.pageSize, input.filters, input.sort, input.filterMode);
+        const sql = buildReferencePageSql(target, foreignKey, input.matchValues, input.page, input.pageSize, input.filters, input.sort, input.filterMode, input.filterGroup);
         const page = await this.readPage(managed, sql, input.page, input.pageSize, target.columns.some(column => /^(?:FLOAT|DOUBLE|REAL)\b/i.test(column.type)));
         return { source, foreignKey, target, page };
       });

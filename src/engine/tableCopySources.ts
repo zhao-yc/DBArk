@@ -77,7 +77,7 @@ export class TableCopySources {
   /** 明确opt-in的表页才进入本路径；没有缺列时仍调用原分页读取，不签发来源。 */
   async page(context: Context, input: PageInput, readPage: ReadPage): Promise<TablePage> {
     const epoch = this.epochs.get(input.connectionId) ?? 0, info = await this.ports.info(context, input.database, input.table);
-    const statement = (metadata: TableInfo) => { const built = buildPageSql(metadata, input.page, input.pageSize, input.filters, input.sort, input.filterMode); return inlineParameters(built.sql, built.params); };
+    const statement = (metadata: TableInfo) => { const built = buildPageSql(metadata, input.page, input.pageSize, input.filters, input.sort, input.filterMode, input.filterGroup); return inlineParameters(built.sql, built.params); };
     const read = async (metadata: TableInfo, sql = statement(metadata)) => { context.checkCancelled(); const terminal = context.commandStarted(); try { const page = await readPage(context.managed, sql, input.page, input.pageSize, metadata.columns.some(column => /^(?:FLOAT|DOUBLE|REAL)\b/i.test(column.type))); context.checkCancelled(); return page; } finally { terminal(); } };
     let issued: PageLease | undefined; let transaction = false, fallback: TableCopyUnavailable | undefined;
     try {

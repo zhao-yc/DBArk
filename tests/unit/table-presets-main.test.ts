@@ -76,11 +76,15 @@ describe('命名方案Main真实来源及只读字段核对',()=>{
  it('执行原TableTab应用入口：原丢稿门先行，后来编辑拒绝，合法整份设置走原表页状态',async()=>{
   const source=readFileSync(new URL('../../src/renderer/components/TableTab.tsx',import.meta.url),'utf8'),tree=ts.createSourceFile('tab.tsx',source,ts.ScriptTarget.Latest,true,ts.ScriptKind.TSX),functions:string[]=[];
   function visit(node:ts.Node){if(ts.isFunctionDeclaration(node)&&['preparePresetApply','applyNamedPreset'].includes(node.name?.text??''))functions.push(node.getText(tree));ts.forEachChild(node,visit);}visit(tree);expect(functions).toHaveLength(2);
-  const setters={setFilters:vi.fn(),setFilterMode:vi.fn(),setSort:vi.fn(),setPageIndex:vi.fn()},rowsRef={current:[] as unknown[]},canReload=vi.fn(()=>false),info={columns:[{name:'payload'}]},record={hasInput:vi.fn(()=>false)};
+  const setters={setFilters:vi.fn(),setFilterMode:vi.fn(),setFilterGroup:vi.fn(),setSort:vi.fn(),setPageIndex:vi.fn()},rowsRef={current:[] as unknown[]},canReload=vi.fn(()=>false),info={columns:[{name:'payload'}]},record={hasInput:vi.fn(()=>false)};
   const context=createContext({...setters,rowsRef,canReload,info,record,base:target,connectionVersion:2,refreshVersion:0,externalStale:false,activeGridEditor:{current:null},presetApplyScope:{current:null},presetUiEpoch:{current:0},document:{},createPresetDialogGuard:()=>({current:()=>true,dispose:vi.fn()}),reloadBlocked:()=>false,mounted:{current:true},loadGeneration:{current:3},blockedRef:{current:false},validateTablePresetColumns:(value:any,columns:string[])=>{expect(columns).toEqual(['payload']);return value;}});
   runInContext(ts.transpileModule(functions.join('\n')+'\nglobalThis.prepare=preparePresetApply;globalThis.apply=applyNamedPreset;',{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText,context);
-  expect(context.prepare()).toBe(false);expect(context.apply(configuration)).toBe(false);expect(setters.setFilters).not.toHaveBeenCalled();
-  canReload.mockReturnValue(true);expect(context.prepare()).toBe(true);rowsRef.current=[];expect(context.apply(configuration)).toBe(false);expect(setters.setFilters).not.toHaveBeenCalled();
+  expect(context.prepare()).toBe(false);expect(context.apply(configuration)).toBe(false);expect(setters.setFilters).not.toHaveBeenCalled();expect(setters.setFilterGroup).not.toHaveBeenCalled();
+  canReload.mockReturnValue(true);expect(context.prepare()).toBe(true);rowsRef.current=[];expect(context.apply(configuration)).toBe(false);expect(setters.setFilters).not.toHaveBeenCalled();expect(setters.setFilterGroup).not.toHaveBeenCalled();
   expect(context.prepare()).toBe(true);expect(context.apply(configuration)).toBe(true);expect(setters.setFilters).toHaveBeenCalledExactlyOnceWith(configuration.filters);expect(setters.setFilterMode).toHaveBeenCalledExactlyOnceWith('all');expect(setters.setSort).toHaveBeenCalledExactlyOnceWith(configuration.sort);expect(setters.setPageIndex).toHaveBeenCalledExactlyOnceWith(1);
+  // 旧方案缺省必须明确清除旧group；新方案使用本次完整核验后的next.filterGroup原样发布。
+  expect(setters.setFilterGroup).toHaveBeenCalledExactlyOnceWith(undefined);
+  const nested:TablePresetConfiguration={...configuration,filterGroup:{mode:'all',children:[{mode:'any',children:[0]}]}};
+  expect(context.prepare()).toBe(true);expect(context.apply(nested)).toBe(true);expect(setters.setFilterGroup).toHaveBeenNthCalledWith(2,nested.filterGroup);expect(setters.setFilterGroup.mock.calls[1][0]).toBe(nested.filterGroup);
  });
 });

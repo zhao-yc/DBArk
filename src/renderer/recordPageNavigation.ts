@@ -1,17 +1,17 @@
-import type { FilterRule, SortRule } from '../shared/contracts';
+import type { FilterRule, FilterGroup, SortRule } from '../shared/contracts';
 import { rowEqual } from './lib';
 import type { DraftRow } from './dataChanges';
 import type { RecordTarget } from './recordViews';
 import { maxTablePage } from './tableFilters';
 
-export interface RecordPageScope { target: RecordTarget; connectionVersion: number; refreshVersion: number; pageSize: number; filters: FilterRule[]; filterMode: string; sort: SortRule[]; }
+export interface RecordPageScope { target: RecordTarget; connectionVersion: number; refreshVersion: number; pageSize: number; filters: FilterRule[]; filterMode: string; filterGroup?: FilterGroup; sort: SortRule[]; }
 export interface RecordPageContext { scope: string; page: number; generation: number; active: boolean; formOpen: boolean; stale: boolean; }
 export interface RecordPageTicket { readonly action: number; readonly scope: string; readonly fromPage: number; readonly page: number; readonly fromGeneration: number; readonly key: string; readonly direction: -1 | 1; generation?: number; rows?: DraftRow[]; }
 export interface RecordPageNavigationView { previous: boolean; next: boolean; message: string; onNavigate(direction: -1 | 1): void; }
 export type RecordPageBegin = { kind: 'ready'; ticket: RecordPageTicket } | { kind: 'busy' | 'dirty' | 'boundary' | 'unavailable' };
 
 /** 条件只用于内存身份比较，不持久化或记录筛选值；页码独立绑定目标页。 */
-export function recordPageScope(value: RecordPageScope): string { return JSON.stringify([value.target.connectionId, value.target.database, value.target.table, value.connectionVersion, value.refreshVersion, value.pageSize, value.filters, value.filterMode, value.sort]); }
+export function recordPageScope(value: RecordPageScope): string { return JSON.stringify([value.target.connectionId, value.target.database, value.target.table, value.connectionVersion, value.refreshVersion, value.pageSize, value.filters, value.filterMode, value.sort, ...(value.filterGroup ? [value.filterGroup] : [])]); }
 
 /** 包含非当前行、新增后删除的行；任何草稿都不能在连续浏览时被隐式放弃。 */
 export function recordPageHasDrafts(rows: readonly DraftRow[], inputDirty: boolean): boolean {
