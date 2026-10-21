@@ -27,3 +27,11 @@ CI39551052101的Windows job119060095139在`threeDrafts`准备第二份正文时�
 准备增加正文输入框的实际持焦检查，分别位于focus后及全选后；可见／可编辑不足以证明焦点。保持原真实键盘、正文断言、120秒、零重试及失败保留，产品src不改。该有界前置检查不证明原CI焦点丢失的具体来源已经确认，后继原生结果另记。
 
 远程中断期间，本机`node scripts/check-local.mjs tests/unit/query-close-others-native-gate.test.ts`退出0，类型30.12秒、原五项门测试通过，总32.89秒；未重复构建。固定离线端口首次受限沙箱EACCES不放行，正常权限下ECONNREFUSED及原socket关闭通过，CIM未发现DBArk／Electron进程。此时VM连接恢复，原生两例仍优先交VM串行排在JSON回合之后；本机尚未启动该GUI。
+
+## WIN11-TEST单次后继验证
+
+准确`1d110829221bd70831f6a0bc1989eb3cbe7469e5`、src树`553b4b7f3ce1430a48e88074a3b46e869b0e23e1`，在前项JSON成功正常退出后串行执行，复用同一产品构建，不重复安装或build。固定离线预检PID15640退出0，原socket拒连及关闭通过；列表PID12532退出0、准确两例。清除继承实库及认证环境，仅开启integration=0与本专项。
+
+原GUI CLI PID11840，UTC2026-10-21T16:46:09.6456789Z至16:46:30.396403Z，退出0、20.742792秒；2 passed、0失败／跳过／flaky，retry0，原两例分别9.113及10.064秒。真实取消保留全文、A直接关闭后推进B及B取消、来源CAS冲突／原弹窗另存／B不自动推进均完成。两份原终态附件accepted=true，正常退出及各启动一次确认，所属`dbark-e2e-BPXEWA`、`dbark-e2e-AeGDHy`目录均移除；没有SQL、实库、SSH、Docker或系统剪贴板操作，不声称证明实库会话隔离。
+
+VM原记录目录`C:\Users\tester\Documents\Codex\2026-10-20\hi\outputs\query-close-others-1d110829-vm-20261022`；原stdout SHA256 `b565b5b66e4065304cd16ce11a586b03f95ff1bcb7bb7ab8f0628d1cd59a2e61`，stderr为空／SHA256 `e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855`。测试会话读取原报告和资源附件、复算`offline-close-result.json` SHA256 `e9fd0aff354360bf40c2fc36a02bd35d1afb4c5e0e9eea317ecf8c912e664a43`，Root通过read_thread核对原进程及附件。该新成功不追认9d旧输入失败原因；新安装和macOS等范围分别验收，暂不发布。
