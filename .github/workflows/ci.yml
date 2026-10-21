@@ -29,6 +29,8 @@ jobs:
           node-version: '24'
       - run: corepack enable
       - run: pnpm install --frozen-lockfile
+      - name: 独立排序筛选导出读回器反例
+        run: python3 -I -B tests/python/test_query_result_sort_case_readback.py
       - run: pnpm typecheck
       - run: pnpm test
       - run: pnpm build

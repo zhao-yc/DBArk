@@ -24,3 +24,5 @@
 WIN11-TEST原7f任务已终态封存，不重跑或更新旧profile。Root另派准确338的Windows准备，metadata为 `outputs/query-result-sort-case-grid-check-338a06b-vm-20261021`：先核四套封存、旧图及Git，安全快进后移除子进程环境全部DBARK变量，仅一次八文件check-local，包含类型及新构建。须先通过新控制实例语法门／ready／首CIM，分别留存本次控制器、launcher、观察器及正式CLI身份；原7f的109文件构建不复用。当前只确认该准备回合已开始，尚无检查CLI句柄或终态。
 
 Windows准备通过后仍由Root另派独立GUI；Python独立读回、完整回归及main整合均未完成，暂不发布。不能将原7f高度失败或本轮RAM读取器通过改记为七行实际窗口成功。
+
+后继补充[四行标准库独立读回工具](query-result-sort-case-readback.md)，只为GUI成功后的准确原文件和SHA提供可复用入口；其独立检查和实件读回另记，不修改当前固定338准备任务或沿用旧两行期待。
