@@ -17,6 +17,11 @@ const packet=(snapshot:TablePresetStoredSnapshot)=>({...target,source:snapshot.s
 async function fixture(){const dir=mkdtempSync(join(tmpdir(),'dbark-preset-'));dirs.push(dir);const file=join(dir,'local.sqlite'),store=await LocalStore.open(file,wasm,protector);store.saveConnection(profile);return {file,store};}
 afterEach(()=>{for(const dir of dirs.splice(0))rmSync(dir,{recursive:true,force:true});});
 describe('命名方案真实SQLite、CAS与原子持久化',()=>{
+ it('停用条件、原始集合及排序真实落盘后重启保持',async()=>{
+  const {file,store}=await fixture(),configuration={...config,filters:config.filters.map(rule=>({...rule,enabled:false}))};
+  const saved=store.saveTablePreset({...packet(store.tablePresets(target)),name:'保留停用条件',configuration});store.close();
+  const reopened=await LocalStore.open(file,wasm,protector);expect(reopened.tablePresets(target).entries[0].configuration).toEqual(configuration);expect(reopened.tablePresets(target).entries[0].id).toBe(saved.entries[0].id);reopened.close();
+ });
  it('显式保存精确值/NULL和排序，重启读回；连接/库/表严格隔离',async()=>{
   const {file,store}=await fixture(),empty=store.tablePresets(target);expect(empty.entries).toEqual([]);
   const saved=store.saveTablePreset({...packet(empty),name:'精确方案',configuration:config});expect(saved.entries[0].configuration).toEqual(config);

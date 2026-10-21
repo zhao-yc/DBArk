@@ -214,7 +214,9 @@ export function buildPageSql(info: TableInfo, page: number, pageSize: number, fi
   if (!Array.isArray(sort) || sort.length > 20) throw new Error('排序规则不能超过 20 条');
   const columns = new Map(info.columns.map(column => [column.name, column]));
   const params: CellValue[] = [];
-  const clauses = filters.map(filter => {
+  // 停用只排除谓词及参数；目录校验和总预算仍覆盖保留的所有条件。
+  for (const filter of filters) if (!columns.has(filter.column)) throw new Error(`未知筛选字段：${filter.column}`);
+  const clauses = filters.filter(filter => filter.enabled !== false).map(filter => {
     const metadata = columns.get(filter.column);
     if (!metadata) throw new Error(`未知筛选字段：${filter.column}`);
     const column = identifier(filter.column);

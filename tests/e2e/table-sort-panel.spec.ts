@@ -3,6 +3,7 @@ import { createHash } from 'node:crypto';
 import { zh } from '../../src/renderer/locales/zh-CN';
 import { tableSortZh as text } from '../../src/renderer/locales/tableSort.zh-CN';
 import { tableCellFilterZh as cellText } from '../../src/renderer/locales/tableCellFilter.zh-CN';
+import { tableFilterEnabledZh as enabledText } from '../../src/renderer/locales/tableFilterEnabled.zh-CN';
 
 const listing = process.argv.some(value => value === '--list' || value.startsWith('--list='));
 const active = !listing && process.env.DBARK_INTEGRATION_ENABLED === '1' && process.env.DBARK_TABLE_SORT_UI === '1';
@@ -31,7 +32,7 @@ function observePages({ ipcMain }: { ipcMain: Electron.IpcMain }, expected: { da
   });
 }
 
-test('真实表页多列排序：第三页回第一页、精确筛选、优先级与取消保留草稿', async ({ trace, screenshot, video }, info) => {
+test('真实表页多列排序及条件启停：跨页、精确筛选、优先级与取消保留草稿', async ({ trace, screenshot, video }, info) => {
   const runtime = require('./desktop-fixture') as Desktop, owner = runtime.ownedDesktopResources(info), page = owner.page, application = owner.application;
   const mysql = require('mysql2/promise') as typeof import('mysql2/promise'), { closeMysqlConnection } = require('../../src/engine/connection') as typeof import('../../src/engine/connection');
   const qualified = '`' + target!.database! + '`.`subject`', databaseSql = '`' + target!.database! + '`', digest = (value: unknown) => createHash('sha256').update(JSON.stringify(value)).digest('hex');
@@ -91,6 +92,20 @@ test('真实表页多列排序：第三页回第一页、精确筛选、优先�
     await step(() => expect.poll(async () => (await state()).pages.at(-1)?.ids).toEqual(Array.from({ length: 50 }, (_, index) => String(121 - index)))); await settled(beforeCancel + 1); expect((await state()).pages.at(-1)?.input.sort).toEqual([{ column: 'id', direction: 'DESC' }, { column: 'note', direction: 'ASC' }]); expect((await state()).pages.at(-1)?.input.filters).toEqual(appliedFilter);
     const beforeClear = (await state()).pages.length; await open(); await click(text.clear); expect((await state()).pages).toHaveLength(beforeClear); await click(text.apply); await step(() => expect.poll(async () => (await state()).pages.at(-1)?.ids).toEqual(Array.from({ length: 50 }, (_, index) => String(index + 1)))); await settled(beforeClear + 1); expect((await state()).pages.at(-1)?.input.sort).toEqual([]);
     const beforeUnchanged = (await state()).pages.length; await open(); await click(text.apply); await step(() => expect(panel).toBeHidden()); await settled(beforeUnchanged);
+    // 在原已通过排序流程后追加启停，不删除、改宽或绕过前面的真实断言。
+    await open(); await click(text.add); await choose(text.field(1), 'id'); await choose(text.direction(1), 'DESC'); await click(text.apply); await settled(beforeUnchanged + 1);
+    const allDescending = Array.from({ length: 50 }, (_, index) => String(121 - index)), filteredDescending = Array.from({ length: 50 }, (_, index) => String(60 - index));
+    await step(() => filterForm.getByRole('combobox', { name: zh.table.text009, exact: true }).selectOption('id')); await step(() => filterForm.getByRole('combobox', { name: zh.table.filterOperatorLabel, exact: true }).selectOption('<')); await step(() => filterForm.getByRole('textbox', { name: zh.table.text011, exact: true }).fill('61')); await step(() => filterForm.getByRole('button', { name: zh.table.text013, exact: true }).click());
+    /** 每次启停只增加一次正式读取，任一模式也只组合启用条件，原排序始终保持。 */
+    async function expectEnabledPage(count: number, ids: string[]) { await step(() => expect.poll(async () => (await state()).pages.at(-1)?.ids).toEqual(ids)); await settled(count); expect((await state()).pages.at(-1)?.input.sort).toEqual([{ column: 'id', direction: 'DESC' }]); }
+    await expectEnabledPage(beforeUnchanged + 2, filteredDescending); const retained = [...appliedFilter, { column: 'id', operator: '<', value: '61' }]; expect((await state()).pages.at(-1)?.input.filters).toEqual(retained);
+    await step(() => table.getByRole('checkbox', { name: enabledText.enabled(2), exact: true }).uncheck()); await expectEnabledPage(beforeUnchanged + 3, allDescending); expect((await state()).pages.at(-1)?.input.filters).toEqual([retained[0], { ...retained[1], enabled: false }]);
+    await step(() => table.getByRole('combobox', { name: zh.table.filterModeLabel, exact: true }).selectOption('any')); await expectEnabledPage(beforeUnchanged + 4, allDescending);
+    await step(() => table.getByRole('button', { name: enabledText.disableAll, exact: true }).click()); await expectEnabledPage(beforeUnchanged + 5, allDescending); expect((await state()).pages.at(-1)?.input.filters).toEqual(retained.map(rule => ({ ...rule, enabled: false })));
+    await step(() => table.getByRole('checkbox', { name: enabledText.enabled(2), exact: true }).check()); await expectEnabledPage(beforeUnchanged + 6, filteredDescending); expect((await state()).pages.at(-1)?.input.filterMode).toBe('any');
+    await step(() => table.getByRole('button', { name: zh.table.filterEditCondition.replace('{0}', '1'), exact: true }).click()); await step(() => expect(filterForm.getByRole('textbox', { name: zh.table.text011, exact: true })).toHaveValue('0.12345678901234567890')); await step(() => filterForm.getByRole('button', { name: zh.table.filterSaveCondition, exact: true }).click()); await expectEnabledPage(beforeUnchanged + 7, filteredDescending); expect((await state()).pages.at(-1)?.input.filters[0]).toEqual({ ...retained[0], enabled: false });
+    await step(() => table.getByRole('button', { name: enabledText.enableAll, exact: true }).click()); await expectEnabledPage(beforeUnchanged + 8, allDescending); expect((await state()).pages.at(-1)?.input.filters).toEqual(retained);
+    await step(() => table.getByRole('combobox', { name: zh.table.filterModeLabel, exact: true }).selectOption('all')); await expectEnabledPage(beforeUnchanged + 9, filteredDescending); expect((await state()).pages.at(-1)?.input.filterMode).toBe('all');
     const final = await state(); expect(final.writes).toBe(0); expect(final.pending).toBe(0); expect(runtime.pageErrors).toEqual([]); const tasks = await step(() => page.evaluate(() => window.dbark.invoke('tasks.list', {}))); expect(tasks.every(task => task.status === 'completed')).toBe(true);
 
     await runtime.confirmOwnedDesktopExit(info); expect(runtime.ownedDesktopResources(info).closed).toBe(true);
@@ -102,6 +117,6 @@ test('真实表页多列排序：第三页回第一页、精确筛选、优先�
       expect(created && /^dbark_tablesort_[a-f0-9]{32}$/.test(target!.database!)).toBe(true); await connection.query('DROP DATABASE ' + databaseSql);
     }, true);
     await auxiliary('verify-absence', async connection => { const [databases] = await connection.execute<any[]>('SELECT SCHEMA_NAME FROM information_schema.SCHEMATA WHERE SCHEMA_NAME=?', [target!.database!]), [threads] = await connection.execute<any[]>('SELECT ID FROM information_schema.PROCESSLIST WHERE DB=? OR ID=? OR ID=?', [target!.database!, preparedThread, cleanupThread]); expect(databases).toHaveLength(0); expect(threads).toHaveLength(0); }, true);
-    await info.attach('表数据多列排序', { body: Buffer.from(JSON.stringify({ audit: final, draftPreserved: true, draftRestored: true, fromThirdPage: true, definitionUnchanged: true, fixtureRows: 121, fixtureDataUnchanged: true, databaseRemoved: true, closes })), contentType: 'application/json' });
+    await info.attach('表数据多列排序', { body: Buffer.from(JSON.stringify({ audit: final, filterEnabledVerified: true, draftPreserved: true, draftRestored: true, fromThirdPage: true, definitionUnchanged: true, fixtureRows: 121, fixtureDataUnchanged: true, databaseRemoved: true, closes })), contentType: 'application/json' });
   } catch (reason) { runtime.retainOwnedDesktopResources(info); await info.attach('排序隔离资源保留', { body: Buffer.from(JSON.stringify({ database: target!.database!, created, automaticCleanup: false, closes })), contentType: 'application/json' }); throw reason; }
 });

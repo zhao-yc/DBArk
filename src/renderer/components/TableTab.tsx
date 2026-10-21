@@ -530,11 +530,13 @@ export function TableTab({ tab, onOpenGeneratedQuery, onQueryTemplateNavigation,
   /** 取消只撤销自己的排序草稿，原页数据和已应用规则保持。 */
   function closeSortPanel(lease: TableSortLease): void { if (sortPanelRef.current === lease) { sortPanelRef.current = null; setSortPanel(null); } }
   function changeFilters(next: FilterRule[]): boolean {
+    if (!mounted.current || tableReadAction.current !== tableReadRender || externalStale || useWorkspace.getState().settings.activeTabId !== tab.id) return false;
     if (!canReload()) return false;
     setFilters(next); setPageIndex(1); return true;
   }
   /** 全部与任一是整组规则的组合方式，切换也必须通过当前页草稿保护。 */
   function changeFilterMode(next: FilterMode): boolean {
+    if (!mounted.current || tableReadAction.current !== tableReadRender || externalStale || useWorkspace.getState().settings.activeTabId !== tab.id) return false;
     if (next === filterMode) return true;
     if (!canReload()) return false;
     setFilterMode(next); setPageIndex(1); return true;

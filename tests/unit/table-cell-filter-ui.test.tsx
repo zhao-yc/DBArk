@@ -9,6 +9,7 @@ import { zh } from '../../src/renderer/locales/zh-CN';
 import { tableSortZh as sortText } from '../../src/renderer/locales/tableSort.zh-CN';
 import { recordViewZh } from '../../src/renderer/locales/recordViews.zh-CN';
 import { buildPageSql } from '../../src/engine/sql';
+import { tableFilterEnabledZh as enabledText } from '../../src/renderer/locales/tableFilterEnabled.zh-CN';
 
 const grid = vi.hoisted(() => ({ props: null as any, rows: [] as DraftRow[] }));
 // 只替换网格/Monaco外界渲染端口；TableTab、类型编辑器、弹窗、store与历史运行生产代码。
@@ -137,5 +138,33 @@ describe('真实React表页多列服务器排序RAM', () => {
     await act(async () => grid.props.onSortColumnsChange([{ columnKey: 'note', direction: 'DESC' }])); const count = pages.length;
     await act(async () => old()); expect(pages).toHaveLength(count); await click(sortText.apply); expect(document.body.textContent).toContain(sortText.stale); await click(sortText.cancel);
     await click(sortText.entry); expect(field(sortText.field(1)).value).toBe('note'); expect(field(sortText.direction(1)).value).toBe('DESC'); await click(sortText.apply); expect(pages).toHaveLength(count); expect(document.querySelector(`[aria-label="${sortText.title}"]`)).toBeNull();
+  });
+});
+
+/** 此RAM端口只投递真实React勾选事件；原生checkbox另由实库窗口验证。 */
+function enabledHandler(index: number): Function { const node = field(enabledText.enabled(index)), key = Object.keys(node).find(key => key.startsWith('__reactProps$'))!; return (node as any)[key].onChange; }
+async function enableRule(index: number, checked: boolean) { await act(async () => enabledHandler(index)({ target: { checked } })); }
+
+describe('真实TableTab服务器筛选启停RAM', () => {
+  it('单条和批量一次读取，保留精确值、NULL、任一模式及已应用排序；编辑不隐式启用', async () => {
+    await mount(); await selectCell(0, 'num'); await click(text.equal); await applyCondition(); await selectCell(1, 'note'); await click(text.equal); await applyCondition();
+    const mode = field(zh.table.filterModeLabel); await act(async () => { mode.value = 'any'; mode.dispatchEvent(new MemoryEvent('change')); }); await act(async () => grid.props.onSortColumnsChange([{ columnKey: 'num', direction: 'DESC' }]));
+    const original = structuredClone(pages.at(-1).filters), count = pages.length; await enableRule(1, false); expect(pages).toHaveLength(count + 1); expect(pages.at(-1)).toMatchObject({ page: 1, filterMode: 'any', sort: [{ column: 'num', direction: 'DESC' }], filters: [{ ...original[0], enabled: false }, original[1]] });
+    await click(enabledText.disableAll); expect(pages).toHaveLength(count + 2); expect(pages.at(-1).filters).toEqual(original.map((rule: any) => ({ ...rule, enabled: false }))); expect(button(enabledText.disableAll).disabled).toBe(true);
+    await click(zh.table.filterEditCondition.replace('{0}', '1')); expect(field(zh.table.text011).value).toBe('0.00000000000000000000001'); await applyCondition(); expect(pages.at(-1).filters[0].enabled).toBe(false);
+    const beforeEnable = pages.length; await click(enabledText.enableAll); expect(pages).toHaveLength(beforeEnable + 1); expect(pages.at(-1).filters).toEqual(original); expect(document.body.textContent).toContain(enabledText.status(2, 2)); expect(commands.includes('table.apply')).toBe(false);
+  });
+  it('拒绝丢弃不切换，接受后从第一页读取并放弃原草稿，零写入', async () => {
+    await mount(); await selectCell(0, 'num'); await click(text.equal); await applyCondition(); await act(async () => grid.props.onRowsChange(grid.rows.map((row, index) => index ? row : { ...row, data: { ...row.data, note: '保留原草稿' } })));
+    const originalConfirm = window.confirm, confirm = vi.fn(() => false); window.confirm = confirm;
+    try {
+      const count = pages.length; await enableRule(1, false); expect(confirm).toHaveBeenCalledWith(recordViewZh.discardPage); expect(pages).toHaveLength(count); expect(field(enabledText.enabled(1)).checked).toBe(true); expect(grid.rows[0].data.note).toBe('保留原草稿'); expect(document.body.textContent).toContain(enabledText.declined);
+      confirm.mockReturnValue(true); await enableRule(1, false); expect(pages).toHaveLength(count + 1); expect(pages.at(-1).filters[0].enabled).toBe(false); expect(grid.rows[0].data.note).toBe('原1'); expect(previews).toEqual([]); expect(commands.includes('table.apply')).toBe(false);
+    } finally { window.confirm = originalConfirm; }
+  });
+  it('移除条件后旧编号回调无效，非活动表页不能接受当前筛选修改', async () => {
+    await mount(); await selectCell(0, 'id'); await click(text.equal); await applyCondition(); await selectCell(1, 'note'); await click(text.equal); await applyCondition(); const old = enabledHandler(2);
+    await click(zh.table.filterRemoveCondition.replace('{0}', '1')); const count = pages.length; await act(async () => old({ target: { checked: false } })); expect(pages).toHaveLength(count); expect(field(enabledText.enabled(1)).checked).toBe(true);
+    await act(async () => store.setState(state => ({ settings: { ...state.settings, activeTabId: '别的标签' } }))); await enableRule(1, false); expect(pages).toHaveLength(count); expect(pages.at(-1).filters).toEqual([{ column: 'note', operator: 'IS NULL' }]);
   });
 });

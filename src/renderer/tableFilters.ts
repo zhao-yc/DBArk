@@ -1,6 +1,7 @@
 import type { FilterMode, FilterRule } from '../shared/contracts';
-import { FILTER_LIMITS } from '../shared/filtering';
+import { FILTER_LIMITS, validateFilterRules } from '../shared/filtering';
 import { zh, formatText } from './locales/zh-CN';
+import { tableFilterEnabledZh as enabledText } from './locales/tableFilterEnabled.zh-CN';
 
 export type { FilterMode };
 /** 与 table.page 的 IPC 页码上限保持一致；不据此虚构表的实际总页数。 */
@@ -52,12 +53,30 @@ export function filterDraftFromRule(rule: FilterRule): FilterDraft {
 /** 新增与编辑共同校验总预算；保留其它条件对象，超限时不修改已应用规则。 */
 export function replaceFilterRule(filters: readonly FilterRule[], rule: FilterRule, editing: number | null): FilterRule[] {
   if (editing !== null && (!Number.isInteger(editing) || editing < 0 || editing >= filters.length)) throw new Error(zh.table.filterConditionMissing);
-  const next = editing === null ? [...filters, rule] : filters.map((current, index) => index === editing ? rule : current);
+  const next = editing === null ? [...filters, rule] : filters.map((current, index) => index === editing ? current.enabled === false && rule.enabled === undefined ? { ...rule, enabled: false } : rule : current);
   if (next.length > FILTER_LIMITS.conditions) throw new Error(formatText(zh.table.filterRulesLimit, FILTER_LIMITS.conditions));
   const values = next.flatMap(current => current.operator === 'IS NULL' || current.operator === 'IS NOT NULL' ? [] : current.values ?? [current.value ?? '']);
   if (values.length > FILTER_LIMITS.totalValues) throw new Error(formatText(zh.table.filterTotalValuesLimit, FILTER_LIMITS.totalValues));
   if (values.reduce((count, value) => count + value.length, 0) > FILTER_LIMITS.totalCharacters) throw new Error(formatText(zh.table.filterTotalCharactersLimit, FILTER_LIMITS.totalCharacters));
   return next;
+}
+
+/** 只改变启用位；恢复启用采用原省略形式，不转换空串、NULL判断或精确数字。 */
+function withFilterEnabled(rule: FilterRule, enabled: boolean): FilterRule {
+  const { enabled: previous, ...rest } = rule;
+  return enabled ? rest : { ...rest, enabled: false };
+}
+/** 单条切换保留条件位置和其它对象；所有停用条件仍必须满足原共享预算。 */
+export function setFilterRuleEnabled(filters: readonly FilterRule[], index: number, enabled: boolean): FilterRule[] {
+  validateFilterRules(filters);
+  if (typeof enabled !== 'boolean' || !Number.isInteger(index) || index < 0 || index >= filters.length) throw Error(enabledText.invalid);
+  return filters.map((rule, position) => position === index ? withFilterEnabled(rule, enabled) : rule);
+}
+/** 批量切换一次交回父页，避免逐条读取；仅复制规则外壳，不重建原始值。 */
+export function setAllFilterRulesEnabled(filters: readonly FilterRule[], enabled: boolean): FilterRule[] {
+  validateFilterRules(filters);
+  if (typeof enabled !== 'boolean') throw Error(enabledText.invalid);
+  return filters.map(rule => withFilterEnabled(rule, enabled));
 }
 
 /** 标签只显示有界摘要，空字符串单独标识，防止大集合挤占整个工作区。 */

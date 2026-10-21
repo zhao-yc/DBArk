@@ -65,7 +65,7 @@ export interface ResultColumn { key: string; name: string; type: string; }
 export interface QueryResult { columns: ResultColumn[]; rows: DataRow[]; affectedRows?: number; insertId?: string; warningCount?: number; truncated: boolean; elapsedMs: number; statement: string; }
 export interface QueryOutcome { results: QueryResult[]; elapsedMs: number; transactionOpen?: boolean; explain?: ExplainPlan; }
 export type FilterMode = 'all' | 'any';
-export interface FilterRule { column: string; operator: '=' | '!=' | '>' | '>=' | '<' | '<=' | 'LIKE' | 'NOT LIKE' | 'IN' | 'NOT IN' | 'BETWEEN' | 'IS NULL' | 'IS NOT NULL'; value?: string; values?: string[]; }
+export interface FilterRule { column: string; operator: '=' | '!=' | '>' | '>=' | '<' | '<=' | 'LIKE' | 'NOT LIKE' | 'IN' | 'NOT IN' | 'BETWEEN' | 'IS NULL' | 'IS NOT NULL'; value?: string; values?: string[]; /** 缺省启用；停用保留原条件但不参与本次筛选，仍计入全部预算。 */ enabled?: boolean; }
 export interface SortRule { column: string; direction: 'ASC' | 'DESC'; }
 export interface TablePage { rows: DataRow[]; columns: ResultColumn[]; hasMore: boolean; page: number; pageSize: number; /** 显式复制页在同一MDL内读取的目录身份；缺失时只能查看。 */ copyMetadataKey?: string; copySource?: TableCopyPageSources; }
 export type RowChange = { kind: 'insert'; values: DataRow } | { kind: 'update'; before: DataRow; values: DataRow } | { kind: 'delete'; before: DataRow };

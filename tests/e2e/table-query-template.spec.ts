@@ -30,7 +30,19 @@ function observeTemplates({ ipcMain }: { ipcMain: Electron.IpcMain }, input: { d
     if (command === 'query.parameterNames') { if (state.parameters++ || value.sql.replaceAll('\r\n', '\n') !== input.update) throw Error('参数目标或读取次数变化'); }
     if (!['table.page', 'query.execute', 'query.parameterNames'].includes(command)) return original(event, payload);
     state.pending++;
-    try { const reply = await original(event, payload); if (command === 'query.execute') { if (!reply?.ok || !Array.isArray(reply.result?.results) || reply.result.results.length !== 1) throw Error('原SELECT未成功'); const rows = reply.result.results[0].rows; state.rows = rows.length; state.note = rows.find((row: any) => row.id === '1')?.note; } return reply; }
+    try {
+      const reply = await original(event, payload);
+      if (command === 'query.execute') {
+        if (!reply?.ok || !Array.isArray(reply.result?.results) || reply.result.results.length !== 1) throw Error('原SELECT未成功');
+        const result = reply.result.results[0], columns = result.columns, rows = result.rows;
+        // 任意SQL结果以唯一内部key存行；显示名称不能直接作为DataRow属性。
+        if (!Array.isArray(columns) || columns.length !== 4 || columns.map((column: any) => column.name).join(',') !== 'id,amount,note,bin' || columns.some((column: any) => typeof column.key !== 'string' || !column.key) || new Set(columns.map((column: any) => column.key)).size !== 4 || !Array.isArray(rows)) throw Error('原SELECT结果列身份无效');
+        const idKey = columns[0].key, noteKey = columns[2].key, matches = rows.filter((row: any) => Object.hasOwn(row, idKey) && row[idKey] === '1');
+        if (matches.length !== 1 || !Object.hasOwn(matches[0], noteKey)) throw Error('原SELECT缺少唯一id=1记录或note字段');
+        state.rows = rows.length; state.note = matches[0][noteKey];
+      }
+      return reply;
+    }
     finally { state.pending--; }
   });
 }
