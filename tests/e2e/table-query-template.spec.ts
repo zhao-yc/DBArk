@@ -20,7 +20,7 @@ test.describe.configure({ timeout: 120000, retries: 0 });
 function observeTemplates({ ipcMain }: { ipcMain: Electron.IpcMain }, input: { database: string; connectionId: string; select: string; update: string }) {
   const handlers = (ipcMain as any)._invokeHandlers, original = handlers.get('dbark:request'), root = globalThis as any;
   if (typeof original !== 'function' || root.__tableQueryTemplates) throw Error('模板观察器归属未知');
-  const state = { pages: 0, selects: 0, parameters: 0, writes: 0, pending: 0, rows: 0, confirmations: 0, note: undefined as unknown };
+  const state = { pages: 0, selects: 0, parameters: 0, hoverReads: 0, writes: 0, pending: 0, rows: 0, confirmations: 0, note: undefined as unknown };
   root.__tableQueryTemplates = state;
   handlers.set('dbark:request', async (event: any, payload: any) => {
     const command = payload.command, value = payload.input;
@@ -28,7 +28,9 @@ function observeTemplates({ ipcMain }: { ipcMain: Electron.IpcMain }, input: { d
     if (command === 'table.page') { if (value.connectionId !== input.connectionId || value.database !== input.database || value.table !== 'subject') throw Error('分页目标已变化'); state.pages++; }
     if (command === 'query.execute') { if (state.selects++ || value.sql.replaceAll('\r\n', '\n') !== input.select) throw Error('禁止非本例SELECT或重复正文执行'); }
     if (command === 'query.parameterNames') { if (state.parameters++ || value.sql.replaceAll('\r\n', '\n') !== input.update) throw Error('参数目标或读取次数变化'); }
-    if (!['table.page', 'query.execute', 'query.parameterNames'].includes(command)) return original(event, payload);
+    const hover = command === 'metadata.completion' && value?.details === true;
+    if (hover) { if (state.hoverReads >= 4 || value.kind !== 'columns' || value.connectionId !== input.connectionId || value.database !== input.database || value.table !== 'subject' || value.prefix !== 'amount' || Object.keys(value).sort().join(',') !== 'connectionId,database,details,kind,prefix,table,taskId') throw Error('字段悬停目标或预算变化'); state.hoverReads++; }
+    if (!hover && !['table.page', 'query.execute', 'query.parameterNames'].includes(command)) return original(event, payload);
     state.pending++;
     try {
       const reply = await original(event, payload);
@@ -47,7 +49,7 @@ function observeTemplates({ ipcMain }: { ipcMain: Electron.IpcMain }, input: { d
   });
 }
 
-test('真实表结构模板预览及独立查询：SELECT执行、UPDATE参数识别和原表草稿保留', async ({ trace, screenshot, video }, info) => {
+test('真实表结构模板及字段悬停：安全属性、SELECT执行、UPDATE参数识别和原表草稿保留', async ({ trace, screenshot, video }, info) => {
   const runtime = require('./desktop-fixture') as Desktop, owner = runtime.ownedDesktopResources(info), page = owner.page, application = owner.application;
   const mysql = require('mysql2/promise') as typeof import('mysql2/promise'), { closeMysqlConnection } = require('../../src/engine/connection') as typeof import('../../src/engine/connection');
   const qualified = '`' + target!.database! + '`.`subject`', databaseSql = '`' + target!.database! + '`', digest = (value: unknown) => createHash('sha256').update(JSON.stringify(value)).digest('hex');
@@ -64,14 +66,14 @@ test('真实表结构模板预览及独立查询：SELECT执行、UPDATE参数�
   }
   /** 每步核原TestInfo、App和窗口，失败保留原资源，不重启或补退出。 */
   async function step<T>(action: () => Promise<T>): Promise<T> { const current = runtime.ownedDesktopResources(info); if (current.page !== page || current.application !== application || current.closed) throw Error('原窗口已失效'); const result = await action(); const after = runtime.ownedDesktopResources(info); if (after.page !== page || after.application !== application || after.closed) throw Error('原窗口已失效'); return result; }
-  const state = () => step(() => application.evaluate(() => (globalThis as any).__tableQueryTemplates as { pages: number; selects: number; parameters: number; writes: number; pending: number; rows: number; confirmations: number; note: unknown }));
+  const state = () => step(() => application.evaluate(() => (globalThis as any).__tableQueryTemplates as { pages: number; selects: number; parameters: number; hoverReads: number; writes: number; pending: number; rows: number; confirmations: number; note: unknown }));
   const settings = () => step(() => page.evaluate(() => window.dbark.invoke('settings.get', {})));
   try {
     expect([trace, screenshot, video]).toEqual(['off', 'off', 'off']);
     await auxiliary('prepare', async (connection, id) => {
       preparedThread = id; const [existing] = await connection.execute<any[]>('SELECT SCHEMA_NAME FROM information_schema.SCHEMATA WHERE SCHEMA_NAME=?', [target!.database!]); expect(existing).toHaveLength(0);
       await connection.query('CREATE DATABASE ' + databaseSql + ' CHARACTER SET utf8mb4 COLLATE utf8mb4_bin'); created = true;
-      await connection.query('CREATE TABLE ' + qualified + ' (id BIGINT NOT NULL PRIMARY KEY,amount DECIMAL(30,20) NOT NULL,note VARCHAR(200) NULL,bin VARBINARY(4) NULL) ENGINE=InnoDB');
+      await connection.query('CREATE TABLE ' + qualified + " (id BIGINT NOT NULL PRIMARY KEY,amount DECIMAL(30,20) NOT NULL DEFAULT 0.12345678901234567890 COMMENT '字段悬停 <img src=x> [执行](command:danger)',note VARCHAR(200) NULL,bin VARBINARY(4) NULL) ENGINE=InnoDB");
       await connection.query('INSERT INTO ' + qualified + ' VALUES ?', [Array.from({ length: 61 }, (_, index) => [index + 1, index === 0 || index === 60 ? '0.12345678901234567890' : '1.00000000000000000000', index === 0 ? '' : index === 60 ? null : '其他记录', Buffer.from([0, 255])])]);
       const [ddl] = await connection.query<any[]>('SHOW CREATE TABLE ' + qualified), [rows] = await connection.query<any[]>('SELECT * FROM ' + qualified + ' ORDER BY id'); expect(rows).toHaveLength(61); definition = digest(ddl); data = digest(rows);
     });
@@ -92,7 +94,13 @@ test('真实表结构模板预览及独立查询：SELECT执行、UPDATE参数�
     await step(() => table.getByRole('button', { name: text.entry, exact: true }).click()); await step(() => expect(templates.getByLabel(text.preview, { exact: true })).toHaveText(select)); expect(await state()).toEqual(before);
     await step(() => templates.getByRole('button', { name: text.open, exact: true }).click()); await step(() => expect(templates).toBeHidden());
     let active = await settings(), query = active.tabs.find(tab => tab.id === active.activeTabId)!; expect(query.kind).toBe('query'); expect(query.connectionId).toBe(profile.id); expect(query.databaseContext).toEqual({ state: 'known', database: target!.database! }); expect(query.sql?.replaceAll('\r\n', '\n')).toBe(select); expect(query.sourceBinding).toBeUndefined(); expect(query.fileSourceBinding).toBeUndefined(); expect((await state()).selects).toBe(0);
-    const queryView = page.locator('.query-tab:visible'); await step(() => queryView.getByRole('button', { name: zh.query.text011, exact: true }).click()); await step(() => expect.poll(async () => (await state()).rows).toBe(61)); expect((await state()).note).toBe(''); await step(() => expect(queryView.getByRole('button', { name: zh.common.stop, exact: true })).toBeDisabled());
+    const queryView = page.locator('.query-tab:visible');
+    // 真正悬停Monaco字段，信息来自正式元数据接口；备注不会变成HTML、图片或命令链接。
+    const amount = queryView.locator('.monaco-editor .view-line').filter({ hasText: '`amount`' }).locator('span').filter({ hasText: 'amount' }).last();
+    await step(() => amount.hover()); const hover = page.locator('.monaco-hover:visible .markdown-hover');
+    await step(() => expect(hover).toContainText('decimal(30,20)')); await step(() => expect(hover).toContainText('允许NULL：否')); await step(() => expect(hover).toContainText('0.12345678901234567890')); await step(() => expect(hover).toContainText('字段悬停')); await step(() => expect(hover.locator('a,img')).toHaveCount(0)); expect((await state()).hoverReads).toBeGreaterThan(0); expect((await state()).selects).toBe(0);
+    await step(() => page.mouse.move(0, 0)); await step(() => expect(hover).toBeHidden());
+    await step(() => queryView.getByRole('button', { name: zh.query.text011, exact: true }).click()); await step(() => expect.poll(async () => (await state()).rows).toBe(61)); expect((await state()).note).toBe(''); await step(() => expect(queryView.getByRole('button', { name: zh.common.stop, exact: true })).toBeDisabled());
     const selectTable = () => step(() => page.locator('.tab-strip .tab-select').filter({ has: page.getByText(tableTab.title, { exact: true }) }).click());
     await selectTable(); await step(() => expect(cell).toHaveText('原表未提交草稿')); const beforeWriteTemplates = await state();
     await step(() => table.getByRole('button', { name: text.entry, exact: true }).click());
@@ -115,6 +123,6 @@ test('真实表结构模板预览及独立查询：SELECT执行、UPDATE参数�
       expect(created && /^dbark_querytemplate_[a-f0-9]{32}$/.test(target!.database!)).toBe(true); await connection.query('DROP DATABASE ' + databaseSql);
     }, true);
     await auxiliary('verify-absence', async connection => { const [databases] = await connection.execute<any[]>('SELECT SCHEMA_NAME FROM information_schema.SCHEMATA WHERE SCHEMA_NAME=?', [target!.database!]), [threads] = await connection.execute<any[]>('SELECT ID FROM information_schema.PROCESSLIST WHERE DB=? OR ID=? OR ID=?', [target!.database!, preparedThread, cleanupThread]); expect(databases).toHaveLength(0); expect(threads).toHaveLength(0); }, true);
-    await info.attach('表结构SQL模板', { body: Buffer.from(JSON.stringify({ generated: 4, selectExecuted: true, parameterNames: 4, draftPreserved: true, draftRestored: true, noAutomaticExecution: true, noWrites: true, audit: final, definitionUnchanged: true, fixtureRows: 61, fixtureDataUnchanged: true, databaseRemoved: true, closes })), contentType: 'application/json' });
+    await info.attach('表结构SQL模板', { body: Buffer.from(JSON.stringify({ generated: 4, fieldHoverVerified: true, hoverMarkupSafe: true, selectExecuted: true, parameterNames: 4, draftPreserved: true, draftRestored: true, noAutomaticExecution: true, noWrites: true, audit: final, definitionUnchanged: true, fixtureRows: 61, fixtureDataUnchanged: true, databaseRemoved: true, closes })), contentType: 'application/json' });
   } catch (reason) { runtime.retainOwnedDesktopResources(info); await info.attach('模板隔离资源保留', { body: Buffer.from(JSON.stringify({ database: target!.database!, created, automaticCleanup: false, closes })), contentType: 'application/json' }); throw reason; }
 });

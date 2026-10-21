@@ -12,6 +12,10 @@ function fixture(){
 
 afterEach(()=>vi.useRealTimers());
 describe('编辑器补全线程生命周期',()=>{
+  it('悬停显式意图只发给本地worker，普通补全报文保持原形状',async()=>{
+    const f=fixture(),hover=f.client.analyze('SELECT amount FROM t',9,{},undefined,undefined,'hover');f.ready();expect(f.ports[0].postMessage.mock.lastCall?.[0]).toMatchObject({intent:'hover'});f.reply();await hover;
+    const ordinary=f.client.analyze('SELECT id FROM t',8);expect(f.ports[0].postMessage.mock.lastCall?.[0]).not.toHaveProperty('intent');f.reply();await ordinary;f.client.dispose();
+  });
   it('等待就绪时能力也固定为独立快照，调用方修改不能开启或关闭旧请求',async()=>{
     const f=fixture(),capabilities={lateralDerivedTables:true,windowFunctions:true,insertRowAliases:true},request=f.client.analyze('SELECT correlated',4,{},undefined,capabilities);
     capabilities.lateralDerivedTables=false;capabilities.windowFunctions=false;capabilities.insertRowAliases=false;expect(f.ports[0].postMessage).not.toHaveBeenCalled();f.ready();

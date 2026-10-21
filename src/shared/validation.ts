@@ -150,7 +150,7 @@ export const commandSchemas: Record<Command, z.ZodType> = {
   'metadata.completion': z.discriminatedUnion('kind',[
     z.object({kind:z.literal('databases'),connectionId:id,taskId:id,prefix:completionPrefix}).strict(),
     z.object({kind:z.literal('objects'),connectionId:id,taskId:id,prefix:completionPrefix,database:completionName,objectKind:z.enum(['relation','function','procedure'])}).strict(),
-    z.object({kind:z.literal('columns'),connectionId:id,taskId:id,prefix:completionPrefix,database:completionName,table:completionName}).strict(),
+    z.object({kind:z.literal('columns'),connectionId:id,taskId:id,prefix:completionPrefix,database:completionName,table:completionName,details:z.literal(true).optional()}).strict(),
   ]),
   'metadata.objects': z.object({ connectionId: id, database: name }).strict(),
   'metadata.table': z.object({ ...target, taskId: id.optional() }).strict(),
@@ -162,7 +162,7 @@ export const commandSchemas: Record<Command, z.ZodType> = {
   'query.sessionState': z.object({ sessionId: id }).strict(),
   'query.completionState':z.object({sessionId:id}).strict(),
   'query.temporaryState':z.object({sessionId:id}).strict(),
-  'query.temporaryCompletion':z.discriminatedUnion('kind',[z.object({sessionId:id,database:completionName,prefix:completionPrefix,kind:z.literal('objects')}).strict(),z.object({sessionId:id,database:completionName,table:completionName,prefix:completionPrefix,kind:z.literal('columns')}).strict()]),
+  'query.temporaryCompletion':z.discriminatedUnion('kind',[z.object({sessionId:id,database:completionName,prefix:completionPrefix,kind:z.literal('objects')}).strict(),z.object({sessionId:id,database:completionName,table:completionName,prefix:completionPrefix,kind:z.literal('columns'),details:z.literal(true).optional()}).strict()]),
   'query.temporaryRead':z.object({sessionId:id,database:completionName,table:completionName,taskId:id}).strict(),
   'query.executeParameterized': z.object({ sessionId: id, sql: text.min(1), parameters: queryParameters, taskId: id, maxRows: z.number().int().min(1).max(100000) }).strict(),
   'query.exportStream': z.object({ sessionId: id, sql: text.min(1), taskId: id, fileToken: id, format: z.enum(['csv', 'json', 'csv-zip', 'sql']), csvDelimiter: z.enum(csvExportDelimiters).optional(), insertTarget: queryInsertTargetSchema.optional(), encoding: z.enum(['utf8', 'utf16le', 'gb18030']), protocol: z.enum(['text-strict', 'binary-explicit']), resultSelection: z.discriminatedUnion('kind', [z.object({ kind: z.literal('all') }).strict(), z.object({ kind: z.literal('row-result'), ordinal: z.number().int().min(1).max(queryStreamExportLimits.results) }).strict()]), parameters: queryParameters.optional() }).strict().superRefine((input, context) => {

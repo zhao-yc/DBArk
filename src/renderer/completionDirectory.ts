@@ -1,5 +1,6 @@
 import {completionLimits,type CompletionDirectoryRequest,type CompletionMetadataInput,type CompletionMetadataOutput} from '../shared/sqlCompletion';
 import {completionIdentifier} from '../shared/completionLexical';
+import { copyCompletionColumnDetails } from '../shared/completionColumnDetails';
 interface Waiter{resolve:(value:CompletionMetadataOutput)=>void;reject:(reason:Error)=>void;detach:()=>void}
 interface Entry{key:string;query:CompletionDirectoryRequest;waiters:Set<Waiter>;taskId?:string;cancelled:boolean}
 interface Transport{request:(input:CompletionMetadataInput)=>Promise<CompletionMetadataOutput>;cancel:(taskId:string)=>Promise<unknown>;id:()=>string}
@@ -13,7 +14,7 @@ export class CompletionDirectory{
   load(query:CompletionDirectoryRequest,signal?:AbortSignal):Promise<CompletionMetadataOutput>{
     if(this.disposed||signal?.aborted)return Promise.reject(cancelled());
     if(!this.validRequest(query))return Promise.reject(new Error('补全目录目标无效'));
-    const key=JSON.stringify([query.kind,query.kind==='databases'?null:query.database,query.kind==='columns'?query.table:query.kind==='objects'?query.objectKind:null,query.prefix]);
+    const key=JSON.stringify([query.kind,query.kind==='databases'?null:query.database,query.kind==='columns'?query.table:query.kind==='objects'?query.objectKind:null,query.prefix,query.kind==='columns'&&query.details===true]);
     const cached=this.cache.get(key);if(cached){this.cache.delete(key);this.bytes-=cached.bytes;if(cached.expires>Date.now()){this.cache.set(key,cached);this.bytes+=cached.bytes;return Promise.resolve(this.copy(cached.value));}}
     let entry=this.entries.get(key);
     if(!entry){if(this.entries.size>=16)return Promise.reject(new Error('补全目录排队已达上限'));entry={key,query:{...query},waiters:new Set(),cancelled:false};this.entries.set(key,entry);this.queue.push(entry);}
@@ -49,9 +50,14 @@ export class CompletionDirectory{
   private validateOutput(query:CompletionDirectoryRequest,value:CompletionMetadataOutput):void{
     const kinds=query.kind==='databases'?['database']:query.kind==='columns'?['column']:query.objectKind==='relation'?['table','view']:[query.objectKind];
     if(!value||!Array.isArray(value.entries)||value.entries.length>completionLimits.entries||typeof value.incomplete!=='boolean'||value.entries.some(entry=>!completionIdentifier(entry.name)||!kinds.includes(entry.kind)||entry.dataType!==undefined&&(typeof entry.dataType!=='string'||entry.dataType.length>64)))throw new Error('补全目录返回值无效');
+    for (const entry of value.entries) {
+      if (entry.visible !== undefined && typeof entry.visible !== 'boolean' || entry.sessionObject !== undefined && !['temporary','unconfirmed'].includes(entry.sessionObject)) throw Error('字段来源或可见性无效');
+      if (entry.details !== undefined) copyCompletionColumnDetails(entry.details);
+      if (query.kind === 'columns' && query.details && !entry.details) throw Error('字段完整属性尚未返回');
+    }
   }
   /** 前缀允许空白/通配符等原名称字符，但不允许NUL、代理字符或无限长度。 */
-  private validRequest(query:CompletionDirectoryRequest):boolean{return typeof query.prefix==='string'&&query.prefix.length<=completionLimits.prefixUnits&&!/[\0\ud800-\udfff]/.test(query.prefix)&&(query.kind==='databases'||completionIdentifier(query.database)&&(query.kind==='objects'||completionIdentifier(query.table)));}
+  private validRequest(query:CompletionDirectoryRequest):boolean{return typeof query.prefix==='string'&&query.prefix.length<=completionLimits.prefixUnits&&!/[\0\ud800-\udfff]/.test(query.prefix)&&(query.kind!=='columns'||query.details===undefined||query.details===true)&&(query.kind==='databases'||completionIdentifier(query.database)&&(query.kind==='objects'||completionIdentifier(query.table)));}
   /** 返回独立普通记录，渲染组件不能修改缓存中的目录名称。 */
-  private copy(value:CompletionMetadataOutput):CompletionMetadataOutput{return{entries:value.entries.map(entry=>({name:entry.name,kind:entry.kind,...(entry.dataType===undefined?{}:{dataType:entry.dataType})})),incomplete:value.incomplete};}
+  private copy(value:CompletionMetadataOutput):CompletionMetadataOutput{return{entries:value.entries.map(entry=>({name:entry.name,kind:entry.kind,...(entry.dataType===undefined?{}:{dataType:entry.dataType}),...(entry.visible===undefined?{}:{visible:entry.visible}),...(entry.details===undefined?{}:{details:copyCompletionColumnDetails(entry.details)})})),incomplete:value.incomplete};}
 }

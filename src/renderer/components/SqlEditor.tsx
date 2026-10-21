@@ -14,15 +14,16 @@ import {CompletionDirectory} from '../completionDirectory';
 import {completionSuggestions,type SqlCompletionItem} from '../completionSuggestions';
 import {completionLimits} from '../../shared/sqlCompletion';
 import {invoke,uid} from '../lib';
-import {resolveCompletionContext,completionContextCapabilities} from '../completionContext';
+import {resolveCompletionContext,completionContextCapabilities,sameCompletionScope,type SqlCompletionScope} from '../completionContext';
 import {SessionCompletionDirectory} from '../sessionCompletionDirectory';
 import {completionServerFacts} from '../completionServerFacts';
 import { currentStatementZh } from '../locales/currentStatement.zh-CN';
 import { editorContentBridge } from '../editorContentBridge';
 import { sqlFormattingZh } from '../locales/sqlFormatting.zh-CN';
+import { createSqlFieldHoverProvider } from '../sqlFieldHoverProvider';
 
 export type SqlCompletionStatus='idle'|'partial'|'unavailable'|'limited'|'databaseUnknown'|'sessionUnknown'|'startupTimeout'|'analysisTimeout';
-export interface SqlCompletionScope{connectionId:string;connectionVersion:number;database?:string;databaseUnknown?:boolean;sessionId?:string}
+export type { SqlCompletionScope } from '../completionContext';
 const completionKinds:Record<SqlCompletionItem['kind'],monaco.languages.CompletionItemKind>={database:monaco.languages.CompletionItemKind.Module,table:monaco.languages.CompletionItemKind.Class,view:monaco.languages.CompletionItemKind.Interface,function:monaco.languages.CompletionItemKind.Function,procedure:monaco.languages.CompletionItemKind.Method,column:monaco.languages.CompletionItemKind.Field,alias:monaco.languages.CompletionItemKind.Variable,keyword:monaco.languages.CompletionItemKind.Keyword};
 
 /** Monaco 使用随安装包发布的编辑器和 worker，离线环境也可直接编辑 SQL。 */
@@ -40,6 +41,8 @@ export function SqlEditor({ value, onChange, onReady, height = '100%', readOnly 
   const contentRef = useRef<ReturnType<typeof editorContentBridge> | null>(null);
   const widgetRef = useRef<{ editor: monaco.editor.IStandaloneCodeEditor; alive: boolean; disposal?: monaco.IDisposable; formatAction?: monaco.IDisposable; formatToken?: object; indentation?: ReturnType<typeof bindEditorIndentation> } | null>(null);
   const propsRef = useRef({ value, onChange, onReady, readOnly, onFormat });
+  const completionRef = useRef(completion);
+  useLayoutEffect(() => { completionRef.current = completion; });
   const aliveRef = useRef(true), [contentReady, setContentReady] = useState(false);
   // options引用稳定；库即使迟到应用初始options，也读取同一份最新readonly，不能重新开放失效实例。
   const optionsRef = useRef<monaco.editor.IStandaloneEditorConstructionOptions>({ readOnly: true, wordBasedSuggestions:'off',quickSuggestions:{other:true,comments:false,strings:false},fontFamily: 'Cascadia Code, SFMono-Regular, Consolas, monospace', ...editorFontOptions(fontSize), minimap: { enabled: false }, automaticLayout: true, scrollBeyondLastLine: false, padding: { top: 18, bottom: 12 }, ...editorIndentationOptions(tabSize, insertSpaces), ...editorWordWrapOptions(wordWrap), renderLineHighlight: 'line', smoothScrolling: true, fixedOverflowWidgets: true, contextmenu: true });
@@ -81,17 +84,20 @@ export function SqlEditor({ value, onChange, onReady, height = '100%', readOnly 
     if(readOnly||!completion)return;
     const worker=new CompletionWorkerClient(()=>new CompletionWorker()),directory=new CompletionDirectory(completion.connectionId,completion.connectionVersion,{request:input=>invoke('metadata.completion',input),cancel:taskId=>invoke('query.cancel',{taskId}),id:uid});
     let active:AbortController|undefined,disposed=false;
+    let hover: ReturnType<typeof createSqlFieldHoverProvider> | undefined;
+    const scopeCurrent = () => aliveRef.current && !propsRef.current.readOnly && sameCompletionScope(completionRef.current, completion);
     const provider = monaco.languages.registerCompletionItemProvider('sql', {
       triggerCharacters:['.','`'],
       provideCompletionItems: async (model, position,_context,token) => {
-        if (disposed||readOnly||editorRef.current?.getModel()!==model||model.isDisposed()||token.isCancellationRequested)return{suggestions:[]};
+        if (disposed||readOnly||!scopeCurrent()||editorRef.current?.getModel()!==model||model.isDisposed()||token.isCancellationRequested)return{suggestions:[]};
+        hover?.cancel();
         active?.abort();const controller=new AbortController();active=controller;statusRef.current?.('idle');
         if(model.getValueLength()>completionLimits.sourceUnits){statusRef.current?.('limited');return{suggestions:[]};}
         const version=model.getVersionId(),source=model.getValue(),offset=model.getOffsetAt(position),cancel=token.onCancellationRequested(()=>controller.abort()),change=model.onDidChangeContent(()=>controller.abort());
         // 无会话草稿复用既有连接检查的事实；不为能力判断新增SQL或主动建立查询会话。
         const openedFacts=completion.sessionId?undefined:completionServerFacts.get(completion.connectionId,completion.connectionVersion);
         /** 每次await后核对模型与版本，标签切换、连接修订和编辑取消都不能交付旧建议。 */
-        const current=()=>!disposed&&!controller.signal.aborted&&!model.isDisposed()&&editorRef.current?.getModel()===model&&model.getVersionId()===version&&active===controller&&(!!completion.sessionId||completionServerFacts.get(completion.connectionId,completion.connectionVersion)===openedFacts);
+        const current=()=>!disposed&&scopeCurrent()&&!controller.signal.aborted&&!model.isDisposed()&&editorRef.current?.getModel()===model&&model.getVersionId()===version&&active===controller&&(!!completion.sessionId||completionServerFacts.get(completion.connectionId,completion.connectionVersion)===openedFacts);
         try{
           const cached=completion.sessionId?await invoke('query.completionState',{sessionId:completion.sessionId}):undefined;if(!current())return{suggestions:[]};
           const scope=resolveCompletionContext(completion.database,cached,completion.databaseUnknown);if(!scope.available){statusRef.current?.(scope.reason==='broken'?'unavailable':'idle');return{suggestions:[]};}
@@ -100,7 +106,7 @@ export function SqlEditor({ value, onChange, onReady, height = '100%', readOnly 
           if(analysis.status==='blocked'){statusRef.current?.(analysis.reason==='startup-timeout'?'startupTimeout':analysis.reason==='timeout'?'analysisTimeout':analysis.reason==='budget'?'limited':analysis.reason==='worker'?'unavailable':'idle');return{suggestions:[]};}
           const sourceDirectory=completion.sessionId?new SessionCompletionDirectory(directory,query=>{
             if(query.kind==='databases'||query.kind==='objects'&&query.objectKind!=='relation')throw new Error('会话目录目标无效');
-            return invoke('query.temporaryCompletion',query.kind==='columns'?{sessionId:completion.sessionId!,kind:'columns',database:query.database,table:query.table,prefix:query.prefix}:{sessionId:completion.sessionId!,kind:'objects',database:query.database,prefix:query.prefix});
+            return invoke('query.temporaryCompletion',query.kind==='columns'?{sessionId:completion.sessionId!,kind:'columns',database:query.database,table:query.table,prefix:query.prefix,...(query.details?{details:true}:{})}:{sessionId:completion.sessionId!,kind:'objects',database:query.database,prefix:query.prefix});
           },cached?.objectsRevision??0):directory;
           const result=await completionSuggestions(analysis,scope.database,sourceDirectory,controller.signal,cached?.dialect);if(!current())return{suggestions:[]};
           if(completion.sessionId){const latest=await invoke('query.completionState',{sessionId:completion.sessionId});if(!current()||latest.busy||latest.broken||latest.objectsRevision!==cached?.objectsRevision||latest.databaseKnown!==cached?.databaseKnown||latest.database!==cached?.database||latest.dialect!==cached?.dialect||latest.serverVersion!==cached?.serverVersion)return{suggestions:[]};}
@@ -112,7 +118,20 @@ export function SqlEditor({ value, onChange, onReady, height = '100%', readOnly 
         finally{cancel.dispose();change.dispose();if(active===controller)active=undefined;}
       }
     });
-    return()=>{disposed=true;active?.abort();provider.dispose();worker.dispose();directory.dispose();};
+    hover = createSqlFieldHoverProvider({
+      scope: completion, model: () => editorRef.current?.getModel() ?? null,
+      current: () => !disposed && scopeCurrent() && contentRef.current?.ready === true,
+      completionBusy: () => !!active,
+      facts: () => completionServerFacts.get(completion.connectionId, completion.connectionVersion),
+      state: sessionId => invoke('query.completionState', { sessionId }), directory,
+      analyze: (source, offset, mode, signal, capabilities) => worker.analyze(source, offset, mode, signal, capabilities, 'hover'),
+      temporary: (sessionId, query) => {
+        if (query.kind !== 'columns') throw Error('字段悬停只读取单字段目录');
+        return invoke('query.temporaryCompletion', { sessionId, kind: 'columns', database: query.database, table: query.table, prefix: query.prefix, ...(query.details ? { details: true } : {}) });
+      }
+    });
+    const hoverRegistration = monaco.languages.registerHoverProvider('sql', hover.provider);
+    return()=>{disposed=true;active?.abort();hoverRegistration.dispose();hover?.dispose();provider.dispose();worker.dispose();directory.dispose();};
   },[readOnly,completion?.connectionId,completion?.connectionVersion,completion?.database,completion?.databaseUnknown,completion?.sessionId]);
   /** 字号与正文桥接可随布局恢复；执行动作及父层onReady不在这里重复发布。 */
   function attachContent(editor: monaco.editor.IStandaloneCodeEditor) {

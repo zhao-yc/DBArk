@@ -3,6 +3,7 @@ import type {ManagedConnection} from './connection';
 import {identifier,qualified} from './sql';
 import {completionIdentifier} from '../shared/completionLexical';
 import {sessionObjectLimits,type SessionObjectColumn,type SessionObjectReadResult} from '../shared/sessionObjects';
+import { copyCompletionColumnDetails } from '../shared/completionColumnDetails';
 export interface SessionObjectReadControl{start():void;check():void;finish():Promise<void>}
 
 /** 只判定服务器返回的元数据种类，不执行视图正文，也不把陌生定义误判为无临时遮蔽。 */
@@ -55,7 +56,13 @@ export async function readSessionObject(managed:ManagedConnection,input:{databas
   }
   const columns=await rows<SessionObjectColumn>(managed,'SHOW FULL COLUMNS FROM '+identifier(input.table)+' FROM '+identifier(input.database),sessionObjectLimits.columns,row=>{
     if(!completionIdentifier(row.Field)||typeof row.Type!=='string'||typeof row.Extra!=='string')throw new Error('当前会话字段格式无效');
-    const type=/^[A-Za-z0-9_]+/.exec(row.Type)?.[0].toLowerCase();return{name:row.Field,...(type?{dataType:type}:{}),visible:!/(?:^|\s)INVISIBLE(?:\s|$)/i.test(row.Extra)};
+    const type=/^[A-Za-z0-9_]+/.exec(row.Type)?.[0].toLowerCase();
+    // 完整属性只来自这次显式SHOW FULL COLUMNS；缺失或过大时保留原字段摘要。
+    let details: SessionObjectColumn['details'];
+    if (['YES','NO'].includes(row.Null as string) && Object.hasOwn(row, 'Default') && Object.hasOwn(row, 'Comment')) {
+      try { details = copyCompletionColumnDetails({ type: row.Type, nullable: row.Null === 'YES', defaultValue: row.Default, extra: row.Extra, comment: row.Comment }); } catch {}
+    }
+    return{name:row.Field,...(type?{dataType:type}:{}),visible:!/(?:^|\s)INVISIBLE(?:\s|$)/i.test(row.Extra),...(details?{details}:{})};
   },control);
   if(!columns.length||new Set(columns.map(column=>column.name.toLowerCase())).size!==columns.length)throw new Error('当前会话字段为空或重复，未替换已有缓存');
   const complete=!reason;control.check();catalog.confirm(input.database,input.table,columns,complete);return{temporary:true,objectKind:'temporary',...input,revision:catalog.revision,columns:columns.length,complete,...(reason?{reason}:{})};

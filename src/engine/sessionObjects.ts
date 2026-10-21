@@ -3,8 +3,9 @@ import {completionLimits,type CompletionDirectoryRequest} from '../shared/sqlCom
 import {sessionObjectLimits,type SessionObjectColumn,type SessionObjectCompletion,type SessionObjectSnapshot} from '../shared/sessionObjects';
 import type {SqlLexicalMode} from '../shared/queryParameters';
 import {alterObjectColumns,sessionObjectAction} from './sessionObjectSyntax';
+import { copyCompletionColumnDetails } from '../shared/completionColumnDetails';
 interface Entry{database:string;name:string;columns:SessionObjectColumn[];known:boolean;complete:boolean;absent:boolean}
-/** 会话目录只保存有界字段摘要；淘汰定义保留遮蔽，目录不足时不能回退永久字段。 */
+/** 会话目录保存有界字段；完整属性只供显式请求，淘汰字段也保留临时遮蔽。 */
 export class SessionObjects{
   private entries=new Map<string,Entry>();private uncertain=false;revision=0;
   constructor(readonly caseMode:0|1|2){}
@@ -15,7 +16,7 @@ export class SessionObjects{
     const action=sessionObjectAction(sql,database,mode,dialect);if(action.kind==='none')return;if(action.kind==='opaque'){this.invalidate();return;}if(action.kind==='dependencies'){if(action.targets.some(target=>{const entry=this.entries.get(this.key(target.database,target.table));return !entry?.known||entry.absent;}))this.invalidate();return;}
     if(action.kind==='create'){const old=this.entries.get(this.key(action.target.database,action.target.table));if(action.effects)this.invalidate();if(action.keep&&old&&!old.absent){if(!old.known)this.put({...old,known:true,columns:[],complete:false});return;}const uncertainExisting=action.keep&&(this.uncertain||warnings>0);this.put({database:action.target.database,name:action.target.table,columns:uncertainExisting?[]:action.columns,known:true,complete:action.complete&&!uncertainExisting,absent:false});}
     if(action.kind==='drop')for(const target of action.targets)this.put({...target,name:target.table,columns:[],known:true,complete:true,absent:true});
-    if(action.kind==='alter'){const old=this.entries.get(this.key(action.target.database,action.target.table));if(old&&!old.absent){const next=alterObjectColumns(old.columns,action.parts,old.database),columns=next.complete?next.columns:[];if(next.rename){this.put({...old,columns:[],known:true,complete:true,absent:true});this.put({...old,database:next.rename.database,name:next.rename.table,columns,complete:old.known&&old.complete&&next.complete});}else this.put({...old,columns,complete:old.known&&old.complete&&next.complete});}}
+    if(action.kind==='alter'){const old=this.entries.get(this.key(action.target.database,action.target.table));if(old&&!old.absent){const next=alterObjectColumns(old.columns,action.parts,old.database),columns=next.complete?next.columns.map(({details,...column})=>column):[];if(next.rename){this.put({...old,columns:[],known:true,complete:true,absent:true});this.put({...old,database:next.rename.database,name:next.rename.table,columns,complete:old.known&&old.complete&&next.complete});}else this.put({...old,columns,complete:old.known&&old.complete&&next.complete});}}
     if(action.kind==='rename')for(const pair of action.pairs){const old=this.entries.get(this.key(pair.before.database,pair.before.table));if(old&&!old.absent){this.put({...old,columns:[],known:true,complete:true,absent:true});this.put({...old,database:pair.after.database,name:pair.after.table});}}
   }
   /** 非变更语句失败不凭空创建未知目录；可能部分执行的动作明确使现有定义待核对。 */
@@ -39,7 +40,7 @@ export class SessionObjects{
     if(query.kind==='databases'||query.kind==='objects'&&query.objectKind!=='relation')return base;
     const prefix=query.prefix.toLowerCase(),matches=(value:string)=>value.toLowerCase().startsWith(prefix);
     if(query.kind==='columns'){const entry=this.entries.get(this.key(query.database,query.table));if(entry?.absent)return base;if(!entry)return this.uncertain?{...base,handled:true,incomplete:true}:base;
-      const all=entry.known?entry.columns.filter(column=>matches(column.name)):[];return{...base,handled:true,entries:all.slice(0,completionLimits.entries).map(column=>({name:column.name,kind:'column',dataType:column.dataType,visible:column.visible,sessionObject:'temporary'})),incomplete:!entry.known||!entry.complete||all.length>completionLimits.entries};}
+      const all=entry.known?entry.columns.filter(column=>query.details?column.name.toLowerCase()===query.prefix.toLowerCase():matches(column.name)):[],maximum=query.details?2:completionLimits.entries;return{...base,handled:true,entries:all.slice(0,maximum).map(column=>({name:column.name,kind:'column',dataType:column.dataType,visible:column.visible,sessionObject:'temporary',...(query.details&&column.details?{details:copyCompletionColumnDetails(column.details)}:{})})),incomplete:!entry.known||!entry.complete||all.length>(query.details?1:maximum)};}
     const entries=[...this.entries.values()].filter(entry=>!entry.absent&&this.key(entry.database,'')===this.key(query.database,'')&&matches(entry.name));
     return{...base,entries:entries.slice(0,completionLimits.entries).map(entry=>({name:entry.name,kind:'table',sessionObject:entry.known?'temporary':'unconfirmed'})),shadowed:entries.map(entry=>entry.name),incomplete:this.uncertain||entries.some(entry=>!entry.known)||entries.length>completionLimits.entries};
   }
@@ -48,8 +49,10 @@ export class SessionObjects{
     if(!completionIdentifier(entry.database)||!completionIdentifier(entry.name)||entry.columns.some(column=>!completionIdentifier(column.name))){this.invalidate();return;}
     const key=this.key(entry.database,entry.name);if(entry.absent&&!this.uncertain){this.entries.delete(key);this.revision++;return;}
     if(!this.entries.has(key)&&this.entries.size>=sessionObjectLimits.objects){const oldest=this.entries.keys().next().value;if(oldest!==undefined)this.entries.delete(oldest);this.uncertain=true;}
-    this.entries.set(key,{...entry,columns:entry.columns.map(column=>({...column}))});this.revision++;
+    this.entries.set(key,{...entry,columns:entry.columns.map(column=>({...column,...(column.details?{details:copyCompletionColumnDetails(column.details)}:{})}))});this.revision++;
     let bytes=0;for(const value of this.entries.values())bytes+=JSON.stringify(value).length*2+256;
+    // 富属性不能挤掉原有字段补全；先去掉可选详情，再采用原字段预算保护。
+    if (bytes > sessionObjectLimits.bytes) { bytes = 0; for (const value of this.entries.values()) { value.columns = value.columns.map(({ details, ...column }) => column); bytes += JSON.stringify(value).length * 2 + 256; } }
     if(entry.columns.length>sessionObjectLimits.columns||bytes>sessionObjectLimits.bytes){const value=this.entries.get(key)!;value.columns=[];value.complete=false;}
   }
 }
