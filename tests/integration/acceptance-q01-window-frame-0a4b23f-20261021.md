@@ -43,3 +43,5 @@ Windows准备d155同产品的类型、24文件699项及新构建已另封存78�
 基于main904778c正常合入既有分支1040c5e，无冲突。逐文件核Q01输入仍与准确0a4一致，筛选启停及其904组合用例不被覆盖。按本轮远程失联的本机回退授权执行一次`node scripts/check-local.mjs --build`，明确指定帧分析、窗口作用域、真实Worker、筛选启停、结果RAM界面、原专项关闭门及虚拟网格七文件：类型25.11秒、265项全通过、无跳过或失败，Vitest8.46秒；普通构建30.45秒、Vite29.74秒，整条CLI退出0、64.7769752秒。
 
 原日志在`.cache/q01-enabled-merged-20261021/`，stdout摘要5ba3a2be4aa18a4943620e31f4581c1980698d1a2283d221da6cc0551ecccb21，stderr摘要b7b49deb47291ec895bb313635131ff90cd6ba86543958be40dcf0272b8b76b4，保留Rollup注释及大分块警告。此为合并源码检查，不是把两项功能合并后的新GUI结果；新完整CI和筛选启停实库范围仍独立验收。
+
+准确main整合提交`c4495066f4f570fbff69769ea377f442c66a0aea`已推送，src树`0eb5a6922e7ecc8ff75b0bdddc1c6e597d25c6d2`。[CI39541666500](https://github.com/zhao-yc/DBArk/actions/runs/39541666500)的Linux job119030571609已success：Python21项、0.304秒，类型／593文件11478通过、10平台跳过／构建成功；单元174.00秒，Vite27.29秒。三平台原生job仍在运行，原生剪贴板job跳过，不先报最终通过。

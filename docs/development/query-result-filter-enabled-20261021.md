@@ -31,3 +31,5 @@ node scripts/check-local.mjs --build tests/unit/query-result-filter-enabled.test
 以上是源码、内存组件与开发构建证据，不是原生GUI、实库、安装包或macOS的本能力验收。Q01的0a4实库窗口回合固定另一准确提交，不能计作本能力通过。后续完整CI及单项客户端验收另记，Navicat工作包仍部分，暂不发布。
 
 整合版c449506已保留上述筛选启停产品及904组合用例，src树0eb5a6922e7ecc8ff75b0bdddc1c6e597d25c6d2；Q01独立0a4 GUI已通过，整合类型／七文件265项／构建也通过。筛选启停的新GUI和条件独立读回按[固定Windows操作单](../testing/query-result-filter-enabled-c449506-vm.md)执行，不能用Q01窗口结果替代。
+
+准确c449的[CI39541666500](https://github.com/zhao-yc/DBArk/actions/runs/39541666500)已取得Linux类型／593文件11478通过、10平台跳过／构建成功，三平台原生仍待终态。新操作单短消息派发返回“Codex app-server is not available”，后续状态查询也报告WIN11-TEST不可达；尚未取得新回合或进程的启动确认，保留待确认状态，不据此重复派发或在本机重开同轮。原Q01回合已完成，不属于本次未确认任务。
