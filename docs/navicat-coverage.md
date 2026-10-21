@@ -2,7 +2,7 @@
 
 ## 当前开发安排（2026-10-22）
 
-高频结果导出新增[已返回快照 XLSX](development/result-excel-20261022.md)：正常导出窗口选择 Excel，沿当前行列及勾选范围，数值时间文本、NULL／空串／字节按原 DBArk 协议保留；完整预检后复用原流式背压／取消／原子文件路径，不重发 SQL。完整单元 12606 项通过／1 平台跳过、最终类型／构建通过，准确窗口随后按实测记录；F02 完整工作包、安装／macOS矩阵及发行计数不增加，暂不发布。
+高频结果导出新增[已返回快照 XLSX](development/result-excel-20261022.md)：正常导出窗口选择 Excel，沿当前行列及勾选范围，数值时间文本、NULL／空串／字节按原 DBArk 协议保留；完整预检后复用原流式背压／取消／原子文件路径，不重发 SQL。完整单元 12606 项通过／1 平台跳过、最终类型／构建通过；准确 `452dda7e` 的[本机 Windows 实库整例及独立 Python 原件读回](../tests/integration/acceptance-result-excel-452dda7e-20261022.md)首次通过原一条 SQL／两个文件、两行六列精确协议及正常退出。F02 完整工作包、安装／macOS矩阵及发行计数不增加，暂不发布。
 
 查询工作区新增[两份固定结果只读对比](development/query-result-comparison-20261022.md)：明确选择匹配键，完整显示四类计数、差异分页及左右字段原值；保留精确数值、NULL、空串及字节，分批可取消，不执行 SQL 或同步。完整单元 12496 项通过／1 平台跳过、最终类型与构建通过；准确 `891a4cb8` 的[本机 Windows 实库窗口](../tests/integration/acceptance-query-result-comparison-891a4cb8-20261022.md)通过四类各一行、精确原值及正常退出，保持两条 SELECT 白名单与剪贴板零调用。四次原生准备失败保留，安装／macOS另验。完整 M03 库表比较同步仍待做，不增加完整工作包或发行计数，暂不发布。另补[离线控制台诊断](development/page-find-fixture-diagnostics-20261022.md)，保留旧 CI 的不同阶段失败，不将本机通过当作根因已清除。
 
