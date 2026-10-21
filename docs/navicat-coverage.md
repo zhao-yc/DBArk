@@ -2,7 +2,7 @@
 
 ## 当前开发安排（2026-10-22）
 
-查询结果新增[命名整理方案](development/query-result-presets-20261022.md)：按连接在本机保存完整嵌套筛选、多列优先级、NULL及大小写，支持预览、新建、明确覆盖、仅重命名、删除和手动应用。元数据、连接来源、原文档、修订与结果租约分别复核，完整试算成功才一次发布并接通撤销。真实SQLite重启／配额／回滚、实际Main IPC与最终回包及React回归已补；原生／安装／macOS范围另验，不增加完整工作包计数，暂不发布。
+查询结果新增[命名整理方案](development/query-result-presets-20261022.md)：按连接在本机保存完整嵌套筛选、多列优先级、NULL及大小写，支持预览、新建、明确覆盖、仅重命名、删除和手动应用。元数据、连接来源、原文档、修订与结果租约分别复核，完整试算成功才一次发布并接通撤销。完整11921通过／1平台跳过、最终352项及构建通过；准确edd7bd57的[本机Windows实库窗口及独立读回](../tests/integration/acceptance-query-result-presets-edd7bd57-20261022.md)已通过原一次SQL、8次方案IPC、两格式导出和正常退出。跨标签为React证据、重开为SQLite证据，客户端重启／安装／macOS另验，不增加完整工作包计数，暂不发布。
 
 查询结果[筛选与完整排序联动](development/query-result-filter-preserve-sort-20261022.md)：应用／清除筛选保持原多列优先级、NULL 和大小写；扩大结果导致非法排序值或预算失败时整份拒绝，保留原视图及历史。类型／构建及准确9469ed2a的[Windows两个实库整例及两组独立导出读回](../tests/integration/acceptance-filter-preserve-sort-9469ed2a-20261022.md)通过，原单条SQL与正常关闭保持。完整Linux的复制旧行序断言失败已记录，修正完整矩阵后七文件383项通过，新完整CI另验；失败原子性为RAM证据，安装／macOS另验，不增加完整工作包计数，暂不发布。
 
