@@ -15,3 +15,5 @@ Windows测试ZIP原件12368667519：2729406字节，SHA256 `e65e8de1fd9c2cc4f585
 安装版“CRLF首次文件模型：普通编辑Undo、格式化快捷键UndoRedo及独立重启”失败于 `editor-indentation-native-gate.ts:57` 的clock-reversed分支：start1792606221706，instant1792606235025，previous1792606235026，deadline1792606341706。两次已记录墙钟相差-1毫秒；失败栈处于launch身份检查，不能据此证明后续格式化断言已执行。
 
 原门使用Date.now并拒绝时间回退，当前诊断证明其拒绝分支及已捕获标量，不证明Windows时钟回调的具体外部原因。原failure.json明确automaticRetry=false、automaticForceStop=false、cleanupAllowed=false；失败资源不补清理，不将另外源码窗口成功追认为此安装用例通过。后继需单独处理计时与真实安装验证，保留原120秒和原身份约束，暂不发布。
+
+后继已实现[原TestInfo单调期限](../../docs/development/native-original-monotonic-deadline-20261022.md)，eb0ea00c的Windows源码正式四例及八正常owner通过，后继合法负时间域另有305项RAM检查。原741安装失败仍保持失败，实际安装和macOS须由后继准确提交另核。

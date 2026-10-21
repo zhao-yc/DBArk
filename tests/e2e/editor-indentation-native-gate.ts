@@ -69,7 +69,8 @@ export function bindEditorIndentNativeCase(info: IndentNativeTestInfo, environme
         if (timeout !== 120000) reject('original-timeout');
         if (info.timeout !== timeout) reject('timeout-changed');
         if (!Number.isFinite(start)) reject('invalid-start');
-        if (monotonic && (!monotonicField || !Number.isFinite(monotonicStart) || monotonicStart! < 0)) reject('invalid-monotonic-start');
+        // 框架原点偏移可产生有限负时间戳；只核来源及有限性，前后与到期仍按原elapsed检查。
+        if (monotonic && (!monotonicField || !Number.isFinite(monotonicStart))) reject('invalid-monotonic-start');
         if (monotonic && (!Object.hasOwn(info, '_startTime') || info._startTime !== monotonicStart)) reject('monotonic-start-changed');
         if (!Number.isFinite(instant)) reject('invalid-clock');
         if (instant < start) reject('before-start');

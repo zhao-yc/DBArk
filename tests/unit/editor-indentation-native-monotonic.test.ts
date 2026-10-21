@@ -40,11 +40,20 @@ describe('原TestInfo单调期限（默认框架路径，RAM）', () => {
     expect(() => f.scope.assertCurrent()).toThrow('分支=clock-reversed；');
     f.tick(3); expect(() => f.scope.assertCurrent()).toThrow('分支=retained；');
   });
-  it.each([undefined, NaN, Infinity, -1])('缺失或无效原单调起点%s不能用当前时刻补造', value => {
+  it.each([undefined, NaN, Infinity, -Infinity])('缺失或无效原单调起点%s不能用当前时刻补造', value => {
     const f = fixture(); f.info._startTime = value;
     expect(() => f.scope.assertCurrent()).toThrow('分支=monotonic-start-changed；');
     const info = { _startWallTime: 100000, timeout: 120000, ...(value === undefined ? {} : { _startTime: value }) };
     expect(() => bindEditorIndentNativeCase(info, { assertCurrent() {} }, () => info).assertCurrent()).toThrow('分支=invalid-monotonic-start；');
+  });
+  it('框架原点偏移产生的有限负时间戳仍沿原elapsed计时，不能把合法时间域误判为无效', () => {
+    const origin = iso.timeOrigin();
+    try {
+      iso.setTimeOrigin(performance.timeOrigin + 10000);
+      const f = fixture(); expect(f.info._startTime).toBeLessThan(0); f.scope.assertCurrent();
+      f.tick(119999); expect(() => f.scope.assertCurrent()).not.toThrow();
+      f.tick(120000); expect(() => f.scope.assertCurrent()).toThrow('分支=deadline；');
+    } finally { iso.setTimeOrigin(origin); }
   });
   it('原单调字段删除后再恢复也不能复活，框架原点漂移同样拒绝', () => {
     const f = fixture(), original = f.info._startTime; delete f.info._startTime;

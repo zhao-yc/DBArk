@@ -27,7 +27,7 @@ function fixture() {
   const source = readFileSync(new URL('../../src/renderer/components/QueryTab.tsx', import.meta.url), 'utf8'), file = ts.createSourceFile('QueryTab.tsx', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
   const functions: string[] = []; let body = '';
   function visit(node: ts.Node) {
-    if (ts.isFunctionDeclaration(node) && node.name && ['saveQuery', 'runQuery', 'invalidateResultSelection', 'selectActiveDetailRow', 'rowDetailAllowed', 'resultViewCurrent'].includes(node.name.text)) functions.push(node.getText(file));
+    if (ts.isFunctionDeclaration(node) && node.name && ['saveQuery', 'runQuery', 'invalidateResultSelection', 'selectActiveDetailRow', 'rowDetailAllowed', 'resultViewCurrent', 'travelResultHistory'].includes(node.name.text)) functions.push(node.getText(file));
     if (ts.isJsxElement(node) && node.openingElement.attributes.properties.some(attribute => ts.isJsxAttribute(attribute) && attribute.name.getText(file) === 'className' && attribute.initializer && ts.isStringLiteral(attribute.initializer) && attribute.initializer.text === 'result-body')) body = node.getText(file);
     ts.forEachChild(node, visit);
   }
@@ -39,11 +39,12 @@ function fixture() {
   const workspace = { settings: { tabs: [tab] }, setBusy: vi.fn(), setDirty: vi.fn(), updateTab: vi.fn(), notify: vi.fn() };
   const frames: ReactElement[] = [], clearOutcome = vi.fn();
   // 本端口只核计划身份，结果选择回调保持关闭；执行路径仍清除真实选择实例。
-  const context = createContext({ filterBinding: undefined, filterView: undefined, sortLeaseRef: { current: null }, setSortLease: vi.fn(), filterLeaseRef: { current: null }, setFilterLease: vi.fn(), resultSelection: selection.resultSelection, selectionBinding: undefined, selectResultRows: vi.fn(() => false), require, exports: {}, tab, settings: { resultLimit: 10 }, busy: false, pin: null, outcome, result: outcome.results[0], resultIndex: 0,
+  const context = createContext({ filterBinding: undefined, filterView: undefined, historyBinding: undefined, sortLeaseRef: { current: null }, setSortLease: vi.fn(), filterLeaseRef: { current: null }, setFilterLease: vi.fn(), resultSelection: selection.resultSelection, selectionBinding: undefined, selectResultRows: vi.fn(() => false), require, exports: {}, tab, settings: { resultLimit: 10 }, busy: false, pin: null, outcome, result: outcome.results[0], resultIndex: 0,
     // 真实初始控制器及未打开的派生视图；活动行回调也从组件AST提取，不另写处理器。
     resultSorter: new QueryResultSort(), sortBinding: undefined, sortView: undefined, rowDetails: new QueryRowDetails(), setRowDetail: vi.fn(), setActiveDetailRow: vi.fn(), currentRowDetail: null, detailBinding: undefined, alive: { current: true }, connectionVersion: 0, document: { querySelector: () => null },
     // 此端口不打开列管理，普通结果的可见列随当前结果更新，不能捕获执行前的计划列。
     get visibleColumns(): unknown[] { return context.result?.columns ?? []; },
+    get viewSource(): unknown { return context.result; },
     task: { current: 'original-plan-task' }, sessionId: 'original-session', sessionRef: { current: 'original-session' }, busyRef: { current: false }, cancelledQuery: { current: '' }, parameterSession: { current: '' }, explainSource: { current: 'SELECT 1' },
     editor: { current: { getModel: () => ({ getValue: () => 'SELECT 1' }) } }, connection: { database: 'db' }, useWorkspace: { getState: () => workspace }, invoke,
     setBusy: (value: boolean) => { context.busy = value; frames.push(context.render()); }, setOutcome: (value: any) => { clearOutcome(value); context.outcome = value; context.result = value?.results[0]; },
@@ -100,6 +101,10 @@ describe('非SQL忙碌期间的计划查看器身份', () => {
     release(next); await running; expect(f.context.outcome).toBe(next); expect(f.child().type).toBe(ResultsGrid);
     expect((f.child() as ReactElement<{ rows: unknown }>).props.rows).toBe(next.results[0].rows);
     expect((f.child() as ReactElement<{ columns: unknown }>).props.columns).toBe(next.results[0].columns);
+    // 抽取真实历史函数；本计划端口没有整理绑定，快捷键回调必须按原门返回，不能另发SQL或改结果。
+    const callbacks = f.child() as ReactElement<{ onHistoryTravel(direction: -1 | 1): void }>, calls = f.invoke.mock.calls.length, clears = f.clearOutcome.mock.calls.length;
+    callbacks.props.onHistoryTravel(-1); callbacks.props.onHistoryTravel(1);
+    expect(f.context.outcome).toBe(next); expect(f.invoke).toHaveBeenCalledTimes(calls); expect(f.clearOutcome).toHaveBeenCalledTimes(clears);
     expect(f.invoke).toHaveBeenCalledWith('query.execute', expect.objectContaining({ sessionId: 'original-session', sql: 'SELECT 2', taskId: 'new-query-task' }));
   });
 
