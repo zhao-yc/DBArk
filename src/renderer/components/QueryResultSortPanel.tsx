@@ -1,4 +1,4 @@
-import { useLayoutEffect, useRef, useState } from 'react';
+import { useLayoutEffect, useRef, useState, type KeyboardEvent } from 'react';
 import { queryResultSortSupportsIgnoreCase, type QueryResultSortBinding, type QueryResultSortRule, type QueryResultSortView } from '../queryResultSort';
 import { queryResultSortZh as text } from '../locales/queryResultSort.zh-CN';
 import { errorMessage } from '../lib';
@@ -48,10 +48,25 @@ export function QueryResultSortPanel({ binding, initial, isCurrent, onApply, onC
     try { const rules = validate(entries); consumed.current = true; if (!onApply(rules)) { consumed.current = false; setError(text.panelDeclined); } }
     catch (reason) { consumed.current = false; setError(errorMessage(reason)); }
   }
+  /** 取消只消费所属渲染的草稿；允许关闭已失效面板，不借旧回调关闭新面板。 */
+  function cancel(): void {
+    if (render.current !== ticket || live.current !== entries || composition.current || consumed.current) return;
+    consumed.current = true; onClose();
+  }
+  /** 明确命令才截获；输入法确认、长按、普通Enter及其它组合保留原输入行为。 */
+  function keyDown(event: KeyboardEvent<HTMLElement>): void {
+    if (event.defaultPrevented || composition.current || event.nativeEvent.isComposing || event.keyCode === 229) return;
+    const confirm = event.key === 'Enter' && (event.ctrlKey || event.metaKey) && !event.altKey && !event.shiftKey;
+    const dismiss = event.key === 'Escape' && !event.ctrlKey && !event.metaKey && !event.altKey && !event.shiftKey;
+    if (!confirm && !dismiss) return;
+    event.preventDefault(); event.stopPropagation();
+    if (event.repeat) return;
+    if (confirm) apply(); else cancel();
+  }
   const disabled = invalid.current || consumed.current || composing;
   const available = binding.visible.filter(column => binding.reasons.has(column.key) && !binding.reasons.get(column.key) && !entries.some(item => item.rule.column === column.key));
   const pages = Math.max(1, Math.ceil(entries.length / pageSize)), currentPage = Math.min(page, pages - 1);
-  return <section role="region" aria-label={text.panelTitle} className="filter-panel expanded-filter-panel query-result-sort-panel" onCompositionStart={() => { composition.current = true; setComposing(true); }} onCompositionEnd={() => { composition.current = false; setComposing(false); }}>
+  return <section role="region" aria-label={text.panelTitle} aria-description={text.panelShortcuts} className="filter-panel expanded-filter-panel query-result-sort-panel" onKeyDown={keyDown} onCompositionStart={() => { composition.current = true; setComposing(true); }} onCompositionEnd={() => { composition.current = false; setComposing(false); }}>
     <strong>{text.panelTitle}</strong><p>{text.panelHint}</p><p className="muted">{text.scope} {text.nullsHint}</p>
     {!entries.length && <p>{text.panelEmpty}</p>}
     {entries.slice(currentPage * pageSize, (currentPage + 1) * pageSize).map(({ id, rule }, position) => {
@@ -65,6 +80,6 @@ export function QueryResultSortPanel({ binding, initial, isCurrent, onApply, onC
       </div>;
     })}
     {pages > 1 && <div className="filter-inputs"><button type="button" disabled={disabled || !currentPage} onClick={() => { if (current()) setPage(currentPage - 1); }}>{text.panelPrevious}</button><span>{text.panelPage(currentPage + 1, pages)}</span><button type="button" disabled={disabled || currentPage + 1 >= pages} onClick={() => { if (current()) setPage(currentPage + 1); }}>{text.panelNext}</button></div>}
-    <ErrorBox message={error}/><div className="filter-inputs"><button type="button" disabled={disabled || !available.length} onClick={() => edit([...entries, { id: sequence.current++, rule: { column: available[0].key, direction: 'ASC' } }], Math.floor(entries.length / pageSize))}>{text.panelAdd}</button><button type="button" disabled={disabled || !entries.length} onClick={() => edit([])}>{text.panelClear}</button><span className="grow"/><button type="button" disabled={composing} onClick={() => { if (render.current === ticket && live.current === entries && !composition.current && !consumed.current) { consumed.current = true; onClose(); } }}>{text.panelCancel}</button><button type="button" className="primary" disabled={disabled} onClick={apply}>{text.panelApply}</button></div>
+    <ErrorBox message={error}/><div className="filter-inputs"><button type="button" disabled={disabled || !available.length} onClick={() => edit([...entries, { id: sequence.current++, rule: { column: available[0].key, direction: 'ASC' } }], Math.floor(entries.length / pageSize))}>{text.panelAdd}</button><button type="button" disabled={disabled || !entries.length} onClick={() => edit([])}>{text.panelClear}</button><span className="grow"/><button type="button" aria-keyshortcuts="Escape" disabled={composing} onClick={cancel}>{text.panelCancel}</button><button type="button" className="primary" title={text.panelShortcuts} aria-keyshortcuts="Control+Enter Meta+Enter" disabled={disabled} onClick={apply}>{text.panelApply}</button></div>
   </section>;
 }

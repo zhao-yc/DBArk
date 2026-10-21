@@ -65,6 +65,50 @@ async function sortDraftField(label: string, value: string | boolean) {
   await act(async () => reactProps(node).onChange({ target: typeof value === 'boolean' ? { checked: value } : { value } }));
 }
 
+/** 走实际region键盘处理器，记录是否消费事件，不替代排序／筛选／工作区控制器。 */
+async function sortDraftKey(key: string, options: Record<string, unknown> = {}) {
+  const panel = document.querySelector('[aria-label="' + text.panelTitle + '"]')!, event = { key, ctrlKey: false, metaKey: false, altKey: false, shiftKey: false, repeat: false, defaultPrevented: false, keyCode: 0, nativeEvent: { isComposing: false }, preventDefault: vi.fn(), stopPropagation: vi.fn(), ...options };
+  await act(async () => reactProps(panel).onKeyDown(event)); return event;
+}
+
+it.each(['ctrlKey', 'metaKey'])('排序草稿%s+Enter只应用一次，旧键盘回调不提交后继草稿，也不执行SQL', async modifier => {
+  await mount(); await click(text.panelTitle); await click(text.panelAdd); await sortDraftField(text.panelDirection(1), 'DESC');
+  const oldKey = reactProps(document.querySelector('[aria-label="' + text.panelTitle + '"]')!).onKeyDown;
+  const event = await sortDraftKey('Enter', { [modifier]: true }); expect(event.preventDefault).toHaveBeenCalledOnce(); expect(event.stopPropagation).toHaveBeenCalledOnce();
+  expect(grid().sortColumns).toEqual([{ columnKey: 'id', direction: 'DESC' }]);
+  await click(text.panelTitle); await click(text.panelClear); await click(text.panelAdd); await sortDraftField(text.panelField(1), 'value');
+  await act(async () => oldKey({ ...event, ctrlKey: true })); expect(grid().sortColumns).toEqual([{ columnKey: 'id', direction: 'DESC' }]);
+  await sortDraftKey('Escape'); expect(grid().sortColumns).toEqual([{ columnKey: 'id', direction: 'DESC' }]);
+  expect(commands.filter(command => command === 'query.execute')).toHaveLength(1);
+});
+
+it('排序草稿普通Enter、Alt/Shift组合及输入法原生标记不提交，长按命令消费但不应用', async () => {
+  await mount(); await click(text.panelTitle); await click(text.panelAdd);
+  for (const [key, options] of [
+    ['Enter', {}], ['Enter', { ctrlKey: true, altKey: true }], ['Enter', { metaKey: true, shiftKey: true }], ['Escape', { ctrlKey: true }],
+    ['Enter', { ctrlKey: true, nativeEvent: { isComposing: true } }], ['Enter', { ctrlKey: true, keyCode: 229 }], ['Enter', { ctrlKey: true, defaultPrevented: true }],
+  ] as [string, Record<string, unknown>][]) {
+    const event = await sortDraftKey(key, options); expect(event.preventDefault).not.toHaveBeenCalled(); expect(event.stopPropagation).not.toHaveBeenCalled(); expect(grid().sortColumns).toEqual([]);
+  }
+  for (const [key, options] of [['Enter', { ctrlKey: true, repeat: true }], ['Escape', { repeat: true }]] as [string, Record<string, unknown>][]) {
+    const event = await sortDraftKey(key, options); expect(event.preventDefault).toHaveBeenCalledOnce(); expect(event.stopPropagation).toHaveBeenCalledOnce(); expect(grid().sortColumns).toEqual([]);
+  }
+  let panel = document.querySelector('[aria-label="' + text.panelTitle + '"]')!; await act(async () => reactProps(panel).onCompositionStart());
+  await sortDraftKey('Enter', { ctrlKey: true }); await sortDraftKey('Escape'); expect(grid().sortColumns).toEqual([]); expect(button(text.panelApply).disabled).toBe(true);
+  panel = document.querySelector('[aria-label="' + text.panelTitle + '"]')!; await act(async () => reactProps(panel).onCompositionEnd());
+  await sortDraftKey('Enter', { ctrlKey: true }); expect(grid().sortColumns).toEqual([{ columnKey: 'id', direction: 'ASC' }]);
+});
+
+it('排序草稿Esc保留原筛选、排序和重做，失效键盘不能关闭后继面板', async () => {
+  await mount(); await sort(); await sort('id', 'DESC'); await click(historyText.undo); const rows = grid().rows;
+  await click(text.panelTitle); await sortDraftField(text.panelDirection(1), 'DESC');
+  const event = await sortDraftKey('Escape'); expect(event.preventDefault).toHaveBeenCalledOnce(); expect(grid().rows).toBe(rows); expect(button(historyText.redo).disabled).toBe(false);
+  await click(text.panelTitle); const stale = reactProps(document.querySelector('[aria-label="' + text.panelTitle + '"]')!).onKeyDown;
+  await act(async () => { store.setState({ connectionVersions: { c: 2 } }); store.setState({ connectionVersions: { c: 1 } }); });
+  await click(text.panelTitle); await click(text.panelAdd); await act(async () => stale(event));
+  expect(document.querySelector('[aria-label="' + text.panelField(1) + '"]')).not.toBeNull();
+});
+
 it('多列排序草稿保留筛选，一次应用完整优先级，原文精度、选择导出及整理撤销一致', async () => {
   await mountMulti(); const saved = structuredClone(original);
   await click(filterText.open); await addFilterRule(1, 'group', 'eq', 'A'); await click(filterText.apply);

@@ -95,7 +95,8 @@ export function registerQueryResultSortCaseUi(binding:QueryResultColumnsUiTarget
    await observe(()=>sortPanel.getByRole('button',{name:sortText.panelAdd,exact:true}).click());
    await observe(()=>sortPanel.getByRole('combobox',{name:sortText.panelField(2),exact:true}).selectOption({index:2}));
    await observe(()=>expect.poll(ids).toEqual(['1','2','3','4','5','6','7']));
-   await observe(()=>sortPanel.getByRole('button',{name:sortText.panelApply,exact:true}).click());
+   await observe(()=>sortPanel.getByRole('combobox',{name:sortText.panelField(2),exact:true}).focus());
+   await observe(()=>sortPanel.getByRole('combobox',{name:sortText.panelField(2),exact:true}).press(`${modifier}+Enter`));
    await observe(()=>expect(sortPanel).toBeHidden());await observe(()=>expect.poll(ids).toEqual(['5','3','1','2','7','6','4']));
    await observe(()=>tab.getByRole('button',{name:historyText.undo,exact:true}).click());await observe(()=>expect.poll(ids).toEqual(['1','2','3','4','5','6','7']));
    await observe(()=>tab.getByRole('button',{name:historyText.redo,exact:true}).click());await observe(()=>expect.poll(ids).toEqual(['5','3','1','2','7','6','4']));
@@ -103,7 +104,8 @@ export function registerQueryResultSortCaseUi(binding:QueryResultColumnsUiTarget
    await observe(()=>expect(sortPanel.getByRole('checkbox',{name:sortText.panelCase(1),exact:true})).toBeChecked());
    await observe(()=>sortPanel.getByRole('combobox',{name:sortText.panelDirection(2),exact:true}).selectOption('DESC'));
    await observe(()=>sortPanel.getByRole('button',{name:sortText.panelEarlier(2),exact:true}).click());
-   await observe(()=>sortPanel.getByRole('button',{name:sortText.panelCancel,exact:true}).click());await observe(()=>expect.poll(ids).toEqual(['5','3','1','2','7','6','4']));
+   await observe(()=>sortPanel.getByRole('combobox',{name:sortText.panelField(1),exact:true}).focus());
+   await observe(()=>sortPanel.getByRole('combobox',{name:sortText.panelField(1),exact:true}).press('Escape'));await observe(()=>expect.poll(ids).toEqual(['5','3','1','2','7','6','4']));
    await observe(()=>tab.getByRole('button',{name:sortText.panelTitle,exact:true}).click());
    await observe(()=>sortPanel.getByRole('button',{name:sortText.panelClear,exact:true}).click());await observe(()=>sortPanel.getByRole('button',{name:sortText.panelApply,exact:true}).click());
    await observe(()=>expect.poll(ids).toEqual(['1','2','3','4','5','6','7']));
