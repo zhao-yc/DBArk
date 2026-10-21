@@ -6,6 +6,9 @@ import type { TableInfo } from '../../src/shared/contracts';
 import { tableCopyMetadataKey } from '../../src/shared/tableCopySource';
 import { tableCellFilterZh as text } from '../../src/renderer/locales/tableCellFilter.zh-CN';
 import { zh } from '../../src/renderer/locales/zh-CN';
+import { tableSortZh as sortText } from '../../src/renderer/locales/tableSort.zh-CN';
+import { recordViewZh } from '../../src/renderer/locales/recordViews.zh-CN';
+import { buildPageSql } from '../../src/engine/sql';
 
 const grid = vi.hoisted(() => ({ props: null as any, rows: [] as DraftRow[] }));
 // 只替换网格/Monaco外界渲染端口；TableTab、类型编辑器、弹窗、store与历史运行生产代码。
@@ -95,5 +98,44 @@ describe('真实React表页按单元格预填全表筛选RAM', () => {
     await selectCell(0, 'bin'); expect(button(text.equal).disabled).toBe(true); await act(async () => old()); expect(document.querySelector('form[class="filter-rule-form"]')).toBeNull(); expect(pages).toHaveLength(count);
     await selectCell(0, 'id'); await click(text.equal); expect(field(zh.table.text011).value).toBe('1'); await click(zh.table.text006); await click(zh.table.text006); expect(field(zh.table.text011).value).toBe('');
     await act(async () => grid.props.onRowsChange(grid.rows.map((row, index) => index ? row : { ...row, data: { ...row.data, note: '未提交' } }))); expect(button(text.equal).disabled).toBe(true); expect(button(text.exclude).disabled).toBe(true); expect(pages).toHaveLength(count); expect(previews).toEqual([]);
+  });
+});
+
+/** 只经真实受控select修改草稿，分页请求仍来自生产TableTab。 */
+async function chooseSort(label: string, value: string) { const node = field(label); await act(async () => { node.value = value; node.dispatchEvent(new MemoryEvent('change')); }); }
+
+describe('真实React表页多列服务器排序RAM', () => {
+  it('编辑顺序和方向期间零读取，应用一次保留精确筛选并生成服务器ORDER BY', async () => {
+    const info = await mount(); await selectCell(0, 'num'); await click(text.equal); await applyCondition();
+    const jump = field(zh.table.pageJumpLabel), propsKey = Object.keys(jump).find(key => key.startsWith('__reactProps$'))!;
+    await act(async () => (jump as any)[propsKey].onChange({ target: { value: '3' } }));
+    await act(async () => document.querySelector('form[class="page-jump"]')!.dispatchEvent(new MemoryEvent('submit'))); expect(pages.at(-1).page).toBe(3);
+    const count = pages.length; await click(sortText.entry); await click(sortText.add); const noteField = field(sortText.field(1)); await chooseSort(sortText.field(1), 'note'); expect(field(sortText.field(1))).toBe(noteField); await chooseSort(sortText.direction(1), 'DESC'); await click(sortText.add); await chooseSort(sortText.field(2), 'num'); await click(sortText.earlier(2));
+    expect(field(sortText.field(1)).value).toBe('num'); expect(field(sortText.field(2))).toBe(noteField); expect(field(sortText.direction(2)).value).toBe('DESC'); expect(pages).toHaveLength(count);
+    const old = callback(button(sortText.apply)); await click(sortText.apply); await act(async () => old()); expect(pages).toHaveLength(count + 1);
+    const input = pages.at(-1); expect(input).toMatchObject({ page: 1, pageSize: 50, filters: [{ column: 'num', operator: '=', value: '0.00000000000000000000001' }], filterMode: 'all', sort: [{ column: 'num', direction: 'ASC' }, { column: 'note', direction: 'DESC' }] });
+    const sql = buildPageSql(info, input.page, input.pageSize, input.filters, input.sort, input.filterMode); expect(sql.sql).toContain('ORDER BY `num` ASC, `note` DESC, `id` ASC LIMIT 51 OFFSET 0'); expect(sql.params).toEqual(['0.00000000000000000000001']); expect(previews).toEqual([]); expect(commands.includes('table.apply')).toBe(false);
+  });
+  it('取消、拒绝丢弃和确认应用分别保留或放弃原数据草稿；清空规则仍保留可靠键兜底', async () => {
+    const info = await mount(); await act(async () => grid.props.onRowsChange(grid.rows.map((row, index) => index ? row : { ...row, data: { ...row.data, note: '尚未提交' } })));
+    const originalConfirm = window.confirm, confirm = vi.fn(() => false); window.confirm = confirm;
+    try {
+      const count = pages.length; await click(sortText.entry); await click(sortText.add); await click(sortText.cancel); expect(pages).toHaveLength(count); expect(grid.rows[0].data.note).toBe('尚未提交'); expect(confirm).not.toHaveBeenCalled();
+      await click(sortText.entry); await click(sortText.add); await chooseSort(sortText.direction(1), 'DESC'); await click(sortText.apply); expect(confirm).toHaveBeenCalledWith(recordViewZh.discardPage); expect(pages).toHaveLength(count); expect(grid.rows[0].data.note).toBe('尚未提交'); expect(document.body.textContent).toContain(sortText.declined);
+      confirm.mockReturnValue(true); await click(sortText.apply); expect(pages).toHaveLength(count + 1); expect(grid.rows[0].data.note).toBe('原1'); expect(pages.at(-1).sort).toEqual([{ column: 'id', direction: 'DESC' }]);
+      await click(sortText.entry); await click(sortText.clear); expect(pages).toHaveLength(count + 1); await click(sortText.apply); expect(pages).toHaveLength(count + 2); expect(pages.at(-1).sort).toEqual([]); expect(buildPageSql(info, 1, 50, [], []).sql).toContain('ORDER BY `id` ASC');
+    } finally { window.confirm = originalConfirm; }
+  });
+  it('旧草稿回调不能覆盖新优先级；表连接ABA后原草稿永久失效', async () => {
+    await mount(); await click(sortText.entry); await click(sortText.add); const old = callback(button(sortText.apply)), count = pages.length;
+    await chooseSort(sortText.direction(1), 'DESC'); await act(async () => old()); expect(pages).toHaveLength(count);
+    await act(async () => { store.setState({ connectionVersions: { 连接: 2 } }); store.setState({ connectionVersions: { 连接: 1 } }); });
+    await click(sortText.apply); expect(document.body.textContent).toContain(sortText.stale); expect(pages).toHaveLength(count); expect(button(sortText.apply).disabled).toBe(true); await click(sortText.cancel); expect(grid.rows).toHaveLength(3);
+  });
+  it('列头排序变化使旧面板失效，重新打开保留新顺序；未改规则直接关闭不查询', async () => {
+    await mount(); await click(sortText.entry); await click(sortText.add); const old = callback(button(sortText.apply));
+    await act(async () => grid.props.onSortColumnsChange([{ columnKey: 'note', direction: 'DESC' }])); const count = pages.length;
+    await act(async () => old()); expect(pages).toHaveLength(count); await click(sortText.apply); expect(document.body.textContent).toContain(sortText.stale); await click(sortText.cancel);
+    await click(sortText.entry); expect(field(sortText.field(1)).value).toBe('note'); expect(field(sortText.direction(1)).value).toBe('DESC'); await click(sortText.apply); expect(pages).toHaveLength(count); expect(document.querySelector(`[aria-label="${sortText.title}"]`)).toBeNull();
   });
 });
