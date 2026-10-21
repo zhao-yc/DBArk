@@ -2,6 +2,8 @@
 
 查询结果新增[命名整理方案](development/query-result-presets-20261022.md)：完整筛选与多列排序按连接持久化，支持新建、覆盖、仅重命名、删除、预览与手动应用；字段及来源不匹配时整份拒绝，失败要求显式刷新。完整11921通过／1平台跳过，最后名称校验另有352项及构建通过；准确edd7bd57的[本机Windows实库窗口与独立导出读回](../tests/integration/acceptance-query-result-presets-edd7bd57-20261022.md)已通过，客户端重启／安装／macOS另验，暂不发布。
 
+后继准确3270ebbb新增[Windows源码真实双客户端重启验收](../tests/integration/acceptance-query-result-presets-restart-3270ebbb-20261022.md)：第二代从原配置读出完整方案，通过真实UI应用与撤销重做；每代一次常量SQL、临时密码不落盘、两代正常退出。124项准备及类型通过，14封存／2143输入不变；产品源码和原编译字节保持，安装／macOS继续，暂不发布。
+
 筛选应用／清除新增[完整排序联动](development/query-result-filter-preserve-sort-20261022.md)：保留多列优先级、NULL 和大小写，新筛选与原排序共同试算，失败不部分发布。类型／构建及两个Windows实库整例、独立导出读回通过；完整CI发现的复制旧行序断言已补准确矩阵，后继七文件383项通过。原失败与新完整CI分别记录，暂不发布。
 
 所有占用电脑的测试优先在独立WIN11-TEST的“dbark测试”会话串行执行。用户已授权连接不稳定时在本机接续；先确认原测试未启动或已结束，记录实际平台与未验范围。当前[高频查询工作流整合](development/query-result-snippet-integration-20261020.md)接入七种文本筛选和片段JSON候选；各独立候选的通过不自动视为整合通过，固定整合提交仍须单独验证，暂不发布。
