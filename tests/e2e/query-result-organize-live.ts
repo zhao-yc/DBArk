@@ -8,6 +8,7 @@ import { QueryResultColumnsUiLifetime,assertQueryResultColumnsUiIdentity,closeQu
 import { queryResultColumnsZh as text } from '../../src/renderer/locales/queryResultColumns.zh-CN';
 import { zh } from '../../src/renderer/locales/zh-CN';
 import { queryResultSortZh as sortText } from '../../src/renderer/locales/queryResultSort.zh-CN';
+import { queryResultHistoryZh as historyText } from '../../src/renderer/locales/queryResultHistory.zh-CN';
 import { queryResultFilterZh as filterText } from '../../src/renderer/locales/queryResultFilter.zh-CN';
 import { queryResultCopyZh as copyText } from '../../src/renderer/locales/queryResultCopy.zh-CN';
 import { captureQueryResultGridLayout } from '../helpers/queryResultGridLayout';
@@ -63,6 +64,9 @@ export function registerQueryResultOrganizeUi(binding:QueryResultColumnsUiTarget
    await observe(()=>heads.nth(3).click({modifiers:[modifier]}));await observe(()=>expect(tab.getByRole('list',{name:sortText.priorities,exact:true}).getByRole('listitem')).toHaveCount(2));
    await observe(()=>expect.poll(ids).toEqual(['2','3','1']));
    await observe(()=>tab.getByRole('button',{name:sortText.earlier(2,'repeated'),exact:true}).click());await observe(()=>expect.poll(ids).toEqual(['1','3','2']));
+   // 真正点击撤销／重做，恢复完整多列优先级；此处仍只有原来的一次明确SQL执行。
+   await observe(()=>tab.getByRole('button',{name:historyText.undo,exact:true}).click());await observe(()=>expect.poll(ids).toEqual(['2','3','1']));
+   await observe(()=>tab.getByRole('button',{name:historyText.redo,exact:true}).click());await observe(()=>expect.poll(ids).toEqual(['1','3','2']));
    const panel=tab.getByRole('region',{name:filterText.title,exact:true});
    /** 通过真实受控条件输入修改草稿；字段按当前可见序号选择，重复别名不作身份。 */
    async function addRule(index:number,column:number,operator:string,value:string,upper?:string){
@@ -80,6 +84,8 @@ export function registerQueryResultOrganizeUi(binding:QueryResultColumnsUiTarget
    await observe(()=>tab.getByRole('button',{name:filterText.open,exact:true}).click());await addRule(1,3,'lte','1.00000000000000000001');await addRule(2,1,'eq','2');
    await observe(()=>panel.getByRole('button',{name:filterText.apply,exact:true}).click());await observe(()=>expect.poll(ids).toEqual([]));
    await observe(()=>expect(tab.locator('.query-result-filter-bar')).toContainText(filterText.counts(3,0)));await observe(()=>expect(tab.getByRole('button',{name:copyText.action,exact:true})).toBeDisabled());await observe(()=>expect(selected).toBeDisabled());
+   await observe(()=>tab.getByRole('button',{name:historyText.undo,exact:true}).click());await observe(()=>expect.poll(ids).toEqual(['1','3','2']));
+   await observe(()=>tab.getByRole('button',{name:historyText.redo,exact:true}).click());await observe(()=>expect.poll(ids).toEqual([]));
    await observe(()=>tab.getByRole('button',{name:filterText.open,exact:true}).click());await observe(()=>panel.getByRole('combobox',{name:filterText.mode,exact:true}).selectOption('OR'));await observe(()=>panel.getByRole('button',{name:filterText.apply,exact:true}).click());await observe(()=>expect.poll(ids).toEqual(['1','2','3']));
    await observe(()=>tab.getByRole('button',{name:filterText.open,exact:true}).click());await observe(()=>panel.getByRole('button',{name:filterText.remove(2),exact:true}).click());await observe(()=>panel.getByRole('combobox',{name:filterText.mode,exact:true}).selectOption('AND'));await observe(()=>panel.getByRole('button',{name:filterText.apply,exact:true}).click());await observe(()=>expect.poll(ids).toEqual(['1','3']));
    await observe(()=>heads.nth(5).click());await observe(()=>heads.nth(3).click({modifiers:[modifier]}));await observe(()=>heads.nth(3).click({modifiers:[modifier]}));await observe(()=>expect(tab.getByRole('list',{name:sortText.priorities,exact:true}).getByRole('listitem')).toHaveCount(2));await observe(()=>expect.poll(ids).toEqual(['3','1']));

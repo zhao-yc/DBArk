@@ -6,6 +6,7 @@ import { runInNewContext } from 'node:vm';
 import ts from 'typescript';
 import { memoryDocument, MemoryEvent, type MemoryNode } from '../fixtures/memory-dom';
 import type { QueryResult } from '../../src/shared/contracts';
+import { queryResultHistoryZh as historyText } from '../../src/renderer/locales/queryResultHistory.zh-CN';
 import { queryResultSortZh as text } from '../../src/renderer/locales/queryResultSort.zh-CN';
 import { queryResultFindZh as findText } from '../../src/renderer/locales/queryResultFind.zh-CN';
 import { queryRowDetailsZh as detailsText } from '../../src/renderer/locales/queryRowDetails.zh-CN';
@@ -607,4 +608,47 @@ it.each(['selected','all'] as const)('筛选和多列排序在%s连续导出模�
     expect(copy(old).size).toBe(0);expect(document.body.textContent).toContain(filterText.counts(3,2));
   }
   expect(original).toEqual(saved);expect(commands.filter(command=>command==='query.execute')).toHaveLength(1);
+});
+
+
+it('整理历史：排序与筛选按整步撤销重做，恢复准确原行和空结果，不新增SQL',async()=>{
+  await mount();const saved=structuredClone(original);expect(button(historyText.undo).disabled).toBe(true);expect(button(historyText.redo).disabled).toBe(true);
+  await sort();expect(grid().rows).toEqual([original.rows[2],original.rows[1],original.rows[0]]);
+  await click(filterText.open);await addFilterRule(1,'id','eq','0');await click(filterText.apply);expect(grid().rows).toEqual([]);
+  await click(historyText.undo);expect(grid().rows).toEqual([original.rows[2],original.rows[1],original.rows[0]]);
+  await click(historyText.undo);expect(grid().rows).toBe(original.rows);expect(button(historyText.undo).disabled).toBe(true);
+  await click(historyText.redo);expect(grid().rows).toEqual([original.rows[2],original.rows[1],original.rows[0]]);
+  await click(historyText.redo);expect(grid().rows).toEqual([]);expect(button(historyText.redo).disabled).toBe(true);
+  expect(original).toEqual(saved);expect(commands.filter(command=>command==='query.execute')).toHaveLength(1);
+});
+it('整理历史：NULL位置、大小写及筛选停用原文保留，取消草稿不记步',async()=>{
+  await mount();await sort('words');await toggleSortCase(1,'原文',true);await nullPosition(1,'原文','LAST');
+  await click(filterText.open);await addFilterRule(1,'id','eq','未启用的精确原文');await enableFilterRule(1,false);await click(filterText.apply);expect(grid().rows).toEqual(original.rows);
+  await click(historyText.undo);expect(grid().sortColumns).toEqual([{columnKey:'words',direction:'ASC'}]);
+  expect(document.querySelector('[aria-label="'+text.nulls(1,'原文')+'"]')!.value).toBe('LAST');expect(document.querySelector('[aria-label="'+text.ignoreCase(1,'原文')+'"]')!.checked).toBe(true);
+  await click(filterText.open);await click(filterText.cancel);expect(button(historyText.redo).disabled).toBe(false);
+  await click(historyText.redo);await click(filterText.open);expect(document.querySelector('[aria-label="'+filterText.enabled(1)+'"]')!.checked).toBe(false);expect(document.querySelector('[aria-label="'+filterText.input+' 1"]')!.value).toBe('未启用的精确原文');await click(filterText.cancel);
+  expect(commands.filter(command=>command==='query.execute')).toHaveLength(1);
+});
+it('整理历史：撤销后新排序截断重做，旧按钮闭包和重复点击不能多走一步',async()=>{
+  await mount();await sort();await sort('id','DESC');const oldUndo=reactProps(button(historyText.undo)).onClick;
+  await act(async()=>{oldUndo();oldUndo();});expect(grid().rows).toEqual([original.rows[2],original.rows[1],original.rows[0]]);
+  await act(async()=>oldUndo());expect(grid().rows).toEqual([original.rows[2],original.rows[1],original.rows[0]]);
+  await sort('words');expect(button(historyText.redo).disabled).toBe(true);await click(historyText.undo);expect(grid().sortColumns).toEqual([{columnKey:'id',direction:'ASC'}]);
+  expect(commands.filter(command=>command==='query.execute')).toHaveLength(1);
+});
+it('整理历史：连接ABA、切换结果与新执行永久撤销原历史及旧按钮',async()=>{
+  await mount();await sort();const oldUndo=reactProps(button(historyText.undo)).onClick;
+  await act(async()=>{store.setState({connectionVersions:{c:2}});store.setState({connectionVersions:{c:1}});});expect(button(historyText.undo).disabled).toBe(true);
+  const unchanged=grid().rows;await act(async()=>oldUndo());expect(grid().rows).toBe(unchanged);expect(grid().sortColumns).toEqual([{columnKey:'id',direction:'ASC'}]);
+  await sort('id','DESC');await click(zh.query.text017+'2');expect(button(historyText.undo).disabled).toBe(true);await click(zh.query.text017+'1');expect(button(historyText.undo).disabled).toBe(true);
+  await sort();await click(zh.query.text010);expect(button(historyText.undo).disabled).toBe(true);expect(commands.filter(command=>command==='query.execute')).toHaveLength(2);
+});
+
+it('整理历史：撤销清空勾选和旧复制，重做后的复制及导出共享准确行序和精度',async()=>{
+  await mount();await sort();const old=grid();await act(async()=>old.onSelectedRowsChange(new Set([0,2])));expect(button(zh.resultExport.selectedTitle).disabled).toBe(false);
+  await click(historyText.undo);expect(button(zh.resultExport.selectedTitle).disabled).toBe(true);expect(copy(old).size).toBe(0);
+  await click(historyText.redo);expect(button(zh.resultExport.selectedTitle).disabled).toBe(true);await act(async()=>grid().onSelectedRowsChange(new Set([0,1])));
+  const typed=JSON.parse(copy().get('application/x-dbark-cells')!);expect(typed.rows.map((row:any[])=>row[0])).toEqual(['2','9007199254740993']);expect(typed.rows[1][1]).toBe('0.12345678901234567890');
+  await click(zh.resultExport.selectedTitle);await click(zh.resultExport.chooseFile);await click(zh.resultExport.start);expect(exports[0].result.rows.map((row:any)=>row.id)).toEqual(['2','9007199254740993']);expect(exports[0].result.rows[1].value).toBe('0.12345678901234567890');await click(zh.common.done);expect(button(historyText.undo).disabled).toBe(false);await click(historyText.undo);expect(grid().rows).toBe(original.rows);expect(commands.filter(command=>command==='query.execute')).toHaveLength(1);
 });
