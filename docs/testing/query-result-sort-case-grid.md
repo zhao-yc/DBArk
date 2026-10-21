@@ -42,6 +42,20 @@ node scripts/check-local.mjs --build tests/unit/query-result-sort-case-grid.test
 | dist-hashes.json | `542a6e1aa43ebdaa87614866d7d49c614b95f90f6288509e6370ad4c7d7ac151` |
 | SHA256SUMS.txt | `e7efb0fdf17acd523f2f2a57fc15554ff6dcda30191ef2f47d142d71d41abb05` |
 
-准备通过后，Root已另派固定338及本轮新构建的独立GUI，metadata为 `outputs/query-result-sort-case-grid-gui-338a06b-vm-20261021`；先核本轮66及旧封存和完整图，再使用新nonce及经语法／ready门的新控制实例，正式120秒／零重试，失败或成功均封存后停止。当前仅确认送达，尚无GUI句柄或结果。Python独立读回、完整回归及main整合均未完成，暂不发布；原7f高度失败及全部unknown保持。
+准备通过后，固定338及本轮新构建的独立GUI已通过，metadata为 `outputs/query-result-sort-case-grid-gui-338a06b-vm-20261021`。CLI16440退出0、17.183秒，1通过／0失败／0跳过／retry0，原120秒；控制器6028、launcher16444、观察器17488均exit0。北京时间08:15:44.609先确认ready及首CIM，再启动CLI；其创建08:15:44.627（CIM毫秒），观察器原生创建08:15:42.6093593，控制器08:15:42.380及launcher08:15:42.525（CIM毫秒）。
+
+全部手写排序矩阵、小数简写、日期／负TIME、复制条件交集和四行原值文件断言通过。原严格断言确认一查询／两导出／三完成任务、pending0／revision0、原owner正常退出及DB观察连接原native／stream同流关闭；原审计对象和任务ID未另行导出，不冒充独立重算。52原附件为26份layout及26份order，实际viewport1428×860、最多两页、最终行序1／3／6／7。
+
+源码574／测试1306／构建109前后未变、Git净，13个本例新进程身份终核零匹配，五套旧封存不变，112新封存校验及秘密扫描通过。原7f高度失败、其它旧profile及unknown保持，不改记成功。以下来自VM原最终回报，Root未下载复算：
+
+| 原件 | 长度／SHA256 |
+| --- | --- |
+| visible-selected.csv | 383字节／`b0dc77e99c919b25c05b2282d554861f467f492c98fa35f764c3f579da6d27ce` |
+| visible-selected.json | 827字节／`c8f1958d36ae099ee13b0f9d4eed1c561d6212986664e2fdf7a95b6908ae9674` |
+| gui-original.json | `f261f9809f3c640d4c43eadc97a4ab3584edb3ed8ea2ac3758ac95df8877ed4b` |
+| gui-stage-report.json | `35234f498f172cbb2e32ed6c9106c8c50dd7592da263834e1d67551eb1289d98` |
+| SHA256SUMS.txt | `e3e04f49431340a9afbb27d998dea34acd2931341e755e8f39b1aaec9fe9db54` |
+
+导出位于本GUI目录的 `dbark-query-columns-a8fd48da6bc1e558dd3296ebd8f8979a` 子目录。Root已另派同一338的独立Python四行读回，通过后一次完整Vitest，metadata为 `outputs/query-result-sort-case-readback-338a06b-vm-20261021`；当前只确认送达，尚无新句柄或结果，main未整合、暂不发布。后继Q01帧关键字候选bcb1420不归入本批证据，`4bd2fd3`仍为本批固定交付检查点。
 
 后继补充[四行标准库独立读回工具](query-result-sort-case-readback.md)，只为GUI成功后的准确原文件和SHA提供可复用入口。49c109f的Linux Python16项、另591文件11380项及类型／构建通过、10平台跳过；实件读回另记，不修改当前固定338准备任务或沿用旧两行期待。
