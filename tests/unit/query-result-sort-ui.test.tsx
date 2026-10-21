@@ -15,6 +15,7 @@ import { queryResultColumnsZh as columnsText } from '../../src/renderer/locales/
 import { zh } from '../../src/renderer/locales/zh-CN';
 import { queryResultFilterZh as filterText } from '../../src/renderer/locales/queryResultFilter.zh-CN';
 import { queryResultPresetsZh as presetsText } from '../../src/renderer/locales/queryResultPresets.zh-CN';
+import { queryResultComparisonZh as comparisonText } from '../../src/renderer/locales/queryResultComparison.zh-CN';
 import { queryResultStatisticsZh as statisticsText } from '../../src/renderer/locales/queryResultStatistics.zh-CN';
 import { queryResultSelectedFilterZh as selectedFilterText } from '../../src/renderer/locales/queryResultSelectedFilter.zh-CN';
 import { queryResultPresetSnapshotSchema, queryResultPresetValueSchema, type QueryResultPresetSnapshot } from '../../src/shared/queryResultPresets';
@@ -1349,4 +1350,66 @@ it('列统计：所属模态观察不自我撤销，原列值漂移终止已完�
   await mount();await click(statisticsText.open);await statisticsReady();const dialog=document.querySelector('[role="dialog"]')!;
   await act(async()=>{for(const observer of observers)observer([{addedNodes:[dialog]}]);});expect(statistic(statisticsText.count)).toBe('3');
   original.rows[0].id='改值';await act(async()=>store.setState({settings:{...store.getState().settings,resultLimit:999}}));expect(document.querySelector('[aria-label="'+statisticsText.sum+'"]')).toBeNull();
+});
+
+/** 固定两代真实QueryTab结果；第二次仅修改RAM数据库端口的返回值，固定来源仍由实际克隆产生。 */
+async function comparisonFixture(prepare?:(result:QueryResult)=>void):Promise<void>{
+  await mount(prepare);await click(zh.query.pinResult);
+  original.rows=[structuredClone(original.rows[0]),{...structuredClone(original.rows[1]),value:'0.12345678901234567891',words:'修改行',bytes:null},{...structuredClone(original.rows[2]),id:'3',words:'新增行'}];
+  await click(zh.query.text010);await click(zh.query.pinResult);
+}
+async function comparisonKey(key:string,checked=true):Promise<void>{
+  const node=document.querySelector('[aria-label="匹配键 '+key+'"]')!;expect(node).not.toBeNull();await act(async()=>reactProps(node).onChange({target:{checked}}));
+}
+async function comparisonReady():Promise<void>{
+  for(let attempt=0;attempt<100&&!document.querySelector('output[aria-label="'+comparisonText.added+'"]');attempt++)await act(async()=>{await new Promise(resolve=>setTimeout(resolve,5));});
+  expect(document.querySelector('output[aria-label="'+comparisonText.added+'"]')).not.toBeNull();
+}
+function compared(label:string):string{return document.querySelector('output[aria-label="'+label+'"]')!.textContent;}
+it('固定结果对比：需要两份固定快照和明确匹配键，未选键不开始且不执行SQL',async()=>{
+  await mount();expect(button(comparisonText.open).disabled).toBe(true);await click(zh.query.pinResult);expect(button(comparisonText.open).disabled).toBe(true);
+  await click(zh.query.text010);await click(zh.query.pinResult);await click(comparisonText.open);
+  expect(button('开始对比').disabled).toBe(true);await act(async()=>reactProps(button('开始对比')).onClick());expect(document.querySelector('output')).toBeNull();expect(commands.filter(c=>c==='query.execute')).toHaveLength(2);
+});
+it('固定结果对比：按明确大整数键统计四类变化，字段详情保留精确原文与NULL、字节',async()=>{
+  await comparisonFixture();const rows=grid().rows,rules=grid().sortColumns;await click(comparisonText.open);await comparisonKey('id');await click('开始对比');await comparisonReady();
+  for(const label of [comparisonText.added,comparisonText.removed,comparisonText.changed,comparisonText.equal])expect(compared(label)).toBe('1');
+  expect(document.querySelector('[aria-label="查看差异 1"]')).toBeNull();await click('查看差异 2');
+  expect(document.querySelector('[aria-label="'+comparisonText.leftValue+' value"]')!.textContent).toContain('0.12345678901234567890');expect(document.querySelector('[aria-label="'+comparisonText.rightValue+' value"]')!.textContent).toContain('0.12345678901234567891');
+  expect(document.querySelector('[aria-label="'+comparisonText.leftValue+' bytes"]')!.textContent).toContain('AP8=');expect(document.querySelector('[aria-label="'+comparisonText.rightValue+' bytes"]')!.textContent).toContain('NULL');
+  await click(zh.common.close);expect(grid().rows).toBe(rows);expect(grid().sortColumns).toEqual(rules);expect(commands.filter(c=>c==='query.execute')).toHaveLength(2);expect(exports).toEqual([]);
+});
+it('固定结果对比：复合匹配键需明确选择，键变化显示移除和新增，不按行位置配对',async()=>{
+  await comparisonFixture();await click(comparisonText.open);await comparisonKey('id');await comparisonKey('words');await click('开始对比');await comparisonReady();
+  expect(compared(comparisonText.added)).toBe('2');expect(compared(comparisonText.removed)).toBe('2');expect(compared(comparisonText.changed)).toBe('0');expect(compared(comparisonText.equal)).toBe('1');expect(commands.filter(c=>c==='query.execute')).toHaveLength(2);
+});
+it('固定结果对比：差异类别和全部显示仅影响列表，左右来源调换反转新增移除及字段原值',async()=>{
+  await comparisonFixture();await click(comparisonText.open);await comparisonKey('id');await click('开始对比');await comparisonReady();
+  await setFilterField('差异范围','equal');expect(document.querySelector('[aria-label="查看差异 1"]')).not.toBeNull();expect(document.querySelector('[aria-label="查看差异 2"]')).toBeNull();expect(compared(comparisonText.changed)).toBe('1');
+  await setFilterField('差异范围','all');expect(document.querySelector('[aria-label="查看差异 2"]')).not.toBeNull();await click('查看差异 3');expect(document.querySelector('[aria-label="'+comparisonText.leftValue+' id"]')!.textContent).toContain('2');
+  const left=document.querySelector('[aria-label="左侧固定结果"]')!.value,right=document.querySelector('[aria-label="右侧固定结果"]')!.value;
+  await setFilterField('左侧固定结果',right);expect(document.querySelector('output')).toBeNull();await setFilterField('右侧固定结果',left);await comparisonKey('id');await click('开始对比');await comparisonReady();
+  expect(compared(comparisonText.added)).toBe('1');expect(compared(comparisonText.removed)).toBe('1');await click('查看差异 2');expect(document.querySelector('[aria-label="'+comparisonText.leftValue+' words"]')!.textContent).toContain('修改行');expect(document.querySelector('[aria-label="'+comparisonText.rightValue+' words"]')!.textContent).toContain('中行');
+});
+it('固定结果对比：字节不能被选择为匹配键，重复键整份拒绝不显示部分数量',async()=>{
+  await comparisonFixture(result=>{result.rows[1].id=result.rows[0].id;});await click(comparisonText.open);expect(document.querySelector('[aria-label="匹配键 bytes"]')!.disabled).toBe(true);await comparisonKey('id');await click('开始对比');
+  await act(async()=>{await new Promise(resolve=>setTimeout(resolve,30));});expect(document.querySelector('output')).toBeNull();expect(document.body.textContent).toContain('重复');expect(commands.filter(c=>c==='query.execute')).toHaveLength(2);
+});
+it('固定结果对比：对比自有模态不会撤销自己，来源固定不受后来原SQL结果对象变化影响',async()=>{
+  await comparisonFixture();await click(comparisonText.open);const dialog=document.querySelector('[role="dialog"]')!;await act(async()=>{for(const observer of observers)observer([{addedNodes:[dialog]}]);});
+  original.rows[0].id='后来对象';await comparisonKey('id');await click('开始对比');await comparisonReady();expect(compared(comparisonText.equal)).toBe('1');expect(compared(comparisonText.changed)).toBe('1');expect(document.body.textContent).toContain('截断');
+});
+it.each(['标签ABA','连接ABA','忙态ABA','外来模态','切换结果'] as const)('固定结果对比：%s撤销原窗口，旧关闭及开始不影响后继窗口',async mode=>{
+  await comparisonFixture();await click(comparisonText.open);await comparisonKey('id');const start=reactProps(button('开始对比')).onClick,close=reactProps(button(zh.common.close)).onClick,saved=store.getState().settings;
+  if(mode==='标签ABA')await act(async()=>{store.setState({settings:{...saved,activeTabId:'other'}});store.setState({settings:saved});});
+  if(mode==='连接ABA')await act(async()=>{store.setState({connectionVersions:{c:2}});store.setState({connectionVersions:{c:1}});});
+  if(mode==='忙态ABA')await act(async()=>{store.getState().setBusy('q',true);store.getState().setBusy('q',false);});
+  if(mode==='外来模态'){const node=document.createElement('div');node.setAttribute('role','dialog');document.body.appendChild(node);node.parentNode!.removeChild(node);await act(async()=>{for(const observer of observers)observer([{addedNodes:[node]}]);});}
+  if(mode==='切换结果')await click(zh.query.text017+'1');
+  expect(document.querySelector('[data-query-result-comparison-owner]')).toBeNull();await click(comparisonText.open);const owner=document.querySelector('[data-query-result-comparison-owner]')!.getAttribute('data-query-result-comparison-owner');await act(async()=>{start();close();});
+  expect(document.querySelector('[data-query-result-comparison-owner]')!.getAttribute('data-query-result-comparison-owner')).toBe(owner);expect(document.querySelector('output')).toBeNull();await comparisonKey('id');await click('开始对比');await comparisonReady();expect(compared(comparisonText.changed)).toBe('1');
+});
+it('固定结果对比：同步打开占住父门，旧网格筛选和导出在同一tick也被拒绝',async()=>{
+  await comparisonFixture();const old=grid(),open=reactProps(button(comparisonText.open)).onClick,exportAll=reactProps(button(zh.resultExport.title)).onClick;
+  await act(async()=>{open();old.onSelectedRowsChange(new Set([0]));exportAll();});expect(document.querySelector('[data-query-result-comparison-owner]')).not.toBeNull();expect(document.querySelectorAll('[role="dialog"]')).toHaveLength(1);expect(exports).toEqual([]);expect(commands.filter(c=>c==='query.execute')).toHaveLength(2);
 });

@@ -7,7 +7,8 @@ app.whenReady().then(async () => {
   const report = (event, detail) => process.stderr.write(JSON.stringify({ fixture: 'page-find-replace', event, ...detail }) + '\n');
   window.webContents.on('did-fail-load', (_event, code, _description, _url, mainFrame) => report('load-failed', { code, mainFrame }));
   window.webContents.on('render-process-gone', (_event, detail) => report('renderer-gone', { reason: detail.reason, exitCode: detail.exitCode }));
-  window.webContents.on('console-message', (_event, detail) => {
+  // Electron 44将结构化消息放在首参数；只声明该参数，避免请求已弃用的数值level参数。
+  window.webContents.on('console-message', detail => {
     if (detail.level === 'warning' || detail.level === 'error') report('renderer-console', { level: detail.level, message: detail.message.slice(0, 2048) });
   });
   window.webContents.on('did-finish-load', () => report('load-finished', {}));

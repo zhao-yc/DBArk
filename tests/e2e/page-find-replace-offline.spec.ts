@@ -46,6 +46,15 @@ test.afterEach(async ({},info) => {
   if (dirname(resolve(directory)) !== resolve(tmpdir()) || !basename(directory).startsWith('dbark-find-e2e-')) throw new Error('拒绝清理夹具目录之外的路径');
   await rm(directory, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
 });
+test('结构化控制台诊断保留真实渲染器警告和错误，不使用弃用参数', async () => {
+  // 消息来自真实Electron渲染器，不能用VM监听器回执冒充跨进程事件。
+  await page.evaluate(() => { console.warn('DBARK_FIND_NATIVE_WARNING'); console.error('DBARK_FIND_NATIVE_ERROR'); });
+  await expect.poll(() => Buffer.concat(startup.stderr).toString('utf8').split(/\r?\n/).flatMap(line => {
+    try { const item=JSON.parse(line);return item.event==='renderer-console'&&['DBARK_FIND_NATIVE_WARNING','DBARK_FIND_NATIVE_ERROR'].includes(item.message)?[{level:item.level,message:item.message}]:[]; } catch { return []; }
+  })).toEqual([{level:'warning',message:'DBARK_FIND_NATIVE_WARNING'},{level:'error',message:'DBARK_FIND_NATIVE_ERROR'}]);
+  expect(Buffer.concat(startup.stderr).toString('utf8')).not.toContain('console-message is deprecated');
+  expect(errors).toEqual([]);
+});
 /** 所有查找选项来自实际输入控件；没有直接调用扫描函数或伪造 Worker 响应。 */
 async function find(query: string, regex = false) {
   if (!await panel().isVisible()) await page.getByRole('button', { name: text.find, exact: true }).click();
