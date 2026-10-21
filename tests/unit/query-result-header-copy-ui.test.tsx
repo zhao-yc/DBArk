@@ -86,13 +86,23 @@ it.each(['clear', 'excluded'] as const)('筛选后多列排序的含列名复制
   expect(port.writes[0].get('text/plain')).not.toContain('秘密'); expect(original).toEqual(before);
   const stale = callback(button(copyText.action));
   if (mode === 'clear') {
-    await click(filterText.clear); expect(grids.all.at(-1)!.rows).toBe(original.rows);
-    expect(grids.all.at(-1)!.sortColumns).toEqual([]); expect(button(copyText.action).disabled).toBe(true);
+    await click(filterText.clear); expect(grids.all.at(-1)!.rows).toEqual([original.rows[0], original.rows[2], original.rows[1]]);
+    expect(grids.all.at(-1)!.sortColumns).toEqual([{ columnKey: 'n', direction: 'ASC' }, { columnKey: 'd', direction: 'ASC' }]); expect(button(copyText.action).disabled).toBe(true);
   } else {
     original.rows[0].d = '2.00000000000000000001'; await act(async () => stale());
     original.rows[0].d = before.rows[0].d;
   }
   await act(async () => stale()); expect(port.writes).toHaveLength(1);
+  if (mode === 'clear') {
+    await act(async () => grids.all.at(-1)!.onSelectedRowsChange(new Set([2, 0, 1]))); await click(copyText.action);
+    expect(JSON.parse(port.writes[1].get('application/x-dbark-cells')!).rows).toEqual([
+      ['字节', '同名', '同名', '空值'],
+      [{ type: 'binary', base64: 'AP8=' }, '18446744073709551615', '0.12345678901234567890', '同组'],
+      [{ type: 'binary', base64: 'AA==' }, '3', '0.50000000000000000000', '同组'],
+      [{ type: 'binary', base64: '' }, '', '1.00000000000000000001', '同组'],
+    ]);
+    expect(port.writes[1].get('text/plain')).not.toContain('秘密'); await act(async () => stale()); expect(port.writes).toHaveLength(2);
+  }
   expect(commands.filter(command => command === 'query.execute')).toHaveLength(1); expect(exports).toEqual([]);
 });
 
