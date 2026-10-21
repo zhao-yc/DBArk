@@ -28,10 +28,16 @@ RANGE投影及Unicode位置修正位于准确 `81f3a42d2cfa220319ecfda697f0e7959
 
 后继在原 `sql-completion-window.spec.ts` 私网窗口用例中保留五个旧场景，追加两步：内联OVER继承基窗口后补CURRENT、命名child追加帧时补PRECEDING。原输入保留右侧suffix，接受必须完整替换为真正不同的正文，避免用无文本变化的接受冒充Undo证明。真实Monaco按键接受后须完整SQL一致，原生Undo／Redo各核正文与任务／历史不变，再执行保留的接受模型；两步独立预期均为20／30／30。沿用原服务器能力门、三行隔离表、150秒及原清理路径，不新增数据库用户、格式或测试开关。这些新增UI场景仅准备，尚未实际执行，也不属于81原Linux或338原GUI。
 
-2026-10-21 Windows准备：准确d155d76的原CLI进程13832已退出0；类型检查39.18秒，24文件699项全部通过、无失败或跳过，普通新构建50.99秒，原生总计122.954秒。该阶段消息已读到，最终文件／旧封存／进程终核及报告尚待原回合返回，不能先视为最终验收。
+2026-10-21 Windows准备：准确d155d76的原CLI进程13832已退出0；类型检查39.18秒，24文件699项全部通过、无失败或跳过，普通新构建50.99秒，原生总计122.954秒。原回合01a15c49-983d-7cf3-98aa-9b89de7b34c2现已completed：source576／tests1308／newdist109、构建输入及Git终核通过；此前八套封存及原两文件七字段／长度／SHA不变，45条身份记录、43个PID候选终核零匹配，五个角色exit0，RAM三项保留。新封存78文件逐项SHA复核通过，文件敏感值扫描无命中。Root读取原回报，未下载复算这78份原件；这些结果仍只是准备，不包括GUI。
+
+原件目录为WIN11-TEST的`outputs/q01-frame-check-d155d76-vm-20261021/`；`q01-windows-prepare-report.json`摘要65138ef704e303e5ae512bedd62a38bcd1a379ff6473bc0e49868ae586854bad，`SHA256SUMS.txt`摘要d39420bc24c859dd871a6cc260fce4672c6af5be9149865ffcd3e8f74088e935，角色原件摘要9c1471bdc7721b9954599b742e20554d2005167026f5d5e0a1da0702ddfe2c91。新dist图摘要ddfccd61d5355459a522a1da613becf07b08b41aa807c1d9544a46ceaf9c7e3c；原stdout为文本，摘要d96c7d0c6b3db7bcc94d7efe9a1a89d0d27d9b6dd4d1427b30c72478ac461434，stderr摘要5cd93a38703c97fd6f8521da509fa752582269f38016d600eb413bcb68570967，保留Rollup注释和大分块警告。
 
 后继准确`0a4b23faf4f631d8204ef48f4fd79e6eb4059753`只给本文件实库describe开启既有`preserveOnUnconfirmedExit`选项，产品树仍为44853a769acc789cf3884dc1b495c1633ea42ead。既有strict实库清理在确认同一owner正常退出之后才删除本例随机库，退出不明则保留原现场。原五个场景、两步新帧场景、断言、超时及默认其它用例不改。
+
+准确0a4的[CI39535762218](https://github.com/zhao-yc/DBArk/actions/runs/39535762218)、job119011905180已success：Python21项、0.275秒，类型通过；Vitest592文件11460通过／10平台跳过、236.28秒，构建通过、Vite34.10秒。原生、剪贴板及发布job跳过。后续同步main文档后的产品、测试、包锁及构建输入与0a4逐项无差异，不把它作为新的GUI通过。
 
 远程连接不稳后按用户新授权，在开发机仅执行一次`node scripts/check-local.mjs tests/unit/completion-window-frame.test.ts tests/unit/completion-window-worker.test.ts`：类型49.43秒、2文件81项全通过、Vitest8.27秒，CLI进程20316于02:57:03.1838847Z创建，60.7853369秒后退出0。未执行构建、GUI或SQL；子进程没有DBARK_*变量。原stdout／stderr独立字节文件在`.cache/q01-0a4b23f-local-20261021/`，SHA分别为c2c7afa883b231d1ed0faea520da12fbcb0cc551b20443b35a37d20dc4346bec及空文件e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855。外层PowerShell控制输出出现两行VoidTaskResult，未混入这两份独立原生日志；保留原观察，不重跑检查。
 
 测试会话本轮报告过含凭据RAM对象误输出到工具结果，当前暴露范围仍待只读脱敏核对；不能用本地或CI成功宣称该事件已处置，也不在文档复制敏感对象。主分支排序筛选已另行交付，后继Q01仍待真实GUI和完整平台验收，暂不发布。
+
+0a4后继单项实库GUI的派发请求长时间未返回确认，Root仅结束了本地控制等待；随后读取测试会话仍为原准备回合completed／idle。尚未取得新GUI回合、进程或结果，派发状态保留为未知，不重复发送或在本机重开同轮。后续先核原请求是否到达，不能把本地等待结束当成远端任务已停止。
