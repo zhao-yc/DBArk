@@ -1,4 +1,5 @@
-import { win32, posix } from 'node:path';
+import { win32, posix, join } from 'node:path';
+import { createRequire } from 'node:module';
 
 export const editorIndentNativeGate = 'DBARK_EDITOR_INDENT_NATIVE_TEST';
 /** 列表与默认关闭只登记定义，不能读取目录、探测端口或加载桌面owner。 */
@@ -27,13 +28,29 @@ export function assertEditorIndentNativeEnvironment(env: NodeJS.ProcessEnv, args
   }
 }
 
-export interface IndentNativeTestInfo { startTime?: Date; _startWallTime?: number; timeout: number; status?: string; }
+export interface IndentNativeTestInfo { startTime?: Date; _startWallTime?: number; _startTime?: number; timeout: number; status?: string; }
+/** 延迟读取锁定框架的原单调时间域，保持与TestInfo._startTime相同的worker起点；列表不加载内核。 */
+function originalFrameworkClock(): () => number {
+  const local = createRequire(join(process.cwd(), 'package.json')), test = createRequire(local.resolve('@playwright/test/package.json'));
+  const playwright = createRequire(test.resolve('playwright/package.json'));
+  const iso = playwright('playwright-core/lib/coreBundle').iso as { monotonicTime(): number; timeOrigin(): number };
+  const now = iso.monotonicTime, origin = iso.timeOrigin();
+  if (typeof now !== 'function' || !Number.isFinite(origin)) throw Error('缩进原生专项缺少原框架单调时钟');
+  return () => {
+    if (iso.monotonicTime !== now || iso.timeOrigin() !== origin) throw Error('缩进原生专项原框架单调时钟已变化');
+    return now();
+  };
+}
 /** 原TestInfo、原120秒期限与当前框架身份共同授权；afterEach和任何失效都留下永久墓碑。 */
-export function bindEditorIndentNativeCase(info: IndentNativeTestInfo, environment: { assertCurrent(): void }, currentInfo: () => IndentNativeTestInfo, now = () => Date.now()) {
+export function bindEditorIndentNativeCase(info: IndentNativeTestInfo, environment: { assertCurrent(): void }, currentInfo: () => IndentNativeTestInfo, suppliedClock?: () => number) {
   // 锁定Playwright 1.64.0的实际TestInfo起点字段；纯RAM反例可显式提供原Date，绝不以当前now补造起点。
   const internal = Object.hasOwn(info, '_startWallTime'), startObject = info.startTime;
   const readStart = () => internal ? typeof info._startWallTime === 'number' ? info._startWallTime : NaN : info.startTime instanceof Date ? Number(info.startTime) : NaN;
   const start = readStart(), timeout = info.timeout, deadline = start + 120000;
+  // 默认沿原TestInfo单调起点计算elapsed，墙钟仅保留身份和诊断；显式RAM时钟继续使用原毫秒域。
+  const monotonic = suppliedClock === undefined ? originalFrameworkClock() : undefined;
+  const monotonicField = monotonic ? Object.hasOwn(info, '_startTime') : false, monotonicStart = monotonic ? info._startTime : undefined;
+  const now = suppliedClock ?? (() => start + (monotonic!() - monotonicStart!));
   let retained = false, previous = now();
   return {
     retain() { retained = true; },
@@ -52,6 +69,8 @@ export function bindEditorIndentNativeCase(info: IndentNativeTestInfo, environme
         if (timeout !== 120000) reject('original-timeout');
         if (info.timeout !== timeout) reject('timeout-changed');
         if (!Number.isFinite(start)) reject('invalid-start');
+        if (monotonic && (!monotonicField || !Number.isFinite(monotonicStart) || monotonicStart! < 0)) reject('invalid-monotonic-start');
+        if (monotonic && (!Object.hasOwn(info, '_startTime') || info._startTime !== monotonicStart)) reject('monotonic-start-changed');
         if (!Number.isFinite(instant)) reject('invalid-clock');
         if (instant < start) reject('before-start');
         if (instant < previous) reject('clock-reversed');
