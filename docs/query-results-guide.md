@@ -33,4 +33,4 @@
 
 ## 验证范围
 
-详细来源见[排序](query-result-sort.md)、[筛选](query-result-filter.md)和[批量启停](development/query-result-filter-bulk-enabled-20261021.md)。单条启停的 Windows 实库续验正在终核；批量按钮已有类型、143项定向及构建证据，真实窗口／安装及各平台范围分别记录，不以本文代替验收。当前暂不发布。
+详细来源见[排序](query-result-sort.md)、[筛选](query-result-filter.md)和[批量启停](development/query-result-filter-bulk-enabled-20261021.md)。单条启停的 [Windows 实库续验](../tests/integration/acceptance-query-result-filter-enabled-c449506-20261021.md)已通过；批量按钮已有类型、143项定向及构建证据，真实窗口／安装及各平台范围分别记录，不以本文代替验收。当前暂不发布。

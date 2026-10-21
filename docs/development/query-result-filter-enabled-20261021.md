@@ -39,3 +39,5 @@ node scripts/check-local.mjs --build tests/unit/query-result-filter-enabled.test
 该回合现已completed并保留80封存：类型39.62秒、四文件144项全通过／0失败／0跳过、测试12.53秒、新构建51.41秒，原CLI15408退出0、103.939秒；身份预检native／stream正常关闭，576源码／1312测试／109新dist、十套旧封存及旧两文件终核通过。外层直接加载含参数属性的TS合同失败，GUI与读回均未启动，未生成nonce；没有对应独立GUI CLI退出码，不记作产品失败。Root用项目esbuild生成.cjs已在Node24验证控制合同可加载，源合同／产品／用例均未改；后续仅按[控制加载修正续验单](../testing/query-result-filter-enabled-control-resume-20261021.md)继续尚未启动的GUI及条件读回，不重跑准备，不回改原错误或80封存。
 
 续验已由回合01a15cbc-93a9-77b0-9a11-2a5ef0d26d1c确认接收并读取准确cee22f4操作单；产品保持c449，先核十一套旧封存和已通过的新图，再仅修外层.cjs加载。当前尚无本能力正式GUI或独立读回结果，远程观察中断不作为重复启动依据。
+
+该续验现已完成[Windows实库整例及独立读回](../../tests/integration/acceptance-query-result-filter-enabled-c449506-20261021.md)：GUI9268退出0、20.556秒、1通过／0失败／0跳过，62个原网格附件；Python12352退出0、0.517秒，四行八列及精度／Unicode／NULL／二进制读回通过。严格收尾、15角色退出、30PID候选零匹配、249封存及所有新旧输入文件终核通过。此为单条启停，不包含后继批量按钮，原控制加载失败及80封存保持；安装、macOS和系统剪贴板不外推。
