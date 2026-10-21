@@ -1,0 +1,16 @@
+export const tableQueryTemplateZh = {
+  entry: '生成查询SQL', title: '表查询SQL模板', kind: '模板类型', preview: 'SQL模板预览', open: '打开新查询', close: '关闭',
+  hint: '根据已载入结构生成独立查询草稿，不读取数据或执行SQL，也不提交表格草稿。写入模板请审阅字段、键条件及参数后再执行；实际权限和约束由数据库校验。',
+  parameters: (count: number) => `含 ${count} 个值参数；打开查询后使用“参数执行”，按列类型选择参数类型。`,
+  selectHint: 'SELECT使用当前结果上限作为LIMIT；不会在生成或打开时执行。',
+  noParameters: '该模板不需要值参数；打开后先审阅，再自行决定是否执行。',
+  generatedComment: '-- SQL模板：请先审阅；带参数的写入语句使用“参数执行”，生成或打开不会执行SQL。',
+  invalid: '表结构、字段或对象名称无效，未生成SQL模板。',
+  budget: 'SQL模板超过字段、文本或200个参数的预算，请手动编写或精简字段。',
+  readonly: '只有明确的普通表可生成写入模板；视图及未知对象只支持SELECT。',
+  key: '未确认非空主键或可靠唯一键，不能生成UPDATE／DELETE模板；请先设计可靠键。',
+  noUpdates: '没有可更新的普通非键字段，不能生成UPDATE模板。',
+  changed: '表、连接、结构或模板选项已变化，请关闭后重新生成。',
+  tabs: '查询标签已达100个，请先关闭部分标签。',
+  queryTitle: (table: string, kind: string) => `${table} · ${kind}`,
+} as const;
