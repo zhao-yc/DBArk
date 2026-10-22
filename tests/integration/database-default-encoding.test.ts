@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { ManagedConnection } from '../../src/engine/connection';
 import type { EngineCommand, TaskEvent } from '../../src/shared/contracts';
 import type { DatabaseDefaultEncodingApplyOutput, DatabaseDefaultEncodingGetOutput, DatabaseDefaultEncodingPreviewOutput } from '../../src/shared/databaseDefaultEncoding';
-import { bindDatabaseEncodingTarget, databaseEncodingGate, databaseEncodingLifetime, assertDatabaseEncodingIdentity, watchDatabaseEncodingConnection, assertDatabaseEncodingReleased, closeDatabaseEncodingObserver, type DatabaseEncodingConnectionFact, type DatabaseEncodingLifetime } from '../helpers/databaseDefaultEncodingIntegration';
+import { bindDatabaseEncodingTarget, databaseEncodingGate, databaseEncodingLifetime, loadDatabaseEncodingModules, assertDatabaseEncodingIdentity, watchDatabaseEncodingConnection, assertDatabaseEncodingReleased, closeDatabaseEncodingObserver, type DatabaseEncodingConnectionFact, type DatabaseEncodingLifetime } from '../helpers/databaseDefaultEncodingIntegration';
 
 const audit = vi.hoisted(() => ({ watch: undefined as undefined | ((managed: ManagedConnection, scope: string) => void), check: undefined as undefined | (() => void), scope: '' }));
 /** 只旁观实际connect返回的原连接，包括Engine短会话；不替换网络或服务器回包。 */
@@ -25,13 +25,14 @@ describe.sequential('数据库默认编码六实例实库专项（Root逐端口�
     const owner = lifetime = databaseEncodingLifetime(context, binding, () => { retained = true; });
     const facts: DatabaseEncodingConnectionFact[] = [], events: TaskEvent[] = []; let allowedSql: string | undefined;
     audit.check = owner.check; audit.watch = (managed, scope) => { facts.push(watchDatabaseEncodingConnection(managed, scope, owner, () => allowedSql)); };
-    let observer: ManagedConnection | undefined, engine: import('../../src/engine').Engine | undefined;
+    let observer: ManagedConnection | undefined, engine: import('../../src/engine/index').Engine | undefined;
     let database = '', marker = '', created: 'absent' | 'unknown' | 'confirmed' = 'absent';
     try {
-      const modules = await owner.step(() => Promise.all([import('../../src/engine'), import('../../src/engine/connection'), import('../../src/engine/sql'), import('node:crypto')]));
-      const [engineModule, connection, quote, crypto] = modules;
+      const { engine: engineModule, connection } = await owner.step(loadDatabaseEncodingModules);
+      const [quote, crypto] = await owner.step(() => Promise.all([import('../../src/engine/sql'), import('node:crypto')]));
       database = 'dbark_dbencoding_' + crypto.randomUUID().replaceAll('-', ''); marker = 'dbark-dbencoding-owner:' + crypto.randomUUID().replaceAll('-', '');
       if (!/^dbark_dbencoding_[a-f0-9]{32}$/.test(database)) throw Error('数据库编码随机资源计划无效');
+      process.stdout.write(JSON.stringify({ 专项: '数据库默认编码', 阶段: '原资源计划', 数据库: database, 所有者标记: marker, 端口: binding.profile.port }) + '\n');
       const db = quote.identifier(database), table = (name: 'existing' | 'inherited') => db + '.' + quote.identifier(name);
       /** 所有observer动作都绑定同一原生会话，不借新连接修复原现场。 */
       const sql = async <T = Record<string, unknown>[]>(text: string, values: (string | number | boolean | null | Buffer)[] = []) => {
@@ -43,6 +44,16 @@ describe.sequential('数据库默认编码六实例实库专项（Root逐端口�
       assertDatabaseEncodingIdentity(identity, binding, observer.status, uuidRows);
       const observerId = observer.connection.threadId;
       if (!Number.isSafeInteger(observerId) || observerId! < 1) throw Error('数据库编码observer原线程未知');
+      engine = new engineModule.Engine(event => events.push(event));
+      /** 每个原Engine调用都等其实际流关闭；预期拒绝在step内部记录，避免把预期失败伪装成可继续的超时。 */
+      const invoke = async <T>(command: EngineCommand, input: Record<string, unknown>, expectedSql?: string): Promise<{ value?: T; error?: unknown; facts: DatabaseEncodingConnectionFact[] }> => {
+        const scope = crypto.randomUUID(); audit.scope = scope; allowedSql = expectedSql; const count = facts.length;
+        const result = await owner.step(async () => { try { return { value: await engine!.handle(command, input) as T }; } catch (error) { return { error }; } });
+        const actual = facts.slice(count); for (const fact of actual) await owner.step(() => fact.closed);
+        assertDatabaseEncodingReleased(actual, command.startsWith('schema.')); allowedSql = undefined; return { ...result, facts: actual };
+      };
+      // 建库之前先证明实际Engine同模块图的connect确实经过旁观端口，观测失联不得制造新数据库。
+      const opened = await invoke('connections.open', { id: binding.profile.id, profile: binding.profile }); expect(opened.error).toBeUndefined(); expect(opened.facts).toHaveLength(1);
       expect(await sql('SELECT SCHEMA_NAME FROM information_schema.SCHEMATA WHERE BINARY SCHEMA_NAME=BINARY ?', [database])).toHaveLength(0);
       const original = { charset: 'utf8mb4', collation: 'utf8mb4_bin' }, changed = { charset: 'latin1', collation: 'latin1_swedish_ci' };
       created = 'unknown'; const create = await sql<{ affectedRows: number; warningStatus: number }>(`CREATE DATABASE ${db} DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_bin`); expect(create.warningStatus).toBe(0); created = 'confirmed';
@@ -55,15 +66,6 @@ describe.sequential('数据库默认编码六实例实库专项（Root逐端口�
       const beforeDefinition = await definition(), beforeColumns = await columns(), beforeRows = await rows();
       expect(beforeRows.map(row => row.id)).toEqual(['2', '9007199254740993', '18446744073709551615']);
       expect(beforeRows[2]).toMatchObject({ signed_value: '-9223372036854775808', amount: '-12345678901234567890123456789012345.123456789012345678901234567890', happened: '2026-10-22 01:02:03.123456', clock_value: '-12:34:56.654321', note: Buffer.from("中文😀'\"\\\0\r\n").toString('hex').toUpperCase(), payload: '00FF805C27' });
-      engine = new engineModule.Engine(event => events.push(event));
-      /** 每个原Engine调用都等其实际流关闭；预期拒绝在step内部记录，避免把预期失败伪装成可继续的超时。 */
-      const invoke = async <T>(command: EngineCommand, input: Record<string, unknown>, expectedSql?: string): Promise<{ value?: T; error?: unknown; facts: DatabaseEncodingConnectionFact[] }> => {
-        const scope = crypto.randomUUID(); audit.scope = scope; allowedSql = expectedSql; const count = facts.length;
-        const result = await owner.step(async () => { try { return { value: await engine!.handle(command, input) as T }; } catch (error) { return { error }; } });
-        const actual = facts.slice(count); for (const fact of actual) await owner.step(() => fact.closed);
-        assertDatabaseEncodingReleased(actual, command.startsWith('schema.')); allowedSql = undefined; return { ...result, facts: actual };
-      };
-      const opened = await invoke('connections.open', { id: binding.profile.id, profile: binding.profile }); expect(opened.error).toBeUndefined();
       const get = async () => { const result = await invoke<DatabaseDefaultEncodingGetOutput>('schema.databaseDefaultEncoding.get', { connectionId: binding.profile.id, database, taskId: crypto.randomUUID(), connectionRevision: 1 }); expect(result.error).toBeUndefined(); expect(result.facts).toHaveLength(1); return result.value!; };
       const preview = async (snapshot: DatabaseDefaultEncodingGetOutput, pair = changed) => invoke<DatabaseDefaultEncodingPreviewOutput>('schema.databaseDefaultEncoding.preview', { snapshotId: snapshot.snapshotId, ...pair, taskId: crypto.randomUUID(), connectionRevision: 1 });
       const apply = async (value: DatabaseDefaultEncodingPreviewOutput, allowWrite: boolean) => invoke<DatabaseDefaultEncodingApplyOutput>('schema.databaseDefaultEncoding.apply', { previewToken: value.previewToken, confirmation: database, acknowledgements: value.requiredAcknowledgements, taskId: crypto.randomUUID(), connectionRevision: 1 }, allowWrite ? value.sql : undefined);
@@ -81,7 +83,7 @@ describe.sequential('数据库默认编码六实例实库专项（Root逐端口�
       const stale = await apply(external.value!, false); expect(stale.error).toBeInstanceOf(Error); expect(stale.facts.flatMap(fact => fact.writes)).toHaveLength(0); expect(await currentSchema()).toEqual([original]);
       expect(await definition()).toBe(beforeDefinition); expect(await columns()).toEqual(beforeColumns); expect(await rows()).toEqual(beforeRows);
       // 权限不足需要另行授权的新账号资源；本namespace不扩张旧cp_*/dbark_colperm_*授权。
-      console.info(JSON.stringify({ 专项: '数据库默认编码', 数据库: database, 端口: binding.profile.port, 版本: observer.status.version, 方言: observer.status.dialect, 严格TLS: !!binding.profile.tls?.enabled, 权限不足: '未验；本轮不创建用户', 已有表定义列及精度字节保持: true, 新表继承默认: true }));
+      process.stdout.write(JSON.stringify({ 专项: '数据库默认编码', 数据库: database, 端口: binding.profile.port, 版本: observer.status.version, 方言: observer.status.dialect, 严格TLS: !!binding.profile.tls?.enabled, 权限不足: '未验；本轮不创建用户', 已有表定义列及精度字节保持: true, 新表继承默认: true }) + '\n');
       /** cleanup只在主体和所有原Engine任务严格结束后进入；未知绝不DROP。 */
       await owner.step(() => engine!.closeAll());
       const taskFacts = facts.filter(fact => fact.scope !== 'observer'); assertDatabaseEncodingReleased(taskFacts, false);
@@ -95,10 +97,10 @@ describe.sequential('数据库默认编码六实例实库专项（Root逐端口�
       await sql('DROP DATABASE ' + db); created = 'absent'; expect(await sql('SELECT SCHEMA_NAME FROM information_schema.SCHEMATA WHERE BINARY SCHEMA_NAME=BINARY ?', [database])).toHaveLength(0);
       await owner.step(() => closeDatabaseEncodingObserver(observer!)); assertDatabaseEncodingReleased(facts, false);
       owner.finish(); complete = true; audit.watch = undefined; audit.check = undefined; audit.scope = '';
-      console.info(JSON.stringify({ 专项: '数据库默认编码', 端口: binding.profile.port, 已清理数据库: database, 数据库残留: 0, 已关闭原生线程数: facts.length, 原任务线程残留: 0, observer原线程: observerId }));
+      process.stdout.write(JSON.stringify({ 专项: '数据库默认编码', 端口: binding.profile.port, 已清理数据库: database, 数据库残留: 0, 已关闭原生线程数: facts.length, 原任务线程残留: 0, observer原线程: observerId }) + '\n');
     } catch (reason) {
       owner.stop(); retained = true;
-      console.info(JSON.stringify({ 专项: '数据库默认编码', 保留现场: true, 数据库: database, 数据库状态: created, 已取得原生线程: facts.map(fact => ({ id: fact.id, pending: fact.pending, closeReturned: fact.closeReturned, closeFailed: fact.closeFailed, sawClose: fact.sawClose })) }));
+      process.stdout.write(JSON.stringify({ 专项: '数据库默认编码', 保留现场: true, 数据库: database, 数据库状态: created, 已取得原生线程: facts.map(fact => ({ id: fact.id, pending: fact.pending, closeReturned: fact.closeReturned, closeFailed: fact.closeFailed, sawClose: fact.sawClose })) }) + '\n');
       throw reason;
     } finally {
       // 失败后不启动DROP、重连、取消或重新执行；只释放已取得的observer句柄并保留全部原事实。

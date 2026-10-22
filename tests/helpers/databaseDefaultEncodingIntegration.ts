@@ -26,6 +26,13 @@ export type DatabaseEncodingBinding = ReturnType<typeof bindDatabaseEncodingTarg
 export function databaseEncodingLifetime(context: QisContext, binding: DatabaseEncodingBinding, retain: () => void) { return qisLifetime(context, binding, retain); }
 export type DatabaseEncodingLifetime = ReturnType<typeof databaseEncodingLifetime>;
 
+/** 先完成异步connect旁观模块，再载入显式Engine入口；不能并行目录导入绕开同一mock模块图。 */
+export async function loadDatabaseEncodingModules() {
+  const connection = await import('../../src/engine/connection');
+  const engine = await import('../../src/engine/index');
+  return { connection, engine };
+}
+
 /** 只读事实验证在任何CREATE之前完成；端口和已配置文字均不能代替实际服务器。 */
 export function assertDatabaseEncodingIdentity(rows: unknown, binding: DatabaseEncodingBinding, status: ManagedConnection['status'], uuidRows?: unknown) {
   if (!Array.isArray(rows) || rows.length !== 1 || !rows[0] || typeof rows[0] !== 'object') throw Error('数据库编码验收实际身份响应不完整');
