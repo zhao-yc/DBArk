@@ -1,5 +1,7 @@
 # 开发与测试
 
+索引设计器新增[参与查询优化器状态](development/index-optimizer-20261023.md)：MySQL可见性、MariaDB忽略状态独立预览与恢复，原生聚簇主键保护。类型、621项相关、完整15218通过／1条件跳过、构建与六实例实际Engine通过；准确347ab3a6的[Windows正式源码窗口](../tests/integration/acceptance-index-optimizer-347ab3a6-20261023.md)完成隐藏／恢复、原定义与全行保持和精确清理，暂不发布。
+
 字段设计器新增[已有整数列自增启用与取消](development/column-auto-increment-20261023.md)：单项差异预览、保留零值的独立结构会话、COPY／排他锁和原属性后核；含生成列的表明确只读。类型、949项定向、完整15120项通过／1平台跳过、构建及实际Engine六实例通过；准确ccb7c42d的[Windows源码正式窗口](../tests/integration/acceptance-column-auto-increment-ccb7c42d-20261023.md)已通过启用／取消、原定义和全行保持／精确清理，暂不发布。
 
 表数据页新增[按勾选原值筛选／排除](development/table-selected-filter-20261023.md)：完整NULL补集与原OR整体AND，预览后一次服务器分页，保留多列排序。准确源码及本机Windows实库范围见[fbc9e471验收](../tests/integration/acceptance-table-selected-filter-fbc9e471-20261023.md)。

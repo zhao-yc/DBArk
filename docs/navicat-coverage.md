@@ -1,5 +1,7 @@
 # Navicat 全功能覆盖目标
 
+O01新增[索引参与优化器切换](development/index-optimizer-20261023.md)：MySQL可见性与MariaDB忽略状态，单索引单属性预览／恢复，真实聚簇主键只读，旧删除／重建权限不放宽。类型、621项相关、完整15218通过／1平台跳过、构建和六实例实际Engine通过，共40组往返／80条原生DDL，5.7零DDL拒绝；准确347ab3a6的[Windows正式源码窗口](../tests/integration/acceptance-index-optimizer-347ab3a6-20261023.md)完成隐藏／恢复、原定义／目录／全行保持及精确清理。安装、macOS和实际故障组合另验，完整O01与发行计数不增加，暂不发布。
+
 ## 当前开发安排（2026-10-23）
 
 O01新增[已有整数列自增启用／取消](development/column-auto-increment-20261023.md)：支持既有首列普通非唯一及复合BTREE索引，单字段单属性SQL预览和三项确认；独立短会话保留零值，COPY／排他锁并完整核对未改定义与目录。类型、949项定向、完整15120项通过／1条件跳过、构建和实际Engine六实例通过，旧确认回调及生成列重算反例保留。准确ccb7c42d的[Windows正式源码窗口](../tests/integration/acceptance-column-auto-increment-ccb7c42d-20261023.md)启用／取消与原定义、全行保持、正常退出、精确清理通过。整表生成列、未知依赖／实体／权限等明确只读；安装／macOS及其它故障组合继续，完整O01与发行计数不增加，暂不发布。
