@@ -31,7 +31,7 @@ describe('集合区间与组合筛选边界', () => {
   });
   it('BIGINT相邻值与精确小数参数不经JS Number，也不触发MySQL字符串转DOUBLE', () => {
     const result = buildPageSql(table, 1, 2, [{ column: 'id', operator: 'IN', values: ['9007199254740992', '9007199254740993'] }, { column: 'amount', operator: '=', value: '12345678901234567890.123456789012345678' }], []);
-    expect(result.sql).toContain('`id` IN (CAST(? AS DECIMAL(65,0)), CAST(? AS DECIMAL(65,0)))');
+    expect(result.sql).toContain('`id` IN (CAST(CAST(? AS DECIMAL(20,0)) AS UNSIGNED), CAST(CAST(? AS DECIMAL(20,0)) AS UNSIGNED))');
     expect(result.params[1]).toBe('9007199254740993'); expect(result.sql).toContain('`amount` = CAST(? AS DECIMAL(65,18))');
     expect(() => buildPageSql(table, 1, 2, [{ column: 'id', operator: '=', value: '1e30' }], [])).toThrow('普通十进制');
     expect(() => buildPageSql(table, 1, 2, [{ column: 'amount', operator: '=', value: '1'.repeat(66) }], [])).toThrow('精确比较范围');

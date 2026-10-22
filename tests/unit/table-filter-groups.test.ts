@@ -93,7 +93,7 @@ describe('真实分页SQL树、参数与关联约束', () => {
   it.each(['all', 'any'] as const)('无filterGroup的旧%s模板及参数逐字节保持', mode => {
     const filters: FilterRule[] = [{ column: 'id', operator: '=', value: '9007199254740993' }, { column: 'note', operator: 'IS NULL' }];
     const actual = buildPageSql(info, 2, 2, filters, [], mode);
-    expect(actual).toEqual({ sql: `SELECT * FROM \`db\`.\`items\` WHERE ((\`id\` = CAST(? AS DECIMAL(65,0))) ${mode === 'all' ? 'AND' : 'OR'} (\`note\` IS NULL)) ORDER BY \`id\` ASC LIMIT 3 OFFSET 2`, params: ['9007199254740993'] });
+    expect(actual).toEqual({ sql: `SELECT * FROM \`db\`.\`items\` WHERE ((\`id\` = CAST(CAST(? AS DECIMAL(20,0)) AS UNSIGNED)) ${mode === 'all' ? 'AND' : 'OR'} (\`note\` IS NULL)) ORDER BY \`id\` ASC LIMIT 3 OFFSET 2`, params: ['9007199254740993'] });
     expect(buildPageSql(info, 2, 2, filters, [], mode, undefined)).toEqual(actual);
   });
 
@@ -104,7 +104,7 @@ describe('真实分页SQL树、参数与关联约束', () => {
       { column: 'note', operator: 'LIKE', value: "  %引号',逗号\\%  " }
     ];
     const actual = buildPageSql(info, 2, 2, filters, [], 'any', group('any', 2, group('all', 1, 0)));
-    expect(actual.sql).toBe('SELECT * FROM `db`.`items` WHERE ((`note` LIKE ?) OR ((`amount` BETWEEN CAST(? AS DECIMAL(65,20)) AND CAST(? AS DECIMAL(65,20))) AND (`id` = CAST(? AS DECIMAL(65,0))))) ORDER BY `id` ASC LIMIT 3 OFFSET 2');
+    expect(actual.sql).toBe('SELECT * FROM `db`.`items` WHERE ((`note` LIKE ?) OR ((`amount` BETWEEN CAST(? AS DECIMAL(65,20)) AND CAST(? AS DECIMAL(65,20))) AND (`id` = CAST(CAST(? AS DECIMAL(20,0)) AS UNSIGNED)))) ORDER BY `id` ASC LIMIT 3 OFFSET 2');
     expect(actual.params).toEqual([filters[2].value, ...filters[1].values!, filters[0].value]);
     expect(actual.sql).not.toContain('18446744073709551615');
   });
@@ -142,7 +142,7 @@ describe('真实分页SQL树、参数与关联约束', () => {
     const input: CommandMap['table.page']['input'] = { ...base, filters, filterMode: 'any', filterGroup: group('any', 1, group('all', 0)), copySource: true, taskId: id };
     try {
       await cache.page({ managed: {} as never, checkCancelled: () => {}, commandStarted: () => () => {} }, input, async (_managed, sql, page, pageSize) => { sqls.push(sql); return { columns: [], rows: [], hasMore: false, page, pageSize }; });
-      expect(sqls).toEqual(["SELECT * FROM `db`.`items` WHERE ((`note` = _utf8mb4 X'41') OR ((`id` = CAST(_utf8mb4 X'39' AS DECIMAL(65,0))))) ORDER BY `id` ASC LIMIT 51 OFFSET 0"]);
+      expect(sqls).toEqual(["SELECT * FROM `db`.`items` WHERE ((`note` = _utf8mb4 X'41') OR ((`id` = CAST(CAST(_utf8mb4 X'39' AS DECIMAL(20,0)) AS UNSIGNED)))) ORDER BY `id` ASC LIMIT 51 OFFSET 0"]);
     } finally { cache.close(); }
   });
 });

@@ -223,6 +223,9 @@ function filterParameter(column: ColumnInfo, value: string, pattern: boolean): s
   const declaredScale = Number(/^(?:DECIMAL|NUMERIC|FIXED)\(\d+,\s*(\d+)\)/i.exec(column.type)?.[1] ?? 0);
   const maxScale = Math.max(30, declaredScale);
   if (fraction.length > maxScale || integerDigits + fraction.length > 65) throw new Error(`字段 ${column.name} 的筛选值超出精确比较范围：最多 65 位数字和 ${maxScale} 位小数`);
+  // 5.7将UNSIGNED整列与高位DECIMAL常量比较会产生1292；仅真实整型且范围已证明的非负整数定型为UNSIGNED。
+  // 沿BIT写值的双层定型：先DECIMAL(20,0)保住8.4预处理参数高位；负号、分数或UINT64溢出仍走原DECIMAL，不取模/截断。
+  if (/^(?:TINYINT|SMALLINT|MEDIUMINT|INT|INTEGER|BIGINT)(?:\(\d{1,5}\))?\s+UNSIGNED(?:\s+ZEROFILL)?$/i.test(column.type.trim()) && /^\+?\d+$/.test(value) && BigInt(value) <= 18446744073709551615n) return 'CAST(CAST(? AS DECIMAL(20,0)) AS UNSIGNED)';
   return `CAST(? AS DECIMAL(65,${fraction.length}))`;
 }
 
