@@ -14,6 +14,7 @@ import { snapshotQueryResult } from '../../src/renderer/queryPins';
 import { QueryResultFilter, queryResultFilteredSortView } from '../../src/renderer/queryResultFilter';
 import { QueryResultSort } from '../../src/renderer/queryResultSort';
 import { QueryRowDetails } from '../../src/renderer/queryRowDetails';
+import { captureQueryFailureSource } from '../../src/renderer/queryFailureSource';
 import { memoryDocument, MemoryEvent } from '../fixtures/memory-dom';
 
 const source = readFileSync(new URL('../../src/renderer/components/QueryTab.tsx', import.meta.url), 'utf8'), file = ts.createSourceFile('QueryTab.tsx', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
@@ -32,7 +33,7 @@ function inspect(node: ts.Node) {
   ts.forEachChild(node, inspect);
 }
 inspect(file);
-const names = ['runQuery', 'handleQueryError', 'querySource', 'execute', 'cancelCurrentQuery', 'invalidateResultSelection', 'pinResult', 'exportVisibleResult', 'resultSelectionAllowed', 'resultViewCurrent'];
+const names = ['runQuery', 'handleQueryError', 'querySource', 'failureSourceScope', 'captureFailureSource', 'clearFailureSource', 'execute', 'cancelCurrentQuery', 'invalidateResultSelection', 'pinResult', 'exportVisibleResult', 'resultSelectionAllowed', 'resultViewCurrent'];
 const selected = ['results', 'pin', 'sourceResult', 'sourceExportable', 'viewSource', 'resultContext', 'filterBinding', 'filterView', 'sortBinding', 'sortView', 'displayedView', 'result', 'exportable', 'selectionBinding'];
 for (const name of names) if (!functions.has(name)) throw Error('缺少真实QueryTab函数：' + name);
 for (const name of selected) if (!declarations.has(name)) throw Error('缺少真实QueryTab结果声明：' + name);
@@ -40,18 +41,19 @@ if (!subscription || !notice || !parameterExecute || !resultTabs || buttons.size
 const harnessCode = `function Harness({port}) {
  const tab=port.tab, settings=port.workspace.settings, connection={}, connectionVersion=0;
  const busyRef=useRef(false), task=useRef(''), cancelledQuery=useRef(''), explainSource=useRef(''), sessionRef=useRef('session'), parameterSession=useRef('session'), editor={current:port.editor}, alive=useRef(true);
+ const failureSource=useRef(undefined),parameterFailureSource=useRef(undefined),closeRequestRef=useRef(undefined);const [,refreshFailureSource]=useState(0);
  const [busy,setBusy]=useState(false),[queryRunning,setQueryRunning]=useState(false),[error,setError]=useState(''),[outcome,setOutcome]=useState(null),[stream,setStream]=useState([]),[resultIndex,setResultIndex]=useState(0),[transaction,setTransaction]=useState(false),[transactionKnown,setTransactionKnown]=useState(true),[sessionId,setSessionId]=useState('session'),[pins,setPins]=useState([]),[selectedPin,setSelectedPin]=useState(''),[showPinSql,setShowPinSql]=useState(false),[exportResult,setExportResult]=useState(null),[exportSelected,setExportSelected]=useState(false),[parameterSource,setParameterSource]=useState(port.sql);
  const pinSequence=useRef(0),resultSelection=port.selection,resultFilter=port.filter,resultSorter=port.sorter,rowDetails=port.details;
  const comparisonLeaseRef=useRef(null),statisticsLeaseRef=useRef(null),sortLeaseRef=useRef(null),filterLeaseRef=useRef(null);
  const noop=()=>{},setComparisonLease=noop,setStatisticsLease=noop,setSortLease=noop,setFilterLease=noop,setRowDetail=noop,setActiveDetailRow=noop;
  const activeColumnLease=null,activeFilterLease=null,activeSortLease=null;
- const useWorkspace={getState:()=>port.workspace},invoke=port.invoke,ensureSession=port.ensureSession,prepareExecutionContext=port.prepare,rememberDatabase=port.remember,uid=port.uid,errorMessage=reason=>reason.message;
+ const useWorkspace={getState:()=>port.workspace,subscribe:port.subscribe??(()=>()=>{})},invoke=port.invoke,ensureSession=port.ensureSession,prepareExecutionContext=port.prepare,rememberDatabase=port.remember,uid=port.uid,errorMessage=reason=>reason.message;
  const [,force]=useState(0);port.force=()=>force(n=>n+1);
  ${names.map(name => functions.get(name)).join('\n')}
  ${subscription}
  const executeParameters=${parameterExecute};
  const ${declarations.get('results')};const ${declarations.get('pin')};const ${declarations.get('sourceResult')};const ${declarations.get('sourceExportable')};const ${declarations.get('viewSource')};const ${declarations.get('resultContext')};
- const visibleColumns=sourceResult?.columns??[],resultModal=false;
+ const visibleColumns=sourceResult?.columns??[],resultModal=false,failureLocator=failureSource.current;
  const ${declarations.get('filterBinding')};const ${declarations.get('filterView')};const ${declarations.get('sortBinding')};const ${declarations.get('sortView')};const ${declarations.get('displayedView')};const ${declarations.get('result')};const ${declarations.get('exportable')};const ${declarations.get('selectionBinding')};
  port.read=()=>({busy,queryRunning,error,outcome,stream,results,sourceResult,sourceExportable,selectionBinding,filterBinding,filterView,sortBinding,sortView,exportResult,pins,transaction,transactionKnown});
  port.current=()=>runQuery(port.sql,'execute',undefined,port.intent);port.cancel=cancelCurrentQuery;
@@ -62,7 +64,7 @@ let doc: ReturnType<typeof memoryDocument>, createRoot: typeof import('react-dom
 const globals = ['window', 'document', 'navigator', 'IS_REACT_ACT_ENVIRONMENT'].map(name => [name, Object.getOwnPropertyDescriptor(globalThis, name)] as const);
 beforeAll(async () => {
   doc = memoryDocument(); const create = doc.createElement.bind(doc); doc.createElement = name => { const node = create(name), set = node.setAttribute.bind(node), remove = node.removeAttribute.bind(node); node.setAttribute = (key, value) => { set(key.toLowerCase(), value); if (key === 'disabled') node.disabled = true; }; node.removeAttribute = key => { remove(key.toLowerCase()); if (key === 'disabled') node.disabled = false; }; return node; }; ({ createRoot } = await import('react-dom/client'));
-  const context: any = createContext({ exports: {}, useEffect, useMemo, useRef, useState, QueryPartialOutcomeNotice, ErrorBox, zh, formatText, exportableQueryResult, snapshotQueryResult, queryResultFilteredSortView, document: doc, window, Error, Play: () => null, Pin: () => null, Download: () => null, require: (name: string) => { if (name === 'react/jsx-runtime') return jsxRuntime; throw Error('禁止载入其他QueryTab依赖'); } });
+  const context: any = createContext({ exports: {}, useEffect, useMemo, useRef, useState, captureQueryFailureSource, QueryPartialOutcomeNotice, ErrorBox, zh, formatText, exportableQueryResult, snapshotQueryResult, queryResultFilteredSortView, document: doc, window, Error, Play: () => null, Pin: () => null, Download: () => null, require: (name: string) => { if (name === 'react/jsx-runtime') return jsxRuntime; throw Error('禁止载入其他QueryTab依赖'); } });
   runInContext(ts.transpileModule(harnessCode + '\nglobalThis.Harness=Harness;', { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX } }).outputText, context); Harness = context.Harness;
 });
 afterEach(async () => { if (root) await act(async () => root!.unmount()); root = undefined; doc.body.textContent = ''; });

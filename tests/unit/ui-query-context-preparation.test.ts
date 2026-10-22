@@ -12,10 +12,10 @@ import type {ConnectionStatus} from '../../src/shared/contracts';
 /** 执行真实组件内的发送函数，只隔离React与IPC边界，核对等待、取消和失败不发送写入。 */
 function fixture(){
   const selection=queryResultSelectionFixture();
-  const source=readFileSync(new URL('../../src/renderer/components/QueryTab.tsx',import.meta.url),'utf8'),file=ts.createSourceFile('QueryTab.tsx',source,ts.ScriptTarget.Latest,true,ts.ScriptKind.TSX),names=new Set(['runQuery','runStreamExport','prepareExecutionContext','cancelCurrentQuery','invalidateResultSelection']),functions:string[]=[];
-  function visit(node:ts.Node){if(ts.isFunctionDeclaration(node)&&node.name&&names.has(node.name.text))functions.push(node.getText(file));ts.forEachChild(node,visit);}visit(file);if(functions.length!==5)throw Error('生产准备函数入口改变');
+  const source=readFileSync(new URL('../../src/renderer/components/QueryTab.tsx',import.meta.url),'utf8'),file=ts.createSourceFile('QueryTab.tsx',source,ts.ScriptTarget.Latest,true,ts.ScriptKind.TSX),names=new Set(['runQuery','runStreamExport','clearFailureSource','prepareExecutionContext','cancelCurrentQuery','invalidateResultSelection']),functions:string[]=[];
+  function visit(node:ts.Node){if(ts.isFunctionDeclaration(node)&&node.name&&names.has(node.name.text))functions.push(node.getText(file));ts.forEachChild(node,visit);}visit(file);if(functions.length!==6)throw Error('生产准备函数入口改变');
   const invoke=vi.fn(async(_command:string,_input?:unknown)=>({results:[]})),flushSettings=vi.fn(async()=>{}),ensureSession=vi.fn(async()=>'session'),rememberDatabase=vi.fn(),handleQueryError=vi.fn(async(_reason:unknown)=>{});let serial=0;
-  const context=createContext({resultSelection:selection.resultSelection,
+  const context=createContext({resultSelection:selection.resultSelection,failureSource:{current:undefined},
     // 只补齐真实初始详情控制器和React状态端口，不替换生产失效/执行函数。
     rowDetails:new QueryRowDetails(),setRowDetail:vi.fn(),setActiveDetailRow:vi.fn(),
     // 对应未打开筛选面板的真实初始引用，不替换原撤销函数或投递断言。

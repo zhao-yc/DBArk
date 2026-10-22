@@ -3,6 +3,7 @@ import { createContext, runInContext } from 'node:vm';
 import ts from 'typescript';
 import { describe, expect, it, vi } from 'vitest';
 import { CurrentStatementIntent } from '../../src/renderer/currentStatementIntent';
+import { captureQueryFailureSource } from '../../src/renderer/queryFailureSource';
 import { currentStatementZh } from '../../src/renderer/locales/currentStatement.zh-CN';
 import { queryContextZh } from '../../src/renderer/locales/queryContext.zh-CN';
 import { queryConnectionDatabase, resolveQueryDatabase } from '../../src/shared/queryContext';
@@ -12,7 +13,7 @@ import { bindEditorIndentation } from '../../src/renderer/editorIndentation';
 import { editorIndentationOptions } from '../../src/shared/editorIndentation';
 
 const source = readFileSync(new URL('../../src/renderer/components/QueryTab.tsx', import.meta.url), 'utf8'), tree = ts.createSourceFile('QueryTab.tsx', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
-const names = new Set(['ensureSession', 'currentStatementScope', 'executeCurrentStatement', 'runQuery', 'prepareExecutionContext', 'querySource', 'execute', 'attachQueryEditor', 'invalidateResultSelection']), functions: string[] = [];
+const names = new Set(['ensureSession', 'currentStatementScope', 'executeCurrentStatement', 'runQuery', 'prepareExecutionContext', 'querySource', 'failureSourceScope', 'captureFailureSource', 'clearFailureSource', 'execute', 'attachQueryEditor', 'invalidateResultSelection']), functions: string[] = [];
 /** 运行真实组件入口和真正异步建连函数，仅替换IO与React端口。 */
 function visit(node: ts.Node) { if (ts.isFunctionDeclaration(node) && node.name && names.has(node.name.text)) functions.push(node.getText(tree)); node.forEachChild(visit); }
 visit(tree);
@@ -24,7 +25,7 @@ function gate() { let release!: () => void; const pending = new Promise<void>(re
 function fixture() {
   const selection = queryResultSelectionFixture();
   let sql = "SET @before=1; SELECT '🧭当前'; DELETE FROM after;", version = 1, offset = sql.indexOf('当前'), modal = false, activeModel: unknown;
-  const listeners = new Map<string, Set<() => void>>(), workspace = { settings: { activeTabId: 'tab', tabs: [{ id: 'tab', kind: 'query', connectionId: 'c', sql, database: 'db', databaseContext: { state: 'known', database: 'db' } }] }, connections: [{ id: 'c', database: 'db' }], connectionVersions: { c: 2 }, setBusy: vi.fn(), setDirty: vi.fn() };
+  const listeners = new Map<string, Set<() => void>>(), workspace = { settings: { activeTabId: 'tab', tabs: [{ id: 'tab', kind: 'query', connectionId: 'c', sql, database: 'db', databaseContext: { state: 'known', database: 'db' } }] }, connections: [{ id: 'c', database: 'db' }], connectionVersions: { c: 2 }, activeJobs: {}, setBusy: vi.fn(), setDirty: vi.fn() };
   const listen = (kind: string, action: () => void) => { const list = listeners.get(kind) ?? new Set(); list.add(action); listeners.set(kind, list); return { dispose: () => { list.delete(action); } }; };
   const emit = (kind: string) => { for (const action of [...listeners.get(kind) ?? []]) action(); };
   const model = { getValue: () => sql, getVersionId: () => version, isDisposed: () => false, getOffsetAt: (p: { column: number }) => p.column - 1, getValueInRange: () => 'SELECT selected', onDidChangeContent: (action: () => void) => listen('content', action), onWillDispose: (action: () => void) => listen('modelDispose', action) };
@@ -33,7 +34,7 @@ function fixture() {
   const invoke = vi.fn(async (command: string, _input?: any): Promise<any> => command === 'sessions.open' ? { sessionId: 'session' } : { results: [] }), flushSettings = vi.fn(async () => {}), handleQueryError = vi.fn(async (_reason: unknown) => {});
   let serial = 0;
   // 对应真实组件的useRef：复制/格式化尚未发起，模型挂载标记初始false，仍执行真实接管函数。
-  const port = createContext({ duplicateIntent: { current: null }, formatting: { current: null }, fileModelAttached: { current: false }, resultSelection: selection.resultSelection,
+  const port = createContext({ duplicateIntent: { current: null }, formatting: { current: null }, fileModelAttached: { current: false }, resultSelection: selection.resultSelection, captureQueryFailureSource, failureSource: { current: undefined }, parameterFailureSource: { current: undefined }, alive: { current: true }, closeRequestRef: { current: undefined }, refreshFailureSource: vi.fn(),
     // 与真实组件初始useRef一致：尚未打开行详情，但真实失效函数仍撤销控制器并清空两个React状态。
     rowDetails: new QueryRowDetails(), setRowDetail: vi.fn(), setActiveDetailRow: vi.fn(),
     // 尚未打开筛选草稿；真实撤销函数仍使用组件的引用及状态端口。
@@ -52,7 +53,7 @@ function fixture() {
 
 describe('真实QueryTab当前语句异步意图', () => {
   it('真实入口在异步建连和落盘后只发一次完整模型正文与真实UTF16光标', async () => {
-    expect(functions).toHaveLength(9); const f = fixture(), expected = f.model.getValue(); await f.execute();
+    expect(functions).toHaveLength(12); const f = fixture(), expected = f.model.getValue(); await f.execute();
     const calls = f.invoke.mock.calls.filter(([command]) => command === 'query.execute'); expect(calls).toHaveLength(1); expect(calls[0][1]).toMatchObject({ sessionId: 'session', sql: expected, currentStatement: { offset: expected.indexOf('当前') } }); expect(calls[0][1].sql).not.toBe('SELECT selected');
     expect(f.model.getValue()).toBe(expected); expect([...f.listeners.values()].every(list => !list.size)).toBe(true);
     expect(f.selection.resultSelection.count(f.selection.binding)).toBe(0);

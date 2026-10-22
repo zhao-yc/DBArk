@@ -15,6 +15,13 @@ vi.mock('../../src/engine/connection', async importOriginal => {
 let owner: QueryPartialLifetime | undefined, retained = false, complete = false;
 afterEach(() => { if (owner && !complete) { retained = true; owner.stop(); } owner?.end(); });
 
+/** 坐标期望来自本例原模板及明确长度，绝不用产品扫描器或indexOf重复SQL反推答案。 */
+function assertPartialFailureSourceRange(outcome: QueryOutcome, source: string, expectedStart: number, failedTemplate: string): void {
+  const range = outcome.failure?.sourceRange;
+  expect(range).toEqual({ start: expectedStart, end: expectedStart + failedTemplate.length });
+  expect(source.slice(range!.start, range!.end)).toBe(failedTemplate);
+}
+
 describe.sequential('查询首错保留完整前序结果六实例专项（Root逐端口运行）', () => {
   it('真实精度前序、autocommit保留、用户回滚、参数隐私及CALL首错丢弃当前语句', { timeout: 120000, retry: 0, repeats: 0 }, async context => {
     if (!queryPartialEnabled(process.argv, process.env)) { context.skip(); return; }
@@ -66,21 +73,24 @@ describe.sequential('查询首错保留完整前序结果六实例专项（Root�
       const sessionFact = facts.at(-1)!; expect(sessionFact.scope.startsWith('engine-')).toBe(true); expect(sessionFact.closeCalls).toBe(0);
       const precision = `SELECT id AS repeated,signed_value AS repeated,amount,happened,note,nullable_value,payload FROM ${table('precision_row')} ORDER BY id`, second = "SELECT 'SECOND_COMPLETE' AS complete_value", missing = 'SELECT * FROM ' + db + '.' + quote.identifier('missing_qpartial');
       const execute = async (statements: string[], command: 'query.execute' | 'query.executeParameterized' = 'query.execute', parameters?: { name: string; type: 'text'; value: string }[], nativeSql = statements.filter(sql => sql !== tail)) => {
-        const taskId = task(), result = await invoke<QueryOutcome>(command, { sessionId, sql: statements.join(';\n'), maxRows: 1000, taskId, ...(parameters ? { parameters } : {}) }, nativeSql);
+        const taskId = task(), source = statements.join(';\n'), result = await invoke<QueryOutcome>(command, { sessionId, sql: source, maxRows: 1000, taskId, ...(parameters ? { parameters } : {}) }, nativeSql);
         expect(result.error).toBeUndefined(); expect(events.filter(event => event.taskId === taskId && event.status !== 'running').map(event => event.status)).toEqual(['failed']);
-        return { outcome: result.value!, taskId };
+        return { outcome: result.value!, taskId, source };
       };
       const prefix = await execute([precision, second, missing, tail]); verifyQueryPartialPrecision(prefix.outcome, 2);
       expect(prefix.outcome.results[1].rows).toEqual([{ c0: 'SECOND_COMPLETE' }]); expect(prefix.outcome.failure).toMatchObject({ statementOrdinal: 3, statementsCompleted: 2 }); expect(Object.hasOwn(prefix.outcome, 'transactionOpen')).toBe(false);
+      assertPartialFailureSourceRange(prefix.outcome, prefix.source, precision.length + 2 + second.length + 2, missing);
       const cacheBefore = sessionFact.commands.length, state = await invoke<{ transactionKnown: boolean; broken: boolean }>('query.sessionState', { sessionId });
       expect(state.error).toBeUndefined(); expect(state.value).toMatchObject({ transactionKnown: false, broken: false }); expect(sessionFact.commands.length).toBe(cacheBefore);
       const insertCommitted = `INSERT INTO ${table('ledger')} VALUES(1,'committed-prefix')`, auto = await execute([insertCommitted, missing, tail]);
       expect(auto.outcome.failure).toMatchObject({ statementOrdinal: 2, statementsCompleted: 1 }); expect(auto.outcome.results).toHaveLength(1); expect(auto.outcome.results[0].affectedRows).toBe(1);
+      assertPartialFailureSourceRange(auto.outcome, auto.source, insertCommitted.length + 2, missing);
       expect(await sql(`SELECT id,note FROM ${table('ledger')} ORDER BY id`)).toEqual([{ id: 0, note: marker }, { id: 1, note: 'committed-prefix' }]);
       expect(sessionFact.commands.some(command => command.sql === 'ROLLBACK')).toBe(false);
       const begun = await invoke('query.transaction', { sessionId, action: 'begin' }, ['START TRANSACTION']); expect(begun.error).toBeUndefined();
       const insertPending = `INSERT INTO ${table('ledger')} VALUES(2,'pending-user-rollback')`, transaction = await execute([insertPending, missing, tail]);
       expect(transaction.outcome.failure).toMatchObject({ statementOrdinal: 2, statementsCompleted: 1 }); expect(transaction.outcome.results[0].affectedRows).toBe(1);
+      assertPartialFailureSourceRange(transaction.outcome, transaction.source, insertPending.length + 2, missing);
       const countBeforeCache = sessionFact.commands.length, txnCache = await invoke<{ transactionKnown: boolean }>('query.sessionState', { sessionId }); expect(txnCache.value?.transactionKnown).toBe(false); expect(sessionFact.commands.length).toBe(countBeforeCache);
       expect(await sql(`SELECT id FROM ${table('ledger')} WHERE id=2`)).toEqual([]); expect(sessionFact.commands.some(command => command.sql === 'ROLLBACK')).toBe(false);
       const rollback = await invoke('query.transaction', { sessionId, action: 'rollback' }, ['ROLLBACK']); expect(rollback.error).toBeUndefined(); expect(sessionFact.commands.at(-1)?.sql).toBe('ROLLBACK');
@@ -90,10 +100,12 @@ describe.sequential('查询首错保留完整前序结果六实例专项（Root�
       expect(parameter.outcome.results).toHaveLength(1); expect(parameter.outcome.results[0].rows).toEqual([{ c0: v.parameter }]); expect(parameter.outcome.results[0].statement).toBe(templateFirst);
       const exposedPrefix = '仅合成参数不进入错误摘要_中文';
       expect(parameter.outcome.failure).toMatchObject({ statementOrdinal: 2, statementsCompleted: 1 }); expect(parameter.outcome.failure!.message).not.toContain(v.parameter); expect(parameter.outcome.failure!.message).not.toContain(exposedPrefix);
+      assertPartialFailureSourceRange(parameter.outcome, parameter.source, templateFirst.length + 2, templateDuplicate);
       const failedParameterEvent = events.filter(event => event.taskId === parameter.taskId && event.status === 'failed')[0]; expect(failedParameterEvent.message).not.toContain(v.parameter); expect(failedParameterEvent.message).not.toContain(exposedPrefix);
       // 5.7实测ERR把emoji显示成?，但前面的完整中文参数仍被回显；分别证明原错误与部分/完整脱敏。
       const parameterError = sessionFact.commands.at(-1)!; expect(parameterError.errors).toHaveLength(1); expect(parameterError.errors[0].errno).toBe(1062); expect(parameterError.errors[0].code).toBe('ER_DUP_ENTRY'); expect(parameterError.errors[0].message).toContain(exposedPrefix);
       const callSql = `CALL ${procedure}()`, call = await execute([precision, callSql, tail]); verifyQueryPartialPrecision(call.outcome, 1); expect(call.outcome.failure).toMatchObject({ statementOrdinal: 2, statementsCompleted: 1 }); expect(JSON.stringify(call.outcome.results)).not.toContain('CALL_EARLY_ONLY');
+      assertPartialFailureSourceRange(call.outcome, call.source, precision.length + 2, callSql);
       const callFact = sessionFact.commands.at(-1)!; expect(callFact.sql).toBe(callSql); expect(callFact.fields).toBeGreaterThan(0); expect(callFact.rows).toBeGreaterThan(0); expect(callFact.errors).toHaveLength(1); expect(callFact.ended).toBe(true);
       const schemaTask = task(), schema = await invoke('schema.apply', { connectionId: binding.profile.id, database, taskId: schemaTask, sql: `SELECT 1;\n${missing}` }, ['SELECT 1', missing]); expect(schema.error).toBeInstanceOf(Error); expect(schema.value).toBeUndefined();
       const schemaFact = facts.at(-1)!; expect(schemaFact).not.toBe(sessionFact); await lifetime.step(() => schemaFact.closed); assertQueryPartialClosed([schemaFact]);
@@ -113,7 +125,7 @@ describe.sequential('查询首错保留完整前序结果六实例专项（Root�
       assertQueryPartialCommands(facts); if (created !== 'confirmed' || !/^dbark_qpartial_[a-f0-9]{32}$/.test(database)) throw Error('部分查询数据库归属不完整，拒绝DROP');
       await sql('DROP DATABASE ' + db); created = 'absent'; expect(await sql('SELECT SCHEMA_NAME FROM information_schema.SCHEMATA WHERE BINARY SCHEMA_NAME=BINARY ?', [database])).toEqual([]);
       await lifetime.step(() => closeQueryPartialObserver(observer!)); await lifetime.step(() => facts[0].closed); assertQueryPartialClosed(facts);
-      process.stdout.write(JSON.stringify({ 专项: '查询部分失败', 端口: binding.profile.port, 方言: observer.status.dialect, 版本: observer.status.version, 严格TLS: !!binding.profile.tls?.enabled, 完整前序精度: true, 后句原驱动投递: facts.flatMap(fact => fact.commands).filter(command => command.sql === tail).length, 尾句阻断次数: facts.reduce((sum, fact) => sum + fact.tailsBlocked, 0), 自动提交保留: true, 显式用户回滚: true, 错误事务缓存: '未知；未伪装ERR确认', 参数错误隐藏: true, CALL失败语句早期行被丢弃: true, schemaApply仍拒绝: true, 长查询取消: '本专项未验；原取消实库专项另行验收', 原线程全部关闭: true, 已清理数据库: database, 数据库残留: 0, 原任务线程残留: 0, observer原线程: facts[0].id }) + '\n');
+      process.stdout.write(JSON.stringify({ 专项: '查询部分失败', 端口: binding.profile.port, 方言: observer.status.dialect, 版本: observer.status.version, 严格TLS: !!binding.profile.tls?.enabled, 完整前序精度: true, 失败SQL模板UTF16范围: true, 后句原驱动投递: facts.flatMap(fact => fact.commands).filter(command => command.sql === tail).length, 尾句阻断次数: facts.reduce((sum, fact) => sum + fact.tailsBlocked, 0), 自动提交保留: true, 显式用户回滚: true, 错误事务缓存: '未知；未伪装ERR确认', 参数错误隐藏: true, CALL失败语句早期行被丢弃: true, schemaApply仍拒绝: true, 长查询取消: '本专项未验；原取消实库专项另行验收', 原线程全部关闭: true, 已清理数据库: database, 数据库残留: 0, 原任务线程残留: 0, observer原线程: facts[0].id }) + '\n');
       lifetime.finish(); complete = true; audit.watch = undefined; audit.check = undefined; audit.scope = '';
     } catch (error) {
       retained = true; lifetime.stop();

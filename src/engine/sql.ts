@@ -53,6 +53,7 @@ export function deserializeCell(value: CellValue): string | number | boolean | n
 
 /** 范围采用原文 UTF-16 半开区间；客户端分隔符不属于真正发送的 SQL。 */
 export interface SqlStatementRange { sql: string; start: number; end: number; delimiterStart: number; delimiterEnd: number; delimiter: string | null; }
+export interface SqlLocatedStatement { sql: string; sourceRange?: { start: number; end: number }; }
 
 /** 支持跨块、跨行字符串与 DELIMITER 指令，导入脚本时只保留当前语句。 */
 export class SqlScriptScanner {
@@ -95,6 +96,22 @@ export class SqlScriptScanner {
   /** 与原脚本扫描共用词法状态；未知模式时连原文偏移也必须完全一致。 */
   pushRanges(chunk: string, final = false, maxStatements = Infinity): SqlStatementRange[] {
     return this.scan(chunk, final, maxStatements, true);
+  }
+
+  /** 执行仍只要求原push的SQL文字一致；原文位置有歧义时省略范围，绝不强化成新的执行拒绝。 */
+  pushLocated(chunk: string, final = false, maxStatements = Infinity): SqlLocatedStatement[] {
+    const located = (range: SqlStatementRange): SqlLocatedStatement => ({ sql: range.sql, sourceRange: { start: range.start, end: range.end } });
+    if (!this.alternates.length) return this.consume(chunk, final, maxStatements).map(located);
+    try {
+      const result = this.consume(chunk, final, maxStatements), output = result.map(located);
+      const text = JSON.stringify(result.map(range => range.sql));
+      for (const alternate of this.alternates) {
+        const candidate = alternate.consume(chunk, final, maxStatements);
+        if (text !== JSON.stringify(candidate.map(range => range.sql))) throw new Error('语句边界不同');
+        for (let index = 0; index < result.length; index++) if (candidate[index].start !== result[index].start || candidate[index].end !== result[index].end) delete output[index].sourceRange;
+      }
+      return output;
+    } catch { throw new Error('无法确定会话 SQL 引号模式，当前 SQL 的语句边界存在歧义；请关闭此标签并新建查询重新连接'); }
   }
 
   /** 原 push 仍比较实际 SQL；范围入口额外拒绝“文字相同但所在位置不同”的歧义。 */

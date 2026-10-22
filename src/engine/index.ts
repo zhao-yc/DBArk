@@ -48,7 +48,7 @@ import { TableDropTasks } from './tableDropTasks';
 import { TableTruncateTasks } from './tableTruncateTasks';
 import { DatabaseCreateTasks } from './databaseCreateTasks';
 import { DatabaseDefaultEncodingTasks } from './databaseDefaultEncodingTasks';
-import { queryFailureMessage } from '../shared/queryFailure';
+import { queryFailureMessage, type QueryFailureSourceRange } from '../shared/queryFailure';
 import { TableDefaultEncodingTasks } from './tableDefaultEncodingTasks';
 import { TableForeignKeyPatchTasks } from './tableForeignKeyPatchTasks';
 import type { StructureTaskContext, StructureTaskOptions } from './structureDefinition';
@@ -880,7 +880,8 @@ export class Engine {
   }
 
   /** 工作台与完整导出共用唯一调度器；每次消费一条，实际执行结束后才按会话模式解释尾部。 */
-  private async *queryStatements(task: RunningTask, sql: string, parameters?: QueryParameter[], currentStatement?: { offset: number }): AsyncGenerator<{ statement: string; template: string; mode: SqlLexicalMode; ordinal: number }> {
+  private async *queryStatements(task: RunningTask, sql: string, parameters?: QueryParameter[], currentStatement?: { offset: number }, locate?: (range: QueryFailureSourceRange | undefined) => void): AsyncGenerator<{ statement: string; template: string; mode: SqlLexicalMode; ordinal: number }> {
+    locate?.(undefined);
     if (typeof sql !== 'string' || Buffer.byteLength(sql) > queryParameterLimits.sqlBytes) throw new Error('SQL 模板不能超过 20 MiB');
     const values = parameters === undefined ? undefined : validateQueryParameters(parameters, this.maxDecimalScale(task.managed), task.managed.status.dialect === 'mariadb');
     let mode = await this.sqlMode(task.managed, task);
@@ -889,7 +890,9 @@ export class Engine {
       const current = currentSqlStatement(sql, currentStatement.offset, mode);
       if (!current) throw new Error('光标所在位置没有可执行的完整语句；未执行相邻语句或全文');
       this.checkCancelled(task);
+      locate?.({ start: current.start, end: current.end });
       yield { statement: current.sql, template: current.sql, mode, ordinal: 1 };
+      locate?.(undefined);
       return;
     }
     if (values) this.parameterPlan(sql, mode, values);
@@ -899,12 +902,16 @@ export class Engine {
     for (;;) {
       this.checkCancelled(task);
       scanner.setMode(mode.noBackslashEscapes, mode.ansiQuotes, mode.ansiQuotesKnown !== false, mode.noBackslashEscapesKnown !== false);
-      const template = scanner.push(first ? sql : '', true, 1)[0]; first = false;
+      const chunk = first ? sql : '', located = locate ? scanner.pushLocated(chunk, true, 1)[0] : undefined;
+      const template = locate ? located?.sql : scanner.push(chunk, true, 1)[0]; first = false;
       if (!template) break;
+      locate?.(located?.sourceRange);
       const statement = values ? bindQueryParameters(template, values, mode) : template;
       if (values) for (const token of namedParameterTokens(template, mode)) used.add(token.name);
       if ((expandedBytes += Buffer.byteLength(statement)) > queryParameterLimits.sqlBytes) throw new Error('展开后的 SQL 合计不能超过 20 MiB');
       yield { statement, template, mode, ordinal: ++ordinal };
+      // 仅恢复到下一轮才继续读取真实模式；上一条已完成的位置不得标成下一条扫描/模式错误。
+      locate?.(undefined);
       mode = await this.sqlMode(task.managed, task);
     }
     if (values && [...values.keys()].some(name => !used.has(name))) throw new Error('脚本执行结束后发现未使用的多余参数；动态模式下无法提前确定全部参数边界');
@@ -917,11 +924,11 @@ export class Engine {
     const results: QueryResult[] = [];
     // 限额由整项任务共享，防止很多结果集或大 BLOB 绕过单结果集行数限制。
     const budget: ResultBudget = { remainingRows: maxRows, remainingBytes: 16 * 1024 * 1024, remainingResults: 200 };
-    let executed = 0;
+    let executed = 0, sourceRange: QueryFailureSourceRange | undefined;
     try {
       if (!Number.isInteger(maxRows) || maxRows < 1 || maxRows > 100000) throw new Error('查询结果上限必须在 1～100000 之间');
       if (failureMode === 'parameterized' && !Array.isArray(parameters)) throw new Error('参数查询必须提供参数列表');
-      for await (const { statement, template } of this.queryStatements(task, sql, parameters, currentStatement)) {
+      for await (const { statement, template } of this.queryStatements(task, sql, parameters, currentStatement, failureMode ? range => { sourceRange = range ? { ...range } : undefined; } : undefined)) {
         try { results.push(...await this.streamQuery(task, statement, maxRows, results.length, budget, template, currentStatement !== undefined)); }
         catch (error) {
           if (!values) throw error;
@@ -930,7 +937,7 @@ export class Engine {
           const safeCode = typeof code === 'string' && /^[A-Z0-9_]+$/.test(code) ? `（${code}）` : '';
           throw new Error(`参数查询失败${safeCode}；服务器错误详情可能包含参数值，已隐藏`);
         }
-        executed++;
+        sourceRange = undefined; executed++;
         this.emit({ taskId: task.id, status: 'running', progress: 0, message: `已执行 ${executed} 条语句` });
       }
     } catch (error) {
@@ -941,7 +948,7 @@ export class Engine {
       const detail = values && typeof code === 'string' ? `数据库错误 ${/^[A-Z0-9_]+$/.test(code) ? code : '未知'}` : this.errorMessage(error);
       if (!failureMode) throw new Error(`第 ${executed + 1} 条 SQL 未完成；已完成 ${executed} 条，此前已提交语句保留，未自动回滚或重放。${detail}`);
       const message = queryFailureMessage(executed, detail);
-      const outcome: QueryOutcome = { results, elapsedMs: performance.now() - started, failure: { statementOrdinal: executed + 1, statementsCompleted: executed, message } };
+      const outcome: QueryOutcome = { results, elapsedMs: performance.now() - started, failure: { statementOrdinal: executed + 1, statementsCompleted: executed, message, ...(sourceRange ? { sourceRange } : {}) } };
       // ERR没有新状态位；旧cached IN_TRANS即便非零也不能冒充失败后的真实事务状态。
       const status = task.managed.serverStatus;
       if (task.managed.transactionStateKnown !== false && !task.managed.broken && status !== undefined && Number.isInteger(status) && status >= 0 && status <= 65535) outcome.transactionOpen = (status & 1) !== 0;

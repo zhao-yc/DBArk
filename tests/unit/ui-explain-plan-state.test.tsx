@@ -27,7 +27,7 @@ function fixture() {
   const source = readFileSync(new URL('../../src/renderer/components/QueryTab.tsx', import.meta.url), 'utf8'), file = ts.createSourceFile('QueryTab.tsx', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
   const functions: string[] = []; let body = '';
   function visit(node: ts.Node) {
-    if (ts.isFunctionDeclaration(node) && node.name && ['saveQuery', 'runQuery', 'invalidateResultSelection', 'selectActiveDetailRow', 'rowDetailAllowed', 'resultViewCurrent', 'travelResultHistory'].includes(node.name.text)) functions.push(node.getText(file));
+    if (ts.isFunctionDeclaration(node) && node.name && ['saveQuery', 'runQuery', 'clearFailureSource', 'invalidateResultSelection', 'selectActiveDetailRow', 'rowDetailAllowed', 'resultViewCurrent', 'travelResultHistory'].includes(node.name.text)) functions.push(node.getText(file));
     if (ts.isJsxElement(node) && node.openingElement.attributes.properties.some(attribute => ts.isJsxAttribute(attribute) && attribute.name.getText(file) === 'className' && attribute.initializer && ts.isStringLiteral(attribute.initializer) && attribute.initializer.text === 'result-body')) body = node.getText(file);
     ts.forEachChild(node, visit);
   }
@@ -45,7 +45,7 @@ function fixture() {
     // 此端口不打开列管理，普通结果的可见列随当前结果更新，不能捕获执行前的计划列。
     get visibleColumns(): unknown[] { return context.result?.columns ?? []; },
     get viewSource(): unknown { return context.result; },
-    task: { current: 'original-plan-task' }, sessionId: 'original-session', sessionRef: { current: 'original-session' }, busyRef: { current: false }, cancelledQuery: { current: '' }, parameterSession: { current: '' }, explainSource: { current: 'SELECT 1' },
+    task: { current: 'original-plan-task' }, sessionId: 'original-session', sessionRef: { current: 'original-session' }, busyRef: { current: false }, cancelledQuery: { current: '' }, parameterSession: { current: '' }, explainSource: { current: 'SELECT 1' }, failureSource: { current: undefined },
     editor: { current: { getModel: () => ({ getValue: () => 'SELECT 1' }) } }, connection: { database: 'db' }, useWorkspace: { getState: () => workspace }, invoke,
     setBusy: (value: boolean) => { context.busy = value; frames.push(context.render()); }, setOutcome: (value: any) => { clearOutcome(value); context.outcome = value; context.result = value?.results[0]; },
     setSave: vi.fn(), flushSettings: vi.fn(async () => {}), rememberDatabase: vi.fn(), errorMessage: String, queryBindingZh, queryContextZh, savedQueryOriginContext, queryDatabaseFromSession, resolveQueryDatabase,
