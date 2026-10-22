@@ -20,7 +20,7 @@ CREATE后交叉核对完整SHOW、COLUMNS、TABLES、分区目录、表达式AST
 
 实库定义`tests/integration/table-create-generated.test.ts`使用独立双门、逐端口独立进程和120秒期限，验证单次CREATE、普通键/FK、两存储、精确写入及收尾；未开启前只登记。原生备用定义`tests/e2e/table-create-generated.spec.ts`默认关闭，必须Root预置准确随机隔离库；它不自行建库、建用户或DROP。完整来源清单和Main IPC旁观尚需独立补齐，不能将备用定义说成已验收。
 
-完整单元、六实例实库、Windows实际表单、macOS及打包目录/真实安装组合待分别记录。O01保持部分，发行计数不增加，暂不发布。
+以上为首次开发检查时点；最终固定提交的完整单元、六实例实库及Windows实际表单结果见文末。macOS及打包目录/真实安装组合另验。O01保持部分，发行计数不增加，暂不发布。
 
 ## 固定提交与首轮实库失败
 
@@ -35,3 +35,13 @@ CREATE后交叉核对完整SHOW、COLUMNS、TABLES、分区目录、表达式AST
 `06359d29`第二轮在全新13357随机库中，产品CREATE、definitionVerified及resourcesReleased均通过，随后观察器将真实COLUMNS位次字符串硬比数字而失败（PID2652、exit1）；INSERT尚未到达，其余实例未启动。独立只读核验同一实际定义通过，COLUMNS位次为`'1'..'6'`、索引序号为`'1'`，原目录按自身排序规则将ix_qty排在PRIMARY之前。原件保留于`.cache/table-create-generated-second-native-metadata-20261022/`；第二库已按原标记及无其它对象精确清理，原失败保留。
 
 观察器现仅接受目录小整数的准确数字或规范十进制文本（拒前导零、小数、空白等），索引查询显式按BINARY名称排序；其它类型、存储、备注、NULL及精确数据断言不变。实际纯门44项PID49552、默认列表PID61472及类型PID12072均exit0；25份封存位于`.cache/table-create-generated-observer-fix-local-20261022/`。生产src树没有因观察器修正改变；六实例仍须在新资源中闭合。
+
+## 最终固定提交验收
+
+准确`8dda6963de9b9891edcda43370cd3483984506fc`、src树`d0caf6a5cfc034bfa2bb20ced7225361aece307f`完成[本轮实测](../../tests/integration/acceptance-table-create-generated-8dda6963-20261022.md)。最终本机Windows类型PID43100、完整单元PID10860、构建PID47940均exit0；707文件14255项通过、1平台文件／1项跳过，26份封存及全部输入保持。
+
+六实例各独立进程通过，共8次单条CREATE、16个VIRTUAL/STORED生成字段；六张subject保留普通主键／索引／外键，两张8.4额外核前缀组合，包含严格TLS。精确数值及NULL、单次令牌、原流关闭、线程零残留和六随机库精确清理通过，63份封存。前两轮失败保持原结论，没有追认为成功。
+
+同一准确源码Windows实际表单PID74960、7.23秒／exit0：真实连接、新表两种生成列、重排、预览前零建表、三项确认、精确数值／微秒／字节／NULL及正常退出通过；Root独立读回后精确删库，16份封存，源码／配置／启动文件摘要不变。该例仅为源码功能验收，内部来源清单、Main逐条IPC审计、截图／窄窗及安装验收未具备，不称正式来源链闭合。
+
+候选[CI 39769011981](https://github.com/zhao-yc/DBArk/actions/runs/39769011981)的Linux类型、单元和构建成功；原生矩阵及发行跳过。macOS、本片安装包、真实取消／断线及限权组合仍未验；旧原生CI失败另列于[编译流程记录](typecheck-heap-20261022.md)，不被本批成功覆盖。O01完整工作包及长期目标继续，暂不发布。
