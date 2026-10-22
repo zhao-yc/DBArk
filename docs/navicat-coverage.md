@@ -2,6 +2,8 @@
 
 ## 当前开发安排（2026-10-22）
 
+D09补充[按需非NULL不同值计数](development/table-statistics-distinct-20261022.md)：原列COUNT(DISTINCT)、同条聚合及原服务器排序规则语义；勾选零查询，显式执行、精确数量和回执类别校验。准确d63的[六实例与Windows正式窗口](../tests/integration/acceptance-table-statistics-distinct-d63c687a-20261022.md)通过ci／UINT64／BIT／NULL／字节及空集，120原非observer连接收尾；完整14919项通过／1条件跳过、类型／构建通过，首轮新错误阶段断言失败保留。分布／抽样、真实故障组合、macOS／安装继续，完整D09与发行计数不增加，暂不发布。
+
 D01新增[服务器全部筛选行统计](development/table-statistics-20261022.md)：表／视图0～12列显式统计，计数／NULL、极值、精确SUM／AVG及近似标识，独立只读事务不包含父草稿。准确同一生产树的[六实例与Windows正式窗口](../tests/integration/acceptance-table-statistics-cc43008a-20261022.md)通过50页行／123全量、视图62行、UINT64相邻边界及未提交行隔离；108非observer原连接收尾，完整14780项通过／1平台跳过、类型／构建通过。首次5.7转换警告及GUI默认页大小失败保留，安全范围无符号整型定型修复不放宽警告门；取消等真实故障、macOS／安装另验。完整D01与发行计数不增加，暂不发布。
 
 D05新增[父记录查看子记录](development/incoming-references-20261022.md)：真实入向外键目录有界续页，完整复合值和关系摘要约束只读子页，独立筛选／分组／多列排序，父草稿保留及取消／迟到围栏。准确同一生产树的[六实例与Windows正式窗口](../tests/integration/acceptance-incoming-references-0a1f5dbb-20261022.md)通过61项实际关系、13384目录50+1、55原非observer线程及精确清库；完整14604项通过／1平台跳过、类型／构建保持。首次夹具及GUI观察SQL失败原件保留；macOS／安装、GUI大目录与真实故障组合另验，完整D05与发行计数不增加，暂不发布。
@@ -381,7 +383,7 @@ CSV字段选择与顺序已在本分支源码整合；已复现的文件sync期�
 | S01 | 用户/角色/授权撤销 | 待做 | 真实权限、预览、权限不足与当前账号保护 |
 | S02 | 服务器/会话/命令监控 | 在做 | 已接正式连接选择、概要/固定状态/有限会话、串行刷新及只读独立任务；源码与RAM证据见[接线边界](development/server-monitor-integration-20261017.md)、[资源隔离与退出](development/independent-task-resource-recovery-20261017.md)，实库/原生/安装待验；取消读取与结束他人会话区分 |
 | F02 | Excel | 部分 | 0.17开发中已有XLSX有界读取、工作表/字段映射及流式导出；MySQL8.4实际1201行往返及六实例文件精度/真实警告批次回滚已验，后者174项包含XLSX/CSV/JSON，见[第二批验收](../tests/integration/acceptance-parallel-second-20261016.md)。完整工作表/类型/公式与取消矩阵、原生macOS及公开发行仍待完成 |
-| D09 | 数据概况/剖析 | 待做 | NULL、分布、抽样范围、服务端聚合及取消 |
+| D09 | 数据概况/剖析 | 部分 | 已有全部筛选行计数／NULL／极值／数值聚合及按需非NULL不同值计数，六实例和Windows源码实证见[不同值统计](../tests/integration/acceptance-table-statistics-distinct-d63c687a-20261022.md)；分布、抽样、实际取消故障组合、安装及其它平台仍待完成 |
 
 ## P2：专业数据库与工作流
 

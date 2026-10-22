@@ -16,6 +16,8 @@ MIN/MAX在服务器先计算实际输出字节，超过256KiB不返回原大值�
 
 统计在新独立连接先设置REPEATABLE READ，再开始READ ONLY事务，正常结束明确ROLLBACK且禁止CHAIN/RELEASE。不共享或提交用户的事务。视图可能调用存储函数，单纯生成SELECT不足以限制其数据库写入，因此使用数据库自身的只读事务约束；参见[MySQL事务说明](https://dev.mysql.com/doc/refman/8.0/en/commit.html)和[MariaDB事务说明](https://mariadb.com/docs/server/reference/sql-statements/transactions/start-transaction)。失败或取消后只收尾原连接，不另开连接补做或重放。
 
+后续增加默认关闭的[非NULL不同值计数](table-statistics-distinct-20261022.md)，仅用户显式开始时在同条聚合内计算，遵循原列排序规则；勾选本身不查询，JSON／空间／未知类型明确不支持。准确d63的独立实证见该片记录，不回填下面旧版本的结果。
+
 原页、筛选、草稿、结构、连接修订或活动标签变化使窗口永久失效，恢复原值不复活。取消ACK不释放原Promise占用，关闭等待原任务和严格物理连接收尾。主进程拒绝修订变化后的迟到结果，任务概要不保存筛选值、统计值或驱动错误原文。
 
 MySQL5.7对UNSIGNED整列与接近UINT64上限的DECIMAL比较可能返回1292警告。共用筛选器仅对元数据已确认的无符号整型、普通非负整数字符串且值不超过UINT64上限采用DECIMAL(20,0)再UNSIGNED定型；不对列包CAST，不经Number。负数、分数或越界值仍保留原DECIMAL精确比较，不能取模或截断；原警告拒绝门保持。
