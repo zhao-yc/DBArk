@@ -1,5 +1,7 @@
 # Navicat 全功能覆盖目标
 
+高频结果筛选新增[按不同值勾选](development/query-result-value-options-20261023.md)：原已返回全部候选、次数／搜索／分页、包含／排除的完整NULL补集和独立条件草稿，保留分组、启停和多列排序。b283173a的[Windows源码窗口](../tests/integration/acceptance-query-value-options-b283173a-20261023.md)通过66行／65种、50+15分页、4／64／63行组合及两格式精确读回；一次常量SQL、正常退出／原流关闭。完整15577通过／1平台跳过后仅补长值完整查看，最终328项／类型／构建通过；原失败和两批字节范围保留，安装与macOS另验，完整工作包及发行计数不增，暂不发布。
+
 O01补齐[普通表重命名旧版兼容](development/table-rename-compat-20261023.md)：MySQL5.7.44及MariaDB10.11.19／11.4.13，完整有界视图关系证明、单条原生RENAME、原物理身份和三确认保护。7f14cee4的[六实例与三个Windows源码窗口](../tests/integration/acceptance-table-rename-compat-7f14cee4-20261023.md)通过12成功／6真实MDL取消DDL及三个窗口各一次往返、共6条成功RENAME，原行／完整定义／目录保持、正常退出和精确清理。完整15427通过／1平台跳过、构建及最终193项针对性检查通过；候选与提交仅声明的行尾差异另记。原失败保留，无回调取消分支仅RAM／源码补证；安装、macOS及其它版本／属性另验，完整O01及发行计数不增加，暂不发布。
 
 O01新增[已有字符列跨字符集转换](development/column-encoding-20261023.md)：真实配对、整列及默认值字节预检、实际MAXLEN索引预算、独立COPY／排他锁与完整目录后核；受控时间默认及自增旁列保持。类型、1095项相关、完整15337通过／1平台跳过、构建及六实例实际Engine通过，共36成功／6预期唯一碰撞拒绝DDL；准确5d859ac7的[Windows正式源码窗口](../tests/integration/acceptance-column-encoding-5d859ac7-20261023.md)完成真实转换／恢复、原字节／定义／索引保持、正常退出及精确清理。旧夹具、丢稿重入、沙箱权限和utf8mb3弃用警告失败均保留；窄升级不忽略任何warning。安装、macOS及实际故障组合另验，完整O01与发行计数不增加，暂不发布。

@@ -1,5 +1,7 @@
 # 开发与测试
 
+结果筛选新增[从原不同值勾选](development/query-result-value-options-20261023.md)：次数、搜索及50项分页，完整NULL补集、只写条件草稿及原分组／启停保护。b283173a的[Windows源码实库窗口](../tests/integration/acceptance-query-value-options-b283173a-20261023.md)通过66原行／65种值、50+15分页、4／64／63行结果、两级排序／撤销重做和精确CSV／JSON独立读回；一次常量SQL、正常退出及原流关闭。完整15577通过／1平台跳过后仅补长值完整查看，最终328项／类型／新构建通过；两批字节范围分开，安装与macOS另验，暂不发布。
+
 同库普通表[重命名旧版兼容](development/table-rename-compat-20261023.md)补齐MySQL5.7.44、MariaDB10.11.19及11.4.13；完整有界视图关系证明、原物理身份及确认代次保护保持。7f14cee4的[六实例及三个Windows源码窗口验收](../tests/integration/acceptance-table-rename-compat-7f14cee4-20261023.md)通过12成功／6真实MDL取消DDL、三窗口各一次往返、共6条成功RENAME及精确清理。完整15427通过／1平台跳过、构建和最终193项针对性检查通过；提交前候选、Git行尾规范化及未验范围分开记录，暂不发布。
 
 索引设计器新增[参与查询优化器状态](development/index-optimizer-20261023.md)：MySQL可见性、MariaDB忽略状态独立预览与恢复，原生聚簇主键保护。类型、621项相关、完整15218通过／1条件跳过、构建与六实例实际Engine通过；准确347ab3a6的[Windows正式源码窗口](../tests/integration/acceptance-index-optimizer-347ab3a6-20261023.md)完成隐藏／恢复、原定义与全行保持和精确清理，暂不发布。
