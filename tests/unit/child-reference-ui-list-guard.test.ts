@@ -15,5 +15,3 @@ describe('父子关联原生定义默认与列举短路（仅RAM）', () => {
   for (const flag of ['--list', '--list=json']) it.each([['0', '0'], ['0', '1'], ['1', '0'], ['1', '1']])(`${flag}双门%s/%s零环境读取、零实际模块加载`, (integration, encoding) => { const value = collect([flag], integration, encoding); expect(value.reads).toEqual([]); expect(value.loaded).toEqual([]); expect(value.register).not.toHaveBeenCalled(); expect(value.skip).toHaveBeenCalledOnce(); });
   it.each([['0', '0'], ['0', '1'], ['1', '0'], ['1', '1']])('非list双门%s/%s只有双开注册RAM端口', (integration, encoding) => { const value = collect([], integration, encoding), active = integration === '1' && encoding === '1'; expect(value.loaded).toEqual(active ? ['./child-reference-live'] : []); expect(value.register).toHaveBeenCalledTimes(active ? 1 : 0); expect(value.skip).toHaveBeenCalledTimes(active ? 0 : 1); });
 });
-
-

@@ -5,4 +5,3 @@ const listing = process.argv.some(value => value === '--list' || value.startsWit
 if (!listing && process.env.DBARK_INTEGRATION_ENABLED === '1' && process.env.DBARK_CHILD_REFERENCE_UI === '1') {
   require('./child-reference-live').registerChildReferenceUiTests();
 } else test.skip('父子记录关联正式窗口专项默认关闭（未执行）', () => {});
-

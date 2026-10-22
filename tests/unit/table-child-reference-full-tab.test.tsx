@@ -158,4 +158,3 @@ it.each(['new','deleted','view'])('完整生产表页%s行/对象入口禁用，
   const f=await fixture();await f.change('保留草稿');if(mode==='new'){await f.click(zh.common.add);}else if(mode==='deleted'){const rows=f.grid().rows;rows[0].deleted=true;f.grid().onActivePositionChange({row:rows[0],column:{key:'note'}});await f.render();}else{f.info.objectKind='view';f.grid().onActivePositionChange({row:f.grid().rows[0],column:{key:'note'}});await f.render();}
   expect(f.button(childText.title).props.disabled).toBe(true);expect(f.all('ChildReferenceDialog')).toHaveLength(0);expect(f.grid().rows[0].data.note).toBe('保留草稿');
 });
-

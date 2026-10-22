@@ -122,4 +122,3 @@ export function registerChildReferenceUiTests() {
     } catch (reason) { retained = true; clock.retain(); retainOwnedDesktopResources(info); throw reason; }
   });
 }
-
