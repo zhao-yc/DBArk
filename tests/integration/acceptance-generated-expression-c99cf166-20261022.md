@@ -33,7 +33,7 @@ WIN11-TEST 最新已确认旧回合 completed／空闲；本轮只读准备派�
 
 同一源码及新 dist，原 Playwright 进程29700，14.67秒／exit0，原120秒、0重试、1worker。真实连接表单关闭记住密码，侧栏 subject →“字段差异编辑”→选择 line_total →“修改生成表达式”→新算式→应用草稿→旧新表达式／完整 SQL 预览→四项确认→一次执行。未注入组件、伪造 IPC 返回或用 SQL 入口替代设计器。
 
-独立 mysql2 observer 核预览零变更，执行后原六列目录和两行源数据全量保持，微秒／BIGINT／DECIMAL／NULL／BLOB／Unicode逐值匹配；目标存储、类型、备注和位置保持，真实生成结果按新式增加，NULL继续传播。Main原处理器外只观察审计 get1／preview1／apply1／release2／pending0，三个真实任务 completed，历史为空，无用户查询或其它结构命令。合法 COPY 物理编号变化仅接受逐字匹配的单一提示，其它错误／警告一律失败，不删除产品警告。
+独立 mysql2 observer 核预览零变更，执行后原六列目录和两行源数据全量保持，微秒／BIGINT／DECIMAL／NULL／VARBINARY二进制值／Unicode逐值匹配；目标存储、类型、备注和位置保持，真实生成结果按新式增加，NULL继续传播。Main原处理器外只观察审计 get1／preview1／apply1／release2／pending0，三个真实任务 completed，历史为空，无用户查询或其它结构命令。合法 COPY 物理编号变化仅接受逐字匹配的单一提示，其它错误／警告一律失败，不删除产品警告。
 
 来源清单 SHA256 `998da1f036abdddd29353ff33a9618a41c97f4e51456b99ff4938758b59d7fb0`；2316输入前后保持，来源在启动、提交前、结果、退出前、收尾后5个明确阶段完整核验，不称每UI动作全量重读。原 App 正常退出0且其原进程树核清后，才核目标线程零、精确删库和同一 observer 流关闭。15份封存见 `.cache/generated-expression-ui-local-20261022/`；截图仅为已核验状态条，已查看，不冒称完整布局／窄窗专项。GUI仅13384明文 VIRTUAL，STORED／其它版本／TLS界面不继承此结果。
 
