@@ -1,5 +1,5 @@
 import { test as baseTest, expect, type TestInfo } from '@playwright/test';
-import { stat } from 'node:fs/promises';
+import { stat, writeFile } from 'node:fs/promises';
 import { zh } from '../../src/renderer/locales/zh-CN';
 import { queryBindingZh as binding } from '../../src/renderer/locales/queryBinding.zh-CN';
 import { queryCloseZh as close } from '../../src/renderer/locales/queryClose.zh-CN';
@@ -80,7 +80,11 @@ async function attachInputObservation(info: TestInfo): Promise<void> {
   let body: Buffer | undefined;
   try {
     const observation = inputObservations.get(info); if (!observation) return; inputObservations.delete(info);
-    body = Buffer.from(observation.seal()); await info.attach('关闭其他查询原输入只读诊断（含空App唯一重载）', { body, contentType: 'application/json' });
+    body = Buffer.from(observation.seal());
+    // list reporter不会把成功用例的内存附件写入artifact，先独占落原outputPath再挂载路径。
+    const path = info.outputPath('query-close-others-input-observation.json');
+    await writeFile(path, body, { flag: 'wx' });
+    await info.attach('关闭其他查询原输入只读诊断（含空App唯一重载）', { path, contentType: 'application/json' });
   } catch {
     try { process.stdout.write('关闭其他查询原输入诊断附件写入失败；不替换原用例错误。\n' + (body?.toString('utf8') ?? '尚未取得封存记录') + '\n'); }
     catch { /* 诊断附件和日志同时失效也保留原用例错误。 */ }
