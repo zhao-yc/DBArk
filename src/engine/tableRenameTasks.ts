@@ -2,12 +2,12 @@ import { randomUUID } from 'node:crypto';
 import type { ResultSetHeader } from 'mysql2';
 import { StructurePatchCache, structureCacheLimits, type StructureCacheScope } from './structurePatchCache';
 import { structureTaskQuery, type StructureTaskHost } from './structureDefinition';
-import { readTableRename, assertTableRenameUnchanged, assertRenameDestinationAbsent, tableRenamePhysicalIdentity } from './tableRenameRead';
-import { tableCommentHash, type TableCommentRead } from './tableCommentRead';
+import { readTableRename, assertTableRenameUnchanged, assertRenameDestinationAbsent, tableRenamePhysicalIdentity, type TableRenameRead } from './tableRenameRead';
+import { tableCommentHash } from './tableCommentRead';
 import { planTableRename, verifyTableRename } from './tableRenameSql';
 import { tableRenameAcknowledgements, type TableRenameTarget, type TableRenameGetInput, type TableRenameGetOutput, type TableRenamePreviewInput, type TableRenamePreviewOutput, type TableRenameApplyInput, type TableRenameApplyOutput, type TableRenameReleaseInput, type TableRenameProgress } from '../shared/tableRename';
 
-interface Snapshot extends TableCommentRead { id: string; target: TableRenameTarget; revision: number; expires: number; }
+interface Snapshot extends TableRenameRead { id: string; target: TableRenameTarget; revision: number; expires: number; }
 interface Preview { snapshot: Snapshot; newName: string; sql: string; bytes: number; expires: number; }
 const initialProgress = (): TableRenameProgress => ({ phase: 'connecting', ddlSubmitted: false, ddlCompleted: false, definitionVerified: false, outcome: 'not-sent' });
 const warnings = [
@@ -21,9 +21,16 @@ const warnings = [
 export class TableRenameTasks {
   private readonly snapshots: StructureCacheScope<Snapshot>;
   private readonly previews: StructureCacheScope<Preview>;
+  private readonly pendingReads = new Set<{ connectionId: string }>();
   constructor(private readonly host: StructureTaskHost, private readonly now = () => Date.now(), private readonly cache = new StructurePatchCache(now)) {
     this.snapshots = cache.scope('tableRename', 'snapshot', value => ({ connectionId: value.target.connectionId, bytes: value.bytes, expires: value.expires }));
     this.previews = cache.scope('tableRename', 'preview', value => ({ connectionId: value.snapshot.target.connectionId, bytes: value.bytes, expires: value.expires }));
+  }
+  /** 连接配置释放或退出使本用途所有等待发布的读取失效，不清理其它用途。 */
+  releaseConnection(connectionId?: string): void {
+    for (const owner of this.pendingReads) if (!connectionId || owner.connectionId === connectionId) this.pendingReads.delete(owner);
+    for (const [id, value] of this.snapshots) if (!connectionId || value.target.connectionId === connectionId) this.snapshots.delete(id);
+    for (const [id, value] of this.previews) if (!connectionId || value.snapshot.target.connectionId === connectionId) this.previews.delete(id);
   }
   /** 释放快照时一并撤销其全部预览，不触碰其他用途令牌。 */
   releaseTokens(input: TableRenameReleaseInput): void {
@@ -41,6 +48,9 @@ export class TableRenameTasks {
   /** 真实读取并关闭短会话后才发布快照，未知能力明确只读。 */
   async get(input: TableRenameGetInput, revision: unknown): Promise<TableRenameGetOutput> {
     const current = this.revision(revision), progress = initialProgress(); let snapshot!: Snapshot;
+    if (this.pendingReads.size >= structureCacheLimits.snapshots) throw Error('重命名读取已达并发预算，请等待原任务收尾');
+    const owner = { connectionId: input.connectionId }; this.pendingReads.add(owner);
+    try {
     const output = await this.host.run(input.connectionId, input.taskId, async context => {
       progress.phase = 'reading'; context.report(); const target = { connectionId: input.connectionId, database: input.database, table: input.table };
       const read = await readTableRename(context, target, undefined, 'get'); this.cache.capacity(read.bytes, 'snapshot');
@@ -49,7 +59,9 @@ export class TableRenameTasks {
         engine: read.engine, rowFormat: read.rowFormat, autoIncrement: read.autoIncrement, charset: read.tableEncoding.charset, collation: read.tableEncoding.collation,
         writable: !read.reasons.length && !!read.tableId, reasons: [...read.reasons], warnings: [...warnings], serverVersion: read.serverVersion };
     }, { label: '读取表重命名', purpose: 'tableRename', progress });
+    if (!this.pendingReads.has(owner)) throw Error('重命名读取期间连接编辑状态已释放，未发布迟到快照');
     this.snapshots.set(snapshot.id, snapshot); return output;
+    } finally { this.pendingReads.delete(owner); }
   }
   /** 只读预览重核来源及真实目标冲突；新名称不能改变连接或数据库。 */
   async preview(input: TableRenamePreviewInput, revision: unknown): Promise<TableRenamePreviewOutput> {
@@ -74,6 +86,7 @@ export class TableRenameTasks {
     const preview = this.previews.get(input.previewToken); this.previews.delete(input.previewToken);
     if (!preview || preview.expires <= this.now()) throw new Error('重命名预览已失效或已使用；未发送DDL');
     const snapshot = preview.snapshot;
+    if (this.snapshots.get(snapshot.id) !== snapshot) throw Error('重命名预览已失效或已使用；未发送DDL');
     if (snapshot.revision !== this.revision(revision)) throw new Error('连接配置已变化；未发送DDL');
     if (!Array.isArray(input.acknowledgements) || input.acknowledgements.length !== tableRenameAcknowledgements.length || new Set(input.acknowledgements).size !== input.acknowledgements.length || tableRenameAcknowledgements.some(value => !input.acknowledgements.includes(value))) throw new Error('风险确认项与预览不一致；令牌已消费，未发送DDL');
     const newTarget = { ...snapshot.target, table: preview.newName }, progress = initialProgress();
@@ -81,9 +94,9 @@ export class TableRenameTasks {
       progress.phase = 'rechecking'; context.report();
       assertTableRenameUnchanged(snapshot, await readTableRename(context, snapshot.target, preview.newName, 'execute'));
       await assertRenameDestinationAbsent(context, snapshot.target, preview.newName);
-      if (preview.expires <= this.now()) throw new Error('重命名预览已过期；未发送DDL');
+      if (preview.expires <= this.now() || this.snapshots.get(snapshot.id) !== snapshot) throw new Error('重命名预览已过期或来源已释放；未发送DDL');
       context.checkCancelled(); progress.phase = 'executing'; context.report();
-      const result = (await structureTaskQuery<ResultSetHeader>(context, preview.sql, () => { progress.ddlSubmitted = true; progress.outcome = 'unknown'; context.report(); })).rows;
+      const result = (await structureTaskQuery<ResultSetHeader>(context, preview.sql, () => { this.releaseTokens({ snapshotId: snapshot.id }); progress.ddlSubmitted = true; progress.outcome = 'unknown'; context.report(); })).rows;
       if (!result || result.affectedRows !== 0) throw new Error('未返回可确认的单表RENAME成功响应；请核对源表和新表，不会重放');
       progress.ddlCompleted = true; progress.outcome = 'succeeded'; progress.phase = 'verifying'; context.report();
       const output: TableRenameApplyOutput = { target: { ...snapshot.target }, newTarget, ddlSubmitted: true, ddlCompleted: true, definitionVerified: false, warnings: [] };

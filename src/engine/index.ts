@@ -152,6 +152,7 @@ export class Engine {
         if (changed && (this.connectionUses.has(input.id) || this.independentResources.retained(input.id) || [...this.sessions.values()].some(session => session.connectionId === input.id) || [...this.tasks.values()].some(task => task.managed.profile.id === input.id))) throw new Error('该连接仍有打开的会话或正在执行的操作，或存在待确认的连接资源；请先关闭相关标签并显式断开连接，再修改地址或认证配置，现有任务未被取消');
         if (changed || !previous) this.profiles.delete(input.id);
         await this.schemaComparisons.close(input.id);
+        this.tableRenames.releaseConnection(input.id);
         this.structureCache.release(input.id);
         this.structureSearches.releaseConnection(input.id);
         this.dataSearchRecords.releaseConnection(input.id);
@@ -183,6 +184,7 @@ export class Engine {
         this.disconnecting.add(input.id);
         try {
         const comparisonCleanup = this.schemaComparisons.close(input.id);
+        this.tableRenames.releaseConnection(input.id);
         this.dataSearchRecords.releaseConnection(input.id);
         this.tableCopySources.releaseConnection(input.id);
         this.structureCache.release(input.id);
@@ -483,6 +485,7 @@ export class Engine {
     try {
     this.excelConnecting.forEach(task => task.controller.abort());
     const comparisonCleanup = this.schemaComparisons.close();
+    this.tableRenames.releaseConnection();
     this.structureCache.release();
     const independent = [...this.independentTasks];
     const active = [...this.tasks.values()];

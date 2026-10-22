@@ -5,6 +5,7 @@ import type { ManagedConnection } from '../../src/engine/connection';
 import type { TableRenameGetOutput, TableRenamePreviewOutput } from '../../src/shared/tableRename';
 import { parseTableColumnDefinition } from '../../src/engine/tableColumnDefinition';
 import { readTableCommentDefinition } from '../../src/engine/tableCommentSql';
+import type { RenameViewDefinition } from '../../src/engine/tableRenameViewDependencies';
 const mock = vi.hoisted(() => ({ connect: vi.fn(), execute: vi.fn() }));
 vi.mock('../../src/engine/connection', () => ({ connect: mock.connect, execute: mock.execute }));
 import { Engine } from '../../src/engine';
@@ -17,10 +18,12 @@ let injectedUnknownClose = false;
 let afterAlterMode: string | undefined;
 let currentName: string, occupied: boolean, dependency: string, grants: string[], afterPhysicalId: string | undefined;
 let held: { complete(error?: Error): void } | undefined;
+let closeGate: (() => Promise<void>) | undefined;
+let legacyViews: RenameViewDefinition[], missingLegacyViews: boolean;
 /** 仅替换驱动；真实Engine、目录校验、预览、执行、取消和关闭路径均运行产品代码。 */
 function managed(signal?: AbortSignal): ManagedConnection {
   const connection = new EventEmitter(), threadId = ++nextId; let sqlMode = mode, quote = 0, encoding = '', collation = '';
-  const value = { connection, profile, signal, broken: false, status: { version, dialect, connectionId: threadId }, close: vi.fn(async () => { if (closeFails) { injectedUnknownClose = true; throw new Error('关闭失败'); } }) } as unknown as ManagedConnection;
+  const value = { connection, profile, signal, broken: false, status: { version, dialect, connectionId: threadId }, close: vi.fn(async () => { if (closeGate) await closeGate(); if (closeFails) { injectedUnknownClose = true; throw new Error('关闭失败'); } }) } as unknown as ManagedConnection;
   Object.assign(connection, { threadId, destroy: () => connection.emit('end'), query(sql: string, callback: (error: Error | null, rows?: unknown, fields?: unknown[]) => void) {
     sent.push({ id: threadId, sql });
     const complete = (error?: Error) => queueMicrotask(() => {
@@ -46,9 +49,18 @@ function managed(signal?: AbortSignal): ManagedConnection {
       else if (sql.startsWith('SELECT CAST(TABLE_ID AS CHAR)')) rows = [{ id: physicalId, name: 'db/' + currentName }];
       else if (sql.startsWith('SELECT c.CHARACTER_SET_NAME AS charset, c.CHARACTER_MAXIMUM')) rows = [{ charset, characters: '2048', bytes: charset === 'utf8mb4' ? '8192' : '6144', maxlen: charset === 'utf8mb4' ? 4 : 3 }];
       else if (sql === 'SHOW GRANTS') rows = grants.map(value => ({ Grants: value }));
-      else if (sql.includes('FROM information_schema.INNODB_FOREIGN')) rows = dependency === 'foreign' ? [{ ID: 'db/foreign' }] : [];
+      else if (sql.includes('FROM information_schema.INNODB_FOREIGN') || sql.includes('FROM information_schema.INNODB_SYS_FOREIGN')) rows = dependency === 'foreign' ? [{ ID: 'db/foreign' }] : [];
       else if (sql.includes('FROM information_schema.TRIGGERS')) rows = dependency === 'trigger' ? [{ TRIGGER_NAME: 'tr' }] : [];
       else if (sql.includes('FROM information_schema.VIEW_TABLE_USAGE')) rows = dependency === 'view' ? [{ VIEW_NAME: 'v' }] : [];
+      else if (sql.startsWith('SELECT TABLE_SCHEMA AS databaseName,TABLE_NAME AS viewName')) {
+        const definitions = sql.includes('information_schema.VIEWS'), hexes = [...sql.matchAll(/X'([0-9a-f]*)'/g)].map(item => Buffer.from(item[1], 'hex').toString()), last = hexes.length ? { database: hexes[0], table: hexes[2] } : undefined;
+        rows = (definitions && missingLegacyViews ? [] : legacyViews).slice().sort((a, b) => Buffer.compare(Buffer.from(a.database), Buffer.from(b.database)) || Buffer.compare(Buffer.from(a.table), Buffer.from(b.table))).filter(value => !last || Buffer.compare(Buffer.from(value.database), Buffer.from(last.database)) > 0 || value.database === last.database && Buffer.compare(Buffer.from(value.table), Buffer.from(last.table)) > 0).slice(0, 129).map(value => ({ databaseName: value.database, viewName: value.table, ...(definitions ? { definition: value.definition, charset: value.charset, collation: value.collation } : {}) }));
+      }
+      else if (sql.startsWith('SHOW CREATE VIEW')) {
+        const names = [...sql.matchAll(/`((?:``|[^`])*)`/g)].map(item => item[1].replaceAll('``', '`')), view = legacyViews.find(value => value.database === names[0] && value.table === names[1]);
+        if (!view) { callback(Error('未登记真实视图')); return; }
+        rows = [{ View: view.table, 'Create View': `CREATE ALGORITHM=UNDEFINED DEFINER=\`u\`@\`h\` SQL SECURITY DEFINER VIEW \`${view.table}\` AS ${view.definition}`, character_set_client: view.charset, collation_connection: view.collation }];
+      }
       else if (sql.startsWith('SELECT TABLE_NAME FROM information_schema.TABLES')) {
         const literals = [...sql.matchAll(/X'([0-9a-f]*)'/g)].map(item => Buffer.from(item[1], 'hex').toString());
         rows = literals[1] === currentName || occupied ? [{ TABLE_NAME: literals[1] }] : [];
@@ -72,7 +84,7 @@ async function get(revision = 1): Promise<TableRenameGetOutput> { return engine.
 async function preview(snapshot: TableRenameGetOutput, newName = 'renamed'): Promise<TableRenamePreviewOutput> { return engine.handle('schema.tableRename.preview', { snapshotId: snapshot.snapshotId, newName, taskId: 'preview-' + nextId, connectionRevision: 1 }); }
 async function apply(value: TableRenamePreviewOutput, taskId = 'apply', revision = 1, acknowledgements = value.requiredAcknowledgements) { return engine.handle('schema.tableRename.apply', { previewToken: value.previewToken, taskId, connectionRevision: revision, acknowledgements }); }
 beforeEach(async () => {
-  injectedUnknownClose = false;
+  injectedUnknownClose = false; closeGate = undefined; legacyViews = []; missingLegacyViews = false;
   currentName = 't'; occupied = false; dependency = ''; grants = ["GRANT ALL PRIVILEGES ON *.* TO 'test'@'host'"]; afterPhysicalId = undefined;
   source = original; physicalId = '9007199254740995'; version = '8.4.11'; dialect = 'mysql'; mode = ''; charset = 'utf8mb3'; catalogMismatch = false; warningCount = 0;
   nextId = 0; sent = []; connections = []; events = []; fail = undefined; hold = undefined; held = undefined; closeFails = false; afterAlterMode = undefined;
@@ -88,6 +100,17 @@ afterEach(async () => {
 });
 
 describe('真实Engine表重命名生命周期（只替换驱动）', () => {
+  it('真实短会话关闭等待期间连接配置释放，不能迟到发布新的可写快照', async () => {
+    let finish!: () => void, closing = false; const gate = new Promise<void>(resolve => { finish = resolve; }); closeGate = async () => { closing = true; await gate; };
+    const pending = get(), rejected = expect(pending).rejects.toThrow('读取期间'); await vi.waitFor(() => expect(closing).toBe(true));
+    await engine.handle('__connections.prepareSave', { id: profile.id, profile, transportChanged: false }); closeGate = undefined; finish(); await rejected;
+    expect(sent.filter(item => item.sql.startsWith('RENAME'))).toHaveLength(0); expect(connections.every(item => vi.mocked(item.close).mock.calls.length === 1)).toBe(true);
+  });
+  it('发送后原驱动错误使同快照全部其它预览失效，不能重放未知RENAME', async () => {
+    const snapshot = await get(), first = await preview(snapshot), second = await preview(snapshot, 'other'); fail = /^RENAME TABLE/;
+    await expect(apply(first, 'unknown-first')).rejects.toThrow('驱动拒绝'); fail = undefined;
+    await expect(apply(second, 'unknown-replay')).rejects.toThrow('已失效或已使用'); expect(sent.filter(item => item.sql.startsWith('RENAME'))).toHaveLength(1); expect(source).toBe(original);
+  });
   it('员工3原反例：全局只读目录权限＋来源ALTER/DROP＋目标CREATE/INSERT，不要求来源CREATE/INSERT', async () => {
     grants = ["GRANT SELECT, SHOW VIEW, TRIGGER, PROCESS ON *.* TO 'test'@'host'", "GRANT ALTER, DROP ON `db`.`t` TO 'test'@'host'", "GRANT CREATE, INSERT ON `db`.`renamed` TO 'test'@'host'"];
     const snapshot = await get(); expect(snapshot.writable, snapshot.reasons.join('；')).toBe(true); expect(sent.filter(item => item.sql.startsWith('RENAME TABLE'))).toHaveLength(0);
@@ -146,8 +169,20 @@ describe('真实Engine表重命名生命周期（只替换驱动）', () => {
     dependency = value; const snapshot = await get(); expect(snapshot.writable).toBe(false); expect(snapshot.reasons.length).toBeGreaterThan(0);
     await expect(preview(snapshot)).rejects.toThrow();
   });
-  it.each(['5.7.44', '8.0.29', '9.0.1', '10.11.19-MariaDB', '11.4.13-MariaDB'])('未证明版本%s不猜测可写', async value => {
+  it.each(['5.6.51', '5.7.43', '8.0.29', '9.0.1', '10.5.29-MariaDB', '10.11.18-MariaDB', '11.4.12-MariaDB'])('未证明版本%s不猜测可写', async value => {
     version = value; dialect = value.includes('MariaDB') ? 'mariadb' : 'mysql'; const snapshot = await get(); expect(snapshot.writable).toBe(false); await expect(preview(snapshot)).rejects.toThrow();
+  });
+  it.each(['5.7.44', '10.11.19-MariaDB', '11.4.13-MariaDB'])('真实旧基线%s完整读取系统100+无关视图后可往返，物理ID和完整正文保留', async value => {
+    version = value; dialect = value.includes('MariaDB') ? 'mariadb' : 'mysql'; legacyViews = Array.from({ length: 135 }, (_, index) => ({ database: 'sys', table: 'v' + String(index).padStart(3, '0'), definition: "select 't' as `t` from `performance_schema`.`threads`", charset: 'utf8mb4', collation: 'utf8mb4_bin' }));
+    const next = await preview(await get()); expect(await apply(next)).toMatchObject({ ddlCompleted: true, definitionVerified: true, after: { tableId: physicalId } });
+    expect(sent.some(item => item.sql.includes('INNODB_SYS_FOREIGN'))).toBe(true); expect(sent.some(item => item.sql.includes('VIEW_TABLE_USAGE'))).toBe(false); expect(sent.filter(item => item.sql.startsWith('SHOW CREATE VIEW'))).toHaveLength(135 * 4);
+    expect(source).toBe(original.replace('CREATE TABLE `t`', 'CREATE TABLE `renamed`')); expect(sent.filter(item => item.sql.startsWith('RENAME'))).toHaveLength(1); expect(connections.every(item => vi.mocked(item.close).mock.calls.length === 1)).toBe(true);
+  });
+  it.each(['direct', 'indirect', 'unknown', 'missing'] as const)('旧库%s全局视图依赖或不完整证明均只读，不发送RENAME', async issue => {
+    version = '10.11.19-MariaDB'; dialect = 'mariadb';
+    legacyViews = [{ database: 'other', table: 'v', definition: issue === 'unknown' ? "select * from json_table('{}','$' columns(x int path '$')) q" : issue === 'indirect' ? 'select * from other.v2' : issue === 'missing' ? 'select * from other.harmless' : 'select * from db.t', charset: 'utf8mb4', collation: 'utf8mb4_bin' }];
+    if (issue === 'indirect') legacyViews.push({ ...legacyViews[0], table: 'v2', definition: 'select * from db.t' }); if (issue === 'missing') missingLegacyViews = true;
+    const snapshot = await get(); expect(snapshot.writable).toBe(false); await expect(preview(snapshot)).rejects.toThrow(); expect(sent.some(item => item.sql.startsWith('RENAME'))).toBe(false);
   });
   it.each(['physical', 'mode', 'warnings', 'read-failure'] as const)('OK包后%s异常保留DDL已完成，禁止完整核验和重放', async kind => {
     const next = await preview(await get());
@@ -169,7 +204,7 @@ describe('真实Engine表重命名生命周期（只替换驱动）', () => {
   it('共享源/目标租约阻断第二次结构操作，关闭失败仍保留执行事实', async () => {
     const snapshot = await get(), first = await preview(snapshot), second = await preview(snapshot, 'other'); hold = /^RENAME TABLE/;
     const pending = apply(first, 'first').catch(error => error); await vi.waitFor(() => expect(held).toBeDefined());
-    await expect(apply(second, 'second')).rejects.toThrow('已有结构变更'); closeFails = true; held!.complete(); expect(await pending).toBeInstanceOf(Error);
+    await expect(apply(second, 'second')).rejects.toThrow('已失效或已使用'); closeFails = true; held!.complete(); expect(await pending).toBeInstanceOf(Error);
     expect(events.at(-1)?.tableRename).toMatchObject({ ddlCompleted: true }); await expect(apply(second, 'replay')).rejects.toThrow('已失效或已使用');
   });
   it('release、过期及连接关闭使快照与预览失效', async () => {

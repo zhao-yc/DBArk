@@ -1,6 +1,7 @@
 import { qualified } from './sql';
 import { tableDefinitionTokens } from './tableColumnDefinition';
 import type { TableCommentRead } from './tableCommentRead';
+import type { TableRenameRead } from './tableRenameRead';
 import { validateTableRenameName, type TableRenameTarget } from '../shared/tableRename';
 
 /** 仅生成同库单表RENAME，不接受客户端SQL、IF EXISTS、多表交换或跨库移动。 */
@@ -26,6 +27,6 @@ export function renameDefinitionBody(read: Pick<TableCommentRead, 'source' | 'co
 }
 
 /** 成功响应后须在新名称找到相同TABLE_ID，且除名称外完整定义和目录属性一致。 */
-export function verifyTableRename(before: TableCommentRead, after: TableCommentRead): boolean {
-  return !after.reasons.length && !!before.tableId && before.tableId === after.tableId && before.identity === after.identity && before.normalizedMode === after.originalMode && before.normalizedMode === after.normalizedMode && renameDefinitionBody(before) === renameDefinitionBody(after) && JSON.stringify([before.nullability, before.encodings, before.tableEncoding, before.engine, before.rowFormat, before.autoIncrement]) === JSON.stringify([after.nullability, after.encodings, after.tableEncoding, after.engine, after.rowFormat, after.autoIncrement]);
+export function verifyTableRename(before: TableRenameRead, after: TableRenameRead): boolean {
+  return !after.reasons.length && before.renameViewDigest === after.renameViewDigest && !!before.tableId && before.tableId === after.tableId && before.identity === after.identity && before.normalizedMode === after.originalMode && before.normalizedMode === after.normalizedMode && renameDefinitionBody(before) === renameDefinitionBody(after) && JSON.stringify([before.nullability, before.encodings, before.tableEncoding, before.engine, before.rowFormat, before.autoIncrement]) === JSON.stringify([after.nullability, after.encodings, after.tableEncoding, after.engine, after.rowFormat, after.autoIncrement]);
 }

@@ -5,7 +5,6 @@ import { test, expect, page } from './desktop-fixture';
 import { enabled, environment, isolatedDatabase, acceptNativeConfirmation, type LiveContext } from './live-helpers';
 
 const active = enabled && process.env.DBARK_TABLE_RENAME_TEST === '1';
-const writablePort = ['13380', '13384', '13484'].includes(process.env.DBARK_TEST_PORT ?? '');
 const dialog = () => page.getByRole('dialog', { name: text.title, exact: true });
 const tablePage = () => page.locator('.table-tab:visible');
 const target = (context: LiveContext, name: string) => `\`${context.database}\`.\`${name}\``;
@@ -46,7 +45,6 @@ test.describe('同库表重命名：正式Electron与真实数据库准备', () 
     await isolatedDatabase(async context => {
       const name = 'rename_complex'; await context.observer.query(`CREATE TABLE ${target(context, name)}(id INT NOT NULL AUTO_INCREMENT,s VARCHAR(80) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin,g INT GENERATED ALWAYS AS(length(s)) STORED,PRIMARY KEY(id),KEY pref(s(8))) ENGINE=InnoDB COMMENT='原说明'`);
       const row = await open(context, name); await row.hover(); await row.getByRole('button', { name: `${text.title} ${name}`, exact: true }).click();
-      if (!writablePort) { await expect(dialog()).toContainText(text.readonly); await expect(dialog().getByRole('textbox', { name: text.newName, exact: true })).toBeDisabled(); await dialog().getByRole('button', { name: text.close, exact: true }).click(); return; }
       await expect(dialog().getByRole('textbox', { name: text.newName, exact: true })).toBeEnabled(); await dialog().getByRole('button', { name: text.close, exact: true }).click();
       await tablePage().getByRole('button', { name: text.title, exact: true }).click(); const before = await ddl(context, name);
       await dialog().getByRole('textbox', { name: text.newName, exact: true }).fill('renamed_complex'); await preview(context, name, 'renamed_complex'); expect(await ddl(context, name)).toBe(before);
@@ -57,7 +55,6 @@ test.describe('同库表重命名：正式Electron与真实数据库准备', () 
     }, info);
   });
   test('实际目标已存在时预览拒绝，保留草稿和两张真实表', async ({}, info) => {
-    test.skip(!writablePort, '本例要求已证明MySQL8写范围');
     await isolatedDatabase(async context => {
       for (const name of ['rename_conflict', 'occupied']) await context.observer.query(`CREATE TABLE ${target(context, name)}(id INT PRIMARY KEY) ENGINE=InnoDB`);
       await open(context, 'rename_conflict'); await tablePage().getByRole('button', { name: text.title, exact: true }).click();
@@ -68,7 +65,6 @@ test.describe('同库表重命名：正式Electron与真实数据库准备', () 
     }, info);
   });
   test('返回编辑释放旧预览，草稿关闭确认，未确认风险不会执行', async ({}, info) => {
-    test.skip(!writablePort, '本例要求已证明MySQL8写范围');
     await isolatedDatabase(async context => {
       await context.observer.query(`CREATE TABLE ${target(context, 'rename_back')}(id INT PRIMARY KEY) ENGINE=InnoDB`); await open(context, 'rename_back');
       await tablePage().getByRole('button', { name: text.title, exact: true }).click(); await dialog().getByRole('textbox', { name: text.newName, exact: true }).fill('rename_back_new');
@@ -76,6 +72,24 @@ test.describe('同库表重命名：正式Electron与真实数据库准备', () 
       await dialog().getByRole('button', { name: text.back, exact: true }).click(); await expect(dialog().getByRole('heading', { name: text.fixedSql, exact: true })).toHaveCount(0); await expect(dialog().getByRole('textbox', { name: text.newName, exact: true })).toHaveValue('rename_back_new');
       const tasks = await page.evaluate(() => window.dbark.invoke('tasks.list', {})); expect(tasks.some(task => task.kind === 'schema.tableRename.apply')).toBe(false);
       await acceptNativeConfirmation(); await dialog().getByRole('button', { name: text.close, exact: true }).click(); expect(await ddl(context, 'rename_back')).toContain('CREATE TABLE `rename_back`');
+    }, info);
+  });
+  test('真实触发器使两个入口只读，保留原对象及定义', async ({}, info) => {
+    await isolatedDatabase(async context => {
+      await context.observer.query(`CREATE TABLE ${target(context, 'rename_readonly')}(id INT PRIMARY KEY) ENGINE=InnoDB`);
+      await context.observer.query(`CREATE TRIGGER ${target(context, 'rename_readonly_tr')} BEFORE INSERT ON ${target(context, 'rename_readonly')} FOR EACH ROW SET NEW.id=NEW.id`);
+      const before = await ddl(context, 'rename_readonly'), row = await open(context, 'rename_readonly');
+      await row.hover(); await row.getByRole('button', { name: `${text.title} rename_readonly`, exact: true }).click();
+      await expect(dialog()).toContainText(text.readonly); await expect(dialog()).toContainText('触发器');
+      await expect(dialog().getByRole('textbox', { name: text.newName, exact: true })).toBeDisabled();
+      await dialog().getByRole('button', { name: text.close, exact: true }).click();
+      await tablePage().getByRole('button', { name: text.title, exact: true }).click();
+      await expect(dialog()).toContainText(text.readonly); await expect(dialog()).toContainText('触发器');
+      await expect(dialog().getByRole('textbox', { name: text.newName, exact: true })).toBeDisabled();
+      await dialog().getByRole('button', { name: text.close, exact: true }).click();
+      expect(await ddl(context, 'rename_readonly')).toBe(before);
+      const [triggers] = await context.observer.query<RowDataPacket[]>('SELECT TRIGGER_NAME FROM information_schema.TRIGGERS WHERE BINARY TRIGGER_SCHEMA=BINARY ? AND BINARY EVENT_OBJECT_TABLE=BINARY ?', [context.database, 'rename_readonly']);
+      expect(triggers.map(row => row.TRIGGER_NAME)).toEqual(['rename_readonly_tr']);
     }, info);
   });
 });

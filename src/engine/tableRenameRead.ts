@@ -4,10 +4,12 @@ import { structureTaskQuery, structureDocumentOf, type StructureTaskContext } fr
 import { tableDefinitionTokens } from './tableColumnDefinition';
 import type { TableDefinitionContext } from '../shared/tableColumnPatches';
 import type { TableRenameTarget } from '../shared/tableRename';
+import { readTableRenameViewDependencies } from './tableRenameViewDependencies';
 
 const literal = (value: string) => `CONVERT(X'${Buffer.from(value).toString('hex')}' USING utf8mb4)`;
 
 export type RenamePermissionPhase = 'get' | 'execute' | 'verify';
+export interface TableRenameRead extends TableCommentRead { renameViewDigest?: string; }
 /** get只证明来源可操作；明确目标后才证明两端写权限，verify仅证明完整目录读取。未知授权均不扩大能力。 */
 export function proveRenamePrivileges(grants: readonly string[], target: TableRenameTarget, mode: TableDefinitionContext, newName?: string, phase: RenamePermissionPhase = newName === undefined ? 'get' : 'execute'): boolean {
   const global = new Set<string>(), source = new Set<string>(), destination = new Set<string>();
@@ -54,32 +56,40 @@ async function privileges(context: StructureTaskContext, target: TableRenameTarg
 }
 
 /** 首批不改写依赖：完整可见的外键、触发器、视图引用必须均为空；未知目录只能查看。 */
-export async function readTableRename(context: StructureTaskContext, target: TableRenameTarget, newName?: string, phase: RenamePermissionPhase = newName === undefined ? 'get' : 'execute'): Promise<TableCommentRead> {
+export async function readTableRename(context: StructureTaskContext, target: TableRenameTarget, newName?: string, phase: RenamePermissionPhase = newName === undefined ? 'get' : 'execute'): Promise<TableRenameRead> {
   const read = await readTableComment(context, target), reasons = [...read.reasons];
-  const version = /^(\d+)\.(\d+)\.(\d+)/.exec(read.serverVersion);
-  const supported = read.context.dialect === 'mysql' && !!version && (version[1] === '8' && (version[2] === '4' || version[2] === '0' && Number(version[3]) >= 30));
-  if (!supported) reasons.push('首批重命名仅开放MySQL 8.0.30及以上8.0版本、8.4；其他版本的依赖与身份范围尚未证明，仅可查看');
+  const version = /^(\d+)\.(\d+)\.(\d+)/.exec(read.serverVersion.replace(/^5\.5\.5-/, ''));
+  const modern = read.context.dialect === 'mysql' && !!version && (version[1] === '8' && (version[2] === '4' || version[2] === '0' && Number(version[3]) >= 30));
+  const legacy = !!version && (read.context.dialect === 'mysql' ? version[0] === '5.7.44' : ['10.11.19', '11.4.13'].includes(version[0]));
+  const supported = modern || legacy; let renameViewDigest: string | undefined;
+  if (!supported) reasons.push('当前版本的重命名依赖与物理身份尚未证明，仅可查看；已支持MySQL 5.7.44、8.0.30及以上8.0、8.4和MariaDB 10.11.19、11.4.13');
   // CHECK自动命名可能随表名改变，不能把它误记为只有表名变化。
   if (structureDocumentOf(read).items.some(item => item.kind === 'constraint' && tableDefinitionTokens(item.raw, read.context).some(token => token.kind === 'word' && token.value.toUpperCase() === 'CHECK'))) reasons.push('首批不处理CHECK约束自动命名，当前仅可查看');
   if (supported) {
     try {
       if (!await privileges(context, target, read.context, newName, phase)) throw new Error(phase === 'verify' ? '无法证明全局SELECT、SHOW VIEW、TRIGGER目录可见性；后核验未完成' : phase === 'get' ? '无法证明来源ALTER/DROP及全局SELECT、SHOW VIEW、TRIGGER目录可见性；角色或部分撤销尚不展开，当前只读' : '无法证明来源ALTER/DROP、目标CREATE/INSERT及全局SELECT、SHOW VIEW、TRIGGER目录可见性；当前只读');
       const path = literal(target.database + '/' + target.table), db = literal(target.database), table = literal(target.table);
-      const foreign = (await structureTaskQuery<unknown[]>(context, `SELECT ID FROM information_schema.INNODB_FOREIGN WHERE CAST(FOR_NAME AS BINARY)=CAST(${path} AS BINARY) OR CAST(REF_NAME AS BINARY)=CAST(${path} AS BINARY) LIMIT 1`)).rows;
+      const foreign = (await structureTaskQuery<unknown[]>(context, `SELECT ID FROM information_schema.${modern ? 'INNODB_FOREIGN' : 'INNODB_SYS_FOREIGN'} WHERE CAST(FOR_NAME AS BINARY)=CAST(${path} AS BINARY) OR CAST(REF_NAME AS BINARY)=CAST(${path} AS BINARY) LIMIT 1`)).rows;
       if (foreign.length) reasons.push('目标存在入向或出向外键；首批不重构关联约束，仅可查看');
       const triggers = (await structureTaskQuery<unknown[]>(context, `SELECT TRIGGER_NAME FROM information_schema.TRIGGERS WHERE CAST(EVENT_OBJECT_SCHEMA AS BINARY)=CAST(${db} AS BINARY) AND CAST(EVENT_OBJECT_TABLE AS BINARY)=CAST(${table} AS BINARY) LIMIT 1`)).rows;
       if (triggers.length) reasons.push('目标存在触发器；首批不重构触发器依赖，仅可查看');
-      const views = (await structureTaskQuery<unknown[]>(context, `SELECT VIEW_NAME FROM information_schema.VIEW_TABLE_USAGE WHERE CAST(TABLE_SCHEMA AS BINARY)=CAST(${db} AS BINARY) AND CAST(TABLE_NAME AS BINARY)=CAST(${table} AS BINARY) LIMIT 1`)).rows;
-      if (views.length) reasons.push('目标被视图引用；首批不重写视图，仅可查看');
+      if (modern) {
+        const views = (await structureTaskQuery<unknown[]>(context, `SELECT VIEW_NAME FROM information_schema.VIEW_TABLE_USAGE WHERE CAST(TABLE_SCHEMA AS BINARY)=CAST(${db} AS BINARY) AND CAST(TABLE_NAME AS BINARY)=CAST(${table} AS BINARY) LIMIT 1`)).rows;
+        if (views.length) reasons.push('目标被视图引用；首批不重写视图，仅可查看');
+      } else {
+        const views = await readTableRenameViewDependencies(context, target, read.context); renameViewDigest = views.digest;
+        if (views.dependent) reasons.push('目标被视图引用；首批不重写视图，仅可查看');
+      }
     } catch (error) { context.checkCancelled(); reasons.push(error instanceof Error ? error.message : '依赖目录无法完整证明，当前只读'); }
   }
-  return { ...read, reasons };
+  return { ...read, reasons, ...(renameViewDigest ? { renameViewDigest, bytes: read.bytes + 256 } : {}) };
 }
 
 /** 来源完整定义、物理编号、服务器与模式仍须严格相同，摘要不替代物理身份。 */
-export function assertTableRenameUnchanged(before: TableCommentRead, after: TableCommentRead): void {
+export function assertTableRenameUnchanged(before: TableRenameRead, after: TableRenameRead): void {
   if (after.reasons.length) throw new Error(after.reasons.join('；') + '；未发送DDL');
   assertTableCommentUnchanged(before, after);
+  if (before.renameViewDigest !== after.renameViewDigest) throw Error('完整可见视图来源已变化，请重新读取；未发送DDL');
 }
 
 /** 只有引擎已核验的服务器身份与原生表编号可组成名称回收凭证，不使用名称或DDL摘要代替物理身份。 */

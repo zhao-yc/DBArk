@@ -15,7 +15,14 @@ import { assertTableRenameLiveTarget } from '../helpers/tableRenameTarget';
 
 // 默认关闭；仅双显式开关允许实际访问，不读取本地凭据文件、不创建账号、不修改全局。
 const enabled = process.env.DBARK_INTEGRATION_ENABLED === '1' && process.env.DBARK_TABLE_RENAME_TEST === '1';
-const writablePort = ['13380', '13384', '13484'].includes(process.env.DBARK_TEST_PORT ?? '');
+const expectedTargets: Record<string, { dialect: string; version: RegExp }> = {
+  '13357': { dialect: 'mysql', version: /^5\.7\.44(?:-|$)/ },
+  '13380': { dialect: 'mysql', version: /^8\.0\.46(?:-|$)/ },
+  '13384': { dialect: 'mysql', version: /^8\.4\.11(?:-|$)/ },
+  '13484': { dialect: 'mysql', version: /^8\.4\.11(?:-|$)/ },
+  '13310': { dialect: 'mariadb', version: /^10\.11\.19-MariaDB/ },
+  '13311': { dialect: 'mariadb', version: /^11\.4\.13-MariaDB/ },
+};
 const database = 'dbark_rename_' + randomUUID().replaceAll('-', '').slice(0, 12);
 const profile: ConnectionProfile = { id: randomUUID(), name: '表重命名隔离验收', group: '', color: '#123456', dialect: 'mysql', host: process.env.DBARK_TEST_HOST ?? '', port: Number(process.env.DBARK_TEST_PORT ?? 0), user: process.env.DBARK_TEST_USER ?? '', password: process.env.DBARK_TEST_PASSWORD ?? '', ...(process.env.DBARK_TEST_TLS === '1' ? { tls: { enabled: true, rejectUnauthorized: true, caPath: process.env.DBARK_TEST_CA } } : {}) };
 const events: TaskEvent[] = [], engine = new Engine(event => events.push(event));
@@ -37,7 +44,8 @@ describe.skipIf(!enabled)('同库表重命名核心验收（显式单实例）',
     const status = await engine.handle('connections.open', { id: profile.id, profile });
     const facts = (await sql('SELECT @@hostname AS host,@@version_compile_os AS os,@@lower_case_table_names AS names'))[0];
     console.info(JSON.stringify({ 表重命名准备: database, 版本: status.version, 方言: status.dialect, 端口: profile.port, 严格TLS: !!profile.tls?.enabled, ...facts }));
-    if (writablePort && (status.dialect !== 'mysql' || !/^8\.(0|4)\./.test(status.version))) throw new Error('端口与预期MySQL8实例不符');
+    const expected = expectedTargets[String(profile.port)];
+    if (!expected || status.dialect !== expected.dialect || !expected.version.test(status.version.replace(/^5\.5\.5-/, ''))) throw new Error('端口与预期方言版本不符');
     await sql('CREATE DATABASE ' + identifier(database) + ' CHARACTER SET utf8mb4 COLLATE utf8mb4_bin'); created = true;
   });
   afterAll(async () => {
@@ -53,11 +61,13 @@ describe.skipIf(!enabled)('同库表重命名核心验收（显式单实例）',
       }
     } finally { await observer?.close({ strict: true }); }
   });
-  it.skipIf(writablePort)('5.7和MariaDB当前只读，明确拒绝预览且保留原表', async () => {
-    await create('readonly'); const before = await ddl('readonly'), snapshot = await get('readonly'); expect(snapshot.writable).toBe(false); expect(snapshot.reasons.join('')).toContain('首批');
+  it('实际触发器依赖保持只读，明确拒绝预览且保留原表', async () => {
+    await create('readonly');
+    await sql(`CREATE TRIGGER ${target('readonly_tr')} BEFORE INSERT ON ${target('readonly')} FOR EACH ROW SET NEW.s='保留触发器'`);
+    const before = await ddl('readonly'), snapshot = await get('readonly'); expect(snapshot.writable).toBe(false); expect(snapshot.reasons.join('')).toContain('触发器');
     await expect(preview(snapshot, 'readonly_new')).rejects.toThrow(); expect(await ddl('readonly')).toBe(before);
   });
-  it.skipIf(!writablePort)('完整定义与数据不变，只读预览零DDL，成功后相同物理ID且旧名消失', async () => {
+  it('完整定义与数据不变，只读预览零DDL，成功后相同物理ID且旧名消失', async () => {
     await create('complex'); await sql(`INSERT INTO ${target('complex')}(s) VALUES('保留数据'),('第二行')`);
     const before = await ddl('complex'), snapshot = await get('complex'); expect(snapshot.writable, snapshot.reasons.join('；')).toBe(true);
     const next = await preview(snapshot, 'complex_new'); expect(await ddl('complex')).toBe(before); expect(next.sql).toBe(`RENAME TABLE ${target('complex')} TO ${target('complex_new')};`);
@@ -66,24 +76,24 @@ describe.skipIf(!enabled)('同库表重命名核心验收（显式单实例）',
     expect((await sql('SELECT id,s,g FROM ' + target('complex_new') + ' ORDER BY id')).map(row => [String(row.id), row.s, String(row.g)])).toEqual([['1', '保留数据', '12'], ['2', '第二行', '9']]);
     await expect(ddl('complex')).rejects.toThrow(); await expect(apply(next)).rejects.toThrow('已失效或已使用');
   });
-  it.skipIf(!writablePort)('真实同名对象在预览和执行前均拒绝，不覆盖或自动改名', async () => {
+  it('真实同名对象在预览和执行前均拒绝，不覆盖或自动改名', async () => {
     await create('conflict'); await create('occupied'); const snapshot = await get('conflict'); await expect(preview(snapshot, 'occupied')).rejects.toThrow('占用');
     const next = await preview(snapshot, 'late_occupied'); await create('late_occupied'); await expect(apply(next)).rejects.toThrow('占用'); await expect(apply(next)).rejects.toThrow('已失效或已使用'); expect(await ddl('conflict')).toContain('CREATE TABLE `conflict`');
   });
-  it.skipIf(!writablePort)('同定义DROP重建原生ID变化、外部定义变化和连接修订变化均拒绝旧令牌', async () => {
+  it('同定义DROP重建原生ID变化、外部定义变化和连接修订变化均拒绝旧令牌', async () => {
     await create('identity'); const snapshot = await get('identity'), next = await preview(snapshot, 'identity_new'), before = await ddl('identity');
     await sql('DROP TABLE ' + target('identity')); await sql(before.replace('CREATE TABLE `identity`', 'CREATE TABLE ' + target('identity')));
     expect(await ddl('identity')).toBe(before); const recreated = await get('identity'); expect(recreated.tableId).not.toBe(snapshot.tableId); await expect(apply(next)).rejects.toThrow('身份');
     const changed = await preview(recreated, 'identity_new'); await sql('ALTER TABLE ' + target('identity') + " COMMENT='外部修改'"); await expect(apply(changed)).rejects.toThrow('定义');
     const revision = await preview(await get('identity'), 'identity_new'); await expect(apply(revision, randomUUID(), 2)).rejects.toThrow('连接配置');
   });
-  it.skipIf(!writablePort)('入向外键、视图引用和触发器目标仅可查看，不重构依赖', async () => {
+  it('入向外键、视图引用和触发器目标仅可查看，不重构依赖', async () => {
     await create('parent'); await sql(`CREATE TABLE ${target('child')}(id INT PRIMARY KEY,pid INT,FOREIGN KEY(pid) REFERENCES ${target('parent')}(id)) ENGINE=InnoDB`);
     expect((await get('parent')).writable).toBe(false); expect((await get('child')).writable).toBe(false);
     await create('viewed'); await sql(`CREATE VIEW ${target('v')} AS SELECT id FROM ${target('viewed')}`); expect((await get('viewed')).writable).toBe(false);
     await create('triggered'); await sql(`CREATE TRIGGER ${target('tr')} BEFORE INSERT ON ${target('triggered')} FOR EACH ROW SET NEW.s='触发'`); expect((await get('triggered')).writable).toBe(false);
   });
-  it.skipIf(!writablePort)('RENAME等待真实元数据锁时取消，记录未知执行事实并收尾，不重放', async () => {
+  it('RENAME等待真实元数据锁时取消，记录未知执行事实并收尾，不重放', async () => {
     await create('cancelled'); const next = await preview(await get('cancelled'), 'cancelled_new'), taskId = randomUUID();
     await sql('START TRANSACTION'); await sql('SELECT * FROM ' + target('cancelled'));
     const pending = apply(next, taskId).catch(error => error);

@@ -1,6 +1,7 @@
 /** 协议确认项与中文文案分离；名称和DDL执行事实不得混为同一状态。 */
 export const tableRenameZh = {
   title: '表重命名', newName: '新表名（同一数据库）', read: '重新读取原表', preview: '预览重命名', apply: '确认重命名', back: '返回名称编辑', cancel: '取消重命名任务', close: '关闭',
+  scope: '仅修改同一数据库中的单个表名，不重述字段或索引定义。名称限1至64个ASCII字母、数字或下划线，首字符不能是数字；是否可执行由本次服务器身份、权限和依赖核验决定。',
   engine: '引擎', charset: '默认字符集', collation: '默认排序规则', rowFormat: '行格式', autoIncrement: '自增计数（只读）', unset: '未设置', version: '数据库版本',
   fixedSql: '固定RENAME语句（只读）', before: '原表名', after: '新表名', readonly: '当前目标仅可查看',
   ackImplicit: '我确认DDL会隐式提交，可能等待元数据锁；取消和事务回滚不能撤销已完成的重命名。',
@@ -10,6 +11,7 @@ export const tableRenameZh = {
   discard: '将放弃尚未提交的新表名草稿，是否继续？', unknownClose: 'DDL可能已完成，请核对源表和新表。确认放弃本窗口记录并继续？',
   notSent: '尚未发送DDL。', unknown: '重命名结果未知，请核对源表和新表；不会自动重试或重放。', succeeded: '表已重命名，物理身份和完整定义已核验。', verificationFailed: 'DDL已完成，但未完整核验；请核对源表和新表，不要重试旧预览。',
   cancelling: '已请求取消，等待真实任务结束和资源释放。', consumed: '本次令牌已消费，不能再次执行，请关闭或重新读取。', unsupportedAck: '存在当前版本不认识的风险确认项，不能执行。',
+  acknowledgementsChanged: '风险确认已变化，请按当前预览重新确认；尚未发送DDL。',
   dirty: '原表或新名称的隐藏表页存在未提交数据或列布局草稿，请先处理。', busy: '原表或新名称的表页仍有活动任务，请等待实际完成。', workspaceBudget: '工作区标签超过检查预算，请先关闭部分标签。',
   connecting: '建立结构连接', reading: '读取物理身份和完整定义', rechecking: '重核来源、依赖与目标冲突', executing: '执行单表重命名', verifying: '核验新名称和原定义', releasing: '释放结构资源',
   oldLink: '此名称已退役，或在当前窗口存在不同物理身份的名称链接歧义，禁止旧对象链接或收藏继续打开；请从真实对象树核对。',
