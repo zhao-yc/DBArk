@@ -29,3 +29,13 @@ Windows原件artifact12414716647，SHA256 `df21c83c7d16e5514e847aded47d1bca4729c
 新增诊断只在检查分支 `codex/native-checkpoint-typecheck-heap-20261022` 的source legacy开启，main及其它分支为0。开启时在每例零标签空App中唯一重载以暴露官方Monaco只读API；这项环境差异和 `originalFailureFixed:false` 明确入记录。原Ctrl+A、insertText、5000ms轮询、120秒期限和关闭断言均保持；四阶段采样及模型／DOM／EditContext事件被动、限量传回Node，失败只附已收到记录，不补读、不改首因。Main返回值明确为持久快照，不称即时renderer草稿。
 
 诊断附加源码的类型检查原进程24492、32.21秒／exit0；默认列表36228／exit0，未启动GUI。实际spec声明的默认／列表关闭、非法值资源前拒绝及原观察契约共13项RAM通过，进程44268／exit0；这不是Windows原生复验。
+
+## 固定提交复验进展
+
+本机后备完整单元固定于 `9967545ae0529a08fd551efc6de5b76cb6a5d2e1`（仅比代码候选增加上述文档，src树仍为 `41c7b53b656d68011d080cacf9a700d8e1e3cfed`）：原PID51196，UTC09:55:00.9924404创建、10:00:09.5796625退出，exit0／308.607秒；699文件通过、1文件平台跳过，14057测试通过、1跳过。前后tracked干净、输入与dist哈希不变，10份封存保留在 `.cache/native-ci-heap-full-local-20261022/`。本轮新VM派单仍未确认，旧回合为completed；没有本轮VM进程、GUI、数据库或剪贴板操作。
+
+候选 [CI 39758650634](https://github.com/zhao-yc/DBArk/actions/runs/39758650634) 的Linux job119756992713已成功：700文件、14048测试通过／10跳过，标准类型与构建成功。macOS x64 job119756992412和Windows job119756992879的源码批准、缩进／分栏及首次文件模型步骤成功；legacy-source仍在运行，不能提前宣称整体或安装包通过。
+
+macOS arm64 job119756992704的原artifact12416713431（ZIP SHA256 `e03820a6fe3ebd2ec8ea4442c052ed3c88ce19fd4a7eb7ef05440f0d2c7139a6`）确认 `typecheck.process.json` 与 `build.process.json` 均为status0、无signal/errorCode，并产生本次源码批准；缩进专项accepted且两原owner正常退出。说明本次堆预算已越过原编译失败，但后续分栏专项仍失败，未执行安装验收。
+
+分栏原几何附件显示屏幕1024×768、工作区高677；请求1400×1000客户区被系统夹成1400×645。14次准入采样最大值226，精确等于产品公式 `489−(37+44+18+35+33)−96`；保留原大于410断言和失败。检查分支未在既有显示租约的准确分支名单内（仅main及原筛选候选），因此这次没有启用租约；主分支控制轮将沿既有600秒租约，不新增显示工具、不扩大名单、不改变阈值或期限。不能把这次环境容量失败当作分栏后续拖动、取消或重启已验。
