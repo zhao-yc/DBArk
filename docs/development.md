@@ -12,6 +12,8 @@
 
 日常改动优先使用 [本地定向检查](development/local-checks.md)：`pnpm check:local -- tests/unit/具体文件.test.ts`；需要普通构建时增加 `--build`。类型检查只执行一次，原生、实库和发行验收继续沿各自入口执行。
 
+类型检查、普通构建和原生CI现在共用固定的[编译器堆预算](development/typecheck-heap-20261022.md)：仅给TypeScript子进程显式4GiB，避免部分macOS运行时默认约2GiB导致编译中止。失败仍停止后续步骤，不改原生时限、重试或显示租约；命令名称保持。
+
 当前以开发为主，发行暂缓。查询结果已接入[复制（含列名）](development/query-result-header-copy-20261020.md)、[多列精确排序](query-result-sort.md)和[本地条件筛选](query-result-filter.md)。本轮[整合与操作说明](development/query-result-multisort-filter-20261020.md)记录本地证据，原生与安装验收分别记录。
 
 Windows 源码客户端的[实库结果整理验收](../tests/integration/acceptance-query-result-organize-20261020.md)已补齐，包含实际发现并修复的连续导出筛选丢失；新窗口与 CSV/JSON 通过，旧失败现场保持。安装与其他平台范围继续单列。
