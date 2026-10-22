@@ -195,6 +195,7 @@ export interface CommandMap {
   'table.referencePage': { input: { connectionId: string; database: string; table: string; foreignKeyName: string; matchValues?: CellValue[]; page: number; pageSize: number; filters: FilterRule[]; filterMode?: FilterMode; filterGroup?: FilterGroup; sort: SortRule[]; taskId: string }; output: { source: TableInfo; foreignKey: ForeignKeyInfo; target: TableInfo; page: TablePage } };
   'table.incomingReferences': { input: import('./incomingReferences').IncomingReferencesInput; output: import('./incomingReferences').IncomingReferencesOutput };
   'table.childReferencePage': { input: import('./incomingReferences').ChildReferencePageInput; output: import('./incomingReferences').ChildReferencePageOutput };
+  'table.statistics': { input: import('./tableStatistics').TableStatisticsInput; output: import('./tableStatistics').TableStatisticsOutput };
   'table.preview': { input: { connectionId: string; database: string; table: string; changes: RowChange[] }; output: SqlPreview & { previewId?: string; previewExpiresAt?: string } };
   'table.apply': { input: { connectionId: string; database: string; table: string; changes: RowChange[]; taskId: string; previewId?: string }; output: { affectedRows: number; receiptId?: string; receiptSaved?: boolean; cleanupWarning?: boolean } };
   'schema.preview': { input: { connectionId: string; design: TableDesign }; output: SqlPreview };

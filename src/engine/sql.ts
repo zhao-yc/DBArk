@@ -226,11 +226,9 @@ function filterParameter(column: ColumnInfo, value: string, pattern: boolean): s
   return `CAST(? AS DECIMAL(65,${fraction.length}))`;
 }
 
-/** 排序与筛选严格使用元数据白名单，值独立绑定；条件与整组均加括号保证组合语义。 */
-export function buildPageSql(info: TableInfo, page: number, pageSize: number, filters: FilterRule[], sort: SortRule[], filterMode: FilterMode = 'all', filterGroup?:FilterGroup): { sql: string; params: CellValue[] } {
-  if (!Number.isSafeInteger(page) || page < 1 || page > 10000000 || !Number.isSafeInteger(pageSize) || pageSize < 1 || pageSize > 1000 || !Number.isSafeInteger((page - 1) * pageSize)) throw new Error('分页参数无效，页号范围为 1～10000000，页大小范围为 1～1000');
+/** 表页及整范围聚合共用同一元数据白名单、启停及分组语义，不重新解析任意SQL。 */
+export function buildTableFilterSql(info: TableInfo, filters: FilterRule[], filterMode: FilterMode = 'all', filterGroup?: FilterGroup): { where: string | undefined; params: CellValue[] } {
   const admitted=copyFilterRules(filters),group=validateFilterGroup(admitted,filterMode,filterGroup);
-  if (!Array.isArray(sort) || sort.length > 20) throw new Error('排序规则不能超过 20 条');
   const columns = new Map(info.columns.map(column => [column.name, column]));
   const params: CellValue[] = [];
   // 停用只排除谓词及参数；目录校验和总预算仍覆盖保留的所有条件。
@@ -254,6 +252,14 @@ export function buildPageSql(info: TableInfo, page: number, pageSize: number, fi
   }
   // 未提供group时沿用旧字节模板，旧平铺参数仍严格按filters顺序。
   const where=group?grouped(group):(()=>{const clauses=admitted.filter(filter=>filter.enabled!==false).map(clause);return clauses.length?'('+clauses.map(clause=>`(${clause})`).join(filterMode==='all'?' AND ':' OR ')+')':undefined;})();
+  return { where, params };
+}
+
+/** 排序与筛选严格使用元数据白名单，值独立绑定；原表页SQL字节模板保持。 */
+export function buildPageSql(info: TableInfo, page: number, pageSize: number, filters: FilterRule[], sort: SortRule[], filterMode: FilterMode = 'all', filterGroup?:FilterGroup): { sql: string; params: CellValue[] } {
+  if (!Number.isSafeInteger(page) || page < 1 || page > 10000000 || !Number.isSafeInteger(pageSize) || pageSize < 1 || pageSize > 1000 || !Number.isSafeInteger((page - 1) * pageSize)) throw new Error('分页参数无效，页号范围为 1～10000000，页大小范围为 1～1000');
+  if (!Array.isArray(sort) || sort.length > 20) throw new Error('排序规则不能超过 20 条');
+  const { where, params } = buildTableFilterSql(info, filters, filterMode, filterGroup), columns = new Map(info.columns.map(column => [column.name, column]));
   // 非唯一排序补上可靠行键作为并列项顺序，避免跳页时相同排序值的行随机换位。
   const order = [...sort, ...info.editableKey.filter(column => !sort.some(rule => rule.column === column)).map(column => ({ column, direction: 'ASC' as const }))];
   const orderSql = order.map(rule => {

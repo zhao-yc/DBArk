@@ -1,0 +1,5 @@
+.table-statistics-columns{display:flex;flex-wrap:wrap;gap:8px 18px;max-height:190px;overflow:auto;margin:12px 0}
+.table-statistics-columns label{display:flex;gap:6px;align-items:center;overflow-wrap:anywhere}
+.table-statistics-results{overflow:auto}.table-statistics-results table{width:100%;border-collapse:collapse}
+.table-statistics-results th,.table-statistics-results td{text-align:left;padding:8px;border-bottom:1px solid var(--border-color);vertical-align:top;white-space:pre-wrap;overflow-wrap:anywhere;max-width:240px}
+.table-statistics-results caption{text-align:left;font-weight:600;margin:10px 0}.table-statistics-conditions{max-height:150px;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere}

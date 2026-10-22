@@ -61,13 +61,13 @@ export function decodeIncomingReferenceCursor(value: string | undefined, sourceD
 }
 
 /** 所有元数据语句同一独立会话，注入原commandStarted生命周期并给旧目录读取追加硬LIMIT。 */
-export async function readIncomingReferenceTable(context: StructureTaskContext, target: { database: string; table: string }): Promise<TableInfo> {
+export async function readIncomingReferenceTable(context: StructureTaskContext, target: { database: string; table: string }, allowViews = false): Promise<TableInfo> {
   if (!validName(target.database) || !validName(target.table)) throw Error(text.invalid); active(context);
   const modes = rows((await structureTaskQuery(context, 'SELECT @@SESSION.sql_mode AS sqlMode')).rows, ['sqlMode'], 1);
   if (modes.length !== 1 || typeof modes[0].sqlMode !== 'string' || !/^[A-Z0-9_,]*$/i.test(modes[0].sqlMode) || modes[0].sqlMode.split(',').some(mode => (definitionOmittingSqlModes as readonly string[]).includes(mode.toUpperCase()))) throw Error(text.invalid);
   context.managed.sqlMode = modes[0].sqlMode;
   const identity = rows((await structureTaskQuery(context, `SELECT TABLE_SCHEMA AS databaseName,TABLE_NAME AS tableName,TABLE_TYPE AS kind FROM information_schema.TABLES WHERE ${equal('TABLE_SCHEMA', target.database)} AND ${equal('TABLE_NAME', target.table)} LIMIT 2`)).rows, ['databaseName', 'tableName', 'kind'], 2);
-  if (identity.length !== 1 || identity[0].databaseName !== target.database || identity[0].tableName !== target.table || identity[0].kind !== 'BASE TABLE') throw Error(text.invalid);
+  if (identity.length !== 1 || identity[0].databaseName !== target.database || identity[0].tableName !== target.table || identity[0].kind !== 'BASE TABLE' && !(allowViews && identity[0].kind === 'VIEW')) throw Error(text.invalid);
   let total = 0;
   const query: MetadataQuery = async <T>(sql: string, params: (string | number | boolean | null | Buffer)[] = []) => {
     const bounded = /^SELECT\b/i.test(sql) && !/\bLIMIT\s+\d+\s*$/i.test(sql) ? sql + ' LIMIT 4097' : sql;
@@ -76,7 +76,7 @@ export async function readIncomingReferenceTable(context: StructureTaskContext, 
     total += Buffer.byteLength(JSON.stringify(result.rows)); if (total > limits.bytes) throw Error(text.budget); return result;
   };
   const info = await tableInfo(context.managed, target.database, target.table, query); active(context);
-  if (info.objectKind !== 'table' || Buffer.byteLength(JSON.stringify(info)) > limits.bytes) throw Error(text.invalid); return info;
+  if (info.objectKind !== (identity[0].kind === 'VIEW' ? 'view' : 'table') || Buffer.byteLength(JSON.stringify(info)) > limits.bytes) throw Error(text.invalid); return info;
 }
 
 /** 首列目录按实际child三元组做二进制keyset，51st只作为续页标记，不截断整个可见目录。 */

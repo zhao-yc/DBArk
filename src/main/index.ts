@@ -309,6 +309,10 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
   const incomingReferenceRead = command === 'table.incomingReferences' || command === 'table.childReferencePage';
   const incomingReferenceRevision = incomingReferenceRead ? store.connectionRevision() : undefined;
   if (incomingReferenceRead && shuttingDown) throw Error('客户端正在退出，不能读取子记录');
+  // 统计只发布原连接修订的完整结果，退出或改目标后不显示迟到聚合。
+  const tableStatisticsRead = command === 'table.statistics';
+  const tableStatisticsRevision = tableStatisticsRead ? store.connectionRevision() : undefined;
+  if (tableStatisticsRead && shuttingDown) throw Error('客户端正在退出，不能统计表数据');
   if (structureCommand && shuttingDown) throw new Error('客户端正在退出，不能开始结构操作');
   connectionConfig.assertAvailable(requestConnectionId);
   // 新建表在第一次等待前消费主进程能力；目的和修订仍由引擎独立核验。
@@ -403,6 +407,8 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
     }
     case 'schema.compare': input = { ...input, sourceProfile: store.resolveConnection(input.source.connectionId), targetProfile: store.resolveConnection(input.target.connectionId) }; break;
     case 'table.incomingReferences':case 'table.childReferencePage':
+      input = { ...input, profile: store.resolveConnection(input.connectionId) }; break;
+    case 'table.statistics':
       input = { ...input, profile: store.resolveConnection(input.connectionId) }; break;
     case 'search.structure':case 'search.structureContinue':case 'search.dataStart':case 'search.recordRead':
       if(shuttingDown)throw Error('客户端正在退出，不能开始搜索');
@@ -581,6 +587,7 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
     sentToEngine = true;
     const result = command==='search.savedQueries'?await savedQuerySearches.start(input):command==='search.savedQueriesContinue'?await savedQuerySearches.next(input):await broker.request(command, input);
     if (incomingReferenceRead && (shuttingDown || incomingReferenceRevision !== store.connectionRevision())) throw Error('连接配置或客户端状态已变化，请重新打开子记录');
+    if (tableStatisticsRead && (shuttingDown || tableStatisticsRevision !== store.connectionRevision())) throw Error('连接配置或客户端状态已变化，请重新统计表数据');
     if (columnRequest && (command === 'schema.columns.get' || command === 'schema.columns.preview')) {
       try { columnsMain.publish(columnRequest, result); }
       catch (error) { await columnsMain.rejectReply(columnRequest, error); }

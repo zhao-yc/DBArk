@@ -24,6 +24,8 @@ import { bindQueryParameters, namedParameterTokens, queryParameterLimits, valida
 import { canonicalReference, validateReferenceValues } from '../shared/references';
 import { buildReferencePageSql, buildChildReferencePageSql, hasStableReferencePagination } from './references';
 import { readIncomingReferences, resolveIncomingReference, recheckIncomingReference } from './incomingReferences';
+import { readTableStatistics } from './tableStatistics';
+import type { TableStatisticsInput } from '../shared/tableStatistics';
 import { incomingReferenceLimits, incomingReferenceMessages, type IncomingReferencesInput, type ChildReferencePageInput } from '../shared/incomingReferences';
 import { connect, execute, type ManagedConnection } from './connection';
 import * as metadata from './metadata';
@@ -343,6 +345,10 @@ export class Engine {
       case 'table.incomingReferences': {
         this.copySourceProfile(input);
         return this.withIndependentTask(input.connectionId, input.taskId, (managed, control) => readIncomingReferences({ managed, ...control }, input as IncomingReferencesInput), undefined, '读取引用此表的子表', true);
+      }
+      case 'table.statistics': {
+        this.copySourceProfile(input);
+        return this.withIndependentTask(input.connectionId, input.taskId, (managed, control) => readTableStatistics({ managed, ...control }, input as TableStatisticsInput, () => this.stopIndependentRead(input.taskId)), undefined, '统计服务器筛选数据', true);
       }
       case 'table.childReferencePage': {
         this.copySourceProfile(input);

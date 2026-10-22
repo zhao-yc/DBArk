@@ -11,6 +11,7 @@ export const publicCommands: Record<Command, true> = {
   'queryFileSources.cancel': true, 'queryFileSources.open': true, 'queryFileSources.save': true, 'queryFileSources.saveAs': true, 'queryFileSources.status': true, 'queryFileSources.release': true,
   'table.presets.list':true,'table.presets.save':true,'table.presets.delete':true,'table.presets.apply':true,
   'serverMonitor.read': true,
+  'table.statistics': true,
   'table.copyInsertSql': true,
   'schema.tableCreate.get': true, 'schema.tableCreate.preview': true, 'schema.tableCreate.apply': true, 'schema.tableCreate.release': true, 'schema.databaseCreate.get': true, 'schema.databaseCreate.preview': true, 'schema.databaseCreate.apply': true, 'schema.databaseCreate.release': true,
   'tasks.cancelState': true,

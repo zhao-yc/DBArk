@@ -48,7 +48,7 @@ function fixture(filterGroup: FilterGroup | undefined = undefined) {
   let sequence = 0;
   const context = createContext({
     // 提取的真实选择函数引用此意图；旧跨页场景尚未打开批量填充，保持生产初值。
-    childReferenceDialog: null, childReferenceIntent: { current: null }, batchFillIntent: { current: null },
+    tableStatisticsDialog: null, tableStatisticsIntent: { current: null }, childReferenceDialog: null, childReferenceIntent: { current: null }, batchFillIntent: { current: null },
     history: new DraftHistory(), RecordPageNavigation, recordPageScope, recordViewZh, tableGridZh, maxTablePage, structuredClone, base, tab,
     ...value, pageIndex: 1, rows, rowsRef: { current: rows }, page: { hasMore: true, columns: [{ key: 'id' }, { key: 'text' }] }, info: { objectKind: 'table', columns: [{ name: 'id' }, { name: 'text' }] },
     useWorkspace: { getState: () => workspace }, recordPages: gate, recordPageScopeRef: { current: { value, page: 1 } }, loadGeneration: { current: 10 },
