@@ -1,11 +1,13 @@
 import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { win32 } from 'node:path';
 import { createContext, runInContext, runInNewContext } from 'node:vm';
 import ts from 'typescript';
 import { expect, it, vi } from 'vitest';
 import { bindQueryPartialUi, queryPartialUiKeys, queryPartialFirstSql, queryPartialScript, queryPartialColumns, queryPartialRows, installQueryPartialUiAudit, readQueryPartialUiAudit } from '../helpers/queryPartialUi';
 
-function env(): NodeJS.ProcessEnv { return { DBARK_QUERY_PARTIAL_UI: '1', DBARK_INTEGRATION_ENABLED: '1', DBARK_TEST_HOST: '192.168.31.200', DBARK_TEST_PORT: '13384', DBARK_TEST_TLS: '0', DBARK_TEST_USER: 'ram', DBARK_TEST_PASSWORD: '', DBARK_TEST_EXPECTED_SERVER_UUID: 'f568f70e-c730-11f1-8190-3e6c830dde01', DBARK_QUERY_PARTIAL_OUTPUT: resolve('.cache/dbark-query-partial-' + 'a'.repeat(32)), DBARK_QUERY_PARTIAL_MANIFEST: resolve('.cache/ram-approved-manifest.json'), DBARK_QUERY_PARTIAL_MANIFEST_SHA256: 'a'.repeat(64) }; }
+/** RAM模拟Windows门时固定使用Windows路径，不依赖执行CI的宿主目录。 */
+function env(): NodeJS.ProcessEnv { return { DBARK_QUERY_PARTIAL_UI: '1', DBARK_INTEGRATION_ENABLED: '1', DBARK_TEST_HOST: '192.168.31.200', DBARK_TEST_PORT: '13384', DBARK_TEST_TLS: '0', DBARK_TEST_USER: 'ram', DBARK_TEST_PASSWORD: '', DBARK_TEST_EXPECTED_SERVER_UUID: 'f568f70e-c730-11f1-8190-3e6c830dde01', DBARK_QUERY_PARTIAL_OUTPUT: win32.resolve('D:\\DBArk', '.cache/dbark-query-partial-' + 'a'.repeat(32)), DBARK_QUERY_PARTIAL_MANIFEST: win32.resolve('D:\\DBArk', '.cache/ram-approved-manifest.json'), DBARK_QUERY_PARTIAL_MANIFEST_SHA256: 'a'.repeat(64) }; }
+it('模拟POSIX工作目录时RAM夹具仍使用明确Windows绝对路径', () => { const cwd = vi.spyOn(process, 'cwd').mockReturnValue('/tmp/dbark-ci'); try { const values = env(); expect(values.DBARK_QUERY_PARTIAL_OUTPUT).toBe('D:\\DBArk\\.cache\\dbark-query-partial-' + 'a'.repeat(32)); expect(values.DBARK_QUERY_PARTIAL_MANIFEST).toBe('D:\\DBArk\\.cache\\ram-approved-manifest.json'); bindQueryPartialUi(() => ({ env: values, platform: 'win32', args: [] })).assertCurrent(); } finally { cwd.mockRestore(); } });
 it('独立11键只接受固定200测试实例与Root批准manifest参数', () => { const values = env(), binding = bindQueryPartialUi(() => ({ env: values, platform: 'win32', args: [] })); expect(queryPartialUiKeys).toHaveLength(11); expect(binding.target).toMatchObject({ host: '192.168.31.200', port: 13384, password: '', sha: 'a'.repeat(64) }); binding.assertCurrent(); });
 it.each(queryPartialUiKeys)('缺少%s不分配资源', key => { const values = env(); delete values[key]; expect(() => bindQueryPartialUi(() => ({ env: values, platform: 'win32', args: [] }))).toThrow(); });
 it.each(['DBARK_EXPLAIN_PROPERTIES_UI', 'DBARK_TEST_DATABASE', 'DBARK_USER_DATA', 'DBARK_DEV_URL', 'dbark_query_partial_ui', 'NODE_OPTIONS', 'NODE_PATH', 'ELECTRON_RUN_AS_NODE'])('额外配置%s拒绝', key => { const values = { ...env(), [key]: '' }; expect(() => bindQueryPartialUi(() => ({ env: values, platform: 'win32', args: [] }))).toThrow(); });

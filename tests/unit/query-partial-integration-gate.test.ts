@@ -91,4 +91,12 @@ describe('部分查询实库定义双门与原驱动透传RAM反例', () => {
     const lost = structuredClone(outcome); Reflect.set(lost.results[0].rows[0], 'c0', Number(v.big)); expect(() => verifyQueryPartialPrecision(lost, 1)).toThrow();
     expect(() => verifyQueryPartialPrecision(outcome, 2)).toThrow('不完整语句');
   });
+  it('原ERR的emoji表示变化不能掩盖中文参数部分泄露，完整value断言仍保留', () => {
+    const prefix = '仅合成参数不进入错误摘要_中文', raw = { errno: 1062, code: 'ER_DUP_ENTRY', message: "Duplicate entry '仅合成参数不进入错误摘要_中文?' for key 'PRIMARY'" };
+    expect(raw).toMatchObject({ errno: 1062, code: 'ER_DUP_ENTRY' }); expect(raw.message).toContain(prefix); expect(raw.message).not.toContain(queryPartialValues.parameter);
+    const leakedSummary = '参数查询失败：' + raw.message;
+    expect(leakedSummary).not.toContain(queryPartialValues.parameter); expect(leakedSummary).toContain(prefix);
+    const hiddenSummary = '第 2 条 SQL 未完成；已完成 1 条。参数查询失败（ER_DUP_ENTRY）；服务器错误详情可能包含参数值，已隐藏';
+    expect(hiddenSummary).not.toContain(queryPartialValues.parameter); expect(hiddenSummary).not.toContain(prefix);
+  });
 });

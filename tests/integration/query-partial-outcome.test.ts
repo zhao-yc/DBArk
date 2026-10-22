@@ -88,10 +88,11 @@ describe.sequential('查询首错保留完整前序结果六实例专项（Root�
       const templateFirst = 'SELECT :secret AS parameter_value', templateDuplicate = `INSERT INTO ${table('unique_values')} VALUES(:secret)`;
       const parameter = await execute([templateFirst, templateDuplicate, tail], 'query.executeParameterized', [{ name: 'secret', type: 'text', value: v.parameter }], [`SELECT ${parameterLiteral} AS parameter_value`, `INSERT INTO ${table('unique_values')} VALUES(${parameterLiteral})`]);
       expect(parameter.outcome.results).toHaveLength(1); expect(parameter.outcome.results[0].rows).toEqual([{ c0: v.parameter }]); expect(parameter.outcome.results[0].statement).toBe(templateFirst);
-      expect(parameter.outcome.failure).toMatchObject({ statementOrdinal: 2, statementsCompleted: 1 }); expect(parameter.outcome.failure!.message).not.toContain(v.parameter);
-      expect(events.filter(event => event.taskId === parameter.taskId && event.status === 'failed')[0].message).not.toContain(v.parameter);
-      // callback原错误不能被流式旁观器漏记，失败任务也不能暴露绑定值；只输出布尔事实。
-      const parameterError = sessionFact.commands.at(-1)!; expect(parameterError.errors.some(error => error.errno === 1062 && error.message.includes(v.parameter))).toBe(true);
+      const exposedPrefix = '仅合成参数不进入错误摘要_中文';
+      expect(parameter.outcome.failure).toMatchObject({ statementOrdinal: 2, statementsCompleted: 1 }); expect(parameter.outcome.failure!.message).not.toContain(v.parameter); expect(parameter.outcome.failure!.message).not.toContain(exposedPrefix);
+      const failedParameterEvent = events.filter(event => event.taskId === parameter.taskId && event.status === 'failed')[0]; expect(failedParameterEvent.message).not.toContain(v.parameter); expect(failedParameterEvent.message).not.toContain(exposedPrefix);
+      // 5.7实测ERR把emoji显示成?，但前面的完整中文参数仍被回显；分别证明原错误与部分/完整脱敏。
+      const parameterError = sessionFact.commands.at(-1)!; expect(parameterError.errors).toHaveLength(1); expect(parameterError.errors[0].errno).toBe(1062); expect(parameterError.errors[0].code).toBe('ER_DUP_ENTRY'); expect(parameterError.errors[0].message).toContain(exposedPrefix);
       const callSql = `CALL ${procedure}()`, call = await execute([precision, callSql, tail]); verifyQueryPartialPrecision(call.outcome, 1); expect(call.outcome.failure).toMatchObject({ statementOrdinal: 2, statementsCompleted: 1 }); expect(JSON.stringify(call.outcome.results)).not.toContain('CALL_EARLY_ONLY');
       const callFact = sessionFact.commands.at(-1)!; expect(callFact.sql).toBe(callSql); expect(callFact.fields).toBeGreaterThan(0); expect(callFact.rows).toBeGreaterThan(0); expect(callFact.errors).toHaveLength(1); expect(callFact.ended).toBe(true);
       const schemaTask = task(), schema = await invoke('schema.apply', { connectionId: binding.profile.id, database, taskId: schemaTask, sql: `SELECT 1;\n${missing}` }, ['SELECT 1', missing]); expect(schema.error).toBeInstanceOf(Error); expect(schema.value).toBeUndefined();
