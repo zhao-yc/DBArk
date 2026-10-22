@@ -107,10 +107,11 @@ function server(dialect: 'mysql' | 'mariadb' = 'mysql') {
   const source = `CREATE TABLE ${quote(design.name)} (${design.columns.map(column => {
     const generated = column.generated;
     return `${quote(column.name)} ${column.type.toLowerCase()}${generated ? ' GENERATED ALWAYS AS ((' + quote('数量') + ' * ' + quote('单`价') + ') + ' + (generated.storage === 'VIRTUAL' ? '1.00' : '2.00') + ') ' + generated.storage : column.nullable ? '' : ' NOT NULL'}${column.autoIncrement ? ' AUTO_INCREMENT' : ''}${column.comment ? " COMMENT '" + column.comment + "'" : ''}`;
-  }).join(',')},PRIMARY KEY (id),KEY ix_qty (${quote('数量')}),CONSTRAINT fk_qty FOREIGN KEY (${quote('数量')}) REFERENCES parent_db.parent(id) ON DELETE RESTRICT ON UPDATE RESTRICT) ENGINE=InnoDB`;
+  }).join(',')},PRIMARY KEY (id),KEY ix_qty (${quote('数量')}),CONSTRAINT fk_qty FOREIGN KEY (${quote('数量')}) REFERENCES parent_db.parent(id) ON DELETE RESTRICT ON UPDATE RESTRICT) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin`;
   const document = parseTableColumnDefinition(source, { dialect, mode: { noBackslashEscapes: false, ansiQuotes: false } });
   const metadata = design.columns.map((column, index) => ({ name: column.name, ordinal: String(index + 1), typeSql: column.type.toLowerCase(), dataType: column.type.split('(')[0].split(' ')[0].toLowerCase(), nullable: column.nullable ? 'YES' : 'NO', defaultValue: null as string | null, extra: column.generated ? column.generated.storage + ' GENERATED' : column.autoIncrement ? 'auto_increment' : '', generationExpression: column.generated ? '(' + quote('数量') + ' * ' + quote('单`价') + ') + ' + (column.generated.storage === 'VIRTUAL' ? '1.00' : '2.00') : '', charset: column.type.startsWith('VARCHAR') ? 'utf8mb4' : null, collation: column.type.startsWith('VARCHAR') ? 'utf8mb4_bin' : null, comment: column.comment }));
   const row = { version, os: 'Linux', lowerNames: '0', sqlMode: 'STRICT_TRANS_TABLES', quoteShowCreate: '1', hostname: 'synthetic', port: '3306', serverId: '1', currentUser: 'unit@localhost', charset: 'utf8mb4', collation: 'utf8mb4_bin' };
+  const tableEncoding = { charset: 'utf8mb4' as string | null, collation: 'utf8mb4_bin', defaultCollation: 'utf8mb4_bin' };
   const queries: string[] = []; let pending = 0, afterSource = source, tableName = design.name, failure: Error | undefined, onColumns: (() => void) | undefined;
   const connection = Object.assign(new EventEmitter(), { query(sql: string, callback: (error: Error | null, rows?: unknown, fields?: unknown[]) => void) {
     queries.push(sql); queueMicrotask(() => {
@@ -119,7 +120,8 @@ function server(dialect: 'mysql' | 'mariadb' = 'mysql') {
       if (sql.startsWith('SELECT VERSION() AS version,')) rows = [row];
       else if (sql === 'SELECT @@server_uuid AS uuid') rows = [{ uuid: '00000000-0000-0000-0000-000000000001' }];
       else if (sql.startsWith('SELECT ENGINE AS engine,')) rows = [{ engine: 'InnoDB', support: 'DEFAULT' }];
-      else if (sql.startsWith('SELECT TABLE_SCHEMA AS databaseName,')) rows = [{ databaseName: design.database, tableName, kind: 'BASE TABLE', engine: 'InnoDB' }];
+      else if (sql.startsWith('SELECT t.TABLE_SCHEMA AS databaseName,')) rows = [{ databaseName: design.database, tableName, kind: 'BASE TABLE', engine: 'InnoDB', charset: tableEncoding.charset, collation: tableEncoding.collation }];
+      else if (sql.startsWith('SELECT CHARACTER_SET_NAME AS name,DEFAULT_COLLATE_NAME AS collation')) rows = [{ name: design.charset, collation: tableEncoding.defaultCollation }];
       else if (sql.startsWith('SELECT PARTITION_NAME AS name')) rows = [{ name: null }];
       else if (sql.startsWith('SELECT COLUMN_NAME AS name,')) { onColumns?.(); rows = metadata; }
       else if (sql.startsWith('SHOW CREATE TABLE ')) rows = [{ 'Create Table': afterSource }];
@@ -128,10 +130,77 @@ function server(dialect: 'mysql' | 'mariadb' = 'mysql') {
     });
   } });
   const context: StructureTaskContext = { managed: { connection, status: { dialect, version }, signal: controller.signal, broken: false } as unknown as ManagedConnection, checkCancelled() { if (controller.signal.aborted) throw controller.signal.reason; }, report() {}, commandStarted() { pending++; return () => { pending--; }; } };
-  return { design, document, metadata, row, context, queries, controller, pending: () => pending, changedSource(value: string) { afterSource = value; }, changedName(value: string) { tableName = value; }, fail(value: Error) { failure = value; }, onColumns(action: () => void) { onColumns = action; } };
+  return { design, document, metadata, row, tableEncoding, context, queries, controller, pending: () => pending, changedSource(value: string) { afterSource = value; }, changedName(value: string) { tableName = value; }, fail(value: Error) { failure = value; }, onColumns(action: () => void) { onColumns = action; } };
 }
 
 describe('新表生成列真实目录后核的RAM响应', () => {
+  it('真实5.7 SHOW形状的note冗余COLLATE仅在表/列实际编码交叉匹配时通过', async () => {
+    const f = server(); f.context.managed.status.version = f.row.version = '5.7.44';
+    f.design.columns[4].name = f.metadata[4].name = 'note'; f.design.columns[4].type = 'VARCHAR(100)'; f.metadata[4].typeSql = 'varchar(100)';
+    const source = f.document.source.replace('`旁列` varchar(20)', '`note` varchar(100) COLLATE utf8mb4_bin DEFAULT NULL');
+    f.document = parseTableColumnDefinition(source, f.document.context); f.changedSource(source);
+    const actual = await readTableCreateGeneratedFacts(f.context), plan = planTableCreateGeneratedColumns(f.design, actual);
+    expect(await verifyCreatedGeneratedColumns(f.context, { database: f.design.database, table: f.design.name }, f.design, plan, f.document)).toBe(true);
+    f.metadata[4].extra = 'INVISIBLE';
+    expect(await verifyCreatedGeneratedColumns(f.context, { database: f.design.database, table: f.design.name }, f.design, plan, f.document)).toBe(false);
+    f.metadata[4].extra = ''; f.metadata[4].collation = 'utf8mb4_general_ci';
+    expect(await verifyCreatedGeneratedColumns(f.context, { database: f.design.database, table: f.design.name }, f.design, plan, f.document)).toBe(false);
+    f.metadata[4].collation = 'utf8mb4_bin';
+    f.document = parseTableColumnDefinition(source.replace('COLLATE utf8mb4_bin DEFAULT NULL', 'COLLATE utf8mb4_general_ci DEFAULT NULL'), f.document.context); f.changedSource(f.document.source);
+    expect(await verifyCreatedGeneratedColumns(f.context, { database: f.design.database, table: f.design.name }, f.design, plan, f.document)).toBe(false);
+    // 即使列SHOW和列目录彼此相同，普通新建没有逐列编码请求，不能覆盖有效表配对。
+    f.metadata[4].collation = 'utf8mb4_general_ci';
+    expect(await verifyCreatedGeneratedColumns(f.context, { database: f.design.database, table: f.design.name }, f.design, plan, f.document)).toBe(false);
+  });
+  it('冗余CHARACTER SET与COLLATE须逐项匹配，数值/二进制列不能获得编码属性', async () => {
+    for (const kind of ['character', 'numeric', 'binary']) {
+      const f = server(); let source = f.document.source;
+      if (kind === 'character') source = source.replace('`旁列` varchar(20)', '`旁列` varchar(20) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin');
+      if (kind === 'numeric') source = source.replace('`单``价` decimal(35,30)', '`单``价` decimal(35,30) CHARACTER SET utf8mb4');
+      if (kind === 'binary') { source = source.replace('`旁列` varchar(20)', '`旁列` varbinary(20) CHARACTER SET utf8mb4'); f.design.columns[4].type = 'VARBINARY(20)'; Object.assign(f.metadata[4], { typeSql: 'varbinary(20)', dataType: 'varbinary', charset: null, collation: null }); }
+      f.document = parseTableColumnDefinition(source, f.document.context); f.changedSource(source);
+      const actual = await readTableCreateGeneratedFacts(f.context), plan = planTableCreateGeneratedColumns(f.design, actual);
+      expect(await verifyCreatedGeneratedColumns(f.context, { database: f.design.database, table: f.design.name }, f.design, plan, f.document)).toBe(kind === 'character');
+      if (kind === 'character') {
+        f.document = parseTableColumnDefinition(source.replace('CHARACTER SET utf8mb4 COLLATE', 'CHARACTER SET latin1 COLLATE'), f.document.context); f.changedSource(f.document.source);
+        expect(await verifyCreatedGeneratedColumns(f.context, { database: f.design.database, table: f.design.name }, f.design, plan, f.document)).toBe(false);
+      }
+    }
+  });
+  it('表SHOW缺省COLLATE只由真实默认目录补证，不能猜默认或用NULL字符集绕过', async () => {
+    const f = server(); f.context.managed.status.version = f.row.version = '5.7.44'; f.tableEncoding.collation = f.tableEncoding.defaultCollation = f.metadata[4].collation = 'utf8mb4_general_ci';
+    const source = f.document.source.replace(' COLLATE=utf8mb4_bin', ''); f.document = parseTableColumnDefinition(source, f.document.context); f.changedSource(source);
+    const actual = await readTableCreateGeneratedFacts(f.context), plan = planTableCreateGeneratedColumns(f.design, actual);
+    expect(await verifyCreatedGeneratedColumns(f.context, { database: f.design.database, table: f.design.name }, f.design, plan, f.document)).toBe(true);
+    f.tableEncoding.defaultCollation = 'utf8mb4_bin';
+    expect(await verifyCreatedGeneratedColumns(f.context, { database: f.design.database, table: f.design.name }, f.design, plan, f.document)).toBe(false);
+    f.tableEncoding.defaultCollation = 'utf8mb4_general_ci'; f.tableEncoding.charset = null;
+    expect(await verifyCreatedGeneratedColumns(f.context, { database: f.design.database, table: f.design.name }, f.design, plan, f.document)).toBe(false);
+  });
+  it('Maria通用UCA的NULL字符集仅接受显式完整SHOW配对与实际TABLES/COLUMNS一致', async () => {
+    const f = server('mariadb'); f.tableEncoding.charset = null; f.tableEncoding.collation = f.metadata[4].collation = 'utf8mb4_uca1400_ai_ci';
+    const source = f.document.source.replace(' COLLATE=utf8mb4_bin', ' COLLATE=utf8mb4_uca1400_ai_ci').replace('`旁列` varchar(20)', '`旁列` varchar(20) CHARACTER SET utf8mb4 COLLATE utf8mb4_uca1400_ai_ci');
+    f.document = parseTableColumnDefinition(source, f.document.context); f.changedSource(source);
+    const actual = await readTableCreateGeneratedFacts(f.context), plan = planTableCreateGeneratedColumns(f.design, actual);
+    expect(await verifyCreatedGeneratedColumns(f.context, { database: f.design.database, table: f.design.name }, f.design, plan, f.document)).toBe(true);
+    f.document = parseTableColumnDefinition(source.replace(' COLLATE=utf8mb4_uca1400_ai_ci', ''), f.document.context); f.changedSource(f.document.source);
+    expect(await verifyCreatedGeneratedColumns(f.context, { database: f.design.database, table: f.design.name }, f.design, plan, f.document)).toBe(false);
+    f.document = parseTableColumnDefinition(source, f.document.context); f.changedSource(source); f.metadata[4].charset = 'latin1';
+    expect(await verifyCreatedGeneratedColumns(f.context, { database: f.design.database, table: f.design.name }, f.design, plan, f.document)).toBe(false);
+  });
+  it('MySQL原生JSON只沿既有固定配对，既不强制表继承也不开放任意编码属性', async () => {
+    const f = server(); f.design.columns[4].type = 'JSON'; Object.assign(f.metadata[4], { typeSql: 'json', dataType: 'json', charset: 'utf8mb4', collation: 'utf8mb4_bin' });
+    f.tableEncoding.collation = 'utf8mb4_general_ci';
+    const source = f.document.source.replace('`旁列` varchar(20)', '`旁列` json DEFAULT NULL').replace(' COLLATE=utf8mb4_bin', ' COLLATE=utf8mb4_general_ci'); f.document = parseTableColumnDefinition(source, f.document.context); f.changedSource(source);
+    const actual = await readTableCreateGeneratedFacts(f.context), plan = planTableCreateGeneratedColumns(f.design, actual);
+    expect(await verifyCreatedGeneratedColumns(f.context, { database: f.design.database, table: f.design.name }, f.design, plan, f.document)).toBe(true);
+    Object.assign(f.metadata[4], { charset: null, collation: null });
+    expect(await verifyCreatedGeneratedColumns(f.context, { database: f.design.database, table: f.design.name }, f.design, plan, f.document)).toBe(true);
+    Object.assign(f.metadata[4], { charset: 'utf8mb4', collation: 'utf8mb4_general_ci' });
+    expect(await verifyCreatedGeneratedColumns(f.context, { database: f.design.database, table: f.design.name }, f.design, plan, f.document)).toBe(false);
+    Object.assign(f.metadata[4], { charset: 'utf8mb4', collation: 'utf8mb4_bin' }); f.document = parseTableColumnDefinition(source.replace('json DEFAULT NULL', 'json COLLATE utf8mb4_bin DEFAULT NULL'), f.document.context); f.changedSource(f.document.source);
+    expect(await verifyCreatedGeneratedColumns(f.context, { database: f.design.database, table: f.design.name }, f.design, plan, f.document)).toBe(false);
+  });
   it.each(['mysql', 'mariadb'] as const)('%s支持Unicode/反引号准确名字及普通索引/FK，真实COLUMNS补证NULL不修改原document权限', async dialect => {
     const f = server(dialect), actual = await readTableCreateGeneratedFacts(f.context), plan = planTableCreateGeneratedColumns(f.design, actual);
     const original = f.document.columns.map(column => ({ nullable: column.nullable, access: column.access }));

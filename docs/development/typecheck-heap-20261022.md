@@ -47,3 +47,7 @@ macOS arm64 job119756992704的原artifact12416713431（ZIP SHA256 `e03820a6fe3eb
 核查发现成功源码用例的`info.attach({body})`没有在list reporter下生成可归档文件；ZIP没有该输入事件原件，不能把这轮通过描述为已取得模型／选区历史，也不能追认旧失败修复。现补为`TestInfo.outputPath`内`writeFile(...,{flag:'wx'})`独占保存后再附路径；失败仅保留已有Node记录，写入冲突不覆盖、不重试、不替换原用例错误。两项原生临时文件回归及原门／围栏共15项通过（PID51944、exit0），仍不是补修后的GUI采集证明；后续准确启用门时另验。
 
 主分支`5a6ff8ca`控制轮[CI39760479639](https://github.com/zhao-yc/DBArk/actions/runs/39760479639)已启用原arm64显示租约，三个架构完成源码批准及原专项后进入legacy；当前后续流程仍在运行。与检查分支的唯一重载诊断环境分开记账。
+
+该控制轮现已终态：Linux、macOS arm64及macOS x64 job成功，Windows job119763113220失败，发行步骤跳过。Windows关闭其他查询两例通过；独立`page-find-replace-offline.spec.ts`第三例在beforeEach等待“当前页查找替换”按钮30秒不存在，测试正文尚未执行，汇总80通过／338跳过／1失败，不认定为Unicode正则或本次堆预算回归。
+
+Windows原artifact12417954567的ZIP SHA256为`32f4a43c0915b3629763c7302bde9ed57725f80ad7daa4e1458c9c55f05eeeaa`。只读核查nested trace：原进程/页仍存活且URL正确，没有browser导航、网络或DOM快照，启动stdout/stderr为空；监听注册较晚，不能据空日志证明模块成功加载或没有早期异常。根因未定，原失败保持，不延长30秒、不自动重试，也不将两Mac成功扩大为全平台绿色。

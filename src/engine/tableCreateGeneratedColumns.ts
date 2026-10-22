@@ -6,6 +6,8 @@ import { definitionOmittingSqlModes, readColumnOnUpdate, readControlledTimestamp
 import { compileResolvedGeneratedColumnExpression, readGeneratedColumnDefinition, sameGeneratedColumnExpression } from './tableGeneratedColumn';
 import { sameStructureFragment, structureTaskQuery, type StructureTaskContext } from './structureDefinition';
 import { qualified } from './sql';
+import { tableDefinitionTokens } from './tableColumnDefinition';
+import { readTableDefaultEncodingDefinition } from './tableDefaultEncodingSql';
 
 export interface TableCreateGeneratedFacts {
   dialect: 'mysql' | 'mariadb'; serverVersion: string; os: string; lowerNames: 0; sqlMode: string; quoteShowCreate: 1;
@@ -98,8 +100,8 @@ function plannedColumns(design: TableCreateDraft, dialect: 'mysql' | 'mariadb'):
 }
 
 /** 普通列EXTRA也必须由SHOW逐项证明；仅允许独立前置默认标记及真实自增/自动时间，不洗掉未知属性。 */
-function ordinaryExtraMatches(column: TableColumnDefinition, extra: string, dialect: 'mysql' | 'mariadb'): boolean {
-  if (extra.length > 512 || column.attributes.some(attribute => !['nullable', 'default', 'comment', 'auto-increment', 'on-update'].includes(attribute.kind))) return false;
+function ordinaryExtraMatches(column: TableColumnDefinition, extra: string, dialect: 'mysql' | 'mariadb', characterEncodingProven: boolean): boolean {
+  if (extra.length > 512 || column.attributes.some(attribute => !['nullable', 'default', 'comment', 'auto-increment', 'on-update', ...(characterEncodingProven ? ['charset', 'collation'] : [])].includes(attribute.kind))) return false;
   const increments = column.attributes.filter(attribute => attribute.kind === 'auto-increment'), updates = column.attributes.filter(attribute => attribute.kind === 'on-update');
   if (increments.length > 1 || updates.length > 1 || increments.length && updates.length) return false;
   let rest = extra.trim();
@@ -114,6 +116,29 @@ function ordinaryExtraMatches(column: TableColumnDefinition, extra: string, dial
   return !!observed && !!expected && sameColumnOnUpdate(expected, { kind: 'expression', expression: 'current-timestamp', precision: observed.precision }, column.type.raw);
 }
 
+/** 新表没有逐列编码请求；字符列只能继承有效表配对，SHOW冗余属性须与真实COLUMNS逐项吻合。 */
+function ordinaryEncodingMatches(column: TableColumnDefinition, row: Record<string, string | number | null>, document: TableColumnDefinitionDocument, encoding: { charset: string; collation: string }): boolean {
+  const character = /^(?:CHAR|VARCHAR|ENUM|SET|(?:TINY|MEDIUM|LONG)?TEXT)$/i.test(String(row.dataType));
+  const attributes = column.attributes.filter(attribute => attribute.kind === 'charset' || attribute.kind === 'collation');
+  // 原生MySQL JSON沿既有JSON新增的固有配对门，不把它当字符继承或给它授予列级编码覆写。
+  if (document.context.dialect === 'mysql' && String(row.dataType).toUpperCase() === 'JSON' && column.type.raw.trim().toUpperCase() === 'JSON') return attributes.length === 0 && (row.charset === null && row.collation === null || row.charset === 'utf8mb4' && row.collation === 'utf8mb4_bin');
+  if (!character) return attributes.length === 0 && row.charset === null && row.collation === null;
+  if (row.charset !== encoding.charset || row.collation !== encoding.collation) return false;
+  for (const attribute of attributes) {
+    const tokens = tableDefinitionTokens(attribute.raw, document.context); let cursor = 0;
+    if (attribute.kind === 'charset') {
+      if (tokens[cursor]?.kind !== 'word') return false;
+      const word = tokens[cursor++].value.toUpperCase();
+      if (word === 'CHARACTER') { if (tokens[cursor]?.kind !== 'word' || tokens[cursor++].value.toUpperCase() !== 'SET') return false; }
+      else if (word !== 'CHARSET') return false;
+    } else if (tokens[cursor]?.kind !== 'word' || tokens[cursor++].value.toUpperCase() !== 'COLLATE') return false;
+    if (tokens[cursor]?.value === '=') cursor++;
+    const value = tokens[cursor++];
+    if (!value || !['word', 'identifier'].includes(value.kind) || value.value !== encoding[attribute.kind === 'charset' ? 'charset' : 'collation'] || cursor !== tokens.length) return false;
+  }
+  return true;
+}
+
 /** 每个生成列都是0基请求计划；普通索引/FK由原CREATE规划器继续完整核验。 */
 export function planTableCreateGeneratedColumns(input: TableCreateDraft, facts: TableCreateGeneratedFacts): TableCreateGeneratedPlan {
   assertTableCreateGeneratedFacts(facts); const design = tableCreateDraftSchema.parse(input);
@@ -126,10 +151,19 @@ export async function verifyCreatedGeneratedColumns(context: StructureTaskContex
   active(context);
   const design = tableCreateDraftSchema.parse(input), facts = await readTableCreateGeneratedFacts(context);
   if (facts.digest !== plan.factsDigest || facts.dialect !== plan.dialect || facts.serverVersion !== plan.serverVersion || target.database !== design.database || target.table !== design.name || document.context.dialect !== plan.dialect || document.context.mode.noBackslashEscapes !== facts.sqlMode.split(',').includes('NO_BACKSLASH_ESCAPES') || document.context.mode.ansiQuotes !== facts.sqlMode.split(',').includes('ANSI_QUOTES') || document.table !== target.table || document.database !== undefined && document.database !== target.database || document.columns.length !== design.columns.length || JSON.stringify(plannedColumns(design, facts.dialect)) !== JSON.stringify(plan.columns)) return false;
-  const where = `CAST(TABLE_SCHEMA AS BINARY)=CAST(${literal(target.database)} AS BINARY) AND CAST(TABLE_NAME AS BINARY)=CAST(${literal(target.table)} AS BINARY)`;
+  const condition = (prefix = '') => `CAST(${prefix}TABLE_SCHEMA AS BINARY)=CAST(${literal(target.database)} AS BINARY) AND CAST(${prefix}TABLE_NAME AS BINARY)=CAST(${literal(target.table)} AS BINARY)`, where = condition();
   const query = async (sql: string, keys: readonly string[], maximum = 1000, budget = 2 * 1024 * 1024) => { const value = await structureTaskQuery<unknown>(context, sql); active(context); return boundedRows(value.rows, keys, maximum, budget); };
-  const tables = await query(`SELECT TABLE_SCHEMA AS databaseName,TABLE_NAME AS tableName,TABLE_TYPE AS kind,ENGINE AS engine FROM information_schema.TABLES WHERE ${where} LIMIT 2`, ['databaseName', 'tableName', 'kind', 'engine'], 2, 64 * 1024);
+  const tables = await query(`SELECT t.TABLE_SCHEMA AS databaseName,t.TABLE_NAME AS tableName,t.TABLE_TYPE AS kind,t.ENGINE AS engine,c.CHARACTER_SET_NAME AS charset,t.TABLE_COLLATION AS collation FROM information_schema.TABLES t LEFT JOIN information_schema.COLLATIONS c ON c.COLLATION_NAME=t.TABLE_COLLATION WHERE ${condition('t.')} LIMIT 2`, ['databaseName', 'tableName', 'kind', 'engine', 'charset', 'collation'], 2, 64 * 1024);
   if (tables.length !== 1 || tables[0].databaseName !== target.database || tables[0].tableName !== target.table || tables[0].kind !== 'BASE TABLE' || tables[0].engine !== 'InnoDB') return false;
+  const table = tables[0], shown = readTableDefaultEncodingDefinition(document.source, document.context);
+  if (shown.reasons.length || shown.charset !== design.charset || typeof table.collation !== 'string' || !/^[A-Za-z0-9_]{1,255}$/.test(table.collation) || shown.collation !== undefined && shown.collation !== table.collation || design.collation !== undefined && design.collation !== table.collation) return false;
+  // Maria通用UCA目录可无一对一字符集；只能由SHOW显式完整配对及TABLES实际collation补证，不能猜名称前缀。
+  if (table.charset === null ? plan.dialect !== 'mariadb' || shown.collation !== table.collation : table.charset !== design.charset) return false;
+  if (shown.collation === undefined) {
+    const defaults = await query(`SELECT CHARACTER_SET_NAME AS name,DEFAULT_COLLATE_NAME AS collation FROM information_schema.CHARACTER_SETS WHERE CHARACTER_SET_NAME=${literal(design.charset)} LIMIT 2`, ['name', 'collation'], 2, 64 * 1024);
+    if (defaults.length !== 1 || defaults[0].name !== design.charset || defaults[0].collation !== table.collation) return false;
+  }
+  const encoding = { charset: design.charset, collation: table.collation };
   const partitions = await query(`SELECT PARTITION_NAME AS name FROM information_schema.PARTITIONS WHERE ${where} LIMIT 2`, ['name'], 2, 64 * 1024);
   if (partitions.length !== 1 || partitions[0].name !== null) return false;
   const columns = await query(`SELECT COLUMN_NAME AS name,ORDINAL_POSITION AS ordinal,COLUMN_TYPE AS typeSql,DATA_TYPE AS dataType,IS_NULLABLE AS nullable,COLUMN_DEFAULT AS defaultValue,EXTRA AS extra,GENERATION_EXPRESSION AS generationExpression,CHARACTER_SET_NAME AS charset,COLLATION_NAME AS collation,COLUMN_COMMENT AS comment FROM information_schema.COLUMNS WHERE ${where} ORDER BY ORDINAL_POSITION LIMIT 1001`, ['name', 'ordinal', 'typeSql', 'dataType', 'nullable', 'defaultValue', 'extra', 'generationExpression', 'charset', 'collation', 'comment']);
@@ -141,7 +175,8 @@ export async function verifyCreatedGeneratedColumns(context: StructureTaskContex
     const family = /^[A-Za-z]+/.exec(column.type.raw.trim())?.[0].toUpperCase(), aliases: Record<string, string> = { INTEGER: 'INT', NUMERIC: 'DECIMAL' };
     if (!family || (aliases[family] ?? family) !== row.dataType.toUpperCase()) return false;
     if (!generated) {
-      if (row.generationExpression !== null && row.generationExpression !== '' || !ordinaryExtraMatches(column, row.extra, plan.dialect)) return false;
+      const character = /^(?:CHAR|VARCHAR|ENUM|SET|(?:TINY|MEDIUM|LONG)?TEXT)$/i.test(row.dataType);
+      if (row.generationExpression !== null && row.generationExpression !== '' || !ordinaryEncodingMatches(column, row, document, encoding) || !ordinaryExtraMatches(column, row.extra, plan.dialect, character)) return false;
       continue;
     }
     const numeric = tableCreateNumericType(column.type.raw), expected = tableCreateNumericType(requested.type), projection = readGeneratedColumnDefinition(actual, column.name);

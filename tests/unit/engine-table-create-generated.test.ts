@@ -21,7 +21,9 @@ function design(): TableCreateDraft { return { database: 'db', name: 'subject', 
   { name: 'stored_total', type: 'decimal(30,6)', nullable: true, autoIncrement: false, comment: '存储', generated: { storage: 'STORED', expression: 'qty * price + 1.00' } },
 ], indexes: [{ name: 'PRIMARY', unique: true, columns: ['id'] }, { name: 'ix_qty', unique: false, columns: ['qty'] }], foreignKeys: [] }; }
 const show = "CREATE TABLE `subject` (`id` bigint unsigned NOT NULL AUTO_INCREMENT,`qty` int DEFAULT NULL,`price` decimal(20,6) DEFAULT NULL,`note` varchar(64) DEFAULT NULL,`virtual_total` decimal(30,6) GENERATED ALWAYS AS ((`qty` * `price`)) VIRTUAL COMMENT '虚拟',`stored_total` decimal(30,6) GENERATED ALWAYS AS (((`qty` * `price`) + 1.00)) STORED COMMENT '存储',PRIMARY KEY (`id`),KEY `ix_qty` (`qty`)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin COMMENT='本例表'";
-interface Column { name: string; ordinal: number; typeSql: string; dataType: string; nullable: string; defaultValue: string | null; extra: string; generationExpression: string; charset: string | null; collation: string | null; comment: string; }
+/** 首轮5.7原SHOW原件，仅将随机所有者注释换成本例固定注释；不由产品renderer/解析器构造期望。 */
+const mysql57ObservedShow = "CREATE TABLE `subject` (\n  `id` bigint(20) unsigned NOT NULL,\n  `qty` int(11) DEFAULT NULL,\n  `price` decimal(20,6) DEFAULT NULL,\n  `note` varchar(100) COLLATE utf8mb4_bin DEFAULT NULL,\n  `virtual_total` decimal(30,6) GENERATED ALWAYS AS ((`qty` * `price`)) VIRTUAL COMMENT '虚拟结果',\n  `stored_total` decimal(30,6) GENERATED ALWAYS AS (((`qty` * `price`) + 1.000000)) STORED COMMENT '存储结果',\n  PRIMARY KEY (`id`),\n  KEY `ix_qty` (`qty`),\n  CONSTRAINT `fk_qty` FOREIGN KEY (`qty`) REFERENCES `parent` (`id`)\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin COMMENT='本例表'";
+interface Column { name: string; ordinal: number | string; typeSql: string; dataType: string; nullable: string; defaultValue: string | null; extra: string; generationExpression: string; charset: string | null; collation: string | null; comment: string; }
 function catalog(): Column[] { return [
   { name: 'id', ordinal: 1, typeSql: 'bigint unsigned', dataType: 'bigint', nullable: 'NO', defaultValue: null, extra: 'auto_increment', generationExpression: '', charset: null, collation: null, comment: '' },
   { name: 'qty', ordinal: 2, typeSql: 'int', dataType: 'int', nullable: 'YES', defaultValue: null, extra: '', generationExpression: '', charset: null, collation: null, comment: '' },
@@ -58,7 +60,7 @@ function connect(signal?: AbortSignal): ManagedConnection {
       else if (sql.startsWith('SELECT CHARACTER_SET_NAME AS name,MAXLEN')) result = [{ name: 'utf8mb4', maxBytes }];
       else if (sql.startsWith('CREATE TABLE')) { created = true; result = { affectedRows: 0, warningStatus: 0 }; }
       else if (sql.startsWith('SHOW CREATE TABLE')) result = [{ 'Create Table': ++showReads >= laterShowAt ? laterShow ?? source : source }];
-      else if (sql.startsWith('SELECT TABLE_SCHEMA AS databaseName')) result = [{ databaseName: 'db', tableName: 'subject', kind: 'BASE TABLE', engine: 'InnoDB' }];
+      else if (sql.startsWith('SELECT t.TABLE_SCHEMA AS databaseName')) result = [{ databaseName: 'db', tableName: 'subject', kind: 'BASE TABLE', engine: 'InnoDB', charset: 'utf8mb4', collation: 'utf8mb4_bin' }];
       else if (sql.startsWith('SELECT PARTITION_NAME AS name')) result = [{ name: null }];
       else if (sql.startsWith('SELECT t.TABLE_NAME')) result = [{ name: 'subject', engine: 'InnoDB', charset: 'utf8mb4', collation: 'utf8mb4_bin', comment: '本例表' }];
       else if (sql.startsWith('SELECT TABLE_NAME AS name,ENGINE')) result = [{ name: 'subject', engine: 'InnoDB', rowFormat: 'Dynamic', collation: 'utf8mb4_bin' }];
@@ -88,7 +90,32 @@ beforeEach(async () => {
 });
 afterEach(async () => { hold = undefined; closeFails = false; held?.complete(Error('合成收尾')); if (unknownClose) await expect(engine.closeAll()).rejects.toThrow('资源未确认释放'); else await engine.closeAll(); });
 
+/** 原5.7观测的类型、NULL、EXTRA、编码及表达式逐项固定，未从SHOW反解或补造。 */
+function mysql57ObservedFixture(): TableCreateDraft {
+  version = '5.7.44'; source = mysql57ObservedShow; foreign = true;
+  rows = [
+    { name: 'id', ordinal: '1', typeSql: 'bigint(20) unsigned', dataType: 'bigint', nullable: 'NO', defaultValue: null, extra: '', generationExpression: '', charset: null, collation: null, comment: '' },
+    { name: 'qty', ordinal: '2', typeSql: 'int(11)', dataType: 'int', nullable: 'YES', defaultValue: null, extra: '', generationExpression: '', charset: null, collation: null, comment: '' },
+    { name: 'price', ordinal: '3', typeSql: 'decimal(20,6)', dataType: 'decimal', nullable: 'YES', defaultValue: null, extra: '', generationExpression: '', charset: null, collation: null, comment: '' },
+    { name: 'note', ordinal: '4', typeSql: 'varchar(100)', dataType: 'varchar', nullable: 'YES', defaultValue: null, extra: '', generationExpression: '', charset: 'utf8mb4', collation: 'utf8mb4_bin', comment: '' },
+    { name: 'virtual_total', ordinal: '5', typeSql: 'decimal(30,6)', dataType: 'decimal', nullable: 'YES', defaultValue: null, extra: 'VIRTUAL GENERATED', generationExpression: '(`qty` * `price`)', charset: null, collation: null, comment: '虚拟结果' },
+    { name: 'stored_total', ordinal: '6', typeSql: 'decimal(30,6)', dataType: 'decimal', nullable: 'YES', defaultValue: null, extra: 'STORED GENERATED', generationExpression: '((`qty` * `price`) + 1.000000)', charset: null, collation: null, comment: '存储结果' },
+  ];
+  const input = design(); input.columns[0].autoIncrement = false; input.columns[3].type = 'varchar(100)'; input.columns[4].comment = '虚拟结果'; input.columns[5].comment = '存储结果'; input.columns[5].generated!.expression = 'qty * price + 1.000000';
+  input.foreignKeys = [{ name: 'fk_qty', columns: ['qty'], referencedDatabase: 'db', referencedTable: 'parent', referencedColumns: ['id'], onUpdate: 'RESTRICT', onDelete: 'RESTRICT' }]; return input;
+}
+
 describe('新表多生成列真实Engine及独立目录RAM', () => {
+  it('5.7原SHOW显式普通列COLLATE在实际表/列编码完整交叉后通过，外键及生成精度保留', async () => {
+    const input = mysql57ObservedFixture(), value = await preview(await get(), input);
+    expect(await apply(value)).toMatchObject({ ddlCompleted: true, definitionVerified: true, resourcesReleased: true }); expect(commands.filter(sql => sql.startsWith('CREATE TABLE'))).toEqual([value.sql]); await expect(apply(value)).rejects.toThrow('失效'); expect(commands.some(sql => /^DROP|^ALTER/.test(sql))).toBe(false);
+  });
+  it.each(['show-collation', 'catalog-collation', 'catalog-charset', 'unknown-attribute'])('5.7显式编码%s不一致仍只保留ACK完成，不放宽后核', async kind => {
+    const input = mysql57ObservedFixture(), value = await preview(await get(), input);
+    if (kind === 'show-collation') source = source.replace('varchar(100) COLLATE utf8mb4_bin', 'varchar(100) COLLATE utf8mb4_general_ci');
+    if (kind === 'catalog-collation') rows[3].collation = 'utf8mb4_general_ci'; if (kind === 'catalog-charset') rows[3].charset = 'latin1'; if (kind === 'unknown-attribute') source = source.replace('varchar(100) COLLATE utf8mb4_bin', 'varchar(100) COLLATE utf8mb4_bin STORAGE DISK');
+    expect(await apply(value)).toMatchObject({ ddlCompleted: true, definitionVerified: false }); expect(commands.filter(sql => sql.startsWith('CREATE TABLE'))).toEqual([value.sql]); await expect(apply(value)).rejects.toThrow('失效'); expect(commands.some(sql => /^DROP|^ALTER/.test(sql))).toBe(false);
+  });
   it.each([['mysql', '5.7.44'], ['mysql', '8.0.46'], ['mysql', '8.4.11'], ['mariadb', '10.11.19-MariaDB'], ['mariadb', '11.4.13-MariaDB']] as const)('%s %s同时创建VIRTUAL/STORED并保持普通主键和索引，单次DDL不重放', async (family, release) => {
     dialect = family; version = release; if (family === 'mysql' && release === '5.7.44') { source = source.replace('bigint unsigned', 'bigint(20) unsigned').replace('`qty` int DEFAULT', '`qty` int(11) DEFAULT'); rows[0].typeSql = 'bigint(20) unsigned'; rows[1].typeSql = 'int(11)'; }
     if (family === 'mariadb') { source = source.replace(' STORED ', ' PERSISTENT '); rows[4].defaultValue = rows[5].defaultValue = 'NULL'; rows[5].extra = 'PERSISTENT GENERATED'; }
@@ -108,6 +135,11 @@ describe('新表多生成列真实Engine及独立目录RAM', () => {
   });
   it('旧普通设计不新增生成能力查询，也不引入第三项确认', async () => {
     const input = design(); input.columns = input.columns.slice(0, 4); const value = await preview(await get(false), input); expect(value.requiredAcknowledgements).toHaveLength(2); expect(value.sql).not.toContain('GENERATED ALWAYS'); expect(commands.some(sql => sql.startsWith('SELECT VERSION() AS version,'))).toBe(false); expect(created).toBe(false);
+  });
+  it('旧普通无生成用途不会借本次编码补证放宽COLLATE属性门', async () => {
+    const input = design(); input.columns = input.columns.slice(0, 4); rows = rows.slice(0, 4);
+    source = "CREATE TABLE `subject` (`id` bigint unsigned NOT NULL AUTO_INCREMENT,`qty` int DEFAULT NULL,`price` decimal(20,6) DEFAULT NULL,`note` varchar(64) COLLATE utf8mb4_bin DEFAULT NULL,PRIMARY KEY (`id`),KEY `ix_qty` (`qty`)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin COMMENT='本例表'";
+    const value = await preview(await get(false), input); expect(await apply(value)).toMatchObject({ ddlCompleted: true, definitionVerified: false }); expect(commands.some(sql => sql.startsWith('SELECT VERSION() AS version,'))).toBe(false); expect(commands.filter(sql => sql.startsWith('CREATE TABLE'))).toEqual([value.sql]);
   });
   it.each(['permission', 'unknown-version', 'unknown-os'])('%s只关闭生成能力，不能伪造可编辑且普通预览可继续', async kind => {
     if (kind === 'permission') permission = /^SELECT VERSION\(\)/; if (kind === 'unknown-version') version = '8.4.12'; if (kind === 'unknown-os') os = 'Win64'; const snapshot = await get(); expect(snapshot.generatedAccess?.editable).toBe(false); snapshot.generatedAccess = { editable: true }; await expect(preview(snapshot)).rejects.toThrow('真实能力'); const input = design(); input.columns = input.columns.slice(0, 4); await expect(preview(snapshot, input)).resolves.toHaveProperty('previewToken'); expect(created).toBe(false);
