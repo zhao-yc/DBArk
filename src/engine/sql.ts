@@ -1,4 +1,5 @@
-import { tableCreateDraftSchema, tableCreateHasPrefix, tableCreateIndexParts, type TableCreateDraft, type TableCreatePrefixFacts } from '../shared/tableCreate';
+import { tableCreateDraftSchema, tableCreateHasPrefix, tableCreateIndexParts, type TableCreateDraft, type TableCreatePrefixFacts, type TableCreateEncodingCatalog } from '../shared/tableCreate';
+import { tableCreateHasColumnEncoding, planTableCreateColumnEncodings, tableCreateColumnEncodingMessages } from '../shared/tableCreateColumnEncoding';
 import { planTableCreateIndexes } from './tableCreateIndexPlan';
 import { planTableCreateGeneratedColumns, type TableCreateGeneratedFacts } from './tableCreateGeneratedColumns';
 import type { CellValue, ColumnInfo, DataRow, FilterGroup, FilterMode, FilterRule, RowChange, SortRule, SqlPreview, TableDesign, TableInfo } from '../shared/contracts';
@@ -333,9 +334,10 @@ export function columnType(value: string): string {
 }
 
 /** 新旧设计共用同一列渲染规则，默认值及类型处理不能因索引入口分叉。 */
-function renderDesignColumn(column: TableDesign['columns'][number] & TableCreateTimeColumn, noBackslashEscapes: boolean): string {
+function renderDesignColumn(column: TableDesign['columns'][number] & TableCreateTimeColumn, noBackslashEscapes: boolean, provenEncoding?: { charset: string; collation: string }): string {
   if (Object.hasOwn(column, 'generated')) throw Error('生成列必须使用新表专属已编译计划，普通字段渲染不能丢弃生成表达式');
-  let sql = `${identifier(column.name)} ${columnType(column.type)} ${column.nullable ? 'NULL' : 'NOT NULL'}`;
+  if (Object.hasOwn(column, 'collation') && !provenEncoding) throw Error(tableCreateColumnEncodingMessages.legacy);
+  let sql = `${identifier(column.name)} ${columnType(column.type)}${provenEncoding ? ` CHARACTER SET ${provenEncoding.charset} COLLATE ${provenEncoding.collation}` : ''} ${column.nullable ? 'NULL' : 'NOT NULL'}`;
   if (column.defaultValue !== undefined) {
     const value = column.defaultValue;
     sql += ' DEFAULT ' + (value === null ? 'NULL' : /^(?:DATE|DATETIME|TIMESTAMP|TIME)\b/i.test(column.type) && temporalDefault(value) ? value.toUpperCase() : stringLiteral(value, noBackslashEscapes));
@@ -365,6 +367,7 @@ function renderDesignConstraints(design: Pick<TableDesign, 'indexes' | 'foreignK
 
 /** 以完整设计和现状生成结构差异；保留未变索引/外键，同名外键修改明确分步预览。 */
 export function buildDesign(design: TableDesign, original?: TableInfo, noBackslashEscapes = false, newTableEncoding?: { charset: string; collation: string }): SqlPreview {
+  if (design.columns.some(column => Object.hasOwn(column, 'collation'))) throw Error(tableCreateColumnEncodingMessages.legacy);
   if (design.columns.some(column => Object.hasOwn(column, 'generated'))) throw Error('生成列不能进入旧整表生成器；请使用新建表专属生成计划');
   // 新键只属于新表专属合同，旧整表ALTER不能借额外属性扩展写能力。
   if ((original || design.originalName !== undefined) && design.columns.some(column => Object.hasOwn(column, 'onUpdate'))) throw Error('新表自动更新时间不能用于旧整表ALTER入口');
@@ -419,21 +422,35 @@ export function buildDesign(design: TableDesign, original?: TableInfo, noBacksla
 }
 
 /** 前缀只从结构化计划渲染；不接受rawSQL，不替换旧生成结果，公共buildDesign接口保持。 */
-export function buildPrefixTableDesign(input: TableCreateDraft, facts: TableCreatePrefixFacts, noBackslashEscapes = false, encoding?: { charset: string; collation: string }): SqlPreview {
+export function buildPrefixTableDesign(input: TableCreateDraft, facts: TableCreatePrefixFacts, noBackslashEscapes = false, encoding?: { charset: string; collation: string }, columnCatalog?: TableCreateEncodingCatalog): SqlPreview {
   const design = tableCreateDraftSchema.parse(input), plan = planTableCreateIndexes(design, facts);
+  if (tableCreateHasColumnEncoding(design)) planTableCreateColumnEncodings(design, columnCatalog);
   if (design.columns.some(column => Object.hasOwn(column, 'generated'))) throw Error('带生成列的前缀新表必须使用专属生成计划');
   if (encoding && (encoding.charset !== design.charset || !/^[A-Za-z0-9_]{1,255}$/.test(encoding.collation))) throw Error('新表编码配对无效');
   const indexes = plan.indexes.map(index => {
     const parts = index.keyParts.map(part => identifier(part.columnName) + (part.prefixLength === undefined ? '' : `(${part.prefixLength})`)).join(', ');
     return index.name === 'PRIMARY' ? `PRIMARY KEY (${parts})` : `${index.unique ? 'UNIQUE ' : ''}KEY ${identifier(index.name)} (${parts})`;
   });
-  const sql = `CREATE TABLE ${qualified(design.database, design.name)} (\n  ${[...design.columns.map(column => renderDesignColumn(column, noBackslashEscapes)), ...indexes].join(',\n  ')}\n) ENGINE=INNODB DEFAULT CHARACTER SET=${design.charset}${encoding ? ' COLLATE=' + encoding.collation : ''} ROW_FORMAT=DYNAMIC COMMENT=${stringLiteral(design.comment, noBackslashEscapes)}`;
+  const sql = `CREATE TABLE ${qualified(design.database, design.name)} (\n  ${[...design.columns.map(column => renderDesignColumn(column, noBackslashEscapes, column.collation)), ...indexes].join(',\n  ')}\n) ENGINE=INNODB DEFAULT CHARACTER SET=${design.charset}${encoding ? ' COLLATE=' + encoding.collation : ''} ROW_FORMAT=DYNAMIC COMMENT=${stringLiteral(design.comment, noBackslashEscapes)}`;
+  return { sql: sql + ';', statements: [{ sql, params: [] }], warnings: [] };
+}
+
+/** 列配对从完整目录重新规划；独立生成整条CREATE，绝不替换旧SQL或丢弃新字段。 */
+export function buildColumnEncodedTableDesign(input: TableCreateDraft, catalog: TableCreateEncodingCatalog, noBackslashEscapes = false, encoding?: { charset: string; collation: string }): SqlPreview {
+  const design = tableCreateDraftSchema.parse(input); planTableCreateColumnEncodings(design, catalog);
+  if (!tableCreateHasColumnEncoding(design) || tableCreateHasPrefix(design) || design.columns.some(column => Object.hasOwn(column, 'generated'))) throw Error(tableCreateColumnEncodingMessages.legacy);
+  const names = new Set(design.columns.map(column => column.name));
+  if (names.size !== design.columns.length || !['INNODB', 'MYISAM', 'MEMORY', 'ARIA', 'ARCHIVE', 'CSV'].includes(design.engine.toUpperCase()) || !/^[A-Za-z0-9_]{1,64}$/.test(design.charset) || encoding && (encoding.charset !== design.charset || !/^[A-Za-z0-9_]{1,255}$/.test(encoding.collation))) throw Error('新表字段编码设计或表选项无效');
+  const { indexes, foreignKeys } = renderDesignConstraints({ indexes: design.indexes.map(index => ({ name: index.name, unique: index.unique, columns: tableCreateIndexParts(index).map(part => part.columnName) })), foreignKeys: design.foreignKeys }, names);
+  const sql = `CREATE TABLE ${qualified(design.database, design.name)} (\n  ${[...design.columns.map(column => renderDesignColumn(column, noBackslashEscapes, column.collation)), ...indexes, ...foreignKeys].join(',\n  ')}\n) ENGINE=${design.engine.toUpperCase()} DEFAULT CHARACTER SET=${design.charset}${encoding ? ' COLLATE=' + encoding.collation : ''} COMMENT=${stringLiteral(design.comment, noBackslashEscapes)}`;
+  if (Buffer.byteLength(sql) > 4 * 1024 * 1024 || splitSql(sql, noBackslashEscapes).length !== 1) throw Error('新表字段编码SQL超过预算或不是单条CREATE');
   return { sql: sql + ';', statements: [{ sql, params: [] }], warnings: [] };
 }
 
 /** 生成列只取受控AST编译结果；普通列和键仍走原渲染，不替换legacy SQL字符串或降级丢属性。 */
-export function buildGeneratedTableDesign(input: TableCreateDraft, facts: TableCreateGeneratedFacts, noBackslashEscapes = false, encoding?: { charset: string; collation: string }, prefixFacts?: TableCreatePrefixFacts): SqlPreview {
+export function buildGeneratedTableDesign(input: TableCreateDraft, facts: TableCreateGeneratedFacts, noBackslashEscapes = false, encoding?: { charset: string; collation: string }, prefixFacts?: TableCreatePrefixFacts, columnCatalog?: TableCreateEncodingCatalog): SqlPreview {
   const design = tableCreateDraftSchema.parse(input), generated = planTableCreateGeneratedColumns(design, facts), names = new Set(design.columns.map(column => column.name));
+  if (tableCreateHasColumnEncoding(design)) planTableCreateColumnEncodings(design, columnCatalog);
   if (!generated.columns.length || names.size !== design.columns.length || design.engine.toUpperCase() !== 'INNODB' || !/^[A-Za-z0-9_]+$/.test(design.charset)) throw Error('生成新表设计、引擎或字符集无效');
   if (encoding && (encoding.charset !== design.charset || !/^[A-Za-z0-9_]{1,255}$/.test(encoding.collation))) throw Error('生成新表编码配对无效');
   const prefix = tableCreateHasPrefix(design); if (prefix && !prefixFacts) throw Error('生成新表缺少实际前缀能力');
@@ -442,7 +459,7 @@ export function buildGeneratedTableDesign(input: TableCreateDraft, facts: TableC
   const indexes = indexPlan ? indexPlan.indexes.map(index => { const parts = index.keyParts.map(part => identifier(part.columnName) + (part.prefixLength === undefined ? '' : `(${part.prefixLength})`)).join(', '); return index.name === 'PRIMARY' ? `PRIMARY KEY (${parts})` : `${index.unique ? 'UNIQUE ' : ''}KEY ${identifier(index.name)} (${parts})`; }) : ordinaryIndexes;
   const columns = design.columns.map((column, ordinal) => {
     const value = generated.columns.find(value => value.ordinal === ordinal && value.name === column.name);
-    if (!column.generated) { if (value) throw Error('普通新表列混入生成计划'); return renderDesignColumn(column, noBackslashEscapes); }
+    if (!column.generated) { if (value) throw Error('普通新表列混入生成计划'); return renderDesignColumn(column, noBackslashEscapes, column.collation); }
     if (!value || value.storage !== column.generated.storage) throw Error('生成新表列与已编译计划不一致');
     return `${identifier(column.name)} ${columnType(column.type)} GENERATED ALWAYS AS (${value.sql}) ${value.storage}${column.comment ? ' COMMENT ' + stringLiteral(column.comment, noBackslashEscapes) : ''}`;
   });

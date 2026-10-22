@@ -69,7 +69,7 @@ export async function verifyCreatedPrefixIndexes(context: StructureTaskContext, 
     const explicitTime = Object.hasOwn(requested, 'onUpdate');
     if (explicitTime ? !tableCreateOnUpdateExtraMatches(requested, metadata.EXTRA) || !sameColumnOnUpdate(readColumnOnUpdate(definition), requested.onUpdate!, definition.type.raw) : !/^(?:(?:auto_increment|DEFAULT_GENERATED)\s*)*$/i.test(metadata.EXTRA)) return false;
     const charset = facts.charsets.find(value => value.name === metadata.CHARACTER_SET_NAME), character = /^(CHAR|VARCHAR|ENUM|SET|(?:TINY|MEDIUM|LONG)?TEXT)$/.test(metadata.DATA_TYPE.toUpperCase());
-    if (character && (metadata.CHARACTER_SET_NAME !== design.charset || metadata.COLLATION_NAME !== tables[0].collation || !charset)) return false;
+    if (character && (metadata.CHARACTER_SET_NAME !== (requested.collation?.charset ?? design.charset) || metadata.COLLATION_NAME !== (requested.collation?.collation ?? tables[0].collation) || !charset)) return false;
     // 非键LOB同样证明子类型容量；不能让两个互相一致但同时缩小的目录长度冒充BLOB。
     // https://dev.mysql.com/doc/refman/8.4/en/string-type-syntax.html
     const capacity = blobCapacities.get(metadata.DATA_TYPE.toUpperCase());

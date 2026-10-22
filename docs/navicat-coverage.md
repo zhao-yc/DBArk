@@ -2,6 +2,8 @@
 
 ## 当前开发安排（2026-10-22）
 
+O01新增[新建表字段编码](development/table-create-column-encoding-20261022.md)：真实目录读取及准备快照释放、按列明确字符集／排序规则、独立继承、重排和确认回执；普通／生成共存／前缀三路径后核，前缀按列自身MAXLEN计算。类型／65文件1961相关项／构建和默认关闭列表通过，首轮反例夹具失败保留；固定完整回归、六实例和Windows实际表单继续，macOS及安装另验。完整O01与发行计数不增加，暂不发布。
+
 O01新增[新建表数值生成列](development/table-create-generated-20261022.md)：实际新表表单支持多列VIRTUAL/STORED、前序草稿引用、普通属性恢复、三确认及完整CREATE后核；普通PK/index/FK保留。准确`8dda6963`的[六实例与Windows源码表单](../tests/integration/acceptance-table-create-generated-8dda6963-20261022.md)通过8次单条CREATE、16个生成字段、精确值及随机库收尾；最终类型／构建及完整14255项通过、1平台跳过，候选Linux CI成功。两轮5.7失败与精确清理保留；Windows表单尚缺内部来源清单及逐条IPC审计，macOS／安装组合另验。完整表达式、生成键及生成链继续，O01与发行计数不增加，暂不发布。
 
 O01补齐[已有数值生成表达式修改](development/generated-expression-edit-20261022.md)：专属单列／单属性入口、旧新预览、四确认及强制COPY；MySQL VIRTUAL另WITH VALIDATION核旧行。准确`c99cf166`的[六实例与Windows正式界面](../tests/integration/acceptance-generated-expression-c99cf166-20261022.md)通过12次VIRTUAL／STORED修改、90条原连接严格关闭和随机库清理，MySQL四实例越界精确错误码通过；原数值、字节及NULL保持。Windows类型／368项相关／完整14041通过和1平台跳过／构建通过，Linux候选CI检查成功；正式窗口仅13384明文VIRTUAL，原一次提交／正常退出闭合。转换、完整表达式／依赖、新表／分区、macOS及新安装继续；旧macOS原生失败保留，完整O01及发行计数不增加，暂不发布。

@@ -22,6 +22,8 @@ export class NewTableGeneratedDrafts {
       if (!column.generated) return column;
       const next = { ...(this.ordinary.get(column) ?? column), name: column.name, comment: column.comment };
       delete next.generated;
+      // 字段编码是可显式清除的公共意图；生成模式里清除后，切回普通不得从旧备份复活。
+      if (Object.hasOwn(column, 'collation')) next.collation = column.collation; else delete next.collation;
       this.transfer(column, next); this.generated.set(next, { ...column.generated });
       return next;
     }

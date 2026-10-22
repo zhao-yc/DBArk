@@ -122,7 +122,11 @@ describe('可选schema9组织迁移的先验证后写入', () => {
   it('超1MiB组织原文在SQLite取文和JSON解析前拒绝，不写盘或清理孤儿', async () => {
     const { store, path } = await fixture(); store.saveQuery(query('a')); const id = group(store, '组'); move(store, ['a'], id); close(store);
     rewrite(path, db => { db.run("DELETE FROM queries WHERE id='a'"); db.run('UPDATE saved_query_organization SET data=?', [' '.repeat(1024 * 1024 + 1)]); }); const before = disk.files.get(path), writes = disk.writes;
-    await expect(fixture(path)).rejects.toThrow('超过1MiB'); expect(disk.files.get(path)).toEqual(before); expect(disk.writes).toBe(writes); expect(persisted(path, db => db.exec('SELECT COUNT(*) FROM saved_query_memberships')[0].values[0][0])).toBe(1);
+    await expect(fixture(path)).rejects.toThrow('超过1MiB');
+    // 完整SQLite原件逐字节比较交给原生Buffer，避免将逾百万字节展开为测试框架属性；不缩小比较范围。
+    const after = disk.files.get(path); expect(before).toBeInstanceOf(Uint8Array); expect(after).toBeInstanceOf(Uint8Array);
+    expect(Buffer.from(after!).equals(Buffer.from(before!))).toBe(true);
+    expect(disk.writes).toBe(writes); expect(persisted(path, db => db.exec('SELECT COUNT(*) FROM saved_query_memberships')[0].values[0][0])).toBe(1);
   });
 });
 

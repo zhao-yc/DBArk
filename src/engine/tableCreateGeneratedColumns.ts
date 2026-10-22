@@ -8,6 +8,8 @@ import { sameStructureFragment, structureTaskQuery, type StructureTaskContext } 
 import { qualified } from './sql';
 import { tableDefinitionTokens } from './tableColumnDefinition';
 import { readTableDefaultEncodingDefinition } from './tableDefaultEncodingSql';
+import { effectiveTableCreateColumnEncoding } from '../shared/tableCreateColumnEncoding';
+import { tableCreateColumnDefaultMatches } from './tableCreateColumnDefaults';
 
 export interface TableCreateGeneratedFacts {
   dialect: 'mysql' | 'mariadb'; serverVersion: string; os: string; lowerNames: 0; sqlMode: string; quoteShowCreate: 1;
@@ -29,7 +31,7 @@ function active(context: StructureTaskContext): void {
 }
 
 /** 只读取固定标量自有字段，按实际UTF8及JSON转义字节计预算，拒绝代理/访问器/稀疏目录。 */
-function boundedRows(value: unknown, keys: readonly string[], maximum: number, budget: number): Record<string, string | number | null>[] {
+export function boundedCreateColumnRows(value: unknown, keys: readonly string[], maximum: number, budget: number): Record<string, string | number | null>[] {
   if (types.isProxy(value) || !Array.isArray(value) || value.length > maximum || Reflect.ownKeys(value).length !== value.length + 1) throw Error(text.verify);
   const result: Record<string, string | number | null>[] = []; let bytes = 2;
   for (let index = 0; index < value.length; index++) {
@@ -56,7 +58,7 @@ function supported(dialect: 'mysql' | 'mariadb', version: string): boolean {
 
 /** 计划只消费真实读取并带完整摘要的能力；调用者不能仅凭宽版本或草稿补证。 */
 export function assertTableCreateGeneratedFacts(facts: TableCreateGeneratedFacts): void {
-  const row = boundedRows([facts], factsKeys, 1, 64 * 1024)[0];
+  const row = boundedCreateColumnRows([facts], factsKeys, 1, 64 * 1024)[0];
   if (!['mysql', 'mariadb'].includes(row.dialect as string) || typeof row.serverVersion !== 'string' || !supported(row.dialect as TableCreateGeneratedFacts['dialect'], row.serverVersion) || typeof row.os !== 'string' || !['linux', 'debian-linux-gnu'].includes(row.os.toLowerCase()) || row.lowerNames !== 0 || row.quoteShowCreate !== 1 || typeof row.sqlMode !== 'string' || !/^[A-Z0-9_,]*$/i.test(row.sqlMode) || row.sqlMode.split(',').some(mode => (definitionOmittingSqlModes as readonly string[]).includes(mode.toUpperCase())) || typeof row.characterSetConnection !== 'string' || !/^[A-Za-z0-9_]{1,64}$/.test(row.characterSetConnection) || typeof row.collationConnection !== 'string' || !/^[A-Za-z0-9_]{1,255}$/.test(row.collationConnection) || !['YES', 'DEFAULT'].includes(row.engineSupport as string) || typeof row.serverIdentity !== 'string' || !/^[a-f0-9]{64}$/.test(row.serverIdentity) || typeof row.digest !== 'string' || !/^[a-f0-9]{64}$/.test(row.digest)) throw Error(text.facts);
   const { digest: _digest, ...content } = row;
   if (hash(content) !== row.digest) throw Error(text.facts);
@@ -65,7 +67,7 @@ export function assertTableCreateGeneratedFacts(facts: TableCreateGeneratedFacts
 /** 只查实际会话、服务器身份与引擎支持，不读取不存在的新表、不SET模式或制造TABLE_ID。 */
 export async function readTableCreateGeneratedFacts(context: StructureTaskContext): Promise<TableCreateGeneratedFacts> {
   active(context);
-  const query = async (sql: string, keys: readonly string[]) => { const result = await structureTaskQuery<unknown>(context, sql); active(context); return boundedRows(result.rows, keys, 2, 64 * 1024); };
+  const query = async (sql: string, keys: readonly string[]) => { const result = await structureTaskQuery<unknown>(context, sql); active(context); return boundedCreateColumnRows(result.rows, keys, 2, 64 * 1024); };
   const rows = await query('SELECT VERSION() AS version,@@version_compile_os AS os,@@lower_case_table_names AS lowerNames,@@sql_mode AS sqlMode,@@sql_quote_show_create AS quoteShowCreate,@@hostname AS hostname,@@port AS port,@@server_id AS serverId,CURRENT_USER() AS currentUser,@@character_set_connection AS charset,@@collation_connection AS collation', ['version', 'os', 'lowerNames', 'sqlMode', 'quoteShowCreate', 'hostname', 'port', 'serverId', 'currentUser', 'charset', 'collation']);
   const row = rows[0], { dialect, version } = context.managed.status;
   if (rows.length !== 1 || !row || row.version !== version || !supported(dialect, version) || ![0, '0'].includes(row.lowerNames as number) || ![1, '1'].includes(row.quoteShowCreate as number) || ['os', 'sqlMode', 'hostname', 'currentUser', 'charset', 'collation'].some(key => typeof row[key] !== 'string') || !row.hostname || !row.currentUser || !/^[1-9]\d{0,4}$/.test(String(row.port)) || Number(row.port) > 65535 || !/^(?:0|[1-9]\d{0,9})$/.test(String(row.serverId)) || Number(row.serverId) > 4294967295) throw Error(text.facts);
@@ -100,7 +102,7 @@ function plannedColumns(design: TableCreateDraft, dialect: 'mysql' | 'mariadb'):
 }
 
 /** 普通列EXTRA也必须由SHOW逐项证明；仅允许独立前置默认标记及真实自增/自动时间，不洗掉未知属性。 */
-function ordinaryExtraMatches(column: TableColumnDefinition, extra: string, dialect: 'mysql' | 'mariadb', characterEncodingProven: boolean): boolean {
+export function ordinaryCreateColumnExtraMatches(column: TableColumnDefinition, extra: string, dialect: 'mysql' | 'mariadb', characterEncodingProven: boolean): boolean {
   if (extra.length > 512 || column.attributes.some(attribute => !['nullable', 'default', 'comment', 'auto-increment', 'on-update', ...(characterEncodingProven ? ['charset', 'collation'] : [])].includes(attribute.kind))) return false;
   const increments = column.attributes.filter(attribute => attribute.kind === 'auto-increment'), updates = column.attributes.filter(attribute => attribute.kind === 'on-update');
   if (increments.length > 1 || updates.length > 1 || increments.length && updates.length) return false;
@@ -116,8 +118,8 @@ function ordinaryExtraMatches(column: TableColumnDefinition, extra: string, dial
   return !!observed && !!expected && sameColumnOnUpdate(expected, { kind: 'expression', expression: 'current-timestamp', precision: observed.precision }, column.type.raw);
 }
 
-/** 新表没有逐列编码请求；字符列只能继承有效表配对，SHOW冗余属性须与真实COLUMNS逐项吻合。 */
-function ordinaryEncodingMatches(column: TableColumnDefinition, row: Record<string, string | number | null>, document: TableColumnDefinitionDocument, encoding: { charset: string; collation: string }): boolean {
+/** 每列的有效配对来自显式请求或表继承，SHOW属性须与真实COLUMNS逐项吻合。 */
+export function ordinaryCreateColumnEncodingMatches(column: TableColumnDefinition, row: Record<string, string | number | null>, document: TableColumnDefinitionDocument, encoding: { charset: string; collation: string }): boolean {
   const character = /^(?:CHAR|VARCHAR|ENUM|SET|(?:TINY|MEDIUM|LONG)?TEXT)$/i.test(String(row.dataType));
   const attributes = column.attributes.filter(attribute => attribute.kind === 'charset' || attribute.kind === 'collation');
   // 原生MySQL JSON沿既有JSON新增的固有配对门，不把它当字符继承或给它授予列级编码覆写。
@@ -152,7 +154,7 @@ export async function verifyCreatedGeneratedColumns(context: StructureTaskContex
   const design = tableCreateDraftSchema.parse(input), facts = await readTableCreateGeneratedFacts(context);
   if (facts.digest !== plan.factsDigest || facts.dialect !== plan.dialect || facts.serverVersion !== plan.serverVersion || target.database !== design.database || target.table !== design.name || document.context.dialect !== plan.dialect || document.context.mode.noBackslashEscapes !== facts.sqlMode.split(',').includes('NO_BACKSLASH_ESCAPES') || document.context.mode.ansiQuotes !== facts.sqlMode.split(',').includes('ANSI_QUOTES') || document.table !== target.table || document.database !== undefined && document.database !== target.database || document.columns.length !== design.columns.length || JSON.stringify(plannedColumns(design, facts.dialect)) !== JSON.stringify(plan.columns)) return false;
   const condition = (prefix = '') => `CAST(${prefix}TABLE_SCHEMA AS BINARY)=CAST(${literal(target.database)} AS BINARY) AND CAST(${prefix}TABLE_NAME AS BINARY)=CAST(${literal(target.table)} AS BINARY)`, where = condition();
-  const query = async (sql: string, keys: readonly string[], maximum = 1000, budget = 2 * 1024 * 1024) => { const value = await structureTaskQuery<unknown>(context, sql); active(context); return boundedRows(value.rows, keys, maximum, budget); };
+  const query = async (sql: string, keys: readonly string[], maximum = 1000, budget = 2 * 1024 * 1024) => { const value = await structureTaskQuery<unknown>(context, sql); active(context); return boundedCreateColumnRows(value.rows, keys, maximum, budget); };
   const tables = await query(`SELECT t.TABLE_SCHEMA AS databaseName,t.TABLE_NAME AS tableName,t.TABLE_TYPE AS kind,t.ENGINE AS engine,c.CHARACTER_SET_NAME AS charset,t.TABLE_COLLATION AS collation FROM information_schema.TABLES t LEFT JOIN information_schema.COLLATIONS c ON c.COLLATION_NAME=t.TABLE_COLLATION WHERE ${condition('t.')} LIMIT 2`, ['databaseName', 'tableName', 'kind', 'engine', 'charset', 'collation'], 2, 64 * 1024);
   if (tables.length !== 1 || tables[0].databaseName !== target.database || tables[0].tableName !== target.table || tables[0].kind !== 'BASE TABLE' || tables[0].engine !== 'InnoDB') return false;
   const table = tables[0], shown = readTableDefaultEncodingDefinition(document.source, document.context);
@@ -176,7 +178,7 @@ export async function verifyCreatedGeneratedColumns(context: StructureTaskContex
     if (!family || (aliases[family] ?? family) !== row.dataType.toUpperCase()) return false;
     if (!generated) {
       const character = /^(?:CHAR|VARCHAR|ENUM|SET|(?:TINY|MEDIUM|LONG)?TEXT)$/i.test(row.dataType);
-      if (row.generationExpression !== null && row.generationExpression !== '' || !ordinaryEncodingMatches(column, row, document, encoding) || !ordinaryExtraMatches(column, row.extra, plan.dialect, character)) return false;
+      if (row.generationExpression !== null && row.generationExpression !== '' || !tableCreateColumnDefaultMatches(requested, column, row.defaultValue as string | null, document.context) || !ordinaryCreateColumnEncodingMatches(column, row, document, effectiveTableCreateColumnEncoding(requested, encoding)) || !ordinaryCreateColumnExtraMatches(column, row.extra, plan.dialect, character)) return false;
       continue;
     }
     const numeric = tableCreateNumericType(column.type.raw), expected = tableCreateNumericType(requested.type), projection = readGeneratedColumnDefinition(actual, column.name);

@@ -1,0 +1,3 @@
+.new-table-column-encoding{display:flex;flex-direction:column;gap:6px;min-width:200px;max-width:330px}
+.new-table-column-encoding>p,.new-table-column-encoding-directory>p{font-size:10px;line-height:1.6;margin:4px 0;overflow-wrap:anywhere}
+.new-table-column-encoding-directory{margin-bottom:12px}

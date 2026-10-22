@@ -39,7 +39,10 @@ export function planTableCreateIndexes(input: TableCreateDraft, facts: TableCrea
     for (const part of keyParts) {
       const source = columns.get(part.columnName); if (source?.name.toUpperCase() === 'FTS_DOC_ID') throw Error('全文文档定位列不属于新表前缀首片'); if (!source) throw Error('索引字段不属于本次待建草稿');
       if (source.generated) throw Error('首片生成新表不为生成列授予索引成本或前缀写能力');
-      const column = planned.get(source.name) ?? plannedColumn(source, charset.maxBytes); planned.set(source.name, column);
+      // MAXLEN按本字段实际选择的字符集计算，不能把表默认套到显式覆写列。
+      const ownCharset = source.collation ? facts.charsets.find(value => value.name === source.collation!.charset) : charset;
+      if (!ownCharset) throw Error('字段字符集不属于本次实际MAXLEN目录');
+      const column = planned.get(source.name) ?? plannedColumn(source, ownCharset.maxBytes); planned.set(source.name, column);
       if (index.name === 'PRIMARY' && (part.prefixLength !== undefined || source.nullable)) throw Error('主键只允许非空完整字段，不接受前缀');
       if (part.prefixLength !== undefined && (column.family === 'integer' || part.prefixLength > column.declaredUnits!)) throw Error('前缀类型或长度超出待建字段的已证明范围');
       // 准确8.4.11将等于整字段长度的字符串前缀省略于SHOW/SUB_PART；仅在类型与MAXLEN证明后规范化，主键已先拒绝。

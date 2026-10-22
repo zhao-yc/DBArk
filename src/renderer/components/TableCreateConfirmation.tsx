@@ -3,7 +3,10 @@ import { tableCreateConfirmation, tableCreateDraftSchema, tableCreateHasPrefix, 
 import { generatedColumnAcknowledgement } from '../../shared/tableGeneratedColumn';
 import { tableCreateGeneratedZh as generatedText } from '../locales/tableCreateGenerated.zh-CN';
 import { tableCreatePrefixZh } from '../locales/tableCreatePrefix.zh-CN';
-import { sameTableEncodingPair, validateTableEncodingPair, type TableEncodingPair } from '../../shared/tableDefaultEncoding';
+import { sameTableEncodingPair, type TableEncodingPair } from '../../shared/tableDefaultEncoding';
+import { assertTableCreateColumnEncodings, tableCreateHasColumnEncoding } from '../../shared/tableCreateColumnEncoding';
+import { matchesNewTableColumnEncodingReceipt, readNewTableEncodingCatalog, type NewTableEncodingCatalog } from '../newTableEncodingCatalog';
+import { tableCreateColumnEncodingZh as columnEncodingText } from '../locales/tableCreateColumnEncoding.zh-CN';
 import { IndexRequestFence } from '../indexPatches';
 import { tableCreateServices, type TableCreateServices } from '../tableCreateServices';
 import { tableCreateZh as text } from '../locales/tableCreate.zh-CN';
@@ -11,11 +14,11 @@ import { useWorkspace } from '../store';
 import { errorMessage, uid } from '../lib';
 import { Modal, ErrorBox, Field } from './ui';
 import { SqlEditor } from './SqlEditor';
-export interface TableCreateConfirmationProps { connectionId: string; design: TableCreateDraft; invalidated?: boolean; isParentCurrent?(): boolean; onBack(): void; onClose(): void; onCreated(result: TableCreateApplyOutput, version: number): void; onDirtyChange?(dirty: boolean): void; services?: TableCreateServices; }
+export interface TableCreateConfirmationProps { connectionId: string; design: TableCreateDraft; columnEncodingCatalogDigest?: string; invalidated?: boolean; isParentCurrent?(): boolean; onBack(): void; onClose(): void; onCreated(result: TableCreateApplyOutput, version: number): void; onDirtyChange?(dirty: boolean): void; services?: TableCreateServices; }
 /** 只接管现有设计器的确认阶段；原字段/索引/FK表单及已有表修改无需复制或更换生成器。 */
-export function TableCreateConfirmation({ connectionId, design, invalidated = false, isParentCurrent, onBack, onClose, onCreated, onDirtyChange, services = tableCreateServices }: TableCreateConfirmationProps) {
+export function TableCreateConfirmation({ connectionId, design, columnEncodingCatalogDigest, invalidated = false, isParentCurrent, onBack, onClose, onCreated, onDirtyChange, services = tableCreateServices }: TableCreateConfirmationProps) {
   const version = useWorkspace(state => state.connectionVersions[connectionId] ?? 0), profile = useWorkspace(state => state.connections.find(value => value.id === connectionId));
-  const fixed = useRef({ connectionId, version, design: structuredClone(design), key: JSON.stringify(design), label: profile ? `${profile.name} · ${profile.host}:${profile.port}` : connectionId });
+  const fixed = useRef({ connectionId, version, design: structuredClone(design), key: JSON.stringify(design), columnEncodingCatalogDigest, label: profile ? `${profile.name} · ${profile.host}:${profile.port}` : connectionId });
   const requiredAcknowledgements = useRef(Object.freeze(tableCreateRequiredAcknowledgements(fixed.current.design))).current;
   // 固定本次接受的父租约函数；函数内部活读origin/lifetime，不改领后续父上下文。
   const parentCurrent = useRef(isParentCurrent);
@@ -29,10 +32,10 @@ export function TableCreateConfirmation({ connectionId, design, invalidated = fa
   const [snapshot, setSnapshot] = useState<TableCreateGetOutput | null>(null), [preview, setPreview] = useState<TableCreatePreviewOutput | null>(null), [busy, setBusy] = useState(false), [confirmation, setConfirmation] = useState(''), [acks, setAcks] = useState<ReadonlySet<string>>(new Set());
   const [error, setError] = useState(''), [outcome, setOutcome] = useState(''), [attempted, setAttempted] = useState(false), [unknown, setUnknown] = useState(false), [complete, setComplete] = useState(false), [, tick] = useState(0);
   const [explicitEncoding, setExplicitEncoding] = useState(false), [selection, setSelection] = useState<TableEncodingPair>({ charset: '', collation: '' });
-  const encodingMode = useRef(false), encodingSelection = useRef(selection), catalog = useRef<TableCreateGetOutput['encodings']>(undefined);
+  const encodingMode = useRef(false), encodingSelection = useRef(selection), catalog = useRef<NewTableEncodingCatalog | undefined>(undefined);
   // 父设计器目标一旦失效必须传入本确认租约，数据库ABA不能因冻结草稿看似未变而复活。
   if (invalidated) invalid.current = true;
-  if (connectionId !== fixed.current.connectionId || version !== fixed.current.version || JSON.stringify(design) !== fixed.current.key) invalid.current = true;
+  if (connectionId !== fixed.current.connectionId || version !== fixed.current.version || JSON.stringify(design) !== fixed.current.key || columnEncodingCatalogDigest !== fixed.current.columnEncodingCatalogDigest) invalid.current = true;
   const validTime = (expires: string) => Number.isFinite(Date.parse(expires)) && Date.parse(expires) > Date.now();
   const expired = !!snapshot && !validTime(snapshot.expiresAt) || !!preview && !validTime(preview.expiresAt);
   const editable = !busy && scopeCurrent() && !expired && !attempted;
@@ -77,30 +80,34 @@ export function TableCreateConfirmation({ connectionId, design, invalidated = fa
       acceptedPreview.current = null; setPreview(null); setConfirmation(''); setAcks(new Set());
       if (snapshots.current.size || tokens.current.size) { await releaseAll(); if (!accepts(op)) return; }
       const parsed = tableCreateDraftSchema.safeParse(fixed.current.design); if (!parsed.success) throw Error(text.invalidDesign); const draft = parsed.data;
+      assertTableCreateColumnEncodings(draft);
+      const columnEncodings = tableCreateHasColumnEncoding(draft);
       if (!accepts(op)) return;
-      const value = await service.current.get({ connectionId: fixed.current.connectionId, database: draft.database, taskId: op.taskId, ...(chosen ? { includeEncodings: true } : {}), ...(tableCreateHasPrefix(draft) ? { includePrefixFacts: true } : {}), ...(tableCreateHasGenerated(draft) ? { includeGeneratedFacts: true } : {}) }, () => accepts(op)); snapshots.current.add(value.snapshotId);
+      const value = await service.current.get({ connectionId: fixed.current.connectionId, database: draft.database, taskId: op.taskId, ...(chosen || columnEncodings ? { includeEncodings: true } : {}), ...(tableCreateHasPrefix(draft) ? { includePrefixFacts: true } : {}), ...(tableCreateHasGenerated(draft) ? { includeGeneratedFacts: true } : {}) }, () => accepts(op)); snapshots.current.add(value.snapshotId);
       if (!accepts(op) || value.target.connectionId !== fixed.current.connectionId || value.target.database !== draft.database || !validTime(value.expiresAt)) { await releaseOne('snapshotId', value.snapshotId); return; }
       if (tableCreateHasPrefix(draft) && !value.prefixFacts) throw Error(tableCreatePrefixZh.unavailable);
       setSnapshot(value);
       // 草稿候选不是实际服务器能力；缺项/未知不能降级为普通列或继续发送预览。
       if (tableCreateHasGenerated(draft) && value.generatedAccess?.editable !== true) throw Error(value.generatedAccess?.reason || generatedText.capability);
-      if (chosen) {
-        const metadata = value.encodings;
+      if (chosen || columnEncodings) {
         catalog.current = undefined;
-        if (!metadata?.digest || metadata.reasons.length || !/^[a-f0-9]{64}$/.test(metadata.digest) || !metadata.candidates.length || metadata.candidates.length > 8192) throw Error(metadata?.reasons.join('\n') || text.encodingUnavailable);
-        const seen = new Set<string>();
-        for (const pair of metadata.candidates) { validateTableEncodingPair(pair); if (seen.has(pair.collation)) throw Error(text.response); seen.add(pair.collation); }
+        const metadata = readNewTableEncodingCatalog(value.encodings);
         catalog.current = metadata;
+        if (columnEncodings && fixed.current.columnEncodingCatalogDigest && metadata.digest !== fixed.current.columnEncodingCatalogDigest) throw Error(columnEncodingText.stale);
         if (previousDigest && previousDigest !== metadata.digest) { changeSelection({ charset: '', collation: '' }); throw Error(text.encodingStale); }
-        if (!chosen.charset || !chosen.collation) return;
-        if (!metadata.candidates.some(pair => sameTableEncodingPair(pair, chosen))) throw Error(text.encodingInvalid);
-        draft.charset = chosen.charset; draft.collation = chosen.collation;
+        if (columnEncodings && draft.columns.some(column => column.collation && !metadata.candidates.some(pair => sameTableEncodingPair(pair, column.collation!)))) throw Error(columnEncodingText.invalid);
+        if (chosen) {
+          if (!chosen.charset || !chosen.collation) return;
+          if (!metadata.candidates.some(pair => sameTableEncodingPair(pair, chosen))) throw Error(text.encodingInvalid);
+          draft.charset = chosen.charset; draft.collation = chosen.collation;
+        }
       }
       if (!accepts(op)) return;
       activeTask.current = uid();
       const next = await service.current.preview({ snapshotId: value.snapshotId, design: draft, taskId: activeTask.current }, () => accepts(op)); tokens.current.add(next.previewToken);
       if (!accepts(op) || next.target.connectionId !== fixed.current.connectionId || next.target.database !== draft.database || next.target.table !== draft.name || !validTime(next.expiresAt) || !acknowledgementsMatch(next)) { await releaseOne('previewToken', next.previewToken); if (accepts(op)) throw Error(text.response); return; }
       if (chosen && (!next.encoding || next.encoding.catalogDigest !== value.encodings?.digest || !sameTableEncodingPair(next.encoding.selection, chosen)) || !chosen && next.encoding) { await releaseOne('previewToken', next.previewToken); throw Error(text.response); }
+      if (!matchesNewTableColumnEncodingReceipt(draft, catalog.current, next.columnEncodings)) { await releaseOne('previewToken', next.previewToken); throw Error(columnEncodingText.response); }
       if (!accepts(op)) { await releaseOne('previewToken', next.previewToken); return; }
       acceptedPreview.current = next; setPreview(next);
     } catch (reason) { if (alive.current && op.guard === fence.current && scopeCurrent()) report(reason); } finally { finish(op); }
@@ -117,7 +124,7 @@ export function TableCreateConfirmation({ connectionId, design, invalidated = fa
   /** 准确本次设计的集合，不接受重复、多余或少一项；执行前再核，防止已接收对象被改写。 */
   function acknowledgementsMatch(value: TableCreatePreviewOutput): boolean { return Array.isArray(value.requiredAcknowledgements) && value.requiredAcknowledgements.length === requiredAcknowledgements.length && new Set(value.requiredAcknowledgements).size === requiredAcknowledgements.length && requiredAcknowledgements.every(id => value.requiredAcknowledgements.includes(id)); }
   async function apply() {
-    if (!scopeCurrent() || !editable || !preview || acceptedPreview.current !== preview || !snapshot || !confirmed || consumed.current || !validTime(preview.expiresAt) || !validTime(snapshot.expiresAt) || !acknowledgementsMatch(preview)) return;
+    if (!scopeCurrent() || !editable || !preview || acceptedPreview.current !== preview || !snapshot || !confirmed || consumed.current || !validTime(preview.expiresAt) || !validTime(snapshot.expiresAt) || !acknowledgementsMatch(preview) || !matchesNewTableColumnEncodingReceipt(fixed.current.design, catalog.current, preview.columnEncodings)) return;
     const op = begin(); if (!op) return; consumed.current = true; setAttempted(true);
     try {
       if (!accepts(op)) return;
@@ -142,6 +149,7 @@ export function TableCreateConfirmation({ connectionId, design, invalidated = fa
   }
   return <Modal title={text.title} wide onClose={() => void leave(false)}><div className="modal-content">
     <p>{text.target}：{fixed.current.label} · {fixed.current.design.database}.{fixed.current.design.name} · {snapshot?.serverVersion}</p>
+    {tableCreateHasColumnEncoding(fixed.current.design) && <><h3>{columnEncodingText.selected}</h3><ul>{fixed.current.design.columns.flatMap((column, ordinal) => column.collation ? [<li key={ordinal}>{ordinal + 1}. {column.name}：{column.collation.charset} / {column.collation.collation}</li>] : [])}</ul><p className="muted small">{columnEncodingText.preparing}</p></>}
     {tableCreateHasGenerated(fixed.current.design) && <><p>{generatedText.confirmation}</p><ul>{fixed.current.design.columns.filter(column => column.generated).map((column, index) => <li key={index}>{column.name} · {column.type} · {column.generated!.storage}：<code>{column.generated!.expression}</code></li>)}</ul></>}
     {invalid.current && <ErrorBox message={text.mismatch}/ >}{expired && <ErrorBox message={text.expired}/ >}
     {busy && !preview && <p role="status">{text.preparing}</p>}{snapshot?.warnings.map(value => <p key={value} className="warning-text">{value}</p>)}

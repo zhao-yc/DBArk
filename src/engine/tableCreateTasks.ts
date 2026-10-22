@@ -6,7 +6,9 @@ import { createHash, randomUUID } from 'node:crypto';
 import type { ResultSetHeader } from 'mysql2';
 import { StructurePatchCache, structureCacheLimits, type StructureCacheScope } from './structurePatchCache';
 import { structureTaskQuery as query, type StructureTaskContext, type StructureTaskHost } from './structureDefinition';
-import { buildDesign, buildPrefixTableDesign, buildGeneratedTableDesign, qualified, mariaDefault, temporalDefault } from './sql';
+import { buildDesign, buildPrefixTableDesign, buildGeneratedTableDesign, buildColumnEncodedTableDesign, qualified, mariaDefault, temporalDefault } from './sql';
+import { planTableCreateColumnEncodings, tableCreateHasColumnEncoding, type TableCreateColumnEncodingPlan } from '../shared/tableCreateColumnEncoding';
+import { verifyCreatedColumnEncodings } from './tableCreateColumnEncoding';
 import { readTableCreateGeneratedFacts, planTableCreateGeneratedColumns, verifyCreatedGeneratedColumns, type TableCreateGeneratedFacts, type TableCreateGeneratedPlan } from './tableCreateGeneratedColumns';
 import { parseTableColumnDefinition, tableDefinitionTokens } from './tableColumnDefinition';
 import { readTableIndexDefinition } from './tableIndexDefinition';
@@ -25,7 +27,7 @@ const literal = (value: string) => `CONVERT(X'${Buffer.from(value, 'utf8').toStr
 const progressOf = (): TableCreateProgress => ({ phase: 'connecting', ddlSubmitted: false, ddlCompleted: false, definitionVerified: false, outcome: 'not-sent' });
 interface Read { identity: string; serverKey: string; mode: string; noBackslash: boolean; bytes: number; version: string; dialect: 'mysql' | 'mariadb'; lowerNames: number; mysql57?: Mysql57CreateCapabilities; }
 interface Snapshot extends Read { connectionId: string; database: string; revision: number; expires: number; encodings?: TableCreateEncodingCatalog; prefixFacts?: TableCreatePrefixFacts; generatedFacts?: TableCreateGeneratedFacts; }
-interface Preview { snapshotId: string; snapshot: Snapshot; design: TableCreateDraft; prefixPlan?: TableCreateIndexPlan; generatedPlan?: TableCreateGeneratedPlan; target: { connectionId: string; database: string; table: string }; designDigest: string; sql: string; bytes: number; expires: number; }
+interface Preview { snapshotId: string; snapshot: Snapshot; design: TableCreateDraft; prefixPlan?: TableCreateIndexPlan; generatedPlan?: TableCreateGeneratedPlan; columnEncodingPlan?: TableCreateColumnEncodingPlan; target: { connectionId: string; database: string; table: string }; designDigest: string; sql: string; bytes: number; expires: number; }
 /** 选项只能来自完整实际目录；没有显式collation的旧调用不读取目录、不猜默认值。 */
 function selectedEncoding(design: TableCreateDraft, snapshot: Snapshot) {
   if (design.collation === undefined) return;
@@ -35,9 +37,12 @@ function selectedEncoding(design: TableCreateDraft, snapshot: Snapshot) {
 }
 /** 目录摘要含完整候选及警告；取消、权限、预算或目录变化均不能沿旧配对继续发送。 */
 async function recheckEncoding(context: StructureTaskContext, snapshot: Snapshot, design: TableCreateDraft) {
-  if (!selectedEncoding(design, snapshot)) return;
+  const selection = selectedEncoding(design, snapshot);
+  const columns = tableCreateHasColumnEncoding(design) ? planTableCreateColumnEncodings(design, snapshot.encodings) : undefined;
+  if (!selection && !columns) return;
   const current = await readTableDefaultEncodingCatalog(context);
   if (current.digest !== snapshot.encodings!.digest) throw Error(text.encodingStale);
+  if (columns && JSON.stringify(planTableCreateColumnEncodings(design, { ...current, reasons: [] })) !== JSON.stringify(columns)) throw Error(text.encodingStale);
 }
 /** 前缀事实仅在专用请求读取；预览与执行重读同一完整摘要，旧无前缀路径不增加能力门。 */
 async function recheckPrefix(context: StructureTaskContext, snapshot: Snapshot, design: TableCreateDraft) {
@@ -99,9 +104,10 @@ async function verify(context: StructureTaskContext, preview: Preview): Promise<
   if (ddl?.length !== 1 || typeof ddl[0]['Create Table'] !== 'string' || Buffer.byteLength(String(ddl[0]['Create Table'])) > 2 * 1024 * 1024) return false;
   if (preview.snapshot.mode.split(',').some(mode => (definitionOmittingSqlModes as readonly string[]).includes(mode.toUpperCase()))) return false;
   const document = parseTableColumnDefinition(String(ddl[0]['Create Table']), { dialect: context.managed.status.dialect, mode: { noBackslashEscapes: preview.snapshot.noBackslash, ansiQuotes: preview.snapshot.mode.split(',').includes('ANSI_QUOTES') } });
-  /** 生成用途的最后已观察SHOW覆盖普通目录/索引/FK后核窗口；普通设计不增加查询，仍不宣称原子CAS。 */
+  /** 新用途最后复读SHOW覆盖目录/索引/FK后核窗口；旧普通设计不增加查询，不宣称原子CAS。 */
   const finish = async (verified: boolean): Promise<boolean> => {
-    if (!verified || !preview.generatedPlan) return verified;
+    if (!verified || !preview.generatedPlan && !preview.columnEncodingPlan) return verified;
+    if (preview.columnEncodingPlan) await recheckEncoding(context, preview.snapshot, design);
     await recheckGenerated(context, preview.snapshot, design, preview.generatedPlan);
     const final = (await query<Record<string, unknown>[]>(context, `SHOW CREATE TABLE ${qualified(database, table)}`)).rows;
     context.checkCancelled();
@@ -117,8 +123,9 @@ async function verify(context: StructureTaskContext, preview: Preview): Promise<
   if (document.table !== table || document.database !== undefined && document.database !== database || document.columns.length !== design.columns.length || indexDocument.items.filter(item => item.kind === 'constraint').length !== design.indexes.length || indexDocument.items.some(item => item.kind === 'constraint' && !['PRIMARY', 'UNIQUE', 'KEY', 'INDEX'].includes(item.constraintKind))) return false;
   // SHOW及全列真实COLUMNS先完成生成专属证明，才允许旧索引链处理本表其它普通键。
   if (preview.generatedPlan && !await verifyCreatedGeneratedColumns(context, preview.target, design, preview.generatedPlan, document)) return false;
-  // 仅生成用途在专属完整证明之后接纳普通列的已证编码；旧普通创建及生成列本身的属性门不放宽。
-  if (document.columns.some((column, index) => !column.type.known || column.attributes.some(attribute => !['nullable', 'default', 'comment', 'auto-increment', ...(design.columns[index].onUpdate ? ['on-update'] : []), ...(design.columns[index].generated && preview.generatedPlan ? ['generated'] : []), ...(preview.generatedPlan && !design.columns[index].generated ? ['charset', 'collation'] : [])].includes(attribute.kind)))) return false;
+  if (preview.columnEncodingPlan && !preview.generatedPlan && !await verifyCreatedColumnEncodings(context, preview.target, design, document)) return false;
+  // 专属完整证明之后才接纳普通列已证编码；旧普通创建及生成列本身属性门不放宽。
+  if (document.columns.some((column, index) => !column.type.known || column.attributes.some(attribute => !['nullable', 'default', 'comment', 'auto-increment', ...(design.columns[index].onUpdate ? ['on-update'] : []), ...(design.columns[index].generated && preview.generatedPlan ? ['generated'] : []), ...((preview.generatedPlan || preview.columnEncodingPlan) && !design.columns[index].generated ? ['charset', 'collation'] : [])].includes(attribute.kind)))) return false;
   /** 仅规范化未引用关键字和无ZEROFILL整数显示宽度；ENUM/SET文字量逐字保留解码后的值。 */
   const type = (value: string, controlledTime = false) => {
     const tokens = tableDefinitionTokens(value, document.context).map(token => ({ kind: token.kind, value: token.kind === 'word' ? token.value.toUpperCase() : token.value }));
@@ -232,18 +239,19 @@ export class TableCreateTasks {
     if (snapshot.mysql57) assertMysql57CreateDesign(design, snapshot.mysql57, snapshot.mode);
     const designDigest = hash(design); if (Buffer.byteLength(JSON.stringify(design)) > 2 * 1024 * 1024) throw Error(text.size);
     const encoding = selectedEncoding(design, snapshot);
+    const columnEncodingPlan = tableCreateHasColumnEncoding(design) ? planTableCreateColumnEncodings(design, snapshot.encodings) : undefined;
     const prefix = tableCreateHasPrefix(design); if (prefix && !snapshot.prefixFacts) throw Error('前缀新表缺少本次实际服务器能力快照');
     const prefixPlan = prefix ? planTableCreateIndexes(design, snapshot.prefixFacts!) : undefined;
     const hasGenerated = design.columns.some(column => column.generated !== undefined); if (hasGenerated && !snapshot.generatedFacts) throw Error(generatedText.snapshot);
     const generatedPlan = hasGenerated ? planTableCreateGeneratedColumns(design, snapshot.generatedFacts!) : undefined;
-    const rendered = generatedPlan ? buildGeneratedTableDesign(design, snapshot.generatedFacts!, snapshot.noBackslash, encoding, snapshot.prefixFacts) : prefix ? buildPrefixTableDesign(design, snapshot.prefixFacts!, snapshot.noBackslash, encoding) : buildDesign(tableCreateLegacyDesign(design), undefined, snapshot.noBackslash, encoding); if (rendered.statements.length !== 1 || !rendered.sql.startsWith('CREATE TABLE ')) throw Error(text.invalid);
-    const token = randomUUID(), preview: Preview = { snapshotId: input.snapshotId, snapshot, design, ...(prefixPlan ? { prefixPlan } : {}), ...(generatedPlan ? { generatedPlan } : {}), target: { connectionId: snapshot.connectionId, database: snapshot.database, table: design.name }, designDigest, sql: rendered.sql, bytes: snapshot.bytes + Buffer.byteLength(JSON.stringify(design)) + Buffer.byteLength(rendered.sql) + (prefixPlan ? Buffer.byteLength(JSON.stringify(prefixPlan)) : 0) + (generatedPlan ? Buffer.byteLength(JSON.stringify(generatedPlan)) : 0) + 2048, expires: snapshot.expires }, progress = progressOf();
+    const rendered = generatedPlan ? buildGeneratedTableDesign(design, snapshot.generatedFacts!, snapshot.noBackslash, encoding, snapshot.prefixFacts, snapshot.encodings) : prefix ? buildPrefixTableDesign(design, snapshot.prefixFacts!, snapshot.noBackslash, encoding, snapshot.encodings) : columnEncodingPlan ? buildColumnEncodedTableDesign(design, snapshot.encodings!, snapshot.noBackslash, encoding) : buildDesign(tableCreateLegacyDesign(design), undefined, snapshot.noBackslash, encoding); if (rendered.statements.length !== 1 || !rendered.sql.startsWith('CREATE TABLE ')) throw Error(text.invalid);
+    const token = randomUUID(), preview: Preview = { snapshotId: input.snapshotId, snapshot, design, ...(prefixPlan ? { prefixPlan } : {}), ...(generatedPlan ? { generatedPlan } : {}), ...(columnEncodingPlan ? { columnEncodingPlan } : {}), target: { connectionId: snapshot.connectionId, database: snapshot.database, table: design.name }, designDigest, sql: rendered.sql, bytes: snapshot.bytes + Buffer.byteLength(JSON.stringify(design)) + Buffer.byteLength(rendered.sql) + (prefixPlan ? Buffer.byteLength(JSON.stringify(prefixPlan)) : 0) + (generatedPlan ? Buffer.byteLength(JSON.stringify(generatedPlan)) : 0) + (columnEncodingPlan ? Buffer.byteLength(JSON.stringify(columnEncodingPlan)) : 0) + 2048, expires: snapshot.expires }, progress = progressOf();
     await this.host.run(snapshot.connectionId, input.taskId, async context => {
       progress.phase = 'rechecking'; context.report(); if ((await read(context, snapshot.database)).identity !== snapshot.identity) throw Error(text.identity); await absent(context, snapshot.database, design.name);
       await recheckEncoding(context, snapshot, design); await recheckPrefix(context, snapshot, design); await recheckGenerated(context, snapshot, design, generatedPlan);
     }, { label: text.labels.preview, purpose: 'tableCreate', progress });
     if (this.snapshots.get(input.snapshotId) !== snapshot || snapshot.expires <= this.now()) throw Error(text.stale);
-    this.previews.set(token, preview); return { target: { ...preview.target }, previewToken: token, expiresAt: new Date(preview.expires).toISOString(), designDigest, sql: preview.sql, warnings: [...text.warnings, ...(design.foreignKeys.length ? [text.foreignKeys] : []), ...(generatedPlan ? [generatedText.computation] : [])], requiredAcknowledgements: tableCreateRequiredAcknowledgements(design), ...(encoding ? { encoding: { selection: encoding, catalogDigest: snapshot.encodings!.digest! } } : {}) };
+    this.previews.set(token, preview); return { target: { ...preview.target }, previewToken: token, expiresAt: new Date(preview.expires).toISOString(), designDigest, sql: preview.sql, warnings: [...text.warnings, ...(design.foreignKeys.length ? [text.foreignKeys] : []), ...(generatedPlan ? [generatedText.computation] : [])], requiredAcknowledgements: tableCreateRequiredAcknowledgements(design), ...(encoding ? { encoding: { selection: encoding, catalogDigest: snapshot.encodings!.digest! } } : {}), ...(columnEncodingPlan ? { columnEncodings: structuredClone(columnEncodingPlan) } : {}) };
   }
   /** 第一次await前消费预览并占用目标；任何失败都不重放、覆盖或DROP补救。 */
   async apply(input: TableCreateApplyInput, revision: unknown): Promise<TableCreateApplyOutput> {
