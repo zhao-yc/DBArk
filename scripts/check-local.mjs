@@ -3,6 +3,7 @@ import { dirname, isAbsolute, relative, resolve, sep } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { performance } from 'node:perf_hooks';
+import { typecheckArguments } from './typecheck.mjs';
 
 const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const usage = '用法：pnpm check:local -- [--build] tests/unit/文件.test.ts [其它明确文件]\n默认只做一次类型检查和指定单元测试；--build 追加普通构建，不启动客户端。';
@@ -45,7 +46,7 @@ export function parseLocalCheckArguments(argv, project = projectRoot) {
 }
 
 /** 顺序复用现有工具；失败即停止，普通构建不再次执行 tsc。 */
-export function runLocalCheck(argv, project = projectRoot) {
+export function runLocalCheck(argv, project = projectRoot, execute = spawnSync) {
   const started = performance.now();
   try {
     const options = parseLocalCheckArguments(argv, project);
@@ -54,9 +55,9 @@ export function runLocalCheck(argv, project = projectRoot) {
       return 0;
     }
     const stages = [
-      { name: '类型检查', file: 'node_modules/typescript/bin/tsc', args: ['--noEmit'] },
-      { name: '指定单元测试', file: 'node_modules/vitest/vitest.mjs', args: ['run', ...options.tests] },
-      ...(options.build ? [{ name: '普通构建', file: 'scripts/build.mjs', args: [] }] : [])
+      { name: '类型检查', file: 'node_modules/typescript/bin/tsc', args: typecheckArguments(project) },
+      { name: '指定单元测试', file: 'node_modules/vitest/vitest.mjs', args: [resolve(project, 'node_modules/vitest/vitest.mjs'), 'run', ...options.tests] },
+      ...(options.build ? [{ name: '普通构建', file: 'scripts/build.mjs', args: [resolve(project, 'scripts/build.mjs')] }] : [])
     ];
     for (const stage of stages) {
       try {
@@ -69,7 +70,7 @@ export function runLocalCheck(argv, project = projectRoot) {
     for (const [index, stage] of stages.entries()) {
       console.log(`[${index + 1}/${stages.length}] ${stage.name}`);
       const stageStarted = performance.now();
-      const result = spawnSync(process.execPath, [resolve(project, stage.file), ...stage.args], {
+      const result = execute(process.execPath, stage.args, {
         cwd: project, stdio: 'inherit', shell: false, windowsHide: true
       });
       const seconds = ((performance.now() - stageStarted) / 1000).toFixed(2);

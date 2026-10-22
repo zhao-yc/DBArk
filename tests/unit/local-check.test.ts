@@ -73,6 +73,25 @@ describe('本地定向检查入口', () => {
     expect(calls).toEqual([{ name: 'typecheck', args: ['--noEmit'] }]);
   });
 
+  it('本地入口直接消费同一编译器argv，只有tsc带堆参数且原阶段次序不变', () => {
+    const root = fixture(), execute = vi.fn(() => ({ status: 0 }));
+    vi.spyOn(console, 'log').mockImplementation(() => {});
+    expect(localCheck.runLocalCheck(['--build', 'tests/unit/space name.test.tsx'], root, execute)).toBe(0);
+    const options = { cwd: root, stdio: 'inherit', shell: false, windowsHide: true };
+    expect(execute.mock.calls).toEqual([
+      [process.execPath, ['--max-old-space-size=4096', join(root, 'node_modules/typescript/bin/tsc'), '--noEmit'], options],
+      [process.execPath, [join(root, 'node_modules/vitest/vitest.mjs'), 'run', 'tests/unit/space name.test.tsx'], options],
+      [process.execPath, [join(root, 'scripts/build.mjs')], options],
+    ]);
+  });
+
+  it.each([{ status: null, signal: 'SIGABRT' }, { status: null, error: Error('原启动失败') }])('本地类型检查未知或启动失败时不继续单元和构建', result => {
+    const root = fixture(), execute = vi.fn(() => result);
+    vi.spyOn(console, 'log').mockImplementation(() => {}); vi.spyOn(console, 'error').mockImplementation(() => {});
+    expect(localCheck.runLocalCheck(['--build', 'tests/unit/one.test.ts'], root, execute)).toBe(1);
+    expect(execute).toHaveBeenCalledOnce();
+  });
+
   it('默认不构建；帮助在缺依赖工程中也不触发任何工具', () => {
     const root = fixture();
     vi.spyOn(console, 'log').mockImplementation(() => {});

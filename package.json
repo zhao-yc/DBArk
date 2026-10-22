@@ -9,8 +9,8 @@
   "packageManager": "pnpm@12.11.2",
   "scripts": {
     "dev": "node scripts/dev.mjs",
-    "build": "tsc --noEmit && node scripts/build.mjs",
-    "typecheck": "tsc --noEmit",
+    "build": "node scripts/typecheck.mjs && node scripts/build.mjs",
+    "typecheck": "node scripts/typecheck.mjs",
     "check:local": "node scripts/check-local.mjs",
     "test": "vitest run",
     "test:integration": "vitest run --config vitest.integration.config.ts",

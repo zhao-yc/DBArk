@@ -40,6 +40,32 @@ describe('原生专项CI同次构建批准及精确运行', () => {
     expect(() => runner.buildSourceApproval({ ...f, context }, execute)).toThrow('退出码');
     expect(execute).toHaveBeenCalledTimes(1); expect(existsSync(join(f.output, 'source-approval.json'))).toBe(false);
   });
+  it('仅专属tsc显式使用4096MiB堆，原两次构建次序和后续build参数保持', () => {
+    const f = fixture(); f.approve();
+    expect(f.build.mock.calls).toEqual([
+      [process.execPath, ['--max-old-space-size=4096', join(f.project, 'node_modules/typescript/bin/tsc'), '--noEmit'], { cwd: f.project }],
+      [process.execPath, [join(f.project, 'scripts/build.mjs')], { cwd: f.project }],
+    ]);
+    for (const name of ['typecheck', 'build']) expect(JSON.parse(readFileSync(join(f.output, name + '.process.json'), 'utf8'))).toEqual({ status: 0, signal: null, errorCode: null });
+  });
+  it.each([
+    { result: { status: null, signal: 'SIGABRT', stdout: '原类型检查输出', stderr: 'FATAL ERROR: Reached heap limit Allocation failed - JavaScript heap out of memory' }, terminal: { status: null, signal: 'SIGABRT', errorCode: null } },
+    { result: { status: null, signal: null, stdout: '', stderr: '', error: Object.assign(Error('原进程无法启动'), { code: 'ENOMEM' }) }, terminal: { status: null, signal: null, errorCode: 'ENOMEM' } },
+  ])('类型检查未知/失败保留原终态，不签批准、不构建或启动专项：$terminal.errorCode/$terminal.signal', ({ result, terminal }) => {
+    const f = fixture(), execute = vi.fn(() => result), native = vi.fn();
+    expect(() => {
+      const approval = runner.buildSourceApproval({ ...f, context }, execute);
+      runner.runNativeEditorSpecialties({ approval, output: f.output, parentEnv: {} }, native);
+    }).toThrow();
+    expect(execute).toHaveBeenCalledOnce(); expect(native).not.toHaveBeenCalled();
+    expect(readFileSync(join(f.output, 'typecheck.stdout.log'), 'utf8')).toBe(result.stdout);
+    expect(readFileSync(join(f.output, 'typecheck.stderr.log'), 'utf8')).toBe(result.stderr);
+    const path = join(f.output, 'typecheck.process.json'), bytes = readFileSync(path);
+    expect(JSON.parse(bytes.toString('utf8'))).toEqual(terminal);
+    for (const name of ['build.stdout.log', 'build.stderr.log', 'build.process.json', 'source-approval.json', 'source-indent-manifest.json', 'source-layout-manifest.json', 'source-indent', 'source-layout']) expect(existsSync(join(f.output, name))).toBe(false);
+    expect(() => runner.buildSourceApproval({ ...f, context }, execute)).toThrow('现场已存在');
+    expect(execute).toHaveBeenCalledOnce(); expect(readFileSync(path)).toEqual(bytes);
+  });
   it('成功build后批准的两个清单可直接通过原identity；不复制校验器', async () => {
     const f = fixture(), approval = f.approve(); expect(f.build).toHaveBeenCalledTimes(2);
     for (const value of Object.values(approval.value.manifests) as any[]) {

@@ -4,6 +4,7 @@ import { appendFileSync, existsSync, mkdirSync, readFileSync, realpathSync, writ
 import { dirname, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { collectIdentity, readApproval, sealApproval, sha256, writeOnce } from './native-editor-ci-identity.mjs';
+import { typecheckArguments } from './typecheck.mjs';
 
 /** 每阶段固定先缩进后分栏；两个门各自只消费自己的批准清单。 */
 export const nativeSpecialties = Object.freeze([
@@ -18,6 +19,8 @@ function success(result) { if (result.error || result.status !== 0) throw result
 function saveCommand(directory, name, result) {
   mkdirSync(directory, { recursive: true });
   writeFileSync(join(directory, name + '.stdout.log'), result.stdout ?? '', { flag: 'wx' }); writeFileSync(join(directory, name + '.stderr.log'), result.stderr ?? '', { flag: 'wx' });
+  // 只记录原spawnSync返回字段；null状态仍由success拒绝，不推断未知进程已正常退出或被终止。
+  writeOnce(join(directory, name + '.process.json'), { status: result.status ?? null, signal: result.signal ?? null, errorCode: result.error?.code ?? null });
 }
 /** CI批准由审核后的工作流绑定有效checkout和同一runner/job；本地任意hash不冒充Root批准。 */
 export function ciContext(project, env = process.env, execute = executeOnce) {
@@ -92,7 +95,8 @@ export function runNativeEditorSpecialties({ approval, output, parentEnv = proce
 export function buildSourceApproval({ project, output, context, executable, resources, currentContext = () => context }, execute = executeOnce) {
   mkdirSync(output, { recursive: true });
   if (['typecheck.stdout.log', 'source-approval.json', 'source-indent-manifest.json', 'source-layout-manifest.json'].some(name => existsSync(join(output, name)))) throw Error('原构建/批准现场已存在，拒绝重复构建或重签');
-  for (const [name, args] of [['typecheck', [join(project, 'node_modules/typescript/bin/tsc'), '--noEmit']], ['build', [join(project, 'scripts/build.mjs')]]]) {
+  // 仅给批准前的专属tsc子进程显式堆预算，不用NODE_OPTIONS影响后续构建或原生专项。
+  for (const [name, args] of [['typecheck', typecheckArguments(project)], ['build', [join(project, 'scripts/build.mjs')]]]) {
     const result = execute(process.execPath, args, { cwd: project }); saveCommand(output, name, result); success(result);
   }
   if (JSON.stringify(currentContext()) !== JSON.stringify(context)) throw Error('build期间源码或job身份漂移');
