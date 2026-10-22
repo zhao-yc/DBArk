@@ -20,3 +20,14 @@
 .query-result-filter-enable { white-space: nowrap; }
 .query-result-filter-condition .query-result-filter-destination { flex: 0 1 220px; min-width: min(160px, 100%); }
 .query-result-filter-destination select { flex: 1; min-width: 0; }
+.query-result-value-picker { padding: 10px; margin: 8px 0; border: 1px solid var(--line); border-radius: 4px; }
+.query-result-value-picker-controls, .query-result-value-picker-pages { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.query-result-value-picker-controls label { display: flex; align-items: center; gap: 6px; max-width: 100%; }
+.query-result-value-picker-controls input { min-width: 120px; max-width: 100%; }
+.query-result-value-picker-list { max-height: 260px; overflow: auto; margin: 8px 0; }
+.query-result-value-picker-option { display: flex; align-items: center; gap: 8px; padding: 4px 0; }
+.query-result-value-picker-option code { white-space: pre-wrap; overflow-wrap: anywhere; min-width: 0; }
+.query-result-value-picker-option span { margin-left: auto; white-space: nowrap; color: var(--muted); }
+.query-result-value-picker-pages { justify-content: flex-end; }
+.query-result-value-picker-option-row details { margin: 0 0 6px 24px; }
+.query-result-value-picker-option-row pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 160px; overflow: auto; margin: 4px 0; }

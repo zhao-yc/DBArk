@@ -61,6 +61,8 @@ function matchExpression(shape:FilterShape,matches:readonly (boolean|undefined)[
 function freezeExpression(shape:FilterShape,rules:readonly Readonly<QueryResultFilterRule>[]):QueryResultFilterGroup{
   return Object.freeze({mode:shape.mode,children:Object.freeze(shape.children.map(child=>typeof child==='number'?rules[child]:freezeExpression(child,rules)))});
 }
+/** 草稿替换也先核完整条件树预算，不扫描结果或提前应用筛选。 */
+export function assertQueryResultFilterExpressionBudget(expression:QueryResultFilterGroup):void{prepareExpression(expression);}
 /** 为已有完整表达式追加AND节点；保留原OR括号与停用原文，最终树先整体核预算再成为草稿。 */
 export function appendQueryResultFilterNode(expression:QueryResultFilterGroup,node:QueryResultFilterRule|QueryResultFilterGroup):QueryResultFilterGroup{
   const previous=prepareExpression(expression),addition=prepareExpression({mode:'AND',children:[node]}),offset=previous.rules.length;

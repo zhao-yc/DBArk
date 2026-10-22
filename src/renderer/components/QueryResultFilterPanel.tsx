@@ -1,12 +1,16 @@
 import { useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
 import type { QueryResultFilterBinding, QueryResultFilterGroup, QueryResultFilterOperator, QueryResultFilterRule, QueryResultFilterView } from '../queryResultFilter';
-import { queryResultFilterLimits, queryResultFilterNeedsUpper, queryResultFilterNeedsValue, queryResultFilterNeedsValues, queryResultFilterOperators, queryResultFilterSupportsIgnoreCase } from '../queryResultFilter';
+import { assertQueryResultFilterExpressionBudget, queryResultFilterLimits, queryResultFilterNeedsUpper, queryResultFilterNeedsValue, queryResultFilterNeedsValues, queryResultFilterOperators, queryResultFilterSupportsIgnoreCase } from '../queryResultFilter';
+import { captureQueryResultValueOptions, currentQueryResultValueOptions } from '../queryResultValueOptions';
+import { queryResultValueOptionsZh as valueText } from '../locales/queryResultValueOptions.zh-CN';
+import { QueryResultValuePicker } from './QueryResultValuePicker';
 import { queryResultFilterZh as text } from '../locales/queryResultFilter.zh-CN';
 import { ErrorBox } from './ui';
 import '../queryResultFilter.css';
 
 type DraftRule={id:number;kind:'rule';rule:QueryResultFilterRule};
 type DraftGroup={id:number;kind:'group';mode:QueryResultFilterGroup['mode'];children:(DraftRule|DraftGroup)[]};
+type ValuePickerOwner={id:number;parent:number;rule:DraftRule;draft:DraftGroup;capture:ReturnType<typeof captureQueryResultValueOptions>};
 /** 树编辑只作用于当前草稿；稳定节点ID与根身份同时保护移除、嵌套和迟到输入。 */
 function editGroup(group:DraftGroup,id:number,change:(group:DraftGroup)=>DraftGroup):DraftGroup{
   return group.id===id?change(group):{...group,children:group.children.map(child=>child.kind==='group'?editGroup(child,id,change):child)};
@@ -23,13 +27,41 @@ function expressionOf(group:DraftGroup):QueryResultFilterGroup{
 export function QueryResultFilterPanel({binding,initial,seed,isCurrent,onApply,onClose}:{binding:QueryResultFilterBinding;initial:QueryResultFilterView;seed?:QueryResultFilterGroup;isCurrent():boolean;onApply(expression:QueryResultFilterGroup):void;onClose():void}){
   const sequence=useRef(0),[draft,setDraft]=useState<DraftGroup>(()=>copyDraft(seed??initial.expression??{mode:initial.mode,children:initial.rules},()=>sequence.current++));
   const live=useRef(draft),invalid=useRef(false),composition=useRef(false),[composing,setComposing]=useState(false);live.current=draft;
+  const pickerRef=useRef<ValuePickerOwner|null>(null),[picker,setPicker]=useState<ValuePickerOwner|null>(null),[pickerError,setPickerError]=useState('');
   const destinations=useRef(new Map<number,HTMLSelectElement>()),focusAfterMove=useRef<number|null>(null);
   /** 跨组会重新挂载条件；只为原先聚焦的选择框恢复焦点，失效面板不抢其它窗口的输入。 */
   useLayoutEffect(()=>{const id=focusAfterMove.current;focusAfterMove.current=null;if(id!==null&&current())destinations.current.get(id)?.focus();});
   /** 首次失效永久拒绝，旧回调不能写入另一棵草稿或移除后占据相同位置的节点。 */
   function current(expected=live.current):boolean{if(invalid.current)return false;let okay=false;try{okay=isCurrent()===true;}catch{}if(!okay)invalid.current=true;return okay&&live.current===expected;}
   /** 同步更新根身份；组合输入期间仅允许所属输入框更新原文。 */
-  function replace(next:DraftGroup,input=false):void{if(!current(draft)||composition.current&&!input)return;live.current=next;setDraft(next);}
+  function replace(next:DraftGroup,input=false):void{if(pickerRef.current||!current(draft)||composition.current&&!input)return;live.current=next;setDraft(next);}
+  /** 候选来自原返回全部行；同一草稿叶及完整结果捕获共同限定所属，不受已生效筛选缩窄。 */
+  function openValues(parent:number,rule:DraftRule):void{
+    if(pickerRef.current||!current(draft)||composition.current)return;
+    try{
+      const column=binding.visible.find(column=>column.key===rule.rule.column);if(!column)return;
+      const capture=captureQueryResultValueOptions(binding.columns,binding.rows,column);
+      if(!current(draft))return;
+      const owner={id:sequence.current++,parent,rule,draft,capture};pickerRef.current=owner;setPicker(owner);setPickerError('');
+    }catch(reason){setPickerError(reason instanceof Error?reason.message:valueText.unavailable);}
+  }
+  /** 捕获后任何来源或父草稿漂移均不可复活；无效窗口仍可单独取消。 */
+  function pickerCurrent(owner:ValuePickerOwner):boolean{return pickerRef.current===owner&&current(owner.draft)&&currentQueryResultValueOptions(owner.capture,binding.columns,binding.rows);}
+  /** 只替换原条件草稿；新增NULL子组保留原启停位，完整树预算成功后才发布，不调用父onApply。 */
+  function stageValues(owner:ValuePickerOwner,node:QueryResultFilterRule|QueryResultFilterGroup):void{
+    if(!pickerCurrent(owner))throw Error(valueText.stale);
+    const disabled=owner.rule.rule.enabled===false;
+    function retainEnabled(value:QueryResultFilterRule|QueryResultFilterGroup):QueryResultFilterRule|QueryResultFilterGroup{
+      return 'children'in value?{mode:value.mode,children:value.children.map(retainEnabled)}:{...value,...(value.values?{values:[...value.values]}:{}),...(disabled?{enabled:false}:{})};
+    }
+    const admitted=retainEnabled(node),replacement:DraftRule|DraftGroup='children'in admitted?copyDraft(admitted,()=>sequence.current++):{id:sequence.current++,kind:'rule',rule:admitted};
+    let replaced=false;const next=editGroup(owner.draft,owner.parent,group=>({...group,children:group.children.map(child=>{if(child!==owner.rule)return child;replaced=true;return replacement;})}));
+    if(!replaced)throw Error(valueText.stale);
+    assertQueryResultFilterExpressionBudget(expressionOf(next));if(!pickerCurrent(owner))throw Error(valueText.stale);
+    pickerRef.current=null;setPicker(null);setPickerError('');live.current=next;setDraft(next);
+  }
+  /** 迟到取消只关闭自己的候选，不关闭较新候选或外层筛选面板。 */
+  function closeValues(owner:ValuePickerOwner):void{if(pickerRef.current===owner){pickerRef.current=null;setPicker(null);}}
   /** 规则输入沿父组与稳定ID定位，成员和端点都共享整棵草稿租约。 */
   function changeRule(parent:number,id:number,change:(rule:QueryResultFilterRule)=>QueryResultFilterRule,input=false):void{
     replace(editGroup(draft,parent,group=>({...group,children:group.children.map(child=>child.kind==='rule'&&child.id===id?{...child,rule:change(child.rule)}:child)})),input);
@@ -77,9 +109,10 @@ export function QueryResultFilterPanel({binding,initial,seed,isCurrent,onApply,o
   function beginComposition():void{if(current(draft)){composition.current=true;setComposing(true);}}
   function endComposition():void{if(current()){composition.current=false;setComposing(false);}}
   /** 按钮与显式快捷键共用原草稿租约，组合输入结束前不得提交。 */
-  function applyDraft():void{if(current(draft)&&!composition.current)onApply(expressionOf(draft));}
+  function applyDraft():void{if(!pickerRef.current&&current(draft)&&!composition.current)onApply(expressionOf(draft));}
   /** 只处理未被子控件消费的明确命令；普通Enter、组合Esc、输入法确认和长按不提交。 */
   function keyDown(event:KeyboardEvent<HTMLElement>):void{
+    if(pickerRef.current)return;
     if(event.defaultPrevented||composition.current||event.nativeEvent.isComposing||event.keyCode===229)return;
     const apply=event.key==='Enter'&&(event.ctrlKey||event.metaKey)&&!event.altKey&&!event.shiftKey;
     const cancel=event.key==='Escape'&&!event.ctrlKey&&!event.metaKey&&!event.altKey&&!event.shiftKey;
@@ -88,7 +121,7 @@ export function QueryResultFilterPanel({binding,initial,seed,isCurrent,onApply,o
     if(event.repeat)return;
     if(apply)applyDraft();else if(current(draft))onClose();
   }
-  const valid=current(),numbers=new Map<number,number>(),groupNames=new Map<number,string>();let groups=0,enabledCount=0;
+  const valid=current()&&!picker,numbers=new Map<number,number>(),groupNames=new Map<number,string>();let groups=0,enabledCount=0;
   /** 展示编号按树顺序连续排列，编辑身份始终使用稳定ID而非展示位置。 */
   function count(group:DraftGroup,path=''):void{groups++;groupNames.set(group.id,path?text.group(path):text.rootGroup);let childGroup=0;for(const child of group.children)if(child.kind==='group')count(child,path?path+'.'+(++childGroup):String(++childGroup));else{numbers.set(child.id,numbers.size+1);if(child.rule.enabled!==false)enabledCount++;}}
   count(draft);
@@ -106,7 +139,8 @@ export function QueryResultFilterPanel({binding,initial,seed,isCurrent,onApply,o
       {!members&&<input aria-label={`${range?text.lower:text.input} ${index}`} placeholder={range?text.lower:undefined} value={rule.value} maxLength={queryResultFilterLimits.valueUnits} disabled={!valid||!needsValue} onChange={event=>changeRule(group.id,id,rule=>({...rule,value:event.target.value}),true)} onCompositionStart={beginComposition} onCompositionEnd={endComposition}/>}
       {range&&<input aria-label={`${text.upper} ${index}`} placeholder={text.upper} value={rule.upper??''} maxLength={queryResultFilterLimits.valueUnits} disabled={!valid} onChange={event=>changeRule(group.id,id,rule=>({...rule,upper:event.target.value}),true)} onCompositionStart={beginComposition} onCompositionEnd={endComposition}/>}
       {members&&<div className="query-result-filter-members"><p>{text.membersHint}</p>{(rule.values??[]).map((value,member)=><div className="query-result-filter-member" key={member}><textarea rows={1} aria-label={text.member(index,member+1)} value={value} maxLength={queryResultFilterLimits.valueUnits} disabled={!valid} onChange={event=>changeRule(group.id,id,rule=>({...rule,values:rule.values?.map((value,position)=>position===member?event.target.value:value)}),true)} onCompositionStart={beginComposition} onCompositionEnd={endComposition}/><button aria-label={text.removeMember(index,member+1)} disabled={!valid||composing||(rule.values?.length??0)<=1} onClick={()=>changeRule(group.id,id,rule=>({...rule,values:rule.values?.filter((_,position)=>position!==member)}))}>×</button></div>)}<button aria-label={text.addMember(index)} disabled={!valid||composing||(rule.values?.length??0)>=queryResultFilterLimits.members} onClick={()=>changeRule(group.id,id,rule=>({...rule,values:[...(rule.values??[]),'']}))}>{text.addValue}</button><span className="muted">{text.memberCount(rule.values?.length??0,queryResultFilterLimits.members)}</span></div>}
+      <button disabled={!valid||composing||!operators.includes('eq')} aria-label={valueText.openCondition(index)} onClick={()=>openValues(group.id,child)}>{valueText.open}</button>
       <button disabled={!valid||composing||numbers.size>=queryResultFilterLimits.conditions} aria-label={text.duplicate(index)} onClick={()=>duplicateRule(group.id,id)}>{text.duplicateLabel}</button><button disabled={!valid||composing} aria-label={text.remove(index)} onClick={()=>replace(editGroup(draft,group.id,node=>({...node,children:node.children.filter(node=>node.id!==id)})))}>×</button>{(rule.operator==='like'||rule.operator==='notLike')&&<p className="query-result-filter-pattern-hint">{text.patternHint}</p>}</div>;
   })}{path&&!group.children.length&&<p>{text.emptyGroup}</p>}{path&&groupActions(group,path,depth)}</>;}
-  return <section role="region" aria-label={text.title} className="query-result-filter-panel" onKeyDown={keyDown}><strong>{text.title}</strong><p>{text.hint}</p><p>{text.groupsHint}</p><p>{text.shortcuts}</p><div className="query-result-filter-conditions">{renderGroup(draft,'',1)}</div>{!draft.children.length&&<p>{text.empty}</p>}{!valid&&<ErrorBox message={text.stale}/>}<div className="query-result-filter-actions">{groupActions(draft,'',1)}<button disabled={!valid||composing||!draft.children.length} onClick={()=>replace({...draft,children:[]})}>{text.clearDraft}</button><span className="grow"/>{composing&&<span>{text.composing}</span>}<button onClick={onClose}>{text.cancel}</button><button className="primary" aria-keyshortcuts="Control+Enter Meta+Enter" disabled={!valid||composing} onClick={applyDraft}>{text.apply}</button></div></section>;
+  return <section role="region" aria-label={text.title} className="query-result-filter-panel" onKeyDown={keyDown}><strong>{text.title}</strong><p>{text.hint}</p><p>{text.groupsHint}</p><p>{text.shortcuts}</p><div className="query-result-filter-conditions">{renderGroup(draft,'',1)}</div>{!draft.children.length&&<p>{text.empty}</p>}{!current()&&<ErrorBox message={text.stale}/>}<ErrorBox message={pickerError}/>{picker&&<><p>{binding.truncated?text.truncated:valueText.scope}</p><QueryResultValuePicker key={picker.id} capture={picker.capture} isCurrent={()=>pickerCurrent(picker)} onApply={node=>stageValues(picker,node)} onClose={()=>closeValues(picker)}/></>}<div className="query-result-filter-actions">{groupActions(draft,'',1)}<button disabled={!valid||composing||!draft.children.length} onClick={()=>replace({...draft,children:[]})}>{text.clearDraft}</button><span className="grow"/>{composing&&<span>{text.composing}</span>}<button disabled={!!picker} onClick={onClose}>{text.cancel}</button><button className="primary" aria-keyshortcuts="Control+Enter Meta+Enter" disabled={!valid||composing} onClick={applyDraft}>{text.apply}</button></div></section>;
 }
