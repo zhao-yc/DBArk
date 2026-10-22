@@ -140,6 +140,7 @@ export function buildTableColumnPatchSql(document: TableColumnDefinitionDocument
   if (mysql57 && Number(version[3]) < 8 && patches.some(patch => patch.kind === 'add' ? patch.type.kind === 'json' : patch.kind === 'alter' && patch.changes.type?.kind === 'json')) throw new Error('当前MySQL版本尚未确认支持原生JSON字段，未发送DDL');
   // 新配对绝不能落到旧属性重述路径而被忽略；须由专用事实/计划/后核闭环处理。
   if (patches.some(patch => patch.kind === 'alter' && Object.hasOwn(patch.changes, 'collation'))) throw new Error('列排序规则必须使用专用受控计划，旧字段计划器未发送DDL');
+  if (patches.some(patch => patch.kind === 'alter' && Object.hasOwn(patch.changes, 'autoIncrement'))) throw new Error('列自增属性必须使用专用受控计划，旧字段计划器未发送DDL');
   if (document.database !== undefined && document.database !== options.database) throw new Error('表定义数据库与目标不一致');
   const target = qualified(options.database, document.table), nodes = new Map<string, ColumnNode>(), names = new Set<string>();
   for (const [ref, name] of options.columnRefs) {
@@ -205,6 +206,7 @@ export function buildTableColumnPatchSql(document: TableColumnDefinitionDocument
     for (const key of Object.keys(changes) as (keyof Alter['changes'])[]) {
       if (key === 'collation') throw new Error('列排序规则必须使用专用受控计划');
       if (key === 'generation') throw new Error('生成表达式必须使用专属独立计划');
+      if (key === 'autoIncrement') throw new Error('列自增属性必须使用专属独立计划');
       assertColumnAttributeReadable(column, key);
     }
     assertDependencies(document, column, new Set(Object.keys(changes)), unknownTail);

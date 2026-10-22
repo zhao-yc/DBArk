@@ -176,7 +176,7 @@ const position = z.discriminatedUnion('kind', [z.object({ kind: z.literal('first
 export const columnPatchSchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('add'), clientKey: ref, name, type: columnTypePatchSchema, nullable: z.boolean(), default: columnDefaultPatchSchema, comment: z.string(), position, onUpdate: columnOnUpdatePatchSchema.optional(), generated: generatedColumnSchema.optional() }).strict(),
   z.object({ kind: z.literal('drop'), columnRef: ref }).strict(),
-  z.object({ kind: z.literal('alter'), columnRef: ref, changes: z.object({ name: name.optional(), type: columnTypePatchSchema.optional(), nullable: z.boolean().optional(), default: columnDefaultPatchSchema.optional(), comment: z.string().optional(), position: position.optional(), onUpdate: columnOnUpdatePatchSchema.optional(), collation: columnCollationPatchSchema.optional(), generation: generationExpressionSchema.optional() }).strict() }).strict(),
+  z.object({ kind: z.literal('alter'), columnRef: ref, changes: z.object({ name: name.optional(), type: columnTypePatchSchema.optional(), nullable: z.boolean().optional(), default: columnDefaultPatchSchema.optional(), comment: z.string().optional(), position: position.optional(), onUpdate: columnOnUpdatePatchSchema.optional(), collation: columnCollationPatchSchema.optional(), generation: generationExpressionSchema.optional(), autoIncrement: z.boolean().optional() }).strict() }).strict(),
 ]);
 export type ColumnPatch = z.infer<typeof columnPatchSchema>;
 
@@ -210,6 +210,8 @@ export function inspectColumnPatchInput(input: unknown): { value: unknown; bytes
 export function validateColumnPatches(input: unknown, maxDecimalScale: 30 | 38 = 30): ColumnPatch[] {
   const checked = inspectColumnPatchInput(input);
   const patches = z.array(columnPatchSchema).min(1).max(tableColumnPatchLimits.patches).parse(checked.value);
+  const autoIncrement = patches.find(patch => patch.kind === 'alter' && Object.hasOwn(patch.changes, 'autoIncrement'));
+  if (autoIncrement && (patches.length !== 1 || autoIncrement.kind !== 'alter' || Object.keys(autoIncrement.changes).length !== 1 || typeof autoIncrement.changes.autoIncrement !== 'boolean')) throw new Error('列自增属性只能单列单属性独立修改');
   const generated = patches.find(patch => patch.kind === 'add' && Object.hasOwn(patch, 'generated'));
   if (generated && patches.length !== 1) throw new Error(generatedColumnMessages.isolated);
   const generation = patches.find(patch => patch.kind === 'alter' && Object.hasOwn(patch.changes, 'generation'));
@@ -257,6 +259,8 @@ export interface TableColumnView {
   generatedReference?: boolean;
   /** 专用生成表达式能力；不改变旧七项access或开放其它生成列属性。 */
   generation?: { storage: 'VIRTUAL' | 'STORED'; expression: string; access: ColumnAttributeAccess };
+  /** 列级自增与表下一计数分开；缺失代表能力未确认，不得当作已关闭。 */
+  autoIncrement?: { enabled: boolean; access: ColumnAttributeAccess };
   default: ReadColumnDefault; comment: string | undefined; rawDefinition: string;
   /** null为无自动更新；缺失表示不能可靠投影，不能据此生成移除补丁。 */
   onUpdate?: ColumnOnUpdatePatch;

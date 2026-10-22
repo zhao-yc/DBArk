@@ -7,6 +7,7 @@ import type { ColumnTaskHost, ColumnTaskOptions } from '../../src/engine/tableCo
 import type { TableColumnGetOutput, TableColumnPatchTarget, TableColumnPreviewOutput } from '../../src/shared/tableColumnPatches';
 const ports = vi.hoisted(() => ({ definition: vi.fn(), facts: vi.fn() }));
 // 仅完整定义/索引准备reader使用合成目录；物理reader、共用查询、Tasks和execution模块均为真实代码。
+// 本旧夹具只验证列排序规则，不提供或验收列自增能力；自增准备须由原callback明确返回未准备。
 vi.mock('../../src/engine/structureDefinition', async () => ({ ...await vi.importActual<any>('../../src/engine/structureDefinition'), readStructureDefinition: ports.definition }));
 vi.mock('../../src/engine/tableColumnCollationRead', async () => ({ ...await vi.importActual<any>('../../src/engine/tableColumnCollationRead'), readColumnCollationFacts: ports.facts }));
 import { TableColumnPatchTasks } from '../../src/engine/tableColumnPatchTasks';
@@ -14,6 +15,7 @@ import { StructurePatchCache, structureCacheLimits } from '../../src/engine/stru
 import { readColumnCollationTaskFacts } from '../../src/engine/tableColumnCollationTaskRead';
 import * as collationProjection from '../../src/engine/tableColumnCollationTaskRead';
 import * as generatedColumnRead from '../../src/engine/tableGeneratedColumnRead';
+import * as columnAutoIncrementRead from '../../src/engine/tableColumnAutoIncrementRead';
 
 /** 可变源仅代表RAM目录观测；不触及账号、连接配置、认证、环境变量或真实数据库。 */
 function makeFacts(collation = 'utf8mb4_bin') {
@@ -54,6 +56,7 @@ function fixture() {
       const complete = () => queueMicrotask(() => {
         state.sqlHook?.(sql);
         if (state.failSql?.test(sql)) { callback(state.error ?? new Error('合成驱动错误')); return; }
+        if (sql === 'SET SESSION foreign_key_checks = 1, unique_checks = 1') { callback(Object.assign(new Error('RAM列自增索引准备未在本排序规则夹具中配置'), { fatal: false })); return; }
         // 本旧夹具只授权列排序规则目录；新增生成列全字段查询经真实driver回调明确拒绝，不能在微任务中throw而悬空原命令。
         if (sql.startsWith('SELECT COLUMN_NAME AS name, ORDINAL_POSITION AS ordinal, COLUMN_TYPE AS typeSql, DATA_TYPE AS dataType, IS_NULLABLE AS nullable, COLUMN_DEFAULT AS defaultValue, EXTRA AS extra, GENERATION_EXPRESSION AS generationExpression, ') && sql.includes('FROM information_schema.COLUMNS WHERE ')) { callback(Object.assign(new Error('RAM生成列目录不在本用途权限内'), { errno: 1142, code: 'ER_TABLEACCESS_DENIED_ERROR', fatal: false })); return; }
         let rows: unknown;
@@ -63,7 +66,7 @@ function fixture() {
         else if (sql.includes('FROM information_schema.INNODB_TABLES')) rows = [{ id: state.id, name: 'ram_db/subject' }];
         else if (sql.startsWith('ALTER TABLE')) { state.current = structuredClone(state.after); state.id = state.postId; rows = state.invalidAck ? undefined : { affectedRows: 0, warningStatus: state.warnings }; }
         else if (sql === 'SHOW WARNINGS LIMIT 20') rows = [{ Level: 'Warning', Code: 1265, Message: '合成服务器警告' }];
-        else throw new Error('未登记的RAM查询：' + sql);
+        else { callback(new Error('未登记的RAM查询：' + sql)); return; }
         callback(null, rows, []);
       });
       if (state.holdAlter && sql.startsWith('ALTER TABLE')) state.held = complete; else complete();
@@ -128,11 +131,12 @@ it.each([1142, 1143, 1227])('明确附加目录权限%s只关闭新能力，旧c
 it('列排序规则准确旧版8.0.46仍沿原get保留七属性且零物理目录，新生成用途由独立Engine专项覆盖', async () => {
   // 仅此用例隔离无关新用途；不能因生成列支持8.0.46而放宽列排序规则原准确版本/零SELECT断言。
   const spy = vi.spyOn(generatedColumnRead, 'readGeneratedColumnFacts').mockResolvedValue({ kind: 'unavailable', reason: '本例仅验证列排序规则准确版本门；生成列由独立Engine专项覆盖' });
+  const autoSpy = vi.spyOn(columnAutoIncrementRead, 'readTableColumnAutoIncrementFacts').mockResolvedValue({ kind: 'unavailable', reason: '本例仅验证列排序规则准确版本门；列自增由独立专项覆盖' });
   try {
     const f = fixture(); f.state.version = '8.0.46'; f.state.current.base.serverVersion = '8.0.46';
     const snapshot = await f.get(); expect(snapshot.collationCatalog).toBeUndefined(); expect(Object.keys(snapshot.columns[1].access)).toEqual(['name', 'type', 'nullable', 'default', 'comment', 'position', 'onUpdate']); expect(f.sent.filter(sql => sql.startsWith('SELECT'))).toHaveLength(0);
     expect(spy).toHaveBeenCalledOnce(); expect(snapshot.generatedAccess).toMatchObject({ editable: false, reason: expect.any(String) });
-  } finally { spy.mockRestore(); }
+  } finally { spy.mockRestore(); autoSpy.mockRestore(); }
 });
 it.each([1045, 1054, 1146, 2013, undefined])('附加读取的认证/未知/断线%s不能吞为普通get成功', async errno => {
   const f = fixture(), error = Object.assign(new Error('原始驱动错误'), { errno }); f.state.failSql = /^SELECT VERSION/; f.state.error = error;

@@ -15,15 +15,19 @@ import { buildColumnCollationExecutionPlan, verifyColumnCollationExecution, type
 import { readGeneratedColumnDefinition, sameGeneratedColumnExpression, compileGeneratedColumnExpression } from './tableGeneratedColumn';
 import { readGeneratedColumnFacts, assertGeneratedColumnUnchanged, verifyGeneratedColumnCatalog, verifyGeneratedExpressionCatalog, type GeneratedColumnRead } from './tableGeneratedColumnRead';
 import { generatedExpressionAccess, prepareGeneratedExpressionAccess } from './tableGeneratedExpressionPlan';
+import { readTableColumnAutoIncrementFacts, assertTableColumnAutoIncrementUnchanged, type TableColumnAutoIncrementFacts } from './tableColumnAutoIncrementRead';
+import { tableColumnAutoIncrementAccess, planTableColumnAutoIncrement, verifyTableColumnAutoIncrement, sameTableColumnAutoIncrementMode, type TableColumnAutoIncrementPlan } from './tableColumnAutoIncrementSql';
+import { indexReferenceNames } from './tableIndexRead';
 
 export const columnTaskLimits = structureCacheLimits;
 export interface ColumnTaskOptions { label: string; columnPatch: TableColumnApplyProgress; executionTarget?: { database: string; table: string }; }
 export interface ColumnTaskHost { run<T>(connectionId: string, taskId: string, action: (context: ColumnTaskContext) => Promise<T>, options: ColumnTaskOptions): Promise<T>; }
-interface Snapshot extends DefinitionRead { id: string; target: TableColumnPatchTarget; revision: number; expires: number; refs: Map<string, string>; bytes: number; collation?: ColumnCollationTaskFacts; generated?: GeneratedColumnRead; }
+interface Snapshot extends DefinitionRead { id: string; target: TableColumnPatchTarget; revision: number; expires: number; refs: Map<string, string>; bytes: number; collation?: ColumnCollationTaskFacts; generated?: GeneratedColumnRead; autoIncrement?: TableColumnAutoIncrementFacts; }
 interface PreviewBase { snapshot: Snapshot; patches: ColumnPatch[]; expires: number; bytes: number; }
 interface LegacyPreview extends PreviewBase { kind: 'legacy'; plan: ColumnPatchSqlPlan; generated?: GeneratedColumnRead; }
 interface CollationPreview extends PreviewBase { kind: 'collation'; plan: ColumnCollationExecutionPlan; collation: ColumnCollationTaskFacts; }
-type Preview = LegacyPreview | CollationPreview;
+interface AutoIncrementPreview extends PreviewBase { kind: 'auto-increment'; plan: TableColumnAutoIncrementPlan; autoIncrement: TableColumnAutoIncrementFacts; }
+type Preview = LegacyPreview | CollationPreview | AutoIncrementPreview;
 
 /** SHA 仅用于定义及身份相等校验，不持久化 SQL 或服务器凭据。 */
 const hash = (source: string): string => createHash('sha256').update(source).digest('hex');
@@ -283,15 +287,24 @@ export class TableColumnPatchTasks {
         let generatedBytes = generated ? generated.bytes + Buffer.byteLength(JSON.stringify(generated.references)) + Buffer.byteLength(JSON.stringify(generatedColumns.map(column => column.generation ?? null))) + 2048 : 0;
         if (generated && !this.fitsAdditional(baseBytes + additional, generatedBytes)) { generated = undefined; generatedBytes = 0; }
         if (generated) columns = generatedColumns;
+        const autoRead = await readTableColumnAutoIncrementFacts(context, target, read, { columns: refs, indexes: new Map() });
+        let autoIncrement = autoRead.kind === 'ready' ? autoRead.value : undefined;
+        let autoColumns = columns.map(column => ({ ...column, autoIncrement: tableColumnAutoIncrementAccess(document, column.name, autoIncrement) }));
+        let autoBytes = (autoIncrement?.bytes ?? 0) + Buffer.byteLength(JSON.stringify(autoColumns.map(column => column.autoIncrement)));
+        if (!this.fitsAdditional(baseBytes + additional + generatedBytes, autoBytes)) {
+          autoIncrement = undefined; autoColumns = columns.map(column => ({ ...column, autoIncrement: tableColumnAutoIncrementAccess(document, column.name) }));
+          autoBytes = Buffer.byteLength(JSON.stringify(autoColumns.map(column => column.autoIncrement)));
+        }
+        columns = autoColumns;
         context.checkCancelled();
         if (!this.pendingReads.has(pending)) throw new Error('字段读取期间连接已释放或修订变化；未登记快照');
-        snapshot = { ...read, id: randomUUID(), target, revision: currentRevision, expires: this.now() + columnTaskLimits.ttlMs, refs, bytes: baseBytes + additional + generatedBytes, ...(collation ? { collation } : {}), ...(generated ? { generated } : {}) };
+        snapshot = { ...read, id: randomUUID(), target, revision: currentRevision, expires: this.now() + columnTaskLimits.ttlMs, refs, bytes: baseBytes + additional + generatedBytes + autoBytes, ...(collation ? { collation } : {}), ...(generated ? { generated } : {}), ...(autoIncrement ? { autoIncrement } : {}) };
         return { target, snapshotId: snapshot.id, ddlHash: hash(read.source), expiresAt: new Date(snapshot.expires).toISOString(), columns, generatedAccess: generated ? { editable: true } : { editable: false, reason: generatedReason }, ...(catalog ? { collationCatalog: catalog } : {}), warnings: [...(risks.length ? [tableColumnDefaultRiskMessage(risks)] : []), ...(document.columns.some(hasUnprovenBinaryDefault) ? ['二进制文本默认值不能证明原始字节（字段：' + document.columns.filter(hasUnprovenBinaryDefault).map(column => JSON.stringify(column.name)).join('、') + '），目标列不能重述或导出结构；旁列及专用默认值操作仍可预览，成功后完整定义需人工核对。'] : []), read.originalMode === read.normalizedMode ? '结构读取使用独立短会话，未修改查询标签。' : '专用结构会话已去除隐藏定义的兼容模式；原查询标签模式未变。', '执行前重核仍存在外部 DDL 并发窗口，请在维护时段暂停并行结构修改。'], capabilities: { dialect: read.context.dialect, serverVersion: read.serverVersion, maxDecimalScale: read.context.dialect === 'mariadb' ? 38 as const : 30 as const } };
       }, { label: '读取字段定义', columnPatch: progress });
       if (!this.pendingReads.has(pending) || snapshot.expires <= this.now()) throw new Error('字段快照已释放或过期，未登记能力令牌');
       // 严格关闭期间其它任务可能占用容量；仅新附加事实放弃，原基础快照仍须真实通过容量检查。
-      if ((snapshot.collation || snapshot.generated) && !this.fitsAdditional(baseBytes, snapshot.bytes - baseBytes)) {
-        delete snapshot.collation; delete snapshot.generated; snapshot.bytes = baseBytes; output.columns = baseColumns; delete output.collationCatalog;
+      if ((snapshot.collation || snapshot.generated || snapshot.autoIncrement) && !this.fitsAdditional(baseBytes, snapshot.bytes - baseBytes)) {
+        delete snapshot.collation; delete snapshot.generated; delete snapshot.autoIncrement; snapshot.bytes = baseBytes; output.columns = baseColumns; delete output.collationCatalog;
         output.generatedAccess = { editable: false, reason: '生成列附加证据超过共享缓存预算，请关闭旧结构窗口后重新读取' };
       }
       this.capacity(snapshot.bytes, 'snapshot'); this.snapshots.set(snapshot.id, snapshot);
@@ -312,6 +325,20 @@ export class TableColumnPatchTasks {
       const read = await readDefinition(context, snapshot.target, true); assertSnapshot(snapshot, read);
       if (patches.some(patch => patch.kind === 'alter' && Object.hasOwn(patch.changes, 'onUpdate'))) assertOnUpdateCatalog(patches, snapshot.refs, await onUpdateCatalog(context, snapshot.target, documentOf(read)));
       if (this.snapshots.get(input.snapshotId) !== snapshot || snapshot.expires <= this.now()) throw new Error('字段快照已释放或过期，未创建新预览');
+      const autoPatch = patches.find(patch => patch.kind === 'alter' && Object.hasOwn(patch.changes, 'autoIncrement'));
+      if (autoPatch?.kind === 'alter') {
+        if (!snapshot.autoIncrement || typeof autoPatch.changes.autoIncrement !== 'boolean') throw Error('原快照没有完整列自增能力，请重新读取；未发送DDL');
+        const fresh = await readTableColumnAutoIncrementFacts(context, snapshot.target, read, indexReferenceNames(snapshot.autoIncrement.indexes));
+        if (fresh.kind !== 'ready') throw Error('列自增真实目录或实体身份已不可用，请重新读取；未发送DDL');
+        assertTableColumnAutoIncrementUnchanged(snapshot.autoIncrement, fresh.value);
+        const name = snapshot.refs.get(autoPatch.columnRef); if (!name) throw Error('列自增目标不在原字段快照内');
+        const plan = planTableColumnAutoIncrement(documentOf(read), fresh.value, autoPatch.columnRef, name, autoPatch.changes.autoIncrement, snapshot.target.database, read.normalizedMode);
+        if (this.snapshots.get(input.snapshotId) !== snapshot || snapshot.expires <= this.now()) throw Error('字段快照已释放或过期，未创建列自增预览');
+        const bytes = snapshot.bytes + fresh.value.bytes + Buffer.byteLength(evidenceJson([plan, patches])) + 2048;
+        this.capacity(bytes, 'preview');
+        value = { kind: 'auto-increment', snapshot, plan, patches, autoIncrement: fresh.value, expires: Math.min(snapshot.expires, this.now() + columnTaskLimits.ttlMs), bytes };
+        return { previewToken: token, expiresAt: new Date(value.expires).toISOString(), target: { ...snapshot.target }, ddlHash: hash(snapshot.source), sql: plan.sql, changes: [{ columnRef: autoPatch.columnRef, description: autoPatch.changes.autoIncrement ? '启用现有整数列自增属性' : '取消现有整数列自增属性' }], warnings: plan.warnings, requiredAcknowledgements: ['ddl-implicit-commit', 'external-ddl-window', ...plan.requiredAcknowledgements], concurrencyPolicy: 'recheck-before-ddl' as const };
+      }
       const collationPatch = patches.find(patch => patch.kind === 'alter' && Object.hasOwn(patch.changes, 'collation'));
       if (collationPatch?.kind === 'alter') {
         if (!snapshot.collation || !collationPatch.changes.collation) throw new Error('原快照没有完整列排序规则能力，请重新读取');
@@ -352,12 +379,27 @@ export class TableColumnPatchTasks {
     const snapshot = preview.snapshot;
     if (snapshot.revision !== this.revision(revision)) throw new Error('连接配置已变化，请重新读取并预览；未发送 DDL');
     if (['ddl-implicit-commit', 'external-ddl-window', ...(preview.kind === 'collation' ? columnCollationAcknowledgements : []), ...preview.plan.requiredAcknowledgements].some(value => !input.acknowledgements.includes(value))) throw new Error('尚未确认结构变更后果；预览已消费，未发送 DDL');
+    if (preview.kind === 'auto-increment') {
+      const required = ['ddl-implicit-commit', 'external-ddl-window', ...preview.plan.requiredAcknowledgements];
+      if (input.acknowledgements.length !== required.length || new Set(input.acknowledgements).size !== required.length || input.acknowledgements.some(value => !required.includes(value))) throw Error('列自增确认项与实际预览不一致；令牌已消费，未发送DDL');
+    }
     const progress = initialProgress();
     return this.host.run(snapshot.target.connectionId, input.taskId, async context => {
       progress.phase = 'rechecking'; context.report();
       const current = await readDefinition(context, snapshot.target, true); assertSnapshot(snapshot, current);
       let collationBefore: ColumnCollationTaskFacts | undefined;
       let generatedBefore: GeneratedColumnRead | undefined;
+      let autoBefore: TableColumnAutoIncrementFacts | undefined;
+      if (preview.kind === 'auto-increment') {
+        const fresh = await readTableColumnAutoIncrementFacts(context, snapshot.target, current, indexReferenceNames(preview.autoIncrement.indexes));
+        if (fresh.kind !== 'ready') throw Error('列自增目录或实体身份已不可用；未发送DDL');
+        assertTableColumnAutoIncrementUnchanged(preview.autoIncrement, fresh.value);
+        const patch = preview.patches[0], name = patch.kind === 'alter' ? snapshot.refs.get(patch.columnRef) : undefined;
+        if (patch.kind !== 'alter' || !name || typeof patch.changes.autoIncrement !== 'boolean') throw Error('列自增私有预览类型无效；未发送DDL');
+        const expected = planTableColumnAutoIncrement(documentOf(current), fresh.value, patch.columnRef, name, patch.changes.autoIncrement, snapshot.target.database, current.normalizedMode);
+        if (evidenceJson(expected) !== evidenceJson(preview.plan)) throw Error('列自增计划或真实依据已变化；未发送DDL');
+        autoBefore = fresh.value;
+      }
       if (preview.kind === 'legacy' && preview.generated) {
         const fresh = await readGeneratedColumnFacts(context, snapshot.target, current);
         if (fresh.kind !== 'ready') throw Error('生成列目录或物理身份已不可用；未发送DDL');
@@ -378,16 +420,24 @@ export class TableColumnPatchTasks {
       }
       if (preview.patches.some(patch => patch.kind === 'alter' && Object.hasOwn(patch.changes, 'onUpdate'))) assertOnUpdateCatalog(preview.patches, snapshot.refs, await onUpdateCatalog(context, snapshot.target, documentOf(current)));
       if (preview.expires <= this.now()) throw new Error('预览在准备期间已过期，请重新预览；未发送 DDL');
+      if (preview.kind === 'auto-increment') {
+        // 先以原快照模式核完实体/目录，再仅在本结构会话追加保零模式并严格读回。
+        await columnTaskQuery(context, `SET SESSION sql_mode = '${preview.plan.executionMode}'`);
+        const modes = (await columnTaskQuery<{ sqlMode: string }[]>(context, 'SELECT @@SESSION.sql_mode AS sqlMode')).rows;
+        if (modes.length !== 1 || typeof modes[0].sqlMode !== 'string' || !sameTableColumnAutoIncrementMode(modes[0].sqlMode, preview.plan.executionMode)) throw Error('结构会话未完整保留原SQL模式并启用NO_AUTO_VALUE_ON_ZERO；未发送DDL');
+        if (this.snapshots.get(snapshot.id) !== snapshot || preview.expires <= this.now()) throw Error('列自增快照已释放或过期；未发送DDL');
+      }
       context.checkCancelled(); progress.phase = 'executing'; context.report();
       try {
         let result: ResultSetHeader;
         try {
-          result = (await columnTaskQuery<ResultSetHeader>(context, preview.plan.sql, () => { progress.ddlSubmitted = true; progress.outcome = 'unknown'; context.report(); })).rows;
+          result = (await columnTaskQuery<ResultSetHeader>(context, preview.plan.sql, () => { if (preview.kind === 'auto-increment') this.releaseTokens({ snapshotId: snapshot.id }); progress.ddlSubmitted = true; progress.outcome = 'unknown'; context.report(); })).rows;
         } catch (error) {
           // 明确 ERR 仍不能证明非原子 DDL 的所有引擎均未改动；保守未知且绝不自动重放。
           progress.outcome = progress.ddlSubmitted ? 'unknown' : 'not-sent'; context.report(); throw error;
         }
         if (!result || typeof result.affectedRows !== 'number') throw new Error('结构命令未返回可确认的 OK 包，请核对实际定义');
+        if (preview.kind === 'auto-increment' && (!Number.isSafeInteger(result.affectedRows) || result.affectedRows < 0)) throw Error('列自增未收到可确认的DDL成功响应，请核对实际定义，不要重放');
         progress.ddlCompleted = true; progress.outcome = 'succeeded'; progress.phase = 'verifying'; context.report();
         const output: TableColumnApplyOutput = { ddlSubmitted: true, ddlCompleted: true, definitionVerified: false, warnings: result.warningStatus ? [`服务器返回 ${result.warningStatus} 条结构变更警告，请核对数据转换结果。`] : [] };
         // SHOW WARNINGS 必须紧跟此 ALTER 的 OK，在任何身份/定义 SELECT 覆盖诊断之前读取。
@@ -407,7 +457,18 @@ export class TableColumnPatchTasks {
         }
         try {
           const after = await readDefinition(context, snapshot.target, false), document = documentOf(after);
-          if (preview.kind === 'collation') {
+          if (preview.kind === 'auto-increment') {
+            if (!autoBefore) throw Error('缺少执行前真实列自增事实');
+            const fresh = await readTableColumnAutoIncrementFacts(context, snapshot.target, after, indexReferenceNames(autoBefore.indexes));
+            if (fresh.kind !== 'ready') throw Error('列自增后核目录或实体不能完整证明');
+            context.checkCancelled();
+            if (context.managed.signal?.aborted || context.managed.broken) throw Error('列自增后核连接已取消或断开');
+            const verified = result.warningStatus === 0 && verifyTableColumnAutoIncrement(autoBefore, fresh.value, current, after, preview.plan);
+            output.definitionVerified = progress.definitionVerified = verified;
+            output.after = { ddlHash: hash(after.source), columns: views(document, snapshot.refs, after.serverVersion, new Set(), after.encodings).map(column => ({ ...column, autoIncrement: tableColumnAutoIncrementAccess(document, column.name, fresh.value) })) };
+            if (autoBefore.physical.tableId !== fresh.value.physical.tableId) output.warnings.push('COPY后物理表编号已变化；已按完整定义和真实目录核验，不承诺物理ID保持。');
+            if (!verified) output.verificationError = '列自增DDL已完成，但警告、执行模式或完整结构/目录后核未全部通过，请核对最新定义；不要重复执行。';
+          } else if (preview.kind === 'collation') {
             if (!collationBefore) throw new Error('缺少执行前真实列排序规则事实');
             const fresh = await readColumnCollationTaskFacts(context, snapshot.target, after, collationBefore.facts.references);
             if (fresh.kind !== 'ready') throw new Error('列排序规则后核目录不可用');
