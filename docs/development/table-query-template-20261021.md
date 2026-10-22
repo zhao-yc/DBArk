@@ -1,5 +1,7 @@
 # 从表结构生成查询SQL模板
 
+后续新增[模板选列与字段顺序](table-query-template-columns-20261022.md)，支持精简宽表和调整参数顺序；原默认四模板行为及以下历史验收记录保持。
+
 当前状态：准确62224ddc的[本机Windows源码实库整例](../../tests/integration/acceptance-table-filter-template-62224dd-20261021.md)已通过四类预览、SELECT61行／原空串、UPDATE4参数及草稿保持／恢复；原CLI9520 exit0／6.5113174秒，正常退出、数据／定义保持、精确清库和三条辅助连接关闭。原c54失败现场仍保留，安装／macOS及其它组合另验，暂不发布。
 
 ## 完整操作

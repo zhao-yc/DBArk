@@ -1,6 +1,8 @@
 # Navicat 全功能覆盖目标
 
-## 当前开发安排（2026-10-22）
+## 当前开发安排（2026-10-23）
+
+高频表页SQL模板新增[选列与字段顺序](development/table-query-template-columns-20261022.md)：SELECT投影、INSERT／UPDATE写入字段及顺序、搜索和50项分页、宽表精简；完整可靠键和200参数预算保持，默认四模板兼容。准确04891962的[Windows源码实库窗口](../tests/integration/acceptance-table-query-template-columns-04891962-20261022.md)通过三字段61行／精度／空串、两组参数、205列精简、父草稿和原库完整保持／精确清理；类型／599项相关／完整14950项通过、1条件跳过／构建通过。首轮沙箱权限失败封存，正常权限原断言复验；其它实例、实际写入、macOS／安装另验，完整工作包及发行计数不增加，暂不发布。
 
 D09补充[按需非NULL不同值计数](development/table-statistics-distinct-20261022.md)：原列COUNT(DISTINCT)、同条聚合及原服务器排序规则语义；勾选零查询，显式执行、精确数量和回执类别校验。准确d63的[六实例与Windows正式窗口](../tests/integration/acceptance-table-statistics-distinct-d63c687a-20261022.md)通过ci／UINT64／BIT／NULL／字节及空集，120原非observer连接收尾；完整14919项通过／1条件跳过、类型／构建通过，首轮新错误阶段断言失败保留。分布／抽样、真实故障组合、macOS／安装继续，完整D09与发行计数不增加，暂不发布。
 

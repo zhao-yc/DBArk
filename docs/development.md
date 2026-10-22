@@ -1,5 +1,7 @@
 # 开发与测试
 
+表页SQL模板的[选列、字段顺序和宽表精简](development/table-query-template-columns-20261022.md)复用已有参数执行工作流；准确源码及本机Windows实库范围见[04891962验收](../tests/integration/acceptance-table-query-template-columns-04891962-20261022.md)。
+
 查询结果新增[命名整理方案](development/query-result-presets-20261022.md)：完整筛选与多列排序按连接持久化，支持新建、覆盖、仅重命名、删除、预览与手动应用；字段及来源不匹配时整份拒绝，失败要求显式刷新。完整11921通过／1平台跳过，最后名称校验另有352项及构建通过；准确edd7bd57的[本机Windows实库窗口与独立导出读回](../tests/integration/acceptance-query-result-presets-edd7bd57-20261022.md)已通过，客户端重启／安装／macOS另验，暂不发布。
 
 后继准确3270ebbb新增[Windows源码真实双客户端重启验收](../tests/integration/acceptance-query-result-presets-restart-3270ebbb-20261022.md)：第二代从原配置读出完整方案，通过真实UI应用与撤销重做；每代一次常量SQL、临时密码不落盘、两代正常退出。124项准备及类型通过，14封存／2143输入不变；产品源码和原编译字节保持，安装／macOS继续，暂不发布。
