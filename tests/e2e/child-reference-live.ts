@@ -74,7 +74,7 @@ export function registerChildReferenceUiTests() {
     const statements = {
       identity: 'SELECT VERSION() AS version,@@version_compile_os AS os,@@lower_case_table_names AS names,@@server_uuid AS uuid,CONNECTION_ID() AS threadId',
       exists: 'SELECT TABLE_NAME AS name FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA=? ORDER BY TABLE_NAME',
-      parent: 'SELECT CAST(id AS CHAR) AS id,CAST(amount AS CHAR) AS amount,HEX(part) AS partHex,label,note FROM ' + quote + ' ORDER BY id',
+      parent: 'SELECT CAST(id AS CHAR) AS id,CAST(amount AS CHAR) AS amount,HEX(part) AS partHex,label,note FROM ' + quote + ' ORDER BY ' + quote + '.`id`',
       child: 'SELECT id,payload FROM ' + qualify('child') + ' WHERE parent_id<=>? AND parent_amount<=>? AND parent_part<=>? AND parent_label<=>? ORDER BY id',
       noKey: 'SELECT id,payload FROM ' + qualify('child_no_pk') + ' WHERE parent_id<=>? AND parent_amount<=>? AND parent_part<=>? AND parent_label<=>? ORDER BY id',
       threads: 'SELECT ID FROM INFORMATION_SCHEMA.PROCESSLIST WHERE DB=? AND ID<>?',
