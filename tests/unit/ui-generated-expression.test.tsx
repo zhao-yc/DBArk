@@ -109,4 +109,3 @@ it('preview取消和迟到回执仍等原Promise并精确释放，不复活计�
 it('apply未知不重放，取消等待原Promise结束后才解除关闭锁', async () => {
   let reject!: (reason: Error) => void; const pending = new Promise<never>((_, value) => { reject = value; }); const f = await mount({ apply: () => pending }); await edit(); await click(text.rowSave); await click(text.preview); await confirm(); await act(async () => { button(text.apply).dispatchEvent(new MemoryEvent('click')); }); await click(text.cancel); expect(button(text.close).disabled).toBe(true); expect(f.apply).toHaveBeenCalledOnce(); await act(async () => reject(new Error('合成重算最终结果未知'))); expect(f.apply).toHaveBeenCalledOnce(); expect(button(text.apply).disabled).toBe(true); expect(document.body.textContent).toContain(text.unknown); expect(button(text.close).disabled).toBe(false);
 });
-
