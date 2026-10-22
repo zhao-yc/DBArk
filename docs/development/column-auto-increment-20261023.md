@@ -17,7 +17,7 @@
 
 首批准确版本为 MySQL 5.7.44、8.0.46、8.4.11 与 MariaDB 10.11.19、11.4.13。还须证明 InnoDB 基本表、实际物理身份、名称映射、完整目录、直接 ALTER 权限及可写运行策略；其它版本、平台、分区、Galera、非默认步长/偏移和不可证明目录只读。
 
-整表存在生成列时，本操作明确只读，即使生成表达式不引用目标列。独立实库反例已证明：复制重建可以在无警告时重算旁边的 STORED 列，原 SQL 定义保持也不能证明生成值不变。表达式／函数索引的既有隐藏依赖保护同样保留。此限制等待独立重算保真方案，不自动删除或转换这些对象。相关求值与 SQL 模式边界见 [MySQL 说明](https://dev.mysql.com/doc/refman/8.4/en/create-table-generated-columns.html) 和 [MariaDB 说明](https://mariadb.com/docs/server/reference/sql-statements/data-definition/create/generated-columns)。
+整表存在生成列时，本操作明确只读，即使生成表达式不引用目标列。独立实库反例已证明：复制重建可以在无警告时重算旁边的 STORED 列，该生成列的 SQL 定义保持也不能证明其值不变。表达式／函数索引的既有隐藏依赖保护同样保留。此限制等待独立重算保真方案，不自动删除或转换这些对象。相关求值与 SQL 模式边界见 [MySQL 说明](https://dev.mysql.com/doc/refman/8.4/en/create-table-generated-columns.html) 和 [MariaDB 说明](https://mariadb.com/docs/server/reference/sql-statements/data-definition/create/generated-columns)。
 
 独立短结构会话在原模式基础上加入 `NO_AUTO_VALUE_ON_ZERO`，读回确认原模式未丢失，再执行单条 `MODIFY COLUMN`，明确采用 `ALGORITHM=COPY, LOCK=EXCLUSIVE`。查询标签及其事务不受此会话设置影响。启用自增时零值可能重新分配，详见 [MySQL 官方行为记录](https://bugs.mysql.com/bug.php?id=103784)；MariaDB 在线 COPY 对该模式另有限制，见 [MariaDB 官方说明](https://github.com/mariadb-corporation/mariadb-docs/blob/main/server/reference/sql-statements/data-definition/alter/alter-table/online-schema-change.md)。因此本功能明确复制、持有排他锁，不承诺在线执行。
 
@@ -27,4 +27,4 @@
 
 独立数据库行为探针已覆盖六实例的原零值、重复零值、负数、大整数、DECIMAL、二进制及 NULL 保持，以及默认插入、取消后显式插入。探针与实际产品路径分别记录：实际 Engine 六实例已通过启用、取消、默认插入、原行读回、生成列表拒绝、缺确认消费令牌、旧令牌拒绝、外部 DDL 拒绝及原生流关闭／精确清理。类型、949 项相关、完整 15120 项通过／1 平台跳过、构建及默认关闭门通过。
 
-Windows 正式源码窗口继续验证；安装包、macOS、SSH、限权与实际 MDL 取消组合另验。旧确认回调、放弃草稿重入及生成列重算的红反例和修复证据均保留。源码通过不等于安装包或其它平台验收，暂不发布。
+准确 ccb7c42d 的 Windows 正式源码窗口已通过启用／取消及原定义、全量原行保持，正常退出后精确清理，详见[验收记录](../../tests/integration/acceptance-column-auto-increment-ccb7c42d-20261023.md)。安装包、macOS、SSH、限权与实际 MDL 取消组合另验。旧确认回调、放弃草稿重入及生成列重算的红反例和修复证据均保留。源码通过不等于安装包或其它平台验收，暂不发布。
