@@ -1,5 +1,7 @@
 # Navicat 全功能覆盖目标
 
+O01新增[已有字符列跨字符集转换](development/column-encoding-20261023.md)：真实配对、整列及默认值字节预检、实际MAXLEN索引预算、独立COPY／排他锁与完整目录后核；受控时间默认及自增旁列保持。类型、1095项相关、完整15337通过／1平台跳过、构建及六实例实际Engine通过，共36成功／6预期唯一碰撞拒绝DDL；准确5d859ac7的[Windows正式源码窗口](../tests/integration/acceptance-column-encoding-5d859ac7-20261023.md)完成真实转换／恢复、原字节／定义／索引保持、正常退出及精确清理。旧夹具、丢稿重入、沙箱权限和utf8mb3弃用警告失败均保留；窄升级不忽略任何warning。安装、macOS及实际故障组合另验，完整O01与发行计数不增加，暂不发布。
+
 O01新增[索引参与优化器切换](development/index-optimizer-20261023.md)：MySQL可见性与MariaDB忽略状态，单索引单属性预览／恢复，真实聚簇主键只读，旧删除／重建权限不放宽。类型、621项相关、完整15218通过／1平台跳过、构建和六实例实际Engine通过，共40组往返／80条原生DDL，5.7零DDL拒绝；准确347ab3a6的[Windows正式源码窗口](../tests/integration/acceptance-index-optimizer-347ab3a6-20261023.md)完成隐藏／恢复、原定义／目录／全行保持及精确清理。安装、macOS和实际故障组合另验，完整O01与发行计数不增加，暂不发布。
 
 ## 当前开发安排（2026-10-23）
