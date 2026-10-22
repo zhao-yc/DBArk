@@ -1,24 +1,11 @@
-import { generatedColumnLimits, generatedColumnMessages as text, parseGeneratedColumnExpression, type GeneratedColumnExpression } from '../shared/tableGeneratedColumn';
+import { generatedColumnExpressionFingerprint, generatedColumnLimits, generatedColumnMessages as text, parseGeneratedColumnExpression, type GeneratedColumnExpression } from '../shared/tableGeneratedColumn';
 import type { TableColumnDefinitionDocument } from '../shared/tableColumnPatches';
 import { editableColumnType, tableDefinitionTokens } from './tableColumnDefinition';
 
 export interface CompiledGeneratedColumnExpression { sql: string; fingerprint: string; referencedColumns: string[]; }
-export interface GeneratedColumnDefinition { storage: 'VIRTUAL' | 'STORED'; expression: string; fingerprint: string; referencedColumns: string[]; }
+export interface GeneratedColumnDefinition { storage: 'VIRTUAL' | 'STORED'; expression: string; sql: string; fingerprint: string; referencedColumns: string[]; }
 /** 此处只引用实际名字；不使用客户端原文片段、数学求值或字符串查找代替解析。 */
 const quoted = (name: string): string => '`' + name.replace(/`/g, '``') + '`';
-
-/** 官方解析器将一元+直接归约为子节点；仅比较键跟随该规则，预览SQL仍保留用户真实运算树。 */
-function expressionFingerprint(node: GeneratedColumnExpression): string {
-  const project = (value: GeneratedColumnExpression): GeneratedColumnExpression => {
-    if (value.kind === 'unary') {
-      const operand = project(value.operand);
-      return value.operator === '+' ? operand : { ...value, operand };
-    }
-    if (value.kind === 'binary') return { ...value, left: project(value.left), right: project(value.right) };
-    return value;
-  };
-  return JSON.stringify(project(node));
-}
 
 /** 引用列须完整可读且是原有普通精确数值列；自增/生成/隐藏和未知属性不能借type权限放行。 */
 export function isGeneratedColumnReference(document: TableColumnDefinitionDocument, name: string, beforeOrdinal = document.columns.length): boolean {
@@ -42,9 +29,12 @@ export function compileGeneratedColumnExpression(document: TableColumnDefinition
     return '(' + render(node.left) + ' ' + node.operator + ' ' + render(node.right) + ')';
   };
   const sql = render(parsed.ast);
-  // 引号、转义及结构括号会增加长度；在DDL前拦截，不能成功后才因自身输出超过解析预算而拒绝后核。
+  // 引号、转义及结构括号会增加长度、词法单元和解析深度；发送DDL前先证明实际输出也能按同一预算后核。
   if (sql.length > generatedColumnLimits.expression) throw Error(text.budget);
-  return { sql, fingerprint: expressionFingerprint(parsed.ast), referencedColumns: [...parsed.referencedColumns] };
+  const fingerprint = generatedColumnExpressionFingerprint(parsed.ast), rendered = parseGeneratedColumnExpression(sql);
+  // 不能仅因输出语法可读就放行；原始运算次序、引用及十进制尺度必须保持同一比较键。
+  if (generatedColumnExpressionFingerprint(rendered.ast) !== fingerprint) throw Error(text.expression);
+  return { sql, fingerprint, referencedColumns: [...parsed.referencedColumns] };
 }
 
 /** SHOW/目录可用当前ANSI模式表示标识符；转为同一安全子集后只比较结构，不执行原表达式。 */
@@ -82,6 +72,6 @@ export function readGeneratedColumnDefinition(document: TableColumnDefinitionDoc
     if (!word(cursor++, 'AS') || tokens[cursor]?.value !== '(' || tokens.at(-2)?.value !== ')' || tokens.at(-1)?.kind !== 'word') return;
     const storage = tokens.at(-1)!.value.toUpperCase(); if (!['VIRTUAL', 'STORED', ...(document.context.dialect === 'mariadb' ? ['PERSISTENT'] : [])].includes(storage)) return;
     const expression = raw.slice(tokens[cursor].end, tokens.at(-2)!.start), compiled = compileGeneratedColumnExpression(document, serverExpression(document, expression), document.columns.indexOf(column));
-    return { storage: storage === 'PERSISTENT' ? 'STORED' : storage as 'VIRTUAL' | 'STORED', expression, fingerprint: compiled.fingerprint, referencedColumns: compiled.referencedColumns };
+    return { storage: storage === 'PERSISTENT' ? 'STORED' : storage as 'VIRTUAL' | 'STORED', expression, sql: compiled.sql, fingerprint: compiled.fingerprint, referencedColumns: compiled.referencedColumns };
   } catch { return; }
 }

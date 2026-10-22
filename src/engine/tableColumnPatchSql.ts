@@ -1,9 +1,10 @@
 import { identifier, qualified, SqlScriptScanner, stringLiteral } from './sql';
 import { columnOnUpdateAccess, columnOnUpdateVersionSupported, readColumnOnUpdate, sameColumnOnUpdate } from '../shared/tableColumnPatches';
-import { assertColumnAttributeReadable, tableDefinitionTokens, type TableDefinitionToken } from './tableColumnDefinition';
+import { assertColumnAttributeReadable, tableDefinitionTokens } from './tableColumnDefinition';
 import { columnRestateAccess, hasUnprovenBinaryDefault, readControlledTimestampDefault, tableColumnDefaultRisks, tableColumnDefaultRiskMessage, tableColumnPatchLimits, validateColumnPatches, type ColumnDefaultPatch, type ColumnPatch, type ColumnTypePatch, type DefinitionRange, type TableColumnDefinition, type TableColumnDefinitionDocument } from '../shared/tableColumnPatches';
 import { generatedColumnAcknowledgement, generatedColumnMessages } from '../shared/tableGeneratedColumn';
 import { compileGeneratedColumnExpression } from './tableGeneratedColumn';
+import { planGeneratedExpressionChange, structureTokensMentionColumn as mentions, structureTailHasUnknownDependencies as tailUnknown } from './tableGeneratedExpressionPlan';
 
 export interface ColumnPatchPlanOptions {
   database: string; serverVersion: string;
@@ -84,27 +85,6 @@ function sameType(left: string, right: string, document: TableColumnDefinitionDo
   return JSON.stringify(normalized(left)) === JSON.stringify(normalized(right));
 }
 
-/** 通过同一词法层检查依赖；字符串和普通注释里的假列名不产生依赖。 */
-function mentions(tokens: TableDefinitionToken[], name: string): boolean {
-  return tokens.some(token => token.kind === 'executable' || ((token.kind === 'word' || token.kind === 'identifier') && token.value.toLowerCase() === name.toLowerCase()));
-}
-
-/** 识别无列依赖的普通表选项；未知尾部和分区不能被当成无依赖。 */
-function tailUnknown(document: TableColumnDefinitionDocument): boolean {
-  const tokens = tableDefinitionTokens(document.tail.raw, document.context); let cursor = 1;
-  const keys = new Set(['ENGINE', 'AUTO_INCREMENT', 'CHARSET', 'COLLATE', 'COMMENT', 'ROW_FORMAT', 'KEY_BLOCK_SIZE', 'STATS_PERSISTENT', 'STATS_AUTO_RECALC', 'STATS_SAMPLE_PAGES', 'PACK_KEYS', 'CHECKSUM', 'DELAY_KEY_WRITE', 'COMPRESSION', 'ENCRYPTION', 'AUTOEXTEND_SIZE']);
-  while (cursor < tokens.length) {
-    if (tokens[cursor].value === ';' && cursor === tokens.length - 1) return false;
-    let key = tokens[cursor].kind === 'word' ? tokens[cursor].value.toUpperCase() : ''; cursor++;
-    if (key === 'DEFAULT') { key = tokens[cursor]?.value.toUpperCase() ?? ''; cursor++; }
-    if (key === 'CHARACTER' && tokens[cursor]?.value.toUpperCase() === 'SET') { key = 'CHARSET'; cursor++; }
-    if (!keys.has(key)) return true;
-    if (tokens[cursor]?.value === '=') cursor++;
-    if (!tokens[cursor] || !['word', 'number', 'string', 'identifier'].includes(tokens[cursor].kind)) return true; cursor++;
-  }
-  return false;
-}
-
 /** 删除、改名、类型/可空及位置不自动修复依赖；未知结构也不能被静默认定安全。 */
 function assertDependencies(document: TableColumnDefinitionDocument, column: TableColumnDefinition, changes: Set<string>, unknownTail: boolean): void {
   const structural = [...changes].some(key => ['drop', 'name', 'type', 'nullable', 'position'].includes(key)); if (!structural) return;
@@ -178,6 +158,16 @@ export function buildTableColumnPatchSql(document: TableColumnDefinitionDocument
     });
     if (!onlyDefaults || risks.some(name => !removed.has(name))) throw new Error(tableColumnDefaultRiskMessage(risks));
   }
+  const generation = patches.find(patch => patch.kind === 'alter' && patch.changes.generation !== undefined);
+  if (generation?.kind === 'alter') {
+    const name = options.columnRefs.get(generation.columnRef); if (!name) throw new Error('生成表达式目标不在原字段快照中');
+    const changed = planGeneratedExpressionChange(document, name, generation.changes.generation!.expression, options.serverVersion);
+    const sql = `ALTER TABLE ${target}\n${changed.clauses.join('\n,\n')}\n;`;
+    if (new TextEncoder().encode(sql).length > tableColumnPatchLimits.ddlBytes) throw new Error('字段 DDL 超过 4 MiB');
+    if (new SqlScriptScanner(document.context.mode.noBackslashEscapes, document.context.mode.ansiQuotes).push(sql, true).length !== 1) throw new Error('生成表达式计划必须恰好为一条 ALTER');
+    const refsByName = new Map([...options.columnRefs].map(([ref, value]) => [value, ref]));
+    return { sql, clauses: changed.clauses, warnings: [...changed.warnings, 'DDL可能隐式提交且不能通过事务撤销；发送前重核仍存在外部DDL窗口，请在维护时段暂停并行结构修改。', '当前定义不包含全部外部视图、触发器、例程及入向外键依赖，执行前仍须核对，不自动重构依赖。'], requiredAcknowledgements: changed.requiredAcknowledgements, finalColumns: document.columns.map(column => ({ columnRef: refsByName.get(column.name)!, name: column.name })), preserved: { columns: document.columns.filter(column => column.name !== name).map(column => column.raw), constraints: document.items.filter(item => item.kind === 'constraint').map(item => item.raw), tail: document.tail.raw } };
+  }
   const originalRefs = new Set(nodes.keys());
   const byName = new Map([...nodes.values()].map(node => [node.name, node]));
   let order = document.columns.map(column => byName.get(column.name)!);
@@ -214,6 +204,7 @@ export function buildTableColumnPatchSql(document: TableColumnDefinitionDocument
     if (changes.default && defaultUnchanged(column, changes.default)) delete changes.default;
     for (const key of Object.keys(changes) as (keyof Alter['changes'])[]) {
       if (key === 'collation') throw new Error('列排序规则必须使用专用受控计划');
+      if (key === 'generation') throw new Error('生成表达式必须使用专属独立计划');
       assertColumnAttributeReadable(column, key);
     }
     assertDependencies(document, column, new Set(Object.keys(changes)), unknownTail);

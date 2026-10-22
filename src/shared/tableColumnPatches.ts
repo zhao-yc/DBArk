@@ -2,7 +2,7 @@ import { z } from 'zod';
 import { inspectStructurePatchInput } from './structurePatchInput';
 import type { SqlLexicalMode } from './queryParameters';
 import type { TableEncodingPair } from './tableDefaultEncoding';
-import { assertAddedGeneratedColumn, generatedColumnMessages, generatedColumnSchema } from './tableGeneratedColumn';
+import { assertAddedGeneratedColumn, generatedColumnMessages, generatedColumnSchema, generationExpressionSchema, parseGeneratedColumnExpression } from './tableGeneratedColumn';
 
 export const tableColumnPatchLimits = { definitionBytes: 2 * 1024 * 1024, columns: 4096, tokens: 150000, nesting: 128, patches: 100, patchBytes: 512 * 1024, ddlBytes: 4 * 1024 * 1024 } as const;
 /** 这些兼容模式会省略 SHOW CREATE 属性，结构读取可规范化，未经规范化的结构导出必须拒绝。 */
@@ -176,7 +176,7 @@ const position = z.discriminatedUnion('kind', [z.object({ kind: z.literal('first
 export const columnPatchSchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('add'), clientKey: ref, name, type: columnTypePatchSchema, nullable: z.boolean(), default: columnDefaultPatchSchema, comment: z.string(), position, onUpdate: columnOnUpdatePatchSchema.optional(), generated: generatedColumnSchema.optional() }).strict(),
   z.object({ kind: z.literal('drop'), columnRef: ref }).strict(),
-  z.object({ kind: z.literal('alter'), columnRef: ref, changes: z.object({ name: name.optional(), type: columnTypePatchSchema.optional(), nullable: z.boolean().optional(), default: columnDefaultPatchSchema.optional(), comment: z.string().optional(), position: position.optional(), onUpdate: columnOnUpdatePatchSchema.optional(), collation: columnCollationPatchSchema.optional() }).strict() }).strict(),
+  z.object({ kind: z.literal('alter'), columnRef: ref, changes: z.object({ name: name.optional(), type: columnTypePatchSchema.optional(), nullable: z.boolean().optional(), default: columnDefaultPatchSchema.optional(), comment: z.string().optional(), position: position.optional(), onUpdate: columnOnUpdatePatchSchema.optional(), collation: columnCollationPatchSchema.optional(), generation: generationExpressionSchema.optional() }).strict() }).strict(),
 ]);
 export type ColumnPatch = z.infer<typeof columnPatchSchema>;
 
@@ -212,6 +212,11 @@ export function validateColumnPatches(input: unknown, maxDecimalScale: 30 | 38 =
   const patches = z.array(columnPatchSchema).min(1).max(tableColumnPatchLimits.patches).parse(checked.value);
   const generated = patches.find(patch => patch.kind === 'add' && Object.hasOwn(patch, 'generated'));
   if (generated && patches.length !== 1) throw new Error(generatedColumnMessages.isolated);
+  const generation = patches.find(patch => patch.kind === 'alter' && Object.hasOwn(patch.changes, 'generation'));
+  if (generation) {
+    if (patches.length !== 1 || generation.kind !== 'alter' || Object.keys(generation.changes).length !== 1 || !generation.changes.generation) throw new Error(generatedColumnMessages.editIsolated);
+    parseGeneratedColumnExpression(generation.changes.generation.expression);
+  }
   // 首片只能单列单属性，不能静默拆分、忽略旁属性或先发送一部分DDL。
   const collation = patches.find(patch => patch.kind === 'alter' && Object.hasOwn(patch.changes, 'collation'));
   if (collation && (patches.length !== 1 || collation.kind !== 'alter' || Object.keys(collation.changes).length !== 1)) throw new Error('列排序规则只能单列单属性独立修改');
@@ -250,6 +255,8 @@ export interface TableColumnView {
   editableType?: ColumnTypePatch;
   /** 只在完整SHOW/目录证明为普通精确数值引用时为true；缺省不能作为生成表达式候选。 */
   generatedReference?: boolean;
+  /** 专用生成表达式能力；不改变旧七项access或开放其它生成列属性。 */
+  generation?: { storage: 'VIRTUAL' | 'STORED'; expression: string; access: ColumnAttributeAccess };
   default: ReadColumnDefault; comment: string | undefined; rawDefinition: string;
   /** null为无自动更新；缺失表示不能可靠投影，不能据此生成移除补丁。 */
   onUpdate?: ColumnOnUpdatePatch;

@@ -2,6 +2,7 @@ import { z } from 'zod';
 
 export const generatedColumnLimits = { expression: 2048, tokens: 256, depth: 16, references: 32, digits: 65 } as const;
 export const generatedColumnAcknowledgement = 'generated-column-computation';
+export const generatedExpressionAcknowledgement = 'generated-expression-recalculation';
 /** 集中说明只表达能力和输入错误，不把原表达式或数据值写入错误文本。 */
 export const generatedColumnMessages = {
   expression: '生成表达式只接受已有普通整数/DECIMAL列、十进制文字量、括号和加减乘；不接受函数、字符串、注释或其它SQL',
@@ -11,10 +12,18 @@ export const generatedColumnMessages = {
   version: '当前服务器版本尚未开放新增数值生成列',
   reference: '生成表达式引用必须精确匹配已有普通整数/DECIMAL列，不能引用自增、生成或未知属性列',
   computation: '生成列由服务器计算，STORED可能重建表；请核对精度、溢出、NULL传播及已有数据，不会自动重试或转换其它列。',
+  editIsolated: '生成表达式必须作为单列单属性独立修改，不能与其它字段变更混合提交',
+  editTarget: '仅允许修改已证明的可空整数/DECIMAL生成列表达式；名称、类型、存储方式、位置和备注保持',
+  editVersion: '当前服务器版本尚未开放生成表达式修改',
+  dependencies: '目标生成列涉及索引、主外键、CHECK、分区或其它表达式依赖，当前不能独立修改',
+  unchanged: '生成表达式没有实际变更，一元正号及语法括号差异不会发送DDL',
+  recalculation: '本次明确使用ALGORITHM=COPY重建表并按当前结构会话sql_mode重新计算已有行；MySQL虚拟列同时WITH VALIDATION。可能长时间等待或持有锁、消耗磁盘，结果或警告需要核对，不会自动重试或回滚。',
 } as const;
 const text = generatedColumnMessages;
 export const generatedColumnSchema = z.object({ storage: z.enum(['VIRTUAL', 'STORED']), expression: z.string().min(1).max(generatedColumnLimits.expression) }).strict();
 export type GeneratedColumn = z.infer<typeof generatedColumnSchema>;
+export const generationExpressionSchema = z.object({ expression: z.string().min(1).max(generatedColumnLimits.expression) }).strict();
+export type GenerationExpressionChange = z.infer<typeof generationExpressionSchema>;
 export type GeneratedColumnExpression =
   | { kind: 'number'; value: string }
   | { kind: 'column'; name: string }
@@ -22,6 +31,22 @@ export type GeneratedColumnExpression =
   | { kind: 'binary'; operator: '+' | '-' | '*'; left: GeneratedColumnExpression; right: GeneratedColumnExpression };
 export interface ParsedGeneratedColumnExpression { ast: GeneratedColumnExpression; referencedColumns: string[]; tokenCount: number; }
 type Token = { kind: 'number' | 'column'; value: string } | { kind: 'symbol'; value: '+' | '-' | '*' | '(' | ')' };
+
+/** 官方解析器仅消去一元+；比较键不改变负号、运算结合、引用顺序或十进制尺度。 */
+export function generatedColumnExpressionFingerprint(node: GeneratedColumnExpression): string {
+  const project = (value: GeneratedColumnExpression): GeneratedColumnExpression => {
+    if (value.kind === 'unary') { const operand = project(value.operand); return value.operator === '+' ? operand : { ...value, operand }; }
+    if (value.kind === 'binary') return { ...value, left: project(value.left), right: project(value.right) };
+    return value;
+  };
+  return JSON.stringify(project(node));
+}
+
+/** 界面只比较完整受控输入；解析及预算先执行，无法证明相同不能冒充无变更。 */
+export function sameGeneratedColumnInputExpression(left: string, right: string): boolean {
+  try { return generatedColumnExpressionFingerprint(parseGeneratedColumnExpression(left).ast) === generatedColumnExpressionFingerprint(parseGeneratedColumnExpression(right).ast); }
+  catch { return false; }
+}
 
 /** 数字只做字符串正规化，保留小数位数，避免把1.00的十进制运算尺度改成整数1。 */
 function decimal(source: string): string {

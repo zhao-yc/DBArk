@@ -115,3 +115,17 @@ export function verifyGeneratedColumnCatalog(before: GeneratedColumnRead, after:
   const physicalWithoutId = ({ tableId: _tableId, ...value }: GeneratedPhysical) => value;
   return JSON.stringify(physicalWithoutId(before.physical)) === JSON.stringify(physicalWithoutId(after.physical)) && after.columns.length === before.columns.length + 1 && JSON.stringify(after.columns.slice(0, before.columns.length)) === JSON.stringify(before.columns);
 }
+
+/** 已有表达式修改不增减字段；只有目标表达式目录可变，其余原列与物理映射全部保持。 */
+export function verifyGeneratedExpressionCatalog(before: GeneratedColumnRead, after: GeneratedColumnRead, columnName: string): boolean {
+  const physicalWithoutId = ({ tableId: _tableId, ...value }: GeneratedPhysical) => value;
+  if (JSON.stringify(physicalWithoutId(before.physical)) !== JSON.stringify(physicalWithoutId(after.physical)) || before.columns.length !== after.columns.length || JSON.stringify(before.references) !== JSON.stringify(after.references)) return false;
+  const targets = before.columns.filter(column => column.name === columnName);
+  if (targets.length !== 1 || after.columns.filter(column => column.name === columnName).length !== 1) return false;
+  const metadata = ({ generationExpression: _expression, ...value }: GeneratedCatalogColumn) => value;
+  return before.columns.every((column, index) => {
+    const current = after.columns[index];
+    if (column.name !== current.name || column.ordinal !== current.ordinal) return false;
+    return column.name === columnName ? JSON.stringify(metadata(column)) === JSON.stringify(metadata(current)) : JSON.stringify(column) === JSON.stringify(current);
+  });
+}
