@@ -69,6 +69,7 @@ const queryDatabaseContext=z.discriminatedUnion('state',[z.object({state:z.liter
 const completionName=z.string().min(1).max(64).refine(completionIdentifier,'补全对象名必须是合法BMP标识符');
 const completionPrefix=z.string().max(completionLimits.prefixUnits).refine(value=>value===''||completionIdentifier(value),'补全前缀含无效字符');
 
+const databaseDropName = z.string().superRefine((value, context) => { try { validateDatabaseDropName(value); } catch (error) { context.addIssue({ code: 'custom', message: error instanceof Error ? error.message : '数据库名称无效' }); } });
 const id = z.string().min(1).max(200);
 const name = z.string().min(1).max(256);
 const text = z.string().max(20_000_000);
@@ -294,6 +295,10 @@ export const commandSchemas: Record<Command, z.ZodType> = {
   'history.page':historyPageInputSchema,'history.pageContinue':localSqlPageNextSchema,'history.pageRelease':localSqlPageReleaseSchema,'history.read':historyReadSchema,'history.readError':historyErrorReadSchema,
   'queryFileSources.recent': queryRecentFilesSchema, 'queryFileSources.forgetRecent': queryRecentFileForgetSchema,
   'explainFiles.open': empty,
+  'schema.databaseDrop.get': z.object({ connectionId: id, database: databaseDropName, taskId: id }).strict(),
+  'schema.databaseDrop.preview': z.object({ snapshotId: id, taskId: id }).strict(),
+  'schema.databaseDrop.apply': z.object({ previewToken: id, confirmation: databaseDropName, acknowledgements: z.array(z.enum(databaseDropAcknowledgements)).length(databaseDropAcknowledgements.length).refine(values => new Set(values).size === values.length), taskId: id }).strict(),
+  'schema.databaseDrop.release': z.object({ snapshotId: id.optional(), previewToken: id.optional() }).strict().refine(value => !!value.snapshotId || !!value.previewToken),
   'schema.databaseDefaultEncoding.get': z.object({ connectionId: id, database: foreignKeyTargetName, taskId: id }).strict(),
   'schema.databaseDefaultEncoding.preview': z.object({ snapshotId: id, charset: z.string().regex(/^[A-Za-z0-9_]{1,64}$/), collation: z.string().regex(/^[A-Za-z0-9_]{1,64}$/), taskId: id }).strict(),
   'schema.databaseDefaultEncoding.apply': z.object({ previewToken: id, confirmation: foreignKeyTargetName, acknowledgements: z.array(z.enum(databaseDefaultEncodingAcknowledgements)).length(databaseDefaultEncodingAcknowledgements.length).refine(values => new Set(values).size === values.length), taskId: id }).strict(),
@@ -316,3 +321,4 @@ export function validateCommand(command: string, input: unknown): unknown {
   if (!result.success) throw new Error(`参数无效：${result.error.issues.map(x => `${x.path.join('.')} ${x.message}`).join('；')}`);
   return result.data;
 }
+import { databaseDropAcknowledgements, validateDatabaseDropName } from './databaseDrop';

@@ -14,6 +14,7 @@ export const publicCommands: Record<Command, true> = {
   'table.statistics': true,
   'table.copyInsertSql': true,
   'schema.tableCreate.get': true, 'schema.tableCreate.preview': true, 'schema.tableCreate.apply': true, 'schema.tableCreate.release': true, 'schema.databaseCreate.get': true, 'schema.databaseCreate.preview': true, 'schema.databaseCreate.apply': true, 'schema.databaseCreate.release': true,
+  'schema.databaseDrop.get': true, 'schema.databaseDrop.preview': true, 'schema.databaseDrop.apply': true, 'schema.databaseDrop.release': true,
   'tasks.cancelState': true,
   'schema.tableDrop.get': true, 'schema.tableDrop.preview': true, 'schema.tableDrop.apply': true, 'schema.tableDrop.release': true,
   'schema.tableDefaultEncoding.get': true, 'schema.tableDefaultEncoding.preview': true, 'schema.tableDefaultEncoding.apply': true, 'schema.tableDefaultEncoding.release': true,

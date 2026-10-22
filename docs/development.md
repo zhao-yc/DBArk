@@ -1,5 +1,7 @@
 # 开发与测试
 
+删除数据库的[实现及验收入口](development/database-drop-20261023.md)：专用类型化IPC、六类目录和完整定义重核、四项风险确认及原名校验、库级结构互斥和工作区保护。实库专项为 `tests/integration/database-drop.test.ts`，双门 `DBARK_INTEGRATION_ENABLED=1`、`DBARK_DATABASE_DROP_TEST=1`；源码窗口为 `tests/e2e/database-drop.spec.ts`，另用 `DBARK_DATABASE_DROP_UI=1` 和独占输出目录。默认／列表不加载凭据或桌面。原生成功、失败和清理证据独立记账，暂不发布。
+
 结果筛选新增[从原不同值勾选](development/query-result-value-options-20261023.md)：次数、搜索及50项分页，完整NULL补集、只写条件草稿及原分组／启停保护。b283173a的[Windows源码实库窗口](../tests/integration/acceptance-query-value-options-b283173a-20261023.md)通过66原行／65种值、50+15分页、4／64／63行结果、两级排序／撤销重做和精确CSV／JSON独立读回；一次常量SQL、正常退出及原流关闭。完整15577通过／1平台跳过后仅补长值完整查看，最终328项／类型／新构建通过；两批字节范围分开，安装与macOS另验，暂不发布。
 
 同库普通表[重命名旧版兼容](development/table-rename-compat-20261023.md)补齐MySQL5.7.44、MariaDB10.11.19及11.4.13；完整有界视图关系证明、原物理身份及确认代次保护保持。7f14cee4的[六实例及三个Windows源码窗口验收](../tests/integration/acceptance-table-rename-compat-7f14cee4-20261023.md)通过12成功／6真实MDL取消DDL、三窗口各一次往返、共6条成功RENAME及精确清理。完整15427通过／1平台跳过、构建和最终193项针对性检查通过；提交前候选、Git行尾规范化及未验范围分开记录，暂不发布。

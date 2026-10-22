@@ -1,3 +1,5 @@
+import { databaseDropAcknowledgements, databaseDropIdentifier } from '../shared/databaseDrop';
+import type { DatabaseDropTarget, DatabaseDropCounts } from '../shared/databaseDrop';
 import { QueryFileSources } from './queryFileSources';
 import { DatabaseDefaultEncodingOwners, type DatabaseEncodingOwnerCommand } from './databaseDefaultEncodingOwners';
 import { ExplainSnapshotFiles } from './explainSnapshotFiles';
@@ -74,7 +76,7 @@ const exportReservations = new ExportReservations();
 const preparingTasks = new Map<string, { cancelled: boolean; failure?: string; connectionIds?: string[] }>();
 const exportProgress = new Map<string, QueryExportProgress>();
 const structureProgress = new Map<string, TableColumnApplyProgress>();
-const structureTokens = new Map<string, { purpose: 'columns' | 'indexes' | 'foreignKeys' | 'tableComment' | 'tableDrop' | 'tableTruncate' | 'tableDefaultEncoding' | 'tableCreate' | 'databaseCreate' | 'databaseDefaultEncoding' | 'tableCopyData' | 'tableCopyStructure' | 'tableRename' | 'tableAutoIncrement'; connectionId: string; expires: number; kind: 'snapshot' | 'preview'; snapshotId?: string }>();
+const structureTokens = new Map<string, { purpose: 'columns' | 'indexes' | 'foreignKeys' | 'tableComment' | 'tableDrop' | 'tableTruncate' | 'tableDefaultEncoding' | 'tableCreate' | 'databaseCreate' | 'databaseDrop' | 'databaseDefaultEncoding' | 'tableCopyData' | 'tableCopyStructure' | 'tableRename' | 'tableAutoIncrement'; connectionId: string; expires: number; kind: 'snapshot' | 'preview'; snapshotId?: string }>();
 const tasks = new Map<string, TaskRecord>();
 // 补全是高频短读，只在内存保留活动编号；不挤占用户任务历史或逐次触发SQLite写盘。
 const completionTasks = new Set<string>();
@@ -87,13 +89,189 @@ const tablePresetSources=new TablePresetSources({assert:value=>columnsMain.asser
 const resultPresetSources=new QueryResultPresetSources({assert:value=>columnsMain.assertCapturedOwner(value),same:(left,right)=>columnsMain.sharesDocumentOwner(left,right)});
 const tablePresetReads=new Map<string,{cancelled:boolean;sent:boolean;stop?:Promise<unknown>}>();
 /** 仅真实Main调用持有发布门；成功结果直到IPC最后同步检查后才释放取消登记。 */
-type MainInvocation = ColumnsInvocation & {databaseEncodingRevision?:number;snapshotSaved?:true;resultPresetPublication?:()=>void;presetPublication?:{pendingStop():Promise<unknown>|undefined;settledStop(stop:Promise<unknown>):void;assertCurrent():void;release():void}};
+type MainInvocation = ColumnsInvocation & { databaseDropRequest?: DatabaseDropMainRequest;databaseEncodingRevision?:number;snapshotSaved?:true;resultPresetPublication?:()=>void;presetPublication?:{pendingStop():Promise<unknown>|undefined;settledStop(stop:Promise<unknown>):void;assertCurrent():void;release():void}};
 /** 数据库属性能力也绑定真实文档；连接修订只由Main捕获，不接受渲染进程注入。 */
 const databaseEncodingOwners = new DatabaseDefaultEncodingOwners({
   assert: owner => { columnsMain.assertCapturedOwner(owner); if ((owner as MainInvocation).databaseEncodingRevision !== store.connectionRevision()) throw Error('连接配置已变化，请重新读取数据库属性'); },
   same: (left, right) => columnsMain.sharesDocumentOwner(left, right),
   release: releaseDatabaseEncoding
 });
+interface DatabaseDropMainRecord {
+  token: string; kind: 'snapshot' | 'preview'; owner: MainInvocation; revision: number; target: DatabaseDropTarget;
+  expires: number; catalogDigest: string; counts: DatabaseDropCounts; writable: boolean; main: { purpose: 'databaseDrop'; connectionId: string; expires: number; kind: 'snapshot' | 'preview'; snapshotId?: string };
+  parent?: DatabaseDropMainRecord; snapshotId?: string;
+}
+interface DatabaseDropMainRequest {
+  command: string; revision: number; target?: DatabaseDropTarget; parent?: DatabaseDropMainRecord; claimed?: DatabaseDropMainRecord;
+  pendingCleanup?: Promise<unknown[]>; reserved?: boolean; returned?: { snapshotId?: string; previewToken?: string }; issued?: DatabaseDropMainRecord;
+  published?: boolean; cleanup?: Promise<never>;
+}
+const databaseDropCapabilities = new Map<string, DatabaseDropMainRecord>();
+const databaseDropRetired = new Map<string, { record: DatabaseDropMainRecord; cleanupExpires: number }>();
+let databaseDropReservations = 0;
+const databaseDropStale = '删除数据库能力、来源或连接配置已变化，请重新读取；不会自动重试删除';
+
+/** 真实主文档、原连接修订与原对象引用必须同时有效；到期能力只允许精确释放。 */
+function assertDatabaseDropRecord(record: DatabaseDropMainRecord, owner: MainInvocation, releasing = false): void {
+  if (!columnsMain.sharesDocumentOwner(record.owner, owner) || databaseDropCapabilities.get(record.token) !== record ||
+    (!releasing && (record.revision !== store.connectionRevision() || record.expires <= Date.now() || structureTokens.get(record.token) !== record.main))) throw Error(databaseDropStale);
+  if (!releasing) connectionConfig.assertAvailable(record.target.connectionId);
+  if (record.parent && !releasing) assertDatabaseDropRecord(record.parent, owner);
+}
+/** 只撤销同用途同父对象能力，不允许相同字符串指向后来签发的其它能力。 */
+function removeDatabaseDropRecord(record: DatabaseDropMainRecord): void {
+  for (const [id, value] of databaseDropCapabilities) if (value === record || value.parent === record) {
+    databaseDropCapabilities.delete(id); databaseDropRetired.set(id, { record: value, cleanupExpires: Date.now() + 600000 }); if (structureTokens.get(id) === value.main) structureTokens.delete(id);
+  }
+}
+/** 旧修订、过期或失联文档的能力不占住预算；新任务必须等待精确引擎回收结算。 */
+function sweepDatabaseDropCapabilities(): Promise<unknown[]> | undefined {
+  const releases: { snapshotId?: string; previewToken?: string }[] = [];
+  for (const record of [...databaseDropCapabilities.values()]) {
+    if (databaseDropCapabilities.get(record.token) !== record) continue;
+    let stale = record.expires <= Date.now() || record.revision !== store.connectionRevision() || structureTokens.get(record.token) !== record.main;
+    try { columnsMain.assertCapturedOwner(record.owner); } catch { stale = true; }
+    if (stale) {
+      removeDatabaseDropRecord(record);
+      releases.push(record.kind === 'snapshot' ? { snapshotId: record.token } : { previewToken: record.token });
+    }
+  }
+  return releases.length ? Promise.allSettled(releases.map(input => Promise.resolve().then(() => broker.request('schema.databaseDrop.release', input)))).then(results => { const failures = results.filter(result => result.status === 'rejected'); if (failures.length) throw new AggregateError(failures.map(result => result.reason), '旧删除数据库能力回收失败；尚未投递新任务'); return results; }) : undefined;
+}
+/** 首个等待之前核对并领取删除能力；执行会同步消费父快照及全部兄弟预览，失败也不复活。 */
+function beginDatabaseDrop(command: string, input: any, owner: MainInvocation): void {
+  columnsMain.assertCapturedOwner(owner);
+  for (const [id, value] of databaseDropRetired) if (value.cleanupExpires <= Date.now()) databaseDropRetired.delete(id);
+  const request: DatabaseDropMainRequest = { command, revision: store.connectionRevision() }; owner.databaseDropRequest = request;
+  if (!command.endsWith('.release')) request.pendingCleanup = sweepDatabaseDropCapabilities();
+  if (command.endsWith('.release')) {
+    const records = [input.snapshotId, input.previewToken].filter(Boolean).map(id => databaseDropCapabilities.get(id) ?? databaseDropRetired.get(id)?.record);
+    if (!records.length || records.some(record => !record)) throw Error(databaseDropStale);
+    // 已消费或已释放能力只保留原文档的有界清理凭证，不恢复其preview/apply权限。
+    for (const record of records) {
+      if (!columnsMain.sharesDocumentOwner(record!.owner, owner)) throw Error(databaseDropStale);
+      if (databaseDropCapabilities.get(record!.token) !== record && databaseDropRetired.get(record!.token)?.record !== record) throw Error(databaseDropStale);
+    }
+    if (input.snapshotId && records.find(record => record!.token === input.snapshotId)?.kind !== 'snapshot' || input.previewToken && records.find(record => record!.token === input.previewToken)?.kind !== 'preview') throw Error(databaseDropStale);
+    for (const record of records) removeDatabaseDropRecord(record!);
+    return;
+  }
+  if (shuttingDown) throw Error('客户端正在退出，不能删除数据库');
+  if (command.endsWith('.get')) request.target = { connectionId: input.connectionId, database: input.database };
+  else {
+    const record = databaseDropCapabilities.get(command.endsWith('.preview') ? input.snapshotId : input.previewToken);
+    if (!record || record.kind !== (command.endsWith('.preview') ? 'snapshot' : 'preview')) throw Error(databaseDropStale);
+    assertDatabaseDropRecord(record, owner); request.target = record.target;
+    if (command.endsWith('.preview')) { if (!record.writable) throw Error(databaseDropStale); request.parent = record; }
+    else {
+      request.claimed = record;
+      removeDatabaseDropRecord(record.parent!);
+      if (input.confirmation !== record.target.database || input.acknowledgements.length !== databaseDropAcknowledgements.length || databaseDropAcknowledgements.some(id => input.acknowledgements.filter((value: string) => value === id).length !== 1)) throw Error('请输入准确数据库原名并确认全部删除风险；原预览已消费，未发送DDL');
+    }
+  }
+  connectionConfig.assertAvailable(request.target!.connectionId);
+  if (command.endsWith('.get') || command.endsWith('.preview')) {
+    if (databaseDropCapabilities.size + databaseDropReservations >= 64 || databaseDropRetired.size + databaseDropCapabilities.size + databaseDropReservations >= 256) throw Error('删除数据库能力已达64项，请先关闭已有窗口并释放快照');
+    request.reserved = true; databaseDropReservations++;
+  }
+}
+/** 清理等待结算后重新核原发布来源；已领取apply只核原身份，不恢复已消费能力。 */
+function assertDatabaseDropBeforeSend(owner: MainInvocation): void {
+  const request = owner.databaseDropRequest!; columnsMain.assertCapturedOwner(owner);
+  if (shuttingDown || request.revision !== store.connectionRevision()) throw Error(databaseDropStale);
+  connectionConfig.assertAvailable(request.target!.connectionId);
+  if (request.parent) assertDatabaseDropRecord(request.parent, owner);
+  if (request.claimed && request.claimed.expires <= Date.now()) throw Error(databaseDropStale);
+}
+/** 验证只允许数据属性，避免能力响应中的访问器在检查期间执行代码。 */
+function databaseDropResponse(value: unknown, keys: readonly string[], optional: readonly string[] = []): Record<string, any> {
+  if (!value || typeof value !== 'object' || Array.isArray(value) || ![Object.prototype, null].includes(Object.getPrototypeOf(value))) throw Error('删除数据库响应格式无效');
+  const descriptors = Object.getOwnPropertyDescriptors(value), names = Reflect.ownKeys(descriptors);
+  if (names.some(key => typeof key !== 'string' || ![...keys, ...optional].includes(key) || !Object.hasOwn(descriptors[key], 'value') || !descriptors[key].enumerable) || keys.some(key => !Object.hasOwn(descriptors, key))) throw Error('删除数据库响应字段无效');
+  return Object.fromEntries(names.map(key => [key, descriptors[key as string].value]));
+}
+/** 只认有界完整对象计数和普通文案数组，不能用隐藏对象或未知目录替代零。 */
+function databaseDropResponseCounts(value: unknown): DatabaseDropCounts {
+  const data = databaseDropResponse(value, ['tables', 'views', 'procedures', 'functions', 'triggers', 'events']);
+  if (Object.values(data).some(count => !Number.isSafeInteger(count) || count < 0 || count > 4096) || Object.values(data).reduce((sum: number, count: number) => sum + count, 0) > 4096) throw Error('删除数据库响应对象计数无效');
+  return data as DatabaseDropCounts;
+}
+function databaseDropResponseStrings(value: unknown): string[] {
+  if (!Array.isArray(value) || value.length > 128 || Reflect.ownKeys(value).length !== value.length + 1) throw Error('删除数据库响应文案无效');
+  const result: string[] = [];
+  for (let index = 0; index < value.length; index++) {
+    const descriptor = Object.getOwnPropertyDescriptor(value, String(index));
+    if (!descriptor || !Object.hasOwn(descriptor, 'value') || typeof descriptor.value !== 'string' || descriptor.value.length > 8192 || descriptor.value.includes('\0')) throw Error('删除数据库响应文案无效');
+    result.push(descriptor.value);
+  }
+  return result;
+}
+/** 先记录可精确回收的新令牌，全部原目标/父快照核验通过后才登记通用Map。 */
+function publishDatabaseDrop(input: any, result: unknown, owner: MainInvocation): void {
+  const request = owner.databaseDropRequest!, getting = request.command.endsWith('.get'), key = getting ? 'snapshotId' : 'previewToken';
+  const descriptor = result && typeof result === 'object' ? Object.getOwnPropertyDescriptor(result, key) : undefined, token = descriptor && Object.hasOwn(descriptor, 'value') ? descriptor.value : undefined;
+  if (typeof token !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(token) || structureTokens.has(token) || databaseDropCapabilities.has(token) || databaseDropRetired.has(token)) throw Error('删除数据库返回无效或重复能力；未覆盖或释放已有能力');
+  request.returned = { [key]: token };
+  columnsMain.assertCapturedOwner(owner);
+  if (shuttingDown || request.revision !== store.connectionRevision() || input.connectionRevision !== request.revision || ['failed', 'cancelled'].includes(tasks.get(input.taskId)?.status ?? '')) throw Error(databaseDropStale);
+  connectionConfig.assertAvailable(request.target!.connectionId);
+  const data = databaseDropResponse(result, getting ? ['target', 'snapshotId', 'expiresAt', 'catalogDigest', 'counts', 'charset', 'collation', 'writable', 'reasons', 'warnings', 'serverVersion'] : ['target', 'previewToken', 'expiresAt', 'catalogDigest', 'counts', 'sql', 'requiredAcknowledgements', 'warnings']);
+  const target = databaseDropResponse(data.target, ['connectionId', 'database']);
+  if (target.connectionId !== request.target!.connectionId || target.database !== request.target!.database) throw Error(databaseDropStale);
+  const expires = Date.parse(data.expiresAt), now = Date.now(), counts = databaseDropResponseCounts(data.counts);
+  if (typeof data.expiresAt !== 'string' || !Number.isFinite(expires) || new Date(expires).toISOString() !== data.expiresAt || expires <= now || expires > now + 120000) throw Error('删除数据库能力期限无效');
+  databaseDropResponseStrings(data.warnings);
+  if (getting) {
+    const reasons = databaseDropResponseStrings(data.reasons);
+    if (typeof data.writable !== 'boolean' || ![data.charset, data.collation, data.serverVersion].every(value => typeof value === 'string' && value.length <= 1024 && !value.includes('\0')) || (typeof data.catalogDigest !== 'string' || !/^[0-9a-f]{64}$/i.test(data.catalogDigest) && !(data.catalogDigest === '' && data.writable === false && reasons.length))) throw Error('删除数据库目录响应无效');
+  } else {
+    assertDatabaseDropRecord(request.parent!, owner);
+    const acknowledgements = databaseDropResponseStrings(data.requiredAcknowledgements), expected = 'DROP DATABASE ' + databaseDropIdentifier(request.target!.database);
+    if (data.catalogDigest !== request.parent!.catalogDigest || Object.keys(counts).some(key => counts[key as keyof DatabaseDropCounts] !== request.parent!.counts[key as keyof DatabaseDropCounts]) || ![expected, expected + ';'].includes(data.sql) || acknowledgements.length !== databaseDropAcknowledgements.length || databaseDropAcknowledgements.some(id => acknowledgements.filter(value => value === id).length !== 1)) throw Error('删除数据库预览与原快照不符');
+  }
+  if (structureTokens.size >= 128) throw Error('结构令牌缓存已达上限，请先关闭旧预览');
+  const main = { purpose: 'databaseDrop' as const, connectionId: request.target!.connectionId, expires: Math.min(expires, request.parent?.expires ?? expires), kind: getting ? 'snapshot' as const : 'preview' as const, ...(!getting ? { snapshotId: input.snapshotId } : {}) };
+  const record: DatabaseDropMainRecord = { token, kind: main.kind, owner, revision: request.revision, target: { ...request.target! }, expires: main.expires, catalogDigest: data.catalogDigest, counts, writable: getting ? data.writable : true, main, ...(!getting ? { parent: request.parent, snapshotId: input.snapshotId } : {}) };
+  databaseDropCapabilities.set(token, record); structureTokens.set(token, main); request.issued = record;
+}
+/** IPC最后一次等待之后同步检查，失败回执仍保留服务器已确认删除这一事实。 */
+function assertDatabaseDropPublication(result: unknown, owner: MainInvocation): void {
+  const request = owner.databaseDropRequest!;
+  if (request.command.endsWith('.release')) return;
+  columnsMain.assertCapturedOwner(owner);
+  if (request.revision !== store.connectionRevision() || shuttingDown) throw Error(databaseDropStale);
+  if (request.issued) assertDatabaseDropRecord(request.issued, owner);
+  else {
+    const data = databaseDropResponse(result, ['target', 'ddlSubmitted', 'ddlCompleted', 'definitionVerified', 'warnings'], ['after', 'verificationError']);
+    const target = databaseDropResponse(data.target, ['connectionId', 'database']);
+    if (!request.claimed || target.connectionId !== request.claimed.target.connectionId || target.database !== request.claimed.target.database || data.ddlSubmitted !== true || data.ddlCompleted !== true || typeof data.definitionVerified !== 'boolean') throw Error('删除数据库回执不符；删除可能已经完成，请人工核对，不要重试');
+    databaseDropResponseStrings(data.warnings);
+    if (data.after !== undefined) { const after = databaseDropResponse(data.after, ['databaseAbsent']); if (typeof after.databaseAbsent !== 'boolean' || data.definitionVerified && after.databaseAbsent !== true) throw Error('删除数据库后核回执不符；不能重试'); }
+    else if (data.definitionVerified) throw Error('删除数据库缺少不存在的后核证据；不能重试');
+    if (data.verificationError !== undefined && (typeof data.verificationError !== 'string' || data.verificationError.length > 8192)) throw Error('删除数据库后核错误格式无效；不能重试');
+  }
+  if (request.reserved) { request.reserved = false; databaseDropReservations--; } request.published = true;
+}
+/** 仅回收本请求新签发能力并等待原release结算；重复失败共享清理，不碰同ID旧能力。 */
+function rejectDatabaseDropPublication(owner: MainInvocation, error: unknown): Promise<never> {
+  const request = owner.databaseDropRequest;
+  if (request?.reserved) { request.reserved = false; databaseDropReservations--; }
+  if (request?.cleanup) return request.cleanup;
+  let release: { snapshotId?: string; previewToken?: string } | undefined;
+  if (request && !request.published && request.returned) {
+    const token = request.returned.snapshotId ?? request.returned.previewToken!;
+    if (request.issued && databaseDropCapabilities.get(token) === request.issued) { removeDatabaseDropRecord(request.issued); release = request.returned; }
+    else if (!databaseDropCapabilities.has(token) && !structureTokens.has(token) && !databaseDropRetired.has(token)) release = request.returned;
+  }
+  const cleanup = (async (): Promise<never> => {
+    const failures: unknown[] = [error];
+    if (request?.pendingCleanup) try { await request.pendingCleanup; } catch (failure) { failures.push(failure); }
+    if (release) try { await broker.request('schema.databaseDrop.release', release); } catch (failure) { failures.push(failure); }
+    if (failures.length > 1) throw new AggregateError(failures, '删除数据库响应失效且能力清理失败；请保留原错误和清理错误');
+    throw error;
+  })();
+  if (request) request.cleanup = cleanup; return cleanup;
+}
 /** 精确释放只撤销内存能力；退出或连接修订不能把已经开始的回收挡在新任务准入门外。 */
 async function releaseDatabaseEncoding(input: { snapshotId?: string; previewToken?: string }): Promise<unknown> {
   if (input.snapshotId) for (const [id, value] of structureTokens) if (value.purpose === 'databaseDefaultEncoding' && (id === input.snapshotId || value.snapshotId === input.snapshotId)) structureTokens.delete(id);
@@ -136,7 +314,7 @@ function taskEvent(event: TaskEvent, deliverInsert=true): void {
   // 接收一次实际发送片段；独立布尔状态保证定位失败/发送前取消不能落全文或空SQL。
   if (pendingHistory?.currentStatement && !pendingHistory.executionSqlReceived && typeof event.executionSql === 'string' && event.executionSql.trim()) { pendingHistory.entry.sql = event.executionSql; pendingHistory.executionSqlReceived = true; }
   if (event.queryExport) exportProgress.set(event.taskId, { ...event.queryExport });
-  const structure = event.tableCreate ?? event.tableCopyData ?? event.tableCopyStructure ?? event.databaseDefaultEncoding ?? event.databaseCreate ?? event.tableDrop ?? event.tableTruncate ?? event.tableAutoIncrement ?? event.tableRename ?? event.tableDefaultEncoding ?? event.tableComment ?? event.foreignKeyPatch ?? event.indexPatch ?? event.columnPatch;
+  const structure = event.tableCreate ?? event.tableCopyData ?? event.tableCopyStructure ?? event.databaseDrop ?? event.databaseDefaultEncoding ?? event.databaseCreate ?? event.tableDrop ?? event.tableTruncate ?? event.tableAutoIncrement ?? event.tableRename ?? event.tableDefaultEncoding ?? event.tableComment ?? event.foreignKeyPatch ?? event.indexPatch ?? event.columnPatch;
   if (structure) structureProgress.set(event.taskId, { ...structure });
   const current = tasks.get(event.taskId);
   if (current) {
@@ -229,6 +407,9 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
     if (command === 'snippets.transferCancel') return snippetTransfers.cancel(input.scopeId, owner, input.close);
     throw Error(snippetTransferZh.stale);
   }
+  if (command.startsWith('schema.databaseDrop.') && columns?.databaseDropRequest?.pendingCleanup) await columns.databaseDropRequest.pendingCleanup;
+  if (command === 'schema.databaseDrop.release') return broker.request(command, input);
+  if (command.startsWith('schema.databaseDrop.')) assertDatabaseDropBeforeSend(columns!);
   if (command === 'schema.databaseDefaultEncoding.release') {
     columnsMain.assertCapturedOwner(columns);
     return releaseDatabaseEncoding(input);
@@ -292,10 +473,10 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
     const scope = { document: columns!.owner.document, assertCurrent: () => columnsMain.assertCapturedOwner(columns) };
     return queryFileOperation(() => queryFileSources.cancelTask(input.taskId, scope), true);
   }
-  const structurePurpose = command.startsWith('schema.databaseDefaultEncoding.') ? 'databaseDefaultEncoding' as const : command.startsWith('schema.tableCreate.') ? 'tableCreate' as const : command.startsWith('schema.tableCopyData.') ? 'tableCopyData' as const : command.startsWith('schema.tableCopyStructure.') ? 'tableCopyStructure' as const : command.startsWith('schema.databaseCreate.') ? 'databaseCreate' as const : command.startsWith('schema.tableRename.') ? 'tableRename' as const : command.startsWith('schema.tableAutoIncrement.') ? 'tableAutoIncrement' as const : command.startsWith('schema.tableDefaultEncoding.') ? 'tableDefaultEncoding' as const : command.startsWith('schema.tableDrop.') ? 'tableDrop' as const : command.startsWith('schema.tableTruncate.') ? 'tableTruncate' as const : command.startsWith('schema.tableComment.') ? 'tableComment' as const : command.startsWith('schema.columns.') ? 'columns' as const : command.startsWith('schema.indexes.') ? 'indexes' as const : command.startsWith('schema.foreignKeys.') ? 'foreignKeys' as const : undefined;
+  const structurePurpose = command.startsWith('schema.databaseDrop.') ? 'databaseDrop' as const : command.startsWith('schema.databaseDefaultEncoding.') ? 'databaseDefaultEncoding' as const : command.startsWith('schema.tableCreate.') ? 'tableCreate' as const : command.startsWith('schema.tableCopyData.') ? 'tableCopyData' as const : command.startsWith('schema.tableCopyStructure.') ? 'tableCopyStructure' as const : command.startsWith('schema.databaseCreate.') ? 'databaseCreate' as const : command.startsWith('schema.tableRename.') ? 'tableRename' as const : command.startsWith('schema.tableAutoIncrement.') ? 'tableAutoIncrement' as const : command.startsWith('schema.tableDefaultEncoding.') ? 'tableDefaultEncoding' as const : command.startsWith('schema.tableDrop.') ? 'tableDrop' as const : command.startsWith('schema.tableTruncate.') ? 'tableTruncate' as const : command.startsWith('schema.tableComment.') ? 'tableComment' as const : command.startsWith('schema.columns.') ? 'columns' as const : command.startsWith('schema.indexes.') ? 'indexes' as const : command.startsWith('schema.foreignKeys.') ? 'foreignKeys' as const : undefined;
   const structureCommand = structurePurpose !== undefined, structurePrefix = structurePurpose ? `schema.${structurePurpose}.` : '';
   for (const [token, value] of structureTokens) if (value.expires <= Date.now()) structureTokens.delete(token);
-  const structureToken = command === structurePrefix + 'preview' ? structureTokens.get(input.snapshotId) : command === structurePrefix + 'apply' ? structureTokens.get(input.previewToken) : undefined;
+  const structureToken = command === 'schema.databaseDrop.apply' ? columns?.databaseDropRequest?.claimed?.main : command === structurePrefix + 'preview' ? structureTokens.get(input.snapshotId) : command === structurePrefix + 'apply' ? structureTokens.get(input.previewToken) : undefined;
   if ((command === structurePrefix + 'preview' && (structureToken?.kind !== 'snapshot' || structureToken.purpose !== structurePurpose)) || (command === structurePrefix + 'apply' && (structureToken?.kind !== 'preview' || structureToken.purpose !== structurePurpose))) throw new Error('结构快照或预览已失效或用途不符，请重新读取；未发送 DDL');
   if (command === structurePrefix + 'release') for (const id of [input.snapshotId, input.previewToken]) {
     const value = id ? structureTokens.get(id) : undefined;
@@ -315,6 +496,12 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
   if (tableStatisticsRead && shuttingDown) throw Error('客户端正在退出，不能统计表数据');
   if (structureCommand && shuttingDown) throw new Error('客户端正在退出，不能开始结构操作');
   connectionConfig.assertAvailable(requestConnectionId);
+  // 删除整库的原目标已由私有能力核验；投递前一次性撤销同源快照和全部兄弟预览。
+  if (command === 'schema.databaseDrop.apply') {
+    const claimed = columns?.databaseDropRequest?.claimed;
+    if (!claimed || claimed.main !== structureToken) throw Error(databaseDropStale);
+    for (const [id, value] of structureTokens) if (value.purpose === 'databaseDrop' && (id === claimed.snapshotId || value.snapshotId === claimed.snapshotId)) structureTokens.delete(id);
+  }
   // 新建表在第一次等待前消费主进程能力；目的和修订仍由引擎独立核验。
   if (command === 'schema.databaseDefaultEncoding.apply' || command === 'schema.tableCreate.apply' || command === 'schema.tableCopyData.apply') structureTokens.delete(input.previewToken);
   if (command.startsWith('schema.compare') && shuttingDown) throw new Error('客户端正在退出，不能开始结构比较');
@@ -598,7 +785,8 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
     }
     if (command === 'table.preview' && previewConnectionRevision !== store.connectionRevision()) throw Error('连接配置自预览开始后已变化，请重新预览');
     if (command === 'table.preview') return { ...result, ...tableApplyReceipts.preview({ connectionId: input.connectionId, connectionRevision: store.connectionRevision(), database: input.database, table: input.table }, input.changes, result) };
-    if (structurePurpose !== 'columns' && (command === structurePrefix + 'get' || command === structurePrefix + 'preview')) {
+    if (structurePurpose === 'databaseDrop' && (command === structurePrefix + 'get' || command === structurePrefix + 'preview')) publishDatabaseDrop(input, result, columns!);
+    if (structurePurpose !== 'columns' && structurePurpose !== 'databaseDrop' && (command === structurePrefix + 'get' || command === structurePrefix + 'preview')) {
       const token = command === structurePrefix + 'get' ? result.snapshotId : result.previewToken;
       if (structurePurpose === 'databaseDefaultEncoding' && (typeof token !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(token) || structureTokens.has(token))) throw Error('数据库默认编码返回了无效或重复能力，原有预览保持不变');
       if (structureTokens.size >= 128) {
@@ -629,7 +817,7 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
       return { affectedRows: confirmed.evidence.serverReportedRows, cleanupWarning: true, ...tableApplyReceipts.finish(taskId) };
     }
     const message = error instanceof Error ? error.message : '操作失败';
-    if (taskId && tasks.get(taskId)?.status === 'running') taskEvent({ taskId, status: preparing.cancelled || error instanceof SavedQuerySearchCancelled ? 'cancelled' : 'failed', progress: 0, message, ...(structureCommand ? { [structurePurpose === 'tableCreate' ? 'tableCreate' : structurePurpose === 'tableCopyData' ? 'tableCopyData' : structurePurpose === 'tableCopyStructure' ? 'tableCopyStructure' : structurePurpose === 'databaseDefaultEncoding' ? 'databaseDefaultEncoding' : structurePurpose === 'databaseCreate' ? 'databaseCreate' : structurePurpose === 'tableRename' ? 'tableRename' : structurePurpose === 'tableAutoIncrement' ? 'tableAutoIncrement' : structurePurpose === 'tableDefaultEncoding' ? 'tableDefaultEncoding' : structurePurpose === 'tableDrop' ? 'tableDrop' : structurePurpose === 'tableTruncate' ? 'tableTruncate' : structurePurpose === 'tableComment' ? 'tableComment' : structurePurpose === 'indexes' ? 'indexPatch' : structurePurpose === 'foreignKeys' ? 'foreignKeyPatch' : 'columnPatch']: { phase: 'connecting' as const, ddlSubmitted: sentToEngine && command === structurePrefix + 'apply', ddlCompleted: false, definitionVerified: false, outcome: sentToEngine && command === structurePrefix + 'apply' ? 'unknown' as const : 'not-sent' as const, ...structureProgress.get(taskId) } } : {}), ...(command === 'query.exportStream' ? { queryExport: { phase: 'preparing' as const, statementsCompleted: 0, rowsWritten: 0, bytesWritten: 0, fileCommitted: false, ...exportProgress.get(taskId), sqlMayHaveExecuted: sentToEngine, transactionKnown: false } } : {}) });
+    if (taskId && tasks.get(taskId)?.status === 'running') taskEvent({ taskId, status: preparing.cancelled || error instanceof SavedQuerySearchCancelled ? 'cancelled' : 'failed', progress: 0, message, ...(structureCommand ? { [structurePurpose === 'tableCreate' ? 'tableCreate' : structurePurpose === 'tableCopyData' ? 'tableCopyData' : structurePurpose === 'tableCopyStructure' ? 'tableCopyStructure' : structurePurpose === 'databaseDrop' ? 'databaseDrop' : structurePurpose === 'databaseDefaultEncoding' ? 'databaseDefaultEncoding' : structurePurpose === 'databaseCreate' ? 'databaseCreate' : structurePurpose === 'tableRename' ? 'tableRename' : structurePurpose === 'tableAutoIncrement' ? 'tableAutoIncrement' : structurePurpose === 'tableDefaultEncoding' ? 'tableDefaultEncoding' : structurePurpose === 'tableDrop' ? 'tableDrop' : structurePurpose === 'tableTruncate' ? 'tableTruncate' : structurePurpose === 'tableComment' ? 'tableComment' : structurePurpose === 'indexes' ? 'indexPatch' : structurePurpose === 'foreignKeys' ? 'foreignKeyPatch' : 'columnPatch']: { phase: 'connecting' as const, ddlSubmitted: sentToEngine && command === structurePrefix + 'apply', ddlCompleted: false, definitionVerified: false, outcome: sentToEngine && command === structurePrefix + 'apply' ? 'unknown' as const : 'not-sent' as const, ...structureProgress.get(taskId) } } : {}), ...(command === 'query.exportStream' ? { queryExport: { phase: 'preparing' as const, statementsCompleted: 0, rowsWritten: 0, bytesWritten: 0, fileCommitted: false, ...exportProgress.get(taskId), sqlMayHaveExecuted: sentToEngine, transactionKnown: false } } : {}) });
     if (history && pendingHistory?.executionSqlReceived) persistAuxiliary(() => store.addHistory({ ...history, elapsedMs: Date.now() - start, error: persistedQueryError(command, message) }));
     throw error;
   } finally { if (command === 'table.apply' && taskId) tableApplyReceipts.finish(taskId); if (command === structurePrefix + 'apply') structureTokens.delete(input.previewToken); if (taskId) { pendingQueryHistory.delete(taskId); preparingTasks.delete(taskId); exportProgress.delete(taskId); structureProgress.delete(taskId); } if(command==='query.exportStream'&&input.format==='sql')queryInsertExports.finish(input.taskId); releaseTarget?.(); }
@@ -725,10 +913,10 @@ function engineExited(): void {
   structureTokens.clear();
   for (const task of tasks.values()) if (task.status === 'running'&&!task.kind.startsWith('search.savedQueries')) {
     const preparing = preparingTasks.has(task.id);
-    if (task.kind.startsWith('schema.tableCreate.') || task.kind.startsWith('schema.tableCopyData.') || task.kind.startsWith('schema.tableCopyStructure.') || task.kind.startsWith('schema.databaseDefaultEncoding.') || task.kind.startsWith('schema.databaseCreate.') || task.kind.startsWith('schema.tableRename.') || task.kind.startsWith('schema.tableAutoIncrement.') || task.kind.startsWith('schema.tableDefaultEncoding.') || task.kind.startsWith('schema.tableDrop.') || task.kind.startsWith('schema.tableTruncate.') || task.kind.startsWith('schema.tableComment.') || task.kind.startsWith('schema.columns.') || task.kind.startsWith('schema.indexes.') || task.kind.startsWith('schema.foreignKeys.')) {
-      const last = structureProgress.get(task.id), possiblySent = !preparing && (task.kind === 'schema.tableCreate.apply' || task.kind === 'schema.tableCopyData.apply' || task.kind === 'schema.tableCopyStructure.apply' || task.kind === 'schema.databaseDefaultEncoding.apply' || task.kind === 'schema.databaseCreate.apply' || task.kind === 'schema.tableRename.apply' || task.kind === 'schema.tableAutoIncrement.apply' || task.kind === 'schema.tableDefaultEncoding.apply' || task.kind === 'schema.tableDrop.apply' || task.kind === 'schema.tableTruncate.apply' || task.kind === 'schema.tableComment.apply' || task.kind === 'schema.columns.apply' || task.kind === 'schema.indexes.apply' || task.kind === 'schema.foreignKeys.apply');
+    if (task.kind.startsWith('schema.databaseDrop.') || task.kind.startsWith('schema.tableCreate.') || task.kind.startsWith('schema.tableCopyData.') || task.kind.startsWith('schema.tableCopyStructure.') || task.kind.startsWith('schema.databaseDefaultEncoding.') || task.kind.startsWith('schema.databaseCreate.') || task.kind.startsWith('schema.tableRename.') || task.kind.startsWith('schema.tableAutoIncrement.') || task.kind.startsWith('schema.tableDefaultEncoding.') || task.kind.startsWith('schema.tableDrop.') || task.kind.startsWith('schema.tableTruncate.') || task.kind.startsWith('schema.tableComment.') || task.kind.startsWith('schema.columns.') || task.kind.startsWith('schema.indexes.') || task.kind.startsWith('schema.foreignKeys.')) {
+      const last = structureProgress.get(task.id), possiblySent = !preparing && (task.kind === 'schema.databaseDrop.apply' || task.kind === 'schema.tableCreate.apply' || task.kind === 'schema.tableCopyData.apply' || task.kind === 'schema.tableCopyStructure.apply' || task.kind === 'schema.databaseDefaultEncoding.apply' || task.kind === 'schema.databaseCreate.apply' || task.kind === 'schema.tableRename.apply' || task.kind === 'schema.tableAutoIncrement.apply' || task.kind === 'schema.tableDefaultEncoding.apply' || task.kind === 'schema.tableDrop.apply' || task.kind === 'schema.tableTruncate.apply' || task.kind === 'schema.tableComment.apply' || task.kind === 'schema.columns.apply' || task.kind === 'schema.indexes.apply' || task.kind === 'schema.foreignKeys.apply');
       const progress: TableColumnApplyProgress = { ...last, phase: last?.phase ?? 'connecting', ddlSubmitted: Boolean(last?.ddlSubmitted || possiblySent), ddlCompleted: last?.ddlCompleted ?? false, definitionVerified: last?.definitionVerified ?? false, outcome: task.kind.startsWith('schema.tableCopyData.') ? ((last as import('../shared/tableCopyData').TableCopyDataProgress)?.dataCompleted ? 'succeeded' : last?.ddlSubmitted || possiblySent ? 'unknown' : 'not-sent') : last?.ddlCompleted ? 'succeeded' : possiblySent ? 'unknown' : 'not-sent' };
-      taskEvent({ taskId: task.id, status: 'failed', progress: task.progress, message: '数据库进程已退出，结构操作不会自动重放，请核对最新定义', ...(task.kind.startsWith('schema.tableCreate.') ? { tableCreate: progress } : task.kind.startsWith('schema.tableCopyData.') ? { tableCopyData: progress } : task.kind.startsWith('schema.tableCopyStructure.') ? { tableCopyStructure: progress } : task.kind.startsWith('schema.databaseDefaultEncoding.') ? { databaseDefaultEncoding: progress } : task.kind.startsWith('schema.databaseCreate.') ? { databaseCreate: progress } : task.kind.startsWith('schema.tableRename.') ? { tableRename: progress } : task.kind.startsWith('schema.tableAutoIncrement.') ? { tableAutoIncrement: progress } : task.kind.startsWith('schema.tableDefaultEncoding.') ? { tableDefaultEncoding: progress } : task.kind.startsWith('schema.tableDrop.') ? { tableDrop: progress } : task.kind.startsWith('schema.tableTruncate.') ? { tableTruncate: progress } : task.kind.startsWith('schema.tableComment.') ? { tableComment: progress } : task.kind.startsWith('schema.indexes.') ? { indexPatch: progress } : task.kind.startsWith('schema.foreignKeys.') ? { foreignKeyPatch: progress } : { columnPatch: progress }) });
+      taskEvent({ taskId: task.id, status: 'failed', progress: task.progress, message: '数据库进程已退出，结构操作不会自动重放，请核对最新定义', ...(task.kind.startsWith('schema.databaseDrop.') ? { databaseDrop: progress } : task.kind.startsWith('schema.tableCreate.') ? { tableCreate: progress } : task.kind.startsWith('schema.tableCopyData.') ? { tableCopyData: progress } : task.kind.startsWith('schema.tableCopyStructure.') ? { tableCopyStructure: progress } : task.kind.startsWith('schema.databaseDefaultEncoding.') ? { databaseDefaultEncoding: progress } : task.kind.startsWith('schema.databaseCreate.') ? { databaseCreate: progress } : task.kind.startsWith('schema.tableRename.') ? { tableRename: progress } : task.kind.startsWith('schema.tableAutoIncrement.') ? { tableAutoIncrement: progress } : task.kind.startsWith('schema.tableDefaultEncoding.') ? { tableDefaultEncoding: progress } : task.kind.startsWith('schema.tableDrop.') ? { tableDrop: progress } : task.kind.startsWith('schema.tableTruncate.') ? { tableTruncate: progress } : task.kind.startsWith('schema.tableComment.') ? { tableComment: progress } : task.kind.startsWith('schema.indexes.') ? { indexPatch: progress } : task.kind.startsWith('schema.foreignKeys.') ? { foreignKeyPatch: progress } : { columnPatch: progress }) });
       continue;
     }
     taskEvent({ taskId: task.id, status: 'failed', progress: task.progress, message: '数据库进程已退出，请核对操作结果并重新连接', ...(task.kind === 'query.exportStream' ? { queryExport: { phase: 'executing' as const, statementsCompleted: 0, rowsWritten: 0, bytesWritten: 0, fileCommitted: false, ...exportProgress.get(task.id), ...(preparing ? { phase: 'preparing' as const } : {}), sqlMayHaveExecuted: !preparing, transactionKnown: false } } : {}) });
@@ -789,12 +977,14 @@ else {
         const fileCancel = Boolean(payload.command === 'query.cancel' && payload.input && typeof payload.input === 'object' && 'taskId' in payload.input && typeof payload.input.taskId === 'string' && tasks.get(payload.input.taskId)?.kind.startsWith('queryFileSources.'));
         const insertRequest = payload.command==='query.confirmInsertExport' || payload.command==='query.exportStream' && !!payload.input && typeof payload.input==='object' && 'format' in payload.input && payload.input.format==='sql' || payload.command==='files.choose' && !!payload.input && typeof payload.input==='object' && 'queryInsertExport' in payload.input || payload.command==='query.cancel' && !!payload.input && typeof payload.input==='object' && 'taskId' in payload.input && typeof payload.input.taskId==='string' && queryInsertExports.has(payload.input.taskId);
         const resultSql = payload.command === 'files.previewResultSql' || payload.command === 'files.releaseResultSql' || (payload.command === 'files.exportResult' || payload.command === 'files.choose') && !!payload.input && typeof payload.input === 'object' && ('format' in payload.input && payload.input.format === 'sql') && (payload.command === 'files.exportResult' || 'resultSqlPreviewId' in payload.input);
+        if (payload.command.startsWith('schema.databaseDrop.')) columns = columnsMain.capture(event);
         if (payload.command.startsWith('schema.databaseDefaultEncoding.')) {
           columns = columnsMain.capture(event); columns.databaseEncodingRevision = store.connectionRevision();
           databaseEncodingCommand = payload.command.slice('schema.databaseDefaultEncoding.'.length) as DatabaseEncodingOwnerCommand;
         }
         if (payload.command.startsWith('explainFiles.')||payload.command.startsWith('schema.columns.')||payload.command.startsWith('table.presets.')||payload.command.startsWith('result.presets.')||payload.command.startsWith('queryFileSources.')||fileCancel||resultSql||insertRequest||payload.command.startsWith('snippets.transfer')) columns = columnsMain.capture(event);
         const input = validateMainCommand(payload.command, payload.input);
+        if (payload.command.startsWith('schema.databaseDrop.')) beginDatabaseDrop(payload.command, input, columns!);
         if (databaseEncodingCommand) databaseEncodingOwners.before(databaseEncodingCommand, input, columns!);
         const operation=dispatch(payload.command as Command,input,columns),local=payload.command==='search.savedQueries'||payload.command==='search.savedQueriesContinue'||payload.command==='queries.page'||payload.command==='queries.pageContinue'||payload.command==='history.page'||payload.command==='history.pageContinue';if(local)localSearchOperations.add(operation);
         // 片段文件操作及清理全部结算后才允许退出关闭存储，复用现有文件操作等待集合。
@@ -826,11 +1016,13 @@ else {
             if (payload.command === 'files.choose' && input && typeof input === 'object' && 'resultSqlPreviewId' in input && typeof input.resultSqlPreviewId === 'string') resultSqlPreviews.release(input.resultSqlPreviewId, columns!.owner.document);
             throw error;
           }
+          if (payload.command.startsWith('schema.databaseDrop.')) assertDatabaseDropPublication(result, columns!);
           if (databaseEncodingCommand) databaseEncodingOwners.assertPublication(databaseEncodingCommand, result, columns!);
           return { ok: true, result };
         } finally { columns?.presetPublication?.release();if(local)localSearchOperations.delete(operation);if(snippetTransferOperation)queryFileOperations.delete(operation); }
       } catch (error) {
         let failure = error;
+        if (payload && typeof payload === 'object' && 'command' in payload && typeof payload.command === 'string' && payload.command.startsWith('schema.databaseDrop.') && columns) try { await rejectDatabaseDropPublication(columns, error); } catch (cleanup) { failure = cleanup; }
         if (databaseEncodingCommand && columns) try { await databaseEncodingOwners.rejectPublication(databaseEncodingCommand, databaseEncodingResult, columns, error); } catch (cleanup) { failure = cleanup; }
         if (columns && columnsMain.hasUnpublished(columns)) try { await columnsMain.rejectReply(columns, error); } catch (cleanup) { failure = cleanup; }
         return { ok: false, error: failure instanceof Error ? failure.message : '客户端操作失败' };

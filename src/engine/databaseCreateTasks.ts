@@ -102,7 +102,7 @@ export class DatabaseCreateTasks {
       catch { /* 已收到DDL成功响应，后核验失败必须保留完成事实，不能当作未执行。 */ }
       if (!output.definitionVerified) output.warnings.push('创建已收到成功响应，但实际名称或编码未完整核验；请核对数据库，不要重复执行。');
       context.report(); this.releaseTokens({ snapshotId: preview.snapshotId }); return output;
-    }, { label: '创建数据库', purpose: 'databaseCreate', progress }); }
+    }, { label: '创建数据库', purpose: 'databaseCreate', progress, executionDatabase: preview.name }); }
     finally { this.executing.delete(key); }
   }
 }

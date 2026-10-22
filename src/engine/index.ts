@@ -50,6 +50,7 @@ import { TableAutoIncrementTasks } from './tableAutoIncrementTasks';
 import { TableCommentTasks } from './tableCommentTasks';
 import { TableDropTasks } from './tableDropTasks';
 import { TableTruncateTasks } from './tableTruncateTasks';
+import { DatabaseDropTasks } from './databaseDropTasks';
 import { DatabaseCreateTasks } from './databaseCreateTasks';
 import { DatabaseDefaultEncodingTasks } from './databaseDefaultEncodingTasks';
 import { queryFailureMessage, type QueryFailureSourceRange } from '../shared/queryFailure';
@@ -107,6 +108,7 @@ export class Engine {
   private readonly tableDrops: TableDropTasks;
   private readonly tableTruncates: TableTruncateTasks;
   private readonly tableCreates: TableCreateTasks;
+  private readonly databaseDrops: DatabaseDropTasks;
   private readonly databaseCreates: DatabaseCreateTasks;
   private readonly databaseDefaultEncodings: DatabaseDefaultEncodingTasks;
   private readonly tableDefaultEncodings: TableDefaultEncodingTasks;
@@ -134,6 +136,7 @@ export class Engine {
     this.tableDrops = new TableDropTasks({ run: (connectionId, taskId, action, options) => this.withIndependentTask(connectionId, taskId, (managed, control) => action({ managed, ...control }), options) }, undefined, this.structureCache);
     this.tableTruncates = new TableTruncateTasks({ run: (connectionId, taskId, action, options) => this.withIndependentTask(connectionId, taskId, (managed, control) => action({ managed, ...control }), options) }, undefined, this.structureCache);
     this.tableCreates = new TableCreateTasks({ run: (connectionId, taskId, action, options) => this.withIndependentTask(connectionId, taskId, (managed, control) => action({ managed, ...control }), options) }, undefined, this.structureCache);
+    this.databaseDrops = new DatabaseDropTasks({ run: (connectionId, taskId, action, options) => this.withIndependentTask(connectionId, taskId, (managed, control) => action({ managed, ...control }), options) }, undefined, this.structureCache);
     this.databaseCreates = new DatabaseCreateTasks({ run: (connectionId, taskId, action, options) => this.withIndependentTask(connectionId, taskId, (managed, control) => action({ managed, ...control }), options) }, undefined, this.structureCache);
     this.databaseDefaultEncodings = new DatabaseDefaultEncodingTasks({ run: (connectionId, taskId, action, options) => this.withIndependentTask(connectionId, taskId, (managed, control) => action({ managed, ...control }), options) }, undefined, this.structureCache);
     this.tableDefaultEncodings = new TableDefaultEncodingTasks({ run: (connectionId, taskId, action, options) => this.withIndependentTask(connectionId, taskId, (managed, control) => action({ managed, ...control }), options) }, undefined, this.structureCache);
@@ -142,7 +145,7 @@ export class Engine {
 
   /** 主进程只注入可信 profile/filePath；其他字段按共享接口处理。 */
   async handle(command: EngineCommand, input: Input): Promise<any> {
-    if (this.closing && command !== 'schema.databaseDefaultEncoding.release') throw new Error('数据库引擎正在关闭，不能开始新操作');
+    if (this.closing && command !== 'schema.databaseDefaultEncoding.release' && command !== 'schema.databaseDrop.release') throw new Error('数据库引擎正在关闭，不能开始新操作');
     switch (command) {
       case '__connections.prepareSave': {
         const next = input.profile as ConnectionProfile;
@@ -153,6 +156,7 @@ export class Engine {
         if (changed || !previous) this.profiles.delete(input.id);
         await this.schemaComparisons.close(input.id);
         this.tableRenames.releaseConnection(input.id);
+        this.databaseDrops.releaseConnection(input.id);
         this.structureCache.release(input.id);
         this.structureSearches.releaseConnection(input.id);
         this.dataSearchRecords.releaseConnection(input.id);
@@ -185,6 +189,7 @@ export class Engine {
         try {
         const comparisonCleanup = this.schemaComparisons.close(input.id);
         this.tableRenames.releaseConnection(input.id);
+        this.databaseDrops.releaseConnection(input.id);
         this.dataSearchRecords.releaseConnection(input.id);
         this.tableCopySources.releaseConnection(input.id);
         this.structureCache.release(input.id);
@@ -415,6 +420,10 @@ export class Engine {
       case 'schema.tableCreate.preview': return this.tableCreates.preview(input as any, input.connectionRevision);
       case 'schema.tableCreate.apply': return this.tableCreates.apply(input as any, input.connectionRevision);
       case 'schema.tableCreate.release': return this.tableCreates.releaseTokens(input);
+      case 'schema.databaseDrop.get': return this.databaseDrops.get(input as any, input.connectionRevision);
+      case 'schema.databaseDrop.preview': return this.databaseDrops.preview(input as any, input.connectionRevision);
+      case 'schema.databaseDrop.apply': return this.databaseDrops.apply(input as any, input.connectionRevision);
+      case 'schema.databaseDrop.release': return this.databaseDrops.releaseTokens(input);
       case 'schema.databaseCreate.get': return this.databaseCreates.get(input as any, input.connectionRevision);
       case 'schema.databaseDefaultEncoding.get': return this.databaseDefaultEncodings.get(input as any, input.connectionRevision);
       case 'schema.databaseDefaultEncoding.preview': return this.databaseDefaultEncodings.preview(input as any, input.connectionRevision);
@@ -486,6 +495,7 @@ export class Engine {
     this.excelConnecting.forEach(task => task.controller.abort());
     const comparisonCleanup = this.schemaComparisons.close();
     this.tableRenames.releaseConnection();
+    this.databaseDrops.releaseConnection();
     this.structureCache.release();
     const independent = [...this.independentTasks];
     const active = [...this.tasks.values()];
@@ -589,7 +599,8 @@ export class Engine {
       const profile = this.profile(connectionId);
       // 字段、索引及后续外键执行共用资源集合，不能在重核与关闭之间并行修改相关父表。
       const executionTargets = [...(options?.executionTarget ? [options.executionTarget] : []), ...(options?.executionTargets ?? [])];
-      const releaseExecution = this.structureExecutions.acquire(connectionId, executionTargets);
+      if (options?.executionDatabase !== undefined && executionTargets.length) throw new Error('库级与表级结构执行范围不能混用；未发送 DDL');
+      const releaseExecution = options?.executionDatabase !== undefined ? this.structureExecutions.acquireDatabase(connectionId, options.executionDatabase) : this.structureExecutions.acquire(connectionId, executionTargets);
       let resources: IndependentTaskResourceLease;
       try { resources = this.independentResources.reserve(connectionId, taskId, releaseExecution); }
       catch (error) { releaseExecution(); throw error; }
@@ -600,7 +611,7 @@ export class Engine {
       const task: IndependentTask = { connectionId, controller, done, resources, structureTask: Boolean(options)||strictRead, generation: 0 };
       this.independentTasks.set(taskId, task);
       const label = options?.label ?? readLabel ?? '读取关联记录';
-      const detail = () => options ? (options.purpose === 'tableCreate' ? { tableCreate: { ...options.progress } } : options.purpose === 'tableCopyData' ? { tableCopyData: { ...options.progress } } : options.purpose === 'tableCopyStructure' ? { tableCopyStructure: { ...options.progress } } : options.purpose === 'databaseDefaultEncoding' ? { databaseDefaultEncoding: { ...options.progress } } : options.purpose === 'databaseCreate' ? { databaseCreate: { ...options.progress } } : options.purpose === 'tableRename' ? { tableRename: { ...options.progress } } : options.purpose === 'tableAutoIncrement' ? { tableAutoIncrement: { ...options.progress } } : options.purpose === 'tableDefaultEncoding' ? { tableDefaultEncoding: { ...options.progress } } : options.purpose === 'tableDrop' ? { tableDrop: { ...options.progress } } : options.purpose === 'tableTruncate' ? { tableTruncate: { ...options.progress } } : options.purpose === 'tableComment' ? { tableComment: { ...options.progress } } : options.purpose === 'indexes' ? { indexPatch: { ...options.progress } } : options.purpose === 'foreignKeys' ? { foreignKeyPatch: { ...options.progress } } : { columnPatch: { ...options.progress } }) : readDetail?.()??{};
+      const detail = () => options ? (options.purpose === 'tableCreate' ? { tableCreate: { ...options.progress } } : options.purpose === 'tableCopyData' ? { tableCopyData: { ...options.progress } } : options.purpose === 'tableCopyStructure' ? { tableCopyStructure: { ...options.progress } } : options.purpose === 'databaseDefaultEncoding' ? { databaseDefaultEncoding: { ...options.progress } } : options.purpose === 'databaseDrop' ? { databaseDrop: { ...options.progress } } : options.purpose === 'databaseCreate' ? { databaseCreate: { ...options.progress } } : options.purpose === 'tableRename' ? { tableRename: { ...options.progress } } : options.purpose === 'tableAutoIncrement' ? { tableAutoIncrement: { ...options.progress } } : options.purpose === 'tableDefaultEncoding' ? { tableDefaultEncoding: { ...options.progress } } : options.purpose === 'tableDrop' ? { tableDrop: { ...options.progress } } : options.purpose === 'tableTruncate' ? { tableTruncate: { ...options.progress } } : options.purpose === 'tableComment' ? { tableComment: { ...options.progress } } : options.purpose === 'indexes' ? { indexPatch: { ...options.progress } } : options.purpose === 'foreignKeys' ? { foreignKeyPatch: { ...options.progress } } : { columnPatch: { ...options.progress } }) : readDetail?.()??{};
       const send = (event: TaskEvent) => { if (!quiet) this.emit(event); };
       const report = () => send({ taskId, status: 'running', progress: 0, message: label, ...detail() });
       const checkCancelled = () => { if (task.cancelRequested || controller.signal.aborted) throw new Error('任务已取消；已执行的结构或数据变更不会撤销'); };

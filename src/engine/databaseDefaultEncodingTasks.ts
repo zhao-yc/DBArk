@@ -146,6 +146,6 @@ export class DatabaseDefaultEncodingTasks {
       } catch { /* DDL成功事实保留；取消、断线或读失败只能报告未核验，不重放。 */ }
       if (!output.definitionVerified) output.verificationError = 'DDL已收到成功响应，但实际默认编码、其他属性或诊断未全部核验；请人工核对，不要重复执行';
       this.releaseTokens({ snapshotId: snapshot.id }); context.report(); return output;
-    }, { label: '修改数据库默认编码', purpose: 'databaseDefaultEncoding', progress, onResourcesReleased: () => { if (this.executing.get(key) === lease) this.executing.delete(key); } });
+    }, { label: '修改数据库默认编码', purpose: 'databaseDefaultEncoding', progress, executionDatabase: snapshot.target.database, onResourcesReleased: () => { if (this.executing.get(key) === lease) this.executing.delete(key); } });
   }
 }
