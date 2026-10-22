@@ -2,6 +2,8 @@
 
 ## 当前开发安排（2026-10-22）
 
+D01新增[服务器全部筛选行统计](development/table-statistics-20261022.md)：表／视图0～12列显式统计，计数／NULL、极值、精确SUM／AVG及近似标识，独立只读事务不包含父草稿。准确同一生产树的[六实例与Windows正式窗口](../tests/integration/acceptance-table-statistics-cc43008a-20261022.md)通过50页行／123全量、视图62行、UINT64相邻边界及未提交行隔离；108非observer原连接收尾，完整14780项通过／1平台跳过、类型／构建通过。首次5.7转换警告及GUI默认页大小失败保留，安全范围无符号整型定型修复不放宽警告门；取消等真实故障、macOS／安装另验。完整D01与发行计数不增加，暂不发布。
+
 D05新增[父记录查看子记录](development/incoming-references-20261022.md)：真实入向外键目录有界续页，完整复合值和关系摘要约束只读子页，独立筛选／分组／多列排序，父草稿保留及取消／迟到围栏。准确同一生产树的[六实例与Windows正式窗口](../tests/integration/acceptance-incoming-references-0a1f5dbb-20261022.md)通过61项实际关系、13384目录50+1、55原非observer线程及精确清库；完整14604项通过／1平台跳过、类型／构建保持。首次夹具及GUI观察SQL失败原件保留；macOS／安装、GUI大目录与真实故障组合另验，完整D05与发行计数不增加，暂不发布。
 
 O01新增[新建表字段编码](development/table-create-column-encoding-20261022.md)：真实目录读取及准备快照释放、逐列明确配对／继承、重排及确认回执；普通／生成共存／前缀三路径后核，前缀按列MAXLEN计算。准确`160cf86f`的[六实例与Windows源码表单](../tests/integration/acceptance-table-create-column-encoding-160cf86f-20261022.md)通过8次单条CREATE、真实大小写／精确字节、38任务线程及隔离库收尾；完整14477项通过／1平台跳过、类型与构建同字节绑定、Linux候选CI成功。两轮失败保留；五阶段来源及正常退出通过，Main逐条IPC、macOS及安装组合另验。完整O01与发行计数不增加，暂不发布。
