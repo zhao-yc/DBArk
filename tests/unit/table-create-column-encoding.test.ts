@@ -9,6 +9,8 @@ import { planTableCreateIndexes } from '../../src/engine/tableCreateIndexPlan';
 import { verifyCreatedColumnEncodings } from '../../src/engine/tableCreateColumnEncoding';
 import { tableCreateColumnDefaultMatches } from '../../src/engine/tableCreateColumnDefaults';
 import type { TableDefinitionContext } from '../../src/shared/tableColumnPatches';
+import { readTableDefaultEncodingDefinition } from '../../src/engine/tableDefaultEncodingSql';
+import { tableCreateDefaultEncodingRowsMatch, tableCreateShownEncodingProof } from '../../src/engine/tableCreateEncodingProof';
 import { tableCreateDraftSchema, tableCreateLegacyDesign, type TableCreateDraft, type TableCreateEncodingCatalog, type TableCreatePrefixFacts } from '../../src/shared/tableCreate';
 import { effectiveTableCreateColumnEncoding, planTableCreateColumnEncodings, tableCreateColumnEncodingAllowed, tableCreateHasColumnEncoding } from '../../src/shared/tableCreateColumnEncoding';
 
@@ -189,5 +191,32 @@ describe('完整COLUMNS默认值与同次SHOW、请求三向核对', () => {
     expect(tableCreateColumnDefaultMatches(column, shown(column.type, 'DEFAULT CURRENT_TIMESTAMP(3)', definitionContext), 'current_timestamp(6)', definitionContext)).toBe(false);
     const zero = { ...column, type: 'TIMESTAMP', defaultValue: 'CURRENT_TIMESTAMP(0)', onUpdate: { ...column.onUpdate, precision: 0 } };
     expect(tableCreateColumnDefaultMatches(zero, shown(zero.type, 'DEFAULT CURRENT_TIMESTAMP', definitionContext), 'current_timestamp()', definitionContext)).toBe(true);
+  });
+});
+
+describe('真实默认目录补证SHOW省略的表COLLATE', () => {
+  const context: TableDefinitionContext = { dialect: 'mysql', mode: { ansiQuotes: false, noBackslashEscapes: false } };
+  /** 5.7真实SHOW会省略已选字符集默认collation；此处只脱敏库表名，保留实际表尾形状。 */
+  const source = 'CREATE TABLE `subject` (`id` bigint(20) unsigned NOT NULL,`qty` int(11) DEFAULT NULL,`u8` varchar(100) COLLATE utf8mb4_bin DEFAULT NULL,`latin` varchar(100) CHARACTER SET latin1 COLLATE latin1_bin DEFAULT NULL,`memo` text COLLATE utf8mb4_bin,`computed` decimal(20,2) GENERATED ALWAYS AS ((`qty` * 1.00)) STORED,PRIMARY KEY (`id`),KEY `ix_qty` (`qty`)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4';
+  it('省略不是不一致，必须保留待证明状态而非提前拒绝或直接相信请求', () => {
+    const request = { charset: 'utf8mb4', collation: 'utf8mb4_general_ci' }, shown = readTableDefaultEncodingDefinition(source, context);
+    expect(shown.reasons).toEqual([]); expect(shown.collation).toBeUndefined(); expect(tableCreateShownEncodingProof(request, shown)).toBe('default-required');
+    expect(tableCreateDefaultEncodingRowsMatch([{ name: 'utf8mb4', collation: 'utf8mb4_general_ci' }], request)).toBe(true);
+    expect(tableCreateDefaultEncodingRowsMatch(undefined, request)).toBe(false);
+    expect(tableCreateDefaultEncodingRowsMatch([{ name: 'utf8mb4', collation: 'utf8mb4_bin' }], request)).toBe(false);
+  });
+  it('不硬编码general_ci，实际字符集默认值与请求准确一致才证明', () => {
+    const request = { charset: 'latin1', collation: 'latin1_swedish_ci' }, shown = readTableDefaultEncodingDefinition(source.replace('DEFAULT CHARSET=utf8mb4', 'DEFAULT CHARSET=latin1'), context);
+    expect(tableCreateShownEncodingProof(request, shown)).toBe('default-required');
+    expect(tableCreateDefaultEncodingRowsMatch([{ name: 'latin1', collation: 'latin1_swedish_ci' }], request)).toBe(true);
+    for (const rows of [[], null, [{ name: 'utf8mb4', collation: request.collation }], [{ name: request.charset, collation: null }], [{ name: request.charset, collation: request.collation }, { name: request.charset, collation: request.collation }]]) expect(tableCreateDefaultEncodingRowsMatch(rows, request)).toBe(false);
+  });
+  it('显式SHOW矛盾、字符集不同或未知表尾不能通过默认目录洗掉', () => {
+    const request = { charset: 'utf8mb4', collation: 'utf8mb4_general_ci' };
+    expect(tableCreateShownEncodingProof(request, readTableDefaultEncodingDefinition(source + ' COLLATE=utf8mb4_bin', context))).toBe('invalid');
+    expect(tableCreateShownEncodingProof(request, readTableDefaultEncodingDefinition(source.replace('DEFAULT CHARSET=utf8mb4', 'DEFAULT CHARSET=latin1'), context))).toBe('invalid');
+    expect(tableCreateShownEncodingProof(request, readTableDefaultEncodingDefinition(source + ' UNKNOWN_OPTION=1', context))).toBe('invalid');
+    expect(tableCreateShownEncodingProof(request, readTableDefaultEncodingDefinition(source + ' COLLATE=utf8mb4_general_ci', context))).toBe('shown');
+    expect(tableCreateShownEncodingProof({ charset: 'utf8mb4' }, readTableDefaultEncodingDefinition(source, context))).toBe('inherited');
   });
 });

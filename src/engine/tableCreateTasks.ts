@@ -9,6 +9,7 @@ import { structureTaskQuery as query, type StructureTaskContext, type StructureT
 import { buildDesign, buildPrefixTableDesign, buildGeneratedTableDesign, buildColumnEncodedTableDesign, qualified, mariaDefault, temporalDefault } from './sql';
 import { planTableCreateColumnEncodings, tableCreateHasColumnEncoding, type TableCreateColumnEncodingPlan } from '../shared/tableCreateColumnEncoding';
 import { verifyCreatedColumnEncodings } from './tableCreateColumnEncoding';
+import { tableCreateShownEncodingProof, tableCreateDefaultEncodingRowsMatch } from './tableCreateEncodingProof';
 import { readTableCreateGeneratedFacts, planTableCreateGeneratedColumns, verifyCreatedGeneratedColumns, type TableCreateGeneratedFacts, type TableCreateGeneratedPlan } from './tableCreateGeneratedColumns';
 import { parseTableColumnDefinition, tableDefinitionTokens } from './tableColumnDefinition';
 import { readTableIndexDefinition } from './tableIndexDefinition';
@@ -113,10 +114,8 @@ async function verify(context: StructureTaskContext, preview: Preview): Promise<
     context.checkCancelled();
     return !context.managed.signal?.aborted && !context.managed.broken && Array.isArray(final) && final.length === 1 && final[0]['Create Table'] === document.source;
   };
-  if (design.collation !== undefined) {
-    const actual = readTableDefaultEncodingDefinition(document.source, document.context);
-    if (actual.reasons.length || actual.charset !== design.charset || actual.collation !== design.collation) return false;
-  }
+  const encodingProof = design.collation === undefined ? 'inherited' : tableCreateShownEncodingProof(design, readTableDefaultEncodingDefinition(document.source, document.context));
+  if (encodingProof === 'invalid') return false;
   const foreignKeys = design.foreignKeys.length ? readCreatedForeignKeys(document, design, context.managed.status.version) : undefined;
   // 只排除已按完整语义证明的FK原范围；未知约束和自动新增索引仍交给原索引守卫拒绝。
   const indexDocument = foreignKeys ? { ...document, items: document.items.filter(item => !foreignKeys.foreignKeys.some(key => key.range.start === item.range.start && key.range.end === item.range.end)) } : document;
@@ -172,6 +171,12 @@ async function verify(context: StructureTaskContext, preview: Preview): Promise<
   }
   if (actualCharset !== design.charset) return false;
   if (design.collation !== undefined && tables[0].collation !== design.collation) return false;
+  // 两种专属core已用真实TABLES+CHARACTER_SETS完整证明省略COLLATE；复核当前TABLES仍相符后复用，不重复读目录。
+  // 普通显式表配对没有专属core，须独立查实际字符集默认值；旧省略配对路径不增加读取。
+  if (encodingProof === 'default-required' && !preview.generatedPlan && !preview.columnEncodingPlan) {
+    const defaults = (await query<unknown>(context, `SELECT CHARACTER_SET_NAME AS name,DEFAULT_COLLATE_NAME AS collation FROM information_schema.CHARACTER_SETS WHERE CHARACTER_SET_NAME=${literal(design.charset)} LIMIT 2`)).rows;
+    if (!tableCreateDefaultEncodingRowsMatch(defaults, { charset: design.charset, collation: design.collation! })) return false;
+  }
   const condition = `TABLE_SCHEMA=${literal(database)} AND TABLE_NAME=${literal(table)}`;
   const columns = (await query<{ name: string; type: string; nullable: string; defaultValue: string | null; extra: string; comment: string }[]>(context, `SELECT COLUMN_NAME AS name,COLUMN_TYPE AS type,IS_NULLABLE AS nullable,COLUMN_DEFAULT AS defaultValue,EXTRA AS extra,COLUMN_COMMENT AS comment FROM information_schema.COLUMNS WHERE ${condition} ORDER BY ORDINAL_POSITION LIMIT 1001`)).rows;
   if (!Array.isArray(columns) || columns.length !== design.columns.length || columns.some((column, index) => {

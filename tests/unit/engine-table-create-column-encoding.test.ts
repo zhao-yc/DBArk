@@ -18,6 +18,9 @@ function design(): TableCreateDraft { return { database: 'db', name: 'subject', 
   { name: 'body', type: 'text', nullable: true, autoIncrement: false, comment: '中文', collation: { charset: 'utf8mb4', collation: 'utf8mb4_bin' } },
 ], indexes: [{ name: 'PRIMARY', unique: true, columns: ['id'] }, { name: 'ix_qty', unique: false, columns: ['qty'] }], foreignKeys: [] }; }
 const originalShow = "CREATE TABLE `subject` (`id` bigint unsigned NOT NULL,`qty` int DEFAULT NULL,`label` varchar(100) CHARACTER SET latin1 COLLATE latin1_bin DEFAULT NULL COMMENT '西文',`body` text COLLATE utf8mb4_bin COMMENT '中文',PRIMARY KEY (`id`),KEY `ix_qty` (`qty`)) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_general_ci COMMENT='列级编码表'";
+/** 6748f954首轮5.7原SHOW，仅将随机所有者注释脱敏；表默认COLLATE确实省略，列级配对保留原文。 */
+const mysql57ObservedShow = "CREATE TABLE `subject` (\n  `id` bigint(20) unsigned NOT NULL,\n  `qty` int(11) DEFAULT NULL,\n  `u8` varchar(100) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin DEFAULT NULL COMMENT '逐列Unicode',\n  `latin` varchar(100) CHARACTER SET latin1 COLLATE latin1_bin DEFAULT NULL COMMENT '逐列单字节',\n  `memo` text CHARACTER SET utf8mb4 COLLATE utf8mb4_bin COMMENT '逐列长文本',\n  `computed` decimal(20,2) GENERATED ALWAYS AS ((`qty` * 1.00)) STORED COMMENT '精确生成',\n  PRIMARY KEY (`id`),\n  KEY `ix_qty` (`qty`),\n  CONSTRAINT `fk_qty` FOREIGN KEY (`qty`) REFERENCES `parent` (`id`)\n) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='列级编码表'";
+const observedDefaultSql = "SELECT CHARACTER_SET_NAME AS name,DEFAULT_COLLATE_NAME AS collation FROM information_schema.CHARACTER_SETS WHERE CHARACTER_SET_NAME=CONVERT(X'757466386d6234' USING utf8mb4) LIMIT 2";
 interface Column { name: string; ordinal: number | string; typeSql: string; dataType: string; nullable: string; defaultValue: string | null; extra: string; generationExpression: string; charset: string | null; collation: string | null; comment: string; }
 function columns(): Column[] { return [
   { name: 'id', ordinal: '1', typeSql: 'bigint unsigned', dataType: 'bigint', nullable: 'NO', defaultValue: null, extra: '', generationExpression: '', charset: null, collation: null, comment: '' },
@@ -29,6 +32,7 @@ let engine: Engine, events: TaskEvent[], sent: string[], rows: Column[], source:
 let catalog: { charset: string; collation: string; compiled: string }[], created: boolean, prefix: boolean, foreign: boolean, labelLength: number, latinMax: number;
 let held: { complete(error?: Error): void; managed: ManagedConnection } | undefined, hold: RegExp | undefined, denied: RegExp | undefined, lateShow: string | undefined, lateAt: number, closeFails: boolean, unknownClose: boolean;
 let fullPatch: Record<string, unknown>, tablesPatch: Record<string, unknown>;
+let defaultRows: unknown;
 const statistics = () => [{ name: 'PRIMARY', nonUnique: 0, column: 'id', sequence: 1, subPart: null, method: 'BTREE', direction: 'A', comment: '' }, { name: 'ix_qty', nonUnique: 1, column: 'qty', sequence: 1, subPart: null, method: 'BTREE', direction: 'A', comment: '' }, ...(prefix ? [{ name: 'ix_label', nonUnique: 1, column: 'label', sequence: 1, subPart: 3072, method: 'BTREE', direction: 'A', comment: '' }] : [])];
 /** 每条原查询均以真实callback结算，未登记也回错误，避免悬空超时掩盖fixture缺漏。 */
 function connect(signal?: AbortSignal): ManagedConnection {
@@ -50,6 +54,7 @@ function connect(signal?: AbortSignal): ManagedConnection {
       else if (sql.startsWith('SELECT SCHEMA_NAME')) result = [{ name: 'db', charset: 'utf8mb4', collation: 'utf8mb4_general_ci' }];
       else if (sql.startsWith('SELECT @@innodb_page_size')) result = [{ pageSize: 16384, defaultRowFormat: 'dynamic' }];
       else if (sql.startsWith('SELECT CHARACTER_SET_NAME AS name,MAXLEN')) result = [{ name: 'latin1', maxBytes: latinMax }, { name: 'utf8mb4', maxBytes: 4 }];
+      else if (sql === observedDefaultSql) result = structuredClone(defaultRows);
       else if (sql.startsWith('SELECT TABLE_NAME FROM')) result = created ? [{ TABLE_NAME: 'subject' }] : [];
       else if (sql.startsWith('CREATE TABLE')) { created = true; result = { affectedRows: 0, warningStatus: 0 }; }
       else if (sql.startsWith('SHOW CREATE TABLE')) result = [{ 'Create Table': ++showReads >= lateAt ? lateShow ?? source : source }];
@@ -79,6 +84,7 @@ beforeEach(async () => {
   rows = columns(); source = originalShow; version = '8.4.11'; dialect = 'mysql'; sequence = showReads = 0; events = []; sent = []; created = prefix = foreign = closeFails = unknownClose = false; labelLength = 100; latinMax = 1; lateAt = Infinity; lateShow = held = hold = denied = undefined;
   // 两次目录的反例控制必须独立，不能让完整COLUMNS补丁意外污染更早的TABLES证据。
   fullPatch = {}; tablesPatch = {};
+  defaultRows = [{ name: 'utf8mb4', collation: 'utf8mb4_general_ci' }];
   catalog = [{ charset: 'latin1', collation: 'latin1_bin', compiled: 'YES' }, { charset: 'latin1', collation: 'latin1_swedish_ci', compiled: 'YES' }, { charset: 'utf8mb4', collation: 'utf8mb4_bin', compiled: 'YES' }, { charset: 'utf8mb4', collation: 'utf8mb4_general_ci', compiled: 'YES' }];
   driver.connect.mockReset().mockImplementation(async (_profile, _database, signal) => connect(signal)); driver.execute.mockReset().mockImplementation(async (_managed, sql) => { if (String(sql).startsWith('KILL CONNECTION')) held?.complete(Error('合成原命令已取消')); return { rows: [] }; }); engine = new Engine(event => events.push(event)); await engine.handle('connections.open', { id: profile.id, profile });
 });
@@ -92,7 +98,35 @@ function withGenerated(input = design()): TableCreateDraft {
 /** 表默认utf8mb4但键列latin1：3072个字符恰3072字节，不能误用表级MAXLEN=4。 */
 function withPrefix(): TableCreateDraft { const input = design(); prefix = true; labelLength = 4000; input.columns[2].type = 'varchar(4000)'; input.indexes.push({ name: 'ix_label', unique: false, keyParts: [{ columnName: 'label', prefixLength: 3072 }] }); rows[2].typeSql = 'varchar(4000)'; source = source.replace('varchar(100)', 'varchar(4000)').replace(') ENGINE=', ',KEY `ix_label` (`label`(3072))) ENGINE=').replace(" COMMENT='列级编码表'", " ROW_FORMAT=DYNAMIC COMMENT='列级编码表'"); return input; }
 
+/** 首轮真实COLUMNS逐项固定；不从SHOW解析或以产品规划器反推观测。 */
+function mysql57ObservedFixture(): TableCreateDraft {
+  version = '5.7.44'; source = mysql57ObservedShow; foreign = true;
+  rows = [
+    { name: 'id', ordinal: '1', typeSql: 'bigint(20) unsigned', dataType: 'bigint', nullable: 'NO', defaultValue: null, extra: '', generationExpression: '', charset: null, collation: null, comment: '' },
+    { name: 'qty', ordinal: '2', typeSql: 'int(11)', dataType: 'int', nullable: 'YES', defaultValue: null, extra: '', generationExpression: '', charset: null, collation: null, comment: '' },
+    { name: 'u8', ordinal: '3', typeSql: 'varchar(100)', dataType: 'varchar', nullable: 'YES', defaultValue: null, extra: '', generationExpression: '', charset: 'utf8mb4', collation: 'utf8mb4_bin', comment: '逐列Unicode' },
+    { name: 'latin', ordinal: '4', typeSql: 'varchar(100)', dataType: 'varchar', nullable: 'YES', defaultValue: null, extra: '', generationExpression: '', charset: 'latin1', collation: 'latin1_bin', comment: '逐列单字节' },
+    { name: 'memo', ordinal: '5', typeSql: 'text', dataType: 'text', nullable: 'YES', defaultValue: null, extra: '', generationExpression: '', charset: 'utf8mb4', collation: 'utf8mb4_bin', comment: '逐列长文本' },
+    { name: 'computed', ordinal: '6', typeSql: 'decimal(20,2)', dataType: 'decimal', nullable: 'YES', defaultValue: null, extra: 'STORED GENERATED', generationExpression: '(`qty` * 1.00)', charset: null, collation: null, comment: '精确生成' },
+  ];
+  return { database: 'db', name: 'subject', engine: 'InnoDB', charset: 'utf8mb4', collation: 'utf8mb4_general_ci', comment: '列级编码表', columns: [
+    { name: 'id', type: 'bigint unsigned', nullable: false, autoIncrement: false, comment: '' }, { name: 'qty', type: 'int', nullable: true, autoIncrement: false, comment: '' },
+    { name: 'u8', type: 'varchar(100)', nullable: true, autoIncrement: false, comment: '逐列Unicode', collation: { charset: 'utf8mb4', collation: 'utf8mb4_bin' } },
+    { name: 'latin', type: 'varchar(100)', nullable: true, autoIncrement: false, comment: '逐列单字节', collation: { charset: 'latin1', collation: 'latin1_bin' } },
+    { name: 'memo', type: 'text', nullable: true, autoIncrement: false, comment: '逐列长文本', collation: { charset: 'utf8mb4', collation: 'utf8mb4_bin' } },
+    { name: 'computed', type: 'decimal(20,2)', nullable: true, autoIncrement: false, comment: '精确生成', generated: { storage: 'STORED', expression: 'qty * 1.00' } },
+  ], indexes: [{ name: 'PRIMARY', unique: true, columns: ['id'] }, { name: 'ix_qty', unique: false, columns: ['qty'] }], foreignKeys: [{ name: 'fk_qty', columns: ['qty'], referencedDatabase: 'db', referencedTable: 'parent', referencedColumns: ['id'], onUpdate: 'RESTRICT', onDelete: 'RESTRICT' }] };
+}
+
 describe('列级编码真实Engine与独立目录（只RAM，不作实库结论）', () => {
+  it('5.7原SHOW省略默认表COLLATE时以实际TABLES和真实默认目录补证，完整六列生成FK仍通过', async () => {
+    const input = mysql57ObservedFixture(), value = await preview(await get(true, true), input); expect(await apply(value)).toMatchObject({ ddlCompleted: true, definitionVerified: true, resourcesReleased: true }); expect(sent.filter(sql => sql === observedDefaultSql)).toHaveLength(1); expect(sent.some(sql => sql.startsWith('SELECT COLUMN_NAME AS name,ORDINAL_POSITION'))).toBe(true); expect(sent.filter(sql => sql.startsWith('CREATE TABLE'))).toEqual([value.sql]); await expect(apply(value)).rejects.toThrow('失效'); expect(sent.some(sql => /^DROP|^ALTER/.test(sql))).toBe(false);
+  });
+  it.each(['unknown-default', 'wrong-default', 'wrong-charset', 'denied-default', 'table-mismatch'])('5.7省略COLLATE但%s时不能硬编码或忽略矛盾补成核验成功', async kind => {
+    const input = mysql57ObservedFixture(), value = await preview(await get(true, true), input);
+    if (kind === 'unknown-default') defaultRows = []; if (kind === 'wrong-default') defaultRows = [{ name: 'utf8mb4', collation: 'utf8mb4_bin' }]; if (kind === 'wrong-charset') defaultRows = [{ name: 'latin1', collation: 'utf8mb4_general_ci' }]; if (kind === 'denied-default') denied = /^SELECT CHARACTER_SET_NAME AS name,DEFAULT_COLLATE_NAME AS collation/; if (kind === 'table-mismatch') tablesPatch.collation = 'utf8mb4_bin';
+    expect(await apply(value)).toMatchObject({ ddlCompleted: true, definitionVerified: false, resourcesReleased: true }); if (kind !== 'table-mismatch') expect(sent).toContain(observedDefaultSql); expect(sent.filter(sql => sql.startsWith('CREATE TABLE'))).toEqual([value.sql]); await expect(apply(value)).rejects.toThrow('失效'); expect(sent.some(sql => /^DROP|^ALTER/.test(sql))).toBe(false);
+  });
   it.each([['mysql', '5.7.44'], ['mysql', '8.0.46'], ['mysql', '8.4.11'], ['mariadb', '10.11.19-MariaDB'], ['mariadb', '11.4.13-MariaDB']] as const)('%s %s普通TEXT/VARCHAR使用准确列配对并完整核验，单CREATE且不可重放', async (family, release) => {
     dialect = family; version = release;
     if (release === '5.7.44') { source = source.replace('bigint unsigned', 'bigint(20) unsigned').replace('`qty` int DEFAULT', '`qty` int(11) DEFAULT'); rows[0].typeSql = 'bigint(20) unsigned'; rows[1].typeSql = 'int(11)'; }

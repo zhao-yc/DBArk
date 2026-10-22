@@ -25,3 +25,13 @@
 本批仅将该超大SQLite原件的测试框架深比较改为Buffer原生完整逐字节比较，并显式核两份Uint8Array存在；长度及全部字节仍比较，原5秒、超限拒绝、零写盘及孤儿成员保留断言不变。原失败日志保留在忽略目录`.cache/table-column-encoding-preparation-20261022/`，后续实际回归另记，不凭改法宣称已证实超时根因。
 
 完整O01及长期目标保持进行中，暂不发布。macOS、本片真实安装、真实取消／断线及限权等组合需独立验收，不把纯RAM反例或源码通过泛化为这些场景。
+
+## 固定候选首轮实库失败
+
+`6748f95416fde39a2729da5a2851fd53b2b90d45`（src树`4a51df52843010ba19bed73ebd2df123b1f28f1f`）在13357的原进程19316／5.37秒／exit1停链，apply完整核验期待失败；当时JSON报告未保留四个返回标志的实际值。其余五实例未启动，尚未INSERT。Root独立只读确认准确5.7.44身份、原owner备注及真实SHOW/COLUMNS，原生成列专属核验函数返回true、全部普通字段默认值／EXTRA／编码交叉一致。真实SHOW表尾省略默认`utf8mb4_general_ci`，外层前置门却要求COLLATE显式存在，因此过早拒绝。
+
+补修仅在实际TABLES与请求准确匹配、CHARACTER_SETS实际默认配对证明后接纳省略；不硬编码默认名称，显式矛盾或未知仍拒绝。生成／列编码专属核验已完成同一证明时复用；普通显式表编码则独立查真实默认目录，旧继承创建不增加读取。新增原5.7真实定义脱敏回归及默认目录错值／空／拒读等反例，实库定义也在断言前记录四项原返回事实。
+
+原失败进程已终态；独立核原两表准确备注、subject空表、parent原行、无额外例程／事件／触发器及无数据库连接后，已精确删原随机库并读回不存在，控制原流关闭。原日志／只读证据／恢复记录分别保留于`.cache/table-create-column-encoding-live-local-20261022/`、`.cache/table-create-column-encoding-13357-inspect-20261022/`、`.cache/table-create-column-encoding-13357-recovery-20261022/`；未捕获首轮完整原任务线程ID集合，不补报数量，不重放原CREATE，也不追认为成功。
+
+补修后类型PID48596／35.17秒、65文件1970相关项PID38704／29.67秒、构建PID54672／34.66秒和默认实库／原生列表PID49896／76472均exit0，43份封存位于`.cache/table-create-column-encoding-default-fix-local-20261022/`，全部输入保持。候选`6748f954`的[Linux CI 39774810318](https://github.com/zhao-yc/DBArk/actions/runs/39774810318)已成功，但不包含这次补修，不能替代最终固定版本验证。
