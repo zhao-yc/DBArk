@@ -51,3 +51,5 @@ macOS arm64 job119756992704的原artifact12416713431（ZIP SHA256 `e03820a6fe3eb
 该控制轮现已终态：Linux、macOS arm64及macOS x64 job成功，Windows job119763113220失败，发行步骤跳过。Windows关闭其他查询两例通过；独立`page-find-replace-offline.spec.ts`第三例在beforeEach等待“当前页查找替换”按钮30秒不存在，测试正文尚未执行，汇总80通过／338跳过／1失败，不认定为Unicode正则或本次堆预算回归。
 
 Windows原artifact12417954567的ZIP SHA256为`32f4a43c0915b3629763c7302bde9ed57725f80ad7daa4e1458c9c55f05eeeaa`。只读核查nested trace：原进程/页仍存活且URL正确，没有browser导航、网络或DOM快照，启动stdout/stderr为空；监听注册较晚，不能据空日志证明模块成功加载或没有早期异常。根因未定，原失败保持，不延长30秒、不自动重试，也不将两Mac成功扩大为全平台绿色。
+
+后续主分支`9d58e43a`的[CI39770899567](https://github.com/zhao-yc/DBArk/actions/runs/39770899567)已终态：Windows x64、macOS arm64／x64三个原生作业成功，Linux类型成功但完整单元14245通过／10条件跳过／1失败，发行跳过。唯一失败为保存查询组织超1MiB原件用例原5000ms超时，日志没有阶段耗时，不能断言与堆或业务回归有关。[后续字段编码批次](table-create-column-encoding-20261022.md)将该完整字节比较改用Buffer原生equals，保全部字节与原断言／期限；准确`160cf86f`本机完整14477通过／1平台跳过及候选Linux CI39776410555成功。原失败保留，后续通过不追认根因已证，也不补造旧GUI诊断。

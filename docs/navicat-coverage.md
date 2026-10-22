@@ -2,7 +2,7 @@
 
 ## 当前开发安排（2026-10-22）
 
-O01新增[新建表字段编码](development/table-create-column-encoding-20261022.md)：真实目录读取及准备快照释放、按列明确字符集／排序规则、独立继承、重排和确认回执；普通／生成共存／前缀三路径后核，前缀按列自身MAXLEN计算。类型／65文件1961相关项／构建和默认关闭列表通过，首轮反例夹具失败保留；固定完整回归、六实例和Windows实际表单继续，macOS及安装另验。完整O01与发行计数不增加，暂不发布。
+O01新增[新建表字段编码](development/table-create-column-encoding-20261022.md)：真实目录读取及准备快照释放、逐列明确配对／继承、重排及确认回执；普通／生成共存／前缀三路径后核，前缀按列MAXLEN计算。准确`160cf86f`的[六实例与Windows源码表单](../tests/integration/acceptance-table-create-column-encoding-160cf86f-20261022.md)通过8次单条CREATE、真实大小写／精确字节、38任务线程及隔离库收尾；完整14477项通过／1平台跳过、类型与构建同字节绑定、Linux候选CI成功。两轮失败保留；五阶段来源及正常退出通过，Main逐条IPC、macOS及安装组合另验。完整O01与发行计数不增加，暂不发布。
 
 O01新增[新建表数值生成列](development/table-create-generated-20261022.md)：实际新表表单支持多列VIRTUAL/STORED、前序草稿引用、普通属性恢复、三确认及完整CREATE后核；普通PK/index/FK保留。准确`8dda6963`的[六实例与Windows源码表单](../tests/integration/acceptance-table-create-generated-8dda6963-20261022.md)通过8次单条CREATE、16个生成字段、精确值及随机库收尾；最终类型／构建及完整14255项通过、1平台跳过，候选Linux CI成功。两轮5.7失败与精确清理保留；Windows表单尚缺内部来源清单及逐条IPC审计，macOS／安装组合另验。完整表达式、生成键及生成链继续，O01与发行计数不增加，暂不发布。
 

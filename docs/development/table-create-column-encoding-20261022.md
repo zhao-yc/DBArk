@@ -35,3 +35,11 @@
 原失败进程已终态；独立核原两表准确备注、subject空表、parent原行、无额外例程／事件／触发器及无数据库连接后，已精确删原随机库并读回不存在，控制原流关闭。原日志／只读证据／恢复记录分别保留于`.cache/table-create-column-encoding-live-local-20261022/`、`.cache/table-create-column-encoding-13357-inspect-20261022/`、`.cache/table-create-column-encoding-13357-recovery-20261022/`；未捕获首轮完整原任务线程ID集合，不补报数量，不重放原CREATE，也不追认为成功。
 
 补修后类型PID48596／35.17秒、65文件1970相关项PID38704／29.67秒、构建PID54672／34.66秒和默认实库／原生列表PID49896／76472均exit0，43份封存位于`.cache/table-create-column-encoding-default-fix-local-20261022/`，全部输入保持。候选`6748f954`的[Linux CI 39774810318](https://github.com/zhao-yc/DBArk/actions/runs/39774810318)已成功，但不包含这次补修，不能替代最终固定版本验证。
+
+## 最终固定提交验收
+
+准确`160cf86f03a037dab053e5cbd6bcf81744fd0fe7`、src树`401fbef7df5dab6ec7c32e4d88afae9f502cc250`完成[六实例及Windows实测](../../tests/integration/acceptance-table-create-column-encoding-160cf86f-20261022.md)。完整单元PID26232／318.75秒／exit0：714文件14477项通过、1平台文件／1项跳过。原类型与构建按全部源输入精确相同证明复用；2356源码／构建输入保持，11份完整封存。准确候选[CI 39776410555](https://github.com/zhao-yc/DBArk/actions/runs/39776410555)成功，候选原生／发行跳过。
+
+六实例共8次单条CREATE，每表2行；逐列utf8mb4_bin／latin1_bin与VARCHAR／TEXT、普通PK/index/FK及STORED生成共存，实际大小写计数、HEX/OCTET和精度通过；两个8.4包含3072字节前缀边界及严格TLS。38个原任务线程的准确集合、六observer原流关闭及六随机库精确清理通过，63份封存，原失败未追认。
+
+Windows真实表单PID9744／10.60秒／exit0：目录读取、逐列配对／继承、重排、准确名称／两确认、单次产品apply任务、完整目录／字节读回及正常退出通过；Root独立重核后精确清库。五阶段批准来源集合及实际App身份已核，截图已查看，17份封存；没有Main逐条IPC审计。GUI仅13384明文源码，CHAR／ENUM／SET及部分异常仅RAM，VIRTUAL组合、macOS和安装矩阵另验。完整O01及长期目标继续，暂不发布。
