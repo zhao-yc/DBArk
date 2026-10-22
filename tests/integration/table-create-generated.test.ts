@@ -15,10 +15,14 @@ vi.mock('../../src/engine/connection', async importOriginal => {
 export function tableCreateGeneratedEnabled(env: Record<string, string | undefined>, args: readonly string[]): boolean {
   return !args.some(value => value === '--list' || value.startsWith('--list=') || value === 'list') && env.DBARK_INTEGRATION_ENABLED === '1' && env.DBARK_TABLE_CREATE_GENERATED_TEST === '1';
 }
+/** 目录小整数只接受准确数字或其规范十进制原串，不转换观测值，不接纳前导零/小数/空白。 */
+export function tableCreateGeneratedMetadataInteger(actual: unknown, expected: number): boolean {
+  return Number.isSafeInteger(expected) && expected > 0 && (actual === expected || actual === String(expected));
+}
 let lifetime: DatabaseEncodingLifetime | undefined, retained = false, complete = false;
 afterEach(() => { if (lifetime && !complete) { retained = true; lifetime.stop(); } lifetime?.end(); });
 
-describe.sequential('新建表多生成列六实例实库（仅定义，逐端口独立进程）', () => {
+describe.sequential('新建表多生成列六实例实库（逐端口独立进程）', () => {
   it('真实CREATE含普通主键索引外键、VIRTUAL/STORED、精确写入和严格收尾；8.4另验前缀兼容', { timeout: 120000, retry: 0, repeats: 0 }, async context => {
     if (!tableCreateGeneratedEnabled(process.env, process.argv)) { context.skip(); return; }
     if (retained) throw Error('新表生成列原验收仍保留现场，不自动重跑');
@@ -78,11 +82,15 @@ describe.sequential('新建表多生成列六实例实库（仅定义，逐端�
         const confirmed = await preview(snapshot, input); expect(confirmed.error).toBeUndefined(); const plan = confirmed.value!, result = await apply(plan, true); expect(result.error).toBeUndefined(); expect(result.value).toMatchObject({ ddlSubmitted: true, ddlCompleted: true, definitionVerified: true, resourcesReleased: true }); expect(result.facts.flatMap(fact => fact.writes)).toEqual([plan.sql]); expect((await apply(plan, false)).error).toBeInstanceOf(Error);
         const show = await sql(`SHOW CREATE TABLE ${target(name)}`); expect(show).toHaveLength(1); expect(show[0]['Create Table']).toContain(marker + ':' + name);
         const catalog = await sql('SELECT COLUMN_NAME,ORDINAL_POSITION,COLUMN_TYPE,IS_NULLABLE,COLUMN_DEFAULT,EXTRA,GENERATION_EXPRESSION,COLUMN_COMMENT FROM information_schema.COLUMNS WHERE BINARY TABLE_SCHEMA=BINARY ? AND BINARY TABLE_NAME=BINARY ? ORDER BY ORDINAL_POSITION', [database, name]); expect(catalog.map(row => row.COLUMN_NAME)).toEqual(['id', 'qty', 'price', 'note', 'virtual_total', 'stored_total']);
-        expect(catalog[4]).toMatchObject({ COLUMN_NAME: 'virtual_total', ORDINAL_POSITION: 5, COLUMN_TYPE: 'decimal(30,6)', IS_NULLABLE: 'YES', EXTRA: 'VIRTUAL GENERATED', COLUMN_COMMENT: '虚拟结果' }); expect(catalog[5]).toMatchObject({ COLUMN_NAME: 'stored_total', ORDINAL_POSITION: 6, COLUMN_TYPE: 'decimal(30,6)', IS_NULLABLE: 'YES', EXTRA: 'STORED GENERATED', COLUMN_COMMENT: '存储结果' });
+        catalog.forEach((row, index) => expect(tableCreateGeneratedMetadataInteger(row.ORDINAL_POSITION, index + 1)).toBe(true));
+        expect(catalog[4]).toMatchObject({ COLUMN_NAME: 'virtual_total', COLUMN_TYPE: 'decimal(30,6)', IS_NULLABLE: 'YES', EXTRA: 'VIRTUAL GENERATED', COLUMN_COMMENT: '虚拟结果' }); expect(catalog[5]).toMatchObject({ COLUMN_NAME: 'stored_total', COLUMN_TYPE: 'decimal(30,6)', IS_NULLABLE: 'YES', EXTRA: 'STORED GENERATED', COLUMN_COMMENT: '存储结果' });
         const insert = `INSERT INTO ${target(name)} (id,qty,price,note) VALUES (18446744073709551615,3,9007199254.123456,?),(9007199254740993,NULL,NULL,?)`; fixtureWrites.add(insert); expect((await sql<{ affectedRows: number; warningStatus: number }>(insert, ['中文🙂', ''])).affectedRows).toBe(2);
         const actual = await sql(`SELECT CAST(id AS CHAR) AS id,CAST(qty AS CHAR) AS qty,CAST(price AS CHAR) AS price,note,CAST(virtual_total AS CHAR) AS virtual_total,CAST(stored_total AS CHAR) AS stored_total FROM ${target(name)} ORDER BY ${quoting.identifier(name)}.id`);
         expect(actual).toEqual([{ id: '9007199254740993', qty: null, price: null, note: '', virtual_total: null, stored_total: null }, { id: '18446744073709551615', qty: '3', price: '9007199254.123456', note: '中文🙂', virtual_total: '27021597762.370368', stored_total: '27021597763.370368' }]);
-        const indexes = await sql('SELECT INDEX_NAME,COLUMN_NAME,SEQ_IN_INDEX,SUB_PART FROM information_schema.STATISTICS WHERE BINARY TABLE_SCHEMA=BINARY ? AND BINARY TABLE_NAME=BINARY ? ORDER BY INDEX_NAME,SEQ_IN_INDEX', [database, name]); expect(indexes).toEqual([{ INDEX_NAME: 'PRIMARY', COLUMN_NAME: 'id', SEQ_IN_INDEX: 1, SUB_PART: null }, ...(withPrefix ? [{ INDEX_NAME: 'ix_note', COLUMN_NAME: 'note', SEQ_IN_INDEX: 1, SUB_PART: 10 }] : []), { INDEX_NAME: 'ix_qty', COLUMN_NAME: 'qty', SEQ_IN_INDEX: 1, SUB_PART: null }]);
+        const indexes = await sql('SELECT INDEX_NAME,COLUMN_NAME,SEQ_IN_INDEX,SUB_PART FROM information_schema.STATISTICS WHERE BINARY TABLE_SCHEMA=BINARY ? AND BINARY TABLE_NAME=BINARY ? ORDER BY BINARY INDEX_NAME,SEQ_IN_INDEX', [database, name]);
+        // 先严格检查原协议值，再仅规范已证小整数用于独立固定期望；spread保留未知字段，不能偷偷丢列。
+        const checkedIndexes = indexes.map(row => { expect(tableCreateGeneratedMetadataInteger(row.SEQ_IN_INDEX, 1)).toBe(true); const prefix = withPrefix && row.INDEX_NAME === 'ix_note'; if (prefix) expect(tableCreateGeneratedMetadataInteger(row.SUB_PART, 10)).toBe(true); else expect(row.SUB_PART).toBeNull(); return { ...row, SEQ_IN_INDEX: 1, ...(prefix ? { SUB_PART: 10 } : {}) }; });
+        expect(checkedIndexes).toEqual([{ INDEX_NAME: 'PRIMARY', COLUMN_NAME: 'id', SEQ_IN_INDEX: 1, SUB_PART: null }, ...(withPrefix ? [{ INDEX_NAME: 'ix_note', COLUMN_NAME: 'note', SEQ_IN_INDEX: 1, SUB_PART: 10 }] : []), { INDEX_NAME: 'ix_qty', COLUMN_NAME: 'qty', SEQ_IN_INDEX: 1, SUB_PART: null }]);
         operations.push({ name, verified: result.value!.definitionVerified, ddlCount: result.facts.flatMap(fact => fact.writes).length, rowCount: actual.length }); if (name === 'prefixed') expectedTables.push(name);
       }
       await owner.step(() => engine!.closeAll()); for (const fact of facts.filter(fact => fact.scope !== 'observer')) await owner.step(() => fact.closed); helpers.assertDatabaseEncodingReleased(facts.filter(fact => fact.scope !== 'observer'), false);

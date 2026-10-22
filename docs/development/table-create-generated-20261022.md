@@ -31,3 +31,7 @@ CREATE后交叉核对完整SHOW、COLUMNS、TABLES、分区目录、表达式AST
 补修仅在生成用途完整目录证明后接纳普通字符列编码属性：TABLES有效表配对、SHOW属性与COLUMNS必须一致；缺省COLLATE读取真实CHARACTER_SETS默认，Maria UCA只以显式完整SHOW配对交叉补证。数值/二进制和未知EXTRA门保留；MySQL JSON仅沿既有固有配对准入，生成列与JSON实库组合仍未验。新增真实5.7原SHOW脱敏固定反例，未用renderer生成期望。
 
 该补修的类型PID45596、51文件1550项PID70404、构建PID10768和两默认列表均exit0；42份封存及全部输入保持于`.cache/table-create-generated-fixed-local-20261022/`。固定补修提交的完整回归与新资源矩阵仍需复验，不追认首轮失败为成功，也不重放原CREATE。
+
+`06359d29`第二轮在全新13357随机库中，产品CREATE、definitionVerified及resourcesReleased均通过，随后观察器将真实COLUMNS位次字符串硬比数字而失败（PID2652、exit1）；INSERT尚未到达，其余实例未启动。独立只读核验同一实际定义通过，COLUMNS位次为`'1'..'6'`、索引序号为`'1'`，原目录按自身排序规则将ix_qty排在PRIMARY之前。原件保留于`.cache/table-create-generated-second-native-metadata-20261022/`；第二库已按原标记及无其它对象精确清理，原失败保留。
+
+观察器现仅接受目录小整数的准确数字或规范十进制文本（拒前导零、小数、空白等），索引查询显式按BINARY名称排序；其它类型、存储、备注、NULL及精确数据断言不变。实际纯门44项PID49552、默认列表PID61472及类型PID12072均exit0；25份封存位于`.cache/table-create-generated-observer-fix-local-20261022/`。生产src树没有因观察器修正改变；六实例仍须在新资源中闭合。
