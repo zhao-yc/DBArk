@@ -4,6 +4,8 @@
 .explain-toolbar button{font-size:11px;min-height:26px;padding:3px 7px}
 .explain-toolbar button[aria-pressed=true]{background:var(--accent-bg);color:var(--accent)}
 .explain-toolbar>span{font-size:10px;overflow-wrap:anywhere}
+.explain-search{display:flex;align-items:center;flex-wrap:wrap;gap:5px;padding:6px 9px;border-bottom:1px solid var(--line);flex:none}
+.explain-search input{flex:1 1 190px;min-width:0;max-width:360px;font-size:11px;min-height:26px}.explain-search button{font-size:10px;min-height:26px;padding:3px 7px}.explain-search>span{font-size:10px;color:var(--muted);overflow-wrap:anywhere}
 .explain-hint{font-size:10px;line-height:1.5;color:var(--muted);margin:5px 9px;overflow-wrap:anywhere}
 .explain-warning{color:var(--warning);font-size:10px;margin:3px 9px;overflow-wrap:anywhere}
 .explain-content{flex:1;min-height:80px;overflow:auto}
@@ -19,6 +21,7 @@
 .explain-detail{padding:12px;border-left:1px solid var(--line);min-width:0;min-height:0;overflow:auto;overflow-wrap:anywhere}
 .explain-detail dl{margin:7px 0 14px}.explain-detail dl>div{display:flex;justify-content:space-between;gap:12px;padding:4px 0;border-bottom:1px solid var(--line)}
 .explain-detail dt{color:var(--muted)}.explain-detail dd{margin:0;text-align:right}.explain-detail dd small{display:block;font-size:9px;color:var(--muted)}
+.explain-properties dt{min-width:0;flex:0 1 42%}.explain-properties dt small{display:block;font-size:9px;overflow-wrap:anywhere}.explain-properties dd{min-width:0;flex:1;text-align:left;white-space:pre-wrap}.explain-properties .explain-property-truncated{color:var(--warning)}
 .explain-detail pre,.explain-raw pre{white-space:pre-wrap;overflow-wrap:anywhere;font-size:10px;line-height:1.65;margin:8px 0;max-height:280px;overflow:auto;background:var(--bg);padding:9px;border:1px solid var(--line)}
 .explain-raw{padding:6px 12px}.explain-raw pre{max-height:none}.explain-empty{padding:12px;color:var(--muted)}
 /* 狭窄容器保留缩进和 ARIA 层级；分区高度有界，详情不会被长树挤出操作范围。 */
