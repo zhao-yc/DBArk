@@ -7,7 +7,7 @@ export type ColumnRef = string;
 export type IndexRef = string;
 export interface IndexKeyPart { columnRef: ColumnRef; prefixLength?: number; direction: 'asc' | 'desc'; }
 export interface IndexDefinition { kind: 'ordinary' | 'unique' | 'primary' | 'fulltext' | 'spatial'; name: string; method: 'BTREE' | 'FULLTEXT' | 'RTREE'; keyParts: IndexKeyPart[]; comment: string; }
-export interface IndexChanges { kind?: IndexDefinition['kind']; name?: string; keyParts?: IndexKeyPart[]; comment?: string; }
+export interface IndexChanges { kind?: IndexDefinition['kind']; name?: string; keyParts?: IndexKeyPart[]; comment?: string; optimizerVisible?: boolean; }
 export type IndexPatch = { op: 'add'; clientKey: string; definition: IndexDefinition } | { op: 'drop'; indexRef: IndexRef } | { op: 'alter'; indexRef: IndexRef; changes: IndexChanges };
 export interface IndexOperationAccess { allowed: boolean; reasons: string[]; }
 export interface TableIndexView {
@@ -15,6 +15,8 @@ export interface TableIndexView {
   editableDefinition?: IndexDefinition; unsupportedReasons: string[];
   /** 只用于界面显示；预览不接受客户端提交的权限投影。 */
   access: { drop: IndexOperationAccess; rename: IndexOperationAccess; replace: IndexOperationAccess };
+  /** 独立原生优化器属性；缺省不授权，也不扩大旧删除、改名或重建权限。 */
+  optimizer?: { visible: boolean; access: IndexOperationAccess };
 }
 export interface ParsedIndexPart {
   range: DefinitionRange; rawSql: string; columnName?: string; prefixLength?: number;
@@ -93,7 +95,7 @@ export const indexDefinitionSchema = z.object({ kind, name, method: z.enum(['BTR
 export const indexPatchSchema = z.discriminatedUnion('op', [
   z.object({ op: z.literal('add'), clientKey: ref, definition: indexDefinitionSchema }).strict(),
   z.object({ op: z.literal('drop'), indexRef: ref }).strict(),
-  z.object({ op: z.literal('alter'), indexRef: ref, changes: z.object({ kind: kind.optional(), name: name.optional(), keyParts: parts.optional(), comment: z.string().optional() }).strict() }).strict(),
+  z.object({ op: z.literal('alter'), indexRef: ref, changes: z.object({ kind: kind.optional(), name: name.optional(), keyParts: parts.optional(), comment: z.string().optional(), optimizerVisible: z.boolean().optional() }).strict() }).strict(),
 ]);
 
 /** 名称约束在新增及合成最终定义后共用，不把用户名称自动修正为保留名。 */
@@ -115,6 +117,8 @@ export function validateIndexPatches(input: unknown): IndexPatch[] {
     if (set.has(key)) throw new Error('索引补丁引用重复'); set.add(key);
     if (patch.op === 'add') assertIndexDefinitionNames(patch.definition);
     if (patch.op === 'alter' && Object.keys(patch.changes).length === 0) throw new Error('索引修改不能为空');
+    // 专用属性不能混入会删除/重建键的旧计划，也不能借undefined表示继承。
+    if (patch.op === 'alter' && Object.hasOwn(patch.changes, 'optimizerVisible') && (patches.length !== 1 || Object.keys(patch.changes).length !== 1 || typeof patch.changes.optimizerVisible !== 'boolean')) throw new Error('索引优化器参与状态必须为独立单项、单属性的明确布尔变更');
   }
   return patches;
 }

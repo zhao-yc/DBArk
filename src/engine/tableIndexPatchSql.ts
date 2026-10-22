@@ -108,6 +108,7 @@ function assertSnapshot(snapshot: IndexPlanSnapshot, options: IndexPlanOptions):
 export function planTableIndexPatches(snapshot: IndexPlanSnapshot, input: unknown, options: IndexPlanOptions): IndexPlanResult {
   try {
     const patches = validateIndexPatches(input); assertSnapshot(snapshot, options);
+    if (patches.some(patch => patch.op === 'alter' && Object.hasOwn(patch.changes, 'optimizerVisible'))) throw new Error('索引优化器参与状态必须使用专用原生属性计划；旧通用计划不能忽略该属性');
     const final = new Map<string, PlannedIndex>([...snapshot.indexes].map(([ref, old]) => [ref, { sourceIndexRef: ref, ...(old.definition ? { definition: old.definition } : {}) }]));
     const additions: PlannedIndex[] = [], operations: IndexPlanOperation[] = [];
     for (const patch of patches) {

@@ -2,6 +2,7 @@ import { assertIndexDefinitionNames, tableIndexPatchLimits, validateIndexPatches
 import type { TableIndexApplyOutput, TableIndexApplyProgress, TableIndexColumnView, TableIndexGetOutput, TableIndexPatchTarget } from '../shared/tableIndexTasks';
 import { indexPatchZh as text } from './locales/indexPatches.zh-CN';
 import { assertSpecialIndexDefinition, indexMethodForKind, isSpecialIndexKind } from '../shared/specialIndexRules';
+import { hasIndexOptimizerPatch, makeIndexOptimizerAlter } from './indexOptimizer';
 
 /** 身份保持精确大小写；配置版本还必须由窗口代次及服务器令牌重核。 */
 export function sameIndexTarget(a: TableIndexPatchTarget, b: TableIndexPatchTarget): boolean { return a.connectionId === b.connectionId && a.database === b.database && a.table === b.table; }
@@ -9,7 +10,7 @@ export function sameIndexTarget(a: TableIndexPatchTarget, b: TableIndexPatchTarg
 export function indexTokenCurrent(expiresAt: string, now = Date.now()): boolean { const expires = Date.parse(expiresAt); return Number.isFinite(expires) && now < expires; }
 /** 未知风险不授权，原型同名不是确认项目。 */
 export function indexAcknowledgementLabel(id: string): string | undefined {
-  const labels = new Map<string, string>([['ddl-implicit-commit', text.ackImplicit], ['external-ddl-window', text.ackWindow], ['drop-unique-constraint', text.ackUnique], ['primary-key-change', text.ackPrimary], ['special-index-change', text.ackSpecial]]);
+  const labels = new Map<string, string>([['ddl-implicit-commit', text.ackImplicit], ['external-ddl-window', text.ackWindow], ['drop-unique-constraint', text.ackUnique], ['primary-key-change', text.ackPrimary], ['special-index-change', text.ackSpecial], ['index-optimizer-change', text.ackOptimizer]]);
   return labels.get(id);
 }
 /** 两项通用确认必须存在，集合精确一致，未知/重复确认都不得执行。 */
@@ -86,6 +87,14 @@ export function validateIndexDrafts(snapshot: TableIndexGetOutput, input: readon
   if (!input.length) throw new Error(text.noChange);
   const patches = validateIndexPatches(input), indexes = new Map(snapshot.indexes.map(index => [index.indexRef, index])), columns = new Map(snapshot.columns.map(column => [column.columnRef, column]));
   if (indexes.size !== snapshot.indexes.length || columns.size !== snapshot.columns.length) throw new Error(text.duplicate);
+  // 原生优化器状态不借旧重建access授权；未知原SQL也不得被完整重序列化。
+  if (hasIndexOptimizerPatch(patches)) {
+    const patch = patches[0];
+    if (patches.length !== 1 || patch.op !== 'alter' || Object.keys(patch.changes).length !== 1 || typeof patch.changes.optimizerVisible !== 'boolean') throw Error(text.optimizerMixed);
+    const index = indexes.get(patch.indexRef); if (!index) throw Error(text.missing);
+    if (!makeIndexOptimizerAlter(index, patch.changes.optimizerVisible)) throw Error(text.noChange);
+    return patches;
+  }
   const names = new Map(snapshot.indexes.map(index => [index.indexRef, { name: index.name, primary: index.kind === 'primary' }]));
   for (const patch of patches) {
     const old = patch.op === 'add' ? undefined : indexes.get(patch.indexRef);

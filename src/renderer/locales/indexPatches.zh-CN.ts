@@ -1,5 +1,10 @@
 /** 索引差异编辑的界面与确认文字集中管理，协议风险 ID 不直接当中文说明。 */
 export const indexPatchZh = {
+  optimizerEntry: '设置优化器使用状态', optimizerEntryNamed: '设置优化器使用状态 {0}', optimizerTitle: '索引参与查询优化器', optimizerToggle: '供查询优化器使用', optimizerCurrent: '当前实际状态', optimizerVisible: '供查询优化器使用', optimizerHidden: '不供查询优化器使用', optimizerUnknown: '优化器使用状态未知', optimizerRestore: '恢复原状态',
+  optimizerMysql: 'MySQL 使用 VISIBLE / INVISIBLE 表示此属性。供优化器使用不保证执行计划实际选中该索引；MySQL 5.7 不支持此切换。', optimizerMaria: 'MariaDB 使用 NOT IGNORED / IGNORED 表示此属性。勾选对应 NOT IGNORED；供优化器使用不保证执行计划实际选中该索引。',
+  optimizerScope: '本次只切换一个已有索引是否供查询优化器使用，索引仍会维护，唯一性约束仍生效；不删除或重建索引，不与新增、删除、改名或其它属性混批。可能改变执行计划、等待锁并影响性能，不保证在线或无锁。',
+  optimizerReadonly: '本次快照未明确授权修改优化器使用状态，请核对原定义及只读原因。', optimizerStale: '索引原状态、快照或权限已变化，请重新读取实际索引。', optimizerMixed: '优化器使用状态只能单索引、单属性独立修改；请先明确撤销其它草稿，原输入已保留。',
+  ackOptimizer: '我确认本次只改变索引是否供查询优化器使用，可能改变执行计划、等待锁并影响性能；索引维护和唯一约束仍生效，不保证实际选中、在线或无锁，取消不能撤销已完成的变更。', acknowledgementsChanged: '风险确认已变化，请按当前预览重新确认；尚未发送 DDL。',
   title: '索引与主键差异', read: '重新读取实际索引', reading: '读取索引定义', preview: '生成索引差异预览', apply: '确认执行本次索引差异', cancel: '取消索引任务', close: '关闭', back: '返回索引差异编辑',
   maintenance: '请在维护窗口执行并暂停并行结构变更。执行前重核仍不能消除外部 DDL 并发窗口。',
   ddl: 'DDL 可能隐式提交；取消与事务回滚不能撤销已完成的索引修改。此操作使用独立结构连接，不提交或回滚查询标签事务。',
