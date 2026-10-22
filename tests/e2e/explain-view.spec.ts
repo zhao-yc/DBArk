@@ -58,7 +58,8 @@ test(explainDiagnosticTitle, async ({ trace }, testInfo) => {
     await view.getByRole('button', { name: '原始输出', exact: true }).click(); await expect(view.getByLabel('原始输出', { exact: true })).toContainText('中文长条件');
     await view.screenshot({ path: testInfo.outputPath('explain-minimum-long.png') });
     await view.evaluate(() => (window as unknown as { explainFixture: { render(kind: string): void } }).explainFixture.render('invalid'));
-    await expect(view.getByRole('status')).toBeVisible(); await expect(view.getByLabel('原始输出', { exact: true })).toContainText('未知的计划');
+    const warning = view.locator('.explain-warning[role="status"]');
+    await expect(warning).toHaveCount(1); await expect(warning).toBeVisible(); await expect(view.getByLabel('原始输出', { exact: true })).toContainText('未知的计划');
     expect(errors).toEqual([]);
   } catch (error) { failed = true; throw error; }
   finally {

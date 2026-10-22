@@ -1,12 +1,15 @@
 /** 执行计划仅保存优化器估计值；数字保留原始十进制文本，不转成浮点数。 */
 export const explainLimits = { jsonBytes: 192 * 1024, depth: 64, tokens: 16000, nodes: 300, label: 160, path: 2048, detail: 16000, textRows: 1000, property: 2048, propertyItems: 32 } as const;
 export type ExplainDialect = 'mysql' | 'mariadb';
+export const explainQueryArrayKinds = ['query_specifications', 'subqueries', 'attached_subqueries', 'optimized_away_subqueries', 'having_subqueries', 'select_list_subqueries'] as const;
+export interface ExplainArrayEntry { container: (typeof explainQueryArrayKinds)[number]; index: number; }
 export interface ExplainMetric { source: string; value: string; }
 export interface ExplainProperty { source: string; value: string; truncated?: boolean; }
 export interface ExplainNode {
   id: string; parent?: string; depth: number; path: string; pathTruncated?: boolean; kind: string; name?: string; unknown: boolean;
   access?: string; rows?: ExplainMetric; produced?: ExplainMetric; filtered?: ExplainMetric; costs: ExplainMetric[]; index?: string;
   properties?: ExplainProperty[];
+  arrayEntry?: ExplainArrayEntry;
 }
 export interface ExplainPlan {
   dialect: ExplainDialect; version: string; format: 'json' | 'text'; nodes: ExplainNode[];
@@ -44,6 +47,7 @@ const metric = (value: Record<string, unknown>, key: string): ExplainMetric | un
   const text = scalar(value[key]); return text !== undefined && /^-?\d+(?:\.\d+)?(?:e[+-]?\d+)?$/i.test(text) ? { source: key, value: text } : undefined;
 };
 const commonKinds = new Set(['plan','query_block','table','nested_loop','subqueries','query_specifications','union_result','materialized','expression_cache','filesort','read_sorted_file','temporary_table','buffer_result','block-nl-join','ordering_operation','grouping_operation','duplicates_removal','materialized_from_subquery','attached_subqueries','optimized_away_subqueries','having_subqueries','select_list_subqueries','windowing','windows','window']);
+const queryArrayKinds = new Set<string>(explainQueryArrayKinds);
 const dataKeys = new Set(['cost_info','possible_keys','used_key_parts','used_columns','ref','partitions']);
 const propertyLists = ['possible_keys','used_key_parts','used_columns','ref','partitions'] as const;
 const propertyTexts = ['attached_condition','index_condition','using_join_buffer','sort_key','message'] as const;
@@ -111,24 +115,32 @@ export function parseExplainPlan(raw: string, dialect: ExplainDialect, version: 
     // 指标树把数值转为精确文本；属性另读原类型，避免误把数值字段当作字符串属性。
     const originalDocument: unknown = JSON.parse(raw);
     let limited = false;
-    const visit = (kind: string, value: unknown, path: string, parent?: ExplainNode, original?: unknown): void => {
+    const visit = (kind: string, value: unknown, path: string, parent?: ExplainNode, original?: unknown, arrayEntry?: ExplainArrayEntry): void => {
       if (plan.nodes.length >= explainLimits.nodes) { limited = true; return; }
       const record = object(value) ? value : {};
       // 极长公共键会在每个子节点路径中重复，必须限制跨进程表示的累计放大。
-      const node: ExplainNode = { id: String(plan.nodes.length), parent: parent?.id, depth: parent ? parent.depth + 1 : 0, path: path.slice(0, explainLimits.path), ...(path.length > explainLimits.path ? { pathTruncated: true } : {}), kind: kind.slice(0, explainLimits.label), name: scalar(record.table_name ?? record.select_id ?? (kind === 'window' ? record.name : undefined))?.slice(0, explainLimits.label), unknown: !commonKinds.has(kind), access: scalar(record.access_type)?.slice(0, explainLimits.label), index: scalar(record.key)?.slice(0, explainLimits.label), ...(dialect === 'mysql' ? mysqlMetrics(record) : mariaMetrics(record)) };
+      const node: ExplainNode = { id: String(plan.nodes.length), parent: parent?.id, depth: parent ? parent.depth + 1 : 0, path: path.slice(0, explainLimits.path), ...(path.length > explainLimits.path ? { pathTruncated: true } : {}), kind: kind.slice(0, explainLimits.label), name: scalar(record.table_name ?? record.select_id ?? (kind === 'window' ? record.name : undefined))?.slice(0, explainLimits.label), unknown: !arrayEntry && !commonKinds.has(kind), ...(arrayEntry ? { arrayEntry } : {}), access: scalar(record.access_type)?.slice(0, explainLimits.label), index: scalar(record.key)?.slice(0, explainLimits.label), ...(dialect === 'mysql' ? mysqlMetrics(record) : mariaMetrics(record)) };
       node.properties = nodeProperties(original);
       plan.nodes.push(node);
       const children = Array.isArray(value) ? value.map((item, i) => [String(i), item] as const) : Object.entries(record);
+      const queryArray = Array.isArray(value) && queryArrayKinds.has(kind);
       for (const [key, child] of children) {
-        if (!child || typeof child !== 'object' || dataKeys.has(key)) continue;
-        // 数组中的包装对象常只含一个操作；保留包装路径，避免虚构额外的连接操作。
         const childPath = path + '/' + key.replaceAll('~', '~0').replaceAll('/', '~1');
         const originalChild = original && typeof original === 'object' ? Object.getOwnPropertyDescriptor(original, key)?.value : undefined;
+        // 查询数组逐项保留真实层级；非法标量、null 和数组也留下未知索引节点，不能静默跳过。
+        if (queryArray) {
+          const entry = object(child) && object(Object.getOwnPropertyDescriptor(child, 'query_block')?.value)
+            ? { container: kind as ExplainArrayEntry['container'], index: Number(key) } : undefined;
+          visit(key, child, childPath, node, originalChild, entry); continue;
+        }
+        if (!child || typeof child !== 'object' || dataKeys.has(key)) continue;
+        // 普通数组中的包装对象常只含一个操作；保留包装路径，避免虚构额外的连接操作。
         if (Array.isArray(value) && object(child) && Object.keys(child).length === 1) {
           const [operation, body] = Object.entries(child)[0];
           if (body && typeof body === 'object') { visit(operation, body, childPath + '/' + operation.replaceAll('~', '~0').replaceAll('/', '~1'), node, originalChild && typeof originalChild === 'object' ? Object.getOwnPropertyDescriptor(originalChild, operation)?.value : undefined); continue; }
         }
-        if (Array.isArray(child) && child.every(item => item === null || typeof item !== 'object')) continue;
+        // 已知查询容器即使为空或仅含标量也保留；其他纯标量数组仍沿用原有数据过滤规则。
+        if (Array.isArray(child) && !queryArrayKinds.has(key) && child.every(item => item === null || typeof item !== 'object')) continue;
         visit(kind === 'windows' && Array.isArray(value) ? 'window' : key, child, childPath, node, originalChild);
       }
     };

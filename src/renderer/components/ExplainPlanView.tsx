@@ -1,12 +1,22 @@
 import { useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
 import type { QueryOutcome } from '../../shared/contracts';
-import { explainLimits, explainNodeDetail, type ExplainNode } from '../../shared/explain';
+import { explainLimits, explainNodeDetail, explainQueryArrayKinds, type ExplainNode } from '../../shared/explain';
 import { explainZh as t } from '../locales/explain.zh-CN';
 import { ResultsGrid } from './ResultsGrid';
 import '../explain.css';
 
 /** 方言节点来自服务器，原型同名名称也只能当作普通文本显示。 */
 const nodeTitle = (kind: string) => Object.hasOwn(t.kinds, kind) ? t.kinds[kind] : kind;
+
+/** 数组位置仅来自节点自有的合法元数据；标题不改变未知状态或推断执行顺序。 */
+function displayTitle(node: ExplainNode): string {
+  const entry: unknown = Object.getOwnPropertyDescriptor(node, 'arrayEntry')?.value;
+  if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return nodeTitle(node.kind);
+  const container = Object.getOwnPropertyDescriptor(entry, 'container')?.value;
+  const index = Object.getOwnPropertyDescriptor(entry, 'index')?.value;
+  if (typeof container !== 'string' || !explainQueryArrayKinds.some(kind => kind === container) || !Number.isSafeInteger(index) || index < 0) return nodeTitle(node.kind);
+  return t.arrayItem(container, index);
+}
 
 /** 展示有界的真实计划；所有视图切换都读取已有结果，只有明确的文本按钮会发送请求。 */
 export function ExplainPlanView({ outcome, onText, busy }: { outcome: QueryOutcome; onText(): void; busy: boolean }) {
@@ -38,7 +48,7 @@ function OwnedExplainPlan({ outcome, onText, busy }: { outcome: QueryOutcome; on
   const matches = useMemo(() => {
     if (!search) return [];
     const needle = search.toLocaleLowerCase();
-    return plan.nodes.filter(node => [node.kind, nodeTitle(node.kind), node.name, node.access, node.index, node.rows?.source, node.rows?.value, node.produced?.source, node.produced?.value, node.filtered?.source, node.filtered ? node.filtered.value + '%' : undefined, ...node.costs.flatMap(cost => [cost.source, cost.value]), ...(node.properties ?? []).flatMap(property => [property.source, property.value, Object.hasOwn(t.propertyLabels, property.source) ? t.propertyLabels[property.source] : undefined])].some(value => value?.toLocaleLowerCase().includes(needle)));
+    return plan.nodes.filter(node => [node.kind, nodeTitle(node.kind), displayTitle(node), node.name, node.access, node.index, node.rows?.source, node.rows?.value, node.produced?.source, node.produced?.value, node.filtered?.source, node.filtered ? node.filtered.value + '%' : undefined, ...node.costs.flatMap(cost => [cost.source, cost.value]), ...(node.properties ?? []).flatMap(property => [property.source, property.value, Object.hasOwn(t.propertyLabels, property.source) ? t.propertyLabels[property.source] : undefined])].some(value => value?.toLocaleLowerCase().includes(needle)));
   }, [plan, search]);
   // 等祖先展开后的真实DOM提交，再聚焦滚动；不使用定时器或遗留异步回调。
   useLayoutEffect(() => {
@@ -106,13 +116,13 @@ function OwnedExplainPlan({ outcome, onText, busy }: { outcome: QueryOutcome; on
           <p className="explain-hint">{t.keyboard}</p>
           <div role="tree" aria-label={t.tree} className="explain-tree">
             {visible.map(node => <button key={node.id} ref={element => { if (element) buttons.current.set(node.id, element); else buttons.current.delete(node.id); }} role="treeitem" aria-level={node.depth + 1} aria-expanded={children.has(node.id) ? !collapsed.has(node.id) : undefined} aria-selected={selected === node.id} tabIndex={selected === node.id ? 0 : -1} className="explain-node" style={{ paddingLeft: 10 + Math.min(node.depth, 10) * 14 }} onFocus={() => setSelected(node.id)} onClick={() => setSelected(node.id)} onDoubleClick={() => { if (children.has(node.id)) toggle(node.id); }} onKeyDown={event => navigate(event, node)}>
-              <span className="explain-node-title"><span aria-hidden="true" onClick={event => { if (children.has(node.id)) { event.stopPropagation(); setSelected(node.id); toggle(node.id); } }}>{children.has(node.id) ? collapsed.has(node.id) ? '▸' : '▾' : '·'}</span> {nodeTitle(node.kind)}{node.name ? ` · ${node.name}` : ''}{node.unknown && <small>{t.unknown}</small>}</span>
+              <span className="explain-node-title"><span aria-hidden="true" onClick={event => { if (children.has(node.id)) { event.stopPropagation(); setSelected(node.id); toggle(node.id); } }}>{children.has(node.id) ? collapsed.has(node.id) ? '▸' : '▾' : '·'}</span> {displayTitle(node)}{node.name ? ` · ${node.name}` : ''}{node.unknown && <small>{t.unknown}</small>}</span>
               <span className="explain-node-metrics">{t.access}：{node.access ?? t.unavailable} · {t.rows}：{node.rows?.value ?? t.unavailable} · {t.filtered}：{node.filtered ? node.filtered.value + '%' : t.unavailable}</span>
             </button>)}
           </div>
         </div>
         {current && <div className="explain-detail" aria-label={t.details}>
-          <strong>{nodeTitle(current.kind)} {current.name}</strong>
+          <strong>{displayTitle(current)} {current.name}</strong>
           <dl>{[[t.access, current.access], [t.rows, current.rows?.value, current.rows?.source], [t.produced, current.produced?.value, current.produced?.source], [t.filtered, current.filtered ? current.filtered.value + '%' : undefined, current.filtered?.source], [t.index, current.index]].map(([label, value, source]) => <div key={label}><dt>{label}</dt><dd title={source ?? (!value ? t.missing : undefined)}>{value ?? t.unavailable}{source && <small>{source}</small>}</dd></div>)}</dl>
           <strong>{t.cost}</strong><dl>{current.costs.length ? current.costs.map(cost => <div key={cost.source}><dt>{cost.source}</dt><dd>{cost.value}</dd></div>) : <div><dd>{t.unavailable}</dd></div>}</dl>
           <strong>{t.properties}</strong><dl className="explain-properties">{current.properties?.length ? current.properties.map(property => <div key={property.source}><dt>{Object.hasOwn(t.propertyLabels, property.source) ? t.propertyLabels[property.source] : property.source}<small>{property.source}</small></dt><dd>{property.value}{property.truncated && <small className="explain-property-truncated">{t.propertyTruncated}</small>}</dd></div>) : <div><dd>{t.unavailable}</dd></div>}</dl>

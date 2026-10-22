@@ -41,6 +41,17 @@ function register(binding: ReturnType<typeof import('../helpers/explainPropertie
       await step(() => tab.getByRole('button', { name: '执行计划', exact: true }).click()); await step(() => expect(tab.getByRole('button', { name: zh.common.stop, exact: true })).toBeDisabled({ timeout: 20000 })); await step(() => expect(tab.locator('.error-box')).toHaveCount(0));
       const plan = tab.getByRole('region', { name: text.title, exact: true }), search = plan.getByRole('textbox', { name: text.find, exact: true }), count = plan.getByRole('status', { name: text.findCount, exact: true });
       await step(() => expect(plan.getByRole('tree')).toBeVisible()); await step(() => plan.getByRole('button', { name: text.collapse, exact: true }).click()); await step(() => expect(plan.getByRole('treeitem')).toHaveCount(1));
+      await step(() => expect(plan.locator('.explain-warning')).toHaveCount(0));
+      // 查询分支是实际JSON包装层，序号表示数组位置；标志不能丢给子查询块或合并估算指标。
+      for (const index of [0, 1]) {
+        await step(() => search.fill(text.arrayItem('query_specifications', index))); await step(() => expect(count).toHaveText(text.matches(0, 1))); await step(() => search.press('Enter'));
+        const branch = plan.getByRole('treeitem', { selected: true }), detail = plan.getByLabel(text.details, { exact: true }), wrapperProperties = detail.locator('.explain-properties');
+        await step(() => expect(branch).toBeFocused()); await step(() => expect(branch).toContainText(text.arrayItem('query_specifications', index)));
+        await step(() => expect(wrapperProperties.locator('div').filter({ has: page.locator('dt', { hasText: 'dependent' }) }).locator('dd')).toHaveText('false')); await step(() => expect(wrapperProperties.locator('div').filter({ has: page.locator('dt', { hasText: 'cacheable' }) }).locator('dd')).toHaveText('true'));
+        await step(() => expect(detail).toContainText('/query_block/ordering_operation/table/materialized_from_subquery/query_block/union_result/query_specifications/' + index)); const original = JSON.parse(await step(() => detail.locator('pre').innerText())); expect([original.dependent, original.cacheable, String(original.query_block.select_id)]).toEqual([false, true, String(index + 2)]);
+        if (index === 0) { await step(() => expect(branch).toBeInViewport({ ratio: 1 })); await step(() => branch.screenshot({ path: info.outputPath('plan-query-branch-node.png') })); const flag = wrapperProperties.locator('div').filter({ has: page.locator('dt', { hasText: 'cacheable' }) }); await step(() => flag.scrollIntoViewIfNeeded()); await step(() => expect(flag).toBeInViewport({ ratio: 1 })); await step(() => flag.screenshot({ path: info.outputPath('plan-query-branch-cacheable.png') })); }
+      }
+      await step(() => plan.getByRole('button', { name: text.collapse, exact: true }).click()); await step(() => expect(plan.getByRole('treeitem')).toHaveCount(1));
       await step(() => search.fill('using_filesort')); await step(() => expect(count).toHaveText(text.matches(0, 1))); await step(() => plan.getByRole('button', { name: text.next, exact: true }).click());
       await step(() => expect(plan.getByRole('treeitem', { selected: true })).toBeFocused()); await step(() => expect(plan.getByRole('treeitem', { selected: true })).toContainText(text.kinds.ordering_operation));
       const properties = plan.getByLabel(text.details, { exact: true }).locator('.explain-properties');
