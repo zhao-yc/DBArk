@@ -24,4 +24,4 @@ DDL 可能部分完成且无法事务回滚。成功响应后的核验或清理�
 - 实库：`tests/integration/database-drop.test.ts`，显式双门 `DBARK_INTEGRATION_ENABLED=1`、`DBARK_DATABASE_DROP_TEST=1`，逐端口核实际服务器。
 - 正式源码窗口：`tests/e2e/database-drop.spec.ts`，额外开启 `DBARK_DATABASE_DROP_UI=1`，使用独占输出目录和 13384 隔离资源。
 
-实库和窗口专项默认关闭，不从聊天或仓库读取凭据。失败保留原日志、进程、线程及随机资源计划，确认原任务结束和资源归属后才单独清理。实际通过范围与原始失败由本轮验收记录补充；源码、安装包、平台和真实故障组合分别记账。
+实库和窗口专项默认关闭，不从聊天或仓库读取凭据。失败保留原日志、进程、线程及随机资源计划，确认原任务结束和资源归属后才单独清理。[本轮验收](../../tests/integration/acceptance-database-drop-20261023.md)包含15,740项单元、六实例12次删除及准确提交94d272fd的Windows正式源码窗口；原始失败、行尾规范化及未验组合分别记录。安装包、macOS和真实取消／部分失败组合尚未验证，暂不发布。
