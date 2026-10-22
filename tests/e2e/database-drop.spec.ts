@@ -36,7 +36,14 @@ function register(binding: ReturnType<typeof import('../helpers/databaseDropUi')
     const database = 'dbark_dbdrop_ui_' + randomUUID().replaceAll('-', ''), quote = '`' + database + '`', marker = 'dbark-dbdrop-owner:' + randomUUID();
     const preservedSql = "SELECT 9007199254740993 AS exact_value; -- 本例删除数据库后保留原文";
     let armed = false, closed = false, observerClosed = false, native: import('mysql2').Connection | undefined, stream: any;
-    const check = () => { clock.assertCurrent(); binding.assertCurrent(); const owner = runtime.ownedDesktopResources(info); if (owner.page !== page || owner.application !== application || runtime.dataDir !== directory || closed !== owner.closed || application.process() !== originalProcess || !originalProcess.pid) throw Error('删除数据库原窗口或进程归属已变化'); if (native && ((native as any).stream !== stream || !stream || observerClosed !== (stream.closed === true))) throw Error('删除数据库观察连接或原流关闭状态已变化'); };
+    /** 活通道核对原ChildProcess身份；正常退出后只核已捕获原进程终态，不再访问关闭的Playwright通道。 */
+    const check = () => {
+      clock.assertCurrent(); binding.assertCurrent(); const owner = runtime.ownedDesktopResources(info);
+      if (owner.page !== page || owner.application !== application || runtime.dataDir !== directory || closed !== owner.closed || !Number.isSafeInteger(originalProcess.pid) || originalProcess.pid! <= 0) throw Error('删除数据库原窗口或进程归属已变化');
+      if (closed) { if (originalProcess.exitCode !== 0 || originalProcess.signalCode !== null) throw Error('删除数据库原进程未取得退出码0且无终止信号的正常终态'); }
+      else if (application.process() !== originalProcess) throw Error('删除数据库原ChildProcess身份已变化');
+      if (native && ((native as any).stream !== stream || !stream || observerClosed !== (stream.closed === true))) throw Error('删除数据库观察连接或原流关闭状态已变化');
+    };
     /** 每个原await前后核原owner和期限，审计只观察实际Main，不替换任务响应。 */
     const step = async <T,>(action: () => Promise<T>, allowClosed = false): Promise<T> => { check(); if (armed) { await application.evaluate(readDatabaseDropUiAudit); check(); } const value = await action(); check(); if (armed && !allowClosed) { await application.evaluate(readDatabaseDropUiAudit); check(); } return value; };
     const query = async (sql: string, params: (string | number | Buffer | null)[] = []): Promise<any> => step(() => new Promise((resolve, reject) => native!.query(sql, params, (error, rows) => error ? reject(error) : resolve(rows))));
