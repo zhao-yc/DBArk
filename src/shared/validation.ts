@@ -1,5 +1,6 @@
 import { queryFileReloadSchemas } from './queryFileReload';
 import { parseExplainSnapshot } from './explainSnapshot';
+import { databaseDefaultEncodingAcknowledgements } from './databaseDefaultEncoding';
 import { assertSqlKeywordCaseWrite } from './sqlKeywordCase';
 import { snippetTransferSchemas } from './snippetTransfer';
 import { assertQueryFileSourceSettings, queryFileSourceRefSchema, queryFileSourceOpenSchema, queryFileSourceSaveSchema, queryFileSourceSaveAsSchema, queryFileSourceStatusSchema, queryFileSourceReleaseSchema, queryFileSourceCancelSchema, queryRecentFilesSchema, queryRecentFileForgetSchema } from './queryFileSources';
@@ -282,6 +283,10 @@ export const commandSchemas: Record<Command, z.ZodType> = {
   'history.page':historyPageInputSchema,'history.pageContinue':localSqlPageNextSchema,'history.pageRelease':localSqlPageReleaseSchema,'history.read':historyReadSchema,'history.readError':historyErrorReadSchema,
   'queryFileSources.recent': queryRecentFilesSchema, 'queryFileSources.forgetRecent': queryRecentFileForgetSchema,
   'explainFiles.open': empty,
+  'schema.databaseDefaultEncoding.get': z.object({ connectionId: id, database: foreignKeyTargetName, taskId: id }).strict(),
+  'schema.databaseDefaultEncoding.preview': z.object({ snapshotId: id, charset: z.string().regex(/^[A-Za-z0-9_]{1,64}$/), collation: z.string().regex(/^[A-Za-z0-9_]{1,64}$/), taskId: id }).strict(),
+  'schema.databaseDefaultEncoding.apply': z.object({ previewToken: id, confirmation: foreignKeyTargetName, acknowledgements: z.array(z.enum(databaseDefaultEncodingAcknowledgements)).length(databaseDefaultEncodingAcknowledgements.length).refine(values => new Set(values).size === values.length), taskId: id }).strict(),
+  'schema.databaseDefaultEncoding.release': z.object({ snapshotId: id.optional(), previewToken: id.optional() }).strict().refine(value => !!value.snapshotId || !!value.previewToken),
   'explainFiles.save': z.object({ snapshot: z.unknown().transform(value => parseExplainSnapshot(value)) }).strict(),
   ...queryFileReloadSchemas,
   'queryFileSources.cancel': queryFileSourceCancelSchema, 'queryFileSources.open': queryFileSourceOpenSchema, 'queryFileSources.save': queryFileSourceSaveSchema, 'queryFileSources.saveAs': queryFileSourceSaveAsSchema, 'queryFileSources.status': queryFileSourceStatusSchema, 'queryFileSources.release': queryFileSourceReleaseSchema,

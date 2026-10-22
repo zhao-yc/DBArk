@@ -47,6 +47,7 @@ import { TableCommentTasks } from './tableCommentTasks';
 import { TableDropTasks } from './tableDropTasks';
 import { TableTruncateTasks } from './tableTruncateTasks';
 import { DatabaseCreateTasks } from './databaseCreateTasks';
+import { DatabaseDefaultEncodingTasks } from './databaseDefaultEncodingTasks';
 import { TableDefaultEncodingTasks } from './tableDefaultEncodingTasks';
 import { TableForeignKeyPatchTasks } from './tableForeignKeyPatchTasks';
 import type { StructureTaskContext, StructureTaskOptions } from './structureDefinition';
@@ -102,6 +103,7 @@ export class Engine {
   private readonly tableTruncates: TableTruncateTasks;
   private readonly tableCreates: TableCreateTasks;
   private readonly databaseCreates: DatabaseCreateTasks;
+  private readonly databaseDefaultEncodings: DatabaseDefaultEncodingTasks;
   private readonly tableDefaultEncodings: TableDefaultEncodingTasks;
   private readonly foreignKeyPatches: TableForeignKeyPatchTasks;
   private readonly schemaComparisons: SchemaCompareTasks;
@@ -128,13 +130,14 @@ export class Engine {
     this.tableTruncates = new TableTruncateTasks({ run: (connectionId, taskId, action, options) => this.withIndependentTask(connectionId, taskId, (managed, control) => action({ managed, ...control }), options) }, undefined, this.structureCache);
     this.tableCreates = new TableCreateTasks({ run: (connectionId, taskId, action, options) => this.withIndependentTask(connectionId, taskId, (managed, control) => action({ managed, ...control }), options) }, undefined, this.structureCache);
     this.databaseCreates = new DatabaseCreateTasks({ run: (connectionId, taskId, action, options) => this.withIndependentTask(connectionId, taskId, (managed, control) => action({ managed, ...control }), options) }, undefined, this.structureCache);
+    this.databaseDefaultEncodings = new DatabaseDefaultEncodingTasks({ run: (connectionId, taskId, action, options) => this.withIndependentTask(connectionId, taskId, (managed, control) => action({ managed, ...control }), options) }, undefined, this.structureCache);
     this.tableDefaultEncodings = new TableDefaultEncodingTasks({ run: (connectionId, taskId, action, options) => this.withIndependentTask(connectionId, taskId, (managed, control) => action({ managed, ...control }), options) }, undefined, this.structureCache);
     this.foreignKeyPatches = new TableForeignKeyPatchTasks({ run: (connectionId, taskId, action, options) => this.withIndependentTask(connectionId, taskId, (managed, control) => action({ managed, ...control }), options) }, undefined, this.structureCache);
   }
 
   /** 主进程只注入可信 profile/filePath；其他字段按共享接口处理。 */
   async handle(command: EngineCommand, input: Input): Promise<any> {
-    if (this.closing) throw new Error('数据库引擎正在关闭，不能开始新操作');
+    if (this.closing && command !== 'schema.databaseDefaultEncoding.release') throw new Error('数据库引擎正在关闭，不能开始新操作');
     switch (command) {
       case '__connections.prepareSave': {
         const next = input.profile as ConnectionProfile;
@@ -193,6 +196,8 @@ export class Engine {
         this.tableCopySources.releaseConnection(input.id);
         this.structureCache.release(input.id);
         const failed = cancellations.find(result => result.status === 'rejected'); if (failed?.status === 'rejected') throw failed.reason;
+        // 仅显式断开且原任务与物理资源均已证实收尾，才解除数据库属性的保守隔离锁。
+        this.databaseDefaultEncodings.releaseConnection(input.id);
         return;
         } finally { this.disconnecting.delete(input.id); }
       }
@@ -384,6 +389,10 @@ export class Engine {
       case 'schema.tableCreate.apply': return this.tableCreates.apply(input as any, input.connectionRevision);
       case 'schema.tableCreate.release': return this.tableCreates.releaseTokens(input);
       case 'schema.databaseCreate.get': return this.databaseCreates.get(input as any, input.connectionRevision);
+      case 'schema.databaseDefaultEncoding.get': return this.databaseDefaultEncodings.get(input as any, input.connectionRevision);
+      case 'schema.databaseDefaultEncoding.preview': return this.databaseDefaultEncodings.preview(input as any, input.connectionRevision);
+      case 'schema.databaseDefaultEncoding.apply': return this.databaseDefaultEncodings.apply(input as any, input.connectionRevision);
+      case 'schema.databaseDefaultEncoding.release': return this.databaseDefaultEncodings.releaseTokens(input);
       case 'schema.databaseCreate.preview': return this.databaseCreates.preview(input as any, input.connectionRevision);
       case 'schema.databaseCreate.apply': return this.databaseCreates.apply(input as any, input.connectionRevision);
       case 'schema.databaseCreate.release': return this.databaseCreates.releaseTokens(input);
@@ -546,6 +555,7 @@ export class Engine {
 
   /** 独立任务从建连前登记，到服务器及本地连接收尾后才释放编号和配置锁。 */
   private async withIndependentTask<T>(connectionId: string, taskId: string, action: (managed: ManagedConnection, control: Omit<StructureTaskContext, 'managed'>) => Promise<T>, options?: StructureTaskOptions, readLabel?:string, strictRead=false,readDetail?:()=>Partial<TaskEvent>, quiet=false): Promise<T> {
+    let resourcesStarted = false;
     return this.withConnectionUse(connectionId, async () => {
       if (this.closing || !taskId || this.taskIdInUse(taskId)) throw new Error('任务编号为空或任务已在执行');
       const profile = this.profile(connectionId);
@@ -555,13 +565,14 @@ export class Engine {
       let resources: IndependentTaskResourceLease;
       try { resources = this.independentResources.reserve(connectionId, taskId, releaseExecution); }
       catch (error) { releaseExecution(); throw error; }
+      resourcesStarted = true;
       const controller = new AbortController();
       let finish!: () => void;
       const done = new Promise<void>(resolve => { finish = resolve; });
       const task: IndependentTask = { connectionId, controller, done, resources, structureTask: Boolean(options)||strictRead, generation: 0 };
       this.independentTasks.set(taskId, task);
       const label = options?.label ?? readLabel ?? '读取关联记录';
-      const detail = () => options ? (options.purpose === 'tableCreate' ? { tableCreate: { ...options.progress } } : options.purpose === 'tableCopyData' ? { tableCopyData: { ...options.progress } } : options.purpose === 'tableCopyStructure' ? { tableCopyStructure: { ...options.progress } } : options.purpose === 'databaseCreate' ? { databaseCreate: { ...options.progress } } : options.purpose === 'tableRename' ? { tableRename: { ...options.progress } } : options.purpose === 'tableAutoIncrement' ? { tableAutoIncrement: { ...options.progress } } : options.purpose === 'tableDefaultEncoding' ? { tableDefaultEncoding: { ...options.progress } } : options.purpose === 'tableDrop' ? { tableDrop: { ...options.progress } } : options.purpose === 'tableTruncate' ? { tableTruncate: { ...options.progress } } : options.purpose === 'tableComment' ? { tableComment: { ...options.progress } } : options.purpose === 'indexes' ? { indexPatch: { ...options.progress } } : options.purpose === 'foreignKeys' ? { foreignKeyPatch: { ...options.progress } } : { columnPatch: { ...options.progress } }) : readDetail?.()??{};
+      const detail = () => options ? (options.purpose === 'tableCreate' ? { tableCreate: { ...options.progress } } : options.purpose === 'tableCopyData' ? { tableCopyData: { ...options.progress } } : options.purpose === 'tableCopyStructure' ? { tableCopyStructure: { ...options.progress } } : options.purpose === 'databaseDefaultEncoding' ? { databaseDefaultEncoding: { ...options.progress } } : options.purpose === 'databaseCreate' ? { databaseCreate: { ...options.progress } } : options.purpose === 'tableRename' ? { tableRename: { ...options.progress } } : options.purpose === 'tableAutoIncrement' ? { tableAutoIncrement: { ...options.progress } } : options.purpose === 'tableDefaultEncoding' ? { tableDefaultEncoding: { ...options.progress } } : options.purpose === 'tableDrop' ? { tableDrop: { ...options.progress } } : options.purpose === 'tableTruncate' ? { tableTruncate: { ...options.progress } } : options.purpose === 'tableComment' ? { tableComment: { ...options.progress } } : options.purpose === 'indexes' ? { indexPatch: { ...options.progress } } : options.purpose === 'foreignKeys' ? { foreignKeyPatch: { ...options.progress } } : { columnPatch: { ...options.progress } }) : readDetail?.()??{};
       const send = (event: TaskEvent) => { if (!quiet) this.emit(event); };
       const report = () => send({ taskId, status: 'running', progress: 0, message: label, ...detail() });
       const checkCancelled = () => { if (task.cancelRequested || controller.signal.aborted) throw new Error('任务已取消；已执行的结构或数据变更不会撤销'); };
@@ -595,7 +606,7 @@ export class Engine {
         if (!confirmed) failure ??= Error('独立任务物理资源尚未确认释放，请显式断开连接；原操作未重放');
         this.independentTasks.delete(taskId); finish();
         // 新建表动作可因发送前取消失败，但严格收尾事实独立成立；未知DDL由用途自身继续保守锁定。
-        if (options?.purpose === 'tableCreate' && managed && resourcesReleased && !task.cancelError) options.onResourcesReleased?.();
+        if ((options?.purpose === 'tableCreate' && managed || options?.purpose === 'databaseDefaultEncoding') && resourcesReleased && !task.cancelError) options?.onResourcesReleased?.();
       }
       if (controller.signal.aborted || task.cancelRequested) failure ??= task.cancelError ?? (options?.progress.ddlCompleted ? undefined : new Error('任务已取消'));
       if (task.cancelError) failure = task.cancelError;
@@ -606,6 +617,10 @@ export class Engine {
       send({ taskId, status, progress: failure ? 0 : 100, message:readDetail?`${label}${status==='completed'?'完成':status==='cancelled'?'已取消':'失败'}`:message, ...detail() });
       if (failure) throw failure;
       return result;
+    }).catch(error => {
+      // 目录/编号/配置准入在资源预留之前失败，没有网络分配，可归还本次数据库属性锁。
+      if (!resourcesStarted && options?.purpose === 'databaseDefaultEncoding') options.onResourcesReleased?.();
+      throw error;
     });
   }
 
