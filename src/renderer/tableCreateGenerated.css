@@ -1,0 +1,4 @@
+.new-table-generated-field{min-width:250px;max-width:360px;display:flex;flex-direction:column;gap:6px}
+.new-table-generated-field>textarea{width:100%;min-height:65px;font-family:var(--font-mono,monospace);font-size:11px;resize:vertical}
+.new-table-generated-field>p{margin:0;line-height:1.6}
+.new-table-generated-field code{white-space:normal;overflow-wrap:anywhere}

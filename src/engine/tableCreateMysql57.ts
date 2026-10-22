@@ -26,7 +26,7 @@ export async function readMysql57CreateCapabilities(context: StructureTaskContex
 }
 
 /** 只增加已证明普通设计的5.7边界；FK、列类型及表达式仍交给原生成器和原完整后核，不扩大能力。 */
-export function assertMysql57CreateDesign(design: TableCreateDesign, capabilities: Mysql57CreateCapabilities, mode: string): void {
+export function assertMysql57CreateDesign(design: Pick<TableCreateDesign, 'engine' | 'charset' | 'columns'>, capabilities: Mysql57CreateCapabilities, mode: string): void {
   if (mode.split(',').some(value => (definitionOmittingSqlModes as readonly string[]).includes(value.toUpperCase()))) throw Error(mysql57CreateMessages.facts);
   if (design.engine.toUpperCase() !== 'INNODB' || !capabilities.charsets.includes(design.charset)) throw Error(mysql57CreateMessages.engine);
   if (!capabilities.explicitTimestamp && design.columns.some(column => /^TIMESTAMP\b/i.test(column.type.trim()))) throw Error(mysql57CreateMessages.timestamp);

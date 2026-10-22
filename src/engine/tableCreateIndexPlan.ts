@@ -38,6 +38,7 @@ export function planTableCreateIndexes(input: TableCreateDraft, facts: TableCrea
     let keyBytes = 0;
     for (const part of keyParts) {
       const source = columns.get(part.columnName); if (source?.name.toUpperCase() === 'FTS_DOC_ID') throw Error('全文文档定位列不属于新表前缀首片'); if (!source) throw Error('索引字段不属于本次待建草稿');
+      if (source.generated) throw Error('首片生成新表不为生成列授予索引成本或前缀写能力');
       const column = planned.get(source.name) ?? plannedColumn(source, charset.maxBytes); planned.set(source.name, column);
       if (index.name === 'PRIMARY' && (part.prefixLength !== undefined || source.nullable)) throw Error('主键只允许非空完整字段，不接受前缀');
       if (part.prefixLength !== undefined && (column.family === 'integer' || part.prefixLength > column.declaredUnits!)) throw Error('前缀类型或长度超出待建字段的已证明范围');

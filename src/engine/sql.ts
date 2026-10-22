@@ -1,5 +1,6 @@
-import { tableCreateDraftSchema, type TableCreateDraft, type TableCreatePrefixFacts } from '../shared/tableCreate';
+import { tableCreateDraftSchema, tableCreateHasPrefix, tableCreateIndexParts, type TableCreateDraft, type TableCreatePrefixFacts } from '../shared/tableCreate';
 import { planTableCreateIndexes } from './tableCreateIndexPlan';
+import { planTableCreateGeneratedColumns, type TableCreateGeneratedFacts } from './tableCreateGeneratedColumns';
 import type { CellValue, ColumnInfo, DataRow, FilterGroup, FilterMode, FilterRule, RowChange, SortRule, SqlPreview, TableDesign, TableInfo } from '../shared/contracts';
 import { tableCreateOnUpdateSql, type TableCreateTimeColumn } from '../shared/tableCreateOnUpdate';
 import { copyFilterRules, validateFilterGroup } from '../shared/filtering';
@@ -333,6 +334,7 @@ export function columnType(value: string): string {
 
 /** 新旧设计共用同一列渲染规则，默认值及类型处理不能因索引入口分叉。 */
 function renderDesignColumn(column: TableDesign['columns'][number] & TableCreateTimeColumn, noBackslashEscapes: boolean): string {
+  if (Object.hasOwn(column, 'generated')) throw Error('生成列必须使用新表专属已编译计划，普通字段渲染不能丢弃生成表达式');
   let sql = `${identifier(column.name)} ${columnType(column.type)} ${column.nullable ? 'NULL' : 'NOT NULL'}`;
   if (column.defaultValue !== undefined) {
     const value = column.defaultValue;
@@ -344,21 +346,8 @@ function renderDesignColumn(column: TableDesign['columns'][number] & TableCreate
   return sql;
 }
 
-/** 以完整设计和现状生成结构差异；保留未变索引/外键，同名外键修改明确分步预览。 */
-export function buildDesign(design: TableDesign, original?: TableInfo, noBackslashEscapes = false, newTableEncoding?: { charset: string; collation: string }): SqlPreview {
-  // 新键只属于新表专属合同，旧整表ALTER不能借额外属性扩展写能力。
-  if ((original || design.originalName !== undefined) && design.columns.some(column => Object.hasOwn(column, 'onUpdate'))) throw Error('新表自动更新时间不能用于旧整表ALTER入口');
-  // 仅新建用途可传显式配对；已有表即便误传也拒绝，不转成ALTER或数据编码转换。
-  if (newTableEncoding && (original || design.originalName !== undefined || newTableEncoding.charset !== design.charset || typeof newTableEncoding.collation !== 'string' || !/^[A-Za-z0-9_]{1,255}$/.test(newTableEncoding.collation))) throw new Error('显式新表编码选项无效或用于已有对象');
-  if (!design.columns.length) throw new Error('表至少需要一个字段');
-  const names = new Set(design.columns.map(column => column.name));
-  if (names.size !== design.columns.length) throw new Error('字段名重复');
-  if (!['INNODB', 'MYISAM', 'MEMORY', 'ARIA', 'ARCHIVE', 'CSV'].includes(design.engine.toUpperCase())) throw new Error('不支持的存储引擎');
-  if (!/^[a-zA-Z0-9_]+$/.test(design.charset)) throw new Error('字符集名称无效');
-  const literal = (value: string) => stringLiteral(value, noBackslashEscapes);
-  /** 先验证类型，再生成列定义；文本字段的时间样式默认值仍按文字量处理。 */
-  const columnSql = (column: TableDesign['columns'][number]) => renderDesignColumn(column, noBackslashEscapes);
-  /** 索引和外键只能引用本次设计中存在且不重复的字段。 */
+/** 普通与生成新表共用同一键/外键渲染，名称、列映射与动作校验不能因入口分叉。 */
+function renderDesignConstraints(design: Pick<TableDesign, 'indexes' | 'foreignKeys'>, names: ReadonlySet<string>) {
   const localColumns = (items: string[]) => {
     if (!items.length || new Set(items).size !== items.length || items.some(name => !names.has(name))) throw new Error('索引或外键包含空、重复或不存在的字段');
     return items.map(identifier).join(', ');
@@ -371,6 +360,25 @@ export function buildDesign(design: TableDesign, original?: TableInfo, noBacksla
     if (![key.onDelete, key.onUpdate].every(action => ['RESTRICT', 'CASCADE', 'SET NULL', 'NO ACTION'].includes(action.toUpperCase()))) throw new Error('外键动作无效');
     return `CONSTRAINT ${identifier(key.name)} FOREIGN KEY (${localColumns(key.columns)}) REFERENCES ${qualified(key.referencedDatabase, key.referencedTable)} (${key.referencedColumns.map(identifier).join(', ')}) ON DELETE ${key.onDelete.toUpperCase()} ON UPDATE ${key.onUpdate.toUpperCase()}`;
   });
+  return { indexes, foreignKeys };
+}
+
+/** 以完整设计和现状生成结构差异；保留未变索引/外键，同名外键修改明确分步预览。 */
+export function buildDesign(design: TableDesign, original?: TableInfo, noBackslashEscapes = false, newTableEncoding?: { charset: string; collation: string }): SqlPreview {
+  if (design.columns.some(column => Object.hasOwn(column, 'generated'))) throw Error('生成列不能进入旧整表生成器；请使用新建表专属生成计划');
+  // 新键只属于新表专属合同，旧整表ALTER不能借额外属性扩展写能力。
+  if ((original || design.originalName !== undefined) && design.columns.some(column => Object.hasOwn(column, 'onUpdate'))) throw Error('新表自动更新时间不能用于旧整表ALTER入口');
+  // 仅新建用途可传显式配对；已有表即便误传也拒绝，不转成ALTER或数据编码转换。
+  if (newTableEncoding && (original || design.originalName !== undefined || newTableEncoding.charset !== design.charset || typeof newTableEncoding.collation !== 'string' || !/^[A-Za-z0-9_]{1,255}$/.test(newTableEncoding.collation))) throw new Error('显式新表编码选项无效或用于已有对象');
+  if (!design.columns.length) throw new Error('表至少需要一个字段');
+  const names = new Set(design.columns.map(column => column.name));
+  if (names.size !== design.columns.length) throw new Error('字段名重复');
+  if (!['INNODB', 'MYISAM', 'MEMORY', 'ARIA', 'ARCHIVE', 'CSV'].includes(design.engine.toUpperCase())) throw new Error('不支持的存储引擎');
+  if (!/^[a-zA-Z0-9_]+$/.test(design.charset)) throw new Error('字符集名称无效');
+  const literal = (value: string) => stringLiteral(value, noBackslashEscapes);
+  /** 先验证类型，再生成列定义；文本字段的时间样式默认值仍按文字量处理。 */
+  const columnSql = (column: TableDesign['columns'][number]) => renderDesignColumn(column, noBackslashEscapes);
+  const { indexes, foreignKeys } = renderDesignConstraints(design, names);
   const preserveCollation = newTableEncoding?.collation ?? (original?.charset === design.charset ? original.collation : undefined);
   if (preserveCollation && !/^[a-zA-Z0-9_]+$/.test(preserveCollation)) throw new Error('原表排序规则名称无效');
   const options = `ENGINE=${design.engine.toUpperCase()} DEFAULT CHARACTER SET=${design.charset}${preserveCollation ? ' COLLATE=' + preserveCollation : ''} COMMENT=${literal(design.comment)}`;
@@ -413,12 +421,33 @@ export function buildDesign(design: TableDesign, original?: TableInfo, noBacksla
 /** 前缀只从结构化计划渲染；不接受rawSQL，不替换旧生成结果，公共buildDesign接口保持。 */
 export function buildPrefixTableDesign(input: TableCreateDraft, facts: TableCreatePrefixFacts, noBackslashEscapes = false, encoding?: { charset: string; collation: string }): SqlPreview {
   const design = tableCreateDraftSchema.parse(input), plan = planTableCreateIndexes(design, facts);
+  if (design.columns.some(column => Object.hasOwn(column, 'generated'))) throw Error('带生成列的前缀新表必须使用专属生成计划');
   if (encoding && (encoding.charset !== design.charset || !/^[A-Za-z0-9_]{1,255}$/.test(encoding.collation))) throw Error('新表编码配对无效');
   const indexes = plan.indexes.map(index => {
     const parts = index.keyParts.map(part => identifier(part.columnName) + (part.prefixLength === undefined ? '' : `(${part.prefixLength})`)).join(', ');
     return index.name === 'PRIMARY' ? `PRIMARY KEY (${parts})` : `${index.unique ? 'UNIQUE ' : ''}KEY ${identifier(index.name)} (${parts})`;
   });
   const sql = `CREATE TABLE ${qualified(design.database, design.name)} (\n  ${[...design.columns.map(column => renderDesignColumn(column, noBackslashEscapes)), ...indexes].join(',\n  ')}\n) ENGINE=INNODB DEFAULT CHARACTER SET=${design.charset}${encoding ? ' COLLATE=' + encoding.collation : ''} ROW_FORMAT=DYNAMIC COMMENT=${stringLiteral(design.comment, noBackslashEscapes)}`;
+  return { sql: sql + ';', statements: [{ sql, params: [] }], warnings: [] };
+}
+
+/** 生成列只取受控AST编译结果；普通列和键仍走原渲染，不替换legacy SQL字符串或降级丢属性。 */
+export function buildGeneratedTableDesign(input: TableCreateDraft, facts: TableCreateGeneratedFacts, noBackslashEscapes = false, encoding?: { charset: string; collation: string }, prefixFacts?: TableCreatePrefixFacts): SqlPreview {
+  const design = tableCreateDraftSchema.parse(input), generated = planTableCreateGeneratedColumns(design, facts), names = new Set(design.columns.map(column => column.name));
+  if (!generated.columns.length || names.size !== design.columns.length || design.engine.toUpperCase() !== 'INNODB' || !/^[A-Za-z0-9_]+$/.test(design.charset)) throw Error('生成新表设计、引擎或字符集无效');
+  if (encoding && (encoding.charset !== design.charset || !/^[A-Za-z0-9_]{1,255}$/.test(encoding.collation))) throw Error('生成新表编码配对无效');
+  const prefix = tableCreateHasPrefix(design); if (prefix && !prefixFacts) throw Error('生成新表缺少实际前缀能力');
+  const indexPlan = prefix ? planTableCreateIndexes(design, prefixFacts!) : undefined;
+  const { indexes: ordinaryIndexes, foreignKeys } = renderDesignConstraints({ indexes: design.indexes.map(index => ({ name: index.name, unique: index.unique, columns: tableCreateIndexParts(index).map(part => part.columnName) })), foreignKeys: design.foreignKeys }, names);
+  const indexes = indexPlan ? indexPlan.indexes.map(index => { const parts = index.keyParts.map(part => identifier(part.columnName) + (part.prefixLength === undefined ? '' : `(${part.prefixLength})`)).join(', '); return index.name === 'PRIMARY' ? `PRIMARY KEY (${parts})` : `${index.unique ? 'UNIQUE ' : ''}KEY ${identifier(index.name)} (${parts})`; }) : ordinaryIndexes;
+  const columns = design.columns.map((column, ordinal) => {
+    const value = generated.columns.find(value => value.ordinal === ordinal && value.name === column.name);
+    if (!column.generated) { if (value) throw Error('普通新表列混入生成计划'); return renderDesignColumn(column, noBackslashEscapes); }
+    if (!value || value.storage !== column.generated.storage) throw Error('生成新表列与已编译计划不一致');
+    return `${identifier(column.name)} ${columnType(column.type)} GENERATED ALWAYS AS (${value.sql}) ${value.storage}${column.comment ? ' COMMENT ' + stringLiteral(column.comment, noBackslashEscapes) : ''}`;
+  });
+  const sql = `CREATE TABLE ${qualified(design.database, design.name)} (\n  ${[...columns, ...indexes, ...foreignKeys].join(',\n  ')}\n) ENGINE=INNODB DEFAULT CHARACTER SET=${design.charset}${encoding ? ' COLLATE=' + encoding.collation : ''}${prefix ? ' ROW_FORMAT=DYNAMIC' : ''} COMMENT=${stringLiteral(design.comment, noBackslashEscapes)}`;
+  if (Buffer.byteLength(sql) > 4 * 1024 * 1024 || splitSql(sql, noBackslashEscapes).length !== 1) throw Error('生成新表SQL超过预算或不是单条CREATE');
   return { sql: sql + ';', statements: [{ sql, params: [] }], warnings: [] };
 }
 

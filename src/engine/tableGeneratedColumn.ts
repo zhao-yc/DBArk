@@ -19,12 +19,13 @@ export function isGeneratedColumnReference(document: TableColumnDefinitionDocume
 export const eligibleGeneratedColumnReference = isGeneratedColumnReference;
 
 /** 将AST每次引用重写为真实转义列名；运算树和十进制尺度保持，不交换运算或推断等价。 */
-export function compileGeneratedColumnExpression(document: TableColumnDefinitionDocument, expression: string, beforeOrdinal = document.columns.length): CompiledGeneratedColumnExpression {
+export function compileResolvedGeneratedColumnExpression(expression: string, resolveColumn: (name: string) => string | undefined): CompiledGeneratedColumnExpression {
   const parsed = parseGeneratedColumnExpression(expression);
-  for (const name of parsed.referencedColumns) if (!isGeneratedColumnReference(document, name, beforeOrdinal)) throw Error(text.reference);
+  const names = new Map<string, string>();
+  for (const name of parsed.referencedColumns) { const resolved = resolveColumn(name); if (resolved !== name) throw Error(text.reference); names.set(name, resolved); }
   const render = (node: GeneratedColumnExpression): string => {
     if (node.kind === 'number') return node.value;
-    if (node.kind === 'column') return quoted(document.columnsByName.get(node.name)!.name);
+    if (node.kind === 'column') return quoted(names.get(node.name)!);
     if (node.kind === 'unary') return '(' + node.operator + render(node.operand) + ')';
     return '(' + render(node.left) + ' ' + node.operator + ' ' + render(node.right) + ')';
   };
@@ -35,6 +36,11 @@ export function compileGeneratedColumnExpression(document: TableColumnDefinition
   // 不能仅因输出语法可读就放行；原始运算次序、引用及十进制尺度必须保持同一比较键。
   if (generatedColumnExpressionFingerprint(rendered.ast) !== fingerprint) throw Error(text.expression);
   return { sql, fingerprint, referencedColumns: [...parsed.referencedColumns] };
+}
+
+/** 旧现表入口仍逐项验证真实目录，不能用待建声明或客户端候选替换原权限证明。 */
+export function compileGeneratedColumnExpression(document: TableColumnDefinitionDocument, expression: string, beforeOrdinal = document.columns.length): CompiledGeneratedColumnExpression {
+  return compileResolvedGeneratedColumnExpression(expression, name => isGeneratedColumnReference(document, name, beforeOrdinal) ? document.columnsByName.get(name)!.name : undefined);
 }
 
 /** SHOW/目录可用当前ANSI模式表示标识符；转为同一安全子集后只比较结构，不执行原表达式。 */

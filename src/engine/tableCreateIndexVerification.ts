@@ -8,6 +8,8 @@ import { readTableIndexDefinition } from './tableIndexDefinition';
 import { deriveTrustedIndexColumn, crossCheckIndexStatistics, type IndexColumnMetadata } from './tableIndexMetadata';
 import { tableCreateMetadataInteger } from './tableCreateIndexFacts';
 import { qualified } from './sql';
+import type { TableCreateGeneratedPlan } from './tableCreateGeneratedColumns';
+import { sameStructureFragment } from './structureDefinition';
 const blobCapacities = new Map<string, number>([['TINYBLOB', 255], ['BLOB', 65535], ['MEDIUMBLOB', 16777215], ['LONGBLOB', 4294967295]]);
 const literal = (value: string) => `CONVERT(X'${Buffer.from(value, 'utf8').toString('hex')}' USING utf8mb4)`;
 /** MySQL前缀新表独立核完整表选项；不扩Maria NULL字符集补证的白名单。 */
@@ -30,7 +32,7 @@ function readOptions(document: TableColumnDefinitionDocument, design: TableCreat
   return values;
 }
 /** CREATE后的实际目录才可进入真实列适配器；完整SHOW和STATISTICS逐键独立复核。 */
-export async function verifyCreatedPrefixIndexes(context: StructureTaskContext, target: { database: string; table: string }, design: TableCreateDraft, plan: TableCreateIndexPlan, facts: TableCreatePrefixFacts, document: TableColumnDefinitionDocument): Promise<boolean> {
+export async function verifyCreatedPrefixIndexes(context: StructureTaskContext, target: { database: string; table: string }, design: TableCreateDraft, plan: TableCreateIndexPlan, facts: TableCreatePrefixFacts, document: TableColumnDefinitionDocument, verifiedGeneratedPlan?: TableCreateGeneratedPlan): Promise<boolean> {
   const options = readOptions(document, design);
   if (context.managed.status.dialect !== 'mysql' || plan.factsDigest !== facts.digest || !options) return false;
   const parsed = readTableIndexDefinition(document);
@@ -57,6 +59,12 @@ export async function verifyCreatedPrefixIndexes(context: StructureTaskContext, 
   for (const metadata of columns) {
     const expected = plan.columns.find(column => column.name === metadata.COLUMN_NAME), definition = document.columns.find(column => column.name === metadata.COLUMN_NAME), requested = design.columns.find(column => column.name === metadata.COLUMN_NAME);
     if (!definition || !requested || typeof metadata.DATA_TYPE !== 'string' || typeof metadata.EXTRA !== 'string') return false;
+    if (requested.generated) {
+      // 仅已通过专属SHOW/完整COLUMNS后核的非键生成列可共存；不伪造原索引适配器的writable权限。
+      const generated = verifiedGeneratedPlan?.columns.find(column => column.name === requested.name && column.ordinal === document.columns.indexOf(definition));
+      if (!generated || expected || generated.storage !== requested.generated.storage || metadata.IS_NULLABLE !== 'YES' || metadata.CHARACTER_SET_NAME !== null || metadata.COLLATION_NAME !== null || metadata.CHARACTER_MAXIMUM_LENGTH !== null || metadata.CHARACTER_OCTET_LENGTH !== null || !new RegExp('^' + generated.storage + '\\s+GENERATED$', 'i').test(metadata.EXTRA.trim()) || !sameStructureFragment(metadata.COLUMN_TYPE, definition.type.raw, document.context) || metadata.DATA_TYPE.toUpperCase() !== /^[A-Za-z]+/.exec(definition.type.raw)?.[0].toUpperCase()) return false;
+      continue;
+    }
     // 仅本次显式时间属性按共享合同核SHOW和完整COLUMNS.EXTRA；旧省略路径保留原白名单。
     const explicitTime = Object.hasOwn(requested, 'onUpdate');
     if (explicitTime ? !tableCreateOnUpdateExtraMatches(requested, metadata.EXTRA) || !sameColumnOnUpdate(readColumnOnUpdate(definition), requested.onUpdate!, definition.type.raw) : !/^(?:(?:auto_increment|DEFAULT_GENERATED)\s*)*$/i.test(metadata.EXTRA)) return false;

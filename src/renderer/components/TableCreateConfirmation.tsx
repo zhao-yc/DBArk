@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
-import { tableCreateAcknowledgements, tableCreateConfirmation, tableCreateDraftSchema, tableCreateHasPrefix, type TableCreateDraft, type TableCreateApplyOutput, type TableCreateGetOutput, type TableCreatePreviewOutput, type TableCreateProgress } from '../../shared/tableCreate';
+import { tableCreateConfirmation, tableCreateDraftSchema, tableCreateHasPrefix, tableCreateHasGenerated, tableCreateRequiredAcknowledgements, type TableCreateDraft, type TableCreateApplyOutput, type TableCreateGetOutput, type TableCreatePreviewOutput, type TableCreateProgress } from '../../shared/tableCreate';
+import { generatedColumnAcknowledgement } from '../../shared/tableGeneratedColumn';
+import { tableCreateGeneratedZh as generatedText } from '../locales/tableCreateGenerated.zh-CN';
 import { tableCreatePrefixZh } from '../locales/tableCreatePrefix.zh-CN';
 import { sameTableEncodingPair, validateTableEncodingPair, type TableEncodingPair } from '../../shared/tableDefaultEncoding';
 import { IndexRequestFence } from '../indexPatches';
@@ -14,6 +16,7 @@ export interface TableCreateConfirmationProps { connectionId: string; design: Ta
 export function TableCreateConfirmation({ connectionId, design, invalidated = false, isParentCurrent, onBack, onClose, onCreated, onDirtyChange, services = tableCreateServices }: TableCreateConfirmationProps) {
   const version = useWorkspace(state => state.connectionVersions[connectionId] ?? 0), profile = useWorkspace(state => state.connections.find(value => value.id === connectionId));
   const fixed = useRef({ connectionId, version, design: structuredClone(design), key: JSON.stringify(design), label: profile ? `${profile.name} · ${profile.host}:${profile.port}` : connectionId });
+  const requiredAcknowledgements = useRef(Object.freeze(tableCreateRequiredAcknowledgements(fixed.current.design))).current;
   // 固定本次接受的父租约函数；函数内部活读origin/lifetime，不改领后续父上下文。
   const parentCurrent = useRef(isParentCurrent);
   const intent = useRef(0), renderedKey = JSON.stringify([connectionId, version, design]), lastKey = useRef(renderedKey), observedVersion = useRef(version);
@@ -33,7 +36,7 @@ export function TableCreateConfirmation({ connectionId, design, invalidated = fa
   const validTime = (expires: string) => Number.isFinite(Date.parse(expires)) && Date.parse(expires) > Date.now();
   const expired = !!snapshot && !validTime(snapshot.expiresAt) || !!preview && !validTime(preview.expiresAt);
   const editable = !busy && scopeCurrent() && !expired && !attempted;
-  const confirmed = !!preview && confirmation === tableCreateConfirmation(preview.target) && acks.size === tableCreateAcknowledgements.length && tableCreateAcknowledgements.every(id => acks.has(id));
+  const confirmed = !!preview && confirmation === tableCreateConfirmation(preview.target) && acks.size === requiredAcknowledgements.length && requiredAcknowledgements.every(id => acks.has(id));
   useEffect(() => { callbacks.current.onDirtyChange?.(!complete || unknown); }, [complete, unknown]);
   useEffect(() => {
     const guard = new IndexRequestFence(); fence.current = guard; alive.current = true;
@@ -75,10 +78,12 @@ export function TableCreateConfirmation({ connectionId, design, invalidated = fa
       if (snapshots.current.size || tokens.current.size) { await releaseAll(); if (!accepts(op)) return; }
       const parsed = tableCreateDraftSchema.safeParse(fixed.current.design); if (!parsed.success) throw Error(text.invalidDesign); const draft = parsed.data;
       if (!accepts(op)) return;
-      const value = await service.current.get({ connectionId: fixed.current.connectionId, database: draft.database, taskId: op.taskId, ...(chosen ? { includeEncodings: true } : {}), ...(tableCreateHasPrefix(draft) ? { includePrefixFacts: true } : {}) }, () => accepts(op)); snapshots.current.add(value.snapshotId);
+      const value = await service.current.get({ connectionId: fixed.current.connectionId, database: draft.database, taskId: op.taskId, ...(chosen ? { includeEncodings: true } : {}), ...(tableCreateHasPrefix(draft) ? { includePrefixFacts: true } : {}), ...(tableCreateHasGenerated(draft) ? { includeGeneratedFacts: true } : {}) }, () => accepts(op)); snapshots.current.add(value.snapshotId);
       if (!accepts(op) || value.target.connectionId !== fixed.current.connectionId || value.target.database !== draft.database || !validTime(value.expiresAt)) { await releaseOne('snapshotId', value.snapshotId); return; }
       if (tableCreateHasPrefix(draft) && !value.prefixFacts) throw Error(tableCreatePrefixZh.unavailable);
       setSnapshot(value);
+      // 草稿候选不是实际服务器能力；缺项/未知不能降级为普通列或继续发送预览。
+      if (tableCreateHasGenerated(draft) && value.generatedAccess?.editable !== true) throw Error(value.generatedAccess?.reason || generatedText.capability);
       if (chosen) {
         const metadata = value.encodings;
         catalog.current = undefined;
@@ -94,7 +99,7 @@ export function TableCreateConfirmation({ connectionId, design, invalidated = fa
       if (!accepts(op)) return;
       activeTask.current = uid();
       const next = await service.current.preview({ snapshotId: value.snapshotId, design: draft, taskId: activeTask.current }, () => accepts(op)); tokens.current.add(next.previewToken);
-      if (!accepts(op) || next.target.connectionId !== fixed.current.connectionId || next.target.database !== draft.database || next.target.table !== draft.name || !validTime(next.expiresAt) || next.requiredAcknowledgements.length !== tableCreateAcknowledgements.length || tableCreateAcknowledgements.some(id => !next.requiredAcknowledgements.includes(id))) { await releaseOne('previewToken', next.previewToken); if (accepts(op)) throw Error(text.response); return; }
+      if (!accepts(op) || next.target.connectionId !== fixed.current.connectionId || next.target.database !== draft.database || next.target.table !== draft.name || !validTime(next.expiresAt) || !acknowledgementsMatch(next)) { await releaseOne('previewToken', next.previewToken); if (accepts(op)) throw Error(text.response); return; }
       if (chosen && (!next.encoding || next.encoding.catalogDigest !== value.encodings?.digest || !sameTableEncodingPair(next.encoding.selection, chosen)) || !chosen && next.encoding) { await releaseOne('previewToken', next.previewToken); throw Error(text.response); }
       if (!accepts(op)) { await releaseOne('previewToken', next.previewToken); return; }
       acceptedPreview.current = next; setPreview(next);
@@ -109,12 +114,14 @@ export function TableCreateConfirmation({ connectionId, design, invalidated = fa
   }
   /** 服务器ACK与后核/收尾独立，刷新只针对最初目标；回调异常不能重放CREATE。 */
   function notify(result: TableCreateApplyOutput) { if (!scopeCurrent()) { report(text.mismatch); return; } try { completed.current(result, fixed.current.version); } catch (reason) { report(reason); } }
+  /** 准确本次设计的集合，不接受重复、多余或少一项；执行前再核，防止已接收对象被改写。 */
+  function acknowledgementsMatch(value: TableCreatePreviewOutput): boolean { return Array.isArray(value.requiredAcknowledgements) && value.requiredAcknowledgements.length === requiredAcknowledgements.length && new Set(value.requiredAcknowledgements).size === requiredAcknowledgements.length && requiredAcknowledgements.every(id => value.requiredAcknowledgements.includes(id)); }
   async function apply() {
-    if (!scopeCurrent() || !editable || !preview || acceptedPreview.current !== preview || !snapshot || !confirmed || consumed.current || !validTime(preview.expiresAt) || !validTime(snapshot.expiresAt)) return;
+    if (!scopeCurrent() || !editable || !preview || acceptedPreview.current !== preview || !snapshot || !confirmed || consumed.current || !validTime(preview.expiresAt) || !validTime(snapshot.expiresAt) || !acknowledgementsMatch(preview)) return;
     const op = begin(); if (!op) return; consumed.current = true; setAttempted(true);
     try {
       if (!accepts(op)) return;
-      const result = await service.current.apply({ previewToken: preview.previewToken, confirmation, acknowledgements: [...tableCreateAcknowledgements], taskId: op.taskId }, () => accepts(op));
+      const result = await service.current.apply({ previewToken: preview.previewToken, confirmation, acknowledgements: [...requiredAcknowledgements], taskId: op.taskId }, () => accepts(op));
       if (!accepts(op)) return;
       if (JSON.stringify(result.target) !== JSON.stringify(preview.target) || result.ddlCompleted !== true || result.ddlSubmitted !== true) throw Error(text.response);
       if (alive.current && op.guard === fence.current) { setComplete(true); setUnknown(!result.definitionVerified || !result.resourcesReleased); setOutcome(!result.resourcesReleased ? text.cleanup : result.definitionVerified ? text.succeeded : text.unverified); setError(result.warnings.join('\n')); }
@@ -135,6 +142,7 @@ export function TableCreateConfirmation({ connectionId, design, invalidated = fa
   }
   return <Modal title={text.title} wide onClose={() => void leave(false)}><div className="modal-content">
     <p>{text.target}：{fixed.current.label} · {fixed.current.design.database}.{fixed.current.design.name} · {snapshot?.serverVersion}</p>
+    {tableCreateHasGenerated(fixed.current.design) && <><p>{generatedText.confirmation}</p><ul>{fixed.current.design.columns.filter(column => column.generated).map((column, index) => <li key={index}>{column.name} · {column.type} · {column.generated!.storage}：<code>{column.generated!.expression}</code></li>)}</ul></>}
     {invalid.current && <ErrorBox message={text.mismatch}/ >}{expired && <ErrorBox message={text.expired}/ >}
     {busy && !preview && <p role="status">{text.preparing}</p>}{snapshot?.warnings.map(value => <p key={value} className="warning-text">{value}</p>)}
     <p>{explicitEncoding ? text.encodingExplicit : text.encodingLegacy}</p><button disabled={!editable} onClick={changeEncodingMode}>{explicitEncoding ? text.encodingUseLegacy : text.encodingChoose}</button>
@@ -142,7 +150,7 @@ export function TableCreateConfirmation({ connectionId, design, invalidated = fa
       <Field label={text.collation}><select aria-label={text.collation} value={selection.collation} disabled={!editable || !selection.charset} onChange={event => { if (editable) changeSelection({ charset: selection.charset, collation: event.target.value }); }}><option value="">{text.encodingPlaceholder}</option>{catalog.current?.candidates.filter(pair => pair.charset === selection.charset).map(pair => <option key={pair.collation} value={pair.collation}>{pair.collation}</option>)}</select></Field>
       {catalog.current?.warnings.map(value => <p key={value} className="warning-text">{value}</p>)}<button disabled={!editable || !selection.charset || !selection.collation} onClick={() => void prepare()}>{text.preview}</button></>}
     {preview && <><h3>{text.sql}</h3><SqlEditor value={preview.sql} readOnly height={300}/><Field label={text.confirmation}><input aria-label={text.confirmation} value={confirmation} disabled={!editable} onChange={event => setConfirmation(event.target.value)}/></Field>
-      {tableCreateAcknowledgements.map((id, index) => <label key={id}><input type="checkbox" checked={acks.has(id)} disabled={!editable} onChange={event => setAcks(current => { const next = new Set(current); if (event.target.checked) next.add(id); else next.delete(id); return next; })}/>{index ? text.ackCreate : text.ackDdl}</label>)}</>}
+      {requiredAcknowledgements.map((id, index) => <label key={id}><input type="checkbox" checked={acks.has(id)} disabled={!editable} onChange={event => setAcks(current => { const next = new Set(current); if (event.target.checked) next.add(id); else next.delete(id); return next; })}/>{id === generatedColumnAcknowledgement ? generatedText.ack : index ? text.ackCreate : text.ackDdl}</label>)}</>}
     {outcome && <p role="status">{outcome}</p>}<ErrorBox message={error}/>
   </div><footer className="modal-footer"><button disabled={busy} onClick={() => void leave(false)}>{text.close}</button><button disabled={busy || attempted} onClick={() => void leave(true)}>{text.back}</button>{busy && <button onClick={() => { if (fence.current.cancel() && activeTask.current) void service.current.cancel(activeTask.current).catch(report); }}>{text.cancel}</button>}<span className="grow"/><button className="primary" disabled={!editable || !confirmed} onClick={() => void apply()}>{text.apply}</button></footer></Modal>;
 }

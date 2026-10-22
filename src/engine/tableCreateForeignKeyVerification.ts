@@ -7,7 +7,7 @@ import type { TableColumnDefinitionDocument } from '../shared/tableColumnPatches
 import type { TableCreateDesign } from '../shared/tableCreate';
 
 /** SHOW完整语义须逐项等于本次结构化设计；不合并NO ACTION/RESTRICT，也不猜父库或列序。 */
-export function readCreatedForeignKeys(document: TableColumnDefinitionDocument, design: TableCreateDesign, serverVersion: string): TableForeignKeyDefinitionRead {
+export function readCreatedForeignKeys(document: TableColumnDefinitionDocument, design: Pick<TableCreateDesign, 'database' | 'foreignKeys'>, serverVersion: string): TableForeignKeyDefinitionRead {
   const parsed = readTableForeignKeyDefinition(document, design.database, serverVersion);
   if (!parsed.complete || parsed.unclassifiedConstraintRanges.length || parsed.foreignKeys.length !== design.foreignKeys.length) throw Error('新表外键完整定义未知或数量不符');
   const names = new Set<string>();
