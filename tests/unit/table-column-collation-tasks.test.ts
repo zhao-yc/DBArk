@@ -13,6 +13,7 @@ import { TableColumnPatchTasks } from '../../src/engine/tableColumnPatchTasks';
 import { StructurePatchCache, structureCacheLimits } from '../../src/engine/structurePatchCache';
 import { readColumnCollationTaskFacts } from '../../src/engine/tableColumnCollationTaskRead';
 import * as collationProjection from '../../src/engine/tableColumnCollationTaskRead';
+import * as generatedColumnRead from '../../src/engine/tableGeneratedColumnRead';
 
 /** 可变源仅代表RAM目录观测；不触及账号、连接配置、认证、环境变量或真实数据库。 */
 function makeFacts(collation = 'utf8mb4_bin') {
@@ -124,9 +125,14 @@ it.each([1142, 1143, 1227])('明确附加目录权限%s只关闭新能力，旧c
   f.state.after = makeFacts(); f.state.after.base.source = f.state.after.base.source.replace("COMMENT '保留COLLATE字样'", "COMMENT '新'");
   expect(await f.apply(value)).toMatchObject({ ddlCompleted: true, definitionVerified: true });
 });
-it('准确旧版本仍沿原get并保留七属性，不查询物理目录', async () => {
-  const f = fixture(); f.state.version = '8.0.46'; f.state.current.base.serverVersion = '8.0.46';
-  const snapshot = await f.get(); expect(snapshot.collationCatalog).toBeUndefined(); expect(Object.keys(snapshot.columns[1].access)).toEqual(['name', 'type', 'nullable', 'default', 'comment', 'position', 'onUpdate']); expect(f.sent.filter(sql => sql.startsWith('SELECT'))).toHaveLength(0);
+it('列排序规则准确旧版8.0.46仍沿原get保留七属性且零物理目录，新生成用途由独立Engine专项覆盖', async () => {
+  // 仅此用例隔离无关新用途；不能因生成列支持8.0.46而放宽列排序规则原准确版本/零SELECT断言。
+  const spy = vi.spyOn(generatedColumnRead, 'readGeneratedColumnFacts').mockResolvedValue({ kind: 'unavailable', reason: '本例仅验证列排序规则准确版本门；生成列由独立Engine专项覆盖' });
+  try {
+    const f = fixture(); f.state.version = '8.0.46'; f.state.current.base.serverVersion = '8.0.46';
+    const snapshot = await f.get(); expect(snapshot.collationCatalog).toBeUndefined(); expect(Object.keys(snapshot.columns[1].access)).toEqual(['name', 'type', 'nullable', 'default', 'comment', 'position', 'onUpdate']); expect(f.sent.filter(sql => sql.startsWith('SELECT'))).toHaveLength(0);
+    expect(spy).toHaveBeenCalledOnce(); expect(snapshot.generatedAccess).toMatchObject({ editable: false, reason: expect.any(String) });
+  } finally { spy.mockRestore(); }
 });
 it.each([1045, 1054, 1146, 2013, undefined])('附加读取的认证/未知/断线%s不能吞为普通get成功', async errno => {
   const f = fixture(), error = Object.assign(new Error('原始驱动错误'), { errno }); f.state.failSql = /^SELECT VERSION/; f.state.error = error;
