@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { columnEncodingSchema, columnEncodingMessages } from './tableColumnEncoding';
 import { inspectStructurePatchInput } from './structurePatchInput';
 import type { SqlLexicalMode } from './queryParameters';
 import type { TableEncodingPair } from './tableDefaultEncoding';
@@ -176,7 +177,7 @@ const position = z.discriminatedUnion('kind', [z.object({ kind: z.literal('first
 export const columnPatchSchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('add'), clientKey: ref, name, type: columnTypePatchSchema, nullable: z.boolean(), default: columnDefaultPatchSchema, comment: z.string(), position, onUpdate: columnOnUpdatePatchSchema.optional(), generated: generatedColumnSchema.optional() }).strict(),
   z.object({ kind: z.literal('drop'), columnRef: ref }).strict(),
-  z.object({ kind: z.literal('alter'), columnRef: ref, changes: z.object({ name: name.optional(), type: columnTypePatchSchema.optional(), nullable: z.boolean().optional(), default: columnDefaultPatchSchema.optional(), comment: z.string().optional(), position: position.optional(), onUpdate: columnOnUpdatePatchSchema.optional(), collation: columnCollationPatchSchema.optional(), generation: generationExpressionSchema.optional(), autoIncrement: z.boolean().optional() }).strict() }).strict(),
+  z.object({ kind: z.literal('alter'), columnRef: ref, changes: z.object({ name: name.optional(), type: columnTypePatchSchema.optional(), nullable: z.boolean().optional(), default: columnDefaultPatchSchema.optional(), comment: z.string().optional(), position: position.optional(), onUpdate: columnOnUpdatePatchSchema.optional(), collation: columnCollationPatchSchema.optional(), generation: generationExpressionSchema.optional(), autoIncrement: z.boolean().optional(), encoding: columnEncodingSchema.optional() }).strict() }).strict(),
 ]);
 export type ColumnPatch = z.infer<typeof columnPatchSchema>;
 
@@ -210,6 +211,8 @@ export function inspectColumnPatchInput(input: unknown): { value: unknown; bytes
 export function validateColumnPatches(input: unknown, maxDecimalScale: 30 | 38 = 30): ColumnPatch[] {
   const checked = inspectColumnPatchInput(input);
   const patches = z.array(columnPatchSchema).min(1).max(tableColumnPatchLimits.patches).parse(checked.value);
+  const encoding = patches.find(patch => patch.kind === 'alter' && Object.hasOwn(patch.changes, 'encoding'));
+  if (encoding && (patches.length !== 1 || encoding.kind !== 'alter' || Object.keys(encoding.changes).length !== 1 || !encoding.changes.encoding)) throw Error(columnEncodingMessages.isolated);
   const autoIncrement = patches.find(patch => patch.kind === 'alter' && Object.hasOwn(patch.changes, 'autoIncrement'));
   if (autoIncrement && (patches.length !== 1 || autoIncrement.kind !== 'alter' || Object.keys(autoIncrement.changes).length !== 1 || typeof autoIncrement.changes.autoIncrement !== 'boolean')) throw new Error('列自增属性只能单列单属性独立修改');
   const generated = patches.find(patch => patch.kind === 'add' && Object.hasOwn(patch, 'generated'));
@@ -246,7 +249,7 @@ export function validateColumnPatches(input: unknown, maxDecimalScale: 30 | 38 =
 
 /** 字段差异 IPC 只传目标、快照引用或一次性预览令牌；执行不接受客户端 SQL。 */
 export interface TableColumnPatchTarget { connectionId: string; database: string; table: string; }
-export interface TableColumnGetInput extends TableColumnPatchTarget { taskId: string; }
+export interface TableColumnGetInput extends TableColumnPatchTarget { taskId: string; includeEncodingFacts?: boolean; }
 export interface TableColumnPreviewInput { snapshotId: string; patches: ColumnPatch[]; taskId: string; }
 export interface TableColumnApplyInput { previewToken: string; acknowledgements: string[]; taskId: string; }
 export interface TableColumnReleaseInput { snapshotId?: string; previewToken?: string; }
@@ -266,6 +269,8 @@ export interface TableColumnView {
   onUpdate?: ColumnOnUpdatePatch;
   /** 有效编码来自实际列目录；access仅为本快照能力，不能替代preview/apply重核。 */
   collation?: { current: TableEncodingPair; access: ColumnAttributeAccess };
+  /** 跨字符集专用途；不扩大旧七属性及同字符集collation访问能力。 */
+  encoding?: { current: TableEncodingPair; access: ColumnAttributeAccess };
   access: Record<ColumnEditableAttribute, ColumnAttributeAccess>;
 }
 export interface TableColumnGetOutput {
@@ -273,6 +278,7 @@ export interface TableColumnGetOutput {
   columns: TableColumnView[]; warnings: string[];
   /** 只在真实完整目录与合计预算允许时提供；不得截断、猜测或在每列重复。 */
   collationCatalog?: TableEncodingPair[];
+  encodingCatalog?: TableEncodingPair[];
   capabilities: { dialect: 'mysql' | 'mariadb'; serverVersion: string; maxDecimalScale: 30 | 38 };
   /** 本快照完整生成目录的新增准入，不改变已有生成列的只读属性。 */
   generatedAccess?: { editable: boolean; reason?: string };

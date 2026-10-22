@@ -18,16 +18,26 @@ import { generatedExpressionAccess, prepareGeneratedExpressionAccess } from './t
 import { readTableColumnAutoIncrementFacts, assertTableColumnAutoIncrementUnchanged, type TableColumnAutoIncrementFacts } from './tableColumnAutoIncrementRead';
 import { tableColumnAutoIncrementAccess, planTableColumnAutoIncrement, verifyTableColumnAutoIncrement, sameTableColumnAutoIncrementMode, type TableColumnAutoIncrementPlan } from './tableColumnAutoIncrementSql';
 import { indexReferenceNames } from './tableIndexRead';
+import { readColumnEncodingFacts, assertColumnEncodingUnchanged, type ColumnEncodingFacts } from './tableColumnEncodingRead';
+import { buildColumnEncodingPlan, checkColumnEncodingRoundtrip, columnEncodingAccess, verifyColumnEncodingChange, type ColumnEncodingPlan } from './tableColumnEncodingSql';
+import { columnEncodingMessages } from '../shared/tableColumnEncoding';
 
 export const columnTaskLimits = structureCacheLimits;
 export interface ColumnTaskOptions { label: string; columnPatch: TableColumnApplyProgress; executionTarget?: { database: string; table: string }; }
 export interface ColumnTaskHost { run<T>(connectionId: string, taskId: string, action: (context: ColumnTaskContext) => Promise<T>, options: ColumnTaskOptions): Promise<T>; }
-interface Snapshot extends DefinitionRead { id: string; target: TableColumnPatchTarget; revision: number; expires: number; refs: Map<string, string>; bytes: number; collation?: ColumnCollationTaskFacts; generated?: GeneratedColumnRead; autoIncrement?: TableColumnAutoIncrementFacts; }
+interface Snapshot extends DefinitionRead { id: string; target: TableColumnPatchTarget; revision: number; expires: number; refs: Map<string, string>; bytes: number; collation?: ColumnCollationTaskFacts; generated?: GeneratedColumnRead; autoIncrement?: TableColumnAutoIncrementFacts; encoding?: ColumnEncodingFacts; }
 interface PreviewBase { snapshot: Snapshot; patches: ColumnPatch[]; expires: number; bytes: number; }
 interface LegacyPreview extends PreviewBase { kind: 'legacy'; plan: ColumnPatchSqlPlan; generated?: GeneratedColumnRead; }
 interface CollationPreview extends PreviewBase { kind: 'collation'; plan: ColumnCollationExecutionPlan; collation: ColumnCollationTaskFacts; }
 interface AutoIncrementPreview extends PreviewBase { kind: 'auto-increment'; plan: TableColumnAutoIncrementPlan; autoIncrement: TableColumnAutoIncrementFacts; }
-type Preview = LegacyPreview | CollationPreview | AutoIncrementPreview;
+interface EncodingPreview extends PreviewBase { kind: 'encoding'; plan: ColumnEncodingPlan; encoding: ColumnEncodingFacts; }
+type Preview = LegacyPreview | CollationPreview | AutoIncrementPreview | EncodingPreview;
+
+/** 编码投影只认独立私有事实；缺省不改变七属性或旧collation权限。 */
+function encodingViews(columns: TableColumnView[], facts: ColumnEncodingFacts): TableColumnView[] {
+  const pairs = new Map(facts.base.encodings.map(value => [value.name, value]));
+  return columns.map(column => { const value = pairs.get(column.name); return value?.charset && value.collation ? { ...column, encoding: { current: { charset: value.charset, collation: value.collation }, access: columnEncodingAccess(facts, column.columnRef) } } : column; });
+}
 
 /** SHA 仅用于定义及身份相等校验，不持久化 SQL 或服务器凭据。 */
 const hash = (source: string): string => createHash('sha256').update(source).digest('hex');
@@ -296,15 +306,20 @@ export class TableColumnPatchTasks {
           autoBytes = Buffer.byteLength(JSON.stringify(autoColumns.map(column => column.autoIncrement)));
         }
         columns = autoColumns;
+        const encodingRead = input.includeEncodingFacts === true ? await readColumnEncodingFacts(context, target, read, {columns:refs,indexes:new Map()}, autoIncrement) : undefined;
+        let encoding = encodingRead?.kind === 'ready' ? encodingRead.value : undefined, encodingBytes = encoding ? encoding.bytes + Buffer.byteLength(JSON.stringify(encoding.catalog.candidates)) + 4096 : 0;
+        if (encoding && !this.fitsAdditional(baseBytes + additional + generatedBytes + autoBytes, encodingBytes)) { encoding = undefined; encodingBytes = 0; }
+        if (encoding) columns = encodingViews(columns, encoding);
+        else if (input.includeEncodingFacts === true) columns = columns.map(column => { const current = read.encodings.find(value => value.name === column.name); return current?.charset && current.collation ? {...column,encoding:{current:{charset:current.charset,collation:current.collation},access:{editable:false,reason:columnEncodingMessages.unavailable}}} : column; });
         context.checkCancelled();
         if (!this.pendingReads.has(pending)) throw new Error('字段读取期间连接已释放或修订变化；未登记快照');
-        snapshot = { ...read, id: randomUUID(), target, revision: currentRevision, expires: this.now() + columnTaskLimits.ttlMs, refs, bytes: baseBytes + additional + generatedBytes + autoBytes, ...(collation ? { collation } : {}), ...(generated ? { generated } : {}), ...(autoIncrement ? { autoIncrement } : {}) };
-        return { target, snapshotId: snapshot.id, ddlHash: hash(read.source), expiresAt: new Date(snapshot.expires).toISOString(), columns, generatedAccess: generated ? { editable: true } : { editable: false, reason: generatedReason }, ...(catalog ? { collationCatalog: catalog } : {}), warnings: [...(risks.length ? [tableColumnDefaultRiskMessage(risks)] : []), ...(document.columns.some(hasUnprovenBinaryDefault) ? ['二进制文本默认值不能证明原始字节（字段：' + document.columns.filter(hasUnprovenBinaryDefault).map(column => JSON.stringify(column.name)).join('、') + '），目标列不能重述或导出结构；旁列及专用默认值操作仍可预览，成功后完整定义需人工核对。'] : []), read.originalMode === read.normalizedMode ? '结构读取使用独立短会话，未修改查询标签。' : '专用结构会话已去除隐藏定义的兼容模式；原查询标签模式未变。', '执行前重核仍存在外部 DDL 并发窗口，请在维护时段暂停并行结构修改。'], capabilities: { dialect: read.context.dialect, serverVersion: read.serverVersion, maxDecimalScale: read.context.dialect === 'mariadb' ? 38 as const : 30 as const } };
+        snapshot = { ...read, id: randomUUID(), target, revision: currentRevision, expires: this.now() + columnTaskLimits.ttlMs, refs, bytes: baseBytes + additional + generatedBytes + autoBytes + encodingBytes, ...(collation ? { collation } : {}), ...(generated ? { generated } : {}), ...(autoIncrement ? { autoIncrement } : {}), ...(encoding ? { encoding } : {}) };
+        return { target, snapshotId: snapshot.id, ddlHash: hash(read.source), expiresAt: new Date(snapshot.expires).toISOString(), columns, generatedAccess: generated ? { editable: true } : { editable: false, reason: generatedReason }, ...(catalog ? { collationCatalog: catalog } : {}), ...(encoding ? { encodingCatalog: encoding.catalog.candidates.filter(pair=>pair.charset!=='binary').map(pair=>({...pair})) } : {}), warnings: [...(risks.length ? [tableColumnDefaultRiskMessage(risks)] : []), ...(document.columns.some(hasUnprovenBinaryDefault) ? ['二进制文本默认值不能证明原始字节（字段：' + document.columns.filter(hasUnprovenBinaryDefault).map(column => JSON.stringify(column.name)).join('、') + '），目标列不能重述或导出结构；旁列及专用默认值操作仍可预览，成功后完整定义需人工核对。'] : []), read.originalMode === read.normalizedMode ? '结构读取使用独立短会话，未修改查询标签。' : '专用结构会话已去除隐藏定义的兼容模式；原查询标签模式未变。', '执行前重核仍存在外部 DDL 并发窗口，请在维护时段暂停并行结构修改。'], capabilities: { dialect: read.context.dialect, serverVersion: read.serverVersion, maxDecimalScale: read.context.dialect === 'mariadb' ? 38 as const : 30 as const } };
       }, { label: '读取字段定义', columnPatch: progress });
       if (!this.pendingReads.has(pending) || snapshot.expires <= this.now()) throw new Error('字段快照已释放或过期，未登记能力令牌');
       // 严格关闭期间其它任务可能占用容量；仅新附加事实放弃，原基础快照仍须真实通过容量检查。
-      if ((snapshot.collation || snapshot.generated || snapshot.autoIncrement) && !this.fitsAdditional(baseBytes, snapshot.bytes - baseBytes)) {
-        delete snapshot.collation; delete snapshot.generated; delete snapshot.autoIncrement; snapshot.bytes = baseBytes; output.columns = baseColumns; delete output.collationCatalog;
+      if ((snapshot.collation || snapshot.generated || snapshot.autoIncrement || snapshot.encoding) && !this.fitsAdditional(baseBytes, snapshot.bytes - baseBytes)) {
+        delete snapshot.collation; delete snapshot.generated; delete snapshot.autoIncrement; delete snapshot.encoding; snapshot.bytes = baseBytes; output.columns = baseColumns; delete output.collationCatalog; delete output.encodingCatalog;
         output.generatedAccess = { editable: false, reason: '生成列附加证据超过共享缓存预算，请关闭旧结构窗口后重新读取' };
       }
       this.capacity(snapshot.bytes, 'snapshot'); this.snapshots.set(snapshot.id, snapshot);
@@ -325,6 +340,19 @@ export class TableColumnPatchTasks {
       const read = await readDefinition(context, snapshot.target, true); assertSnapshot(snapshot, read);
       if (patches.some(patch => patch.kind === 'alter' && Object.hasOwn(patch.changes, 'onUpdate'))) assertOnUpdateCatalog(patches, snapshot.refs, await onUpdateCatalog(context, snapshot.target, documentOf(read)));
       if (this.snapshots.get(input.snapshotId) !== snapshot || snapshot.expires <= this.now()) throw new Error('字段快照已释放或过期，未创建新预览');
+      const encodingPatch = patches.find(patch => patch.kind === 'alter' && Object.hasOwn(patch.changes, 'encoding'));
+      if (encodingPatch?.kind === 'alter') {
+        if (!snapshot.encoding || !encodingPatch.changes.encoding) throw Error(columnEncodingMessages.unavailable);
+        const fresh = await readColumnEncodingFacts(context, snapshot.target, read, indexReferenceNames(snapshot.encoding.core.indexes));
+        if (fresh.kind !== 'ready') throw Error(fresh.reason);
+        assertColumnEncodingUnchanged(snapshot.encoding, fresh.value);
+        const plan = buildColumnEncodingPlan(fresh.value, encodingPatch.columnRef, encodingPatch.changes.encoding);
+        await checkColumnEncodingRoundtrip(context, plan);
+        if (this.snapshots.get(snapshot.id) !== snapshot || snapshot.expires <= this.now()) throw Error('列编码快照已释放或过期，未发布预览');
+        const bytes = snapshot.bytes + fresh.value.bytes + Buffer.byteLength(evidenceJson([plan,patches])) + 2048;
+        this.capacity(bytes,'preview'); value = { kind:'encoding', snapshot, plan, patches, encoding:fresh.value, expires:Math.min(snapshot.expires,this.now()+columnTaskLimits.ttlMs),bytes };
+        return {previewToken:token,expiresAt:new Date(value.expires).toISOString(),target:{...snapshot.target},ddlHash:hash(snapshot.source),sql:plan.sql,changes:[{columnRef:encodingPatch.columnRef,description:'转换指定字符列的字符集和排序规则'}],warnings:plan.warnings,requiredAcknowledgements:['ddl-implicit-commit','external-ddl-window',...plan.requiredAcknowledgements],concurrencyPolicy:'recheck-before-ddl' as const};
+      }
       const autoPatch = patches.find(patch => patch.kind === 'alter' && Object.hasOwn(patch.changes, 'autoIncrement'));
       if (autoPatch?.kind === 'alter') {
         if (!snapshot.autoIncrement || typeof autoPatch.changes.autoIncrement !== 'boolean') throw Error('原快照没有完整列自增能力，请重新读取；未发送DDL');
@@ -379,6 +407,11 @@ export class TableColumnPatchTasks {
     const snapshot = preview.snapshot;
     if (snapshot.revision !== this.revision(revision)) throw new Error('连接配置已变化，请重新读取并预览；未发送 DDL');
     if (['ddl-implicit-commit', 'external-ddl-window', ...(preview.kind === 'collation' ? columnCollationAcknowledgements : []), ...preview.plan.requiredAcknowledgements].some(value => !input.acknowledgements.includes(value))) throw new Error('尚未确认结构变更后果；预览已消费，未发送 DDL');
+    if (preview.kind === 'encoding') {
+      const required = ['ddl-implicit-commit','external-ddl-window',...preview.plan.requiredAcknowledgements];
+      if (input.acknowledgements.length !== required.length || new Set(input.acknowledgements).size !== required.length || input.acknowledgements.some(value=>!required.includes(value))) throw Error('列编码转换确认项与实际预览不一致；预览已消费，未发送DDL');
+      return this.applyEncoding(input, preview);
+    }
     if (preview.kind === 'auto-increment') {
       const required = ['ddl-implicit-commit', 'external-ddl-window', ...preview.plan.requiredAcknowledgements];
       if (input.acknowledgements.length !== required.length || new Set(input.acknowledgements).size !== required.length || input.acknowledgements.some(value => !required.includes(value))) throw Error('列自增确认项与实际预览不一致；令牌已消费，未发送DDL');
@@ -508,5 +541,43 @@ export class TableColumnPatchTasks {
         if (progress.ddlSubmitted) { this.release(snapshot.target.connectionId); this.cache.release(snapshot.target.connectionId); }
       }
     }, { label: '执行字段变更', columnPatch: progress, executionTarget: snapshot.target });
+  }
+
+  /** 专用COPY动作保留原令牌/目标锁/关闭状态机；完整预检不等于外部写入锁或原子CAS。 */
+  private async applyEncoding(input: TableColumnApplyInput, preview: EncodingPreview): Promise<TableColumnApplyOutput> {
+    const snapshot = preview.snapshot, progress = initialProgress();
+    return this.host.run(snapshot.target.connectionId,input.taskId,async context=>{
+      progress.phase='rechecking';context.report();
+      const current=await readDefinition(context,snapshot.target,true);assertSnapshot(snapshot,current);
+      const fresh=await readColumnEncodingFacts(context,snapshot.target,current,indexReferenceNames(preview.encoding.core.indexes));
+      if(fresh.kind!=='ready')throw Error(fresh.reason);assertColumnEncodingUnchanged(preview.encoding,fresh.value);
+      const expected=buildColumnEncodingPlan(fresh.value,preview.plan.columnRef,preview.plan.next);
+      if(evidenceJson(expected)!==evidenceJson(preview.plan))throw Error('列编码计划或事实已变化，未发送DDL');
+      await checkColumnEncodingRoundtrip(context,expected);
+      await columnTaskQuery(context,`SET SESSION sql_mode = '${expected.executionMode}'`);
+      const modes=(await columnTaskQuery<{sqlMode:string}[]>(context,'SELECT @@SESSION.sql_mode AS sqlMode')).rows;
+      if(modes.length!==1||typeof modes[0].sqlMode!=='string'||!sameTableColumnAutoIncrementMode(modes[0].sqlMode,expected.executionMode))throw Error('列编码会话未完整保留原模式并启用STRICT_ALL_TABLES/NO_AUTO_VALUE_ON_ZERO，未发送DDL');
+      const final=await readDefinition(context,snapshot.target,false);assertSnapshot({...current,originalMode:modes[0].sqlMode,normalizedMode:modes[0].sqlMode},final);
+      if(this.snapshots.get(snapshot.id)!==snapshot||preview.expires<=this.now())throw Error('列编码快照已释放或过期，未发送DDL');
+      context.checkCancelled();progress.phase='executing';context.report();
+      try{
+        const result=(await columnTaskQuery<ResultSetHeader>(context,expected.sql,()=>{this.releaseTokens({snapshotId:snapshot.id});progress.ddlSubmitted=true;progress.outcome='unknown';context.report();})).rows;
+        if(!result||!Number.isSafeInteger(result.affectedRows)||result.affectedRows<0)throw Error('列编码未收到可确认DDL成功响应，请核对实际结果，不要重放');
+        progress.ddlCompleted=true;progress.outcome='succeeded';progress.phase='verifying';context.report();
+        const output:TableColumnApplyOutput={ddlSubmitted:true,ddlCompleted:true,definitionVerified:false,warnings:[]};
+        if(result.warningStatus!==0){
+          output.warnings.push('列编码DDL已完成，但服务器警告状态不是已确认零警告，请人工核对。');
+          try{const warnings=(await columnTaskQuery<{Code:number;Message:string}[]>(context,'SHOW WARNINGS LIMIT 20')).rows;if(!Array.isArray(warnings)||warnings.length>20)throw Error('警告目录无效');for(const warning of warnings)if(typeof warning.Message==='string'&&Number.isSafeInteger(warning.Code))output.warnings.push(`服务器警告 ${warning.Code}：${warning.Message.slice(0,1024)}`);}catch{output.warnings.push('原警告读取失败或取消；不要重复执行DDL。');}
+        }
+        try{
+          const after=await readDefinition(context,snapshot.target,false),afterFacts=await readColumnEncodingFacts(context,snapshot.target,after,indexReferenceNames(fresh.value.core.indexes));
+          if(afterFacts.kind!=='ready')throw Error(afterFacts.reason);context.checkCancelled();if(context.managed.broken||context.managed.signal?.aborted)throw Error('列编码后核已取消或断开');
+          output.definitionVerified=progress.definitionVerified=result.warningStatus===0&&verifyColumnEncodingChange(fresh.value,afterFacts.value,expected);
+          output.after={ddlHash:hash(after.source),columns:encodingViews(views(documentOf(after),snapshot.refs,after.serverVersion,new Set(),after.encodings),afterFacts.value)};
+          if(!output.definitionVerified)output.verificationError='列编码DDL已完成，但完整定义、目录或原属性未能全部核验；请核对实际结果，不要重放。';
+        }catch{output.verificationError='列编码DDL已收到成功响应，但取消、断线或目录失败使后核未完成；不要重放。';}
+        context.report();return output;
+      }finally{if(progress.ddlSubmitted){this.release(snapshot.target.connectionId);this.cache.release(snapshot.target.connectionId);}}
+    },{label:'执行字符列编码转换',columnPatch:progress,executionTarget:snapshot.target});
   }
 }

@@ -4,6 +4,8 @@ import { columnOnUpdateVersionSupported, sameColumnOnUpdate } from '../shared/ta
 import { parseGeneratedColumnExpression, sameGeneratedColumnInputExpression } from '../shared/tableGeneratedColumn';
 import { columnCollationPatchSchema, type TableColumnGetOutput } from '../shared/tableColumnPatches';
 import { sameTableEncodingPair, tableDefaultEncodingLimits, type TableEncodingPair } from '../shared/tableDefaultEncoding';
+import { hasColumnEncodingPatch, makeColumnEncodingAlter } from './columnEncoding';
+import { columnEncodingZh } from './locales/columnEncoding.zh-CN';
 
 export type ColumnChanges = Extract<ColumnPatch, { kind: 'alter' }>['changes'];
 /** 候选授权与目标绑定原快照；相同名字或版本文本不能替代原始目录身份。 */
@@ -78,6 +80,7 @@ export function formatReadColumnDefault(value: ReadColumnDefault): string {
 }
 /** 风险ID只用于协议，确认句集中中文；未知ID拒执行，不猜含义或沿用原型属性。 */
 export function columnAcknowledgementLabel(id: string, generationEditing = false): string | undefined {
+  if (id === 'column-encoding-copy') return columnEncodingZh.acknowledgement;
   if (generationEditing && id === 'generated-column-computation') return text.ackGenerationComputation;
   const labels: Record<string, string> = { 'ddl-implicit-commit': text.ackImplicit, 'external-ddl-window': text.ackWindow, 'drop-column-data': text.ackDrop, 'external-name-dependencies': text.ackDependencies, 'conversion-or-nullability': text.ackConversion, 'column-collation-semantics': text.ackCollationSemantics, 'column-collation-default-algorithm': text.ackCollationAlgorithm, 'generated-column-computation': text.ackGenerated, 'generated-expression-recalculation': text.ackGenerationRecalculation, 'column-auto-increment-copy': text.ackAutoIncrementCopy };
   return Object.hasOwn(labels, id) ? labels[id] : undefined;
@@ -123,7 +126,12 @@ export function columnTypeLabel(type: ColumnTypePatch): string {
   }
 }
 /** 恢复原值时消除差异，同时按服务器能力拒绝修改只读属性。 */
-export function makeColumnAlter(column: TableColumnView, changes: ColumnChanges, catalog?: readonly TableEncodingPair[]): ColumnPatch | null {
+export function makeColumnAlter(column: TableColumnView, changes: ColumnChanges, catalog?: readonly TableEncodingPair[], encodingCatalog?: readonly TableEncodingPair[]): ColumnPatch | null {
+  // 跨字符集使用独立目录及授权，不能借旧同字符集排序规则或七属性能力进入。
+  if (Object.hasOwn(changes, 'encoding')) {
+    if (Object.keys(changes).length !== 1) throw Error(columnEncodingZh.mixed);
+    return makeColumnEncodingAlter(column, changes.encoding!, encodingCatalog);
+  }
   // 自增不属于原七项access；只接受显式布尔和独立授权，不自动改DEFAULT/NULL或补索引。
   if (Object.hasOwn(changes, 'autoIncrement')) {
     if (Object.keys(changes).length !== 1) throw new Error(text.autoIncrementMixed);
@@ -150,6 +158,7 @@ export function makeColumnAlter(column: TableColumnView, changes: ColumnChanges,
     if (key === 'collation') continue;
     if (key === 'generation') continue;
     if (key === 'autoIncrement') continue;
+    if (key === 'encoding') continue;
     const original = key === 'type' ? column.typeSql.trim().toUpperCase() : key === 'default' ? editableColumnDefault(column.default) : key === 'position' ? undefined : column[key];
     if (key === 'onUpdate' && sameColumnOnUpdate(column.onUpdate, value as typeof column.onUpdate, column.typeSql)) continue;
     const comparable = key === 'type' ? columnTypeLabel(value as ColumnTypePatch).toUpperCase() : value;
@@ -164,9 +173,15 @@ export function setColumnPatch(patches: readonly ColumnPatch[], key: string, nex
   const other = patches.filter(patch => (patch.kind === 'add' ? patch.clientKey : patch.columnRef) !== key); return next ? [...other, next] : other;
 }
 /** 在网络预览前校验名称、位置和预算；引用始终来自快照或新增clientKey。 */
-export function validateColumnDrafts(columns: readonly TableColumnView[], input: readonly ColumnPatch[], scale: 30 | 38, catalog?: readonly TableEncodingPair[], generatedContext?: Pick<TableColumnGetOutput, 'capabilities' | 'generatedAccess'>): ColumnPatch[] {
+export function validateColumnDrafts(columns: readonly TableColumnView[], input: readonly ColumnPatch[], scale: 30 | 38, catalog?: readonly TableEncodingPair[], generatedContext?: Pick<TableColumnGetOutput, 'capabilities' | 'generatedAccess' | 'encodingCatalog'>): ColumnPatch[] {
   if (!input.length) throw new Error(text.noChange);
   const patches = validateColumnPatches(input, scale); const refs = new Map(columns.map(column => [column.columnRef, column]));
+  // 恢复原值不产生差异；跨字符集必须独立成批并反查原完整目录。
+  if (hasColumnEncodingPatch(patches)) {
+    const patch = patches[0]; if (patches.length !== 1 || patch.kind !== 'alter' || Object.keys(patch.changes).length !== 1) throw Error(columnEncodingZh.mixed);
+    const column = refs.get(patch.columnRef); if (!column) throw Error(text.missing);
+    if (!makeColumnAlter(column, patch.changes, undefined, generatedContext?.encodingCatalog)) throw Error(text.noChange);
+  }
   // 单项自增不能和任何列、位置或其它专用属性混批；恢复原值也不能借机提交无效差异。
   const autoIncrements = patches.filter(patch => patch.kind === 'alter' && Object.hasOwn(patch.changes, 'autoIncrement'));
   if (autoIncrements.length) {
@@ -206,7 +221,7 @@ export function validateColumnDrafts(columns: readonly TableColumnView[], input:
       if (value && value.precision !== undefined && value.precision !== precision) throw new Error(text.onUpdatePrecision);
     }
     if (patch.kind === 'add') { if (refs.has(patch.clientKey)) throw new Error(text.duplicate); names.set(patch.clientKey, patch.name); }
-    else if (patch.kind === 'alter') { for (const key of Object.keys(patch.changes) as (keyof ColumnChanges)[]) { if (key === 'generation' || key === 'autoIncrement') continue; if (key === 'collation') { if (!makeColumnAlter(refs.get(patch.columnRef)!, patch.changes, catalog)) throw new Error(text.noChange); continue; } if (!refs.get(patch.columnRef)!.access[key].editable) throw new Error(refs.get(patch.columnRef)!.access[key].reason || text.readonly); } if (patch.changes.name !== undefined) names.set(patch.columnRef, patch.changes.name); }
+    else if (patch.kind === 'alter') { for (const key of Object.keys(patch.changes) as (keyof ColumnChanges)[]) { if (key === 'generation' || key === 'autoIncrement' || key === 'encoding') continue; if (key === 'collation') { if (!makeColumnAlter(refs.get(patch.columnRef)!, patch.changes, catalog)) throw new Error(text.noChange); continue; } if (!refs.get(patch.columnRef)!.access[key].editable) throw new Error(refs.get(patch.columnRef)!.access[key].reason || text.readonly); } if (patch.changes.name !== undefined) names.set(patch.columnRef, patch.changes.name); }
   }
   if (!names.size) throw new Error(text.lastColumn);
   const folded = new Set<string>(); for (const name of names.values()) { if (folded.has(name.toLowerCase())) throw new Error(text.duplicate); folded.add(name.toLowerCase()); }
