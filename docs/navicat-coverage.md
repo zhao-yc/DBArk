@@ -2,6 +2,8 @@
 
 ## 当前开发安排（2026-10-22）
 
+O01新增[数值生成列设计入口](development/generated-column-add-20261022.md)：已有表单独追加VIRTUAL／STORED整数或DECIMAL生成列，实际候选与有界加减乘表达式、SQL预览／确认、完整目录和原生表身份重核。准确`f7348692`的[六实例与Windows正式界面](../tests/integration/acceptance-generated-column-f7348692-20261022.md)通过12次单条ADD、66条原连接严格关闭及随机库精确清理；包含严格TLS、一元正号规范化、原精度／字节保持、后续计算及旧计划拒绝。最终Windows完整13855通过／1平台跳过、类型与构建通过，Linux CI13846通过／10条件跳过；首轮夹具／观察SQL／本机并发失败原件保留。既有生成列修改／转换、完整表达式、新表／分区、macOS及新安装等继续，完整O01及发行计数不增加，暂不发布。
+
 Q03新增[保存查询层级分组](development/saved-query-organization-20261022.md)：父子组管理、按组全文搜索、跨页100条有界选择／预览移动及整子树解散；独立组织元数据保留原SQL和来源摘要，全局CAS及原子写盘保护。最终类型／构建、完整13673项通过／1平台跳过；准确`05f4f33c`的[Windows正式窗口及独立SQLite](../tests/integration/acceptance-saved-query-organization-05f4f33c-20261022.md)首次通过58条资料、跨页27条、原绑定保存及两次正常启动，8次组织操作、零SQL任务／历史／秘密，2292输入和27封存保持。旧类型／夹具失败保留；macOS／安装版／窄窗及原生并发等另验，完整Q03及发行计数不增加，暂不发布。
 
 Q02新增[定位未完成SQL](development/query-failure-source-20261022.md)：执行调度返回原模板UTF16范围，原编辑器只选择／滚动／聚焦；支持全文、选区、当前语句及参数模板，模型／正文／连接变化使旧定位永久失效。准确`2f8536a5`的[六实例与Windows窗口](../tests/integration/acceptance-query-failure-source-2f8536a5-20261022.md)通过，真实按钮与光标移动复定位保持原模型版本及单次查询，独立导出／SQLite及资源收尾闭合；完整13553项通过／1平台跳过、类型及构建通过。原生只实测全文及光标移动，其它模式与失效边界由单元／React接线验证；macOS／安装版另验，完整Q02及发行计数不增加，暂不发布。
