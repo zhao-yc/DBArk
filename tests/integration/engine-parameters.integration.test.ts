@@ -77,7 +77,7 @@ describe.skipIf(!enabled)('远程类型参数查询', () => {
     expect(firstValues(await query('SELECT :v AS precise', [{ name: 'v', type: 'decimal', value: fraction }]))[0]).toBe(fraction);
     const end = capabilities.allowTimeEndpointFraction ? '838:59:59.999999' : '838:59:59.000000';
     expect(firstValues(await query('SELECT :v AS duration', [{ name: 'v', type: 'time', value: end }]))[0]).toBe(end);
-    await expect(query('INSERT INTO parameter_values(id) VALUES (100); SELECT :v', [{ name: 'v', type: 'time', value: '839:00:00' }])).rejects.toThrow();
+    await expect(query('INSERT INTO parameter_values(id) VALUES (100); SELECT :v', [{ name: 'v', type: 'time', value: '839:00:00' }])).resolves.toMatchObject({ results: [], failure: { statementOrdinal: 1, statementsCompleted: 0, message: expect.any(String) } });
     expect(firstValues(await query('SELECT COUNT(*) FROM parameter_values WHERE id=100')).map(String)).toEqual(['0']);
   });
 
@@ -110,7 +110,7 @@ describe.skipIf(!enabled)('远程类型参数查询', () => {
 
   it('类型错误、缺参及多余参数均不会执行第一条写入', async () => {
     for (const parameters of [[{ name: 'v', type: 'integer', value: '1;DROP TABLE parameter_values' }], [], [{ name: 'v', type: 'null' }, { name: 'unused', type: 'null' }]] as QueryParameter[][]) {
-      await expect(query('INSERT INTO parameter_values(id) VALUES (11); SELECT :v', parameters)).rejects.toThrow();
+      await expect(query('INSERT INTO parameter_values(id) VALUES (11); SELECT :v', parameters)).resolves.toMatchObject({ results: [], failure: { statementOrdinal: 1, statementsCompleted: 0, message: expect.any(String) } });
       expect(firstValues(await query('SELECT COUNT(*) FROM parameter_values WHERE id=11')).map(String)).toEqual(['0']);
     }
   });
@@ -132,7 +132,8 @@ describe.skipIf(!enabled)('远程类型参数查询', () => {
     const secret = '仅本标签秘密_' + randomUUID();
     await query('INSERT INTO parameter_unique VALUES (:v)', [{ name: 'v', type: 'text', value: secret }]);
     events.length = 0;
-    await expect(query('INSERT INTO parameter_unique VALUES (:v); INSERT INTO parameter_values(id) VALUES (12)', [{ name: 'v', type: 'text', value: secret }])).rejects.toThrow('ER_DUP_ENTRY');
+    const failed = await query('INSERT INTO parameter_unique VALUES (:v); INSERT INTO parameter_values(id) VALUES (12)', [{ name: 'v', type: 'text', value: secret }]);
+    expect(failed).toMatchObject({ results: [], failure: { statementOrdinal: 1, statementsCompleted: 0, message: expect.stringContaining('ER_DUP_ENTRY') } }); expect(failed.failure!.message).not.toContain(secret);
     expect(JSON.stringify(events)).not.toContain(secret);
     expect(firstValues(await query('SELECT COUNT(*) FROM parameter_values WHERE id=12')).map(String)).toEqual(['0']);
     const output = await query('SELECT :v AS value', [{ name: 'v', type: 'text', value: secret }]);
@@ -166,7 +167,7 @@ describe.skipIf(!enabled)('远程类型参数查询', () => {
       const names = await engine.handle('query.parameterNames', { sessionId: isolated, sql: 'SELECT :v' });
       expect(names.ansiQuotesKnown).toBe(false); expect(names.noBackslashEscapesKnown).toBe(false); expect(names.names).toEqual(['v']);
       expect(firstValues(await query('SELECT :v AS value', [{ name: 'v', type: 'integer', value: '42' }], isolated)).map(String)).toEqual(['42']);
-      await expect(query('SELECT :v AS "path\\"', [{ name: 'v', type: 'text', value: '不能猜测' }], isolated)).rejects.toThrow('歧义');
+      await expect(query('SELECT :v AS "path\\"', [{ name: 'v', type: 'text', value: '不能猜测' }], isolated)).resolves.toMatchObject({ results: [], failure: { statementOrdinal: 1, statementsCompleted: 0, message: expect.stringContaining('歧义') } });
       expect(await engine.handle('query.sessionState', { sessionId: isolated })).toEqual({ transactionOpen: true, transactionKnown: true, broken: false });
       await engine.handle('query.transaction', { sessionId: isolated, action: 'rollback' });
       expect(await engine.handle('query.sessionState', { sessionId: isolated })).toEqual({ transactionOpen: false, transactionKnown: true, broken: false });
@@ -203,7 +204,7 @@ describe.skipIf(!enabled)('远程类型参数查询', () => {
         const names = await engine.handle('query.parameterNames', { sessionId: isolated, sql: 'SELECT :v' });
         expect(names.ansiQuotesKnown).toBe(false); expect(names.noBackslashEscapesKnown).toBe(false);
         await expect(engine.handle('query.parameterNames', { sessionId: isolated, sql: template })).rejects.toThrow('歧义');
-        await expect(query(template, [{ name: 'ghost', type: 'integer', value: '7' }], isolated)).rejects.toThrow('歧义');
+        await expect(query(template, [{ name: 'ghost', type: 'integer', value: '7' }], isolated)).resolves.toMatchObject({ results: [], failure: { statementOrdinal: 1, statementsCompleted: 0, message: expect.stringContaining('歧义') } });
         expect(firstValues(await query('SELECT @@SESSION.sql_mode, :v', [{ name: 'v', type: 'integer', value: '42' }], isolated)).map(String)).toEqual(['', '42']);
       }
       await query('START TRANSACTION', undefined, isolated);
@@ -225,7 +226,7 @@ describe.skipIf(!enabled)('远程类型参数查询', () => {
       await query('START TRANSACTION; INSERT INTO parameter_values(id) VALUES (31)', undefined, isolated);
       expect(await engine.handle('query.sessionState', { sessionId: isolated })).toEqual({ transactionOpen: true, transactionKnown: true, broken: false });
       expect(firstValues(await query('SELECT ROW_COUNT()', undefined, isolated)).map(String)).toEqual(['1']);
-      await expect(query('INSERT INTO parameter_values(id) VALUES (:id)', [{ name: 'id', type: 'integer', value: '31' }], isolated)).rejects.toThrow('ER_DUP_ENTRY');
+      await expect(query('INSERT INTO parameter_values(id) VALUES (:id)', [{ name: 'id', type: 'integer', value: '31' }], isolated)).resolves.toMatchObject({ results: [], failure: { statementOrdinal: 1, statementsCompleted: 0, message: expect.stringContaining('ER_DUP_ENTRY') } });
       expect(await engine.handle('query.sessionState', { sessionId: isolated })).toEqual({ transactionOpen: true, transactionKnown: false, broken: false });
       await engine.handle('query.transaction', { sessionId: isolated, action: 'rollback' });
       expect(await engine.handle('query.sessionState', { sessionId: isolated })).toEqual({ transactionOpen: false, transactionKnown: true, broken: false });
@@ -237,11 +238,11 @@ describe.skipIf(!enabled)('远程类型参数查询', () => {
     try {
       await query("SET sql_mode='';", undefined, isolated);
       await query("DELIMITER $$\nCREATE PROCEDURE fail_protocol_mode() BEGIN SET SESSION sql_mode='ANSI_QUOTES,NO_BACKSLASH_ESCAPES'; SET SESSION session_track_system_variables=''; SIGNAL SQLSTATE '45000' SET MESSAGE_TEXT='预期的模式异常'; END$$\nDELIMITER ;\nSTART TRANSACTION", undefined, isolated);
-      await expect(query('CALL fail_protocol_mode()', undefined, isolated)).rejects.toThrow('预期的模式异常');
+      await expect(query('CALL fail_protocol_mode()', undefined, isolated)).resolves.toMatchObject({ results: [], failure: { statementOrdinal: 1, statementsCompleted: 0, message: expect.stringContaining('预期的模式异常') } });
       expect(await engine.handle('query.sessionState', { sessionId: isolated })).toEqual({ transactionOpen: true, transactionKnown: false, broken: false });
       const names = await engine.handle('query.parameterNames', { sessionId: isolated, sql: 'SELECT :v' });
       expect(names.ansiQuotesKnown).toBe(false); expect(names.noBackslashEscapesKnown).toBe(false);
-      await expect(query("SELECT 'path\\' AS value, :v", [{ name: 'v', type: 'integer', value: '1' }], isolated)).rejects.toThrow('歧义');
+      await expect(query("SELECT 'path\\' AS value, :v", [{ name: 'v', type: 'integer', value: '1' }], isolated)).resolves.toMatchObject({ results: [], failure: { statementOrdinal: 1, statementsCompleted: 0, message: expect.stringContaining('歧义') } });
       expect(firstValues(await query('SELECT :v AS value', [{ name: 'v', type: 'integer', value: '42' }], isolated)).map(String)).toEqual(['42']);
       expect((await engine.handle('query.parameterNames', { sessionId: isolated, sql: 'SELECT :v' })).noBackslashEscapesKnown).toBe(false);
       await engine.handle('query.transaction', { sessionId: isolated, action: 'rollback' });
@@ -253,7 +254,7 @@ describe.skipIf(!enabled)('远程类型参数查询', () => {
     const isolated = (await engine.handle('sessions.open', { connectionId: profile.id, database })).sessionId;
     try {
       await query('START TRANSACTION; INSERT INTO parameter_values(id) VALUES (32)', undefined, isolated);
-      await expect(query('CREATE TABLE parameter_values (id INT)', undefined, isolated)).rejects.toThrow();
+      await expect(query('CREATE TABLE parameter_values (id INT)', undefined, isolated)).resolves.toMatchObject({ results: [], failure: { statementOrdinal: 1, statementsCompleted: 0, message: expect.any(String) } });
       const state = await engine.handle('query.sessionState', { sessionId: isolated });
       expect(state.transactionKnown).toBe(false); expect(state.broken).toBe(false);
       await engine.handle('query.transaction', { sessionId: isolated, action: 'rollback' });

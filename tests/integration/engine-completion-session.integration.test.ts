@@ -37,7 +37,7 @@ describe.skipIf(!enabled)('200隔离实例：补全读取真实会话缓存',()=
     const taskId=randomUUID();await engine.handle('query.execute',{sessionId:id,taskId,sql:`USE ${identifier(a)};SELECT DATABASE()`,maxRows:20});
     expect(events.filter(event=>event.taskId===taskId&&event.executionDatabase).map(event=>event.executionDatabase)).toEqual([{state:'known',database:b}]);expect((await state(id)).database).toBe(a);
     const parameterId=randomUUID();await engine.handle('query.executeParameterized',{sessionId:id,taskId:parameterId,sql:'SELECT :v',parameters:[{name:'v',type:'text',value:'参数'}],maxRows:20});expect(events.find(event=>event.taskId===parameterId&&event.executionDatabase)?.executionDatabase).toEqual({state:'known',database:a});
-    const failed=randomUUID();await expect(engine.handle('query.execute',{sessionId:id,taskId:failed,sql:'SELECT * FROM dbark_missing_context_subject',maxRows:20})).rejects.toThrow();expect(events.find(event=>event.taskId===failed&&event.executionDatabase)?.executionDatabase).toEqual({state:'known',database:a});
+    const failed=randomUUID();await expect(engine.handle('query.execute',{sessionId:id,taskId:failed,sql:'SELECT * FROM dbark_missing_context_subject',maxRows:20})).resolves.toMatchObject({results:[],failure:{statementOrdinal:1,statementsCompleted:0,message:expect.any(String)}});expect(events.find(event=>event.taskId===failed&&event.executionDatabase)?.executionDatabase).toEqual({state:'known',database:a});
     const unknown=randomUUID();await engine.handle('query.execute',{sessionId:id,taskId:unknown,sql:'SELECT 1',maxRows:20});expect(events.find(event=>event.taskId===unknown&&event.executionDatabase)?.executionDatabase).toEqual({state:'unknown'});
   }));
   it('显式空库建连覆盖连接配置默认库，历史事件不会把无库误记为配置库',async()=>{
@@ -61,7 +61,7 @@ describe.skipIf(!enabled)('200隔离实例：补全读取真实会话缓存',()=
     await run(id,`CALL ${qualified(a,'p_schema')}()`);expect(await state(id)).toMatchObject({database:b,databaseKnown:true,busy:false});expect(cell(await run(id,'SELECT DATABASE() AS db'),'db')).toBe(b);
   },b));
   it('ERR后不以普通EOF恢复旧库，后续USE真报告才确认',async()=>session(async id=>{
-    await expect(run(id,'SELECT missing_column FROM missing_table')).rejects.toThrow();expect(await state(id)).toMatchObject({databaseKnown:false,broken:false});await run(id,'SELECT 1');expect((await state(id)).databaseKnown).toBe(false);await run(id,`USE ${identifier(b)}`);expect(await state(id)).toMatchObject({database:b,databaseKnown:true});
+    await expect(run(id,'SELECT missing_column FROM missing_table')).resolves.toMatchObject({results:[],failure:{statementOrdinal:1,statementsCompleted:0,message:expect.any(String)}});expect(await state(id)).toMatchObject({databaseKnown:false,broken:false});await run(id,'SELECT 1');expect((await state(id)).databaseKnown).toBe(false);await run(id,`USE ${identifier(b)}`);expect(await state(id)).toMatchObject({database:b,databaseKnown:true});
   }));
   it('繁忙会话只返回忙碌快照，读取缓存不取消原长查询',async()=>session(async id=>{
     const taskId=randomUUID(),query=engine.handle('query.execute',{sessionId:id,sql:'SELECT SLEEP(10)',taskId,maxRows:1}),failure=expect(query).rejects.toThrow();await expect.poll(async()=>(await state(id)).busy).toBe(true);expect(await state(id)).toEqual({databaseKnown:false,broken:false,busy:true});expect(events.filter(event=>event.taskId===taskId).at(-1)?.status).toBe('running');await engine.handle('query.cancel',{taskId});await failure;expect(events.filter(event=>event.taskId===taskId).at(-1)?.status).toBe('cancelled');

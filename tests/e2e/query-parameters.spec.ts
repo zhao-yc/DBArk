@@ -216,9 +216,16 @@ test.describe('实库类型参数查询', () => {
       const { sessionId } = await page.evaluate(input => window.dbark.invoke('sessions.open', input), { connectionId, database });
       try {
         const invalidLists: QueryParameter[][] = [[], [{ name: 'value', type: 'integer', value: '2' }, { name: 'unused', type: 'null' }], [{ name: 'value', type: 'null' }, { name: 'value', type: 'null' }]];
-        for (const parameters of invalidLists) {
-          const message = await page.evaluate(async input => { try { await window.dbark.invoke('query.executeParameterized', input); return ''; } catch (error) { return String(error); } }, { sessionId, sql: source, parameters, taskId: randomUUID(), maxRows: 10 });
-          expect(message).toMatch(/缺少命名参数值|多余参数|名称重复/);
+        for (const [index, parameters] of invalidLists.entries()) {
+          const input = { sessionId, sql: source, parameters, taskId: randomUUID(), maxRows: 10 };
+          if (index === 2) {
+            // 重复参数仍在IPC严格校验阶段拒绝；不得把连接故障等意外异常吞成预期失败。
+            await expect(page.evaluate(value => window.dbark.invoke('query.executeParameterized', value), input)).rejects.toThrow('查询参数名称重复');
+          } else {
+            const outcome = await page.evaluate(value => window.dbark.invoke('query.executeParameterized', value), input);
+            expect(outcome.results).toEqual([]); expect(outcome.failure).toMatchObject({ statementOrdinal: 1, statementsCompleted: 0 });
+            expect(outcome.failure!.message).toMatch(/缺少命名参数值|多余参数/);
+          }
           expect(await countRows(observer, database)).toBe(0);
         }
       } finally { await page.evaluate(input => window.dbark.invoke('sessions.close', input), { sessionId }); }

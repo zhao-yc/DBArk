@@ -129,7 +129,7 @@ describe('参数任务预检、会话模式和失败边界', () => {
     const active = await mocks.connect.mock.results.at(-1)!.value as ManagedConnection;
     active.serverStatus = undefined;
     await expect(engine.handle('query.parameterNames', { sessionId, sql: 'SELECT :v' })).rejects.toThrow('无法确定会话');
-    await expect(engine.handle('query.executeParameterized', { sessionId, sql: 'SELECT :v', parameters: [parameter('integer', '1')], taskId: 'missing-cache', maxRows: 10 })).rejects.toThrow('无法确定会话');
+    await expect(engine.handle('query.executeParameterized', { sessionId, sql: 'SELECT :v', parameters: [parameter('integer', '1')], taskId: 'missing-cache', maxRows: 10 })).resolves.toMatchObject({ results: [], failure: { statementOrdinal: 1, statementsCompleted: 0, message: expect.stringContaining('无法确定会话') } });
     expect(sent).toEqual([]); expect(mocks.execute).not.toHaveBeenCalled();
     expect(await engine.handle('query.sessionState', { sessionId })).toEqual({ transactionOpen: false, transactionKnown: false, broken: true });
   });
@@ -141,7 +141,7 @@ describe('参数任务预检、会话模式和失败边界', () => {
     expect(preview.names).toEqual(['v']); expect(preview.ansiQuotesKnown).toBe(false); expect(preview.warnings).toHaveLength(1);
     expect(await engine.handle('query.sessionState', { sessionId })).toEqual({ transactionOpen: true, transactionKnown: true, broken: false });
     await engine.handle('query.executeParameterized', { sessionId, sql: 'SELECT :v', parameters: [parameter('integer', '1')], taskId: 'uncertain-safe', maxRows: 10 });
-    await expect(engine.handle('query.executeParameterized', { sessionId, sql: 'SELECT "path\\", :v', parameters: [parameter('integer', '1')], taskId: 'uncertain-unsafe', maxRows: 10 })).rejects.toThrow('歧义');
+    await expect(engine.handle('query.executeParameterized', { sessionId, sql: 'SELECT "path\\", :v', parameters: [parameter('integer', '1')], taskId: 'uncertain-unsafe', maxRows: 10 })).resolves.toMatchObject({ results: [], failure: { statementOrdinal: 1, statementsCompleted: 0, message: expect.stringContaining('歧义') } });
     expect(sent).toEqual(['SELECT 1']); expect(mocks.execute).not.toHaveBeenCalled();
   });
   it('会话状态接口不发送 SQL，并可在执行失败后读取未提交事务', async () => {
@@ -154,7 +154,7 @@ describe('参数任务预检、会话模式和失败边界', () => {
   });
   it('所有类型、缺失和多余参数在首条写入前拒绝', async () => {
     for (const parameters of [[parameter('integer', '不合法')], [], [parameter('text', '合法'), { name: 'extra', type: 'null' }]]) {
-      await expect(engine.handle('query.executeParameterized', { sessionId, sql: 'INSERT INTO t VALUES (1); INSERT INTO t VALUES (:v)', parameters, taskId: 'invalid', maxRows: 10 })).rejects.toThrow();
+      await expect(engine.handle('query.executeParameterized', { sessionId, sql: 'INSERT INTO t VALUES (1); INSERT INTO t VALUES (:v)', parameters, taskId: 'invalid', maxRows: 10 })).resolves.toMatchObject({ results: [], failure: { statementOrdinal: 1, statementsCompleted: 0 } });
       expect(sent).toEqual([]);
     }
   });
@@ -176,18 +176,18 @@ describe('参数任务预检、会话模式和失败边界', () => {
   });
   it('动态模式后缺参准确报告部分执行，后续写入不发送', async () => {
     scenario = (sql, result) => { if (sql.startsWith('SET')) serverMode = 'NO_BACKSLASH_ESCAPES'; done(result); };
-    await expect(engine.handle('query.executeParameterized', { sessionId, sql: "SET sql_mode=@future; INSERT INTO t VALUES ('path\\', :missing)", parameters: [], taskId: 'partial', maxRows: 10 })).rejects.toThrow('已完成 1 条');
+    await expect(engine.handle('query.executeParameterized', { sessionId, sql: "SET sql_mode=@future; INSERT INTO t VALUES ('path\\', :missing)", parameters: [], taskId: 'partial', maxRows: 10 })).resolves.toMatchObject({ failure: { statementOrdinal: 2, statementsCompleted: 1, message: expect.stringContaining('已完成 1 条') } });
     expect(sent).toEqual(['SET sql_mode=@future']);
   });
   it('普通脚本也按最新 ANSI_QUOTES 分割，后条解析失败说明此前写入已完成', async () => {
     scenario = (sql, result) => { if (sql.startsWith('SET')) serverMode = 'ANSI_QUOTES'; done(result); };
     await engine.handle('query.execute', { sessionId, sql: 'SET sql_mode=\'ANSI_QUOTES\'; SELECT "path\\"; SELECT 3', taskId: 'normal-mode', maxRows: 10 });
     expect(sent).toHaveLength(3);
-    await expect(engine.handle('query.execute', { sessionId, sql: "INSERT INTO t VALUES (1); SELECT '", taskId: 'bad-tail', maxRows: 10 })).rejects.toThrow('已完成 1 条');
+    await expect(engine.handle('query.execute', { sessionId, sql: "INSERT INTO t VALUES (1); SELECT '", taskId: 'bad-tail', maxRows: 10 })).resolves.toMatchObject({ failure: { statementOrdinal: 2, statementsCompleted: 1, message: expect.stringContaining('已完成 1 条') } });
   });
   it('服务器错误包含参数秘密时只暴露安全代码，结果声明保持模板', async () => {
     scenario = (_sql, result) => result.emit('error', Object.assign(new Error('秘密值 duplicate value'), { code: 'ER_DUP_ENTRY' }));
-    await expect(engine.handle('query.executeParameterized', { sessionId, sql: 'INSERT INTO t VALUES (:v)', parameters: [parameter('text', '秘密值')], taskId: 'privacy', maxRows: 10 })).rejects.toThrow('ER_DUP_ENTRY');
+    await expect(engine.handle('query.executeParameterized', { sessionId, sql: 'INSERT INTO t VALUES (:v)', parameters: [parameter('text', '秘密值')], taskId: 'privacy', maxRows: 10 })).resolves.toMatchObject({ results: [], failure: { message: expect.stringContaining('ER_DUP_ENTRY') } });
     expect(JSON.stringify(events)).not.toContain('秘密值');
   });
 });

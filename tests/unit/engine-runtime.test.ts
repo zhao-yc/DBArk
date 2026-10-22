@@ -43,7 +43,7 @@ describe('查询任务与会话互斥', () => {
   it('驱动在连接上报告致命错误时查询立即失败并释放监听器', async () => {
     const active = await mocks.connect.mock.results.at(-1)!.value as ManagedConnection;
     scenario = () => { active.connection.emit('error', new Error('模拟解析器致命错误')); };
-    await expect(engine.handle('query.execute', { sessionId, sql: 'SELECT value', taskId: 'fatal-error', maxRows: 1 })).rejects.toThrow('模拟解析器致命错误');
+    await expect(engine.handle('query.execute', { sessionId, sql: 'SELECT value', taskId: 'fatal-error', maxRows: 1 })).resolves.toMatchObject({ results: [], failure: { statementOrdinal: 1, statementsCompleted: 0, message: expect.stringContaining('模拟解析器致命错误') } });
     expect(active.connection.listenerCount('error')).toBe(0); expect(events.at(-1)?.status).toBe('failed');
   });
   it('真实驱动的无字段 DDL/DML 状态包能正常完成，不能等待不存在的列数组', async () => {
@@ -163,7 +163,7 @@ describe('光标当前语句的真实引擎投递', () => {
     else if (condition === 'missing-mode') { active.sqlMode = undefined; active.serverStatus = undefined; }
     else if (condition === 'incomplete') { sql = "SELECT 1; SELECT '未完成"; offset = 2; }
     else if (condition === 'delimiter') { sql = 'DELIMITER $$\nSELECT 1$$'; offset = 2; }
-    await expect(engine.handle('query.execute', { sessionId, sql, currentStatement: { offset }, taskId: 'reject-current', maxRows: 10 })).rejects.toThrow();
+    await expect(engine.handle('query.execute', { sessionId, sql, currentStatement: { offset }, taskId: 'reject-current', maxRows: 10 })).resolves.toMatchObject({ results: [], failure: { statementOrdinal: 1, statementsCompleted: 0 } });
     expect(active.connection.query).not.toHaveBeenCalled(); expect(events.filter(event => event.executionSql)).toEqual([]); expect(mocks.execute).not.toHaveBeenCalled();
   });
   it('未知模式但所有候选边界一致时只发一条，沿原预算和事务状态', async () => {
@@ -180,12 +180,12 @@ describe('光标当前语句的真实引擎投递', () => {
   });
   it('发送后失败保留一次实际片段事件，不执行前后语句或自动重放', async () => {
     const actual: string[] = []; scenario = (sql, query) => { actual.push(sql); query.emit('error', new Error('当前语句失败')); };
-    await expect(engine.handle('query.execute', { sessionId, sql: 'SELECT before; SELECT current; SELECT after;', currentStatement: { offset: 24 }, taskId: 'current-failed', maxRows: 10 })).rejects.toThrow('已完成 0 条');
+    await expect(engine.handle('query.execute', { sessionId, sql: 'SELECT before; SELECT current; SELECT after;', currentStatement: { offset: 24 }, taskId: 'current-failed', maxRows: 10 })).resolves.toMatchObject({ results: [], failure: { statementOrdinal: 1, statementsCompleted: 0, message: expect.stringContaining('已完成 0 条') } });
     expect(actual).toEqual(['SELECT current']); expect(events.filter(event => event.executionSql).map(event => event.executionSql)).toEqual(['SELECT current']);
   });
   it('驱动同步拒绝接收时不报告已发送片段', async () => {
     const active = await mocks.connect.mock.results.at(-1)!.value as ManagedConnection; active.connection.query = (() => { throw Error('投递失败'); }) as never;
-    await expect(engine.handle('query.execute', { sessionId, sql: 'SELECT 1', currentStatement: { offset: 2 }, taskId: 'sync-current-failed', maxRows: 10 })).rejects.toThrow('投递失败'); expect(events.filter(event => event.executionSql)).toEqual([]);
+    await expect(engine.handle('query.execute', { sessionId, sql: 'SELECT 1', currentStatement: { offset: 2 }, taskId: 'sync-current-failed', maxRows: 10 })).resolves.toMatchObject({ results: [], failure: { message: expect.stringContaining('投递失败') } }); expect(events.filter(event => event.executionSql)).toEqual([]);
   });
   it('当前片段发送后取消只KILL本任务，事件保留一次且后句不投递', async () => {
     let pending: EventEmitter | undefined; const actual: string[] = []; scenario = (sql, query) => { actual.push(sql); pending = query; };
@@ -198,7 +198,7 @@ describe('光标当前语句的真实引擎投递', () => {
     const active = await mocks.connect.mock.results.at(-1)!.value as ManagedConnection, actual: string[] = [];
     scenario = (sql, query) => { actual.push(sql); active.broken = true; query.emit('error', Error('ECONNRESET')); };
     const input = { sessionId, sql: 'SELECT before; SELECT current;', currentStatement: { offset: 23 }, taskId: 'broken-current', maxRows: 10 };
-    await expect(engine.handle('query.execute', input)).rejects.toThrow('ECONNRESET'); await expect(engine.handle('query.execute', { ...input, taskId: 'after-broken-current' })).rejects.toThrow('断开');
+    await expect(engine.handle('query.execute', input)).resolves.toMatchObject({ results: [], failure: { message: expect.stringContaining('ECONNRESET') } }); await expect(engine.handle('query.execute', { ...input, taskId: 'after-broken-current' })).rejects.toThrow('断开');
     expect(actual).toEqual(['SELECT current']); expect(events.filter(event => event.executionSql)).toHaveLength(1);
   });
 });

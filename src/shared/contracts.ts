@@ -67,7 +67,7 @@ export interface ForeignKeyInfo { name: string; columns: string[]; referencedDat
 export interface TableInfo { database: string; name: string; columns: ColumnInfo[]; indexes: IndexInfo[]; foreignKeys: ForeignKeyInfo[]; primaryKey: string[]; editableKey: string[]; engine: string; ddl: string; charset?: string; collation?: string; comment?: string; /** 来自可信 information_schema.TABLES；未知类型不通过空 engine 推测。 */ objectKind?: 'table' | 'view'; }
 export interface ResultColumn { key: string; name: string; type: string; }
 export interface QueryResult { columns: ResultColumn[]; rows: DataRow[]; affectedRows?: number; insertId?: string; warningCount?: number; truncated: boolean; elapsedMs: number; statement: string; }
-export interface QueryOutcome { results: QueryResult[]; elapsedMs: number; transactionOpen?: boolean; explain?: ExplainPlan; }
+export interface QueryOutcome { results: QueryResult[]; elapsedMs: number; transactionOpen?: boolean; explain?: ExplainPlan; /** 首错停止后只携带此前完整结果；失败语句不保证未执行，也不会自动重放。 */ failure?: import('./queryFailure').QueryFailure; }
 export type FilterMode = 'all' | 'any';
 /** 数字引用同一filters数组位置；每条条件（含停用）在完整树中恰好出现一次。 */
 export interface FilterGroup { readonly mode: FilterMode; readonly children: readonly (number | FilterGroup)[]; }

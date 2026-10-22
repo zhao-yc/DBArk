@@ -595,8 +595,12 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
     if (command === 'sessions.open') sessions.set(result.sessionId, { connectionId: input.connectionId });
     if (command === 'sessions.close') sessions.delete(input.sessionId);
     if (command === 'table.apply' && !tableApplyReceipts.confirmed(taskId!)) throw Error('未收到可信提交确认，结果未知；请查看提交记录，不要重复执行原批次');
-    if (taskId && command!=='search.dataStart' && tasks.get(taskId)?.status === 'running') taskEvent({ taskId, status: 'completed', progress: 100, message: '执行完成' });
-    if (history && pendingHistory?.executionSqlReceived) persistAuxiliary(() => store.addHistory({ ...history, elapsedMs: Date.now() - start, success: true }));
+    // 查询可带首错停止前的完整结果返回；响应成功不代表整份脚本执行成功。
+    const queryFailure = command === 'query.execute' || command === 'query.executeParameterized' ? result?.failure : undefined;
+    const terminalStatus = taskId ? tasks.get(taskId)?.status : undefined;
+    if (taskId && queryFailure && (terminalStatus === 'running' || terminalStatus === 'completed')) taskEvent({ taskId, status: 'failed', progress: 100, message: queryFailure.message });
+    else if (taskId && command!=='search.dataStart' && terminalStatus === 'running') taskEvent({ taskId, status: 'completed', progress: 100, message: '执行完成' });
+    if (history && pendingHistory?.executionSqlReceived) persistAuxiliary(() => store.addHistory({ ...history, elapsedMs: Date.now() - start, success: !queryFailure, ...(queryFailure ? { error: persistedQueryError(command, queryFailure.message) } : {}) }));
     return command === 'table.apply' ? { ...result, ...tableApplyReceipts.finish(taskId!) } : result;
   } catch (error) {
     if (command === 'table.apply' && taskId && !sentToEngine) tableApplyReceipts.notDispatched(taskId);

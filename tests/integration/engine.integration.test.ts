@@ -77,7 +77,7 @@ describe.skipIf(!enabled)('远程 MySQL/MariaDB 数据库引擎', () => {
     const other = (await engine.handle('sessions.open', { connectionId: profile.id, database })).sessionId;
     try {
       await query('CREATE TEMPORARY TABLE tab_temp (id INT)');
-      await expect(query('SELECT * FROM tab_temp', other)).rejects.toThrow();
+      await expect(query('SELECT * FROM tab_temp', other)).resolves.toMatchObject({ results: [], failure: { statementOrdinal: 1, statementsCompleted: 0, message: expect.any(String) } });
       await query('CREATE TABLE transactions_test (id INT PRIMARY KEY) ENGINE=InnoDB');
       await engine.handle('query.transaction', { sessionId, action: 'begin' });
       await query('INSERT INTO transactions_test VALUES (1)');

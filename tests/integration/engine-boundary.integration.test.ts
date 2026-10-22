@@ -56,7 +56,7 @@ describe.skipIf(!enabled)('远程数据库权限、断线和容量边界', () =>
     const session = (await engine.handle('sessions.open', { connectionId: limited.id, database })).sessionId;
     try {
       expect((await query('SELECT * FROM permission_guard', session)).results[0].rows).toHaveLength(1);
-      await expect(query('INSERT INTO permission_guard VALUES (2)', session)).rejects.toThrow(/denied|permission/i);
+      await expect(query('INSERT INTO permission_guard VALUES (2)', session)).resolves.toMatchObject({ results: [], failure: { statementOrdinal: 1, statementsCompleted: 0, message: expect.stringMatching(/denied|permission/i) } });
       expect((await query('SELECT * FROM permission_guard')).results[0].rows).toHaveLength(1);
     } finally { await engine.handle('connections.close', { id: limited.id }); }
   });
@@ -68,7 +68,7 @@ describe.skipIf(!enabled)('远程数据库权限、断线和容量边界', () =>
       const connectionId = String((await query('SELECT CONNECTION_ID()', victim)).results[0].rows[0].c0);
       expect(connectionId).toMatch(/^\d+$/);
       const running = query('INSERT INTO disconnect_guard(value) VALUES(1); SELECT SLEEP(20)', victim);
-      const failure = expect(running).rejects.toThrow();
+      const failure = expect(running).resolves.toMatchObject({ results: [expect.objectContaining({ affectedRows: 1 })], failure: { statementOrdinal: 2, statementsCompleted: 1, message: expect.any(String) } });
       // 等到第一条写入确实提交后，只中断该测试会话，不影响其余客户端连接。
       await expect.poll(async () => Number((await query('SELECT COUNT(*) FROM disconnect_guard')).results[0].rows[0].c0)).toBe(1);
       await query(`KILL CONNECTION ${connectionId}`); await failure;
