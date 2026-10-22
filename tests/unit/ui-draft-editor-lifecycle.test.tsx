@@ -96,7 +96,8 @@ describe('真实ReactDOM编辑器卸载与父层草稿历史',()=>{
   let callback:ts.Expression|undefined;
   const visit=(node:ts.Node)=>{if(ts.isVariableDeclaration(node)&&node.name.getText(source)==='onGridEditingChange'&&node.initializer&&ts.isCallExpression(node.initializer))callback=node.initializer.arguments[0];ts.forEachChild(node,visit);};visit(source);expect(callback).toBeDefined();
   const setGridEditing=vi.fn(),activeGridEditor={current:{} as object|null},mounted={current:true};
-  const notify=runInNewContext(ts.transpileModule(`(${callback!.getText(source)})`,{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText,{mounted,activeGridEditor,setGridEditing}) as (editor:object,editing:boolean)=>void;
+  // 原例没有打开勾选值预览，补齐生产回调的新可空引用，原生命周期断言保持。
+  const notify=runInNewContext(ts.transpileModule(`(${callback!.getText(source)})`,{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText,{mounted,activeGridEditor,setGridEditing,selectedFilterRef:{current:null}}) as (editor:object,editing:boolean)=>void;
   const first={},second={};notify(first,true);notify(second,true);notify(first,false);expect(activeGridEditor.current).toBe(second);expect(setGridEditing.mock.calls).toEqual([[true],[true]]);notify(second,false);expect(setGridEditing).toHaveBeenLastCalledWith(false);
   activeGridEditor.current=second;setGridEditing.mockClear();mounted.current=false;notify(second,false);notify(first,true);expect(activeGridEditor.current).toBe(second);expect(setGridEditing).not.toHaveBeenCalled();
  });
