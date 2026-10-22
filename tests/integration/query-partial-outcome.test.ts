@@ -98,7 +98,8 @@ describe.sequential('查询首错保留完整前序结果六实例专项（Root�
       const schemaTask = task(), schema = await invoke('schema.apply', { connectionId: binding.profile.id, database, taskId: schemaTask, sql: `SELECT 1;\n${missing}` }, ['SELECT 1', missing]); expect(schema.error).toBeInstanceOf(Error); expect(schema.value).toBeUndefined();
       const schemaFact = facts.at(-1)!; expect(schemaFact).not.toBe(sessionFact); await lifetime.step(() => schemaFact.closed); assertQueryPartialClosed([schemaFact]);
       expect(events.filter(event => event.taskId === schemaTask && event.status !== 'running').map(event => event.status)).toEqual(['failed']);
-      const recoveredTask = task(), recovered = await invoke<QueryOutcome>('query.execute', { sessionId, taskId: recoveredTask, sql: 'SELECT 77 AS recovered', maxRows: 10 }, ['SELECT 77 AS recovered']); expect(recovered.error).toBeUndefined(); expect(recovered.value?.failure).toBeUndefined(); expect(recovered.value?.results[0].rows).toEqual([{ c0: 77 }]);
+      // 各版本对裸整数常量使用不同协议类型；明确CHAR后逐字验证，避免验收器误判合法精度策略。
+      const recoverySql = 'SELECT CAST(77 AS CHAR) AS recovered', recoveredTask = task(), recovered = await invoke<QueryOutcome>('query.execute', { sessionId, taskId: recoveredTask, sql: recoverySql, maxRows: 10 }, [recoverySql]); expect(recovered.error).toBeUndefined(); expect(recovered.value?.failure).toBeUndefined(); expect(recovered.value?.results[0].rows).toEqual([{ c0: '77' }]);
       expect(events.filter(event => event.taskId === recoveredTask && event.status !== 'running').map(event => event.status)).toEqual(['completed']);
       const closed = await invoke('sessions.close', { sessionId }); expect(closed.error).toBeUndefined(); await lifetime.step(() => sessionFact.closed); assertQueryPartialClosed([sessionFact]);
       await lifetime.step(() => engine!.closeAll()); const engineFacts = facts.filter(fact => fact.scope !== 'observer'); assertQueryPartialClosed(engineFacts);
