@@ -1,5 +1,5 @@
 import type { CellValue } from '../shared/contracts';
-import type { TableStatisticsOutput } from '../shared/tableStatistics';
+import { tableStatisticsColumnKind, type TableStatisticsOutput } from '../shared/tableStatistics';
 import { TableStatisticsIntent } from './tableStatisticsIntent';
 import { cellPreview } from './lib';
 import { tableStatisticsZh as text } from './locales/tableStatistics.zh-CN';
@@ -13,12 +13,22 @@ function cell(value: CellValue): void {
   throw Error(text.mismatch);
 }
 /** 对象、所选字段顺序及总量全部核对后才展示，不能接纳旧源或另列的成功回包。 */
-export function checkTableStatisticsOutput(intent: TableStatisticsIntent, columns: readonly string[], output: TableStatisticsOutput): void {
+export function checkTableStatisticsOutput(intent: TableStatisticsIntent, columns: readonly string[], output: TableStatisticsOutput, distinct = false): void {
   if (!intent.current() || JSON.stringify(output.source) !== JSON.stringify(intent.source) || !/^[a-f0-9]{64}$/.test(output.sourceDigest) || !Array.isArray(output.columns) || output.columns.length !== columns.length || !Array.isArray(output.warnings) || output.warnings.some(warning => typeof warning !== 'string')) throw Error(text.mismatch);
   const total = count(output.rowCount);
   for (let index = 0; index < columns.length; index++) {
     const result = output.columns[index], original = intent.source.columns.find(column => column.name === columns[index]);
     if (!original || result.name !== original.name || result.type !== original.type || count(result.nonNull) + count(result.nulls) !== total) throw Error(text.mismatch);
+    // 不同值仅属于本次显式请求的受支持列；自有 undefined 也不能冒充未请求的字段。
+    const hasDistinct = Object.hasOwn(result, 'distinct');
+    const expectedKind = tableStatisticsColumnKind(original.type);
+    if (distinct && result.kind !== expectedKind) throw Error(text.mismatch);
+    if (!distinct || expectedKind === 'count-only') { if (hasDistinct) throw Error(text.mismatch); }
+    else {
+      if (!hasDistinct || (result.kind !== 'numeric' && result.kind !== 'ordered')) throw Error(text.mismatch);
+      const different = count(result.distinct), nonNull = count(result.nonNull);
+      if (different > nonNull || nonNull > 0n && different === 0n) throw Error(text.mismatch);
+    }
     if (result.kind === 'numeric') {
       cell(result.min); cell(result.max);
       if (typeof result.approximate !== 'boolean' || [result.sum, result.avg].some(value => value !== null && (typeof value !== 'string' || !value.length || value.length > 2048))) throw Error(text.mismatch);

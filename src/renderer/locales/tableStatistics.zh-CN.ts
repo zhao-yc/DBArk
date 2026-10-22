@@ -3,6 +3,10 @@ export const tableStatisticsZh = {
   drafts: '本页尚未提交的新增、修改和删除不计入统计；草稿保持，不会提交或清除。',
   selection: '选择统计字段（最多12个）', countOnly: '不选择字段时只统计总记录数。勾选字段不会查询服务器。',
   selected: (count: number) => `已选择 ${count} / 12 个字段`, selectColumn: (name: string) => `统计字段 ${name}`,
+  distinctOption: '统计非NULL不同值（可能耗时）', distinctColumn: '非NULL不同值（COUNT DISTINCT）',
+  distinctUnsupported: '此类型不支持不同值统计',
+  distinctScope: '此选项只改变本地选择，点击开始或重新统计后才读取。未选择字段时仍只统计总记录数，不会自动选择字段。',
+  distinctSemantics: '不同值按服务器原列排序规则和类型语义计算，不按客户端文本或字节比较。NULL 不参与，空字符串参与；空集或全部为 NULL 时为 0。JSON、空间或尚未证明的类型不统计不同值。',
   conditions: '本次冻结的服务器筛选', noFilters: '未设置筛选：统计当前对象的全部记录。',
   disabledFilters: '已停用的条件保持停用；条件分组与原精确值保持。',
   disabledPrefix: '[停用] ', allMode: '全部条件匹配', anyMode: '任一条件匹配',
@@ -17,5 +21,5 @@ export const tableStatisticsZh = {
   unavailable: '此类型仅提供数量统计', null: 'NULL（空集或全部为 NULL）',
   approximate: 'FLOAT/DOUBLE 为近似数值；显示服务器返回值，不承诺十进制精确运算。',
   bounded: '长文本与二进制仅显示有界预览；原字节包装不会转换为浮点数。',
-  empty: '没有符合筛选的记录；所选字段的聚合值为 NULL。', result: '服务器统计结果',
+  empty: '没有符合筛选的记录；极值、总和与平均值为 NULL，数量统计为 0。', result: '服务器统计结果',
 } as const;

@@ -85,6 +85,72 @@ describe('原服务器单行统计解码与精度', () => {
   });
 });
 
+describe('按需服务器COUNT(DISTINCT)', () => {
+  it('省略与false的SQL、计划及旧结果形状完全一致', () => {
+    const info = source(), input = request(['__proto__', 'label', 'binary', 'doc']);
+    const omitted = planTableStatistics(info, input), disabled = planTableStatistics(info, { ...input, distinct: false });
+    expect(disabled).toEqual(omitted); expect(omitted.sql).not.toContain('DISTINCT');
+    expect(omitted.columns.every(item => !Object.hasOwn(item, 'distinct'))).toBe(true);
+    const plan = planTableStatistics(info, request(['label']));
+    const row = { rowCount: '1', c0_nonNull: '1', c0_nulls: '0', c0_min: 'A', c0_minBytes: '1', c0_max: 'A', c0_maxBytes: '1' };
+    expect(Object.hasOwn(decodeTableStatistics(plan, values(plan, row)).columns[0], 'distinct')).toBe(false);
+  });
+  it('文字ci、二进制和大整数去重使用原列，不覆盖排序规则或转换为近似数', () => {
+    const info = source(); info.collation = 'utf8mb4_general_ci';
+    const plan = planTableStatistics(info, { ...request(['label', 'binary', '__proto__', 'doc']), distinct: true });
+    for (const [index, name] of ['label', 'binary', '__proto__'].entries()) {
+      expect(plan.sql).toContain(`COUNT(DISTINCT \`${name}\`) AS \`c${index}_distinct\``);
+      expect(plan.sql).toContain(`CAST(\`c${index}_distinct\` AS CHAR) AS \`c${index}_distinct\``);
+      expect(plan.aliases.indexOf(`c${index}_distinct`)).toBe(plan.aliases.indexOf(`c${index}_nulls`) + 1);
+      expect(plan.columns[index].distinct).toBe(true);
+    }
+    expect(plan.sql).not.toMatch(/\bCOLLATE\b|\bBINARY\b/); expect(plan.columns[3]).not.toHaveProperty('distinct'); expect(plan.sql).not.toContain('c3_distinct');
+  });
+  it('BIT去重按原bytes列，数值极值和合计继续显式UNSIGNED', () => {
+    const info = source(); info.columns[0].type = 'BIT(64)';
+    const plan = planTableStatistics(info, { ...request(['__proto__']), distinct: true });
+    expect(plan.sql).toContain('COUNT(DISTINCT `__proto__`)'); expect(plan.sql).not.toContain('COUNT(DISTINCT CAST(');
+    for (const operation of ['MIN', 'MAX', 'SUM', 'AVG']) expect(plan.sql).toContain(`${operation}(CAST(\`__proto__\` AS UNSIGNED))`);
+  });
+  it.each([[], ['doc'], ['shape']].map(selected => ({ selected })))('没有支持列%j时不增SQL或结果字段', ({ selected }) => {
+    const ordinary = planTableStatistics(source(), request(selected)), enabled = planTableStatistics(source(), { ...request(selected), distinct: true });
+    expect(enabled).toEqual(ordinary); expect(enabled.sql).not.toContain('DISTINCT');
+    const result = decodeTableStatistics(enabled, selected.length ? ['4', '3', '1'] : ['4']);
+    expect(result.columns.every(item => !Object.hasOwn(item, 'distinct'))).toBe(true);
+  });
+  it.each([null, 0, 1, 'true', {}, []].map(distinct => ({ distinct })))('计划不将非布尔请求%j当作启用', ({ distinct }) => {
+    expect(() => planTableStatistics(source(), { ...request(['label']), distinct } as never)).toThrow();
+  });
+  it('超过安全整数的去重计数保留十进制串，不截断大整数', () => {
+    const plan = planTableStatistics(source(), { ...request(['__proto__']), distinct: true });
+    const row = { rowCount: '18446744073709551615', c0_nonNull: '18446744073709551615', c0_nulls: '0', c0_distinct: '9007199254740993', c0_min: '0', c0_minBytes: '1', c0_max: '18446744073709551615', c0_maxBytes: '20', c0_sum: '18446744073709551615', c0_avg: '1.0000' };
+    expect(decodeTableStatistics(plan, values(plan, row)).columns[0]).toMatchObject({ kind: 'numeric', distinct: '9007199254740993', max: '18446744073709551615' });
+  });
+  it('文字和binary极值保留原CellValue及各自去重结果', () => {
+    const plan = planTableStatistics(source(), { ...request(['label', 'binary']), distinct: true });
+    const row: Record<string, CellValue> = { rowCount: '4', c0_nonNull: '3', c0_nulls: '1', c0_distinct: '1', c0_min: 'A', c0_minBytes: '1', c0_max: 'a', c0_maxBytes: '1', c1_nonNull: '3', c1_nulls: '1', c1_distinct: '2', c1_min: { type: 'binary', base64: '' }, c1_minBytes: '0', c1_max: { type: 'binary', base64: 'AP8=' }, c1_maxBytes: '2' };
+    const result = decodeTableStatistics(plan, values(plan, row));
+    expect(result.columns[0]).toMatchObject({ kind: 'ordered', distinct: '1', min: 'A', max: 'a' });
+    expect(result.columns[1]).toMatchObject({ kind: 'ordered', distinct: '2', max: { type: 'binary', base64: 'AP8=' } });
+  });
+  it.each(['0', '123'])('空集/全NULL行数%s去重明确为0', rowCount => {
+    const plan = planTableStatistics(source(), { ...request(['allnull', 'label']), distinct: true });
+    const row = { rowCount, c0_nonNull: '0', c0_nulls: rowCount, c0_distinct: '0', c1_nonNull: '0', c1_nulls: rowCount, c1_distinct: '0' };
+    expect(decodeTableStatistics(plan, values(plan, row)).columns).toEqual([expect.objectContaining({ distinct: '0', min: null, max: null, sum: null, avg: null }), expect.objectContaining({ distinct: '0', min: null, max: null })]);
+    expect(() => decodeTableStatistics(plan, values(plan, { ...row, c1_distinct: '1' }))).toThrow();
+  });
+  it.each(['0', '4', '01', '-1', '1.0', 'NaN', '', 1, null, undefined])('伪造去重计数%j不命中/不舍入/不当NULL忽略', distinct => {
+    const plan = planTableStatistics(source(), { ...request(['label']), distinct: true });
+    const row = { rowCount: '4', c0_nonNull: '3', c0_nulls: '1', c0_distinct: distinct, c0_min: 'A', c0_minBytes: '1', c0_max: 'z', c0_maxBytes: '1' };
+    expect(() => decodeTableStatistics(plan, values(plan, row as Record<string, CellValue>))).toThrow();
+  });
+  it('缺失或额外原值不能移位成另一统计字段', () => {
+    const plan = planTableStatistics(source(), { ...request(['label']), distinct: true });
+    const row = ['4', '3', '1', '2', 'A', '1', 'z', '1'];
+    expect(() => decodeTableStatistics(plan, row.slice(1))).toThrow(); expect(() => decodeTableStatistics(plan, [...row, '伪造'])).toThrow();
+  });
+});
+
 describe('统计结构身份包括视图定义', () => {
   const context = { managed: { sqlMode: '', status: { dialect: 'mysql' } } } as StructureTaskContext;
   it('表尾自增计数可变，列/备注/表达式变化不能混成同次统计', () => {

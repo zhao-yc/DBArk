@@ -51,6 +51,12 @@ describe('表数据统计Main实际分派与公开参数（仅RAM）', () => {
     expect(validateCommand('table.statistics', filtered)).toEqual(filtered);
     for (const patch of [{ sql: 'SELECT 1' }, { profile: {} }, { sessionId: '用户事务' }, { page: 1 }, { pageSize: 50 }, { sort: [] }, { columns: Array.from({ length: 13 }, (_, index) => '列' + index) }, { columns: ['金额', '金额'] }, { filters: [{ column: '金额', operator: 'IN', values: [] }] }, { filterMode: 'any', filterGroup: { mode: 'all', children: [] } }]) expect(() => validateCommand('table.statistics', { ...input, ...patch })).toThrow();
   });
+  it('不同值开关只接受显式布尔，Main原样透传且不创建查询历史', async () => {
+    const distinctInput = { ...input, distinct: true }; expect(validateCommand('table.statistics', distinctInput)).toEqual(distinctInput);
+    expect(validateCommand('table.statistics', { ...input, distinct: false })).toEqual({ ...input, distinct: false });
+    for (const distinct of ['true', 1, null, {}, []]) expect(() => validateCommand('table.statistics', { ...input, distinct })).toThrow();
+    const f = fixture(); await f.dispatch('table.statistics', distinctInput); expect(f.request).toHaveBeenCalledExactlyOnceWith('table.statistics', { ...distinctInput, profile: f.profile }); expect(f.history).not.toHaveBeenCalled();
+  });
   it('任务概要全部状态都不保存筛选、聚合数值或驱动错误原文', () => {
     for (const status of ['running', 'completed', 'failed', 'cancelled'] as const) {
       const message = persistedTaskMessage('table.statistics', { taskId: 't', status, progress: 0, message: '私密金额=18446744073709551615 SUM=999 驱动凭据' });

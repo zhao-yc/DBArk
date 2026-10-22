@@ -199,7 +199,7 @@ export const commandSchemas: Record<Command, z.ZodType> = {
     if (input.matchValues !== undefined) try { validateReferenceValues(input.matchValues); } catch (error) { context.addIssue({ code: 'custom', path: ['matchValues'], message: error instanceof Error ? error.message : '关联值无效' }); }
   })),
   'table.incomingReferences': z.object({ ...target, taskId: id, cursor: z.string().min(1).max(2048).regex(/^[A-Za-z0-9_-]+$/).optional() }).strict(),
-  'table.statistics': guardedTablePage(z.object({ ...target, taskId: id, columns: z.array(name).max(12).refine(value => new Set(value).size === value.length, '统计字段不能重复'), filters: z.array(filterRule).max(FILTER_LIMITS.conditions), filterMode: z.enum(['all', 'any']).optional(), filterGroup: filterGroupSchema.optional() }).strict().superRefine((input, context) => {
+  'table.statistics': guardedTablePage(z.object({ ...target, taskId: id, columns: z.array(name).max(12).refine(value => new Set(value).size === value.length, '统计字段不能重复'), filters: z.array(filterRule).max(FILTER_LIMITS.conditions), filterMode: z.enum(['all', 'any']).optional(), filterGroup: filterGroupSchema.optional(), distinct: z.boolean().optional() }).strict().superRefine((input, context) => {
     try { validateFilterGroup(input.filters, input.filterMode, input.filterGroup); } catch (error) { context.addIssue({ code: 'custom', path: ['filters'], message: error instanceof Error ? error.message : '统计筛选无效' }); }
   })),
   'table.childReferencePage': guardedTablePage(tablePage.safeExtend({ taskId: id, relation: z.object({ database: name, table: name, foreignKeyName: name, digest: z.string().regex(/^[a-f0-9]{64}$/) }).strict(), matchValues: z.array(cell).min(1).max(64) }).superRefine((input, context) => {

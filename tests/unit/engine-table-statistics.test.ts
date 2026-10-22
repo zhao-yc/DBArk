@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ConnectionProfile, TaskEvent } from '../../src/shared/contracts';
 import type { ManagedConnection } from '../../src/engine/connection';
 import type { TableStatisticsOutput } from '../../src/shared/tableStatistics';
+import { tableStatisticsMessages } from '../../src/shared/tableStatistics';
 
 const driver = vi.hoisted(() => ({ connect: vi.fn() }));
 /** 仅替换网络连接；真实Engine、metadata、流消费器、SQL、统计解码与严格关闭保持。 */
@@ -28,6 +29,7 @@ let engine: Engine, sent: string[], events: TaskEvent[], connections: ManagedCon
 let warnings: unknown, eofWarnings: number | undefined, fieldPatch: ((names: string[]) => string[]) | undefined, valuePatch: ((value: unknown[]) => unknown[]) | undefined, rowCount: string;
 let mode: string, kind: 'BASE TABLE' | 'VIEW', source: string, sourceReads: number, lateSource: string | undefined, lateAt: number, metadataOverflow: boolean;
 let denied: RegExp | undefined, holdAggregate: boolean, originalEnd: ((error?: Error) => void) | undefined, killReceived: boolean, closeFails: boolean, unknownClose: boolean, extraResult: boolean;
+let requestedDistinct: boolean;
 const aggregates: Record<string, { suffixes: string[]; values: () => unknown[] }> = {
   big_value: { suffixes: ['nonNull', 'nulls', 'min', 'minBytes', 'max', 'maxBytes', 'sum', 'avg'], values: () => ['122', '1', '0', '1', '18446744073709551615', '20', '36893488147419103229', '302405640552615600.2377'] },
   amount: { suffixes: ['nonNull', 'nulls', 'min', 'minBytes', 'max', 'maxBytes', 'sum', 'avg'], values: () => ['122', '1', '-9007199254740993.123456789011', '30', '9007199254740993.123456789012', '29', '0.000000000001', '0.0000000000000082'] },
@@ -39,8 +41,14 @@ const aggregates: Record<string, { suffixes: string[]; values: () => unknown[] }
   document: { suffixes: ['nonNull', 'nulls'], values: () => ['122', '1'] },
   bit_value: { suffixes: ['nonNull', 'nulls', 'min', 'minBytes', 'max', 'maxBytes', 'sum', 'avg'], values: () => ['122', '1', '0', '1', '18446744073709551615', '20', '18446744073709551615', '151202820276307800.1230'] },
 };
-const rawNames = () => ['rowCount', ...requested.flatMap((name, index) => aggregates[name].suffixes.map(suffix => `c${index}_${suffix}`))];
-const rawValues = () => [rowCount, ...requested.flatMap(name => aggregates[name].values())];
+// 去重预期独立固定，不复用产品SQL或解码结果来生成计数；JSON保持仅计数。
+const distinctCounts: Record<string, string> = { big_value: '3', amount: '4', at_value: '5', all_null: '0', payload: '2', label: '3', approx_value: '3', bit_value: '2' };
+const rawNames = () => ['rowCount', ...requested.flatMap((name, index) => {
+  const suffixes = [...aggregates[name].suffixes]; if (requestedDistinct && Object.hasOwn(distinctCounts, name)) suffixes.splice(2, 0, 'distinct'); return suffixes.map(suffix => `c${index}_${suffix}`);
+})];
+const rawValues = () => [rowCount, ...requested.flatMap(name => {
+  const values = aggregates[name].values(); if (requestedDistinct && Object.hasOwn(distinctCounts, name)) values.splice(2, 0, distinctCounts[name]); return values;
+})];
 const hexValues = (sql: string) => [...sql.matchAll(/X'([a-f0-9]*)'/ig)].map(match => Buffer.from(match[1], 'hex').toString('utf8'));
 
 /** 原事件泵支持pause/resume；统计只接收一行聚合，不把产品响应或字段结果mock为已成功。 */
@@ -78,9 +86,9 @@ function connect(signal?: AbortSignal): ManagedConnection {
   Object.assign(connection, { threadId, stream, pause() { paused = true; }, resume() { paused = false; if (!holdAggregate) pump(); }, query, execute: query, end: (callback: () => void) => queueMicrotask(callback), destroy: () => connection.emit('end') });
   signal?.addEventListener('abort', () => connection.emit('end'), { once: true }); connections.push(managed); return managed;
 }
-const statistics = (changes: Record<string, unknown> = {}): Promise<TableStatisticsOutput> => { const input = { connectionId: profile.id, database: 'db', table: 'subject', taskId: 'stats-' + sequence, columns: [...names], filters: [], ...changes }; requested = input.columns; return engine.handle('table.statistics', input); };
+const statistics = (changes: Record<string, unknown> = {}): Promise<TableStatisticsOutput> => { const input = { connectionId: profile.id, database: 'db', table: 'subject', taskId: 'stats-' + sequence, columns: [...names], filters: [], ...changes }; requested = input.columns; requestedDistinct = changes.distinct === true; return engine.handle('table.statistics', input); };
 const aggregation = () => sent.filter(sql => /AS `dbark_statistics`$/.test(sql));
-beforeEach(async () => { sequence = sourceReads = 0; sent = []; events = []; connections = []; requested = []; rows = undefined; warnings = []; eofWarnings = 0; fieldPatch = valuePatch = undefined; rowCount = '123'; mode = ''; kind = 'BASE TABLE'; source = originalShow; lateAt = Infinity; lateSource = denied = originalEnd = undefined; metadataOverflow = holdAggregate = killReceived = closeFails = unknownClose = extraResult = false; driver.connect.mockReset().mockImplementation(async (_profile, _database, signal) => connect(signal)); engine = new Engine(event => events.push(event)); await engine.handle('connections.open', { id: profile.id, profile }); });
+beforeEach(async () => { sequence = sourceReads = 0; sent = []; events = []; connections = []; requested = []; requestedDistinct = false; rows = undefined; warnings = []; eofWarnings = 0; fieldPatch = valuePatch = undefined; rowCount = '123'; mode = ''; kind = 'BASE TABLE'; source = originalShow; lateAt = Infinity; lateSource = denied = originalEnd = undefined; metadataOverflow = holdAggregate = killReceived = closeFails = unknownClose = extraResult = false; driver.connect.mockReset().mockImplementation(async (_profile, _database, signal) => connect(signal)); engine = new Engine(event => events.push(event)); await engine.handle('connections.open', { id: profile.id, profile }); });
 afterEach(async () => { holdAggregate = false; originalEnd?.(Error('合成收尾')); closeFails = false; if (unknownClose) await expect(engine.closeAll()).rejects.toThrow('资源未确认释放'); else await engine.closeAll(); });
 
 describe('服务器全部筛选行统计真实Engine/metadata/原生事件流（仅RAM）', () => {
@@ -107,4 +115,67 @@ describe('服务器全部筛选行统计真实Engine/metadata/原生事件流（
   it('metadata超过4096行明确失败并关闭，不能载入整个表后客户端统计', async () => { metadataOverflow = true; await expect(statistics({ columns: [] })).rejects.toThrow('预算'); expect(aggregation()).toEqual([]); });
   it('取消ACK不代替原聚合终态，等待原error/end与strictclose再结算', async () => { holdAggregate = true; const taskId = 'stats-' + sequence; let settled = false; const pending = statistics({ columns: [] }).finally(() => { settled = true; }), failed = expect(pending).rejects.toThrow('取消'); await vi.waitFor(() => expect(originalEnd).toBeDefined()); const cancelled = engine.handle('query.cancel', { taskId }); await vi.waitFor(() => expect(killReceived).toBe(true)); expect(settled).toBe(false); originalEnd!(Error('原聚合已取消')); await cancelled; await failed; expect(events.at(-1)?.status).toBe('cancelled'); expect(sent).not.toContain(controls[2]); expect(connections.every(managed => (managed.connection as unknown as { stream: { closed: boolean } }).stream.closed)).toBe(true); });
   it('严格关闭失败保留未知资源，结果不能当作成功发布', async () => { closeFails = true; await expect(statistics({ columns: [] })).rejects.toThrow('关闭'); expect(unknownClose).toBe(true); expect(events.at(-1)?.status).toBe('failed'); });
+});
+
+describe('按需去重计数保持原真实Engine流和事务终态（仅RAM）', () => {
+  it('数字/ci文字/binary/BIT同一原聚合去重，JSON不假造能力，警示只出现一次', async () => {
+    const selected = ['big_value', 'label', 'payload', 'bit_value', 'document', 'all_null'];
+    const result = await statistics({ columns: selected, distinct: true });
+    expect(result.columns.map(column => column.name)).toEqual(selected);
+    expect(result.columns[0]).toMatchObject({ kind: 'numeric', distinct: '3', max: '18446744073709551615', sum: '36893488147419103229' });
+    expect(result.columns[1]).toMatchObject({ kind: 'ordered', distinct: '3', min: 'Alpha', max: 'fill' });
+    expect(result.columns[2]).toMatchObject({ kind: 'ordered', distinct: '2', min: { type: 'binary', base64: '' }, max: { type: 'binary', base64: 'AP8=' } });
+    expect(result.columns[3]).toMatchObject({ kind: 'numeric', distinct: '2', max: '18446744073709551615' });
+    expect(result.columns[4]).toMatchObject({ kind: 'count-only' }); expect(result.columns[4]).not.toHaveProperty('distinct');
+    expect(result.columns[5]).toMatchObject({ distinct: '0', nonNull: '0', min: null, max: null, sum: null, avg: null });
+    const sql = aggregation()[0]; expect(aggregation()).toHaveLength(1);
+    for (const name of ['big_value', 'label', 'payload', 'bit_value', 'all_null']) expect(sql).toContain(`COUNT(DISTINCT \`${name}\`)`);
+    expect(sql).not.toContain('COUNT(DISTINCT `document`)'); expect(sql).not.toContain('COUNT(DISTINCT CAST('); expect(sql).not.toMatch(/\bCOLLATE\b|\bBINARY\b/);
+    for (const operation of ['MIN', 'MAX', 'SUM', 'AVG']) expect(sql).toContain(operation + '(CAST(`bit_value` AS UNSIGNED))');
+    expect(result.warnings.filter(warning => warning === tableStatisticsMessages.distinct)).toHaveLength(1);
+    expect(sent.slice(0, 2)).toEqual(controls.slice(0, 2)); expect(sent[sent.indexOf(sql) + 1]).toBe('SHOW WARNINGS LIMIT 21'); expect(sent.at(-1)).toBe(controls[2]);
+    expect(connections.slice(1).every(managed => vi.mocked(managed.close).mock.calls[0]?.[0]?.strict === true)).toBe(true);
+  });
+  it('默认与显式false沿完全相同SQL和旧结果形状，不添加性能警示', async () => {
+    const omitted = await statistics({ columns: ['label'] }), disabled = await statistics({ columns: ['label'], distinct: false });
+    expect(aggregation()).toHaveLength(2); expect(aggregation()[1]).toBe(aggregation()[0]); expect(aggregation()[0]).not.toContain('DISTINCT');
+    expect(disabled).toEqual(omitted); expect(omitted.columns[0]).not.toHaveProperty('distinct'); expect(disabled.columns[0]).not.toHaveProperty('distinct');
+    expect(disabled.warnings).not.toContain(tableStatisticsMessages.distinct);
+  });
+  it.each([[], ['document']].map(selected => ({ selected })))('true但无支持列%j不生成去重或警示', async ({ selected }) => {
+    const result = await statistics({ columns: selected, distinct: true });
+    expect(aggregation()).toHaveLength(1); expect(aggregation()[0]).not.toContain('DISTINCT'); expect(result.warnings).not.toContain(tableStatisticsMessages.distinct); expect(result.columns.every(column => !Object.hasOwn(column, 'distinct'))).toBe(true);
+  });
+  it('UINT64计数和超过Number安全整数的去重原文本不被舍入', async () => {
+    rowCount = '18446744073709551615'; valuePatch = value => { value[1] = rowCount; value[2] = '0'; value[3] = '9007199254740993'; return value; };
+    const result = await statistics({ columns: ['big_value'], distinct: true });
+    expect(result.rowCount).toBe(rowCount); expect(result.columns[0]).toMatchObject({ nonNull: rowCount, distinct: '9007199254740993' });
+  });
+  it('空筛选结果去重为0，极值和数值合计仍全NULL', async () => {
+    rowCount = '0'; valuePatch = () => ['0', '0', '0', '0', null, null, null, null, null, null];
+    const result = await statistics({ columns: ['big_value'], distinct: true, filters: [{ column: 'label', operator: '=', value: '不存在的固定值' }] });
+    expect(result.columns[0]).toMatchObject({ nonNull: '0', nulls: '0', distinct: '0', min: null, max: null, sum: null, avg: null });
+    expect(aggregation()[0]).toContain(' WHERE '); expect(aggregation()).toHaveLength(1);
+  });
+  it.each(['01', '-1', '1.0', 'NaN', '0', '123', 1, null, undefined])('非规范/矛盾去重%j拒绝整包而不发布部分统计', async count => {
+    valuePatch = value => { value[3] = count; return value; };
+    // undefined不是合法线协议字段，原协议预算先拒绝；其它已序列化值由统计计数校验拒绝。
+    await expect(statistics({ columns: ['label'], distinct: true })).rejects.toThrow(count === undefined ? '驱动返回了不能无损序列化的字段类型' : '无效');
+    expect(aggregation()).toHaveLength(1); expect(sent).not.toContain(controls[2]); expect(events.at(-1)?.status).toBe('failed'); expect(connections.at(-1)!.close).toHaveBeenCalledOnce();
+  });
+  it.each(['wrong', 'missing', 'extra'])('原流去重别名%s不能错位、缺项或多项', async kind => {
+    fieldPatch = fields => kind === 'wrong' ? fields.map(field => field === 'c0_distinct' ? 'c0_distinct伪造' : field) : kind === 'missing' ? fields.filter(field => field !== 'c0_distinct') : [...fields, 'c0_extra'];
+    await expect(statistics({ columns: ['label'], distinct: true })).rejects.toThrow(); expect(aggregation()).toHaveLength(1); expect(sent).not.toContain(controls[2]); expect(connections.at(-1)!.close).toHaveBeenCalledOnce();
+  });
+  it('请求去重也不能绕过原聚合warning失败门', async () => {
+    warnings = [{ Level: 'Warning', Code: 1265, Message: '合成统计去重警告' }];
+    await expect(statistics({ columns: ['label'], distinct: true })).rejects.toThrow('警告'); expect(aggregation()).toHaveLength(1); expect(sourceReads).toBe(1); expect(sent).not.toContain(controls[2]);
+  });
+  it('去重聚合取消仍等待原终包和strictclose，不返回部分去重数', async () => {
+    holdAggregate = true; const taskId = 'stats-' + sequence; let settled = false;
+    const pending = statistics({ columns: ['label'], distinct: true }).finally(() => { settled = true; }), failed = expect(pending).rejects.toThrow('取消');
+    await vi.waitFor(() => expect(originalEnd).toBeDefined()); const cancelled = engine.handle('query.cancel', { taskId }); await vi.waitFor(() => expect(killReceived).toBe(true));
+    expect(settled).toBe(false); originalEnd!(Error('原去重聚合已取消')); await cancelled; await failed;
+    expect(events.at(-1)?.status).toBe('cancelled'); expect(sent).not.toContain(controls[2]); expect(aggregation()).toHaveLength(1); expect(connections.every(managed => (managed.connection as unknown as { stream: { closed: boolean } }).stream.closed)).toBe(true);
+  });
 });
