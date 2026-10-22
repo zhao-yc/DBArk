@@ -12,13 +12,15 @@ import type { ColumnDefaultPatch, ColumnTypePatch, ReadColumnDefault, TableColum
 import { columnCollationAcknowledgements } from '../shared/tableColumnPatches';
 import { readColumnCollationTaskFacts, assertColumnCollationTaskUnchanged, columnCollationTaskCatalog, columnCollationTaskViews, type ColumnCollationTaskFacts } from './tableColumnCollationTaskRead';
 import { buildColumnCollationExecutionPlan, verifyColumnCollationExecution, type ColumnCollationExecutionPlan } from './tableColumnCollationExecution';
+import { readGeneratedColumnDefinition, sameGeneratedColumnExpression, compileGeneratedColumnExpression } from './tableGeneratedColumn';
+import { readGeneratedColumnFacts, assertGeneratedColumnUnchanged, verifyGeneratedColumnCatalog, type GeneratedColumnRead } from './tableGeneratedColumnRead';
 
 export const columnTaskLimits = structureCacheLimits;
 export interface ColumnTaskOptions { label: string; columnPatch: TableColumnApplyProgress; executionTarget?: { database: string; table: string }; }
 export interface ColumnTaskHost { run<T>(connectionId: string, taskId: string, action: (context: ColumnTaskContext) => Promise<T>, options: ColumnTaskOptions): Promise<T>; }
-interface Snapshot extends DefinitionRead { id: string; target: TableColumnPatchTarget; revision: number; expires: number; refs: Map<string, string>; bytes: number; collation?: ColumnCollationTaskFacts; }
+interface Snapshot extends DefinitionRead { id: string; target: TableColumnPatchTarget; revision: number; expires: number; refs: Map<string, string>; bytes: number; collation?: ColumnCollationTaskFacts; generated?: GeneratedColumnRead; }
 interface PreviewBase { snapshot: Snapshot; patches: ColumnPatch[]; expires: number; bytes: number; }
-interface LegacyPreview extends PreviewBase { kind: 'legacy'; plan: ColumnPatchSqlPlan; }
+interface LegacyPreview extends PreviewBase { kind: 'legacy'; plan: ColumnPatchSqlPlan; generated?: GeneratedColumnRead; }
 interface CollationPreview extends PreviewBase { kind: 'collation'; plan: ColumnCollationExecutionPlan; collation: ColumnCollationTaskFacts; }
 type Preview = LegacyPreview | CollationPreview;
 
@@ -30,12 +32,12 @@ const evidenceJson = (value: unknown): string => JSON.stringify(value, (_key, it
 const initialProgress = (): TableColumnApplyProgress => ({ phase: 'connecting', ddlSubmitted: false, ddlCompleted: false, definitionVerified: false, outcome: 'not-sent' });
 
 /** 投影使用服务端快照引用及共享能力，不把名称对象当字典，也不泄露物理连接编号。 */
-function views(document: TableColumnDefinitionDocument, refs: Map<string, string>, serverVersion: string, unreliable = new Set<string>(), encodings: ColumnEncoding[] = []): TableColumnView[] {
+function views(document: TableColumnDefinitionDocument, refs: Map<string, string>, serverVersion: string, unreliable = new Set<string>(), encodings: ColumnEncoding[] = [], generated?: GeneratedColumnRead): TableColumnView[] {
   const byName = new Map([...refs].map(([ref, name]) => [name, ref]));
   return document.columns.map(column => ({ columnRef: byName.get(column.name) ?? randomUUID(), name: column.name, ordinal: column.ordinal, typeSql: column.type.raw, editableType: editableColumnType(column, document.context, encodings.find(encoding => encoding.name === column.name)), nullable: column.nullable,
     // 只改变显示投影，不把损失字节的文本伪装成原值；内部可定位 DEFAULT 仍允许显式专用覆盖。
     default: hasUnprovenBinaryDefault(column) ? { kind: 'opaque' as const, sql: column.attributes.find(attribute => attribute.kind === 'default')!.raw, reason: '二进制默认值的原始字节不可证明，请显式选择新默认值或删除默认值' } : column.default,
-    comment: column.comment, rawDefinition: column.raw, ...(readColumnOnUpdate(column) === undefined ? {} : { onUpdate: readColumnOnUpdate(column) }), access: { ...columnPatchAccess(column, document.context.dialect, serverVersion), ...(unreliable.has(column.name) ? { onUpdate: { editable: false, reason: '自动更新时间目录与原定义不一致，不能修改该属性' } } : {}) } }));
+    comment: column.comment, rawDefinition: column.raw, ...(generated?.references.includes(column.name) ? { generatedReference: true } : {}), ...(readColumnOnUpdate(column) === undefined ? {} : { onUpdate: readColumnOnUpdate(column) }), access: { ...columnPatchAccess(column, document.context.dialect, serverVersion), ...(unreliable.has(column.name) ? { onUpdate: { editable: false, reason: '自动更新时间目录与原定义不一致，不能修改该属性' } } : {}) } }));
 }
 
 /** 只在字段流程核对EXTRA；不修改共用结构读取器或把目录缺失当作无自动更新。 */
@@ -154,7 +156,11 @@ function verifyAfter(preview: LegacyPreview, document: TableColumnDefinitionDocu
     const jsonEncoding = addedJson && !!afterEncoding && (afterEncoding.charset === 'utf8mb4' && afterEncoding.collation === 'utf8mb4_bin' || document.context.dialect === 'mysql' && afterEncoding.charset === null && afterEncoding.collation === null);
     const jsonAttribute = (kind: string): boolean => jsonEncoding && document.context.dialect === 'mariadb' && ['charset', 'collation', 'check'].includes(kind);
     // 新增字段没有旧片段可作证据；出现未请求的生成、自增或其它属性时不能报完整核验成功。
-    if (patch.kind === 'add' && after.attributes.some(attribute => !['nullable', 'default', 'comment'].includes(attribute.kind) && !(attribute.kind === 'on-update' && patch.onUpdate != null) && !addedEncodingAttribute(attribute.kind) && !jsonAttribute(attribute.kind))) return false;
+    if (patch.kind === 'add' && after.attributes.some(attribute => !['nullable', 'default', 'comment'].includes(attribute.kind) && !(attribute.kind === 'on-update' && patch.onUpdate != null) && !(attribute.kind === 'generated' && patch.generated !== undefined) && !addedEncodingAttribute(attribute.kind) && !jsonAttribute(attribute.kind))) return false;
+    if (patch.kind === 'add' && patch.generated) {
+      const generated = readGeneratedColumnDefinition(document, after.name);
+      if (!preview.generated || !generated || generated.storage !== patch.generated.storage || !sameGeneratedColumnExpression(document, patch.generated.expression, generated.expression, after.ordinal)) return false;
+    }
     if (patch.kind === 'add' && !sameColumnOnUpdate(readColumnOnUpdate(after), patch.onUpdate ?? null, after.type.raw)) return false;
     if (afterEncoding?.charset && !inheritedEncoding && !jsonEncoding) return false;
     if (changes.nullable !== undefined && after.nullable !== changes.nullable) return false;
@@ -245,15 +251,22 @@ export class TableColumnPatchTasks {
           additional = collation.bytes + Buffer.byteLength(JSON.stringify(catalog)) + Buffer.byteLength(JSON.stringify(columns.map(column => column.collation ?? null)));
           if (!this.fitsAdditional(baseBytes, additional)) { collation = undefined; columns = baseColumns; catalog = undefined; additional = 0; }
         }
+        const generatedRead = await readGeneratedColumnFacts(context, target, read);
+        let generated = generatedRead.kind === 'ready' ? generatedRead.value : undefined;
+        const generatedReason = generatedRead.kind === 'unavailable' ? generatedRead.reason : '生成列附加证据超过共享缓存预算，请关闭旧结构窗口后重新读取';
+        let generatedBytes = generated ? generated.bytes + Buffer.byteLength(JSON.stringify(generated.references)) + 2048 : 0;
+        if (generated && !this.fitsAdditional(baseBytes + additional, generatedBytes)) { generated = undefined; generatedBytes = 0; }
+        if (generated) columns = columns.map(column => generated.references.includes(column.name) ? { ...column, generatedReference: true } : column);
         context.checkCancelled();
         if (!this.pendingReads.has(pending)) throw new Error('字段读取期间连接已释放或修订变化；未登记快照');
-        snapshot = { ...read, id: randomUUID(), target, revision: currentRevision, expires: this.now() + columnTaskLimits.ttlMs, refs, bytes: baseBytes + additional, ...(collation ? { collation } : {}) };
-        return { target, snapshotId: snapshot.id, ddlHash: hash(read.source), expiresAt: new Date(snapshot.expires).toISOString(), columns, ...(catalog ? { collationCatalog: catalog } : {}), warnings: [...(risks.length ? [tableColumnDefaultRiskMessage(risks)] : []), ...(document.columns.some(hasUnprovenBinaryDefault) ? ['二进制文本默认值不能证明原始字节（字段：' + document.columns.filter(hasUnprovenBinaryDefault).map(column => JSON.stringify(column.name)).join('、') + '），目标列不能重述或导出结构；旁列及专用默认值操作仍可预览，成功后完整定义需人工核对。'] : []), read.originalMode === read.normalizedMode ? '结构读取使用独立短会话，未修改查询标签。' : '专用结构会话已去除隐藏定义的兼容模式；原查询标签模式未变。', '执行前重核仍存在外部 DDL 并发窗口，请在维护时段暂停并行结构修改。'], capabilities: { dialect: read.context.dialect, serverVersion: read.serverVersion, maxDecimalScale: read.context.dialect === 'mariadb' ? 38 as const : 30 as const } };
+        snapshot = { ...read, id: randomUUID(), target, revision: currentRevision, expires: this.now() + columnTaskLimits.ttlMs, refs, bytes: baseBytes + additional + generatedBytes, ...(collation ? { collation } : {}), ...(generated ? { generated } : {}) };
+        return { target, snapshotId: snapshot.id, ddlHash: hash(read.source), expiresAt: new Date(snapshot.expires).toISOString(), columns, generatedAccess: generated ? { editable: true } : { editable: false, reason: generatedReason }, ...(catalog ? { collationCatalog: catalog } : {}), warnings: [...(risks.length ? [tableColumnDefaultRiskMessage(risks)] : []), ...(document.columns.some(hasUnprovenBinaryDefault) ? ['二进制文本默认值不能证明原始字节（字段：' + document.columns.filter(hasUnprovenBinaryDefault).map(column => JSON.stringify(column.name)).join('、') + '），目标列不能重述或导出结构；旁列及专用默认值操作仍可预览，成功后完整定义需人工核对。'] : []), read.originalMode === read.normalizedMode ? '结构读取使用独立短会话，未修改查询标签。' : '专用结构会话已去除隐藏定义的兼容模式；原查询标签模式未变。', '执行前重核仍存在外部 DDL 并发窗口，请在维护时段暂停并行结构修改。'], capabilities: { dialect: read.context.dialect, serverVersion: read.serverVersion, maxDecimalScale: read.context.dialect === 'mariadb' ? 38 as const : 30 as const } };
       }, { label: '读取字段定义', columnPatch: progress });
       if (!this.pendingReads.has(pending) || snapshot.expires <= this.now()) throw new Error('字段快照已释放或过期，未登记能力令牌');
       // 严格关闭期间其它任务可能占用容量；仅新附加事实放弃，原基础快照仍须真实通过容量检查。
-      if (snapshot.collation && !this.fitsAdditional(baseBytes, snapshot.bytes - baseBytes)) {
-        delete snapshot.collation; snapshot.bytes = baseBytes; output.columns = baseColumns; delete output.collationCatalog;
+      if ((snapshot.collation || snapshot.generated) && !this.fitsAdditional(baseBytes, snapshot.bytes - baseBytes)) {
+        delete snapshot.collation; delete snapshot.generated; snapshot.bytes = baseBytes; output.columns = baseColumns; delete output.collationCatalog;
+        output.generatedAccess = { editable: false, reason: '生成列附加证据超过共享缓存预算，请关闭旧结构窗口后重新读取' };
       }
       this.capacity(snapshot.bytes, 'snapshot'); this.snapshots.set(snapshot.id, snapshot);
       output.target = { ...snapshot.target };
@@ -286,9 +299,17 @@ export class TableColumnPatchTasks {
         value = { kind: 'collation', snapshot, plan, patches, collation: fresh.value, expires: Math.min(snapshot.expires, this.now() + columnTaskLimits.ttlMs), bytes };
         return { previewToken: token, expiresAt: new Date(value.expires).toISOString(), target: { ...snapshot.target }, ddlHash: hash(snapshot.source), sql: plan.sql, changes: [{ columnRef: collationPatch.columnRef, description: '仅修改指定列的排序规则' }], warnings: [...plan.warnings, '相关查询、视图、程序和应用的比较、排序、分组及连接结果可能改变或冲突；未穷尽分析全部外部依赖。', '服务器可能重建或复制表、等待或持有锁、消耗时间及磁盘并影响读写；不承诺无锁、在线或物理表编号不变。'], requiredAcknowledgements: [...new Set(['ddl-implicit-commit', 'external-ddl-window', ...columnCollationAcknowledgements, ...plan.requiredAcknowledgements])], concurrencyPolicy: 'recheck-before-ddl' as const };
       }
+      let generated: GeneratedColumnRead | undefined;
+      if (patches.some(patch => patch.kind === 'add' && patch.generated !== undefined)) {
+        if (!snapshot.generated) throw Error('原快照没有完整生成列目录与物理身份能力，请重新读取；未发送DDL');
+        const fresh = await readGeneratedColumnFacts(context, snapshot.target, read);
+        if (fresh.kind !== 'ready') throw Error('生成列完整目录或物理身份不能重核，请重新读取；未发送DDL');
+        assertGeneratedColumnUnchanged(snapshot.generated, fresh.value); generated = fresh.value;
+        for (const patch of patches) if (patch.kind === 'add' && patch.generated && compileGeneratedColumnExpression(documentOf(read), patch.generated.expression).referencedColumns.some(name => !generated!.references.includes(name))) throw Error('生成表达式引用字段没有真实目录准入；未发送DDL');
+      }
       const plan = buildTableColumnPatchSql(documentOf(snapshot), patches, { database: snapshot.target.database, serverVersion: snapshot.serverVersion, columnRefs: snapshot.refs });
-      const bytes = snapshot.bytes + Buffer.byteLength(plan.sql) + Buffer.byteLength(JSON.stringify(patches)) + 2048;
-      this.capacity(bytes, 'preview'); value = { kind: 'legacy', snapshot, plan, patches, expires: this.now() + columnTaskLimits.ttlMs, bytes };
+      const bytes = snapshot.bytes + (generated?.bytes ?? 0) + Buffer.byteLength(plan.sql) + Buffer.byteLength(JSON.stringify(patches)) + 2048;
+      this.capacity(bytes, 'preview'); value = { kind: 'legacy', snapshot, plan, patches, ...(generated ? { generated } : {}), expires: this.now() + columnTaskLimits.ttlMs, bytes };
       return { previewToken: token, expiresAt: new Date(value.expires).toISOString(), target: { ...snapshot.target }, ddlHash: hash(snapshot.source), sql: plan.sql, changes: patches.map(patch => ({ ...(patch.kind !== 'add' ? { columnRef: patch.columnRef } : {}), description: patch.kind === 'add' ? '新增字段' : patch.kind === 'drop' ? '删除字段及其数据' : '修改指定字段属性' })), warnings: plan.warnings, requiredAcknowledgements: ['ddl-implicit-commit', 'external-ddl-window', ...plan.requiredAcknowledgements], concurrencyPolicy: 'recheck-before-ddl' as const };
     }, { label: '预览字段变更', columnPatch: progress });
     if (this.snapshots.get(input.snapshotId) !== snapshot || snapshot.expires <= this.now() || value.expires <= this.now()) throw new Error('字段快照已释放或过期，未创建新预览');
@@ -306,6 +327,15 @@ export class TableColumnPatchTasks {
       progress.phase = 'rechecking'; context.report();
       const current = await readDefinition(context, snapshot.target, true); assertSnapshot(snapshot, current);
       let collationBefore: ColumnCollationTaskFacts | undefined;
+      let generatedBefore: GeneratedColumnRead | undefined;
+      if (preview.kind === 'legacy' && preview.generated) {
+        const fresh = await readGeneratedColumnFacts(context, snapshot.target, current);
+        if (fresh.kind !== 'ready') throw Error('生成列目录或物理身份已不可用；未发送DDL');
+        assertGeneratedColumnUnchanged(preview.generated, fresh.value);
+        const expected = buildTableColumnPatchSql(documentOf(current), preview.patches, { database: snapshot.target.database, serverVersion: current.serverVersion, columnRefs: snapshot.refs });
+        if (evidenceJson(expected) !== evidenceJson(preview.plan)) throw Error('生成列执行计划或原始依据已变化；未发送DDL');
+        generatedBefore = fresh.value;
+      }
       if (preview.kind === 'collation') {
         const fresh = await readColumnCollationTaskFacts(context, snapshot.target, current, preview.collation.facts.references);
         if (fresh.kind !== 'ready') throw new Error('列排序规则能力已不可用；未发送DDL');
@@ -364,8 +394,18 @@ export class TableColumnPatchTasks {
           } else {
             const unreliable = await onUpdateCatalog(context, snapshot.target, document);
             const unreliableRequestedTime = preview.patches.some(patch => patch.kind === 'add' ? unreliable.has(patch.name) : patch.kind === 'alter' && Object.hasOwn(patch.changes, 'onUpdate') && unreliable.has(snapshot.refs.get(patch.columnRef)!));
-            output.definitionVerified = progress.definitionVerified = after.identity === current.identity && after.normalizedMode === current.normalizedMode && verifyAfter(preview, document, after) && !unreliableRequestedTime;
-            output.after = { ddlHash: hash(after.source), columns: views(document, new Map(preview.plan.finalColumns.map(column => [column.columnRef, column.name])), after.serverVersion, unreliable, after.encodings) };
+            let generatedAfter: GeneratedColumnRead | undefined, generatedVerified = true;
+            if (preview.generated) {
+              const fresh = await readGeneratedColumnFacts(context, snapshot.target, after);
+              generatedAfter = fresh.kind === 'ready' ? fresh.value : undefined;
+              generatedVerified = !!generatedBefore && !!generatedAfter && verifyGeneratedColumnCatalog(generatedBefore, generatedAfter);
+            }
+            // 后核回调迟到的取消不能把已经收到的OK撤销，也不能发布伪造的已核验成功。
+            context.checkCancelled();
+            if (context.managed.signal?.aborted || context.managed.broken) throw Error('字段后核连接已中止或断开');
+            output.definitionVerified = progress.definitionVerified = after.identity === current.identity && after.normalizedMode === current.normalizedMode && verifyAfter(preview, document, after) && !unreliableRequestedTime && generatedVerified;
+            output.after = { ddlHash: hash(after.source), columns: views(document, new Map(preview.plan.finalColumns.map(column => [column.columnRef, column.name])), after.serverVersion, unreliable, after.encodings, generatedAfter) };
+            if (generatedBefore && generatedAfter && generatedBefore.physical.tableId !== generatedAfter.physical.tableId) output.warnings.push('新增生成列后物理表编号已变化；定义核验不据此判断执行算法。');
             if (document.columns.some(hasUnprovenBinaryDefault)) output.warnings.push('二进制默认值仍以不能证明原始字节的文本显示；DDL 已完成，但这些字段的默认值未核验，不能据此自动重建或重复执行。');
             if (!output.definitionVerified) output.verificationError = 'DDL 已完成，但定义变更及未改属性尚未全部核验一致，请核对最新定义；不要重复执行';
           }

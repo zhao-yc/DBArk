@@ -1,10 +1,15 @@
 import { readControlledTimestampDefault, validateColumnPatches, type ColumnDefaultPatch, type ColumnPatch, type ColumnTypePatch, type ReadColumnDefault, type TableColumnView, type TableColumnPatchTarget, type TableColumnApplyProgress, type TableColumnApplyOutput } from '../shared/tableColumnPatches';
 import { columnPatchZh as text } from './locales/columnPatches.zh-CN';
-import { sameColumnOnUpdate } from '../shared/tableColumnPatches';
+import { columnOnUpdateVersionSupported, sameColumnOnUpdate } from '../shared/tableColumnPatches';
+import { parseGeneratedColumnExpression } from '../shared/tableGeneratedColumn';
 import { columnCollationPatchSchema, type TableColumnGetOutput } from '../shared/tableColumnPatches';
 import { sameTableEncodingPair, tableDefaultEncodingLimits, type TableEncodingPair } from '../shared/tableDefaultEncoding';
 
 export type ColumnChanges = Extract<ColumnPatch, { kind: 'alter' }>['changes'];
+/** 候选授权与目标绑定原快照；相同名字或版本文本不能替代原始目录身份。 */
+export function generatedColumnSnapshotKey(snapshot: TableColumnGetOutput): string {
+  return JSON.stringify([snapshot.target, snapshot.snapshotId, snapshot.ddlHash, snapshot.expiresAt, snapshot.capabilities, snapshot.generatedAccess, snapshot.columns.map(column => [column.columnRef, column.name, column.typeSql, column.rawDefinition, column.generatedReference])]);
+}
 /** 完整目录先逐项校验且拒绝重复；仅服务器明确授权的同charset真实配对可选。 */
 export function columnCollationCandidates(column: TableColumnView, catalog?: readonly TableEncodingPair[]): readonly TableEncodingPair[] {
   if (column.collation?.access.editable !== true) throw new Error(column.collation?.access.reason || text.collationReadonly);
@@ -57,7 +62,7 @@ export function formatReadColumnDefault(value: ReadColumnDefault): string {
 }
 /** 风险ID只用于协议，确认句集中中文；未知ID拒执行，不猜含义或沿用原型属性。 */
 export function columnAcknowledgementLabel(id: string): string | undefined {
-  const labels: Record<string, string> = { 'ddl-implicit-commit': text.ackImplicit, 'external-ddl-window': text.ackWindow, 'drop-column-data': text.ackDrop, 'external-name-dependencies': text.ackDependencies, 'conversion-or-nullability': text.ackConversion, 'column-collation-semantics': text.ackCollationSemantics, 'column-collation-default-algorithm': text.ackCollationAlgorithm };
+  const labels: Record<string, string> = { 'ddl-implicit-commit': text.ackImplicit, 'external-ddl-window': text.ackWindow, 'drop-column-data': text.ackDrop, 'external-name-dependencies': text.ackDependencies, 'conversion-or-nullability': text.ackConversion, 'column-collation-semantics': text.ackCollationSemantics, 'column-collation-default-algorithm': text.ackCollationAlgorithm, 'generated-column-computation': text.ackGenerated };
   return Object.hasOwn(labels, id) ? labels[id] : undefined;
 }
 /** 只比较展示目标身份；同ID配置变更还须由窗口代次与未来引擎令牌重核保护。 */
@@ -126,9 +131,18 @@ export function setColumnPatch(patches: readonly ColumnPatch[], key: string, nex
   const other = patches.filter(patch => (patch.kind === 'add' ? patch.clientKey : patch.columnRef) !== key); return next ? [...other, next] : other;
 }
 /** 在网络预览前校验名称、位置和预算；引用始终来自快照或新增clientKey。 */
-export function validateColumnDrafts(columns: readonly TableColumnView[], input: readonly ColumnPatch[], scale: 30 | 38, catalog?: readonly TableEncodingPair[]): ColumnPatch[] {
+export function validateColumnDrafts(columns: readonly TableColumnView[], input: readonly ColumnPatch[], scale: 30 | 38, catalog?: readonly TableEncodingPair[], generatedContext?: Pick<TableColumnGetOutput, 'capabilities' | 'generatedAccess'>): ColumnPatch[] {
   if (!input.length) throw new Error(text.noChange);
   const patches = validateColumnPatches(input, scale); const refs = new Map(columns.map(column => [column.columnRef, column]));
+  // 生成列只接受原快照明确授权的单项新增；客户端不拼SQL、不求值或猜测字段能力。
+  const generated = patches.filter(patch => patch.kind === 'add' && Object.hasOwn(patch, 'generated'));
+  if (generated.length) {
+    if (patches.length !== 1 || generated.length !== 1) throw new Error(text.generatedMixed);
+    if (!generatedContext || generatedContext.generatedAccess?.editable !== true || !columnOnUpdateVersionSupported(generatedContext.capabilities.dialect, generatedContext.capabilities.serverVersion)) throw new Error(generatedContext?.generatedAccess?.reason || text.generatedVersion);
+    const patch = generated[0]; if (patch.kind !== 'add' || !patch.generated) throw new Error(text.generatedStale);
+    const parsed = parseGeneratedColumnExpression(patch.generated.expression), allowed = new Set(columns.filter(column => column.generatedReference === true).map(column => column.name));
+    if (parsed.referencedColumns.some(name => !allowed.has(name))) throw new Error(text.generatedSourceInvalid);
+  }
   if (refs.size !== columns.length) throw new Error(text.missing);
   const dropped = new Set(patches.filter(patch => patch.kind === 'drop').map(patch => patch.columnRef));
   const names = new Map(columns.filter(column => !dropped.has(column.columnRef)).map(column => [column.columnRef, column.name]));

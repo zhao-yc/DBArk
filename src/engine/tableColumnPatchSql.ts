@@ -2,6 +2,8 @@ import { identifier, qualified, SqlScriptScanner, stringLiteral } from './sql';
 import { columnOnUpdateAccess, columnOnUpdateVersionSupported, readColumnOnUpdate, sameColumnOnUpdate } from '../shared/tableColumnPatches';
 import { assertColumnAttributeReadable, tableDefinitionTokens, type TableDefinitionToken } from './tableColumnDefinition';
 import { columnRestateAccess, hasUnprovenBinaryDefault, readControlledTimestampDefault, tableColumnDefaultRisks, tableColumnDefaultRiskMessage, tableColumnPatchLimits, validateColumnPatches, type ColumnDefaultPatch, type ColumnPatch, type ColumnTypePatch, type DefinitionRange, type TableColumnDefinition, type TableColumnDefinitionDocument } from '../shared/tableColumnPatches';
+import { generatedColumnAcknowledgement, generatedColumnMessages } from '../shared/tableGeneratedColumn';
+import { compileGeneratedColumnExpression } from './tableGeneratedColumn';
 
 export interface ColumnPatchPlanOptions {
   database: string; serverVersion: string;
@@ -183,6 +185,7 @@ export function buildTableColumnPatchSql(document: TableColumnDefinitionDocument
   const unknownTail = tailUnknown(document);
   for (const patch of patches) {
     if (patch.kind === 'add') {
+      if (patch.generated && !columnOnUpdateVersionSupported(document.context.dialect, options.serverVersion)) throw new Error(generatedColumnMessages.version);
       if (Object.hasOwn(patch, 'onUpdate') && !columnOnUpdateVersionSupported(document.context.dialect, options.serverVersion)) throw new Error('当前版本尚未开放新增自动更新时间属性');
       if (originalRefs.has(patch.clientKey) || nodes.has(patch.clientKey)) throw new Error('新增字段引用与现有快照冲突');
       const node = { ref: patch.clientKey, name: patch.name }; nodes.set(node.ref, node); operations.set(node.ref, patch); continue;
@@ -255,6 +258,13 @@ export function buildTableColumnPatchSql(document: TableColumnDefinitionDocument
       positionSql = index === 0 ? ' FIRST' : ` AFTER ${identifier(order[index - 1].name)}`; order.splice(index, 0, node); moved = before !== order.map(item => item.ref).join('\0');
     }
     if (operation.kind === 'add') {
+      if (operation.generated) {
+        // 只发送由受控AST及真实列名重建的表达式，不将用户原文拼接进ALTER。
+        const generated = compileGeneratedColumnExpression(document, operation.generated.expression);
+        const type = typeSql(operation.type, document.context.mode.noBackslashEscapes);
+        clauses.push(`ADD COLUMN ${identifier(operation.name)} ${type} GENERATED ALWAYS AS (${generated.sql}) ${operation.generated.storage} COMMENT ${stringLiteral(operation.comment, document.context.mode.noBackslashEscapes)}${positionSql}`);
+        acknowledgements.add(generatedColumnAcknowledgement); warnings.push(generatedColumnMessages.computation); continue;
+      }
       const type = typeSql(operation.type, document.context.mode.noBackslashEscapes), value = defaultSql(operation.default, type, operation.nullable, document, largeDefaultUnsupported);
       const precision = operation.type.kind === 'temporal' ? operation.type.precision ?? 0 : 0;
       const onUpdate = operation.onUpdate ? ' ON UPDATE CURRENT_TIMESTAMP' + (precision ? `(${precision})` : '') : '';
