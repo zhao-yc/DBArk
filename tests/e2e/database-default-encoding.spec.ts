@@ -43,6 +43,8 @@ function register(binding: ReturnType<typeof import('../helpers/databaseDefaultE
       const mysql = require('mysql2') as typeof import('mysql2'); check(); native = mysql.createConnection({ host: binding.target.host, port: binding.target.port, user: binding.target.user, password: binding.target.password, supportBigNumbers: true, bigNumberStrings: true, dateStrings: true, decimalNumbers: false, multipleStatements: false, charset: 'UTF8MB4_BIN', connectTimeout: 10000 }); stream = (native as any).stream; check();
       await step(() => new Promise<void>((resolve, reject) => native!.connect(error => error ? reject(error) : resolve())));
       const identity = await query('SELECT VERSION() AS version,@@version_compile_os AS os,@@lower_case_table_names AS names,@@server_uuid AS uuid,CONNECTION_ID() AS threadId'); expect(identity).toHaveLength(1); const server = identity[0]; expect({ version: server.version, os: server.os, names: Number(server.names), uuid: server.uuid }).toEqual({ version: '8.4.11', os: 'Linux', names: 0, uuid: binding.target.uuid }); expect(Number.isSafeInteger(Number(server.threadId)) && Number(server.threadId) > 0).toBe(true); const threadId = Number(server.threadId);
+      // 在建库前记录脱敏原计划，失败也能定位本例资源；不输出凭据。
+      process.stdout.write(JSON.stringify({ 专项: '数据库默认编码GUI', 阶段: '原资源计划', 数据库: database, 端口: binding.target.port, 原观察线程: threadId }) + '\n');
       expect(await query('SELECT SCHEMA_NAME FROM INFORMATION_SCHEMA.SCHEMATA WHERE SCHEMA_NAME=?', [database])).toEqual([]);
       await query('CREATE DATABASE ' + quote + ' CHARACTER SET utf8mb4 COLLATE utf8mb4_bin');
       await query('CREATE TABLE ' + quote + '.`existing` (`id` BIGINT UNSIGNED NOT NULL PRIMARY KEY,`moment` DATETIME(6) NOT NULL,`unicode_value` VARCHAR(80) NOT NULL,`payload` VARBINARY(20),`nullable_value` TEXT NULL) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin');
@@ -50,7 +52,8 @@ function register(binding: ReturnType<typeof import('../helpers/databaseDefaultE
       const defaults = () => query('SELECT DEFAULT_CHARACTER_SET_NAME AS charset,DEFAULT_COLLATION_NAME AS collation FROM INFORMATION_SCHEMA.SCHEMATA WHERE SCHEMA_NAME=?', [database]);
       const tableDefinition = () => query('SHOW CREATE TABLE ' + quote + '.`existing`');
       const columnEncoding = () => query("SELECT COLUMN_NAME AS name,CHARACTER_SET_NAME AS charset,COLLATION_NAME AS collation FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA=? AND TABLE_NAME='existing' ORDER BY ORDINAL_POSITION", [database]);
-      const rows = () => query("SELECT CAST(id AS CHAR) AS id,DATE_FORMAT(moment,'%Y-%m-%d %H:%i:%s.%f') AS moment,unicode_value,HEX(payload) AS payload,nullable_value FROM " + quote + '.`existing` ORDER BY id');
+      // 限定原表数字列，避免ORDER BY命中CAST后的文本别名而按字典序排列。
+      const rows = () => query("SELECT CAST(id AS CHAR) AS id,DATE_FORMAT(moment,'%Y-%m-%d %H:%i:%s.%f') AS moment,unicode_value,HEX(payload) AS payload,nullable_value FROM " + quote + '.`existing` ORDER BY existing.id');
       const original = { defaults: await defaults(), definition: await tableDefinition(), columns: await columnEncoding(), rows: await rows() };
       expect(original.defaults).toEqual([{ charset: 'utf8mb4', collation: 'utf8mb4_bin' }]); expect(original.rows).toEqual([{ id: '9007199254740993', moment: '2026-10-22 23:59:58.654321', unicode_value: '', payload: '', nullable_value: 'NULL' }, { id: '18446744073709551615', moment: '2026-10-22 00:01:02.123456', unicode_value: '中文🙂', payload: '00FF000A', nullable_value: null }]);
       await step(() => page.locator('.app-commandbar').getByRole('button', { name: zh.common.newConnection, exact: true }).click()); const form = page.getByRole('dialog', { name: zh.common.newConnection, exact: true });
