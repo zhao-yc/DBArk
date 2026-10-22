@@ -9,6 +9,7 @@ import type { AppSettings } from '../../src/shared/contracts';
 /** 列表和默认关闭不加载桌面owner；实际启用前拒绝实库、SSH、认证及录制参数。 */
 function assertOfflineCloseOthersEnvironment(env: Record<string, string | undefined>, args: string[]): void {
   if (Object.hasOwn(env, 'DBARK_DEV_URL')) throw Error('关闭其他查询原生专项拒绝DBARK_DEV_URL，空值也不得覆盖本例renderer');
+  if (Object.hasOwn(env, 'DBARK_QUERY_CLOSE_OTHERS_INPUT_DIAGNOSTICS') && !['0', '1'].includes(env.DBARK_QUERY_CLOSE_OTHERS_INPUT_DIAGNOSTICS!)) throw Error('关闭其他查询输入诊断门只允许准确0、1或缺省关闭');
   const alias = (key: string) => key === 'DBARK_C02_EXECUTABLE_PATH' && !!env.DBARK_EXECUTABLE_PATH && env[key] === env.DBARK_EXECUTABLE_PATH;
   if (env.DBARK_INTEGRATION_ENABLED !== '0' || Object.keys(env).some(key => /^DBARK_(?:TEST_|C02_|SSH_|MTLS_|TLS_|MYSQL_|MARIADB_|AUTH_|PASSWORD|TOKEN|CREDENTIAL|CERT|CA_PATH|PRIVATE_KEY)/.test(key) && !alias(key))) throw Error('关闭其他查询原生专项只允许离线配置及integration=0，拒绝实库或认证参数');
   for (const [index, value] of args.entries()) {
@@ -18,6 +19,7 @@ function assertOfflineCloseOthersEnvironment(env: Record<string, string | undefi
 const listing = process.argv.some(value => value === '--list' || value.startsWith('--list='));
 const active = !listing && process.env.DBARK_QUERY_CLOSE_OTHERS_NATIVE_TEST === '1';
 if (active) assertOfflineCloseOthersEnvironment(process.env, process.argv);
+const inputDiagnostics = active && process.env.DBARK_QUERY_CLOSE_OTHERS_INPUT_DIAGNOSTICS === '1';
 type Desktop = typeof import('./desktop-fixture');
 const test: typeof baseTest = active ? (require('./desktop-fixture') as Desktop).test : baseTest;
 test.skip(!active, '默认关闭：须Root开启DBARK_QUERY_CLOSE_OTHERS_NATIVE_TEST=1，integration=0并先核127.0.0.1:1无监听');
@@ -34,6 +36,7 @@ const cSql = "SELECT '保留C', '🧭';\n-- 当前查询必须保留";
 const externalSql = "SELECT '另一编辑者更新的来源A';\n-- 仅通过合法本地CAS保存";
 type Tab = AppSettings['tabs'][number];
 const completed: { directory: string; identity: string; normalExitConfirmed: true }[] = [];
+const inputObservations = new WeakMap<TestInfo, import('../helpers/queryCloseOthersInputObservation').CloseOthersInputObservation>();
 
 /** 每次跨await后核对同一TestInfo所属owner，不借全局句柄重启或操作其它实例。 */
 function desktop(info: TestInfo) {
@@ -49,6 +52,40 @@ async function settings(info: TestInfo) {
 async function queries(info: TestInfo) {
   const value = await desktop(info).page.evaluate(() => window.dbark.invoke('queries.list', {})); desktop(info); return value;
 }
+/** 诊断门关闭不加载SDK/helper；开启只在每例空App唯一reload，原输入和断言不变。 */
+async function prepareInputObservation(info: TestInfo): Promise<void> {
+  if (!inputDiagnostics) return;
+  const { page, application } = desktop(info), initial = await settings(info); desktop(info);
+  if (initial.tabs.length || initial.activeTabId != null || inputObservations.has(info)) throw Error('输入诊断只允许本例空App准备一次');
+  const { bindEditorIndentNativeCase } = require('./editor-indentation-native-gate') as typeof import('./editor-indentation-native-gate');
+  const clock = bindEditorIndentNativeCase(info, { assertCurrent() { assertOfflineCloseOthersEnvironment(process.env, process.argv); const owner = desktop(info); if (owner.page !== page || owner.application !== application || process.env.DBARK_QUERY_CLOSE_OTHERS_INPUT_DIAGNOSTICS !== '1') throw Error('原输入诊断窗口或环境已变化'); } }, () => test.info());
+  const checked = async <T,>(action: () => Promise<T>) => { clock.assertCurrent(); const value = await action(); clock.assertCurrent(); return value; };
+  const rawStart = (info as TestInfo & { _startWallTime?: number })._startWallTime, start = typeof rawStart === 'number' ? rawStart : Number((info as TestInfo & { startTime?: Date }).startTime);
+  if (!Number.isFinite(start) || info.timeout !== 120000) throw Error('原输入诊断缺少原120秒TestInfo起点');
+  await checked(() => page.addInitScript(() => { self.MonacoEnvironment = { ...self.MonacoEnvironment, globalAPI: true }; }));
+  await checked(() => page.reload()); await checked(() => expect(page.locator('.app-statusbar')).toBeVisible());
+  const empty = await checked(() => settings(info)); if (empty.tabs.length || empty.activeTabId != null) throw Error('原输入诊断空App重载后产生了未知标签');
+  const { installQueryCloseOthersInputObservation } = require('../helpers/queryCloseOthersInputObservation') as typeof import('../helpers/queryCloseOthersInputObservation');
+  const observation = await checked(() => installQueryCloseOthersInputObservation(page, { nonce: `${info.testId}:${info.retry}`, deadline: start + 120000 }, () => clock.assertCurrent()));
+  inputObservations.set(info, observation);
+}
+/** 四阶段各只采样一次；Main值明确是先读取的持久快照，不当作即时renderer草稿。 */
+async function observeInput(info: TestInfo, phase: import('../helpers/queryCloseOthersInputObservation').CloseOthersInputPhase, tabId: string, paneIndex: number, intendedSql: string): Promise<void> {
+  const observation = inputObservations.get(info); if (!observation) return;
+  const value = await settings(info), observedAt = Date.now(); desktop(info);
+  await observation.sample({ phase, tabId, paneIndex, intendedSql, persisted: { observedAt, activeTabId: value.activeTabId, sql: value.tabs.find(tab => tab.id === tabId)?.sql } }); desktop(info);
+}
+/** 仅封存父进程已收到的有界记录；失败时不补读、不改原错误，也不尝试退出。 */
+async function attachInputObservation(info: TestInfo): Promise<void> {
+  let body: Buffer | undefined;
+  try {
+    const observation = inputObservations.get(info); if (!observation) return; inputObservations.delete(info);
+    body = Buffer.from(observation.seal()); await info.attach('关闭其他查询原输入只读诊断（含空App唯一重载）', { body, contentType: 'application/json' });
+  } catch {
+    try { process.stdout.write('关闭其他查询原输入诊断附件写入失败；不替换原用例错误。\n' + (body?.toString('utf8') ?? '尚未取得封存记录') + '\n'); }
+    catch { /* 诊断附件和日志同时失效也保留原用例错误。 */ }
+  }
+}
 /** 设置落盘不代表新Monaco已挂载；先核准确标签及正式正文桥就绪，再走真实键盘。 */
 async function write(info: TestInfo, sql: string, expectedTabId?: string) {
   const { page } = desktop(info), before = await settings(info), tabId = expectedTabId ?? before.activeTabId;
@@ -62,8 +99,12 @@ async function write(info: TestInfo, sql: string, expectedTabId?: string) {
   expect((await settings(info)).activeTabId).toBe(tabId);
   // 对话框关闭后的焦点恢复可晚于可见/可编辑；两次原生按键之间也核准确输入框持焦。
   await input.focus(); desktop(info); await expect(input).toBeFocused(); desktop(info);
+  if (inputDiagnostics) await observeInput(info, '全选前', tabId!, index, sql);
   await page.keyboard.press(`${modifier}+A`); desktop(info); await expect(input).toBeFocused(); desktop(info);
+  if (inputDiagnostics) await observeInput(info, '全选后', tabId!, index, sql);
+  if (inputDiagnostics) await observeInput(info, '插入前', tabId!, index, sql);
   await page.keyboard.insertText(sql); desktop(info);
+  if (inputDiagnostics) await observeInput(info, '插入后', tabId!, index, sql);
   await expect.poll(async () => { const value = await settings(info); expect(value.activeTabId).toBe(tabId); return value.tabs.find(tab => tab.id === tabId)?.sql?.replaceAll('\r\n', '\n'); }).toBe(sql);
 }
 /** 用真实标签按钮切换，再以持久化ID核对准确前端身份。 */
@@ -76,6 +117,7 @@ async function select(info: TestInfo, tab: Tab) {
 async function threeDrafts(info: TestInfo) {
   const { page } = desktop(info);
   await expect(page.locator('.tab-strip .tab-select')).toHaveCount(0);
+  if (inputDiagnostics) await prepareInputObservation(info);
   await page.locator('.app-commandbar').getByRole('button', { name: zh.common.newConnection, exact: true }).click(); desktop(info);
   const connection = page.getByRole('dialog', { name: zh.common.newConnection, exact: true });
   const connectionName = '关闭其他查询离线连接';
@@ -118,6 +160,7 @@ async function threeDrafts(info: TestInfo) {
   for (const tab of value.tabs) { expect(tab.kind).toBe('query'); expect(tab.connectionId).toBe(a.connectionId); expect(tab.databaseContext).toEqual({ state: 'known', database: null }); }
   expect(a.sourceBinding?.id).toBe(records[0].id); expect(b).not.toHaveProperty('sourceBinding'); expect(c).not.toHaveProperty('sourceBinding');
   expect(await queries(info)).toEqual(records);
+  const observation = inputObservations.get(info); if (observation) { await observation.stop(); desktop(info); await attachInputObservation(info); }
   return { a, b, c, records };
 }
 /** 等待真实portal和React提交产生准确目标弹窗，绝不自行清DOM或推进队列。 */
@@ -165,6 +208,7 @@ async function finish(info: TestInfo, identity: string) {
 /** 失败立即保留所属owner，不在finally重试退出、不强停、不删除未知目录。 */
 async function retainFailure(info: TestInfo) {
   const runtime = require('./desktop-fixture') as Desktop; runtime.retainOwnedDesktopResources(info);
+  if (inputDiagnostics) await attachInputObservation(info);
   await info.attach('关闭其他查询保留现场', { body: Buffer.from(JSON.stringify({ directory: runtime.dataDir, automaticRetry: false, automaticRestart: false, automaticForceStop: false, directoryRemoved: false })), contentType: 'application/json' });
 }
 

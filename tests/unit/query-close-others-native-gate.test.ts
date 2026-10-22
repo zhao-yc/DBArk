@@ -53,6 +53,21 @@ describe('关闭其他查询原生spec的默认关闭与离线准备门（不启
     }
     expect(() => guard({ DBARK_INTEGRATION_ENABLED: '0' })).not.toThrow();
   });
+  it('输入诊断单门不能启动桌面，list也不加载SDK或观察helper', () => {
+    for (const [env, args] of [
+      [{ DBARK_QUERY_CLOSE_OTHERS_INPUT_DIAGNOSTICS: '1' }, []],
+      [{ DBARK_QUERY_CLOSE_OTHERS_NATIVE_TEST: '1', DBARK_QUERY_CLOSE_OTHERS_INPUT_DIAGNOSTICS: '1', DBARK_INTEGRATION_ENABLED: '0' }, ['--list']],
+    ] as [Record<string, string>, string[]][]) {
+      const result = declareSpec(env, args);
+      expect(result.registrations).toHaveLength(2); expect(result.skips[0][0]).toBe(true);
+      expect(result.loaded.some(name => /desktop-fixture|queryCloseOthersInputObservation|editor-indentation-native|monaco/i.test(name))).toBe(false);
+    }
+  });
+  it('原生启用时非法诊断值在资源前拒绝，缺省和准确0、1保留原离线门', () => {
+    for (const value of ['', 'true', '01', undefined]) expect(() => declareSpec({ DBARK_QUERY_CLOSE_OTHERS_NATIVE_TEST: '1', DBARK_INTEGRATION_ENABLED: '0', DBARK_QUERY_CLOSE_OTHERS_INPUT_DIAGNOSTICS: value }, [])).toThrow('诊断门');
+    for (const value of ['0', '1']) expect(() => guard({ DBARK_INTEGRATION_ENABLED: '0', DBARK_QUERY_CLOSE_OTHERS_INPUT_DIAGNOSTICS: value })).not.toThrow();
+    expect(() => guard({ DBARK_INTEGRATION_ENABLED: '0' })).not.toThrow();
+  });
   it('仅允许正式runner准确同值EXE别名，其余实库SSH及认证参数即使空值也拒绝', () => {
     const env = { DBARK_INTEGRATION_ENABLED: '0', DBARK_EXECUTABLE_PATH: 'C:/固定候选/DBArk.exe', DBARK_C02_EXECUTABLE_PATH: 'C:/固定候选/DBArk.exe' };
     expect(() => guard(env)).not.toThrow();

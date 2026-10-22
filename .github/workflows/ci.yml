@@ -132,6 +132,8 @@ jobs:
           DBARK_QUERY_DUPLICATE_NATIVE_TEST: '1'
           # 串行关闭其他查询的两项正式离线用例；预检拒连并等原socket关闭后才启动。
           DBARK_QUERY_CLOSE_OTHERS_NATIVE_TEST: '1'
+          # 仅本轮检查分支被动采集；main及其它分支仍走原输入路径，不追认旧失败已修。
+          DBARK_QUERY_CLOSE_OTHERS_INPUT_DIAGNOSTICS: ${{ github.ref == 'refs/heads/codex/native-checkpoint-typecheck-heap-20261022' && '1' || '0' }}
           # 仅源码 E2E 的固定离线片段用例采集；安装验收与实库用例不继承此门。
           DBARK_SNIPPETS_NATIVE_DIAGNOSTICS: '1'
           # 只采集原执行计划离线用例的实际context及窗口，不传入安装或实库流程。
