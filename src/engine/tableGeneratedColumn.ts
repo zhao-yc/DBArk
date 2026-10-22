@@ -7,6 +7,19 @@ export interface GeneratedColumnDefinition { storage: 'VIRTUAL' | 'STORED'; expr
 /** 此处只引用实际名字；不使用客户端原文片段、数学求值或字符串查找代替解析。 */
 const quoted = (name: string): string => '`' + name.replace(/`/g, '``') + '`';
 
+/** 官方解析器将一元+直接归约为子节点；仅比较键跟随该规则，预览SQL仍保留用户真实运算树。 */
+function expressionFingerprint(node: GeneratedColumnExpression): string {
+  const project = (value: GeneratedColumnExpression): GeneratedColumnExpression => {
+    if (value.kind === 'unary') {
+      const operand = project(value.operand);
+      return value.operator === '+' ? operand : { ...value, operand };
+    }
+    if (value.kind === 'binary') return { ...value, left: project(value.left), right: project(value.right) };
+    return value;
+  };
+  return JSON.stringify(project(node));
+}
+
 /** 引用列须完整可读且是原有普通精确数值列；自增/生成/隐藏和未知属性不能借type权限放行。 */
 export function isGeneratedColumnReference(document: TableColumnDefinitionDocument, name: string, beforeOrdinal = document.columns.length): boolean {
   if (!Number.isSafeInteger(beforeOrdinal) || beforeOrdinal < 0 || beforeOrdinal > document.columns.length) return false;
@@ -31,7 +44,7 @@ export function compileGeneratedColumnExpression(document: TableColumnDefinition
   const sql = render(parsed.ast);
   // 引号、转义及结构括号会增加长度；在DDL前拦截，不能成功后才因自身输出超过解析预算而拒绝后核。
   if (sql.length > generatedColumnLimits.expression) throw Error(text.budget);
-  return { sql, fingerprint: JSON.stringify(parsed.ast), referencedColumns: [...parsed.referencedColumns] };
+  return { sql, fingerprint: expressionFingerprint(parsed.ast), referencedColumns: [...parsed.referencedColumns] };
 }
 
 /** SHOW/目录可用当前ANSI模式表示标识符；转为同一安全子集后只比较结构，不执行原表达式。 */
@@ -52,7 +65,7 @@ function serverExpression(document: TableColumnDefinitionDocument, source: strin
   return result + tail;
 }
 
-/** 仅语法外括号/空白/安全数字前导零可归一化；无法证明相同即返回false，不能伪报后核通过。 */
+/** 仅语法外括号/空白/安全数字前导零及解析器丢弃的一元+可归一化；不推断代数等价。 */
 export function sameGeneratedColumnExpression(document: TableColumnDefinitionDocument, left: string, right: string, beforeOrdinal = document.columns.length): boolean {
   try { return compileGeneratedColumnExpression(document, serverExpression(document, left), beforeOrdinal).fingerprint === compileGeneratedColumnExpression(document, serverExpression(document, right), beforeOrdinal).fingerprint; }
   catch { return false; }

@@ -95,6 +95,35 @@ describe('生成表达式真实列引用与服务器投影', () => {
     expect(sameGeneratedColumnExpression(parsed, 'qty*price+0001.2300', '((`qty` * `price`) + 1.2300)')).toBe(true);
     for (const [left, right] of [['qty+price', 'price+qty'], ['qty+(price+1)', '(qty+price)+1'], ['qty+9007199254740993', 'qty+9007199254740992'], ['qty+1.00', 'qty+1.0'], ['qty+1', 'qty+2'], ['qty', 'abs(qty)'], ['qty', 'unknown']]) expect(sameGeneratedColumnExpression(parsed, left, right)).toBe(false);
   });
+  it('一元正号只从比较键递归消去，原AST、引用次数和预览SQL均保留', () => {
+    const parsed = document(), input = '+(+qty * +price) + +9007199254740993.123456789012', result = compileGeneratedColumnExpression(parsed, input);
+    expect(parseGeneratedColumnExpression(input).ast.kind).toBe('binary');
+    expect(result.sql).toContain('(+`qty`)'); expect(result.sql).toContain('(+`price`)'); expect(result.sql).toContain('(+9007199254740993.123456789012)');
+    expect(result.fingerprint).toBe(compileGeneratedColumnExpression(parsed, 'qty * price + 9007199254740993.123456789012').fingerprint);
+    expect(compileGeneratedColumnExpression(parsed, '+qty + +qty').referencedColumns).toEqual(['qty', 'qty']);
+    expect(compileGeneratedColumnExpression(parsed, '+qty').sql).toBe('(+`qty`)');
+    expect(parseGeneratedColumnExpression('+qty').ast).toEqual({ kind: 'unary', operator: '+', operand: { kind: 'column', name: 'qty' } });
+  });
+  it('不能借一元正号正规化消除负号、重排运算或舍弃十进制尺度', () => {
+    const parsed = document();
+    for (const [left, right] of [['+qty', '-qty'], ['+(-qty)', 'qty'], ['-(-qty)', 'qty'], ['+qty-price', 'price-qty'], ['+(qty+price)+1', 'qty+(price+1)'], ['+(+1.00)', '1.0'], ['+9007199254740993', '9007199254740992']]) expect(sameGeneratedColumnExpression(parsed, left, right)).toBe(false);
+    expect(sameGeneratedColumnExpression(parsed, '+(-qty)', '-qty')).toBe(true);
+    expect(sameGeneratedColumnExpression(parsed, '-(+qty)', '-qty')).toBe(true);
+    expect(sameGeneratedColumnExpression(parsed, '+(qty+price)', 'qty+price')).toBe(true);
+  });
+  it('原输入预算先于正号正规化执行，不能用可消去节点绕过深度、引用或字符上限', () => {
+    const parsed = document();
+    for (const expression of ['+'.repeat(17) + 'qty', '+qty' + ' '.repeat(2048), balanced(Array(33).fill('+qty'))]) expect(() => compileGeneratedColumnExpression(parsed, expression)).toThrow('限制');
+  });
+  it.each([['mysql', '5.7.44'], ['mysql', '8.0.46'], ['mysql', '8.4.11'], ['mariadb', '11.4.13']] as const)('%s %s官方一元+归约对应的SHOW/目录投影只去正号也能后核', (dialect, _version) => {
+    // 这是官方语法规则的RAM样本，不把样本文字冒充本轮实库SHOW采证。
+    const parsed = document('CREATE TABLE t(qty int NOT NULL,price decimal(30,12) NULL,total decimal(65,12) GENERATED ALWAYS AS ((`qty` * `price`) + 9007199254740993.123456789012) VIRTUAL)', { ...mysql, dialect });
+    const requested = '+(+qty * +price) + +9007199254740993.123456789012', actual = readGeneratedColumnDefinition(parsed, 'total');
+    expect(actual).toMatchObject({ storage: 'VIRTUAL', referencedColumns: ['qty', 'price'] });
+    expect(actual!.fingerprint).toBe(compileGeneratedColumnExpression(parsed, requested, 2).fingerprint);
+    expect(sameGeneratedColumnExpression(parsed, requested, actual!.expression, 2)).toBe(true);
+    expect(sameGeneratedColumnExpression(parsed, actual!.expression, '(`qty` * `price`) + 9007199254740993.123456789012', 2)).toBe(true);
+  });
   it('客户端虽在原字符预算内，正规化补引号和括号超预算仍在DDL前拒绝', () => {
     const name = 'x'.repeat(60), expression = balanced(Array(32).fill(name)); expect(expression.length).toBeLessThanOrEqual(2048);
     const parsed = document('CREATE TABLE t (`' + name + '` int NULL)');
