@@ -1,9 +1,12 @@
 import { useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
 import type { QueryOutcome } from '../../shared/contracts';
+import type { ExplainSnapshotDocument } from '../../shared/explainSnapshot';
 import { explainLimits, explainNodeDetail, explainQueryArrayKinds, type ExplainNode } from '../../shared/explain';
 import { explainZh as t } from '../locales/explain.zh-CN';
 import { ResultsGrid } from './ResultsGrid';
+import { ExplainSnapshotSaveButton } from './ExplainSnapshotSaveButton';
 import '../explain.css';
+import '../explainSnapshot.css';
 
 /** 方言节点来自服务器，原型同名名称也只能当作普通文本显示。 */
 const nodeTitle = (kind: string) => Object.hasOwn(t.kinds, kind) ? t.kinds[kind] : kind;
@@ -19,15 +22,16 @@ function displayTitle(node: ExplainNode): string {
 }
 
 /** 展示有界的真实计划；所有视图切换都读取已有结果，只有明确的文本按钮会发送请求。 */
-export function ExplainPlanView({ outcome, onText, busy }: { outcome: QueryOutcome; onText(): void; busy: boolean }) {
+type ExplainPlanViewProps = { outcome: QueryOutcome; onText?(): void; busy: boolean; fileBusy?: boolean; fileActions?: boolean; fileSnapshot?: ExplainSnapshotDocument; saveAs?: boolean; onFileBusyChange?(busy: boolean): void };
+export function ExplainPlanView({ outcome, onText, busy, fileBusy, fileActions = false, fileSnapshot, saveAs, onFileBusyChange }: ExplainPlanViewProps) {
   const owner = useRef({ outcome, plan: outcome.explain, generation: 0 });
   // 父查询保留组件时仍以真实结果对象换代；A→B→A不能复活旧节点和查找闭包。
   if (owner.current.outcome !== outcome || owner.current.plan !== outcome.explain) owner.current = { outcome, plan: outcome.explain, generation: owner.current.generation + 1 };
-  return <OwnedExplainPlan key={owner.current.generation} outcome={outcome} onText={onText} busy={busy}/>;
+  return <OwnedExplainPlan key={owner.current.generation} outcome={outcome} onText={onText} busy={busy} fileBusy={fileBusy} fileActions={fileActions} fileSnapshot={fileSnapshot} saveAs={saveAs} onFileBusyChange={onFileBusyChange}/>;
 }
 
 /** 交互状态只归属于本轮结果；本地阅读永远不产生新的数据库请求。 */
-function OwnedExplainPlan({ outcome, onText, busy }: { outcome: QueryOutcome; onText(): void; busy: boolean }) {
+function OwnedExplainPlan({ outcome, onText, busy, fileBusy, fileActions, fileSnapshot, saveAs, onFileBusyChange }: ExplainPlanViewProps) {
   const plan = outcome.explain!;
   const [view, setView] = useState<'tree' | 'raw' | 'table'>(plan.nodes.length ? 'tree' : plan.format === 'text' ? 'table' : 'raw');
   const [selected, setSelected] = useState(plan.nodes[0]?.id ?? '');
@@ -92,7 +96,8 @@ function OwnedExplainPlan({ outcome, onText, busy }: { outcome: QueryOutcome; on
   return <section className="explain-view" aria-label={t.title}>
     <div className="explain-toolbar" role="group" aria-label={t.title}>
       {(['tree', 'raw', 'table'] as const).map(mode => <button key={mode} aria-pressed={view === mode} onClick={() => setView(mode)}>{t[mode]}</button>)}
-      <button disabled={busy} onClick={() => { if (alive.current && !busy) onText(); }}>{t.text}</button>
+      {onText && <button disabled={busy} onClick={() => { if (alive.current && !busy) onText(); }}>{t.text}</button>}
+      {fileActions && <ExplainSnapshotSaveButton outcome={outcome} fileSnapshot={fileSnapshot} busy={fileBusy ?? busy} saveAs={saveAs} onFileBusyChange={onFileBusyChange}/>}
       <span className="muted">{t.source}：{plan.dialect === 'mysql' ? 'MySQL' : 'MariaDB'} {plan.version} · {plan.format === 'json' ? 'EXPLAIN FORMAT=JSON' : 'EXPLAIN'}</span>
     </div>
     <div className="explain-search" role="search" aria-label={t.find}>

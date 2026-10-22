@@ -1,4 +1,6 @@
 import { QueryFileSources } from './queryFileSources';
+import { ExplainSnapshotFiles } from './explainSnapshotFiles';
+import { explainSnapshotZh } from '../shared/explainSnapshot.zh-CN';
 import { ResultSqlPreviews } from './resultSqlPreviews';
 import { QueryInsertExports } from './queryInsertExports';
 import { resultSqlZh } from '../shared/resultSql.zh-CN';
@@ -48,6 +50,7 @@ let connectionConfig: ConnectionConfigManager;
 let connectionTransfer: ConnectionTransfer;
 let snippetTransfers: SnippetTransfers;
 let queryFileSources: QueryFileSources;
+let explainSnapshotFiles: ExplainSnapshotFiles;
 let savedQuerySearches:SavedQuerySearches;
 let savedQueryPages:SavedQueryPages;
 let historyPages:HistoryPages;
@@ -83,7 +86,7 @@ const tablePresetSources=new TablePresetSources({assert:value=>columnsMain.asser
 const resultPresetSources=new QueryResultPresetSources({assert:value=>columnsMain.assertCapturedOwner(value),same:(left,right)=>columnsMain.sharesDocumentOwner(left,right)});
 const tablePresetReads=new Map<string,{cancelled:boolean;sent:boolean;stop?:Promise<unknown>}>();
 /** 仅真实Main调用持有发布门；成功结果直到IPC最后同步检查后才释放取消登记。 */
-type MainInvocation = ColumnsInvocation & {resultPresetPublication?:()=>void;presetPublication?:{pendingStop():Promise<unknown>|undefined;settledStop(stop:Promise<unknown>):void;assertCurrent():void;release():void}};
+type MainInvocation = ColumnsInvocation & {snapshotSaved?:true;resultPresetPublication?:()=>void;presetPublication?:{pendingStop():Promise<unknown>|undefined;settledStop(stop:Promise<unknown>):void;assertCurrent():void;release():void}};
 /** 取消只指向本片已登记的独立metadata任务；原请求仍等待utility严格资源结算。 */
 function cancelTablePresetRead(taskId:string):Promise<unknown> {
   const state=tablePresetReads.get(taskId);if(!state)return Promise.resolve();
@@ -207,6 +210,17 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
     if (command === 'snippets.transferApply') return snippetTransfers.apply(input.scopeId, owner, input.previewId, input.decisions);
     if (command === 'snippets.transferCancel') return snippetTransfers.cancel(input.scopeId, owner, input.close);
     throw Error(snippetTransferZh.stale);
+  }
+  // 文件能力仅绑定本次真实主窗口文档，不接收渲染进程传入的磁盘路径或连接。
+  if (command === 'explainFiles.open' || command === 'explainFiles.save') {
+    columnsMain.assertCapturedOwner(columns);
+    const owner = { assertCurrent: () => columnsMain.assertCapturedOwner(columns) };
+    return queryFileOperation(async () => {
+      if (command === 'explainFiles.open') return explainSnapshotFiles.open(owner);
+      const result = await explainSnapshotFiles.save(input.snapshot, owner);
+      if (result) columns!.snapshotSaved = true;
+      return result;
+    });
   }
   if(command==='query.confirmInsertExport'){
     // 最终确认先同步消费真实owner的发布令牌，随后仅向原引擎任务投递文件发布信号。
@@ -702,6 +716,17 @@ else {
       const result = await dialog.showSaveDialog(window, { title: '另存SQL文件', defaultPath: name ?? '查询.sql', filters }); return result.canceled ? undefined : result.filePath;
     } });
     connectionTransfer = new ConnectionTransfer(store, Date.now, undefined, connectionConfig);
+    explainSnapshotFiles = new ExplainSnapshotFiles({ reserve: path => exportReservations.acquire(path), choose: async mode => {
+      const ownerWindow = window;
+      if (!ownerWindow) throw Error(explainSnapshotZh.stale);
+      const filters = [{ name: 'DBArk 执行计划快照', extensions: ['json'] }];
+      if (mode === 'open') {
+        const selected = await dialog.showOpenDialog(ownerWindow, { title: explainSnapshotZh.choose, properties: ['openFile'], filters });
+        return selected.canceled ? undefined : selected.filePaths[0];
+      }
+      const selected = await dialog.showSaveDialog(ownerWindow, { title: explainSnapshotZh.save, defaultPath: explainSnapshotZh.defaultName, filters });
+      return selected.canceled ? undefined : selected.filePath;
+    } });
     snippetTransfers = new SnippetTransfers(store, { choose: async mode => {
       if (!window) throw Error(snippetTransferZh.stale);
       const filters = [{ name: 'SQL片段 JSON', extensions: ['json'] }];
@@ -719,7 +744,7 @@ else {
         const fileCancel = Boolean(payload.command === 'query.cancel' && payload.input && typeof payload.input === 'object' && 'taskId' in payload.input && typeof payload.input.taskId === 'string' && tasks.get(payload.input.taskId)?.kind.startsWith('queryFileSources.'));
         const insertRequest = payload.command==='query.confirmInsertExport' || payload.command==='query.exportStream' && !!payload.input && typeof payload.input==='object' && 'format' in payload.input && payload.input.format==='sql' || payload.command==='files.choose' && !!payload.input && typeof payload.input==='object' && 'queryInsertExport' in payload.input || payload.command==='query.cancel' && !!payload.input && typeof payload.input==='object' && 'taskId' in payload.input && typeof payload.input.taskId==='string' && queryInsertExports.has(payload.input.taskId);
         const resultSql = payload.command === 'files.previewResultSql' || payload.command === 'files.releaseResultSql' || (payload.command === 'files.exportResult' || payload.command === 'files.choose') && !!payload.input && typeof payload.input === 'object' && ('format' in payload.input && payload.input.format === 'sql') && (payload.command === 'files.exportResult' || 'resultSqlPreviewId' in payload.input);
-        if (payload.command.startsWith('schema.columns.')||payload.command.startsWith('table.presets.')||payload.command.startsWith('result.presets.')||payload.command.startsWith('queryFileSources.')||fileCancel||resultSql||insertRequest||payload.command.startsWith('snippets.transfer')) columns = columnsMain.capture(event);
+        if (payload.command.startsWith('explainFiles.')||payload.command.startsWith('schema.columns.')||payload.command.startsWith('table.presets.')||payload.command.startsWith('result.presets.')||payload.command.startsWith('queryFileSources.')||fileCancel||resultSql||insertRequest||payload.command.startsWith('snippets.transfer')) columns = columnsMain.capture(event);
         const input = validateMainCommand(payload.command, payload.input);
         const operation=dispatch(payload.command as Command,input,columns),local=payload.command==='search.savedQueries'||payload.command==='search.savedQueriesContinue'||payload.command==='queries.page'||payload.command==='queries.pageContinue'||payload.command==='history.page'||payload.command==='history.pageContinue';if(local)localSearchOperations.add(operation);
         // 片段文件操作及清理全部结算后才允许退出关闭存储，复用现有文件操作等待集合。
@@ -738,6 +763,11 @@ else {
             catch (error) { await columnsMain.rejectReply(columns, error); }
           }
           if (payload.command.startsWith('queryFileSources.') || fileCancel || payload.command.startsWith('snippets.transfer')) columnsMain.assertCapturedOwner(columns);
+          if (payload.command.startsWith('explainFiles.')) try { columnsMain.assertCapturedOwner(columns); } catch (error) {
+            // 文件已提交后的最后发布门失效时，不能诱导用户自动重试覆盖文件。
+            if (columns?.snapshotSaved) throw Error(explainSnapshotZh.unknownWrite);
+            throw error;
+          }
           if(insertRequest)columnsMain.assertCapturedOwner(columns);
           if (resultSql) try { columnsMain.assertCapturedOwner(columns); } catch (error) {
             // 仅撤销本次未发布的能力，迟到旧失败不能清掉同文档其他导出窗口的新预览。

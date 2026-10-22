@@ -1,0 +1,5 @@
+/* 离线窗口保留有界计划区域，长文件名和保存回执可换行。 */
+.explain-snapshot-dialog{display:flex;flex-direction:column;min-height:0;gap:8px;padding:12px;overflow:auto}
+.explain-snapshot-dialog>p{margin:0;overflow-wrap:anywhere}.explain-snapshot-actions{display:flex;gap:8px;flex-wrap:wrap}
+.explain-snapshot-plan{height:min(65vh,700px);min-height:240px;border:1px solid var(--line)}
+.explain-snapshot-save{display:inline-flex;gap:6px;align-items:center;flex-wrap:wrap;min-width:0}.explain-snapshot-save>span{font-size:10px;overflow-wrap:anywhere}.explain-snapshot-save>[role=alert]{color:var(--warning)}

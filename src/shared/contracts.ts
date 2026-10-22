@@ -36,6 +36,7 @@ import type{SavedQuerySearchInput,SavedQuerySearchNext,SavedQuerySearchPage,Save
 import type{SavedQueryPageInput,SavedQueryPage}from'./savedQueryPages';
 import type{HistoryPageInput,HistoryPage,HistoryOpenResult}from'./historyPages';
 import type { ExplainPlan } from './explain';
+import type { ExplainSnapshotDocument } from './explainSnapshot';
 import type { WorkbenchTarget, WorkbenchSnapshot } from './workbench';
 import type { SchemaCompareInput, SchemaCompareResult, SchemaComparePreviewInput, SchemaComparePreview } from './schemaCompare';
 import type { QuerySourceBinding, QuerySaveContent, QuerySaveResult } from './queryBinding';
@@ -98,6 +99,8 @@ export interface CommandMap {
   'result.presets.delete': { input: QueryResultPresetSelect; output: QueryResultPresetSnapshot };
   'result.presets.read': { input: QueryResultPresetSelect; output: QueryResultPresetValue };
   'queryFileSources.checkExternal': { input: QueryFileCheckInput; output: QueryFileCheckResult };
+  'explainFiles.open': { input: Record<string, never>; output: { name: string; snapshot: ExplainSnapshotDocument } | null };
+  'explainFiles.save': { input: { snapshot: ExplainSnapshotDocument }; output: { name: string } | null };
   'queryFileSources.reload': { input: QueryFileReloadInput; output: QueryFileReloadResult };
   'queryFileSources.discardReload': { input: QueryFileDiscardInput; output: { discarded: boolean } };
   'queryFileSources.open': { input: QueryFileSourceOpenInput; output: QueryFileSourceOpenResult };
