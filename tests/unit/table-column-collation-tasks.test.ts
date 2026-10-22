@@ -53,6 +53,8 @@ function fixture() {
       const complete = () => queueMicrotask(() => {
         state.sqlHook?.(sql);
         if (state.failSql?.test(sql)) { callback(state.error ?? new Error('合成驱动错误')); return; }
+        // 本旧夹具只授权列排序规则目录；新增生成列全字段查询经真实driver回调明确拒绝，不能在微任务中throw而悬空原命令。
+        if (sql.startsWith('SELECT COLUMN_NAME AS name, ORDINAL_POSITION AS ordinal, COLUMN_TYPE AS typeSql, DATA_TYPE AS dataType, IS_NULLABLE AS nullable, COLUMN_DEFAULT AS defaultValue, EXTRA AS extra, GENERATION_EXPRESSION AS generationExpression, ') && sql.includes('FROM information_schema.COLUMNS WHERE ')) { callback(Object.assign(new Error('RAM生成列目录不在本用途权限内'), { errno: 1142, code: 'ER_TABLEACCESS_DENIED_ERROR', fatal: false })); return; }
         let rows: unknown;
         if (sql.startsWith('SELECT VERSION()')) rows = [{ version: state.version, os: 'Linux', lowerNames: 0 }];
         else if (sql.includes('FROM information_schema.TABLES')) rows = [{ databaseName: 'ram_db', tableName: 'subject', kind: 'BASE TABLE', engine: 'InnoDB' }];
@@ -81,6 +83,7 @@ beforeEach(() => { ports.definition.mockReset(); ports.facts.mockReset(); });
 it.each([false, true])('真实物理/专用execution与Tasks闭环，postID变化=%s不单独判失败', async changed => {
   const f = fixture(); if (changed) f.state.postId = '19612';
   const snapshot = await f.get(); expect(f.state.closed).toBe(1); expect(snapshot.collationCatalog).toHaveLength(3);
+  expect(snapshot.generatedAccess).toMatchObject({ editable: false, reason: expect.any(String) }); expect(snapshot.columns.every(column => column.generatedReference !== true)).toBe(true);
   expect(snapshot.columns[0].collation).toBeUndefined(); expect(snapshot.columns[1].collation).toEqual({ current: { charset: 'utf8mb4', collation: 'utf8mb4_bin' }, access: { editable: true } });
   expect(JSON.stringify(snapshot)).not.toMatch(/19611|tableId|serverIdentity|references|directAlterProven/);
   const value = await f.preview(snapshot); expect(f.state.closed).toBe(2); expect(f.sent.filter(sql => sql.startsWith('ALTER'))).toHaveLength(0);
