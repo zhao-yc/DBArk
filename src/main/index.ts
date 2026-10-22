@@ -213,6 +213,11 @@ function registerQueryFileSourceTask(taskId: string, command: Command): void {
 
 /** 分派前检查配置保存锁，防止检查通过后另一个请求用旧凭据抢先建连。 */
 async function dispatch(command: Command, input: any, columns?: MainInvocation): Promise<unknown> {
+  // 查询分组仅操作本地组织元数据，不占用连接锁、不委派数据库任务或执行历史。
+  if (command === 'queries.organizationGet' || command === 'queries.organizationApply') {
+    if (shuttingDown) throw Error('客户端正在退出，不能整理保存查询分组');
+    return command === 'queries.organizationGet' ? store.queryOrganization() : store.applyQueryOrganization(input);
+  }
   // 专属片段传输只认真实IPC文档与Main快照，永不转发给SQL引擎或接受任意文件路径。
   if (command.startsWith('snippets.transfer')) {
     columnsMain.assertCapturedOwner(columns);

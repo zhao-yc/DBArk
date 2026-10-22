@@ -27,6 +27,7 @@ import{historyPageInputSchema,historyReadSchema,historyErrorReadSchema}from'./hi
 import{localSqlPageNextSchema,localSqlPageReleaseSchema}from'./localSqlPages';
 import { connectionFileRequirements, connectionImportApplySchema, connectionImportReviewSchema, connectionTransferLimits } from './connectionTransfer';
 import { connectionOrganizationGetSchema, connectionOrganizationApplySchema } from './connectionOrganization';
+import { savedQueryOrganizationGetSchema, savedQueryOrganizationApplySchema } from './savedQueryOrganization';
 import type { Command, ResultExportData } from './contracts';
 import { validateResultExportData } from './resultExport';
 import { assertResultExcelData } from './resultExcel';
@@ -135,6 +136,7 @@ export const commandSchemas: Record<Command, z.ZodType> = {
   'table.copyInsertSql': copyInsertSqlInputSchema,
   'workbench.get': empty, 'workbench.save': workbenchSaveSchema, 'workbench.resolve': workbenchTargetSchema, 'workbench.copyUri': workbenchTargetSchema,
   'queries.create': querySaveContentSchema, 'queries.updateSource': queryUpdateSourceSchema,
+  'queries.organizationGet': savedQueryOrganizationGetSchema, 'queries.organizationApply': savedQueryOrganizationApplySchema,
   'table.preferences.get': tablePreferenceTargetSchema, 'table.preferences.save': tablePreferenceSaveSchema, 'table.preferences.reset': tablePreferenceTargetSchema,
   'schema.compare': schemaCompareInputSchema, 'schema.comparePreview': schemaComparePreviewSchema, 'schema.compareRelease': schemaCompareReleaseSchema,
   'app.runtimeInfo': empty, 'app.info': empty,

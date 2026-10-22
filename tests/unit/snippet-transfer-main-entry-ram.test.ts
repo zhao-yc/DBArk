@@ -10,6 +10,9 @@ const emit = (text: string) => ts.transpileModule(text, { compilerOptions: { tar
 /** 取正式Main函数AST运行；只保留该专属dispatch分支，其余路径遇到即失败，不启动Electron。 */
 function main() {
   const dispatch = source.statements.find((node): node is ts.FunctionDeclaration => ts.isFunctionDeclaration(node) && node.name?.text === 'dispatch')!;
+  // 按真实命令前缀找专属分支，不依赖dispatch中第一条语句的位置。
+  const snippetBranches = dispatch.body!.statements.filter((node): node is ts.IfStatement => ts.isIfStatement(node) && ts.isCallExpression(node.expression) && ts.isPropertyAccessExpression(node.expression.expression) && ts.isIdentifier(node.expression.expression.expression) && node.expression.expression.expression.text === 'command' && node.expression.expression.name.text === 'startsWith' && node.expression.arguments.length === 1 && ts.isStringLiteral(node.expression.arguments[0]) && node.expression.arguments[0].text === 'snippets.transfer');
+  expect(snippetBranches).toHaveLength(1);
   let handler: ts.Expression | undefined;
   function visit(node: ts.Node): void { if (ts.isCallExpression(node) && node.expression.getText(source) === 'ipcMain.handle' && node.arguments[0]?.getText(source) === "'dbark:request'") handler = node.arguments[1]; ts.forEachChild(node, visit); } visit(source);
   expect(handler).toBeDefined(); let valid = true;
@@ -18,7 +21,7 @@ function main() {
   const snippetTransfers = { open: vi.fn(() => ({ scopeId: 'RAM能力' })), preview: vi.fn(async () => null), export: vi.fn(async () => ({ count: 1 })), apply: vi.fn(() => ({ items: [], added: 0, replaced: 0, skipped: 0 })), cancel: vi.fn(() => ({ cancelled: true })) };
   const queryFileOperations=new Set<Promise<unknown>>();
   const context = createContext({ Error, columnsMain, snippetTransfers, snippetTransferZh, shuttingDown: false, window: { webContents }, rendererURL: 'RAM渲染页', tasks: new Map(), queryInsertExports: { has: () => false }, validateMainCommand: validateCommand, localSearchOperations: new Set(),queryFileOperations });
-  runInContext(emit(`async function dispatch(command:any,input:any,columns?:any){${dispatch.body!.statements[0].getText(source)}throw Error('越界分派');}\nvar request=${handler!.getText(source)};`), context);
+  runInContext(emit(`async function dispatch(command:any,input:any,columns?:any){${snippetBranches[0].getText(source)}throw Error('越界分派');}\nvar request=${handler!.getText(source)};`), context);
   return { request: context.request as (event: unknown, payload: unknown) => Promise<any>, event, columns, owner, snippetTransfers, columnsMain,queryFileOperations, invalidate() { valid = false; } };
 }
 it('五项正式IPC实际捕获Main文档、严格校验、进入专属dispatch并在回包前再次检查归属', async () => {
@@ -42,5 +45,5 @@ it.each(['resolved','rejected'] as const)('片段分派%s前保留退出等待�
   const pending=new Promise<{count:number}>((yes,no)=>{resolve=yes;reject=no;});h.snippetTransfers.export.mockImplementation(()=>pending);
   const request=h.request(h.event,{command:'snippets.transferExport',input:{scopeId}}),tracked=h.queryFileOperations.size;
   if(outcome==='resolved')resolve({count:1});else reject(Error('原文件操作失败'));
-  const reply=await request;expect(tracked).toBe(1);expect(reply.ok).toBe(outcome==='resolved');expect(h.queryFileOperations.size).toBe(0);
+  const reply=await request;expect(tracked).toBe(1);expect(h.snippetTransfers.export).toHaveBeenCalledOnce();expect(reply.ok).toBe(outcome==='resolved');if(outcome==='rejected')expect(reply.error).toBe('原文件操作失败');expect(h.queryFileOperations.size).toBe(0);
 });

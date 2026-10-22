@@ -30,6 +30,8 @@ import { bindSavedQuery, queryConnectionDigest } from './queryBinding';
 import { tablePresetDocumentSchema, tablePresetListSchema, tablePresetSaveSchema, tablePresetSelectSchema, validateTablePresetBudget, type TablePresetTarget, type TablePresetSource, type TablePresetStoredSnapshot as TablePresetSnapshot, type TablePresetSelect } from '../shared/tablePresets';
 import { queryResultPresetDocumentSchema, queryResultPresetListSchema, queryResultPresetSaveSchema, queryResultPresetSelectSchema, queryResultPresetRenameSchema, validateQueryResultPresetBudget, type QueryResultPresetSource, type QueryResultPresetStoredSnapshot, type QueryResultPresetValue, type QueryResultPresetSelect, type QueryResultPresetSave, type QueryResultPresetRename } from '../shared/queryResultPresets';
 import { parseSavedQueryRecord } from './savedQuerySearchMatch';
+import { savedQueryOrganizationApplySchema, savedQueryGroupIds, type SavedQueryOrganizationApply, type SavedQueryGroupScope } from '../shared/savedQueryOrganization';
+import { applySavedQueryOrganization, readSavedQueryOrganization, savedQueryOrganizationRevision, savedQueryOrganizationSnapshot, savedQueryMembershipCondition, validateSavedQueryOrganizationStorage } from './savedQueryOrganizationStorage';
 
 export interface SecretProtector { available(): boolean; encrypt(value: string): string; decrypt(value: string): string; }
 export const defaultSettings: AppSettings = { theme: 'dark', sidebarWidth: 270, resultLimit: 1000, pageSize: 200, dataTypeColors: false, editorFontSize: editorFontLimits.defaultSize, editorWordWrap: defaultEditorWordWrap, editorTabSize: editorIndentationLimits.defaultTabSize, editorInsertSpaces: editorIndentationLimits.defaultInsertSpaces, tabs: [] };
@@ -43,6 +45,7 @@ export class LocalStore {
   private readonly queryFileReloadGenerations = new Map<string, number>();
   private queryFileDocumentSnapshot?: AppSettings['tabs'];
   private queryRevisionValue=0;
+  private readonly queryOrganizationGeneration = randomUUID();
   private historyRevisionValue=0;
   private snippetRevisionValue = 0;
   private volatileSecrets = new Map<string, string>();
@@ -70,6 +73,7 @@ export class LocalStore {
     }
     // 可选元数据也须先完整校验；坏文档不能被迁移或任务恢复写盘掩盖。
     if (this.db.exec("SELECT 1 FROM sqlite_master WHERE type='table' AND name='query_result_presets'").length) this.validateQueryResultPresetCollection();
+    validateSavedQueryOrganizationStorage(this.db);
     this.mutate(() => {
       this.db.run(`CREATE TABLE IF NOT EXISTS connections (id TEXT PRIMARY KEY, data TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS secrets (connection_id TEXT NOT NULL, name TEXT NOT NULL, value TEXT NOT NULL, PRIMARY KEY(connection_id,name));
@@ -90,6 +94,12 @@ export class LocalStore {
         CREATE TABLE IF NOT EXISTS query_file_recents (id INTEGER PRIMARY KEY CHECK(id=1), data TEXT NOT NULL);
         -- 查询结果整理方案是可选schema9元数据，不改变旧客户端的原生版本门槛。
         CREATE TABLE IF NOT EXISTS query_result_presets (connection_id TEXT PRIMARY KEY, data TEXT NOT NULL);
+        -- 分组元数据与查询原文分离；旧schema9客户端可忽略，不改变来源摘要。
+        CREATE TABLE IF NOT EXISTS saved_query_organization (id INTEGER PRIMARY KEY CHECK(id=1), data TEXT NOT NULL);
+        CREATE TABLE IF NOT EXISTS saved_query_memberships (query_id TEXT PRIMARY KEY, group_id TEXT NOT NULL);
+        CREATE INDEX IF NOT EXISTS saved_query_memberships_group ON saved_query_memberships(group_id,query_id);
+        -- 旧客户端合法删除留下的孤儿成员不能在同ID重建时复活。
+        DELETE FROM saved_query_memberships WHERE NOT EXISTS (SELECT 1 FROM queries WHERE queries.id=saved_query_memberships.query_id);
         PRAGMA user_version=9;`);
     });
     for (const receipt of this.records<TableApplyReceipt>('SELECT data FROM table_apply_receipts').map(parseTableApplyReceipt)) if (receipt.phase !== 'terminal') this.saveTableApplyReceipt(interruptTableApplyReceipt(receipt));
@@ -470,11 +480,32 @@ export class LocalStore {
   /** 按更新时间返回保存的查询。 */
   queries(): SavedQuery[] { return this.records('SELECT data FROM queries ORDER BY updated_at DESC'); }
   /** 搜索绑定查询及连接库修订；失败写盘不会改变修订。 */
-  querySearchRevision():string{return this.queryRevisionValue+':'+this.connectionRevisionValue;}
+  querySearchRevision():string{return this.queryRevisionValue+':'+this.connectionRevisionValue+':'+readSavedQueryOrganization(this.db).revision;}
+  /** 分组CAS同时绑定整个查询库和组织修订；读取只统计元数据，不解密连接。 */
+  queryOrganization() { return savedQueryOrganizationSnapshot(this.db, this.queryOrganizationRevision()); }
+  /** 每次重启更换世代，防止旧渲染文档或ABA修订重新获得写入资格。 */
+  private queryOrganizationRevision(): string { return savedQueryOrganizationRevision(readSavedQueryOrganization(this.db), this.queryRevisionValue, this.queryOrganizationGeneration); }
+  /** 同步CAS及所有成员摘要在一次真实SQLite事务核对，写盘失败不推进任何修订。 */
+  applyQueryOrganization(raw: SavedQueryOrganizationApply) {
+    const input = savedQueryOrganizationApplySchema.parse(raw);
+    if (input.expectedRevision !== this.queryOrganizationRevision()) throw Error('保存查询库或分组已变化，请刷新后重试');
+    const createdId = input.operation.kind === 'create' ? randomUUID() : undefined;
+    this.mutate(() => {
+      if (input.expectedRevision !== this.queryOrganizationRevision()) throw Error('保存查询库或分组已变化，请刷新后重试');
+      applySavedQueryOrganization(this.db, input.operation, createdId, id => this.querySearchRaw(id));
+    });
+    return this.queryOrganization();
+  }
   /** 二进制主键位置分页，仅取一条正文及下一条存在性，不复制整个查询库。 */
   querySearchNext(after?:string):{id:string;raw:string|null;hasMore:boolean}|null{const statement=this.db.prepare('SELECT id,CASE WHEN length(CAST(data AS BLOB))<=? THEN data ELSE NULL END AS data FROM queries '+(after===undefined?'':'WHERE id COLLATE BINARY>? ')+'ORDER BY id COLLATE BINARY LIMIT 2');try{statement.bind(after===undefined?[savedQuerySearchLimits.recordBytes]:[savedQuerySearchLimits.recordBytes,after]);if(!statement.step())return null;const row=statement.getAsObject();return{id:String(row.id),raw:typeof row.data==='string'?row.data:null,hasMore:statement.step()};}finally{statement.free();}}
   /** 更新时间与ID均降序，复合索引定位下一条，不用OFFSET或复制整页正文数组。 */
-  queryPageNext(after?:SavedQueryPagePosition):{id:string;updatedAt:string;raw:string|null;hasMore:boolean}|null{const statement=this.db.prepare('SELECT id,updated_at,CASE WHEN length(CAST(data AS BLOB))<=? THEN data ELSE NULL END AS data FROM queries '+(after?'WHERE (updated_at COLLATE BINARY,id COLLATE BINARY)<(?,?) ':'')+'ORDER BY updated_at COLLATE BINARY DESC,id COLLATE BINARY DESC LIMIT 2');try{statement.bind(after?[savedQuerySearchLimits.recordBytes,after.updatedAt,after.id]:[savedQuerySearchLimits.recordBytes]);if(!statement.step())return null;const row=statement.getAsObject();return{id:String(row.id),updatedAt:String(row.updated_at),raw:typeof row.data==='string'?row.data:null,hasMore:statement.step()};}finally{statement.free();}}
+  queryPageNext(after?:SavedQueryPagePosition,input?:{group?:SavedQueryGroupScope}):{id:string;updatedAt:string;raw:string|null;hasMore:boolean;groupId?:string}|null{
+    const ids=savedQueryGroupIds(readSavedQueryOrganization(this.db).groups,input?.group??{kind:'all'}),scope=savedQueryMembershipCondition(ids),conditions:string[]=[],params:SqlValue[]=[savedQuerySearchLimits.recordBytes];
+    if(scope.condition){conditions.push(scope.condition);params.push(...scope.params);}
+    if(after){conditions.push('(q.updated_at COLLATE BINARY,q.id COLLATE BINARY)<(?,?)');params.push(after.updatedAt,after.id);}
+    const statement=this.db.prepare('SELECT q.id,q.updated_at,m.group_id,CASE WHEN length(CAST(q.data AS BLOB))<=? THEN q.data ELSE NULL END AS data FROM queries q LEFT JOIN saved_query_memberships m ON m.query_id=q.id '+(conditions.length?'WHERE '+conditions.join(' AND ')+' ':'')+'ORDER BY q.updated_at COLLATE BINARY DESC,q.id COLLATE BINARY DESC LIMIT 2');
+    try{statement.bind(params);if(!statement.step())return null;const row=statement.getAsObject();return{id:String(row.id),updatedAt:String(row.updated_at),raw:typeof row.data==='string'?row.data:null,...(typeof row.group_id==='string'?{groupId:row.group_id}:{}),hasMore:statement.step()};}finally{statement.free();}
+  }
   /** 只在明确打开时读取一条当前原文，过大记录不会进入渲染进程。 */
   querySearchRaw(id:string):string|undefined{const statement=this.db.prepare('SELECT CASE WHEN length(CAST(data AS BLOB))<=? THEN data ELSE NULL END FROM queries WHERE id=?');try{statement.bind([savedQuerySearchLimits.recordBytes,id]);if(!statement.step())return;const raw=statement.get()[0];if(typeof raw!=='string')throw Error('保存查询记录超过128MiB');return raw;}finally{statement.free();}}
   /** 打开查询只核本地连接存在性，不解密密码或尝试数据库网络连接。 */
@@ -566,7 +597,7 @@ export class LocalStore {
     this.queryRevisionValue++;
   }
   /** 只删除指定查询，不影响数据库或执行历史。 */
-  deleteQuery(id: string): void { this.mutate(() => this.db.run('DELETE FROM queries WHERE id=?', [id]));this.queryRevisionValue++; }
+  deleteQuery(id: string): void { this.mutate(() => { this.db.run('DELETE FROM saved_query_memberships WHERE query_id=?', [id]); this.db.run('DELETE FROM queries WHERE id=?', [id]); });this.queryRevisionValue++; }
   /** 历史显示限制为最近 500 条，可以按连接筛选。 */
   history(connectionId?: string): HistoryEntry[] { return this.records(`SELECT data FROM history ${connectionId ? 'WHERE connection_id=?' : ''} ORDER BY started_at DESC LIMIT 500`, connectionId ? [connectionId] : []); }
   /** 历史或连接成功变化即失效旧页；写盘失败不改变本地修订。 */

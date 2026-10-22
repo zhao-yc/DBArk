@@ -24,6 +24,7 @@ export const publicCommands: Record<Command, true> = {
   'schema.tableTruncate.get': true, 'schema.tableTruncate.preview': true, 'schema.tableTruncate.apply': true, 'schema.tableTruncate.release': true,
   'workbench.get': true, 'workbench.save': true, 'workbench.resolve': true, 'workbench.copyUri': true,
   'queries.create': true, 'queries.updateSource': true,
+  'queries.organizationGet': true, 'queries.organizationApply': true,
   'table.preferences.get': true, 'table.preferences.save': true, 'table.preferences.reset': true,
   'schema.compare': true, 'schema.comparePreview': true, 'schema.compareRelease': true,
   'app.runtimeInfo': true, 'app.info': true, 'app.setDirty': true,

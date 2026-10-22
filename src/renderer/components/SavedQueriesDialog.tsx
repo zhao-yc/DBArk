@@ -1,51 +1,114 @@
-import{useEffect,useRef,useState}from'react';
-import{ArrowUpRight,Clock3,FileCode2,Search,Trash2}from'lucide-react';
-import type{SavedQueryPage,SavedQueryPageEntry}from'../../shared/savedQueryPages';
-import{zh,formatText}from'../locales/zh-CN';
-import{queryContextZh}from'../locales/queryContext.zh-CN';
-import{savedQueryPagesZh as t}from'../locales/savedQueryPages.zh-CN';
-import{errorMessage,invoke,uid}from'../lib';
-import{useWorkspace}from'../store';
-import{Empty,ErrorBox,Modal,Spinner}from'./ui';
-import'../savedQueryPages.css';
+import { useEffect, useRef, useState } from 'react';
+import { ArrowUpRight, Clock3, FileCode2, Search, Trash2 } from 'lucide-react';
+import type { SavedQueryPage, SavedQueryPageEntry } from '../../shared/savedQueryPages';
+import type { SavedQueryGroupScope, SavedQueryOrganizationSnapshot } from '../../shared/savedQueryOrganization';
+import type { SavedQueryOpenResult } from '../../shared/savedQuerySearch';
+import { zh, formatText } from '../locales/zh-CN';
+import { queryContextZh } from '../locales/queryContext.zh-CN';
+import { savedQueryPagesZh as t } from '../locales/savedQueryPages.zh-CN';
+import { savedQueryOrganizationZh as text } from '../locales/savedQueryOrganization.zh-CN';
+import { errorMessage, invoke, uid } from '../lib';
+import { useWorkspace } from '../store';
+import { readSavedQueryOrganization, savedQueryOrganizationTree, type SelectedSavedQuery, type SavedQueryOrganizationPreview } from '../savedQueryOrganizationUi';
+import { SavedQueryOrganizationEditor, type SavedQueryOrganizationEdit } from './SavedQueryOrganizationEditor';
+import { Empty, ErrorBox, Modal, Spinner } from './ui';
+import '../savedQueryPages.css';
 
-/** 列表只保留当前概要页；关闭及切回历史都等待当前读取和续页释放。 */
-export function SavedQueriesDialog({onClose,onHistory}:{onClose():void;onHistory():void}){
- const connections=useWorkspace(state=>state.connections),[search,setSearch]=useState(''),[applied,setApplied]=useState(''),[policy,setPolicy]=useState<'stop'|'continue'>('continue'),[appliedPolicy,setAppliedPolicy]=useState(policy);
- const[reply,setReply]=useState<SavedQueryPage>(),[batch,setBatch]=useState(0),[busy,setBusy]=useState(true),[closing,setClosing]=useState(false),[error,setError]=useState(''),[targets,setTargets]=useState(new Map<string,string>());
- const cursor=useRef<string|undefined>(undefined),active=useRef<string|undefined>(undefined),pending=useRef<Promise<unknown>|undefined>(undefined),locked=useRef(false),closed=useRef(false);
- /** 释放准确句柄；迟到的新页也必须释放，不残留到另一次窗口。 */
- async function release(){const value=cursor.current;if(value){await invoke('queries.pageRelease',{cursor:value});if(cursor.current===value)cursor.current=undefined;}}
- /** 等待当前读取或显式打开/删除终态后再释放句柄，避免迟到回复打开标签。 */
- async function cleanup(){if(active.current)await invoke('query.cancel',{taskId:active.current});await pending.current?.catch(()=>{});await release();}
- /** 模态关闭和切回历史共用收尾流程，失败保留窗口供用户核对。 */
- async function close(after=onClose){if(closed.current)return;closed.current=true;setClosing(true);try{await cleanup();after();}catch(reason){closed.current=false;setClosing(false);setError(errorMessage(reason));}}
- /** 不累计上一页正文/卡片；新筛选显式从头读，空命中页仍能继续。 */
- async function load(next=false){
-  if(locked.current||closed.current)return;locked.current=true;setBusy(true);setError('');const taskId=uid();
-  try{const previous=cursor.current;if(!next){await release();if(closed.current)return;setReply(undefined);setBatch(0);setTargets(new Map());}else if(!previous)return;
-   cursor.current=undefined;active.current=taskId;const request=next?invoke('queries.pageContinue',{taskId,cursor:previous!}):invoke('queries.page',{taskId,search,onError:policy});pending.current=request;
-   const page=await request;if(pending.current===request)pending.current=undefined;if(active.current===taskId)active.current=undefined;cursor.current=page.cursor;
-   if(closed.current){await release();return;}setReply(page);setBatch(value=>next?value+1:1);setApplied(search);setAppliedPolicy(policy);setTargets(new Map());
-  }catch(reason){if(!closed.current)setError(errorMessage(reason));}
-  finally{if(active.current===taskId)active.current=undefined;pending.current=undefined;locked.current=false;if(!closed.current)setBusy(false);}
- }
- useEffect(()=>{void load();return()=>{closed.current=true;void cleanup().catch(reason=>useWorkspace.getState().notify(t.cleanupFailed+errorMessage(reason),true));};},[]);
- /** 原连接不存在时不回退当前连接或首个连接；Map也支持constructor等标识。 */
- function target(item:SavedQueryPageEntry){if(targets.has(item.query.id))return targets.get(item.query.id)!;return connections.some(value=>value.id===item.query.connectionId)?item.query.connectionId!:'';}
- /** 按当前原文摘要读取，并且只创建新标签，不执行语句或替换旧草稿。 */
- async function open(item:SavedQueryPageEntry){
-  if(locked.current||closed.current)return;const connectionId=target(item);if(!connectionId){setError(t.choose);return;}locked.current=true;setBusy(true);setError('');
-  try{const request=invoke('queries.read',{id:item.query.id,digest:item.digest,connectionId});pending.current=request;const result=await request;if(pending.current===request)pending.current=undefined;if(!closed.current)await close(()=>{useWorkspace.getState().openTab({id:uid(),kind:'query',title:result.query.name,connectionId:result.connectionId,database:result.database,databaseContext:result.databaseContext,sql:result.query.sql,sourceBinding:result.sourceBinding});onClose();});}
-  catch(reason){if(!closed.current)setError(errorMessage(reason));}finally{pending.current=undefined;locked.current=false;if(!closed.current)setBusy(false);}
- }
- /** 按所见摘要删除，成功后丢弃旧续页；失败不重放，也不移除当前卡片。 */
- async function remove(item:SavedQueryPageEntry){
-  if(locked.current||closed.current)return;locked.current=true;setBusy(true);setError('');let success=false;
-  try{const request=invoke('queries.deleteChecked',{id:item.query.id,digest:item.digest});pending.current=request;await request;success=true;}catch(reason){if(!closed.current)setError(errorMessage(reason));}
-  finally{pending.current=undefined;locked.current=false;if(!closed.current)setBusy(false);}if(success&&!closed.current)await load();
- }
- /** 默认库的已知无库、未知和遗留状态不能合并。 */
- function databaseLabel(item:SavedQueryPageEntry){const value=item.query,context=value.databaseContext;return context?context.state==='known'?context.database||queryContextZh.none:queryContextZh.unknown:value.database?value.database+' ('+queryContextZh.legacy+')':queryContextZh.legacy;}
- return <Modal title={zh.activity.text003} wide onClose={()=>void close()}><div className="dialog-tabs"><button disabled={closing} onClick={()=>void close(onHistory)}><Clock3 size={14}/>{zh.activity.text004}</button><button className="selected"><FileCode2 size={14}/>{zh.activity.text005}</button></div><div className="modal-content saved-query-pages"><div className="search-box"><Search size={15}/><input aria-label={t.search} value={search} maxLength={512} disabled={busy||closing} onChange={event=>setSearch(event.target.value)} onKeyDown={event=>{if(event.key==='Enter'){event.preventDefault();void load();}}}/><button disabled={busy||closing} onClick={()=>void load()}>{t.searchButton}</button></div><label className="inline-field">{t.onError}<select aria-label={t.onError} disabled={busy||closing} value={policy} onChange={event=>setPolicy(event.target.value as typeof policy)}><option value="continue">{t.continue}</option><option value="stop">{t.stop}</option></select></label><p className="muted small">{t.hint}</p>{(search!==applied||policy!==appliedPolicy)&&<p role="status">{t.pending}</p>}<ErrorBox message={error}/>{busy&&<Spinner/>}{reply&&<p role="status">{formatText(t.summary,batch,reply.scanned,reply.matched,reply.failed)} {reply.stoppedOnError?t.failedStop:reply.cursor?t.more:t.done}</p>}<div className="history-list">{reply?.items.map(item=><article className="history-card" key={item.query.id}><div><strong>{item.query.name}</strong><span className="grow"/><span className="muted small">{connections.find(profile=>profile.id===item.query.connectionId)?.name||t.sourceMissing} / {databaseLabel(item)}</span></div><pre>{item.sqlPreview}{item.previewTruncated?'…':''}</pre>{item.previewTruncated&&<p className="muted small">{formatText(t.preview,item.sqlUnits)}</p>}<label className="inline-field">{t.choose}<select aria-label={formatText(t.connection,item.query.name)} value={target(item)} disabled={busy||closing} onChange={event=>setTargets(current=>new Map(current).set(item.query.id,event.target.value))}><option value="">{t.choose}</option>{connections.map(profile=><option value={profile.id} key={profile.id}>{profile.name}</option>)}</select></label><footer><span className="muted small">{new Date(item.query.updatedAt).toLocaleString('zh-CN')}</span><span className="grow"/><button className="icon-button" disabled={busy||closing} title={zh.activity.text009} aria-label={zh.activity.text009} onClick={()=>void remove(item)}><Trash2 size={14}/></button><button disabled={busy||closing||!target(item)} onClick={()=>void open(item)}>{zh.activity.text010}<ArrowUpRight size={14}/></button></footer></article>)}{reply&&!reply.items.length&&<Empty title={t.empty} text={t.emptyHint}/>}</div>{reply?.failures.length?<details><summary>{t.failures} ({reply.failures.length})</summary>{reply.failures.map((failure,index)=><p key={index}>{failure.id}：{failure.message}</p>)}</details>:null}<p className="muted small">{t.openHint}</p></div><footer className="modal-footer"><button disabled={busy||closing} onClick={()=>void load()}>{t.refresh}</button><button disabled={busy||closing||!reply?.cursor||search!==applied||policy!==appliedPolicy} onClick={()=>void load(true)}>{t.next}</button>{busy&&<button disabled={closing||!active.current} onClick={()=>{if(active.current)void invoke('query.cancel',{taskId:active.current}).catch(reason=>setError(errorMessage(reason)));}}>{t.cancel}</button>}<span className="grow"/><button disabled={closing} onClick={()=>void close()}>{zh.common.close}</button></footer></Modal>;
+interface Services { request: typeof invoke; id(): string; }
+const services: Services = { request: invoke, id: uid };
+interface Criteria { search: string; policy: 'stop' | 'continue'; group: SavedQueryGroupScope; }
+const criteriaKey = (value: Criteria) => JSON.stringify([value.search, value.policy, value.group]);
+interface Edit { value: SavedQueryOrganizationEdit; snapshot: SavedQueryOrganizationSnapshot; selected: readonly SelectedSavedQuery[]; epoch: number; }
+
+/** 原Promise锁覆盖分组和列表；跨页选择只存编号、摘要和名称，不累计SQL正文。 */
+export function SavedQueriesDialog({ onClose, onHistory, services: io = services }: { onClose(): void; onHistory(): void; services?: Services }) {
+  const connections = useWorkspace(state => state.connections);
+  const [search, setSearch] = useState(''), [policy, setPolicy] = useState<'stop' | 'continue'>('continue'), [group, setGroup] = useState<SavedQueryGroupScope>({ kind: 'all' }), [includeDescendants, setIncludeDescendants] = useState(true);
+  const [reply, setReply] = useState<SavedQueryPage>(), [batch, setBatch] = useState(0), [applied, setApplied] = useState(''), [busy, setBusy] = useState(true), [closing, setClosing] = useState(false), [error, setError] = useState(''), [notice, setNotice] = useState('');
+  const [organization, setOrganization] = useState<SavedQueryOrganizationSnapshot>(), organizationRef = useRef(organization);
+  const [selected, setSelected] = useState<ReadonlyMap<string, SelectedSavedQuery>>(new Map()), selectedRef = useRef(selected), [editing, setEditing] = useState<Edit>(), editRef = useRef(editing), [needsRefresh, setNeedsRefresh] = useState(false), [targets, setTargets] = useState(new Map<string, string>());
+  const cursor = useRef<string | undefined>(undefined), active = useRef<string | undefined>(undefined), pending = useRef<Promise<void> | undefined>(undefined), locked = useRef(false), closed = useRef(false), alive = useRef(true), epoch = useRef(0);
+  const criteria: Criteria = { search, policy, group }, criteriaRef = useRef(criteria); criteriaRef.current = criteria; const renderEpoch = epoch.current;
+  const owns = (ticket: number) => alive.current && !closed.current && epoch.current === ticket;
+  const editable = () => owns(renderEpoch) && !locked.current && !editRef.current;
+  /** 原句柄仅在成功释放后遗忘；迟到新页也精确回收。 */
+  async function release() { const value = cursor.current; if (value) { await io.request('queries.pageRelease', { cursor: value }); if (cursor.current === value) cursor.current = undefined; } }
+  /** 取消失败仍等原Promise终态并释放，不能让观察超时或按钮点击提前放行。 */
+  async function cleanup() { let failure: unknown; if (active.current) try { await io.request('query.cancel', { taskId: active.current }); } catch (reason) { failure = reason; } await pending.current?.catch(() => {}); await release(); if (failure) throw failure; }
+  async function close(after = onClose) { if (closed.current) return; closed.current = true; epoch.current++; editRef.current = undefined; setEditing(undefined); setClosing(true); try { await cleanup(); after(); } catch (reason) { closed.current = false; setClosing(false); setError(errorMessage(reason)); } }
+  /** 同步占锁并跟踪整项操作；每个旧渲染回调仅能使用原代次。 */
+  function run(action: (ticket: number) => Promise<void>, expected = renderEpoch): Promise<void> | undefined {
+    if (!owns(expected) || locked.current) return;
+    locked.current = true; const ticket = ++epoch.current; setBusy(true); setError(''); setNotice('');
+    // action延后到原Promise微任务，保证同步抛错也只在operation完成赋值后执行收尾。
+    const operation: Promise<void> = Promise.resolve().then(() => action(ticket)).catch(reason => { if (owns(ticket)) setError(errorMessage(reason)); }).finally(() => { if (pending.current === operation) pending.current = undefined; locked.current = false; if (alive.current && !closed.current) setBusy(false); });
+    pending.current = operation; return operation;
+  }
+  /** 外来树与计数先完整校验，不存在的范围明确退回未分组。 */
+  function publish(raw: unknown, requested: SavedQueryGroupScope): SavedQueryGroupScope { const value = readSavedQueryOrganization(raw); organizationRef.current = value; setOrganization(value); const next = requested.kind === 'group' && !value.groups.some(item => item.id === requested.id) ? { kind: 'unfiled' } as const : requested; if (next !== requested) setNotice(text.scopeRemoved); setGroup(next); criteriaRef.current = { ...criteriaRef.current, group: next }; return next; }
+  /** 续页只有cursor和taskId；旧页不累积，迟到句柄在原操作内释放。 */
+  async function readPage(ticket: number, value: Criteria, next = false) {
+    const previous = cursor.current;
+    if (!next) { await release(); if (!owns(ticket)) return; setReply(undefined); setBatch(0); setTargets(new Map()); } else if (!previous) return;
+    cursor.current = undefined; const taskId = io.id(); active.current = taskId;
+    try {
+      const page = await (next ? io.request('queries.pageContinue', { taskId, cursor: previous! }) : io.request('queries.page', { taskId, search: value.search, onError: value.policy, ...(value.group.kind === 'all' ? {} : { group: value.group }) }));
+      cursor.current = page.cursor; if (!owns(ticket)) { await release(); return; }
+      setReply(page); setBatch(count => next ? count + 1 : 1); setApplied(criteriaKey(value)); setTargets(new Map());
+    } catch (reason) { if (owns(ticket) && next) { setReply(previous => previous ? { ...previous, cursor: undefined } : previous); setNeedsRefresh(true); } throw reason; }
+    finally { if (active.current === taskId) active.current = undefined; }
+  }
+  /** 显式第一页重新读取组织版本；全文、组范围和原错误策略共同生效。 */
+  function load(next = false, requested = criteriaRef.current) { if (editRef.current) return; return run(async ticket => { let value = requested; if (!next) { const raw = await io.request('queries.organizationGet', {}); if (!owns(ticket)) return; value = { ...requested, group: publish(raw, requested.group) }; setNeedsRefresh(false); } await readPage(ticket, value, next); }); }
+  useEffect(() => { alive.current = true; void load(); return () => { alive.current = false; closed.current = true; epoch.current++; editRef.current = undefined; void cleanup().catch(reason => useWorkspace.getState().notify(t.cleanupFailed + errorMessage(reason), true)); }; }, []);
+  /** 草稿改变只撤销旧事件，不自动查询或释放旧页。 */
+  function draft(action: () => void) { if (!editable()) return; epoch.current++; action(); }
+  function selectScope(value: SavedQueryGroupScope) { if (!editable()) return; setGroup(value); criteriaRef.current = { ...criteriaRef.current, group: value }; void load(false, criteriaRef.current); }
+  function choose(item: SavedQueryPageEntry, checked: boolean) { if (!editable()) return; const next = new Map(selectedRef.current); if (checked) { if (!next.has(item.query.id) && next.size >= 100) { setError(text.selectionLimit); return; } next.set(item.query.id, { id: item.query.id, digest: item.digest, name: item.query.name }); } else next.delete(item.query.id); epoch.current++; selectedRef.current = next; setSelected(next); }
+  /** 当前页选择先计算完整并集再发布，超100条整批拒绝；取消本页保留隐藏选择。 */
+  function choosePage(checked: boolean) { if (!editable() || !reply?.items.length) return; const next = new Map(selectedRef.current); if (checked) { const ids = new Set([...next.keys(), ...reply.items.map(item => item.query.id)]); if (ids.size > 100) { setError(text.selectionLimit); return; } for (const item of reply.items) next.set(item.query.id, { id: item.query.id, digest: item.digest, name: item.query.name }); } else for (const item of reply.items) next.delete(item.query.id); epoch.current++; selectedRef.current = next; setSelected(next); }
+  function clearSelection() { if (!editable()) return; epoch.current++; selectedRef.current = new Map(); setSelected(selectedRef.current); }
+  /** 原树对象、原选择和代次一起捕获，外来快照或旧回调不能换目标。 */
+  function edit(value: SavedQueryOrganizationEdit) { if (!editable() || !organizationRef.current || needsRefresh) return; const next = { value, snapshot: organizationRef.current, selected: Object.freeze([...selectedRef.current.values()].map(item => Object.freeze({ ...item }))), epoch: ++epoch.current }; editRef.current = next; setEditing(next); setError(''); }
+  function cancelEdit() { if (locked.current || !editRef.current) return; epoch.current++; editRef.current = undefined; setEditing(undefined); }
+  /** 仅提交已展示的冻结CAS补丁；失败要求手动刷新，不重放、不逐条降级写入。 */
+  function apply(preview: SavedQueryOrganizationPreview, origin: Edit) {
+    if (closed.current || locked.current || editRef.current !== origin || epoch.current !== origin.epoch || organizationRef.current !== origin.snapshot || preview.input.expectedRevision !== origin.snapshot.revision) return;
+    void run(async ticket => { try { const raw = await io.request('queries.organizationApply', preview.input); if (!owns(ticket)) return; const nextGroup = publish(raw, criteriaRef.current.group); editRef.current = undefined; setEditing(undefined); selectedRef.current = new Map(); setSelected(selectedRef.current); setNeedsRefresh(false); await readPage(ticket, { ...criteriaRef.current, group: nextGroup }); if (owns(ticket)) setNotice(text.saved); } catch (reason) { if (owns(ticket)) { editRef.current = undefined; setEditing(undefined); setNeedsRefresh(true); setError(errorMessage(reason)); } } }, origin.epoch);
+  }
+  /** 丢失来源不回退其它连接；打开仅重读摘要对应原文，不执行SQL。 */
+  function target(item: SavedQueryPageEntry) { return targets.has(item.query.id) ? targets.get(item.query.id)! : connections.some(value => value.id === item.query.connectionId) ? item.query.connectionId! : ''; }
+  function open(item: SavedQueryPageEntry) {
+    if (!editable()) return; const connectionId = target(item); if (!connectionId) { setError(t.choose); return; }
+    let opened: SavedQueryOpenResult | undefined; const work = run(async ticket => { const result = await io.request('queries.read', { id: item.query.id, digest: item.digest, connectionId }); if (owns(ticket)) opened = result; });
+    if (work) void work.then(() => { if (opened && !closed.current) { const result = opened; void close(() => { useWorkspace.getState().openTab({ id: io.id(), kind: 'query', title: result.query.name, connectionId: result.connectionId, database: result.database, databaseContext: result.databaseContext, sql: result.query.sql, sourceBinding: result.sourceBinding }); onClose(); }); } });
+  }
+  function remove(item: SavedQueryPageEntry) { if (!editable()) return; void run(async ticket => { await io.request('queries.deleteChecked', { id: item.query.id, digest: item.digest }); if (!owns(ticket)) return; const next = new Map(selectedRef.current); next.delete(item.query.id); selectedRef.current = next; setSelected(next); const raw = await io.request('queries.organizationGet', {}); if (!owns(ticket)) return; const nextGroup = publish(raw, criteriaRef.current.group); await readPage(ticket, { ...criteriaRef.current, group: nextGroup }); }); }
+  function databaseLabel(item: SavedQueryPageEntry) { const value = item.query, context = value.databaseContext; return context ? context.state === 'known' ? context.database || queryContextZh.none : queryContextZh.unknown : value.database ? value.database + ' (' + queryContextZh.legacy + ')' : queryContextZh.legacy; }
+  const blocked = busy || closing || !!editing, changed = criteriaKey(criteria) !== applied, tree = organization ? savedQueryOrganizationTree(organization) : [], hidden = [...selected.keys()].filter(id => !reply?.items.some(item => item.query.id === id)).length, selectedGroup = group.kind === 'group' ? group.id : undefined;
+  const pageSelected = reply?.items.filter(item => selected.has(item.query.id)).length ?? 0, pageAllSelected = !!reply?.items.length && pageSelected === reply.items.length, pageMixed = pageSelected > 0 && !pageAllSelected;
+  return <Modal title={zh.activity.text003} wide onClose={() => void close()}>
+    <div className="dialog-tabs"><button disabled={closing} onClick={() => void close(onHistory)}><Clock3 size={14}/>{zh.activity.text004}</button><button className="selected"><FileCode2 size={14}/>{zh.activity.text005}</button></div>
+    <div className="modal-content saved-query-pages"><p className="muted small">{text.metadataOnly}</p><div className="saved-query-organization-layout">
+      <details className="saved-query-organization-tree" open><summary>{text.title}</summary><nav aria-label={text.tree}>
+        <button disabled={blocked} aria-label={text.all} aria-current={group.kind === 'all' ? 'true' : undefined} onClick={() => selectScope({ kind: 'all' })}>{text.all} ({organization?.totalCount ?? 0})</button>
+        <button disabled={blocked} aria-label={text.unfiled} aria-current={group.kind === 'unfiled' ? 'true' : undefined} onClick={() => selectScope({ kind: 'unfiled' })}>{text.unfiled} ({organization?.unfiledCount ?? 0})</button>
+        {tree.map(item => <button disabled={blocked} style={{ paddingLeft: 12 + (item.depth - 1) * 14 }} key={item.id} aria-label={text.selectGroup(item.path)} title={item.path + ' · ' + text.direct(item.count, item.totalCount)} aria-current={group.kind === 'group' && group.id === item.id ? 'true' : undefined} onClick={() => selectScope({ kind: 'group', id: item.id, includeDescendants })}>{item.name} ({item.totalCount})</button>)}
+      </nav><label><input type="checkbox" aria-label={text.includeDescendants} checked={includeDescendants} disabled={blocked || group.kind !== 'group'} onChange={event => { const value = event.target.checked; setIncludeDescendants(value); if (group.kind === 'group') selectScope({ ...group, includeDescendants: value }); }}/>{text.includeDescendants}</label>
+        <div className="saved-query-group-actions"><button disabled={blocked || !organization || needsRefresh} onClick={() => edit({ kind: 'create', id: selectedGroup })}>{text.create}</button><button disabled={blocked || !selectedGroup || needsRefresh} onClick={() => edit({ kind: 'rename', id: selectedGroup })}>{text.rename}</button><button disabled={blocked || !selectedGroup || needsRefresh} onClick={() => edit({ kind: 'moveGroup', id: selectedGroup })}>{text.moveGroup}</button><button disabled={blocked || !selectedGroup || needsRefresh} onClick={() => edit({ kind: 'dissolve', id: selectedGroup })}>{text.dissolve}</button></div>
+      </details>
+      <div className="saved-query-organization-list"><div className="search-box"><Search size={15}/><input aria-label={t.search} value={search} maxLength={512} disabled={blocked} onChange={event => draft(() => setSearch(event.target.value))} onKeyDown={event => { if (event.key === 'Enter') { event.preventDefault(); void load(); } }}/><button disabled={blocked} onClick={() => void load()}>{t.searchButton}</button></div>
+        <label className="inline-field">{t.onError}<select aria-label={t.onError} disabled={blocked} value={policy} onChange={event => draft(() => setPolicy(event.target.value as typeof policy))}><option value="continue">{t.continue}</option><option value="stop">{t.stop}</option></select></label><p className="muted small">{t.hint}</p>{changed && reply && <p>{t.pending}</p>}
+        <p>{text.selected(selected.size, hidden)}</p><label><input type="checkbox" aria-label={text.selectPage} aria-checked={pageMixed ? 'mixed' : pageAllSelected} checked={pageAllSelected} ref={node => { if (node) node.indeterminate = pageMixed; }} disabled={blocked || !reply?.items.length} onChange={event => choosePage(event.target.checked)}/>{text.selectPage}</label><div className="saved-query-group-actions"><button disabled={blocked || !selected.size || !organization || needsRefresh} onClick={() => edit({ kind: 'moveQueries' })}>{text.moveQueries}</button><button disabled={blocked || !selected.size} onClick={clearSelection}>{text.clear}</button></div>
+        <ErrorBox message={error}/>{needsRefresh && <p className="warning-text">{text.refreshRequired}</p>}{notice && <p>{notice}</p>}{busy && <Spinner/>}
+        {reply && <p role="status">{formatText(t.summary, batch, reply.scanned, reply.matched, reply.failed)} {reply.stoppedOnError ? t.failedStop : reply.cursor ? t.more : t.done}</p>}
+        <div className="history-list">{reply?.items.map(item => <article className="history-card" key={item.query.id}><div><label><input type="checkbox" aria-label={text.select(item.query.name)} disabled={blocked} checked={selected.has(item.query.id)} onChange={event => choose(item, event.target.checked)}/><strong>{item.query.name}</strong></label><span className="grow"/><span className="muted small">{connections.find(profile => profile.id === item.query.connectionId)?.name || t.sourceMissing} / {databaseLabel(item)}</span></div>
+          <pre>{item.sqlPreview}{item.previewTruncated ? '…' : ''}</pre>{item.previewTruncated && <p className="muted small">{formatText(t.preview, item.sqlUnits)}</p>}<label className="inline-field">{t.choose}<select aria-label={formatText(t.connection, item.query.name)} value={target(item)} disabled={blocked} onChange={event => draft(() => setTargets(current => new Map(current).set(item.query.id, event.target.value)))}><option value="">{t.choose}</option>{connections.map(profile => <option value={profile.id} key={profile.id}>{profile.name}</option>)}</select></label>
+          <footer><span className="muted small">{new Date(item.query.updatedAt).toLocaleString('zh-CN')}</span><span className="grow"/><button className="icon-button" disabled={blocked} title={zh.activity.text009} aria-label={zh.activity.text009} onClick={() => remove(item)}><Trash2 size={14}/></button><button disabled={blocked || !target(item)} onClick={() => open(item)}>{zh.activity.text010}<ArrowUpRight size={14}/></button></footer>
+        </article>)}{reply && !reply.items.length && <Empty title={t.empty} text={t.emptyHint}/>}</div>
+        {reply?.failures.length ? <details><summary>{t.failures} ({reply.failures.length})</summary>{reply.failures.map((failure, index) => <p key={index}>{failure.id}：{failure.message}</p>)}</details> : null}<p className="muted small">{t.openHint}</p>
+      </div>
+    </div>{editing && <SavedQueryOrganizationEditor snapshot={editing.snapshot} edit={editing.value} selected={editing.selected} busy={busy || closing} onCancel={cancelEdit} onConfirm={preview => apply(preview, editing)}/>}</div>
+    <footer className="modal-footer"><button disabled={blocked} onClick={() => void load()}>{t.refresh}</button><button disabled={blocked || needsRefresh || !reply?.cursor || changed} onClick={() => void load(true)}>{t.next}</button>{busy && <button disabled={closing || !active.current} onClick={() => { if (active.current) void io.request('query.cancel', { taskId: active.current }).catch(reason => setError(errorMessage(reason))); }}>{t.cancel}</button>}<span className="grow"/><button disabled={closing} onClick={() => void close()}>{zh.common.close}</button></footer>
+  </Modal>;
 }

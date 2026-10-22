@@ -14,3 +14,22 @@
 .history-pages .history-time-range{display:flex;flex-wrap:wrap;align-items:end;gap:12px;margin-top:12px}
 .history-pages .history-time-range label{display:flex;flex:1 1 230px;flex-direction:column;gap:6px}
 .history-pages .history-time-range input{width:100%;min-width:0}
+
+.saved-query-organization-layout{display:grid;grid-template-columns:minmax(160px,230px) minmax(0,1fr);gap:16px;align-items:start}
+.saved-query-organization-tree{min-width:0;border:1px solid var(--line);border-radius:6px;padding:10px;max-height:65vh;overflow:auto}
+.saved-query-organization-tree summary{cursor:pointer;font-weight:600;margin-bottom:10px}
+.saved-query-organization-tree nav{display:flex;flex-direction:column;gap:4px;margin-bottom:12px}
+.saved-query-organization-tree nav button{text-align:left;white-space:normal;overflow-wrap:anywhere;min-height:32px}
+.saved-query-organization-tree nav button[aria-current=true]{background:var(--accent-bg);color:var(--accent)}
+.saved-query-organization-tree label{display:flex;gap:6px;align-items:center;font-size:12px}
+.saved-query-group-actions{display:flex;flex-wrap:wrap;gap:6px;margin:10px 0}
+.saved-query-organization-list{min-width:0}
+.saved-query-organization-list>.inline-field{margin-top:12px}
+.saved-query-organization-list .history-card>div>label{display:flex;gap:8px;align-items:center;min-width:0}
+.saved-query-organization-editor{margin-top:16px;border:1px solid var(--line);border-radius:6px;padding:14px}
+.saved-query-organization-editor>label{display:flex;flex-direction:column;gap:6px;margin:12px 0}
+.saved-query-organization-editor input,.saved-query-organization-editor select{width:100%;max-width:100%;min-width:0}
+.saved-query-organization-editor [role=region]{border:1px solid var(--line);padding:12px;margin:12px 0;overflow-wrap:anywhere}
+.saved-query-organization-editor [role=region] ul{max-height:180px;overflow:auto}
+.saved-query-organization-editor footer{display:flex;gap:8px;flex-wrap:wrap}
+@media(max-width:760px){.saved-query-organization-layout{grid-template-columns:minmax(0,1fr)}.saved-query-organization-tree{max-height:240px}.saved-query-organization-editor footer button{flex:1 1 140px}}

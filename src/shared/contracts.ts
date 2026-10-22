@@ -34,6 +34,7 @@ import type {DataSearchCatalogueInput,DataSearchCataloguePage} from './dataSearc
 import type{DataSearchRecordReadInput,DataSearchRecordsReleaseInput,DataSearchRecord}from'./dataSearchRecords';
 import type{SavedQuerySearchInput,SavedQuerySearchNext,SavedQuerySearchPage,SavedQueryOpenResult}from'./savedQuerySearch';
 import type{SavedQueryPageInput,SavedQueryPage}from'./savedQueryPages';
+import type { SavedQueryOrganizationApply, SavedQueryOrganizationSnapshot } from './savedQueryOrganization';
 import type{HistoryPageInput,HistoryPage,HistoryOpenResult}from'./historyPages';
 import type { ExplainPlan } from './explain';
 import type { ExplainSnapshotDocument } from './explainSnapshot';
@@ -154,6 +155,8 @@ export interface CommandMap {
   'search.savedQueriesRelease':{input:{cursor:string};output:void};
   'queries.read':{input:{id:string;digest:string;connectionId:string};output:SavedQueryOpenResult};
   'queries.page':{input:SavedQueryPageInput;output:SavedQueryPage};
+  'queries.organizationGet': { input: Record<string, never>; output: SavedQueryOrganizationSnapshot };
+  'queries.organizationApply': { input: SavedQueryOrganizationApply; output: SavedQueryOrganizationSnapshot };
   'queries.pageContinue':{input:{taskId:string;cursor:string};output:SavedQueryPage};
   'queries.pageRelease':{input:{cursor:string};output:void};
   'queries.deleteChecked':{input:{id:string;digest:string};output:void};
