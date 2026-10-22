@@ -1,0 +1,108 @@
+import { EventEmitter } from 'node:events';
+import { Readable } from 'node:stream';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { CellValue, ConnectionProfile, ForeignKeyInfo, TaskEvent } from '../../src/shared/contracts';
+import type { ManagedConnection } from '../../src/engine/connection';
+import type { ChildReferencePageOutput, IncomingReferenceRelation, IncomingReferencesOutput } from '../../src/shared/incomingReferences';
+
+const driver = vi.hoisted(() => ({ connect: vi.fn() }));
+/** 仅替换实际网络连接；metadata/tableInfo、KCU/RC读取、摘要、SQL、流及任务关闭均沿正式代码。 */
+vi.mock('../../src/engine/connection', async () => ({ ...await vi.importActual('../../src/engine/connection'), connect: driver.connect }));
+import { closeMysqlConnection } from '../../src/engine/connection';
+import { Engine } from '../../src/engine/index';
+
+const profile: ConnectionProfile = { id: 'incoming-ram', name: '入向关联RAM', group: '', color: '', dialect: 'mysql', host: 'offline.invalid', port: 3306, user: '合成用户' };
+const anchor: CellValue[] = ['18446744073709551615', '9007199254740993.123456789012', 'Alpha', { type: 'binary', base64: 'AAEn/wCAXAA=' }];
+const parentNames = ['big_key', 'dec_key', 'label_key', 'bin_key'], childNames = ['fk_big', 'fk_dec', 'fk_label', 'fk_bin'];
+interface Relation { database: string; table: string; name: string; columns: string[]; parentColumns: string[]; }
+let engine: Engine, events: TaskEvent[], sent: string[], connections: ManagedConnection[], sequence: number, parentDatabase: string, parentTable: string, relations: Relation[];
+let parentDdl: string, parentHasKey: boolean, childHasKey: boolean, streamRows: unknown[][], partPatch: Record<string, unknown>, rulePatch: Record<string, unknown>, candidateOverride: unknown[] | undefined;
+let childKeyPatch: Record<string, unknown>, afterData: (() => void) | undefined;
+let mode: string, denied: RegExp | undefined, hold: RegExp | undefined, held: { complete(error?: Error): void } | undefined, lateDdl: string | undefined, parentReads: number, lateAt: number, closeFails: boolean, unknownClose: boolean;
+const quote = (value: string) => '`' + value.replaceAll('`', '``') + '`';
+const hexValues = (sql: string) => [...sql.matchAll(/X'([A-Fa-f0-9]*)'/g)].map(match => Buffer.from(match[1], 'hex').toString('utf8'));
+/** RAM目录按独立固定数据的UTF8字节序返回；不用产品cursor/规划器产生对照。 */
+const ordered = () => [...relations].sort((a, b) => Buffer.compare(Buffer.from(a.database), Buffer.from(b.database)) || Buffer.compare(Buffer.from(a.table), Buffer.from(b.table)) || Buffer.compare(Buffer.from(a.name), Buffer.from(b.name)));
+const foreign = (relation: Relation): ForeignKeyInfo => ({ name: relation.name, columns: [...relation.columns], referencedDatabase: parentDatabase, referencedTable: parentTable, referencedColumns: [...relation.parentColumns], onUpdate: 'RESTRICT', onDelete: 'RESTRICT' });
+/** SHOW约束由固定原声明投影，与KCU/RC分开返回，不把产品摘要倒灌回目录。 */
+const constraints = (database: string, table: string) => relations.filter(relation => relation.database === database && relation.table === table).map(relation => `,CONSTRAINT ${quote(relation.name)} FOREIGN KEY (${relation.columns.map(quote).join(',')}) REFERENCES ${quote(parentDatabase)}.${quote(parentTable)} (${relation.parentColumns.map(quote).join(',')}) ON DELETE RESTRICT ON UPDATE RESTRICT`).join('');
+const parentSource = () => `CREATE TABLE ${quote(parentTable)} (big_key BIGINT UNSIGNED NOT NULL,dec_key DECIMAL(30,12) NOT NULL,label_key VARCHAR(32) NOT NULL,bin_key VARBINARY(8) NOT NULL,PRIMARY KEY(big_key,dec_key,label_key,bin_key)${constraints(parentDatabase, parentTable)}) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4`;
+/** 独立手写列目录声明；不将TableInfo或产品SHOW解析结果当数据库响应。 */
+function columnRows(isParent: boolean) { return [
+  ...(!isParent ? [{ name: 'cid', type: 'bigint unsigned', nullable: 'NO', defaultValue: null, extra: '', comment: '', characterSet: null }] : []),
+  { name: isParent ? 'big_key' : 'fk_big', type: 'bigint unsigned', nullable: isParent ? 'NO' : 'YES', defaultValue: null, extra: '', comment: '', characterSet: null },
+  { name: isParent ? 'dec_key' : 'fk_dec', type: 'decimal(30,12)', nullable: isParent ? 'NO' : 'YES', defaultValue: null, extra: '', comment: '', characterSet: null },
+  { name: isParent ? 'label_key' : 'fk_label', type: 'varchar(32)', nullable: isParent ? 'NO' : 'YES', defaultValue: null, extra: '', comment: '', characterSet: 'utf8mb4' },
+  { name: isParent ? 'bin_key' : 'fk_bin', type: 'varbinary(8)', nullable: isParent ? 'NO' : 'YES', defaultValue: null, extra: '', comment: '', characterSet: null },
+  ...(!isParent ? [{ name: 'payload', type: 'blob', nullable: 'YES', defaultValue: null, extra: '', comment: '', characterSet: null }] : []),
+]; }
+const tupleSelected = (sql: string) => { const names = hexValues(sql); return ordered().filter(relation => { for (let index = 0; index + 2 < names.length; index += 3) if (relation.database === names[index] && relation.table === names[index + 1] && relation.name === names[index + 2]) return true; return false; }); };
+/** 同一个原query支持callback与rowsAsArray流，未登记SQL也真实callback拒绝而不悬空。 */
+function connect(signal?: AbortSignal): ManagedConnection {
+  const connection = new EventEmitter(), threadId = ++sequence, stream = Object.assign(new EventEmitter(), { closed: false, end(callback: () => void) { queueMicrotask(() => { callback(); stream.closed = true; stream.emit('close'); }); } });
+  const managed = { connection, signal, profile, sqlMode: '', status: { version: '8.4.11', dialect: 'mysql', connectionId: threadId }, broken: false, close: vi.fn(async () => { if (closeFails) { unknownClose = true; throw Error('合成原连接关闭未知'); } await closeMysqlConnection(connection as any, true, false, 500); }) } as unknown as ManagedConnection;
+  const query = (...args: unknown[]) => {
+    const sql = typeof args[0] === 'string' ? args[0] : (args[0] as { sql: string }).sql, callback = typeof args.at(-1) === 'function' ? args.at(-1) as (error: Error | null, result?: unknown, fields?: unknown[]) => void : undefined, command = new EventEmitter(); sent.push(sql);
+    if (!callback) {
+      const output = new Readable({ objectMode: true, read() {} }); let settled = false; Object.assign(command, { stream: () => output });
+      const complete = (error?: Error) => queueMicrotask(() => { if (settled) return; settled = true; if (error) { command.emit('error', error); output.destroy(error); return; } command.emit('fields', ['cid', ...childNames, 'payload'].map(name => ({ name, columnType: 253 }))); for (const row of streamRows) output.push(row); output.push(null); command.emit('end'); afterData?.(); });
+      if (hold?.test(sql)) held = { complete }; else complete(); return command;
+    }
+    const complete = (error?: Error) => queueMicrotask(() => {
+      if (error || denied?.test(sql)) { callback(error ?? Object.assign(Error('合成目录拒读'), { errno: 1142, code: 'ER_TABLEACCESS_DENIED_ERROR' }), undefined, []); command.emit('end'); return; }
+      // SHOW使用真实引用标识符；其余目录使用正式inlineParameters产生的UTF8字面量。
+      const values = hexValues(sql), shown = sql.startsWith('SHOW CREATE TABLE') ? [...sql.matchAll(/`((?:``|[^`])+)`/g)].map(match => match[1].replaceAll('``', '`')) : [], database = shown[0] ?? values[0] ?? (Array.isArray(args[1]) ? String(args[1][0]) : parentDatabase), table = shown[1] ?? values[1] ?? (Array.isArray(args[1]) ? String(args[1][1]) : parentTable), isParent = database === parentDatabase && table === parentTable; let result: unknown;
+      if (sql === 'SELECT @@SESSION.sql_mode AS sqlMode') result = [{ sqlMode: mode }];
+      else if (sql.startsWith('SELECT TABLE_SCHEMA AS databaseName,TABLE_NAME AS tableName,TABLE_TYPE AS kind')) result = [{ databaseName: database, tableName: table, kind: 'BASE TABLE' }];
+      else if (sql.startsWith('SELECT COLUMN_NAME AS name, COLUMN_TYPE AS type')) result = columnRows(isParent);
+      else if (sql.startsWith('SELECT INDEX_NAME AS name, NON_UNIQUE AS nonUnique')) result = (isParent ? parentHasKey ? parentNames : [] : childHasKey ? ['cid'] : []).map(columnName => ({ name: 'PRIMARY', nonUnique: 0, columnName, subPart: null, indexType: 'BTREE', sortDirection: 'A' }));
+      else if (sql.startsWith('SELECT k.CONSTRAINT_NAME AS name, k.COLUMN_NAME')) result = relations.filter(relation => relation.database === database && relation.table === table).flatMap(relation => relation.columns.map((columnName, index) => ({ name: relation.name, columnName, referencedDatabase: parentDatabase, referencedTable: parentTable, referencedColumn: relation.parentColumns[index], onUpdate: 'RESTRICT', onDelete: 'RESTRICT', ...(!isParent ? childKeyPatch : {}) })));
+      else if (sql.startsWith('SELECT t.ENGINE AS engine, t.TABLE_TYPE AS tableType')) result = [{ engine: 'InnoDB', tableType: 'BASE TABLE', collation: 'utf8mb4_general_ci', comment: '', charset: 'utf8mb4' }];
+      else if (sql.startsWith('SHOW CREATE TABLE')) { result = [{ 'Create Table': isParent ? ++parentReads >= lateAt ? lateDdl ?? parentDdl : parentDdl : `CREATE TABLE ${quote(table)} (cid BIGINT UNSIGNED NOT NULL,fk_big BIGINT UNSIGNED,fk_dec DECIMAL(30,12),fk_label VARCHAR(32),fk_bin VARBINARY(8),payload BLOB${childHasKey ? ',PRIMARY KEY(cid)' : ''}${constraints(database, table)}) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4` }]; }
+      else if (sql.startsWith('SELECT k.TABLE_SCHEMA AS databaseName,k.TABLE_NAME AS tableName,k.CONSTRAINT_NAME AS foreignKeyName FROM')) {
+        const after = sql.includes('CAST(k.TABLE_SCHEMA AS BINARY)>') ? values.slice(-3) : undefined;
+        result = candidateOverride ?? ordered().filter(relation => !after || [relation.database, relation.table, relation.name].some((value, index, tuple) => tuple.slice(0, index).every((previous, earlier) => previous === after[earlier]) && Buffer.compare(Buffer.from(value), Buffer.from(after[index])) > 0)).slice(0, 51).map(relation => ({ databaseName: relation.database, tableName: relation.table, foreignKeyName: relation.name }));
+      } else if (sql.startsWith('SELECT k.TABLE_SCHEMA AS databaseName')) result = tupleSelected(sql).flatMap(relation => relation.columns.map((columnName, index) => ({ databaseName: relation.database, tableName: relation.table, foreignKeyName: relation.name, constraintSchema: relation.database, columnName, ordinal: String(index + 1), parentPosition: String(index + 1), parentDatabase, parentTable, parentColumn: relation.parentColumns[index], ...partPatch })));
+      else if (sql.startsWith('SELECT r.CONSTRAINT_SCHEMA AS databaseName')) result = tupleSelected(sql).map(relation => ({ databaseName: relation.database, tableName: relation.table, foreignKeyName: relation.name, parentDatabase, parentTable, uniqueName: 'PRIMARY', matchOption: 'NONE', onUpdate: 'RESTRICT', onDelete: 'RESTRICT', ...rulePatch }));
+      else if (sql.startsWith('KILL CONNECTION')) { held?.complete(Error('合成原命令已取消')); result = []; }
+      else { callback(Error('入向关联RAM未登记SQL'), undefined, []); command.emit('end'); return; }
+      callback(null, result, []); command.emit('end');
+    });
+    if (hold?.test(sql)) held = { complete }; else complete(); return command;
+  };
+  Object.assign(connection, { threadId, stream, end: (callback: () => void) => queueMicrotask(callback), destroy: () => connection.emit('end'), query, execute: query }); signal?.addEventListener('abort', () => connection.emit('end'), { once: true }); connections.push(managed); return managed;
+}
+const base = () => ({ connectionId: profile.id, database: parentDatabase, table: parentTable });
+const list = (cursor?: string): Promise<IncomingReferencesOutput> => engine.handle('table.incomingReferences', { ...base(), taskId: 'list-' + sequence, ...(cursor ? { cursor } : {}) });
+const page = (relation: IncomingReferenceRelation, changes: Record<string, unknown> = {}): Promise<ChildReferencePageOutput> => engine.handle('table.childReferencePage', { ...base(), relation: { database: relation.database, table: relation.table, foreignKeyName: relation.foreignKey.name, digest: relation.digest }, matchValues: anchor, page: 1, pageSize: 10, filters: [], sort: [], taskId: 'page-' + sequence, ...changes });
+beforeEach(async () => { events = []; sent = []; connections = []; sequence = parentReads = 0; parentDatabase = 'db'; parentTable = 'parent'; relations = [{ database: 'db', table: 'child', name: 'fk_comp', columns: [...childNames], parentColumns: [...parentNames] }]; parentDdl = parentSource(); parentHasKey = childHasKey = true; streamRows = [['9007199254740993', anchor[0], anchor[1], 'alpha', Buffer.from('000127ff00805c00', 'hex'), Buffer.from('000127ff', 'hex')]]; partPatch = {}; rulePatch = {}; childKeyPatch = {}; candidateOverride = undefined; mode = ''; lateAt = Infinity; lateDdl = denied = hold = held = afterData = undefined; closeFails = unknownClose = false; driver.connect.mockReset().mockImplementation(async (_profile, _database, signal) => connect(signal)); engine = new Engine(event => events.push(event)); await engine.handle('connections.open', { id: profile.id, profile }); });
+afterEach(async () => { hold = undefined; closeFails = false; held?.complete(Error('合成收尾')); if (unknownClose) await expect(engine.closeAll()).rejects.toThrow('资源未确认释放'); else await engine.closeAll(); });
+
+describe('入向关联真实Engine+实际metadata/目录/流（仅RAM）', () => {
+  it('完整有序四字段映射来自真实KCU+RC，独立childPage保BIGINT/DECIMAL/BLOB及ci文本', async () => {
+    const result = await list(); expect(result.scope).toBe('visible-only'); expect(result.relations).toHaveLength(1); expect(result.relations[0].foreignKey).toEqual(foreign(relations[0])); const actual = await page(result.relations[0]); expect(actual.stablePagination).toBe(true); expect(actual.target.editableKey).toEqual(['cid']); expect(actual.page.rows).toEqual([{ cid: '9007199254740993', fk_big: anchor[0], fk_dec: anchor[1], fk_label: 'alpha', fk_bin: anchor[3], payload: { type: 'binary', base64: 'AAEn/w==' } }]); const sql = sent.find(sql => /^SELECT \* FROM/.test(sql))!; expect(sql).toContain('`fk_big` = CAST('); expect(sql).toContain('DECIMAL(65,12)'); expect(sql).toContain("X'000127ff00805c00'"); expect(connections.slice(1).every(managed => vi.mocked(managed.close).mock.calls[0]?.[0]?.strict === true)).toBe(true);
+  });
+  it('51个实际关系以二进制keyset分50/1而非首批截断，不使用OFFSET', async () => {
+    relations = Array.from({ length: 51 }, (_, index) => ({ database: 'db', table: 'child', name: 'fk_' + String(index).padStart(2, '0'), columns: [...childNames], parentColumns: [...parentNames] })); const first = await list(); expect(first.relations.map(relation => relation.foreignKey.name)).toEqual(relations.slice(0, 50).map(relation => relation.name)); expect(first.nextCursor).toBeTypeOf('string'); const second = await list(first.nextCursor); expect(second.relations.map(relation => relation.foreignKey.name)).toEqual(['fk_50']); expect(second.nextCursor).toBeUndefined(); expect(sent.filter(sql => sql.includes('k.ORDINAL_POSITION=1'))).toHaveLength(2); expect(sent.some(sql => sql.includes('CAST(k.CONSTRAINT_NAME AS BINARY)>'))).toBe(true); expect(sent.filter(sql => sql.includes('k.ORDINAL_POSITION=1')).every(sql => !/OFFSET/i.test(sql))).toBe(true);
+  });
+  it('跨库同名FK与自引用按真实child三元组区分，Unicode反引号目标保持精确引用', async () => {
+    parentDatabase = '父`库'; parentTable = '父表'; relations = [{ database: 'a库', table: '子`表', name: '同名FK', columns: [...childNames], parentColumns: [...parentNames] }, { database: 'b库', table: '子`表', name: '同名FK', columns: [...childNames], parentColumns: [...parentNames] }, { database: parentDatabase, table: parentTable, name: '自关联', columns: [...parentNames], parentColumns: [...parentNames] }]; parentDdl = parentSource(); const value = await list(); expect(value.relations.map(relation => [relation.database, relation.table, relation.foreignKey.name])).toEqual(ordered().map(relation => [relation.database, relation.table, relation.name])); expect(new Set(value.relations.map(relation => relation.digest)).size).toBe(3); expect(sent).toContain('SHOW CREATE TABLE `父``库`.`父表`');
+  });
+  it.each([{ ordinal: '2' }, { ordinal: '01' }, { parentPosition: '65' }, { constraintSchema: '其它库' }, { parentTable: '其它表' }, { parentColumn: '不存在' }])('不完整或矛盾KCU%j不能当作不存在关联', async patch => { partPatch = patch; await expect(list()).rejects.toThrow(); expect(sent.some(sql => /^SELECT \* FROM/.test(sql))).toBe(false); });
+  it.each([{ onDelete: 'SET DEFAULT' }, { parentDatabase: '其它库' }, { uniqueName: null }, { matchOption: 'FULL' }])('实际RC未知或矛盾%j明确拒绝', async patch => { rulePatch = patch; await expect(list()).rejects.toThrow(); expect(sent.some(sql => /^SELECT \* FROM/.test(sql))).toBe(false); });
+  it('候选目录重复或乱序不由客户端任意去重排序后放行', async () => { const item = { databaseName: 'db', tableName: 'child', foreignKeyName: 'fk_comp' }; candidateOverride = [item, item]; await expect(list()).rejects.toThrow(); candidateOverride = [{ ...item, foreignKeyName: 'z' }, { ...item, foreignKeyName: 'a' }]; await expect(list()).rejects.toThrow(); });
+  it('独立child实际metadata与入向KCU/RC映射矛盾时零子数据查询', async () => { const relation = (await list()).relations[0]; childKeyPatch = { onDelete: 'CASCADE' }; await expect(page(relation)).rejects.toThrow('变化'); expect(sent.some(sql => /^SELECT \* FROM/.test(sql))).toBe(false); });
+  it('外部父DDL变化使既有关系摘要与目录游标失效，不执行子数据', async () => { const value = await list(); parentDdl += " COMMENT='外部变化'"; await expect(page(value.relations[0])).rejects.toThrow('变化'); expect(sent.some(sql => /^SELECT \* FROM/.test(sql))).toBe(false); });
+  it('目录读取结束前父DDL漂移拒绝迟到列表', async () => { lateAt = 2; lateDdl = parentDdl + " COMMENT='外部变化'"; await expect(list()).rejects.toThrow('变化'); expect(events.at(-1)?.status).toBe('failed'); });
+  it('旧cursor来源结构变化后拒绝，不将两代目录混页', async () => { relations = Array.from({ length: 51 }, (_, index) => ({ database: 'db', table: 'child', name: 'fk_' + String(index).padStart(2, '0'), columns: [...childNames], parentColumns: [...parentNames] })); const first = await list(); parentDdl += " COMMENT='新代际'"; await expect(list(first.nextCursor)).rejects.toThrow('游标'); });
+  it('关系digest被改写时零子数据查询', async () => { const value = await list(), relation = value.relations[0]; await expect(page({ ...relation, digest: (relation.digest[0] === 'a' ? 'b' : 'a') + relation.digest.slice(1) })).rejects.toThrow('变化'); expect(sent.some(sql => /^SELECT \* FROM/.test(sql))).toBe(false); });
+  it('数据原流完成后关系动作漂移，丢弃迟到页且不补发数据查询', async () => { const relation = (await list()).relations[0]; afterData = () => { rulePatch = { onDelete: 'CASCADE' }; }; await expect(page(relation)).rejects.toThrow('变化'); expect(sent.filter(sql => /^SELECT \* FROM/.test(sql))).toHaveLength(1); });
+  it('仅表尾自增计数变化不使父关系摘要失效，真实列或备注仍绑定', async () => { parentDdl += ' AUTO_INCREMENT=8'; const relation = (await list()).relations[0]; parentDdl = parentDdl.replace('AUTO_INCREMENT=8', 'AUTO_INCREMENT=9'); expect((await page(relation)).relation.digest).toBe(relation.digest); });
+  it('定义省略模式不可发布看似完整的目录', async () => { mode = 'NO_FIELD_OPTIONS'; await expect(list()).rejects.toThrow('无效'); expect(sent.some(sql => /^SELECT \* FROM/.test(sql))).toBe(false); });
+  it('NULL仍只生成恒假范围；OR普通筛选始终在复合关联AND之内', async () => { const value = await list(); streamRows = []; await page(value.relations[0], { matchValues: [null, anchor[1], anchor[2], anchor[3]] }); expect(sent.find(sql => /^SELECT \* FROM/.test(sql))).toContain('WHERE (0 = 1)'); sent = []; await page(value.relations[0], { filterMode: 'any', filters: [{ column: 'cid', operator: '=', value: '1' }, { column: 'cid', operator: '=', value: '2' }] }); expect(sent.find(sql => /^SELECT \* FROM/.test(sql))).toMatch(/WHERE \([^]*`fk_bin`[^]*\) AND \([^]* OR [^]*\)/); });
+  it('matchValues不能省略、漏列或用不安全数值冒充精确父键', async () => { const relation = (await list()).relations[0]; for (const values of [undefined, [], [anchor[0]], [18446744073709551615, anchor[1], anchor[2], anchor[3]]]) await expect(page(relation, { matchValues: values })).rejects.toThrow(); expect(sent.some(sql => /^SELECT \* FROM/.test(sql))).toBe(false); });
+  it('子表无可靠唯一键仍可分页且stable=false，原正向父键准入不放宽', async () => { childHasKey = false; const relation = (await list()).relations[0], actual = await page(relation, { page: 2, pageSize: 1, sort: [{ column: 'payload', direction: 'ASC' }] }); expect(actual.stablePagination).toBe(false); expect(actual.target.editableKey).toEqual([]); expect(sent.find(sql => /^SELECT \* FROM/.test(sql))).toContain('LIMIT 2 OFFSET 1'); parentHasKey = false; await expect(engine.handle('table.referencePage', { connectionId: profile.id, database: 'db', table: 'child', foreignKeyName: 'fk_comp', matchValues: anchor, page: 1, pageSize: 10, filters: [], sort: [], taskId: 'forward' })).rejects.toThrow('非空唯一键'); });
+  it('目录权限不足明确失败并严格关闭，不能返回空可见清单', async () => { denied = /^SELECT k.TABLE_SCHEMA AS databaseName/; await expect(list()).rejects.toThrow('目录拒读'); expect(events.at(-1)?.status).toBe('failed'); expect(connections.at(-1)!.close).toHaveBeenCalledOnce(); });
+  it('取消真实目录在途命令，等待原callback与原流close后结算', async () => { hold = /^SELECT k.TABLE_SCHEMA AS databaseName/; const taskId = 'list-' + sequence, pending = list(), rejected = expect(pending).rejects.toThrow('取消'); await vi.waitFor(() => expect(held).toBeDefined()); await engine.handle('query.cancel', { taskId }); await rejected; expect(events.at(-1)?.status).toBe('cancelled'); expect(connections.every(managed => (managed.connection as unknown as { stream: { closed: boolean } }).stream.closed)).toBe(true); });
+  it('严格关闭失败拒绝发布只读结果，原资源不冒充已释放', async () => { const relation = (await list()).relations[0]; closeFails = true; await expect(page(relation)).rejects.toThrow('关闭'); expect(unknownClose).toBe(true); });
+});

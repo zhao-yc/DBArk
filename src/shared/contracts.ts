@@ -193,6 +193,8 @@ export interface CommandMap {
   'table.copyInsertSql': { input: CopyInsertSqlInput; output: void };
   /** 目标仅由服务器来源表的外键解析；值元组保留精确字符串及二进制，不以普通文本筛选代替关联。 */
   'table.referencePage': { input: { connectionId: string; database: string; table: string; foreignKeyName: string; matchValues?: CellValue[]; page: number; pageSize: number; filters: FilterRule[]; filterMode?: FilterMode; filterGroup?: FilterGroup; sort: SortRule[]; taskId: string }; output: { source: TableInfo; foreignKey: ForeignKeyInfo; target: TableInfo; page: TablePage } };
+  'table.incomingReferences': { input: import('./incomingReferences').IncomingReferencesInput; output: import('./incomingReferences').IncomingReferencesOutput };
+  'table.childReferencePage': { input: import('./incomingReferences').ChildReferencePageInput; output: import('./incomingReferences').ChildReferencePageOutput };
   'table.preview': { input: { connectionId: string; database: string; table: string; changes: RowChange[] }; output: SqlPreview & { previewId?: string; previewExpiresAt?: string } };
   'table.apply': { input: { connectionId: string; database: string; table: string; changes: RowChange[]; taskId: string; previewId?: string }; output: { affectedRows: number; receiptId?: string; receiptSaved?: boolean; cleanupWarning?: boolean } };
   'schema.preview': { input: { connectionId: string; design: TableDesign }; output: SqlPreview };

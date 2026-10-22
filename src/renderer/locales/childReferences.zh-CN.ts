@@ -1,0 +1,18 @@
+export const childReferencesZh = {
+  title: '查看子记录', relations: '引用此父表的外键', previousRelations: '上一页关联', nextRelations: '下一页关联',
+  visible: '仅显示当前账号可见的引用关系；跨页目录不是全局权限清单，也不是一致快照。',
+  snapshot: '按打开时父行的当前字段值（包括已暂存草稿）查找；不会提交或丢弃父表草稿，也不会追踪并发修改。',
+  changed: '原父行、页面、草稿、标签或连接已变化，本次关联浏览已失效。请关闭后重新打开。',
+  mismatch: '父表或实际外键定义已变化，请关闭后刷新父表再打开。',
+  incomplete: '父行缺少关联所需的完整字段，已禁止读取子记录；请重新加载父表。',
+  nullTuple: '父行关联字段包含 NULL，没有可匹配的子记录。本次未发送子记录查询。',
+  emptyRelations: '此页没有当前账号可见的引用关系。', empty: '没有匹配的子记录。',
+  source: '父记录来源', target: '子记录来源', mapping: '实际外键映射（子列 → 父列）',
+  loading: '正在读取关联记录…', cancel: '取消读取', cancelling: '正在取消；原读取结束后才可继续。',
+  close: '关闭', closing: '正在等待原读取结束后关闭…', refresh: '刷新子记录',
+  previous: '上一页子记录', next: '下一页子记录', page: '子记录页码', jump: '跳转', pageSize: '每页子记录数',
+  sort: '子记录多列排序', groups: '子记录筛选分组',
+  readonly: '子记录仅供查看；筛选和排序只作用于此窗口，不改变已打开的表标签。',
+  unstable: '子表没有可靠非空唯一键；本页仍只读，翻页期间记录可能重复或遗漏。',
+  relationPage: (page: number) => `关联目录第 ${page} 页`, resultPage: (page: number, count: number) => `子记录第 ${page} 页，本页 ${count} 条`,
+} as const;

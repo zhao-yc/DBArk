@@ -96,17 +96,33 @@ function referenceLiteral(column: ColumnInfo, value: Exclude<CellValue, null>): 
   return exportLiteral(value);
 }
 
-/** 在普通分页 SQL 的筛选组外追加关联条件，ANY 筛选不能放宽关联范围。 */
-export function buildReferencePageSql(target: TableInfo, foreignKey: ForeignKeyInfo, matchValues: CellValue[] | undefined, page: number, pageSize: number, filters: FilterRule[], sort: SortRule[], filterMode?: FilterMode, filterGroup?:FilterGroup): string {
-  if (!target.editableKey.length || !target.indexes.some(index => index.unique && index.columns.length === target.editableKey.length && index.columns.every((name, index) => referenceColumn(target, name).name === target.editableKey[index])) || target.editableKey.some(name => referenceColumn(target, name).nullable)) throw new Error('关联目标表没有可靠的非空唯一键，暂不支持稳定分页，请使用 SQL 查询查看');
+/** 仅完整非空唯一键可承诺稳定的翻页排序；原正向关联仍严格要求此门。 */
+export function hasStableReferencePagination(target: TableInfo): boolean {
+  return !!target.editableKey.length && target.indexes.some(index => index.unique && index.columns.length === target.editableKey.length && index.columns.every((name, index) => referenceColumn(target, name).name === target.editableKey[index])) && target.editableKey.every(name => !referenceColumn(target, name).nullable);
+}
+
+/** 真正关系范围在普通筛选组之外，目标列和文字量类型来源可分别来自真实子列和父列。 */
+function scopedReferencePageSql(target: TableInfo, columns: string[], values: CellValue[], valueColumns: ColumnInfo[], page: number, pageSize: number, filters: FilterRule[], sort: SortRule[], filterMode?: FilterMode, filterGroup?: FilterGroup): string {
+  validateReferenceValues(values);
+  if (!columns.length || columns.length !== values.length || valueColumns.length !== values.length || new Set(columns).size !== columns.length) throw new Error('关联值数量与当前外键字段数量不同，请刷新表结构');
   const statement = buildPageSql(target, page, pageSize, filters, sort, filterMode, filterGroup);
   const sql = inlineParameters(statement.sql, statement.params);
-  if (matchValues === undefined) return sql;
-  validateReferenceValues(matchValues);
-  if (matchValues.length !== foreignKey.referencedColumns.length) throw new Error('关联值数量与当前外键字段数量不同，请刷新表结构');
-  const match = matchValues.includes(null) ? '0 = 1' : foreignKey.referencedColumns.map((name, index) => `${identifier(name)} = ${referenceLiteral(referenceColumn(target, name), matchValues[index]!)}`).join(' AND ');
+  const names = columns.map(name => referenceColumn(target, name).name);
+  const match = values.includes(null) ? '0 = 1' : names.map((name, index) => `${identifier(name)} = ${referenceLiteral(valueColumns[index], values[index]!)}`).join(' AND ');
   const prefix = `SELECT * FROM ${qualified(target.database, target.name)}`;
   if (!sql.startsWith(prefix)) throw new Error('关联分页模板无效');
   const tail = sql.slice(prefix.length);
   return `${prefix} WHERE (${match})${tail.startsWith(' WHERE ') ? ' AND ' + tail.slice(7) : tail}`;
+}
+
+/** 原正向可靠键及省略匹配值语义保留，ANY筛选不能放宽关联范围。 */
+export function buildReferencePageSql(target: TableInfo, foreignKey: ForeignKeyInfo, matchValues: CellValue[] | undefined, page: number, pageSize: number, filters: FilterRule[], sort: SortRule[], filterMode?: FilterMode, filterGroup?:FilterGroup): string {
+  if (!hasStableReferencePagination(target)) throw new Error('关联目标表没有可靠的非空唯一键，暂不支持稳定分页，请使用 SQL 查询查看');
+  if (matchValues === undefined) { const statement = buildPageSql(target, page, pageSize, filters, sort, filterMode, filterGroup); return inlineParameters(statement.sql, statement.params); }
+  return scopedReferencePageSql(target, foreignKey.referencedColumns, matchValues, foreignKey.referencedColumns.map(name => referenceColumn(target, name)), page, pageSize, filters, sort, filterMode, filterGroup);
+}
+
+/** 反向浏览仍使用真实child→parent外键，不捏造反转外键；匹配值必需且始终限制子记录范围。 */
+export function buildChildReferencePageSql(source: TableInfo, target: TableInfo, foreignKey: ForeignKeyInfo, matchValues: CellValue[], page: number, pageSize: number, filters: FilterRule[], sort: SortRule[], filterMode?: FilterMode, filterGroup?: FilterGroup): string {
+  return scopedReferencePageSql(target, foreignKey.columns, matchValues, foreignKey.referencedColumns.map(name => referenceColumn(source, name)), page, pageSize, filters, sort, filterMode, filterGroup);
 }

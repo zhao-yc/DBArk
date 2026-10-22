@@ -1,0 +1,5 @@
+.child-reference-tools,.child-reference-pagination{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:10px 0}
+.child-reference-pagination form{display:flex;gap:6px}.child-reference-pagination input{width:90px}
+.child-reference-grid{height:340px;min-height:180px}.child-reference-grid>.results-grid{height:100%}
+.child-reference-mapping{overflow-wrap:anywhere}.child-reference-content .field select{max-width:100%;width:100%}
+@media(max-height:750px){.child-reference-grid{height:240px}}

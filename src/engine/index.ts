@@ -22,7 +22,9 @@ import type { CellValue, CommandMap, EngineCommand, ConnectionProfile, DataRow, 
 import { connectionTransportChanged } from '../shared/connectionProfile';
 import { bindQueryParameters, namedParameterTokens, queryParameterLimits, validateQueryParameters, type QueryParameter, type SqlLexicalMode } from '../shared/queryParameters';
 import { canonicalReference, validateReferenceValues } from '../shared/references';
-import { buildReferencePageSql } from './references';
+import { buildReferencePageSql, buildChildReferencePageSql, hasStableReferencePagination } from './references';
+import { readIncomingReferences, resolveIncomingReference, recheckIncomingReference } from './incomingReferences';
+import { incomingReferenceLimits, incomingReferenceMessages, type IncomingReferencesInput, type ChildReferencePageInput } from '../shared/incomingReferences';
 import { connect, execute, type ManagedConnection } from './connection';
 import * as metadata from './metadata';
 import { completionMetadata } from './completionMetadata';
@@ -338,6 +340,25 @@ export class Engine {
         const sql = inlineParameters(statement.sql, statement.params);
         return this.readPage(managed, sql, input.page, input.pageSize, info.columns.some(column => /^(?:FLOAT|DOUBLE|REAL)\b/i.test(column.type)));
       });
+      case 'table.incomingReferences': {
+        this.copySourceProfile(input);
+        return this.withIndependentTask(input.connectionId, input.taskId, (managed, control) => readIncomingReferences({ managed, ...control }, input as IncomingReferencesInput), undefined, '读取引用此表的子表', true);
+      }
+      case 'table.childReferencePage': {
+        this.copySourceProfile(input);
+        return this.withIndependentTask(input.connectionId, input.taskId, async (managed, control) => {
+          const request = input as ChildReferencePageInput; validateReferenceValues(request.matchValues);
+          const context = { managed, ...control }, current = await resolveIncomingReference(context, request, request.relation);
+          const sql = buildChildReferencePageSql(current.source, current.target, current.relation.foreignKey, request.matchValues, request.page, request.pageSize, request.filters, request.sort, request.filterMode, request.filterGroup);
+          const ended = control.commandStarted(); let page;
+          try { page = await this.readPage(managed, sql, request.page, request.pageSize, current.target.columns.some(column => /^(?:FLOAT|DOUBLE|REAL)\b/i.test(column.type)), true); }
+          finally { ended(); }
+          control.checkCancelled(); await recheckIncomingReference(context, request, request.relation, current);
+          const result = { source: current.source, sourceDigest: current.sourceDigest, relation: current.relation, target: current.target, page, stablePagination: hasStableReferencePagination(current.target) };
+          if (Buffer.byteLength(JSON.stringify(result)) > incomingReferenceLimits.bytes) throw Error(incomingReferenceMessages.budget);
+          return result;
+        }, undefined, '读取关联子记录', true);
+      }
       case 'table.referencePage': return this.withIndependentTask(input.connectionId, input.taskId, async managed => {
         if (input.matchValues !== undefined) validateReferenceValues(input.matchValues);
         const source = await metadata.tableInfo(managed, input.database, input.table);

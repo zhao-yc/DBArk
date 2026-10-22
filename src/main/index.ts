@@ -305,6 +305,10 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
   // 纯能力释放先同步撤销父及关联预览，退出/保存锁不得阻止精确回收。
   if (command === 'schema.columns.release') return columnsMain.release(columnRequest!, input);
   const requestConnectionId = structureToken?.connectionId ?? input.connectionId ?? sessions.get(input.sessionId)?.connectionId ?? (command.startsWith('connections.') ? input.id : undefined);
+  // 入向关联只接收本次连接修订的结果；迟到响应不能成为新配置下的目录或数据。
+  const incomingReferenceRead = command === 'table.incomingReferences' || command === 'table.childReferencePage';
+  const incomingReferenceRevision = incomingReferenceRead ? store.connectionRevision() : undefined;
+  if (incomingReferenceRead && shuttingDown) throw Error('客户端正在退出，不能读取子记录');
   if (structureCommand && shuttingDown) throw new Error('客户端正在退出，不能开始结构操作');
   connectionConfig.assertAvailable(requestConnectionId);
   // 新建表在第一次等待前消费主进程能力；目的和修订仍由引擎独立核验。
@@ -398,6 +402,8 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
       });
     }
     case 'schema.compare': input = { ...input, sourceProfile: store.resolveConnection(input.source.connectionId), targetProfile: store.resolveConnection(input.target.connectionId) }; break;
+    case 'table.incomingReferences':case 'table.childReferencePage':
+      input = { ...input, profile: store.resolveConnection(input.connectionId) }; break;
     case 'search.structure':case 'search.structureContinue':case 'search.dataStart':case 'search.recordRead':
       if(shuttingDown)throw Error('客户端正在退出，不能开始搜索');
       input={...input,profile:store.resolveConnection(input.connectionId)};break;
@@ -574,6 +580,7 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
     if (taskId) preparingTasks.delete(taskId);
     sentToEngine = true;
     const result = command==='search.savedQueries'?await savedQuerySearches.start(input):command==='search.savedQueriesContinue'?await savedQuerySearches.next(input):await broker.request(command, input);
+    if (incomingReferenceRead && (shuttingDown || incomingReferenceRevision !== store.connectionRevision())) throw Error('连接配置或客户端状态已变化，请重新打开子记录');
     if (columnRequest && (command === 'schema.columns.get' || command === 'schema.columns.preview')) {
       try { columnsMain.publish(columnRequest, result); }
       catch (error) { await columnsMain.rejectReply(columnRequest, error); }

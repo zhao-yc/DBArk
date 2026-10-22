@@ -44,7 +44,7 @@ export const publicCommands: Record<Command, true> = {
   'query.exportStream': true,
   'query.confirmInsertExport': true,
   'table.applyReceipt.list': true, 'table.applyReceipt.detail': true,
-  'table.page': true, 'table.copySourceRead': true, 'table.copySourceRelease': true, 'table.referencePage': true, 'table.preview': true, 'table.apply': true, 'schema.preview': true, 'schema.apply': true,
+  'table.page': true, 'table.copySourceRead': true, 'table.copySourceRelease': true, 'table.referencePage': true, 'table.incomingReferences': true, 'table.childReferencePage': true, 'table.preview': true, 'table.apply': true, 'schema.preview': true, 'schema.apply': true,
   'schema.columns.get': true, 'schema.columns.preview': true, 'schema.columns.apply': true, 'schema.columns.release': true,
   'schema.indexes.get': true, 'schema.indexes.preview': true, 'schema.indexes.apply': true, 'schema.indexes.release': true,
   'schema.foreignKeys.get': true, 'schema.foreignKeys.preview': true, 'schema.foreignKeys.apply': true, 'schema.foreignKeys.release': true,
