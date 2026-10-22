@@ -29,12 +29,14 @@ function register(binding: ReturnType<typeof import('../helpers/queryPartialUi')
       assertConfigurationBytes();
       const identity = await checked(() => sealEditorIndentLaunchIdentity(binding.target.manifest, binding.target.sha, resolve('.'), { stat: path => checked(async () => { const value = await fs.lstat(path); return { file: value.isFile(), directory: value.isDirectory(), link: value.isSymbolicLink() }; }), real: path => checked(() => fs.realpath(path)), list: path => checked(() => fs.readdir(path)), bytes: path => checked(() => fs.readFile(path)) }, () => clock.assertCurrent()));
       assertConfigurationBytes();
-      if (identity.manifest.kind !== 'source') throw Error('脚本部分失败本轮仅验批准源码App'); await use({ clock, identity, assertConfigurationBytes });
+      if (identity.manifest.kind !== 'source') throw Error('脚本部分失败本轮仅验批准源码App');
+      // desktopLifetime与启动守卫先完成收尾，最外层依赖夹具最后移除原TestInfo登记。
+      try { await use({ clock, identity, assertConfigurationBytes }); } finally { clocks.delete(info); }
     },
     ownedDesktopLaunchGuard: async ({ partialIdentity }, use) => { await use({ assertCurrent() { partialIdentity.clock.assertCurrent(); }, assertPreparation(info) { if (clocks.get(info) !== partialIdentity.clock) throw Error('脚本部分失败启动归属变化'); partialIdentity.clock.assertCurrent(); } }); },
   });
   const { expect } = runtime; test.use({ trace: 'off', screenshot: 'off', video: 'off', preserveOnUnconfirmedExit: true }); test.setTimeout(120000); test.describe.configure({ retries: 0 });
-  test.afterEach(({}, info) => { try { const check = completions.get(info); if (!check) throw Error('脚本部分失败原例尚未闭合'); check(); completions.delete(info); clocks.delete(info); } catch (error) { retained = true; clocks.get(info)?.retain(); runtime.retainOwnedDesktopResources(info); throw error; } });
+  test.afterEach(({}, info) => { try { const check = completions.get(info); if (!check) throw Error('脚本部分失败原例尚未闭合'); check(); completions.delete(info); } catch (error) { retained = true; clocks.get(info)?.retain(); runtime.retainOwnedDesktopResources(info); throw error; } });
   test('真实脚本首错保留完整前缀、固定导出且不改变后语句哨兵', async ({ trace, screenshot, video, partialIdentity }, info) => {
     const { clock, identity, assertConfigurationBytes } = partialIdentity, { page, application } = runtime.ownedDesktopResources(info), originalDirectory = runtime.dataDir, originalProcess = application.process();
     // 本门仅接收Windows；预先固定原模型CRLF，后续输入、IPC、历史和摘要均逐字核对同一脚本。
