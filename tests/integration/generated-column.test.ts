@@ -84,7 +84,7 @@ describe.sequential('新增数值生成列六实例实库（逐端口独立进�
         operations.push({ storage, ddlCount: applied.facts.flatMap(fact => fact.writes).length, verified: applied.value!.definitionVerified });
       }
       const updated = await sql<{ affectedRows: number; warningStatus: number }>(`UPDATE ${table} SET qty=3 WHERE id=18446744073709551615`); expect(updated.affectedRows).toBe(1); expect(updated.warningStatus).toBe(0);
-      expect(await sql(`SELECT CAST(virtual_total AS CHAR) AS virtual,CAST(stored_total AS CHAR) AS stored FROM ${table} WHERE id=18446744073709551615`)).toEqual([{ virtual: '30.370370367037037036703703703671', stored: '30.370370367037037036703703703671' }]); expect(await rows()).toEqual(beforeRows);
+      expect(await sql(`SELECT CAST(virtual_total AS CHAR) AS virtual_value,CAST(stored_total AS CHAR) AS stored_value FROM ${table} WHERE id=18446744073709551615`)).toEqual([{ virtual_value: '30.370370367037037036703703703671', stored_value: '30.370370367037037036703703703671' }]); expect(await rows()).toEqual(beforeRows);
       // 同名原定义发生外部变化后，不允许旧计划投递任何ALTER。
       const stale = await preview(await get(), [patch('VIRTUAL', 'stale_total')]); expect(stale.error).toBeUndefined(); await sql(`ALTER TABLE ${table} COMMENT='${marker}:changed'`);
       const refused = await apply(stale.value!, false); expect(refused.error).toBeInstanceOf(Error); expect(refused.facts.flatMap(fact => fact.writes)).toHaveLength(0);
