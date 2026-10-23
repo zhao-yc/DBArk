@@ -40,6 +40,7 @@ import {queryDatabasePatch} from '../shared/queryContext';
 import{SavedQuerySearches,SavedQuerySearchCancelled}from'./savedQuerySearch';
 import{SavedQueryPages}from'./savedQueryPages';
 import{HistoryPages}from'./historyPages';
+import { HistoryDelete } from './historyDelete';
 import { resolveWorkbenchTarget } from './workbench';
 import { objectUri } from '../shared/workbench';
 import { applyTablePreset, TablePresetSources } from './tablePresets';
@@ -59,6 +60,7 @@ let explainSnapshotFiles: ExplainSnapshotFiles;
 let savedQuerySearches:SavedQuerySearches;
 let savedQueryPages:SavedQueryPages;
 let historyPages:HistoryPages;
+let historyDelete: HistoryDelete;
 const localSearchOperations=new Set<Promise<unknown>>();
 let shuttingDown = false;
 let shutdownComplete = false;
@@ -580,7 +582,7 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
     case 'table.presets.apply': {
       const revision=store.connectionRevision();
       tablePresetSources.assert(columns,input);
-      if(tasks.has(input.taskId)||completionTasks.has(input.taskId)||savedQueryPages?.owns(input.taskId)||historyPages?.owns(input.taskId)||completionTasks.size>=8)throw Error('方案读取任务编号已使用或读取繁忙');
+      if(tasks.has(input.taskId)||completionTasks.has(input.taskId)||savedQueryPages?.owns(input.taskId)||historyPages?.owns(input.taskId)||(typeof historyDelete!=='undefined'&&historyDelete?.owns(input.taskId))||completionTasks.size>=8)throw Error('方案读取任务编号已使用或读取繁忙');
       const state={cancelled:false,sent:false,stop:undefined as Promise<unknown>|undefined};tablePresetReads.set(input.taskId,state);completionTasks.add(input.taskId);
       const check=()=>{tablePresetSources.assert(columns,input);connectionConfig.assertAvailable(input.connectionId);if(state.cancelled||shuttingDown||store.connectionRevision()!==revision)throw Error('方案读取已取消或连接配置已变化');};
       let result:unknown,failure:unknown,failed=false;
@@ -641,7 +643,7 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
       if (command === 'table.page' && !input.copySource) break;
       // 表来源短读仅占用内存任务编号，沿原取消通道；不写执行历史或持久化行值。
       if (shuttingDown) throw new Error('客户端正在退出，不能读取完整复制源');
-      if (tasks.has(input.taskId) || completionTasks.has(input.taskId) || savedQueryPages?.owns(input.taskId) || historyPages?.owns(input.taskId)) throw new Error('任务编号已使用');
+      if (tasks.has(input.taskId) || completionTasks.has(input.taskId) || savedQueryPages?.owns(input.taskId) || historyPages?.owns(input.taskId) || (typeof historyDelete !== 'undefined' && historyDelete?.owns(input.taskId))) throw new Error('任务编号已使用');
       if (completionTasks.size >= 8) throw new Error('只读请求繁忙，请稍后再读取');
       connectionConfig.assertAvailable(input.connectionId); completionTasks.add(input.taskId);
       try { return await broker.request(command, { ...input, profile: store.resolveConnection(input.connectionId) }); }
@@ -649,13 +651,14 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
     }
     case 'metadata.completion':case 'search.catalogue': {
       if(shuttingDown)throw new Error('客户端正在退出，不能读取补全目录');
-      if(tasks.has(input.taskId)||completionTasks.has(input.taskId)||savedQueryPages?.owns(input.taskId)||historyPages?.owns(input.taskId))throw new Error('任务编号已使用，请重新发起操作');
+      if(tasks.has(input.taskId)||completionTasks.has(input.taskId)||savedQueryPages?.owns(input.taskId)||historyPages?.owns(input.taskId)||(typeof historyDelete!=='undefined'&&historyDelete?.owns(input.taskId)))throw new Error('任务编号已使用，请重新发起操作');
       if(completionTasks.size>=8)throw new Error('补全目录读取繁忙，请稍后触发');
       completionTasks.add(input.taskId);
       try{return await broker.request(command,{...input,profile:store.resolveConnection(input.connectionId)});}
       finally{completionTasks.delete(input.taskId);}
     }
     case 'query.cancel': {
+      if (typeof historyDelete !== 'undefined' && historyDelete?.owns(input.taskId)) return historyDelete.cancel(input.taskId, columns!);
       if (tasks.get(input.taskId)?.kind === 'table.exportFiltered' && tableFilteredExports.has(input.taskId)) return tableFilteredExports.cancel(input.taskId, columns!);
       if(columns&&tasks.get(input.taskId)?.kind==='query.exportStream')queryInsertExports.assertOwned(input.taskId,columns);
       if(tablePresetReads.has(input.taskId))return cancelTablePresetRead(input.taskId);
@@ -727,7 +730,7 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
     case 'queries.deleteChecked':if(shuttingDown)throw Error('客户端正在退出，不能删除保存查询');return savedQueryPages.deleteChecked(input);
     case 'queries.page':case 'queries.pageContinue':case 'history.page':case 'history.pageContinue':{
       if(shuttingDown)throw Error('客户端正在退出，不能读取查询列表');
-      if(tasks.has(input.taskId)||completionTasks.has(input.taskId)||savedQueryPages?.owns(input.taskId)||historyPages?.owns(input.taskId))throw Error('请求编号已使用');
+      if(tasks.has(input.taskId)||completionTasks.has(input.taskId)||savedQueryPages?.owns(input.taskId)||historyPages?.owns(input.taskId)||(typeof historyDelete!=='undefined'&&historyDelete?.owns(input.taskId)))throw Error('请求编号已使用');
       // 列表和补全同属高频短读，活动编号只放内存，不逐次写任务或执行历史。
       completionTasks.add(input.taskId);try{return command==='queries.page'?await savedQueryPages.start(input):command==='queries.pageContinue'?await savedQueryPages.next(input):command==='history.page'?await historyPages.start(input):await historyPages.next(input);}finally{completionTasks.delete(input.taskId);}
     }
@@ -744,6 +747,14 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
     case 'history.pageRelease':return historyPages.release(input);
     case 'history.read':return historyPages.read(input);
     case 'history.readError':return historyPages.readError(input);
+    case 'history.deletePreview': {
+      if (shuttingDown) throw Error('客户端正在退出，不能清理执行历史');
+      if (tasks.has(input.taskId) || completionTasks.has(input.taskId) || savedQueryPages?.owns(input.taskId) || historyPages?.owns(input.taskId) || historyDelete.owns(input.taskId)) throw Error('请求编号已使用');
+      completionTasks.add(input.taskId);
+      try { return await historyDelete.preview(input, columns!); } finally { completionTasks.delete(input.taskId); }
+    }
+    case 'history.deleteApply': return historyDelete.apply(input, columns!);
+    case 'history.deleteRelease': return historyDelete.release(input, columns!);
     case 'table.applyReceipt.list': return store.tableApplyReceipts(input);
     case 'table.applyReceipt.detail': return store.tableApplyReceipt(input.operationId);
     case 'tasks.list': return store.tasks();
@@ -782,7 +793,7 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
   const taskId: string | undefined = command !== 'query.cancel' ? input.taskId : undefined;
   const startedAt = new Date().toISOString(); const start = Date.now();
   if (taskId) {
-    if (tasks.has(taskId)||completionTasks.has(taskId)||savedQueryPages?.owns(taskId)||historyPages?.owns(taskId)) throw new Error('任务编号已使用，请重新发起操作');
+    if (tasks.has(taskId)||completionTasks.has(taskId)||savedQueryPages?.owns(taskId)||historyPages?.owns(taskId)||(typeof historyDelete!=='undefined'&&historyDelete?.owns(taskId))) throw new Error('任务编号已使用，请重新发起操作');
     const task: TaskRecord = { id: taskId, kind: command, status: 'running', progress: 0, message: tableValueOptionsRead ? '正在读取服务器不同值' : '正在执行', startedAt };
     tasks.set(taskId, task); store.saveTask(task);
     if (tableValueOptionsRead) tableValueOptionsAdmitted = true;
@@ -940,7 +951,7 @@ app.on('before-quit', event => {
       await Promise.race([new Promise<void>((resolve, reject) => { stateFlushed = { resolve, reject }; window!.webContents.send('dbark:menu', 'persist-state'); }), new Promise((_, reject) => setTimeout(() => reject(new Error('工作台未能及时保存状态')), 3000))]);
       stateFlushed = undefined;
     }
-    await savedQuerySearches?.close();await savedQueryPages?.close();await historyPages?.close();await Promise.allSettled([...localSearchOperations]);
+    await savedQuerySearches?.close();await savedQueryPages?.close();await historyPages?.close();await historyDelete?.close();await Promise.allSettled([...localSearchOperations]);
     await Promise.allSettled([...queryFileOperations]);
     await broker?.close();
     tableApplyReceipts?.interrupt();
@@ -953,7 +964,7 @@ app.on('before-quit', event => {
     stateFlushed = undefined;
     const answer = await dialog.showMessageBox({ type: 'error', title: '退出前保存或收尾失败', message: error instanceof Error ? error.message : String(error), detail: '返回工作台可排查后重试。强制退出会终止本地执行进程并放弃未保存配置，不能确认远端操作已停止，也不能撤销已提交操作。', buttons: ['返回工作台','强制退出客户端'], defaultId: 0, cancelId: 0 });
     if (answer.response === 1) {
-      await savedQuerySearches?.close();await savedQueryPages?.close();await historyPages?.close();await Promise.allSettled([...localSearchOperations]);
+      await savedQuerySearches?.close();await savedQueryPages?.close();await historyPages?.close();await historyDelete?.close();await Promise.allSettled([...localSearchOperations]);
       await Promise.allSettled([...queryFileOperations]);
       try { broker?.forceClose(); } catch (failure) { shuttingDown = false; dialog.showErrorBox('强制退出失败', failure instanceof Error ? failure.message : '数据库执行进程未能终止'); return; }
       try { store?.close(); } catch { /* 用户已明确选择退出，避免退出状态永久锁死。 */ }
@@ -1027,6 +1038,7 @@ else {
     savedQuerySearches=new SavedQuerySearches(store,join(__dirname,'savedQuerySearchWorker.cjs'),taskEvent);
     savedQueryPages=new SavedQueryPages(store,join(__dirname,'savedQuerySearchWorker.cjs'));
     historyPages=new HistoryPages(store,join(__dirname,'savedQuerySearchWorker.cjs'));
+    historyDelete = new HistoryDelete(store, join(__dirname, 'savedQuerySearchWorker.cjs'), { assert: owner => columnsMain.assertCapturedOwner(owner), same: (left, right) => columnsMain.sharesDocumentOwner(left, right), shuttingDown: () => shuttingDown });
     ipcMain.handle('dbark:request', async (event, payload: unknown) => {
       let columns: MainInvocation | undefined;
       let databaseEncodingCommand: DatabaseEncodingOwnerCommand | undefined, databaseEncodingResult: unknown;
@@ -1037,6 +1049,8 @@ else {
         const insertRequest = payload.command==='query.confirmInsertExport' || payload.command==='query.exportStream' && !!payload.input && typeof payload.input==='object' && 'format' in payload.input && payload.input.format==='sql' || payload.command==='files.choose' && !!payload.input && typeof payload.input==='object' && 'queryInsertExport' in payload.input || payload.command==='query.cancel' && !!payload.input && typeof payload.input==='object' && 'taskId' in payload.input && typeof payload.input.taskId==='string' && queryInsertExports.has(payload.input.taskId);
         const resultSql = payload.command === 'files.previewResultSql' || payload.command === 'files.releaseResultSql' || (payload.command === 'files.exportResult' || payload.command === 'files.choose') && !!payload.input && typeof payload.input === 'object' && ('format' in payload.input && payload.input.format === 'sql') && (payload.command === 'files.exportResult' || 'resultSqlPreviewId' in payload.input);
         const filteredExportCancel = payload.command === 'query.cancel' && !!payload.input && typeof payload.input === 'object' && 'taskId' in payload.input && typeof payload.input.taskId === 'string' && tasks.get(payload.input.taskId)?.kind === 'table.exportFiltered' && tableFilteredExports.has(payload.input.taskId);
+        const historyDeleteCancel = payload.command === 'query.cancel' && !!payload.input && typeof payload.input === 'object' && 'taskId' in payload.input && typeof payload.input.taskId === 'string' && typeof historyDelete !== 'undefined' && historyDelete.owns(payload.input.taskId);
+        if (payload.command.startsWith('history.delete') || historyDeleteCancel) columns = columnsMain.capture(event);
         if (payload.command.startsWith('schema.databaseDrop.') || payload.command === 'table.valueOptions' || payload.command === 'table.exportFiltered' || filteredExportCancel) columns = columnsMain.capture(event);
         if (payload.command.startsWith('schema.databaseDefaultEncoding.')) {
           columns = columnsMain.capture(event); columns.databaseEncodingRevision = store.connectionRevision();
@@ -1046,7 +1060,7 @@ else {
         const input = validateMainCommand(payload.command, payload.input);
         if (payload.command.startsWith('schema.databaseDrop.')) beginDatabaseDrop(payload.command, input, columns!);
         if (databaseEncodingCommand) databaseEncodingOwners.before(databaseEncodingCommand, input, columns!);
-        const operation=dispatch(payload.command as Command,input,columns),local=payload.command==='search.savedQueries'||payload.command==='search.savedQueriesContinue'||payload.command==='queries.page'||payload.command==='queries.pageContinue'||payload.command==='history.page'||payload.command==='history.pageContinue';if(local)localSearchOperations.add(operation);
+        const operation=dispatch(payload.command as Command,input,columns),local=payload.command==='search.savedQueries'||payload.command==='search.savedQueriesContinue'||payload.command==='queries.page'||payload.command==='queries.pageContinue'||payload.command==='history.page'||payload.command==='history.pageContinue'||payload.command.startsWith('history.delete');if(local)localSearchOperations.add(operation);
         // 片段文件操作及清理全部结算后才允许退出关闭存储，复用现有文件操作等待集合。
         const snippetTransferOperation=payload.command.startsWith('snippets.transfer');if(snippetTransferOperation)queryFileOperations.add(operation);
         try {
@@ -1083,6 +1097,9 @@ else {
             if (!columns?.tableValueOptionsPublication) throw Error('服务器不同值读取缺少原来源发布门');
             columns.tableValueOptionsPublication();
           }
+          if (payload.command === 'history.deletePreview') historyDelete.assertPreviewPublication(result, columns!);
+          // 删除同步落盘后必须保留applied事实；这里只对仍属只读的释放/取消做最终来源门。
+          if (payload.command === 'history.deleteRelease' || historyDeleteCancel) columnsMain.assertCapturedOwner(columns);
           return { ok: true, result };
         } finally { columns?.presetPublication?.release();if(local)localSearchOperations.delete(operation);if(snippetTransferOperation)queryFileOperations.delete(operation); }
       } catch (error) {

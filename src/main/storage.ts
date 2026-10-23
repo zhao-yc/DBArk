@@ -14,7 +14,7 @@ import { assertTlsPassphrase, tlsCredentialMessages } from '../shared/tlsCredent
 import { parseTableApplyReceipt, interruptTableApplyReceipt, tableApplyReceiptLimits, type TableApplyReceipt, type TableApplyReceiptListInput, type TableApplyReceiptPage } from '../shared/tableApplyReceipt';
 import { persistedTaskMessage } from './taskPrivacy';
 import initSqlJs, { type Database, type SqlValue } from 'sql.js';
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, renameSync, unlinkSync, writeFileSync } from 'node:fs';
 import { dirname } from 'node:path';
 import { randomUUID, createHash } from 'node:crypto';
 import type { AppSettings, ConnectionProfile, HistoryEntry, SavedQuery, SqlSnippet, TaskRecord } from '../shared/contracts';
@@ -30,6 +30,9 @@ import { bindSavedQuery, queryConnectionDigest } from './queryBinding';
 import { tablePresetDocumentSchema, tablePresetListSchema, tablePresetSaveSchema, tablePresetSelectSchema, validateTablePresetBudget, type TablePresetTarget, type TablePresetSource, type TablePresetStoredSnapshot as TablePresetSnapshot, type TablePresetSelect } from '../shared/tablePresets';
 import { queryResultPresetDocumentSchema, queryResultPresetListSchema, queryResultPresetSaveSchema, queryResultPresetSelectSchema, queryResultPresetRenameSchema, validateQueryResultPresetBudget, type QueryResultPresetSource, type QueryResultPresetStoredSnapshot, type QueryResultPresetValue, type QueryResultPresetSelect, type QueryResultPresetSave, type QueryResultPresetRename } from '../shared/queryResultPresets';
 import { parseSavedQueryRecord } from './savedQuerySearchMatch';
+import { parseHistoryRecord } from './historyPageMatch';
+import { historyDeleteText, type HistoryDeleteReference } from '../shared/historyDelete';
+import { historyDeleteByteTotal, historyDeleteReferences } from './historyDeleteStorage';
 import { savedQueryOrganizationApplySchema, savedQueryGroupIds, type SavedQueryOrganizationApply, type SavedQueryGroupScope } from '../shared/savedQueryOrganization';
 import { applySavedQueryOrganization, readSavedQueryOrganization, savedQueryOrganizationRevision, savedQueryOrganizationSnapshot, savedQueryMembershipCondition, validateSavedQueryOrganizationStorage } from './savedQueryOrganizationStorage';
 
@@ -49,6 +52,7 @@ export class LocalStore {
   private historyRevisionValue=0;
   private snippetRevisionValue = 0;
   private volatileSecrets = new Map<string, string>();
+  private guardedMutation = false;
   /** 绑定数据库、文件路径及系统凭据保护器；仅由 open 创建已迁移的存储实例。 */
   private constructor(private db: Database, private path: string, private protector: SecretProtector, private reopen: (data: Uint8Array) => Database) {}
 
@@ -122,23 +126,31 @@ export class LocalStore {
   }
 
   /** 原子替换配置文件，写盘失败交给调用者恢复内存快照。 */
-  private flush(): void {
+  private flush(beforeReplace?: () => void): void {
     const temporary = `${this.path}.tmp`;
     writeFileSync(temporary, this.db.export(), { mode: 0o600 });
+    // 同步写盘也可能跨过预览期限；只在发布前检查，成功替换后不再制造失败结果。
+    try { beforeReplace?.(); } catch (error) {
+      try { unlinkSync(temporary); } catch { /* 不覆盖原归属错误，目标配置文件仍未替换。 */ }
+      throw error;
+    }
     renameSync(temporary, this.path);
   }
 
   /** 文件写入失败时同时恢复内存数据库和会话凭据，防止后续保存悄悄提交失败操作。 */
-  private mutate(action: () => void): void {
+  private mutate(action: () => void, assertCurrent?: () => void): void {
+    // 归属回调可读取存储，但不得在受保护事务中重入另一次写操作。
+    if (this.guardedMutation) throw Error('本地数据正在提交，请稍后重试');
     const snapshot = this.db.export();
     const secrets = new Map(this.volatileSecrets);
+    if (assertCurrent) this.guardedMutation = true;
     try {
-      this.db.run('BEGIN'); action(); this.db.run('COMMIT'); this.flush(); this.queryFileDocumentSnapshot = undefined;
+      this.db.run('BEGIN'); action(); assertCurrent?.(); this.db.run('COMMIT'); this.flush(assertCurrent); this.queryFileDocumentSnapshot = undefined;
     } catch (error) {
       try { this.db.run('ROLLBACK'); } catch { /* COMMIT 后的磁盘错误没有活动事务。 */ }
       this.db.close(); this.db = this.reopen(snapshot); this.volatileSecrets = secrets; this.queryFileDocumentSnapshot = undefined;
       throw new Error(`本地数据保存失败，修改未保存：${error instanceof Error ? error.message : String(error)}`);
-    }
+    } finally { if (assertCurrent) this.guardedMutation = false; }
   }
 
   /** 优先读取会话凭据；持久化密文只能通过系统保护器解密。 */
@@ -602,6 +614,48 @@ export class LocalStore {
   history(connectionId?: string): HistoryEntry[] { return this.records(`SELECT data FROM history ${connectionId ? 'WHERE connection_id=?' : ''} ORDER BY started_at DESC LIMIT 500`, connectionId ? [connectionId] : []); }
   /** 历史或连接成功变化即失效旧页；写盘失败不改变本地修订。 */
   historyPageRevision():string{return this.historyRevisionValue+':'+this.connectionRevisionValue;}
+  /** 精确读取原索引和有界原文，不能把坏索引或超限正文转换成有效历史。 */
+  historyDeleteRecord(id: string): { id: string; startedAt: string; connectionId: string; raw: string | null } | undefined {
+    if (typeof id !== 'string' || !id.length || id.length > 200) throw Error(historyDeleteText.invalidRecord);
+    const statement = this.db.prepare('SELECT id,connection_id,started_at,CASE WHEN length(CAST(data AS BLOB))<=? THEN data ELSE NULL END AS data FROM history WHERE id COLLATE BINARY=?');
+    try {
+      statement.bind([savedQuerySearchLimits.recordBytes, id]);
+      if (!statement.step()) return;
+      const row = statement.getAsObject();
+      if (typeof row.id !== 'string' || row.id !== id || typeof row.started_at !== 'string' || typeof row.connection_id !== 'string') throw Error(historyDeleteText.invalidRecord);
+      return { id: row.id, startedAt: row.started_at, connectionId: row.connection_id, raw: typeof row.data === 'string' ? row.data : null };
+    } finally { statement.free(); }
+  }
+  /** 仅删除预览授权的精确ID；整批原文、索引和来源均确认后才执行第一条删除。 */
+  deleteHistorySnapshot(expectedRevision: string, refs: readonly HistoryDeleteReference[], assertCurrent: () => void): number {
+    const references = historyDeleteReferences(refs);
+    const current = () => {
+      assertCurrent();
+      if (expectedRevision !== this.historyPageRevision() || !Number.isSafeInteger(this.historyRevisionValue) || this.historyRevisionValue < 0 || this.historyRevisionValue >= Number.MAX_SAFE_INTEGER) throw Error(historyDeleteText.stale);
+    };
+    current();
+    this.mutate(() => {
+      current(); let total = 0;
+      for (const reference of references) {
+        current();
+        const row = this.historyDeleteRecord(reference.id);
+        if (!row) throw Error(historyDeleteText.missing);
+        if (row.raw === null) throw Error(historyDeleteText.budget);
+        total = historyDeleteByteTotal(total, Buffer.byteLength(row.raw));
+        const entry = parseHistoryRecord(row.id, row.raw);
+        if (entry.startedAt !== row.startedAt || (entry.connectionId ?? '') !== row.connectionId) throw Error(historyDeleteText.invalidRecord);
+        if (createHash('sha256').update(row.raw).digest('hex') !== reference.digest) throw Error(historyDeleteText.stale);
+      }
+      current();
+      for (const reference of references) {
+        this.db.run('DELETE FROM history WHERE id COLLATE BINARY=?', [reference.id]);
+        if (this.db.getRowsModified() !== 1) throw Error(historyDeleteText.stale);
+      }
+    }, current);
+    // 只在原子文件替换完成后推进一次修订，任何回滚都保留原预览修订。
+    this.historyRevisionValue++;
+    return references.length;
+  }
   /** 原始时间与ID复合键分页，范围用参数绑定；一次只交付一条完整记录。 */
   historyPageNext(after:HistoryPagePosition|undefined,input:HistoryPageInput):{id:string;startedAt:string;connectionId:string;raw:string|null;hasMore:boolean}|null{
     const conditions:string[]=[],params:SqlValue[]=[savedQuerySearchLimits.recordBytes];

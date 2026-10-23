@@ -36,6 +36,7 @@ import type{SavedQuerySearchInput,SavedQuerySearchNext,SavedQuerySearchPage,Save
 import type{SavedQueryPageInput,SavedQueryPage}from'./savedQueryPages';
 import type { SavedQueryOrganizationApply, SavedQueryOrganizationSnapshot } from './savedQueryOrganization';
 import type{HistoryPageInput,HistoryPage,HistoryOpenResult}from'./historyPages';
+import type { HistoryDeletePreviewInput, HistoryDeletePreviewOutput, HistoryDeleteApplyInput, HistoryDeleteApplyOutput, HistoryDeleteReleaseInput } from './historyDelete';
 import type { ExplainPlan } from './explain';
 import type { ExplainSnapshotDocument } from './explainSnapshot';
 import type { DatabaseDefaultEncodingGetInput, DatabaseDefaultEncodingGetOutput, DatabaseDefaultEncodingPreviewInput, DatabaseDefaultEncodingPreviewOutput, DatabaseDefaultEncodingApplyInput, DatabaseDefaultEncodingApplyOutput, DatabaseDefaultEncodingReleaseInput } from './databaseDefaultEncoding';
@@ -254,6 +255,9 @@ export interface CommandMap {
   'history.pageRelease':{input:{cursor:string};output:void};
   'history.read':{input:{id:string;digest:string;connectionId:string};output:HistoryOpenResult};
   'history.readError':{input:{id:string;digest:string};output:{error:string}};
+  'history.deletePreview': { input: HistoryDeletePreviewInput; output: HistoryDeletePreviewOutput };
+  'history.deleteApply': { input: HistoryDeleteApplyInput; output: HistoryDeleteApplyOutput };
+  'history.deleteRelease': { input: HistoryDeleteReleaseInput; output: void };
   'table.applyReceipt.list': { input: import('./tableApplyReceipt').TableApplyReceiptListInput; output: import('./tableApplyReceipt').TableApplyReceiptPage };
   'table.applyReceipt.detail': { input: { operationId: string }; output: import('./tableApplyReceipt').TableApplyReceipt };
   'tasks.list': { input: Record<string, never>; output: TaskRecord[] };
