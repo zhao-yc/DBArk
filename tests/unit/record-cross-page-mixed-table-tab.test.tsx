@@ -48,7 +48,7 @@ function fixture(filterGroup: FilterGroup | undefined = undefined) {
   let sequence = 0;
   const context = createContext({
     // 提取的真实选择函数引用此意图；旧跨页场景尚未打开批量填充，保持生产初值。
-    tableStatisticsDialog: null, tableStatisticsIntent: { current: null }, childReferenceDialog: null, childReferenceIntent: { current: null }, batchFillIntent: { current: null }, selectedFilterRef: { current: null },
+    tableValueOptionsDialog: null, tableValueOptionsIntent: { current: null }, tableStatisticsDialog: null, tableStatisticsIntent: { current: null }, childReferenceDialog: null, childReferenceIntent: { current: null }, batchFillIntent: { current: null }, selectedFilterRef: { current: null },
     history: new DraftHistory(), RecordPageNavigation, recordPageScope, recordViewZh, tableGridZh, maxTablePage, structuredClone, base, tab,
     ...value, pageIndex: 1, rows, rowsRef: { current: rows }, page: { hasMore: true, columns: [{ key: 'id' }, { key: 'text' }] }, info: { objectKind: 'table', columns: [{ name: 'id' }, { name: 'text' }] },
     useWorkspace: { getState: () => workspace }, recordPages: gate, recordPageScopeRef: { current: { value, page: 1 } }, loadGeneration: { current: 10 },
@@ -75,8 +75,8 @@ function fixture(filterGroup: FilterGroup | undefined = undefined) {
   context.setSelectedRows = vi.fn((rows: unknown) => { context.selectedRows = rows; });
   context.setSelection = vi.fn((selection: unknown) => { context.selection = typeof selection === 'function' ? selection(context.selection) : selection; });
   context.setPageIndex = vi.fn((index: number) => { context.pageIndex = index; context.recordPageScopeRef.current.page = index; });
-  // canReload现委派原纯忙门；一并提取真实函数，复用上面的模态/布局/关联活动端口。
-  const names = ['getRecordPageContext', 'navigateRecordPage', 'jumpToMatch', 'selectCurrentCell', 'applyPagePlan', 'reloadBlocked', 'canReload', 'duplicateCurrentRow', 'invalidateCopyRead', 'releaseCopySources'];
+  // 原确认前后守卫也从生产函数提取；复用原模态/布局/关联活动端口，不伪造确认成功。
+  const names = ['getRecordPageContext', 'navigateRecordPage', 'jumpToMatch', 'selectCurrentCell', 'applyPagePlan', 'reloadBlocked', 'confirmPageReload', 'canReload', 'duplicateCurrentRow', 'invalidateCopyRead', 'releaseCopySources'];
   if (names.some(name => !functions.has(name)) || !load || !consume || !blocked || buttons.size !== 4) throw Error('缺少生产跨页或原有工具接线');
   const declarations = names.map(name => functions.get(name)).join('\n') + '\n' + names.map(name => `globalThis.${name}=${name};`).join('\n');
   const expressions = ['DataGrid_onCellClick', 'DataGrid_onCellKeyDown', 'PageFindPanel_getSelectionToken'];

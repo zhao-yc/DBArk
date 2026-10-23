@@ -2,6 +2,7 @@ import type { Command, TaskEvent } from '../shared/contracts';
 
 /** 服务端错误可能展开参数值；概要记录仅保存进度，不将错误原文写入本地库。 */
 export function persistedTaskMessage(command: string, event: TaskEvent): string {
+  if (command === 'table.valueOptions') return event.status === 'completed' ? '服务器不同值读取已完成；筛选值、搜索模式、候选和错误原文未保存。' : event.status === 'running' ? '正在读取服务器不同值；筛选值、搜索模式和候选仅在当前窗口保留。' : '服务器不同值读取未完成；筛选值、搜索模式、候选和错误原文未保存，请在当前窗口核对。';
   if (command === 'table.statistics') return event.status === 'completed' ? '表数据统计已完成；筛选值、聚合结果和错误原文未保存。' : event.status === 'running' ? '正在统计服务器数据；筛选值和聚合结果仅在当前窗口保留。' : '表数据统计未完成；筛选值、聚合结果和错误原文未保存，请在当前窗口核对。';
   if (command === 'table.incomingReferences' || command === 'table.childReferencePage') return event.status === 'completed' ? '子记录只读任务已完成；关联值、记录和错误原文未保存。' : event.status === 'running' ? '正在读取子记录；关联值和记录仅在当前窗口保留。' : '子记录读取未完成；关联值、记录和错误原文未保存，请在当前窗口核对。';
   if (command.startsWith('queryFileSources.')) return event.queryFileSource?.wrote === 'unknown' ? 'SQL文件替换结果不确定，请核对原文件；不自动重试，正文与路径未保存。' : event.queryFileSource?.wrote === 'yes' && event.status !== 'completed' ? 'SQL文件已写入，但附加处理未完成，请核对文件与来源状态，不要自动重试。' : event.status === 'completed' ? 'SQL文件任务已完成，正文与路径未写入任务概要。' : event.status === 'running' ? '正在处理SQL文件，正文与路径未写入任务概要。' : 'SQL文件任务未写入即已结束，输入保持；正文与路径未写入任务概要。';

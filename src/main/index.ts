@@ -88,8 +88,11 @@ const queryInsertExports=new QueryInsertExports(files,{assert:value=>columnsMain
 const tablePresetSources=new TablePresetSources({assert:value=>columnsMain.assertCapturedOwner(value),same:(left,right)=>columnsMain.sharesDocumentOwner(left,right)});
 const resultPresetSources=new QueryResultPresetSources({assert:value=>columnsMain.assertCapturedOwner(value),same:(left,right)=>columnsMain.sharesDocumentOwner(left,right)});
 const tablePresetReads=new Map<string,{cancelled:boolean;sent:boolean;stop?:Promise<unknown>}>();
+// 连接关闭不修改磁盘配置修订；不同值另用私有对象代次防关闭后同名重开复活旧候选。
+const tableValueOptionsConnectionOwners = new Map<string, object>();
+const tableValueOptionsClosing = new Map<string, object>();
 /** 仅真实Main调用持有发布门；成功结果直到IPC最后同步检查后才释放取消登记。 */
-type MainInvocation = ColumnsInvocation & { databaseDropRequest?: DatabaseDropMainRequest;databaseEncodingRevision?:number;snapshotSaved?:true;resultPresetPublication?:()=>void;presetPublication?:{pendingStop():Promise<unknown>|undefined;settledStop(stop:Promise<unknown>):void;assertCurrent():void;release():void}};
+type MainInvocation = ColumnsInvocation & { databaseDropRequest?: DatabaseDropMainRequest;databaseEncodingRevision?:number;snapshotSaved?:true;tableValueOptionsPublication?:()=>void;resultPresetPublication?:()=>void;presetPublication?:{pendingStop():Promise<unknown>|undefined;settledStop(stop:Promise<unknown>):void;assertCurrent():void;release():void}};
 /** 数据库属性能力也绑定真实文档；连接修订只由Main捕获，不接受渲染进程注入。 */
 const databaseEncodingOwners = new DatabaseDefaultEncodingOwners({
   assert: owner => { columnsMain.assertCapturedOwner(owner); if ((owner as MainInvocation).databaseEncodingRevision !== store.connectionRevision()) throw Error('连接配置已变化，请重新读取数据库属性'); },
@@ -494,6 +497,18 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
   const tableStatisticsRead = command === 'table.statistics';
   const tableStatisticsRevision = tableStatisticsRead ? store.connectionRevision() : undefined;
   if (tableStatisticsRead && shuttingDown) throw Error('客户端正在退出，不能统计表数据');
+  const tableValueOptionsRead = command === 'table.valueOptions';
+  const tableValueOptionsRevision = tableValueOptionsRead ? store.connectionRevision() : undefined;
+  let tableValueOptionsAdmitted = false;
+  let tableValueOptionsConnectionOwner = tableValueOptionsRead ? tableValueOptionsConnectionOwners.get(requestConnectionId) : undefined;
+  if (tableValueOptionsRead && !tableValueOptionsConnectionOwner) { tableValueOptionsConnectionOwner = {}; tableValueOptionsConnectionOwners.set(requestConnectionId, tableValueOptionsConnectionOwner); }
+  // 原主文档、配置锁及连接修订绑定本次读取；请求不能在等待后偷换发布来源。
+  const assertTableValueOptionsPublication = () => {
+    columnsMain.assertCapturedOwner(columns);
+    connectionConfig.assertAvailable(requestConnectionId);
+    if (shuttingDown || tableValueOptionsRevision !== store.connectionRevision() || tableValueOptionsClosing.has(requestConnectionId) || tableValueOptionsConnectionOwners.get(requestConnectionId) !== tableValueOptionsConnectionOwner || tableValueOptionsAdmitted && ['failed', 'cancelled'].includes(tasks.get(input.taskId)?.status ?? '')) throw Error('连接配置或客户端状态已变化，请重新读取服务器不同值');
+  };
+  if (tableValueOptionsRead) assertTableValueOptionsPublication();
   if (structureCommand && shuttingDown) throw new Error('客户端正在退出，不能开始结构操作');
   connectionConfig.assertAvailable(requestConnectionId);
   // 删除整库的原目标已由私有能力核验；投递前一次性撤销同源快照和全部兄弟预览。
@@ -597,6 +612,8 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
       input = { ...input, profile: store.resolveConnection(input.connectionId) }; break;
     case 'table.statistics':
       input = { ...input, profile: store.resolveConnection(input.connectionId) }; break;
+    case 'table.valueOptions':
+      input = { ...input, profile: store.resolveConnection(input.connectionId) }; break;
     case 'search.structure':case 'search.structureContinue':case 'search.dataStart':case 'search.recordRead':
       if(shuttingDown)throw Error('客户端正在退出，不能开始搜索');
       input={...input,profile:store.resolveConnection(input.connectionId)};break;
@@ -659,17 +676,24 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
       if([...tasks.values()].some(task=>task.kind==='query.exportStream'&&task.status==='running'))queryInsertExports.invalidateAll();
       return saved;
     }
-    case 'connections.delete': await broker.request('connections.close', input); store.deleteConnection(input.id); return;
+    case 'connections.delete': {
+      const owner = {}; tableValueOptionsConnectionOwners.set(input.id, owner); tableValueOptionsClosing.set(input.id, owner);
+      try { await broker.request('connections.close', input); store.deleteConnection(input.id); return; }
+      finally { if (tableValueOptionsClosing.get(input.id) === owner) tableValueOptionsClosing.delete(input.id); }
+    }
     case 'connections.open': input = { ...input, profile: store.resolveConnection(input.id) }; break;
     case 'connections.test': {
       const previous = store.connections().find(profile => profile.id === input.id);
       input = { ...input, pendingFiles: [...new Set([...previous?.pendingFiles ?? [], ...input.pendingFiles ?? []])] };
       assertConnectionReady(input); input = store.resolveConnection(input.id, input as ConnectionProfile); break;
     }
-    case 'connections.close':
+    case 'connections.close': {
+      const owner = {}; tableValueOptionsConnectionOwners.set(input.id, owner); tableValueOptionsClosing.set(input.id, owner);
       for (const [id, session] of sessions) if (session.connectionId === input.id) sessions.delete(id);
       for (const [token, value] of structureTokens) if (value.connectionId === input.id) structureTokens.delete(token);
-      break;
+      try { return await broker.request(command, input); }
+      finally { if (tableValueOptionsClosing.get(input.id) === owner) tableValueOptionsClosing.delete(input.id); }
+    }
     case 'table.preferences.get': return store.tablePreferences(input);
     case 'table.preferences.save': return store.saveTablePreferences(input);
     case 'table.preferences.reset': return store.resetTablePreferences(input);
@@ -733,8 +757,9 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
   const startedAt = new Date().toISOString(); const start = Date.now();
   if (taskId) {
     if (tasks.has(taskId)||completionTasks.has(taskId)||savedQueryPages?.owns(taskId)||historyPages?.owns(taskId)) throw new Error('任务编号已使用，请重新发起操作');
-    const task: TaskRecord = { id: taskId, kind: command, status: 'running', progress: 0, message: '正在执行', startedAt };
+    const task: TaskRecord = { id: taskId, kind: command, status: 'running', progress: 0, message: tableValueOptionsRead ? '正在读取服务器不同值' : '正在执行', startedAt };
     tasks.set(taskId, task); store.saveTask(task);
+    if (tableValueOptionsRead) tableValueOptionsAdmitted = true;
   }
   const session = sessions.get(input.sessionId);
   const currentStatement = command === 'query.execute' && input.currentStatement !== undefined;
@@ -775,6 +800,7 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
     const result = command==='search.savedQueries'?await savedQuerySearches.start(input):command==='search.savedQueriesContinue'?await savedQuerySearches.next(input):await broker.request(command, input);
     if (incomingReferenceRead && (shuttingDown || incomingReferenceRevision !== store.connectionRevision())) throw Error('连接配置或客户端状态已变化，请重新打开子记录');
     if (tableStatisticsRead && (shuttingDown || tableStatisticsRevision !== store.connectionRevision())) throw Error('连接配置或客户端状态已变化，请重新统计表数据');
+    if (tableValueOptionsRead) { assertTableValueOptionsPublication(); columns!.tableValueOptionsPublication = assertTableValueOptionsPublication; }
     if (columnRequest && (command === 'schema.columns.get' || command === 'schema.columns.preview')) {
       try { columnsMain.publish(columnRequest, result); }
       catch (error) { await columnsMain.rejectReply(columnRequest, error); }
@@ -806,7 +832,7 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
     const queryFailure = command === 'query.execute' || command === 'query.executeParameterized' ? result?.failure : undefined;
     const terminalStatus = taskId ? tasks.get(taskId)?.status : undefined;
     if (taskId && queryFailure && (terminalStatus === 'running' || terminalStatus === 'completed')) taskEvent({ taskId, status: 'failed', progress: 100, message: queryFailure.message });
-    else if (taskId && command!=='search.dataStart' && terminalStatus === 'running') taskEvent({ taskId, status: 'completed', progress: 100, message: '执行完成' });
+    else if (taskId && command!=='search.dataStart' && terminalStatus === 'running') taskEvent({ taskId, status: 'completed', progress: 100, message: tableValueOptionsRead ? '服务器不同值读取完成' : '执行完成' });
     if (history && pendingHistory?.executionSqlReceived) persistAuxiliary(() => store.addHistory({ ...history, elapsedMs: Date.now() - start, success: !queryFailure, ...(queryFailure ? { error: persistedQueryError(command, queryFailure.message) } : {}) }));
     return command === 'table.apply' ? { ...result, ...tableApplyReceipts.finish(taskId!) } : result;
   } catch (error) {
@@ -977,7 +1003,7 @@ else {
         const fileCancel = Boolean(payload.command === 'query.cancel' && payload.input && typeof payload.input === 'object' && 'taskId' in payload.input && typeof payload.input.taskId === 'string' && tasks.get(payload.input.taskId)?.kind.startsWith('queryFileSources.'));
         const insertRequest = payload.command==='query.confirmInsertExport' || payload.command==='query.exportStream' && !!payload.input && typeof payload.input==='object' && 'format' in payload.input && payload.input.format==='sql' || payload.command==='files.choose' && !!payload.input && typeof payload.input==='object' && 'queryInsertExport' in payload.input || payload.command==='query.cancel' && !!payload.input && typeof payload.input==='object' && 'taskId' in payload.input && typeof payload.input.taskId==='string' && queryInsertExports.has(payload.input.taskId);
         const resultSql = payload.command === 'files.previewResultSql' || payload.command === 'files.releaseResultSql' || (payload.command === 'files.exportResult' || payload.command === 'files.choose') && !!payload.input && typeof payload.input === 'object' && ('format' in payload.input && payload.input.format === 'sql') && (payload.command === 'files.exportResult' || 'resultSqlPreviewId' in payload.input);
-        if (payload.command.startsWith('schema.databaseDrop.')) columns = columnsMain.capture(event);
+        if (payload.command.startsWith('schema.databaseDrop.') || payload.command === 'table.valueOptions') columns = columnsMain.capture(event);
         if (payload.command.startsWith('schema.databaseDefaultEncoding.')) {
           columns = columnsMain.capture(event); columns.databaseEncodingRevision = store.connectionRevision();
           databaseEncodingCommand = payload.command.slice('schema.databaseDefaultEncoding.'.length) as DatabaseEncodingOwnerCommand;
@@ -1018,6 +1044,11 @@ else {
           }
           if (payload.command.startsWith('schema.databaseDrop.')) assertDatabaseDropPublication(result, columns!);
           if (databaseEncodingCommand) databaseEncodingOwners.assertPublication(databaseEncodingCommand, result, columns!);
+          // 最后同步发布门之后不再等待，迟到候选不能越过导航、退出或连接变更。
+          if (payload.command === 'table.valueOptions') {
+            if (!columns?.tableValueOptionsPublication) throw Error('服务器不同值读取缺少原来源发布门');
+            columns.tableValueOptionsPublication();
+          }
           return { ok: true, result };
         } finally { columns?.presetPublication?.release();if(local)localSearchOperations.delete(operation);if(snippetTransferOperation)queryFileOperations.delete(operation); }
       } catch (error) {

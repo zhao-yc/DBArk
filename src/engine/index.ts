@@ -25,6 +25,8 @@ import { canonicalReference, validateReferenceValues } from '../shared/reference
 import { buildReferencePageSql, buildChildReferencePageSql, hasStableReferencePagination } from './references';
 import { readIncomingReferences, resolveIncomingReference, recheckIncomingReference } from './incomingReferences';
 import { readTableStatistics } from './tableStatistics';
+import { readTableValueOptions } from './tableValueOptions';
+import type { TableValueOptionsInput } from '../shared/tableValueOptions';
 import type { TableStatisticsInput } from '../shared/tableStatistics';
 import { incomingReferenceLimits, incomingReferenceMessages, type IncomingReferencesInput, type ChildReferencePageInput } from '../shared/incomingReferences';
 import { connect, execute, type ManagedConnection } from './connection';
@@ -356,6 +358,11 @@ export class Engine {
       case 'table.statistics': {
         this.copySourceProfile(input);
         return this.withIndependentTask(input.connectionId, input.taskId, (managed, control) => readTableStatistics({ managed, ...control }, input as TableStatisticsInput, () => this.stopIndependentRead(input.taskId)), undefined, '统计服务器筛选数据', true);
+      }
+      case 'table.valueOptions': {
+        this.copySourceProfile(input);
+        // 候选使用独立只读会话；原终包与严格连接清理完成后才发布，不读取父页草稿。
+        return this.withIndependentTask(input.connectionId, input.taskId, (managed, control) => readTableValueOptions({ managed, ...control }, input as TableValueOptionsInput, () => this.stopIndependentRead(input.taskId)), undefined, '读取服务器不同值', true);
       }
       case 'table.childReferencePage': {
         this.copySourceProfile(input);
