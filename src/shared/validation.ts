@@ -13,6 +13,7 @@ import { generatedColumnAcknowledgement } from './tableGeneratedColumn';
 import { tableCopyStructureKnownAcknowledgements, validateTableCopyStructureName } from './tableCopyStructure';
 import { z } from 'zod';
 import { tableValueOptionsSearchPattern } from './tableValueOptions';
+import { tableFilteredExportLimits, tableFilteredExportText } from './tableFilteredExport';
 import { queryInsertTargetSchema, queryInsertConfirmationSchema } from './queryInsertExport';
 import { serverMonitorLimits, validateServerMonitorInput } from './serverMonitor';
 import { csvExportFieldLimits } from './csvExportFields';
@@ -205,6 +206,13 @@ export const commandSchemas: Record<Command, z.ZodType> = {
     // 沿用表页的全集筛选预算；LIKE模式保留原空白及通配符，不补写SQL。
     try { validateFilterGroup(input.filters, input.filterMode, input.filterGroup); tableValueOptionsSearchPattern(input.searchPattern); }
     catch (error) { context.addIssue({ code: 'custom', message: error instanceof Error ? error.message : '服务器不同值筛选无效' }); }
+  })),
+  'table.exportFiltered': guardedTablePage(z.object({ ...target, taskId: id, fileToken: id, metadataKey: z.string().min(1).max(tableFilteredExportLimits.metadataBytes).refine(value => new TextEncoder().encode(value).length <= tableFilteredExportLimits.metadataBytes, tableFilteredExportText.metadata), filters: z.array(filterRule).max(FILTER_LIMITS.conditions), filterMode: z.enum(['all', 'any']).optional(), filterGroup: filterGroupSchema.optional(), sort: sortRulesSchema, format: z.enum(['csv', 'json', 'sql', 'xlsx']), encoding: z.enum(['utf8', 'utf16le', 'gb18030']), csvDelimiter: z.enum(csvExportDelimiters).optional() }).strict().superRefine((input, context) => {
+    // 不接收任意SQL或路径；全集预算也覆盖停用条件与原分组的每个叶子。
+    try { validateFilterGroup(input.filters, input.filterMode, input.filterGroup); }
+    catch (error) { context.addIssue({ code: 'custom', message: error instanceof Error ? error.message : tableFilteredExportText.invalid }); }
+    if (Object.hasOwn(input, 'csvDelimiter') && (input.format !== 'csv' || input.csvDelimiter === undefined)) context.addIssue({ code: 'custom', message: '分隔符仅适用于CSV导出，且必须为逗号、分号或Tab' });
+    if (new Set(input.sort.map(rule => rule.column)).size !== input.sort.length) context.addIssue({ code: 'custom', message: '导出排序字段不能重复' });
   })),
   'table.statistics': guardedTablePage(z.object({ ...target, taskId: id, columns: z.array(name).max(12).refine(value => new Set(value).size === value.length, '统计字段不能重复'), filters: z.array(filterRule).max(FILTER_LIMITS.conditions), filterMode: z.enum(['all', 'any']).optional(), filterGroup: filterGroupSchema.optional(), distinct: z.boolean().optional() }).strict().superRefine((input, context) => {
     try { validateFilterGroup(input.filters, input.filterMode, input.filterGroup); } catch (error) { context.addIssue({ code: 'custom', path: ['filters'], message: error instanceof Error ? error.message : '统计筛选无效' }); }

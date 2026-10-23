@@ -70,6 +70,8 @@ import { queryInsertZh } from '../shared/queryInsertExport.zh-CN';
 import { explainQuery } from './queryExplain';
 import { explainLimits } from '../shared/explain';
 import { consumeQueryFrames } from './queryStreamProtocol';
+import { prepareTableFilteredExport, type PreparedTableFilteredExport } from './tableFilteredExport';
+import { tableFilteredExportText } from '../shared/tableFilteredExport';
 import { queryExportWireProtocol, queryStreamExportLimits, type QueryExportProgress, type QueryExportResultSummary, type QueryStreamExportInput, type QueryStreamExportOutput } from '../shared/queryStreamExport';
 import { buildChanges, buildDesign, buildPageSql, deserializeCell, exportLiteral, identifier, inlineParameters, qualified, serializeCell, splitSql, SqlScriptScanner, typedCellPlaceholder } from './sql';
 import { currentSqlStatement } from './currentStatement';
@@ -82,7 +84,8 @@ interface RunningTask {
   queryExport?: QueryExportProgress; fileCommitStarted?: boolean;
 }
 interface ResultBudget { remainingRows: number; remainingBytes: number; remainingResults: number; }
-interface IndependentTask { connectionId: string; controller: AbortController; done: Promise<void>; managed?: ManagedConnection; resources?: IndependentTaskResourceLease; resourceCloseFailed?: boolean; cancelPending?: Promise<void>; stopPending?:Promise<void>; cancelError?: Error; cancelRequested?: boolean; actionSettled?: boolean; structureTask?: boolean; generation?: number; commandTerminal?: Promise<void>; commandInFlight?:boolean; }
+interface IndependentTask { connectionId: string; controller: AbortController; done: Promise<void>; managed?: ManagedConnection; resources?: IndependentTaskResourceLease; resourceCloseFailed?: boolean; cancelPending?: Promise<void>; stopPending?:Promise<void>; cancelError?: Error; cancelRequested?: boolean; actionSettled?: boolean; structureTask?: boolean; generation?: number; commandTerminal?: Promise<void>; commandInFlight?:boolean; fileFinalization?: boolean; fileCommitStarted?: boolean; fileCommitted?: boolean; }
+interface IndependentFileFinalizer<T> { commit(check: () => void, start: () => void): Promise<T>; dispose(): Promise<void>; committed(): boolean; }
 type Input = Record<string, any>;
 
 /** 独立数据库进程的入口；网络连接与文件流不会进入 Electron 渲染进程。 */
@@ -364,6 +367,21 @@ export class Engine {
         // 候选使用独立只读会话；原终包与严格连接清理完成后才发布，不读取父页草稿。
         return this.withIndependentTask(input.connectionId, input.taskId, (managed, control) => readTableValueOptions({ managed, ...control }, input as TableValueOptionsInput, () => this.stopIndependentRead(input.taskId)), undefined, '读取服务器不同值', true);
       }
+      case 'table.exportFiltered': {
+        this.assertFile(input); this.copySourceProfile(input);
+        let prepared: PreparedTableFilteredExport | undefined; let beginCommit: () => void = () => { throw Error('文件发布尚未获得原数据库收尾授权'); };
+        const finalizer: IndependentFileFinalizer<import('../shared/tableFilteredExport').TableFilteredExportOutput> = {
+          async commit(check, start) { check(); if (!prepared) throw Error('完整导出暂存尚未完成'); beginCommit = start; return prepared.commit(); },
+          dispose: async () => { await prepared?.dispose(); }, committed: () => prepared?.fileCommitted === true,
+        };
+        return this.withIndependentTask(input.connectionId, input.taskId, async (managed, control) => {
+          prepared = await prepareTableFilteredExport({ managed, ...control }, input as import('../shared/tableFilteredExport').TableFilteredExportInput & { filePath: string }, {
+            stop: () => this.stopIndependentRead(input.taskId), onCommitStart: () => beginCommit(),
+            onProgress: rows => this.emit({ taskId: input.taskId, status: 'running', progress: 0, message: tableFilteredExportText.label, rows }),
+          });
+          return { rows: prepared.rows, fileCommitted: true as const };
+        }, undefined, tableFilteredExportText.label, true, undefined, false, finalizer);
+      }
       case 'table.childReferencePage': {
         this.copySourceProfile(input);
         return this.withIndependentTask(input.connectionId, input.taskId, async (managed, control) => {
@@ -599,7 +617,7 @@ export class Engine {
   }
 
   /** 独立任务从建连前登记，到服务器及本地连接收尾后才释放编号和配置锁。 */
-  private async withIndependentTask<T>(connectionId: string, taskId: string, action: (managed: ManagedConnection, control: Omit<StructureTaskContext, 'managed'>) => Promise<T>, options?: StructureTaskOptions, readLabel?:string, strictRead=false,readDetail?:()=>Partial<TaskEvent>, quiet=false): Promise<T> {
+  private async withIndependentTask<T>(connectionId: string, taskId: string, action: (managed: ManagedConnection, control: Omit<StructureTaskContext, 'managed'>) => Promise<T>, options?: StructureTaskOptions, readLabel?:string, strictRead=false,readDetail?:()=>Partial<TaskEvent>, quiet=false, fileFinalizer?: IndependentFileFinalizer<T>): Promise<T> {
     let resourcesStarted = false;
     return this.withConnectionUse(connectionId, async () => {
       if (this.closing || !taskId || this.taskIdInUse(taskId)) throw new Error('任务编号为空或任务已在执行');
@@ -615,7 +633,7 @@ export class Engine {
       const controller = new AbortController();
       let finish!: () => void;
       const done = new Promise<void>(resolve => { finish = resolve; });
-      const task: IndependentTask = { connectionId, controller, done, resources, structureTask: Boolean(options)||strictRead, generation: 0 };
+      const task: IndependentTask = { connectionId, controller, done, resources, structureTask: Boolean(options)||strictRead, generation: 0, ...(fileFinalizer ? { fileFinalization: true } : {}) };
       this.independentTasks.set(taskId, task);
       const label = options?.label ?? readLabel ?? '读取关联记录';
       const detail = () => options ? (options.purpose === 'tableCreate' ? { tableCreate: { ...options.progress } } : options.purpose === 'tableCopyData' ? { tableCopyData: { ...options.progress } } : options.purpose === 'tableCopyStructure' ? { tableCopyStructure: { ...options.progress } } : options.purpose === 'databaseDefaultEncoding' ? { databaseDefaultEncoding: { ...options.progress } } : options.purpose === 'databaseDrop' ? { databaseDrop: { ...options.progress } } : options.purpose === 'databaseCreate' ? { databaseCreate: { ...options.progress } } : options.purpose === 'tableRename' ? { tableRename: { ...options.progress } } : options.purpose === 'tableAutoIncrement' ? { tableAutoIncrement: { ...options.progress } } : options.purpose === 'tableDefaultEncoding' ? { tableDefaultEncoding: { ...options.progress } } : options.purpose === 'tableDrop' ? { tableDrop: { ...options.progress } } : options.purpose === 'tableTruncate' ? { tableTruncate: { ...options.progress } } : options.purpose === 'tableComment' ? { tableComment: { ...options.progress } } : options.purpose === 'indexes' ? { indexPatch: { ...options.progress } } : options.purpose === 'foreignKeys' ? { foreignKeyPatch: { ...options.progress } } : { columnPatch: { ...options.progress } }) : readDetail?.()??{};
@@ -650,9 +668,27 @@ export class Engine {
         const confirmed = resources.settle(Boolean(task.resourceCloseFailed));
         resourcesReleased = resourcesReleased && confirmed;
         if (!confirmed) failure ??= Error('独立任务物理资源尚未确认释放，请显式断开连接；原操作未重放');
+        // 本用途保持任务编号、配置锁和done，直到数据库严格收尾后才允许原子文件替换。
+        // 此间取消只登记意图，不再向已退出的数据库线程发送KILL；替换开始后保留真实提交结果。
+        if (fileFinalizer) {
+          if (!failure && resourcesReleased && !task.cancelError) {
+            try { result = await fileFinalizer.commit(checkCancelled, () => { checkCancelled(); task.fileCommitStarted = true; }); task.fileCommitted = fileFinalizer.committed(); }
+            catch (error) { failure = error; }
+          }
+          try { await fileFinalizer.dispose(); }
+          catch (error) {
+            if (fileFinalizer.committed()) { task.fileCommitted = true; try { send({ taskId, status: 'running', progress: 100, message: '文件已保存，但本地收尾报告异常；请核对文件，不要自动重试' }); } catch { /* 已提交事实不因通知异常变成未导出。 */ } }
+            else failure ??= error;
+          }
+        }
         this.independentTasks.delete(taskId); finish();
         // 新建表动作可因发送前取消失败，但严格收尾事实独立成立；未知DDL由用途自身继续保守锁定。
         if ((options?.purpose === 'tableCreate' && managed || options?.purpose === 'databaseDefaultEncoding') && resourcesReleased && !task.cancelError) options?.onResourcesReleased?.();
+      }
+      if (task.fileCommitted) {
+        // 原子替换已确认，迟到通知或收尾异常不能把真实文件提交改报为未导出。
+        try { send({ taskId, status: 'completed', progress: 100, message: `${label}完成` }); } catch { /* 返回值仍携带真实fileCommitted事实。 */ }
+        return result;
       }
       if (controller.signal.aborted || task.cancelRequested) failure ??= task.cancelError ?? (options?.progress.ddlCompleted ? undefined : new Error('任务已取消'));
       if (task.cancelError) failure = task.cancelError;
@@ -832,7 +868,7 @@ export class Engine {
     if (this.schemaComparisons.has(id)) return this.schemaComparisons.cancel(id);
     const independent = this.independentTasks.get(id);
     if (independent) {
-      if (independent.actionSettled) { await independent.done; return; }
+      if (independent.actionSettled) { if (independent.fileFinalization && !independent.fileCommitStarted) independent.cancelRequested = true; await independent.done; return; }
       independent.cancelRequested = true;
       this.dataSearches.interrupt(id);
       if (!independent.cancelPending) {

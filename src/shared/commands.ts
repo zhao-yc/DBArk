@@ -13,6 +13,7 @@ export const publicCommands: Record<Command, true> = {
   'serverMonitor.read': true,
   'table.statistics': true,
   'table.valueOptions': true,
+  'table.exportFiltered': true,
   'table.copyInsertSql': true,
   'schema.tableCreate.get': true, 'schema.tableCreate.preview': true, 'schema.tableCreate.apply': true, 'schema.tableCreate.release': true, 'schema.databaseCreate.get': true, 'schema.databaseCreate.preview': true, 'schema.databaseCreate.apply': true, 'schema.databaseCreate.release': true,
   'schema.databaseDrop.get': true, 'schema.databaseDrop.preview': true, 'schema.databaseDrop.apply': true, 'schema.databaseDrop.release': true,

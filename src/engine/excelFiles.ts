@@ -20,6 +20,8 @@ export interface ExcelSheetReadOptions extends ExcelReadOptions { sheetId: strin
 export interface ExcelExportOptions extends ExcelReadOptions {
   columns: ExcelColumn[]; rows: AsyncIterable<CellValue[]>; onCommitStart: () => void;
   onProgress?: (rows: number) => void; io?: AtomicFileIO;
+  /** 仅内部完整表导出协调器持有：完成ZIP与暂存后交回，外层在数据库严格关闭后提交和清理。 */
+  deferredAtomicFile?: AtomicFile;
 }
 
 /** 固定 ExcelJS 4.4.0 的内部流适配，仅替换无背压的 StreamBuf，不改 XML 编码和 ZIP 格式实现。 */
@@ -44,7 +46,7 @@ export async function exportExcelFile(input: ExcelExportOptions): Promise<{ rows
   if (excelJsPackage.version !== '4.4.0') throw new Error('Excel 流适配需要重新验证当前 ExcelJS 版本');
   validateExcelHeaders(input.columns.map(column => column.name));
   const maximumCells = cellBudget(input.cellBudget); checkCellCount(1, input.columns.length, maximumCells);
-  const atomic = await AtomicFile.create(input.filePath, 'utf8', check, input.onCommitStart, input.io, EXCEL_LIMITS.maxCompressedBytes);
+  const atomic = input.deferredAtomicFile ?? await AtomicFile.create(input.filePath, 'utf8', check, input.onCommitStart, input.io, EXCEL_LIMITS.maxCompressedBytes);
   const streams: PassThrough[] = [], pendingWrites = new Set<Promise<void>>();
   let streamError: Error | undefined, totalXml = 0;
   const sink = new Writable({ highWaterMark: 64 * 1024,
@@ -58,7 +60,7 @@ export async function exportExcelFile(input: ExcelExportOptions): Promise<{ rows
   sink.on('error', error => { streamError = error; });
   const workbook = new ExcelJS.stream.xlsx.WorkbookWriter({ stream: sink, useSharedStrings: false, useStyles: false, zip: { zlib: { level: 6 } } });
   const internals = workbook as unknown as StreamingWriterInternals;
-  if (typeof internals._openStream !== 'function' || typeof internals.zip?.append !== 'function' || typeof internals.zip?.abort !== 'function') { sink.destroy(); await sinkDone.catch(() => undefined); await atomic.dispose(); throw new Error('ExcelJS 流写入接口已变化，需要重新验证'); }
+  if (typeof internals._openStream !== 'function' || typeof internals.zip?.append !== 'function' || typeof internals.zip?.abort !== 'function') { sink.destroy(); await sinkDone.catch(() => undefined); if (!input.deferredAtomicFile) await atomic.dispose(); throw new Error('ExcelJS 流写入接口已变化，需要重新验证'); }
   const zipDone = finished(internals.zip, { cleanup: true }); void zipDone.catch(() => undefined);
   internals.zip.on('error', error => { streamError = error; sink.destroy(error); });
   const cancellationTimer = setInterval(() => {
@@ -111,7 +113,7 @@ export async function exportExcelFile(input: ExcelExportOptions): Promise<{ rows
       if (count % 100 === 0) input.onProgress?.(count);
     }
     worksheet.commit(); await Promise.all([workbook.commit(), sinkDone]);
-    check(); await atomic.commit(); input.onProgress?.(count);
+    check(); if (input.deferredAtomicFile) await atomic.prepare(true); else await atomic.commit(); input.onProgress?.(count);
     return { rows: count, bytes: atomic.bytesWritten };
   } finally {
     clearInterval(cancellationTimer);
@@ -120,7 +122,7 @@ export async function exportExcelFile(input: ExcelExportOptions): Promise<{ rows
     for (const stream of streams) stream.destroy();
     sink.destroy();
     await Promise.allSettled([sinkDone, zipDone, ...pendingWrites]);
-    await atomic.dispose();
+    if (!input.deferredAtomicFile) await atomic.dispose();
   }
 }
 
