@@ -4,7 +4,7 @@ import { planTableCreateIndexes } from './tableCreateIndexPlan';
 import { planTableCreateGeneratedColumns, type TableCreateGeneratedFacts } from './tableCreateGeneratedColumns';
 import type { CellValue, ColumnInfo, DataRow, FilterGroup, FilterMode, FilterRule, RowChange, SortRule, SqlPreview, TableDesign, TableInfo } from '../shared/contracts';
 import { tableCreateOnUpdateSql, type TableCreateTimeColumn } from '../shared/tableCreateOnUpdate';
-import { copyFilterRules, validateFilterGroup } from '../shared/filtering';
+import { buildTableFilterSql as compileTableReadFilterSql, buildTableReadOrder } from '../shared/tableReadSql';
 import { validateReferenceValues } from '../shared/references';
 
 /** 标识符始终作为标识符引用，不允许空值、NUL 或超过 MySQL 限制的名称。 */
@@ -213,62 +213,16 @@ export class SqlScriptScanner {
 /** 对编辑器已有的完整文本执行同一套扫描规则，不另建简化版分号切分逻辑。 */
 export function splitSql(sql: string, noBackslashEscapes = false, ansiQuotes = false, ansiQuotesKnown = true, noBackslashEscapesKnown = true): string[] { return new SqlScriptScanner(noBackslashEscapes, ansiQuotes, ansiQuotesKnown, noBackslashEscapesKnown).push(sql, true); }
 
-/** 精确数值参数显式转为 DECIMAL，防止 MySQL 将字符串与 BIGINT 比较时降为 DOUBLE。 */
-function filterParameter(column: ColumnInfo, value: string, pattern: boolean): string {
-  if (pattern || !/^(?:TINYINT|SMALLINT|MEDIUMINT|INT|INTEGER|BIGINT|DECIMAL|NUMERIC|FIXED|BIT|YEAR)\b/i.test(column.type)) return '?';
-  if (!/^[+-]?(?:\d+(?:\.\d*)?|\.\d+)$/.test(value)) throw new Error(`字段 ${column.name} 的筛选值必须为普通十进制数，不接受科学计数法或其他文本`);
-  const [integer, fraction = ''] = value.replace(/^[+-]/, '').split('.');
-  const integerDigits = integer.replace(/^0+/, '').length;
-  // MySQL 支持 30 位小数；元数据明确给出更高位数时保留 MariaDB 该列已支持的尺度。
-  const declaredScale = Number(/^(?:DECIMAL|NUMERIC|FIXED)\(\d+,\s*(\d+)\)/i.exec(column.type)?.[1] ?? 0);
-  const maxScale = Math.max(30, declaredScale);
-  if (fraction.length > maxScale || integerDigits + fraction.length > 65) throw new Error(`字段 ${column.name} 的筛选值超出精确比较范围：最多 65 位数字和 ${maxScale} 位小数`);
-  // 5.7将UNSIGNED整列与高位DECIMAL常量比较会产生1292；仅真实整型且范围已证明的非负整数定型为UNSIGNED。
-  // 沿BIT写值的双层定型：先DECIMAL(20,0)保住8.4预处理参数高位；负号、分数或UINT64溢出仍走原DECIMAL，不取模/截断。
-  if (/^(?:TINYINT|SMALLINT|MEDIUMINT|INT|INTEGER|BIGINT)(?:\(\d{1,5}\))?\s+UNSIGNED(?:\s+ZEROFILL)?$/i.test(column.type.trim()) && /^\+?\d+$/.test(value) && BigInt(value) <= 18446744073709551615n) return 'CAST(CAST(? AS DECIMAL(20,0)) AS UNSIGNED)';
-  return `CAST(? AS DECIMAL(65,${fraction.length}))`;
-}
-
-/** 表页及整范围聚合共用同一元数据白名单、启停及分组语义，不重新解析任意SQL。 */
+/** 表页及聚合入口沿用原签名；筛选编译与可查看SELECT共用唯一实现。 */
 export function buildTableFilterSql(info: TableInfo, filters: FilterRule[], filterMode: FilterMode = 'all', filterGroup?: FilterGroup): { where: string | undefined; params: CellValue[] } {
-  const admitted=copyFilterRules(filters),group=validateFilterGroup(admitted,filterMode,filterGroup);
-  const columns = new Map(info.columns.map(column => [column.name, column]));
-  const params: CellValue[] = [];
-  // 停用只排除谓词及参数；目录校验和总预算仍覆盖保留的所有条件。
-  for (const filter of admitted) if (!columns.has(filter.column)) throw new Error(`未知筛选字段：${filter.column}`);
-  /** 叶参数在实际遍历到该叶时才绑定，嵌套分组保持DFS顺序及原精确占位符。 */
-  const clause = (filter:FilterRule):string => {
-    const metadata = columns.get(filter.column);
-    if (!metadata) throw new Error(`未知筛选字段：${filter.column}`);
-    const column = identifier(filter.column);
-    if (filter.operator === 'IS NULL' || filter.operator === 'IS NOT NULL') return `${column} ${filter.operator}`;
-    /** 参数按条件原顺序加入，不拆分逗号、裁剪空白或转换为 JavaScript 数值。 */
-    const parameter = (value: string) => { const sql = filterParameter(metadata, value, filter.operator === 'LIKE' || filter.operator === 'NOT LIKE'); params.push(value); return sql; };
-    if (filter.operator === 'IN' || filter.operator === 'NOT IN') return `${column} ${filter.operator} (${filter.values!.map(parameter).join(', ')})`;
-    if (filter.operator === 'BETWEEN') return `${column} BETWEEN ${parameter(filter.values![0])} AND ${parameter(filter.values![1])}`;
-    return `${column} ${filter.operator} ${parameter(filter.value ?? '')}`;
-  };
-  /** 全停用子树省略，不能让空OR变成真或用缺省谓词放宽其它分支。 */
-  function grouped(node:FilterGroup):string|undefined{
-    const children=node.children.map(child=>typeof child==='number'?(admitted[child].enabled===false?undefined:`(${clause(admitted[child])})`):grouped(child)).filter((value):value is string=>value!==undefined);
-    return children.length?'('+children.join(node.mode==='all'?' AND ':' OR ')+')':undefined;
-  }
-  // 未提供group时沿用旧字节模板，旧平铺参数仍严格按filters顺序。
-  const where=group?grouped(group):(()=>{const clauses=admitted.filter(filter=>filter.enabled!==false).map(clause);return clauses.length?'('+clauses.map(clause=>`(${clause})`).join(filterMode==='all'?' AND ':' OR ')+')':undefined;})();
-  return { where, params };
+  return compileTableReadFilterSql(info, filters, filterMode, filterGroup);
 }
-
 /** 排序与筛选严格使用元数据白名单，值独立绑定；原表页SQL字节模板保持。 */
 export function buildPageSql(info: TableInfo, page: number, pageSize: number, filters: FilterRule[], sort: SortRule[], filterMode: FilterMode = 'all', filterGroup?:FilterGroup): { sql: string; params: CellValue[] } {
   if (!Number.isSafeInteger(page) || page < 1 || page > 10000000 || !Number.isSafeInteger(pageSize) || pageSize < 1 || pageSize > 1000 || !Number.isSafeInteger((page - 1) * pageSize)) throw new Error('分页参数无效，页号范围为 1～10000000，页大小范围为 1～1000');
-  if (!Array.isArray(sort) || sort.length > 20) throw new Error('排序规则不能超过 20 条');
-  const { where, params } = buildTableFilterSql(info, filters, filterMode, filterGroup), columns = new Map(info.columns.map(column => [column.name, column]));
-  // 非唯一排序补上可靠行键作为并列项顺序，避免跳页时相同排序值的行随机换位。
-  const order = [...sort, ...info.editableKey.filter(column => !sort.some(rule => rule.column === column)).map(column => ({ column, direction: 'ASC' as const }))];
-  const orderSql = order.map(rule => {
-    if (!columns.has(rule.column) || !['ASC', 'DESC'].includes(rule.direction)) throw new Error('排序字段或方向无效');
-    return `${identifier(rule.column)} ${rule.direction}`;
-  }).join(', ');
+  const { where, params } = buildTableFilterSql(info, filters, filterMode, filterGroup);
+  // 同一排序器保留显式顺序并补可靠键；合法旧SQL字节不变，重复非法规则不再放行。
+  const orderSql = buildTableReadOrder(info, sort);
   return { sql: `SELECT * FROM ${qualified(info.database, info.name)}${where?' WHERE '+where:''}${orderSql ? ' ORDER BY ' + orderSql : ''} LIMIT ${pageSize + 1} OFFSET ${(page - 1) * pageSize}`, params };
 }
 
