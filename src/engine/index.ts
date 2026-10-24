@@ -1,4 +1,6 @@
 import { TableCopyDataTasks } from './tableCopyDataTasks';
+import { ResultInsertTasks } from './resultInsert';
+import { resultInsertPreviewInputSchema, resultInsertApplyInputSchema, resultInsertReleaseInputSchema } from '../shared/resultInsert';
 import { TableCreateTasks } from './tableCreateTasks';
 import { readServerMonitor } from './serverMonitor';
 import { IndependentTaskResources, type IndependentTaskResourceLease } from './independentTaskResources';
@@ -84,7 +86,7 @@ interface RunningTask {
   queryExport?: QueryExportProgress; fileCommitStarted?: boolean;
 }
 interface ResultBudget { remainingRows: number; remainingBytes: number; remainingResults: number; }
-interface IndependentTask { connectionId: string; controller: AbortController; done: Promise<void>; managed?: ManagedConnection; resources?: IndependentTaskResourceLease; resourceCloseFailed?: boolean; cancelPending?: Promise<void>; stopPending?:Promise<void>; cancelError?: Error; cancelRequested?: boolean; actionSettled?: boolean; structureTask?: boolean; generation?: number; commandTerminal?: Promise<void>; commandInFlight?:boolean; fileFinalization?: boolean; fileCommitStarted?: boolean; fileCommitted?: boolean; }
+interface IndependentTask { commitProtected?: () => boolean; connectionId: string; controller: AbortController; done: Promise<void>; managed?: ManagedConnection; resources?: IndependentTaskResourceLease; resourceCloseFailed?: boolean; cancelPending?: Promise<void>; stopPending?:Promise<void>; cancelError?: Error; cancelRequested?: boolean; actionSettled?: boolean; structureTask?: boolean; generation?: number; commandTerminal?: Promise<void>; commandInFlight?:boolean; fileFinalization?: boolean; fileCommitStarted?: boolean; fileCommitted?: boolean; }
 interface IndependentFileFinalizer<T> { commit(check: () => void, start: () => void): Promise<T>; dispose(): Promise<void>; committed(): boolean; }
 type Input = Record<string, any>;
 
@@ -103,6 +105,7 @@ export class Engine {
   private readonly connectionUses = new Map<string, number>();
   private readonly pendingUses = new Set<Promise<void>>();
   private readonly resultFiles: ResultFileTasks;
+  private readonly resultInserts: ResultInsertTasks;
   private readonly columnPatches: TableColumnPatchTasks;
   private readonly indexPatches: TableIndexPatchTasks;
   private readonly tableDataCopies: TableCopyDataTasks;
@@ -130,6 +133,8 @@ export class Engine {
   constructor(private readonly emit: (event: TaskEvent) => void = () => undefined,options?:{dataSearchAcknowledgementMs?:number}) {
     this.dataSearches=new DataSearchTasks(emit,options?.dataSearchAcknowledgementMs,this.dataSearchRecords);
     this.resultFiles = new ResultFileTasks(emit);
+    // 整批写入与结构执行共用目标锁，COMMIT发出后取消只能等待真实结果。
+    this.resultInserts = new ResultInsertTasks({ run: (target, taskId, action, progress, execution) => this.withIndependentTask(target.connectionId, taskId, (managed, control) => action({ managed, ...control }), undefined, execution ? '写入查询结果' : '预览查询结果写入', true, () => ({ resultInsert: { ...progress } }), false, undefined, execution ? { target, commitProtected: () => progress.commitMayHaveBeenSent } : undefined) });
     this.schemaComparisons = new SchemaCompareTasks({ read: (target, taskId) => this.withIndependentTask(target.connectionId, taskId, (managed, control) => readSchemaComparisonTarget({ managed, ...control }, target), undefined, '只读结构比较', true, undefined, true), cancel: taskId => this.cancelTask(taskId) }, emit);
     this.columnPatches = new TableColumnPatchTasks({ run: (connectionId, taskId, action, options) => this.withIndependentTask(connectionId, taskId, (managed, control) => action({ managed, ...control }), { label: options.label, purpose: 'columns', progress: options.columnPatch, executionTarget: options.executionTarget }) }, undefined, this.structureCache);
     this.indexPatches = new TableIndexPatchTasks({ run: (connectionId, taskId, action, options) => this.withIndependentTask(connectionId, taskId, (managed, control) => action({ managed, ...control }), options) }, undefined, this.structureCache);
@@ -150,8 +155,17 @@ export class Engine {
 
   /** 主进程只注入可信 profile/filePath；其他字段按共享接口处理。 */
   async handle(command: EngineCommand, input: Input): Promise<any> {
-    if (this.closing && command !== 'schema.databaseDefaultEncoding.release' && command !== 'schema.databaseDrop.release') throw new Error('数据库引擎正在关闭，不能开始新操作');
+    if (this.closing && command !== 'result.insertRelease' && command !== 'schema.databaseDefaultEncoding.release' && command !== 'schema.databaseDrop.release') throw new Error('数据库引擎正在关闭，不能开始新操作');
     switch (command) {
+      case 'result.insertPreview': case 'result.insertApply': {
+        const profile = input.profile as ConnectionProfile | undefined;
+        if (!profile || profile.id !== input.connectionId) throw Error('主进程未提供可信结果写入连接');
+        if (!Number.isSafeInteger(input.connectionRevision) || input.connectionRevision < 0) throw Error('结果写入缺少可信连接修订');
+        if (!this.profiles.has(profile.id)) this.profiles.set(profile.id, profile);
+        const { profile: _profile, connectionRevision, ...request } = input;
+        return command === 'result.insertPreview' ? this.resultInserts.preview(resultInsertPreviewInputSchema.parse(request), connectionRevision) : this.resultInserts.apply(resultInsertApplyInputSchema.parse(request), connectionRevision);
+      }
+      case 'result.insertRelease': return this.resultInserts.release(resultInsertReleaseInputSchema.parse(input));
       case '__connections.prepareSave': {
         const next = input.profile as ConnectionProfile;
         if (!next || next.id !== input.id) throw new Error('主进程未提供有效连接配置');
@@ -160,6 +174,7 @@ export class Engine {
         if (changed && (this.connectionUses.has(input.id) || this.independentResources.retained(input.id) || [...this.sessions.values()].some(session => session.connectionId === input.id) || [...this.tasks.values()].some(task => task.managed.profile.id === input.id))) throw new Error('该连接仍有打开的会话或正在执行的操作，或存在待确认的连接资源；请先关闭相关标签并显式断开连接，再修改地址或认证配置，现有任务未被取消');
         if (changed || !previous) this.profiles.delete(input.id);
         await this.schemaComparisons.close(input.id);
+        this.resultInserts.releaseConnection(input.id);
         this.tableRenames.releaseConnection(input.id);
         this.databaseDrops.releaseConnection(input.id);
         this.structureCache.release(input.id);
@@ -193,6 +208,7 @@ export class Engine {
         this.disconnecting.add(input.id);
         try {
         const comparisonCleanup = this.schemaComparisons.close(input.id);
+        this.resultInserts.releaseConnection(input.id);
         this.tableRenames.releaseConnection(input.id);
         this.databaseDrops.releaseConnection(input.id);
         this.dataSearchRecords.releaseConnection(input.id);
@@ -519,6 +535,7 @@ export class Engine {
     try {
     this.excelConnecting.forEach(task => task.controller.abort());
     const comparisonCleanup = this.schemaComparisons.close();
+    this.resultInserts.close();
     this.tableRenames.releaseConnection();
     this.databaseDrops.releaseConnection();
     this.structureCache.release();
@@ -617,13 +634,13 @@ export class Engine {
   }
 
   /** 独立任务从建连前登记，到服务器及本地连接收尾后才释放编号和配置锁。 */
-  private async withIndependentTask<T>(connectionId: string, taskId: string, action: (managed: ManagedConnection, control: Omit<StructureTaskContext, 'managed'>) => Promise<T>, options?: StructureTaskOptions, readLabel?:string, strictRead=false,readDetail?:()=>Partial<TaskEvent>, quiet=false, fileFinalizer?: IndependentFileFinalizer<T>): Promise<T> {
+  private async withIndependentTask<T>(connectionId: string, taskId: string, action: (managed: ManagedConnection, control: Omit<StructureTaskContext, 'managed'>) => Promise<T>, options?: StructureTaskOptions, readLabel?:string, strictRead=false,readDetail?:()=>Partial<TaskEvent>, quiet=false, fileFinalizer?: IndependentFileFinalizer<T>, dataWrite?: { target: { database: string; table: string }; commitProtected(): boolean }): Promise<T> {
     let resourcesStarted = false;
     return this.withConnectionUse(connectionId, async () => {
       if (this.closing || !taskId || this.taskIdInUse(taskId)) throw new Error('任务编号为空或任务已在执行');
       const profile = this.profile(connectionId);
       // 字段、索引及后续外键执行共用资源集合，不能在重核与关闭之间并行修改相关父表。
-      const executionTargets = [...(options?.executionTarget ? [options.executionTarget] : []), ...(options?.executionTargets ?? [])];
+      const executionTargets = [...(dataWrite ? [dataWrite.target] : []), ...(options?.executionTarget ? [options.executionTarget] : []), ...(options?.executionTargets ?? [])];
       if (options?.executionDatabase !== undefined && executionTargets.length) throw new Error('库级与表级结构执行范围不能混用；未发送 DDL');
       const releaseExecution = options?.executionDatabase !== undefined ? this.structureExecutions.acquireDatabase(connectionId, options.executionDatabase) : this.structureExecutions.acquire(connectionId, executionTargets);
       let resources: IndependentTaskResourceLease;
@@ -633,7 +650,7 @@ export class Engine {
       const controller = new AbortController();
       let finish!: () => void;
       const done = new Promise<void>(resolve => { finish = resolve; });
-      const task: IndependentTask = { connectionId, controller, done, resources, structureTask: Boolean(options)||strictRead, generation: 0, ...(fileFinalizer ? { fileFinalization: true } : {}) };
+      const task: IndependentTask = { commitProtected: dataWrite?.commitProtected, connectionId, controller, done, resources, structureTask: Boolean(options)||strictRead, generation: 0, ...(fileFinalizer ? { fileFinalization: true } : {}) };
       this.independentTasks.set(taskId, task);
       const label = options?.label ?? readLabel ?? '读取关联记录';
       const detail = () => options ? (options.purpose === 'tableCreate' ? { tableCreate: { ...options.progress } } : options.purpose === 'tableCopyData' ? { tableCopyData: { ...options.progress } } : options.purpose === 'tableCopyStructure' ? { tableCopyStructure: { ...options.progress } } : options.purpose === 'databaseDefaultEncoding' ? { databaseDefaultEncoding: { ...options.progress } } : options.purpose === 'databaseDrop' ? { databaseDrop: { ...options.progress } } : options.purpose === 'databaseCreate' ? { databaseCreate: { ...options.progress } } : options.purpose === 'tableRename' ? { tableRename: { ...options.progress } } : options.purpose === 'tableAutoIncrement' ? { tableAutoIncrement: { ...options.progress } } : options.purpose === 'tableDefaultEncoding' ? { tableDefaultEncoding: { ...options.progress } } : options.purpose === 'tableDrop' ? { tableDrop: { ...options.progress } } : options.purpose === 'tableTruncate' ? { tableTruncate: { ...options.progress } } : options.purpose === 'tableComment' ? { tableComment: { ...options.progress } } : options.purpose === 'indexes' ? { indexPatch: { ...options.progress } } : options.purpose === 'foreignKeys' ? { foreignKeyPatch: { ...options.progress } } : { columnPatch: { ...options.progress } }) : readDetail?.()??{};
@@ -867,7 +884,9 @@ export class Engine {
     if (this.excelReads.has(id)) return this.excelReads.cancel(id);
     if (this.schemaComparisons.has(id)) return this.schemaComparisons.cancel(id);
     const independent = this.independentTasks.get(id);
+    // 结果插入的COMMIT已发送时不再KILL，避免把已提交误报为已撤销。
     if (independent) {
+      if (independent.commitProtected?.()) { await independent.done; return; }
       if (independent.actionSettled) { if (independent.fileFinalization && !independent.fileCommitStarted) independent.cancelRequested = true; await independent.done; return; }
       independent.cancelRequested = true;
       this.dataSearches.interrupt(id);

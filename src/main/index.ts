@@ -20,6 +20,8 @@ import { TableFilteredExportOwners, type TableFilteredExportMainLease } from './
 import { tableFilteredExportText } from '../shared/tableFilteredExport';
 import { EngineBroker } from './broker';
 import { ColumnsMainCapabilities, type ColumnsInvocation } from './columnsMainCapabilities';
+import { ResultInsertOwners } from './resultInsertOwners';
+import type { ResultInsertPreviewInput, ResultInsertApplyInput, ResultInsertProgress } from '../shared/resultInsert';
 import { LocalStore } from './storage';
 import { ConnectionConfigManager } from './connectionConfig';
 import { ConnectionTransfer } from './connectionTransfer';
@@ -82,12 +84,20 @@ const exportProgress = new Map<string, QueryExportProgress>();
 const structureProgress = new Map<string, TableColumnApplyProgress>();
 const structureTokens = new Map<string, { purpose: 'columns' | 'indexes' | 'foreignKeys' | 'tableComment' | 'tableDrop' | 'tableTruncate' | 'tableDefaultEncoding' | 'tableCreate' | 'databaseCreate' | 'databaseDrop' | 'databaseDefaultEncoding' | 'tableCopyData' | 'tableCopyStructure' | 'tableRename' | 'tableAutoIncrement'; connectionId: string; expires: number; kind: 'snapshot' | 'preview'; snapshotId?: string }>();
 const tasks = new Map<string, TaskRecord>();
+const resultInsertProgress = new Map<string, ResultInsertProgress>();
 // 补全是高频短读，只在内存保留活动编号；不挤占用户任务历史或逐次触发SQLite写盘。
 const completionTasks = new Set<string>();
 const lastPersist = new Map<string, number>();
 const rendererURL = process.env.DBARK_DEV_URL ?? pathToFileURL(join(__dirname, '../renderer/index.html')).href;
 // 字段令牌只绑定真实IPC文档；回收仍使用原引擎精确release，不扩其他结构业务。
 const columnsMain = new ColumnsMainCapabilities(structureTokens, { currentWindow: () => window, rendererURL, connectionRevision: () => store.connectionRevision(), assertAvailable: id => connectionConfig.assertAvailable(id), shuttingDown: () => shuttingDown, release: input => broker.request('schema.columns.release', input) });
+const resultInserts = new ResultInsertOwners({
+  assert: owner => columnsMain.assertCapturedOwner(owner), same: (left, right) => columnsMain.sharesDocumentOwner(left, right),
+  revision: () => store.connectionRevision(), closing: () => shuttingDown,
+  available: id => connectionConfig.assertAvailable(id), run: runResultInsert,
+  release: input => broker.request('result.insertRelease', input),
+  stop: async taskId => { const preparing = preparingTasks.get(taskId); if (preparing) { preparing.cancelled = true; return; } return broker.request('query.cancel', { taskId }); },
+});
 const queryInsertExports=new QueryInsertExports(files,{assert:value=>columnsMain.assertCapturedOwner(value),same:(left,right)=>columnsMain.sharesDocumentOwner(left,right),revision:()=>store.connectionRevision(),session:id=>sessions.get(id),closing:()=>shuttingDown,stop:async taskId=>{const preparing=preparingTasks.get(taskId);if(preparing){preparing.cancelled=true;return;}return broker.request('query.cancel',{taskId});}});
 const tablePresetSources=new TablePresetSources({assert:value=>columnsMain.assertCapturedOwner(value),same:(left,right)=>columnsMain.sharesDocumentOwner(left,right)});
 const resultPresetSources=new QueryResultPresetSources({assert:value=>columnsMain.assertCapturedOwner(value),same:(left,right)=>columnsMain.sharesDocumentOwner(left,right)});
@@ -317,6 +327,18 @@ function engineTaskEvent(event:TaskEvent):void{if(event.queryInsert&&!queryInser
 
 /** 任务进度只保留概要；分批结果直接传输，不把整批数据写入配置库。 */
 function taskEvent(event: TaskEvent, deliverInsert=true): void {
+  if (event.resultInsert) {
+    // 已发送与ACK事实单向累积，迟到旧进度不能抹掉提交证明或将历史改回失败。
+    const before = resultInsertProgress.get(event.taskId), next = { ...event.resultInsert };
+    next.dmlMayHaveBeenSent ||= !!before?.dmlMayHaveBeenSent; next.commitMayHaveBeenSent ||= !!before?.commitMayHaveBeenSent;
+    next.commitAcknowledged ||= !!before?.commitAcknowledged; next.rollbackAcknowledged ||= !!before?.rollbackAcknowledged; next.transactionProtected ||= !!before?.transactionProtected;
+    if (before?.commitAcknowledged) { next.rows = before.rows; next.totalRows = before.totalRows; }
+    if (next.commitAcknowledged) next.outcome = 'committed';
+    else if (next.rollbackAcknowledged && next.transactionProtected) next.outcome = 'rolled-back';
+    else if (before?.outcome === 'unknown' && next.outcome === 'not-sent') next.outcome = 'unknown';
+    event = { ...event, resultInsert: next }; resultInsertProgress.set(event.taskId, next); resultInserts.observe();
+  }
+  if (event.resultInsert?.commitAcknowledged && event.status !== 'running') event = { ...event, status: 'completed', message: event.status === 'completed' ? event.message : '查询结果事务已确认提交，附加收尾异常；请核对资源，不要重复插入' };
   if(completionTasks.has(event.taskId))return;
   if (event.tableApply) tableApplyReceipts?.receive(event.taskId, event.tableApply);
   if (event.status !== 'running' && tableApplyReceipts?.confirmed(event.taskId)) event = { ...event, status: 'completed', progress: 100, message: '服务器已确认目标事务提交；附加错误请查看提交记录' };
@@ -402,7 +424,34 @@ function registerQueryFileSourceTask(taskId: string, command: Command): void {
 }
 
 /** 分派前检查配置保存锁，防止检查通过后另一个请求用旧凭据抢先建连。 */
+/** 结果写入独立登记原任务，只向引擎注入Main解密配置和修订，正文不进入历史。 */
+async function runResultInsert(command: 'result.insertPreview' | 'result.insertApply', input: ResultInsertPreviewInput | ResultInsertApplyInput, revision: number): Promise<unknown> {
+  const taskId = input.taskId;
+  if (shuttingDown || tasks.has(taskId) || completionTasks.has(taskId) || savedQueryPages?.owns(taskId) || historyPages?.owns(taskId) || historyDelete?.owns(taskId)) throw Error('结果写入任务编号已使用或客户端正在退出');
+  connectionConfig.assertAvailable(input.connectionId);
+  const profile = store.resolveConnection(input.connectionId), startedAt = new Date().toISOString();
+  const task: TaskRecord = { id: taskId, kind: command, status: 'running', progress: 0, message: '正在检查查询结果写入；字段值仅存内存', startedAt };
+  let sent = false;
+  try {
+    // 首次落盘失败不留下永久running任务，也不能进入数据库发送阶段。
+    store.saveTask(task); tasks.set(taskId, task);
+    if (revision !== store.connectionRevision()) throw Error('连接配置已变化，请重新预览');
+    sent = true;
+    const result = await broker.request(command, { ...input, profile, connectionRevision: revision });
+    if (tasks.get(taskId)?.status === 'running') taskEvent({ taskId, status: 'completed', progress: 100, message: '结果写入任务结束', resultInsert: resultInsertProgress.get(taskId) });
+    return result;
+  } catch (error) {
+    const last = resultInsertProgress.get(taskId);
+    if (!tasks.has(taskId) || tasks.get(taskId)?.status === 'running') taskEvent({ taskId, status: 'failed', progress: task.progress, message: '结果写入未正常完成；请核对目标表，不要自动重试', resultInsert: last ?? { phase: 'finished', rows: 0, totalRows: 0, dmlMayHaveBeenSent: sent && command === 'result.insertApply', commitMayHaveBeenSent: sent && command === 'result.insertApply', commitAcknowledged: false, rollbackAcknowledged: false, transactionProtected: false, outcome: sent && command === 'result.insertApply' ? 'unknown' : 'not-sent' } });
+    throw error;
+  }
+}
+
 async function dispatch(command: Command, input: any, columns?: MainInvocation): Promise<unknown> {
+  if (command === 'result.insertPreview') return resultInserts.preview(input, columns!);
+  if (command === 'result.insertApply') return resultInserts.apply(input, columns!);
+  if (command === 'result.insertRelease') return resultInserts.release(input, columns!);
+  if (command === 'query.cancel' && tasks.get(input.taskId)?.kind.startsWith('result.insert') && resultInserts.has(input.taskId)) return resultInserts.cancel(input.taskId, columns!);
   // 查询分组仅操作本地组织元数据，不占用连接锁、不委派数据库任务或执行历史。
   if (command === 'queries.organizationGet' || command === 'queries.organizationApply') {
     if (shuttingDown) throw Error('客户端正在退出，不能整理保存查询分组');
@@ -683,7 +732,7 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
     case 'connections.importPreview': return queryFileOperation(() => connectionTransfer.preview(resolveFileToken(files, input.fileToken, 'connection-import', 'json')));
     case 'connections.importReview': if (shuttingDown) throw new Error('客户端正在退出，不能导入连接'); return connectionTransfer.review(input);
     case 'connections.importReviewRelease': return connectionTransfer.releaseReview(input);
-    case 'connections.importApply': return queryFileOperation(async () => { try { return await connectionTransfer.applyBatch(input); } finally { if ([...tasks.values()].some(task => task.kind === 'table.exportFiltered' && task.status === 'running')) tableFilteredExports.observe(); } });
+    case 'connections.importApply': return queryFileOperation(async () => { try { return await connectionTransfer.applyBatch(input); } finally { resultInserts.observe(); if ([...tasks.values()].some(task => task.kind === 'table.exportFiltered' && task.status === 'running')) tableFilteredExports.observe(); } });
     case 'connections.organizationGet':
       if (shuttingDown) throw Error('客户端正在退出，不能读取连接整理');
       return store.connectionOrganization();
@@ -693,15 +742,17 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
       for (const id of input.ids) connectionConfig.assertAvailable(id);
       // INSERT 导出能力绑定全局修订；等原请求 finally 释放账本后才允许整理，不主动取消导出。
       if ([...tasks.values()].some(task => task.kind === 'query.exportStream' && queryInsertExports.has(task.id))) throw Error(connectionOrganizationZh.busyExport);
-      { const result = store.applyConnectionOrganization(input); if ([...tasks.values()].some(task => task.kind === 'table.exportFiltered' && task.status === 'running')) tableFilteredExports.observe(); return result; }
+      { const result = store.applyConnectionOrganization(input); resultInserts.observe(); if ([...tasks.values()].some(task => task.kind === 'table.exportFiltered' && task.status === 'running')) tableFilteredExports.observe(); return result; }
     case 'connections.save': {
       // 保留原保存检查：被拒绝的配置修改不得先取消任务；成功保存后才撤销本片旧修订能力。
       const saved=await connectionConfig.save(confirmConnectionFiles(input,store.connections().find(profile=>profile.id===input.id),files));
+      resultInserts.observe();
       if ([...tasks.values()].some(task => task.kind === 'table.exportFiltered' && task.status === 'running')) tableFilteredExports.observe();
       if([...tasks.values()].some(task=>task.kind==='query.exportStream'&&task.status==='running'))queryInsertExports.invalidateAll();
       return saved;
     }
     case 'connections.delete': {
+      resultInserts.invalidateConnection(input.id);
       const owner = {}; tableValueOptionsConnectionOwners.set(input.id, owner); tableValueOptionsClosing.set(input.id, owner);
       if ([...tasks.values()].some(task => task.kind === 'table.exportFiltered' && task.status === 'running')) tableFilteredExports.observe();
       try { await broker.request('connections.close', input); store.deleteConnection(input.id); return; }
@@ -714,6 +765,7 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
       assertConnectionReady(input); input = store.resolveConnection(input.id, input as ConnectionProfile); break;
     }
     case 'connections.close': {
+      resultInserts.invalidateConnection(input.id);
       const owner = {}; tableValueOptionsConnectionOwners.set(input.id, owner); tableValueOptionsClosing.set(input.id, owner);
       if ([...tasks.values()].some(task => task.kind === 'table.exportFiltered' && task.status === 'running')) tableFilteredExports.observe();
       for (const [id, session] of sessions) if (session.connectionId === input.id) sessions.delete(id);
@@ -911,6 +963,11 @@ function createMenu(): void {
 async function createWindow(): Promise<void> {
   window = new BrowserWindow({ width: 1440, height: 920, minWidth: 1024, minHeight: 680, show: false, backgroundColor: '#101319', title: 'DBArk', icon: app.isPackaged ? join(process.resourcesPath, 'icon.png') : join(__dirname, '../../build/icon.png'), webPreferences: { preload: join(__dirname, 'preload.cjs'), sandbox: true, contextIsolation: true, nodeIntegration: false, webSecurity: true, spellcheck: false } });
   columnsMain.trackWindow(window);
+  // 文档换代后精确释放未应用预览，并撤销原在途任务；不依赖旧renderer继续存活。
+  window.webContents.on('did-start-navigation', details => { if (details.isMainFrame && !details.isSameDocument) resultInserts.observe(); });
+  window.webContents.on('did-navigate', () => resultInserts.observe());
+  window.webContents.on('render-process-gone', () => resultInserts.observe());
+  window.webContents.on('destroyed', () => resultInserts.observe());
   // 主文档换代立即撤销尚未确认的暂存发布，不依赖旧renderer继续发送取消。
   window.webContents.on('did-start-navigation',details=>{if(details.isMainFrame&&!details.isSameDocument)queryInsertExports.invalidateAll();});
   window.webContents.on('did-navigate',()=>queryInsertExports.invalidateAll());
@@ -953,6 +1010,7 @@ app.on('before-quit', event => {
     }
     await savedQuerySearches?.close();await savedQueryPages?.close();await historyPages?.close();await historyDelete?.close();await Promise.allSettled([...localSearchOperations]);
     await Promise.allSettled([...queryFileOperations]);
+    await resultInserts.drain();
     await broker?.close();
     tableApplyReceipts?.interrupt();
     for (const task of tasks.values()) if (task.status === 'running') {
@@ -976,6 +1034,7 @@ app.on('window-all-closed', () => app.quit());
 
 /** 进程退出使所有尚未投递的准备请求失效，迟到的文件检查不能启动新进程继续写入。 */
 function engineExited(): void {
+  resultInserts.engineExited();
   tableApplyReceipts?.interrupt();
   // 本地保存查询的匹配线程独立于数据库工具进程，不能被数据库进程退出误判为失败。
   for (const preparing of preparingTasks.values()) preparing.failure = '数据库进程已退出，准备任务已停止；尚未发送用户 SQL，原目标文件保持不变';
@@ -983,6 +1042,12 @@ function engineExited(): void {
   structureTokens.clear();
   for (const task of tasks.values()) if (task.status === 'running'&&!task.kind.startsWith('search.savedQueries')) {
     const preparing = preparingTasks.has(task.id);
+    if (task.kind.startsWith('result.insert')) {
+      const last = resultInsertProgress.get(task.id), sent = task.kind === 'result.insertApply' && !preparing;
+      const progress: ResultInsertProgress = { phase: 'finished', rows: 0, totalRows: 0, dmlMayHaveBeenSent: sent, commitMayHaveBeenSent: sent, commitAcknowledged: false, rollbackAcknowledged: false, transactionProtected: false, ...last, outcome: last?.commitAcknowledged ? 'committed' : last?.rollbackAcknowledged && last.transactionProtected ? 'rolled-back' : sent ? 'unknown' : 'not-sent' };
+      taskEvent({ taskId: task.id, status: progress.commitAcknowledged ? 'completed' : 'failed', progress: task.progress, message: progress.commitAcknowledged ? '数据库进程退出前已确认提交，请勿重复插入' : '数据库进程已退出，请核对目标表；原批次未自动重放', resultInsert: progress });
+      continue;
+    }
     if (task.kind.startsWith('schema.databaseDrop.') || task.kind.startsWith('schema.tableCreate.') || task.kind.startsWith('schema.tableCopyData.') || task.kind.startsWith('schema.tableCopyStructure.') || task.kind.startsWith('schema.databaseDefaultEncoding.') || task.kind.startsWith('schema.databaseCreate.') || task.kind.startsWith('schema.tableRename.') || task.kind.startsWith('schema.tableAutoIncrement.') || task.kind.startsWith('schema.tableDefaultEncoding.') || task.kind.startsWith('schema.tableDrop.') || task.kind.startsWith('schema.tableTruncate.') || task.kind.startsWith('schema.tableComment.') || task.kind.startsWith('schema.columns.') || task.kind.startsWith('schema.indexes.') || task.kind.startsWith('schema.foreignKeys.')) {
       const last = structureProgress.get(task.id), possiblySent = !preparing && (task.kind === 'schema.databaseDrop.apply' || task.kind === 'schema.tableCreate.apply' || task.kind === 'schema.tableCopyData.apply' || task.kind === 'schema.tableCopyStructure.apply' || task.kind === 'schema.databaseDefaultEncoding.apply' || task.kind === 'schema.databaseCreate.apply' || task.kind === 'schema.tableRename.apply' || task.kind === 'schema.tableAutoIncrement.apply' || task.kind === 'schema.tableDefaultEncoding.apply' || task.kind === 'schema.tableDrop.apply' || task.kind === 'schema.tableTruncate.apply' || task.kind === 'schema.tableComment.apply' || task.kind === 'schema.columns.apply' || task.kind === 'schema.indexes.apply' || task.kind === 'schema.foreignKeys.apply');
       const progress: TableColumnApplyProgress = { ...last, phase: last?.phase ?? 'connecting', ddlSubmitted: Boolean(last?.ddlSubmitted || possiblySent), ddlCompleted: last?.ddlCompleted ?? false, definitionVerified: last?.definitionVerified ?? false, outcome: task.kind.startsWith('schema.tableCopyData.') ? ((last as import('../shared/tableCopyData').TableCopyDataProgress)?.dataCompleted ? 'succeeded' : last?.ddlSubmitted || possiblySent ? 'unknown' : 'not-sent') : last?.ddlCompleted ? 'succeeded' : possiblySent ? 'unknown' : 'not-sent' };
@@ -1050,6 +1115,7 @@ else {
         const resultSql = payload.command === 'files.previewResultSql' || payload.command === 'files.releaseResultSql' || (payload.command === 'files.exportResult' || payload.command === 'files.choose') && !!payload.input && typeof payload.input === 'object' && ('format' in payload.input && payload.input.format === 'sql') && (payload.command === 'files.exportResult' || 'resultSqlPreviewId' in payload.input);
         const filteredExportCancel = payload.command === 'query.cancel' && !!payload.input && typeof payload.input === 'object' && 'taskId' in payload.input && typeof payload.input.taskId === 'string' && tasks.get(payload.input.taskId)?.kind === 'table.exportFiltered' && tableFilteredExports.has(payload.input.taskId);
         const historyDeleteCancel = payload.command === 'query.cancel' && !!payload.input && typeof payload.input === 'object' && 'taskId' in payload.input && typeof payload.input.taskId === 'string' && typeof historyDelete !== 'undefined' && historyDelete.owns(payload.input.taskId);
+        if (payload.command.startsWith('result.insert') || payload.command === 'query.cancel' && !!payload.input && typeof payload.input === 'object' && 'taskId' in payload.input && typeof payload.input.taskId === 'string' && tasks.get(payload.input.taskId)?.kind.startsWith('result.insert') && resultInserts.has(payload.input.taskId)) columns = columnsMain.capture(event);
         if (payload.command.startsWith('history.delete') || historyDeleteCancel) columns = columnsMain.capture(event);
         if (payload.command.startsWith('schema.databaseDrop.') || payload.command === 'table.valueOptions' || payload.command === 'table.exportFiltered' || filteredExportCancel) columns = columnsMain.capture(event);
         if (payload.command.startsWith('schema.databaseDefaultEncoding.')) {
@@ -1100,6 +1166,10 @@ else {
           if (payload.command === 'history.deletePreview') historyDelete.assertPreviewPublication(result, columns!);
           // 删除同步落盘后必须保留applied事实；这里只对仍属只读的释放/取消做最终来源门。
           if (payload.command === 'history.deleteRelease' || historyDeleteCancel) columnsMain.assertCapturedOwner(columns);
+          if (payload.command === 'result.insertPreview') {
+            try { resultInserts.assertPublication(result, columns!); }
+            catch (error) { await resultInserts.rejectPublication(result, columns!); throw error; }
+          }
           return { ok: true, result };
         } finally { columns?.presetPublication?.release();if(local)localSearchOperations.delete(operation);if(snippetTransferOperation)queryFileOperations.delete(operation); }
       } catch (error) {

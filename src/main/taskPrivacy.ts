@@ -2,6 +2,7 @@ import type { Command, TaskEvent } from '../shared/contracts';
 
 /** 服务端错误可能展开参数值；概要记录仅保存进度，不将错误原文写入本地库。 */
 export function persistedTaskMessage(command: string, event: TaskEvent): string {
+  if (command.startsWith('result.insert')) return event.resultInsert?.commitAcknowledged ? '结果写入事务已收到提交成功响应；行值、映射SQL和错误原文未保存，请勿重复插入。' : event.resultInsert?.outcome === 'unknown' || event.resultInsert?.commitMayHaveBeenSent ? '结果写入状态未知，请核对目标表；未自动重试，行值和错误原文未保存。' : event.resultInsert?.rollbackAcknowledged ? '结果写入整批回滚已确认；行值和错误原文未保存。' : event.status === 'completed' ? '结果写入预览完成；数据仅存临时内存，未执行插入。' : '结果写入任务尚未确认提交；行值、映射SQL和错误原文未保存，请在原窗口核对。';
   if (command === 'table.exportFiltered') return event.status === 'completed' ? '服务器全部筛选行导出已完成；条件、原值、文件路径和错误原文未保存。' : event.status === 'running' ? '正在导出服务器全部筛选行；条件、原值、文件路径和错误原文未保存。' : '服务器全部筛选行导出未正常完成；请在原窗口核对文件状态，条件和错误原文未保存。';
   if (command === 'table.valueOptions') return event.status === 'completed' ? '服务器不同值读取已完成；筛选值、搜索模式、候选和错误原文未保存。' : event.status === 'running' ? '正在读取服务器不同值；筛选值、搜索模式和候选仅在当前窗口保留。' : '服务器不同值读取未完成；筛选值、搜索模式、候选和错误原文未保存，请在当前窗口核对。';
   if (command === 'table.statistics') return event.status === 'completed' ? '表数据统计已完成；筛选值、聚合结果和错误原文未保存。' : event.status === 'running' ? '正在统计服务器数据；筛选值和聚合结果仅在当前窗口保留。' : '表数据统计未完成；筛选值、聚合结果和错误原文未保存，请在当前窗口核对。';

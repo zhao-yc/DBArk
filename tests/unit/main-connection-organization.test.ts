@@ -10,7 +10,10 @@ function harness(shuttingDown = false) {
   const body = source.slice(source.indexOf('async function dispatch('), source.indexOf('/** 按平台生成中文原生菜单'));
   const snapshot = { revision: 2, connections: [] }, get = vi.fn(() => snapshot), apply = vi.fn(() => snapshot), available = vi.fn(), request = vi.fn(() => { throw Error('不允许引擎调用'); });
   const tasks = new Map(), has = vi.fn(() => false), invalidateAll = vi.fn();
-  const context = createContext({ shuttingDown, tasks, queryInsertExports: { has, invalidateAll }, connectionOrganizationZh, structureTokens: new Map(), sessions: new Map(), savedQueryPages: undefined, historyPages: undefined, store: { connectionOrganization: get, applyConnectionOrganization: apply }, connectionConfig: { assertAvailable: available }, broker: { request } });
+  const context = createContext({
+    // 未打开结果写入用途时的真实初始空协调器，不登记任务、预览或写入能力。
+    resultInserts: { observe() {}, invalidateConnection(_connectionId: string) {}, engineExited() {}, has: (_taskId: string) => false },
+     shuttingDown, tasks, queryInsertExports: { has, invalidateAll }, connectionOrganizationZh, structureTokens: new Map(), sessions: new Map(), savedQueryPages: undefined, historyPages: undefined, store: { connectionOrganization: get, applyConnectionOrganization: apply }, connectionConfig: { assertAvailable: available }, broker: { request } });
   runInContext(ts.transpileModule(body + '\nglobalThis.dispatch=dispatch;', { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText, context);
   return { get, apply, available, request, snapshot, tasks, has, invalidateAll, dispatch: context.dispatch as (command: string, input: unknown) => Promise<unknown> };
 }

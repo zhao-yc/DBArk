@@ -43,6 +43,7 @@ const harnessCode = `function Harness({port}) {
  const busyRef=useRef(false), task=useRef(''), cancelledQuery=useRef(''), explainSource=useRef(''), sessionRef=useRef('session'), parameterSession=useRef('session'), editor={current:port.editor}, alive=useRef(true);
  const failureSource=useRef(undefined),parameterFailureSource=useRef(undefined),closeRequestRef=useRef(undefined);const [,refreshFailureSource]=useState(0);
  const [busy,setBusy]=useState(false),[queryRunning,setQueryRunning]=useState(false),[error,setError]=useState(''),[outcome,setOutcome]=useState(null),[stream,setStream]=useState([]),[resultIndex,setResultIndex]=useState(0),[transaction,setTransaction]=useState(false),[transactionKnown,setTransactionKnown]=useState(true),[sessionId,setSessionId]=useState('session'),[pins,setPins]=useState([]),[selectedPin,setSelectedPin]=useState(''),[showPinSql,setShowPinSql]=useState(false),[exportResult,setExportResult]=useState(null),[exportSelected,setExportSelected]=useState(false),[parameterSource,setParameterSource]=useState(port.sql);
+ const resultInsertRef=useRef(null),resultInsertActivity=useRef(0);
  const pinSequence=useRef(0),resultSelection=port.selection,resultFilter=port.filter,resultSorter=port.sorter,rowDetails=port.details;
  const comparisonLeaseRef=useRef(null),statisticsLeaseRef=useRef(null),sortLeaseRef=useRef(null),filterLeaseRef=useRef(null);
  const noop=()=>{},setComparisonLease=noop,setStatisticsLease=noop,setSortLease=noop,setFilterLease=noop,setRowDetail=noop,setActiveDetailRow=noop;

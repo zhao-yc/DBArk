@@ -59,6 +59,9 @@ export function mainColumnsHarness() {
   }
   let handler!: (event: any, payload: any) => Promise<any>;
   const context = createContext({
+    // 未打开结果写入用途时的真实初始空协调器，不登记任务、预览或写入能力。
+    resultInserts: { observe() {}, invalidateConnection(_connectionId: string) {}, engineExited() {}, has: (_taskId: string) => false }, resultInsertProgress: new Map(),
+
     Date, Map, Error, Boolean, SavedQuerySearchCancelled, columnsMain: undefined, tablePresetSources: undefined, tablePresetReads: new Map(), window: undefined, structureTokens: tokens, tasks, structureProgress: progress, events,
     tableApplyReceipts: undefined, pendingQueryHistory: new Map(), completionTasks: new Set(), preparingTasks: new Map(), exportProgress: new Map(), sessions: new Map(),
     savedQuerySearches: { has: () => false }, savedQueryPages: undefined, historyPages: undefined, localSearchOperations: new Set(), shuttingDown: false, shutdownComplete: false,

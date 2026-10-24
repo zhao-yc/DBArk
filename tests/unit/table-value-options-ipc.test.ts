@@ -27,7 +27,10 @@ function fixture() {
   const request = vi.fn(async (_command: string, _input: any): Promise<any> => ({ values: [{ value: '9007199254740993', count: '18446744073709551615' }] }));
   const frame = { url: 'dbark-test:renderer' }, webContents = { mainFrame: frame };
   const assertCapturedOwner = vi.fn((value: unknown) => { if (value !== owner || !documentCurrent) throw Error('原主文档已变化'); });
-  const context = createContext({ Date, Map, Set, Error, SavedQuerySearchCancelled, tableApplyReceipts: undefined, savedQueryPages: undefined, historyPages: undefined, savedQuerySearches: { has: () => false }, tasks,
+  const context = createContext({
+    // 未打开结果写入用途时的真实初始空协调器，不登记任务、预览或写入能力。
+    resultInserts: { observe() {}, invalidateConnection(_connectionId: string) {}, engineExited() {}, has: (_taskId: string) => false },
+     Date, Map, Set, Error, SavedQuerySearchCancelled, tableApplyReceipts: undefined, savedQueryPages: undefined, historyPages: undefined, savedQuerySearches: { has: () => false }, tasks,
     completionTasks: new Set(), pendingQueryHistory: new Map(), preparingTasks: new Map(), exportProgress: new Map(), structureProgress: new Map(), structureTokens: new Map(), sessions: new Map(), tablePresetReads: new Map(), tableValueOptionsConnectionOwners: new Map(), tableValueOptionsClosing: new Map(), shuttingDown: false,
     localSearchOperations: new Set(), queryFileOperations: new Set(), window: { webContents }, rendererURL: frame.url,
     columnsMain: { capture: () => owner, assertCapturedOwner, hasUnpublished: () => false },

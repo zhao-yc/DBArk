@@ -1,4 +1,5 @@
 import { queryFileReloadSchemas } from './queryFileReload';
+import { resultInsertPreviewInputSchema, resultInsertApplyInputSchema, resultInsertReleaseInputSchema } from './resultInsert';
 import { parseExplainSnapshot } from './explainSnapshot';
 import { databaseDefaultEncodingAcknowledgements } from './databaseDefaultEncoding';
 import { assertSqlKeywordCaseWrite } from './sqlKeywordCase';
@@ -136,6 +137,9 @@ const settingsRawWriteSchema = z.unknown().superRefine((raw, context) => {
 });
 
 export const commandSchemas: Record<Command, z.ZodType> = {
+  'result.insertPreview': resultInsertPreviewInputSchema,
+  'result.insertApply': resultInsertApplyInputSchema,
+  'result.insertRelease': resultInsertReleaseInputSchema,
   'result.presets.list': queryResultPresetListSchema, 'result.presets.save': queryResultPresetSaveSchema, 'result.presets.rename': queryResultPresetRenameSchema, 'result.presets.delete': queryResultPresetSelectSchema, 'result.presets.read': queryResultPresetSelectSchema,
   'table.presets.list':tablePresetListSchema,'table.presets.save':tablePresetSaveSchema,'table.presets.delete':tablePresetSelectSchema,'table.presets.apply':tablePresetApplySchema,
   'table.copyInsertSql': copyInsertSqlInputSchema,

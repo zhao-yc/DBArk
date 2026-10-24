@@ -40,7 +40,10 @@ function mainFixture() {
   }
   visit(tree); if (!manager || functions.length !== 3) throw Error('缺少生产处理器');
   request = vi.fn((command: string, input: unknown) => engine.handle(command as Parameters<Engine['handle']>[0], input as never));
-  const port = createContext({ Error, Date, Map, Set, ConnectionConfigManager, revokeConnectionFiles, connectionReplacementText, resolveFileToken, validateCommand, store, broker: { request },
+  const port = createContext({
+    // 未打开结果写入用途时的真实初始空协调器，不登记任务、预览或写入能力。
+    resultInserts: { observe() {}, invalidateConnection(_connectionId: string) {}, engineExited() {}, has: (_taskId: string) => false },
+     Error, Date, Map, Set, ConnectionConfigManager, revokeConnectionFiles, connectionReplacementText, resolveFileToken, validateCommand, store, broker: { request },
     shuttingDown: false, rendererSettingsCurrent: true, rendererHasSettings: true, stateFlushed: undefined,
     sessions: new Map(), preparingTasks: new Map(), structureTokens: new Map(), tasks: new Map(), completionTasks: new Set(), pendingQueryHistory: new Map(), exportProgress: new Map(), structureProgress: new Map(), files: new Map(), queryFileOperations: new Set(),
   });

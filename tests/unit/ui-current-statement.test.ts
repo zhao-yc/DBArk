@@ -34,7 +34,8 @@ function fixture() {
   const invoke = vi.fn(async (command: string, _input?: any): Promise<any> => command === 'sessions.open' ? { sessionId: 'session' } : { results: [] }), flushSettings = vi.fn(async () => {}), handleQueryError = vi.fn(async (_reason: unknown) => {});
   let serial = 0;
   // 对应真实组件的useRef：复制/格式化尚未发起，模型挂载标记初始false，仍执行真实接管函数。
-  const port = createContext({ duplicateIntent: { current: null }, formatting: { current: null }, fileModelAttached: { current: false }, resultSelection: selection.resultSelection, captureQueryFailureSource, failureSource: { current: undefined }, parameterFailureSource: { current: undefined }, alive: { current: true }, closeRequestRef: { current: undefined }, refreshFailureSource: vi.fn(),
+  // 未打开结果写入用途的真实初始引用，不替换原执行函数或断言。
+  const port = createContext({ resultInsertRef: { current: null }, resultInsertActivity: { current: 0 }, duplicateIntent: { current: null }, formatting: { current: null }, fileModelAttached: { current: false }, resultSelection: selection.resultSelection, captureQueryFailureSource, failureSource: { current: undefined }, parameterFailureSource: { current: undefined }, alive: { current: true }, closeRequestRef: { current: undefined }, refreshFailureSource: vi.fn(),
     // 与真实组件初始useRef一致：尚未打开行详情，但真实失效函数仍撤销控制器并清空两个React状态。
     rowDetails: new QueryRowDetails(), setRowDetail: vi.fn(), setActiveDetailRow: vi.fn(),
     // 尚未打开筛选草稿；真实撤销函数仍使用组件的引用及状态端口。
