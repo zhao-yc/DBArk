@@ -47,6 +47,7 @@ import {queryDatabaseFromSession} from '../shared/queryContext';
 import { csvCell, csvHeader, encodingName, previewFile, readRecords, readText } from './files';
 import { csvExportDelimiter } from '../shared/csvExport';
 import { csvImportHasHeader } from '../shared/csvImport';
+import { fileImportTransactionMode, fileImportTransactionText } from '../shared/fileImportTransaction';
 import { ResultFileTasks } from './resultFileTasks';
 import { TableColumnPatchTasks } from './tableColumnPatchTasks';
 import { TableIndexPatchTasks } from './tableIndexPatchTasks';
@@ -85,6 +86,7 @@ interface RunningTask {
   cancelPending?: Promise<void>; serverStatus?: number; done: Promise<void>; finish(): void;
   tableApply?: TableApplyEvidence;
   queryExport?: QueryExportProgress; fileCommitStarted?: boolean;
+  fileImport?: { committing: boolean; finalCommit: boolean; commitAcknowledged: boolean; committedRows: number; result?: { rows: number; errors: string[] }; failure?: Error };
 }
 interface ResultBudget { remainingRows: number; remainingBytes: number; remainingResults: number; }
 interface IndependentTask { commitProtected?: () => boolean; connectionId: string; controller: AbortController; done: Promise<void>; managed?: ManagedConnection; resources?: IndependentTaskResourceLease; resourceCloseFailed?: boolean; cancelPending?: Promise<void>; stopPending?:Promise<void>; cancelError?: Error; cancelRequested?: boolean; actionSettled?: boolean; structureTask?: boolean; generation?: number; commandTerminal?: Promise<void>; commandInFlight?:boolean; fileFinalization?: boolean; fileCommitStarted?: boolean; fileCommitted?: boolean; }
@@ -503,9 +505,19 @@ export class Engine {
         if (this.taskIdInUse(input.taskId)) throw new Error('任务编号已在执行');
         return this.excelReads.run(command, input as any);
       }
-      case 'excel.import': this.assertFile(input); return this.withExcelTask(input, '导入 Excel', task => this.importExcel(task, input));
+      case 'excel.import': fileImportTransactionMode('xlsx', input); this.assertFile(input); return this.withExcelTask(input, '导入 Excel', task => this.importExcel(task, input));
       case 'excel.export': this.assertFile(input); return this.withExcelTask(input, '导出 Excel', task => this.exportExcel(task, input));
-      case 'files.import': this.assertFile(input); return this.withConnection(input.connectionId, managed => this.runTask(input.taskId, managed, '导入文件', task => this.importFile(task, input)), input.database);
+      case 'files.import': {
+        this.assertFile(input); const mode = fileImportTransactionMode(input.format, input);
+        const evidence: NonNullable<RunningTask['fileImport']> = { committing: false, finalCommit: false, commitAcknowledged: false, committedRows: 0 };
+        try { return await this.withConnection(input.connectionId, managed => this.runTask(input.taskId, managed, '导入文件', task => { task.fileImport = evidence; return this.importFile(task, input); }), input.database, mode === 'atomic'); }
+        catch (error) {
+          if (!evidence.commitAcknowledged || !evidence.result) { if (evidence.failure && error !== evidence.failure) throw Error(`${evidence.failure.message}；附加收尾错误：${this.errorMessage(error)}`); throw error; }
+          // 物理关闭晚失败不能抹掉已收到的COMMIT ACK，也不自动重新导入。
+          try { this.emit({ taskId: input.taskId, status: 'completed', progress: 100, rows: evidence.committedRows, message: fileImportTransactionText.committedCleanup }); } catch { /* 返回值仍保留真实提交行数。 */ }
+          return { rows: evidence.committedRows, errors: [...evidence.result.errors, fileImportTransactionText.committedCleanup] };
+        }
+      }
       case 'files.exportColumns': {
         const target = { connectionId: input.connectionId, database: input.database, table: input.table };
         const read = await this.withIndependentTask(input.connectionId, input.taskId, async (managed, control) => { const info = await metadata.tableInfo(managed, input.database, input.table); control.checkCancelled(); return this.csvExportFields.prepare(target, info, managed, input.connectionRevision); }, undefined, '读取CSV导出字段', true);
@@ -591,10 +603,10 @@ export class Engine {
   }
 
   /** 元数据和文件任务使用独立连接，避免干扰 SQL 标签页里的事务与临时表。 */
-  private async withConnection<T>(id: string, action: (managed: ManagedConnection) => Promise<T>, database?: string): Promise<T> {
+  private async withConnection<T>(id: string, action: (managed: ManagedConnection) => Promise<T>, database?: string, strict = false): Promise<T> {
     return this.withConnectionUse(id, async () => {
       const managed = await connect(this.profile(id), database);
-      try { return await action(managed); } finally { await managed.close(); }
+      try { return await action(managed); } finally { if (strict) await managed.close({ strict: true }); else await managed.close(); }
     });
   }
 
@@ -779,25 +791,31 @@ export class Engine {
     this.emit({ taskId: id, status: 'running', progress: 0, message: label, executionDatabase:queryDatabaseFromSession(completionSessionState(managed,false)) });
     try {
       const result = await action(task);
-      if (!task.tableApply?.commitAcknowledged) this.checkCancelled(task);
-      if (task.tableApply?.commitAcknowledged) await task.cancelPending?.catch(() => undefined); else await task.cancelPending;
+      if (!task.tableApply?.commitAcknowledged && !task.fileImport?.commitAcknowledged) this.checkCancelled(task);
+      if (task.tableApply?.commitAcknowledged || task.fileImport?.commitAcknowledged || task.fileImport?.failure) await task.cancelPending?.catch(() => undefined); else await task.cancelPending;
       const errors = (result as { errors?: string[] } | undefined)?.errors;
       // 仅显式查询策略可把保留前序结果的回包判为失败，不按任意对象的failure属性猜全局终态。
       const final = terminal?.(result);
       this.emit({ taskId: id, status: final?.status ?? (errors?.length ? 'failed' : 'completed'), progress: 100, message: final?.message ?? (errors?.length ? errors[0] : `${label}完成`), ...(task.queryExport ? { queryExport: { ...task.queryExport } } : {}) });
       return result;
     } catch (error) {
+      if (task.fileImport?.commitAcknowledged && task.fileImport.result) {
+        await task.cancelPending?.catch(() => undefined);
+        try { this.emit({ taskId: id, status: 'completed', progress: 100, rows: task.fileImport.committedRows, message: fileImportTransactionText.committedCleanup }); } catch { /* COMMIT事实优先于晚通知异常。 */ }
+        return task.fileImport.result as T;
+      }
       if (task.tableApply?.commitAcknowledged) {
         await task.cancelPending?.catch(() => undefined);
         this.emit({ taskId: id, status: 'completed', progress: 100, message: '服务器已确认目标事务提交；请查看提交记录' });
         return { affectedRows: task.tableApply.serverReportedRows } as T;
       }
-      await task.cancelPending;
+      if (task.fileImport?.failure) { await task.cancelPending?.catch(() => undefined); error = task.fileImport.failure; }
+      else await task.cancelPending;
       this.emit({ taskId: id, status: task.cancelled && !task.fileCommitStarted ? 'cancelled' : 'failed', progress: 0, message: this.errorMessage(error), ...(task.queryExport ? { queryExport: { ...task.queryExport } } : {}) });
       throw error;
     } finally {
       // 取消连接仍在建立时，不能放开会话给下一条查询，以免 KILL 误伤复用线程。
-      if (task.tableApply?.commitAcknowledged) await task.cancelPending?.catch(() => undefined); else await task.cancelPending;
+      if (task.tableApply?.commitAcknowledged || task.fileImport?.commitAcknowledged || task.fileImport?.failure) await task.cancelPending?.catch(() => undefined); else await task.cancelPending;
       this.tasks.delete(id); task.finish();
     }
   }
@@ -926,6 +944,8 @@ export class Engine {
     if (this.resultFiles.has(id)) { this.resultFiles.cancel(id); return; }
     const task = this.tasks.get(id);
     if (!task) return;
+    // COMMIT一旦发送就不再KILL；中间批提交后仍响应取消，最后提交则保留真实ACK。
+    if (task.fileImport?.committing) { if (!task.fileImport.finalCommit) task.cancelled = true; return; }
     if (task.fileCommitStarted || task.tableApply?.commitMayHaveBeenSent) return;
     task.cancelled = true;this.insertConfirmations.cancel(id);
     return this.stopTaskCommand(task);
@@ -1314,8 +1334,9 @@ export class Engine {
     return { rows: result.rows };
   }
 
-  /** 文件导入每 500 行提交一批；当前批失败回滚，先前批已提交，并明确记录部分成功。 */
+  /** CSV/JSON可整文件单事务；缺省保持每500行提交，任何未知终态都不重放或伪报回滚。 */
   private async importFile(task: RunningTask, input: Input, records?: AsyncIterable<DataRow>): Promise<{ rows: number; errors: string[] }> {
+    const transactionMode = fileImportTransactionMode(input.format, input), atomic = transactionMode === 'atomic';
     // 内部调用也不能把 CSV 标题选项混入 SQL、JSON 或 Excel，并在任何事务前校验。
     if (Object.hasOwn(input, 'csvHasHeader')) {
       if (typeof input.csvHasHeader !== 'boolean') throw new Error('CSV 首行字段名配置必须为布尔值');
@@ -1323,19 +1344,46 @@ export class Engine {
     }
     if (input.format === 'sql') return this.importSql(task, input);
     if (!['csv', 'json'].includes(input.format) && !(input.format === 'xlsx' && records)) throw new Error('不支持的导入格式');
-    const info = await metadata.tableInfo(task.managed, input.database, input.table);
-    if (info.engine.toUpperCase() !== 'INNODB') throw new Error('CSV/JSON 导入仅支持 InnoDB 表，以保证每批失败可回滚');
-    const columns = new Map(info.columns.map(column => [column.name, column]));
-    const mapping = Object.entries(input.mapping as Record<string, string>);
-    if (!mapping.length) throw new Error('请至少映射一个源字段');
-    if (new Set(mapping.map(([, target]) => target)).size !== mapping.length) throw new Error('多个源字段不能映射到同一个目标字段');
-    for (const [, target] of mapping) if (!columns.has(target) || columns.get(target)?.generated) throw new Error(`目标字段不存在或为生成列：${target}`);
-    const insertPrefix = `INSERT INTO ${qualified(input.database, input.table)} (${mapping.map(([, target]) => identifier(target)).join(', ')}) VALUES `;
-    let committed = 0, pending = 0, sourceLine = 0, committing = false;
-    await this.statement(task, 'START TRANSACTION');
+    const evidence = task.fileImport ??= { committing: false, finalCommit: false, commitAcknowledged: false, committedRows: 0 };
+    /** 映射只信当前同会话真实目录，禁止生成列与重复目标，数值仍交原无损校验。 */
+    const plan = (info: Awaited<ReturnType<typeof metadata.tableInfo>>) => {
+      if (info.engine.toUpperCase() !== 'INNODB') throw new Error('CSV/JSON 导入仅支持 InnoDB 表，以保证失败可回滚');
+      if (atomic && info.objectKind !== 'table') throw new Error('整文件原子提交仅支持可确认的 InnoDB 基本表');
+      const columns = new Map(info.columns.map(column => [column.name, column])), mapping = Object.entries(input.mapping as Record<string, string>);
+      if (!mapping.length) throw new Error('请至少映射一个源字段');
+      if (new Set(mapping.map(([, target]) => target)).size !== mapping.length) throw new Error('多个源字段不能映射到同一个目标字段');
+      for (const [, target] of mapping) if (!columns.has(target) || columns.get(target)?.generated) throw new Error(`目标字段不存在或为生成列：${target}`);
+      return { info, columns, mapping, insertPrefix: `INSERT INTO ${qualified(input.database, input.table)} (${mapping.map(([, target]) => identifier(target)).join(', ')}) VALUES ` };
+    };
+    let selected = atomic ? undefined : plan(await metadata.tableInfo(task.managed, input.database, input.table));
+    let committed = 0, pending = 0, sourceLine = 0, committing = false, transactionStarted = false, transactionProtected = false;
+    const status = (value: unknown): value is number => typeof value === 'number' && Number.isInteger(value) && value >= 0 && value <= 65535;
+    /** 原子模式必须看到真实连续IN_TRANS；不能把缓存缺项或隐式提交当成受保护事务。 */
+    const checkTransaction = () => {
+      if (atomic && (task.managed.broken || task.managed.transactionStateKnown !== true || !status(task.managed.serverStatus) || !(task.managed.serverStatus & 1))) { transactionProtected = false; throw Error(fileImportTransactionText.transactionUnknown); }
+    };
+    /** COMMIT的原ACK先登记行数，再等待取消/通知收尾；未知提交绝不补发ROLLBACK来伪造撤销。 */
+    const commit = async (final: boolean) => {
+      this.checkCancelled(task); checkTransaction(); committing = true; evidence.committing = true; evidence.finalCommit = final;
+      await this.statement<ResultSetHeader>(task, 'COMMIT', [], acknowledged => {
+        if (atomic ? !status(acknowledged.serverStatus) || !!(acknowledged.serverStatus & 1) : acknowledged.serverStatus !== undefined && (!status(acknowledged.serverStatus) || !!(acknowledged.serverStatus & 1))) throw Error(fileImportTransactionText.commitUnknown);
+        committed += pending; pending = 0; transactionStarted = false; evidence.committedRows = committed;
+        if (final) { evidence.commitAcknowledged = true; evidence.result = { rows: committed, errors: [] }; }
+        else { committing = false; evidence.committing = false; }
+      });
+    };
     try {
+      await this.statement<ResultSetHeader>(task, 'START TRANSACTION', [], acknowledged => { transactionStarted = true; if (atomic && (!status(acknowledged.serverStatus) || !(acknowledged.serverStatus & 1))) throw Error(fileImportTransactionText.transactionUnknown); });
+      if (atomic) {
+        checkTransaction();
+        try { await this.statement(task, `SELECT 1 FROM ${qualified(input.database, input.table)} LIMIT 0`); }
+        catch (error) { throw Error(`${fileImportTransactionText.lockFailed}。${this.errorMessage(error)}`); }
+        checkTransaction(); selected = plan(await metadata.tableInfo(task.managed, input.database, input.table)); checkTransaction(); transactionProtected = true;
+        this.emit({ taskId: task.id, status: 'running', progress: 0, rows: 0, message: fileImportTransactionText.atomicScope });
+      }
+      const { info, columns, mapping, insertPrefix } = selected!;
       for await (const row of records ?? readRecords(input.filePath, input.format, input.encoding, input.csvDelimiter, input.csvHasHeader)) {
-        this.checkCancelled(task); sourceLine++;
+        this.checkCancelled(task); checkTransaction(); sourceLine++;
         const values = mapping.map(([source, target]) => {
           if (!Object.hasOwn(row, source)) throw new Error(`源记录缺少字段：${source}`);
           let value = row[source];
@@ -1349,24 +1397,34 @@ export class Engine {
           inserted = await this.statement(task, change.sql, change.params);
         } else inserted = await this.statement(task, insertPrefix + '(' + mapping.map(([, target], index) => typedCellPlaceholder(columns.get(target)!, values[index])).join(', ') + ')', values);
         pending++;
+        if (atomic && (!status(inserted.serverStatus) || !(inserted.serverStatus & 1))) { transactionProtected = false; throw Error(fileImportTransactionText.transactionUnknown); }
+        checkTransaction();
+        if (atomic && inserted.affectedRows !== 1) throw Error('INSERT影响行数无法确认为一行，整文件拒绝提交');
         // OK 包的警告数必须立即核对；SHOW WARNINGS 是诊断语句，不能先发下一条 INSERT/COMMIT 清掉诊断区。
         if (!Number.isSafeInteger(inserted.warningStatus) || inserted.warningStatus !== 0) {
           const diagnostics = await this.statement<{ Code: number; Level: string }[]>(task, 'SHOW WARNINGS LIMIT 32');
           const codes = Array.isArray(diagnostics) ? diagnostics.map(item => String(item.Code)).filter(code => /^\d+$/.test(code)).join(', ') : '';
           throw new Error(`INSERT 返回警告或无法确认警告数，当前批拒绝提交，不能确认无损转换${codes ? `；诊断代码：${codes}` : ''}`);
         }
-        if (pending === 500) {
-          committing = true; await this.statement(task, 'COMMIT'); committing = false; committed += pending; pending = 0;
+        if (!atomic && pending === 500) {
+          await commit(false);
           this.emit({ taskId: task.id, status: 'running', progress: 0, rows: committed, message: `已提交 ${committed} 行（每批 500 行）` });
-          await this.statement(task, 'START TRANSACTION');
-        }
+          await this.statement(task, 'START TRANSACTION', [], () => { transactionStarted = true; });
+        } else if (atomic && pending % 500 === 0) this.emit({ taskId: task.id, status: 'running', progress: 0, rows: 0, message: `已写入 ${pending} 行，整文件仍待提交；尚未确认任何行提交` });
       }
-      committing = true; await this.statement(task, 'COMMIT'); committing = false; committed += pending;
-      return { rows: committed, errors: [] };
+      await commit(true); return evidence.result!;
     } catch (error) {
-      if (!task.managed.broken) await execute(task.managed, 'ROLLBACK').catch(() => undefined);
-      const message = `第 ${sourceLine || 1} 条记录导入失败；已确认提交 ${committed} 行，${committing ? '当前批提交结果未确认，请核对数据库' : `当前批 ${pending} 行已回滚`}。${this.errorMessage(error)}`;
-      if (task.cancelled) throw new Error(message);
+      if (evidence.commitAcknowledged && evidence.result) return evidence.result;
+      let rolledBack = false, cancellationFailure: unknown;
+      if (!committing && transactionStarted) {
+        // 先等原代次取消控制结束，不能让迟到KILL落到本轮清理ROLLBACK。
+        try { await task.cancelPending; } catch (failure) { cancellationFailure = failure; }
+        if (!task.managed.broken) try { const result = (await execute<ResultSetHeader>(task.managed, 'ROLLBACK')).rows; rolledBack = status(result.serverStatus) && !(result.serverStatus & 1) && result.warningStatus === 0; } catch { /* 仅在原ACK完整时宣称已回滚。 */ }
+      }
+      const rollback = committing ? fileImportTransactionText.commitUnknown : transactionStarted && (!rolledBack || atomic && !transactionProtected && pending > 0) ? fileImportTransactionText.rollbackUnknown : transactionStarted ? atomic ? '整文件目标表事务已确认回滚' : `当前批 ${pending} 行已回滚` : '当前事务尚未写入数据';
+      const message = `第 ${sourceLine || 1} 条记录导入失败；已确认提交 ${committed} 行，${rollback}。${this.errorMessage(error)}${cancellationFailure ? `；取消控制收尾失败：${this.errorMessage(cancellationFailure)}` : ''}`;
+      evidence.failure = new Error(message);
+      if (task.cancelled || cancellationFailure) throw evidence.failure;
       // 保留已提交行数与定位信息，调用方可以展示明确的部分成功结果。
       this.emit({ taskId: task.id, status: 'running', progress: 0, rows: committed, message });
       return { rows: committed, errors: [message] };
