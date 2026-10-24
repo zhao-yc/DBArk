@@ -11,6 +11,12 @@ import { RecordFormPanel } from '../../src/renderer/components/RecordFormPanel';
 import type { RecordViewController } from '../../src/renderer/hooks/useRecordViews';
 import { recordViewZh as text } from '../../src/renderer/locales/recordViews.zh-CN';
 
+// 本例只做分页逻辑及SSR，不登记文件操作或桌面工作区；意外越界立即失败。
+vi.mock('../../src/renderer/store', () => {
+  const forbidden = () => { throw Error('分页SSR夹具不得访问桌面工作区或文件用途'); };
+  return { useWorkspace: Object.assign(forbidden, { getState: forbidden, subscribe: forbidden }) };
+});
+
 const scopeValue = { target: { connectionId: '连接', database: '库', table: '记录' }, connectionVersion: 2, refreshVersion: 0, pageSize: 50, filters: [], filterMode: 'all', sort: [{ column: 'id', direction: 'ASC' as const }] };
 const scope = recordPageScope(scopeValue);
 const context: RecordPageContext = { scope, page: 1, generation: 10, active: true, formOpen: true, stale: false };

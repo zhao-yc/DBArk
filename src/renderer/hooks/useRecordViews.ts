@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import type { DraftRow } from '../dataChanges';
 import { errorMessage } from '../lib';
-import { assertRecordDraftCurrent, beginRecordDraft, editRecordInput, recordInputDirty, recordReadonlyReason, RecordFieldError, RecordLeaveGuard, stageRecordDraft, type RecordContext, type RecordDraft, type RecordInput } from '../recordViews';
+import { assertRecordDraftCurrent, beginRecordDraft, editRecordInput, recordInputDirty, recordMetadataKey, recordTargetKey, recordReadonlyReason, RecordFieldError, RecordLeaveGuard, stageRecordDraft, type RecordContext, type RecordDraft, type RecordInput } from '../recordViews';
 import { recordViewZh as text } from '../locales/recordViews.zh-CN';
 import { assertRecordDocumentCurrent, beginRecordDocument, changeRecordDocument, recordDocumentDirty, stageRecordDocument, type RecordDocumentInput } from '../recordInputDocument';
 import { assertRecordJsonNodeCurrent, beginRecordJsonNodeInput, changeRecordJsonNodeInput, recordJsonNodeDirty, stageRecordJsonNodeInput, type RecordJsonNodeInput, type RecordNodeSelection } from '../recordJsonNodeInput';
@@ -120,6 +120,13 @@ export function useRecordViews(options: Options) {
       replace(editRecordInput(current, column, value)); setError(''); setFocusKey(null); setNotice('');
     } catch (reason) { report(reason); }
   }
+  /** 文件回包只读核原字段输入与同步行来源；不调用change，不重选或重建缓冲。 */
+  function isFieldCurrent(captured: RecordDraft, key: string, input: RecordInput | undefined, reason = ''): boolean {
+    if (bufferRef.current?.kind !== 'fields' || draftRef.current !== captured || captured.fields.get(key) !== input) return false;
+    const current = latest.current.getContext(), row = latest.current.getRows().find(item => item.id === captured.rowId);
+    // 待删除行仍可另存原字节，因此不借只能写入的assertRecordDraftCurrent资格门。
+    return current.loaded && !current.busy && !current.stale && !!row && recordReadonlyReason(current, row, key) === reason && !!current.info?.columns.some(column => column.name === key) && captured.target === recordTargetKey(current.target) && captured.metadata === recordMetadataKey(current.info) && captured.generation === current.generation && captured.connectionVersion === current.connectionVersion && captured.data === row.data && captured.original === row.original && captured.inserted === row.inserted;
+  }
   /** 当前只有整行variant时才能接收原文；晚到事件先核身份与忙碌门，不能覆盖新行。 */
   function changeDocument(value: string, captured: RecordDocumentInput) {
     const current=bufferRef.current;if(current?.kind!=='document')return;
@@ -182,6 +189,6 @@ export function useRecordViews(options: Options) {
     if(identityChanged||needsDocument){setError('');setFocusKey(null);replace(beginRecordDraft(row,latest.current.getContext()));}
   }, [options.rows, context.info]);
 
-  return { draft, documentInput:buffer?.kind==='document'?buffer.input:null, nodeInput:buffer?.kind==='node'?buffer.input:null, structureInput:buffer?.kind==='structure'?buffer.input:null, formOpen, displayMode, changeDisplayMode, changeDocument, openNode, changeNode, openStructure, changeStructure, closeNode, cellKey, pending, error, focusKey, notice, dirty, hasInput: () => dirtyRef.current, reset, discard, stage, request, resolve, select, openForm, closeForm, openCell, closeCell, expand, change };
+  return { draft, documentInput:buffer?.kind==='document'?buffer.input:null, nodeInput:buffer?.kind==='node'?buffer.input:null, structureInput:buffer?.kind==='structure'?buffer.input:null, formOpen, displayMode, changeDisplayMode, changeDocument, openNode, changeNode, openStructure, changeStructure, closeNode, cellKey, pending, error, focusKey, notice, dirty, hasInput: () => dirtyRef.current, reset, discard, stage, request, resolve, select, openForm, closeForm, openCell, closeCell, expand, change, isFieldCurrent };
 }
 export type RecordViewController = ReturnType<typeof useRecordViews>;

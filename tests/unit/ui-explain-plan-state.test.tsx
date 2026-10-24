@@ -46,6 +46,8 @@ function fixture() {
     // 此端口不打开列管理，普通结果的可见列随当前结果更新，不能捕获执行前的计划列。
     get visibleColumns(): unknown[] { return context.result?.columns ?? []; },
     get viewSource(): unknown { return context.result; },
+    // 原结果表达式新增只读字节来源，沿同一实际任务引用，不写死第二份结果代次。
+    get resultContext(): readonly unknown[] { return [context.outcome, context.resultIndex, undefined, context.task.current, context.connectionVersion, tab.connectionId]; },
     task: { current: 'original-plan-task' }, sessionId: 'original-session', sessionRef: { current: 'original-session' }, busyRef: { current: false }, cancelledQuery: { current: '' }, parameterSession: { current: '' }, explainSource: { current: 'SELECT 1' }, failureSource: { current: undefined },
     editor: { current: { getModel: () => ({ getValue: () => 'SELECT 1' }) } }, connection: { database: 'db' }, useWorkspace: { getState: () => workspace }, invoke,
     setBusy: (value: boolean) => { context.busy = value; frames.push(context.render()); }, setOutcome: (value: any) => { clearOutcome(value); context.outcome = value; context.result = value?.results[0]; },

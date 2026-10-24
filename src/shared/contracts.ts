@@ -96,6 +96,8 @@ export interface ResultExportOptions { fileToken: string; format: 'csv' | 'json'
 
 /** 请求映射是界面、主进程与数据库进程共同使用的唯一接口定义。 */
 export interface CommandMap {
+  'binaryCellFiles.open': { input: import('./binaryCellFiles').BinaryCellFileOpenInput; output: import('./binaryCellFiles').BinaryCellFileOpenOutput };
+  'binaryCellFiles.save': { input: import('./binaryCellFiles').BinaryCellFileSaveInput; output: import('./binaryCellFiles').BinaryCellFileSaveOutput };
   'files.importPresets.list': { input: Record<string, never>; output: import('./importPresets').ImportPresetSnapshot };
   'files.importPresets.save': { input: import('./importPresets').ImportPresetSaveInput; output: import('./importPresets').ImportPresetSnapshot };
   'files.importPresets.delete': { input: import('./importPresets').ImportPresetDeleteInput; output: import('./importPresets').ImportPresetSnapshot };

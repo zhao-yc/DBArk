@@ -1,3 +1,5 @@
+import { readBinaryCellFile, writeBinaryCellFile } from './binaryCellFiles';
+import { binaryCellFileText } from '../shared/binaryCellFiles';
 import { databaseDropAcknowledgements, databaseDropIdentifier } from '../shared/databaseDrop';
 import type { DatabaseDropTarget, DatabaseDropCounts } from '../shared/databaseDrop';
 import { QueryFileSources } from './queryFileSources';
@@ -78,6 +80,7 @@ const pendingQueryHistory = new Map<string, { entry: HistoryEntry; currentStatem
 const files = new Map<string, { path: string; purpose: string; format?: string }>();
 const resultSqlPreviews = new ResultSqlPreviews(files);
 const queryFileOperations = new Set<Promise<unknown>>();
+let binaryCellFileActive = false;
 const exportReservations = new ExportReservations();
 const preparingTasks = new Map<string, { cancelled: boolean; failure?: string; connectionIds?: string[] }>();
 const exportProgress = new Map<string, QueryExportProgress>();
@@ -448,6 +451,34 @@ async function runResultInsert(command: 'result.insertPreview' | 'result.insertA
 }
 
 async function dispatch(command: Command, input: any, columns?: MainInvocation): Promise<unknown> {
+  // 原生选择器和实际IO属于同一次文档操作；不创建任务、不读取连接，也不向渲染层交付路径。
+  if (command === 'binaryCellFiles.open' || command === 'binaryCellFiles.save') {
+    const assertCurrent = () => { columnsMain.assertCapturedOwner(columns); if (shuttingDown) throw Error(binaryCellFileText.shuttingDown); };
+    assertCurrent();
+    if (binaryCellFileActive) throw Error(binaryCellFileText.busy);
+    binaryCellFileActive = true;
+    try {
+      return await queryFileOperation(async () => {
+        assertCurrent();
+        const filters = [{ name: binaryCellFileText.allFiles, extensions: ['*'] }];
+        if (command === 'binaryCellFiles.open') {
+          const chosen = await dialog.showOpenDialog(window!, { title: binaryCellFileText.openTitle, properties: ['openFile'], filters });
+          assertCurrent();
+          if (chosen.canceled || !chosen.filePaths.length) return null;
+          return readBinaryCellFile(chosen.filePaths[0], assertCurrent);
+        }
+        const chosen = await dialog.showSaveDialog(window!, { title: binaryCellFileText.saveTitle, defaultPath: input.suggestedName ?? binaryCellFileText.defaultName, filters });
+        assertCurrent();
+        if (chosen.canceled || !chosen.filePath) return null;
+        const release = await exportReservations.acquire(chosen.filePath);
+        try {
+          assertCurrent();
+          // 文件替换前最后核活由服务执行；成功替换后的回执不能因迟到导航被改写成可重试失败。
+          return await writeBinaryCellFile(chosen.filePath, input, assertCurrent);
+        } finally { release(); }
+      });
+    } finally { binaryCellFileActive = false; }
+  }
   if (command === 'result.insertPreview') return resultInserts.preview(input, columns!);
   if (command === 'result.insertApply') return resultInserts.apply(input, columns!);
   if (command === 'result.insertRelease') return resultInserts.release(input, columns!);
@@ -1125,7 +1156,7 @@ else {
         const filteredExportCancel = payload.command === 'query.cancel' && !!payload.input && typeof payload.input === 'object' && 'taskId' in payload.input && typeof payload.input.taskId === 'string' && tasks.get(payload.input.taskId)?.kind === 'table.exportFiltered' && tableFilteredExports.has(payload.input.taskId);
         const historyDeleteCancel = payload.command === 'query.cancel' && !!payload.input && typeof payload.input === 'object' && 'taskId' in payload.input && typeof payload.input.taskId === 'string' && typeof historyDelete !== 'undefined' && historyDelete.owns(payload.input.taskId);
         if (payload.command.startsWith('result.insert') || payload.command === 'query.cancel' && !!payload.input && typeof payload.input === 'object' && 'taskId' in payload.input && typeof payload.input.taskId === 'string' && tasks.get(payload.input.taskId)?.kind.startsWith('result.insert') && resultInserts.has(payload.input.taskId)) columns = columnsMain.capture(event);
-        if (payload.command.startsWith('history.delete') || historyDeleteCancel) columns = columnsMain.capture(event);
+        if (payload.command.startsWith('history.delete') || historyDeleteCancel || payload.command.startsWith('binaryCellFiles.')) columns = columnsMain.capture(event);
         if (payload.command.startsWith('schema.databaseDrop.') || payload.command === 'table.valueOptions' || payload.command === 'table.exportFiltered' || filteredExportCancel) columns = columnsMain.capture(event);
         if (payload.command.startsWith('schema.databaseDefaultEncoding.')) {
           columns = columnsMain.capture(event); columns.databaseEncodingRevision = store.connectionRevision();
@@ -1140,6 +1171,8 @@ else {
         const snippetTransferOperation=payload.command.startsWith('snippets.transfer');if(snippetTransferOperation)queryFileOperations.add(operation);
         try {
           const result = await operation;
+          // 载入字节只能发布给原文档；另存成功事实由文件服务返回，不能诱导自动重放覆盖。
+          if (payload.command === 'binaryCellFiles.open') { columnsMain.assertCapturedOwner(columns); if (shuttingDown) throw Error(binaryCellFileText.shuttingDown); }
           // 本地快照也不能迟到发布给已经导航或退出的旧文档；已提交配置不自动重放或撤回。
           if (payload.command.startsWith('files.importPresets.')) { columnsMain.assertCapturedOwner(columns); if (shuttingDown) throw Error('客户端正在退出，导入配置回执未发布，请重新读取'); }
           if (databaseEncodingCommand) { databaseEncodingResult = result; await databaseEncodingOwners.after(databaseEncodingCommand, input, result, columns!); }

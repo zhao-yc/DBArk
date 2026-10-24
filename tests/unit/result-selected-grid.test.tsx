@@ -5,7 +5,8 @@ import { ResultsGrid } from '../../src/renderer/components/ResultsGrid';
 import { ResultExportSelection } from '../../src/renderer/resultExport';
 const grid=vi.hoisted(()=>({props:null as any}));
 vi.mock('react-data-grid',()=>({DataGrid:(props:any)=>{grid.props=props;return null;},SelectColumn:{key:'select'}}));
-vi.mock('../../src/renderer/store',()=>({useWorkspace:(select:any)=>select({settings:{theme:'light',dataTypeColors:false}})}));
+// 保留真实Zustand订阅语义；本例不打开二进制模态，不模拟文件能力或接纳门。
+vi.mock('../../src/renderer/store',async()=>{const{create}=await import('zustand');return{useWorkspace:create(()=>({settings:{theme:'light',dataTypeColors:false}}))};});
 const globals=['window','document','navigator','IS_REACT_ACT_ENVIRONMENT'].map(name=>[name,Object.getOwnPropertyDescriptor(globalThis,name)] as const);
 let document:ReturnType<typeof memoryDocument>,createRoot:typeof import('react-dom/client')['createRoot'],root:ReturnType<typeof createRoot>|undefined;
 beforeAll(async()=>{document=memoryDocument();({createRoot}=await import('react-dom/client'));});
