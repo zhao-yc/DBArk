@@ -452,6 +452,15 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
   if (command === 'result.insertApply') return resultInserts.apply(input, columns!);
   if (command === 'result.insertRelease') return resultInserts.release(input, columns!);
   if (command === 'query.cancel' && tasks.get(input.taskId)?.kind.startsWith('result.insert') && resultInserts.has(input.taskId)) return resultInserts.cancel(input.taskId, columns!);
+  // 导入配置只写本地白名单元数据，绑定真实主窗口文档，不委派引擎或读取连接秘密。
+  if (command.startsWith('files.importPresets.')) {
+    const assertCurrent = () => { columnsMain.assertCapturedOwner(columns); if (shuttingDown) throw Error('客户端正在退出，不能读写导入配置'); };
+    assertCurrent();
+    if (command === 'files.importPresets.list') return store.importPresets();
+    if (command === 'files.importPresets.save') return store.saveImportPreset(input, assertCurrent);
+    if (command === 'files.importPresets.delete') return store.deleteImportPreset(input, assertCurrent);
+    throw Error('未知的导入配置操作');
+  }
   // 查询分组仅操作本地组织元数据，不占用连接锁、不委派数据库任务或执行历史。
   if (command === 'queries.organizationGet' || command === 'queries.organizationApply') {
     if (shuttingDown) throw Error('客户端正在退出，不能整理保存查询分组');
@@ -1122,7 +1131,7 @@ else {
           columns = columnsMain.capture(event); columns.databaseEncodingRevision = store.connectionRevision();
           databaseEncodingCommand = payload.command.slice('schema.databaseDefaultEncoding.'.length) as DatabaseEncodingOwnerCommand;
         }
-        if (payload.command.startsWith('explainFiles.')||payload.command.startsWith('schema.columns.')||payload.command.startsWith('table.presets.')||payload.command.startsWith('result.presets.')||payload.command.startsWith('queryFileSources.')||fileCancel||resultSql||insertRequest||payload.command.startsWith('snippets.transfer')) columns = columnsMain.capture(event);
+        if (payload.command.startsWith('explainFiles.')||payload.command.startsWith('schema.columns.')||payload.command.startsWith('table.presets.')||payload.command.startsWith('result.presets.')||payload.command.startsWith('queryFileSources.')||fileCancel||resultSql||insertRequest||payload.command.startsWith('snippets.transfer')||payload.command.startsWith('files.importPresets.')) columns = columnsMain.capture(event);
         const input = validateMainCommand(payload.command, payload.input);
         if (payload.command.startsWith('schema.databaseDrop.')) beginDatabaseDrop(payload.command, input, columns!);
         if (databaseEncodingCommand) databaseEncodingOwners.before(databaseEncodingCommand, input, columns!);
@@ -1131,6 +1140,8 @@ else {
         const snippetTransferOperation=payload.command.startsWith('snippets.transfer');if(snippetTransferOperation)queryFileOperations.add(operation);
         try {
           const result = await operation;
+          // 本地快照也不能迟到发布给已经导航或退出的旧文档；已提交配置不自动重放或撤回。
+          if (payload.command.startsWith('files.importPresets.')) { columnsMain.assertCapturedOwner(columns); if (shuttingDown) throw Error('客户端正在退出，导入配置回执未发布，请重新读取'); }
           if (databaseEncodingCommand) { databaseEncodingResult = result; await databaseEncodingOwners.after(databaseEncodingCommand, input, result, columns!); }
           if(payload.command.startsWith('result.presets.')){columnsMain.assertCapturedOwner(columns);columns?.resultPresetPublication?.();}
           if(payload.command.startsWith('table.presets.')){

@@ -96,6 +96,9 @@ export interface ResultExportOptions { fileToken: string; format: 'csv' | 'json'
 
 /** 请求映射是界面、主进程与数据库进程共同使用的唯一接口定义。 */
 export interface CommandMap {
+  'files.importPresets.list': { input: Record<string, never>; output: import('./importPresets').ImportPresetSnapshot };
+  'files.importPresets.save': { input: import('./importPresets').ImportPresetSaveInput; output: import('./importPresets').ImportPresetSnapshot };
+  'files.importPresets.delete': { input: import('./importPresets').ImportPresetDeleteInput; output: import('./importPresets').ImportPresetSnapshot };
   'result.insertPreview': { input: import('./resultInsert').ResultInsertPreviewInput; output: import('./resultInsert').ResultInsertPreviewOutput };
   'result.insertApply': { input: import('./resultInsert').ResultInsertApplyInput; output: import('./resultInsert').ResultInsertApplyOutput };
   'result.insertRelease': { input: import('./resultInsert').ResultInsertReleaseInput; output: void };

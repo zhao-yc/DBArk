@@ -29,6 +29,7 @@ import { querySaveContentSchema, queryUpdateSourceSchema, sameSavedQueryContext,
 import { bindSavedQuery, queryConnectionDigest } from './queryBinding';
 import { tablePresetDocumentSchema, tablePresetListSchema, tablePresetSaveSchema, tablePresetSelectSchema, validateTablePresetBudget, type TablePresetTarget, type TablePresetSource, type TablePresetStoredSnapshot as TablePresetSnapshot, type TablePresetSelect } from '../shared/tablePresets';
 import { queryResultPresetDocumentSchema, queryResultPresetListSchema, queryResultPresetSaveSchema, queryResultPresetSelectSchema, queryResultPresetRenameSchema, validateQueryResultPresetBudget, type QueryResultPresetSource, type QueryResultPresetStoredSnapshot, type QueryResultPresetValue, type QueryResultPresetSelect, type QueryResultPresetSave, type QueryResultPresetRename } from '../shared/queryResultPresets';
+import { importPresetDocumentSchema, importPresetSaveSchema, importPresetDeleteSchema, importPresetLimits, importPresetText, type ImportPresetDocument, type ImportPresetSnapshot, type ImportPresetSaveInput, type ImportPresetDeleteInput } from '../shared/importPresets';
 import { parseSavedQueryRecord } from './savedQuerySearchMatch';
 import { parseHistoryRecord } from './historyPageMatch';
 import { historyDeleteText, type HistoryDeleteReference } from '../shared/historyDelete';
@@ -49,6 +50,7 @@ export class LocalStore {
   private queryFileDocumentSnapshot?: AppSettings['tabs'];
   private queryRevisionValue=0;
   private readonly queryOrganizationGeneration = randomUUID();
+  private readonly importPresetGeneration = randomUUID();
   private historyRevisionValue=0;
   private snippetRevisionValue = 0;
   private volatileSecrets = new Map<string, string>();
@@ -77,6 +79,8 @@ export class LocalStore {
     }
     // 可选元数据也须先完整校验；坏文档不能被迁移或任务恢复写盘掩盖。
     if (this.db.exec("SELECT 1 FROM sqlite_master WHERE type='table' AND name='query_result_presets'").length) this.validateQueryResultPresetCollection();
+    // 可选导入配置先校验原始字节和完整文档；未知版本不能被任何迁移写盘覆盖。
+    if (this.db.exec("SELECT 1 FROM sqlite_master WHERE type='table' AND name='import_presets'").length) this.readImportPresetDocument();
     validateSavedQueryOrganizationStorage(this.db);
     this.mutate(() => {
       this.db.run(`CREATE TABLE IF NOT EXISTS connections (id TEXT PRIMARY KEY, data TEXT NOT NULL);
@@ -98,6 +102,8 @@ export class LocalStore {
         CREATE TABLE IF NOT EXISTS query_file_recents (id INTEGER PRIMARY KEY CHECK(id=1), data TEXT NOT NULL);
         -- 查询结果整理方案是可选schema9元数据，不改变旧客户端的原生版本门槛。
         CREATE TABLE IF NOT EXISTS query_result_presets (connection_id TEXT PRIMARY KEY, data TEXT NOT NULL);
+        -- 文件解释及人工映射为可选schema9元数据，不保存路径、行值或连接身份。
+        CREATE TABLE IF NOT EXISTS import_presets (id INTEGER PRIMARY KEY CHECK(id=1), data TEXT NOT NULL);
         -- 分组元数据与查询原文分离；旧schema9客户端可忽略，不改变来源摘要。
         CREATE TABLE IF NOT EXISTS saved_query_organization (id INTEGER PRIMARY KEY CHECK(id=1), data TEXT NOT NULL);
         CREATE TABLE IF NOT EXISTS saved_query_memberships (query_id TEXT PRIMARY KEY, group_id TEXT NOT NULL);
@@ -308,6 +314,62 @@ export class LocalStore {
     const input=tablePresetSelectSchema.parse(raw),current=this.checkedTablePresets(input),entry=current.entries.find(item=>item.id===input.id);
     if(!entry||entry.connectionDigest!==current.source.connectionDigest)throw Error('方案来源连接已失效，请重新显式保存或覆盖');
     return entry.configuration;
+  }
+
+  /** 读取唯一原始文档，先核原字节再解析；坏行、未知版本及超限整体拒绝。 */
+  private readImportPresetDocument(): ImportPresetDocument {
+    const statement = this.db.prepare('SELECT id,data FROM import_presets');
+    try {
+      if (!statement.step()) return { version: 1, revision: 0, entries: [] };
+      const [id, data] = statement.get();
+      if (id !== 1 || typeof data !== 'string' || Buffer.byteLength(data, 'utf8') > importPresetLimits.documentBytes || statement.step()) throw Error(importPresetText.documentBudget);
+      return importPresetDocumentSchema.parse(JSON.parse(data));
+    } finally { statement.free(); }
+  }
+
+  /** generation仅属于本次open，不持久化、不解密凭据；每次返回完整独立配置副本。 */
+  importPresets(): ImportPresetSnapshot {
+    const document = this.readImportPresetDocument();
+    return { generation: this.importPresetGeneration, revision: document.revision, entries: document.entries };
+  }
+
+  /** 同步事务内同时核代次和修订，删空后仍保留修订墓碑，拒绝旧会话与ABA复用。 */
+  private checkedImportPresets(input: ImportPresetSaveInput | ImportPresetDeleteInput): ImportPresetDocument {
+    const document = this.readImportPresetDocument();
+    if (input.generation !== this.importPresetGeneration || input.revision !== document.revision || document.revision >= Number.MAX_SAFE_INTEGER) throw Error(importPresetText.stale);
+    return document;
+  }
+
+  /** 只写严格白名单文档；mutate负责事务、归属终门及原子替换失败的内存/磁盘恢复。 */
+  private writeImportPresets(document: ImportPresetDocument): ImportPresetSnapshot {
+    const checked = importPresetDocumentSchema.parse(document), data = JSON.stringify(checked);
+    this.db.run('INSERT INTO import_presets VALUES (1,?) ON CONFLICT(id) DO UPDATE SET data=excluded.data', [data]);
+    return { generation: this.importPresetGeneration, revision: checked.revision, entries: checked.entries };
+  }
+
+  /** 新建或精确覆盖完整配置；名称原文查重，覆盖保留创建时间及集合顺序。 */
+  saveImportPreset(raw: unknown, assertCurrent?: () => void): ImportPresetSnapshot {
+    const input = importPresetSaveSchema.parse(raw); let result!: ImportPresetSnapshot;
+    this.mutate(() => {
+      assertCurrent?.(); const current = this.checkedImportPresets(input), previous = input.id ? current.entries.find(entry => entry.id === input.id) : undefined;
+      if (input.id && !previous) throw Error(importPresetText.missing);
+      if (current.entries.some(entry => entry.name === input.name && entry.id !== input.id)) throw Error(importPresetText.duplicate);
+      const now = new Date(Math.max(Date.now(), previous ? Date.parse(previous.updatedAt) : 0)).toISOString();
+      const entry = { id: previous?.id ?? randomUUID(), name: input.name, configuration: input.configuration, createdAt: previous?.createdAt ?? now, updatedAt: now };
+      result = this.writeImportPresets({ version: 1, revision: current.revision + 1, entries: previous ? current.entries.map(item => item.id === previous.id ? entry : item) : [...current.entries, entry] });
+    }, assertCurrent);
+    return result;
+  }
+
+  /** 删除精确编号，最后一项也写入递增修订；不会清理任何查询、连接或其他配置。 */
+  deleteImportPreset(raw: unknown, assertCurrent?: () => void): ImportPresetSnapshot {
+    const input = importPresetDeleteSchema.parse(raw); let result!: ImportPresetSnapshot;
+    this.mutate(() => {
+      assertCurrent?.(); const current = this.checkedImportPresets(input);
+      if (!current.entries.some(entry => entry.id === input.id)) throw Error(importPresetText.missing);
+      result = this.writeImportPresets({ version: 1, revision: current.revision + 1, entries: current.entries.filter(entry => entry.id !== input.id) });
+    }, assertCurrent);
+    return result;
   }
 
   /** 来源从真实已保存连接计算；不读取凭据，也不信任界面传入的摘要。 */

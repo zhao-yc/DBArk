@@ -1,3 +1,4 @@
+import { importPresetListSchema, importPresetSaveSchema, importPresetDeleteSchema } from './importPresets';
 import { queryFileReloadSchemas } from './queryFileReload';
 import { resultInsertPreviewInputSchema, resultInsertApplyInputSchema, resultInsertReleaseInputSchema } from './resultInsert';
 import { parseExplainSnapshot } from './explainSnapshot';
@@ -290,6 +291,9 @@ export const commandSchemas: Record<Command, z.ZodType> = {
   'excel.export': z.object({ ...target, fileToken: id, taskId: id, scope: z.enum(['sample','all']).optional() }).strict(),
   'files.readQuery': z.object({ fileToken: id, encoding: z.enum(['utf8','utf16le','gb18030']) }).strict(),
   'files.writeQuery': z.object({ fileToken: id, encoding: z.enum(['utf8','utf16le','gb18030']), sql: text }).strict(),
+  'files.importPresets.list': importPresetListSchema,
+  'files.importPresets.save': importPresetSaveSchema,
+  'files.importPresets.delete': importPresetDeleteSchema,
   'files.preview': z.object({ fileToken: id, format: z.enum(['csv','json']), encoding: z.enum(['utf8','utf16le','gb18030']), csvDelimiter: z.enum(csvImportDelimiters).optional(), csvHasHeader: z.boolean().optional() }).strict().refine(value => value.csvDelimiter === undefined || value.format === 'csv', '分隔符只适用于 CSV 导入').refine(value => !Object.hasOwn(value, 'csvHasHeader') || value.format === 'csv' && typeof value.csvHasHeader === 'boolean', '首行字段名配置只适用于 CSV 导入，且必须为布尔值'),
   'files.import': z.object({ ...fileOptions, csvDelimiter: z.enum(csvImportDelimiters).optional(), csvHasHeader: z.boolean().optional(), mapping: ownRecord(z.string(), '导入映射') }).strict().refine(value => value.csvDelimiter === undefined || value.format === 'csv', '分隔符只适用于 CSV 导入').refine(value => !Object.hasOwn(value, 'csvHasHeader') || value.format === 'csv' && typeof value.csvHasHeader === 'boolean', '首行字段名配置只适用于 CSV 导入，且必须为布尔值'),
   'files.exportColumns': z.object({ ...target, taskId: id }).strict(),
