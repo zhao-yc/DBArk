@@ -1,3 +1,4 @@
+import { emptyTableFilteredUpdateOwners } from './table-filtered-update-owner-fixture';
 import { readFileSync } from 'node:fs';
 import { createContext, runInContext } from 'node:vm';
 import ts from 'typescript';
@@ -7,7 +8,7 @@ import { describe, expect, it, vi } from 'vitest';
 function fixture() {
   const text = readFileSync(new URL('../../src/main/index.ts', import.meta.url), 'utf8'), dispatch = text.slice(text.indexOf('async function dispatch('), text.indexOf('/** 按平台生成中文原生菜单'));
   const saves = vi.fn(), history = vi.fn(), request = vi.fn(async (_command: string, _input: unknown) => ({ complete: true })), assertAvailable = vi.fn();
-  const context = createContext({ Error, Date, Map, Set, structureTokens: new Map(), structureProgress: new Map(), exportProgress: new Map(), tasks: new Map(), completionTasks: new Set(), tablePresetReads: new Map(), shuttingDown: false, savedQueryPages: undefined, historyPages: undefined, savedQuerySearches: { has: () => false }, preparingTasks: new Map(), sessions: new Map(), connectionConfig: { assertAvailable }, store: { resolveConnection: (id: string) => ({ id, password: '受控凭据' }), saveTask: saves, addHistory: history }, broker: { request } });
+  const context = createContext({ filteredUpdates: emptyTableFilteredUpdateOwners(), Error, Date, Map, Set, structureTokens: new Map(), structureProgress: new Map(), exportProgress: new Map(), tasks: new Map(), completionTasks: new Set(), tablePresetReads: new Map(), shuttingDown: false, savedQueryPages: undefined, historyPages: undefined, savedQuerySearches: { has: () => false }, preparingTasks: new Map(), sessions: new Map(), connectionConfig: { assertAvailable }, store: { resolveConnection: (id: string) => ({ id, password: '受控凭据' }), saveTask: saves, addHistory: history }, broker: { request } });
   runInContext(ts.transpileModule(dispatch + '\nglobalThis.dispatch=dispatch;', { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText, context);
   return { context, saves, history, request, assertAvailable, dispatch: context.dispatch as (command: string, input: Record<string, unknown>) => Promise<unknown> };
 }

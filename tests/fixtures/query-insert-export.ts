@@ -1,3 +1,4 @@
+import { emptyTableFilteredUpdateOwners } from '../unit/table-filtered-update-owner-fixture';
 import {readFileSync} from 'node:fs';
 import {randomUUID} from 'node:crypto';
 import vm from 'node:vm';
@@ -18,7 +19,7 @@ export function queryInsertMain(path:string,sessionId:string,request:(command:st
   const sessions=new Map([[sessionId,{connectionId:'p'}]]),preparingTasks=new Map<string,any>();
   const assert=(value:unknown)=>{if(value!==owner||!state.current)throw Error('RAM原主文档失效');};
   const insert=new QueryInsertExports(files,{assert,same:(left,right)=>{assert(left);assert(right);return true;},revision:()=>state.revision,session:id=>sessions.get(id),closing:()=>state.closing,stop:async taskId=>{const preparing=preparingTasks.get(taskId);if(preparing)preparing.cancelled=true;else await request('query.cancel',{taskId});}});
-  const context=vm.createContext({Date,Map,Error,randomUUID,queryInsertExports:insert,shuttingDown:false,files,tasks,sessions,preparingTasks,queryDatabasePatch,persistedTaskMessage,persistedQueryError,resolveFileToken,
+  const context=vm.createContext({ filteredUpdates: emptyTableFilteredUpdateOwners(),Date,Map,Error,randomUUID,queryInsertExports:insert,shuttingDown:false,files,tasks,sessions,preparingTasks,queryDatabasePatch,persistedTaskMessage,persistedQueryError,resolveFileToken,
     SavedQuerySearchCancelled:class extends Error{},resultSqlZh:{shuttingDown:'正在退出'},tableApplyReceipts:undefined,
     columnsMain:{assertCapturedOwner:assert},async chooseFile(input:any){const token=randomUUID();files.set(token,{path,purpose:input.purpose,format:input.format});return{token,name:'完整.sql'};},
     pendingQueryHistory:new Map(),completionTasks:new Set(),exportProgress:new Map(),structureProgress:new Map(),lastPersist:new Map(),lastStorageWarning:0,tablePresetReads:new Map(),structureTokens:new Map(),savedQueryPages:undefined,historyPages:undefined,savedQuerySearches:{has:()=>false},

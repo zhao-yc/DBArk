@@ -6,6 +6,8 @@ import ts from 'typescript';
 import { describe, expect, it, vi } from 'vitest';
 import { ColumnsMainCapabilities } from '../../src/main/columnsMainCapabilities';
 import { ResultInsertOwners } from '../../src/main/resultInsertOwners';
+import { TableFilteredUpdateOwners } from '../../src/main/tableFilteredUpdateOwners';
+import { mergeTableFilteredUpdateProgress } from '../../src/main/tableFilteredUpdateProgress';
 import { persistedTaskMessage } from '../../src/main/taskPrivacy';
 import { validateCommand } from '../../src/shared/validation';
 import type { ConnectionProfile, TaskEvent, TaskRecord } from '../../src/shared/contracts';
@@ -18,17 +20,17 @@ async function flush() { for (let index = 0; index < 16; index++) await Promise.
 /** AST提取真实Main函数、两个能力管理器初始化和原IPC回调，不维护手写分派副本。 */
 function productionParts() {
   const source = readFileSync(new URL('../../src/main/index.ts', import.meta.url), 'utf8'), tree = ts.createSourceFile('main.ts', source, ts.ScriptTarget.Latest, true);
-  const names = ['runResultInsert', 'dispatch', 'taskEvent', 'engineExited', 'validateMainCommand', 'persistAuxiliary'], functions = new Map<string, string>(), bindings = new Map<string, string>();
+  const names = ['runResultInsert', 'runTableFilteredUpdate', 'dispatch', 'taskEvent', 'engineExited', 'validateMainCommand', 'persistAuxiliary'], functions = new Map<string, string>(), bindings = new Map<string, string>();
   let callback: ts.ArrowFunction | undefined;
   function visit(node: ts.Node): void {
     if (ts.isFunctionDeclaration(node) && names.includes(node.name?.text ?? '')) functions.set(node.name!.text, node.getText(tree));
-    if (ts.isVariableStatement(node)) for (const declaration of node.declarationList.declarations) if (ts.isIdentifier(declaration.name) && ['columnsMain', 'resultInserts'].includes(declaration.name.text)) bindings.set(declaration.name.text, node.getText(tree));
+    if (ts.isVariableStatement(node)) for (const declaration of node.declarationList.declarations) if (ts.isIdentifier(declaration.name) && ['columnsMain', 'resultInserts', 'filteredUpdates'].includes(declaration.name.text)) bindings.set(declaration.name.text, node.getText(tree));
     if (ts.isCallExpression(node) && node.expression.getText(tree) === 'ipcMain.handle' && ts.isStringLiteral(node.arguments[0]) && node.arguments[0].text === 'dbark:request' && ts.isArrowFunction(node.arguments[1])) callback = node.arguments[1];
     ts.forEachChild(node, visit);
   }
   visit(tree);
-  if (functions.size !== names.length || bindings.size !== 2 || !callback) throw Error('未提取到结果插入真实Main入口');
-  return [...functions.values(), bindings.get('columnsMain'), bindings.get('resultInserts'), 'globalThis.handleRequest = ' + callback.getText(tree) + ';', 'globalThis.actual = {runResultInsert,dispatch,taskEvent,engineExited,columnsMain,resultInserts};'].join('\n');
+  if (functions.size !== names.length || bindings.size !== 3 || !callback) throw Error('未提取到结果插入真实Main入口');
+  return [...functions.values(), bindings.get('columnsMain'), bindings.get('resultInserts'), bindings.get('filteredUpdates'), 'globalThis.handleRequest = ' + callback.getText(tree) + ';', 'globalThis.actual = {runResultInsert,dispatch,taskEvent,engineExited,columnsMain,resultInserts};'].join('\n');
 }
 
 /** 真实归属器与文档能力读取RAM原生句柄；只有broker与存储被替代，不加载Electron或数据库。 */
@@ -48,7 +50,7 @@ function fixture() {
     if (command === 'result.insertRelease' || command === 'query.cancel') return undefined;
     throw Error('RAM broker拒绝非本用途调用：' + command);
   });
-  const context: any = createContext({ Date, Map, Set, Error, Buffer, Promise, ColumnsMainCapabilities, ResultInsertOwners, persistedTaskMessage, validateCommand,
+  const context: any = createContext({ Date, Map, Set, Error, Buffer, Promise, ColumnsMainCapabilities, ResultInsertOwners, TableFilteredUpdateOwners, mergeTableFilteredUpdateProgress, filteredUpdateProgress: new Map(), persistedTaskMessage, validateCommand,
     window, rendererURL: frame.url, structureTokens: new Map(), tasks, resultInsertProgress: progress, completionTasks: new Set(), pendingQueryHistory: new Map(), preparingTasks: new Map(), sessions: new Map(), exportProgress: new Map(), structureProgress: new Map(), lastPersist: new Map(), lastStorageWarning: 0,
     tableApplyReceipts: undefined, savedQueryPages: undefined, historyPages: undefined, historyDelete: undefined, tableFilteredExports: { has: () => false }, queryInsertExports: { has: () => false },
     localSearchOperations: new Set(), queryFileOperations: new Set(), shuttingDown: false, rendererSettingsCurrent: true,

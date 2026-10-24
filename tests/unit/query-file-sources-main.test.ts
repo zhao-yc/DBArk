@@ -1,3 +1,4 @@
+import { emptyTableFilteredUpdateOwners } from './table-filtered-update-owner-fixture';
 import { expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
@@ -30,7 +31,7 @@ function mainPort() {
   let choose: () => Promise<string | undefined> = async () => undefined, choices = 0;
   const ramStore = { saveTask: (task: TaskRecord) => { records.push(task); }, queryFileSource: () => undefined, queryFileDocument: (id: string) => { if (id !== 'one') throw Error('未知文档'); return { token: document, tab }; }, queryFileSourceRecords: () => [], commitQueryFileSource: () => { throw Error('本例不得持久化'); }, releaseQueryFileSource: () => false, queryRecentFiles: () => [], queryRecentFile: () => undefined, forgetRecentFile: () => false };
   const service = new QueryFileSources({ store: ramStore, report: event => publish(event), choose: async () => { choices++; return choose(); }, reserve: async () => { throw Error('本例不得写文件'); } });
-  const context = createContext({ structureTokens: new Map(), sessions: new Map(), connectionConfig: { assertAvailable: (id: unknown) => { if (id !== undefined) throw Error('本地任务状态不得建立数据库目标'); } }, taskCancelSnapshot, tasks: new Map(), store: ramStore, completionTasks: new Set(), tableApplyReceipts: undefined, pendingQueryHistory: new Map(), exportProgress: new Map(), structureProgress: new Map(), lastPersist: new Map(), persistAuxiliary: (action: () => void) => action(), persistedTaskMessage, columnsMain: owner, queryFileSources: service, window, rendererURL: frame.url, validateCommand, shuttingDown: false, rendererSettingsCurrent: true, rendererHasSettings: true, queryFileOperations: new Set(), Error, Promise });
+  const context = createContext({ filteredUpdates: emptyTableFilteredUpdateOwners(), structureTokens: new Map(), sessions: new Map(), connectionConfig: { assertAvailable: (id: unknown) => { if (id !== undefined) throw Error('本地任务状态不得建立数据库目标'); } }, taskCancelSnapshot, tasks: new Map(), store: ramStore, completionTasks: new Set(), tableApplyReceipts: undefined, pendingQueryHistory: new Map(), exportProgress: new Map(), structureProgress: new Map(), lastPersist: new Map(), persistAuxiliary: (action: () => void) => action(), persistedTaskMessage, columnsMain: owner, queryFileSources: service, window, rendererURL: frame.url, validateCommand, shuttingDown: false, rendererSettingsCurrent: true, rendererHasSettings: true, queryFileOperations: new Set(), Error, Promise });
   // 仅补真实INSERT初始依赖，文件来源任务不被登记为INSERT；原query.cancel继续进入原服务。
   context.queryInsertExports = new QueryInsertExports(new Map(), {
     assert: value => owner.assertCapturedOwner(value), same: (left, right) => owner.sharesDocumentOwner(left, right),

@@ -1,5 +1,7 @@
 import { TableCopyDataTasks } from './tableCopyDataTasks';
 import { ResultInsertTasks } from './resultInsert';
+import { TableFilteredUpdateTasks } from './tableFilteredUpdate';
+import { tableFilteredUpdatePreviewInputSchema, tableFilteredUpdateApplyInputSchema, tableFilteredUpdateReleaseInputSchema } from '../shared/tableFilteredUpdate';
 import { resultInsertPreviewInputSchema, resultInsertApplyInputSchema, resultInsertReleaseInputSchema } from '../shared/resultInsert';
 import { TableCreateTasks } from './tableCreateTasks';
 import { readServerMonitor } from './serverMonitor';
@@ -109,6 +111,7 @@ export class Engine {
   private readonly pendingUses = new Set<Promise<void>>();
   private readonly resultFiles: ResultFileTasks;
   private readonly resultInserts: ResultInsertTasks;
+  private readonly tableFilteredUpdates: TableFilteredUpdateTasks;
   private readonly columnPatches: TableColumnPatchTasks;
   private readonly indexPatches: TableIndexPatchTasks;
   private readonly tableDataCopies: TableCopyDataTasks;
@@ -138,6 +141,8 @@ export class Engine {
     this.resultFiles = new ResultFileTasks(emit);
     // 整批写入与结构执行共用目标锁，COMMIT发出后取消只能等待真实结果。
     this.resultInserts = new ResultInsertTasks({ run: (target, taskId, action, progress, execution) => this.withIndependentTask(target.connectionId, taskId, (managed, control) => action({ managed, ...control }), undefined, execution ? '写入查询结果' : '预览查询结果写入', true, () => ({ resultInsert: { ...progress } }), false, undefined, execution ? { target, commitProtected: () => progress.commitMayHaveBeenSent } : undefined) });
+    // 全范围填充独占目标锁；COMMIT已发送后取消只能等待原ACK与严格关闭，不发送KILL。
+    this.tableFilteredUpdates = new TableFilteredUpdateTasks({ run: (target, taskId, action, progress, execution, finalize) => this.withIndependentTask(target.connectionId, taskId, (managed, control) => action({ managed, ...control }), undefined, execution ? '填充全部筛选匹配行' : '快照全部筛选匹配行', true, () => ({ tableFilteredUpdate: { ...progress } }), false, undefined, execution ? { target, commitProtected: () => progress.commitMayHaveBeenSent } : undefined, finalize), stop: taskId => this.stopIndependentRead(taskId) });
     this.schemaComparisons = new SchemaCompareTasks({ read: (target, taskId) => this.withIndependentTask(target.connectionId, taskId, (managed, control) => readSchemaComparisonTarget({ managed, ...control }, target), undefined, '只读结构比较', true, undefined, true), cancel: taskId => this.cancelTask(taskId) }, emit);
     this.columnPatches = new TableColumnPatchTasks({ run: (connectionId, taskId, action, options) => this.withIndependentTask(connectionId, taskId, (managed, control) => action({ managed, ...control }), { label: options.label, purpose: 'columns', progress: options.columnPatch, executionTarget: options.executionTarget }) }, undefined, this.structureCache);
     this.indexPatches = new TableIndexPatchTasks({ run: (connectionId, taskId, action, options) => this.withIndependentTask(connectionId, taskId, (managed, control) => action({ managed, ...control }), options) }, undefined, this.structureCache);
@@ -158,8 +163,16 @@ export class Engine {
 
   /** 主进程只注入可信 profile/filePath；其他字段按共享接口处理。 */
   async handle(command: EngineCommand, input: Input): Promise<any> {
-    if (this.closing && command !== 'result.insertRelease' && command !== 'schema.databaseDefaultEncoding.release' && command !== 'schema.databaseDrop.release') throw new Error('数据库引擎正在关闭，不能开始新操作');
+    if (this.closing && command !== 'table.filteredUpdate.release' && command !== 'result.insertRelease' && command !== 'schema.databaseDefaultEncoding.release' && command !== 'schema.databaseDrop.release') throw new Error('数据库引擎正在关闭，不能开始新操作');
     switch (command) {
+      case 'table.filteredUpdate.preview': case 'table.filteredUpdate.apply': {
+        const profile = input.profile as ConnectionProfile | undefined;
+        if (!profile || profile.id !== input.connectionId || !Number.isSafeInteger(input.connectionRevision) || input.connectionRevision < 0) throw Error('主进程未提供可信填充连接及修订');
+        if (!this.profiles.has(profile.id)) this.profiles.set(profile.id, profile);
+        const { profile: _profile, connectionRevision, ...request } = input;
+        return command === 'table.filteredUpdate.preview' ? this.tableFilteredUpdates.preview(tableFilteredUpdatePreviewInputSchema.parse(request), connectionRevision) : this.tableFilteredUpdates.apply(tableFilteredUpdateApplyInputSchema.parse(request), connectionRevision);
+      }
+      case 'table.filteredUpdate.release': return this.tableFilteredUpdates.release(tableFilteredUpdateReleaseInputSchema.parse(input));
       case 'result.insertPreview': case 'result.insertApply': {
         const profile = input.profile as ConnectionProfile | undefined;
         if (!profile || profile.id !== input.connectionId) throw Error('主进程未提供可信结果写入连接');
@@ -178,6 +191,7 @@ export class Engine {
         if (changed || !previous) this.profiles.delete(input.id);
         await this.schemaComparisons.close(input.id);
         this.resultInserts.releaseConnection(input.id);
+        await this.tableFilteredUpdates.releaseConnection(input.id);
         this.tableRenames.releaseConnection(input.id);
         this.databaseDrops.releaseConnection(input.id);
         this.structureCache.release(input.id);
@@ -211,6 +225,7 @@ export class Engine {
         this.disconnecting.add(input.id);
         try {
         const comparisonCleanup = this.schemaComparisons.close(input.id);
+        const filteredUpdateCleanup = this.tableFilteredUpdates.releaseConnection(input.id);
         this.resultInserts.releaseConnection(input.id);
         this.tableRenames.releaseConnection(input.id);
         this.databaseDrops.releaseConnection(input.id);
@@ -222,7 +237,7 @@ export class Engine {
         connecting.forEach(task => task.controller.abort());
         const active = [...this.tasks.values()].filter(task => task.managed.profile.id === input.id);
         const independent = [...this.independentTasks].filter(([, task]) => task.connectionId === input.id);
-        const cancellations = await Promise.allSettled([comparisonCleanup, ...active.map(task => this.cancelTask(task.id)), ...independent.map(([id]) => this.cancelTask(id))]);
+        const cancellations = await Promise.allSettled([comparisonCleanup, filteredUpdateCleanup, ...active.map(task => this.cancelTask(task.id)), ...independent.map(([id]) => this.cancelTask(id))]);
         await Promise.all([...connecting.map(task => task.done), ...active.map(task => task.done), ...independent.map(([, task]) => task.done)]);
         for (const [id, session] of this.sessions) if (session.connectionId === input.id) { await session.managed.close(); this.sessions.delete(id); }
         const recovered = await this.independentResources.recover(input.id);
@@ -548,6 +563,7 @@ export class Engine {
     try {
     this.excelConnecting.forEach(task => task.controller.abort());
     const comparisonCleanup = this.schemaComparisons.close();
+    const filteredUpdateCleanup = this.tableFilteredUpdates.close();
     this.resultInserts.close();
     this.tableRenames.releaseConnection();
     this.databaseDrops.releaseConnection();
@@ -555,7 +571,7 @@ export class Engine {
     const independent = [...this.independentTasks];
     const active = [...this.tasks.values()];
     const fileCleanup = Promise.all([this.resultFiles.closeAll(), this.excelReads.closeAll()]);
-    const cancellations = await Promise.allSettled([comparisonCleanup, ...active.map(task => this.cancelTask(task.id)), ...independent.map(([id]) => this.cancelTask(id))]);
+    const cancellations = await Promise.allSettled([comparisonCleanup, filteredUpdateCleanup, ...active.map(task => this.cancelTask(task.id)), ...independent.map(([id]) => this.cancelTask(id))]);
     await Promise.all([...active.map(task => task.done), ...independent.map(([, task]) => task.done)]);
     await fileCleanup;
     // 首个 await 之前已进入的建连也必须收尾，避免退出后迟到注册会话。
@@ -647,7 +663,7 @@ export class Engine {
   }
 
   /** 独立任务从建连前登记，到服务器及本地连接收尾后才释放编号和配置锁。 */
-  private async withIndependentTask<T>(connectionId: string, taskId: string, action: (managed: ManagedConnection, control: Omit<StructureTaskContext, 'managed'>) => Promise<T>, options?: StructureTaskOptions, readLabel?:string, strictRead=false,readDetail?:()=>Partial<TaskEvent>, quiet=false, fileFinalizer?: IndependentFileFinalizer<T>, dataWrite?: { target: { database: string; table: string }; commitProtected(): boolean }): Promise<T> {
+  private async withIndependentTask<T>(connectionId: string, taskId: string, action: (managed: ManagedConnection, control: Omit<StructureTaskContext, 'managed'>) => Promise<T>, options?: StructureTaskOptions, readLabel?:string, strictRead=false,readDetail?:()=>Partial<TaskEvent>, quiet=false, fileFinalizer?: IndependentFileFinalizer<T>, dataWrite?: { target: { database: string; table: string }; commitProtected(): boolean }, taskFinalizer?: (succeeded: boolean) => Promise<void>): Promise<T> {
     let resourcesStarted = false;
     return this.withConnectionUse(connectionId, async () => {
       if (this.closing || !taskId || this.taskIdInUse(taskId)) throw new Error('任务编号为空或任务已在执行');
@@ -711,6 +727,8 @@ export class Engine {
             else failure ??= error;
           }
         }
+        // 私有快照清理也保留原taskId、connectionUses及done，不借文件发布状态冒充数据库提交。
+        if (taskFinalizer) { try { await taskFinalizer(!failure && resourcesReleased && !task.cancelRequested && !controller.signal.aborted); } catch (error) { failure ??= error; } }
         this.independentTasks.delete(taskId); finish();
         // 新建表动作可因发送前取消失败，但严格收尾事实独立成立；未知DDL由用途自身继续保守锁定。
         if ((options?.purpose === 'tableCreate' && managed || options?.purpose === 'databaseDefaultEncoding') && resourcesReleased && !task.cancelError) options?.onResourcesReleased?.();

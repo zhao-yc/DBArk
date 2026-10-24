@@ -1,3 +1,4 @@
+import { emptyTableFilteredUpdateOwners } from './table-filtered-update-owner-fixture';
 import { readFileSync } from 'node:fs';
 import { createContext, runInContext } from 'node:vm';
 import ts from 'typescript';
@@ -15,7 +16,7 @@ function fixture() {
   if (start < 0 || end <= start) throw Error('生产分派入口已变化');
   const tasks = new Map<string, TaskRecord>(), events: TaskEvent[] = [], saves = vi.fn(), history = vi.fn(); let revision = 11;
   const profile = { id: 'connection', password: '仅内存合成凭据' }, request = vi.fn(async (_command: string, _input: any): Promise<any> => ({ rowCount: '18446744073709551615' })), assertAvailable = vi.fn();
-  const context = createContext({ Date, Map, Set, Error, SavedQuerySearchCancelled, tableApplyReceipts: undefined, savedQueryPages: undefined, historyPages: undefined, savedQuerySearches: { has: () => false }, tasks,
+  const context = createContext({ filteredUpdates: emptyTableFilteredUpdateOwners(), Date, Map, Set, Error, SavedQuerySearchCancelled, tableApplyReceipts: undefined, savedQueryPages: undefined, historyPages: undefined, savedQuerySearches: { has: () => false }, tasks,
     completionTasks: new Set(), pendingQueryHistory: new Map(), preparingTasks: new Map(), exportProgress: new Map(), structureProgress: new Map(), structureTokens: new Map(), sessions: new Map(), tablePresetReads: new Map(), shuttingDown: false,
     connectionConfig: { assertAvailable }, store: { saveTask: saves, addHistory: history, connectionRevision: () => revision, resolveConnection: (id: string) => { if (id !== profile.id) throw Error('未知连接'); return profile; } }, broker: { request },
     taskEvent(event: TaskEvent) { events.push(event); tasks.set(event.taskId, { ...tasks.get(event.taskId)!, status: event.status }); },

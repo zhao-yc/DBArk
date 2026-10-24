@@ -1,3 +1,4 @@
+import { emptyTableFilteredUpdateOwners } from './table-filtered-update-owner-fixture';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createRequire } from 'node:module';
 import { EventEmitter } from 'node:events';
@@ -40,7 +41,7 @@ function mainFixture() {
   }
   visit(tree); if (!manager || functions.length !== 3) throw Error('缺少生产处理器');
   request = vi.fn((command: string, input: unknown) => engine.handle(command as Parameters<Engine['handle']>[0], input as never));
-  const port = createContext({
+  const port = createContext({ filteredUpdates: emptyTableFilteredUpdateOwners(),
     // 未打开结果写入用途时的真实初始空协调器，不登记任务、预览或写入能力。
     resultInserts: { observe() {}, invalidateConnection(_connectionId: string) {}, engineExited() {}, has: (_taskId: string) => false },
      Error, Date, Map, Set, ConnectionConfigManager, revokeConnectionFiles, connectionReplacementText, resolveFileToken, validateCommand, store, broker: { request },

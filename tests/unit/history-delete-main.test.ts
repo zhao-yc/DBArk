@@ -1,3 +1,4 @@
+import { emptyTableFilteredUpdateOwners } from './table-filtered-update-owner-fixture';
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { build } from 'esbuild';
 import { createHash, randomUUID } from 'node:crypto';
@@ -66,7 +67,7 @@ function main(f: ReturnType<typeof fixture>) {
   const request = vi.fn(async () => { throw Error('历史清理不允许进入Engine'); });
   // 原dispatch在switch之前统一清理结构能力、解析会话及核配置锁；本例仅提供准确的空RAM状态。
   const assertAvailable = vi.fn((connectionId?: string) => { if (connectionId !== undefined) throw Error('历史清理不应绑定数据库连接'); });
-  const context: any = createContext({ Error, Map, Set, Date, window: f.window, rendererURL: f.frame.url, columnsMain: f.columnsMain, historyDelete: f.service, historyPages: undefined, savedQueryPages: undefined, savedQuerySearches: { has: () => false }, tasks: new Map(), completionTasks: new Set(), tablePresetReads: new Map(), structureTokens: new Map(), sessions: new Map(), connectionConfig: { assertAvailable }, queryInsertExports: { has: vi.fn(() => false) }, shuttingDown: false, localSearchOperations: new Set(), queryFileOperations: new Set(), store: f.store, broker: { request }, validateMainCommand: validateCommand });
+  const context: any = createContext({ filteredUpdates: emptyTableFilteredUpdateOwners(), Error, Map, Set, Date, window: f.window, rendererURL: f.frame.url, columnsMain: f.columnsMain, historyDelete: f.service, historyPages: undefined, savedQueryPages: undefined, savedQuerySearches: { has: () => false }, tasks: new Map(), completionTasks: new Set(), tablePresetReads: new Map(), structureTokens: new Map(), sessions: new Map(), connectionConfig: { assertAvailable }, queryInsertExports: { has: vi.fn(() => false) }, shuttingDown: false, localSearchOperations: new Set(), queryFileOperations: new Set(), store: f.store, broker: { request }, validateMainCommand: validateCommand });
   runInContext(ts.transpileModule(source.slice(start, end) + '\nglobalThis.dispatch=dispatch;globalThis.request=' + callback.getText(tree) + ';', { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText, context);
   return { context, request, ipc: (command: string, input: unknown) => context.request(f.event, { command, input }) as Promise<any> };
 }

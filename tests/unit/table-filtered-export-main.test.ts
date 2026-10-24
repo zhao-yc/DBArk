@@ -5,6 +5,7 @@ import ts from 'typescript';
 import { describe, expect, it, vi } from 'vitest';
 import { ColumnsMainCapabilities } from '../../src/main/columnsMainCapabilities';
 import { TableFilteredExportOwners } from '../../src/main/tableFilteredExportOwners';
+import { TableFilteredUpdateOwners } from '../../src/main/tableFilteredUpdateOwners';
 import { SavedQuerySearchCancelled } from '../../src/main/savedQuerySearch';
 import { resolveFileToken } from '../../src/main/fileTokens';
 import { persistedTaskMessage } from '../../src/main/taskPrivacy';
@@ -41,6 +42,8 @@ function fixture() {
     connectionConfig: { assertAvailable }, exportReservations: { acquire }, store: { saveTask: saves, addHistory: history, connectionRevision: () => revision, resolveConnection: (id: string) => { if (id !== profile.id) throw Error('未知连接'); return profile; } }, broker: { request }, validateMainCommand: validateCommand, SavedQuerySearchCancelled,
     taskEvent(event: TaskEvent) { events.push(event); tasks.set(event.taskId, { ...tasks.get(event.taskId)!, status: event.status }); },
   });
+  // 未登记跨页写入能力；仍使用真实owner协调器，意外越界即由原broker哨兵拒绝。
+  context.filteredUpdates = new TableFilteredUpdateOwners({ assert: value => columnsMain.assertCapturedOwner(value), same: (left, right) => columnsMain.sharesDocumentOwner(left, right), revision: () => revision, closing: () => false, available: assertAvailable, run: async () => { throw Error('导出夹具不登记填充任务'); }, release: async () => { throw Error('导出夹具不登记填充快照'); }, stop: async () => { throw Error('导出夹具不登记填充取消'); } });
   runInContext(ts.transpileModule(source.slice(start, end) + '\nglobalThis.dispatch=dispatch;\nglobalThis.handleRequest=' + callback.getText(tree) + ';', { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText, context);
   return { context, tasks, events, saves, history, files, profile, request, acquire, releaseTarget, owners, owner, contents, assertAvailable,
     revise() { revision++; owners.observe(); }, lock(value: boolean) { locked = value; }, navigate() { contents.emit('did-navigate'); },

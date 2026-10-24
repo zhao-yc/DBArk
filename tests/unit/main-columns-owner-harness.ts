@@ -9,6 +9,7 @@ import { validateCommand } from '../../src/shared/validation';
 import { SavedQuerySearchCancelled } from '../../src/main/savedQuerySearch';
 import { QueryFileSources } from '../../src/main/queryFileSources';
 import { QueryInsertExports } from '../../src/main/queryInsertExports';
+import { TableFilteredUpdateOwners } from '../../src/main/tableFilteredUpdateOwners';
 
 /** 可控等待只替换broker物理边界，真实Main dispatch/helper/IPC保持原文。 */
 export function deferred<T = any>() { let resolve!: (value: T) => void, reject!: (error: Error) => void; const promise = new Promise<T>((yes, no) => { resolve = yes; reject = no; }); return { promise, resolve, reject }; }
@@ -16,7 +17,7 @@ export function deferred<T = any>() { let resolve!: (value: T) => void, reject!:
 /** AST提取实际生产入口；不存在原函数或IPC回调时立即失败，不维护手写分发器副本。 */
 function productionParts() {
   const source = readFileSync(new URL('../../src/main/index.ts', import.meta.url), 'utf8'), tree = ts.createSourceFile('index.ts', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
-  const names = ['dispatch', 'engineExited', 'createWindow', 'validateMainCommand', 'cancelTablePresetRead', 'invalidateTablePresetSources'], parts: string[] = [];
+  const names = ['dispatch', 'engineExited', 'createWindow', 'validateMainCommand', 'cancelTablePresetRead', 'invalidateTablePresetSources', 'runTableFilteredUpdate'], parts: string[] = [];
   let wrapper = '';
   function visit(node: ts.Node) {
     if (ts.isFunctionDeclaration(node) && names.includes(node.name?.text ?? '')) parts.push(node.getText(tree));
@@ -35,6 +36,7 @@ function fakeWindow() {
   const contents: any = {
     mainFrame: frame, isDestroyed: () => contentsDestroyed,
     on(name: string, callback: Function) { listeners.set(name, [...listeners.get(name) ?? [], callback]); return contents; },
+    removeListener(name: string, callback: Function) { listeners.set(name, (listeners.get(name) ?? []).filter(value => value !== callback)); return contents; },
     emit(name: string, ...args: any[]) { for (const callback of listeners.get(name) ?? []) callback(...args); },
     send() {}, setWindowOpenHandler() {},
     session: { setPermissionRequestHandler() {}, setPermissionCheckHandler() {} }
@@ -61,10 +63,11 @@ export function mainColumnsHarness() {
   const context = createContext({
     // 未打开结果写入用途时的真实初始空协调器，不登记任务、预览或写入能力。
     resultInserts: { observe() {}, invalidateConnection(_connectionId: string) {}, engineExited() {}, has: (_taskId: string) => false }, resultInsertProgress: new Map(),
+    filteredUpdateProgress: new Map(),
 
     Date, Map, Error, Boolean, SavedQuerySearchCancelled, columnsMain: undefined, tablePresetSources: undefined, tablePresetReads: new Map(), window: undefined, structureTokens: tokens, tasks, structureProgress: progress, events,
     tableApplyReceipts: undefined, pendingQueryHistory: new Map(), completionTasks: new Set(), preparingTasks: new Map(), exportProgress: new Map(), sessions: new Map(),
-    savedQuerySearches: { has: () => false }, savedQueryPages: undefined, historyPages: undefined, localSearchOperations: new Set(), shuttingDown: false, shutdownComplete: false,
+    savedQuerySearches: { has: () => false }, savedQueryPages: undefined, historyPages: undefined, historyDelete: undefined, localSearchOperations: new Set(), shuttingDown: false, shutdownComplete: false,
     rendererSettingsCurrent: true, rendererURL: 'app://renderer', process: { resourcesPath: 'ram' }, __dirname: 'ram', join: (...parts: string[]) => parts.join('/'),
     app: { isPackaged: false, quit() {} }, files: new Map(),
     BrowserWindow: function () { const window = fakeWindow(); windows.push(window); return window; },
@@ -85,6 +88,11 @@ export function mainColumnsHarness() {
     connectionRevision: () => revision, assertAvailable: id => context.connectionConfig.assertAvailable(id), shuttingDown: () => context.shuttingDown,
     release: input => request('schema.columns.release', input) });
   context.columnsMain = capabilities;
+  // 原字段测试不登记本用途；若显式调用新命令，仍须走同一真实Main函数和owner检查。
+  context.filteredUpdates = new TableFilteredUpdateOwners({
+    assert: value => capabilities.assertCapturedOwner(value), same: (left, right) => capabilities.sharesDocumentOwner(left, right), revision: () => context.store.connectionRevision(), closing: () => context.shuttingDown,
+    available: id => context.connectionConfig.assertAvailable(id), run: (command, input, value) => context.runTableFilteredUpdate(command, input, value), release: input => request('table.filteredUpdate.release', input), stop: taskId => request('query.cancel', { taskId }),
+  });
   // 新Main wrapper/窗口监听读取真实INSERT归属表；初始无文件能力，不能以noop跳过撤销。
   context.queryInsertExports = new QueryInsertExports(context.files, {
     assert: value => capabilities.assertCapturedOwner(value), same: (left, right) => capabilities.sharesDocumentOwner(left, right),

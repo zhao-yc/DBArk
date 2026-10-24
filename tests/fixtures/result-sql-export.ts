@@ -1,3 +1,4 @@
+import { emptyTableFilteredUpdateOwners } from '../unit/table-filtered-update-owner-fixture';
 import { readFileSync } from 'node:fs';
 import { createContext, runInContext } from 'node:vm';
 import { randomUUID } from 'node:crypto';
@@ -16,7 +17,7 @@ export function resultSqlMain(filePath: string, request: (command: string, input
   const files = new Map<string, SelectedFile>(), previews = new ResultSqlPreviews(files), owner = {}, tasks = new Map<string, TaskRecord>();
   const state = { current: true }, commands: { command: string; input: any }[] = [];
   const invocation = { owner: { document: owner } };
-  const context = createContext({ Date, Map, Error, randomUUID, shuttingDown: false, files, resultSqlPreviews: previews, resolveFileToken,
+  const context = createContext({ filteredUpdates: emptyTableFilteredUpdateOwners(), Date, Map, Error, randomUUID, shuttingDown: false, files, resultSqlPreviews: previews, resolveFileToken,
     SavedQuerySearchCancelled: class extends Error {},
     columnsMain: { assertCapturedOwner(value: unknown) { if (value !== invocation || !state.current) throw Error('合成主文档已失效'); } },
     async chooseFile(input: any) { const token = randomUUID(); files.set(token, { path: filePath, purpose: input.purpose, format: input.format }); return { token, name: '结果.sql' }; },

@@ -1,4 +1,5 @@
 import { binaryCellFileOpenSchema, binaryCellFileSaveSchema } from './binaryCellFiles';
+import { tableFilteredUpdatePreviewInputSchema, tableFilteredUpdateApplyInputSchema, tableFilteredUpdateReleaseInputSchema } from './tableFilteredUpdate';
 import { fileImportTransactionMode, fileImportTransactionModeSchema } from './fileImportTransaction';
 import { importPresetListSchema, importPresetSaveSchema, importPresetDeleteSchema } from './importPresets';
 import { queryFileReloadSchemas } from './queryFileReload';
@@ -322,6 +323,9 @@ export const commandSchemas: Record<Command, z.ZodType> = {
   'queryFileSources.recent': queryRecentFilesSchema, 'queryFileSources.forgetRecent': queryRecentFileForgetSchema,
   'explainFiles.open': empty,
   'binaryCellFiles.open': binaryCellFileOpenSchema,
+  'table.filteredUpdate.preview': tableFilteredUpdatePreviewInputSchema,
+  'table.filteredUpdate.apply': tableFilteredUpdateApplyInputSchema,
+  'table.filteredUpdate.release': tableFilteredUpdateReleaseInputSchema,
   'binaryCellFiles.save': binaryCellFileSaveSchema,
   'schema.databaseDrop.get': z.object({ connectionId: id, database: databaseDropName, taskId: id }).strict(),
   'schema.databaseDrop.preview': z.object({ snapshotId: id, taskId: id }).strict(),

@@ -2,6 +2,7 @@ import type { Command } from './contracts';
 
 /** 预加载白名单不引入校验器或 Node 依赖；新增公开命令必须在编译时补齐。 */
 export const publicCommands: Record<Command, true> = {
+  'table.filteredUpdate.preview': true, 'table.filteredUpdate.apply': true, 'table.filteredUpdate.release': true,
   'binaryCellFiles.open': true, 'binaryCellFiles.save': true,
   'files.importPresets.list': true, 'files.importPresets.save': true, 'files.importPresets.delete': true,
   'result.insertPreview': true, 'result.insertApply': true, 'result.insertRelease': true,
