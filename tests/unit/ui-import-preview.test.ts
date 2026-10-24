@@ -18,6 +18,24 @@ function tableInfo(table = 'items'): TableInfo {
 }
 
 describe('文件导入预览的异步上下文', () => {
+  it('CSV标题默认兼容，关闭后预览身份不同，位置源键即使与目标同名也绝不自动映射', async () => {
+    const csv: ImportPreviewContext = { ...context, format: 'csv' }, positional = { ...csv, csvHasHeader: false };
+    expect(importPreviewKey(csv)).toBe(importPreviewKey({ ...csv, csvHasHeader: true })); expect(importPreviewKey(csv)).not.toBe(importPreviewKey(positional));
+    const positionalSample: ImportSample = { columns: ['第1列', '第2列'], rows: [{ 第1列: '首条数据', 第2列: '' }, { 第1列: '第二条', 第2列: '原文\n换行' }] };
+    const info = tableInfo(); info.columns.push({ ...info.columns[0], name: '第1列' });
+    const preview = vi.fn(async () => positionalSample), controller = new ImportPreviewController({ metadata: async () => info, preview }, () => {});
+    await controller.prepare(positional); expect(preview).toHaveBeenCalledExactlyOnceWith(positional); expect(controller.ready(positional)?.mapping).toEqual({ 第1列: '', 第2列: '' });
+    expect(controller.ready(csv)).toBeNull(); controller.setMapping(positional, '第1列', 'id'); controller.setMapping(positional, '第2列', 'content');
+    expect(controller.ready(positional)?.mapping).toEqual({ 第1列: 'id', 第2列: 'content' }); expect(controller.ready(positional)?.sample.rows[0]).toEqual({ 第1列: '首条数据', 第2列: '' });
+  });
+  it.each([false, true])('标题A→B→A保留最终预览，旧成功/失败不能覆盖（旧A失败=%s）', async failFirst => {
+    const csv: ImportPreviewContext = { ...context, format: 'csv' }, first = deferred<ImportSample>(), second = deferred<ImportSample>(), third = deferred<ImportSample>();
+    const preview = vi.fn().mockReturnValueOnce(first.promise).mockReturnValueOnce(second.promise).mockReturnValueOnce(third.promise), controller = new ImportPreviewController({ metadata: async () => tableInfo(), preview }, () => {});
+    const a = controller.prepare(csv); await Promise.resolve(); await Promise.resolve(); const b = controller.prepare({ ...csv, csvHasHeader: false }); await Promise.resolve(); await Promise.resolve(); const c = controller.prepare(csv); await Promise.resolve(); await Promise.resolve();
+    third.resolve(sample); await c; controller.setMapping(csv, 'content', 'id');
+    if (failFirst) { first.reject(Error('旧标题失败')); second.resolve({ columns: ['旧位置'], rows: [] }); } else { first.resolve({ columns: ['旧标题'], rows: [] }); second.reject(Error('旧位置失败')); }
+    await Promise.all([a, b]); expect(controller.ready(csv)?.sample).toEqual(sample); expect(controller.ready(csv)?.mapping.content).toBe('id'); expect(preview).toHaveBeenCalledTimes(3);
+  });
   it('分隔符属于预览身份，省略与显式逗号兼容，换参数即失效人工映射', async () => {
     const csv: ImportPreviewContext = { ...context, format: 'csv' };
     expect(importPreviewKey(csv)).toBe(importPreviewKey({ ...csv, csvDelimiter: ',' }));

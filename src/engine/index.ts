@@ -46,6 +46,7 @@ import { tableCopySourceLimits } from '../shared/tableCopySource';
 import {queryDatabaseFromSession} from '../shared/queryContext';
 import { csvCell, csvHeader, encodingName, previewFile, readRecords, readText } from './files';
 import { csvExportDelimiter } from '../shared/csvExport';
+import { csvImportHasHeader } from '../shared/csvImport';
 import { ResultFileTasks } from './resultFileTasks';
 import { TableColumnPatchTasks } from './tableColumnPatchTasks';
 import { TableIndexPatchTasks } from './tableIndexPatchTasks';
@@ -1315,6 +1316,11 @@ export class Engine {
 
   /** 文件导入每 500 行提交一批；当前批失败回滚，先前批已提交，并明确记录部分成功。 */
   private async importFile(task: RunningTask, input: Input, records?: AsyncIterable<DataRow>): Promise<{ rows: number; errors: string[] }> {
+    // 内部调用也不能把 CSV 标题选项混入 SQL、JSON 或 Excel，并在任何事务前校验。
+    if (Object.hasOwn(input, 'csvHasHeader')) {
+      if (typeof input.csvHasHeader !== 'boolean') throw new Error('CSV 首行字段名配置必须为布尔值');
+      csvImportHasHeader(input.format, input.csvHasHeader);
+    }
     if (input.format === 'sql') return this.importSql(task, input);
     if (!['csv', 'json'].includes(input.format) && !(input.format === 'xlsx' && records)) throw new Error('不支持的导入格式');
     const info = await metadata.tableInfo(task.managed, input.database, input.table);
@@ -1328,7 +1334,7 @@ export class Engine {
     let committed = 0, pending = 0, sourceLine = 0, committing = false;
     await this.statement(task, 'START TRANSACTION');
     try {
-      for await (const row of records ?? readRecords(input.filePath, input.format, input.encoding, input.csvDelimiter)) {
+      for await (const row of records ?? readRecords(input.filePath, input.format, input.encoding, input.csvDelimiter, input.csvHasHeader)) {
         this.checkCancelled(task); sourceLine++;
         const values = mapping.map(([source, target]) => {
           if (!Object.hasOwn(row, source)) throw new Error(`源记录缺少字段：${source}`);

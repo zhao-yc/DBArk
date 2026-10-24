@@ -7,7 +7,7 @@ import { parser } from 'stream-json';
 import { streamArray } from 'stream-json/streamers/StreamArray';
 import type { CellValue, DataRow } from '../shared/contracts';
 import { serializeCell } from './sql';
-import { csvImportDelimiter, type CsvImportDelimiter } from '../shared/csvImport';
+import { csvImportColumnName, csvImportDelimiter, csvImportHasHeader, type CsvImportDelimiter } from '../shared/csvImport';
 import type { CsvExportDelimiter } from '../shared/csvExport';
 
 /** 保存 JSON 数字的原始 token，避免经过 JavaScript 浮点数再序列化。 */
@@ -54,10 +54,13 @@ export function csvValue(value: string): CellValue {
 }
 
 /** JSON 顶层必须是对象数组；数字保留原始字符串，避免大整数在解析阶段舍入。 */
-export async function* readRecords(filePath: string, format: 'csv' | 'json', encoding: string, delimiter?: CsvImportDelimiter): AsyncGenerator<DataRow> {
+export async function* readRecords(filePath: string, format: 'csv' | 'json', encoding: string, delimiter?: CsvImportDelimiter, hasHeader?: boolean): AsyncGenerator<DataRow> {
   const selectedDelimiter = csvImportDelimiter(format, delimiter);
+  const selectedHasHeader = csvImportHasHeader(format, hasHeader);
+  // 所有配置先校验，错误选项不能触发文件打开或遗留尚未接入 pipeline 的句柄。
+  const selectedEncoding = encodingName(encoding);
   const source = createReadStream(filePath);
-  const decoder = iconv.decodeStream(encodingName(encoding)) as Transform;
+  const decoder = iconv.decodeStream(selectedEncoding) as Transform;
   const numberTokens = new Transform({ objectMode: true,
     /** 将数字 token 转为带标记的原始文本，同时保护合法原型同名键。 */
     transform(token, _encoding, callback) {
@@ -65,7 +68,7 @@ export async function* readRecords(filePath: string, format: 'csv' | 'json', enc
     callback(null, token.name === 'numberValue' ? { name: 'stringValue', value: new JsonNumber(token.value) } : token.name === 'keyValue' ? { ...token, value: jsonKeyPrefix + token.value } : token);
   } });
   const output = format === 'csv'
-    ? parse({ columns: false, delimiter: selectedDelimiter, bom: true, skip_empty_lines: true, max_record_size: 64 * 1024 * 1024 })
+    ? parse({ columns: false, delimiter: selectedDelimiter, bom: true, skip_empty_lines: selectedHasHeader, max_record_size: 64 * 1024 * 1024 })
     : streamArray({ highWaterMark: 16 });
   const completed = format === 'csv' ? pipeline(source, decoder, output) : pipeline(source, decoder, parser(), numberTokens, output);
   // 避免迭代器尚未挂接时上游读取错误成为未处理的 Promise rejection。
@@ -75,10 +78,15 @@ export async function* readRecords(filePath: string, format: 'csv' | 'json', enc
   try {
     for await (const item of output) {
       if (format === 'csv' && !headers) {
-        headers = (item as string[]).map(String);
-        if (new Set(headers).size !== headers.length || headers.some(name => !name.length)) throw new Error('CSV 标题不能包含重复或空字段名');
-        continue;
+        if (selectedHasHeader) {
+          headers = (item as string[]).map(String);
+          if (new Set(headers).size !== headers.length || headers.some(name => !name.length)) throw new Error('CSV 标题不能包含重复或空字段名');
+          continue;
+        }
+        // 首条数组同时确定列数并作为数据产出，不把重复值、空串或原型同名文字当标题。
+        headers = (item as string[]).map((_value, index) => csvImportColumnName(index));
       }
+      if (format === 'csv' && (item as string[]).length !== headers!.length) throw new Error('CSV 每行列数必须与首行一致');
       const record = format === 'csv' ? Object.fromEntries(headers!.map((name, index) => [name, item[index]])) : restoreKeys(item.value);
       if (!record || typeof record !== 'object' || Array.isArray(record)) throw new Error('导入文件每行必须是字段到值的对象');
       const row: DataRow = Object.create(null) as DataRow;
@@ -110,9 +118,10 @@ export async function* readText(filePath: string, encoding: string): AsyncGenera
 }
 
 /** 只读取前 20 条记录用于字段映射，提前结束时由生成器释放文件句柄。 */
-export async function previewFile(input: { filePath: string; format: 'csv' | 'json'; encoding: string; csvDelimiter?: CsvImportDelimiter }): Promise<{ columns: string[]; rows: DataRow[] }> {
+export async function previewFile(input: { filePath: string; format: 'csv' | 'json'; encoding: string; csvDelimiter?: CsvImportDelimiter; csvHasHeader?: boolean }): Promise<{ columns: string[]; rows: DataRow[] }> {
+  if (Object.hasOwn(input, 'csvHasHeader') && typeof input.csvHasHeader !== 'boolean') throw new Error('首行为标题选项必须为布尔值，且只适用于 CSV 导入');
   const rows: DataRow[] = [], columns = new Set<string>();
-  for await (const row of readRecords(input.filePath, input.format, input.encoding, input.csvDelimiter)) {
+  for await (const row of readRecords(input.filePath, input.format, input.encoding, input.csvDelimiter, input.csvHasHeader)) {
     rows.push(row); Object.keys(row).forEach(name => columns.add(name));
     if (rows.length >= 20) break;
   }

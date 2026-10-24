@@ -1,10 +1,11 @@
 import type { DataRow, TableInfo } from '../shared/contracts';
-import { csvImportDelimiter, type CsvImportDelimiter } from '../shared/csvImport';
+import { csvImportDelimiter, csvImportHasHeader, type CsvImportDelimiter } from '../shared/csvImport';
 
 export interface ImportPreviewTarget { connectionId: string; database: string; table: string; }
 export interface ImportPreviewContext extends ImportPreviewTarget {
   fileToken: string; format: 'csv' | 'json'; encoding: 'utf8' | 'utf16le' | 'gb18030';
   csvDelimiter?: CsvImportDelimiter;
+  csvHasHeader?: boolean;
 }
 export interface ImportSample { columns: string[]; rows: DataRow[]; }
 export interface ReadyImportPreview { key: string; status: 'ready'; info: TableInfo; sample: ImportSample; mapping: Record<string, string>; }
@@ -14,12 +15,12 @@ interface PreviewDependencies {
   preview: (context: ImportPreviewContext) => Promise<ImportSample>;
 }
 
-/** 元数据只按目标缓存，文件、格式、编码和分隔符另行组成预览标识。 */
+/** 元数据只按目标缓存，文件、格式、编码、分隔符和标题设置另行组成预览标识。 */
 function targetKey(target: ImportPreviewTarget): string { return JSON.stringify([target.connectionId, target.database, target.table]); }
 
 /** 使用结构化键避免名称分隔符碰撞；就绪判断在渲染阶段完成，不等待副作用失效旧状态。 */
 export function importPreviewKey(context: ImportPreviewContext): string {
-  return JSON.stringify([context.connectionId, context.database, context.table, context.fileToken, context.format, context.encoding, csvImportDelimiter(context.format, context.csvDelimiter)]);
+  return JSON.stringify([context.connectionId, context.database, context.table, context.fileToken, context.format, context.encoding, csvImportDelimiter(context.format, context.csvDelimiter), csvImportHasHeader(context.format, context.csvHasHeader)]);
 }
 
 /** 只有完整匹配当前上下文的预览可见且可导入，旧预览和失败状态均不能借用旧映射。 */
@@ -48,7 +49,9 @@ export class ImportPreviewController {
       const sample = await this.dependencies.preview(context);
       if (generation !== this.generation) return;
       const targets = new Set(info.columns.filter(column => !column.generated).map(column => column.name));
-      const mapping = Object.fromEntries(sample.columns.map(name => [name, targets.has(name) ? name : '']));
+      // 无标题CSV的源键仅表示列位置，即便目标恰好也叫“第1列”仍必须人工映射。
+      const automatic = context.format !== 'csv' || csvImportHasHeader(context.format, context.csvHasHeader);
+      const mapping = Object.fromEntries(sample.columns.map(name => [name, automatic && targets.has(name) ? name : '']));
       this.update({ key, status: 'ready', info, sample, mapping });
     } catch (reason) {
       if (generation === this.generation) this.update({ key, status: 'failed', error: reason instanceof Error ? reason.message : String(reason) });
