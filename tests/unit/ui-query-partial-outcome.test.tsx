@@ -27,7 +27,7 @@ function inspect(node: ts.Node) {
   if (ts.isJsxElement(node) && node.openingElement.tagName.getText(file) === 'button') {
     const value = node.getText(file); if (value.includes('onClick={() => void execute()}')) buttons.set('execute', value); if (value.includes('onClick={pinResult}')) buttons.set('pin', value); if (value.includes('onClick={exportVisibleResult}')) buttons.set('export', value);
   }
-  if (ts.isBinaryExpression(node) && node.left.getText(file) === 'outcome?.failure' && ts.isJsxSelfClosingElement(node.right) && node.right.tagName.getText(file) === 'QueryPartialOutcomeNotice') notice = node.getText(file);
+  if (ts.isBinaryExpression(node) && node.left.getText(file) === 'outcome?.failure && !outcome.scriptReport' && ts.isJsxSelfClosingElement(node.right) && node.right.tagName.getText(file) === 'QueryPartialOutcomeNotice') notice = node.getText(file);
   if (ts.isJsxExpression(node) && node.expression && ts.isCallExpression(node.expression) && node.expression.expression.getText(file) === 'results.map') resultTabs = node.getText(file);
   if (ts.isJsxSelfClosingElement(node) && node.tagName.getText(file) === 'QueryParametersDialog') { const prop = node.attributes.properties.find(value => ts.isJsxAttribute(value) && value.name.getText(file) === 'onExecute') as ts.JsxAttribute; if (prop.initializer && ts.isJsxExpression(prop.initializer)) parameterExecute = prop.initializer.expression!.getText(file); }
   ts.forEachChild(node, inspect);
@@ -40,6 +40,7 @@ for (const name of selected) if (!declarations.has(name)) throw Error('缺少真
 if (!subscription || !notice || !parameterExecute || !resultTabs || buttons.size !== 3) throw Error('真实QueryTab窄适配入口不完整');
 const harnessCode = `function Harness({port}) {
  const tab=port.tab, settings=port.workspace.settings, connection={}, connectionVersion=0;
+ const continueOnError=false,parameterContinueOnError={current:false};
  const busyRef=useRef(false), task=useRef(''), cancelledQuery=useRef(''), explainSource=useRef(''), sessionRef=useRef('session'), parameterSession=useRef('session'), editor={current:port.editor}, alive=useRef(true);
  const failureSource=useRef(undefined),parameterFailureSource=useRef(undefined),closeRequestRef=useRef(undefined);const [,refreshFailureSource]=useState(0);
  const [busy,setBusy]=useState(false),[queryRunning,setQueryRunning]=useState(false),[error,setError]=useState(''),[outcome,setOutcome]=useState(null),[stream,setStream]=useState([]),[resultIndex,setResultIndex]=useState(0),[transaction,setTransaction]=useState(false),[transactionKnown,setTransactionKnown]=useState(true),[sessionId,setSessionId]=useState('session'),[pins,setPins]=useState([]),[selectedPin,setSelectedPin]=useState(''),[showPinSql,setShowPinSql]=useState(false),[exportResult,setExportResult]=useState(null),[exportSelected,setExportSelected]=useState(false),[parameterSource,setParameterSource]=useState(port.sql);

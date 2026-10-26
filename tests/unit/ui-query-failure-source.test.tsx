@@ -16,7 +16,7 @@ let notice = '', parameterExecute = '', parameterClose = '', lifetime = '';
 /** 真实QueryTab的执行、参数确认、关闭和生命周期均原样抽取，RAM只提供外部端口。 */
 function inspect(node: ts.Node) {
   if (ts.isFunctionDeclaration(node) && node.name) functions.set(node.name.text, node.getText(tree));
-  if (ts.isBinaryExpression(node) && node.left.getText(tree) === 'outcome?.failure' && ts.isJsxSelfClosingElement(node.right)) notice = node.getText(tree);
+  if (ts.isBinaryExpression(node) && node.left.getText(tree) === 'outcome?.failure && !outcome.scriptReport' && ts.isJsxSelfClosingElement(node.right)) notice = node.getText(tree);
   if (ts.isExpressionStatement(node) && ts.isCallExpression(node.expression) && node.expression.expression.getText(tree) === 'useEffect' && node.getText(tree).includes('alive.current = true; return')) lifetime = node.getText(tree);
   if (ts.isJsxSelfClosingElement(node) && node.tagName.getText(tree) === 'QueryParametersDialog') for (const property of node.attributes.properties) { if (!ts.isJsxAttribute(property) || !property.initializer || !ts.isJsxExpression(property.initializer)) continue; if (property.name.getText(tree) === 'onExecute') parameterExecute = property.initializer.expression!.getText(tree); if (property.name.getText(tree) === 'onClose') parameterClose = property.initializer.expression!.getText(tree); }
   ts.forEachChild(node, inspect);
@@ -25,6 +25,7 @@ inspect(tree);
 const required = ['querySource', 'failureSourceScope', 'captureFailureSource', 'clearFailureSource', 'execute', 'currentStatementScope', 'executeCurrentStatement', 'openParameters', 'loadParameterNames', 'runQuery', 'handleQueryError', 'attachQueryEditor'];
 if (!notice || !parameterExecute || !parameterClose || !lifetime || required.some(name => !functions.has(name))) throw Error('真实定位入口不完整');
 const code = `function Harness({port}) {
+ const continueOnError=false,parameterContinueOnError={current:false};
  const tab=port.tab,settings=port.workspace.settings,editor=useRef(port.editor),alive=useRef(true),busyRef=useRef(false),sessionRef=useRef('session'),pendingSession=useRef(null),task=useRef(''),cancelledQuery=useRef(''),explainSource=useRef(''),parameterSession=useRef('session'),failureSource=useRef(undefined),parameterFailureSource=useRef(undefined),closeRequestRef=useRef(undefined),activeCurrentIntent=useRef(null),fileModelAttached=useRef(false),formatting=useRef(null),duplicateIntent=useRef(null),closeIntent=useRef(null),closeBusy=useRef(null);
  const [outcome,setOutcome]=useState(null),[stream,setStream]=useState([]),[busy,setBusy]=useState(false),[error,setError]=useState(''),[parameterSource,setParameterSource]=useState(null),[,refreshFailureSource]=useState(0);
  const noop=()=>{},setQueryRunning=noop,setSelectedPin=noop,setShowPinSql=noop,setResultIndex=noop,setSessionId=noop,setTransaction=noop,setTransactionKnown=noop,setSearchEditor=noop;

@@ -40,6 +40,7 @@ import type { HistoryDeletePreviewInput, HistoryDeletePreviewOutput, HistoryDele
 import type { ExplainPlan } from './explain';
 import type { QueryAnalyzePlan } from './queryAnalyze';
 import type { QueryTransactionSettingsSnapshot, QueryTransactionIsolation } from './queryTransactionSettings';
+import type { QueryScriptReport } from './queryContinueOnError';
 import type { PlanSnapshotDocument } from './explainSnapshot';
 import type { DatabaseDefaultEncodingGetInput, DatabaseDefaultEncodingGetOutput, DatabaseDefaultEncodingPreviewInput, DatabaseDefaultEncodingPreviewOutput, DatabaseDefaultEncodingApplyInput, DatabaseDefaultEncodingApplyOutput, DatabaseDefaultEncodingReleaseInput } from './databaseDefaultEncoding';
 import type { WorkbenchTarget, WorkbenchSnapshot } from './workbench';
@@ -71,7 +72,7 @@ export interface ForeignKeyInfo { name: string; columns: string[]; referencedDat
 export interface TableInfo { database: string; name: string; columns: ColumnInfo[]; indexes: IndexInfo[]; foreignKeys: ForeignKeyInfo[]; primaryKey: string[]; editableKey: string[]; engine: string; ddl: string; charset?: string; collation?: string; comment?: string; /** 来自可信 information_schema.TABLES；未知类型不通过空 engine 推测。 */ objectKind?: 'table' | 'view'; }
 export interface ResultColumn { key: string; name: string; type: string; }
 export interface QueryResult { columns: ResultColumn[]; rows: DataRow[]; affectedRows?: number; insertId?: string; warningCount?: number; truncated: boolean; elapsedMs: number; statement: string; }
-export interface QueryOutcome { results: QueryResult[]; elapsedMs: number; transactionOpen?: boolean; explain?: ExplainPlan; /** 独立于估算计划；该结果来自用户明确确认后的实际执行。 */ analysis?: QueryAnalyzePlan; /** 首错停止后只携带此前完整结果；失败语句不保证未执行，也不会自动重放。 */ failure?: import('./queryFailure').QueryFailure; }
+export interface QueryOutcome { results: QueryResult[]; elapsedMs: number; transactionOpen?: boolean; explain?: ExplainPlan; /** 独立于估算计划；该结果来自用户明确确认后的实际执行。 */ analysis?: QueryAnalyzePlan; /** 默认首错停止；显式遇错继续也只保留完整结果，失败语句不保证未执行且不重放。 */ failure?: import('./queryFailure').QueryFailure; /** 仅显式遇错继续携带，不改变默认首错停止回包。 */ scriptReport?: QueryScriptReport; }
 export type FilterMode = 'all' | 'any';
 /** 数字引用同一filters数组位置；每条条件（含停用）在完整树中恰好出现一次。 */
 export interface FilterGroup { readonly mode: FilterMode; readonly children: readonly (number | FilterGroup)[]; }
@@ -194,7 +195,7 @@ export interface CommandMap {
   'metadata.ddl': { input: { connectionId: string; database: string; name: string; kind: ObjectKind }; output: string };
   'sessions.open': { input: { connectionId: string; database?: string|null }; output: { sessionId: string } };
   'sessions.close': { input: { sessionId: string }; output: void };
-  'query.execute': { input: { sessionId: string; sql: string; taskId: string; maxRows: number; /** 同一Monaco模型全文中的UTF-16光标；缺省保持原选区/全部行为。 */ currentStatement?: { offset: number } }; output: QueryOutcome };
+  'query.execute': { input: { sessionId: string; sql: string; taskId: string; maxRows: number; continueOnError?: boolean; /** 同一Monaco模型全文中的UTF-16光标；缺省保持原选区/全部行为。 */ currentStatement?: { offset: number } }; output: QueryOutcome };
   'query.explain': { input: { sessionId: string; sql: string; taskId: string; maxRows: number; format?: 'auto' | 'text' }; output: QueryOutcome };
   'query.analyze': { input: { sessionId: string; sql: string; taskId: string; maxRows: number; acknowledged: true; expectedDatabase: string | null }; output: QueryOutcome };
   'query.analyzeContext': { input: { sessionId: string; taskId: string }; output: CompletionSessionState };
@@ -204,7 +205,7 @@ export interface CommandMap {
   'query.temporaryState':{input:{sessionId:string};output:SessionObjectSnapshot};
   'query.temporaryCompletion':{input:{sessionId:string;database:string;prefix:string;kind:'objects'}|{sessionId:string;database:string;table:string;prefix:string;kind:'columns';details?:true};output:SessionObjectCompletion};
   'query.temporaryRead':{input:{sessionId:string;database:string;table:string;taskId:string};output:SessionObjectReadResult};
-  'query.executeParameterized': { input: { sessionId: string; sql: string; parameters: QueryParameter[]; taskId: string; maxRows: number }; output: QueryOutcome };
+  'query.executeParameterized': { input: { sessionId: string; sql: string; parameters: QueryParameter[]; taskId: string; maxRows: number; continueOnError?: boolean }; output: QueryOutcome };
   'query.exportStream': { input: QueryStreamExportInput; output: QueryStreamExportOutput };
   'query.confirmInsertExport': { input: import('zod').infer<typeof import('./queryInsertExport').queryInsertConfirmationSchema>; output: void };
   'query.cancel': { input: { taskId: string }; output: void };

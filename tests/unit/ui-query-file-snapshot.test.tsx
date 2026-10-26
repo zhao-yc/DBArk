@@ -175,7 +175,8 @@ describe('0.29真实QueryTab外部检查与当前草稿重载（RAM）', () => {
     return editor;
   }
   async function accept() {
-    const checkbox = document.body.querySelectorAll('input').find(node => node.type === 'checkbox'); expect(checkbox).toBeDefined();
+    const reload = document.body.querySelector(`[aria-label="${reloadText.title}"]`); expect(reload).not.toBeNull();
+    const checkbox = reload!.querySelectorAll('input').find(node => node.type === 'checkbox'); expect(checkbox).toBeDefined();
     await act(async () => { checkbox!.checked = true; checkbox!.dispatchEvent(new MemoryEvent('click')); });
   }
   it('显示有界只读差异与dirty确认，预览零保存；确认只更新原模型及ref/EOL/摘要', async () => {

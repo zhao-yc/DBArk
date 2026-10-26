@@ -52,3 +52,12 @@ diff --git a/lib/commands/command.js b/lib/commands/command.js
        if (this.queryTimeout) {
          Timers.clearTimeout(this.queryTimeout);
          this.queryTimeout = null;
+diff --git a/lib/packets/packet.js b/lib/packets/packet.js
+--- a/lib/packets/packet.js
++++ b/lib/packets/packet.js
+@@ -223,3 +223,4 @@ class Packet {
+   eofStatusFlags() {
+-    return this.buffer.readInt16LE(this.offset + 3);
++    // EOF状态为无符号16位；保留MariaDB ANSI_QUOTES高位及原事务/模式位。
++    return this.buffer.readUInt16LE(this.offset + 3);
+   }
