@@ -88,6 +88,8 @@ jobs:
       - name: 编译既有Mac显示租约程序并记录实际镜像
         if: steps.mac-keeper-context.outputs.enabled == 'true'
         shell: bash
+        env:
+          MODE_KEEPER_RUNNER_ENVIRONMENT: ${{ runner.environment }}
         run: |
           set -euo pipefail
           mkdir -p .cache/macos-mode-keeper
@@ -99,6 +101,10 @@ jobs:
           } > .cache/macos-mode-keeper/context.log 2>&1
           cat .cache/macos-mode-keeper/context.log
           test "$(/usr/bin/uname -m)" = arm64
+          mkdir -p .cache/macos-mode-keeper/preflight
+          /usr/bin/xcrun swiftc scripts/v028-probe-macos-display.swift -o .cache/macos-mode-keeper/preflight/probe > .cache/macos-mode-keeper/preflight/compile.log 2>&1
+          .cache/macos-mode-keeper/preflight/probe > .cache/macos-mode-keeper/preflight/inventory.json 2> .cache/macos-mode-keeper/preflight/stderr.log
+          cat .cache/macos-mode-keeper/preflight/inventory.json
           if /usr/bin/xcrun swiftc scripts/macos-mode-keeper.swift -o .cache/macos-mode-keeper/keeper > .cache/macos-mode-keeper/compile.log 2>&1; then
             cat .cache/macos-mode-keeper/compile.log
           else
@@ -183,6 +189,8 @@ jobs:
           path: |
             .cache/macos-mode-keeper/context.log
             .cache/macos-mode-keeper/compile.log
+            .cache/macos-mode-keeper/preflight/*.json
+            .cache/macos-mode-keeper/preflight/*.log
             .cache/macos-mode-keeper/source/
             .cache/macos-mode-keeper/installed/
           include-hidden-files: true
