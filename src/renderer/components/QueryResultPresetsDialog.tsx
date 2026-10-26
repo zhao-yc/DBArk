@@ -7,6 +7,14 @@ import { zh } from '../locales/zh-CN';
 import { Modal, ErrorBox, Spinner } from './ui';
 import '../queryResultPresets.css';
 
+/** 原始列序号与显示名一起标明边界，重复别名不会混淆保存的唯一键。 */
+function frozenSummary(value:QueryResultPresetValue):string {
+  if(value.frozenThrough===undefined)return text.notFrozen;
+  const position=value.columns.findIndex(column=>column.key===value.frozenThrough);
+  if(position<0||!value.visible.some(column=>column.key===value.frozenThrough))return text.frozenUnavailable;
+  return text.frozenThrough(position+1,value.columns[position].name||zh.resultExport.emptyName);
+}
+
 /** 预览完整层级及原文，名称只用于显示；实际应用仍核字段唯一键及完整类型。 */
 function ExpressionPreview({ group, value }: { group: QueryResultFilterGroup; value: QueryResultPresetValue }) {
   return <ul><li><strong>{group.mode === 'AND' ? filterText.and : filterText.or}</strong>{!group.children.length && <span> · {text.noFilters}</span>}<ul>{group.children.map((node, index) => 'children' in node ? <li key={index}><ExpressionPreview group={node} value={value}/></li> : <li key={index}>
@@ -84,12 +92,12 @@ export function QueryResultPresetsDialog({ connectionId, value, owner, isCurrent
   /** 请求未结算时保留窗口；导航/卸载仍会撤销所有迟到回调。 */
   function close() { if (!operation.current) onClose(); }
   return <div data-query-result-presets-owner={owner}><Modal title={text.title} onClose={close} wide><div className="modal-content query-result-presets">
-    <p>{text.scope}</p><p className="muted small">{text.hint} {text.current}：{text.summary(value.columns.length, value.visible.length)}</p>
+    <p>{text.scope}</p><p className="muted small">{text.hint} {text.current}：{text.summary(value.columns.length, value.visible.length)}</p><p aria-label={text.currentFrozen}>{frozenSummary(value)}</p>
     <label>{text.choose}<select aria-label={text.choose} value={draft.selected} disabled={!valid || busy} onChange={event => { const entry = snapshot?.entries.find(item => item.id === event.target.value); change({ selected: entry?.id ?? '', name: entry?.name ?? '' }); }}><option value="">{text.placeholder}</option>{snapshot?.entries.map(entry => <option key={entry.id} value={entry.id}>{entry.name}</option>)}</select></label>
     <label>{text.name}<input aria-label={text.name} maxLength={queryResultPresetLimits.name} disabled={!valid || busy} value={draft.name} onChange={event => change({ ...draft, name: event.target.value })}/></label>
     {!snapshot?.entries.length && !busy && !error && <p>{text.empty}</p>}
     <div className="query-result-preset-actions"><button disabled={!valid || busy} onClick={() => void load()}>{text.refresh}</button><button disabled={!writable || !validName || snapshot?.entries.some(entry => entry.name === name)} onClick={() => void mutate('create')}>{text.create}</button><button disabled={!writable || !selected || !validName || duplicate} onClick={() => void mutate('overwrite')}>{text.overwrite}</button><button disabled={!writable || !selected || !validName || duplicate || name === selected.name} onClick={() => void mutate('rename')}>{text.rename}</button><button disabled={!writable || !selected} onClick={() => void mutate('delete')}>{text.remove}</button></div>
-    {selected && <section className="query-result-preset-preview" aria-label={text.preview}><strong>{selected.name} · {text.summary(selected.value.columns.length, selected.value.visible.length)}</strong><h3>{text.filters}</h3><ExpressionPreview group={selected.value.configuration.expression} value={selected.value}/><h3>{text.sort}</h3>{selected.value.configuration.sort.length ? <ol>{selected.value.configuration.sort.map((rule, index) => <li key={index}>{selected.value.columns.find(column => column.key === rule.column)?.name || rule.column} · {rule.direction === 'ASC' ? text.asc : text.desc} · {rule.nulls === 'FIRST' ? text.nullFirst : rule.nulls === 'LAST' ? text.nullLast : text.nullDefault}{rule.ignoreCase && ` · ${text.ignoreCase}`}</li>)}</ol> : <p>{text.noSort}</p>}</section>}
+    {selected && <section className="query-result-preset-preview" aria-label={text.preview}><strong>{selected.name} · {text.summary(selected.value.columns.length, selected.value.visible.length)}</strong><p aria-label={text.savedFrozen}>{frozenSummary(selected.value)}</p><h3>{text.filters}</h3><ExpressionPreview group={selected.value.configuration.expression} value={selected.value}/><h3>{text.sort}</h3>{selected.value.configuration.sort.length ? <ol>{selected.value.configuration.sort.map((rule, index) => <li key={index}>{selected.value.columns.find(column => column.key === rule.column)?.name || rule.column} · {rule.direction === 'ASC' ? text.asc : text.desc} · {rule.nulls === 'FIRST' ? text.nullFirst : rule.nulls === 'LAST' ? text.nullLast : text.nullDefault}{rule.ignoreCase && ` · ${text.ignoreCase}`}</li>)}</ol> : <p>{text.noSort}</p>}</section>}
     {selected && !connectionMatches && <ErrorBox message={text.connectionChanged}/>} {selected && !valueMatches && <ErrorBox message={text.mismatch}/>} {!valid && <ErrorBox message={text.stale}/>}<ErrorBox message={error}/>{needsRefresh && <p>{text.refreshNeeded}</p>}{busy && <Spinner text={text.working}/>}
   </div><footer className="modal-footer"><span className="grow"/><button disabled={busy} onClick={close}>{zh.common.close}</button><button className="primary" disabled={!writable || !selected || !connectionMatches || !valueMatches} onClick={() => void apply()}>{text.apply}</button></footer></Modal></div>;
 }

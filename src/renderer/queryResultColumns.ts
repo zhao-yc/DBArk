@@ -1,7 +1,7 @@
 import type { DataRow, QueryResult, ResultColumn, ResultExportData } from '../shared/contracts';
 import { resultExportLimits, validateResultExportData } from '../shared/resultExport';
 
-export interface QueryResultColumnLayout { order: string[]; visible: string[]; }
+export interface QueryResultColumnLayout { order: string[]; visible: string[]; frozenThrough?: string; }
 /** 内部唯一key才是身份；显示别名允许重复，元数据预算保持原上限。 */
 export function queryResultColumnKeys(columns: ResultColumn[]): string[] {
   if (!columns.length || columns.length > resultExportLimits.columns) throw Error('结果列数量超出可管理范围');
@@ -13,14 +13,36 @@ export function queryResultColumnKeys(columns: ResultColumn[]): string[] {
 export function queryResultVisibleColumns(columns: ResultColumn[], layout: QueryResultColumnLayout): ResultColumn[] {
   const keys = queryResultColumnKeys(columns), actual = new Set(keys), visible = new Set(layout.visible);
   if (layout.order.length !== keys.length || new Set(layout.order).size !== keys.length || layout.order.some(key => !actual.has(key)) || !visible.size || visible.size !== layout.visible.length || layout.visible.some(key => !actual.has(key))) throw Error('结果列布局已失效');
+  const frozen = Object.getOwnPropertyDescriptor(layout, 'frozenThrough');
+  if (frozen && (!('value' in frozen) || !frozen.enumerable || typeof frozen.value !== 'string' || !frozen.value.length || !visible.has(frozen.value))) throw Error('结果冻结边界必须是当前可见的精确内部列键');
   const map = new Map(columns.map(column => [column.key,column]));
   return layout.order.filter(key => visible.has(key)).map(key => map.get(key)!);
+}
+/** 冻结标记只接受布局中的可见唯一key，重名显示别名不会参与身份判断。 */
+export function setQueryResultFrozenThrough(layout: QueryResultColumnLayout, key?: string): QueryResultColumnLayout {
+  const output: QueryResultColumnLayout = { order: [...layout.order], visible: [...layout.visible] };
+  if (key === undefined) return output;
+  const available = new Set(output.order);
+  if (typeof key !== 'string' || !key.length || key.length > 4096 || output.order.length > resultExportLimits.columns || output.order.some(value => typeof value !== 'string' || !value.length) || available.size !== output.order.length || new Set(output.visible).size !== output.visible.length || output.visible.some(value => !available.has(value)) || !available.has(key) || !output.visible.includes(key)) throw Error('结果冻结边界必须是当前可见的精确唯一内部列键');
+  return { ...output, frozenThrough: key };
+}
+/** 只从已验证的当前可见顺序取前缀；元数据或边界失效时安全解除，不猜测其他列。 */
+export function frozenQueryResultKeys(columns: ResultColumn[], layout: QueryResultColumnLayout): string[] {
+  const frozen = Object.getOwnPropertyDescriptor(layout, 'frozenThrough');
+  if (!frozen || !('value' in frozen) || !frozen.enumerable || typeof frozen.value !== 'string' || !frozen.value.length) return [];
+  try {
+    const visible = queryResultVisibleColumns(columns, { order: layout.order, visible: layout.visible }).map(column => column.key), index = visible.indexOf(frozen.value);
+    return index < 0 ? [] : visible.slice(0, index + 1);
+  } catch { return []; }
 }
 /** 相邻移动只修改有界列布局，行数组及原结果完全不变。 */
 export function moveQueryResultColumn(layout: QueryResultColumnLayout, key: string, direction: -1 | 1): QueryResultColumnLayout {
   const index=layout.order.indexOf(key), target=index+direction;
   if (index < 0 || direction !== -1 && direction !== 1 || target < 0 || target >= layout.order.length) return layout;
-  const order=[...layout.order];[order[index],order[target]]=[order[target],order[index]];return {order,visible:layout.visible};
+  const order=[...layout.order];[order[index],order[target]]=[order[target],order[index]];
+  const frozen = Object.getOwnPropertyDescriptor(layout, 'frozenThrough');
+  const frozenThrough = frozen && 'value' in frozen && frozen.enumerable && typeof frozen.value === 'string' && order.filter(value => value === frozen.value).length === 1 && layout.visible.includes(frozen.value) ? frozen.value : undefined;
+  return {order,visible:layout.visible,...(frozenThrough === undefined ? {} : {frozenThrough})};
 }
 /** 在打开导出或接纳行选择时才投影；逐行计量，超预算即停，绝不复制隐藏单元格。 */
 export function projectQueryResultRows(result: QueryResult, columns: ResultColumn[], indices?: readonly number[]): ResultExportData {

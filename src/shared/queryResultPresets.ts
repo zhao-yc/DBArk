@@ -8,7 +8,7 @@ export interface QueryResultFilterGroup { readonly mode: QueryResultFilterMode; 
 export interface QueryResultSortRule { column: string; direction: 'ASC' | 'DESC'; nulls?: 'FIRST' | 'LAST'; ignoreCase?: boolean; }
 export interface QueryResultOrganization { readonly expression: QueryResultFilterGroup; readonly sort: readonly QueryResultSortRule[]; }
 /** 只保存完整字段身份与整理配置，任何行、SQL及文件路径均不属于方案。 */
-export interface QueryResultPresetValue { readonly columns: readonly ResultColumn[]; readonly visible: readonly ResultColumn[]; readonly configuration: QueryResultOrganization; }
+export interface QueryResultPresetValue { readonly columns: readonly ResultColumn[]; readonly visible: readonly ResultColumn[]; readonly configuration: QueryResultOrganization; readonly frozenThrough?: string; }
 export const queryResultPresetLimits = { name: 80, perConnection: 100, connections: 500, entries: 1000, entryBytes: 512 * 1024, totalBytes: 8 * 1024 * 1024, valueUnits: 128 * 1024 } as const;
 const structure = { columns: 1024, conditions: 32, groups: 16, depth: 8, members: 128, literalUnits: 4096 } as const;
 const operators = new Set<QueryResultFilterOperator>(['contains', 'notContains', 'startsWith', 'notStartsWith', 'endsWith', 'notEndsWith', 'like', 'notLike', 'empty', 'notEmpty', 'eq', 'ne', 'gt', 'gte', 'lt', 'lte', 'between', 'notBetween', 'in', 'notIn', 'null', 'notNull']);
@@ -66,9 +66,12 @@ function parseValue(input: unknown): QueryResultPresetValue {
     if (new Set(output.map(column => column.key)).size !== output.length) return invalid();
     return output;
   }
-  const source = record(input, ['columns', 'visible', 'configuration']);
+  const source = record(input, ['columns', 'visible', 'configuration', 'frozenThrough'], ['columns', 'visible', 'configuration']);
   const all = columns(source.columns), visible = columns(source.visible), available = new Set(visible.map(column => column.key));
   for (const column of visible) if (!all.some(other => other.key === column.key && other.name === column.name && other.type === column.type)) return invalid();
+  // 可选字段存在时也必须有效，undefined不能冒充省略；冻结仅绑定当前可见内部key。
+  const frozenThrough = Object.hasOwn(source, 'frozenThrough') ? string(source.frozenThrough, 1, 4096) : undefined;
+  if (frozenThrough !== undefined && !available.has(frozenThrough)) return invalid();
   /** 所有叶（包括停用叶）保留原值及选项；仅核结构，不把数字或日期转成Main比较值。 */
   function rule(value: unknown): QueryResultFilterRule {
     if (++conditions > structure.conditions) return invalid();
@@ -119,7 +122,7 @@ function parseValue(input: unknown): QueryResultPresetValue {
     return output;
   });
   if (new Set(sort.map(item => item.column)).size !== sort.length) return invalid();
-  const output: QueryResultPresetValue = { columns: all, visible, configuration: { expression, sort } };
+  const output: QueryResultPresetValue = { columns: all, visible, configuration: { expression, sort }, ...(frozenThrough === undefined ? {} : { frozenThrough }) };
   if (JSON.stringify(output).length > queryResultPresetLimits.valueUnits) throw Error('查询结果方案超过128 Ki UTF-16单元容量');
   return output;
 }

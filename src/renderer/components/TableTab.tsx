@@ -64,7 +64,7 @@ import { patchReferenceRow, referenceWritable, referencesForColumn, type Referen
 import { referenceZh } from '../locales/references.zh-CN';
 import type { CellValue, ForeignKeyInfo } from '../../shared/contracts';
 import type { TablePreferences } from '../../shared/tablePreferences';
-import { changeTablePreference, moveTableColumn, reconcileTablePreferences, visibleTableKeys } from '../tableColumnPreferences';
+import { changeTablePreference, moveTableColumn, reconcileTablePreferences, visibleTableKeys, frozenTableKeys } from '../tableColumnPreferences';
 import { applyPageReplacement, type PageOccurrence, type PageReplacement } from '../pageFindReplace';
 import { PageFindPanel } from './PageFindPanel';
 import { TablePreferencesDialog } from './TablePreferencesDialog';
@@ -327,6 +327,8 @@ export function TableTab({ tab, onOpenGeneratedQuery, onQueryTemplateNavigation,
   useEffect(() => () => recordPages.cancel(), [recordPages]);
   const editable = !recordReadonlyReason({ ...getRecordContext(), busy: false });
   const visibleKeys = useMemo(() => visibleTableKeys(reconcileTablePreferences(page?.columns.map(column => column.key) ?? [], preferences)), [page?.columns, preferences]);
+  // 冻结边界和可见列使用同一真实结构调和，只标记前缀，不重排原值或读取数据库。
+  const frozenKeys = useMemo(() => frozenTableKeys(reconcileTablePreferences(page?.columns.map(column => column.key) ?? [], preferences)), [page?.columns, preferences]);
   const visibleColumns = useMemo(() => { const source = new Map(page?.columns.map(column => [column.key, column]) ?? []); return visibleKeys.map(key => source.get(key)!); }, [page?.columns, visibleKeys]);
   const pageFindContext = useRef<{ values: unknown[]; generation: number }>({ values: [], generation: 0 });
   /** 任意草稿或上下文变化都递增查找代次；应用时同步重算，不能覆盖同轮事件的新草稿。 */
@@ -890,13 +892,13 @@ export function TableTab({ tab, onOpenGeneratedQuery, onQueryTemplateNavigation,
     catch (reason) { setError(errorMessage(reason)); }
   }
   const columns = useMemo<Column<DraftRow>[]>(() => [SelectColumn, ...visibleColumns.map<Column<DraftRow>>(column => ({
-    key: column.key, name: column.name, minWidth: 64, maxWidth: 2000, width: preferences.columns.find(item => item.name === column.key)?.width ?? 165, resizable: true, sortable: true, draggable: true,
+    key: column.key, name: column.name, minWidth: 64, maxWidth: 2000, width: preferences.columns.find(item => item.name === column.key)?.width ?? 165, frozen: frozenKeys.includes(column.key), resizable: true, sortable: true, draggable: true,
     // 组件的editable同时控制粘贴派发；只读判断保持不变，二进制另在文本入口拦截。
     editable: row => !record.dirty && !recordReadonlyReason(getRecordContext(), row, column.key),
     renderEditCell: props => <TextCellEditor {...props} onEditingChange={onGridEditingChange} binary={isBinaryCell(ownCell(props.row.data, column.key), info?.columns.find(item => item.name === column.key)?.type)}/>,
     renderHeaderCell: () => <span className="data-header">{info?.primaryKey.includes(column.key) && <KeyRound size={11}/>}<span>{column.name}<small className="column-type">{column.type}</small></span></span>,
     renderCell: ({ row, tabIndex }) => { const value = ownCell(row.data, column.key); return <DataTypeColor enabled={settings.dataTypeColors === true} selected={tabIndex === 0 || selectedRows.has(row.id)} value={value} type={settings.dataTypeColors === true ? catalogColorType(info?.columns, column.key) : undefined} source="catalog" className={value === null ? 'null-value' : value === undefined ? 'default-value' : ''} title={value === undefined ? zh.common.defaultValue : cellPreview(value)}>{value === undefined ? zh.common.defaultValue : cellPreview(value)}</DataTypeColor>; }
-  }))], [visibleColumns, preferences, editable, info, blocked, record.dirty, externalStale, settings.dataTypeColors, settings.dataTypeColors === true ? selectedRows : null]);
+  }))], [visibleColumns, preferences, frozenKeys, editable, info, blocked, record.dirty, externalStale, settings.dataTypeColors, settings.dataTypeColors === true ? selectedRows : null]);
   /** 刷新后网格可能保留同一活动坐标；点击也须用当前行同步选择，不能只等待坐标变化。 */
   function selectCurrentCell(row: DraftRow | undefined, key: string | undefined) {
     // 先永久撤销旧意图；忙碌时忽略新选择也不能让切走再切回的回包复活。
