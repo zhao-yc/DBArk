@@ -39,6 +39,7 @@ import type{HistoryPageInput,HistoryPage,HistoryOpenResult}from'./historyPages';
 import type { HistoryDeletePreviewInput, HistoryDeletePreviewOutput, HistoryDeleteApplyInput, HistoryDeleteApplyOutput, HistoryDeleteReleaseInput } from './historyDelete';
 import type { ExplainPlan } from './explain';
 import type { QueryAnalyzePlan } from './queryAnalyze';
+import type { QueryTransactionSettingsSnapshot, QueryTransactionIsolation } from './queryTransactionSettings';
 import type { PlanSnapshotDocument } from './explainSnapshot';
 import type { DatabaseDefaultEncodingGetInput, DatabaseDefaultEncodingGetOutput, DatabaseDefaultEncodingPreviewInput, DatabaseDefaultEncodingPreviewOutput, DatabaseDefaultEncodingApplyInput, DatabaseDefaultEncodingApplyOutput, DatabaseDefaultEncodingReleaseInput } from './databaseDefaultEncoding';
 import type { WorkbenchTarget, WorkbenchSnapshot } from './workbench';
@@ -208,6 +209,9 @@ export interface CommandMap {
   'query.confirmInsertExport': { input: import('zod').infer<typeof import('./queryInsertExport').queryInsertConfirmationSchema>; output: void };
   'query.cancel': { input: { taskId: string }; output: void };
   'query.transaction': { input: { sessionId: string; action: 'begin' | 'commit' | 'rollback' }; output: void };
+  /** 仅原会话默认事务属性；读取与应用均使用独立任务，不隐式提交。 */
+  'query.transactionSettings.read': { input: { sessionId: string; taskId: string }; output: QueryTransactionSettingsSnapshot };
+  'query.transactionSettings.apply': { input: { sessionId: string; taskId: string; expected: QueryTransactionSettingsSnapshot; isolation: QueryTransactionIsolation; readOnly: boolean }; output: QueryTransactionSettingsSnapshot };
   'table.page': { input: { connectionId: string; database: string; table: string; page: number; pageSize: number; filters: FilterRule[]; filterMode?: FilterMode; filterGroup?: FilterGroup; sort: SortRule[]; copySource?: boolean; taskId?: string }; output: TablePage };
   'table.copySourceRead': { input: TableCopySourceReadInput; output: TableCopySourceReadResult };
   'table.copySourceRelease': { input: TableCopySourceReleaseInput; output: void };

@@ -79,6 +79,7 @@ import { explainQuery } from './queryExplain';
 import { explainLimits } from '../shared/explain';
 import { analyzeQuery } from './queryAnalyze';
 import { queryAnalyzeCapability } from '../shared/queryAnalyze';
+import { applyQueryTransactionSettings, readQueryTransactionSettings, queryTransactionSettingsMayHaveChanged, type QueryTransactionSettingsContext } from './queryTransactionSettings';
 import { consumeQueryFrames } from './queryStreamProtocol';
 import { prepareTableFilteredExport, type PreparedTableFilteredExport } from './tableFilteredExport';
 import { tableFilteredExportText } from '../shared/tableFilteredExport';
@@ -92,6 +93,7 @@ interface RunningTask {
   cancelPending?: Promise<void>; serverStatus?: number; done: Promise<void>; finish(): void;
   tableApply?: TableApplyEvidence;
   queryExport?: QueryExportProgress; fileCommitStarted?: boolean;
+  transactionSettingsChangeSubmitted?: boolean;
   fileImport?: { committing: boolean; finalCommit: boolean; commitAcknowledged: boolean; committedRows: number; result?: { rows: number; errors: string[] }; failure?: Error };
 }
 interface ResultBudget { remainingRows: number; remainingBytes: number; remainingResults: number; }
@@ -420,6 +422,17 @@ export class Engine {
         const actions: Record<string, string> = { begin: 'START TRANSACTION', commit: 'COMMIT', rollback: 'ROLLBACK' };
         if (!Object.hasOwn(actions, input.action)) throw new Error('事务操作无效');
         await execute(managed, actions[input.action]);
+      });
+      case 'query.transactionSettings.read': return this.withSession(input.sessionId, managed => this.runTask(input.taskId, managed, '读取本会话事务默认设置', task => readQueryTransactionSettings(this.transactionSettingsContext(managed, task))));
+      case 'query.transactionSettings.apply': return this.withSession(input.sessionId, async managed => {
+        let setMayHaveBeenSent = false;
+        try {
+          return await this.runTask(input.taskId, managed, '修改本会话事务默认设置', task => applyQueryTransactionSettings(input.expected, input.isolation, input.readOnly, this.transactionSettingsContext(managed, task, () => { setMayHaveBeenSent = true; })));
+        } catch (error) {
+          // runTask尾部也会检查取消；SET已发后此处仍须保留“可能改变”的边界。
+          if (setMayHaveBeenSent) throw queryTransactionSettingsMayHaveChanged(error);
+          throw error;
+        }
       });
       case 'table.copySourceRead': {
         this.copySourceProfile(input);
@@ -879,12 +892,19 @@ export class Engine {
         return { affectedRows: task.tableApply.serverReportedRows } as T;
       }
       if (task.fileImport?.failure) { await task.cancelPending?.catch(() => undefined); error = task.fileImport.failure; }
-      else await task.cancelPending;
+      else if (task.transactionSettingsChangeSubmitted) {
+        try { await task.cancelPending; }
+        catch (cancelError) { error = new AggregateError([error, cancelError], '本会话设置执行与取消收尾失败'); }
+      } else await task.cancelPending;
+      if (task.transactionSettingsChangeSubmitted) error = queryTransactionSettingsMayHaveChanged(error);
       this.emit({ taskId: id, status: task.cancelled && !task.fileCommitStarted ? 'cancelled' : 'failed', progress: 0, message: this.errorMessage(error), ...(task.queryExport ? { queryExport: { ...task.queryExport } } : {}) });
       throw error;
     } finally {
       // 取消连接仍在建立时，不能放开会话给下一条查询，以免 KILL 误伤复用线程。
-      if (task.tableApply?.commitAcknowledged || task.fileImport?.commitAcknowledged || task.fileImport?.failure) await task.cancelPending?.catch(() => undefined); else await task.cancelPending;
+      if (task.tableApply?.commitAcknowledged || task.fileImport?.commitAcknowledged || task.fileImport?.failure) await task.cancelPending?.catch(() => undefined);
+      // 本功能取消收尾的原错误已在catch合并；finally仍须释放任务，不能再次抛出覆盖终态。
+      else if (task.transactionSettingsChangeSubmitted) await task.cancelPending?.catch(() => undefined);
+      else await task.cancelPending;
       this.tasks.delete(id); task.finish();
     }
   }
@@ -1070,6 +1090,31 @@ export class Engine {
       return rows;
     }
     finally { task.inFlight = false; await task.cancelPending; }
+  }
+
+  /** 固定诊断不走结果流或执行历史；清掉旧状态后只采信本条命令的新协议包。 */
+  private transactionSettingsContext(managed: ManagedConnection, task: RunningTask, onSetSent?: () => void): QueryTransactionSettingsContext {
+    return {
+      status: managed.status, physicalId: () => managed.connection.threadId,
+      check: () => { this.checkCancelled(task); if (managed.broken) throw Error('原会话连接已断开；不会自动重连或重放'); },
+      protocolState: () => ({ known: managed.transactionStateKnown === true, broken: managed.broken, serverStatus: managed.serverStatus }),
+      onSetSent: () => { task.transactionSettingsChangeSubmitted = true; onSetSent?.(); },
+      query: async (sql, onSend) => {
+        this.checkCancelled(task);
+        if (managed.broken) throw Error('原会话连接已断开；不会自动重连或重放');
+        task.inFlight = true; task.generation++;
+        managed.transactionStateKnown = false; managed.serverStatus = undefined;
+        try {
+          // 标记位与驱动投递在同一同步调用栈；投递后失败不能自动重试设置。
+          onSend?.();
+          const result = await execute<unknown>(managed, sql);
+          if (result.rows && typeof result.rows === 'object' && 'serverStatus' in result.rows && Number.isInteger(result.rows.serverStatus)) {
+            managed.serverStatus = Number(result.rows.serverStatus); managed.transactionStateKnown = true;
+          }
+          return result;
+        } finally { task.inFlight = false; await task.cancelPending; }
+      },
+    };
   }
 
   /** 工作台与完整导出共用唯一调度器；每次消费一条，实际执行结束后才按会话模式解释尾部。 */

@@ -6,6 +6,7 @@ import { importPresetListSchema, importPresetSaveSchema, importPresetDeleteSchem
 import { queryFileReloadSchemas } from './queryFileReload';
 import { resultInsertPreviewInputSchema, resultInsertApplyInputSchema, resultInsertReleaseInputSchema } from './resultInsert';
 import { parsePlanSnapshot } from './explainSnapshot';
+import { queryTransactionSettingsReadSchema, queryTransactionSettingsApplySchema } from './queryTransactionSettings';
 import { databaseDefaultEncodingAcknowledgements } from './databaseDefaultEncoding';
 import { assertSqlKeywordCaseWrite } from './sqlKeywordCase';
 import { snippetTransferSchemas } from './snippetTransfer';
@@ -205,6 +206,8 @@ export const commandSchemas: Record<Command, z.ZodType> = {
   'query.confirmInsertExport': queryInsertConfirmationSchema,
   'query.cancel': z.object({ taskId: id }).strict(),
   'query.transaction': z.object({ sessionId: id, action: z.enum(['begin','commit','rollback']) }).strict(),
+  'query.transactionSettings.read': queryTransactionSettingsReadSchema,
+  'query.transactionSettings.apply': queryTransactionSettingsApplySchema,
   'table.page': guardedTablePage(tablePage.safeExtend({ copySource: z.boolean().optional(), taskId: z.string().uuid().optional() }).superRefine((input, context) => {
     if (input.copySource && !input.taskId || input.taskId && !input.copySource) context.addIssue({ code: 'custom', message: '来源表页必须同时显式启用copySource并提供独立任务UUID' });
   })),

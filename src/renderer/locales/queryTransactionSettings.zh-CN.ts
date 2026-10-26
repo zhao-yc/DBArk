@@ -1,0 +1,14 @@
+export const queryTransactionSettingsZh = {
+  open: '事务设置', title: '本会话事务默认设置', connection: '原查询连接',
+  isolation: 'SESSION 默认事务隔离级别', readOnly: 'SESSION 默认只读事务',
+  refresh: '重新读取本会话设置', apply: '应用到本会话', close: '关闭', dismiss: '关闭事务设置对话框',
+  physicalId: '服务器连接 ID', serverVersion: '实际服务器版本', database: '实际默认库',
+  transaction: '协议当前事务', autocommit: '自动提交（autocommit）', status: '事务设置状态',
+  none: '无默认库', yes: '开启', no: '关闭', loading: '正在读取本会话设置…', applying: '正在应用到本会话…',
+  ready: '已读取本会话默认设置', applied: '已应用并读取本会话默认设置', retry: '设置尚未确认，请显式重新读取后再应用。',
+  changed: '原标签、活动标签、连接或会话已变化，本次设置已失效，请关闭后重新打开。',
+  busy: '标签已有活动作业，请等待完成后再操作。',
+  activeTransaction: '原会话正在事务中，可以读取；请先显式提交或回滚，再重新读取后修改默认值。',
+  defaultsNotice: '这里只设置原会话的 SESSION 默认值，不代表当前事务的实际隔离级别或读写属性；一次性事务 SQL 可以覆盖默认值。设置不会自动提交、回滚或重连。',
+  diagnosticsNotice: '读取会改变原会话的 ROW_COUNT()、FOUND_ROWS() 和警告等诊断信息；已有可视查询结果保持不变。设置不保存到连接配置，重新打开时重新读取。',
+} as const;
