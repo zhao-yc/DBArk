@@ -1,3 +1,4 @@
+import { emptyTableFilteredDeleteOwners } from './table-filtered-delete-owner-fixture';
 import { emptyTableFilteredUpdateOwners } from './table-filtered-update-owner-fixture';
 import { readFileSync } from 'node:fs';
 import { runInNewContext } from 'node:vm';
@@ -22,7 +23,7 @@ it('原Main before-quit先被真实dirty提示阻塞，确认后仅沿原收尾�
   const shutdownOrder: string[] = [];
   // 未打开结果写入用途时的真实初始空协调器，退出没有待等待的写入任务或预览。
   const resultInserts = { async drain() {} };
-  const callback = (statement.expression as ts.CallExpression).arguments[1], main: any = { filteredUpdates: emptyTableFilteredUpdateOwners(), resultInserts, shutdownComplete: false, shuttingDown: false, hasPendingEdits: true, tasks: new Map(), window: f.owner, dialog: f.dialog, rendererHasSettings: false, stateFlushed: undefined, savedQuerySearches: undefined, savedQueryPages: undefined, historyPages: undefined, historyDelete: { close: vi.fn(async () => { await Promise.resolve(); shutdownOrder.push('history-delete'); }) }, localSearchOperations: [], queryFileOperations: [], broker: { close: vi.fn(async () => {}) }, tableApplyReceipts: undefined, store: { close: vi.fn(() => { shutdownOrder.push('store'); }) }, app: f.app, event: { preventDefault: vi.fn() }, setTimeout };
+  const callback = (statement.expression as ts.CallExpression).arguments[1], main: any = { filteredDeletes: emptyTableFilteredDeleteOwners(), filteredUpdates: emptyTableFilteredUpdateOwners(), resultInserts, shutdownComplete: false, shuttingDown: false, hasPendingEdits: true, tasks: new Map(), window: f.owner, dialog: f.dialog, rendererHasSettings: false, stateFlushed: undefined, savedQuerySearches: undefined, savedQueryPages: undefined, historyPages: undefined, historyDelete: { close: vi.fn(async () => { await Promise.resolve(); shutdownOrder.push('history-delete'); }) }, localSearchOperations: [], queryFileOperations: [], broker: { close: vi.fn(async () => {}) }, tableApplyReceipts: undefined, store: { close: vi.fn(() => { shutdownOrder.push('store'); }) }, app: f.app, event: { preventDefault: vi.fn() }, setTimeout };
   const document = { sql: draftSql, dirty: true }, before = { ...document }; await installSqlFilesDirtyExitAnswer(f.application, f.choice);
   runInNewContext(ts.transpileModule('(' + callback.getText(tree) + ')(event)', { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText, main);
   expect(main.event.preventDefault).toHaveBeenCalledOnce(); expect(f.events).toEqual(['DBARK_SQL_FILES_DIRTY_PENDING:' + f.choice.nonce]); expect(f.app.quit).not.toHaveBeenCalled(); expect(main.broker.close).not.toHaveBeenCalled(); expect(main.historyDelete.close).not.toHaveBeenCalled(); expect(f.dialog.showMessageBox).toBe(f.original);

@@ -1,3 +1,4 @@
+import { emptyTableFilteredDeleteOwners } from './table-filtered-delete-owner-fixture';
 import { emptyTableFilteredUpdateOwners } from './table-filtered-update-owner-fixture';
 import { readFileSync } from 'node:fs';
 import { createContext, runInContext } from 'node:vm';
@@ -11,7 +12,7 @@ function harness(shuttingDown = false) {
   const body = source.slice(source.indexOf('async function dispatch('), source.indexOf('/** 按平台生成中文原生菜单'));
   const snapshot = { revision: 2, connections: [] }, get = vi.fn(() => snapshot), apply = vi.fn(() => snapshot), available = vi.fn(), request = vi.fn(() => { throw Error('不允许引擎调用'); });
   const tasks = new Map(), has = vi.fn(() => false), invalidateAll = vi.fn();
-  const context = createContext({ filteredUpdates: emptyTableFilteredUpdateOwners(),
+  const context = createContext({ filteredDeletes: emptyTableFilteredDeleteOwners(), filteredUpdates: emptyTableFilteredUpdateOwners(),
     // 未打开结果写入用途时的真实初始空协调器，不登记任务、预览或写入能力。
     resultInserts: { observe() {}, invalidateConnection(_connectionId: string) {}, engineExited() {}, has: (_taskId: string) => false },
      shuttingDown, tasks, queryInsertExports: { has, invalidateAll }, connectionOrganizationZh, structureTokens: new Map(), sessions: new Map(), savedQueryPages: undefined, historyPages: undefined, store: { connectionOrganization: get, applyConnectionOrganization: apply }, connectionConfig: { assertAvailable: available }, broker: { request } });

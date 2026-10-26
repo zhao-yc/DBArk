@@ -1,3 +1,4 @@
+import { tableFilteredDeletePreviewInputSchema, tableFilteredDeleteApplyInputSchema, tableFilteredDeleteReleaseInputSchema } from './tableFilteredDelete';
 import { binaryCellFileOpenSchema, binaryCellFileSaveSchema } from './binaryCellFiles';
 import { tableFilteredUpdatePreviewInputSchema, tableFilteredUpdateApplyInputSchema, tableFilteredUpdateReleaseInputSchema } from './tableFilteredUpdate';
 import { fileImportTransactionMode, fileImportTransactionModeSchema } from './fileImportTransaction';
@@ -323,6 +324,9 @@ export const commandSchemas: Record<Command, z.ZodType> = {
   'queryFileSources.recent': queryRecentFilesSchema, 'queryFileSources.forgetRecent': queryRecentFileForgetSchema,
   'explainFiles.open': empty,
   'binaryCellFiles.open': binaryCellFileOpenSchema,
+  'table.filteredDelete.preview': tableFilteredDeletePreviewInputSchema,
+  'table.filteredDelete.apply': tableFilteredDeleteApplyInputSchema,
+  'table.filteredDelete.release': tableFilteredDeleteReleaseInputSchema,
   'table.filteredUpdate.preview': tableFilteredUpdatePreviewInputSchema,
   'table.filteredUpdate.apply': tableFilteredUpdateApplyInputSchema,
   'table.filteredUpdate.release': tableFilteredUpdateReleaseInputSchema,

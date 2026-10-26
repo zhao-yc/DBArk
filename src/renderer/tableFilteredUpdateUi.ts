@@ -54,11 +54,18 @@ export function checkTableFilteredUpdateApplied(value:unknown,preview:TableFilte
   return output;
 }
 /** 原任务进度只单调保留发送/ACK事实；旧事件不能撤回COMMIT或提前解锁取消。 */
-export function mergeTableFilteredUpdateProgress(before:TableFilteredUpdateProgress|undefined,value:unknown,expectedRows?:number):TableFilteredUpdateProgress|undefined {
-  const parsed=tableFilteredUpdateProgressSchema.safeParse(value);if(!parsed.success)return before;const next=parsed.data;
-  if(next.commitAcknowledged&&(!next.commitMayHaveBeenSent||!next.transactionProtected||next.outcome!=='committed'||expectedRows===undefined||next.rows!==expectedRows||next.totalRows!==expectedRows))return before;
-  const output={...next,dmlMayHaveBeenSent:!!before?.dmlMayHaveBeenSent||next.dmlMayHaveBeenSent,commitMayHaveBeenSent:!!before?.commitMayHaveBeenSent||next.commitMayHaveBeenSent,commitAcknowledged:!!before?.commitAcknowledged||next.commitAcknowledged,rollbackAcknowledged:!!before?.rollbackAcknowledged||next.rollbackAcknowledged,transactionProtected:!!before?.transactionProtected||next.transactionProtected};
-  if(output.commitAcknowledged)output.outcome='committed';else if(output.rollbackAcknowledged&&output.transactionProtected&&!output.commitMayHaveBeenSent)output.outcome='rolled-back';else if(before?.outcome==='unknown'||output.dmlMayHaveBeenSent&&next.outcome==='not-sent')output.outcome='unknown';return output;
+export function mergeTableFilteredUpdateProgress(before: TableFilteredUpdateProgress | undefined, value: unknown, expectedRows?: number): TableFilteredUpdateProgress | undefined {
+  const parsed = tableFilteredUpdateProgressSchema.safeParse(value); if (!parsed.success) return before; const next = parsed.data;
+  // Main可能已记账失保护，但真实COMMIT ACK仍优先；准确发送/用途/全量行数门继续成立。
+  if (next.commitAcknowledged && (!next.commitMayHaveBeenSent || next.outcome !== 'committed' || expectedRows === undefined || next.rows !== expectedRows || next.totalRows !== expectedRows)) return before;
+  // 发送DML后失去事务保护永久保持；初始或迟到prepare未发送DML的false不抹掉真实保护。
+  const protectionLost = !!before?.dmlMayHaveBeenSent && !before.transactionProtected || next.dmlMayHaveBeenSent && !next.transactionProtected;
+  const output = { ...next, dmlMayHaveBeenSent: !!before?.dmlMayHaveBeenSent || next.dmlMayHaveBeenSent, commitMayHaveBeenSent: !!before?.commitMayHaveBeenSent || next.commitMayHaveBeenSent, commitAcknowledged: !!before?.commitAcknowledged || next.commitAcknowledged, rollbackAcknowledged: !!before?.rollbackAcknowledged || next.rollbackAcknowledged, transactionProtected: !protectionLost && (!!before?.transactionProtected || next.transactionProtected) };
+  if (output.commitAcknowledged) { output.outcome = 'committed'; if (before?.commitAcknowledged) { output.rows = before.rows; output.totalRows = before.totalRows; } }
+  else if (output.dmlMayHaveBeenSent && !output.transactionProtected) output.outcome = 'unknown';
+  else if (output.rollbackAcknowledged && output.transactionProtected && !output.commitMayHaveBeenSent) output.outcome = 'rolled-back';
+  else if (before?.outcome === 'unknown' || output.dmlMayHaveBeenSent && next.outcome === 'not-sent') output.outcome = 'unknown';
+  return output;
 }
 /** 共享快照不允许被子组件原地改写。 */
 function freeze<T>(value:T):T {if(value&&typeof value==='object'){for(const child of Object.values(value))freeze(child);Object.freeze(value);}return value;}

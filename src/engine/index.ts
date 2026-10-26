@@ -1,6 +1,8 @@
 import { TableCopyDataTasks } from './tableCopyDataTasks';
 import { ResultInsertTasks } from './resultInsert';
 import { TableFilteredUpdateTasks } from './tableFilteredUpdate';
+import { TableFilteredDeleteTasks } from './tableFilteredDelete';
+import { tableFilteredDeletePreviewInputSchema, tableFilteredDeleteApplyInputSchema, tableFilteredDeleteReleaseInputSchema } from '../shared/tableFilteredDelete';
 import { tableFilteredUpdatePreviewInputSchema, tableFilteredUpdateApplyInputSchema, tableFilteredUpdateReleaseInputSchema } from '../shared/tableFilteredUpdate';
 import { resultInsertPreviewInputSchema, resultInsertApplyInputSchema, resultInsertReleaseInputSchema } from '../shared/resultInsert';
 import { TableCreateTasks } from './tableCreateTasks';
@@ -112,6 +114,7 @@ export class Engine {
   private readonly resultFiles: ResultFileTasks;
   private readonly resultInserts: ResultInsertTasks;
   private readonly tableFilteredUpdates: TableFilteredUpdateTasks;
+  private readonly tableFilteredDeletes: TableFilteredDeleteTasks;
   private readonly columnPatches: TableColumnPatchTasks;
   private readonly indexPatches: TableIndexPatchTasks;
   private readonly tableDataCopies: TableCopyDataTasks;
@@ -143,6 +146,8 @@ export class Engine {
     this.resultInserts = new ResultInsertTasks({ run: (target, taskId, action, progress, execution) => this.withIndependentTask(target.connectionId, taskId, (managed, control) => action({ managed, ...control }), undefined, execution ? '写入查询结果' : '预览查询结果写入', true, () => ({ resultInsert: { ...progress } }), false, undefined, execution ? { target, commitProtected: () => progress.commitMayHaveBeenSent } : undefined) });
     // 全范围填充独占目标锁；COMMIT已发送后取消只能等待原ACK与严格关闭，不发送KILL。
     this.tableFilteredUpdates = new TableFilteredUpdateTasks({ run: (target, taskId, action, progress, execution, finalize) => this.withIndependentTask(target.connectionId, taskId, (managed, control) => action({ managed, ...control }), undefined, execution ? '填充全部筛选匹配行' : '快照全部筛选匹配行', true, () => ({ tableFilteredUpdate: { ...progress } }), false, undefined, execution ? { target, commitProtected: () => progress.commitMayHaveBeenSent } : undefined, finalize), stop: taskId => this.stopIndependentRead(taskId) });
+    // 删除在独立用途和目标执行锁中运行；提交可能发送后只等待原ACK，不重放或KILL。
+    this.tableFilteredDeletes = new TableFilteredDeleteTasks({ run: (target, taskId, action, progress, execution, finalize) => this.withIndependentTask(target.connectionId, taskId, (managed, control) => action({ managed, ...control }), undefined, execution ? '删除全部筛选匹配行' : '快照全部筛选匹配行', true, () => ({ tableFilteredDelete: { ...progress } }), false, undefined, execution ? { target, commitProtected: () => progress.commitMayHaveBeenSent } : undefined, finalize), stop: taskId => this.stopIndependentRead(taskId) });
     this.schemaComparisons = new SchemaCompareTasks({ read: (target, taskId) => this.withIndependentTask(target.connectionId, taskId, (managed, control) => readSchemaComparisonTarget({ managed, ...control }, target), undefined, '只读结构比较', true, undefined, true), cancel: taskId => this.cancelTask(taskId) }, emit);
     this.columnPatches = new TableColumnPatchTasks({ run: (connectionId, taskId, action, options) => this.withIndependentTask(connectionId, taskId, (managed, control) => action({ managed, ...control }), { label: options.label, purpose: 'columns', progress: options.columnPatch, executionTarget: options.executionTarget }) }, undefined, this.structureCache);
     this.indexPatches = new TableIndexPatchTasks({ run: (connectionId, taskId, action, options) => this.withIndependentTask(connectionId, taskId, (managed, control) => action({ managed, ...control }), options) }, undefined, this.structureCache);
@@ -163,8 +168,16 @@ export class Engine {
 
   /** 主进程只注入可信 profile/filePath；其他字段按共享接口处理。 */
   async handle(command: EngineCommand, input: Input): Promise<any> {
-    if (this.closing && command !== 'table.filteredUpdate.release' && command !== 'result.insertRelease' && command !== 'schema.databaseDefaultEncoding.release' && command !== 'schema.databaseDrop.release') throw new Error('数据库引擎正在关闭，不能开始新操作');
+    if (this.closing && command !== 'table.filteredDelete.release' && command !== 'table.filteredUpdate.release' && command !== 'result.insertRelease' && command !== 'schema.databaseDefaultEncoding.release' && command !== 'schema.databaseDrop.release') throw new Error('数据库引擎正在关闭，不能开始新操作');
     switch (command) {
+      case 'table.filteredDelete.preview': case 'table.filteredDelete.apply': {
+        const profile = input.profile as ConnectionProfile | undefined;
+        if (!profile || profile.id !== input.connectionId || !Number.isSafeInteger(input.connectionRevision) || input.connectionRevision < 0) throw Error('主进程未提供可信删除连接及修订');
+        if (!this.profiles.has(profile.id)) this.profiles.set(profile.id, profile);
+        const { profile: _profile, connectionRevision, ...request } = input;
+        return command === 'table.filteredDelete.preview' ? this.tableFilteredDeletes.preview(tableFilteredDeletePreviewInputSchema.parse(request), connectionRevision) : this.tableFilteredDeletes.apply(tableFilteredDeleteApplyInputSchema.parse(request), connectionRevision);
+      }
+      case 'table.filteredDelete.release': return this.tableFilteredDeletes.release(tableFilteredDeleteReleaseInputSchema.parse(input));
       case 'table.filteredUpdate.preview': case 'table.filteredUpdate.apply': {
         const profile = input.profile as ConnectionProfile | undefined;
         if (!profile || profile.id !== input.connectionId || !Number.isSafeInteger(input.connectionRevision) || input.connectionRevision < 0) throw Error('主进程未提供可信填充连接及修订');
@@ -192,6 +205,7 @@ export class Engine {
         await this.schemaComparisons.close(input.id);
         this.resultInserts.releaseConnection(input.id);
         await this.tableFilteredUpdates.releaseConnection(input.id);
+        await this.tableFilteredDeletes.releaseConnection(input.id);
         this.tableRenames.releaseConnection(input.id);
         this.databaseDrops.releaseConnection(input.id);
         this.structureCache.release(input.id);
@@ -226,6 +240,7 @@ export class Engine {
         try {
         const comparisonCleanup = this.schemaComparisons.close(input.id);
         const filteredUpdateCleanup = this.tableFilteredUpdates.releaseConnection(input.id);
+        const filteredDeleteCleanup = this.tableFilteredDeletes.releaseConnection(input.id);
         this.resultInserts.releaseConnection(input.id);
         this.tableRenames.releaseConnection(input.id);
         this.databaseDrops.releaseConnection(input.id);
@@ -237,7 +252,7 @@ export class Engine {
         connecting.forEach(task => task.controller.abort());
         const active = [...this.tasks.values()].filter(task => task.managed.profile.id === input.id);
         const independent = [...this.independentTasks].filter(([, task]) => task.connectionId === input.id);
-        const cancellations = await Promise.allSettled([comparisonCleanup, filteredUpdateCleanup, ...active.map(task => this.cancelTask(task.id)), ...independent.map(([id]) => this.cancelTask(id))]);
+        const cancellations = await Promise.allSettled([comparisonCleanup, filteredUpdateCleanup, filteredDeleteCleanup, ...active.map(task => this.cancelTask(task.id)), ...independent.map(([id]) => this.cancelTask(id))]);
         await Promise.all([...connecting.map(task => task.done), ...active.map(task => task.done), ...independent.map(([, task]) => task.done)]);
         for (const [id, session] of this.sessions) if (session.connectionId === input.id) { await session.managed.close(); this.sessions.delete(id); }
         const recovered = await this.independentResources.recover(input.id);
@@ -564,6 +579,7 @@ export class Engine {
     this.excelConnecting.forEach(task => task.controller.abort());
     const comparisonCleanup = this.schemaComparisons.close();
     const filteredUpdateCleanup = this.tableFilteredUpdates.close();
+    const filteredDeleteCleanup = this.tableFilteredDeletes.close();
     this.resultInserts.close();
     this.tableRenames.releaseConnection();
     this.databaseDrops.releaseConnection();
@@ -571,7 +587,7 @@ export class Engine {
     const independent = [...this.independentTasks];
     const active = [...this.tasks.values()];
     const fileCleanup = Promise.all([this.resultFiles.closeAll(), this.excelReads.closeAll()]);
-    const cancellations = await Promise.allSettled([comparisonCleanup, filteredUpdateCleanup, ...active.map(task => this.cancelTask(task.id)), ...independent.map(([id]) => this.cancelTask(id))]);
+    const cancellations = await Promise.allSettled([comparisonCleanup, filteredUpdateCleanup, filteredDeleteCleanup, ...active.map(task => this.cancelTask(task.id)), ...independent.map(([id]) => this.cancelTask(id))]);
     await Promise.all([...active.map(task => task.done), ...independent.map(([, task]) => task.done)]);
     await fileCleanup;
     // 首个 await 之前已进入的建连也必须收尾，避免退出后迟到注册会话。

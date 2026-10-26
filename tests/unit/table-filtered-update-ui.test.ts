@@ -14,4 +14,29 @@ describe('服务器全部筛选行填充范围与回执',()=>{
   it('NULL、空字节、JSON词法保持原类型；DEFAULT/坏Hex/非法JSON整次拒绝',()=>{const info=source();expect(tableFilteredUpdateValue(info,'payload',{mode:'binary',text:'0x'})).toEqual({type:'binary',base64:''});expect(tableFilteredUpdateValue(info,'payload',{mode:'null',text:''})).toBeNull();expect(tableFilteredUpdateValue(info,'j',{mode:'json',text:'{"n":9007199254740993}'})).toBe('{"n":9007199254740993}');for(const input of [{mode:'default' as const,text:''},{mode:'binary' as const,text:'0x0'},{mode:'json' as const,text:'{'}])expect(()=>tableFilteredUpdateValue(info,'body',input)).toThrow();});
   it('准确预览与提交逐字段回证，不接受另一目标/字段/行数，有限样本明确省略',()=>{const lease=intent(),input=lease.input('body',{mode:'text',text:'x'},randomUUID()),preview={previewToken:randomUUID(),target:lease.target,column:'body',rows:512,shownRows:1,sql:'UPDATE sample;',sampleOmitted:true,expiresAt:new Date(Date.now()+60000).toISOString(),definitionDigest:'a'.repeat(64),assignmentDigest:'b'.repeat(64),timeZone:'SYSTEM',warnings:[]};expect(checkTableFilteredUpdatePreview(preview,input)).toEqual(preview);for(const changed of [{...preview,column:'j'},{...preview,target:{...lease.target,table:'其它'}},{...preview,sampleOmitted:false}])expect(()=>checkTableFilteredUpdatePreview(changed,input)).toThrow();const output={target:lease.target,column:'body',rows:512,outcome:'committed',commitAcknowledged:true};expect(checkTableFilteredUpdateApplied(output,preview)).toEqual(output);expect(()=>checkTableFilteredUpdateApplied({...output,rows:1},preview)).toThrow();});
   it('COMMIT发送与准确全量ACK单调保留；不完整ACK、回滚与其它进度不伪造已提交',()=>{const before=mergeTableFilteredUpdateProgress(undefined,progress({phase:'committing',rows:512,commitMayHaveBeenSent:true,dmlMayHaveBeenSent:true,outcome:'unknown'}),512)!;const old=mergeTableFilteredUpdateProgress(before,progress(),512)!;expect(old.commitMayHaveBeenSent).toBe(true);expect(old.outcome).toBe('unknown');expect(mergeTableFilteredUpdateProgress(old,progress({commitAcknowledged:true,commitMayHaveBeenSent:true,rows:1,outcome:'committed'}),512)).toBe(old);const ack=mergeTableFilteredUpdateProgress(old,progress({phase:'finished',rows:512,commitMayHaveBeenSent:true,commitAcknowledged:true,outcome:'committed'}),512)!;expect(ack.commitAcknowledged).toBe(true);expect(mergeTableFilteredUpdateProgress(ack,progress(),512)!.outcome).toBe('committed');expect(mergeTableFilteredUpdateProgress(undefined,progress({rollbackAcknowledged:true,transactionProtected:true,outcome:'rolled-back'}),512)!.outcome).toBe('rolled-back');});
+  it('真实修改后失保护永久保持unknown，回滚ACK及迟到旧true不能追认已回滚', () => {
+    const active = mergeTableFilteredUpdateProgress(undefined, progress({ dmlMayHaveBeenSent: true, outcome: 'unknown' }), 512)!;
+    const lost = mergeTableFilteredUpdateProgress(active, progress({ phase: 'rolling-back', dmlMayHaveBeenSent: true, transactionProtected: false, rollbackAcknowledged: true, outcome: 'unknown' }), 512)!;
+    expect(lost.transactionProtected).toBe(false); expect(lost.rollbackAcknowledged).toBe(true); expect(lost.outcome).toBe('unknown');
+    const late = mergeTableFilteredUpdateProgress(lost, progress({ dmlMayHaveBeenSent: true, transactionProtected: true, rollbackAcknowledged: true, outcome: 'rolled-back' }), 512)!;
+    expect(late.transactionProtected).toBe(false); expect(late.outcome).toBe('unknown');
+    const prepare = mergeTableFilteredUpdateProgress(late, progress({ phase: 'preparing', dmlMayHaveBeenSent: false, transactionProtected: false, outcome: 'not-sent' }), 512)!;
+    expect(prepare.transactionProtected).toBe(false); expect(prepare.dmlMayHaveBeenSent).toBe(true); expect(prepare.outcome).toBe('unknown');
+  });
+  it('初始及迟到prepare未发送DML的false不抹真实保护，正常受保护回滚仍可确认', () => {
+    const initial = mergeTableFilteredUpdateProgress(undefined, progress({ phase: 'preparing', dmlMayHaveBeenSent: false, transactionProtected: false }), 512)!;
+    expect(initial.transactionProtected).toBe(false);
+    const active = mergeTableFilteredUpdateProgress(initial, progress({ dmlMayHaveBeenSent: true, transactionProtected: true, outcome: 'unknown' }), 512)!;
+    const late = mergeTableFilteredUpdateProgress(active, progress({ phase: 'preparing', dmlMayHaveBeenSent: false, transactionProtected: false, outcome: 'not-sent' }), 512)!;
+    expect(late.transactionProtected).toBe(true); expect(late.dmlMayHaveBeenSent).toBe(true); expect(late.outcome).toBe('unknown');
+    const rollback = mergeTableFilteredUpdateProgress(late, progress({ phase: 'finished', dmlMayHaveBeenSent: true, transactionProtected: true, rollbackAcknowledged: true, outcome: 'rolled-back' }), 512)!;
+    expect(rollback.transactionProtected).toBe(true); expect(rollback.outcome).toBe('rolled-back');
+  });
+  it('Main形状真实完整COMMIT ACK优先于失保护及迟到失败，不恢复失保护标志', () => {
+    const lost = mergeTableFilteredUpdateProgress(undefined, progress({ dmlMayHaveBeenSent: true, transactionProtected: false, rollbackAcknowledged: true, outcome: 'unknown' }), 512)!;
+    const committed = mergeTableFilteredUpdateProgress(lost, progress({ phase: 'finished', rows: 512, dmlMayHaveBeenSent: true, transactionProtected: false, commitMayHaveBeenSent: true, commitAcknowledged: true, outcome: 'committed' }), 512)!;
+    expect(committed.commitAcknowledged).toBe(true); expect(committed.outcome).toBe('committed'); expect(committed.transactionProtected).toBe(false);
+    const late = mergeTableFilteredUpdateProgress(committed, progress({ rows: 0, dmlMayHaveBeenSent: true, transactionProtected: false, rollbackAcknowledged: true, outcome: 'unknown' }), 512)!;
+    expect(late.commitAcknowledged).toBe(true); expect(late.outcome).toBe('committed'); expect(late.rows).toBe(512); expect(late.totalRows).toBe(512); expect(late.transactionProtected).toBe(false);
+  });
 });

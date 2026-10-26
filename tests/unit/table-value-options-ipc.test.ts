@@ -1,3 +1,4 @@
+import { emptyTableFilteredDeleteOwners } from './table-filtered-delete-owner-fixture';
 import { emptyTableFilteredUpdateOwners } from './table-filtered-update-owner-fixture';
 import { readFileSync } from 'node:fs';
 import { createContext, runInContext } from 'node:vm';
@@ -28,7 +29,7 @@ function fixture() {
   const request = vi.fn(async (_command: string, _input: any): Promise<any> => ({ values: [{ value: '9007199254740993', count: '18446744073709551615' }] }));
   const frame = { url: 'dbark-test:renderer' }, webContents = { mainFrame: frame };
   const assertCapturedOwner = vi.fn((value: unknown) => { if (value !== owner || !documentCurrent) throw Error('原主文档已变化'); });
-  const context = createContext({ filteredUpdates: emptyTableFilteredUpdateOwners(),
+  const context = createContext({ filteredDeletes: emptyTableFilteredDeleteOwners(), filteredUpdates: emptyTableFilteredUpdateOwners(),
     // 未打开结果写入用途时的真实初始空协调器，不登记任务、预览或写入能力。
     resultInserts: { observe() {}, invalidateConnection(_connectionId: string) {}, engineExited() {}, has: (_taskId: string) => false },
      Date, Map, Set, Error, SavedQuerySearchCancelled, tableApplyReceipts: undefined, savedQueryPages: undefined, historyPages: undefined, savedQuerySearches: { has: () => false }, tasks,

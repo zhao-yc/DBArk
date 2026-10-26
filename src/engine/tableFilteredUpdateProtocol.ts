@@ -32,7 +32,8 @@ export function resultInsertTriggerVisibility(grants: readonly string[], target:
     if (word(0) !== 'GRANT' || on < 2 || tokens[on + 2]?.value !== '.' || word(on + 4) !== 'TO') continue;
     const database = tokens[on + 1], table = tokens[on + 3];
     if (!database || !table || !['word', 'identifier', 'symbol'].includes(database.kind) || !['word', 'identifier', 'symbol'].includes(table.kind)) continue;
-    const scope = database.value === '*' && table.value === '*' || database.value === target.database && (table.value === '*' || table.value === target.table);
+    const wildcard = (token: typeof database) => token.kind === 'symbol' && token.value === '*';
+    const scope = wildcard(database) && wildcard(table) || ['word', 'identifier'].includes(database.kind) && database.value === target.database && (wildcard(table) || ['word', 'identifier'].includes(table.kind) && table.value === target.table);
     if (!scope) continue;
     const privileges = grant.slice(tokens[1].start, tokens[on].start).toUpperCase().split(',').map(value => value.trim());
     if (privileges.some(value => ['ALL', 'ALL PRIVILEGES', 'TRIGGER'].includes(value))) proven = true;

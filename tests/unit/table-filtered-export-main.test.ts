@@ -1,3 +1,4 @@
+import { emptyTableFilteredDeleteOwners } from './table-filtered-delete-owner-fixture';
 import { readFileSync } from 'node:fs';
 import { EventEmitter } from 'node:events';
 import { createContext, runInContext } from 'node:vm';
@@ -35,7 +36,7 @@ function fixture() {
   const owner = columnsMain.capture({ sender: contents, senderFrame: frame } as any);
   let context: any;
   const owners = new TableFilteredExportOwners({ assert: value => columnsMain.assertCapturedOwner(value), same: (left, right) => columnsMain.sharesDocumentOwner(left, right), stop: async taskId => { const preparing = context.preparingTasks.get(taskId); if (preparing) { preparing.cancelled = true; return; } await request('query.cancel', { taskId }); } });
-  context = createContext({ Error, AggregateError, Date, Map, Set, tableFilteredExportText, tableFilteredExports: owners, columnsMain, files, resolveFileToken,
+  context = createContext({ filteredDeletes: emptyTableFilteredDeleteOwners(), Error, AggregateError, Date, Map, Set, tableFilteredExportText, tableFilteredExports: owners, columnsMain, files, resolveFileToken,
     tableApplyReceipts: undefined, savedQueryPages: undefined, historyPages: undefined, savedQuerySearches: { has: () => false }, tasks,
     completionTasks: new Set(), pendingQueryHistory: new Map(), preparingTasks: new Map(), exportProgress: new Map(), structureProgress: new Map(), structureTokens: new Map(), sessions: new Map(), tablePresetReads: new Map(), tableValueOptionsConnectionOwners: new Map(), tableValueOptionsClosing: new Map(), shuttingDown: false,
     localSearchOperations: new Set(), queryFileOperations: new Set(), window, rendererURL: frame.url,

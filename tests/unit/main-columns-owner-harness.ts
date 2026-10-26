@@ -1,3 +1,4 @@
+import { TableFilteredDeleteOwners } from '../../src/main/tableFilteredDeleteOwners';
 import { readFileSync } from 'node:fs';
 import { createContext, runInContext } from 'node:vm';
 import ts from 'typescript';
@@ -17,16 +18,17 @@ export function deferred<T = any>() { let resolve!: (value: T) => void, reject!:
 /** AST提取实际生产入口；不存在原函数或IPC回调时立即失败，不维护手写分发器副本。 */
 function productionParts() {
   const source = readFileSync(new URL('../../src/main/index.ts', import.meta.url), 'utf8'), tree = ts.createSourceFile('index.ts', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
-  const names = ['dispatch', 'engineExited', 'createWindow', 'validateMainCommand', 'cancelTablePresetRead', 'invalidateTablePresetSources', 'runTableFilteredUpdate'], parts: string[] = [];
-  let wrapper = '';
+  const names = ['dispatch', 'engineExited', 'createWindow', 'validateMainCommand', 'cancelTablePresetRead', 'invalidateTablePresetSources', 'runTableFilteredUpdate', 'runTableFilteredDelete'], parts: string[] = [];
+  let wrapper = '', deletionBinding = '';
   function visit(node: ts.Node) {
+    if (ts.isVariableStatement(node) && node.declarationList.declarations.some(declaration => ts.isIdentifier(declaration.name) && declaration.name.text === 'filteredDeletes')) deletionBinding = node.getText(tree);
     if (ts.isFunctionDeclaration(node) && names.includes(node.name?.text ?? '')) parts.push(node.getText(tree));
     if (ts.isCallExpression(node) && node.expression.getText(tree) === 'ipcMain.handle' && ts.isStringLiteral(node.arguments[0]) && node.arguments[0].text === 'dbark:request') wrapper = node.getText(tree);
     ts.forEachChild(node, visit);
   }
   visit(tree);
-  if (parts.length !== names.length || !wrapper) throw Error('未提取到真实Main函数或IPC wrapper');
-  return parts.join('\n') + '\n' + wrapper + ';\nglobalThis.actual = {dispatch,engineExited,createWindow};';
+  if (parts.length !== names.length || !wrapper || !deletionBinding) throw Error('未提取到真实Main函数、删除能力初始化或IPC wrapper');
+  return parts.join('\n') + '\n' + deletionBinding + '\nglobalThis.filteredDeletes=filteredDeletes;\n' + wrapper + ';\nglobalThis.actual = {dispatch,engineExited,createWindow};';
 }
 
 /** 只模拟Electron对象与事件，不模拟owner授权；helper逐项读取这些真实边界对象。 */
@@ -63,9 +65,9 @@ export function mainColumnsHarness() {
   const context = createContext({
     // 未打开结果写入用途时的真实初始空协调器，不登记任务、预览或写入能力。
     resultInserts: { observe() {}, invalidateConnection(_connectionId: string) {}, engineExited() {}, has: (_taskId: string) => false }, resultInsertProgress: new Map(),
-    filteredUpdateProgress: new Map(),
+    filteredUpdateProgress: new Map(), filteredDeleteProgress: new Map(),
 
-    Date, Map, Error, Boolean, SavedQuerySearchCancelled, columnsMain: undefined, tablePresetSources: undefined, tablePresetReads: new Map(), window: undefined, structureTokens: tokens, tasks, structureProgress: progress, events,
+    Date, Map, Error, Boolean, TableFilteredDeleteOwners, SavedQuerySearchCancelled, columnsMain: undefined, tablePresetSources: undefined, tablePresetReads: new Map(), window: undefined, structureTokens: tokens, tasks, structureProgress: progress, events,
     tableApplyReceipts: undefined, pendingQueryHistory: new Map(), completionTasks: new Set(), preparingTasks: new Map(), exportProgress: new Map(), sessions: new Map(),
     savedQuerySearches: { has: () => false }, savedQueryPages: undefined, historyPages: undefined, historyDelete: undefined, localSearchOperations: new Set(), shuttingDown: false, shutdownComplete: false,
     rendererSettingsCurrent: true, rendererURL: 'app://renderer', process: { resourcesPath: 'ram' }, __dirname: 'ram', join: (...parts: string[]) => parts.join('/'),
@@ -93,6 +95,7 @@ export function mainColumnsHarness() {
     assert: value => capabilities.assertCapturedOwner(value), same: (left, right) => capabilities.sharesDocumentOwner(left, right), revision: () => context.store.connectionRevision(), closing: () => context.shuttingDown,
     available: id => context.connectionConfig.assertAvailable(id), run: (command, input, value) => context.runTableFilteredUpdate(command, input, value), release: input => request('table.filteredUpdate.release', input), stop: taskId => request('query.cancel', { taskId }),
   });
+
   // 新Main wrapper/窗口监听读取真实INSERT归属表；初始无文件能力，不能以noop跳过撤销。
   context.queryInsertExports = new QueryInsertExports(context.files, {
     assert: value => capabilities.assertCapturedOwner(value), same: (left, right) => capabilities.sharesDocumentOwner(left, right),
