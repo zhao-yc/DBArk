@@ -65,8 +65,13 @@ let approvalEnvironment = ProcessInfo.processInfo.environment
 let originalDiagnosticBranch = approvalEnvironment["GITHUB_REF"] == "refs/heads/codex/macos-mode-keeper-20261019"
 let serialIntelDiagnostic = approvalEnvironment["GITHUB_REF"] == "refs/heads/codex/v028-serial-closeout-20261019" &&
     approvalEnvironment["GITHUB_JOB"] == "x64-environment" && architecture == "x64"
+// main 只开放这个无窗口、无模式配置的诊断工作流；不能据此绕过keeper的独立镜像准入。
+let mainDiagnostic = approvalEnvironment["GITHUB_REPOSITORY"] == "zhao-yc/DBArk" &&
+    approvalEnvironment["GITHUB_REF"] == "refs/heads/main" &&
+    approvalEnvironment["GITHUB_WORKFLOW_REF"] == "zhao-yc/DBArk/.github/workflows/v028-macos-display-diagnostic.yml@refs/heads/main" &&
+    approvalEnvironment["GITHUB_EVENT_NAME"] == "push" && approvalEnvironment["GITHUB_JOB"] == "inspect"
 guard approvalEnvironment["GITHUB_ACTIONS"] == "true",
-      originalDiagnosticBranch || serialIntelDiagnostic,
+      originalDiagnosticBranch || serialIntelDiagnostic || mainDiagnostic,
       approvalEnvironment["MODE_KEEPER_RUNNER_ENVIRONMENT"] == "github-hosted" else {
     fail("只读诊断须本次隔离GitHub托管job")
 }
@@ -91,6 +96,7 @@ for screen in screens {
     let scale = Double(screen.backingScaleFactor)
     guard scale.isFinite, scale > 0 else { fail("显示器缩放比例未知") }
     displays.append(["displayID": display, "mainDisplay": display == CGMainDisplayID(),
+                     "mirrored": CGDisplayIsInMirrorSet(display) != 0,
                      "framePoints": rectangle(screen.frame),
                      "visibleFramePoints": rectangle(screen.visibleFrame),
                      "backingScaleFactor": scale,

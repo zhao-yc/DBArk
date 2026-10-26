@@ -2,6 +2,7 @@ name: 0.28 Mac编译与只读显示诊断
 on:
   push:
     branches:
+      - main
       - codex/macos-mode-keeper-20261019
     paths:
       - '.github/workflows/v028-macos-display-diagnostic.yml'
