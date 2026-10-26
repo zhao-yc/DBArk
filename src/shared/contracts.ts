@@ -38,6 +38,7 @@ import type { SavedQueryOrganizationApply, SavedQueryOrganizationSnapshot } from
 import type{HistoryPageInput,HistoryPage,HistoryOpenResult}from'./historyPages';
 import type { HistoryDeletePreviewInput, HistoryDeletePreviewOutput, HistoryDeleteApplyInput, HistoryDeleteApplyOutput, HistoryDeleteReleaseInput } from './historyDelete';
 import type { ExplainPlan } from './explain';
+import type { QueryAnalyzePlan } from './queryAnalyze';
 import type { ExplainSnapshotDocument } from './explainSnapshot';
 import type { DatabaseDefaultEncodingGetInput, DatabaseDefaultEncodingGetOutput, DatabaseDefaultEncodingPreviewInput, DatabaseDefaultEncodingPreviewOutput, DatabaseDefaultEncodingApplyInput, DatabaseDefaultEncodingApplyOutput, DatabaseDefaultEncodingReleaseInput } from './databaseDefaultEncoding';
 import type { WorkbenchTarget, WorkbenchSnapshot } from './workbench';
@@ -69,7 +70,7 @@ export interface ForeignKeyInfo { name: string; columns: string[]; referencedDat
 export interface TableInfo { database: string; name: string; columns: ColumnInfo[]; indexes: IndexInfo[]; foreignKeys: ForeignKeyInfo[]; primaryKey: string[]; editableKey: string[]; engine: string; ddl: string; charset?: string; collation?: string; comment?: string; /** 来自可信 information_schema.TABLES；未知类型不通过空 engine 推测。 */ objectKind?: 'table' | 'view'; }
 export interface ResultColumn { key: string; name: string; type: string; }
 export interface QueryResult { columns: ResultColumn[]; rows: DataRow[]; affectedRows?: number; insertId?: string; warningCount?: number; truncated: boolean; elapsedMs: number; statement: string; }
-export interface QueryOutcome { results: QueryResult[]; elapsedMs: number; transactionOpen?: boolean; explain?: ExplainPlan; /** 首错停止后只携带此前完整结果；失败语句不保证未执行，也不会自动重放。 */ failure?: import('./queryFailure').QueryFailure; }
+export interface QueryOutcome { results: QueryResult[]; elapsedMs: number; transactionOpen?: boolean; explain?: ExplainPlan; /** 独立于估算计划；该结果来自用户明确确认后的实际执行。 */ analysis?: QueryAnalyzePlan; /** 首错停止后只携带此前完整结果；失败语句不保证未执行，也不会自动重放。 */ failure?: import('./queryFailure').QueryFailure; }
 export type FilterMode = 'all' | 'any';
 /** 数字引用同一filters数组位置；每条条件（含停用）在完整树中恰好出现一次。 */
 export interface FilterGroup { readonly mode: FilterMode; readonly children: readonly (number | FilterGroup)[]; }
@@ -194,6 +195,8 @@ export interface CommandMap {
   'sessions.close': { input: { sessionId: string }; output: void };
   'query.execute': { input: { sessionId: string; sql: string; taskId: string; maxRows: number; /** 同一Monaco模型全文中的UTF-16光标；缺省保持原选区/全部行为。 */ currentStatement?: { offset: number } }; output: QueryOutcome };
   'query.explain': { input: { sessionId: string; sql: string; taskId: string; maxRows: number; format?: 'auto' | 'text' }; output: QueryOutcome };
+  'query.analyze': { input: { sessionId: string; sql: string; taskId: string; maxRows: number; acknowledged: true; expectedDatabase: string | null }; output: QueryOutcome };
+  'query.analyzeContext': { input: { sessionId: string; taskId: string }; output: CompletionSessionState };
   'query.parameterNames': { input: { sessionId: string; sql: string }; output: QueryParameterNames };
   'query.sessionState': { input: { sessionId: string }; output: { transactionOpen: boolean; transactionKnown: boolean; broken: boolean } };
   'query.completionState':{input:{sessionId:string};output:CompletionSessionState};

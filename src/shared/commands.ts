@@ -48,7 +48,7 @@ export const publicCommands: Record<Command, true> = {
   'search.dataStart':true,'search.dataNext':true,'search.dataRelease':true,
   'search.catalogue':true,
   'search.recordRead':true,'search.recordsRelease':true,
-  'sessions.open': true, 'sessions.close': true, 'query.execute': true, 'query.explain': true, 'query.cancel': true, 'query.transaction': true,
+  'sessions.open': true, 'sessions.close': true, 'query.execute': true, 'query.explain': true, 'query.analyze': true, 'query.analyzeContext': true, 'query.cancel': true, 'query.transaction': true,
   'query.parameterNames': true, 'query.executeParameterized': true, 'query.sessionState': true,'query.completionState':true,
   'query.temporaryState':true,'query.temporaryCompletion':true,'query.temporaryRead':true,
   'query.exportStream': true,

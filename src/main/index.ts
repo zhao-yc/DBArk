@@ -975,8 +975,9 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
     if (tableValueOptionsRead) tableValueOptionsAdmitted = true;
   }
   const session = sessions.get(input.sessionId);
-  const currentStatement = command === 'query.execute' && input.currentStatement !== undefined;
-  const history: HistoryEntry | undefined = (command === 'query.execute' || command === 'query.executeParameterized' || command === 'query.exportStream') && session ? { id: randomUUID(), connectionId: session.connectionId, databaseContext:{state:'unknown'}, sql: currentStatement ? '' : input.sql, startedAt, elapsedMs: 0, success: false } : undefined;
+  // 实际分析与当前语句均等待Engine报告真正发送的SQL；历史不能把ANALYZE误记成裸DML。
+  const currentStatement = command === 'query.analyze' || command === 'query.execute' && input.currentStatement !== undefined;
+  const history: HistoryEntry | undefined = (command === 'query.execute' || command === 'query.executeParameterized' || command === 'query.exportStream' || command === 'query.analyze') && session ? { id: randomUUID(), connectionId: session.connectionId, databaseContext:{state:'unknown'}, sql: currentStatement ? '' : input.sql, startedAt, elapsedMs: 0, success: false } : undefined;
   const pendingHistory = history ? { entry: history, currentStatement, executionSqlReceived: !currentStatement } : undefined;
   if(pendingHistory&&taskId)pendingQueryHistory.set(taskId,pendingHistory);
   const preparing: { cancelled: boolean; failure?: string; connectionIds?: string[] } = { cancelled: false, connectionIds: command === 'schema.compare' ? [input.source.connectionId, input.target.connectionId] : requestConnectionId ? [requestConnectionId] : [] }; if (taskId) preparingTasks.set(taskId, preparing);

@@ -39,7 +39,7 @@ import { connect, execute, type ManagedConnection } from './connection';
 import * as metadata from './metadata';
 import { completionMetadata } from './completionMetadata';
 import type {CompletionMetadataInput} from '../shared/sqlCompletion';
-import {completionSessionState} from './completionSession';
+import {completionSessionState, initialCompletionDatabase, invalidateCompletionDatabase} from './completionSession';
 import {readSessionObject} from './sessionObjectRead';
 import {StructureSearches} from './structureSearch';
 import {DataSearchTasks} from './dataSearchTasks';
@@ -77,6 +77,8 @@ import { queryInsertTargetSchema } from '../shared/queryInsertExport';
 import { queryInsertZh } from '../shared/queryInsertExport.zh-CN';
 import { explainQuery } from './queryExplain';
 import { explainLimits } from '../shared/explain';
+import { analyzeQuery } from './queryAnalyze';
+import { queryAnalyzeCapability } from '../shared/queryAnalyze';
 import { consumeQueryFrames } from './queryStreamProtocol';
 import { prepareTableFilteredExport, type PreparedTableFilteredExport } from './tableFilteredExport';
 import { tableFilteredExportText } from '../shared/tableFilteredExport';
@@ -376,6 +378,39 @@ export class Engine {
         const result = await explainQuery(input.sql, input.format ?? 'auto', {
           status: managed.status, mode, check: () => this.checkCancelled(task), reusable: () => !managed.broken && managed.serverStatus !== undefined,
           run: sql => this.streamQuery(task, sql, Math.min(input.maxRows, explainLimits.textRows), 0, { remainingRows: Math.min(input.maxRows, explainLimits.textRows), remainingBytes: 1024 * 1024, remainingResults: 1 }),
+        });
+        if (managed.serverStatus === undefined) { managed.broken = true; managed.connection.destroy(); }
+        return { ...result, transactionOpen: managed.serverStatus === undefined ? undefined : Boolean(managed.serverStatus & 1) };
+      }));
+      case 'query.analyzeContext': return this.withSession(input.sessionId, managed => this.runTask(input.taskId, managed, '读取实际分析上下文', async task => {
+        const capability = queryAnalyzeCapability(managed.status);
+        if (!capability.supported) throw Error(capability.reason ?? '当前服务器不支持实际执行分析');
+        // 仅此显式入口读取内置函数，既不接收用户SQL，也不提交、切库或建立替代会话。
+        const results = await this.streamQuery(task, 'SELECT DATABASE() AS __dbark_analyze_database', 1, 0, { remainingRows: 1, remainingBytes: 4096, remainingResults: 1 });
+        const result = results[0], value = result?.rows[0]?.[result.columns[0]?.key];
+        if (results.length !== 1 || result.columns.length !== 1 || result.rows.length !== 1 || result.truncated || !(value === null || typeof value === 'string')) {
+          invalidateCompletionDatabase(managed); throw Error('无法完整确认原会话的实际默认库，未允许执行分析');
+        }
+        managed.completionDatabase = initialCompletionDatabase(value);
+        const state = completionSessionState(managed, false);
+        if (state.broken || !state.databaseKnown) throw Error('无法确认原会话的实际默认库，未允许执行分析');
+        return state;
+      }));
+      case 'query.analyze': return this.withSession(input.sessionId, managed => this.runTask(input.taskId, managed, '实际执行分析', async task => {
+        if (input.acknowledged !== true || !Number.isInteger(input.maxRows) || input.maxRows < 1 || input.maxRows > 100000 || !(input.expectedDatabase === null || typeof input.expectedDatabase === 'string' && input.expectedDatabase.length > 0 && input.expectedDatabase.length <= 64)) throw Error('实际执行分析参数无效或尚未确认');
+        const capability = queryAnalyzeCapability(managed.status);
+        if (!capability.supported) throw Error(capability.reason ?? '当前服务器不支持实际执行分析');
+        // 确认的是原物理会话的真实默认库；未知、切库或断线后均不能执行旧确认。
+        const assertDatabase = () => {
+          this.checkCancelled(task);
+          if (managed.broken || !managed.completionDatabase?.known || managed.completionDatabase.database !== input.expectedDatabase) throw Error('会话默认库自确认后已变化或未知，请重新打开实际执行分析');
+        };
+        assertDatabase();
+        const mode = await this.sqlMode(managed, task);
+        assertDatabase();
+        const result = await analyzeQuery(input.sql, input.acknowledged, {
+          status: managed.status, mode, check: () => this.checkCancelled(task), reusable: () => !managed.broken && managed.serverStatus !== undefined,
+          run: sql => { assertDatabase(); return this.streamQuery(task, sql, Math.min(input.maxRows, explainLimits.textRows), 0, { remainingRows: Math.min(input.maxRows, explainLimits.textRows), remainingBytes: 1024 * 1024, remainingResults: 1 }, sql, true); },
         });
         if (managed.serverStatus === undefined) { managed.broken = true; managed.connection.destroy(); }
         return { ...result, transactionOpen: managed.serverStatus === undefined ? undefined : Boolean(managed.serverStatus & 1) };
