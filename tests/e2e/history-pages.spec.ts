@@ -8,6 +8,8 @@ import{test,expect,page,dataDir,pageErrors,desktop,quitDesktop,launchDesktop}fro
 
 test.use({trace:'off'});
 const runtimeRequire=createRequire(join(process.cwd(),'package.json')),dialog=()=>page.getByRole('dialog',{name:'历史与保存的查询',exact:true});
+/** 按读取进度的无障碍名称定位，不能误把选择数量或待应用筛选当成读取结果。 */
+const progress=()=>dialog().getByRole('status',{name:'历史读取进度',exact:true});
 const entry=(patch:Partial<HistoryEntry>={}):HistoryEntry=>({id:'h',connectionId:'source',sql:'SELECT 9007199254740993',startedAt:'2026-10-15T00:00:00Z',elapsedMs:12,success:true,...patch});
 /** 应用真正退出后使用生产存储写夹具，再真实重启；不增加可伪造执行历史的生产IPC。 */
 async function seed(write:(store:LocalStore)=>void){await quitDesktop();const store=await LocalStore.open(join(dataDir,'dbark.sqlite'),runtimeRequire.resolve('sql.js/dist/sql-wasm.wasm'),{available:()=>false,encrypt:value=>value,decrypt:value=>value});try{write(store);}finally{store.close();}await launchDesktop();}
@@ -17,10 +19,38 @@ async function search(text:string){await dialog().getByLabel('搜索完整历史
 /** 仅持久化不可连接的本地来源元数据，不打开数据库连接。 */
 function source(store:LocalStore,id='source'){store.saveConnection({id,name:'离线来源 '+id,group:'',color:'#123456',dialect:'mysql',host:'127.0.0.1',port:1,user:'offline',database:'配置默认库'});}
 
+test('读取进度、选择数量和筛选提示可独立定位且保留各自状态', async () => {
+ await seed(store => {
+  source(store);
+  store.addHistory(entry({ id: 'first', sql: 'SELECT 1 -- 第一条' }));
+  store.addHistory(entry({ id: 'second', sql: 'SELECT 2 -- 第二条' }));
+ });
+ await open();
+ const selection = dialog().getByRole('status', { name: '历史选择数量', exact: true });
+ const filter = dialog().getByRole('status', { name: '历史筛选状态', exact: true });
+ const notice = dialog().getByRole('status', { name: '历史选择提示', exact: true });
+ await expect(progress()).toContainText('已检查2条 · 匹配2条 · 读取失败0条');
+ await expect(selection).toHaveText('已选择 0 条（跨批次保留，最多 100 条）');
+ await dialog().getByRole('button', { name: '全选当前批次', exact: true }).click();
+ await expect(selection).toHaveText('已选择 2 条（跨批次保留，最多 100 条）');
+ await dialog().getByLabel('搜索完整历史SQL或错误', { exact: true }).fill('第一条');
+ await expect(filter).toHaveText('筛选已改变，请重新搜索。');
+ await expect(notice).toContainText('原选择已清除');
+ await expect(selection).toHaveText('已选择 0 条（跨批次保留，最多 100 条）');
+ await expect(progress()).toContainText('已检查2条 · 匹配2条 · 读取失败0条');
+ await dialog().getByRole('button', { name: '搜索执行历史', exact: true }).click();
+ await expect(progress()).toContainText('已检查2条 · 匹配1条 · 读取失败0条');
+ await expect(filter).toHaveCount(0);
+ await expect(dialog().locator('.history-card')).toHaveAttribute('data-history-id', 'first');
+ expect(await page.evaluate(() => window.dbark.invoke('tasks.list', {}))).toEqual([]);
+ expect(await page.evaluate(() => window.dbark.invoke('history.list', {}))).toHaveLength(2);
+ expect(pageErrors).toEqual([]);
+});
+
 test('58条历史分三批、完整SQL和错误筛选及按需错误全文，最小窗口可真实操作',async({},info)=>{
- test.setTimeout(120000);const originalError='原始错误_'+ '错'.repeat(9000)+'错误全文尾部';await seed(store=>{source(store);for(let i=0;i<58;i++)store.addHistory(entry({id:'h'+String(i).padStart(3,'0'),sql:'SELECT 9007199254740993; -- '+ 'x'.repeat(8000)+(i===0?'SQL完整尾部':'普通尾部'),success:i!==1,error:i===1?originalError:undefined}));});await desktop.evaluate(({BrowserWindow})=>BrowserWindow.getAllWindows()[0].setSize(1024,680));await open();await expect(dialog().locator('.history-card')).toHaveCount(25);await expect(dialog().getByRole('status')).toContainText('已检查25条');const all=await dialog().locator('.history-card').evaluateAll(cards=>cards.map(card=>card.getAttribute('data-history-id')));expect(all).toEqual(Array.from({length:25},(_,i)=>'h'+String(57-i).padStart(3,'0')));expect(await dialog().locator('.history-card pre').first().textContent()).toHaveLength(513);
+ test.setTimeout(120000);const originalError='原始错误_'+ '错'.repeat(9000)+'错误全文尾部';await seed(store=>{source(store);for(let i=0;i<58;i++)store.addHistory(entry({id:'h'+String(i).padStart(3,'0'),sql:'SELECT 9007199254740993; -- '+ 'x'.repeat(8000)+(i===0?'SQL完整尾部':'普通尾部'),success:i!==1,error:i===1?originalError:undefined}));});await desktop.evaluate(({BrowserWindow})=>BrowserWindow.getAllWindows()[0].setSize(1024,680));await open();await expect(dialog().locator('.history-card')).toHaveCount(25);await expect(progress()).toContainText('已检查25条');const all=await dialog().locator('.history-card').evaluateAll(cards=>cards.map(card=>card.getAttribute('data-history-id')));expect(all).toEqual(Array.from({length:25},(_,i)=>'h'+String(57-i).padStart(3,'0')));expect(await dialog().locator('.history-card pre').first().textContent()).toHaveLength(513);
  for(const count of[25,8]){await dialog().getByRole('button',{name:'读取下一批',exact:true}).click();await expect(dialog().getByRole('button',{name:'刷新到第一页',exact:true})).toBeEnabled();await expect(dialog().locator('.history-card')).toHaveCount(count);all.push(...await dialog().locator('.history-card').evaluateAll(cards=>cards.map(card=>card.getAttribute('data-history-id'))));}expect(new Set(all).size).toBe(58);await expect(dialog().getByRole('button',{name:'读取下一批',exact:true})).toBeDisabled();
- await search('SQL完整尾部');await expect(dialog().locator('.history-card')).toHaveCount(0);for(const scanned of[50,58]){await dialog().getByRole('button',{name:'读取下一批',exact:true}).click();await expect(dialog().getByRole('status')).toContainText('已检查'+scanned+'条');}await expect(dialog().locator('.history-card')).toHaveCount(1);await expect(dialog().locator('.history-card')).toHaveAttribute('data-history-id','h000');
+ await search('SQL完整尾部');await expect(dialog().locator('.history-card')).toHaveCount(0);for(const scanned of[50,58]){await dialog().getByRole('button',{name:'读取下一批',exact:true}).click();await expect(progress()).toContainText('已检查'+scanned+'条');}await expect(dialog().locator('.history-card')).toHaveCount(1);await expect(dialog().locator('.history-card')).toHaveAttribute('data-history-id','h000');
  await dialog().getByLabel('执行结果',{exact:true}).selectOption('failed');await search('错误全文尾部');for(let i=0;i<2;i++){await dialog().getByRole('button',{name:'读取下一批',exact:true}).click();await expect(dialog().getByRole('button',{name:'刷新到第一页',exact:true})).toBeEnabled();}const card=dialog().locator('.history-card');await expect(card).toHaveAttribute('data-history-id','h001');await expect(card).not.toContainText('错误全文尾部');await card.getByRole('button',{name:'查看完整错误',exact:true}).click();await expect(card.getByRole('region',{name:'完整历史错误',exact:true}).locator('pre')).toHaveText(originalError);await card.getByRole('button',{name:'收起完整错误',exact:true}).click();await expect(card).not.toContainText('错误全文尾部');expect((await page.evaluate(()=>window.dbark.invoke('history.list',{})))).toHaveLength(58);expect(await page.evaluate(()=>window.dbark.invoke('tasks.list',{}))).toEqual([]);expect(pageErrors).toEqual([]);await page.screenshot({path:info.outputPath('history-pages-compact-errors.png')});
 });
 
@@ -31,7 +61,7 @@ test('四种历史上下文按来源恢复为新草稿，来源失效明确选�
 });
 
 test('损坏历史有明确失败和停止政策，来源及字段筛选不混入其它记录',async({},info)=>{
- test.setTimeout(90000);await seed(store=>{source(store);source(store,'other');store.addHistory(entry({id:'a',sql:'仅本来源SQL'}));store.addHistory(entry({id:'b',connectionId:'other',success:false,error:'仅错误全文'}));const db=(store as unknown as{db:Database}).db;db.run('INSERT INTO history VALUES(?,?,?,?)',['z','source','{损坏JSON','2026-10-16']);db.run('INSERT INTO history VALUES(?,?,?,?)',['unbound','',JSON.stringify({...entry({id:'unbound',sql:'遗留空来源'}),connectionId:undefined}),'2026-10-15T00:00:00Z']);store.saveSettings(store.settings());});await open();await expect(dialog().getByRole('status')).toContainText('读取失败1条');await dialog().locator('details > summary').click();await expect(dialog().locator('details')).toContainText('z：执行历史记录JSON无效');await dialog().getByLabel('损坏记录处理',{exact:true}).selectOption('stop');await search('');await expect(dialog().getByRole('status')).toContainText('遇到记录错误，已停止');await expect(dialog().getByRole('button',{name:'读取下一批',exact:true})).toBeDisabled();await dialog().getByLabel('损坏记录处理',{exact:true}).selectOption('continue');await dialog().getByLabel('历史来源',{exact:true}).selectOption('connection:other');await search('仅错误全文');await expect(dialog().locator('.history-card')).toHaveAttribute('data-history-id','b');await dialog().getByLabel('错误信息',{exact:true}).uncheck();await search('仅错误全文');await expect(dialog().locator('.history-card')).toHaveCount(0);await dialog().getByLabel('历史来源',{exact:true}).selectOption('unbound');await search('遗留空来源');await expect(dialog().locator('.history-card')).toHaveAttribute('data-history-id','unbound');expect(pageErrors).toEqual([]);await page.screenshot({path:info.outputPath('history-pages-corrupt-explicit.png')});
+ test.setTimeout(90000);await seed(store=>{source(store);source(store,'other');store.addHistory(entry({id:'a',sql:'仅本来源SQL'}));store.addHistory(entry({id:'b',connectionId:'other',success:false,error:'仅错误全文'}));const db=(store as unknown as{db:Database}).db;db.run('INSERT INTO history VALUES(?,?,?,?)',['z','source','{损坏JSON','2026-10-16']);db.run('INSERT INTO history VALUES(?,?,?,?)',['unbound','',JSON.stringify({...entry({id:'unbound',sql:'遗留空来源'}),connectionId:undefined}),'2026-10-15T00:00:00Z']);store.saveSettings(store.settings());});await open();await expect(progress()).toContainText('读取失败1条');await dialog().locator('details > summary').click();await expect(dialog().locator('details')).toContainText('z：执行历史记录JSON无效');await dialog().getByLabel('损坏记录处理',{exact:true}).selectOption('stop');await search('');await expect(progress()).toContainText('遇到记录错误，已停止');await expect(dialog().getByRole('button',{name:'读取下一批',exact:true})).toBeDisabled();await dialog().getByLabel('损坏记录处理',{exact:true}).selectOption('continue');await dialog().getByLabel('历史来源',{exact:true}).selectOption('connection:other');await search('仅错误全文');await expect(dialog().locator('.history-card')).toHaveAttribute('data-history-id','b');await dialog().getByLabel('错误信息',{exact:true}).uncheck();await search('仅错误全文');await expect(dialog().locator('.history-card')).toHaveCount(0);await dialog().getByLabel('历史来源',{exact:true}).selectOption('unbound');await search('遗留空来源');await expect(dialog().locator('.history-card')).toHaveAttribute('data-history-id','unbound');expect(pageErrors).toEqual([]);await page.screenshot({path:info.outputPath('history-pages-corrupt-explicit.png')});
 });
 
 test('历史真实IPC取消、切换、关闭和重启释放资源且筛选条件不写本地配置',async()=>{

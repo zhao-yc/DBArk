@@ -1,6 +1,7 @@
 export const historyDeleteZh = {
   title: '清理执行历史', single: '删除此条', selected: '删除所选历史', filtered: '删除当前筛选全部匹配',
   select: (id: string) => `选择历史 ${id}`, selectBatch: '全选当前批次', clearSelection: '清除选择',
+  selectionStatus: '历史选择数量', selectionNoticeStatus: '历史选择提示',
   selection: (count: number) => `已选择 ${count} 条（跨批次保留，最多 100 条）`,
   selectionCleared: '筛选草稿已变化，原选择已清除；请先应用筛选再选择。',
   limit: '最多选择 100 条历史；本次未增加选择，请先清除部分选择。',
