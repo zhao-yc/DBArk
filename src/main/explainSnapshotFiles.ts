@@ -3,7 +3,7 @@ import type { Stats } from 'node:fs';
 import type { FileHandle } from 'node:fs/promises';
 import { randomUUID } from 'node:crypto';
 import { basename, dirname, isAbsolute, join } from 'node:path';
-import { decodeExplainSnapshot, encodeExplainSnapshot, explainSnapshotLimits, type ExplainSnapshotDocument } from '../shared/explainSnapshot';
+import { decodePlanSnapshot, encodePlanSnapshot, explainSnapshotLimits, type PlanSnapshotDocument } from '../shared/explainSnapshot';
 import { explainSnapshotZh as text } from '../shared/explainSnapshot.zh-CN';
 
 export interface ExplainSnapshotOwner { assertCurrent(): void }
@@ -60,10 +60,10 @@ export class ExplainSnapshotFiles {
   }
 
   /** 单句柄有界读取，严格 UTF-8 解码后才解析，来源变化时不发布任何快照。 */
-  open(owner: ExplainSnapshotOwner): Promise<{ name: string; snapshot: ExplainSnapshotDocument } | null> {
+  open(owner: ExplainSnapshotOwner): Promise<{ name: string; snapshot: PlanSnapshotDocument } | null> {
     return this.operation(owner, async () => {
       let handle: FileHandle | undefined;
-      let result: { name: string; snapshot: ExplainSnapshotDocument } | null = null;
+      let result: { name: string; snapshot: PlanSnapshotDocument } | null = null;
       const errors: unknown[] = [];
       try {
         const selected = await this.guarded(owner, () => this.ports.choose('open'));
@@ -89,7 +89,7 @@ export class ExplainSnapshotFiles {
         let decoded: string;
         try { decoded = new TextDecoder('utf-8', { fatal: true }).decode(data.subarray(0, count)); }
         catch { throw new Error('计划快照必须使用有效的 UTF-8 编码'); }
-        result = { name: basename(path), snapshot: decodeExplainSnapshot(decoded) };
+        result = { name: basename(path), snapshot: decodePlanSnapshot(decoded) };
         owner.assertCurrent();
       } catch (error) { errors.push(error); }
       if (handle) {
@@ -102,9 +102,9 @@ export class ExplainSnapshotFiles {
   }
 
   /** 同目录独占临时文件同步后原子替换；先校验内容，再打开保存对话框。 */
-  save(snapshot: ExplainSnapshotDocument, owner: ExplainSnapshotOwner): Promise<{ name: string } | null> {
+  save(snapshot: PlanSnapshotDocument, owner: ExplainSnapshotOwner): Promise<{ name: string } | null> {
     return this.operation(owner, async () => {
-      const encoded = Buffer.from(encodeExplainSnapshot(snapshot), 'utf8');
+      const encoded = Buffer.from(encodePlanSnapshot(snapshot), 'utf8');
       let handle: FileHandle | undefined;
       let temporary: string | undefined;
       let release: (() => void) | undefined;

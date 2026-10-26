@@ -1,22 +1,33 @@
 import { useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
 import type { QueryAnalyzeMetric, QueryAnalyzeNode, QueryAnalyzePlan } from '../../shared/queryAnalyze';
+import type { QueryOutcome } from '../../shared/contracts';
+import type { AnalyzeSnapshotDocument } from '../../shared/explainSnapshot';
+import { explainSnapshotZh as snapshotText } from '../../shared/explainSnapshot.zh-CN';
 import { queryAnalyzeZh as t } from '../locales/queryAnalyze.zh-CN';
+import { ExplainSnapshotSaveButton } from './ExplainSnapshotSaveButton';
 import '../queryAnalyze.css';
+import '../explainSnapshot.css';
 
 /** 指标原文独立保留；未知字段也展示服务器名称，不凭名称推测单位或计算总耗时。 */
 function metricTitle(metric: QueryAnalyzeMetric): string { return Object.hasOwn(t.metricLabels, metric.source) ? t.metricLabels[metric.source] : metric.source; }
 /** 单位只作展示附注，不能把原始十进制字符串转成 JavaScript 数值。 */
 function metricValue(metric: QueryAnalyzeMetric): string { return metric.value + (metric.unit ? ` ${t.units[metric.unit]}` : ''); }
 
+/** 文件入口只接收当前计划对应结果；未启用时保持纯只读展示。 */
+export interface QueryAnalyzeViewProps {
+  plan: QueryAnalyzePlan; outcome?: QueryOutcome; fileSnapshot?: AnalyzeSnapshotDocument;
+  fileActions?: boolean; busy?: boolean; saveAs?: boolean; onFileBusyChange?(busy: boolean): void;
+}
 /** 新结果即换代，A→B→A不能继承旧计划的所选节点或折叠状态。 */
-export function QueryAnalyzeView({ plan }: { plan: QueryAnalyzePlan }) {
+export function QueryAnalyzeView(props: QueryAnalyzeViewProps) {
+  const { plan } = props;
   const owner = useRef({ plan, generation: 0 });
   if (owner.current.plan !== plan) owner.current = { plan, generation: owner.current.generation + 1 };
-  return <OwnedQueryAnalyzeView key={owner.current.generation} plan={plan}/>;
+  return <OwnedQueryAnalyzeView key={owner.current.generation} {...props}/>;
 }
 
 /** 这里只阅读已经返回的分析结果；展开、选择及切换原文都不会执行 SQL 或调用 IPC。 */
-function OwnedQueryAnalyzeView({ plan }: { plan: QueryAnalyzePlan }) {
+function OwnedQueryAnalyzeView({ plan, outcome, fileSnapshot, fileActions = false, busy = false, saveAs = false, onFileBusyChange }: QueryAnalyzeViewProps) {
   const [view, setView] = useState<'tree' | 'raw'>(plan.nodes.length ? 'tree' : 'raw');
   const [selected, setSelected] = useState(plan.nodes[0]?.id ?? '');
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
@@ -64,6 +75,7 @@ function OwnedQueryAnalyzeView({ plan }: { plan: QueryAnalyzePlan }) {
   return <section className="query-analyze-view" aria-label={t.view}>
     <div className="query-analyze-toolbar" role="group" aria-label={t.view}>
       <button aria-pressed={view === 'tree'} onClick={() => { if (alive.current) setView('tree'); }}>{t.tree}</button><button aria-pressed={view === 'raw'} onClick={() => { if (alive.current) setView('raw'); }}>{t.raw}</button>
+      {fileActions && (outcome && outcome.analysis === plan ? <ExplainSnapshotSaveButton outcome={outcome} fileSnapshot={fileSnapshot} busy={busy} saveAs={saveAs} onFileBusyChange={onFileBusyChange}/> : <span className="explain-snapshot-save"><button disabled title={snapshotText.unavailable}>{saveAs ? snapshotText.saveAs : snapshotText.save}</button></span>)}
       <span className="muted">{t.source}：{plan.dialect === 'mysql' ? 'MySQL' : 'MariaDB'} {plan.version} · {plan.format === 'tree' ? 'EXPLAIN ANALYZE' : 'ANALYZE FORMAT=JSON'}</span>
     </div>
     <div className="query-analyze-hints"><p>{plan.dialect === 'mysql' ? t.mysqlHint : t.mariaHint}</p><p>{t.estimateHint}</p><p>{t.relationHint}</p>{plan.rawTruncated && <p className="query-analyze-warning" role="alert">{t.truncated}</p>}{plan.warnings.map((warning, index) => <p className="query-analyze-warning" role="status" key={index}>{warning}</p>)}</div>

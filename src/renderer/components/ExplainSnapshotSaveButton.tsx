@@ -1,11 +1,11 @@
 import { useLayoutEffect, useRef, useState } from 'react';
 import type { QueryOutcome } from '../../shared/contracts';
-import { captureExplainSnapshot, parseExplainSnapshot, type ExplainSnapshotDocument } from '../../shared/explainSnapshot';
+import { capturePlanSnapshot, parsePlanSnapshot, type PlanSnapshotDocument } from '../../shared/explainSnapshot';
 import { explainSnapshotZh as text } from '../../shared/explainSnapshot.zh-CN';
 import { errorMessage, invoke } from '../lib';
 
 /** 显式捕获当前结果；本地文件回执不替换计划对象或重置阅读状态。 */
-export function ExplainSnapshotSaveButton({ outcome, fileSnapshot, busy, saveAs = false, onFileBusyChange }: { outcome: QueryOutcome; fileSnapshot?: ExplainSnapshotDocument; busy: boolean; saveAs?: boolean; onFileBusyChange?(busy: boolean): void }) {
+export function ExplainSnapshotSaveButton({ outcome, fileSnapshot, busy, saveAs = false, onFileBusyChange }: { outcome: QueryOutcome; fileSnapshot?: PlanSnapshotDocument; busy: boolean; saveAs?: boolean; onFileBusyChange?(busy: boolean): void }) {
   const [pending, setPending] = useState(false), [notice, setNotice] = useState<{ value: string; error?: boolean }>();
   const operation = useRef<object | null>(null), lifetime = useRef(0), alive = useRef(false);
   const source = useRef({ outcome, fileSnapshot, generation: 0 });
@@ -21,7 +21,7 @@ export function ExplainSnapshotSaveButton({ outcome, fileSnapshot, busy, saveAs 
     try {
       onFileBusyChange?.(true); claimed = true; setPending(true); setNotice(undefined);
       // 导入文件保留原始文档；本次版本新增的解析诊断仅用于显示，不能挤占另存预算。
-      const snapshot = captured.fileSnapshot ? parseExplainSnapshot(captured.fileSnapshot) : captureExplainSnapshot(captured.outcome);
+      const snapshot = captured.fileSnapshot ? parsePlanSnapshot(captured.fileSnapshot) : capturePlanSnapshot(captured.outcome);
       const saved = await invoke('explainFiles.save', { snapshot });
       if (current() && saved) setNotice({ value: text.saved(saved.name) });
     } catch (reason) { if (current()) setNotice({ value: errorMessage(reason), error: true }); }

@@ -39,7 +39,7 @@ import type{HistoryPageInput,HistoryPage,HistoryOpenResult}from'./historyPages';
 import type { HistoryDeletePreviewInput, HistoryDeletePreviewOutput, HistoryDeleteApplyInput, HistoryDeleteApplyOutput, HistoryDeleteReleaseInput } from './historyDelete';
 import type { ExplainPlan } from './explain';
 import type { QueryAnalyzePlan } from './queryAnalyze';
-import type { ExplainSnapshotDocument } from './explainSnapshot';
+import type { PlanSnapshotDocument } from './explainSnapshot';
 import type { DatabaseDefaultEncodingGetInput, DatabaseDefaultEncodingGetOutput, DatabaseDefaultEncodingPreviewInput, DatabaseDefaultEncodingPreviewOutput, DatabaseDefaultEncodingApplyInput, DatabaseDefaultEncodingApplyOutput, DatabaseDefaultEncodingReleaseInput } from './databaseDefaultEncoding';
 import type { WorkbenchTarget, WorkbenchSnapshot } from './workbench';
 import type { SchemaCompareInput, SchemaCompareResult, SchemaComparePreviewInput, SchemaComparePreview } from './schemaCompare';
@@ -117,7 +117,7 @@ export interface CommandMap {
   'result.presets.delete': { input: QueryResultPresetSelect; output: QueryResultPresetSnapshot };
   'result.presets.read': { input: QueryResultPresetSelect; output: QueryResultPresetValue };
   'queryFileSources.checkExternal': { input: QueryFileCheckInput; output: QueryFileCheckResult };
-  'explainFiles.open': { input: Record<string, never>; output: { name: string; snapshot: ExplainSnapshotDocument } | null };
+  'explainFiles.open': { input: Record<string, never>; output: { name: string; snapshot: PlanSnapshotDocument } | null };
   'schema.databaseDrop.get': { input: DatabaseDropGetInput; output: DatabaseDropGetOutput };
   'schema.databaseDrop.preview': { input: DatabaseDropPreviewInput; output: DatabaseDropPreviewOutput };
   'schema.databaseDrop.apply': { input: DatabaseDropApplyInput; output: DatabaseDropApplyOutput };
@@ -126,7 +126,7 @@ export interface CommandMap {
   'schema.databaseDefaultEncoding.preview': { input: DatabaseDefaultEncodingPreviewInput; output: DatabaseDefaultEncodingPreviewOutput };
   'schema.databaseDefaultEncoding.apply': { input: DatabaseDefaultEncodingApplyInput; output: DatabaseDefaultEncodingApplyOutput };
   'schema.databaseDefaultEncoding.release': { input: DatabaseDefaultEncodingReleaseInput; output: void };
-  'explainFiles.save': { input: { snapshot: ExplainSnapshotDocument }; output: { name: string } | null };
+  'explainFiles.save': { input: { snapshot: PlanSnapshotDocument }; output: { name: string } | null };
   'queryFileSources.reload': { input: QueryFileReloadInput; output: QueryFileReloadResult };
   'queryFileSources.discardReload': { input: QueryFileDiscardInput; output: { discarded: boolean } };
   'queryFileSources.open': { input: QueryFileSourceOpenInput; output: QueryFileSourceOpenResult };

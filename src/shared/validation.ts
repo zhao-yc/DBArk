@@ -5,7 +5,7 @@ import { fileImportTransactionMode, fileImportTransactionModeSchema } from './fi
 import { importPresetListSchema, importPresetSaveSchema, importPresetDeleteSchema } from './importPresets';
 import { queryFileReloadSchemas } from './queryFileReload';
 import { resultInsertPreviewInputSchema, resultInsertApplyInputSchema, resultInsertReleaseInputSchema } from './resultInsert';
-import { parseExplainSnapshot } from './explainSnapshot';
+import { parsePlanSnapshot } from './explainSnapshot';
 import { databaseDefaultEncodingAcknowledgements } from './databaseDefaultEncoding';
 import { assertSqlKeywordCaseWrite } from './sqlKeywordCase';
 import { snippetTransferSchemas } from './snippetTransfer';
@@ -341,7 +341,7 @@ export const commandSchemas: Record<Command, z.ZodType> = {
   'schema.databaseDefaultEncoding.preview': z.object({ snapshotId: id, charset: z.string().regex(/^[A-Za-z0-9_]{1,64}$/), collation: z.string().regex(/^[A-Za-z0-9_]{1,64}$/), taskId: id }).strict(),
   'schema.databaseDefaultEncoding.apply': z.object({ previewToken: id, confirmation: foreignKeyTargetName, acknowledgements: z.array(z.enum(databaseDefaultEncodingAcknowledgements)).length(databaseDefaultEncodingAcknowledgements.length).refine(values => new Set(values).size === values.length), taskId: id }).strict(),
   'schema.databaseDefaultEncoding.release': z.object({ snapshotId: id.optional(), previewToken: id.optional() }).strict().refine(value => !!value.snapshotId || !!value.previewToken),
-  'explainFiles.save': z.object({ snapshot: z.unknown().transform(value => parseExplainSnapshot(value)) }).strict(),
+  'explainFiles.save': z.object({ snapshot: z.unknown().transform(value => parsePlanSnapshot(value)) }).strict(),
   ...queryFileReloadSchemas,
   'queryFileSources.cancel': queryFileSourceCancelSchema, 'queryFileSources.open': queryFileSourceOpenSchema, 'queryFileSources.save': queryFileSourceSaveSchema, 'queryFileSources.saveAs': queryFileSourceSaveAsSchema, 'queryFileSources.status': queryFileSourceStatusSchema, 'queryFileSources.release': queryFileSourceReleaseSchema,
   'settings.get': empty, 'settings.save': settingsRawWriteSchema.pipe(z.object({ theme: z.enum(['dark','light']), sidebarWidth: z.number().min(180).max(600), resultLimit: z.number().int().min(1).max(100000), pageSize: z.number().int().min(1).max(1000), dataTypeColors: z.boolean().optional(), editorFontSize: z.number().int().min(editorFontLimits.min).max(editorFontLimits.max).optional(), editorWordWrap: z.boolean().optional(), editorTabSize: z.number().int().min(editorIndentationLimits.min).max(editorIndentationLimits.max).optional(), editorInsertSpaces: z.boolean().optional(), sqlKeywordCase: z.enum(['preserve', 'upper', 'lower']).optional(), tabs: z.array(z.object({ id, kind: z.enum(['query','table']), title: name, connectionId: id, database: z.string().optional(), databaseContext:queryDatabaseContext.optional(), table: z.string().optional(), sql: text.optional(), sourceBinding: querySourceBindingSchema.optional(), fileSourceBinding: queryFileSourceRefSchema.optional(), queryEditorHeight: z.number().int().min(queryLayoutLimits.minEditorHeight).max(queryLayoutLimits.maxEditorHeight).optional() }).strict()).max(100), activeTabId: z.string().optional() }).strict().superRefine((value, context) => { try { assertEditorIndentationWrite(value); assertQueryLayoutWrite(value); assertQueryFileSourceSettings(value); } catch (error) { context.addIssue({ code: z.ZodIssueCode.custom, message: error instanceof Error ? error.message : '缩进偏好无效' }); } }))

@@ -1,5 +1,6 @@
 import type { CellValue, QueryOutcome, QueryResult } from './contracts';
 import { parseExplainPlan } from './explain';
+import { parseQueryAnalyzePlan } from './queryAnalyze';
 import { explainSnapshotZh as text } from './explainSnapshot.zh-CN';
 
 export const explainSnapshotLimits = { bytes: 1048576, columns: 64, rows: 1000, warnings: 64, version: 256, cell: 196608, raw: 196608, column: 2048, warning: 16000, items: 70000 } as const;
@@ -9,6 +10,12 @@ export interface ExplainSnapshotDocument {
   raw: string; rawTruncated: boolean; warnings: string[];
   result: { columns: { key: string; name: string; type: string }[]; rows: Record<string, SnapshotCell>[]; truncated: boolean };
 }
+export interface AnalyzeSnapshotDocument {
+  kind: 'dbark.analyze-snapshot'; version: 1; dialect: 'mysql' | 'mariadb'; serverVersion: string; format: 'tree' | 'json';
+  raw: string; rawTruncated: boolean; warnings: string[];
+  result: ExplainSnapshotDocument['result'];
+}
+export type PlanSnapshotDocument = ExplainSnapshotDocument | AnalyzeSnapshotDocument;
 type Budget = { bytes: number; items: number };
 const invalid = (): never => { throw Error(text.invalid); };
 const large = (): never => { throw Error(text.tooLarge); };
@@ -193,4 +200,75 @@ export function decodeExplainSnapshot(value: string): ExplainSnapshotDocument {
   let parsed: unknown;
   try { parsed = JSON.parse(value); } catch { return invalid(); }
   return parseExplainSnapshot(parsed);
+}
+
+/** 实测格式独立版本化；只有明确标记不完整的输出才允许保留异常原始结果容器。 */
+function analyzeDocument(value: unknown, capture = false): AnalyzeSnapshotDocument {
+  record(value, ['kind', 'version', 'dialect', 'serverVersion', 'format', 'raw', 'rawTruncated', 'warnings', 'result']);
+  const budget: Budget = { bytes: 0, items: 0 };
+  if (own(value, 'kind') !== 'dbark.analyze-snapshot' || own(value, 'version') !== 1) return invalid();
+  const dialect = own(value, 'dialect'), format = own(value, 'format'), rawTruncated = own(value, 'rawTruncated');
+  if ((dialect !== 'mysql' && dialect !== 'mariadb') || (format !== 'tree' && format !== 'json') || typeof rawTruncated !== 'boolean' || dialect === 'mysql' && format !== 'tree' || dialect === 'mariadb' && format !== 'json') return invalid();
+  const serverVersion = string(own(value, 'serverVersion'), explainSnapshotLimits.version, budget);
+  const raw = string(own(value, 'raw'), explainSnapshotLimits.raw, budget);
+  const warnings = array(own(value, 'warnings'), explainSnapshotLimits.warnings).map(item => string(item, explainSnapshotLimits.warning, budget));
+  const output: AnalyzeSnapshotDocument = { kind: 'dbark.analyze-snapshot', version: 1, dialect, serverVersion, format, raw, rawTruncated, warnings, result: result(own(value, 'result'), budget, capture) };
+  const oneCell = output.result.columns.length === 1 && output.result.rows.length === 1;
+  const originalCell = oneCell ? output.result.rows[0][output.result.columns[0].key] : undefined;
+  // 不完整标记也不能掩盖两份互相矛盾的单格文本；非文本/多格仅供明确不完整的结果回看。
+  if (oneCell && typeof originalCell === 'string' && originalCell !== raw) return invalid();
+  if (!rawTruncated && !output.result.truncated && (!oneCell || typeof originalCell !== 'string' || originalCell !== raw)) return invalid();
+  if (new TextEncoder().encode(JSON.stringify(output) + '\n').byteLength > explainSnapshotLimits.bytes) return large();
+  return output;
+}
+
+/** 通用捕获只选择一种计划来源；原文条件可能含业务字面值，但不会主动保存原SQL字段。 */
+export function capturePlanSnapshot(outcome: QueryOutcome): PlanSnapshotDocument {
+  record(outcome);
+  const estimated = Object.hasOwn(outcome, 'explain'), actual = Object.hasOwn(outcome, 'analysis');
+  if (estimated === actual) return invalid();
+  if (estimated) return captureExplainSnapshot(outcome);
+  const results = array(own(outcome, 'results'), 1);
+  if (results.length !== 1) return invalid();
+  const plan = own(outcome, 'analysis'); record(plan);
+  return analyzeDocument({ kind: 'dbark.analyze-snapshot', version: 1, dialect: own(plan, 'dialect'), serverVersion: own(plan, 'version'), format: own(plan, 'format'), raw: own(plan, 'raw'), rawTruncated: own(plan, 'rawTruncated'), warnings: own(plan, 'warnings'), result: results[0] }, true);
+}
+
+/** 文件kind严格分流，旧估算v1和新实测v1不能互相冒充或借用另一方的格式。 */
+export function parsePlanSnapshot(value: unknown): PlanSnapshotDocument {
+  record(value, ['kind', 'version', 'dialect', 'serverVersion', 'format', 'raw', 'rawTruncated', 'warnings', 'result']);
+  const kind = own(value, 'kind');
+  if (kind === 'dbark.explain-snapshot') return parseExplainSnapshot(value);
+  if (kind === 'dbark.analyze-snapshot') return analyzeDocument(value);
+  return invalid();
+}
+
+/** 只从文件重建展示，不建立会话；两种截断事实都禁止将实测前缀解析为完整树。 */
+export function planSnapshotOutcome(value: PlanSnapshotDocument): QueryOutcome {
+  const snapshot = parsePlanSnapshot(value);
+  if (snapshot.kind === 'dbark.explain-snapshot') return explainSnapshotOutcome(snapshot);
+  const analysis = parseQueryAnalyzePlan(snapshot.raw, snapshot.dialect, snapshot.serverVersion, snapshot.format, snapshot.rawTruncated || snapshot.result.truncated);
+  const diagnostics = [...new Set(analysis.warnings)].slice(0, explainSnapshotLimits.warnings);
+  const savedWarnings = [...new Set(snapshot.warnings)].filter(warning => !diagnostics.includes(warning));
+  analysis.warnings = [...savedWarnings.slice(0, explainSnapshotLimits.warnings - diagnostics.length), ...diagnostics];
+  const rows = snapshot.result.rows.map(row => {
+    const output = Object.create(null) as Record<string, CellValue>;
+    for (const column of snapshot.result.columns) {
+      const value = row[column.key];
+      output[column.key] = value && typeof value === 'object' && value.type === 'number' ? Number(value.text) : value;
+    }
+    return output;
+  });
+  return { results: [{ columns: snapshot.result.columns, rows, truncated: snapshot.result.truncated, elapsedMs: 0, statement: '' }], elapsedMs: 0, analysis };
+}
+
+/** 编码独立校验副本；离线另存应传原文件文档，不能重捕获派生展示状态。 */
+export function encodePlanSnapshot(value: PlanSnapshotDocument): string { return JSON.stringify(parsePlanSnapshot(value)) + '\n'; }
+
+/** 解析前沿用1MiB字节预算；严格UTF-8字节解码仍由Main负责。 */
+export function decodePlanSnapshot(value: string): PlanSnapshotDocument {
+  string(value, explainSnapshotLimits.bytes, { bytes: 0, items: 0 }, false);
+  let parsed: unknown;
+  try { parsed = JSON.parse(value); } catch { return invalid(); }
+  return parsePlanSnapshot(parsed);
 }
