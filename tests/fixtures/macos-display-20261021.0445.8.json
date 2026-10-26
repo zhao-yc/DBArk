@@ -1,0 +1,185 @@
+{
+  "context" : {
+    "architecture" : "arm64",
+    "imageOS" : "macos26",
+    "imageVersion" : "20261021.0445.8",
+    "operatingSystemVersion" : "Version 26.6.2 (Build 25G83)",
+    "swVersContextFile" : "context.log",
+    "translationObservation" : {
+      "rawValue" : 0,
+      "sysctlAvailable" : true,
+      "translated" : false
+    }
+  },
+  "displays" : [
+    {
+      "availableModeCount" : 12,
+      "availableModes" : [
+        {
+          "ioFlags" : 3,
+          "logicalHeight" : 600,
+          "logicalWidth" : 800,
+          "modeID" : 0,
+          "pixelHeight" : 600,
+          "pixelToLogicalScaleX" : 1,
+          "pixelToLogicalScaleY" : 1,
+          "pixelWidth" : 800,
+          "refreshRate" : 60
+        },
+        {
+          "ioFlags" : 3,
+          "logicalHeight" : 540,
+          "logicalWidth" : 960,
+          "modeID" : 1,
+          "pixelHeight" : 540,
+          "pixelToLogicalScaleX" : 1,
+          "pixelToLogicalScaleY" : 1,
+          "pixelWidth" : 960,
+          "refreshRate" : 60
+        },
+        {
+          "ioFlags" : 3,
+          "logicalHeight" : 576,
+          "logicalWidth" : 1024,
+          "modeID" : 2,
+          "pixelHeight" : 576,
+          "pixelToLogicalScaleX" : 1,
+          "pixelToLogicalScaleY" : 1,
+          "pixelWidth" : 1024,
+          "refreshRate" : 60
+        },
+        {
+          "ioFlags" : 3,
+          "logicalHeight" : 768,
+          "logicalWidth" : 1024,
+          "modeID" : 3,
+          "pixelHeight" : 768,
+          "pixelToLogicalScaleX" : 1,
+          "pixelToLogicalScaleY" : 1,
+          "pixelWidth" : 1024,
+          "refreshRate" : 60
+        },
+        {
+          "ioFlags" : 3,
+          "logicalHeight" : 720,
+          "logicalWidth" : 1280,
+          "modeID" : 4,
+          "pixelHeight" : 720,
+          "pixelToLogicalScaleX" : 1,
+          "pixelToLogicalScaleY" : 1,
+          "pixelWidth" : 1280,
+          "refreshRate" : 60
+        },
+        {
+          "ioFlags" : 3,
+          "logicalHeight" : 960,
+          "logicalWidth" : 1280,
+          "modeID" : 5,
+          "pixelHeight" : 960,
+          "pixelToLogicalScaleX" : 1,
+          "pixelToLogicalScaleY" : 1,
+          "pixelWidth" : 1280,
+          "refreshRate" : 60
+        },
+        {
+          "ioFlags" : 3,
+          "logicalHeight" : 756,
+          "logicalWidth" : 1344,
+          "modeID" : 6,
+          "pixelHeight" : 756,
+          "pixelToLogicalScaleX" : 1,
+          "pixelToLogicalScaleY" : 1,
+          "pixelWidth" : 1344,
+          "refreshRate" : 60
+        },
+        {
+          "ioFlags" : 3,
+          "logicalHeight" : 1008,
+          "logicalWidth" : 1344,
+          "modeID" : 7,
+          "pixelHeight" : 1008,
+          "pixelToLogicalScaleX" : 1,
+          "pixelToLogicalScaleY" : 1,
+          "pixelWidth" : 1344,
+          "refreshRate" : 60
+        },
+        {
+          "ioFlags" : 3,
+          "logicalHeight" : 900,
+          "logicalWidth" : 1600,
+          "modeID" : 8,
+          "pixelHeight" : 900,
+          "pixelToLogicalScaleX" : 1,
+          "pixelToLogicalScaleY" : 1,
+          "pixelWidth" : 1600,
+          "refreshRate" : 60
+        },
+        {
+          "ioFlags" : 3,
+          "logicalHeight" : 1200,
+          "logicalWidth" : 1600,
+          "modeID" : 9,
+          "pixelHeight" : 1200,
+          "pixelToLogicalScaleX" : 1,
+          "pixelToLogicalScaleY" : 1,
+          "pixelWidth" : 1600,
+          "refreshRate" : 60
+        },
+        {
+          "ioFlags" : 33554439,
+          "logicalHeight" : 1080,
+          "logicalWidth" : 1920,
+          "modeID" : 10,
+          "pixelHeight" : 1080,
+          "pixelToLogicalScaleX" : 1,
+          "pixelToLogicalScaleY" : 1,
+          "pixelWidth" : 1920,
+          "refreshRate" : 60
+        },
+        {
+          "ioFlags" : 1,
+          "logicalHeight" : 480,
+          "logicalWidth" : 640,
+          "modeID" : 11,
+          "pixelHeight" : 480,
+          "pixelToLogicalScaleX" : 1,
+          "pixelToLogicalScaleY" : 1,
+          "pixelWidth" : 640,
+          "refreshRate" : 60
+        }
+      ],
+      "backingScaleFactor" : 1,
+      "currentMode" : {
+        "ioFlags" : 3,
+        "logicalHeight" : 768,
+        "logicalWidth" : 1024,
+        "modeID" : 3,
+        "pixelHeight" : 768,
+        "pixelToLogicalScaleX" : 1,
+        "pixelToLogicalScaleY" : 1,
+        "pixelWidth" : 1024,
+        "refreshRate" : 60
+      },
+      "displayID" : 1,
+      "framePoints" : {
+        "height" : 768,
+        "width" : 1024,
+        "x" : 0,
+        "y" : 0
+      },
+      "mainDisplay" : true,
+      "mirrored" : false,
+      "visibleFramePoints" : {
+        "height" : 674,
+        "width" : 1024,
+        "x" : 0,
+        "y" : 63
+      }
+    }
+  ],
+  "includesDuplicateLowResolutionModes" : true,
+  "readOnly" : true,
+  "schemaVersion" : 1,
+  "尺寸说明" : "logical来自CGDisplayMode，AppKit矩形为点，pixel为实际像素；仍须未来读取Electron原窗口及workArea DIP",
+  "用途" : "只读枚举，不代表显示空间足够或产品原生验收通过"
+}
