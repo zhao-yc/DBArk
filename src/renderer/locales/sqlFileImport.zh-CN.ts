@@ -1,0 +1,15 @@
+export const sqlFileImportZh = {
+  title: 'SQL 文件执行结果', unconfirmed: 'SQL 执行结果未确认',
+  unconfirmedHint: '未取得与本次任务及编码一致的有效回执。请核对服务器；不能据此认定执行成功、事务已提交或已撤销。不会自动重试。',
+  completed: '脚本已完成', failed: '脚本执行失败', cancelled: '脚本已取消',
+  completedStatements: '完整完成语句数', affected: '服务器累计影响行数', unknown: '未知',
+  affectedHint: '服务器累计影响行数不是保留或提交行数，仅累计完整返回语句的服务器影响计数。失败语句也可能已生效；回滚确认不能证明原 COMMIT 未执行。此前提交的修改、DDL、非事务表及外部副作用不会因此撤销。',
+  encoding: '本次解码编码', encodings: { utf8: 'UTF-8', utf16le: 'UTF-16 LE', gb18030: 'GB18030' },
+  phase: '失败阶段', phases: { 'initial-mode': '读取初始 SQL 模式', read: '读取或解码文件', parse: '解析脚本', execute: '执行语句', 'mode-refresh': '刷新 SQL 模式', finalize: '确认脚本结束状态', rollback: '回滚收尾' },
+  ordinal: (value: number) => `第 ${value} 条语句`, location: '解码后文件位置', positionUnavailable: '未取得可确认的原文件位置',
+  position: (start: { line: number; column: number }, end: { line: number; column: number }) => `第 ${start.line} 行，第 ${start.column} 列 — 第 ${end.line} 行，第 ${end.column} 列（结束位置不含）`,
+  positionHint: '行列基于所选编码解码并移除 BOM 后的文件内容，行列从 1 开始，列按 UTF-16 字符计数；不是文件字节偏移。DELIMITER 控制行不作为已执行 SQL。',
+  rollback: '回滚状态', rollbackStates: { 'not-needed': '无需额外回滚', confirmed: '已确认回滚本次未提交事务', unconfirmed: '回滚未确认' },
+  transaction: '结束事务状态', transactions: { closed: '事务已关闭', open: '事务仍打开', unknown: '事务状态未知' },
+  unknownHint: '请人工核对服务器状态与目标数据；不会自动重新执行文件。', cleanup: '执行后收尾警告',
+} as const;

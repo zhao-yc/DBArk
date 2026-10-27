@@ -88,6 +88,10 @@ import { queryExportWireProtocol, queryStreamExportLimits, type QueryExportProgr
 import { buildChanges, buildDesign, buildPageSql, deserializeCell, exportLiteral, identifier, inlineParameters, qualified, serializeCell, splitSql, SqlScriptScanner, typedCellPlaceholder } from './sql';
 import { currentSqlStatement } from './currentStatement';
 import { QueryWarningCollector } from './queryWarnings';
+import type { FileImportResult, SqlFileImportReceipt } from '../shared/sqlFileImport';
+import { sqlFileImportMessage } from '../shared/sqlFileImport';
+import { SqlFileImportPositions } from './sqlFileImportPosition';
+import { createSqlFileImportEvidence, finishSqlFileImportEvidence, sqlFileImportTransaction, type SqlFileImportEvidence } from './sqlFileImportReceipt';
 
 interface Session { id: string; connectionId: string; managed: ManagedConnection; busy: boolean; }
 interface RunningTask {
@@ -98,6 +102,7 @@ interface RunningTask {
   transactionSettingsChangeSubmitted?: boolean;
   continueOnErrorMode?: boolean;
   collectWarningsMode?: boolean;
+  sqlFileImport?: SqlFileImportEvidence;
   fileImport?: { committing: boolean; finalCommit: boolean; commitAcknowledged: boolean; committedRows: number; result?: { rows: number; errors: string[] }; failure?: Error };
 }
 interface ResultBudget { remainingRows: number; remainingBytes: number; remainingResults: number; }
@@ -591,6 +596,19 @@ export class Engine {
       case 'excel.export': this.assertFile(input); return this.withExcelTask(input, '导出 Excel', task => this.exportExcel(task, input));
       case 'files.import': {
         this.assertFile(input); const mode = fileImportTransactionMode(input.format, input);
+        // 请求配置错误在建连及SQL运行回执之前拒绝；importFile内仍保留同一防线。
+        if (Object.hasOwn(input, 'csvHasHeader')) {
+          if (typeof input.csvHasHeader !== 'boolean') throw new Error('CSV 首行字段名配置必须为布尔值');
+          csvImportHasHeader(input.format, input.csvHasHeader);
+        }
+        if (input.format === 'sql') {
+          const evidence = createSqlFileImportEvidence(input.taskId, input.encoding);
+          try { return await this.withConnection(input.connectionId, managed => this.runTask(input.taskId, managed, '导入SQL文件', task => { task.sqlFileImport = evidence; return this.importFile(task, input); }), input.database, true); }
+          catch {
+            // 关闭晚失败不能丢弃原SQL/ROLLBACK回执；错误正文可能含本机路径，统一有界说明。
+            return finishSqlFileImportEvidence(evidence, evidence.result.sql?.termination === 'cancelled', 'SQL文件连接或任务收尾未确认；请核对服务器，不要重复导入');
+          }
+        }
         const evidence: NonNullable<RunningTask['fileImport']> = { committing: false, finalCommit: false, commitAcknowledged: false, committedRows: 0 };
         try { return await this.withConnection(input.connectionId, managed => this.runTask(input.taskId, managed, '导入文件', task => { task.fileImport = evidence; return this.importFile(task, input); }), input.database, mode === 'atomic'); }
         catch (error) {
@@ -877,6 +895,13 @@ export class Engine {
     this.emit({ taskId: id, status: 'running', progress: 0, message: label, executionDatabase:queryDatabaseFromSession(completionSessionState(managed,false)) });
     try {
       const result = await action(task);
+      if (task.sqlFileImport) {
+        let cleanup: string | undefined;
+        try { await task.cancelPending; } catch { cleanup = 'SQL文件取消控制收尾失败；请核对原服务器连接，不会自动重试'; }
+        const retained = finishSqlFileImportEvidence(task.sqlFileImport, task.cancelled, cleanup);
+        this.emit({ taskId: id, status: task.cancelled ? 'cancelled' : retained.errors.length ? 'failed' : 'completed', progress: 100, message: retained.errors[0] ?? 'SQL文件执行完成；服务器影响计数不等于提交行数' });
+        return retained as T;
+      }
       if (!task.tableApply?.commitAcknowledged && !task.fileImport?.commitAcknowledged) this.checkCancelled(task);
       if (task.tableApply?.commitAcknowledged || task.fileImport?.commitAcknowledged || task.fileImport?.failure) await task.cancelPending?.catch(() => undefined); else await task.cancelPending;
       const errors = (result as { errors?: string[] } | undefined)?.errors;
@@ -885,6 +910,13 @@ export class Engine {
       this.emit({ taskId: id, status: final?.status ?? (errors?.length ? 'failed' : 'completed'), progress: 100, message: final?.message ?? (errors?.length ? errors[0] : `${label}完成`), ...(task.queryExport ? { queryExport: { ...task.queryExport } } : {}) });
       return result;
     } catch (error) {
+      if (task.sqlFileImport) {
+        let cleanup = 'SQL文件任务收尾异常；原执行及回滚证据已保留，不会自动重试';
+        try { await task.cancelPending; } catch { cleanup += '；取消控制连接收尾未确认'; }
+        const retained = finishSqlFileImportEvidence(task.sqlFileImport, task.cancelled, cleanup);
+        try { this.emit({ taskId: id, status: task.cancelled ? 'cancelled' : 'failed', progress: 0, message: retained.errors[0] ?? cleanup }); } catch { /* 事件通道故障不能抹掉SQL回执。 */ }
+        return retained as T;
+      }
       if (task.fileImport?.commitAcknowledged && task.fileImport.result) {
         await task.cancelPending?.catch(() => undefined);
         try { this.emit({ taskId: id, status: 'completed', progress: 100, rows: task.fileImport.committedRows, message: fileImportTransactionText.committedCleanup }); } catch { /* COMMIT事实优先于晚通知异常。 */ }
@@ -911,7 +943,8 @@ export class Engine {
       throw error;
     } finally {
       // 取消连接仍在建立时，不能放开会话给下一条查询，以免 KILL 误伤复用线程。
-      if (task.tableApply?.commitAcknowledged || task.fileImport?.commitAcknowledged || task.fileImport?.failure) await task.cancelPending?.catch(() => undefined);
+      if (task.sqlFileImport) await task.cancelPending?.catch(() => undefined);
+      else if (task.tableApply?.commitAcknowledged || task.fileImport?.commitAcknowledged || task.fileImport?.failure) await task.cancelPending?.catch(() => undefined);
       // 本功能取消收尾的原错误已在catch合并；finally仍须释放任务，不能再次抛出覆盖终态。
       else if (task.transactionSettingsChangeSubmitted) await task.cancelPending?.catch(() => undefined);
       else if (task.continueOnErrorMode) await task.cancelPending?.catch(() => undefined);
@@ -1458,7 +1491,7 @@ export class Engine {
   }
 
   /** 多结果集按服务器序号隔离；IPC 每批至多 200 行，返回结果受用户上限约束。 */
-  private async streamQuery(task: RunningTask, sql: string, maxRows: number, offset: number, budget: ResultBudget = { remainingRows: maxRows, remainingBytes: 16 * 1024 * 1024, remainingResults: 200 }, displaySql = sql, reportExecutionSql = false, continuing?: { driverError(error: Error): void; commandEnded?(): void }): Promise<QueryResult[]> {
+  private async streamQuery(task: RunningTask, sql: string, maxRows: number, offset: number, budget: ResultBudget = { remainingRows: maxRows, remainingBytes: 16 * 1024 * 1024, remainingResults: 200 }, displaySql = sql, reportExecutionSql = false, continuing?: { driverError(error: Error): void; commandEnded?(): void; commandSucceeded?(): void; affectedRows?(value: unknown): void }): Promise<QueryResult[]> {
     this.checkCancelled(task);
     task.inFlight = true; task.generation++;
     const started = performance.now(), results: QueryResult[] = [], batches = new Map<number, DataRow[]>(), batchBytes = new Map<number, number>();
@@ -1537,7 +1570,7 @@ export class Engine {
           // CALL 的最终状态包没有索引，必须接在已有行结果集之后，不能覆盖首个结果。
           const index = resultIndex ?? nextImplicitResult;
           if (!Array.isArray(value)) { nextImplicitResult = index + 1; pendingRowsWarning = undefined; activeRowsIndex = undefined; }
-          if (!Array.isArray(value)) task.managed.serverStatus = task.serverStatus = value.serverStatus;
+          if (!Array.isArray(value)) { task.managed.serverStatus = task.serverStatus = value.serverStatus; continuing?.affectedRows?.(value.affectedRows); }
           const result = ensure(index); if (!result) return;
           if (!Array.isArray(value)) {
             result.affectedRows = value.affectedRows; result.insertId = String(value.insertId); result.warningCount = value.warningStatus; return;
@@ -1559,7 +1592,7 @@ export class Engine {
           if (!continuing) { fail(error); return; }
           if (!deferredError) { deferredError = error; continuing.driverError(error); }
           // 服务器ERR不等于命令end；原终态到达前不能发送状态诊断或下一句。
-        }).once('end', () => { continuing?.commandEnded?.(); if (settled) return; finishRowsWarning(); if (deferredError) { fail(deferredError); return; } settled = true; cleanup(); resolve(); });
+        }).once('end', () => { continuing?.commandEnded?.(); if (settled) return; finishRowsWarning(); if (deferredError) { fail(deferredError); return; } continuing?.commandSucceeded?.(); settled = true; cleanup(); resolve(); });
         if (reportExecutionSql && continuing) consume(() => this.emit({ taskId: task.id, status: 'running', progress: 0, message: '已发送当前语句', executionSql: sql }))();
       });
       for (let index = 0; index < results.length; index++) { flush(index); if (results[index]) results[index].elapsedMs = performance.now() - started; }
@@ -1738,52 +1771,82 @@ export class Engine {
   }
 
   /** SQL 脚本遵循其自身事务语义；DDL 隐式提交与此前已提交语句不能回滚。 */
-  private async importSql(task: RunningTask, input: Input): Promise<{ rows: number; errors: string[] }> {
-    const initialMode = await this.sqlMode(task.managed, task);
-    const scanner = new SqlScriptScanner(initialMode.noBackslashEscapes, initialMode.ansiQuotes, initialMode.ansiQuotesKnown !== false, initialMode.noBackslashEscapesKnown !== false);
-    let rows = 0, statements = 0, pendingRows = 0, committedRows = 0;
-    /** 执行单条导入语句，并根据服务器事务状态区分待提交与已提交影响行数。 */
-    const run = async (sql: string) => {
-      const result = await this.streamQuery(task, sql, 1, 0);
-      const affected = result.reduce((total, item) => total + (item.affectedRows ?? 0), 0);
-      rows += affected; statements++;
-      const start = sql.replace(/^(?:\s+|\/\*[\s\S]*?\*\/|--[^\n]*(?:\n|$)|#[^\n]*(?:\n|$))*/, '');
-      if (/^ROLLBACK\b(?!\s+TO\b)/i.test(start)) pendingRows = 0;
-      else {
-        if (/^(?:BEGIN\b|START\s+TRANSACTION\b)/i.test(start)) { committedRows += pendingRows; pendingRows = 0; }
-        pendingRows += affected;
-        if (task.serverStatus !== undefined && (task.serverStatus & 1) === 0) { committedRows += pendingRows; pendingRows = 0; }
-      }
-      if (statements % 100 === 0) this.emit({ taskId: task.id, status: 'running', progress: 0, rows, message: `已执行 ${statements} 条 SQL；脚本按自身事务边界提交` });
-    };
-    /** 一次只消费一条；同一行或文件块里的后续 SQL 也必须等待实际模式刷新。 */
-    const drain = async (chunk: string, final = false) => {
-      let first = true;
-      for (;;) {
-        const sql = scanner.push(first ? chunk : '', final, 1)[0]; first = false;
-        if (!sql) return;
-        await run(sql);
-        const mode = await this.sqlMode(task.managed, task);
-        scanner.setMode(mode.noBackslashEscapes, mode.ansiQuotes, mode.ansiQuotesKnown !== false, mode.noBackslashEscapesKnown !== false);
-      }
+  private async importSql(task: RunningTask, input: Input): Promise<FileImportResult> {
+    const evidence = task.sqlFileImport ??= createSqlFileImportEvidence(task.id, input.encoding);
+    const receipt = evidence.result.sql!, positions = new SqlFileImportPositions();
+    let phase: NonNullable<SqlFileImportReceipt['failure']>['phase'] = 'initial-mode';
+    /** 阶段也由异步drain闭包更新；显式读取完整联合类型，不沿用外层词法窄化。 */
+    const currentPhase = (): NonNullable<SqlFileImportReceipt['failure']>['phase'] => phase;
+    let current: NonNullable<SqlFileImportReceipt['failure']>['statement'];
+    let attempted = false, currentCompleted = false, pendingRows = 0, legacyRows = 0;
+    /** 服务器完整返回的影响计数单独累计；溢出或非法值降为未知，不伪造精确零。 */
+    const add = (left: number | null, right: unknown): number | null => left !== null && typeof right === 'number' && Number.isSafeInteger(right) && right >= 0 && Number.isSafeInteger(left + right) ? left + right : null;
+    /** 原连接只尝试一次ROLLBACK；完整ACK、无warning及新鲜关闭状态缺一不可。 */
+    const rollback = async () => {
+      receipt.rollback = { state: 'unconfirmed', message: '原连接回滚结果尚未确认；此前提交及非事务副作用可能保留' };
+      try {
+        await task.cancelPending;
+        if (task.managed.broken) throw Error('原连接已断开，不能确认回滚');
+        task.inFlight = true; task.generation++; task.managed.serverStatus = undefined; task.managed.transactionStateKnown = false;
+        const result = (await execute<ResultSetHeader>(task.managed, 'ROLLBACK')).rows;
+        if (!result || Array.isArray(result) || !Number.isInteger(result.serverStatus) || result.serverStatus < 0 || result.serverStatus > 65535 || (result.serverStatus & 1) !== 0 || result.warningStatus !== 0 || result.affectedRows !== 0 || sqlFileImportTransaction(task.managed) !== 'closed' || task.managed.serverStatus !== result.serverStatus) throw Error('ROLLBACK未收到可确认的无警告关闭事务ACK');
+        receipt.rollback = { state: 'confirmed' };
+      } catch (error) { receipt.rollback.message = sqlFileImportMessage(this.errorMessage(error)); }
+      finally { task.inFlight = false; receipt.transaction = sqlFileImportTransaction(task.managed); }
     };
     try {
-      for await (const chunk of readText(input.filePath, input.encoding)) await drain(chunk);
-      await drain('', true);
-      // EOF/OK 返回的状态位来自服务器，无需额外查询破坏脚本的诊断信息。
-      const status = task.managed.serverStatus;
-      if (status === undefined) throw new Error('无法确认 SQL 脚本结束时的服务器事务状态');
-      if ((status & 1) !== 0) {
-        await execute(task.managed, 'ROLLBACK');
-        return { rows: committedRows, errors: [`脚本执行了 ${statements} 条 SQL，但结束时仍有未提交事务，已回滚该事务。累计影响 ${rows} 行不是成功提交行数；此前提交的 ${committedRows} 行保留。请为脚本补充明确的 COMMIT/ROLLBACK。`] };
-      }
-      return { rows: committedRows, errors: [] };
+      const initialMode = await this.sqlMode(task.managed, task);
+      const scanner = new SqlScriptScanner(initialMode.noBackslashEscapes, initialMode.ansiQuotes, initialMode.ansiQuotesKnown !== false, initialMode.noBackslashEscapesKnown !== false);
+      /** 每次仅执行一个原扫描范围；模式刷新失败仍属于刚完成的语句。 */
+      const drain = async (chunk: string, final = false) => {
+        positions.append(chunk); let first = true;
+        for (;;) {
+          phase = 'parse'; current = undefined; this.checkCancelled(task);
+          const item = scanner.pushLocated(first ? chunk : '', final, 1)[0]; first = false;
+          if (!item) { positions.discardBefore(scanner.retainedSourceOffset); return; }
+          const location = positions.locate(item.sourceRange);
+          current = { ordinal: receipt.completedStatements + 1, ...(location ? { location } : {}) };
+          phase = 'execute'; attempted = true; currentCompleted = false;
+          let affected: number | null = 0, observedAffected = false;
+          const completed = () => {
+            if (currentCompleted) return; currentCompleted = true; receipt.completedStatements++;
+            receipt.serverReportedAffectedRows = affected === null ? null : add(receipt.serverReportedAffectedRows, affected);
+            const start = item.sql.replace(/^(?:\s+|\/\*[\s\S]*?\*\/|--[^\n]*(?:\n|$)|#[^\n]*(?:\n|$))*/, '');
+            // 只保留旧rows兼容估算，不据此宣称提交/持久行数；SAVEPOINT同样不能推算持久效果。
+            if (/^ROLLBACK\b(?!\s+(?:WORK\s+)?TO\b)/i.test(start)) pendingRows = 0;
+            else {
+              if (/^(?:BEGIN\b|START\s+TRANSACTION\b)/i.test(start)) { legacyRows += pendingRows; pendingRows = 0; }
+              pendingRows += affected ?? 0;
+              if (sqlFileImportTransaction(task.managed) === 'closed') { legacyRows += pendingRows; pendingRows = 0; }
+            }
+          };
+          const result = await this.streamQuery(task, item.sql, 1, 0, undefined, item.sql, false, { driverError: () => {}, affectedRows: value => { observedAffected = true; affected = add(affected, value); }, commandSucceeded: completed });
+          // 网络端口替身可只返回完整结果；真实驱动在command end先记录ACK事实，取消晚到也不会抹掉它。
+          if (!currentCompleted) { if (!observedAffected) for (const set of result) if (set.affectedRows !== undefined) affected = add(affected, set.affectedRows); completed(); }
+          phase = 'mode-refresh'; current!.ordinal = receipt.completedStatements;
+          const mode = await this.sqlMode(task.managed, task);
+          scanner.setMode(mode.noBackslashEscapes, mode.ansiQuotes, mode.ansiQuotesKnown !== false, mode.noBackslashEscapesKnown !== false);
+          positions.discardBefore(scanner.retainedSourceOffset);
+          if (receipt.completedStatements % 100 === 0) this.emit({ taskId: task.id, status: 'running', progress: 0, message: `已完整执行${receipt.completedStatements}条SQL；累计服务器影响计数不是提交行数` });
+        }
+      };
+      phase = 'read';
+      for await (const chunk of readText(input.filePath, input.encoding)) { await drain(chunk); phase = 'read'; current = undefined; }
+      await drain('', true); phase = 'finalize'; current = undefined; this.checkCancelled(task);
+      receipt.transaction = sqlFileImportTransaction(task.managed);
+      if (receipt.transaction === 'unknown') throw Error('无法确认SQL脚本结束时的服务器事务状态');
+      if (receipt.transaction === 'open') throw Error('脚本结束时仍有未提交事务；请为脚本补充明确的COMMIT/ROLLBACK');
+      receipt.termination = 'completed'; delete receipt.failure;
     } catch (error) {
-      if (!task.managed.broken) await execute(task.managed, 'ROLLBACK').catch(() => undefined);
-      const message = `第 ${statements + 1} 条 SQL 失败；此前已提交语句保留，未提交事务已回滚。${this.errorMessage(error)}`;
-      if (task.cancelled) throw new Error(message);
-      return { rows: committedRows, errors: [message] };
+      // 完整end后才到达的取消/消费者异常，不得虚构下一条执行失败。
+      let failurePhase = currentPhase();
+      if (failurePhase === 'execute' && currentCompleted) { failurePhase = 'finalize'; current = undefined; }
+      receipt.termination = task.cancelled ? 'cancelled' : 'failed';
+      receipt.failure = { phase: failurePhase, message: sqlFileImportMessage(failurePhase === 'read' ? '读取SQL文件失败；请核对所选文件及读取权限' : this.errorMessage(error)), ...((failurePhase === 'execute' || failurePhase === 'mode-refresh') && current ? { statement: current } : {}) };
+      if (attempted) await rollback(); else receipt.transaction = sqlFileImportTransaction(task.managed);
     }
+    evidence.result.rows = Number.isSafeInteger(legacyRows) && legacyRows >= 0 ? legacyRows : 0;
+    return finishSqlFileImportEvidence(evidence, task.cancelled);
   }
 
   /** 导出使用流背压和临时文件；完成后原子替换，取消或失败不留下伪完整目标文件。 */

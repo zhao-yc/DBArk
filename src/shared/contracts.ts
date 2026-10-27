@@ -254,7 +254,7 @@ export interface CommandMap {
   'files.readQuery': { input: { fileToken: string; encoding: QueryFileEncoding }; output: { sql: string; encoding: QueryFileEncoding } };
   'files.writeQuery': { input: { fileToken: string; encoding: QueryFileEncoding; sql: string }; output: void };
   'files.preview': { input: { fileToken: string; format: 'csv' | 'json'; encoding: string; csvDelimiter?: CsvImportDelimiter; csvHasHeader?: boolean }; output: { columns: string[]; rows: DataRow[] } };
-  'files.import': { input: ImportOptions; output: { rows: number; errors: string[] } };
+  'files.import': { input: ImportOptions; output: import('./sqlFileImport').FileImportResult };
   'files.exportColumns': { input: CsvExportFieldsInput; output: CsvExportFieldsOutput };
   'files.releaseExportColumns': { input: { catalogId: string }; output: void };
   'files.export': { input: ExportOptions; output: { rows: number } };

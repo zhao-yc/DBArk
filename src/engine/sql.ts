@@ -73,6 +73,9 @@ export class SqlScriptScanner {
     if (!ansiQuotesKnown || !noBackslashEscapesKnown) this.setMode(noBackslashEscapes, ansiQuotes, ansiQuotesKnown, noBackslashEscapesKnown);
   }
 
+  /** 未来定位范围不早于仍保留语句的起点；仅供流式文件释放源块，不改变扫描或返回合同。 */
+  get retainedSourceOffset(): number { return Math.min(this.statementOffset, ...this.alternates.map(scanner => scanner.statementOffset)); }
+
   /** 仅在语句边界更新模式；尚未消费的尾部保留到读取下一条语句时再解释。 */
   setMode(noBackslashEscapes: boolean, ansiQuotes = false, ansiQuotesKnown = true, noBackslashEscapesKnown = true): void {
     if (this.hasCode || this.state !== 'normal') throw new Error('不能在 SQL 语句中途改变词法模式');
