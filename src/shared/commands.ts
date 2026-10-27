@@ -44,6 +44,7 @@ export const publicCommands: Record<Command, true> = {
   'connections.export': true, 'connections.importPreview': true, 'connections.importReview': true, 'connections.importReviewRelease': true, 'connections.importApply': true,
   'connections.list': true, 'connections.save': true, 'connections.delete': true, 'connections.test': true, 'connections.open': true, 'connections.close': true,
   'metadata.databases': true, 'metadata.objects': true, 'metadata.table': true, 'metadata.ddl': true, 'metadata.completion': true,
+  'metadata.routineInvocation': true,
   'search.structure':true,'search.structureContinue':true,'search.release':true,
   'search.savedQueries':true,'search.savedQueriesContinue':true,'search.savedQueriesRelease':true,'queries.read':true,
   'queries.page':true,'queries.pageContinue':true,'queries.pageRelease':true,'queries.deleteChecked':true,

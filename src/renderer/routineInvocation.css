@@ -1,0 +1,6 @@
+.routine-invocation-body { display: flex; flex-direction: column; gap: 8px; padding: 12px; min-height: 0; max-height: calc(88vh - 120px); overflow: auto; }
+.routine-invocation-body > p { margin: 0; overflow-wrap: anywhere; }
+.routine-invocation-parameters { max-height: 240px; overflow: auto; flex: 0 0 auto; }
+.routine-invocation-parameters table { width: 100%; border-collapse: collapse; }
+.routine-invocation-parameters th, .routine-invocation-parameters td { padding: 6px 8px; text-align: left; border-bottom: 1px solid var(--line-soft); overflow-wrap: anywhere; }
+.routine-invocation-sql { flex: 0 0 auto; min-height: 260px; border: 1px solid var(--line); }

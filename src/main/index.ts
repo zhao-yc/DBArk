@@ -1,4 +1,5 @@
 import { TableFilteredDeleteOwners } from './tableFilteredDeleteOwners';
+import { routineInvocationZh as routineInvocationMessages } from '../shared/routineInvocation.zh-CN';
 import { mergeTableFilteredDeleteProgress } from './tableFilteredDeleteProgress';
 import type { TableFilteredDeletePreviewInput, TableFilteredDeleteApplyInput, TableFilteredDeleteProgress } from '../shared/tableFilteredDelete';
 import { readBinaryCellFile, writeBinaryCellFile } from './binaryCellFiles';
@@ -739,6 +740,10 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
   const tableStatisticsRead = command === 'table.statistics';
   const tableStatisticsRevision = tableStatisticsRead ? store.connectionRevision() : undefined;
   if (tableStatisticsRead && shuttingDown) throw Error('客户端正在退出，不能统计表数据');
+  // 例程目录读取使用独立任务；配置改变后的迟到签名不能创建新调用草稿。
+  const routineInvocationRead = command === 'metadata.routineInvocation';
+  const routineInvocationRevision = routineInvocationRead ? store.connectionRevision() : undefined;
+  if (routineInvocationRead && shuttingDown) throw Error(routineInvocationMessages.shuttingDown);
   const tableValueOptionsRead = command === 'table.valueOptions';
   const tableFilteredExport = command === 'table.exportFiltered';
   const tableFilteredExportRevision = tableFilteredExport ? store.connectionRevision() : undefined;
@@ -1010,6 +1015,9 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
       return;
     }
     case 'table.draftVerify': connectionConfig.assertAvailable(input.connectionId); input = { ...input, profile: store.resolveConnection(input.connectionId) }; break;
+    case 'metadata.routineInvocation':
+      // 保留原generic task编号、准备取消和终态事件，不借用任何查询会话。
+      input = { ...input, profile: store.resolveConnection(input.connectionId) }; break;
     case 'files.choose': return input.queryInsertExport ? chooseQueryInsertFile(input,columns) : input.resultSqlPreviewId ? chooseResultSqlFile(input, columns) : chooseFile(input);
     case 'files.path': { const file = files.get(input.token); if (!file) throw new Error('文件选择已失效，请重新选择'); return file.path; }
     case 'files.readQuery': return queryFileOperation(() => readQueryFile(resolveFileToken(files, input.fileToken, 'query', 'sql'), input.encoding));
@@ -1087,6 +1095,10 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
     if (filteredExportLease) result = await filteredExportLease.settle(result);
     if (incomingReferenceRead && (shuttingDown || incomingReferenceRevision !== store.connectionRevision())) throw Error('连接配置或客户端状态已变化，请重新打开子记录');
     if (tableStatisticsRead && (shuttingDown || tableStatisticsRevision !== store.connectionRevision())) throw Error('连接配置或客户端状态已变化，请重新统计表数据');
+    if (routineInvocationRead) {
+      columnsMain.assertCapturedOwner(columns); connectionConfig.assertAvailable(requestConnectionId);
+      if (shuttingDown || routineInvocationRevision !== store.connectionRevision()) throw Error(routineInvocationMessages.stale);
+    }
     if (tableValueOptionsRead) { assertTableValueOptionsPublication(); columns!.tableValueOptionsPublication = assertTableValueOptionsPublication; }
     if (columnRequest && (command === 'schema.columns.get' || command === 'schema.columns.preview')) {
       try { columnsMain.publish(columnRequest, result); }

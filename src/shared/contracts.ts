@@ -11,6 +11,7 @@ import type { TableCopyStructureGetInput, TableCopyStructureGetOutput, TableCopy
 /** 所有跨进程数据均为可结构化克隆的普通值，精确数值由驱动保留为字符串。 */
 import type { DatabaseCreateGetInput, DatabaseCreateGetOutput, DatabaseCreatePreviewInput, DatabaseCreatePreviewOutput, DatabaseCreateApplyInput, DatabaseCreateApplyOutput, DatabaseCreateReleaseInput } from './databaseCreate';
 import type { QueryParameter, QueryParameterNames } from './queryParameters';
+import type { RoutineInvocationMetadata, RoutineInvocationTarget } from './routineInvocation';
 import type { TableDefaultEncodingGetInput, TableDefaultEncodingGetOutput, TableDefaultEncodingPreviewInput, TableDefaultEncodingPreviewOutput, TableDefaultEncodingApplyInput, TableDefaultEncodingApplyOutput, TableDefaultEncodingReleaseInput } from './tableDefaultEncoding';
 import type { TableRenameGetInput, TableRenameGetOutput, TableRenamePreviewInput, TableRenamePreviewOutput, TableRenameApplyInput, TableRenameApplyOutput, TableRenameReleaseInput } from './tableRename';
 import type { TableAutoIncrementGetInput, TableAutoIncrementGetOutput, TableAutoIncrementPreviewInput, TableAutoIncrementPreviewOutput, TableAutoIncrementApplyInput, TableAutoIncrementApplyOutput, TableAutoIncrementReleaseInput } from './tableAutoIncrement';
@@ -205,6 +206,7 @@ export interface CommandMap {
   'metadata.objects': { input: { connectionId: string; database: string }; output: DatabaseObject[] };
   'metadata.table': { input: { connectionId: string; database: string; table: string; taskId?: string }; output: TableInfo };
   'metadata.ddl': { input: { connectionId: string; database: string; name: string; kind: ObjectKind }; output: string };
+  'metadata.routineInvocation': { input: RoutineInvocationTarget & { taskId: string }; output: RoutineInvocationMetadata };
   'sessions.open': { input: { connectionId: string; database?: string|null }; output: { sessionId: string } };
   'sessions.close': { input: { sessionId: string }; output: void };
   'query.execute': { input: { sessionId: string; sql: string; taskId: string; maxRows: number; continueOnError?: boolean; /** 仅true插入SHOW诊断，false或省略保持既有查询行为。 */ collectWarnings?: boolean; /** 同一Monaco模型全文中的UTF-16光标；缺省保持原选区/全部行为。 */ currentStatement?: { offset: number } }; output: QueryOutcome };

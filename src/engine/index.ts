@@ -1,5 +1,7 @@
 import { TableCopyDataTasks } from './tableCopyDataTasks';
 import { verifyTableDraft } from './tableDraftVerify';
+import { readRoutineInvocationMetadata, type RoutineInvocationInput } from './routineInvocationMetadata';
+import { routineInvocationZh } from '../shared/routineInvocation.zh-CN';
 import type { TableDraftVerifyInput } from '../shared/tableDraftCommands';
 import { ResultInsertTasks } from './resultInsert';
 import { TableFilteredUpdateTasks } from './tableFilteredUpdate';
@@ -350,6 +352,11 @@ export class Engine {
         return this.withIndependentTask(input.connectionId,input.taskId,(managed,control)=>completionMetadata(managed,input as CompletionMetadataInput,control),undefined,'读取补全元数据',true);
       }
       case 'metadata.objects': return this.withConnection(input.connectionId, connection => metadata.objects(connection, input.database));
+      case 'metadata.routineInvocation': {
+        // Main注入保存配置；直接进入独立短会话，不触碰现有查询事务或先开不可取消连接。
+        if (input.profile) this.copySourceProfile(input);
+        return this.withIndependentTask(input.connectionId, input.taskId, (managed, control) => readRoutineInvocationMetadata({ managed, ...control }, input as RoutineInvocationInput), undefined, routineInvocationZh.reading, true);
+      }
       case 'metadata.table': {
         // 方案应用由Main补充已验证配置，直接进入原独立元数据租约；不另开无法取消的连接。
         if(input.profile)this.copySourceProfile(input);

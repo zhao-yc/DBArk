@@ -35,3 +35,7 @@ WIN11-TEST唯一正式Node CLI进程2632 exit0，2通过／0跳过／retry0，�
 两例均保持真实0连接／0标签、原配置和精确值；原名称与完整wire独立核对，源SQL只读、BLOB内层Escape不关闭外层。第一例open1／save1／chooser2，第二例open1／save0／chooser1；观察范围内pending、utility启动、被拒数据库命令均0。保存SHA256 `1a62a085a6d07efbadfdabe587c8c50d13e7245e33688fcdbf0e4ae0cf84fb81`在两新进程一致。第二例完成精确两文件及原identity目录删除，source32／dist109前后未变。
 
 Root完整回读原件108078字节／47项，SHA256 `397b0f67085e702a42ab6d865989f46414f5bef4ccf5ea52ce6983c1732f5a52`，核CRC、逐项哈希、路径、私钥块及正式报告、原附件、原退出码、父链和清理事实；最终8路径与Root候选原字节一致。原source01失败保持，当前不公开发行；CI、macOS和安装包不借用本轮结论。
+
+## 精确提交CI
+
+实现提交`f2857901643a552cbf28ba747b10981ebef2962f`的[CI 40591409259](https://github.com/zhao-yc/DBArk/actions/runs/40591409259)最终success。Linux完整892文件、18946项通过／10跳过，类型及构建成功；Windows x64、macOS arm64／x64任务均success，剪贴板专项与发布任务skipped。原Linux解码日志留忽略缓存。这补齐本提交CI终态，不将原生私网专项、macOS全局快照窗口或实际安装范围扩大，暂不发布。

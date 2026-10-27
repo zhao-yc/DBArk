@@ -8,6 +8,8 @@ import { queryFileReloadSchemas } from './queryFileReload';
 import { resultInsertPreviewInputSchema, resultInsertApplyInputSchema, resultInsertReleaseInputSchema } from './resultInsert';
 import { parsePlanSnapshot } from './explainSnapshot';
 import { parseQueryResultSnapshot } from './queryResultSnapshot';
+import { parseRoutineInvocationTarget } from './routineInvocation';
+import { routineInvocationZh } from './routineInvocation.zh-CN';
 import { tableDraftSaveSchema, tableDraftOpenSchema, tableDraftVerifySchema } from './tableDraftCommands';
 import { externalObjectUriEmptySchema, externalObjectUriIdSchema } from './externalObjectUris';
 import { queryTransactionSettingsReadSchema, queryTransactionSettingsApplySchema } from './queryTransactionSettings';
@@ -191,6 +193,10 @@ export const commandSchemas: Record<Command, z.ZodType> = {
   'metadata.objects': z.object({ connectionId: id, database: name }).strict(),
   'metadata.table': z.object({ ...target, taskId: id.optional() }).strict(),
   'metadata.ddl': z.object({ connectionId: id, database: name, name, kind: z.enum(['table','view','procedure','function','trigger','event']) }).strict(),
+  'metadata.routineInvocation': z.object({ connectionId: id, database: name, name, kind: z.enum(['procedure', 'function']), taskId: id }).strict().superRefine((value, context) => {
+    try { parseRoutineInvocationTarget({ connectionId: value.connectionId, database: value.database, name: value.name, kind: value.kind }); }
+    catch (error) { context.addIssue({ code: 'custom', message: error instanceof Error ? error.message : routineInvocationZh.invalid }); }
+  }),
   'sessions.open': z.object({ connectionId: id, database: name.nullable().optional() }).strict(), 'sessions.close': z.object({ sessionId: id }).strict(),
   'query.execute': z.object({ sessionId: id, sql: text.min(1), taskId: id, maxRows: z.number().int().min(1).max(100000), continueOnError: z.boolean().optional(), collectWarnings: z.boolean().optional(), currentStatement: z.object({ offset: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER) }).strict().optional() }).strict().refine(value => value.currentStatement === undefined || value.currentStatement.offset <= value.sql.length, '当前语句光标超出完整正文范围'),
   'query.explain': z.object({ sessionId: id, sql: text.min(1), taskId: id, maxRows: z.number().int().min(1).max(100000), format: z.enum(['auto', 'text']).optional() }).strict(),

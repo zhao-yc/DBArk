@@ -1,0 +1,16 @@
+export const routineInvocationZh = {
+  entry: '生成例程调用', title: '生成例程调用草稿', read: '读取参数并预览', open: '打开调用查询', close: '关闭', cancel: '取消本次读取',
+  procedure: '存储过程', function: '函数', parameters: '例程参数', ordinal: '顺序', direction: '方向', name: '名称', type: '数据库类型', binding: '调用占位符／输出变量',
+  zero: '此例程没有输入参数。', returnType: '函数返回类型', preview: '完整调用脚本（只读）',
+  notice: '这里只读取目录并生成草稿，不执行 SQL，也不修改现有查询、结果、事务或未提交草稿。',
+  effects: '存储过程和函数都可能写入数据、隐式提交或产生外部副作用。请先审阅例程与生成脚本，再明确执行；失败或取消后不会自动重试。',
+  values: '打开查询后，用原有“参数执行”按钮手动填写 IN／INOUT 值，支持九种类型。此预览不填写或保存参数实际值。',
+  whole: '必须整份执行生成脚本；如包含 SET、调用、输出读取和末尾清值，请完整保留，不要只执行 CALL 或输出 SELECT。',
+  variables: 'OUT／INOUT 使用本次预览独有的会话变量。执行失败或取消可能遗留变量值；末尾 SET = NULL 只清空值，不删除会话变量。',
+  noOutputs: '此脚本没有 OUT／INOUT 会话变量。',
+  reading: '正在通过独立任务读取例程参数…', checking: '正在重新核对原例程结构…',
+  cancelling: '已请求取消，正在等待原目录读取与取消响应结束…', closing: '正在关闭：等待原读取与取消响应完整结束，不会提前释放操作。',
+  stale: '原例程目标或连接配置已变化，请关闭后重新打开。', changed: '例程结构已变化，旧预览已失效。请明确重新读取参数并生成新的调用草稿。',
+  target: '返回的例程目录不属于原目标，未生成或打开查询。', consumed: '本次调用草稿已经交付，不会自动重复打开；需要时请重新读取。',
+  queryTitle: (name: string) => `${name} · 例程调用`,
+} as const;
