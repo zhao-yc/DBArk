@@ -11,6 +11,7 @@ import type { DatabaseDropTarget, DatabaseDropCounts } from '../shared/databaseD
 import { QueryFileSources } from './queryFileSources';
 import { DatabaseDefaultEncodingOwners, type DatabaseEncodingOwnerCommand } from './databaseDefaultEncodingOwners';
 import { ExplainSnapshotFiles } from './explainSnapshotFiles';
+import { QueryResultSnapshotFiles, queryResultSnapshotFileMessages } from './queryResultSnapshotFiles';
 import { TableDraftFiles, tableDraftFileMessages } from './tableDraftFiles';
 import { bindTableDraft, assertTableDraftBinding } from './tableDraftBinding';
 import { explainSnapshotZh } from '../shared/explainSnapshot.zh-CN';
@@ -72,6 +73,7 @@ let connectionTransfer: ConnectionTransfer;
 let snippetTransfers: SnippetTransfers;
 let queryFileSources: QueryFileSources;
 let explainSnapshotFiles: ExplainSnapshotFiles;
+let queryResultSnapshotFiles: QueryResultSnapshotFiles;
 let tableDraftFiles: TableDraftFiles;
 let savedQuerySearches:SavedQuerySearches;
 let savedQueryPages:SavedQueryPages;
@@ -643,6 +645,17 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
         owner.assertCurrent(); return result;
       }
       const result = await tableDraftFiles.save(bindTableDraft(input.payload, profile), owner);
+      if (result) columns!.snapshotSaved = true;
+      return result;
+    });
+  }
+  // 结果快照只读写用户明确选择的本地文件，不取得连接、会话或SQL执行能力。
+  if (command === 'resultSnapshotFiles.open' || command === 'resultSnapshotFiles.save') {
+    columnsMain.assertCapturedOwner(columns);
+    const owner = { assertCurrent: () => columnsMain.assertCapturedOwner(columns) };
+    return queryFileOperation(async () => {
+      if (command === 'resultSnapshotFiles.open') return queryResultSnapshotFiles.open(owner);
+      const result = await queryResultSnapshotFiles.save(input.snapshot, owner);
       if (result) columns!.snapshotSaved = true;
       return result;
     });
@@ -1319,6 +1332,17 @@ else {
       const selected = await dialog.showSaveDialog(ownerWindow, { title: explainSnapshotZh.save, defaultPath: explainSnapshotZh.defaultName, filters });
       return selected.canceled ? undefined : selected.filePath;
     } });
+    queryResultSnapshotFiles = new QueryResultSnapshotFiles({ reserve: path => exportReservations.acquire(path), choose: async mode => {
+      const ownerWindow = window;
+      if (!ownerWindow) throw Error(queryResultSnapshotFileMessages.stale);
+      const filters = [{ name: queryResultSnapshotFileMessages.fileType, extensions: ['json'] }];
+      if (mode === 'open') {
+        const selected = await dialog.showOpenDialog(ownerWindow, { title: queryResultSnapshotFileMessages.choose, properties: ['openFile'], filters });
+        return selected.canceled ? undefined : selected.filePaths[0];
+      }
+      const selected = await dialog.showSaveDialog(ownerWindow, { title: queryResultSnapshotFileMessages.save, defaultPath: queryResultSnapshotFileMessages.defaultName, filters });
+      return selected.canceled ? undefined : selected.filePath;
+    } });
     snippetTransfers = new SnippetTransfers(store, { choose: async mode => {
       if (!window) throw Error(snippetTransferZh.stale);
       const filters = [{ name: 'SQL片段 JSON', extensions: ['json'] }];
@@ -1350,7 +1374,7 @@ else {
         }
         if (payload.command.startsWith('explainFiles.')||payload.command.startsWith('schema.columns.')||payload.command.startsWith('table.presets.')||payload.command.startsWith('result.presets.')||payload.command.startsWith('queryFileSources.')||fileCancel||resultSql||insertRequest||payload.command.startsWith('snippets.transfer')||payload.command.startsWith('files.importPresets.')) columns = columnsMain.capture(event);
         const input = validateMainCommand(payload.command, payload.input);
-        if (payload.command.startsWith('tableDraftFiles.') || payload.command.startsWith('workbench.protocol')) columns = columnsMain.capture(event);
+        if (payload.command.startsWith('tableDraftFiles.') || payload.command.startsWith('resultSnapshotFiles.') || payload.command.startsWith('workbench.protocol')) columns = columnsMain.capture(event);
         if (payload.command.startsWith('schema.databaseDrop.')) beginDatabaseDrop(payload.command, input, columns!);
         if (databaseEncodingCommand) databaseEncodingOwners.before(databaseEncodingCommand, input, columns!);
         const operation=dispatch(payload.command as Command,input,columns),local=payload.command==='search.savedQueries'||payload.command==='search.savedQueriesContinue'||payload.command==='queries.page'||payload.command==='queries.pageContinue'||payload.command==='history.page'||payload.command==='history.pageContinue'||payload.command.startsWith('history.delete');if(local)localSearchOperations.add(operation);
@@ -1384,9 +1408,9 @@ else {
             catch (error) { await columnsMain.rejectReply(columns, error); }
           }
           if (payload.command.startsWith('queryFileSources.') || fileCancel || payload.command.startsWith('snippets.transfer')) columnsMain.assertCapturedOwner(columns);
-          if (payload.command.startsWith('explainFiles.') || payload.command.startsWith('tableDraftFiles.')) try { columnsMain.assertCapturedOwner(columns); } catch (error) {
+          if (payload.command.startsWith('explainFiles.') || payload.command.startsWith('tableDraftFiles.') || payload.command.startsWith('resultSnapshotFiles.')) try { columnsMain.assertCapturedOwner(columns); } catch (error) {
             // 文件已提交后的最后发布门失效时，不能诱导用户自动重试覆盖文件。
-            if (columns?.snapshotSaved) throw Error(payload.command.startsWith('tableDraftFiles.') ? tableDraftFileMessages.unknownWrite : explainSnapshotZh.unknownWrite);
+            if (columns?.snapshotSaved) throw Error(payload.command.startsWith('resultSnapshotFiles.') ? queryResultSnapshotFileMessages.unknownWrite : payload.command.startsWith('tableDraftFiles.') ? tableDraftFileMessages.unknownWrite : explainSnapshotZh.unknownWrite);
             throw error;
           }
           if(insertRequest)columnsMain.assertCapturedOwner(columns);

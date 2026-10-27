@@ -7,6 +7,7 @@ import { importPresetListSchema, importPresetSaveSchema, importPresetDeleteSchem
 import { queryFileReloadSchemas } from './queryFileReload';
 import { resultInsertPreviewInputSchema, resultInsertApplyInputSchema, resultInsertReleaseInputSchema } from './resultInsert';
 import { parsePlanSnapshot } from './explainSnapshot';
+import { parseQueryResultSnapshot } from './queryResultSnapshot';
 import { tableDraftSaveSchema, tableDraftOpenSchema, tableDraftVerifySchema } from './tableDraftCommands';
 import { externalObjectUriEmptySchema, externalObjectUriIdSchema } from './externalObjectUris';
 import { queryTransactionSettingsReadSchema, queryTransactionSettingsApplySchema } from './queryTransactionSettings';
@@ -334,6 +335,8 @@ export const commandSchemas: Record<Command, z.ZodType> = {
   'history.deletePreview': historyDeletePreviewInputSchema, 'history.deleteApply': historyDeleteApplyInputSchema, 'history.deleteRelease': historyDeleteReleaseInputSchema,
   'queryFileSources.recent': queryRecentFilesSchema, 'queryFileSources.forgetRecent': queryRecentFileForgetSchema,
   'explainFiles.open': empty,
+  'resultSnapshotFiles.open': empty,
+  'resultSnapshotFiles.save': z.object({ snapshot: z.unknown().transform(value => parseQueryResultSnapshot(value)) }).strict(),
   'tableDraftFiles.open': tableDraftOpenSchema, 'tableDraftFiles.save': tableDraftSaveSchema, 'table.draftVerify': tableDraftVerifySchema,
   'binaryCellFiles.open': binaryCellFileOpenSchema,
   'table.filteredDelete.preview': tableFilteredDeletePreviewInputSchema,

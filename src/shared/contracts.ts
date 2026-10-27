@@ -43,6 +43,7 @@ import type { QueryTransactionSettingsSnapshot, QueryTransactionIsolation } from
 import type { QueryScriptReport } from './queryContinueOnError';
 import type { QueryWarningsReport } from './queryWarnings';
 import type { PlanSnapshotDocument } from './explainSnapshot';
+import type { QueryResultSnapshotDocument } from './queryResultSnapshot';
 import type { DatabaseDefaultEncodingGetInput, DatabaseDefaultEncodingGetOutput, DatabaseDefaultEncodingPreviewInput, DatabaseDefaultEncodingPreviewOutput, DatabaseDefaultEncodingApplyInput, DatabaseDefaultEncodingApplyOutput, DatabaseDefaultEncodingReleaseInput } from './databaseDefaultEncoding';
 import type { WorkbenchTarget, WorkbenchSnapshot } from './workbench';
 import type { SchemaCompareInput, SchemaCompareResult, SchemaComparePreviewInput, SchemaComparePreview } from './schemaCompare';
@@ -124,6 +125,8 @@ export interface CommandMap {
   'result.presets.read': { input: QueryResultPresetSelect; output: QueryResultPresetValue };
   'queryFileSources.checkExternal': { input: QueryFileCheckInput; output: QueryFileCheckResult };
   'explainFiles.open': { input: Record<string, never>; output: { name: string; snapshot: PlanSnapshotDocument } | null };
+  'resultSnapshotFiles.open': { input: Record<string, never>; output: { name: string; snapshot: QueryResultSnapshotDocument } | null };
+  'resultSnapshotFiles.save': { input: { snapshot: QueryResultSnapshotDocument }; output: { name: string } | null };
   'schema.databaseDrop.get': { input: DatabaseDropGetInput; output: DatabaseDropGetOutput };
   'schema.databaseDrop.preview': { input: DatabaseDropPreviewInput; output: DatabaseDropPreviewOutput };
   'schema.databaseDrop.apply': { input: DatabaseDropApplyInput; output: DatabaseDropApplyOutput };

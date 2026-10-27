@@ -10,6 +10,7 @@ export const publicCommands: Record<Command, true> = {
   'files.importPresets.list': true, 'files.importPresets.save': true, 'files.importPresets.delete': true,
   'result.insertPreview': true, 'result.insertApply': true, 'result.insertRelease': true,
   'explainFiles.open': true, 'explainFiles.save': true,
+  'resultSnapshotFiles.open': true, 'resultSnapshotFiles.save': true,
   'schema.databaseDefaultEncoding.get': true, 'schema.databaseDefaultEncoding.preview': true, 'schema.databaseDefaultEncoding.apply': true, 'schema.databaseDefaultEncoding.release': true,
   'connections.organizationGet': true, 'connections.organizationApply': true,
   'result.presets.list': true, 'result.presets.save': true, 'result.presets.rename': true, 'result.presets.delete': true, 'result.presets.read': true,
