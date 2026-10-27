@@ -86,14 +86,25 @@
   Push $8
   Push $9
   StrCpy $0 "$INSTDIR\${APP_EXECUTABLE_FILENAME}"
-  StrCpy $1 '"$INSTDIR\${APP_EXECUTABLE_FILENAME}" "%1"'
+  ; 固定终止符先于不可信URI，阻止解码引号拆出的参数被原生运行时识别为开关。
+  StrCpy $1 '"$INSTDIR\${APP_EXECUTABLE_FILENAME}" -- "%1"'
   !insertmacro DBArkObjectUriContext install dbark_uri_install_skip
   !insertmacro DBArkObjectUriOpen "${DBARK_OBJECT_URI_KEY}"
   StrCmpS $5 2 dbark_uri_register
   StrCmpS $5 0 0 dbark_uri_install_skip
   System::Call 'advapi32::RegCloseKey(p r3) i .r8'
   StrCmpS $8 0 0 dbark_uri_install_skip
-  !insertmacro DBArkObjectUriOwned dbark_uri_install_skip
+  ; 先读取一次命令选择固定格式；读取错误立即拒绝，不把I/O失败当作旧格式重试。
+  ClearErrors
+  ReadRegStr $9 SHELL_CONTEXT "${DBARK_OBJECT_URI_KEY}\shell\open\command" ""
+  IfErrors dbark_uri_install_skip
+  StrCmpS $9 $1 dbark_uri_install_owned
+  StrCpy $1 '"$INSTDIR\${APP_EXECUTABLE_FILENAME}" "%1"'
+  StrCmpS $9 $1 0 dbark_uri_install_skip
+  dbark_uri_install_owned:
+    ; 仅对选定命令完整核验一次；旧格式仍要求本路径、全部标记、类型及整棵树形。
+    !insertmacro DBArkObjectUriOwned dbark_uri_install_skip
+    StrCpy $1 '"$INSTDIR\${APP_EXECUTABLE_FILENAME}" -- "%1"'
   dbark_uri_register:
     ClearErrors
     WriteRegStr SHELL_CONTEXT "${DBARK_OBJECT_URI_KEY}" "" "${DBARK_OBJECT_URI_DESCRIPTION}"
@@ -136,7 +147,7 @@
   Push $8
   Push $9
   StrCpy $0 "$INSTDIR\${APP_EXECUTABLE_FILENAME}"
-  StrCpy $1 '"$INSTDIR\${APP_EXECUTABLE_FILENAME}" "%1"'
+  StrCpy $1 '"$INSTDIR\${APP_EXECUTABLE_FILENAME}" -- "%1"'
   !insertmacro DBArkObjectUriContext uninstall dbark_uri_uninstall_skip
   !insertmacro DBArkObjectUriOwned dbark_uri_uninstall_skip
   ; 只删除已核对的自有值，叶子仅空时移除；绝不递归删除Classes或dbark树。

@@ -41,14 +41,14 @@ function program(name: 'customInstall' | 'customUnInstall'): string[] {
 }
 
 /** 注册表模型只提供API返回；所有分支、匹配、写删与寄存器恢复均读取实际NSIS指令。 */
-function interpret(name: 'customInstall' | 'customUnInstall', registry: Registry, options: { mode?: string; directory?: string; openError?: number; closeError?: number; failWrite?: number } = {}) {
+function interpret(name: 'customInstall' | 'customUnInstall', registry: Registry, options: { mode?: string; directory?: string; openError?: number; closeError?: number; readError?: boolean; failCommandReadOnce?: boolean; failWrite?: number } = {}) {
   const mode = options.mode ?? 'CurrentUser', hive = mode === 'all' ? 'machine' : 'user', instructions = program(name);
   const registers = new Map<string, string>(Array.from({ length: 10 }, (_, index) => ['$' + index, '原寄存器' + index]));
   registers.set('$INSTDIR', options.directory ?? 'C:\\程序 Files\\DBArk'); registers.set('$installMode', mode);
   const initialRegisters = new Map(registers), stack: string[] = [], handles = new Map<string, string>(), mutations: string[] = [];
   const nativeRoots: { root: string; rights: number }[] = [];
   const labels = new Map(instructions.flatMap((line, index) => line.endsWith(':') ? [[line.slice(0, -1), index] as const] : []));
-  let error = false, nextHandle = 0, notifications = 0, writes = 0, pc = 0, steps = 0;
+  let error = false, nextHandle = 0, notifications = 0, writes = 0, commandReads = 0, pc = 0, steps = 0;
   const expand = (value: string) => value.replace(/\$(?:INSTDIR|installMode|\d)/g, name => registers.get(name) ?? (() => { throw Error('未知NSIS变量'); })());
   const address = (path: string, root = hive) => root + ':' + path.toLowerCase();
   const children = (key: string) => [...registry.keys()].filter(candidate => candidate.startsWith(key + '\\') && !candidate.slice(key.length + 1).includes('\\'));
@@ -86,7 +86,9 @@ function interpret(name: 'customInstall' | 'customUnInstall', registry: Registry
     if (op === 'ReadRegStr' || op === 'ReadRegDWORD') {
       if (args[1] !== 'SHELL_CONTEXT') throw Error('注册表读取绕过安装上下文');
       const cell = registry.get(address(args[2]))?.get(args[3].toLowerCase()), expected = op === 'ReadRegDWORD' ? 'dword' : 'string';
-      if (!cell || cell.type !== expected) { error = true; registers.set(raw[1], ''); } else registers.set(raw[1], cell.value);
+      const commandRead = args[2].toLowerCase() === protocol + '\\shell\\open\\command' && args[3] === '';
+      if (commandRead) commandReads++;
+      if (options.readError || options.failCommandReadOnce && commandRead && commandReads === 1 || !cell || cell.type !== expected) { error = true; registers.set(raw[1], ''); } else registers.set(raw[1], cell.value);
       continue;
     }
     if (op === 'WriteRegStr' || op === 'WriteRegDWORD') {
@@ -105,11 +107,18 @@ function interpret(name: 'customInstall' | 'customUnInstall', registry: Registry
   }
   expect(stack).toEqual([]); expect(registers).toEqual(initialRegisters);
   if (!options.closeError) expect(handles.size).toBe(0);
-  return { mutations, notifications, writes, nativeRoots };
+  return { mutations, notifications, writes, nativeRoots, commandReads };
 }
 
 function snapshot(registry: Registry) { return [...registry].map(([key, values]) => [key, [...values].sort()] as const).sort(); }
 function owned(mode: 'CurrentUser' | 'all' = 'CurrentUser') { const registry: Registry = new Map(); interpret('customInstall', registry, { mode }); return registry; }
+/** 旧版原件仅命令缺少固定终止符，其余全部所有权字段和树形沿用实际include产物。 */
+function legacyOwned(mode: 'CurrentUser' | 'all' = 'CurrentUser') {
+  const registry = owned(mode), root = (mode === 'all' ? 'machine:' : 'user:') + protocol;
+  const executable = registry.get(root)!.get('dbarkownerpath')!.value;
+  registry.get(root + '\\shell\\open\\command')!.set('', { type: 'string', value: '"' + executable + '" "%1"' });
+  return registry;
+}
 
 describe('对象URI安装配置与实际include有限解释（不代表原生安装验收）', () => {
   it('仅macOS声明dbark scheme，NSIS显式include且原配置边界不变', () => {
@@ -138,11 +147,24 @@ describe('对象URI安装配置与实际include有限解释（不代表原生安
     const registry: Registry = new Map(), directory = 'C:\\程序 Files\\DBArk %app% & test';
     const result = interpret('customInstall', registry, { mode, directory }), root = mode === 'all' ? 'machine:' : 'user:';
     expect(result.notifications).toBe(1); expect(result.writes).toBe(8);
-    expect(registry.get(root + protocol + '\\shell\\open\\command')!.get('')!.value).toBe('"' + directory + '\\DBArk.exe" "%1"');
+    expect(registry.get(root + protocol + '\\shell\\open\\command')!.get('')!.value).toBe('"' + directory + '\\DBArk.exe" -- "%1"');
     expect(registry.get(root + protocol)!.get('dbarkownerpath')!.value).toBe(directory + '\\DBArk.exe');
     expect([...registry.keys()].every(key => key.startsWith(root))).toBe(true);
     expect(result.mutations.every(value => value.includes(root + protocol))).toBe(true);
     expect(result.nativeRoots.length).toBeGreaterThan(0); expect(result.nativeRoots.every(item => item.root + ':' === root && item.rights === 0x20119)).toBe(true);
+  });
+
+  it.each(['CurrentUser', 'all'] as const)('仅%s完整旧owner迁移为带固定终止符的新命令，迁移后仍可严格卸载', mode => {
+    const registry = legacyOwned(mode), root = (mode === 'all' ? 'machine:' : 'user:') + protocol;
+    const previous = snapshot(registry), oldCommand = registry.get(root + '\\shell\\open\\command')!.get('')!.value;
+    // 新卸载器不追认旧命令；只有显式安装迁移成功后才拥有新命令的卸载权。
+    expect(interpret('customUnInstall', registry, { mode }).mutations).toEqual([]); expect(snapshot(registry)).toEqual(previous);
+    const result = interpret('customInstall', registry, { mode }); expect(result.notifications).toBe(1); expect(result.writes).toBe(8);
+    const executable = registry.get(root)!.get('dbarkownerpath')!.value;
+    expect(oldCommand).toBe('"' + executable + '" "%1"');
+    expect(registry.get(root + '\\shell\\open\\command')!.get('')!.value).toBe('"' + executable + '" -- "%1"');
+    expect(snapshot(registry)).toEqual(snapshot(owned(mode)));
+    expect(interpret('customUnInstall', registry, { mode }).notifications).toBe(1); expect(registry.has(root)).toBe(false);
   });
 
   it.each(['CurrentUser', 'all'] as const)('同一路径完整owner可重复安装，%s正确卸载且保留Classes及邻项', mode => {
@@ -166,9 +188,37 @@ describe('对象URI安装配置与实际include有限解释（不代表原生安
     const registry: Registry = new Map(); expect(interpret('customInstall', registry, { openError }).mutations).toEqual([]); expect(registry.size).toBe(0);
   });
 
+  it('新旧完整owner读取失败均保留原注册，不能借迁移分支绕过读错误', () => {
+    for (const registry of [owned(), legacyOwned()]) {
+      const before = snapshot(registry);
+      for (const hook of ['customInstall', 'customUnInstall'] as const) {
+        const result = interpret(hook, registry, { readError: true }); expect(result.mutations).toEqual([]); expect(result.notifications).toBe(0); expect(snapshot(registry)).toEqual(before);
+      }
+    }
+  });
+
+  it('新旧命令仅首次读取失败时立即保留原件，不再重读并迁移', () => {
+    for (const registry of [owned(), legacyOwned()]) {
+      const before = snapshot(registry), result = interpret('customInstall', registry, { failCommandReadOnce: true });
+      expect(result.commandReads).toBe(1); expect(result.writes).toBe(0); expect(result.mutations).toEqual([]); expect(result.notifications).toBe(0); expect(snapshot(registry)).toEqual(before);
+    }
+  });
+
+  it('旧注册丢失marker或在原EXE命令中追加开关时不获迁移权', () => {
+    for (const change of ['missing-marker', 'extra-switch'] as const) {
+      const registry = legacyOwned(), root = 'user:' + protocol;
+      if (change === 'missing-marker') registry.get(root)!.delete('dbarkownerversion');
+      else registry.get(root + '\\shell\\open\\command')!.get('')!.value += ' --foreign';
+      const before = snapshot(registry), result = interpret('customInstall', registry);
+      expect(result.mutations).toEqual([]); expect(result.notifications).toBe(0); expect(snapshot(registry)).toEqual(before);
+    }
+  });
+
   it.each(['customInstall', 'customUnInstall'] as const)('%s拒绝不同安装路径，即使AppID相同也不改写原注册', hook => {
-    const registry = owned(), before = snapshot(registry);
-    expect(interpret(hook, registry, { directory: 'D:\\另一个DBArk' }).mutations).toEqual([]); expect(snapshot(registry)).toEqual(before);
+    for (const registry of [owned(), legacyOwned()]) {
+      const before = snapshot(registry);
+      expect(interpret(hook, registry, { directory: 'D:\\另一个DBArk' }).mutations).toEqual([]); expect(snapshot(registry)).toEqual(before);
+    }
   });
 
   it.each([
@@ -177,8 +227,10 @@ describe('对象URI安装配置与实际include有限解释（不代表原生安
     { key: '\\DefaultIcon', name: '', value: 'foreign.ico,0' }, { key: '\\shell', name: '', value: 'foreignVerb' },
     { key: '\\shell\\open\\command', name: '', value: '"C:\\foreign.exe" "%1"' },
   ])('已变更注册字段$key/$name在卸载/重装时整体保留', ({ key, name, value }) => {
-    const registry = owned(); registry.get('user:' + protocol + key.toLowerCase())!.set(name.toLowerCase(), { type: 'string', value }); const before = snapshot(registry);
-    for (const hook of ['customInstall', 'customUnInstall'] as const) { expect(interpret(hook, registry).mutations).toEqual([]); expect(snapshot(registry)).toEqual(before); }
+    for (const registry of [owned(), legacyOwned()]) {
+      registry.get('user:' + protocol + key.toLowerCase())!.set(name.toLowerCase(), { type: 'string', value }); const before = snapshot(registry);
+      for (const hook of ['customInstall', 'customUnInstall'] as const) { expect(interpret(hook, registry).mutations).toEqual([]); expect(snapshot(registry)).toEqual(before); }
+    }
   });
 
   it.each([
@@ -187,13 +239,17 @@ describe('对象URI安装配置与实际include有限解释（不代表原生安
     { key: '\\shell\\open\\command', name: 'DelegateExecute', type: 'string' as const, value: '{foreign}' },
     { key: '', name: 'ForeignData', type: 'string' as const, value: '不要删除' },
   ])('错误marker类型/版本或附加handler数据不会被删除：$name/$value', ({ key, name, type, value }) => {
-    const registry = owned(); registry.get('user:' + protocol + key.toLowerCase())!.set(name.toLowerCase(), { type, value }); const before = snapshot(registry);
-    expect(interpret('customUnInstall', registry).mutations).toEqual([]); expect(snapshot(registry)).toEqual(before);
+    for (const registry of [owned(), legacyOwned()]) {
+      registry.get('user:' + protocol + key.toLowerCase())!.set(name.toLowerCase(), { type, value }); const before = snapshot(registry);
+      for (const hook of ['customInstall', 'customUnInstall'] as const) { expect(interpret(hook, registry).mutations).toEqual([]); expect(snapshot(registry)).toEqual(before); }
+    }
   });
 
   it('后来加入DDEEXEC子树即保留整套注册，不仅比较旧command', () => {
-    const registry = owned(); registry.set('user:' + protocol + '\\shell\\open\\ddeexec', new Map([['', { type: 'string', value: '外来DDE' }]])); const before = snapshot(registry);
-    expect(interpret('customUnInstall', registry).mutations).toEqual([]); expect(snapshot(registry)).toEqual(before);
+    for (const registry of [owned(), legacyOwned()]) {
+      registry.set('user:' + protocol + '\\shell\\open\\ddeexec', new Map([['', { type: 'string', value: '外来DDE' }]])); const before = snapshot(registry);
+      for (const hook of ['customInstall', 'customUnInstall'] as const) { expect(interpret(hook, registry).mutations).toEqual([]); expect(snapshot(registry)).toEqual(before); }
+    }
   });
 
   it('部分写入失败不发布成功通知，也不能在下次安装当作完整owner接管', () => {

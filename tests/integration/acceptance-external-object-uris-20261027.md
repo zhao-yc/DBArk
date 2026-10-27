@@ -42,6 +42,24 @@ Windows只读asar验证在按真实API使用本机路径分隔符后通过（PID
 
 ## 验收边界
 
+### 2026-10-28补充：完整CI、旧安装收尾及分隔符候选
+
+`e62dd658` 的[CI 40533833206](https://github.com/zhao-yc/DBArk/actions/runs/40533833206)四个主要job均success：Linux 881文件18733通过/10跳过，类型和构建通过；Windows x64及macOS arm64/x64各自源码、安装产物legacy均82通过/375跳过。签名、公证、实库及本功能OS URI流程不因此视为通过；开发预览发布job跳过。四份原始job日志保存在本机中转缓存，旧40528682535原红仍保留。
+
+原Windows候选的registration01在非提权WMI事件订阅被拒后、安装前停止。registration02使用无GUI父子探针验证 `Start-Process -Wait -PassThru`：父13596 exit0，子7388晚5.76秒exit0，等待在子结束后返回；与[PowerShell官方进程树等待](https://learn.microsoft.com/en-us/powershell/module/microsoft.powershell.management/start-process#-wait)语义一致。随后原安装器15772 tree-wait exit0/13.94秒；附加runspace观察器HadErrors导致控制器停链，原子错误流未保存，原因未确认，不能把当前空快照倒推成历史全过程证明。
+
+registration03只读确认旧完整owner及Windows有效关联匹配 `"exe" "%1"`，asar109一致，当前本例进程0。发现原前置检查只保存DisplayName精确等于DBArk的项，会漏掉 `DBArk 0.28.0`；没有固定GUID或完整根键清单的原始空证据，故安装前GUID `3adbf054-c5e2-5ff2-a5b2-a395f736b37d` 不存在未确认。原两份空数组及筛选代码均保留，未补签fresh安装验收。
+
+registration04在当前父目录fileId/volume/SID、旧完整owner、实际卸载器路径/hash及进程0均复核后，只调用原 `Uninstall DBArk.exe`。PID8020真实tree-wait exit0，一次卸载，无重试或手工删注册表/目录；当前自有协议、固定卸载项、安装目录及进程已清，父目录和空profile保留作原件。这只证明当前owned资源清理，不修补旧前置证据缺口。Root已回读01–04与原NSIS记录包（125项，188895字节，SHA256 `f931b84167b593ab218e3c182d1dd077850d3c6b58d12f5950a3d9538b315244`），递归174项哈希/CRC/路径及私钥块检查通过；未主动启动系统URI、App、DB或剪贴板操作，原1392现场保持。
+
+后续5文件候选加入注册命令的固定 `--`、严格旧own迁移、接收器固定前缀及反例、真实副实例spawn参数断言。来源及静态/原生边界见[开发说明](../../docs/development/external-object-uris-20261027.md)。新原生安装前必须同时记录固定GUID、带版本名称及完整目标键清单，旧精确名称筛选不得再作为空状态门。
+
+green05最初SSH6456 exit255/10秒超时，在下载前停止，未测试或写入。一次明确授权的只读身份/哈希重试3764及SCP14936均exit0，未改网络/hosts/key配置，测试仍在WIN11-TEST，本机未接续。新5文件核哈希后，24文件274项全部通过（PID15872 exit0，包含此前262项）；build含完整类型通过（18404 exit0），新109份构建固定。默认16520恰1skip、list6340恰1；新offline512 exit0/1通过，副实例16464 exit0/signal=null、profile正常清理、pending0/fork0，固定分隔符spawn输入与正式Main事件通过，不作为原生最早argv或Shell结果。
+
+新NSIS一次编译15140 exit0/198.66秒，使用green05独立输出路径，未重建第二次dist；新EXE143270562字节、SHA256 `312bb580676351fd4e8bdb6596da8688e209a2a8b6cfab0e18046da80ed5dd14`，新asar209370661字节、SHA256 `8f3aaf2efd3e823477c674923f1a9d5cd32648fe14b95048441588fd569f32f9`，109条逐哈希一致，旧green03包未改。Root回读118项原件包（157559字节，SHA256 `c00f0134f5424cb7a1956649ab1ead61e9723a4545926c22536970283e836d28`），与本机5文件逐字匹配，递归124条哈希/CRC/路径/私钥块检查通过。
+
+green05尚未执行新包原生安装、系统URI/端口探针或实库；未借用e62旧完整CI。registration06已独立派发严格前置旧包→新包原生升级及新原卸载器清理，未取得结果前不宣告通过；每版本仅执行一次，任何失败保留现场，不手写改键或删除文件来达标。
+
 单元涵盖规范URI、参数预算及拆参、文档/连接/导航ABA、真实Promise收尾、提交线性化、模态、卸载、React StrictMode与安装脚本归属判断。安装脚本解释器不证明NSIS原生编译或注册表行为。
 
 离线Electron用例仅覆盖正式Main `open-url`事件、真实副实例、正式preload/IPC及未知连接拒绝；不替换产品结果、不访问数据库、不使用系统剪贴板或原生文件输入。它不能证明OS协议注册、冷启动或实库对象成功导航。Windows安装/卸载与冷热系统入口、macOS两个架构、实库正向导航、完整回归及新CI均需各自记录，不借用旧草稿功能的验收结果。W02保持“部分”，不增加完整工作包或发行计数。

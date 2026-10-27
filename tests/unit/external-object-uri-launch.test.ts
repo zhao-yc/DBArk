@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { captureObjectUriLaunch, receiveObjectUriLaunch } from '../../src/main/externalObjectUriLaunch';
 import { objectUri } from '../../src/shared/workbench';
 import { ExternalObjectUris } from '../../src/main/externalObjectUris';
+import { externalObjectUriLimits } from '../../src/shared/externalObjectUris';
 
 const uri = objectUri({ connectionId: '原连接', database: '库/名', kind: 'table', name: '表" %22/尾\\' });
 const exe = 'C:\\含空格 应用\\DBArk.exe';
@@ -11,12 +12,27 @@ describe('单实例原参数保真接收', () => {
     const expected = { dbarkObjectUri: { kind: 'url', uri } };
     expect(captureObjectUriLaunch([exe, uri], false)).toEqual(expected);
     expect(captureObjectUriLaunch([exe, 'dist/main/index.cjs', uri], true)).toEqual(expected);
+    expect(captureObjectUriLaunch([exe, '--', uri], false)).toEqual(expected);
+    expect(captureObjectUriLaunch([exe, 'dist/main/index.cjs', '--', uri], true)).toEqual(expected);
     expect(captureObjectUriLaunch([exe], false)).toEqual({ dbarkObjectUri: { kind: 'none' } });
+    expect(captureObjectUriLaunch([exe, '--'], false)).toEqual({ dbarkObjectUri: { kind: 'none' } });
   });
-  it.each(['--flag', '--original-process-start-time=1', '任意拆分尾项'])('即便前半是canonical链接，也拒绝追加参数%s', extra => {
+  it.each(['--flag', '--original-process-start-time=1', '--inspect=9229', '--remote-debugging-port=9222', '任意拆分尾项'])('即便前半是canonical链接，也拒绝追加参数%s', extra => {
     const valid = objectUri({ connectionId: 'c', database: 'd', kind: 'table', name: 'safe' });
     expect(captureObjectUriLaunch([exe, valid, extra], false)).toEqual({ dbarkObjectUri: { kind: 'error', code: 'invalid' } });
     expect(captureObjectUriLaunch([exe, extra, valid], false)).toEqual({ dbarkObjectUri: { kind: 'error', code: 'invalid' } });
+    expect(captureObjectUriLaunch([exe, '--', valid, extra], false)).toEqual({ dbarkObjectUri: { kind: 'error', code: 'invalid' } });
+    expect(captureObjectUriLaunch([exe, '--', extra, valid], false)).toEqual({ dbarkObjectUri: { kind: 'error', code: 'invalid' } });
+  });
+  it.each([
+    { name: '重复分隔符', args: ['--', '--', uri] },
+    { name: '链接后分隔符', args: [uri, '--'] },
+    { name: '前后都有分隔符', args: ['--', uri, '--'] },
+    { name: '分隔符后夹入旗标', args: ['--', '--flag', uri] },
+  ])('只接受固定位置的一次分隔符，拒绝$name', ({ args }) => {
+    const expected = { dbarkObjectUri: { kind: 'error', code: 'invalid' } };
+    expect(captureObjectUriLaunch([exe, ...args], false)).toEqual(expected);
+    expect(captureObjectUriLaunch([exe, 'dist/main/index.cjs', ...args], true)).toEqual(expected);
   });
   it('双候选不挑一个打开，普通无协议重复启动不覆盖原待处理对象', () => {
     const queue = fixture();
@@ -36,6 +52,16 @@ describe('单实例原参数保真接收', () => {
       expect(captured).toEqual({ dbarkObjectUri: { kind: 'error', code: 'invalid' } });
       expect(JSON.stringify(captured)).not.toContain('secret');
     }
+  });
+  it('分隔符的字符仍计入整体预算，不因剥除固定前缀而放宽上限', () => {
+    const prefix = 'x'.repeat(externalObjectUriLimits.argvCharacters - uri.length);
+    expect(captureObjectUriLaunch([prefix, uri], false)).toEqual({ dbarkObjectUri: { kind: 'url', uri } });
+    expect(captureObjectUriLaunch([prefix, '--', uri], false)).toEqual({ dbarkObjectUri: { kind: 'error', code: 'invalid' } });
+    expect(captureObjectUriLaunch([prefix.slice(0, -2), '--', uri], false)).toEqual({ dbarkObjectUri: { kind: 'url', uri } });
+    const entry = 'dist/main/index.cjs';
+    const developmentPrefix = prefix.slice(entry.length);
+    expect(captureObjectUriLaunch([developmentPrefix, entry, uri], true)).toEqual({ dbarkObjectUri: { kind: 'url', uri } });
+    expect(captureObjectUriLaunch([developmentPrefix, entry, '--', uri], true)).toEqual({ dbarkObjectUri: { kind: 'error', code: 'invalid' } });
   });
 });
 

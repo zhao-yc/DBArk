@@ -24,7 +24,9 @@ export function captureObjectUriLaunch(argv: readonly string[], development: boo
   const candidates = args.filter(item => /^dbark:/i.test(item));
   if (candidates.length === 0) return { dbarkObjectUri: { kind: 'none' } };
   if (candidates.length > 1) return error('multiple');
-  if (args.length !== 1) return error();
+  // 安装器以固定 -- 在原生层终止选项；这里只允许它紧跟可信启动前缀，不能泛化过滤旗标。
+  const payload = args[0] === '--' ? args.slice(1) : args;
+  if (payload.length !== 1) return error();
   try { parseObjectUri(candidates[0]); }
   catch { return error(); }
   return { dbarkObjectUri: { kind: 'url', uri: candidates[0] } };

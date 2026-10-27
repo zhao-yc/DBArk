@@ -48,11 +48,12 @@ function register(): void {
     await expect(page.getByText(text.invalid, { exact: true })).toBeVisible();
     await expect.poll(async () => (await facts()).calls.filter(call => call.command === 'workbench.protocolFinish' && call.ok).length).toBe(1);
 
-    // 真正启动第二个Electron进程：原process.argv由副实例传additionalData，主实例继续使用原窗口。
+    // 真正启动第二个Electron进程：开发入口后固定放置--及完整URI，主实例继续使用原窗口。
+    // 这里只留证spawn输入和正式Main事件；Playwright loader会整理调试参数，不作为原生最早argv证据。
     const uri = objectUri({ connectionId: 'offline-no-such-connection', database: '原库/ %22', kind: 'table', name: '表"尾\\' });
     const env = Object.fromEntries(Object.entries({ ...process.env, DBARK_USER_DATA: launch.userData }).filter((entry): entry is [string, string] => entry[1] !== undefined));
     delete env.ELECTRON_RUN_AS_NODE;
-    const arguments_ = [...(launch.development ? [launch.appPath] : []), uri];
+    const arguments_ = [...(launch.development ? [launch.appPath] : []), '--', uri];
     const child = spawn(launch.executable, arguments_, { env, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
     // 先订阅真实终态，再持久化PID；超时也能精确找到本例副实例，不能以退出观察超时代替退出。
     const secondaryExit = new Promise<{ pid: number | undefined; code: number | null; signal: NodeJS.Signals | null }>((resolve, reject) => {
@@ -61,6 +62,9 @@ function register(): void {
     void secondaryExit.catch(() => undefined); // 附件IO期间也保留原拒绝，由下方同一Promise报告。
     const secondaryRecord = { pid: child.pid, executable: launch.executable, arguments: arguments_, userData: launch.userData };
     await info.attach('系统链接副实例启动归属', { body: JSON.stringify(secondaryRecord, null, 2), contentType: 'application/json' });
+    expect(secondaryRecord.arguments.slice(0, -2)).toEqual(launch.development ? [launch.appPath] : []);
+    expect(secondaryRecord.arguments.slice(-2)).toEqual(['--', uri]);
+    expect(secondaryRecord.arguments.filter(value => value.startsWith('-'))).toEqual(['--']);
     let outputBytes = 0;
     const retainOutput = (channel: string, chunk: Buffer) => {
       // 限定本例控制台总量，既不隐藏错误，也不让副实例无限输出挤满内存。
@@ -80,7 +84,7 @@ function register(): void {
     expect(await page.evaluate(() => window.dbark.invoke('settings.get', {}))).toEqual(baseline);
     await application.evaluate(() => { (globalThis as any).__dbarkObjectUriAudit.restore(); }); own();
     expect(runtime.pageErrors).toEqual([]);
-    await info.attach('系统链接离线入口证据', { body: JSON.stringify({ secondary, ...result, scope: '正式open-url事件与真实副实例；不是系统协议注册或实库对象成功导航' }, null, 2), contentType: 'application/json' });
+    await info.attach('系统链接离线入口证据', { body: JSON.stringify({ secondary, ...result, scope: '正式open-url事件与真实副实例及spawn参数；不是原生最早argv、系统协议注册或实库对象成功导航证据' }, null, 2), contentType: 'application/json' });
     await runtime.confirmOwnedDesktopExit(info); expect(runtime.ownedDesktopResources(info).closed).toBe(true); complete = true;
   });
 }

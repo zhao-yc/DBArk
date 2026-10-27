@@ -2,7 +2,7 @@
 
 ## 使用与边界
 
-对象链接沿用 `dbark://object/v1/...`，从应用内“复制对象链接”取得。链接仅保存本地连接编号、数据库及对象身份，不携带凭据，不执行 SQL。接收方必须已有原连接；未知连接、缺失对象或权限不足均拒绝，不回退到其它连接。
+对象链接沿用 `dbark://object/v1/...`，从应用内“复制对象链接”取得。链接仅保存本地连接编号、数据库及对象身份，不携带凭据，不接受或执行URI携带的SQL。接收方必须已有原连接；未知连接、缺失对象或权限不足均拒绝，不回退到其它连接。
 
 新源码接入系统启动入口。Windows 安装脚本配置 `dbark` 协议；macOS 配置应用包 `CFBundleURLTypes`。开发启动不修改系统关联。注册已有外来处理程序时，Windows 安装与卸载均保留它；仅本安装拥有且完整匹配的注册可以更新或清除。注册失败可能保留部分写入，不能当作已安装成功。原生注册、冷热启动、卸载及各架构的验收必须单独记录。
 
@@ -18,8 +18,12 @@
 
 ## 验证入口
 
+Windows协议命令现补充固定 `"exe" -- "%1"`；接收器只额外接受固定位置的单个 `--`，其后仍须恰好一个规范URI。旧自有注册只有完整标记、路径、描述、图标、协议值及树形均匹配时才迁移，先读取命令选择已知格式，再完整验证一次；任一读取失败保持原值。卸载仅处理完整当前格式。
+
+这是原生参数边界：[Electron在加载应用JS前初始化Node参数](https://github.com/electron/electron/blob/v44.7.0/shell/common/node_bindings.cc#L573)，[Chromium选项解析](https://github.com/chromium/chromium/blob/152.0.7977.130/base/command_line.cc#L588)及[Node选项解析](https://github.com/nodejs/node/blob/v24.21.0/src/node_options-inl.h#L309)均以 `--` 终止选项。后置JS拒绝不代表此前未处理过原生选项。本次为静态源码推导，未做Shell/端口重现；Playwright会整理自身启动参数，不能拿其内部argv作为最早原生参数的完整证据。未为测试更换产品或翻转fuse。补充5文件后，WIN11-TEST的274项相关、含类型构建、新离线整例、NSIS编译及asar109条核对通过；完整CI和原生升级仍另验，不沿用旧提交结论。
+
 `external-object-uri-launch`、`external-object-uris-{main,consumer,hook,boundary}`、`object-uri-installer` 单元文件覆盖边界与并发；`ui-workbench-navigation` 保留原导航断言。安装脚本解释测试不证明 NSIS 编译、注册表或操作系统行为。
 
 `DBARK_OBJECT_URI_OFFLINE=1 pnpm exec playwright test tests/e2e/external-object-uris-offline.spec.ts --workers=1 --retries=0` 验证正式 Main `open-url` 事件及真实副实例的离线拒绝，不访问数据库、原生文件输入或剪贴板。默认关闭；该用例不证明系统注册、冷启动或实库成功导航。
 
-本轮 WIN11-TEST 构建、262项相关单元（含此前123项）、URI离线整例、精确四方法隔离接口整例、Windows NSIS编译及asar109条逐哈希校验通过；首次完整CI的旧夹具/API预期失败和窄修分别保留。完整回归、系统安装/注册、冷热启动和实库正向导航仍需闭合，详见[验收记录](../../tests/integration/acceptance-external-object-uris-20261027.md)。暂不发布；不得把源码接线或其它功能的旧 CI 当作本功能原生验收。
+本轮各阶段证据分别绑定：e62完整CI四个主要job通过；分隔符补充版另经274项相关、构建、离线整例、NSIS与asar核验。首次CI原红、旧安装前置证据缺口及当前owned清理均保留。新提交完整CI、原生升级、冷热系统入口和实库正向导航继续，详见[验收记录](../../tests/integration/acceptance-external-object-uris-20261027.md)。暂不发布，不将部分子能力计为完整W02。
