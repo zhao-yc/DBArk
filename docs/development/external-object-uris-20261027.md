@@ -26,4 +26,6 @@ Windows协议命令现补充固定 `"exe" -- "%1"`；接收器只额外接受固
 
 `DBARK_OBJECT_URI_OFFLINE=1 pnpm exec playwright test tests/e2e/external-object-uris-offline.spec.ts --workers=1 --retries=0` 验证正式 Main `open-url` 事件及真实副实例的离线拒绝，不访问数据库、原生文件输入或剪贴板。默认关闭；该用例不证明系统注册、冷启动或实库成功导航。
 
-本轮各阶段证据分别绑定：e62完整CI四个主要job通过；分隔符补充版另经274项相关、构建、离线整例、NSIS与asar核验。首次CI原红、旧安装前置证据缺口及当前owned清理均保留。新提交完整CI、原生升级、冷热系统入口和实库正向导航继续，详见[验收记录](../../tests/integration/acceptance-external-object-uris-20261027.md)。暂不发布，不将部分子能力计为完整W02。
+正向用例为 `tests/e2e/external-object-uris-live.spec.ts`：仅同时显式设置 `DBARK_INTEGRATION_ENABLED=1`、`DBARK_OBJECT_URI_LIVE=1` 才加载实库配置。使用已有私密环境的200主机、显式13384端口，实际版本必须为MySQL8.4；读取 `information_schema.CHARACTER_SETS`，经正式Main事件及React consumer打开只读页，不创建或删除库、用户和表。用 `pnpm exec playwright test tests/e2e/external-object-uris-live.spec.ts --workers=1 --retries=0` 运行；不支持本例的TLS配置会拒绝，不降级。保持trace/video/screenshot关闭，失败保留原实例，不自动重跑；默认与list不读取实库配置。实际结果另记，不能把用例存在视为通过。
+
+本轮各阶段证据分别绑定：e62及380完整CI四个主要job均通过；分隔符补充版另经274项相关、构建、离线整例、NSIS与asar核验。Windows旧包到新包的实际同版升级、完整协议命令更新及新原卸载器清理也已通过；控制器错误和不重放旧安装的checkpoint分别保留。新增live07在MySQL8.4.11/13384通过正式Main事件打开真实只读系统表；类型、默认关闭及列表也通过，无数据库对象写入。首次CI原红及旧安装前置证据缺口仍保留。OS冷热入口、Shell及其它实库组合另验，详见[验收记录](../../tests/integration/acceptance-external-object-uris-20261027.md)。暂不发布，不将部分子能力计为完整W02。

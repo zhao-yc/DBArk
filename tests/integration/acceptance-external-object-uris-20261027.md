@@ -58,8 +58,24 @@ green05最初SSH6456 exit255/10秒超时，在下载前停止，未测试或写�
 
 新NSIS一次编译15140 exit0/198.66秒，使用green05独立输出路径，未重建第二次dist；新EXE143270562字节、SHA256 `312bb580676351fd4e8bdb6596da8688e209a2a8b6cfab0e18046da80ed5dd14`，新asar209370661字节、SHA256 `8f3aaf2efd3e823477c674923f1a9d5cd32648fe14b95048441588fd569f32f9`，109条逐哈希一致，旧green03包未改。Root回读118项原件包（157559字节，SHA256 `c00f0134f5424cb7a1956649ab1ead61e9723a4545926c22536970283e836d28`），与本机5文件逐字匹配，递归124条哈希/CRC/路径/私钥块检查通过。
 
-green05尚未执行新包原生安装、系统URI/端口探针或实库；未借用e62旧完整CI。registration06已独立派发严格前置旧包→新包原生升级及新原卸载器清理，未取得结果前不宣告通过；每版本仅执行一次，任何失败保留现场，不手写改键或删除文件来达标。
+green05构建阶段未执行新包原生安装、系统URI/端口探针或实库；未借用e62旧完整CI。后续registration06独立记录严格前置的旧包→新包同版升级及新原卸载器清理，结果如下。
+
+registration06重新记录固定GUID、带版本DisplayName和四份完整Uninstall根键清单的空状态。旧包安装17064 tree-wait exit0/12.411秒后，控制器468因自定义集合名 `$matches` 被PowerShell自动变量 `$Matches` 覆盖而exit1，原脚本和错误保留。仅在函数副本更名集合的3处引用，反向替换逐字一致；原17064终态、旧完整owner、关联、asar、父目录身份及当前进程0逐项通过后，从旧安装后的checkpoint继续，未重放旧安装器。
+
+新包同版升级13160 tree-wait exit0/17.423秒，新原卸载器1196 tree-wait exit0/3.926秒，均仅执行一次。完整owner及Windows有效命令从 `"exe" "%1"` 更新为 `"exe" -- "%1"`，旧、新asar各109/109匹配。这证明原生升级终态，不推断自定义legacy分支已实际执行。卸载后准确scope及四份根键清单与本轮06前置完全一致，安装目录、快捷方式和本例进程无残留；父目录和空profile留证。无提权、kill、重试或手写注册表/文件删除；原02的GUID前置缺口仍未确认。
+
+Root已回读registration06原件包（118项、179913字节，SHA256 `ad6b0db79c6e72d456706960a6a13be4eebb6d92e60163b6a22078d53ebacdaf`），含原停链包，递归168项哈希/CRC/路径及私钥块检查通过。上述动作未启动系统URI、App、端口探针、DB或剪贴板，原1392数据库现场保持。
+
+`380ca008` 的[CI 40549363185](https://github.com/zhao-yc/DBArk/actions/runs/40549363185)四个主要job均success：Linux类型、构建及881文件18745项单元通过/10跳过；Windows x64、macOS arm64/x64各自源码与安装产物legacy均82通过/375跳过。四份原始job日志与e62旧日志分别保存；发布开发预览及额外剪贴板job跳过。此CI覆盖分隔符和迁移修改，不证明本功能OS冷热入口或实库组合。
+
+### 正向只读实库入口（live07）
+
+仅新增 `tests/e2e/external-object-uris-live.spec.ts`（SHA256 `ffd16af9fc91c5dbcf3dc5d7b4da82add4ab4c38e9270b2a832aec3da063b7dc`），原39路径及green05的109份dist保持不变，未重复build、单元或安装。WIN11-TEST完整类型3224 exit0，双门关闭默认7560 exit0/恰1skip，list17632 exit0/恰1例，默认和列表均未读取实库配置或启动App/DB。
+
+显式双门后的唯一实库用例10348 exit0、1通过/0跳过/0重试，实际为200的13384、MySQL8.4.11。正式连接、目录及表元数据预检后，用真实对象kind生成URI，正式Main `open-url`→React consumer→`information_schema.CHARACTER_SETS` 显示真实表头和非空数据，未知基本表类型提示只读、添加禁用、错误为零。14次原IPC全部成功，Resolve/Commit/Finish各一次，pending0；未绕过consumer直接领取或提交请求。
+
+原fixture严格正常退出、已记录PID消失及本地profile清理通过，当前App/runner均不存在。无DDL/DML、创建删除库用户、DB cleanup、剪贴板、系统Shell或端口探针；未使用1392草稿库。实库原私密日志仅留VM，本机回读脱敏包（50项、54951字节，SHA256 `a85f779aec998df55a0499213f3a93e32829b5e0e51358d8e8504ce045e2d132`），逐项哈希/CRC/路径/私钥块及本机spec哈希核对通过。此例不证明OS Shell、冷启动、macOS或其它数据库组合。
 
 单元涵盖规范URI、参数预算及拆参、文档/连接/导航ABA、真实Promise收尾、提交线性化、模态、卸载、React StrictMode与安装脚本归属判断。安装脚本解释器不证明NSIS原生编译或注册表行为。
 
-离线Electron用例仅覆盖正式Main `open-url`事件、真实副实例、正式preload/IPC及未知连接拒绝；不替换产品结果、不访问数据库、不使用系统剪贴板或原生文件输入。它不能证明OS协议注册、冷启动或实库对象成功导航。Windows安装/卸载与冷热系统入口、macOS两个架构、实库正向导航、完整回归及新CI均需各自记录，不借用旧草稿功能的验收结果。W02保持“部分”，不增加完整工作包或发行计数。
+离线Electron用例仅覆盖正式Main `open-url`事件、真实副实例、正式preload/IPC及未知连接拒绝；正向实库例和Windows实际升级/卸载在上述独立记录中通过。不将这些结果泛化到OS Shell/冷热入口、macOS协议行为或完整驱动矩阵，不借用旧草稿功能的验收结果。W02保持“部分”，不增加完整工作包或发行计数。
