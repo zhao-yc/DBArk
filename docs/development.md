@@ -1,5 +1,7 @@
 # 开发与测试
 
+W02新增[系统对象链接入口](development/external-object-uris-20261027.md)：有界单实例队列、真实文档及连接修订租约、受限IPC、模态等待与原工作区导航；Windows安装脚本和macOS包声明分别接线。WIN11-TEST类型、123项定向、构建及1个正式事件/真实副实例离线整例通过，原失败与边界见[验收记录](../tests/integration/acceptance-external-object-uris-20261027.md)；系统注册、冷启动及实库成功导航须另取原生证据，暂不发布。
+
 本批表格草稿文件通过独立受限文件能力保存，`table.draftVerify` 在原独立只读会话复核完整旧值，恢复仍由原预览／集中提交链处理。变更不代表已发布；[实现与逐轮验证](development/table-draft-files-20261027.md)分别记录相关单元、构建、原全量失败及实库收尾问题。实库需双门 `DBARK_INTEGRATION_ENABLED=1`、`DBARK_TABLE_DRAFT_TEST=1`；源码窗口将后一个换为 `DBARK_TABLE_DRAFT_UI=1`，默认和列表模式不启用真实资源。凭据及预期实例身份仅从受限本地配置注入，不能写到命令行、日志或源码；须取得本轮随机测试库的创建与精确清理授权后才运行。后续实库、窗口及平台结果按固定快照和原件补录，暂不发布。
 
 常用文件任务新增[CSV／JSON可靠匹配键与冲突策略](development/file-import-conflict-20261027.md)，含跨进程目录校验、事务回执和严格TLS关闭回归。最终验证全部优先在WIN11-TEST执行；原失败、六实例分批证据、严格TLS源码窗口及未验范围见专项。本批暂不发布。

@@ -8,6 +8,7 @@ import { queryFileReloadSchemas } from './queryFileReload';
 import { resultInsertPreviewInputSchema, resultInsertApplyInputSchema, resultInsertReleaseInputSchema } from './resultInsert';
 import { parsePlanSnapshot } from './explainSnapshot';
 import { tableDraftSaveSchema, tableDraftOpenSchema, tableDraftVerifySchema } from './tableDraftCommands';
+import { externalObjectUriEmptySchema, externalObjectUriIdSchema } from './externalObjectUris';
 import { queryTransactionSettingsReadSchema, queryTransactionSettingsApplySchema } from './queryTransactionSettings';
 import { databaseDefaultEncodingAcknowledgements } from './databaseDefaultEncoding';
 import { assertSqlKeywordCaseWrite } from './sqlKeywordCase';
@@ -152,6 +153,8 @@ export const commandSchemas: Record<Command, z.ZodType> = {
   'table.presets.list':tablePresetListSchema,'table.presets.save':tablePresetSaveSchema,'table.presets.delete':tablePresetSelectSchema,'table.presets.apply':tablePresetApplySchema,
   'table.copyInsertSql': copyInsertSqlInputSchema,
   'workbench.get': empty, 'workbench.save': workbenchSaveSchema, 'workbench.resolve': workbenchTargetSchema, 'workbench.copyUri': workbenchTargetSchema,
+  'workbench.protocolReady': externalObjectUriEmptySchema, 'workbench.protocolTake': externalObjectUriEmptySchema,
+  'workbench.protocolResolve': externalObjectUriIdSchema, 'workbench.protocolCommit': externalObjectUriIdSchema, 'workbench.protocolFinish': externalObjectUriIdSchema,
   'queries.create': querySaveContentSchema, 'queries.updateSource': queryUpdateSourceSchema,
   'queries.organizationGet': savedQueryOrganizationGetSchema, 'queries.organizationApply': savedQueryOrganizationApplySchema,
   'table.preferences.get': tablePreferenceTargetSchema, 'table.preferences.save': tablePreferenceSaveSchema, 'table.preferences.reset': tablePreferenceTargetSchema,

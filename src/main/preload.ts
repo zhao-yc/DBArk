@@ -22,6 +22,12 @@ const api: DesktopApi = {
     const handler = (_event: Electron.IpcRendererEvent, action: string) => listener(action);
     ipcRenderer.on('dbark:menu', handler);
     return () => ipcRenderer.removeListener('dbark:menu', handler);
+  },
+  /** 只交付空唤醒，不向页面透传原始系统参数或 Electron 事件。 */
+  onObjectUri(listener) {
+    const handler = () => listener();
+    ipcRenderer.on('dbark:object-uri-pending', handler);
+    return () => ipcRenderer.removeListener('dbark:object-uri-pending', handler);
   }
 };
 contextBridge.exposeInMainWorld('dbark', api);

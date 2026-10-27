@@ -25,6 +25,7 @@ import { schemaCompareZh } from './locales/schemaCompare.zh-CN';
 import { zh, formatText } from './locales/zh-CN';
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useApplicationInfo } from './useApplicationInfo';
+import { useExternalObjectUris } from './useExternalObjectUris';
 import { EncryptionStatus } from './components/EncryptionStatus';
 import { version as bundledVersion } from '../../package.json';
 import { Activity, ArrowRight, CheckCircle2, CircleHelp, Database, FileCode2, History, Moon, Plus, Search, Settings2, Sun, Table2, TerminalSquare, X } from 'lucide-react';
@@ -146,6 +147,7 @@ export default function App() {
   const workbenchNavigation = useMemo(() => createWorkbenchNavigation(setDdl), []);
   useLayoutEffect(() => { workbenchNavigation.activate(); return () => workbenchNavigation.dispose(); }, [workbenchNavigation]);
   const openWorkbenchTarget = workbenchNavigation.open;
+  useExternalObjectUris(ready, openWorkbenchTarget, closingOtherQueries || !!queryCloseRequest || !!queryCloseCommit);
   const [transfer, setTransfer] = useState<{ mode: 'import' | 'export'; connectionId: string; database: string; table: string } | null>(null);
   const [refreshVersion, setRefreshVersion] = useState(0);
   const { version, platform, runtimeError, encryptionAvailable, checkingEncryption, encryptionError, checkEncryption } = useApplicationInfo(bundledVersion);

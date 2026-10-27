@@ -129,4 +129,23 @@ describe('收藏与链接的最新显式导航意图', () => {
     navigation.retireTable({ ...a, table: 'unknown' }); expect(navigation.completeTableRename(b, { ...a, table: 'unknown' }, 'a'.repeat(64))).toBe(false);
     const other = { ...uri, connectionId: 'other' }; request.mockResolvedValueOnce(other); await expect(navigation.open(other)).resolves.toBe(true);
   });
+  it('系统入口复用原解析后投影门，提交完成前不选择连接或开页且不追加内部resolve', async () => {
+    let finish!: () => void; const submitted = new Promise<void>(resolve => { finish = resolve; });
+    const resolve = vi.fn(async () => testing), beforeProject = vi.fn(() => submitted), isCurrent = vi.fn(() => true);
+    const opening = navigation.open(production, { resolve, beforeProject, isCurrent }); await Promise.resolve(); await Promise.resolve();
+    expect(resolve).toHaveBeenCalledExactlyOnceWith(production); expect(beforeProject).toHaveBeenCalledOnce(); expect(request).not.toHaveBeenCalled();
+    expect(workspace.useWorkspace.getState().selection).toBeUndefined(); expect(workspace.useWorkspace.getState().settings.tabs).toEqual([]);
+    finish(); expect(await opening).toBe(true); expect(workspace.useWorkspace.getState().selection?.connectionId).toBe(testing.connectionId);
+    expect(workspace.useWorkspace.getState().settings.tabs).toMatchObject([{ table: 'users', connectionId: testing.connectionId }]);
+  });
+  it('外部owner失效或提交期间名称退役都不能投影，旧提交失败也不覆盖新意图', async () => {
+    let current = false; const resolve = vi.fn(async () => production), commit = vi.fn(async () => undefined);
+    expect(await navigation.open(production, { resolve, beforeProject: commit, isCurrent: () => current })).toBe(false); expect(resolve).not.toHaveBeenCalled(); expect(commit).not.toHaveBeenCalled();
+    current = true; let reject!: (reason: Error) => void; const waiting = new Promise<void>((_, no) => { reject = no; });
+    const opening = navigation.open(production, { resolve, beforeProject: () => waiting, isCurrent: () => current }); await Promise.resolve(); await Promise.resolve();
+    current = false; reject(Error('旧提交失效')); expect(await opening).toBe(false); expect(workspace.useWorkspace.getState().settings.tabs).toEqual([]);
+    let finish!: () => void; const submitted = new Promise<void>(yes => { finish = yes; }); current = true;
+    const retiring = navigation.open(production, { resolve, beforeProject: () => submitted, isCurrent: () => current }); await Promise.resolve(); await Promise.resolve(); navigation.retireTable({ connectionId: production.connectionId, database: production.database, table: production.name }); finish();
+    expect(await retiring).toBe(false); expect(workspace.useWorkspace.getState().selection).toBeUndefined(); expect(workspace.useWorkspace.getState().settings.tabs).toEqual([]);
+  });
 });

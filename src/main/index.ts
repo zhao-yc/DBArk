@@ -54,6 +54,9 @@ import{SavedQueryPages}from'./savedQueryPages';
 import{HistoryPages}from'./historyPages';
 import { HistoryDelete } from './historyDelete';
 import { resolveWorkbenchTarget } from './workbench';
+import { ExternalObjectUris } from './externalObjectUris';
+import { captureObjectUriLaunch, receiveObjectUriLaunch } from './externalObjectUriLaunch';
+import { externalObjectUrisZh } from '../shared/externalObjectUris.zh-CN';
 import { objectUri } from '../shared/workbench';
 import { applyTablePreset, TablePresetSources } from './tablePresets';
 import { QueryResultPresetSources } from './queryResultPresetSources';
@@ -105,6 +108,29 @@ const lastPersist = new Map<string, number>();
 const rendererURL = process.env.DBARK_DEV_URL ?? pathToFileURL(join(__dirname, '../renderer/index.html')).href;
 // 字段令牌只绑定真实IPC文档；回收仍使用原引擎精确release，不扩其他结构业务。
 const columnsMain = new ColumnsMainCapabilities(structureTokens, { currentWindow: () => window, rendererURL, connectionRevision: () => store.connectionRevision(), assertAvailable: id => connectionConfig.assertAvailable(id), shuttingDown: () => shuttingDown, release: input => broker.request('schema.columns.release', input) });
+// 系统输入只进入单槽队列；原连接和对象由正式元数据服务核验，不执行链接中的 SQL。
+const externalObjectUris = new ExternalObjectUris<ColumnsInvocation>({
+  revision: () => store?.connectionRevision(),
+  assertOwner: owner => columnsMain.assertCapturedOwner(owner),
+  sameOwner: (left, right) => columnsMain.sharesDocumentOwner(left, right),
+  notify: owner => { columnsMain.assertCapturedOwner(owner); window!.webContents.send('dbark:object-uri-pending'); },
+  resolve: (target, assertCurrent) => {
+    /** 每次真实投递前后核验租约，页面或系统意图变化不再启动后续元数据读取。 */
+    const guard = () => {
+      assertCurrent();
+      if (shuttingDown) throw Error(externalObjectUrisZh.closed);
+      connectionConfig.assertAvailable(target.connectionId);
+    };
+    guard();
+    return resolveWorkbenchTarget(target, {
+      connectionExists: id => store.queryConnectionExists(id),
+      connect: async id => { guard(); await broker.request('connections.open', { id, profile: store.resolveConnection(id) }); guard(); },
+      databases: async id => { guard(); const result = await broker.request('metadata.databases', { connectionId: id }); guard(); return result; },
+      objects: async (id, database) => { guard(); const result = await broker.request('metadata.objects', { connectionId: id, database }); guard(); return result; },
+      assertCurrent: guard
+    });
+  }
+});
 const resultInserts = new ResultInsertOwners({
   assert: owner => columnsMain.assertCapturedOwner(owner), same: (left, right) => columnsMain.sharesDocumentOwner(left, right),
   revision: () => store.connectionRevision(), closing: () => shuttingDown,
@@ -804,6 +830,13 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
     // 无 await、无引擎调用：全部校验和生成通过后才一次写入系统剪贴板。
     case 'table.copyInsertSql': return copyInsertSql(input, sql => clipboard.writeText(sql));
     case 'workbench.get': return store.workbench();
+    case 'workbench.protocolReady': return externalObjectUris.ready(columns!);
+    case 'workbench.protocolTake': return shuttingDown ? null : externalObjectUris.take(columns!);
+    case 'workbench.protocolResolve': return externalObjectUris.resolve(columns!, input.id);
+    case 'workbench.protocolCommit':
+      if (shuttingDown) throw Error(externalObjectUrisZh.closed);
+      return externalObjectUris.commit(columns!, input.id);
+    case 'workbench.protocolFinish': return externalObjectUris.finish(columns!, input.id);
     // 主进程只写入由严格对象身份生成的链接，不开放任意剪贴板读写权限。
     case 'workbench.copyUri': return clipboard.writeText(objectUri(input));
     case 'workbench.save':
@@ -1110,6 +1143,10 @@ function createMenu(): void {
 async function createWindow(): Promise<void> {
   window = new BrowserWindow({ width: 1440, height: 920, minWidth: 1024, minHeight: 680, show: false, backgroundColor: '#101319', title: 'DBArk', icon: app.isPackaged ? join(process.resourcesPath, 'icon.png') : join(__dirname, '../../build/icon.png'), webPreferences: { preload: join(__dirname, 'preload.cjs'), sandbox: true, contextIsolation: true, nodeIntegration: false, webSecurity: true, spellcheck: false } });
   columnsMain.trackWindow(window);
+  // 不同主文档不能继承已经开始的打开操作；旧 Promise 仍等真实完成才释放队列。
+  window.webContents.on('did-start-navigation', details => { if (details.isMainFrame && !details.isSameDocument) externalObjectUris.suspend(); });
+  window.webContents.on('render-process-gone', () => externalObjectUris.suspend());
+  window.webContents.on('destroyed', () => externalObjectUris.suspend());
   // 文档换代后精确释放未应用预览，并撤销原在途任务；不依赖旧renderer继续存活。
   window.webContents.on('did-start-navigation', details => { if (details.isMainFrame && !details.isSameDocument) resultInserts.observe(); });
   window.webContents.on('did-navigate', () => resultInserts.observe());
@@ -1156,7 +1193,7 @@ app.on('before-quit', event => {
   void (async () => {
     if ((hasPendingEdits || [...tasks.values()].some(t => t.status === 'running')) && window) {
       const answer = await dialog.showMessageBox(window, { type: 'warning', title: '仍有待完成的工作', message: '退出会放弃尚未提交的表格修改、断开数据库连接并回滚未提交事务。已提交的操作不会撤销。', buttons: ['继续工作','退出客户端'], defaultId: 0, cancelId: 0 });
-      if (answer.response === 0) { shuttingDown = false; return; }
+      if (answer.response === 0) { shuttingDown = false; window?.webContents.send('dbark:object-uri-pending'); return; }
     }
     // 先让界面把防抖队列里的最新编辑落盘，再关闭配置库。
     if (rendererHasSettings && window && !window.isDestroyed()) {
@@ -1174,17 +1211,17 @@ app.on('before-quit', event => {
       const committed = task.kind === 'table.apply' && tableApplyReceipts?.confirmed(task.id);
       persistAuxiliary(() => store.saveTask({ ...task, status: committed ? 'completed' : 'cancelled', finishedAt: new Date().toISOString(), message: committed ? '服务器已确认目标事务提交；请查看提交记录' : '客户端已退出，请核对操作结果' }));
     }
-    store?.close(); shutdownComplete = true; app.quit();
+    store?.close(); externalObjectUris.close(); shutdownComplete = true; app.quit();
   })().catch(async error => {
     stateFlushed = undefined;
     const answer = await dialog.showMessageBox({ type: 'error', title: '退出前保存或收尾失败', message: error instanceof Error ? error.message : String(error), detail: '返回工作台可排查后重试。强制退出会终止本地执行进程并放弃未保存配置，不能确认远端操作已停止，也不能撤销已提交操作。', buttons: ['返回工作台','强制退出客户端'], defaultId: 0, cancelId: 0 });
     if (answer.response === 1) {
       await savedQuerySearches?.close();await savedQueryPages?.close();await historyPages?.close();await historyDelete?.close();await Promise.allSettled([...localSearchOperations]);
       await Promise.allSettled([...queryFileOperations]);
-      try { broker?.forceClose(); } catch (failure) { shuttingDown = false; dialog.showErrorBox('强制退出失败', failure instanceof Error ? failure.message : '数据库执行进程未能终止'); return; }
+      try { broker?.forceClose(); } catch (failure) { shuttingDown = false; window?.webContents.send('dbark:object-uri-pending'); dialog.showErrorBox('强制退出失败', failure instanceof Error ? failure.message : '数据库执行进程未能终止'); return; }
       try { store?.close(); } catch { /* 用户已明确选择退出，避免退出状态永久锁死。 */ }
-      shutdownComplete = true; app.quit();
-    } else shuttingDown = false;
+      externalObjectUris.close(); shutdownComplete = true; app.quit();
+    } else { shuttingDown = false; window?.webContents.send('dbark:object-uri-pending'); }
   });
 });
 app.on('window-all-closed', () => app.quit());
@@ -1231,9 +1268,17 @@ function engineExited(): void {
   }
 }
 
-if (!app.requestSingleInstanceLock()) { shutdownComplete = true; app.quit(); }
+const objectUriLaunch = captureObjectUriLaunch(process.argv, process.defaultApp === true);
+if (!app.requestSingleInstanceLock(objectUriLaunch)) { shutdownComplete = true; app.quit(); }
 else {
-  app.on('second-instance', () => { if (window?.isMinimized()) window.restore(); window?.focus(); });
+  // macOS 事件必须在 whenReady 前同步订阅，冷启动的链接才能进入等待握手的队列。
+  app.on('open-url', (event, url) => { event.preventDefault(); externalObjectUris.receiveUrl(url); });
+  receiveObjectUriLaunch(externalObjectUris, objectUriLaunch);
+  app.on('second-instance', (_event, _argv, _workingDirectory, additionalData) => {
+    receiveObjectUriLaunch(externalObjectUris, additionalData);
+    if (window?.isMinimized()) window.restore();
+    window?.focus();
+  });
   void app.whenReady().then(async () => {
     const wasm = app.isPackaged ? join(process.resourcesPath, 'sql-wasm.wasm') : require.resolve('sql.js/dist/sql-wasm.wasm');
     store = await LocalStore.open(join(app.getPath('userData'), 'dbark.sqlite'), wasm, { available: () => safeStorage.isEncryptionAvailable(), encrypt: value => safeStorage.encryptString(value).toString('base64'), decrypt: value => safeStorage.decryptString(Buffer.from(value, 'base64')) });
@@ -1305,7 +1350,7 @@ else {
         }
         if (payload.command.startsWith('explainFiles.')||payload.command.startsWith('schema.columns.')||payload.command.startsWith('table.presets.')||payload.command.startsWith('result.presets.')||payload.command.startsWith('queryFileSources.')||fileCancel||resultSql||insertRequest||payload.command.startsWith('snippets.transfer')||payload.command.startsWith('files.importPresets.')) columns = columnsMain.capture(event);
         const input = validateMainCommand(payload.command, payload.input);
-        if (payload.command.startsWith('tableDraftFiles.')) columns = columnsMain.capture(event);
+        if (payload.command.startsWith('tableDraftFiles.') || payload.command.startsWith('workbench.protocol')) columns = columnsMain.capture(event);
         if (payload.command.startsWith('schema.databaseDrop.')) beginDatabaseDrop(payload.command, input, columns!);
         if (databaseEncodingCommand) databaseEncodingOwners.before(databaseEncodingCommand, input, columns!);
         const operation=dispatch(payload.command as Command,input,columns),local=payload.command==='search.savedQueries'||payload.command==='search.savedQueriesContinue'||payload.command==='queries.page'||payload.command==='queries.pageContinue'||payload.command==='history.page'||payload.command==='history.pageContinue'||payload.command.startsWith('history.delete');if(local)localSearchOperations.add(operation);
@@ -1313,6 +1358,7 @@ else {
         const snippetTransferOperation=payload.command.startsWith('snippets.transfer');if(snippetTransferOperation)queryFileOperations.add(operation);
         try {
           const result = await operation;
+          if (payload.command.startsWith('workbench.protocol')) columnsMain.assertCapturedOwner(columns);
           if (payload.command === 'table.filteredUpdate.preview') {
             try { filteredUpdates.assertPublication(result, columns!); }
             catch (error) { await filteredUpdates.rejectPublication(result, columns!); throw error; }

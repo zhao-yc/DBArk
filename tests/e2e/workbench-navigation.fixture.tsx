@@ -22,7 +22,9 @@ window.dbark = {
     if (command === 'workbench.resolve') return new Promise<WorkbenchTarget>(resolve => { pending.set(++next, { target: input, resolve }); });
     if (command === 'settings.save') return Promise.resolve();
     return Promise.reject(Error('界面协议夹具遇到未预期的命令：' + command));
-  }) as DesktopApi['invoke'], onTask: () => () => {}, onMenu: () => () => {}
+  }) as DesktopApi['invoke'], onTask: () => () => {}, onMenu: () => () => {},
+  // 本夹具只挂载应用内导航组件，不接收系统通知；新的完整DesktopApi仍保留原拒绝未知命令门。
+  onObjectUri: () => () => {}
 };
 useWorkspace.setState({ ready: true, connections });
 useWorkbench.setState({ ready: true, snapshot: { revision: 0, document: { version: 1, focusMode: false, groups: [], favorites: connections.map(profile => ({ id: profile.id, label: 'users', groupId: null, target: { connectionId: profile.id, database: 'app', kind: 'table', name: 'users' } })) } } });

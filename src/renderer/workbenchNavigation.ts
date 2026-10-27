@@ -6,7 +6,12 @@ import type { WorkbenchTarget } from '../shared/workbench';
 import { invoke } from './lib';
 import { useWorkspace } from './store';
 
-export interface WorkbenchOpenOptions { signal?: AbortSignal; }
+export interface WorkbenchOpenOptions {
+  signal?: AbortSignal;
+  resolve?(target: WorkbenchTarget): Promise<WorkbenchTarget>;
+  beforeProject?(): Promise<void>;
+  isCurrent?(): boolean;
+}
 export type OpenWorkbenchTarget = (target: WorkbenchTarget, options?: WorkbenchOpenOptions) => Promise<boolean>;
 export interface WorkbenchDefinitionTarget { connectionId: string; database: string; object: DatabaseObject; readOnly: true; }
 
@@ -27,12 +32,19 @@ export function createWorkbenchNavigation(openDefinition: (target: WorkbenchDefi
     /** 新导航在首个 await 前占用代次；过期成功和过期错误都不能改变当前界面。 */
     async open(target: WorkbenchTarget, options?: WorkbenchOpenOptions): Promise<boolean> {
       const current = ++generation;
-      const valid = () => !disposed && current === generation && !options?.signal?.aborted;
+      const valid = () => !disposed && current === generation && !options?.signal?.aborted && (!options?.isCurrent || options.isCurrent());
       if (!valid()) return false;
       if (blocked(target)) throw new Error(tableRenameZh.oldLink);
       let resolved: WorkbenchTarget;
-      try { resolved = await invoke('workbench.resolve', target); }
+      try { resolved = await (options?.resolve ? options.resolve(target) : invoke('workbench.resolve', target)); }
       catch (error) { if (!valid()) return false; throw error; }
+      if (!valid()) return false;
+      if (blocked(resolved)) throw new Error(tableRenameZh.oldLink);
+      // 系统入口先由Main提交原请求，再通过原页面归属与退役门同步投影；内部导航无新增IPC。
+      if (options?.beforeProject) {
+        try { await options.beforeProject(); }
+        catch (error) { if (!valid()) return false; throw error; }
+      }
       if (!valid()) return false;
       if (blocked(resolved)) throw new Error(tableRenameZh.oldLink);
       const workspace = useWorkspace.getState();

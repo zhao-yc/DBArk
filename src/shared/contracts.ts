@@ -146,6 +146,11 @@ export interface CommandMap {
   'workbench.get': { input: Record<string, never>; output: WorkbenchSnapshot };
   'workbench.save': { input: WorkbenchSnapshot; output: WorkbenchSnapshot };
   'workbench.resolve': { input: WorkbenchTarget; output: WorkbenchTarget };
+  'workbench.protocolReady': { input: Record<string, never>; output: import('./externalObjectUris').ExternalObjectUriState };
+  'workbench.protocolTake': { input: Record<string, never>; output: import('./externalObjectUris').ExternalObjectUriRequest | null };
+  'workbench.protocolResolve': { input: { id: string }; output: WorkbenchTarget };
+  'workbench.protocolCommit': { input: { id: string }; output: { committed: true } };
+  'workbench.protocolFinish': { input: { id: string }; output: import('./externalObjectUris').ExternalObjectUriState };
   'workbench.copyUri': { input: WorkbenchTarget; output: void };
   'queries.create': { input: QuerySaveContent; output: QuerySaveResult };
   'queries.updateSource': { input: { source: QuerySourceBinding; content: QuerySaveContent }; output: QuerySaveResult };
@@ -337,6 +342,8 @@ export interface DesktopApi {
   invoke<C extends Command>(command: C, input: CommandMap[C]['input']): Promise<CommandMap[C]['output']>;
   onTask(listener: (event: TaskEvent) => void): () => void;
   onMenu(listener: (action: string) => void): () => void;
+  /** 系统链接通知不携带地址；只能经受限命令领取原文档请求。 */
+  onObjectUri(listener: () => void): () => void;
 }
 declare global { interface Window { dbark: DesktopApi; } }
 import type { DatabaseDropGetInput, DatabaseDropGetOutput, DatabaseDropPreviewInput, DatabaseDropPreviewOutput, DatabaseDropApplyInput, DatabaseDropApplyOutput, DatabaseDropReleaseInput } from './databaseDrop';
