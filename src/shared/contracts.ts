@@ -100,6 +100,9 @@ export interface ResultExportOptions { fileToken: string; format: 'csv' | 'json'
 
 /** 请求映射是界面、主进程与数据库进程共同使用的唯一接口定义。 */
 export interface CommandMap {
+  'tableDraftFiles.open': { input: { target: import('./tableDraft').TableDraftTarget }; output: { name: string; document: import('./tableDraft').TableDraftDocument } | null };
+  'tableDraftFiles.save': { input: { payload: import('./tableDraft').TableDraftPayload }; output: { name: string } | null };
+  'table.draftVerify': { input: import('./tableDraftCommands').TableDraftVerifyInput; output: { verifiedChanges: number } };
   'table.filteredDelete.preview': { input: import('./tableFilteredDelete').TableFilteredDeletePreviewInput; output: import('./tableFilteredDelete').TableFilteredDeletePreviewOutput };
   'table.filteredDelete.apply': { input: import('./tableFilteredDelete').TableFilteredDeleteApplyInput; output: import('./tableFilteredDelete').TableFilteredDeleteApplyOutput };
   'table.filteredDelete.release': { input: import('./tableFilteredDelete').TableFilteredDeleteReleaseInput; output: void };

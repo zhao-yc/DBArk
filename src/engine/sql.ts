@@ -230,7 +230,7 @@ export function buildPageSql(info: TableInfo, page: number, pageSize: number, fi
 }
 
 /** 全旧值比较避免丢失更新；唯一键是可靠定位的必要条件，不能仅凭 LIMIT 1 写入。 */
-export function buildChanges(info: TableInfo, changes: RowChange[]): SqlPreview {
+export function buildChanges(info: TableInfo, changes: RowChange[], options?: { binaryText?: 'cast' }): SqlPreview {
   if (info.engine.toUpperCase() !== 'INNODB') throw new Error('仅允许对 InnoDB 事务表集中提交修改');
   if (!info.editableKey.length) throw new Error('此表没有全部非空的主键或唯一键，数据仅可读取');
   const columns = new Map(info.columns.map(column => [column.name, column]));
@@ -259,6 +259,8 @@ export function buildChanges(info: TableInfo, changes: RowChange[]): SqlPreview 
       params.push(change.before[column.name]);
       // 先统一到连接字符集再取字节，否则 latin1 的 é 与 UTF-8 参数会产生假冲突。
       if (/^(?:CHAR|VARCHAR|TINYTEXT|TEXT|MEDIUMTEXT|LONGTEXT|ENUM|SET|JSON)\b/i.test(column.type)) {
+        // 新的严格只读核验显式选择现代语法；既有预览/提交缺省SQL与参数字节保持不变。
+        if (options?.binaryText === 'cast') return `CAST(CONVERT(${identifier(column.name)} USING utf8mb4) AS BINARY) <=> CAST(CONVERT(? USING utf8mb4) AS BINARY)`;
         return `BINARY CONVERT(${identifier(column.name)} USING utf8mb4) <=> BINARY CONVERT(? USING utf8mb4)`;
       }
       // BLOB/二进制列原生比较已按字节执行；数值和日期维持服务器自身的类型语义。

@@ -7,6 +7,7 @@ import { importPresetListSchema, importPresetSaveSchema, importPresetDeleteSchem
 import { queryFileReloadSchemas } from './queryFileReload';
 import { resultInsertPreviewInputSchema, resultInsertApplyInputSchema, resultInsertReleaseInputSchema } from './resultInsert';
 import { parsePlanSnapshot } from './explainSnapshot';
+import { tableDraftSaveSchema, tableDraftOpenSchema, tableDraftVerifySchema } from './tableDraftCommands';
 import { queryTransactionSettingsReadSchema, queryTransactionSettingsApplySchema } from './queryTransactionSettings';
 import { databaseDefaultEncodingAcknowledgements } from './databaseDefaultEncoding';
 import { assertSqlKeywordCaseWrite } from './sqlKeywordCase';
@@ -330,6 +331,7 @@ export const commandSchemas: Record<Command, z.ZodType> = {
   'history.deletePreview': historyDeletePreviewInputSchema, 'history.deleteApply': historyDeleteApplyInputSchema, 'history.deleteRelease': historyDeleteReleaseInputSchema,
   'queryFileSources.recent': queryRecentFilesSchema, 'queryFileSources.forgetRecent': queryRecentFileForgetSchema,
   'explainFiles.open': empty,
+  'tableDraftFiles.open': tableDraftOpenSchema, 'tableDraftFiles.save': tableDraftSaveSchema, 'table.draftVerify': tableDraftVerifySchema,
   'binaryCellFiles.open': binaryCellFileOpenSchema,
   'table.filteredDelete.preview': tableFilteredDeletePreviewInputSchema,
   'table.filteredDelete.apply': tableFilteredDeleteApplyInputSchema,

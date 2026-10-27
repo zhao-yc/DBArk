@@ -1,4 +1,6 @@
 import { TableCopyDataTasks } from './tableCopyDataTasks';
+import { verifyTableDraft } from './tableDraftVerify';
+import type { TableDraftVerifyInput } from '../shared/tableDraftCommands';
 import { ResultInsertTasks } from './resultInsert';
 import { TableFilteredUpdateTasks } from './tableFilteredUpdate';
 import { TableFilteredDeleteTasks } from './tableFilteredDelete';
@@ -524,6 +526,10 @@ export class Engine {
         const page = await this.readPage(managed, sql, input.page, input.pageSize, target.columns.some(column => /^(?:FLOAT|DOUBLE|REAL)\b/i.test(column.type)));
         return { source, foreignKey, target, page };
       });
+      case 'table.draftVerify': {
+        this.copySourceProfile(input);
+        return this.withIndependentTask(input.connectionId, input.taskId, (managed, control) => verifyTableDraft({ managed, ...control }, input as TableDraftVerifyInput), undefined, '核对待恢复草稿原行', true);
+      }
       case 'table.preview': return this.withConnection(input.connectionId, async managed => buildChanges(await metadata.tableInfo(managed, input.database, input.table), input.changes));
       case 'table.apply': return this.withConnection(input.connectionId, managed => this.runTask(input.taskId, managed, '提交数据修改', task => this.applyChanges(task, input)));
       case 'schema.preview': return this.withConnection(input.connectionId, async managed => {

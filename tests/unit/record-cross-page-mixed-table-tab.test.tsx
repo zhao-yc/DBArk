@@ -39,7 +39,7 @@ function visit(node: ts.Node) {
 visit(tree);
 
 /** 使用实际导航 helper 和生产 TableTab 方法，不另写一套跨页或选择令牌判断。 */
-function fixture(filterGroup: FilterGroup | undefined = undefined) {
+function fixture(filterGroup: FilterGroup | undefined = undefined, restoredDraftView = false) {
   const rows = [{ id: '原页本地UUID', data: { id: '50', text: '原值' }, original: { id: '50', text: '原值' }, inserted: false, deleted: false }];
   const base = { connectionId: '连接', database: '库', table: '表' }, tab = { id: '活动页', ...base };
   const value = { target: base, connectionVersion: 4, refreshVersion: 2, pageSize: 50, filters: [{ column: 'id', operator: '>=', value: '1' }, ...(filterGroup ? [{ column: 'text', operator: '=', value: '新值一' }, { column: 'text', operator: 'IS NULL' }] : [])], filterMode: 'all', filterGroup, sort: [{ column: 'id', direction: 'ASC' }] };
@@ -67,11 +67,13 @@ function fixture(filterGroup: FilterGroup | undefined = undefined) {
     invoke: vi.fn(async (command: string, input: { page?: number }) => command === 'metadata.table' ? { objectKind: 'table', columns: [] } : command === 'table.page' ? { page: input.page, pageSize: 50, hasMore: input.page === 1, rows: [{ id: input.page === 2 ? '51' : '49', text: '新值一' }, ...(input.page === 1 ? [{ id: '50', text: '新值末' }] : [])] } : undefined),
     assertGridWritable: vi.fn(), getRecordContext: () => ({ info: {} }), recordReadonlyReason: () => undefined, pageFindGeneration: () => 1,
     applyPageReplacement: vi.fn(), collectChanges: vi.fn(() => []),
-    setError: vi.fn(), setInfo: vi.fn(), setExternalStale: vi.fn(), setRecordPageMessage: vi.fn(),
+    setError: vi.fn(), setInfo: vi.fn(), setExternalStale: vi.fn(), setRecordPageMessage: vi.fn(), restoredDraftView, setRestoredDraftView: vi.fn(),
   });
   context.setBusy = vi.fn((value: boolean) => { context.busy = value; context.blocked = !!runInContext(blocked, context); context.blockedRef.current = context.blocked; });
   context.setRows = vi.fn((rows: unknown[]) => { context.rows = rows; context.rowsRef.current = rows; });
   context.setPage = vi.fn((page: unknown) => { context.page = page; });
+  // load原文继续清理恢复模式；仅提供可观测的React setter外部端口。
+  context.setRestoredDraftView = vi.fn((value: boolean) => { context.restoredDraftView = value; });
   context.setSelectedRows = vi.fn((rows: unknown) => { context.selectedRows = rows; });
   context.setSelection = vi.fn((selection: unknown) => { context.selection = typeof selection === 'function' ? selection(context.selection) : selection; });
   context.setPageIndex = vi.fn((index: number) => { context.pageIndex = index; context.recordPageScopeRef.current.page = index; });
@@ -87,6 +89,15 @@ function fixture(filterGroup: FilterGroup | undefined = undefined) {
 }
 
 describe('D04与现有TableTab工具的混合正负向接线', () => {
+  it('真实load失败仍退出恢复草稿视图并清除旧页，保留原错误和原行对象', async () => {
+    const f = fixture(undefined, true), c = f.context, original = structuredClone(f.rows), failure = Error('原表页读取失败');
+    c.invoke.mockImplementation(async (command: string) => { if (command === 'table.page') throw failure; if (command === 'metadata.table') return { objectKind: 'table', columns: [] }; if (command === 'connections.open') return undefined; throw Error('不应调用:' + command); });
+    await f.load();
+    expect(c.setRestoredDraftView).toHaveBeenCalledExactlyOnceWith(false); expect(c.restoredDraftView).toBe(false);
+    expect(c.page).toBeNull(); expect(c.rowsRef.current).toEqual([]); expect(c.setError).toHaveBeenLastCalledWith(String(failure));
+    expect(f.rows).toEqual(original); expect(c.blockedRef.current).toBe(false);
+    expect(c.invoke.mock.calls.map(([command]: [string]) => command)).toEqual(['connections.open', 'metadata.table', 'table.page']);
+  });
   it('D02复制形成整页草稿后，D04拒绝跨页且保留复制身份、活动选择和原行', () => {
     const f = fixture(), c = f.context, token = c.selectionRef.current, original = structuredClone(f.rows[0]);
     const info: TableInfo = { database: c.base.database, name: c.base.table, objectKind: 'table', engine: 'InnoDB',

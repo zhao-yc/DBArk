@@ -11,6 +11,7 @@ import { recordViewZh } from '../../src/renderer/locales/recordViews.zh-CN';
 import { buildPageSql } from '../../src/engine/sql';
 import { tableFilterEnabledZh as enabledText } from '../../src/renderer/locales/tableFilterEnabled.zh-CN';
 import { tableFilterGroupsZh as groupText } from '../../src/renderer/locales/tableFilterGroups.zh-CN';
+import { tableDraftFilesZh as savedDraftText } from '../../src/renderer/locales/tableDraftFiles.zh-CN';
 
 const grid = vi.hoisted(() => ({ props: null as any, rows: [] as DraftRow[] }));
 // 只替换网格/Monaco外界渲染端口；TableTab、类型编辑器、弹窗、store与历史运行生产代码。
@@ -54,7 +55,7 @@ afterEach(async () => { if (root) { await act(async () => root!.unmount()); root
 afterAll(() => { for (const [name, descriptor] of globals) if (descriptor) Object.defineProperty(globalThis, name, descriptor); else Reflect.deleteProperty(globalThis, name); });
 
 /** 所有IPC都在RAM内响应；未知命令立即失败，绝不连接服务器或真实数据库。 */
-async function mount() {
+async function mount(options: { restoreDraft?: boolean } = {}) {
   commands = []; previews = []; pages = [];
   const info: TableInfo = { database: 'db', name: 'items', objectKind: 'table', engine: 'InnoDB', primaryKey: ['id'], editableKey: ['id'], foreignKeys: [], indexes: [], ddl: '', columns: ['id', 'note', 'num', 'doc', 'bin'].map(name => ({ name, type: name === 'num' ? 'decimal(65,30)' : name === 'doc' ? 'json' : name === 'bin' ? 'blob' : 'text', nullable: name !== 'id' && name !== 'num', defaultValue: null, extra: name === 'id' ? 'auto_increment' : '', generated: false, comment: '' })) };
   const source = [1, 2, 3].map(id => ({ id: String(id), note: id === 2 ? null : '原' + id, num: '0.00000000000000000000001', doc: '{"n":900719925474099312345,"x":-0}', bin: { type: 'binary', base64: 'AP8=' } }));
@@ -66,6 +67,8 @@ async function mount() {
     if (command === 'table.presets.list') return { revision: 0, source: 'absent', bindingToken: 'ram-only', entries: [] };
     if (command === 'table.page') { pages.push(structuredClone(input)); return { page: input.page, pageSize: input.pageSize, hasMore: false, rows: structuredClone(source), columns: info.columns.map(column => ({ key: column.name, name: column.name, type: column.type })), copyMetadataKey: tableCopyMetadataKey(info) }; }
     if (command === 'table.preview') { previews.push(structuredClone(input)); return { sql: '仅RAM预览', warnings: [] }; }
+    if (options.restoreDraft && command === 'tableDraftFiles.open') return { name: '合成草稿.dbark-draft.json', document: { kind: 'dbark.table-draft', version: 1, target: { connectionId: '连接', database: info.database, table: info.name }, metadataKey: tableCopyMetadataKey(info), endpointKey: 'a'.repeat(64), changes: [{ kind: 'update', before: structuredClone(source[0]), values: { note: '恢复的本地草稿' } }] } };
+    if (options.restoreDraft && command === 'table.draftVerify') return { verifiedChanges: 1 };
     throw Error('禁止额外IO：' + command);
   } };
   const tab = { id: '表页', kind: 'table' as const, connectionId: '连接', database: 'db', table: 'items', title: '合成表' };
@@ -229,4 +232,30 @@ describe('真实TableTab服务器筛选启停RAM', () => {
     await click(zh.table.filterRemoveCondition.replace('{0}', '1')); const count = pages.length; await act(async () => old({ target: { checked: false } })); expect(pages).toHaveLength(count); expect(field(enabledText.enabled(1)).checked).toBe(true);
     await act(async () => store.setState(state => ({ settings: { ...state.settings, activeTabId: '别的标签' } }))); await enableRule(1, false); expect(pages).toHaveLength(count); expect(pages.at(-1).filters).toEqual([{ column: 'note', operator: 'IS NULL' }]);
   });
+});
+
+
+describe('服务器页跳转与独立恢复草稿的边界（真实TableTab RAM）', () => {
+  it('恢复前遗留的不同页码不能由当前submit或旧闭包领取分页，零确认且保留草稿', async () => {
+    await mount({ restoreDraft: true });
+    const jump = field(zh.table.pageJumpLabel), jumpProps = Object.keys(jump).find(key => key.startsWith('__reactProps$'))!;
+    await act(async () => (jump as any)[jumpProps].onChange({ target: { value: '7' } }));
+    const originalForm = document.querySelector('form[class="page-jump"]')!, formProps = Object.keys(originalForm).find(key => key.startsWith('__reactProps$'))!;
+    const oldSubmit = (originalForm as any)[formProps].onSubmit;
+    const count = pages.length, originalConfirm = window.confirm, confirm = vi.fn(() => true); window.confirm = confirm;
+    try {
+      await click(savedDraftText.open); await click(savedDraftText.choose);
+      const acknowledgement = field(savedDraftText.restoreAcknowledgement), acknowledgementProps = Object.keys(acknowledgement).find(key => key.startsWith('__reactProps$'))!;
+      await act(async () => (acknowledgement as any)[acknowledgementProps].onChange({ target: { checked: true } }));
+      await click(savedDraftText.restoreAction);
+      expect(document.querySelector('[role="dialog"]')).toBeNull(); expect(document.body.textContent).toContain(savedDraftText.restoredScope);
+      expect(field(zh.table.pageJumpLabel).value).toBe('7'); expect(field(zh.table.pageJumpLabel).disabled).toBe(true); expect(button(zh.table.pageJump).disabled).toBe(true);
+      expect(grid.rows).toHaveLength(1); const restored = structuredClone(grid.rows); expect(restored[0].data.note).toBe('恢复的本地草稿'); expect(restored[0].original!.note).toBe('原1');
+      await act(async () => document.querySelector('form[class="page-jump"]')!.dispatchEvent(new MemoryEvent('submit')));
+      await act(async () => oldSubmit({ preventDefault() {} }));
+      expect(confirm).not.toHaveBeenCalled(); expect(pages).toHaveLength(count); expect(grid.rows).toEqual(restored); expect(store.getState().dirtyTabs['表页']).toBe(true);
+      expect(commands.filter(command => command === 'table.draftVerify')).toHaveLength(1); expect(commands.includes('table.apply')).toBe(false);
+    } finally { window.confirm = originalConfirm; }
+  });
+
 });

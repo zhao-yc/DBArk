@@ -46,7 +46,7 @@ if (!activePosition || !cellClick || !selectionSync) throw Error('缺少真实�
 const code = ts.transpileModule(functions.join('\n') + '\nconst load=' + load + ';globalThis.handlers={load,copy:duplicateCurrentRow,read:readCompleteCopySource,context:getRecordContext,navigate:navigateRecordPage,invalidate:invalidateCopyRead,activePosition:(' + activePosition + '),cellClick:(' + cellClick + '),renderSelection:()=>{' + selectionSync + '},resize:(' + resize + '),disabled:()=>(' + disabled + '),environment:()=>{const copyValues=' + copyValues + ';' + environment + '}};', { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
 
 /** 仅模拟IO；旧目录id/note，新来源页声明新增hidden INVISIBLE，服务器回包由测试显式结束。 */
-async function fixture(mode: 'mismatch' | 'matching' | 'unavailable' | 'local' = 'mismatch', filterGroup: FilterGroup | undefined = undefined) {
+async function fixture(mode: 'mismatch' | 'matching' | 'unavailable' | 'local' = 'mismatch', filterGroup: FilterGroup | undefined = undefined, restoredDraftView = false) {
   const old: TableInfo = { database: 'db', name: 'records', engine: 'InnoDB', objectKind: 'table', ddl: '', primaryKey: ['id'], editableKey: ['id'], indexes: [], foreignKeys: [], columns: [{ name: 'id', type: 'int', nullable: false, extra: 'auto_increment', generated: false, defaultValue: null, comment: '' }, { name: 'note', type: 'text', nullable: true, extra: '', generated: false, defaultValue: null, comment: '' }] };
   const fresh = structuredClone(old); fresh.columns.push({ ...fresh.columns[1], name: 'hidden', extra: 'INVISIBLE', defaultValue: '默认值' });
   const metadata = mode === 'matching' ? fresh : old, actual = mode === 'local' ? old : fresh;
@@ -63,7 +63,7 @@ async function fixture(mode: 'mismatch' | 'matching' | 'unavailable' | 'local' =
     visibleKeys: ['id', 'note'], updatePreferences: vi.fn(), setPreferencesError: vi.fn(),
     loadGeneration: { current: 0 }, blockedRef: { current: false }, loadingCount: { current: 0 }, referenceCount: { current: 0 }, applyingRef: { current: false }, preferencesLock: { current: false }, copyPendingRef: { current: false }, mounted: { current: true }, copyPageTask: { current: undefined }, copyPage: { current: null }, copySources: { current: null }, copyRowRefs: { current: new Map() }, copyReadIntent: { current: null }, copyEnvironment: { current: { values: [] } }, rowsRef: { current: [] }, selectionRef: { current: undefined }, copiedDraftIds: { current: new Set() }, inputDirtyRef: { current: false }, recordControllerRef: { current: { ...record, reset: vi.fn() } }, previewingRef: { current: false }, preview: null,
     recordContextRef: { current: { target: base, connectionVersion: 1, generation: 0, info: null, loaded: false, stale: false, busy: false } }, record, rootElement: { current: { querySelector: () => null } }, document: { querySelector: () => null }, blocked: false, copySourceReady: false, copyMetadataReason: '', referenceRow: undefined, info: null, page: null,
-    setRowsState, setError: vi.fn(), setCopyPending: vi.fn(), setDuplicateNotice: vi.fn(), setSelectedRows: vi.fn(), setSelection: vi.fn(), setExternalStale: vi.fn(), setBusy: vi.fn(), setInfo: vi.fn(), setPage: vi.fn(),
+    setRowsState, setError: vi.fn(), setCopyPending: vi.fn(), setDuplicateNotice: vi.fn(), setSelectedRows: vi.fn(), setSelection: vi.fn(), setExternalStale: vi.fn(), setBusy: vi.fn(), setInfo: vi.fn(), setPage: vi.fn(), restoredDraftView, setRestoredDraftView: vi.fn(),
     recordReadonlyReason, recordTargetKey, tableCopyMetadataKey, recordCopyMetadataReason, recordCopySourceReady, recordDuplicateReadonlyReason, duplicateRecordDraft, beginRecordCopyRead, consumeRecordCopyRead, collectChanges, errorMessage, formatText, recordDuplicateZh, recordCopySourceZh, recordViewZh,
   });
   // 缺省平铺与实际分组都由同一load读取；同步范围引用模拟组件本轮渲染。
@@ -73,6 +73,8 @@ async function fixture(mode: 'mismatch' | 'matching' | 'unavailable' | 'local' =
     port.recordPageScopeRef.current.value.filters = port.filters;
   }
   port.setInfo = (value: TableInfo) => { port.info = value; port.recordContextRef.current.info = value; }; port.setPage = (value: TablePage) => { port.page = value; port.recordContextRef.current.loaded = !!value; };
+  // 只补真实load新增的React状态端口，不替换成功/失败分支或原行保护。
+  port.setRestoredDraftView = vi.fn((value: boolean) => { port.restoredDraftView = value; });
   port.setCopyPending = vi.fn((value: boolean) => { port.blocked = value; });
   // React状态与同步引用分别观察；真实setter既接收对象，也接收函数式更新。
   port.setSelection = vi.fn((value: unknown) => { port.selection = typeof value === 'function' ? value(port.selection) : value; });
@@ -87,6 +89,13 @@ async function fixture(mode: 'mismatch' | 'matching' | 'unavailable' | 'local' =
 }
 
 describe('复制补取的同坐标通知与令牌', () => {
+  it('真实load成功交付服务器页时退出恢复草稿视图，保持原行及来源登记', async () => {
+    const f = await fixture('local', undefined, true), p = f.port;
+    expect(p.setRestoredDraftView).toHaveBeenCalledExactlyOnceWith(false);
+    expect(p.restoredDraftView).toBe(false); expect(p.page).toBe(f.page);
+    expect(p.rowsRef.current).toHaveLength(1); expect(p.rowsRef.current[0]).toMatchObject({ inserted: false, deleted: false, original: { id: 1, note: '源记录' }, data: { id: 1, note: '源记录' } });
+    expect(p.setError).toHaveBeenCalledExactlyOnceWith('');
+  });
   it('同坐标通知后自有busy渲染按生产语句回写ref，完整回包仍只追加一次', async () => {
     const f = await fixture('matching'), p = f.port, state = p.selection;
     p.handlers.activePosition({ row: p.rowsRef.current[0], column: { key: 'note' } });

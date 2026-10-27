@@ -11,6 +11,8 @@ import type { DatabaseDropTarget, DatabaseDropCounts } from '../shared/databaseD
 import { QueryFileSources } from './queryFileSources';
 import { DatabaseDefaultEncodingOwners, type DatabaseEncodingOwnerCommand } from './databaseDefaultEncodingOwners';
 import { ExplainSnapshotFiles } from './explainSnapshotFiles';
+import { TableDraftFiles, tableDraftFileMessages } from './tableDraftFiles';
+import { bindTableDraft, assertTableDraftBinding } from './tableDraftBinding';
 import { explainSnapshotZh } from '../shared/explainSnapshot.zh-CN';
 import { ResultSqlPreviews } from './resultSqlPreviews';
 import { QueryInsertExports } from './queryInsertExports';
@@ -67,6 +69,7 @@ let connectionTransfer: ConnectionTransfer;
 let snippetTransfers: SnippetTransfers;
 let queryFileSources: QueryFileSources;
 let explainSnapshotFiles: ExplainSnapshotFiles;
+let tableDraftFiles: TableDraftFiles;
 let savedQuerySearches:SavedQuerySearches;
 let savedQueryPages:SavedQueryPages;
 let historyPages:HistoryPages;
@@ -600,6 +603,24 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
     return releaseDatabaseEncoding(input);
   }
   // 文件能力仅绑定本次真实主窗口文档，不接收渲染进程传入的磁盘路径或连接。
+  if (command === 'tableDraftFiles.open' || command === 'tableDraftFiles.save') {
+    columnsMain.assertCapturedOwner(columns);
+    const target = command === 'tableDraftFiles.open' ? input.target : input.payload.target;
+    const revision = store.connectionRevision();
+    const owner = { assertCurrent: () => { columnsMain.assertCapturedOwner(columns); connectionConfig.assertAvailable(target.connectionId); if (revision !== store.connectionRevision()) throw Error('连接配置已变化，草稿文件操作结果未发布'); } };
+    const profile = store.resolveConnection(target.connectionId);
+    return queryFileOperation(async () => {
+      owner.assertCurrent();
+      if (command === 'tableDraftFiles.open') {
+        const result = await tableDraftFiles.open(owner);
+        if (result) assertTableDraftBinding(result.document, target, profile);
+        owner.assertCurrent(); return result;
+      }
+      const result = await tableDraftFiles.save(bindTableDraft(input.payload, profile), owner);
+      if (result) columns!.snapshotSaved = true;
+      return result;
+    });
+  }
   if (command === 'explainFiles.open' || command === 'explainFiles.save') {
     columnsMain.assertCapturedOwner(columns);
     const owner = { assertCurrent: () => columnsMain.assertCapturedOwner(columns) };
@@ -942,6 +963,7 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
       finally { stateFlushed = undefined; }
       return;
     }
+    case 'table.draftVerify': connectionConfig.assertAvailable(input.connectionId); input = { ...input, profile: store.resolveConnection(input.connectionId) }; break;
     case 'files.choose': return input.queryInsertExport ? chooseQueryInsertFile(input,columns) : input.resultSqlPreviewId ? chooseResultSqlFile(input, columns) : chooseFile(input);
     case 'files.path': { const file = files.get(input.token); if (!file) throw new Error('文件选择已失效，请重新选择'); return file.path; }
     case 'files.readQuery': return queryFileOperation(() => readQueryFile(resolveFileToken(files, input.fileToken, 'query', 'sql'), input.encoding));
@@ -1234,6 +1256,13 @@ else {
       const result = await dialog.showSaveDialog(window, { title: '另存SQL文件', defaultPath: name ?? '查询.sql', filters }); return result.canceled ? undefined : result.filePath;
     } });
     connectionTransfer = new ConnectionTransfer(store, Date.now, undefined, connectionConfig);
+    tableDraftFiles = new TableDraftFiles({ reserve: path => exportReservations.acquire(path), choose: async mode => {
+      const ownerWindow = window;
+      if (!ownerWindow) throw Error('表格草稿所属窗口已关闭');
+      const filters = [{ name: 'DBArk 表格草稿（包含原始数据）', extensions: ['dbark-draft'] }];
+      if (mode === 'open') { const selected = await dialog.showOpenDialog(ownerWindow, { title: '打开表格草稿', properties: ['openFile'], filters }); return selected.canceled ? undefined : selected.filePaths[0]; }
+      const selected = await dialog.showSaveDialog(ownerWindow, { title: '保存表格草稿', defaultPath: '表格草稿.dbark-draft', filters }); return selected.canceled ? undefined : selected.filePath;
+    } });
     explainSnapshotFiles = new ExplainSnapshotFiles({ reserve: path => exportReservations.acquire(path), choose: async mode => {
       const ownerWindow = window;
       if (!ownerWindow) throw Error(explainSnapshotZh.stale);
@@ -1276,6 +1305,7 @@ else {
         }
         if (payload.command.startsWith('explainFiles.')||payload.command.startsWith('schema.columns.')||payload.command.startsWith('table.presets.')||payload.command.startsWith('result.presets.')||payload.command.startsWith('queryFileSources.')||fileCancel||resultSql||insertRequest||payload.command.startsWith('snippets.transfer')||payload.command.startsWith('files.importPresets.')) columns = columnsMain.capture(event);
         const input = validateMainCommand(payload.command, payload.input);
+        if (payload.command.startsWith('tableDraftFiles.')) columns = columnsMain.capture(event);
         if (payload.command.startsWith('schema.databaseDrop.')) beginDatabaseDrop(payload.command, input, columns!);
         if (databaseEncodingCommand) databaseEncodingOwners.before(databaseEncodingCommand, input, columns!);
         const operation=dispatch(payload.command as Command,input,columns),local=payload.command==='search.savedQueries'||payload.command==='search.savedQueriesContinue'||payload.command==='queries.page'||payload.command==='queries.pageContinue'||payload.command==='history.page'||payload.command==='history.pageContinue'||payload.command.startsWith('history.delete');if(local)localSearchOperations.add(operation);
@@ -1308,9 +1338,9 @@ else {
             catch (error) { await columnsMain.rejectReply(columns, error); }
           }
           if (payload.command.startsWith('queryFileSources.') || fileCancel || payload.command.startsWith('snippets.transfer')) columnsMain.assertCapturedOwner(columns);
-          if (payload.command.startsWith('explainFiles.')) try { columnsMain.assertCapturedOwner(columns); } catch (error) {
+          if (payload.command.startsWith('explainFiles.') || payload.command.startsWith('tableDraftFiles.')) try { columnsMain.assertCapturedOwner(columns); } catch (error) {
             // 文件已提交后的最后发布门失效时，不能诱导用户自动重试覆盖文件。
-            if (columns?.snapshotSaved) throw Error(explainSnapshotZh.unknownWrite);
+            if (columns?.snapshotSaved) throw Error(payload.command.startsWith('tableDraftFiles.') ? tableDraftFileMessages.unknownWrite : explainSnapshotZh.unknownWrite);
             throw error;
           }
           if(insertRequest)columnsMain.assertCapturedOwner(columns);
