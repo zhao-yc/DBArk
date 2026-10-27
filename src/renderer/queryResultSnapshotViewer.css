@@ -1,0 +1,8 @@
+.query-result-snapshot-viewer { display: flex; flex-direction: column; gap: 8px; min-height: 0; max-height: calc(90vh - 72px); overflow: auto; padding: 12px; }
+.query-result-snapshot-viewer > p { margin: 0; overflow-wrap: anywhere; }
+.query-result-snapshot-viewer-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.query-result-snapshot-viewer-grid { flex: 0 0 auto; height: min(48vh, 480px); min-height: 240px; overflow: hidden; border: 1px solid var(--line); }
+.query-result-snapshot-viewer-grid > .query-result-copy-region { height: 100%; min-height: 0; }
+.query-result-snapshot-viewer-grid .query-result-find-region { min-height: 0; }
+.query-result-snapshot-viewer-sql { flex: 0 0 auto; min-height: 210px; }
+.query-result-snapshot-viewer-sql > p { margin: 0 0 6px; }
