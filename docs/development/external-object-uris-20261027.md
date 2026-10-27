@@ -22,4 +22,4 @@
 
 `DBARK_OBJECT_URI_OFFLINE=1 pnpm exec playwright test tests/e2e/external-object-uris-offline.spec.ts --workers=1 --retries=0` 验证正式 Main `open-url` 事件及真实副实例的离线拒绝，不访问数据库、原生文件输入或剪贴板。默认关闭；该用例不证明系统注册、冷启动或实库成功导航。
 
-本轮 WIN11-TEST 类型、123项相关单元、构建、1个离线整例及Windows NSIS编译通过，尚未安装或注册；原失败及未验范围见[验收记录](../../tests/integration/acceptance-external-object-uris-20261027.md)。暂不发布；不得把源码接线或其它功能的旧 CI 当作本功能原生验收。
+本轮 WIN11-TEST 构建、262项相关单元（含此前123项）、URI离线整例、精确四方法隔离接口整例、Windows NSIS编译及asar109条逐哈希校验通过；首次完整CI的旧夹具/API预期失败和窄修分别保留。完整回归、系统安装/注册、冷热启动和实库正向导航仍需闭合，详见[验收记录](../../tests/integration/acceptance-external-object-uris-20261027.md)。暂不发布；不得把源码接线或其它功能的旧 CI 当作本功能原生验收。

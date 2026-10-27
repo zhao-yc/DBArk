@@ -1,4 +1,5 @@
 import { emptyTableFilteredDeleteOwners } from './table-filtered-delete-owner-fixture';
+import { extractMainProductionFunction } from './main-production-function';
 import { emptyTableFilteredUpdateOwners } from './table-filtered-update-owner-fixture';
 import { readFileSync } from 'node:fs';
 import { createContext, runInContext } from 'node:vm';
@@ -10,9 +11,9 @@ import type { TaskEvent, TaskRecord } from '../../src/shared/contracts';
 function productionFunctions(): string {
   const source = readFileSync(new URL('../../src/main/index.ts', import.meta.url), 'utf8');
   const dispatchStart = source.indexOf('async function dispatch('), dispatchEnd = source.indexOf('/** 按平台生成中文原生菜单');
-  const exitStart = source.indexOf('function engineExited('), exitEnd = source.indexOf('if (!app.requestSingleInstanceLock())');
-  if (dispatchStart < 0 || dispatchEnd <= dispatchStart || exitStart < 0 || exitEnd <= exitStart) throw new Error('生产函数位置改变，请更新真实入口测试');
-  return ts.transpileModule(source.slice(dispatchStart, dispatchEnd) + source.slice(exitStart, exitEnd) + '\nglobalThis.handlers = { dispatch, engineExited };', { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
+  if (dispatchStart < 0 || dispatchEnd <= dispatchStart) throw new Error('生产函数位置改变，请更新真实入口测试');
+  const exited = extractMainProductionFunction(source, 'engineExited');
+  return ts.transpileModule(source.slice(dispatchStart, dispatchEnd) + exited + '\nglobalThis.handlers = { dispatch, engineExited };', { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
 }
 
 describe('主进程准备任务的进程退出竞态', () => {

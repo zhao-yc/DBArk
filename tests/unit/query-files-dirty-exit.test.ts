@@ -1,4 +1,5 @@
 import { emptyTableFilteredDeleteOwners } from './table-filtered-delete-owner-fixture';
+import { ExternalObjectUris } from '../../src/main/externalObjectUris';
 import { emptyTableFilteredUpdateOwners } from './table-filtered-update-owner-fixture';
 import { readFileSync } from 'node:fs';
 import { runInNewContext } from 'node:vm';
@@ -23,12 +24,19 @@ it('原Main before-quit先被真实dirty提示阻塞，确认后仅沿原收尾�
   const shutdownOrder: string[] = [];
   // 未打开结果写入用途时的真实初始空协调器，退出没有待等待的写入任务或预览。
   const resultInserts = { async drain() {} };
-  const callback = (statement.expression as ts.CallExpression).arguments[1], main: any = { filteredDeletes: emptyTableFilteredDeleteOwners(), filteredUpdates: emptyTableFilteredUpdateOwners(), resultInserts, shutdownComplete: false, shuttingDown: false, hasPendingEdits: true, tasks: new Map(), window: f.owner, dialog: f.dialog, rendererHasSettings: false, stateFlushed: undefined, savedQuerySearches: undefined, savedQueryPages: undefined, historyPages: undefined, historyDelete: { close: vi.fn(async () => { await Promise.resolve(); shutdownOrder.push('history-delete'); }) }, localSearchOperations: [], queryFileOperations: [], broker: { close: vi.fn(async () => {}) }, tableApplyReceipts: undefined, store: { close: vi.fn(() => { shutdownOrder.push('store'); }) }, app: f.app, event: { preventDefault: vi.fn() }, setTimeout };
+  // 退出夹具没有接收页面或系统链接；仍沿真实空队列close收尾，不吞掉生产关闭回调。
+  const externalObjectUris = new ExternalObjectUris<string>({
+    revision: () => 0, assertOwner: () => { throw Error('退出夹具未登记接收页面'); },
+    sameOwner: (left, right) => left === right, resolve: async () => { throw Error('退出夹具禁止对象核验'); }, notify: vi.fn()
+  });
+  const closeObjectUris = vi.spyOn(externalObjectUris, 'close');
+  const callback = (statement.expression as ts.CallExpression).arguments[1], main: any = { externalObjectUris, filteredDeletes: emptyTableFilteredDeleteOwners(), filteredUpdates: emptyTableFilteredUpdateOwners(), resultInserts, shutdownComplete: false, shuttingDown: false, hasPendingEdits: true, tasks: new Map(), window: f.owner, dialog: f.dialog, rendererHasSettings: false, stateFlushed: undefined, savedQuerySearches: undefined, savedQueryPages: undefined, historyPages: undefined, historyDelete: { close: vi.fn(async () => { await Promise.resolve(); shutdownOrder.push('history-delete'); }) }, localSearchOperations: [], queryFileOperations: [], broker: { close: vi.fn(async () => {}) }, tableApplyReceipts: undefined, store: { close: vi.fn(() => { shutdownOrder.push('store'); }) }, app: f.app, event: { preventDefault: vi.fn() }, setTimeout };
   const document = { sql: draftSql, dirty: true }, before = { ...document }; await installSqlFilesDirtyExitAnswer(f.application, f.choice);
   runInNewContext(ts.transpileModule('(' + callback.getText(tree) + ')(event)', { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText, main);
   expect(main.event.preventDefault).toHaveBeenCalledOnce(); expect(f.events).toEqual(['DBARK_SQL_FILES_DIRTY_PENDING:' + f.choice.nonce]); expect(f.app.quit).not.toHaveBeenCalled(); expect(main.broker.close).not.toHaveBeenCalled(); expect(main.historyDelete.close).not.toHaveBeenCalled(); expect(f.dialog.showMessageBox).toBe(f.original);
   const receipt = await consumeSqlFilesDirtyExitAnswer(f.application, f.choice); expect(receipt).toEqual({ pid: 101, window: 31, contents: 41, calls: 1, restored: true, consumed: true }); expect(f.realm.__sqlFilesDirtyExit).toBeUndefined(); expect(f.app.quit).not.toHaveBeenCalled();
   await vi.runAllTimersAsync(); expect(f.app.quit).toHaveBeenCalledOnce(); expect(main.historyDelete.close).toHaveBeenCalledOnce(); expect(main.store.close).toHaveBeenCalledOnce(); expect(shutdownOrder).toEqual(['history-delete', 'store']); expect(main.shutdownComplete).toBe(true); expect(main.hasPendingEdits).toBe(true); expect(document).toEqual(before); expect(f.original).not.toHaveBeenCalled();
+  expect(closeObjectUris).toHaveBeenCalledOnce(); expect(main.store.close.mock.invocationCallOrder[0]).toBeLessThan(closeObjectUris.mock.invocationCallOrder[0]); expect(closeObjectUris.mock.invocationCallOrder[0]).toBeLessThan(f.app.quit.mock.invocationCallOrder[0]);
 });
 it('两个独立原owner各回答一次，准确选项为退出客户端；同一原应用禁止重装', async () => {
   for (let index = 0; index < 2; index++) {

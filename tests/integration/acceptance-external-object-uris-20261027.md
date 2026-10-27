@@ -26,6 +26,20 @@ Windows真实 `electron-builder 26.15.3 --win nsis --x64 --publish never` 编译
 
 提交前逐条比对Git暂存内容：24条中仅 `App.tsx` 由仓库属性将CRLF规范为LF（75049→74566字节），移除CR后逐字一致，其余23条无字节变化。本轮VM证据绑定规范化前工作区，不把它声称为尚未运行的提交CI；后续提交CI须单独记录。
 
+## 首次提交CI与夹具复验
+
+`0dc8d7b2` 已推送main；[CI 40528682535](https://github.com/zhao-yc/DBArk/actions/runs/40528682535) 四个主要job均失败，原红保留。Linux完整单元为18694通过/39失败/10跳过（881文件）；Windows、macOS arm64/x64各自源码legacy为81通过/1失败/375跳过，未进入各自安装验收，不能标为原生CI通过。
+
+39项单元失败定位于旧Main夹具：字符串截取使用已不存在的锁语句边界，误含启动代码或先触发位置门；共用owner夹具及退出夹具缺少真实URI队列。仅补测试：AST提取唯一顶层 `engineExited`，共用夹具初始化真实Main队列和resolver，退出夹具使用真实空队列并增加store关闭→队列close→quit次序断言，既有Main行为断言保持。
+
+三平台相同源码失败来自隔离接口精确白名单仍预期三方法。按本次正式API改为 `invoke/onMenu/onObjectUri/onTask` 精确四项，并增加四函数均冻结的要求；Node暴露、原IPC暴露和sandbox判据不变。
+
+WIN11-TEST green04：14个测试夹具补丁后类型检查PID15696 exit0；原受影响16文件加原入口8文件共24文件262项全部通过（PID13956 exit0）。262已包含此前123项，不能相加。随后单独补desktop断言，list恰1、实际只执行该隔离接口例1通过（PID248 exit0），无数据库/剪贴板/原生文件输入。此次完整type先于desktop单行断言补丁，新增提交完整type仍待CI。
+
+Root已核对15个测试路径与VM一致，回读边界原件包（27项、55251字节、SHA256 `e3b0ac80b9dd0478d7a8c64ace3a6de66d08de9b8e7073d3390fd339e757c744`）及其独立green04包（31项、30255字节、SHA256 `c5a067356c88ad526548300c24292ed2c1627fac770827e3fc67a05f3922b68f`），递归58项哈希/CRC/路径/私钥标记检查通过。产品、109份dist及NSIS/asar均未修改或重建；新提交和新完整CI须另记，不能把旧CI原红改为绿。
+
+Windows只读asar验证在按真实API使用本机路径分隔符后通过（PID15756 exit0）：109个dist文件逐哈希一致，Main入口存在，asar为209370220字节、SHA256 `3524530f7e28622f57ebfac07a74a042117998610a5ff59ce67d4ede50a68e4c`。初次只读工具的模块入口/路径查找错误保留，未重打包或执行包代码。安装前盘点HKCU/HKLM 32/64协议、UserChoice、AppPaths及精确DBArk卸载记录均不存在，Windows关联API返回1155；后续原生安装/注册另验。
+
 ## 验收边界
 
 单元涵盖规范URI、参数预算及拆参、文档/连接/导航ABA、真实Promise收尾、提交线性化、模态、卸载、React StrictMode与安装脚本归属判断。安装脚本解释器不证明NSIS原生编译或注册表行为。

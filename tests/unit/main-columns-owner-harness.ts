@@ -11,6 +11,9 @@ import { SavedQuerySearchCancelled } from '../../src/main/savedQuerySearch';
 import { QueryFileSources } from '../../src/main/queryFileSources';
 import { QueryInsertExports } from '../../src/main/queryInsertExports';
 import { TableFilteredUpdateOwners } from '../../src/main/tableFilteredUpdateOwners';
+import { ExternalObjectUris } from '../../src/main/externalObjectUris';
+import { resolveWorkbenchTarget } from '../../src/main/workbench';
+import { externalObjectUrisZh } from '../../src/shared/externalObjectUris.zh-CN';
 
 /** 可控等待只替换broker物理边界，真实Main dispatch/helper/IPC保持原文。 */
 export function deferred<T = any>() { let resolve!: (value: T) => void, reject!: (error: Error) => void; const promise = new Promise<T>((yes, no) => { resolve = yes; reject = no; }); return { promise, resolve, reject }; }
@@ -19,16 +22,17 @@ export function deferred<T = any>() { let resolve!: (value: T) => void, reject!:
 function productionParts() {
   const source = readFileSync(new URL('../../src/main/index.ts', import.meta.url), 'utf8'), tree = ts.createSourceFile('index.ts', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
   const names = ['dispatch', 'engineExited', 'createWindow', 'validateMainCommand', 'cancelTablePresetRead', 'invalidateTablePresetSources', 'runTableFilteredUpdate', 'runTableFilteredDelete'], parts: string[] = [];
-  let wrapper = '', deletionBinding = '';
+  let wrapper = '', deletionBinding = '', objectUriBinding = '';
   function visit(node: ts.Node) {
     if (ts.isVariableStatement(node) && node.declarationList.declarations.some(declaration => ts.isIdentifier(declaration.name) && declaration.name.text === 'filteredDeletes')) deletionBinding = node.getText(tree);
+    if (ts.isVariableStatement(node) && node.declarationList.declarations.some(declaration => ts.isIdentifier(declaration.name) && declaration.name.text === 'externalObjectUris')) objectUriBinding = node.getText(tree);
     if (ts.isFunctionDeclaration(node) && names.includes(node.name?.text ?? '')) parts.push(node.getText(tree));
     if (ts.isCallExpression(node) && node.expression.getText(tree) === 'ipcMain.handle' && ts.isStringLiteral(node.arguments[0]) && node.arguments[0].text === 'dbark:request') wrapper = node.getText(tree);
     ts.forEachChild(node, visit);
   }
   visit(tree);
-  if (parts.length !== names.length || !wrapper || !deletionBinding) throw Error('未提取到真实Main函数、删除能力初始化或IPC wrapper');
-  return parts.join('\n') + '\n' + deletionBinding + '\nglobalThis.filteredDeletes=filteredDeletes;\n' + wrapper + ';\nglobalThis.actual = {dispatch,engineExited,createWindow};';
+  if (parts.length !== names.length || !wrapper || !deletionBinding || !objectUriBinding) throw Error('未提取到真实Main函数、删除/对象链接能力初始化或IPC wrapper');
+  return parts.join('\n') + '\n' + deletionBinding + '\nglobalThis.filteredDeletes=filteredDeletes;\n' + objectUriBinding + '\nglobalThis.externalObjectUris=externalObjectUris;\n' + wrapper + ';\nglobalThis.actual = {dispatch,engineExited,createWindow};';
 }
 
 /** 只模拟Electron对象与事件，不模拟owner授权；helper逐项读取这些真实边界对象。 */
@@ -67,7 +71,7 @@ export function mainColumnsHarness() {
     resultInserts: { observe() {}, invalidateConnection(_connectionId: string) {}, engineExited() {}, has: (_taskId: string) => false }, resultInsertProgress: new Map(),
     filteredUpdateProgress: new Map(), filteredDeleteProgress: new Map(),
 
-    Date, Map, Error, Boolean, TableFilteredDeleteOwners, SavedQuerySearchCancelled, columnsMain: undefined, tablePresetSources: undefined, tablePresetReads: new Map(), window: undefined, structureTokens: tokens, tasks, structureProgress: progress, events,
+    Date, Map, Error, Boolean, TableFilteredDeleteOwners, ExternalObjectUris, resolveWorkbenchTarget, externalObjectUrisZh, SavedQuerySearchCancelled, columnsMain: undefined, tablePresetSources: undefined, tablePresetReads: new Map(), window: undefined, structureTokens: tokens, tasks, structureProgress: progress, events,
     tableApplyReceipts: undefined, pendingQueryHistory: new Map(), completionTasks: new Set(), preparingTasks: new Map(), exportProgress: new Map(), sessions: new Map(),
     savedQuerySearches: { has: () => false }, savedQueryPages: undefined, historyPages: undefined, historyDelete: undefined, localSearchOperations: new Set(), shuttingDown: false, shutdownComplete: false,
     rendererSettingsCurrent: true, rendererURL: 'app://renderer', process: { resourcesPath: 'ram' }, __dirname: 'ram', join: (...parts: string[]) => parts.join('/'),
@@ -76,7 +80,8 @@ export function mainColumnsHarness() {
     ipcMain: { handle(channel: string, callback: typeof handler) { if (channel !== 'dbark:request') throw Error('非预期IPC通道'); handler = callback; } },
     validateCommand,
     connectionConfig: { assertAvailable(id?: string) { if (blocked && id === 'trusted') throw Error('连接配置正在保存'); } },
-    store: { saveTask() {}, connectionRevision: () => revision },
+    // 字段用途未登记系统对象链接连接；若显式调用解析，仍由真实resolver拒绝原连接缺失。
+    store: { saveTask() {}, connectionRevision: () => revision, queryConnectionExists: (_id: string) => false, resolveConnection: (_id: string): never => { throw Error('字段所有权夹具未登记对象链接连接凭据'); } },
     broker: { request },
     taskEvent(event: any) { events.push(event); const value = event.columnPatch ?? event.indexPatch; if (value) progress.set(event.taskId, value); tasks.set(event.taskId, { ...tasks.get(event.taskId), status: event.status }); afterTask?.(); },
   });

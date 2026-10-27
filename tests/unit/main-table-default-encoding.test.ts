@@ -1,3 +1,4 @@
+import { extractMainProductionFunction } from './main-production-function';
 import { emptyTableFilteredDeleteOwners } from './table-filtered-delete-owner-fixture';
 import { emptyTableFilteredUpdateOwners } from './table-filtered-update-owner-fixture';
 import { readFileSync } from 'node:fs';
@@ -12,7 +13,7 @@ import type { TaskEvent, TaskRecord } from '../../src/shared/contracts';
 function harness() {
   const source = readFileSync(new URL('../../src/main/index.ts', import.meta.url), 'utf8');
   const dispatch = source.slice(source.indexOf('async function dispatch('), source.indexOf('/** 按平台生成中文原生菜单'));
-  const exit = source.slice(source.indexOf('function engineExited('), source.indexOf('if (!app.requestSingleInstanceLock())'));
+  const exit = extractMainProductionFunction(source, 'engineExited');
   const tokens = new Map(), progress = new Map(), tasks = new Map<string, TaskRecord>(), events: TaskEvent[] = [], request = vi.fn(async (_command: string, _input: unknown): Promise<any> => undefined);
   const context = createContext({ filteredDeletes: emptyTableFilteredDeleteOwners(), filteredUpdates: emptyTableFilteredUpdateOwners(),
     // 未打开结果写入用途时的真实初始空协调器，不登记任务、预览或写入能力。
