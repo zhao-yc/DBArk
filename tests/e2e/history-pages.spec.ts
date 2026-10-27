@@ -5,8 +5,10 @@ import type{Database}from'sql.js';
 import type{HistoryEntry}from'../../src/shared/contracts';
 import{LocalStore}from'../../src/main/storage';
 import{test,expect,page,dataDir,pageErrors,desktop,quitDesktop,launchDesktop}from'./desktop-fixture';
+import { historyInsertionZh } from '../../src/renderer/locales/historyInsertion.zh-CN';
+import { zh } from '../../src/renderer/locales/zh-CN';
 
-test.use({trace:'off'});
+test.use({trace:'off',screenshot:'off',video:'off'});
 const runtimeRequire=createRequire(join(process.cwd(),'package.json')),dialog=()=>page.getByRole('dialog',{name:'历史与保存的查询',exact:true});
 /** 按读取进度的无障碍名称定位，不能误把选择数量或待应用筛选当成读取结果。 */
 const progress=()=>dialog().getByRole('status',{name:'历史读取进度',exact:true});
@@ -66,4 +68,98 @@ test('损坏历史有明确失败和停止政策，来源及字段筛选不混�
 
 test('历史真实IPC取消、切换、关闭和重启释放资源且筛选条件不写本地配置',async()=>{
  test.setTimeout(120000);await seed(store=>{for(let i=0;i<28;i++)store.addHistory(entry({id:'h'+String(i).padStart(3,'0'),sql:'-- '+ 'x'.repeat(200000)}));});const cancelled=await page.evaluate(async()=>{const taskId=crypto.randomUUID(),pending=window.dbark.invoke('history.page',{taskId,search:'仅内存筛选_不能落盘',fields:['sql'],scope:{kind:'all'},status:'all',onError:'continue'}),cancellation=window.dbark.invoke('query.cancel',{taskId});const result=await pending.then(()=>({cancelled:false,message:''}),error=>({cancelled:true,message:error.message}));await cancellation;return result;});expect(cancelled.cancelled).toBe(true);expect(cancelled.message).toContain('取消');await open();await dialog().getByLabel('搜索完整历史SQL或错误',{exact:true}).fill('窗口筛选_不恢复');await dialog().getByRole('button',{name:'保存的查询',exact:true}).click();await expect(dialog().getByRole('button',{name:'执行历史',exact:true})).toBeVisible();await dialog().getByRole('button',{name:'执行历史',exact:true}).click();await expect(dialog().getByLabel('搜索完整历史SQL或错误',{exact:true})).toHaveValue('');await dialog().getByRole('button',{name:'关闭',exact:true}).click();await expect(dialog()).toHaveCount(0);await quitDesktop();await launchDesktop();expect(await page.evaluate(()=>window.dbark.invoke('tasks.list',{}))).toEqual([]);expect((await page.evaluate(()=>window.dbark.invoke('history.list',{})))).toHaveLength(28);const bytes=await readFile(join(dataDir,'dbark.sqlite'));expect(bytes.includes(Buffer.from('仅内存筛选_不能落盘'))).toBe(false);expect(bytes.includes(Buffer.from('窗口筛选_不恢复'))).toBe(false);expect(pageErrors).toEqual([]);
+});
+
+test.describe('合成本地历史插入真实Monaco', () => {
+  test('完整历史只替换原选区且单次撤销，关闭后的真实迟到读取不编辑原查询', async () => {
+    test.setTimeout(120000);
+    const prefix = "-- 外部前缀🚢\n", selected = 'REPLACE_ME', suffix = "\nSELECT '外部后缀' AS 尾;";
+    const originalSql = prefix + selected + suffix;
+    const historySql = '-- 合成失败记录：仅本地夹具，未执行数据库\nUPDATE synthetic SET amount=900719925474099312345, note=\'$1 ${name}\\n\';\n-- ' + 'x'.repeat(650) + '\n-- 完整历史尾标记';
+    // 沿原seed体系先退出App再独占SQLite，不能在Main内存快照存活时另开数据库写入。
+    await seed(store => {
+      source(store); source(store, 'other');
+      store.addHistory(entry({ id: 'synthetic-insert', connectionId: 'other', databaseContext: { state: 'known', database: '历史来源库' }, sql: historySql, success: false, error: '合成离线夹具，未执行数据库，不是执行成功证据' }));
+      store.saveQuery({ id: 'insertion-source', name: '历史插入原查询', connectionId: 'source', databaseContext: { state: 'known', database: '原查询库' }, sql: originalSql, updatedAt: '2026-10-15T00:00:00Z' });
+    });
+    await page.addInitScript(() => { self.MonacoEnvironment = { ...self.MonacoEnvironment, globalAPI: true }; });
+    await page.reload(); await expect(page.locator('.app-statusbar')).toBeVisible();
+    await open(); await dialog().getByRole('button', { name: '保存的查询', exact: true }).click();
+    await dialog().locator('.history-card').filter({ has: page.getByText('历史插入原查询', { exact: true }) }).getByRole('button', { name: '在新标签打开', exact: true }).click();
+    await expect(dialog()).toHaveCount(0);
+    const query = page.locator('.query-tab:visible'), box = query.locator('.monaco-editor').getByRole('textbox');
+    await expect(box).toBeVisible(); const modifier = process.platform === 'darwin' ? 'Meta' : 'Control';
+    /** Monaco仅用官方只读API观测；正文和选区由正式打开入口及真实按键产生。 */
+    const observe = () => page.evaluate(() => {
+      const editors = (window as Window & { monaco?: typeof import('monaco-editor') }).monaco?.editor.getEditors().filter(editor => editor.getContainerDomNode().isConnected && editor.getContainerDomNode().closest('.query-tab') && editor.getContainerDomNode().getClientRects().length > 0);
+      if (editors?.length !== 1) throw Error('历史插入原查询编辑器不唯一'); const model = editors[0].getModel(); if (!model || model.isDisposed()) throw Error('历史插入原模型未知');
+      return { value: model.getValue(), version: model.getVersionId(), eol: model.getEOL(), uri: model.uri.toString(), ranges: editors[0].getSelections()?.map(range => ({ start: model.getOffsetAt(range.getStartPosition()), end: model.getOffsetAt(range.getEndPosition()) })) };
+    });
+    const initial = await observe(), normalize = (text: string) => text.replaceAll('\n', initial.eol);
+    expect(initial.value).toBe(normalize(originalSql));
+    /** 同时核对真实模型及正常settings保存路径，不能仅观察store冒充编辑器撤销。 */
+    const exact = async (value: string) => {
+      await expect.poll(async () => (await observe()).value).toBe(value);
+      await expect.poll(async () => { const settings = await page.evaluate(() => window.dbark.invoke('settings.get', {})); return settings.tabs.find(tab => tab.id === settings.activeTabId)?.sql; }).toBe(value);
+    };
+    await box.focus(); await page.keyboard.press(process.platform === 'darwin' ? 'Meta+ArrowDown' : 'Control+End'); await page.keyboard.press('Space');
+    const original = normalize(originalSql) + ' ', inserted = normalize(prefix + historySql + suffix) + ' '; await exact(original);
+    /** 选择ASCII哨兵而保留外部Unicode/EOL；不用setSelection或executeEdits预置测试答案。 */
+    const select = async () => {
+      await box.focus(); await page.keyboard.press(process.platform === 'darwin' ? 'Meta+ArrowUp' : 'Control+Home'); await page.keyboard.press('ArrowDown');
+      for (const _character of selected) await page.keyboard.press('Shift+ArrowRight');
+      expect((await observe()).ranges).toEqual([{ start: normalize(prefix).length, end: normalize(prefix).length + selected.length }]);
+    };
+    /** 离线证据仅证明原无结果/未连接事务状态不变，不能推导真实活动事务保持。 */
+    const sideEffects = async () => {
+      const stored = await page.evaluate(async () => { const settings = await window.dbark.invoke('settings.get', {}); return { activeTabId: settings.activeTabId, tabs: settings.tabs.map(({ sql: _sql, ...tab }) => tab), tasks: await window.dbark.invoke('tasks.list', {}), history: await window.dbark.invoke('history.list', {}), queries: await window.dbark.invoke('queries.list', {}) }; });
+      return { ...stored, context: await query.getByLabel('当前查询默认库', { exact: true }).textContent(), connection: await query.locator('.context-bar > strong').textContent(), session: await query.locator('.context-bar').getByText(zh.query.text009, { exact: true }).textContent(), result: await query.locator('.result-body').textContent(), grids: await query.locator('.result-body [role="grid"]').count(), commitDisabled: await query.getByRole('button', { name: zh.common.transactionCommit, exact: true }).isDisabled(), rollbackDisabled: await query.getByRole('button', { name: zh.common.transactionRollback, exact: true }).isDisabled() };
+    };
+    const before = await sideEffects(); expect(before.tabs).toHaveLength(1); expect(before.grids).toBe(0); expect(before.session).toBe(zh.query.text009); expect(before.commitDisabled).toBe(true); expect(before.rollbackDisabled).toBe(true); expect(before.context).toBe('原查询库'); expect(before.tasks).toEqual([]);
+    await desktop.evaluate(({ ipcMain, BrowserWindow }) => {
+      const root = globalThis as any, handlers = (ipcMain as any)._invokeHandlers, previous = handlers?.get('dbark:request'), window = BrowserWindow.getAllWindows()[0], frame = window.webContents.mainFrame;
+      if (!previous || root.__historyInsertionAudit || BrowserWindow.getAllWindows().length !== 1) throw Error('历史插入Main旁观归属未知');
+      const state = { pending: 0, calls: [] as string[], reads: [] as { id: string; digest: string; connectionId: string; ok: boolean }[], gateNext: false, held: false, release: undefined as (() => void) | undefined, check() {}, restore() {} };
+      const check = () => { if (root.__historyInsertionAudit !== state || handlers.get('dbark:request') !== wrapped || window.isDestroyed() || window.webContents.mainFrame !== frame || BrowserWindow.getAllWindows().length !== 1) throw Error('历史插入Main原归属变化'); };
+      const wrapped = async (event: any, payload: any) => {
+        check(); if (event.sender !== window.webContents || event.senderFrame !== frame) throw Error('历史插入Main原IPC来源变化'); state.calls.push(String(payload.command)); state.pending++;
+        try {
+          const result = await previous(event, payload); check();
+          if (payload.command === 'history.read') {
+            state.reads.push({ id: payload.input.id, digest: payload.input.digest, connectionId: payload.input.connectionId, ok: result?.ok === true });
+            // 先取得真实原处理结果，只延后本次交付；不替换SQL、摘要、成功状态或数据库执行结果。
+            if (state.gateNext) { state.gateNext = false; state.held = true; await new Promise<void>(resolve => { state.release = () => { if (!state.held) throw Error('原历史读取门已经释放'); state.held = false; state.release = undefined; resolve(); }; }); check(); }
+          }
+          return result;
+        } finally { state.pending--; }
+      };
+      state.check = check; state.restore = () => { check(); if (state.pending || state.held) throw Error('原历史读取尚未收尾'); handlers.set('dbark:request', previous); delete root.__historyInsertionAudit; };
+      root.__historyInsertionAudit = state; handlers.set('dbark:request', wrapped);
+    });
+    const audit = () => desktop.evaluate(() => { const state = (globalThis as any).__historyInsertionAudit; state.check(); return { pending: state.pending as number, held: state.held as boolean, calls: state.calls as string[], reads: state.reads as { id: string; digest: string; connectionId: string; ok: boolean }[] }; });
+    let failure: unknown, failed = false;
+    try {
+      await select(); await open(); const card = dialog().locator('[data-history-id="synthetic-insert"]');
+      await expect(card.locator('pre').first()).not.toContainText('完整历史尾标记'); await expect(card.getByLabel('打开历史的连接：synthetic-insert', { exact: true })).toHaveValue('other');
+      await expect(card.getByRole('button', { name: historyInsertionZh.insert, exact: true })).toBeEnabled(); await card.getByRole('button', { name: historyInsertionZh.insert, exact: true }).click(); await expect(dialog()).toHaveCount(0); await exact(inserted);
+      expect((await observe()).uri).toBe(initial.uri); expect(await sideEffects()).toEqual(before);
+      await box.focus(); await page.keyboard.press(`${modifier}+z`); await exact(original); expect(await sideEffects()).toEqual(before);
+      await select(); const beforeLate = await observe(); await open();
+      await desktop.evaluate(() => { const state = (globalThis as any).__historyInsertionAudit; state.check(); if (state.held || state.gateNext) throw Error('历史原读取门不能重入'); state.gateNext = true; });
+      await dialog().locator('[data-history-id="synthetic-insert"]').getByRole('button', { name: historyInsertionZh.insert, exact: true }).click(); await expect.poll(async () => (await audit()).held).toBe(true);
+      await page.keyboard.press('Escape'); await expect(dialog().getByRole('button', { name: zh.common.close, exact: true })).toBeDisabled();
+      await desktop.evaluate(() => { const state = (globalThis as any).__historyInsertionAudit; state.check(); if (!state.held || !state.release) throw Error('原历史读取尚未进入交付门'); state.release(); });
+      await expect(dialog()).toHaveCount(0); await expect.poll(async () => (await audit()).pending).toBe(0); await exact(original);
+      const afterLate = await observe(); expect({ value: afterLate.value, version: afterLate.version, uri: afterLate.uri }).toEqual({ value: beforeLate.value, version: beforeLate.version, uri: beforeLate.uri }); expect(await sideEffects()).toEqual(before);
+      // 迟到读取未创建新编辑，原插入的Redo/Undo分组仍各只需一次真实按键。
+      await box.focus(); await page.keyboard.press(process.platform === 'darwin' ? 'Meta+Shift+z' : 'Control+y'); await exact(inserted); await page.keyboard.press(`${modifier}+z`); await exact(original);
+      const result = await audit(); expect(result.reads).toHaveLength(2); expect(result.reads.map(({ digest: _digest, ...read }) => read)).toEqual(Array.from({ length: 2 }, () => ({ id: 'synthetic-insert', connectionId: 'source', ok: true }))); expect(result.reads.every(read => /^[a-f0-9]{64}$/.test(read.digest))).toBe(true); expect(result.reads[0].digest).toBe(result.reads[1].digest);
+      expect(result.calls.filter(command => command.startsWith('query.execute') || command.startsWith('query.transaction') || command === 'sessions.open')).toEqual([]); expect(await sideEffects()).toEqual(before); expect(pageErrors).toEqual([]);
+    } catch (reason) { failed = true; failure = reason; throw reason; }
+    finally {
+      // 只释放本例人为延迟的原回包，原错误和原退出门保留；不让测试门污染默认fixture退出。
+      try { await desktop.evaluate(() => { const state = (globalThis as any).__historyInsertionAudit; state.check(); if (state.held) state.release(); }); await expect.poll(async () => (await audit()).pending).toBe(0); await desktop.evaluate(() => { (globalThis as any).__historyInsertionAudit.restore(); }); }
+      catch (cleanup) { if (failed) throw new AggregateError([failure, cleanup], '历史插入原用例失败且旁观门收尾未确认', { cause: failure }); throw cleanup; }
+    }
+  });
 });

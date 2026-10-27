@@ -27,7 +27,7 @@ import { queryResultFilterZh as filterText } from '../locales/queryResultFilter.
 import { queryResultSortZh as sortText } from '../locales/queryResultSort.zh-CN';
 import '../queryResultSort.css';
 import { zh, formatText } from '../locales/zh-CN';
-import { useEffect, useId, useMemo, useRef, useState } from 'react';
+import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { QueryCloseDialog } from './QueryCloseDialog';
 import { QuerySaveCloseIntent, type QueryCloseRequest } from '../queryCloseIntent';
@@ -77,6 +77,7 @@ import { resultInsertZh } from '../locales/resultInsert.zh-CN';
 import { QueryFileActions, QueryFileSourceCaption } from './QueryFilesDialog';
 import { SnippetsDialog } from './SnippetsDialog';
 import { snippetEdit } from '../snippetInsertion';
+import { captureHistoryInsertion, type HistoryInsertionRegistry, type HistoryInsertionTarget } from '../historyInsertion';
 import { QueryParametersDialog } from './QueryParametersDialog';
 import { parameterZh } from '../locales/queryParameters.zh-CN';
 import type { QueryParameter } from '../../shared/queryParameters';
@@ -105,7 +106,7 @@ import '../queryLayout.css';
 const completionStatusInfo={sessionUnknown:{text:completionZh.sessionUnknown,hint:completionZh.sessionUnknownHint},partial:{text:completionZh.partial,hint:completionZh.partialHint},unavailable:{text:completionZh.unavailable,hint:completionZh.unavailableHint},limited:{text:completionZh.limited,hint:completionZh.limitedHint},databaseUnknown:{text:completionZh.databaseUnknown,hint:completionZh.databaseUnknownHint},startupTimeout:{text:completionZh.startupTimeout,hint:completionZh.startupTimeoutHint},analysisTimeout:{text:completionZh.analysisTimeout,hint:completionZh.analysisTimeoutHint}};
 
 /** 一个标签对应一个固定会话，流式结果和任务事件只接收当前执行编号。 */
-export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseRequestFinished }: { closeRequest?: QueryCloseRequest; onCloseRequestFinished?(request: QueryCloseRequest, close: boolean): void; tab: WorkspaceTab; onHistory: () => void;searchNavigation?:SavedQueryNavigationSource }) {
+export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseRequestFinished,historyInsertionRegistry }: { historyInsertionRegistry?: HistoryInsertionRegistry; closeRequest?: QueryCloseRequest; onCloseRequestFinished?(request: QueryCloseRequest, close: boolean): void; tab: WorkspaceTab; onHistory: () => void;searchNavigation?:SavedQueryNavigationSource }) {
   const alive = useRef(true), closeRequestRef = useRef(closeRequest); closeRequestRef.current = closeRequest;
   const closeIntent = useRef<QuerySaveCloseIntent | undefined>(undefined);
   const closeBusy = useRef<WorkspaceBusyLease | undefined>(undefined);
@@ -208,6 +209,26 @@ export function QueryTab({ tab, onHistory,searchNavigation,closeRequest,onCloseR
   /** 新执行和结果切换先撤销同步绑定，旧事件不能在下一次渲染前导出。 */
   function invalidateResultSelection() { resultInsertRef.current?.invalidate();comparisonLeaseRef.current=null;setComparisonLease(null);statisticsLeaseRef.current=null;setStatisticsLease(null);sortLeaseRef.current=null;setSortLease(null);filterLeaseRef.current=null;setFilterLease(null);resultSelection.invalidate(); rowDetails.invalidate(); setRowDetail(null); setActiveDetailRow(null); }
   const [showSnippets, setShowSnippets] = useState(false); const snippetSelection = useRef<monaco.Selection | null>(null);
+  const historyInsertion = useRef<HistoryInsertionTarget | null>(null);
+  /** App只登记工厂，打开历史时才捕获原查询；隐藏页不会被误认为活动编辑器。 */
+  useEffect(() => {
+    if (!historyInsertionRegistry) return;
+    const unregister = historyInsertionRegistry.register(tab.id, () => {
+      historyInsertion.current?.dispose();
+      const instance = editor.current;
+      if (!instance) return null;
+      flushEditorContent(instance);
+      historyInsertion.current = captureHistoryInsertion(instance, () => {
+        const workspace = useWorkspace.getState(), current = workspace.settings.tabs.find(item => item.id === tab.id);
+        return { tab: current, activeTabId: workspace.settings.activeTabId, connection: workspace.connections.find(item => item.id === current?.connectionId), connectionVersion: workspace.connectionVersions[current?.connectionId ?? ''] ?? 0, selection: workspace.selection,
+          session: sessionRef.current, execution: task.current, alive: alive.current && editor.current === instance, busy: busyRef.current || !!pendingSession.current || !!workspace.activeJobs[tab.id] || !!formatting.current || fileSource.isBusy(), closing: !!closeRequestRef.current };
+      }, listener => useWorkspace.subscribe(listener));
+      return historyInsertion.current;
+    });
+    return () => { unregister(); historyInsertion.current?.dispose(); historyInsertion.current = null; };
+  }, [historyInsertionRegistry, tab.id]);
+  // 纯React忙态、关闭和会话提交同样立即观察；不等历史回包才比较，不增加轮询。
+  useLayoutEffect(() => { historyInsertion.current?.current(); });
   const snippetModel = useRef<monaco.editor.ITextModel | null>(null);
   const [parameterSource, setParameterSource] = useState<string | null>(null);
   const parameterSession = useRef(''); const [queryRunning, setQueryRunning] = useState(false);
