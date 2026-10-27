@@ -87,6 +87,7 @@ import { tableFilteredExportText } from '../shared/tableFilteredExport';
 import { queryExportWireProtocol, queryStreamExportLimits, type QueryExportProgress, type QueryExportResultSummary, type QueryStreamExportInput, type QueryStreamExportOutput } from '../shared/queryStreamExport';
 import { buildChanges, buildDesign, buildPageSql, deserializeCell, exportLiteral, identifier, inlineParameters, qualified, serializeCell, splitSql, SqlScriptScanner, typedCellPlaceholder } from './sql';
 import { currentSqlStatement } from './currentStatement';
+import { QueryWarningCollector } from './queryWarnings';
 
 interface Session { id: string; connectionId: string; managed: ManagedConnection; busy: boolean; }
 interface RunningTask {
@@ -96,6 +97,7 @@ interface RunningTask {
   queryExport?: QueryExportProgress; fileCommitStarted?: boolean;
   transactionSettingsChangeSubmitted?: boolean;
   continueOnErrorMode?: boolean;
+  collectWarningsMode?: boolean;
   fileImport?: { committing: boolean; finalCommit: boolean; commitAcknowledged: boolean; committedRows: number; result?: { rows: number; errors: string[] }; failure?: Error };
 }
 interface ResultBudget { remainingRows: number; remainingBytes: number; remainingResults: number; }
@@ -343,7 +345,7 @@ export class Engine {
       }, undefined, '读取表格元数据', true) : this.withConnection(input.connectionId, connection => metadata.tableInfo(connection, input.database, input.table));
       }
       case 'metadata.ddl': return this.withConnection(input.connectionId, connection => metadata.objectDdl(connection, input.database, input.name, input.kind));
-      case 'query.execute': return this.withSession(input.sessionId, managed => this.runTask(input.taskId, managed, '执行 SQL', task => this.queryScript(task, input.sql, input.maxRows, undefined, input.currentStatement, 'query', input.continueOnError), outcome => outcome.failure ? { status: 'failed', message: outcome.failure.message } : undefined));
+      case 'query.execute': return this.withSession(input.sessionId, managed => this.runTask(input.taskId, managed, '执行 SQL', task => this.queryScript(task, input.sql, input.maxRows, undefined, input.currentStatement, 'query', input.continueOnError, input.collectWarnings), outcome => outcome.failure ? { status: 'failed', message: outcome.failure.message } : undefined));
       case 'query.exportStream': {
         this.assertFile(input);
         return this.withSession(input.sessionId, managed => this.runTask(input.taskId, managed, '执行 SQL 并完整导出', task => this.exportQueryStream(task, input as QueryStreamExportInput & { filePath: string })));
@@ -366,7 +368,7 @@ export class Engine {
         const session=this.sessions.get(input.sessionId);if(!session)throw new Error('会话不存在，请重新打开标签页');
         return completionSessionState(session.managed,session.busy);
       }
-      case 'query.executeParameterized': return this.withSession(input.sessionId, managed => this.runTask(input.taskId, managed, '执行参数查询', task => this.queryScript(task, input.sql, input.maxRows, input.parameters, undefined, 'parameterized', input.continueOnError), outcome => outcome.failure ? { status: 'failed', message: outcome.failure.message } : undefined));
+      case 'query.executeParameterized': return this.withSession(input.sessionId, managed => this.runTask(input.taskId, managed, '执行参数查询', task => this.queryScript(task, input.sql, input.maxRows, input.parameters, undefined, 'parameterized', input.continueOnError, input.collectWarnings), outcome => outcome.failure ? { status: 'failed', message: outcome.failure.message } : undefined));
       case 'query.temporaryState':{
         const session=this.sessions.get(input.sessionId);if(!session?.managed.sessionObjects)throw new Error('会话对象目录不存在，请重新连接');
         return session.managed.sessionObjects.snapshot(session.busy,session.managed.broken);
@@ -900,6 +902,9 @@ export class Engine {
       } else if (task.continueOnErrorMode) {
         try { await task.cancelPending; }
         catch (cancelError) { error = new AggregateError([error, cancelError], '遇错继续任务与取消收尾失败；已停止，不会自动重试'); }
+      } else if (task.collectWarningsMode) {
+        try { await task.cancelPending; }
+        catch (cancelError) { error = new AggregateError([error, cancelError], '警告采集任务与取消收尾失败；原语句可能已执行，不会自动重试'); }
       } else await task.cancelPending;
       if (task.transactionSettingsChangeSubmitted) error = queryTransactionSettingsMayHaveChanged(error);
       this.emit({ taskId: id, status: task.cancelled && !task.fileCommitStarted ? 'cancelled' : 'failed', progress: 0, message: this.errorMessage(error), ...(task.queryExport ? { queryExport: { ...task.queryExport } } : {}) });
@@ -910,6 +915,7 @@ export class Engine {
       // 本功能取消收尾的原错误已在catch合并；finally仍须释放任务，不能再次抛出覆盖终态。
       else if (task.transactionSettingsChangeSubmitted) await task.cancelPending?.catch(() => undefined);
       else if (task.continueOnErrorMode) await task.cancelPending?.catch(() => undefined);
+      else if (task.collectWarningsMode) await task.cancelPending?.catch(() => undefined);
       else await task.cancelPending;
       this.tasks.delete(id); task.finish();
     }
@@ -1162,8 +1168,9 @@ export class Engine {
   }
 
   /** 顺序执行脚本并共享结果预算，末尾读取真实事务状态供界面提示。 */
-  private async queryScript(task: RunningTask, sql: string, maxRows: number, parameters?: QueryParameter[], currentStatement?: { offset: number }, failureMode?: 'query' | 'parameterized', continueOnError?: boolean): Promise<QueryOutcome> {
-    if (continueOnError === true) return this.queryScriptContinuing(task, sql, maxRows, parameters, currentStatement, failureMode);
+  private async queryScript(task: RunningTask, sql: string, maxRows: number, parameters?: QueryParameter[], currentStatement?: { offset: number }, failureMode?: 'query' | 'parameterized', continueOnError?: boolean, collectWarnings?: boolean): Promise<QueryOutcome> {
+    if (continueOnError === true) return this.queryScriptContinuing(task, sql, maxRows, parameters, currentStatement, failureMode, collectWarnings);
+    if (collectWarnings === true) return this.queryScriptWithWarnings(task, sql, maxRows, parameters, currentStatement, failureMode);
     const started = performance.now();
     const values = parameters !== undefined || failureMode === 'parameterized';
     const results: QueryResult[] = [];
@@ -1208,13 +1215,83 @@ export class Engine {
     return { results, elapsedMs: performance.now() - started, transactionOpen };
   }
 
+  /** 显式警告模式仍首错即停；采集与用户SQL分开计事实，默认路径不进入此分支。 */
+  private async queryScriptWithWarnings(task: RunningTask, sql: string, maxRows: number, parameters?: QueryParameter[], currentStatement?: { offset: number }, failureMode?: 'query' | 'parameterized'): Promise<QueryOutcome> {
+    task.collectWarningsMode = true;
+    const started = performance.now(), results: QueryResult[] = [], parameterized = parameters !== undefined || failureMode === 'parameterized';
+    const warnings = new QueryWarningCollector(parameterized), budget: ResultBudget = { remainingRows: maxRows, remainingBytes: 16 * 1024 * 1024, remainingResults: 200 };
+    let completed = 0, ordinal = 1, sourceRange: QueryFailureSourceRange | undefined, currentCompleted = false;
+    let failure: QueryOutcome['failure'];
+    try {
+      if (!Number.isInteger(maxRows) || maxRows < 1 || maxRows > 100000) throw Error('查询结果上限必须在 1～100000 之间');
+      if (failureMode === 'parameterized' && !Array.isArray(parameters)) throw Error('参数查询必须提供参数列表');
+      for await (const item of this.queryStatements(task, sql, parameters, currentStatement, range => { sourceRange = range ? { ...range } : undefined; })) {
+        ordinal = item.ordinal; currentCompleted = false;
+        let originalError: unknown, driverError: unknown, commandEnded = false;
+        const physicalId = task.managed.connection.threadId;
+        try {
+          results.push(...await this.streamQuery(task, item.statement, maxRows, results.length, budget, item.template, currentStatement !== undefined, { driverError: error => { driverError = error; }, commandEnded: () => { commandEnded = true; } }));
+          currentCompleted = true; completed++;
+        } catch (error) { originalError = error; }
+        if (task.cancelled) this.checkCancelled(task);
+        try {
+          await this.captureQueryWarnings(task, warnings, ordinal, sourceRange, currentCompleted ? 'completed' : 'failed', commandEnded && (!originalError || originalError === driverError && canContinueQueryError(originalError)));
+        } catch (captureError) {
+          if (task.cancelled) throw captureError;
+          // 原SQL失败事实优先，采集故障在独立warnings组明确记录，不能覆盖首错。
+          if (originalError) throw originalError;
+          throw captureError;
+        }
+        if (originalError) throw originalError;
+        if (!this.queryWarningsSessionKnown(task, physicalId)) throw Error('原语句已执行，但警告采集后的原会话状态未知；已停止后续SQL，不会自动重试');
+        sourceRange = undefined; ordinal = completed + 1; currentCompleted = false;
+        this.emit({ taskId: task.id, status: 'running', progress: 0, message: `已执行 ${completed} 条语句` });
+      }
+    } catch (error) {
+      if (task.cancelled) throw error;
+      const detail = formatQueryScriptError(error, parameterized);
+      failure = { statementOrdinal: ordinal, statementsCompleted: completed, message: currentCompleted ? `第 ${ordinal} 条SQL已执行，但警告采集或原连接状态未完整确认；请核对执行结果，不要直接重试。${detail}` : queryFailureMessage(completed, detail), ...(sourceRange ? { sourceRange } : {}) };
+    }
+    const outcome: QueryOutcome = { results, elapsedMs: performance.now() - started, warnings: warnings.report, ...(failure ? { failure } : {}) };
+    const status = task.managed.serverStatus;
+    if (!task.managed.broken && task.managed.transactionStateKnown === true && Number.isInteger(status) && status! >= 0 && status! <= 65535) outcome.transactionOpen = Boolean(status! & 1);
+    return outcome;
+  }
+
+  /** 固定SHOW共用原任务代次和取消控制；不进入用户结果/SQL历史，也不自动重连或补偿事务。 */
+  private async captureQueryWarnings(task: RunningTask, collector: QueryWarningCollector, statementOrdinal: number, sourceRange: QueryFailureSourceRange | undefined, status: 'completed' | 'failed', allowed: boolean): Promise<void> {
+    this.checkCancelled(task);
+    const statement = { statementOrdinal, ...(sourceRange ? { sourceRange: { ...sourceRange } } : {}), status };
+    if (!allowed || task.managed.broken) { collector.unavailable(statement); return; }
+    const physicalId = task.managed.connection.threadId, original = this.transactionSettingsContext(task.managed, task);
+    await collector.capture(statement, {
+      check: () => this.checkCancelled(task), broken: () => task.managed.broken,
+      query: async sql => {
+        this.checkCancelled(task);
+        if (!Number.isSafeInteger(physicalId) || (physicalId ?? 0) < 1 || task.managed.connection.threadId !== physicalId) throw Error('原警告会话身份未知');
+        const result = await original.query(sql);
+        this.checkCancelled(task);
+        if (task.managed.connection.threadId !== physicalId) throw Error('原警告会话身份变化');
+        return result;
+      },
+    });
+  }
+
+  /** 诊断ERR没有新事务状态，不能因原SQL成功就绕过未知状态继续投递尾句。 */
+  private queryWarningsSessionKnown(task: RunningTask, physicalId: number | undefined): boolean {
+    const managed = task.managed, status = managed.serverStatus;
+    return !managed.broken && Number.isSafeInteger(physicalId) && (physicalId ?? 0) > 0 && managed.connection.threadId === physicalId && managed.transactionStateKnown === true && Number.isInteger(status) && status! >= 0 && status! <= 65535;
+  }
+
   /** 显式遇错继续共用原调度器与整批预算；成功语句和失败片段不混合，不重放任何语句。 */
-  private async queryScriptContinuing(task: RunningTask, sql: string, maxRows: number, parameters?: QueryParameter[], currentStatement?: { offset: number }, failureMode?: 'query' | 'parameterized'): Promise<QueryOutcome> {
+  private async queryScriptContinuing(task: RunningTask, sql: string, maxRows: number, parameters?: QueryParameter[], currentStatement?: { offset: number }, failureMode?: 'query' | 'parameterized', collectWarnings?: boolean): Promise<QueryOutcome> {
     task.continueOnErrorMode = true;
     const started = performance.now(), results: QueryResult[] = [];
     const budget: ResultBudget = { remainingRows: maxRows, remainingBytes: 16 * 1024 * 1024, remainingResults: 200 };
     const report: QueryScriptReport = { mode: 'continue-on-error', statementsAttempted: 0, statementsCompleted: 0, reachedEnd: false, errors: [] };
     const parameterized = parameters !== undefined || failureMode === 'parameterized';
+    const warnings = collectWarnings === true ? new QueryWarningCollector(parameterized) : undefined;
+    if (warnings) task.collectWarningsMode = true;
     let sourceRange: QueryFailureSourceRange | undefined, activeOrdinal: number | undefined;
     /** 参数任务始终先分类原错误，再隐藏所有可能含展开值的明细。 */
     const record = (error: unknown, kind: 'server' | 'stopped', ordinal: number) => {
@@ -1226,15 +1303,22 @@ export class Engine {
       if (failureMode === 'parameterized' && !Array.isArray(parameters)) throw Error('参数查询必须提供参数列表');
       for await (const { statement, template, ordinal } of this.queryStatements(task, sql, parameters, currentStatement, range => { sourceRange = range ? { ...range } : undefined; })) {
         this.checkCancelled(task); activeOrdinal = ordinal; report.statementsAttempted = ordinal;
-        let driverError: unknown;
+        let driverError: unknown, commandEnded = false, currentCompleted = false;
+        const physicalId = task.managed.connection.threadId;
         try {
-          const completed = await this.streamQuery(task, statement, maxRows, results.length, budget, template, currentStatement !== undefined, { driverError: error => { driverError = error; } });
-          results.push(...completed); report.statementsCompleted++;
-          if (task.managed.broken || task.managed.transactionStateKnown !== true || !Number.isInteger(task.managed.serverStatus) || task.managed.serverStatus! < 0 || task.managed.serverStatus! > 65535) { activeOrdinal = undefined; sourceRange = undefined; throw Error('当前语句已执行，但无法确认新的原会话协议状态，已停止后续语句'); }
+          const completed = await this.streamQuery(task, statement, maxRows, results.length, budget, template, currentStatement !== undefined, { driverError: error => { driverError = error; }, commandEnded: () => { commandEnded = true; } });
+          results.push(...completed); currentCompleted = true; report.statementsCompleted++;
+          if (warnings) await this.captureQueryWarnings(task, warnings, ordinal, sourceRange, 'completed', commandEnded);
+          if (task.managed.broken || task.managed.transactionStateKnown !== true || !Number.isInteger(task.managed.serverStatus) || task.managed.serverStatus! < 0 || task.managed.serverStatus! > 65535 || warnings && !this.queryWarningsSessionKnown(task, physicalId)) { activeOrdinal = undefined; sourceRange = undefined; throw Error('当前语句已执行，但无法确认新的原会话协议状态，已停止后续语句'); }
         } catch (error) {
           if (task.cancelled) this.checkCancelled(task);
-          if (task.managed.broken || error !== driverError || !canContinueQueryError(error)) throw error;
+          if (task.managed.broken || error !== driverError || !canContinueQueryError(error)) {
+            if (warnings && !currentCompleted) warnings.unavailable({ statementOrdinal: ordinal, sourceRange, status: 'failed' });
+            if (currentCompleted) { activeOrdinal = undefined; sourceRange = undefined; }
+            throw error;
+          }
           record(error, 'server', ordinal);
+          if (warnings) await this.captureQueryWarnings(task, warnings, ordinal, sourceRange, 'failed', commandEnded);
           if (report.errors.length >= queryContinueOnErrorLimits.errors) { report.stopReason = '错误记录已达到100条上限，已停止后续语句'; break; }
           await this.refreshContinuingSession(task);
           this.checkCancelled(task);
@@ -1248,7 +1332,7 @@ export class Engine {
       if (report.errors.at(-1)?.statementOrdinal !== activeOrdinal || activeOrdinal === undefined) record(error, 'stopped', activeOrdinal ?? report.statementsAttempted + 1);
       report.stopReason = truncateQueryScriptMessage(formatQueryScriptError(error, parameterized));
     }
-    const outcome: QueryOutcome = { results, elapsedMs: performance.now() - started, scriptReport: report };
+    const outcome: QueryOutcome = { results, elapsedMs: performance.now() - started, scriptReport: report, ...(warnings ? { warnings: warnings.report } : {}) };
     if (report.errors.length) {
       const first = report.errors[0];
       outcome.failure = { statementOrdinal: first.statementOrdinal, statementsCompleted: first.statementsCompleted, message: queryScriptReportSummary(report), ...(first.sourceRange ? { sourceRange: { ...first.sourceRange } } : {}) };
@@ -1374,7 +1458,7 @@ export class Engine {
   }
 
   /** 多结果集按服务器序号隔离；IPC 每批至多 200 行，返回结果受用户上限约束。 */
-  private async streamQuery(task: RunningTask, sql: string, maxRows: number, offset: number, budget: ResultBudget = { remainingRows: maxRows, remainingBytes: 16 * 1024 * 1024, remainingResults: 200 }, displaySql = sql, reportExecutionSql = false, continuing?: { driverError(error: Error): void }): Promise<QueryResult[]> {
+  private async streamQuery(task: RunningTask, sql: string, maxRows: number, offset: number, budget: ResultBudget = { remainingRows: maxRows, remainingBytes: 16 * 1024 * 1024, remainingResults: 200 }, displaySql = sql, reportExecutionSql = false, continuing?: { driverError(error: Error): void; commandEnded?(): void }): Promise<QueryResult[]> {
     this.checkCancelled(task);
     task.inFlight = true; task.generation++;
     const started = performance.now(), results: QueryResult[] = [], batches = new Map<number, DataRow[]>(), batchBytes = new Map<number, number>();
@@ -1410,11 +1494,23 @@ export class Engine {
         let settled = false;
         const fail = (error: Error) => { if (settled) return; settled = true; task.managed.transactionStateKnown = false; cleanup(); reject(error); };
         let deferredError: Error | undefined;
+        let activeRowsIndex: number | undefined, pendingRowsWarning: number | undefined;
+        /** EOF和OK共用会话事件；先暂存，到下一边界排除紧随其后的CALL状态包。 */
+        const finishRowsWarning = () => {
+          if (activeRowsIndex !== undefined && pendingRowsWarning !== undefined && results[activeRowsIndex]) results[activeRowsIndex].warningCount = pendingRowsWarning;
+          pendingRowsWarning = undefined;
+        };
+        const onSessionState = (packet: { sql?: string; warningStatus?: number }) => {
+          if (settled || packet.sql !== sql) return;
+          finishRowsWarning();
+          if (Number.isInteger(packet.warningStatus) && packet.warningStatus! >= 0 && packet.warningStatus! <= 65535) pendingRowsWarning = packet.warningStatus;
+        };
         const transport = continuing ? (task.managed.connection as unknown as { stream?: { once(event: string, listener: () => void): void; removeListener(event: string, listener: () => void): void } }).stream : undefined;
         const connectionFailed = (error: Error) => { if (settled) return; task.managed.broken = true; fail(deferredError ?? error); };
         const connectionEnded = () => connectionFailed(new Error('查询连接在结果完成前断开；不会自动重连或重放'));
-        const cleanup = () => { task.managed.connection.removeListener('error', connectionFailed); task.managed.connection.removeListener('end', connectionEnded); transport?.removeListener('close', connectionEnded); };
+        const cleanup = () => { task.managed.connection.removeListener('error', connectionFailed); task.managed.connection.removeListener('end', connectionEnded); task.managed.connection.removeListener('dbark:session-state', onSessionState); transport?.removeListener('close', connectionEnded); };
         task.managed.connection.once('error', connectionFailed); task.managed.connection.once('end', connectionEnded);
+        task.managed.connection.on('dbark:session-state', onSessionState);
         transport?.once('close', connectionEnded);
         /** 本地消费异常只停止原命令并等待终态，不凭伪造errno把它当服务器ERR继续。 */
         const consume = <T extends unknown[]>(action: (...args: T) => void): ((...args: T) => void) => !continuing ? action : (...args) => {
@@ -1427,6 +1523,7 @@ export class Engine {
           // mysql2 对 DDL/DML 状态包会发送 fields(undefined)，该包没有列定义。
           if (!fields) return;
           const resultIndex = index ?? nextImplicitResult;
+          finishRowsWarning(); activeRowsIndex = resultIndex;
           nextImplicitResult = resultIndex + 1;
           const result = ensure(resultIndex); if (!result) return;
           result.columns = this.columns(fields);
@@ -1439,7 +1536,7 @@ export class Engine {
           if (settled) return;
           // CALL 的最终状态包没有索引，必须接在已有行结果集之后，不能覆盖首个结果。
           const index = resultIndex ?? nextImplicitResult;
-          if (!Array.isArray(value)) nextImplicitResult = index + 1;
+          if (!Array.isArray(value)) { nextImplicitResult = index + 1; pendingRowsWarning = undefined; activeRowsIndex = undefined; }
           if (!Array.isArray(value)) task.managed.serverStatus = task.serverStatus = value.serverStatus;
           const result = ensure(index); if (!result) return;
           if (!Array.isArray(value)) {
@@ -1462,7 +1559,7 @@ export class Engine {
           if (!continuing) { fail(error); return; }
           if (!deferredError) { deferredError = error; continuing.driverError(error); }
           // 服务器ERR不等于命令end；原终态到达前不能发送状态诊断或下一句。
-        }).once('end', () => { if (settled) return; if (deferredError) { fail(deferredError); return; } settled = true; cleanup(); resolve(); });
+        }).once('end', () => { continuing?.commandEnded?.(); if (settled) return; finishRowsWarning(); if (deferredError) { fail(deferredError); return; } settled = true; cleanup(); resolve(); });
         if (reportExecutionSql && continuing) consume(() => this.emit({ taskId: task.id, status: 'running', progress: 0, message: '已发送当前语句', executionSql: sql }))();
       });
       for (let index = 0; index < results.length; index++) { flush(index); if (results[index]) results[index].elapsedMs = performance.now() - started; }

@@ -25,7 +25,7 @@ if (!option || !functions.has('runQuery') || !functions.has('execute')) throw Er
 function execution(outcome: QueryOutcome = { results: [], elapsedMs: 1 }) {
   const invoke = vi.fn(async () => outcome), ensureSession = vi.fn(async () => '原会话'), errors = vi.fn(async () => {});
   const workspace = { setBusy: vi.fn(), setDirty: vi.fn() }, scriptFailureRanges = { current: new Set<QueryFailure>() }, failureSource = { current: undefined as any };
-  const context: any = createContext({ Error, Set, confirmedQueryContinueRange, invoke, ensureSession, continueOnError: false, scriptFailureRanges, failureSource,
+  const context: any = createContext({ Error, Set, confirmedQueryContinueRange, invoke, ensureSession, continueOnError: false, collectWarnings: false, scriptFailureRanges, failureSource,
     busyRef: { current: false }, task: { current: '' }, cancelledQuery: { current: '' }, explainSource: { current: '' }, parameterSession: { current: '原会话' }, settings: { resultLimit: 25 }, tab: { id: '原标签' },
     useWorkspace: { getState: () => workspace }, handleQueryError: errors, clearFailureSource: vi.fn(), invalidateResultSelection: vi.fn(), prepareExecutionContext: vi.fn(async () => {}), uid: () => '本次任务',
     setBusy: vi.fn(), setQueryRunning: vi.fn(), setError: vi.fn(), setSelectedPin: vi.fn(), setShowPinSql: vi.fn(), setOutcome: vi.fn(), setStream: vi.fn(), setResultIndex: vi.fn(), setTransaction: vi.fn(), setTransactionKnown: vi.fn(),
