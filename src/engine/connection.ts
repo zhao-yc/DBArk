@@ -37,14 +37,18 @@ export interface ManagedConnection {
 
 /** 严格结构任务观察 QUIT 写入/本地流关闭；COM_QUIT 没有服务器 ACK，不据此证明 DDL 结果。 */
 export async function closeMysqlConnection(connection: Connection, strict: boolean, alreadyBroken = false, timeoutMs = 1000): Promise<void> {
-  const stream = (connection as unknown as { stream?: { closed?: boolean; incoming?: { state?: string }; outgoing?: { state?: string }; once(name: string, fn: () => void): unknown; removeListener(name: string, fn: () => void): unknown; destroy(): void; end(callback?: (error?: Error) => void): void; close?(): void } }).stream;
+  const stream = (connection as unknown as { stream?: { closed?: boolean; encrypted?: boolean; incoming?: { state?: string }; outgoing?: { state?: string }; once(name: string, fn: () => void): unknown; removeListener(name: string, fn: () => void): unknown; destroy(): void; destroySoon?(): void; end(callback?: (error?: Error) => void): void; close?(): void } }).stream;
   let failure: Error | undefined;
   await new Promise<void>(resolve => {
     // ssh2 Channel 的 closed 属性不随手工 close 事件变化；双方协议状态可证明此前已关闭，不能把 EOF 当 CLOSE。
     let settled = false, endReturned = alreadyBroken, writableFlushed = alreadyBroken, transportClosed = stream?.closed === true || (typeof stream?.close === 'function' && stream.incoming?.state === 'closed' && stream.outgoing?.state === 'closed');
     const finish = (): void => { if (settled) return; settled = true; clearTimeout(timer); stream?.removeListener('close', onClose); resolve(); };
     const checkFinished = (): void => { if (!strict || !stream || ((failure || (endReturned && writableFlushed)) && transportClosed)) finish(); };
-    const onClose = (): void => { transportClosed = true; checkFinished(); };
+    const onClose = (hadError?: unknown): void => {
+      transportClosed = true;
+      if (!alreadyBroken && stream?.encrypted === true && hadError === true) failure ??= new Error('TLS连接关闭出现传输错误，请核对服务器状态');
+      checkFinished();
+    };
     const destroyLocal = (): void => { connection.destroy(); stream?.destroy(); };
     const timer = setTimeout(() => { failure = new Error('数据库连接关闭超时，本地流已强制关闭，请核对服务器状态'); destroyLocal(); finish(); }, timeoutMs);
     timer.unref();
@@ -56,6 +60,7 @@ export async function closeMysqlConnection(connection: Connection, strict: boole
     }
     try {
       connection.end(error => {
+        if (settled) return;
         endReturned = true;
         if (error) { failure = new Error('数据库连接正常退出失败，本地流已强制关闭，请核对服务器状态', { cause: error }); destroyLocal(); }
         checkFinished();
@@ -64,7 +69,14 @@ export async function closeMysqlConnection(connection: Connection, strict: boole
           queueMicrotask(() => {
             if (settled) return;
             try { stream.end(error => {
-              try { if (error) throw error; writableFlushed = true; stream.close?.(); checkFinished(); }
+              if (settled) return;
+              try {
+                if (error) throw error; writableFlushed = true;
+                // TLS写侧排空后主动释放本地句柄，避免等不到对端EOF；仍须原流真实close，不能以请求代替证明。
+                if (stream.encrypted === true && typeof stream.destroySoon === 'function') stream.destroySoon();
+                else stream.close?.();
+                checkFinished();
+              }
               catch (error) { failure = new Error('数据库退出传输写入或关闭失败，本地流已强制关闭', { cause: error }); destroyLocal(); checkFinished(); }
             }); }
             catch (error) { failure = new Error('数据库退出传输关闭失败，本地流已强制关闭', { cause: error }); destroyLocal(); checkFinished(); }

@@ -68,6 +68,7 @@ import { canContinueQueryError, formatQueryScriptError, queryContinueOnErrorLimi
 import { TableDefaultEncodingTasks } from './tableDefaultEncodingTasks';
 import { TableForeignKeyPatchTasks } from './tableForeignKeyPatchTasks';
 import type { StructureTaskContext, StructureTaskOptions } from './structureDefinition';
+import { structureTaskQuery } from './structureDefinition';
 import { StructurePatchCache } from './structurePatchCache';
 import { StructureExecutionLocks } from './structureExecutionLocks';
 import { parseTableColumnDefinition } from './tableColumnDefinition';
@@ -92,8 +93,12 @@ import type { FileImportResult, SqlFileImportReceipt } from '../shared/sqlFileIm
 import { sqlFileImportMessage } from '../shared/sqlFileImport';
 import { SqlFileImportPositions } from './sqlFileImportPosition';
 import { createSqlFileImportEvidence, finishSqlFileImportEvidence, sqlFileImportTransaction, type SqlFileImportEvidence } from './sqlFileImportReceipt';
+import { fileImportConflict } from '../shared/fileImportConflict';
+import { readFileImportKeyCatalog } from './fileImportConflictCatalog';
+import { createFileImportConflictEvidence, finishFileImportConflictEvidence, importFileWithConflict, type FileImportConflictControl, type FileImportConflictEvidence } from './fileImportConflict';
 
 interface Session { id: string; connectionId: string; managed: ManagedConnection; busy: boolean; }
+interface ConflictImportLease { connectionId: string; controller: AbortController; done: Promise<void>; phase: 'connecting' | 'running' | 'closing'; evidence: FileImportConflictEvidence; }
 interface RunningTask {
   id: string; managed: ManagedConnection; cancelled: boolean; inFlight: boolean; generation: number;
   cancelPending?: Promise<void>; serverStatus?: number; done: Promise<void>; finish(): void;
@@ -103,6 +108,7 @@ interface RunningTask {
   continueOnErrorMode?: boolean;
   collectWarningsMode?: boolean;
   sqlFileImport?: SqlFileImportEvidence;
+  fileImportConflict?: FileImportConflictEvidence;
   fileImport?: { committing: boolean; finalCommit: boolean; commitAcknowledged: boolean; committedRows: number; result?: { rows: number; errors: string[] }; failure?: Error };
 }
 interface ResultBudget { remainingRows: number; remainingBytes: number; remainingResults: number; }
@@ -114,6 +120,7 @@ type Input = Record<string, any>;
 export class Engine {
   private readonly excelReads = new ExcelReadTasks(event => this.emit(event));
   private readonly excelConnecting = new Map<string, { connectionId: string; controller: AbortController; done: Promise<void> }>();
+  private readonly conflictImports = new Map<string, ConflictImportLease>();
   private readonly profiles = new Map<string, ConnectionProfile>();
   private readonly sessions = new Map<string, Session>();
   private readonly tasks = new Map<string, RunningTask>();
@@ -263,10 +270,12 @@ export class Engine {
         this.structureSearches.releaseConnection(input.id);
         const connecting = [...this.excelConnecting.values()].filter(task => task.connectionId === input.id);
         connecting.forEach(task => task.controller.abort());
+        const conflicts = [...this.conflictImports.values()].filter(task => task.connectionId === input.id);
+        conflicts.forEach(task => { if (task.phase === 'connecting') task.controller.abort(); });
         const active = [...this.tasks.values()].filter(task => task.managed.profile.id === input.id);
         const independent = [...this.independentTasks].filter(([, task]) => task.connectionId === input.id);
         const cancellations = await Promise.allSettled([comparisonCleanup, filteredUpdateCleanup, filteredDeleteCleanup, ...active.map(task => this.cancelTask(task.id)), ...independent.map(([id]) => this.cancelTask(id))]);
-        await Promise.all([...connecting.map(task => task.done), ...active.map(task => task.done), ...independent.map(([, task]) => task.done)]);
+        await Promise.all([...connecting.map(task => task.done), ...conflicts.map(task => task.done), ...active.map(task => task.done), ...independent.map(([, task]) => task.done)]);
         for (const [id, session] of this.sessions) if (session.connectionId === input.id) { await session.managed.close(); this.sessions.delete(id); }
         const recovered = await this.independentResources.recover(input.id);
         if (recovered.remaining) throw Error('独立任务连接资源尚未确认释放，请核对服务器及隧道状态后再次显式断开；原操作未重放');
@@ -592,14 +601,23 @@ export class Engine {
         if (this.taskIdInUse(input.taskId)) throw new Error('任务编号已在执行');
         return this.excelReads.run(command, input as any);
       }
-      case 'excel.import': fileImportTransactionMode('xlsx', input); this.assertFile(input); return this.withExcelTask(input, '导入 Excel', task => this.importExcel(task, input));
+      case 'excel.import': fileImportConflict('xlsx', input); fileImportTransactionMode('xlsx', input); this.assertFile(input); return this.withExcelTask(input, '导入 Excel', task => this.importExcel(task, input));
       case 'excel.export': this.assertFile(input); return this.withExcelTask(input, '导出 Excel', task => this.exportExcel(task, input));
+      case 'files.importKeys': return this.readImportKeys(input);
       case 'files.import': {
         this.assertFile(input); const mode = fileImportTransactionMode(input.format, input);
+        const conflict = fileImportConflict(input.format, input);
         // 请求配置错误在建连及SQL运行回执之前拒绝；importFile内仍保留同一防线。
         if (Object.hasOwn(input, 'csvHasHeader')) {
           if (typeof input.csvHasHeader !== 'boolean') throw new Error('CSV 首行字段名配置必须为布尔值');
           csvImportHasHeader(input.format, input.csvHasHeader);
+        }
+        if (conflict) {
+          if (this.closing || !input.taskId || this.taskIdInUse(input.taskId)) throw Error('任务编号为空或任务已在执行');
+          const evidence = createFileImportConflictEvidence(input.taskId, conflict.mode);
+          return this.withConflictImport(input, evidence, task => {
+            return importFileWithConflict({ connectionId: input.connectionId, database: input.database, table: input.table }, input.format, input.mapping, conflict, mode, readRecords(input.filePath, input.format, input.encoding, input.csvDelimiter, input.csvHasHeader), evidence, this.conflictImportControl(task));
+          });
         }
         if (input.format === 'sql') {
           const evidence = createSqlFileImportEvidence(input.taskId, input.encoding);
@@ -640,13 +658,14 @@ export class Engine {
   }
 
   /** 所有任务通道共用编号占用检查，避免集成后取消误命中另一种活动任务。 */
-  private taskIdInUse(id: string): boolean { return this.tasks.has(id) || this.independentTasks.has(id) || this.independentResources.owns(id) || this.resultFiles.has(id) || this.excelReads.has(id) || this.excelConnecting.has(id) || this.schemaComparisons.has(id); }
+  private taskIdInUse(id: string): boolean { return this.tasks.has(id) || this.independentTasks.has(id) || this.independentResources.owns(id) || this.resultFiles.has(id) || this.excelReads.has(id) || this.excelConnecting.has(id) || this.conflictImports.has(id) || this.schemaComparisons.has(id); }
 
   /** 关闭前取消任务并释放固定会话，未提交事务由服务器在断开时回滚。 */
   async closeAll(): Promise<void> {
     this.closing = true;
     try {
     this.excelConnecting.forEach(task => task.controller.abort());
+    this.conflictImports.forEach(task => { if (task.phase === 'connecting') task.controller.abort(); });
     const comparisonCleanup = this.schemaComparisons.close();
     const filteredUpdateCleanup = this.tableFilteredUpdates.close();
     const filteredDeleteCleanup = this.tableFilteredDeletes.close();
@@ -746,6 +765,35 @@ export class Engine {
       if (controller.signal.aborted) throw new Error('Excel 任务在建连阶段已取消，尚未读取或写入数据');
       throw reason;
     } finally { this.excelConnecting.delete(id); finish(); }
+  }
+
+  /** 新策略建连前独占编号，迟到连接先复核取消；租约覆盖真实运行及严格关闭，不改变旧Excel/默认导入。 */
+  private async withConflictImport(input: Input, evidence: FileImportConflictEvidence, action: (task: RunningTask) => Promise<FileImportResult>): Promise<FileImportResult> {
+    const id = input.taskId;
+    if (this.closing || !id || this.taskIdInUse(id)) throw Error('任务编号为空或任务已在执行');
+    let finish!: () => void; const done = new Promise<void>(resolve => { finish = resolve; });
+    const lease: ConflictImportLease = { connectionId: input.connectionId, controller: new AbortController(), done, phase: 'connecting', evidence };
+    this.conflictImports.set(id, lease);
+    try {
+      return await this.withConnectionUse(input.connectionId, async () => {
+        const managed = await connect(this.profile(input.connectionId), input.database, lease.controller.signal);
+        try {
+          if (lease.controller.signal.aborted || this.closing) return finishFileImportConflictEvidence(evidence, true);
+          lease.phase = 'running';
+          return await this.runTask(id, managed, '按匹配键导入文件', task => { task.fileImportConflict = evidence; return action(task); }, undefined, lease);
+        } finally { lease.phase = 'closing'; await managed.close({ strict: true }); }
+      });
+    } catch {
+      const result = finishFileImportConflictEvidence(evidence, lease.controller.signal.aborted, '导入连接或任务收尾未确认；原处理与提交回执已保留，请核对资源，不要重复导入');
+      if (lease.phase === 'connecting' && !lease.controller.signal.aborted) try { this.emit({ taskId: id, status: 'failed', progress: 0, message: result.errors[0] }); } catch { /* 回执仍保留准备失败。 */ }
+      return result;
+    } finally {
+      if (lease.controller.signal.aborted && !evidence.finalCommitAcknowledged) {
+        finishFileImportConflictEvidence(evidence, true);
+        try { this.emit({ taskId: id, status: 'cancelled', progress: 0, message: evidence.result.errors[0] ?? '导入在建连阶段已取消，尚未读取或写入数据' }); } catch { /* 取消事实由回执保留。 */ }
+      }
+      this.conflictImports.delete(id); finish();
+    }
   }
 
   /** 独立任务从建连前登记，到服务器及本地连接收尾后才释放编号和配置锁。 */
@@ -885,8 +933,9 @@ export class Engine {
   }
 
   /** 统一登记任务、发送终态并等待取消控制连接结束后释放任务标识。 */
-  private async runTask<T>(id: string, managed: ManagedConnection, label: string, action: (task: RunningTask) => Promise<T>, terminal?: (result: T) => { status: 'failed'; message: string } | undefined): Promise<T> {
-    if (this.closing || !id || this.taskIdInUse(id)) throw new Error('任务编号为空或任务已在执行');
+  private async runTask<T>(id: string, managed: ManagedConnection, label: string, action: (task: RunningTask) => Promise<T>, terminal?: (result: T) => { status: 'failed'; message: string } | undefined, conflictLease?: ConflictImportLease): Promise<T> {
+    const ownConflictLease = conflictLease && this.conflictImports.get(id) === conflictLease && conflictLease.phase === 'running' && !this.tasks.has(id);
+    if (this.closing || !id || this.taskIdInUse(id) && !ownConflictLease) throw new Error('任务编号为空或任务已在执行');
     let finish!: () => void;
     const done = new Promise<void>(resolve => { finish = resolve; });
     const task: RunningTask = { id, managed, cancelled: false, inFlight: false, generation: 0, done, finish };
@@ -895,6 +944,13 @@ export class Engine {
     this.emit({ taskId: id, status: 'running', progress: 0, message: label, executionDatabase:queryDatabaseFromSession(completionSessionState(managed,false)) });
     try {
       const result = await action(task);
+      if (task.fileImportConflict) {
+        let cleanup: string | undefined;
+        try { await task.cancelPending; } catch { cleanup = '导入取消控制收尾失败；请核对原服务器连接，不会自动重试'; }
+        const retained = finishFileImportConflictEvidence(task.fileImportConflict, task.cancelled, cleanup), report = retained.conflicts!;
+        this.emit({ taskId: id, status: report.termination === 'cancelled' ? 'cancelled' : retained.errors.length ? 'failed' : 'completed', progress: 100, message: retained.errors[0] ?? '按匹配键导入完成；匹配更新计数包含未改变值的命令' });
+        return retained as T;
+      }
       if (task.sqlFileImport) {
         let cleanup: string | undefined;
         try { await task.cancelPending; } catch { cleanup = 'SQL文件取消控制收尾失败；请核对原服务器连接，不会自动重试'; }
@@ -910,6 +966,13 @@ export class Engine {
       this.emit({ taskId: id, status: final?.status ?? (errors?.length ? 'failed' : 'completed'), progress: 100, message: final?.message ?? (errors?.length ? errors[0] : `${label}完成`), ...(task.queryExport ? { queryExport: { ...task.queryExport } } : {}) });
       return result;
     } catch (error) {
+      if (task.fileImportConflict) {
+        let cleanup = '导入任务收尾异常；原处理与提交回执已保留，不会自动重试';
+        try { await task.cancelPending; } catch { cleanup += '；取消控制连接收尾未确认'; }
+        const retained = finishFileImportConflictEvidence(task.fileImportConflict, task.cancelled, cleanup);
+        try { this.emit({ taskId: id, status: retained.conflicts?.termination === 'cancelled' ? 'cancelled' : 'failed', progress: 0, message: retained.errors[0] ?? cleanup }); } catch { /* 事件故障不能抹掉已取得的提交事实。 */ }
+        return retained as T;
+      }
       if (task.sqlFileImport) {
         let cleanup = 'SQL文件任务收尾异常；原执行及回滚证据已保留，不会自动重试';
         try { await task.cancelPending; } catch { cleanup += '；取消控制连接收尾未确认'; }
@@ -943,7 +1006,7 @@ export class Engine {
       throw error;
     } finally {
       // 取消连接仍在建立时，不能放开会话给下一条查询，以免 KILL 误伤复用线程。
-      if (task.sqlFileImport) await task.cancelPending?.catch(() => undefined);
+      if (task.fileImportConflict || task.sqlFileImport) await task.cancelPending?.catch(() => undefined);
       else if (task.tableApply?.commitAcknowledged || task.fileImport?.commitAcknowledged || task.fileImport?.failure) await task.cancelPending?.catch(() => undefined);
       // 本功能取消收尾的原错误已在catch合并；finally仍须释放任务，不能再次抛出覆盖终态。
       else if (task.transactionSettingsChangeSubmitted) await task.cancelPending?.catch(() => undefined);
@@ -1032,6 +1095,9 @@ export class Engine {
 
   /** 取消只针对仍然运行的那一代语句；控制连接失败时销毁原会话，不重连重放。 */
   private async cancelTask(id: string): Promise<void> {
+    const conflict = this.conflictImports.get(id);
+    if (conflict?.phase === 'connecting') { conflict.controller.abort(); finishFileImportConflictEvidence(conflict.evidence, true); await conflict.done; return; }
+    if (conflict?.phase === 'closing') { await conflict.done; return; }
     const connecting = this.excelConnecting.get(id);
     if (connecting) { connecting.controller.abort(); await connecting.done; return; }
     if (this.excelReads.has(id)) return this.excelReads.cancel(id);
@@ -1078,6 +1144,8 @@ export class Engine {
     if (this.resultFiles.has(id)) { this.resultFiles.cancel(id); return; }
     const task = this.tasks.get(id);
     if (!task) return;
+    if (task.fileImportConflict?.finalCommitAcknowledged) return;
+    if (task.fileImportConflict?.committing) { if (!task.fileImportConflict.finalCommit) task.cancelled = true; return; }
     // COMMIT一旦发送就不再KILL；中间批提交后仍响应取消，最后提交则保留真实ACK。
     if (task.fileImport?.committing) { if (!task.fileImport.finalCommit) task.cancelled = true; return; }
     if (task.fileCommitStarted || task.tableApply?.commitMayHaveBeenSent) return;
@@ -1135,6 +1203,76 @@ export class Engine {
       return rows;
     }
     finally { task.inFlight = false; await task.cancelPending; }
+  }
+
+  /** 显式冲突导入专用端口；原连接、取消代次及完整ACK均留在同一任务，默认导入不经过此路径。 */
+  private conflictImportControl(task: RunningTask): FileImportConflictControl {
+    const managed = task.managed;
+    const observe = (rows: unknown) => {
+      if (rows && typeof rows === 'object' && !Array.isArray(rows) && 'serverStatus' in rows && Number.isInteger(rows.serverStatus) && Number(rows.serverStatus) >= 0 && Number(rows.serverStatus) <= 65535) { managed.serverStatus = Number(rows.serverStatus); managed.transactionStateKnown = true; }
+    };
+    return {
+      managed, checkCancelled: () => this.checkCancelled(task), cancelled: () => task.cancelled,
+      progress: records => this.emit({ taskId: task.id, status: 'running', progress: 0, rows: task.fileImportConflict?.result.rows ?? 0, message: `已处理 ${records} 条源记录；已确认提交当前处理结果` }),
+      query: async <T>(sql: string, values: (string | number | boolean | null | Buffer)[] = [], hooks?: { submitted?(): void; acknowledged?(rows: T): void }): Promise<T> => {
+        this.checkCancelled(task);
+        if (managed.broken) throw Error('原导入连接已断开，不会自动重连或重试');
+        task.inFlight = true; task.generation++; managed.serverStatus = undefined; managed.transactionStateKnown = false;
+        let warningKnown = false, warningBad = false;
+        const onPacket = (packet: { sql?: string; warningStatus?: number }) => { if (packet.sql === sql) { warningKnown = true; if (!Number.isInteger(packet.warningStatus) || packet.warningStatus !== 0) warningBad = true; } };
+        managed.connection.on('dbark:session-state', onPacket);
+        try {
+          hooks?.submitted?.();
+          const rows = (await execute<T>(managed, sql, values)).rows;
+          if (Array.isArray(rows) && (!warningKnown || warningBad)) throw Error('内部锁定或目录查询警告数未知或非零，当前批拒绝提交');
+          observe(rows); hooks?.acknowledged?.(rows); return rows;
+        } finally { managed.connection.removeListener('dbark:session-state', onPacket); task.inFlight = false; await task.cancelPending; }
+      },
+      rollback: async () => {
+        await task.cancelPending;
+        if (managed.broken) throw Error('原导入连接已断开，不能确认回滚');
+        task.inFlight = true; task.generation++; managed.serverStatus = undefined; managed.transactionStateKnown = false;
+        try { const rows = (await execute<ResultSetHeader>(managed, 'ROLLBACK')).rows; observe(rows); return rows; }
+        finally { task.inFlight = false; await task.cancelPending; }
+      },
+    };
+  }
+
+  /** 建连前登记只读目录任务，15秒只发取消意图；原命令及物理资源确实收尾后才交付或失败。 */
+  private async readImportKeys(input: Input) {
+    let expired = false, settled = false, cancelling: Promise<void> | undefined;
+    const pending = this.withIndependentTask(input.connectionId, input.taskId, async (managed, control) => {
+      const context: StructureTaskContext = { managed, ...control };
+      const query = async <T>(sql: string, values: (string | number | boolean | null | Buffer)[] = []): Promise<T> => {
+        const actual = values.length ? inlineParameters(sql, values.map(value => Buffer.isBuffer(value) ? { type: 'binary' as const, base64: value.toString('base64') } : value)) : sql;
+        managed.serverStatus = undefined; managed.transactionStateKnown = false;
+        let warningKnown = false, warningBad = false;
+        const onPacket = (packet: { sql?: string; warningStatus?: number }) => { if (packet.sql === actual) { warningKnown = true; if (packet.warningStatus !== 0) warningBad = true; } };
+        managed.connection.on('dbark:session-state', onPacket);
+        try {
+          const rows = (await structureTaskQuery<T>(context, actual)).rows;
+          if (Array.isArray(rows)) { if (!warningKnown || warningBad) throw Error('匹配键目录读取警告未知或非零'); }
+          else {
+            const header = rows as ResultSetHeader;
+            if (!header || header.affectedRows !== 0 || header.warningStatus !== 0 || !Number.isInteger(header.serverStatus) || header.serverStatus < 0 || header.serverStatus > 65535) throw Error('匹配键目录事务未收到完整无警告ACK');
+            managed.serverStatus = header.serverStatus; managed.transactionStateKnown = true;
+            if (Boolean(header.serverStatus & 1) !== (sql === 'START TRANSACTION')) throw Error('匹配键目录事务状态与命令不一致');
+          }
+          return rows;
+        } finally { managed.connection.removeListener('dbark:session-state', onPacket); }
+      };
+      await query('SET SESSION lock_wait_timeout = 5');
+      await query('SET SESSION innodb_lock_wait_timeout = 5');
+      await query('START TRANSACTION');
+      // 错误/取消由独立任务严格关闭原物理连接，不在原命令未终态时抢发清理SQL。
+      await query(`SELECT 1 FROM ${qualified(input.database, input.table)} LIMIT 0`);
+      const result = await readFileImportKeyCatalog(managed, { connectionId: input.connectionId, database: input.database, table: input.table }, query);
+      await query('ROLLBACK'); control.checkCancelled(); return result.catalog;
+    }, undefined, '读取导入匹配键', true);
+    const timer = setTimeout(() => { if (settled) return; expired = true; cancelling = this.cancelTask(input.taskId); void cancelling.catch(() => undefined); }, 15000);
+    timer.unref();
+    try { const result = await pending; if (expired) throw Error('读取匹配键目录超过15秒；原任务已收尾，未生成目录'); return result; }
+    finally { settled = true; clearTimeout(timer); await cancelling; }
   }
 
   /** 固定诊断不走结果流或执行历史；清掉旧状态后只采信本条命令的新协议包。 */

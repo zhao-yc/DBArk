@@ -92,7 +92,7 @@ export interface TaskEvent { tableFilteredDelete?: import('./tableFilteredDelete
 export interface FileChoice { token: string; name: string; }
 export type QueryFileEncoding = 'utf8' | 'utf16le' | 'gb18030';
 export interface AppSettings { theme: 'dark' | 'light'; sidebarWidth: number; resultLimit: number; pageSize: number; dataTypeColors?: boolean; editorFontSize?: number; editorWordWrap?: boolean; editorTabSize?: number; editorInsertSpaces?: boolean; /** 显式格式化关键字，缺项保持原样。 */ sqlKeywordCase?: 'preserve' | 'upper' | 'lower'; tabs: { id: string; kind: 'query' | 'table'; title: string; connectionId: string; database?: string; databaseContext?:QueryDatabaseContext; table?: string; sql?: string; sourceBinding?: QuerySourceBinding; /** 文件权限仅Main持有，与本地保存查询来源分开。 */ fileSourceBinding?: QueryFileSourceRef; /** 仅查询标签可保存的编辑区像素高度；缺项由读取合同回退300。 */ queryEditorHeight?: number }[]; activeTabId?: string; }
-export interface ImportOptions { connectionId: string; database: string; table: string; fileToken: string; format: 'csv' | 'json' | 'sql'; encoding: 'utf8' | 'utf16le' | 'gb18030'; csvDelimiter?: CsvImportDelimiter; /** 仅 CSV；省略时首行作为字段名，false 时按列序号映射并保留首条数据。 */ csvHasHeader?: boolean; /** 仅CSV／JSON；省略保持每500行提交，atomic整文件确认成功后提交一次。 */ transactionMode?: import('./fileImportTransaction').FileImportTransactionMode; mapping: Record<string, string>; taskId: string; }
+export interface ImportOptions { connectionId: string; database: string; table: string; fileToken: string; format: 'csv' | 'json' | 'sql'; encoding: 'utf8' | 'utf16le' | 'gb18030'; csvDelimiter?: CsvImportDelimiter; /** 仅 CSV；省略时首行作为字段名，false 时按列序号映射并保留首条数据。 */ csvHasHeader?: boolean; /** 仅CSV／JSON；省略保持每500行提交，atomic整文件确认成功后提交一次。 */ transactionMode?: import('./fileImportTransaction').FileImportTransactionMode; /** 仅CSV／JSON本次执行配置；省略只新增，不能由模板静默开启更新。 */ conflict?: import('./fileImportConflict').FileImportConflictSelection; mapping: Record<string, string>; taskId: string; }
 export interface ExportOptions { csvSelection?: CsvExportSelection; csvDelimiter?: CsvExportDelimiter; connectionId: string; database: string; table: string; fileToken: string; format: 'csv' | 'json' | 'sql'; encoding: 'utf8' | 'utf16le' | 'gb18030'; includeStructure: boolean; includeData: boolean; taskId: string; }
 /** 仅包含已经返回的结果，不携带可触发数据库访问的 SQL、连接或会话。 */
 export interface ResultExportData { columns: Pick<ResultColumn, 'key' | 'name'>[]; rows: DataRow[]; truncated: boolean; }
@@ -254,6 +254,7 @@ export interface CommandMap {
   'files.readQuery': { input: { fileToken: string; encoding: QueryFileEncoding }; output: { sql: string; encoding: QueryFileEncoding } };
   'files.writeQuery': { input: { fileToken: string; encoding: QueryFileEncoding; sql: string }; output: void };
   'files.preview': { input: { fileToken: string; format: 'csv' | 'json'; encoding: string; csvDelimiter?: CsvImportDelimiter; csvHasHeader?: boolean }; output: { columns: string[]; rows: DataRow[] } };
+  'files.importKeys': { input: { connectionId: string; database: string; table: string; taskId: string }; output: import('./fileImportConflict').FileImportKeyCatalog };
   'files.import': { input: ImportOptions; output: import('./sqlFileImport').FileImportResult };
   'files.exportColumns': { input: CsvExportFieldsInput; output: CsvExportFieldsOutput };
   'files.releaseExportColumns': { input: { catalogId: string }; output: void };

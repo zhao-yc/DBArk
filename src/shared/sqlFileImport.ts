@@ -35,6 +35,7 @@ export interface FileImportResult {
   rows: number;
   errors: string[];
   sql?: SqlFileImportReceipt;
+  conflicts?: import('./fileImportConflict').FileImportConflictReport;
 }
 
 /** 同时限制字符、UTF-8和JSON转义预算；截断说明也计入4096字节预算。 */
