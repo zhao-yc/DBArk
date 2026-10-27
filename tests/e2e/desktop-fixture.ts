@@ -7,6 +7,7 @@ import { promisify } from 'node:util';
 import {randomUUID} from 'node:crypto';
 import { createSnippetsNativeDiagnostics, snippetsDiagnosticPort } from './snippets-native-diagnostics';
 import type { SnippetsNativeDiagnostics } from '../helpers/snippetsNativeDiagnostics';
+import { createDesktopQuitDiagnosticContext, observeDesktopQuitMethods } from './desktop-quit-diagnostics';
 
 interface RecordedDialog { title?: string; message: string; buttons?: string[]; response: number; }
 declare global { var __dbarkE2EDialogs: { answers: number[]; calls: RecordedDialog[] }; }
@@ -21,6 +22,7 @@ export let dialogCalls: RecordedDialog[] = [];
 let quitReady:Promise<void>;
 export let snippetsDiagnostics: SnippetsNativeDiagnostics | undefined;
 let snippetsDiagnosticsArmed = false;
+let quitDiagnosticContext: ReturnType<typeof createDesktopQuitDiagnosticContext> | undefined;
 
 /** 仅显式启用的用例持有此状态；不改变旧用例的退出及兜底路径。 */
 interface OwnedDesktopExit {
@@ -232,6 +234,44 @@ export async function requestQuit(method: 'app' | 'window' = 'app') {
   }, method);
 }
 
+/** 显式诊断使用原退出函数，只旁观原应用的方法和原will-quit承诺。 */
+export async function quitDesktopDiagnosed(method: 'app' | 'window' = 'app') {
+  const application = desktop, ownerPage = page, ready = quitReady;
+  const context = quitDiagnosticContext, diagnostic = context?.begin(application, ownerPage);
+  if (!diagnostic) return quitDesktop(method);
+  await diagnostic.arm();
+  if (quitDiagnosticContext !== context || !diagnostic.current() || desktop !== application || page !== ownerPage || quitReady !== ready) { diagnostic.record('observer-unavailable', { ok: false }); throw Error('原诊断退出归属已变化，未投递退出请求'); }
+  const restore = observeDesktopQuitMethods(application, diagnostic, () => { if (desktop !== application) throw Error('原应用归属已变化'); return closed; });
+  void ready.then(() => diagnostic.record('will-quit'));
+  try { await quitDesktop(method); }
+  catch (error) { diagnostic.record('quit-failed'); throw error; }
+  finally { restore(); }
+}
+
+/** 独立显式诊断生命周期；默认及结构写入用例继续消费原夹具主体。 */
+async function runQuitDiagnosedDesktopLifetime(trace: Parameters<typeof createSnippetsNativeDiagnostics>[0], use: () => Promise<void>, info: TestInfo): Promise<void> {
+  const context = createDesktopQuitDiagnosticContext(info), previous = quitDiagnosticContext;
+  quitDiagnosticContext = context;
+  try {
+    snippetsDiagnosticsArmed = false; snippetsDiagnostics = createSnippetsNativeDiagnostics(trace, info); pageErrors = [];
+    dataDir = await mkdtemp(join(tmpdir(), 'dbark-e2e-'));
+    try { await launchDesktop(); await use(); }
+    finally {
+      try {
+        if (snippetsDiagnostics) await snippetsDiagnostics.finish(info.status !== info.expectedStatus);
+        if (!closed) { await answerDialogs([1, 1]); await quitDesktopDiagnosed(); }
+      } finally {
+        const diagnostic = !closed ? context.begin(desktop, page) : undefined;
+        if (diagnostic) diagnostic.record('force-stop-started', { processCount: 1 });
+        await forceStopOwnProcess();
+        if (diagnostic) diagnostic.record('force-stop-finished', { closed });
+        if (dirname(resolve(dataDir)) !== resolve(tmpdir()) || !basename(dataDir).startsWith('dbark-e2e-')) throw new Error('拒绝清理测试临时目录以外的路径');
+        await rm(dataDir, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
+      }
+    }
+  } finally { await context.finish(); if (quitDiagnosticContext === context) quitDiagnosticContext = previous; }
+}
+
 /** 先验证真实退出守卫到will-quit，再用公开close断开测试调试连接，仍核所有实际进程退出。 */
 export async function quitDesktop(method: 'app' | 'window' = 'app') {
   if (snippetsDiagnostics) { snippetsDiagnostics.mark('before-quit'); await snippetsDiagnostics.stop(); }
@@ -254,11 +294,13 @@ async function forceStopOwnProcess() {
 }
 
 /** 自动夹具随每个用例运行，不依赖模块首次导入时注册钩子，避免跨文件复用已关闭窗口。 */
-export const test = baseTest.extend<{ desktopLifetime: void; preserveOnUnconfirmedExit: boolean; ownedDesktopLaunchGuard: { assertCurrent(): void; assertPreparation?(info: TestInfo): void } | undefined }>({
+export const test = baseTest.extend<{ desktopLifetime: void; preserveOnUnconfirmedExit: boolean; collectQuitDiagnostics: boolean; ownedDesktopLaunchGuard: { assertCurrent(): void; assertPreparation?(info: TestInfo): void } | undefined }>({
   preserveOnUnconfirmedExit: [false, { option: true }],
+  collectQuitDiagnostics: [false, { option: true }],
   ownedDesktopLaunchGuard: [undefined, { option: true }],
-  desktopLifetime: [async ({ trace, preserveOnUnconfirmedExit, ownedDesktopLaunchGuard }, use, testInfo) => {
-    if (preserveOnUnconfirmedExit) {
+  desktopLifetime: [async ({ trace, preserveOnUnconfirmedExit, collectQuitDiagnostics, ownedDesktopLaunchGuard }, use, testInfo) => {
+    if (preserveOnUnconfirmedExit || collectQuitDiagnostics) {
+      if (collectQuitDiagnostics && !preserveOnUnconfirmedExit) { await runQuitDiagnosedDesktopLifetime(trace, use, testInfo); return; }
       // 检查端口仅在显式strict分支生效，并在分配所属资源前复核；默认分支保留原文。
       // 旧strict路径保留原调用时点；只有新准备hook需要先登记本例真实墓碑。
       if (!ownedDesktopLaunchGuard?.assertPreparation) ownedDesktopLaunchGuard?.assertCurrent();

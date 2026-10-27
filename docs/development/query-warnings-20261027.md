@@ -73,3 +73,9 @@ WIN11-TEST 再次不可达，按既有授权使用 Windows 本机回退，串行
 Linux、Mac arm64／x64 job 通过，Windows 旧连接迁移退出失败仍待[阶段诊断](../testing/windows-quit-ci-20261027.md)。
 其中 Mac arm64 实际分配旧镜像，详见[镜像原件](../testing/macos-image-renewal-20261027.md)。
 当前不增加完整 Q02 工作包、安装包或发行通过数，暂不发布。
+
+后续 `77fe4485` CI 的 Windows／Linux／Mac arm64 job 已通过，Intel 原生分栏出现
+403 未达到 >410 的真实失败。执行选项移至既有上下文行并防止竖排压缩；本轮类型、
+1169 相关、完整 18210 通过／1 平台跳过、构建及 Windows 正式警告窗口通过，准确
+隔离资源独立核零。原失败、原生几何及 Mac 复验边界见
+[工具栏空间回归](../testing/query-warning-layout-20261027.md)，不继承旧 run 为本次修复通过。

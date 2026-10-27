@@ -3,7 +3,7 @@ import { createServer, type AddressInfo } from 'node:net';
 import { join } from 'node:path';
 import type { ConnectionProfile, FileChoice } from '../../src/shared/contracts';
 import type { ConnectionImportApply, ConnectionTransferDocument, ExportedConnectionProfile } from '../../src/shared/connectionTransfer';
-import { test as desktopTest, expect, desktop, page, dataDir, pageErrors, closed, launchDesktop, quitDesktop } from './desktop-fixture';
+import { test as desktopTest, expect, desktop, page, dataDir, pageErrors, closed, launchDesktop, quitDesktopDiagnosed as quitDesktop } from './desktop-fixture';
 import { enabled as liveEnabled, environment } from './live-helpers';
 
 interface Traffic { port: number; connections: number; }
@@ -25,7 +25,7 @@ const test = desktopTest.extend<{ traffic: Traffic }>({
   },
 });
 // 同文件含显式启用的实库凭据输入；Playwright 要求 trace 在文件级配置，禁止记录秘密参数。
-test.use({ trace: 'off' });
+test.use({ trace: 'off', collectQuitDiagnostics: true });
 /** 失败时在夹具关闭窗口前保存实际画面，凭据字段仍为密码框且测试轨迹关闭。 */
 test.afterEach(async ({}, testInfo) => { if (!closed && testInfo.status !== testInfo.expectedStatus) await page.screenshot({ path: testInfo.outputPath('failure.png') }).catch(() => undefined); });
 

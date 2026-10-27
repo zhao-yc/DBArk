@@ -1,6 +1,13 @@
 .query-tab{overflow-y:auto;min-width:0}
 .query-tab>.sql-editor-wrap{min-height:0}
 .query-tab>.result-body{min-height:var(--query-result-min-height,96px)}
+/* 执行选项使用既有上下文行，禁止中文标签被工具栏挤成竖排而侵占分栏空间。 */
+.query-execution-options{display:flex;align-items:center;gap:10px;flex:0 0 auto;white-space:nowrap}
+.query-execution-options>.check,.query-execution-options input{flex-shrink:0;white-space:nowrap}
+/* 极窄窗口及长来源允许横向浏览，控件不隐藏、不增加行高，键盘聚焦可滚动到目标。 */
+.query-tab>.context-bar,.query-tab>.toolbar{overflow-x:auto;overflow-y:hidden;scrollbar-width:none;white-space:nowrap}
+.query-tab>.context-bar>:not(.grow){flex-shrink:0}
+.query-tab>.context-bar>strong,.query-tab>.context-bar>[aria-label="当前查询默认库"]{max-width:240px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .query-layout-bar{height:18px;display:flex;align-items:stretch;gap:6px;flex-shrink:0;background:var(--surface);border-block:1px solid var(--line-soft)}
 .query-layout-handle{flex:1;min-width:30px;cursor:row-resize;touch-action:none;position:relative}
 .query-layout-handle:after{content:"";position:absolute;left:calc(50% - 18px);top:6px;width:36px;border-top:2px solid var(--muted)}
