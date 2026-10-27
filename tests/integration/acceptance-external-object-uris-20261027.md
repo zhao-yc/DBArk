@@ -68,6 +68,8 @@ Root已回读registration06原件包（118项、179913字节，SHA256 `ad6b0db79
 
 `380ca008` 的[CI 40549363185](https://github.com/zhao-yc/DBArk/actions/runs/40549363185)四个主要job均success：Linux类型、构建及881文件18745项单元通过/10跳过；Windows x64、macOS arm64/x64各自源码与安装产物legacy均82通过/375跳过。四份原始job日志与e62旧日志分别保存；发布开发预览及额外剪贴板job跳过。此CI覆盖分隔符和迁移修改，不证明本功能OS冷热入口或实库组合。
 
+后续只读实库用例及证据提交 `398e5fab` 的[CI 40555074289](https://github.com/zhao-yc/DBArk/actions/runs/40555074289)四个主要job也已success；开发预览发布跳过。该默认关闭的新增实库用例仍以live07的实际执行记录为准，CI没有连接私有数据库。
+
 ### 正向只读实库入口（live07）
 
 仅新增 `tests/e2e/external-object-uris-live.spec.ts`（SHA256 `ffd16af9fc91c5dbcf3dc5d7b4da82add4ab4c38e9270b2a832aec3da063b7dc`），原39路径及green05的109份dist保持不变，未重复build、单元或安装。WIN11-TEST完整类型3224 exit0，双门关闭默认7560 exit0/恰1skip，list17632 exit0/恰1例，默认和列表均未读取实库配置或启动App/DB。
