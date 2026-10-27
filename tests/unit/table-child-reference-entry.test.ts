@@ -6,9 +6,15 @@ import { ChildReferenceIntent } from '../../src/renderer/childReferenceIntent';
 import type { TableInfo } from '../../src/shared/contracts';
 
 const source = readFileSync(new URL('../../src/renderer/components/TableTab.tsx', import.meta.url), 'utf8'), tree = ts.createSourceFile('TableTab.tsx', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
-const methods = new Map<string, string>(); let disabled = '';
+const methods = new Map<string, string>(); let disabled = '', blocked = '';
+const blockedNames = new Set<string>();
 /** 提取生产按钮及原处理器；仅替换store、DOM、setter，不另造一套入口判定。 */
 function visit(node: ts.Node): void {
+  if (ts.isVariableDeclaration(node) && node.name.getText(tree) === 'blocked' && node.initializer) {
+    blocked = node.initializer.getText(tree);
+    const collect = (part: ts.Node): void => { if (ts.isIdentifier(part)) blockedNames.add(part.text); ts.forEachChild(part, collect); };
+    collect(node.initializer);
+  }
   if (ts.isFunctionDeclaration(node) && node.name && ['openChildReferences', 'closeChildReferences'].includes(node.name.text)) methods.set(node.name.text, node.getText(tree));
   if (ts.isJsxOpeningElement(node) && node.tagName.getText(tree) === 'button') {
     const props = new Map(node.attributes.properties.filter(ts.isJsxAttribute).map(attribute => [attribute.name.getText(tree), attribute.initializer && ts.isJsxExpression(attribute.initializer) ? attribute.initializer.expression?.getText(tree) : '']));
@@ -45,5 +51,13 @@ it.each(['row', 'generation', 'version', 'active-tab', 'profile', 'page', 'input
   expect(captured.current()).toBe(false); restore(); expect(captured.current()).toBe(false);
 });
 it('旧关闭回调不能关闭新意图，原页面路径保持正式Dialog及活动锁接线', () => {
-  const f = fixture(); f.handlers.openChildReferences(); const first = f.intent()!; f.handlers.closeChildReferences(first); f.handlers.openChildReferences(); const second = f.intent(); f.handlers.closeChildReferences(first); expect(f.intent()).toBe(second); expect(source).toContain('<ChildReferenceDialog base={base} intent={childReferenceDialog}'); expect(source).toContain('onActivity={referenceActivity}'); expect(source).toContain('busy || referenceBusy || !!childReferenceDialog');
+  const f = fixture(); f.handlers.openChildReferences(); const first = f.intent()!; f.handlers.closeChildReferences(first); f.handlers.openChildReferences(); const second = f.intent(); f.handlers.closeChildReferences(first); expect(f.intent()).toBe(second); expect(source).toContain('<ChildReferenceDialog base={base} intent={childReferenceDialog}'); expect(source).toContain('onActivity={referenceActivity}');
+});
+
+it('真实blocked表达式保留关联与作业各门，新增对话框不依赖源码排列', () => {
+  expect(blocked).not.toBe('');
+  for (const name of ['busy', 'referenceBusy', 'childReferenceDialog', 'foreignKeyJoinDialog']) expect(blockedNames.has(name)).toBe(true);
+  const initial = Object.fromEntries([...blockedNames].map(name => [name, false]));
+  expect(runInContext(blocked, createContext({ ...initial }))).toBe(false);
+  for (const name of blockedNames) expect(runInContext(blocked, createContext({ ...initial, [name]: true }))).toBe(true);
 });

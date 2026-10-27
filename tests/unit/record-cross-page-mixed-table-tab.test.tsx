@@ -47,6 +47,8 @@ function fixture(filterGroup: FilterGroup | undefined = undefined, restoredDraft
   const gate = new RecordPageNavigation(), reset = vi.fn(), select = vi.fn((_: string, activate: () => void) => { activate(); return true; });
   let sequence = 0;
   const context = createContext({
+    // JOIN对话框是新增的真实blocked依赖；旧跨页场景保持未打开的生产初值。
+    foreignKeyJoinDialog: null,
     // 提取的真实选择/load及blocked表达式引用这些意图；旧跨页场景均未打开，保持生产初值。
     filteredDeleteDialog: null, filteredUpdateDialog: null, filteredDeleteIntent: { current: null }, filteredUpdateIntent: { current: null }, filteredSelectDialog: null, filteredSelectIntent: { current: null }, filteredSelectPage: { current: null }, filteredExportDialog: null, filteredExportIntent: { current: null }, tableValueOptionsDialog: null, tableValueOptionsIntent: { current: null }, tableStatisticsDialog: null, tableStatisticsIntent: { current: null }, childReferenceDialog: null, childReferenceIntent: { current: null }, batchFillIntent: { current: null }, selectedFilterRef: { current: null },
     history: new DraftHistory(), RecordPageNavigation, recordPageScope, recordViewZh, tableGridZh, maxTablePage, structuredClone, base, tab,
@@ -89,6 +91,13 @@ function fixture(filterGroup: FilterGroup | undefined = undefined, restoredDraft
 }
 
 describe('D04与现有TableTab工具的混合正负向接线', () => {
+  it('JOIN对话框打开时沿真实blocked阻止跨页，关闭后恢复原门且不改草稿', async () => {
+    const f = fixture(), c = f.context, original = structuredClone(f.rows);
+    c.foreignKeyJoinDialog = {}; c.setBusy(false);
+    expect(c.blockedRef.current).toBe(true); await f.navigate();
+    expect(c.invoke).not.toHaveBeenCalled(); expect(f.rows).toEqual(original);
+    c.foreignKeyJoinDialog = null; c.setBusy(false); expect(c.blockedRef.current).toBe(false);
+  });
   it('真实load失败仍退出恢复草稿视图并清除旧页，保留原错误和原行对象', async () => {
     const f = fixture(undefined, true), c = f.context, original = structuredClone(f.rows), failure = Error('原表页读取失败');
     c.invoke.mockImplementation(async (command: string) => { if (command === 'table.page') throw failure; if (command === 'metadata.table') return { objectKind: 'table', columns: [] }; if (command === 'connections.open') return undefined; throw Error('不应调用:' + command); });
