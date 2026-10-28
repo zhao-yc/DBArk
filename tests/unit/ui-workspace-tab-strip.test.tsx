@@ -2,12 +2,13 @@ import React, { act, createRef } from 'react';
 import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from 'vitest';
 import type { WorkspaceTab } from '../../src/renderer/store';
 import { tabOrderZh as text } from '../../src/renderer/locales/tabOrder.zh-CN';
+import { queryCloseZh as closeText } from '../../src/renderer/locales/queryClose.zh-CN';
 import { zh, formatText } from '../../src/renderer/locales/zh-CN';
 import { memoryDocument, MemoryEvent, MemoryNode } from '../fixtures/memory-dom';
 
 let doc: ReturnType<typeof memoryDocument>, createRoot: typeof import('react-dom/client').createRoot, root: ReturnType<typeof createRoot> | undefined;
 let Strip: typeof import('../../src/renderer/components/WorkspaceTabStrip').WorkspaceTabStrip, store: typeof import('../../src/renderer/store').useWorkspace;
-let ui: { stripRef: React.RefObject<HTMLDivElement | null>; onClose: ReturnType<typeof vi.fn>; onNew: ReturnType<typeof vi.fn> };
+let ui: { stripRef: React.RefObject<HTMLDivElement | null>; onClose: ReturnType<typeof vi.fn>; onNew: ReturnType<typeof vi.fn>; onCloseSide?: ReturnType<typeof vi.fn> };
 const bridge = vi.fn(async () => undefined), globals = ['window', 'document', 'navigator', 'MutationObserver', 'IS_REACT_ACT_ENVIRONMENT'].map(key => [key, Object.getOwnPropertyDescriptor(globalThis, key)] as const);
 let windowEvents: MemoryNode;
 const observers = new Set<Observer>();
@@ -175,4 +176,47 @@ it('整组snapshot异常或缺ref不抛工作台、不丢原标题，全部旧�
     expect(wrappers()).toHaveLength(3); expect(wrappers().every(node => node.querySelectorAll('button').every(button => button.disabled))).toBe(true);
     await click(doc.querySelectorAll('button').find(node => node.classList.contains('add-tab'))!); expect(ui.onNew).toHaveBeenCalledTimes(1); expect(move).not.toHaveBeenCalled();
   } finally { await act(async () => store.setState({ tabOrderSnapshot: snapshot, moveTab: originalMove })); }
+});
+
+/** 真实条带菜单不借当前活动标签定位，旧回调仍由原菜单owner约束。 */
+function menuButton(id: string) { return wrapper(id).querySelectorAll('button').find(node => node.classList.contains('tab-query-menu'))!; }
+function sideButton(side: 'left' | 'right') { return doc.querySelectorAll('button').find(node => node.textContent === closeText[side])!; }
+it('非活动查询锚点只交接准确ref，表标签不提供菜单且活动标签保持', async () => {
+  ui.onCloseSide = vi.fn(); await render(); expect(wrapper('b').querySelectorAll('button').some(node => node.classList.contains('tab-query-menu'))).toBe(false);
+  await click(menuButton('c')); expect(store.getState().settings.activeTabId).toBe('a'); expect(sideButton('right').disabled).toBe(true);
+  const old = callback(sideButton('left'), 'onClick'); await click(sideButton('left')); expect(ui.onCloseSide).toHaveBeenCalledTimes(1);
+  const [ref, side] = ui.onCloseSide.mock.calls[0]; expect(side).toBe('left'); expect(store.getState().resolveTabOrder(ref)?.id).toBe('c'); expect(ui.onClose).not.toHaveBeenCalled();
+  await act(async () => old()); expect(ui.onCloseSide).toHaveBeenCalledTimes(1); expect(store.getState().settings.activeTabId).toBe('a');
+});
+it.each(['重排ABA', '来源ABA', '新增', 'blocked', '卸载', '拖动', '键盘移动', 'Escape', 'blur'])('%s后原菜单不可复活且不能撤销后来菜单', async fault => {
+  ui.onCloseSide = vi.fn(); await render(); await click(menuButton('c')); const old = callback(sideButton('left'), 'onClick'), original = store.getState().settings;
+  if (fault === '重排ABA') await act(async () => { store.getState().updateSettings({ tabs: [...original.tabs].reverse() }); store.getState().updateSettings(original); });
+  if (fault === '来源ABA') await act(async () => { store.getState().updateTab('c', { databaseContext: { state: 'known', database: null } }); store.getState().updateSettings(original); });
+  if (fault === '新增') await act(async () => store.getState().openTab({ kind: 'query', title: '后来查询', connectionId: 'c', sql: '' }));
+  if (fault === 'blocked') await render(true); if (fault === '卸载') { await act(async () => root!.unmount()); root = undefined; }
+  if (fault === '拖动') await drag('a'); if (fault === '键盘移动') await key('c', 'Home');
+  if (fault === 'Escape') await act(async () => doc.dispatchEvent(Object.assign(new MemoryEvent('keydown'), { key: 'Escape' })));
+  if (fault === 'blur') await act(async () => windowEvents.dispatchEvent(new MemoryEvent('blur')));
+  await act(async () => old()); expect(ui.onCloseSide).not.toHaveBeenCalled();
+  if (!['blocked', '卸载', '拖动'].includes(fault)) { await click(menuButton('c')); await act(async () => old()); expect(doc.querySelector('[role="menu"]')).not.toBeNull(); }
+});
+it('菜单期间出现又移除的模态也永久撤销，旧动作不穿透到新菜单', async () => {
+  ui.onCloseSide = vi.fn(); await render(); await click(menuButton('c')); const old = callback(sideButton('left'), 'onClick');
+  const modal = doc.createElement('div'); modal.setAttribute('role', 'dialog'); doc.body.appendChild(modal); doc.body.removeChild(modal);
+  for (const observer of observers) if (observer.active) observer.records.push({ addedNodes: [modal] } as unknown as MutationRecord);
+  await act(async () => old()); expect(ui.onCloseSide).not.toHaveBeenCalled();
+});
+
+it.each(['dialog', 'alertdialog'])('复用节点的%s角色变化后恢复也撤销旧菜单，未投递记录不能穿透', async role => {
+  ui.onCloseSide = vi.fn(); await render();
+  const reused = doc.createElement('div'); doc.body.appendChild(reused);
+  await click(menuButton('c')); const old = callback(sideButton('left'), 'onClick');
+  reused.setAttribute('role', role); reused.removeAttribute('role');
+  for (const observer of observers) if (observer.active) observer.records.push(
+    { type: 'attributes', target: reused, attributeName: 'role', oldValue: null } as unknown as MutationRecord,
+    { type: 'attributes', target: reused, attributeName: 'role', oldValue: role } as unknown as MutationRecord
+  );
+  await act(async () => old()); expect(ui.onCloseSide).not.toHaveBeenCalled();
+  await click(menuButton('c')); await act(async () => old()); expect(ui.onCloseSide).not.toHaveBeenCalled();
+  expect(doc.querySelector('[role="menu"]')).not.toBeNull();
 });

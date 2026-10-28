@@ -56,3 +56,34 @@ describe('关闭其他查询的对象归属与串行回执', () => {
     f.close(request); expect(f.requests).toHaveLength(1); expect(f.state.settings.tabs).toContain(f.b); expect(f.listeners.size).toBe(0);
   });
 });
+
+describe('关闭左右查询的原对象范围与顺序', () => {
+  it('左侧只取原查询，锚点与表标签不关闭', () => {
+    const f = fixture(); f.queue.start(f.b, 'left'); expect(f.requests.map(item => item.tabId)).toEqual(['keep']);
+    f.close(f.requests[0]); expect(f.requests.map(item => item.tabId)).toEqual(['keep', 'a']); f.close(f.requests[1]);
+    expect(f.state.settings.tabs.map(item => item.id)).toEqual(['table', 'b']); expect(f.changes).toEqual([true, false]);
+  });
+  it('右侧按原顺序等待回执，新标签不进批次，自身关闭不误停链', () => {
+    const f = fixture(); f.queue.start(f.keep, 'right'); f.change([tab('new-left'), ...f.state.settings.tabs, tab('new-right')]);
+    f.close(f.requests[0]); expect(f.requests.map(item => item.tabId)).toEqual(['a', 'b']); f.close(f.requests[1]);
+    expect(f.state.settings.tabs.map(item => item.id)).toEqual(['new-left', 'keep', 'table', 'new-right']);
+  });
+  it.each(['重排', '重排ABA', '锚点来源ABA', '未来目标替换', '连接修订ABA'])('%s粘性撤销原侧关批次', fault => {
+    const f = fixture(); f.queue.start(f.keep, 'right'); const original = [...f.state.settings.tabs];
+    if (fault === '重排' || fault === '重排ABA') { f.change([f.keep, f.b, original[2], f.a]); if (fault === '重排ABA') f.change(original); }
+    if (fault === '锚点来源ABA') { f.change(original.map(item => item === f.keep ? { ...item, sourceBinding: { id: 'new', digest: 'a'.repeat(64), connectionId: 'c', context: { state: 'unknown' } } } : item)); f.change(original); }
+    if (fault === '未来目标替换') f.change(original.map(item => item === f.b ? { ...item } : item));
+    if (fault === '连接修订ABA') { f.state.connectionVersions.c = 1; f.notify(); f.state.connectionVersions.c = 0; f.notify(); }
+    expect(f.queue.running).toBe(false); expect(f.queue.remove(f.a, vi.fn())).toBe(false); f.queue.finish(f.requests[0], false); expect(f.requests).toHaveLength(1);
+  });
+  it('取消或保存失败即停，旧failed不能误停下一请求', () => {
+    const f = fixture(); f.queue.start(f.keep, 'right'); const old = f.requests[0]; f.close(old); old.failed!(); expect(f.queue.running).toBe(true);
+    f.queue.finish(f.requests[1], false); expect(f.queue.running).toBe(false); expect(f.state.settings.tabs).toContain(f.b);
+    const g = fixture(); g.queue.start(g.b, 'left'); g.requests[0].failed!(); g.queue.finish(g.requests[0], false); expect(g.requests).toHaveLength(1); expect(g.state.settings.tabs).toContain(g.a);
+  });
+  it('原保存mutate接管新对象后仍可完成侧关，不把正常保存当外部替换', () => {
+    const f = fixture(); f.queue.start(f.keep, 'right'); const request = f.requests[0], patch = { title: '保存后的A' };
+    request.mutate!(f.a, patch, () => f.change(f.state.settings.tabs.map(item => item === f.a ? { ...item, ...patch } : item)));
+    f.close(request); expect(f.requests.map(item => item.tabId)).toEqual(['a', 'b']); f.close(f.requests[1]); expect(f.state.settings.tabs.map(item => item.id)).toEqual(['keep', 'table']);
+  });
+});

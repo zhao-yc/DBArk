@@ -6,3 +6,7 @@
 .tab-strip .tab-select:focus-visible { outline: 1px solid var(--accent); outline-offset: -3px; }
 .tab-order-help { display: flex; flex-shrink: 0; flex-wrap: wrap; gap: 2px 12px; padding: 3px 10px; color: var(--muted); font-size: 10px; line-height: 1.5; border-bottom: 1px solid var(--line-soft); }
 .tab-order-help [role='status'] { color: var(--text); }
+
+.tab-query-menu { padding: 0 5px; }
+.query-tab-menu { display: flex; flex-shrink: 0; flex-wrap: wrap; align-items: center; gap: 6px; padding: 6px 10px; border-bottom: 1px solid var(--line-soft); background: var(--panel); }
+.query-tab-menu > span { color: var(--muted); font-size: 11px; }

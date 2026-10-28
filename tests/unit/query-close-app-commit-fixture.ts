@@ -18,7 +18,7 @@ export function appFunctions(environment: Record<string, unknown>) {
     ts.forEachChild(node, visit);
   }; visit(tree); if (methods.length !== 4 || !entry || !layout) throw Error('真实App队列提交接线缺失');
   const context = createContext({ React, useLayoutEffect, QueryCloseQueue, QueryCloseRequests, queryCloseZh, zh, ...environment });
-  const code = methods.join('\n') + '\nglobalThis.finish=finishQueryClose;globalThis.entry=(settings,activeTab,closingOtherQueries)=>(' + entry + ');globalThis.layout=(queryCloseCommit,queryCloseRequest,settings)=>{' + layout + ';};';
+  const code = methods.join('\n') + '\nglobalThis.closeSides=closeOtherQueries;globalThis.finish=finishQueryClose;globalThis.entry=(settings,activeTab,closingOtherQueries)=>(' + entry + ');globalThis.layout=(queryCloseCommit,queryCloseRequest,settings)=>{' + layout + ';};';
   runInContext(ts.transpileModule(code, { compilerOptions: { target: ts.ScriptTarget.ES2022, jsx: ts.JsxEmit.React } }).outputText, context);
   return context as any;
 }

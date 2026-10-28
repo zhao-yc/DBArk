@@ -22,7 +22,8 @@ async function mount() {
   (window as any).confirm = vi.fn(() => false);
   (window as any).dbark = { onTask: () => () => {}, onMenu: () => () => {}, invoke: async (command: string, input: any) => { calls.push({ command, input }); const wait = hook?.(command, input); if (wait) return wait; if (command === 'settings.save' || command === 'sessions.close') return; if (command === 'queries.create') return saved; throw Error('独审拒绝实际外界调用：' + command); } };
   const make = (id: string) => ({ id, kind: 'query', title: id, connectionId: 'c', sql: 'SELECT ' + id + ';', databaseContext: { state: 'known', database: null } });
-  store.setState({ settings: { theme: 'dark', sidebarWidth: 260, resultLimit: 1000, pageSize: 100, activeTabId: 'keep', tabs: [make('keep'), make('a'), make('b'), { ...make('table'), kind: 'table' }] }, connections: [{ id: 'c', name: '内存连接', host: 'offline.invalid', port: 1, user: 'ram', dialect: 'mysql', color: '', group: '' }], activeJobs: {}, dirtyTabs: {}, connectionVersions: {}, tasks: [] });
+  // 混合表页提供真实必需的库表身份，不能绕过正式标签引用校验。
+  store.setState({ settings: { theme: 'dark', sidebarWidth: 260, resultLimit: 1000, pageSize: 100, activeTabId: 'keep', tabs: [make('keep'), make('a'), make('b'), { ...make('table'), kind: 'table', database: 'db', table: 'subject' }] }, connections: [{ id: 'c', name: '内存连接', host: 'offline.invalid', port: 1, user: 'ram', dialect: 'mysql', color: '', group: '' }], activeJobs: {}, dirtyTabs: {}, connectionVersions: {}, tasks: [] });
   function Harness() {
     const settings = store((state: any) => state.settings), requests = useMemo(() => new QueryCloseRequests(), []), otherQueryClose = useRef<any>(null);
     const [request, setRequest] = useState<any>(), [closing, setClosing] = useState(false), [commit, setCommit] = useState<any>(), [foreign,setForeign]=useState(false);
@@ -69,5 +70,30 @@ describe('原独审反例的真实App布局提交与Modal对照', () => {
     await mount(); await click(closeWords.others); await click(closeWords.save); const pending = gate(); hook = command => command === 'queries.create' ? pending.promise : undefined;
     await click(bindingWords.create); await click(bindingWords.create); expect(calls.filter(call => call.command === 'queries.create')).toHaveLength(1);
     await act(async () => pending.resolve(saved)); expect(store.getState().settings.tabs.some((tab: any) => tab.id === 'a')).toBe(false);
+  });
+});
+
+describe('侧关复用真实App关闭与保存握手', () => {
+  it('旧顶栏真实JSX接收React点击事件仍按活动查询关闭其他，不误把事件当锚点', async () => {
+    await mount(); await click(closeWords.others);
+    expect(world.requests.map((item: any) => item.tabId)).toEqual(['a']);
+    await click(closeWords.discard); expect(world.requests.map((item: any) => item.tabId)).toEqual(['a', 'b']);
+    await click(closeWords.cancel); expect(store.getState().settings.tabs.map((item: any) => item.id)).toEqual(['keep', 'b', 'table']);
+    expect(store.getState().settings.activeTabId).toBe('keep');
+  });
+  it.each(['left', 'right'] as const)('%s以非活动原锚点a选择范围，取消保留原SQL与表标签', async side => {
+    await mount(); const ref = store.getState().tabOrderSnapshot().find((item: any) => item.id === 'a');
+    await act(async () => world.vm.closeSides(ref, side)); expect(world.requests.map((item: any) => item.tabId)).toEqual([side === 'left' ? 'keep' : 'b']);
+    await click(closeWords.cancel); expect(store.getState().settings.tabs.map((item: any) => item.id)).toEqual(['keep', 'a', 'b', 'table']);
+    expect(calls.some(call => /query\.execute|table\.apply/u.test(call.command))).toBe(false);
+  });
+  it.each(['save', 'discard'] as const)('右侧%s完成后保留非活动锚点、当前标签与表页，不发送另一关闭', async mode => {
+    await mount(); const ref = store.getState().tabOrderSnapshot().find((item: any) => item.id === 'a'); await act(async () => world.vm.closeSides(ref, 'right'));
+    if (mode === 'save') { await click(closeWords.save); await click(bindingWords.create); } else await click(closeWords.discard);
+    expect(store.getState().settings.tabs.map((item: any) => item.id)).toEqual(['keep', 'a', 'table']); expect(store.getState().settings.activeTabId).toBe('keep'); expect(world.requests).toHaveLength(1);
+  });
+  it('右侧正在执行不跳过保护，不关闭后面的查询', async () => {
+    await mount(); await act(async () => store.getState().setBusy('a', true)); const ref = store.getState().tabOrderSnapshot().find((item: any) => item.id === 'keep');
+    await act(async () => world.vm.closeSides(ref, 'right')); expect(world.requests).toHaveLength(0); expect(store.getState().settings.tabs.map((item: any) => item.id)).toEqual(['keep', 'a', 'b', 'table']);
   });
 });

@@ -2,6 +2,7 @@ import type { WorkspaceTab } from './store';
 import type { QueryCloseRequest } from './queryCloseIntent';
 import { queryCloseZh as text } from './locales/queryClose.zh-CN';
 
+export type QueryCloseRange = 'others' | 'left' | 'right';
 interface QueueState { settings: { tabs: WorkspaceTab[] }; connections: object[]; connectionVersions: Record<string, number>; }
 interface QueuePorts {
   read(): QueueState;
@@ -13,6 +14,7 @@ interface QueuePorts {
 export class QueryCloseQueue {
   #targets: WorkspaceTab[] = []; #keep?: WorkspaceTab; #index = 0; #request?: QueryCloseRequest;
   #commit?: QueryCloseRequest; #dispatchLease?: object; #requestLease?: object;
+  #order?: string[];
   #closed = new Set<WorkspaceTab>(); #versions = new Map<string, number>(); #profiles = new Map<string, object | undefined>();
   #running = false; #valid = true; #unsubscribe?: () => void; #adopting?: { before: WorkspaceTab; after: WorkspaceTab };
   constructor(private readonly ports: QueuePorts) {}
@@ -20,10 +22,14 @@ export class QueryCloseQueue {
   get pending() { return !!this.#request || !!this.#commit; }
   get awaitingCommit() { return this.#commit; }
   /** 同一队列只启动一次，保留查询和全部目标必须是当前准确对象。 */
-  start(keep: WorkspaceTab): void {
+  start(keep: WorkspaceTab, range: QueryCloseRange = 'others'): void {
     if (this.#keep || !this.#valid) return;
     const state = this.ports.read(); if (keep.kind !== 'query' || !state.settings.tabs.includes(keep)) return;
-    this.#keep = keep; this.#targets = state.settings.tabs.filter(tab => tab.kind === 'query' && tab !== keep);
+    if (!['others', 'left', 'right'].includes(range)) return;
+    const anchor = state.settings.tabs.indexOf(keep);
+    this.#keep = keep; this.#targets = state.settings.tabs.filter((tab, index) => tab.kind === 'query' && tab !== keep && (range === 'others' || (range === 'left' ? index < anchor : index > anchor)));
+    // 侧关保留触发时完整顺序；只忽略后来新增的标签与本队列已经明确关闭的原对象。
+    if (range !== 'others') this.#order = state.settings.tabs.map(tab => tab.id);
     if (new Set(state.settings.tabs.map(tab => tab.id)).size !== state.settings.tabs.length) { this.dispose(); return; }
     for (const tab of [keep, ...this.#targets]) { this.#versions.set(tab.connectionId, state.connectionVersions[tab.connectionId] ?? 0); this.#profiles.set(tab.connectionId, state.connections.find(profile => (profile as { id?: string }).id === tab.connectionId)); }
     this.#running = true; this.ports.changed(true); this.#unsubscribe = this.ports.subscribe(() => this.#inspect()); this.#advance();
@@ -32,6 +38,11 @@ export class QueryCloseQueue {
   #inspect(): boolean {
     if (!this.#valid || !this.#keep) return false;
     const state = this.ports.read();
+    if (this.#order && this.#running) {
+      const closed = new Set([...this.#closed].map(tab => tab.id)), captured = new Set(this.#order);
+      const expected = this.#order.filter(id => !closed.has(id)), actual = state.settings.tabs.filter(tab => captured.has(tab.id)).map(tab => tab.id);
+      if (expected.length !== actual.length || expected.some((id, index) => id !== actual[index])) { this.#valid = false; this.#stop(); return false; }
+    }
     const watching = this.#running ? [this.#keep, ...this.#targets.filter(tab => !this.#closed.has(tab))] : this.#request && !this.#closed.has(this.#targets[this.#index]) ? [this.#targets[this.#index]] : [];
     for (const tab of watching) {
       const actual = state.settings.tabs.find(item => item.id === tab.id);
@@ -94,7 +105,7 @@ export class QueryCloseQueue {
     if (!this.#running && !this.#request) {
       this.#unsubscribe?.(); this.#unsubscribe = undefined; this.#valid = false; this.#keep = undefined;
       this.#commit = undefined; this.#dispatchLease = undefined; this.#requestLease = undefined;
-      this.#targets = []; this.#closed.clear(); this.#versions.clear(); this.#profiles.clear();
+      this.#targets = []; this.#order = undefined; this.#closed.clear(); this.#versions.clear(); this.#profiles.clear();
     }
   }
   /** 卸载永久撤销，包括已停止但仍在等待单次保存回包的租约。 */
