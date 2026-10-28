@@ -1,0 +1,46 @@
+name: 当前源码关键字 macOS arm64 专项
+on:
+  push:
+    branches: [main]
+    paths:
+      - .github/workflows/sql-keyword-current.yml
+      - scripts/sql-keyword-current-ci.mjs
+      - tests/unit/sql-keyword-current-ci.test.ts
+  workflow_dispatch:
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: sql-keyword-current-${{ github.run_id }}-${{ github.run_attempt }}
+  cancel-in-progress: false
+jobs:
+  keyword-current-arm64:
+    name: 当前源码关键字 · macOS arm64
+    runs-on: macos-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - run: corepack enable
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm exec install-electron
+      - name: 同job编译封存当前源码并单次运行原关键字两例
+        run: node scripts/sql-keyword-current-ci.mjs source
+        env:
+          KEYWORD_CURRENT_RUNNER_ENVIRONMENT: ${{ runner.environment }}
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: sql-keyword-current-macos-arm64-${{ github.run_id }}-${{ github.run_attempt }}
+          # 仅公开日志、JSON报告/身份清单及receipt；不上传应用、临时用户目录、录制或安装产物。
+          path: |
+            test-results/sql-keyword-current/*.json
+            test-results/sql-keyword-current/*.log
+            test-results/sql-keyword-current/keyword/*.json
+            test-results/sql-keyword-current/keyword/*.log
+          if-no-files-found: warn
+          retention-days: 14

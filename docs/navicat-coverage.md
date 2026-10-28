@@ -1,5 +1,7 @@
 # Navicat 全功能覆盖目标
 
+Q01开始[当前源码macOS关键字重启专项](development/sql-keyword-current-20261028.md)：产品和原两例保持，新增独立当前main源码CI入口，保留原5秒／120秒、Undo／迟到撤销／SQLite9／四owner退出门，不使用旧冻结job或安装资产。WIN11-TEST Node／类型及46项运行器预检通过，Root回读旧Mac失败ZIP及新source119原件；Mac实际运行待新job，不将预检或三平台普通CI视为该专项通过，暂不发布。
+
 O01开发源码新增[新建表 CHECK 设计](development/table-create-checks-20261028.md)：原新表设计器中命名表级约束增删改／重排、生效意图、实际能力读取和第三／第四确认，真实单条CREATE与SHOW／TC／CC交叉后核；普通、前缀、字段编码、生成列四路线保持原限制，MariaDB JSON隐式检查单独证明后再投影给原索引／外键核验。WIN11-TEST类型、20文件645项专项、完整19414通过／1平台跳过、构建和默认／list关闭门通过；Root已回读原件及冻结字节，见[验收记录](../tests/integration/acceptance-table-create-checks-20261028.md)。实库新增资源及事务探针仍待授权，原生窗口、安装和macOS未验，不增加完整工作包或发行计数，暂不发布。
 
 O01开发源码新增[已有表 CHECK 约束管理](development/table-checks-20261028.md)：普通表双入口、真实目录与完整定义交叉读取、单项增删改及 MySQL 逐条启停、固定 SQL 和准确库表确认，单次能力及完整结构后核验。WIN11-TEST类型、分轮257／317项相关单元、完整19326项通过／1平台跳过、构建及默认／list关闭门通过。旧测试夹具缺依赖和一次测试进程通道中断均保留原失败；修后完整源码及原始日志已回读，见[验收记录](../tests/integration/acceptance-table-checks-20261028.md)。实库新增隔离资源等待单独授权，真实DDL／原生窗口、安装及macOS未验；不增加完整工作包或发行计数，暂不发布。
