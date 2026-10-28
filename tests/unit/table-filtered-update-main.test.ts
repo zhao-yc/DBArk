@@ -9,6 +9,8 @@ import { validateCommand } from '../../src/shared/validation';
 import { publicCommands } from '../../src/shared/commands';
 import { tableFilteredUpdateConfirmation } from '../../src/shared/tableFilteredUpdate';
 import type { TableFilteredUpdatePreviewInput, TableFilteredUpdatePreviewOutput, TableFilteredUpdateApplyInput, TableFilteredUpdateProgress } from '../../src/shared/tableFilteredUpdate';
+type LegacyPreviewInput = Extract<TableFilteredUpdatePreviewInput, { column: string }>;
+type LegacyPreviewOutput = Extract<TableFilteredUpdatePreviewOutput, { column: string }>;
 import { mainColumnsHarness } from './main-columns-owner-harness';
 
 /** 精确控制原异步边界，不用定时器或新Promise追认原数据库/磁盘任务。 */
@@ -19,8 +21,8 @@ function fixture() {
   const available = () => { if (locked) throw Error('配置正在保存'); };
   const cap = new ColumnsMainCapabilities(new Map(), { rendererURL: frame.url, currentWindow: () => window as any, connectionRevision: () => revision, assertAvailable: available, shuttingDown: () => closing, release: async () => {} }); cap.trackWindow(window as any);
   const capture = () => cap.capture({ sender: contents, senderFrame: frame } as any), owner = capture();
-  const input: TableFilteredUpdatePreviewInput = { connectionId: 'c', database: '库', table: 'subject', taskId: randomUUID(), metadataKey: '原完整目录', filters: [], sort: [{ column: 'id', direction: 'ASC' }], column: 'note', value: '合成私密赋值9007199254740993' };
-  const output = (patch: Partial<TableFilteredUpdatePreviewOutput> = {}): TableFilteredUpdatePreviewOutput => ({ previewToken: randomUUID(), target: { connectionId: 'c', database: input.database, table: input.table }, column: input.column, rows: 61, shownRows: 10, sql: 'UPDATE `库`.`subject` SET `note` = ? WHERE 原唯一键及完整旧值;', sampleOmitted: true, expiresAt: new Date(now + 600000).toISOString(), definitionDigest: 'a'.repeat(64), assignmentDigest: createHash('sha256').update(JSON.stringify([input.column, input.value])).digest('hex'), timeZone: 'SYSTEM', warnings: [], ...patch });
+  const input: LegacyPreviewInput = { connectionId: 'c', database: '库', table: 'subject', taskId: randomUUID(), metadataKey: '原完整目录', filters: [], sort: [{ column: 'id', direction: 'ASC' }], column: 'note', value: '合成私密赋值9007199254740993' };
+  const output = (patch: Partial<LegacyPreviewOutput> = {}): LegacyPreviewOutput => ({ previewToken: randomUUID(), target: { connectionId: 'c', database: input.database, table: input.table }, column: input.column, rows: 61, shownRows: 10, sql: 'UPDATE `库`.`subject` SET `note` = ? WHERE 原唯一键及完整旧值;', sampleOmitted: true, expiresAt: new Date(now + 600000).toISOString(), definitionDigest: 'a'.repeat(64), assignmentDigest: createHash('sha256').update(JSON.stringify([input.column, input.value])).digest('hex'), timeZone: 'SYSTEM', warnings: [], ...patch });
   const run = vi.fn(async (_command: string, _input: unknown, _revision: number): Promise<unknown> => output()), release = vi.fn(async (_input: unknown): Promise<unknown> => undefined), stop = vi.fn(async (_taskId: string): Promise<unknown> => undefined);
   const owners = new TableFilteredUpdateOwners({ assert: value => cap.assertCapturedOwner(value), same: (left, right) => cap.sharesDocumentOwner(left, right), revision: () => revision, closing: () => closing, available, run, release, stop }, () => now);
   const apply = (preview: TableFilteredUpdatePreviewOutput): TableFilteredUpdateApplyInput => ({ connectionId: input.connectionId, taskId: randomUUID(), previewToken: preview.previewToken, confirmation: tableFilteredUpdateConfirmation(preview), acknowledged: true });
@@ -42,7 +44,7 @@ describe('全部筛选行填充Main一次性能力', () => {
     const wait = deferred<unknown>(); f.run.mockReturnValueOnce(wait.promise); const input = f.apply(preview), pending = f.owners.apply(input, f.capture());
     await expect(f.owners.apply({ ...input, taskId: randomUUID() }, f.capture())).rejects.toThrow();
     expect(f.run).toHaveBeenLastCalledWith('table.filteredUpdate.apply', input, 7);
-    wait.resolve({ target: preview.target, column: preview.column, rows: 61, outcome: 'committed', commitAcknowledged: true }); await expect(pending).resolves.toMatchObject({ commitAcknowledged: true });
+    wait.resolve({ target: preview.target, column: (preview as LegacyPreviewOutput).column, rows: 61, outcome: 'committed', commitAcknowledged: true }); await expect(pending).resolves.toMatchObject({ commitAcknowledged: true });
     expect(f.release).toHaveBeenCalledWith({ connectionId: 'c', previewToken: preview.previewToken });
   });
   it.each(['revision', 'disconnect', 'expiry', 'navigation', 'closing'] as const)('%s撤销原能力，恢复原值不能复活', async reason => {
@@ -75,13 +77,13 @@ describe('全部筛选行填充Main一次性能力', () => {
   });
   it('真实提交优先于晚导航/清理失败，drain仍保留原清理失败', async () => {
     const f = fixture(), preview = await f.owners.preview(f.input, f.owner), wait = deferred<unknown>(); f.run.mockReturnValueOnce(wait.promise); f.release.mockRejectedValueOnce(Error('原磁盘清理失败')); const pending = f.owners.apply(f.apply(preview), f.owner); f.navigate();
-    wait.resolve({ target: preview.target, column: preview.column, rows: 61, outcome: 'committed', commitAcknowledged: true }); await expect(pending).resolves.toMatchObject({ commitAcknowledged: true }); await expect(f.owners.drain()).rejects.toThrow('原磁盘清理失败');
+    wait.resolve({ target: preview.target, column: (preview as LegacyPreviewOutput).column, rows: 61, outcome: 'committed', commitAcknowledged: true }); await expect(pending).resolves.toMatchObject({ commitAcknowledged: true }); await expect(f.owners.drain()).rejects.toThrow('原磁盘清理失败');
   });
   it('临时配置准入锁及原进度不取消现有写入；新请求仍拒绝且原token不被消费', async () => {
     const f = fixture(), preview = await f.owners.preview(f.input, f.owner), wait = deferred<unknown>(); f.run.mockReturnValueOnce(wait.promise);
     const pending = f.owners.apply(f.apply(preview), f.owner); f.lock(); f.owners.observe(); f.owners.observe(); expect(f.stop).not.toHaveBeenCalled();
     await expect(f.owners.preview({ ...f.input, taskId: randomUUID() }, f.owner)).rejects.toThrow('配置正在保存'); expect(f.run).toHaveBeenCalledTimes(2);
-    f.unlock(); wait.resolve({ target: preview.target, column: preview.column, rows: 61, outcome: 'committed', commitAcknowledged: true }); await expect(pending).resolves.toMatchObject({ commitAcknowledged: true }); expect(f.stop).not.toHaveBeenCalled();
+    f.unlock(); wait.resolve({ target: preview.target, column: (preview as LegacyPreviewOutput).column, rows: 61, outcome: 'committed', commitAcknowledged: true }); await expect(pending).resolves.toMatchObject({ commitAcknowledged: true }); expect(f.stop).not.toHaveBeenCalled();
     const next = await f.owners.preview({ ...f.input, taskId: randomUUID() }, f.owner); f.lock(); await expect(f.owners.apply(f.apply(next), f.owner)).rejects.toThrow('配置正在保存'); f.unlock(); f.owners.assertPublication(next, f.owner);
   });
   it('ACK单向累积与脱敏任务概要不泄露赋值、SQL、路径或驱动回显', () => {
@@ -105,5 +107,67 @@ describe('实际Main IPC及任务注册', () => {
     const main = mainColumnsHarness(), f = fixture(), resolve = vi.fn(() => { throw Error('不应解密'); }); main.context.store = { saveTask: vi.fn(() => { throw Error('本地概要失败'); }), connectionRevision: () => 7, resolveConnection: resolve };
     await expect(main.run('table.filteredUpdate.preview', f.input)).rejects.toThrow('本地概要失败'); expect(resolve).not.toHaveBeenCalled(); expect(main.request).not.toHaveBeenCalled();
     const child = main.event(); child.senderFrame = { ...child.senderFrame }; expect((await main.invoke('table.filteredUpdate.preview', f.input, child)).ok).toBe(false); expect((await main.invoke('table.filteredUpdate.preview', { ...f.input, sql: '未授权' })).ok).toBe(false); expect(resolve).not.toHaveBeenCalled(); expect(main.request).not.toHaveBeenCalled();
+  });
+});
+
+/** 沿同一个Main能力门核整组赋值，不以首字段回执代替多字段事实。 */
+function multiFixture() {
+  const f = fixture(), single = f.input;
+  if (!('column' in single)) throw Error('旧夹具须保持单字段');
+  const { column: _column, value: _value, ...scope } = single;
+  const assignments = [{ column: 'note', value: '多字段精确原值9007199254740993' }, { column: 'amount', value: '1234567890.123456' }, { column: 'payload', value: { type: 'binary' as const, base64: 'AP8=' } }];
+  const input = { ...scope, assignments };
+  const output = (): TableFilteredUpdatePreviewOutput => {
+    const original = f.output(); if (!('column' in original)) throw Error('旧夹具须保持单字段回执');
+    const { column: _column, ...rest } = original;
+    return { ...rest, columns: assignments.map(value => value.column), assignmentDigest: createHash('sha256').update(JSON.stringify(assignments.map(value => [value.column, value.value]))).digest('hex') };
+  };
+  f.run.mockImplementation(async () => output());
+  return { ...f, input, output };
+}
+
+describe('Main多字段填充绑定完整有序列集合', () => {
+  it('实际生产Main分派一次传整组，持久概要不包含任一赋值或解密口令', async () => {
+    const main = mainColumnsHarness(), f = multiFixture(), expected = { ...f.output(), expiresAt: new Date(Date.now() + 600000).toISOString() }, secret = { id: 'c', password: '多字段仅RAM口令' }, saved = vi.fn();
+    main.context.store = { saveTask: saved, connectionRevision: () => 7, resolveConnection: () => secret };
+    main.request.mockImplementation(async command => command === 'table.filteredUpdate.preview' ? expected : undefined);
+    expect(await main.run('table.filteredUpdate.preview', f.input)).toEqual(expected);
+    expect(main.request).toHaveBeenCalledExactlyOnceWith('table.filteredUpdate.preview', { ...f.input, profile: secret, connectionRevision: 7 });
+    const persisted = JSON.stringify(saved.mock.calls);
+    expect(persisted).not.toContain(secret.password); expect(persisted).not.toContain('多字段精确原值9007199254740993'); expect(persisted).not.toContain('1234567890.123456'); expect(persisted).not.toContain('AP8=');
+    await main.run('table.filteredUpdate.release', { connectionId: f.input.connectionId, previewToken: expected.previewToken });
+  });
+  it('预览和提交一次传整组，不丢后续值，不重复提交或泄漏持久任务', async () => {
+    const f = multiFixture(), preview = await f.owners.preview(f.input, f.owner);
+    expect(f.run).toHaveBeenCalledExactlyOnceWith('table.filteredUpdate.preview', f.input, 7);
+    expect(preview).toHaveProperty('columns', ['note', 'amount', 'payload']); expect(preview).not.toHaveProperty('column');
+    f.run.mockResolvedValueOnce({ target: preview.target, columns: ['note', 'amount', 'payload'], rows: preview.rows, outcome: 'committed', commitAcknowledged: true });
+    const applied = f.apply(preview); expect(await f.owners.apply(applied, f.owner)).toMatchObject({ columns: ['note', 'amount', 'payload'], commitAcknowledged: true });
+    await expect(f.owners.apply({ ...applied, taskId: randomUUID() }, f.owner)).rejects.toThrow();
+    expect(f.run).toHaveBeenCalledTimes(2);
+  });
+  it.each(['首字段', '子集', '调序', '后字段值摘要'])('错误%s预览释放本例token且不发布能力', async kind => {
+    const f = multiFixture(), expected = f.output();
+    let value: unknown = expected;
+    if (kind === '首字段') { const { columns: _columns, ...rest } = expected as Extract<TableFilteredUpdatePreviewOutput, { columns: string[] }>; value = { ...rest, column: 'note' }; }
+    if (kind === '子集') value = { ...expected, columns: ['note', 'amount'] };
+    if (kind === '调序') value = { ...expected, columns: ['amount', 'note', 'payload'] };
+    if (kind === '后字段值摘要') value = { ...expected, assignmentDigest: createHash('sha256').update(JSON.stringify(f.input.assignments.map((item, index) => [item.column, index === 2 ? null : item.value]))).digest('hex') };
+    f.run.mockResolvedValueOnce(value);
+    await expect(f.owners.preview(f.input, f.owner)).rejects.toThrow();
+    expect(f.release).toHaveBeenCalledExactlyOnceWith({ connectionId: f.input.connectionId, previewToken: expected.previewToken });
+    expect(() => f.owners.assertPublication(expected, f.owner)).toThrow();
+  });
+  it.each([[['note']], [['amount', 'note', 'payload']]])('提交ACK字段%s不能冒充原整组提交', async columns => {
+    const f = multiFixture(), preview = await f.owners.preview(f.input, f.owner);
+    f.run.mockResolvedValueOnce({ target: preview.target, columns, rows: preview.rows, outcome: 'committed', commitAcknowledged: true });
+    await expect(f.owners.apply(f.apply(preview), f.owner)).rejects.toThrow('未知');
+    expect(f.run).toHaveBeenCalledTimes(2); expect(f.release).toHaveBeenCalledWith({ connectionId: f.input.connectionId, previewToken: preview.previewToken });
+  });
+  it('只确认第一字段不消费原整组预览', async () => {
+    const f = multiFixture(), preview = await f.owners.preview(f.input, f.owner), request = f.apply(preview);
+    await expect(f.owners.apply({ ...request, confirmation: `${preview.target.database}.${preview.target.table} / note / ${preview.rows}` }, f.owner)).rejects.toThrow();
+    f.owners.assertPublication(preview, f.owner); expect(f.run).toHaveBeenCalledOnce();
+    await f.owners.release({ connectionId: f.input.connectionId, previewToken: preview.previewToken }, f.owner);
   });
 });

@@ -1,12 +1,13 @@
 import type { CellValue, ColumnInfo, FilterGroup, FilterMode, FilterRule, SortRule, TableInfo } from '../shared/contracts';
 import { copyFilterRules, validateFilterGroup } from '../shared/filtering';
 import { tableCopyMetadataKey } from '../shared/tableCopySource';
-import { tableFilteredUpdateColumns as sharedColumns, tableFilteredUpdatePreviewInputSchema, tableFilteredUpdatePreviewOutputSchema, tableFilteredUpdateApplyOutputSchema, tableFilteredUpdateProgressSchema, type TableFilteredUpdatePreviewInput, type TableFilteredUpdatePreviewOutput, type TableFilteredUpdateApplyOutput, type TableFilteredUpdateProgress } from '../shared/tableFilteredUpdate';
+import { tableFilteredUpdateColumns as sharedColumns, tableFilteredUpdateAssignments, tableFilteredUpdateOutputColumns, tableFilteredUpdateLimits, tableFilteredUpdatePreviewInputSchema, tableFilteredUpdatePreviewOutputSchema, tableFilteredUpdateApplyOutputSchema, tableFilteredUpdateProgressSchema, type TableFilteredUpdatePreviewInput, type TableFilteredUpdatePreviewOutput, type TableFilteredUpdateApplyOutput, type TableFilteredUpdateProgress } from '../shared/tableFilteredUpdate';
 import { validateTableSort } from './tableSort';
 import { parseCell } from './lib';
-import { recordInputLimits, type RecordInput } from './recordViews';
+import type { RecordInput } from './recordViews';
 import { tableFilteredUpdateZh as text } from './locales/tableFilteredUpdate.zh-CN';
 
+export interface TableFilteredUpdateDraft { column: string; input: RecordInput; }
 export interface TableFilteredUpdateScope { filters: readonly FilterRule[]; filterMode: FilterMode; filterGroup?: FilterGroup; sort: readonly SortRule[]; }
 export interface TableFilteredUpdateTarget { connectionId: string; database: string; table: string; }
 /** 复用共享普通字段资格；对象和可靠定位键先核，真实可写性仍由服务器重新核验。 */
@@ -17,7 +18,7 @@ export function tableFilteredUpdateColumns(info: TableInfo): ColumnInfo[] {
 /** 不把BIGINT/DECIMAL转成number；JSON保留完整词法原文，二进制沿原完整Hex校验。 */
 export function tableFilteredUpdateValue(info: TableInfo, name: string, input: RecordInput): CellValue {
   const column = tableFilteredUpdateColumns(info).find(column => column.name === name);
-  if (!column || !['text','json','binary','null'].includes(input.mode) || typeof input.text !== 'string' || input.text.length > recordInputLimits.field || input.mode === 'null' && !column.nullable || /^(?:TINYBLOB|BLOB|MEDIUMBLOB|LONGBLOB|BINARY|VARBINARY|BIT)\b/i.test(column.type) && !['binary','null'].includes(input.mode)) throw Error(text.invalid);
+  if (!column || !['text','json','binary','null'].includes(input.mode) || typeof input.text !== 'string' || input.text.length > tableFilteredUpdateLimits.fieldBytes || input.mode === 'null' && !column.nullable || /^(?:TINYBLOB|BLOB|MEDIUMBLOB|LONGBLOB|BINARY|VARBINARY|BIT)\b/i.test(column.type) && !['binary','null'].includes(input.mode)) throw Error(text.invalid);
   return parseCell(input.text, input.mode as 'text'|'json'|'binary'|'null');
 }
 /** 条件只来自已应用范围，原页数据、勾选和未提交输入均不进入服务器请求。 */
@@ -36,22 +37,47 @@ export class TableFilteredUpdateIntent {
   invalidate():void {if(this.dead)return;this.dead=true;queueMicrotask(()=>{for(const listener of this.listeners)listener();});}
   subscribe(listener:()=>void):()=>void {this.listeners.add(listener);return()=>{this.listeners.delete(listener);};}
   /** 发送前同步复核来源，再返回完整独立typed值与原条件，不携带页码/OFFSET。 */
-  input(column:string,input:RecordInput,taskId:string): TableFilteredUpdatePreviewInput {
+  input(column:string,input:RecordInput,taskId:string): Extract<TableFilteredUpdatePreviewInput,{column:string}> {
+    const result=this.inputs([{column,input}],taskId);
+    if('assignments' in result)throw Error(text.invalid);
+    return result;
+  }
+  /** 先解析整组再发出一次请求；任意后续字段无效时不产生部分预览。 */
+  inputs(drafts:readonly TableFilteredUpdateDraft[],taskId:string): TableFilteredUpdatePreviewInput {
     if(!this.current())throw Error(text.stale);
-    return tableFilteredUpdatePreviewInputSchema.parse({...this.target,taskId,metadataKey:this.metadataKey,filters:structuredClone(this.scope.filters) as FilterRule[],filterMode:this.scope.filterMode,...(this.scope.filterGroup?{filterGroup:structuredClone(this.scope.filterGroup)}:{}),sort:structuredClone(this.scope.sort) as SortRule[],column,value:tableFilteredUpdateValue(this.source,column,input)});
+    if(!drafts.length||drafts.length>tableFilteredUpdateLimits.columns||new Set(drafts.map(item=>item.column)).size!==drafts.length)throw Error(text.invalid);
+    const assignments=drafts.map(item=>({column:item.column,value:tableFilteredUpdateValue(this.source,item.column,item.input)}));
+    const assignment=assignments.length===1?assignments[0]:{assignments};
+    return tableFilteredUpdatePreviewInputSchema.parse({...this.target,taskId,metadataKey:this.metadataKey,filters:structuredClone(this.scope.filters) as FilterRule[],filterMode:this.scope.filterMode,...(this.scope.filterGroup?{filterGroup:structuredClone(this.scope.filterGroup)}:{}),sort:structuredClone(this.scope.sort) as SortRule[],...assignment});
   }
 }
-/** 预览回证准确目标和字段；样本只能是原准确总数中的有限完整语句。 */
-export function checkTableFilteredUpdatePreview(value:unknown,input:TableFilteredUpdatePreviewInput):TableFilteredUpdatePreviewOutput {
+/** 摘要完全保留有序列和值的原类型；单字段沿用历史摘要编码。 */
+export async function tableFilteredUpdateInputDigest(input:TableFilteredUpdatePreviewInput):Promise<string> {
+  const assignments=tableFilteredUpdateAssignments(input),payload='assignments' in input?assignments.map(item=>[item.column,item.value]):[assignments[0].column,assignments[0].value];
+  const hash=await globalThis.crypto.subtle.digest('SHA-256',new TextEncoder().encode(JSON.stringify(payload)));
+  return Array.from(new Uint8Array(hash),value=>value.toString(16).padStart(2,'0')).join('');
+}
+/** 列集合逐项有序核对，同时拒绝旧单列与新整组回执混用。 */
+function sameColumns(output:TableFilteredUpdatePreviewOutput|TableFilteredUpdateApplyOutput,expected:TableFilteredUpdatePreviewInput|TableFilteredUpdatePreviewOutput):boolean {
+  const names=tableFilteredUpdateOutputColumns(output),wanted='target' in expected?tableFilteredUpdateOutputColumns(expected):tableFilteredUpdateAssignments(expected).map(item=>item.column);
+  return ('columns' in output)===('target' in expected?'columns' in expected:'assignments' in expected)&&names.length===wanted.length&&names.every((name,index)=>name===wanted[index]);
+}
+/** 预览回证准确目标、完整有序字段与本地摘要；样本只能是原准确总数中的有限完整语句。 */
+export function checkTableFilteredUpdatePreview(value:unknown,input:TableFilteredUpdatePreviewInput,assignmentDigest?:string):TableFilteredUpdatePreviewOutput {
   const result=tableFilteredUpdatePreviewOutputSchema.parse(value);
-  if(result.target.connectionId!==input.connectionId||result.target.database!==input.database||result.target.table!==input.table||result.column!==input.column||result.shownRows>Math.min(result.rows,10)||result.rows===0&&(result.shownRows!==0||!!result.sql)||!result.sampleOmitted&&result.shownRows<result.rows)throw Error(text.invalid);
+  if(result.target.connectionId!==input.connectionId||result.target.database!==input.database||result.target.table!==input.table||!sameColumns(result,input)||assignmentDigest!==undefined&&result.assignmentDigest!==assignmentDigest||'assignments' in input&&assignmentDigest===undefined||result.shownRows>Math.min(result.rows,10)||result.rows===0&&(result.shownRows!==0||!!result.sql)||!result.sampleOmitted&&result.shownRows<result.rows)throw Error(text.invalid);
   return result;
 }
-/** 提交成功只接纳原令牌的准确目标、字段与全量行数。 */
+/** 提交成功只接纳原操作令牌绑定的准确目标、完整有序字段与全量行数。 */
 export function checkTableFilteredUpdateApplied(value:unknown,preview:TableFilteredUpdatePreviewOutput):TableFilteredUpdateApplyOutput {
   const output=tableFilteredUpdateApplyOutputSchema.parse(value);
-  if(output.rows!==preview.rows||output.column!==preview.column||output.target.connectionId!==preview.target.connectionId||output.target.database!==preview.target.database||output.target.table!==preview.target.table)throw Error(text.invalid);
+  if(output.rows!==preview.rows||!sameColumns(output,preview)||output.target.connectionId!==preview.target.connectionId||output.target.database!==preview.target.database||output.target.table!==preview.target.table)throw Error(text.invalid);
   return output;
+}
+/** 只有原任务准确全量COMMIT ACK才可补足RPC收尾失败，保留整组字段形式。 */
+export function tableFilteredUpdateCommitted(preview:TableFilteredUpdatePreviewOutput):TableFilteredUpdateApplyOutput {
+  const columns=tableFilteredUpdateOutputColumns(preview),fields='columns' in preview?{columns}:{column:columns[0]};
+  return {target:preview.target,...fields,rows:preview.rows,outcome:'committed',commitAcknowledged:true};
 }
 /** 原任务进度只单调保留发送/ACK事实；旧事件不能撤回COMMIT或提前解锁取消。 */
 export function mergeTableFilteredUpdateProgress(before: TableFilteredUpdateProgress | undefined, value: unknown, expectedRows?: number): TableFilteredUpdateProgress | undefined {

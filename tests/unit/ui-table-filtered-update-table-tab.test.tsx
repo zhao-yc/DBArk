@@ -1,8 +1,8 @@
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { tableFilteredUpdateConfirmation } from '../../src/shared/tableFilteredUpdate';
 import { recordViewZh as recordText } from '../../src/renderer/locales/recordViews.zh-CN';
 import React, { act } from 'react';
-import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { memoryDocument, MemoryEvent, MemoryNode } from '../fixtures/memory-dom';
 import type { DraftRow } from '../../src/renderer/dataChanges';
 import type { TableInfo } from '../../src/shared/contracts';
@@ -36,7 +36,9 @@ beforeAll(async () => {
   };
   ({ createRoot } = await import('react-dom/client')); ({ TableTab } = await import('../../src/renderer/components/TableTab')); ({ TableQueryTemplateDialog: Dialog } = await import('../../src/renderer/components/TableQueryTemplateDialog')); ({ useWorkspace: store, flushSettings: flush } = await import('../../src/renderer/store'));
 });
-afterEach(async () => { if (root) await act(async () => root!.unmount()); root = undefined; await flush(); doc.body.textContent = ''; delete (window as any).dbark; });
+/** 用独立Node哈希实现RAM WebCrypto端口，保留异步而不依赖线程调度。 */
+beforeEach(()=>{vi.spyOn(globalThis.crypto.subtle,'digest').mockImplementation(async(_algorithm,data)=>{const bytes=ArrayBuffer.isView(data)?new Uint8Array(data.buffer,data.byteOffset,data.byteLength):new Uint8Array(data);return Uint8Array.from(createHash('sha256').update(bytes).digest()).buffer;});});
+afterEach(async () => { if (root) await act(async () => root!.unmount()); root = undefined; await flush(); doc.body.textContent = ''; delete (window as any).dbark; vi.restoreAllMocks(); });
 afterAll(() => { for (const [name, descriptor] of globals) if (descriptor) Object.defineProperty(globalThis, name, descriptor); else Reflect.deleteProperty(globalThis, name); });
 
 /** 初始化与服务器任务均为RAM端口；正式入口、scope与刷新逻辑使用真实TableTab。 */
@@ -48,8 +50,8 @@ async function mount(options: { wide?: number; view?: boolean; weird?: boolean }
   const source = Object.fromEntries(info.columns.map(column => [column.name, column.name === 'id' ? '9007199254740993' : column.name === 'amount' ? '9007199254740993.123456789012' : column.name === 'label' ? 'Alpha' : '原值']));
   (window as any).dbark = { onTask: () => () => {}, invoke: async (command: string, input: any) => {
     commands.push(command); requests.push({command,input:structuredClone(input)});
-    if(command==='table.filteredUpdate.preview'){lastPreview={previewToken:randomUUID(),target:{connectionId:input.connectionId,database:input.database,table:input.table},column:input.column,rows:777,shownRows:1,sql:'UPDATE sampled_old_row;',sampleOmitted:true,expiresAt:new Date(Date.now()+60000).toISOString(),definitionDigest:'a'.repeat(64),assignmentDigest:'b'.repeat(64),timeZone:'SYSTEM',warnings:[]};return pendingPreview?pendingPreview.promise:lastPreview;}
-    if(command==='table.filteredUpdate.apply')return {target:lastPreview.target,column:lastPreview.column,rows:lastPreview.rows,outcome:'committed',commitAcknowledged:true};
+    if(command==='table.filteredUpdate.preview'){const fields=input.assignments?{columns:input.assignments.map((item:any)=>item.column)}:{column:input.column},payload=input.assignments?input.assignments.map((item:any)=>[item.column,item.value]):[input.column,input.value];lastPreview={previewToken:randomUUID(),target:{connectionId:input.connectionId,database:input.database,table:input.table},...fields,rows:777,shownRows:1,sql:'UPDATE sampled_old_row;',sampleOmitted:true,expiresAt:new Date(Date.now()+60000).toISOString(),definitionDigest:'a'.repeat(64),assignmentDigest:createHash('sha256').update(JSON.stringify(payload)).digest('hex'),timeZone:'SYSTEM',warnings:[]};return pendingPreview?pendingPreview.promise:lastPreview;}
+    if(command==='table.filteredUpdate.apply')return {target:lastPreview.target,...(lastPreview.columns?{columns:lastPreview.columns}:{column:lastPreview.column}),rows:lastPreview.rows,outcome:'committed',commitAcknowledged:true};
     if(command==='table.filteredUpdate.release')return;
     if (['settings.save', 'connections.open', 'query.cancel', 'table.copySourceRelease'].includes(command)) return;
     if (command === 'table.preferences.get') return null; if (command === 'metadata.table') return info;
@@ -79,6 +81,12 @@ async function applyScope() { await click(zh.table.text006); await select(preset
 async function field(value:string){const label='note · '+recordText.value,associated=doc.querySelectorAll('label').find(node=>node.textContent===label)?.getAttribute('for');const node=doc.querySelectorAll('textarea').find(node=>node.getAttribute('aria-label')===label||!!associated&&node.getAttribute('id')===associated)!;expect(node).toBeDefined();await act(async()=>{node.value=value;node.dispatchEvent(new MemoryEvent('input'));});}
 async function confirmUpdate(){const node=doc.querySelectorAll('textarea').find(node=>node.getAttribute('aria-label')===text.confirmation)!;await act(async()=>{node.value=tableFilteredUpdateConfirmation(lastPreview);node.dispatchEvent(new MemoryEvent('input'));});const check=doc.querySelectorAll('input').find(node=>node.getAttribute('aria-label')===text.acknowledge)!;await act(async()=>{check.checked=true;check.dispatchEvent(new MemoryEvent('click'));});}
 describe('跨页服务器填充实际TableTab正式入口与刷新RAM',()=>{
+  it('真实父入口多字段仍一次提交完整范围，原第二页与勾选保留至明确关闭刷新',async()=>{
+    await mount();await applyScope();await click(zh.common.pageNext);await act(async()=>grid.props.onSelectedRowsChange(new Set([grid.rows[0].id])));const selected=[...grid.props.selectedRows],original=structuredClone(grid.rows),before=pages.length;
+    await click(text.entry);await select(text.column,'note');await field('整组统一值');await click(text.add);
+    const valueLabel='label · '+recordText.value,associated=doc.querySelectorAll('label').find(node=>node.textContent===valueLabel)?.getAttribute('for'),editor=doc.querySelectorAll('textarea').find(node=>node.getAttribute('id')===associated)!;expect(editor).toBeDefined();await act(async()=>{editor.value='整组标签';editor.dispatchEvent(new MemoryEvent('input'));});await click(text.preview);
+    const captured=requests.filter(item=>item.command==='table.filteredUpdate.preview');expect(captured).toHaveLength(1);expect(captured[0].input).toMatchObject({...readScope(),assignments:[{column:'note',value:'整组统一值'},{column:'label',value:'整组标签'}]});expect(grid.rows).toEqual(original);expect([...grid.props.selectedRows]).toEqual(selected);expect(pages).toHaveLength(before);await confirmUpdate();await click(text.apply);expect(requests.filter(item=>item.command==='table.filteredUpdate.apply')).toHaveLength(1);expect(pages).toHaveLength(before);await click(text.close);expect(pages).toHaveLength(before+1);expect(pages.at(-1)).toMatchObject({...readScope(),page:2});
+  });
   it('第二页完整OR嵌套/停用/多排序进入preview；只确认777全量行，关闭收尾后刷新原第二页',async()=>{
     await mount();await applyScope();await click(zh.common.pageNext);const before=pages.length,original=structuredClone(grid.rows);await click(text.entry);expect(requests.filter(item=>item.command==='table.filteredUpdate.preview')).toHaveLength(0);await select(text.column,'note');await field('统一\n精确值');await click(text.preview);
     const captured=requests.find(item=>item.command==='table.filteredUpdate.preview')!.input;expect(captured).toMatchObject({...readScope(),column:'note',value:'统一\n精确值'});expect(Object.hasOwn(captured,'page')).toBe(false);expect(Object.hasOwn(captured,'pageSize')).toBe(false);expect(grid.rows).toEqual(original);expect(pages).toHaveLength(before);await confirmUpdate();await click(text.apply);expect(requests.filter(item=>item.command==='table.filteredUpdate.apply')).toHaveLength(1);expect(pages).toHaveLength(before);await click(text.close);expect(pages).toHaveLength(before+1);expect(pages.at(-1)).toMatchObject({...readScope(),page:2});

@@ -1,11 +1,11 @@
 import { EventEmitter } from 'node:events';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { lstat, writeFile } from 'node:fs/promises';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { CellValue, ColumnInfo, TableInfo } from '../../src/shared/contracts';
 import { tableCopyMetadataKey } from '../../src/shared/tableCopySource';
-import { tableFilteredUpdateConfirmation, tableFilteredUpdateLimits, type TableFilteredUpdateApplyInput, type TableFilteredUpdatePreviewInput, type TableFilteredUpdateProgress, type TableFilteredUpdateTarget } from '../../src/shared/tableFilteredUpdate';
-import { TableFilteredUpdateTasks, planTableFilteredUpdate, tableFilteredUpdateStatement, type TableFilteredUpdateHost } from '../../src/engine/tableFilteredUpdate';
+import { tableFilteredUpdateConfirmation, tableFilteredUpdateLimits, type TableFilteredUpdateApplyInput, type TableFilteredUpdateAssignment, type TableFilteredUpdatePreviewInput, type TableFilteredUpdatePreviewOutput, type TableFilteredUpdateProgress, type TableFilteredUpdateTarget } from '../../src/shared/tableFilteredUpdate';
+import { TableFilteredUpdateTasks, planTableFilteredUpdate, tableFilteredUpdateAssignmentsStatement, tableFilteredUpdateStatement, type TableFilteredUpdateHost } from '../../src/engine/tableFilteredUpdate';
 import { TableFilteredUpdateSpool } from '../../src/engine/tableFilteredUpdateSpool';
 import { buildPageSql, inlineParameters } from '../../src/engine/sql';
 import type { StructureTaskContext } from '../../src/engine/structureDefinition';
@@ -19,14 +19,16 @@ function table(): TableInfo { return { database: 'db', name: 'subject', objectKi
 /** 只构造本例可信目录与对应原DDL，保持其余精度/时间/生成列夹具不变。 */
 function addIndex(info: TableInfo, columns: string[], definition: string, unique = false, name = 'secondary'): void { info.indexes.push({ name, unique, columns }); info.ddl = info.ddl.replace(', PRIMARY KEY (`id`)', ', ' + definition + ', PRIMARY KEY (`id`)'); }
 const cells = (index: number): CellValue[] => [index === 0 ? '18446744073709551615' : String(index), '9007199254740993.123456789012', index ? ' O\'Reilly\\\0🚢 ' : null, { type: 'binary', base64: index ? '' : 'AP8=' }, index ? '2026-10-24 12:34:56.123456' : null, '9007199254740994.123456789012'];
-function request(source: TableInfo, patch: Partial<TableFilteredUpdatePreviewInput> = {}): TableFilteredUpdatePreviewInput { return { ...target, taskId: randomUUID(), metadataKey: tableCopyMetadataKey(source), filters: [], sort: [], column: 'note', value: '填充\0原文 🚢 ', ...patch }; }
-function apply(preview: { previewToken: string; target: TableFilteredUpdateTarget; column: string; rows: number }, patch: Partial<TableFilteredUpdateApplyInput> = {}): TableFilteredUpdateApplyInput { return { connectionId: target.connectionId, taskId: randomUUID(), previewToken: preview.previewToken, confirmation: tableFilteredUpdateConfirmation(preview), acknowledged: true, ...patch }; }
+function request(source: TableInfo, patch: Partial<Extract<TableFilteredUpdatePreviewInput, { column: string }>> = {}): Extract<TableFilteredUpdatePreviewInput, { column: string }> { return { ...target, taskId: randomUUID(), metadataKey: tableCopyMetadataKey(source), filters: [], sort: [], column: 'note', value: '填充\0原文 🚢 ', ...patch }; }
+/** 新输入保持纯assignments形状，不能夹带旧单字段属性。 */
+function multiRequest(source: TableInfo, assignments: TableFilteredUpdateAssignment[]): Extract<TableFilteredUpdatePreviewInput, { assignments: TableFilteredUpdateAssignment[] }> { return { ...target, taskId: randomUUID(), metadataKey: tableCopyMetadataKey(source), filters: [], sort: [], assignments }; }
+function apply(preview: Pick<TableFilteredUpdatePreviewOutput, 'previewToken' | 'target' | 'rows'> & ({ column: string } | { columns: string[] }), patch: Partial<TableFilteredUpdateApplyInput> = {}): TableFilteredUpdateApplyInput { return { connectionId: target.connectionId, taskId: randomUUID(), previewToken: preview.previewToken, confirmation: tableFilteredUpdateConfirmation(preview), acknowledged: true, ...patch }; }
 
 /** 实际磁盘spool、SQL编译和定义解析均参与；只替换物理数据库传输。 */
 function fixture() {
   const f = { source: table(), now: 1000, count: 1105, cancelled: false, triggers: false, grants: ['GRANT ALL PRIVILEGES ON *.* TO `offline`@`%`'], zone: 'SYSTEM', systemZone: 'UTC', offset: '0',
     updated: 0, failUpdate: 0, affectedUpdate: 0, warningUpdate: 0, breakUpdate: 0, loseTransaction: 0, failCommit: false, failRollback: false, lateCloseFailure: false, activeCommands: 0, activeRuns: 0,
-    commands: [] as { sql: string; values?: unknown[] }[], runs: [] as { progress: TableFilteredUpdateProgress; execution: boolean }[], paths: [] as string[], holdEnd: '', heldEnds: [] as (() => void)[],
+    commands: [] as { sql: string; values?: unknown[] }[], runs: [] as { progress: TableFilteredUpdateProgress; execution: boolean }[], paths: [] as string[], holdEnd: '', heldEnds: [] as (() => void)[], concurrentValues: new Map<string, unknown>(),
     afterUpdate: undefined as (() => void) | undefined, beforeClose: undefined as (() => Promise<void>) | undefined,
   };
   const host: TableFilteredUpdateHost = { async stop() { throw Error('RAM原读取不应失去终态'); }, async run<T>(_target: TableFilteredUpdateTarget, _taskId: string, action: (context: StructureTaskContext) => Promise<T>, progress: TableFilteredUpdateProgress, execution: boolean, finalize: (succeeded: boolean) => Promise<void>): Promise<T> {
@@ -54,7 +56,10 @@ function fixture() {
           else if (sql.startsWith('UPDATE ')) { f.updated++; if (f.failUpdate === f.updated) error = Error('本例更新失败'); if (f.breakUpdate === f.updated) managed.broken = true; if (f.loseTransaction === f.updated) inTransaction = false; f.afterUpdate?.(); }
           else throw Error('本例拒绝未声明SQL：' + sql);
           managed.serverStatus = 2 | (inTransaction ? 1 : 0);
-          rows = { affectedRows: sql.startsWith('UPDATE ') ? f.affectedUpdate === f.updated ? 0 : 1 : 0, serverStatus: managed.serverStatus, warningStatus: sql.startsWith('UPDATE ') && f.warningUpdate === f.updated ? 1 : 0 };
+          // RAM服务器只在实际WHERE含对应原列谓词时模拟并发冲突，遗漏某列守卫会使断言失败。
+          const where = sql.indexOf(' WHERE '), setParameters = where < 0 ? 0 : (sql.slice(0, where).match(/\?/g)?.length ?? 0);
+          const concurrentConflict = sql.startsWith('UPDATE ') && [...f.concurrentValues].some(([name, current]) => sql.slice(where).includes('`' + name + '`') && !Object.is(values?.[setParameters + f.source.columns.findIndex(column => column.name === name)], current));
+          rows = { affectedRows: sql.startsWith('UPDATE ') ? f.affectedUpdate === f.updated || concurrentConflict ? 0 : 1 : 0, serverStatus: managed.serverStatus, warningStatus: sql.startsWith('UPDATE ') && f.warningUpdate === f.updated ? 1 : 0 };
         }
         callback(error, rows, []); const end = () => operation.emit('end'); if (sql === f.holdEnd) f.heldEnds.push(end); else queueMicrotask(end);
       }); return operation;
@@ -90,26 +95,73 @@ describe('服务器全部筛选行填充核心', () => {
   });
   it('预览1105条不写DB且仅十条SQL样本；调用者后改不污染，原全部行逐条prepared并一次COMMIT', async () => {
     const { f, tasks } = fixture(), input = request(f.source), preview = await tasks.preview(input, 4);
-    expect(preview).toMatchObject({ target, column: 'note', rows: 1105, shownRows: 10, sampleOmitted: true, timeZone: 'SYSTEM' }); expect(Buffer.byteLength(preview.sql)).toBeLessThanOrEqual(tableFilteredUpdateLimits.previewSqlBytes); expect(f.updated).toBe(0); expect(f.activeCommands).toBe(0);
+    expect(preview).toMatchObject({ target, column: 'note', rows: 1105, shownRows: 10, sampleOmitted: true, timeZone: 'SYSTEM', assignmentDigest: createHash('sha256').update(JSON.stringify([input.column, input.value])).digest('hex') }); expect(Buffer.byteLength(preview.sql)).toBeLessThanOrEqual(tableFilteredUpdateLimits.previewSqlBytes); expect(f.updated).toBe(0); expect(f.activeCommands).toBe(0);
     input.value = '迟到改值'; input.filters.push({ column: 'id', operator: '=', value: '0' });
     expect(await tasks.apply(apply(preview), 4)).toEqual({ target, column: 'note', rows: 1105, outcome: 'committed', commitAcknowledged: true });
     const updates = f.commands.filter(item => item.sql.startsWith('UPDATE ')); expect(updates).toHaveLength(1105); expect(updates[0].values?.[0]).toBe('填充\0原文 🚢 '); expect(updates[0].values?.[1]).toBe('18446744073709551615'); expect(updates[0].values).toContainEqual(Buffer.from([0, 255])); expect(updates[1].values?.at(-1)).toBe('1792845296.123456');
     expect(updates[0].sql).toContain('BINARY CONVERT(`note` USING utf8mb4)'); expect(updates[0].sql).toContain('UNIX_TIMESTAMP(`at`) <=> CAST(? AS DECIMAL(20,6))'); expect(f.commands.filter(item => item.sql === 'COMMIT')).toHaveLength(1); expect(f.runs.at(-1)?.progress).toMatchObject({ rows: 1105, totalRows: 1105, commitAcknowledged: true, transactionProtected: true, outcome: 'committed' });
     await expect(lstat(f.paths[0])).rejects.toMatchObject({ code: 'ENOENT' }); expect(f.activeRuns).toBe(0); await expect(tasks.apply(apply(preview), 4)).rejects.toThrow('预览');
   }, 30000);
-  it.each(['error', 'conflict', 'warning', 'cancel'] as const)('%s中途失败整批ROLLBACK，无中间COMMIT，不混入预览后新行', async kind => {
-    const { f, tasks } = fixture(); f.count = 3; const preview = await tasks.preview(request(f.source), 0); f.count = 999;
+  it('两字段与多字段都只生成一条UPDATE，精确DECIMAL、NULL和BLOB共享完整原行谓词', () => {
+    const source = table(), row = { values: cells(1), timestampEpochs: ['1792845296.123456'] };
+    const assignments: TableFilteredUpdateAssignment[] = [{ column: 'amount', value: '123456789012345678.123456789012' }, { column: 'note', value: null }, { column: 'payload', value: { type: 'binary', base64: 'AP8=' } }];
+    for (const group of [assignments.slice(0, 2), assignments]) {
+      const statement = tableFilteredUpdateAssignmentsStatement(source, group, row);
+      expect(statement.sql.match(/\bUPDATE\b/g)).toHaveLength(1); expect(statement.sql.split(' WHERE ')[0]).toBe('UPDATE `db`.`subject` SET ' + group.map(item => '`' + item.column + '` = ?').join(', '));
+      expect(statement.params).toEqual([...group.map(item => item.value), ...row.values, '1792845296.123456']); expect(statement.sql).toContain('`amount` <=> ?'); expect(statement.sql).toContain('BINARY CONVERT(`note` USING utf8mb4)'); expect(statement.sql).toContain('`payload` <=> ?'); expect(statement.sql).toContain('`computed` <=> ?'); expect(statement.sql).toContain('UNIX_TIMESTAMP(`at`) <=> CAST(? AS DECIMAL(20,6))');
+    }
+    expect(() => tableFilteredUpdateAssignmentsStatement(source, [assignments[0], assignments[0]], row)).toThrow(); expect(() => tableFilteredUpdateAssignmentsStatement(source, [], row)).toThrow();
+  });
+  it('整组有序摘要与回执绑定冻结赋值，后改数组/二进制/输出列不污染全部行且只COMMIT一次', async () => {
+    const { f, tasks } = fixture(); f.count = 2;
+    const assignments: TableFilteredUpdateAssignment[] = [{ column: 'amount', value: '123456789012345678.123456789012' }, { column: 'note', value: null }, { column: 'payload', value: { type: 'binary', base64: 'AP8=' } }];
+    const original = structuredClone(assignments), input = multiRequest(f.source, assignments), preview = await tasks.preview(input, 7), reversed = await tasks.preview(multiRequest(f.source, [...original].reverse()), 7);
+    const digest = (group: TableFilteredUpdateAssignment[]) => createHash('sha256').update(JSON.stringify(group.map(({ column, value }) => [column, value]))).digest('hex');
+    expect(preview).toMatchObject({ columns: ['amount', 'note', 'payload'], rows: 2, shownRows: 2, assignmentDigest: digest(original) }); expect(preview).not.toHaveProperty('column'); expect(preview).not.toHaveProperty('value'); expect(preview.assignmentDigest).not.toBe(reversed.assignmentDigest); expect(reversed.assignmentDigest).toBe(digest([...original].reverse()));
+    expect(preview.sql.match(/UPDATE /g)).toHaveLength(2); expect(preview.sql).toContain("SET `amount` = _utf8mb4 X'"); expect(preview.sql).toContain(", `note` = NULL, `payload` = X'00ff'");
+    const command = apply(preview); input.assignments[0].value = '0'; (input.assignments[2].value as { type: 'binary'; base64: string }).base64 = ''; input.assignments.reverse(); assignments.push({ column: 'at', value: null }); if ('columns' in preview) preview.columns.reverse();
+    const result = await tasks.apply(command, 7); expect(result).toEqual({ target, columns: ['amount', 'note', 'payload'], rows: 2, outcome: 'committed', commitAcknowledged: true });
+    const updates = f.commands.filter(item => item.sql.startsWith('UPDATE ')); expect(updates).toHaveLength(2); for (const update of updates) expect(update.values?.slice(0, 3)).toEqual(['123456789012345678.123456789012', null, Buffer.from([0, 255])]);
+    expect(updates[1].values?.slice(3, -1)).toEqual(cells(1).map(value => value && typeof value === 'object' ? Buffer.from(value.base64, 'base64') : value)); expect(f.commands.filter(item => item.sql === 'COMMIT')).toHaveLength(1); expect(f.commands.filter(item => item.sql === 'ROLLBACK')).toHaveLength(0);
+    await tasks.release({ connectionId: target.connectionId, previewToken: reversed.previewToken }); await expect(lstat(f.paths[0])).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+  it('新单项列表仍返回columns和整组摘要，不能静默降为旧单字段协议', async () => {
+    const { f, tasks } = fixture(); f.count = 1; const input = request(f.source), legacy = await tasks.preview(input, 0), grouped = await tasks.preview(multiRequest(f.source, [{ column: input.column, value: input.value }]), 0);
+    expect(legacy).toHaveProperty('column', 'note'); expect(legacy).not.toHaveProperty('columns'); expect(grouped).toHaveProperty('columns', ['note']); expect(grouped).not.toHaveProperty('column'); expect(grouped.assignmentDigest).not.toBe(legacy.assignmentDigest);
+    expect(await tasks.apply(apply(grouped), 0)).toMatchObject({ columns: ['note'], rows: 1, commitAcknowledged: true }); await tasks.release({ connectionId: target.connectionId, previewToken: legacy.previewToken });
+  });
+  it.each([{ kind: '缺列', columns: ['amount'] }, { kind: '列序', columns: ['note', 'amount'] }])('确认$kind在执行连接前拒绝，不能仅凭首列执行整组', async ({ columns }) => {
+    const { f, tasks } = fixture(); f.count = 1; const preview = await tasks.preview(multiRequest(f.source, [{ column: 'amount', value: '1.000000000000' }, { column: 'note', value: null }]), 0), before = f.runs.length;
+    await expect(tasks.apply(apply(preview, { confirmation: tableFilteredUpdateConfirmation({ target, columns, rows: preview.rows }) }), 0)).rejects.toThrow(); expect(f.runs).toHaveLength(before); expect(f.updated).toBe(0);
+  });
+  it.each([
+    { column: 'amount', value: '1.1234567890123' }, { column: 'amount', value: null }, { column: 'payload', value: { type: 'binary', base64: 'AAECAwQFBgcICQ==' } }, { column: 'id', value: '1' }, { column: 'computed', value: '1' }, { column: 'missing', value: 'x' },
+  ] satisfies TableFilteredUpdateAssignment[])('后字段$column非法时整组在扫描、spool及首条DML前拒绝', async invalid => {
+    const { f, tasks } = fixture(); f.count = 2;
+    await expect(tasks.preview(multiRequest(f.source, [{ column: 'note', value: '合法首字段' }, invalid]), 0)).rejects.toThrow(); expect(hooks.frames).not.toHaveBeenCalled(); expect(f.paths).toEqual([]); expect(f.updated).toBe(0); expect(f.commands.some(item => item.sql.startsWith('UPDATE '))).toBe(false);
+  });
+  it('重复字段在建立预览连接前拒绝，不把后值静默覆盖前值', async () => {
+    const { f, tasks } = fixture(); await expect(tasks.preview(multiRequest(f.source, [{ column: 'note', value: '前值' }, { column: 'note', value: '后值' }]), 0)).rejects.toThrow(); expect(f.runs).toEqual([]); expect(f.paths).toEqual([]); expect(f.updated).toBe(0);
+  });
+  it.each(['amount', 'note', 'payload'] as const)('整组中$0原值并发变化导致一次整批ROLLBACK而非部分字段提交', async name => {
+    const { f, tasks } = fixture(); f.count = 3;
+    const preview = await tasks.preview(multiRequest(f.source, [{ column: 'amount', value: '1.000000000000' }, { column: 'note', value: null }, { column: 'payload', value: { type: 'binary', base64: '' } }]), 0);
+    f.afterUpdate = () => { if (f.updated === 2) f.concurrentValues.set(name, name === 'payload' ? Buffer.from([1, 2]) : name === 'amount' ? '2.000000000000' : '并发新值'); };
+    await expect(tasks.apply(apply(preview), 0)).rejects.toThrow(); expect(f.updated).toBe(2); expect(f.commands.filter(item => item.sql === 'ROLLBACK')).toHaveLength(1); expect(f.commands.some(item => item.sql === 'COMMIT')).toBe(false); expect(f.runs.at(-1)?.progress).toMatchObject({ transactionProtected: true, rollbackAcknowledged: true, outcome: 'rolled-back' }); await expect(lstat(f.paths[0])).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+  it.each(['legacy', 'multi'].flatMap(shape => ['error', 'conflict', 'warning', 'cancel'].map(kind => ({ shape, kind }))))('$shape $kind中途失败整批ROLLBACK，无中间COMMIT，不混入预览后新行', async ({ shape, kind }) => {
+    const { f, tasks } = fixture(); f.count = 3; const preview = await tasks.preview(shape === 'legacy' ? request(f.source) : multiRequest(f.source, [{ column: 'amount', value: '1.000000000000' }, { column: 'note', value: null }]), 0); f.count = 999;
     if (kind === 'error') f.failUpdate = 2; if (kind === 'conflict') f.affectedUpdate = 2; if (kind === 'warning') f.warningUpdate = 2; if (kind === 'cancel') f.afterUpdate = () => { f.cancelled = true; };
     await expect(tasks.apply(apply(preview), 0)).rejects.toThrow(); expect(f.updated).toBe(kind === 'cancel' ? 1 : 2); expect(f.commands.filter(item => item.sql === 'ROLLBACK')).toHaveLength(1); expect(f.commands.some(item => item.sql === 'COMMIT')).toBe(false); expect(f.runs.at(-1)?.progress).toMatchObject({ transactionProtected: true, rollbackAcknowledged: true, outcome: 'rolled-back' }); expect(f.activeCommands).toBe(0);
   });
-  it.each(['commit', 'rollback', 'disconnect', 'transaction'] as const)('%s证据丢失保留unknown，令牌不可重放', async kind => {
-    const { f, tasks } = fixture(); f.count = 3; const preview = await tasks.preview(request(f.source), 0);
+  it.each(['legacy', 'multi'].flatMap(shape => ['commit', 'rollback', 'disconnect', 'transaction'].map(kind => ({ shape, kind }))))('$shape $kind证据丢失保留unknown，令牌不可重放', async ({ shape, kind }) => {
+    const { f, tasks } = fixture(); f.count = 3; const preview = await tasks.preview(shape === 'legacy' ? request(f.source) : multiRequest(f.source, [{ column: 'amount', value: '1.000000000000' }, { column: 'note', value: null }]), 0);
     if (kind === 'commit') f.failCommit = true; if (kind === 'rollback') { f.failUpdate = 2; f.failRollback = true; } if (kind === 'disconnect') f.breakUpdate = 1; if (kind === 'transaction') f.loseTransaction = 1;
     await expect(tasks.apply(apply(preview), 0)).rejects.toThrow('未知'); expect(f.runs.at(-1)?.progress.outcome).toBe('unknown'); if (kind === 'transaction') expect(f.runs.at(-1)?.progress.transactionProtected).toBe(false);
     const count = f.commands.length; await expect(tasks.apply(apply(preview), 0)).rejects.toThrow(); expect(f.commands).toHaveLength(count); if (kind === 'commit') expect(f.commands.some(item => item.sql === 'ROLLBACK')).toBe(false);
   });
-  it('COMMIT回调ACK先记账但真实end未到不能完成，晚关闭失败仍返回真实已提交', async () => {
-    const { f, tasks } = fixture(); f.count = 2; const preview = await tasks.preview(request(f.source), 0); f.holdEnd = 'COMMIT'; f.lateCloseFailure = true;
+  it.each(['legacy', 'multi'] as const)('%s COMMIT回调ACK先记账但真实end未到不能完成，晚关闭失败仍返回真实已提交', async shape => {
+    const { f, tasks } = fixture(); f.count = 2; const preview = await tasks.preview(shape === 'legacy' ? request(f.source) : multiRequest(f.source, [{ column: 'amount', value: '1.000000000000' }, { column: 'note', value: null }]), 0); f.holdEnd = 'COMMIT'; f.lateCloseFailure = true;
     let finished = false; const operation = tasks.apply(apply(preview), 0).then(result => { finished = true; return result; });
     await vi.waitFor(() => expect(f.heldEnds).toHaveLength(1)); expect(finished).toBe(false); expect(f.activeCommands).toBe(1); expect(f.runs.at(-1)?.progress.commitAcknowledged).toBe(true);
     const closing = tasks.close(); f.cancelled = true; expect(finished).toBe(false); f.heldEnds.shift()!(); expect(await operation).toMatchObject({ rows: 2, commitAcknowledged: true }); await closing; expect(f.activeCommands).toBe(0);
@@ -119,8 +171,8 @@ describe('服务器全部筛选行填充核心', () => {
     let finished = false; const preview = tasks.preview(request(f.source), 0).then(value => { finished = true; return value; });
     await vi.waitFor(() => expect(release).toBeTypeOf('function')); expect(finished).toBe(false); expect(f.activeRuns).toBe(1); release(); const value = await preview; await tasks.release({ connectionId: target.connectionId, previewToken: value.previewToken }); await expect(lstat(f.paths[0])).rejects.toMatchObject({ code: 'ENOENT' });
   });
-  it('宿主done必须等待快照清理；COMMIT ACK后的清理失败仍留原件账本供显式恢复', async () => {
-    const { f, tasks } = fixture(); f.count = 1; const preview = await tasks.preview(request(f.source), 0);
+  it.each(['legacy', 'multi'] as const)('%s 宿主done必须等待快照清理；COMMIT ACK后的清理失败仍留原件账本供显式恢复', async shape => {
+    const { f, tasks } = fixture(); f.count = 1; const preview = await tasks.preview(shape === 'legacy' ? request(f.source) : multiRequest(f.source, [{ column: 'amount', value: '1.000000000000' }, { column: 'note', value: null }]), 0);
     const original = TableFilteredUpdateSpool.prototype.dispose; let release!: () => void;
     const dispose = vi.spyOn(TableFilteredUpdateSpool.prototype, 'dispose').mockImplementationOnce(async function (this: TableFilteredUpdateSpool) { await new Promise<void>(resolve => { release = resolve; }); throw Error('本例快照清理失败'); });
     let finished = false; const operation = tasks.apply(apply(preview), 0).then(value => { finished = true; return value; });

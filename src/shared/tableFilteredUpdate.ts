@@ -2,9 +2,11 @@ import { z } from 'zod';
 import type { CellValue, ColumnInfo, TableInfo } from './contracts';
 import { FILTER_LIMITS, filterGroupSchema, filterRuleSchema, sortRulesSchema, validateFilterGroup } from './filtering';
 
-export const tableFilteredUpdateLimits = Object.freeze({ previews: 2, lifetimeMs: 600000, fieldBytes: 8 * 1024 * 1024, rowBytes: 16 * 1024 * 1024, spoolBytes: 10 * 1024 * 1024 * 1024, definitionBytes: 2 * 1024 * 1024, columns: 1024, shownRows: 10, previewSqlBytes: 256 * 1024 });
+// 确认列名经JSON编码每个UTF-16单元最坏占六字节；512KiB覆盖1024×64×6及库表名、标点和行数。
+export const tableFilteredUpdateLimits = Object.freeze({ previews: 2, lifetimeMs: 600000, fieldBytes: 8 * 1024 * 1024, rowBytes: 16 * 1024 * 1024, spoolBytes: 10 * 1024 * 1024 * 1024, definitionBytes: 2 * 1024 * 1024, columns: 1024, shownRows: 10, previewSqlBytes: 256 * 1024, confirmationBytes: 512 * 1024 });
 export const tableFilteredUpdateText = Object.freeze({
   invalid: '全部筛选行填充的目标、条件或值无效', stale: '填充预览已过期、使用或来源变化，请重新预览；不会自动重放',
+  assignmentBudget: '填充值超过单字段8MiB或全部字段合计16MiB限制，未截断数据',
   budget: '完整旧值快照超过字段8MiB、行16MiB或总10GiB限制，或已有两份预览；未截断数据',
   unsupported: '仅支持具有可靠非空唯一键且完整定义可确认的InnoDB基本表',
   column: '只能填充未参与任何索引的普通非自增、非生成字段',
@@ -29,18 +31,27 @@ const connectionId = z.string().min(1).max(200), taskId = z.string().uuid(), dig
 export function assertTableFilteredUpdateData(input: unknown): void {
   const ancestors = new Set<object>(); let nodes = 0;
   const visit = (value: unknown, depth: number): void => {
-    if (++nodes > 5000 || depth > 24) throw Error(text.invalid);
+    // 每个二进制赋值最多五个节点；另保留原筛选、输出和元数据的5000节点预算。
+    if (++nodes > 5000 + limits.columns * 5 || depth > 24) throw Error(text.invalid);
     if (typeof value === 'string') { if (!unicode(value)) throw Error(text.invalid); return; }
     if (!value || typeof value !== 'object') return;
     if (ancestors.has(value) || (Array.isArray(value) ? Object.getPrototypeOf(value) !== Array.prototype : ![Object.prototype, null].includes(Object.getPrototypeOf(value)))) throw Error(text.invalid);
     ancestors.add(value); const keys = Reflect.ownKeys(value);
     if (keys.length > 1100) throw Error(text.invalid);
+    if (Array.isArray(value)) {
+      const length = Object.getOwnPropertyDescriptor(value, 'length')?.value;
+      if (!Number.isSafeInteger(length) || length < 0 || length > 1100 || keys.length !== length + 1) throw Error(text.invalid);
+      // 逐个核自有索引，避免用同数量的额外属性掩盖空洞后触发继承getter。
+      for (let index = 0; index < length; index++) {
+        const descriptor = Object.getOwnPropertyDescriptor(value, String(index));
+        if (!descriptor || !('value' in descriptor) || !descriptor.enumerable) throw Error(text.invalid);
+      }
+    }
     for (const key of keys) {
       const descriptor = Object.getOwnPropertyDescriptor(value, key);
       if (typeof key !== 'string' || !descriptor || !('value' in descriptor) || !descriptor.enumerable && !(Array.isArray(value) && key === 'length')) throw Error(text.invalid);
       if (!(Array.isArray(value) && key === 'length')) visit(descriptor.value, depth + 1);
     }
-    if (Array.isArray(value) && (value.length > 1100 || keys.length !== value.length + 1)) throw Error(text.invalid);
     ancestors.delete(value);
   }; visit(input, 0);
 }
@@ -57,16 +68,50 @@ export function tableFilteredUpdateBinaryBytes(value: string): number {
   if (padding === 2 && (last & 15) || padding === 1 && (last & 3)) throw Error(text.invalid); return length;
 }
 const cell = z.union([z.string().refine(value => unicode(value) && bytes(value) <= limits.fieldBytes, text.budget), z.number().finite(), z.boolean(), z.null(), z.object({ type: z.literal('binary'), base64: z.string().refine(value => { try { tableFilteredUpdateBinaryBytes(value); return true; } catch { return false; } }, text.invalid) }).strict()]);
-export const tableFilteredUpdatePreviewInputSchema = guarded(tableFilteredUpdateTargetSchema.extend({ taskId, metadataKey: z.string().min(1).refine(value => unicode(value) && bytes(value) <= limits.definitionBytes, text.budget), filters: z.array(filterRuleSchema).max(FILTER_LIMITS.conditions), filterMode: z.enum(['all', 'any']).optional(), filterGroup: filterGroupSchema.optional(), sort: sortRulesSchema, column: name, value: cell }).strict().superRefine((input, context) => { try { validateFilterGroup(input.filters, input.filterMode, input.filterGroup); } catch (reason) { context.addIssue({ code: 'custom', message: reason instanceof Error ? reason.message : text.invalid }); } if (new Set(input.sort.map(rule => rule.column)).size !== input.sort.length) context.addIssue({ code: 'custom', message: text.invalid }); }));
+const assignmentSchema = z.object({ column: name, value: cell }).strict();
+export type TableFilteredUpdateAssignment = z.infer<typeof assignmentSchema>;
+export type TableFilteredUpdateAssignmentInput = { column: string; value: CellValue; assignments?: never } | { assignments: readonly TableFilteredUpdateAssignment[]; column?: never; value?: never };
+export type TableFilteredUpdateOutputColumnInput = { column: string; columns?: never } | { columns: readonly string[]; column?: never };
+/** 预算统计原值实际字节，不把Base64表示体积误算为二进制大小；固定标量按有界存储计。 */
+function assignmentBytes(value: CellValue): number {
+  return typeof value === 'string' ? bytes(value) : value === null ? 0 : typeof value === 'number' ? 8 : typeof value === 'boolean' ? 1 : tableFilteredUpdateBinaryBytes(value.base64);
+}
+const assignmentsSchema = z.array(assignmentSchema).min(1).max(limits.columns).superRefine((assignments, context) => {
+  if (new Set(assignments.map(assignment => assignment.column)).size !== assignments.length) context.addIssue({ code: 'custom', message: text.invalid });
+  if (assignments.reduce((total, assignment) => total + assignmentBytes(assignment.value), 0) > limits.rowBytes) context.addIssue({ code: 'custom', message: text.assignmentBudget });
+});
+const outputColumnsSchema = z.array(name).min(1).max(limits.columns).refine(columns => new Set(columns).size === columns.length, text.invalid);
+/** 返回全部赋值的独立副本；新旧形状互斥，即使新列表只有一项也不降为旧协议。 */
+export function tableFilteredUpdateAssignments(input: TableFilteredUpdateAssignmentInput): TableFilteredUpdateAssignment[] {
+  assertTableFilteredUpdateData(input);
+  if (Object.hasOwn(input, 'assignments')) {
+    if (Object.hasOwn(input, 'column') || Object.hasOwn(input, 'value')) throw Error(text.invalid);
+    return assignmentsSchema.parse(input.assignments);
+  }
+  return assignmentsSchema.parse([{ column: input.column, value: input.value }]);
+}
+/** 输出只含完整列集合；不读取或泄露任何填充值，也不以首列替代整组。 */
+export function tableFilteredUpdateOutputColumns(input: TableFilteredUpdateOutputColumnInput): string[] {
+  assertTableFilteredUpdateData(input);
+  if (Object.hasOwn(input, 'columns')) {
+    if (Object.hasOwn(input, 'column')) throw Error(text.invalid);
+    return outputColumnsSchema.parse(input.columns);
+  }
+  return outputColumnsSchema.parse([input.column]);
+}
+const previewInputBaseSchema = tableFilteredUpdateTargetSchema.extend({ taskId, metadataKey: z.string().min(1).refine(value => unicode(value) && bytes(value) <= limits.definitionBytes, text.budget), filters: z.array(filterRuleSchema).max(FILTER_LIMITS.conditions), filterMode: z.enum(['all', 'any']).optional(), filterGroup: filterGroupSchema.optional(), sort: sortRulesSchema });
+export const tableFilteredUpdatePreviewInputSchema = guarded(z.union([previewInputBaseSchema.extend({ column: name, value: cell }).strict(), previewInputBaseSchema.extend({ assignments: assignmentsSchema }).strict()]).superRefine((input, context) => { try { validateFilterGroup(input.filters, input.filterMode, input.filterGroup); } catch (reason) { context.addIssue({ code: 'custom', message: reason instanceof Error ? reason.message : text.invalid }); } if (new Set(input.sort.map(rule => rule.column)).size !== input.sort.length) context.addIssue({ code: 'custom', message: text.invalid }); }));
 export type TableFilteredUpdatePreviewInput = z.infer<typeof tableFilteredUpdatePreviewInputSchema>;
-export const tableFilteredUpdateApplyInputSchema = guarded(z.object({ connectionId, taskId, previewToken: taskId, confirmation: z.string().min(1).max(300), acknowledged: z.literal(true) }).strict());
+export const tableFilteredUpdateApplyInputSchema = guarded(z.object({ connectionId, taskId, previewToken: taskId, confirmation: z.string().min(1).max(limits.confirmationBytes).refine(value => unicode(value) && bytes(value) <= limits.confirmationBytes, text.invalid), acknowledged: z.literal(true) }).strict());
 export type TableFilteredUpdateApplyInput = z.infer<typeof tableFilteredUpdateApplyInputSchema>;
 export const tableFilteredUpdateReleaseInputSchema = guarded(z.object({ connectionId, previewToken: taskId }).strict());
 export type TableFilteredUpdateReleaseInput = z.infer<typeof tableFilteredUpdateReleaseInputSchema>;
 const rows = z.number().int().min(0).max(Number.MAX_SAFE_INTEGER);
-export const tableFilteredUpdatePreviewOutputSchema = guarded(z.object({ previewToken: taskId, target: tableFilteredUpdateTargetSchema, column: name, rows, shownRows: z.number().int().min(0).max(limits.shownRows), sql: z.string().refine(value => unicode(value) && bytes(value) <= limits.previewSqlBytes, text.budget), sampleOmitted: z.boolean(), expiresAt: z.string().datetime(), definitionDigest: digest, assignmentDigest: digest, timeZone: z.string().min(1).max(100), warnings: z.array(z.string().max(2000)).max(32) }).strict());
+const previewOutputBaseSchema = z.object({ previewToken: taskId, target: tableFilteredUpdateTargetSchema, rows, shownRows: z.number().int().min(0).max(limits.shownRows), sql: z.string().refine(value => unicode(value) && bytes(value) <= limits.previewSqlBytes, text.budget), sampleOmitted: z.boolean(), expiresAt: z.string().datetime(), definitionDigest: digest, assignmentDigest: digest, timeZone: z.string().min(1).max(100), warnings: z.array(z.string().max(2000)).max(32) });
+export const tableFilteredUpdatePreviewOutputSchema = guarded(z.union([previewOutputBaseSchema.extend({ column: name }).strict(), previewOutputBaseSchema.extend({ columns: outputColumnsSchema }).strict()]));
 export type TableFilteredUpdatePreviewOutput = z.infer<typeof tableFilteredUpdatePreviewOutputSchema>;
-export const tableFilteredUpdateApplyOutputSchema = guarded(z.object({ target: tableFilteredUpdateTargetSchema, column: name, rows, outcome: z.literal('committed'), commitAcknowledged: z.literal(true) }).strict());
+const applyOutputBaseSchema = z.object({ target: tableFilteredUpdateTargetSchema, rows, outcome: z.literal('committed'), commitAcknowledged: z.literal(true) });
+export const tableFilteredUpdateApplyOutputSchema = guarded(z.union([applyOutputBaseSchema.extend({ column: name }).strict(), applyOutputBaseSchema.extend({ columns: outputColumnsSchema }).strict()]));
 export type TableFilteredUpdateApplyOutput = z.infer<typeof tableFilteredUpdateApplyOutputSchema>;
 export const tableFilteredUpdateProgressSchema = guarded(z.object({ phase: z.enum(['preparing', 'snapshotting', 'validating', 'updating', 'committing', 'rolling-back', 'releasing', 'finished']), rows, totalRows: rows, snapshotBytes: z.number().int().min(0).max(limits.spoolBytes), dmlMayHaveBeenSent: z.boolean(), commitMayHaveBeenSent: z.boolean(), commitAcknowledged: z.boolean(), rollbackAcknowledged: z.boolean(), transactionProtected: z.boolean(), outcome: z.enum(['not-sent', 'rolled-back', 'unknown', 'committed']) }).strict());
 export type TableFilteredUpdateProgress = z.infer<typeof tableFilteredUpdateProgressSchema>;
@@ -80,4 +125,7 @@ export function tableFilteredUpdateColumns(info: TableInfo): ColumnInfo[] {
   return info.columns.filter(column => !indexed.has(column.name) && !column.generated && !/\bauto_increment\b/i.test(column.extra) && !info.primaryKey.includes(column.name) && !info.editableKey.includes(column.name));
 }
 /** 确认文本只作原文比对，永远不作为SQL来源。 */
-export function tableFilteredUpdateConfirmation(input: { target: TableFilteredUpdateTarget; column: string; rows: number }): string { return `${input.target.database}.${input.target.table} / ${input.column} / ${input.rows}`; }
+export function tableFilteredUpdateConfirmation(input: { target: TableFilteredUpdateTarget; rows: number } & TableFilteredUpdateOutputColumnInput): string {
+  const columns = tableFilteredUpdateOutputColumns(input);
+  return `${input.target.database}.${input.target.table} / ${Object.hasOwn(input, 'columns') ? JSON.stringify(columns) : columns[0]} / ${input.rows}`;
+}
