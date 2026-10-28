@@ -84,6 +84,40 @@ describe.sequential('当前筛选完整流式导出六实例真实Engine（默�
         if (format === 'sql') { const text = raw.toString('utf8'); expect(text.match(/^INSERT INTO /gm)).toHaveLength(plan.rows); for (const exact of ['18446744073709551615', '9007199254740993.123456789012', '2026-10-23 12:34:56.123456']) expect(text).toContain(Buffer.from(exact).toString('hex')); expect(text).not.toMatch(/CREATE TABLE|DROP TABLE|`computed`/); }
         expect(events.filter(event => event.taskId === taskId && event.status === 'completed')).toHaveLength(1);
       }
+      // 旧四格式全列断言保留；显式投影仍按原完整label/id排序逐行对照同一独立baseline。
+      const selectedColumns = ['amount', 'id'], projected = baseline.map(row => ({ amount: row.amount, id: row.id }));
+      for (const format of ['csv', 'json', 'sql', 'xlsx'] as const) {
+        const filePath = path.join(directory, 'selected-fields.' + format), taskId = crypto.randomUUID(); outputs.push(filePath); await owner.step(() => fs.writeFile(filePath, '原两列目标文件'));
+        const result = await invoke<{ rows: number; fileCommitted: true }>('table.exportFiltered', { ...target, ...scope, columns: selectedColumns, taskId, fileToken: crypto.randomUUID(), filePath, format, encoding: 'utf8', ...(format === 'csv' ? { csvDelimiter: ';' } : {}) });
+        expect(result.error).toBeUndefined(); expect(result.value).toEqual({ rows: plan.rows, fileCommitted: true }); expect(result.facts).toHaveLength(1);
+        const selects = result.facts[0].commands.filter(command => command.streamed); expect(selects).toHaveLength(1); expect(selects[0].method).toBe('execute');
+        expect(selects[0].sql).toMatch(/^SELECT `amount`, `id` FROM /); expect(selects[0].sql).toMatch(/ORDER BY `label` ASC, `id` DESC$/); expect(selects[0].sql).not.toMatch(/\bLIMIT\s+\d+|\bOFFSET\s+\d+/i);
+        const raw = await owner.step(() => fs.readFile(filePath));
+        if (format === 'json') {
+          const rows = JSON.parse(raw.toString('utf8')); expect(rows).toHaveLength(1105); expect(rows).toEqual(projected); expect(rows.every((row: DataRow) => JSON.stringify(Object.keys(row)) === JSON.stringify(selectedColumns))).toBe(true);
+        }
+        if (format === 'csv') {
+          expect(raw.toString('utf8').split('\r\n')[0]).toBe('amount;id');
+          const rows = await sqlAudit.collectTableFilteredExportRows(files.readRecords(filePath, 'csv', 'utf8', ';'), owner); expect(rows).toHaveLength(1105); expect(rows).toEqual(expectedText(projected, false)); expect(rows.every(row => JSON.stringify(Object.keys(row)) === JSON.stringify(selectedColumns))).toBe(true);
+        }
+        if (format === 'xlsx') {
+          const sheets = await owner.step(() => excel.listExcelSheets({ filePath, checkCancelled: owner.check })); expect(sheets).toHaveLength(1);
+          const options = { filePath, sheetId: sheets[0].id, protocol: 'dbark-v1' as const, checkCancelled: owner.check };
+          expect((await owner.step(() => excel.previewExcelSheet(options))).columns).toEqual(selectedColumns);
+          const rows = await sqlAudit.collectTableFilteredExportRows(excel.readExcelRows(options), owner); expect(rows).toHaveLength(1105); expect(rows).toEqual(expectedText(projected, true)); expect(rows.every(row => JSON.stringify(Object.keys(row)) === JSON.stringify(selectedColumns))).toBe(true);
+        }
+        if (format === 'sql') {
+          // 只核文件中的准确列头、顺序和每个十进制原值，不执行文件或承诺SQL恢复保真。
+          const text = raw.toString('utf8'), inserts = text.split('\n').filter(line => line.startsWith('INSERT INTO ')); expect(inserts).toHaveLength(1105);
+          const prefix = 'INSERT INTO ' + db + '.`subject` (`amount`, `id`) VALUES (';
+          expect(inserts).toEqual(projected.map(row => { expect(typeof row.amount).toBe('string'); expect(typeof row.id).toBe('number'); return prefix + "_utf8mb4 X'" + Buffer.from(String(row.amount), 'utf8').toString('hex') + "', " + String(row.id) + ');'; }));
+          expect(text).not.toMatch(/CREATE TABLE|ALTER TABLE|DROP TABLE|`label`|`big_value`|`at_value`|`payload`|`bit_value`|`approx_value`|`json_value`|`computed`/);
+        }
+        expect(events.filter(event => event.taskId === taskId && event.status === 'completed')).toHaveLength(1);
+      }
+      const invalidPath = path.join(directory, 'unknown-field.json'); outputs.push(invalidPath); await owner.step(() => fs.writeFile(invalidPath, '未知列保护原文件'));
+      const invalidSelection = await invoke('table.exportFiltered', { ...target, ...scope, columns: ['amount', 'missing_column'], taskId: crypto.randomUUID(), fileToken: crypto.randomUUID(), filePath: invalidPath, format: 'json', encoding: 'utf8' });
+      expect(invalidSelection.error).toBeInstanceOf(Error); expect(invalidSelection.facts).toHaveLength(1); expect(invalidSelection.facts[0].commands.filter(command => command.streamed)).toEqual([]); expect(await owner.step(() => fs.readFile(invalidPath, 'utf8'))).toBe('未知列保护原文件');
       const viewed = await invoke<TableInfo>('metadata.table', { ...target, table: 'subject_view' }); expect(viewed.error).toBeUndefined();
       const viewPath = path.join(directory, 'view.json'); outputs.push(viewPath);
       const viewedExport = await invoke<{ rows: number }>('table.exportFiltered', { ...target, ...scope, table: 'subject_view', metadataKey: tableCopyMetadataKey(viewed.value!), fileToken: crypto.randomUUID(), filePath: viewPath, taskId: crypto.randomUUID(), format: 'json', encoding: 'utf8', filters: [{ column: 'label', operator: 'IN', values: ['ALPHA'] }], filterGroup: undefined });

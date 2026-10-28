@@ -6,7 +6,7 @@ import iconv from 'iconv-lite';
 import { parse } from 'csv-parse/sync';
 import ExcelJS from 'exceljs';
 import type { CellValue, TableInfo } from '../../src/shared/contracts';
-import type { TableFilteredExportInput } from '../../src/shared/tableFilteredExport';
+import { selectTableFilteredExportColumns, tableFilteredExportLimits, type TableFilteredExportInput } from '../../src/shared/tableFilteredExport';
 import type { QueryExportFrame } from '../../src/shared/queryStreamExport';
 import type { StructureTaskContext } from '../../src/engine/structureDefinition';
 import { tableCopyMetadataKey } from '../../src/shared/tableCopySource';
@@ -42,6 +42,27 @@ async function input(patch: Partial<TableFilteredExportInput> = {}): Promise<Tab
 }
 
 describe('当前服务器筛选全部行SQL计划', () => {
+  it.each(['csv', 'json', 'sql', 'xlsx'] as const)('%s显式列顺序只控制SELECT，未选列仍可筛选、排序及补可靠键', async format => {
+    const request = await input({ format, columns: ['payload', 'amount'], filters: [{ column: 'label', operator: '=', value: '中文' }], sort: [{ column: 'calculated', direction: 'DESC' }] });
+    const plan = planTableFilteredExport(source, request);
+    expect(plan.columns.map(column => column.name)).toEqual(['payload', 'amount']); expect(plan.columns[0]).toBe(source.columns[4]);
+    expect(plan.sql).toMatch(/^SELECT `payload`, `amount` FROM /); expect(plan.sql).toContain('`label`'); expect(plan.sql).toMatch(/ORDER BY `calculated` DESC, `id` ASC$/);
+    expect(plan.sql).not.toMatch(/\bLIMIT\b|\bOFFSET\b|SELECT \*/); expect(source.columns.map(column => column.name)).toEqual(names);
+  });
+  it('共享字段选择保持旧默认语义，显式SQL生成列拒绝而不悄悄剔除', () => {
+    expect(selectTableFilteredExportColumns(source, { format: 'json' })).toBe(source.columns);
+    expect(selectTableFilteredExportColumns(source, { format: 'sql' }).map(column => column.name)).toEqual(names.filter(name => name !== 'calculated'));
+    expect(selectTableFilteredExportColumns(source, { format: 'xlsx', columns: ['calculated', 'id'] })).toEqual([source.columns[5], source.columns[0]]);
+    expect(() => selectTableFilteredExportColumns(source, { format: 'sql', columns: ['id', 'calculated'] })).toThrow('生成列');
+    const duplicated = { ...source, columns: [...source.columns, { ...source.columns[0] }] };
+    expect(() => selectTableFilteredExportColumns(duplicated, { format: 'json', columns: ['amount'] })).toThrow();
+    const maximum = Array.from({ length: tableFilteredExportLimits.columns }, (_, index) => ({ ...source.columns[0], name: 'c' + index })), wide = { ...source, columns: maximum };
+    expect(selectTableFilteredExportColumns(wide, { format: 'json', columns: maximum.map(column => column.name) })).toHaveLength(tableFilteredExportLimits.columns);
+  });
+  it('显式列选择仍要求完整源metadataKey，不能拿投影后的目录键绕过未选字段变化', async () => {
+    const request = await input({ columns: ['id'], metadataKey: tableCopyMetadataKey({ ...source, columns: [source.columns[0]] }) });
+    expect(() => planTableFilteredExport(source, request)).toThrow('变化');
+  });
   it('OR/嵌套/停用与精确参数复用；多列原顺序加可靠键，不附LIMIT或OFFSET', async () => {
     const request = await input({ filters: [{ column: 'amount', operator: '>', value: '9007199254740993.123456789011' }, { column: 'label', operator: '=', value: '中文' }, { column: 'id', operator: '=', value: '0', enabled: false }], filterGroup: { mode: 'all', children: [{ mode: 'any', children: [0, 1] }, 2] }, sort: [{ column: 'amount', direction: 'DESC' }, { column: 'at_value', direction: 'ASC' }] });
     const plan = planTableFilteredExport(source, request); expect(plan.sql).toContain(' OR '); expect(plan.sql).toContain('DECIMAL(65,12)'); expect(plan.sql).toContain(Buffer.from('9007199254740993.123456789011').toString('hex')); expect(plan.sql).toMatch(/ORDER BY `amount` DESC, `at_value` ASC, `id` ASC$/); expect(plan.sql).not.toMatch(/SELECT \*|\bLIMIT\b|\bOFFSET\b/); expect(plan.columns.map(column => column.name)).toEqual(names);
@@ -62,6 +83,38 @@ describe('当前服务器筛选全部行SQL计划', () => {
 });
 
 describe('真实文件完整暂存与精度', () => {
+  it.each(['csv', 'json', 'sql', 'xlsx'] as const)('%s真实文件仅含有序选列并保留精确值及NULL/空字节', async format => {
+    const selected = ['payload', 'amount', 'id'], positions = selected.map(name => names.indexOf(name));
+    columns = selected; rawTypes = positions.map(index => types[index]); rawRows = rawRows.map(row => positions.map(index => row[index]));
+    const request = await input({ format, columns: selected }), staged = await prepareTableFilteredExport(context, request, { stop: vi.fn(), onCommitStart() {} });
+    expect(await readFile(request.filePath, 'utf8')).toBe('原目标'); expect(staged.rows).toBe(2); await staged.commit(); await staged.dispose();
+    expect(ports.frames.mock.calls[0][1]).toMatch(/^SELECT `payload`, `amount`, `id` FROM /);
+    if (format === 'xlsx') {
+      const workbook = new ExcelJS.Workbook(); await workbook.xlsx.readFile(request.filePath); const sheet = workbook.worksheets[0];
+      expect(sheet.columnCount).toBe(3); expect(sheet.rowCount).toBe(3); expect(selected.map((_name, index) => sheet.getCell(1, index + 1).text)).toEqual(selected);
+      expect(sheet.getCell('A2').text).toBe('\\B:AP8='); expect(sheet.getCell('B2').text).toBe('9007199254740993.123456789012'); expect(sheet.getCell('C2').text).toBe('18446744073709551615'); expect(sheet.getCell('B3').text).toBe('\\N');
+    } else {
+      const content = await readFile(request.filePath, 'utf8');
+      if (format === 'json') {
+        const values = JSON.parse(content); expect(Object.keys(values[0])).toEqual(selected); expect(Object.keys(values[1])).toEqual(selected);
+        expect(values).toEqual([{ payload: { type: 'binary', base64: 'AP8=' }, amount: '9007199254740993.123456789012', id: '18446744073709551615' }, { payload: { type: 'binary', base64: '' }, amount: null, id: '18446744073709551614' }]);
+      } else if (format === 'csv') {
+        expect(parse(content)).toEqual([selected, ['base64:AP8=', '9007199254740993.123456789012', '18446744073709551615'], ['base64:', '\\N', '18446744073709551614']]);
+      } else {
+        expect(content).toContain('INSERT INTO `库``名`.`subject` (`payload`, `amount`, `id`) VALUES ('); expect(content).toContain("X'00ff'"); expect(content).toContain(Buffer.from('9007199254740993.123456789012').toString('hex')); expect(content).toContain(Buffer.from('18446744073709551615').toString('hex')); expect(content).toContain('NULL');
+        for (const omitted of ['at_value', 'label', 'calculated', 'floating']) expect(content).not.toContain('`' + omitted + '`');
+      }
+    }
+  });
+  it.each(['csv', 'json', 'sql', 'xlsx'] as const)('%s非法字段选择在打开暂存或执行数据SELECT之前拒绝，原文件不变', async format => {
+    const invalid: string[][] = [[], ['id', 'id'], ['missing'], Array.from({ length: tableFilteredExportLimits.columns + 1 }, (_, index) => 'c' + index)];
+    if (format === 'sql') invalid.push(['id', 'calculated']);
+    for (const columns of invalid) {
+      const request = await input({ format, columns }), open = vi.fn(nativeAtomicFileIO.open);
+      await expect(prepareTableFilteredExport(context, request, { stop: vi.fn(), onCommitStart() {}, io: { ...nativeAtomicFileIO, open } })).rejects.toThrow();
+      expect(open).not.toHaveBeenCalled(); expect(ports.frames).not.toHaveBeenCalled(); expect(await readFile(request.filePath, 'utf8')).toBe('原目标'); expect(await readdir(directories.at(-1)!)).toEqual(['result']);
+    }
+  });
   it('JSON单数组保留精确文本/NULL/字节/负零，原文件仅显式commit后替换', async () => {
     const request = await input(), startCommit = vi.fn(), staged = await prepareTableFilteredExport(context, request, { stop: vi.fn(), onCommitStart: startCommit });
     expect(await readFile(request.filePath, 'utf8')).toBe('原目标'); expect(staged.rows).toBe(2); expect(staged.fileCommitted).toBe(false); expect(startCommit).not.toHaveBeenCalled(); expect(seen.at(-1)).toBe('ROLLBACK AND NO CHAIN NO RELEASE');

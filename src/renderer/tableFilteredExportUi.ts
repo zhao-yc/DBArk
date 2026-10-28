@@ -1,5 +1,5 @@
 import type { FilterGroup, FilterMode, FilterRule, SortRule, TableInfo } from '../shared/contracts';
-import { tableFilteredExportLimits, type TableFilteredExportInput, type TableFilteredExportOutput } from '../shared/tableFilteredExport';
+import { selectTableFilteredExportColumns, tableFilteredExportLimits, type TableFilteredExportInput, type TableFilteredExportOutput } from '../shared/tableFilteredExport';
 import { copyFilterRules, validateFilterGroup } from '../shared/filtering';
 import { tableCopyMetadataKey } from '../shared/tableCopySource';
 import { validateTableSort } from './tableSort';
@@ -7,7 +7,7 @@ import { tableFilteredExportZh as text } from './locales/tableFilteredExport.zh-
 
 export interface TableFilteredExportConditions { filters: readonly FilterRule[]; filterMode: FilterMode; filterGroup?: FilterGroup; }
 export type TableFilteredExportTarget = Pick<TableFilteredExportInput, 'connectionId' | 'database' | 'table'>;
-export type TableFilteredExportOptions = Pick<TableFilteredExportInput, 'format' | 'encoding' | 'csvDelimiter'>;
+export type TableFilteredExportOptions = Pick<TableFilteredExportInput, 'format' | 'encoding' | 'csvDelimiter' | 'columns'>;
 /** 快照递归冻结，导出只使用服务器条件，绝不复制父表行作为文件数据。 */
 function freeze<T>(value: T): T { if (value && typeof value === 'object') { for (const child of Object.values(value)) freeze(child); Object.freeze(value); } return value; }
 
@@ -43,7 +43,9 @@ export class TableFilteredExportIntent {
     if (!this.current() || !fileToken || !taskId || !['csv', 'json', 'sql', 'xlsx'].includes(options.format) || !['utf8', 'utf16le', 'gb18030'].includes(options.encoding) || options.format !== 'csv' && options.csvDelimiter !== undefined || options.csvDelimiter !== undefined && ![',', ';', '\t'].includes(options.csvDelimiter)) throw Error(text.invalid);
     if (options.format === 'sql' && this.source.objectKind !== 'table') throw Error(text.viewSql);
     if (options.format === 'sql' && !this.source.columns.some(column => !column.generated)) throw Error(text.noSqlFields);
-    return { ...this.target, metadataKey: this.metadataKey, filters: structuredClone(this.conditions.filters) as FilterRule[], filterMode: this.conditions.filterMode, ...(this.conditions.filterGroup ? { filterGroup: structuredClone(this.conditions.filterGroup) } : {}), sort: structuredClone(this.sort) as SortRule[], format: options.format, encoding: options.format === 'xlsx' ? 'utf8' : options.encoding, ...(options.format === 'csv' && options.csvDelimiter !== undefined ? { csvDelimiter: options.csvDelimiter } : {}), fileToken, taskId };
+    const columns = selectTableFilteredExportColumns(this.source, options);
+    // 原请求可省略字段保持兼容；明确选择独立复制，迟到调用方修改不能改写已确认的文件范围。
+    return { ...this.target, metadataKey: this.metadataKey, filters: structuredClone(this.conditions.filters) as FilterRule[], filterMode: this.conditions.filterMode, ...(this.conditions.filterGroup ? { filterGroup: structuredClone(this.conditions.filterGroup) } : {}), sort: structuredClone(this.sort) as SortRule[], format: options.format, encoding: options.format === 'xlsx' ? 'utf8' : options.encoding, ...(options.format === 'csv' && options.csvDelimiter !== undefined ? { csvDelimiter: options.csvDelimiter } : {}), ...(options.columns !== undefined ? { columns: columns.map(column => column.name) } : {}), fileToken, taskId };
   }
 }
 /** 完整落盘事实只来自原IPC回执；运行进度和完成事件不能代替此回执。 */

@@ -1,6 +1,6 @@
 import type { CellValue, ColumnInfo, TableInfo } from '../shared/contracts';
 import { tableCopyMetadataKey } from '../shared/tableCopySource';
-import { tableFilteredExportLimits, tableFilteredExportText as text, type TableFilteredExportInput, type TableFilteredExportOutput } from '../shared/tableFilteredExport';
+import { selectTableFilteredExportColumns, tableFilteredExportLimits, tableFilteredExportText as text, type TableFilteredExportInput, type TableFilteredExportOutput } from '../shared/tableFilteredExport';
 import { queryStreamExportLimits as limits, type QueryExportFrame } from '../shared/queryStreamExport';
 import { EXCEL_LIMITS } from '../shared/excelTransfer';
 import { csvExportDelimiter, type CsvExportDelimiter } from '../shared/csvExport';
@@ -29,8 +29,7 @@ export function planTableFilteredExport(source: TableInfo, input: TableFilteredE
   csvExportDelimiter(input.format, input.csvDelimiter);
   // 视图目录不能证明投影及生成表达式可写；不把只读结果伪装成可向原视图复放的INSERT。
   if (input.format === 'sql' && source.objectKind !== 'table') throw Error('无法确认视图INSERT可写性；视图请用CSV/JSON/XLSX导出。');
-  const columns = input.format === 'sql' ? source.columns.filter(column => !column.generated) : source.columns;
-  if (!columns.length || columns.length > limits.columns || new Set(source.columns.map(column => column.name)).size !== source.columns.length) throw Error(text.metadata);
+  const columns = selectTableFilteredExportColumns(source, input);
   if (!Array.isArray(input.sort) || input.sort.length > tableFilteredExportLimits.sorts || new Set(input.sort.map(rule => rule?.column)).size !== input.sort.length || input.sort.some(rule => !rule || !source.columns.some(column => column.name === rule.column) || !['ASC', 'DESC'].includes(rule.direction))) throw Error(text.invalid);
   const sort = input.sort.map(rule => ({ column: rule.column, direction: rule.direction }));
   const order = [...sort, ...source.editableKey.filter(column => !sort.some(rule => rule.column === column)).map(column => ({ column, direction: 'ASC' as const }))];

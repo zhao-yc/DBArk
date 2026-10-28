@@ -41,8 +41,8 @@ afterAll(() => { for (const [key, descriptor] of globals) if (descriptor) Object
 const source = (): TableInfo => ({ database: 'd', name: 'subject', objectKind: 'table', engine: 'InnoDB', ddl: 'CREATE TABLE subject(id BIGINT,g INT GENERATED ALWAYS AS(1))', columns: [{ name: 'id', type: 'BIGINT', nullable: false, generated: false, defaultValue: null, extra: '', comment: '' }, { name: 'g', type: 'INT', nullable: true, generated: true, defaultValue: null, extra: 'GENERATED', comment: '' }], indexes: [], primaryKey: ['id'], editableKey: ['id'], foreignKeys: [] });
 /** 原chooser、导出及取消分别由各自Promise驱动，进度事件不能伪造完整落盘。 */
 function deferred<T>() { let resolve!: (value: T) => void, reject!: (reason: unknown) => void; const promise = new Promise<T>((yes, no) => { resolve = yes; reject = no; }); return { promise, resolve, reject }; }
-async function mount(override: Partial<TableFilteredExportServices> = {}, objectKind: 'table' | 'view' = 'table') {
-  let allowed = true; const info = source(); info.objectKind = objectKind; if (objectKind === 'view') info.engine = '';
+async function mount(override: Partial<TableFilteredExportServices> = {}, objectKind: 'table' | 'view' = 'table', definition: TableInfo = source()) {
+  let allowed = true; const info = definition; info.objectKind = objectKind; if (objectKind === 'view') info.engine = '';
   const intent = new TableFilteredExportIntent({ connectionId: 'c', database: 'd', table: 'subject' }, info, { filters: [{ column: 'id', operator: '>=', value: '9007199254740993', enabled: false }], filterMode: 'all' }, [{ column: 'id', direction: 'DESC' }], [], () => allowed);
   const choose = vi.fn(async (_input: Parameters<TableFilteredExportServices['choose']>[0]): Promise<FileChoice | null> => ({ token: 'file-token', name: 'synthetic.csv' })), execute = vi.fn(async (_input: Parameters<TableFilteredExportServices['execute']>[0]): Promise<TableFilteredExportOutput> => ({ rows: 1105, fileCommitted: true })), cancel = vi.fn(async (_id: string) => undefined), listeners = new Set<(event: TaskEvent) => void>();
   const services: TableFilteredExportServices = { choose, execute, cancel, subscribe: listener => { listeners.add(listener); return () => { listeners.delete(listener); }; }, ...override };
@@ -58,6 +58,15 @@ function callback(node: MemoryNode, name = 'onClick'): (...args: unknown[]) => u
 async function click(label: string): Promise<void> { const node = button(label); expect(node.disabled).toBe(false); await act(async () => { node.dispatchEvent(new MemoryEvent('click')); }); }
 async function chooseFile(): Promise<void> { const node = picker(); expect(node.disabled).toBe(false); await act(async () => { node.dispatchEvent(new MemoryEvent('click')); }); }
 async function change(label: string, value: string): Promise<void> { const node = select(label); expect(node.disabled).toBe(false); await act(async () => { node.value = value; node.dispatchEvent(new MemoryEvent('change')); }); }
+
+/** 增加一个普通文本字段，仅供字段投影用例；原有两列夹具与全部旧断言保持。 */
+function projectionSource(): TableInfo { const info = source(); info.columns.splice(1, 0, { ...info.columns[0], name: 'name', type: 'VARCHAR(80)', nullable: true }); return info; }
+function field(name: string): MemoryNode { const node = document.querySelectorAll('input').find(item => item.getAttribute('aria-label') === '导出字段 ' + name); expect(node, '导出字段 ' + name).toBeDefined(); return node!; }
+function moveButton(name: string, direction: '上移' | '下移'): MemoryNode { const label = direction + '导出字段 ' + name, node = document.querySelectorAll('button').find(item => item.getAttribute('aria-label') === label); expect(node, label).toBeDefined(); return node!; }
+/** checkbox使用当前正式onChange，方向使用真实按钮事件；不写组件草稿或调用意图内部方法。 */
+async function checkField(name: string, checked: boolean): Promise<void> { const node = field(name); expect(node.disabled).toBe(false); await act(async () => { callback(node, 'onChange')({ target: { checked } }); }); expect(field(name).checked).toBe(checked); }
+async function moveField(name: string, direction: '上移' | '下移'): Promise<void> { const node = moveButton(name, direction); expect(node.disabled).toBe(false); await act(async () => { node.dispatchEvent(new MemoryEvent('click')); }); }
+function orderedFields(): string[] { const list = document.querySelector('[aria-label="已选字段顺序"]'); expect(list).not.toBeNull(); return list!.querySelectorAll('button').map(node => node.getAttribute('aria-label') ?? '').filter(label => label.startsWith('上移导出字段 ')).map(label => label.slice('上移导出字段 '.length)); }
 
 describe('全量筛选行正式对话框真实React RAM（非原生文件/数据库验收）', () => {
   it('初始只显示完整范围和所有字段，不读取数据、不选择文件、不执行', async () => { const f = await mount(); expect(document.querySelector('[data-table-filtered-export-dialog]')).not.toBeNull(); expect(document.body.textContent).toContain(text.scope); expect(document.body.textContent).toContain(text.committedOnly); expect(document.body.textContent).toContain(text.disabled); expect(document.body.textContent).toContain('9007199254740993'); expect(document.body.textContent).toContain(text.generated); expect(f.choose).not.toHaveBeenCalled(); expect(f.execute).not.toHaveBeenCalled(); expect(button(text.start).disabled).toBe(true); });
@@ -80,5 +89,62 @@ describe('全量筛选行正式对话框真实React RAM（非原生文件/数据
     const f = await mount({}, 'view'); expect(select(text.format).querySelectorAll('option').find(option => option.value === 'sql')!.disabled).toBe(true); expect(document.body.textContent).toContain(text.viewSql);
     await act(async () => callback(select(text.format), 'onChange')({ target: { value: 'sql' } })); expect(select(text.format).value).toBe('csv'); expect(f.choose).not.toHaveBeenCalled(); expect(f.execute).not.toHaveBeenCalled();
     await change(text.format, 'json'); await chooseFile(); await click(text.start); expect(f.execute.mock.calls[0][0].format).toBe('json');
+  });
+});
+
+describe('全部筛选行导出字段选择及顺序真实React RAM', () => {
+  it('默认全选并按元数据顺序展示，清空拒绝chooser和执行，显式全选可恢复', async () => {
+    const f = await mount({}, 'table', projectionSource());
+    expect(['id', 'name', 'g'].map(name => field(name).checked)).toEqual([true, true, true]); expect(orderedFields()).toEqual(['id', 'name', 'g']);
+    await click('清空字段选择'); expect(orderedFields()).toEqual([]); expect(picker().disabled).toBe(true); expect(button(text.start).disabled).toBe(true);
+    expect(document.body.textContent).toContain(text.emptyFields);
+    expect(f.choose).not.toHaveBeenCalled(); expect(f.execute).not.toHaveBeenCalled();
+    await click('选择全部字段'); expect(orderedFields()).toEqual(['id', 'name', 'g']); expect(picker().disabled).toBe(false); expect(button(text.start).disabled).toBe(true);
+  });
+  it.each(['csv', 'json', 'sql', 'xlsx'] as const)('%s仅将明确两列及所选顺序交给execute，原全量条件和排序不变', async format => {
+    const f = await mount({}, 'table', projectionSource()); if (format !== 'csv') await change(text.format, format);
+    await click('清空字段选择'); await checkField('id', true); await checkField('name', true); await moveField('name', '上移');
+    expect(orderedFields()).toEqual(['name', 'id']); expect(moveButton('name', '上移').disabled).toBe(true); expect(moveButton('id', '下移').disabled).toBe(true);
+    await chooseFile(); await click(text.start);
+    expect(f.execute).toHaveBeenCalledOnce(); expect(f.execute.mock.calls[0][0]).toMatchObject({ columns: ['name', 'id'], format, filters: f.intent.conditions.filters, filterMode: 'all', sort: f.intent.sort, fileToken: 'file-token' });
+    expect(f.intent.source.columns.map(column => column.name)).toEqual(['id', 'name', 'g']);
+  });
+  it('改选及移动各自消费旧文件，修回原选择也不能复用令牌或原按钮闭包', async () => {
+    const f = await mount({}, 'table', projectionSource()); await chooseFile(); const oldStart = callback(button(text.start)), oldField = callback(field('name'), 'onChange');
+    await checkField('name', false); expect(button(text.start).disabled).toBe(true); await checkField('name', true);
+    await act(async () => { oldStart(); oldField({ target: { checked: false } }); });
+    expect(field('name').checked).toBe(true); expect(f.execute).not.toHaveBeenCalled(); expect(button(text.start).disabled).toBe(true);
+    await chooseFile(); const before = orderedFields(); await moveField(before[1], '上移'); expect(button(text.start).disabled).toBe(true);
+    await chooseFile(); await click(text.start); expect(f.execute).toHaveBeenCalledOnce(); expect(f.choose).toHaveBeenCalledTimes(3);
+  });
+  it('旧上下移回调不能在顺序ABA后改写新草稿，原文件不复活', async () => {
+    const f = await mount({}, 'table', projectionSource()); await chooseFile(); const oldUp = callback(moveButton('name', '上移'));
+    await moveField('name', '上移'); await moveField('name', '下移'); expect(orderedFields()).toEqual(['id', 'name', 'g']);
+    await act(async () => oldUp()); expect(orderedFields()).toEqual(['id', 'name', 'g']); expect(button(text.start).disabled).toBe(true); expect(f.execute).not.toHaveBeenCalled();
+  });
+  it('chooser与导出原Promise等待期间全部选列控件禁用，旧事件和双击不能绕过占用', async () => {
+    const choice = deferred<FileChoice | null>(), result = deferred<TableFilteredExportOutput>(), choose = vi.fn(() => choice.promise), execute = vi.fn((_input: Parameters<TableFilteredExportServices['execute']>[0]) => result.promise), f = await mount({ choose, execute }, 'table', projectionSource());
+    const oldPick = callback(picker()), oldField = callback(field('name'), 'onChange'), oldMove = callback(moveButton('name', '上移'));
+    await act(async () => { oldPick(); oldPick(); }); expect(choose).toHaveBeenCalledOnce();
+    for (const name of ['id', 'name', 'g']) expect(field(name).disabled).toBe(true);
+    expect(moveButton('name', '上移').disabled).toBe(true); expect(button('选择全部字段').disabled).toBe(true); expect(button('清空字段选择').disabled).toBe(true);
+    await act(async () => { oldField({ target: { checked: false } }); oldMove(); }); expect(orderedFields()).toEqual(['id', 'name', 'g']);
+    await act(async () => choice.resolve({ token: 'exact', name: 'chosen.csv' })); const start = callback(button(text.start)), currentField = callback(field('name'), 'onChange');
+    await act(async () => { start(); start(); currentField({ target: { checked: false } }); }); expect(execute).toHaveBeenCalledOnce(); expect(execute.mock.calls[0][0].columns).toEqual(['id', 'name', 'g']);
+    expect(field('name').disabled).toBe(true); expect(moveButton('name', '上移').disabled).toBe(true); expect(f.onActivity.mock.calls).toEqual([[1], [-1], [1]]);
+    await act(async () => result.resolve({ rows: 1105, fileCommitted: true })); expect(f.onActivity.mock.calls).toEqual([[1], [-1], [1], [-1]]);
+  });
+  it('来源失效再恢复不允许旧选列或文件闭包修改后继意图', async () => {
+    const f = await mount({}, 'table', projectionSource()); await chooseFile(); const oldField = callback(field('name'), 'onChange'), oldMove = callback(moveButton('name', '上移')), oldStart = callback(button(text.start));
+    await f.allowed(false); await f.allowed(true); await act(async () => { oldField({ target: { checked: false } }); oldMove(); oldStart(); });
+    expect(orderedFields()).toEqual(['id', 'name', 'g']); expect(f.execute).not.toHaveBeenCalled(); expect(picker().disabled).toBe(true);
+    await f.replaceIntent(); await act(async () => { oldField({ target: { checked: false } }); oldMove(); oldStart(); }); expect(f.execute).not.toHaveBeenCalled(); expect(button(text.start).disabled).toBe(true);
+  });
+  it('切SQL明确排除生成列且禁选，旧CSV回调不能加回；切格式仍需重选文件', async () => {
+    const f = await mount({}, 'table', projectionSource()); await chooseFile(); const oldGenerated = callback(field('g'), 'onChange');
+    await change(text.format, 'sql'); expect(field('g').disabled).toBe(true); expect(field('g').checked).toBe(false); expect(document.body.textContent).toContain(text.generated); expect(orderedFields()).toEqual(['id', 'name']); expect(button(text.start).disabled).toBe(true);
+    await act(async () => oldGenerated({ target: { checked: true } })); expect(field('g').checked).toBe(false);
+    await chooseFile(); await click(text.start); expect(f.execute.mock.calls[0][0]).toMatchObject({ format: 'sql', columns: ['id', 'name'] });
+    await change(text.format, 'json'); expect(field('g').disabled).toBe(false); await checkField('g', true); expect(button(text.start).disabled).toBe(true);
   });
 });

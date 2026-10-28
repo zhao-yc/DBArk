@@ -56,6 +56,14 @@ function fixture() {
 }
 
 describe('全部服务器筛选行导出的严格IPC', () => {
+  it.each(['csv', 'json', 'sql', 'xlsx'])('%s接受非空有序字段选择，省略仍保持旧请求', format => {
+    const value = { ...input, format, columns: ['字段乙', '字段甲'] };
+    expect(validateCommand('table.exportFiltered', value)).toEqual(value);
+    expect(validateCommand('table.exportFiltered', { ...input, format })).toEqual({ ...input, format });
+    for (const columns of [[], ['字段甲', '字段甲'], [''], [1], ['x'.repeat(257)], Array.from({ length: tableFilteredExportLimits.columns + 1 }, (_, index) => '列' + index), '字段甲']) expect(() => validateCommand('table.exportFiltered', { ...value, columns })).toThrow();
+    const maximum = Array.from({ length: tableFilteredExportLimits.columns }, (_, index) => '列' + index);
+    expect(validateCommand('table.exportFiltered', { ...value, columns: maximum })).toMatchObject({ columns: maximum });
+  });
   it.each(['csv', 'json', 'sql', 'xlsx'])('%s仅接受元数据键与完整原筛选排序，不引入任意SQL或路径', format => {
     expect(publicCommands['table.exportFiltered']).toBe(true);
     const value = { ...input, format, filters: [{ column: '金额', operator: 'IN', values: ['9007199254740993.000000000001', ''], enabled: false }], filterMode: 'any', filterGroup: { mode: 'any', children: [0] }, sort: [{ column: '金额', direction: 'DESC' }] };
@@ -78,6 +86,12 @@ describe('全部服务器筛选行导出的严格IPC', () => {
 });
 
 describe('真实Main文件用途、可信注入和副作用生命周期', () => {
+  it('字段顺序原样穿过Main，原完整来源和可信注入不被裁剪', async () => {
+    const f = fixture(), selected = { ...input, columns: ['字段乙', '字段甲'] };
+    expect(await f.ipc(selected)).toEqual({ ok: true, result: { rows: 1000001, fileCommitted: true } });
+    expect(f.request).toHaveBeenCalledExactlyOnceWith('table.exportFiltered', { ...selected, profile: f.profile, filePath: 'RAM-owned.csv', connectionRevision: 11 });
+    expect(f.releaseTarget).toHaveBeenCalledOnce(); expect(f.owners.has(input.taskId)).toBe(false);
+  });
   it('正确文件用途与格式才投递，Main注入可信profile/路径/修订且不写SQL历史', async () => {
     const f = fixture(); expect(await f.ipc()).toEqual({ ok: true, result: { rows: 1000001, fileCommitted: true } });
     expect(f.request).toHaveBeenCalledExactlyOnceWith('table.exportFiltered', { ...input, profile: f.profile, filePath: 'RAM-owned.csv', connectionRevision: 11 }); expect(f.acquire).toHaveBeenCalledExactlyOnceWith('RAM-owned.csv'); expect(f.releaseTarget).toHaveBeenCalledOnce(); expect(f.history).not.toHaveBeenCalled(); expect(f.tasks.get(input.taskId)?.status).toBe('completed'); expect(f.owners.has(input.taskId)).toBe(false);

@@ -62,6 +62,8 @@ export function createTableFilteredExportSqlAudit(input: { database: string; fix
     add(`SELECT ${projection(generated)} FROM ${db}.\`subject\` WHERE ${empty} ORDER BY \`label\` ASC, \`id\` DESC`);
     add(`SELECT ${projection(generated)} FROM ${db}.\`subject_view\` WHERE ${view} ORDER BY \`label\` ASC, \`id\` DESC`);
   }
+  // 仅新增本轮准确两列、原范围及原排序；不接受任意投影、反向列序或其它目标。
+  add(`SELECT \`amount\`, \`id\` FROM ${db}.\`subject\` WHERE ${range} ORDER BY \`label\` ASC, \`id\` DESC`);
   const observer = new Map<string, (values: Params) => boolean>(), observe = (sql: string, params: (values: Params) => boolean = none) => observer.set(key(sql), params);
   observe('SELECT @@hostname AS hostname,@@port AS port,@@server_id AS serverId,@@version_compile_os AS os,@@lower_case_table_names AS lowerNames'); observe('SELECT @@server_uuid AS uuid');
   observe('SELECT SCHEMA_NAME FROM information_schema.SCHEMATA WHERE BINARY SCHEMA_NAME=BINARY ?', values => values.length === 1 && values[0] === database);

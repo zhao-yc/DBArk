@@ -59,3 +59,29 @@ describe('完整文件落盘回执', () => {
   it.each([{ rows: -1, fileCommitted: true }, { rows: 1.1, fileCommitted: true }, { rows: 2, fileCommitted: false }, { rows: 2 }, { rows: '2', fileCommitted: true }, { rows: 2, fileCommitted: true, done: true }])('未知或未提交回执拒绝 %j', value => { expect(() => checkTableFilteredExportOutput(value)).toThrow(); });
   it('回执getter不能执行为成功', () => { const getter = vi.fn(() => 1), value = { fileCommitted: true }; Object.defineProperty(value, 'rows', { enumerable: true, get: getter }); expect(() => checkTableFilteredExportOutput(value)).toThrow(); expect(getter).not.toHaveBeenCalled(); });
 });
+
+describe('完整流式导出字段投影的意图参数', () => {
+  /** 增加普通字段供四格式排序测试，生成列仍保留为SQL拒绝反例。 */
+  function projectedIntent() { const info = source(); info.columns.splice(1, 0, { ...info.columns[0], name: 'name', type: 'VARCHAR(80)' }); return new TableFilteredExportIntent(target, info, { filters: [], filterMode: 'all' }, [{ column: 'g', direction: 'DESC' }], [], () => true); }
+  it.each(['csv', 'json', 'sql', 'xlsx'] as const)('%s保留精确选择与顺序，每次input复制数组且不污染后续配置', format => {
+    const intent = projectedIntent(), columns = ['name', 'id'], options = { format, encoding: 'utf8' as const, columns }, input = intent.input(options, 'file', 'task');
+    expect(input.columns).toEqual(['name', 'id']); expect(input.columns).not.toBe(columns); expect(input.sort).toEqual([{ column: 'g', direction: 'DESC' }]);
+    columns.reverse(); expect(input.columns).toEqual(['name', 'id']); input.columns!.push('changed');
+    expect(intent.input(options, 'next-file', 'next-task').columns).toEqual(['id', 'name']); expect(intent.source.columns.map(column => column.name)).toEqual(['id', 'name', 'g']);
+  });
+  it.each(['csv', 'json', 'sql', 'xlsx'] as const)('%s未提供columns保留旧全列协议，显式undefined不伪造空选择', format => {
+    const intent = projectedIntent();
+    expect(Object.hasOwn(intent.input({ format, encoding: 'utf8' }, 'file', 'task'), 'columns')).toBe(false);
+    expect(Object.hasOwn(intent.input({ format, encoding: 'utf8', columns: undefined }, 'file', 'task'), 'columns')).toBe(false);
+  });
+  it.each(['csv', 'json', 'sql', 'xlsx'] as const)('%s空选择、重复及未知列拒绝，不静默回退全部字段', format => {
+    const intent = projectedIntent();
+    for (const columns of [[], ['id', 'id'], ['unknown'], ['name', 'unknown']]) expect(() => intent.input({ format, encoding: 'utf8', columns }, 'file', 'task')).toThrow();
+  });
+  it('仅SQL显式选择生成列拒绝，三数据格式保留生成列及调用方顺序', () => {
+    const intent = projectedIntent(); expect(() => intent.input({ format: 'sql', encoding: 'utf8', columns: ['g'] }, 'file', 'task')).toThrow();
+    expect(() => intent.input({ format: 'sql', encoding: 'utf8', columns: ['id', 'g'] }, 'file', 'task')).toThrow();
+    for (const format of ['csv', 'json', 'xlsx'] as const) expect(intent.input({ format, encoding: 'utf8', columns: ['g', 'id'] }, 'file', 'task').columns).toEqual(['g', 'id']);
+    expect(intent.input({ format: 'sql', encoding: 'utf8', columns: ['name', 'id'] }, 'file', 'task').columns).toEqual(['name', 'id']);
+  });
+});

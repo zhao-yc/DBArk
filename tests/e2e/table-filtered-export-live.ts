@@ -52,7 +52,7 @@ export function registerTableFilteredExportUiTests(): void {
   });
   nativeTest.use({ preserveOnUnconfirmedExit: true, trace: 'off', screenshot: 'off', video: 'off' }); nativeTest.describe.configure({ mode: 'serial', retries: 0, timeout: 120000 });
   nativeTest.afterEach(({}, info) => { if (!finished.has(info)) { retained = true; clocks.get(info)?.retain(); retainOwnedDesktopResources(info); throw Error('筛选导出GUI未确认原App终态，保留现场'); } });
-  nativeTest('正式表页排序后的1105行及已应用Alpha筛选导出', async ({ filteredSource, trace, screenshot, video }, info) => {
+  nativeTest('正式表页排序后的1105行、字段子集及已应用Alpha筛选导出', async ({ filteredSource, trace, screenshot, video }, info) => {
     const { clock, identity } = filteredSource, captured = ownedDesktopResources(info), { page, application } = captured, original = application.process(), frame = page.mainFrame(); let closed = false;
     let observer: Connection | undefined, observerStream: Socket | undefined, observerThread: number | undefined, observerClosed = false, observerClosing = false, observerSawClose = false, observerError: Error | undefined;
     const observerCommands: { callbackReturned: boolean; terminal: boolean }[] = [];
@@ -119,9 +119,21 @@ export function registerTableFilteredExportUiTests(): void {
     for (const [index, column] of ['label', 'id'].entries()) { await step(() => sorting.getByRole('button', { name: sortText.add, exact: true }).click()); await step(() => sorting.getByRole('combobox', { name: sortText.field(index + 1), exact: true }).selectOption(column)); }
     await step(() => sorting.getByRole('combobox', { name: sortText.direction(2), exact: true }).selectOption('DESC')); await step(() => sorting.getByRole('button', { name: sortText.apply, exact: true }).click()); await step(() => expect(sorting).toBeHidden());
     /** 仅为原窗口本次JSON路径回答一次原生保存选择；引擎、IPC和磁盘写入均为真实产品。 */
-    const exportJson = async (name: string, count: number) => {
+    const exportJson = async (name: string, count: number, projection = false) => {
       const filePath = join(output, name); await step(() => fs.writeFile(filePath, '原文件', { flag: 'wx' }));
       await step(() => tab.getByRole('button', { name: text.entry, exact: true }).click()); const dialog = page.getByRole('dialog', { name: text.title, exact: true }); await step(() => dialog.getByRole('combobox', { name: text.format, exact: true }).selectOption('json'));
+      if (projection) {
+        // 正式UI先证明空选择不能获得文件能力，再明确选择两列，不直接改配置或IPC。
+        await step(() => dialog.getByRole('button', { name: text.clearFields, exact: true }).click());
+        await step(() => expect(dialog.getByText(text.emptyFields, { exact: true })).toBeVisible());
+        await step(() => expect(dialog.getByRole('button', { name: text.choose, exact: true })).toBeDisabled());
+        await step(() => expect(dialog.getByRole('button', { name: text.start, exact: true })).toBeDisabled());
+        await step(() => dialog.getByRole('checkbox', { name: '导出字段 id', exact: true }).check());
+        await step(() => dialog.getByRole('checkbox', { name: '导出字段 amount', exact: true }).check());
+        await step(() => expect(dialog.getByRole('checkbox', { name: '导出字段 label', exact: true })).not.toBeChecked());
+      }
+      /** 每次只消费原窗口同一精确路径的一次保存回答；改顺序后必须重新走原文件能力签发。 */
+      const chooseOriginalFile = async () => {
       await step(() => application.evaluate(({ dialog, BrowserWindow }, input) => {
         const original = dialog.showSaveDialog, windows = BrowserWindow.getAllWindows().filter(item => !item.isDestroyed()); if (windows.length !== 1) throw Error('筛选导出文件选择原窗口不唯一');
         const owner = windows[0];
@@ -131,18 +143,35 @@ export function registerTableFilteredExportUiTests(): void {
           return { canceled: false, filePath: input.filePath };
         }) as typeof dialog.showSaveDialog;
       }, { filePath }));
-      await step(() => dialog.getByRole('button', { name: text.choose, exact: true }).click()); await step(() => expect(dialog.getByRole('button', { name: text.chooseAgain + '：' + basename(filePath), exact: true })).toBeEnabled()); await step(() => dialog.getByRole('button', { name: text.start, exact: true }).click()); await step(() => expect(dialog.getByText(text.completed(count), { exact: true })).toBeVisible());
+        await step(() => dialog.getByRole('button', { name: text.choose, exact: true }).click());
+        await step(() => expect(dialog.getByRole('button', { name: text.chooseAgain + '：' + basename(filePath), exact: true })).toBeEnabled());
+      };
+      await chooseOriginalFile();
+      if (projection) {
+        await step(() => dialog.getByRole('button', { name: '上移导出字段 amount', exact: true }).click());
+        const order = dialog.getByRole('list', { name: text.fieldOrder, exact: true });
+        await step(() => expect(order.locator('li > span')).toHaveText(['amount', 'id']));
+        await step(() => expect(dialog.getByRole('button', { name: text.start, exact: true })).toBeDisabled());
+        await step(() => expect(dialog.getByRole('button', { name: text.chooseAgain + '：' + basename(filePath), exact: true })).toHaveCount(0));
+        // 旧令牌已撤销，重新明确选择同一projection.json，不能依旧令牌直接执行。
+        await chooseOriginalFile();
+      }
+      await step(() => dialog.getByRole('button', { name: text.start, exact: true }).click()); await step(() => expect(dialog.getByText(text.completed(count), { exact: true })).toBeVisible());
       const rows = JSON.parse(await step(() => fs.readFile(filePath, 'utf8'))); expect(rows).toHaveLength(count); await step(() => dialog.getByRole('button', { name: text.done, exact: true }).click()); await step(() => expect(dialog).toBeHidden()); return { filePath, rows };
     };
     const full = await exportJson('all.json', 1105);
+    const projection = await exportJson('projection.json', 1105, true);
+    // label未输出仍参与原多列排序；逐行比对首个完整文件，不能只比集合或抽样。
+    for (const row of projection.rows) expect(Object.keys(row)).toEqual(['amount', 'id']);
+    expect(projection.rows).toEqual(full.rows.map((row: { amount: unknown; id: unknown }) => ({ amount: row.amount, id: row.id })));
     await step(() => tab.getByRole('button', { name: valuesText.open, exact: true }).click()); const candidates = page.getByRole('dialog', { name: valuesText.title, exact: true }); await step(() => candidates.getByRole('combobox', { name: valuesText.column, exact: true }).selectOption('label')); await step(() => candidates.getByRole('button', { name: valuesText.read, exact: true }).click()); await step(() => expect(candidates.getByRole('checkbox', { name: /^"[Aa]lpha ?"$/ })).toBeVisible()); await step(() => candidates.getByRole('checkbox', { name: /^"[Aa]lpha ?"$/ }).check()); await step(() => candidates.getByRole('button', { name: valuesText.apply, exact: true }).click()); await step(() => expect(candidates).toBeHidden());
     const filtered = await exportJson('alpha.json', 369); expect(filtered.rows).toEqual(full.rows.filter((row: { label: string | null }) => typeof row.label === 'string' && row.label.trim().toLowerCase() === 'alpha')); expect(filtered.rows.map((row: { id: number }) => row.id)).toEqual(filtered.rows.map((row: { id: number }) => row.id).sort((left: number, right: number) => right - left));
-    const tasks = await step(() => page.evaluate(() => window.dbark.invoke('tasks.list', {}))); expect(tasks.filter(task => task.kind === 'table.exportFiltered')).toHaveLength(2); expect(tasks.every(task => task.status === 'completed')).toBe(true); expect(await step(() => page.evaluate(() => window.dbark.invoke('history.list', {})))).toEqual([]); expect(pageErrors).toEqual([]);
+    const tasks = await step(() => page.evaluate(() => window.dbark.invoke('tasks.list', {}))); expect(tasks.filter(task => task.kind === 'table.exportFiltered')).toHaveLength(3); expect(tasks.every(task => task.status === 'completed')).toBe(true); expect(await step(() => page.evaluate(() => window.dbark.invoke('history.list', {})))).toEqual([]); expect(pageErrors).toEqual([]);
     const screenshotPath = info.outputPath('全部筛选行-多列排序.png'); await step(() => tab.screenshot({ path: screenshotPath })); const screenshotHash = createHash('sha256').update(await step(() => fs.readFile(screenshotPath))).digest('hex'); await step(() => identity.assertCurrent());
     await confirmOwnedDesktopExit(info); closed = true; check(); expect(original.exitCode).toBe(0); await step(() => identity.assertCurrent());
     await assertObserverIdentity(); expect(await readObserver('threads')).toEqual([]); check();
     observerClosing = true; await step(() => closeMysqlConnection(observer!, true)); observerClosed = true; observerClosing = false; check();
     expect(observerSawClose).toBe(true); expect(observerStream!.closed).toBe(true); expect(observerCommands.every(command => command.callbackReturned && command.terminal)).toBe(true); await step(() => identity.assertCurrent());
-    await step(() => info.attach('全部筛选行正式专项终态', { body: Buffer.from(JSON.stringify({ kind: 'dbark.table-filtered-export-ui', database, fullRows: full.rows.length, filteredRows: filtered.rows.length, files: [full.filePath, filtered.filePath], pageSize: 50, sorting: ['label ASC', 'id DESC'], normalExit: true, originalProcessExitCode: original.exitCode, sourceManifest: values.DBARK_TABLE_FILTERED_EXPORT_MANIFEST_SHA256, sourceVerifiedBeforeAndAfter: true, serverVersion: '8.4.11', serverUuidVerified: true, originalOwnerVerifiedBeforeAndAfter: true, controlThreadId: observerThread, observerClosed, targetThreadsAfterExit: 0, observerCommandsEnded: true, screenshot: { path: screenshotPath, sha256: screenshotHash }, nativeFilePickerInputVerified: false, mainIpcAuditVerified: false, systemClipboard: 0, installerVerified: false, macOSVerified: false })), contentType: 'application/json' })); finished.add(info);
+    await step(() => info.attach('全部筛选行正式专项终态', { body: Buffer.from(JSON.stringify({ kind: 'dbark.table-filtered-export-ui', database, fullRows: full.rows.length, projectionRows: projection.rows.length, projectionColumns: ['amount', 'id'], projectionOrderMatchesFullRows: true, filteredRows: filtered.rows.length, files: [full.filePath, projection.filePath, filtered.filePath], pageSize: 50, sorting: ['label ASC', 'id DESC'], normalExit: true, originalProcessExitCode: original.exitCode, sourceManifest: values.DBARK_TABLE_FILTERED_EXPORT_MANIFEST_SHA256, sourceVerifiedBeforeAndAfter: true, serverVersion: '8.4.11', serverUuidVerified: true, originalOwnerVerifiedBeforeAndAfter: true, controlThreadId: observerThread, observerClosed, targetThreadsAfterExit: 0, observerCommandsEnded: true, screenshot: { path: screenshotPath, sha256: screenshotHash }, nativeFilePickerInputVerified: false, mainIpcAuditVerified: false, systemClipboard: 0, installerVerified: false, macOSVerified: false })), contentType: 'application/json' })); finished.add(info);
   });
 }

@@ -15,6 +15,14 @@ const info = (view = false): TableInfo => ({ database, name: view ? 'subject_vie
 const request = (source: TableInfo): TableFilteredExportInput => ({ connectionId: 'c', database, table: source.name, fileToken: 'file', taskId: 'task', metadataKey: tableCopyMetadataKey(source), format: 'csv', encoding: 'utf8', filters: [{ column: 'id', operator: '>=', value: '1' }, { column: 'id', operator: '<', value: '0', enabled: false }, { column: 'id', operator: '<=', value: '1105' }], filterMode: 'all', filterGroup: { mode: 'all', children: [{ mode: 'any', children: [0, 1] }, 2] }, sort: [{ column: 'label', direction: 'ASC' }, { column: 'id', direction: 'DESC' }] });
 
 describe('完整筛选导出本专项窄SQL白名单', () => {
+  it('新增两列只准准确amount/id顺序及原范围排序，不能外推任意字段或目标', () => {
+    const { audit } = policy();
+    // 模板独立手写，不用正式planner生成本轮审计正例。
+    const statement = 'SELECT `amount`, `id` FROM `' + database + '`.`subject` WHERE (((`id` >= CAST(_utf8mb4 X\'31\' AS DECIMAL(65,0)))) AND (`id` <= CAST(_utf8mb4 X\'31313035\' AS DECIMAL(65,0)))) ORDER BY `label` ASC, `id` DESC';
+    expect(() => audit.assert(statement, [], 'table.exportFiltered:nonce')).not.toThrow();
+    for (const changed of [statement.replace('`amount`, `id`', '`id`, `amount`'), statement.replace('`amount`, `id`', '`amount`'), statement.replace('`amount`, `id`', '`amount`, `id`, `label`'), statement.replace('31313035', '31313036'), statement.replace('`subject`', '`subject_view`'), statement.replace('`label` ASC', '`label` DESC'), statement.replace(database, 'business'), statement + ' LIMIT 1000']) expect(() => audit.assert(changed, [], 'table.exportFiltered:nonce')).toThrow();
+    expect(() => audit.assert(statement, [], 'metadata.table:nonce')).toThrow(); expect(() => audit.assert(statement, [], 'observer')).toThrow();
+  });
   it('四格式实际受控投影都须符合独立列举的谓词、目标和ORDER模板', () => {
     const { audit } = policy(), source = info();
     for (const format of ['csv', 'json', 'sql', 'xlsx'] as const) expect(() => audit.assert(planTableFilteredExport(source, { ...request(source), format }).sql, [], 'table.exportFiltered:nonce')).not.toThrow();
