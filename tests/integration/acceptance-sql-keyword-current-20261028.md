@@ -19,3 +19,13 @@ Root另下载旧artifact12192148660原ZIP：44098字节，SHA256 `24105dab20523d
 必须新GitHub-hosted macOS arm64、准确当前main／workflow／job／首次attempt；实际OS和架构逐次记录。原回环预检、同job type／build成功后才签本次完整运行字节，准许及manifest前后重核。保留原两例、原5秒／120秒、单worker、零重试，trace／screenshot／video关闭。不得调用原六专项、legacy、安装或旧artifact消费者，不降低原显示／输入／模型／退出门。
 
 完整原进程状态、报告、准许、真实清单与终态附件缺一不可；绿色step、无残留或托管VM销毁均不替代四个正常owner和原目录清理事实。失败保留原件，不能把观察超时当作终态或重放理由。通过也只覆盖当前源码的CDP格式化快捷键和工作台恢复，不覆盖系统Cmd+S、安装、Intel、其它Mac流程或旧冻结产品；暂不发布。
+
+## 新Mac实际结果
+
+测试头`8c85cdd322b0f36409b504257c36788886136b01`，[run40622537303](https://github.com/zhao-yc/DBArk/actions/runs/40622537303)／job122599736395终态success，首次attempt1。实际macOS26.6.2（25G83）、darwin arm64、Node24.22.1、Electron44.7.0、Playwright1.64.0；image macos26／20261021.0445.8。原回环预检、同jobtype／build及原Playwright进程均status0、signal和errorCode为空。
+
+原upper26.0秒、lower12.7秒，完整报告共39.7秒，expected2／unexpected0／skipped0／flaky0。两个case各仅一result、retry0／timeout120000；原5秒正文断言、单Undo／Redo、模块迟到撤销、SQLite9、保存的活动标签／唯一可见pane／模型／正文及独立重启均由原完整用例验证。四个owner的confirmed／willQuit／closed均true，各case记录PID数量5／4，目录均已移除；模块门每例held1／delivered1／detached true／failed false／contextRoundTrip true。附件声明systemClipboard0／sqlExecution0，本轮未操作系统保存键。
+
+artifact12788082342为35901字节，ZIP SHA256 `4a5080257ee5cb0f04abc499f2764b0d028f010fc2c0d25f99eed8c09bac5fb6`。Root本机独立核全部36项CRC、路径／私钥块、原进程状态及完整report／附件：报告SHA256 `aceeeb4bf431210b6e51618b2024dcdfec9f3c19e5b4bfe46fc98d6e590f53e8`；准许SHA256 `19c46d286d1a6bc08c53b0516bb8447179c2f277d49ddb116126f6537c69bc97`；113项清单SHA256 `93fb1f6692c661e504869611005ec0c8b8b2298e4235d4741284971bce9ba0b2`，与独立keyword清单原字节相同，前后准许重核通过。raw type／build日志与producer记录匹配；产品src tree为`c50b50c9f9de733610455d2d2b85e29409e2e964`，package／lock对象及原spec SHA均与Root当前相符。
+
+原spec／config、owner／runtime、keyword环境门及identity producer与bf对应文件无差异；共享case期限守卫此前改用原框架单调时钟而未延长120秒，本轮未修改该守卫。当前源码专项补验通过不证明旧失败根因，也不重新标记旧bf的Mac失败，不外推旧安装、系统Cmd+S或Intel。源码、预检和Mac原件索引见[机器证据](../../docs/development/sql-keyword-current-20261028.evidence.json)。暂不发布。

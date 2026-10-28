@@ -1,0 +1,82 @@
+{
+  "kind": "dbark.sql-keyword-current-source-evidence",
+  "verifiedAt": "2026-10-28",
+  "testHead": "8c85cdd322b0f36409b504257c36788886136b01",
+  "product": {
+    "srcTree": "c50b50c9f9de733610455d2d2b85e29409e2e964",
+    "packageBlob": "770d9e054ad5d8a5fed00bc511690df3847fc28a",
+    "lockBlob": "ee1f1cb68e6e5edd244eac6f04c95d3a68bca32f",
+    "originalSpecSha256": "1b6b0a30fd7ae165fbd9f18cded69d3196e9a57e8302e5c4a6eb817fa7e76a2b"
+  },
+  "github": {
+    "runId": 40622537303,
+    "jobId": 122599736395,
+    "artifactId": 12788082342,
+    "attempt": 1,
+    "conclusion": "success",
+    "url": "https://github.com/zhao-yc/DBArk/actions/runs/40622537303"
+  },
+  "platform": {
+    "os": "macOS",
+    "version": "26.6.2",
+    "build": "25G83",
+    "arch": "arm64",
+    "node": "24.22.1",
+    "electron": "44.7.0",
+    "playwright": "1.64.0"
+  },
+  "archive": {
+    "bytes": 35901,
+    "sha256": "4a5080257ee5cb0f04abc499f2764b0d028f010fc2c0d25f99eed8c09bac5fb6",
+    "entries": 36,
+    "allCrcPathsPrivateKeyBlockScanPassed": true
+  },
+  "report": {
+    "sha256": "aceeeb4bf431210b6e51618b2024dcdfec9f3c19e5b4bfe46fc98d6e590f53e8",
+    "expected": 2,
+    "unexpected": 0,
+    "skipped": 0,
+    "flaky": 0,
+    "resultsPerCase": 1,
+    "retry": 0,
+    "caseTimeoutMs": 120000
+  },
+  "approvalSha256": "19c46d286d1a6bc08c53b0516bb8447179c2f277d49ddb116126f6537c69bc97",
+  "runtimeManifest": {
+    "sha256": "93fb1f6692c661e504869611005ec0c8b8b2298e4235d4741284971bce9ba0b2",
+    "files": 113,
+    "sourceOnly": true
+  },
+  "owners": {
+    "normalExitCount": 4,
+    "directoriesRemoved": 2,
+    "recordedPidsPerCase": [
+      [
+        5,
+        4
+      ],
+      [
+        5,
+        4
+      ]
+    ]
+  },
+  "originalFailure": {
+    "product": "bf08645a28fceb5d1d40ba16f013bb78e7a7c0a2",
+    "runId": 39265643127,
+    "jobId": 118104387921,
+    "artifactId": 12192148660,
+    "reportSha256": "8dc14b60b5bc28d0a06e4a72de40bf0795999047bbc4b0227f15739f7ca28ebe",
+    "statusPreserved": "unexpected1/skipped1/flaky0",
+    "rootCauseUnproven": true
+  },
+  "unverified": [
+    "旧冻结产品与安装包",
+    "Mac系统Cmd+S",
+    "macOS x64",
+    "其它Mac流程",
+    "全部Navicat工作包"
+  ],
+  "published": false,
+  "productChangedInThisWork": false
+}

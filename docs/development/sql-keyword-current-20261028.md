@@ -20,6 +20,8 @@ WIN11-TEST预检已通过Node语法、类型及新旧运行器两文件46项；R
 
 ## 证据边界
 
-先由WIN11-TEST预检新脚本及守卫，再推送触发Mac实际运行。当前没有根因证明：按键到达不等于动作已接纳，configuration事件也不等于它发生在实际Deferred等待内。若新例仍失败，再补官方getter／事件的只读见证，不能代理模型、动作或私有store来制造通过。
+当前源码已在[新run40622537303](https://github.com/zhao-yc/DBArk/actions/runs/40622537303)完成Mac实际验证：macOS26.6.2／arm64，原upper／lower均单次通过，无跳过或重试，四个owner正常退出、两份临时目录清理。Root独立核35901字节／36项ZIP、完整原报告、准许及113运行文件清单；产品src／package／lock对象与本地相符，原spec和config未改。机器索引见[本轮证据](sql-keyword-current-20261028.evidence.json)。
+
+本轮没有修改产品或证明根因，只能确认当前源码未复现旧失败。相比旧冻结候选，共享期限守卫此前已改为原框架单调时钟，仍守原120秒；owner／runtime、关键字门及原spec／config未变，本轮未再修改它们。不能将结果归因为某个配置事件、时钟修正或产品提交，也不追认旧bf候选通过。
 
 实际结果见[专项验收](../../tests/integration/acceptance-sql-keyword-current-20261028.md)。Mac系统Cmd+S、安装版、Intel及完整Navicat工作包均不由本专项覆盖，暂不发布。
