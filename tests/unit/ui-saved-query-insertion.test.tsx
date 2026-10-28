@@ -60,6 +60,14 @@ function button(label: string) { const result = doc.querySelectorAll('button').f
 async function click(label: string) { const node = button(label); expect(node.disabled).toBe(false); await act(async () => node.dispatchEvent(new MemoryEvent('click'))); }
 function callback(node: any, name = 'onClick') { const key = Object.keys(node).find(value => value.startsWith('__reactProps$')); if (!key || typeof node[key][name] !== 'function') throw Error('缺少真实React事件'); return node[key][name] as (event?: any) => void; }
 const calls = (f: ReturnType<typeof fixture>, command: string) => f.request.mock.calls.filter(call => call[0] === command);
+
+it.each([false, true])('App传入%s插入目标时，已应用列表仍只有一个进度状态，目标说明完整可读', async withTarget => {
+  const f = fixture(); await render(f, withTarget ? f.lease : null);
+  const statuses = doc.querySelectorAll('[role="status"]'); expect(statuses).toHaveLength(1);
+  expect(statuses[0].textContent).toContain('当前第');
+  expect(doc.body.textContent).toContain(withTarget ? text.target(f.lease.title) : text.unavailable);
+  expect(doc.querySelectorAll('p').some(node => node.getAttribute('aria-live') === 'polite' && node.textContent.includes(withTarget ? text.target(f.lease.title) : text.unavailable))).toBe(true);
+});
 async function escape() { await act(async () => doc.dispatchEvent(Object.assign(new MemoryEvent('keydown'), { key: 'Escape' }))); }
 
 it('来源连接缺失仍按摘要插入完整长SQL，先释放游标且不打开新标签或发送连接参数', async () => {

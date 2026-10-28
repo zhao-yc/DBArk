@@ -30,6 +30,14 @@ function target() {
   return { lease, inserted, invalidate };
 }
 function fixture() { return { ...target(), onClose: vi.fn(), onOpen: vi.fn(), onStructure: vi.fn() }; }
+
+it.each([false, true])('App传入%s插入目标时，搜索窗口仍只有一个进度状态，说明不冒充搜索结果', async withTarget => {
+  const f = fixture(); await render(f, withTarget ? f.lease : null);
+  const statuses = doc.querySelectorAll('[role="status"]'); expect(statuses).toHaveLength(1);
+  expect(statuses[0].textContent).toContain(searchText.empty);
+  expect(doc.body.textContent).toContain(withTarget ? text.target(f.lease.title) : text.unavailable);
+  expect(doc.querySelectorAll('p').some(node => node.getAttribute('aria-live') === 'polite' && node.textContent.includes(withTarget ? text.target(f.lease.title) : text.unavailable))).toBe(true);
+});
 beforeAll(async () => {
   doc = memoryDocument(); (doc as any).oninput = null; const create = doc.createElement.bind(doc);
   doc.createElement = name => {

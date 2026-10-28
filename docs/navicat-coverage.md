@@ -1,5 +1,9 @@
 # Navicat 全功能覆盖目标
 
+W01开发源码新增[工作台标签重排](development/tab-order-20261028.md)：真实鼠标前／后投放，Ctrl／⌘＋Shift＋左右／Home／End 调序，保活动标签和最新原对象，顺序沿原设置持久化。WIN11-TEST 类型、16 文件 244 项定向及正式四文件窗口 11 通过／2 实库条件跳过，原模型在移动中保持、两组键盘 Undo／Redo 和同 profile 两个 owned 正常退出／重启恢复通过；虚拟机完整回归失败及原件单列保留；按已授权的连接不稳回退，本机类型／291项相关及正常权限完整19552通过／1平台跳过，仅同步旧行详情RAM测试基线，产品和原生脚本保持。首次类型、旧 RAM 夹具、投放微任务时序和错误单次撤销假设的原失败分别保留，见[验收记录](../tests/integration/acceptance-tab-order-20261028.md)。混合表页真实窗口、拖动中并发操作、实际文件绑定、活动会话／结果／事务、macOS 和安装另验，完整工作包及发行计数不增加，暂不发布。
+
+Q03整合回归修复：`845b2d32` 的[三平台 CI 40631066083](https://github.com/zhao-yc/DBArk/actions/runs/40631066083)原有四条保存查询分页／矮窗／全文／正则取消用例真实失败，因插入目标说明产生第二个 `role=status`；改为普通 `aria-live` 段落并补实际 `null`／有效目标反例。新 Windows 四文件回归已通过原四例，未改原断言／期限；旧 CI 不追认成功，新的 macOS／安装结果另验，详见[原验收追加记录](../tests/integration/acceptance-saved-query-insertion-20261028.md)。
+
 Q03开发源码新增[已保存查询插入原选区](development/saved-query-insertion-20261028.md)：保存列表与全文搜索两个入口重新核验完整正文，单次编辑／撤销，原连接、默认库和来源绑定保持，不执行SQL、不新建标签。WIN11-TEST类型、12文件143项专项、完整19490通过／1平台跳过及构建通过；正式Main＋Monaco两入口复合例一次通过，真实迟到回包按Escape后不改变模型／Undo栈，原owned正常退出。只读探测／控制器包装错误单列；实际文件绑定、重启、实库活动状态、macOS及安装另验，见[验收记录](../tests/integration/acceptance-saved-query-insertion-20261028.md)。完整工作包及发行计数不增加，暂不发布。
 
 Q01补验[当前源码macOS关键字重启专项](development/sql-keyword-current-20261028.md)：8c85cdd3的新run40622537303在macOS26.6.2 arm64上，原upper／lower均单次通过，四owner正常退出及两目录清理，原5秒／120秒、Undo／迟到撤销／SQLite9／重启身份门保持。WIN11-TEST Node／类型及46项运行器预检通过；Root独立回读新旧ZIP、原报告及113运行文件清单。产品未修改，未证明旧失败根因，不追认旧bf候选；安装、系统Cmd+S和Intel未验，不增加完整工作包或发行计数，暂不发布。

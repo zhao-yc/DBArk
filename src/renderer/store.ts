@@ -11,6 +11,7 @@ import { completionServerFacts } from './completionServerFacts';
 import { assertQueryFileSourceSettings, assertQueryFileSourceSql, sameQueryFileSource, type QueryFileSourceView } from '../shared/queryFileSources';
 import type { QueryFileTaskState } from './queryFileTasks';
 import { queryFilesZh } from './locales/queryFiles.zh-CN';
+import { TabOrderRegistry, type TabOrderRef, type TabOrderMove } from './tabOrder';
 
 export type WorkspaceTab = AppSettings['tabs'][number];
 const defaults: AppSettings = { theme: 'dark', sidebarWidth: 260, resultLimit: 1000, pageSize: 100, dataTypeColors: false, editorFontSize: editorFontLimits.defaultSize, editorWordWrap: defaultEditorWordWrap, editorTabSize: editorIndentationLimits.defaultTabSize, editorInsertSpaces: editorIndentationLimits.defaultInsertSpaces, tabs: [] };
@@ -18,6 +19,7 @@ let busySequence = 0;
 const busyOwners = new Map<string, number>();
 const queryFileOpenTargets = new WeakSet<WorkspaceTab>();
 let saveTimer: ReturnType<typeof setTimeout> | undefined;
+const tabOrder = new TabOrderRegistry();
 
 interface WorkspaceState {
   ready: boolean; settings: AppSettings; connections: ConnectionProfile[]; tasks: TaskRecord[];
@@ -30,6 +32,7 @@ interface WorkspaceState {
   invalidateConnection: (connectionId: string) => void;
   updateSettings: (update: Partial<AppSettings>) => void; openTab: (tab: Omit<WorkspaceTab, 'id'> & { id?: string }) => void;
   updateTab: (id: string, update: Partial<WorkspaceTab>) => void; closeTab: (id: string) => void;
+  tabOrderSnapshot(): readonly TabOrderRef[]; resolveTabOrder(ref: TabOrderRef): WorkspaceTab | undefined; moveTab(ref: TabOrderRef, move: TabOrderMove): boolean;
   select: (selection: WorkspaceState['selection']) => void; notify: (text: string, error?: boolean) => void;
   setBusy: (id: string, busy: boolean) => void; setDirty: (id: string, dirty: boolean) => void;
   onTask: (event: TaskEvent) => void;
@@ -45,6 +48,7 @@ export function wasQueryFileOpenTarget(tab: WorkspaceTab): boolean { return quer
 /** 统一配置提交与原持久化顺序，允许文件打开阶段与标签在同一store通知中切换。 */
 function commitWorkspaceSettings(update: Partial<AppSettings>, openings = useWorkspace.getState().queryFileOpenings): void {
   const state = useWorkspace.getState(), previous = state.settings, settings = { ...previous, ...update }, queryFileDirty = { ...state.queryFileDirty };
+  try { tabOrder.observe(previous.tabs); } catch { /* 旧坏状态只撤销重排权限，仍允许原设置入口修复。 */ }
   assertQueryFileSourceSettings(settings);
   // SQL或修订变化先同步标dirty，再等待摘要确认；关闭/退出不能借用上一次正文的clean缓存。
   for (const tab of settings.tabs) {
@@ -53,7 +57,9 @@ function commitWorkspaceSettings(update: Partial<AppSettings>, openings = useWor
     if (!tab.fileSourceBinding) delete queryFileDirty[tab.id];
   }
   for (const id of Object.keys(queryFileDirty)) if (!settings.tabs.some(tab => tab.id === id)) delete queryFileDirty[id];
-  useWorkspace.setState({ settings, queryFileDirty, queryFileOpenings: openings });
+  const fileDirtyUnchanged = Object.keys(queryFileDirty).length === Object.keys(state.queryFileDirty).length && Object.keys(queryFileDirty).every(id => queryFileDirty[id] === state.queryFileDirty[id]);
+  useWorkspace.setState({ settings, queryFileDirty: fileDirtyUnchanged ? state.queryFileDirty : queryFileDirty, queryFileOpenings: openings });
+  try { tabOrder.observe(settings.tabs); } catch { /* settings自身的校验保持原入口，重排不发布部分列表。 */ }
   // 标签身份立即投递；正文仍防抖，保持原settings.save通道及400毫秒合并规则。
   const identities = (value: AppSettings) => JSON.stringify(value.tabs.map(tab => [tab.id, tab.connectionId, tab.kind]));
   if (identities(previous) !== identities(settings)) { clearTimeout(saveTimer); saveTimer = undefined; void invoke('settings.save', settings).catch(error => useWorkspace.getState().notify(errorMessage(error), true)); }
@@ -151,6 +157,7 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
   initialize: async () => {
     try {
       const [settings, connections, tasks] = await Promise.all([invoke('settings.get', {}), invoke('connections.list', {}), invoke('tasks.list', {})]);
+      tabOrder.reset();
       set({ settings: { ...defaults, ...settings, editorFontSize: readEditorFontSize(settings.editorFontSize), editorWordWrap: readEditorWordWrap(settings.editorWordWrap), editorTabSize: readEditorTabSize(settings.editorTabSize), editorInsertSpaces: readEditorInsertSpaces(settings.editorInsertSpaces), ...(Object.hasOwn(settings, 'sqlKeywordCase') ? { sqlKeywordCase: readSqlKeywordCase(settings.sqlKeywordCase) } : {}) }, connections, tasks, ready: true });
     } catch (error) { set({ ready: true }); get().notify(errorMessage(error), true); }
   },
@@ -172,7 +179,17 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     get().updateSettings({ tabs: [...current.tabs, tab], activeTabId: tab.id });
   },
   /** 按标签标识更新查询正文或标题，并把草稿纳入布局恢复状态。 */
-  updateTab: (id, update) => get().updateSettings({ tabs: get().settings.tabs.map(tab => tab.id === id ? { ...tab, ...update } : tab) }),
+  updateTab: (id, update) => {
+    const current = get().settings.tabs; try { tabOrder.observe(current); } catch { /* 泛设置仍能修复坏状态，但不能继承旧重排权限。 */ }
+    const releases: Array<() => void> = [];
+    const tabs = current.map(tab => { if (tab.id !== id) return tab; const next = { ...tab, ...update }; try { releases.push(tabOrder.continueUpdate(tab, next)); } catch { /* 换绑或无效目标不继承文档令牌。 */ } return next; });
+    try { commitWorkspaceSettings({ tabs }); } finally { for (const release of releases) release(); }
+  },
+  /** 只投影内存身份，旧事件提交时仍须重新解析同一个live标签对象。 */
+  tabOrderSnapshot: () => tabOrder.snapshot(get().settings.tabs),
+  resolveTabOrder: ref => tabOrder.resolve(ref, get().settings.tabs),
+  /** 顺序变化沿原400毫秒/标签身份持久化通道，绝不携带旧settings或改变活动标签。 */
+  moveTab: (ref, move) => { const tabs = tabOrder.move(ref, move, get().settings.tabs); if (!tabs) return false; commitWorkspaceSettings({ tabs }); return true; },
   /** 调用方完成任务和草稿确认后删除标签，当前标签关闭时激活邻近标签。 */
   closeTab: id => {
     const settings = get().settings; const index = settings.tabs.findIndex(tab => tab.id === id); const tabs = settings.tabs.filter(tab => tab.id !== id);
@@ -201,6 +218,9 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     return { tasks: [task, ...state.tasks.filter(item => item.id !== event.taskId)].slice(0, 200), queryFileTasks };
   })
 }));
+
+// 包括直接setState在内的每次真实通知都记录删除/换绑ABA；异常仅撤销重排权限，不影响其它store订阅。
+useWorkspace.subscribe(state => { try { tabOrder.observe(state.settings.tabs); } catch { /* registry已清空旧令牌，下一次snapshot会报告整组错误。 */ } });
 
 /** 主进程的退出握手负责保存；卸载时只清理定时器，禁止向已关闭的配置库再次写入。 */
 window.addEventListener('beforeunload', () => { clearTimeout(saveTimer); saveTimer = undefined; });

@@ -27,7 +27,8 @@ function fixture(options: { strict?: boolean; holdClose?: boolean; aliveAfterClo
   context = createContext({ Error, AggregateError, WeakMap, Number, Date, expect: assertion, desktop, closed: false, pageErrors: [], snippetsDiagnostics: undefined, snippetsDiagnosticsArmed: false, quitReady: Promise.resolve(),
     createSnippetsNativeDiagnostics: () => undefined, mkdtemp: vi.fn(async () => join(tmpdir(), 'dbark-e2e-owned')), join, dirname, basename, resolve, tmpdir, rm, forceStopOwnProcess: force,
     launchDesktop: vi.fn(async () => { order.push('launch'); context.closed = false; }), requestQuit: vi.fn(async () => { order.push('quit-request'); }), answerDialogs: vi.fn(async () => { order.push('answer'); }),
-    process: { kill: () => { if (options.aliveAfterClose) return true; throw Object.assign(Error('RAM端口确认进程已消失'), { code: 'ESRCH' }); } },
+    // Node真实process始终具有env；空RAM环境不领取显式离线重启能力，退出/清理断言保持原样。
+    process: { env: {}, kill: () => { if (options.aliveAfterClose) return true; throw Object.assign(Error('RAM端口确认进程已消失'), { code: 'ESRCH' }); } },
     environment: { DBARK_TEST_HOST: 'offline.invalid', DBARK_TEST_USER: 'RAM端口' }, randomUUID: () => '12345678-1234-1234-1234-123456789abc', tlsCertificate: () => undefined, readFileSync: () => { throw Error('不能读取认证文件'); },
     mysql: { createConnection: vi.fn(async () => observer) }, connectAndCreate: vi.fn(async (database: string) => ({ database, connectionId: 'RAM连接', connectionName: '合成端口' })),
     page: { evaluate: vi.fn(async () => { order.push('tasks'); return options.tasks ?? []; }), screenshot: vi.fn(async () => { throw Error('纯测试禁止截图'); }) },

@@ -50,6 +50,8 @@ async function openDetails(index = 0, grid = mainGrid()) { await activate(index,
 it('完整原列顺序包含隐藏列，精确值普通文本显示；打开、翻行和关闭不改勾选/布局/复制或发命令', async () => {
   await mount(); const before = structuredClone(original); await layout();
   await act(async () => mainGrid().onSelectedRowsChange(new Set([1])));
+  // 先结清前序布局的400ms保存，再验证详情操作没有新增任何请求；不能过滤settings.save掩盖副作用。
+  await flush();
   const selected = [...mainGrid().selectedRows], copied = copy(), calls = [...commands], keys = mainGrid().columns.map((column: any) => column.key);
   await openDetails();
   expect(document.querySelector('[role="dialog"]')).toBeNull(); expect(region()!.textContent).toContain(detailsText.scope);
@@ -92,6 +94,8 @@ it.each(['result', 'pin', 'version', 'job', 'inactive', 'connection', 'closed', 
   if (change === 'new') await click(zh.query.text010);
   if (change === 'modal') { const node = document.createElement('div'); node.setAttribute('role', 'dialog'); document.body.appendChild(node); node.parentNode!.removeChild(node); await act(async () => { for (const observer of [...observers]) observer([{ addedNodes: [node] }]); }); }
   if (change === 'unmount') { await act(async () => root!.unmount()); root = undefined; }
+  // 当前动作的合法保存必须先完成，后续旧闭包仍逐项比较完整请求基线。
+  await flush();
   const calls = [...commands];
   await act(async () => { oldGrid.onActivePositionChange({ row: original.rows[0], rowIdx: 0 }); oldOpen(); oldNext(); oldClose(); });
   expect(region()).toBeNull(); expect(commands).toEqual(calls);

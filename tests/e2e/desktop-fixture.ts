@@ -1,4 +1,4 @@
-import { test as baseTest, expect, _electron as electron, type ElectronApplication, type Page, type TestInfo } from '@playwright/test';
+import { test as baseTest, expect, _electron as electron, type ConsoleMessage, type ElectronApplication, type Page, type TestInfo } from '@playwright/test';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { basename, dirname, join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -29,8 +29,10 @@ interface OwnedDesktopExit {
   confirmed: boolean; retained: boolean; active: boolean; application?: ElectronApplication; ownerPage?: Page;
   processIds?: number[]; ready?: Promise<void>; closed: boolean; onClose?: () => void;
   diagnostics?: SnippetsNativeDiagnostics; confirming?: Promise<void>;
+  restartDirectory?: string;
 }
 const preservedDesktopExits = new WeakMap<TestInfo, OwnedDesktopExit>();
+const desktopEventReleases = new WeakMap<ElectronApplication, () => void>();
 /** 共用同一个TestInfo识别本例选项，不以全局环境开关影响其他用例。 */
 export function preservesUnconfirmedExit(info: TestInfo): boolean { return preservedDesktopExits.has(info); }
 /** 一旦无法确认，后续自动fixture也必须停链，不能再尝试退出或删除所属资源。 */
@@ -118,6 +120,27 @@ export async function confirmOwnedDesktopExit(info: TestInfo): Promise<void> {
   finally { state.confirming = undefined; }
 }
 
+/** 仅普通离线owned用例可显式重启一次；先确认原owner退出，再用新墓碑绑定同一临时profile。 */
+export async function restartOwnedDesktop(info: TestInfo): Promise<ReturnType<typeof ownedDesktopResources>> {
+  const previous = ownedDesktopState(info), directory = previous.restartDirectory, releaseEvents = desktopEventReleases.get(previous.application!);
+  if (process.env.DBARK_INTEGRATION_ENABLED !== '0' || !previous.confirmed || !previous.closed || previous.confirming || !directory || directory !== dataDir || previous.diagnostics || !releaseEvents
+    || dirname(resolve(directory)) !== resolve(tmpdir()) || !basename(directory).startsWith('dbark-e2e-')) throw Error('原owned退出或重启范围未确认，不能启动新应用');
+  // 旧应用已完成close和PID消失核验，解除仅属于旧实例的事件，迟到事件不能污染新共享句柄。
+  releaseEvents(); desktopEventReleases.delete(previous.application!);
+  if (previous.onClose) previous.application!.off('close', previous.onClose);
+  previous.active = false;
+  const next: OwnedDesktopExit = { confirmed: false, retained: false, active: true, closed: false };
+  preservedDesktopExits.set(info, next);
+  const guard = { assertCurrent() {
+    if (preservedDesktopExits.get(info) !== next || !next.active || next.retained || dataDir !== directory || process.env.DBARK_INTEGRATION_ENABLED !== '0') { next.retained = true; throw Error('本次重启归属已失效，保留原profile与所属进程'); }
+  } };
+  try {
+    // 复用现有先登记资源、晚回停链的启动路径；未就绪前不发布新的全局app/page。
+    await launchPreparedOwnedDesktop(info, next, directory, guard, undefined);
+    guard.assertCurrent(); return ownedDesktopResources(info);
+  } catch (reason) { next.retained = true; throw reason; }
+}
+
 /** 首次采集必须由离线片段用例在连接表单已关闭之后明确开启。 */
 export async function startSnippetsNativeDiagnostics() {
   if (!snippetsDiagnostics || snippetsDiagnosticsArmed) return;
@@ -151,16 +174,20 @@ export async function launchDesktop(guard?: { assertCurrent(): void }) {
   desktop = await electron.launch({ ...(executablePath ? { executablePath, args: [] } : { args: ['.'] }), env, chromiumSandbox: true });
   const quitMarker='DBARK_E2E_QUIT_READY:'+randomUUID();let ready!:()=>void;quitReady=new Promise<void>(resolve=>{ready=resolve;});
   closed = false;
-  desktop.on('close', () => { closed = true; });
-  desktop.on('console', message => {
+  const launchedApplication = desktop, onClosed = () => { closed = true; };
+  const onConsole = (message: ConsoleMessage) => {
     const text = message.text();
     if (text.startsWith('DBARK_E2E_DIALOG:')) dialogCalls.push(JSON.parse(text.slice('DBARK_E2E_DIALOG:'.length)) as RecordedDialog);
     if(text===quitMarker)ready();
-  });
+  };
+  desktop.on('close', onClosed); desktop.on('console', onConsole);
   // 只观察实际will-quit，不阻止退出；收到此标记前保存守卫与原生对话框都已完成。
   await desktop.evaluate(({app},marker)=>{app.once('will-quit',()=>console.log(marker));},quitMarker);
   page = await desktop.firstWindow();
-  page.on('pageerror', error => pageErrors.push(error.message));
+  const launchedPage = page, onPageError = (error: Error) => { pageErrors.push(error.message); };
+  page.on('pageerror', onPageError);
+  // 仅释放本次launch注册的三个回调，沿Playwright公开off接口，不移除其他调用者的监听。
+  desktopEventReleases.set(launchedApplication, () => { launchedApplication.off('close', onClosed); launchedApplication.off('console', onConsole); launchedPage.off('pageerror', onPageError); });
   // 原生 CI 首次启动安装产物需要额外加载时间；只延长就绪等待，仍要求状态栏真实可见。
   await expect(page.locator('.app-statusbar')).toBeVisible({ timeout: 15000 });
   await answerDialogs([]);
@@ -328,6 +355,7 @@ export const test = baseTest.extend<{ desktopLifetime: void; preserveOnUnconfirm
       // 内层已核目录回包，外层await恢复仍可能晚于afterEach；先复核再写共享目录句柄。
       if (originalGuard?.assertPreparation) launchGuard!.assertCurrent();
       if (!originalGuard?.assertPreparation) dataDir = directory;
+      if (!originalGuard && !collectQuitDiagnostics && !snippetsDiagnostics && process.env.DBARK_INTEGRATION_ENABLED === '0') state.restartDirectory = directory;
       let failed = false, originalFailure: unknown;
       try {
         if (originalGuard?.assertPreparation) { await launchPreparedOwnedDesktop(testInfo, state, directory, launchGuard!, preparedDiagnostics); launchGuard!.assertCurrent(); ownedDesktopState(testInfo); }
@@ -337,24 +365,26 @@ export const test = baseTest.extend<{ desktopLifetime: void; preserveOnUnconfirm
       }
       catch (reason) { failed = true; originalFailure = reason; throw reason; }
       finally {
+        // 显式重启替换了墓碑时，只清理当前owner；从未重启的用例仍使用原state与原收尾。
+        const finalState = preservedDesktopExits.get(testInfo) ?? state;
         try {
-          if (state.retained) {
+          if (finalState.retained) {
             if (!failed) throw new Error('本例已经停链，保留所属资源且不重复退出');
           } else try {
             ownedDesktopState(testInfo);
-            if (state.diagnostics) { await state.diagnostics.finish(testInfo.status !== testInfo.expectedStatus); ownedDesktopState(testInfo); }
+            if (finalState.diagnostics) { await finalState.diagnostics.finish(testInfo.status !== testInfo.expectedStatus); ownedDesktopState(testInfo); }
             await confirmOwnedDesktopExit(testInfo);
             ownedDesktopState(testInfo);
             if (dirname(resolve(directory)) !== resolve(tmpdir()) || !basename(directory).startsWith('dbark-e2e-')) throw new Error('拒绝清理测试临时目录以外的路径');
             await rm(directory, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 });
           } catch (cleanupFailure) {
-            state.retained = true;
+            finalState.retained = true;
             if (failed) throw new AggregateError([originalFailure, cleanupFailure], '原用例失败且退出或清理未确认，保留所属资源', { cause: originalFailure });
             throw cleanupFailure;
           }
         } finally {
           // WeakMap保留失效墓碑：迟到的实库helper仍识别显式模式，不能退回默认清理分支。
-          state.active = false; if (state.application && state.onClose) state.application.off('close', state.onClose);
+          finalState.active = false; if (finalState.application && finalState.onClose) finalState.application.off('close', finalState.onClose);
         }
       }
       return;

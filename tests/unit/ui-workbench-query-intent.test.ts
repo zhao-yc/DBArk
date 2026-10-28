@@ -35,6 +35,8 @@ function appHandlers(navigation: unknown, workspace: typeof import('../../src/re
       if (node.openingElement.attributes.properties.some(item => ts.isJsxAttribute(item) && item.name.getText(file) === 'className' && item.initializer && ts.isStringLiteral(item.initializer) && item.initializer.text === 'add-tab')) found.set('标签加号', attribute(node.openingElement, 'onClick')!);
     }
     if (ts.isJsxSelfClosingElement(node) && node.tagName.getText(file) === 'Welcome') found.set('欢迎页', attribute(node, 'onQuery')!);
+    // 标签按钮已提取到真实条带组件；沿App传入的onNew读取同一生产回调，保留全部五入口断言。
+    if (ts.isJsxSelfClosingElement(node) && node.tagName.getText(file) === 'WorkspaceTabStrip') found.set('标签加号', attribute(node, 'onNew')!);
     if (ts.isJsxSelfClosingElement(node) && node.tagName.getText(file) === 'NewQueryDialog') found.set('关闭查询', attribute(node, 'onClose')!);
     if (ts.isVariableDeclaration(node) && node.name.getText(file) === 'listener' && node.initializer?.getText(file).includes("event.key.toLowerCase() === 't'")) found.set('快捷键', node.initializer.getText(file));
     if (ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression) && node.expression.name.text === 'onMenu') found.set('原生菜单', node.arguments[0].getText(file));
