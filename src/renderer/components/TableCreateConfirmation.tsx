@@ -2,6 +2,8 @@ import { useEffect, useRef, useState } from 'react';
 import { tableCreateConfirmation, tableCreateDraftSchema, tableCreateHasPrefix, tableCreateHasGenerated, tableCreateRequiredAcknowledgements, type TableCreateDraft, type TableCreateApplyOutput, type TableCreateGetOutput, type TableCreatePreviewOutput, type TableCreateProgress } from '../../shared/tableCreate';
 import { generatedColumnAcknowledgement } from '../../shared/tableGeneratedColumn';
 import { tableCreateGeneratedZh as generatedText } from '../locales/tableCreateGenerated.zh-CN';
+import { tableCreateHasChecks, tableCreateChecksAcknowledgement, tableCreateChecksMessages } from '../../shared/tableCreateChecks';
+import { tableCreateChecksZh as checksText } from '../locales/tableCreateChecks.zh-CN';
 import { tableCreatePrefixZh } from '../locales/tableCreatePrefix.zh-CN';
 import { sameTableEncodingPair, type TableEncodingPair } from '../../shared/tableDefaultEncoding';
 import { assertTableCreateColumnEncodings, tableCreateHasColumnEncoding } from '../../shared/tableCreateColumnEncoding';
@@ -83,12 +85,14 @@ export function TableCreateConfirmation({ connectionId, design, columnEncodingCa
       assertTableCreateColumnEncodings(draft);
       const columnEncodings = tableCreateHasColumnEncoding(draft);
       if (!accepts(op)) return;
-      const value = await service.current.get({ connectionId: fixed.current.connectionId, database: draft.database, taskId: op.taskId, ...(chosen || columnEncodings ? { includeEncodings: true } : {}), ...(tableCreateHasPrefix(draft) ? { includePrefixFacts: true } : {}), ...(tableCreateHasGenerated(draft) ? { includeGeneratedFacts: true } : {}) }, () => accepts(op)); snapshots.current.add(value.snapshotId);
+      const value = await service.current.get({ connectionId: fixed.current.connectionId, database: draft.database, taskId: op.taskId, ...(chosen || columnEncodings ? { includeEncodings: true } : {}), ...(tableCreateHasPrefix(draft) ? { includePrefixFacts: true } : {}), ...(tableCreateHasGenerated(draft) ? { includeGeneratedFacts: true } : {}), ...(tableCreateHasChecks(draft) ? { includeCheckFacts: true } : {}) }, () => accepts(op)); snapshots.current.add(value.snapshotId);
       if (!accepts(op) || value.target.connectionId !== fixed.current.connectionId || value.target.database !== draft.database || !validTime(value.expiresAt)) { await releaseOne('snapshotId', value.snapshotId); return; }
       if (tableCreateHasPrefix(draft) && !value.prefixFacts) throw Error(tableCreatePrefixZh.unavailable);
       setSnapshot(value);
       // 草稿候选不是实际服务器能力；缺项/未知不能降级为普通列或继续发送预览。
       if (tableCreateHasGenerated(draft) && value.generatedAccess?.editable !== true) throw Error(value.generatedAccess?.reason || generatedText.capability);
+      // CHECK能力必须来自本次独立读取；服务器不支持时不能静默删条件或把NOT ENFORCED改为启用。
+      if (tableCreateHasChecks(draft) && (value.checksAccess?.editable !== true || draft.checks!.some(check => !check.enforced) && value.checksAccess.allowsNotEnforced !== true)) throw Error(value.checksAccess?.reason || tableCreateChecksMessages.unavailable);
       if (chosen || columnEncodings) {
         catalog.current = undefined;
         const metadata = readNewTableEncodingCatalog(value.encodings);
@@ -158,7 +162,7 @@ export function TableCreateConfirmation({ connectionId, design, columnEncodingCa
       <Field label={text.collation}><select aria-label={text.collation} value={selection.collation} disabled={!editable || !selection.charset} onChange={event => { if (editable) changeSelection({ charset: selection.charset, collation: event.target.value }); }}><option value="">{text.encodingPlaceholder}</option>{catalog.current?.candidates.filter(pair => pair.charset === selection.charset).map(pair => <option key={pair.collation} value={pair.collation}>{pair.collation}</option>)}</select></Field>
       {catalog.current?.warnings.map(value => <p key={value} className="warning-text">{value}</p>)}<button disabled={!editable || !selection.charset || !selection.collation} onClick={() => void prepare()}>{text.preview}</button></>}
     {preview && <><h3>{text.sql}</h3><SqlEditor value={preview.sql} readOnly height={300}/><Field label={text.confirmation}><input aria-label={text.confirmation} value={confirmation} disabled={!editable} onChange={event => setConfirmation(event.target.value)}/></Field>
-      {requiredAcknowledgements.map((id, index) => <label key={id}><input type="checkbox" checked={acks.has(id)} disabled={!editable} onChange={event => setAcks(current => { const next = new Set(current); if (event.target.checked) next.add(id); else next.delete(id); return next; })}/>{id === generatedColumnAcknowledgement ? generatedText.ack : index ? text.ackCreate : text.ackDdl}</label>)}</>}
+      {requiredAcknowledgements.map((id, index) => <label key={id}><input type="checkbox" checked={acks.has(id)} disabled={!editable} onChange={event => setAcks(current => { const next = new Set(current); if (event.target.checked) next.add(id); else next.delete(id); return next; })}/>{id === generatedColumnAcknowledgement ? generatedText.ack : id === tableCreateChecksAcknowledgement ? checksText.ack : index ? text.ackCreate : text.ackDdl}</label>)}</>}
     {outcome && <p role="status">{outcome}</p>}<ErrorBox message={error}/>
   </div><footer className="modal-footer"><button disabled={busy} onClick={() => void leave(false)}>{text.close}</button><button disabled={busy || attempted} onClick={() => void leave(true)}>{text.back}</button>{busy && <button onClick={() => { if (fence.current.cancel() && activeTask.current) void service.current.cancel(activeTask.current).catch(report); }}>{text.cancel}</button>}<span className="grow"/><button className="primary" disabled={!editable || !confirmed} onClick={() => void apply()}>{text.apply}</button></footer></Modal>;
 }

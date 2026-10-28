@@ -6,13 +6,14 @@ import { readTableDefaultEncodingDefinition } from './tableDefaultEncodingSql';
 import { sameStructureFragment, structureTaskQuery, type StructureTaskContext } from './structureDefinition';
 import { qualified } from './sql';
 import { tableCreateColumnDefaultMatches } from './tableCreateColumnDefaults';
+import { tableCreateCheckHasJson, tableCreateCheckJsonMatches, type TableCreateChecksProof } from './tableCreateChecks';
 
 const literal = (value: string) => `CONVERT(X'${Buffer.from(value, 'utf8').toString('hex')}' USING utf8mb4)`;
 /** 原查询终态后仍核取消及断线，核验失败不能转成可重放的CREATE。 */
 function active(context: StructureTaskContext): void { context.checkCancelled(); if (context.managed.signal?.aborted || context.managed.broken) throw Error('字段编码核验会话已中断'); }
 
 /** 完整SHOW、TABLES与全列COLUMNS共同证明每列配对；此处不制造已存在列的写权限。 */
-export async function verifyCreatedColumnEncodings(context: StructureTaskContext, target: { database: string; table: string }, input: TableCreateDraft, document: TableColumnDefinitionDocument): Promise<boolean> {
+export async function verifyCreatedColumnEncodings(context: StructureTaskContext, target: { database: string; table: string }, input: TableCreateDraft, document: TableColumnDefinitionDocument, checkProof?: TableCreateChecksProof): Promise<boolean> {
   active(context); const design = tableCreateDraftSchema.parse(input);
   if (!tableCreateHasColumnEncoding(design) || design.columns.some(column => column.generated) || target.database !== design.database || target.table !== design.name || document.table !== target.table || document.database !== undefined && document.database !== target.database || document.columns.length !== design.columns.length || document.context.dialect !== context.managed.status.dialect) return false;
   const condition = (prefix = '') => `CAST(${prefix}TABLE_SCHEMA AS BINARY)=CAST(${literal(target.database)} AS BINARY) AND CAST(${prefix}TABLE_NAME AS BINARY)=CAST(${literal(target.table)} AS BINARY)`;
@@ -35,6 +36,8 @@ export async function verifyCreatedColumnEncodings(context: StructureTaskContext
     if (row.name !== requested.name || row.name !== column.name || !/^[1-9]\d*$/.test(String(row.ordinal)) || Number(row.ordinal) !== index + 1 || typeof row.typeSql !== 'string' || !sameStructureFragment(row.typeSql, column.type.raw, document.context) || typeof row.dataType !== 'string' || typeof row.extra !== 'string' || !['YES', 'NO'].includes(String(row.nullable)) || (row.nullable === 'YES') !== requested.nullable || column.nullable !== undefined && column.nullable !== (row.nullable === 'YES') || row.comment !== requested.comment || row.comment !== (column.comment ?? '') || row.defaultValue !== null && typeof row.defaultValue !== 'string' || row.generationExpression !== null && row.generationExpression !== '') return false;
     const family = /^[A-Za-z]+/.exec(column.type.raw.trim())?.[0].toUpperCase(), aliases: Record<string, string> = { INTEGER: 'INT', NUMERIC: 'DECIMAL' };
     if (!family || (aliases[family] ?? family) !== row.dataType.toUpperCase()) return false;
+    // JSON_VALID及固有utf8mb4_bin配对先有完整证明，当前整行目录仍与准确原SHOW绑定，不按布尔放行。
+    if (tableCreateCheckHasJson(checkProof, document, column.name)) { if (!tableCreateCheckJsonMatches(checkProof, document, column.name, row)) return false; continue; }
     const character = /^(?:CHAR|VARCHAR|ENUM|SET|(?:TINY|MEDIUM|LONG)?TEXT)$/i.test(row.dataType);
     if (!tableCreateColumnDefaultMatches(requested, column, row.defaultValue as string | null, document.context) || !ordinaryCreateColumnEncodingMatches(column, row, document, effectiveTableCreateColumnEncoding(requested, encoding)) || !ordinaryCreateColumnExtraMatches(column, row.extra, document.context.dialect, character)) return false;
   }

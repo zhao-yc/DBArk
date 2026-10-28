@@ -9,6 +9,8 @@ import { structureTaskQuery as query, type StructureTaskContext, type StructureT
 import { buildDesign, buildPrefixTableDesign, buildGeneratedTableDesign, buildColumnEncodedTableDesign, qualified, mariaDefault, temporalDefault } from './sql';
 import { planTableCreateColumnEncodings, tableCreateHasColumnEncoding, type TableCreateColumnEncodingPlan } from '../shared/tableCreateColumnEncoding';
 import { verifyCreatedColumnEncodings } from './tableCreateColumnEncoding';
+import { tableCreateHasChecks, tableCreateChecksMessages as checkText } from '../shared/tableCreateChecks';
+import { readTableCreateCheckFacts, recheckTableCreateChecks, buildTableCreateChecks, verifyTableCreateChecks, tableCreateCheckHasJson, tableCreateCheckJsonMatches, type TableCreateCheckFacts } from './tableCreateChecks';
 import { tableCreateShownEncodingProof, tableCreateDefaultEncodingRowsMatch } from './tableCreateEncodingProof';
 import { readTableCreateGeneratedFacts, planTableCreateGeneratedColumns, verifyCreatedGeneratedColumns, type TableCreateGeneratedFacts, type TableCreateGeneratedPlan } from './tableCreateGeneratedColumns';
 import { parseTableColumnDefinition, tableDefinitionTokens } from './tableColumnDefinition';
@@ -27,7 +29,7 @@ const hash = (value: unknown) => createHash('sha256').update(JSON.stringify(valu
 const literal = (value: string) => `CONVERT(X'${Buffer.from(value, 'utf8').toString('hex')}' USING utf8mb4)`;
 const progressOf = (): TableCreateProgress => ({ phase: 'connecting', ddlSubmitted: false, ddlCompleted: false, definitionVerified: false, outcome: 'not-sent' });
 interface Read { identity: string; serverKey: string; mode: string; noBackslash: boolean; bytes: number; version: string; dialect: 'mysql' | 'mariadb'; lowerNames: number; mysql57?: Mysql57CreateCapabilities; }
-interface Snapshot extends Read { connectionId: string; database: string; revision: number; expires: number; encodings?: TableCreateEncodingCatalog; prefixFacts?: TableCreatePrefixFacts; generatedFacts?: TableCreateGeneratedFacts; }
+interface Snapshot extends Read { connectionId: string; database: string; revision: number; expires: number; encodings?: TableCreateEncodingCatalog; prefixFacts?: TableCreatePrefixFacts; generatedFacts?: TableCreateGeneratedFacts; checkFacts?: TableCreateCheckFacts; }
 interface Preview { snapshotId: string; snapshot: Snapshot; design: TableCreateDraft; prefixPlan?: TableCreateIndexPlan; generatedPlan?: TableCreateGeneratedPlan; columnEncodingPlan?: TableCreateColumnEncodingPlan; target: { connectionId: string; database: string; table: string }; designDigest: string; sql: string; bytes: number; expires: number; }
 /** 选项只能来自完整实际目录；没有显式collation的旧调用不读取目录、不猜默认值。 */
 function selectedEncoding(design: TableCreateDraft, snapshot: Snapshot) {
@@ -56,6 +58,12 @@ async function recheckGenerated(context: StructureTaskContext, snapshot: Snapsho
   if (!snapshot.generatedFacts || !plan) throw Error(generatedText.plan);
   const current = await readTableCreateGeneratedFacts(context);
   if (current.digest !== snapshot.generatedFacts.digest || JSON.stringify(planTableCreateGeneratedColumns(design, current)) !== JSON.stringify(plan)) throw Error(generatedText.planStale);
+}
+/** CHECK只在本用途重新准备会话并绑定实际模式/版本，旧草稿不增加任何能力读取。 */
+async function recheckChecks(context: StructureTaskContext, snapshot: Snapshot, design: TableCreateDraft) {
+  if (!tableCreateHasChecks(design)) return;
+  if (!snapshot.checkFacts || snapshot.checkFacts.sqlMode !== snapshot.mode || snapshot.checkFacts.serverVersion !== snapshot.version || snapshot.checkFacts.dialect !== snapshot.dialect) throw Error(checkText.stale);
+  await recheckTableCreateChecks(context, snapshot.checkFacts);
 }
 /** 读取实际会话与准确数据库；保留编码目录绑定，5.x追加准确能力，8.x/Maria沿原路径。 */
 async function read(context: StructureTaskContext, database: string): Promise<Read> {
@@ -104,12 +112,17 @@ async function verify(context: StructureTaskContext, preview: Preview): Promise<
   const ddl = (await query<Record<string, unknown>[]>(context, `SHOW CREATE TABLE ${qualified(database, table)}`)).rows;
   if (ddl?.length !== 1 || typeof ddl[0]['Create Table'] !== 'string' || Buffer.byteLength(String(ddl[0]['Create Table'])) > 2 * 1024 * 1024) return false;
   if (preview.snapshot.mode.split(',').some(mode => (definitionOmittingSqlModes as readonly string[]).includes(mode.toUpperCase()))) return false;
-  const document = parseTableColumnDefinition(String(ddl[0]['Create Table']), { dialect: context.managed.status.dialect, mode: { noBackslashEscapes: preview.snapshot.noBackslash, ansiQuotes: preview.snapshot.mode.split(',').includes('ANSI_QUOTES') } });
+  const originalDocument = parseTableColumnDefinition(String(ddl[0]['Create Table']), { dialect: context.managed.status.dialect, mode: { noBackslashEscapes: preview.snapshot.noBackslash, ansiQuotes: preview.snapshot.mode.split(',').includes('ANSI_QUOTES') } });
+  // 全部CHECK先交叉真实目录，准确投影保留source/range/真实类型；原未知约束守卫继续执行。
+  const checkProof = tableCreateHasChecks(design) && preview.snapshot.checkFacts ? await verifyTableCreateChecks(context, preview.target, design, preview.snapshot.checkFacts, originalDocument) : undefined;
+  if (tableCreateHasChecks(design) && !checkProof) return false;
+  const document = checkProof?.document ?? originalDocument;
   /** 新用途最后复读SHOW覆盖目录/索引/FK后核窗口；旧普通设计不增加查询，不宣称原子CAS。 */
   const finish = async (verified: boolean): Promise<boolean> => {
-    if (!verified || !preview.generatedPlan && !preview.columnEncodingPlan) return verified;
+    if (!verified || !preview.generatedPlan && !preview.columnEncodingPlan && !checkProof) return verified;
     if (preview.columnEncodingPlan) await recheckEncoding(context, preview.snapshot, design);
     await recheckGenerated(context, preview.snapshot, design, preview.generatedPlan);
+    await recheckChecks(context, preview.snapshot, design);
     const final = (await query<Record<string, unknown>[]>(context, `SHOW CREATE TABLE ${qualified(database, table)}`)).rows;
     context.checkCancelled();
     return !context.managed.signal?.aborted && !context.managed.broken && Array.isArray(final) && final.length === 1 && final[0]['Create Table'] === document.source;
@@ -121,10 +134,10 @@ async function verify(context: StructureTaskContext, preview: Preview): Promise<
   const indexDocument = foreignKeys ? { ...document, items: document.items.filter(item => !foreignKeys.foreignKeys.some(key => key.range.start === item.range.start && key.range.end === item.range.end)) } : document;
   if (document.table !== table || document.database !== undefined && document.database !== database || document.columns.length !== design.columns.length || indexDocument.items.filter(item => item.kind === 'constraint').length !== design.indexes.length || indexDocument.items.some(item => item.kind === 'constraint' && !['PRIMARY', 'UNIQUE', 'KEY', 'INDEX'].includes(item.constraintKind))) return false;
   // SHOW及全列真实COLUMNS先完成生成专属证明，才允许旧索引链处理本表其它普通键。
-  if (preview.generatedPlan && !await verifyCreatedGeneratedColumns(context, preview.target, design, preview.generatedPlan, document)) return false;
-  if (preview.columnEncodingPlan && !preview.generatedPlan && !await verifyCreatedColumnEncodings(context, preview.target, design, document)) return false;
+  if (preview.generatedPlan && !await verifyCreatedGeneratedColumns(context, preview.target, design, preview.generatedPlan, document, checkProof)) return false;
+  if (preview.columnEncodingPlan && !preview.generatedPlan && !await verifyCreatedColumnEncodings(context, preview.target, design, document, checkProof)) return false;
   // 专属完整证明之后才接纳普通列已证编码；旧普通创建及生成列本身属性门不放宽。
-  if (document.columns.some((column, index) => !column.type.known || column.attributes.some(attribute => !['nullable', 'default', 'comment', 'auto-increment', ...(design.columns[index].onUpdate ? ['on-update'] : []), ...(design.columns[index].generated && preview.generatedPlan ? ['generated'] : []), ...((preview.generatedPlan || preview.columnEncodingPlan) && !design.columns[index].generated ? ['charset', 'collation'] : [])].includes(attribute.kind)))) return false;
+  if (document.columns.some((column, index) => !column.type.known || column.attributes.some(attribute => !['nullable', 'default', 'comment', 'auto-increment', ...(design.columns[index].onUpdate ? ['on-update'] : []), ...(design.columns[index].generated && preview.generatedPlan ? ['generated'] : []), ...(((preview.generatedPlan || preview.columnEncodingPlan) && !design.columns[index].generated || tableCreateCheckHasJson(checkProof, document, column.name)) ? ['charset', 'collation'] : [])].includes(attribute.kind)))) return false;
   /** 仅规范化未引用关键字和无ZEROFILL整数显示宽度；ENUM/SET文字量逐字保留解码后的值。 */
   const type = (value: string, controlledTime = false) => {
     const tokens = tableDefinitionTokens(value, document.context).map(token => ({ kind: token.kind, value: token.kind === 'word' ? token.value.toUpperCase() : token.value }));
@@ -139,7 +152,7 @@ async function verify(context: StructureTaskContext, preview: Preview): Promise<
   /** 仅生成数值列复用专属声明语义，允许NUMERIC别名和省略默认精度；普通列原严格比较不变。 */
   const sameType = (actual: string, expected: TableCreateDraft['columns'][number]): boolean => expected.generated
     ? tableCreateNumericType(actual) !== undefined && JSON.stringify(tableCreateNumericType(actual)) === JSON.stringify(tableCreateNumericType(expected.type))
-    : type(actual, Object.hasOwn(expected, 'onUpdate')) === type(expected.type, Object.hasOwn(expected, 'onUpdate'));
+    : tableCreateCheckHasJson(checkProof, document, expected.name) ? actual.trim().toUpperCase() === 'LONGTEXT' && expected.type.trim().toUpperCase() === 'JSON' : type(actual, Object.hasOwn(expected, 'onUpdate')) === type(expected.type, Object.hasOwn(expected, 'onUpdate'));
   // SHOW CREATE与目录必须同时支持本次设计，不能将两次不一致的读取拼成一次核验成功。
   if (document.columns.some((column, index) => {
     const expected = design.columns[index], value = column.default;
@@ -184,7 +197,8 @@ async function verify(context: StructureTaskContext, preview: Preview): Promise<
     const sameDefault = expected.defaultValue === undefined ? actualDefault === null : expected.defaultValue === null ? actualDefault === null : temporalDefault(expected.defaultValue) && /^(?:DATE|TIME|DATETIME|TIMESTAMP)\b/i.test(expected.type) ? Object.hasOwn(expected, 'onUpdate') ? tableCreateTimeDefaultMatches(expected.defaultValue, actualDefault) : String(actualDefault).toUpperCase().replace(/\(\)$/, '') === expected.defaultValue.toUpperCase().replace(/\(\)$/, '') : actualDefault === expected.defaultValue;
     const generated = preview.generatedPlan?.columns.find(value => value.ordinal === index && value.name === expected.name);
     const generatedExtra = generated && new RegExp('^' + (generated.storage === 'STORED' && context.managed.status.dialect === 'mariadb' ? '(?:STORED|PERSISTENT)' : generated.storage) + '\\s+GENERATED$', 'i').test(column.extra.trim());
-    return column.name !== expected.name || !sameType(column.type, expected) || !['YES', 'NO'].includes(column.nullable) || (column.nullable === 'YES') !== expected.nullable || /auto_increment/i.test(column.extra) !== expected.autoIncrement || column.comment !== expected.comment || !sameDefault || (expected.generated ? !generatedExtra : !tableCreateOnUpdateExtraMatches(expected, column.extra));
+    const jsonMatches = !tableCreateCheckHasJson(checkProof, document, expected.name) || tableCreateCheckJsonMatches(checkProof, document, expected.name, { name: column.name, typeSql: column.type, nullable: column.nullable, defaultValue: column.defaultValue, extra: column.extra, comment: column.comment });
+    return !jsonMatches || column.name !== expected.name || !sameType(column.type, expected) || !['YES', 'NO'].includes(column.nullable) || (column.nullable === 'YES') !== expected.nullable || /auto_increment/i.test(column.extra) !== expected.autoIncrement || column.comment !== expected.comment || !sameDefault || (expected.generated ? !generatedExtra : !tableCreateOnUpdateExtraMatches(expected, column.extra));
   })) return false;
   if (preview.prefixPlan) return finish(!!preview.snapshot.prefixFacts && await verifyCreatedPrefixIndexes(context, preview.target, design, preview.prefixPlan, preview.snapshot.prefixFacts, document, preview.generatedPlan));
   const indexes = (await query<{ name: string; nonUnique: number; column: string; sequence: number; subPart: number | null; method: string; direction: string | null; comment: string }[]>(context, `SELECT INDEX_NAME AS name,NON_UNIQUE AS nonUnique,COLUMN_NAME AS \`column\`,SEQ_IN_INDEX AS sequence,SUB_PART AS subPart,INDEX_TYPE AS method,COLLATION AS direction,INDEX_COMMENT AS comment FROM information_schema.STATISTICS WHERE ${condition} ORDER BY INDEX_NAME,SEQ_IN_INDEX LIMIT 4097`)).rows;
@@ -229,8 +243,13 @@ export class TableCreateTasks {
         try { generatedFacts = await readTableCreateGeneratedFacts(context); generatedAccess = { editable: true }; }
         catch { context.checkCancelled(); if (context.managed.signal?.aborted || context.managed.broken) throw Error(generatedText.interrupted); generatedAccess = { editable: false, reason: generatedText.unavailable }; }
       }
-      snapshot = { ...actual, bytes: actual.bytes + catalogBytes + (prefixFacts ? Buffer.byteLength(JSON.stringify(prefixFacts)) : 0) + (generatedFacts ? Buffer.byteLength(JSON.stringify(generatedFacts)) : 0), ...(prefixFacts ? { prefixFacts } : {}), ...(generatedFacts ? { generatedFacts } : {}), ...(encodings ? { encodings } : {}), connectionId: input.connectionId, database: input.database, revision: actualRevision, expires: this.now() + structureCacheLimits.ttlMs }; this.cache.capacity(snapshot.bytes, 'snapshot');
-      return { target: { connectionId: input.connectionId, database: input.database }, snapshotId: id, expiresAt: new Date(snapshot.expires).toISOString(), serverVersion: actual.version, warnings: [...text.warnings], ...(generatedAccess ? { generatedAccess } : {}), ...(prefixFacts ? { prefixFacts: structuredClone(prefixFacts) } : {}), ...(encodings ? { encodings: structuredClone(encodings) } : {}) };
+      let checkFacts: TableCreateCheckFacts | undefined, checksAccess: TableCreateGetOutput['checksAccess'];
+      if (input.includeCheckFacts) {
+        try { checkFacts = await readTableCreateCheckFacts(context); if (checkFacts.sqlMode !== actual.mode || checkFacts.serverVersion !== actual.version || checkFacts.dialect !== actual.dialect) throw Error(checkText.stale); checksAccess = { editable: true, allowsNotEnforced: checkFacts.allowsNotEnforced }; }
+        catch { context.checkCancelled(); if (context.managed.signal?.aborted || context.managed.broken) throw Error(checkText.unavailable); checkFacts = undefined; checksAccess = { editable: false, allowsNotEnforced: false, reason: checkText.unavailable }; }
+      }
+      snapshot = { ...actual, bytes: actual.bytes + catalogBytes + (prefixFacts ? Buffer.byteLength(JSON.stringify(prefixFacts)) : 0) + (generatedFacts ? Buffer.byteLength(JSON.stringify(generatedFacts)) : 0) + (checkFacts ? Buffer.byteLength(JSON.stringify(checkFacts)) : 0), ...(prefixFacts ? { prefixFacts } : {}), ...(generatedFacts ? { generatedFacts } : {}), ...(checkFacts ? { checkFacts } : {}), ...(encodings ? { encodings } : {}), connectionId: input.connectionId, database: input.database, revision: actualRevision, expires: this.now() + structureCacheLimits.ttlMs }; this.cache.capacity(snapshot.bytes, 'snapshot');
+      return { target: { connectionId: input.connectionId, database: input.database }, snapshotId: id, expiresAt: new Date(snapshot.expires).toISOString(), serverVersion: actual.version, warnings: [...text.warnings], ...(checksAccess ? { checksAccess } : {}), ...(generatedAccess ? { generatedAccess } : {}), ...(prefixFacts ? { prefixFacts: structuredClone(prefixFacts) } : {}), ...(encodings ? { encodings: structuredClone(encodings) } : {}) };
     }, { label: text.labels.get, purpose: 'tableCreate', progress });
     this.snapshots.set(id, snapshot); return result;
   }
@@ -249,14 +268,19 @@ export class TableCreateTasks {
     const prefixPlan = prefix ? planTableCreateIndexes(design, snapshot.prefixFacts!) : undefined;
     const hasGenerated = design.columns.some(column => column.generated !== undefined); if (hasGenerated && !snapshot.generatedFacts) throw Error(generatedText.snapshot);
     const generatedPlan = hasGenerated ? planTableCreateGeneratedColumns(design, snapshot.generatedFacts!) : undefined;
-    const rendered = generatedPlan ? buildGeneratedTableDesign(design, snapshot.generatedFacts!, snapshot.noBackslash, encoding, snapshot.prefixFacts, snapshot.encodings) : prefix ? buildPrefixTableDesign(design, snapshot.prefixFacts!, snapshot.noBackslash, encoding, snapshot.encodings) : columnEncodingPlan ? buildColumnEncodedTableDesign(design, snapshot.encodings!, snapshot.noBackslash, encoding) : buildDesign(tableCreateLegacyDesign(design), undefined, snapshot.noBackslash, encoding); if (rendered.statements.length !== 1 || !rendered.sql.startsWith('CREATE TABLE ')) throw Error(text.invalid);
+    const hasChecks = tableCreateHasChecks(design); if (hasChecks && !snapshot.checkFacts) throw Error(checkText.unavailable);
+    // 只从基础生成输入剥离CHECK；四条原生成路线及所有其它属性仍由原生成器完整裁决。
+    const { checks: _checks, ...baseDesign } = design;
+    const rendered = generatedPlan ? buildGeneratedTableDesign(baseDesign, snapshot.generatedFacts!, snapshot.noBackslash, encoding, snapshot.prefixFacts, snapshot.encodings) : prefix ? buildPrefixTableDesign(baseDesign, snapshot.prefixFacts!, snapshot.noBackslash, encoding, snapshot.encodings) : columnEncodingPlan ? buildColumnEncodedTableDesign(baseDesign, snapshot.encodings!, snapshot.noBackslash, encoding) : buildDesign(tableCreateLegacyDesign(baseDesign), undefined, snapshot.noBackslash, encoding); if (rendered.statements.length !== 1 || !rendered.sql.startsWith('CREATE TABLE ')) throw Error(text.invalid);
+    if (hasChecks) rendered.sql = buildTableCreateChecks(rendered.sql, design, snapshot.checkFacts!);
     const token = randomUUID(), preview: Preview = { snapshotId: input.snapshotId, snapshot, design, ...(prefixPlan ? { prefixPlan } : {}), ...(generatedPlan ? { generatedPlan } : {}), ...(columnEncodingPlan ? { columnEncodingPlan } : {}), target: { connectionId: snapshot.connectionId, database: snapshot.database, table: design.name }, designDigest, sql: rendered.sql, bytes: snapshot.bytes + Buffer.byteLength(JSON.stringify(design)) + Buffer.byteLength(rendered.sql) + (prefixPlan ? Buffer.byteLength(JSON.stringify(prefixPlan)) : 0) + (generatedPlan ? Buffer.byteLength(JSON.stringify(generatedPlan)) : 0) + (columnEncodingPlan ? Buffer.byteLength(JSON.stringify(columnEncodingPlan)) : 0) + 2048, expires: snapshot.expires }, progress = progressOf();
     await this.host.run(snapshot.connectionId, input.taskId, async context => {
       progress.phase = 'rechecking'; context.report(); if ((await read(context, snapshot.database)).identity !== snapshot.identity) throw Error(text.identity); await absent(context, snapshot.database, design.name);
       await recheckEncoding(context, snapshot, design); await recheckPrefix(context, snapshot, design); await recheckGenerated(context, snapshot, design, generatedPlan);
+      await recheckChecks(context, snapshot, design);
     }, { label: text.labels.preview, purpose: 'tableCreate', progress });
     if (this.snapshots.get(input.snapshotId) !== snapshot || snapshot.expires <= this.now()) throw Error(text.stale);
-    this.previews.set(token, preview); return { target: { ...preview.target }, previewToken: token, expiresAt: new Date(preview.expires).toISOString(), designDigest, sql: preview.sql, warnings: [...text.warnings, ...(design.foreignKeys.length ? [text.foreignKeys] : []), ...(generatedPlan ? [generatedText.computation] : [])], requiredAcknowledgements: tableCreateRequiredAcknowledgements(design), ...(encoding ? { encoding: { selection: encoding, catalogDigest: snapshot.encodings!.digest! } } : {}), ...(columnEncodingPlan ? { columnEncodings: structuredClone(columnEncodingPlan) } : {}) };
+    this.previews.set(token, preview); return { target: { ...preview.target }, previewToken: token, expiresAt: new Date(preview.expires).toISOString(), designDigest, sql: preview.sql, warnings: [...text.warnings, ...(hasChecks ? [checkText.warning] : []), ...(design.foreignKeys.length ? [text.foreignKeys] : []), ...(generatedPlan ? [generatedText.computation] : [])], requiredAcknowledgements: tableCreateRequiredAcknowledgements(design), ...(encoding ? { encoding: { selection: encoding, catalogDigest: snapshot.encodings!.digest! } } : {}), ...(columnEncodingPlan ? { columnEncodings: structuredClone(columnEncodingPlan) } : {}) };
   }
   /** 第一次await前消费预览并占用目标；任何失败都不重放、覆盖或DROP补救。 */
   async apply(input: TableCreateApplyInput, revision: unknown): Promise<TableCreateApplyOutput> {
@@ -271,13 +295,14 @@ export class TableCreateTasks {
       const result = await this.host.run(snapshot.connectionId, input.taskId, async context => {
         progress.phase = 'rechecking'; context.report(); if ((await read(context, snapshot.database)).identity !== snapshot.identity) throw Error(text.identity); await absent(context, snapshot.database, preview.target.table);
         await recheckEncoding(context, snapshot, preview.design); await recheckPrefix(context, snapshot, preview.design); await recheckGenerated(context, snapshot, preview.design, preview.generatedPlan);
+        await recheckChecks(context, snapshot, preview.design);
         if (this.snapshots.get(preview.snapshotId) !== snapshot || preview.expires <= this.now()) throw Error(text.stale);
         progress.phase = 'executing'; context.report();
         const result = (await query<ResultSetHeader>(context, preview.sql, () => { progress.ddlSubmitted = true; progress.outcome = 'unknown'; context.report(); })).rows;
         if (!result || typeof result.affectedRows !== 'number') throw Error(text.ack);
         progress.ddlCompleted = true; progress.outcome = 'succeeded'; progress.phase = 'verifying'; context.report();
         output = { target: { ...preview.target }, ddlSubmitted: true, ddlCompleted: true, definitionVerified: false, resourcesReleased: false, warnings: [] };
-        try { await recheckEncoding(context, snapshot, preview.design); await recheckPrefix(context, snapshot, preview.design); await recheckGenerated(context, snapshot, preview.design, preview.generatedPlan); output.definitionVerified = progress.definitionVerified = (await read(context, snapshot.database)).identity === snapshot.identity && await verify(context, preview); } catch { /* ACK事实已成立，后核失败不能变回未执行或自动重放。 */ }
+        try { await recheckEncoding(context, snapshot, preview.design); await recheckPrefix(context, snapshot, preview.design); await recheckGenerated(context, snapshot, preview.design, preview.generatedPlan); await recheckChecks(context, snapshot, preview.design); output.definitionVerified = progress.definitionVerified = (await read(context, snapshot.database)).identity === snapshot.identity && await verify(context, preview); } catch { /* ACK事实已成立，后核失败不能变回未执行或自动重放。 */ }
         if (!output.definitionVerified) output.warnings.push(text.verify); if (result.warningStatus) output.warnings.push(text.serverWarning);
         context.report(); this.releaseTokens({ snapshotId: preview.snapshotId }); return output;
       }, { label: text.labels.apply, purpose: 'tableCreate', progress, executionTarget: { database: snapshot.database, table: preview.target.table }, onResourcesReleased: () => { released = true; } });

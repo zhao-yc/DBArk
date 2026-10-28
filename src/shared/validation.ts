@@ -24,6 +24,7 @@ import { editorFontLimits } from './editorFont';
 import { tableCopyDataMode, tableCopyDataAcknowledgements } from './tableCopyData';
 import { tableCreateDesignSchema, tableCreateDraftSchema, tableCreateAcknowledgements } from './tableCreate';
 import { generatedColumnAcknowledgement } from './tableGeneratedColumn';
+import { tableCreateChecksAcknowledgement } from './tableCreateChecks';
 import { tableCopyStructureKnownAcknowledgements, validateTableCopyStructureName } from './tableCopyStructure';
 import { z } from 'zod';
 import { tableValueOptionsSearchPattern } from './tableValueOptions';
@@ -286,10 +287,10 @@ export const commandSchemas: Record<Command, z.ZodType> = {
   'schema.tableTruncate.preview': z.object({ snapshotId: id, taskId: id }).strict(),
   'schema.tableTruncate.apply': z.object({ previewToken: id, confirmation: z.string().min(3).max(129), acknowledgements: z.array(z.enum(tableTruncateAcknowledgements)).length(3).refine(values => new Set(values).size === values.length), taskId: id }).strict(),
   'schema.tableTruncate.release': z.object({ snapshotId: id.optional(), previewToken: id.optional() }).strict().refine(value => !!value.snapshotId || !!value.previewToken),
-  'schema.tableCreate.get': z.object({ connectionId: id, database: tableCreateDesignSchema.shape.database, taskId: id, includeEncodings: z.boolean().optional(), includePrefixFacts: z.boolean().optional(), includeGeneratedFacts: z.boolean().optional() }).strict(),
+  'schema.tableCreate.get': z.object({ connectionId: id, database: tableCreateDesignSchema.shape.database, taskId: id, includeEncodings: z.boolean().optional(), includePrefixFacts: z.boolean().optional(), includeGeneratedFacts: z.boolean().optional(), includeCheckFacts: z.boolean().optional() }).strict(),
   'schema.tableCreate.preview': z.object({ snapshotId: id, design: tableCreateDraftSchema, taskId: id }).strict(),
   // IPC仅开放已知确认项；具体设计需要的准确集合仍由消费预览的引擎核对。
-  'schema.tableCreate.apply': z.object({ previewToken: id, confirmation: z.string().max(129), acknowledgements: z.array(z.enum([...tableCreateAcknowledgements, generatedColumnAcknowledgement])).min(2).max(3).refine(value => new Set(value).size === value.length && tableCreateAcknowledgements.every(item => value.includes(item))), taskId: id }).strict(),
+  'schema.tableCreate.apply': z.object({ previewToken: id, confirmation: z.string().max(129), acknowledgements: z.array(z.enum([...tableCreateAcknowledgements, generatedColumnAcknowledgement, tableCreateChecksAcknowledgement])).min(2).max(4).refine(value => new Set(value).size === value.length && tableCreateAcknowledgements.every(item => value.includes(item))), taskId: id }).strict(),
   'schema.tableCreate.release': z.object({ snapshotId: id.optional(), previewToken: id.optional() }).strict().refine(value => !!(value.snapshotId || value.previewToken)),
   'schema.databaseCreate.get': z.object({ connectionId: id, taskId: id }).strict(),
   'schema.databaseCreate.preview': z.object({ snapshotId: id, name: z.string().max(64).refine(value => { try { validateDatabaseCreateName(value); return true; } catch { return false; } }, '数据库名称不在受控范围'), charset: z.string().regex(/^[A-Za-z0-9_]{1,64}$/), collation: z.string().regex(/^[A-Za-z0-9_]{1,255}$/), taskId: id }).strict(),

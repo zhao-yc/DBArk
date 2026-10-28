@@ -10,6 +10,7 @@ import { tableDefinitionTokens } from './tableColumnDefinition';
 import { readTableDefaultEncodingDefinition } from './tableDefaultEncodingSql';
 import { effectiveTableCreateColumnEncoding } from '../shared/tableCreateColumnEncoding';
 import { tableCreateColumnDefaultMatches } from './tableCreateColumnDefaults';
+import { tableCreateCheckHasJson, tableCreateCheckJsonMatches, type TableCreateChecksProof } from './tableCreateChecks';
 
 export interface TableCreateGeneratedFacts {
   dialect: 'mysql' | 'mariadb'; serverVersion: string; os: string; lowerNames: 0; sqlMode: string; quoteShowCreate: 1;
@@ -149,7 +150,7 @@ export function planTableCreateGeneratedColumns(input: TableCreateDraft, facts: 
 }
 
 /** CREATE后只用实际SHOW与完整COLUMNS补齐省略NULL，不能据此给未知属性授予editable权限。 */
-export async function verifyCreatedGeneratedColumns(context: StructureTaskContext, target: { database: string; table: string }, input: TableCreateDraft, plan: TableCreateGeneratedPlan, document: TableColumnDefinitionDocument): Promise<boolean> {
+export async function verifyCreatedGeneratedColumns(context: StructureTaskContext, target: { database: string; table: string }, input: TableCreateDraft, plan: TableCreateGeneratedPlan, document: TableColumnDefinitionDocument, checkProof?: TableCreateChecksProof): Promise<boolean> {
   active(context);
   const design = tableCreateDraftSchema.parse(input), facts = await readTableCreateGeneratedFacts(context);
   if (facts.digest !== plan.factsDigest || facts.dialect !== plan.dialect || facts.serverVersion !== plan.serverVersion || target.database !== design.database || target.table !== design.name || document.context.dialect !== plan.dialect || document.context.mode.noBackslashEscapes !== facts.sqlMode.split(',').includes('NO_BACKSLASH_ESCAPES') || document.context.mode.ansiQuotes !== facts.sqlMode.split(',').includes('ANSI_QUOTES') || document.table !== target.table || document.database !== undefined && document.database !== target.database || document.columns.length !== design.columns.length || JSON.stringify(plannedColumns(design, facts.dialect)) !== JSON.stringify(plan.columns)) return false;
@@ -177,6 +178,8 @@ export async function verifyCreatedGeneratedColumns(context: StructureTaskContex
     const family = /^[A-Za-z]+/.exec(column.type.raw.trim())?.[0].toUpperCase(), aliases: Record<string, string> = { INTEGER: 'INT', NUMERIC: 'DECIMAL' };
     if (!family || (aliases[family] ?? family) !== row.dataType.toUpperCase()) return false;
     if (!generated) {
+      // 仅同份SHOW及TC/CC/COLUMNS签发的Maria JSON证据可证明LONGTEXT；本次完整目录仍须逐项相等。
+      if (tableCreateCheckHasJson(checkProof, document, column.name)) { if (!tableCreateCheckJsonMatches(checkProof, document, column.name, row)) return false; continue; }
       const character = /^(?:CHAR|VARCHAR|ENUM|SET|(?:TINY|MEDIUM|LONG)?TEXT)$/i.test(row.dataType);
       if (row.generationExpression !== null && row.generationExpression !== '' || !tableCreateColumnDefaultMatches(requested, column, row.defaultValue as string | null, document.context) || !ordinaryCreateColumnEncodingMatches(column, row, document, effectiveTableCreateColumnEncoding(requested, encoding)) || !ordinaryCreateColumnExtraMatches(column, row.extra, plan.dialect, character)) return false;
       continue;
