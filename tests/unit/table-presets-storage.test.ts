@@ -17,6 +17,13 @@ const packet=(snapshot:TablePresetStoredSnapshot)=>({...target,source:snapshot.s
 async function fixture(){const dir=mkdtempSync(join(tmpdir(),'dbark-preset-'));dirs.push(dir);const file=join(dir,'local.sqlite'),store=await LocalStore.open(file,wasm,protector);store.saveConnection(profile);return {file,store};}
 afterEach(()=>{for(const dir of dirs.splice(0))rmSync(dir,{recursive:true,force:true});});
 describe('命名方案真实SQLite、CAS与原子持久化',()=>{
+ it('NULL位置独立保存并在真实SQLite重开后完整恢复，旧默认规则不补字段',async()=>{
+  const {file,store}=await fixture();
+  const configuration:TablePresetConfiguration={...config,sort:[{column:'payload',direction:'DESC',nulls:'FIRST'},{column:'nullable',direction:'ASC',nulls:'LAST'}]};
+  try{const first=store.saveTablePreset({...packet(store.tablePresets(target)),name:'NULL位置',configuration});store.saveTablePreset({...packet(first),name:'旧默认',configuration:config});}finally{store.close();}
+  const reopened=await LocalStore.open(file,wasm,protector);
+  try{const saved=reopened.tablePresets(target);expect(saved.entries.find(item=>item.name==='NULL位置')!.configuration).toEqual(configuration);expect(saved.entries.find(item=>item.name==='旧默认')!.configuration).toEqual(config);expect(Object.hasOwn(saved.entries.find(item=>item.name==='旧默认')!.configuration.sort[0],'nulls')).toBe(false);}finally{reopened.close();}
+ });
  it('真实SQLite关闭重开保留嵌套组与停用原文；旧缺省不补group，读取仍核CAS',async()=>{
   const {file,store}=await fixture(),nested:TablePresetConfiguration={...config,filters:config.filters.map((rule,index)=>({...rule,...(index===1?{enabled:false}:{})})),filterGroup:{mode:'any',children:[{mode:'all',children:[1]},0]}};
   const grouped=store.saveTablePreset({...packet(store.tablePresets(target)),name:'完整嵌套组',configuration:nested});

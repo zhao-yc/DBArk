@@ -5,7 +5,7 @@ export const tableReadSqlLimits = Object.freeze({ columns: 4096, sorts: 20, sqlB
 export const tableReadSqlText = Object.freeze({
   invalid: '生成SELECT的表元数据、字段或条件无效',
   columns: '请选择1～4096个不重复的有效字段，并保留所需列顺序',
-  sorts: '排序只接受最多20条不重复的有效字段及ASC或DESC方向',
+  sorts: '排序只接受最多20条不重复的有效字段、ASC或DESC方向，以及可选FIRST或LAST的NULL位置',
   limit: '结果行数上限必须是1～100000的整数',
   sqlBytes: '完整SELECT超过2MiB，请缩小筛选条件；未截断语句',
   unicode: '名称或筛选值包含无效Unicode字符，未生成语句',
@@ -92,18 +92,24 @@ function list<T>(value: readonly T[], maximum: number, message: string): T[] {
 /** 排序只校显式20条预算；补可靠键不占该预算，原合法表页排序字节保持。 */
 export function buildTableReadOrder(info: TableInfo, sort: readonly SortRule[]): string {
   const columns = new Set(info.columns.map(column => column.name)), seen = new Set<string>();
-  const rules = list(sort, tableReadSqlLimits.sorts, tableReadSqlText.sorts).map(rule => {
-    if (!rule || typeof rule !== 'object' || Reflect.ownKeys(rule).length !== 2) throw Error(tableReadSqlText.sorts);
-    const column = Object.getOwnPropertyDescriptor(rule, 'column'), direction = Object.getOwnPropertyDescriptor(rule, 'direction');
+  const rules: SortRule[] = list(sort, tableReadSqlLimits.sorts, tableReadSqlText.sorts).map(rule => {
+    if (!rule || typeof rule !== 'object' || Reflect.ownKeys(rule).some(key => key !== 'column' && key !== 'direction' && key !== 'nulls')) throw Error(tableReadSqlText.sorts);
+    const column = Object.getOwnPropertyDescriptor(rule, 'column'), direction = Object.getOwnPropertyDescriptor(rule, 'direction'), nulls = Object.getOwnPropertyDescriptor(rule, 'nulls');
     if (!column || !direction || !('value' in column) || !('value' in direction) || !column.enumerable || !direction.enumerable || typeof column.value !== 'string' || !columns.has(column.value) || !['ASC', 'DESC'].includes(direction.value) || seen.has(column.value)) throw Error(tableReadSqlText.sorts);
-    seen.add(column.value); return { column: column.value as string, direction: direction.value as 'ASC' | 'DESC' };
+    // 可选NULL位置也只读自有数据描述符；显式undefined与旧双字段规则使用相同数据库默认字节。
+    if (nulls && (!('value' in nulls) || !nulls.enumerable || nulls.value !== undefined && nulls.value !== 'FIRST' && nulls.value !== 'LAST')) throw Error(tableReadSqlText.sorts);
+    seen.add(column.value); return { column: column.value as string, direction: direction.value as 'ASC' | 'DESC', ...(nulls?.value === undefined ? {} : { nulls: nulls.value as 'FIRST' | 'LAST' }) };
   });
   const keys = list(info.editableKey, tableReadSqlLimits.columns, tableReadSqlText.invalid), keyNames = new Set<string>();
   for (const key of keys) {
     if (typeof key !== 'string' || !columns.has(key) || keyNames.has(key)) throw Error(tableReadSqlText.invalid);
     keyNames.add(key); if (!seen.has(key)) rules.push({ column: key, direction: 'ASC' });
   }
-  return rules.map(rule => `${tableReadIdentifier(rule.column)} ${rule.direction}`).join(', ');
+  // NULL分桶与值方向分别编译；空串、精确数值及二进制原值均不参与转换，补键仍只出现一次。
+  return rules.flatMap(rule => {
+    const column = tableReadIdentifier(rule.column), value = `${column} ${rule.direction}`;
+    return rule.nulls === undefined ? [value] : [`(${column} IS NULL) ${rule.nulls === 'FIRST' ? 'DESC' : 'ASC'}`, value];
+  }).join(', ');
 }
 
 export interface FilteredTableSelectInput {

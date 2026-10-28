@@ -13,6 +13,7 @@ import { QueryInsertFile } from './queryInsertFile';
 import { buildTableFilterSql, identifier, inlineParameters, qualified } from './sql';
 import { structureTaskQuery, type StructureTaskContext } from './structureDefinition';
 import { tableStatisticsSourceIdentity } from './tableStatistics';
+import { buildTableReadOrder } from '../shared/tableReadSql';
 
 export interface TableFilteredExportPlan { sql: string; columns: ColumnInfo[]; }
 export interface PreparedTableFilteredExport {
@@ -30,12 +31,12 @@ export function planTableFilteredExport(source: TableInfo, input: TableFilteredE
   // 视图目录不能证明投影及生成表达式可写；不把只读结果伪装成可向原视图复放的INSERT。
   if (input.format === 'sql' && source.objectKind !== 'table') throw Error('无法确认视图INSERT可写性；视图请用CSV/JSON/XLSX导出。');
   const columns = selectTableFilteredExportColumns(source, input);
-  if (!Array.isArray(input.sort) || input.sort.length > tableFilteredExportLimits.sorts || new Set(input.sort.map(rule => rule?.column)).size !== input.sort.length || input.sort.some(rule => !rule || !source.columns.some(column => column.name === rule.column) || !['ASC', 'DESC'].includes(rule.direction))) throw Error(text.invalid);
-  const sort = input.sort.map(rule => ({ column: rule.column, direction: rule.direction }));
-  const order = [...sort, ...source.editableKey.filter(column => !sort.some(rule => rule.column === column)).map(column => ({ column, direction: 'ASC' as const }))];
-  if (order.some(rule => !source.columns.some(column => column.name === rule.column))) throw Error(text.metadata);
+  if (source.editableKey.some(column => !source.columns.some(item => item.name === column))) throw Error(text.metadata);
+  // 分页、模板与完整导出使用相同NULL分桶和可靠键，隐藏输出列仍可参与原排序。
+  let order: string;
+  try { order = buildTableReadOrder(source, input.sort); } catch { throw Error(text.invalid); }
   const filter = buildTableFilterSql(source, input.filters, input.filterMode, input.filterGroup);
-  const sql = inlineParameters(`SELECT ${columns.map(column => identifier(column.name)).join(', ')} FROM ${qualified(source.database, source.name)}${filter.where ? ' WHERE ' + filter.where : ''}${order.length ? ' ORDER BY ' + order.map(rule => `${identifier(rule.column)} ${rule.direction}`).join(', ') : ''}`, filter.params);
+  const sql = inlineParameters(`SELECT ${columns.map(column => identifier(column.name)).join(', ')} FROM ${qualified(source.database, source.name)}${filter.where ? ' WHERE ' + filter.where : ''}${order ? ' ORDER BY ' + order : ''}`, filter.params);
   if (Buffer.byteLength(sql) > limits.sqlBytes) throw Error(text.invalid);
   return { sql, columns };
 }

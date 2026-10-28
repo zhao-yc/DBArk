@@ -11,7 +11,14 @@ export const filterRuleSchema = z.unknown().transform((input, context): FilterRu
   try { return filterRuleShape.parse(copyRule(input)); }
   catch (reason) { context.addIssue({ code: 'custom', message: reason instanceof Error ? reason.message : '筛选条件无效' }); return z.NEVER; }
 });
-export const sortRulesSchema = z.array(z.object({ column: field, direction: z.enum(['ASC','DESC']) }).strict()).max(20);
+const sortRuleShape = z.object({ column: field, direction: z.enum(['ASC','DESC']), nulls: z.enum(['FIRST','LAST']).optional() }).strict();
+/** 先读自有描述符再交Zod；排序字段和NULL位置均不能通过getter或额外SQL字段扩展。 */
+export const sortRulesSchema = z.unknown().transform((input, context): z.output<typeof sortRuleShape>[] => {
+  try {
+    const rules = ownArray(input, 20, '排序字段最多20项').map(rule => ownRecord(rule, ['column', 'direction', 'nulls'], ['column', 'direction']));
+    return z.array(sortRuleShape).max(20).parse(rules);
+  } catch (reason) { context.addIssue({ code: 'custom', message: reason instanceof Error ? reason.message : '排序条件无效' }); return z.NEVER; }
+});
 
 /** 字段必须是普通对象的自有数据属性；不调用访问器，不接受未知扩展。 */
 function ownRecord(input: unknown, allowed: readonly string[], required: readonly string[]): Record<string, unknown> {

@@ -1,3 +1,4 @@
+import { tableSortRuleSummary } from '../tableSort';
 import { useLayoutEffect, useMemo, useRef, useState } from 'react';
 import type { TableInfo } from '../../shared/contracts';
 import { buildTableQueryTemplate, tableQueryTemplateColumns, tableQueryTemplateKinds, type TableQueryTemplateKind, type TableQueryTemplateOptions } from '../tableQueryTemplate';
@@ -96,7 +97,7 @@ export function TableQueryTemplateDialog({ info, limit, readScope, isCurrent, on
   return <Modal title={text.title} wide onClose={close}><div className="modal-content" {...(readScope ? { 'data-table-filtered-select-dialog': true } : {})}>
     <p className="muted">{text.hint}</p>
     {!readScope && <Field label={text.kind}><select aria-label={text.kind} value={kind} onChange={event => changeKind(event.target.value)}>{tableQueryTemplateKinds.map(value => <option key={value} value={value}>{value}</option>)}</select></Field>}
-    {readScope && <><p>{filteredText.independent}</p><section aria-label={filteredText.conditions}><strong>{filteredText.conditions}</strong>{readScope.filters.length ? <ul>{readScope.filters.map((rule, index) => <li key={index}>{rule.enabled === false ? filteredText.disabledRule : ''}{filterRuleSummary(rule)}</li>)}</ul> : <p>{filteredText.noConditions}</p>}{readScope.filterGroup && <p>{tableFilterGroupSummary(readScope.filterGroup)}</p>}</section><section aria-label={filteredText.sorts}><strong>{filteredText.sorts}</strong>{readScope.sort.length ? <ol>{readScope.sort.map((rule, index) => <li key={index}>{rule.column} {rule.direction}</li>)}</ol> : <p>{filteredText.noSorts}</p>}</section></>}
+    {readScope && <><p>{filteredText.independent}</p><section aria-label={filteredText.conditions}><strong>{filteredText.conditions}</strong>{readScope.filters.length ? <ul>{readScope.filters.map((rule, index) => <li key={index}>{rule.enabled === false ? filteredText.disabledRule : ''}{filterRuleSummary(rule)}</li>)}</ul> : <p>{filteredText.noConditions}</p>}{readScope.filterGroup && <p>{tableFilterGroupSummary(readScope.filterGroup)}</p>}</section><section aria-label={filteredText.sorts}><strong>{filteredText.sorts}</strong>{readScope.sort.length ? <ol>{readScope.sort.map((rule, index) => <li key={index}>{tableSortRuleSummary(rule)}</li>)}</ol> : <p>{filteredText.noSorts}</p>}</section></>}
     {kind !== 'DELETE' && !candidates.error && <section aria-label={text.columns} style={{ marginTop: 16 }}>
       <strong>{text.columns}</strong><p className="muted">{text.columnsHint}</p>
       {kind === 'INSERT' && <p className="muted">{text.insertColumnsHint}</p>}

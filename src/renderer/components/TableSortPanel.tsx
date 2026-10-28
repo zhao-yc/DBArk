@@ -30,6 +30,15 @@ export function TableSortPanel({ columns, initial, isCurrent, onApply, onClose }
     if (destination < 0 || destination >= draft.length) return;
     const next = [...draft], [rule] = next.splice(index, 1); next.splice(destination, 0, rule); edit(next);
   }
+  /** 位置独立于方向；恢复数据库默认时删除可选字段，旧双字段规则与原SQL字节保持。 */
+  function changeNulls(index: number, value: string): void {
+    if (!['DEFAULT', 'FIRST', 'LAST'].includes(value)) return;
+    edit(draft.map((item, position) => {
+      if (position !== index) return item;
+      const { nulls: _nulls, ...rule } = item.rule;
+      return { ...item, rule: value === 'DEFAULT' ? rule : { ...rule, nulls: value as 'FIRST' | 'LAST' } };
+    }));
+  }
   /** 取消父层草稿确认时保留当前排序草稿；成功同步消费，连点不能重复读取。 */
   function apply(): void {
     if (!current()) return;
@@ -43,6 +52,7 @@ export function TableSortPanel({ columns, initial, isCurrent, onApply, onClose }
     {draft.map(({ id, rule }, index) => <div className="filter-inputs" key={id}>
       <span>{index + 1}.</span><label>{text.field(index + 1)}<select aria-label={text.field(index + 1)} disabled={disabled} value={rule.column} onChange={event => edit(draft.map((item, position) => position === index ? { ...item, rule: { ...item.rule, column: event.target.value } } : item))}>{columns.map(column => <option key={column} value={column} disabled={column !== rule.column && draft.some(item => item.rule.column === column)}>{column}</option>)}</select></label>
       <label>{text.direction(index + 1)}<select aria-label={text.direction(index + 1)} disabled={disabled} value={rule.direction} onChange={event => edit(draft.map((item, position) => position === index ? { ...item, rule: { ...item.rule, direction: event.target.value as SortRule['direction'] } } : item))}><option value="ASC">{text.asc}</option><option value="DESC">{text.desc}</option></select></label>
+      <label>{text.nulls(index + 1)}<select aria-label={text.nulls(index + 1)} disabled={disabled} value={rule.nulls ?? 'DEFAULT'} onChange={event => changeNulls(index, event.target.value)}><option value="DEFAULT">{text.nullsDefault}</option><option value="FIRST">{text.nullsFirst}</option><option value="LAST">{text.nullsLast}</option></select></label>
       <button type="button" aria-label={text.earlier(index + 1)} disabled={disabled || index === 0} onClick={() => move(index, -1)}>↑</button><button type="button" aria-label={text.later(index + 1)} disabled={disabled || index === draft.length - 1} onClick={() => move(index, 1)}>↓</button><button type="button" aria-label={text.remove(index + 1)} disabled={disabled} onClick={() => edit(draft.filter((_, position) => position !== index))}>×</button>
     </div>)}
     <ErrorBox message={error}/><div className="filter-inputs"><button type="button" disabled={disabled || !available.length || draft.length >= 20} onClick={() => edit([...draft, { id: sequence.current++, rule: { column: available[0], direction: 'ASC' } }])}>{text.add}</button><button type="button" disabled={disabled || !draft.length} onClick={() => edit([])}>{text.clear}</button><span className="grow"/><button type="button" onClick={onClose}>{text.cancel}</button><button type="button" className="primary" disabled={disabled} onClick={apply}>{text.apply}</button></div>
