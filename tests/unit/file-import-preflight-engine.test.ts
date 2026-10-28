@@ -3,6 +3,7 @@ import { EventEmitter } from 'node:events';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { createHash } from 'node:crypto';
 import type { ConnectionProfile, TableInfo, TaskEvent } from '../../src/shared/contracts';
 import type { MetadataQuery } from '../../src/engine/metadata';
 const io = vi.hoisted(() => ({ connect: vi.fn(), execute: vi.fn(), metadata: vi.fn() }));
@@ -56,6 +57,13 @@ function assertReadOnly() {
 }
 
 describe('整文件预检真实Engine入口', () => {
+  it('新表原文件期望与同次完整读取逐字匹配；同长度内容变化只报预检失败且零写入', async () => {
+    const source = 'id,amount\n1,2\n', expectedSource = { sha256: createHash('sha256').update(source).digest('hex'), bytes: Buffer.byteLength(source) };
+    expect(await engine.handle('files.preflight', { ...await input('指纹一致', source), expectedSource })).toMatchObject({ complete: true, issueCount: 0, sourceFingerprint: expectedSource.sha256 });
+    const changed = await engine.handle('files.preflight', { ...await input('同长度变化', source.replace('1,2', '1,3')), expectedSource });
+    expect(changed).toMatchObject({ complete: false, termination: 'source-changed', checkedRecords: 1, issueCount: 1 });
+    expect(changed.issues[0].code).toBe('source-changed'); assertReadOnly();
+  });
   it('第21条后仍检查多字段，全部计数且零DML或事务命令', async () => {
     const result = await engine.handle('files.preflight', await input('count', 'id,amount\n' + '1,2\n'.repeat(21) + '坏,错\n'.repeat(205)));
     expect(result).toMatchObject({ checkedRecords: 226, validRecords: 21, invalidRecords: 205, issueCount: 410, truncated: true, complete: true });

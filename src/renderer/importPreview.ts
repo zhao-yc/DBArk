@@ -16,7 +16,7 @@ interface PreviewDependencies {
   metadata: (target: ImportPreviewTarget) => Promise<TableInfo>;
   preview: (context: ImportPreviewContext) => Promise<ImportSample>;
 }
-export interface ImportPreviewPreparation { freshMetadata?: boolean; configuration?: ImportPresetConfiguration; }
+export interface ImportPreviewPreparation { freshMetadata?: boolean; configuration?: ImportPresetConfiguration; initialMapping?: Readonly<Record<string,string>>; sourceColumns?: readonly string[]; }
 
 /** 具名字段按完整集合对齐，无标题字段按原列位置；所有目标通过后才整份发布。 */
 function completeMapping(info: TableInfo, sample: ImportSample, configuration: ImportPresetConfiguration): Record<string, string> {
@@ -51,22 +51,29 @@ export class ImportPreviewController {
 
   /** 切换上下文先失效旧请求，待当前目标元数据成功后才读取一次文件预览。 */
   async prepare(context: ImportPreviewContext | null, options: ImportPreviewPreparation = {}): Promise<void> {
-    if (context && !options.freshMetadata && !options.configuration && readyImportPreview(this.state, context)) return;
+    if (context && !options.freshMetadata && !options.configuration && !options.initialMapping && !options.sourceColumns && readyImportPreview(this.state, context)) return;
     const generation = ++this.generation;
     if (!context) { this.update(null); return; }
     const key = importPreviewKey(context); this.update({ key, status: 'loading' });
     try {
       const configuration = options.configuration ? importPresetConfigurationSchema.parse(options.configuration) : undefined;
+      // 来源列来自完整inspect，而不是有限样本或mapping的键；首await前独立复制以固定原准备意图。
+      const initialMapping = options.initialMapping === undefined ? undefined : Object.fromEntries(Object.entries(options.initialMapping));
+      const sourceColumns = options.sourceColumns === undefined ? undefined : [...options.sourceColumns];
+      if (sourceColumns && (!sourceColumns.length || new Set(sourceColumns).size !== sourceColumns.length || sourceColumns.some(name => typeof name !== 'string'))) throw Error(importPresetsZh.incompatible);
+      if (configuration && (initialMapping || sourceColumns)) throw Error(importPresetsZh.incompatible);
       if (configuration && (configuration.format !== context.format || configuration.encoding !== context.encoding || csvImportDelimiter(context.format, configuration.csvDelimiter) !== csvImportDelimiter(context.format, context.csvDelimiter) || csvImportHasHeader(context.format, configuration.csvHasHeader) !== csvImportHasHeader(context.format, context.csvHasHeader))) throw Error(importPresetsZh.incompatible);
       const info = await this.metadataFor(context, !!options.freshMetadata);
       if (generation !== this.generation) return;
-      if (configuration && (info.database !== context.database || info.name !== context.table)) throw Error(importPresetsZh.incompatible);
-      const sample = await this.dependencies.preview(context);
+      if ((configuration || initialMapping || sourceColumns) && (info.database !== context.database || info.name !== context.table)) throw Error(importPresetsZh.incompatible);
+      const limited = await this.dependencies.preview(context);
       if (generation !== this.generation) return;
+      if (sourceColumns && limited.columns.some(name => !sourceColumns.includes(name))) throw Error(importPresetsZh.incompatible);
+      const sample = sourceColumns ? { ...limited, columns: sourceColumns } : limited;
       const targets = new Set(info.columns.filter(column => !column.generated).map(column => column.name));
       // 无标题CSV的源键仅表示列位置，即便目标恰好也叫“第1列”仍必须人工映射。
       const automatic = context.format !== 'csv' || csvImportHasHeader(context.format, context.csvHasHeader);
-      const mapping = configuration ? completeMapping(info, sample, configuration) : Object.fromEntries(sample.columns.map(name => [name, automatic && targets.has(name) ? name : '']));
+      const mapping = configuration ? completeMapping(info, sample, configuration) : Object.fromEntries(sample.columns.map(name => [name, initialMapping !== undefined ? Object.hasOwn(initialMapping,name) && targets.has(initialMapping[name]) ? initialMapping[name] : '' : automatic && targets.has(name) ? name : '']));
       this.update({ key, status: 'ready', info, sample, mapping });
     } catch (reason) {
       if (generation === this.generation) this.update({ key, status: 'failed', error: reason instanceof Error ? reason.message : String(reason) });

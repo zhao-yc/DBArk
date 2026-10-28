@@ -54,7 +54,7 @@ export function csvValue(value: string): CellValue {
 }
 
 /** JSON 顶层必须是对象数组；数字保留原始字符串，避免大整数在解析阶段舍入。 */
-export async function* readRecords(filePath: string, format: 'csv' | 'json', encoding: string, delimiter?: CsvImportDelimiter, hasHeader?: boolean, control?: { signal?: AbortSignal; onBytes?: (chunk: Buffer) => void }): AsyncGenerator<DataRow> {
+export async function* readRecords(filePath: string, format: 'csv' | 'json', encoding: string, delimiter?: CsvImportDelimiter, hasHeader?: boolean, control?: { signal?: AbortSignal; onBytes?: (chunk: Buffer) => void; onColumns?: (columns: string[]) => void }): AsyncGenerator<DataRow> {
   const selectedDelimiter = csvImportDelimiter(format, delimiter);
   const selectedHasHeader = csvImportHasHeader(format, hasHeader);
   // 所有配置先校验，错误选项不能触发文件打开或遗留尚未接入 pipeline 的句柄。
@@ -87,10 +87,13 @@ export async function* readRecords(filePath: string, format: 'csv' | 'json', enc
         if (selectedHasHeader) {
           headers = (item as string[]).map(String);
           if (new Set(headers).size !== headers.length || headers.some(name => !name.length)) throw new Error('CSV 标题不能包含重复或空字段名');
+          // 原标题一经校验即报告，即使没有数据行也能保留完整源列；副本不能反向修改解析器。
+          control?.onColumns?.([...headers]);
           continue;
         }
         // 首条数组同时确定列数并作为数据产出，不把重复值、空串或原型同名文字当标题。
         headers = (item as string[]).map((_value, index) => csvImportColumnName(index));
+        control?.onColumns?.([...headers]);
       }
       if (format === 'csv' && (item as string[]).length !== headers!.length) throw new Error('CSV 每行列数必须与首行一致');
       const record = format === 'csv' ? Object.fromEntries(headers!.map((name, index) => [name, item[index]])) : restoreKeys(item.value);

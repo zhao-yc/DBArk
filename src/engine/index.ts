@@ -59,6 +59,9 @@ import { preflightImportFile } from './fileImportPreflight';
 import type { FileImportPreflightInput } from '../shared/fileImportPreflight';
 import { fileImportTransactionMode, fileImportTransactionText } from '../shared/fileImportTransaction';
 import { ResultFileTasks } from './resultFileTasks';
+import { ImportFileInspectTasks } from './importFileInspectTasks';
+import { readVerifiedImportRecords } from './importNewTableSource';
+import { importFileSourceSchema } from '../shared/importNewTable';
 import { TableColumnPatchTasks } from './tableColumnPatchTasks';
 import { TableIndexPatchTasks } from './tableIndexPatchTasks';
 import { TableRenameTasks } from './tableRenameTasks';
@@ -130,6 +133,7 @@ type Input = Record<string, any>;
 /** 独立数据库进程的入口；网络连接与文件流不会进入 Electron 渲染进程。 */
 export class Engine {
   private readonly excelReads = new ExcelReadTasks(event => this.emit(event));
+  private readonly importInspections = new ImportFileInspectTasks(event => this.emit(event));
   private readonly excelConnecting = new Map<string, { connectionId: string; controller: AbortController; done: Promise<void> }>();
   private readonly conflictImports = new Map<string, ConflictImportLease>();
   private readonly profiles = new Map<string, ConnectionProfile>();
@@ -632,6 +636,9 @@ export class Engine {
       case 'schema.foreignKeys.preview': return this.foreignKeyPatches.preview(input as any, input.connectionRevision);
       case 'schema.foreignKeys.apply': return this.foreignKeyPatches.apply(input as any, input.connectionRevision);
       case 'schema.foreignKeys.release': return this.foreignKeyPatches.releaseTokens(input);
+      case 'files.inspectImport':
+        this.assertFile(input); if (this.taskIdInUse(input.taskId)) throw Error('扫描任务编号已使用');
+        return this.importInspections.run(input as Parameters<ImportFileInspectTasks['run']>[0]);
       case 'files.preview': this.assertFile(input); return previewFile(input as Parameters<typeof previewFile>[0]);
       case 'files.preflight': {
         this.assertFile(input);
@@ -655,6 +662,8 @@ export class Engine {
       case 'files.import': {
         this.assertFile(input); const mode = fileImportTransactionMode(input.format, input);
         const conflict = fileImportConflict(input.format, input);
+        // 指纹绑定必须在建连前拒绝批提交、冲突模式及其它格式，内部调用不能绕过IPC。
+        this.assertExpectedImportSource(input, mode);
         // 请求配置错误在建连及SQL运行回执之前拒绝；importFile内仍保留同一防线。
         if (Object.hasOwn(input, 'csvHasHeader')) {
           if (typeof input.csvHasHeader !== 'boolean') throw new Error('CSV 首行字段名配置必须为布尔值');
@@ -706,7 +715,7 @@ export class Engine {
   }
 
   /** 所有任务通道共用编号占用检查，避免集成后取消误命中另一种活动任务。 */
-  private taskIdInUse(id: string): boolean { return this.tasks.has(id) || this.independentTasks.has(id) || this.independentResources.owns(id) || this.resultFiles.has(id) || this.excelReads.has(id) || this.excelConnecting.has(id) || this.conflictImports.has(id) || this.schemaComparisons.has(id); }
+  private taskIdInUse(id: string): boolean { return this.tasks.has(id) || this.independentTasks.has(id) || this.independentResources.owns(id) || this.resultFiles.has(id) || this.excelReads.has(id) || this.importInspections.has(id) || this.excelConnecting.has(id) || this.conflictImports.has(id) || this.schemaComparisons.has(id); }
 
   /** 关闭前取消任务并释放固定会话，未提交事务由服务器在断开时回滚。 */
   async closeAll(): Promise<void> {
@@ -723,7 +732,7 @@ export class Engine {
     this.structureCache.release();
     const independent = [...this.independentTasks];
     const active = [...this.tasks.values()];
-    const fileCleanup = Promise.all([this.resultFiles.closeAll(), this.excelReads.closeAll()]);
+    const fileCleanup = Promise.all([this.resultFiles.closeAll(), this.excelReads.closeAll(), this.importInspections.closeAll()]);
     const cancellations = await Promise.allSettled([comparisonCleanup, filteredUpdateCleanup, filteredDeleteCleanup, ...active.map(task => this.cancelTask(task.id)), ...independent.map(([id]) => this.cancelTask(id))]);
     await Promise.all([...active.map(task => task.done), ...independent.map(([, task]) => task.done)]);
     await fileCleanup;
@@ -1156,6 +1165,7 @@ export class Engine {
     const connecting = this.excelConnecting.get(id);
     if (connecting) { connecting.controller.abort(); await connecting.done; return; }
     if (this.excelReads.has(id)) return this.excelReads.cancel(id);
+    if (this.importInspections.has(id)) return this.importInspections.cancel(id);
     if (this.schemaComparisons.has(id)) return this.schemaComparisons.cancel(id);
     const independent = this.independentTasks.get(id);
     // 结果插入的COMMIT已发送时不再KILL，避免把已提交误报为已撤销。
@@ -1917,8 +1927,16 @@ export class Engine {
   }
 
   /** CSV/JSON可整文件单事务；缺省保持每500行提交，任何未知终态都不重放或伪报回滚。 */
+  /** 原文件指纹必须整文件原子提交；旧入口省略时保持既有批次语义。 */
+  private assertExpectedImportSource(input: Input, mode: string) {
+    if (!Object.hasOwn(input, 'expectedSource')) return;
+    if (input.expectedSource === undefined || !['csv', 'json'].includes(input.format) || mode !== 'atomic' || Object.hasOwn(input, 'conflict')) throw Error('原文件指纹仅允许CSV／JSON整文件事务新增，不允许冲突策略');
+    return importFileSourceSchema.parse(input.expectedSource);
+  }
   private async importFile(task: RunningTask, input: Input, records?: AsyncIterable<DataRow>): Promise<{ rows: number; errors: string[] }> {
     const transactionMode = fileImportTransactionMode(input.format, input), atomic = transactionMode === 'atomic';
+    const expectedSource = this.assertExpectedImportSource(input, transactionMode);
+    if (expectedSource && records) throw Error('指纹绑定不能借用未经核验的其它记录读取器');
     // 内部调用也不能把 CSV 标题选项混入 SQL、JSON 或 Excel，并在任何事务前校验。
     if (Object.hasOwn(input, 'csvHasHeader')) {
       if (typeof input.csvHasHeader !== 'boolean') throw new Error('CSV 首行字段名配置必须为布尔值');
@@ -1964,7 +1982,9 @@ export class Engine {
         this.emit({ taskId: task.id, status: 'running', progress: 0, rows: 0, message: fileImportTransactionText.atomicScope });
       }
       const { info, columns, mapping, insertPrefix } = selected!;
-      for await (const row of records ?? readRecords(input.filePath, input.format, input.encoding, input.csvDelimiter, input.csvHasHeader)) {
+      // 原读取链完整核完SHA才结束迭代；任何变化在下方唯一COMMIT之前抛出并走原回滚。
+      const sourceRecords = expectedSource ? readVerifiedImportRecords({ ...input, expectedSource } as Parameters<typeof readVerifiedImportRecords>[0], () => this.checkCancelled(task), task.managed.signal) : readRecords(input.filePath, input.format, input.encoding, input.csvDelimiter, input.csvHasHeader);
+      for await (const row of records ?? sourceRecords) {
         this.checkCancelled(task); checkTransaction(); sourceLine++;
         const values = mapping.map(([source, target]) => {
           if (!Object.hasOwn(row, source)) throw new Error(`源记录缺少字段：${source}`);

@@ -1061,6 +1061,7 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
     case 'excel.preview':
     case 'excel.import':
     case 'excel.export': input = { ...input, filePath: resolveFileToken(files, input.fileToken, command === 'excel.export' ? 'export' : 'import', 'xlsx') }; break;
+    case 'files.inspectImport':
     case 'files.preview':
     case 'files.preflight':
     case 'files.import':
@@ -1073,7 +1074,7 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
       }
       const expected = command === 'files.export' || command === 'files.exportResult' ? 'export' : 'import';
       // 已返回XLSX只消费本窗口明确选择的Excel文件能力，不借其它导出格式令牌。
-      input = { ...input, filePath: resolveFileToken(files, input.fileToken, expected, command === 'files.preflight' ? input.format : command === 'files.exportResult' && input.format === 'xlsx' ? 'xlsx' : undefined) }; break;
+      input = { ...input, filePath: resolveFileToken(files, input.fileToken, expected, command === 'files.preflight' || command === 'files.inspectImport' || input.expectedSource ? input.format : command === 'files.exportResult' && input.format === 'xlsx' ? 'xlsx' : undefined) }; break;
     }
   }
   const taskId: string | undefined = command !== 'query.cancel' ? input.taskId : undefined;
@@ -1446,7 +1447,7 @@ else {
         if (databaseEncodingCommand) databaseEncodingOwners.before(databaseEncodingCommand, input, columns!);
         const operation=dispatch(payload.command as Command,input,columns),local=payload.command==='search.savedQueries'||payload.command==='search.savedQueriesContinue'||payload.command==='queries.page'||payload.command==='queries.pageContinue'||payload.command==='history.page'||payload.command==='history.pageContinue'||payload.command.startsWith('history.delete');if(local)localSearchOperations.add(operation);
         // 片段文件及整文件预检的清理全部结算后才关闭存储，预检另在退出时沿原任务通道取消。
-        const trackedFileOperation=payload.command.startsWith('snippets.transfer') || payload.command === 'files.preflight';if(trackedFileOperation)queryFileOperations.add(operation);
+        const trackedFileOperation=payload.command.startsWith('snippets.transfer') || (payload.command === 'files.preflight' || payload.command === 'files.inspectImport');if(trackedFileOperation)queryFileOperations.add(operation);
         try {
           const result = await operation;
           if (payload.command === 'queries.readText') { columnsMain.assertCapturedOwner(columns); if (shuttingDown) throw Error('客户端正在退出，保存查询正文未发布'); }

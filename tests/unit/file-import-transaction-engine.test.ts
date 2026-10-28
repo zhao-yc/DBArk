@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { mkdtemp, readdir, rm, rmdir, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, readdir, rm, rmdir, writeFile } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { EventEmitter } from 'node:events';
@@ -121,5 +122,44 @@ describe('整文件原子事务真实Engine调度', () => {
     let insertsSeen = 0; step = async (_managed, sql) => { if (sql.startsWith('INSERT') && ++insertsSeen === 501) { io.close.mockRejectedValueOnce(Error('原取消控制关闭失败')); await engine.handle('query.cancel', { taskId: '本例导入' }).catch(() => undefined); throw Error('本例INSERT中断'); } if (sql === 'ROLLBACK') throw Error('本例回滚ACK丢失'); return undefined; };
     await expect(engine.handle('files.import', await input(502))).rejects.toThrow(/已确认提交 500 行.*回滚结果未确认.*取消控制收尾失败/u);
     expect(commands().filter(sql => sql === 'COMMIT')).toHaveLength(1); expect(commands().filter(sql => sql === 'ROLLBACK')).toHaveLength(1); expect(events.at(-1)?.message).toContain('已确认提交 500 行');
+  });
+});
+
+describe('新表导入原文件指纹的真实Engine接线（离线驱动边界）', () => {
+  /** 期望直接哈希独立手写文件，不调用产品扫描器生成期望摘要。 */
+  async function fingerprint(filePath: string) { const bytes = await readFile(filePath); return { sha256: createHash('sha256').update(bytes).digest('hex'), bytes: bytes.length }; }
+  it.each(['csv', 'json'] as const)('%s完整原字节匹配才允许502行一次提交，500处仍未提交', async format => {
+    const request = await input(502, format), expectedSource = await fingerprint(request.filePath);
+    step = (_managed, sql) => { if (sql.startsWith('INSERT')) expect(commands()).not.toContain('COMMIT'); return undefined; };
+    const result = await engine.handle('files.import', { ...request, expectedSource, transactionMode: 'atomic' });
+    expect(result).toEqual({ rows: 502, errors: [] }); expect(inserts()).toHaveLength(502); expect(commands().filter(sql => sql === 'COMMIT')).toHaveLength(1); expect(commands()).not.toContain('ROLLBACK');
+    expect(inserts().at(-1)![2]).toEqual(['502', '123456789012345678.123456789012']);
+  });
+  it('同长度文件在最初扫描后改变，全部INSERT仍须原事务回滚且零COMMIT', async () => {
+    const request = await input(502), expectedSource = await fingerprint(request.filePath), original = await readFile(request.filePath, 'utf8');
+    await writeFile(request.filePath, original.replace('123456789012345678', '223456789012345678'));
+    const result = await engine.handle('files.import', { ...request, expectedSource, transactionMode: 'atomic' });
+    expect(result.rows).toBe(0); expect(result.errors.join(' ')).toMatch(/指纹|内容|扫描/); expect(result.errors.join(' ')).toContain('确认回滚');
+    expect(inserts()).toHaveLength(502); expect(commands()).not.toContain('COMMIT'); expect(commands().filter(sql => sql === 'ROLLBACK')).toHaveLength(1);
+  });
+  it('真实读取中改写原文件，即使原字节已缓冲也不能借同摘要绕过前后身份核验', async () => {
+    const request = await input(3000), expectedSource = await fingerprint(request.filePath), original = await readFile(request.filePath, 'utf8'); let changed = false;
+    step = async (_managed, sql) => { if (!changed && sql.startsWith('INSERT')) { changed = true; await writeFile(request.filePath, original.replace('123456789012345678', '223456789012345678')); } return undefined; };
+    const result = await engine.handle('files.import', { ...request, expectedSource, transactionMode: 'atomic' });
+    expect(changed).toBe(true); expect(result.rows).toBe(0); expect(result.errors.length).toBeGreaterThan(0); expect(commands()).not.toContain('COMMIT'); expect(commands().filter(sql => sql === 'ROLLBACK')).toHaveLength(1);
+  });
+  it('新原文件选项不能降为批提交、SQL或冲突写，非法输入在建连前拒绝', async () => {
+    io.connect.mockClear(); const request = await input(1), expectedSource = await fingerprint(request.filePath);
+    for (const changed of [{}, { transactionMode: 'batch' }, { transactionMode: 'atomic', format: 'sql' }, { transactionMode: 'atomic', conflict: undefined }, { transactionMode: 'atomic', expectedSource: undefined }, { transactionMode: 'atomic', expectedSource: { sha256: '非法', bytes: 1 } }]) {
+      await expect(engine.handle('files.import', { ...request, expectedSource, ...changed })).rejects.toThrow();
+    }
+    expect(io.connect).not.toHaveBeenCalled(); expect(io.metadata).not.toHaveBeenCalled(); expect(io.execute).not.toHaveBeenCalled();
+  });
+  it('文件扫描经正式Engine任务登记，无数据库访问；取消返回等待原读取退出', async () => {
+    const request = await input(3000); io.connect.mockClear(); let cancellation: Promise<void> | undefined;
+    hook = event => { if (event.taskId === '文件扫描' && (event.rows ?? 0) >= 128 && !cancellation) cancellation = engine.handle('query.cancel', { taskId: '文件扫描' }); };
+    await expect(engine.handle('files.inspectImport', { fileToken: '原选择', filePath: request.filePath, format: 'csv', encoding: 'utf8', taskId: '文件扫描' })).rejects.toThrow('取消'); await cancellation;
+    expect(cancellation).toBeDefined(); expect((engine as any).importInspections.has('文件扫描')).toBe(false); expect(events.at(-1)?.status).toBe('cancelled');
+    expect(io.connect).not.toHaveBeenCalled(); expect(io.metadata).not.toHaveBeenCalled(); expect(io.execute).not.toHaveBeenCalled();
   });
 });

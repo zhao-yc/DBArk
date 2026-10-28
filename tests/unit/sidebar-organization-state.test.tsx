@@ -3,6 +3,7 @@ import { afterAll, afterEach, beforeAll, expect, it, vi } from 'vitest';
 import type { ConnectionProfile } from '../../src/shared/contracts';
 import { completionServerFacts } from '../../src/renderer/completionServerFacts';
 import { zh } from '../../src/renderer/locales/zh-CN';
+import { importNewTableZh } from '../../src/renderer/locales/importNewTable.zh-CN';
 import { memoryDocument, MemoryEvent } from '../fixtures/memory-dom';
 
 let document: ReturnType<typeof memoryDocument>, createRoot: typeof import('react-dom/client')['createRoot'], root: ReturnType<typeof createRoot> | undefined;
@@ -14,7 +15,7 @@ afterEach(async () => { if (root) await act(async () => root!.unmount()); root =
 afterAll(() => { for (const [name, descriptor] of globals) if (descriptor) Object.defineProperty(globalThis, name, descriptor); else Reflect.deleteProperty(globalThis, name); });
 
 /** 使用真实Sidebar/子节点及Zustand，仅把IPC替换为明确可结算的RAM端口。 */
-async function mount() {
+async function mount(onImportNewTable?: (connectionId: string, database: string) => void) {
   const profiles: ConnectionProfile[] = ['a', 'b'].map(id => ({ id, name: `连接${id}`, group: id === 'a' ? '原组' : '目标组', color: '#123456', dialect: 'mysql', host: 'offline.invalid', port: 3306, user: 'ram' }));
   useWorkspace.setState({ connections: profiles, connectionVersions: {}, selection: undefined, activeJobs: {}, settings: { ...useWorkspace.getState().settings, tabs: [], activeTabId: undefined } });
   useWorkbench.setState({ ready: true, busy: false, snapshot: { revision: 0, document: { ...useWorkbench.getState().snapshot.document, groups: [], favorites: [{ id: '本例收藏', label: '收藏库', groupId: null, target: { connectionId: 'a', kind: 'database', database: '收藏库' } }] } } });
@@ -24,7 +25,7 @@ async function mount() {
     return new Promise(resolve => calls.push({ command, input, resolve }));
   });
   (window as any).dbark = { invoke };
-  const noop = () => {}, props = { onNewConnection: noop, onEditConnection: noop, onCopyConnection: noop, onDesign: noop, onColumnPatches: noop, onIndexPatches: noop, onForeignKeyPatches: noop, onTableRename: noop, onTableAutoIncrement: noop, onTableComment: noop, onTableDefaultEncoding: noop, onDdl: noop, onOpenWorkbench: async () => true };
+  const noop = () => {}, props = { onNewConnection: noop, onEditConnection: noop, onCopyConnection: noop, onImportNewTable, onDesign: noop, onColumnPatches: noop, onIndexPatches: noop, onForeignKeyPatches: noop, onTableRename: noop, onTableAutoIncrement: noop, onTableComment: noop, onTableDefaultEncoding: noop, onDdl: noop, onOpenWorkbench: async () => true };
   const host = document.createElement('div'); document.body.appendChild(host); root = createRoot(host as any);
   const render = async (refreshVersion = 0) => { await act(async () => root!.render(<Sidebar {...props} refreshVersion={refreshVersion}/>)); };
   await render();
@@ -37,6 +38,12 @@ function connected(button: Node) { return button.querySelectorAll('span').some(n
 function busy(button: Node) { return button.getAttribute('aria-busy'); }
 function status() { return { connectionId: 101, dialect: 'mysql', version: '8.4.11' }; }
 function commands(f: Awaited<ReturnType<typeof mount>>) { return f.calls.map(call => call.command); }
+
+it('数据库级从文件导入新表入口传递准确原目标，点击不创建表或查询记录', async () => {
+  const open = vi.fn(), f = await mount(open); await click(connection()); await f.settle(0, status()); await f.settle(1, ['原数据库']);
+  const entry = document.querySelectorAll('button').find(node => node.getAttribute('aria-label') === `${importNewTableZh.title} 原数据库`); expect(entry).toBeDefined();
+  await click(entry!); expect(open).toHaveBeenCalledExactlyOnceWith('a', '原数据库'); expect(commands(f)).toEqual(['connections.open', 'metadata.databases']);
+});
 
 it('已展开且已连接的节点换组或改色保留原DOM、数据库对象树和收藏Shelf，不重连', async () => {
   const f = await mount(), original = connection(), shelf = document.querySelectorAll('section').find(node => node.getAttribute('class') === 'workbench-shelf');

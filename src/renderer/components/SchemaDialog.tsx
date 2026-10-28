@@ -41,16 +41,24 @@ const splitColumns = (text: string) => text.split(',').map(item => item.trim());
 type SchemaDraft = Omit<TableDesign, 'indexes' | 'columns'> & { columns: TableCreateDraft['columns']; indexes: TableCreateIndex[]; checks?: TableCreateCheck[] };
 /** 已有表显式取回整字段模型，不能把新表前缀合同传给通用schema.preview。 */
 function existingDesign(design: SchemaDraft): TableDesign { if (tableCreateHasChecks(design)) throw Error(checksText.existing); return { ...design, indexes: design.indexes.map(index => { if (!('columns' in index)) throw Error('已有表不能使用新表专属键部分'); return index; }) }; }
-interface SchemaDialogProps { connectionId: string; database: string; table?: string; onClose: () => void; onApplied: () => void; onCreated?(result: TableCreateApplyOutput, version: number): void; onDirtyChange?(dirty: boolean): void; }
+interface SchemaDialogProps { connectionId: string; database: string; table?: string; initialDesign?: TableCreateDraft; isParentCurrent?():boolean; invalidated?:boolean; onClose: () => void; onApplied: () => void; onCreated?(result: TableCreateApplyOutput, version: number): void; onDirtyChange?(dirty: boolean): void; }
 interface SchemaOperationContext { lifetime: object | null; connectionId: string; database: string; table?: string; version: number; revision: number; }
 interface SchemaPreviewContext { context: SchemaOperationContext; preview: SqlPreview; sql: string; }
 /** 已有表按准确目标隔离组件；新建草稿保持原失效保护，不因连接变动无声丢弃。 */
 export function SchemaDialog(props: SchemaDialogProps) { return <SchemaDialogContent key={props.table ? JSON.stringify([props.connectionId, props.database, props.table]) : 'new'} {...props}/>; }
 
 /** 设计器维护字段、索引及外键草稿，必须先生成预览后才允许执行 DDL。 */
-function SchemaDialogContent({ connectionId, database, table, onClose, onApplied, onCreated, onDirtyChange }: SchemaDialogProps) {
-  const [design, setDesign] = useState<SchemaDraft>({ database, name: table ?? '', ...(table ? { originalName: table } : {}), engine: 'InnoDB', charset: 'utf8mb4', comment: '', columns: table ? [] : [{ ...blankColumn(), name: 'id', type: 'bigint unsigned', nullable: false, autoIncrement: true }], indexes: table ? [] : [{ name: 'PRIMARY', unique: true, columns: ['id'] }], foreignKeys: [] });
-  const [section, setSection] = useState<'columns' | 'indexes' | 'foreignKeys' | 'checks'>('columns'); const sectionRef = useRef(section), checksViewRevision = useRef(0); sectionRef.current = section; const [busy, setBusy] = useState(!!table); const [error, setError] = useState(''); const [preview, setPreview] = useState<SqlPreview | null>(null); const [sql, setSql] = useState('');
+function SchemaDialogContent({ connectionId, database, table, initialDesign, isParentCurrent, invalidated=false, onClose, onApplied, onCreated, onDirtyChange }: SchemaDialogProps) {
+  const [initial] = useState(() => {
+    const empty: SchemaDraft = { database, name: table ?? '', ...(table ? { originalName: table } : {}), engine:'InnoDB', charset:'utf8mb4', comment:'', columns:[], indexes:[], foreignKeys:[] };
+    if (initialDesign !== undefined) {
+      try { if (table) throw Error('已有表不能接收导入新表草稿'); const design=tableCreateDraftSchema.parse(initialDesign); if(design.database!==database)throw Error('导入新表草稿的数据库与当前目标不一致'); return { design:design as SchemaDraft, error:'' }; }
+      catch (reason) { return { design:empty, error:'导入新表草稿无效，未退回默认建表：'+errorMessage(reason) }; }
+    }
+    return { design: table ? empty : { ...empty, columns:[{...blankColumn(),name:'id',type:'bigint unsigned',nullable:false,autoIncrement:true}], indexes:[{name:'PRIMARY',unique:true,columns:['id']}] }, error:'' };
+  });
+  const [design, setDesign] = useState<SchemaDraft>(initial.design);
+  const [section, setSection] = useState<'columns' | 'indexes' | 'foreignKeys' | 'checks'>('columns'); const sectionRef = useRef(section), checksViewRevision = useRef(0); sectionRef.current = section; const [busy, setBusy] = useState(!!table&&!initial.error); const [error, setError] = useState(initial.error); const [preview, setPreview] = useState<SqlPreview | null>(null); const [sql, setSql] = useState('');
   const [unsupported, setUnsupported] = useState(false); const [originalDdl, setOriginalDdl] = useState('');
   const [applyTaskId, setApplyTaskId] = useState('');
   const [confirming, setConfirming] = useState(false); const [createDraft, setCreateDraft] = useState<{ design: TableCreateDraft; context: SchemaOperationContext; columnEncodingCatalogDigest?: string } | null>(null);
@@ -61,11 +69,15 @@ function SchemaDialogContent({ connectionId, database, table, onClose, onApplied
   const columnOrder = useRef(new NewTableColumnOrder<SchemaDraft['columns'][number]>()), createLocked = useRef(false);
   const generatedDrafts = useRef(new NewTableGeneratedDrafts());
   const lifetime = useRef<object | null>(null), previewContext = useRef<SchemaPreviewContext | null>(null);
-  const metadataReady = useRef(!table);
+  const metadataReady = useRef(!table&&!initial.error);
   const sourceVersion = useWorkspace(state => state.connectionVersions[connectionId] ?? 0);
   const closeTargetKey = useRef(''); closeTargetKey.current = JSON.stringify([connectionId, database, table, sourceVersion]);
-  const origin = useRef({ connectionId, database, table, version: sourceVersion, draft: JSON.stringify(design), invalid: false });
-  if (origin.current.connectionId !== connectionId || origin.current.database !== database || origin.current.table !== table || origin.current.version !== sourceVersion) origin.current.invalid = true;
+  const origin = useRef({ connectionId, database, table, initialDesign, parent:isParentCurrent, version: sourceVersion, draft: JSON.stringify(design), invalid: !!initial.error });
+  if (origin.current.connectionId !== connectionId || origin.current.database !== database || origin.current.table !== table || origin.current.version !== sourceVersion || origin.current.initialDesign !== initialDesign) origin.current.invalid = true;
+  if(origin.current.initialDesign!==undefined&&invalidated)origin.current.invalid=true;
+  parentCurrent();
+  /** 种子流程固定最初父租约；false或异常单向失效，后续换函数或恢复true不能复活。 */
+  function parentCurrent():boolean {const source=origin.current;if(source.initialDesign!==undefined&&!source.invalid)try{if(source.parent&&source.parent()!==true)source.invalid=true;}catch{source.invalid=true;}return !source.invalid;}
   /** 每次effect挂载独立身份，StrictMode清理后的旧Promise不能借新挂载复活。 */
   useEffect(() => {
     const token = {}; lifetime.current = token;
@@ -78,11 +90,11 @@ function SchemaDialogContent({ connectionId, database, table, onClose, onApplied
   /** 请求固定目标、连接修订、挂载和草稿代次；提交不得改取当前props的连接。 */
   function capture(): SchemaOperationContext { const source = origin.current; return { lifetime: lifetime.current, connectionId: source.connectionId, database: source.database, table: source.table, version: source.version, revision: previewRevision.current }; }
   function sameLifetime(context: SchemaOperationContext): boolean { return context.lifetime !== null && lifetime.current === context.lifetime; }
-  function current(context: SchemaOperationContext): boolean { const source = origin.current; return sameLifetime(context) && !source.invalid && context.connectionId === source.connectionId && context.database === source.database && context.table === source.table && context.version === source.version && (useWorkspace.getState().connectionVersions[context.connectionId] ?? 0) === context.version && context.revision === previewRevision.current; }
+  function current(context: SchemaOperationContext): boolean { const source = origin.current; return parentCurrent() && sameLifetime(context) && context.connectionId === source.connectionId && context.database === source.database && context.table === source.table && context.version === source.version && (useWorkspace.getState().connectionVersions[context.connectionId] ?? 0) === context.version && context.revision === previewRevision.current; }
   useEffect(() => { if (!table) onDirtyChange?.(confirming || JSON.stringify(design) !== origin.current.draft); }, [design, confirming, table]);
   useEffect(() => { if (!columnCatalog) return; const timer = window.setTimeout(() => tickColumnCatalog(value => value + 1), Math.max(1, Date.parse(columnCatalog.expiresAt) - Date.now() + 1)); return () => window.clearTimeout(timer); }, [columnCatalog]);
   useEffect(() => {
-    if (!table) return;
+    if (!table || initial.error) return;
     const context = capture();
     setBusy(true);
     void (async () => {
@@ -141,6 +153,7 @@ function SchemaDialogContent({ connectionId, database, table, onClose, onApplied
   }
   /** 关闭先收回候选读取残留；在途get不能因取消ACK或旧关闭回调提前离开。 */
   async function closeSchema() {
+    parentCurrent();
     if (table) { if (!busy) onClose(); return; }
     if (busy || columnDirectory.current?.busy || columnCatalogClosing.current) return;
     const context = capture(), key = closeTargetKey.current, invalidAtStart = origin.current.invalid; columnCatalogClosing.current = true; setBusy(true);
@@ -225,6 +238,7 @@ function SchemaDialogContent({ connectionId, database, table, onClose, onApplied
     catch (reason) { if (current(accepted.context)) setError(errorMessage(reason)); } finally { if (sameLifetime(accepted.context)) setBusy(false); }
   }
   const renderedRevision = previewRevision.current, renderedChecksViewRevision = checksViewRevision.current, columnsEditable = !busy && !confirming && !preview && !createLocked.current && !origin.current.invalid;
+  if(initial.error)return <Modal title="导入新表草稿不可用" onClose={onClose}><div className="modal-content"><ErrorBox message={initial.error}/></div><footer className="modal-footer"><button onClick={onClose}>{zh.common.close}</button></footer></Modal>;
   if (!table && confirming && createDraft) return <TableCreateConfirmation connectionId={connectionId} design={createDraft.design} columnEncodingCatalogDigest={createDraft.columnEncodingCatalogDigest} invalidated={origin.current.invalid} isParentCurrent={() => current(createDraft.context)} onBack={() => backFromCreate(createDraft.context)} onClose={onClose} onCreated={onCreated ?? (() => onApplied())} onDirtyChange={onDirtyChange}/>;
   if (unsupported) return <Modal title={formatText(zh.schema.text003, table)} wide onClose={onClose}><div className="modal-content"><div className="info-strip">{zh.schema.text004}</div><SqlEditor value={originalDdl} readOnly height={370}/></div><footer className="modal-footer"><button onClick={onClose}>{zh.common.close}</button><span className="grow"/><button className="primary" onClick={() => { useWorkspace.getState().openTab({ kind: 'query', connectionId, database, title: formatText(zh.schema.text005, table), sql: formatText(zh.schema.text006, originalDdl.split('\n').map(line => '-- ' + line).join('\n')) }); onClose(); }}>{zh.schema.text007}</button></footer></Modal>;
   return <Modal title={table ? formatText(zh.schema.text008, table) : formatText(zh.schema.text009, database)} wide onClose={() => void closeSchema()}><div className="modal-content schema-content"><div className="schema-properties"><Field label={zh.schema.text010}><input value={design.name} onChange={event => update({ name: event.target.value })}/></Field><Field label={zh.schema.text011}><select value={design.engine} onChange={event => update({ engine: event.target.value })}><option>InnoDB</option><option>MyISAM</option><option>MEMORY</option><option>ARCHIVE</option></select></Field><Field label={zh.schema.text012}><input value={design.charset} onChange={event => update({ charset: event.target.value })}/></Field><Field label={zh.schema.text013}><input value={design.comment} onChange={event => update({ comment: event.target.value })}/></Field></div>{preview ? <><div className="info-strip">{zh.schema.text014}</div>{preview.warnings.map(warning => <div className="warning-text" key={warning}>{warning}</div>)}<SqlEditor value={sql} onChange={editSql} readOnly={busy || origin.current.invalid} height={350}/></> : <><div className="dialog-tabs inset">{(['columns', 'indexes', 'foreignKeys'] as const).map((key, index) => <button key={key} className={section === key ? 'selected' : ''} onClick={() => selectSection(key)}>{[zh.common.fields, zh.common.indexes, zh.common.foreignKeys][index]} <span className="count">{design[key].length}</span></button>)}{!table && <button className={section === 'checks' ? 'selected' : ''} onClick={() => selectSection('checks')}>{checksText.title} <span className="count">{design.checks?.length ?? 0}</span></button>}</div>{!table && tableCreateHasChecks(design) && <p className="muted small">{checksText.dependency}</p>}<div className="design-table-wrap">

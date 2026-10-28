@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { stat } from 'node:fs/promises';
+import { importFileSourceSchema } from '../shared/importNewTable';
 import { setImmediate } from 'node:timers/promises';
 import type { TableInfo } from '../shared/contracts';
 import { fileImportPreflightIssueLimit, type FileImportPreflightInput, type FileImportPreflightIssue, type FileImportPreflightProgress, type FileImportPreflightReport } from '../shared/fileImportPreflight';
@@ -20,6 +21,7 @@ function sourceIdentity(value: Awaited<ReturnType<typeof stat>>): string {
 
 /** 整文件只读校验：目录命令沿原任务取消与收尾，不读取目标记录、不建立事务。 */
 export async function preflightImportFile(context: StructureTaskContext, input: FileImportPreflightInput & { filePath: string }, onProgress?: (progress: FileImportPreflightProgress) => void): Promise<FileImportPreflightReport> {
+  const expectedSource = Object.hasOwn(input, 'expectedSource') ? importFileSourceSchema.parse(input.expectedSource) : undefined;
   const checkCancelled = () => { context.checkCancelled(); context.managed.signal?.throwIfAborted(); };
   const query: MetadataQuery = async <T>(sql: string, params: (string | number | boolean | null | Buffer)[] = []) => structureTaskQuery<T>(context, inlineParameters(sql, params.map(value => Buffer.isBuffer(value) ? { type: 'binary' as const, base64: value.toString('base64') } : value)));
   const readInfo = () => tableInfo(context.managed, input.database, input.table, query);
@@ -74,7 +76,12 @@ export async function preflightImportFile(context: StructureTaskContext, input: 
   checkCancelled();
   if (!unchanged || finished && report.sourceBytes !== before.size) {
     report.termination = 'source-changed'; issue({ code: 'source-changed', message: '源文件身份、大小或修改时间已变化，请重新选择并预检' });
-  } else if (finished) report.sourceFingerprint = hash.digest('hex');
+  } else if (finished) {
+    report.sourceFingerprint = hash.digest('hex');
+    if (expectedSource && (expectedSource.sha256 !== report.sourceFingerprint || expectedSource.bytes !== report.sourceBytes)) {
+      report.termination = 'source-changed'; issue({ code: 'source-changed', message: '源文件与新表向导最初完整扫描的内容不同，请重新核对；未执行导入' });
+    }
+  }
   const afterInfo = await readInfo(); checkCancelled();
   if (schemaFingerprint(afterInfo) !== report.schemaFingerprint) {
     report.termination = 'schema-changed'; issue({ code: 'schema-changed', message: '目标字段定义已变化，请重新读取映射并预检' });
