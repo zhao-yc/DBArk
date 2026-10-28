@@ -33,7 +33,7 @@ function inspect(node: ts.Node) {
   ts.forEachChild(node, inspect);
 }
 inspect(file);
-const names = ['runQuery', 'handleQueryError', 'querySource', 'failureSourceScope', 'captureFailureSource', 'clearFailureSource', 'execute', 'cancelCurrentQuery', 'invalidateResultSelection', 'pinResult', 'exportVisibleResult', 'resultSelectionAllowed', 'resultViewCurrent'];
+const names = ['runQuery', 'handleQueryError', 'querySource', 'failureSourceScope', 'captureFailureSource', 'clearFailureSource', 'execute', 'cancelCurrentQuery', 'invalidateResultSelection', 'pinResult', 'exportVisibleResult', 'resultSelectionAllowed', 'resultViewCurrent', 'submitParameterQuery'];
 const selected = ['results', 'pin', 'sourceResult', 'sourceExportable', 'viewSource', 'resultContext', 'filterBinding', 'filterView', 'sortBinding', 'sortView', 'displayedView', 'result', 'exportable', 'selectionBinding'];
 for (const name of names) if (!functions.has(name)) throw Error('缺少真实QueryTab函数：' + name);
 for (const name of selected) if (!declarations.has(name)) throw Error('缺少真实QueryTab结果声明：' + name);
@@ -41,6 +41,7 @@ if (!subscription || !notice || !parameterExecute || !resultTabs || buttons.size
 const harnessCode = `function Harness({port}) {
  const tab=port.tab, settings=port.workspace.settings, connection={}, connectionVersion=0;
  const continueOnError=false,parameterContinueOnError={current:false},collectWarnings=false,parameterCollectWarnings={current:false};
+ const parameterReuse={current:null},parameterReusePort={current:null};
  const busyRef=useRef(false), task=useRef(''), cancelledQuery=useRef(''), explainSource=useRef(''), sessionRef=useRef('session'), parameterSession=useRef('session'), editor={current:port.editor}, alive=useRef(true);
  const failureSource=useRef(undefined),parameterFailureSource=useRef(undefined),closeRequestRef=useRef(undefined);const [,refreshFailureSource]=useState(0);
  const [busy,setBusy]=useState(false),[queryRunning,setQueryRunning]=useState(false),[error,setError]=useState(''),[outcome,setOutcome]=useState(null),[stream,setStream]=useState([]),[resultIndex,setResultIndex]=useState(0),[transaction,setTransaction]=useState(false),[transactionKnown,setTransactionKnown]=useState(true),[sessionId,setSessionId]=useState('session'),[pins,setPins]=useState([]),[selectedPin,setSelectedPin]=useState(''),[showPinSql,setShowPinSql]=useState(false),[exportResult,setExportResult]=useState(null),[exportSelected,setExportSelected]=useState(false),[parameterSource,setParameterSource]=useState(port.sql);

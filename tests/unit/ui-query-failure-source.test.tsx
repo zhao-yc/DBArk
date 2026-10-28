@@ -22,10 +22,11 @@ function inspect(node: ts.Node) {
   ts.forEachChild(node, inspect);
 }
 inspect(tree);
-const required = ['querySource', 'failureSourceScope', 'captureFailureSource', 'clearFailureSource', 'execute', 'currentStatementScope', 'executeCurrentStatement', 'openParameters', 'loadParameterNames', 'runQuery', 'handleQueryError', 'attachQueryEditor'];
+const required = ['querySource', 'failureSourceScope', 'captureFailureSource', 'clearFailureSource', 'execute', 'currentStatementScope', 'executeCurrentStatement', 'openParameters', 'loadParameterNames', 'runQuery', 'handleQueryError', 'attachQueryEditor', 'submitParameterQuery', 'closeParameters'];
 if (!notice || !parameterExecute || !parameterClose || !lifetime || required.some(name => !functions.has(name))) throw Error('真实定位入口不完整');
 const code = `function Harness({port}) {
  const continueOnError=false,parameterContinueOnError={current:false},collectWarnings=false,parameterCollectWarnings={current:false};
+ const parameterReuse={current:null},parameterReusePort={current:null},parameterReuseOwner=()=>({begin:()=>null});
  const tab=port.tab,settings=port.workspace.settings,editor=useRef(port.editor),alive=useRef(true),busyRef=useRef(false),sessionRef=useRef('session'),pendingSession=useRef(null),task=useRef(''),cancelledQuery=useRef(''),explainSource=useRef(''),parameterSession=useRef('session'),failureSource=useRef(undefined),parameterFailureSource=useRef(undefined),closeRequestRef=useRef(undefined),activeCurrentIntent=useRef(null),fileModelAttached=useRef(false),formatting=useRef(null),duplicateIntent=useRef(null),closeIntent=useRef(null),closeBusy=useRef(null);
  const [outcome,setOutcome]=useState(null),[stream,setStream]=useState([]),[busy,setBusy]=useState(false),[error,setError]=useState(''),[parameterSource,setParameterSource]=useState(null),[,refreshFailureSource]=useState(0);
  const noop=()=>{},setQueryRunning=noop,setSelectedPin=noop,setShowPinSql=noop,setResultIndex=noop,setSessionId=noop,setTransaction=noop,setTransactionKnown=noop,setSearchEditor=noop;

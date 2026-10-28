@@ -29,6 +29,7 @@ if (!option || !notice || !parameterExecute || !functions.has('runQuery')) throw
 function execution(outcome: QueryOutcome = { results: [], elapsedMs: 1 }) {
   const invoke = vi.fn(async () => outcome), ensureSession = vi.fn(async () => '原会话'), setOutcome = vi.fn(), clearFailureSource = vi.fn();
   const context: any = createContext({ Error, Set, invoke, ensureSession, setOutcome, clearFailureSource, collectWarnings: false, continueOnError: false, warningsResultSource: { current: null },
+    parameterReuse: { current: null }, parameterReusePort: { current: null }, parameterReuseOwner: () => ({ begin: () => null }),
     busyRef: { current: false }, task: { current: '' }, cancelledQuery: { current: '' }, explainSource: { current: '' }, parameterSession: { current: '原会话' }, parameterFailureSource: { current: undefined }, parameterContinueOnError: { current: false }, parameterCollectWarnings: { current: false }, parameterSource: null,
     settings: { resultLimit: 20 }, tab: { id: '原标签' }, useWorkspace: { getState: () => ({ setBusy: vi.fn(), setDirty: vi.fn() }) },
     handleQueryError: vi.fn(async () => {}), invalidateResultSelection: vi.fn(), prepareExecutionContext: vi.fn(async () => {}), uid: () => '原任务',
@@ -37,7 +38,7 @@ function execution(outcome: QueryOutcome = { results: [], elapsedMs: 1 }) {
   });
   context.warningsViewScope = () => ({ tabId: '原标签', connectionId: 'c', connectionVersion: 1, connection: context, sessionId: '原会话', taskId: context.task.current, outcome: null, present: true, active: true, closing: false, busy: context.busyRef.current, pinned: false });
   context.setParameterSource = (value: string | null) => { context.parameterSource = value; };
-  const selected = ['runQuery', 'execute', 'openParameters'].map(name => functions.get(name)!).join('\n');
+  const selected = ['runQuery', 'execute', 'openParameters', 'submitParameterQuery'].map(name => functions.get(name)!).join('\n');
   runInContext(ts.transpileModule(selected + `\nglobalThis.run=runQuery;globalThis.execute=execute;globalThis.openParameters=openParameters;globalThis.parameterExecute=${parameterExecute};`, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS } }).outputText, context);
   return { context, invoke, ensureSession, setOutcome, run: context.run as (...args: any[]) => Promise<void> };
 }
