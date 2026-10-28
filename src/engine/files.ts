@@ -54,12 +54,17 @@ export function csvValue(value: string): CellValue {
 }
 
 /** JSON 顶层必须是对象数组；数字保留原始字符串，避免大整数在解析阶段舍入。 */
-export async function* readRecords(filePath: string, format: 'csv' | 'json', encoding: string, delimiter?: CsvImportDelimiter, hasHeader?: boolean): AsyncGenerator<DataRow> {
+export async function* readRecords(filePath: string, format: 'csv' | 'json', encoding: string, delimiter?: CsvImportDelimiter, hasHeader?: boolean, control?: { signal?: AbortSignal; onBytes?: (chunk: Buffer) => void }): AsyncGenerator<DataRow> {
   const selectedDelimiter = csvImportDelimiter(format, delimiter);
   const selectedHasHeader = csvImportHasHeader(format, hasHeader);
   // 所有配置先校验，错误选项不能触发文件打开或遗留尚未接入 pipeline 的句柄。
   const selectedEncoding = encodingName(encoding);
+  control?.signal?.throwIfAborted();
   const source = createReadStream(filePath);
+  // 原始字节观察器置于同一条背压链中，摘要不能另开文件或忽略观察器失败。
+  const observed = new Transform({ transform(chunk: Buffer, _encoding, callback) {
+    try { control?.onBytes?.(chunk); callback(null, chunk); } catch (error) { callback(error as Error); }
+  } });
   const decoder = iconv.decodeStream(selectedEncoding) as Transform;
   const numberTokens = new Transform({ objectMode: true,
     /** 将数字 token 转为带标记的原始文本，同时保护合法原型同名键。 */
@@ -70,7 +75,8 @@ export async function* readRecords(filePath: string, format: 'csv' | 'json', enc
   const output = format === 'csv'
     ? parse({ columns: false, delimiter: selectedDelimiter, bom: true, skip_empty_lines: selectedHasHeader, max_record_size: 64 * 1024 * 1024 })
     : streamArray({ highWaterMark: 16 });
-  const completed = format === 'csv' ? pipeline(source, decoder, output) : pipeline(source, decoder, parser(), numberTokens, output);
+  const options = { signal: control?.signal };
+  const completed = format === 'csv' ? pipeline(source, observed, decoder, output, options) : pipeline(source, observed, decoder, parser(), numberTokens, output, options);
   // 避免迭代器尚未挂接时上游读取错误成为未处理的 Promise rejection。
   void completed.catch(() => undefined);
   let finished = false;
@@ -102,7 +108,7 @@ export async function* readRecords(filePath: string, format: 'csv' | 'json', enc
     await completed;
     finished = true;
   } finally {
-    source.destroy(); decoder.destroy(); numberTokens.destroy(); output.destroy();
+    source.destroy(); observed.destroy(); decoder.destroy(); numberTokens.destroy(); output.destroy();
     if (!finished) await completed.catch(() => undefined);
   }
 }

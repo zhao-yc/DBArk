@@ -2,6 +2,7 @@ import type { Command } from './contracts';
 
 /** 预加载白名单不引入校验器或 Node 依赖；新增公开命令必须在编译时补齐。 */
 export const publicCommands: Record<Command, true> = {
+  'files.preflight': true,
   'tableDraftFiles.open': true, 'tableDraftFiles.save': true, 'table.draftVerify': true,
   'query.transactionSettings.read': true, 'query.transactionSettings.apply': true,
   'table.filteredDelete.preview': true, 'table.filteredDelete.apply': true, 'table.filteredDelete.release': true,

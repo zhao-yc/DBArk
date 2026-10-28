@@ -269,6 +269,7 @@ export interface CommandMap {
   'files.writeQuery': { input: { fileToken: string; encoding: QueryFileEncoding; sql: string }; output: void };
   'files.preview': { input: { fileToken: string; format: 'csv' | 'json'; encoding: string; csvDelimiter?: CsvImportDelimiter; csvHasHeader?: boolean }; output: { columns: string[]; rows: DataRow[] } };
   'files.importKeys': { input: { connectionId: string; database: string; table: string; taskId: string }; output: import('./fileImportConflict').FileImportKeyCatalog };
+  'files.preflight': { input: import('./fileImportPreflight').FileImportPreflightInput; output: import('./fileImportPreflight').FileImportPreflightReport };
   'files.import': { input: ImportOptions; output: import('./sqlFileImport').FileImportResult };
   'files.exportColumns': { input: CsvExportFieldsInput; output: CsvExportFieldsOutput };
   'files.releaseExportColumns': { input: { catalogId: string }; output: void };

@@ -127,6 +127,30 @@ const queryParameters = z.array(z.object({ name: z.string().regex(/^[A-Za-z_][A-
 const index = z.object({ name, unique: z.boolean(), columns: z.array(name).min(1) }).strict();
 const foreignKey = z.object({ name, columns: z.array(name).min(1), referencedDatabase: name, referencedTable: name, referencedColumns: z.array(name).min(1), onUpdate: z.enum(['RESTRICT','CASCADE','SET NULL','NO ACTION']), onDelete: z.enum(['RESTRICT','CASCADE','SET NULL','NO ACTION']) }).strict();
 const fileOptions = { ...target, fileToken: id, format: z.enum(['csv','json','sql']), encoding: z.enum(['utf8','utf16le','gb18030']), taskId: id };
+/** 预检映射仅保留自有数据字段；列名允许原型同名，数量、名称和目标唯一性仍严格受限。 */
+const fileImportPreflightMapping = ownRecord(name, '预检映射').superRefine((mapping, context) => {
+  const entries = Object.entries(mapping);
+  if (entries.length > 1000) context.addIssue({ code: 'custom', message: '预检映射最多允许1000项' });
+  const targets = new Set<string>();
+  for (const [source, destination] of entries) {
+    if (!name.safeParse(source).success) context.addIssue({ code: 'custom', path: [source], message: '源字段名必须为1至256个字符' });
+    if (targets.has(destination)) context.addIssue({ code: 'custom', path: [source], message: '预检映射不能重复使用目标字段' });
+    targets.add(destination);
+  }
+});
+/** 先核原始属性再交给对象校验，不把继承值、访问器或不可枚举配置提升为授权。 */
+const fileImportPreflightSchema = ownRecord(z.unknown(), '导入预检参数').superRefine((input, context) => {
+  const required = ['connectionId', 'database', 'table', 'fileToken', 'taskId', 'format', 'encoding', 'mapping'];
+  const allowed = new Set([...required, 'csvDelimiter', 'csvHasHeader']);
+  for (const key of Object.keys(input)) if (!allowed.has(key)) context.addIssue({ code: 'custom', path: [key], message: '导入预检包含未声明参数' });
+  for (const key of required) if (!Object.hasOwn(input, key)) context.addIssue({ code: 'custom', path: [key], message: '导入预检缺少必需的自有参数' });
+}).pipe(z.object({
+  ...target, fileToken: id, taskId: id, format: z.enum(['csv', 'json']), encoding: z.enum(['utf8', 'utf16le', 'gb18030']),
+  csvDelimiter: z.enum(csvImportDelimiters).optional(), csvHasHeader: z.boolean().optional(), mapping: fileImportPreflightMapping
+}).strict().superRefine((input, context) => {
+  if (Object.hasOwn(input, 'csvDelimiter') && (input.format !== 'csv' || input.csvDelimiter === undefined)) context.addIssue({ code: 'custom', path: ['csvDelimiter'], message: '分隔符只适用于CSV预检，且必须为逗号、分号或Tab' });
+  if (Object.hasOwn(input, 'csvHasHeader') && (input.format !== 'csv' || typeof input.csvHasHeader !== 'boolean')) context.addIssue({ code: 'custom', path: ['csvHasHeader'], message: '首行字段名配置只适用于CSV预检，且必须为布尔值' });
+}));
 const excelSheet = { fileToken: id, sheetId: id, headerRow: z.number().int().min(1).max(1000).optional(), protocol: z.enum(['plain','dbark-v1']) };
 /** custom 保留已校验结果引用，避免 Zod 深拷贝十万行；主进程仍完整校验每个字段。 */
 const resultExportData = z.custom<ResultExportData>().superRefine((value, context) => {
@@ -323,6 +347,7 @@ export const commandSchemas: Record<Command, z.ZodType> = {
   'files.importPresets.delete': importPresetDeleteSchema,
   'files.preview': z.object({ fileToken: id, format: z.enum(['csv','json']), encoding: z.enum(['utf8','utf16le','gb18030']), csvDelimiter: z.enum(csvImportDelimiters).optional(), csvHasHeader: z.boolean().optional() }).strict().refine(value => value.csvDelimiter === undefined || value.format === 'csv', '分隔符只适用于 CSV 导入').refine(value => !Object.hasOwn(value, 'csvHasHeader') || value.format === 'csv' && typeof value.csvHasHeader === 'boolean', '首行字段名配置只适用于 CSV 导入，且必须为布尔值'),
   'files.importKeys': z.object({ ...target, taskId: id }).strict(),
+  'files.preflight': fileImportPreflightSchema,
   'files.import': z.object({ ...fileOptions, csvDelimiter: z.enum(csvImportDelimiters).optional(), csvHasHeader: z.boolean().optional(), transactionMode: fileImportTransactionModeSchema.optional(), conflict: fileImportConflictSelectionSchema.optional(), mapping: ownRecord(z.string(), '导入映射') }).strict().refine(value => value.csvDelimiter === undefined || value.format === 'csv', '分隔符只适用于 CSV 导入').refine(value => !Object.hasOwn(value, 'csvHasHeader') || value.format === 'csv' && typeof value.csvHasHeader === 'boolean', '首行字段名配置只适用于 CSV 导入，且必须为布尔值').refine(value => !Object.hasOwn(value, 'transactionMode') || (value.format === 'csv' || value.format === 'json') && value.transactionMode !== undefined, '提交方式只适用于CSV／JSON导入，且必须为batch或atomic').refine(value => !Object.hasOwn(value, 'conflict') || (value.format === 'csv' || value.format === 'json') && value.conflict !== undefined, '冲突处理仅适用于CSV／JSON，且不能显式留空'),
   'files.exportColumns': z.object({ ...target, taskId: id }).strict(),
   'files.releaseExportColumns': z.object({ catalogId: id }).strict(),

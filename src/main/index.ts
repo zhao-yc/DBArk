@@ -475,6 +475,17 @@ async function queryFileOperation<T>(action: () => Promise<T>, allowShutdown = f
   try { return await operation; } finally { queryFileOperations.delete(operation); }
 }
 
+/** 长文件预检先沿原任务通道取消，再由文件等待集合等待真实收尾；不预先落定任务状态。 */
+async function cancelFileImportPreflights(): Promise<void> {
+  const stopping: Promise<unknown>[] = [];
+  for (const task of tasks.values()) if (task.kind === 'files.preflight' && task.status === 'running') {
+    const preparing = preparingTasks.get(task.id);
+    if (preparing) preparing.cancelled = true;
+    else stopping.push(broker.request('query.cancel', { taskId: task.id }));
+  }
+  await Promise.allSettled(stopping);
+}
+
 /** 小型 SQL 保存也占用目标直到原子操作清理完毕，避免与长任务并发覆盖。 */
 async function writeSelectedQuery(input: { fileToken: string; sql: string; encoding: QueryFileEncoding }): Promise<void> {
   const path = resolveFileToken(files, input.fileToken, 'export', 'sql');
@@ -1042,16 +1053,18 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
     case 'excel.import':
     case 'excel.export': input = { ...input, filePath: resolveFileToken(files, input.fileToken, command === 'excel.export' ? 'export' : 'import', 'xlsx') }; break;
     case 'files.preview':
+    case 'files.preflight':
     case 'files.import':
     case 'files.export':
     case 'files.exportResult': {
+      if (command === 'files.preflight' && shuttingDown) throw Error('客户端正在退出，不能开始导入预检');
       if (command === 'files.exportResult' && input.format === 'sql') {
         columnsMain.assertCapturedOwner(columns);
         input = { ...input, filePath: resultSqlPreviews.consume(input, columns!.owner.document) }; break;
       }
       const expected = command === 'files.export' || command === 'files.exportResult' ? 'export' : 'import';
       // 已返回XLSX只消费本窗口明确选择的Excel文件能力，不借其它导出格式令牌。
-      input = { ...input, filePath: resolveFileToken(files, input.fileToken, expected, command === 'files.exportResult' && input.format === 'xlsx' ? 'xlsx' : undefined) }; break;
+      input = { ...input, filePath: resolveFileToken(files, input.fileToken, expected, command === 'files.preflight' ? input.format : command === 'files.exportResult' && input.format === 'xlsx' ? 'xlsx' : undefined) }; break;
     }
   }
   const taskId: string | undefined = command !== 'query.cancel' ? input.taskId : undefined;
@@ -1242,6 +1255,7 @@ app.on('before-quit', event => {
       stateFlushed = undefined;
     }
     await savedQuerySearches?.close();await savedQueryPages?.close();await historyPages?.close();await historyDelete?.close();await Promise.allSettled([...localSearchOperations]);
+    await cancelFileImportPreflights();
     await Promise.allSettled([...queryFileOperations]);
     await resultInserts.drain();
     await filteredUpdates.drain();
@@ -1258,6 +1272,7 @@ app.on('before-quit', event => {
     const answer = await dialog.showMessageBox({ type: 'error', title: '退出前保存或收尾失败', message: error instanceof Error ? error.message : String(error), detail: '返回工作台可排查后重试。强制退出会终止本地执行进程并放弃未保存配置，不能确认远端操作已停止，也不能撤销已提交操作。', buttons: ['返回工作台','强制退出客户端'], defaultId: 0, cancelId: 0 });
     if (answer.response === 1) {
       await savedQuerySearches?.close();await savedQueryPages?.close();await historyPages?.close();await historyDelete?.close();await Promise.allSettled([...localSearchOperations]);
+      await cancelFileImportPreflights();
       await Promise.allSettled([...queryFileOperations]);
       try { broker?.forceClose(); } catch (failure) { shuttingDown = false; window?.webContents.send('dbark:object-uri-pending'); dialog.showErrorBox('强制退出失败', failure instanceof Error ? failure.message : '数据库执行进程未能终止'); return; }
       try { store?.close(); } catch { /* 用户已明确选择退出，避免退出状态永久锁死。 */ }
@@ -1407,8 +1422,8 @@ else {
         if (payload.command.startsWith('schema.databaseDrop.')) beginDatabaseDrop(payload.command, input, columns!);
         if (databaseEncodingCommand) databaseEncodingOwners.before(databaseEncodingCommand, input, columns!);
         const operation=dispatch(payload.command as Command,input,columns),local=payload.command==='search.savedQueries'||payload.command==='search.savedQueriesContinue'||payload.command==='queries.page'||payload.command==='queries.pageContinue'||payload.command==='history.page'||payload.command==='history.pageContinue'||payload.command.startsWith('history.delete');if(local)localSearchOperations.add(operation);
-        // 片段文件操作及清理全部结算后才允许退出关闭存储，复用现有文件操作等待集合。
-        const snippetTransferOperation=payload.command.startsWith('snippets.transfer');if(snippetTransferOperation)queryFileOperations.add(operation);
+        // 片段文件及整文件预检的清理全部结算后才关闭存储，预检另在退出时沿原任务通道取消。
+        const trackedFileOperation=payload.command.startsWith('snippets.transfer') || payload.command === 'files.preflight';if(trackedFileOperation)queryFileOperations.add(operation);
         try {
           const result = await operation;
           if (payload.command === 'queries.readText') { columnsMain.assertCapturedOwner(columns); if (shuttingDown) throw Error('客户端正在退出，保存查询正文未发布'); }
@@ -1468,7 +1483,7 @@ else {
             catch (error) { await resultInserts.rejectPublication(result, columns!); throw error; }
           }
           return { ok: true, result };
-        } finally { columns?.presetPublication?.release();if(local)localSearchOperations.delete(operation);if(snippetTransferOperation)queryFileOperations.delete(operation); }
+        } finally { columns?.presetPublication?.release();if(local)localSearchOperations.delete(operation);if(trackedFileOperation)queryFileOperations.delete(operation); }
       } catch (error) {
         let failure = error;
         if (payload && typeof payload === 'object' && 'command' in payload && typeof payload.command === 'string' && payload.command.startsWith('schema.databaseDrop.') && columns) try { await rejectDatabaseDropPublication(columns, error); } catch (cleanup) { failure = cleanup; }

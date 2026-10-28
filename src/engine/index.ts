@@ -55,6 +55,8 @@ import {queryDatabaseFromSession} from '../shared/queryContext';
 import { csvCell, csvHeader, encodingName, previewFile, readRecords, readText } from './files';
 import { csvExportDelimiter } from '../shared/csvExport';
 import { csvImportHasHeader } from '../shared/csvImport';
+import { preflightImportFile } from './fileImportPreflight';
+import type { FileImportPreflightInput } from '../shared/fileImportPreflight';
 import { fileImportTransactionMode, fileImportTransactionText } from '../shared/fileImportTransaction';
 import { ResultFileTasks } from './resultFileTasks';
 import { TableColumnPatchTasks } from './tableColumnPatchTasks';
@@ -626,6 +628,16 @@ export class Engine {
       case 'schema.foreignKeys.apply': return this.foreignKeyPatches.apply(input as any, input.connectionRevision);
       case 'schema.foreignKeys.release': return this.foreignKeyPatches.releaseTokens(input);
       case 'files.preview': this.assertFile(input); return previewFile(input as Parameters<typeof previewFile>[0]);
+      case 'files.preflight': {
+        this.assertFile(input);
+        // 全文件检查使用独立只读连接；原任务和读取流真实收尾后才归还取消及关闭占用。
+        let checkedRecords = 0;
+        return this.withIndependentTask(input.connectionId, input.taskId, (managed, control) =>
+          preflightImportFile({ managed, ...control }, input as FileImportPreflightInput & { filePath: string }, progress => {
+            checkedRecords = progress.checkedRecords;
+            this.emit({ taskId: input.taskId, status: 'running', progress: 0, rows: checkedRecords, message: `正在校验导入文件，已检查 ${checkedRecords} 条记录` });
+          }), undefined, '校验整份导入文件', true, () => ({ rows: checkedRecords }));
+      }
       case 'excel.sheets':
       case 'excel.preview': {
         this.assertFile(input);

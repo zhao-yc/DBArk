@@ -2,6 +2,7 @@ import type { Command, TaskEvent } from '../shared/contracts';
 
 /** 服务端错误可能展开参数值；概要记录仅保存进度，不将错误原文写入本地库。 */
 export function persistedTaskMessage(command: string, event: TaskEvent): string {
+  if (command === 'files.preflight') return event.status === 'completed' ? '整文件导入预检已结束；未写入数据库，报告仅在当前窗口保留，字段名、字段值、文件路径和错误原文未保存。' : event.status === 'running' ? '正在只读预检导入文件；字段名、字段值、文件路径和错误原文未保存。' : '整文件导入预检未正常完成；未写入数据库，字段名、字段值、文件路径和错误原文未保存，请在当前窗口核对。';
   if (command.startsWith('table.filteredDelete.')) {
     const progress = event.tableFilteredDelete;
     if (progress?.commitAcknowledged) return '全部筛选行删除事务已确认提交；条件、旧值、SQL和快照路径未保存，请勿重复删除。';
