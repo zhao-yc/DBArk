@@ -5,6 +5,7 @@ import { SavedQueryOrganizationEditor } from '../../src/renderer/components/Save
 import { savedQueryOrganizationZh as text } from '../../src/renderer/locales/savedQueryOrganization.zh-CN';
 import { savedQueryPagesZh as pageText } from '../../src/renderer/locales/savedQueryPages.zh-CN';
 import { savedQueryRenameZh as renameText } from '../../src/shared/savedQueryRename';
+import { savedQueryDeleteSelectedZh as deleteText } from '../../src/shared/savedQueryDeleteSelected';
 import type { SavedQueryOrganizationSnapshot } from '../../src/shared/savedQueryOrganization';
 import { planSavedQueryGroups, summarizeSavedQueryOrganization } from '../../src/shared/savedQueryOrganization';
 import { memoryDocument, MemoryEvent } from '../fixtures/memory-dom';
@@ -47,6 +48,58 @@ async function check(label: string, checked = true) { const node = field(label);
 const calls = (f: ReturnType<typeof fixture>, command: string) => f.request.mock.calls.filter(call => call[0] === command);
 /** 取React实际附着的旧回调，避免移除节点不冒泡造成假阳性。 */
 function callback(node: any, event: string) { const key = Object.keys(node).find(name => name.startsWith('__reactProps$')); if (!key || typeof node[key][event] !== 'function') throw Error('React真实事件端口不存在'); return node[key][event] as (event?: any) => void; }
+
+it('跨页所选完整预览后单次批删，只提交两个原引用并释放旧cursor刷新第一页', async () => {
+  const f = fixture(), normal = f.request.getMockImplementation()!;
+  f.request.mockImplementation(async (command, value) => command === 'queries.deleteSelectedChecked' ? { deleted: value.queries.length } : normal(command, value));
+  await mount(f); await check(text.select('查询0')); await click(pageText.next); await check(text.select('查询25'));
+  expect(doc.body.textContent).toContain(text.selected(2, 1)); await click(deleteText.open);
+  const preview = doc.querySelector('[aria-label="删除所选保存查询"]')!;
+  expect(preview.querySelectorAll('li').map(node => node.textContent)).toEqual(['查询0 q0', '查询25 q25']); expect(calls(f, 'queries.deleteSelectedChecked')).toHaveLength(0);
+  await click(deleteText.confirm(2));
+  expect(calls(f, 'queries.deleteSelectedChecked').map(call => call[1])).toEqual([{ queries: [0, 25].map(index => ({ id: 'q' + index, digest: index.toString(16).padStart(64, '0') })) }]);
+  expect(calls(f, 'queries.pageRelease').map(call => call[1].cursor)).toContain('cursor-next'); expect(calls(f, 'queries.page')).toHaveLength(2); expect(calls(f, 'queries.organizationGet')).toHaveLength(2);
+  expect(doc.body.textContent).toContain(deleteText.deleted(2)); expect(doc.body.textContent).toContain(text.selected(0, 0));
+  expect(f.request.mock.calls.some(call => ['queries.read', 'queries.readText', 'queries.save', 'query.execute', 'queries.deleteChecked'].includes(call[0]))).toBe(false);
+});
+it('父Modal真实document监听收到Escape只取消删除预览，保留列表及选择，旧确认不能复活', async () => {
+  const f = fixture(); await mount(f); await check(text.select('查询0')); await click(deleteText.open);
+  const old = callback(button(deleteText.confirm(1)), 'onClick');
+  // RAM在document分发，以执行真实Modal注册的监听；浏览器捕获顺序由原生用例另验。
+  await act(async () => doc.dispatchEvent(Object.assign(new MemoryEvent('keydown'), { key: 'Escape' })));
+  expect(doc.querySelector('[aria-label="删除所选保存查询"]')).toBeNull(); expect(doc.querySelector('[role="dialog"]')).not.toBeNull(); expect(f.onClose).not.toHaveBeenCalled();
+  expect(doc.body.textContent).toContain(text.selected(1, 0)); await click(deleteText.open); await act(async () => old()); expect(calls(f, 'queries.deleteSelectedChecked')).toHaveLength(0);
+  await click(deleteText.cancel); expect(doc.querySelector('[aria-label="删除所选保存查询"]')).toBeNull();
+});
+it('末项摘要过期拒绝后保留所选和原页，要求刷新并不重放旧确认', async () => {
+  const f = fixture(), normal = f.request.getMockImplementation()!;
+  f.request.mockImplementation(async (command, value) => { if (command === 'queries.deleteSelectedChecked') throw Error(deleteText.stale); return normal(command, value); });
+  await mount(f); await check(text.select('查询0')); await check(text.select('查询1')); await click(deleteText.open);
+  const old = callback(button(deleteText.confirm(2)), 'onClick'); await click(deleteText.confirm(2)); await act(async () => old());
+  expect(calls(f, 'queries.deleteSelectedChecked')).toHaveLength(1); expect(doc.body.textContent).toContain(deleteText.stale); expect(doc.body.textContent).toContain(text.selected(2, 0));
+  expect(doc.querySelectorAll('article')).toHaveLength(25); expect(button(deleteText.open).disabled).toBe(true); expect(calls(f, 'queries.pageRelease')).toHaveLength(0);
+});
+it('批删同栈双击只投递一次，忙碌时禁确认取消，父关闭等原写入及cursor释放', async () => {
+  const f = fixture(), normal = f.request.getMockImplementation()!, pending = deferred<{ deleted: number }>();
+  f.request.mockImplementation(async (command, value) => command === 'queries.deleteSelectedChecked' ? pending.promise : normal(command, value));
+  await mount(f); await check(text.select('查询0')); await click(deleteText.open);
+  const confirm = callback(button(deleteText.confirm(1)), 'onClick'); await act(async () => { confirm(); confirm(); });
+  expect(calls(f, 'queries.deleteSelectedChecked')).toHaveLength(1); expect(button(deleteText.confirm(1)).disabled).toBe(true); expect(button(deleteText.cancel).disabled).toBe(true);
+  await click('关闭'); expect(f.onClose).not.toHaveBeenCalled(); await act(async () => pending.resolve({ deleted: 1 }));
+  expect(f.onClose).toHaveBeenCalledOnce(); expect(calls(f, 'queries.pageRelease')).toHaveLength(1); expect(calls(f, 'queries.page')).toHaveLength(1);
+});
+it('准确成功回执后刷新失败保留已删除事实，不再次投递，已删除选择撤销', async () => {
+  const f = fixture(), normal = f.request.getMockImplementation()!; let committed = false;
+  f.request.mockImplementation(async (command, value) => { if (command === 'queries.deleteSelectedChecked') { committed = true; return { deleted: 1 }; } if (command === 'queries.organizationGet' && committed) throw Error('本例刷新失败'); return normal(command, value); });
+  await mount(f); await check(text.select('查询0')); await click(deleteText.open); await click(deleteText.confirm(1));
+  expect(doc.body.textContent).toContain(deleteText.refreshRequired); expect(doc.body.textContent).toContain('本例刷新失败'); expect(doc.body.textContent).toContain(text.selected(0, 0)); expect(calls(f, 'queries.deleteSelectedChecked')).toHaveLength(1);
+});
+it.each([{ deleted: 0 }, { deleted: 1, extra: true }])('未知回执%j不冒称删除成功或未删，保留选择并要求刷新', async receipt => {
+  const f = fixture(), normal = f.request.getMockImplementation()!;
+  f.request.mockImplementation(async (command, value) => command === 'queries.deleteSelectedChecked' ? receipt : normal(command, value));
+  await mount(f); await check(text.select('查询0')); await click(deleteText.open); await click(deleteText.confirm(1));
+  expect(doc.body.textContent).toContain(deleteText.failed); expect(doc.body.textContent).not.toContain(deleteText.deleted(1)); expect(doc.body.textContent).toContain(text.selected(1, 0)); expect(button(deleteText.open).disabled).toBe(true); expect(calls(f, 'queries.deleteSelectedChecked')).toHaveLength(1);
+});
 
 it('重命名只提交原id摘要及新名，刷新原范围并仅撤销本条旧选择', async () => {
   const f = fixture(), normal = f.request.getMockImplementation()!; let name = '';

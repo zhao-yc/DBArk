@@ -32,4 +32,5 @@
 .saved-query-organization-editor [role=region]{border:1px solid var(--line);padding:12px;margin:12px 0;overflow-wrap:anywhere}
 .saved-query-organization-editor [role=region] ul{max-height:180px;overflow:auto}
 .saved-query-organization-editor footer{display:flex;gap:8px;flex-wrap:wrap}
+.saved-query-delete-selected-preview ol{max-height:240px;overflow:auto;overflow-wrap:anywhere}
 @media(max-width:760px){.saved-query-organization-layout{grid-template-columns:minmax(0,1fr)}.saved-query-organization-tree{max-height:240px}.saved-query-organization-editor footer button{flex:1 1 140px}}

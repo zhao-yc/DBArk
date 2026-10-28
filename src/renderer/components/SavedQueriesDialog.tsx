@@ -13,6 +13,8 @@ import { readSavedQueryOrganization, savedQueryOrganizationTree, type SelectedSa
 import { SavedQueryOrganizationEditor, type SavedQueryOrganizationEdit } from './SavedQueryOrganizationEditor';
 import { SavedQueryRenameEditor, type SavedQueryRenameOrigin } from './SavedQueryRenameEditor';
 import { savedQueryRenameSchema, savedQueryRenameZh as renameText } from '../../shared/savedQueryRename';
+import { SavedQueryDeleteSelectedPreview } from './SavedQueryDeleteSelectedPreview';
+import { savedQueryDeleteSelectedSchema, readSavedQueryDeleteSelectedResult, savedQueryDeleteSelectedZh as deleteText } from '../../shared/savedQueryDeleteSelected';
 import { Empty, ErrorBox, Modal, Spinner } from './ui';
 import type { HistoryInsertionTarget } from '../historyInsertion';
 import { savedQueryInsertionZh as insertionText } from '../locales/savedQueryInsertion.zh-CN';
@@ -22,6 +24,7 @@ interface Services { request: typeof invoke; id(): string; }
 const services: Services = { request: invoke, id: uid };
 interface Criteria { search: string; policy: 'stop' | 'continue'; group: SavedQueryGroupScope; }
 interface RenameEdit { source: SavedQueryRenameOrigin; page: SavedQueryPage; criteria: string; epoch: number; }
+interface DeleteEdit { items: readonly SelectedSavedQuery[]; selection: ReadonlyMap<string, SelectedSavedQuery>; epoch: number; }
 const criteriaKey = (value: Criteria) => JSON.stringify([value.search, value.policy, value.group]);
 interface Edit { value: SavedQueryOrganizationEdit; snapshot: SavedQueryOrganizationSnapshot; selected: readonly SelectedSavedQuery[]; epoch: number; }
 
@@ -33,6 +36,7 @@ export function SavedQueriesDialog({ onClose, onHistory, insertion, services: io
   const [organization, setOrganization] = useState<SavedQueryOrganizationSnapshot>(), organizationRef = useRef(organization);
   const [selected, setSelected] = useState<ReadonlyMap<string, SelectedSavedQuery>>(new Map()), selectedRef = useRef(selected), [editing, setEditing] = useState<Edit>(), editRef = useRef(editing), [needsRefresh, setNeedsRefresh] = useState(false), [targets, setTargets] = useState(new Map<string, string>());
   const [renaming, setRenaming] = useState<RenameEdit>(), renameRef = useRef<RenameEdit | undefined>(undefined);
+  const [deleting, setDeleting] = useState<DeleteEdit>(), deleteRef = useRef<DeleteEdit | undefined>(undefined);
   const cursor = useRef<string | undefined>(undefined), active = useRef<string | undefined>(undefined), pending = useRef<Promise<void> | undefined>(undefined), locked = useRef(false), closed = useRef(false), alive = useRef(true), epoch = useRef(0);
   const criteria: Criteria = { search, policy, group }, criteriaRef = useRef(criteria); criteriaRef.current = criteria; const renderEpoch = epoch.current;
   const insertionRef = useRef(insertion), previousInsertion = useRef(insertion), insertionClosing = useRef(false), cancelledInsertion = useRef(false);
@@ -46,7 +50,7 @@ export function SavedQueriesDialog({ onClose, onHistory, insertion, services: io
     const off = insertion?.subscribe(sync); sync(); return () => { off?.(); };
   }, [insertion]);
   const owns = (ticket: number) => alive.current && !closed.current && epoch.current === ticket;
-  const editable = () => owns(renderEpoch) && !locked.current && !editRef.current && !renameRef.current;
+  const editable = () => owns(renderEpoch) && !locked.current && !editRef.current && !renameRef.current && !deleteRef.current;
   /** 原句柄仅在成功释放后遗忘；迟到新页也精确回收。 */
   async function release() { const value = cursor.current; if (value) { await io.request('queries.pageRelease', { cursor: value }); if (cursor.current === value) cursor.current = undefined; } }
   /** 取消失败仍等原Promise终态并释放，不能让观察超时或按钮点击提前放行。 */
@@ -57,7 +61,7 @@ export function SavedQueriesDialog({ onClose, onHistory, insertion, services: io
     if (closed.current) return;
     closed.current = true; insertionClosing.current = keepInsertion; cancelledInsertion.current = false;
     if (!keepInsertion) epoch.current++;
-    editRef.current = undefined; setEditing(undefined); renameRef.current = undefined; setRenaming(undefined); setClosing(true);
+    editRef.current = undefined; setEditing(undefined); renameRef.current = undefined; setRenaming(undefined); deleteRef.current = undefined; setDeleting(undefined); setClosing(true);
     try { await cleanup(); if (!alive.current) return; if (keepInsertion && cancelledInsertion.current) onClose(); else after(); }
     catch (reason) { if (alive.current) { closed.current = false; setClosing(false); setError(errorMessage(reason)); } }
     finally { insertionClosing.current = false; }
@@ -85,12 +89,12 @@ export function SavedQueriesDialog({ onClose, onHistory, insertion, services: io
     finally { if (active.current === taskId) active.current = undefined; }
   }
   /** 显式第一页重新读取组织版本；全文、组范围和原错误策略共同生效。 */
-  function load(next = false, requested = criteriaRef.current, expected = renderEpoch) { if (editRef.current || renameRef.current) return; return run(async ticket => { let value = requested; if (!next) { const raw = await io.request('queries.organizationGet', {}); if (!owns(ticket)) return; value = { ...requested, group: publish(raw, requested.group) }; setNeedsRefresh(false); } await readPage(ticket, value, next); }, expected); }
+  function load(next = false, requested = criteriaRef.current, expected = renderEpoch) { if (editRef.current || renameRef.current || deleteRef.current) return; return run(async ticket => { let value = requested; if (!next) { const raw = await io.request('queries.organizationGet', {}); if (!owns(ticket)) return; value = { ...requested, group: publish(raw, requested.group) }; setNeedsRefresh(false); } await readPage(ticket, value, next); }, expected); }
   useEffect(() => {
     alive.current = true; closed.current = false; const ticket = epoch.current;
     // StrictMode的旧setup尚未投递时只留本轮启动权；cleanup不消费父传入的子权限。
     void Promise.resolve(pending.current).then(() => { if (owns(ticket)) void load(false, criteriaRef.current, ticket); });
-    return () => { alive.current = false; closed.current = true; epoch.current++; editRef.current = undefined; renameRef.current = undefined; void cleanup().catch(reason => useWorkspace.getState().notify(t.cleanupFailed + errorMessage(reason), true)); };
+    return () => { alive.current = false; closed.current = true; epoch.current++; editRef.current = undefined; renameRef.current = undefined; deleteRef.current = undefined; void cleanup().catch(reason => useWorkspace.getState().notify(t.cleanupFailed + errorMessage(reason), true)); };
   }, []);
   /** 草稿改变只撤销旧事件，不自动查询或释放旧页。 */
   function draft(action: () => void) { if (!editable()) return; epoch.current++; action(); }
@@ -141,6 +145,43 @@ export function SavedQueriesDialog({ onClose, onHistory, insertion, services: io
       }
     }, origin.epoch);
   }
+  /** 跨页选择完整复制为只含名称和引用的预览，不因当前页或搜索隐藏而缩减删除范围。 */
+  function beginDeleteSelected(): void {
+    if (!editable() || needsRefresh || !selectedRef.current.size) return;
+    const items = Object.freeze([...selectedRef.current.values()].map(item => Object.freeze({ ...item })));
+    const parsed = savedQueryDeleteSelectedSchema.safeParse({ queries: items.map(({ id, digest }) => ({ id, digest })) });
+    if (!parsed.success) { setError(deleteText.invalid); return; }
+    const origin: DeleteEdit = { items, selection: selectedRef.current, epoch: ++epoch.current };
+    deleteRef.current = origin; setDeleting(origin); setError(''); setNotice('');
+  }
+  /** 取消只撤销所见批量预览，不能消费新选择或后来打开的面板。 */
+  function cancelDeleteSelected(origin: DeleteEdit): void {
+    if (locked.current || deleteRef.current !== origin || !owns(origin.epoch)) return;
+    epoch.current++; deleteRef.current = undefined; setDeleting(undefined);
+  }
+  /** 确切计数回执确认后再清所选；成功与后续刷新失败分开，不重试任何删除。 */
+  function applyDeleteSelected(origin: DeleteEdit): void {
+    if (locked.current || deleteRef.current !== origin || !owns(origin.epoch) || selectedRef.current !== origin.selection) return;
+    const input = savedQueryDeleteSelectedSchema.parse({ queries: origin.items.map(({ id, digest }) => ({ id, digest })) });
+    void run(async ticket => {
+      let committed = false;
+      try {
+        const raw = await io.request('queries.deleteSelectedChecked', input);
+        const result = readSavedQueryDeleteSelectedResult(raw, origin.items.length); committed = true;
+        if (!owns(ticket)) return;
+        deleteRef.current = undefined; setDeleting(undefined); setNeedsRefresh(true);
+        const next = new Map(selectedRef.current); for (const item of origin.items) next.delete(item.id); selectedRef.current = next; setSelected(next);
+        const groups = await io.request('queries.organizationGet', {}); if (!owns(ticket)) return;
+        const group = publish(groups, criteriaRef.current.group);
+        await readPage(ticket, { ...criteriaRef.current, group });
+        if (owns(ticket)) { setNeedsRefresh(false); setNotice(deleteText.deleted(result.deleted)); }
+      } catch (reason) {
+        if (!owns(ticket)) return;
+        deleteRef.current = undefined; setDeleting(undefined); setNeedsRefresh(true); setError(errorMessage(reason));
+        if (committed) setNotice(deleteText.refreshRequired);
+      }
+    }, origin.epoch);
+  }
   /** 丢失来源不回退其它连接；打开仅重读摘要对应原文，不执行SQL。 */
   function target(item: SavedQueryPageEntry) { return targets.has(item.query.id) ? targets.get(item.query.id)! : connections.some(value => value.id === item.query.connectionId) ? item.query.connectionId! : ''; }
   function open(item: SavedQueryPageEntry) {
@@ -175,9 +216,9 @@ export function SavedQueriesDialog({ onClose, onHistory, insertion, services: io
   }
   function remove(item: SavedQueryPageEntry) { if (!editable()) return; void run(async ticket => { await io.request('queries.deleteChecked', { id: item.query.id, digest: item.digest }); if (!owns(ticket)) return; const next = new Map(selectedRef.current); next.delete(item.query.id); selectedRef.current = next; setSelected(next); const raw = await io.request('queries.organizationGet', {}); if (!owns(ticket)) return; const nextGroup = publish(raw, criteriaRef.current.group); await readPage(ticket, { ...criteriaRef.current, group: nextGroup }); }); }
   function databaseLabel(item: SavedQueryPageEntry) { const value = item.query, context = value.databaseContext; return context ? context.state === 'known' ? context.database || queryContextZh.none : queryContextZh.unknown : value.database ? value.database + ' (' + queryContextZh.legacy + ')' : queryContextZh.legacy; }
-  const blocked = busy || closing || !!editing || !!renaming, changed = criteriaKey(criteria) !== applied, tree = organization ? savedQueryOrganizationTree(organization) : [], hidden = [...selected.keys()].filter(id => !reply?.items.some(item => item.query.id === id)).length, selectedGroup = group.kind === 'group' ? group.id : undefined;
+  const blocked = busy || closing || !!editing || !!renaming || !!deleting, changed = criteriaKey(criteria) !== applied, tree = organization ? savedQueryOrganizationTree(organization) : [], hidden = [...selected.keys()].filter(id => !reply?.items.some(item => item.query.id === id)).length, selectedGroup = group.kind === 'group' ? group.id : undefined;
   const pageSelected = reply?.items.filter(item => selected.has(item.query.id)).length ?? 0, pageAllSelected = !!reply?.items.length && pageSelected === reply.items.length, pageMixed = pageSelected > 0 && !pageAllSelected;
-  return <Modal title={zh.activity.text003} wide onClose={() => { const origin = renameRef.current; if (origin) cancelRename(origin); else void close(); }}>
+  return <Modal title={zh.activity.text003} wide onClose={() => { const origin = renameRef.current; if (origin) cancelRename(origin); else if (deleteRef.current) cancelDeleteSelected(deleteRef.current); else void close(); }}>
     <div className="dialog-tabs"><button disabled={closing} onClick={() => void close(onHistory)}><Clock3 size={14}/>{zh.activity.text004}</button><button className="selected"><FileCode2 size={14}/>{zh.activity.text005}</button></div>
     <div className="modal-content saved-query-pages"><p className="muted small">{text.metadataOnly}</p><p className="muted small">{insertionText.hint}</p><p aria-live="polite">{insertion ? insertionText.target(insertion.title) : insertionText.unavailable}{insertion && !insertAvailable && <span> · {insertionText.changed}</span>}</p><div className="saved-query-organization-layout">
       <details className="saved-query-organization-tree" open><summary>{text.title}</summary><nav aria-label={text.tree}>
@@ -189,7 +230,7 @@ export function SavedQueriesDialog({ onClose, onHistory, insertion, services: io
       </details>
       <div className="saved-query-organization-list"><div className="search-box"><Search size={15}/><input aria-label={t.search} value={search} maxLength={512} disabled={blocked} onChange={event => draft(() => setSearch(event.target.value))} onKeyDown={event => { if (event.key === 'Enter') { event.preventDefault(); void load(); } }}/><button disabled={blocked} onClick={() => void load()}>{t.searchButton}</button></div>
         <label className="inline-field">{t.onError}<select aria-label={t.onError} disabled={blocked} value={policy} onChange={event => draft(() => setPolicy(event.target.value as typeof policy))}><option value="continue">{t.continue}</option><option value="stop">{t.stop}</option></select></label><p className="muted small">{t.hint}</p>{changed && reply && <p>{t.pending}</p>}
-        <p>{text.selected(selected.size, hidden)}</p><label><input type="checkbox" aria-label={text.selectPage} aria-checked={pageMixed ? 'mixed' : pageAllSelected} checked={pageAllSelected} ref={node => { if (node) node.indeterminate = pageMixed; }} disabled={blocked || !reply?.items.length} onChange={event => choosePage(event.target.checked)}/>{text.selectPage}</label><div className="saved-query-group-actions"><button disabled={blocked || !selected.size || !organization || needsRefresh} onClick={() => edit({ kind: 'moveQueries' })}>{text.moveQueries}</button><button disabled={blocked || !selected.size} onClick={clearSelection}>{text.clear}</button></div>
+        <p>{text.selected(selected.size, hidden)}</p><label><input type="checkbox" aria-label={text.selectPage} aria-checked={pageMixed ? 'mixed' : pageAllSelected} checked={pageAllSelected} ref={node => { if (node) node.indeterminate = pageMixed; }} disabled={blocked || !reply?.items.length} onChange={event => choosePage(event.target.checked)}/>{text.selectPage}</label><div className="saved-query-group-actions"><button disabled={blocked || !selected.size || !organization || needsRefresh} onClick={() => edit({ kind: 'moveQueries' })}>{text.moveQueries}</button><button disabled={blocked || !selected.size || needsRefresh} onClick={beginDeleteSelected}>{deleteText.open}</button><button disabled={blocked || !selected.size} onClick={clearSelection}>{text.clear}</button></div>
         <ErrorBox message={error}/>{needsRefresh && <p className="warning-text">{text.refreshRequired}</p>}{notice && <p>{notice}</p>}{busy && <Spinner/>}
         {reply && <p role="status">{formatText(t.summary, batch, reply.scanned, reply.matched, reply.failed)} {reply.stoppedOnError ? t.failedStop : reply.cursor ? t.more : t.done}</p>}
         <div className="history-list">{reply?.items.map(item => <article className="history-card" key={item.query.id}><div><label><input type="checkbox" aria-label={text.select(item.query.name)} disabled={blocked} checked={selected.has(item.query.id)} onChange={event => choose(item, event.target.checked)}/><strong>{item.query.name}</strong></label><span className="grow"/><span className="muted small">{connections.find(profile => profile.id === item.query.connectionId)?.name || t.sourceMissing} / {databaseLabel(item)}</span></div>
@@ -198,7 +239,7 @@ export function SavedQueriesDialog({ onClose, onHistory, insertion, services: io
         </article>)}{reply && !reply.items.length && <Empty title={t.empty} text={t.emptyHint}/>}</div>
         {reply?.failures.length ? <details><summary>{t.failures} ({reply.failures.length})</summary>{reply.failures.map((failure, index) => <p key={index}>{failure.id}：{failure.message}</p>)}</details> : null}<p className="muted small">{t.openHint}</p>
       </div>
-    </div>{renaming && <SavedQueryRenameEditor key={renaming.epoch} origin={renaming.source} busy={busy || closing} onCancel={() => cancelRename(renaming)} onConfirm={name => applyRename(name, renaming)}/ >}{editing && <SavedQueryOrganizationEditor snapshot={editing.snapshot} edit={editing.value} selected={editing.selected} busy={busy || closing} onCancel={cancelEdit} onConfirm={preview => apply(preview, editing)}/>}</div>
+    </div>{deleting && <SavedQueryDeleteSelectedPreview key={deleting.epoch} items={deleting.items} busy={busy || closing} onCancel={() => cancelDeleteSelected(deleting)} onConfirm={() => applyDeleteSelected(deleting)}/>}{renaming && <SavedQueryRenameEditor key={renaming.epoch} origin={renaming.source} busy={busy || closing} onCancel={() => cancelRename(renaming)} onConfirm={name => applyRename(name, renaming)}/ >}{editing && <SavedQueryOrganizationEditor snapshot={editing.snapshot} edit={editing.value} selected={editing.selected} busy={busy || closing} onCancel={cancelEdit} onConfirm={preview => apply(preview, editing)}/>}</div>
     <footer className="modal-footer"><button disabled={blocked} onClick={() => void load()}>{t.refresh}</button><button disabled={blocked || needsRefresh || !reply?.cursor || changed} onClick={() => void load(true)}>{t.next}</button>{busy && <button disabled={closing || !active.current} onClick={() => { if (active.current) void io.request('query.cancel', { taskId: active.current }).catch(reason => setError(errorMessage(reason))); }}>{t.cancel}</button>}<span className="grow"/><button disabled={closing} onClick={() => void close()}>{zh.common.close}</button></footer>
   </Modal>;
 }

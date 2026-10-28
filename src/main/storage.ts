@@ -32,6 +32,7 @@ import { queryResultPresetDocumentSchema, queryResultPresetListSchema, queryResu
 import { importPresetDocumentSchema, importPresetSaveSchema, importPresetDeleteSchema, importPresetLimits, importPresetText, type ImportPresetDocument, type ImportPresetSnapshot, type ImportPresetSaveInput, type ImportPresetDeleteInput } from '../shared/importPresets';
 import { parseSavedQueryRecord } from './savedQuerySearchMatch';
 import { savedQueryRenameSchema, savedQueryRenameZh } from '../shared/savedQueryRename';
+import { savedQueryDeleteSelectedLimits, savedQueryDeleteSelectedSchema, savedQueryDeleteSelectedZh } from '../shared/savedQueryDeleteSelected';
 import { parseHistoryRecord } from './historyPageMatch';
 import { historyDeleteText, type HistoryDeleteReference } from '../shared/historyDelete';
 import { historyDeleteByteTotal, historyDeleteReferences } from './historyDeleteStorage';
@@ -692,6 +693,32 @@ export class LocalStore {
   }
   /** 只删除指定查询，不影响数据库或执行历史。 */
   deleteQuery(id: string): void { this.mutate(() => { this.db.run('DELETE FROM saved_query_memberships WHERE query_id=?', [id]); this.db.run('DELETE FROM queries WHERE id=?', [id]); });this.queryRevisionValue++; }
+  /** 一次同步SQLite事务完整核对所选原文，再删除精确记录及其成员关系，禁止逐项独立提交。 */
+  deleteQueriesChecked(raw: unknown): { deleted: number } {
+    const input = savedQueryDeleteSelectedSchema.parse(raw);
+    this.mutate(() => {
+      let rawBytes = 0;
+      // 所有记录都通过摘要及结构校验后才允许第一条DELETE；末项失败不会半删前项。
+      for (const selected of input.queries) {
+        const previous = this.querySearchRaw(selected.id);
+        if (previous === undefined) throw Error(savedQueryDeleteSelectedZh.missing);
+        // 一次仅保留本条原文；先减后比较，累计超过128MiB时仍未发送任何DELETE。
+        const bytes = Buffer.byteLength(previous);
+        if (bytes > savedQueryDeleteSelectedLimits.rawBytes - rawBytes) throw Error(savedQueryDeleteSelectedZh.budget);
+        rawBytes += bytes;
+        if (createHash('sha256').update(previous).digest('hex') !== selected.digest) throw Error(savedQueryDeleteSelectedZh.stale);
+        parseSavedQueryRecord(selected.id, previous);
+      }
+      for (const selected of input.queries) {
+        this.db.run('DELETE FROM saved_query_memberships WHERE query_id=?', [selected.id]);
+        this.db.run('DELETE FROM queries WHERE id=?', [selected.id]);
+        if (this.db.getRowsModified() !== 1) throw Error(savedQueryDeleteSelectedZh.failed);
+      }
+    });
+    // 只有完整原子发布成功才推进一次修订，失败由mutate恢复原内存、成员及发布文件。
+    this.queryRevisionValue++;
+    return { deleted: input.queries.length };
+  }
   /** 历史显示限制为最近 500 条，可以按连接筛选。 */
   history(connectionId?: string): HistoryEntry[] { return this.records(`SELECT data FROM history ${connectionId ? 'WHERE connection_id=?' : ''} ORDER BY started_at DESC LIMIT 500`, connectionId ? [connectionId] : []); }
   /** 历史或连接成功变化即失效旧页；写盘失败不改变本地修订。 */

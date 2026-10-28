@@ -9,7 +9,7 @@ export const savedQueryOrganizationZh = {
   select: (name: string) => `选择保存查询：${name}`, direct: (count: number, total: number) => `直接${count}条，含子组${total}条`,
   selectGroup: (path: string) => `选择分组：${path}`,
   selectPage: '选择当前页查询',
-  selectionLimit: '最多选择100条，请先移动或清空选择。', snapshotInvalid: '保存查询分组回包无效，请刷新后重试。', stale: '分组或预览已变化，请刷新后重新预览；未自动重试。',
+  selectionLimit: '最多选择100条，请先处理或清空选择。', snapshotInvalid: '保存查询分组回包无效，请刷新后重试。', stale: '分组或预览已变化，请刷新后重新预览；未自动重试。',
   refreshRequired: '本次未自动重放，请点击“刷新到第一页”核对最新分组后再操作。', saved: '分组变更已保存。', scopeRemoved: '原分组已不存在，现显示未分组。',
   source: '原分组', target: '变更后位置', members: (groups: number, count: number) => `受影响分组${groups}个，查询${count}条。`,
   queries: (count: number) => `移动${count}条已选查询（包括隐藏选择）。`, noChange: '没有分组变更可预览。',
