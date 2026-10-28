@@ -146,7 +146,7 @@ describe('缩进原生适配器的实际边界函数（RAM）', () => {
   });
   it('原will-quit之后才调用公开close，两次owner全部PID不存在后才能删除原目录', async () => {
     const f = fixture(), first = await f.run.launch(); await f.run.close(first); const second = await f.run.launch(); await f.run.close(second); await f.run.finish();
-    expect(f.preflight).toHaveBeenCalledTimes(2); expect(f.launch).toHaveBeenCalledTimes(2); expect(f.applications.every(value => value.close.mock.calls.length === 1)).toBe(true); expect(f.probe).toHaveBeenCalledTimes(6); expect(f.removed).toHaveBeenCalledWith(f.directory, { recursive: true, force: false }); expect(f.run.removed).toBe(true);
+    expect(f.preflight).toHaveBeenCalledTimes(2); expect(f.launch).toHaveBeenCalledTimes(2); expect(f.applications.every(value => value.close.mock.calls.length === 1)).toBe(true); expect(f.probe).toHaveBeenCalledTimes(6); expect(f.removed).toHaveBeenCalledWith(f.directory, { recursive: true, force: false, maxRetries: f.context.process.platform === 'win32' ? 5 : 0, retryDelay: 100 }); expect(f.run.removed).toBe(true);
   });
   it('意外close没有本owner握手即停链，不调用公开close补造退出或自动删除', async () => {
     const f = fixture('无握手关闭'), owner = await f.run.launch(); await expect(f.run.close(owner)).rejects.toThrow('未取得will-quit'); expect(owner.confirmed).toBe(false); expect(f.applications[0].close).not.toHaveBeenCalled(); expect(f.removed).not.toHaveBeenCalled();

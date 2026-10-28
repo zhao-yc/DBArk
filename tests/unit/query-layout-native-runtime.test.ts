@@ -60,4 +60,24 @@ function fixture(mode: '正常' | '无握手关闭' | 'PID权限错误' | '链�
 it.each(['win32','darwin'])('旧未传可选参数在%s仍按原清单/launcher/PID证明闭合',async platform=>{const f=fixture('正常',false,platform),a=await f.run.launch();await f.run.close(a);const b=await f.run.launch();await f.run.close(b);await f.run.finish();expect(f.preflight).toHaveBeenCalledTimes(2);expect(f.run.removed).toBe(true);expect(f.approval).toBeUndefined();});
 it.each(['win32','darwin'])('新独立清单在%s不伪造旧门，原controller两次正常退出后才清理',async platform=>{const f=fixture('正常',false,platform,true);expect(f.environment.DBARK_EDITOR_INDENT_NATIVE_TEST).toBeUndefined();expect(f.environment.DBARK_EDITOR_INDENT_MANIFEST).toBeUndefined();const a=await f.run.launch();await f.run.close(a);const b=await f.run.launch();expect(b).not.toBe(a);await f.run.close(b);await f.run.finish();expect(f.preflight).toHaveBeenCalledTimes(2);expect(f.run.removed).toBe(true);expect(f.launch).toHaveBeenCalledWith(expect.objectContaining({executablePath:f.exe,cwd:f.root,args:[f.root]}));});
 it('独立批准摘要错配不能执行原端口或launch，不能回退到旧环境清单',async()=>{const f=fixture('正常',false,'win32',true,true);await expect(f.run.launch()).rejects.toThrow('批准');expect(f.preflight).not.toHaveBeenCalled();expect(f.launch).not.toHaveBeenCalled();expect(f.removed).not.toHaveBeenCalled();});
+it.each(['win32', 'darwin'])('两owner确认退出后%s只发一次非强制rm，Windows内部退避有限', async platform => {
+  const f = fixture('正常', false, platform, true), first = await f.run.launch(); await f.run.close(first); const second = await f.run.launch(); await f.run.close(second); await f.run.finish();
+  expect(f.removed).toHaveBeenCalledExactlyOnceWith(f.directory, { recursive: true, force: false, maxRetries: platform === 'win32' ? 5 : 0, retryDelay: 100 }); expect(f.run.removed).toBe(true);
+});
+it('rm耗尽后EBUSY仍原样失败，不能补第二次清理或成功标记', async () => {
+  const f = fixture('正常', false, 'win32', true), first = await f.run.launch(); await f.run.close(first); const second = await f.run.launch(); await f.run.close(second);
+  const busy = Object.assign(Error('合成rm内部退避后仍占用'), { code: 'EBUSY' }); f.removed.mockRejectedValueOnce(busy);
+  await expect(f.run.finish()).rejects.toBe(busy); expect(f.run.removed).toBe(false); expect(f.run.retained).toBe(true);
+  await expect(f.run.finish()).rejects.toThrow('owner已失效'); expect(f.removed).toHaveBeenCalledOnce();
+});
+it('rm成功返回但目录仍存在时不能完成清理', async () => {
+  const f = fixture('正常', false, 'win32', true), first = await f.run.launch(); await f.run.close(first); const second = await f.run.launch(); await f.run.close(second);
+  f.removed.mockImplementationOnce(async () => {}); await expect(f.run.finish()).rejects.toThrow('目录仍存在'); expect(f.run.removed).toBe(false); expect(f.run.retained).toBe(true);
+});
+it('清理等待期间scope失效，迟到的rm成功不能生成正常终态', async () => {
+  const f = fixture('正常', false, 'win32', true), first = await f.run.launch(); await f.run.close(first); const second = await f.run.launch(); await f.run.close(second);
+  let release!: () => void, entered!: () => void; const started = new Promise<void>(yes => { entered = yes; });
+  f.removed.mockImplementationOnce(() => new Promise<void>(yes => { release = yes; entered(); }));
+  const finishing = f.run.finish(); await started; f.run.retained = true; release(); await expect(finishing).rejects.toThrow('owner已失效'); expect(f.run.removed).toBe(false); expect(f.removed).toHaveBeenCalledOnce();
+});
 it('第二参数调用方事后改对象不能改写已捕获的Root清单',async()=>{const f=fixture('正常',false,'win32',true);f.approval!.manifestPath=resolve('RAM-foreign-manifest.json');f.approval!.approvedHash='b'.repeat(64);const owner=await f.run.launch();expect(f.launch).toHaveBeenCalledOnce();await f.run.close(owner);expect(f.run.retained).toBe(false);});

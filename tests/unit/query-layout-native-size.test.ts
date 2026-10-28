@@ -17,20 +17,20 @@ const nativeHelper = readFileSync(new URL('../helpers/queryLayoutNativeWindow.ts
 const pageGeometry = (maximum = 614) => ({ viewport: { width: 1400, height: 1000, devicePixelRatio: 2 }, tab: { x: 0, y: 132, width: 1100, height: 844 }, editor: { x: 0, y: 213, width: 1100, height: Math.min(300, maximum) }, separator: { minimum: 130, maximum, value: Math.min(300, maximum) }, children: [{ classes: 'toolbar', rect: { x: 0, y: 169, width: 1100, height: 44 } }] });
 
 /** 原controller.step核每个await两侧；只有系统窗口/页面/附件端口是RAM。 */
-function fixture(options: { platform?: 'darwin' | 'win32'; sizes?: number[][]; viewports?: number[][]; maxima?: number[]; attachmentFails?: boolean; expire?: 'identity' | 'set' | 'center' | 'get' | 'page' | 'attach'; wrongWindow?: boolean; wrongContents?: boolean; diagnosticFails?: boolean } = {}) {
+function fixture(options: { platform?: 'darwin' | 'win32'; scaleFactor?: number; devicePixelRatio?: number; sizes?: number[][]; viewports?: number[][]; maxima?: number[]; attachmentFails?: boolean; expire?: 'identity' | 'set' | 'center' | 'get' | 'page' | 'attach' | 'correct'; wrongWindow?: boolean; wrongContents?: boolean; diagnosticFails?: boolean } = {}) {
   const { sizes = [[1400, 1000]], viewports, maxima = [614], attachmentFails = false } = options;
   const attachments: Array<{ name: string; value: any }> = [], annotations: unknown[] = [], polls: Array<{ timeout: number; expected: unknown; attempts: number }> = [];
-  let alive = true, index = 0, currentSize = sizes[0];
+  let alive = true, index = 0, currentSize = sizes[0], contentRequests = 0;
   const expire = (stage: typeof options.expire) => { if (options.expire === stage) alive = false; };
   const getContentSize = vi.fn(() => { currentSize = sizes[Math.min(index++, sizes.length - 1)]; expire('get'); return currentSize; });
-  const getDisplayMatching = vi.fn(() => ({ id: 9, bounds: { x: 0, y: 0, width: 1920, height: 1200 }, workArea: { x: 0, y: 30, width: 1920, height: 1100 }, scaleFactor: 2 }));
-  const native = { id: 1, webContents: { id: 2, getZoomFactor: vi.fn(() => 1) }, isDestroyed: vi.fn(() => false), setMinimumSize: vi.fn(), setContentSize: vi.fn(() => { expire('set'); }), center: vi.fn(() => { expire('center'); }), getContentSize,
+  const getDisplayMatching = vi.fn(() => ({ id: 9, bounds: { x: 0, y: 0, width: 1920, height: 1200 }, workArea: { x: 0, y: 30, width: 1920, height: 1100 }, scaleFactor: options.scaleFactor ?? 2 }));
+  const native = { id: 1, webContents: { id: 2, getZoomFactor: vi.fn(() => 1) }, isDestroyed: vi.fn(() => false), setMinimumSize: vi.fn(), setContentSize: vi.fn(() => { expire('set'); if (++contentRequests === 2) expire('correct'); }), center: vi.fn(() => { expire('center'); }), getContentSize,
     getBounds: vi.fn(() => { if (options.diagnosticFails) throw Error('合成补充诊断失败'); return { x: 0, y: 30, width: currentSize[0], height: currentSize[1] + 35 }; }),
     getContentBounds: vi.fn(() => ({ x: 0, y: 65, width: currentSize[0], height: currentSize[1] })), getMinimumSize: vi.fn(() => [720, 320]),
   };
   const api = { BrowserWindow: { fromId: vi.fn(() => ({ ...native, id: options.wrongWindow ? 3 : native.id, webContents: { ...native.webContents, id: options.wrongContents ? 4 : native.webContents.id } })) }, screen: { getDisplayMatching } };
   const handle = { evaluate: vi.fn(async (action: (window: typeof native, value: any) => unknown, value: unknown) => { const result = action(native, value); if (handle.evaluate.mock.calls.length === 1) expire('identity'); return result; }) };
-  const evaluate = vi.fn(async () => { const n = evaluate.mock.calls.length - 1, view = viewports?.[Math.min(n, viewports.length - 1)] ?? currentSize; const value = { ...pageGeometry(maxima[Math.min(n, maxima.length - 1)]), viewport: { width: view[0], height: view[1], devicePixelRatio: 2 } }; expire('page'); return value; });
+  const evaluate = vi.fn(async () => { const n = evaluate.mock.calls.length - 1, view = viewports?.[Math.min(n, viewports.length - 1)] ?? currentSize; const value = { ...pageGeometry(maxima[Math.min(n, maxima.length - 1)]), viewport: { width: view[0], height: view[1], devicePixelRatio: options.devicePixelRatio ?? options.scaleFactor ?? 2 } }; expire('page'); return value; });
   const applicationEvaluate = vi.fn(async (action: (modules: typeof api, identity: unknown) => unknown, identity: unknown) => action(api, identity));
   const owner = { application: { browserWindow: vi.fn(async () => handle), evaluate: applicationEvaluate }, page: { evaluate }, closed: false, confirmed: false } as unknown as IndentNativeOwner;
   const assertCurrent = vi.fn(() => { if (!alive) throw Error('原scope已失效'); });
@@ -72,6 +72,41 @@ it('Windows保留原尺寸设置，不继承Mac居中准备而触发系统尺寸
   const f = fixture({ platform: 'win32' }); await f.resize();
   expect(f.native.setContentSize).toHaveBeenCalledExactlyOnceWith(1400, 1000); expect(f.native.center).not.toHaveBeenCalled();
   expect(f.attachments.at(-1)?.value).toMatchObject({ actual: { width: 1400, height: 1000 }, stable: true });
+});
+it.each([1000, 480])('175%%缩放到%s高时只补偿一次内容请求，原目标及最终精确视口保持', async height => {
+  const f = fixture({ platform: 'win32', scaleFactor: 1.75, sizes: [[1401, height + 1], [1401, height + 1], [1400, height], [1400, height]] }); await f.resize(height);
+  expect(f.native.setContentSize.mock.calls).toEqual([[1400, height], [1399, height - 1]]); expect(f.native.center).not.toHaveBeenCalled();
+  expect(f.attachments.filter(item => item.name === '分栏原生窗口尺寸').map(item => item.value.stable)).toEqual([false, false, false, true]);
+  expect(f.polls).toEqual([{ timeout: 5000, expected: true, attempts: 4 }]);
+});
+it('校准后持续超量仍失败，不能重发或把1401作为合格宽度', async () => {
+  const f = fixture({ platform: 'win32', scaleFactor: 1.75, sizes: [[1401, 1001]] }); await expect(f.resize()).rejects.toThrow();
+  expect(f.native.setContentSize.mock.calls).toEqual([[1400, 1000], [1399, 999]]); expect(f.attachments.filter(item => item.name === '分栏原生窗口尺寸').every(item => !item.value.stable)).toBe(true);
+});
+it.each([
+  { platform: 'darwin' as const, scaleFactor: 1.75 }, { scaleFactor: 2 }, { scaleFactor: 1 }, { scaleFactor: 1.75, devicePixelRatio: 2 }, { scaleFactor: 1.75, diagnosticFails: true },
+])('非Windows分数DPI或诊断不足不得追加尺寸写入：%j', async option => {
+  const f = fixture({ platform: 'win32', sizes: [[1401, 1001]], ...option }); await expect(f.resize()).rejects.toThrow(); expect(f.native.setContentSize).toHaveBeenCalledExactlyOnceWith(1400, 1000);
+});
+it.each([[1399, 1000], [1402, 1000], [1400, 1002], [1401, 0]])('分数DPI也不校准空间不足或任意偏差：%s×%s', async (width, height) => {
+  const f = fixture({ platform: 'win32', scaleFactor: 1.75, sizes: [[width, height]] }); await expect(f.resize()).rejects.toThrow(); expect(f.native.setContentSize).toHaveBeenCalledExactlyOnceWith(1400, 1000);
+});
+it('页面与native不一致或瞬态超量均不能触发校准', async () => {
+  const wrong = fixture({ platform: 'win32', scaleFactor: 1.75, sizes: [[1401, 1001]], viewports: [[1400, 1000]] }); await expect(wrong.resize()).rejects.toThrow(); expect(wrong.native.setContentSize).toHaveBeenCalledOnce();
+  const transient = fixture({ platform: 'win32', scaleFactor: 1.75, sizes: [[1401, 1001], [1400, 1000], [1400, 1000]] }); await transient.resize(); expect(transient.native.setContentSize).toHaveBeenCalledOnce();
+});
+it('被工作区夹取的不足空间不发补偿请求，不能趁校准扩大高度', async () => {
+  const f = fixture({ platform: 'win32', scaleFactor: 1.75, sizes: [[1401, 942]] }); await expect(f.resize()).rejects.toThrow();
+  expect(f.native.setContentSize).toHaveBeenCalledExactlyOnceWith(1400, 1000);
+});
+it('补偿写入返回后scope失效不能读取新尺寸或宣称稳定', async () => {
+  const f = fixture({ platform: 'win32', scaleFactor: 1.75, sizes: [[1401, 1001]], expire: 'correct' }); await expect(f.resize()).rejects.toThrow('原scope已失效');
+  expect(f.native.setContentSize).toHaveBeenCalledTimes(2); expect(f.native.getContentSize).toHaveBeenCalledTimes(2); expect(f.run.retained).toBe(true);
+});
+it('校准写入前原外框已经变化时拒绝修改，不覆盖用户移动或缩放', async () => {
+  const f = fixture({ platform: 'win32', scaleFactor: 1.75, sizes: [[1401, 1001]] });
+  f.native.getBounds.mockImplementationOnce(() => ({ x: 0, y: 30, width: 1401, height: 1036 })).mockImplementationOnce(() => ({ x: 0, y: 30, width: 1401, height: 1036 })).mockImplementationOnce(() => ({ x: 2, y: 30, width: 1401, height: 1036 }));
+  await expect(f.resize()).rejects.toThrow('原窗口已变化'); expect(f.native.setContentSize).toHaveBeenCalledOnce(); expect(f.native.getContentSize).toHaveBeenCalledTimes(2);
 });
 it('尺寸返回后原scope失效不能继续居中；居中报错不能继续读取几何', async () => {
   const stale = fixture({ expire: 'set' }); await expect(stale.resize()).rejects.toThrow('原scope已失效'); expect(stale.native.center).not.toHaveBeenCalled();

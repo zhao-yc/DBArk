@@ -8,6 +8,9 @@
 .query-tab>.context-bar,.query-tab>.toolbar{overflow-x:auto;overflow-y:hidden;scrollbar-width:none;white-space:nowrap}
 .query-tab>.context-bar>:not(.grow){flex-shrink:0}
 .query-tab>.context-bar>strong,.query-tab>.context-bar>[aria-label="当前查询默认库"]{max-width:240px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+/* 结果操作条保持单行并允许横向浏览，避免标签收缩断行侵占编辑区。 */
+.query-tab>.result-toolbar{overflow-x:auto;overflow-y:hidden;scrollbar-width:none;white-space:nowrap}
+.query-tab>.result-toolbar>:not(.grow){flex-shrink:0;white-space:nowrap}
 .query-layout-bar{height:18px;display:flex;align-items:stretch;gap:6px;flex-shrink:0;background:var(--surface);border-block:1px solid var(--line-soft)}
 .query-layout-handle{flex:1;min-width:30px;cursor:row-resize;touch-action:none;position:relative}
 .query-layout-handle:after{content:"";position:absolute;left:calc(50% - 18px);top:6px;width:36px;border-top:2px solid var(--muted)}

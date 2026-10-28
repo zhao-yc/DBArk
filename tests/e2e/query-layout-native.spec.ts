@@ -97,7 +97,7 @@ async function attachGeometry(run: EditorIndentNativeRun, owner: IndentNativeOwn
     info.annotations.push({ type: '分栏几何附件失败', description: '原尺寸与布局断言继续保留；未额外访问窗口。' });
   }));
 }
-/** 保留原尺寸请求；最多5秒确认同一真实窗口/视口一致且连续稳定，空间仍由原布局门核验。 */
+/** 保留原尺寸目标及5秒期限；Windows分数缩放的单像素超量只补偿一次内容请求，最终仍须满足原视口。 */
 async function resize(run: EditorIndentNativeRun, owner: IndentNativeOwner, width: number, height: number, info: TestInfo) {
   const handle = await run.step(owner, () => owner.application.browserWindow(owner.page));
   const identity = await run.step(owner, () => handle.evaluate(window => ({ id: window.id, contents: window.webContents.id })));
@@ -105,7 +105,7 @@ async function resize(run: EditorIndentNativeRun, owner: IndentNativeOwner, widt
   // Mac保留旧小窗口原点会令放大后的外框越过workArea；Windows居中会按工作区收缩尺寸，须保留其原设置流程。
   // Mac定位独立step核尺寸返回后的原期限，不缩客户区、伪造视口或在失效后补读几何。
   if (process.platform === 'darwin') await run.step(owner, () => handle.evaluate(window => window.center()));
-  let previous: string | undefined;
+  let previous: string | undefined, previousObservation: string | undefined, corrected = false;
   await expect.poll(async () => {
     const native = await run.step(owner, () => owner.application.evaluate(readQueryLayoutNativeWindow, identity));
     const actual = native.actual;
@@ -113,8 +113,26 @@ async function resize(run: EditorIndentNativeRun, owner: IndentNativeOwner, widt
     const valid = actual.length === 2 && actual[0] === width && Number.isSafeInteger(actual[1]) && actual[1] > 0 && actual[1] <= height && page.viewport.width === actual[0] && page.viewport.height === actual[1] && Number.isFinite(page.viewport.devicePixelRatio) && page.viewport.devicePixelRatio > 0;
     const sample = JSON.stringify({ actual, viewport: page.viewport, diagnostics: native.diagnostics });
     const stable = valid && previous === sample;
+    const repeatedObservation = previousObservation === sample; previousObservation = sample;
     previous = valid ? sample : undefined;
     await attachGeometry(run, owner, info, '分栏原生窗口尺寸', { requested: { width, height }, actual: { width: actual[0], height: actual[1] }, page, native, stable });
+    const diagnostic = native.diagnostics, scale = diagnostic?.display.scaleFactor;
+    // 仅处理连续一致的Windows分数DPI超量；不修正少量空间、页面不一致或任意大偏差。
+    const fractionalOvershoot = process.platform === 'win32' && !corrected && !valid && repeatedObservation && diagnostic && typeof scale === 'number' && Number.isFinite(scale) && scale > 1 && !Number.isInteger(scale) && diagnostic.zoomFactor === 1 && page.viewport.devicePixelRatio === scale && page.viewport.width === actual[0] && page.viewport.height === actual[1] && actual[0] >= width && actual[0] <= width + 1 && actual[1] >= height && actual[1] <= height + 1 && (actual[0] > width || actual[1] > height);
+    if (fractionalOvershoot) {
+      const observed = diagnostic.bounds;
+      const size = { width: width - (actual[0] - width), height: height - (actual[1] - height) };
+      if (![observed.x, observed.y, observed.width, observed.height, size.width, size.height].every(Number.isSafeInteger) || size.width < 720 || size.height < 320) throw Error('分栏尺寸补偿缺少可靠原尺寸');
+      corrected = true;
+      await attachGeometry(run, owner, info, '分栏原生尺寸校准请求', { requested: { width, height }, actual, observed, command: { method: 'setContentSize', ...size }, scale });
+      await run.step(owner, () => handle.evaluate((window, value) => {
+        const current = window.getBounds();
+        if (window.isDestroyed() || window.id !== value.identity.id || window.webContents.id !== value.identity.contents || current.x !== value.observed.x || current.y !== value.observed.y || current.width !== value.observed.width || current.height !== value.observed.height) throw Error('分栏尺寸补偿的原窗口已变化');
+        window.setContentSize(value.size.width, value.size.height);
+      }, { identity, observed, size }));
+      // 真实窗口变化后重新要求两个一致样本；不延长期限或复用校准前的样本。
+      previous = undefined; previousObservation = undefined; return false;
+    }
     return stable;
   }, { timeout: 5000, intervals: [100, 200, 400], message: '原生内容宽度须达到原请求，实际有效高度不得超过请求；窗口/视口须一致且连续稳定，后续仍核原布局目标' }).toBe(true);
 }

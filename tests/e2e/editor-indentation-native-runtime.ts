@@ -142,6 +142,12 @@ export function createEditorIndentNativeRun(binding: { assertCurrent(): void }, 
       await expect.poll(() => { try { guard(); return ids.filter(pid => { guard(); try { process.kill(pid, 0); return true; } catch (reason) { if ((reason as NodeJS.ErrnoException).code === 'ESRCH') return false; throw reason; } }); } catch (reason) { failure = reason; return []; } }, { timeout: 5000, message: '本owner全部已记录PID须明确不存在' }).toEqual([]);
       guard(); if (failure) throw failure;
     },
-    remove: async path => { await assertDirectory(path); guard(); await rm(path, { recursive: true, force: false }); guard(); try { await lstat(path); guard(); } catch (reason) { guard(); if ((reason as NodeJS.ErrnoException).code === 'ENOENT') return; throw reason; } throw Error('本例目录仍存在，未完成清理'); },
+    remove: async path => {
+      await assertDirectory(path); guard();
+      // Windows正常退出后字典文件可能短暂被占用；仅在本次rm内有限退避，最终失败仍停链保留。
+      await rm(path, { recursive: true, force: false, maxRetries: process.platform === 'win32' ? 5 : 0, retryDelay: 100 }); guard();
+      try { await lstat(path); guard(); } catch (reason) { guard(); if ((reason as NodeJS.ErrnoException).code === 'ENOENT') return; throw reason; }
+      throw Error('本例目录仍存在，未完成清理');
+    },
   }); return run;
 }
