@@ -998,6 +998,7 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
     case 'queries.read': { const result = savedQuerySearches.read(input); return { ...result, sourceBinding: store.bindQuerySource(input.id, input.digest) }; }
     case 'queries.pageRelease':return savedQueryPages.release(input);
     case 'queries.deleteChecked':if(shuttingDown)throw Error('客户端正在退出，不能删除保存查询');return savedQueryPages.deleteChecked(input);
+    case 'queries.renameChecked':if(shuttingDown)throw Error('客户端正在退出，不能重命名保存查询');return store.renameQueryChecked(input);
     case 'queries.page':case 'queries.pageContinue':case 'history.page':case 'history.pageContinue':{
       if(shuttingDown)throw Error('客户端正在退出，不能读取查询列表');
       if(tasks.has(input.taskId)||completionTasks.has(input.taskId)||savedQueryPages?.owns(input.taskId)||historyPages?.owns(input.taskId)||(typeof historyDelete!=='undefined'&&historyDelete?.owns(input.taskId)))throw Error('请求编号已使用');

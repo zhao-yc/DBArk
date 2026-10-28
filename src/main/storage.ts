@@ -31,6 +31,7 @@ import { tablePresetDocumentSchema, tablePresetListSchema, tablePresetSaveSchema
 import { queryResultPresetDocumentSchema, queryResultPresetListSchema, queryResultPresetSaveSchema, queryResultPresetSelectSchema, queryResultPresetRenameSchema, validateQueryResultPresetBudget, type QueryResultPresetSource, type QueryResultPresetStoredSnapshot, type QueryResultPresetValue, type QueryResultPresetSelect, type QueryResultPresetSave, type QueryResultPresetRename } from '../shared/queryResultPresets';
 import { importPresetDocumentSchema, importPresetSaveSchema, importPresetDeleteSchema, importPresetLimits, importPresetText, type ImportPresetDocument, type ImportPresetSnapshot, type ImportPresetSaveInput, type ImportPresetDeleteInput } from '../shared/importPresets';
 import { parseSavedQueryRecord } from './savedQuerySearchMatch';
+import { savedQueryRenameSchema, savedQueryRenameZh } from '../shared/savedQueryRename';
 import { parseHistoryRecord } from './historyPageMatch';
 import { historyDeleteText, type HistoryDeleteReference } from '../shared/historyDelete';
 import { historyDeleteByteTotal, historyDeleteReferences } from './historyDeleteStorage';
@@ -613,6 +614,25 @@ export class LocalStore {
   }
   /** 查询正文和来源连接一起原子保存。 */
   saveQuery(query: SavedQuery): void { this.mutate(() => this.db.run('INSERT INTO queries VALUES (?,?,?) ON CONFLICT(id) DO UPDATE SET data=excluded.data,updated_at=excluded.updated_at', [query.id, JSON.stringify(query), query.updatedAt]));this.queryRevisionValue++; }
+  /** 仅重命名所见原记录；摘要复核和更新时间单调推进均在原同步SQLite事务内完成。 */
+  renameQueryChecked(raw: unknown): void {
+    const input = savedQueryRenameSchema.parse(raw);
+    this.mutate(() => {
+      const previous = this.querySearchRaw(input.id);
+      if (previous === undefined) throw Error(savedQueryRenameZh.missing);
+      if (createHash('sha256').update(previous).digest('hex') !== input.digest) throw Error(savedQueryRenameZh.stale);
+      const current = parseSavedQueryRecord(input.id, previous);
+      if (current.name === input.name) throw Error(savedQueryRenameZh.noChange);
+      // +1ms覆盖冻结时钟和回拨；非法遗留日期回退当前时间，Date极值溢出不能偷偷改写。
+      const now = Date.now(), old = Date.parse(current.updatedAt), next = Number.isFinite(old) ? Math.max(now, old + 1) : now;
+      if (!Number.isSafeInteger(next) || Math.abs(next) > 8_640_000_000_000_000) throw Error(savedQueryRenameZh.timestamp);
+      const updatedAt = new Date(next).toISOString();
+      const query = parseSavedQueryRecord(input.id, JSON.stringify({ ...current, name: input.name, updatedAt }));
+      this.db.run('UPDATE queries SET data=?,updated_at=? WHERE id=?', [JSON.stringify(query), query.updatedAt, input.id]);
+    });
+    // 原子落盘成功后才改变搜索/分页/组织CAS；失败由mutate恢复原内存及磁盘。
+    this.queryRevisionValue++;
+  }
   /** 来源身份只读取当前连接的公开路由字段，不通过 resolveConnection 解密凭据。 */
   private querySourceProfile(id?: string): ConnectionProfile | undefined {
     return id ? this.records<ConnectionProfile>('SELECT data FROM connections WHERE id=?', [id])[0] : undefined;

@@ -196,6 +196,7 @@ export interface CommandMap {
   'queries.pageContinue':{input:{taskId:string;cursor:string};output:SavedQueryPage};
   'queries.pageRelease':{input:{cursor:string};output:void};
   'queries.deleteChecked':{input:{id:string;digest:string};output:void};
+  'queries.renameChecked':{input:import('./savedQueryRename').SavedQueryRenameInput;output:void};
   'search.structureContinue':{input:StructureSearchContinue;output:StructureSearchPage};
   'search.release':{input:{connectionId:string;cursor:string};output:void};
   'search.dataStart':{input:DataSearchInput;output:DataSearchReply};

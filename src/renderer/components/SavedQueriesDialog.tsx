@@ -11,6 +11,8 @@ import { errorMessage, invoke, uid } from '../lib';
 import { useWorkspace } from '../store';
 import { readSavedQueryOrganization, savedQueryOrganizationTree, type SelectedSavedQuery, type SavedQueryOrganizationPreview } from '../savedQueryOrganizationUi';
 import { SavedQueryOrganizationEditor, type SavedQueryOrganizationEdit } from './SavedQueryOrganizationEditor';
+import { SavedQueryRenameEditor, type SavedQueryRenameOrigin } from './SavedQueryRenameEditor';
+import { savedQueryRenameSchema, savedQueryRenameZh as renameText } from '../../shared/savedQueryRename';
 import { Empty, ErrorBox, Modal, Spinner } from './ui';
 import type { HistoryInsertionTarget } from '../historyInsertion';
 import { savedQueryInsertionZh as insertionText } from '../locales/savedQueryInsertion.zh-CN';
@@ -19,6 +21,7 @@ import '../savedQueryPages.css';
 interface Services { request: typeof invoke; id(): string; }
 const services: Services = { request: invoke, id: uid };
 interface Criteria { search: string; policy: 'stop' | 'continue'; group: SavedQueryGroupScope; }
+interface RenameEdit { source: SavedQueryRenameOrigin; page: SavedQueryPage; criteria: string; epoch: number; }
 const criteriaKey = (value: Criteria) => JSON.stringify([value.search, value.policy, value.group]);
 interface Edit { value: SavedQueryOrganizationEdit; snapshot: SavedQueryOrganizationSnapshot; selected: readonly SelectedSavedQuery[]; epoch: number; }
 
@@ -29,6 +32,7 @@ export function SavedQueriesDialog({ onClose, onHistory, insertion, services: io
   const [reply, setReply] = useState<SavedQueryPage>(), [batch, setBatch] = useState(0), [applied, setApplied] = useState(''), [busy, setBusy] = useState(true), [closing, setClosing] = useState(false), [error, setError] = useState(''), [notice, setNotice] = useState('');
   const [organization, setOrganization] = useState<SavedQueryOrganizationSnapshot>(), organizationRef = useRef(organization);
   const [selected, setSelected] = useState<ReadonlyMap<string, SelectedSavedQuery>>(new Map()), selectedRef = useRef(selected), [editing, setEditing] = useState<Edit>(), editRef = useRef(editing), [needsRefresh, setNeedsRefresh] = useState(false), [targets, setTargets] = useState(new Map<string, string>());
+  const [renaming, setRenaming] = useState<RenameEdit>(), renameRef = useRef<RenameEdit | undefined>(undefined);
   const cursor = useRef<string | undefined>(undefined), active = useRef<string | undefined>(undefined), pending = useRef<Promise<void> | undefined>(undefined), locked = useRef(false), closed = useRef(false), alive = useRef(true), epoch = useRef(0);
   const criteria: Criteria = { search, policy, group }, criteriaRef = useRef(criteria); criteriaRef.current = criteria; const renderEpoch = epoch.current;
   const insertionRef = useRef(insertion), previousInsertion = useRef(insertion), insertionClosing = useRef(false), cancelledInsertion = useRef(false);
@@ -42,7 +46,7 @@ export function SavedQueriesDialog({ onClose, onHistory, insertion, services: io
     const off = insertion?.subscribe(sync); sync(); return () => { off?.(); };
   }, [insertion]);
   const owns = (ticket: number) => alive.current && !closed.current && epoch.current === ticket;
-  const editable = () => owns(renderEpoch) && !locked.current && !editRef.current;
+  const editable = () => owns(renderEpoch) && !locked.current && !editRef.current && !renameRef.current;
   /** 原句柄仅在成功释放后遗忘；迟到新页也精确回收。 */
   async function release() { const value = cursor.current; if (value) { await io.request('queries.pageRelease', { cursor: value }); if (cursor.current === value) cursor.current = undefined; } }
   /** 取消失败仍等原Promise终态并释放，不能让观察超时或按钮点击提前放行。 */
@@ -53,7 +57,7 @@ export function SavedQueriesDialog({ onClose, onHistory, insertion, services: io
     if (closed.current) return;
     closed.current = true; insertionClosing.current = keepInsertion; cancelledInsertion.current = false;
     if (!keepInsertion) epoch.current++;
-    editRef.current = undefined; setEditing(undefined); setClosing(true);
+    editRef.current = undefined; setEditing(undefined); renameRef.current = undefined; setRenaming(undefined); setClosing(true);
     try { await cleanup(); if (!alive.current) return; if (keepInsertion && cancelledInsertion.current) onClose(); else after(); }
     catch (reason) { if (alive.current) { closed.current = false; setClosing(false); setError(errorMessage(reason)); } }
     finally { insertionClosing.current = false; }
@@ -81,12 +85,12 @@ export function SavedQueriesDialog({ onClose, onHistory, insertion, services: io
     finally { if (active.current === taskId) active.current = undefined; }
   }
   /** 显式第一页重新读取组织版本；全文、组范围和原错误策略共同生效。 */
-  function load(next = false, requested = criteriaRef.current, expected = renderEpoch) { if (editRef.current) return; return run(async ticket => { let value = requested; if (!next) { const raw = await io.request('queries.organizationGet', {}); if (!owns(ticket)) return; value = { ...requested, group: publish(raw, requested.group) }; setNeedsRefresh(false); } await readPage(ticket, value, next); }, expected); }
+  function load(next = false, requested = criteriaRef.current, expected = renderEpoch) { if (editRef.current || renameRef.current) return; return run(async ticket => { let value = requested; if (!next) { const raw = await io.request('queries.organizationGet', {}); if (!owns(ticket)) return; value = { ...requested, group: publish(raw, requested.group) }; setNeedsRefresh(false); } await readPage(ticket, value, next); }, expected); }
   useEffect(() => {
     alive.current = true; closed.current = false; const ticket = epoch.current;
     // StrictMode的旧setup尚未投递时只留本轮启动权；cleanup不消费父传入的子权限。
     void Promise.resolve(pending.current).then(() => { if (owns(ticket)) void load(false, criteriaRef.current, ticket); });
-    return () => { alive.current = false; closed.current = true; epoch.current++; editRef.current = undefined; void cleanup().catch(reason => useWorkspace.getState().notify(t.cleanupFailed + errorMessage(reason), true)); };
+    return () => { alive.current = false; closed.current = true; epoch.current++; editRef.current = undefined; renameRef.current = undefined; void cleanup().catch(reason => useWorkspace.getState().notify(t.cleanupFailed + errorMessage(reason), true)); };
   }, []);
   /** 草稿改变只撤销旧事件，不自动查询或释放旧页。 */
   function draft(action: () => void) { if (!editable()) return; epoch.current++; action(); }
@@ -102,6 +106,40 @@ export function SavedQueriesDialog({ onClose, onHistory, insertion, services: io
   function apply(preview: SavedQueryOrganizationPreview, origin: Edit) {
     if (closed.current || locked.current || editRef.current !== origin || epoch.current !== origin.epoch || organizationRef.current !== origin.snapshot || preview.input.expectedRevision !== origin.snapshot.revision) return;
     void run(async ticket => { try { const raw = await io.request('queries.organizationApply', preview.input); if (!owns(ticket)) return; const nextGroup = publish(raw, criteriaRef.current.group); editRef.current = undefined; setEditing(undefined); selectedRef.current = new Map(); setSelected(selectedRef.current); setNeedsRefresh(false); await readPage(ticket, { ...criteriaRef.current, group: nextGroup }); if (owns(ticket)) setNotice(text.saved); } catch (reason) { if (owns(ticket)) { editRef.current = undefined; setEditing(undefined); setNeedsRefresh(true); setError(errorMessage(reason)); } } }, origin.epoch);
+  }
+  /** 只捕获所见记录的名称和摘要，不读取完整SQL或借用当前打开查询。 */
+  function beginRename(item: SavedQueryPageEntry): void {
+    if (!editable() || needsRefresh || !reply?.items.includes(item) || criteriaKey(criteriaRef.current) !== applied) return;
+    const origin: RenameEdit = { source: Object.freeze({ id: item.query.id, digest: item.digest, name: item.query.name }), page: reply, criteria: applied, epoch: ++epoch.current };
+    renameRef.current = origin; setRenaming(origin); setError(''); setNotice('');
+  }
+  /** 取消只撤销当前名称草稿，旧面板回调不能关闭后来打开的编辑器。 */
+  function cancelRename(origin: RenameEdit): void {
+    if (locked.current || renameRef.current !== origin || !owns(origin.epoch)) return;
+    epoch.current++; renameRef.current = undefined; setRenaming(undefined);
+  }
+  /** 名称变更独立提交；提交成功而刷新失败时如实保留已保存事实，不能重放重命名。 */
+  function applyRename(name: string, origin: RenameEdit): void {
+    if (locked.current || renameRef.current !== origin || !owns(origin.epoch) || pageView.current.reply !== origin.page || pageView.current.needsRefresh || criteriaKey(criteriaRef.current) !== origin.criteria) return;
+    const input = savedQueryRenameSchema.safeParse({ id: origin.source.id, digest: origin.source.digest, name });
+    if (!input.success || name === origin.source.name) { setError(input.success ? renameText.noChange : renameText.invalidName); return; }
+    void run(async ticket => {
+      let committed = false;
+      try {
+        await io.request('queries.renameChecked', input.data); committed = true;
+        if (!owns(ticket)) return;
+        renameRef.current = undefined; setRenaming(undefined); setNeedsRefresh(true);
+        const next = new Map(selectedRef.current); next.delete(origin.source.id); selectedRef.current = next; setSelected(next);
+        const raw = await io.request('queries.organizationGet', {}); if (!owns(ticket)) return;
+        const group = publish(raw, criteriaRef.current.group);
+        await readPage(ticket, { ...criteriaRef.current, group });
+        if (owns(ticket)) { setNeedsRefresh(false); setNotice(renameText.renamed); }
+      } catch (reason) {
+        if (!owns(ticket)) return;
+        renameRef.current = undefined; setRenaming(undefined); setNeedsRefresh(true); setError(errorMessage(reason));
+        if (committed) setNotice(renameText.refreshRequired);
+      }
+    }, origin.epoch);
   }
   /** 丢失来源不回退其它连接；打开仅重读摘要对应原文，不执行SQL。 */
   function target(item: SavedQueryPageEntry) { return targets.has(item.query.id) ? targets.get(item.query.id)! : connections.some(value => value.id === item.query.connectionId) ? item.query.connectionId! : ''; }
@@ -137,9 +175,9 @@ export function SavedQueriesDialog({ onClose, onHistory, insertion, services: io
   }
   function remove(item: SavedQueryPageEntry) { if (!editable()) return; void run(async ticket => { await io.request('queries.deleteChecked', { id: item.query.id, digest: item.digest }); if (!owns(ticket)) return; const next = new Map(selectedRef.current); next.delete(item.query.id); selectedRef.current = next; setSelected(next); const raw = await io.request('queries.organizationGet', {}); if (!owns(ticket)) return; const nextGroup = publish(raw, criteriaRef.current.group); await readPage(ticket, { ...criteriaRef.current, group: nextGroup }); }); }
   function databaseLabel(item: SavedQueryPageEntry) { const value = item.query, context = value.databaseContext; return context ? context.state === 'known' ? context.database || queryContextZh.none : queryContextZh.unknown : value.database ? value.database + ' (' + queryContextZh.legacy + ')' : queryContextZh.legacy; }
-  const blocked = busy || closing || !!editing, changed = criteriaKey(criteria) !== applied, tree = organization ? savedQueryOrganizationTree(organization) : [], hidden = [...selected.keys()].filter(id => !reply?.items.some(item => item.query.id === id)).length, selectedGroup = group.kind === 'group' ? group.id : undefined;
+  const blocked = busy || closing || !!editing || !!renaming, changed = criteriaKey(criteria) !== applied, tree = organization ? savedQueryOrganizationTree(organization) : [], hidden = [...selected.keys()].filter(id => !reply?.items.some(item => item.query.id === id)).length, selectedGroup = group.kind === 'group' ? group.id : undefined;
   const pageSelected = reply?.items.filter(item => selected.has(item.query.id)).length ?? 0, pageAllSelected = !!reply?.items.length && pageSelected === reply.items.length, pageMixed = pageSelected > 0 && !pageAllSelected;
-  return <Modal title={zh.activity.text003} wide onClose={() => void close()}>
+  return <Modal title={zh.activity.text003} wide onClose={() => { const origin = renameRef.current; if (origin) cancelRename(origin); else void close(); }}>
     <div className="dialog-tabs"><button disabled={closing} onClick={() => void close(onHistory)}><Clock3 size={14}/>{zh.activity.text004}</button><button className="selected"><FileCode2 size={14}/>{zh.activity.text005}</button></div>
     <div className="modal-content saved-query-pages"><p className="muted small">{text.metadataOnly}</p><p className="muted small">{insertionText.hint}</p><p aria-live="polite">{insertion ? insertionText.target(insertion.title) : insertionText.unavailable}{insertion && !insertAvailable && <span> · {insertionText.changed}</span>}</p><div className="saved-query-organization-layout">
       <details className="saved-query-organization-tree" open><summary>{text.title}</summary><nav aria-label={text.tree}>
@@ -156,11 +194,11 @@ export function SavedQueriesDialog({ onClose, onHistory, insertion, services: io
         {reply && <p role="status">{formatText(t.summary, batch, reply.scanned, reply.matched, reply.failed)} {reply.stoppedOnError ? t.failedStop : reply.cursor ? t.more : t.done}</p>}
         <div className="history-list">{reply?.items.map(item => <article className="history-card" key={item.query.id}><div><label><input type="checkbox" aria-label={text.select(item.query.name)} disabled={blocked} checked={selected.has(item.query.id)} onChange={event => choose(item, event.target.checked)}/><strong>{item.query.name}</strong></label><span className="grow"/><span className="muted small">{connections.find(profile => profile.id === item.query.connectionId)?.name || t.sourceMissing} / {databaseLabel(item)}</span></div>
           <pre>{item.sqlPreview}{item.previewTruncated ? '…' : ''}</pre>{item.previewTruncated && <p className="muted small">{formatText(t.preview, item.sqlUnits)}</p>}<label className="inline-field">{t.choose}<select aria-label={formatText(t.connection, item.query.name)} value={target(item)} disabled={blocked} onChange={event => draft(() => setTargets(current => new Map(current).set(item.query.id, event.target.value)))}><option value="">{t.choose}</option>{connections.map(profile => <option value={profile.id} key={profile.id}>{profile.name}</option>)}</select></label>
-          <footer><span className="muted small">{new Date(item.query.updatedAt).toLocaleString('zh-CN')}</span><span className="grow"/><button className="icon-button" disabled={blocked} title={zh.activity.text009} aria-label={zh.activity.text009} onClick={() => remove(item)}><Trash2 size={14}/></button><button disabled={blocked || changed || needsRefresh || !insertAvailable} onClick={() => insert(item)}>{insertionText.insert}</button><button disabled={blocked || !target(item)} onClick={() => open(item)}>{zh.activity.text010}<ArrowUpRight size={14}/></button></footer>
+          <footer><span className="muted small">{new Date(item.query.updatedAt).toLocaleString('zh-CN')}</span><span className="grow"/><button disabled={blocked || changed || needsRefresh} onClick={() => beginRename(item)}>{renameText.rename}</button><button className="icon-button" disabled={blocked} title={zh.activity.text009} aria-label={zh.activity.text009} onClick={() => remove(item)}><Trash2 size={14}/></button><button disabled={blocked || changed || needsRefresh || !insertAvailable} onClick={() => insert(item)}>{insertionText.insert}</button><button disabled={blocked || !target(item)} onClick={() => open(item)}>{zh.activity.text010}<ArrowUpRight size={14}/></button></footer>
         </article>)}{reply && !reply.items.length && <Empty title={t.empty} text={t.emptyHint}/>}</div>
         {reply?.failures.length ? <details><summary>{t.failures} ({reply.failures.length})</summary>{reply.failures.map((failure, index) => <p key={index}>{failure.id}：{failure.message}</p>)}</details> : null}<p className="muted small">{t.openHint}</p>
       </div>
-    </div>{editing && <SavedQueryOrganizationEditor snapshot={editing.snapshot} edit={editing.value} selected={editing.selected} busy={busy || closing} onCancel={cancelEdit} onConfirm={preview => apply(preview, editing)}/>}</div>
+    </div>{renaming && <SavedQueryRenameEditor key={renaming.epoch} origin={renaming.source} busy={busy || closing} onCancel={() => cancelRename(renaming)} onConfirm={name => applyRename(name, renaming)}/ >}{editing && <SavedQueryOrganizationEditor snapshot={editing.snapshot} edit={editing.value} selected={editing.selected} busy={busy || closing} onCancel={cancelEdit} onConfirm={preview => apply(preview, editing)}/>}</div>
     <footer className="modal-footer"><button disabled={blocked} onClick={() => void load()}>{t.refresh}</button><button disabled={blocked || needsRefresh || !reply?.cursor || changed} onClick={() => void load(true)}>{t.next}</button>{busy && <button disabled={closing || !active.current} onClick={() => { if (active.current) void io.request('query.cancel', { taskId: active.current }).catch(reason => setError(errorMessage(reason))); }}>{t.cancel}</button>}<span className="grow"/><button disabled={closing} onClick={() => void close()}>{zh.common.close}</button></footer>
   </Modal>;
 }

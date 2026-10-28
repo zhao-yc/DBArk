@@ -50,6 +50,7 @@ export const publicCommands: Record<Command, true> = {
   'search.structure':true,'search.structureContinue':true,'search.release':true,
   'search.savedQueries':true,'search.savedQueriesContinue':true,'search.savedQueriesRelease':true,'queries.read':true,'queries.readText':true,
   'queries.page':true,'queries.pageContinue':true,'queries.pageRelease':true,'queries.deleteChecked':true,
+  'queries.renameChecked': true,
   'history.page':true,'history.pageContinue':true,'history.pageRelease':true,'history.read':true,'history.readError':true,
   'history.deletePreview': true, 'history.deleteApply': true, 'history.deleteRelease': true,
   'search.dataStart':true,'search.dataNext':true,'search.dataRelease':true,

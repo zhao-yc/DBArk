@@ -4,6 +4,7 @@ import { SavedQueriesDialog } from '../../src/renderer/components/SavedQueriesDi
 import { SavedQueryOrganizationEditor } from '../../src/renderer/components/SavedQueryOrganizationEditor';
 import { savedQueryOrganizationZh as text } from '../../src/renderer/locales/savedQueryOrganization.zh-CN';
 import { savedQueryPagesZh as pageText } from '../../src/renderer/locales/savedQueryPages.zh-CN';
+import { savedQueryRenameZh as renameText } from '../../src/shared/savedQueryRename';
 import type { SavedQueryOrganizationSnapshot } from '../../src/shared/savedQueryOrganization';
 import { planSavedQueryGroups, summarizeSavedQueryOrganization } from '../../src/shared/savedQueryOrganization';
 import { memoryDocument, MemoryEvent } from '../fixtures/memory-dom';
@@ -46,6 +47,57 @@ async function check(label: string, checked = true) { const node = field(label);
 const calls = (f: ReturnType<typeof fixture>, command: string) => f.request.mock.calls.filter(call => call[0] === command);
 /** 取React实际附着的旧回调，避免移除节点不冒泡造成假阳性。 */
 function callback(node: any, event: string) { const key = Object.keys(node).find(name => name.startsWith('__reactProps$')); if (!key || typeof node[key][event] !== 'function') throw Error('React真实事件端口不存在'); return node[key][event] as (event?: any) => void; }
+
+it('重命名只提交原id摘要及新名，刷新原范围并仅撤销本条旧选择', async () => {
+  const f = fixture(), normal = f.request.getMockImplementation()!; let name = '';
+  f.request.mockImplementation(async (command, value) => {
+    if (command === 'queries.renameChecked') { name = value.name; return; }
+    const result = await normal(command, value);
+    return command === 'queries.page' && name ? { ...result, items: result.items.map((item: any) => item.query.id === 'q0' ? { ...item, query: { ...item.query, name }, digest: 'b'.repeat(64) } : item) } : result;
+  });
+  await mount(f); await check(text.select('查询0')); await check(text.select('查询1'));
+  await click(renameText.rename); await input(renameText.newName, '  重命名🚢  ');
+  expect(calls(f, 'queries.renameChecked')).toHaveLength(0); await click(renameText.confirm);
+  expect(calls(f, 'queries.renameChecked').map(call => call[1])).toEqual([{ id: 'q0', digest: '0'.repeat(64), name: '  重命名🚢  ' }]);
+  expect(calls(f, 'queries.page')).toHaveLength(2); expect(calls(f, 'queries.organizationGet')).toHaveLength(2);
+  expect(calls(f, 'queries.pageRelease')).toHaveLength(1); expect(doc.body.textContent).toContain(renameText.renamed);
+  expect(doc.body.textContent).toContain(text.selected(1, 0)); expect(field(text.select('查询1')).checked).toBe(true);
+  expect(doc.querySelectorAll('strong').some(node => node.textContent === '  重命名🚢  ')).toBe(true);
+  expect(f.request.mock.calls.some(call => ['queries.read', 'queries.readText', 'queries.save', 'query.execute'].includes(call[0]))).toBe(false);
+});
+it('待完成重命名双击只提交一次，关闭父列表等待原Promise及原cursor释放', async () => {
+  const f = fixture(), normal = f.request.getMockImplementation()!, wait = deferred<void>();
+  f.request.mockImplementation(async (command, value) => command === 'queries.renameChecked' ? wait.promise : normal(command, value));
+  await mount(f); await click(renameText.rename); await input(renameText.newName, '新名');
+  const confirm = callback(button(renameText.confirm), 'onClick'); await act(async () => { confirm(); confirm(); });
+  expect(calls(f, 'queries.renameChecked')).toHaveLength(1); expect(button(renameText.cancel).disabled).toBe(true);
+  await click('关闭'); expect(f.onClose).not.toHaveBeenCalled();
+  await act(async () => wait.resolve()); expect(f.onClose).toHaveBeenCalledTimes(1);
+  expect(calls(f, 'queries.pageRelease')).toHaveLength(1); expect(calls(f, 'queries.page')).toHaveLength(1);
+});
+it('原摘要拒绝后保留原页并要求刷新，不重放；旧确认不能作用于新编辑器', async () => {
+  const f = fixture(), normal = f.request.getMockImplementation()!;
+  f.request.mockImplementation(async (command, value) => { if (command === 'queries.renameChecked') throw Error(renameText.stale); return normal(command, value); });
+  await mount(f); await click(renameText.rename); await input(renameText.newName, '本地新名');
+  const old = callback(button(renameText.confirm), 'onClick'); await click(renameText.confirm);
+  expect(doc.body.textContent).toContain(renameText.stale); expect(doc.body.textContent).toContain('查询0');
+  expect(button(renameText.rename).disabled).toBe(true); await act(async () => old()); expect(calls(f, 'queries.renameChecked')).toHaveLength(1);
+  await click(pageText.refresh); await click(renameText.rename); await input(renameText.newName, '另一个新名');
+  await act(async () => old()); expect(calls(f, 'queries.renameChecked')).toHaveLength(1);
+});
+it('重命名已提交但列表刷新失败明确显示已保存，不再执行同一重命名', async () => {
+  const f = fixture(), normal = f.request.getMockImplementation()!; let committed = false;
+  f.request.mockImplementation(async (command, value) => { if (command === 'queries.renameChecked') { committed = true; return; } if (command === 'queries.organizationGet' && committed) throw Error('本例刷新失败'); return normal(command, value); });
+  await mount(f); await click(renameText.rename); await input(renameText.newName, '已保存新名'); await click(renameText.confirm);
+  expect(doc.body.textContent).toContain(renameText.refreshRequired); expect(doc.body.textContent).toContain('本例刷新失败');
+  expect(button(renameText.rename).disabled).toBe(true); expect(calls(f, 'queries.renameChecked')).toHaveLength(1);
+});
+it('搜索草稿变化撤销旧重命名入口，取消后旧确认也不能复活', async () => {
+  const f = fixture(); await mount(f); const oldEntry = callback(button(renameText.rename), 'onClick');
+  await input(pageText.search, '新条件'); await act(async () => oldEntry()); expect(doc.querySelector('[aria-label="新查询名称"]')).toBeNull();
+  await click(pageText.searchButton); await click(renameText.rename); await input(renameText.newName, '待取消'); const oldConfirm = callback(button(renameText.confirm), 'onClick');
+  await click(renameText.cancel); await act(async () => oldConfirm()); expect(calls(f, 'queries.renameChecked')).toHaveLength(0);
+});
 
 it('初始原概要页、唯一status与树计数真实可达，不读取全量SQL或执行任务', async () => { const f = fixture(); await mount(f); expect(calls(f, 'queries.page')[0][1]).toEqual({ taskId: expect.any(String), search: '', onError: 'continue' }); expect(doc.querySelectorAll('article')).toHaveLength(25); expect(doc.querySelectorAll('[role="status"]')).toHaveLength(1); expect(button(text.selectGroup('根 / 子')).textContent).toContain('2'); expect(f.request.mock.calls.map(call => call[0])).toEqual(['queries.organizationGet', 'queries.page']); });
 it('父组包含/不含子组与原完整文字搜索共同生效，草稿不自动请求且续页只有原cursor', async () => { const f = fixture(); await mount(f); await click(text.selectGroup('根')); expect(calls(f, 'queries.page').at(-1)![1].group).toEqual({ kind: 'group', id: 'root', includeDescendants: true }); await check(text.includeDescendants, false); expect(calls(f, 'queries.page').at(-1)![1].group.includeDescendants).toBe(false); const old = f.request.mock.calls.length; await input(pageText.search, '完整SQL尾部'); expect(f.request.mock.calls).toHaveLength(old); expect(button(pageText.next).disabled).toBe(true); await click(pageText.searchButton); expect(calls(f, 'queries.page').at(-1)![1]).toMatchObject({ search: '完整SQL尾部', group: { id: 'root', includeDescendants: false } }); await click(pageText.next); expect(Object.keys(calls(f, 'queries.pageContinue')[0][1]).sort()).toEqual(['cursor', 'taskId']); await click(text.unfiled); expect(calls(f, 'queries.page').at(-1)![1].group).toEqual({ kind: 'unfiled' }); });

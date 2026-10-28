@@ -41,6 +41,7 @@ import { workbenchSaveSchema, workbenchTargetSchema } from './workbench';
 import { schemaCompareInputSchema, schemaComparePreviewSchema, schemaCompareReleaseSchema } from './schemaCompare';
 import { querySaveContentSchema, queryUpdateSourceSchema, querySourceBindingSchema } from './queryBinding';
 import{savedQueryPageInputSchema,savedQueryPageNextSchema,savedQueryPageReleaseSchema,savedQueryDeleteCheckedSchema}from'./savedQueryPages';
+import { savedQueryRenameSchema } from './savedQueryRename';
 import{historyPageInputSchema,historyReadSchema,historyErrorReadSchema}from'./historyPages';
 import { historyDeletePreviewInputSchema, historyDeleteApplyInputSchema, historyDeleteReleaseInputSchema } from './historyDelete';
 import{localSqlPageNextSchema,localSqlPageReleaseSchema}from'./localSqlPages';
@@ -206,6 +207,7 @@ export const commandSchemas: Record<Command, z.ZodType> = {
   'search.structure':structureSearchInputSchema,
   'search.savedQueries':savedQuerySearchInputSchema,'search.savedQueriesContinue':savedQuerySearchNextSchema,'search.savedQueriesRelease':savedQuerySearchReleaseSchema,'queries.read':savedQueryReadSchema,'queries.readText':savedQueryReadTextSchema,
   'queries.page':savedQueryPageInputSchema,'queries.pageContinue':savedQueryPageNextSchema,'queries.pageRelease':savedQueryPageReleaseSchema,'queries.deleteChecked':savedQueryDeleteCheckedSchema,
+  'queries.renameChecked': savedQueryRenameSchema,
   'search.structureContinue':structureSearchContinueSchema,
   'search.release':structureSearchReleaseSchema,
   'search.dataStart':dataSearchInputSchema,'search.dataNext':dataSearchNextSchema,'search.dataRelease':dataSearchReleaseSchema,
