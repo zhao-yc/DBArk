@@ -14,6 +14,7 @@ import { routineInvocationZh } from './routineInvocation.zh-CN';
 import { tableDraftSaveSchema, tableDraftOpenSchema, tableDraftVerifySchema } from './tableDraftCommands';
 import { externalObjectUriEmptySchema, externalObjectUriIdSchema } from './externalObjectUris';
 import { queryTransactionSettingsReadSchema, queryTransactionSettingsApplySchema } from './queryTransactionSettings';
+import { queryDatabaseSwitchSchema } from './queryDatabaseSwitch';
 import { databaseDefaultEncodingAcknowledgements } from './databaseDefaultEncoding';
 import { assertSqlKeywordCaseWrite } from './sqlKeywordCase';
 import { snippetTransferSchemas } from './snippetTransfer';
@@ -250,6 +251,7 @@ export const commandSchemas: Record<Command, z.ZodType> = {
   'query.transaction': z.object({ sessionId: id, action: z.enum(['begin','commit','rollback']) }).strict(),
   'query.transactionSettings.read': queryTransactionSettingsReadSchema,
   'query.transactionSettings.apply': queryTransactionSettingsApplySchema,
+  'query.databaseSwitch': queryDatabaseSwitchSchema,
   'table.page': guardedTablePage(tablePage.safeExtend({ copySource: z.boolean().optional(), taskId: z.string().uuid().optional() }).superRefine((input, context) => {
     if (input.copySource && !input.taskId || input.taskId && !input.copySource) context.addIssue({ code: 'custom', message: '来源表页必须同时显式启用copySource并提供独立任务UUID' });
   })),

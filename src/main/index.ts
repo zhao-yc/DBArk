@@ -21,6 +21,7 @@ import { QueryInsertExports } from './queryInsertExports';
 import { resultSqlZh } from '../shared/resultSql.zh-CN';
 import { connectionOrganizationZh } from '../shared/connectionOrganization.zh-CN';
 import { tableCreateMessages } from '../shared/tableCreate';
+import { assertQueryDatabaseSwitchOutput, queryDatabaseSwitchMessages } from '../shared/queryDatabaseSwitch';
 import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, safeStorage } from 'electron';
 import { copyInsertSql } from './copyInsertSql';
 import { join, basename } from 'node:path';
@@ -754,6 +755,12 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
   // 纯能力释放先同步撤销父及关联预览，退出/保存锁不得阻止精确回收。
   if (command === 'schema.columns.release') return columnsMain.release(columnRequest!, input);
   const requestConnectionId = structureToken?.connectionId ?? input.connectionId ?? sessions.get(input.sessionId)?.connectionId ?? (command.startsWith('connections.') ? input.id : undefined);
+  // 切库只绑定Main已登记的原会话，不能借缺失会话或客户端连接字段走新连接。
+  const databaseSwitchSession = command === 'query.databaseSwitch' ? sessions.get(input.sessionId) : undefined;
+  if (command === 'query.databaseSwitch') {
+    if (shuttingDown) throw Error(queryDatabaseSwitchMessages.shuttingDown);
+    if (!databaseSwitchSession) throw Error(queryDatabaseSwitchMessages.sessionMissing);
+  }
   // 入向关联只接收本次连接修订的结果；迟到响应不能成为新配置下的目录或数据。
   const incomingReferenceRead = command === 'table.incomingReferences' || command === 'table.childReferencePage';
   const incomingReferenceRevision = incomingReferenceRead ? store.connectionRevision() : undefined;
@@ -1073,7 +1080,7 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
   const startedAt = new Date().toISOString(); const start = Date.now();
   if (taskId) {
     if (tasks.has(taskId)||completionTasks.has(taskId)||savedQueryPages?.owns(taskId)||historyPages?.owns(taskId)||(typeof historyDelete!=='undefined'&&historyDelete?.owns(taskId))) throw new Error('任务编号已使用，请重新发起操作');
-    const task: TaskRecord = { id: taskId, kind: command, status: 'running', progress: 0, message: tableValueOptionsRead ? '正在读取服务器不同值' : '正在执行', startedAt };
+    const task: TaskRecord = { id: taskId, kind: command, status: 'running', progress: 0, message: tableValueOptionsRead ? '正在读取服务器不同值' : command === 'query.databaseSwitch' ? '正在切换默认数据库' : '正在执行', startedAt };
     tasks.set(taskId, task); store.saveTask(task);
     if (tableValueOptionsRead) tableValueOptionsAdmitted = true;
   }
@@ -1096,6 +1103,11 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
     // 文件路径归一化期间的取消在主进程捕获，不能丢失后继续发送用户 SQL。
     if (preparing.cancelled) throw new Error('任务在准备阶段已取消，尚未发送用户 SQL；原目标文件保持不变');
     connectionConfig.assertAvailable(requestConnectionId);
+    // 原会话等待准备时已关闭或替换则零投递；已发送后的确认仍归原task，不重放USE。
+    if (command === 'query.databaseSwitch') {
+      if (shuttingDown) throw Error(queryDatabaseSwitchMessages.shuttingDown);
+      if (sessions.get(input.sessionId) !== databaseSwitchSession) throw Error(queryDatabaseSwitchMessages.sessionMissing);
+    }
     if(command==='query.exportStream'&&input.format==='sql')queryInsertExports.assert(input.taskId);
     if (command === 'files.exportResult' && input.format === 'sql') columnsMain.assertCapturedOwner(columns);
   // 新建表在第一次等待前消费主进程能力；目的和修订仍由引擎独立核验。
@@ -1120,6 +1132,15 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
     if (tableFilteredExport) tableFilteredExportSubmitted = true;
     sentToEngine = true;
     let result = command==='search.savedQueries'?await savedQuerySearches.start(input):command==='search.savedQueriesContinue'?await savedQuerySearches.next(input):await broker.request(command, input);
+    // 专用回包必须确认实际库及原任务；错误ACK不能进入通用completed分支。
+    if (command === 'query.databaseSwitch') {
+      try { assertQueryDatabaseSwitchOutput(result, input); }
+      catch (error) {
+        // 引擎事件先于Promise回包到达时，错误回执仍须撤销原任务的completed展示。
+        if (taskId && ['running', 'completed'].includes(tasks.get(taskId)?.status ?? '')) taskEvent({ taskId, status: 'failed', progress: 100, message: queryDatabaseSwitchMessages.unconfirmed });
+        throw error;
+      }
+    }
     if (filteredExportLease) result = await filteredExportLease.settle(result);
     if (incomingReferenceRead && (shuttingDown || incomingReferenceRevision !== store.connectionRevision())) throw Error('连接配置或客户端状态已变化，请重新打开子记录');
     if (tableStatisticsRead && (shuttingDown || tableStatisticsRevision !== store.connectionRevision())) throw Error('连接配置或客户端状态已变化，请重新统计表数据');
@@ -1163,7 +1184,7 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
     const terminalStatus = taskId ? tasks.get(taskId)?.status : undefined;
     if (tableFilteredExport && taskId && result.fileCommitted === true) taskEvent({ taskId, status: 'completed', progress: 100, rows: result.rows, message: tableFilteredExportText.summaryCompleted });
     else if (taskId && queryFailure && (terminalStatus === 'running' || terminalStatus === 'completed')) taskEvent({ taskId, status: 'failed', progress: 100, message: queryFailure.message });
-    else if (taskId && command!=='search.dataStart' && terminalStatus === 'running') taskEvent({ taskId, status: 'completed', progress: 100, message: tableValueOptionsRead ? '服务器不同值读取完成' : '执行完成' });
+    else if (taskId && command!=='search.dataStart' && terminalStatus === 'running') taskEvent({ taskId, status: 'completed', progress: 100, message: tableValueOptionsRead ? '服务器不同值读取完成' : command === 'query.databaseSwitch' ? '默认数据库已确认' : '执行完成' });
     if (history && pendingHistory?.executionSqlReceived) persistAuxiliary(() => store.addHistory({ ...history, elapsedMs: Date.now() - start, success: !queryFailure, ...(queryFailure ? { error: persistedQueryError(command, queryFailure.message) } : {}) }));
     return command === 'table.apply' ? { ...result, ...tableApplyReceipts.finish(taskId!) } : result;
   } catch (error) {

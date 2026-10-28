@@ -28,6 +28,7 @@ import type { TableIndexGetInput, TableIndexGetOutput, TableIndexPreviewInput, T
 import type { TableForeignKeyGetInput, TableForeignKeyGetOutput, TableForeignKeyPreviewInput, TableForeignKeyPreviewOutput, TableForeignKeyApplyInput, TableForeignKeyApplyOutput, TableForeignKeyApplyProgress, TableForeignKeyReleaseInput } from './tableForeignKeyTasks';
 import type { CompletionMetadataInput, CompletionMetadataOutput,CompletionSessionState } from './sqlCompletion';
 import type {QueryDatabaseContext} from './queryContext';
+import type { QueryDatabaseSwitchInput, QueryDatabaseSwitchOutput } from './queryDatabaseSwitch';
 import type {SessionObjectSnapshot,SessionObjectCompletion,SessionObjectReadResult} from './sessionObjects';
 import type {StructureSearchInput,StructureSearchContinue,StructureSearchPage} from './databaseSearch';
 import type {DataSearchInput,DataSearchNext,DataSearchReply,DataSearchProgress} from './dataSearch';
@@ -219,6 +220,7 @@ export interface CommandMap {
   'query.parameterNames': { input: { sessionId: string; sql: string }; output: QueryParameterNames };
   'query.sessionState': { input: { sessionId: string }; output: { transactionOpen: boolean; transactionKnown: boolean; broken: boolean } };
   'query.completionState':{input:{sessionId:string};output:CompletionSessionState};
+  'query.databaseSwitch': { input: QueryDatabaseSwitchInput; output: QueryDatabaseSwitchOutput };
   'query.temporaryState':{input:{sessionId:string};output:SessionObjectSnapshot};
   'query.temporaryCompletion':{input:{sessionId:string;database:string;prefix:string;kind:'objects'}|{sessionId:string;database:string;table:string;prefix:string;kind:'columns';details?:true};output:SessionObjectCompletion};
   'query.temporaryRead':{input:{sessionId:string;database:string;table:string;taskId:string};output:SessionObjectReadResult};

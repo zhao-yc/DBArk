@@ -89,6 +89,8 @@ import { explainLimits } from '../shared/explain';
 import { analyzeQuery } from './queryAnalyze';
 import { queryAnalyzeCapability } from '../shared/queryAnalyze';
 import { applyQueryTransactionSettings, readQueryTransactionSettings, queryTransactionSettingsMayHaveChanged, type QueryTransactionSettingsContext } from './queryTransactionSettings';
+import { switchQueryDatabase, queryDatabaseSwitchMayHaveChanged, type QueryDatabaseSwitchContext } from './queryDatabaseSwitch';
+import type { QueryDatabaseSwitchInput } from '../shared/queryDatabaseSwitch';
 import { consumeQueryFrames } from './queryStreamProtocol';
 import { prepareTableFilteredExport, type PreparedTableFilteredExport } from './tableFilteredExport';
 import { tableFilteredExportText } from '../shared/tableFilteredExport';
@@ -112,6 +114,8 @@ interface RunningTask {
   tableApply?: TableApplyEvidence;
   queryExport?: QueryExportProgress; fileCommitStarted?: boolean;
   transactionSettingsChangeSubmitted?: boolean;
+  databaseSwitchSubmitted?: boolean;
+  databaseSwitchConfirmed?: boolean;
   continueOnErrorMode?: boolean;
   collectWarningsMode?: boolean;
   sqlFileImport?: SqlFileImportEvidence;
@@ -396,6 +400,7 @@ export class Engine {
         const session=this.sessions.get(input.sessionId);if(!session)throw new Error('会话不存在，请重新打开标签页');
         return completionSessionState(session.managed,session.busy);
       }
+      case 'query.databaseSwitch': return this.withSession(input.sessionId, managed => this.runTask(input.taskId, managed, '切换本查询默认库', task => switchQueryDatabase(input as QueryDatabaseSwitchInput, this.databaseSwitchContext(input.sessionId, managed, task))));
       case 'query.executeParameterized': return this.withSession(input.sessionId, managed => this.runTask(input.taskId, managed, '执行参数查询', task => this.queryScript(task, input.sql, input.maxRows, input.parameters, undefined, 'parameterized', input.continueOnError, input.collectWarnings), outcome => outcome.failure ? { status: 'failed', message: outcome.failure.message } : undefined));
       case 'query.temporaryState':{
         const session=this.sessions.get(input.sessionId);if(!session?.managed.sessionObjects)throw new Error('会话对象目录不存在，请重新连接');
@@ -1034,7 +1039,10 @@ export class Engine {
         return { affectedRows: task.tableApply.serverReportedRows } as T;
       }
       if (task.fileImport?.failure) { await task.cancelPending?.catch(() => undefined); error = task.fileImport.failure; }
-      else if (task.transactionSettingsChangeSubmitted) {
+      else if (task.databaseSwitchSubmitted) {
+        try { await task.cancelPending; }
+        catch (cancelError) { error = new AggregateError([error, cancelError], '切换默认库执行与取消收尾失败'); }
+      } else if (task.transactionSettingsChangeSubmitted) {
         try { await task.cancelPending; }
         catch (cancelError) { error = new AggregateError([error, cancelError], '本会话设置执行与取消收尾失败'); }
       } else if (task.continueOnErrorMode) {
@@ -1045,6 +1053,10 @@ export class Engine {
         catch (cancelError) { error = new AggregateError([error, cancelError], '警告采集任务与取消收尾失败；原语句可能已执行，不会自动重试'); }
       } else await task.cancelPending;
       if (task.transactionSettingsChangeSubmitted) error = queryTransactionSettingsMayHaveChanged(error);
+      if (task.databaseSwitchSubmitted) {
+        if (!task.databaseSwitchConfirmed) invalidateCompletionDatabase(managed);
+        error = queryDatabaseSwitchMayHaveChanged(error);
+      }
       this.emit({ taskId: id, status: task.cancelled && !task.fileCommitStarted ? 'cancelled' : 'failed', progress: 0, message: this.errorMessage(error), ...(task.queryExport ? { queryExport: { ...task.queryExport } } : {}) });
       throw error;
     } finally {
@@ -1052,7 +1064,7 @@ export class Engine {
       if (task.fileImportConflict || task.sqlFileImport) await task.cancelPending?.catch(() => undefined);
       else if (task.tableApply?.commitAcknowledged || task.fileImport?.commitAcknowledged || task.fileImport?.failure) await task.cancelPending?.catch(() => undefined);
       // 本功能取消收尾的原错误已在catch合并；finally仍须释放任务，不能再次抛出覆盖终态。
-      else if (task.transactionSettingsChangeSubmitted) await task.cancelPending?.catch(() => undefined);
+      else if (task.transactionSettingsChangeSubmitted || task.databaseSwitchSubmitted) await task.cancelPending?.catch(() => undefined);
       else if (task.continueOnErrorMode) await task.cancelPending?.catch(() => undefined);
       else if (task.collectWarningsMode) await task.cancelPending?.catch(() => undefined);
       else await task.cancelPending;
@@ -1339,6 +1351,56 @@ export class Engine {
           }
           return result;
         } finally { task.inFlight = false; await task.cancelPending; }
+      },
+    };
+  }
+
+  /** 显式切库端口始终绑定原session、ManagedConnection和驱动对象，整段命令保留原任务取消边界。 */
+  private databaseSwitchContext(sessionId: string, managed: ManagedConnection, task: RunningTask): QueryDatabaseSwitchContext {
+    const native = managed.connection, threadId = native.threadId;
+    const check = () => {
+      this.checkCancelled(task);
+      if (this.sessions.get(sessionId)?.managed !== managed || task.managed !== managed || managed.connection !== native || native.threadId !== threadId || managed.broken || managed.signal?.aborted) throw Error('原查询物理会话已变化或断开，未自动重连或重试');
+    };
+    return {
+      check, physicalId: () => native.threadId,
+      completion: () => completionSessionState(managed, false),
+      protocol: () => ({ known: managed.transactionStateKnown === true, broken: managed.broken, serverStatus: managed.serverStatus }),
+      confirmDatabase: database => { managed.completionDatabase = initialCompletionDatabase(database); },
+      invalidateDatabase: () => invalidateCompletionDatabase(managed),
+      onSubmitted: () => { task.databaseSwitchSubmitted = true; },
+      onConfirmed: () => { task.databaseSwitchConfirmed = true; },
+      query: async (sql, submitted) => {
+        check();
+        let schemaReported = false;
+        const onPacket = (packet: { sql?: string; stateChanges?: { schema?: string | null } }) => { if (packet.sql === sql && typeof packet.stateChanges?.schema === 'string') schemaReported = true; };
+        native.on('dbark:session-state', onPacket);
+        task.inFlight = true; task.generation++;
+        // 以known标记隔离旧状态；ERR没有新状态位，但不能据此伪造物理连接已经断开。
+        managed.transactionStateKnown = false;
+        let commandError: unknown;
+        try {
+          // 投递标记与驱动调用之间没有await；此后任何失败都不能宣称旧库仍然有效。
+          submitted?.();
+          const result = await execute<unknown>(managed, sql);
+          if (result.rows && typeof result.rows === 'object' && !Array.isArray(result.rows) && 'serverStatus' in result.rows && Number.isInteger(result.rows.serverStatus) && Number(result.rows.serverStatus) >= 0 && Number(result.rows.serverStatus) <= 65535) {
+            if (Boolean(managed.transactionStateKnown) && managed.serverStatus !== Number(result.rows.serverStatus)) throw Error('原切库确认包与本条命令协议状态不一致');
+            managed.serverStatus = Number(result.rows.serverStatus); managed.transactionStateKnown = true;
+          }
+          // mysql2 Query.doneInsert的真实回调只有(error,rows)，仅完整非结果OK允许缺省fields。
+          const header = result.rows;
+          const controlAck = !!header && typeof header === 'object' && !Array.isArray(header) && 'affectedRows' in header && header.affectedRows === 0 && 'warningStatus' in header && header.warningStatus === 0 && 'serverStatus' in header && Number.isInteger(header.serverStatus) && Number(header.serverStatus) >= 0 && Number(header.serverStatus) <= 65535;
+          const fields = result.fields === undefined && controlAck ? [] : result.fields;
+          if (!Array.isArray(fields)) throw Error('原切库命令的列描述缺失或无效');
+          return { ...result, fields, schemaReported };
+        } catch (error) {
+          commandError = error; throw error;
+        } finally {
+          native.removeListener('dbark:session-state', onPacket);
+          task.inFlight = false;
+          try { await task.cancelPending; }
+          catch (cancelError) { if (commandError !== undefined) throw new AggregateError([commandError, cancelError], '原切库命令与取消控制收尾失败'); throw cancelError; }
+        }
       },
     };
   }

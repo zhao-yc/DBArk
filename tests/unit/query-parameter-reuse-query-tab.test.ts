@@ -57,7 +57,7 @@ function fixture() {
     uid: () => 'task-' + ++sequence, zh: { query: { text001: '空SQL' } },
     setParameterSource: (value: string | null) => { context.parameterSource = value; }, setBusy: (value: boolean) => { context.busy = value; if (!value && earlyConfirmation) context.confirm(); },
     setQueryRunning: vi.fn(), setError: vi.fn(), setSelectedPin: vi.fn(), setShowPinSql: vi.fn(), setOutcome: vi.fn(), setStream: vi.fn(), setResultIndex: vi.fn(), setTransaction: vi.fn(), setTransactionKnown: vi.fn(), setCompletionSession: vi.fn(),
-    useEffect: (effect: () => void) => effect(), sessionId: 's', busy: false, connectionVersion: 1,
+    databaseSwitchIntent: { current: null }, databaseSwitchDialog: null, useEffect: (effect: () => void) => effect(), sessionId: 's', busy: false, connectionVersion: 1,
   });
   const code = names.map(name => declarations.get(name)).join('\n') + `\nglobalThis.open=openParameters;globalThis.load=loadParameterNames;globalThis.submit=${executeBinding};globalThis.close=closeParameters;globalThis.getPort=()=>(${reuseBinding});globalThis.confirm=()=>{${completionEffect}};`;
   runInContext(ts.transpileModule(code, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText, context);
