@@ -1,0 +1,11 @@
+.table-checks-content { display: flex; flex-direction: column; gap: 10px; min-height: 0; max-height: calc(100vh - 185px); overflow: auto; padding: 16px; }
+.table-checks-content p { margin: 0; overflow-wrap: anywhere; }
+.table-checks-list { display: flex; flex-direction: column; gap: 8px; max-height: 320px; overflow: auto; }
+.table-checks-item { border: 1px solid var(--line); border-radius: 5px; padding: 10px; }
+.table-checks-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin: 6px 0; }
+.table-checks-expression { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 180px; overflow: auto; font-size: 12px; }
+.table-checks-editor { display: flex; flex-direction: column; gap: 10px; border: 1px solid var(--line); padding: 12px; }
+.table-checks-editor textarea { min-height: 100px; resize: vertical; }
+.table-checks-confirm { border: 2px solid var(--accent); padding: 12px; background: var(--surface); }
+.table-checks-confirm-fields { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+@media (max-width: 650px) { .table-checks-confirm-fields { grid-template-columns: 1fr; } }

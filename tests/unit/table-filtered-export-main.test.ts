@@ -5,6 +5,8 @@ import { createContext, runInContext } from 'node:vm';
 import ts from 'typescript';
 import { describe, expect, it, vi } from 'vitest';
 import { ColumnsMainCapabilities } from '../../src/main/columnsMainCapabilities';
+import { TableChecksMainCapabilities, tableChecksFailureProgress } from '../../src/main/tableChecksMainCapabilities';
+import { extractMainProductionBinding } from './main-production-function';
 import { TableFilteredExportOwners } from '../../src/main/tableFilteredExportOwners';
 import { TableFilteredUpdateOwners } from '../../src/main/tableFilteredUpdateOwners';
 import { SavedQuerySearchCancelled } from '../../src/main/savedQuerySearch';
@@ -36,7 +38,7 @@ function fixture() {
   const owner = columnsMain.capture({ sender: contents, senderFrame: frame } as any);
   let context: any;
   const owners = new TableFilteredExportOwners({ assert: value => columnsMain.assertCapturedOwner(value), same: (left, right) => columnsMain.sharesDocumentOwner(left, right), stop: async taskId => { const preparing = context.preparingTasks.get(taskId); if (preparing) { preparing.cancelled = true; return; } await request('query.cancel', { taskId }); } });
-  context = createContext({ filteredDeletes: emptyTableFilteredDeleteOwners(), Error, AggregateError, Date, Map, Set, tableFilteredExportText, tableFilteredExports: owners, columnsMain, files, resolveFileToken,
+  context = createContext({ filteredDeletes: emptyTableFilteredDeleteOwners(), Error, AggregateError, Date, Map, Set, TableChecksMainCapabilities, tableChecksFailureProgress, tableFilteredExportText, tableFilteredExports: owners, columnsMain, files, resolveFileToken,
     tableApplyReceipts: undefined, savedQueryPages: undefined, historyPages: undefined, savedQuerySearches: { has: () => false }, tasks,
     completionTasks: new Set(), pendingQueryHistory: new Map(), preparingTasks: new Map(), exportProgress: new Map(), structureProgress: new Map(), structureTokens: new Map(), sessions: new Map(), tablePresetReads: new Map(), tableValueOptionsConnectionOwners: new Map(), tableValueOptionsClosing: new Map(), shuttingDown: false,
     localSearchOperations: new Set(), queryFileOperations: new Set(), window, rendererURL: frame.url,
@@ -45,7 +47,7 @@ function fixture() {
   });
   // 未登记跨页写入能力；仍使用真实owner协调器，意外越界即由原broker哨兵拒绝。
   context.filteredUpdates = new TableFilteredUpdateOwners({ assert: value => columnsMain.assertCapturedOwner(value), same: (left, right) => columnsMain.sharesDocumentOwner(left, right), revision: () => revision, closing: () => false, available: assertAvailable, run: async () => { throw Error('导出夹具不登记填充任务'); }, release: async () => { throw Error('导出夹具不登记填充快照'); }, stop: async () => { throw Error('导出夹具不登记填充取消'); } });
-  runInContext(ts.transpileModule(source.slice(start, end) + '\nglobalThis.dispatch=dispatch;\nglobalThis.handleRequest=' + callback.getText(tree) + ';', { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText, context);
+  runInContext(ts.transpileModule(extractMainProductionBinding(source, 'tableChecksMain') + '\n' + source.slice(start, end) + '\nglobalThis.dispatch=dispatch;\nglobalThis.handleRequest=' + callback.getText(tree) + ';', { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText, context);
   return { context, tasks, events, saves, history, files, profile, request, acquire, releaseTarget, owners, owner, contents, assertAvailable,
     revise() { revision++; owners.observe(); }, lock(value: boolean) { locked = value; }, navigate() { contents.emit('did-navigate'); },
     dispatch: (value: any = input) => context.dispatch('table.exportFiltered', value, owner) as Promise<any>,

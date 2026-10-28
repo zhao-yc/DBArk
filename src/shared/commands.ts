@@ -32,6 +32,7 @@ export const publicCommands: Record<Command, true> = {
   'schema.tableCopyStructure.get': true, 'schema.tableCopyStructure.preview': true, 'schema.tableCopyStructure.apply': true, 'schema.tableCopyStructure.release': true,
   'schema.tableRename.get': true, 'schema.tableRename.preview': true, 'schema.tableRename.apply': true, 'schema.tableRename.release': true,
   'schema.tableAutoIncrement.get': true, 'schema.tableAutoIncrement.preview': true, 'schema.tableAutoIncrement.apply': true, 'schema.tableAutoIncrement.release': true,
+  'schema.tableChecks.get': true, 'schema.tableChecks.preview': true, 'schema.tableChecks.apply': true, 'schema.tableChecks.release': true,
   'schema.tableComment.get': true, 'schema.tableComment.preview': true, 'schema.tableComment.apply': true, 'schema.tableComment.release': true,
   'schema.tableTruncate.get': true, 'schema.tableTruncate.preview': true, 'schema.tableTruncate.apply': true, 'schema.tableTruncate.release': true,
   'workbench.get': true, 'workbench.save': true, 'workbench.resolve': true, 'workbench.copyUri': true,

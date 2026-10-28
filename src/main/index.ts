@@ -32,6 +32,7 @@ import { TableFilteredExportOwners, type TableFilteredExportMainLease } from './
 import { tableFilteredExportText } from '../shared/tableFilteredExport';
 import { EngineBroker } from './broker';
 import { ColumnsMainCapabilities, type ColumnsInvocation } from './columnsMainCapabilities';
+import { TableChecksMainCapabilities, tableChecksFailureProgress, type TableChecksInvocation } from './tableChecksMainCapabilities';
 import { ResultInsertOwners } from './resultInsertOwners';
 import type { ResultInsertPreviewInput, ResultInsertApplyInput, ResultInsertProgress } from '../shared/resultInsert';
 import { LocalStore } from './storage';
@@ -100,7 +101,7 @@ const exportReservations = new ExportReservations();
 const preparingTasks = new Map<string, { cancelled: boolean; failure?: string; connectionIds?: string[] }>();
 const exportProgress = new Map<string, QueryExportProgress>();
 const structureProgress = new Map<string, TableColumnApplyProgress>();
-const structureTokens = new Map<string, { purpose: 'columns' | 'indexes' | 'foreignKeys' | 'tableComment' | 'tableDrop' | 'tableTruncate' | 'tableDefaultEncoding' | 'tableCreate' | 'databaseCreate' | 'databaseDrop' | 'databaseDefaultEncoding' | 'tableCopyData' | 'tableCopyStructure' | 'tableRename' | 'tableAutoIncrement'; connectionId: string; expires: number; kind: 'snapshot' | 'preview'; snapshotId?: string }>();
+const structureTokens = new Map<string, { purpose: 'columns' | 'indexes' | 'foreignKeys' | 'tableChecks' | 'tableComment' | 'tableDrop' | 'tableTruncate' | 'tableDefaultEncoding' | 'tableCreate' | 'databaseCreate' | 'databaseDrop' | 'databaseDefaultEncoding' | 'tableCopyData' | 'tableCopyStructure' | 'tableRename' | 'tableAutoIncrement'; connectionId: string; expires: number; kind: 'snapshot' | 'preview'; snapshotId?: string }>();
 const tasks = new Map<string, TaskRecord>();
 const resultInsertProgress = new Map<string, ResultInsertProgress>();
 const filteredUpdateProgress = new Map<string, TableFilteredUpdateProgress>();
@@ -111,6 +112,7 @@ const lastPersist = new Map<string, number>();
 const rendererURL = process.env.DBARK_DEV_URL ?? pathToFileURL(join(__dirname, '../renderer/index.html')).href;
 // 字段令牌只绑定真实IPC文档；回收仍使用原引擎精确release，不扩其他结构业务。
 const columnsMain = new ColumnsMainCapabilities(structureTokens, { currentWindow: () => window, rendererURL, connectionRevision: () => store.connectionRevision(), assertAvailable: id => connectionConfig.assertAvailable(id), shuttingDown: () => shuttingDown, release: input => broker.request('schema.columns.release', input) });
+const tableChecksMain = new TableChecksMainCapabilities(structureTokens, { assertOwner: owner => columnsMain.assertCapturedOwner(owner), sameOwner: (left, right) => columnsMain.sharesDocumentOwner(left, right), revision: () => store.connectionRevision(), available: id => connectionConfig.assertAvailable(id), closing: () => shuttingDown, release: input => broker.request('schema.tableChecks.release', input) });
 // 系统输入只进入单槽队列；原连接和对象由正式元数据服务核验，不执行链接中的 SQL。
 const externalObjectUris = new ExternalObjectUris<ColumnsInvocation>({
   revision: () => store?.connectionRevision(),
@@ -165,7 +167,7 @@ const tableFilteredExports = new TableFilteredExportOwners({
   stop: async taskId => { const preparing = preparingTasks.get(taskId); if (preparing) { preparing.cancelled = true; return; } await broker.request('query.cancel', { taskId }); },
 });
 /** 仅真实Main调用持有发布门；成功结果直到IPC最后同步检查后才释放取消登记。 */
-type MainInvocation = ColumnsInvocation & { databaseDropRequest?: DatabaseDropMainRequest;databaseEncodingRevision?:number;snapshotSaved?:true;tableValueOptionsPublication?:()=>void;resultPresetPublication?:()=>void;presetPublication?:{pendingStop():Promise<unknown>|undefined;settledStop(stop:Promise<unknown>):void;assertCurrent():void;release():void}};
+type MainInvocation = ColumnsInvocation & { tableChecksRequest?: TableChecksInvocation; databaseDropRequest?: DatabaseDropMainRequest;databaseEncodingRevision?:number;snapshotSaved?:true;tableValueOptionsPublication?:()=>void;resultPresetPublication?:()=>void;presetPublication?:{pendingStop():Promise<unknown>|undefined;settledStop(stop:Promise<unknown>):void;assertCurrent():void;release():void}};
 /** 数据库属性能力也绑定真实文档；连接修订只由Main捕获，不接受渲染进程注入。 */
 const databaseEncodingOwners = new DatabaseDefaultEncodingOwners({
   assert: owner => { columnsMain.assertCapturedOwner(owner); if ((owner as MainInvocation).databaseEncodingRevision !== store.connectionRevision()) throw Error('连接配置已变化，请重新读取数据库属性'); },
@@ -412,7 +414,7 @@ function taskEvent(event: TaskEvent, deliverInsert=true): void {
   // 接收一次实际发送片段；独立布尔状态保证定位失败/发送前取消不能落全文或空SQL。
   if (pendingHistory?.currentStatement && !pendingHistory.executionSqlReceived && typeof event.executionSql === 'string' && event.executionSql.trim()) { pendingHistory.entry.sql = event.executionSql; pendingHistory.executionSqlReceived = true; }
   if (event.queryExport) exportProgress.set(event.taskId, { ...event.queryExport });
-  const structure = event.tableCreate ?? event.tableCopyData ?? event.tableCopyStructure ?? event.databaseDrop ?? event.databaseDefaultEncoding ?? event.databaseCreate ?? event.tableDrop ?? event.tableTruncate ?? event.tableAutoIncrement ?? event.tableRename ?? event.tableDefaultEncoding ?? event.tableComment ?? event.foreignKeyPatch ?? event.indexPatch ?? event.columnPatch;
+  const structure = event.tableCreate ?? event.tableCopyData ?? event.tableCopyStructure ?? event.databaseDrop ?? event.databaseDefaultEncoding ?? event.databaseCreate ?? event.tableDrop ?? event.tableTruncate ?? event.tableAutoIncrement ?? event.tableRename ?? event.tableDefaultEncoding ?? event.tableChecks ?? event.tableComment ?? event.foreignKeyPatch ?? event.indexPatch ?? event.columnPatch;
   if (structure) structureProgress.set(event.taskId, { ...structure });
   const current = tasks.get(event.taskId);
   if (current?.kind === 'table.exportFiltered') tableFilteredExports.observe(event.taskId);
@@ -719,7 +721,7 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
     const scope = { document: columns!.owner.document, assertCurrent: () => columnsMain.assertCapturedOwner(columns) };
     return queryFileOperation(() => queryFileSources.cancelTask(input.taskId, scope), true);
   }
-  const structurePurpose = command.startsWith('schema.databaseDrop.') ? 'databaseDrop' as const : command.startsWith('schema.databaseDefaultEncoding.') ? 'databaseDefaultEncoding' as const : command.startsWith('schema.tableCreate.') ? 'tableCreate' as const : command.startsWith('schema.tableCopyData.') ? 'tableCopyData' as const : command.startsWith('schema.tableCopyStructure.') ? 'tableCopyStructure' as const : command.startsWith('schema.databaseCreate.') ? 'databaseCreate' as const : command.startsWith('schema.tableRename.') ? 'tableRename' as const : command.startsWith('schema.tableAutoIncrement.') ? 'tableAutoIncrement' as const : command.startsWith('schema.tableDefaultEncoding.') ? 'tableDefaultEncoding' as const : command.startsWith('schema.tableDrop.') ? 'tableDrop' as const : command.startsWith('schema.tableTruncate.') ? 'tableTruncate' as const : command.startsWith('schema.tableComment.') ? 'tableComment' as const : command.startsWith('schema.columns.') ? 'columns' as const : command.startsWith('schema.indexes.') ? 'indexes' as const : command.startsWith('schema.foreignKeys.') ? 'foreignKeys' as const : undefined;
+  const structurePurpose = command.startsWith('schema.databaseDrop.') ? 'databaseDrop' as const : command.startsWith('schema.databaseDefaultEncoding.') ? 'databaseDefaultEncoding' as const : command.startsWith('schema.tableCreate.') ? 'tableCreate' as const : command.startsWith('schema.tableCopyData.') ? 'tableCopyData' as const : command.startsWith('schema.tableCopyStructure.') ? 'tableCopyStructure' as const : command.startsWith('schema.databaseCreate.') ? 'databaseCreate' as const : command.startsWith('schema.tableRename.') ? 'tableRename' as const : command.startsWith('schema.tableAutoIncrement.') ? 'tableAutoIncrement' as const : command.startsWith('schema.tableDefaultEncoding.') ? 'tableDefaultEncoding' as const : command.startsWith('schema.tableDrop.') ? 'tableDrop' as const : command.startsWith('schema.tableTruncate.') ? 'tableTruncate' as const : command.startsWith('schema.tableChecks.') ? 'tableChecks' as const : command.startsWith('schema.tableComment.') ? 'tableComment' as const : command.startsWith('schema.columns.') ? 'columns' as const : command.startsWith('schema.indexes.') ? 'indexes' as const : command.startsWith('schema.foreignKeys.') ? 'foreignKeys' as const : undefined;
   const structureCommand = structurePurpose !== undefined, structurePrefix = structurePurpose ? `schema.${structurePurpose}.` : '';
   for (const [token, value] of structureTokens) if (value.expires <= Date.now()) structureTokens.delete(token);
   const structureToken = command === 'schema.databaseDrop.apply' ? columns?.databaseDropRequest?.claimed?.main : command === structurePrefix + 'preview' ? structureTokens.get(input.snapshotId) : command === structurePrefix + 'apply' ? structureTokens.get(input.previewToken) : undefined;
@@ -729,6 +731,9 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
     if (value && value.purpose !== structurePurpose) throw new Error('结构令牌用途不符，未释放其他编辑器的预览');
   }
   const columnRequest = structurePurpose === 'columns' ? columnsMain.begin(command, input, columns) : undefined;
+  const checkRequest = structurePurpose === 'tableChecks' ? tableChecksMain.begin(command, input, columns) : undefined;
+  if (checkRequest && columns) columns.tableChecksRequest = checkRequest;
+  if (command === 'schema.tableChecks.release') return tableChecksMain.release(checkRequest!, input);
   // 纯能力释放先同步撤销父及关联预览，退出/保存锁不得阻止精确回收。
   if (command === 'schema.columns.release') return columnsMain.release(columnRequest!, input);
   const requestConnectionId = structureToken?.connectionId ?? input.connectionId ?? sessions.get(input.sessionId)?.connectionId ?? (command.startsWith('connections.') ? input.id : undefined);
@@ -1015,6 +1020,7 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
       return;
     }
     case 'table.draftVerify': connectionConfig.assertAvailable(input.connectionId); input = { ...input, profile: store.resolveConnection(input.connectionId) }; break;
+    case 'schema.tableChecks.get': input = { ...input, profile: store.resolveConnection(input.connectionId) }; break;
     case 'metadata.routineInvocation':
       // 保留原generic task编号、准备取消和终态事件，不借用任何查询会话。
       input = { ...input, profile: store.resolveConnection(input.connectionId) }; break;
@@ -1082,6 +1088,7 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
     // 令牌目标只来自可信引擎输出；修订在投递前同步读取，客户端不能注入或覆盖。
     if (structureCommand && command !== structurePrefix + 'release') input = { ...input, connectionRevision: store.connectionRevision() };
     if (columnRequest) columnsMain.beforeSend(columnRequest, input.connectionRevision);
+    if (checkRequest) tableChecksMain.beforeSend(checkRequest, input.connectionRevision);
     if (command === 'files.exportColumns' || command === 'files.export' && input.csvSelection) input = { ...input, connectionRevision: store.connectionRevision() };
     if (command.startsWith('schema.compare')) {
       input = { ...input, connectionRevision: store.connectionRevision() };
@@ -1100,6 +1107,9 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
       if (shuttingDown || routineInvocationRevision !== store.connectionRevision()) throw Error(routineInvocationMessages.stale);
     }
     if (tableValueOptionsRead) { assertTableValueOptionsPublication(); columns!.tableValueOptionsPublication = assertTableValueOptionsPublication; }
+    if (checkRequest && (command === 'schema.tableChecks.get' || command === 'schema.tableChecks.preview')) {
+      try { tableChecksMain.publish(checkRequest, result); } catch (error) { await tableChecksMain.rejectReply(checkRequest, error); }
+    }
     if (columnRequest && (command === 'schema.columns.get' || command === 'schema.columns.preview')) {
       try { columnsMain.publish(columnRequest, result); }
       catch (error) { await columnsMain.rejectReply(columnRequest, error); }
@@ -1111,7 +1121,7 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
     if (command === 'table.preview' && previewConnectionRevision !== store.connectionRevision()) throw Error('连接配置自预览开始后已变化，请重新预览');
     if (command === 'table.preview') return { ...result, ...tableApplyReceipts.preview({ connectionId: input.connectionId, connectionRevision: store.connectionRevision(), database: input.database, table: input.table }, input.changes, result) };
     if (structurePurpose === 'databaseDrop' && (command === structurePrefix + 'get' || command === structurePrefix + 'preview')) publishDatabaseDrop(input, result, columns!);
-    if (structurePurpose !== 'columns' && structurePurpose !== 'databaseDrop' && (command === structurePrefix + 'get' || command === structurePrefix + 'preview')) {
+    if (structurePurpose !== 'columns' && structurePurpose !== 'tableChecks' && structurePurpose !== 'databaseDrop' && (command === structurePrefix + 'get' || command === structurePrefix + 'preview')) {
       const token = command === structurePrefix + 'get' ? result.snapshotId : result.previewToken;
       if (structurePurpose === 'databaseDefaultEncoding' && (typeof token !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(token) || structureTokens.has(token))) throw Error('数据库默认编码返回了无效或重复能力，原有预览保持不变');
       if (structureTokens.size >= 128) {
@@ -1144,7 +1154,7 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
       return { affectedRows: confirmed.evidence.serverReportedRows, cleanupWarning: true, ...tableApplyReceipts.finish(taskId) };
     }
     const message = error instanceof Error ? error.message : '操作失败';
-    if (taskId && tasks.get(taskId)?.status === 'running') taskEvent({ taskId, status: preparing.cancelled || error instanceof SavedQuerySearchCancelled ? 'cancelled' : 'failed', progress: 0, message, ...(structureCommand ? { [structurePurpose === 'tableCreate' ? 'tableCreate' : structurePurpose === 'tableCopyData' ? 'tableCopyData' : structurePurpose === 'tableCopyStructure' ? 'tableCopyStructure' : structurePurpose === 'databaseDrop' ? 'databaseDrop' : structurePurpose === 'databaseDefaultEncoding' ? 'databaseDefaultEncoding' : structurePurpose === 'databaseCreate' ? 'databaseCreate' : structurePurpose === 'tableRename' ? 'tableRename' : structurePurpose === 'tableAutoIncrement' ? 'tableAutoIncrement' : structurePurpose === 'tableDefaultEncoding' ? 'tableDefaultEncoding' : structurePurpose === 'tableDrop' ? 'tableDrop' : structurePurpose === 'tableTruncate' ? 'tableTruncate' : structurePurpose === 'tableComment' ? 'tableComment' : structurePurpose === 'indexes' ? 'indexPatch' : structurePurpose === 'foreignKeys' ? 'foreignKeyPatch' : 'columnPatch']: { phase: 'connecting' as const, ddlSubmitted: sentToEngine && command === structurePrefix + 'apply', ddlCompleted: false, definitionVerified: false, outcome: sentToEngine && command === structurePrefix + 'apply' ? 'unknown' as const : 'not-sent' as const, ...structureProgress.get(taskId) } } : {}), ...(command === 'query.exportStream' ? { queryExport: { phase: 'preparing' as const, statementsCompleted: 0, rowsWritten: 0, bytesWritten: 0, fileCommitted: false, ...exportProgress.get(taskId), sqlMayHaveExecuted: sentToEngine, transactionKnown: false } } : {}) });
+    if (taskId && tasks.get(taskId)?.status === 'running') taskEvent({ taskId, status: preparing.cancelled || error instanceof SavedQuerySearchCancelled ? 'cancelled' : 'failed', progress: 0, message, ...(structureCommand ? { [structurePurpose === 'tableCreate' ? 'tableCreate' : structurePurpose === 'tableCopyData' ? 'tableCopyData' : structurePurpose === 'tableCopyStructure' ? 'tableCopyStructure' : structurePurpose === 'databaseDrop' ? 'databaseDrop' : structurePurpose === 'databaseDefaultEncoding' ? 'databaseDefaultEncoding' : structurePurpose === 'databaseCreate' ? 'databaseCreate' : structurePurpose === 'tableRename' ? 'tableRename' : structurePurpose === 'tableAutoIncrement' ? 'tableAutoIncrement' : structurePurpose === 'tableDefaultEncoding' ? 'tableDefaultEncoding' : structurePurpose === 'tableDrop' ? 'tableDrop' : structurePurpose === 'tableTruncate' ? 'tableTruncate' : structurePurpose === 'tableChecks' ? 'tableChecks' : structurePurpose === 'tableComment' ? 'tableComment' : structurePurpose === 'indexes' ? 'indexPatch' : structurePurpose === 'foreignKeys' ? 'foreignKeyPatch' : 'columnPatch']: { phase: 'connecting' as const, ddlSubmitted: sentToEngine && command === structurePrefix + 'apply', ddlCompleted: false, definitionVerified: false, outcome: sentToEngine && command === structurePrefix + 'apply' ? 'unknown' as const : 'not-sent' as const, ...structureProgress.get(taskId), ...(structurePurpose === 'tableChecks' ? tableChecksFailureProgress(sentToEngine && command === structurePrefix + 'apply', structureProgress.get(taskId)) : {}) } } : {}), ...(command === 'query.exportStream' ? { queryExport: { phase: 'preparing' as const, statementsCompleted: 0, rowsWritten: 0, bytesWritten: 0, fileCommitted: false, ...exportProgress.get(taskId), sqlMayHaveExecuted: sentToEngine, transactionKnown: false } } : {}) });
     if (history && pendingHistory?.executionSqlReceived) persistAuxiliary(() => store.addHistory({ ...history, elapsedMs: Date.now() - start, error: persistedQueryError(command, message) }));
     throw error;
   } finally { if (filteredExportLease) await filteredExportLease.release(); if (command === 'table.apply' && taskId) tableApplyReceipts.finish(taskId); if (command === structurePrefix + 'apply') structureTokens.delete(input.previewToken); if (taskId) { pendingQueryHistory.delete(taskId); preparingTasks.delete(taskId); exportProgress.delete(taskId); structureProgress.delete(taskId); } if(command==='query.exportStream'&&input.format==='sql')queryInsertExports.finish(input.taskId); releaseTarget?.(); }
@@ -1283,10 +1293,10 @@ function engineExited(): void {
       taskEvent({ taskId: task.id, status: progress.commitAcknowledged ? 'completed' : 'failed', progress: task.progress, message: progress.commitAcknowledged ? '数据库进程退出前已确认提交，请勿重复插入' : '数据库进程已退出，请核对目标表；原批次未自动重放', resultInsert: progress });
       continue;
     }
-    if (task.kind.startsWith('schema.databaseDrop.') || task.kind.startsWith('schema.tableCreate.') || task.kind.startsWith('schema.tableCopyData.') || task.kind.startsWith('schema.tableCopyStructure.') || task.kind.startsWith('schema.databaseDefaultEncoding.') || task.kind.startsWith('schema.databaseCreate.') || task.kind.startsWith('schema.tableRename.') || task.kind.startsWith('schema.tableAutoIncrement.') || task.kind.startsWith('schema.tableDefaultEncoding.') || task.kind.startsWith('schema.tableDrop.') || task.kind.startsWith('schema.tableTruncate.') || task.kind.startsWith('schema.tableComment.') || task.kind.startsWith('schema.columns.') || task.kind.startsWith('schema.indexes.') || task.kind.startsWith('schema.foreignKeys.')) {
-      const last = structureProgress.get(task.id), possiblySent = !preparing && (task.kind === 'schema.databaseDrop.apply' || task.kind === 'schema.tableCreate.apply' || task.kind === 'schema.tableCopyData.apply' || task.kind === 'schema.tableCopyStructure.apply' || task.kind === 'schema.databaseDefaultEncoding.apply' || task.kind === 'schema.databaseCreate.apply' || task.kind === 'schema.tableRename.apply' || task.kind === 'schema.tableAutoIncrement.apply' || task.kind === 'schema.tableDefaultEncoding.apply' || task.kind === 'schema.tableDrop.apply' || task.kind === 'schema.tableTruncate.apply' || task.kind === 'schema.tableComment.apply' || task.kind === 'schema.columns.apply' || task.kind === 'schema.indexes.apply' || task.kind === 'schema.foreignKeys.apply');
+    if (task.kind.startsWith('schema.databaseDrop.') || task.kind.startsWith('schema.tableCreate.') || task.kind.startsWith('schema.tableCopyData.') || task.kind.startsWith('schema.tableCopyStructure.') || task.kind.startsWith('schema.databaseDefaultEncoding.') || task.kind.startsWith('schema.databaseCreate.') || task.kind.startsWith('schema.tableRename.') || task.kind.startsWith('schema.tableAutoIncrement.') || task.kind.startsWith('schema.tableDefaultEncoding.') || task.kind.startsWith('schema.tableDrop.') || task.kind.startsWith('schema.tableTruncate.') || task.kind.startsWith('schema.tableChecks.') || task.kind.startsWith('schema.tableComment.') || task.kind.startsWith('schema.columns.') || task.kind.startsWith('schema.indexes.') || task.kind.startsWith('schema.foreignKeys.')) {
+      const last = structureProgress.get(task.id), possiblySent = !preparing && (task.kind === 'schema.databaseDrop.apply' || task.kind === 'schema.tableCreate.apply' || task.kind === 'schema.tableCopyData.apply' || task.kind === 'schema.tableCopyStructure.apply' || task.kind === 'schema.databaseDefaultEncoding.apply' || task.kind === 'schema.databaseCreate.apply' || task.kind === 'schema.tableRename.apply' || task.kind === 'schema.tableAutoIncrement.apply' || task.kind === 'schema.tableDefaultEncoding.apply' || task.kind === 'schema.tableDrop.apply' || task.kind === 'schema.tableTruncate.apply' || task.kind === 'schema.tableChecks.apply' || task.kind === 'schema.tableComment.apply' || task.kind === 'schema.columns.apply' || task.kind === 'schema.indexes.apply' || task.kind === 'schema.foreignKeys.apply');
       const progress: TableColumnApplyProgress = { ...last, phase: last?.phase ?? 'connecting', ddlSubmitted: Boolean(last?.ddlSubmitted || possiblySent), ddlCompleted: last?.ddlCompleted ?? false, definitionVerified: last?.definitionVerified ?? false, outcome: task.kind.startsWith('schema.tableCopyData.') ? ((last as import('../shared/tableCopyData').TableCopyDataProgress)?.dataCompleted ? 'succeeded' : last?.ddlSubmitted || possiblySent ? 'unknown' : 'not-sent') : last?.ddlCompleted ? 'succeeded' : possiblySent ? 'unknown' : 'not-sent' };
-      taskEvent({ taskId: task.id, status: 'failed', progress: task.progress, message: '数据库进程已退出，结构操作不会自动重放，请核对最新定义', ...(task.kind.startsWith('schema.databaseDrop.') ? { databaseDrop: progress } : task.kind.startsWith('schema.tableCreate.') ? { tableCreate: progress } : task.kind.startsWith('schema.tableCopyData.') ? { tableCopyData: progress } : task.kind.startsWith('schema.tableCopyStructure.') ? { tableCopyStructure: progress } : task.kind.startsWith('schema.databaseDefaultEncoding.') ? { databaseDefaultEncoding: progress } : task.kind.startsWith('schema.databaseCreate.') ? { databaseCreate: progress } : task.kind.startsWith('schema.tableRename.') ? { tableRename: progress } : task.kind.startsWith('schema.tableAutoIncrement.') ? { tableAutoIncrement: progress } : task.kind.startsWith('schema.tableDefaultEncoding.') ? { tableDefaultEncoding: progress } : task.kind.startsWith('schema.tableDrop.') ? { tableDrop: progress } : task.kind.startsWith('schema.tableTruncate.') ? { tableTruncate: progress } : task.kind.startsWith('schema.tableComment.') ? { tableComment: progress } : task.kind.startsWith('schema.indexes.') ? { indexPatch: progress } : task.kind.startsWith('schema.foreignKeys.') ? { foreignKeyPatch: progress } : { columnPatch: progress }) });
+      taskEvent({ taskId: task.id, status: 'failed', progress: task.progress, message: '数据库进程已退出，结构操作不会自动重放，请核对最新定义', ...(task.kind.startsWith('schema.databaseDrop.') ? { databaseDrop: progress } : task.kind.startsWith('schema.tableCreate.') ? { tableCreate: progress } : task.kind.startsWith('schema.tableCopyData.') ? { tableCopyData: progress } : task.kind.startsWith('schema.tableCopyStructure.') ? { tableCopyStructure: progress } : task.kind.startsWith('schema.databaseDefaultEncoding.') ? { databaseDefaultEncoding: progress } : task.kind.startsWith('schema.databaseCreate.') ? { databaseCreate: progress } : task.kind.startsWith('schema.tableRename.') ? { tableRename: progress } : task.kind.startsWith('schema.tableAutoIncrement.') ? { tableAutoIncrement: progress } : task.kind.startsWith('schema.tableDefaultEncoding.') ? { tableDefaultEncoding: progress } : task.kind.startsWith('schema.tableDrop.') ? { tableDrop: progress } : task.kind.startsWith('schema.tableTruncate.') ? { tableTruncate: progress } : task.kind.startsWith('schema.tableChecks.') ? { tableChecks: progress } : task.kind.startsWith('schema.tableComment.') ? { tableComment: progress } : task.kind.startsWith('schema.indexes.') ? { indexPatch: progress } : task.kind.startsWith('schema.foreignKeys.') ? { foreignKeyPatch: progress } : { columnPatch: progress }) });
       continue;
     }
     taskEvent({ taskId: task.id, status: 'failed', progress: task.progress, message: '数据库进程已退出，请核对操作结果并重新连接', ...(task.kind === 'query.exportStream' ? { queryExport: { phase: 'executing' as const, statementsCompleted: 0, rowsWritten: 0, bytesWritten: 0, fileCommitted: false, ...exportProgress.get(task.id), ...(preparing ? { phase: 'preparing' as const } : {}), sqlMayHaveExecuted: !preparing, transactionKnown: false } } : {}) });
@@ -1379,6 +1389,7 @@ else {
         if (payload.command.startsWith('result.insert') || payload.command === 'query.cancel' && !!payload.input && typeof payload.input === 'object' && 'taskId' in payload.input && typeof payload.input.taskId === 'string' && tasks.get(payload.input.taskId)?.kind.startsWith('result.insert') && resultInserts.has(payload.input.taskId)) columns = columnsMain.capture(event);
         if (payload.command.startsWith('history.delete') || historyDeleteCancel || payload.command.startsWith('binaryCellFiles.') || payload.command.startsWith('table.filteredUpdate.') || payload.command === 'query.cancel' && !!payload.input && typeof payload.input === 'object' && 'taskId' in payload.input && typeof payload.input.taskId === 'string' && filteredUpdates.has(payload.input.taskId)) columns = columnsMain.capture(event);
         if (payload.command.startsWith('table.filteredDelete.') || payload.command === 'query.cancel' && !!payload.input && typeof payload.input === 'object' && 'taskId' in payload.input && typeof payload.input.taskId === 'string' && filteredDeletes.has(payload.input.taskId)) columns = columnsMain.capture(event);
+        if (payload.command.startsWith('schema.tableChecks.')) columns = columnsMain.capture(event);
         if (payload.command.startsWith('schema.databaseDrop.') || payload.command === 'table.valueOptions' || payload.command === 'table.exportFiltered' || filteredExportCancel) columns = columnsMain.capture(event);
         if (payload.command.startsWith('schema.databaseDefaultEncoding.')) {
           columns = columnsMain.capture(event); columns.databaseEncodingRevision = store.connectionRevision();
@@ -1414,6 +1425,9 @@ else {
             const publication=columns?.presetPublication;let stop=publication?.pendingStop();
             while(stop){await stop;publication!.settledStop(stop);stop=publication!.pendingStop();}
             columnsMain.assertCapturedOwner(columns);publication?.assertCurrent();
+          }
+          if (columns?.tableChecksRequest && payload.command !== 'schema.tableChecks.release') {
+            try { tableChecksMain.assertReply(columns.tableChecksRequest, result); } catch (error) { await tableChecksMain.rejectReply(columns.tableChecksRequest, error); }
           }
           if (columns && (payload.command === 'schema.columns.get' || payload.command === 'schema.columns.preview')) {
             try { columnsMain.assertReply(columns); }
@@ -1452,6 +1466,7 @@ else {
         let failure = error;
         if (payload && typeof payload === 'object' && 'command' in payload && typeof payload.command === 'string' && payload.command.startsWith('schema.databaseDrop.') && columns) try { await rejectDatabaseDropPublication(columns, error); } catch (cleanup) { failure = cleanup; }
         if (databaseEncodingCommand && columns) try { await databaseEncodingOwners.rejectPublication(databaseEncodingCommand, databaseEncodingResult, columns, error); } catch (cleanup) { failure = cleanup; }
+        if (tableChecksMain.hasUnpublished(columns?.tableChecksRequest)) try { await tableChecksMain.rejectReply(columns!.tableChecksRequest!, error); } catch (cleanup) { failure = cleanup; }
         if (columns && columnsMain.hasUnpublished(columns)) try { await columnsMain.rejectReply(columns, error); } catch (cleanup) { failure = cleanup; }
         return { ok: false, error: failure instanceof Error ? failure.message : '客户端操作失败' };
       }

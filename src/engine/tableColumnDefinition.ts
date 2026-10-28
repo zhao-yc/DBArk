@@ -130,9 +130,9 @@ function readColumn(source: string, tokens: Token[], range: DefinitionRange, ord
   const type = { ...fragment(source, base.start, tokens[cursor - 1].end), known: knownTypes.has(word(base)) };
   const result: TableColumnDefinition = { kind: 'column', ...fragment(source, range.start, range.end), name: name.value, nameRange: { start: name.start, end: name.end }, ordinal, type, nullable: undefined, default: { kind: 'none' }, comment: undefined, attributes: [], access: Object.fromEntries(editableAttributes.map(key => [key, { editable: true }])) as TableColumnDefinition['access'] };
   const seen = new Set<string>();
-  /** 同属性重复不是“最后值覆盖”，必须阻止未来计划器对错误源范围修改。 */
+  /** 普通属性重复必须拒绝；合法的多个列级CHECK分别保留，不以最后一项覆盖。 */
   const add = (kind: ColumnDefinitionAttribute['kind'], from: number, end: number): void => {
-    if (kind !== 'opaque' && seen.has(kind)) throw new Error('表定义含重复列属性'); seen.add(kind);
+    if (kind !== 'opaque' && kind !== 'check' && seen.has(kind)) throw new Error('表定义含重复列属性'); seen.add(kind);
     result.attributes.push({ kind, ...fragment(source, tokens[from].start, tokens[end - 1].end) });
   };
   while (cursor < tokens.length) {

@@ -1,6 +1,8 @@
 import { readFileSync } from 'node:fs';
 import { createContext, runInContext } from 'node:vm';
 import ts from 'typescript';
+import { TableChecksMainCapabilities, tableChecksFailureProgress } from '../../src/main/tableChecksMainCapabilities';
+import { extractMainProductionBinding } from './main-production-function';
 import { expect, it, vi } from 'vitest';
 import { validateCommand } from '../../src/shared/validation';
 import { publicCommands } from '../../src/shared/commands';
@@ -20,8 +22,8 @@ function harness() {
   const event = { sender: webContents, senderFrame: webContents.mainFrame };
   const columnsMain = { capture: vi.fn(() => columns), assertCapturedOwner(value: unknown) { if (value !== columns || !current) throw Error(explainSnapshotZh.stale); }, hasUnpublished: () => false };
   const explainSnapshotFiles = { open: vi.fn(async (_owner: unknown): Promise<unknown> => null), save: vi.fn(async (_snapshot: unknown, _owner: unknown): Promise<unknown> => null) };
-  const context = createContext({ Error, columnsMain, explainSnapshotFiles, explainSnapshotZh, shuttingDown: false, window: { webContents }, rendererURL: 'RAM:plan', tasks: new Map(), queryInsertExports: { has: () => false }, validateMainCommand: validateCommand, localSearchOperations: new Set(), queryFileOperations: new Set() });
-  const source = `${fileOperation.getText(tree)}\nasync function dispatch(command:any,input:any,columns?:any){${branch.getText(tree)}throw Error('越界分派');}\nvar request=${wrapper!.getText(tree)};`;
+  const context = createContext({ Error, TableChecksMainCapabilities, tableChecksFailureProgress, structureTokens: new Map(), columnsMain, explainSnapshotFiles, explainSnapshotZh, shuttingDown: false, window: { webContents }, rendererURL: 'RAM:plan', tasks: new Map(), queryInsertExports: { has: () => false }, validateMainCommand: validateCommand, localSearchOperations: new Set(), queryFileOperations: new Set() });
+  const source = `${extractMainProductionBinding(tree.text, 'tableChecksMain')}\n${fileOperation.getText(tree)}\nasync function dispatch(command:any,input:any,columns?:any){${branch.getText(tree)}throw Error('越界分派');}\nvar request=${wrapper!.getText(tree)};`;
   runInContext(ts.transpileModule(source, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None } }).outputText, context);
   return { context, columns, event, files: explainSnapshotFiles, capture: columnsMain.capture, invalidate() { current = false; }, request: context.request as (event: unknown, payload: unknown) => Promise<any> };
 }

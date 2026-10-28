@@ -11,6 +11,8 @@ import { createContext, runInContext } from 'node:vm';
 import ts from 'typescript';
 import { HistoryDelete } from '../../src/main/historyDelete';
 import { ColumnsMainCapabilities } from '../../src/main/columnsMainCapabilities';
+import { TableChecksMainCapabilities, tableChecksFailureProgress } from '../../src/main/tableChecksMainCapabilities';
+import { extractMainProductionBinding } from './main-production-function';
 import { SavedQueryMatcher } from '../../src/main/savedQueryMatcher';
 import { summarizeHistoryRecord } from '../../src/main/historyPageMatch';
 import { validateCommand } from '../../src/shared/validation';
@@ -69,7 +71,8 @@ function main(f: ReturnType<typeof fixture>) {
   // 原dispatch在switch之前统一清理结构能力、解析会话及核配置锁；本例仅提供准确的空RAM状态。
   const assertAvailable = vi.fn((connectionId?: string) => { if (connectionId !== undefined) throw Error('历史清理不应绑定数据库连接'); });
   const context: any = createContext({ filteredDeletes: emptyTableFilteredDeleteOwners(), filteredUpdates: emptyTableFilteredUpdateOwners(), Error, Map, Set, Date, window: f.window, rendererURL: f.frame.url, columnsMain: f.columnsMain, historyDelete: f.service, historyPages: undefined, savedQueryPages: undefined, savedQuerySearches: { has: () => false }, tasks: new Map(), completionTasks: new Set(), tablePresetReads: new Map(), structureTokens: new Map(), sessions: new Map(), connectionConfig: { assertAvailable }, queryInsertExports: { has: vi.fn(() => false) }, shuttingDown: false, localSearchOperations: new Set(), queryFileOperations: new Set(), store: f.store, broker: { request }, validateMainCommand: validateCommand });
-  runInContext(ts.transpileModule(source.slice(start, end) + '\nglobalThis.dispatch=dispatch;globalThis.request=' + callback.getText(tree) + ';', { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText, context);
+  Object.assign(context, { TableChecksMainCapabilities, tableChecksFailureProgress });
+  runInContext(ts.transpileModule(extractMainProductionBinding(source, 'tableChecksMain') + '\n' + source.slice(start, end) + '\nglobalThis.dispatch=dispatch;globalThis.request=' + callback.getText(tree) + ';', { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText, context);
   return { context, request, ipc: (command: string, input: unknown) => context.request(f.event, { command, input }) as Promise<any> };
 }
 

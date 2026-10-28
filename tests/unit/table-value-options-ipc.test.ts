@@ -3,6 +3,8 @@ import { emptyTableFilteredUpdateOwners } from './table-filtered-update-owner-fi
 import { readFileSync } from 'node:fs';
 import { createContext, runInContext } from 'node:vm';
 import ts from 'typescript';
+import { TableChecksMainCapabilities, tableChecksFailureProgress } from '../../src/main/tableChecksMainCapabilities';
+import { extractMainProductionBinding } from './main-production-function';
 import { describe, expect, it, vi } from 'vitest';
 import { SavedQuerySearchCancelled } from '../../src/main/savedQuerySearch';
 import { persistedTaskMessage } from '../../src/main/taskPrivacy';
@@ -32,7 +34,7 @@ function fixture() {
   const context = createContext({ filteredDeletes: emptyTableFilteredDeleteOwners(), filteredUpdates: emptyTableFilteredUpdateOwners(),
     // 未打开结果写入用途时的真实初始空协调器，不登记任务、预览或写入能力。
     resultInserts: { observe() {}, invalidateConnection(_connectionId: string) {}, engineExited() {}, has: (_taskId: string) => false },
-     Date, Map, Set, Error, SavedQuerySearchCancelled, tableApplyReceipts: undefined, savedQueryPages: undefined, historyPages: undefined, savedQuerySearches: { has: () => false }, tasks,
+     Date, Map, Set, Error, TableChecksMainCapabilities, tableChecksFailureProgress, SavedQuerySearchCancelled, tableApplyReceipts: undefined, savedQueryPages: undefined, historyPages: undefined, savedQuerySearches: { has: () => false }, tasks,
     completionTasks: new Set(), pendingQueryHistory: new Map(), preparingTasks: new Map(), exportProgress: new Map(), structureProgress: new Map(), structureTokens: new Map(), sessions: new Map(), tablePresetReads: new Map(), tableValueOptionsConnectionOwners: new Map(), tableValueOptionsClosing: new Map(), shuttingDown: false,
     localSearchOperations: new Set(), queryFileOperations: new Set(), window: { webContents }, rendererURL: frame.url,
     columnsMain: { capture: () => owner, assertCapturedOwner, hasUnpublished: () => false },
@@ -40,7 +42,7 @@ function fixture() {
     validateMainCommand: validateCommand,
     taskEvent(event: TaskEvent) { events.push(event); tasks.set(event.taskId, { ...tasks.get(event.taskId)!, status: event.status }); },
   });
-  runInContext(ts.transpileModule(source.slice(start, end) + '\nglobalThis.dispatch=dispatch;\nglobalThis.handleRequest=' + callback.getText(tree) + ';', { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText, context);
+  runInContext(ts.transpileModule(extractMainProductionBinding(source, 'tableChecksMain') + '\n' + source.slice(start, end) + '\nglobalThis.dispatch=dispatch;\nglobalThis.handleRequest=' + callback.getText(tree) + ';', { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText, context);
   return { context, owner, request, tasks, events, saves, history, profile, assertAvailable, assertCapturedOwner, revise: () => { revision++; }, navigate: () => { documentCurrent = false; },
     dispatch: (value = input) => (context.dispatch as any)('table.valueOptions', value, owner),
     ipc: (value: unknown = input) => (context.handleRequest as any)({ sender: webContents, senderFrame: frame }, { command: 'table.valueOptions', input: value }),

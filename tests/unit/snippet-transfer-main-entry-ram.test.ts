@@ -1,6 +1,8 @@
 import { readFileSync } from 'node:fs';
 import { createContext, runInContext } from 'node:vm';
 import ts from 'typescript';
+import { TableChecksMainCapabilities, tableChecksFailureProgress } from '../../src/main/tableChecksMainCapabilities';
+import { extractMainProductionBinding } from './main-production-function';
 import { expect, it, vi } from 'vitest';
 import { validateCommand } from '../../src/shared/validation';
 import { snippetTransferZh } from '../../src/shared/snippetTransfer';
@@ -20,8 +22,8 @@ function main() {
   const columnsMain = { capture: vi.fn(() => { if (!valid) throw Error('文档已失效'); return columns; }), assertCapturedOwner: vi.fn((value: unknown) => { if (value !== columns || !valid) throw Error('文档已失效'); }), hasUnpublished: () => false };
   const snippetTransfers = { open: vi.fn(() => ({ scopeId: 'RAM能力' })), preview: vi.fn(async () => null), export: vi.fn(async () => ({ count: 1 })), apply: vi.fn(() => ({ items: [], added: 0, replaced: 0, skipped: 0 })), cancel: vi.fn(() => ({ cancelled: true })) };
   const queryFileOperations=new Set<Promise<unknown>>();
-  const context = createContext({ Error, columnsMain, snippetTransfers, snippetTransferZh, shuttingDown: false, window: { webContents }, rendererURL: 'RAM渲染页', tasks: new Map(), queryInsertExports: { has: () => false }, validateMainCommand: validateCommand, localSearchOperations: new Set(),queryFileOperations });
-  runInContext(emit(`async function dispatch(command:any,input:any,columns?:any){${snippetBranches[0].getText(source)}throw Error('越界分派');}\nvar request=${handler!.getText(source)};`), context);
+  const context = createContext({ Error, TableChecksMainCapabilities, tableChecksFailureProgress, structureTokens: new Map(), columnsMain, snippetTransfers, snippetTransferZh, shuttingDown: false, window: { webContents }, rendererURL: 'RAM渲染页', tasks: new Map(), queryInsertExports: { has: () => false }, validateMainCommand: validateCommand, localSearchOperations: new Set(),queryFileOperations });
+  runInContext(emit(`${extractMainProductionBinding(source.text, 'tableChecksMain')}\nasync function dispatch(command:any,input:any,columns?:any){${snippetBranches[0].getText(source)}throw Error('越界分派');}\nvar request=${handler!.getText(source)};`), context);
   return { request: context.request as (event: unknown, payload: unknown) => Promise<any>, event, columns, owner, snippetTransfers, columnsMain,queryFileOperations, invalidate() { valid = false; } };
 }
 it('五项正式IPC实际捕获Main文档、严格校验、进入专属dispatch并在回包前再次检查归属', async () => {

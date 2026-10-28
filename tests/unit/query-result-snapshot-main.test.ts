@@ -1,6 +1,8 @@
 import { readFileSync } from 'node:fs';
 import { createContext, runInContext } from 'node:vm';
 import ts from 'typescript';
+import { TableChecksMainCapabilities, tableChecksFailureProgress } from '../../src/main/tableChecksMainCapabilities';
+import { extractMainProductionBinding } from './main-production-function';
 import { expect, it, vi } from 'vitest';
 import { validateCommand } from '../../src/shared/validation';
 import { publicCommands } from '../../src/shared/commands';
@@ -31,12 +33,12 @@ function harness() {
     open: vi.fn(async (_owner: unknown): Promise<unknown> => null),
     save: vi.fn(async (_snapshot: unknown, _owner: unknown): Promise<unknown> => null),
   };
-  const context = createContext({ Error, columnsMain, queryResultSnapshotFiles, queryResultSnapshotFileMessages: text,
+  const context = createContext({ Error, TableChecksMainCapabilities, tableChecksFailureProgress, structureTokens: new Map(), columnsMain, queryResultSnapshotFiles, queryResultSnapshotFileMessages: text,
     shuttingDown: false, window: { webContents }, rendererURL: 'RAM:result-snapshot', tasks: new Map(),
     queryInsertExports: { has: () => false }, validateMainCommand: validateCommand,
     localSearchOperations: new Set(), queryFileOperations: new Set(),
   });
-  const source = `${operation.getText(tree)}\nasync function dispatch(command:any,input:any,columns?:any){${branch.getText(tree)}throw Error('越界分派');}\nvar request=${wrapper!.getText(tree)};`;
+  const source = `${extractMainProductionBinding(tree.text, 'tableChecksMain')}\n${operation.getText(tree)}\nasync function dispatch(command:any,input:any,columns?:any){${branch.getText(tree)}throw Error('越界分派');}\nvar request=${wrapper!.getText(tree)};`;
   runInContext(ts.transpileModule(source, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None } }).outputText, context);
   return { context, event, files: queryResultSnapshotFiles, capture: columnsMain.capture,
     invalidate() { current = false; }, request: context.request as (event: unknown, payload: unknown) => Promise<any> };

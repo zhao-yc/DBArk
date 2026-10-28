@@ -4,6 +4,8 @@ import { createContext, runInContext } from 'node:vm';
 import ts from 'typescript';
 import { vi } from 'vitest';
 import { ColumnsMainCapabilities } from '../../src/main/columnsMainCapabilities';
+import { TableChecksMainCapabilities, tableChecksFailureProgress } from '../../src/main/tableChecksMainCapabilities';
+import { extractMainProductionBinding } from './main-production-function';
 import { TablePresetSources } from '../../src/main/tablePresets';
 import { QueryResultPresetSources } from '../../src/main/queryResultPresetSources';
 import { validateCommand } from '../../src/shared/validation';
@@ -32,7 +34,7 @@ function productionParts() {
   }
   visit(tree);
   if (parts.length !== names.length || !wrapper || !deletionBinding || !objectUriBinding) throw Error('未提取到真实Main函数、删除/对象链接能力初始化或IPC wrapper');
-  return parts.join('\n') + '\n' + deletionBinding + '\nglobalThis.filteredDeletes=filteredDeletes;\n' + objectUriBinding + '\nglobalThis.externalObjectUris=externalObjectUris;\n' + wrapper + ';\nglobalThis.actual = {dispatch,engineExited,createWindow};';
+  return parts.join('\n') + '\n' + extractMainProductionBinding(source, 'tableChecksMain') + '\n' + deletionBinding + '\nglobalThis.filteredDeletes=filteredDeletes;\n' + objectUriBinding + '\nglobalThis.externalObjectUris=externalObjectUris;\n' + wrapper + ';\nglobalThis.actual = {dispatch,engineExited,createWindow};';
 }
 
 /** 只模拟Electron对象与事件，不模拟owner授权；helper逐项读取这些真实边界对象。 */
@@ -71,7 +73,7 @@ export function mainColumnsHarness() {
     resultInserts: { observe() {}, invalidateConnection(_connectionId: string) {}, engineExited() {}, has: (_taskId: string) => false }, resultInsertProgress: new Map(),
     filteredUpdateProgress: new Map(), filteredDeleteProgress: new Map(),
 
-    Date, Map, Error, Boolean, TableFilteredDeleteOwners, ExternalObjectUris, resolveWorkbenchTarget, externalObjectUrisZh, SavedQuerySearchCancelled, columnsMain: undefined, tablePresetSources: undefined, tablePresetReads: new Map(), window: undefined, structureTokens: tokens, tasks, structureProgress: progress, events,
+    Date, Map, Error, Boolean, TableChecksMainCapabilities, tableChecksFailureProgress, TableFilteredDeleteOwners, ExternalObjectUris, resolveWorkbenchTarget, externalObjectUrisZh, SavedQuerySearchCancelled, columnsMain: undefined, tablePresetSources: undefined, tablePresetReads: new Map(), window: undefined, structureTokens: tokens, tasks, structureProgress: progress, events,
     tableApplyReceipts: undefined, pendingQueryHistory: new Map(), completionTasks: new Set(), preparingTasks: new Map(), exportProgress: new Map(), sessions: new Map(),
     savedQuerySearches: { has: () => false }, savedQueryPages: undefined, historyPages: undefined, historyDelete: undefined, localSearchOperations: new Set(), shuttingDown: false, shutdownComplete: false,
     rendererSettingsCurrent: true, rendererURL: 'app://renderer', process: { resourcesPath: 'ram' }, __dirname: 'ram', join: (...parts: string[]) => parts.join('/'),

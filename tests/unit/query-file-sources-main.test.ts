@@ -10,6 +10,8 @@ import { EventEmitter } from 'node:events';
 import { createContext, runInContext } from 'node:vm';
 import ts from 'typescript';
 import { ColumnsMainCapabilities } from '../../src/main/columnsMainCapabilities';
+import { TableChecksMainCapabilities, tableChecksFailureProgress } from '../../src/main/tableChecksMainCapabilities';
+import { extractMainProductionBinding } from './main-production-function';
 import { QueryFileSources } from '../../src/main/queryFileSources';
 import { QueryInsertExports } from '../../src/main/queryInsertExports';
 import { validateCommand } from '../../src/shared/validation';
@@ -39,7 +41,8 @@ function mainPort() {
     revision: () => 0, session: id => context.sessions.get(id), closing: () => context.shuttingDown,
     stop: async () => { throw Error('文件来源夹具未登记INSERT，不得停止数据库任务'); }
   });
-  const code = declarations.join('\n') + '\nglobalThis.handler = ' + callback + ';';
+  Object.assign(context, { TableChecksMainCapabilities, tableChecksFailureProgress });
+  const code = extractMainProductionBinding(text, 'tableChecksMain') + '\n' + declarations.join('\n') + '\nglobalThis.handler = ' + callback + ';';
   runInContext(ts.transpileModule(code, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.None } }).outputText, context);
   publish = event => context.taskEvent(event);
   const request = (command: string, input: unknown, senderFrame: unknown = frame) => context.handler({ sender: contents, senderFrame }, { command, input }) as Promise<{ ok: boolean; result?: unknown; error?: string }>;

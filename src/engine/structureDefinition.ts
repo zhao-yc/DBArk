@@ -8,7 +8,7 @@ import { definitionOmittingSqlModes, tableColumnPatchLimits, type TableColumnApp
 
 export interface StructureTaskContext { managed: ManagedConnection; checkCancelled(): void; report(): void; commandStarted(): () => void; }
 export interface StructureTaskOptions {
-  label: string; purpose: 'columns' | 'indexes' | 'foreignKeys' | 'tableComment' | 'tableDrop' | 'tableTruncate' | 'tableDefaultEncoding' | 'tableCreate' | 'databaseCreate' | 'databaseDefaultEncoding' | 'databaseDrop' | 'tableCopyData' | 'tableCopyStructure' | 'tableRename' | 'tableAutoIncrement'; progress: TableColumnApplyProgress;
+  label: string; purpose: 'columns' | 'indexes' | 'foreignKeys' | 'tableChecks' | 'tableComment' | 'tableDrop' | 'tableTruncate' | 'tableDefaultEncoding' | 'tableCreate' | 'databaseCreate' | 'databaseDefaultEncoding' | 'databaseDrop' | 'tableCopyData' | 'tableCopyStructure' | 'tableRename' | 'tableAutoIncrement'; progress: TableColumnApplyProgress;
   executionTarget?: { database: string; table: string }; executionTargets?: readonly { database: string; table: string }[];
   /** 库级执行范围不可与表级范围混用，由真实连接收尾释放。 */
   executionDatabase?: string;

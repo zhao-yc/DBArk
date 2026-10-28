@@ -1,3 +1,4 @@
+import { tableCheckGetSchema, tableCheckPreviewSchema, tableCheckApplySchema, tableCheckReleaseSchema } from './tableChecks';
 import { tableFilteredDeletePreviewInputSchema, tableFilteredDeleteApplyInputSchema, tableFilteredDeleteReleaseInputSchema } from './tableFilteredDelete';
 import { binaryCellFileOpenSchema, binaryCellFileSaveSchema } from './binaryCellFiles';
 import { tableFilteredUpdatePreviewInputSchema, tableFilteredUpdateApplyInputSchema, tableFilteredUpdateReleaseInputSchema } from './tableFilteredUpdate';
@@ -272,6 +273,10 @@ export const commandSchemas: Record<Command, z.ZodType> = {
   'schema.tableAutoIncrement.preview': z.object({ snapshotId: id, value: z.string().max(20).transform(value => validateTableAutoIncrement(value)), taskId: id }).strict(),
   'schema.tableAutoIncrement.apply': z.object({ previewToken: id, acknowledgements: z.array(z.enum(tableAutoIncrementKnownAcknowledgements)).max(4).refine(value => new Set(value).size === value.length, '下一自增值确认项不能重复'), taskId: id }).strict(),
   'schema.tableAutoIncrement.release': z.object({ snapshotId: id.optional(), previewToken: id.optional() }).strict().refine(value => Boolean(value.snapshotId || value.previewToken), '缺少待释放的下一自增值令牌'),
+  'schema.tableChecks.get': tableCheckGetSchema,
+  'schema.tableChecks.preview': tableCheckPreviewSchema,
+  'schema.tableChecks.apply': tableCheckApplySchema,
+  'schema.tableChecks.release': tableCheckReleaseSchema,
   'schema.tableComment.get': z.object({ connectionId: id, database: z.string().min(1).max(64), table: z.string().min(1).max(64), taskId: id }).strict(),
   'schema.tableDrop.get': z.object({ connectionId: id, database: foreignKeyTargetName, table: foreignKeyTargetName, taskId: id }).strict(),
   'schema.tableDrop.preview': z.object({ snapshotId: id, taskId: id }).strict(),
