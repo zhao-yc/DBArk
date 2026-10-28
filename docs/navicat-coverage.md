@@ -1,5 +1,7 @@
 # Navicat 全功能覆盖目标
 
+Q03开发源码新增[已保存查询插入原选区](development/saved-query-insertion-20261028.md)：保存列表与全文搜索两个入口重新核验完整正文，单次编辑／撤销，原连接、默认库和来源绑定保持，不执行SQL、不新建标签。WIN11-TEST类型、12文件143项专项、完整19490通过／1平台跳过及构建通过；正式Main＋Monaco两入口复合例一次通过，真实迟到回包按Escape后不改变模型／Undo栈，原owned正常退出。只读探测／控制器包装错误单列；实际文件绑定、重启、实库活动状态、macOS及安装另验，见[验收记录](../tests/integration/acceptance-saved-query-insertion-20261028.md)。完整工作包及发行计数不增加，暂不发布。
+
 Q01补验[当前源码macOS关键字重启专项](development/sql-keyword-current-20261028.md)：8c85cdd3的新run40622537303在macOS26.6.2 arm64上，原upper／lower均单次通过，四owner正常退出及两目录清理，原5秒／120秒、Undo／迟到撤销／SQLite9／重启身份门保持。WIN11-TEST Node／类型及46项运行器预检通过；Root独立回读新旧ZIP、原报告及113运行文件清单。产品未修改，未证明旧失败根因，不追认旧bf候选；安装、系统Cmd+S和Intel未验，不增加完整工作包或发行计数，暂不发布。
 
 O01开发源码新增[新建表 CHECK 设计](development/table-create-checks-20261028.md)：原新表设计器中命名表级约束增删改／重排、生效意图、实际能力读取和第三／第四确认，真实单条CREATE与SHOW／TC／CC交叉后核；普通、前缀、字段编码、生成列四路线保持原限制，MariaDB JSON隐式检查单独证明后再投影给原索引／外键核验。WIN11-TEST类型、20文件645项专项、完整19414通过／1平台跳过、构建和默认／list关闭门通过；Root已回读原件及冻结字节，见[验收记录](../tests/integration/acceptance-table-create-checks-20261028.md)。实库新增资源及事务探针仍待授权，原生窗口、安装和macOS未验，不增加完整工作包或发行计数，暂不发布。

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { ArrowUpRight, Clock3, FileCode2, Search, Trash2 } from 'lucide-react';
 import type { SavedQueryPage, SavedQueryPageEntry } from '../../shared/savedQueryPages';
 import type { SavedQueryGroupScope, SavedQueryOrganizationSnapshot } from '../../shared/savedQueryOrganization';
@@ -12,6 +12,8 @@ import { useWorkspace } from '../store';
 import { readSavedQueryOrganization, savedQueryOrganizationTree, type SelectedSavedQuery, type SavedQueryOrganizationPreview } from '../savedQueryOrganizationUi';
 import { SavedQueryOrganizationEditor, type SavedQueryOrganizationEdit } from './SavedQueryOrganizationEditor';
 import { Empty, ErrorBox, Modal, Spinner } from './ui';
+import type { HistoryInsertionTarget } from '../historyInsertion';
+import { savedQueryInsertionZh as insertionText } from '../locales/savedQueryInsertion.zh-CN';
 import '../savedQueryPages.css';
 
 interface Services { request: typeof invoke; id(): string; }
@@ -21,7 +23,7 @@ const criteriaKey = (value: Criteria) => JSON.stringify([value.search, value.pol
 interface Edit { value: SavedQueryOrganizationEdit; snapshot: SavedQueryOrganizationSnapshot; selected: readonly SelectedSavedQuery[]; epoch: number; }
 
 /** 原Promise锁覆盖分组和列表；跨页选择只存编号、摘要和名称，不累计SQL正文。 */
-export function SavedQueriesDialog({ onClose, onHistory, services: io = services }: { onClose(): void; onHistory(): void; services?: Services }) {
+export function SavedQueriesDialog({ onClose, onHistory, insertion, services: io = services }: { onClose(): void; onHistory(): void; insertion?: HistoryInsertionTarget | null; services?: Services }) {
   const connections = useWorkspace(state => state.connections);
   const [search, setSearch] = useState(''), [policy, setPolicy] = useState<'stop' | 'continue'>('continue'), [group, setGroup] = useState<SavedQueryGroupScope>({ kind: 'all' }), [includeDescendants, setIncludeDescendants] = useState(true);
   const [reply, setReply] = useState<SavedQueryPage>(), [batch, setBatch] = useState(0), [applied, setApplied] = useState(''), [busy, setBusy] = useState(true), [closing, setClosing] = useState(false), [error, setError] = useState(''), [notice, setNotice] = useState('');
@@ -29,13 +31,33 @@ export function SavedQueriesDialog({ onClose, onHistory, services: io = services
   const [selected, setSelected] = useState<ReadonlyMap<string, SelectedSavedQuery>>(new Map()), selectedRef = useRef(selected), [editing, setEditing] = useState<Edit>(), editRef = useRef(editing), [needsRefresh, setNeedsRefresh] = useState(false), [targets, setTargets] = useState(new Map<string, string>());
   const cursor = useRef<string | undefined>(undefined), active = useRef<string | undefined>(undefined), pending = useRef<Promise<void> | undefined>(undefined), locked = useRef(false), closed = useRef(false), alive = useRef(true), epoch = useRef(0);
   const criteria: Criteria = { search, policy, group }, criteriaRef = useRef(criteria); criteriaRef.current = criteria; const renderEpoch = epoch.current;
+  const insertionRef = useRef(insertion), previousInsertion = useRef(insertion), insertionClosing = useRef(false), cancelledInsertion = useRef(false);
+  insertionRef.current = insertion;
+  const [insertAvailable, setInsertAvailable] = useState(() => insertion?.current() ?? false);
+  const pageView = useRef({ reply, applied, needsRefresh }); pageView.current = { reply, applied, needsRefresh };
+  /** 每个资料页只持父面板借出的子租约；换目标后旧目标不可因相同prop恢复而复活。 */
+  useLayoutEffect(() => {
+    if (previousInsertion.current !== insertion) { previousInsertion.current?.dispose(); previousInsertion.current = insertion; }
+    const sync = () => setInsertAvailable(insertion?.current() ?? false);
+    const off = insertion?.subscribe(sync); sync(); return () => { off?.(); };
+  }, [insertion]);
   const owns = (ticket: number) => alive.current && !closed.current && epoch.current === ticket;
   const editable = () => owns(renderEpoch) && !locked.current && !editRef.current;
   /** 原句柄仅在成功释放后遗忘；迟到新页也精确回收。 */
   async function release() { const value = cursor.current; if (value) { await io.request('queries.pageRelease', { cursor: value }); if (cursor.current === value) cursor.current = undefined; } }
   /** 取消失败仍等原Promise终态并释放，不能让观察超时或按钮点击提前放行。 */
   async function cleanup() { let failure: unknown; if (active.current) try { await io.request('query.cancel', { taskId: active.current }); } catch (reason) { failure = reason; } await pending.current?.catch(() => {}); await release(); if (failure) throw failure; }
-  async function close(after = onClose) { if (closed.current) return; closed.current = true; epoch.current++; editRef.current = undefined; setEditing(undefined); setClosing(true); try { await cleanup(); after(); } catch (reason) { closed.current = false; setClosing(false); setError(errorMessage(reason)); } }
+  async function close(after = onClose, keepInsertion = false) {
+    // Escape在读取或释放期间仍撤销插入，不能因原close正在等待而忽略关闭意图。
+    if (!keepInsertion) { insertionRef.current?.dispose(); if (insertionClosing.current) cancelledInsertion.current = true; }
+    if (closed.current) return;
+    closed.current = true; insertionClosing.current = keepInsertion; cancelledInsertion.current = false;
+    if (!keepInsertion) epoch.current++;
+    editRef.current = undefined; setEditing(undefined); setClosing(true);
+    try { await cleanup(); if (!alive.current) return; if (keepInsertion && cancelledInsertion.current) onClose(); else after(); }
+    catch (reason) { if (alive.current) { closed.current = false; setClosing(false); setError(errorMessage(reason)); } }
+    finally { insertionClosing.current = false; }
+  }
   /** 同步占锁并跟踪整项操作；每个旧渲染回调仅能使用原代次。 */
   function run(action: (ticket: number) => Promise<void>, expected = renderEpoch): Promise<void> | undefined {
     if (!owns(expected) || locked.current) return;
@@ -59,8 +81,13 @@ export function SavedQueriesDialog({ onClose, onHistory, services: io = services
     finally { if (active.current === taskId) active.current = undefined; }
   }
   /** 显式第一页重新读取组织版本；全文、组范围和原错误策略共同生效。 */
-  function load(next = false, requested = criteriaRef.current) { if (editRef.current) return; return run(async ticket => { let value = requested; if (!next) { const raw = await io.request('queries.organizationGet', {}); if (!owns(ticket)) return; value = { ...requested, group: publish(raw, requested.group) }; setNeedsRefresh(false); } await readPage(ticket, value, next); }); }
-  useEffect(() => { alive.current = true; void load(); return () => { alive.current = false; closed.current = true; epoch.current++; editRef.current = undefined; void cleanup().catch(reason => useWorkspace.getState().notify(t.cleanupFailed + errorMessage(reason), true)); }; }, []);
+  function load(next = false, requested = criteriaRef.current, expected = renderEpoch) { if (editRef.current) return; return run(async ticket => { let value = requested; if (!next) { const raw = await io.request('queries.organizationGet', {}); if (!owns(ticket)) return; value = { ...requested, group: publish(raw, requested.group) }; setNeedsRefresh(false); } await readPage(ticket, value, next); }, expected); }
+  useEffect(() => {
+    alive.current = true; closed.current = false; const ticket = epoch.current;
+    // StrictMode的旧setup尚未投递时只留本轮启动权；cleanup不消费父传入的子权限。
+    void Promise.resolve(pending.current).then(() => { if (owns(ticket)) void load(false, criteriaRef.current, ticket); });
+    return () => { alive.current = false; closed.current = true; epoch.current++; editRef.current = undefined; void cleanup().catch(reason => useWorkspace.getState().notify(t.cleanupFailed + errorMessage(reason), true)); };
+  }, []);
   /** 草稿改变只撤销旧事件，不自动查询或释放旧页。 */
   function draft(action: () => void) { if (!editable()) return; epoch.current++; action(); }
   function selectScope(value: SavedQueryGroupScope) { if (!editable()) return; setGroup(value); criteriaRef.current = { ...criteriaRef.current, group: value }; void load(false, criteriaRef.current); }
@@ -83,13 +110,38 @@ export function SavedQueriesDialog({ onClose, onHistory, services: io = services
     let opened: SavedQueryOpenResult | undefined; const work = run(async ticket => { const result = await io.request('queries.read', { id: item.query.id, digest: item.digest, connectionId }); if (owns(ticket)) opened = result; });
     if (work) void work.then(() => { if (opened && !closed.current) { const result = opened; void close(() => { useWorkspace.getState().openTab({ id: io.id(), kind: 'query', title: result.query.name, connectionId: result.connectionId, database: result.database, databaseContext: result.databaseContext, sql: result.query.sql, sourceBinding: result.sourceBinding }); onClose(); }); } });
   }
+  /** 全文按摘要重读；先退出run原Promise再关闭释放，避免cleanup等待自己的pending。 */
+  function insert(item: SavedQueryPageEntry) {
+    if (!editable()) return;
+    const captured = insertion, original = pageView.current, source = organizationRef.current;
+    const sourceCurrent = () => alive.current && insertionRef.current === captured && !!captured?.current()
+      && pageView.current.reply === original.reply && pageView.current.applied === original.applied
+      && !pageView.current.needsRefresh && organizationRef.current === source
+      && criteriaKey(criteriaRef.current) === original.applied && original.reply?.items.includes(item) === true;
+    if (!sourceCurrent()) { setError(captured ? insertionText.changed : insertionText.unavailable); return; }
+    let sql: string | undefined, ticket = -1;
+    const work = run(async owner => {
+      ticket = owner;
+      const result = await io.request('queries.readText', { id: item.query.id, digest: item.digest });
+      if (owns(owner) && sourceCurrent()) sql = result.query.sql;
+      else if (owns(owner)) throw Error(insertionText.changed);
+    });
+    if (work) void work.then(() => {
+      if (sql === undefined || closed.current || !owns(ticket)) return;
+      const complete = sql;
+      void close(() => {
+        if (epoch.current !== ticket || !sourceCurrent()) throw Error(insertionText.changed);
+        captured!.insert(complete); onClose();
+      }, true);
+    });
+  }
   function remove(item: SavedQueryPageEntry) { if (!editable()) return; void run(async ticket => { await io.request('queries.deleteChecked', { id: item.query.id, digest: item.digest }); if (!owns(ticket)) return; const next = new Map(selectedRef.current); next.delete(item.query.id); selectedRef.current = next; setSelected(next); const raw = await io.request('queries.organizationGet', {}); if (!owns(ticket)) return; const nextGroup = publish(raw, criteriaRef.current.group); await readPage(ticket, { ...criteriaRef.current, group: nextGroup }); }); }
   function databaseLabel(item: SavedQueryPageEntry) { const value = item.query, context = value.databaseContext; return context ? context.state === 'known' ? context.database || queryContextZh.none : queryContextZh.unknown : value.database ? value.database + ' (' + queryContextZh.legacy + ')' : queryContextZh.legacy; }
   const blocked = busy || closing || !!editing, changed = criteriaKey(criteria) !== applied, tree = organization ? savedQueryOrganizationTree(organization) : [], hidden = [...selected.keys()].filter(id => !reply?.items.some(item => item.query.id === id)).length, selectedGroup = group.kind === 'group' ? group.id : undefined;
   const pageSelected = reply?.items.filter(item => selected.has(item.query.id)).length ?? 0, pageAllSelected = !!reply?.items.length && pageSelected === reply.items.length, pageMixed = pageSelected > 0 && !pageAllSelected;
   return <Modal title={zh.activity.text003} wide onClose={() => void close()}>
     <div className="dialog-tabs"><button disabled={closing} onClick={() => void close(onHistory)}><Clock3 size={14}/>{zh.activity.text004}</button><button className="selected"><FileCode2 size={14}/>{zh.activity.text005}</button></div>
-    <div className="modal-content saved-query-pages"><p className="muted small">{text.metadataOnly}</p><div className="saved-query-organization-layout">
+    <div className="modal-content saved-query-pages"><p className="muted small">{text.metadataOnly}</p><p className="muted small">{insertionText.hint}</p><p role={insertion !== undefined ? "status" : undefined}>{insertion ? insertionText.target(insertion.title) : insertionText.unavailable}{insertion && !insertAvailable && <span> · {insertionText.changed}</span>}</p><div className="saved-query-organization-layout">
       <details className="saved-query-organization-tree" open><summary>{text.title}</summary><nav aria-label={text.tree}>
         <button disabled={blocked} aria-label={text.all} aria-current={group.kind === 'all' ? 'true' : undefined} onClick={() => selectScope({ kind: 'all' })}>{text.all} ({organization?.totalCount ?? 0})</button>
         <button disabled={blocked} aria-label={text.unfiled} aria-current={group.kind === 'unfiled' ? 'true' : undefined} onClick={() => selectScope({ kind: 'unfiled' })}>{text.unfiled} ({organization?.unfiledCount ?? 0})</button>
@@ -104,7 +156,7 @@ export function SavedQueriesDialog({ onClose, onHistory, services: io = services
         {reply && <p role="status">{formatText(t.summary, batch, reply.scanned, reply.matched, reply.failed)} {reply.stoppedOnError ? t.failedStop : reply.cursor ? t.more : t.done}</p>}
         <div className="history-list">{reply?.items.map(item => <article className="history-card" key={item.query.id}><div><label><input type="checkbox" aria-label={text.select(item.query.name)} disabled={blocked} checked={selected.has(item.query.id)} onChange={event => choose(item, event.target.checked)}/><strong>{item.query.name}</strong></label><span className="grow"/><span className="muted small">{connections.find(profile => profile.id === item.query.connectionId)?.name || t.sourceMissing} / {databaseLabel(item)}</span></div>
           <pre>{item.sqlPreview}{item.previewTruncated ? '…' : ''}</pre>{item.previewTruncated && <p className="muted small">{formatText(t.preview, item.sqlUnits)}</p>}<label className="inline-field">{t.choose}<select aria-label={formatText(t.connection, item.query.name)} value={target(item)} disabled={blocked} onChange={event => draft(() => setTargets(current => new Map(current).set(item.query.id, event.target.value)))}><option value="">{t.choose}</option>{connections.map(profile => <option value={profile.id} key={profile.id}>{profile.name}</option>)}</select></label>
-          <footer><span className="muted small">{new Date(item.query.updatedAt).toLocaleString('zh-CN')}</span><span className="grow"/><button className="icon-button" disabled={blocked} title={zh.activity.text009} aria-label={zh.activity.text009} onClick={() => remove(item)}><Trash2 size={14}/></button><button disabled={blocked || !target(item)} onClick={() => open(item)}>{zh.activity.text010}<ArrowUpRight size={14}/></button></footer>
+          <footer><span className="muted small">{new Date(item.query.updatedAt).toLocaleString('zh-CN')}</span><span className="grow"/><button className="icon-button" disabled={blocked} title={zh.activity.text009} aria-label={zh.activity.text009} onClick={() => remove(item)}><Trash2 size={14}/></button><button disabled={blocked || changed || needsRefresh || !insertAvailable} onClick={() => insert(item)}>{insertionText.insert}</button><button disabled={blocked || !target(item)} onClick={() => open(item)}>{zh.activity.text010}<ArrowUpRight size={14}/></button></footer>
         </article>)}{reply && !reply.items.length && <Empty title={t.empty} text={t.emptyHint}/>}</div>
         {reply?.failures.length ? <details><summary>{t.failures} ({reply.failures.length})</summary>{reply.failures.map((failure, index) => <p key={index}>{failure.id}：{failure.message}</p>)}</details> : null}<p className="muted small">{t.openHint}</p>
       </div>

@@ -1,5 +1,5 @@
 import{randomUUID,createHash}from'node:crypto';
-import{savedQuerySearchInputSchema,savedQuerySearchNextSchema,savedQuerySearchReleaseSchema,savedQueryReadSchema,savedQuerySearchLimits as limits,type SavedQuerySearchInput,type SavedQuerySearchPage,type SavedQueryOpenResult}from'../shared/savedQuerySearch';
+import{savedQuerySearchInputSchema,savedQuerySearchNextSchema,savedQuerySearchReleaseSchema,savedQueryReadSchema,savedQueryReadTextSchema,savedQuerySearchLimits as limits,type SavedQuerySearchInput,type SavedQuerySearchPage,type SavedQueryOpenResult,type SavedQueryReadTextResult}from'../shared/savedQuerySearch';
 import type{TaskEvent}from'../shared/contracts';
 import{SavedQueryMatcher}from'./savedQueryMatcher';
 import{parseSavedQueryRecord}from'./savedQuerySearchMatch';
@@ -27,8 +27,18 @@ export class SavedQuerySearches{
  async cancel(taskId:string){const job=this.jobs.get(taskId);if(!job)return;job.cancelled=true;await job.matcher?.close();await job.done;}
  /** 退出拒绝新任务，并等待所有正在计算的真实线程终止。 */
  async close(){this.closing=true;this.cursors.clear();await Promise.all([...this.jobs.keys()].map(id=>this.cancel(id)));}
+ /** 正文读取共用同一真实存储和摘要门；先限字节再hash/解析，不以摘要预览替代完整记录。 */
+ private readRecord(input:{id:string;digest:string}){
+  if(this.closing)throw Error('客户端正在退出，不能读取保存查询正文');
+  const source=this.store.querySearchRaw(input.id);if(source===undefined)throw Error('保存查询已删除，请重新搜索');
+  if(Buffer.byteLength(source)>limits.recordBytes)throw Error('保存查询记录超过128MiB，未打开原文');
+  if(createHash('sha256').update(source).digest('hex')!==input.digest)throw Error('保存查询已修改，请重新搜索后打开');
+  return parseSavedQueryRecord(input.id,source);
+ }
  /** 原摘要再校验后才读取完整正文；替代连接必须明确提供，并变成默认库未知的新查询。 */
- read(raw:unknown):SavedQueryOpenResult{const input=savedQueryReadSchema.parse(raw),source=this.store.querySearchRaw(input.id);if(!source)throw Error('保存查询已删除，请重新搜索');if(createHash('sha256').update(source).digest('hex')!==input.digest)throw Error('保存查询已修改，请重新搜索后打开');if(!this.store.queryConnectionExists(input.connectionId))throw Error('所选连接不存在，请明确选择有效连接');const query=parseSavedQueryRecord(input.id,source),contextChanged=query.connectionId!==input.connectionId;if(query.id!==input.id)throw Error('保存查询标识与本地索引不一致');return{query,connectionId:input.connectionId,...(contextChanged?{databaseContext:{state:'unknown' as const}}:{database:query.databaseContext?query.databaseContext.state==='known'?query.databaseContext.database??undefined:undefined:query.database,databaseContext:query.databaseContext}),contextChanged};}
+ read(raw:unknown):SavedQueryOpenResult{const input=savedQueryReadSchema.parse(raw),query=this.readRecord(input);if(!this.store.queryConnectionExists(input.connectionId))throw Error('所选连接不存在，请明确选择有效连接');const contextChanged=query.connectionId!==input.connectionId;return{query,connectionId:input.connectionId,...(contextChanged?{databaseContext:{state:'unknown' as const}}:{database:query.databaseContext?query.databaseContext.state==='known'?query.databaseContext.database??undefined:undefined:query.database,databaseContext:query.databaseContext}),contextChanged};}
+ /** 插入只返回完整原文及原记录元数据，既不检查源连接，也不生成保存来源授权。 */
+ readText(raw:unknown):SavedQueryReadTextResult{const input=savedQueryReadTextSchema.parse(raw);return{query:this.readRecord(input)};}
  /** 每页最多25条记录，发布前等待线程结束，失败/超时从不算作无命中。 */
  private async run(state:State,taskId:string):Promise<SavedQuerySearchPage>{
   this.prune();if(this.closing)throw Error('客户端正在退出，不能开始本地搜索');if(this.jobs.has(taskId))throw Error('本地搜索编号已使用');if(this.jobs.size>=limits.active||this.jobs.size+this.cursors.size>=limits.cursors)throw Error('本地搜索已达上限，请先关闭旧窗口');

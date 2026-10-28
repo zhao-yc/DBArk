@@ -189,6 +189,7 @@ export interface CommandMap {
   'search.savedQueriesContinue':{input:SavedQuerySearchNext;output:SavedQuerySearchPage};
   'search.savedQueriesRelease':{input:{cursor:string};output:void};
   'queries.read':{input:{id:string;digest:string;connectionId:string};output:SavedQueryOpenResult};
+  'queries.readText':{input:import('./savedQuerySearch').SavedQueryReadTextInput;output:import('./savedQuerySearch').SavedQueryReadTextResult};
   'queries.page':{input:SavedQueryPageInput;output:SavedQueryPage};
   'queries.organizationGet': { input: Record<string, never>; output: SavedQueryOrganizationSnapshot };
   'queries.organizationApply': { input: SavedQueryOrganizationApply; output: SavedQueryOrganizationSnapshot };

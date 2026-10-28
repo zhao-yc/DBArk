@@ -615,6 +615,12 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
     if (shuttingDown) throw Error('客户端正在退出，不能整理保存查询分组');
     return command === 'queries.organizationGet' ? store.queryOrganization() : store.applyQueryOrganization(input);
   }
+  // 插入保存查询正文只读本地原记录，不领取来源绑定、连接配置锁或数据库任务。
+  if (command === 'queries.readText') {
+    columnsMain.assertCapturedOwner(columns);
+    if (shuttingDown) throw Error('客户端正在退出，不能读取保存查询正文');
+    return savedQuerySearches.readText(input);
+  }
   // 专属片段传输只认真实IPC文档与Main快照，永不转发给SQL引擎或接受任意文件路径。
   if (command.startsWith('snippets.transfer')) {
     columnsMain.assertCapturedOwner(columns);
@@ -1389,7 +1395,7 @@ else {
         if (payload.command.startsWith('result.insert') || payload.command === 'query.cancel' && !!payload.input && typeof payload.input === 'object' && 'taskId' in payload.input && typeof payload.input.taskId === 'string' && tasks.get(payload.input.taskId)?.kind.startsWith('result.insert') && resultInserts.has(payload.input.taskId)) columns = columnsMain.capture(event);
         if (payload.command.startsWith('history.delete') || historyDeleteCancel || payload.command.startsWith('binaryCellFiles.') || payload.command.startsWith('table.filteredUpdate.') || payload.command === 'query.cancel' && !!payload.input && typeof payload.input === 'object' && 'taskId' in payload.input && typeof payload.input.taskId === 'string' && filteredUpdates.has(payload.input.taskId)) columns = columnsMain.capture(event);
         if (payload.command.startsWith('table.filteredDelete.') || payload.command === 'query.cancel' && !!payload.input && typeof payload.input === 'object' && 'taskId' in payload.input && typeof payload.input.taskId === 'string' && filteredDeletes.has(payload.input.taskId)) columns = columnsMain.capture(event);
-        if (payload.command.startsWith('schema.tableChecks.')) columns = columnsMain.capture(event);
+        if (payload.command.startsWith('schema.tableChecks.') || payload.command === 'queries.readText') columns = columnsMain.capture(event);
         if (payload.command.startsWith('schema.databaseDrop.') || payload.command === 'table.valueOptions' || payload.command === 'table.exportFiltered' || filteredExportCancel) columns = columnsMain.capture(event);
         if (payload.command.startsWith('schema.databaseDefaultEncoding.')) {
           columns = columnsMain.capture(event); columns.databaseEncodingRevision = store.connectionRevision();
@@ -1405,6 +1411,7 @@ else {
         const snippetTransferOperation=payload.command.startsWith('snippets.transfer');if(snippetTransferOperation)queryFileOperations.add(operation);
         try {
           const result = await operation;
+          if (payload.command === 'queries.readText') { columnsMain.assertCapturedOwner(columns); if (shuttingDown) throw Error('客户端正在退出，保存查询正文未发布'); }
           if (payload.command.startsWith('workbench.protocol')) columnsMain.assertCapturedOwner(columns);
           if (payload.command === 'table.filteredUpdate.preview') {
             try { filteredUpdates.assertPublication(result, columns!); }

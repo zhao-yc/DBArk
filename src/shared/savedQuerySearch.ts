@@ -12,6 +12,10 @@ export const savedQuerySearchInputSchema=z.object({taskId:z.string().uuid(),scop
 export const savedQuerySearchNextSchema=z.object({taskId:z.string().uuid(),cursor:z.string().uuid()}).strict();
 export const savedQuerySearchReleaseSchema=z.object({cursor:z.string().uuid()}).strict();
 export const savedQueryReadSchema=z.object({id,digest:z.string().regex(/^[a-f0-9]{64}$/),connectionId:id}).strict();
+/** 插入正文只消费原摘要；不接受或授予连接、会话与来源绑定。 */
+export const savedQueryReadTextSchema=savedQueryReadSchema.omit({connectionId:true}).strict();
+export type SavedQueryReadTextInput=z.infer<typeof savedQueryReadTextSchema>;
+export interface SavedQueryReadTextResult{query:SavedQuery}
 export type SavedQuerySearchInput=z.infer<typeof savedQuerySearchInputSchema>;
 export type SavedQuerySearchNext=z.infer<typeof savedQuerySearchNextSchema>;
 export interface SavedQueryMatch{field:'name'|'sql';line:number;column:number;offset:number;length:number;preview:string;previewTruncated:boolean}
