@@ -1,6 +1,6 @@
 export const tableStatisticsZh = {
-  title: '表数据统计', scope: '统计服务器上符合当前筛选的全部已提交记录，不限于已加载页。',
-  drafts: '本页尚未提交的新增、修改和删除不计入统计；草稿保持，不会提交或清除。',
+  title: '表数据统计', scope: '统计服务器上符合当前筛选的全部已提交记录。',
+  drafts: '本页未提交修改不计入统计，草稿保持。',
   selection: '选择统计字段（最多12个）', countOnly: '不选择字段时只统计总记录数。勾选字段不会查询服务器。',
   selected: (count: number) => `已选择 ${count} / 12 个字段`, selectColumn: (name: string) => `统计字段 ${name}`,
   distinctOption: '统计非NULL不同值（可能耗时）', distinctColumn: '非NULL不同值（COUNT DISTINCT）',

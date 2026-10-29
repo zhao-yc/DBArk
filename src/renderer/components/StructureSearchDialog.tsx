@@ -6,7 +6,7 @@ import {databaseSearchZh as text} from '../locales/databaseSearch.zh-CN';
 import {structureSearchContext} from '../structureSearchContext';
 import {invoke,errorMessage,uid} from '../lib';
 import {useWorkspace} from '../store';
-import {Modal,Field,ErrorBox,Spinner} from './ui';
+import {Modal,Field,ErrorBox,Spinner, UsageHelp } from './ui';
 import '../databaseSearch.css';
 import type {DefinitionSearchOpen} from '../../shared/definitionNavigation';
 import {DefinitionSearchConnectionLease} from '../definitionNavigation';
@@ -84,13 +84,13 @@ export function StructureSearchDialog({onClose,onOpen,onData,onSavedQueries}:{on
           <Field label={text.limit}><input aria-label={text.limit} type="number" min={1} max={structureSearchLimits.maxHits} value={limit} onChange={event=>setLimit(Number(event.target.value))}/></Field>
           <Field label={text.onError}><select aria-label={text.onError} value={onError} onChange={event=>setOnError(event.target.value as 'stop'|'continue')}><option value="stop">{text.stop}</option><option value="continue">{text.continueOnError}</option></select></Field></div>
         <div className="database-search-kinds">{(searchIn==='definition'?definitionSearchKinds:structureSearchKinds).map(kind=><label key={kind}><input type="checkbox" checked={kinds.includes(kind)} onChange={event=>setKinds(previous=>event.target.checked?[...previous,kind]:previous.filter(value=>value!==kind))}/>{text.kinds[kind]}</label>)}<label><input type="checkbox" checked={caseSensitive} onChange={event=>setCaseSensitive(event.target.checked)}/>{text.caseSensitive}</label></div>
-        <p className="muted small">{searchIn==='definition'?text.definitionHint:text.databaseHint} {text.ruleHint}</p>
+        <UsageHelp><p>{searchIn==='definition'?text.definitionHint:text.databaseHint}</p><p>{text.ruleHint}</p><p>{text.currentDefinition}</p></UsageHelp>
       </fieldset>
       <ErrorBox message={error}/>
       <div role="status" className="database-search-status">{busy||closing?<Spinner text={closing?text.closing:text.opening}/>:page?<><span>{text.resultConnection}：{state.connections.find(profile=>profile.id===resultConnection.current)?.name}；{text.summary(page.totalHits,page.completedScopes,page.scopeCount)}{page.scannedDefinitions!==undefined&&text.definitionCount(page.scannedDefinitions)}</span> {page.limitReached?text.capped:page.stoppedOnError?text.stopped:page.cursor?text.more:page.completedScopes<page.scopeCount?text.failed:failures.length?text.finishedWithErrors:page.scannedDefinitions!==undefined?text.definitionsDone:text.done}</>:text.emptyHint}</div>
       <DataGrid className={state.settings.theme==='dark'?'rdg-dark':'rdg-light'} columns={columns} rows={hits} rowKeyGetter={row=>JSON.stringify([row.database,row.kind,row.object,row.name])} rowClass={row=>row===selected?'database-search-selected':undefined} onCellClick={({row})=>setSelected(row)} onCellDoubleClick={({row})=>{if(!busy&&!closing)void close(row);}} onCellKeyDown={({row},event)=>{if(event.key==='Enter'&&!busy&&!closing){event.preventDefault();void close(row);}}} renderers={{noRowsFallback:<div className="database-search-empty">{text.empty}</div>}} style={{height:230}}/>
       {failures.length>0&&<details className="database-search-failures" open><summary>{text.failureCount(failures.length)}</summary>{failures.map((failure,index)=><p key={index}>{failure.database} · {text.kinds[failure.kind]}{failure.object?' · '+failure.object:''}：{failure.message}</p>)}</details>}
-      <p className="muted small">{text.currentDefinition} {page?.cursor&&text.expired}</p>
+      {page?.cursor&&<p className="muted small">{text.expired}</p>}
     </div>
     <footer className="modal-footer"><button className="primary" disabled={busy||closing||!connectionId} onClick={()=>search()}>{text.start}</button><button disabled={busy||closing||!cursor.current||!resultLease.current?.current()} onClick={()=>search(true)}>{text.next}</button><button disabled={!busy||closing} onClick={()=>void cancel().catch(reason=>setError(errorMessage(reason)))}>{text.cancel}</button><span className="grow"/><button disabled={!selected||busy||closing} onClick={()=>selected&&void close(selected)}>{text.open}</button><button disabled={closing} onClick={()=>void close()}>{text.close}</button></footer>
   </Modal>;

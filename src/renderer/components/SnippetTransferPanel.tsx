@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import type { SqlSnippet } from '../../shared/contracts';
 import { snippetTransferZh as text, type SnippetTransferAction, type SnippetTransferPreview } from '../../shared/snippetTransfer';
 import { errorMessage, invoke } from '../lib';
-import { ErrorBox } from './ui';
+import { ErrorBox, UsageHelp } from './ui';
 
 /** 文件能力只存活于当前片段弹窗；迟到响应只释放能力，不更新界面或自动确认。 */
 export function SnippetTransferPanel({ blocked, authorize, onActive, onApplied }: { blocked: boolean; authorize(action: () => void): void; onActive(active: boolean): void; onApplied(items: SqlSnippet[]): void }) {
@@ -69,7 +69,7 @@ export function SnippetTransferPanel({ blocked, authorize, onActive, onApplied }
   // 外层标识文件操作区，只有实际差异区域使用预览名称，避免同名区域和空预览误报。
   return <section className="snippet-transfer" aria-label={text.region}>
     <div><button disabled={blocked || !!busy || !!preview || cancelling} onClick={() => request('export')}>{text.export}</button><button disabled={blocked || !!busy || !!preview || cancelling} onClick={() => request('import')}>{text.import}</button>{(busy || preview) && <button disabled={busy === 'apply' || cancelling} onClick={() => void cancel()}>{preview ? text.closePreview : text.cancel}</button>}</div>
-    <p className="muted small">{text.hint}</p><ErrorBox message={error}/>{message && <p role="status">{message}</p>}
+    <UsageHelp><p>{text.hint}</p></UsageHelp><ErrorBox message={error}/>{message && <p role="status">{message}</p>}
     {preview && <div role="region" aria-label={text.preview}><h3>{text.preview}</h3>{preview.entries.map(entry => <article key={entry.snippet.id} className="snippet-transfer-entry">
       <strong>{entry.snippet.name} · {text[entry.status]}</strong><p className="muted small">ID：{entry.snippet.id}</p>{entry.warnings.map(warning => <p key={warning}>{warning}</p>)}
       <label>{entry.snippet.name}<select aria-label={`${entry.snippet.name}（${entry.snippet.id}）导入动作`} disabled={!!busy || cancelling} value={actions[entry.snippet.id]} onChange={event => setActions(previous => ({ ...previous, [entry.snippet.id]: event.target.value as SnippetTransferAction }))}><option value="skip">{text.skip}</option>{entry.status !== 'same' && <option value={entry.status}>{text[entry.status]}</option>}</select></label>

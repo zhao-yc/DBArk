@@ -1,3 +1,4 @@
+import { UsageHelp } from './ui';
 import { useLayoutEffect, useRef, useState } from 'react';
 import { ImportPreflightController, type ImportPreflightServices, type ImportPreflightSource, type ImportPreflightState } from '../importPreflight';
 import type { FileImportPreflightReport } from '../../shared/fileImportPreflight';
@@ -33,7 +34,7 @@ export function ImportPreflightPanel({ source, busy, onActivity, onReport, servi
   const report = state.report, working = state.phase !== 'idle', pages = Math.max(1, Math.ceil((report?.issues.length ?? 0) / 20)), currentPage = Math.min(page, pages - 1);
   const generation = state.generation, instance = controller.current;
   return <section aria-label={text.title}>
-    <h3>{text.title}</h3><p>{text.scope}</p><p>{text.detail}</p>
+    <h3>{text.title}</h3><p>{text.notice}</p><UsageHelp><p>{text.scope}</p><p>{text.detail}</p></UsageHelp>
     <button type="button" disabled={!source || busy || working} onClick={() => { setPage(0); void instance?.run(generation, busy); }}>{text.run}</button>
     {state.phase === 'running' || state.phase === 'cancelling' ? <button type="button" disabled={state.phase === 'cancelling'} onClick={() => void instance?.cancel(generation)}>{text.cancel}</button> : null}
     <button type="button" disabled={!report || busy || working} onClick={() => { if (report) void instance?.export(generation, report, busy); }}>{text.export}</button>

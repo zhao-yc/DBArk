@@ -8,7 +8,7 @@ import { zh } from '../locales/zh-CN';
 import { invoke, kindLabels, errorMessage } from '../lib';
 import { useWorkspace } from '../store';
 import { SqlEditor } from './SqlEditor';
-import { ErrorBox, Modal, Spinner } from './ui';
+import { ErrorBox, Modal, Spinner, UsageHelp } from './ui';
 import '../definitionNavigation.css';
 
 /** 实际定义编辑器只读展示；源对象、连接修订与模型监听共同撤销旧命中。 */
@@ -55,5 +55,5 @@ export function DefinitionViewer({ connectionId, database, object, search, onClo
   }, [connectionId, database, object.name, object.kind, version, search]);
   // 旧目标即使在效果清理前重绘，也不能继续展示其原文或高亮。
   const owned = read?.lease.current(), value = owned ? read?.value : undefined, invalid = !!read && !owned || value?.status === 'invalid';
-  return <Modal title={databaseSearchZh.definitionTitle(kindLabels[object.kind], object.name)} wide onClose={() => { read?.lease.cancel(); onClose(); }}><div className="modal-content"><p className="muted">{databaseSearchZh.definitionReadOnly}</p>{invalid && <p role="status">{t.invalid}</p>}{owned && read?.busy && <Spinner/>}{value?.status === 'unavailable' && <p role="status">{t.unavailable}</p>}{value?.source && <DefinitionMatches source={value.source} editor={editor} current={() => read?.lease.current() ? current() : undefined}/ >}{value?.sql && <SqlEditor key={read?.generation} value={value.sql} readOnly height={340} onReady={instance => { if (read?.lease.current()) { modelLease.current?.lease.dispose(); const prepared = new DefinitionEditorLease(instance); modelLease.current = { owner: read.lease, lease: prepared }; setEditor(prepared); } }}/ >}{owned && read?.error && <><p role="status">{t.failed}</p><ErrorBox message={read.error}/></>}</div><footer className="modal-footer"><span className="grow"/><button onClick={() => { read?.lease.cancel(); onClose(); }}>{zh.common.cancel}</button></footer></Modal>;
+  return <Modal title={databaseSearchZh.definitionTitle(kindLabels[object.kind], object.name)} wide onClose={() => { read?.lease.cancel(); onClose(); }}><div className="modal-content"><UsageHelp><p>{databaseSearchZh.definitionReadOnly}</p></UsageHelp>{invalid && <p role="status">{t.invalid}</p>}{owned && read?.busy && <Spinner/>}{value?.status === 'unavailable' && <p role="status">{t.unavailable}</p>}{value?.source && <DefinitionMatches source={value.source} editor={editor} current={() => read?.lease.current() ? current() : undefined}/ >}{value?.sql && <SqlEditor key={read?.generation} value={value.sql} readOnly height={340} onReady={instance => { if (read?.lease.current()) { modelLease.current?.lease.dispose(); const prepared = new DefinitionEditorLease(instance); modelLease.current = { owner: read.lease, lease: prepared }; setEditor(prepared); } }}/ >}{owned && read?.error && <><p role="status">{t.failed}</p><ErrorBox message={read.error}/></>}</div><footer className="modal-footer"><span className="grow"/><button onClick={() => { read?.lease.cancel(); onClose(); }}>{zh.common.cancel}</button></footer></Modal>;
 }

@@ -7,7 +7,7 @@ import { zh } from '../locales/zh-CN';
 import { parsePageJump, maxTablePage } from '../tableFilters';
 import { TableFilterPanel } from './TableFilterPanel';
 import { ResultsGrid } from './ResultsGrid';
-import { ErrorBox, Field, Modal, Spinner } from './ui';
+import { ErrorBox, Field, Modal, Spinner, UsageHelp } from './ui';
 import '../references.css';
 
 type ReferencePage = CommandMap['table.referencePage']['output'];
@@ -86,7 +86,7 @@ export function ForeignKeyDialog({ base, snapshot, keys, mode, onApply, onClose,
   const writable = mode === 'choose' && referenceWritable(data?.source ?? snapshot.source, key);
   const canClear = writable && referenceClearable(data?.source ?? snapshot.source, key);
   return <Modal title={mode === 'choose' ? text.choose : text.browse} wide onClose={close}><div className="modal-content reference-content">
-    <p className="muted small">{mode === 'choose' ? text.hint : text.browseHint}</p>
+    <UsageHelp><p>{mode === 'choose' ? text.hint : text.browseHint}</p></UsageHelp>
     <Field label={text.constraint}><select disabled={busy} value={keyName} onChange={event => { setKeyName(event.target.value); setPageIndex(1); setFilters([]); setSort([]); setClearConfirm(false); }}>{keys.map(item => <option key={item.name} value={item.name}>{item.name}</option>)}</select></Field>
     <p>{text.target}：{key.referencedDatabase}.{key.referencedTable}</p><p className="reference-mapping">{text.mapping}：{key.columns.map((column, index) => `${column} → ${key.referencedColumns[index]}`).join('，')}</p>
     <TableFilterPanel columns={(targetInfo?.columns ?? []).map(column => column.name)} filters={filters} mode={filterMode} disabled={busy || !data} onFiltersChange={next => { if (busy) return false; setFilters(next); setPageIndex(1); return true; }} onModeChange={next => { if (busy) return false; setFilterMode(next); setPageIndex(1); return true; }}/>

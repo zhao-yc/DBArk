@@ -6,7 +6,7 @@ export const queryResultComparisonZh = {
   keys: '匹配键', keyHint: '请明确选择 1～8 个匹配键，不推断主键。', keysHint: '请选择 1～8 个唯一匹配键；匹配键不能为 NULL 或重复，不支持浮点、字节与未知类型。',
   keyLimit: (maximum: number) => `最多选择 ${maximum} 个匹配键`, selectKeys: '请明确选择1～8个匹配键',
   requireTwo: '请先固定至少两份查询结果',
-  notice: '仅在当前标签内对比两份固定结果的已返回行，不重发 SQL、不写数据库；此功能尚不提供数据同步。',
+  notice: '仅对比两份固定结果的已返回行，不执行数据库同步。',
   truncated: '至少一侧结果已截断，对比仅覆盖已返回部分，不代表数据库全表差异。',
   scanning: '正在对比固定结果…', progress: (processed: number, total: number) => `已处理 ${processed} / ${total} 行`,
   added: '新增', removed: '移除', changed: '修改', equal: '未变化',

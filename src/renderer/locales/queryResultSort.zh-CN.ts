@@ -1,5 +1,5 @@
 export const queryResultSortZh = {
-  panelTitle: '多列排序', panelHint: '先编辑独立排序草稿，再一次应用；保留当前筛选，不执行或重发SQL。取消保留原排序，应用后可撤销整理。', panelEmpty: '当前草稿使用原返回顺序。',
+  panelTitle: '多列排序', panelHint: '先编辑独立排序草稿，再一次应用；保留当前筛选，不执行或重发SQL。取消保留原排序，应用后可撤销整理。', panelEmpty: '按原返回顺序',
   panelField: (order: number) => `排序草稿第${order}字段`, panelDirection: (order: number) => `排序草稿第${order}方向`, panelNulls: (order: number) => `排序草稿第${order}NULL位置`, panelCase: (order: number) => `排序草稿第${order}忽略大小写`,
   panelAdd: '添加排序字段', panelClear: '清空排序草稿', panelCancel: '取消排序草稿', panelApply: '应用排序草稿', panelDeclined: '排序未应用，原视图保持；请核对当前结果及排序预算。',
   panelPrevious: '上一页排序规则', panelNext: '下一页排序规则', panelPage: (page: number, total: number) => `排序规则第${page}／${total}页`,

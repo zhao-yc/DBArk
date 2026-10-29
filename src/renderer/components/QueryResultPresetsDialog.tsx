@@ -4,7 +4,7 @@ import { invoke, errorMessage } from '../lib';
 import { queryResultPresetsZh as text } from '../locales/queryResultPresets.zh-CN';
 import { queryResultFilterZh as filterText } from '../locales/queryResultFilter.zh-CN';
 import { zh } from '../locales/zh-CN';
-import { Modal, ErrorBox, Spinner } from './ui';
+import { UsageHelp, Modal, ErrorBox, Spinner  } from './ui';
 import '../queryResultPresets.css';
 
 /** 原始列序号与显示名一起标明边界，重复别名不会混淆保存的唯一键。 */
@@ -92,7 +92,7 @@ export function QueryResultPresetsDialog({ connectionId, value, owner, isCurrent
   /** 请求未结算时保留窗口；导航/卸载仍会撤销所有迟到回调。 */
   function close() { if (!operation.current) onClose(); }
   return <div data-query-result-presets-owner={owner}><Modal title={text.title} onClose={close} wide><div className="modal-content query-result-presets">
-    <p>{text.scope}</p><p className="muted small">{text.hint} {text.current}：{text.summary(value.columns.length, value.visible.length)}</p><p aria-label={text.currentFrozen}>{frozenSummary(value)}</p>
+    <p>{text.scope}</p><UsageHelp><p>{text.hint}</p></UsageHelp><p>{text.current}：{text.summary(value.columns.length, value.visible.length)}</p><p aria-label={text.currentFrozen}>{frozenSummary(value)}</p>
     <label>{text.choose}<select aria-label={text.choose} value={draft.selected} disabled={!valid || busy} onChange={event => { const entry = snapshot?.entries.find(item => item.id === event.target.value); change({ selected: entry?.id ?? '', name: entry?.name ?? '' }); }}><option value="">{text.placeholder}</option>{snapshot?.entries.map(entry => <option key={entry.id} value={entry.id}>{entry.name}</option>)}</select></label>
     <label>{text.name}<input aria-label={text.name} maxLength={queryResultPresetLimits.name} disabled={!valid || busy} value={draft.name} onChange={event => change({ ...draft, name: event.target.value })}/></label>
     {!snapshot?.entries.length && !busy && !error && <p>{text.empty}</p>}

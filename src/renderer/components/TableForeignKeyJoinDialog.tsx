@@ -4,7 +4,7 @@ import { buildForeignKeyJoin, foreignKeyJoinChoices, foreignKeyJoinMetadataKey }
 import { foreignKeyJoinPreview, revalidateForeignKeyJoin, type ForeignKeyJoinPreview, type ForeignKeyJoinTarget, TableForeignKeyJoinIntent } from '../tableForeignKeyJoinIntent';
 import { tableForeignKeyJoinZh as text } from '../locales/tableForeignKeyJoin.zh-CN';
 import { errorMessage, invoke, uid } from '../lib';
-import { ErrorBox, Modal, Spinner } from './ui';
+import { ErrorBox, Modal, Spinner, UsageHelp } from './ui';
 
 export interface TableForeignKeyJoinServices { read(input: ForeignKeyJoinTarget & { taskId: string }): Promise<TableInfo>; cancel(taskId: string): Promise<unknown>; }
 /** 每次正式元数据读取均持有独立任务编号；取消不借普通查询或复用数据库会话。 */
@@ -138,8 +138,8 @@ export function TableForeignKeyJoinDialog({ intent, onOpen, onClose, onActivity,
     <p>{text.scope}</p><p>{origin.intent.source.database}.{origin.intent.source.name} · {text.limit}：{origin.intent.limit}</p>
     <label>{text.fk}<select aria-label={text.fk} disabled={unavailable} value={selection.fk} onChange={event => changeForeignKey(event.target.value)}>{choices.map(item => <option key={item.name} value={item.name}>{item.name} → {item.referencedDatabase}.{item.referencedTable}</option>)}</select></label>
     <label>{text.joinKind}<select aria-label={text.joinKind} disabled={busy || unavailable} value={selection.kind} onChange={event => { if (event.target.value === 'LEFT' || event.target.value === 'INNER') revise({ ...selection, kind: event.target.value }); }}><option value="LEFT">{text.left}</option><option value="INNER">{text.inner}</option></select></label>
-    <p>{selection.kind === 'LEFT' ? text.leftHint : text.innerHint}</p><section aria-label={text.relationship}><p>{text.relationship}</p>{choice && <ul>{choice.columns.map((name, index) => <li key={name}>{origin.intent.source.database}.{origin.intent.source.name}.{name} = {choice.referencedDatabase}.{choice.referencedTable}.{choice.referencedColumns[index]}</li>)}</ul>}</section>
-    <p>{text.aliases}</p>{fieldList('child', origin.intent.source)}{parent && parent.fk === selection.fk && fieldList('parent', parent.info)}
+    <UsageHelp><p>{selection.kind === 'LEFT' ? text.leftHint : text.innerHint}</p><p>{text.relationship}</p><p>{text.aliases}</p></UsageHelp>{choice && <section aria-label={text.relationship}><ul>{choice.columns.map((name, index) => <li key={name}>{origin.intent.source.database}.{origin.intent.source.name}.{name} = {choice.referencedDatabase}.{choice.referencedTable}.{choice.referencedColumns[index]}</li>)}</ul></section>}
+    {fieldList('child', origin.intent.source)}{parent && parent.fk === selection.fk && fieldList('parent', parent.info)}
     <ErrorBox message={unavailable && !closing ? text.stale : error || preview.error}/>{closing ? <p role="status">{text.closing}</p> : message && <Spinner text={message}/>}
     {preview.value && !unavailable && <section aria-label={text.preview}><pre style={{ whiteSpace: 'pre-wrap' }}>{preview.value.sql}</pre></section>}
   </div><footer className="modal-footer">{busy && <button disabled={closing} onClick={() => { if (rendered()) cancel(); }}>{text.cancel}</button>}<span className="grow"/><button disabled={closing} onClick={close}>{text.close}</button><button disabled={busy || unavailable || !choice} onClick={() => run('preview')}>{text.preview}</button><button className="primary" disabled={busy || unavailable || !preview.value} onClick={() => run('open')}>{text.open}</button></footer></Modal>;

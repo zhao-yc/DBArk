@@ -4,7 +4,7 @@ import { queryParameterTypes, validateQueryParameters, type QueryParameter, type
 import { errorMessage } from '../lib';
 import { zh } from '../locales/zh-CN';
 import { parameterZh as text } from '../locales/queryParameters.zh-CN';
-import { ErrorBox, Field, Modal, Spinner } from './ui';
+import { UsageHelp, ErrorBox, Field, Modal, Spinner  } from './ui';
 import { SqlEditor } from './SqlEditor';
 import '../queryParameters.css';
 import type { QueryParameterReusePort } from '../queryParameterReusePort';
@@ -149,8 +149,8 @@ export function QueryParametersDialog({ source, loadNames, onExecute, onClose, s
   function close(): void { if (!alive.current || live.current !== ticket || closing.current) return; closing.current = true; ready.current = false; revokeFrame(); onClose(); }
   const hint = (type: QueryParameterType) => type === 'boolean' ? text.booleanHint : type === 'binary' ? text.binaryHint : type === 'date' ? text.dateHint : type === 'datetime' ? text.datetimeHint : type === 'time' ? text.timeHint : type === 'integer' || type === 'decimal' ? text.numericHint : text.textHint;
   return <Modal title={text.title} wide onClose={close}>
-    <div className="modal-content parameter-content"><p className="muted small">{text.hint}</p><p className="muted small">{reuse ? reuseText.privacy : text.privacy}</p>
-      {reuse && <section aria-label={reuseText.title}><p>{reuseText.hint}</p><p>{reuseText.overwrite}</p><label><input type="checkbox" checked={remember} disabled={loading || !info} onChange={event => changeRemember(event.target.checked)}/>{reuseText.remember}</label><div className="parameter-actions"><button type="button" disabled={loading || !info || !reusable} onClick={fillPrevious}>{reuseText.fill}</button><button type="button" disabled={loading || !info || !reusable && !remember} onClick={forgetPrevious}>{reuseText.forget}</button></div>{notice && <p role="status">{notice}</p>}</section>}
+    <div className="modal-content parameter-content"><UsageHelp><p>{text.hint}</p><p>{text.dateNote}</p>{reuse && <p>{reuseText.hint}</p>}</UsageHelp><p className="muted small">{reuse ? reuseText.privacy : text.privacy}</p>
+      {reuse && <section aria-label={reuseText.title}><p>{reuseText.overwrite}</p><label><input type="checkbox" checked={remember} disabled={loading || !info} onChange={event => changeRemember(event.target.checked)}/>{reuseText.remember}</label><div className="parameter-actions"><button type="button" disabled={loading || !info || !reusable} onClick={fillPrevious}>{reuseText.fill}</button><button type="button" disabled={loading || !info || !reusable && !remember} onClick={forgetPrevious}>{reuseText.forget}</button></div>{notice && <p role="status">{notice}</p>}</section>}
       <h3>{text.source}</h3>{source.length > 65536 && <p className="warning-text">{text.sourceTruncated}</p>}<SqlEditor value={source.slice(0, 65536)} readOnly height={160}/>
       <div className="parameter-actions">{loading ? <Spinner text={text.namesLoading}/> : !rows.length && <span className="muted small">{text.noParameters}</span>}<span className="grow"/><button disabled={loading} onClick={() => void reload()}>{text.retry}</button><button disabled={loading || rows.length >= 200} onClick={() => { if (frame() && !loadingRef.current) setRows(previous => previous.length >= 200 ? previous : [...previous, { id: ++sequence.current, parameter: { name: '', type: 'text', value: '' }, manual: true }]); }}><Plus size={13}/>{text.add}</button></div>
       {!!info?.warnings?.length && <div className="info-strip">{text.namesDynamic}<ul>{info.warnings.map((warning, index) => <li key={index}>{warning}</li>)}</ul></div>}
@@ -159,7 +159,7 @@ export function QueryParametersDialog({ source, loadNames, onExecute, onClose, s
         <Field label={`${text.type} ${row.parameter.name || row.id}`}><select disabled={loading} value={row.parameter.type} onChange={event => update(row.id, { type: event.target.value as QueryParameterType, value: event.target.value === 'null' ? undefined : row.parameter.value ?? '' })}>{queryParameterTypes.map(type => <option value={type} key={type}>{text[type]}</option>)}</select></Field>
         <Field label={`${text.value} ${row.parameter.name || row.id}`}><textarea disabled={loading || row.parameter.type === 'null'} value={row.parameter.value ?? ''} maxLength={65536} rows={2} placeholder={row.parameter.type === 'null' ? 'NULL' : hint(row.parameter.type)} onChange={event => update(row.id, { value: event.target.value })}/></Field>
         {row.manual && <button className="icon-button" disabled={loading} aria-label={`${text.remove} ${row.id}`} onClick={() => { if (frame() && !loadingRef.current) setRows(previous => previous.filter(item => item.id !== row.id)); }}><Trash2 size={13}/></button>}
-      </div>)}</div><p className="muted small">{text.dateNote}</p><ErrorBox message={error}/>
+      </div>)}</div><ErrorBox message={error}/>
     </div><footer className="modal-footer"><button onClick={close}>{zh.common.cancel}</button><span className="grow"/><button className="primary" disabled={loading || !info || !ready.current || invalid.current || closing.current} onClick={execute}><Play size={14}/>{submitLabel ?? text.execute}</button></footer>
   </Modal>;
 }

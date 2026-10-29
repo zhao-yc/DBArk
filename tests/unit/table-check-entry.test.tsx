@@ -41,7 +41,7 @@ function entry() {
   };
   visit(app); expect(declarations).toHaveLength(5); expect(methods).toHaveLength(3); expect(dirty.includes('checksEdits')).toBe(true); expect(modal).not.toBe('');
   // 其它功能的修改标志是外界false端口；checksEdits、workspace flags和完整hasDirty表达式均保留正式源码。
-  const otherFlags = Object.fromEntries(['databaseDropEdits', 'copyDataEdits', 'tableCreateEdits', 'copyStructureEdits', 'databaseCreateEdits', 'dropEdits', 'truncateEdits', 'counterEdits', 'renameEdits', 'encodingEdits', 'databaseEncodingEdits', 'commentEdits', 'columnEdits', 'indexEdits', 'foreignKeyEdits'].map(key => [key, false]));
+  const otherFlags = Object.fromEntries(['importNewTable', 'importNewTableEdits', 'databaseDropEdits', 'copyDataEdits', 'tableCreateEdits', 'copyStructureEdits', 'databaseCreateEdits', 'dropEdits', 'truncateEdits', 'counterEdits', 'renameEdits', 'encodingEdits', 'databaseEncodingEdits', 'commentEdits', 'columnEdits', 'indexEdits', 'foreignKeyEdits'].map(key => [key, false]));
   let sequence = 0, open!: (value: TableCheckTarget) => void; const invalidate = vi.fn(), mark = vi.fn(), uid = vi.fn(() => `owner-${++sequence}`);
   function DialogPort(props: DialogProps) { views.push(props); return <section role="dialog" aria-label={text.title}/>; }
   const context = createContext({ exports: {}, ...otherFlags, document, useState, useRef, useWorkspace: store, assertTableChecksTargetAvailable, tableChecksServices, tableCheckMessages, errorMessage, structuredClone, uid, TableCheckConstraintsDialog: DialogPort, workbenchNavigation: { invalidate }, markStructureTarget: mark, captureOpen: (value: typeof open) => { open = value; }, require(name: string) { if (name === 'react/jsx-runtime') return jsxRuntime; throw Error('禁止其它App依赖'); } });

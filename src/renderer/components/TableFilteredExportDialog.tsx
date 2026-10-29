@@ -9,7 +9,7 @@ import { tableFilterGroupSummary } from '../tableFilterGroups';
 import { errorMessage, invoke, uid } from '../lib';
 import { tableFilteredExportZh as text } from '../locales/tableFilteredExport.zh-CN';
 import { CsvExportDelimiterField } from './CsvExportDelimiter';
-import { ErrorBox, Field, Modal, Spinner } from './ui';
+import { ErrorBox, Field, Modal, Spinner, UsageHelp } from './ui';
 
 export interface TableFilteredExportServices {
   choose(input: { purpose: 'export'; format: TableFilteredExportInput['format']; suggestedName: string }): Promise<FileChoice | null>;
@@ -143,14 +143,14 @@ export function TableFilteredExportDialog({ intent, services = tableFilteredExpo
     <section aria-label={text.sorts}><strong>{text.sorts}</strong>{owner.intent.sort.length ? <ol>{owner.intent.sort.map((rule, index) => <li key={index}>{tableSortRuleSummary(rule)}</li>)}</ol> : <p>{text.noSorts}</p>}</section>
     <div className="form-grid"><Field label={text.format}><select aria-label={text.format} disabled={disabled} value={draft.format} onChange={event => change({ format: event.target.value as Draft['format'], encoding: draft.encoding, csvDelimiter: draft.csvDelimiter })}><option value="csv">CSV</option><option value="json">JSON</option><option value="sql" disabled={owner.intent.source.objectKind !== 'table'}>INSERT SQL</option><option value="xlsx">Excel（XLSX）</option></select></Field>
       <Field label={text.encoding}><select aria-label={text.encoding} disabled={disabled || draft.format === 'xlsx'} value={draft.encoding} onChange={event => change({ format: draft.format, encoding: event.target.value as Draft['encoding'], csvDelimiter: draft.csvDelimiter })}><option value="utf8">UTF-8</option><option value="utf16le">UTF-16LE</option><option value="gb18030">GB18030</option></select></Field>{draft.format === 'csv' && <CsvExportDelimiterField value={draft.csvDelimiter} disabled={disabled} onChange={csvDelimiter => change({ format: draft.format, encoding: draft.encoding, csvDelimiter })}/>}</div>
-    {draft.format === 'xlsx' && <><p>{text.xlsxEncoding}</p><p>{text.xlsxLimits}</p></>}{draft.format === 'sql' && <p className="warning-text">{text.sqlScope}</p>}{owner.intent.source.objectKind !== 'table' && <p className="muted small">{text.viewSql}</p>}
-    <section aria-label={text.fields}><strong>{text.fields}</strong><p>{text.allFields}</p>
+    {draft.format === 'xlsx' && <UsageHelp><p>{text.xlsxEncoding}</p><p>{text.xlsxLimits}</p></UsageHelp>}{draft.format === 'sql' && <p className="warning-text">{text.sqlScope}</p>}{owner.intent.source.objectKind !== 'table' && <p className="muted small">{text.viewSql}</p>}
+    <section aria-label={text.fields}><strong>{text.fields}</strong><UsageHelp><p>{text.allFields}</p><p>{text.atomic}</p></UsageHelp>
       <button type="button" disabled={disabled} onClick={() => changeFields(owner.intent.source.columns.filter(column => draft.format !== 'sql' || !column.generated).map(column => column.name))}>{text.selectAllFields}</button><button type="button" disabled={disabled} onClick={() => changeFields([])}>{text.clearFields}</button>
       <div className="check-row">{owner.intent.source.columns.map(column => <label className="check" key={column.name}><input type="checkbox" aria-label={text.fieldLabel(column.name)} checked={draft.columns.includes(column.name)} disabled={disabled || draft.format === 'sql' && !!column.generated} onChange={event => selectField(column.name, event.target.checked)}/>{column.name} · {column.type}{column.generated ? ` · ${text.generated}` : ''}</label>)}</div>
       <ol aria-label={text.fieldOrder}>{draft.columns.map((name, position) => <li key={name}><span>{name}</span> <button type="button" aria-label={text.fieldUp(name)} disabled={disabled || position === 0} onClick={() => moveField(name, -1)}>{text.moveUp}</button> <button type="button" aria-label={text.fieldDown(name)} disabled={disabled || position + 1 === draft.columns.length} onClick={() => moveField(name, 1)}>{text.moveDown}</button></li>)}</ol>
       {!draft.columns.length && <p className="warning-text">{text.emptyFields}</p>}
     </section>
-    <button className="file-picker" disabled={disabled || sqlUnavailable || !draft.columns.length} onClick={choose}>{draft.file ? `${text.chooseAgain}：${draft.file.name}` : text.choose}</button><p className="muted small">{text.atomic}</p>
+    <button className="file-picker" disabled={disabled || sqlUnavailable || !draft.columns.length} onClick={choose}>{draft.file ? `${text.chooseAgain}：${draft.file.name}` : text.choose}</button>
     {busy && <Spinner text={active?.kind === 'choose' ? text.choosing : text.running}/>} {closing && <p>{text.closing}</p>}
     {progress && <div className="transfer-progress"><span>{progress.message}</span><progress value={progress.progress} max={100}/></div>}
     {draft.done && <div className="success-box">{draft.done.changed ? text.committedChanged(draft.done.output.rows) : text.completed(draft.done.output.rows)}</div>}

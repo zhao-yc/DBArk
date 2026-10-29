@@ -1,7 +1,7 @@
 import { useRef, useState } from 'react';
 import { queryBindingZh as t } from '../locales/queryBinding.zh-CN';
 import { errorMessage } from '../lib';
-import { ErrorBox, Field, Modal, Spinner } from './ui';
+import { UsageHelp, ErrorBox, Field, Modal, Spinner  } from './ui';
 
 /** 两个动作分别明确命名；失败保留名称和旧来源，用户可改为另存。 */
 export function QueryBindingDialog({ initialName, bound, onSave, onClose }: { initialName: string; bound: boolean; onSave(action: 'update' | 'create', name: string): Promise<void>; onClose(): void }) {
@@ -18,7 +18,7 @@ export function QueryBindingDialog({ initialName, bound, onSave, onClose }: { in
   }
   return <Modal title={t.title} onClose={() => { if (!active.current) onClose(); }}><div className="modal-content">
     <p className="muted small">{bound ? t.bound : t.unbound}</p><Field label={t.name}><input value={name} maxLength={256} disabled={busy} onChange={event => setName(event.target.value)}/></Field>
-    <p className="muted small">{t.hint}</p><ErrorBox message={error}/>
+    <UsageHelp><p>{t.hint}</p></UsageHelp><ErrorBox message={error}/>
   </div><footer className="modal-footer">{busy && <Spinner/>}<button disabled={busy} onClick={onClose}>{t.cancel}</button><span className="grow"/>
     <button disabled={busy} onClick={() => void save('create')}>{t.create}</button>{bound && <button className="primary" disabled={busy} onClick={() => void save('update')}>{t.update}</button>}
   </footer></Modal>;

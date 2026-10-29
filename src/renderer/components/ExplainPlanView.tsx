@@ -1,3 +1,4 @@
+import { UsageHelp } from './ui';
 import { useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react';
 import type { QueryOutcome } from '../../shared/contracts';
 import type { ExplainSnapshotDocument } from '../../shared/explainSnapshot';
@@ -110,7 +111,7 @@ function OwnedExplainPlan({ outcome, onText, busy, fileBusy, fileActions, fileSn
       <span role="status" aria-label={t.findCount}>{search ? t.matches(matchIndex < 0 ? 0 : matchIndex + 1, matches.length) : t.findIdle}</span>
       <button disabled={!matches.length} onClick={() => travel(-1)}>{t.previous}</button><button disabled={!matches.length} onClick={() => travel(1)}>{t.next}</button><button disabled={!search} onClick={clearSearch}>{t.clear}</button>
     </div>
-    <p className="explain-hint">{t.findHint}</p>
+    <UsageHelp><p>{t.findHint}</p><p>{t.keyboard}</p><p>{t.detailHint}</p></UsageHelp>
     {searchError && <p className="explain-warning" role="alert">{t.findTooLong}</p>}
     <p className="explain-hint">{t.estimates}</p>
     {plan.warnings.map((warning, index) => <p className="explain-warning" role="status" key={index}>{warning}</p>)}
@@ -118,7 +119,7 @@ function OwnedExplainPlan({ outcome, onText, busy, fileBusy, fileActions, fileSn
       {view === 'tree' && (plan.nodes.length ? <div className="explain-layout">
         <div className="explain-tree-pane">
           <div className="explain-actions"><button onClick={() => setCollapsed(new Set())}>{t.expand}</button><button onClick={() => { setCollapsed(new Set(children)); setSelected(plan.nodes[0].id); }}>{t.collapse}</button></div>
-          <p className="explain-hint">{t.keyboard}</p>
+
           <div role="tree" aria-label={t.tree} className="explain-tree">
             {visible.map(node => <button key={node.id} ref={element => { if (element) buttons.current.set(node.id, element); else buttons.current.delete(node.id); }} role="treeitem" aria-level={node.depth + 1} aria-expanded={children.has(node.id) ? !collapsed.has(node.id) : undefined} aria-selected={selected === node.id} tabIndex={selected === node.id ? 0 : -1} className="explain-node" style={{ paddingLeft: 10 + Math.min(node.depth, 10) * 14 }} onFocus={() => setSelected(node.id)} onClick={() => setSelected(node.id)} onDoubleClick={() => { if (children.has(node.id)) toggle(node.id); }} onKeyDown={event => navigate(event, node)}>
               <span className="explain-node-title"><span aria-hidden="true" onClick={event => { if (children.has(node.id)) { event.stopPropagation(); setSelected(node.id); toggle(node.id); } }}>{children.has(node.id) ? collapsed.has(node.id) ? '▸' : '▾' : '·'}</span> {displayTitle(node)}{node.name ? ` · ${node.name}` : ''}{node.unknown && <small>{t.unknown}</small>}</span>
@@ -131,7 +132,7 @@ function OwnedExplainPlan({ outcome, onText, busy, fileBusy, fileActions, fileSn
           <dl>{[[t.access, current.access], [t.rows, current.rows?.value, current.rows?.source], [t.produced, current.produced?.value, current.produced?.source], [t.filtered, current.filtered ? current.filtered.value + '%' : undefined, current.filtered?.source], [t.index, current.index]].map(([label, value, source]) => <div key={label}><dt>{label}</dt><dd title={source ?? (!value ? t.missing : undefined)}>{value ?? t.unavailable}{source && <small>{source}</small>}</dd></div>)}</dl>
           <strong>{t.cost}</strong><dl>{current.costs.length ? current.costs.map(cost => <div key={cost.source}><dt>{cost.source}</dt><dd>{cost.value}</dd></div>) : <div><dd>{t.unavailable}</dd></div>}</dl>
           <strong>{t.properties}</strong><dl className="explain-properties">{current.properties?.length ? current.properties.map(property => <div key={property.source}><dt>{Object.hasOwn(t.propertyLabels, property.source) ? t.propertyLabels[property.source] : property.source}<small>{property.source}</small></dt><dd>{property.value}{property.truncated && <small className="explain-property-truncated">{t.propertyTruncated}</small>}</dd></div>) : <div><dd>{t.unavailable}</dd></div>}</dl>
-          <p className="explain-hint">{t.path}：{current.path || '/'}{current.pathTruncated ? '…' : ''}</p><p className="explain-hint">{t.detailHint}</p><pre tabIndex={0}>{detail}</pre>
+          <p className="explain-hint">{t.path}：{current.path || '/'}{current.pathTruncated ? '…' : ''}</p><pre tabIndex={0}>{detail}</pre>
         </div>}
       </div> : <p className="explain-empty">{t.empty}</p>)}
       {view === 'raw' && <div className="explain-raw"><pre tabIndex={0} aria-label={t.raw}>{raw ? raw.slice(0, explainLimits.jsonBytes) : t.rawMissing}</pre>{(raw.length > explainLimits.jsonBytes || plan.rawTruncated) && <p>{t.rawLimited}</p>}</div>}

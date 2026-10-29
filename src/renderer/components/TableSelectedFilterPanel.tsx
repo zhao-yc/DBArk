@@ -3,7 +3,7 @@ import { FILTER_LIMITS } from '../../shared/filtering';
 import type { TableSelectedFilterProposal } from '../tableSelectedFilter';
 import { tableSelectedFilterZh as text } from '../locales/tableSelectedFilter.zh-CN';
 import { errorMessage } from '../lib';
-import { ErrorBox } from './ui';
+import { ErrorBox, UsageHelp } from './ui';
 
 type EventSignal = { defaultPrevented?: boolean; nativeEvent?: { defaultPrevented?: boolean } };
 interface Props { proposal: TableSelectedFilterProposal; isCurrent(): boolean; onApply(): boolean; onClose(): void; }
@@ -75,7 +75,7 @@ export function TableSelectedFilterPanel({ proposal, isCurrent, onApply, onClose
   return <section className="filter-panel expanded-filter-panel" role="region" aria-label={text.title} tabIndex={-1} onKeyDown={keyDown}
     onCompositionStart={event => { if (!event.defaultPrevented && !event.nativeEvent?.defaultPrevented && ownsRender()) { composition.current = true; setComposing(true); } }}
     onCompositionEnd={event => { if (!event.defaultPrevented && !event.nativeEvent?.defaultPrevented && ownsRender()) { composition.current = false; setComposing(false); } }}>
-    <strong>{text.title}</strong><p>{text.hint}</p>
+    <strong>{text.title}</strong><UsageHelp><p>{text.hint}</p><p>{text.originalAnd}</p><p>{text.valueHint}</p><p>{text.applyHint}</p><p>{text.shortcuts}</p></UsageHelp>
     {prepared.valid && <>
       <dl style={{ display: 'grid', gridTemplateColumns: 'max-content minmax(0, 1fr)', gap: '5px 14px', margin: '10px 0', overflowWrap: 'anywhere' }}>
         <dt>{text.column}</dt><dd aria-label={text.column} style={{ margin: 0 }}>{origin.column}</dd>
@@ -83,14 +83,14 @@ export function TableSelectedFilterPanel({ proposal, isCurrent, onApply, onClose
         <dt>{text.valueCount}</dt><dd aria-label={text.valueCount} style={{ margin: 0 }}>{origin.values.length}</dd>
         <dt>{text.nullState}</dt><dd aria-label={text.nullState} style={{ margin: 0 }}>{origin.includesNull ? text.hasNull : text.noNull}</dd>
       </dl>
-      <p aria-label={text.semantics}>{semantics}</p><p>{text.originalAnd}</p><p className="muted">{text.valueHint}</p>
+      <p aria-label={text.semantics}>{semantics}</p>
       <div role="list" aria-label={text.values} style={{ maxHeight: 220, overflow: 'auto', border: '1px solid var(--line)', borderRadius: 5, padding: 8 }}>
         {origin.values.map((value, index) => <pre role="listitem" key={index} style={{ margin: '3px 0', whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{JSON.stringify(value)}</pre>)}
         {!origin.values.length && <p>{text.noValues}</p>}
       </div>
       {origin.includesNull && <p aria-label={text.nullValue}>{text.null}</p>}
     </>}
-    <p>{text.applyHint}</p><p className="muted">{text.shortcuts}</p>{composing && <p>{text.composing}</p>}
+    {composing && <p>{text.composing}</p>}
     <ErrorBox message={prepared.error || (!valid && !settled ? text.unavailable : feedback.message)}/>
     <div className="filter-inputs"><span className="grow"/><button type="button" disabled={composing || settled || latest.current !== origin} onClick={cancel}>{text.cancel}</button><button type="button" className="primary" disabled={disabled} onClick={apply}>{text.apply}</button></div>
   </section>;

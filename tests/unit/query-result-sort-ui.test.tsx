@@ -565,7 +565,7 @@ it('列头三态排序保留源行/列与SQL，精确排序后选择复制和导
   await mount();const rawRows=original.rows,saved=structuredClone(original),sql=store.getState().settings.tabs[0].sql;expect(grid().columns.find((c:any)=>c.key==='id').sortable).toBe(true);expect(grid().columns.find((c:any)=>c.key==='bytes').sortable).toBe(false);
   await sort();expect(grid().rows.map((r:any)=>r.id)).toEqual(['2','9007199254740993','18446744073709551615']);expect(grid().rows[0]).toBe(rawRows[2]);
   await act(async()=>grid().onSelectedRowsChange(new Set([0,2])));const typed=JSON.parse(copy().get('application/x-dbark-cells')!);expect(typed.rows.map((r:any)=>r[0])).toEqual(['2','18446744073709551615']);
-  expect(document.body.textContent).toContain(text.truncated);expect(document.body.textContent).toContain(text.scope);expect(store.getState().settings.tabs[0].sql).toBe(sql);expect(original).toEqual(saved);expect(original.rows).toBe(rawRows);
+  expect(document.body.textContent).toContain(filterText.truncated);expect(button(text.panelTitle).getAttribute('title')).toBe(text.scope);expect(store.getState().settings.tabs[0].sql).toBe(sql);expect(original).toEqual(saved);expect(original.rows).toBe(rawRows);
   await click(zh.resultExport.selectedTitle);await click(zh.resultExport.chooseFile);await click(zh.resultExport.start);expect(exports[0].result.rows.map((r:any)=>r.id)).toEqual(['2','18446744073709551615']);expect(commands.filter(c=>c==='query.execute')).toHaveLength(1);
 });
 it('降序/清除及固定结果独立，旧排序/复制闭包不能在新视图重放',async()=>{
@@ -577,7 +577,7 @@ it('全结果导出冻结排序后的全部已返回行，原结果及会话不�
   await click(zh.resultExport.title);await click(zh.resultExport.chooseFile);await click(zh.resultExport.start);expect(exports[0].result.rows.map((r:any)=>r.id)).toEqual(['2','9007199254740993','18446744073709551615']);expect(original).toEqual(saved);expect(commands.filter(c=>c==='query.execute')).toHaveLength(1);expect(commands.some(c=>c.startsWith('query.transaction'))).toBe(false);
 });
 it('排序前已有的勾选明确清除，不把旧显示位置的选择转给另一原行',async()=>{
-  await mount();await act(async()=>grid().onSelectedRowsChange(new Set([0])));const before=grid();expect(grid().selectedRows).toEqual(new Set([0]));await sort();expect(grid().selectedRows.size).toBe(0);expect(button(zh.resultExport.selectedTitle).disabled).toBe(true);expect(copy(before).size).toBe(0);expect(document.body.textContent).toContain(text.selection);
+  await mount();await act(async()=>grid().onSelectedRowsChange(new Set([0])));const before=grid();expect(grid().selectedRows).toEqual(new Set([0]));await sort();expect(grid().selectedRows.size).toBe(0);expect(button(zh.resultExport.selectedTitle).disabled).toBe(true);expect(copy(before).size).toBe(0);await click(text.panelTitle);expect(document.body.textContent).toContain(text.selection);await click(text.panelCancel);
 });
 it('排序后活动位置、详情上下行、查找滚动和字节查看都定位同一视图原行',async()=>{
   await mount();await sort();await act(async()=>grid().onActivePositionChange({row:grid().rows[0],rowIdx:0}));await click(detailsText.open);expect(document.body.textContent).toContain('早行');await click(detailsText.next);expect(document.body.textContent).toContain('中行');await click(detailsText.close);

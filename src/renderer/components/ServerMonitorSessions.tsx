@@ -1,3 +1,4 @@
+import { UsageHelp } from './ui';
 import { useMemo, useState } from 'react';
 import type { ServerMonitorSnapshot } from '../../shared/serverMonitor';
 import { serverMonitorSessionSearchLimit, serverMonitorSessionView, type ServerMonitorSessionDirection, type ServerMonitorSessionSort } from '../serverMonitorSessions';
@@ -14,7 +15,7 @@ export function ServerMonitorSessions({section,disabled=false}: Props) {
   const value = (text: string | null) => text === null ? monitor.null : text === '' ? monitor.emptyString : text;
   return <section className="server-monitor-sessions">
     <h3>{monitor.sessions}</h3>
-    <p>{t.scope}</p><p className="server-monitor-note">{t.sqlScope}</p>
+    <UsageHelp><p>{t.scope}</p><p>{t.sqlScope}</p></UsageHelp>
     {section.status === 'unavailable' ? <p>{monitor.unavailable}：{section.reason}</p> : <>
       <div className="server-monitor-session-controls">
         <label>{t.search}<input type="search" aria-label={t.search} placeholder={t.placeholder} maxLength={serverMonitorSessionSearchLimit} value={query} disabled={disabled} onInput={event=>setQuery(event.currentTarget.value.slice(0,serverMonitorSessionSearchLimit))}/></label>

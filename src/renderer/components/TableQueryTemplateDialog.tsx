@@ -8,7 +8,7 @@ import { buildFilteredTableSelect } from '../../shared/tableReadSql';
 import type { TableFilteredSelectScope } from '../tableFilteredSelectUi';
 import { filterRuleSummary } from '../tableFilters';
 import { tableFilterGroupSummary } from '../tableFilterGroups';
-import { ErrorBox, Field, Modal } from './ui';
+import { ErrorBox, Field, Modal, UsageHelp } from './ui';
 
 const columnsPerPage = 50;
 interface Selection { kind: TableQueryTemplateKind; columns: readonly string[]; search: string; page: number; }
@@ -95,13 +95,11 @@ export function TableQueryTemplateDialog({ info, limit, readScope, isCurrent, on
   }
 
   return <Modal title={text.title} wide onClose={close}><div className="modal-content" {...(readScope ? { 'data-table-filtered-select-dialog': true } : {})}>
-    <p className="muted">{text.hint}</p>
+    <UsageHelp><p>{text.hint}</p><p>{text.columnsHint}</p>{kind === 'INSERT' && <p>{text.insertColumnsHint}</p>}{kind === 'UPDATE' && <p>{text.updateColumnsHint}</p>}</UsageHelp>
     {!readScope && <Field label={text.kind}><select aria-label={text.kind} value={kind} onChange={event => changeKind(event.target.value)}>{tableQueryTemplateKinds.map(value => <option key={value} value={value}>{value}</option>)}</select></Field>}
     {readScope && <><p>{filteredText.independent}</p><section aria-label={filteredText.conditions}><strong>{filteredText.conditions}</strong>{readScope.filters.length ? <ul>{readScope.filters.map((rule, index) => <li key={index}>{rule.enabled === false ? filteredText.disabledRule : ''}{filterRuleSummary(rule)}</li>)}</ul> : <p>{filteredText.noConditions}</p>}{readScope.filterGroup && <p>{tableFilterGroupSummary(readScope.filterGroup)}</p>}</section><section aria-label={filteredText.sorts}><strong>{filteredText.sorts}</strong>{readScope.sort.length ? <ol>{readScope.sort.map((rule, index) => <li key={index}>{tableSortRuleSummary(rule)}</li>)}</ol> : <p>{filteredText.noSorts}</p>}</section></>}
     {kind !== 'DELETE' && !candidates.error && <section aria-label={text.columns} style={{ marginTop: 16 }}>
-      <strong>{text.columns}</strong><p className="muted">{text.columnsHint}</p>
-      {kind === 'INSERT' && <p className="muted">{text.insertColumnsHint}</p>}
-      {kind === 'UPDATE' && <p className="muted">{text.updateColumnsHint}</p>}
+      <strong>{text.columns}</strong>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap', marginBottom: 8 }}>
         <input aria-label={text.filterColumns} placeholder={text.filterColumns} value={search} maxLength={64} onChange={event => revise({ ...selection, search: event.target.value, page: 1 })}/>
         <button onClick={() => revise({ ...selection, columns: candidates.columns, search: '', page: 1 })}>{text.resetColumns}</button>

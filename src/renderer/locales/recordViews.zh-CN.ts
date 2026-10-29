@@ -6,7 +6,7 @@ export const recordViewZh = {
   pageDirty: '当前页还有输入或未提交草稿，请先处理后再跨页浏览。输入和草稿已保留。',
   pageEmpty: '第 {0} 页没有记录，可返回上一页；不会自动继续读取。', pageFailed: '第 {0} 页读取失败，旧页未保留为新页。请返回上一页或明确刷新重试。',
   pageUnavailable: '当前记录或页面已变化，请重新选择记录后再跨页浏览。', pageChanged: '读取结果不属于请求的页码或页大小，请重新读取。',
-  stageHint: '仅暂存到本页，仍需预览并提交。切行和失焦不会写入数据库。',
+  stageHint: '暂存到本页后，仍需预览并提交。',
   inputDirty: '有尚未暂存的输入', staged: '本行已有草稿', unchanged: '本行未修改', inserted: '新增记录', deleted: '待删除记录',
   editField: '编辑字段', viewField: '查看字段', collapseField: '收起字段', mode: '值类型', value: '字段内容',
   text: '文本', json: 'JSON 原文', binary: '二进制十六进制', null: 'SQL NULL', default: '使用默认值／未填写',
@@ -29,5 +29,5 @@ export const recordViewZh = {
   budgetExceeded: '本行输入总量超过 2097152 个 UTF-16 代码单元，请减少同时编辑的字段。',
   invalidField: '字段“{0}”无法暂存：{1}', previewChanged: '预览对应的页面草稿已变化，请返回编辑并重新预览。',
   applyAttempted: '本次执行已经投递。请核对执行结果，再返回编辑重新预览；不会自动重试。',
-  readonlyHint: '可编辑状态只描述客户端支持范围，实际写入权限仍由服务器判定。',
+  readonlyHint: '实际写入权限由服务器判定。',
 } as const;

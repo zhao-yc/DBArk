@@ -11,7 +11,7 @@ import { errorMessage } from '../lib';
 import { zh } from '../locales/zh-CN';
 import { queryFilesZh as text } from '../locales/queryFiles.zh-CN';
 import type { QueryFileSourceController } from '../useQueryFileSource';
-import { ErrorBox, Field, Modal, Spinner } from './ui';
+import { UsageHelp, ErrorBox, Field, Modal, Spinner  } from './ui';
 import { QueryFileTaskProgress } from './QueryFileTaskProgress';
 import { RecentQueryFilesDialog } from './RecentQueryFilesDialog';
 
@@ -33,10 +33,10 @@ export function QueryFilesDialog({ mode, files, onClose }: { mode: 'open' | 'sav
   /** 编码切换只允许相符BOM，不暗改正文或现有来源。 */
   function changeEncoding(next: QueryFileEncoding) { setEncoding(next); if (bom !== 'none' && bom !== next) setBom('none'); }
   return createPortal(<Modal title={mode === 'open' ? text.open : text.saveAs} onClose={() => { if (!active.current) onClose(); }}>
-    <div className="modal-content"><p className="muted small">{mode === 'open' ? text.openHint : text.optionsHint}</p>
+    <div className="modal-content"><UsageHelp><p>{mode === 'open' ? text.openHint : text.optionsHint}</p><p>{text.limitHint}</p></UsageHelp>
       <Field label={text.encoding}><select value={encoding} disabled={busy} onChange={event => changeEncoding(event.target.value as QueryFileEncoding)}><option value="utf8">{text.utf8}</option><option value="utf16le">{text.utf16le}</option><option value="gb18030">{text.gb18030}</option></select></Field>
       {mode === 'save' && <><Field label={text.bom}><select value={bom} disabled={busy} onChange={event => setBom(event.target.value as QueryFileBom)}><option value="none">{text.noBom}</option>{encoding !== 'gb18030' && <option value={encoding}>{encoding === 'utf8' ? text.utf8 : text.utf16le} BOM</option>}</select></Field><Field label={text.eol}><select value={eol} disabled={busy} onChange={event => setEol(event.target.value as QueryFileEolPolicy)}><option value="preserve">{text.preserve}</option><option value="lf">{text.lf}</option><option value="crlf">{text.crlf}</option><option value="cr">{text.cr}</option></select></Field></>}
-      <p className="muted small">{text.limitHint}</p>{busy && files.task && <QueryFileTaskProgress task={files.task}/>}<ErrorBox message={error}/>
+      {busy && files.task && <QueryFileTaskProgress task={files.task}/>}<ErrorBox message={error}/>
     </div><footer className="modal-footer"><span className="grow"/>{busy && <Spinner/>}<button disabled={busy} onClick={onClose}>{zh.common.cancel}</button><button className="primary" disabled={busy} onClick={() => void choose()}>{mode === 'open' ? <FolderOpen size={14}/> : <FileDown size={14}/>}{mode === 'open' ? text.openAction : text.saveAction}</button></footer>
   </Modal>, document.body);
 }

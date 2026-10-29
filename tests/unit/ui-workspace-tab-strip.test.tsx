@@ -66,7 +66,7 @@ it('保留旧选择器、活动标志与关闭文案，点击/关闭/新增仍�
   expect(wrapper('a').getAttribute('data-active-workspace-tab')).toBe('true'); expect(close('b').getAttribute('aria-label')).toBe(formatText(zh.app.text012, '数据表 B'));
   expect(wrapper('b').querySelectorAll('span').some(node => node.classList.contains('dirty-dot'))).toBe(true);
   await click(select('c')); expect(store.getState().settings.activeTabId).toBe('c'); await click(close('b')); expect(ui.onClose).toHaveBeenCalledExactlyOnceWith('b');
-  await click(doc.querySelectorAll('button').find(node => node.classList.contains('add-tab'))!); expect(ui.onNew).toHaveBeenCalledTimes(1); expect(doc.body.textContent).toContain(text.hint);
+  await click(doc.querySelectorAll('button').find(node => node.classList.contains('add-tab'))!); expect(ui.onNew).toHaveBeenCalledTimes(1); expect(select('c').getAttribute('title')).toBe(text.shortcut); expect(doc.body.textContent).not.toContain(text.hint);
 });
 
 it.each(['before', 'after'] as const)('同窗拖放到左右半区 %s，只重排最新原对象且不切active或读拖动数据', async position => {

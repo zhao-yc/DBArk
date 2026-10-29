@@ -50,7 +50,7 @@ function Results({ report, selectedIds, disabled, onSelectionChange }: SchemaCom
       <label>{text.name}<input type="search" aria-label={text.name} title={text.searchHint} value={filter.name} onChange={event => changeFilter({ ...filter, name: event.currentTarget.value })}/></label>
       <button type="button" onClick={() => changeFilter(defaultSchemaCompareResultsFilter)}>{text.reset}</button>
     </div>
-    <p className="muted small">{text.searchHint} {text.retained}</p><p role="status" aria-live="polite">{text.count(view.rows.length, view.total)}</p>
+    <p role="status" aria-live="polite">{text.count(view.rows.length, view.total)}</p>
     {view.hiddenSelectedIds.length > 0 && <div className="schema-compare-hidden-selection" role="status"><strong>{text.hidden(view.hiddenSelectedIds.length)}</strong><button type="button" disabled={disabled} onClick={() => select({ snapshotId: report.snapshotId, kind: 'clearHidden', ids: view.hiddenSelectedIds })}>{text.clearHidden}</button></div>}
     {view.rows.length === 0 ? <p>{view.total ? text.noMatch : text.noRows}</p> : <div className="schema-compare-results"><table><thead><tr><th>{labels.select}</th><th>{labels.category}</th><th>{labels.name}</th><th>{labels.status}</th><th>{labels.properties}</th><th>{labels.detail}</th></tr></thead><tbody>
       {view.rows.map(row => { const id = schemaCompareResultsId(row); return <tr key={id} data-status={row.status}>

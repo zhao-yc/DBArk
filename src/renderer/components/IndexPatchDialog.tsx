@@ -6,7 +6,7 @@ import { IndexRequestFence, changeIndexDraftKind, indexAcknowledgementLabel, ind
 import { errorMessage, uid } from '../lib';
 import { formatText } from '../locales/zh-CN';
 import { indexPatchZh as text } from '../locales/indexPatches.zh-CN';
-import { ErrorBox, Field, Modal, Spinner } from './ui';
+import { ErrorBox, Field, Modal, Spinner, UsageHelp } from './ui';
 import { SqlEditor } from './SqlEditor';
 import { IndexOptimizerEditor } from './IndexOptimizerEditor';
 import { IndexOptimizerIntent, IndexOptimizerPreview, hasIndexOptimizerPatch, makeIndexOptimizerAlter } from '../indexOptimizer';
@@ -336,7 +336,7 @@ export function IndexPatchDialog({ target, targetVersion, services, onClose, onC
       <Field label={text.name}><input aria-label={text.name} disabled={editingDisabled || !canRename || editor.definition.kind === 'primary'} value={editor.definition.name} onChange={event => changeEditor({ ...editor.definition, name: event.target.value })}/></Field>
       <Field label={text.method}><input aria-label={text.method} readOnly value={editor.definition.method}/></Field>
       <Field label={text.comment}><textarea aria-label={text.comment} disabled={editingDisabled || !canReplace} value={editor.definition.comment} onChange={event => changeEditor({ ...editor.definition, comment: event.target.value })}/></Field></div>
-      <fieldset className="index-patch-parts" disabled={editingDisabled || !canReplace}><legend>{text.parts}</legend><p className="muted small">{text.fullColumn}</p>
+      <fieldset className="index-patch-parts" disabled={editingDisabled || !canReplace}><legend>{text.parts}</legend><UsageHelp><p>{text.fullColumn}</p></UsageHelp>
         {editor.definition.keyParts.map((part, position) => {
           const column = snapshot.columns.find(value => value.columnRef === part.columnRef), label = position + 1;
           return <div className="index-patch-part" key={position}>
@@ -351,7 +351,7 @@ export function IndexPatchDialog({ target, targetVersion, services, onClose, onC
         <button disabled={editor.definition.kind === 'spatial' || editor.definition.keyParts.length >= (snapshot.capabilities?.maxKeyParts ?? 0) || !snapshot.columns.some(value => indexColumnSelectable(value, editor.definition.kind) && !editor.definition.keyParts.some(part => part.columnRef === value.columnRef))} onClick={() => { const column = snapshot.columns.find(value => indexColumnSelectable(value, editor.definition.kind) && !editor.definition.keyParts.some(part => part.columnRef === value.columnRef)); if (column) changeEditor({ ...editor.definition, keyParts: [...editor.definition.keyParts, { columnRef: column.columnRef, direction: 'asc' }] }); }}>{text.addPart}</button>
       </fieldset><footer><button disabled={busy || mismatch} onClick={() => { if (draftCurrent()) setEditor(null); }}>{text.editorCancel}</button><button disabled={editingDisabled} onClick={saveRow}>{text.rowSave}</button></footer>
     </section>}</>}
-    {preview && <><h3>{text.fixedSql}</h3><SqlEditor value={preview.sql} readOnly height={260}/><p className="muted small">{text.previewOnly}</p>
+    {preview && <><h3>{text.fixedSql}</h3><SqlEditor value={preview.sql} readOnly height={260}/>
       {preview.changes.map((change, i) => <p key={i}>{change.description}</p>)}{preview.warnings.map((warning, i) => <p className="warning-text" key={i}>{warning}</p>)}
       <div className="index-patch-acks" aria-label={text.confirmation}>{preview.requiredAcknowledgements.map((ack, i) => indexAcknowledgementLabel(ack) === undefined ? <p className="warning-text" key={`${ack}:${i}`}>{formatText(text.unsupportedAck, ack)}</p> : <label key={`${ack}:${i}`}><input type="checkbox" disabled={busy || consumed || mismatch || previewExpired || snapshotExpired} checked={acks.has(ack)} onChange={event => changeAcknowledgement(preview, acks, renderedAckRevision, ack, event.target.checked)}/>{indexAcknowledgementLabel(ack)}</label>)}</div>
       {consumed && <p>{text.consumed}</p>}

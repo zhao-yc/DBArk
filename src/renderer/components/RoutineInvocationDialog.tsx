@@ -7,7 +7,7 @@ import { RoutineInvocationIntent } from '../routineInvocationIntent';
 import { parseRoutineInvocationForTarget, routineInvocationServices, type RoutineInvocationServices } from '../routineInvocationServices';
 import { routineInvocationZh as text } from '../locales/routineInvocation.zh-CN';
 import { SqlEditor } from './SqlEditor';
-import { ErrorBox, Modal, Spinner } from './ui';
+import { ErrorBox, Modal, Spinner, UsageHelp } from './ui';
 import '../routineInvocation.css';
 
 interface Receipt { metadata: RoutineInvocationMetadata; plan: ReturnType<typeof buildRoutineInvocation>; stale: boolean; consumed: boolean; }
@@ -93,7 +93,7 @@ export function RoutineInvocationDialog({ target, onOpenGeneratedQuery, onClose,
   }, [intent]);
   const unavailable = invalid || !intent.current(), parameterRows = receipt?.metadata.parameters ?? [];
   return <Modal title={text.title} wide onClose={close}><div ref={host} className="routine-invocation-body" aria-busy={busy || closing}>
-    <p>{intent.target.database}.{intent.target.name} · {intent.target.kind === 'procedure' ? text.procedure : text.function}</p><p>{text.notice}</p><p className="warning-text">{text.effects}</p><p>{text.values}</p><p>{text.whole}</p>
+    <p>{intent.target.database}.{intent.target.name} · {intent.target.kind === 'procedure' ? text.procedure : text.function}</p><UsageHelp><p>{text.notice}</p><p>{text.values}</p></UsageHelp><p className="warning-text">{text.effects}</p><p>{text.whole}</p>
     {receipt && <><div className="routine-invocation-parameters"><table><caption>{text.parameters}</caption><thead><tr>{[text.ordinal, text.direction, text.name, text.type, text.binding].map(label => <th key={label}>{label}</th>)}</tr></thead><tbody>{parameterRows.map(parameter => <tr key={parameter.ordinal}><td>{parameter.ordinal}</td><td>{parameter.mode}</td><td>{parameter.name}</td><td>{parameter.type}</td><td>{receipt.plan.arguments.find(argument => argument.ordinal === parameter.ordinal)?.placeholder}{receipt.plan.outputs.find(output => output.ordinal === parameter.ordinal)?.variable && <span>{' → ' + receipt.plan.outputs.find(output => output.ordinal === parameter.ordinal)!.variable}</span>}</td></tr>)}</tbody></table>{!parameterRows.length && <p>{text.zero}</p>}</div>{receipt.metadata.returnType && <p>{text.returnType}：{receipt.metadata.returnType}</p>}<p>{receipt.plan.outputs.length ? text.variables : text.noOutputs}</p><section aria-label={text.preview} className="routine-invocation-sql"><SqlEditor value={receipt.plan.sql} readOnly height={260}/></section></>}
     <ErrorBox message={unavailable ? text.stale : error}/>{receipt?.stale && !error && !unavailable && <p className="warning-text">{text.changed}</p>}{receipt?.consumed && <p>{text.consumed}</p>}{closing ? <p role="status">{text.closing}</p> : busy && <Spinner text={message}/>}
   </div><footer className="modal-footer">{busy && <button disabled={closing} onClick={() => { if (committed.current === ticket) cancel(); }}>{text.cancel}</button>}<span className="grow"/><button disabled={closing} onClick={close}>{text.close}</button><button disabled={busy || closing || unavailable} onClick={() => run('read')}>{text.read}</button><button className="primary" disabled={busy || closing || unavailable || !receipt || receipt.stale || receipt.consumed} onClick={() => run('open')}>{text.open}</button></footer></Modal>;

@@ -1,3 +1,4 @@
+import { UsageHelp } from './ui';
 import type { ComponentProps } from 'react';
 import type { CellValue } from '../../shared/contracts';
 import { dataTypeColorKind, dataTypeColorKinds, type DataTypeColorSource } from '../dataTypeColors';
@@ -18,5 +19,5 @@ export function DataTypeColorLegend() {
 
 /** 显式开关及单项重置复用应用本地偏好入口，不修改其他设置或历史记录。 */
 export function DataTypeColorPreferences({ enabled, onChange }: { enabled: boolean; onChange(enabled: boolean): void }) {
-  return <section className="full data-type-preference"><label className="check"><input type="checkbox" checked={enabled} onChange={event => onChange(event.target.checked)}/>{text.title}</label><p className="muted small">{text.hint}</p><DataTypeColorLegend/><button type="button" disabled={!enabled} onClick={() => onChange(false)}>{text.reset}</button></section>;
+  return <section className="full data-type-preference"><label className="check"><input type="checkbox" checked={enabled} onChange={event => onChange(event.target.checked)}/>{text.title}</label><UsageHelp><p>{text.hint}</p></UsageHelp><DataTypeColorLegend/><button type="button" disabled={!enabled} onClick={() => onChange(false)}>{text.reset}</button></section>;
 }

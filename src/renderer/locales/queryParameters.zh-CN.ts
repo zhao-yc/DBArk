@@ -4,7 +4,7 @@ export const parameterZh = {
   transactionUnknown: '事务状态需核对', transactionUnknownHint: '服务器错误包不提供当前事务状态。可明确提交或回滚；后续成功查询会按实际协议状态更新提示，不会自动重放写操作。',
   source: '本次 SQL 模板', sourceTruncated: '模板较长，预览仅显示前 65536 个字符，执行使用完整原文。',
   namesLoading: '正在读取当前会话并识别参数…', retry: '重新识别参数', noParameters: '当前可分析语句没有发现值参数。动态脚本可手动添加后续语句需要的参数。',
-  privacy: '参数值仅用于本次执行，不保存到查询历史或工作区；历史保留模板。执行结果和只读快照可能显示实际值，关闭标签后释放。',
+  privacy: '历史仅保留模板，参数值不写入历史或工作区，关闭标签后释放。结果和快照可能包含实际值。',
   namesDynamic: '当前会话模式或脚本中的模式变更无法完整静态确定。名称预览可能不完整，可添加后续参数；后续解析或绑定错误不能撤销此前已经提交的语句。',
   name: '参数名称', type: '参数类型', value: '参数值', add: '添加参数', remove: '移除手动参数', execute: '执行参数 SQL',
   text: '文本', integer: '整数', decimal: '小数', boolean: '布尔值', date: '日期', datetime: '日期时间', time: '时间 / 时长', binary: '二进制（Hex）', null: 'NULL',

@@ -1,3 +1,4 @@
+import { UsageHelp } from './ui';
 import type { TableCreateDraft } from '../../shared/tableCreate';
 import { tableCreateGeneratedReferenceColumns } from '../../shared/tableCreateGenerated';
 import type { NewTableColumnMode } from '../newTableGeneratedDrafts';
@@ -15,7 +16,7 @@ export function NewTableGeneratedField({ design, position, disabled, onMode, onE
       <option value="ordinary">{text.ordinary}</option><option value="VIRTUAL">{text.virtual}</option><option value="STORED">{text.stored}</option>
     </select>
     {column.generated && <><textarea aria-label={text.expression(position)} value={column.generated.expression} maxLength={2048} disabled={disabled} rows={3} onChange={event => { if (!disabled) onExpression(event.target.value); }}/>
-      <p className="muted small">{text.hint}</p><p className="muted small">{text.planned}</p>
-      <div aria-label={text.references(position)}>{reason ? <span className="warning-text">{reason}</span> : references.length ? references.map(value => <code key={value.ordinal}>{value.name}{' '}</code>) : <span>{text.noReferences}</span>}</div><p className="muted small">{text.keys}</p></>}
+      <UsageHelp><p>{text.hint}</p><p>{text.planned}</p><p>{text.keys}</p></UsageHelp>
+      <div aria-label={text.references(position)}>{reason ? <span className="warning-text">{reason}</span> : references.length ? references.map(value => <code key={value.ordinal}>{value.name}{' '}</code>) : <span>{text.noReferences}</span>}</div></>}
   </div>;
 }

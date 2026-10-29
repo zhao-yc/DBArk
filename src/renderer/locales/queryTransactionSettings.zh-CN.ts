@@ -16,5 +16,5 @@ export const queryTransactionSettingsZh = {
   acknowledgeCommit: '我确认提交当前会话的活动事务并开启自动提交',
   enableAutocommit: '开启自动提交', disableAutocommit: '关闭自动提交',
   enableAndCommit: '开启自动提交并提交当前事务', autocommitApplying: '正在设置本会话自动提交…',
-  diagnosticsNotice: '读取会改变原会话的 ROW_COUNT()、FOUND_ROWS() 和警告等诊断信息；已有可视查询结果保持不变。设置不保存到连接配置，重新打开时重新读取。',
+  diagnosticsNotice: '读取会改变 ROW_COUNT()、FOUND_ROWS() 和警告；设置仅作用于本会话。',
 } as const;

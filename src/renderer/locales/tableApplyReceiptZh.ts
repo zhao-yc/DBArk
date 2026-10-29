@@ -5,6 +5,7 @@ export const tableApplyReceiptZh = {
   title: '数据提交记录', tasks: '返回任务', privacy: '只保存目标和结果摘要，不保存SQL、参数、行值或原错误。记录仅说明目标InnoDB事务，不包含触发器或外部副作用。',
   empty: '暂无提交记录', missing: '未找到提交记录', running: '执行中',
   details: '提交记录详情',
+  scope: '回执仅说明目标 InnoDB 事务，不包含触发器或外部副作用；不保存SQL或行值。',
   labels: { operationId: '操作编号', previewId: '预览编号', connectionRevision: '连接编号 / 修订', target: '目标库表', intent: '计划类别', time: '开始 / 结束', phase: '阶段', reason: '原因', transactionProtected: '目标连续事务保护', dmlAcknowledged: '提交前语句回应数', acknowledgements: 'COMMIT成功回应 / ROLLBACK成功回应' },
   intent: '新增 {0}，修改 {1}，删除 {2}；执行计划 {3} 条',
   unfinished: '尚未结束', pendingConfirmation: '未知 / 尚未确认', confirmed: '已确认', unconfirmed: '未确认', yes: '是', no: '否',

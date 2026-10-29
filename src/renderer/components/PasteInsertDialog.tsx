@@ -4,7 +4,7 @@ import { errorMessage } from '../lib';
 import { decodePasteInsert, defaultPasteInsertMapping, preparePasteInsert, readPasteInsert, pasteInsertSummary, type PasteInsertMapping, type PasteInsertPlan } from '../pasteInsert';
 import { maxClipboardCharacters, type ClipboardCell } from '../gridClipboard';
 import { pasteInsertZh as text } from '../locales/pasteInsert.zh-CN';
-import { ErrorBox, Modal } from './ui';
+import { ErrorBox, Modal, UsageHelp } from './ui';
 
 /** 独立本地预览：只接收真实paste事件或手工输入，关闭丢弃本弹窗输入，不触碰原页草稿。 */
 export function PasteInsertDialog({ info, visibleKeys, invalidReason, onStage, onClose }: {
@@ -51,14 +51,13 @@ export function PasteInsertDialog({ info, visibleKeys, invalidReason, onStage, o
   }
   const mappingPages = Math.max(1, Math.ceil(mapping.length / 10)), columnPages = Math.max(1, Math.ceil(info.columns.length / 10));
   return <Modal title={text.action} wide onClose={() => { planRef.current = null; onClose(); }}><div className="modal-content">
-    <p>{text.hint}</p><p className="muted small">{text.limits}</p>
+    <UsageHelp><p>{text.hint}</p><p>{text.limits}</p><p>{text.defaults}</p><p>{text.autoHint}</p><p>{text.previewHint}</p></UsageHelp>
     <label className="field full"><span>{text.input}</span><textarea aria-label={text.input} rows={5} value={input} onPaste={paste} onChange={event => changeInput(event.target.value)} disabled={!!invalidReason}/></label>
     {matrix && <><p>{text.rows}：{matrix.length} · {text.columns}：{matrix[0].length}</p><h3>{text.mapping}</h3>
-      <p>{text.defaults}</p><p className="muted small">{text.autoHint}</p>
       {mapping.slice(mappingPage * 10, mappingPage * 10 + 10).map((target, offset) => { const index = mappingPage * 10 + offset; return <label className="inline-field" key={index}>{text.source} {index + 1}<select aria-label={`${text.destination} ${index + 1}`} value={target === null ? '' : String(info.columns.findIndex(column => column.name === target) + 1)} disabled={!!invalidReason} onChange={event => mapColumn(index, event.target.value ? info.columns[Number(event.target.value) - 1].name : null)}><option value="">{text.skip}</option>{writable.map(column => <option key={column.name} value={String(info.columns.indexOf(column) + 1)}>{column.name}{/\bauto_increment\b/i.test(column.extra) ? ` · ${text.auto}` : ''}</option>)}</select></label>; })}
       <p><button disabled={mappingPage === 0} onClick={() => setMappingPage(value => value - 1)}>{text.previous}</button> {mappingPage + 1}/{mappingPages} <button disabled={mappingPage + 1 >= mappingPages} onClick={() => setMappingPage(value => value + 1)}>{text.next}</button></p>
     </>}
-    {plan && <><p role="status">{text.prepared} {text.rows}：{plan.data.length}</p><p className="muted small">{text.previewHint}</p><div style={{ overflow: 'auto', maxHeight: 320 }}><table><thead><tr>{info.columns.slice(columnPage * 10, columnPage * 10 + 10).map(column => <th key={column.name}>{column.name}{column.generated ? ` · ${text.generated}` : ''}</th>)}</tr></thead><tbody>{plan.data.slice(0, 10).map((row, index) => <tr key={index}>{info.columns.slice(columnPage * 10, columnPage * 10 + 10).map(column => <td key={column.name}>{pasteInsertSummary(row, column.name)}</td>)}</tr>)}</tbody></table></div><p><button disabled={columnPage === 0} onClick={() => setColumnPage(value => value - 1)}>{text.previous}</button> {columnPage + 1}/{columnPages} <button disabled={columnPage + 1 >= columnPages} onClick={() => setColumnPage(value => value + 1)}>{text.next}</button></p></>}
+    {plan && <><p role="status">{text.prepared} {text.rows}：{plan.data.length}</p><div style={{ overflow: 'auto', maxHeight: 320 }}><table><thead><tr>{info.columns.slice(columnPage * 10, columnPage * 10 + 10).map(column => <th key={column.name}>{column.name}{column.generated ? ` · ${text.generated}` : ''}</th>)}</tr></thead><tbody>{plan.data.slice(0, 10).map((row, index) => <tr key={index}>{info.columns.slice(columnPage * 10, columnPage * 10 + 10).map(column => <td key={column.name}>{pasteInsertSummary(row, column.name)}</td>)}</tr>)}</tbody></table></div><p><button disabled={columnPage === 0} onClick={() => setColumnPage(value => value - 1)}>{text.previous}</button> {columnPage + 1}/{columnPages} <button disabled={columnPage + 1 >= columnPages} onClick={() => setColumnPage(value => value + 1)}>{text.next}</button></p></>}
     <ErrorBox message={invalidReason || error}/>
   </div><footer className="modal-footer"><button onClick={() => { planRef.current = null; onClose(); }}>{text.close}</button><span className="grow"/><button disabled={!!invalidReason} onClick={preview}>{text.preview}</button><button className="primary" disabled={!plan || !!invalidReason} onClick={stage}>{text.stage}</button></footer></Modal>;
 }

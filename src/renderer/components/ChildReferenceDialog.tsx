@@ -7,7 +7,7 @@ import { errorMessage, invoke, uid } from '../lib';
 import { childReferencesZh as text } from '../locales/childReferences.zh-CN';
 import { maxTablePage, parsePageJump } from '../tableFilters';
 import { validateTableSort } from '../tableSort';
-import { ErrorBox, Field, Modal, Spinner } from './ui';
+import { ErrorBox, Field, Modal, Spinner, UsageHelp } from './ui';
 import { ResultsGrid } from './ResultsGrid';
 import { TableFilterPanel } from './TableFilterPanel';
 import { TableFilterGroupsDialog } from './TableFilterGroupsDialog';
@@ -128,7 +128,7 @@ export function ChildReferenceDialog({ base, intent, onClose, onActivity, servic
   /** 编辑面板只接受打开时的原条件、关系及意图，旧确认不能变更新页。 */
   function panelCurrent(): boolean { return editable() && currentConditions.current === panelScope && currentSelection.current === selected; }
   return <Modal title={text.title} wide onClose={close}><div className="modal-content child-reference-content" aria-busy={busy || closing}>
-    <p>{text.visible}</p><p className="muted small">{text.snapshot}</p><p className="muted small">{text.readonly}</p>
+    <p>{text.visible}</p><UsageHelp><p>{text.snapshot}</p><p>{text.readonly}</p></UsageHelp>
     <p>{text.source}：{intent.source.database}.{intent.source.name}</p>
     <div className="child-reference-tools"><button disabled={disabled || directoryPage === 0} onClick={() => { if (editable()) loadDirectory(directoryPage - 1, cursors.current[directoryPage - 1]); }}>{text.previousRelations}</button><span>{text.relationPage(directoryPage + 1)}</span><button disabled={disabled || !nextCursor} onClick={() => { if (editable() && nextCursor) loadDirectory(directoryPage + 1, nextCursor); }}>{text.nextRelations}</button></div>
     <Field label={text.relations}><select aria-label={text.relations} disabled={disabled} value={selected ? String(relations.indexOf(selected)) : ''} onChange={event => {

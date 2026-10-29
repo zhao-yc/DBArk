@@ -1,9 +1,9 @@
 export const tableQueryTemplateZh = {
   entry: '生成查询SQL', title: '表查询SQL模板', kind: '模板类型', preview: 'SQL模板预览', open: '打开新查询', close: '关闭',
   hint: '根据已载入结构生成独立查询草稿，不读取数据或执行SQL，也不提交表格草稿。写入模板请审阅字段、键条件及参数后再执行；实际权限和约束由数据库校验。',
-  parameters: (count: number) => `含 ${count} 个值参数；打开查询后使用“参数执行”，按列类型选择参数类型。`,
-  selectHint: 'SELECT使用当前结果上限作为LIMIT；不会在生成或打开时执行。',
-  noParameters: '该模板不需要值参数；打开后先审阅，再自行决定是否执行。',
+  parameters: (count: number) => `含 ${count} 个参数，请用“参数执行”并选择对应类型。`,
+  selectHint: 'LIMIT 沿用当前结果上限；打开后不会自动执行。',
+  noParameters: '打开后请先审阅 SQL，再执行。',
   columns: '模板字段', chooseColumn: (name: string) => `模板字段 ${name}`,
   clearColumns: '清空字段', resetColumns: '恢复默认字段', filterColumns: '搜索模板字段',
   moveColumnUp: (name: string) => `上移模板字段 ${name}`, moveColumnDown: (name: string) => `下移模板字段 ${name}`,

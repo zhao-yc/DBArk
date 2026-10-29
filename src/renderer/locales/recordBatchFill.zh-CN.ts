@@ -1,6 +1,6 @@
 export const recordBatchFillZh = {
   action: '批量填充字段', title: '批量填充选中记录', field: '填充字段', stage: '暂存整批草稿',
-  notice: '仅修改当前页已勾选的完整已有记录。可添加多个字段分别填写统一值，整组暂存后可一步撤销；仍需原表页预览并提交。',
+  notice: '仅暂存当前页勾选记录的修改，仍需在表页预览并提交。',
   add: '添加填充字段', remove: (column: string) => `移除填充字段 ${column}`,
   assignment: (order: number) => `填充项 ${order}`, fieldAt: (order: number) => `填充字段 ${order}`,
   assignments: '请至少选择一个不同的可编辑字段；重复、缺失或超出可编辑字段数时整组未暂存。',

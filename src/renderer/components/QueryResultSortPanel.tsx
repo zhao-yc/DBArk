@@ -2,7 +2,7 @@ import { useLayoutEffect, useRef, useState, type KeyboardEvent } from 'react';
 import { queryResultSortSupportsIgnoreCase, type QueryResultSortBinding, type QueryResultSortRule, type QueryResultSortView } from '../queryResultSort';
 import { queryResultSortZh as text } from '../locales/queryResultSort.zh-CN';
 import { errorMessage } from '../lib';
-import { ErrorBox } from './ui';
+import { UsageHelp, ErrorBox  } from './ui';
 
 type Entry = { id: number; rule: QueryResultSortRule };
 const pageSize = 10;
@@ -67,7 +67,7 @@ export function QueryResultSortPanel({ binding, initial, isCurrent, onApply, onC
   const available = binding.visible.filter(column => binding.reasons.has(column.key) && !binding.reasons.get(column.key) && !entries.some(item => item.rule.column === column.key));
   const pages = Math.max(1, Math.ceil(entries.length / pageSize)), currentPage = Math.min(page, pages - 1);
   return <section role="region" aria-label={text.panelTitle} aria-description={text.panelShortcuts} className="filter-panel expanded-filter-panel query-result-sort-panel" onKeyDown={keyDown} onCompositionStart={() => { composition.current = true; setComposing(true); }} onCompositionEnd={() => { composition.current = false; setComposing(false); }}>
-    <strong>{text.panelTitle}</strong><p>{text.panelHint}</p><p className="muted">{text.scope} {text.nullsHint}</p>
+    <strong>{text.panelTitle}</strong><UsageHelp><p>{text.panelHint}</p><p>{text.scope}</p><p>{text.nullsHint}</p><p>{text.selection}</p><p>{text.panelShortcuts}</p></UsageHelp>
     {!entries.length && <p>{text.panelEmpty}</p>}
     {entries.slice(currentPage * pageSize, (currentPage + 1) * pageSize).map(({ id, rule }, position) => {
       const index = currentPage * pageSize + position, order = index + 1, column = binding.visible.find(item => item.key === rule.column)!;

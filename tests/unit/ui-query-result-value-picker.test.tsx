@@ -77,7 +77,7 @@ describe('已返回不同值选择器真实 React RAM 交互（非原生验收�
   it('相同80字前缀的长候选有各自完整值提示和只读详情，选值不靠省略文字猜测', async () => {
     const values = ['甲'.repeat(90) + 'A', '甲'.repeat(90) + 'B'], f = await mount(values);
     expect(boxes().map(node => node.getAttribute('title'))).toEqual(values.map(value => JSON.stringify(value)));
-    const details = document.querySelectorAll('details'); expect(details).toHaveLength(2);
+    const details = document.querySelectorAll('details').filter(node => node.querySelector('pre') !== null); expect(details).toHaveLength(2);
     expect(details.map(node => node.querySelector('pre')?.textContent)).toEqual(values.map(value => JSON.stringify(value)));
     expect(details.map(node => node.querySelector('summary')?.textContent)).toEqual([text.completeValue(1), text.completeValue(2)]);
     expect(f.onApply).not.toHaveBeenCalled(); expect(f.onClose).not.toHaveBeenCalled();

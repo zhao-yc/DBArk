@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { tablePresetLimits, validateTablePresetColumns, type TablePresetConfiguration, type TablePresetSnapshot, type TablePresetTarget } from '../../shared/tablePresets';
 import { invoke, errorMessage, uid } from '../lib';
 import { tablePresetsZh as t } from '../locales/tablePresets.zh-CN';
-import { ErrorBox } from './ui';
+import { ErrorBox, UsageHelp } from './ui';
 
 interface Props {
   target:TablePresetTarget;connectionVersion:number;refreshVersion:number;columns:string[];
@@ -56,7 +56,7 @@ export function TablePresetPanel(props:Props) {
     }
   }
   const disabled=props.disabled||pending||reading||!snapshot,same=snapshot?.entries.some(item=>item.name===name);
-  return <section aria-label={t.title}><strong>{t.title}</strong><p>{t.notice}</p><div className="filter-inputs">
+  return <section aria-label={t.title}><strong>{t.title}</strong><UsageHelp><p>{t.notice}</p></UsageHelp><div className="filter-inputs">
     <input aria-label={t.name} maxLength={tablePresetLimits.name} value={name} onChange={event=>setName(event.target.value)}/>
     <button disabled={disabled||!name.trim()||same} onClick={()=>void action('save')}>{t.save}</button>
     <button disabled={disabled||!same} onClick={()=>void action('replace')}>{t.replace}</button>

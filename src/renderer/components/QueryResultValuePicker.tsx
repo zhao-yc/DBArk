@@ -2,7 +2,7 @@ import { useLayoutEffect, useRef, useState, type KeyboardEvent } from 'react';
 import type { QueryResultFilterGroup, QueryResultFilterRule } from '../queryResultFilter';
 import { queryResultValueOptionsLimits, queryResultValueOptionsNode, searchQueryResultValueOptions, type QueryResultValueOptions } from '../queryResultValueOptions';
 import { queryResultValueOptionsZh as text } from '../locales/queryResultValueOptions.zh-CN';
-import { ErrorBox } from './ui';
+import { UsageHelp, ErrorBox  } from './ui';
 
 type Draft = { query: string; mode: 'include' | 'exclude'; selected: readonly number[]; page: number; problem?: string };
 /** 不同值勾选只写入所属条件草稿；源捕获、父级租约和每次草稿身份共同拒绝迟到事件。 */
@@ -97,7 +97,7 @@ export function QueryResultValuePicker({ capture, isCurrent, onApply, onClose }:
     const json = JSON.stringify(literal); return json.length > 80 ? json.slice(0, 80) + text.displayTruncated : json;
   }
   return <section role="region" aria-label={text.title} className="query-result-value-picker" onKeyDown={keyDown}>
-    <strong>{text.title}</strong><p>{text.column(capture.column.name, capture.column.type)}</p><p>{text.hint}</p><p>{text.scope}</p><p>{text.shortcuts}</p>
+    <strong>{text.title}</strong><p>{text.column(capture.column.name, capture.column.type)}</p><UsageHelp><p>{text.hint}</p><p>{text.shortcuts}</p></UsageHelp>
     <p aria-live="polite">{text.counts(capture.rows, capture.entries.length, matches.length, draft.selected.length)}</p>
     <div className="query-result-value-picker-controls"><label>{text.search}<input aria-label={text.search} value={draft.query} disabled={!valid} onChange={event => search(event.target.value)} onCompositionStart={beginComposition} onCompositionEnd={endComposition}/></label>
       <label>{text.mode}<select aria-label={text.mode} value={draft.mode} disabled={!valid || composing} onChange={event => { const mode = event.target.value; if (mode === 'include' || mode === 'exclude') replace({ ...draft, mode, problem: undefined }); }}><option value="include">{text.include}</option><option value="exclude">{text.exclude}</option></select></label>

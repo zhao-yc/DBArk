@@ -4,7 +4,7 @@ import { FILTER_LIMITS, copyFilterRules, validateFilterGroup } from '../../share
 import { filterRuleSummary } from '../tableFilters';
 import { tableFilterGroupsZh as text } from '../locales/tableFilterGroups.zh-CN';
 import { errorMessage } from '../lib';
-import { ErrorBox } from './ui';
+import { ErrorBox, UsageHelp } from './ui';
 
 type Leaf = { kind: 'rule'; id: number; index: number };
 type Group = { kind: 'group'; id: number; mode: FilterMode; children: (Leaf | Group)[] };
@@ -140,7 +140,7 @@ export function TableFilterGroupsDialog({ filters, mode, initial, isCurrent, onA
   return <section className="filter-panel expanded-filter-panel" role="region" aria-label={text.title} onKeyDown={keyDown}
     onCompositionStart={() => { if (current()) { composition.current = true; setComposing(true); } }}
     onCompositionEnd={() => { if (current()) { composition.current = false; setComposing(false); } }}>
-    <strong>{text.title}</strong><p>{text.hint}</p><p>{text.limits}</p><p>{text.shortcuts}</p>
+    <strong>{text.title}</strong><UsageHelp><p>{text.hint}</p><p>{text.limits}</p><p>{text.shortcuts}</p></UsageHelp>
     {empty && <p>{text.empty}</p>}{draft && render(draft)}{composing && <p>{text.composing}</p>}
     <ErrorBox message={error || (!valid && !consumed.current ? text.stale : '')}/>
     <div className="filter-inputs"><span className="grow"/><button type="button" disabled={composing || consumed.current} onClick={cancel}>{text.cancel}</button><button type="button" className="primary" disabled={disabled || empty} onClick={apply}>{text.apply}</button></div>

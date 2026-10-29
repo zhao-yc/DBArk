@@ -13,7 +13,7 @@ function bundle() {
     build.onResolve({ filter: /^react$/ }, () => ({ path: 'hooks', namespace: 'panel' }));
     build.onResolve({ filter: /^react\/jsx-runtime$/ }, () => ({ path: 'jsx', namespace: 'panel' }));
     build.onResolve({ filter: /^\.\/ui$/ }, args => args.importer.endsWith('PageFindPanel.tsx') ? { path: 'ui', namespace: 'panel' } : undefined);
-    build.onLoad({ filter: /.*/, namespace: 'panel' }, args => ({ contents: args.path === 'hooks' ? 'export const useState=(...v)=>globalThis.__hooks.state(...v),useRef=(...v)=>globalThis.__hooks.ref(...v),useMemo=(...v)=>globalThis.__hooks.memo(...v),useEffect=(...v)=>globalThis.__hooks.effect(...v);' : args.path === 'jsx' ? 'export const jsx=(type,props)=>({type,props}),jsxs=jsx,Fragment="fragment";' : 'export const Field="Field",Modal="Modal",ErrorBox="ErrorBox";' }));
+    build.onLoad({ filter: /.*/, namespace: 'panel' }, args => ({ contents: args.path === 'hooks' ? 'export const useState=(...v)=>globalThis.__hooks.state(...v),useRef=(...v)=>globalThis.__hooks.ref(...v),useMemo=(...v)=>globalThis.__hooks.memo(...v),useEffect=(...v)=>globalThis.__hooks.effect(...v);' : args.path === 'jsx' ? 'export const jsx=(type,props)=>({type,props}),jsxs=jsx,Fragment="fragment";' : 'export const Field="Field",Modal="Modal",ErrorBox="ErrorBox",UsageHelp="UsageHelp";' }));
   } }] }).then(result => result.outputFiles[0].text);
 }
 

@@ -78,7 +78,7 @@ export function QueryResultFind({ owner, rows, columns, grid, isCurrent, onHit, 
     <div className="query-result-find-toolbar"><button type="button" disabled={!available} aria-expanded={!!visible} onClick={open} title="Ctrl / ⌘ + F">{text.open}</button>
       {visible && <><input ref={input} type="text" aria-label={text.input} value={query} onChange={event => start(event.target.value, sensitive)}/><label className="check"><input type="checkbox" checked={sensitive} onChange={event => start(query, event.target.checked)}/>{text.sensitive}</label><button type="button" aria-label={text.previous} disabled={!active?.progress.count || !available} onClick={() => navigate(-1)}>↑</button><button type="button" aria-label={text.next} disabled={!active?.progress.count || !available} onClick={() => navigate(1)}>↓</button><button type="button" aria-label={text.close} onClick={close}>×</button></>}
     </div>
-    {visible && <div className="query-result-find-status"><span role="status" aria-live="polite">{status}</span>{hit && <span>{text.location(hit.row, hit.column)}</span>}{progress?.phase === 'limited' && <strong>{text.limited}</strong>}<span className="muted">{text.scope(rows.length, columns.length)}{text.hint}</span></div>}
+    {visible && <div className="query-result-find-status"><span role="status" aria-live="polite">{status}</span>{hit && <span>{text.location(hit.row, hit.column)}</span>}{progress?.phase === 'limited' && <strong>{text.limited}</strong>}<span className="muted" title={text.hint}>{text.scope(rows.length, columns.length)}</span></div>}
     <div className="query-result-find-grid">{children}</div>
   </div>;
 }

@@ -4,7 +4,7 @@ import { pinLimits, type PinnedQueryResult } from '../queryPins';
 import { captureQueryResultComparison, currentQueryResultComparison, queryResultComparisonKeyReason, queryResultComparisonValues, QueryResultComparisonScan, type QueryResultComparisonCapture, type QueryResultComparisonResult, type QueryResultComparisonRow, type QueryResultComparisonValue } from '../queryResultComparison';
 import { queryResultComparisonZh as text } from '../locales/queryResultComparison.zh-CN';
 import { errorMessage } from '../lib';
-import { ErrorBox, Modal } from './ui';
+import { UsageHelp, ErrorBox, Modal  } from './ui';
 
 interface Props { pins: readonly PinnedQueryResult[]; owner: string; isCurrent(): boolean; onClose(): void; }
 type Draft = { left: string; right: string; keys: readonly string[] };
@@ -146,7 +146,7 @@ export function QueryResultComparisonDialog({ pins, owner, isCurrent, onClose }:
   }
   const kindLabel = (kind: QueryResultComparisonRow['kind']) => text[kind];
   return <div data-query-result-comparison-owner={owner}><Modal title={text.title} onClose={close} wide><div className="modal-content">
-    <p>{text.notice}</p><p className="muted small">{text.keysHint} {text.identity}</p>{(left?.truncated || right?.truncated) && <p role="note">{text.truncated}</p>}
+    <p>{text.notice}</p><UsageHelp><p>{text.keysHint}</p><p>{text.identity}</p></UsageHelp>{(left?.truncated || right?.truncated) && <p role="note">{text.truncated}</p>}
     <div className="filter-inputs"><label>{text.left}<select aria-label={text.left} value={draft.left} disabled={!valid} onChange={event => { if (!event.defaultPrevented && !event.nativeEvent?.defaultPrevented) change({ left: event.target.value, right: draft.right, keys: [] }); }}>{prepared.sources.map(source => <option key={source.id} value={source.id}>{source.label}</option>)}</select></label>
       <label>{text.right}<select aria-label={text.right} value={draft.right} disabled={!valid} onChange={event => { if (!event.defaultPrevented && !event.nativeEvent?.defaultPrevented) change({ left: draft.left, right: event.target.value, keys: [] }); }}>{prepared.sources.map(source => <option key={source.id} value={source.id}>{source.label}</option>)}</select></label></div>
     <fieldset disabled={!valid}><legend>{text.keys}</legend>{columns.map(column => { const reason = queryResultComparisonKeyReason(column), checked = draft.keys.includes(column.key); return <label key={column.key} className="check" title={reason}><input type="checkbox" aria-label={text.key(column.key)} checked={checked} disabled={!valid || !!reason || !checked && draft.keys.length >= 8} onChange={event => { if (!event.defaultPrevented && !event.nativeEvent?.defaultPrevented) change({ ...draft, keys: event.target.checked ? [...draft.keys, column.key] : draft.keys.filter(key => key !== column.key) }); }}/>{column.name || column.key} · {column.key}{reason && <span> · {reason}</span>}</label>; })}</fieldset>

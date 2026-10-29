@@ -7,7 +7,7 @@ export const tableForeignKeyJoinZh = {
   selected: (selected: number, total: number) => `已选 ${selected} / ${total} 个字段`,
   preview: '预览 SQL', open: '打开为独立查询', close: '关闭', limit: '最多返回行数',
   relationship: '仅使用所选真实外键的全部字段，保持复合字段顺序，不猜测主键或按名称推断关联。',
-  scope: '生成双方整表的关联 SELECT，不包含父页筛选、排序、分页或未提交草稿。预览不查询数据、不执行 SQL；打开后请自行审阅并明确执行。',
+  scope: '仅生成 SQL；关联双方整表，不含当前筛选、排序、分页或未提交修改。',
   leftHint: 'LEFT JOIN 保留所有子表记录；外键包含 NULL 或父表未匹配时，父表输出为 NULL。',
   innerHint: 'INNER JOIN 只返回按全部外键字段匹配的记录；包含 NULL 的关联不会匹配。',
   aliases: '输出字段使用 c_ / p_ 与原列序号组成的唯一别名，避免两侧同名字段丢失。',

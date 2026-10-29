@@ -7,7 +7,7 @@ import { importNewTableZh as text } from '../locales/importNewTable.zh-CN';
 import { useWorkspace } from '../store';
 import { SchemaDialog } from './SchemaDialog';
 import { TransferDialog } from './TransferDialog';
-import { ErrorBox, Field, Modal, Spinner } from './ui';
+import { ErrorBox, Field, Modal, Spinner, UsageHelp } from './ui';
 
 export interface ImportNewTableDialogProps {
   connectionId: string; database: string; onClose(): void;
@@ -45,7 +45,7 @@ export function ImportNewTableDialog({ connectionId, database, onClose, onCreate
   if (state.stage === 'import' && state.seed && state.created && lease) return <TransferDialog mode="import" connectionId={origin.connectionId} database={origin.database} table={state.created.target.table} initialImport={state.seed} invalidated={state.invalid} isParentCurrent={childCurrent} onClose={() => controller.importClosed(lease)}/>;
   const disabled = state.busy || state.closing || state.invalid, inspection = state.inspection;
   return <Modal title={text.title} wide onClose={() => event(() => { void controller.close(state); })}><div className="modal-content" aria-busy={state.busy || state.closing}>
-    <p className="info-strip">{text.scope}</p><p className="warning-text">{text.ddl}</p>
+    <UsageHelp><p>{text.scope}</p><p>{text.types}</p>{inspection && <><p>{text.bytes}：{inspection.source.bytes}</p><p style={{ overflowWrap: 'anywhere' }}>{text.fingerprint}：{inspection.source.sha256}</p></>}</UsageHelp><p className="warning-text">{text.ddl}</p>
     {state.stage === 'source' ? <>
       <div className="form-grid"><Field label={text.format}><select aria-label={text.format} value={state.options.format} disabled={disabled} onChange={value => event(() => controller.change(state, { format: value.target.value as 'csv' | 'json' }))}><option value="csv">CSV</option><option value="json">JSON</option></select></Field>
         <Field label={text.encoding}><select aria-label={text.encoding} value={state.options.encoding} disabled={disabled} onChange={value => event(() => controller.change(state, { encoding: value.target.value as 'utf8' | 'utf16le' | 'gb18030' }))}><option value="utf8">UTF-8</option><option value="utf16le">UTF-16 LE</option><option value="gb18030">GB18030</option></select></Field>
@@ -53,7 +53,7 @@ export function ImportNewTableDialog({ connectionId, database, onClose, onCreate
       </div>
       <button disabled={disabled} onClick={() => event(() => { void controller.scan(state); })}>{state.busy ? <Spinner/> : null}{text.choose}</button>
       {state.file && <p>{text.source}：{state.file.name}</p>}
-      {inspection && <section><p>{text.records(inspection.records)}</p><p>{text.bytes}：{inspection.source.bytes}</p><p style={{ overflowWrap: 'anywhere' }}>{text.fingerprint}：{inspection.source.sha256}</p><p>{text.columns}：{inspection.columns.length}</p><p>{text.types}</p><p>{text.sample}</p>
+      {inspection && <section><p>{text.records(inspection.records)}</p><p>{text.columns}：{inspection.columns.length}</p><p>{text.sample}</p>
         <div style={{ overflow: 'auto', maxHeight: 280 }}><table><thead><tr>{inspection.columns.map(column => <th key={column}>{column}</th>)}</tr></thead><tbody>{inspection.rows.map((row, index) => <tr key={index}>{inspection.columns.map(column => <td key={column}>{cellPreview(Object.hasOwn(row, column) ? row[column] : undefined, 120)}</td>)}</tr>)}</tbody></table></div>
         {inspection.sampleOmitted && <p>{text.omitted}</p>}
         <Field label={text.table}><input aria-label={text.table} value={state.tableName} disabled={disabled} maxLength={64} onChange={value => event(() => controller.name(state, value.target.value))}/></Field><label><input type="checkbox" aria-label={text.reviewed} checked={state.reviewed} disabled={disabled || !state.tableName} onChange={value => event(() => controller.review(state, value.target.checked))}/>{text.reviewed}</label>

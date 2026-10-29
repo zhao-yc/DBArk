@@ -3,7 +3,7 @@ import type { SavedQueryOrganizationSnapshot, SavedQueryOrganizationOperation } 
 import { savedQueryOrganizationLimits } from '../../shared/savedQueryOrganization';
 import { previewSavedQueryOrganization, savedQueryOrganizationTree, type SelectedSavedQuery, type SavedQueryOrganizationPreview } from '../savedQueryOrganizationUi';
 import { savedQueryOrganizationZh as text } from '../locales/savedQueryOrganization.zh-CN';
-import { ErrorBox } from './ui';
+import { ErrorBox, UsageHelp } from './ui';
 import { errorMessage } from '../lib';
 
 export interface SavedQueryOrganizationEdit { kind: SavedQueryOrganizationOperation['kind']; id?: string; }
@@ -30,7 +30,7 @@ export function SavedQueryOrganizationEditor({ snapshot, edit, selected, busy, o
     } catch (reason) { setError(errorMessage(reason)); }
   }
   const title = text[edit.kind], tree = savedQueryOrganizationTree(snapshot);
-  return <section className="saved-query-organization-editor" role="group" aria-label={title}><h3>{title}</h3><p className="muted small">{text.metadataOnly}</p>
+  return <section className="saved-query-organization-editor" role="group" aria-label={title}><h3>{title}</h3><UsageHelp><p>{text.metadataOnly}</p></UsageHelp>
     {(edit.kind === 'create' || edit.kind === 'rename') && <label>{text.groupName}<input aria-label={text.groupName} maxLength={savedQueryOrganizationLimits.name} disabled={busy} value={name} onChange={event => change(() => setName(event.target.value))}/></label>}
     {(edit.kind === 'create' || edit.kind === 'moveGroup' || edit.kind === 'moveQueries') && <label>{edit.kind === 'moveQueries' ? text.destination : text.parent}<select aria-label={edit.kind === 'moveQueries' ? text.destination : text.parent} value={parent} disabled={busy} onChange={event => change(() => setParent(event.target.value))}><option value="">{edit.kind === 'moveQueries' ? text.unfiled : text.root}</option>{tree.map(item => <option value={item.id} key={item.id}>{item.path}</option>)}</select></label>}
     {edit.kind === 'dissolve' && <p className="warning-text">{text.dissolveWarning}</p>}

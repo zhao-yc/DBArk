@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { editorIndentationLimits, isEditorTabSize, readEditorInsertSpaces, readEditorTabSize } from '../../shared/editorIndentation';
 import { flushSettings, useWorkspace } from '../store';
 import { editorIndentationZh as text } from '../locales/editorIndentation.zh-CN';
-import { ErrorBox, Field, Modal } from './ui';
+import { ErrorBox, Field, Modal, UsageHelp } from './ui';
 
 /** 独立的缩进入口，仅向App报告模态变化，不重写字号或换行入口。 */
 export function EditorIndentPreferences({ onVisibilityChange }: { onVisibilityChange(): void }) {
@@ -39,6 +39,6 @@ function IndentDialog({ onClose }: { onClose(): void }) {
     <p className="full" role="status">{text.current(width, spaces)}</p>
     <Field label={text.width}><input aria-label={text.width} type="number" min={editorIndentationLimits.min} max={editorIndentationLimits.max} step="1" value={draftWidth} disabled={saving} onChange={event => { setDraftWidth(event.target.value); setError(''); }}/></Field>
     <Field label={text.style}><select aria-label={text.style} value={draftStyle} disabled={saving} onChange={event => { setDraftStyle(event.target.value); setError(''); }}><option value="spaces">{text.spaces}</option><option value="tabs">{text.tabs}</option></select></Field>
-    <p className="full muted small">{text.hint}</p><button type="button" disabled={saving} onClick={() => { setDraftWidth(String(editorIndentationLimits.defaultTabSize)); setDraftStyle('spaces'); setError(''); }}>{text.reset}</button><p className="full muted small">{text.draft}</p><div className="full"><ErrorBox message={error}/></div>
+    <UsageHelp className="full"><p>{text.hint}</p><p>{text.draft}</p></UsageHelp><button type="button" disabled={saving} onClick={() => { setDraftWidth(String(editorIndentationLimits.defaultTabSize)); setDraftStyle('spaces'); setError(''); }}>{text.reset}</button><div className="full"><ErrorBox message={error}/></div>
   </div><footer className="modal-footer"><button type="button" onClick={close}>{text.cancel}</button><span className="grow"/><button type="button" className="primary" disabled={saving} onClick={() => void save()}>{saving ? text.saving : text.save}</button></footer></Modal>;
 }

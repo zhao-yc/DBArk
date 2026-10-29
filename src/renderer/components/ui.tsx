@@ -1,6 +1,12 @@
 import { zh } from '../locales/zh-CN';
 import { useEffect, useRef, type ReactNode } from 'react';
 import { X, LoaderCircle } from 'lucide-react';
+import '../usageHelp.css';
+
+/** 普通操作规则按需展开；原生摘要支持键盘，风险与即时状态由调用方保持可见。 */
+export function UsageHelp({ children, className = '' }: { children: ReactNode; className?: string }) {
+  return <details className={`usage-help ${className}`.trim()}><summary>{zh.common.usageHelp}</summary><div className="usage-help-content">{children}</div></details>;
+}
 
 /** 对话框限制键盘焦点并在关闭后还原，关闭回调通过引用保持最新状态。 */
 export function Modal({ title, children, onClose, wide = false }: { title: string; children: ReactNode; onClose: () => void; wide?: boolean }) {
@@ -8,14 +14,14 @@ export function Modal({ title, children, onClose, wide = false }: { title: strin
   const closeRef = useRef(onClose); closeRef.current = onClose;
   useEffect(() => {
     const previous = document.activeElement as HTMLElement | null;
-    root.current?.querySelector<HTMLElement>('input, select, textarea, button')?.focus();
+    root.current?.querySelector<HTMLElement>('input, select, textarea, button, summary')?.focus();
     /** 拦截 Escape 并循环 Tab 焦点，避免键盘操作穿透到对话框后方。 */
     const listener = (event: KeyboardEvent) => {
       // 输入法组合阶段的 Escape/Tab 属于输入法；捕获层必须先跳过，避免提前关闭弹窗或移动焦点。
       if (event.isComposing || event.keyCode === 229) return;
       if (event.key === 'Escape') { event.stopPropagation(); closeRef.current(); }
       if (event.key === 'Tab') {
-        const elements = root.current?.querySelectorAll<HTMLElement>('button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled), [tabindex="0"]');
+        const elements = root.current?.querySelectorAll<HTMLElement>('button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled), summary, [tabindex="0"]');
         if (!elements?.length) return;
         if (event.shiftKey && document.activeElement === elements[0]) { event.preventDefault(); elements[elements.length - 1].focus(); }
         else if (!event.shiftKey && document.activeElement === elements[elements.length - 1]) { event.preventDefault(); elements[0].focus(); }

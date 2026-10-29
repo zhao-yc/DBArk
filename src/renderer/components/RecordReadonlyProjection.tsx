@@ -1,3 +1,4 @@
+import { UsageHelp } from './ui';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { ColumnInfo } from '../../shared/contracts';
 import type { DraftRow } from '../dataChanges';
@@ -77,7 +78,7 @@ function ProjectionContent({ row, context, identity, columns, visibleKeys, showH
     onStructure({row,identity,columnName,document,segments},current,kind);
   }
   if (mode === 'json') return <section className="record-projection-content" aria-label={text.json}>
-    <p>{text.jsonHint}</p>{projection?.status === 'ready' ? <><p>{formatText(text.jsonBytes, projection.outputBytes)}</p><textarea className="record-whole-json" aria-label={text.jsonText} spellCheck={false} readOnly value={projection.text}/></> : projection && <ProjectionError result={projection}/>}</section>;
+    <p>{text.jsonScope}</p><UsageHelp><p>{text.jsonHint}</p></UsageHelp>{projection?.status === 'ready' ? <><p>{formatText(text.jsonBytes, projection.outputBytes)}</p><textarea className="record-whole-json" aria-label={text.jsonText} spellCheck={false} readOnly value={projection.text}/></> : projection && <ProjectionError result={projection}/>}</section>;
   if (!summary) return null;
   if (summary.status !== 'ready') return <ProjectionError result={summary}/>;
   const selected = active && names.includes(active.name) ? active : null;
@@ -91,7 +92,7 @@ function ProjectionContent({ row, context, identity, columns, visibleKeys, showH
         {(field.kind === 'string' || field.kind === 'json-text') && <button aria-expanded={selected?.name === name} onClick={() => selected?.name === name ? setActive(null) : inspectJson(column)}>{selected?.name === name ? text.closeTree : field.kind === 'json-text' ? text.parse : text.parseExplicit}</button>}
       </li>;
     })}</ol>
-    {selected && <section className="record-lexical-section" aria-label={selected.name}><h3>{selected.name}</h3><p>{text.jsonSource}</p>
+    {selected && <section className="record-lexical-section" aria-label={selected.name}><h3>{selected.name}</h3><UsageHelp><p>{text.jsonSource}</p><p>{text.ordered}</p></UsageHelp>
       {selected.result.status === 'ready' ? <LexicalTree key={selected.name} identity={identity} columnName={selected.name} document={selected.result} reason={recordReadonlyReason(context,row,selected.name)} onEdit={segments=>editNode(selected.result as ReadyLexicalDocument,selected.name,segments)} onStructure={(segments,kind)=>structureNode(selected.result as ReadyLexicalDocument,selected.name,segments,kind)}/> : <div role="status"><strong>{selected.result.status === 'invalid' ? text.invalid : selected.result.status === 'limited' ? text.lexicalLimited : text.unavailable}</strong><p>{'offset' in selected.result ? formatText(text.failureAt, selected.result.offset, selected.result.reason) : selected.result.reason}</p></div>}
     </section>}
   </section>;
@@ -118,7 +119,7 @@ function LexicalTree({ identity, columnName, document, reason, onEdit, onStructu
   if(selectedNode&&selected){if(selected.path.at(-1)?.kind==='member')kinds.push('rename');if(selected.path.length)kinds.push('remove');if(selectedNode.kind==='object'){kinds.push('append-member');if(selectedNode.members.length)kinds.push('move-member');}if(selectedNode.kind==='array'){kinds.push('insert-element');if(selectedNode.elements.length)kinds.push('move-element');}}
   /** 展开只改变显示集合；收起不改原文、词法路径或页内草稿。 */
   function toggle(id: number) { setExpanded(current => { const next = new Set(current); if (next.has(id)) next.delete(id); else next.add(id); return next; }); }
-  return <><p>{text.ordered}</p><p>{formatText(text.nodeRange, window.offset + 1, Math.min(window.offset + projectionViewLimits.nodes, window.total), window.total)}</p>
+  return <><p>{formatText(text.nodeRange, window.offset + 1, Math.min(window.offset + projectionViewLimits.nodes, window.total), window.total)}</p>
     <div className="record-projection-pager"><button disabled={!window.previous} onClick={() => setOffset(window.offset - projectionViewLimits.nodes)}>{text.nodePrevious}</button><button disabled={!window.next} onClick={() => setOffset(window.offset + projectionViewLimits.nodes)}>{text.nodeNext}</button></div>
     <ol className="record-lexical-list" aria-label={text.lexicalTree}>{window.rows.map(row => {
       const node = document.nodes[row.id]; const count = node.kind === 'object' ? node.members.length : node.kind === 'array' ? node.elements.length : null;

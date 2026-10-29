@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { schemaCompareInputSchema, type SchemaCompareInput, type SchemaCompareResult, type SchemaComparePreview, type SchemaComparePreviewInput, type SchemaCompareTarget } from '../../shared/schemaCompare';
 import { schemaCompareZh as text } from '../locales/schemaCompare.zh-CN';
-import { ErrorBox, Field, Modal } from './ui';
+import { ErrorBox, Field, Modal, UsageHelp } from './ui';
 import { SchemaCompareResults } from './SchemaCompareResults';
 import { applySchemaCompareResultsSelection } from '../schemaCompareResults';
 import '../schemaCompare.css';
@@ -111,7 +111,7 @@ export function SchemaCompareDialog({ connections, services, initialSource, init
   }
   const endpointName = (value: SchemaCompareTarget) => `${connections.find(connection => connection.id === value.connectionId)?.name ?? value.connectionId} · ${JSON.stringify(value.database)}.${JSON.stringify(value.table)}`;
   return <Modal title={text.title} wide onClose={() => void close()}><div className="modal-content schema-compare-content">
-    <p>{text.direction}</p><p className="muted small">{text.scope} {text.exactNames}</p>
+    <p>{text.direction}</p><UsageHelp><p>{text.scope}</p><p>{text.exactNames}</p></UsageHelp>
     <div className="schema-compare-endpoints">{endpoint(text.source, source, value => changeEndpoint('source', value))}{endpoint(text.target, target, value => changeEndpoint('target', value))}</div><button disabled={busy || closing || previewBusy} onClick={() => { changeEndpoint('source', target); changeEndpoint('target', source); }}>{text.swap}</button><ErrorBox message={error}/>
     <div role="status">{closing ? text.closing : busy ? text.reading : report ? <>{Object.entries(report.counts).map(([status, count]) => <span className="schema-compare-count" key={status}>{text.statuses[status as keyof typeof text.statuses]}：{count}</span>)}{report.counts.unknown > 0 ? text.unknown : report.counts.added + report.counts.removed + report.counts.changed === 0 ? text.allSame : ''}</> : text.empty}</div>
     {report && <><p className="schema-compare-direction">{endpointName(report.source)}（{text.version} {report.sourceVersion}） → {endpointName(report.target)}（{text.version} {report.targetVersion}）</p>

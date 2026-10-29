@@ -12,7 +12,7 @@ export function RecordJsonNodeEditor({input,reason,onChange,onClose}:{input:Reco
   useEffect(()=>{editor.current?.focus();},[input.session]);
   return <section className="record-node-input" aria-label={text.title}>
     <header><h3>{text.title} · {input.columnName}</h3><button onClick={onClose}>{text.close}</button></header>
-    <p>{text.hint}</p><details><summary>{text.details}</summary><p className="muted small">{text.scope}</p><label>{text.path}<textarea readOnly spellCheck={false} value={JSON.stringify({columnName:input.columnName,segments:input.value.segments})}/></label></details>
+    <details><summary>{text.details}</summary><p>{text.hint}</p><p className="muted small">{text.scope}</p><label>{text.path}<textarea readOnly spellCheck={false} value={JSON.stringify({columnName:input.columnName,segments:input.value.segments})}/></label></details>
     <label htmlFor={id}>{text.label}</label><BoundedRecordTextarea id={id} ref={editor} spellCheck={false} readOnly={!!reason} value={input.value.text} budget={jsonNodeInputBudget} inputIdentity={input.session} onValueChange={value=>onChange(value,input)}/>
     {reason&&<p role="status">{reason}</p>}
   </section>;

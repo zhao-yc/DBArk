@@ -1,6 +1,6 @@
 import { useLayoutEffect, useRef, useState, type KeyboardEvent } from 'react';
 import { savedQueryRenameSchema, savedQueryRenameZh as text } from '../../shared/savedQueryRename';
-import { ErrorBox } from './ui';
+import { ErrorBox, UsageHelp } from './ui';
 
 export interface SavedQueryRenameOrigin { readonly id: string; readonly digest: string; readonly name: string; }
 interface Props { origin: SavedQueryRenameOrigin; busy: boolean; onConfirm(name: string): void; onCancel(): void; }
@@ -52,7 +52,7 @@ export function SavedQueryRenameEditor({ origin, busy, onConfirm, onCancel }: Pr
   const parsed = savedQueryRenameSchema.safeParse({ id: original.id, digest: original.digest, name: draft.name });
   const disabled = busy || finished || dead.current;
   return <section className="saved-query-organization-editor saved-query-rename-editor" role="group" aria-label={text.rename} onKeyDown={keyDown}>
-    <h3>{text.rename}</h3><p>{original.name}</p><p className="muted small">{text.hint}</p>
+    <h3>{text.rename}</h3><p>{original.name}</p><UsageHelp><p>{text.hint}</p></UsageHelp>
     <label>{text.newName}<input ref={input} aria-label={text.newName} maxLength={256} value={draft.name} disabled={disabled} onChange={event => change(event.target.value)} onCompositionStart={() => compose(true)} onCompositionEnd={() => compose(false)}/></label>
     <ErrorBox message={dead.current ? text.stale : !parsed.success ? text.invalidName : undefined}/>
     <footer><button type="button" disabled={disabled} onClick={cancel}>{text.cancel}</button><span className="grow"/><button type="button" className="primary" disabled={disabled || composing || !parsed.success || draft.name === original.name} onClick={confirm}>{text.confirm}</button></footer>

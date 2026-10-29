@@ -1,7 +1,7 @@
 export const queryResultSnapshotViewerZh = {
   entry: '查看结果快照', title: '离线结果快照', choose: '选择结果快照', save: '另存完整快照', close: '关闭',
-  notice: '只读查看文件，不需要数据库连接或查询标签，不执行来源 SQL。文件含原始数据及 SQL，可能包含敏感内容，请妥善保管。',
-  scope: '只包含原查询已返回的范围，最多 16 MiB；另存保留文件的全部原始列、行和来源 SQL，不按网格选中范围裁剪。',
+  notice: '文件含原始数据和 SQL，可能包含敏感内容，请妥善保管。',
+  scope: '离线只读查看，不执行来源 SQL。文件只含原查询已返回范围，最多 16 MiB；另存保留文件的全部原始列、行和来源 SQL，不按网格选中范围裁剪。',
   truncated: '原结果已截断：文件不代表完整查询或数据库全表。',
   sourceShow: '显示来源 SQL', sourceHide: '隐藏来源 SQL', sourceTitle: '来源 SQL（只读，不执行）',
   empty: '请选择结果快照文件', opening: '正在选择并读取文件…', saving: '正在另存完整快照…',

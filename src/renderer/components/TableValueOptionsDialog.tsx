@@ -5,7 +5,7 @@ import { tableValueOptionsColumnCapability, tableValueOptionsLimits, tableValueO
 import { buildTableValueOptionsConditions, checkTableValueOptionsOutput, tableValueOptionsLiteral, type TableValueOptionsConditions } from '../tableValueOptionsUi';
 import { errorMessage, uid } from '../lib';
 import { tableValueOptionsZh as text } from '../locales/tableValueOptions.zh-CN';
-import { ErrorBox, Modal, Spinner } from './ui';
+import { ErrorBox, Modal, Spinner, UsageHelp } from './ui';
 
 export interface TableValueOptionsServices { read(input: TableValueOptionsInput): Promise<TableValueOptionsOutput>; cancel(taskId: string): Promise<unknown>; }
 export interface TableValueOptionsDialogProps {
@@ -132,9 +132,9 @@ export function TableValueOptionsDialog(props: TableValueOptionsDialogProps) {
   /** 标签仅省略展示，详情和条件构造始终读取服务器完整原值。 */
   function label(value: typeof options[number]['value'], short = false): string { const full = text.value(tableValueOptionsLiteral(value, origin.source.columns.find(info => info.name === draft.receipt?.column)?.type)); return short && full.length > 80 ? full.slice(0, 80) + text.displayTruncated : full; }
   return <Modal title={text.title} wide onClose={() => close()}><div className="modal-content" data-table-value-options-dialog onKeyDown={keyDown} aria-busy={busy || closing}>
-    <p>{source.database}.{source.name}</p><p>{text.scope}</p><p>{text.semantics}</p><p>{text.bounded}</p>{tableValueOptionsColumnCapability(source.columns.find(info => info.name === draft.column)?.type ?? '') === 'floating' && <p className="warning-text">{text.approximate}</p>}
+    <p>{source.database}.{source.name}</p><p>{text.scope}</p><UsageHelp><p>{text.semantics}</p><p>{text.bounded}</p><p>{text.searchHint}</p></UsageHelp>{tableValueOptionsColumnCapability(source.columns.find(info => info.name === draft.column)?.type ?? '') === 'floating' && <p className="warning-text">{text.approximate}</p>}
     <label>{text.column}<select aria-label={text.column} value={draft.column} disabled={disabled || composing} onChange={event => change('column', event.target.value)}>{source.columns.map(info => <option key={info.name} value={info.name} disabled={tableValueOptionsColumnCapability(info.type) === 'unsupported'}>{info.name} · {info.type}</option>)}</select></label>
-    <label>{text.search}<input aria-label={text.search} value={draft.query} disabled={disabled} onChange={event => change('query', event.target.value)} onCompositionStart={beginComposition} onCompositionEnd={endComposition}/></label><p className="muted small">{text.searchHint}</p>
+    <label>{text.search}<input aria-label={text.search} value={draft.query} disabled={disabled} onChange={event => change('query', event.target.value)} onCompositionStart={beginComposition} onCompositionEnd={endComposition}/></label>
     <label>{text.mode}<select aria-label={text.mode} value={draft.exclude ? 'exclude' : 'include'} disabled={disabled || composing} onChange={event => { if (!editable() || composition.current) return; const value = event.target.value; if (value === 'include' || value === 'exclude') replace({ ...draft, exclude: value === 'exclude', prompt: undefined }); }}><option value="include">{text.include}</option><option value="exclude">{text.exclude}</option></select></label>
     {busy && <Spinner text={text.loading}/>}<ErrorBox message={!valid ? text.stale : draft.problem}/>{closing && <p>{text.closing}</p>}
     {draft.receipt && <section aria-label={text.title}><p aria-live="polite">{text.selected(options.length, draft.selected.length)}</p>{!receiptMatches && <p className="warning-text">{text.searchPending}</p>}{draft.receipt.truncated && <p className="warning-text">{text.truncated}</p>}{draft.receipt.warnings.map((warning, index) => <p className="warning-text" key={index}>{warning}</p>)}

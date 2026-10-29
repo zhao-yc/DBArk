@@ -3,7 +3,7 @@ import type { ResultSelectionBinding } from '../resultExport';
 import { moveQueryResultColumn, setQueryResultFrozenThrough, type QueryResultColumnLayout } from '../queryResultColumns';
 import { queryResultColumnsZh as text } from '../locales/queryResultColumns.zh-CN';
 import { zh } from '../locales/zh-CN';
-import { Modal, ErrorBox } from './ui';
+import { UsageHelp, Modal, ErrorBox  } from './ui';
 import '../queryResultColumns.css';
 
 /** 模态只编辑有界列草稿；不扫描、复制行数据，也不投递SQL或文件请求。 */
@@ -27,7 +27,7 @@ export function QueryResultColumnsDialog({ binding, initial, owner, isCurrent, o
   }
   const frozenPosition=layout.frozenThrough===undefined?undefined:original.get(layout.frozenThrough)?.position;
   return <div data-query-columns-owner={owner}><Modal title={text.title} onClose={onClose} wide>
-    <div className="modal-content query-result-columns"><p>{text.hint}</p><p>{text.freezeHint}</p>
+    <div className="modal-content query-result-columns"><UsageHelp><p>{text.hint}</p><p>{text.freezeHint}</p></UsageHelp>
       <p role="status" aria-label={text.freezeStatus}>{frozenPosition===undefined?text.notFrozen:text.frozenThrough(frozenPosition)}</p>
       <label>{text.search}<input aria-label={text.search} value={search} placeholder={text.searchHint} disabled={!valid} onChange={event=>{if(current())setSearch(event.target.value);}}/></label>
       <div className="query-result-columns-list">{matches.map(key=>{const item=original.get(key)!,index=layout.order.indexOf(key);return <div className="query-result-column" key={key}>

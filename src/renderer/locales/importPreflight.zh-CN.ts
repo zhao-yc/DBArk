@@ -4,6 +4,7 @@ export const importPreflightZh = {
   invalidReport: '预检报告身份或计数不一致，请重新预检', cancelFailed: '取消请求失败，仍在等待原任务结束', exportFailed: '报告导出失败', exported: '报告已导出',
   complete: '已检查整份文件', incomplete: '未完整检查，不能确认整份文件通过', passed: '已映射字段未发现异常',
   blocked: '当前预检未通过，请修正文件或映射后重新预检', reportName: '导入预检报告.json',
+  notice: '仅检查已映射字段；预检不写入数据，也不保证正式导入成功。',
   scope: '仅检查已选映射字段的类型、空值及无损表示；未映射字段、默认值、唯一键、外键、CHECK、触发器与匹配键实时约束仍由正式导入核验。预检不会导入数据，也不保证正式导入成功。',
   detail: '明细使用数据记录号，不是文件物理行号。仅保留最多 200 条错误，导出也只包含这些明细及汇总。',
   truncated: '错误明细已截断，计数仍覆盖已检查范围。', record: '数据记录号', source: '源列', target: '目标列', code: '错误代码', message: '说明',

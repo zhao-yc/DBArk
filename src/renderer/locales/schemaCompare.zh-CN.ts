@@ -1,9 +1,9 @@
 export const schemaCompareZh = {
   entry: '结构比较', title: '结构比较与 SQL 预览', source: '源表', target: '目标表', connection: '连接', database: '数据库', table: '表名',
   start: '比较结构', cancel: '取消读取', close: '关闭', closing: '等待读取结束…', reading: '正在读取两侧完整定义…',
-  empty: '请选择两张明确配对的表，再开始比较。', direction: '比较方向：源 → 目标。新增表示目标缺少，删除表示目标多出。',
-  scope: '首阶段仅比较字段、主键/索引及出向外键；不推断重命名，按选择生成 SQL 审查稿，不执行同步。',
-  exactNames: '名称精确配对；连接、数据库和表名保持原始输入，不自动改写引用。',
+  empty: '请选择两张明确配对的表，再开始比较。', direction: '源 → 目标：新增表示目标缺少，删除表示目标多出。',
+  scope: '比较字段、索引与出向外键；仅生成 SQL 审查稿，不执行同步。',
+  exactNames: '名称精确匹配，不推断重命名。',
   showSame: '显示相同项', category: '类别', name: '名称', status: '结果', properties: '变化属性', reasons: '不能可靠比较的原因',
   sourceDefinition: '源定义', targetDefinition: '目标定义', absent: '此侧无对应定义', detail: '查看完整片段',
   version: '版本', select: '选择', preview: '生成 SQL 预览', save: '保存 SQL 预览', selected: '已选择', blocked: '未生成项', sql: 'SQL 审查稿', previewScope: '快照有效期两分钟；仅生成预览，尚未同步。', saved: 'SQL 预览已保存。', swap: '交换源与目标', stale: '比较输入已变化，请重新比较。',

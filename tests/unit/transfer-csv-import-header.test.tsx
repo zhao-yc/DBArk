@@ -56,7 +56,7 @@ describe('无标题CSV导入正式表单（真实React RAM）', () => {
   it('默认有标题兼容旧请求；关闭后保留文件、首条数据和完整手动映射，false原样进入预览与执行', async () => {
     await mount(); expect(named(text.label, 'input').checked).toBe(true); await click(picker()); expect(requests('files.preview')[0]).not.toHaveProperty('csvHasHeader');
     await header(false); expect(requests('files.choose')).toHaveLength(1); expect(requests('files.preview').at(-1)).toEqual({ fileToken: 'current-file', format: 'csv', encoding: 'utf8', csvDelimiter: ',', csvHasHeader: false });
-    expect(doc.body.textContent).toContain(text.noHeaderHint); expect(named('映射字段 第1列', 'select').value).toBe(''); expect(named('映射字段 第2列', 'select').value).toBe(''); expect(port.grid.rows[0]).toEqual(positional.rows[0]);
+    expect(doc.querySelectorAll('select').some(node => node.getAttribute('title') === text.noHeaderHint)).toBe(true); expect(named('映射字段 第1列', 'select').value).toBe(''); expect(named('映射字段 第2列', 'select').value).toBe(''); expect(port.grid.rows[0]).toEqual(positional.rows[0]);
     await click(execute()); expect(requests('files.import')).toHaveLength(0); await change(named('映射字段 第1列', 'select'), 'id'); await change(named('映射字段 第2列', 'select'), '内容'); await click(execute());
     expect(requests('files.import')).toHaveLength(1); expect(requests('files.import')[0]).toMatchObject({ csvHasHeader: false, csvDelimiter: ',', mapping: { 第1列: 'id', 第2列: '内容' }, fileToken: 'current-file' });
   });

@@ -3,7 +3,7 @@ import type { TableApplyReceipt, TableApplyReceiptPage } from '../../shared/tabl
 import { tableApplyReceiptZh as t } from '../locales/tableApplyReceiptZh';
 import { formatText } from '../locales/zh-CN';
 import { errorMessage, invoke } from '../lib';
-import { Empty, ErrorBox, Modal } from './ui';
+import { Empty, ErrorBox, Modal, UsageHelp } from './ui';
 
 /** 详情纯展示受限回执；没有执行、重试或把历史SQL放回编辑器的入口。 */
 export function TableApplyReceiptDetails({ receipt: r }: { receipt: TableApplyReceipt }) {
@@ -13,7 +13,7 @@ export function TableApplyReceiptDetails({ receipt: r }: { receipt: TableApplyRe
       <dt>{t.labels.time}</dt><dd>{r.startedAt} / {r.finishedAt ?? t.unfinished}</dd><dt>{t.labels.phase}</dt><dd>{t.phases[r.phase]}</dd><dt>{t.labels.reason}</dt><dd>{t.reasons[r.reason]}</dd>
       <dt>{t.rows}</dt><dd>{r.committedReportedRows === null ? t.pendingConfirmation : r.committedReportedRows}</dd>
       <dt>{t.labels.transactionProtected}</dt><dd>{r.evidence.transactionProtected ? t.confirmed : t.unconfirmed}</dd><dt>{t.labels.dmlAcknowledged}</dt><dd>{r.evidence.dmlAcknowledged}</dd><dt>{t.labels.acknowledgements}</dt><dd>{r.evidence.commitAcknowledged ? t.yes : t.no} / {r.evidence.rollbackAcknowledged ? t.yes : t.no}</dd></dl>
-    {r.outcome === 'unknown' && <p className="warning-text">{t.unknown}</p>}{r.committedReportedRows === null && <p>{t.pendingRows}</p>}<p className="muted">{t.clock}</p><p className="muted">{t.privacy}</p>
+    {r.outcome === 'unknown' && <p className="warning-text">{t.unknown}</p>}{r.committedReportedRows === null && <p>{t.pendingRows}</p>}<p className="muted">{t.clock}</p><p className="muted">{t.scope}</p>
   </section>;
 }
 
@@ -34,10 +34,10 @@ export function TableApplyReceiptsDialog({ onClose, onTasks, initialOperationId 
     void invoke('table.applyReceipt.detail', { operationId: selectedId }).then(r => { if (active) setSelected(r); }).catch(e => { if (active) setError(errorMessage(e)); });
     return () => { active = false; };
   }, [selectedId, revision]);
-  return <Modal title={t.title} wide onClose={onClose}><div className="modal-content">{onTasks && <button onClick={onTasks}>{t.tasks}</button>}<p>{t.privacy}</p><ErrorBox message={error}/>
+  return <Modal title={t.title} wide onClose={onClose}><div className="modal-content">{onTasks && <button onClick={onTasks}>{t.tasks}</button>}<UsageHelp><p>{t.privacy}</p></UsageHelp><ErrorBox message={error}/>
     <label>{t.filters.outcome}<select aria-label={t.filters.outcomeAria} value={outcome} onChange={e => { setOutcome(e.target.value); setPage(0); setSelectedId(undefined); }}><option value="">{t.filters.all}</option>{Object.entries(t.outcomes).map(([key, text]) => <option key={key} value={key}>{text}</option>)}</select></label>
     <label>{t.filters.connectionId}<input aria-label={t.filters.connectionAria} value={connectionId} onChange={e => { setConnectionId(e.target.value); setPage(0); setSelectedId(undefined); }}/></label>
-    <div aria-busy={busy}>{reply?.items.map(r => <article key={r.operationId} className="task-card"><strong>{r.target.database} / {r.target.table}</strong><p>{r.outcome ? t.outcomes[r.outcome] : t.running}</p><p>{r.startedAt}</p><button onClick={() => setSelectedId(r.operationId)}>{t.viewDetails}</button></article>)}{reply && !reply.items.length && <Empty title={t.empty} text={t.privacy}/>}</div>
+    <div aria-busy={busy}>{reply?.items.map(r => <article key={r.operationId} className="task-card"><strong>{r.target.database} / {r.target.table}</strong><p>{r.outcome ? t.outcomes[r.outcome] : t.running}</p><p>{r.startedAt}</p><button onClick={() => setSelectedId(r.operationId)}>{t.viewDetails}</button></article>)}{reply && !reply.items.length && <Empty title={t.empty}/>}</div>
     <footer><button disabled={busy || page === 0} onClick={() => setPage(n => n - 1)}>{t.previousPage}</button><span>{formatText(t.page, page + 1, reply?.total ?? 0)}</span><button disabled={busy || !reply || (page + 1) * 25 >= reply.total} onClick={() => setPage(n => n + 1)}>{t.nextPage}</button></footer>
     {selected && <TableApplyReceiptDetails receipt={selected}/>}</div></Modal>;
 }

@@ -2,7 +2,7 @@ import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { parseTableDraftDocument, parseTableDraftPayload, type TableDraftDocument, type TableDraftPayload, type TableDraftTarget } from '../../shared/tableDraft';
 import { errorMessage, invoke, uid } from '../lib';
 import { tableDraftFilesZh as text } from '../locales/tableDraftFiles.zh-CN';
-import { ErrorBox, Modal, Spinner } from './ui';
+import { ErrorBox, Modal, Spinner, UsageHelp } from './ui';
 
 export interface TableDraftDialogServices {
   open(target: TableDraftTarget): Promise<{ name: string; document: TableDraftDocument } | null>;
@@ -134,7 +134,7 @@ export function TableDraftDialog({ services = tableDraftDialogServices, ...props
   return <Modal title={owner.mode === 'save' ? text.saveTitle : text.restoreTitle} onClose={close}>
     <div className="modal-content" data-table-draft-dialog aria-busy={busy}>
       <p>{owner.target.database}.{owner.target.table}</p>
-      {owner.mode === 'save' ? <><p className="warning-text">{text.saveWarning}</p><p>{text.saveScope}</p><p>{text.localOnly}</p></> : <><p>{text.restoreScope}</p><p>{text.restoreView}</p>
+      {owner.mode === 'save' ? <><p className="warning-text">{text.saveWarning}</p><UsageHelp><p>{text.saveScope}</p><p>{text.localOnly}</p></UsageHelp></> : <><p>{text.restoreScope}</p><p>{text.restoreView}</p>
         <button className="file-picker" disabled={disabled} onClick={choose}>{view.file ? text.chooseAgain : text.choose}</button>
         {view.file ? <section aria-label={text.file}><strong>{view.file.name}</strong><div aria-label={text.summary}>{text.insert}：{counts.insert}；{text.update}：{counts.update}；{text.delete}：{counts.delete}</div></section> : <p>{text.noSelection}</p>}
       </>}

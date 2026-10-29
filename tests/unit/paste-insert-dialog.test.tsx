@@ -31,7 +31,7 @@ function component() {
     if (name === 'react') return hooks; if (name === 'react/jsx-runtime') return jsxRuntime;
     if (name === '../pasteInsert') return logic; if (name === '../gridClipboard') return { maxClipboardCharacters };
     if (name === '../lib') return { errorMessage }; if (name === '../locales/pasteInsert.zh-CN') return { pasteInsertZh: text };
-    if (name === './ui') return { Modal: 'modal-port', ErrorBox: 'error-port' }; throw Error('纯组件端口禁止未知依赖：' + name);
+    if (name === './ui') return { Modal: 'modal-port', ErrorBox: 'error-port', UsageHelp: 'usage-help-port' }; throw Error('纯组件端口禁止未知依赖：' + name);
   }, module, module.exports);
   const props = { info, visibleKeys: ['id', 'note', 'generated'], invalidReason: '', onStage: vi.fn(), onClose: vi.fn() };
   let tree: Element;

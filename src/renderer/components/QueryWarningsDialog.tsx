@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import type { QueryOutcome } from '../../shared/contracts';
 import { queryWarningsZh as t } from '../locales/queryWarnings.zh-CN';
-import { Empty, Field, Modal } from './ui';
+import { UsageHelp, Empty, Field, Modal  } from './ui';
 
 /** 警告报告只阅读已取得的快照；不提供当前会话重读或重新执行入口。 */
 export function QueryWarningsDialog({ report, onClose }: { report: NonNullable<QueryOutcome['warnings']>; onClose(): void }) {
@@ -11,7 +11,7 @@ export function QueryWarningsDialog({ report, onClose }: { report: NonNullable<Q
   function bounded(value: string): string { const limit = 4096; if (value.length <= limit) return value; const end = /[\ud800-\udbff]/u.test(value[limit - 1]) && /[\udc00-\udfff]/u.test(value[limit]) ? limit - 1 : limit; return value.slice(0, end) + `［${t.messageTruncated}］`; }
   return <Modal title={t.title} wide onClose={onClose}>
     <div className="modal-content" style={{ minHeight: 0, overflow: 'auto', maxHeight: 'calc(100vh - 180px)', overflowWrap: 'anywhere' }}>
-      <p className="muted small">{t.snapshot}</p><p>{t.statements(statements.length)}</p>
+      <UsageHelp><p>{t.snapshot}</p></UsageHelp><p>{t.statements(statements.length)}</p>
       {report.truncated && <p className="warning-text" role="status">{t.truncated}</p>}{report.omittedStatements > 0 && <p className="warning-text">{t.omitted(report.omittedStatements)}</p>}
       {!!statements.length && <Field label={t.statement}><select aria-label={t.statement} value={String(selected)} style={{ maxWidth: '100%' }} onChange={event => setSelected(Number(event.target.value))}>{statements.map((entry, index) => <option key={`${entry.statementOrdinal}:${index}`} value={String(index)}>{t.ordinal(entry.statementOrdinal)} · {entry.status === 'completed' ? t.completed : t.failed} · {t.total} {entry.warningCount === undefined ? t.unknown : String(entry.warningCount)} · {t.collected} {entry.conditions.length}</option>)}</select></Field>}
       {statement && <section aria-label={t.ordinal(statement.statementOrdinal)}>

@@ -3,7 +3,7 @@ import { validateTableRenameName, type TableRenameGetInput, type TableRenameGetO
 import { TableRenameRequestFence, sameTableRenameTarget, tableRenameAckLabel, tableRenameAcksComplete, tableRenameFailure } from '../tableRenameUi';
 import { tableRenameZh as text } from '../locales/tableRename.zh-CN';
 import { errorMessage, uid } from '../lib';
-import { ErrorBox, Field, Modal, Spinner } from './ui';
+import { ErrorBox, Field, Modal, Spinner, UsageHelp } from './ui';
 import { SqlEditor } from './SqlEditor';
 
 export interface TableRenameServices {
@@ -184,7 +184,7 @@ export function TableRenameDialog({ target, targetVersion, services, onClose, on
   }
   const unsupportedAck = preview?.requiredAcknowledgements.some(id => !tableRenameAckLabel(id));
   return <Modal title={text.title} wide onClose={() => void close()}><div className="modal-content table-rename-dialog">
-    <p>{fixed.current.target.database} / {fixed.current.target.table}</p><p className="muted small">{text.scope}</p>
+    <p>{fixed.current.target.database} / {fixed.current.target.table}</p><UsageHelp><p>{text.scope}</p></UsageHelp>
     {snapshot && <><div className="form-grid"><Field label={text.engine}><input readOnly value={snapshot.engine}/></Field><Field label={text.charset}><input readOnly value={snapshot.charset}/></Field><Field label={text.collation}><input readOnly value={snapshot.collation}/></Field><Field label={text.rowFormat}><input readOnly value={snapshot.rowFormat}/></Field><Field label={text.autoIncrement}><input readOnly value={snapshot.autoIncrement ?? text.unset}/></Field><Field label={text.version}><input readOnly value={snapshot.serverVersion}/></Field></div>
       {!snapshot.writable && <div role="status"><strong>{text.readonly}</strong>{snapshot.reasons.map((reason, index) => <p key={index}>{reason}</p>)}</div>}
       {snapshot.warnings.map((warning, index) => <p className="warning-text" key={index}>{warning}</p>)}

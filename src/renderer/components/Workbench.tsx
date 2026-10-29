@@ -5,7 +5,7 @@ import { errorMessage, invoke, uid } from '../lib';
 import { useWorkspace } from '../store';
 import { useWorkbench } from '../workbench';
 import { workbenchZh as t } from '../locales/workbench.zh-CN';
-import { ErrorBox, Field, Modal } from './ui';
+import { ErrorBox, Field, Modal, UsageHelp } from './ui';
 import type { OpenWorkbenchTarget } from '../workbenchNavigation';
 
 export type { OpenWorkbenchTarget } from '../workbenchNavigation';
@@ -90,7 +90,7 @@ export function WorkbenchDialog({ onClose, onOpen }: { onClose(): void; onOpen: 
       if (await save({ ...document, favorites })) setEditingId(undefined);
     } catch (error) { setLocalError(errorMessage(error)); }
   }
-  return <Modal title={t.title} onClose={close} wide><div className="modal-content workbench-manager"><p className="muted">{t.hint}</p>
+  return <Modal title={t.title} onClose={close} wide><div className="modal-content workbench-manager"><UsageHelp><p>{t.hint}</p></UsageHelp>
     {!ready && <button disabled={busy} onClick={() => void useWorkbench.getState().initialize()}>{busy ? t.loading : t.retry}</button>}
     <form className="workbench-group-form" onSubmit={event => { event.preventDefault(); void save({ ...document, groups: editingGroup ? document.groups.map(group => group.id === editingGroup ? { ...group, name: groupName } : group) : [...document.groups, { id: uid(), name: groupName }] }).then(saved => { if (saved) { setGroupName(''); setEditingGroup(null); } }); }}>
       <Field label={t.groupName}><input maxLength={100} value={groupName} onChange={event => setGroupName(event.target.value)} required/></Field><button disabled={disabled} type="submit">{editingGroup ? t.save : t.newGroup}</button>{editingGroup && <button type="button" onClick={() => { setEditingGroup(null); setGroupName(''); }}>{t.cancel}</button>}
@@ -129,5 +129,5 @@ export function ObjectLinkDialog({ onClose, onOpen }: { onClose(): void; onOpen:
   const scope = useWorkbenchOpenScope();
   /** 关闭只废弃异步结果，不等待网络响应，也不把中止信号发送给数据库进程。 */
   function close() { scope.cancel(); onClose(); }
-  return <Modal title={t.paste} onClose={close}><form onSubmit={event => { event.preventDefault(); if (busy) return; setError(''); setBusy(true); const options = scope.begin(); void Promise.resolve().then(() => onOpen(parseObjectUri(uri), options)).then(opened => { if (opened && scope.alive()) onClose(); }).catch(error => { if (scope.alive()) setError(errorMessage(error)); }).finally(() => { if (scope.alive()) setBusy(false); }); }}><div className="modal-content"><p className="muted">{t.uriHint}</p><Field label={t.uri}><textarea aria-label={t.uri} rows={5} maxLength={8192} value={uri} onChange={event => setUri(event.target.value)} required/></Field><ErrorBox message={error}/></div><footer className="modal-footer"><button type="button" onClick={close}>{t.cancel}</button><span className="grow"/><button className="primary" type="submit" disabled={busy || !uri}>{t.openUri}</button></footer></form></Modal>;
+  return <Modal title={t.paste} onClose={close}><form onSubmit={event => { event.preventDefault(); if (busy) return; setError(''); setBusy(true); const options = scope.begin(); void Promise.resolve().then(() => onOpen(parseObjectUri(uri), options)).then(opened => { if (opened && scope.alive()) onClose(); }).catch(error => { if (scope.alive()) setError(errorMessage(error)); }).finally(() => { if (scope.alive()) setBusy(false); }); }}><div className="modal-content"><UsageHelp><p>{t.uriHint}</p></UsageHelp><Field label={t.uri}><textarea aria-label={t.uri} rows={5} maxLength={8192} value={uri} onChange={event => setUri(event.target.value)} required/></Field><ErrorBox message={error}/></div><footer className="modal-footer"><button type="button" onClick={close}>{t.cancel}</button><span className="grow"/><button className="primary" type="submit" disabled={busy || !uri}>{t.openUri}</button></footer></form></Modal>;
 }

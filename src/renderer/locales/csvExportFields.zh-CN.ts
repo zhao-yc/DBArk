@@ -2,7 +2,7 @@
 export const csvExportFieldsZh = {
   regionLabel: 'CSV导出字段',
   title: 'CSV导出字段与顺序',
-  scopeSuffix: '；只投影所选字段。重新读取会重置选择，未勾选字段不会写入文件。',
+  scopeSuffix: ' · 仅导出所选字段；重新读取会重置选择。',
   read: '重新读取CSV字段目录',
   loading: '正在读取CSV实际字段目录',
   consumed: 'CSV字段目录已绑定本次任务，正在等待终态。',

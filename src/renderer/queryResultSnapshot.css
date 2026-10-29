@@ -7,7 +7,6 @@
   border-bottom: 1px solid var(--border);
 }
 .query-result-snapshot-actions > button { flex: 0 0 auto; }
-.query-result-snapshot-actions > .query-result-snapshot-scope,
 .query-result-snapshot-actions > .warning-text,
 .query-result-snapshot-actions > [role='status'],
 .query-result-snapshot-actions > .error-box { flex-basis: 100%; line-height: 1.5; }

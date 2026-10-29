@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { editorFontLimits, isEditorFontSize, readEditorFontSize } from '../../shared/editorFont';
 import { flushSettings, useWorkspace } from '../store';
 import { editorFontZh as text } from '../locales/editorFont.zh-CN';
-import { ErrorBox, Field, Modal } from './ui';
+import { ErrorBox, Field, Modal, UsageHelp } from './ui';
 
 /** 仅暂存字号；显式保存时合并最新工作区，绝不携带打开弹窗时的SQL/标签快照。 */
 export function EditorFontPreferencesDialog({ onClose }: { onClose(): void }) {
@@ -33,6 +33,6 @@ export function EditorFontPreferencesDialog({ onClose }: { onClose(): void }) {
   }
   return <Modal title={text.title} onClose={close}><div className="modal-content form-grid">
     <p className="full" role="status">{text.current(current)}</p><Field label={text.field} full><input aria-label={text.field} type="number" min={editorFontLimits.min} max={editorFontLimits.max} step="1" value={draft} disabled={saving} onChange={event => { setDraft(event.target.value); setError(''); }}/></Field>
-    <p className="full muted small">{text.hint}</p><button type="button" disabled={saving} onClick={() => { setDraft(String(editorFontLimits.defaultSize)); setError(''); }}>{text.reset}</button><p className="full muted small">{text.draft}</p><div className="full"><ErrorBox message={error}/></div>
+    <UsageHelp className="full"><p>{text.hint}</p><p>{text.draft}</p></UsageHelp><button type="button" disabled={saving} onClick={() => { setDraft(String(editorFontLimits.defaultSize)); setError(''); }}>{text.reset}</button><div className="full"><ErrorBox message={error}/></div>
   </div><footer className="modal-footer"><button type="button" onClick={close}>{text.cancel}</button><span className="grow"/><button type="button" className="primary" disabled={saving} onClick={() => void save()}>{saving ? text.saving : text.save}</button></footer></Modal>;
 }

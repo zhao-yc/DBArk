@@ -1,7 +1,7 @@
 /** 简体中文语言包。新增语言时复制模块结构；动态位置使用 {0}、{1} 等占位符。 */
 export const zh = {
   snippets: {
-    title: 'SQL 片段库', search: '搜索片段名称、说明或正文', groupFilter: '筛选片段分组', allGroups: '全部分组', ungrouped: '未分组', builtin: '内置模板', user: '我的片段', new: '新建片段', name: '片段名称', group: '片段分组', description: '片段说明', sql: '片段 SQL 正文', copy: '复制为新片段', insert: '插入查询', edit: '编辑片段', deleteTitle: '删除 SQL 片段', deleteConfirm: '确定删除“{0}”？已插入查询的正文不会被删除。', unsavedTitle: '放弃片段修改', unsavedConfirm: '片段修改尚未保存，确定放弃？', discard: '放弃修改', saved: '片段已保存', empty: '没有符合条件的片段', hint: '插入仅替换查询选区或写入光标位置，不执行 SQL。模板中的表名请自行修改。', selectName: '选择片段：{0}', selectColumns: '按条件读取列', selectDescription: '修改表名、列名和条件后执行。', countName: '分组统计', countDescription: '按分类统计记录数，修改表名和分类列。', explainName: '查看查询执行计划', explainDescription: '对 SELECT 查询查看执行计划，不修改数据。', loading: '正在读取片段库…', insertUnavailable: '查询编辑器尚未就绪'
+    title: 'SQL 片段库', search: '搜索片段名称、说明或正文', groupFilter: '筛选片段分组', allGroups: '全部分组', ungrouped: '未分组', builtin: '内置模板', user: '我的片段', new: '新建片段', name: '片段名称', group: '片段分组', description: '片段说明', sql: '片段 SQL 正文', copy: '复制为新片段', insert: '插入查询', edit: '编辑片段', deleteTitle: '删除 SQL 片段', deleteConfirm: '确定删除“{0}”？已插入查询的正文不会被删除。', unsavedTitle: '放弃片段修改', unsavedConfirm: '片段修改尚未保存，确定放弃？', discard: '放弃修改', saved: '片段已保存', empty: '没有符合条件的片段', hint: '插入到选区或光标处，不执行 SQL；请核对模板中的表名。', selectName: '选择片段：{0}', selectColumns: '按条件读取列', selectDescription: '修改表名、列名和条件后执行。', countName: '分组统计', countDescription: '按分类统计记录数，修改表名和分类列。', explainName: '查看查询执行计划', explainDescription: '对 SELECT 查询查看执行计划，不修改数据。', loading: '正在读取片段库…', insertUnavailable: '查询编辑器尚未就绪'
   },
   resultExport: {
     selectedTitle: '导出勾选结果行', selectedRows: '仅导出已返回结果中勾选的 {0} 行',
@@ -11,7 +11,7 @@ export const zh = {
     returnedOnly: '仅写出当前结果集已返回的行，不重新执行查询，也不读取服务器上的其他数据。',
     truncated: '此结果已截断；文件仅包含已返回行，不包含服务器上的其余结果。',
     format: '结果文件格式', encoding: '结果文件编码', chooseFile: '选择结果保存位置',
-    atomicFile: '写入完成后替换目标文件；取消或失败会保留原文件。',
+    atomicFile: '完成后替换目标文件；取消或失败保留原文件。',
     columnMapping: '导出列预览', columnPosition: '列位置', originalColumn: '原列名', outputColumn: 'CSV 标题 / JSON 键', emptyName: '（空列名）',
     columnRule: '按结果列顺序导出。首个非空列名保留；重复名或空名添加“ [列位置]”后缀，冲突时递增，避开所有原始列名。空名以“列”为前缀。',
     csvProtocol: 'CSV：\\N 表示 NULL，空字符串使用双引号；反斜线开头的文本增加一个反斜线，二进制写为 base64: 内容。',
@@ -20,6 +20,7 @@ export const zh = {
   },
   // 通用操作与状态。
   common: {
+    usageHelp: '使用说明',
     cancel: "取消",
     close: "关闭",
     save: "保存",
@@ -91,12 +92,12 @@ export const zh = {
     text020: "查询结果上限",
     text021: "每页数据行数",
     text022: "侧边栏宽度",
-    text023: "设置与查询标签自动保存，下次打开时恢复。",
+    text023: "工作区自动保存。",
     text024: "数据库密码通过系统加密保存。",
     text025: "当前系统加密不可用，密码仅在本次会话中保留。",
     text026: "让数据库工作，更加从容。",
     text027: "版本 ",
-    text028: "支持 MySQL 与 MariaDB 的开源数据库客户端。连接、查询、编辑和管理，在同一个工作空间完成。",
+    text028: "支持 MySQL 和 MariaDB 的开源数据库客户端。",
     text029: "MIT 许可证 · © 2026 DBArk contributors",
     text030: "你的数据库工作空间",
     text031: "数据有序，",

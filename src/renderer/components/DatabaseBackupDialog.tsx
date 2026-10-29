@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { databaseBackupKinds, type DatabaseBackupInspection, type DatabaseBackupPlan, type DatabaseBackupPreparationServices, type DatabaseBackupToolSummary } from '../../shared/databaseBackup';
 import { databaseBackupZh as text } from '../locales/databaseBackup.zh-CN';
-import { ErrorBox, Modal } from './ui';
+import { ErrorBox, Modal, UsageHelp } from './ui';
 import '../databaseBackup.css';
 
 export interface DatabaseBackupDialogProps {
@@ -114,6 +114,6 @@ export function DatabaseBackupDialog({ connections, tools, services, onClose }: 
         <label><input type="checkbox" aria-label={text.acknowledge} checked={acknowledged} disabled={blocked || !ready} onChange={event => { if (active.current || closeRequested.current || currentEpoch.current !== epoch) return; const value = event.currentTarget.checked; authoritative.current = { ...authoritative.current, acknowledged: value }; setAcknowledged(value); setPlan(null); }}/>{text.acknowledge}</label></section>
       <p>{text.output}：{file?.displayName ?? '尚未选择'}</p><button disabled={blocked || !ready} onClick={chooseFile}>{text.choose}</button>
       <button disabled={blocked || !ready || !file || !acknowledged} onClick={prepare}>{text.prepare}</button></>}
-    {plan && <section role="status" className="database-backup-plan"><h3>{text.planned}</h3><p>{text.notExecuted}</p><p>{text.format}</p><p>{text.output}：{plan.outputName}</p><p>{text.expires}：{new Date(plan.expiresAt).toLocaleString('zh-CN')}</p><p>{text.recheck}</p></section>}
+    {plan && <section role="status" className="database-backup-plan"><h3>{text.planned}</h3><p>{text.notExecuted}</p><UsageHelp><p>{text.format}</p></UsageHelp><p>{text.output}：{plan.outputName}</p><p>{text.expires}：{new Date(plan.expiresAt).toLocaleString('zh-CN')}</p><p>{text.recheck}</p></section>}
   </div><footer className="modal-footer"><button disabled={blocked || !tools.length} onClick={inspect}>{text.inspect}</button><button disabled={!busy || closing} onClick={() => void cancel()}>{text.cancel}</button><span className="grow"/><button disabled={closing} onClick={() => void close()}>{text.close}</button></footer></Modal>;
 }

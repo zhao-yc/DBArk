@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { defaultSqlKeywordCase, readSqlKeywordCase } from '../../shared/sqlKeywordCase';
 import { flushSettings, useWorkspace } from '../store';
 import { sqlFormattingZh as text } from '../locales/sqlFormatting.zh-CN';
-import { ErrorBox, Field } from './ui';
+import { ErrorBox, Field, UsageHelp } from './ui';
 
 /** 集中在原全局偏好弹窗；草稿、恢复默认和取消都不触碰已有模型或SQL。 */
 export function SqlKeywordCasePreferences() {
@@ -25,7 +25,7 @@ export function SqlKeywordCasePreferences() {
   function change(value: string) { setDraft(value); setError(''); setSaved(false); }
   return <section className="full" aria-label={text.preferences}>
     <h3>{text.preferences}</h3><Field label={text.keywordCase}><select aria-label={text.keywordCase} value={draft} disabled={saving} onChange={event => change(event.target.value)}><option value="preserve">{text.preserve}</option><option value="upper">{text.upper}</option><option value="lower">{text.lower}</option></select></Field>
-    <p className="muted small">{text.preferenceHint}</p><p className="muted small">{text.resetHint}</p>
+    <UsageHelp><p>{text.preferenceHint}</p><p>{text.resetHint}</p></UsageHelp>
     <button type="button" disabled={saving} onClick={() => change(defaultSqlKeywordCase)}>{text.reset}</button><button type="button" disabled={saving} onClick={() => change(current)}>{text.cancelDraft}</button><button type="button" disabled={saving} onClick={() => void save()}>{saving ? text.saving : text.save}</button>
     {saved && <p role="status">{text.saved}</p>}<ErrorBox message={error}/>
   </section>;

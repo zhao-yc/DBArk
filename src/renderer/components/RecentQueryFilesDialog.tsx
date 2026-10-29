@@ -5,7 +5,7 @@ import type { QueryFileEncoding } from '../../shared/contracts';
 import type { QueryFileSourceController } from '../useQueryFileSource';
 import { errorMessage } from '../lib';
 import { queryFilesZh as text } from '../locales/queryFiles.zh-CN';
-import { ErrorBox, Field, Modal, Spinner } from './ui';
+import { ErrorBox, Field, Modal, Spinner, UsageHelp } from './ui';
 import { QueryFileTaskProgress } from './QueryFileTaskProgress';
 
 /** 只展示Main有界元数据；选中及确认以前不请求正文，路径不进入任何打开参数。 */
@@ -40,7 +40,7 @@ export function RecentQueryFilesDialog({ files, onClose }: { files: QueryFileSou
     finally { active.current = false; if (alive.current) setBusy(false); }
   }
   return createPortal(<Modal title={text.recent} onClose={() => { if (!active.current) onClose(); }}><div className="modal-content">
-    <p className="muted small">{text.recentHint}</p>
+    <UsageHelp><p>{text.recentHint}</p></UsageHelp>
     <Field label={text.recentSelection}><select value={selected} disabled={busy} onChange={event => select(event.target.value)}><option value="">{text.selectRecent}</option>{entries.map(item => <option key={item.id} value={item.id}>{item.name} — {item.displayPath}</option>)}</select></Field>
     {!busy && !entries.length && <p>{text.noRecent}</p>}
     <Field label={text.encoding}><select value={encoding} disabled={busy || !selected} onChange={event => setEncoding(event.target.value as QueryFileEncoding)}><option value="utf8">{text.utf8}</option><option value="utf16le">{text.utf16le}</option><option value="gb18030">{text.gb18030}</option></select></Field>

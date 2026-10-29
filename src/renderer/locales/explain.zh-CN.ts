@@ -1,15 +1,15 @@
 /** 执行计划文案集中管理；优化器字段名保留原文便于核对来源。 */
 export const explainZh = {
   title: '可视化执行计划', tree: '树形计划', raw: '原始输出', table: '计划结果表格', text: '获取文本计划',
-  estimates: '以下均为优化器估计值，成本不是毫秒；节点连接表示 JSON 包含关系，数组顺序沿用服务器输出。',
+  estimates: '优化器估计值，成本不是毫秒。',
   unavailable: '不可用', missing: '当前节点未提供此指标', empty: '当前计划无法生成树，请查看原始输出或获取文本计划。',
   source: '计划来源', node: '计划节点', access: '访问方式', rows: '估计扫描行数', produced: '估计连接输出行数', filtered: '过滤后比例', cost: '成本', index: '使用索引',
-  details: '节点详情', path: 'JSON 路径', detailHint: '详情中的数值以文本保留精度，完整字节以原始输出为准。',
+  details: '节点详情', path: 'JSON 路径', detailHint: '数值保留原精度，完整内容请查看原始输出。',
   unknown: '未知节点', keyboard: '方向键移动和展开收起，Home / End 跳转首尾，Enter / 空格选择节点。',
   expand: '全部展开', collapse: '全部收起', rawMissing: '当前没有可用的 JSON 原文，请查看计划结果表格。', rawLimited: '原始输出展示已截断。',
   longPath: '节点路径超过展示上限，请查看原始输出。',
   find: '查找计划节点', findPlaceholder: '查找类型、表名、索引、指标或属性', findCount: '计划查找计数', findIdle: '输入关键字后查找', previous: '上一处', next: '下一处', clear: '清空查找', matches: (current: number, total: number) => `${current} / ${total} 个匹配节点`,
-  findHint: '关键字最多 200 字符；仅查找当前已生成的节点（含已收起节点）及属性展示文本，已截断内容以原始输出为准。', findTooLong: '关键字超过 200 字符，本次输入未应用，仍使用上次关键字。',
+  findHint: '最多 200 字符，可查找已收起节点及属性；不包含已截断内容。', findTooLong: '关键字超过 200 字符，本次输入未应用，仍使用上次关键字。',
   properties: '节点属性', propertyTruncated: '此属性展示已截断，请核对原始输出。',
   // 项号只描述 JSON 数组中的位置，不表示优化器执行顺序。
   arrayItem: (container: string, index: number) => `${container === 'query_specifications' ? '查询分支' : '子查询项'} · 第 ${index + 1} 项`,

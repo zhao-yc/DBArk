@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { serverMonitorStatusNames } from '../../shared/serverMonitor';
 import { ServerMonitorController, type ServerMonitorServices, type ServerMonitorViewState } from '../serverMonitorController';
 import { serverMonitorZhCN as t } from '../serverMonitorZh';
-import { Modal } from './ui';
+import { Modal, UsageHelp } from './ui';
 import { ServerMonitorSessions } from './ServerMonitorSessions';
 import '../serverMonitor.css';
 
@@ -38,7 +38,7 @@ export function ServerMonitorDialog(props: ServerMonitorDialogProps) {
         <button type="button" disabled={!busy || view.waiting || closing} onClick={() => void controller.cancel()}>{t.cancel}</button>
         <label><input type="checkbox" checked={sameTarget && view.automatic} disabled={view.waiting || closing || !sameTarget} onChange={event => controller.setAutomatic(event.target.checked)} />{t.auto}</label>
       </div>
-      <p>{t.snapshot}</p><p>{t.scope}</p><p className="server-monitor-note">{t.autoBudget}</p>
+      <p>{t.notice}</p><UsageHelp><p>{t.snapshot}</p><p>{t.scope}</p><p>{t.autoBudget}</p></UsageHelp>
       {closing ? <p role="status">{t.closing}</p> : view.waiting && <p role="status">{t.waiting}</p>}
       {sameTarget && view.error && <p role="alert">{view.error}</p>}
       {!snapshot && <p role="status">{t.empty}</p>}

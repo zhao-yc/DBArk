@@ -4,7 +4,7 @@ import type { FilterRule } from '../../shared/contracts';
 import { errorMessage } from '../lib';
 import { zh, formatText } from '../locales/zh-CN';
 import { emptyFilterDraft, filterDraftFromRule, filterOperatorLabels, filterRuleFromDraft, filterRuleSummary, replaceFilterRule, setFilterRuleEnabled, setAllFilterRulesEnabled, type FilterDraft, type FilterMode } from '../tableFilters';
-import { ErrorBox } from './ui';
+import { ErrorBox, UsageHelp } from './ui';
 import { tableCellFilterZh as cellText } from '../locales/tableCellFilter.zh-CN';
 import { tableFilterEnabledZh as enabledText } from '../locales/tableFilterEnabled.zh-CN';
 
@@ -66,8 +66,8 @@ export function TableFilterPanel({ columns, filters, mode, disabled, onFiltersCh
         {isRange && <><input aria-label={zh.table.filterRangeStart} value={draft.value} disabled={disabled} onChange={event => changeDraft({ value: event.target.value })} placeholder={zh.table.filterRangeStart}/><input aria-label={zh.table.filterRangeEnd} value={draft.upperValue} disabled={disabled} onChange={event => changeDraft({ upperValue: event.target.value })} placeholder={zh.table.filterRangeEnd}/></>}
         <button type="submit" disabled={disabled || !columns.length}>{editing === null ? zh.table.text013 : zh.table.filterSaveCondition}</button>{editing !== null && <button type="button" disabled={disabled} onClick={cancelEdit}>{zh.table.filterCancelEdit}</button>}
       </div>
-      {isSet && <div className="filter-set-editor"><textarea rows={3} aria-label={zh.table.filterSetValues} value={draft.valuesText} disabled={disabled} onChange={event => changeDraft({ valuesText: event.target.value })}/><p>{zh.table.filterSetHint}</p><label className="check"><input type="checkbox" checked={draft.includeEmptyString} disabled={disabled} onChange={event => changeDraft({ includeEmptyString: event.target.checked })}/>{zh.table.filterIncludeEmptyString}</label></div>}
-      <p className="filter-value-hint">{isNull ? zh.table.filterNullHint : isRange ? zh.table.filterRangeHint : isSet ? '' : zh.table.filterScalarHint}</p>
+      {isSet && <div className="filter-set-editor"><textarea rows={3} aria-label={zh.table.filterSetValues} value={draft.valuesText} disabled={disabled} onChange={event => changeDraft({ valuesText: event.target.value })}/><label className="check"><input type="checkbox" checked={draft.includeEmptyString} disabled={disabled} onChange={event => changeDraft({ includeEmptyString: event.target.checked })}/>{zh.table.filterIncludeEmptyString}</label></div>}
+      <UsageHelp><p>{isNull ? zh.table.filterNullHint : isRange ? zh.table.filterRangeHint : isSet ? zh.table.filterSetHint : zh.table.filterScalarHint}</p></UsageHelp>
     </form>
     <ErrorBox message={error}/>
     {filters.length > 0 && <div className="filter-chips editable-filter-chips">{filters.map((filter, index) => <div className={`filter-chip ${editing === index ? 'editing' : ''} ${filter.enabled === false ? 'condition-disabled' : ''}`} key={index}><label className="filter-chip-enabled" title={enabledText.hint}><input type="checkbox" aria-label={enabledText.enabled(index + 1)} checked={filter.enabled !== false} disabled={disabled} onChange={event => changeEnabled(index, event.target.checked)}/><span>{filter.enabled === false ? enabledText.disabledLabel : enabledText.enabledLabel}</span></label><button type="button" className="filter-chip-edit" aria-label={formatText(zh.table.filterEditCondition, index + 1)} title={filterRuleSummary(filter)} disabled={disabled} onClick={() => editCondition(index)}><Pencil size={10}/><span>{filterRuleSummary(filter)}</span></button><button type="button" className="filter-chip-remove" aria-label={formatText(zh.table.filterRemoveCondition, index + 1)} disabled={disabled} onClick={() => removeCondition(index)}><X size={11}/></button></div>)}</div>}

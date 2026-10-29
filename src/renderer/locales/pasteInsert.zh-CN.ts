@@ -10,7 +10,7 @@ export const pasteInsertZh = {
   rowLimit: '每批新增不能超过1000行，请拆分数据；没有生成任何草稿。', shape: '每行的源列数量必须一致，不能暂存不完整矩阵。',
   mappingInvalid: '字段映射无效：目标字段须存在、可写且不能重复，请重新选择。', mappingEmpty: '请至少映射一个可写字段。',
   typedInvalid: '无法识别DBArk类型化剪贴板数据，未退回普通文本；可明确编辑文本后重新预览。',
-  prepared: '已准备有界预览；尚未生成草稿、执行SQL或写入数据库。', staged: '已一次性暂存新增草稿。请核对DEFAULT及键值，再从原入口集中预览和确认提交。',
+  prepared: '预览已就绪，尚未暂存或写入数据库。', staged: '已一次性暂存新增草稿。请核对DEFAULT及键值，再从原入口集中预览和确认提交。',
   defaultValue: 'DEFAULT（省略字段）', textValue: '文本',
   already: '本次预览已消费或关闭，请重新预览，不能重复暂存。', invalidId: '新增草稿身份冲突，整批未暂存，请重新打开。'
 } as const;

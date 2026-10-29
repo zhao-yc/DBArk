@@ -3,7 +3,7 @@ import type { SortRule } from '../../shared/contracts';
 import { tableSortZh as text } from '../locales/tableSort.zh-CN';
 import { validateTableSort } from '../tableSort';
 import { errorMessage } from '../lib';
-import { ErrorBox } from './ui';
+import { ErrorBox, UsageHelp } from './ui';
 
 type SortEntry = { id: number; rule: SortRule };
 
@@ -47,7 +47,7 @@ export function TableSortPanel({ columns, initial, isCurrent, onApply, onClose }
   }
   const disabled = invalid.current || consumed.current, available = columns.filter(column => !draft.some(item => item.rule.column === column));
   return <section className="filter-panel expanded-filter-panel" role="region" aria-label={text.title}>
-    <strong>{text.title}</strong><p>{text.hint}</p><p className="muted">{text.ties}</p>
+    <strong>{text.title}</strong><UsageHelp><p>{text.hint}</p><p>{text.ties}</p></UsageHelp>
     {!draft.length && <p>{text.empty}</p>}
     {draft.map(({ id, rule }, index) => <div className="filter-inputs" key={id}>
       <span>{index + 1}.</span><label>{text.field(index + 1)}<select aria-label={text.field(index + 1)} disabled={disabled} value={rule.column} onChange={event => edit(draft.map((item, position) => position === index ? { ...item, rule: { ...item.rule, column: event.target.value } } : item))}>{columns.map(column => <option key={column} value={column} disabled={column !== rule.column && draft.some(item => item.rule.column === column)}>{column}</option>)}</select></label>

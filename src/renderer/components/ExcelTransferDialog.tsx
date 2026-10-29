@@ -2,7 +2,7 @@ import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from 're
 import type { CellValue, FileChoice } from '../../shared/contracts';
 import { validateExcelMapping, type ExcelColumn, type ExcelFieldMapping, type ExcelSheet, type ExcelSheetPreview, type ExcelTextProtocol, type ExcelTransferProgress, type ExcelTransferServices, type ExcelTransferTarget } from '../../shared/excelTransfer';
 import { excelTransferZh as text } from '../locales/excelTransfer.zh-CN';
-import { ErrorBox, Field, Modal, Spinner } from './ui';
+import { ErrorBox, Field, Modal, Spinner, UsageHelp } from './ui';
 import { ExcelTransferLifecycle, type ExcelTaskSnapshot } from '../excelTransferLifecycle';
 import { ExcelPreviewTasks } from '../excelPreviewTasks';
 import '../excelTransfer.css';
@@ -112,18 +112,16 @@ export function ExcelTransferDialog(props: Props) {
 
   return <Modal title={`${mode === 'import' ? text.importTitle : text.exportTitle} · ${database}.${table}`} wide onClose={close}>
     <div className="modal-content excel-transfer">
-      <p className="info-strip">{mode === 'export' ? text.exportHelp : text.importLimits}</p>
+      {mode === 'export' && <p className="info-strip">{text.exportScope}</p>}<UsageHelp><p>{mode === 'export' ? text.exportHelp : text.importLimits}</p>{mode === 'export' ? <p>{text.limits}</p> : <p>{protocol === 'plain' ? text.plainHelp : text.dbarkHelp}</p>}</UsageHelp>
       {mode === 'import' && <p className="info-strip">{text.importPolicy}</p>}
       {props.onBack && <button disabled={busy || loading} onClick={props.onBack}>{text.back}</button>}
       {mode === 'export' && <Field label={text.scope}><select aria-label={text.scope} disabled={busy} value={scope} onChange={event => { setScope(event.target.value as typeof scope); setDone(undefined); }}><option value="sample">{text.sample}</option><option value="all">{text.all}</option></select></Field>}
-      {mode === 'export' && <p className="muted small">{text.limits}</p>}
-      <button className="file-picker" disabled={busy || loading} onClick={() => void chooseFile()}><span><strong>{file?.name ?? (mode === 'import' ? text.chooseImport : text.chooseExport)}</strong><small>{text.fileHint}</small></span></button>
+      <button className="file-picker" title={text.fileHint} disabled={busy || loading} onClick={() => void chooseFile()}><span><strong>{file?.name ?? (mode === 'import' ? text.chooseImport : text.chooseExport)}</strong></span></button>
       {mode === 'import' && sheets.length > 0 && <div className="form-grid">
         <Field label={text.sheet}><select aria-label={text.sheet} value={sheetId} disabled={busy} onChange={event => setSheetId(event.target.value)}>{sheets.map(sheet => <option key={sheet.id} value={sheet.id}>{sheet.name}{sheet.hidden ? text.hidden : ''}</option>)}</select></Field>
         <Field label={text.headerRow}><input type="number" aria-label={text.headerRow} min="1" max="1000" value={headerRow} disabled={busy} onChange={event => setHeaderRow(Number(event.target.value))}/></Field>
         <Field label={text.protocol}><select aria-label={text.protocol} value={protocol} disabled={busy} onChange={event => setProtocol(event.target.value as ExcelTextProtocol)}><option value="plain">{text.plain}</option><option value="dbark-v1">{text.dbark}</option></select></Field>
       </div>}
-      {mode === 'import' && <p className="muted small">{protocol === 'plain' ? text.plainHelp : text.dbarkHelp}</p>}
       {loading && <Spinner text={text.loading}/>}
       {loading && <button onClick={() => void reads.cancel().catch(reason => { if (mounted.current) setError(reason instanceof Error ? reason.message : text.error); })}>{text.cancel}</button>}
       {current && <><h3>{text.mapping}</h3><datalist id={targetListId}>{current.targets.map(column => <option key={column.name} value={column.name}/>)}</datalist><div className="mapping-grid">{current.mapping.slice(mappingPage * 50, (mappingPage + 1) * 50).map((item, index) => <div className="mapping-row" key={item.source}><span className="truncate">{item.source}</span><span aria-hidden="true">→</span><input list={targetListId} placeholder={text.skip} aria-label={text.mappingLabel.replace('{name}', item.source)} value={item.target} disabled={busy} onChange={event => {

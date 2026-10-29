@@ -5,7 +5,7 @@ import { errorMessage, invoke } from '../lib';
 import { useWorkspace } from '../store';
 import { ResultsGrid } from './ResultsGrid';
 import { SqlEditor } from './SqlEditor';
-import { ErrorBox, Modal, Spinner } from './ui';
+import { UsageHelp, ErrorBox, Modal, Spinner  } from './ui';
 import '../queryResultSnapshotViewer.css';
 
 export interface QueryResultSnapshotViewerServices {
@@ -86,7 +86,7 @@ export function QueryResultSnapshotDialog({ onClose, services = queryResultSnaps
   /** SQL只控制本窗口只读显隐，不设置编辑器正文或提供任何执行回调。 */
   function toggleSql(): void { if (editable() && loaded && loadedRef.current === loaded) setShowSql(value => !value); }
   return <Modal title={text.title} wide onClose={close}><div ref={host} className="query-result-snapshot-viewer" aria-busy={!!busy}>
-    <p>{text.notice}</p><p className="muted small">{text.scope}</p><div className="query-result-snapshot-viewer-actions"><button disabled={!!busy} onClick={() => void file('open')}>{text.choose}</button><button disabled={!!busy || !loaded} onClick={() => void file('save')}>{text.save}</button><button disabled={!!busy || !loaded} onClick={toggleSql}>{showSql ? text.sourceHide : text.sourceShow}</button><span className="grow"/><button disabled={!!busy} onClick={close}>{text.close}</button></div>
+    <p>{text.notice}</p><UsageHelp><p>{text.scope}</p></UsageHelp><div className="query-result-snapshot-viewer-actions"><button disabled={!!busy} onClick={() => void file('open')}>{text.choose}</button><button disabled={!!busy || !loaded} onClick={() => void file('save')}>{text.save}</button><button disabled={!!busy || !loaded} onClick={toggleSql}>{showSql ? text.sourceHide : text.sourceShow}</button><span className="grow"/><button disabled={!!busy} onClick={close}>{text.close}</button></div>
     <ErrorBox message={error}/>{busy && <Spinner text={busy === 'open' ? text.opening : text.saving}/>} {message && <p role="status">{message}</p>}
     {loaded ? <><p role="status">{text.opened(loaded.name)}</p><p>{text.count(loaded.snapshot.result.rows.length, loaded.snapshot.result.columns.length)}</p>{loaded.snapshot.result.truncated && <p className="warning-text">{text.truncated}</p>}<div className="query-result-snapshot-viewer-grid"><ResultsGrid columns={loaded.snapshot.result.columns} rows={loaded.snapshot.result.rows} selectionScope={loaded.scope} isCurrent={() => gridCurrent(loaded, interaction, false)} binarySourceIdentity={binaryIdentity} binaryIsCurrent={() => gridCurrent(loaded, interaction, true)} binaryFileActions={false}/></div>{showSql && <section className="query-result-snapshot-viewer-sql" aria-label={text.sourceTitle}><p>{text.sourceTitle}</p><SqlEditor value={loaded.snapshot.result.statement} readOnly height={180}/></section>}</> : <p>{text.empty}</p>}
   </div></Modal>;

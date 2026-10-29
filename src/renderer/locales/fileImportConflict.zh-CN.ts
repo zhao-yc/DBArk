@@ -12,7 +12,7 @@ export const fileImportConflictZh = {
   completed: '导入处理已完成', failed: '导入处理已停止', cancelled: '导入处理已取消',
   readRecords: '已读取记录（含失败记录）', acknowledged: '已确认处理', committed: '已确认提交',
   inserted: '新增', matchedUpdates: '匹配更新命令（含未变化）', skippedExisting: '跳过已有', skippedMissing: '跳过未匹配',
-  countsHint: '匹配更新计数包含值未改变的命中，不代表实际修改记录数。已确认处理与已确认提交分别展示。',
+  countsHint: '匹配更新含未变化的记录，不等于实际修改行数。',
   batch: '当前批状态', batches: { none: '无待确认批次', pending: '尚未提交', 'rolled-back': '当前批已确认回滚', 'rollback-unconfirmed': '当前批回滚未确认', 'commit-unknown': '原 COMMIT 结果未知' },
   noReplay: '原 COMMIT 结果未知时不能自动重放；请核对服务器。此前已确认提交的批次及非事务副作用可能保留。',
   checkServer: '请核对服务器与目标数据；此前已确认提交的批次及非事务副作用可能保留，不会自动重试。',

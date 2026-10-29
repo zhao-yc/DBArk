@@ -1,7 +1,7 @@
 /** 批量整理只修改连接显示元数据，不暗示会话、目标或凭据已被重新配置。 */
 export const connectionOrganizationZh = {
   open: '整理连接', title: '整理连接', notice: '仅批量修改分组和颜色，不修改连接目标、认证文件或凭据，不中断会话，也不发送 SQL。',
-  search: '搜索连接', visibleSelect: '勾选本页可见连接', clearAll: '清空勾选', list: '连接列表',
+  selectLabel: '选择', search: '搜索连接', visibleSelect: '勾选本页可见连接', clearAll: '清空勾选', list: '连接列表',
   selectedSummary: (selected: number, total: number) => `已选择 ${selected} / ${total} 个连接`,
   previewTitle: '整理预览', preview: '预览修改', startApply: '确认整理', refresh: '刷新连接', close: '关闭', loading: '正在读取连接…', applying: '正在保存整理…',
   stale: '连接配置已变化，请刷新并重新预览后再整理。', refreshNeeded: '请刷新连接并重新核对选择及修改。', noResults: '没有匹配的连接',

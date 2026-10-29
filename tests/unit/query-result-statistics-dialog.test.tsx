@@ -127,7 +127,7 @@ describe('查询结果列统计的真实对话框', () => {
 
   it('整数三分之一按协议18位舍入且明确说明，合计仍精确', async () => {
     const data = fixture(); data.rows = [0, 0, 1].map(n => ({ ...data.rows[0], n: String(n) })); await mount({ ...data, initialColumn: data.columns[0] }); await finish();
-    expect(metric(text.sum)).toBe('1'); expect(metric(text.average)).toBe('0.333333333333333333'); expect(document.body.textContent).toContain(text.averageRounded); expect(document.body.textContent).not.toContain(text.floatInput);
+    expect(metric(text.sum)).toBe('1'); expect(metric(text.average)).toBe('0.333333333333333333'); expect(document.querySelectorAll('p').find(node => node.getAttribute('title') === text.averageRounded)?.textContent).toBe(text.rounded); expect(document.body.textContent).not.toContain(text.floatInput);
   });
 
   it('一列含不合类型原值时保留全部计数，不能发布前面几行算出的部分值指标', async () => {
