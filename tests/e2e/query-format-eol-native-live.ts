@@ -37,19 +37,19 @@ async function observe(run: EditorIndentNativeRun, owner: IndentNativeOwner) {
 }
 /** 真实表单创建无密码回环概要及空查询；每个UI动作单独消费父门，不在浏览器串行发两次写RPC。 */
 async function prepareOfflineQuery(run: EditorIndentNativeRun, owner: IndentNativeOwner) {
-  const page = owner.page; await run.step(owner, () => page.locator('.app-commandbar').getByRole('button', { name: zh.common.newConnection, exact: true }).click());
+  const page = owner.page; await run.step(owner, async () => (await navigationMenuItem(page.locator('.navigation-toolbar'), { name: zh.common.newConnection, exact: true }, () => run.assert(owner))).click());
   const form = page.getByRole('dialog', { name: zh.common.newConnection, exact: true });
   for (const [label, value] of [[zh.connections.text006, '首次文件EOL离线'], [zh.connections.text009, '127.0.0.1'], [zh.connections.text010, '1'], [zh.common.user, 'offline'], [zh.connections.text011, ''], [zh.connections.text012, '']]) await run.step(owner, () => form.getByLabel(label, { exact: true }).fill(value));
-  await run.step(owner, () => form.getByRole('checkbox', { name: zh.connections.text016, exact: true }).uncheck()); await run.step(owner, () => form.getByRole('button', { name: zh.connections.text036, exact: true }).click()); await run.step(owner, () => expect(form).toBeHidden());
+  await run.step(owner, () => form.getByRole('checkbox', { name: zh.connections.text016, exact: true }).uncheck()); await run.step(owner, async () => (await navigationMenuItem(form, { name: zh.connections.text036, exact: true }, () => run.assert(owner))).click()); await run.step(owner, () => expect(form).toBeHidden());
   const profiles = await run.step(owner, () => page.evaluate(() => window.dbark.invoke('connections.list', {}))); expect(profiles).toHaveLength(1); expect(profiles[0]).toMatchObject({ host: '127.0.0.1', port: 1, user: 'offline', rememberPassword: false }); expect(Boolean(profiles[0].hasPassword || profiles[0].ssh?.enabled || profiles[0].tls?.enabled)).toBe(false);
-  await run.step(owner, () => page.locator('.app-commandbar').getByRole('button', { name: zh.common.newQuery, exact: true }).click()); const query = page.getByRole('dialog', { name: zh.common.newQuery, exact: true });
-  await run.step(owner, () => expect(query.locator('.error-box')).toContainText(/ECONNREFUSED|连接被拒绝|拒绝连接/i, { timeout: 20000 })); await run.step(owner, () => query.getByRole('button', { name: zh.app.text053, exact: true }).click()); await run.step(owner, () => expect(query).toBeHidden());
+  await run.step(owner, async () => (await navigationMenuItem(page.locator('.navigation-toolbar'), { name: zh.common.newQuery, exact: true }, () => run.assert(owner))).click()); const query = page.getByRole('dialog', { name: zh.common.newQuery, exact: true });
+  await run.step(owner, () => expect(query.locator('.error-box')).toContainText(/ECONNREFUSED|连接被拒绝|拒绝连接/i, { timeout: 20000 })); await run.step(owner, async () => (await navigationMenuItem(query, { name: zh.app.text053, exact: true }, () => run.assert(owner))).click()); await run.step(owner, () => expect(query).toBeHidden());
 }
 /** 原正式文件入口先建空placeholder，再异步加载自有LF字节；只有一次准确OpenDialog回答。 */
 async function openFileSource(run: EditorIndentNativeRun, owner: IndentNativeOwner, path: string) {
   const nonce = randomUUID(); await run.step(owner, () => installSqlFilesOpenAnswer(owner.application, { nonce, path }));
-  await run.step(owner, () => owner.page.locator('.query-tab:visible').getByRole('button', { name: text.open, exact: true }).click()); const dialog = owner.page.getByRole('dialog', { name: text.open, exact: true });
-  await run.step(owner, () => dialog.getByRole('combobox', { name: text.encoding, exact: true }).selectOption('utf8')); await run.step(owner, () => dialog.getByRole('button', { name: text.openAction, exact: true }).click());
+  await run.step(owner, async () => (await navigationMenuItem(owner.page.locator('.query-tab:visible'), { name: text.open, exact: true }, () => run.assert(owner))).click()); const dialog = owner.page.getByRole('dialog', { name: text.open, exact: true });
+  await run.step(owner, () => dialog.getByRole('combobox', { name: text.encoding, exact: true }).selectOption('utf8')); await run.step(owner, async () => (await navigationMenuItem(dialog, { name: text.openAction, exact: true }, () => run.assert(owner))).click());
   await expect.poll(() => run.step(owner, () => owner.application.evaluate(() => (globalThis as typeof globalThis & { __sqlFilesOpenAnswer?: { calls: number } }).__sqlFilesOpenAnswer?.calls))).toBe(1);
   expect(await run.step(owner, () => finishSqlFilesOpenAnswer(owner.application, nonce))).toEqual({ calls: 1, restored: true }); await run.step(owner, () => expect(dialog).toBeHidden());
   await run.step(owner, () => expect(owner.page.locator('.query-tab:visible .monaco-editor')).toBeVisible());
@@ -111,7 +111,7 @@ export function registerFormatEolNative(binding: ReturnType<typeof bindFormatEol
       const ready = await model(run, first); expect({ ...ready, focused: initial.focused, selections: initial.selections }).toEqual(initial); expect(ready.focused).toBe(true); expect(ready.selections).toEqual([{ start: 0, end: 0 }]);
       // 紧邻实际触发再核原LF草稿及零内容事件，不能靠预编辑使store追平模型EOL。
       const untouched = await facts(run, first), originalAgain = await run.step(first, () => files!.read(path, fileIdentity)); assertFormatEolInitial(originalAgain.bytes.toString('utf8'), untouched.tab.sql ?? '', ready, process.platform);
-      if (entry === 0) await run.step(first, () => first.page.getByRole('button', { name: sqlFormattingZh.action, exact: true }).click()); else await run.step(first, () => first.page.keyboard.press('Alt+Shift+f'));
+      if (entry === 0) await run.step(first, async () => (await navigationMenuItem(first.page, { name: sqlFormattingZh.action, exact: true }, () => run.assert(first))).click()); else await run.step(first, () => first.page.keyboard.press('Alt+Shift+f'));
       const expected = formatEolExpected.replaceAll('\n', initial.eol); await exact(run, first, expected); const changed = await model(run, first); expect(changed.id).toBe(initial.id); expect(changed.eol).toBe(initial.eol); expect(changed.version).toBeGreaterThan(initial.version); expect(changed.changes).toBe(1); expect(changed.focused).toBe(true);
       // 一次Undo必须恢复格式化前模型全文；不先补焦点，也不通过setter恢复store或Undo栈。
       await run.step(first, () => first.page.keyboard.press(modifier + '+z')); await exact(run, first, initial.value); expect((await model(run, first)).changes).toBe(2);
@@ -128,3 +128,6 @@ export function registerFormatEolNative(binding: ReturnType<typeof bindFormatEol
     } finally { try { await files?.closeHandles(); } catch (closing) { run.retained = true; throw new AggregateError(failure === undefined ? [closing] : [failure, closing], '格式化原文件句柄关闭失败', { cause: failure }); } }
   });
 }
+
+/** 原门进入具体动作后才加载真实菜单导航，不改变默认/列表阶段的资源边界。 */
+async function navigationMenuItem(...args: Parameters<typeof import('./navigation-menu')['navigationMenuItem']>): Promise<import('@playwright/test').Locator> { return (require('./navigation-menu') as typeof import('./navigation-menu')).navigationMenuItem(...args); }

@@ -124,17 +124,17 @@ function register(): void {
       const baseline = await step(() => page.evaluate(() => window.dbark.invoke('settings.get', {}))); expect(baseline.tabs).toEqual([]);
       await step(() => expect.poll(async () => (await audit()).pending).toBe(0)); await step(() => application.evaluate(() => (globalThis as any).__queryResultSnapshotGlobal.bind()));
       expect(await step(() => page.evaluate(() => window.dbark.invoke('tasks.list', {})))).toEqual([]); expect(await step(() => page.evaluate(() => window.dbark.invoke('history.list', {})))).toEqual([]);
-      await step(() => page.getByRole('button', { name: text.entry, exact: true }).click());
+      await step(async () => (await navigationMenuItem(page, { name: text.entry, exact: true }, () => clock.assertCurrent())).click());
       const viewer = page.getByRole('dialog', { name: text.title, exact: true }); await step(() => expect(viewer).toBeVisible());
       // 打开查看器本身不触发任何文件或数据库操作，选文件仍属于第二次明确动作。
       expect((await step(audit)).opened).toBe(0);
       await step(() => application.evaluate(() => (globalThis as any).__queryResultSnapshotGlobal.arm('open')));
-      await step(() => viewer.getByRole('button', { name: text.choose, exact: true }).click());
+      await step(async () => (await navigationMenuItem(viewer, { name: text.choose, exact: true }, () => clock.assertCurrent())).click());
       await step(() => expect(viewer.getByText(text.opened(basename(mode === 'save' ? sourcePath : savedPath)), { exact: true })).toBeVisible());
       await step(() => expect(viewer.getByText(text.truncated, { exact: true })).toBeVisible());
       const actualCells = (await step(audit)).originalCells;
       expect(actualCells).toEqual({ negativeZero: true, prototypeOwn: true, constructorOwn: true, big: '18446744073709551615', decimal: '12345678901234567890.1234567890', date: '2026-10-28 12:34:56.123456', nullable: null, empty: '', blob: 'AP8A', emptyBlob: '', truncated: true });
-      await step(() => expect(viewer.getByRole('button', { name: text.choose, exact: true })).toBeVisible()); await step(() => expect(viewer.getByRole('button', { name: text.save, exact: true })).toBeVisible());
+      await step(async () => expect((await navigationMenuItem(viewer, { name: text.choose, exact: true }, () => clock.assertCurrent()))).toBeVisible()); await step(async () => expect((await navigationMenuItem(viewer, { name: text.save, exact: true }, () => clock.assertCurrent()))).toBeVisible());
       const grid = viewer.locator('.results-grid'), duplicateHeaders = grid.getByRole('columnheader').filter({ hasText: /^重复列/ });
       await step(() => expect(duplicateHeaders).toHaveCount(2));
       // 正式列头同时呈现列名与类型，分别核对，不能把small中的类型当成列名的一部分。
@@ -150,22 +150,22 @@ function register(): void {
         for (let index = 0; index < 8; index++) { if (await step(() => grid.getByRole('gridcell').filter({ hasText: value }).count())) { found = true; break; } await step(() => grid.evaluate(element => { element.scrollLeft += element.clientWidth; })); await step(() => page.evaluate(() => new Promise<void>(done => requestAnimationFrame(() => requestAnimationFrame(() => done()))))); }
         expect(found).toBe(true); await step(() => expect(grid.getByRole('gridcell').filter({ hasText: value })).toContainText(value));
       }
-      await step(() => viewer.getByRole('button', { name: text.sourceShow, exact: true }).click()); await step(() => expect(viewer.locator('.monaco-editor .view-lines')).toContainText('仅快照SQL')); await step(() => expect(viewer.getByRole('textbox')).toHaveAttribute('aria-autocomplete', 'none')); await step(() => viewer.getByRole('button', { name: text.sourceHide, exact: true }).click()); await step(() => expect(viewer.locator('.monaco-editor')).toHaveCount(0));
+      await step(async () => (await navigationMenuItem(viewer, { name: text.sourceShow, exact: true }, () => clock.assertCurrent())).click()); await step(() => expect(viewer.locator('.monaco-editor .view-lines')).toContainText('仅快照SQL')); await step(() => expect(viewer.getByRole('textbox')).toHaveAttribute('aria-autocomplete', 'none')); await step(async () => (await navigationMenuItem(viewer, { name: text.sourceHide, exact: true }, () => clock.assertCurrent())).click()); await step(() => expect(viewer.locator('.monaco-editor')).toHaveCount(0));
       // 全局BLOB只读展示，不暴露依赖查询会话的独立原字节文件操作；Esc只关闭最内层。
       await step(() => grid.evaluate(element => { element.scrollLeft = element.scrollWidth; }));
       const blob = grid.getByRole('gridcell').filter({ hasText: /^0x00FF00$/i });
       await step(() => expect(blob).toHaveCount(1)); await step(() => blob.dblclick());
       const binary = page.getByRole('dialog', { name: binaryCellZh.title + '：BLOB', exact: true });
       await step(() => expect(binary).toBeVisible()); await step(() => expect(binary.getByRole('textbox', { name: binaryCellZh.hexLabel, exact: true })).toHaveValue(/00.*ff.*00/i));
-      await step(() => expect(binary.getByRole('button', { name: binaryCellFilesZh.save, exact: true })).toHaveCount(0));
+      await step(async () => expect((await navigationMenuItem(binary, { name: binaryCellFilesZh.save, exact: true }, () => clock.assertCurrent()))).toHaveCount(0));
       await step(() => page.keyboard.press('Escape')); await step(() => expect(binary).toBeHidden()); await step(() => expect(viewer).toBeVisible());
       if (mode === 'save') {
-        await step(() => application.evaluate(() => (globalThis as any).__queryResultSnapshotGlobal.arm('save'))); await step(() => viewer.getByRole('button', { name: text.save, exact: true }).click()); await step(() => expect(viewer.getByText(text.saved(basename(savedPath)), { exact: true })).toBeVisible());
+        await step(() => application.evaluate(() => (globalThis as any).__queryResultSnapshotGlobal.arm('save'))); await step(async () => (await navigationMenuItem(viewer, { name: text.save, exact: true }, () => clock.assertCurrent())).click()); await step(() => expect(viewer.getByText(text.saved(basename(savedPath)), { exact: true })).toBeVisible());
         const saved = await step(() => readFile(savedPath)); savedSha256 = hash(saved); const independent = JSON.parse(saved.toString('utf8'));
         expect(Object.keys(independent).sort()).toEqual(['kind', 'name', 'result', 'version']); expect(independent.name).toBe(expectedWire.name); expect(independent.kind).toBe(expectedWire.kind); expect(independent.version).toBe(1); expect(independent.result).toEqual(expectedWire.result);
         expect(Object.hasOwn(independent.result.rows[0], '__proto__')).toBe(true); expect(independent.result.rows[0].negativeZero).toEqual({ type: 'number', text: '-0' });
       }
-      await step(() => viewer.getByRole('button', { name: text.close, exact: true }).click()); await step(() => expect(viewer).toBeHidden()); await step(() => expect(page.locator('.welcome-tab')).toBeVisible());
+      await step(async () => (await navigationMenuItem(viewer, { name: text.close, exact: true }, () => clock.assertCurrent())).click()); await step(() => expect(viewer).toBeHidden()); await step(() => expect(page.locator('.welcome-tab')).toBeVisible());
       expect(await step(() => page.locator('.query-tab').count())).toBe(0);
       const after = await step(() => page.evaluate(() => window.dbark.invoke('settings.get', {}))); expect(after).toEqual(baseline); expect(JSON.stringify(after)).not.toContain('offline-snapshot-source'); expect(JSON.stringify(after)).not.toContain('18446744073709551615');
       expect(await step(() => page.evaluate(() => window.dbark.invoke('connections.list', {})))).toEqual([]); expect(await step(() => page.evaluate(() => window.dbark.invoke('tasks.list', {})))).toEqual([]); expect(await step(() => page.evaluate(() => window.dbark.invoke('history.list', {})))).toEqual([]); expect(runtime.pageErrors).toEqual([]);
@@ -182,3 +182,6 @@ function register(): void {
     } catch (reason) { halted = true; clock.retain(); runtime.retainOwnedDesktopResources(info); throw reason; }
   });
 }
+
+/** 原门进入具体动作后才加载真实菜单导航，不改变默认/列表阶段的资源边界。 */
+async function navigationMenuItem(...args: Parameters<typeof import('./navigation-menu')['navigationMenuItem']>): Promise<import('@playwright/test').Locator> { return (require('./navigation-menu') as typeof import('./navigation-menu')).navigationMenuItem(...args); }

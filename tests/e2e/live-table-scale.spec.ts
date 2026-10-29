@@ -7,7 +7,7 @@ test.use({ trace: 'off' });
 
 /** 对象由独立观察连接准备，随后完全通过对象树、表格和筛选表单操作。 */
 async function openTable(database: string, name: string) {
-  await page.locator('.database-row').getByRole('button', { name: database, exact: true }).click();
+  await (await (await import('./navigation-menu')).navigationMenuItem(page.locator('.database-row'), { name: database, exact: true })).click();
   await page.locator('.object-row').getByText(name, { exact: true }).dblclick();
   const table = page.locator('.table-tab:visible');
   await expect(table.locator('.loading-overlay')).toHaveCount(0);
@@ -35,12 +35,12 @@ async function addFilter(column: string, operator: string, value?: string | [str
     await table.getByLabel('区间起始值', { exact: true }).fill(value![0]);
     await table.getByLabel('区间结束值', { exact: true }).fill(value![1]);
   } else if (!operator.includes('NULL')) await table.getByLabel('筛选值', { exact: true }).fill(value as string ?? '');
-  await table.getByRole('button', { name: '添加条件', exact: true }).click();
+  await (await (await import('./navigation-menu')).navigationMenuItem(table, { name: '添加条件', exact: true })).click();
 }
 
 /** 清空规则仍然走 UI，确认之前的结果已真正被新查询替换。 */
 async function clearFilters() {
-  await page.locator('.table-tab:visible').getByRole('button', { name: '清空', exact: true }).click();
+  await (await (await import('./navigation-menu')).navigationMenuItem(page.locator('.table-tab:visible'), { name: '清空', exact: true })).click();
   await expectIds([1, 2, 3, 4, 5, 6, 7, 8]);
 }
 
@@ -53,13 +53,13 @@ test.describe('远程真实数据库表格筛选与规模', () => {
       await observer.query('CREATE TABLE ' + database + '.filter_cases (id INT PRIMARY KEY, title VARCHAR(80), score INT NOT NULL) ENGINE=InnoDB');
       await observer.query('INSERT INTO ' + database + '.filter_cases (id,title,score) VALUES ?', [[[1, null, 1], [2, '', 2], [3, '中文🚀', 3], [4, '甲,乙', 4], [5, ' leading value ', 5], [6, 'abc', 6], [7, '中文另一个', 7], [8, '甲', 8]]]);
       const table = await openTable(database, 'filter_cases');
-      await table.getByRole('button', { name: '筛选', exact: true }).click();
+      await (await (await import('./navigation-menu')).navigationMenuItem(table, { name: '筛选', exact: true })).click();
       await expectIds([1, 2, 3, 4, 5, 6, 7, 8]);
       await addFilter('title', '=', '中文🚀'); await expectIds([3]);
-      await table.getByRole('button', { name: '编辑条件 1', exact: true }).click();
+      await (await (await import('./navigation-menu')).navigationMenuItem(table, { name: '编辑条件 1', exact: true })).click();
       await table.getByLabel('筛选值', { exact: true }).fill('甲,乙');
-      await table.getByRole('button', { name: '保存条件', exact: true }).click(); await expectIds([4]);
-      await table.getByRole('button', { name: '移除条件 1', exact: true }).click(); await expectIds([1, 2, 3, 4, 5, 6, 7, 8]);
+      await (await (await import('./navigation-menu')).navigationMenuItem(table, { name: '保存条件', exact: true })).click(); await expectIds([4]);
+      await (await (await import('./navigation-menu')).navigationMenuItem(table, { name: '移除条件 1', exact: true })).click(); await expectIds([1, 2, 3, 4, 5, 6, 7, 8]);
       await addFilter('title', 'IS NULL'); await expectIds([1]); await clearFilters();
       await addFilter('title', '=', ''); await expectIds([2]); await clearFilters();
       await addFilter('title', 'IN', '甲,乙\n中文🚀'); await expectIds([3, 4]); await clearFilters();
@@ -76,10 +76,10 @@ test.describe('远程真实数据库表格筛选与规模', () => {
       await table.getByLabel('条件匹配方式', { exact: true }).selectOption('any'); await expectIds([1, 2]);
       await page.screenshot({ path: testInfo.outputPath('live-filter-any.png') });
       await table.getByLabel('条件匹配方式', { exact: true }).selectOption('all'); await expectIds([]);
-      await table.getByRole('button', { name: '移除条件 1', exact: true }).click(); await expectIds([2]);
+      await (await (await import('./navigation-menu')).navigationMenuItem(table, { name: '移除条件 1', exact: true })).click(); await expectIds([2]);
       await clearFilters();
       await table.getByLabel('跳转页码', { exact: true }).fill('2');
-      await table.getByRole('button', { name: '跳转', exact: true }).click(); await expectIds([]);
+      await (await (await import('./navigation-menu')).navigationMenuItem(table, { name: '跳转', exact: true })).click(); await expectIds([]);
       await addFilter('title', '=', '中文🚀'); await expectIds([3]);
       await expect(table.getByLabel('跳转页码', { exact: true })).toHaveValue('1');
       await clearFilters();
@@ -98,14 +98,14 @@ test.describe('远程真实数据库表格筛选与规模', () => {
       expect(persistedDraft[0].title).toBe('中文🚀');
       await answerDialogs([]);
       await acceptNativeConfirmation();
-      await table.getByRole('button', { name: '撤销', exact: true }).click();
+      await (await (await import('./navigation-menu')).navigationMenuItem(table, { name: '撤销', exact: true })).click();
       await expect(table.getByRole('gridcell', { name: '中文🚀', exact: true })).toBeVisible();
       // 精确整数筛选失败时必须清空旧页，不能把旧结果留在新条件下继续编辑。
       await addFilter('score', '=', 'abc');
       await expect(table.locator('.loading-overlay')).toHaveCount(0);
       await expect(table.locator('.error-box')).toBeVisible();
       await expect(table.locator('[role="gridcell"]')).toHaveCount(0);
-      await table.getByRole('button', { name: '清空', exact: true }).click();
+      await (await (await import('./navigation-menu')).navigationMenuItem(table, { name: '清空', exact: true })).click();
       await expectIds([1, 2, 3, 4, 5, 6, 7, 8]);
     }, testInfo);
   });
@@ -133,7 +133,7 @@ test.describe('远程真实数据库表格筛选与规模', () => {
       const firstPageDomRows = await grid.getByRole('row').count();
       expect(firstPageDomRows).toBeLessThan(100);
       await table.getByLabel('跳转页码', { exact: true }).fill('1000');
-      await table.getByRole('button', { name: '跳转', exact: true }).click();
+      await (await (await import('./navigation-menu')).navigationMenuItem(table, { name: '跳转', exact: true })).click();
       await expect(table.locator('.loading-overlay')).toHaveCount(0);
       await grid.evaluate(element => { element.scrollTop = 0; });
       await expect(grid.getByRole('gridcell', { name: '999001', exact: true })).toBeVisible({ timeout: 20000 });

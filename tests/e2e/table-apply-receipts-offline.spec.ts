@@ -16,16 +16,16 @@ test.beforeEach(async () => {
   // 只在正式获准执行时解析本机Electron；列表收集不会解析或启动二进制。
   const require = createRequire(resolve('package.json'));
   desktop = await electron.launch({ executablePath: require('electron'), args: [resolve('dist/main/index.cjs')], env: { ...env, DBARK_USER_DATA: directory } });
-  page = await desktop.firstWindow(); await expect(page.locator('.app-commandbar')).toBeVisible();
+  page = await desktop.firstWindow(); await expect(page.locator('.navigation-toolbar')).toBeVisible();
 });
 test.afterEach(async () => { try { await desktop?.close(); } finally { desktop = undefined; if (directory) await rm(directory, { recursive: true, force: true }); } });
 
 test('离线任务中心可打开空提交记录及返回任务，页面明确隐私和范围', async () => {
-  await page.getByRole('button', { name: zh.common.taskCenter, exact: true }).click();
-  await page.getByRole('button', { name: '数据提交记录', exact: true }).click();
+  await (await (await import('./navigation-menu')).navigationMenuItem(page, { name: zh.common.taskCenter, exact: true })).click();
+  await (await (await import('./navigation-menu')).navigationMenuItem(page, { name: '数据提交记录', exact: true })).click();
   const dialog = page.getByRole('dialog', { name: '数据提交记录', exact: true });
   await expect(dialog).toContainText('暂无提交记录'); await expect(dialog).toContainText('不保存SQL'); await expect(dialog).toContainText('不包含触发器');
-  await dialog.getByRole('button', { name: '返回任务', exact: true }).click(); await expect(page.getByRole('dialog', { name: zh.common.taskCenter, exact: true })).toBeVisible();
+  await (await (await import('./navigation-menu')).navigationMenuItem(dialog, { name: '返回任务', exact: true })).click(); await expect(page.getByRole('dialog', { name: zh.common.taskCenter, exact: true })).toBeVisible();
 });
 
 test('renderer不能借只读详情接口注入已提交标签，不产生任务或记录', async () => {

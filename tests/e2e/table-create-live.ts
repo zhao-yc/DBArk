@@ -57,23 +57,23 @@ export function registerTableCreateUiTests() {
         const connection = page(owner).locator('.connection-node').filter({ has: page(owner).getByRole('button', { name: context.connectionName, exact: true }) });
         const database = connection.locator('.database-row').filter({ has: page(owner).getByRole('button', { name: context.database, exact: true }) });
         // 先实际展开原库目录，再验证创建后的刷新；聚焦折叠节点不代表目录已展开。
-        await database.getByRole('button', { name: context.database, exact: true }).click(); owner.assertCurrent();
+        await (await (await import('./navigation-menu')).navigationMenuItem(database, { name: context.database, exact: true }, () => owner.assertCurrent())).click(); owner.assertCurrent();
         await expect(database.getByRole('button', { name: context.database, exact: true })).toHaveAttribute('aria-expanded', 'true'); owner.assertCurrent();
         await database.getByRole('button', { name: context.database, exact: true }).focus(); owner.assertCurrent();
         await clickSidebarAction(database, { name: zh.sidebar.text017, exact: true }); owner.assertCurrent();
         const designer = page(owner).getByRole('dialog', { name: formatText(zh.schema.text009, context.database), exact: true });
         await designer.getByLabel(zh.schema.text010, { exact: true }).fill('daily_new_table'); owner.assertCurrent();
-        await designer.getByRole('button', { name: zh.schema.text027, exact: true }).click(); owner.assertCurrent();
+        await (await (await import('./navigation-menu')).navigationMenuItem(designer, { name: zh.schema.text027, exact: true }, () => owner.assertCurrent())).click(); owner.assertCurrent();
         await designer.getByLabel(formatText(zh.schema.text018, 2), { exact: true }).fill('amount'); owner.assertCurrent();
         await designer.getByLabel(formatText(zh.schema.text019, 2), { exact: true }).fill('decimal(30,12)'); owner.assertCurrent();
         await designer.getByLabel(formatText(zh.schema.text020, 2), { exact: true }).uncheck(); owner.assertCurrent();
         await designer.getByLabel(formatText(zh.schema.text022, 2), { exact: true }).fill('123456789012345678.123456789012'); owner.assertCurrent();
-        await designer.getByRole('button', { name: new RegExp('^' + zh.common.indexes) }).click(); owner.assertCurrent();
-        await designer.getByRole('button', { name: zh.schema.text036, exact: true }).click(); owner.assertCurrent();
+        await (await (await import('./navigation-menu')).navigationMenuItem(designer, { name: new RegExp('^' + zh.common.indexes) }, () => owner.assertCurrent())).click(); owner.assertCurrent();
+        await (await (await import('./navigation-menu')).navigationMenuItem(designer, { name: zh.schema.text036, exact: true }, () => owner.assertCurrent())).click(); owner.assertCurrent();
         await designer.getByLabel(formatText(zh.schema.text031, 2), { exact: true }).fill('uq_amount'); owner.assertCurrent();
         await designer.getByLabel(formatText(zh.schema.text033, 2), { exact: true }).check(); owner.assertCurrent();
         await designer.getByLabel(formatText(zh.schema.text034, 2), { exact: true }).fill('amount'); owner.assertCurrent();
-        await designer.getByRole('button', { name: zh.schema.text049, exact: true }).click(); owner.assertCurrent();
+        await (await (await import('./navigation-menu')).navigationMenuItem(designer, { name: zh.schema.text049, exact: true }, () => owner.assertCurrent())).click(); owner.assertCurrent();
         const confirmation = page(owner).getByRole('dialog', { name: text.title, exact: true });
         await expect(confirmation.locator('.monaco-editor .view-lines')).toContainText('CREATE TABLE'); owner.assertCurrent();
         // 预览只读：仅观察本例合成库的准确目标，任何apply之前都必须仍不存在。
@@ -83,7 +83,7 @@ export function registerTableCreateUiTests() {
         for (const label of [text.ackDdl, text.ackCreate]) { await confirmation.getByRole('checkbox', { name: label, exact: true }).check(); owner.assertCurrent(); }
         await expect(confirmation.getByRole('button', { name: text.apply, exact: true })).toBeDisabled(); owner.assertCurrent();
         await confirmation.getByLabel(text.confirmation, { exact: true }).fill(context.database + '.daily_new_table'); owner.assertCurrent();
-        await confirmation.getByRole('button', { name: text.apply, exact: true }).click(); owner.assertCurrent();
+        await (await (await import('./navigation-menu')).navigationMenuItem(confirmation, { name: text.apply, exact: true }, () => owner.assertCurrent())).click(); owner.assertCurrent();
         await expect(confirmation.getByRole('status')).toHaveText(text.succeeded); owner.assertCurrent();
         // 成功提示之外再核本例唯一apply及终态；任务读取未知同样停链保留现场。
         const tasks = await observe(owner, () => page(owner).evaluate(() => window.dbark.invoke('tasks.list', {}))); owner.assertCurrent();
@@ -93,7 +93,7 @@ export function registerTableCreateUiTests() {
         expect(columns.map(row => row.COLUMN_NAME)).toEqual(['id', 'amount']); expect(columns[1].COLUMN_DEFAULT).toBe('123456789012345678.123456789012');
         const [indexes] = await observe(owner, () => context.observer.query<RowDataPacket[]>('SELECT INDEX_NAME,NON_UNIQUE FROM information_schema.STATISTICS WHERE TABLE_SCHEMA=? AND TABLE_NAME=? ORDER BY INDEX_NAME', [context.database, 'daily_new_table'])); owner.assertCurrent();
         expect(indexes.map(row => [row.INDEX_NAME, Number(row.NON_UNIQUE)])).toEqual([['PRIMARY', 0], ['uq_amount', 0]]);
-        await confirmation.getByRole('button', { name: text.close, exact: true }).click(); owner.assertCurrent();
+        await (await (await import('./navigation-menu')).navigationMenuItem(confirmation, { name: text.close, exact: true }, () => owner.assertCurrent())).click(); owner.assertCurrent();
         await expect(confirmation).toHaveCount(0); owner.assertCurrent();
         // 仅核原连接对象树的准确新表，确认完成回调已刷新；不切换或重绑其它目标。
         await expect(connection.locator('.object-row').getByText('daily_new_table', { exact: true })).toBeVisible(); owner.assertCurrent();

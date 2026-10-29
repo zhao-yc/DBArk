@@ -1,3 +1,11 @@
+import { installNavigationMenuRamPort, navigationMenuRamButton } from '../helpers/navigationMenuRamPort';
+import { workspaceToolCommandSource } from '../helpers/workspaceToolCommandSource';
+import { uiCommandLabels } from '../../src/shared/uiCommands.zh-CN';
+import { navigationZh } from '../../src/renderer/locales/navigation.zh-CN';
+import { readEditorWordWrap } from '../../src/shared/editorWordWrap';
+let errorMessage: typeof import('../../src/renderer/lib')['errorMessage'];
+let restoreNavigationMenuPort: () => void = () => {};
+let ActionMenu: typeof import('../../src/renderer/components/ActionMenu')['ActionMenu'], ActionMenuSection: typeof import('../../src/renderer/components/ActionMenu')['ActionMenuSection'];
 import React, { act, useState } from 'react';
 import * as jsxRuntime from 'react/jsx-runtime';
 import { readFileSync } from 'node:fs';
@@ -16,7 +24,7 @@ vi.mock('../../src/renderer/completion.worker?worker', () => ({ default: class {
 let document: ReturnType<typeof memoryDocument>, createRoot: typeof import('react-dom/client')['createRoot'], root: ReturnType<typeof createRoot> | undefined;
 let SqlEditor: typeof import('../../src/renderer/components/SqlEditor')['SqlEditor'], Dialog: typeof import('../../src/renderer/components/EditorFontPreferencesDialog')['EditorFontPreferencesDialog'];
 let store: typeof import('../../src/renderer/store')['useWorkspace'], flush: typeof import('../../src/renderer/store')['flushSettings'];
-let Entry: React.ComponentType<{ children: React.ReactNode }>, saved: any[], reply: (input: any, count: number) => Promise<void> | void;
+let Entry: React.ComponentType<{ children?: React.ReactNode }>, saved: any[], reply: (input: any, count: number) => Promise<void> | void;
 const globals = ['window','document','navigator','self','IS_REACT_ACT_ENVIRONMENT'].map(name => [name, Object.getOwnPropertyDescriptor(globalThis, name)] as const);
 const ready = vi.fn(), invalidate = vi.fn();
 let hideEditors: (value: boolean) => void;
@@ -32,22 +40,25 @@ class FontEditor extends ContentEditorPort {
 /** 从正式App提取准确命令栏button、state、开关方法及弹窗表达式；其余工作台入口不模拟。 */
 function appEntry() {
   const source = readFileSync(new URL('../../src/renderer/App.tsx', import.meta.url), 'utf8'), file = ts.createSourceFile('App.tsx', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
-  const app = file.statements.find(node => ts.isFunctionDeclaration(node) && node.name?.text === 'App')!;
-  let button = '', declaration = '', modal = ''; const methods: string[] = [];
-  const visit = (node: ts.Node) => {
+  const app = file.statements.find(node => ts.isFunctionDeclaration(node) && node.name?.text === 'WorkspaceApp')!;
+  let declaration = '', modal = ''; const methods: string[] = [];
+  function visit(node: ts.Node) {
     if (ts.isVariableStatement(node) && node.declarationList.declarations.some(item => item.name.getText(file) === '[editorFontPreferences, setEditorFontPreferences]')) declaration = node.getText(file);
     if (ts.isFunctionDeclaration(node) && ['openEditorFontPreferences','closeEditorFontPreferences'].includes(node.name?.text ?? '')) methods.push(node.getText(file));
-    if (ts.isJsxElement(node) && node.openingElement.tagName.getText(file) === 'button' && node.children.some(item => ts.isJsxExpression(item) && item.expression?.getText(file) === 'editorFontZh.entry')) button = node.getText(file);
     if (ts.isBinaryExpression(node) && node.left.getText(file) === 'editorFontPreferences' && ts.isJsxSelfClosingElement(node.right)) modal = node.getText(file);
     ts.forEachChild(node, visit);
-  };
-  visit(app); expect([declaration,button,modal].every(Boolean)).toBe(true); expect(methods).toHaveLength(2);
-  const context: any = createContext({ exports: {}, useState, document, EditorFontPreferencesDialog: Dialog, editorFontZh: text, workbenchNavigation: { invalidate }, require: (name: string) => { if (name === 'react/jsx-runtime') return jsxRuntime; throw Error('禁止其它App依赖'); } });
-  runInContext(ts.transpileModule(`function Entry({children}:any){${declaration}\n${methods.join('\n')}\nreturn <>${button}{${modal}}{children}</>};globalThis.Entry=Entry;`, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX } }).outputText, context);
-  return context.Entry as typeof Entry;
+  }
+  visit(app); expect([declaration, modal].every(Boolean)).toBe(true); expect(methods).toHaveLength(2);
+  const menu = workspaceToolCommandSource(source, readFileSync(new URL('../../src/renderer/components/NavigationToolbar.tsx', import.meta.url), 'utf8'), 'editor-font');
+  const context: any = createContext({ exports: {}, useState, document, useWorkspace: store, flushSettings: flush, errorMessage, readEditorWordWrap, ActionMenu, ActionMenuSection, uiCommandLabels, navigationZh, EditorFontPreferencesDialog: Dialog, workbenchNavigation: { invalidate: invalidate }, require: (name: string) => { if (name === 'react/jsx-runtime') return jsxRuntime; throw Error('禁止其它App依赖'); } });
+  runInContext(ts.transpileModule(`function Entry({children}:any){${declaration}
+${methods.join('\n')}
+${menu}return <><ActionMenu label={navigationZh.tools}>{toolActions}</ActionMenu>${modal ? '{' + modal + '}' : ''}{children}</>};globalThis.Entry=Entry;`, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX } }).outputText, context);
+  return context.Entry as React.ComponentType<{ children?: React.ReactNode }>;
 }
+
 beforeAll(async () => {
-  document = memoryDocument(); (document as any).oninput = null; Object.defineProperty(globalThis, 'self', { configurable: true, value: window });
+  document = memoryDocument(); restoreNavigationMenuPort = installNavigationMenuRamPort(document); ({ ActionMenu, ActionMenuSection } = await import('../../src/renderer/components/ActionMenu')); ({ errorMessage } = await import('../../src/renderer/lib')); (document as any).oninput = null; Object.defineProperty(globalThis, 'self', { configurable: true, value: window });
   const create = document.createElement.bind(document); document.createElement = name => { const node = create(name); if (name === 'input') { let type = 'text'; Object.defineProperty(node, 'type', { configurable: true, get: () => type, set: value => { type = value; node.attributes.set('type', value); } }); } const set = node.setAttribute.bind(node), remove = node.removeAttribute.bind(node); node.setAttribute = (key, value) => { set(key.toLowerCase(), value); if (key === 'disabled') node.disabled = true; }; node.removeAttribute = key => { remove(key.toLowerCase()); if (key === 'disabled') node.disabled = false; }; return node; };
   port.monaco = { KeyMod: { CtrlCmd: 2048, Shift: 1024, Alt: 512 }, KeyCode: { Enter: 3, KeyF: 36 }, Uri: { parse: (path: string) => ({ path }) }, languages: { CompletionItemKind: Object.fromEntries(['Module','Class','Interface','Function','Method','Field','Variable','Keyword'].map((name, index) => [name, index])), registerHoverProvider: () => ({ dispose() {} }), registerCompletionItemProvider: vi.fn(() => ({ dispose() {} })) }, editor: { EditorOption: { readOnly: 1 }, getModel: () => undefined, createModel: (value: string) => new ContentModelPort(value), setModelLanguage() {}, setTheme() {}, onDidChangeMarkers: () => ({ dispose() {} }), getModelMarkers: () => [], create: (_node: any, options: any) => { port.initial.push({ fontSize: options.fontSize, lineHeight: options.lineHeight, readOnly: options.readOnly }); const editor = new FontEditor(options.model, options); port.editors.push(editor); return editor; } } };
   ({ createRoot } = await import('react-dom/client')); ({ SqlEditor } = await import('../../src/renderer/components/SqlEditor')); ({ EditorFontPreferencesDialog: Dialog } = await import('../../src/renderer/components/EditorFontPreferencesDialog')); ({ useWorkspace: store, flushSettings: flush } = await import('../../src/renderer/store')); Entry = appEntry();
@@ -56,7 +67,7 @@ beforeAll(async () => {
   vi.spyOn(loader, 'init').mockImplementation(() => Object.assign(port.loader ?? Promise.resolve(port.monaco), { cancel() {} }));
 });
 afterEach(async () => { if (root) { await act(async () => root!.unmount()); root = undefined; } reply = () => {}; await flush(); delete (window as any).dbark; vi.useRealTimers(); port.editors = []; port.initial = []; port.loader = undefined; ready.mockClear(); invalidate.mockClear(); document.body.textContent = ''; });
-afterAll(() => { vi.restoreAllMocks(); for (const [name, descriptor] of globals) if (descriptor) Object.defineProperty(globalThis, name, descriptor); else Reflect.deleteProperty(globalThis, name); });
+afterAll(() => { restoreNavigationMenuPort(); vi.restoreAllMocks(); for (const [name, descriptor] of globals) if (descriptor) Object.defineProperty(globalThis, name, descriptor); else Reflect.deleteProperty(globalThis, name); });
 function pending() { let yes!: () => void, no!: (error: Error) => void; const promise = new Promise<void>((resolve, reject) => { yes = resolve; no = reject; }); return { promise, yes, no }; }
 /** 全部RPC只允许既有settings.save；没有数据库、GUI、剪贴板或实际文件写入。 */
 async function mount(size?: number) {
@@ -69,7 +80,7 @@ async function mount(size?: number) {
   function WorkArea() { const [hidden, setHidden] = useState(false); hideEditors = setHidden; return <React.Suspense fallback={<span>等待恢复</span>}><Editors/><Gate hidden={hidden}/></React.Suspense>; }
   const host = document.createElement('div'); document.body.appendChild(host); root = createRoot(host as any); await act(async () => root!.render(<Entry><WorkArea/></Entry>));
 }
-function button(label: string) { const node = document.querySelectorAll('button').find(node => node.textContent === label); expect(node, '缺少正式按钮：' + label).toBeDefined(); return node!; }
+function button(label: string) { const node = navigationMenuRamButton(document, label) ?? document.querySelectorAll('button').find(node => node.textContent === label); expect(node, '缺少正式按钮：' + label).toBeDefined(); return node!; }
 async function click(label: string) { const node = button(label); expect(node.disabled).toBe(false); await act(async () => node.dispatchEvent(new MemoryEvent('click'))); }
 async function draft(value: string) { const node = document.querySelector(`input[aria-label="${text.field}"]`)!; await act(async () => { node.value = value; node.dispatchEvent(new MemoryEvent('input')); }); }
 function editorState(editor: FontEditor) { return { model: editor.model, version: editor.model?.getVersionId(), value: editor.getValue(), selection: editor.selection, modelSets: editor.modelSets, setValue: editor.setValueCalls, undoStops: editor.undoStops, stackStops: editor.model?.stackStops, controlledEdits: editor.model?.controlledEdits, actions: editor.actions.length, changes: editor.model?.content.size }; }
@@ -77,20 +88,20 @@ function editorState(editor: FontEditor) { return { model: editor.model, version
 it('实际App字号入口与真实编辑器库热更新所有可写/只读实例，model/撤销/光标/SQL与原就绪门不变', async () => {
   await mount(); expect(port.editors).toHaveLength(2); expect(port.initial).toEqual([{ fontSize: 13, lineHeight: 23, readOnly: true }, { fontSize: 13, lineHeight: 23, readOnly: true }]);
   const editors = [...port.editors] as FontEditor[], before = editors.map(editorState); expect(editors.map(editor => editor.readOnly)).toEqual([false, true]); expect(ready).toHaveBeenCalledTimes(2);
-  await click(text.entry); expect(invalidate).toHaveBeenCalledOnce(); expect(document.body.textContent).toContain(text.current(13)); await draft('20'); expect(editors.every(editor => editor.options.fontSize === 13)).toBe(true);
+  await click(uiCommandLabels['editor-font']); expect(invalidate).toHaveBeenCalledOnce(); expect(document.body.textContent).toContain(text.current(13)); await draft('20'); expect(editors.every(editor => editor.options.fontSize === 13)).toBe(true);
   await click(text.save); expect(saved).toHaveLength(1); expect(saved[0].editorFontSize).toBe(20); expect(port.editors).toEqual(editors); expect(editors.map(editorState)).toEqual(before); expect(ready).toHaveBeenCalledTimes(2); expect(editors.map(editor => editor.options.fontSize)).toEqual([20,20]); expect(editors.map(editor => editor.options.lineHeight)).toEqual([35,35]); expect(editors.map(editor => editor.readOnly)).toEqual([false,true]); expect(editors.every(editor => editor.options.fontFamily === 'Cascadia Code, SFMono-Regular, Consolas, monospace')).toBe(true); expect(document.querySelector('[role="dialog"]')).toBeNull();
 });
 
 it('越界/小数/空草稿不能保存，恢复默认需明确保存，取消不改当前偏好', async () => {
-  await mount(24); await click(text.entry);
+  await mount(24); await click(uiCommandLabels['editor-font']);
   for (const value of ['7','33','12.5','']) { await draft(value); await click(text.save); expect(document.body.textContent).toContain(text.invalid); expect(saved).toHaveLength(0); expect(store.getState().settings.editorFontSize).toBe(24); }
   await click(text.reset); expect(document.querySelector(`input[aria-label="${text.field}"]`)!.value).toBe('13'); expect(document.body.textContent).toContain(text.current(24)); await click(text.cancel); expect(store.getState().settings.editorFontSize).toBe(24);
-  await click(text.entry); await click(text.reset); await click(text.save); expect(store.getState().settings.editorFontSize).toBe(13); expect(port.editors.every(editor => editor.options.fontSize === 13 && editor.options.lineHeight === 23)).toBe(true); expect(saved).toHaveLength(1);
+  await click(uiCommandLabels['editor-font']); await click(text.reset); await click(text.save); expect(store.getState().settings.editorFontSize).toBe(13); expect(port.editors.every(editor => editor.options.fontSize === 13 && editor.options.lineHeight === 23)).toBe(true); expect(saved).toHaveLength(1);
 });
 
 it('保存迟到回包不覆盖期间新SQL/新标签或活动标签，不回写打开弹窗时的settings', async () => {
   await mount(); const gate = pending(); reply = (_input, count) => count === 1 ? gate.promise : undefined;
-  await click(text.entry); await draft('18'); await click(text.save); expect(document.body.textContent).toContain(text.saving);
+  await click(uiCommandLabels['editor-font']); await draft('18'); await click(text.save); expect(document.body.textContent).toContain(text.saving);
   await act(async () => { store.getState().updateTab('q', { sql: 'select 保存期间新正文' }); store.getState().openTab({ id: 'new', kind: 'query', title: '新标签', connectionId: 'c', sql: 'select 新标签' }); });
   const latest = store.getState().settings, before = port.editors.map(editorState); await act(async () => gate.yes());
   expect(store.getState().settings).toBe(latest); expect(store.getState().settings.activeTabId).toBe('new'); expect(store.getState().settings.tabs[0].sql).toBe('select 保存期间新正文'); expect(port.editors.map(editorState)).toEqual(before); expect(saved.at(-1).activeTabId).toBe('new'); expect(saved.at(-1).tabs[0].sql).toBe('select 保存期间新正文');
@@ -98,12 +109,12 @@ it('保存迟到回包不覆盖期间新SQL/新标签或活动标签，不回写
 
 it('关闭重开的新弹窗不被旧保存回包关闭或重置草稿', async () => {
   await mount(); const gate = pending(); reply = (_input, count) => count === 1 ? gate.promise : undefined;
-  await click(text.entry); await draft('18'); await click(text.save); await click(text.cancel); await click(text.entry); await draft('25');
+  await click(uiCommandLabels['editor-font']); await draft('18'); await click(text.save); await click(text.cancel); await click(uiCommandLabels['editor-font']); await draft('25');
   await act(async () => gate.yes()); expect(document.querySelector('[role="dialog"]')).not.toBeNull(); expect(document.querySelector(`input[aria-label="${text.field}"]`)!.value).toBe('25'); expect(store.getState().settings.editorFontSize).toBe(18); await click(text.cancel);
 });
 
 it('保存失败明确保留未持久提示，可重试，失败回包不复原旧工作区', async () => {
-  await mount(); reply = () => Promise.reject(Error('RAM保存失败')); await click(text.entry); await draft('22'); await click(text.save);
+  await mount(); reply = () => Promise.reject(Error('RAM保存失败')); await click(uiCommandLabels['editor-font']); await draft('22'); await click(text.save);
   expect(document.body.textContent).toContain(text.failed); expect(store.getState().settings.editorFontSize).toBe(22); expect(document.querySelector('[role="dialog"]')).not.toBeNull(); reply = () => {}; await click(text.save); expect(saved).toHaveLength(2); expect(document.querySelector('[role="dialog"]')).toBeNull();
 });
 
@@ -127,7 +138,7 @@ it('Suspense隐藏期间改字号，恢复原widget时只热更新最新字号�
 it('关闭同步撤销：取消/标题/Escape/保存成功通知前旧保存均失效，正常重开有新权限', async () => {
   const handler = (node: any) => node[Object.keys(node).find(key => key.startsWith('__reactProps$'))!].onClick as () => void;
   for (const mode of ['cancel','header','escape','saved']) {
-    await mount(24); await click(text.entry); await draft('18'); const oldSave = handler(button(text.save));
+    await mount(24); await click(uiCommandLabels['editor-font']); await draft('18'); const oldSave = handler(button(text.save));
     const changeAndDeliver = () => { store.getState().updateSettings({ editorFontSize: 28 }); oldSave(); };
     if (mode === 'saved') {
       // 正式App关闭方法先通知导航，再setState；在通知内投递旧保存，覆盖卸载尚未提交的窗口。
@@ -140,7 +151,7 @@ it('关闭同步撤销：取消/标题/Escape/保存成功通知前旧保存均�
     });
     expect(store.getState().settings.editorFontSize, mode).toBe(28);
     expect(saved.filter(settings => settings.editorFontSize === 18), mode).toHaveLength(mode === 'saved' ? 1 : 0);
-    await click(text.entry); expect(document.querySelector(`input[aria-label="${text.field}"]`)!.value).toBe('28');
+    await click(uiCommandLabels['editor-font']); expect(document.querySelector(`input[aria-label="${text.field}"]`)!.value).toBe('28');
     await draft('30'); await click(text.save); expect(store.getState().settings.editorFontSize, mode).toBe(30); expect(saved.at(-1).editorFontSize).toBe(30);
     await act(async () => root!.unmount()); root = undefined; reply = () => {}; await flush(); document.body.textContent = ''; invalidate.mockReset();
   }

@@ -63,9 +63,9 @@ function register(): void {
     /** 显式UI执行一次，原Main回包、任务与可见网格均须完成。 */
     async function execute(): Promise<QueryOutcome> {
       const before = (await step(audit)).calls.filter(call => call.command === 'query.execute').length;
-      await step(() => query().getByRole('button', { name: '执行全部', exact: true }).click());
+      await step(async () => (await navigationMenuItem(query(), { name: '执行全部', exact: true })).click());
       await step(() => expect.poll(async () => (await audit()).calls.filter(call => call.command === 'query.execute').length).toBe(before + 1));
-      await step(() => expect(query().getByRole('button', { name: '停止', exact: true })).toBeDisabled());
+      await step(async () => expect((await navigationMenuItem(query(), { name: '停止', exact: true }))).toBeDisabled());
       await step(() => expect(query().locator('.error-box')).toHaveCount(0));
       const calls = (await step(audit)).calls.filter(call => call.command === 'query.execute'), last = calls.at(-1)!;
       expect(last.ok).toBe(true); const result = last.result as QueryOutcome; expect(result.failure).toBeUndefined(); expect(result.scriptReport?.errors ?? []).toEqual([]); return result;
@@ -163,19 +163,19 @@ function register(): void {
       const pending = async () => { resourceNames(); const [rows] = await step(() => observer!.query<import('mysql2/promise').RowDataPacket[]>(`SELECT COUNT(*) AS n FROM \`${a}\`.subject WHERE id=19`)); return Number(rows[0].n); };
       expect(await pending()).toBe(0);
       // 已应用筛选及降序真实作用于原四行结果，切库后不能重发SQL或重置整理。
-      await step(() => query().getByRole('button', { name: filterText.open, exact: true }).click()); const panel = query().getByRole('region', { name: filterText.title, exact: true });
-      await step(() => panel.getByRole('button', { name: filterText.add, exact: true }).click());
-      await step(() => panel.getByRole('combobox', { name: filterText.column + ' 1', exact: true }).selectOption({ index: 0 })); await step(() => panel.getByRole('combobox', { name: filterText.operator + ' 1', exact: true }).selectOption('lt')); await step(() => panel.getByRole('textbox', { name: filterText.input + ' 1', exact: true }).fill('19')); await step(() => panel.getByRole('button', { name: filterText.apply, exact: true }).click());
+      await step(async () => (await navigationMenuItem(query(), { name: filterText.open, exact: true })).click()); const panel = query().getByRole('region', { name: filterText.title, exact: true });
+      await step(async () => (await navigationMenuItem(panel, { name: filterText.add, exact: true })).click());
+      await step(() => panel.getByRole('combobox', { name: filterText.column + ' 1', exact: true }).selectOption({ index: 0 })); await step(() => panel.getByRole('combobox', { name: filterText.operator + ' 1', exact: true }).selectOption('lt')); await step(() => panel.getByRole('textbox', { name: filterText.input + ' 1', exact: true }).fill('19')); await step(async () => (await navigationMenuItem(panel, { name: filterText.apply, exact: true })).click());
       const idHead = query().locator('.result-body [role="columnheader"]:has(.column-type)').nth(0); await step(() => idHead.click()); await step(() => idHead.click());
       await step(() => expect.poll(async () => (await view()).ids).toEqual(['3', '2', '1']));
       await step(() => editor().focus()); await step(() => page.keyboard.press('Control+End')); await step(() => page.keyboard.insertText(suffix)); await step(() => page.keyboard.press('Control+Home')); await step(() => page.keyboard.press('Shift+ArrowRight')); await step(() => page.keyboard.press('Shift+ArrowRight'));
       const beforeModel = await model(), beforeView = await view(), beforeLedger = await ledger(); expect(beforeModel.value).toBe(originalSql); expect(beforeView.filter).toContain(filterText.counts(4, 3));
-      await step(() => query().getByRole('button', { name: text.open, exact: true }).click()); await step(() => dialog().getByRole('combobox', { name: text.database, exact: true }).selectOption(b)); await step(() => dialog().getByRole('button', { name: text.close, exact: true }).click());
+      await step(async () => (await navigationMenuItem(query(), { name: text.open, exact: true })).click()); await step(() => dialog().getByRole('combobox', { name: text.database, exact: true }).selectOption(b)); await step(async () => (await navigationMenuItem(dialog(), { name: text.close, exact: true })).click());
       await step(() => expect(dialog()).toBeHidden()); expect((await step(audit)).switches).toBe(0); expect(await model()).toEqual(beforeModel); expect(await view()).toEqual(beforeView); expect((await ledger()).history).toEqual(beforeLedger.history);
       expect((await originalQuery(diagnosticSql)).results[0].rows).toEqual(beforeFacts);
       const beforeSwitchLedger = await ledger(), beforeSwitchCalls = (await step(audit)).calls.filter(call => call.command === 'query.execute').length;
-      await step(() => query().getByRole('button', { name: text.open, exact: true }).click()); await step(() => dialog().getByRole('combobox', { name: text.database, exact: true }).selectOption(b)); await step(() => dialog().getByRole('button', { name: text.confirm, exact: true }).click());
-      await step(() => expect(dialog().getByRole('status')).toHaveText(text.completed + b)); await step(() => dialog().getByRole('button', { name: text.close, exact: true }).click()); await step(() => expect(dialog()).toBeHidden());
+      await step(async () => (await navigationMenuItem(query(), { name: text.open, exact: true })).click()); await step(() => dialog().getByRole('combobox', { name: text.database, exact: true }).selectOption(b)); await step(async () => (await navigationMenuItem(dialog(), { name: text.confirm, exact: true })).click());
+      await step(() => expect(dialog().getByRole('status')).toHaveText(text.completed + b)); await step(async () => (await navigationMenuItem(dialog(), { name: text.close, exact: true })).click()); await step(() => expect(dialog()).toBeHidden());
       const switched = await step(audit), call = switched.calls.filter(call => call.command === 'query.databaseSwitch'); expect(call).toHaveLength(1); expect(call[0].ok).toBe(true);
       expect(call[0].input).toMatchObject({ sessionId: session, database: b, expectedContext: { state: 'known', database: a } });
       const confirmed = call[0].result as SwitchOutput; expect(confirmed).toMatchObject({ sessionId: session, database: b, unchanged: false, transactionKnown: true, transactionOpen: true, completion: { database: b, databaseKnown: true, broken: false, busy: false } }); expect((call[0].input as { taskId: string }).taskId).toBe(confirmed.taskId);
@@ -192,7 +192,7 @@ function register(): void {
       await step(() => expect(page.locator('.suggest-widget.visible')).toContainText('b_only')); await step(() => expect(page.locator('.suggest-widget.visible')).not.toContainText('a_only'));
       const completion = (await step(audit)).calls.filter(call => call.command === 'metadata.completion' && (call.input as { kind?: string; database?: string; table?: string }).kind === 'columns' && (call.input as { database?: string }).database === b && (call.input as { table?: string }).table === 'subject'); expect(completion.length).toBeGreaterThan(0);
       await step(() => page.keyboard.press('Escape')); await write(sql); const bResult = await execute(); expect(bResult.results[0].rows.map(row => row.c1)).toEqual(['B-one', 'B-two', 'B-three']); expect(bResult.results[0].rows.every(row => String(row.c2) === connectionId && row.c3 === b)).toBe(true);
-      await step(() => query().getByRole('button', { name: '回滚', exact: true }).click()); await step(() => expect(query().getByRole('button', { name: '回滚', exact: true })).toBeDisabled());
+      await step(async () => (await navigationMenuItem(query(), { name: '回滚', exact: true })).click()); await step(async () => expect((await navigationMenuItem(query(), { name: '回滚', exact: true }))).toBeDisabled());
       const rolled = (await originalQuery(diagnosticSql)).results[0].rows; expect(rolled).toHaveLength(1); expect(rolled[0]).toMatchObject({ c0: beforeFacts[0].c0, c1: b, c2: 73 }); expect(String(rolled[0].c3)).toBe('0'); expect(await pending()).toBe(0);
       await write(originalSql); await step(() => expect.poll(async () => (await settings()).tabs.find(tab => tab.id === tabId)).toMatchObject({ sql: originalSql, databaseContext: { state: 'known', database: b } }));
       const finalAudit = await step(audit); expect(finalAudit.switches).toBe(1); expect(finalAudit.forbidden).toBe(0); await step(() => expect.poll(async () => (await audit()).pending).toBe(0)); await restoreAudit();
@@ -217,3 +217,6 @@ function register(): void {
     } catch (error) { stopped = true; desktop.retainOwnedDesktopResources(info); throw error; }
   });
 }
+
+/** 原门进入具体动作后才加载真实菜单导航，不改变默认/列表阶段的资源边界。 */
+async function navigationMenuItem(...args: Parameters<typeof import('./navigation-menu')['navigationMenuItem']>): Promise<import('@playwright/test').Locator> { return (require('./navigation-menu') as typeof import('./navigation-menu')).navigationMenuItem(...args); }

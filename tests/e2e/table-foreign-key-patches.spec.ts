@@ -71,14 +71,14 @@ async function foreignKeyDatabase(body: (context: Context) => Promise<void>, inf
 async function openTable(context: Context, name: string) {
   const connection = page.locator('.connection-node').filter({ has: page.locator('.connection-row').getByText(context.connectionName, { exact: true }) });
   await connection.locator('.connection-row').hover(); await clickSidebarAction(connection, { name: '刷新连接', exact: true });
-  await connection.locator('.database-row').getByRole('button', { name: context.database, exact: true }).click();
+  await (await (await import('./navigation-menu')).navigationMenuItem(connection.locator('.database-row'), { name: context.database, exact: true })).click();
   await connection.locator('.object-row').getByText(name, { exact: true }).click();
   await expect(tablePage().locator('.context-bar')).toContainText(name); await expect(tablePage().locator('.loading-overlay')).toHaveCount(0); await expect(tablePage().locator(':scope > .error-box')).toHaveCount(0);
   return connection;
 }
-async function openDialog() { await tablePage().getByRole('button', { name: text.title, exact: true }).click(); await expect(dialog().getByRole('button', { name: text.read, exact: true })).toBeEnabled({ timeout: 30000 }); }
-async function edit(name: string) { await dialog().getByRole('button', { name: `编辑外键差异 ${name}`, exact: true }).click(); await expect(dialog().locator('.foreign-key-patch-editor')).toBeVisible(); }
-async function save() { await dialog().getByRole('button', { name: text.rowSave, exact: true }).click(); await expect(dialog().locator('.foreign-key-patch-editor')).toHaveCount(0); }
+async function openDialog() { await (await (await import('./navigation-menu')).navigationMenuItem(tablePage(), { name: text.title, exact: true })).click(); await expect(dialog().getByRole('button', { name: text.read, exact: true })).toBeEnabled({ timeout: 30000 }); }
+async function edit(name: string) { await (await (await import('./navigation-menu')).navigationMenuItem(dialog(), { name: `编辑外键差异 ${name}`, exact: true })).click(); await expect(dialog().locator('.foreign-key-patch-editor')).toBeVisible(); }
+async function save() { await (await (await import('./navigation-menu')).navigationMenuItem(dialog(), { name: text.rowSave, exact: true })).click(); await expect(dialog().locator('.foreign-key-patch-editor')).toHaveCount(0); }
 /** 引用只从当前真实选项取得，不构造或解析服务端 opaque refs。 */
 async function selectColumn(side: '子' | '父', position: number, name: string) {
   const select = dialog().getByRole('combobox', { name: `${side}表字段 ${position}`, exact: true });
@@ -86,12 +86,12 @@ async function selectColumn(side: '子' | '父', position: number, name: string)
   if (!value) throw new Error('缺少真实字段选项'); await select.selectOption(value);
 }
 async function preview() {
-  await dialog().getByRole('button', { name: text.preview, exact: true }).click(); await expect(dialog().getByRole('heading', { name: text.fixedSql, exact: true })).toBeVisible({ timeout: 30000 });
+  await (await (await import('./navigation-menu')).navigationMenuItem(dialog(), { name: text.preview, exact: true })).click(); await expect(dialog().getByRole('heading', { name: text.fixedSql, exact: true })).toBeVisible({ timeout: 30000 });
   for (const checkbox of await dialog().getByRole('checkbox').all()) await checkbox.check();
   await expect(dialog().getByRole('button', { name: text.apply, exact: true })).toBeEnabled();
 }
-async function apply() { await dialog().getByRole('button', { name: text.apply, exact: true }).click(); await expect(dialog().getByRole('status')).toContainText(text.succeeded, { timeout: 30000 }); }
-async function confirmDiscard() { await dialog().getByRole('alertdialog', { name: text.confirmTitle }).getByRole('button', { name: text.confirmContinue, exact: true }).click(); }
+async function apply() { await (await (await import('./navigation-menu')).navigationMenuItem(dialog(), { name: text.apply, exact: true })).click(); await expect(dialog().getByRole('status')).toContainText(text.succeeded, { timeout: 30000 }); }
+async function confirmDiscard() { await (await (await import('./navigation-menu')).navigationMenuItem(dialog().getByRole('alertdialog', { name: text.confirmTitle }), { name: text.confirmContinue, exact: true })).click(); }
 /** 建立普通完整支持键，避免隐式创建索引掩盖产品行为。 */
 async function simpleTables(context: Context, constraint = 'fk_old') {
   await context.observer.query(`CREATE TABLE ${qualified(context.database, 'parent')}(id INT NOT NULL,note VARCHAR(40),PRIMARY KEY(id)) ENGINE=InnoDB ROW_FORMAT=DYNAMIC`);
@@ -127,7 +127,7 @@ async function restoreGate() { await desktop.evaluate(() => { const current = gl
 async function cancelHeldResponse(kind: 'snapshotId' | 'previewToken') {
   await expect.poll(() => desktop.evaluate(() => (globalThis as GateGlobal).__foreignKeyGate?.entered)).toBe(true);
   const result = await desktop.evaluate(() => (globalThis as GateGlobal).__foreignKeyGate?.response); expect(result?.ok).toBe(true); expect(result?.result?.[kind]).toBeTruthy();
-  await dialog().getByRole('button', { name: text.cancel, exact: true }).click(); await expect(dialog().getByRole('button', { name: text.read, exact: true })).toBeDisabled();
+  await (await (await import('./navigation-menu')).navigationMenuItem(dialog(), { name: text.cancel, exact: true })).click(); await expect(dialog().getByRole('button', { name: text.read, exact: true })).toBeDisabled();
   await desktop.evaluate(() => (globalThis as GateGlobal).__foreignKeyGate?.release());
   await expect(dialog().getByRole('button', { name: text.read, exact: true })).toBeEnabled({ timeout: 15000 });
   await expect.poll(() => desktop.evaluate((_, { key, token }) => (globalThis as GateGlobal).__foreignKeyGate?.releases.filter(row => row.ok && row.input[key] === token).length, { key: kind, token: result!.result![kind] })).toBe(1);
@@ -147,7 +147,7 @@ test.describe('外键差异：真实 Electron 与隔离数据库', () => {
     await foreignKeyDatabase(async context => {
       await simpleTables(context); const original = await ddl(context, 'child'); const connection = await openTable(context, 'child');
       const row = connection.locator('.object-row').filter({ has: page.getByText('child', { exact: true }) }); await row.hover(); await clickSidebarAction(row, { name: `${text.title} child`, exact: true });
-      await expect(dialog().getByRole('button', { name: '编辑外键差异 fk_old', exact: true })).toBeEnabled({ timeout: 30000 }); await dialog().getByRole('button', { name: text.close, exact: true }).click(); await openDialog();
+      await expect(dialog().getByRole('button', { name: '编辑外键差异 fk_old', exact: true })).toBeEnabled({ timeout: 30000 }); await (await (await import('./navigation-menu')).navigationMenuItem(dialog(), { name: text.close, exact: true })).click(); await openDialog();
       await edit('fk_old'); await dialog().getByRole('textbox', { name: text.name, exact: true }).fill('fk_new'); await save(); await preview(); expect(await ddl(context, 'child')).toBe(original);
       await expect(dialog().locator('.monaco-editor .view-lines')).toContainText('DROP FOREIGN KEY'); await expect(dialog().locator('.monaco-editor .view-lines')).toContainText('ADD CONSTRAINT');
       await dialog().locator('.monaco-editor').getByRole('textbox').focus(); await page.keyboard.press(`${modifier}+Enter`); await page.keyboard.press(`${modifier}+S`); expect(await applyTasks()).toHaveLength(0); expect(await ddl(context, 'child')).toBe(original);
@@ -163,13 +163,13 @@ test.describe('外键差异：真实 Electron 与隔离数据库', () => {
       await context.observer.query(`CREATE TABLE ${qualified(context.parentDatabase, 'other_parent')}(x INT NOT NULL,y INT NOT NULL,PRIMARY KEY(y,x)) ENGINE=InnoDB ROW_FORMAT=DYNAMIC`);
       await context.observer.query(`CREATE TABLE ${qualified(context.database, 'child')}(id INT PRIMARY KEY,a INT NULL,b INT NULL,KEY ab(a,b),KEY ba(b,a),CONSTRAINT fk_pair FOREIGN KEY(a,b) REFERENCES ${qualified(context.database, 'parent')}(a,b) ON UPDATE RESTRICT ON DELETE RESTRICT) ENGINE=InnoDB ROW_FORMAT=DYNAMIC`);
       await openTable(context, 'child'); await openDialog(); await edit('fk_pair'); await dialog().getByRole('textbox', { name: text.name, exact: true }).fill('discard_me'); await save();
-      await dialog().getByRole('textbox', { name: text.extraDatabase, exact: true }).fill(context.parentDatabase); await dialog().getByRole('textbox', { name: text.extraTable, exact: true }).fill('other_parent'); await dialog().getByRole('button', { name: text.loadParent, exact: true }).click();
-      await dialog().getByRole('button', { name: text.confirmCancel, exact: true }).click(); await edit('fk_pair'); await expect(dialog().getByRole('textbox', { name: text.name, exact: true })).toHaveValue('discard_me'); await dialog().getByRole('button', { name: text.editorCancel, exact: true }).click();
-      await dialog().getByRole('button', { name: text.loadParent, exact: true }).click(); await confirmDiscard(); await expect(dialog().getByRole('button', { name: text.read, exact: true })).toBeEnabled({ timeout: 30000 });
+      await dialog().getByRole('textbox', { name: text.extraDatabase, exact: true }).fill(context.parentDatabase); await dialog().getByRole('textbox', { name: text.extraTable, exact: true }).fill('other_parent'); await (await (await import('./navigation-menu')).navigationMenuItem(dialog(), { name: text.loadParent, exact: true })).click();
+      await (await (await import('./navigation-menu')).navigationMenuItem(dialog(), { name: text.confirmCancel, exact: true })).click(); await edit('fk_pair'); await expect(dialog().getByRole('textbox', { name: text.name, exact: true })).toHaveValue('discard_me'); await (await (await import('./navigation-menu')).navigationMenuItem(dialog(), { name: text.editorCancel, exact: true })).click();
+      await (await (await import('./navigation-menu')).navigationMenuItem(dialog(), { name: text.loadParent, exact: true })).click(); await confirmDiscard(); await expect(dialog().getByRole('button', { name: text.read, exact: true })).toBeEnabled({ timeout: 30000 });
       await edit('fk_pair'); await expect(dialog().getByRole('textbox', { name: text.name, exact: true })).toHaveValue('fk_pair'); await dialog().getByRole('combobox', { name: text.parent, exact: true }).selectOption({ label: `${context.parentDatabase} / other_parent` });
-      await selectColumn('父', 1, 'x'); await selectColumn('父', 2, 'y'); await dialog().getByRole('button', { name: '上移字段映射 2', exact: true }).click();
+      await selectColumn('父', 1, 'x'); await selectColumn('父', 2, 'y'); await (await (await import('./navigation-menu')).navigationMenuItem(dialog(), { name: '上移字段映射 2', exact: true })).click();
       await dialog().getByRole('combobox', { name: text.onDelete, exact: true }).selectOption('SET NULL'); await dialog().getByRole('combobox', { name: text.onUpdate, exact: true }).selectOption('CASCADE');
-      await dialog().getByRole('button', { name: text.rowSave, exact: true }).click(); await expect(dialog().locator('.error-box')).toContainText(text.sameName); expect(await applyTasks()).toHaveLength(0);
+      await (await (await import('./navigation-menu')).navigationMenuItem(dialog(), { name: text.rowSave, exact: true })).click(); await expect(dialog().locator('.error-box')).toContainText(text.sameName); expect(await applyTasks()).toHaveLength(0);
       await dialog().getByRole('textbox', { name: text.name, exact: true }).fill('fk_cross'); await save(); await preview(); await apply();
       const [pairs] = await context.observer.query<RowDataPacket[]>('SELECT COLUMN_NAME,REFERENCED_TABLE_SCHEMA,REFERENCED_TABLE_NAME,REFERENCED_COLUMN_NAME FROM information_schema.KEY_COLUMN_USAGE WHERE TABLE_SCHEMA=? AND TABLE_NAME=? AND CONSTRAINT_NAME=? ORDER BY ORDINAL_POSITION', [context.database, 'child', 'fk_cross']);
       expect(pairs.map(row => [row.COLUMN_NAME, row.REFERENCED_TABLE_SCHEMA, row.REFERENCED_TABLE_NAME, row.REFERENCED_COLUMN_NAME])).toEqual([['b', context.parentDatabase, 'other_parent', 'y'], ['a', context.parentDatabase, 'other_parent', 'x']]);
@@ -180,10 +180,10 @@ test.describe('外键差异：真实 Electron 与隔离数据库', () => {
   test('目标入口与父表 beforeApply 均保护未提交草稿且不丢值', async ({}, info) => {
     await foreignKeyDatabase(async context => {
       await simpleTables(context); await context.observer.query(`CREATE TABLE ${qualified(context.database, 'other_child')}(id INT PRIMARY KEY,parent_id INT,KEY support(parent_id),CONSTRAINT fk_other FOREIGN KEY(parent_id) REFERENCES ${qualified(context.database, 'parent')}(id)) ENGINE=InnoDB ROW_FORMAT=DYNAMIC`);
-      await openTable(context, 'child'); await dirtyNote('子表未提交'); await tablePage().getByRole('button', { name: text.title, exact: true }).click(); await expect(dialog()).toHaveCount(0); await expect(page.locator('.toast[role="alert"]')).toContainText(text.dataDirty);
+      await openTable(context, 'child'); await dirtyNote('子表未提交'); await (await (await import('./navigation-menu')).navigationMenuItem(tablePage(), { name: text.title, exact: true })).click(); await expect(dialog()).toHaveCount(0); await expect(page.locator('.toast[role="alert"]')).toContainText(text.dataDirty);
       await openTable(context, 'parent'); await dirtyNote('父表未提交'); await openTable(context, 'other_child'); await openDialog(); await edit('fk_other'); await dialog().getByRole('textbox', { name: text.name, exact: true }).fill('fk_blocked'); await save(); await preview();
-      const original = await ddl(context, 'other_child'); await dialog().getByRole('button', { name: text.apply, exact: true }).click(); await expect(dialog().locator('.error-box')).toContainText(text.dataDirty); await expect(dialog().getByRole('status')).toContainText(text.notSent); expect(await applyTasks()).toHaveLength(0); expect(await ddl(context, 'other_child')).toBe(original);
-      await dialog().getByRole('button', { name: text.close, exact: true }).click(); await confirmDiscard();
+      const original = await ddl(context, 'other_child'); await (await (await import('./navigation-menu')).navigationMenuItem(dialog(), { name: text.apply, exact: true })).click(); await expect(dialog().locator('.error-box')).toContainText(text.dataDirty); await expect(dialog().getByRole('status')).toContainText(text.notSent); expect(await applyTasks()).toHaveLength(0); expect(await ddl(context, 'other_child')).toBe(original);
+      await (await (await import('./navigation-menu')).navigationMenuItem(dialog(), { name: text.close, exact: true })).click(); await confirmDiscard();
       await page.locator('.tab-select').filter({ hasText: /^parent$/ }).click(); await expect(tablePage().getByRole('gridcell').filter({ hasText: '父表未提交' })).toBeVisible();
       await page.locator('.tab-select').filter({ hasText: /^child$/ }).click(); await expect(tablePage().getByRole('gridcell').filter({ hasText: '子表未提交' })).toBeVisible();
       const [rows] = await context.observer.query<RowDataPacket[]>(`SELECT note FROM ${qualified(context.database, 'parent')} UNION ALL SELECT note FROM ${qualified(context.database, 'child')}`); expect(rows.map(row => row.note)).toEqual(['parent-old', 'child-old']);
@@ -193,9 +193,9 @@ test.describe('外键差异：真实 Electron 与隔离数据库', () => {
   test('真实 get 与 preview 返回迟到时释放令牌，不生成可执行旧预览', async ({}, info) => {
     await foreignKeyDatabase(async context => {
       await simpleTables(context); await openTable(context, 'child'); const original = await ddl(context, 'child');
-      await installGate('schema.foreignKeys.get'); await tablePage().getByRole('button', { name: text.title, exact: true }).click(); await cancelHeldResponse('snapshotId');
-      await dialog().getByRole('button', { name: text.read, exact: true }).click(); await expect(dialog().getByRole('button', { name: '编辑外键差异 fk_old', exact: true })).toBeEnabled({ timeout: 30000 });
-      await edit('fk_old'); await dialog().getByRole('textbox', { name: text.name, exact: true }).fill('fk_late'); await save(); await installGate('schema.foreignKeys.preview'); await dialog().getByRole('button', { name: text.preview, exact: true }).click(); await cancelHeldResponse('previewToken'); expect(await ddl(context, 'child')).toBe(original);
+      await installGate('schema.foreignKeys.get'); await (await (await import('./navigation-menu')).navigationMenuItem(tablePage(), { name: text.title, exact: true })).click(); await cancelHeldResponse('snapshotId');
+      await (await (await import('./navigation-menu')).navigationMenuItem(dialog(), { name: text.read, exact: true })).click(); await expect(dialog().getByRole('button', { name: '编辑外键差异 fk_old', exact: true })).toBeEnabled({ timeout: 30000 });
+      await edit('fk_old'); await dialog().getByRole('textbox', { name: text.name, exact: true }).fill('fk_late'); await save(); await installGate('schema.foreignKeys.preview'); await (await (await import('./navigation-menu')).navigationMenuItem(dialog(), { name: text.preview, exact: true })).click(); await cancelHeldResponse('previewToken'); expect(await ddl(context, 'child')).toBe(original);
     }, info);
   });
 
@@ -208,17 +208,17 @@ test.describe('外键差异：真实 Electron 与隔离数据库', () => {
       await context.observer.query(`LOCK TABLES ${qualified(context.database, 'child')} READ`);
       let blockedId: string | undefined;
       try {
-        await dialog().getByRole('button', { name: text.apply, exact: true }).click();
+        await (await (await import('./navigation-menu')).navigationMenuItem(dialog(), { name: text.apply, exact: true })).click();
         await expect.poll(async () => { const [rows] = await context.observer.query<RowDataPacket[]>('SHOW FULL PROCESSLIST'); const blocked = rows.find(row => typeof row.Info === 'string' && row.Info.startsWith('ALTER TABLE') && row.Info.includes(context.database) && /metadata lock/i.test(String(row.State))); if (blocked) blockedId = String(blocked.Id); return !!blocked; }, { timeout: 20000 }).toBe(true);
-        await dialog().getByRole('button', { name: text.cancel, exact: true }).click(); await expect(dialog().getByRole('button', { name: text.read, exact: true })).toBeEnabled({ timeout: 20000 });
+        await (await (await import('./navigation-menu')).navigationMenuItem(dialog(), { name: text.cancel, exact: true })).click(); await expect(dialog().getByRole('button', { name: text.read, exact: true })).toBeEnabled({ timeout: 20000 });
         expect((await applyTasks()).map(task => task.status)).toEqual(['cancelled']);
         await expect.poll(async () => { const [rows] = await context.observer.query<RowDataPacket[]>('SHOW FULL PROCESSLIST'); return rows.some(row => String(row.Id) === blockedId); }).toBe(false);
       } finally { await context.observer.query('UNLOCK TABLES'); }
-      expect(await ddl(context, 'child')).toBe(original); await dialog().getByRole('button', { name: text.close, exact: true }).click(); await confirmDiscard();
+      expect(await ddl(context, 'child')).toBe(original); await (await (await import('./navigation-menu')).navigationMenuItem(dialog(), { name: text.close, exact: true })).click(); await confirmDiscard();
       await page.locator('.tab-select').filter({ hasText: queryTab.trim() }).click(); await expect(page.locator('.query-tab:visible .tab-status')).toContainText('事务进行中');
       await executeSql('SELECT v FROM local_probe'); await expect(page.locator('.query-tab:visible').getByRole('gridcell').filter({ hasText: '保留临时表' })).toBeVisible();
       const [before] = await context.observer.query<RowDataPacket[]>(`SELECT COUNT(*) AS n FROM ${qualified(context.database, 'transaction_probe')}`); expect(String(before[0].n)).toBe('0');
-      await page.locator('.query-tab:visible').getByRole('button', { name: '回滚', exact: true }).click(); await expect(page.locator('.query-tab:visible .tab-status')).not.toContainText('事务进行中');
+      await (await (await import('./navigation-menu')).navigationMenuItem(page.locator('.query-tab:visible'), { name: '回滚', exact: true })).click(); await expect(page.locator('.query-tab:visible .tab-status')).not.toContainText('事务进行中');
       const [after] = await context.observer.query<RowDataPacket[]>(`SELECT COUNT(*) AS n FROM ${qualified(context.database, 'transaction_probe')}`); expect(String(after[0].n)).toBe('0');
     }, info);
   });
@@ -237,9 +237,9 @@ test.describe('外键差异：真实 Electron 与隔离数据库', () => {
     await foreignKeyDatabase(async context => {
       await context.observer.query(`CREATE TABLE ${qualified(context.database, 'self_child')}(id INT NOT NULL,parent_id INT NULL,note VARCHAR(40),PRIMARY KEY(id),KEY support(parent_id)) ENGINE=InnoDB ROW_FORMAT=DYNAMIC`);
       await context.observer.query(`INSERT INTO ${qualified(context.database, 'self_child')} VALUES(1,NULL,'根'),(2,1,'子')`); await openTable(context, 'self_child'); const original = await ddl(context, 'self_child'); await openDialog();
-      await dialog().getByRole('button', { name: text.add, exact: true }).click(); await dialog().getByRole('textbox', { name: text.name, exact: true }).fill('fk_self'); await dialog().getByRole('combobox', { name: text.parent, exact: true }).selectOption({ label: `${context.database} / self_child` }); await selectColumn('子', 1, 'parent_id'); await selectColumn('父', 1, 'id'); await save(); await preview(); await apply();
-      expect(await ddl(context, 'self_child')).toContain('CONSTRAINT `fk_self`'); await dialog().getByRole('button', { name: text.read, exact: true }).click(); await expect(dialog().getByRole('button', { name: '标记删除外键 fk_self', exact: true })).toBeEnabled({ timeout: 30000 });
-      await dialog().getByRole('button', { name: '标记删除外键 fk_self', exact: true }).click(); await confirmDiscard(); await preview(); await apply(); expect(await ddl(context, 'self_child')).toBe(original);
+      await (await (await import('./navigation-menu')).navigationMenuItem(dialog(), { name: text.add, exact: true })).click(); await dialog().getByRole('textbox', { name: text.name, exact: true }).fill('fk_self'); await dialog().getByRole('combobox', { name: text.parent, exact: true }).selectOption({ label: `${context.database} / self_child` }); await selectColumn('子', 1, 'parent_id'); await selectColumn('父', 1, 'id'); await save(); await preview(); await apply();
+      expect(await ddl(context, 'self_child')).toContain('CONSTRAINT `fk_self`'); await (await (await import('./navigation-menu')).navigationMenuItem(dialog(), { name: text.read, exact: true })).click(); await expect(dialog().getByRole('button', { name: '标记删除外键 fk_self', exact: true })).toBeEnabled({ timeout: 30000 });
+      await (await (await import('./navigation-menu')).navigationMenuItem(dialog(), { name: '标记删除外键 fk_self', exact: true })).click(); await confirmDiscard(); await preview(); await apply(); expect(await ddl(context, 'self_child')).toBe(original);
       const [rows] = await context.observer.query<RowDataPacket[]>(`SELECT id,parent_id,note FROM ${qualified(context.database, 'self_child')} ORDER BY id`); expect(rows.map(row => [row.id, row.parent_id, row.note])).toEqual([[1, null, '根'], [2, 1, '子']]); expect(await applyTasks()).toHaveLength(2);
     }, info);
   });

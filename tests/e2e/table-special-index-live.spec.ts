@@ -45,12 +45,12 @@ async function openTable(context: LiveContext, name: string): Promise<void> {
   const connection = page.locator('.connection-node').filter({ has: page.getByRole('button', { name: context.connectionName, exact: true }) });
   await connection.getByRole('button', { name: context.connectionName, exact: true }).focus(); await clickSidebarAction(connection, { name: '刷新连接', exact: true });
   const object = connection.locator('.object-row').getByText(name, { exact: true });
-  if (!(await object.isVisible())) await connection.locator('.database-row').getByRole('button', { name: context.database, exact: true }).click();
+  if (!(await object.isVisible())) await (await (await import('./navigation-menu')).navigationMenuItem(connection.locator('.database-row'), { name: context.database, exact: true })).click();
   await expect(object).toBeVisible(); await object.click();
   await expect(tablePage().locator('.context-bar')).toContainText(name); await expect(tablePage().locator('.loading-overlay')).toHaveCount(0); await expect(tablePage().locator(':scope > .error-box')).toHaveCount(0);
 }
 async function openDialog(): Promise<void> {
-  await tablePage().getByRole('button', { name: text.title, exact: true }).click(); await expect(dialog().getByRole('button', { name: text.add, exact: true })).toBeEnabled();
+  await (await (await import('./navigation-menu')).navigationMenuItem(tablePage(), { name: text.title, exact: true })).click(); await expect(dialog().getByRole('button', { name: text.add, exact: true })).toBeEnabled();
 }
 /** 从真实字段选项取服务器引用；不在测试中制造columnRef。 */
 function field(position: number): Locator { return dialog().getByRole('combobox', { name: `索引字段 ${position}`, exact: true }); }
@@ -73,7 +73,7 @@ async function data(context: LiveContext, table: string): Promise<RowDataPacket[
 /** 预览前后独立查结构与数据，且实际apply调用及任务数量为预期值；风险确认逐项验证。 */
 async function previewAndConfirm(context: LiveContext, table: string, expectedApplyCount: number, expectedSql: RegExp): Promise<void> {
   const before = await ddl(context, table), values = await data(context, table);
-  await dialog().getByRole('button', { name: text.preview, exact: true }).click(); await expect(dialog().getByRole('heading', { name: text.fixedSql, exact: true })).toBeVisible();
+  await (await (await import('./navigation-menu')).navigationMenuItem(dialog(), { name: text.preview, exact: true })).click(); await expect(dialog().getByRole('heading', { name: text.fixedSql, exact: true })).toBeVisible();
   // 标题先于Monaco文本渲染；沿用默认断言期限等待真实DOM，不注入模型或延长超时。
   const sqlLines = dialog().locator('.monaco-editor .view-lines'); await expect(sqlLines).toContainText(expectedSql);
   const sql = (await sqlLines.innerText()).replace(/\u00a0/g, ' ');
@@ -113,8 +113,8 @@ test.describe('特殊索引真实产品面板验收准备', () => {
       await openTable(context, table); await openDialog();
       const readonly = dialog().locator('.index-patch-item[aria-label="readonly_generated"]'); await expect(readonly).toContainText('生成');
       await expect(readonly.getByRole('button', { name: '编辑索引差异 readonly_generated', exact: true })).toBeDisabled(); await expect(readonly.getByRole('button', { name: '标记删除索引 readonly_generated', exact: true })).toBeDisabled();
-      await dialog().getByRole('button', { name: text.add, exact: true }).click(); await selectField(1, 'b'); await dialog().getByRole('spinbutton', { name: '索引前缀长度 1', exact: true }).fill('3');
-      await dialog().getByRole('button', { name: text.addPart, exact: true }).click(); await selectField(2, 'a'); await dialog().getByRole('spinbutton', { name: '索引前缀长度 2', exact: true }).fill('8');
+      await (await (await import('./navigation-menu')).navigationMenuItem(dialog(), { name: text.add, exact: true })).click(); await selectField(1, 'b'); await dialog().getByRole('spinbutton', { name: '索引前缀长度 1', exact: true }).fill('3');
+      await (await (await import('./navigation-menu')).navigationMenuItem(dialog(), { name: text.addPart, exact: true })).click(); await selectField(2, 'a'); await dialog().getByRole('spinbutton', { name: '索引前缀长度 2', exact: true }).fill('8');
       const kinds = dialog().getByRole('combobox', { name: text.kind, exact: true });
       await kinds.selectOption('spatial'); await expect(field(2)).toHaveCount(0); await expect(dialog().getByRole('textbox', { name: text.method, exact: true })).toHaveValue('RTREE');
       await expect(field(1)).toHaveValue((await option(1, 'g').getAttribute('value'))!);
@@ -125,22 +125,22 @@ test.describe('特殊索引真实产品面板验收准备', () => {
       await expectOptionDisabled(1, 'a', false); await expectOptionDisabled(1, 'b', false); for (const column of ['g', 'g_nullable', 'calc', 'id']) await expectOptionDisabled(1, column, true);
       await expect(dialog().getByRole('spinbutton', { name: '索引前缀长度 1', exact: true })).toHaveValue(''); await expect(dialog().getByRole('spinbutton', { name: '索引前缀长度 1', exact: true })).toBeDisabled(); await expect(dialog().getByRole('combobox', { name: '索引方向 1', exact: true })).toBeDisabled();
       if (kind === 'spatial') await kinds.selectOption(kind);
-      else { await dialog().getByRole('button', { name: text.addPart, exact: true }).click(); await selectField(2, 'b'); }
+      else { await (await (await import('./navigation-menu')).navigationMenuItem(dialog(), { name: text.addPart, exact: true })).click(); await selectField(2, 'b'); }
       await dialog().getByRole('textbox', { name: text.name, exact: true }).fill(name); await dialog().getByRole('textbox', { name: text.comment, exact: true }).fill('面板特殊索引');
-      await dialog().getByRole('button', { name: text.rowSave, exact: true }).click(); await expect(dialog().locator('.index-patch-editor')).toHaveCount(0);
+      await (await (await import('./navigation-menu')).navigationMenuItem(dialog(), { name: text.rowSave, exact: true })).click(); await expect(dialog().locator('.index-patch-editor')).toHaveCount(0);
       await previewAndConfirm(context, table, 0, kind === 'fulltext' ? /ADD\s+FULLTEXT\s+INDEX/ : /ADD\s+SPATIAL\s+INDEX/); await page.screenshot({ path: info.outputPath(`${kind}-real-panel-preview.png`) });
       await dialog().getByRole('button', { name: text.apply, exact: true }).dblclick(); await expect(dialog().getByRole('status')).toContainText(text.succeeded, { timeout: 30000 });
       expect(await applyCount()).toBe(1); expect(await applyTasks()).toBe(1); await expect(dialog().getByRole('button', { name: text.apply, exact: true })).toBeDisabled(); await expect(dialog()).toContainText(text.consumed);
       const actual = (await indexes(context, table)).filter(row => row.Key_name === name).sort((a, b) => Number(a.Seq_in_index) - Number(b.Seq_in_index));
       expect(actual.map(row => row.Column_name)).toEqual(kind === 'fulltext' ? ['a', 'b'] : ['g']); for (const row of actual) { expect(String(row.Non_unique)).toBe('1'); expect(row.Index_type).toBe(kind === 'fulltext' ? 'FULLTEXT' : 'SPATIAL'); expect(row.Index_comment).toBe('面板特殊索引'); }
       expect(await data(context, table)).toEqual(originalData);
-      await dialog().getByRole('button', { name: text.close, exact: true }).click(); await openDialog();
+      await (await (await import('./navigation-menu')).navigationMenuItem(dialog(), { name: text.close, exact: true })).click(); await openDialog();
       const added = dialog().locator(`.index-patch-item[aria-label="${name}"]`); await expect(added.getByRole('button', { name: `编辑索引差异 ${name}`, exact: true })).toBeDisabled(); await expect(added).toContainText(/不改名|不能改名/);
       await added.getByText(text.original, { exact: true }).click(); await expect(added.locator('pre')).toContainText(kind === 'fulltext' ? 'FULLTEXT KEY' : 'SPATIAL KEY');
-      await acceptNativeConfirmation(); await added.getByRole('button', { name: `标记删除索引 ${name}`, exact: true }).click();
-      await previewAndConfirm(context, table, 1, /DROP\s+INDEX/); await dialog().getByRole('button', { name: text.apply, exact: true }).click(); await expect(dialog().getByRole('status')).toContainText(text.succeeded, { timeout: 30000 });
+      await acceptNativeConfirmation(); await (await (await import('./navigation-menu')).navigationMenuItem(added, { name: `标记删除索引 ${name}`, exact: true })).click();
+      await previewAndConfirm(context, table, 1, /DROP\s+INDEX/); await (await (await import('./navigation-menu')).navigationMenuItem(dialog(), { name: text.apply, exact: true })).click(); await expect(dialog().getByRole('status')).toContainText(text.succeeded, { timeout: 30000 });
       expect(await applyCount()).toBe(2); expect(await applyTasks()).toBe(2); expect((await indexes(context, table)).map(row => row.Key_name).sort()).toEqual(originalIndexes); expect(await data(context, table)).toEqual(originalData);
-      await dialog().getByRole('button', { name: text.close, exact: true }).click();
+      await (await (await import('./navigation-menu')).navigationMenuItem(dialog(), { name: text.close, exact: true })).click();
     }, info);
   });
 });

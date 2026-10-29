@@ -100,8 +100,8 @@ async function seedFavorites(old: LiveContext) {
 async function chooseCurrent(context: LiveContext) {
   const connection = page.locator('.connection-node').filter({ has: page.locator('.connection-row').getByRole('button', { name: context.connectionName, exact: true }) });
   const database = connection.locator('.database-row').filter({ has: page.getByRole('button', { name: context.database, exact: true }) });
-  if (!await database.isVisible()) await connection.locator('.connection-row').getByRole('button', { name: context.connectionName, exact: true }).click();
-  await expect(database).toBeVisible({ timeout: 20000 }); await database.getByRole('button', { name: context.database, exact: true }).click();
+  if (!await database.isVisible()) await (await (await import('./navigation-menu')).navigationMenuItem(connection.locator('.connection-row'), { name: context.connectionName, exact: true })).click();
+  await expect(database).toBeVisible({ timeout: 20000 }); await (await (await import('./navigation-menu')).navigationMenuItem(database, { name: context.database, exact: true })).click();
   await expect(database).toHaveClass(/active/); return database;
 }
 
@@ -137,7 +137,7 @@ test('双真实连接：旧表/只读定义成功及不存在对象失败不覆�
           const currentDatabase = await chooseCurrent(current), target = targets[item.target];
           const button = shelf().getByRole('button', { name: [/^打开对象：真实迟到表 ·/, /^打开对象：真实迟到定义 ·/, /^打开对象：真实不存在对象 ·/][item.target] });
           await hold(target); await button.click(); await nativeReply(item.target !== 2);
-          await page.locator('.app-commandbar').getByRole('button', { name: '新建查询', exact: true }).click();
+          await (await (await import('./navigation-menu')).navigationMenuItem(page.locator('.navigation-toolbar'), { name: '新建查询', exact: true })).click();
           await expect(queryForm()).toBeVisible();
           await expect(queryForm().getByRole('combobox', { name: '数据库连接', exact: true })).toHaveValue(current.connectionId);
           await expect(queryForm().getByRole('combobox', { name: '默认数据库（可选）', exact: true })).toHaveValue(current.database);
@@ -146,7 +146,7 @@ test('双真实连接：旧表/只读定义成功及不存在对象失败不覆�
           await expect(queryForm().getByRole('alert')).toHaveCount(0);
           let result = '';
           if (item.active) {
-            await queryForm().getByRole('button', { name: '打开查询', exact: true }).click(); await expect(queryForm()).toBeHidden(); tabCount++;
+            await (await (await import('./navigation-menu')).navigationMenuItem(queryForm(), { name: '打开查询', exact: true })).click(); await expect(queryForm()).toBeHidden(); tabCount++;
             await executeSql(`SELECT note,DATABASE() AS intent_database,CONNECTION_ID() AS intent_session,'主动查询${index}' AS intent_marker FROM intent_current WHERE id=1`);
             result = await readRenderedResult(text => text.includes('当前真实查询结果') && text.includes(current.database) && text.includes('主动查询' + index));
             // 结果网格先于协议缓存回填和400ms持久化完成；明确等待真实会话面包屑的预期库。
@@ -164,13 +164,13 @@ test('双真实连接：旧表/只读定义成功及不存在对象失败不覆�
             await expect(page.getByRole('dialog')).toHaveCount(1); await expect(queryForm()).toBeVisible();
             await expect(queryForm().getByRole('combobox', { name: '数据库连接', exact: true })).toHaveValue(current.connectionId);
             await expect(queryForm().getByRole('combobox', { name: '默认数据库（可选）', exact: true })).toHaveValue(current.database);
-            await queryForm().getByRole('button', { name: '取消', exact: true }).click(); await expect(queryForm()).toBeHidden();
+            await (await (await import('./navigation-menu')).navigationMenuItem(queryForm(), { name: '取消', exact: true })).click(); await expect(queryForm()).toBeHidden();
           }
         }
 
         // 旧请求失效后新的真实表导航仍可成功；保留已有当前连接查询标签，不把它们替换掉。
         const beforeLatest = await savedTabs(tabCount, current);
-        await shelf().getByRole('button', { name: /^打开对象：真实迟到表 ·/ }).click();
+        await (await (await import('./navigation-menu')).navigationMenuItem(shelf(), { name: /^打开对象：真实迟到表 ·/ })).click();
         const table = page.locator('.table-tab:visible'); await expect(table).toBeVisible();
         await expect(table.locator('.context-bar')).toContainText(old.connectionName); await expect(table.getByRole('grid')).toContainText('旧目标真实原值', { timeout: 20000 });
         await expect(table.locator('.error-box')).toHaveCount(0);
@@ -178,16 +178,16 @@ test('双真实连接：旧表/只读定义成功及不存在对象失败不覆�
         expect(afterLatest.tabs.filter(tab => beforeLatest.tabs.some(previous => previous.id === tab.id))).toEqual(beforeLatest.tabs);
 
         // 最新真实过程链接读取原定义且保持只读，证明修复没有全局禁用导航或吞掉有效对象。
-        await page.locator('.app-commandbar').getByRole('button', { name: '粘贴对象链接', exact: true }).click();
+        await (await (await import('./navigation-menu')).navigationMenuItem(page.locator('.navigation-toolbar'), { name: '粘贴对象链接', exact: true })).click();
         const link = page.getByRole('dialog', { name: '粘贴对象链接', exact: true });
         await link.getByLabel('DBArk 对象链接', { exact: true }).fill(objectUri(targets[1]));
-        await link.getByRole('button', { name: '打开链接', exact: true }).click(); await expect(link).toBeHidden();
+        await (await (await import('./navigation-menu')).navigationMenuItem(link, { name: '打开链接', exact: true })).click(); await expect(link).toBeHidden();
         const definition = page.getByRole('dialog'); await expect(definition).toContainText('只读');
         await expect(definition.getByRole('button', { name: '取消', exact: true })).toBeEnabled({ timeout: 20000 });
         await expect(definition.locator('.monaco-editor .view-lines')).toContainText('PROCEDURE');
         await expect(definition.getByRole('button', { name: '执行 SQL', exact: true })).toHaveCount(0);
         await page.screenshot({ path: info.outputPath('query-intent-live-latest-definition.png') });
-        await definition.getByRole('button', { name: '取消', exact: true }).click(); await expect(definition).toHaveCount(0);
+        await (await (await import('./navigation-menu')).navigationMenuItem(definition, { name: '取消', exact: true })).click(); await expect(definition).toHaveCount(0);
         expect(await desktop.evaluate(() => (globalThis as ProbeRoot).__queryIntentLiveProbe?.resolves)).toBe(7);
         expect(pageErrors).toEqual([]);
       } finally {

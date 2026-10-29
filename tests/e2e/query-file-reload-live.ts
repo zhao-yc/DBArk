@@ -41,20 +41,20 @@ export function registerQueryFileReloadUi(binding: Binding) {
       let identity = await step(() => files.create(files.paths.source, Buffer.from(initial)));
       await step(() => page.addInitScript(() => { self.MonacoEnvironment = { ...self.MonacoEnvironment, globalAPI: true }; }));
       await step(() => page.reload()); await step(() => expect(page.locator('.app-statusbar')).toBeVisible());
-      await step(() => page.locator('.app-commandbar').getByRole('button', { name: zh.common.newConnection, exact: true }).click());
+      await step(async () => (await navigationMenuItem(page.locator('.navigation-toolbar'), { name: zh.common.newConnection, exact: true }, () => binding.assertCurrent())).click());
       const connection = page.getByRole('dialog', { name: zh.common.newConnection, exact: true });
       for (const [label, value] of [[zh.connections.text006, '文件重载离线验收'], [zh.connections.text009, '127.0.0.1'], [zh.connections.text010, '1'], [zh.common.user, 'offline'], [zh.connections.text011, ''], [zh.connections.text012, '']]) await step(() => connection.getByLabel(label, { exact: true }).fill(value));
       await step(() => connection.getByRole('checkbox', { name: zh.connections.text016, exact: true }).uncheck());
-      await step(() => connection.getByRole('button', { name: zh.connections.text036, exact: true }).click()); await step(() => expect(connection).toBeHidden());
-      await step(() => page.locator('.app-commandbar').getByRole('button', { name: zh.common.newQuery, exact: true }).click());
+      await step(async () => (await navigationMenuItem(connection, { name: zh.connections.text036, exact: true }, () => binding.assertCurrent())).click()); await step(() => expect(connection).toBeHidden());
+      await step(async () => (await navigationMenuItem(page.locator('.navigation-toolbar'), { name: zh.common.newQuery, exact: true }, () => binding.assertCurrent())).click());
       const query = page.getByRole('dialog', { name: zh.common.newQuery, exact: true });
       await step(() => expect(query.locator('.error-box')).toContainText(/ECONNREFUSED|连接被拒绝|拒绝连接/i, { timeout: 15000 }));
-      await step(() => query.getByRole('button', { name: zh.app.text053, exact: true }).click()); await step(() => expect(query).toBeHidden());
+      await step(async () => (await navigationMenuItem(query, { name: zh.app.text053, exact: true }, () => binding.assertCurrent())).click()); await step(() => expect(query).toBeHidden());
       const nonce = randomUUID(); await step(() => installSqlFilesOpenAnswer(application, { nonce, path: files.paths.source }));
-      const tab = page.locator('.query-tab:visible'); await step(() => tab.getByRole('button', { name: text.open, exact: true }).click());
+      const tab = page.locator('.query-tab:visible'); await step(async () => (await navigationMenuItem(tab, { name: text.open, exact: true }, () => binding.assertCurrent())).click());
       const opening = page.getByRole('dialog', { name: text.open, exact: true });
       await step(() => opening.getByRole('combobox', { name: text.encoding, exact: true }).selectOption('utf8'));
-      await step(() => opening.getByRole('button', { name: text.openAction, exact: true }).click());
+      await step(async () => (await navigationMenuItem(opening, { name: text.openAction, exact: true }, () => binding.assertCurrent())).click());
       await step(() => expect(opening).toBeHidden()); expect(await step(() => finishSqlFilesOpenAnswer(application, nonce))).toEqual({ calls: 1, restored: true });
       await expect.poll(() => model().then(value => value.sql)).toBe(initial);
       const original = await model(), state = await settings(); expect(state.tabs).toHaveLength(2); const fileTab = state.tabs[1]; expect(fileTab.fileSourceBinding).toBeDefined();
@@ -73,24 +73,24 @@ export function registerQueryFileReloadUi(binding: Binding) {
       const replacement = await step(() => files.create(files.paths.replacement, Buffer.from(external)));
       identity = (await step(() => files.move(files.paths.replacement, files.paths.source, replacement, identity))).identity;
       const preview = page.getByRole('dialog', { name: reloadText.title, exact: true });
-      await step(() => tab.getByRole('button', { name: reloadText.check, exact: true }).click());
+      await step(async () => (await navigationMenuItem(tab, { name: reloadText.check, exact: true }, () => binding.assertCurrent())).click());
       await step(() => expect(preview).toContainText(reloadText.replaced)); await step(() => expect(preview).toContainText(reloadText.dirty));
-      await step(() => expect(preview.getByRole('button', { name: reloadText.confirm, exact: true })).toBeDisabled());
-      await step(() => preview.getByRole('button', { name: reloadText.cancel, exact: true }).click()); await step(() => expect(preview).toBeHidden()); await exact(draft, '\r\n', 1, false);
-      await step(() => tab.getByRole('button', { name: reloadText.check, exact: true }).click());
+      await step(async () => expect((await navigationMenuItem(preview, { name: reloadText.confirm, exact: true }, () => binding.assertCurrent()))).toBeDisabled());
+      await step(async () => (await navigationMenuItem(preview, { name: reloadText.cancel, exact: true }, () => binding.assertCurrent())).click()); await step(() => expect(preview).toBeHidden()); await exact(draft, '\r\n', 1, false);
+      await step(async () => (await navigationMenuItem(tab, { name: reloadText.check, exact: true }, () => binding.assertCurrent())).click());
       await step(() => preview.getByRole('checkbox', { name: reloadText.acknowledge, exact: true }).check());
-      await step(() => preview.getByRole('button', { name: reloadText.confirm, exact: true }).click()); await step(() => expect(preview).toBeHidden()); await exact(external, '\n', 2, true);
+      await step(async () => (await navigationMenuItem(preview, { name: reloadText.confirm, exact: true }, () => binding.assertCurrent())).click()); await step(() => expect(preview).toBeHidden()); await exact(external, '\n', 2, true);
       for (const [sql, eol] of [[draft.replaceAll('\r\n', '\n'), '\n'], [draft, '\r\n'], [initial, '\r\n']]) { await step(() => input.focus()); await step(() => page.keyboard.press(modifier + '+z')); await exact(sql, eol, 2, false); }
       for (const [sql, eol, clean] of [[draft, '\r\n', false], [draft.replaceAll('\r\n', '\n'), '\n', false], [external, '\n', true]] as const) { await step(() => input.focus()); await step(() => page.keyboard.press(redo)); await exact(sql, eol, 2, clean); }
       // 新预览建立后再次原子外改；确认必须拒绝，不能自动拿后一个版本替换草稿。
       const third = await step(() => files.create(files.paths.replacement, Buffer.from("SELECT 'third';\n")));
       identity = (await step(() => files.move(files.paths.replacement, files.paths.source, third, identity))).identity;
-      await step(() => tab.getByRole('button', { name: reloadText.check, exact: true }).click()); await step(() => expect(preview).toContainText(reloadText.replaced));
+      await step(async () => (await navigationMenuItem(tab, { name: reloadText.check, exact: true }, () => binding.assertCurrent())).click()); await step(() => expect(preview).toContainText(reloadText.replaced));
       const fourthBytes = Buffer.from("SELECT 'fourth';\n"), fourth = await step(() => files.create(files.paths.replacement, fourthBytes));
       identity = (await step(() => files.move(files.paths.replacement, files.paths.source, fourth, identity))).identity;
-      await step(() => preview.getByRole('checkbox', { name: reloadText.acknowledge, exact: true }).check()); await step(() => preview.getByRole('button', { name: reloadText.confirm, exact: true }).click());
+      await step(() => preview.getByRole('checkbox', { name: reloadText.acknowledge, exact: true }).check()); await step(async () => (await navigationMenuItem(preview, { name: reloadText.confirm, exact: true }, () => binding.assertCurrent())).click());
       const recovery = page.getByRole('dialog', { name: text.recovery, exact: true }); await step(() => expect(recovery).toContainText(reloadText.expired));
-      await step(() => recovery.getByRole('button', { name: zh.common.cancel, exact: true }).click()); await exact(external, '\n', 2, true);
+      await step(async () => (await navigationMenuItem(recovery, { name: zh.common.cancel, exact: true }, () => binding.assertCurrent())).click()); await exact(external, '\n', 2, true);
       const status = await step(() => page.evaluate(id => window.dbark.invoke('queryFileSources.status', { tabId: id }), fileTab.id));
       expect(status.state).toBe('bound'); if (status.state !== 'bound') throw Error('最终来源不明'); expect(status.binding.savedSqlDigest).toBe(digest(external));
       const tasks = await step(() => page.evaluate(() => window.dbark.invoke('tasks.list', {})));
@@ -106,3 +106,6 @@ export function registerQueryFileReloadUi(binding: Binding) {
     } catch (reason) { retainOwnedDesktopResources(info); throw reason; }
   });
 }
+
+/** 原门进入具体动作后才加载真实菜单导航，不改变默认/列表阶段的资源边界。 */
+async function navigationMenuItem(...args: Parameters<typeof import('./navigation-menu')['navigationMenuItem']>): Promise<import('@playwright/test').Locator> { return (require('./navigation-menu') as typeof import('./navigation-menu')).navigationMenuItem(...args); }

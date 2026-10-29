@@ -60,12 +60,12 @@ async function count(observer: Connection, database: string, condition = '1=1') 
 /** 选择格式和目标后仍需明确新执行确认，双协议确认相互独立。 */
 async function openExport(path?: string, format: 'json' | 'csv' | 'csv-zip' = 'json', ordinal = 1, protocol: 'text-strict' | 'binary-explicit' = 'text-strict') {
   await observeEvents(); await choosePath(path);
-  await query().getByRole('button', { name: '新执行并完整导出', exact: true }).click();
+  await (await navigationMenuItem(query(), { name: '新执行并完整导出', exact: true })).click();
   const modal = dialog(); await expect(modal).toBeVisible();
   await modal.getByRole('combobox', { name: '完整文件格式', exact: true }).selectOption(format);
   await modal.getByRole('combobox', { name: '执行协议', exact: true }).selectOption(protocol);
   if (format === 'csv') await modal.getByRole('textbox', { name: '行结果集序号', exact: true }).fill(String(ordinal));
-  await expect(modal.getByRole('button', { name: '确认新执行并导出', exact: true })).toBeDisabled();
+  await expect((await navigationMenuItem(modal, { name: '确认新执行并导出', exact: true }))).toBeDisabled();
   await modal.locator('.file-picker').click();
   if (path) await expect(modal.locator('.file-picker')).toContainText(basename(path));
   return modal;
@@ -76,9 +76,9 @@ async function start(modal: Locator, doubleClick = false) {
   await modal.getByRole('checkbox', { name: acknowledgement, exact: true }).check();
   const binary = modal.getByRole('checkbox', { name: binaryAcknowledgement, exact: true });
   if (await binary.count()) {
-    await expect(modal.getByRole('button', { name: '确认新执行并导出', exact: true })).toBeDisabled(); await binary.check();
+    await expect((await navigationMenuItem(modal, { name: '确认新执行并导出', exact: true }))).toBeDisabled(); await binary.check();
   }
-  const button = modal.getByRole('button', { name: '确认新执行并导出', exact: true });
+  const button = (await navigationMenuItem(modal, { name: '确认新执行并导出', exact: true }));
   if (doubleClick) await button.dblclick(); else await button.click();
   let taskId = '';
   await expect.poll(async () => {
@@ -96,7 +96,7 @@ async function finish(taskId: string, status: 'completed' | 'failed' | 'cancelle
   return page.evaluate(id => (window as StreamWindow).__q05StreamEvents?.filter(event => event.taskId === id).at(-1), taskId);
 }
 /** 从真实关闭按钮收起模态，不能以隐藏窗口替代任务资源收尾断言。 */
-async function closeExport() { await dialog().getByRole('button', { name: '关闭', exact: true }).click(); await expect(dialog()).toBeHidden(); }
+async function closeExport() { await (await navigationMenuItem(dialog(), { name: '关闭', exact: true })).click(); await expect(dialog()).toBeHidden(); }
 /** 用独立解析器读实际小型 JSON 文件，不读取应用内存中的预览替代。 */
 async function json(path: string): Promise<JsonDocument> { return JSON.parse(await readFile(path, 'utf8')); }
 /** 对任务、历史、工作区和真实 SQLite 字节同时检查参数值及展开 Hex。 */
@@ -142,7 +142,7 @@ test.describe('实库完整 SQL 流式导出', () => {
       const taskId = await start(modal, true), event = await finish(taskId); expect(event?.queryExport).toMatchObject({ statementsCompleted: 4, fileCommitted: true, rowsWritten: 2 });
       const files = await readQueryCsvZip(target), manifest = JSON.parse(files.get('manifest.json')!.toString('utf8')); expect(manifest.results.map((result: any) => result.kind)).toEqual(['status', 'rows', 'rows', 'rows']);
       expect(parseCsv(files.get('results/rows-001.csv')!)).toEqual([['same_name', 'same_name [2]'], ['11', '22']]); expect(parseCsv(files.get('results/rows-002.csv')!)).toEqual([['empty_value']]); expect(parseCsv(files.get('results/rows-003.csv')!)[1]).toEqual(['18446744073709551615', '\\N', 'base64:AAH/']);
-      expect(await count(observer, database)).toBe(1); const after = await executionIds(); expect(after.history.filter(id => !before.history.includes(id))).toHaveLength(1); await expect(modal.getByRole('button', { name: '确认新执行并导出', exact: true })).toBeDisabled(); await expect(modal).toContainText('results/rows-003.csv'); expect(await readdir(directory)).toEqual(['all.zip']); await page.screenshot({ path: testInfo.outputPath('multi-csv-zip-success.png') }); await closeExport();
+      expect(await count(observer, database)).toBe(1); const after = await executionIds(); expect(after.history.filter(id => !before.history.includes(id))).toHaveLength(1); await expect((await navigationMenuItem(modal, { name: '确认新执行并导出', exact: true }))).toBeDisabled(); await expect(modal).toContainText('results/rows-003.csv'); expect(await readdir(directory)).toEqual(['all.zip']); await page.screenshot({ path: testInfo.outputPath('multi-csv-zip-success.png') }); await closeExport();
     }, testInfo);
   });
 
@@ -153,7 +153,7 @@ test.describe('实库完整 SQL 流式导出', () => {
       await executeSql('SELECT CONNECTION_ID() AS thread_id');
       const cell = query().locator('.result-body [role="gridcell"][aria-colindex="2"]');
       let threadId = ''; await expect.poll(async () => { threadId = (await cell.textContent())?.trim() ?? ''; return threadId; }).toMatch(/^\d+$/);
-      await query().getByRole('button', { name: '开始事务', exact: true }).click(); await expect(query().locator('.tab-status')).toContainText('事务进行中');
+      await (await navigationMenuItem(query(), { name: '开始事务', exact: true })).click(); await expect(query().locator('.tab-status')).toContainText('事务进行中');
       const source = 'INSERT INTO stream_guard VALUES(1); SELECT CONNECTION_ID() AS thread_id, value, @stream_marker AS session_value FROM stream_temp;';
       const excluded = 'COMMIT; INSERT INTO stream_guard VALUES(99);';
       await writeSql(`${source}\n${excluded}`); await page.keyboard.press(`${modifier}+A`);
@@ -172,18 +172,18 @@ test.describe('实库完整 SQL 流式导出', () => {
       const after = await executionIds(); expect(after.history.filter(id => !before.history.includes(id))).toHaveLength(1);
       await page.screenshot({ path: testInfo.outputPath('stream-single-execution-success.png') }); await closeExport();
       await expect(query().locator('.tab-status')).toContainText('事务进行中');
-      await query().getByRole('button', { name: '结果 2', exact: true }).click();
+      await (await navigationMenuItem(query(), { name: '结果 2', exact: true })).click();
       await choosePath(join(directory, 'cached-preview.json'));
-      await query().getByRole('button', { name: '导出已返回结果', exact: true }).click();
+      await (await navigationMenuItem(query(), { name: '导出已返回结果', exact: true })).click();
       const cached = page.getByRole('dialog', { name: '导出已返回结果', exact: true });
       await cached.getByRole('combobox', { name: '结果文件格式', exact: true }).selectOption('json'); await cached.locator('.file-picker').click();
-      await cached.getByRole('button', { name: '开始导出已返回行', exact: true }).click(); await expect(cached.locator('.success-box')).toContainText('已导出 1 行');
-      await cached.getByRole('button', { name: '完成', exact: true }).click();
+      await (await navigationMenuItem(cached, { name: '开始导出已返回行', exact: true })).click(); await expect(cached.locator('.success-box')).toContainText('已导出 1 行');
+      await (await navigationMenuItem(cached, { name: '完成', exact: true })).click();
       expect((await executionIds()).history).toEqual(after.history); expect(await count(observer, database)).toBe(0);
       await executeSql('SELECT CONNECTION_ID(), COUNT(*) FROM stream_guard');
       await expect(query().locator('.result-body [role="gridcell"][aria-colindex="2"]')).toHaveText(threadId);
       await expect(query().locator('.result-body [role="gridcell"][aria-colindex="3"]')).toHaveText('1');
-      await query().getByRole('button', { name: '回滚', exact: true }).click(); await expect(query().getByRole('button', { name: '回滚', exact: true })).toBeDisabled();
+      await (await navigationMenuItem(query(), { name: '回滚', exact: true })).click(); await expect((await navigationMenuItem(query(), { name: '回滚', exact: true }))).toBeDisabled();
       expect(await count(observer, database)).toBe(0); expect((await readdir(directory)).some(name => name.endsWith('.partial'))).toBe(false);
     }, testInfo);
   });
@@ -195,26 +195,26 @@ test.describe('实库完整 SQL 流式导出', () => {
       const marker = `Q05_SECRET_${randomUUID()}`; const template = 'INSERT INTO stream_secret VALUES(:value); SELECT CAST(18446744073709551615 AS UNSIGNED) AS big_value, NULL AS null_value, X\'00ff\' AS payload, \'中文\' AS `__proto__`;';
       await writeSql(template); const directory = join(dataDir, 'parameters'); await mkdir(directory); const target = join(directory, 'secret.json');
       const modal = await openExport(target); const before = await executionIds();
-      await modal.getByRole('button', { name: '填写类型参数', exact: true }).click();
+      await (await navigationMenuItem(modal, { name: '填写类型参数', exact: true })).click();
       const form = page.getByRole('dialog', { name: '类型参数查询', exact: true });
-      await expect(form.getByRole('button', { name: '应用参数（不执行 SQL）', exact: true })).toBeEnabled({ timeout: 20000 });
+      await expect((await navigationMenuItem(form, { name: '应用参数（不执行 SQL）', exact: true }))).toBeEnabled({ timeout: 20000 });
       const row = form.locator('.parameter-row').filter({ has: page.getByText('参数类型 value', { exact: true }) });
       await row.getByRole('combobox').selectOption('text'); await row.getByRole('textbox', { name: '参数值 value', exact: true }).fill(marker);
-      await form.getByRole('button', { name: '应用参数（不执行 SQL）', exact: true }).click(); await expect(form).toBeHidden();
+      await (await navigationMenuItem(form, { name: '应用参数（不执行 SQL）', exact: true })).click(); await expect(form).toBeHidden();
       expect(await executionIds()).toEqual(before);
       const first = await start(modal); await finish(first); await closeExport(); await privacy(marker, template);
       const content = await json(target), values = content.results.find(item => item.kind === 'rows')!.rows![0];
       expect(values.big_value).toBe('18446744073709551615'); expect(values.null_value).toBeNull(); expect(values.payload).toEqual({ type: 'binary', base64: 'AP8=' }); expect(Object.hasOwn(values, '__proto__')).toBe(true); expect(values.__proto__).toBe('中文');
       expect(await readFile(target, 'utf8')).not.toContain(marker); expect(await readFile(target, 'utf8')).not.toContain(template);
       // 相同模板重新打开，填写值不恢复；明确第二次执行制造真实重复键失败，不能自动重试。
-      const second = await openExport(target); await second.getByRole('button', { name: '填写类型参数', exact: true }).click();
-      await expect(form.getByRole('button', { name: '应用参数（不执行 SQL）', exact: true })).toBeEnabled({ timeout: 20000 });
+      const second = await openExport(target); await (await navigationMenuItem(second, { name: '填写类型参数', exact: true })).click();
+      await expect((await navigationMenuItem(form, { name: '应用参数（不执行 SQL）', exact: true }))).toBeEnabled({ timeout: 20000 });
       const secondRow = form.locator('.parameter-row').filter({ has: page.getByText('参数类型 value', { exact: true }) });
       await expect(secondRow.getByRole('textbox', { name: '参数值 value', exact: true })).toHaveValue('');
       await secondRow.getByRole('textbox', { name: '参数值 value', exact: true }).fill(marker);
-      await form.getByRole('button', { name: '应用参数（不执行 SQL）', exact: true }).click();
+      await (await navigationMenuItem(form, { name: '应用参数（不执行 SQL）', exact: true })).click();
       const failed = await start(second); await finish(failed, 'failed'); await expect(second.locator('.error-box')).toContainText('ER_DUP_ENTRY');
-      await expect(second.getByRole('button', { name: '确认再次新执行并导出', exact: true })).toBeDisabled();
+      await expect((await navigationMenuItem(second, { name: '确认再次新执行并导出', exact: true }))).toBeDisabled();
       expect(await json(target)).toEqual(content); await privacy(marker, template); await closeExport();
       const previous = Buffer.from('CSV 原件'); const csv = join(directory, 'missing.csv'); await writeFile(csv, previous);
       await writeSql('INSERT INTO stream_guard VALUES(7); SELECT 1 AS only_result;');
@@ -228,7 +228,7 @@ test.describe('实库完整 SQL 流式导出', () => {
   test('CSV按本次行结果序号导出100001行，预览仍200行且普通上限不截断文件', async ({}, testInfo) => {
     await isolatedDatabase(async ({ observer, database }) => {
       await observer.query(`CREATE TABLE \`${database}\`.stream_guard (id INT PRIMARY KEY)`); await openDatabaseQuery(database);
-      await query().getByLabel('查询结果行数上限', { exact: true }).fill('2');
+      await (await navigationMenuInput(query(), {name:'查询结果行数上限',exact:true})).fill('2');
       const digits = '(SELECT 0 n UNION ALL SELECT 1 UNION ALL SELECT 2 UNION ALL SELECT 3 UNION ALL SELECT 4 UNION ALL SELECT 5 UNION ALL SELECT 6 UNION ALL SELECT 7 UNION ALL SELECT 8 UNION ALL SELECT 9)';
       await writeSql(`INSERT INTO stream_guard VALUES(1); SELECT '不是目标' AS ignored; SELECT a.n+b.n*10+c.n*100+d.n*1000+e.n*10000+f.n*100000+1 AS id FROM ${digits} a CROSS JOIN ${digits} b CROSS JOIN ${digits} c CROSS JOIN ${digits} d CROSS JOIN ${digits} e CROSS JOIN ${digits} f WHERE a.n+b.n*10+c.n*100+d.n*1000+e.n*10000+f.n*100000<100001 ORDER BY id; INSERT INTO stream_guard VALUES(2);`);
       const directory = join(dataDir, 'complete-file'); await mkdir(directory); const target = join(directory, 'all-rows.csv');
@@ -238,7 +238,7 @@ test.describe('实库完整 SQL 流式导出', () => {
       for await (const row of createReadStream(target).pipe(parse({ columns: true }))) { rows++; const id = Number(row.id); if (id !== rows) throw new Error(`完整 CSV 第 ${rows} 行错误`); sum += id; }
       expect(rows).toBe(100001); expect(sum).toBe(5000150001); expect(await count(observer, database)).toBe(2);
       await page.screenshot({ path: testInfo.outputPath('stream-complete-over-limit.png') }); await closeExport();
-      await query().getByRole('button', { name: '结果 3', exact: true }).click(); await expect(query().locator('.tab-status')).toContainText('200'); await expect(query().locator('.tab-status')).toContainText('已达到结果上限');
+      await (await navigationMenuItem(query(), { name: '结果 3', exact: true })).click(); await expect(query().locator('.tab-status')).toContainText('200'); await expect(query().locator('.tab-status')).toContainText('已达到结果上限');
       expect(await query().locator('.result-body [role="row"]').count()).toBeLessThan(80); expect(pageErrors).toEqual([]);
     }, testInfo);
   });
@@ -269,12 +269,12 @@ test.describe('实库完整 SQL 流式导出', () => {
       await writeSql('SELECT SLEEP(30) AS wait_value; INSERT INTO stream_guard VALUES(9);');
       const modal = await openExport(target, 'csv'); const first = await start(modal);
       await expect.poll(async () => { const [rows] = await observer.query<RowDataPacket[]>('SELECT INFO FROM information_schema.PROCESSLIST WHERE ID=?', [threadId]); return rows.some(row => String(row.INFO).includes('SLEEP(30)')); }).toBe(true);
-      await modal.getByRole('button', { name: '取消任务', exact: true }).click(); await finish(first, 'cancelled'); expect(await readFile(target)).toEqual(previous); expect(await count(observer, database)).toBe(0); await closeExport();
+      await (await navigationMenuItem(modal, { name: '取消任务', exact: true })).click(); await finish(first, 'cancelled'); expect(await readFile(target)).toEqual(previous); expect(await count(observer, database)).toBe(0); await closeExport();
       const digits = '(SELECT 0 n UNION ALL SELECT 1 UNION ALL SELECT 2 UNION ALL SELECT 3 UNION ALL SELECT 4 UNION ALL SELECT 5 UNION ALL SELECT 6 UNION ALL SELECT 7 UNION ALL SELECT 8 UNION ALL SELECT 9)';
       await writeSql(`SELECT REPEAT('实际磁盘写入',128) AS payload FROM ${digits} a CROSS JOIN ${digits} b CROSS JOIN ${digits} c CROSS JOIN ${digits} d CROSS JOIN ${digits} e; INSERT INTO stream_guard VALUES(10);`);
       const writing = await openExport(target, 'csv'); const second = await start(writing);
       await expect.poll(() => page.evaluate(id => (window as StreamWindow).__q05StreamEvents?.some(event => event.taskId === id && event.status === 'running' && (event.queryExport?.bytesWritten ?? 0) >= 65536), second), { timeout: 20000 }).toBe(true);
-      await writing.getByRole('button', { name: '取消任务', exact: true }).click(); const terminal = await finish(second, 'cancelled');
+      await (await navigationMenuItem(writing, { name: '取消任务', exact: true })).click(); const terminal = await finish(second, 'cancelled');
       expect(terminal?.queryExport?.bytesWritten).toBeGreaterThan(0); expect(terminal?.queryExport?.rowsWritten).toBeLessThan(100000);
       expect(await readFile(target)).toEqual(previous); expect(await count(observer, database)).toBe(0); expect((await readdir(directory)).some(name => name.endsWith('.partial'))).toBe(false);
       await page.screenshot({ path: testInfo.outputPath('stream-writing-cancelled.png') }); await closeExport();
@@ -356,8 +356,8 @@ test.describe('实库完整 SQL 流式导出', () => {
   test('通过Electron正常退出正在导出的标签会等待真正取消，事务和原文件均保持正确', async ({}, testInfo) => {
     await isolatedDatabase(async ({ observer, database }) => {
       await observer.query(`CREATE TABLE \`${database}\`.stream_guard (id INT PRIMARY KEY)`); await openDatabaseQuery(database);
-      await query().getByRole('button', { name: '开始事务', exact: true }).click(); await expect(query().getByRole('button', { name: '回滚', exact: true })).toBeEnabled();
-      await executeSql('INSERT INTO stream_guard VALUES(51); SELECT CONNECTION_ID() AS thread_id'); await query().getByRole('button', { name: '结果 2', exact: true }).click();
+      await (await navigationMenuItem(query(), { name: '开始事务', exact: true })).click(); await expect((await navigationMenuItem(query(), { name: '回滚', exact: true }))).toBeEnabled();
+      await executeSql('INSERT INTO stream_guard VALUES(51); SELECT CONNECTION_ID() AS thread_id'); await (await navigationMenuItem(query(), { name: '结果 2', exact: true })).click();
       let threadId = ''; await expect.poll(async () => { threadId = (await query().locator('.result-body [role="gridcell"][aria-colindex="2"]').textContent())?.trim() ?? ''; return threadId; }).toMatch(/^\d+$/);
       const directory = join(dataDir, 'quit-while-exporting'); await mkdir(directory); const path = join(directory, 'protected.json'); await writeFile(path, '退出时原件');
       await writeSql('SELECT SLEEP(30); INSERT INTO stream_guard VALUES(52)'); const modal = await openExport(path); await start(modal);
@@ -369,3 +369,9 @@ test.describe('实库完整 SQL 流式导出', () => {
     }, testInfo);
   });
 });
+
+/** 原门进入具体动作后才加载真实菜单导航，不改变默认/列表阶段的资源边界。 */
+async function navigationMenuItem(...args: Parameters<typeof import('./navigation-menu')['navigationMenuItem']>): Promise<import('@playwright/test').Locator> { return (require('./navigation-menu') as typeof import('./navigation-menu')).navigationMenuItem(...args); }
+
+/** 仅实际操作时加载结果设置菜单，默认及列表阶段不增加资源读取。 */
+async function navigationMenuInput(...args: Parameters<typeof import('./navigation-menu')['navigationMenuInput']>): Promise<import('@playwright/test').Locator> { return (require('./navigation-menu') as typeof import('./navigation-menu')).navigationMenuInput(...args); }

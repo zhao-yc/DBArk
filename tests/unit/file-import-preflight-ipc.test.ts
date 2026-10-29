@@ -8,6 +8,7 @@ import { validateCommand } from '../../src/shared/validation';
 import { resolveFileToken } from '../../src/main/fileTokens';
 import { persistedTaskMessage } from '../../src/main/taskPrivacy';
 import { extractMainProductionFunction } from './main-production-function';
+import { applicationMenuRamPort } from './application-menu-ram-port';
 
 /** 使用合成文件能力和记录，不读取私有配置或真实数据库。 */
 function input(): FileImportPreflightInput {
@@ -108,7 +109,7 @@ function harness() {
   const context = createContext({
     Error, Date, Map, Set, Promise, console, setTimeout, clearTimeout, resolveFileToken, persistedTaskMessage, validateMainCommand: validateCommand,
     tasks, files, broker, store, window: { webContents, isDestroyed: () => false }, rendererURL: 'RAM:预检', columnsMain,
-    shuttingDown: false, shutdownComplete: false, rendererHasSettings: false, hasPendingEdits: false,
+    applicationMenu: applicationMenuRamPort().menu, shuttingDown: false, shutdownComplete: false, rendererHasSettings: false, hasPendingEdits: false,
     structureTokens: new Map(), sessions: new Map(), preparingTasks: new Map(), completionTasks: new Set(), pendingQueryHistory: new Map(),
     exportProgress: new Map(), structureProgress: new Map(), lastPersist: new Map(), resultInsertProgress: new Map(), filteredUpdateProgress: new Map(), filteredDeleteProgress: new Map(),
     queryFileOperations: new Set(), localSearchOperations: new Set(), tableValueOptionsConnectionOwners: new Map(), tableValueOptionsClosing: new Map(),

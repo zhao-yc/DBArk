@@ -22,12 +22,12 @@ function tlsCertificate():string|undefined{
 /** 只替换本次原生文件选择的回答；路径授权、文件读取和TLS建连仍走产品原逻辑。 */
 async function configureTls(form:ReturnType<typeof page.getByRole>){
   const certificate=tlsCertificate();if(!certificate)return;
-  await form.getByRole('button',{name:'TLS / SSL',exact:true}).click();await form.getByLabel(zh.connections.text027,{exact:true}).check();await form.getByLabel(zh.connections.text028,{exact:true}).check();
+  await (await (await import('./navigation-menu')).navigationMenuItem(form, {name:'TLS / SSL',exact:true})).click();await form.getByLabel(zh.connections.text027,{exact:true}).check();await form.getByLabel(zh.connections.text028,{exact:true}).check();
   await desktop.evaluate(({dialog},path)=>{
     const root=globalThis as typeof globalThis&{__liveTlsOpenDialog?:typeof dialog.showOpenDialog};if(root.__liveTlsOpenDialog)throw Error('TLS文件选择不可交叉覆盖');root.__liveTlsOpenDialog=dialog.showOpenDialog;
     dialog.showOpenDialog=(async()=>({canceled:false,filePaths:[path]}))as typeof dialog.showOpenDialog;
   },certificate);
-  try{await form.getByRole('button',{name:'选择CA 证书',exact:true}).click();await expect(form.getByRole('textbox',{name:'CA 证书 选择CA 证书',exact:true})).toHaveValue(certificate);}
+  try{await (await (await import('./navigation-menu')).navigationMenuItem(form, {name:'选择CA 证书',exact:true})).click();await expect(form.getByRole('textbox',{name:'CA 证书 选择CA 证书',exact:true})).toHaveValue(certificate);}
   finally{await desktop.evaluate(({dialog})=>{const root=globalThis as typeof globalThis&{__liveTlsOpenDialog?:typeof dialog.showOpenDialog};if(root.__liveTlsOpenDialog){dialog.showOpenDialog=root.__liveTlsOpenDialog;delete root.__liveTlsOpenDialog;}});}
 }
 
@@ -46,7 +46,7 @@ export async function acceptNativeConfirmation() {
 /** 连接表单走真实 UI；测试追踪关闭，避免把临时数据库密码记录进 Playwright 参数轨迹。 */
 export async function connectAndCreate(database: string): Promise<Omit<LiveContext, 'observer'>> {
   const connectionName = `E2E ${database}`;
-  await page.locator('.app-commandbar').getByRole('button', { name: '新建连接', exact: true }).click();
+  await (await (await import('./navigation-menu')).navigationMenuItem(page.locator('.navigation-toolbar'), { name: '新建连接', exact: true })).click();
   const form = page.getByRole('dialog', { name: '新建连接', exact: true });
   await form.getByLabel('连接名称', { exact: true }).fill(connectionName);
   await form.getByLabel('主机地址', { exact: true }).fill(environment.DBARK_TEST_HOST!);
@@ -55,9 +55,9 @@ export async function connectAndCreate(database: string): Promise<Omit<LiveConte
   await form.getByLabel('数据库密码', { exact: true }).fill(environment.DBARK_TEST_PASSWORD ?? '');
   await form.getByLabel('连接分组', { exact: true }).fill('隔离数据库验证');
   await configureTls(form);
-  await form.getByRole('button', { name: '测试连接', exact: true }).click();
+  await (await (await import('./navigation-menu')).navigationMenuItem(form, { name: '测试连接', exact: true })).click();
   await expect(form.locator('.success-box')).toContainText('连接成功', { timeout: 20000 });
-  await form.getByRole('button', { name: '保存连接', exact: true }).click();
+  await (await (await import('./navigation-menu')).navigationMenuItem(form, { name: '保存连接', exact: true })).click();
   await expect(form).toBeHidden();
   const profiles = await page.evaluate(() => window.dbark.invoke('connections.list', {}));
   const saved = profiles.find(profile => profile.name === connectionName)!;
@@ -74,9 +74,9 @@ export async function connectAndCreate(database: string): Promise<Omit<LiveConte
   await create.getByLabel('数据库名称', { exact: true }).fill(database);
   await expect(create.locator('.monaco-editor .view-lines')).toContainText('CREATE DATABASE');
   await acceptNativeConfirmation();
-  await create.getByRole('button', { name: '执行 SQL', exact: true }).click();
+  await (await (await import('./navigation-menu')).navigationMenuItem(create, { name: '执行 SQL', exact: true })).click();
   await expect(create).toBeHidden({ timeout: 20000 });
-  await connectionRow.getByRole('button', { name: connectionName, exact: true }).click();
+  await (await (await import('./navigation-menu')).navigationMenuItem(connectionRow, { name: connectionName, exact: true })).click();
   await expect(page.locator('.database-row').getByRole('button', { name: database, exact: true })).toBeVisible();
   return { database, connectionName, connectionId };
 }

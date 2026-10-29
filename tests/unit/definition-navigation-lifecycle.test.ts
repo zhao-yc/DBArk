@@ -1,4 +1,4 @@
-import { sidebarMenuRegistrationPort } from '../helpers/sidebarMenuRamPort';
+import { sidebarMenuRegistrationPort, navigationMenuRegistrationPort } from '../helpers/sidebarMenuRamPort';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { EventEmitter } from 'node:events';
@@ -16,6 +16,7 @@ function fixture(options: { notify?: 'throw' | 'noop'; nativeClose?: (native: an
   const sandbox: any = { exports: {}, Date: { now: () => now }, process: { platform: 'win32', env: {} }, require(name: string) {
     // 对象树菜单是显式RAM展示依赖，不加载Playwright或计作原生/认证模块。
     if (name === './sidebar-menu') return sidebarMenuRegistrationPort;
+    if (name === './navigation-menu') return navigationMenuRegistrationPort;
     if (name === 'node:fs' || name === 'node:crypto' || name.endsWith('/zh-CN') || name.endsWith('/databaseCreate.zh-CN') || name.endsWith('/tableDefaultEncodingTarget')) return {};
     if (name === 'mysql2/promise') return { createConnection() { throw Error('纯端口禁止数据库'); } };
     if (name.endsWith('/engine/connection')) return { closeMysqlConnection: options.nativeClose ?? closeMysqlConnection };

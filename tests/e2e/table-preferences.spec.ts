@@ -29,7 +29,7 @@ test('离线 IPC 跨重启保持顺序显隐宽度和原型列名，目标隔离
   const other = { ...target, connectionId: second.id };
   expect(await get(target)).toBeNull(); await save(target); await save(other, { version: 1, columns: [{ name: '另一列', hidden: false, width: 99 }] });
   await save({ ...target, table: 'case' }, { version: 1, columns: [] });
-  await page.getByRole('button', { name: '切换主题', exact: true }).click();
+  await (await (await import('./navigation-menu')).navigationMenuItem(page, { name: '切换主题', exact: true })).click();
   await quitDesktop(); await launchDesktop();
   expect(await get(target)).toEqual(preferences); expect((await get(other))?.columns[0].name).toBe('另一列'); expect(await get({ ...target, table: 'case' })).toEqual({ version: 1, columns: [] });
   const settings = await page.evaluate(() => window.dbark.invoke('settings.get', {})); expect(settings.theme).toBe('light'); expect(settings).not.toHaveProperty('tablePreferences');
@@ -67,7 +67,7 @@ test('真实写盘失败不会丢失布局，修复后保存设置及重启不�
     await expect(page.evaluate(input => window.dbark.invoke('connections.save', { ...input, host: '另一目标' }), connection)).rejects.toThrow('修改未保存');
     expect(await get(target)).toEqual(preferences);
   } finally { await rmdir(blocker); }
-  await page.getByRole('button', { name: '切换主题', exact: true }).click(); await quitDesktop(); await launchDesktop();
+  await (await (await import('./navigation-menu')).navigationMenuItem(page, { name: '切换主题', exact: true })).click(); await quitDesktop(); await launchDesktop();
   expect(await get(target)).toEqual(preferences);
   expect((await page.evaluate(() => window.dbark.invoke('connections.list', {})))[0].host).toBe(connection.host); await expectOfflineOnly();
 });
@@ -78,7 +78,7 @@ test('现库降级至版本2后启动补建偏好和回执表至schema9，既有
     await window.dbark.invoke('queries.save', { id: '旧查询', name: '旧查询', connectionId: id, sql: 'SELECT 7', updatedAt: '' });
     await window.dbark.invoke('snippets.save', { id: '旧片段', name: '旧片段', group: '分组', description: '说明', sql: 'SELECT 8', updatedAt: '' });
   }, connection.id);
-  await page.getByRole('button', { name: '切换主题', exact: true }).click(); await quitDesktop();
+  await (await (await import('./navigation-menu')).navigationMenuItem(page, { name: '切换主题', exact: true })).click(); await quitDesktop();
   const file = join(dataDir, 'dbark.sqlite'), SQL = await initSqlJs({ locateFile: () => sqlWasmFile });
   // 仅降级本例临时现库并移除两表；其它新表仍存在，因此不声称覆盖完整历史schema2迁移。
   const old = new SQL.Database(await readFile(file)); old.run('DROP TABLE table_preferences; DROP TABLE table_apply_receipts; PRAGMA user_version=2');

@@ -34,7 +34,7 @@ function register() {
       await step(() => page().reload()); await step(() => expect(page().locator('.app-statusbar')).toBeVisible());
       /** 每次App分别绑定原frame；只认正式IPC，不能测试侧替换分组或SQL实现。 */
       const audit = async () => { const window = await step(() => owner.application.browserWindow(page())), senderId = await step(() => window.evaluate(value => value.webContents.id)); await step(() => window.dispose()); await step(() => owner.application.evaluate(installSavedQueryOrganizationAudit, { senderId, profileId: profile.id })); armed = true; };
-      const open = async () => { await step(() => page().locator('.app-commandbar').getByRole('button', { name: zh.common.historyQueries, exact: true }).click()); await step(() => dialog().getByRole('button', { name: zh.activity.text005, exact: true }).click()); await ready(); };
+      const open = async () => { await step(() => page().locator('.navigation-toolbar').getByRole('button', { name: zh.common.historyQueries, exact: true }).click()); await step(() => dialog().getByRole('button', { name: zh.activity.text005, exact: true }).click()); await ready(); };
       const snapshot = () => step(() => page().evaluate(() => window.dbark.invoke('queries.organizationGet', {})));
       const scope = async (name: string) => { await step(() => dialog().getByRole('button', { name, exact: true }).click()); await ready(); };
       const confirm = async () => { await step(() => dialog().getByRole('button', { name: text.preview, exact: true }).click()); await step(() => expect(dialog().getByRole('region', { name: text.previewTitle, exact: true })).toBeVisible()); await step(() => dialog().getByRole('button', { name: text.confirm, exact: true }).click()); await ready(); };

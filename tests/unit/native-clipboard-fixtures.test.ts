@@ -3,6 +3,7 @@ import {createContext,runInContext} from 'node:vm';
 import * as path from 'node:path';
 import ts from 'typescript';
 import {describe,expect,it} from 'vitest';
+import {navigationMenuRamPort} from '../helpers/sidebarMenuRamPort';
 
 type Kind='query-binary-types-offline'|'record-input-guards-offline';
 type Payload=Blob|{title:string;url:string};
@@ -35,6 +36,7 @@ function replay(kind:Kind,initial:Entry[],options:Options={},fixtureSource=sourc
   const temporary='/controlled-tmp',context=createContext({Buffer,Blob,Error,AggregateError,process:{env:{DBARK_INTEGRATION_ENABLED:'0',DBARK_QUERY_BINARY_NATIVE_ENABLED:'1',DBARK_RECORD_INPUT_NATIVE_ENABLED:'1'},platform:'darwin',cwd:()=>'/controlled-project',kill:()=>{throw Error('合成进程已退出');}}});
   context.window={__recordInputGuardAudit:{events:[]}};
   const requireBoundary=(name:string)=>{
+    if(name==='./navigation-menu')return navigationMenuRamPort;
     if(name==='@playwright/test')return{test,expect:boundaryExpect,_electron:{launch:async()=>{calls.launch++;return app;}}};
     if(name==='vite')return{createServer:async()=>({listen:async()=>undefined,close:async()=>undefined,httpServer:{address:()=>({port:32100})}})};
     if(name==='@vitejs/plugin-react')return{default:()=>[],__esModule:true};

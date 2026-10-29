@@ -1,3 +1,7 @@
+import { installNavigationMenuRamPort, navigationMenuRamButton, navigationMenuRamInput, navigationMenuRamCheckbox } from '../helpers/navigationMenuRamPort';
+import { queryWarningsZh } from '../../src/renderer/locales/queryWarnings.zh-CN';
+import { queryContinueOnErrorZh } from '../../src/renderer/locales/queryContinueOnError.zh-CN';
+let restoreNavigationMenuPort: () => void = () => {};
 import React, { act } from 'react';
 import { afterAll, afterEach, beforeAll, expect, it, vi } from 'vitest';
 import type { QueryResult } from '../../src/shared/contracts';
@@ -16,7 +20,7 @@ let document: ReturnType<typeof memoryDocument>, createRoot: typeof import('reac
 let QueryTab: typeof import('../../src/renderer/components/QueryTab')['QueryTab'], store: typeof import('../../src/renderer/store')['useWorkspace'], flush: typeof import('../../src/renderer/store')['flushSettings'];
 const globals = ['window', 'document', 'navigator', 'HTMLElement', 'IS_REACT_ACT_ENVIRONMENT'].map(name => [name, Object.getOwnPropertyDescriptor(globalThis, name)] as const);
 beforeAll(async () => {
-  document = memoryDocument(); (document as any).oninput = null; Object.assign(window, { setTimeout, clearTimeout, confirm: () => true }); Object.defineProperty(globalThis, 'HTMLElement', { value: MemoryNode, configurable: true });
+  document = memoryDocument(); restoreNavigationMenuPort = installNavigationMenuRamPort(document); (document as any).oninput = null; Object.assign(window, { setTimeout, clearTimeout, confirm: () => true }); Object.defineProperty(globalThis, 'HTMLElement', { value: MemoryNode, configurable: true });
   const create = document.createElement.bind(document);
   document.createElement = name => {
     const node = create(name); if (name === 'input') node.type = 'text';
@@ -28,14 +32,14 @@ beforeAll(async () => {
   ({ createRoot } = await import('react-dom/client')); ({ QueryTab } = await import('../../src/renderer/components/QueryTab')); ({ useWorkspace: store, flushSettings: flush } = await import('../../src/renderer/store'));
 });
 afterEach(async () => { if (root) { await act(async () => root!.unmount()); root = undefined; } if ((window as any).dbark) await flush(); delete (window as any).dbark; document.body.textContent = ''; renders.grids = []; renders.editors = []; });
-afterAll(() => { for (const [name, descriptor] of globals) if (descriptor) Object.defineProperty(globalThis, name, descriptor); else Reflect.deleteProperty(globalThis, name); });
+afterAll(() => { restoreNavigationMenuPort(); for (const [name, descriptor] of globals) if (descriptor) Object.defineProperty(globalThis, name, descriptor); else Reflect.deleteProperty(globalThis, name); });
 /** 仅合成已返回行，不把RAM数据或回包当作真实数据库/文件选择器验收。 */
 function result(note = '原值'): QueryResult { return { columns: [{ key: 'id', name: '同名', type: 'BIGINT' }, { key: 'value', name: '同名', type: 'VARCHAR' }, { key: 'bytes', name: '字节', type: 'BLOB' }], rows: [{ id: '18446744073709551615', value: note, bytes: { type: 'binary', base64: 'AP8=' } }, { id: '9007199254740993', value: null, bytes: { type: 'binary', base64: '' } }], truncated: true, elapsedMs: 3, statement: 'DELETE FROM synthetic; -- 仅来源展示，绝不自动执行' }; }
 function deferred<T>() { let resolve!: (value: T) => void, reject!: (reason: Error) => void; const promise = new Promise<T>((yes, no) => { resolve = yes; reject = no; }); return { promise, resolve, reject }; }
 function section() { return document.body.querySelector('[data-snapshot-tab="q"]') ?? document.body; }
 /** RAM DOM只支持标签/属性选择器，类名通过真实classList读取，避免空结果冒充通过。 */
 function nodes(className: string, parent: MemoryNode = section()) { return parent.querySelectorAll('div').filter(node => node.classList.contains(className)); }
-function button(label: string) { const node = section().querySelectorAll('button').find(node => node.textContent === label || node.getAttribute('aria-label') === label || label === zh.query.text010 && node.textContent.startsWith(label)); expect(node, label).toBeDefined(); return node!; }
+function button(label: string) { const node = (navigationMenuRamButton(section(), label) ?? section().querySelectorAll('button').find(node => node.textContent === label || node.getAttribute('aria-label') === label || label === zh.query.text010 && node.textContent.startsWith(label))); expect(node, label).toBeDefined(); return node!; }
 async function click(label: string) { const node = button(label); expect(node.disabled, label).toBe(false); await act(async () => { node.dispatchEvent(new MemoryEvent('click')); }); }
 function grid() { expect(renders.grids.length).toBeGreaterThan(0); return renders.grids.at(-1)!; }
 function callback(node: MemoryNode): () => void { const key = Object.keys(node).find(key => key.startsWith('__reactProps$')); if (!key) throw Error('缺少真实React按钮事件'); return (node as any)[key].onClick; }
@@ -62,12 +66,34 @@ async function mount(options: { open?: QueryResultSnapshotServices['open']; save
 }
 it('真实QueryTab无结果无连接也能离线打开，复用原网格/来源SQL/两份固定结果比较且不执行', async () => {
   const f = await mount(), before = structuredClone(store.getState().settings); expect(button(text.save).disabled).toBe(true); expect(button(text.open).disabled).toBe(false);
-  const row = nodes('query-result-snapshot-actions')[0], toolbar = nodes('result-toolbar')[0]; expect(row).toBeDefined(); expect(toolbar).toBeDefined(); expect(row.parentNode).toBe(toolbar.parentNode); expect(nodes('query-result-snapshot-actions', toolbar)).toHaveLength(0);
+  const toolbar = nodes('result-toolbar')[0], menu = document.body.querySelectorAll('div').find(node => node.getAttribute('role') === 'menu' && node.getAttribute('aria-label') === '快照'); expect(toolbar).toBeDefined(); expect(menu).toBeDefined(); expect(menu!.parentNode).toBe(document.body); expect(nodes('query-result-snapshot-actions')).toHaveLength(0); expect(nodes('action-menu-panel', toolbar)).toHaveLength(0);
   await click(text.open); expect(grid().rows).toEqual(f.snapshot.result.rows); expect(document.body.textContent).toContain(text.truncated); expect(store.getState().settings).toEqual(before);
   await click(zh.query.pinnedStatement); expect(renders.editors.some(props => props.readOnly === true && props.value === f.snapshot.result.statement)).toBe(true); await click(zh.common.close);
   f.open.mockResolvedValue({ name: 'second.json', snapshot: createQueryResultSnapshot(result('第二份'), '第二快照') }); await click(text.open); await click(queryResultComparisonZh.open);
   expect(document.body.querySelector('[aria-label="' + queryResultComparisonZh.title + '"]')).not.toBeNull(); expect(document.body.textContent).toContain('第二快照');
   expect(f.commands.filter(item => /^(?:connections\.open|sessions\.|query\.)/.test(item.command))).toEqual([]); expect(store.getState().settings.tabs[0].sql).toBe(f.tab.sql);
+});
+it('结果上限仅在整理菜单展示，原受控值与1至100000边界保留且不执行SQL', async () => {
+  await mount(); const before = structuredClone(store.getState().settings.tabs);
+  expect(section().querySelector('[aria-label="' + zh.query.text021 + '"]')).toBeNull();
+  const input = navigationMenuRamInput(section(), zh.query.text021); expect(input).toBeDefined();
+  const key = Object.keys(input!).find(key => key.startsWith('__reactProps$'))!;
+  const change = (input as any)[key].onChange as (event: { target: { value: string } }) => void;
+  await act(async () => change({ target: { value: '2' } })); expect(store.getState().settings.resultLimit).toBe(2); expect(Number(input!.value)).toBe(2);
+  await act(async () => change({ target: { value: '100001' } })); expect(store.getState().settings.resultLimit).toBe(100000); expect(Number(input!.value)).toBe(100000);
+  await act(async () => change({ target: { value: '0' } })); expect(store.getState().settings.resultLimit).toBe(1); expect(Number(input!.value)).toBe(1);
+  expect(store.getState().settings.tabs).toEqual(before); expect(renders.grids).toHaveLength(0);
+});
+it('会话菜单按需展示原执行checkbox，保留受控值、风险说明及键盘焦点', async () => {
+  await mount(); const before = structuredClone(store.getState().settings.tabs);
+  expect(section().querySelector('[aria-label="' + queryWarningsZh.option + '"]')).toBeNull();
+  const warnings = navigationMenuRamCheckbox(section(), queryWarningsZh.option); expect(warnings).toBeDefined(); expect(warnings!.checked).toBe(false);
+  const change = (node: MemoryNode, checked: boolean) => { const key = Object.keys(node).find(key => key.startsWith('__reactProps$'))!; (node as any)[key].onChange({ target: { checked } }); };
+  await act(async () => change(warnings!, true)); expect(warnings!.checked).toBe(true); expect(document.body.textContent).toContain(queryWarningsZh.hint);
+  const continuation = navigationMenuRamCheckbox(section(), queryContinueOnErrorZh.option); expect(continuation).toBeDefined(); expect(continuation!.parentNode!.getAttribute('title')).toBe(queryContinueOnErrorZh.hint);
+  await act(async () => change(continuation!, true)); expect(continuation!.checked).toBe(true);
+  warnings!.focus(); await act(async () => warnings!.dispatchEvent(Object.assign(new MemoryEvent('keydown'), { key: 'ArrowDown' }))); expect(document.activeElement).toBe(continuation);
+  expect(store.getState().settings.tabs).toEqual(before); expect(renders.grids).toHaveLength(0);
 });
 it('保存已返回当前结果或打开的固定结果，保来源SQL/列/精度/NULL/字节且不重跑', async () => {
   const f = await mount({ execute: true }), before = structuredClone(store.getState().settings), queryCount = f.commands.filter(item => item.command === 'query.execute').length;

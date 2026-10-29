@@ -122,7 +122,7 @@ async function threeDrafts(info: TestInfo) {
   const { page } = desktop(info);
   await expect(page.locator('.tab-strip .tab-select')).toHaveCount(0);
   if (inputDiagnostics) await prepareInputObservation(info);
-  await page.locator('.app-commandbar').getByRole('button', { name: zh.common.newConnection, exact: true }).click(); desktop(info);
+  await (await navigationMenuItem(page.locator('.navigation-toolbar'), { name: zh.common.newConnection, exact: true })).click(); desktop(info);
   const connection = page.getByRole('dialog', { name: zh.common.newConnection, exact: true });
   const connectionName = '关闭其他查询离线连接';
   await connection.getByLabel(zh.connections.text006, { exact: true }).fill(connectionName); desktop(info);
@@ -134,29 +134,29 @@ async function threeDrafts(info: TestInfo) {
   await connection.getByRole('checkbox', { name: zh.connections.text016, exact: true }).uncheck(); desktop(info);
   await expect(connection.getByLabel(zh.connections.text011, { exact: true })).toHaveValue('');
   await expect(connection.getByRole('checkbox', { name: zh.connections.text016, exact: true })).not.toBeChecked();
-  await connection.getByRole('button', { name: zh.connections.text036, exact: true }).click(); desktop(info);
+  await (await navigationMenuItem(connection, { name: zh.connections.text036, exact: true })).click(); desktop(info);
   await expect(connection).toBeHidden();
-  await page.locator('.app-commandbar').getByRole('button', { name: zh.common.newQuery, exact: true }).click(); desktop(info);
+  await (await navigationMenuItem(page.locator('.navigation-toolbar'), { name: zh.common.newQuery, exact: true })).click(); desktop(info);
   const dialog = page.getByRole('dialog', { name: zh.common.newQuery, exact: true });
   await expect(dialog.getByRole('combobox', { name: new RegExp('^' + zh.app.text049) })).toHaveText(connectionName);
   await expect(dialog.getByLabel(zh.app.text050, { exact: true })).toHaveValue('');
   // 正式流程的拒连是离线边界；不伪造连接成功、会话或服务器能力。
   await expect(dialog.locator('.error-box')).toContainText(/ECONNREFUSED|连接被拒绝|拒绝连接/i, { timeout: 20000 });
-  await dialog.getByRole('button', { name: zh.app.text053, exact: true }).click(); desktop(info);
+  await (await navigationMenuItem(dialog, { name: zh.app.text053, exact: true })).click(); desktop(info);
   await expect(dialog).toBeHidden(); await write(info, savedSql);
-  await page.locator('.query-tab:visible').getByRole('button', { name: zh.query.text015, exact: true }).click(); desktop(info);
+  await (await navigationMenuItem(page.locator('.query-tab:visible'), { name: zh.query.text015, exact: true })).click(); desktop(info);
   const save = page.getByRole('dialog', { name: binding.title, exact: true });
   await save.getByLabel(binding.name, { exact: true }).fill(sourceName); desktop(info);
-  await save.getByRole('button', { name: binding.create, exact: true }).click(); desktop(info); await expect(save).toBeHidden();
+  await (await navigationMenuItem(save, { name: binding.create, exact: true })).click(); desktop(info); await expect(save).toBeHidden();
   const records = await queries(info); expect(records).toHaveLength(1);
   expect(records[0].sql.replaceAll('\r\n', '\n')).toBe(savedSql);
   await expect.poll(async () => (await settings(info)).tabs[0]?.sourceBinding?.id).toBe(records[0].id);
   await write(info, aSql);
   const a = (await settings(info)).tabs[0];
-  await page.locator('.query-tab:visible').getByRole('button', { name: duplicate.action, exact: true }).click(); desktop(info);
+  await (await navigationMenuItem(page.locator('.query-tab:visible'), { name: duplicate.action, exact: true })).click(); desktop(info);
   await expect.poll(() => settings(info).then(value => value.tabs.length)).toBe(2); await write(info, bSql, (await settings(info)).tabs[1].id);
   const b = (await settings(info)).tabs[1];
-  await page.locator('.query-tab:visible').getByRole('button', { name: duplicate.action, exact: true }).click(); desktop(info);
+  await (await navigationMenuItem(page.locator('.query-tab:visible'), { name: duplicate.action, exact: true })).click(); desktop(info);
   await expect.poll(() => settings(info).then(value => value.tabs.length)).toBe(3); await write(info, cSql, (await settings(info)).tabs[2].id);
   const value = await settings(info), c = value.tabs[2];
   expect(value.tabs).toEqual([a, b, c]); expect(value.activeTabId).toBe(c.id);
@@ -220,17 +220,17 @@ test('保留C：取消全部保留；再发A直接关闭后真实推进B，B取�
   try {
     expect(trace).toBe('off'); expect(screenshot).toBe('off'); expect(video).toBe('off');
     const { a, b, c, records } = await threeDrafts(info), { page } = desktop(info);
-    const others = page.locator('.app-commandbar').getByRole('button', { name: close.others, exact: true });
+    const others = (await navigationMenuItem(page.locator('.navigation-toolbar'), { name: close.others, exact: true }));
     await others.click(); desktop(info);
-    await (await closeDialog(info, a)).getByRole('button', { name: close.cancel, exact: true }).click(); desktop(info);
+    await (await navigationMenuItem((await closeDialog(info, a)), { name: close.cancel, exact: true })).click(); desktop(info);
     await expect(page.getByRole('dialog')).toHaveCount(0);
     expect((await settings(info)).tabs).toEqual([a, b, c]); expect((await settings(info)).activeTabId).toBe(c.id); expect(await queries(info)).toEqual(records);
     await expect(others).toBeEnabled(); await others.click(); desktop(info);
-    await (await closeDialog(info, a)).getByRole('button', { name: close.discard, exact: true }).click(); desktop(info);
+    await (await navigationMenuItem((await closeDialog(info, a)), { name: close.discard, exact: true })).click(); desktop(info);
     // 7142cb0原红必须在这里失败，不能因已知缺陷跳过真正出现B的断言。
     const second = await closeDialog(info, b);
     await expect.poll(() => settings(info).then(value => value.tabs.map(tab => tab.id))).toEqual([b.id, c.id]);
-    await second.getByRole('button', { name: close.cancel, exact: true }).click(); desktop(info);
+    await (await navigationMenuItem(second, { name: close.cancel, exact: true })).click(); desktop(info);
     await expect(page.getByRole('dialog')).toHaveCount(0);
     expect((await settings(info)).tabs).toEqual([b, c]); expect((await settings(info)).activeTabId).toBe(c.id); expect(await queries(info)).toEqual(records);
     await select(info, b); await select(info, c); expect((await settings(info)).tabs).toEqual([b, c]);
@@ -250,18 +250,18 @@ test('来源CAS冲突：首个A保存失败仍可另存关闭，但B不自动推
     expect((await settings(info)).tabs).toEqual([a, b, c]);
     const observedTargets = [a, b, c].map(({ id, title }) => ({ id, title }));
     await observeCloseDialogs(info, observedTargets);
-    await page.locator('.app-commandbar').getByRole('button', { name: close.others, exact: true }).click(); desktop(info);
-    await (await closeDialog(info, a)).getByRole('button', { name: close.save, exact: true }).click(); desktop(info);
+    await (await navigationMenuItem(page.locator('.navigation-toolbar'), { name: close.others, exact: true })).click(); desktop(info);
+    await (await navigationMenuItem((await closeDialog(info, a)), { name: close.save, exact: true })).click(); desktop(info);
     const save = page.getByRole('dialog', { name: binding.title, exact: true }); await expect(save).toBeVisible();
     const nameBefore = await save.getByLabel(binding.name, { exact: true }).inputValue();
-    await save.getByRole('button', { name: binding.update, exact: true }).click(); desktop(info);
+    await (await navigationMenuItem(save, { name: binding.update, exact: true })).click(); desktop(info);
     await expect(save.locator('.error-box')).toContainText('原查询已修改；本次未覆盖');
     await expect(save).toBeVisible(); await expect(save.getByLabel(binding.name, { exact: true })).toHaveValue(nameBefore);
-    await expect(save.getByRole('button', { name: binding.create, exact: true })).toBeEnabled();
+    await expect((await navigationMenuItem(save, { name: binding.create, exact: true }))).toBeEnabled();
     expect((await settings(info)).tabs).toEqual([a, b, c]); expect(await queries(info)).toEqual(originals);
     const newName = '失败后由旧弹窗另存A';
     await save.getByLabel(binding.name, { exact: true }).fill(newName); desktop(info);
-    await save.getByRole('button', { name: binding.create, exact: true }).click(); desktop(info);
+    await (await navigationMenuItem(save, { name: binding.create, exact: true })).click(); desktop(info);
     await expect(save).toBeHidden(); await expect(page.getByRole('dialog')).toHaveCount(0);
     await expect.poll(() => settings(info).then(value => value.tabs.map(tab => tab.id))).toEqual([b.id, c.id]);
     expect((await settings(info)).tabs).toEqual([b, c]); expect((await settings(info)).activeTabId).toBe(c.id);
@@ -289,3 +289,6 @@ test.afterAll(async ({}, info) => {
     await info.attach('关闭其他查询原生终态', { body: Buffer.from(JSON.stringify({ accepted: true, ...result, directoryRemoved: true, launches: 1, explicitSqlExecution: 0, systemClipboard: 0, realDatabaseSessionIsolationProven: false })), contentType: 'application/json' });
   }
 });
+
+/** 原门进入具体动作后才加载真实菜单导航，不改变默认/列表阶段的资源边界。 */
+async function navigationMenuItem(...args: Parameters<typeof import('./navigation-menu')['navigationMenuItem']>): Promise<import('@playwright/test').Locator> { return (require('./navigation-menu') as typeof import('./navigation-menu')).navigationMenuItem(...args); }

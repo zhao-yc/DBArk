@@ -8,6 +8,13 @@ import { memoryDocument, MemoryEvent, MemoryNode } from '../fixtures/memory-dom'
 
 let document: ReturnType<typeof memoryDocument>, createRoot: typeof import('react-dom/client')['createRoot'], root: ReturnType<typeof createRoot> | undefined;
 let Sidebar: typeof import('../../src/renderer/components/Sidebar')['Sidebar'], useWorkspace: typeof import('../../src/renderer/store')['useWorkspace'], useWorkbench: typeof import('../../src/renderer/workbench')['useWorkbench'];
+let SidebarTreeProvider: typeof import('../../src/renderer/components/SidebarContextMenu')['SidebarTreeProvider'];
+let useSidebarSelection: typeof import('../../src/renderer/components/SidebarContextMenu')['useSidebarSelection'];
+let selectedTarget: import('../../src/renderer/components/SidebarContextMenu').SidebarNodeTarget | undefined;
+let currentTarget: ReturnType<typeof useSidebarSelection>['current'];
+
+/** 只旁观Provider公开的选择合同，不读取React内部状态或替代原菜单事件。 */
+function SelectionProbe() { const selection = useSidebarSelection(); selectedTarget = selection.target; currentTarget = selection.current; return null; }
 type Node = ReturnType<typeof memoryDocument>['body'];
 const globals = ['window', 'document', 'navigator', 'IS_REACT_ACT_ENVIRONMENT', 'MutationObserver'].map(name => [name, Object.getOwnPropertyDescriptor(globalThis, name)] as const);
 const connectedDescriptor = Object.getOwnPropertyDescriptor(MemoryNode.prototype, 'isConnected');
@@ -18,6 +25,7 @@ beforeAll(async () => {
   Object.assign(window, { innerWidth: 1024, innerHeight: 768 });
   Object.defineProperty(globalThis, 'MutationObserver', { configurable: true, value: class { observe() {} disconnect() {} takeRecords() { return []; } } });
   ({ createRoot } = await import('react-dom/client')); ({ useWorkspace } = await import('../../src/renderer/store')); ({ useWorkbench } = await import('../../src/renderer/workbench')); ({ Sidebar } = await import('../../src/renderer/components/Sidebar'));
+  ({ SidebarTreeProvider, useSidebarSelection } = await import('../../src/renderer/components/SidebarContextMenu'));
 });
 afterEach(async () => { if (root) await act(async () => root!.unmount()); root = undefined; document.body.textContent = ''; delete (window as any).dbark; completionServerFacts.clear('a'); completionServerFacts.clear('b'); vi.restoreAllMocks(); });
 afterAll(() => { for (const [name, descriptor] of globals) if (descriptor) Object.defineProperty(globalThis, name, descriptor); else Reflect.deleteProperty(globalThis, name); if (connectedDescriptor) Object.defineProperty(MemoryNode.prototype, 'isConnected', connectedDescriptor); else Reflect.deleteProperty(MemoryNode.prototype, 'isConnected'); });
@@ -35,7 +43,7 @@ async function mount(onImportNewTable?: (connectionId: string, database: string)
   (window as any).dbark = { invoke };
   const noop = () => {}, props = { onNewConnection: noop, onEditConnection: noop, onCopyConnection: noop, onImportNewTable, onDesign: noop, onColumnPatches: noop, onIndexPatches: noop, onForeignKeyPatches: noop, onTableRename: noop, onTableAutoIncrement: noop, onTableComment: noop, onTableDefaultEncoding: noop, onDdl: noop, onOpenWorkbench: async () => true };
   const host = document.createElement('div'); document.body.appendChild(host); root = createRoot(host as any);
-  const render = async (refreshVersion = 0) => { await act(async () => root!.render(<Sidebar {...props} refreshVersion={refreshVersion}/>)); };
+  const render = async (refreshVersion = 0) => { await act(async () => root!.render(<SidebarTreeProvider><Sidebar {...props} refreshVersion={refreshVersion}/><SelectionProbe/></SidebarTreeProvider>)); };
   await render();
   return { calls, invoke, render, async settle(index: number, value: unknown) { await act(async () => calls[index].resolve(value)); }, async move(group: string, color = '#123456') { await act(async () => useWorkspace.getState().setConnections(useWorkspace.getState().connections.map(profile => profile.id === 'a' ? { ...profile, group, color } : profile))); } };
 }
@@ -58,6 +66,32 @@ it('数据库级从文件导入新表入口传递准确原目标，点击不创�
   const database = document.querySelectorAll('button').find(node => node.textContent === '原数据库')!;
   const entry = await menuAction(database, `${importNewTableZh.title} 原数据库`);
   await click(entry!); expect(open).toHaveBeenCalledExactlyOnceWith('a', '原数据库'); expect(commands(f)).toEqual(['connections.open', 'metadata.databases']);
+});
+
+it('共享选择区分同名表视图，右键不接管另一连接的查询或发送请求，配置ABA不复活旧对象', async () => {
+  const f = await mount(); await click(connection()); await f.settle(0, status()); await f.settle(1, ['原数据库']);
+  const database = document.querySelectorAll('button').find(node => node.textContent === '原数据库')!;
+  await click(database); await f.settle(2, [{ name: '同名对象', kind: 'table' }, { name: '同名对象', kind: 'view' }]);
+  const query = { id: '原查询', kind: 'query' as const, title: '保留原编辑区', connectionId: 'b', database: '另一数据库', sql: 'SELECT 1;' };
+  await act(async () => useWorkspace.setState({ settings: { ...useWorkspace.getState().settings, tabs: [query], activeTabId: query.id } }));
+  const before = f.calls.length;
+  for (const [kind, title] of [['table', '表'], ['view', '视图']] as const) {
+    const row = document.querySelectorAll('button').find(node => node.getAttribute('title') === `${title} · 同名对象`)!;
+    expect(row).toBeDefined();
+    await act(async () => { const event = new MemoryEvent('contextmenu'); event.button = 2; row.dispatchEvent(event); });
+    expect(selectedTarget).toEqual({ connectionId: 'a', database: '原数据库', kind, name: '同名对象' });
+    expect(currentTarget()).toBe(selectedTarget);
+    expect(useWorkspace.getState().selection).toEqual({ connectionId: 'a', database: '原数据库' });
+    expect(useWorkspace.getState().settings.activeTabId).toBe(query.id);
+    expect(useWorkspace.getState().settings.tabs[0]).toBe(query);
+    expect(f.calls).toHaveLength(before);
+  }
+  const oldTarget = currentTarget(), original = useWorkspace.getState().connections.find(item => item.id === 'a')!;
+  await f.move('目标组');
+  expect(currentTarget()).toEqual({ kind: 'database', connectionId: 'a', database: '原数据库' });
+  await act(async () => useWorkspace.getState().setConnections(useWorkspace.getState().connections.map(item => item.id === 'a' ? original : item)));
+  expect(currentTarget()).not.toBe(oldTarget); expect(currentTarget()?.kind).toBe('database');
+  expect(useWorkspace.getState().settings.tabs[0]).toBe(query); expect(f.calls).toHaveLength(before);
 });
 
 it('已展开且已连接的节点换组或改色保留原DOM、数据库对象树和收藏Shelf，不重连', async () => {

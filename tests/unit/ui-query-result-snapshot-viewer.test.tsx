@@ -1,3 +1,11 @@
+import { installNavigationMenuRamPort, navigationMenuRamButton } from '../helpers/navigationMenuRamPort';
+import { workspaceToolCommandSource } from '../helpers/workspaceToolCommandSource';
+import { uiCommandLabels } from '../../src/shared/uiCommands.zh-CN';
+import { navigationZh } from '../../src/renderer/locales/navigation.zh-CN';
+import { readEditorWordWrap } from '../../src/shared/editorWordWrap';
+let errorMessage: typeof import('../../src/renderer/lib')['errorMessage'];
+let restoreNavigationMenuPort: () => void = () => {};
+let ActionMenu: typeof import('../../src/renderer/components/ActionMenu')['ActionMenu'], ActionMenuSection: typeof import('../../src/renderer/components/ActionMenu')['ActionMenuSection'];
 import React, { act, useState } from 'react';
 import * as jsxRuntime from 'react/jsx-runtime';
 import { readFileSync } from 'node:fs';
@@ -17,20 +25,20 @@ let document: ReturnType<typeof memoryDocument>, createRoot: typeof import('reac
 let Dialog: typeof import('../../src/renderer/components/QueryResultSnapshotDialog')['QueryResultSnapshotDialog'], store: typeof import('../../src/renderer/store')['useWorkspace'];
 const bridge = vi.fn(), globals = ['window', 'document', 'navigator', 'HTMLElement', 'IS_REACT_ACT_ENVIRONMENT'].map(key => [key, Object.getOwnPropertyDescriptor(globalThis, key)] as const);
 beforeAll(async () => {
-  document = memoryDocument(); Object.defineProperty(globalThis, 'HTMLElement', { value: MemoryNode, configurable: true }); const create = document.createElement.bind(document);
+  document = memoryDocument(); restoreNavigationMenuPort = installNavigationMenuRamPort(document); ({ ActionMenu, ActionMenuSection } = await import('../../src/renderer/components/ActionMenu')); ({ errorMessage } = await import('../../src/renderer/lib')); Object.defineProperty(globalThis, 'HTMLElement', { value: MemoryNode, configurable: true }); const create = document.createElement.bind(document);
   document.createElement = name => { const node = create(name), set = node.setAttribute.bind(node), remove = node.removeAttribute.bind(node); if (name === 'input') node.type = 'text'; node.setAttribute = (key, value) => { set(key, value); if (key === 'disabled') node.disabled = true; if (key === 'type') node.type = value; }; node.removeAttribute = key => { remove(key); if (key === 'disabled') node.disabled = false; }; return node; };
   ({ createRoot } = await import('react-dom/client')); ({ QueryResultSnapshotDialog: Dialog } = await import('../../src/renderer/components/QueryResultSnapshotDialog')); ({ useWorkspace: store } = await import('../../src/renderer/store'));
 });
 beforeEach(() => { bridge.mockReset(); (window as any).dbark = { invoke: bridge }; store.setState({ connections: [], settings: { ...store.getState().settings, tabs: [], activeTabId: undefined }, notice: undefined, activeJobs: {} }); });
 afterEach(async () => { if (root) { await act(async () => root!.unmount()); root = undefined; } document.body.textContent = ''; rendered.grids = []; rendered.parents = []; rendered.editors = []; delete (window as any).dbark; });
-afterAll(() => { for (const [key, descriptor] of globals) if (descriptor) Object.defineProperty(globalThis, key, descriptor); else Reflect.deleteProperty(globalThis, key); });
+afterAll(() => { restoreNavigationMenuPort(); for (const [key, descriptor] of globals) if (descriptor) Object.defineProperty(globalThis, key, descriptor); else Reflect.deleteProperty(globalThis, key); });
 /** 只有合成文件内容，不伪造数据库执行或真实磁盘读写。 */
 function snapshot(note = '原文'): QueryResultSnapshotDocument { return createQueryResultSnapshot({ columns: [{ key: 'id', name: '同名', type: 'BIGINT' }, { key: 'amount', name: '同名', type: 'DECIMAL(30,12)' }, { key: 'time', name: '时间', type: 'DATETIME(6)' }, { key: 'nil', name: '空值', type: 'VARCHAR' }, { key: 'bytes', name: '字节', type: 'BLOB' }, { key: 'text', name: '原文', type: 'JSON' }], rows: [{ id: '18446744073709551615', amount: '0.123456789012', time: '2026-10-28 12:34:56.123456', nil: null, bytes: { type: 'binary', base64: 'AP8=' }, text: note + '{"big":900719925474099312345,"z":-0}' }], elapsedMs: -0, truncated: true, statement: 'DELETE FROM synthetic; -- 仅来源展示，不能执行' }, '合成文件内容'); }
 const opened = (name = '原文件.dbark-result.json', value = snapshot()) => ({ name, snapshot: value });
 function deferred<T>() { let resolve!: (value: T) => void, reject!: (reason: Error) => void; const promise = new Promise<T>((yes, no) => { resolve = yes; reject = no; }); return { promise, resolve, reject }; }
 async function mount(element: React.ReactNode = <Dialog onClose={vi.fn()}/>) { const host = document.createElement('div'); document.body.appendChild(host); root = createRoot(host as any); await render(element); }
 async function render(element: React.ReactNode) { await act(async () => root!.render(element)); }
-function button(label: string) { const node = document.body.querySelectorAll('button').find(node => node.textContent === label || node.getAttribute('aria-label') === label); expect(node, label).toBeDefined(); return node!; }
+function button(label: string) { const node = navigationMenuRamButton(document, label) ?? document.body.querySelectorAll('button').find(node => node.textContent === label || node.getAttribute('aria-label') === label); expect(node, label).toBeDefined(); return node!; }
 async function click(label: string) { const node = button(label); expect(node.disabled, label).toBe(false); await act(async () => { node.dispatchEvent(new MemoryEvent('click')); }); }
 function props(node: MemoryNode): any { const key = Object.keys(node).find(key => key.startsWith('__reactProps$')); if (!key) throw Error('缺少真实React事件'); return (node as any)[key]; }
 /** memory-dom不实现CSS class查询，按真实div/classList定位，不伪造布局值。 */
@@ -91,21 +99,26 @@ it.each(['saved', 'error'] as const)('卸载后save %s仍通知物理文件事�
 
 /** 从真实App只提取该入口，不能用手写替代按钮或伪造连接/查询状态。 */
 function appEntry(invalidate: () => void) {
-  const source = readFileSync(new URL('../../src/renderer/App.tsx', import.meta.url), 'utf8'), file = ts.createSourceFile('App.tsx', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX); let declaration = '', button = '', modal = ''; const methods: string[] = [];
+  const source = readFileSync(new URL('../../src/renderer/App.tsx', import.meta.url), 'utf8'), file = ts.createSourceFile('App.tsx', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+  const app = file.statements.find(node => ts.isFunctionDeclaration(node) && node.name?.text === 'WorkspaceApp')!;
+  let declaration = '', modal = ''; const methods: string[] = [];
   function visit(node: ts.Node) {
     if (ts.isVariableStatement(node) && node.declarationList.declarations.some(item => item.name.getText(file) === '[resultSnapshot, setResultSnapshot]')) declaration = node.getText(file);
-    if (ts.isFunctionDeclaration(node) && ['openResultSnapshot', 'closeResultSnapshot'].includes(node.name?.text ?? '')) methods.push(node.getText(file));
-    if (ts.isJsxElement(node) && node.openingElement.tagName.getText(file) === 'button' && node.children.some(item => ts.isJsxExpression(item) && item.expression?.getText(file) === 'queryResultSnapshotViewerZh.entry')) button = node.getText(file);
+    if (ts.isFunctionDeclaration(node) && ['openResultSnapshot','closeResultSnapshot'].includes(node.name?.text ?? '')) methods.push(node.getText(file));
     if (ts.isBinaryExpression(node) && node.left.getText(file) === 'resultSnapshot' && ts.isJsxSelfClosingElement(node.right)) modal = node.getText(file);
     ts.forEachChild(node, visit);
   }
-  visit(file); expect([declaration, button, modal].every(Boolean)).toBe(true); expect(methods).toHaveLength(2);
-  const context = createContext({ exports: {}, useState, document, QueryResultSnapshotDialog: Dialog, queryResultSnapshotViewerZh: text, workbenchNavigation: { invalidate }, require: (name: string) => { if (name === 'react/jsx-runtime') return jsxRuntime; throw Error('禁止其它App依赖'); } });
-  runInContext(ts.transpileModule(`function Entry(){${declaration}\n${methods.join('\n')}\nreturn <>${button}{${modal}}</>};globalThis.Entry=Entry;`, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX } }).outputText, context);
-  return context.Entry as React.ComponentType;
+  visit(app); expect([declaration, modal].every(Boolean)).toBe(true); expect(methods).toHaveLength(2);
+  const menu = workspaceToolCommandSource(source, readFileSync(new URL('../../src/renderer/components/NavigationToolbar.tsx', import.meta.url), 'utf8'), 'result-snapshot');
+  const context: any = createContext({ exports: {}, useState, document, useWorkspace: store, flushSettings: () => Promise.resolve(), errorMessage, readEditorWordWrap, ActionMenu, ActionMenuSection, uiCommandLabels, navigationZh, QueryResultSnapshotDialog: Dialog, workbenchNavigation: { invalidate: invalidate }, require: (name: string) => { if (name === 'react/jsx-runtime') return jsxRuntime; throw Error('禁止其它App依赖'); } });
+  runInContext(ts.transpileModule(`function Entry({children}:any){${declaration}
+${methods.join('\n')}
+${menu}return <><ActionMenu label={navigationZh.tools}>{toolActions}</ActionMenu>${modal ? '{' + modal + '}' : ''}{children}</>};globalThis.Entry=Entry;`, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX } }).outputText, context);
+  return context.Entry as React.ComponentType<{ children?: React.ReactNode }>;
 }
+
 it('真实App无连接入口可开，已有modal拒绝旧入口且开关推进导航意图', async () => {
   const invalidate = vi.fn(), Entry = appEntry(invalidate); await mount(<Entry/>); expect(store.getState().settings.tabs).toEqual([]); expect(store.getState().connections).toEqual([]);
-  const old = props(button(text.entry)).onClick, other = document.createElement('div'); other.setAttribute('role', 'dialog'); document.body.appendChild(other); await act(async () => old()); expect(invalidate).not.toHaveBeenCalled(); document.body.removeChild(other);
-  await click(text.entry); expect(invalidate).toHaveBeenCalledOnce(); expect(document.querySelectorAll('[role="dialog"]')).toHaveLength(1); expect(bridge).not.toHaveBeenCalled(); await click(text.close); expect(invalidate).toHaveBeenCalledTimes(2); expect(document.querySelectorAll('[role="dialog"]')).toHaveLength(0);
+  const old = props(button(uiCommandLabels['result-snapshot'])).onClick, other = document.createElement('div'); other.setAttribute('role', 'dialog'); document.body.appendChild(other); await act(async () => old()); expect(invalidate).not.toHaveBeenCalled(); document.body.removeChild(other);
+  await click(uiCommandLabels['result-snapshot']); expect(invalidate).toHaveBeenCalledOnce(); expect(document.querySelectorAll('[role="dialog"]')).toHaveLength(1); expect(bridge).not.toHaveBeenCalled(); await click(text.close); expect(invalidate).toHaveBeenCalledTimes(2); expect(document.querySelectorAll('[role="dialog"]')).toHaveLength(0);
 });

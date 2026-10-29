@@ -38,7 +38,7 @@ async function chooseFile(scope: C02Desktop, form: Locator, label: string, path:
   }, path);
   const failures: unknown[] = [];
   try {
-    await form.getByRole('button', { name: `选择${label}`, exact: true }).click();
+    await (await (await import('./navigation-menu')).navigationMenuItem(form, { name: `选择${label}`, exact: true })).click();
     await expect.poll(async () => (await form.getByRole('textbox', { name: `${label} 选择${label}`, exact: true }).inputValue()) === path, { message: '真实文件选择结果应进入本例连接表单' }).toBe(true);
   } catch (error) { failures.push(c02Failure('C02 真实文件选择失败', error)); }
   try {
@@ -54,7 +54,7 @@ async function chooseFile(scope: C02Desktop, form: Locator, label: string, path:
 
 /** 负例只判断真实 UI 终态，不读取或输出原错误文本，也不替换认证回包。 */
 export async function testConnection(form: Locator, success: boolean): Promise<void> {
-  await form.getByRole('button', { name: '测试连接', exact: true }).click();
+  await (await (await import('./navigation-menu')).navigationMenuItem(form, { name: '测试连接', exact: true })).click();
   await expect.poll(async () => {
     const button = form.getByRole('button', { name: '测试连接', exact: true });
     const done = await button.count() === 1 && await button.isEnabled();
@@ -66,7 +66,7 @@ export async function testConnection(form: Locator, success: boolean): Promise<v
 /** 新建、错误/正确测试与保存全部走正式 ConnectionDialog；不经 IPC 直接植入连接配置。 */
 export async function createConnection(scope: C02Desktop, lease: C02MtlSLease, remember: boolean): Promise<string> {
   const page = scope.page, profile = lease.profile, name = `C02 UI ${lease.database}`;
-  await page.locator('.app-commandbar').getByRole('button', { name: '新建连接', exact: true }).click();
+  await (await (await import('./navigation-menu')).navigationMenuItem(page.locator('.navigation-toolbar'), { name: '新建连接', exact: true })).click();
   const form = page.getByRole('dialog', { name: '新建连接', exact: true });
   await form.getByLabel('连接名称', { exact: true }).fill(name);
   await form.getByLabel('主机地址', { exact: true }).fill(profile.host);
@@ -76,7 +76,7 @@ export async function createConnection(scope: C02Desktop, lease: C02MtlSLease, r
   await form.getByLabel('连接分组', { exact: true }).fill('C02 独立验收');
   await form.getByRole('checkbox', { name: '安全保存密码', exact: true }).setChecked(remember);
   await secretInput(form, '数据库密码', profile.password!);
-  await form.getByRole('button', { name: 'TLS / SSL', exact: true }).click();
+  await (await (await import('./navigation-menu')).navigationMenuItem(form, { name: 'TLS / SSL', exact: true })).click();
   await form.getByRole('checkbox', { name: '启用加密连接', exact: true }).check();
   await form.getByRole('checkbox', { name: '验证服务器证书', exact: true }).check();
   await chooseFile(scope, form, 'CA 证书', profile.tls!.caPath!);
@@ -84,7 +84,7 @@ export async function createConnection(scope: C02Desktop, lease: C02MtlSLease, r
   await chooseFile(scope, form, '客户端私钥', profile.tls!.keyPath!);
   await secretInput(form, passphraseLabel, `${profile.tls!.passphrase}-wrong`); await testConnection(form, false);
   await secretInput(form, passphraseLabel, profile.tls!.passphrase!); await testConnection(form, true);
-  await form.getByRole('button', { name: '保存连接', exact: true }).click();
+  await (await (await import('./navigation-menu')).navigationMenuItem(form, { name: '保存连接', exact: true })).click();
   await expect.poll(async () => !(await form.isVisible()), { message: 'C02 正式保存应完成并关闭表单' }).toBe(true);
   const facts = await overview(scope, name);
   c02Assert(facts.id && facts.publicOnly && facts.hasPassword && facts.hasTlsPassphrase, 'C02 保存后的公开概要或秘密存在标记不正确');
@@ -113,14 +113,14 @@ export async function savedOrCleared(form: Locator, clear: boolean): Promise<voi
   const password = form.getByLabel('数据库密码', { exact: true });
   await expect.poll(async () => (await password.inputValue()) === '', { message: '数据库密码不应回显' }).toBe(true);
   await expect(password).toHaveAttribute('placeholder', '已保存，未修改时保留');
-  await form.getByRole('button', { name: 'TLS / SSL', exact: true }).click();
+  await (await (await import('./navigation-menu')).navigationMenuItem(form, { name: 'TLS / SSL', exact: true })).click();
   const field = form.getByLabel(passphraseLabel, { exact: true });
   await expect.poll(async () => (await field.inputValue()) === '', { message: 'TLS 口令不应回显' }).toBe(true);
   await expect(field).toHaveAttribute('placeholder', '已保存，未修改时保留');
   if (clear) {
-    await form.getByRole('button', { name: `清除${passphraseLabel}`, exact: true }).click();
+    await (await (await import('./navigation-menu')).navigationMenuItem(form, { name: `清除${passphraseLabel}`, exact: true })).click();
     await expect(field).toHaveAttribute('placeholder', '保存后将清除');
-    await form.getByRole('button', { name: '保存连接', exact: true }).click();
+    await (await (await import('./navigation-menu')).navigationMenuItem(form, { name: '保存连接', exact: true })).click();
     await expect.poll(async () => !(await form.isVisible()), { message: 'C02 明确清除应保存完成并关闭表单' }).toBe(true);
   }
 }
@@ -128,16 +128,16 @@ export async function savedOrCleared(form: Locator, clear: boolean): Promise<voi
 /** Monaco 只输入无秘密的 SELECT/SHOW；实际执行按钮、main broker、utility 与结果网格均不替换。 */
 export async function utilitySelect(scope: C02Desktop, lease: C02MtlSLease, id: string): Promise<void> {
   const page = scope.page;
-  await page.locator('.app-commandbar').getByRole('button', { name: '新建查询', exact: true }).click();
+  await (await (await import('./navigation-menu')).navigationMenuItem(page.locator('.navigation-toolbar'), { name: '新建查询', exact: true })).click();
   const form = page.getByRole('dialog', { name: '新建查询', exact: true });
   await form.getByRole('combobox', { name: '数据库连接', exact: true }).selectOption(id);
   await form.getByRole('combobox', { name: '默认数据库（可选）', exact: true }).fill(lease.database);
   await expect.poll(async () => !(await form.getByRole('combobox', { name: '默认数据库（可选）', exact: true }).getAttribute('placeholder'))?.includes('读取'), { timeout: 20000 }).toBe(true);
-  await form.getByRole('button', { name: '打开查询', exact: true }).click();
+  await (await (await import('./navigation-menu')).navigationMenuItem(form, { name: '打开查询', exact: true })).click();
   const query = page.locator('.query-tab:visible'), input = query.locator('.monaco-editor').getByRole('textbox');
   const execute = async (statement: string, complete: (value: string) => boolean): Promise<string> => {
     await input.focus(); await page.keyboard.press(`${modifier}+A`); await page.keyboard.insertText(statement);
-    await query.getByRole('button', { name: '执行全部', exact: true }).click();
+    await (await (await import('./navigation-menu')).navigationMenuItem(query, { name: '执行全部', exact: true })).click();
     await expect(query.getByRole('button', { name: '停止', exact: true })).toBeDisabled({ timeout: 20000 });
     c02Assert(await query.locator('.error-box').count() === 0, 'C02 utility 查询实际失败');
     let rendered = '';

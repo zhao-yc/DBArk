@@ -1,3 +1,5 @@
+import { installNavigationMenuRamPort, navigationMenuRamButton, navigationMenuObservedMutationPort } from '../helpers/navigationMenuRamPort';
+let restoreNavigationMenuPort: () => void = () => {};
 import { act } from 'react';
 import { afterAll, afterEach, beforeAll, expect, it, vi } from 'vitest';
 import { memoryDocument, MemoryEvent } from '../fixtures/memory-dom';
@@ -19,7 +21,7 @@ let document: ReturnType<typeof memoryDocument>, createRoot: typeof import('reac
 let original: QueryResult, commands: string[], exports: any[], observers: Set<Function>;
 const globals = ['window','document','navigator','IS_REACT_ACT_ENVIRONMENT','MutationObserver','Element'].map(name => [name, Object.getOwnPropertyDescriptor(globalThis, name)] as const);
 beforeAll(async () => {
-  document = memoryDocument(); (document as any).oninput = null; Object.assign(window, { setTimeout, clearTimeout, confirm: () => true });
+  document = memoryDocument(); restoreNavigationMenuPort = installNavigationMenuRamPort(document); (document as any).oninput = null; Object.assign(window, { setTimeout, clearTimeout, confirm: () => true });
   const create = document.createElement.bind(document);
   document.createElement = name => {
     const node = create(name);
@@ -35,14 +37,14 @@ beforeAll(async () => {
     return node;
   };
   observers = new Set(); (globalThis as any).Element = create('div').constructor;
-  (globalThis as any).MutationObserver = class { constructor(private callback: Function) { observers.add(callback); } observe() {} disconnect() { observers.delete(this.callback); } };
+  (globalThis as any).MutationObserver = navigationMenuObservedMutationPort(observers);
   ({ createRoot } = await import('react-dom/client')); ({ ResultsGrid: Grid } = await import('../../src/renderer/components/ResultsGrid'));
   ({ QueryTab } = await import('../../src/renderer/components/QueryTab')); ({ useWorkspace: store, flushSettings: flush } = await import('../../src/renderer/store'));
 });
 afterEach(async () => { if (root) { await act(async () => root!.unmount()); root = undefined; } vi.useRealTimers(); await flush(); delete (window as any).dbark; vi.restoreAllMocks(); ports.grids = []; ports.scroll.mockClear(); ports.activate.mockClear(); ports.hostKey = 0; document.body.textContent = ''; });
-afterAll(() => { for (const [name, descriptor] of globals) if (descriptor) Object.defineProperty(globalThis, name, descriptor); else Reflect.deleteProperty(globalThis, name); });
+afterAll(() => { restoreNavigationMenuPort(); for (const [name, descriptor] of globals) if (descriptor) Object.defineProperty(globalThis, name, descriptor); else Reflect.deleteProperty(globalThis, name); });
 function container() { const node = document.createElement('div'); document.body.appendChild(node); root = createRoot(node as any); }
-function button(name: string) { const node = document.querySelectorAll('button').find(node => node.textContent === name || node.getAttribute('aria-label') === name || name === zh.query.text010 && node.textContent.startsWith(name)); expect(node, '缺少按钮：' + name).toBeDefined(); return node!; }
+function button(name: string) { const node = (navigationMenuRamButton(document, name) ?? document.querySelectorAll('button').find(node => node.textContent === name || node.getAttribute('aria-label') === name || name === zh.query.text010 && node.textContent.startsWith(name))); expect(node, '缺少按钮：' + name).toBeDefined(); return node!; }
 async function click(name: string) { const node = button(name); expect(node.disabled).toBe(false); await act(async () => node.dispatchEvent(new MemoryEvent('click'))); }
 async function search(value: string) { const node = document.querySelector(`input[aria-label="${text.input}"]`)!; expect(node).not.toBeNull(); await act(async () => { node.value = value; node.dispatchEvent(new MemoryEvent('input')); }); }
 /** 定时器只推进本例RAM分块；不启动浏览器，也不使用系统clipboard。 */

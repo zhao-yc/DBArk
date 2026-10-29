@@ -4,6 +4,7 @@ import ts from 'typescript';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { attachMonacoCaretDiagnostic, collectMonacoCaretDiagnostics, readMonacoCaretDiagnostics } from '../e2e/monaco-caret-diagnostics';
 import { diagnosticSample, diagnosticFilePorts } from './monaco-diagnostic-test-ports';
+import { navigationMenuRamPort } from '../helpers/sidebarMenuRamPort';
 
 /** 只模拟公开getter和settings.get；任何剪贴板访问都会直接失败。 */
 function environment(options: { model?: string; main?: string; api?: boolean; focused?: boolean; editorCount?: number; selection?: boolean | null; modelFails?: boolean; mainFails?: boolean; noActiveTab?: boolean; route?: 'textarea' | 'nativeEditContext' | 'other' | 'outside'; bound?: unknown } = {}) {
@@ -97,7 +98,7 @@ async function replayCase(attachmentFails: boolean, diskFails = false) {
     ts.forEachChild(node, visit);
   }
   visit(tree); expect(body).not.toBe('');
-  const code = ts.transpileModule('let pendingOfflineDiagnostic; const replay = ' + body + '; const after = ' + afterBody + '; ({replay,after});', { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
+  const code = ts.transpileModule('let pendingOfflineDiagnostic; const replay = ' + body + '; const after = ' + afterBody + '; ({replay,after});', { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS } }).outputText;
   const originalFailure = Error('合成原prepare断言失败'), attachments: { name: string; data: Record<string, unknown> }[] = [], screenshots: string[] = [], timeouts: number[] = [], inputs: string[] = [], chosen: string[] = [];
   const control = { click: async () => undefined, getByRole: () => control };
   const page = { locator: () => control, getByRole: () => control, keyboard: { press: async () => undefined }, screenshot: async ({ path }: { path: string }) => { screenshots.push(path); }, evaluate: async () => diagnosticSample };
@@ -105,7 +106,9 @@ async function replayCase(attachmentFails: boolean, diskFails = false) {
     test: { setTimeout: (value: number) => timeouts.push(value) }, offlineQuery: async () => undefined, page, query: () => ({ locator: () => ({}) }), expect: () => ({ toBeVisible: async () => undefined }),
     atCaret: async (marked: string) => { inputs.push(marked); if (inputs.length === 3) throw originalFailure; return marked.replace('|', ''); },
     choose: async (column: string) => { chosen.push(column); }, expectSql: async () => undefined, modifier: 'Control', pageErrors: ['不可输出的真实页面错误'],
-    attachMonacoCaretDiagnostic
+    attachMonacoCaretDiagnostic,
+    // 只补正式用例新增的菜单展示端口；诊断阶段和原错误仍由原测试体负责。
+    require(name: string) { if (name === './navigation-menu') return navigationMenuRamPort; throw Error('补全诊断回放禁止其它依赖：' + name); }
   }) as { replay: (fixtures: unknown, info: unknown) => Promise<void>; after: (fixtures: unknown, info: unknown) => Promise<void> };
   let received: unknown;
   const info = { testId: '合成同一测试身份', timeout: 90000, duration: 12, outputPath: (name: string) => name, attach: async (name: string, options: { path: string }) => { attachments.push({ name, data: JSON.parse(disk.data.get(options.path)!) }); if (attachmentFails) throw Error('合成附件失败'); } };

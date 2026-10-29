@@ -43,7 +43,7 @@ async function observe(run: EditorIndentNativeRun, owner: IndentNativeOwner) {
 }
 /** 正式无密码表单；原runtime预检必须已证明127.0.0.1:1拒连及原close，才有本例资源。 */
 async function offlineQuery(run: EditorIndentNativeRun, owner: IndentNativeOwner, info: TestInfo) {
-  const page = owner.page; await run.step(owner, () => page.locator('.app-commandbar').getByRole('button', { name: zh.common.newConnection, exact: true }).click());
+  const page = owner.page; await run.step(owner, async () => (await navigationMenuItem(page.locator('.navigation-toolbar'), { name: zh.common.newConnection, exact: true }, () => run.assert(owner))).click());
   const form = page.getByRole('dialog', { name: zh.common.newConnection, exact: true });
   for (const [label, value] of [[zh.connections.text006, 'SQL文件原生离线'], [zh.connections.text009, '127.0.0.1'], [zh.connections.text010, '1'], [zh.common.user, 'offline'], [zh.connections.text011, ''], [zh.connections.text012, '']]) await run.step(owner, () => form.getByLabel(label, { exact: true }).fill(value));
   await run.step(owner, () => form.getByRole('checkbox', { name: zh.connections.text016, exact: true }).uncheck());
@@ -69,7 +69,7 @@ async function offlineQuery(run: EditorIndentNativeRun, owner: IndentNativeOwner
   }));
   await run.step(owner, async () => {
     let originalFailure: unknown;
-    try { await form.getByRole('button', { name: zh.connections.text036, exact: true }).click(); run.assert(owner); await expect(form).toBeHidden(); }
+    try { await (await navigationMenuItem(form, { name: zh.connections.text036, exact: true }, () => run.assert(owner))).click(); run.assert(owner); await expect(form).toBeHidden(); }
     catch (reason) { originalFailure = reason; throw reason; }
     finally {
       try {
@@ -85,8 +85,8 @@ async function offlineQuery(run: EditorIndentNativeRun, owner: IndentNativeOwner
   });
   const profiles = await run.step(owner, () => page.evaluate(() => window.dbark.invoke('connections.list', {})));
   expect(profiles).toHaveLength(1); expect(profiles[0]).toMatchObject({ host: '127.0.0.1', port: 1, user: 'offline', rememberPassword: false }); expect(Boolean(profiles[0].hasPassword || profiles[0].ssh?.enabled || profiles[0].tls?.enabled)).toBe(false);
-  await run.step(owner, () => page.locator('.app-commandbar').getByRole('button', { name: zh.common.newQuery, exact: true }).click()); const query = page.getByRole('dialog', { name: zh.common.newQuery, exact: true });
-  await run.step(owner, () => expect(query.locator('.error-box')).toContainText(/ECONNREFUSED|连接被拒绝|拒绝连接/i, { timeout: 20000 })); await run.step(owner, () => query.getByRole('button', { name: zh.app.text053, exact: true }).click()); await run.step(owner, () => expect(query).toBeHidden());
+  await run.step(owner, async () => (await navigationMenuItem(page.locator('.navigation-toolbar'), { name: zh.common.newQuery, exact: true }, () => run.assert(owner))).click()); const query = page.getByRole('dialog', { name: zh.common.newQuery, exact: true });
+  await run.step(owner, () => expect(query.locator('.error-box')).toContainText(/ECONNREFUSED|连接被拒绝|拒绝连接/i, { timeout: 20000 })); await run.step(owner, async () => (await navigationMenuItem(query, { name: zh.app.text053, exact: true }, () => run.assert(owner))).click()); await run.step(owner, () => expect(query).toBeHidden());
 }
 /** 所有正文写入只经过真实键盘，保存快捷键使用同一个输入区。 */
 async function write(run: EditorIndentNativeRun, owner: IndentNativeOwner, sql: string) {
@@ -96,16 +96,16 @@ async function write(run: EditorIndentNativeRun, owner: IndentNativeOwner, sql: 
 /** 仅替换本次原OpenDialog回答，正文/来源/任务仍由真实UI和Main完成。 */
 async function openFile(run: EditorIndentNativeRun, owner: IndentNativeOwner, path?: string) {
   const nonce = randomUUID(); await run.step(owner, () => installSqlFilesOpenAnswer(owner.application, { nonce, path }));
-  await run.step(owner, () => owner.page.locator('.query-tab:visible').getByRole('button', { name: text.open, exact: true }).click()); const dialog = owner.page.getByRole('dialog', { name: text.open, exact: true });
-  await run.step(owner, () => dialog.getByRole('combobox', { name: text.encoding, exact: true }).selectOption('utf8')); await run.step(owner, () => dialog.getByRole('button', { name: text.openAction, exact: true }).click());
+  await run.step(owner, async () => (await navigationMenuItem(owner.page.locator('.query-tab:visible'), { name: text.open, exact: true }, () => run.assert(owner))).click()); const dialog = owner.page.getByRole('dialog', { name: text.open, exact: true });
+  await run.step(owner, () => dialog.getByRole('combobox', { name: text.encoding, exact: true }).selectOption('utf8')); await run.step(owner, async () => (await navigationMenuItem(dialog, { name: text.openAction, exact: true }, () => run.assert(owner))).click());
   await expect.poll(() => run.step(owner, () => owner.application.evaluate(() => (globalThis as typeof globalThis & { __sqlFilesOpenAnswer?: { calls: number } }).__sqlFilesOpenAnswer?.calls))).toBe(1);
   expect(await run.step(owner, () => finishSqlFilesOpenAnswer(owner.application, nonce))).toEqual({ calls: 1, restored: true });
-  if (path) await run.step(owner, () => expect(dialog).toBeHidden()); else { await run.step(owner, () => expect(dialog).toBeVisible()); await run.step(owner, () => dialog.getByRole('button', { name: zh.common.cancel, exact: true }).click()); await run.step(owner, () => expect(dialog).toBeHidden()); }
+  if (path) await run.step(owner, () => expect(dialog).toBeHidden()); else { await run.step(owner, () => expect(dialog).toBeVisible()); await run.step(owner, async () => (await navigationMenuItem(dialog, { name: zh.common.cancel, exact: true }, () => run.assert(owner))).click()); await run.step(owner, () => expect(dialog).toBeHidden()); }
 }
 /** 最近ID取真实列表，只作为所见UI选择及只读对照，绝不发送路径或伪造打开IPC。 */
 async function recent(run: EditorIndentNativeRun, owner: IndentNativeOwner, path: string, expectedId?: string) {
-  await run.step(owner, () => owner.page.locator('.query-tab:visible').getByRole('button', { name: text.recent, exact: true }).click()); const dialog = owner.page.getByRole('dialog', { name: text.recent, exact: true }), select = dialog.getByRole('combobox', { name: text.recentSelection, exact: true });
-  await run.step(owner, () => expect(select).toBeEnabled()); await run.step(owner, () => expect(select).toHaveValue('')); await run.step(owner, () => expect(dialog.getByRole('button', { name: text.openRecent, exact: true })).toBeDisabled());
+  await run.step(owner, async () => (await navigationMenuItem(owner.page.locator('.query-tab:visible'), { name: text.recent, exact: true }, () => run.assert(owner))).click()); const dialog = owner.page.getByRole('dialog', { name: text.recent, exact: true }), select = dialog.getByRole('combobox', { name: text.recentSelection, exact: true });
+  await run.step(owner, () => expect(select).toBeEnabled()); await run.step(owner, () => expect(select).toHaveValue('')); await run.step(owner, async () => expect((await navigationMenuItem(dialog, { name: text.openRecent, exact: true }, () => run.assert(owner)))).toBeDisabled());
   const values = await settings(run, owner), entries = await run.step(owner, () => owner.page.evaluate(tabId => window.dbark.invoke('queryFileSources.recent', { tabId }), values.activeTabId!));
   expect(entries).toHaveLength(1); expect(entries[0]).toMatchObject({ name: basename(path), displayPath: path }); if (expectedId) expect(entries[0].id).toBe(expectedId);
   await run.step(owner, () => select.selectOption(entries[0].id)); await run.step(owner, () => expect(select).toHaveValue(entries[0].id)); await run.step(owner, () => expect(dialog.getByRole('combobox', { name: text.encoding, exact: true })).toHaveValue(entries[0].encoding)); return { dialog, id: entries[0].id };
@@ -183,23 +183,23 @@ export function registerQueryFilesNative(binding: Binding) {
       const source = await bound(run, first, fileTab.id); expect(source.displayPath).toBe(path); expect((await run.step(first, () => files!.read(path, originalIdentity))).bytes).toEqual(scenario === 0 ? Buffer.from(recentSql) : utf16NativeBytes(sourceSql));
       if (scenario === 0) {
         expect(source).toMatchObject({ encoding: 'utf8', bom: 'none', eol: 'lf' });
-        const selected = await recent(run, first, path); await run.step(first, () => selected.dialog.getByRole('button', { name: text.cancelRecent, exact: true }).click()); expect(await workspace(run, first)).toEqual(opened);
-        const again = await recent(run, first, path, selected.id); await run.step(first, () => again.dialog.getByRole('button', { name: text.openRecent, exact: true }).click()); await run.step(first, () => expect(again.dialog).toBeHidden()); await expect.poll(() => settings(run, first).then(value => value.tabs.length)).toBe(3);
+        const selected = await recent(run, first, path); await run.step(first, async () => (await navigationMenuItem(selected.dialog, { name: text.cancelRecent, exact: true })).click()); expect(await workspace(run, first)).toEqual(opened);
+        const again = await recent(run, first, path, selected.id); await run.step(first, async () => (await navigationMenuItem(again.dialog, { name: text.openRecent, exact: true })).click()); await run.step(first, () => expect(again.dialog).toBeHidden()); await expect.poll(() => settings(run, first).then(value => value.tabs.length)).toBe(3);
         const reopened = await workspace(run, first); expect(reopened.tabs.slice(0, 2)).toEqual(opened.tabs); expect(reopened.tabs[2].sql).toBe(recentSql); expect(reopened.tabs[2].id).not.toBe(fileTab.id); expect(reopened.actual.slice(0, 2).map(value => ({ ...value, visible: false }))).toEqual(opened.actual.map(value => ({ ...value, visible: false }))); await bound(run, first, reopened.activeTabId!);
         await openFile(run, first); expect(await workspace(run, first)).toEqual(reopened);
-        await run.step(first, () => files!.move(path, files!.paths.missing, originalIdentity)); const unavailable = await recent(run, first, path, selected.id); await run.step(first, () => unavailable.dialog.getByRole('button', { name: text.openRecent, exact: true }).click());
+        await run.step(first, () => files!.move(path, files!.paths.missing, originalIdentity)); const unavailable = await recent(run, first, path, selected.id); await run.step(first, async () => (await navigationMenuItem(unavailable.dialog, { name: text.openRecent, exact: true })).click());
         const recovery = first.page.getByRole('dialog', { name: text.recovery, exact: true }); await run.step(first, () => expect(recovery).toContainText(text.wroteNo)); await run.step(first, () => expect(recovery.locator('.error-box')).toContainText(/文件|来源/)); await expect.poll(() => settings(run, first).then(value => value.tabs.length)).toBe(3); expect(await workspace(run, first)).toEqual(reopened);
-        await run.step(first, () => recovery.getByRole('button', { name: zh.common.cancel, exact: true }).click()); await run.step(first, () => files!.move(files!.paths.missing, path, originalIdentity));
-        const second = await restart(run, first, files), restored = await recent(run, second, path, selected.id); await run.step(second, () => restored.dialog.getByRole('button', { name: text.openRecent, exact: true }).click()); await run.step(second, () => expect(restored.dialog).toBeHidden()); await expect.poll(() => settings(run, second).then(value => value.tabs.length)).toBe(4);
+        await run.step(first, async () => (await navigationMenuItem(recovery, { name: zh.common.cancel, exact: true })).click()); await run.step(first, () => files!.move(files!.paths.missing, path, originalIdentity));
+        const second = await restart(run, first, files), restored = await recent(run, second, path, selected.id); await run.step(second, async () => (await navigationMenuItem(restored.dialog, { name: text.openRecent, exact: true })).click()); await run.step(second, () => expect(restored.dialog).toBeHidden()); await expect.poll(() => settings(run, second).then(value => value.tabs.length)).toBe(4);
         const final = await workspace(run, second); expect(final.tabs.slice(0, 3)).toEqual(reopened.tabs); expect(final.tabs[3].sql).toBe(recentSql); await bound(run, second, final.activeTabId!); await run.step(second, () => files!.read(path, originalIdentity)); await noSql(run, second); await cleanFileSources(run, second); await noSql(run, second); await run.close(second);
       } else {
         // 此文件专项使用正式保存按钮；原生菜单快捷键另验，不能把CDP按键无写入称作已通过。
-        expect(source).toMatchObject({ encoding: 'utf16le', bom: 'utf16le', eol: 'crlf' }); await write(run, first, savedSql); await run.step(first, () => expect(first.page.locator('.query-tab:visible').getByRole('status', { name: text.fileSource, exact: true })).toContainText(text.dirty)); await run.step(first, () => first.page.locator('.query-tab:visible').getByRole('button', { name: text.save, exact: true }).click());
+        expect(source).toMatchObject({ encoding: 'utf16le', bom: 'utf16le', eol: 'crlf' }); await write(run, first, savedSql); await run.step(first, () => expect(first.page.locator('.query-tab:visible').getByRole('status', { name: text.fileSource, exact: true })).toContainText(text.dirty)); await run.step(first, async () => (await navigationMenuItem(first.page.locator('.query-tab:visible'), { name: text.save, exact: true }, () => run.assert(first))).click());
         await run.step(first, () => expect(first.page.locator('.query-tab:visible').getByRole('status', { name: text.fileSource, exact: true })).toContainText(text.clean)); const saved = await run.step(first, () => files!.read(path)); expect(saved.bytes).toEqual(utf16NativeBytes(savedSql)); const savedSource = await bound(run, first, fileTab.id); expect(savedSource.ref.id).toBe(source.ref.id); expect(savedSource.ref.revision).toBeGreaterThan(source.ref.revision); expect(savedSource).toMatchObject({ encoding: 'utf16le', bom: 'utf16le', eol: 'crlf' });
         await write(run, first, draftSql); const draft = await workspace(run, first), incoming = await run.step(first, () => files!.create(files!.paths.replacement, utf16NativeBytes(externalSql))); expect([incoming.dev, incoming.ino]).not.toEqual([saved.identity.dev, saved.identity.ino]); await run.step(first, () => files!.move(files!.paths.replacement, path, incoming, saved.identity));
-        await run.step(first, () => first.page.locator('.query-tab:visible .monaco-editor').getByRole('textbox').focus()); await run.step(first, () => first.page.locator('.query-tab:visible').getByRole('button', { name: text.save, exact: true }).click()); const recovery = first.page.getByRole('dialog', { name: text.recovery, exact: true });
+        await run.step(first, () => first.page.locator('.query-tab:visible .monaco-editor').getByRole('textbox').focus()); await run.step(first, async () => (await navigationMenuItem(first.page.locator('.query-tab:visible'), { name: text.save, exact: true }, () => run.assert(first))).click()); const recovery = first.page.getByRole('dialog', { name: text.recovery, exact: true });
         await run.step(first, () => expect(recovery).toContainText(text.wroteNo)); await run.step(first, () => expect(recovery.locator('.error-box')).toContainText('原文件已被替换')); expect(await workspace(run, first)).toEqual(draft); expect((await run.step(first, () => files!.read(path, incoming))).bytes).toEqual(utf16NativeBytes(externalSql));
-        await run.step(first, () => recovery.getByRole('button', { name: text.reread, exact: true }).click()); await run.step(first, () => expect(recovery).toBeHidden()); await expect.poll(() => settings(run, first).then(value => value.tabs.length)).toBe(3); const reread = await workspace(run, first);
+        await run.step(first, async () => (await navigationMenuItem(recovery, { name: text.reread, exact: true })).click()); await run.step(first, () => expect(recovery).toBeHidden()); await expect.poll(() => settings(run, first).then(value => value.tabs.length)).toBe(3); const reread = await workspace(run, first);
         expect(reread.tabs[1].id).toBe(fileTab.id); expect(reread.tabs[1].sql).toBe(draftSql); expect(reread.tabs[1].fileSourceBinding?.id).toBe(savedSource.ref.id); expect(reread.tabs[1].fileSourceBinding!.revision).toBeGreaterThan(savedSource.ref.revision); expect(reread.tabs[2]).toMatchObject({ sql: externalSql, title: basename(path) + text.rereadSuffix }); expect(reread.tabs[2].fileSourceBinding).toBeUndefined(); expect(reread.tabs[2].sourceBinding).toBeUndefined(); expect(reread.activeTabId).toBe(reread.tabs[2].id);
         expect({ ...reread.actual[1], visible: true }).toEqual(draft.actual[1]); expect(reread.actual[2].model).not.toBe(draft.actual[1].model); await bound(run, first, fileTab.id); expect((await run.step(first, () => files!.read(path, incoming))).bytes).toEqual(utf16NativeBytes(externalSql));
         const second = await restart(run, first, files, () => closeDirtyOwner(run, first, scope, info, dirtyExits)); const final = await workspace(run, second); expect(final.tabs[1].sql).toBe(draftSql); expect(final.tabs[2].sql).toBe(externalSql); await bound(run, second, fileTab.id); await run.step(second, () => files!.read(path, incoming)); await noSql(run, second); await closeDirtyOwner(run, second, scope, info, dirtyExits); expect(dirtyExits).toHaveLength(2);
@@ -213,3 +213,6 @@ export function registerQueryFilesNative(binding: Binding) {
     } finally { try { await files?.closeHandles(); } catch (closing) { run.retained = true; throw new AggregateError(failure === undefined ? [closing] : [failure, closing], '原文件句柄关闭失败，保留首因', { cause: failure }); } }
   });
 }
+
+/** 原门进入具体动作后才加载真实菜单导航，不改变默认/列表阶段的资源边界。 */
+async function navigationMenuItem(...args: Parameters<typeof import('./navigation-menu')['navigationMenuItem']>): Promise<import('@playwright/test').Locator> { return (require('./navigation-menu') as typeof import('./navigation-menu')).navigationMenuItem(...args); }

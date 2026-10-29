@@ -162,20 +162,20 @@ function register(enabled: boolean): void {
         await live.writeSql(source);
         const owner = runtime.ownedDesktopResources(info), query = owner.page.locator('.query-tab:visible'), analysis = query.getByRole('region', { name: t.view, exact: true });
         await observed(info, { mode: 'live', steps: [{ mode: 'save', path: filePath }, { mode: 'save', cancel: true }], profileId: connectionId, database, sql: source, openTitle: text.choose, saveTitle: text.save, invalidText: text.invalid }, async () => {
-          await query.getByRole('button', { name: t.open, exact: true }).click(); const confirmation = owner.page.getByRole('dialog', { name: t.title, exact: true });
+          await (await (await import('./navigation-menu')).navigationMenuItem(query, { name: t.open, exact: true })).click(); const confirmation = owner.page.getByRole('dialog', { name: t.title, exact: true });
           await expect(confirmation).toBeVisible(); await expect(confirmation).toContainText(database);
-          expect((await audit(info)).analyses).toEqual([]); await confirmation.getByRole('checkbox', { name: t.acknowledge, exact: true }).check(); await confirmation.getByRole('button', { name: t.confirm, exact: true }).click();
+          expect((await audit(info)).analyses).toEqual([]); await confirmation.getByRole('checkbox', { name: t.acknowledge, exact: true }).check(); await (await (await import('./navigation-menu')).navigationMenuItem(confirmation, { name: t.confirm, exact: true })).click();
           await expect(confirmation).toHaveCount(0); await expect.poll(async () => (await audit(info)).analyses.length, { timeout: 20000 }).toBe(1);
           await expect.poll(async () => (await audit(info)).pending).toBe(0); await expect(analysis.getByRole('treeitem').first()).toBeVisible(); await expect(query.locator('.error-box')).toHaveCount(0);
           const reply = (await audit(info)).analyses[0].outcome, plan = reply.analysis!;
           expect(reply.results).toHaveLength(1); expect(reply.results[0].rows).toHaveLength(1); expect(reply.results[0].columns).toHaveLength(1);
           expect(plan.dialect).toBe(dialect); expect(plan.version.replace(/^5[.]5[.]5-/, '')).toBe(version.replace(/^5[.]5[.]5-/, '')); expect(plan.format).toBe(dialect === 'mysql' ? 'tree' : 'json'); expect(plan.rawTruncated).toBe(false);
-          await analysis.getByRole('button', { name: text.save, exact: true }).click(); await expect(analysis.getByRole('status').filter({ hasText: text.saved(path.basename(filePath)) })).toBeVisible();
+          await (await (await import('./navigation-menu')).navigationMenuItem(analysis, { name: text.save, exact: true })).click(); await expect(analysis.getByRole('status').filter({ hasText: text.saved(path.basename(filePath)) })).toBeVisible();
           originalBytes = await fs.readFile(filePath); originalDocument = JSON.parse(originalBytes.toString('utf8'));
           expect(originalDocument).toEqual({ kind: 'dbark.analyze-snapshot', version: 1, dialect: plan.dialect, serverVersion: plan.version, format: plan.format, raw: plan.raw, rawTruncated: plan.rawTruncated, warnings: plan.warnings, result: { columns: reply.results[0].columns, rows: reply.results[0].rows, truncated: reply.results[0].truncated } });
           for (const key of ['statement', 'elapsedMs', 'transactionOpen', 'nodes', 'connectionId', 'sessionId']) expect(Object.hasOwn(originalDocument, key) || Object.hasOwn(originalDocument.result, key)).toBe(false);
-          expect(originalBytes.includes(Buffer.from(source))).toBe(false); await analysis.getByRole('button', { name: t.raw, exact: true }).click(); await expect(analysis.getByLabel(t.raw, { exact: true })).toHaveText(plan.raw);
-          await analysis.getByRole('button', { name: text.save, exact: true }).click(); await expect(analysis.getByRole('button', { name: text.save, exact: true })).toBeEnabled();
+          expect(originalBytes.includes(Buffer.from(source))).toBe(false); await (await (await import('./navigation-menu')).navigationMenuItem(analysis, { name: t.raw, exact: true })).click(); await expect(analysis.getByLabel(t.raw, { exact: true })).toHaveText(plan.raw);
+          await (await (await import('./navigation-menu')).navigationMenuItem(analysis, { name: text.save, exact: true })).click(); await expect(analysis.getByRole('button', { name: text.save, exact: true })).toBeEnabled();
           expect(await fs.readFile(filePath)).toEqual(originalBytes); await expect(analysis.getByLabel(t.raw, { exact: true })).toHaveText(plan.raw);
           const fact = await audit(info); expect(fact.analyses).toHaveLength(1); expect(fact.files).toEqual([{ mode: 'save', canceled: false, ok: true, name: path.basename(filePath) }, { mode: 'save', canceled: true, ok: true }]); expect(fact.fileIndex).toBe(2); expect(fact.pending).toBe(0);
           await owner.page.screenshot({ path: output(info, '实际分析-正式保存.png') });
@@ -197,21 +197,21 @@ function register(enabled: boolean): void {
       const digest = createHash('sha256').update(originalBytes).digest('hex');
       await observed(info, { mode: 'offline', steps: [{ mode: 'open', path: filePath }, { mode: 'save', path: copyOne }, { mode: 'open', cancel: true }, { mode: 'open', path: badKind, invalid: true }, { mode: 'open', path: badVersion, invalid: true }, { mode: 'save', path: copyTwo }], openTitle: text.choose, saveTitle: text.save, invalidText: text.invalid }, async () => {
         expect(await owner.page.evaluate(() => window.dbark.invoke('connections.list', {}))).toEqual([]); expect((await owner.page.evaluate(() => window.dbark.invoke('settings.get', {}))).tabs).toEqual([]);
-        await owner.page.locator('.app-commandbar').getByRole('button', { name: text.entry, exact: true }).click(); await expect(dialog).toContainText(text.notice);
-        await dialog.getByRole('button', { name: text.choose, exact: true }).click(); await expect(dialog.getByRole('status').filter({ hasText: text.opened(path.basename(filePath)) })).toBeVisible(); await expect(dialog).toContainText(text.actual);
+        await (await (await import('./navigation-menu')).navigationMenuItem(owner.page.locator('.navigation-toolbar'), { name: text.entry, exact: true })).click(); await expect(dialog).toContainText(text.notice);
+        await (await (await import('./navigation-menu')).navigationMenuItem(dialog, { name: text.choose, exact: true })).click(); await expect(dialog.getByRole('status').filter({ hasText: text.opened(path.basename(filePath)) })).toBeVisible(); await expect(dialog).toContainText(text.actual);
         const analysis = dialog.getByRole('region', { name: t.view, exact: true }); await expect(analysis.getByRole('treeitem').first()).toBeVisible();
-        await analysis.getByRole('button', { name: t.raw, exact: true }).click(); await expect(analysis.getByLabel(t.raw, { exact: true })).toHaveText(originalDocument.raw);
-        await analysis.getByRole('button', { name: text.saveAs, exact: true }).click(); await expect(analysis.getByRole('status').filter({ hasText: text.saved(path.basename(copyOne)) })).toBeVisible();
+        await (await (await import('./navigation-menu')).navigationMenuItem(analysis, { name: t.raw, exact: true })).click(); await expect(analysis.getByLabel(t.raw, { exact: true })).toHaveText(originalDocument.raw);
+        await (await (await import('./navigation-menu')).navigationMenuItem(analysis, { name: text.saveAs, exact: true })).click(); await expect(analysis.getByRole('status').filter({ hasText: text.saved(path.basename(copyOne)) })).toBeVisible();
         for (const failure of ['cancel', 'kind', 'version'] as const) {
-          await dialog.getByRole('button', { name: text.choose, exact: true }).click(); await expect(dialog.getByRole('button', { name: text.choose, exact: true })).toBeEnabled();
+          await (await (await import('./navigation-menu')).navigationMenuItem(dialog, { name: text.choose, exact: true })).click(); await expect(dialog.getByRole('button', { name: text.choose, exact: true })).toBeEnabled();
           if (failure !== 'cancel') await expect(dialog.locator('.error-box')).toContainText(text.invalid);
           await expect(analysis.getByLabel(t.raw, { exact: true })).toHaveText(originalDocument.raw); await expect(dialog.getByRole('status').filter({ hasText: text.opened(path.basename(filePath)) })).toBeVisible();
           expect(createHash('sha256').update(await fs.readFile(filePath)).digest('hex')).toBe(digest);
         }
-        await analysis.getByRole('button', { name: text.saveAs, exact: true }).click(); await expect(analysis.getByRole('status').filter({ hasText: text.saved(path.basename(copyTwo)) })).toBeVisible();
+        await (await (await import('./navigation-menu')).navigationMenuItem(analysis, { name: text.saveAs, exact: true })).click(); await expect(analysis.getByRole('status').filter({ hasText: text.saved(path.basename(copyTwo)) })).toBeVisible();
         for (const copy of [copyOne, copyTwo]) { const bytes = await fs.readFile(copy); expect(JSON.parse(bytes.toString('utf8'))).toEqual(originalDocument); expect(bytes).toEqual(originalBytes); }
         await owner.page.screenshot({ path: output(info, '实际分析-空连接离线另存.png') });
-        await dialog.getByRole('button', { name: text.close, exact: true }).click(); await expect(dialog).toHaveCount(0);
+        await (await (await import('./navigation-menu')).navigationMenuItem(dialog, { name: text.close, exact: true })).click(); await expect(dialog).toHaveCount(0);
         expect(await owner.page.evaluate(() => window.dbark.invoke('connections.list', {}))).toEqual([]); expect(await owner.page.evaluate(() => window.dbark.invoke('history.list', {}))).toEqual([]); expect(await owner.page.evaluate(() => window.dbark.invoke('tasks.list', {}))).toEqual([]);
         const fact = await audit(info); expect(fact.databaseCommands).toEqual([]); expect(fact.analyses).toEqual([]); expect(fact.pending).toBe(0); expect(fact.fileIndex).toBe(6); expect(fact.dialogs).toBe(6);
       });

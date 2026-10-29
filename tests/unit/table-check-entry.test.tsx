@@ -28,7 +28,7 @@ afterAll(() => { for (const [key, descriptor] of globals) if (descriptor) Object
 
 /** 仅提取CHECK真实App节点；Dialog是明确的外界端口，不声称覆盖完整组件或实际DDL。 */
 function entry() {
-  const source = readFileSync(new URL('../../src/renderer/App.tsx', import.meta.url), 'utf8'), file = ts.createSourceFile('App.tsx', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX), app = file.statements.find(node => ts.isFunctionDeclaration(node) && node.name?.text === 'App') as ts.FunctionDeclaration;
+  const source = readFileSync(new URL('../../src/renderer/App.tsx', import.meta.url), 'utf8'), file = ts.createSourceFile('App.tsx', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX), app = file.statements.find(node => ts.isFunctionDeclaration(node) && node.name?.text === 'WorkspaceApp') as ts.FunctionDeclaration;
   const declarations: string[] = [], methods: string[] = []; let dirty = '', modal = '';
   const visit = (node: ts.Node) => {
     if (ts.isVariableStatement(node)) {

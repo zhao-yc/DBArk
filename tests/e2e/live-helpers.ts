@@ -34,7 +34,7 @@ function tlsCertificate():string|undefined{
 async function configureTls(form:ReturnType<typeof page.getByRole>,owner?:LiveDesktopOwner){
   owner?.assertCurrent();
   const certificate=tlsCertificate();if(!certificate)return;
-  await form.getByRole('button',{name:'TLS / SSL',exact:true}).click();owner?.assertCurrent();
+  await (await (await import('./navigation-menu')).navigationMenuItem(form, {name:'TLS / SSL',exact:true}, owner ? () => owner.assertCurrent() : undefined)).click();owner?.assertCurrent();
   await form.getByLabel(zh.connections.text027,{exact:true}).check();owner?.assertCurrent();
   await form.getByLabel(zh.connections.text028,{exact:true}).check();owner?.assertCurrent();
   const application=owner?owner.application:desktop;
@@ -44,7 +44,7 @@ async function configureTls(form:ReturnType<typeof page.getByRole>,owner?:LiveDe
   },certificate);
   owner?.assertCurrent();
   let failed=false,originalFailure:unknown;
-  try{await form.getByRole('button',{name:'选择CA 证书',exact:true}).click();owner?.assertCurrent();await expect(form.getByRole('textbox',{name:'CA 证书 选择CA 证书',exact:true})).toHaveValue(certificate);owner?.assertCurrent();}
+  try{await (await (await import('./navigation-menu')).navigationMenuItem(form, {name:'选择CA 证书',exact:true}, owner ? () => owner.assertCurrent() : undefined)).click();owner?.assertCurrent();await expect(form.getByRole('textbox',{name:'CA 证书 选择CA 证书',exact:true})).toHaveValue(certificate);owner?.assertCurrent();}
   catch(reason){failed=true;originalFailure=reason;throw reason;}
   finally{
     try{owner?.assertCurrent();await (owner?application:desktop).evaluate(({dialog})=>{const root=globalThis as typeof globalThis&{__liveTlsOpenDialog?:typeof dialog.showOpenDialog};if(root.__liveTlsOpenDialog){dialog.showOpenDialog=root.__liveTlsOpenDialog;delete root.__liveTlsOpenDialog;}});owner?.assertCurrent();}
@@ -75,7 +75,7 @@ export async function connectAndCreate(database: string, owner?: LiveDesktopOwne
   const connectionName = `E2E ${database}`;
   // 非严格分支仍按原时点读取全局page；严格分支始终只返回捕获页面，不降级回全局。
   const targetPage = () => { owner?.assertCurrent(); return owner ? owner.page : page; };
-  await targetPage().locator('.app-commandbar').getByRole('button', { name: '新建连接', exact: true }).click();owner?.assertCurrent();
+  await (await (await import('./navigation-menu')).navigationMenuItem(targetPage().locator('.navigation-toolbar'), { name: '新建连接', exact: true }, owner ? () => owner.assertCurrent() : undefined)).click();owner?.assertCurrent();
   const form = targetPage().getByRole('dialog', { name: '新建连接', exact: true });
   await form.getByLabel('连接名称', { exact: true }).fill(connectionName);owner?.assertCurrent();
   await form.getByLabel('主机地址', { exact: true }).fill(environment.DBARK_TEST_HOST!);owner?.assertCurrent();
@@ -84,9 +84,9 @@ export async function connectAndCreate(database: string, owner?: LiveDesktopOwne
   await form.getByLabel('数据库密码', { exact: true }).fill(environment.DBARK_TEST_PASSWORD ?? '');owner?.assertCurrent();
   await form.getByLabel('连接分组', { exact: true }).fill('隔离数据库验证');owner?.assertCurrent();
   await configureTls(form,owner);owner?.assertCurrent();
-  await form.getByRole('button', { name: '测试连接', exact: true }).click();owner?.assertCurrent();
+  await (await (await import('./navigation-menu')).navigationMenuItem(form, { name: '测试连接', exact: true }, owner ? () => owner.assertCurrent() : undefined)).click();owner?.assertCurrent();
   await expect(form.locator('.success-box')).toContainText('连接成功', { timeout: 20000 });owner?.assertCurrent();
-  await form.getByRole('button', { name: '保存连接', exact: true }).click();owner?.assertCurrent();
+  await (await (await import('./navigation-menu')).navigationMenuItem(form, { name: '保存连接', exact: true }, owner ? () => owner.assertCurrent() : undefined)).click();owner?.assertCurrent();
   await expect(form).toBeHidden();owner?.assertCurrent();
   const profiles = await targetPage().evaluate(() => window.dbark.invoke('connections.list', {}));owner?.assertCurrent();
   const connectionId = profiles.find(profile => profile.name === connectionName)!.id;
@@ -100,16 +100,16 @@ export async function connectAndCreate(database: string, owner?: LiveDesktopOwne
   // 走新建库真实目录、预览与准确确认；保持utf8mb4/bin显式配对，不使用SQL或IPC替代表单。
   await create.getByRole('combobox', { name: databaseText.charset, exact: true }).selectOption('utf8mb4');owner?.assertCurrent();
   await create.getByRole('combobox', { name: databaseText.collation, exact: true }).selectOption('utf8mb4_bin');owner?.assertCurrent();
-  await create.getByRole('button', { name: databaseText.preview, exact: true }).click();owner?.assertCurrent();
+  await (await (await import('./navigation-menu')).navigationMenuItem(create, { name: databaseText.preview, exact: true }, owner ? () => owner.assertCurrent() : undefined)).click();owner?.assertCurrent();
   await expect(create.locator('.monaco-editor .view-lines')).toContainText('CREATE DATABASE');owner?.assertCurrent();
   await create.getByRole('textbox', { name: databaseText.confirmation, exact: true }).fill(database);owner?.assertCurrent();
   await create.getByRole('checkbox', { name: databaseText.ackDdl, exact: true }).check();owner?.assertCurrent();
   await create.getByRole('checkbox', { name: databaseText.ackCreate, exact: true }).check();owner?.assertCurrent();
-  await create.getByRole('button', { name: databaseText.apply, exact: true }).click();owner?.assertCurrent();
+  await (await (await import('./navigation-menu')).navigationMenuItem(create, { name: databaseText.apply, exact: true }, owner ? () => owner.assertCurrent() : undefined)).click();owner?.assertCurrent();
   await expect(create.getByRole('status')).toHaveText(databaseText.succeeded, { timeout: 20000 });owner?.assertCurrent();
-  await create.getByRole('button', { name: '关闭', exact: true }).click();owner?.assertCurrent();
+  await (await (await import('./navigation-menu')).navigationMenuItem(create, { name: '关闭', exact: true }, owner ? () => owner.assertCurrent() : undefined)).click();owner?.assertCurrent();
   await expect(create).toBeHidden({ timeout: 20000 });owner?.assertCurrent();
-  await connectionRow.getByRole('button', { name: connectionName, exact: true }).click();owner?.assertCurrent();
+  await (await (await import('./navigation-menu')).navigationMenuItem(connectionRow, { name: connectionName, exact: true }, owner ? () => owner.assertCurrent() : undefined)).click();owner?.assertCurrent();
   await expect(targetPage().locator('.database-row').getByRole('button', { name: database, exact: true })).toBeVisible();owner?.assertCurrent();
   return { database, connectionName, connectionId };
 }
@@ -194,7 +194,7 @@ export async function writeSql(source: string) {
 export async function executeSql(source: string) {
   await writeSql(source);
   const query = page.locator('.query-tab:visible');
-  await query.getByRole('button', { name: '执行全部', exact: true }).click();
+  await (await (await import('./navigation-menu')).navigationMenuItem(query, { name: '执行全部', exact: true })).click();
   await expect(query.getByRole('button', { name: '停止', exact: true })).toBeDisabled({ timeout: 20000 });
   await expect(query.locator('.error-box')).toHaveCount(0);
 }

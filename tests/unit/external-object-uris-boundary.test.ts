@@ -2,7 +2,7 @@ import { readFileSync } from 'node:fs';
 import { runInNewContext } from 'node:vm';
 import ts from 'typescript';
 import { describe, expect, it, vi } from 'vitest';
-import { publicCommands } from '../../src/shared/commands';
+import { publicCommands, isUiCommandInvocation } from '../../src/shared/commands';
 import { validateCommand } from '../../src/shared/validation';
 import type { DesktopApi } from '../../src/shared/contracts';
 
@@ -37,7 +37,7 @@ describe('系统链接的正式preload及参数边界', () => {
     runInNewContext(ts.transpileModule(source, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS } }).outputText, {
       exports: {}, require(name: string) {
         if (name === 'electron') return { contextBridge: { exposeInMainWorld(_key: string, value: DesktopApi) { api = value; } }, ipcRenderer: { invoke: request, on, removeListener } };
-        if (name === '../shared/commands') return { publicCommands };
+        if (name === '../shared/commands') return { publicCommands, isUiCommandInvocation };
         throw Error('禁止额外预加载依赖');
       }
     });

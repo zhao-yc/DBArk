@@ -7,6 +7,7 @@ import { memoryDocument, MemoryEvent, type MemoryNode } from '../fixtures/memory
 import { zh } from '../../src/renderer/locales/zh-CN';
 import { assertTlsPassphrase } from '../../src/shared/tlsCredentials';
 import type { ConnectionProfile } from '../../src/shared/contracts';
+import { navigationMenuRamPort } from '../helpers/sidebarMenuRamPort';
 
 const { request } = vi.hoisted(() => ({ request: vi.fn() }));
 vi.mock('../../src/renderer/lib', async original => ({ ...await original<object>(), invoke: request, uid: () => '仅RAM合成连接' }));
@@ -31,7 +32,7 @@ function fixtureForm(file: string, title: string): string {
   const segments: string[] = [];
   const blocks = (node: ts.Node) => {
     if (ts.isBlock(node)) {
-      const start = node.statements.findIndex(statement => /^await page\.locator\('\.app-commandbar'\).*新建连接/.test(statement.getText(source)));
+      const start = node.statements.findIndex(statement => /^await .*navigationMenuItem\(page\.locator\('\.navigation-toolbar'\),\s*\{\s*name:\s*'新建连接',\s*exact:\s*true\s*\}/.test(statement.getText(source)));
       if (start >= 0) {
         const end = node.statements.findIndex((statement, index) => index > start && /await expect\(form\)\.(?:toHaveCount\(0\)|toBeHidden\(\))/.test(statement.getText(source)));
         if (end < 0) throw Error('真实表单缺少保存后关闭断言');
@@ -145,9 +146,10 @@ describe('两条限权真实fixture的临时密码仅RAM', () => {
     const ram = await mount();
     expect(document.querySelector('input[type="checkbox"]')?.checked).toBe(true);
     const form = locator(() => document.querySelectorAll('div[role="dialog"]').find(node => node.getAttribute('aria-label') === '新建连接'));
-    const page = { locator: (selector: string) => { expect(selector).toBe('.app-commandbar'); return { getByRole: (_role: string, options: { name: string }) => ({ click: async () => { expect(options.name).toBe('新建连接'); } }) }; }, getByRole: () => form };
-    const code = ts.transpile(`(async () => { ${fixtureForm(file, title)} })()`, { target: ts.ScriptTarget.ES2022 });
-    await runInNewContext(code, { page, expect: fixtureExpect, zh, environment: { DBARK_TEST_HOST: 'ram.example.invalid', DBARK_TEST_PORT: '13384' }, port: 13384, user: '合成临时账号', password: syntheticPassword, connectionName: '合成限权连接' });
+    const page = { locator: (selector: string) => { expect(selector).toBe('.navigation-toolbar'); return { getByRole: (_role: string, options: { name: string }) => ({ click: async () => { expect(options.name).toBe('新建连接'); } }) }; }, getByRole: () => form };
+    // 仅接纳明确的导航展示依赖；真实表单输入、密码保存及RAM存储断言继续执行原语句。
+    const code = ts.transpile(`(async () => { ${fixtureForm(file, title)} })()`, { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS });
+    await runInNewContext(code, { page, expect: fixtureExpect, zh, require(name: string) { if (name === './navigation-menu') return navigationMenuRamPort; throw Error('限权表单回放禁止其它依赖：' + name); }, environment: { DBARK_TEST_HOST: 'ram.example.invalid', DBARK_TEST_PORT: '13384' }, port: 13384, user: '合成临时账号', password: syntheticPassword, connectionName: '合成限权连接' });
     const calls = request.mock.calls.filter(([command]) => command === 'connections.test' || command === 'connections.save');
     expect(calls.map(([command]) => command)).toEqual(['connections.test', 'connections.save']);
     for (const [, profile] of calls) { expect(profile.rememberPassword, '临时账号的真实表单必须显式关闭密码保存').toBe(false); expect(profile).toMatchObject({ user: '合成临时账号', password: syntheticPassword }); }

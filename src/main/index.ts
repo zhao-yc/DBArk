@@ -23,6 +23,7 @@ import { connectionOrganizationZh } from '../shared/connectionOrganization.zh-CN
 import { tableCreateMessages } from '../shared/tableCreate';
 import { assertQueryDatabaseSwitchOutput, queryDatabaseSwitchMessages } from '../shared/queryDatabaseSwitch';
 import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, safeStorage } from 'electron';
+import { ApplicationMenu, isApplicationMenuDocument } from './applicationMenu';
 import { copyInsertSql } from './copyInsertSql';
 import { join, basename } from 'node:path';
 import { mkdirSync } from 'node:fs';
@@ -68,6 +69,7 @@ import { QueryResultPresetSources } from './queryResultPresetSources';
 if (process.env.DBARK_USER_DATA) { mkdirSync(process.env.DBARK_USER_DATA, { recursive: true }); app.setPath('userData', process.env.DBARK_USER_DATA); }
 app.setName('DBArk');
 let window: BrowserWindow | undefined;
+let applicationMenu: ApplicationMenu | undefined;
 let store: LocalStore;
 let broker: EngineBroker;
 let tableApplyReceipts: TableApplyReceipts;
@@ -1039,6 +1041,12 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
     case 'tasks.list': return store.tasks();
     case 'tasks.cancelState': return taskCancelSnapshot(input.taskIds, tasks, (id, operationId) => tableApplyReceipts.cancelState(id, operationId)).map(item => tasks.get(item.taskId)?.status === 'running' && tasks.get(item.taskId)?.kind.startsWith('queryFileSources.') ? { ...item, state: queryFileSources.cancelState(item.taskId) } : item);
     case 'settings.get': rendererHasSettings = true; return store.settings();
+    case 'app.menuState': {
+      columnsMain.assertCapturedOwner(columns);
+      if (shuttingDown || !applicationMenu) throw Error('客户端菜单当前不可用');
+      applicationMenu.update(input);
+      return;
+    }
     case 'settings.save': {
       try { store.saveSettings(input); rendererSettingsCurrent = true; stateFlushed?.resolve(); }
       catch (error) { rendererSettingsCurrent = false; stateFlushed?.reject(error instanceof Error ? error : new Error(String(error))); throw error; }
@@ -1203,24 +1211,23 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
   } finally { if (filteredExportLease) await filteredExportLease.release(); if (command === 'table.apply' && taskId) tableApplyReceipts.finish(taskId); if (command === structurePrefix + 'apply') structureTokens.delete(input.previewToken); if (taskId) { pendingQueryHistory.delete(taskId); preparingTasks.delete(taskId); exportProgress.delete(taskId); structureProgress.delete(taskId); } if(command==='query.exportStream'&&input.format==='sql')queryInsertExports.finish(input.taskId); releaseTarget?.(); }
 }
 
-/** 按平台生成中文原生菜单，查询快捷键统一发送给当前工作区。 */
+/** 菜单模板只接纳固定命令，执行资格由当前文档的准确修订决定。 */
 function createMenu(): void {
-  const action = (name: string) => () => window?.webContents.send('dbark:menu', name);
-  const mac = process.platform === 'darwin';
-  const menu: Electron.MenuItemConstructorOptions[] = [
-    ...(mac ? [{ label: 'DBArk', submenu: [{ label: '关于 DBArk', role: 'about' }, { type: 'separator' }, { label: '隐藏 DBArk', role: 'hide' }, { label: '退出 DBArk', role: 'quit' }] } as Electron.MenuItemConstructorOptions] : []),
-    { label: '文件', submenu: [{ label: '新建连接', accelerator: 'CmdOrCtrl+Shift+N', click: action('new-connection') }, { label: '新建查询', accelerator: 'CmdOrCtrl+N', click: action('new-query') }, { label: '打开 SQL 文件', accelerator: 'CmdOrCtrl+O', click: action('open-sql-file') }, { label: '最近 SQL 文件', click: action('recent-sql-file') }, { label: '另存 SQL 文件', accelerator: 'CmdOrCtrl+Shift+S', click: action('save-sql-file') }, { label: '保存查询', accelerator: 'CmdOrCtrl+S', click: action('save-query') }, { type: 'separator' }, { label: '退出', role: 'quit' }] },
-    { label: '编辑', submenu: [{ label: '撤销', role: 'undo' }, { label: '重做', role: 'redo' }, { type: 'separator' }, { label: '剪切', role: 'cut' }, { label: '复制', role: 'copy' }, { label: '粘贴', role: 'paste' }, { label: '全选', role: 'selectAll' }] },
-    { label: '查询', submenu: [{ label: '执行查询', accelerator: 'CmdOrCtrl+Enter', click: action('execute') },{label:'全库搜索',accelerator:'CmdOrCtrl+Shift+F',click:action('structure-search')}] },
-    { label: '视图', submenu: [{ label: '切换明暗主题', click: action('toggle-theme') }, { label: '放大', role: 'zoomIn' }, { label: '缩小', role: 'zoomOut' }, { label: '重置缩放', role: 'resetZoom' }, { label: '全屏', role: 'togglefullscreen' }] }
-  ];
-  Menu.setApplicationMenu(Menu.buildFromTemplate(menu));
+  applicationMenu = new ApplicationMenu(process.platform, {
+    replace: template => Menu.setApplicationMenu(Menu.buildFromTemplate(template)),
+    available: () => !shuttingDown && !!window && !window.isDestroyed() && !window.webContents.isDestroyed() && isApplicationMenuDocument(window.webContents.getURL(), rendererURL),
+    send: invocation => window?.webContents.send('dbark:command', invocation)
+  });
 }
 
 /** 创建启用沙箱与上下文隔离的窗口，限制导航并等待页面就绪后显示。 */
 async function createWindow(): Promise<void> {
   window = new BrowserWindow({ width: 1440, height: 920, minWidth: 1024, minHeight: 680, show: false, backgroundColor: '#101319', title: 'DBArk', icon: app.isPackaged ? join(process.resourcesPath, 'icon.png') : join(__dirname, '../../build/icon.png'), webPreferences: { preload: join(__dirname, 'preload.cjs'), sandbox: true, contextIsolation: true, nodeIntegration: false, webSecurity: true, spellcheck: false } });
   columnsMain.trackWindow(window);
+  // 重导航立即撤销旧菜单闭包，不能等待新页面初始化后再覆盖旧可用状态。
+  window.webContents.on('did-start-navigation', details => { if (details.isMainFrame && !details.isSameDocument) applicationMenu?.invalidate(); });
+  window.webContents.on('render-process-gone', () => applicationMenu?.invalidate());
+  window.webContents.on('destroyed', () => applicationMenu?.invalidate());
   // 不同主文档不能继承已经开始的打开操作；旧 Promise 仍等真实完成才释放队列。
   window.webContents.on('did-start-navigation', details => { if (details.isMainFrame && !details.isSameDocument) externalObjectUris.suspend(); });
   window.webContents.on('render-process-gone', () => externalObjectUris.suspend());
@@ -1258,7 +1265,7 @@ async function createWindow(): Promise<void> {
   window.webContents.session.setPermissionCheckHandler(() => false);
   window.once('ready-to-show', () => window?.show());
   window.on('close', event => { if (!shutdownComplete) { event.preventDefault(); app.quit(); } });
-  window.on('closed', () => { window = undefined; resultSqlPreviews.clear(); files.clear(); });
+  window.on('closed', () => { applicationMenu?.invalidate(); window = undefined; resultSqlPreviews.clear(); files.clear(); });
   await window.loadURL(rendererURL);
 }
 
@@ -1268,10 +1275,11 @@ app.on('before-quit', event => {
   event.preventDefault();
   if (shuttingDown) return;
   shuttingDown = true;
+  applicationMenu?.invalidate();
   void (async () => {
     if ((hasPendingEdits || [...tasks.values()].some(t => t.status === 'running')) && window) {
       const answer = await dialog.showMessageBox(window, { type: 'warning', title: '仍有待完成的工作', message: '退出会放弃尚未提交的表格修改、断开数据库连接并回滚未提交事务。已提交的操作不会撤销。', buttons: ['继续工作','退出客户端'], defaultId: 0, cancelId: 0 });
-      if (answer.response === 0) { shuttingDown = false; window?.webContents.send('dbark:object-uri-pending'); return; }
+      if (answer.response === 0) { shuttingDown = false; window?.webContents.send('dbark:object-uri-pending'); window?.webContents.send('dbark:menu', 'refresh-command-state'); return; }
     }
     // 先让界面把防抖队列里的最新编辑落盘，再关闭配置库。
     if (rendererHasSettings && window && !window.isDestroyed()) {
@@ -1298,10 +1306,10 @@ app.on('before-quit', event => {
       await savedQuerySearches?.close();await savedQueryPages?.close();await historyPages?.close();await historyDelete?.close();await Promise.allSettled([...localSearchOperations]);
       await cancelFileImportPreflights();
       await Promise.allSettled([...queryFileOperations]);
-      try { broker?.forceClose(); } catch (failure) { shuttingDown = false; window?.webContents.send('dbark:object-uri-pending'); dialog.showErrorBox('强制退出失败', failure instanceof Error ? failure.message : '数据库执行进程未能终止'); return; }
+      try { broker?.forceClose(); } catch (failure) { shuttingDown = false; window?.webContents.send('dbark:object-uri-pending'); window?.webContents.send('dbark:menu', 'refresh-command-state'); dialog.showErrorBox('强制退出失败', failure instanceof Error ? failure.message : '数据库执行进程未能终止'); return; }
       try { store?.close(); } catch { /* 用户已明确选择退出，避免退出状态永久锁死。 */ }
       externalObjectUris.close(); shutdownComplete = true; app.quit();
-    } else { shuttingDown = false; window?.webContents.send('dbark:object-uri-pending'); }
+    } else { shuttingDown = false; window?.webContents.send('dbark:object-uri-pending'); window?.webContents.send('dbark:menu', 'refresh-command-state'); }
   });
 });
 app.on('window-all-closed', () => app.quit());
@@ -1442,6 +1450,7 @@ else {
         }
         if (payload.command.startsWith('explainFiles.')||payload.command.startsWith('schema.columns.')||payload.command.startsWith('table.presets.')||payload.command.startsWith('result.presets.')||payload.command.startsWith('queryFileSources.')||fileCancel||resultSql||insertRequest||payload.command.startsWith('snippets.transfer')||payload.command.startsWith('files.importPresets.')) columns = columnsMain.capture(event);
         const input = validateMainCommand(payload.command, payload.input);
+        if (payload.command === 'app.menuState') columns = columnsMain.capture(event);
         if (payload.command.startsWith('tableDraftFiles.') || payload.command.startsWith('resultSnapshotFiles.') || payload.command.startsWith('workbench.protocol')) columns = columnsMain.capture(event);
         if (payload.command.startsWith('schema.databaseDrop.')) beginDatabaseDrop(payload.command, input, columns!);
         if (databaseEncodingCommand) databaseEncodingOwners.before(databaseEncodingCommand, input, columns!);

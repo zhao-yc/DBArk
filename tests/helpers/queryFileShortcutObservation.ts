@@ -76,7 +76,7 @@ export async function installShortcutObservation(page: Page, choice: ShortcutCho
     }
     root.__queryShortcutObservation = state;
     try {
-      offMenu = window.dbark.onMenu(action => passive(() => send({ stage: 'menu', command: action === 'save-query' ? 'save-query' : 'other', view: view() })));
+      offMenu = window.dbark.onCommand(event => passive(() => send({ stage: 'menu', command: event.id === 'save-query' ? 'save-query' : 'other', view: view() })));
       offTask = window.dbark.onTask(event => passive(() => { const task = event.queryFileSource; if (task?.tabId === choice.tabId && task.operation === 'save') send({ stage: 'task', view: view(), task: { id: event.taskId, status: event.status, phase: task.phase, wrote: task.wrote } }); }));
       document.addEventListener('keydown', keydown, true); timer = setTimeout(() => dispose(false), choice.deadline - Date.now());
       send({ stage: 'before', view: view() }); return { nonce: choice.nonce, installed: true };

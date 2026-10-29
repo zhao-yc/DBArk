@@ -7,6 +7,7 @@ import ts from 'typescript';
 import type { ElectronApplication } from '@playwright/test';
 import { beforeEach, afterEach, expect, it, vi } from 'vitest';
 import { installSqlFilesDirtyExitAnswer, consumeSqlFilesDirtyExitAnswer, draftSql } from '../helpers/queryFilesNative';
+import { applicationMenuRamPort } from './application-menu-ram-port';
 
 beforeEach(() => { vi.useFakeTimers(); vi.setSystemTime(1000); });
 afterEach(() => { vi.clearAllTimers(); vi.useRealTimers(); });
@@ -33,7 +34,7 @@ it('原Main before-quit先被真实dirty提示阻塞，确认后仅沿原收尾�
     sameOwner: (left, right) => left === right, resolve: async () => { throw Error('退出夹具禁止对象核验'); }, notify: vi.fn()
   });
   const closeObjectUris = vi.spyOn(externalObjectUris, 'close');
-  const callback = (statement.expression as ts.CallExpression).arguments[1], main: any = { externalObjectUris, filteredDeletes: emptyTableFilteredDeleteOwners(), filteredUpdates: emptyTableFilteredUpdateOwners(), resultInserts, shutdownComplete: false, shuttingDown: false, hasPendingEdits: true, tasks: new Map(), preparingTasks: new Map(), window: f.owner, dialog: f.dialog, rendererHasSettings: false, stateFlushed: undefined, savedQuerySearches: undefined, savedQueryPages: undefined, historyPages: undefined, historyDelete: { close: vi.fn(async () => { await Promise.resolve(); shutdownOrder.push('history-delete'); }) }, localSearchOperations: [], queryFileOperations: [], broker: { close: vi.fn(async () => {}) }, tableApplyReceipts: undefined, store: { close: vi.fn(() => { shutdownOrder.push('store'); }) }, app: f.app, event: { preventDefault: vi.fn() }, setTimeout };
+  const callback = (statement.expression as ts.CallExpression).arguments[1], main: any = { applicationMenu: applicationMenuRamPort().menu, externalObjectUris, filteredDeletes: emptyTableFilteredDeleteOwners(), filteredUpdates: emptyTableFilteredUpdateOwners(), resultInserts, shutdownComplete: false, shuttingDown: false, hasPendingEdits: true, tasks: new Map(), preparingTasks: new Map(), window: f.owner, dialog: f.dialog, rendererHasSettings: false, stateFlushed: undefined, savedQuerySearches: undefined, savedQueryPages: undefined, historyPages: undefined, historyDelete: { close: vi.fn(async () => { await Promise.resolve(); shutdownOrder.push('history-delete'); }) }, localSearchOperations: [], queryFileOperations: [], broker: { close: vi.fn(async () => {}) }, tableApplyReceipts: undefined, store: { close: vi.fn(() => { shutdownOrder.push('store'); }) }, app: f.app, event: { preventDefault: vi.fn() }, setTimeout };
   const document = { sql: draftSql, dirty: true }, before = { ...document }; await installSqlFilesDirtyExitAnswer(f.application, f.choice);
   runInNewContext(ts.transpileModule(cancellation.getText(tree) + '\n(' + callback.getText(tree) + ')(event)', { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText, main);
   expect(main.event.preventDefault).toHaveBeenCalledOnce(); expect(f.events).toEqual(['DBARK_SQL_FILES_DIRTY_PENDING:' + f.choice.nonce]); expect(f.app.quit).not.toHaveBeenCalled(); expect(main.broker.close).not.toHaveBeenCalled(); expect(main.historyDelete.close).not.toHaveBeenCalled(); expect(f.dialog.showMessageBox).toBe(f.original);

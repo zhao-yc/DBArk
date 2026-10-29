@@ -1,6 +1,6 @@
 import { contextBridge, ipcRenderer } from 'electron';
 import type { DesktopApi, TaskEvent } from '../shared/contracts';
-import { publicCommands } from '../shared/commands';
+import { publicCommands, isUiCommandInvocation } from '../shared/commands';
 
 /** 沙箱页面只能访问固定 API，不暴露原始 IPC、文件系统或 Node 对象。 */
 const api: DesktopApi = {
@@ -17,11 +17,17 @@ const api: DesktopApi = {
     ipcRenderer.on('dbark:task', handler);
     return () => ipcRenderer.removeListener('dbark:task', handler);
   },
-  /** 原生菜单只传递动作名称，不能执行任意脚本或暴露 IPC 对象。 */
+  /** 内部生命周期与警告只传递固定事件内容，不暴露 IPC 对象。 */
   onMenu(listener) {
     const handler = (_event: Electron.IpcRendererEvent, action: string) => listener(action);
     ipcRenderer.on('dbark:menu', handler);
     return () => ipcRenderer.removeListener('dbark:menu', handler);
+  },
+  /** 用户命令只交付白名单编号与状态代次，不交付原始IPC事件或执行能力。 */
+  onCommand(listener) {
+    const handler = (_event: Electron.IpcRendererEvent, invocation: unknown) => { if (isUiCommandInvocation(invocation)) listener(invocation); };
+    ipcRenderer.on('dbark:command', handler);
+    return () => ipcRenderer.removeListener('dbark:command', handler);
   },
   /** 只交付空唤醒，不向页面透传原始系统参数或 Electron 事件。 */
   onObjectUri(listener) {

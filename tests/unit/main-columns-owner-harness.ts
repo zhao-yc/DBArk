@@ -16,6 +16,7 @@ import { TableFilteredUpdateOwners } from '../../src/main/tableFilteredUpdateOwn
 import { ExternalObjectUris } from '../../src/main/externalObjectUris';
 import { resolveWorkbenchTarget } from '../../src/main/workbench';
 import { externalObjectUrisZh } from '../../src/shared/externalObjectUris.zh-CN';
+import { applicationMenuRamPort } from './application-menu-ram-port';
 
 /** 可控等待只替换broker物理边界，真实Main dispatch/helper/IPC保持原文。 */
 export function deferred<T = any>() { let resolve!: (value: T) => void, reject!: (error: Error) => void; const promise = new Promise<T>((yes, no) => { resolve = yes; reject = no; }); return { promise, resolve, reject }; }
@@ -73,7 +74,7 @@ export function mainColumnsHarness() {
     resultInserts: { observe() {}, invalidateConnection(_connectionId: string) {}, engineExited() {}, has: (_taskId: string) => false }, resultInsertProgress: new Map(),
     filteredUpdateProgress: new Map(), filteredDeleteProgress: new Map(),
 
-    Date, Map, Error, Boolean, TableChecksMainCapabilities, tableChecksFailureProgress, TableFilteredDeleteOwners, ExternalObjectUris, resolveWorkbenchTarget, externalObjectUrisZh, SavedQuerySearchCancelled, columnsMain: undefined, tablePresetSources: undefined, tablePresetReads: new Map(), window: undefined, structureTokens: tokens, tasks, structureProgress: progress, events,
+    Date, Map, Error, Boolean, applicationMenu: applicationMenuRamPort().menu, TableChecksMainCapabilities, tableChecksFailureProgress, TableFilteredDeleteOwners, ExternalObjectUris, resolveWorkbenchTarget, externalObjectUrisZh, SavedQuerySearchCancelled, columnsMain: undefined, tablePresetSources: undefined, tablePresetReads: new Map(), window: undefined, structureTokens: tokens, tasks, structureProgress: progress, events,
     tableApplyReceipts: undefined, pendingQueryHistory: new Map(), completionTasks: new Set(), preparingTasks: new Map(), exportProgress: new Map(), sessions: new Map(),
     savedQuerySearches: { has: () => false }, savedQueryPages: undefined, historyPages: undefined, historyDelete: undefined, localSearchOperations: new Set(), shuttingDown: false, shutdownComplete: false,
     rendererSettingsCurrent: true, rendererURL: 'app://renderer', process: { resourcesPath: 'ram' }, __dirname: 'ram', join: (...parts: string[]) => parts.join('/'),

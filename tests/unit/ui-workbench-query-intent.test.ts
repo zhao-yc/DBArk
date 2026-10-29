@@ -3,13 +3,17 @@ import { createContext, runInContext } from 'node:vm';
 import ts from 'typescript';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { WorkbenchTarget } from '../../src/shared/workbench';
+import { UiCommandRegistry } from '../../src/renderer/uiCommandRegistry';
+import { uiMenuStateSchema, type UiCommandInvocation, type UiMenuState } from '../../src/shared/uiCommands';
+import type { DesktopApi } from '../../src/shared/contracts';
+import { errorMessage } from '../../src/renderer/lib';
 
 const { request, saveSettings } = vi.hoisted(() => ({ request: vi.fn(), saveSettings: vi.fn() }));
 // 新标签的本地保存不能消耗待交付的导航响应；其它命令仍由原导航spy核对。
 vi.mock('../../src/renderer/lib', () => ({ invoke: (command: string, input: unknown) => command === 'settings.save' ? saveSettings(input) : request(command, input), uid: () => '本次新标签', errorMessage: (error: unknown) => String(error) }));
 const source = readFileSync(new URL('../../src/renderer/App.tsx', import.meta.url), 'utf8');
 const file = ts.createSourceFile('App.tsx', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
-const app = file.statements.find(node => ts.isFunctionDeclaration(node) && node.name?.text === 'App')!;
+const app = file.statements.find(node => ts.isFunctionDeclaration(node) && node.name?.text === 'WorkspaceApp')!;
 type Entry = '工具栏' | '标签加号' | '欢迎页' | '快捷键' | '原生菜单';
 const entries: Entry[] = ['工具栏', '标签加号', '欢迎页', '快捷键', '原生菜单'];
 const target = { connectionId: '旧连接', database: '旧库', kind: 'table', name: '旧表' } as const;
@@ -24,6 +28,7 @@ function pending() {
 /** 从正式App提取所有查询入口的真实回调及其辅助函数，避免只测试另写的组件保护。 */
 function appHandlers(navigation: unknown, workspace: typeof import('../../src/renderer/store')) {
   const found = new Map<string, string>(), helpers: string[] = [];
+  let handlerDeclaration = '', newQueryCommand = '';
   function attribute(node: ts.JsxOpeningElement | ts.JsxSelfClosingElement, name: string) {
     const value = node.attributes.properties.find(item => ts.isJsxAttribute(item) && item.name.getText(file) === name);
     return value && ts.isJsxAttribute(value) && value.initializer && ts.isJsxExpression(value.initializer) ? value.initializer.expression?.getText(file) : undefined;
@@ -39,20 +44,60 @@ function appHandlers(navigation: unknown, workspace: typeof import('../../src/re
     if (ts.isJsxSelfClosingElement(node) && node.tagName.getText(file) === 'WorkspaceTabStrip') found.set('标签加号', attribute(node, 'onNew')!);
     if (ts.isJsxSelfClosingElement(node) && node.tagName.getText(file) === 'NewQueryDialog') found.set('关闭查询', attribute(node, 'onClose')!);
     if (ts.isVariableDeclaration(node) && node.name.getText(file) === 'listener' && node.initializer?.getText(file).includes("event.key.toLowerCase() === 't'")) found.set('快捷键', node.initializer.getText(file));
-    if (ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression) && node.expression.name.text === 'onMenu') found.set('原生菜单', node.arguments[0].getText(file));
+    if (ts.isVariableDeclaration(node) && node.name.getText(file) === 'handler' && node.initializer) handlerDeclaration = node.getText(file);
+    if (ts.isVariableDeclaration(node) && node.name.getText(file) === 'appCommands' && node.initializer && ts.isObjectLiteralExpression(node.initializer)) {
+      const property = node.initializer.properties.find(item => ts.isPropertyAssignment(item) && item.name.getText(file) === "'new-query'");
+      if (property && ts.isPropertyAssignment(property)) newQueryCommand = property.initializer.getText(file);
+    }
     ts.forEachChild(node, visit);
   }
-  visit(app); expect([...found.keys()].sort()).toEqual([...entries, '关闭查询'].sort());
+  visit(app);
+  // 顶部按钮已提取到真实模块工具栏；仍执行该按钮的原回调，不另写new-query接管逻辑。
+  const toolbarSource = readFileSync(new URL('../../src/renderer/components/NavigationToolbar.tsx', import.meta.url), 'utf8');
+  const toolbarFile = ts.createSourceFile('NavigationToolbar.tsx', toolbarSource, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+  function toolbarVisit(node: ts.Node) {
+    if (ts.isJsxAttribute(node) && node.name.getText(toolbarFile) === 'onClick' && node.initializer && ts.isJsxExpression(node.initializer) && node.initializer.expression?.getText(toolbarFile) === "() => commands.run('new-query')") found.set('工具栏', node.initializer.expression.getText(toolbarFile));
+    ts.forEachChild(node, toolbarVisit);
+  }
+  toolbarVisit(toolbarFile);
+  // 原生入口改取实际唯一typed桥接回调，旧onMenu字符串不再具备用户命令执行资格。
+  const runtimeSource = readFileSync(new URL('../../src/renderer/uiCommands.ts', import.meta.url), 'utf8'), runtimeFile = ts.createSourceFile('uiCommands.ts', runtimeSource, ts.ScriptTarget.Latest, true);
+  function runtimeVisit(node: ts.Node) {
+    if (ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression) && node.expression.name.text === 'onCommand') found.set('原生菜单', node.arguments[0].getText(runtimeFile));
+    ts.forEachChild(node, runtimeVisit);
+  }
+  runtimeVisit(runtimeFile);
+  expect(handlerDeclaration).not.toBe(''); expect(newQueryCommand).not.toBe('');
+  expect([...found.keys()].sort()).toEqual([...entries, '关闭查询'].sort());
   const shown = { query: false, modal: false }, connection = vi.fn();
-  const context = createContext({ workbenchNavigation: navigation, useWorkspace: workspace.useWorkspace, connections: [{ id: '当前连接' }],
+  const registry = new UiCommandRegistry(), nativeListeners = new Set<(event: UiCommandInvocation) => void>(); let menuState: UiMenuState | undefined;
+  const bridge: Pick<DesktopApi, 'invoke' | 'onCommand'> = {
+    invoke: (async (command: string, input: unknown) => {
+      if (command !== 'app.menuState') throw Error('菜单夹具拒绝非状态命令');
+      menuState = uiMenuStateSchema.parse(input);
+    }) as DesktopApi['invoke'],
+    onCommand(listener) { nativeListeners.add(listener); return () => { nativeListeners.delete(listener); }; }
+  };
+  const state = workspace.useWorkspace.getState();
+  const context = createContext({ workbenchNavigation: navigation, useWorkspace: workspace.useWorkspace, connections: [{ id: '当前连接' }], state, settings: state.settings, available: true,
+    uiCommands: registry, modal: () => shown.modal, errorMessage,
+    commands: { run: (id: 'new-query') => { void registry.execute({ id, revision: registry.getSnapshot().revision }); } },
     setNewQuery: (value: boolean) => { shown.query = value; }, setConnectionDialog: connection,
     document: { querySelector: () => shown.modal ? {} : null }, setWorkbenchDialog: vi.fn(), setObjectLinkDialog: vi.fn() });
-  const code = helpers.join('\n') + '\nglobalThis.handlers={' + [...found].map(([name, callback]) => JSON.stringify(name) + ':(' + callback + ')').join(',') + '};';
+  const code = helpers.join('\n') + '\nconst ' + handlerDeclaration + ';\nglobalThis.newQueryCommand=(' + newQueryCommand + ');\nglobalThis.handlers={' + [...found].map(([name, callback]) => JSON.stringify(name) + ':(' + callback + ')').join(',') + '};';
   runInContext(ts.transpileModule(code, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText, context);
+  const offState = registry.subscribe(() => { void bridge.invoke('app.menuState', registry.getSnapshot()); });
+  registry.setBlocked(false); registry.update('app', {}, { active: true, contextKey: '原App新查询入口', handlers: { 'new-query': context.newQueryCommand } });
+  const offCommand = bridge.onCommand(context.handlers['原生菜单']);
   return { shown, context, connection, close: context.handlers['关闭查询'] as () => void,
+    dispose() { offState(); offCommand(); },
     open(entry: Entry) {
       const event = { ctrlKey: true, metaKey: false, shiftKey: false, key: 't', isComposing: false, keyCode: 84, preventDefault: vi.fn() };
-      context.handlers[entry](entry === '原生菜单' ? 'new-query' : event);
+      if (entry === '原生菜单') {
+        if (!menuState?.commands.some(command => command.id === 'new-query' && command.enabled)) throw Error('正式new-query菜单状态尚未发布');
+        const command: UiCommandInvocation = { id: 'new-query', revision: menuState.revision };
+        for (const listener of nativeListeners) listener(command);
+      } else context.handlers[entry](event);
     }
   };
 }
@@ -70,7 +115,7 @@ describe('正式App新查询入口撤销W02迟到意图', () => {
     navigation = (await import('../../src/renderer/workbenchNavigation')).createWorkbenchNavigation(definition);
     handlers = appHandlers(navigation, workspace);
   });
-  afterEach(() => { navigation.dispose(); vi.clearAllTimers(); vi.useRealTimers(); vi.unstubAllGlobals(); });
+  afterEach(() => { handlers.dispose(); navigation.dispose(); vi.clearAllTimers(); vi.useRealTimers(); vi.unstubAllGlobals(); });
 
   it.each(entries)('%s打开查询表单后，迟到表页不能改连接或标签', async entry => {
     const old = pending(); request.mockReturnValueOnce(old.promise); const opening = navigation.open(target);

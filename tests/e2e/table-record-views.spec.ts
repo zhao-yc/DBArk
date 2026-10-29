@@ -61,7 +61,7 @@ async function recordDatabase(body: (context: LiveContext) => Promise<void>, inf
 async function openTable(context: LiveContext, name: string) {
   const connection = page.locator('.connection-node').filter({ has: page.locator('.connection-row').getByText(context.connectionName, { exact: true }) });
   await connection.locator('.connection-row').hover(); await clickSidebarAction(connection, { name: '刷新连接', exact: true });
-  await connection.locator('.database-row').getByRole('button', { name: context.database, exact: true }).click();
+  await (await (await import('./navigation-menu')).navigationMenuItem(connection.locator('.database-row'), { name: context.database, exact: true })).click();
   await connection.locator('.object-row').getByText(name, { exact: true }).click();
   await expect(table().locator('.context-bar')).toContainText(name); await expect(table().locator('.loading-overlay')).toHaveCount(0);
   await expect(table().locator(':scope > .error-box')).toHaveCount(0); await expect(table().locator('.results-grid')).toBeVisible();
@@ -75,21 +75,21 @@ async function cell(name: string, row = 2) {
   await result.scrollIntoViewIfNeeded(); return result;
 }
 async function openForm(name = 'note', row = 2) {
-  await (await cell(name, row)).click(); if (!(await form().isVisible())) await table().getByRole('button', { name: text.title, exact: true }).click(); await expect(form()).toBeVisible();
+  await (await cell(name, row)).click(); if (!(await form().isVisible())) await (await (await import('./navigation-menu')).navigationMenuItem(table(), { name: text.title, exact: true })).click(); await expect(form()).toBeVisible();
 }
 /** 字段按精确 accessible name 定位；展开与修改均来自真实控件。 */
 async function field(name: string): Promise<Locator> {
   const section = form().getByRole('region', { name, exact: true });
-  if (!(await section.getByRole('textbox', { name: `${name} · ${text.value}`, exact: true }).count())) await section.getByRole('button', { name: /^(编辑字段|查看字段)$/ }).click();
+  if (!(await section.getByRole('textbox', { name: `${name} · ${text.value}`, exact: true }).count())) await (await (await import('./navigation-menu')).navigationMenuItem(section, { name: /^(编辑字段|查看字段)$/ })).click();
   return section;
 }
 async function input(name: string, value: string, mode = 'text') {
   const section = await field(name); await section.getByRole('combobox', { name: text.mode, exact: true }).selectOption(mode);
   if (mode !== 'null' && mode !== 'default') await section.getByRole('textbox', { name: `${name} · ${text.value}`, exact: true }).fill(value);
 }
-async function stage() { await form().getByRole('button', { name: text.stage, exact: true }).click(); await expect(form().locator('.error-box')).toHaveCount(0); await expect(form().getByRole('status')).toHaveText(text.stagedNotice); }
-async function showPreview() { await table().getByRole('button', { name: '预览并提交', exact: true }).click(); await expect(preview()).toBeVisible(); await expect(preview().locator('.monaco-editor .view-lines')).toContainText(/UPDATE|INSERT/); }
-async function submit() { await preview().getByRole('button', { name: '确认提交', exact: true }).click(); await expect(preview()).toBeHidden({ timeout: 20000 }); await expect(table().locator('.loading-overlay')).toHaveCount(0); await expect(table().locator(':scope > .error-box')).toHaveCount(0); }
+async function stage() { await (await (await import('./navigation-menu')).navigationMenuItem(form(), { name: text.stage, exact: true })).click(); await expect(form().locator('.error-box')).toHaveCount(0); await expect(form().getByRole('status')).toHaveText(text.stagedNotice); }
+async function showPreview() { await (await (await import('./navigation-menu')).navigationMenuItem(table(), { name: '预览并提交', exact: true })).click(); await expect(preview()).toBeVisible(); await expect(preview().locator('.monaco-editor .view-lines')).toContainText(/UPDATE|INSERT/); }
+async function submit() { await (await (await import('./navigation-menu')).navigationMenuItem(preview(), { name: '确认提交', exact: true })).click(); await expect(preview()).toBeHidden({ timeout: 20000 }); await expect(table().locator('.loading-overlay')).toHaveCount(0); await expect(table().locator(':scope > .error-box')).toHaveCount(0); }
 /** 两行夹具区分本地行 UUID、完整旧值和服务器并发更新。 */
 async function simple(context: LiveContext) {
   await context.observer.query(`CREATE TABLE ${qualified(context.database, 'records')}(id INT PRIMARY KEY,note VARCHAR(100),\`__proto__\` VARCHAR(100),payload BLOB) ENGINE=InnoDB`);
@@ -129,7 +129,7 @@ test.describe('普通记录表单：共享草稿与真实提交', () => {
     await recordDatabase(async context => {
       await context.observer.query(`CREATE TABLE ${qualified(context.database, 'types')}(id INT PRIMARY KEY AUTO_INCREMENT,default_text VARCHAR(40) DEFAULT '服务器默认',nullable_text VARCHAR(40),empty_text VARCHAR(40),literal_null VARCHAR(40),big_value BIGINT UNSIGNED,decimal_value DECIMAL(30,6),time_value DATETIME(6),payload BLOB,json_value JSON,\`__proto__\` VARCHAR(40)) ENGINE=InnoDB`);
       await context.observer.query(`INSERT INTO ${qualified(context.database, 'types')}(id) VALUES(1)`); await openTable(context, 'types'); await openForm('id'); await observeRequests();
-      await table().getByRole('button', { name: '新增', exact: true }).click(); await expect(form()).toContainText(text.inserted);
+      await (await (await import('./navigation-menu')).navigationMenuItem(table(), { name: '新增', exact: true })).click(); await expect(form()).toContainText(text.inserted);
       await input('nullable_text', '', 'null'); await input('empty_text', ''); await input('literal_null', 'NULL'); await input('big_value', '18446744073709551615'); await input('decimal_value', '12345678901234567890.123456'); await input('time_value', '2026-10-14 01:02:03.123456'); await input('payload', '00 ff 80 00', 'binary'); await input('__proto__', '原型新增');
       const json = ' { "n":9007199254740993, "text":"中文" }\n'; await input('json_value', json, 'json'); await stage();
       expect((await context.observer.query<RowDataPacket[]>(`SELECT COUNT(*) AS n FROM ${qualified(context.database, 'types')}`))[0][0].n).toBe('1');
@@ -146,22 +146,22 @@ test.describe('普通记录表单：共享草稿与真实提交', () => {
   test('非法JSON切行保留输入，留在/放弃/暂存三条离开路径均不写库', async ({}, info) => {
     await recordDatabase(async context => {
       await simple(context); await openForm(); await observeRequests(); await input('note', '{', 'json');
-      await form().getByRole('button', { name: text.next, exact: true }).click(); await expect(leave()).toBeVisible(); await leave().getByRole('button', { name: text.stageContinue, exact: true }).click(); await expect(leave().locator('.error-box')).toContainText('note');
-      await leave().getByRole('button', { name: text.stay, exact: true }).click(); await expect((await field('note')).getByRole('textbox')).toHaveValue('{'); await expect(form()).toContainText('本页第 1 / 2 条');
-      await form().getByRole('button', { name: text.next, exact: true }).click(); await leave().getByRole('button', { name: text.discardContinue, exact: true }).click(); await expect(form()).toContainText('本页第 2 / 2 条');
-      await input('note', '第二行待暂存'); await form().getByRole('button', { name: text.previous, exact: true }).click(); await leave().getByRole('button', { name: text.stageContinue, exact: true }).click(); await expect(form()).toContainText('本页第 1 / 2 条'); await expect(await cell('note', 3)).toHaveText('第二行待暂存');
+      await (await (await import('./navigation-menu')).navigationMenuItem(form(), { name: text.next, exact: true })).click(); await expect(leave()).toBeVisible(); await (await (await import('./navigation-menu')).navigationMenuItem(leave(), { name: text.stageContinue, exact: true })).click(); await expect(leave().locator('.error-box')).toContainText('note');
+      await (await (await import('./navigation-menu')).navigationMenuItem(leave(), { name: text.stay, exact: true })).click(); await expect((await field('note')).getByRole('textbox')).toHaveValue('{'); await expect(form()).toContainText('本页第 1 / 2 条');
+      await (await (await import('./navigation-menu')).navigationMenuItem(form(), { name: text.next, exact: true })).click(); await (await (await import('./navigation-menu')).navigationMenuItem(leave(), { name: text.discardContinue, exact: true })).click(); await expect(form()).toContainText('本页第 2 / 2 条');
+      await input('note', '第二行待暂存'); await (await (await import('./navigation-menu')).navigationMenuItem(form(), { name: text.previous, exact: true })).click(); await (await (await import('./navigation-menu')).navigationMenuItem(leave(), { name: text.stageContinue, exact: true })).click(); await expect(form()).toContainText('本页第 1 / 2 条'); await expect(await cell('note', 3)).toHaveText('第二行待暂存');
       expect((await context.observer.query<RowDataPacket[]>(`SELECT note FROM ${qualified(context.database, 'records')} ORDER BY id`))[0].map(row => row.note)).toEqual(['原第一', '原第二']); expect(await calls('table.preview')).toHaveLength(0); expect(await calls('table.apply')).toHaveLength(0); expect(await calls('table.page')).toHaveLength(0);
     }, info);
   });
 
   test('完整旧值冲突后整批回滚，草稿保留且同预览禁止重放', async ({}, info) => {
     await recordDatabase(async context => {
-      await simple(context); await openForm(); await observeRequests(); await input('note', '本地第一'); await stage(); await form().getByRole('button', { name: text.next, exact: true }).click(); await input('note', '本地第二'); await stage(); await showPreview();
+      await simple(context); await openForm(); await observeRequests(); await input('note', '本地第一'); await stage(); await (await (await import('./navigation-menu')).navigationMenuItem(form(), { name: text.next, exact: true })).click(); await input('note', '本地第二'); await stage(); await showPreview();
       await context.observer.query(`UPDATE ${qualified(context.database, 'records')} SET \`__proto__\`='并发原型' WHERE id=2`);
-      await preview().getByRole('button', { name: '确认提交', exact: true }).click(); await expect(preview().locator('.error-box')).toContainText(/并发|已被其他/); await expect(preview().getByRole('button', { name: '确认提交', exact: true })).toBeDisabled();
+      await (await (await import('./navigation-menu')).navigationMenuItem(preview(), { name: '确认提交', exact: true })).click(); await expect(preview().locator('.error-box')).toContainText(/并发|已被其他/); await expect(preview().getByRole('button', { name: '确认提交', exact: true })).toBeDisabled();
       await preview().getByRole('button', { name: '确认提交', exact: true }).evaluate(button => (button as HTMLButtonElement).click()); expect(await calls('table.apply')).toHaveLength(1);
       expect((await context.observer.query<RowDataPacket[]>(`SELECT note,\`__proto__\` AS p FROM ${qualified(context.database, 'records')} ORDER BY id`))[0].map(row => [row.note, row.p])).toEqual([['原第一', '原型一'], ['原第二', '并发原型']]);
-      expect((await applyTasks()).map(task => task.status)).toEqual(['failed']); await preview().getByRole('button', { name: '返回编辑', exact: true }).click(); await expect(await cell('note')).toHaveText('本地第一'); await expect(await cell('note', 3)).toHaveText('本地第二'); await expect(table().locator('.table-action-bar')).toContainText('2 条待提交修改');
+      expect((await applyTasks()).map(task => task.status)).toEqual(['failed']); await (await (await import('./navigation-menu')).navigationMenuItem(preview(), { name: '返回编辑', exact: true })).click(); await expect(await cell('note')).toHaveText('本地第一'); await expect(await cell('note', 3)).toHaveText('本地第二'); await expect(table().locator('.table-action-bar')).toContainText('2 条待提交修改');
     }, info);
   });
 
@@ -178,7 +178,7 @@ test.describe('普通记录表单：共享草稿与真实提交', () => {
 
   test('单元格CtrlEnter失败留输入成功关闭，reported组合键Escape不关闭弹窗', async ({}, info) => {
     await recordDatabase(async context => {
-      await simple(context); await observeRequests(); await (await cell('payload')).click(); await table().getByRole('button', { name: '单元格', exact: true }).click();
+      await simple(context); await observeRequests(); await (await cell('payload')).click(); await (await (await import('./navigation-menu')).navigationMenuItem(table(), { name: '单元格', exact: true })).click();
       const modal = page.getByRole('dialog', { name: '编辑单元格：payload', exact: true }); const editor = modal.getByRole('textbox', { name: `payload · ${text.value}`, exact: true }); await editor.fill('001'); await editor.press(`${modifier}+Enter`); await expect(modal).toBeVisible(); await expect(modal.getByRole('alert').filter({ hasText: '字段“payload”无法暂存' })).toContainText('payload'); await expect(editor).toHaveValue('001');
       // 浏览器报告的组合状态只是事件边界验收，不代表实体输入法或真实 composition 过程。
       for (const properties of [{ isComposing: true, keyCode: 27 }, { isComposing: false, keyCode: 229 }]) {
@@ -197,7 +197,7 @@ test.describe('普通记录表单：共享草稿与真实提交', () => {
       await context.observer.query(`CREATE TABLE ${qualified(context.database, 'no_key')}(note VARCHAR(40)) ENGINE=InnoDB`); await context.observer.query(`INSERT INTO ${qualified(context.database, 'no_key')} VALUES('无键')`);
       await context.observer.query(`CREATE VIEW ${qualified(context.database, 'readonly_view')} AS SELECT id,note FROM ${qualified(context.database, 'generated_rows')}`);
       await openTable(context, 'generated_rows'); await openForm(); await observeRequests(); const generated = await field('computed'); await expect(generated).toContainText(text.generated); await expect(generated.getByRole('combobox')).toBeDisabled(); await expect(generated.getByRole('textbox')).toHaveAttribute('readonly', '');
-      await form().getByRole('button', { name: text.next, exact: true }).click(); await expect(form()).toContainText('本页第 2 / 2 条'); await expect(form().getByRole('button', { name: text.next, exact: true })).toBeDisabled(); await form().getByRole('button', { name: text.previous, exact: true }).click(); await expect(form()).toContainText('本页第 1 / 2 条'); expect(await calls('table.page')).toHaveLength(0); expect(await calls('metadata.table')).toHaveLength(0);
+      await (await (await import('./navigation-menu')).navigationMenuItem(form(), { name: text.next, exact: true })).click(); await expect(form()).toContainText('本页第 2 / 2 条'); await expect(form().getByRole('button', { name: text.next, exact: true })).toBeDisabled(); await (await (await import('./navigation-menu')).navigationMenuItem(form(), { name: text.previous, exact: true })).click(); await expect(form()).toContainText('本页第 1 / 2 条'); expect(await calls('table.page')).toHaveLength(0); expect(await calls('metadata.table')).toHaveLength(0);
       await openTable(context, 'no_key'); await openForm(); const noKey = await field('note'); await expect(noKey).toContainText(text.noKey); await expect(noKey.getByRole('textbox')).toHaveAttribute('readonly', ''); await expect(table().getByRole('button', { name: '新增', exact: true })).toBeDisabled();
       await openTable(context, 'readonly_view'); await openForm(); const view = await field('note'); await expect(view).toContainText(text.viewReadonly); await expect(view.getByRole('textbox')).toHaveAttribute('readonly', ''); expect(await calls('table.apply')).toHaveLength(0); expect(await applyTasks()).toHaveLength(0);
       expect((await context.observer.query<RowDataPacket[]>(`SELECT note,computed FROM ${qualified(context.database, 'generated_rows')} ORDER BY id`))[0].map(row => [row.note, row.computed])).toEqual([['第一', '第一生成'], ['第二', '第二生成']]);

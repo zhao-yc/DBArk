@@ -52,20 +52,20 @@ async function probe(database: string, rowId: string, marker: string, note: stri
 async function historyIds() { return page.evaluate(async () => (await window.dbark.invoke('history.list', {})).map(entry => entry.id).sort()); }
 /** 只通过实际工具栏打开保存表单；明确选择创建或原查询更新。 */
 async function save(action: '保存到原查询' | '另存为新查询', name?: string) {
-  await query().getByRole('button', { name: '保存查询', exact: true }).click();
-  await expect(saveDialog().getByRole('button', { name: '另存为新查询', exact: true }), '实库套件需先合入Q03新保存入口，不能在仅有首批集成的版本上运行').toBeVisible();
+  await (await navigationMenuItem(query(), { name: '保存查询', exact: true })).click();
+  await expect((await navigationMenuItem(saveDialog(), { name: '另存为新查询', exact: true })), '实库套件需先合入Q03新保存入口，不能在仅有首批集成的版本上运行').toBeVisible();
   if (name) await saveDialog().getByLabel('查询名称', { exact: true }).fill(name);
-  await saveDialog().getByRole('button', { name: action, exact: true }).click();
+  await (await navigationMenuItem(saveDialog(), { name: action, exact: true })).click();
 }
 /** 页面断言从生产 IPC 读取本地记录，既不替换返回值，也不写组件或工作台内部状态。 */
 async function records() { return page.evaluate(() => window.dbark.invoke('queries.list', {})); }
 /** 从真实分页列表新开来源标签，按名称选择唯一夹具，不复用已有会话。 */
 async function openSaved(name: string) {
-  await page.locator('.app-commandbar').getByRole('button', { name: '历史与查询', exact: true }).click();
+  await (await navigationMenuItem(page.locator('.navigation-toolbar'), { name: '历史与查询', exact: true })).click();
   const dialog = page.getByRole('dialog', { name: '历史与保存的查询', exact: true });
-  await dialog.getByRole('button', { name: '保存的查询', exact: true }).click();
+  await (await navigationMenuItem(dialog, { name: '保存的查询', exact: true })).click();
   const row = dialog.locator('.history-card').filter({ has: page.getByText(name, { exact: true }) });
-  await expect(row).toHaveCount(1); await row.getByRole('button', { name: '在新标签打开', exact: true }).click();
+  await expect(row).toHaveCount(1); await (await navigationMenuItem(row, { name: '在新标签打开', exact: true })).click();
   await expect(dialog).toBeHidden(); await expect(query().locator('.monaco-editor')).toBeVisible();
 }
 /** 顺序来自本例真实新增的标签；点击后等待活动页切换，保持原标签身份。 */
@@ -75,10 +75,10 @@ async function activate(index: number, title: string) {
 }
 /** 事务按钮控制原物理会话，完成后提交按钮应不可用；不借观察连接回滚被测会话。 */
 async function rollback() {
-  const button = query().getByRole('button', { name: '回滚', exact: true }); await expect(button).toBeEnabled(); await button.click();
+  const button = (await navigationMenuItem(query(), { name: '回滚', exact: true })); await expect(button).toBeEnabled(); await button.click();
   // 先等操作互斥释放，不能把“回滚仍在进行所以按钮禁用”误认为事务已经结束。
-  await expect(query().getByRole('button', { name: '执行全部', exact: true })).toBeEnabled();
-  await expect(query().getByRole('button', { name: '提交', exact: true })).toBeDisabled(); await expect(query().locator('.error-box')).toHaveCount(0);
+  await expect((await navigationMenuItem(query(), { name: '执行全部', exact: true }))).toBeEnabled();
+  await expect((await navigationMenuItem(query(), { name: '提交', exact: true }))).toBeDisabled(); await expect(query().locator('.error-box')).toHaveCount(0);
 }
 
 test.describe('Q03 统筹启用的200隔离实库来源绑定', () => {
@@ -90,7 +90,7 @@ test.describe('Q03 统筹启用的200隔离实库来源绑定', () => {
       await fixtures(context); const { database } = context;
       await openDatabaseQuery(database);
       await executeSql(`CREATE TEMPORARY TABLE binding_session_token(marker VARCHAR(20));INSERT INTO binding_session_token VALUES('会话甲');START TRANSACTION;UPDATE binding_subject SET note='甲未提交' WHERE id=${firstId}`);
-      const a = await probe(database, firstId, '会话甲', '甲未提交'); await expect(query().getByRole('button', { name: '提交', exact: true })).toBeEnabled();
+      const a = await probe(database, firstId, '会话甲', '甲未提交'); await expect((await navigationMenuItem(query(), { name: '提交', exact: true }))).toBeEnabled();
       const dangerous = `UPDATE ${isolatedName(database)}.binding_subject SET note='保存操作绝不能自动执行' WHERE id=${firstId}; -- 来源原文`;
       await writeSql(dangerous); const beforeCreate = await historyIds();
       await save('另存为新查询', '双会话来源'); await expect(saveDialog()).toBeHidden();
@@ -105,11 +105,11 @@ test.describe('Q03 统筹启用的200隔离实库来源绑定', () => {
       const bSql = dangerous + '\n-- 乙标签更新原查询'; await writeSql(bSql); const beforeUpdate = await historyIds();
       await save('保存到原查询'); await expect(saveDialog()).toBeHidden(); expect(await historyIds()).toEqual(beforeUpdate);
       expect(await query().locator('.result-body').innerText()).toBe(b.text); expect((await records()).find(record => record.id === original.id)?.sql).toContain('乙标签更新原查询');
-      await activate(0, '双会话来源'); await expect.poll(() => query().locator('.result-body').innerText()).toBe(a.text); await expect(query().getByRole('button', { name: '提交', exact: true })).toBeEnabled();
+      await activate(0, '双会话来源'); await expect.poll(() => query().locator('.result-body').innerText()).toBe(a.text); await expect((await navigationMenuItem(query(), { name: '提交', exact: true }))).toBeEnabled();
       const aSql = dangerous + '\n-- 甲标签陈旧草稿'; await writeSql(aSql); const beforeConflict = await historyIds();
       await save('保存到原查询'); await expect(saveDialog().getByRole('alert')).toContainText('原查询已修改');
       expect(await historyIds()).toEqual(beforeConflict); expect((await records()).find(record => record.id === original.id)?.sql).toContain('乙标签更新原查询');
-      await saveDialog().getByRole('button', { name: '取消', exact: true }).click();
+      await (await navigationMenuItem(saveDialog(), { name: '取消', exact: true })).click();
       await expect(query().locator('.monaco-editor .view-lines')).toContainText('甲标签陈旧草稿');
       await save('另存为新查询', '甲标签冲突副本'); await expect(saveDialog()).toBeHidden(); expect(await historyIds()).toEqual(beforeConflict);
       const copy = (await records()).find(record => record.name === '甲标签冲突副本')!; expect(copy.id).not.toBe(original.id); expect(copy.sql).toContain('甲标签陈旧草稿');
@@ -137,12 +137,12 @@ test.describe('Q03 统筹启用的200隔离实库来源绑定', () => {
       await writeSql(dangerous + '; -- 切库后的明确副本'); const beforeSave = await historyIds();
       await save('保存到原查询'); await expect(saveDialog().getByRole('alert')).toContainText('默认库状态已变化'); expect(await historyIds()).toEqual(beforeSave);
       const unchanged = (await records()).find(record => record.id === original.id)!; expect(unchanged).toEqual(original);
-      await saveDialog().getByLabel('查询名称', { exact: true }).fill('切库后副本'); await saveDialog().getByRole('button', { name: '另存为新查询', exact: true }).click(); await expect(saveDialog()).toBeHidden();
+      await saveDialog().getByLabel('查询名称', { exact: true }).fill('切库后副本'); await (await navigationMenuItem(saveDialog(), { name: '另存为新查询', exact: true })).click(); await expect(saveDialog()).toBeHidden();
       expect(await historyIds()).toEqual(beforeSave); const copy = (await records()).find(record => record.name === '切库后副本')!; expect(copy.id).not.toBe(original.id); expect(copy.databaseContext).toEqual({ state: 'known', database: 'information_schema' });
       const after = await probe(database, firstId, '切库会话', '切库前未提交', 'information_schema'); expect(after.sessionId).toBe(before.sessionId);
       const beforeOpen = await historyIds(); await openSaved('切库后副本'); expect(await historyIds()).toEqual(beforeOpen); await expect(query().getByLabel('当前查询默认库', { exact: true })).toHaveText('information_schema');
       // 标签标题先更新，虚拟网格随后测量；等待原结果完整重现，不重发SQL或放宽内容断言。
-      await activate(0, '切库后副本'); await expect.poll(() => query().locator('.result-body').innerText()).toBe(after.text); await expect(query().getByRole('button', { name: '提交', exact: true })).toBeEnabled();
+      await activate(0, '切库后副本'); await expect.poll(() => query().locator('.result-body').innerText()).toBe(after.text); await expect((await navigationMenuItem(query(), { name: '提交', exact: true }))).toBeEnabled();
       expect((await probe(database, firstId, '切库会话', '切库前未提交', 'information_schema')).sessionId).toBe(before.sessionId);
       await rollback(); expect((await probe(database, firstId, '切库会话', '原值甲', 'information_schema')).sessionId).toBe(before.sessionId);
       expect(await committed(context)).toEqual([{ id: firstId, note: '原值甲' }, { id: secondId, note: '原值乙' }]);
@@ -152,3 +152,6 @@ test.describe('Q03 统筹启用的200隔离实库来源绑定', () => {
     }, info);
   });
 });
+
+/** 原门进入具体动作后才加载真实菜单导航，不改变默认/列表阶段的资源边界。 */
+async function navigationMenuItem(...args: Parameters<typeof import('./navigation-menu')['navigationMenuItem']>): Promise<import('@playwright/test').Locator> { return (require('./navigation-menu') as typeof import('./navigation-menu')).navigationMenuItem(...args); }

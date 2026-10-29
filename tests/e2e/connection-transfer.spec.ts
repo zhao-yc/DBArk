@@ -66,14 +66,14 @@ async function list() { return page.evaluate(() => window.dbark.invoke('connecti
 async function reloadWorkspace() { await page.reload(); await expect(page.locator('.app-statusbar')).toBeVisible(); }
 /** UI 模式和文件选择保持用户实际顺序；不绕过预览直接发路径给业务接口。 */
 async function transfer(mode: 'export' | 'import') {
-  await page.getByRole('button', { name: '连接导入导出', exact: true }).click();
+  await (await (await import('./navigation-menu')).navigationMenuItem(page, { name: '连接导入导出', exact: true })).click();
   const modal = page.getByRole('dialog', { name: '连接概要导入导出', exact: true });
-  await modal.getByRole('button', { name: mode === 'export' ? '导出连接概要' : '导入连接概要', exact: true }).click();
+  await (await (await import('./navigation-menu')).navigationMenuItem(modal, { name: mode === 'export' ? '导出连接概要' : '导入连接概要', exact: true })).click();
   return modal;
 }
 async function previewUi(file: string) {
   await chooseNative('open', file); const modal = await transfer('import');
-  await modal.getByRole('button', { name: /^选择概要导入文件/ }).click(); return modal;
+  await (await (await import('./navigation-menu')).navigationMenuItem(modal, { name: /^选择概要导入文件/ })).click(); return modal;
 }
 /** 负例也通过真实原生选择获取令牌；不同用途令牌不能直接互换。 */
 async function authorize(file: string, purpose: 'connection-import' | 'connection-export' | 'query'): Promise<FileChoice> {
@@ -116,7 +116,7 @@ test.describe('离线连接概要复制与迁移', () => {
     await expect(modal.getByLabel('数据库密码', { exact: true })).toHaveValue('');
     await expect(modal).toContainText('未复制密码');
     await modal.getByRole('checkbox', { name: stagedLabel, exact: true }).check();
-    await modal.getByRole('button', { name: '保存连接', exact: true }).click(); await expect(modal).toBeHidden();
+    await (await (await import('./navigation-menu')).navigationMenuItem(modal, { name: '保存连接', exact: true })).click(); await expect(modal).toBeHidden();
     const all = await list(); expect(all).toHaveLength(2);
     const copy = all.find(item => item.id !== original.id)!; expect(copy.name).toBe(`${original.name} 副本`); expectNoInheritedSecrets(copy);
     expect(copy.pendingFiles?.slice().sort()).toEqual(['sshPrivateKey', 'tlsCa', 'tlsCert', 'tlsKey'].sort());
@@ -139,10 +139,10 @@ test.describe('离线连接概要复制与迁移', () => {
       tls: { enabled: false, rejectUnauthorized: true, caPath: join(dataDir, '绝不导出目录', 'ca.pem') } });
     await reloadWorkspace(); const file = join(dataDir, '概要.json'); await writeFile(file, '旧文件必须完整保留');
     await chooseNative('save'); let modal = await transfer('export');
-    await modal.getByRole('button', { name: /^选择概要导出文件/ }).click();
+    await (await (await import('./navigation-menu')).navigationMenuItem(modal, { name: /^选择概要导出文件/ })).click();
     await expect(modal.getByRole('button', { name: '确认导出连接概要', exact: true })).toBeDisabled();
     expect(await readFile(file, 'utf8')).toBe('旧文件必须完整保留');
-    await chooseNative('save', file); await modal.getByRole('button', { name: /^选择概要导出文件/ }).click();
+    await chooseNative('save', file); await (await (await import('./navigation-menu')).navigationMenuItem(modal, { name: /^选择概要导出文件/ })).click();
     await modal.getByRole('button', { name: '确认导出连接概要', exact: true }).dblclick();
     await expect(modal.locator('.success-box')).toHaveText('连接概要已导出');
     const bytes = await readFile(file, 'utf8');
@@ -152,7 +152,7 @@ test.describe('离线连接概要复制与迁移', () => {
       tls: { enabled: false, rejectUnauthorized: true, caFileName: 'ca.pem' } }] });
     for (const forbidden of [...dummySecrets, dataDir, 'hasPassword', 'hasPassphrase', 'rememberPassword', 'privateKeyPath', 'caPath']) expect(bytes).not.toContain(forbidden);
     await page.screenshot({ path: testInfo.outputPath('connection-export-whitelist.png') });
-    await modal.getByRole('button', { name: '关闭', exact: true }).click();
+    await (await (await import('./navigation-menu')).navigationMenuItem(modal, { name: '关闭', exact: true })).click();
     const wrong = await authorize(file, 'query');
     await expect(page.evaluate(fileToken => window.dbark.invoke('connections.importPreview', { fileToken }), wrong.token)).rejects.toThrow(/未授权|用途/);
     await expect(page.evaluate(input => window.dbark.invoke('connections.export', input), { connectionIds: [original.id], fileToken: wrong.token })).rejects.toThrow(/未授权|用途/);
@@ -188,15 +188,15 @@ test.describe('离线连接概要复制与迁移', () => {
     expect(added.id).not.toBe(second.id); expect(all.some(item => item.name.includes('迟到文件'))).toBe(false);
     expect(await page.evaluate(input => window.dbark.invoke('table.preferences.get', input), { ...originalPreferenceTarget, connectionId: added.id })).toBeNull();
     expect(await page.evaluate(input => window.dbark.invoke('table.preferences.get', input), originalPreferenceTarget)).toEqual(preferences);
-    await modal.getByRole('button', { name: '关闭', exact: true }).click();
+    await (await (await import('./navigation-menu')).navigationMenuItem(modal, { name: '关闭', exact: true })).click();
     await quitDesktop(); await launchDesktop(); expect(await list()).toEqual(all);
     // 全跳过也必须回传完整公开列表，不能让前端用空新增列表清空原侧栏。
     const skipFile = await writeDocument('全部跳过.json', [first, second]), skipModal = await previewUi(skipFile);
     for (const index of [1, 2]) await expect(skipModal.getByRole('combobox', { name: `导入处理 ${index}`, exact: true })).toHaveValue('skip');
     await skipModal.getByRole('checkbox', { name: stagedLabel, exact: true }).check();
-    await skipModal.getByRole('button', { name: '确认批次新增连接', exact: true }).click();
+    await (await (await import('./navigation-menu')).navigationMenuItem(skipModal, { name: '确认批次新增连接', exact: true })).click();
     await expect(skipModal.locator('.success-box')).toContainText('新增 0，跳过 2'); await expect(page.locator('.connection-row')).toHaveCount(2);
-    expect(await list()).toEqual(all); await skipModal.getByRole('button', { name: '关闭', exact: true }).click(); await expectOffline(traffic);
+    expect(await list()).toEqual(all); await (await (await import('./navigation-menu')).navigationMenuItem(skipModal, { name: '关闭', exact: true })).click(); await expectOffline(traffic);
   });
 
   test('非法版本、秘密字段、绝对路径、重复 ID 和数量体积超限在预览拒绝且不落配置', async ({ traffic }) => {
@@ -213,11 +213,11 @@ test.describe('离线连接概要复制与迁移', () => {
     for (const [index, document] of invalid.entries()) {
       const file = join(dataDir, `非法-${index}.json`); await writeFile(file, JSON.stringify(document)); const modal = await previewUi(file);
       await expect(modal.locator('.error-box')).toBeVisible(); await expect(modal.getByRole('button', { name: '确认批次新增连接', exact: true })).toBeDisabled();
-      expect(await list()).toEqual([existing]); await modal.getByRole('button', { name: '关闭', exact: true }).click();
+      expect(await list()).toEqual([existing]); await (await (await import('./navigation-menu')).navigationMenuItem(modal, { name: '关闭', exact: true })).click();
     }
     const huge = join(dataDir, '超限.json'), handle = await open(huge, 'w'); try { await handle.truncate(2 * 1024 * 1024 + 1); } finally { await handle.close(); }
     const modal = await previewUi(huge); await expect(modal.locator('.error-box')).toContainText(/2 MiB|2MiB|2 MB/);
-    expect(await list()).toEqual([existing]); await modal.getByRole('button', { name: '关闭', exact: true }).click();
+    expect(await list()).toEqual([existing]); await (await (await import('./navigation-menu')).navigationMenuItem(modal, { name: '关闭', exact: true })).click();
     const bytes = await readFile(join(dataDir, 'dbark.sqlite')); expect(bytes.includes(Buffer.from('禁止导入的秘密字段'))).toBe(false);
     await expectOffline(traffic);
   });
@@ -230,11 +230,11 @@ test.describe('离线连接概要复制与迁移', () => {
     await modal.getByRole('checkbox', { name: stagedLabel, exact: true }).check();
     // 使用真实公开保存入口模拟预览期间另一操作修改配置，不能 mock 修订号或取消后台旧会话。
     const renamed = await seed({ ...original, name: '预览后真实修改的名称' });
-    await modal.getByRole('button', { name: '确认批次新增连接', exact: true }).click();
+    await (await (await import('./navigation-menu')).navigationMenuItem(modal, { name: '确认批次新增连接', exact: true })).click();
     await expect(modal.locator('.error-box')).toContainText(/变更|变化|过期|失效/);
     expect(await list()).toEqual([renamed]);
     await page.screenshot({ path: testInfo.outputPath('connection-import-stale-preview.png') });
-    await modal.getByRole('button', { name: '关闭', exact: true }).click();
+    await (await (await import('./navigation-menu')).navigationMenuItem(modal, { name: '关闭', exact: true })).click();
 
     const preview = await previewIpc(file);
     const input: ConnectionImportApply = { previewToken: preview.previewToken, decisions: preview.entries.map(entry => ({ sourceId: entry.sourceId, action: 'add' })), allowIncomplete: true };
@@ -247,7 +247,7 @@ test.describe('离线连接概要复制与迁移', () => {
     // 这是明确的已消费 token 负例，不是对失败写入的自动重试。
     await expect(apply(input)).rejects.toThrow(/预览|令牌|失效|过期/);
     expect(await list()).toEqual([renamed]);
-    await page.getByRole('button', { name: '切换主题', exact: true }).click();
+    await (await (await import('./navigation-menu')).navigationMenuItem(page, { name: '切换主题', exact: true })).click();
     await quitDesktop(); await launchDesktop(); expect(await list()).toEqual([renamed]);
     const bytes = await readFile(join(dataDir, 'dbark.sqlite'));
     expect(bytes.includes(Buffer.from('整批第一条'))).toBe(false); expect(bytes.includes(Buffer.from('整批第二条'))).toBe(false);
@@ -261,17 +261,17 @@ test.describe('离线连接概要复制与迁移', () => {
     const file = await writeDocument('需补文件.json', [protectedProfile]);
     const modal = await previewUi(file); await expect(modal.getByRole('region', { name: '来源连接概要 1', exact: true })).toContainText('提示CA.pem');
     await modal.getByRole('checkbox', { name: stagedLabel, exact: true }).check();
-    await modal.getByRole('button', { name: '导出连接概要', exact: true }).click();
+    await (await (await import('./navigation-menu')).navigationMenuItem(modal, { name: '导出连接概要', exact: true })).click();
     await expect(modal.getByRole('region', { name: '来源连接概要 1', exact: true })).toHaveCount(0);
     await expect(modal.getByRole('button', { name: '确认导出连接概要', exact: true })).toBeDisabled();
-    await modal.getByRole('button', { name: '导入连接概要', exact: true }).click();
+    await (await (await import('./navigation-menu')).navigationMenuItem(modal, { name: '导入连接概要', exact: true })).click();
     await expect(modal.getByRole('button', { name: '确认批次新增连接', exact: true })).toBeDisabled();
-    await chooseNative('open'); await modal.getByRole('button', { name: '选择概要导入文件', exact: true }).click();
+    await chooseNative('open'); await (await (await import('./navigation-menu')).navigationMenuItem(modal, { name: '选择概要导入文件', exact: true })).click();
     expect(await list()).toEqual([]);
-    await chooseNative('open', file); await modal.getByRole('button', { name: '选择概要导入文件', exact: true }).click();
+    await chooseNative('open', file); await (await (await import('./navigation-menu')).navigationMenuItem(modal, { name: '选择概要导入文件', exact: true })).click();
     await modal.getByRole('checkbox', { name: stagedLabel, exact: true }).check();
-    await modal.getByRole('button', { name: '确认批次新增连接', exact: true }).click();
-    await expect(modal.locator('.success-box')).toContainText('新增 1，跳过 0'); await modal.getByRole('button', { name: '关闭', exact: true }).click();
+    await (await (await import('./navigation-menu')).navigationMenuItem(modal, { name: '确认批次新增连接', exact: true })).click();
+    await expect(modal.locator('.success-box')).toContainText('新增 1，跳过 0'); await (await (await import('./navigation-menu')).navigationMenuItem(modal, { name: '关闭', exact: true })).click();
     const [imported] = await list(); expectNoInheritedSecrets(imported);
     expect(imported.ssh).toMatchObject({ enabled: true, hostFingerprint: protectedProfile.ssh!.hostFingerprint });
     expect(imported.tls).toEqual({ enabled: true, rejectUnauthorized: true });
@@ -289,38 +289,38 @@ test.describe('离线连接概要复制与迁移', () => {
       const dialog = page.getByRole('dialog', { name: '编辑连接', exact: true }); await expect(dialog).toBeVisible(); return dialog;
     }
     const editor = await openImportedEditor();
-    await editor.getByRole('button', { name: 'SSH 隧道', exact: true }).click();
+    await (await (await import('./navigation-menu')).navigationMenuItem(editor, { name: 'SSH 隧道', exact: true })).click();
     await expect(editor.getByRole('checkbox', { name: '通过 SSH 隧道连接', exact: true })).toBeChecked();
     // 实际 Field 可访问名称含同一 label 内选择按钮的 aria-label，使用完整名称而非不存在的短标签。
     await expect(editor.getByRole('textbox', { name: '私钥文件 选择 SSH 私钥', exact: true })).toHaveValue('');
     // 手输路径不是新的本机选择授权，不能清除待补标记；只测试拒绝，不读取或生成真实私钥。
     await editor.getByRole('textbox', { name: '私钥文件 选择 SSH 私钥', exact: true }).fill(join(dataDir, '未经选择的私钥.key'));
-    await editor.getByRole('button', { name: 'TLS / SSL', exact: true }).click();
+    await (await (await import('./navigation-menu')).navigationMenuItem(editor, { name: 'TLS / SSL', exact: true })).click();
     await expect(editor.getByRole('checkbox', { name: '启用加密连接', exact: true })).toBeChecked();
     await expect(editor.getByRole('checkbox', { name: '验证服务器证书', exact: true })).toBeChecked();
     await expect(editor.getByRole('textbox', { name: 'CA 证书 选择CA 证书', exact: true })).toHaveValue('');
-    await editor.getByRole('button', { name: '测试连接', exact: true }).click();
+    await (await (await import('./navigation-menu')).navigationMenuItem(editor, { name: '测试连接', exact: true })).click();
     await expect(editor.locator('.error-box')).toContainText(/重新选择本机/);
     await page.screenshot({ path: testInfo.outputPath('connection-import-auth-pending.png') });
-    await editor.getByRole('button', { name: '取消', exact: true }).click(); expect(await list()).toEqual([imported]);
+    await (await (await import('./navigation-menu')).navigationMenuItem(editor, { name: '取消', exact: true })).click(); expect(await list()).toEqual([imported]);
 
     // 文件只含虚构文本，用来核验选择授权和保存门槛，不冒充真实私钥或成功 TLS/SSH 认证。
     const selections = { ssh: join(dataDir, '本机选中.key'), ca: join(dataDir, '本机选中CA.pem'), cert: join(dataDir, '本机选中证书.pem'), key: join(dataDir, '本机选中TLS.key') };
     for (const file of Object.values(selections)) await writeFile(file, 'C03 虚构文件：只核验路径授权，不用于真实认证。');
     const reselected = await openImportedEditor();
-    await reselected.getByRole('button', { name: 'SSH 隧道', exact: true }).click();
-    await chooseNative('open', selections.ssh); await reselected.getByRole('button', { name: '选择 SSH 私钥', exact: true }).click();
+    await (await (await import('./navigation-menu')).navigationMenuItem(reselected, { name: 'SSH 隧道', exact: true })).click();
+    await chooseNative('open', selections.ssh); await (await (await import('./navigation-menu')).navigationMenuItem(reselected, { name: '选择 SSH 私钥', exact: true })).click();
     await expect(reselected.getByRole('textbox', { name: '私钥文件 选择 SSH 私钥', exact: true })).toHaveValue(selections.ssh);
-    await reselected.getByRole('button', { name: 'TLS / SSL', exact: true }).click();
+    await (await (await import('./navigation-menu')).navigationMenuItem(reselected, { name: 'TLS / SSL', exact: true })).click();
     for (const [label, file] of [['CA 证书', selections.ca], ['客户端证书', selections.cert], ['客户端私钥', selections.key]]) {
-      await chooseNative('open', file); await reselected.getByRole('button', { name: `选择${label}`, exact: true }).click();
+      await chooseNative('open', file); await (await (await import('./navigation-menu')).navigationMenuItem(reselected, { name: `选择${label}`, exact: true })).click();
       await expect(reselected.getByRole('textbox', { name: `${label} 选择${label}`, exact: true })).toHaveValue(file);
     }
     // UI 已有真实本机授权，但持久化的旧标记尚未解除；先测试必须仍拒绝且没有任何网络连接。
-    await reselected.getByRole('button', { name: '测试连接', exact: true }).click();
+    await (await (await import('./navigation-menu')).navigationMenuItem(reselected, { name: '测试连接', exact: true })).click();
     await expect(reselected.locator('.error-box')).toContainText(/重新选择本机|先保存/);
     expect(await list()).toEqual([imported]); expect(traffic.connections).toBe(0);
-    await reselected.getByRole('button', { name: '保存连接', exact: true }).click(); await expect(reselected).toBeHidden();
+    await (await (await import('./navigation-menu')).navigationMenuItem(reselected, { name: '保存连接', exact: true })).click(); await expect(reselected).toBeHidden();
     const [saved] = await list(); expect(saved.pendingFiles ?? []).toEqual([]);
     expect(saved.ssh).toMatchObject({ enabled: true, privateKeyPath: selections.ssh, hostFingerprint: protectedProfile.ssh!.hostFingerprint });
     expect(saved.tls).toEqual({ enabled: true, rejectUnauthorized: true, caPath: selections.ca, certPath: selections.cert, keyPath: selections.key });
@@ -345,7 +345,7 @@ test.describe('连接迁移保持真实只读工作区', () => {
       await input.focus(); await page.keyboard.press(`${modifier}+A`); await page.keyboard.insertText(probe);
       await expect.poll(async () => { const settings = await page.evaluate(() => window.dbark.invoke('settings.get', {})); return settings.tabs.find(tab => tab.id === settings.activeTabId)?.sql; }).toBe(probe);
       const previousTasks = await page.evaluate(async () => (await window.dbark.invoke('tasks.list', {})).map(task => task.id));
-      await query.getByRole('button', { name: '执行全部', exact: true }).click();
+      await (await (await import('./navigation-menu')).navigationMenuItem(query, { name: '执行全部', exact: true })).click();
       await expect.poll(async () => (await page.evaluate(() => window.dbark.invoke('tasks.list', {}))).filter(task => !previousTasks.includes(task.id)).map(task => task.status)).toEqual(['completed']);
       await expect(query.getByRole('button', { name: '停止', exact: true })).toBeDisabled({ timeout: 20000 }); await expect(query.locator('.error-box')).toHaveCount(0);
       // 单调探针值证明是这次 SELECT 的新行，不能把旧结果或重绘中的空节点当作会话证据。
@@ -356,14 +356,14 @@ test.describe('连接迁移保持真实只读工作区', () => {
     }
     const sessions: string[] = [];
     for (const connection of [first, second]) {
-      await page.locator('.app-commandbar').getByRole('button', { name: '新建查询', exact: true }).click();
+      await (await (await import('./navigation-menu')).navigationMenuItem(page.locator('.navigation-toolbar'), { name: '新建查询', exact: true })).click();
       const modal = page.getByRole('dialog', { name: '新建查询', exact: true });
       await modal.getByRole('combobox', { name: '数据库连接', exact: true }).selectOption(connection.id);
       // 带 datalist 的真实输入框具有 combobox 角色，仍可直接输入明确系统库名。
       await modal.getByRole('combobox', { name: '默认数据库（可选）', exact: true }).fill(connection.database!);
-      await modal.getByRole('button', { name: '打开查询', exact: true }).click();
+      await (await (await import('./navigation-menu')).navigationMenuItem(modal, { name: '打开查询', exact: true })).click();
       const query = page.locator('.query-tab:visible'); await expect(query.locator('.monaco-editor')).toBeVisible();
-      await query.getByRole('button', { name: '开始事务', exact: true }).click();
+      await (await (await import('./navigation-menu')).navigationMenuItem(query, { name: '开始事务', exact: true })).click();
       await expect(query.getByRole('button', { name: '回滚', exact: true })).toBeEnabled({ timeout: 20000 });
       sessions.push(await executeProbe(connection.database!));
     }
@@ -378,18 +378,18 @@ test.describe('连接迁移保持真实只读工作区', () => {
     const row = page.locator('.connection-row').filter({ hasText: first.name }); await row.hover();
     await clickSidebarAction(row, { name: `复制连接概要 ${first.name}`, exact: true });
     const copyDialog = page.getByRole('dialog', { name: '新建连接', exact: true });
-    await copyDialog.getByRole('button', { name: '保存连接', exact: true }).click(); await expect(copyDialog).toBeHidden();
+    await (await (await import('./navigation-menu')).navigationMenuItem(copyDialog, { name: '保存连接', exact: true })).click(); await expect(copyDialog).toBeHidden();
     const file = join(dataDir, '实际只读连接概要.json'); await chooseNative('save', file); const exporter = await transfer('export');
-    await exporter.getByRole('button', { name: '选择概要导出文件', exact: true }).click();
+    await (await (await import('./navigation-menu')).navigationMenuItem(exporter, { name: '选择概要导出文件', exact: true })).click();
     await page.keyboard.press(`${modifier}+Enter`); await page.keyboard.press(`${modifier}+S`);
     await expect(page.getByRole('dialog')).toHaveCount(1);
-    await exporter.getByRole('button', { name: '确认导出连接概要', exact: true }).click();
-    await expect(exporter.locator('.success-box')).toBeVisible(); await exporter.getByRole('button', { name: '关闭', exact: true }).click();
+    await (await (await import('./navigation-menu')).navigationMenuItem(exporter, { name: '确认导出连接概要', exact: true })).click();
+    await expect(exporter.locator('.success-box')).toBeVisible(); await (await (await import('./navigation-menu')).navigationMenuItem(exporter, { name: '关闭', exact: true })).click();
     const importer = await previewUi(file);
     await importer.getByRole('combobox', { name: '导入处理 1', exact: true }).selectOption('add');
     await importer.getByRole('checkbox', { name: stagedLabel, exact: true }).check();
-    await importer.getByRole('button', { name: '确认批次新增连接', exact: true }).click();
-    await expect(importer.locator('.success-box')).toContainText('新增 1，跳过 2'); await importer.getByRole('button', { name: '关闭', exact: true }).click();
+    await (await (await import('./navigation-menu')).navigationMenuItem(importer, { name: '确认批次新增连接', exact: true })).click();
+    await expect(importer.locator('.success-box')).toContainText('新增 1，跳过 2'); await (await (await import('./navigation-menu')).navigationMenuItem(importer, { name: '关闭', exact: true })).click();
     await expect(page.locator('.connection-row')).toHaveCount(4);
     const after = await page.evaluate(async () => ({ settings: await window.dbark.invoke('settings.get', {}), tasks: await window.dbark.invoke('tasks.list', {}), history: await window.dbark.invoke('history.list', {}) }));
     expect(after.settings.tabs).toEqual(before.settings.tabs); expect(after.settings.activeTabId).toBe(before.settings.activeTabId);
@@ -397,7 +397,7 @@ test.describe('连接迁移保持真实只读工作区', () => {
     for (const [index, connection] of [first, second].entries()) {
       await page.locator('.workspace-tab-button').nth(index).getByRole('button').first().click();
       expect(await executeProbe(connection.database!)).toBe(sessions[index]);
-      await page.locator('.query-tab:visible').getByRole('button', { name: '回滚', exact: true }).click();
+      await (await (await import('./navigation-menu')).navigationMenuItem(page.locator('.query-tab:visible'), { name: '回滚', exact: true })).click();
       await expect(page.locator('.query-tab:visible').getByRole('button', { name: '回滚', exact: true })).toBeDisabled();
     }
     expect((await list()).filter(item => item.id === first.id || item.id === second.id)).toEqual([first, second]);

@@ -1,4 +1,4 @@
-import { sidebarMenuRamPort } from '../helpers/sidebarMenuRamPort';
+import { sidebarMenuRamPort, navigationMenuRamPort } from '../helpers/sidebarMenuRamPort';
 import { readFileSync } from 'node:fs';
 import { createContext, runInContext } from 'node:vm';
 import ts from 'typescript';
@@ -64,6 +64,7 @@ function harness(options: Options = {}) {
   const context = createContext({ exports: {} as Record<string, Function>, process: { env: raw }, require(name: string) {
     // 对象树菜单是显式RAM展示依赖，不加载Playwright或计作原生/认证模块。
     if (name === './sidebar-menu') return sidebarMenuRamPort;
+    if (name === './navigation-menu') return navigationMenuRamPort;
     if (name === 'node:fs') return { existsSync: () => options.fallback ?? false };
     if (name === './desktop-fixture') return { test, expect: uiExpect, ownedDesktopResources: owned, retainOwnedDesktopResources: retain };
     if (name === './live-helpers') { calls.push('load-helper'); return { environment, isolatedDatabase: globals.exports.isolatedDatabase }; }

@@ -5,6 +5,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { bindShortcutNativeEnvironment, shortcutNativeActive, shortcutNativeCase } from '../helpers/queryFileShortcutGate';
 import { detachShortcutObservation, installShortcutObservation, ShortcutEventLog } from '../helpers/queryFileShortcutObservation';
 import { EditorIndentNativeRun } from '../e2e/editor-indentation-native-owner';
+import { navigationMenuRamPort } from '../helpers/sidebarMenuRamPort';
 
 /** 只造RAM环境，不读取清单、不构建原生批准、不运行Playwright。 */
 function environment() { return { DBARK_QUERY_FILE_SHORTCUT_NATIVE_TEST: '1', DBARK_QUERY_FILE_SHORTCUT_NATIVE_APPROVED: '1', DBARK_INTEGRATION_ENABLED: '0', DBARK_QUERY_FILE_SHORTCUT_MANIFEST: 'C:\\future\\approved.json', DBARK_QUERY_FILE_SHORTCUT_MANIFEST_SHA256: 'a'.repeat(64) } as NodeJS.ProcessEnv; }
@@ -50,7 +51,7 @@ function documentFixture() {
   const records: string[] = [], offMenu = vi.fn(), offTask = vi.fn(), dispatch = vi.fn(() => { throw Error('观察器不得派发'); });
   const pane = { getClientRects: () => [{}], querySelector: (selector: string) => selector.includes('button[') ? { disabled: false } : null };
   const document = { hasFocus: () => true, querySelectorAll: (selector: string) => selector === '.query-tab' ? [pane] : [], addEventListener: (_: string, fn: any) => { key = fn; }, removeEventListener: vi.fn() };
-  const window: any = { dbark: { onMenu: (fn: any) => { menu = fn; return offMenu; }, onTask: (fn: any) => { task = fn; return offTask; }, invoke: dispatch }, monaco: { editor: { getEditors: () => [{ hasTextFocus: () => true, getContainerDomNode: () => ({ closest: () => pane }) }] } } };
+  const window: any = { dbark: { onCommand: (fn: any) => { menu = (id: string) => fn({ id, revision: 1 }); return offMenu; }, onTask: (fn: any) => { task = fn; return offTask; }, invoke: dispatch }, monaco: { editor: { getEditors: () => [{ hasTextFocus: () => true, getContainerDomNode: () => ({ closest: () => pane }) }] } } };
   const context = { window, document, Date: { now: () => now }, console: { debug: (value: string) => records.push(value) }, setTimeout: (fn: any) => { expiry = fn; return 1; }, clearTimeout: vi.fn() };
   const page = { evaluate: async (fn: Function, choice: object) => runInNewContext('(' + fn.toString() + ')', context)(choice) } as any;
   return { page, window, document, records, offMenu, offTask, dispatch, menu: (action: string) => menu!(action), task: (event: any) => task!(event), key: (event: any) => key!(event), expire() { now = 2000; expiry!(); } };
@@ -78,16 +79,21 @@ describe('实际用例保留一次按键和父门', () => {
   const live = readFileSync(new URL('../e2e/query-file-shortcut-native-live.ts', import.meta.url), 'utf8');
   it('无按钮fallback/菜单调用/保存IPC/产品handler，完整golden及重启链保留', () => {
     expect(live.match(/keyboard\.press\(process\.platform === 'darwin' \? 'Meta\+s' : 'Control\+s'\)/g)).toHaveLength(1);
-    expect(live).not.toMatch(/invoke\('queryFileSources\.save|\.click\(.*save|MenuItem|sendInputEvent|\.setValue\(|\.setEOL\(|\.setModel\(|clipboard|useWorkspace/);
+    // 禁止真实MenuItem API；导航定位器名称不应被误判成系统菜单调用。
+    expect(live).not.toMatch(/invoke\('queryFileSources\.save|\.click\(.*save|\bMenuItem\b|sendInputEvent|\.setValue\(|\.setEOL\(|\.setModel\(|clipboard|useWorkspace/);
     for (const value of ['timeout: 120000, retries: 0', 'files!.read(path, original)', 'files!.read(path, saved.identity)', 'utf16NativeBytes(savedSql)', 'baseline.binding.ref.revision + 1', 'savedSqlDigest:', 'expect(disk.schema).toBe(9)', 'await run.close(first)', 'await run.close(second)', 'await run.finish()', 'nativeMenuClickObserved: false']) expect(live).toContain(value);
     const failed = live.slice(live.indexOf('} catch (reason) {\n      failure = reason;')); expect(failed).not.toMatch(/\.evaluate\(|\.screenshot\(|readIndentNativeSettings/);
   });
   it('实际offlineQuery首动作迟到后停链，不进入下一表单，不补取观察', async () => {
     const tree = ts.createSourceFile('live.ts', live, ts.ScriptTarget.Latest, true); let body = ''; function visit(node: ts.Node) { if (ts.isFunctionDeclaration(node) && node.name?.text === 'offlineQuery') body = node.getText(tree); ts.forEachChild(node, visit); } visit(tree); expect(body).not.toBe('');
-    let release!: () => void; const held = new Promise<void>(done => { release = done; }), next = vi.fn(() => { throw Error('不得进入下一项'); });
-    const owner = { application: {}, page: { locator: () => ({ getByRole: () => ({ click: () => held }) }), getByRole: next }, ids: new Set([1]), closed: false, confirmed: false, ready: false, errors: [], quitReady: Promise.resolve() } as any;
+    let release!: () => void, markEntered!: () => void;
+    const held = new Promise<void>(done => { release = done; }), entered = new Promise<void>(done => { markEntered = done; }), next = vi.fn(() => { throw Error('不得进入下一项'); });
+    const firstClick = vi.fn(() => { markEntered(); return held; });
+    const owner = { application: {}, page: { locator: () => ({ getByRole: () => ({ click: firstClick }) }), getByRole: next }, ids: new Set([1]), closed: false, confirmed: false, ready: false, errors: [], quitReady: Promise.resolve() } as any;
     const forbidden = () => { throw Error('禁止资源'); }, run = new EditorIndentNativeRun({ assertCurrent() {}, preflight: forbidden, directory: forbidden, assertDirectory: forbidden, launch: forbidden, prepare: forbidden, record: forbidden, quit: forbidden, absent: forbidden, remove: forbidden }); run.acquiredOwner(owner);
-    const exports: any = {}; runInNewContext(ts.transpileModule(body + ';exports.prepare=offlineQuery;', { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS } }).outputText, { exports, zh: { common: { newConnection: '新建连接' } } });
-    const pending = exports.prepare(run, owner), rejected = expect(pending).rejects.toThrow(); run.retained = true; release(); await rejected; expect(next).not.toHaveBeenCalled();
+    const exports: any = {}; runInNewContext(ts.transpileModule(body + ';exports.prepare=offlineQuery;', { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS } }).outputText, { exports, zh: { common: { newConnection: '新建连接' } }, navigationMenuItem: navigationMenuRamPort.navigationMenuItem });
+    const pending = exports.prepare(run, owner), rejected = expect(pending).rejects.toThrow();
+    // 必须先确认原首动作已进入挂起状态，再撤销owner；不能用定位阶段提前失败代替迟到回包反例。
+    await entered; expect(firstClick).toHaveBeenCalledOnce(); run.retained = true; release(); await rejected; expect(next).not.toHaveBeenCalled();
   });
 });

@@ -1,3 +1,7 @@
+import { installNavigationMenuRamPort, navigationMenuRamButton } from '../helpers/navigationMenuRamPort';
+import { readFileSync } from 'node:fs';
+import { runInNewContext } from 'node:vm';
+import ts from 'typescript';
 import React, { act } from 'react';
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { memoryDocument, MemoryEvent, MemoryNode } from '../fixtures/memory-dom';
@@ -24,8 +28,9 @@ let document: ReturnType<typeof memoryDocument>, createRoot: typeof import('reac
 let TableTab: typeof import('../../src/renderer/components/TableTab')['TableTab'], store: typeof import('../../src/renderer/store')['useWorkspace'], flush: typeof import('../../src/renderer/store')['flushSettings'];
 let commands: string[], previews: any[];
 const globals = ['window', 'document', 'navigator', 'HTMLElement', 'IS_REACT_ACT_ENVIRONMENT'].map(name => [name, Object.getOwnPropertyDescriptor(globalThis, name)] as const);
+let restoreNavigationMenuPort = () => {};
 beforeAll(async () => {
-  document = memoryDocument(); (document as any).oninput = null; Object.defineProperty(globalThis, 'HTMLElement', { value: MemoryNode, configurable: true });
+  document = memoryDocument(); restoreNavigationMenuPort = installNavigationMenuRamPort(document); (document as any).oninput = null; Object.defineProperty(globalThis, 'HTMLElement', { value: MemoryNode, configurable: true });
   const create = document.createElement.bind(document);
   document.createElement = name => {
     const node = create(name); if (name === 'input') node.type = 'text';
@@ -42,7 +47,7 @@ beforeAll(async () => {
   ({ createRoot } = await import('react-dom/client')); ({ TableTab } = await import('../../src/renderer/components/TableTab')); ({ useWorkspace: store, flushSettings: flush } = await import('../../src/renderer/store'));
 });
 afterEach(async () => { if (root) { await act(async () => root!.unmount()); root = undefined; } await flush(); document.body.textContent = ''; delete (window as any).dbark; });
-afterAll(() => { for (const [name, descriptor] of globals) if (descriptor) Object.defineProperty(globalThis, name, descriptor); else Reflect.deleteProperty(globalThis, name); });
+afterAll(() => { restoreNavigationMenuPort(); for (const [name, descriptor] of globals) if (descriptor) Object.defineProperty(globalThis, name, descriptor); else Reflect.deleteProperty(globalThis, name); });
 
 /** 所有IPC都在RAM内响应；未知命令立即失败，绝不连接服务器或真实数据库。 */
 async function mount() {
@@ -64,7 +69,28 @@ async function mount() {
   await act(async () => root!.render(<TableTab tab={tab} onDesign={noop} onTransfer={noop} onColumnPatches={noop} onIndexPatches={noop} onForeignKeyPatches={noop} onTableRename={noop} onTableAutoIncrement={noop} onTableComment={noop} onTableDefaultEncoding={noop} />));
   expect(grid.rows).toHaveLength(3); await select(new Set(grid.rows.slice(0, 2).map(row => row.id))); return info;
 }
-function button(name: string) { const node = document.querySelectorAll('button').find(node => node.getAttribute('aria-label') === name || node.textContent === name); expect(node, '缺少按钮：' + name).toBeDefined(); return node!; }
+function button(name: string) { const node = navigationMenuRamButton(document.body, name); expect(node, '缺少按钮：' + name).toBeDefined(); return node!; }
+/** 模态期间不能展开页面菜单；原撤销禁用合同由生产表达式及真实菜单屏障分别验证。 */
+async function expectUndoModalBlocked() {
+  const source = ts.createSourceFile('TableTab.tsx', readFileSync(new URL('../../src/renderer/components/TableTab.tsx', import.meta.url), 'utf8'), ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+  let blocked = '', disabled = '';
+  const visit = (node: ts.Node) => {
+    if (ts.isVariableDeclaration(node) && node.name.getText(source) === 'historyBlocked') blocked = node.initializer!.getText(source);
+    if (ts.isJsxOpeningElement(node) && node.tagName.getText(source) === 'button' && node.attributes.properties.some(attribute => ts.isJsxAttribute(attribute) && attribute.name.getText(source) === 'aria-label' && attribute.initializer && ts.isJsxExpression(attribute.initializer) && attribute.initializer.expression?.getText(source) === 'draftHistoryZh.undo')) {
+      const attribute = node.attributes.properties.find(attribute => ts.isJsxAttribute(attribute) && attribute.name.getText(source) === 'disabled') as ts.JsxAttribute;
+      disabled = (attribute.initializer as ts.JsxExpression).expression!.getText(source);
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(source); expect(blocked).not.toBe(''); expect(disabled).not.toBe('');
+  const value = runInNewContext(ts.transpileModule(`const historyBlocked=(${blocked});(${disabled})`, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText, {
+    blocked: false, editable: true, record: { dirty: false, pending: false, cellKey: null, nodeInput: null, structureInput: null }, gridEditing: false, showPreferences: false, referenceDialog: null, pasteInsertDialog: null, batchFillDialog: {}, settings: { activeTabId: '原页' }, tab: { id: '原页' }, history: { status: { undo: 1 } }
+  });
+  expect(value).toBe(true);
+  const originalDialog = dialog(), menus = document.querySelectorAll('[role="menu"]').length;
+  await act(async () => button('更多').dispatchEvent(new MemoryEvent('click')));
+  expect(document.querySelectorAll('[role="menu"]')).toHaveLength(menus); expect(dialog()).toBe(originalDialog);
+}
 async function click(name: string) { const node = button(name); expect(node.disabled).toBe(false); await act(async () => node.dispatchEvent(new MemoryEvent('click'))); }
 async function select(ids: ReadonlySet<string>) { await act(async () => grid.props.onSelectedRowsChange(ids)); }
 const dialog = () => document.querySelector(`[aria-label="${text.title}"]`);
@@ -92,7 +118,7 @@ describe('真实React表页批量填充RAM', () => {
   it('后字段非法JSON不会部分暂存，修正后整组只产生一步', async () => {
     await mount(); const before = grid.rows, calls = commands.length; await click(text.action); await input('一起填充'); await click(text.add);
     await change(document.querySelector(`[aria-label="${text.fieldAt(2)}"]`)!, 'doc', 'change'); await input('{', 1); await click(text.stage);
-    expect(grid.rows).toBe(before); expect(dialog()).not.toBeNull(); expect(button(historyText.undo).disabled).toBe(true); expect(commands).toHaveLength(calls);
+    expect(grid.rows).toBe(before); expect(dialog()).not.toBeNull(); await expectUndoModalBlocked(); expect(commands).toHaveLength(calls);
     await input('{ "修正":true }', 1); await click(text.stage); expect(grid.rows[0].data.note).toBe('一起填充'); expect(grid.rows[0].data.doc).toBe('{ "修正":true }'); expect(button(historyText.undo).textContent).toContain('(1)'); expect(commands).toHaveLength(calls);
   });
   it('移除重加字段后旧输入和旧暂存不能复活，重复字段的合成事件也不能覆盖现有项', async () => {
@@ -117,7 +143,7 @@ describe('真实React表页批量填充RAM', () => {
     expect(grid.rows.slice(0, 2).map(row => row.data[name])).toEqual([expected, expected]); expect(commands).toHaveLength(calls); expect(button(historyText.undo).textContent).toContain('(1)');
   });
   it('非法JSON整批不写，留在弹窗修正后仍只暂存一步', async () => {
-    await mount(); const before = grid.rows, calls = commands.length; await click(text.action); await column('doc'); await input('{'); await click(text.stage); expect(dialog()).not.toBeNull(); expect(grid.rows).toBe(before); expect(button(historyText.undo).disabled).toBe(true);
+    await mount(); const before = grid.rows, calls = commands.length; await click(text.action); await column('doc'); await input('{'); await click(text.stage); expect(dialog()).not.toBeNull(); expect(grid.rows).toBe(before); await expectUndoModalBlocked();
     await input('{ "修正":true }'); await click(text.stage); expect(grid.rows[0].data.doc).toBe('{ "修正":true }'); expect(button(historyText.undo).textContent).toContain('(1)'); expect(commands).toHaveLength(calls);
   });
   it('选择ABA变化后旧弹窗和已移除的迟到暂存闭包都不能写', async () => {

@@ -1,3 +1,4 @@
+import { extractMainProductionFunction } from './main-production-function';
 import { readFileSync } from 'node:fs';
 import { createContext, runInContext } from 'node:vm';
 import ts from 'typescript';
@@ -11,7 +12,7 @@ import { SavedQuerySearchCancelled } from '../../src/main/savedQuerySearch';
 /** 运行主进程真实 dispatch 原文，只替换数据库进程投递及存储边界。 */
 function fixture() {
   const source = readFileSync(new URL('../../src/main/index.ts', import.meta.url), 'utf8');
-  const dispatch = source.slice(source.indexOf('async function dispatch('), source.indexOf('/** 按平台生成中文原生菜单'));
+  const dispatch = extractMainProductionFunction(source, 'dispatch');
   const request = vi.fn(async () => ({ rows: 1 })), release = vi.fn(), acquire = vi.fn(async () => release), tasks = new Map();
   const context = createContext({ Date, Map, Set, Error, files: new Map([['输入', { path: '/授权/输入.xlsx', purpose: 'import', format: 'xlsx' }], ['输出', { path: '/授权/输出.xlsx', purpose: 'export', format: 'xlsx' }], ['旧格式', { path: '/授权/旧.csv', purpose: 'import', format: 'csv' }]]),
     tasks, completionTasks: new Set(), preparingTasks: new Map(), pendingQueryHistory: new Map(), exportProgress: new Map(), structureProgress: new Map(), structureTokens: new Map(), sessions: new Map(), savedQueryPages: undefined, historyPages: undefined,

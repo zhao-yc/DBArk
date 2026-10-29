@@ -8,3 +8,8 @@
 .sidebar-context-menu>button:hover:not(:disabled),.sidebar-context-menu>button:focus-visible{background:var(--surface-3)}
 .sidebar-context-menu>button.danger{color:var(--danger)}
 .sidebar-context-menu>[role=separator]{height:1px;margin:4px;background:var(--line)}
+.sidebar-context-submenu>button{display:flex;align-items:center;justify-content:space-between;gap:9px;width:100%;min-height:30px;padding:6px 8px;border:0;background:transparent;text-align:left}
+.sidebar-context-submenu>button:hover:not(:disabled),.sidebar-context-submenu>button:focus-visible,.sidebar-context-submenu>button[aria-expanded=true]{background:var(--surface-3)}
+.sidebar-context-child-menu{z-index:91}
+.object-list-row{height:31px;min-height:31px;max-height:31px;flex-wrap:nowrap}
+.object-list-row>.tree-label{flex-basis:auto;width:100%;min-width:0;padding-left:10px}

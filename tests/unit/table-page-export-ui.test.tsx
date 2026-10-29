@@ -1,3 +1,4 @@
+import { installNavigationMenuRamPort, navigationMenuRamButton } from '../helpers/navigationMenuRamPort';
 import React, { act } from 'react';
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { memoryDocument, MemoryEvent, MemoryNode } from '../fixtures/memory-dom';
@@ -23,8 +24,9 @@ let document: ReturnType<typeof memoryDocument>, createRoot: typeof import('reac
 let TableTab: typeof import('../../src/renderer/components/TableTab')['TableTab'], store: typeof import('../../src/renderer/store')['useWorkspace'], flush: typeof import('../../src/renderer/store')['flushSettings'];
 let commands: string[], previews: any[], pages: any[], exports: any[];
 const globals = ['window', 'document', 'navigator', 'HTMLElement', 'IS_REACT_ACT_ENVIRONMENT'].map(name => [name, Object.getOwnPropertyDescriptor(globalThis, name)] as const);
+let restoreNavigationMenuPort = () => {};
 beforeAll(async () => {
-  document = memoryDocument(); (document as any).oninput = null; Object.defineProperty(globalThis, 'HTMLElement', { value: MemoryNode, configurable: true });
+  document = memoryDocument(); restoreNavigationMenuPort = installNavigationMenuRamPort(document); (document as any).oninput = null; Object.defineProperty(globalThis, 'HTMLElement', { value: MemoryNode, configurable: true });
   const create = document.createElement.bind(document);
   document.createElement = name => {
     const node = create(name); if (name === 'input') node.type = 'text';
@@ -46,7 +48,7 @@ beforeAll(async () => {
   ({ createRoot } = await import('react-dom/client')); ({ TableTab } = await import('../../src/renderer/components/TableTab')); ({ useWorkspace: store, flushSettings: flush } = await import('../../src/renderer/store'));
 });
 afterEach(async () => { if (root) { await act(async () => root!.unmount()); root = undefined; } await flush(); document.body.textContent = ''; delete (window as any).dbark; });
-afterAll(() => { for (const [name, descriptor] of globals) if (descriptor) Object.defineProperty(globalThis, name, descriptor); else Reflect.deleteProperty(globalThis, name); });
+afterAll(() => { restoreNavigationMenuPort(); for (const [name, descriptor] of globals) if (descriptor) Object.defineProperty(globalThis, name, descriptor); else Reflect.deleteProperty(globalThis, name); });
 
 /** 所有IPC都在RAM内响应；未知命令立即失败，绝不连接服务器或真实数据库。 */
 async function mount() {
@@ -71,7 +73,7 @@ async function mount() {
   await act(async () => root!.render(<TableTab tab={tab} onDesign={noop} onTransfer={noop} onColumnPatches={noop} onIndexPatches={noop} onForeignKeyPatches={noop} onTableRename={noop} onTableAutoIncrement={noop} onTableComment={noop} onTableDefaultEncoding={noop} />));
   expect(grid.rows).toHaveLength(3); return info;
 }
-function button(name: string) { const node = document.querySelectorAll('button').find(node => node.getAttribute('aria-label') === name || node.textContent === name); expect(node, '缺少按钮：' + name).toBeDefined(); return node!; }
+function button(name: string) { const node = navigationMenuRamButton(document.body, name); expect(node, '缺少按钮：' + name).toBeDefined(); return node!; }
 async function click(name: string) { const node = button(name); expect(node.disabled).toBe(false); await act(async () => node.dispatchEvent(new MemoryEvent('click'))); }
 /** 通过真实网格回调勾选，倒序Set不能改变文件中的显示顺序。 */
 async function select(indices: number[]) { await act(async () => grid.props.onSelectedRowsChange(new Set(indices.map(index => grid.rows[index].id)))); }

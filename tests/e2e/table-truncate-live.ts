@@ -30,10 +30,10 @@ async function open(owner: CaseOwner, context: LiveContext, name: string) {
   const connection = page(owner).locator('.connection-node').filter({ has: page(owner).locator('.connection-row').getByText(context.connectionName, { exact: true }) });
   await connection.locator('.connection-row').getByRole('button', { name: context.connectionName, exact: true }).focus(); owner.assertCurrent();
   await clickSidebarAction(connection, { name: '刷新连接', exact: true }, undefined, () => owner.assertCurrent()); owner.assertCurrent();
-  await connection.locator('.database-row').getByRole('button', { name: context.database, exact: true }).click(); owner.assertCurrent();
+  await (await (await import('./navigation-menu')).navigationMenuItem(connection.locator('.database-row'), { name: context.database, exact: true }, () => owner.assertCurrent())).click(); owner.assertCurrent();
   await connection.locator('.object-row').filter({ has: page(owner).getByText(name, { exact: true }) }).getByText(name, { exact: true }).click(); owner.assertCurrent();
   const table = page(owner).locator('.table-tab:visible'); await expect(table.locator('.loading-overlay')).toHaveCount(0); owner.assertCurrent();
-  await table.getByRole('button', { name: text.title, exact: true }).click(); owner.assertCurrent();
+  await (await (await import('./navigation-menu')).navigationMenuItem(table, { name: text.title, exact: true }, () => owner.assertCurrent())).click(); owner.assertCurrent();
   await expect(dialog(owner).getByRole('button', { name: text.preview, exact: true })).toBeEnabled(); owner.assertCurrent();
 }
 /** 只有入口双开关才加载此模块；执行权由ROOT另行安排，不是本片交付时的实库证据。 */
@@ -51,7 +51,7 @@ export function registerTableTruncateUiTests() {
       await observe(owner, () => context.observer.query(`CREATE TABLE ${table}(id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY,s VARCHAR(80)) ENGINE=InnoDB AUTO_INCREMENT=20`)); owner.assertCurrent();
       await observe(owner, () => context.observer.query(`INSERT INTO ${table}(s) VALUES('合成数据')`)); owner.assertCurrent();
       await open(owner, context, 'basic'); owner.assertCurrent();
-      await dialog(owner).getByRole('button', { name: text.preview, exact: true }).click(); owner.assertCurrent();
+      await (await (await import('./navigation-menu')).navigationMenuItem(dialog(owner), { name: text.preview, exact: true }, () => owner.assertCurrent())).click(); owner.assertCurrent();
       await expect(dialog(owner).locator('.monaco-editor .view-lines')).toContainText('TRUNCATE TABLE'); owner.assertCurrent();
       const submit = dialog(owner).getByRole('button', { name: text.apply, exact: true }); await expect(submit).toBeDisabled(); owner.assertCurrent();
       await dialog(owner).getByLabel(text.confirmation, { exact: true }).fill(context.database + '.basic '); owner.assertCurrent();
@@ -66,7 +66,7 @@ export function registerTableTruncateUiTests() {
       await observe(owner, () => context.observer.query(`INSERT INTO ${table}(s) VALUES('重置后')`)); owner.assertCurrent();
       const [next] = await observe(owner, () => context.observer.query<RowDataPacket[]>('SELECT id FROM ' + table)); owner.assertCurrent(); expect(String(next[0].id)).toBe('1');
       const tasks = await page(owner).evaluate(() => window.dbark.invoke('tasks.list', {})); owner.assertCurrent(); expect(tasks.filter(task => task.kind === 'schema.tableTruncate.apply')).toHaveLength(1);
-      await dialog(owner).getByRole('button', { name: text.close, exact: true }).click(); owner.assertCurrent();
+      await (await (await import('./navigation-menu')).navigationMenuItem(dialog(owner), { name: text.close, exact: true }, () => owner.assertCurrent())).click(); owner.assertCurrent();
       // click响应不代表预览/快照令牌已经释放；弹窗实际卸载后才返回到严格退出夹具。
       await expect(dialog(owner)).toHaveCount(0); owner.assertCurrent();
     }, info, { captureFailureScreenshot: false });

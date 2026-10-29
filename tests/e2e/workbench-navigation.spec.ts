@@ -27,31 +27,31 @@ test('真实收藏与链接组件的倒序导航、关闭和卸载不复活旧�
     await expect(production).toHaveAttribute('title', /\[production\].*"app"\."users"/);
     await ui.screenshot({ path: testInfo.outputPath('workbench-connection-identity.png') });
     await production.click(); await expect.poll(() => ui.evaluate(() => window.workbenchNavigationFixture.pending())).toEqual([1]);
-    await ui.getByRole('button', { name: '粘贴对象链接', exact: true }).click();
+    await (await (await import('./navigation-menu')).navigationMenuItem(ui, { name: '粘贴对象链接', exact: true })).click();
     let link = ui.getByRole('dialog', { name: '粘贴对象链接', exact: true });
     await link.getByLabel('DBArk 对象链接', { exact: true }).fill(objectUri({ connectionId: 'testing', database: 'app', kind: 'table', name: 'users' }));
-    await link.getByRole('button', { name: '打开链接', exact: true }).click();
+    await (await (await import('./navigation-menu')).navigationMenuItem(link, { name: '打开链接', exact: true })).click();
     await expect.poll(() => ui.evaluate(() => window.workbenchNavigationFixture.pending())).toEqual([1, 2]);
     await ui.evaluate(() => window.workbenchNavigationFixture.finish(2)); await expect(link).toBeHidden();
     await expect(ui.getByLabel('当前连接', { exact: true })).toHaveText('testing');
     await ui.evaluate(() => window.workbenchNavigationFixture.finish(1));
     expect(await ui.evaluate(() => window.workbenchNavigationFixture.state())).toEqual({ connection: 'testing', tabs: ['testing'] });
     // 管理弹窗在导航等待期间可以关闭，迟到成功不能打开目标或重新关闭其它窗口。
-    await ui.getByRole('button', { name: '收藏与虚拟分组', exact: true }).click();
+    await (await (await import('./navigation-menu')).navigationMenuItem(ui, { name: '收藏与虚拟分组', exact: true })).click();
     const manager = ui.getByRole('dialog', { name: '收藏与虚拟分组', exact: true });
     await manager.getByRole('button', { name: '打开对象：users', exact: true }).first().click();
     await expect.poll(() => ui.evaluate(() => window.workbenchNavigationFixture.pending())).toEqual([3]);
-    await manager.getByRole('button', { name: '关闭对话框', exact: true }).click(); await expect(manager).toBeHidden();
+    await (await (await import('./navigation-menu')).navigationMenuItem(manager, { name: '关闭对话框', exact: true })).click(); await expect(manager).toBeHidden();
     await ui.evaluate(() => window.workbenchNavigationFixture.finish(3));
     await expect(ui.getByLabel('当前连接', { exact: true })).toHaveText('testing');
     // URI 对话框关闭和单独卸载两条路径均通过所属信号废弃结果。
     for (const [index, unmount] of [false, true].entries()) {
-      await ui.getByRole('button', { name: '粘贴对象链接', exact: true }).click(); link = ui.getByRole('dialog', { name: '粘贴对象链接', exact: true });
+      await (await (await import('./navigation-menu')).navigationMenuItem(ui, { name: '粘贴对象链接', exact: true })).click(); link = ui.getByRole('dialog', { name: '粘贴对象链接', exact: true });
       await link.getByLabel('DBArk 对象链接', { exact: true }).fill(objectUri({ connectionId: 'production', database: 'app', kind: 'procedure', name: 'users' }));
-      await link.getByRole('button', { name: '打开链接', exact: true }).click();
+      await (await (await import('./navigation-menu')).navigationMenuItem(link, { name: '打开链接', exact: true })).click();
       await expect.poll(() => ui.evaluate(() => window.workbenchNavigationFixture.pending())).toEqual([4 + index]);
       if (unmount) await ui.evaluate(() => window.workbenchNavigationFixture.removeDialogs());
-      else await link.getByRole('button', { name: '取消', exact: true }).click();
+      else await (await (await import('./navigation-menu')).navigationMenuItem(link, { name: '取消', exact: true })).click();
       await expect(link).toBeHidden(); await ui.evaluate(id => window.workbenchNavigationFixture.finish(id), 4 + index);
       await expect(ui.getByLabel('当前定义', { exact: true })).toBeEmpty(); await expect(ui.getByLabel('当前连接', { exact: true })).toHaveText('testing');
     }

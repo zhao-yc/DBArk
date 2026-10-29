@@ -9,7 +9,7 @@ async function openTable(connectionName: string, database: string, name: string)
   const connection = page.locator('.connection-node').filter({ has: page.locator('.connection-row').getByText(connectionName, { exact: true }) });
   await connection.locator('.connection-row').hover(); await clickSidebarAction(connection.locator('.connection-row'), { name: '刷新连接', exact: true });
   const databaseRow = connection.locator('.database-row').filter({ has: page.getByRole('button', { name: database, exact: true }) });
-  await expect(databaseRow).toBeVisible(); await databaseRow.getByRole('button', { name: database, exact: true }).click();
+  await expect(databaseRow).toBeVisible(); await (await (await import('./navigation-menu')).navigationMenuItem(databaseRow, { name: database, exact: true })).click();
   await connection.locator('.object-row').getByText(name, { exact: true }).click();
   const table = page.locator('.table-tab:visible'); await expect(table.locator('.context-bar')).toContainText(name); await expect(table.locator('.loading-overlay')).toHaveCount(0); return table;
 }
@@ -27,18 +27,18 @@ export function registerCopyInsertSqlNativeTest() {
         await withNativeClipboard(async () => {
           let table = await openTable(connectionName, database, 'copy_insert_values');
           const first = table.locator('.results-grid [role="row"]').filter({ hasText: '原始记录甲' }), second = table.locator('.results-grid [role="row"]').filter({ hasText: '原始记录乙' });
-          await first.getByRole('gridcell').filter({ hasText: '原始记录甲' }).click(); await table.getByRole('button', { name: text.current, exact: true }).click(); await expect(table).toContainText(text.copied);
+          await first.getByRole('gridcell').filter({ hasText: '原始记录甲' }).click(); await (await (await import('./navigation-menu')).navigationMenuItem(table, { name: text.current, exact: true })).click(); await expect(table).toContainText(text.copied);
           await expect.poll(() => desktop.evaluate(async ({ clipboard }, database) => (await clipboard.readText()).includes('INSERT INTO `' + database + '`.`copy_insert_values`'), database)).toBe(true);
           const current = await desktop.evaluate(({ clipboard }) => clipboard.readText());
           expect(current).toContain('INSERT INTO `' + database + '`.`copy_insert_values`'); expect(current).toContain('18446744073709551615'); expect(current).toContain('12345678901234567890.120000'); expect(current).toContain("X'00ff8000'"); expect(current).toContain(Buffer.from('2026-10-17 01:02:03.123456').toString('hex')); expect(current).toContain('NULL'); expect(current.split('\n')).toHaveLength(1);
-          await first.getByRole('checkbox').check(); await second.getByRole('checkbox').check(); await table.getByRole('button', { name: text.selected, exact: true }).click(); await expect(table).toContainText(text.copied);
+          await first.getByRole('checkbox').check(); await second.getByRole('checkbox').check(); await (await (await import('./navigation-menu')).navigationMenuItem(table, { name: text.selected, exact: true })).click(); await expect(table).toContainText(text.copied);
           await expect.poll(() => desktop.evaluate(async ({ clipboard }) => (await clipboard.readText()).split('\n').length)).toBe(2);
           const selected = await desktop.evaluate(({ clipboard }) => clipboard.readText()); expect(selected.split('\n')).toHaveLength(2);
           await first.getByRole('gridcell').filter({ hasText: '原始记录甲' }).dblclick(); const input = table.locator('.grid-input'); await input.fill('未保存草稿'); await input.press('Enter');
-          await table.getByRole('button', { name: text.selected, exact: true }).click(); await expect(table).toContainText(text.draft);
+          await (await (await import('./navigation-menu')).navigationMenuItem(table, { name: text.selected, exact: true })).click(); await expect(table).toContainText(text.draft);
           expect(await desktop.evaluate(async ({ clipboard }, value) => await clipboard.readText() === value, selected)).toBe(true);
           await observer.query('CREATE TABLE `' + database + '`.`copy_insert_generated` (id INT, derived INT GENERATED ALWAYS AS (id+1) STORED)'); await observer.query('INSERT INTO `' + database + '`.`copy_insert_generated` (id) VALUES (1)');
-          table = await openTable(connectionName, database, 'copy_insert_generated'); await table.locator('.results-grid [role="gridcell"]').first().click(); await table.getByRole('button', { name: text.current, exact: true }).click(); await expect(table).toContainText(text.type);
+          table = await openTable(connectionName, database, 'copy_insert_generated'); await table.locator('.results-grid [role="gridcell"]').first().click(); await (await (await import('./navigation-menu')).navigationMenuItem(table, { name: text.current, exact: true })).click(); await expect(table).toContainText(text.type);
           expect(await desktop.evaluate(async ({ clipboard }, value) => await clipboard.readText() === value, selected)).toBe(true);
         });
       } catch (reason) { retainOwnedDesktopResources(info); throw reason; }

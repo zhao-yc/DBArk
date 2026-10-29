@@ -1,3 +1,4 @@
+import { installNavigationMenuRamPort, navigationMenuRamButton } from '../helpers/navigationMenuRamPort';
 import { createHash, randomUUID } from 'node:crypto';
 import { tableFilteredUpdateConfirmation } from '../../src/shared/tableFilteredUpdate';
 import { recordViewZh as recordText } from '../../src/renderer/locales/recordViews.zh-CN';
@@ -22,8 +23,9 @@ let TableTab: typeof import('../../src/renderer/components/TableTab')['TableTab'
 let commands: string[], pages: any[], opened: any[], requests: Array<{command:string;input:any}>; let pendingPreview:any; let lastPreview:any;
 const globals = ['window', 'document', 'navigator', 'HTMLElement', 'IS_REACT_ACT_ENVIRONMENT'].map(name => [name, Object.getOwnPropertyDescriptor(globalThis, name)] as const);
 const readScope = (): TableFilteredSelectScope => ({ filters: [{ column: 'label', operator: '=', value: 'Alpha' }, { column: 'label', operator: '=', value: 'Beta' }, { column: 'id', operator: '>=', value: '9007199254740993' }, { column: 'note', operator: '=', value: '停用条件不进入SQL', enabled: false }], filterMode: 'all', filterGroup: { mode: 'all', children: [{ mode: 'any', children: [0, 1] }, 2, 3] }, sort: [{ column: 'label', direction: 'ASC' }, { column: 'id', direction: 'DESC' }] });
+let restoreNavigationMenuPort = () => {};
 beforeAll(async () => {
-  doc = memoryDocument(); (doc as any).oninput = null; Object.defineProperty(globalThis, 'HTMLElement', { value: MemoryNode, configurable: true }); const create = doc.createElement.bind(doc);
+  doc = memoryDocument(); restoreNavigationMenuPort = installNavigationMenuRamPort(doc); (doc as any).oninput = null; Object.defineProperty(globalThis, 'HTMLElement', { value: MemoryNode, configurable: true }); const create = doc.createElement.bind(doc);
   /** 仅补标准属性，不读取或改写React组件内部状态作为通过证据。 */
   doc.createElement = name => {
     const node = create(name); if (name === 'input') node.type = 'text';
@@ -39,7 +41,7 @@ beforeAll(async () => {
 /** 用独立Node哈希实现RAM WebCrypto端口，保留异步而不依赖线程调度。 */
 beforeEach(()=>{vi.spyOn(globalThis.crypto.subtle,'digest').mockImplementation(async(_algorithm,data)=>{const bytes=ArrayBuffer.isView(data)?new Uint8Array(data.buffer,data.byteOffset,data.byteLength):new Uint8Array(data);return Uint8Array.from(createHash('sha256').update(bytes).digest()).buffer;});});
 afterEach(async () => { if (root) await act(async () => root!.unmount()); root = undefined; await flush(); doc.body.textContent = ''; delete (window as any).dbark; vi.restoreAllMocks(); });
-afterAll(() => { for (const [name, descriptor] of globals) if (descriptor) Object.defineProperty(globalThis, name, descriptor); else Reflect.deleteProperty(globalThis, name); });
+afterAll(() => { restoreNavigationMenuPort(); for (const [name, descriptor] of globals) if (descriptor) Object.defineProperty(globalThis, name, descriptor); else Reflect.deleteProperty(globalThis, name); });
 
 /** 初始化与服务器任务均为RAM端口；正式入口、scope与刷新逻辑使用真实TableTab。 */
 async function mount(options: { wide?: number; view?: boolean; weird?: boolean } = {}) {
@@ -66,7 +68,7 @@ async function mount(options: { wide?: number; view?: boolean; weird?: boolean }
   await act(async () => root!.render(<TableTab tab={tab} onOpenGeneratedQuery={candidate => { opened.push(structuredClone(candidate)); store.getState().openTab(candidate); }} onDesign={noop} onTransfer={noop} onColumnPatches={noop} onIndexPatches={noop} onForeignKeyPatches={noop} onTableRename={noop} onTableAutoIncrement={noop} onTableComment={noop} onTableDefaultEncoding={noop}/>));
   expect(grid.rows).toHaveLength(1); return { info, tab };
 }
-function button(label: string): MemoryNode { const node = doc.querySelectorAll('button').find(node => node.getAttribute('aria-label') === label || node.textContent === label); expect(node, label).toBeDefined(); return node!; }
+function button(label: string): MemoryNode { const node = navigationMenuRamButton(doc.body, label); expect(node, label).toBeDefined(); return node!; }
 async function click(label: string) { const node = button(label); expect(node.disabled, label).toBe(false); await act(async () => node.dispatchEvent(new MemoryEvent('click'))); }
 async function select(label: string, value: string) { const node = doc.querySelectorAll('select').find(value => value.getAttribute('aria-label') === label)!; expect(node).toBeDefined(); await act(async () => { node.value = value; node.dispatchEvent(new MemoryEvent('change')); }); }
 async function input(label: string, value: string) { const node = doc.querySelectorAll('input').find(value => value.getAttribute('aria-label') === label)!; expect(node).toBeDefined(); await act(async () => { node.value = value; node.dispatchEvent(new MemoryEvent('input')); }); }

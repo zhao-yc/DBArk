@@ -36,7 +36,7 @@ export function registerColumnCollationInstalledUi(binding: ColumnCollationInsta
       check();expect(trace).toBe('off');expect(screenshot).toBe('off');expect(video).toBe('off');
       const name=`列排序规则-${target.kind}-${target.marker}`;
       expect(await history()).toEqual([]);await step(()=>expect(page.locator('.tab-strip .tab-select')).toHaveCount(0));
-      await step(()=>page.locator('.app-commandbar').getByRole('button',{name:zh.common.newConnection,exact:true}).click());
+      await step(()=>page.locator('.navigation-toolbar').getByRole('button',{name:zh.common.newConnection,exact:true}).click());
       const connection=page.getByRole('dialog',{name:zh.common.newConnection,exact:true}),dialect=connection.getByRole('combobox',{name:prefix(zh.connections.text008)});
       await step(()=>expect(dialect).toHaveCount(1));await step(()=>dialect.selectOption('mysql'));await step(()=>expect(dialect).toHaveValue('mysql'));
       await step(()=>connection.getByLabel(zh.connections.text006,{exact:true}).fill(name));

@@ -54,16 +54,16 @@ async function analyzed(source:string,offset:number,supported:boolean){
 }
 /** 只点执行当前草稿；不能用预期SQL覆盖实际候选插入结果后再执行。 */
 async function executeCurrent(column:string,values:string[]){
-  const previous=await count('query.execute',true);await query().getByRole('button',{name:'执行全部',exact:true}).click();await expect.poll(()=>count('query.execute',true),{timeout:20000}).toBe(previous+1);
+  const previous=await count('query.execute',true);await (await (await import('./navigation-menu')).navigationMenuItem(query(), {name:'执行全部',exact:true})).click();await expect.poll(()=>count('query.execute',true),{timeout:20000}).toBe(previous+1);
   await expect(query().getByRole('button',{name:'停止',exact:true})).toBeDisabled();await expect(query().locator('.error-box')).toHaveCount(0);
   const header=query().getByRole('columnheader',{name:new RegExp('^'+column)});await expect(header).toHaveCount(1);const index=await header.getAttribute('aria-colindex');if(!index)throw Error('实际输出缺少列坐标');
   await expect.poll(()=>query().locator(`[role=row][aria-rowindex]:not([aria-rowindex="1"]) [role=gridcell][aria-colindex="${index}"]`).allTextContents().then(texts=>texts.map(value=>value.trim()))).toEqual(values);
 }
 /** 首次执行后按既有界面显式确认来源，保留临时表遮蔽保护及零自动执行边界。 */
 async function confirmSources(database:string){
-  await query().getByRole('button',{name:'会话临时对象',exact:true}).click();const modal=page.getByRole('dialog',{name:'当前查询会话的临时对象',exact:true});
-  for(const table of['users','orders']){await modal.getByLabel('数据库名称',{exact:true}).fill(database);await modal.getByLabel('表或视图名称',{exact:true}).fill(table);await modal.getByRole('button',{name:'读取会话结构',exact:true}).click();await expect(modal.locator('.success-box')).toContainText('该名称当前不是临时表',{timeout:20000});}
-  await modal.getByRole('button',{name:'关闭',exact:true}).click();
+  await (await (await import('./navigation-menu')).navigationMenuItem(query(), {name:'会话临时对象',exact:true})).click();const modal=page.getByRole('dialog',{name:'当前查询会话的临时对象',exact:true});
+  for(const table of['users','orders']){await modal.getByLabel('数据库名称',{exact:true}).fill(database);await modal.getByLabel('表或视图名称',{exact:true}).fill(table);await (await (await import('./navigation-menu')).navigationMenuItem(modal, {name:'读取会话结构',exact:true})).click();await expect(modal.locator('.success-box')).toContainText('该名称当前不是临时表',{timeout:20000});}
+  await (await (await import('./navigation-menu')).navigationMenuItem(modal, {name:'关闭',exact:true})).click();
 }
 /** 表和样本仅由旁观连接建立，应用执行阶段始终只通过真实查询工作区。 */
 async function fixture(context:LiveContext){

@@ -38,7 +38,7 @@ test('真实表页按单元格原值读取全表：跨页精确小数、空串�
   const state = () => step(() => application.evaluate(() => (globalThis as any).__tableCellFilterPages as { pages: { input: any; ids?: string[]; hasMore?: boolean }[]; pending: number; writes: number }));
   try {
     expect([trace, screenshot, video]).toEqual(['off', 'off', 'off']);
-    await step(() => page.locator('.app-commandbar').getByRole('button', { name: zh.common.newConnection, exact: true }).click()); const form = page.getByRole('dialog', { name: zh.common.newConnection, exact: true });
+    await step(() => page.locator('.navigation-toolbar').getByRole('button', { name: zh.common.newConnection, exact: true }).click()); const form = page.getByRole('dialog', { name: zh.common.newConnection, exact: true });
     const connectionName = '单元格筛选本例';
     for (const [label, value] of [[zh.connections.text006, connectionName], [zh.connections.text009, target!.host!], [zh.connections.text010, target!.port!], [zh.common.user, target!.user!], [zh.connections.text011, target!.password!], [zh.connections.text012, target!.database!]]) await step(() => form.getByLabel(label, { exact: true }).fill(value));
     await step(() => form.getByRole('combobox', { name: new RegExp('^' + zh.connections.text008) }).selectOption('mysql'));

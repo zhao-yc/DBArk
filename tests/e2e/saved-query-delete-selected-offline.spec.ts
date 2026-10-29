@@ -77,7 +77,7 @@ function register(): void {
     const organization = (value: Awaited<ReturnType<typeof groups>>) => ({ groups: value.groups, totalCount: value.totalCount, unfiledCount: value.unfiledCount });
     const list = () => page.getByRole('dialog', { name: zh.activity.text003, exact: true });
     async function openList(): Promise<void> {
-      await step(() => page.locator('.app-commandbar').getByRole('button', { name: zh.common.historyQueries, exact: true }).click());
+      await step(() => page.locator('.navigation-toolbar').getByRole('button', { name: zh.common.historyQueries, exact: true }).click());
       await step(() => list().getByRole('button', { name: zh.activity.text005, exact: true }).click());
       await step(() => expect(list().getByRole('button', { name: pages.refresh, exact: true })).toBeEnabled());
     }

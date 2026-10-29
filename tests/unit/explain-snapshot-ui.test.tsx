@@ -1,3 +1,11 @@
+import { installNavigationMenuRamPort, navigationMenuRamButton } from '../helpers/navigationMenuRamPort';
+import { workspaceToolCommandSource } from '../helpers/workspaceToolCommandSource';
+import { uiCommandLabels } from '../../src/shared/uiCommands.zh-CN';
+import { navigationZh } from '../../src/renderer/locales/navigation.zh-CN';
+import { readEditorWordWrap } from '../../src/shared/editorWordWrap';
+let errorMessage: typeof import('../../src/renderer/lib')['errorMessage'];
+let restoreNavigationMenuPort: () => void = () => {};
+let ActionMenu: typeof import('../../src/renderer/components/ActionMenu')['ActionMenu'], ActionMenuSection: typeof import('../../src/renderer/components/ActionMenu')['ActionMenuSection'];
 import { act, useState } from 'react';
 import * as jsxRuntime from 'react/jsx-runtime';
 import { readFileSync } from 'node:fs';
@@ -19,31 +27,35 @@ let Dialog: typeof import('../../src/renderer/components/ExplainSnapshotDialog')
 let View: typeof import('../../src/renderer/components/ExplainPlanView')['ExplainPlanView'];
 let Save: typeof import('../../src/renderer/components/ExplainSnapshotSaveButton')['ExplainSnapshotSaveButton'];
 const globals = ['window', 'document', 'navigator', 'IS_REACT_ACT_ENVIRONMENT'].map(name => [name, Object.getOwnPropertyDescriptor(globalThis, name)] as const);
+let store: typeof import('../../src/renderer/store')['useWorkspace'];
 const bridge = vi.fn();
 /** 从正式 App 取入口状态、开关及模态表达式，验证无连接场景无需引入整套数据库工作区。 */
 function appEntry(invalidate: () => void) {
   const source = readFileSync(new URL('../../src/renderer/App.tsx', import.meta.url), 'utf8'), file = ts.createSourceFile('App.tsx', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
-  const app = file.statements.find(node => ts.isFunctionDeclaration(node) && node.name?.text === 'App')!;
-  let button = '', declaration = '', modal = ''; const methods: string[] = [];
-  const visit = (node: ts.Node) => {
+  const app = file.statements.find(node => ts.isFunctionDeclaration(node) && node.name?.text === 'WorkspaceApp')!;
+  let declaration = '', modal = ''; const methods: string[] = [];
+  function visit(node: ts.Node) {
     if (ts.isVariableStatement(node) && node.declarationList.declarations.some(item => item.name.getText(file) === '[explainSnapshot, setExplainSnapshot]')) declaration = node.getText(file);
-    if (ts.isFunctionDeclaration(node) && ['openExplainSnapshot', 'closeExplainSnapshot'].includes(node.name?.text ?? '')) methods.push(node.getText(file));
-    if (ts.isJsxElement(node) && node.openingElement.tagName.getText(file) === 'button' && node.children.some(item => ts.isJsxExpression(item) && item.expression?.getText(file) === 'explainSnapshotZh.entry')) button = node.getText(file);
+    if (ts.isFunctionDeclaration(node) && ['openExplainSnapshot','closeExplainSnapshot'].includes(node.name?.text ?? '')) methods.push(node.getText(file));
     if (ts.isBinaryExpression(node) && node.left.getText(file) === 'explainSnapshot' && ts.isJsxSelfClosingElement(node.right)) modal = node.getText(file);
     ts.forEachChild(node, visit);
-  };
-  visit(app); expect([declaration, button, modal].every(Boolean)).toBe(true); expect(methods).toHaveLength(2);
-  const context: any = createContext({ exports: {}, useState, document, ExplainSnapshotDialog: Dialog, explainSnapshotZh: text, workbenchNavigation: { invalidate }, require: (name: string) => { if (name === 'react/jsx-runtime') return jsxRuntime; throw Error('禁止其它 App 依赖'); } });
-  runInContext(ts.transpileModule(`function Entry(){${declaration}\n${methods.join('\n')}\nreturn <>${button}{${modal}}</>};globalThis.Entry=Entry;`, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX } }).outputText, context);
-  return context.Entry as React.ComponentType;
+  }
+  visit(app); expect([declaration, modal].every(Boolean)).toBe(true); expect(methods).toHaveLength(2);
+  const menu = workspaceToolCommandSource(source, readFileSync(new URL('../../src/renderer/components/NavigationToolbar.tsx', import.meta.url), 'utf8'), 'explain-snapshot');
+  const context: any = createContext({ exports: {}, useState, document, useWorkspace: store, flushSettings: () => Promise.resolve(), errorMessage, readEditorWordWrap, ActionMenu, ActionMenuSection, uiCommandLabels, navigationZh, ExplainSnapshotDialog: Dialog, workbenchNavigation: { invalidate: invalidate }, require: (name: string) => { if (name === 'react/jsx-runtime') return jsxRuntime; throw Error('禁止其它App依赖'); } });
+  runInContext(ts.transpileModule(`function Entry({children}:any){${declaration}
+${methods.join('\n')}
+${menu}return <><ActionMenu label={navigationZh.tools}>{toolActions}</ActionMenu>${modal ? '{' + modal + '}' : ''}{children}</>};globalThis.Entry=Entry;`, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX } }).outputText, context);
+  return context.Entry as React.ComponentType<{ children?: React.ReactNode }>;
 }
+
 beforeAll(async () => {
-  document = memoryDocument(); (document as any).oninput = null; const create = document.createElement.bind(document);
+  document = memoryDocument(); restoreNavigationMenuPort = installNavigationMenuRamPort(document); ({ ActionMenu, ActionMenuSection } = await import('../../src/renderer/components/ActionMenu')); ({ errorMessage } = await import('../../src/renderer/lib')); (document as any).oninput = null; const create = document.createElement.bind(document);
   document.createElement = name => { const node = create(name); (node as any).scrollIntoView = vi.fn(); const set = node.setAttribute.bind(node), remove = node.removeAttribute.bind(node); node.setAttribute = (key, value) => { set(key.toLowerCase(), value); if (key === 'disabled') node.disabled = true; }; node.removeAttribute = key => { remove(key.toLowerCase()); if (key === 'disabled') node.disabled = false; }; return node; };
-  ({ createRoot } = await import('react-dom/client')); ({ ExplainSnapshotDialog: Dialog } = await import('../../src/renderer/components/ExplainSnapshotDialog')); ({ ExplainPlanView: View } = await import('../../src/renderer/components/ExplainPlanView')); ({ ExplainSnapshotSaveButton: Save } = await import('../../src/renderer/components/ExplainSnapshotSaveButton'));
+  ({ createRoot } = await import('react-dom/client')); ({ useWorkspace: store } = await import('../../src/renderer/store')); ({ ExplainSnapshotDialog: Dialog } = await import('../../src/renderer/components/ExplainSnapshotDialog')); ({ ExplainPlanView: View } = await import('../../src/renderer/components/ExplainPlanView')); ({ ExplainSnapshotSaveButton: Save } = await import('../../src/renderer/components/ExplainSnapshotSaveButton'));
 });
 afterEach(async () => { if (root) await act(async () => root!.unmount()); root = undefined; document.body.textContent = ''; bridge.mockReset(); });
-afterAll(() => { for (const [name, descriptor] of globals) if (descriptor) Object.defineProperty(globalThis, name, descriptor); else Reflect.deleteProperty(globalThis, name); });
+afterAll(() => { restoreNavigationMenuPort(); for (const [name, descriptor] of globals) if (descriptor) Object.defineProperty(globalThis, name, descriptor); else Reflect.deleteProperty(globalThis, name); });
 
 /** 原始数据库结果交由正式 codec 处理，不用另一个文件实现替代被测代码。 */
 function fixture(name = 'orders'): QueryOutcome {
@@ -54,7 +66,7 @@ function fixture(name = 'orders'): QueryOutcome {
 function deferred<T>() { let resolve!: (value: T) => void, reject!: (reason: Error) => void; const promise = new Promise<T>((yes, no) => { resolve = yes; reject = no; }); return { promise, resolve, reject }; }
 async function mount(element: React.ReactNode) { (window as any).dbark = { invoke: bridge }; const host = document.createElement('div'); document.body.appendChild(host); root = createRoot(host as any); await render(element); }
 async function render(element: React.ReactNode) { await act(async () => root!.render(element)); }
-function button(label: string) { const node = document.querySelectorAll('button').find(item => item.textContent === label || item.getAttribute('aria-label') === label); expect(node, label).toBeDefined(); return node!; }
+function button(label: string) { const node = navigationMenuRamButton(document, label) ?? document.querySelectorAll('button').find(item => item.textContent === label || item.getAttribute('aria-label') === label); expect(node, label).toBeDefined(); return node!; }
 async function click(label: string) { await act(async () => button(label).dispatchEvent(new MemoryEvent('click'))); }
 function props(node: ReturnType<typeof memoryDocument>['body']) { return (node as any)[Object.keys(node).find(key => key.startsWith('__reactProps$'))!]; }
 async function search(value: string) { const input = document.querySelector(`input[aria-label="${planText.find}"]`)!; await act(async () => { input.value = value; input.dispatchEvent(new MemoryEvent('input')); }); }
@@ -127,9 +139,9 @@ it('跨打开和另存的旧回调不能绕过同步共享锁', async () => {
 });
 
 it('正式 App 无连接入口可用且遵守现有模态门和导航失效规则', async () => {
-  const invalidate = vi.fn(), Entry = appEntry(invalidate); await mount(<Entry/>); expect(button(text.entry).disabled).toBe(false);
-  const clickEntry = props(button(text.entry)).onClick, other = document.createElement('div'); other.setAttribute('role', 'dialog'); document.body.appendChild(other); await act(async () => clickEntry()); expect(invalidate).not.toHaveBeenCalled(); expect(document.querySelectorAll('[role="dialog"]')).toHaveLength(1); document.body.removeChild(other);
-  await click(text.entry); expect(invalidate).toHaveBeenCalledTimes(1); expect(document.querySelectorAll('[role="dialog"]')).toHaveLength(1); expect(bridge).not.toHaveBeenCalled(); await click(text.close); expect(invalidate).toHaveBeenCalledTimes(2); expect(document.querySelector('[role="dialog"]')).toBeNull();
+  const invalidate = vi.fn(), Entry = appEntry(invalidate); await mount(<Entry/>); expect(button(uiCommandLabels['explain-snapshot']).disabled).toBe(false);
+  const clickEntry = props(button(uiCommandLabels['explain-snapshot'])).onClick, other = document.createElement('div'); other.setAttribute('role', 'dialog'); document.body.appendChild(other); await act(async () => clickEntry()); expect(invalidate).not.toHaveBeenCalled(); expect(document.querySelectorAll('[role="dialog"]')).toHaveLength(1); document.body.removeChild(other);
+  await click(uiCommandLabels['explain-snapshot']); expect(invalidate).toHaveBeenCalledTimes(1); expect(document.querySelectorAll('[role="dialog"]')).toHaveLength(1); expect(bridge).not.toHaveBeenCalled(); await click(text.close); expect(invalidate).toHaveBeenCalledTimes(2); expect(document.querySelector('[role="dialog"]')).toBeNull();
 });
 
 it('恰为1MiB的合法原始文件在本版本新增解析诊断后仍能精确另存', async () => {

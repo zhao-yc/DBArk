@@ -34,32 +34,32 @@ async function cell(key: string) {
   }
   const index = await header.getAttribute('aria-colindex'); return page.locator(`[role=row][aria-rowindex="2"] [role=gridcell][aria-colindex="${index}"]`);
 }
-async function open(key: string) { const target = await cell(key); await target.scrollIntoViewIfNeeded(); await target.click(); await page.getByRole('button', { name: '单元格', exact: true }).click(); await expect(viewer()).toBeVisible(); }
+async function open(key: string) { const target = await cell(key); await target.scrollIntoViewIfNeeded(); await target.click(); await (await (await import('./navigation-menu')).navigationMenuItem(page, { name: '单元格', exact: true })).click(); await expect(viewer()).toBeVisible(); }
 async function writes() { return page.evaluate(() => (window as unknown as { __binaryCalls: string[] }).__binaryCalls.filter(value => ['table.apply', 'table.preview', 'query.execute'].includes(value))); }
 async function urls() { return page.evaluate(() => (window as unknown as { __binaryUrls: Set<string> }).__binaryUrls.size); }
 
 test('Hex严格校验后只暂存原草稿，UTF8查看保真，NULL与空BLOB明确区分', async ({}, result) => {
-  await (await cell('payload')).dblclick(); await expect(viewer()).toBeVisible(); await viewer().getByRole('button', { name: text.text, exact: true }).click(); await expect(viewer().getByRole('textbox', { name: text.textLabel, exact: true })).toHaveValue('中😀\x00');
-  await viewer().getByRole('button', { name: text.hex, exact: true }).click(); const hex = viewer().getByRole('textbox'); await hex.fill('0x0'); await expect(viewer().getByRole('alert')).toContainText('成对'); await page.getByRole('button', { name: '暂存修改', exact: true }).click(); await expect(page.getByRole('dialog')).toBeVisible(); await expect(page.locator('.row-modified')).toHaveCount(0);
-  await hex.fill('0x00 ff 80'); await page.getByRole('button', { name: '暂存修改', exact: true }).click(); await expect(page.getByRole('dialog')).toHaveCount(0); await expect(await cell('payload')).toHaveText('0x00ff80'); expect(await writes()).toEqual([]);
-  await open('nil'); await expect(viewer()).toContainText(text.null); await page.getByRole('button', { name: '关闭字段编辑', exact: true }).click(); await open('empty'); await expect(viewer()).toContainText(text.empty); await expect(viewer().getByRole('textbox')).toHaveValue('0x'); expect(errors).toEqual([]); await page.screenshot({ path: result.outputPath('NULL与空二进制.png') });
+  await (await cell('payload')).dblclick(); await expect(viewer()).toBeVisible(); await (await (await import('./navigation-menu')).navigationMenuItem(viewer(), { name: text.text, exact: true })).click(); await expect(viewer().getByRole('textbox', { name: text.textLabel, exact: true })).toHaveValue('中😀\x00');
+  await (await (await import('./navigation-menu')).navigationMenuItem(viewer(), { name: text.hex, exact: true })).click(); const hex = viewer().getByRole('textbox'); await hex.fill('0x0'); await expect(viewer().getByRole('alert')).toContainText('成对'); await (await (await import('./navigation-menu')).navigationMenuItem(page, { name: '暂存修改', exact: true })).click(); await expect(page.getByRole('dialog')).toBeVisible(); await expect(page.locator('.row-modified')).toHaveCount(0);
+  await hex.fill('0x00 ff 80'); await (await (await import('./navigation-menu')).navigationMenuItem(page, { name: '暂存修改', exact: true })).click(); await expect(page.getByRole('dialog')).toHaveCount(0); await expect(await cell('payload')).toHaveText('0x00ff80'); expect(await writes()).toEqual([]);
+  await open('nil'); await expect(viewer()).toContainText(text.null); await (await (await import('./navigation-menu')).navigationMenuItem(page, { name: '关闭字段编辑', exact: true })).click(); await open('empty'); await expect(viewer()).toContainText(text.empty); await expect(viewer().getByRole('textbox')).toHaveValue('0x'); expect(errors).toEqual([]); await page.screenshot({ path: result.outputPath('NULL与空二进制.png') });
 });
 
 test('PNG JPEG WebP实际图片显示尺寸并释放Blob URL，脚本格式和巨大值不创建URL', async ({}, result) => {
   for (const format of ['png', 'jpeg', 'webp']) {
     if (format !== 'png') { await page.goto(url + '?format=' + format); }
-    await open('picture'); await viewer().getByRole('button', { name: text.image, exact: true }).click(); await expect(viewer().getByRole('img')).toBeVisible(); await expect.poll(() => viewer().getByRole('img').evaluate((node: HTMLImageElement) => [node.naturalWidth, node.naturalHeight])).toEqual([2, 3]); await expect(viewer()).toContainText('2 × 3');
-    if (format === 'png') { expect(await urls()).toBe(1); await viewer().getByRole('button', { name: text.hex, exact: true }).click(); await expect.poll(urls).toBe(0); await viewer().getByRole('button', { name: text.image, exact: true }).click(); await expect.poll(urls).toBe(1); await page.screenshot({ path: result.outputPath('PNG有界预览.png') }); }
-    await page.getByRole('button', { name: '关闭字段编辑', exact: true }).click(); if (format === 'png') await expect.poll(urls).toBe(0);
+    await open('picture'); await (await (await import('./navigation-menu')).navigationMenuItem(viewer(), { name: text.image, exact: true })).click(); await expect(viewer().getByRole('img')).toBeVisible(); await expect.poll(() => viewer().getByRole('img').evaluate((node: HTMLImageElement) => [node.naturalWidth, node.naturalHeight])).toEqual([2, 3]); await expect(viewer()).toContainText('2 × 3');
+    if (format === 'png') { expect(await urls()).toBe(1); await (await (await import('./navigation-menu')).navigationMenuItem(viewer(), { name: text.hex, exact: true })).click(); await expect.poll(urls).toBe(0); await (await (await import('./navigation-menu')).navigationMenuItem(viewer(), { name: text.image, exact: true })).click(); await expect.poll(urls).toBe(1); await page.screenshot({ path: result.outputPath('PNG有界预览.png') }); }
+    await (await (await import('./navigation-menu')).navigationMenuItem(page, { name: '关闭字段编辑', exact: true })).click(); if (format === 'png') await expect.poll(urls).toBe(0);
   }
-  await open('script'); await viewer().getByRole('button', { name: text.image, exact: true }).click(); await expect(viewer().getByRole('alert')).toContainText(text.imageUnsupported); await expect(viewer().getByRole('img')).toHaveCount(0); expect(await page.evaluate(() => (window as unknown as { __binaryExecuted?: boolean }).__binaryExecuted)).toBeUndefined(); await page.getByRole('button', { name: '关闭字段编辑', exact: true }).click();
+  await open('script'); await (await (await import('./navigation-menu')).navigationMenuItem(viewer(), { name: text.image, exact: true })).click(); await expect(viewer().getByRole('alert')).toContainText(text.imageUnsupported); await expect(viewer().getByRole('img')).toHaveCount(0); expect(await page.evaluate(() => (window as unknown as { __binaryExecuted?: boolean }).__binaryExecuted)).toBeUndefined(); await (await (await import('./navigation-menu')).navigationMenuItem(page, { name: '关闭字段编辑', exact: true })).click();
   await open('large'); await expect(viewer()).toContainText(text.byteLimit); await expect(viewer().getByRole('textbox')).toHaveCount(0); expect(await writes()).toEqual([]); expect(errors).toEqual([]);
 });
 
 test('超编辑预算只能分页查看；结构变化使旧编辑失效并释放图像；任意SQL结果只读', async () => {
-  await open('medium'); await expect(viewer()).toContainText('只读片段'); await expect(viewer().getByRole('textbox')).toHaveJSProperty('readOnly', true); await viewer().getByRole('button', { name: text.next, exact: true }).click(); await expect(viewer()).toContainText('4097'); await expect(page.getByRole('button', { name: '暂存修改', exact: true })).toBeDisabled(); await page.getByRole('button', { name: '关闭字段编辑', exact: true }).click();
-  await open('picture'); await viewer().getByRole('button', { name: text.image, exact: true }).click(); await expect.poll(urls).toBe(1); await page.getByRole('button', { name: '夹具结构变化', exact: true }).evaluate((node: HTMLButtonElement) => node.click()); await expect(viewer()).toHaveCount(0); await expect.poll(urls).toBe(0); await page.getByRole('button', { name: '关闭字段编辑', exact: true }).click();
-  await page.getByRole('button', { name: 'SQL只读结果', exact: true }).click(); await (await cell('payload')).dblclick(); await expect(viewer()).toContainText(text.readonly); await expect(viewer().getByRole('textbox')).toHaveJSProperty('readOnly', true); await expect(page.getByRole('button', { name: '暂存修改', exact: true })).toHaveCount(0); await page.getByRole('button', { name: '夹具结果刷新', exact: true }).evaluate((node: HTMLButtonElement) => node.click()); await expect(viewer()).toHaveCount(0); expect(await writes()).toEqual([]); expect(errors).toEqual([]);
+  await open('medium'); await expect(viewer()).toContainText('只读片段'); await expect(viewer().getByRole('textbox')).toHaveJSProperty('readOnly', true); await (await (await import('./navigation-menu')).navigationMenuItem(viewer(), { name: text.next, exact: true })).click(); await expect(viewer()).toContainText('4097'); await expect(page.getByRole('button', { name: '暂存修改', exact: true })).toBeDisabled(); await (await (await import('./navigation-menu')).navigationMenuItem(page, { name: '关闭字段编辑', exact: true })).click();
+  await open('picture'); await (await (await import('./navigation-menu')).navigationMenuItem(viewer(), { name: text.image, exact: true })).click(); await expect.poll(urls).toBe(1); await page.getByRole('button', { name: '夹具结构变化', exact: true }).evaluate((node: HTMLButtonElement) => node.click()); await expect(viewer()).toHaveCount(0); await expect.poll(urls).toBe(0); await (await (await import('./navigation-menu')).navigationMenuItem(page, { name: '关闭字段编辑', exact: true })).click();
+  await (await (await import('./navigation-menu')).navigationMenuItem(page, { name: 'SQL只读结果', exact: true })).click(); await (await cell('payload')).dblclick(); await expect(viewer()).toContainText(text.readonly); await expect(viewer().getByRole('textbox')).toHaveJSProperty('readOnly', true); await expect(page.getByRole('button', { name: '暂存修改', exact: true })).toHaveCount(0); await page.getByRole('button', { name: '夹具结果刷新', exact: true }).evaluate((node: HTMLButtonElement) => node.click()); await expect(viewer()).toHaveCount(0); expect(await writes()).toEqual([]); expect(errors).toEqual([]);
 });
 
 test('连接版本变化使尚未暂存的Hex失效，原草稿不被迟到输入覆盖', async () => {
@@ -68,10 +68,10 @@ test('连接版本变化使尚未暂存的Hex失效，原草稿不被迟到输�
 });
 
 test('记录表单中的图片缓存同样随结构快照失效并释放', async () => {
-  await (await cell('picture')).click(); await page.getByRole('button', { name: '记录表单', exact: true }).click();
+  await (await cell('picture')).click(); await (await (await import('./navigation-menu')).navigationMenuItem(page, { name: '记录表单', exact: true })).click();
   const form = page.getByRole('complementary', { name: '记录表单', exact: true }), field = form.getByRole('region', { name: 'picture', exact: true });
-  await field.getByRole('button', { name: '编辑字段', exact: true }).click(); await viewer().getByRole('button', { name: text.image, exact: true }).click(); await expect.poll(urls).toBe(1);
-  await page.getByRole('button', { name: '夹具结构变化', exact: true }).click(); await expect(viewer()).toHaveCount(0); await expect.poll(urls).toBe(0); expect(await writes()).toEqual([]); expect(errors).toEqual([]);
+  await (await (await import('./navigation-menu')).navigationMenuItem(field, { name: '编辑字段', exact: true })).click(); await (await (await import('./navigation-menu')).navigationMenuItem(viewer(), { name: text.image, exact: true })).click(); await expect.poll(urls).toBe(1);
+  await (await (await import('./navigation-menu')).navigationMenuItem(page, { name: '夹具结构变化', exact: true })).click(); await expect(viewer()).toHaveCount(0); await expect.poll(urls).toBe(0); expect(await writes()).toEqual([]); expect(errors).toEqual([]);
 });
 
 test('无前缀多一字节的Hex整次拒绝并保留旧输入，合法上限可保真暂存', async () => {
@@ -80,7 +80,7 @@ test('无前缀多一字节的Hex整次拒绝并保留旧输入，合法上限�
   await expect(page.getByRole('button', { name: '暂存修改', exact: true })).toBeDisabled(); await expect(hex).toHaveValue(baseline);
   await expect(page.locator('.row-modified')).toHaveCount(0); expect(await writes()).toEqual([]);
   const upper = '0x' + 'ab'.repeat(131071); await hex.fill(upper); await expect(viewer()).toContainText('Hex 校验通过：131071 字节');
-  await page.getByRole('button', { name: '暂存修改', exact: true }).click(); await expect(page.getByRole('dialog')).toHaveCount(0); await open('payload'); await expect(viewer().getByRole('textbox')).toHaveValue(upper); expect(await writes()).toEqual([]); expect(errors).toEqual([]);
+  await (await (await import('./navigation-menu')).navigationMenuItem(page, { name: '暂存修改', exact: true })).click(); await expect(page.getByRole('dialog')).toHaveCount(0); await open('payload'); await expect(viewer().getByRole('textbox')).toHaveValue(upper); expect(await writes()).toEqual([]); expect(errors).toEqual([]);
 });
 
 test('单元格及记录表单真实剪贴板超限不截断，选区替换整次拒绝，合法边界可暂存', async () => {
@@ -91,7 +91,7 @@ test('单元格及记录表单真实剪贴板超限不截断，选区替换整�
     await hex.focus(); if (selectAll) await hex.press(`${modifier}+A`); await hex.press(`${modifier}+V`);
   }
   for (const route of ['cell', 'form'] as const) {
-    if (route === 'form') { await page.reload(); await expect(page.locator('.results-grid')).toBeVisible(); await expect(page.locator('.loading-overlay')).toHaveCount(0); await (await cell('payload')).click(); await page.getByRole('button', { name: '记录表单', exact: true }).click(); await page.getByRole('complementary', { name: '记录表单', exact: true }).getByRole('region', { name: 'payload', exact: true }).getByRole('button', { name: '编辑字段', exact: true }).click(); }
+    if (route === 'form') { await page.reload(); await expect(page.locator('.results-grid')).toBeVisible(); await expect(page.locator('.loading-overlay')).toHaveCount(0); await (await cell('payload')).click(); await (await (await import('./navigation-menu')).navigationMenuItem(page, { name: '记录表单', exact: true })).click(); await (await (await import('./navigation-menu')).navigationMenuItem(page.getByRole('complementary', { name: '记录表单', exact: true }).getByRole('region', { name: 'payload', exact: true }), { name: '编辑字段', exact: true })).click(); }
     else await open('payload');
     const hex = viewer().getByRole('textbox'), baseline = await hex.inputValue();
     await expect(hex).not.toHaveAttribute('maxlength');
@@ -101,13 +101,13 @@ test('单元格及记录表单真实剪贴板超限不截断，选区替换整�
     await hex.evaluate((node: HTMLTextAreaElement) => node.setSelectionRange(2, 4)); await paste(hex, maximum, false); await expect(hex).toHaveValue(baseline); await expect(viewer().getByRole('alert')).toContainText('完整 Hex 编辑');
     await expect(page.getByRole('button', { name: route === 'cell' ? '暂存修改' : '暂存本行', exact: true })).toBeDisabled(); await expect(page.locator('.row-modified')).toHaveCount(0);
     const legal = route === 'cell' ? '0x' + maximum : maximum + ' \n'; await paste(hex, legal); await expect(hex).toHaveValue(legal); await expect(viewer()).toContainText('Hex 校验通过：131071 字节');
-    await page.getByRole('button', { name: route === 'cell' ? '暂存修改' : '暂存本行', exact: true }).click(); await expect(page.locator('.row-modified')).toHaveCount(1); expect(await writes()).toEqual([]);
+    await (await (await import('./navigation-menu')).navigationMenuItem(page, { name: route === 'cell' ? '暂存修改' : '暂存本行', exact: true })).click(); await expect(page.locator('.row-modified')).toHaveCount(1); expect(await writes()).toEqual([]);
     if (route === 'cell') await expect(page.getByRole('dialog')).toHaveCount(0);
-    else await page.getByRole('complementary', { name: '记录表单', exact: true }).getByRole('button', { name: '收起记录表单', exact: true }).click();
+    else await (await (await import('./navigation-menu')).navigationMenuItem(page.getByRole('complementary', { name: '记录表单', exact: true }), { name: '收起记录表单', exact: true })).click();
     await open('payload'); const stagedHex = viewer().getByRole('textbox'); await expect(stagedHex).toHaveValue('0x' + maximum);
     // 已有合法草稿也必须逐字节保留，失败输入不能替换成截短的新草稿。
     await paste(stagedHex, '0x' + maximum + 'ab'); await expect(stagedHex).toHaveValue('0x' + maximum); await expect(viewer().getByRole('alert')).toContainText('完整 Hex 编辑'); await expect(page.locator('.row-modified')).toHaveCount(1); expect(await writes()).toEqual([]);
-    await page.getByRole('button', { name: '关闭字段编辑', exact: true }).click();
+    await (await (await import('./navigation-menu')).navigationMenuItem(page, { name: '关闭字段编辑', exact: true })).click();
   }
   expect(errors).toEqual([]);
 });

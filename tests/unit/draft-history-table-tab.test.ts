@@ -1,3 +1,4 @@
+import { navigationMenuVmPort, navigationToolbarVmChildren } from '../helpers/sidebarMenuRamPort';
 import { readFileSync, existsSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -79,6 +80,7 @@ async function fixture(options: { batch?: boolean; plainKey?: boolean; lease?: b
       if (name.endsWith('.css')) return {};
       const target = path.resolve(path.dirname(file), name);
       if (target === path.join(renderer, 'store')) return { useWorkspace: store };
+      if (target === path.join(renderer, 'uiCommands')) return navigationMenuVmPort;
       if (target === path.join(renderer, 'lib')) return { ...lib, invoke, uid: vi.fn(() => 'UUID-' + ++counter) };
       if (target.startsWith(path.join(renderer, 'components') + path.sep)) return new Proxy({}, { get: (_, key) => String(key) });
       for (const extension of ['.ts', '.tsx']) if (existsSync(target + extension)) return load(target + extension);
@@ -88,7 +90,7 @@ async function fixture(options: { batch?: boolean; plainKey?: boolean; lease?: b
   }
   const component = load(path.join(renderer, 'components/TableTab.tsx')).TableTab;
   const props = { tab, refreshVersion: 0, onDesign: vi.fn(), onTransfer: vi.fn(), onColumnPatches: vi.fn(), onIndexPatches: vi.fn(), onForeignKeyPatches: vi.fn(), onTableRename: vi.fn(), onTableAutoIncrement: vi.fn(), onTableComment: vi.fn(), onTableDefaultEncoding: vi.fn() };
-  function all(type: unknown) { const found: Element[] = []; function walk(value: any) { if (Array.isArray(value)) value.forEach(walk); else if (value?.props) { if (value.type === type) found.push(value); walk(value.props.children); } } walk(tree); return found; }
+  function all(type: unknown) { const found: Element[] = []; function walk(value: any) { if (Array.isArray(value)) value.forEach(walk); else if (value?.props) { if (value.type === type) found.push(value); walk(navigationToolbarVmChildren(value)); walk(value.props.children); } } walk(tree); return found; }
   async function render() {
     for (let round = 0; round < 40; round++) {
       cursor = 0; dirty = false; tree = component(props);

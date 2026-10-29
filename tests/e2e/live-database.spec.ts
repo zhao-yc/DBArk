@@ -16,10 +16,10 @@ async function verifyConnectionChangeGuard(database: string, connectionName: str
   const form = page.getByRole('dialog', { name: '编辑连接', exact: true });
   await form.getByLabel('主机地址', { exact: true }).fill('127.0.0.1');
   await form.getByLabel('端口', { exact: true }).fill('1');
-  await form.getByRole('button', { name: '保存连接', exact: true }).click();
+  await (await (await import('./navigation-menu')).navigationMenuItem(form, { name: '保存连接', exact: true })).click();
   await expect(form.locator('.error-box')).toContainText('关闭此连接的全部标签');
   await expect(form).toBeVisible();
-  await form.getByRole('button', { name: '取消', exact: true }).click();
+  await (await (await import('./navigation-menu')).navigationMenuItem(form, { name: '取消', exact: true })).click();
   const ipc = await page.evaluate(async id => {
     const before = (await window.dbark.invoke('connections.list', {})).find(profile => profile.id === id)!;
     let error = '';
@@ -39,7 +39,7 @@ async function verifyConnectionChangeGuard(database: string, connectionName: str
   await page.locator('.connection-row').hover();
   await clickSidebarAction(page.locator('.connection-row').filter({ has: page.getByRole('button', { name: connectionName, exact: true }) }), { name: `编辑连接 ${connectionName}`, exact: true });
   await form.getByLabel('连接名称', { exact: true }).fill(renamed);
-  await form.getByRole('button', { name: '保存连接', exact: true }).click();
+  await (await (await import('./navigation-menu')).navigationMenuItem(form, { name: '保存连接', exact: true })).click();
   await expect(form).toBeHidden();
   await expect(page.locator('.connection-row .tree-label')).toContainText(renamed);
   await executeSql("SELECT '改名后会话仍可用' AS ready;");
@@ -50,14 +50,14 @@ async function verifyConnectionChangeGuard(database: string, connectionName: str
 /** 已关闭连接标签后修改默认库，只清该连接树与库选择；新查询不得继承另一连接的活动库。 */
 async function verifyConnectionContextInvalidation(database: string, connectionName: string, connectionId: string, encryptionAvailable: boolean) {
   const otherName = `另一连接 ${database}`;
-  await page.locator('.app-commandbar').getByRole('button', { name: '新建连接', exact: true }).click();
+  await (await (await import('./navigation-menu')).navigationMenuItem(page.locator('.navigation-toolbar'), { name: '新建连接', exact: true })).click();
   const create = page.getByRole('dialog', { name: '新建连接', exact: true });
   await create.getByLabel('连接名称', { exact: true }).fill(otherName);
   await create.getByLabel('主机地址', { exact: true }).fill(environment.DBARK_TEST_HOST!);
   await create.getByLabel('端口', { exact: true }).fill(environment.DBARK_TEST_PORT ?? '3306');
   await create.getByLabel('用户名', { exact: true }).fill(environment.DBARK_TEST_USER ?? 'root');
   await create.getByLabel('数据库密码', { exact: true }).fill(environment.DBARK_TEST_PASSWORD ?? '');
-  await create.getByRole('button', { name: '保存连接', exact: true }).click();
+  await (await (await import('./navigation-menu')).navigationMenuItem(create, { name: '保存连接', exact: true })).click();
   await expect(create).toBeHidden();
 
   const originalNode = page.locator('.connection-node').filter({ has: page.getByRole('button', { name: connectionName, exact: true }) });
@@ -76,7 +76,7 @@ async function verifyConnectionContextInvalidation(database: string, connectionN
   await expect(page.locator('.workspace-tab-button')).toHaveCount(1);
   await originalNode.locator('.connection-row .tree-label').click();
   const originalDatabase = originalNode.locator('.database-row').filter({ has: page.getByRole('button', { name: database, exact: true }) });
-  await originalDatabase.getByRole('button', { name: database, exact: true }).click();
+  await (await (await import('./navigation-menu')).navigationMenuItem(originalDatabase, { name: database, exact: true })).click();
   await expect(originalDatabase).toHaveClass(/active/);
   await expect(originalNode.getByRole('button', { name: 'transaction_probe', exact: true })).toBeVisible();
   await originalNode.locator('.connection-row').hover();
@@ -84,7 +84,7 @@ async function verifyConnectionContextInvalidation(database: string, connectionN
   const edit = page.getByRole('dialog', { name: '编辑连接', exact: true });
   await edit.getByLabel('默认数据库（可选）', { exact: true }).fill('information_schema');
   if (!encryptionAvailable) await edit.getByLabel('数据库密码', { exact: true }).fill(environment.DBARK_TEST_PASSWORD ?? '');
-  await edit.getByRole('button', { name: '保存连接', exact: true }).click();
+  await (await (await import('./navigation-menu')).navigationMenuItem(edit, { name: '保存连接', exact: true })).click();
   await expect(edit).toBeHidden();
   await expect(originalNode.locator('.database-row')).toHaveCount(0);
   await expect(originalNode.locator('.connection-row')).toHaveClass(/active/);
@@ -92,11 +92,11 @@ async function verifyConnectionContextInvalidation(database: string, connectionN
   await expect(page.locator('.query-tab:visible .result-body')).toContainText('另一连接保持原库');
 
   // 空的默认库输入与选中的连接节点共同证明 selection.database 被清除，而非用其它标签补值。
-  await page.locator('.app-commandbar').getByRole('button', { name: '新建查询', exact: true }).click();
+  await (await (await import('./navigation-menu')).navigationMenuItem(page.locator('.navigation-toolbar'), { name: '新建查询', exact: true })).click();
   const query = page.getByRole('dialog', { name: '新建查询', exact: true });
   await expect(query.getByRole('combobox', { name: /^数据库连接/ })).toHaveValue(connectionId);
   await expect(query.getByLabel('默认数据库（可选）', { exact: true })).toHaveValue('');
-  await query.getByRole('button', { name: '打开查询', exact: true }).click();
+  await (await (await import('./navigation-menu')).navigationMenuItem(query, { name: '打开查询', exact: true })).click();
   await executeSql('SELECT DATABASE() AS active_database;');
   await expect(page.locator('.query-tab:visible .result-body')).toContainText('information_schema');
   await expect(page.locator('.query-tab:visible .result-body')).not.toContainText(database);
@@ -113,7 +113,7 @@ async function chooseTransferFile(path: string, mode: 'import' | 'export') {
 /** 文件预览完成后点击执行；失败保存脱敏任务状态帮助区分数据库错误与交互未触发。 */
 async function transfer(table: Locator, file: string, mode: 'import' | 'export', format: 'csv' | 'json' | 'sql', rows: number, mapping?: Record<string, string>) {
   await chooseTransferFile(file, mode);
-  await table.getByRole('button', { name: mode === 'import' ? '导入' : '导出', exact: true }).click();
+  await (await (await import('./navigation-menu')).navigationMenuItem(table, { name: mode === 'import' ? '导入' : '导出', exact: true })).click();
   const modal = page.getByRole('dialog', { name: new RegExp(`^${mode === 'import' ? '导入数据' : '导出数据'} ·`) });
   // 原生 select 位于包裹式 label 内，匹配标签前缀，避免浏览器把选项文本并入标签名。
   await modal.getByRole('combobox', { name: /^文件格式/ }).selectOption(format);
@@ -141,7 +141,7 @@ async function transfer(table: Locator, file: string, mode: 'import' | 'export',
       for (const field of ['id', 'title', 'note', 'amount']) await expect(modal.getByLabel(`映射字段 ${field}`, { exact: true })).toHaveValue(field);
     }
   }
-  await modal.getByRole('button', { name: mode === 'import' ? '开始导入' : '开始导出', exact: true }).click();
+  await (await (await import('./navigation-menu')).navigationMenuItem(modal, { name: mode === 'import' ? '开始导入' : '开始导出', exact: true })).click();
   try { await expect(modal.locator('.success-box')).toContainText(`${rows} 行`, { timeout: 20000 }); }
   catch (reason) {
     const tasks = await page.evaluate(() => window.dbark.invoke('tasks.list', {}));
@@ -149,7 +149,7 @@ async function transfer(table: Locator, file: string, mode: 'import' | 'export',
     throw reason;
   }
   await expect(modal.locator('.error-box')).toHaveCount(0);
-  await modal.getByRole('button', { name: '完成', exact: true }).click();
+  await (await (await import('./navigation-menu')).navigationMenuItem(modal, { name: '完成', exact: true })).click();
   await expect(modal).toBeHidden();
 }
 
@@ -168,14 +168,14 @@ test.describe('远程真实数据库桌面工作流', () => {
       await expect(query.locator('.result-body')).toContainText('中文🚀选中');
       await expect(query.getByRole('button', { name: '结果 2', exact: true })).toHaveCount(0);
       await executeSql('SELECT 1 AS first_result; SELECT 2 AS second_result;');
-      await query.getByRole('button', { name: '结果 2', exact: true }).click();
+      await (await (await import('./navigation-menu')).navigationMenuItem(query, { name: '结果 2', exact: true })).click();
       await expect(query.locator('.result-body')).toContainText('second_result');
       // 固定快照保留精度、二进制与 NULL；新查询不得替换旧值，释放后回到本次结果。
       await executeSql("SELECT CAST(9223372036854775807 AS SIGNED) AS exact_bigint, CAST(12345678901234567890.123456 AS DECIMAL(30,6)) AS exact_decimal, NULL AS missing_value, X'00ff' AS binary_value, '固定中文🚀' AS text_value;");
-      await query.getByRole('button', { name: '固定结果', exact: true }).click();
+      await (await (await import('./navigation-menu')).navigationMenuItem(query, { name: '固定结果', exact: true })).click();
       await executeSql("SELECT '新查询结果' AS latest;");
       await expect(query.locator('.result-body')).toContainText('新查询结果');
-      await query.getByRole('button', { name: '固定 1', exact: true }).click();
+      await (await (await import('./navigation-menu')).navigationMenuItem(query, { name: '固定 1', exact: true })).click();
       await expect(query.getByRole('button', { name: '固定 1', exact: true })).toHaveAttribute('aria-pressed', 'true');
       for (const value of ['9223372036854775807', '12345678901234567890.123456', 'NULL', '0x00ff', '固定中文🚀']) await expect(query.getByRole('gridcell', { name: value, exact: true })).toBeVisible();
       await expect(query.locator('.result-body')).not.toContainText('新查询结果');
@@ -184,7 +184,7 @@ test.describe('远程真实数据库桌面工作流', () => {
       await observer.query('CREATE TABLE ' + database + '.snapshot_shortcut_probe (id INT AUTO_INCREMENT PRIMARY KEY)');
       await writeSql('INSERT INTO snapshot_shortcut_probe VALUES (NULL);');
       const tasksBeforeSnapshot = await page.evaluate(async () => (await window.dbark.invoke('tasks.list', {})).length);
-      await query.getByRole('button', { name: '快照 SQL', exact: true }).click();
+      await (await (await import('./navigation-menu')).navigationMenuItem(query, { name: '快照 SQL', exact: true })).click();
       const snapshotSql = page.getByRole('dialog', { name: '固定结果的原 SQL', exact: true });
       await expect(snapshotSql.locator('.monaco-editor .view-lines')).toContainText('固定中文🚀');
       await expect(snapshotSql.locator('.monaco-editor .view-lines')).not.toContainText('新查询结果');
@@ -195,8 +195,8 @@ test.describe('远程真实数据库桌面工作流', () => {
       const [snapshotWrites] = await observer.query<RowDataPacket[]>('SELECT COUNT(*) AS total FROM ' + database + '.snapshot_shortcut_probe');
       expect(Number(snapshotWrites[0].total)).toBe(0);
       expect(await page.evaluate(async () => (await window.dbark.invoke('tasks.list', {})).length)).toBe(tasksBeforeSnapshot);
-      await snapshotSql.getByRole('button', { name: '关闭', exact: true }).click();
-      await query.getByRole('button', { name: '释放 固定 1', exact: true }).click();
+      await (await (await import('./navigation-menu')).navigationMenuItem(snapshotSql, { name: '关闭', exact: true })).click();
+      await (await (await import('./navigation-menu')).navigationMenuItem(query, { name: '释放 固定 1', exact: true })).click();
       await expect(query.locator('.pinned-results')).toHaveCount(0);
       await expect(query.locator('.result-body')).toContainText('新查询结果');
       const renamedConnection = await verifyConnectionChangeGuard(database, connectionName, connectionId);
@@ -209,32 +209,32 @@ test.describe('远程真实数据库桌面工作流', () => {
       await expect(query.locator('.error-box')).toHaveCount(0);
       const [shortcutRows] = await observer.query<RowDataPacket[]>(`SELECT COUNT(*) AS total FROM \`${database}\`.shortcut_probe`);
       expect(Number(shortcutRows[0].total)).toBe(1);
-      await query.getByRole('button', { name: '开始事务', exact: true }).click();
+      await (await (await import('./navigation-menu')).navigationMenuItem(query, { name: '开始事务', exact: true })).click();
       await expect(query.locator('.tab-status')).toContainText('事务进行中');
       await executeSql("INSERT INTO transaction_probe VALUES (1,'应回滚');");
       const [beforeRollback] = await observer.query<RowDataPacket[]>(`SELECT COUNT(*) AS total FROM \`${database}\`.transaction_probe`);
       expect(Number(beforeRollback[0].total)).toBe(0);
-      await query.getByRole('button', { name: '回滚', exact: true }).click();
+      await (await (await import('./navigation-menu')).navigationMenuItem(query, { name: '回滚', exact: true })).click();
       await expect(query.locator('.tab-status')).not.toContainText('事务进行中');
       const [afterRollback] = await observer.query<RowDataPacket[]>(`SELECT COUNT(*) AS total FROM \`${database}\`.transaction_probe`);
       expect(Number(afterRollback[0].total)).toBe(0);
-      await query.getByRole('button', { name: '开始事务', exact: true }).click();
+      await (await (await import('./navigation-menu')).navigationMenuItem(query, { name: '开始事务', exact: true })).click();
       await executeSql("INSERT INTO transaction_probe VALUES (2,'应提交');");
-      await query.getByRole('button', { name: '提交', exact: true }).click();
+      await (await (await import('./navigation-menu')).navigationMenuItem(query, { name: '提交', exact: true })).click();
       await expect.poll(async () => { const [rows] = await observer.query<RowDataPacket[]>(`SELECT COUNT(*) AS total FROM \`${database}\`.transaction_probe`); return Number(rows[0].total); }).toBe(1);
       await executeSql("SELECT '取消后仍保留的快照' AS preserved;");
-      await query.getByRole('button', { name: '固定结果', exact: true }).click();
+      await (await (await import('./navigation-menu')).navigationMenuItem(query, { name: '固定结果', exact: true })).click();
       await writeSql('SELECT 1 AS partial_result; SELECT SLEEP(30) AS cancelled_query;');
-      await query.getByRole('button', { name: '执行全部', exact: true }).click();
+      await (await (await import('./navigation-menu')).navigationMenuItem(query, { name: '执行全部', exact: true })).click();
       await expect(query.getByRole('button', { name: '停止', exact: true })).toBeEnabled();
       await expect(query.locator('.result-body')).toContainText('partial_result');
-      await query.getByRole('button', { name: '停止', exact: true }).click();
+      await (await (await import('./navigation-menu')).navigationMenuItem(query, { name: '停止', exact: true })).click();
       await expect(query.getByRole('button', { name: '停止', exact: true })).toBeDisabled({ timeout: 15000 });
       await expect.poll(() => page.evaluate(async () => (await window.dbark.invoke('tasks.list', {})).some(task => task.status === 'cancelled'))).toBe(true);
       await expect(query.getByRole('button', { name: '固定结果', exact: true })).toBeDisabled();
-      await query.getByRole('button', { name: '固定 2', exact: true }).click();
+      await (await (await import('./navigation-menu')).navigationMenuItem(query, { name: '固定 2', exact: true })).click();
       await expect(query.locator('.result-body')).toContainText('取消后仍保留的快照');
-      await query.getByRole('button', { name: '释放 固定 2', exact: true }).click();
+      await (await (await import('./navigation-menu')).navigationMenuItem(query, { name: '释放 固定 2', exact: true })).click();
       await executeSql("SELECT '取消后仍可查询' AS ready;");
       await expect(query.locator('.result-body')).toContainText('取消后仍可查询');
       await page.screenshot({ path: testInfo.outputPath('live-query.png') });
@@ -246,9 +246,9 @@ test.describe('远程真实数据库桌面工作流', () => {
       await clickSidebarAction(page.locator('.connection-row').filter({ has: page.getByRole('button', { name: renamedConnection, exact: true }) }), { name: `编辑连接 ${renamedConnection}`, exact: true });
       const form = page.getByRole('dialog', { name: '编辑连接', exact: true });
       if (!encryptionAvailable) await form.getByLabel('数据库密码', { exact: true }).fill(environment.DBARK_TEST_PASSWORD ?? '');
-      await form.getByRole('button', { name: '测试连接', exact: true }).click();
+      await (await (await import('./navigation-menu')).navigationMenuItem(form, { name: '测试连接', exact: true })).click();
       await expect(form.locator('.success-box')).toContainText('连接成功', { timeout: 20000 });
-      await form.getByRole('button', { name: '取消', exact: true }).click();
+      await (await (await import('./navigation-menu')).navigationMenuItem(form, { name: '取消', exact: true })).click();
       await verifyConnectionContextInvalidation(database, renamedConnection, connectionId, encryptionAvailable);
       await page.screenshot({ path: testInfo.outputPath('live-connection-context.png') });
     }, testInfo);
@@ -258,8 +258,8 @@ test.describe('远程真实数据库桌面工作流', () => {
     await isolatedDatabase(async ({ observer, database }) => {
       await observer.query(`CREATE TABLE \`${database}\`.records (id INT PRIMARY KEY, title VARCHAR(120), note VARCHAR(120), amount DECIMAL(30,6)) ENGINE=InnoDB`);
       await observer.query(`INSERT INTO \`${database}\`.records VALUES (1,'原始一','备注一',12345678901234567890.123456),(2,'原始二',NULL,0.000001)`);
-      await page.locator('.database-row').getByRole('button', { name: database, exact: true }).click();
-      await page.locator('.object-row').getByRole('button', { name: 'records', exact: true }).click();
+      await (await (await import('./navigation-menu')).navigationMenuItem(page.locator('.database-row'), { name: database, exact: true })).click();
+      await (await (await import('./navigation-menu')).navigationMenuItem(page.locator('.object-row'), { name: 'records', exact: true })).click();
       const table = page.locator('.table-tab:visible');
       await expect(table.getByRole('gridcell', { name: '原始一', exact: true })).toBeVisible();
       await table.getByRole('gridcell', { name: '原始一', exact: true }).dblclick();
@@ -268,10 +268,10 @@ test.describe('远程真实数据库桌面工作流', () => {
       const [before] = await observer.query<RowDataPacket[]>(`SELECT title FROM \`${database}\`.records WHERE id=1`);
       expect(before[0].title).toBe('原始一');
       async function commitDraft() {
-        await table.getByRole('button', { name: '预览并提交', exact: true }).click();
+        await (await (await import('./navigation-menu')).navigationMenuItem(table, { name: '预览并提交', exact: true })).click();
         const preview = page.getByRole('dialog', { name: '确认数据修改', exact: true });
         await expect(preview.locator('.monaco-editor .view-lines')).toContainText('UPDATE');
-        await preview.getByRole('button', { name: '确认提交', exact: true }).click();
+        await (await (await import('./navigation-menu')).navigationMenuItem(preview, { name: '确认提交', exact: true })).click();
         await expect(preview).toBeHidden({ timeout: 20000 });
         await expect(table.locator('.loading-overlay')).toHaveCount(0);
       }
@@ -324,7 +324,7 @@ test.describe('远程真实数据库桌面工作流', () => {
       const [imported] = await observer.query<RowDataPacket[]>(`SELECT id,title,note,amount FROM \`${database}\`.records ORDER BY id`);
       expect(imported).toHaveLength(5);
       expect(imported[2].title).toBe('CSV导入'); expect(imported[3].title).toBe('JSON导入🚀'); expect(imported[3].note).toBeNull(); expect(imported[4].amount).toBe('3.000003');
-      await table.getByRole('button', { name: '刷新', exact: true }).click();
+      await (await (await import('./navigation-menu')).navigationMenuItem(table, { name: '刷新', exact: true })).click();
       await expect(table.getByRole('gridcell', { name: 'SQL导入', exact: true })).toBeVisible();
       await page.screenshot({ path: testInfo.outputPath('live-table.png') });
     }, testInfo);

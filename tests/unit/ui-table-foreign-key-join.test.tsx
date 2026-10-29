@@ -1,3 +1,4 @@
+import { installNavigationMenuRamPort, navigationMenuRamButton } from '../helpers/navigationMenuRamPort';
 import React, { act } from 'react';
 import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from 'vitest';
 import type { TableInfo } from '../../src/shared/contracts';
@@ -14,8 +15,9 @@ let document: ReturnType<typeof memoryDocument>, createRoot: typeof import('reac
 let Dialog: typeof import('../../src/renderer/components/TableForeignKeyJoinDialog')['TableForeignKeyJoinDialog'], official: TableForeignKeyJoinServices, TableTab: typeof import('../../src/renderer/components/TableTab')['TableTab'];
 let store: typeof import('../../src/renderer/store')['useWorkspace'], flush: typeof import('../../src/renderer/store')['flushSettings'];
 const globals = ['window', 'document', 'navigator', 'HTMLElement', 'IS_REACT_ACT_ENVIRONMENT'].map(key => [key, Object.getOwnPropertyDescriptor(globalThis, key)] as const);
+let restoreNavigationMenuPort = () => {};
 beforeAll(async () => {
-  document = memoryDocument(); (document as any).oninput = null; Object.defineProperty(globalThis, 'HTMLElement', { value: MemoryNode, configurable: true });
+  document = memoryDocument(); restoreNavigationMenuPort = installNavigationMenuRamPort(document); (document as any).oninput = null; Object.defineProperty(globalThis, 'HTMLElement', { value: MemoryNode, configurable: true });
   const create = document.createElement.bind(document);
   document.createElement = name => {
     const node = create(name); if (name === 'input') node.type = 'text';
@@ -28,7 +30,7 @@ beforeAll(async () => {
 });
 beforeEach(() => { (window as any).dbark = { invoke: vi.fn(async () => undefined), onTask: () => () => {} }; });
 afterEach(async () => { if (root) { await act(async () => root!.unmount()); root = undefined; } await flush(); document.body.textContent = ''; delete (window as any).dbark; });
-afterAll(() => { for (const [key, descriptor] of globals) if (descriptor) Object.defineProperty(globalThis, key, descriptor); else Reflect.deleteProperty(globalThis, key); });
+afterAll(() => { restoreNavigationMenuPort(); for (const [key, descriptor] of globals) if (descriptor) Object.defineProperty(globalThis, key, descriptor); else Reflect.deleteProperty(globalThis, key); });
 /** 合成目录只用于组件交互，既不连接数据库，也不把RAM结果当作实际SQL执行。 */
 function tables() {
   const table = (name: string, columns: string[]): TableInfo => ({ database: 'db', name, objectKind: 'table', engine: 'InnoDB', ddl: '', indexes: [], primaryKey: ['id'], editableKey: ['id'], foreignKeys: [], columns: columns.map(name => ({ name, type: 'bigint', nullable: true, generated: false, extra: '', comment: '', defaultValue: null })) });
@@ -37,7 +39,7 @@ function tables() {
   return { child, parent };
 }
 function deferred<T>() { let resolve!: (value: T) => void; const promise = new Promise<T>(done => { resolve = done; }); return { promise, resolve }; }
-function button(label: string) { const node = document.body.querySelectorAll('button').find(node => node.textContent === label || node.getAttribute('aria-label') === label); expect(node, label).toBeDefined(); return node!; }
+function button(label: string) { const node = navigationMenuRamButton(document.body, label); expect(node, label).toBeDefined(); return node!; }
 async function click(label: string) { const node = button(label); expect(node.disabled, label).toBe(false); await act(async () => { node.dispatchEvent(new MemoryEvent('click')); }); }
 async function select(label: string, value: string) { const node = document.body.querySelectorAll('select').find(node => node.getAttribute('aria-label') === label)!; expect(node).toBeDefined(); await act(async () => { node.value = value; node.dispatchEvent(new MemoryEvent('change')); }); }
 async function toggle(label: string) { const node = document.body.querySelectorAll('input').find(node => node.getAttribute('aria-label') === label)!; expect(node).toBeDefined(); await act(async () => { node.checked = !node.checked; node.dispatchEvent(new MemoryEvent('click')); }); }

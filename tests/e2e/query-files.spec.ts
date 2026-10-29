@@ -44,7 +44,7 @@ async function authorizeFile(path: string, purpose: 'query' | 'import' | 'export
 async function openOfflineQuery() {
   // 只观察本次测试的原Page和应用；不在其它测试或迟到页面上补读诊断。
   const owner = { page, desktop, dataDir, info: test.info() };
-  await page.locator('.app-commandbar').getByRole('button', { name: '新建连接', exact: true }).click();
+  await (await navigationMenuItem(page.locator('.navigation-toolbar'), { name: '新建连接', exact: true })).click();
   const connection = page.getByRole('dialog', { name: '新建连接', exact: true });
   await connection.getByLabel('连接名称', { exact: true }).fill('SQL 文件离线验收');
   await connection.getByLabel('主机地址', { exact: true }).fill('127.0.0.1');
@@ -54,15 +54,15 @@ async function openOfflineQuery() {
     if (page !== owner.page || desktop !== owner.desktop || dataDir !== owner.dataDir || test.info() !== owner.info || owner.page.isClosed()) throw Error('离线保存观察所属测试已失效');
   });
   try {
-    await connection.getByRole('button', { name: '保存连接', exact: true }).click();
+    await (await navigationMenuItem(connection, { name: '保存连接', exact: true })).click();
     await expect(connection).toBeHidden();
   } catch (original) {
     await observation.failure(original, (name, attachment) => owner.info.attach(name, attachment));
   } finally {
     await observation.detach();
   }
-  await page.locator('.app-commandbar').getByRole('button', { name: '新建查询', exact: true }).click();
-  await page.getByRole('dialog', { name: '新建查询', exact: true }).getByRole('button', { name: '打开查询', exact: true }).click();
+  await (await navigationMenuItem(page.locator('.navigation-toolbar'), { name: '新建查询', exact: true })).click();
+  await (await navigationMenuItem(page.getByRole('dialog', { name: '新建查询', exact: true }), { name: '打开查询', exact: true })).click();
   await expect(page.locator('.query-tab:visible .monaco-editor')).toBeVisible();
 }
 
@@ -79,7 +79,7 @@ async function writeEditor(sql: string) {
 /** 只有用户点击主按钮才触发文件选择；每次调用只点击一次，不重放写入操作。 */
 async function fileDialog(mode: 'open' | 'save', encoding: Encoding) {
   const title = mode === 'open' ? '打开 SQL 文件' : '另存 SQL 文件';
-  await page.locator('.query-tab:visible').getByRole('button', { name: title, exact: true }).click();
+  await (await navigationMenuItem(page.locator('.query-tab:visible'), { name: title, exact: true })).click();
   const modal = page.getByRole('dialog', { name: title, exact: true });
   await modal.getByRole('combobox', { name: /^文件编码/ }).selectOption(encoding);
   return modal;
@@ -127,7 +127,7 @@ test.describe('离线 SQL 文件打开与另存', () => {
       const file = join(directory, example.name); await writeFile(file, example.bytes);
       await chooseNativeFile('open', file);
       const modal = await fileDialog('open', example.requested);
-      await modal.getByRole('button', { name: '选择并打开 SQL 文件', exact: true }).click();
+      await (await navigationMenuItem(modal, { name: '选择并打开 SQL 文件', exact: true })).click();
       await expect(modal).toBeHidden();
       await expect(page.locator('.workspace-tab-button')).toHaveCount(index + 2);
       const tabs = await storedTabs(index + 2);
@@ -145,11 +145,11 @@ test.describe('离线 SQL 文件打开与另存', () => {
     const beforeCancel = await storedTabs(4);
     await chooseNativeFile('open');
     const cancelled = await fileDialog('open', 'utf8');
-    await cancelled.getByRole('button', { name: '选择并打开 SQL 文件', exact: true }).click();
+    await (await navigationMenuItem(cancelled, { name: '选择并打开 SQL 文件', exact: true })).click();
     await expect(cancelled).toBeVisible();
     await expect(page.locator('.workspace-tab-button')).toHaveCount(4);
     expect(await storedTabs(4)).toEqual(beforeCancel);
-    await cancelled.getByRole('button', { name: '取消', exact: true }).click();
+    await (await navigationMenuItem(cancelled, { name: '取消', exact: true })).click();
     const calls = await desktop.evaluate(() => globalThis.__dbarkQueryFileCalls);
     expect(calls.every(call => call.mode === 'open' && call.filters?.[0]?.extensions.includes('sql'))).toBe(true);
     await expectNoSqlExecution([...Array.from({ length: 3 }, () => ({ kind: 'queryFileSources.open' as const, status: 'completed' as const })), { kind: 'queryFileSources.open', status: 'cancelled' }]);
@@ -169,7 +169,7 @@ test.describe('离线 SQL 文件打开与另存', () => {
       const modal = await fileDialog('save', encoding);
       // 正式另存支持独立选择BOM；明确保留原用例的UTF16LE带BOM字节要求。
       await modal.getByRole('combobox', { name: '字节顺序标记（BOM）', exact: true }).selectOption(encoding === 'utf16le' ? 'utf16le' : 'none');
-      await modal.getByRole('button', { name: '选择并保存 SQL 文件', exact: true }).click();
+      await (await navigationMenuItem(modal, { name: '选择并保存 SQL 文件', exact: true })).click();
       await expect(modal).toBeHidden();
       const expected = encoding === 'utf16le' ? Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from(editorSource, 'utf16le')]) : iconv.encode(editorSource, encoding);
       expect(await readFile(target)).toEqual(expected);
@@ -186,11 +186,11 @@ test.describe('离线 SQL 文件打开与另存', () => {
     const beforeCancel = await storedTabs(1);
     await chooseNativeFile('save');
     const cancelled = await fileDialog('save', 'utf8');
-    await cancelled.getByRole('button', { name: '选择并保存 SQL 文件', exact: true }).click();
+    await (await navigationMenuItem(cancelled, { name: '选择并保存 SQL 文件', exact: true })).click();
     await expect(cancelled).toBeVisible();
     await expect.poll(() => desktop.evaluate(() => globalThis.__dbarkQueryFileCalls.length)).toBe(callsBeforeCancel + 1);
     expect(await readFile(join(directory, 'utf8.sql'), 'utf8')).toBe(editorSource);
-    await cancelled.getByRole('button', { name: '取消', exact: true }).click();
+    await (await navigationMenuItem(cancelled, { name: '取消', exact: true })).click();
     expect(await storedTabs(1)).toEqual(beforeCancel);
     expect((await readdir(directory)).sort()).toEqual(['gb18030.sql', 'utf16le.sql', 'utf8.sql']);
     const calls = await desktop.evaluate(() => globalThis.__dbarkQueryFileCalls.filter(call => call.mode === 'save'));
@@ -215,20 +215,20 @@ test.describe('离线 SQL 文件打开与另存', () => {
     for (const example of [{ file: encoded, error: encodingError }, { file: be, error: encodingError }, { file: nul, error: encodingError }, { file: big, error: 'SQL文件超过20MiB，未读写文件正文' }]) {
       await chooseNativeFile('open', example.file);
       const modal = await fileDialog('open', 'utf8');
-      await modal.getByRole('button', { name: '选择并打开 SQL 文件', exact: true }).click();
+      await (await navigationMenuItem(modal, { name: '选择并打开 SQL 文件', exact: true })).click();
       const recovery = page.getByRole('dialog', { name: '文件保存需要处理', exact: true });
       await expect(modal).toBeHidden();
       await expect(recovery.locator('.error-box')).toHaveText(example.error);
       await expect(recovery.getByText('本次未写入文件。', { exact: true })).toBeVisible();
-      await expect(recovery.getByRole('button', { name: '重新选择 SQL 文件', exact: true })).toBeEnabled();
+      await expect((await navigationMenuItem(recovery, { name: '重新选择 SQL 文件', exact: true }))).toBeEnabled();
       await expect(page.locator('.workspace-tab-button')).toHaveCount(1);
       expect((await storedTabs(1))[0]).toEqual(original);
-      await recovery.getByRole('button', { name: '取消', exact: true }).click();
+      await (await navigationMenuItem(recovery, { name: '取消', exact: true })).click();
       await expect(recovery).toBeHidden();
     }
     await chooseNativeFile('open', encoded);
     const recovered = await fileDialog('open', 'gb18030');
-    await recovered.getByRole('button', { name: '选择并打开 SQL 文件', exact: true }).click();
+    await (await navigationMenuItem(recovered, { name: '选择并打开 SQL 文件', exact: true })).click();
     await expect(recovered).toBeHidden();
     const tabs = await storedTabs(2); expect(tabs[0]).toEqual(original); expect(tabs[1].sql).toBe(source);
     expect(tabs[1].id).not.toBe(original.id); expect(tabs[1].title).toBe('国标.sql');
@@ -266,3 +266,6 @@ test.describe('离线 SQL 文件打开与另存', () => {
     await expectNoSqlExecution();
   });
 });
+
+/** 原门进入具体动作后才加载真实菜单导航，不改变默认/列表阶段的资源边界。 */
+async function navigationMenuItem(...args: Parameters<typeof import('./navigation-menu')['navigationMenuItem']>): Promise<import('@playwright/test').Locator> { return (require('./navigation-menu') as typeof import('./navigation-menu')).navigationMenuItem(...args); }

@@ -57,7 +57,7 @@ function register(): void {
         }, item);
         await page.reload();
         const query = page.locator('.query-tab:visible');
-        await query.getByRole('button', { name: snapshotText.open, exact: true }).click();
+        await (await (await import('./navigation-menu')).navigationMenuItem(query, { name: snapshotText.open, exact: true })).click();
         await expect(query.locator('[role="grid"]')).toBeVisible();
         if (!baseline) {
           await expect(page.locator('.tab-order-help')).toHaveCount(0);
@@ -67,7 +67,7 @@ function register(): void {
         }
         await page.screenshot({ path: info.outputPath(`${baseline ? 'before' : 'after'}-${item.theme}-${item.width}.png`) });
         if (!baseline) {
-          await query.getByRole('button', { name: sortText.panelTitle, exact: true }).click();
+          await (await (await import('./navigation-menu')).navigationMenuItem(query, { name: sortText.panelTitle, exact: true })).click();
           const sort = query.getByRole('region', { name: sortText.panelTitle, exact: true });
           await expect(sort.locator('details.usage-help')).not.toHaveAttribute('open', '');
           await expect(sort.getByText(sortText.panelHint, { exact: true })).not.toBeVisible();
@@ -76,8 +76,8 @@ function register(): void {
           await expect(sort.locator('summary')).toBeFocused(); await page.keyboard.press('Enter');
           await expect(sort.getByText(sortText.panelHint, { exact: true })).toBeVisible();
           await page.keyboard.press('Space'); await expect(sort.getByText(sortText.panelHint, { exact: true })).not.toBeVisible();
-          await sort.getByRole('button', { name: sortText.panelCancel, exact: true }).click();
-          await query.getByRole('button', { name: filterText.open, exact: true }).click();
+          await (await (await import('./navigation-menu')).navigationMenuItem(sort, { name: sortText.panelCancel, exact: true })).click();
+          await (await (await import('./navigation-menu')).navigationMenuItem(query, { name: filterText.open, exact: true })).click();
           const filter = query.getByRole('region', { name: filterText.title, exact: true });
           await expect(filter.getByText(filterText.hint, { exact: true })).not.toBeVisible();
           await filter.locator('summary').focus(); await page.keyboard.press('Shift+Tab'); await page.keyboard.press('Tab');
@@ -89,7 +89,7 @@ function register(): void {
           await page.screenshot({ path: info.outputPath(`help-${item.theme}-${item.width}.png`) });
           await page.keyboard.press('Space'); await expect(filter.getByText(filterText.hint, { exact: true })).not.toBeVisible();
           await page.screenshot({ path: info.outputPath(`filter-${item.theme}-${item.width}.png`) });
-          await filter.getByRole('button', { name: filterText.cancel, exact: true }).click();
+          await (await (await import('./navigation-menu')).navigationMenuItem(filter, { name: filterText.cancel, exact: true })).click();
         }
       }
       const audit = await application.evaluate(() => (globalThis as any).__uiCopyAudit as { opened: number; denied: string[]; pending: number });

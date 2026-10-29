@@ -1,3 +1,5 @@
+import { installNavigationMenuRamPort, navigationMenuRamButton } from '../helpers/navigationMenuRamPort';
+let restoreNavigationMenuPort: () => void = () => {};
 import React, { act } from 'react';
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { memoryDocument, MemoryEvent } from '../fixtures/memory-dom';
@@ -25,9 +27,9 @@ let document: ReturnType<typeof memoryDocument>, createRoot: typeof import('reac
 let QueryTab: typeof import('../../src/renderer/components/QueryTab')['QueryTab'], useWorkspace: typeof import('../../src/renderer/store')['useWorkspace'], flushSettings: typeof import('../../src/renderer/store')['flushSettings'];
 const globals = ['window', 'document', 'navigator', 'IS_REACT_ACT_ENVIRONMENT'].map(name => [name, Object.getOwnPropertyDescriptor(globalThis, name)] as const);
 let commands: string[];
-beforeAll(async () => { document = memoryDocument(); ({ createRoot } = await import('react-dom/client')); ({ QueryTab } = await import('../../src/renderer/components/QueryTab')); ({ useWorkspace, flushSettings } = await import('../../src/renderer/store')); });
+beforeAll(async () => { document = memoryDocument(); restoreNavigationMenuPort = installNavigationMenuRamPort(document); ({ createRoot } = await import('react-dom/client')); ({ QueryTab } = await import('../../src/renderer/components/QueryTab')); ({ useWorkspace, flushSettings } = await import('../../src/renderer/store')); });
 afterEach(async () => { if (root) { await act(async () => root!.unmount()); root = undefined; } await flushSettings(); });
-afterAll(() => { for (const [name, descriptor] of globals) if (descriptor) Object.defineProperty(globalThis, name, descriptor); else Reflect.deleteProperty(globalThis, name); });
+afterAll(() => { restoreNavigationMenuPort(); for (const [name, descriptor] of globals) if (descriptor) Object.defineProperty(globalThis, name, descriptor); else Reflect.deleteProperty(globalThis, name); });
 /** 格式化只允许普通草稿恢复写入；任何执行、建连、会话、历史或保存查询调用都失败。 */
 async function mount(source: string, start = 0, end = 0, eol = '\n') {
   io.closeRequest = undefined; io.eol = eol; io.start = start; io.end = end; io.multi = false; io.readOnly = false; io.events = []; commands = [];
@@ -36,7 +38,7 @@ async function mount(source: string, start = 0, end = 0, eol = '\n') {
   function View() { const [, tick] = React.useState(0); io.rerender = () => tick(value => value + 1); const tab = useWorkspace(state => state.settings.tabs[0]); return tab ? <QueryTab tab={tab} closeRequest={io.closeRequest} onHistory={() => {}}/> : null; }
   const node = document.createElement('div'); document.body.appendChild(node); root = createRoot(node as any); await act(async () => root!.render(<View/>));
 }
-async function click(entry: '按钮' | '快捷回调') { if (entry === '快捷回调') { expect(io.format).toBeTypeOf('function'); await act(async () => io.format!()); await flushSettings(); return; } const button = document.body.querySelectorAll('button').find(node => node.getAttribute('aria-label') === '格式化 SQL'); expect(button).toBeDefined(); await act(async () => button!.dispatchEvent(new MemoryEvent('click'))); await flushSettings(); }
+async function click(entry: '按钮' | '快捷回调') { if (entry === '快捷回调') { expect(io.format).toBeTypeOf('function'); await act(async () => io.format!()); await flushSettings(); return; } const button = navigationMenuRamButton(document.body, '格式化 SQL') ?? document.body.querySelectorAll('button').find(node => node.getAttribute('aria-label') === '格式化 SQL'); expect(button).toBeDefined(); await act(async () => button!.dispatchEvent(new MemoryEvent('click'))); await flushSettings(); }
 
 describe.each(['按钮', '快捷回调'] as const)('真实QueryTab格式化%s', entry => {
   it.each([['\n', '\r\n', 'preserve'], ['\n', '\r\n', 'upper'], ['\n', '\r\n', 'lower'], ['\r\n', '\n', 'preserve'], ['\r\n', '\n', 'upper'], ['\r\n', '\n', 'lower']] as const)('模型EOL与来源换行不同：来源%j/模型%j/偏好%s仍经原事务格式化', async (sourceEol, modelEol, keywordCase) => {

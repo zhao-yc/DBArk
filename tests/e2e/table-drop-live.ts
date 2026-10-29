@@ -31,10 +31,10 @@ async function open(owner: CaseOwner, context: LiveContext) {
   const connection = page(owner).locator('.connection-node').filter({ has: page(owner).locator('.connection-row').getByText(context.connectionName, { exact: true }) });
   await connection.locator('.connection-row').getByRole('button', { name: context.connectionName, exact: true }).focus(); owner.assertCurrent();
   await clickSidebarAction(connection, { name: '刷新连接', exact: true }, undefined, () => owner.assertCurrent()); owner.assertCurrent();
-  await connection.locator('.database-row').getByRole('button', { name: context.database, exact: true }).click(); owner.assertCurrent();
+  await (await (await import('./navigation-menu')).navigationMenuItem(connection.locator('.database-row'), { name: context.database, exact: true }, () => owner.assertCurrent())).click(); owner.assertCurrent();
   await connection.locator('.object-row').getByText('subject', { exact: true }).click(); owner.assertCurrent();
   const table = page(owner).locator('.table-tab:visible'); await expect(table.locator('.loading-overlay')).toHaveCount(0); owner.assertCurrent();
-  await table.getByRole('button', { name: text.title, exact: true }).click(); owner.assertCurrent();
+  await (await (await import('./navigation-menu')).navigationMenuItem(table, { name: text.title, exact: true }, () => owner.assertCurrent())).click(); owner.assertCurrent();
   await expect(dialog(owner).getByRole('button', { name: text.preview, exact: true })).toBeEnabled(); owner.assertCurrent();
 }
 /** 双门非list模式才导入；此文件是未执行验收定义，不代表本轮实库许可或通过。 */
@@ -59,7 +59,7 @@ export function registerTableDropUiTests() {
       // 先证明定位器在真实标签上有命中，删除后的零计数才不会因旧CSS类失配而空通过。
       const originalTab = page(owner).locator('.workspace-tab-button .tab-select').getByText('subject', { exact: true });
       await expect(originalTab).toHaveCount(1); owner.assertCurrent();
-      await dialog(owner).getByRole('button', { name: text.preview, exact: true }).click(); owner.assertCurrent();
+      await (await (await import('./navigation-menu')).navigationMenuItem(dialog(owner), { name: text.preview, exact: true }, () => owner.assertCurrent())).click(); owner.assertCurrent();
       await expect(dialog(owner).locator('.monaco-editor .view-lines')).toContainText('DROP TABLE'); owner.assertCurrent();
       const submit = dialog(owner).getByRole('button', { name: text.apply, exact: true }); await expect(submit).toBeDisabled(); owner.assertCurrent();
       await dialog(owner).getByLabel(text.confirmation, { exact: true }).fill(context.database + '.subject '); owner.assertCurrent();
@@ -70,7 +70,7 @@ export function registerTableDropUiTests() {
       const [after] = await observe(owner, () => context.observer.query<RowDataPacket[]>('SELECT TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA=? AND TABLE_NAME=?',[context.database,'subject'])); owner.assertCurrent(); expect(after).toHaveLength(0);
       await expect(originalTab).toHaveCount(0); owner.assertCurrent();
       const tasks = await page(owner).evaluate(() => window.dbark.invoke('tasks.list', {})); owner.assertCurrent(); expect(tasks.filter(task => task.kind === 'schema.tableDrop.apply')).toHaveLength(1);
-      await dialog(owner).getByRole('button', { name: text.close, exact: true }).click(); owner.assertCurrent();
+      await (await (await import('./navigation-menu')).navigationMenuItem(dialog(owner), { name: text.close, exact: true }, () => owner.assertCurrent())).click(); owner.assertCurrent();
       // 关闭会等待令牌释放；弹窗卸载之后，App才允许工作区快捷键，不能把click返回当关闭完成。
       await expect(dialog(owner)).toHaveCount(0); owner.assertCurrent();
       // 旧URI本身不写入系统clipboard，人工输入原目标；必须由原产品导航拒绝。
@@ -79,8 +79,8 @@ export function registerTableDropUiTests() {
       await page(owner).keyboard.press(process.platform === 'darwin' ? 'Meta+Shift+O' : 'Control+Shift+O'); owner.assertCurrent();
       const link = page(owner).getByRole('dialog', { name: '粘贴对象链接', exact: true });
       await expect(link).toBeVisible(); owner.assertCurrent();
-      await link.getByLabel('DBArk 对象链接', { exact: true }).fill(uri); owner.assertCurrent(); await link.getByRole('button', { name: '打开链接', exact: true }).click(); owner.assertCurrent();
-      await expect(link.getByRole('alert')).toContainText('此名称已退役'); owner.assertCurrent(); await link.getByRole('button', {name:'关闭对话框',exact:true}).click(); owner.assertCurrent();
+      await link.getByLabel('DBArk 对象链接', { exact: true }).fill(uri); owner.assertCurrent(); await (await (await import('./navigation-menu')).navigationMenuItem(link, { name: '打开链接', exact: true }, () => owner.assertCurrent())).click(); owner.assertCurrent();
+      await expect(link.getByRole('alert')).toContainText('此名称已退役'); owner.assertCurrent(); await (await (await import('./navigation-menu')).navigationMenuItem(link, {name:'关闭对话框',exact:true}, () => owner.assertCurrent())).click(); owner.assertCurrent();
     }, info, { captureFailureScreenshot: false });
   });
 }

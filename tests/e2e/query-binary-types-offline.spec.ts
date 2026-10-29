@@ -77,6 +77,9 @@ test('wire BLOB中的TEXT LONGTEXT及NULL双击和Enter均不打开字节查看�
   await expect(await cell(0)).toHaveText('TEXT正文'); await expect(await cell(2)).toHaveText('NULL');
 });
 test('真实字节及空字节保留双击Enter与只读守卫，重复别名标题按name值按key', async () => {
-  await (await cell(1)).dblclick(); const modal = page.getByRole('dialog', { name: '二进制单元格：重复别名', exact: true }); await expect(modal).toBeVisible(); await expect(modal.getByRole('textbox')).toHaveValue('00 ff 80'); await expect(modal.getByRole('textbox')).toHaveJSProperty('readOnly', true); await expect(modal.getByRole('button', { name: /暂存/ })).toHaveCount(0); await modal.getByRole('button', { name: '关闭对话框', exact: true }).click();
-  const target = await cell(3); await target.click(); await target.press('Enter'); const empty = page.getByRole('dialog', { name: '二进制单元格：空字节', exact: true }); await expect(empty).toContainText('0 字节'); await expect(empty.getByRole('textbox')).toHaveValue(''); await expect(empty.getByRole('textbox')).toHaveJSProperty('readOnly', true); await expect(empty.getByRole('button', { name: /暂存/ })).toHaveCount(0);
+  await (await cell(1)).dblclick(); const modal = page.getByRole('dialog', { name: '二进制单元格：重复别名', exact: true }); await expect(modal).toBeVisible(); await expect(modal.getByRole('textbox')).toHaveValue('00 ff 80'); await expect(modal.getByRole('textbox')).toHaveJSProperty('readOnly', true); await expect((await navigationMenuItem(modal, { name: /暂存/ }))).toHaveCount(0); await (await navigationMenuItem(modal, { name: '关闭对话框', exact: true })).click();
+  const target = await cell(3); await target.click(); await target.press('Enter'); const empty = page.getByRole('dialog', { name: '二进制单元格：空字节', exact: true }); await expect(empty).toContainText('0 字节'); await expect(empty.getByRole('textbox')).toHaveValue(''); await expect(empty.getByRole('textbox')).toHaveJSProperty('readOnly', true); await expect((await navigationMenuItem(empty, { name: /暂存/ }))).toHaveCount(0);
 });
+
+/** 原门进入具体动作后才加载真实菜单导航，不改变默认/列表阶段的资源边界。 */
+async function navigationMenuItem(...args: Parameters<typeof import('./navigation-menu')['navigationMenuItem']>): Promise<import('@playwright/test').Locator> { return (require('./navigation-menu') as typeof import('./navigation-menu')).navigationMenuItem(...args); }

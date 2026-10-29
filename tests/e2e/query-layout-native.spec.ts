@@ -54,21 +54,21 @@ async function current(run: EditorIndentNativeRun, owner: IndentNativeOwner) { c
 /** 真正新建查询保留127.0.0.1:1原拒连表单；不伪造成功、连接测试或SQL会话。 */
 async function newQuery(run: EditorIndentNativeRun, owner: IndentNativeOwner) {
   const page = owner.page;
-  await run.step(owner, () => page.locator('.app-commandbar').getByRole('button', { name: zh.common.newQuery, exact: true }).click());
+  await run.step(owner, async () => (await navigationMenuItem(page.locator('.navigation-toolbar'), { name: zh.common.newQuery, exact: true })).click());
   const dialog = page.getByRole('dialog', { name: zh.common.newQuery, exact: true });
   await run.step(owner, () => expect(dialog.locator('.error-box')).toContainText(/ECONNREFUSED|连接被拒绝|拒绝连接/i, { timeout: 20000 }));
-  await run.step(owner, () => dialog.getByRole('button', { name: zh.app.text053, exact: true }).click());
+  await run.step(owner, async () => (await navigationMenuItem(dialog, { name: zh.app.text053, exact: true })).click());
   await run.step(owner, () => expect(dialog).toBeHidden());
   await run.step(owner, () => expect(page.locator('.query-tab:visible .monaco-editor').getByRole('textbox')).toBeEditable());
 }
 /** 正式连接表单只填无秘密的固定回环概要；禁用SSH，不点击连接测试。 */
 async function prepareQuery(run: EditorIndentNativeRun, owner: IndentNativeOwner) {
   const page = owner.page;
-  await run.step(owner, () => page.locator('.app-commandbar').getByRole('button', { name: zh.common.newConnection, exact: true }).click());
+  await run.step(owner, async () => (await navigationMenuItem(page.locator('.navigation-toolbar'), { name: zh.common.newConnection, exact: true })).click());
   const dialog = page.getByRole('dialog', { name: zh.common.newConnection, exact: true });
   for (const [name, value] of [[zh.connections.text006, '分栏原生离线'], [zh.connections.text009, '127.0.0.1'], [zh.connections.text010, '1'], [zh.common.user, 'offline'], [zh.connections.text011, ''], [zh.connections.text012, '']]) await run.step(owner, () => dialog.getByLabel(name, { exact: true }).fill(value));
   await run.step(owner, () => dialog.getByRole('checkbox', { name: zh.connections.text016, exact: true }).uncheck());
-  await run.step(owner, () => dialog.getByRole('button', { name: zh.connections.text036, exact: true }).click());
+  await run.step(owner, async () => (await navigationMenuItem(dialog, { name: zh.connections.text036, exact: true })).click());
   await run.step(owner, () => expect(dialog).toBeHidden()); await newQuery(run, owner);
 }
 /** 只使用真实键盘输入无前导缩进种子，不假定Monaco多行插入会去掉继承缩进。 */
@@ -196,7 +196,7 @@ test('离线原生分栏：两查询独立拖动/键盘、取消/默认、视觉
     await drag(run, first, 60); await expect.poll(() => height(run, first, a)).toBe(360); expect(content(await current(run, first))).toEqual(content(originalA.selected));
     await key(run, first, 'ArrowDown'); await expect.poll(() => height(run, first, a)).toBe(370); expect(content(await current(run, first))).toEqual(content(originalA.selected));
     const beforeCancel = await settings(run, first); await drag(run, first, 80, true); await unchangedAfterDebounce(run, first, beforeCancel); expect(content(await current(run, first))).toEqual(content(originalA.selected));
-    await run.step(first, () => first.page.locator('.query-tab:visible').getByRole('button', { name: layoutText.restore, exact: true }).click());
+    await run.step(first, async () => (await navigationMenuItem(first.page.locator('.query-tab:visible'), { name: layoutText.restore, exact: true })).click());
     await expect.poll(() => height(run, first, a)).toBe(300); expect(content(await current(run, first))).toEqual(content(originalA.selected)); await history(run, first, originalA);
     await newQuery(run, first); const b = (await settings(run, first)).activeTabId!; expect(b).toBeTruthy(); expect(b).not.toBe(a); const originalB = await seed(run, first, '分栏B');
     await drag(run, first, 40); await expect.poll(() => height(run, first, b)).toBe(340); expect(content(await current(run, first))).toEqual(content(originalB.selected));
@@ -222,3 +222,6 @@ test('离线原生分栏：两查询独立拖动/键盘、取消/默认、视觉
     throw reason;
   }
 });
+
+/** 原门进入具体动作后才加载真实菜单导航，不改变默认/列表阶段的资源边界。 */
+async function navigationMenuItem(...args: Parameters<typeof import('./navigation-menu')['navigationMenuItem']>): Promise<import('@playwright/test').Locator> { return (require('./navigation-menu') as typeof import('./navigation-menu')).navigationMenuItem(...args); }

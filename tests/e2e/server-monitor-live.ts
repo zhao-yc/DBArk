@@ -32,7 +32,7 @@ export function registerServerMonitorUi(binding: ServerMonitorUiTarget) {
       });
       assertServerMonitorUiIdentity(await observe(() => current.observer!.query('SELECT @@version AS version,@@version_compile_os AS os,@@lower_case_table_names AS names,@@server_uuid AS uuid')),binding.target.uuid);
       const connectionName = 'S02只读监控本例';
-      await observe(() => page.locator('.app-commandbar').getByRole('button',{name:zh.common.newConnection,exact:true}).click());
+      await observe(() => page.locator('.navigation-toolbar').getByRole('button',{name:zh.common.newConnection,exact:true}).click());
       const form = page.getByRole('dialog',{name:zh.common.newConnection,exact:true});
       await observe(() => form.getByLabel(zh.connections.text006,{exact:true}).fill(connectionName));
       await observe(() => form.getByLabel(zh.connections.text008,{exact:true}).selectOption('mysql'));
@@ -50,7 +50,7 @@ export function registerServerMonitorUi(binding: ServerMonitorUiTarget) {
       expect(Boolean(profile && profile.name === connectionName && profile.host === binding.target.host && profile.port === binding.target.port && profile.user === binding.target.user && !profile.database && profile.rememberPassword === false && profile.password === undefined && profile.hasPassword === Boolean(binding.target.password) && !profile.ssh?.enabled && !profile.tls?.enabled)).toBe(true);
       const before = await observe(() => page.evaluate(async () => ({ tabs:(await window.dbark.invoke('settings.get',{})).tabs, history:await window.dbark.invoke('history.list',{}) })));
       expect(before.tabs.some(tab => tab.kind === 'query')).toBe(false);
-      await observe(() => page.locator('.app-commandbar').getByRole('button',{name:t.title,exact:true}).click());
+      await observe(() => page.locator('.navigation-toolbar').getByRole('button',{name:t.title,exact:true}).click());
       const monitor = page.getByRole('dialog',{name:t.title,exact:true});
       await observe(() => monitor.getByLabel(t.connection,{exact:true}).selectOption(profile!.id));
       await observe(() => monitor.getByRole('button',{name:t.open,exact:true}).click());

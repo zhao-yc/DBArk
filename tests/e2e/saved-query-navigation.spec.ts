@@ -17,11 +17,11 @@ async function prepare(sql:string){
 }
 /** 沿实际入口检索并摘要复核打开，只读导航不调用SQL执行或直接注入Monaco内容。 */
 async function open(keyword:string,mode='contains'){
- await page.locator('.app-commandbar').getByRole('button',{name:'全库搜索',exact:true}).click();
- await page.getByRole('dialog',{name:'全库搜索：结构名称',exact:true}).getByRole('button',{name:'搜索保存查询',exact:true}).click();
+ await (await (await import('./navigation-menu')).navigationMenuItem(page.locator('.navigation-toolbar'), {name:'全库搜索',exact:true})).click();
+ await (await (await import('./navigation-menu')).navigationMenuItem(page.getByRole('dialog',{name:'全库搜索：结构名称',exact:true}), {name:'搜索保存查询',exact:true})).click();
  await dialog().getByLabel('本地搜索文字',{exact:true}).fill(keyword);await dialog().getByLabel('本地匹配方式',{exact:true}).selectOption(mode);
- await dialog().getByRole('button',{name:'开始本地搜索',exact:true}).click();await expect(dialog().getByRole('button',{name:'开始本地搜索',exact:true})).toBeEnabled({timeout:20000});
- await dialog().locator('.rdg-row').click();await dialog().getByRole('button',{name:'打开查询（不执行）',exact:true}).click();await expect(dialog()).toHaveCount(0);
+ await (await (await import('./navigation-menu')).navigationMenuItem(dialog(), {name:'开始本地搜索',exact:true})).click();await expect(dialog().getByRole('button',{name:'开始本地搜索',exact:true})).toBeEnabled({timeout:20000});
+ await dialog().locator('.rdg-row').click();await (await (await import('./navigation-menu')).navigationMenuItem(dialog(), {name:'打开查询（不执行）',exact:true})).click();await expect(dialog()).toHaveCount(0);
  await expect(navigation()).toBeVisible();
 }
 /** 生产工作台快照只用于核对正文，没有通过脚本替换编辑器或认证回包。 */
@@ -30,24 +30,24 @@ async function activeSql(){const settings=await page.evaluate(()=>window.dbark.i
 test('多处UTF16与CRLF导航后编辑立即失效，撤销不复活且原草稿零执行保持',async()=>{
  const sql="-- 😀锚点\r\nUPDATE subject SET note='锚点';\r\n-- 锚点",original=await prepare(sql);await open('锚点');
  await expect(navigation().getByRole('status')).toHaveText(t.count(0,3));await expect(query().locator('.saved-query-match')).toHaveCount(3);
- await navigation().getByRole('button',{name:t.next,exact:true}).click();await expect(navigation().getByRole('status')).toHaveText(t.count(1,3));
- await navigation().getByRole('button',{name:t.previous,exact:true}).click();await navigation().getByRole('button',{name:t.previous,exact:true}).click();await expect(navigation().getByRole('status')).toHaveText(t.count(2,3));
+ await (await (await import('./navigation-menu')).navigationMenuItem(navigation(), {name:t.next,exact:true})).click();await expect(navigation().getByRole('status')).toHaveText(t.count(1,3));
+ await (await (await import('./navigation-menu')).navigationMenuItem(navigation(), {name:t.previous,exact:true})).click();await (await (await import('./navigation-menu')).navigationMenuItem(navigation(), {name:t.previous,exact:true})).click();await expect(navigation().getByRole('status')).toHaveText(t.count(2,3));
  const offset=sql.lastIndexOf('锚点');await page.keyboard.insertText('定位探针');await expect.poll(activeSql).toBe(sql.slice(0,offset)+'定位探针'+sql.slice(offset));
  await expect(navigation().getByRole('status')).toHaveText(t.invalid);await expect(query().locator('.saved-query-match')).toHaveCount(0);
  await page.keyboard.press(`${process.platform==='darwin'?'Meta':'Control'}+z`);await expect.poll(activeSql).toBe(sql);await expect(navigation().getByRole('status')).toHaveText(t.invalid);
- await navigation().getByRole('button',{name:t.close,exact:true}).click();await expect(navigation()).toHaveCount(0);
+ await (await (await import('./navigation-menu')).navigationMenuItem(navigation(), {name:t.close,exact:true})).click();await expect(navigation()).toHaveCount(0);
  const settings=await page.evaluate(()=>window.dbark.invoke('settings.get',{}));expect(settings.tabs.find(tab=>tab.id===original.id)).toEqual(original);
  expect(await page.evaluate(()=>window.dbark.invoke('history.list',{}))).toEqual([]);expect(pageErrors).toEqual([]);
 });
 test('大量命中明确只显示前200处，关闭高亮后旧控件不能恢复',async()=>{
  await prepare('-- '+ '锚点 '.repeat(210));await open('锚点');await expect(navigation().getByRole('status')).toHaveText(t.count(0,200));await expect(navigation()).toContainText(t.capped(200));
- await navigation().getByRole('button',{name:t.previous,exact:true}).click();await expect(navigation().getByRole('status')).toHaveText(t.count(199,200));
- await navigation().getByRole('button',{name:t.close,exact:true}).click();await expect(navigation()).toHaveCount(0);await expect(query().locator('.saved-query-match')).toHaveCount(0);
+ await (await (await import('./navigation-menu')).navigationMenuItem(navigation(), {name:t.previous,exact:true})).click();await expect(navigation().getByRole('status')).toHaveText(t.count(199,200));
+ await (await (await import('./navigation-menu')).navigationMenuItem(navigation(), {name:t.close,exact:true})).click();await expect(navigation()).toHaveCount(0);await expect(query().locator('.saved-query-match')).toHaveCount(0);
  expect(await page.evaluate(()=>window.dbark.invoke('history.list',{}))).toEqual([]);
 });
 test('Unicode零宽正则可导航末尾，零宽标记不写入SQL',async()=>{
  const sql='-- 😀 😀',original=await prepare(sql);await open('(?=😀)|$','regexp');await expect(navigation().getByRole('status')).toHaveText(t.count(0,3));
- await navigation().getByRole('button',{name:t.previous,exact:true}).click();await expect(navigation().getByRole('status')).toHaveText(t.count(2,3));await expect.poll(activeSql).toBe(sql);
+ await (await (await import('./navigation-menu')).navigationMenuItem(navigation(), {name:t.previous,exact:true})).click();await expect(navigation().getByRole('status')).toHaveText(t.count(2,3));await expect.poll(activeSql).toBe(sql);
  const settings=await page.evaluate(()=>window.dbark.invoke('settings.get',{}));expect(settings.tabs.find(tab=>tab.id===original.id)).toEqual(original);expect(await page.evaluate(()=>window.dbark.invoke('history.list',{}))).toEqual([]);
 });
 test('CRLF内部零宽命中明确不可精确定位，不显示两处同点或修改原文',async()=>{
@@ -55,5 +55,5 @@ test('CRLF内部零宽命中明确不可精确定位，不显示两处同点或�
  await expect(navigation().getByRole('status')).toHaveText(t.unlocatable);await expect(navigation().getByRole('button',{name:t.previous,exact:true})).toHaveCount(0);await expect(navigation().getByRole('button',{name:t.next,exact:true})).toHaveCount(0);
  await expect(query().locator('.saved-query-match')).toHaveCount(0);await expect.poll(activeSql).toBe(sql);
  const settings=await page.evaluate(()=>window.dbark.invoke('settings.get',{}));expect(settings.tabs.find(tab=>tab.id===original.id)).toEqual(original);expect(await page.evaluate(()=>window.dbark.invoke('history.list',{}))).toEqual([]);
- await navigation().getByRole('button',{name:t.close,exact:true}).click();await expect(navigation()).toHaveCount(0);
+ await (await (await import('./navigation-menu')).navigationMenuItem(navigation(), {name:t.close,exact:true})).click();await expect(navigation()).toHaveCount(0);
 });

@@ -2,8 +2,9 @@ import { readFileSync } from 'node:fs';
 import { createContext, runInContext } from 'node:vm';
 import ts from 'typescript';
 import { renderToStaticMarkup } from 'react-dom/server';
+import * as jsxRuntime from 'react/jsx-runtime';
+import type { ReactNode } from 'react';
 import { describe, expect, it, vi } from 'vitest';
-import { CopyInsertSqlButtons } from '../../src/renderer/components/CopyInsertSqlButtons';
 import { prepareCopyInsertSql } from '../../src/renderer/copyInsertSql';
 import { copyInsertSql } from '../../src/main/copyInsertSql';
 import { copyInsertSqlZh } from '../../src/shared/copyInsertSql.zh-CN';
@@ -11,11 +12,14 @@ import { fixture } from '../helpers/copyInsertPage';
 
 const source = readFileSync(new URL('../../src/renderer/components/TableTab.tsx', import.meta.url), 'utf8');
 const tree = ts.createSourceFile('TableTab.tsx', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
-let handler = '', wiring = '';
+let handler = '';
+const wiring = { current: '', selected: '' };
 /** 执行生产 TableTab 原处理器；只替换 IPC 端口，不把它描述为真实 GUI/剪贴板验收。 */
 function visit(node: ts.Node) {
   if (ts.isFunctionDeclaration(node) && node.name?.text === 'copyRowsAsInsert') handler = node.getText(tree);
-  if (ts.isJsxSelfClosingElement(node) && node.tagName.getText(tree) === 'CopyInsertSqlButtons') wiring = node.getText(tree);
+  if (ts.isJsxElement(node) && node.openingElement.tagName.getText(tree) === 'button') {
+    for (const key of ['current', 'selected'] as const) if (node.children.some(child => ts.isJsxExpression(child) && child.expression?.getText(tree) === `copyInsertSqlZh.${key}`)) wiring[key] = node.getText(tree);
+  }
   ts.forEachChild(node, visit);
 }
 visit(tree);
@@ -28,9 +32,13 @@ function port() {
   return { f, tab, workspace, context, click(selected = false) { runInContext(`copyRowsAsInsert(${selected})`, context); }, async settle() { resolve(); await Promise.resolve(); await Promise.resolve(); } };
 }
 describe('表页 INSERT 入口的纯端口验证（实际 GUI/OS 为零）', () => {
-  it('真实组件接在 TableTab，中文标题说明原值策略，分别控制当前与勾选入口', () => {
-    expect(wiring).toContain('onCopy={copyRowsAsInsert}');
-    const html = renderToStaticMarkup(<CopyInsertSqlButtons disabled={false} current selected={false} onCopy={() => {}}/>);
+  it('真实两个入口接在 TableTab，中文标题说明原值策略，分别控制当前与勾选入口', () => {
+    expect(wiring.current).toContain('onClick={() => copyRowsAsInsert(false)}');
+    expect(wiring.selected).toContain('onClick={() => copyRowsAsInsert(true)}');
+    // 仅执行生产按钮JSX；菜单层级的实际交互由专项验证，不渲染隐藏兼容入口。
+    const exports: { view?: ReactNode } = {};
+    runInContext(ts.transpileModule(`exports.view=(<>${wiring.current}${wiring.selected}</>);`, { fileName: 'copy-entry.tsx', compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX } }).outputText, createContext({ exports, copyInsertSqlZh, insertCopyBlockedRef: { current: false }, selection: { rowId: '原行' }, selectedRows: new Set(), copyRowsAsInsert: vi.fn(), require: (name: string) => { if (name === 'react/jsx-runtime') return jsxRuntime; throw Error('复制入口不允许未知依赖'); } }));
+    const html = renderToStaticMarkup(exports.view);
     expect(html).toContain(copyInsertSqlZh.current); expect(html).toContain(copyInsertSqlZh.selected); expect(html).toContain(copyInsertSqlZh.policy); expect(html.match(/disabled=""/g)).toHaveLength(1);
   });
   it('当前行和勾选行只调用专用 IPC，不调用查询、补取或表写入命令', async () => {

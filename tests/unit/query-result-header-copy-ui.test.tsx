@@ -1,3 +1,5 @@
+import { installNavigationMenuRamPort, navigationMenuRamButton, navigationMenuObservedMutationPort } from '../helpers/navigationMenuRamPort';
+let restoreNavigationMenuPort: () => void = () => {};
 import { act } from 'react';
 import { readFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
@@ -21,13 +23,13 @@ let document:ReturnType<typeof memoryDocument>,createRoot:typeof import('react-d
 let original:QueryResult,second:QueryResult,commands:string[],exports:any[],observers:Set<Function>;
 const globals=['window','document','navigator','IS_REACT_ACT_ENVIRONMENT','MutationObserver','Element'].map(name=>[name,Object.getOwnPropertyDescriptor(globalThis,name)] as const);
 beforeAll(async()=>{
- document=memoryDocument();(document as any).oninput=null;Object.assign(window,{setTimeout,clearTimeout,confirm:()=>true});const create=document.createElement.bind(document);
+ document=memoryDocument(); restoreNavigationMenuPort = installNavigationMenuRamPort(document);(document as any).oninput=null;Object.assign(window,{setTimeout,clearTimeout,confirm:()=>true});const create=document.createElement.bind(document);
  document.createElement=name=>{const node=create(name);if(name==='input'){let kind='text';Object.defineProperty(node,'type',{configurable:true,get:()=>kind,set:value=>{kind=value;node.attributes.set('type',value);}});node.type='text';}if(name==='option')Object.defineProperty(node,'value',{configurable:true,get:()=>node.attributes.get('value')??node.textContent,set:value=>node.attributes.set('value',value)});if(name==='select'){Object.defineProperty(node,'options',{get:()=>node.querySelectorAll('option')});Object.defineProperty(node,'value',{configurable:true,get:()=>node.querySelectorAll('option').find(option=>(option as any).selected)?.value??'',set:value=>{for(const option of node.querySelectorAll('option'))(option as any).selected=option.value===value;}});}const set=node.setAttribute.bind(node),remove=node.removeAttribute.bind(node);node.setAttribute=(key,value)=>{set(key.toLowerCase(),value);if(key==='disabled')node.disabled=true;};node.removeAttribute=key=>{remove(key.toLowerCase());if(key==='disabled')node.disabled=false;};return node;};
- observers=new Set();(globalThis as any).Element=create('div').constructor;(globalThis as any).MutationObserver=class{constructor(private callback:Function){observers.add(callback);}observe(){}disconnect(){observers.delete(this.callback);}};
+ observers=new Set();(globalThis as any).Element=create('div').constructor;(globalThis as any).MutationObserver=navigationMenuObservedMutationPort(observers);
  ({createRoot}=await import('react-dom/client'));({QueryTab}=await import('../../src/renderer/components/QueryTab'));({useWorkspace:store,flushSettings:flush}=await import('../../src/renderer/store'));
 });
 afterEach(async()=>{if(root){await act(async()=>root!.unmount());root=undefined;}await flush();delete(window as any).dbark;vi.restoreAllMocks();grids.all=[];});
-afterAll(()=>{for(const[name,descriptor]of globals)if(descriptor)Object.defineProperty(globalThis,name,descriptor);else Reflect.deleteProperty(globalThis,name);});
+afterAll(()=>{ restoreNavigationMenuPort();for(const[name,descriptor]of globals)if(descriptor)Object.defineProperty(globalThis,name,descriptor);else Reflect.deleteProperty(globalThis,name);});
 /** 只给真实查询端口合成响应；所有文件选择、写入和settings保存都是RAM事件。 */
 async function mount(multiple = false){commands=[];exports=[];original={columns:[{key:'__proto__',name:'同名',type:'BIGINT'},{key:'d',name:'同名',type:'DECIMAL'},{key:'n',name:'空值',type:'TEXT'},{key:'b',name:'字节',type:'BLOB'},{key:'secret',name:'隐藏内容',type:'TEXT'}],rows:[JSON.parse('{"__proto__":"18446744073709551615","d":"0.12345678901234567890","n":"","b":{"type":"binary","base64":"AP8="},"secret":"秘密"}'),JSON.parse('{"__proto__":"","d":"1.00000000000000000001","n":null,"b":{"type":"binary","base64":""},"secret":"秘密"}')],truncated:true,elapsedMs:1,statement:'SELECT RAM'};second={...original,columns:[{key:'next',name:'新结果',type:'TEXT'}],rows:[{next:'新值'}]};
  if(multiple){ original.rows[0].n='同组';original.rows[1].n='同组';original.rows.push(JSON.parse('{"__proto__":"3","d":"0.50000000000000000000","n":"同组","b":{"type":"binary","base64":"AA=="},"secret":"秘密"}')); }
@@ -36,7 +38,7 @@ async function mount(multiple = false){commands=[];exports=[];original={columns:
  function Harness(){const tabs=store(state=>state.settings.tabs);return tabs.map(tab=><QueryTab key={tab.id} tab={tab} onHistory={()=>{}}/>);}const container=document.createElement('div');document.body.appendChild(container);root=createRoot(container as any);await act(async()=>root!.render(<Harness/>));await click(zh.query.text010);
 }
 /** 按真实中文按钮或可访问列序号操作，重复别名不作身份。 */
-function button(name:string){const node=document.querySelectorAll('button').find(node=>node.textContent===name||node.getAttribute('aria-label')===name||name===zh.query.text010&&node.textContent.startsWith(name));expect(node,'缺少按钮：'+name).toBeDefined();return node!;}
+function button(name:string){const node=(navigationMenuRamButton(document, name) ?? document.querySelectorAll('button').find(node=>node.textContent===name||node.getAttribute('aria-label')===name||name===zh.query.text010&&node.textContent.startsWith(name)));expect(node,'缺少按钮：'+name).toBeDefined();return node!;}
 async function click(name:string){const node=button(name);expect(node.disabled).toBe(false);await act(async()=>node.dispatchEvent(new MemoryEvent('click')));}
 async function toggle(position:number,checked:boolean){const node=document.querySelector(`input[aria-label="${text.visible(position)}"]`)!;expect(node).not.toBeNull();await act(async()=>{node.checked=checked;node.dispatchEvent(new MemoryEvent('click'));});}
 /** 抓取旧的真实React闭包来覆盖重绘之后的迟到动作。 */

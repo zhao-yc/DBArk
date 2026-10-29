@@ -91,20 +91,20 @@ function register(): void {
     /** 仅在内存断言敏感值没有进入记账；产物只备份已核安全的四类本地记录。 */
     function privateLedger(value: unknown): void { const text = JSON.stringify(value); for (const marker of values) { expect(text).not.toContain(marker); expect(text.toLowerCase()).not.toContain(Buffer.from(marker).toString('hex')); } }
     async function open(): Promise<void> {
-      await step(() => query().getByRole('button', { name: '参数执行', exact: true }).click()); await step(() => expect(modal()).toBeVisible());
-      await step(() => expect(modal().getByRole('button', { name: '执行参数 SQL', exact: true })).toBeEnabled());
+      await step(async () => (await navigationMenuItem(query(), { name: '参数执行', exact: true })).click()); await step(() => expect(modal()).toBeVisible());
+      await step(async () => expect((await navigationMenuItem(modal(), { name: '执行参数 SQL', exact: true }))).toBeEnabled());
       await step(() => expect(remember()).not.toBeChecked()); await step(() => expect(input()).toHaveValue('')); await step(() => expect(modal().locator('.error-box')).toHaveCount(0));
     }
-    async function cancel(): Promise<void> { await step(() => modal().getByRole('button', { name: '取消', exact: true }).click()); await step(() => expect(modal()).toBeHidden()); }
+    async function cancel(): Promise<void> { await step(async () => (await navigationMenuItem(modal(), { name: '取消', exact: true })).click()); await step(() => expect(modal()).toBeHidden()); }
     /** 执行按钮只点一次，实际任务终态、结果单元格和Main原回包共同证明成功。 */
     async function execute(marker: string, index: number): Promise<void> {
       const before = await ledgerIds(); await step(() => input().fill(marker)); await step(() => remember().check());
-      await step(() => modal().getByRole('button', { name: '执行参数 SQL', exact: true }).click()); await step(() => expect(modal()).toBeHidden());
+      await step(async () => (await navigationMenuItem(modal(), { name: '执行参数 SQL', exact: true })).click()); await step(() => expect(modal()).toBeHidden());
       await step(() => expect.poll(async () => {
         const tasks = await page.evaluate(() => window.dbark.invoke('tasks.list', {})); check(); const added = tasks.filter(task => !before.tasks.includes(task.id));
         if (added.length !== 1 || added[0].kind !== 'query.executeParameterized') return '未知任务集合'; return added[0].status;
       }).toBe('completed'));
-      await step(() => expect(query().getByRole('button', { name: '停止', exact: true })).toBeDisabled());
+      await step(async () => expect((await navigationMenuItem(query(), { name: '停止', exact: true }))).toBeDisabled());
       await step(() => expect(query().locator('.result-body [role="gridcell"][aria-colindex="2"]')).toHaveText(marker));
       const report = await step(audit), calls = report.calls.filter(call => call.command === 'query.executeParameterized'); expect(calls).toHaveLength(index + 1);
       // 显示别名属于列元数据；行使用引擎c0键，分别核对两者，不能把别名当内部键。
@@ -135,7 +135,7 @@ function register(): void {
       await open(); await step(() => expect(fill()).toBeEnabled()); expect(await ledgerIds()).toEqual(firstIds);
       await step(() => fill().click()); await step(() => expect(input()).toHaveValue(values[0])); expect(await ledgerIds()).toEqual(firstIds); await cancel();
       await open(); await step(() => expect(fill()).toBeEnabled()); await step(() => fill().click()); await step(() => expect(input()).toHaveValue(values[0]));
-      await step(() => modal().getByRole('button', { name: text.forget, exact: true }).click()); await step(() => expect(input()).toHaveValue(values[0])); await step(() => expect(remember()).not.toBeChecked()); expect(await ledgerIds()).toEqual(firstIds); await cancel();
+      await step(async () => (await navigationMenuItem(modal(), { name: text.forget, exact: true })).click()); await step(() => expect(input()).toHaveValue(values[0])); await step(() => expect(remember()).not.toBeChecked()); expect(await ledgerIds()).toEqual(firstIds); await cancel();
       await open(); await step(() => expect(fill()).toBeDisabled()); await execute(values[1], 1);
       const secondIds = await ledgerIds(); await open(); await step(() => expect(fill()).toBeEnabled()); await cancel(); expect(await ledgerIds()).toEqual(secondIds);
       // 真实键盘只加一个空格再Undo，不触碰系统剪贴板；同文模型版本仍变化，旧缓存不能复活。
@@ -160,3 +160,6 @@ function register(): void {
     } catch (error) { stopped = true; desktop.retainOwnedDesktopResources(info); throw error; }
   });
 }
+
+/** 原门进入具体动作后才加载真实菜单导航，不改变默认/列表阶段的资源边界。 */
+async function navigationMenuItem(...args: Parameters<typeof import('./navigation-menu')['navigationMenuItem']>): Promise<import('@playwright/test').Locator> { return (require('./navigation-menu') as typeof import('./navigation-menu')).navigationMenuItem(...args); }

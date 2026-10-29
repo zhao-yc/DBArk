@@ -24,7 +24,7 @@ test('Excel 正式文件授权、工作表和预览 IPC，以及表格实际入�
   expect(result.sheets.map(sheet => sheet.name)).toEqual(['说明', '实际数据']);
   expect(result.sample.rows).toEqual([{ 编号: '18446744073709551615', 文本: '=SUM(A1)' }]); expect(result.denied).toContain('文件访问未授权');
   await page.reload(); await expect(page.locator('.table-tab:visible')).toBeVisible();
-  await page.locator('.table-tab:visible').getByRole('button', { name: '导入', exact: true }).click();
+  await (await (await import('./navigation-menu')).navigationMenuItem(page.locator('.table-tab:visible'), { name: '导入', exact: true })).click();
   await page.getByRole('dialog').getByRole('combobox').first().selectOption('xlsx');
   const modal = page.getByRole('dialog', { name: '导入 Excel · 离线库.离线表', exact: true }); await expect(modal).toBeVisible();
   await expect(modal.getByRole('button', { name: '开始导入', exact: true })).toBeDisabled();
@@ -34,13 +34,13 @@ test('Excel 正式文件授权、工作表和预览 IPC，以及表格实际入�
   await expect(modal.locator('.error-box')).toContainText('连接');
   await expect(modal.getByRole('button', { name: '开始导入', exact: true })).toBeDisabled();
   await page.screenshot({ path: testInfo.outputPath('excel-import-offline.png') });
-  await modal.getByRole('button', { name: '关闭', exact: true }).click();
-  await page.locator('.table-tab:visible').getByRole('button', { name: '导出', exact: true }).click();
+  await (await (await import('./navigation-menu')).navigationMenuItem(modal, { name: '关闭', exact: true })).click();
+  await (await (await import('./navigation-menu')).navigationMenuItem(page.locator('.table-tab:visible'), { name: '导出', exact: true })).click();
   await page.getByRole('dialog').getByRole('combobox').first().selectOption('xlsx');
   const output = page.getByRole('dialog', { name: '导出 Excel · 离线库.离线表', exact: true });
   await expect(output.getByRole('combobox', { name: '导出范围', exact: true })).toHaveValue('sample');
   await output.getByRole('combobox', { name: '导出范围', exact: true }).selectOption('all');
-  await output.getByRole('button', { name: '其他文件格式', exact: true }).click(); await expect(page.getByRole('dialog').getByRole('combobox').first()).toHaveValue('csv');
+  await (await (await import('./navigation-menu')).navigationMenuItem(output, { name: '其他文件格式', exact: true })).click(); await expect(page.getByRole('dialog').getByRole('combobox').first()).toHaveValue('csv');
   const tasks = await page.evaluate(() => window.dbark.invoke('tasks.list', {}));
   const metadata = tasks.filter(task => task.kind === 'metadata.table'), previews = tasks.filter(task => task.kind === 'excel.preview');
   expect(metadata.length).toBeGreaterThan(0); expect(previews.length).toBeGreaterThan(0);

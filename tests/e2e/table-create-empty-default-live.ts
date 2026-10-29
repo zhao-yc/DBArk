@@ -78,7 +78,7 @@ export function registerTableCreateEmptyDefaultUiTests() {
       const [initialTables] = await run(() => connection.query<RowDataPacket[]>('SELECT TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA=?', [schema])); expect(initialTables).toHaveLength(0);
       const connectionName = 'E2E ' + schema;
       // 真实连接表单使用显式账号，不走IPC伪造配置或本地认证文件。
-      await ui(() => page.locator('.app-commandbar').getByRole('button', { name: '新建连接', exact: true }).click());
+      await ui(() => page.locator('.navigation-toolbar').getByRole('button', { name: '新建连接', exact: true }).click());
       const form = page.getByRole('dialog', { name: '新建连接', exact: true });
       for (const [label, value] of [['连接名称', connectionName], ['主机地址', target.host], ['端口', String(target.port)], ['用户名', target.user], ['数据库密码', target.password], ['连接分组', '隔离数据库验证']]) await ui(() => form.getByLabel(label, { exact: true }).fill(value));
       await ui(() => form.getByRole('button', { name: '测试连接', exact: true }).click());

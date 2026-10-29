@@ -34,13 +34,13 @@ async function noSql(run: EditorIndentNativeRun, owner: IndentNativeOwner) {
 }
 /** 本例正式表单与回环拒连前提沿原入口；每次await单独由原父门结算。 */
 async function offlineQuery(run: EditorIndentNativeRun, owner: IndentNativeOwner) {
-  const page = owner.page; await run.step(owner, () => page.locator('.app-commandbar').getByRole('button', { name: zh.common.newConnection, exact: true }).click());
+  const page = owner.page; await run.step(owner, async () => (await navigationMenuItem(page.locator('.navigation-toolbar'), { name: zh.common.newConnection, exact: true }, () => run.assert(owner))).click());
   const form = page.getByRole('dialog', { name: zh.common.newConnection, exact: true });
   for (const [label, value] of [[zh.connections.text006, '单次文件快捷键离线'], [zh.connections.text009, '127.0.0.1'], [zh.connections.text010, '1'], [zh.common.user, 'offline'], [zh.connections.text011, ''], [zh.connections.text012, '']]) await run.step(owner, () => form.getByLabel(label, { exact: true }).fill(value));
-  await run.step(owner, () => form.getByRole('checkbox', { name: zh.connections.text016, exact: true }).uncheck()); await run.step(owner, () => form.getByRole('button', { name: zh.connections.text036, exact: true }).click()); await run.step(owner, () => expect(form).toBeHidden());
+  await run.step(owner, () => form.getByRole('checkbox', { name: zh.connections.text016, exact: true }).uncheck()); await run.step(owner, async () => (await navigationMenuItem(form, { name: zh.connections.text036, exact: true }, () => run.assert(owner))).click()); await run.step(owner, () => expect(form).toBeHidden());
   const profiles = await run.step(owner, () => page.evaluate(() => window.dbark.invoke('connections.list', {}))); expect(profiles).toHaveLength(1); expect(profiles[0]).toMatchObject({ host: '127.0.0.1', port: 1, user: 'offline', rememberPassword: false }); expect(Boolean(profiles[0].hasPassword || profiles[0].ssh?.enabled || profiles[0].tls?.enabled)).toBe(false);
-  await run.step(owner, () => page.locator('.app-commandbar').getByRole('button', { name: zh.common.newQuery, exact: true }).click()); const query = page.getByRole('dialog', { name: zh.common.newQuery, exact: true });
-  await run.step(owner, () => expect(query.locator('.error-box')).toContainText(/ECONNREFUSED|连接被拒绝|拒绝连接/i, { timeout: 20000 })); await run.step(owner, () => query.getByRole('button', { name: zh.app.text053, exact: true }).click()); await run.step(owner, () => expect(query).toBeHidden());
+  await run.step(owner, async () => (await navigationMenuItem(page.locator('.navigation-toolbar'), { name: zh.common.newQuery, exact: true }, () => run.assert(owner))).click()); const query = page.getByRole('dialog', { name: zh.common.newQuery, exact: true });
+  await run.step(owner, () => expect(query.locator('.error-box')).toContainText(/ECONNREFUSED|连接被拒绝|拒绝连接/i, { timeout: 20000 })); await run.step(owner, async () => (await navigationMenuItem(query, { name: zh.app.text053, exact: true }, () => run.assert(owner))).click()); await run.step(owner, () => expect(query).toBeHidden());
 }
 /** 严格Main来源核验仍在原launch中；reload仅开放官方只读getter。 */
 async function observe(run: EditorIndentNativeRun, owner: IndentNativeOwner) {
@@ -51,8 +51,8 @@ async function observe(run: EditorIndentNativeRun, owner: IndentNativeOwner) {
 /** 只回答原生文件选择一次，仍由正式UI和Main建立来源。 */
 async function openSource(run: EditorIndentNativeRun, owner: IndentNativeOwner, path: string) {
   const nonce = randomUUID(); await run.step(owner, () => installSqlFilesOpenAnswer(owner.application, { nonce, path }));
-  await run.step(owner, () => owner.page.locator('.query-tab:visible').getByRole('button', { name: text.open, exact: true }).click()); const dialog = owner.page.getByRole('dialog', { name: text.open, exact: true });
-  await run.step(owner, () => dialog.getByRole('combobox', { name: text.encoding, exact: true }).selectOption('utf8')); await run.step(owner, () => dialog.getByRole('button', { name: text.openAction, exact: true }).click());
+  await run.step(owner, async () => (await navigationMenuItem(owner.page.locator('.query-tab:visible'), { name: text.open, exact: true }, () => run.assert(owner))).click()); const dialog = owner.page.getByRole('dialog', { name: text.open, exact: true });
+  await run.step(owner, () => dialog.getByRole('combobox', { name: text.encoding, exact: true }).selectOption('utf8')); await run.step(owner, async () => (await navigationMenuItem(dialog, { name: text.openAction, exact: true }, () => run.assert(owner))).click());
   expect(await run.step(owner, () => finishSqlFilesOpenAnswer(owner.application, nonce))).toEqual({ calls: 1, restored: true }); await run.step(owner, () => expect(dialog).toBeHidden());
 }
 /** 单一用例只发一次保存按键；事件只是诊断，文件字节/来源/重启/正常退出仍决定成败。 */
@@ -142,3 +142,6 @@ export function registerShortcutNative(binding: ReturnType<typeof bindShortcutNa
     } finally { mainLog?.stop(); removeMain?.(); log?.stop(); removeConsole?.(); try { await files?.closeHandles(); } catch (closing) { run.retained = true; throw new AggregateError(failure === undefined ? [closing] : [failure, closing], '快捷键原文件句柄关闭失败', { cause: failure }); } }
   });
 }
+
+/** 原门进入具体动作后才加载真实菜单导航，不改变默认/列表阶段的资源边界。 */
+async function navigationMenuItem(...args: Parameters<typeof import('./navigation-menu')['navigationMenuItem']>): Promise<import('@playwright/test').Locator> { return (require('./navigation-menu') as typeof import('./navigation-menu')).navigationMenuItem(...args); }

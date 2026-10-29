@@ -23,7 +23,7 @@ export function registerTableCreatePrefixTests() {
       assertDefaultEncodingLiveTarget({host:process.env.DBARK_TEST_HOST,port:process.env.DBARK_TEST_PORT,tlsFlag:process.env.DBARK_TEST_TLS,caPath:process.env.DBARK_TEST_CA});
       if(process.env.DBARK_INTEGRATION_ENABLED!=='1'||process.env.DBARK_TABLE_CREATE_PREFIX_UI!=='1'||process.env.DBARK_TEST_PORT!=='13384'||process.env.DBARK_TEST_TLS!=='0'||!/^dbark_e2e_prefix_[a-f0-9]{32}$/.test(process.env.DBARK_TEST_DATABASE??''))throw Error('前缀正式目标或双门未明确');
       const database = process.env.DBARK_TEST_DATABASE!, name = 'prefix_' + randomUUID().replaceAll('-', ''), connectionName = '前缀正式 ' + name;
-      await step(() => page.locator('.app-commandbar').getByRole('button', { name: '新建连接', exact: true }).click());
+      await step(() => page.locator('.navigation-toolbar').getByRole('button', { name: '新建连接', exact: true }).click());
       const connection = page.getByRole('dialog', { name: '新建连接', exact: true });
       for (const [label, value] of [['连接名称', connectionName], ['主机地址', process.env.DBARK_TEST_HOST!], ['端口', process.env.DBARK_TEST_PORT!], ['用户名', process.env.DBARK_TEST_USER!], ['数据库密码', process.env.DBARK_TEST_PASSWORD ?? '']]) await step(() => connection.getByLabel(label, { exact: true }).fill(value));
       await step(() => connection.getByRole('button', { name: '测试连接', exact: true }).click()); await step(() => expect(connection.locator('.success-box')).toContainText('连接成功')); await step(() => connection.getByRole('button', { name: '保存连接', exact: true }).click()); await step(() => expect(connection).toBeHidden());

@@ -1,3 +1,5 @@
+import { installNavigationMenuRamPort, navigationMenuRamButton } from '../helpers/navigationMenuRamPort';
+let restoreNavigationMenuPort: () => void = () => {};
 import React, { act, useEffect, useMemo, useRef, useState } from 'react';
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { memoryDocument, MemoryEvent } from '../fixtures/memory-dom';
@@ -13,9 +15,9 @@ vi.mock('../../src/renderer/components/SqlEditor', async () => {
 let document: ReturnType<typeof memoryDocument>, createRoot: any, root: any, store: any, flushSettings: any, QueryTab: any, world: any;
 let hook: ((command: string, input: any) => Promise<any> | undefined) | undefined, calls: { command: string; input: any }[];
 const globals = ['window', 'document', 'navigator', 'IS_REACT_ACT_ENVIRONMENT'].map(key => [key, Object.getOwnPropertyDescriptor(globalThis, key)] as const);
-beforeAll(async () => { document = memoryDocument(); ({ createRoot } = await import('react-dom/client')); ({ useWorkspace: store, flushSettings } = await import('../../src/renderer/store')); ({ QueryTab } = await import('../../src/renderer/components/QueryTab')); });
+beforeAll(async () => { document = memoryDocument(); restoreNavigationMenuPort = installNavigationMenuRamPort(document); ({ createRoot } = await import('react-dom/client')); ({ useWorkspace: store, flushSettings } = await import('../../src/renderer/store')); ({ QueryTab } = await import('../../src/renderer/components/QueryTab')); });
 afterEach(async () => { if (root) await act(async () => root.unmount()); root = undefined; hook = undefined; await flushSettings(); document.body.textContent = ''; });
-afterAll(() => { for (const [key, value] of globals) if (value) Object.defineProperty(globalThis, key, value); else Reflect.deleteProperty(globalThis, key); });
+afterAll(() => { restoreNavigationMenuPort(); for (const [key, value] of globals) if (value) Object.defineProperty(globalThis, key, value); else Reflect.deleteProperty(globalThis, key); });
 const saved = { name: '保存后的A', source: { id: 'saved-a', digest: 'b'.repeat(64), connectionId: 'c', context: { state: 'known', database: null } } };
 async function mount() {
   calls = []; hook = undefined; world = { requests: [] as any[], modalChecks: [] as boolean[] };
@@ -37,7 +39,7 @@ async function mount() {
   }
   const node = document.createElement('div'); document.body.appendChild(node); root = createRoot(node as any); await act(async () => root.render(<Harness/>));
 }
-async function click(text: string) { const button = document.body.querySelectorAll('button').find(node => node.textContent === text); expect(button, '真实按钮：' + text).toBeDefined(); await act(async () => button!.dispatchEvent(new MemoryEvent('click'))); }
+async function click(text: string) { const button = (navigationMenuRamButton(document.body, text) ?? document.body.querySelectorAll('button').find(node => node.textContent === text)); expect(button, '真实按钮：' + text).toBeDefined(); await act(async () => button!.dispatchEvent(new MemoryEvent('click'))); }
 function gate() { let resolve!: (value: any) => void; const promise = new Promise<any>(yes => { resolve = yes; }); return { promise, resolve }; }
 
 describe('原独审反例的真实App布局提交与Modal对照', () => {

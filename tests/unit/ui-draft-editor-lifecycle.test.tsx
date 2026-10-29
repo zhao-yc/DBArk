@@ -4,6 +4,7 @@ import {runInNewContext} from 'node:vm';
 import ts from 'typescript';
 import {afterAll,afterEach,beforeAll,describe,expect,it,vi} from 'vitest';
 import {memoryDocument,MemoryEvent,MemoryNode} from '../fixtures/memory-dom';
+import {installNavigationMenuRamPort,navigationMenuRamButton} from '../helpers/navigationMenuRamPort';
 import {tableCopyMetadataKey} from '../../src/shared/tableCopySource';
 import {draftHistoryZh as text} from '../../src/renderer/locales/draftHistory.zh-CN';
 import {zh} from '../../src/renderer/locales/zh-CN';
@@ -33,8 +34,9 @@ let TableTab:typeof import('../../src/renderer/components/TableTab')['TableTab']
 let commands:string[],blurEvents=0;
 const globalNames=['window','document','navigator','HTMLElement','IS_REACT_ACT_ENVIRONMENT'],globals=globalNames.map(name=>[name,Object.getOwnPropertyDescriptor(globalThis,name)] as const);
 const originalFocus=MemoryNode.prototype.focus,originalQuery=MemoryNode.prototype.querySelector,oldClosest=Object.getOwnPropertyDescriptor(MemoryNode.prototype,'closest'),oldSelect=Object.getOwnPropertyDescriptor(MemoryNode.prototype,'select');
+let restoreNavigationMenuPort=()=>{};
 beforeAll(async()=>{
- document=memoryDocument();(document as any).oninput=null;Object.defineProperty(globalThis,'HTMLElement',{value:MemoryNode,configurable:true});
+ document=memoryDocument();restoreNavigationMenuPort=installNavigationMenuRamPort(document);(document as any).oninput=null;Object.defineProperty(globalThis,'HTMLElement',{value:MemoryNode,configurable:true});
  const create=document.createElement.bind(document);document.createElement=(name:string)=>{const node=create(name);if(name==='input')node.type='text';if(name==='select')Object.defineProperty(node,'options',{get:()=>node.querySelectorAll('option')});
   // ReactDOM按HTML布尔属性写入disabled，测试读回与浏览器一致；不推导产品状态。
   const set=node.setAttribute.bind(node),remove=node.removeAttribute.bind(node);node.setAttribute=(key,value)=>{set(key,value);if(key==='disabled')node.disabled=true;};node.removeAttribute=key=>{remove(key);if(key==='disabled')node.disabled=false;};return node;};
@@ -47,7 +49,7 @@ beforeAll(async()=>{
  ({createRoot}=await import('react-dom/client'));({TableTab}=await import('../../src/renderer/components/TableTab'));({useWorkspace,flushSettings}=await import('../../src/renderer/store'));
 });
 afterEach(async()=>{if(root){await act(async()=>root!.unmount());root=undefined;}await flushSettings();});
-afterAll(()=>{MemoryNode.prototype.focus=originalFocus;MemoryNode.prototype.querySelector=originalQuery;for(const[name,descriptor]of [['closest',oldClosest],['select',oldSelect]] as const){if(descriptor)Object.defineProperty(MemoryNode.prototype,name,descriptor);else Reflect.deleteProperty(MemoryNode.prototype,name);}for(const[name,descriptor]of globals){if(descriptor)Object.defineProperty(globalThis,name,descriptor);else Reflect.deleteProperty(globalThis,name);}});
+afterAll(()=>{restoreNavigationMenuPort();MemoryNode.prototype.focus=originalFocus;MemoryNode.prototype.querySelector=originalQuery;for(const[name,descriptor]of [['closest',oldClosest],['select',oldSelect]] as const){if(descriptor)Object.defineProperty(MemoryNode.prototype,name,descriptor);else Reflect.deleteProperty(MemoryNode.prototype,name);}for(const[name,descriptor]of globals){if(descriptor)Object.defineProperty(globalThis,name,descriptor);else Reflect.deleteProperty(globalThis,name);}});
 
 /** TableTab、记录控制器、草稿历史、实际编辑器及ReactDOM均使用生产代码；只提供RAM IPC。 */
 async function mount(strict=false){
@@ -60,9 +62,19 @@ async function mount(strict=false){
  const container=document.createElement('div');document.body.appendChild(container);root=createRoot(container as any);await act(async()=>root!.render(strict?<React.StrictMode>{view}</React.StrictMode>:view));expect(io.rows).toHaveLength(1);
 }
 const buttons=()=>document.body.querySelectorAll('button');
-function button(label:string){const found=buttons().find(node=>node.getAttribute('aria-label')===label||node.textContent===label);expect(found).toBeDefined();return found!;}
+function button(label:string){const found=navigationMenuRamButton(document.body,label);expect(found).toBeDefined();return found!;}
 const input=()=>document.body.querySelector('.grid-input');
-async function begin(){await act(async()=>io.begin());expect(input()).not.toBeNull();expect(button(text.undo).disabled).toBe(true);}
+/** 菜单关闭时不读取隐藏撤销按钮；保留生产禁用表达式，并实际确认更多不会抢走网格输入焦点。 */
+async function expectUndoInputBlocked(){
+ const source=ts.createSourceFile('TableTab.tsx',readFileSync(new URL('../../src/renderer/components/TableTab.tsx',import.meta.url),'utf8'),ts.ScriptTarget.Latest,true,ts.ScriptKind.TSX);
+ let blocked='',disabled='';
+ const visit=(node:ts.Node)=>{if(ts.isVariableDeclaration(node)&&node.name.getText(source)==='historyBlocked')blocked=node.initializer!.getText(source);if(ts.isJsxOpeningElement(node)&&node.tagName.getText(source)==='button'&&node.attributes.properties.some(attribute=>ts.isJsxAttribute(attribute)&&attribute.name.getText(source)==='aria-label'&&attribute.initializer&&ts.isJsxExpression(attribute.initializer)&&attribute.initializer.expression?.getText(source)==='draftHistoryZh.undo')){const attribute=node.attributes.properties.find(attribute=>ts.isJsxAttribute(attribute)&&attribute.name.getText(source)==='disabled') as ts.JsxAttribute;disabled=(attribute.initializer as ts.JsxExpression).expression!.getText(source);}ts.forEachChild(node,visit);};visit(source);
+ expect(blocked).not.toBe('');expect(disabled).not.toBe('');
+ const value=runInNewContext(ts.transpileModule(`const historyBlocked=(${blocked});(${disabled})`,{compilerOptions:{target:ts.ScriptTarget.ES2022}}).outputText,{blocked:false,editable:true,record:{dirty:false,pending:false,cellKey:null,nodeInput:null,structureInput:null},gridEditing:true,showPreferences:false,referenceDialog:null,pasteInsertDialog:null,batchFillDialog:null,settings:{activeTabId:'原页'},tab:{id:'原页'},history:{status:{undo:1}}});
+ expect(value).toBe(true);const before=document.querySelectorAll('[role="menu"]').length,editor=input(),more=button('更多');expect(more.disabled).toBe(true);
+ await act(async()=>more.dispatchEvent(new MemoryEvent('click')));expect(document.querySelectorAll('[role="menu"]')).toHaveLength(before);expect(input()).toBe(editor);
+}
+async function begin(){await act(async()=>io.begin());expect(input()).not.toBeNull();await expectUndoInputBlocked();}
 async function type(value:string){const node=input()!;await act(async()=>{node.value=value;node.dispatchEvent(new MemoryEvent('input'));});}
 async function key(value:string,composition=false){const event=new MemoryEvent('keydown');event.key=value;Object.assign(event,{isComposing:composition,keyCode:composition?229:13,ctrlKey:false,metaKey:false,shiftKey:false,altKey:false});await act(async()=>input()!.dispatchEvent(event));return event;}
 async function click(label:string){const node=button(label);expect(node.disabled).toBe(false);await act(async()=>node.dispatchEvent(new MemoryEvent('click')));}
@@ -76,16 +88,16 @@ describe('真实ReactDOM编辑器卸载与父层草稿历史',()=>{
   await mount();await click(zh.common.add);const id=io.rows[1].id;await begin();await type('暂存新值');await key(action);expect(input()).toBeNull();expect(blurEvents).toBe(0);expect(button(text.undo).disabled).toBe(false);expect(io.rows[0].data.note).toBe(action==='Escape'?'原值':'暂存新值');expect(button(text.undo).textContent).toContain(action==='Escape'?'(1)':'(2)');expect(io.rows[1].id).toBe(id);
  });
  it('IME Enter不提交也不释放编辑占门；结束组合后原Enter只提交一次',async()=>{
-  await mount();await begin();await type('组合值');await key('Enter',true);expect(input()).not.toBeNull();expect(button(text.undo).disabled).toBe(true);expect(io.rows[0].data.note).toBe('原值');await key('Enter');expect(input()).toBeNull();expect(button(text.undo).disabled).toBe(false);expect(button(text.undo).textContent).toContain('(1)');
+  await mount();await begin();await type('组合值');await key('Enter',true);expect(input()).not.toBeNull();await expectUndoInputBlocked();expect(io.rows[0].data.note).toBe('原值');await key('Enter');expect(input()).toBeNull();expect(button(text.undo).disabled).toBe(false);expect(button(text.undo).textContent).toContain('(1)');
  });
  it('编辑器替换后旧卸载不能清掉新编辑占门，结束新会话才可撤销',async()=>{
-  await mount();await click(zh.common.add);await begin();const old=input();await act(async()=>io.replace());expect(input()).not.toBe(old);expect(button(text.undo).disabled).toBe(true);await key('Escape');expect(input()).toBeNull();expect(button(text.undo).disabled).toBe(false);
+  await mount();await click(zh.common.add);await begin();const old=input();await act(async()=>io.replace());expect(input()).not.toBe(old);await expectUndoInputBlocked();await key('Escape');expect(input()).toBeNull();expect(button(text.undo).disabled).toBe(false);
  });
  it('StrictMode真实重复effect后可完成提交，回调在改字重渲染间稳定',async()=>{
   await mount(true);await begin();const notify=io.notify;expect(typeof notify).toBe('function');await type('严格模式');expect(io.notify).toBe(notify);await key('Enter');expect(input()).toBeNull();expect(button(text.undo).disabled).toBe(false);
  });
  it('编辑期间CtrlZ保留给原生输入，父层历史不消费按键',async()=>{
-  await mount();await click(zh.common.add);await begin();await type('输入草稿');const event=new MemoryEvent('keydown');event.key='z';Object.assign(event,{ctrlKey:true,metaKey:false,shiftKey:false,altKey:false});await act(async()=>input()!.dispatchEvent(event));expect(event.defaultPrevented).toBe(false);expect(io.rows).toHaveLength(2);expect(io.rows[0].data.note).toBe('原值');expect(input()!.value).toBe('输入草稿');expect(button(text.undo).disabled).toBe(true);
+  await mount();await click(zh.common.add);await begin();await type('输入草稿');const event=new MemoryEvent('keydown');event.key='z';Object.assign(event,{ctrlKey:true,metaKey:false,shiftKey:false,altKey:false});await act(async()=>input()!.dispatchEvent(event));expect(event.defaultPrevented).toBe(false);expect(io.rows).toHaveLength(2);expect(io.rows[0].data.note).toBe('原值');expect(input()!.value).toBe('输入草稿');await expectUndoInputBlocked();
  });
  it('整页卸载不补blur、不提交未完成输入或发送SQL',async()=>{
   await mount();await begin();await type('未提交字段');const before=commands.length;await act(async()=>root!.unmount());root=undefined;expect(input()).toBeNull();expect(blurEvents).toBe(0);expect(commands.slice(before).filter(command=>command==='table.apply'||command==='table.preview')).toEqual([]);expect(useWorkspace.getState().dirtyTabs.表页??false).toBe(false);

@@ -93,12 +93,12 @@ test('真实表格第二页混合草稿保存、重开独立恢复、一次集�
     directory = await mkdtemp(join(tmpdir(), 'dbark-tabledraft-ui-'));
     await installTableDraftAudit(application, { connectionId: context.connectionId, database, table: 'subject' }); installed = true;
     const databaseNode = page.locator('.database-row').filter({ has: page.getByRole('button', { name: database, exact: true }) });
-    await databaseNode.getByRole('button', { name: database, exact: true }).click();
-    const openTable = async () => { check(); await page.locator('.object-row').getByRole('button', { name: 'subject', exact: true }).click(); await expect(page.locator('.table-tab:visible').getByRole('grid')).toBeVisible(); await expect(page.locator('.table-tab:visible').locator('.loading-overlay')).toHaveCount(0); await expect.poll(async () => (await audit()).pending).toBe(0); await collectThreads(); };
+    await (await (await import('./navigation-menu')).navigationMenuItem(databaseNode, { name: database, exact: true }, check)).click();
+    const openTable = async () => { check(); await (await (await import('./navigation-menu')).navigationMenuItem(page.locator('.object-row'), { name: 'subject', exact: true }, check)).click(); await expect(page.locator('.table-tab:visible').getByRole('grid')).toBeVisible(); await expect(page.locator('.table-tab:visible').locator('.loading-overlay')).toHaveCount(0); await expect.poll(async () => (await audit()).pending).toBe(0); await collectThreads(); };
     await openTable(); const tab = page.locator('.table-tab:visible'), grid = tab.getByRole('grid');
     await tab.getByRole('combobox', { name: zh.table.text021, exact: true }).selectOption('50');
     await expect.poll(async () => (await audit()).pages.at(-1)).toMatchObject({ page: 1, pageSize: 50, count: 50, hasMore: true });
-    await tab.getByRole('button', { name: zh.common.pageNext, exact: true }).click();
+    await (await (await import('./navigation-menu')).navigationMenuItem(tab, { name: zh.common.pageNext, exact: true }, check)).click();
     await expect.poll(async () => (await audit()).pages.at(-1)).toMatchObject({ page: 2, pageSize: 50, count: 11, hasMore: false });
     const sourceRow = (note: string) => grid.getByRole('row').filter({ has: page.getByRole('gridcell', { name: note, exact: true }) });
     /** 只读真实列头首文本节点，避免把紧接的类型small文本合并成列名。 */
@@ -109,20 +109,20 @@ test('真实表格第二页混合草稿保存、重开独立恢复、一次集�
     };
     const edit = async (row: Locator, key: string, value: string) => { check(); await (await cell(row, key)).dblclick(); const input = tab.locator('.grid-input'); await expect(input).toBeVisible(); await input.fill(value); await input.press('Enter'); await expect(input).toHaveCount(0); check(); };
     await edit(sourceRow('row-51'), 'note', 'saved-update-51');
-    await sourceRow('row-52').getByRole('checkbox').check(); await tab.getByRole('button', { name: zh.common.delete, exact: true }).click();
-    await tab.getByRole('button', { name: zh.common.add, exact: true }).click(); await grid.evaluate(element => { element.scrollTop = element.scrollHeight; });
+    await sourceRow('row-52').getByRole('checkbox').check(); await (await (await import('./navigation-menu')).navigationMenuItem(tab, { name: zh.common.delete, exact: true }, check)).click();
+    await (await (await import('./navigation-menu')).navigationMenuItem(tab, { name: zh.common.add, exact: true }, check)).click(); await grid.evaluate(element => { element.scrollTop = element.scrollHeight; });
     const inserted = tab.locator('.row-inserted'); await expect(inserted).toHaveCount(1); await edit(inserted, 'id', newId); await edit(inserted, 'note', 'saved-insert');
     await expect(tab.getByRole('button', { name: text.open, exact: true })).toBeDisabled(); expect(await baseline()).toEqual(initial);
     /** 原UI写出敏感草稿文件，独立读取磁盘字节后才登记，不伪造保存回包。 */
     const save = async (name: string): Promise<TableDraftDocument> => {
-      await tab.getByRole('button', { name: text.save, exact: true }).click(); const dialog = page.getByRole('dialog', { name: text.saveTitle, exact: true });
+      await (await (await import('./navigation-menu')).navigationMenuItem(tab, { name: text.save, exact: true }, check)).click(); const dialog = page.getByRole('dialog', { name: text.saveTitle, exact: true });
       await expect(dialog).toBeVisible(); await expect(dialog.getByRole('button', { name: text.saveAction, exact: true })).toBeDisabled();
       await dialog.getByRole('checkbox', { name: text.saveAcknowledgement, exact: true }).check();
       const path = join(directory, name), nonce = randomUUID(); fileAnswer = nonce;
-      await installTableDraftFileAnswer(application, { nonce, path, mode: 'save' }); await dialog.getByRole('button', { name: text.saveAction, exact: true }).click();
+      await installTableDraftFileAnswer(application, { nonce, path, mode: 'save' }); await (await (await import('./navigation-menu')).navigationMenuItem(dialog, { name: text.saveAction, exact: true }, check)).click();
       await expect(dialog.getByRole('status')).toContainText(text.saved); expect(await finishTableDraftFileAnswer(application, nonce)).toMatchObject({ calls: 1, originalRestored: true }); fileAnswer = undefined;
       const bytes = await readFile(path), document = decodeTableDraft(bytes.toString('utf8')); files.push({ path, bytes });
-      await dialog.getByRole('button', { name: text.close, exact: true }).click(); await expect(dialog).toBeHidden();
+      await (await (await import('./navigation-menu')).navigationMenuItem(dialog, { name: text.close, exact: true }, check)).click(); await expect(dialog).toBeHidden();
       await expect(tab.getByRole('button', { name: text.open, exact: true })).toBeDisabled();
       await expect(page.locator('.workspace-tab-button.active .dirty-dot')).toHaveCount(1); return document;
     };
@@ -141,14 +141,14 @@ test('真实表格第二页混合草稿保存、重开独立恢复、一次集�
     await expect(tab.getByRole('button', { name: text.open, exact: true })).toBeEnabled(); expect(await baseline()).toEqual(initial);
     /** 打开与核验都走原Main及原Engine，不注入页面状态或替代恢复方法。 */
     const openDraft = async (file: string) => {
-      await tab.getByRole('button', { name: text.open, exact: true }).click(); const dialog = page.getByRole('dialog', { name: text.restoreTitle, exact: true });
+      await (await (await import('./navigation-menu')).navigationMenuItem(tab, { name: text.open, exact: true }, check)).click(); const dialog = page.getByRole('dialog', { name: text.restoreTitle, exact: true });
       const nonce = randomUUID(); fileAnswer = nonce; await installTableDraftFileAnswer(application, { nonce, path: file, mode: 'open' });
-      await dialog.getByRole('button', { name: text.choose, exact: true }).click(); await expect(dialog.getByRole('region', { name: text.file, exact: true })).toBeVisible();
+      await (await (await import('./navigation-menu')).navigationMenuItem(dialog, { name: text.choose, exact: true }, check)).click(); await expect(dialog.getByRole('region', { name: text.file, exact: true })).toBeVisible();
       expect(await finishTableDraftFileAnswer(application, nonce)).toMatchObject({ calls: 1, originalRestored: true }); fileAnswer = undefined;
       await dialog.getByRole('checkbox', { name: text.restoreAcknowledgement, exact: true }).check(); return dialog;
     };
     let restore = await openDraft(files[0].path); await expect(restore.getByLabel(text.summary, { exact: true })).toHaveText('新增：1；修改：1；删除：1');
-    await restore.getByRole('button', { name: text.restoreAction, exact: true }).click(); await expect(restore).toBeHidden();
+    await (await (await import('./navigation-menu')).navigationMenuItem(restore, { name: text.restoreAction, exact: true }, check)).click(); await expect(restore).toBeHidden();
     await expect(tab.getByRole('status')).toHaveText(text.restoredScope); await expect(grid.getByRole('row')).toHaveCount(4);
     await expect(tab.locator('.row-modified')).toHaveCount(1); await expect(tab.locator('.row-deleted')).toHaveCount(1); await expect(tab.locator('.row-inserted')).toHaveCount(1);
     await expect(await cell(sourceRow('saved-update-51'), 'id')).toHaveText(initial[50].id); await expect(await cell(sourceRow('row-52'), 'id')).toHaveText(initial[51].id); await expect(await cell(sourceRow('saved-insert'), 'id')).toHaveText(newId);
@@ -156,10 +156,10 @@ test('真实表格第二页混合草稿保存、重开独立恢复、一次集�
     await expect(tab.getByRole('button', { name: text.open, exact: true })).toBeDisabled(); expect(await baseline()).toEqual(initial);
     let state = await audit(); expect(state.verifies).toHaveLength(1); expect(state.verifies[0]).toMatchObject({ ok: true, count: 3 }); expect(state.applies).toHaveLength(0);
     await info.attach('原独立恢复草稿视图', { body: await tab.screenshot(), contentType: 'image/png' });
-    await tab.getByRole('button', { name: zh.table.text019, exact: true }).click(); const preview = page.getByRole('dialog', { name: zh.table.text031, exact: true });
+    await (await (await import('./navigation-menu')).navigationMenuItem(tab, { name: zh.table.text019, exact: true }, check)).click(); const preview = page.getByRole('dialog', { name: zh.table.text031, exact: true });
     await expect(preview.locator('.monaco-editor .view-lines')).toContainText('UPDATE'); await expect(preview.locator('.monaco-editor .view-lines')).toContainText('DELETE'); await expect(preview.locator('.monaco-editor .view-lines')).toContainText('INSERT'); expect(await baseline()).toEqual(initial);
     state = await audit(); expect(state.previews).toEqual([{ changes: document.changes, ok: true }]); expect(state.applies).toHaveLength(0);
-    await preview.getByRole('button', { name: zh.common.confirmApply, exact: true }).click(); await expect(preview).toBeHidden();
+    await (await (await import('./navigation-menu')).navigationMenuItem(preview, { name: zh.common.confirmApply, exact: true }, check)).click(); await expect(preview).toBeHidden();
     await expect.poll(async () => (await audit()).applies.length).toBe(1); await expect.poll(async () => (await audit()).pending).toBe(0); await expect(tab.locator('.loading-overlay')).toHaveCount(0);
     const expected = [...initial.filter(row => row.id !== initial[51].id).map(row => row.id === initial[50].id ? { ...row, note: 'saved-update-51' } : row), { id: newId, note: 'saved-insert', big_value: initial[0].big_value, amount: initial[0].amount, stamp: initial[0].stamp, payload: null, nullable_value: null }];
     expect(await baseline()).toEqual(expected); expect((await audit()).applies).toEqual([{ taskId: expect.any(String), changes: document.changes, ok: true }]);
@@ -167,10 +167,10 @@ test('真实表格第二页混合草稿保存、重开独立恢复、一次集�
     // 第二份文件保留原before；由独立连接改变原行，真实恢复必须失败，不能更新成新before。
     await edit(sourceRow('row-01'), 'note', 'stale-attempt'); const stale = await save('stale.dbark-draft'); expect(stale.changes).toHaveLength(1);
     await closeTable(); await openTable(); await observe('UPDATE ' + table('subject') + ' SET note=? WHERE id=?', ['external-preserved', initial[0].id]);
-    restore = await openDraft(files[1].path); await restore.getByRole('button', { name: text.restoreAction, exact: true }).click();
+    restore = await openDraft(files[1].path); await (await (await import('./navigation-menu')).navigationMenuItem(restore, { name: text.restoreAction, exact: true }, check)).click();
     await expect(restore.locator('.error-box')).toContainText('原始行已变化或不存在'); await expect(restore.getByRole('button', { name: text.close, exact: true })).toBeEnabled();
     state = await audit(); expect(state.verifies).toHaveLength(2); expect(state.verifies[1].ok).toBe(false); expect(new Set(state.verifies.map(value => value.taskId)).size).toBe(2); expect(state.applies).toHaveLength(1);
-    await restore.getByRole('button', { name: text.close, exact: true }).click(); await expect(restore).toBeHidden();
+    await (await (await import('./navigation-menu')).navigationMenuItem(restore, { name: text.close, exact: true }, check)).click(); await expect(restore).toBeHidden();
     await expect(sourceRow('row-01')).toHaveCount(1); await expect(tab.locator('.row-modified,.row-deleted,.row-inserted')).toHaveCount(0); await expect(page.locator('.workspace-tab-button.active .dirty-dot')).toHaveCount(0);
     expect(await baseline()).toEqual(expected.map(row => row.id === initial[0].id ? { ...row, note: 'external-preserved' } : row));
     await collectThreads(); await expect.poll(async () => (await audit()).pending).toBe(0); state = await audit(); expect(state.saves).toHaveLength(2); expect(state.opens).toHaveLength(2); expect(state.applies).toHaveLength(1); expect(pageErrors).toEqual([]);

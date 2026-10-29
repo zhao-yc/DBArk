@@ -1,3 +1,4 @@
+import { extractMainProductionFunction } from './main-production-function';
 import { readFileSync } from 'node:fs';
 import { createContext, runInContext } from 'node:vm';
 import ts from 'typescript';
@@ -5,7 +6,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { SavedQuerySearchCancelled } from '../../src/main/savedQuerySearch';
 /** 执行真实main分派，仅替换broker、授权文件令牌与配置锁RAM端口。 */
 function harness() {
-  const source = readFileSync(new URL('../../src/main/index.ts', import.meta.url), 'utf8'), body = source.slice(source.indexOf('async function dispatch('), source.indexOf('/** 按平台生成中文原生菜单'));
+  const source = readFileSync(new URL('../../src/main/index.ts', import.meta.url), 'utf8'), body = extractMainProductionFunction(source, 'dispatch');
   const tasks = new Map(), broker = { request: vi.fn(async (_command: string, _input: unknown) => ({})) }, available = vi.fn(), reserve = vi.fn(async () => () => {});
   const context = createContext({ SavedQuerySearchCancelled, tableApplyReceipts: undefined, tasks, structureTokens: new Map(), structureProgress: new Map(), sessions: new Map(), connectionConfig: { assertAvailable: available }, savedQueryPages: undefined, historyPages: undefined, completionTasks: new Set(), shuttingDown: false, store: { connectionRevision: () => 11, saveTask() {} }, preparingTasks: new Map(), pendingQueryHistory: new Map(), exportProgress: new Map(), broker, files: new Map(), resolveFileToken: () => '授权路径', exportReservations: { acquire: reserve }, taskEvent: (event: { taskId: string; status: string }) => tasks.set(event.taskId, { ...tasks.get(event.taskId), status: event.status }) });
   runInContext(ts.transpileModule(body + '\nglobalThis.dispatch=dispatch;', { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText, context);

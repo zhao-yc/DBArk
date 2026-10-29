@@ -24,10 +24,10 @@ async function sourceFile() {
 async function openImport() {
   const path = await sourceFile();
   await desktop.evaluate(({ dialog }, file) => { dialog.showOpenDialog = async () => ({ canceled: false, filePaths: [file] }); }, path);
-  await page.getByRole('button', { name: text.open, exact: true }).click();
+  await (await (await import('./navigation-menu')).navigationMenuItem(page, { name: text.open, exact: true })).click();
   const modal = page.getByRole('dialog', { name: text.title, exact: true });
-  await modal.getByRole('button', { name: text.import, exact: true }).click();
-  await modal.getByRole('button', { name: text.chooseImport, exact: true }).click();
+  await (await (await import('./navigation-menu')).navigationMenuItem(modal, { name: text.import, exact: true })).click();
+  await (await (await import('./navigation-menu')).navigationMenuItem(modal, { name: text.chooseImport, exact: true })).click();
   await expect(modal.getByRole('combobox', { name: `${text.action} 1`, exact: true })).toHaveValue('add');
   return modal;
 }
@@ -36,7 +36,7 @@ async function review(modal: Awaited<ReturnType<typeof openImport>>, id: string)
   await modal.getByRole('combobox', { name: `${text.action} 1`, exact: true }).selectOption('replace');
   await expect(modal.getByRole('combobox', { name: `${text.replaceTarget} 1`, exact: true })).toHaveValue('');
   await modal.getByRole('combobox', { name: `${text.replaceTarget} 1`, exact: true }).selectOption(id);
-  await modal.getByRole('button', { name: text.reviewReplace, exact: true }).click();
+  await (await (await import('./navigation-menu')).navigationMenuItem(modal, { name: text.reviewReplace, exact: true })).click();
   await expect(modal.getByLabel(text.reviewTitle, { exact: true })).toBeVisible();
 }
 async function acknowledge(modal: Awaited<ReturnType<typeof openImport>>) { for (const label of [risk.target, risk.secrets, risk.files, risk.linked]) await modal.getByRole('checkbox', { name: label, exact: true }).check(); await modal.getByRole('checkbox', { name: text.staged, exact: true }).check(); }
@@ -45,7 +45,7 @@ test('C03明确选择旧→新目标、风险未齐不可提交，替换后保�
   const target = await seed('C03原目标'); await page.reload(); const modal = await openImport(); await review(modal, target.id);
   await expect(modal.getByLabel(text.oldTarget, { exact: true })).toContainText('old.invalid:3306'); await expect(modal.getByLabel(text.newTarget, { exact: true })).toContainText('new.invalid:3307');
   await expect(modal.getByRole('button', { name: text.replaceConfirm, exact: true })).toBeDisabled(); await acknowledge(modal);
-  await modal.getByRole('button', { name: text.replaceConfirm, exact: true }).click(); await expect(modal.locator('.success-box')).toContainText('替换 1');
+  await (await (await import('./navigation-menu')).navigationMenuItem(modal, { name: text.replaceConfirm, exact: true })).click(); await expect(modal.locator('.success-box')).toContainText('替换 1');
   const connections = await page.evaluate(() => window.dbark.invoke('connections.list', {})); expect(connections).toHaveLength(1);
   expect(connections[0]).toMatchObject({ id: target.id, host: 'new.invalid', hasPassword: false, rememberPassword: false, pendingFiles: ['tlsCa'] });
   expect(await page.evaluate(() => window.dbark.invoke('tasks.list', {}))).toEqual([]); expect(await page.evaluate(() => window.dbark.invoke('history.list', {}))).toEqual([]); expect(pageErrors).toEqual([]);
@@ -62,7 +62,7 @@ test('C03目标A→B→A重新选择清除全部确认，不复活旧审阅', as
 test('C03确认后主进程配置修订变化令CAS失败，旧目标和合成凭据保持且不重试', async () => {
   const target = await seed('C03原目标'); await page.reload(); const modal = await openImport(); await review(modal, target.id); await acknowledge(modal);
   // 通过真实主进程保存另一个配置，只制造并发修订，不篡改业务处理器或渲染结果。
-  await seed('C03并发新增'); await modal.getByRole('button', { name: text.replaceConfirm, exact: true }).click();
+  await seed('C03并发新增'); await (await (await import('./navigation-menu')).navigationMenuItem(modal, { name: text.replaceConfirm, exact: true })).click();
   await expect(modal.locator('.warning-text')).toContainText([text.fail]); await expect(modal.getByLabel(text.reviewTitle, { exact: true })).toHaveCount(0);
   const connections = await page.evaluate(() => window.dbark.invoke('connections.list', {})); expect(connections.find(profile => profile.id === target.id)).toMatchObject({ host: 'old.invalid', hasPassword: true });
   expect(await page.evaluate(() => window.dbark.invoke('tasks.list', {}))).toEqual([]); expect(pageErrors).toEqual([]);

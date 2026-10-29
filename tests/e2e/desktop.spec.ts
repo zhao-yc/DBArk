@@ -30,8 +30,8 @@ test('桌面启动、存储、进程隔离与输入校验', async ({}, testInfo)
 
 test('渲染页面只能访问固定的隔离接口', async () => {
   const boundary = await page.evaluate(() => ({ keys: Object.keys(window.dbark).sort(), node: 'process' in window || 'require' in window, exposedIpc: 'ipcRenderer' in window, methodsFrozen: Object.values(window.dbark).every(value => typeof value === 'function' && Object.isFrozen(value)) }));
-  // 系统链接仅新增空通知订阅；固定白名单仍逐项精确核对，四个桥接函数均必须冻结。
-  expect(boundary.keys).toEqual(['invoke', 'onMenu', 'onObjectUri', 'onTask']); expect(boundary.node).toBe(false); expect(boundary.exposedIpc).toBe(false); expect(boundary.methodsFrozen).toBe(true);
+  // 原生命令仅新增受限通知订阅；固定白名单逐项精确核对，五个桥接函数均必须冻结。
+  expect(boundary.keys).toEqual(['invoke', 'onCommand', 'onMenu', 'onObjectUri', 'onTask']); expect(boundary.node).toBe(false); expect(boundary.exposedIpc).toBe(false); expect(boundary.methodsFrozen).toBe(true);
   const renderers = await desktop.evaluate(({ app }) => app.getAppMetrics().filter(metric => metric.type === 'Tab'));
   expect(renderers.length).toBeGreaterThan(0);
   if (process.platform === 'win32' || process.platform === 'darwin') expect(renderers.every(metric => metric.sandboxed)).toBe(true);
@@ -49,7 +49,7 @@ test('待提交修改退出可取消，随后确认退出并释放进程', async
   expect(first.title).toBe('仍有待完成的工作'); expect(first.response).toBe(0);
   expect(first.message).toContain('回滚未提交事务');
   // 取消后仍可操作，第二次退出可再次进入状态机而非永久卡在 shuttingDown。
-  await page.getByRole('button', { name: '切换主题', exact: true }).click();
+  await (await (await import('./navigation-menu')).navigationMenuItem(page, { name: '切换主题', exact: true })).click();
   await expect(page.locator('html')).toHaveAttribute('data-theme', 'light');
   await quitDesktop('window');
   expect(dialogCalls.map(call => call.response)).toEqual([0, 1]);
@@ -60,7 +60,7 @@ test('退出保存失败可返回工作台，修复磁盘后再次退出并恢�
   // 用同名目录制造真实文件写入失败，验证存储回滚和退出回退的完整路径。
   await mkdir(blockedFile);
   await answerDialogs([0]);
-  await page.getByRole('button', { name: '切换主题', exact: true }).click();
+  await (await (await import('./navigation-menu')).navigationMenuItem(page, { name: '切换主题', exact: true })).click();
   await requestQuit();
   await expect.poll(() => desktop.evaluate(() => globalThis.__dbarkE2EDialogs.calls.length)).toBe(1);
   const failure = await desktop.evaluate(() => globalThis.__dbarkE2EDialogs.calls[0]);
@@ -76,7 +76,7 @@ test('退出保存失败可返回工作台，修复磁盘后再次退出并恢�
 });
 
 test('通过界面保存连接和查询，Monaco 可编辑，主题与最后输入重启恢复', async ({}, testInfo) => {
-  await page.locator('.app-commandbar').getByRole('button', { name: '新建连接', exact: true }).click();
+  await (await (await import('./navigation-menu')).navigationMenuItem(page.locator('.navigation-toolbar'), { name: '新建连接', exact: true })).click();
   const connectionDialog = page.getByRole('dialog', { name: '新建连接', exact: true });
   await connectionDialog.getByLabel('连接名称', { exact: true }).fill('离线工作区测试');
   await connectionDialog.getByLabel('端口', { exact: true }).fill('1');
@@ -84,18 +84,18 @@ test('通过界面保存连接和查询，Monaco 可编辑，主题与最后输�
   await connectionDialog.getByLabel('数据库密码', { exact: true }).fill('仅用于本例的临时密码');
   await connectionDialog.getByLabel('连接分组', { exact: true }).fill('自动化测试');
   await connectionDialog.getByLabel('安全保存密码').uncheck();
-  await connectionDialog.getByRole('button', { name: '保存连接', exact: true }).click();
+  await (await (await import('./navigation-menu')).navigationMenuItem(connectionDialog, { name: '保存连接', exact: true })).click();
   await expect(connectionDialog).toBeHidden();
   await expect(page.locator('.sidebar')).toContainText('离线工作区测试');
-  await page.locator('.app-commandbar').getByRole('button', { name: '新建查询', exact: true }).click();
-  await page.getByRole('dialog', { name: '新建查询', exact: true }).getByRole('button', { name: '打开查询', exact: true }).click();
+  await (await (await import('./navigation-menu')).navigationMenuItem(page.locator('.navigation-toolbar'), { name: '新建查询', exact: true })).click();
+  await (await (await import('./navigation-menu')).navigationMenuItem(page.getByRole('dialog', { name: '新建查询', exact: true }), { name: '打开查询', exact: true })).click();
   const editor = page.locator('.monaco-editor').first();
   await expect(editor).toBeVisible();
   // Monaco 新版使用原生 EditContext；通过无障碍角色定位，兼容 textarea 与原生输入区。
   const input = editor.getByRole('textbox');
   await input.focus(); await page.keyboard.insertText('select 1 as e2e_value;');
   // 提示文字包含快捷键和作用范围；实际按钮以稳定的无障碍名称定位。
-  await page.getByRole('button', { name: sqlFormattingZh.action, exact: true }).click();
+  await (await (await import('./navigation-menu')).navigationMenuItem(page, { name: sqlFormattingZh.action, exact: true })).click();
   // 新格式化保留关键字大小写；两行排版及随后保存的精确SQL共同证明不是空操作。
   await expect(editor.locator('.view-lines .view-line')).toHaveCount(2);
   await expect(editor.locator('.view-lines .view-line').first()).toHaveText('select');
@@ -104,7 +104,7 @@ test('通过界面保存连接和查询，Monaco 可编辑，主题与最后输�
   const queryDialog = page.getByRole('dialog', { name: '保存查询', exact: true });
   await queryDialog.getByLabel('查询名称', { exact: true }).fill('离线保存的 SQL');
   // 普通未绑定标签明确另存，不能猜测来源记录或依赖兼容保存按钮。
-  await queryDialog.getByRole('button', { name: '另存为新查询', exact: true }).click();
+  await (await (await import('./navigation-menu')).navigationMenuItem(queryDialog, { name: '另存为新查询', exact: true })).click();
   await expect(queryDialog).toBeHidden();
   const saved = await page.evaluate(() => window.dbark.invoke('queries.list', {}));
   expect(saved[0].name).toBe('离线保存的 SQL'); expect(saved[0].sql.replaceAll('\r\n', '\n')).toBe('select\n  1 as e2e_value;');
@@ -113,7 +113,7 @@ test('通过界面保存连接和查询，Monaco 可编辑，主题与最后输�
   // 不等待 400 ms 防抖保存，退出握手必须保存最后输入的 SQL 和主题。
   await input.focus(); await page.keyboard.press(process.platform === 'darwin' ? 'Meta+A' : 'Control+A');
   await page.keyboard.insertText('SELECT 2 AS last_edit_before_quit;');
-  await page.getByRole('button', { name: '切换主题', exact: true }).click();
+  await (await (await import('./navigation-menu')).navigationMenuItem(page, { name: '切换主题', exact: true })).click();
   await quitDesktop();
   await launchDesktop();
   await expect(page.locator('html')).toHaveAttribute('data-theme', 'light');
@@ -133,7 +133,7 @@ test('保存失败时明确强制退出并放弃配置，重启仍保留上次�
   await mkdir(blockedFile);
   // 此回答明确选择强制退出；本例只验配置放弃与重启，不接纳普通资源收尾或远端终态。
   await answerDialogs([1]);
-  await page.getByRole('button', { name: '切换主题', exact: true }).click();
+  await (await (await import('./navigation-menu')).navigationMenuItem(page, { name: '切换主题', exact: true })).click();
   await quitDesktop();
   expect(dialogCalls).toHaveLength(1);
   expect(dialogCalls[0].title).toBe('退出前保存或收尾失败');

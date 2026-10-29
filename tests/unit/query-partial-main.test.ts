@@ -1,3 +1,4 @@
+import { extractMainProductionFunction } from './main-production-function';
 import { readFileSync } from 'node:fs';
 import { createContext, runInContext } from 'node:vm';
 import { randomUUID } from 'node:crypto';
@@ -12,7 +13,7 @@ import type { HistoryEntry, TaskEvent, TaskRecord } from '../../src/shared/contr
 function fixture() {
   const source = readFileSync(new URL('../../src/main/index.ts', import.meta.url), 'utf8');
   const event = source.slice(source.indexOf('function taskEvent('), source.indexOf('/** 文件只能'));
-  const dispatch = source.slice(source.indexOf('async function dispatch('), source.indexOf('/** 按平台生成中文原生菜单'));
+  const dispatch = extractMainProductionFunction(source, 'dispatch');
   const entries: HistoryEntry[] = [], persisted: TaskRecord[] = [], sent: TaskEvent[] = [];
   const request = vi.fn<(...args: any[]) => Promise<any>>(async () => ({}));
   const context = createContext({

@@ -1,4 +1,5 @@
 import type { QueryFileCheckInput, QueryFileCheckResult, QueryFileReloadInput, QueryFileReloadResult, QueryFileDiscardInput } from './queryFileReload';
+import type { UiCommandInvocation, UiMenuState, ObjectCategory } from './uiCommands';
 import type { QueryFileSourceRef, QueryFileSourceOpenInput, QueryFileSourceOpenResult, QueryFileSourceSaveInput, QueryFileSourceSaveAsInput, QueryFileSourceSaveResult, QueryFileSourceStatusInput, QueryFileSourceStatus, QueryFileSourceReleaseInput, QueryFileSourceCancelInput } from './queryFileSources';
 import type { QueryRecentFileView } from './queryFileSources';
 import type { SnippetTransferDecision, SnippetTransferPreview, SnippetTransferResult } from './snippetTransfer';
@@ -95,7 +96,7 @@ export interface TaskRecord { /** 仅由main签发的随机回执关联，不能
 export interface TaskEvent { tableChecks?: import('./tableChecks').TableCheckProgress; tableFilteredDelete?: import('./tableFilteredDelete').TableFilteredDeleteProgress; tableFilteredUpdate?: import('./tableFilteredUpdate').TableFilteredUpdateProgress; resultInsert?: import('./resultInsert').ResultInsertProgress; databaseDrop?: import('./databaseDrop').DatabaseDropProgress; queryFileSource?: import('./queryFileSources').QueryFileSourceProgress; tableCreate?: import('./tableCreate').TableCreateProgress; databaseCreate?: import('./databaseCreate').DatabaseCreateProgress; databaseDefaultEncoding?: import('./databaseDefaultEncoding').DatabaseDefaultEncodingProgress; tableApply?: import('./tableApplyReceipt').TableApplyProgress; taskId: string; status: TaskRecord['status']; progress: number; message: string; rows?: number; resultIndex?: number; columns?: ResultColumn[]; batch?: DataRow[]; executionDatabase?:QueryDatabaseContext; /** 当前语句开始发送时只报告一次实际片段，历史不得使用完整源脚本。 */ executionSql?: string; queryExport?: QueryExportProgress; queryInsert?: import('./queryInsertExport').QueryInsertPending; columnPatch?: TableColumnApplyProgress; indexPatch?: TableIndexApplyProgress; foreignKeyPatch?: TableForeignKeyApplyProgress; tableCopyData?: import('./tableCopyData').TableCopyDataProgress; tableCopyStructure?: TableColumnApplyProgress; tableRename?: TableColumnApplyProgress; tableAutoIncrement?: TableColumnApplyProgress; tableComment?: TableColumnApplyProgress; tableDrop?: TableColumnApplyProgress; tableTruncate?: TableColumnApplyProgress; tableDefaultEncoding?: TableColumnApplyProgress; dataSearch?:DataSearchProgress; }
 export interface FileChoice { token: string; name: string; }
 export type QueryFileEncoding = 'utf8' | 'utf16le' | 'gb18030';
-export interface AppSettings { theme: 'dark' | 'light'; sidebarWidth: number; resultLimit: number; pageSize: number; dataTypeColors?: boolean; editorFontSize?: number; editorWordWrap?: boolean; editorTabSize?: number; editorInsertSpaces?: boolean; /** 显式格式化关键字，缺项保持原样。 */ sqlKeywordCase?: 'preserve' | 'upper' | 'lower'; tabs: { id: string; kind: 'query' | 'table'; title: string; connectionId: string; database?: string; databaseContext?:QueryDatabaseContext; table?: string; sql?: string; sourceBinding?: QuerySourceBinding; /** 文件权限仅Main持有，与本地保存查询来源分开。 */ fileSourceBinding?: QueryFileSourceRef; /** 仅查询标签可保存的编辑区像素高度；缺项由读取合同回退300。 */ queryEditorHeight?: number }[]; activeTabId?: string; }
+export interface AppSettings { theme: 'dark' | 'light'; sidebarWidth: number; resultLimit: number; pageSize: number; dataTypeColors?: boolean; editorFontSize?: number; editorWordWrap?: boolean; editorTabSize?: number; editorInsertSpaces?: boolean; /** 显式格式化关键字，缺项保持原样。 */ sqlKeywordCase?: 'preserve' | 'upper' | 'lower'; tabs: { id: string; kind: 'query' | 'table' | 'objects'; title: string; connectionId: string; database?: string; /** 仅对象浏览标签持有，不关联SQL、事务或文件来源。 */ objectCategory?: ObjectCategory; databaseContext?:QueryDatabaseContext; table?: string; sql?: string; sourceBinding?: QuerySourceBinding; /** 文件权限仅Main持有，与本地保存查询来源分开。 */ fileSourceBinding?: QueryFileSourceRef; /** 仅查询标签可保存的编辑区像素高度；缺项由读取合同回退300。 */ queryEditorHeight?: number }[]; activeTabId?: string; }
 export interface ImportOptions { /** 新表导入的原文件指纹，仅允许整文件事务。 */ expectedSource?: import('./importNewTable').ImportFileSource; connectionId: string; database: string; table: string; fileToken: string; format: 'csv' | 'json' | 'sql'; encoding: 'utf8' | 'utf16le' | 'gb18030'; csvDelimiter?: CsvImportDelimiter; /** 仅 CSV；省略时首行作为字段名，false 时按列序号映射并保留首条数据。 */ csvHasHeader?: boolean; /** 仅CSV／JSON；省略保持每500行提交，atomic整文件确认成功后提交一次。 */ transactionMode?: import('./fileImportTransaction').FileImportTransactionMode; /** 仅CSV／JSON本次执行配置；省略只新增，不能由模板静默开启更新。 */ conflict?: import('./fileImportConflict').FileImportConflictSelection; mapping: Record<string, string>; taskId: string; }
 export interface ExportOptions { csvSelection?: CsvExportSelection; csvDelimiter?: CsvExportDelimiter; connectionId: string; database: string; table: string; fileToken: string; format: 'csv' | 'json' | 'sql'; encoding: 'utf8' | 'utf16le' | 'gb18030'; includeStructure: boolean; includeData: boolean; taskId: string; }
 /** 仅包含已经返回的结果，不携带可触发数据库访问的 SQL、连接或会话。 */
@@ -104,6 +105,7 @@ export interface ResultExportOptions { fileToken: string; format: 'csv' | 'json'
 
 /** 请求映射是界面、主进程与数据库进程共同使用的唯一接口定义。 */
 export interface CommandMap {
+  'app.menuState': { input: UiMenuState; output: void };
   'tableDraftFiles.open': { input: { target: import('./tableDraft').TableDraftTarget }; output: { name: string; document: import('./tableDraft').TableDraftDocument } | null };
   'tableDraftFiles.save': { input: { payload: import('./tableDraft').TableDraftPayload }; output: { name: string } | null };
   'table.draftVerify': { input: import('./tableDraftCommands').TableDraftVerifyInput; output: { verifiedChanges: number } };
@@ -360,6 +362,8 @@ export interface DesktopApi {
   invoke<C extends Command>(command: C, input: CommandMap[C]['input']): Promise<CommandMap[C]['output']>;
   onTask(listener: (event: TaskEvent) => void): () => void;
   onMenu(listener: (action: string) => void): () => void;
+  /** 用户菜单命令携带准确状态代次，与内部保存状态及警告事件分开。 */
+  onCommand(listener: (invocation: UiCommandInvocation) => void): () => void;
   /** 系统链接通知不携带地址；只能经受限命令领取原文档请求。 */
   onObjectUri(listener: () => void): () => void;
 }

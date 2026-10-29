@@ -40,16 +40,19 @@ createRoot(document.getElementById('root')).render(<App/>);`;
   try {
     const block = view.getByRole('treeitem').filter({ hasText: '查询块 · 1' }); await block.click(); await block.press('ArrowLeft');
     await expect(block).toHaveAttribute('aria-expanded', 'false'); await expect(block).toHaveAttribute('aria-selected', 'true');
-    await view.getByRole('button', { name: '保存开始', exact: true }).click(); await expect(block).toHaveAttribute('aria-expanded', 'false'); await expect(block).toHaveAttribute('aria-selected', 'true');
-    await expect(view.getByRole('button', { name: '获取文本计划', exact: true })).toBeDisabled(); await view.getByRole('button', { name: '结束繁忙', exact: true }).click();
-    await expect(block).toHaveAttribute('aria-expanded', 'false'); await view.getByRole('button', { name: '原始输出', exact: true }).click();
-    await view.getByRole('button', { name: '另存开始', exact: true }).click(); await expect(view.getByRole('button', { name: '原始输出', exact: true })).toHaveAttribute('aria-pressed', 'true');
-    await view.getByRole('button', { name: '结束繁忙', exact: true }).click(); await expect(view.getByRole('button', { name: '原始输出', exact: true })).toHaveAttribute('aria-pressed', 'true');
-    await view.getByRole('button', { name: '树形计划', exact: true }).click(); await view.getByRole('button', { name: 'CAS失败开始', exact: true }).click();
-    await expect(block).toHaveAttribute('aria-expanded', 'false'); await view.getByRole('button', { name: '结束繁忙', exact: true }).click(); await expect(block).toHaveAttribute('aria-selected', 'true');
+    await (await navigationMenuItem(view, { name: '保存开始', exact: true })).click(); await expect(block).toHaveAttribute('aria-expanded', 'false'); await expect(block).toHaveAttribute('aria-selected', 'true');
+    await expect((await navigationMenuItem(view, { name: '获取文本计划', exact: true }))).toBeDisabled(); await (await navigationMenuItem(view, { name: '结束繁忙', exact: true })).click();
+    await expect(block).toHaveAttribute('aria-expanded', 'false'); await (await navigationMenuItem(view, { name: '原始输出', exact: true })).click();
+    await (await navigationMenuItem(view, { name: '另存开始', exact: true })).click(); await expect((await navigationMenuItem(view, { name: '原始输出', exact: true }))).toHaveAttribute('aria-pressed', 'true');
+    await (await navigationMenuItem(view, { name: '结束繁忙', exact: true })).click(); await expect((await navigationMenuItem(view, { name: '原始输出', exact: true }))).toHaveAttribute('aria-pressed', 'true');
+    await (await navigationMenuItem(view, { name: '树形计划', exact: true })).click(); await (await navigationMenuItem(view, { name: 'CAS失败开始', exact: true })).click();
+    await expect(block).toHaveAttribute('aria-expanded', 'false'); await (await navigationMenuItem(view, { name: '结束繁忙', exact: true })).click(); await expect(block).toHaveAttribute('aria-selected', 'true');
     await view.screenshot({ path: info.outputPath('plan-state-retained.png') });
-    await view.getByRole('button', { name: '新查询开始', exact: true }).click(); await expect(view.getByRole('tree')).toHaveCount(0);
-    await view.getByRole('button', { name: '新查询结束', exact: true }).click(); await expect(view.getByRole('grid')).toBeVisible(); await expect(view.getByRole('tree')).toHaveCount(0);
+    await (await navigationMenuItem(view, { name: '新查询开始', exact: true })).click(); await expect(view.getByRole('tree')).toHaveCount(0);
+    await (await navigationMenuItem(view, { name: '新查询结束', exact: true })).click(); await expect(view.getByRole('grid')).toBeVisible(); await expect(view.getByRole('tree')).toHaveCount(0);
     expect(errors).toEqual([]);
   } finally { await desktop.evaluate(({ BrowserWindow }, id) => BrowserWindow.fromId(id)?.destroy(), id); }
 });
+
+/** 原门进入具体动作后才加载真实菜单导航，不改变默认/列表阶段的资源边界。 */
+async function navigationMenuItem(...args: Parameters<typeof import('./navigation-menu')['navigationMenuItem']>): Promise<import('@playwright/test').Locator> { return (require('./navigation-menu') as typeof import('./navigation-menu')).navigationMenuItem(...args); }

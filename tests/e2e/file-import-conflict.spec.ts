@@ -84,8 +84,8 @@ test('真实CSV和JSON策略键选择、指定键upsert/其它unique拒绝、原
       };
       state.check=check;state.restore=()=>{check();if(state.pending)throw Error('冲突原请求尚在途');handlers.set('dbark:request',previous);delete root.__conflictImportAudit;};root.__conflictImportAudit=state;handlers.set('dbark:request',wrapped);
     },{connectionId:context.connectionId,database,formats:files.map(file=>file.format)});installed=true;
-    await page.locator('.database-row').filter({has:page.getByRole('button',{name:database,exact:true})}).getByRole('button',{name:database,exact:true}).click();
-    await page.locator('.object-row').getByRole('button',{name:'subject',exact:true}).click();const tab=page.locator('.table-tab:visible');await expect(tab.getByRole('grid')).toBeVisible();await tab.getByRole('button',{name:zh.common.import,exact:true}).click();
+    await (await (await import('./navigation-menu')).navigationMenuItem(page.locator('.database-row').filter({has:page.getByRole('button',{name:database,exact:true})}), {name:database,exact:true}, check)).click();
+    await (await (await import('./navigation-menu')).navigationMenuItem(page.locator('.object-row'), {name:'subject',exact:true}, check)).click();const tab=page.locator('.table-tab:visible');await expect(tab.getByRole('grid')).toBeVisible();await (await (await import('./navigation-menu')).navigationMenuItem(tab, {name:zh.common.import,exact:true}, check)).click();
     const dialog=page.getByRole('dialog',{name:`${zh.transfer.text004} · ${database}.subject`,exact:true}),start=dialog.getByRole('button',{name:zh.transfer.text028,exact:true}),report=dialog.getByRole('status',{name:t.report,exact:true}),mode=dialog.getByRole('combobox',{name:t.mode,exact:true}),key=dialog.getByRole('combobox',{name:t.key,exact:true});
     await expect(mode).toHaveValue('insert');expect((await audit()).catalogs).toHaveLength(0);
     for(const[index,file]of files.entries()){
@@ -102,7 +102,7 @@ test('真实CSV和JSON策略键选择、指定键upsert/其它unique拒绝、原
       await expect(start).toBeEnabled();await start.click();
       await expect.poll(async()=>{const rows=await observe('SELECT ID FROM information_schema.PROCESSLIST WHERE DB=? AND ID<>? AND INFO LIKE ?',[database,observerId,'%FOR UPDATE%']);for(const row of rows)threads.add(Number(row.ID));return rows.length;}).toBe(1);
       if(index===2){
-        await expect(dialog.locator('.file-picker')).toBeDisabled();await dialog.getByRole('button',{name:zh.transfer.text027,exact:true}).click();
+        await expect(dialog.locator('.file-picker')).toBeDisabled();await (await (await import('./navigation-menu')).navigationMenuItem(dialog, {name:zh.transfer.text027,exact:true}, check)).click();
       }else{await observe('ROLLBACK');held=false;}
       await expect.poll(async()=>(await audit()).imports.length).toBe(index+1);await expect.poll(async()=>(await audit()).pending).toBe(0);
       const original=(await audit()).imports[index],receipt=fileImportConflictReportSchema.parse(original.result.conflicts);expect(receipt.taskId).toBe(original.taskId);expect(receipt.mode).toBe('upsert');await expect(report).toBeVisible();await expect(report).toContainText(t.countsHint);
@@ -116,7 +116,7 @@ test('真实CSV和JSON策略键选择、指定键upsert/其它unique拒绝、原
       await info.attach('冲突第'+(index+1)+'次回执',{body:JSON.stringify(receipt,null,2),contentType:'application/json'});await info.attach('冲突第'+(index+1)+'次原生报告',{body:await report.screenshot(),contentType:'image/png'});
     }
     const state=await audit();expect(state.imports).toHaveLength(3);expect(new Set(state.started.map(value=>value.taskId)).size).toBe(3);expect(new Set(state.choices.map(value=>value.token)).size).toBe(3);expect(threads.size).toBe(3);await info.attach('冲突Main原始任务及取消旁观',{body:JSON.stringify(state,null,2),contentType:'application/json'});expect(pageErrors).toEqual([]);
-    await application.evaluate(()=>(globalThis as any).__conflictImportAudit.restore());installed=false;await dialog.getByRole('button',{name:zh.common.done,exact:true}).click();
+    await application.evaluate(()=>(globalThis as any).__conflictImportAudit.restore());installed=false;await (await (await import('./navigation-menu')).navigationMenuItem(dialog, {name:zh.common.done,exact:true}, check)).click();
   }catch(error){failed=true;failure=error;}
   try{
     if(held){await observe('ROLLBACK');held=false;}

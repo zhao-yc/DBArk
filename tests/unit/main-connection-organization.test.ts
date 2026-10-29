@@ -1,3 +1,4 @@
+import { extractMainProductionFunction } from './main-production-function';
 import { emptyTableFilteredDeleteOwners } from './table-filtered-delete-owner-fixture';
 import { emptyTableFilteredUpdateOwners } from './table-filtered-update-owner-fixture';
 import { readFileSync } from 'node:fs';
@@ -9,7 +10,7 @@ import { connectionOrganizationZh } from '../../src/shared/connectionOrganizatio
 /** 执行真实Main分派；存储CAS由独立SQLite测试覆盖，本例只替换持久化/引擎边界。 */
 function harness(shuttingDown = false) {
   const source = readFileSync(new URL('../../src/main/index.ts', import.meta.url), 'utf8');
-  const body = source.slice(source.indexOf('async function dispatch('), source.indexOf('/** 按平台生成中文原生菜单'));
+  const body = extractMainProductionFunction(source, 'dispatch');
   const snapshot = { revision: 2, connections: [] }, get = vi.fn(() => snapshot), apply = vi.fn(() => snapshot), available = vi.fn(), request = vi.fn(() => { throw Error('不允许引擎调用'); });
   const tasks = new Map(), has = vi.fn(() => false), invalidateAll = vi.fn();
   const context = createContext({ filteredDeletes: emptyTableFilteredDeleteOwners(), filteredUpdates: emptyTableFilteredUpdateOwners(),

@@ -10,24 +10,24 @@ test.setTimeout(150000);
 
 /** 只操作真实设置入口；保存沿原本地偏好IPC，绝不向网格注入数据或伪造元数据。 */
 async function preferences() {
-  await page.getByRole('button', { name: zh.app.text009, exact: true }).click();
+  await (await (await import('./navigation-menu')).navigationMenuItem(page, { name: zh.app.text009, exact: true })).click();
   return page.getByRole('dialog', { name: zh.app.text009, exact: true });
 }
 async function setColors(enabled: boolean) {
   const modal = await preferences(); const checkbox = modal.getByRole('checkbox', { name: text.title, exact: true });
   if (enabled) await checkbox.check(); else await checkbox.uncheck();
   await expect.poll(() => page.evaluate(() => window.dbark.invoke('settings.get', {}))).toMatchObject({ dataTypeColors: enabled });
-  await modal.getByRole('button', { name: zh.common.done, exact: true }).click();
+  await (await (await import('./navigation-menu')).navigationMenuItem(modal, { name: zh.common.done, exact: true })).click();
 }
 
 test('D08默认关闭、六类图例、暗亮切换和重启恢复及单项重置', async () => {
   await expect(page.locator('.app-statusbar')).toBeVisible(); expect((await page.evaluate(() => window.dbark.invoke('settings.get', {}))).dataTypeColors).toBe(false);
   const modal = await preferences(); await expect(modal.getByRole('checkbox', { name: text.title, exact: true })).not.toBeChecked(); await expect(modal.getByRole('list', { name: text.legend, exact: true }).locator('li')).toHaveCount(6);
   await modal.getByRole('checkbox', { name: text.title, exact: true }).check(); await modal.getByRole('combobox', { name: zh.app.text019, exact: true }).selectOption('light');
-  await expect.poll(() => page.evaluate(() => window.dbark.invoke('settings.get', {}))).toMatchObject({ dataTypeColors: true, theme: 'light' }); await modal.getByRole('button', { name: zh.common.done, exact: true }).click();
+  await expect.poll(() => page.evaluate(() => window.dbark.invoke('settings.get', {}))).toMatchObject({ dataTypeColors: true, theme: 'light' }); await (await (await import('./navigation-menu')).navigationMenuItem(modal, { name: zh.common.done, exact: true })).click();
   await quitDesktop(); await launchDesktop(); await expect(page.locator('.app-statusbar')).toBeVisible(); const restored = await preferences();
   await expect(restored.getByRole('checkbox', { name: text.title, exact: true })).toBeChecked(); await expect(restored.getByRole('combobox', { name: zh.app.text019, exact: true })).toHaveValue('light');
-  await restored.getByRole('button', { name: text.reset, exact: true }).click(); await expect(restored.getByRole('checkbox', { name: text.title, exact: true })).not.toBeChecked();
+  await (await (await import('./navigation-menu')).navigationMenuItem(restored, { name: text.reset, exact: true })).click(); await expect(restored.getByRole('checkbox', { name: text.title, exact: true })).not.toBeChecked();
   await expect.poll(() => page.evaluate(() => window.dbark.invoke('settings.get', {}))).toMatchObject({ dataTypeColors: false, theme: 'light' }); expect(pageErrors).toEqual([]);
 });
 
@@ -41,7 +41,7 @@ test('D08真实表格与只读SQL的可靠类别一致，文本不猜类型，�
     await context.observer.query(`INSERT INTO ${qualified} VALUES(1,9007199254740993,0.100000000001,'2026-10-16 12:34:56.123456',X'00FF','123',NULL,'2026-10-16')`);
     const connection = page.locator('.connection-node').filter({ has: page.locator('.connection-row').getByText(context.connectionName, { exact: true }) });
     await connection.locator('.connection-row').hover(); await clickSidebarAction(connection, { name: '刷新连接', exact: true });
-    await connection.locator('.database-row').getByRole('button', { name: context.database, exact: true }).click(); await connection.locator('.object-row').getByText('d08_values', { exact: true }).click();
+    await (await (await import('./navigation-menu')).navigationMenuItem(connection.locator('.database-row'), { name: context.database, exact: true })).click(); await connection.locator('.object-row').getByText('d08_values', { exact: true }).click();
     const table = page.locator('.table-tab:visible'); await expect(table.locator('.loading-overlay')).toHaveCount(0); await expect(table.locator('[data-value-type]')).toHaveCount(0);
     await setColors(true); for (const kind of ['number', 'temporal', 'binary', 'text', 'null']) await expect(table.locator(`[data-value-type="${kind}"]`).first()).toBeVisible();
     const header = table.getByRole('columnheader', { name: /^big_value/ }); const index = await header.getAttribute('aria-colindex'); if (!index) throw Error('真实列缺少aria坐标');

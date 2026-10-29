@@ -1,4 +1,4 @@
-import { sidebarMenuRamPort } from '../helpers/sidebarMenuRamPort';
+import { sidebarMenuRamPort, navigationMenuRamPort } from '../helpers/sidebarMenuRamPort';
 import { EventEmitter } from 'node:events';
 import { closeMysqlConnection } from '../../src/engine/connection';
 import { readFileSync } from 'node:fs';
@@ -27,6 +27,7 @@ function harness(changes: { facts?: Record<string, unknown>; queryUnknown?: bool
   const context = createContext({ exports: {}, process: { env: raw }, require(name: string) {
     // 对象树菜单是显式RAM展示依赖，不加载Playwright或计作原生/认证模块。
     if (name === './sidebar-menu') return sidebarMenuRamPort;
+    if (name === './navigation-menu') return navigationMenuRamPort;
     if (name === 'node:crypto') return { randomUUID: () => uuid };
     if (name === 'mysql2/promise') return { __esModule: true, default: mysql };
     if (name === './desktop-fixture') return { test, expect, ownedDesktopResources(value: unknown) { expect(value).toBe(info); if (retained) throw Error('合成所属资源已保留'); return { page, application, closed: appClosed }; }, confirmOwnedDesktopExit: async () => { calls.push('app-exit'); appClosed = true; }, retainOwnedDesktopResources(value: unknown) { expect(value).toBe(info); retained = true; calls.push('retain'); } };

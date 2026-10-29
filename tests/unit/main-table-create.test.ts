@@ -12,7 +12,7 @@ import type { TaskEvent, TaskRecord } from '../../src/shared/contracts';
 /** 直接运行生产dispatch/engineExited；所有broker与存储均为RAM，不加载Electron。 */
 function harness() {
   const source = readFileSync(new URL('../../src/main/index.ts', import.meta.url), 'utf8');
-  const dispatch = source.slice(source.indexOf('async function dispatch('), source.indexOf('/** 按平台生成中文原生菜单'));
+  const dispatch = extractMainProductionFunction(source, 'dispatch');
   const exit = extractMainProductionFunction(source, 'engineExited');
   const tokens = new Map(), progress = new Map(), tasks = new Map<string, TaskRecord>(), events: TaskEvent[] = [], request = vi.fn(async (_command: string, _input: unknown): Promise<any> => undefined); let revision = 7;
   const context = createContext({ filteredDeletes: emptyTableFilteredDeleteOwners(), filteredUpdates: emptyTableFilteredUpdateOwners(),

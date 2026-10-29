@@ -17,7 +17,7 @@ async function openCaptureTable(connectionName: string, database: string, name: 
   await connection.locator('.connection-row').getByRole('button', { name: connectionName, exact: true }).focus();
   await clickSidebarAction(connection, { name: '刷新连接', exact: true });
   const databaseRow = connection.locator('.database-row').filter({ has: page.getByRole('button', { name: database, exact: true }) });
-  await databaseRow.getByRole('button', { name: database, exact: true }).click();
+  await (await (await import('./navigation-menu')).navigationMenuItem(databaseRow, { name: database, exact: true })).click();
   await connection.locator('.object-row').getByText(name, { exact: true }).click();
   await expect(table().locator('.loading-overlay')).toHaveCount(0);
   await expect(table().getByRole('button', { name: text.find, exact: true })).toBeEnabled();
@@ -36,14 +36,14 @@ async function cell(key: string, row = 2): Promise<Locator> {
 async function find(query: string, column: string, occurrences: number) {
   await panel().getByRole('combobox', { name: text.column, exact: true }).selectOption(column);
   await panel().getByRole('textbox', { name: text.query, exact: true }).fill(query);
-  await panel().getByRole('button', { name: text.search, exact: true }).click();
+  await (await (await import('./navigation-menu')).navigationMenuItem(panel(), { name: text.search, exact: true })).click();
   await expect(panel().getByRole('status')).toContainText(`0 / ${occurrences} 处`);
   await expect(panel().getByRole('button', { name: text.search, exact: true })).toBeEnabled();
 }
 
 /** 完整逐格比对预览，不以片段或预览标题代替真实原值和完整after。 */
 async function preview(changes: readonly Pick<CaptureSqlChange, 'before' | 'after'>[]) {
-  await panel().getByRole('button', { name: text.preview, exact: true }).click();
+  await (await (await import('./navigation-menu')).navigationMenuItem(panel(), { name: text.preview, exact: true })).click();
   const dialog = replacementPreview(); await expect(dialog).toBeVisible();
   await expect.poll(() => dialog.locator('tbody tr td:nth-child(3) pre').allTextContents()).toEqual(changes.map(change => change.before));
   await expect.poll(() => dialog.locator('tbody tr td:nth-child(4) pre').allTextContents()).toEqual(changes.map(change => change.after));
@@ -51,14 +51,14 @@ async function preview(changes: readonly Pick<CaptureSqlChange, 'before' | 'afte
 
 /** 等完整SQL、完整参数和只读性，再用独立连接确认提交前零写库，最后点击原集中提交。 */
 async function commitDraft(database: string, name: string, changes: readonly CaptureSqlChange[], assertUnchanged: () => Promise<void>) {
-  await table().getByRole('button', { name: '预览并提交', exact: true }).click();
+  await (await (await import('./navigation-menu')).navigationMenuItem(table(), { name: '预览并提交', exact: true })).click();
   const dialog = page.getByRole('dialog', { name: '确认数据修改', exact: true }), editor = dialog.locator('.monaco-editor'), lines = editor.locator('.view-lines');
   let complete: string | undefined;
   await expect.poll(async () => { const rendered = await lines.innerText(); if (completeCaptureSql(rendered, database, name, changes)) complete = rendered; return complete; }, { message: '等待所有UPDATE、完整参数及JSON尾部实际渲染' }).toBeDefined();
   const before = complete!; await editor.click(); await page.keyboard.type('不能改写SQL');
   await expect.poll(() => lines.innerText()).toBe(before);
   await assertUnchanged(); await expect(dialog.getByRole('button', { name: '确认提交', exact: true })).toBeEnabled();
-  await dialog.getByRole('button', { name: '确认提交', exact: true }).click(); await expect(dialog).toHaveCount(0);
+  await (await (await import('./navigation-menu')).navigationMenuItem(dialog, { name: '确认提交', exact: true })).click(); await expect(dialog).toHaveCount(0);
   await expect(table().locator('.error-box')).toHaveCount(0);
 }
 
@@ -79,16 +79,16 @@ test.describe('D06显式捕获替换正式产品UI', () => {
       const read = async () => (await observer.query<RowDataPacket[]>(`SELECT CAST(id AS CHAR) AS id,note FROM ${qualified} ORDER BY id`))[0], before = await read();
       expect(before).toEqual(ids.map((id, index) => ({ id, note: sources[index] })));
       const unchanged = async () => { expect(await read()).toEqual(before); };
-      await openCaptureTable(connectionName, database, name); await table().getByRole('button', { name: text.find, exact: true }).click();
+      await openCaptureTable(connectionName, database, name); await (await (await import('./navigation-menu')).navigationMenuItem(table(), { name: text.find, exact: true })).click();
       const capture = panel().getByRole('checkbox', { name: text.captureReplacement, exact: true }); await expect(capture).not.toBeChecked(); await expect(capture).toBeDisabled();
       await panel().getByRole('checkbox', { name: text.regex, exact: true }).check(); await expect(capture).not.toBeChecked();
       await panel().getByRole('textbox', { name: text.replacement, exact: true }).fill(replacement); await find(query, 'note', 3);
       const literal = sources.map(source => source.replace(new RegExp(query, 'gu'), () => replacement));
       await preview(sources.map((source, index) => ({ before: source, after: literal[index] }))); await unchanged();
-      await replacementPreview().getByRole('button', { name: '取消', exact: true }).click(); await expect(table().locator('.row-modified')).toHaveCount(0);
+      await (await (await import('./navigation-menu')).navigationMenuItem(replacementPreview(), { name: '取消', exact: true })).click(); await expect(table().locator('.row-modified')).toHaveCount(0);
       await capture.check(); await find(query, 'note', 3);
       const changes = sources.map((source, index) => ({ id: ids[index], before: source, after: source.replace(new RegExp(query, 'gu'), replacement) }));
-      await preview(changes); await unchanged(); await replacementPreview().getByRole('button', { name: text.apply, exact: true }).click();
+      await preview(changes); await unchanged(); await (await (await import('./navigation-menu')).navigationMenuItem(replacementPreview(), { name: text.apply, exact: true })).click();
       await expect(replacementPreview()).toHaveCount(0);
       for (let index = 0; index < changes.length; index++) await expect(await cell('note', index + 2)).toHaveText(changes[index].after);
       await unchanged(); await page.screenshot({ path: result.outputPath('capture-batch-drafts.png') });
@@ -103,10 +103,10 @@ test.describe('D06显式捕获替换正式产品UI', () => {
       await observer.query(`CREATE TABLE ${qualified}(id BIGINT UNSIGNED PRIMARY KEY,note TEXT) ENGINE=InnoDB`);
       await observer.query(`INSERT INTO ${qualified}(id,note) VALUES(?,?)`, [id, source]);
       const read = async () => (await observer.query<RowDataPacket[]>(`SELECT CAST(id AS CHAR) AS id,note FROM ${qualified}`))[0]; expect(await read()).toEqual([{ id, note: source }]);
-      await openCaptureTable(connectionName, database, name); await table().getByRole('button', { name: text.find, exact: true }).click();
+      await openCaptureTable(connectionName, database, name); await (await (await import('./navigation-menu')).navigationMenuItem(table(), { name: text.find, exact: true })).click();
       await panel().getByRole('checkbox', { name: text.regex, exact: true }).check(); await panel().getByRole('checkbox', { name: text.captureReplacement, exact: true }).check();
       const replace = panel().getByRole('textbox', { name: text.replacement, exact: true }); await replace.fill(replacement); await find('(old)', 'note', 3);
-      await panel().getByRole('button', { name: text.next, exact: true }).click(); await expect(panel().getByRole('status')).toContainText('1 / 3 处');
+      await (await (await import('./navigation-menu')).navigationMenuItem(panel(), { name: text.next, exact: true })).click(); await expect(panel().getByRole('status')).toContainText('1 / 3 处');
       const first = source.replace(/(old)/u, replacement); expect('old-old-old'.length).not.toBe(replacement.length);
       await replace.press('Enter'); await expect(await cell('note')).toHaveText(first); await expect(panel().getByRole('status')).toContainText('4 / 5 处');
       await expect(panel().locator('.page-find-current')).toContainText('格内第 4 处 · UTF-16 位置 15'); await expect(replace).toBeFocused(); expect(await read()).toEqual([{ id, note: source }]);
@@ -125,19 +125,19 @@ test.describe('D06显式捕获替换正式产品UI', () => {
       const read = async () => (await observer.query<RowDataPacket[]>(`SELECT CAST(id AS CHAR) AS id,note,amount,HEX(payload) AS bytes_value,nil,\`generated\` AS generated_value FROM ${qualified}`))[0], before = await read();
       expect(before).toEqual([{ id, note: source, amount: '12345678901234567890.123456', bytes_value: '0001FF', nil: null, generated_value: source }]);
       const unchanged = async () => { expect(await read()).toEqual(before); };
-      await openCaptureTable(connectionName, database, name); await table().getByRole('button', { name: text.find, exact: true }).click();
+      await openCaptureTable(connectionName, database, name); await (await (await import('./navigation-menu')).navigationMenuItem(table(), { name: text.find, exact: true })).click();
       await panel().getByRole('checkbox', { name: text.regex, exact: true }).check(); await panel().getByRole('checkbox', { name: text.captureReplacement, exact: true }).check();
       await panel().getByRole('textbox', { name: text.replacement, exact: true }).fill(replacement); await find(query, '', 8);
       const change = { id, before: source, after: source.replace(new RegExp(query, 'gu'), replacement) };
-      await preview([change]); await unchanged(); await replacementPreview().getByRole('button', { name: text.apply, exact: true }).click();
+      await preview([change]); await unchanged(); await (await (await import('./navigation-menu')).navigationMenuItem(replacementPreview(), { name: text.apply, exact: true })).click();
       await expect(replacementPreview()).toHaveCount(0); await expect(await cell('note')).toHaveText(change.after); await unchanged();
       for (const [key, pattern, count, value] of [['amount', '12345678901234567890\\.123456', 1, '12345678901234567890.123456'], ['generated', query, 3, source], ['payload', '00', 0, '0x0001ff']] as const) {
-        await find(pattern, key, count); if (count) await panel().getByRole('button', { name: text.next, exact: true }).click();
+        await find(pattern, key, count); if (count) await (await (await import('./navigation-menu')).navigationMenuItem(panel(), { name: text.next, exact: true })).click();
         await expect(panel().getByRole('button', { name: text.replaceOne, exact: true })).toBeDisabled(); await expect(panel().getByRole('button', { name: text.preview, exact: true })).toBeDisabled();
         await expect(await cell(key)).toHaveText(value); await unchanged();
       }
       await panel().getByRole('combobox', { name: text.column, exact: true }).selectOption('nil'); await panel().getByRole('combobox', { name: text.kind, exact: true }).selectOption('null');
-      await panel().getByRole('button', { name: text.search, exact: true }).click(); await expect(panel().getByRole('status')).toContainText('0 / 1 处');
+      await (await (await import('./navigation-menu')).navigationMenuItem(panel(), { name: text.search, exact: true })).click(); await expect(panel().getByRole('status')).toContainText('0 / 1 处');
       await expect(panel().getByRole('checkbox', { name: text.captureReplacement, exact: true })).not.toBeChecked(); await expect(panel().getByRole('button', { name: text.preview, exact: true })).toBeDisabled(); await expect(await cell('nil')).toHaveText('NULL');
       await expect(await cell('note')).toHaveText(change.after); await unchanged(); await page.screenshot({ path: result.outputPath('capture-unicode-readonly-drafts.png') });
       await commitDraft(database, name, [change], unchanged);

@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs';
 import { createContext, runInContext } from 'node:vm';
 import ts from 'typescript';
 import { TableChecksMainCapabilities, tableChecksFailureProgress } from '../../src/main/tableChecksMainCapabilities';
-import { extractMainProductionBinding } from './main-production-function';
+import { extractMainProductionFunction, extractMainProductionBinding } from './main-production-function';
 import { describe, expect, it, vi } from 'vitest';
 import { SavedQuerySearchCancelled } from '../../src/main/savedQuerySearch';
 import { persistedTaskMessage } from '../../src/main/taskPrivacy';
@@ -17,8 +17,6 @@ const input = { connectionId: 'connection', database: '库', table: '表', colum
 /** 直接执行生产dispatch及AST定位的真实IPC回调，仅替换Electron、RAM存储与进程传输。 */
 function fixture() {
   const source = readFileSync(new URL('../../src/main/index.ts', import.meta.url), 'utf8');
-  const start = source.indexOf('async function dispatch('), end = source.indexOf('/** 按平台生成中文原生菜单');
-  if (start < 0 || end <= start) throw Error('生产分派入口已变化');
   const tree = ts.createSourceFile('main.ts', source, ts.ScriptTarget.Latest, true); let callback: ts.ArrowFunction | undefined;
   function visit(node: ts.Node): void {
     if (ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression) && ts.isIdentifier(node.expression.expression) && node.expression.expression.text === 'ipcMain' && node.expression.name.text === 'handle' && ts.isStringLiteral(node.arguments[0]) && node.arguments[0].text === 'dbark:request' && ts.isArrowFunction(node.arguments[1])) callback = node.arguments[1];
@@ -42,7 +40,7 @@ function fixture() {
     validateMainCommand: validateCommand,
     taskEvent(event: TaskEvent) { events.push(event); tasks.set(event.taskId, { ...tasks.get(event.taskId)!, status: event.status }); },
   });
-  runInContext(ts.transpileModule(extractMainProductionBinding(source, 'tableChecksMain') + '\n' + source.slice(start, end) + '\nglobalThis.dispatch=dispatch;\nglobalThis.handleRequest=' + callback.getText(tree) + ';', { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText, context);
+  runInContext(ts.transpileModule(extractMainProductionBinding(source, 'tableChecksMain') + '\n' + extractMainProductionFunction(source, 'dispatch') + '\nglobalThis.dispatch=dispatch;\nglobalThis.handleRequest=' + callback.getText(tree) + ';', { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText, context);
   return { context, owner, request, tasks, events, saves, history, profile, assertAvailable, assertCapturedOwner, revise: () => { revision++; }, navigate: () => { documentCurrent = false; },
     dispatch: (value = input) => (context.dispatch as any)('table.valueOptions', value, owner),
     ipc: (value: unknown = input) => (context.handleRequest as any)({ sender: webContents, senderFrame: frame }, { command: 'table.valueOptions', input: value }),

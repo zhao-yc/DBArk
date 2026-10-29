@@ -51,7 +51,7 @@ async function counts(): Promise<Counts> {
 /** 保存完成前后都保持真实调用次数；忙碌是否保留UI由调用者在延迟窗口内另行断言。 */
 async function saveHeld(action: '保存到原查询' | '另存为新查询', inspectBusy: () => Promise<void>, name?: string, ok = true) {
   const before = await counts();
-  await query().getByRole('button', { name: '保存查询', exact: true }).click();
+  await (await navigationMenuItem(query(), { name: '保存查询', exact: true })).click();
   if (name) await saveDialog().getByLabel('查询名称', { exact: true }).fill(name);
   await desktop.evaluate((_, command: SaveCommand) => {
     const probe = (globalThis as ProbeRoot).__planStateLiveProbe; if (!probe || probe.gate) throw Error('保存延迟门状态异常');
@@ -60,14 +60,14 @@ async function saveHeld(action: '保存到原查询' | '另存为新查询', ins
     probe.gate = { command, claimed: false, arrived: false, wait, release };
   }, action === '另存为新查询' ? 'queries.create' : 'queries.updateSource');
   try {
-    await saveDialog().getByRole('button', { name: action, exact: true }).click();
+    await (await navigationMenuItem(saveDialog(), { name: action, exact: true })).click();
     await expect.poll(() => desktop.evaluate(() => {
       const gate = (globalThis as ProbeRoot).__planStateLiveProbe?.gate;
       return { arrived: gate?.arrived ?? false, ok: gate?.ok };
     }), { timeout: 20000, message: '等待原保存处理器真实结果，保持渲染端繁忙' }).toEqual({ arrived: true, ok });
-    await expect(saveDialog().getByRole('button', { name: action, exact: true })).toBeDisabled();
-    await expect(query().getByRole('button', { name: '执行全部', exact: true })).toBeDisabled();
-    await expect(plan().getByRole('button', { name: '获取文本计划', exact: true })).toBeDisabled();
+    await expect((await navigationMenuItem(saveDialog(), { name: action, exact: true }))).toBeDisabled();
+    await expect((await navigationMenuItem(query(), { name: '执行全部', exact: true }))).toBeDisabled();
+    await expect((await navigationMenuItem(plan(), { name: '获取文本计划', exact: true }))).toBeDisabled();
     await inspectBusy(); expect(await counts()).toEqual(before);
   } finally {
     await desktop.evaluate(() => {
@@ -76,7 +76,7 @@ async function saveHeld(action: '保存到原查询' | '另存为新查询', ins
   }
   if (ok) await expect(saveDialog()).toBeHidden();
   else await expect(saveDialog().getByRole('alert')).toContainText('原查询已修改');
-  await expect(query().getByRole('button', { name: '执行全部', exact: true })).toBeEnabled();
+  await expect((await navigationMenuItem(query(), { name: '执行全部', exact: true }))).toBeEnabled();
   expect(await counts()).toEqual(before);
 }
 
@@ -90,18 +90,18 @@ async function fixtures(context: LiveContext) {
 
 /** 用实际ARIA状态核对非默认选中节点和收起状态，不读取React内部状态。 */
 async function retainedNode(node: Locator) {
-  await expect(plan().getByRole('button', { name: '树形计划', exact: true })).toHaveAttribute('aria-pressed', 'true');
+  await expect((await navigationMenuItem(plan(), { name: '树形计划', exact: true }))).toHaveAttribute('aria-pressed', 'true');
   await expect(node).toHaveAttribute('aria-selected', 'true'); await expect(node).toHaveAttribute('aria-expanded', 'false');
   await expect(plan().getByRole('treeitem').first()).toHaveAttribute('aria-selected', 'false');
 }
 
 /** 按真实分页保存列表打开同源第二标签，只改变来源正文以触发真实CAS，不能伪造错误响应。 */
 async function openSaved(name: string) {
-  await page.locator('.app-commandbar').getByRole('button', { name: '历史与查询', exact: true }).click();
+  await (await navigationMenuItem(page.locator('.navigation-toolbar'), { name: '历史与查询', exact: true })).click();
   const dialog = page.getByRole('dialog', { name: '历史与保存的查询', exact: true });
-  await dialog.getByRole('button', { name: '保存的查询', exact: true }).click();
+  await (await navigationMenuItem(dialog, { name: '保存的查询', exact: true })).click();
   const row = dialog.locator('.history-card').filter({ has: page.getByText(name, { exact: true }) });
-  await expect(row).toHaveCount(1); await row.getByRole('button', { name: '在新标签打开', exact: true }).click();
+  await expect(row).toHaveCount(1); await (await navigationMenuItem(row, { name: '在新标签打开', exact: true })).click();
   await expect(dialog).toBeHidden(); await expect(query().locator('.monaco-editor')).toBeVisible();
 }
 
@@ -123,8 +123,8 @@ test('真实JSON计划经保存、原来源更新、另存及同源CAS冲突保�
     try {
       await fixtures(context); await openDatabaseQuery(context.database);
       const source = 'SELECT a.id,a.note,b.note AS peer_note FROM plan_state_subject a JOIN plan_state_subject b ON b.id=a.peer_id WHERE a.id>=1';
-      await writeSql(source); await query().getByRole('button', { name: '执行计划', exact: true }).click();
-      await expect(query().getByRole('button', { name: '执行全部', exact: true })).toBeEnabled({ timeout: 20000 });
+      await writeSql(source); await (await navigationMenuItem(query(), { name: '执行计划', exact: true })).click();
+      await expect((await navigationMenuItem(query(), { name: '执行全部', exact: true }))).toBeEnabled({ timeout: 20000 });
       await expect(query().locator('.error-box')).toHaveCount(0);
       await expect(plan().locator('.explain-toolbar')).toContainText('EXPLAIN FORMAT=JSON');
       expect(await counts()).toEqual({ execute: 0, explain: 1 });
@@ -138,25 +138,25 @@ test('真实JSON计划经保存、原来源更新、另存及同源CAS冲突保�
       await saveHeld('保存到原查询', () => retainedNode(node)); await retainedNode(node);
       expect((await records()).find(record => record.id === original.id)?.sql).toBe(updatedDraft);
 
-      await plan().getByRole('button', { name: '原始输出', exact: true }).click();
+      await (await navigationMenuItem(plan(), { name: '原始输出', exact: true })).click();
       const raw = await plan().getByLabel('原始输出', { exact: true }).innerText();
       expect(JSON.parse(raw)).toHaveProperty('query_block');
       const retainedRaw = async () => {
-        await expect(plan().getByRole('button', { name: '原始输出', exact: true })).toHaveAttribute('aria-pressed', 'true');
+        await expect((await navigationMenuItem(plan(), { name: '原始输出', exact: true }))).toHaveAttribute('aria-pressed', 'true');
         await expect(plan().getByLabel('原始输出', { exact: true })).toHaveText(raw);
       };
       await saveHeld('另存为新查询', retainedRaw, '计划状态独立副本'); await retainedRaw();
       const copy = (await records()).find(record => record.name === '计划状态独立副本')!;
       expect(copy.id).not.toBe(original.id); expect(copy.sql).toBe(updatedDraft);
       expect((await records()).find(record => record.id === original.id)?.sql).toBe(updatedDraft);
-      await plan().getByRole('button', { name: '树形计划', exact: true }).click(); await retainedNode(node);
+      await (await navigationMenuItem(plan(), { name: '树形计划', exact: true })).click(); await retainedNode(node);
 
       // 同源第二标签只保存不同正文；原标签仍持旧摘要，CAS错误必须来自正式处理器。
       const beforeOpen = await counts(); await openSaved('计划状态独立副本'); expect(await counts()).toEqual(beforeOpen);
       await expect(page.locator('.tab-strip .tab-select')).toHaveCount(2);
       const winner = source + '\n-- 同源第二标签先更新'; await writeSql(winner);const winnerDraft=await capturedDraft(winner);
-      await query().getByRole('button', { name: '保存查询', exact: true }).click();
-      await saveDialog().getByRole('button', { name: '保存到原查询', exact: true }).click(); await expect(saveDialog()).toBeHidden();
+      await (await navigationMenuItem(query(), { name: '保存查询', exact: true })).click();
+      await (await navigationMenuItem(saveDialog(), { name: '保存到原查询', exact: true })).click(); await expect(saveDialog()).toBeHidden();
       expect((await records()).find(record => record.id === copy.id)?.sql).toBe(winnerDraft); expect(await counts()).toEqual(beforeOpen);
       await page.locator('.tab-strip .tab-select').first().click();
       await expect(page.locator('.tab-strip .workspace-tab-button.active .tab-select')).toHaveText('计划状态独立副本'); await retainedNode(node);
@@ -164,7 +164,7 @@ test('真实JSON计划经保存、原来源更新、另存及同源CAS冲突保�
       await saveHeld('保存到原查询', () => retainedNode(node), undefined, false); await retainedNode(node);
       expect((await records()).find(record => record.id === copy.id)?.sql).toBe(winnerDraft);
       await expect(query().locator('.monaco-editor .view-lines')).toContainText('陈旧草稿必须保留');
-      await saveDialog().getByRole('button', { name: '取消', exact: true }).click(); await expect(saveDialog()).toBeHidden();
+      await (await navigationMenuItem(saveDialog(), { name: '取消', exact: true })).click(); await expect(saveDialog()).toBeHidden();
       expect(await counts()).toEqual({ execute: 0, explain: 1 });
       await page.screenshot({ path: info.outputPath('plan-state-live-after-cas.png') });
 
@@ -181,3 +181,6 @@ test('真实JSON计划经保存、原来源更新、另存及同源CAS冲突保�
     }
   }, info);
 });
+
+/** 原门进入具体动作后才加载真实菜单导航，不改变默认/列表阶段的资源边界。 */
+async function navigationMenuItem(...args: Parameters<typeof import('./navigation-menu')['navigationMenuItem']>): Promise<import('@playwright/test').Locator> { return (require('./navigation-menu') as typeof import('./navigation-menu')).navigationMenuItem(...args); }

@@ -82,26 +82,30 @@ it('正式采集控件默认关闭，运行和参数表单期间锁定，提示R
   expect(document.querySelector(`[role="note"][aria-label="${t.notice}"]`)!.textContent).toBe(t.hint); expect(document.body.textContent).toContain('ROW_COUNT()');
   port.busy = true; await act(async () => root!.render(<Controls/>)); expect(input.disabled).toBe(true); port.busy = false; port.parameters = true; await act(async () => root!.render(<Controls/>)); expect(input.disabled).toBe(true);
 });
-it('两个执行选项位于既有上下文行的独立组，不能再挤占执行工具栏高度', () => {
-  const placements: Array<{ label: string; classes: string[] }> = [];
+it('两个执行选项位于上下文会话菜单的独立组，不常驻挤占行宽或执行工具栏高度', () => {
+  const placements: Array<{ label: string; classes: string[]; menus: string[] }> = [];
   /** RAM不伪造像素；这里只核真实组件层级，真实高度仍由原生分栏门验证。 */
   function visit(node: ts.Node) {
     if (ts.isJsxSelfClosingElement(node) && node.tagName.getText(file) === 'input') {
       const label = node.attributes.properties.find(item => ts.isJsxAttribute(item) && item.name.getText(file) === 'aria-label') as ts.JsxAttribute | undefined;
       const text = label?.initializer?.getText(file);
       if (text === '{queryWarningsZh.option}' || text === '{queryContinueOnErrorZh.option}') {
-        const classes: string[] = [];
+        const classes: string[] = [], menus: string[] = [];
         for (let parent: ts.Node | undefined = node.parent; parent; parent = parent.parent) if (ts.isJsxElement(parent)) {
+          if (parent.openingElement.tagName.getText(file) === 'ActionMenu') {
+            const label = parent.openingElement.attributes.properties.find(item => ts.isJsxAttribute(item) && item.name.getText(file) === 'label') as ts.JsxAttribute | undefined;
+            if (label?.initializer) menus.push(label.initializer.getText(file));
+          }
           const attribute = parent.openingElement.attributes.properties.find(item => ts.isJsxAttribute(item) && item.name.getText(file) === 'className') as ts.JsxAttribute | undefined;
           if (attribute?.initializer && ts.isStringLiteral(attribute.initializer)) classes.push(...attribute.initializer.text.split(' '));
         }
-        placements.push({ label: text!, classes });
+        placements.push({ label: text!, classes, menus });
       }
     }
     ts.forEachChild(node, visit);
   }
   visit(file); expect(placements.map(item => item.label)).toEqual(['{queryWarningsZh.option}', '{queryContinueOnErrorZh.option}']);
-  for (const item of placements) { expect(item.classes).toContain('context-bar'); expect(item.classes).toContain('query-execution-options'); expect(item.classes).not.toContain('toolbar'); }
+  for (const item of placements) { expect(item.classes).toContain('context-bar'); expect(item.classes).toContain('query-execution-options'); expect(item.classes).not.toContain('toolbar'); expect(item.menus).toEqual(['{menuText.sessionOptions}']); }
 });
 it('普通和类型参数仅显式true携带采集flag，默认省略且每次只投递原查询一次', async () => {
   for (const parameters of [undefined, [{ name: 'n', type: 'integer', value: '1' }]]) for (const enabled of [false, true]) {

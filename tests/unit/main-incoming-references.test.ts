@@ -1,3 +1,4 @@
+import { extractMainProductionFunction } from './main-production-function';
 import { emptyTableFilteredDeleteOwners } from './table-filtered-delete-owner-fixture';
 import { emptyTableFilteredUpdateOwners } from './table-filtered-update-owner-fixture';
 import { readFileSync } from 'node:fs';
@@ -14,8 +15,6 @@ const commands = ['table.incomingReferences', 'table.childReferencePage'] as con
 /** 运行真实Main分派原文，仅替换Electron、存储及进程传输边界。 */
 function fixture() {
   const source = readFileSync(new URL('../../src/main/index.ts', import.meta.url), 'utf8');
-  const start = source.indexOf('async function dispatch('), end = source.indexOf('/** 按平台生成中文原生菜单');
-  if (start < 0 || end <= start) throw Error('生产分派入口已变化');
   const tasks = new Map<string, TaskRecord>(), events: TaskEvent[] = [], saves = vi.fn(), history = vi.fn(); let revision = 7;
   const profile = { id: 'connection', password: '仅内存合成凭据' };
   const request = vi.fn(async (_command: string, _input: any): Promise<any> => ({ ready: true }));
@@ -25,7 +24,7 @@ function fixture() {
     connectionConfig: { assertAvailable }, store: { saveTask: saves, addHistory: history, connectionRevision: () => revision, resolveConnection: (id: string) => { if (id !== profile.id) throw Error('未知连接'); return profile; } }, broker: { request },
     taskEvent(event: TaskEvent) { events.push(event); tasks.set(event.taskId, { ...tasks.get(event.taskId)!, status: event.status }); },
   });
-  runInContext(ts.transpileModule(source.slice(start, end) + '\nglobalThis.dispatch=dispatch;', { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText, context);
+  runInContext(ts.transpileModule(extractMainProductionFunction(source, 'dispatch') + '\nglobalThis.dispatch=dispatch;', { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText, context);
   return { context, request, tasks, events, saves, history, profile, assertAvailable, revise: () => { revision++; }, dispatch: context.dispatch as (command: string, input: any) => Promise<any> };
 }
 

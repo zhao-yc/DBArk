@@ -42,10 +42,10 @@ async function selectTemplate(source: string, excluded: string) {
 /** 参数识别使用真实会话；等待识别完成才能填写，不能用固定延时假定表单已就绪。 */
 async function openParameters(source?: string) {
   if (source !== undefined) await writeSql(source);
-  await query().getByRole('button', { name: '参数执行', exact: true }).click();
+  await (await navigationMenuItem(query(), { name: '参数执行', exact: true })).click();
   const modal = parameterDialog();
   await expect(modal).toBeVisible();
-  await expect(modal.getByRole('button', { name: '执行参数 SQL', exact: true })).toBeEnabled({ timeout: 20000 });
+  await expect((await navigationMenuItem(modal, { name: '执行参数 SQL', exact: true }))).toBeEnabled({ timeout: 20000 });
   await expect(modal.locator('.error-box')).toHaveCount(0);
   return modal;
 }
@@ -62,7 +62,7 @@ async function fillParameter(modal: Locator, name: string, type: QueryParameterT
 
 /** 手动名称从稳定行内填写，重名测试也不依赖重复的 aria-label 定位。 */
 async function addManualParameter(modal: Locator, name: string, type: QueryParameterType = 'text', value = '') {
-  await modal.getByRole('button', { name: '添加参数', exact: true }).click();
+  await (await navigationMenuItem(modal, { name: '添加参数', exact: true })).click();
   const row = modal.locator('.parameter-row').last();
   await row.getByRole('textbox', { name: /^参数名称 / }).fill(name);
   await row.getByRole('combobox').selectOption(type);
@@ -73,7 +73,7 @@ async function addManualParameter(modal: Locator, name: string, type: QueryParam
 /** 只点击一次开始，按真实任务登记找到这次执行，不重放失败的写操作。 */
 async function startParameters(modal: Locator): Promise<string> {
   const before = await page.evaluate(async () => (await window.dbark.invoke('tasks.list', {})).map(task => task.id));
-  await modal.getByRole('button', { name: '执行参数 SQL', exact: true }).click();
+  await (await navigationMenuItem(modal, { name: '执行参数 SQL', exact: true })).click();
   await expect(modal).toBeHidden();
   let taskId = '';
   await expect.poll(async () => {
@@ -87,7 +87,7 @@ async function startParameters(modal: Locator): Promise<string> {
 /** 任务终态与按钮都需完成；断言结果单元格时仍单独等待虚拟表格绘制。 */
 async function finishParameters(taskId: string, status: 'completed' | 'failed' | 'cancelled' = 'completed') {
   await expect.poll(async () => page.evaluate(async id => (await window.dbark.invoke('tasks.list', {})).find(task => task.id === id)?.status, taskId), { timeout: 20000 }).toBe(status);
-  await expect(query().getByRole('button', { name: '停止', exact: true })).toBeDisabled();
+  await expect((await navigationMenuItem(query(), { name: '停止', exact: true }))).toBeDisabled();
   if (status === 'completed') await expect(query().locator(':scope > .error-box')).toHaveCount(0);
 }
 
@@ -130,7 +130,7 @@ test.describe('实库类型参数查询', () => {
       const beforePreview = await executionIds();
       const cancelledPreview = await openParameters();
       await expect(query().locator('.result-body [role="gridcell"][aria-colindex="2"]')).toHaveText('参数预览期间保留的旧结果');
-      await cancelledPreview.getByRole('button', { name: '取消', exact: true }).click();
+      await (await navigationMenuItem(cancelledPreview, { name: '取消', exact: true })).click();
       await expect(cancelledPreview).toBeHidden();
       expect(await executionIds()).toEqual(beforePreview); expect(await countRows(observer, database)).toBe(0);
       const modal = await openParameters();
@@ -169,12 +169,12 @@ test.describe('实库类型参数查询', () => {
       await expect(query().locator('.result-body [role="gridcell"][aria-colindex="3"]')).toHaveText(marker);
       await expect(query().locator('.result-body [role="gridcell"][aria-colindex="4"]')).toHaveText(':ignored');
       await page.screenshot({ path: testInfo.outputPath('parameter-result.png') });
-      await query().getByRole('button', { name: '固定结果', exact: true }).click();
-      await query().getByRole('button', { name: '快照 SQL', exact: true }).click();
+      await (await navigationMenuItem(query(), { name: '固定结果', exact: true })).click();
+      await (await navigationMenuItem(query(), { name: '快照 SQL', exact: true })).click();
       const preview = page.getByRole('dialog', { name: '固定结果的原 SQL', exact: true });
       await expect(preview.locator('.monaco-editor .view-lines')).toContainText(':value');
       await expect(preview.locator('.monaco-editor .view-lines')).not.toContainText(marker);
-      await preview.getByRole('button', { name: '关闭', exact: true }).click();
+      await (await navigationMenuItem(preview, { name: '关闭', exact: true })).click();
       await assertParameterPrivacy([marker], [template, repeated]);
     }, testInfo);
   });
@@ -197,20 +197,20 @@ test.describe('实库类型参数查询', () => {
       ];
       for (const invalidValue of invalid) {
         await fillParameter(modal, 'value', invalidValue.type, invalidValue.value);
-        await modal.getByRole('button', { name: '执行参数 SQL', exact: true }).click();
+        await (await navigationMenuItem(modal, { name: '执行参数 SQL', exact: true })).click();
         await expect(modal.locator('.error-box')).toContainText(invalidValue.error);
         expect(await executionIds()).toEqual(before); expect(await countRows(observer, database)).toBe(0);
       }
       await fillParameter(modal, 'value', 'integer', '2');
       const manual = await addManualParameter(modal, '');
-      await modal.getByRole('button', { name: '执行参数 SQL', exact: true }).click();
+      await (await navigationMenuItem(modal, { name: '执行参数 SQL', exact: true })).click();
       await expect(modal.locator('.error-box')).toContainText('参数名须为');
       await manual.getByRole('textbox', { name: /^参数名称 / }).fill('value');
-      await modal.getByRole('button', { name: '执行参数 SQL', exact: true }).click();
+      await (await navigationMenuItem(modal, { name: '执行参数 SQL', exact: true })).click();
       await expect(modal.locator('.error-box')).toContainText('查询参数名称重复');
       expect(await executionIds()).toEqual(before); expect(await countRows(observer, database)).toBe(0);
       await page.screenshot({ path: testInfo.outputPath('query-parameters-invalid-before-write.png') });
-      await modal.getByRole('button', { name: '取消', exact: true }).click();
+      await (await navigationMenuItem(modal, { name: '取消', exact: true })).click();
 
       // 自动识别参数行不可删除；缺参用真实 IPC 负例验证主进程和引擎防线，不篡改表单 DOM。
       const { sessionId } = await page.evaluate(input => window.dbark.invoke('sessions.open', input), { connectionId, database });
@@ -244,8 +244,8 @@ test.describe('实库类型参数查询', () => {
       await expect(manual.locator('.parameter-row')).toHaveCount(0);
       await addManualParameter(manual, 'later', 'integer', '42');
       await finishParameters(await startParameters(manual));
-      await expect(query().getByRole('button', { name: '结果 2', exact: true })).toBeVisible();
-      await query().getByRole('button', { name: '结果 2', exact: true }).click();
+      await expect((await navigationMenuItem(query(), { name: '结果 2', exact: true }))).toBeVisible();
+      await (await navigationMenuItem(query(), { name: '结果 2', exact: true })).click();
       await expect(query().locator('.result-body [role="gridcell"][aria-colindex="2"]')).toHaveText('path\\');
       await expect(query().locator('.result-body [role="gridcell"][aria-colindex="3"]')).toHaveText('42');
       await executeSql("SET SESSION sql_mode='';");
@@ -260,7 +260,7 @@ test.describe('实库类型参数查询', () => {
       await expect(query().locator(':scope > .error-box')).toContainText('已完成 2 条');
       await expect(query().locator(':scope > .error-box')).toContainText('未自动回滚或重放');
       expect(await countRows(observer, database, 'id=1')).toBe(1); expect(await countRows(observer, database, 'id=9')).toBe(0);
-      await expect(query().getByRole('button', { name: '回滚', exact: true })).toBeDisabled();
+      await expect((await navigationMenuItem(query(), { name: '回滚', exact: true }))).toBeDisabled();
 
       // 成功完成的协议状态可确定事务已开启；先核对正常提示，再回滚这个空事务。
       const knownDialog = await openParameters('START TRANSACTION; SELECT :probe AS transaction_probe;');
@@ -268,8 +268,8 @@ test.describe('实库类型参数查询', () => {
       await finishParameters(await startParameters(knownDialog));
       await expect(query().locator('.tab-status')).toContainText('事务进行中');
       await expect(query().locator('.tab-status')).not.toContainText('事务状态需核对');
-      await query().getByRole('button', { name: '回滚', exact: true }).click();
-      await expect(query().getByRole('button', { name: '回滚', exact: true })).toBeDisabled();
+      await (await navigationMenuItem(query(), { name: '回滚', exact: true })).click();
+      await expect((await navigationMenuItem(query(), { name: '回滚', exact: true }))).toBeDisabled();
 
       const transactionMarker = `Q06_TRANSACTION_${randomUUID()}`;
       const transactional = 'START TRANSACTION; INSERT INTO parameter_guard VALUES (2,:secret); INSERT INTO parameter_guard VALUES (3,:secret); INSERT INTO parameter_guard VALUES (4,:secret);';
@@ -278,9 +278,9 @@ test.describe('实库类型参数查询', () => {
       await finishParameters(await startParameters(transactionDialog), 'failed');
       await expect(query().locator(':scope > .error-box')).toContainText('ER_DUP_ENTRY');
       await expect(query().locator(':scope > .error-box')).not.toContainText(transactionMarker);
-      await expect(query().getByRole('button', { name: '回滚', exact: true })).toBeEnabled();
-      await expect(query().getByRole('button', { name: '提交', exact: true })).toBeEnabled();
-      await expect(query().getByRole('button', { name: '开始事务', exact: true })).toBeDisabled();
+      await expect((await navigationMenuItem(query(), { name: '回滚', exact: true }))).toBeEnabled();
+      await expect((await navigationMenuItem(query(), { name: '提交', exact: true }))).toBeEnabled();
+      await expect((await navigationMenuItem(query(), { name: '开始事务', exact: true }))).toBeDisabled();
       // MySQL 错误包不携带当前事务状态，不能把上一次状态当成当前确定状态。
       await expect(query().locator('.tab-status')).toContainText('事务状态需核对');
       await expect(query().locator('.tab-status')).not.toContainText('事务进行中');
@@ -288,12 +288,12 @@ test.describe('实库类型参数查询', () => {
       await page.screenshot({ path: testInfo.outputPath('query-parameters-failed-transaction.png') });
       await executeSql('SELECT COUNT(*) AS own_uncommitted_rows FROM parameter_guard WHERE id IN (2,3,4);');
       await expect(query().locator('.result-body [role="gridcell"][aria-colindex="2"]')).toHaveText('1');
-      await expect(query().getByRole('button', { name: '回滚', exact: true })).toBeEnabled();
+      await expect((await navigationMenuItem(query(), { name: '回滚', exact: true }))).toBeEnabled();
       await expect(query().locator('.tab-status')).toContainText('事务进行中');
       await expect(query().locator('.tab-status')).not.toContainText('事务状态需核对');
       await page.screenshot({ path: testInfo.outputPath('query-parameters-transaction-reconciled.png') });
-      await query().getByRole('button', { name: '回滚', exact: true }).click();
-      await expect(query().getByRole('button', { name: '回滚', exact: true })).toBeDisabled();
+      await (await navigationMenuItem(query(), { name: '回滚', exact: true })).click();
+      await expect((await navigationMenuItem(query(), { name: '回滚', exact: true }))).toBeDisabled();
       await executeSql('SELECT COUNT(*) AS rolled_back_rows FROM parameter_guard WHERE id IN (2,3,4);');
       await expect(query().locator('.result-body [role="gridcell"][aria-colindex="2"]')).toHaveText('0');
       expect(await countRows(observer, database, 'id IN (2,3,4)')).toBe(0);
@@ -312,12 +312,12 @@ test.describe('实库类型参数查询', () => {
       await fillParameter(modal, 'value', 'text', marker); await fillParameter(modal, 'delay', 'integer', '30');
       const taskId = await startParameters(modal);
       await expect(query().locator('.result-body')).toContainText(marker);
-      await expect(query().getByRole('button', { name: '停止', exact: true })).toBeEnabled();
-      await query().getByRole('button', { name: '停止', exact: true }).click();
+      await expect((await navigationMenuItem(query(), { name: '停止', exact: true }))).toBeEnabled();
+      await (await navigationMenuItem(query(), { name: '停止', exact: true })).click();
       await finishParameters(taskId, 'cancelled');
       await expect(query().locator(':scope > .error-box')).toContainText('取消');
-      await expect(query().getByRole('button', { name: '固定结果', exact: true })).toBeDisabled();
-      await expect(query().getByRole('button', { name: '导出已返回结果', exact: true })).toBeDisabled();
+      await expect((await navigationMenuItem(query(), { name: '固定结果', exact: true }))).toBeDisabled();
+      await expect((await navigationMenuItem(query(), { name: '导出已返回结果', exact: true }))).toBeDisabled();
       expect(await countRows(observer, database)).toBe(0);
       await page.screenshot({ path: testInfo.outputPath('query-parameters-cancelled.png') });
       await executeSql('SELECT 1 AS usable_after_cancel;');
@@ -327,3 +327,6 @@ test.describe('实库类型参数查询', () => {
     }, testInfo);
   });
 });
+
+/** 原门进入具体动作后才加载真实菜单导航，不改变默认/列表阶段的资源边界。 */
+async function navigationMenuItem(...args: Parameters<typeof import('./navigation-menu')['navigationMenuItem']>): Promise<import('@playwright/test').Locator> { return (require('./navigation-menu') as typeof import('./navigation-menu')).navigationMenuItem(...args); }

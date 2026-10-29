@@ -74,9 +74,9 @@ test.afterEach(async ({}, info) => {
 });
 /** 两个入口始终点击原组件按钮；节点选择只由夹具提供当前精确路径。 */
 async function open(route: 'document' | 'node') {
-  await page.getByRole('button', { name: '打开夹具记录', exact: true }).click();
-  await panel().getByRole('button', { name: route === 'document' ? '整行编辑' : '记录树', exact: true }).click();
-  if (route === 'node') await page.getByRole('button', { name: '选择夹具JSON根节点', exact: true }).click();
+  await (await (await import('./navigation-menu')).navigationMenuItem(page, { name: '打开夹具记录', exact: true })).click();
+  await (await (await import('./navigation-menu')).navigationMenuItem(panel(), { name: route === 'document' ? '整行编辑' : '记录树', exact: true })).click();
+  if (route === 'node') await (await (await import('./navigation-menu')).navigationMenuItem(page, { name: '选择夹具JSON根节点', exact: true })).click();
   const input = panel().getByRole('textbox', { name: route === 'document' ? '整行 JSON 输入' : 'JSON 节点输入', exact: true }); await expect(input).toBeVisible(); await expect(input).not.toHaveAttribute('maxlength'); return input;
 }
 /** 选区只设置偏移；内容经真实系统剪贴板及webContents.paste进入Chromium。 */

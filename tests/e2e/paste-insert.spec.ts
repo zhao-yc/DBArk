@@ -20,7 +20,7 @@ async function isolated(body: (context: LiveContext) => Promise<void>, info: Par
     const connection = page.locator('.connection-node').filter({ has: page.locator('.connection-row').getByText(context.connectionName, { exact: true }) });
     await connection.locator('.connection-row').getByRole('button', { name: context.connectionName, exact: true }).focus();
     await clickSidebarAction(connection, { name: '刷新连接', exact: true });
-    await connection.locator('.database-row').getByRole('button', { name: context.database, exact: true }).click();
+    await (await (await import('./navigation-menu')).navigationMenuItem(connection.locator('.database-row'), { name: context.database, exact: true })).click();
     await connection.locator('.object-row').filter({ has: page.getByText('subject', { exact: true }) }).getByText('subject', { exact: true }).click();
     await expect(table().locator('.loading-overlay')).toHaveCount(0); await expect(table().getByRole('button', { name: text.action, exact: true })).toBeEnabled();
     await body(context);
@@ -34,36 +34,36 @@ async function unchanged(context: LiveContext) {
 
 test('批量新增：空表手工文本先有界预览再暂存，外部NULL为文字且零自动写入', async ({}, info) => {
   test.setTimeout(120000); await isolated(async context => {
-    await table().getByRole('button', { name: text.action, exact: true }).click();
-    await dialog().getByLabel(text.input, { exact: true }).fill('第一行\nNULL'); await dialog().getByRole('button', { name: text.preview, exact: true }).click();
+    await (await (await import('./navigation-menu')).navigationMenuItem(table(), { name: text.action, exact: true })).click();
+    await dialog().getByLabel(text.input, { exact: true }).fill('第一行\nNULL'); await (await (await import('./navigation-menu')).navigationMenuItem(dialog(), { name: text.preview, exact: true })).click();
     await expect(dialog().getByRole('status')).toContainText('2'); await expect(dialog()).toContainText('文本：NULL'); await expect(dialog()).toContainText('DEFAULT'); await unchanged(context);
-    await dialog().getByRole('button', { name: text.stage, exact: true }).click(); await expect(dialog()).toHaveCount(0); await expect(table().locator('.row-inserted')).toHaveCount(2); await unchanged(context);
-    await table().getByRole('button', { name: zh.table.text019, exact: true }).click(); const preview = page.getByRole('dialog', { name: zh.table.text031, exact: true });
-    await expect(preview.locator('.monaco-editor')).toBeVisible(); await unchanged(context); await preview.getByRole('button', { name: zh.common.backToEdit, exact: true }).click();
+    await (await (await import('./navigation-menu')).navigationMenuItem(dialog(), { name: text.stage, exact: true })).click(); await expect(dialog()).toHaveCount(0); await expect(table().locator('.row-inserted')).toHaveCount(2); await unchanged(context);
+    await (await (await import('./navigation-menu')).navigationMenuItem(table(), { name: zh.table.text019, exact: true })).click(); const preview = page.getByRole('dialog', { name: zh.table.text031, exact: true });
+    await expect(preview.locator('.monaco-editor')).toBeVisible(); await unchanged(context); await (await (await import('./navigation-menu')).navigationMenuItem(preview, { name: zh.common.backToEdit, exact: true })).click();
   }, info);
 });
 
 test('批量新增：合成paste事件保留typed NULL/字节/JSON原文，未声称系统原生剪贴板验收', async ({}, info) => {
   test.setTimeout(120000); await isolated(async context => {
-    await table().getByRole('button', { name: text.action, exact: true }).click();
+    await (await (await import('./navigation-menu')).navigationMenuItem(table(), { name: text.action, exact: true })).click();
     const payload = encodeClipboard([[null, { type: 'binary', base64: 'AAH/' }, '{"n":900719925474099312345,"x":-0}']]);
     await dialog().getByLabel(text.input, { exact: true }).evaluate((element, data) => {
       const transfer = new DataTransfer(); transfer.setData(data.type, data.typed); transfer.setData('text/plain', data.text);
       element.dispatchEvent(new ClipboardEvent('paste', { clipboardData: transfer, bubbles: true, cancelable: true }));
     }, { ...payload, type: cellClipboardType });
-    await dialog().getByRole('button', { name: text.preview, exact: true }).click(); await expect(dialog()).toContainText('SQL NULL'); await expect(dialog()).toContainText('0x0001ff'); await expect(dialog()).toContainText('900719925474099312345');
-    await dialog().getByRole('button', { name: text.stage, exact: true }).click(); await expect(table().locator('.row-inserted')).toHaveCount(1); await unchanged(context);
+    await (await (await import('./navigation-menu')).navigationMenuItem(dialog(), { name: text.preview, exact: true })).click(); await expect(dialog()).toContainText('SQL NULL'); await expect(dialog()).toContainText('0x0001ff'); await expect(dialog()).toContainText('900719925474099312345');
+    await (await (await import('./navigation-menu')).navigationMenuItem(dialog(), { name: text.stage, exact: true })).click(); await expect(table().locator('.row-inserted')).toHaveCount(1); await unchanged(context);
   }, info);
 });
 
 test('批量新增：1001行整批拒绝，关闭及未知typed不复用旧预览，既有草稿保留', async ({}, info) => {
   test.setTimeout(120000); await isolated(async context => {
-    await table().getByRole('button', { name: zh.common.add, exact: true }).click();
-    await table().getByRole('button', { name: text.action, exact: true }).click(); await dialog().getByLabel(text.input, { exact: true }).fill(Array(1001).fill('x').join('\n')); await dialog().getByRole('button', { name: text.preview, exact: true }).click();
+    await (await (await import('./navigation-menu')).navigationMenuItem(table(), { name: zh.common.add, exact: true })).click();
+    await (await (await import('./navigation-menu')).navigationMenuItem(table(), { name: text.action, exact: true })).click(); await dialog().getByLabel(text.input, { exact: true }).fill(Array(1001).fill('x').join('\n')); await (await (await import('./navigation-menu')).navigationMenuItem(dialog(), { name: text.preview, exact: true })).click();
     await expect(dialog().getByRole('alert')).toContainText('1000'); await expect(dialog().getByRole('button', { name: text.stage, exact: true })).toBeDisabled();
-    await dialog().getByRole('button', { name: text.close, exact: true }).click(); await expect(table().locator('.row-inserted')).toHaveCount(1);
-    await table().getByRole('button', { name: text.action, exact: true }).click(); await dialog().getByLabel(text.input, { exact: true }).fill('旧预览'); await dialog().getByRole('button', { name: text.preview, exact: true }).click();
+    await (await (await import('./navigation-menu')).navigationMenuItem(dialog(), { name: text.close, exact: true })).click(); await expect(table().locator('.row-inserted')).toHaveCount(1);
+    await (await (await import('./navigation-menu')).navigationMenuItem(table(), { name: text.action, exact: true })).click(); await dialog().getByLabel(text.input, { exact: true }).fill('旧预览'); await (await (await import('./navigation-menu')).navigationMenuItem(dialog(), { name: text.preview, exact: true })).click();
     await dialog().getByLabel(text.input, { exact: true }).evaluate((element, type) => { const transfer = new DataTransfer(); transfer.setData(type, '{"version":999,"rows":[]}'); transfer.setData('text/plain', '不能退回此文本'); element.dispatchEvent(new ClipboardEvent('paste', { clipboardData: transfer, bubbles: true, cancelable: true })); }, cellClipboardType);
-    await expect(dialog().getByRole('alert')).toBeVisible(); await expect(dialog().getByRole('button', { name: text.stage, exact: true })).toBeDisabled(); await dialog().getByRole('button', { name: text.close, exact: true }).click(); await expect(table().locator('.row-inserted')).toHaveCount(1); await unchanged(context);
+    await expect(dialog().getByRole('alert')).toBeVisible(); await expect(dialog().getByRole('button', { name: text.stage, exact: true })).toBeDisabled(); await (await (await import('./navigation-menu')).navigationMenuItem(dialog(), { name: text.close, exact: true })).click(); await expect(table().locator('.row-inserted')).toHaveCount(1); await unchanged(context);
   }, info);
 });

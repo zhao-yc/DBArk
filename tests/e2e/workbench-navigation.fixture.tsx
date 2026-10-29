@@ -1,6 +1,7 @@
 import { useLayoutEffect, useMemo, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import type { DesktopApi } from '../../src/shared/contracts';
+import { uiMenuStateSchema, type UiCommandId, type UiCommandInvocation, type UiMenuState } from '../../src/shared/uiCommands';
 import type { WorkbenchTarget } from '../../src/shared/workbench';
 import { WorkbenchDialog, WorkbenchShelf, ObjectLinkDialog } from '../../src/renderer/components/Workbench';
 import { createWorkbenchNavigation } from '../../src/renderer/workbenchNavigation';
@@ -11,6 +12,8 @@ import '../../src/renderer/workbench.css';
 
 interface Pending { target: WorkbenchTarget; resolve(target: WorkbenchTarget): void; }
 const pending = new Map<number, Pending>(); let next = 0;
+const commandListeners = new Set<(event: UiCommandInvocation) => void>();
+let menuState: UiMenuState | undefined;
 const connections = [
   { id: 'production', name: '生产环境', group: '正式', color: '#e14b4b' },
   { id: 'testing', name: '测试环境', group: '开发', color: '#3c9d65' }
@@ -18,11 +21,14 @@ const connections = [
 
 // 只控制核验回包顺序；真实组件、导航代码及 Zustand 选择和标签更新均未替换。
 window.dbark = {
-  invoke: ((command: string, input: WorkbenchTarget) => {
-    if (command === 'workbench.resolve') return new Promise<WorkbenchTarget>(resolve => { pending.set(++next, { target: input, resolve }); });
+  invoke: ((command: string, input: unknown) => {
+    if (command === 'workbench.resolve') return new Promise<WorkbenchTarget>(resolve => { pending.set(++next, { target: input as WorkbenchTarget, resolve }); });
     if (command === 'settings.save') return Promise.resolve();
+    // 仅保存真实注册器发布的封闭快照，不从测试注入可执行回调或更改产品状态。
+    if (command === 'app.menuState') { menuState = uiMenuStateSchema.parse(input); return Promise.resolve(); }
     return Promise.reject(Error('界面协议夹具遇到未预期的命令：' + command));
   }) as DesktopApi['invoke'], onTask: () => () => {}, onMenu: () => () => {},
+  onCommand(listener) { commandListeners.add(listener); return () => { commandListeners.delete(listener); }; },
   // 本夹具只挂载应用内导航组件，不接收系统通知；新的完整DesktopApi仍保留原拒绝未知命令门。
   onObjectUri: () => () => {}
 };
@@ -33,6 +39,7 @@ declare global {
   interface Window {
     workbenchNavigationFixture: {
       pending(): number[]; finish(id: number): void; unmount(): void; removeDialogs(): void;
+      command(id: UiCommandId): boolean;
       state(): { connection?: string; tabs: string[] };
     };
   }
@@ -54,6 +61,12 @@ window.workbenchNavigationFixture = {
   pending: () => [...pending.keys()],
   finish(id) { const item = pending.get(id); if (!item) throw Error('请求不存在'); pending.delete(id); item.resolve(item.target); },
   unmount: () => root.unmount(), removeDialogs: () => {},
+  command(id) {
+    if (!menuState?.commands.some(command => command.id === id && command.enabled)) return false;
+    const event: UiCommandInvocation = { id, revision: menuState.revision };
+    for (const listener of commandListeners) listener(event);
+    return true;
+  },
   state: () => ({ connection: useWorkspace.getState().selection?.connectionId, tabs: useWorkspace.getState().settings.tabs.map(tab => tab.connectionId) })
 };
 root.render(<Fixture/>);

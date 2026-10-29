@@ -39,8 +39,8 @@ async function cell(key = 'note', row = 2) {
 }
 /** 首屏实际查找第一处，默认捕获开关必须关闭。 */
 async function prepareCurrent() {
-  await page.getByRole('button', { name: text.find, exact: true }).click(); await panel().getByRole('combobox', { name: text.column, exact: true }).selectOption('note'); await query().fill('old'); await expect(panel().getByRole('status')).toContainText('0 / 3 处');
-  await panel().getByRole('button', { name: text.next, exact: true }).click(); await expect(panel().locator('.page-find-current')).toContainText('格内第 1 处'); await replacement().fill('NEW'); await expect(panel().getByRole('checkbox', { name: text.captureReplacement, exact: true })).not.toBeChecked(); await unchanged();
+  await (await (await import('./navigation-menu')).navigationMenuItem(page, { name: text.find, exact: true })).click(); await panel().getByRole('combobox', { name: text.column, exact: true }).selectOption('note'); await query().fill('old'); await expect(panel().getByRole('status')).toContainText('0 / 3 处');
+  await (await (await import('./navigation-menu')).navigationMenuItem(panel(), { name: text.next, exact: true })).click(); await expect(panel().locator('.page-find-current')).toContainText('格内第 1 处'); await replacement().fill('NEW'); await expect(panel().getByRole('checkbox', { name: text.captureReplacement, exact: true })).not.toBeChecked(); await unchanged();
 }
 /** 真实脏通知捕获瞬时变化；不把通知数量当作setRows精确调用次数。 */
 async function unchanged() {
@@ -74,7 +74,7 @@ async function recover(value = 'NEW') {
   expect((await signals()).dirtyMarks).toBeGreaterThan(0); expect((await signals()).transitions).toBe(1); await expect.poll(async () => (await workers()).every(worker => worker.nativeTerminated)).toBe(true);
 }
 /** 正则查找必须经实际输入和显式按钮发起，不直接调用生产扫描函数。 */
-async function realSearch(value: string) { await query().fill(value); await panel().getByRole('button', { name: text.search, exact: true }).click(); }
+async function realSearch(value: string) { await query().fill(value); await (await (await import('./navigation-menu')).navigationMenuItem(panel(), { name: text.search, exact: true })).click(); }
 
 test.describe('D06仅延迟真实原消息的原生组件回归准备', () => {
   test.skip(process.env.DBARK_D06_NATIVE_LATE_UI !== '1', '由ROOT独占执行，默认不启动Electron或Vite');
@@ -90,7 +90,7 @@ test.describe('D06仅延迟真实原消息的原生组件回归准备', () => {
   test.afterEach(async ({}, result) => {
     try {
       if (app && page && !page.isClosed()) try {
-        if (await panel().count()) await page.getByRole('button', { name: text.find, exact: true }).click();
+        if (await panel().count()) await (await (await import('./navigation-menu')).navigationMenuItem(page, { name: text.find, exact: true })).click();
         const evidence = { 测试: result.title, 状态: result.status, 草稿: await signals(), 原消息与实际终止: await workers(), 页面错误: errors, 禁止命令: await page.evaluate(() => (window as ProbeWindow).__pageFindCalls.filter(command => ['table.preview', 'table.apply', 'query.execute'].includes(command))) };
         await result.attach('D06原消息迟到控制链摘要', { body: JSON.stringify(evidence, null, 2), contentType: 'application/json' }); expect(evidence.禁止命令).toEqual([]); expect(errors).toEqual([]);
       } finally { await page.evaluate(() => { (window as Partial<ProbeWindow>).__d06NativeDrafts?.dispose(); (window as Partial<ProbeWindow>).__d06NativeMessages?.restore(); }); }
@@ -108,22 +108,22 @@ test.describe('D06仅延迟真实原消息的原生组件回归准备', () => {
     });
   }
   test('D06-NATIVE-LATE-UI-05：真实翻页代次使旧原值计划失效，不能覆盖新页同值数据', async () => {
-    await prepareCurrent(); const held = await holdPreview(), pages = await page.evaluate(() => (window as ProbeWindow).__pageFindCalls.filter(command => command === 'table.page').length); await page.getByRole('button', { name: '下一页', exact: true }).click();
+    await prepareCurrent(); const held = await holdPreview(), pages = await page.evaluate(() => (window as ProbeWindow).__pageFindCalls.filter(command => command === 'table.page').length); await (await (await import('./navigation-menu')).navigationMenuItem(page, { name: '下一页', exact: true })).click();
     await expect.poll(() => page.evaluate(() => (window as ProbeWindow).__pageFindCalls.filter(command => command === 'table.page').length)).toBe(pages + 1); await expect(page.getByRole('button', { name: '上一页', exact: true })).toBeEnabled(); await expect(panel().getByRole('status')).toContainText('0 / 3 处');
-    await releaseOriginal(held, true); await unchanged(); await panel().getByRole('button', { name: text.next, exact: true }).click(); await recover(); const latest = (await workers()).filter(worker => worker.operation === 'preview').at(-1)!; expect(latest.generation).toBeGreaterThan(held.generation!);
+    await releaseOriginal(held, true); await unchanged(); await (await (await import('./navigation-menu')).navigationMenuItem(panel(), { name: text.next, exact: true })).click(); await recover(); const latest = (await workers()).filter(worker => worker.operation === 'preview').at(-1)!; expect(latest.generation).toBeGreaterThan(held.generation!);
   });
   test('D06-NATIVE-LATE-UI-06：大小写正则保持实际匹配，默认捕获关闭仍按美元字面替换', async () => {
     await prepareCurrent(); await panel().getByRole('checkbox', { name: text.regex, exact: true }).check(); await panel().getByRole('combobox', { name: text.column, exact: true }).selectOption(''); await realSearch('(?<词>old)'); await expect(panel().getByRole('status')).toContainText('0 / 5 处');
-    await panel().getByRole('checkbox', { name: text.case, exact: true }).check(); await panel().getByRole('button', { name: text.search, exact: true }).click(); await expect(panel().getByRole('status')).toContainText('0 / 4 处'); await panel().getByRole('checkbox', { name: text.case, exact: true }).uncheck(); await panel().getByRole('combobox', { name: text.column, exact: true }).selectOption('note'); await panel().getByRole('button', { name: text.search, exact: true }).click(); await expect(panel().getByRole('status')).toContainText('0 / 3 处');
-    await expect(panel().getByRole('checkbox', { name: text.captureReplacement, exact: true })).not.toBeChecked(); await panel().getByRole('button', { name: text.next, exact: true }).click(); const literal = '$1/$&/$$/$<词>'; await replacement().fill(literal); const held = await holdPreview(literal); expect(held).toMatchObject({ regex: true, caseSensitive: false, captureReplacement: false }); expect((await workers()).some(worker => worker.regex && worker.caseSensitive)).toBe(true);
+    await panel().getByRole('checkbox', { name: text.case, exact: true }).check(); await (await (await import('./navigation-menu')).navigationMenuItem(panel(), { name: text.search, exact: true })).click(); await expect(panel().getByRole('status')).toContainText('0 / 4 处'); await panel().getByRole('checkbox', { name: text.case, exact: true }).uncheck(); await panel().getByRole('combobox', { name: text.column, exact: true }).selectOption('note'); await (await (await import('./navigation-menu')).navigationMenuItem(panel(), { name: text.search, exact: true })).click(); await expect(panel().getByRole('status')).toContainText('0 / 3 处');
+    await expect(panel().getByRole('checkbox', { name: text.captureReplacement, exact: true })).not.toBeChecked(); await (await (await import('./navigation-menu')).navigationMenuItem(panel(), { name: text.next, exact: true })).click(); const literal = '$1/$&/$$/$<词>'; await replacement().fill(literal); const held = await holdPreview(literal); expect(held).toMatchObject({ regex: true, caseSensitive: false, captureReplacement: false }); expect((await workers()).some(worker => worker.regex && worker.caseSensitive)).toBe(true);
     await replacement().fill('其它'); await replacement().fill(literal); await releaseOriginal(held, true); await unchanged(); await recover(literal); await expect(await cell('other')).toHaveText('OLD');
   });
   test('D06-NATIVE-LATE-UI-07：明确取消后原响应迟到，取消原文保留且新命令可恢复', async () => {
-    await prepareCurrent(); const held = await holdPreview(); await panel().getByRole('button', { name: text.cancelSearch, exact: true }).click(); await expect(panel().getByRole('alert')).toContainText(text.cancelled); await releaseOriginal(held, true); await expect(panel().getByRole('alert')).toContainText(text.cancelled); await unchanged(); await recover();
+    await prepareCurrent(); const held = await holdPreview(); await (await (await import('./navigation-menu')).navigationMenuItem(panel(), { name: text.cancelSearch, exact: true })).click(); await expect(panel().getByRole('alert')).toContainText(text.cancelled); await releaseOriginal(held, true); await expect(panel().getByRole('alert')).toContainText(text.cancelled); await unchanged(); await recover();
   });
   test('D06-NATIVE-LATE-UI-08：真实错误照常显示，随后迟到旧错误不能覆盖新查询与恢复', async () => {
-    await prepareCurrent(); await panel().getByRole('checkbox', { name: text.regex, exact: true }).check(); await query().fill('['); await page.evaluate(() => (window as ProbeWindow).__d06NativeMessages.arm('find')); await panel().getByRole('button', { name: text.search, exact: true }).click(); const first = await heldResponse('find'); expect(first).toMatchObject({ status: 'blocked', reason: 'invalid' }); await unchanged(); await releaseOriginal(first, false); await expect(panel().getByRole('alert')).toContainText(text.regexInvalid);
-    await realSearch('old'); await expect(panel().getByRole('status')).toContainText('0 / 3 处'); await query().fill('['); await page.evaluate(() => (window as ProbeWindow).__d06NativeMessages.arm('find')); await panel().getByRole('button', { name: text.search, exact: true }).click(); const stale = await heldResponse('find'); expect(stale).toMatchObject({ status: 'blocked', reason: 'invalid' });
-    await realSearch('old'); await expect(panel().getByRole('status')).toContainText('0 / 3 处'); await releaseOriginal(stale, true); await expect(panel().getByRole('alert')).toHaveCount(0); await unchanged(); await panel().getByRole('button', { name: text.next, exact: true }).click(); await recover();
+    await prepareCurrent(); await panel().getByRole('checkbox', { name: text.regex, exact: true }).check(); await query().fill('['); await page.evaluate(() => (window as ProbeWindow).__d06NativeMessages.arm('find')); await (await (await import('./navigation-menu')).navigationMenuItem(panel(), { name: text.search, exact: true })).click(); const first = await heldResponse('find'); expect(first).toMatchObject({ status: 'blocked', reason: 'invalid' }); await unchanged(); await releaseOriginal(first, false); await expect(panel().getByRole('alert')).toContainText(text.regexInvalid);
+    await realSearch('old'); await expect(panel().getByRole('status')).toContainText('0 / 3 处'); await query().fill('['); await page.evaluate(() => (window as ProbeWindow).__d06NativeMessages.arm('find')); await (await (await import('./navigation-menu')).navigationMenuItem(panel(), { name: text.search, exact: true })).click(); const stale = await heldResponse('find'); expect(stale).toMatchObject({ status: 'blocked', reason: 'invalid' });
+    await realSearch('old'); await expect(panel().getByRole('status')).toContainText('0 / 3 处'); await releaseOriginal(stale, true); await expect(panel().getByRole('alert')).toHaveCount(0); await unchanged(); await (await (await import('./navigation-menu')).navigationMenuItem(panel(), { name: text.next, exact: true })).click(); await recover();
   });
 });

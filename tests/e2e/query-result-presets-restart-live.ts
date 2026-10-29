@@ -33,13 +33,13 @@ export function registerQueryResultPresetsRestart(binding: QueryResultColumnsUiT
       const profileId = await profile(run, first, binding, true), firstTab = await prepareQuery(run, first, profileId);
       await arm(run, first, profileId, firstTab, 1, info); await execute(run, first);
       await organize(run, first); const page = first.page, dialog = page.getByRole('dialog', { name: presets.title, exact: true });
-      await step(run, first, () => page.locator('.query-tab:visible').getByRole('button', { name: presets.open, exact: true }).click());
+      await step(run, first, async () => (await navigationMenuItem(page.locator('.query-tab:visible'), { name: presets.open, exact: true })).click());
       await step(run, first, () => dialog.getByRole('textbox', { name: presets.name, exact: true }).fill(presetName));
-      await step(run, first, () => dialog.getByRole('button', { name: presets.create, exact: true }).click());
+      await step(run, first, async () => (await navigationMenuItem(dialog, { name: presets.create, exact: true })).click());
       await preview(run, first); const firstAudit = await step(run, first, () => first.application.evaluate(readQueryResultPresetsRestartAudit));
       expect(firstAudit.schemeCommands).toEqual(['list', 'save']); expect(firstAudit.snapshot?.entries).toHaveLength(1);
       const expected = firstAudit.snapshot!; assertConfiguration(expected);
-      await step(run, first, () => dialog.getByRole('button', { name: zh.common.close, exact: true }).click());
+      await step(run, first, async () => (await navigationMenuItem(dialog, { name: zh.common.close, exact: true })).click());
       await closeQuery(run, first); await settled(run, first, 1); await run.close(first);
       const firstDisk = await disk(run, profileId, binding.target.password); expect(firstDisk.document).toEqual({ version: expected.version, revision: expected.revision, entries: expected.entries });
       expect(firstDisk.history).toBe(1); expect(firstDisk.tasks).toBe(1);
@@ -51,13 +51,13 @@ export function registerQueryResultPresetsRestart(binding: QueryResultColumnsUiT
       const secondTab = await prepareQuery(run, second, profileId); await arm(run, second, profileId, secondTab, 2, info, expected);
       await execute(run, second); await step(run, second, () => expect.poll(() => ids(run, second)).toEqual(['1', '2', '3']));
       const secondDialog = second.page.getByRole('dialog', { name: presets.title, exact: true });
-      await step(run, second, () => second.page.locator('.query-tab:visible').getByRole('button', { name: presets.open, exact: true }).click());
+      await step(run, second, async () => (await navigationMenuItem(second.page.locator('.query-tab:visible'), { name: presets.open, exact: true }, () => run.assert(second))).click());
       await step(run, second, () => secondDialog.getByRole('combobox', { name: presets.choose, exact: true }).selectOption({ label: presetName }));
-      await preview(run, second); await step(run, second, () => secondDialog.getByRole('button', { name: presets.apply, exact: true }).click());
+      await preview(run, second); await step(run, second, async () => (await navigationMenuItem(secondDialog, { name: presets.apply, exact: true })).click());
       await step(run, second, () => expect(secondDialog).toBeHidden()); await step(run, second, () => expect.poll(() => ids(run, second)).toEqual(['3', '1']));
-      await step(run, second, () => second.page.locator('.query-tab:visible').getByRole('button', { name: history.undo, exact: true }).click());
+      await step(run, second, async () => (await navigationMenuItem(second.page.locator('.query-tab:visible'), { name: history.undo, exact: true }, () => run.assert(second))).click());
       await step(run, second, () => expect.poll(() => ids(run, second)).toEqual(['1', '2', '3']));
-      await step(run, second, () => second.page.locator('.query-tab:visible').getByRole('button', { name: history.redo, exact: true }).click());
+      await step(run, second, async () => (await navigationMenuItem(second.page.locator('.query-tab:visible'), { name: history.redo, exact: true }, () => run.assert(second))).click());
       await step(run, second, () => expect.poll(() => ids(run, second)).toEqual(['3', '1']));
       const secondAudit = await step(run, second, () => second.application.evaluate(readQueryResultPresetsRestartAudit));
       expect(secondAudit.schemeCommands).toEqual(['list', 'read']); expect(secondAudit.lastRead).toEqual(expected.entries[0].value);
@@ -83,18 +83,18 @@ function assertConfiguration(snapshot: QueryResultPresetStoredSnapshot): void {
 }
 /** 连接仅由表单创建且不记住密码，不测试连接或展开对象树。 */
 async function createConnection(run: EditorIndentNativeRun, owner: IndentNativeOwner, binding: QueryResultColumnsUiTarget): Promise<void> {
-  const page = owner.page; await step(run, owner, () => page.locator('.app-commandbar').getByRole('button', { name: zh.common.newConnection, exact: true }).click());
+  const page = owner.page; await step(run, owner, async () => (await navigationMenuItem(page.locator('.navigation-toolbar'), { name: zh.common.newConnection, exact: true }, () => run.assert(owner))).click());
   const form = page.getByRole('dialog', { name: zh.common.newConnection, exact: true });
   for (const [label, value] of [[zh.connections.text006, connectionName], [zh.connections.text009, binding.target.host], [zh.connections.text010, String(binding.target.port)], [zh.common.user, binding.target.user], [zh.connections.text011, binding.target.password], [zh.connections.text012, '']]) await step(run, owner, () => form.getByLabel(label, { exact: true }).fill(value));
   await step(run, owner, () => form.getByRole('combobox', { name: new RegExp('^' + zh.connections.text008) }).selectOption('mysql'));
-  await step(run, owner, () => form.getByLabel(zh.connections.text016, { exact: true }).uncheck()); await step(run, owner, () => form.getByRole('button', { name: zh.connections.text036, exact: true }).click()); await step(run, owner, () => expect(form).toBeHidden());
+  await step(run, owner, () => form.getByLabel(zh.connections.text016, { exact: true }).uncheck()); await step(run, owner, async () => (await navigationMenuItem(form, { name: zh.connections.text036, exact: true }, () => run.assert(owner))).click()); await step(run, owner, () => expect(form).toBeHidden());
 }
 /** 重启后只在关闭标签的真实表单重新填临时秘密，不改连接概要或方案。 */
 async function restorePassword(run: EditorIndentNativeRun, owner: IndentNativeOwner, binding: QueryResultColumnsUiTarget): Promise<void> {
   const row = owner.page.locator('.connection-node').filter({ has: owner.page.locator('.connection-row').getByText(connectionName, { exact: true }) });
   await step(run, owner, () => row.locator('.connection-row').hover()); await step(run, owner, () => clickSidebarAction(row, { name: `编辑连接 ${connectionName}`, exact: true }));
   const form = owner.page.getByRole('dialog', { name: '编辑连接', exact: true }); await step(run, owner, () => form.getByLabel(zh.connections.text011, { exact: true }).fill(binding.target.password));
-  await step(run, owner, () => form.getByLabel(zh.connections.text016, { exact: true }).uncheck()); await step(run, owner, () => form.getByRole('button', { name: zh.connections.text036, exact: true }).click()); await step(run, owner, () => expect(form).toBeHidden());
+  await step(run, owner, () => form.getByLabel(zh.connections.text016, { exact: true }).uncheck()); await step(run, owner, async () => (await navigationMenuItem(form, { name: zh.connections.text036, exact: true }, () => run.assert(owner))).click()); await step(run, owner, () => expect(form).toBeHidden());
 }
 /** 只读真实概要，证明两代ID相同、没有持久密码、SSH或TLS。 */
 async function profile(run: EditorIndentNativeRun, owner: IndentNativeOwner, binding: QueryResultColumnsUiTarget, available: boolean): Promise<string> {
@@ -103,8 +103,8 @@ async function profile(run: EditorIndentNativeRun, owner: IndentNativeOwner, bin
 }
 /** SQL全部来自真实Monaco输入；读取Main设置仅用于捕获准确tabId。 */
 async function prepareQuery(run: EditorIndentNativeRun, owner: IndentNativeOwner, profileId: string): Promise<string> {
-  const page = owner.page; await step(run, owner, () => page.locator('.app-commandbar').getByRole('button', { name: zh.common.newQuery, exact: true }).click()); const form = page.getByRole('dialog', { name: zh.common.newQuery, exact: true });
-  await step(run, owner, () => form.getByRole('combobox', { name: new RegExp('^' + zh.app.text049) }).selectOption(profileId)); await step(run, owner, () => form.getByLabel(zh.app.text050, { exact: true }).fill('')); await step(run, owner, () => form.getByRole('button', { name: zh.app.text053, exact: true }).click());
+  const page = owner.page; await step(run, owner, async () => (await navigationMenuItem(page.locator('.navigation-toolbar'), { name: zh.common.newQuery, exact: true }, () => run.assert(owner))).click()); const form = page.getByRole('dialog', { name: zh.common.newQuery, exact: true });
+  await step(run, owner, () => form.getByRole('combobox', { name: new RegExp('^' + zh.app.text049) }).selectOption(profileId)); await step(run, owner, () => form.getByLabel(zh.app.text050, { exact: true }).fill('')); await step(run, owner, async () => (await navigationMenuItem(form, { name: zh.app.text053, exact: true }, () => run.assert(owner))).click());
   await step(run, owner, () => page.locator('.query-tab:visible .monaco-editor').getByRole('textbox').focus()); await step(run, owner, () => page.keyboard.press(modifier + '+A')); await step(run, owner, () => page.keyboard.insertText(queryResultColumnsSql));
   let id = ''; await step(run, owner, () => expect.poll(async () => { run.assert(owner); const settings = await page.evaluate(() => window.dbark.invoke('settings.get', {})); run.assert(owner); const tab = settings.tabs.find(item => item.id === settings.activeTabId); if (settings.tabs.length === 1 && tab?.kind === 'query' && tab.sql === queryResultColumnsSql && tab.connectionId === profileId) { id = tab.id; return true; } return false; }).toBe(true)); return id;
 }
@@ -115,19 +115,19 @@ async function arm(run: EditorIndentNativeRun, owner: IndentNativeOwner, profile
 }
 /** 每代恰一次执行按钮，结果显示行序由真实DOM单元格独立读取。 */
 async function execute(run: EditorIndentNativeRun, owner: IndentNativeOwner): Promise<void> {
-  const tab = owner.page.locator('.query-tab:visible'); await step(run, owner, () => tab.getByRole('button', { name: zh.query.text011, exact: true }).click()); await step(run, owner, () => expect(tab.getByRole('button', { name: zh.common.stop, exact: true })).toBeDisabled({ timeout: 20000 })); await step(run, owner, () => expect(tab.locator('.error-box')).toHaveCount(0)); await step(run, owner, () => expect.poll(() => ids(run, owner)).toEqual(['1', '2', '3']));
+  const tab = owner.page.locator('.query-tab:visible'); await step(run, owner, async () => (await navigationMenuItem(tab, { name: zh.query.text011, exact: true }, () => run.assert(owner))).click()); await step(run, owner, async () => expect((await navigationMenuItem(tab, { name: zh.common.stop, exact: true }, () => run.assert(owner)))).toBeDisabled({ timeout: 20000 })); await step(run, owner, () => expect(tab.locator('.error-box')).toHaveCount(0)); await step(run, owner, () => expect.poll(() => ids(run, owner)).toEqual(['1', '2', '3']));
 }
 /** 内部轮询仅同代同步核验，不能嵌套run.step形成并发动作。 */
 async function ids(run: EditorIndentNativeRun, owner: IndentNativeOwner): Promise<string[]> { run.assert(owner); const values = await owner.page.locator('.query-tab:visible .results-grid [role="row"][aria-rowindex] [role="gridcell"][aria-colindex="2"]').allTextContents(); run.assert(owner); return values; }
 /** 完整括号、停用原文及两列选项全部由实际控件建立。 */
 async function organize(run: EditorIndentNativeRun, owner: IndentNativeOwner): Promise<void> {
   const page = owner.page, tab = page.locator('.query-tab:visible'), panel = tab.getByRole('region', { name: filter.title, exact: true });
-  await step(run, owner, () => tab.getByRole('button', { name: filter.open, exact: true }).click()); await step(run, owner, () => panel.getByRole('button', { name: filter.addGroup, exact: true }).click());
+  await step(run, owner, async () => (await navigationMenuItem(tab, { name: filter.open, exact: true }, () => run.assert(owner))).click()); await step(run, owner, async () => (await navigationMenuItem(panel, { name: filter.addGroup, exact: true }, () => run.assert(owner))).click());
   /** 独立输入每个叶节点，不借产品比较器或保存接口构造期待。 */
   async function rule(index: number, column: number, operator: string, value: string) { await step(run, owner, () => panel.getByRole('combobox', { name: filter.column + ' ' + index, exact: true }).selectOption({ index: column })); await step(run, owner, () => panel.getByRole('combobox', { name: filter.operator + ' ' + index, exact: true }).selectOption(operator)); await step(run, owner, () => panel.getByRole('textbox', { name: filter.input + ' ' + index, exact: true }).fill(value)); }
-  await rule(1, 0, 'eq', '1'); await step(run, owner, () => panel.getByRole('button', { name: filter.addInGroup('1'), exact: true }).click()); await rule(2, 0, 'eq', '3');
-  await step(run, owner, () => panel.getByRole('button', { name: filter.add, exact: true }).click()); await rule(3, 2, 'lte', '1.00000000000000000001');
-  await step(run, owner, () => panel.getByRole('button', { name: filter.add, exact: true }).click()); await rule(4, 0, 'eq', '保留停用原文'); await step(run, owner, () => panel.getByRole('checkbox', { name: filter.enabled(4), exact: true }).uncheck()); await step(run, owner, () => panel.getByRole('button', { name: filter.apply, exact: true }).click());
+  await rule(1, 0, 'eq', '1'); await step(run, owner, async () => (await navigationMenuItem(panel, { name: filter.addInGroup('1'), exact: true }, () => run.assert(owner))).click()); await rule(2, 0, 'eq', '3');
+  await step(run, owner, async () => (await navigationMenuItem(panel, { name: filter.add, exact: true }, () => run.assert(owner))).click()); await rule(3, 2, 'lte', '1.00000000000000000001');
+  await step(run, owner, async () => (await navigationMenuItem(panel, { name: filter.add, exact: true }, () => run.assert(owner))).click()); await rule(4, 0, 'eq', '保留停用原文'); await step(run, owner, () => panel.getByRole('checkbox', { name: filter.enabled(4), exact: true }).uncheck()); await step(run, owner, async () => (await navigationMenuItem(panel, { name: filter.apply, exact: true }, () => run.assert(owner))).click());
   const heads = tab.locator('.results-grid [role="columnheader"]:has(.column-type)'); await step(run, owner, () => heads.nth(0).click()); await step(run, owner, () => heads.nth(0).click()); await step(run, owner, () => heads.nth(2).click({ modifiers: [modifier] }));
   await step(run, owner, () => tab.getByRole('combobox', { name: sort.nulls(1, 'id'), exact: true }).selectOption('LAST')); await step(run, owner, () => tab.getByRole('checkbox', { name: sort.ignoreCase(1, 'id'), exact: true }).check()); await step(run, owner, () => tab.getByRole('combobox', { name: sort.nulls(2, 'repeated'), exact: true }).selectOption('FIRST')); await step(run, owner, () => expect.poll(() => ids(run, owner)).toEqual(['3', '1']));
 }
@@ -141,7 +141,7 @@ async function preview(run: EditorIndentNativeRun, owner: IndentNativeOwner): Pr
 async function closeQuery(run: EditorIndentNativeRun, owner: IndentNativeOwner): Promise<void> {
   await step(run, owner, () => owner.page.locator('.tab-strip .tab-close').click()); const dialog = owner.page.getByRole('dialog', { name: closeText.title, exact: true });
   await step(run, owner, () => expect.poll(async () => { run.assert(owner); const count = await owner.page.locator('.query-tab').count(); run.assert(owner); if (!count) return true; const visible = await dialog.isVisible(); run.assert(owner); return visible; }).toBe(true));
-  if (await step(run, owner, () => dialog.isVisible())) await step(run, owner, () => dialog.getByRole('button', { name: closeText.discard, exact: true }).click());
+  if (await step(run, owner, () => dialog.isVisible())) await step(run, owner, async () => (await navigationMenuItem(dialog, { name: closeText.discard, exact: true }, () => run.assert(owner))).click());
   await step(run, owner, () => expect.poll(async () => { run.assert(owner); const settings = await owner.page.evaluate(() => window.dbark.invoke('settings.get', {})); run.assert(owner); return settings.tabs.length; }).toBe(0));
 }
 /** 当代审计、历史任务及显式关闭事实必须全部结算才允许正常退出。 */
@@ -167,3 +167,6 @@ async function disk(run: EditorIndentNativeRun, profileId: string, password: str
     } finally { db.close(); }
   });
 }
+
+/** 原门进入具体动作后才加载真实菜单导航，不改变默认/列表阶段的资源边界。 */
+async function navigationMenuItem(...args: Parameters<typeof import('./navigation-menu')['navigationMenuItem']>): Promise<import('@playwright/test').Locator> { return (require('./navigation-menu') as typeof import('./navigation-menu')).navigationMenuItem(...args); }

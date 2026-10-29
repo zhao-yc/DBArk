@@ -18,7 +18,7 @@ test('实库对象树星标、成功打开与对象删除后链接失败', async
     await observer.query(`CREATE PROCEDURE ${quote(database)}.${quote(table)}() SELECT 1`);
     const [before] = await observer.query(`SHOW CREATE TABLE ${quote(database)}.${quote(table)}`);
     const dbRow = page.locator('.database-row').filter({ has: page.getByRole('button', { name: database, exact: true }) });
-    await dbRow.getByRole('button', { name: database, exact: true }).click();
+    await (await (await import('./navigation-menu')).navigationMenuItem(dbRow, { name: database, exact: true })).click();
     const row = page.locator('.object-row').filter({ has: page.getByTitle(`表 · ${table}`, { exact: true }) });
     await expect(row).toBeVisible(); await row.locator('.tree-label').focus();
     await clickSidebarAction(row, { name: `添加收藏：${table}`, exact: true });
@@ -31,23 +31,23 @@ test('实库对象树星标、成功打开与对象删除后链接失败', async
     await expect(page.locator('.table-tab:visible .error-box')).toHaveCount(0);
     const profilesBefore = await page.evaluate(() => window.dbark.invoke('connections.list', {}));
     // 同名过程采用明确类型核验，读取的是过程定义而非表页。
-    await page.locator('.app-commandbar').getByRole('button', { name: '粘贴对象链接', exact: true }).click();
+    await (await (await import('./navigation-menu')).navigationMenuItem(page.locator('.navigation-toolbar'), { name: '粘贴对象链接', exact: true })).click();
     let link = page.getByRole('dialog', { name: '粘贴对象链接', exact: true });
     await link.getByLabel('DBArk 对象链接', { exact: true }).fill(objectUri({ connectionId, database, kind: 'procedure', name: table }));
-    await link.getByRole('button', { name: '打开链接', exact: true }).click();
+    await (await (await import('./navigation-menu')).navigationMenuItem(link, { name: '打开链接', exact: true })).click();
     const definition = page.getByRole('dialog');
     await expect(definition).toContainText('只读');
     await expect(definition.getByRole('button', { name: '执行 SQL', exact: true })).toHaveCount(0);
     // 只读说明在定义读取前已经显示；等实际读取结束再关闭，不能点击忙碌期无效的标题栏关闭。
     await expect(definition.getByRole('button', { name: '取消', exact: true })).toBeEnabled();
     await expect(definition.locator('.monaco-editor .view-lines')).toContainText('PROCEDURE');
-    await definition.getByRole('button', { name: '取消', exact: true }).click();
+    await (await (await import('./navigation-menu')).navigationMenuItem(definition, { name: '取消', exact: true })).click();
     await expect(definition).toHaveCount(0);
     await observer.query(`DROP VIEW ${quote(database)}.${quote(view)}`);
-    await page.locator('.app-commandbar').getByRole('button', { name: '粘贴对象链接', exact: true }).click();
+    await (await (await import('./navigation-menu')).navigationMenuItem(page.locator('.navigation-toolbar'), { name: '粘贴对象链接', exact: true })).click();
     link = page.getByRole('dialog', { name: '粘贴对象链接', exact: true });
     await link.getByLabel('DBArk 对象链接', { exact: true }).fill(objectUri({ connectionId, database, kind: 'view', name: view }));
-    await link.getByRole('button', { name: '打开链接', exact: true }).click();
+    await (await (await import('./navigation-menu')).navigationMenuItem(link, { name: '打开链接', exact: true })).click();
     await expect(link.getByRole('alert')).toContainText('原对象已删除');
     expect(await page.evaluate(() => window.dbark.invoke('connections.list', {}))).toEqual(profilesBefore);
     expect(pageErrors).toEqual([]);

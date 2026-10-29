@@ -53,8 +53,8 @@ test('原窗口预检322条坏文件、报告原子保存、新来源显式校�
     ];
     for (const source of sources) { const path = join(directory, source.name), bytes = Buffer.from(source.text, 'utf8'); await writeFile(path, bytes, { flag: 'wx' }); files.push({ path, bytes }); }
     await installPreflightUiAudit(application, { connectionId: context.connectionId, database, table: 'subject' }); installed = true;
-    await page.locator('.database-row').filter({ has: page.getByRole('button', { name: database, exact: true }) }).getByRole('button', { name: database, exact: true }).click();
-    await page.locator('.object-row').getByRole('button', { name: 'subject', exact: true }).click(); const tab = page.locator('.table-tab:visible'); await expect(tab.getByRole('grid')).toBeVisible(); await tab.getByRole('button', { name: zh.common.import, exact: true }).click();
+    await (await (await import('./navigation-menu')).navigationMenuItem(page.locator('.database-row').filter({ has: page.getByRole('button', { name: database, exact: true }) }), { name: database, exact: true }, check)).click();
+    await (await (await import('./navigation-menu')).navigationMenuItem(page.locator('.object-row'), { name: 'subject', exact: true }, check)).click(); const tab = page.locator('.table-tab:visible'); await expect(tab.getByRole('grid')).toBeVisible(); await (await (await import('./navigation-menu')).navigationMenuItem(tab, { name: zh.common.import, exact: true }, check)).click();
     const dialog = page.getByRole('dialog', { name: `${zh.transfer.text004} · ${database}.subject`, exact: true }), panel = dialog.getByRole('region', { name: t.title, exact: true }), start = dialog.getByRole('button', { name: zh.transfer.text028, exact: true }), run = panel.getByRole('button', { name: t.run, exact: true });
     await dialog.getByRole('combobox', { name: zh.transfer.text006, exact: true }).selectOption('csv');
     /** 准确一次性回答原文件框，Main仍签发真实唯一token；不声明系统键鼠输入已验。 */
@@ -65,7 +65,7 @@ test('原窗口预检322条坏文件、报告原子保存、新来源显式校�
     await expect(panel).toContainText(t.summary(322, 21, 301, 602, 200)); await expect(panel).toContainText(t.truncated); await expect(panel.locator('tbody tr')).toHaveCount(20); await expect(panel.locator('tbody tr').first().getByRole('cell').first()).toHaveText('22'); await expect(start).toBeDisabled();
     expect((await audit()).imports).toHaveLength(0); expect(await snapshot()).toEqual(before); expect(await observe('SHOW CREATE TABLE ' + table('subject'))).toEqual(definition);
     await info.attach('坏文件预检正式报告区域', { body: await panel.screenshot(), contentType: 'image/png' });
-    const nonce = randomUUID(); await installPreflightReportAnswer(application, { nonce, path: reportPath, suggestedName: t.reportName }); await panel.getByRole('button', { name: t.export, exact: true }).click(); expect(await finishPreflightReportAnswer(application, nonce)).toEqual({ calls: 1, originalRestored: true, nativeInputVerified: false });
+    const nonce = randomUUID(); await installPreflightReportAnswer(application, { nonce, path: reportPath, suggestedName: t.reportName }); await (await (await import('./navigation-menu')).navigationMenuItem(panel, { name: t.export, exact: true }, check)).click(); expect(await finishPreflightReportAnswer(application, nonce)).toEqual({ calls: 1, originalRestored: true, nativeInputVerified: false });
     await expect.poll(async () => (await audit()).exports.length).toBe(1); await expect.poll(async () => (await audit()).pending).toBe(0);
     // 独立Node JSON.parse核原文件，不调用产品报告投影器生成期待。
     const raw = await readFile(reportPath, 'utf8'), report = JSON.parse(raw) as Record<string, unknown>[];
@@ -93,7 +93,7 @@ test('原窗口预检322条坏文件、报告原子保存、新来源显式校�
     expect(await snapshot()).toEqual([{ n: '7', amount: '9007199254740993.123456789012', note: null, payload: '00FF' }, { n: '18446744073709551615', amount: '-9007199254740993.123456789011', note: '中文😀\r\n跨行', payload: null }]);
     expect(await observe('SHOW CREATE TABLE ' + table('subject'))).toEqual(definition); for (const file of files) expect(await readFile(file.path)).toEqual(file.bytes); expect(pageErrors).toEqual([]);
     await info.attach('预检窗口报告及原子导入回执', { body: JSON.stringify({ bad: { checked: 322, invalid: 301, issueCount: 602, retained: report.length - 1 }, good: { checked: 2, issueCount: 0 }, receipt }), contentType: 'application/json' }); await info.attach('预检正式报告区域', { body: await panel.screenshot(), contentType: 'image/png' });
-    await removePreflightUiAudit(application); installed = false; await dialog.getByRole('button', { name: zh.common.done, exact: true }).click();
+    await removePreflightUiAudit(application); installed = false; await (await (await import('./navigation-menu')).navigationMenuItem(dialog, { name: zh.common.done, exact: true }, check)).click();
   } catch (error) { failed = true; failure = error; }
   if (failed) {
     // 原用例失败即保留窗口、库及文件；仅关闭本例观察连接，释放其自有行锁，不补退出或清库。

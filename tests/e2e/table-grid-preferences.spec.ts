@@ -19,7 +19,7 @@ async function openTable(connectionName: string, database: string, name: string)
   const row = connection.locator('.connection-row'); await row.hover();
   await clickSidebarAction(row, { name: '刷新连接', exact: true });
   const databaseRow = connection.locator('.database-row').filter({ has: page.getByRole('button', { name: database, exact: true }) });
-  await expect(databaseRow).toBeVisible(); await databaseRow.getByRole('button', { name: database, exact: true }).click();
+  await expect(databaseRow).toBeVisible(); await (await (await import('./navigation-menu')).navigationMenuItem(databaseRow, { name: database, exact: true })).click();
   await connection.locator('.object-row').getByText(name, { exact: true }).click();
   await expect(activeTable().locator('.context-bar')).toContainText(name);
   await expect(activeTable().locator('.loading-overlay')).toHaveCount(0);
@@ -49,7 +49,7 @@ async function edit(name: string, value: string, row = 2) {
 
 /** 查找每次显式设置类型及范围，避免沿用上一项选项掩盖边界。 */
 async function find(value: string, column = '', kind: 'text' | 'null' | 'default' = 'text', count?: number) {
-  if (!(await findPanel().isVisible())) await activeTable().getByRole('button', { name: '当前页查找替换', exact: true }).click();
+  if (!(await findPanel().isVisible())) await (await (await import('./navigation-menu')).navigationMenuItem(activeTable(), { name: '当前页查找替换', exact: true })).click();
   const panel = findPanel();
   await panel.getByRole('combobox', { name: '查找值类型', exact: true }).selectOption(kind);
   await panel.getByRole('combobox', { name: '查找列范围', exact: true }).selectOption(column);
@@ -65,26 +65,26 @@ async function savedLayout(context: LiveContext, table: string) {
 
 /** 布局在标签内立即生效，保存必须明确完成后才关闭窗口。 */
 async function openLayout() {
-  await activeTable().getByRole('button', { name: '表列偏好', exact: true }).click();
+  await (await (await import('./navigation-menu')).navigationMenuItem(activeTable(), { name: '表列偏好', exact: true })).click();
   await expect(layoutDialog()).toBeVisible(); return layoutDialog();
 }
 
 /** 方向按钮按列名移动，无拖动坐标或绕过界面的状态注入。 */
 async function moveUp(name: string, steps: number) {
-  for (let step = 0; step < steps; step++) await layoutDialog().getByRole('button', { name: `前移 ${name}`, exact: true }).click();
+  for (let step = 0; step < steps; step++) await (await (await import('./navigation-menu')).navigationMenuItem(layoutDialog(), { name: `前移 ${name}`, exact: true })).click();
 }
 
 /** 保存完成由真实提示确认，不用固定延时猜测本地磁盘写入。 */
 async function saveAndCloseLayout() {
-  await layoutDialog().getByRole('button', { name: '保存表列偏好', exact: true }).click();
+  await (await (await import('./navigation-menu')).navigationMenuItem(layoutDialog(), { name: '保存表列偏好', exact: true })).click();
   await expect(layoutDialog()).toContainText('列偏好已保存');
-  await layoutDialog().getByRole('button', { name: '关闭', exact: true }).click();
+  await (await (await import('./navigation-menu')).navigationMenuItem(layoutDialog(), { name: '关闭', exact: true })).click();
   await expect(layoutDialog()).toBeHidden();
 }
 
 /** 普通表格提交保留真实 SQL 预览与确认；加载完成后另外核验新单元格。 */
 async function dataPreview() {
-  await activeTable().getByRole('button', { name: '预览并提交', exact: true }).click();
+  await (await (await import('./navigation-menu')).navigationMenuItem(activeTable(), { name: '预览并提交', exact: true })).click();
   const modal = page.getByRole('dialog', { name: '确认数据修改', exact: true });
   await expect(modal.locator('.monaco-editor .view-lines')).toContainText('UPDATE'); return modal;
 }
@@ -98,7 +98,7 @@ async function restoreConnectionPassword(connectionName: string) {
   await clickSidebarAction(connection, { name: `编辑连接 ${connectionName}`, exact: true });
   const form = page.getByRole('dialog', { name: '编辑连接', exact: true });
   await form.getByLabel('数据库密码', { exact: true }).fill(environment.DBARK_TEST_PASSWORD ?? '');
-  await form.getByRole('button', { name: '保存连接', exact: true }).click(); await expect(form).toBeHidden();
+  await (await (await import('./navigation-menu')).navigationMenuItem(form, { name: '保存连接', exact: true })).click(); await expect(form).toBeHidden();
 }
 
 test.describe('当前页查找替换与列偏好：真实 MySQL UI', () => {
@@ -122,7 +122,7 @@ test.describe('当前页查找替换与列偏好：真实 MySQL UI', () => {
       await expect(table.locator('.loading-overlay')).toHaveCount(0);
       await expect(table.getByRole('gridcell', { name: '远行远列唯一中文', exact: true })).toHaveCount(0);
       let panel = await find('远行远列唯一中文', '', 'text', 1);
-      await panel.getByRole('button', { name: '下一处', exact: true }).click();
+      await (await (await import('./navigation-menu')).navigationMenuItem(panel, { name: '下一处', exact: true })).click();
       const target = table.getByRole('gridcell', { name: '远行远列唯一中文', exact: true });
       await expect(target).toBeVisible(); await expect(target).toHaveAttribute('aria-selected', 'true');
       await expect(target).toHaveAttribute('aria-colindex', '30');
@@ -133,7 +133,7 @@ test.describe('当前页查找替换与列偏好：真实 MySQL UI', () => {
       await expect(panel.getByRole('button', { name: '下一处', exact: true })).toBeDisabled();
       await expect(table.getByRole('textbox', { name: '跳转页码', exact: true })).toHaveValue('1');
       await page.screenshot({ path: testInfo.outputPath('grid-find-virtual-current-page.png') });
-      await table.getByRole('button', { name: '下一页', exact: true }).click();
+      await (await (await import('./navigation-menu')).navigationMenuItem(table, { name: '下一页', exact: true })).click();
       await expect(table.getByRole('textbox', { name: '跳转页码', exact: true })).toHaveValue('2');
       await expect(table.locator('.loading-overlay')).toHaveCount(0);
       await find('只在未加载第二页', '', 'text', 1);
@@ -166,11 +166,11 @@ test.describe('当前页查找替换与列偏好：真实 MySQL UI', () => {
       await find('原型中文', '__proto__', 'text', 1); await find('构造中文', 'constructor', 'text', 1);
       const [before] = await observer.query<RowDataPacket[]>(`SELECT value_text,CAST(exact_big AS CHAR) AS exact_big,exact_decimal,HEX(payload) AS payload FROM ${q(database, 'find_types')} WHERE id=1`);
       expect([before[0].value_text, before[0].exact_big, before[0].exact_decimal, before[0].payload]).toEqual(['NULL', '18446744073709551615', '12345678901234567890.123456', '4E554C4C']);
-      await activeTable().getByRole('button', { name: '新增', exact: true }).click();
+      await (await (await import('./navigation-menu')).navigationMenuItem(activeTable(), { name: '新增', exact: true })).click();
       await find('', '__proto__', 'default', 1); await find('', '__proto__', 'null', 0);
       await find('', 'value_text', 'default', 1); await find('', 'value_text', 'null', 1);
       await find('DEFAULT', '__proto__', 'text', 0);
-      await (await cell('value_text')).click(); await activeTable().getByRole('button', { name: '删除', exact: true }).click();
+      await (await cell('value_text')).click(); await (await (await import('./navigation-menu')).navigationMenuItem(activeTable(), { name: '删除', exact: true })).click();
       await find('未提交中文', 'value_text', 'text', 0);
       await page.screenshot({ path: testInfo.outputPath('grid-find-types-draft.png') });
     }, testInfo);
@@ -184,21 +184,21 @@ test.describe('当前页查找替换与列偏好：真实 MySQL UI', () => {
       const beforeTasks = await page.evaluate(() => window.dbark.invoke('tasks.list', {}));
       const panel = await find('old', '', 'text', 4);
       await panel.getByRole('textbox', { name: '替换为文字', exact: true }).fill('$& 新');
-      await panel.getByRole('button', { name: '预览当前页替换', exact: true }).click();
+      await (await (await import('./navigation-menu')).navigationMenuItem(panel, { name: '预览当前页替换', exact: true })).click();
       const preview = page.getByRole('dialog', { name: '当前页替换草稿预览', exact: true });
       await expect(preview).toContainText('将修改 4 格、2 行');
       await expect(preview.getByRole('cell', { name: '$& 新 原型二', exact: true })).toBeVisible();
       expect((await observer.query<RowDataPacket[]>(`SELECT title FROM ${q(database, 'replace_conflict')} ORDER BY id`))[0].map(row => row.title)).toEqual(['old 第一', 'old 第二']);
       expect(await page.evaluate(() => window.dbark.invoke('tasks.list', {}))).toEqual(beforeTasks);
       await page.screenshot({ path: testInfo.outputPath('grid-replace-preview-no-write.png') });
-      await preview.getByRole('button', { name: '确认形成替换草稿', exact: true }).click(); await expect(preview).toBeHidden();
+      await (await (await import('./navigation-menu')).navigationMenuItem(preview, { name: '确认形成替换草稿', exact: true })).click(); await expect(preview).toBeHidden();
       await expect(activeTable().locator('.table-action-bar')).toContainText('2 条待提交修改');
       await expect(await cell('__proto__')).toHaveText('$& 新 原型一');
       expect((await observer.query<RowDataPacket[]>(`SELECT title FROM ${q(database, 'replace_conflict')} ORDER BY id`))[0].map(row => row.title)).toEqual(['old 第一', 'old 第二']);
       expect(await page.evaluate(() => window.dbark.invoke('tasks.list', {}))).toEqual(beforeTasks);
       const submit = await dataPreview();
       await observer.query(`UPDATE ${q(database, 'replace_conflict')} SET title='并发修改' WHERE id=2`);
-      await submit.getByRole('button', { name: '确认提交', exact: true }).click();
+      await (await (await import('./navigation-menu')).navigationMenuItem(submit, { name: '确认提交', exact: true })).click();
       await expect(submit.locator('.error-box')).toContainText(/并发|已被其他/);
       const [after] = await observer.query<RowDataPacket[]>(`SELECT title,\`__proto__\` AS prototype_value,amount FROM ${q(database, 'replace_conflict')} ORDER BY id`);
       expect(after.map(row => [row.title, row.prototype_value, row.amount])).toEqual([['old 第一', 'old 原型一', '12345678901234567890.123456'], ['并发修改', 'old 原型二', '0.000001']]);
@@ -225,12 +225,12 @@ test.describe('当前页查找替换与列偏好：真实 MySQL UI', () => {
       const saved = await savedLayout(context, 'grid_child');
       expect(saved?.columns.filter(column => !column.hidden).map(column => column.name)).toEqual(['parent_id', '__proto__', 'title']);
       await find('隐藏备注一', '', 'text', 0);
-      await activeTable().getByRole('button', { name: '当前页查找替换', exact: true }).click();
+      await (await (await import('./navigation-menu')).navigationMenuItem(activeTable(), { name: '当前页查找替换', exact: true })).click();
       await expect(activeTable().getByRole('button', { name: '查看关联记录', exact: true })).toBeEnabled();
-      await activeTable().getByRole('button', { name: '查看关联记录', exact: true }).click();
+      await (await (await import('./navigation-menu')).navigationMenuItem(activeTable(), { name: '查看关联记录', exact: true })).click();
       const reference = page.getByRole('dialog', { name: '查看关联记录', exact: true });
       await expect(reference.getByRole('gridcell', { name: '父记录十', exact: true })).toBeVisible();
-      await reference.getByRole('button', { name: '关闭', exact: true }).click();
+      await (await (await import('./navigation-menu')).navigationMenuItem(reference, { name: '关闭', exact: true })).click();
       const first = await cell('__proto__'); await first.click();
       await expect(activeTable().getByRole('button', { name: '查看关联记录', exact: true })).toBeDisabled();
       // 真实 ClipboardEvent 走 RDG 事件处理；不依赖操作系统剪贴板权限，也不改内部草稿。
@@ -239,7 +239,7 @@ test.describe('当前页查找替换与列偏好：真实 MySQL UI', () => {
       await activeTable().locator('[role="row"][aria-rowindex="2"]').getByRole('checkbox').check();
       const copied = await (await cell('__proto__')).evaluate(element => { const data = new DataTransfer(); element.dispatchEvent(new ClipboardEvent('copy', { bubbles: true, cancelable: true, clipboardData: data })); return { text: data.getData('text/plain'), typed: data.getData('application/x-dbark-cells') }; });
       expect(copied.text).toBe('10\t原型改一\t标题改一'); expect(JSON.parse(copied.typed).rows).toEqual([[10, '原型改一', '标题改一']]);
-      const submit = await dataPreview(); await submit.getByRole('button', { name: '确认提交', exact: true }).click(); await expect(submit).toBeHidden({ timeout: 20000 });
+      const submit = await dataPreview(); await (await (await import('./navigation-menu')).navigationMenuItem(submit, { name: '确认提交', exact: true })).click(); await expect(submit).toBeHidden({ timeout: 20000 });
       await expect(activeTable().locator('.loading-overlay')).toHaveCount(0); await expect(await cell('title')).toHaveText('标题改一');
       const [rows] = await observer.query<RowDataPacket[]>(`SELECT id,parent_id,title,note,\`__proto__\` AS prototype_value FROM ${q(database, 'grid_child')} ORDER BY id`);
       expect(rows.map(row => [row.id, row.parent_id, row.title, row.note, row.prototype_value])).toEqual([[1, 10, '标题改一', '隐藏备注一', '原型改一'], [2, 20, '标题改二', '隐藏备注二', '原型改二']]);
@@ -264,10 +264,10 @@ test.describe('当前页查找替换与列偏好：真实 MySQL UI', () => {
       await saveAndCloseLayout();
       const original = await savedLayout(context, 'layout_saved');
       expect(original?.columns).toEqual([{ name: 'constructor', hidden: false, width: 260 }, { name: 'id', hidden: false }, { name: 'obsolete', hidden: true }, { name: 'keep_text', hidden: false }]);
-      await page.getByRole('button', { name: '关闭 layout_saved', exact: true }).click();
+      await (await (await import('./navigation-menu')).navigationMenuItem(page, { name: '关闭 layout_saved', exact: true })).click();
       await openTable(connectionName, database, 'layout_saved'); await expect(await cell('constructor')).toHaveText('原型构造');
       await expect(activeTable().getByRole('columnheader', { name: /^obsolete/ })).toHaveCount(0);
-      await page.getByRole('button', { name: '关闭 layout_saved', exact: true }).click();
+      await (await (await import('./navigation-menu')).navigationMenuItem(page, { name: '关闭 layout_saved', exact: true })).click();
       await quitDesktop(); await launchDesktop(); await restoreConnectionPassword(connectionName);
       await openTable(connectionName, database, 'layout_saved'); expect(await savedLayout(context, 'layout_saved')).toEqual(original);
       await expect(activeTable().getByRole('columnheader', { name: /^constructor/ })).toHaveAttribute('aria-colindex', '2');
@@ -276,8 +276,8 @@ test.describe('当前页查找替换与列偏好：真实 MySQL UI', () => {
       await expect(activeTable().getByRole('columnheader', { name: /^id/ })).toHaveAttribute('aria-colindex', '2');
       await expect(activeTable().getByRole('columnheader', { name: /^obsolete/ })).toBeVisible();
       await observer.query(`ALTER TABLE ${q(database, 'layout_saved')} DROP COLUMN obsolete, ADD COLUMN added_text VARCHAR(30) DEFAULT '新列内容'`);
-      await page.locator('.workspace-tab-button').getByRole('button', { name: 'layout_saved', exact: true }).click();
-      await activeTable().getByRole('button', { name: '刷新', exact: true }).click(); await expect(activeTable().locator('.loading-overlay')).toHaveCount(0);
+      await (await (await import('./navigation-menu')).navigationMenuItem(page.locator('.workspace-tab-button'), { name: 'layout_saved', exact: true })).click();
+      await (await (await import('./navigation-menu')).navigationMenuItem(activeTable(), { name: '刷新', exact: true })).click(); await expect(activeTable().locator('.loading-overlay')).toHaveCount(0);
       await openLayout();
       await expect(layoutDialog().getByRole('checkbox', { name: '显示列 obsolete', exact: true })).toHaveCount(0);
       await expect(layoutDialog().getByRole('checkbox', { name: '显示列 added_text', exact: true })).toBeChecked();
@@ -286,9 +286,9 @@ test.describe('当前页查找替换与列偏好：真实 MySQL UI', () => {
       expect((await savedLayout(context, 'layout_saved'))?.columns.map(column => column.name)).toEqual(['constructor', 'id', 'keep_text', 'added_text']);
       await expect(await cell('added_text')).toHaveText('新列内容');
       await page.screenshot({ path: testInfo.outputPath('grid-layout-restart-schema-reconcile.png') });
-      await openLayout(); await layoutDialog().getByRole('button', { name: '恢复默认列布局', exact: true }).click();
+      await openLayout(); await (await (await import('./navigation-menu')).navigationMenuItem(layoutDialog(), { name: '恢复默认列布局', exact: true })).click();
       await expect.poll(() => savedLayout(context, 'layout_saved')).toBeNull();
-      await layoutDialog().getByRole('button', { name: '关闭', exact: true }).click();
+      await (await (await import('./navigation-menu')).navigationMenuItem(layoutDialog(), { name: '关闭', exact: true })).click();
       await expect(activeTable().getByRole('columnheader', { name: /^id/ })).toHaveAttribute('aria-colindex', '2');
       expect(pageErrors).toEqual([]);
     }, testInfo);
@@ -317,27 +317,27 @@ test.describe('当前页查找替换与列偏好：真实 MySQL UI', () => {
         await (await cell('title')).click(); await page.keyboard.press(`${modifier}+h`); await expect(kindSelect).toBeFocused();
       }
       await findPanel().getByRole('combobox', { name: '查找值类型', exact: true }).selectOption('text');
-      await activeTable().getByRole('button', { name: '当前页查找替换', exact: true }).click(); await expect(findPanel()).toBeHidden();
+      await (await (await import('./navigation-menu')).navigationMenuItem(activeTable(), { name: '当前页查找替换', exact: true })).click(); await expect(findPanel()).toBeHidden();
       await (await cell('title')).click(); await page.keyboard.press(`${modifier}+h`); await expect(findPanel()).toBeVisible();
       await expect(replacementInput).toBeFocused();
-      await activeTable().getByRole('button', { name: '当前页查找替换', exact: true }).click(); await expect(findPanel()).toBeHidden();
+      await (await (await import('./navigation-menu')).navigationMenuItem(activeTable(), { name: '当前页查找替换', exact: true })).click(); await expect(findPanel()).toBeHidden();
       await (await cell('title')).dblclick();
       const editor = activeTable().getByRole('textbox', { name: '编辑 title', exact: true });
       await editor.fill('键盘草稿'); await editor.press(`${modifier}+f`); await expect(findPanel()).toBeHidden(); await expect(editor).toBeVisible();
       await editor.press('Enter'); await expect(await cell('title')).toHaveText('键盘草稿');
       await openLayout(); await page.keyboard.press(`${modifier}+f`); await expect(findPanel()).toBeHidden(); await expect(layoutDialog()).toBeVisible();
       await page.keyboard.press(`${modifier}+Enter`); await expect(page.getByRole('dialog', { name: '确认数据修改', exact: true })).toHaveCount(0);
-      await layoutDialog().getByRole('button', { name: '关闭', exact: true }).click();
+      await (await (await import('./navigation-menu')).navigationMenuItem(layoutDialog(), { name: '关闭', exact: true })).click();
       const beforeTasks = await page.evaluate(() => window.dbark.invoke('tasks.list', {}));
       const panel = await find('键盘草稿', 'title', 'text', 1);
       await panel.getByRole('textbox', { name: '替换为文字', exact: true }).fill('替换后的草稿');
-      await panel.getByRole('button', { name: '预览当前页替换', exact: true }).click();
+      await (await (await import('./navigation-menu')).navigationMenuItem(panel, { name: '预览当前页替换', exact: true })).click();
       const replacement = page.getByRole('dialog', { name: '当前页替换草稿预览', exact: true });
       await expect(replacement).toBeVisible(); await page.keyboard.press(`${modifier}+Enter`);
       await expect(replacement).toBeVisible(); await expect(page.getByRole('dialog', { name: '确认数据修改', exact: true })).toHaveCount(0);
       expect(await page.evaluate(() => window.dbark.invoke('tasks.list', {}))).toEqual(beforeTasks);
       expect((await observer.query<RowDataPacket[]>(`SELECT title FROM ${q(database, 'grid_shortcuts')} WHERE id=1`))[0][0].title).toBe('键盘原文');
-      await replacement.getByRole('button', { name: '取消', exact: true }).click(); await expect(await cell('title')).toHaveText('键盘草稿');
+      await (await (await import('./navigation-menu')).navigationMenuItem(replacement, { name: '取消', exact: true })).click(); await expect(await cell('title')).toHaveText('键盘草稿');
       await page.screenshot({ path: testInfo.outputPath('grid-modal-editor-shortcut-guard.png') });
     }, testInfo);
   });
@@ -355,7 +355,7 @@ test.describe('当前页查找替换与列偏好：真实 MySQL UI', () => {
       // 仅替换原生文件选择的返回值，授权令牌、预览、映射、文件读取和 worker 写库均保持真实。
       await desktop.evaluate(({ dialog }, path) => { dialog.showOpenDialog = (async () => ({ canceled: false, filePaths: [path] })) as typeof dialog.showOpenDialog; }, file);
       const tasksBefore = await page.evaluate(() => window.dbark.invoke('tasks.list', {}));
-      await activeTable().getByRole('button', { name: '导入', exact: true }).click();
+      await (await (await import('./navigation-menu')).navigationMenuItem(activeTable(), { name: '导入', exact: true })).click();
       const modal = page.getByRole('dialog', { name: `导入数据 · ${database}.prototype_import`, exact: true });
       await modal.getByRole('combobox', { name: /^文件格式/ }).selectOption('csv');
       await modal.getByRole('combobox', { name: /^文件编码/ }).selectOption('utf8');
@@ -370,7 +370,7 @@ test.describe('当前页查找替换与列偏好：真实 MySQL UI', () => {
       expect(Number((await observer.query<RowDataPacket[]>(`SELECT COUNT(*) AS n FROM ${q(database, 'prototype_import')}`))[0][0].n)).toBe(0);
       expect(await page.evaluate(() => window.dbark.invoke('tasks.list', {}))).toEqual(tasksBefore);
       await page.screenshot({ path: testInfo.outputPath('grid-prototype-import-mapping.png') });
-      await modal.getByRole('button', { name: '开始导入', exact: true }).click();
+      await (await (await import('./navigation-menu')).navigationMenuItem(modal, { name: '开始导入', exact: true })).click();
       await expect(modal.locator('.success-box')).toContainText('已导入 2 行', { timeout: 20000 });
       await expect(modal.locator('.error-box')).toHaveCount(0);
       await expect(modal.getByRole('button', { name: '开始导入', exact: true })).toBeDisabled();
@@ -380,8 +380,8 @@ test.describe('当前页查找替换与列偏好：真实 MySQL UI', () => {
       const [actual] = await observer.query<RowDataPacket[]>(`SELECT id,\`__proto__\` AS prototype_value,\`constructor\` AS constructor_value,note FROM ${q(database, 'prototype_import')} ORDER BY id`);
       expect(actual.map(row => [String(row.id), row.prototype_value, row.constructor_value, row.note])).toEqual(rows.map(row => [row[2], row[0], row[1], row[3]]));
       expect(actual).toHaveLength(2);
-      await modal.getByRole('button', { name: '完成', exact: true }).click();
-      await activeTable().getByRole('button', { name: '刷新', exact: true }).click(); await expect(activeTable().locator('.loading-overlay')).toHaveCount(0);
+      await (await (await import('./navigation-menu')).navigationMenuItem(modal, { name: '完成', exact: true })).click();
+      await (await (await import('./navigation-menu')).navigationMenuItem(activeTable(), { name: '刷新', exact: true })).click(); await expect(activeTable().locator('.loading-overlay')).toHaveCount(0);
       await expect(await cell('__proto__')).toHaveText(rows[0][0]);
       await openLayout(); await layoutDialog().getByRole('checkbox', { name: '显示列 note', exact: true }).uncheck(); await saveAndCloseLayout();
       const saved = await savedLayout(context, 'prototype_import'); expect(saved?.columns.map(column => column.name)).toEqual(['id', '__proto__', 'constructor', 'note']);

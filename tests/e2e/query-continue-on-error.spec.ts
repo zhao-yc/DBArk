@@ -56,7 +56,7 @@ test('默认首错停止与显式多错继续、逐错原SQL定位、参数隐�
     let environment: unknown = { globalAPI: true };
     Object.defineProperty(window, 'MonacoEnvironment', { configurable: true, get: () => environment, set: value => { environment = { ...value, globalAPI: true }; } });
   });
-  await page.reload(); await expect(page.locator('.app-commandbar')).toBeVisible();
+  await page.reload(); await expect(page.locator('.navigation-toolbar')).toBeVisible();
   const live = await import('./live-helpers');
   if (!enabled || !['192.168.31.200', 'deve-server.yinzon.com'].includes(live.environment.DBARK_TEST_HOST ?? '') || live.environment.DBARK_TEST_PORT !== '13384') throw Error('遇错继续窗口仅限200既定隔离13384');
   await live.isolatedDatabase(async ({ observer, database }) => {
@@ -66,7 +66,7 @@ test('默认首错停止与显式多错继续、逐错原SQL定位、参数隐�
     const hidden = '仅在执行结果显示的参数值'; await observer.query(`INSERT INTO \`${database}\`.continue_secrets VALUES(1,?)`, [hidden]);
     await observed(info, async () => {
       await ownedDesktopResources(info).application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(1460, 980));
-      await live.openDatabaseQuery(database); await expect(query().getByRole('checkbox', { name: t.option, exact: true })).not.toBeChecked();
+      await live.openDatabaseQuery(database); await expect(await navigationMenuCheckbox(query(), { name: t.option, exact: true }, () => { const owner=ownedDesktopResources(info);if(owner.closed||owner.page!==page)throw Error('遇错继续选项原页面已变化'); })).not.toBeChecked();
       const observation = await page.evaluate(() => {
         const api = (window as Window & { monaco?: typeof import('monaco-editor') }).monaco;
         return { api: !!api, editors: api?.editor.getEditors().filter(editor => { const node = editor.getContainerDomNode(); return node.isConnected && !!node.closest('.query-tab') && node.getClientRects().length > 0; }).length ?? 0 };
@@ -74,14 +74,14 @@ test('默认首错停止与显式多错继续、逐错原SQL定位、参数隐�
       await info.attach('Monaco官方只读观察准入', { body: JSON.stringify(observation), contentType: 'application/json' }); expect(observation).toEqual({ api: true, editors: 1 });
       /** 等真实Main原响应落定；预期失败也保留原结果，不重发一次“确认”。 */
       const run = async (source: string) => {
-        const before = (await audit(info)).queries.length; await live.writeSql(source); await query().getByRole('button', { name: '执行全部', exact: true }).click();
-        await expect.poll(async () => (await audit(info)).queries.length).toBe(before + 1); await expect(query().getByRole('button', { name: '停止', exact: true })).toBeDisabled(); return (await audit(info)).queries.at(-1)!;
+        const before = (await audit(info)).queries.length; await live.writeSql(source); await (await navigationMenuItem(query(), { name: '执行全部', exact: true })).click();
+        await expect.poll(async () => (await audit(info)).queries.length).toBe(before + 1); await expect((await navigationMenuItem(query(), { name: '停止', exact: true }))).toBeDisabled(); return (await audit(info)).queries.at(-1)!;
       };
       const defaultResult = await run("INSERT INTO continue_subject VALUES(1,'默认首条'); INSERT INTO continue_subject VALUES(1,'默认冲突'); INSERT INTO continue_subject VALUES(2,'不应继续')");
       expect(defaultResult).toMatchObject({ enabled: false, ok: true, outcome: { failure: { statementOrdinal: 2 } } }); expect(defaultResult.outcome?.scriptReport).toBeUndefined();
       await expect(query().getByRole('status', { name: queryPartialOutcomeZh.title, exact: true })).toBeVisible(); await expect(notice()).toHaveCount(0);
       expect((await observer.query<RowDataPacket[]>(`SELECT id FROM \`${database}\`.continue_subject ORDER BY id`))[0].map(row => row.id)).toEqual([1]); await observer.query(`DELETE FROM \`${database}\`.continue_subject`);
-      await query().getByRole('checkbox', { name: t.option, exact: true }).check();
+      await (await navigationMenuCheckbox(query(), { name: t.option, exact: true }, () => { const owner=ownedDesktopResources(info);if(owner.closed||owner.page!==page)throw Error('遇错继续选项原页面已变化'); })).check();
       const source = ["INSERT INTO continue_subject VALUES(1,'继续首条');", "INSERT INTO continue_subject VALUES(1,'继续冲突');", "SELECT '中间结果' AS result;", 'SELEC broken;', "INSERT INTO continue_subject VALUES(2,'继续尾条');", 'SELECT CAST(CONNECTION_ID() AS CHAR) AS sid,id,note FROM continue_subject ORDER BY id;'].join('\n');
       const continued = await run(source); expect(continued).toMatchObject({ enabled: true, ok: true, outcome: { scriptReport: { statementsAttempted: 6, statementsCompleted: 4, reachedEnd: true } } });
       expect(continued.outcome?.scriptReport?.errors.map(error => error.statementOrdinal)).toEqual([2, 4]);
@@ -89,7 +89,7 @@ test('默认首错停止与显式多错继续、逐错原SQL定位、参数隐�
       await expect(query().getByRole('status', { name: queryPartialOutcomeZh.title, exact: true })).toHaveCount(0);
       const original = await page.evaluate(observeQueryFailureSource), count = (await audit(info)).queries.length;
       for (const ordinal of [2, 4]) {
-        await notice().getByRole('button', { name: t.locate(ordinal), exact: true }).click(); const current = await page.evaluate(observeQueryFailureSource);
+        await (await navigationMenuItem(notice(), { name: t.locate(ordinal), exact: true })).click(); const current = await page.evaluate(observeQueryFailureSource);
         expect(current.version).toBe(original.version); expect(current.source).toBe(original.source); expect(current.focused).toBe(true);
         expect(current.selections?.map(value => value.text.trim().replace(/;$/, ''))).toEqual([ordinal === 2 ? "INSERT INTO continue_subject VALUES(1,'继续冲突')" : 'SELEC broken']);
       }
@@ -98,9 +98,9 @@ test('默认首错停止与显式多错继续、逐错原SQL定位、参数隐�
       await page.screenshot({ path: info.outputPath('多错继续与逐条定位.png') });
 
       const parameterSource = 'INSERT INTO continue_secrets VALUES(2,:hidden); SELECT :hidden AS accepted'; await live.writeSql(parameterSource);
-      await query().getByRole('button', { name: parameterZh.open, exact: true }).click(); const modal = page.getByRole('dialog', { name: parameterZh.title, exact: true });
-      await expect(modal.getByRole('button', { name: parameterZh.execute, exact: true })).toBeEnabled(); await modal.getByRole('textbox', { name: parameterZh.value + ' hidden', exact: true }).fill(hidden);
-      const beforeParameter = (await audit(info)).queries.length; await modal.getByRole('button', { name: parameterZh.execute, exact: true }).click(); await expect(modal).toHaveCount(0);
+      await (await navigationMenuItem(query(), { name: parameterZh.open, exact: true })).click(); const modal = page.getByRole('dialog', { name: parameterZh.title, exact: true });
+      await expect((await navigationMenuItem(modal, { name: parameterZh.execute, exact: true }))).toBeEnabled(); await modal.getByRole('textbox', { name: parameterZh.value + ' hidden', exact: true }).fill(hidden);
+      const beforeParameter = (await audit(info)).queries.length; await (await navigationMenuItem(modal, { name: parameterZh.execute, exact: true })).click(); await expect(modal).toHaveCount(0);
       await expect.poll(async () => (await audit(info)).queries.length).toBe(beforeParameter + 1); await expect(notice()).toContainText(t.counts(2, 1, 1));
       const parameter = (await audit(info)).queries.at(-1)!; expect(parameter).toMatchObject({ command: 'query.executeParameterized', enabled: true, ok: true, outcome: { scriptReport: { reachedEnd: true } } });
       expect(JSON.stringify(parameter.outcome?.scriptReport)).not.toContain(hidden); await expect(query().locator('.error-box')).not.toContainText(hidden);
@@ -111,3 +111,9 @@ test('默认首错停止与显式多错继续、逐错原SQL定位、参数隐�
     });
   }, info, { captureFailureScreenshot: false });
 });
+
+/** 原门进入具体动作后才加载真实菜单导航，不改变默认/列表阶段的资源边界。 */
+async function navigationMenuItem(...args: Parameters<typeof import('./navigation-menu')['navigationMenuItem']>): Promise<import('@playwright/test').Locator> { return (require('./navigation-menu') as typeof import('./navigation-menu')).navigationMenuItem(...args); }
+
+/** 实际进入会话菜单后取得原继续执行复选框，保留原门和断言。 */
+async function navigationMenuCheckbox(...args: Parameters<typeof import('./navigation-menu')['navigationMenuCheckbox']>): Promise<import('@playwright/test').Locator> { return (require('./navigation-menu') as typeof import('./navigation-menu')).navigationMenuCheckbox(...args); }

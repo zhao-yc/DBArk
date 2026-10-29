@@ -21,7 +21,7 @@ async function isolated(body: (context: LiveContext) => Promise<void>, info: Par
     const connection = page.locator('.connection-node').filter({ has: page.locator('.connection-row').getByText(context.connectionName, { exact: true }) });
     await connection.locator('.connection-row').getByRole('button', { name: context.connectionName, exact: true }).focus();
     await clickSidebarAction(connection, { name: '刷新连接', exact: true });
-    await connection.locator('.database-row').getByRole('button', { name: context.database, exact: true }).click();
+    await (await (await import('./navigation-menu')).navigationMenuItem(connection.locator('.database-row'), { name: context.database, exact: true })).click();
     await connection.locator('.object-row').filter({ has: page.getByText('subject', { exact: true }) }).getByText('subject', { exact: true }).click();
     await expect(table().locator('.loading-overlay')).toHaveCount(0); await body(context);
     const [rows] = await context.observer.query(`SELECT note FROM \`${context.database}\`.subject`);
@@ -34,19 +34,19 @@ test('本页草稿：一次单格编辑可撤销重做，编辑输入期间禁�
     await table().getByRole('gridcell').filter({ hasText: /^原值$/ }).dblclick(); const input = table().locator('.grid-input');
     await input.fill('新值'); await expect(table().getByRole('button', { name: history.undo, exact: true })).toBeDisabled();
     await input.press('Enter'); await expect(input).toHaveCount(0);
-    await table().getByRole('button', { name: history.undo, exact: true }).click(); await expect(table().getByRole('gridcell').filter({ hasText: /^原值$/ })).toHaveCount(1);
-    await table().getByRole('button', { name: history.redo, exact: true }).click(); await expect(table().getByRole('gridcell').filter({ hasText: /^新值$/ })).toHaveCount(1);
+    await (await (await import('./navigation-menu')).navigationMenuItem(table(), { name: history.undo, exact: true })).click(); await expect(table().getByRole('gridcell').filter({ hasText: /^原值$/ })).toHaveCount(1);
+    await (await (await import('./navigation-menu')).navigationMenuItem(table(), { name: history.redo, exact: true })).click(); await expect(table().getByRole('gridcell').filter({ hasText: /^新值$/ })).toHaveCount(1);
   }, info);
 });
 
 test('本页草稿：单行与批量新增各为一步，重做不提交数据库', async ({}, info) => {
   test.setTimeout(120000); await isolated(async () => {
-    await table().getByRole('button', { name: zh.common.add, exact: true }).click(); await expect(table().locator('.row-inserted')).toHaveCount(1);
-    await table().getByRole('button', { name: history.undo, exact: true }).click(); await expect(table().locator('.row-inserted')).toHaveCount(0);
-    await table().getByRole('button', { name: history.redo, exact: true }).click(); await expect(table().locator('.row-inserted')).toHaveCount(1);
-    await table().getByRole('button', { name: paste.action, exact: true }).click(); const dialog = page.getByRole('dialog', { name: paste.action, exact: true });
-    await dialog.getByLabel(paste.input, { exact: true }).fill('甲\n乙'); await dialog.getByRole('button', { name: paste.preview, exact: true }).click(); await dialog.getByRole('button', { name: paste.stage, exact: true }).click();
-    await expect(table().locator('.row-inserted')).toHaveCount(3); await table().getByRole('button', { name: history.undo, exact: true }).click(); await expect(table().locator('.row-inserted')).toHaveCount(1);
-    await table().getByRole('button', { name: history.redo, exact: true }).click(); await expect(table().locator('.row-inserted')).toHaveCount(3);
+    await (await (await import('./navigation-menu')).navigationMenuItem(table(), { name: zh.common.add, exact: true })).click(); await expect(table().locator('.row-inserted')).toHaveCount(1);
+    await (await (await import('./navigation-menu')).navigationMenuItem(table(), { name: history.undo, exact: true })).click(); await expect(table().locator('.row-inserted')).toHaveCount(0);
+    await (await (await import('./navigation-menu')).navigationMenuItem(table(), { name: history.redo, exact: true })).click(); await expect(table().locator('.row-inserted')).toHaveCount(1);
+    await (await (await import('./navigation-menu')).navigationMenuItem(table(), { name: paste.action, exact: true })).click(); const dialog = page.getByRole('dialog', { name: paste.action, exact: true });
+    await dialog.getByLabel(paste.input, { exact: true }).fill('甲\n乙'); await (await (await import('./navigation-menu')).navigationMenuItem(dialog, { name: paste.preview, exact: true })).click(); await (await (await import('./navigation-menu')).navigationMenuItem(dialog, { name: paste.stage, exact: true })).click();
+    await expect(table().locator('.row-inserted')).toHaveCount(3); await (await (await import('./navigation-menu')).navigationMenuItem(table(), { name: history.undo, exact: true })).click(); await expect(table().locator('.row-inserted')).toHaveCount(1);
+    await (await (await import('./navigation-menu')).navigationMenuItem(table(), { name: history.redo, exact: true })).click(); await expect(table().locator('.row-inserted')).toHaveCount(3);
   }, info);
 });

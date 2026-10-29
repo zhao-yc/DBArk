@@ -40,7 +40,7 @@ export function registerSelectedResultsExport(binding: SelectedResultsTarget) {
 
       // 只经真实表单建立一个不保存密码、无默认库、无SSH/TLS的临时工作区连接。
       const connectionName = `勾选行 ${format.toUpperCase()} 零DDL验收`;
-      await observe(() => page.locator('.app-commandbar').getByRole('button', { name: zh.common.newConnection, exact: true }).click());
+      await observe(async () => (await navigationMenuItem(page.locator('.navigation-toolbar'), { name: zh.common.newConnection, exact: true }, () => binding.assertCurrent())).click());
       const form = page.getByRole('dialog', { name: zh.common.newConnection, exact: true });
       await observe(() => form.getByLabel(zh.connections.text006, { exact: true }).fill(connectionName));
       // Field包装label包含select选项文字；限定本对话框的combobox与标签前缀，不按完整label文本精确匹配。
@@ -56,9 +56,9 @@ export function registerSelectedResultsExport(binding: SelectedResultsTarget) {
       await observe(() => expect(form.getByLabel(zh.connections.text012, { exact: true })).toHaveValue(''));
       await observe(() => form.getByLabel(zh.connections.text016, { exact: true }).uncheck());
       await observe(() => expect(form.getByLabel(zh.connections.text016, { exact: true })).not.toBeChecked());
-      await observe(() => form.getByRole('button', { name: zh.connections.text034, exact: true }).click());
+      await observe(async () => (await navigationMenuItem(form, { name: zh.connections.text034, exact: true }, () => binding.assertCurrent())).click());
       await observe(() => expect(form.locator('.success-box')).toContainText('连接成功', { timeout: 20000 }));
-      await observe(() => form.getByRole('button', { name: zh.connections.text036, exact: true }).click());
+      await observe(async () => (await navigationMenuItem(form, { name: zh.connections.text036, exact: true }, () => binding.assertCurrent())).click());
       await observe(() => expect(form).toBeHidden());
       const profiles = await observe(() => page.evaluate(() => window.dbark.invoke('connections.list', {})));
       const profile = profiles.length === 1 ? profiles[0] : undefined;
@@ -67,7 +67,7 @@ export function registerSelectedResultsExport(binding: SelectedResultsTarget) {
       expect(Boolean(profile && profile.name === connectionName && profile.host === binding.target.host && profile.port === binding.target.port && profile.user === binding.target.user && !profile.database && profile.rememberPassword === false && profile.password === undefined && profile.hasPassword === Boolean(binding.target.password) && !profile.ssh?.enabled && !profile.tls?.enabled)).toBe(true);
 
       // 使用全局新查询表单，明确留空默认库；不展开数据库，更不创建数据库或表。
-      await observe(() => page.locator('.app-commandbar').getByRole('button', { name: zh.common.newQuery, exact: true }).click());
+      await observe(async () => (await navigationMenuItem(page.locator('.navigation-toolbar'), { name: zh.common.newQuery, exact: true }, () => binding.assertCurrent())).click());
       const query = page.getByRole('dialog', { name: zh.common.newQuery, exact: true });
       // 此处同样是Field包装的select；动态连接名称不能成为exact label定位的前提。
       const queryConnectionSelect = query.getByRole('combobox', { name: new RegExp('^' + zh.app.text049) });
@@ -76,7 +76,7 @@ export function registerSelectedResultsExport(binding: SelectedResultsTarget) {
       await observe(() => expect(queryConnectionSelect).toHaveValue(profile!.id));
       await observe(() => query.getByLabel(zh.app.text050, { exact: true }).fill(''));
       await observe(() => expect(query.getByLabel(zh.app.text050, { exact: true })).toHaveValue(''));
-      await observe(() => query.getByRole('button', { name: zh.app.text053, exact: true }).click());
+      await observe(async () => (await navigationMenuItem(query, { name: zh.app.text053, exact: true }, () => binding.assertCurrent())).click());
       await observe(() => expect(query).toBeHidden());
       const tab = page.locator('.query-tab:visible');
       await observe(() => expect(tab.locator('[aria-label="当前查询默认库"]')).toHaveText(queryContextZh.none));
@@ -86,12 +86,12 @@ export function registerSelectedResultsExport(binding: SelectedResultsTarget) {
         await observe(() => tab.locator('.monaco-editor').getByRole('textbox').focus());
         await observe(() => page.keyboard.press(`${process.platform === 'darwin' ? 'Meta' : 'Control'}+A`));
         await observe(() => page.keyboard.insertText(sql));
-        await observe(() => tab.getByRole('button', { name: zh.query.text011, exact: true }).click());
-        await observe(() => expect(tab.getByRole('button', { name: zh.common.stop, exact: true })).toBeDisabled({ timeout: 20000 }));
+        await observe(async () => (await navigationMenuItem(tab, { name: zh.query.text011, exact: true }, () => binding.assertCurrent())).click());
+        await observe(async () => expect((await navigationMenuItem(tab, { name: zh.common.stop, exact: true }, () => binding.assertCurrent()))).toBeDisabled({ timeout: 20000 }));
         await observe(() => expect(tab.locator('.error-box')).toHaveCount(0));
       }
       await execute("SELECT 1 AS id,CAST('18446744073709551615' AS CHAR) AS repeated,NULL AS repeated,X'00ff' AS bytes UNION ALL SELECT 2,'不选','中间',X'' UNION ALL SELECT 3,'0.12345678901234567890','',NULL ORDER BY id");
-      const selected = tab.getByRole('button', { name: zh.resultExport.selectedTitle, exact: true });
+      const selected = (await navigationMenuItem(tab, { name: zh.resultExport.selectedTitle, exact: true }, () => binding.assertCurrent()));
       await observe(() => expect(selected).toBeDisabled());
       const rows = tab.locator('.result-body .results-grid [role="row"]');
       await observe(() => rows.nth(3).getByRole('checkbox').check());
@@ -111,7 +111,7 @@ export function registerSelectedResultsExport(binding: SelectedResultsTarget) {
       await observe(() => dialog.getByRole('combobox', { name: zh.resultExport.format, exact: true }).selectOption(format));
       await observe(() => dialog.getByRole('combobox', { name: zh.resultExport.encoding, exact: true }).selectOption('utf8'));
       await observe(() => dialog.locator('.file-picker').click());
-      await observe(() => dialog.getByRole('button', { name: zh.resultExport.start, exact: true }).click());
+      await observe(async () => (await navigationMenuItem(dialog, { name: zh.resultExport.start, exact: true }, () => binding.assertCurrent())).click());
       await observe(() => expect(dialog.locator('.success-box')).toHaveText('已导出 2 行已返回结果。'));
       const bytes = await observe(() => readFile(file));
       if (format === 'json') {
@@ -122,9 +122,9 @@ export function registerSelectedResultsExport(binding: SelectedResultsTarget) {
         expect(actual[0].bytes).toEqual({ type: 'binary', base64: 'AP8=' });
         expect(actual[1].repeated).toBe('0.12345678901234567890'); expect(actual[1].bytes).toBeNull();
       } else verifySelectedResultsCsv(bytes);
-      await observe(() => dialog.getByRole('button', { name: zh.common.done, exact: true }).click());
+      await observe(async () => (await navigationMenuItem(dialog, { name: zh.common.done, exact: true }, () => binding.assertCurrent())).click());
       expect(await observe(() => page.evaluate(async () => (await window.dbark.invoke('history.list', {})).map(item => item.id).sort()))).toEqual(before);
-      await observe(() => tab.getByRole('button', { name: zh.query.pinResult, exact: true }).click());
+      await observe(async () => (await navigationMenuItem(tab, { name: zh.query.pinResult, exact: true }, () => binding.assertCurrent())).click());
       await observe(() => expect(selected).toBeDisabled());
       await observe(() => tab.locator('.pinned-results .current-results').click());
       await observe(() => expect(selected).toBeDisabled());
@@ -137,3 +137,6 @@ export function registerSelectedResultsExport(binding: SelectedResultsTarget) {
     finally { state.endBody(); }
   });
 }
+
+/** 原门进入具体动作后才加载真实菜单导航，不改变默认/列表阶段的资源边界。 */
+async function navigationMenuItem(...args: Parameters<typeof import('./navigation-menu')['navigationMenuItem']>): Promise<import('@playwright/test').Locator> { return (require('./navigation-menu') as typeof import('./navigation-menu')).navigationMenuItem(...args); }

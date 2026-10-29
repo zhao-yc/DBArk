@@ -1,3 +1,5 @@
+import { installNavigationMenuRamPort, navigationMenuRamButton } from '../helpers/navigationMenuRamPort';
+let restoreNavigationMenuPort: () => void = () => {};
 import React, { act } from 'react';
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { memoryDocument, MemoryEvent } from '../fixtures/memory-dom';
@@ -23,9 +25,9 @@ let document: ReturnType<typeof memoryDocument>, root: ReturnType<typeof import(
 let QueryTab: typeof import('../../src/renderer/components/QueryTab')['QueryTab'], useWorkspace: typeof import('../../src/renderer/store')['useWorkspace'], flushSettings: typeof import('../../src/renderer/store')['flushSettings'];
 let commands: { command: string; input: any }[], hook: undefined | ((command: string, input: any) => Promise<any> | undefined);
 const globals = ['window', 'document', 'navigator', 'IS_REACT_ACT_ENVIRONMENT'].map(name => [name, Object.getOwnPropertyDescriptor(globalThis, name)] as const);
-beforeAll(async () => { document = memoryDocument(); ({ createRoot } = await import('react-dom/client')); ({ QueryTab } = await import('../../src/renderer/components/QueryTab')); ({ useWorkspace, flushSettings } = await import('../../src/renderer/store')); });
+beforeAll(async () => { document = memoryDocument(); restoreNavigationMenuPort = installNavigationMenuRamPort(document); ({ createRoot } = await import('react-dom/client')); ({ QueryTab } = await import('../../src/renderer/components/QueryTab')); ({ useWorkspace, flushSettings } = await import('../../src/renderer/store')); });
 afterEach(async () => { hook = undefined; if (root) { await act(async () => root!.unmount()); root = undefined; } await flushSettings(); document.body.textContent = ''; });
-afterAll(() => { for (const [name, descriptor] of globals) if (descriptor) Object.defineProperty(globalThis, name, descriptor); else Reflect.deleteProperty(globalThis, name); });
+afterAll(() => { restoreNavigationMenuPort(); for (const [name, descriptor] of globals) if (descriptor) Object.defineProperty(globalThis, name, descriptor); else Reflect.deleteProperty(globalThis, name); });
 /** 全部外界调用为RAM回执，复制阶段只允许普通settings.save及原会话协议缓存读取。 */
 async function mount(context: any = { state: 'known', database: 'sales' }) {
   commands = []; io.entries = []; hook = undefined; let session = 0;
@@ -39,10 +41,10 @@ async function mount(context: any = { state: 'known', database: 'sales' }) {
     throw Error('复制测试禁止额外外界调用：' + command);
   } };
   useWorkspace.setState({ settings: { theme: 'dark', sidebarWidth: 260, resultLimit: 1000, pageSize: 100, activeTabId: 'source', tabs: [{ id: 'source', kind: 'query', title: '已保存源', connectionId: 'c', database: 'stale_legacy', databaseContext: context, sql: 'SELECT 旧缓存;', sourceBinding: { id: 'saved-query', digest: 'a'.repeat(64), connectionId: 'c', context: { state: 'known', database: 'sales' } } }] }, connections: [{ id: 'c', name: 'RAM连接', host: 'offline.invalid', port: 1, user: 'ram', dialect: 'mysql', database: 'profile_default', color: '', group: '' }], activeJobs: {}, dirtyTabs: {}, connectionVersions: {}, tasks: [], notice: undefined });
-  function View() { const tabs = useWorkspace(state => state.settings.tabs); return <>{tabs.map(tab => <section key={tab.id} data-copy-tab={tab.id}><QueryTab tab={tab} onHistory={() => {}}/></section>)}</>; }
+  function View() { const settings = useWorkspace(state => state.settings); return <>{settings.tabs.map(tab => <section key={tab.id} data-copy-tab={tab.id} hidden={settings.activeTabId !== tab.id}><QueryTab tab={tab} onHistory={() => {}}/></section>)}</>; }
   const node = document.createElement('div'); document.body.appendChild(node); root = createRoot(node as any); await act(async () => root!.render(<View/>));
 }
-function button(tabId: string, action: string = text.action) { const section = document.body.querySelector(`[data-copy-tab="${tabId}"]`)!; return section.querySelectorAll('button').find(node => action === text.action ? node.getAttribute('aria-label') === action : node.textContent.startsWith(action))!; }
+function button(tabId: string, action: string = text.action) { const section = document.body.querySelector(`[data-copy-tab="${tabId}"]`)!; return (navigationMenuRamButton(section, action) ?? section.querySelectorAll('button').find(node => action === text.action ? node.getAttribute('aria-label') === action : node.textContent.startsWith(action)))!; }
 async function click(tabId: string, action: string = text.action) { const node = button(tabId, action); expect(node).toBeDefined(); await act(async () => node.dispatchEvent(new MemoryEvent('click'))); }
 function deferred<T>() { let resolve!: (value: T) => void; const promise = new Promise<T>(yes => { resolve = yes; }); return { promise, resolve }; }
 
@@ -72,6 +74,6 @@ describe('真实查询标签复制入口（RAM组件）', () => {
   it('重复点击等待中的复制只读一次上下文；修订变化后的旧视图禁用入口', async () => {
     await mount(); await click('source', zh.query.text010); const wait = deferred<any>(); hook = command => command === 'query.completionState' ? wait.promise : undefined; const before = commands.length;
     await click('source'); await click('source'); expect(commands.slice(before).filter(item => item.command === 'query.completionState')).toHaveLength(1); await act(async () => wait.resolve({ databaseKnown: true, database: 'runtime_db', broken: false, busy: false })); expect(useWorkspace.getState().settings.tabs).toHaveLength(2);
-    await act(async () => useWorkspace.getState().invalidateConnection('c')); expect(button('source').getAttribute('disabled')).not.toBeNull();
+    await act(async () => { useWorkspace.getState().invalidateConnection('c'); useWorkspace.getState().updateSettings({ activeTabId: 'source' }); }); expect(button('source').getAttribute('disabled')).not.toBeNull();
   });
 });

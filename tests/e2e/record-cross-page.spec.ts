@@ -46,17 +46,17 @@ async function prepare(context: LiveContext) {
   await context.observer.query(`INSERT INTO ${qualified(context)} VALUES ?`, [Array.from({ length: 51 }, (_, index) => [index + 1, `记录${index + 1}`, '{"n":9007199254740993}'])]);
   const connection = page.locator('.connection-node').filter({ has: page.locator('.connection-row').getByText(context.connectionName, { exact: true }) });
   await connection.locator('.connection-row > .tree-label').focus(); await clickSidebarAction(connection, { name: zh.sidebar.text011, exact: true });
-  await connection.locator('.database-row').getByRole('button', { name: context.database, exact: true }).click();
+  await (await (await import('./navigation-menu')).navigationMenuItem(connection.locator('.database-row'), { name: context.database, exact: true })).click();
   await connection.locator('.object-row').getByText('records', { exact: true }).click(); await expect(table().locator('.loading-overlay')).toHaveCount(0);
   await table().getByRole('combobox', { name: zh.table.text021, exact: true }).selectOption('50'); await expect(table().locator('.loading-overlay')).toHaveCount(0);
   await observe(context.connectionId);
   // 显式排序和非空服务端条件随正反跨页原样传递。
   await table().getByRole('columnheader', { name: /^id/ }).click(); await expect(table().locator('.loading-overlay')).toHaveCount(0);
-  await table().getByRole('button', { name: zh.table.text006, exact: true }).click();
-  const filter = table().locator('.filter-panel'); await filter.getByRole('combobox', { name: zh.table.text009, exact: true }).selectOption('id'); await filter.getByRole('combobox', { name: zh.table.filterOperatorLabel, exact: true }).selectOption('>='); await filter.getByRole('textbox', { name: zh.table.text011, exact: true }).fill('1'); await filter.getByRole('button', { name: zh.table.text013, exact: true }).click(); await expect(table().locator('.loading-overlay')).toHaveCount(0);
+  await (await (await import('./navigation-menu')).navigationMenuItem(table(), { name: zh.table.text006, exact: true })).click();
+  const filter = table().locator('.filter-panel'); await filter.getByRole('combobox', { name: zh.table.text009, exact: true }).selectOption('id'); await filter.getByRole('combobox', { name: zh.table.filterOperatorLabel, exact: true }).selectOption('>='); await filter.getByRole('textbox', { name: zh.table.text011, exact: true }).fill('1'); await (await (await import('./navigation-menu')).navigationMenuItem(filter, { name: zh.table.text013, exact: true })).click(); await expect(table().locator('.loading-overlay')).toHaveCount(0);
   const header = table().getByRole('columnheader', { name: /^id/ }), index = await header.getAttribute('aria-colindex');
   await table().locator(`[role="row"][aria-rowindex="2"] [role="gridcell"][aria-colindex="${index}"]`).click();
-  await table().getByRole('button', { name: text.title, exact: true }).click(); await expect(previous()).toBeDisabled();
+  await (await (await import('./navigation-menu')).navigationMenuItem(table(), { name: text.title, exact: true })).click(); await expect(previous()).toBeDisabled();
   // 页内真实按钮导航不发读取；不用DOM注入或程序设置React选中状态。
   for (let index = 1; index < 50; index++) await next().click();
   await expect(form()).toContainText('本页第 50 / 50 条'); await expect(form().getByRole('region', { name: 'id', exact: true }).locator('dd').first()).toHaveText('50');
@@ -89,15 +89,15 @@ test.describe('D04记录表单跨页正式入口准备', () => {
     test(`${kind}阻止跨页并完整保留输入与旧值`, async ({}, info) => {
       await database(async () => {
         let input: ReturnType<typeof form> | undefined;
-        if (kind === '非法整行JSON') { await form().getByRole('button', { name: documentText.input, exact: true }).click(); input = form().getByRole('textbox', { name: documentText.label, exact: true }); await input.fill('{'); }
-        else if (kind === '新增草稿') { await table().getByRole('button', { name: zh.common.add, exact: true }).click(); }
-        else if (kind === '删除草稿') { await table().getByRole('button', { name: zh.common.delete, exact: true }).click(); }
+        if (kind === '非法整行JSON') { await (await (await import('./navigation-menu')).navigationMenuItem(form(), { name: documentText.input, exact: true })).click(); input = form().getByRole('textbox', { name: documentText.label, exact: true }); await input.fill('{'); }
+        else if (kind === '新增草稿') { await (await (await import('./navigation-menu')).navigationMenuItem(table(), { name: zh.common.add, exact: true })).click(); }
+        else if (kind === '删除草稿') { await (await (await import('./navigation-menu')).navigationMenuItem(table(), { name: zh.common.delete, exact: true })).click(); }
         else {
           if (kind === '非当前行草稿') await previous().click();
           const key = kind === '非法JSON字段' ? 'payload' : 'note', section = form().getByRole('region', { name: key, exact: true });
-          await section.getByRole('button', { name: text.editField, exact: true }).click(); await section.getByRole('combobox', { name: text.mode, exact: true }).selectOption(kind === '非法JSON字段' ? 'json' : 'text');
+          await (await (await import('./navigation-menu')).navigationMenuItem(section, { name: text.editField, exact: true })).click(); await section.getByRole('combobox', { name: text.mode, exact: true }).selectOption(kind === '非法JSON字段' ? 'json' : 'text');
           input = section.getByRole('textbox', { name: `${key} · ${text.value}`, exact: true }); await input.fill(kind === '非法JSON字段' ? '{' : '跨页前原样保留');
-          if (kind === '非当前行草稿') { await form().getByRole('button', { name: text.stage, exact: true }).click(); await next().click(); input = undefined; }
+          if (kind === '非当前行草稿') { await (await (await import('./navigation-menu')).navigationMenuItem(form(), { name: text.stage, exact: true })).click(); await next().click(); input = undefined; }
         }
         const before = (await calls()).length; await next().click(); await expect(note()).toHaveText(text.pageDirty); expect((await calls()).length).toBe(before);
         if (input) await expect(input).toHaveValue(kind === '字段文本' ? '跨页前原样保留' : '{');
@@ -125,7 +125,7 @@ test.describe('D04记录表单跨页正式入口准备', () => {
     await database(async () => {
       await desktop.evaluate(() => { (globalThis as Main).__recordCrossPage!.hold = true; }); const before = (await calls()).length;
       await next().click(); await expect.poll(() => desktop.evaluate(() => (globalThis as Main).__recordCrossPage!.held)).toBe(true); await expect(next()).toBeDisabled();
-      await page.locator('.app-commandbar').getByRole('button', { name: zh.common.newQuery, exact: true }).click(); await page.getByRole('dialog', { name: zh.common.newQuery, exact: true }).getByRole('button', { name: '打开查询', exact: true }).click();
+      await (await (await import('./navigation-menu')).navigationMenuItem(page.locator('.navigation-toolbar'), { name: zh.common.newQuery, exact: true })).click(); await (await (await import('./navigation-menu')).navigationMenuItem(page.getByRole('dialog', { name: zh.common.newQuery, exact: true }), { name: '打开查询', exact: true })).click();
       await desktop.evaluate(() => (globalThis as Main).__recordCrossPage!.release()); await page.locator('.tab-select').filter({ hasText: /^records$/ }).click(); await expect(table().locator('.loading-overlay')).toHaveCount(0);
       await expect(form()).toContainText(text.empty); await expect(form().getByRole('region', { name: 'id', exact: true })).toHaveCount(0); expect((await calls()).length).toBe(before + 1);
     }, info);

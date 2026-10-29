@@ -59,12 +59,12 @@ async function database(body: (context: LiveContext) => Promise<void>, info: Tes
 /** 搜索与打开均走实际中文控件；不直接打开定义或传入制造的位置。 */
 async function search(context: LiveContext, database: string, needle: string, mode = 'contains') {
   const page = context.page; context.assertCurrent();
-  await page.locator('.app-commandbar').getByRole('button', { name: '全库搜索', exact: true }).click();
+  await (await (await import('./navigation-menu')).navigationMenuItem(page.locator('.navigation-toolbar'), { name: '全库搜索', exact: true }, () => context.assertCurrent())).click();
   await page.getByRole('dialog', { name: '全库搜索：结构名称', exact: true }).getByLabel('搜索内容', { exact: true }).selectOption('definition');
   await searchDialog(context).getByLabel('数据库范围（每行一个）', { exact: true }).fill(database); await searchDialog(context).getByLabel('搜索文字', { exact: true }).fill(needle); await searchDialog(context).getByLabel('匹配方式', { exact: true }).selectOption(mode);
-  await searchDialog(context).getByRole('button', { name: '开始搜索', exact: true }).click(); await expect(searchDialog(context).getByRole('button', { name: '开始搜索', exact: true })).toBeEnabled({ timeout: 30000 }); await expect(searchDialog(context).locator('.error-box')).toHaveCount(0);
+  await (await (await import('./navigation-menu')).navigationMenuItem(searchDialog(context), { name: '开始搜索', exact: true }, () => context.assertCurrent())).click(); await expect(searchDialog(context).getByRole('button', { name: '开始搜索', exact: true })).toBeEnabled({ timeout: 30000 }); await expect(searchDialog(context).locator('.error-box')).toHaveCount(0);
 }
-async function open(context: LiveContext, name: string) { const page = context.page; context.assertCurrent(); await searchDialog(context).locator('.rdg-row').filter({ has: page.getByText(name, { exact: true }) }).click(); await searchDialog(context).getByRole('button', { name: '打开当前定义', exact: true }).click(); await expect(searchDialog(context)).toHaveCount(0); await expect(definition(context)).toBeVisible(); }
+async function open(context: LiveContext, name: string) { const page = context.page; context.assertCurrent(); await searchDialog(context).locator('.rdg-row').filter({ has: page.getByText(name, { exact: true }) }).click(); await (await (await import('./navigation-menu')).navigationMenuItem(searchDialog(context), { name: '打开当前定义', exact: true }, () => context.assertCurrent())).click(); await expect(searchDialog(context)).toHaveCount(0); await expect(definition(context)).toBeVisible(); }
 /** 独立从实际SHOW CREATE原文计算UTF16行列期望，不借产品导航状态反推位置。 */
 function offsets(sql: string, needle: string) { const values: number[] = []; let at = sql.indexOf(needle); while (at >= 0) { values.push(at); at = sql.indexOf(needle, at + needle.length); } return values; }
 function status(sql: string, offset: number, index: number, count: number) { const lines = sql.slice(0, offset).split(/\r\n|\r|\n/); return t.count(index, count) + t.position(lines.length, lines.at(-1)!.length + 1); }
@@ -85,10 +85,10 @@ test('真实定义普通文字大小写/Unicode多处导航按精确行列定位
     const before = await ddl(context, 'subject', 'VIEW'), expected = offsets(before, 'Marker'); expect(expected).toHaveLength(3);
     const tabs = (await page.evaluate(() => window.dbark.invoke('settings.get', {}))).tabs;
     await search(context, context.database, 'mArKeR'); await open(context, 'subject'); await expect(navigation(context).getByRole('status')).toHaveText(status(before, expected[0], 0, 3));
-    await navigation(context).getByRole('button', { name: t.next, exact: true }).click(); await expect(navigation(context).getByRole('status')).toHaveText(status(before, expected[1], 1, 3));
-    await navigation(context).getByRole('button', { name: t.previous, exact: true }).click(); await navigation(context).getByRole('button', { name: t.previous, exact: true }).click(); await expect(navigation(context).getByRole('status')).toHaveText(status(before, expected[2], 2, 3));
+    await (await (await import('./navigation-menu')).navigationMenuItem(navigation(context), { name: t.next, exact: true }, () => context.assertCurrent())).click(); await expect(navigation(context).getByRole('status')).toHaveText(status(before, expected[1], 1, 3));
+    await (await (await import('./navigation-menu')).navigationMenuItem(navigation(context), { name: t.previous, exact: true }, () => context.assertCurrent())).click(); await (await (await import('./navigation-menu')).navigationMenuItem(navigation(context), { name: t.previous, exact: true }, () => context.assertCurrent())).click(); await expect(navigation(context).getByRole('status')).toHaveText(status(before, expected[2], 2, 3));
     await expect(definition(context).locator('.definition-match-active').first()).toBeVisible(); const displayed = await definition(context).locator('.monaco-editor .view-lines').textContent(); await page.keyboard.insertText('不可修改'); expect(await definition(context).locator('.monaco-editor .view-lines').textContent()).toBe(displayed);
-    await page.keyboard.press(`${process.platform === 'darwin' ? 'Meta' : 'Control'}+Enter`); await navigation(context).getByRole('button', { name: t.close, exact: true }).click(); await expect(navigation(context)).toHaveCount(0); await expect(definition(context).locator('.definition-match')).toHaveCount(0); await expect(definition(context).getByRole('button', { name: '执行 SQL', exact: true })).toHaveCount(0);
+    await page.keyboard.press(`${process.platform === 'darwin' ? 'Meta' : 'Control'}+Enter`); await (await (await import('./navigation-menu')).navigationMenuItem(navigation(context), { name: t.close, exact: true }, () => context.assertCurrent())).click(); await expect(navigation(context)).toHaveCount(0); await expect(definition(context).locator('.definition-match')).toHaveCount(0); await expect(definition(context).getByRole('button', { name: '执行 SQL', exact: true })).toHaveCount(0);
     expect(await ddl(context, 'subject', 'VIEW')).toBe(before); expect((await page.evaluate(() => window.dbark.invoke('settings.get', {}))).tabs).toEqual(tabs);
   }, info);
 });
@@ -97,7 +97,7 @@ for (const count of [200, 201]) test(`真实${count}处边界包含额外探测�
     const { page, desktop } = context; context.assertCurrent();
     await context.observer.query(`CREATE TABLE ${target(context, 'subject')}(id INT) COMMENT='${'NavMark '.repeat(count)}'`); const before = await ddl(context, 'subject'), expected = offsets(before, 'NavMark'); expect(expected).toHaveLength(count);
     await search(context, context.database, 'NavMark'); await open(context, 'subject'); await expect(navigation(context).getByRole('status')).toHaveText(status(before, expected[0], 0, 200)); await expect(navigation(context)).toContainText(count === 201 ? t.capped(200) : t.complete);
-    await navigation(context).getByRole('button', { name: t.previous, exact: true }).click(); await expect(navigation(context).getByRole('status')).toHaveText(status(before, expected[199], 199, 200)); expect(await ddl(context, 'subject')).toBe(before);
+    await (await (await import('./navigation-menu')).navigationMenuItem(navigation(context), { name: t.previous, exact: true }, () => context.assertCurrent())).click(); await expect(navigation(context).getByRole('status')).toHaveText(status(before, expected[199], 199, 200)); expect(await ddl(context, 'subject')).toBe(before);
   }, info);
 });
 for (const change of ['定义变化', '读取失败']) test(`搜索后${change}整组失效，不沿用旧计数或执行定义`, async ({}, info) => {
@@ -118,7 +118,7 @@ test('延迟真实定义回包后关闭并打开另一对象，旧回包不覆�
     const { page, desktop } = context; context.assertCurrent();
     for (const name of ['first', 'second']) await context.observer.query(`CREATE TABLE ${target(context, name)}(id INT) COMMENT='NavMark ${name}'`);
     await desktop.evaluate(() => { (globalThis as Main).__definitionNavigationObserver!.holdName = 'first'; }); await search(context, context.database, 'NavMark'); await open(context, 'first');
-    await expect.poll(() => desktop.evaluate(() => (globalThis as Main).__definitionNavigationObserver?.held)).toBe(true); await definition(context).getByRole('button', { name: '取消', exact: true }).click();
+    await expect.poll(() => desktop.evaluate(() => (globalThis as Main).__definitionNavigationObserver?.held)).toBe(true); await (await (await import('./navigation-menu')).navigationMenuItem(definition(context), { name: '取消', exact: true }, () => context.assertCurrent())).click();
     await search(context, context.database, 'NavMark'); await open(context, 'second'); const source = await ddl(context, 'second'); await expect(navigation(context).getByRole('status')).toHaveText(status(source, offsets(source, 'NavMark')[0], 0, 1));
     await desktop.evaluate(() => (globalThis as Main).__definitionNavigationObserver?.release()); await expect.poll(() => desktop.evaluate(() => (globalThis as Main).__definitionNavigationObserver?.delivered)).toBe(true);
     // 旧真实回包释放后再完成一次renderer IPC读取，随后核对当前对象及位置。

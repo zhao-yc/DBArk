@@ -23,7 +23,7 @@ async function replaceSql(modal: Locator, sql: string) {
 
 /** 创建字段草稿，不绕过设计器直接发送建表请求。 */
 async function addColumn(modal: Locator, number: number, name: string, type: string, nullable: boolean, defaultValue?: string) {
-  await modal.getByRole('button', { name: '添加字段', exact: true }).click();
+  await (await (await import('./navigation-menu')).navigationMenuItem(modal, { name: '添加字段', exact: true })).click();
   await modal.getByLabel('字段名 ' + number, { exact: true }).fill(name);
   await modal.getByLabel('字段类型 ' + number, { exact: true }).fill(type);
   await modal.getByLabel('允许空 ' + number, { exact: true }).setChecked(nullable);
@@ -43,7 +43,7 @@ async function newTable(database: string, table: string) {
 /** 从数据库实际返回的对象定义进入编辑器，避免把测试生成的 SQL 当成读取证据。 */
 async function editObject(database: string, name: string) {
   const row = await databaseRow(database);
-  await row.getByRole('button', { name: database, exact: true }).click();
+  await (await (await import('./navigation-menu')).navigationMenuItem(row, { name: database, exact: true })).click();
   const object = page.locator('.object-row').filter({ has: page.getByText(name, { exact: true }) });
   await expect(object).toBeVisible();
   await object.hover();
@@ -61,34 +61,34 @@ test.describe('远程真实数据库对象设计与定义', () => {
       const q = (name: string) => database + '.' + name;
       let design = await newTable(database, 'parents');
       await addColumn(design, 2, 'code', 'varchar(80)', false);
-      await design.getByRole('button', { name: '预览 SQL', exact: true }).click();
+      await (await (await import('./navigation-menu')).navigationMenuItem(design, { name: '预览 SQL', exact: true })).click();
       await expect(design.locator('.monaco-editor .view-lines')).toContainText('PRIMARY KEY');
       const [beforeCreate] = await observer.query<RowDataPacket[]>('SELECT TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA=? AND TABLE_NAME=?', [database, 'parents']);
       expect(beforeCreate).toHaveLength(0);
-      await design.getByRole('button', { name: '确认执行', exact: true }).click();
+      await (await (await import('./navigation-menu')).navigationMenuItem(design, { name: '确认执行', exact: true })).click();
       await expect(design).toBeHidden({ timeout: 20000 });
 
       design = await newTable(database, 'children');
       await addColumn(design, 2, 'parent_id', 'bigint unsigned', false);
       await addColumn(design, 3, 'code', 'varchar(80)', false);
       await addColumn(design, 4, 'note', 'varchar(100)', true);
-      await design.getByRole('button', { name: /^索引/ }).click();
-      await design.getByRole('button', { name: '添加索引', exact: true }).click();
+      await (await (await import('./navigation-menu')).navigationMenuItem(design, { name: /^索引/ })).click();
+      await (await (await import('./navigation-menu')).navigationMenuItem(design, { name: '添加索引', exact: true })).click();
       await design.getByLabel('索引名 2', { exact: true }).fill('uq_children_code');
       await design.getByLabel('唯一索引 2', { exact: true }).check();
       await design.getByLabel('索引字段 2', { exact: true }).fill('code');
-      await design.getByRole('button', { name: /^外键/ }).click();
-      await design.getByRole('button', { name: '添加外键', exact: true }).click();
+      await (await (await import('./navigation-menu')).navigationMenuItem(design, { name: /^外键/ })).click();
+      await (await (await import('./navigation-menu')).navigationMenuItem(design, { name: '添加外键', exact: true })).click();
       await design.getByLabel('外键名称', { exact: true }).fill('fk_children_parent');
       await design.getByLabel('本表字段（逗号分隔）', { exact: true }).fill('parent_id');
       await design.getByLabel('引用表', { exact: true }).fill('parents');
       await design.getByLabel('引用字段（逗号分隔）', { exact: true }).fill('id');
       await design.getByRole('combobox', { name: /^更新时/ }).selectOption('CASCADE');
       await design.getByRole('combobox', { name: /^删除时/ }).selectOption('CASCADE');
-      await design.getByRole('button', { name: '预览 SQL', exact: true }).click();
+      await (await (await import('./navigation-menu')).navigationMenuItem(design, { name: '预览 SQL', exact: true })).click();
       for (const fragment of ['PRIMARY KEY', 'UNIQUE', 'FOREIGN KEY', 'CASCADE']) await expect(design.locator('.monaco-editor .view-lines')).toContainText(fragment);
       await page.screenshot({ path: testInfo.outputPath('live-table-design-preview.png') });
-      await design.getByRole('button', { name: '确认执行', exact: true }).click();
+      await (await (await import('./navigation-menu')).navigationMenuItem(design, { name: '确认执行', exact: true })).click();
       await expect(design).toBeHidden({ timeout: 20000 });
       const [indexes] = await observer.query<RowDataPacket[]>('SELECT INDEX_NAME,NON_UNIQUE,COLUMN_NAME FROM information_schema.STATISTICS WHERE TABLE_SCHEMA=? AND TABLE_NAME=?', [database, 'children']);
       expect(indexes.some(row => row.INDEX_NAME === 'PRIMARY' && row.COLUMN_NAME === 'id')).toBe(true);
@@ -106,9 +106,9 @@ test.describe('远程真实数据库对象设计与定义', () => {
       await design.getByLabel('字段名 4', { exact: true }).fill('note_edited');
       await design.getByLabel('字段类型 4', { exact: true }).fill('varchar(200)');
       await addColumn(design, 5, 'flag', 'int', false, '7');
-      await design.getByRole('button', { name: '预览 SQL', exact: true }).click();
+      await (await (await import('./navigation-menu')).navigationMenuItem(design, { name: '预览 SQL', exact: true })).click();
       await expect(design.locator('.monaco-editor .view-lines')).toContainText('ALTER TABLE');
-      await design.getByRole('button', { name: '确认执行', exact: true }).click();
+      await (await (await import('./navigation-menu')).navigationMenuItem(design, { name: '确认执行', exact: true })).click();
       await expect(design).toBeHidden({ timeout: 20000 });
       const [modified] = await observer.query<RowDataPacket[]>('SELECT note_edited,flag FROM ' + q('children') + ' WHERE id=1');
       expect(modified).toMatchObject([{ note_edited: '待改列', flag: 7 }]);
@@ -135,14 +135,14 @@ test.describe('远程真实数据库对象设计与定义', () => {
         await modal.getByRole('combobox', { name: /^对象类型/ }).selectOption(definition.kind);
         await modal.getByLabel('对象名称', { exact: true }).fill(definition.name);
         await replaceSql(modal, definition.sql(definition.initial));
-        await modal.getByRole('button', { name: '执行 SQL', exact: true }).click();
+        await (await (await import('./navigation-menu')).navigationMenuItem(modal, { name: '执行 SQL', exact: true })).click();
         await expect(modal).toBeHidden({ timeout: 20000 });
         modal = await editObject(database, definition.name);
         await expect(modal.locator('.monaco-editor .view-lines')).toContainText(definition.initial, { timeout: 15000 });
         if (definition.kind === 'function') await page.screenshot({ path: testInfo.outputPath('live-function-definition.png') });
         const replacement = (definition.kind === 'view' ? '' : 'DROP ' + definition.kind.toUpperCase() + ' IF EXISTS ' + q(definition.name) + ';\n') + definition.sql(definition.changed);
         await replaceSql(modal, replacement);
-        await modal.getByRole('button', { name: '执行 SQL', exact: true }).click();
+        await (await (await import('./navigation-menu')).navigationMenuItem(modal, { name: '执行 SQL', exact: true })).click();
         await expect(modal).toBeHidden({ timeout: 20000 });
 
         if (definition.kind === 'view') {
@@ -167,7 +167,7 @@ test.describe('远程真实数据库对象设计与定义', () => {
       const [remaining] = await observer.query<RowDataPacket[]>('SELECT COUNT(*) AS total FROM ' + q('children'));
       expect(Number(remaining[0].total)).toBe(0);
       const row = await databaseRow(database);
-      await row.getByRole('button', { name: database, exact: true }).click();
+      await (await (await import('./navigation-menu')).navigationMenuItem(row, { name: database, exact: true })).click();
       for (const item of definitions) await expect(page.locator('.object-row').getByText(item.name, { exact: true })).toBeVisible();
       await page.screenshot({ path: testInfo.outputPath('live-objects.png') });
     }, testInfo);

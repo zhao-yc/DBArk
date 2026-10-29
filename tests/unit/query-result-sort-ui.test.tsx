@@ -1,3 +1,5 @@
+import { installNavigationMenuRamPort, navigationMenuRamButton, navigationMenuObservedMutationPort } from '../helpers/navigationMenuRamPort';
+let restoreNavigationMenuPort: () => void = () => {};
 import { act } from 'react';
 import { afterAll, afterEach, beforeAll, expect, it, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
@@ -39,13 +41,13 @@ function installMemoryOption(node:MemoryNode):void{
   Object.defineProperty(node,'value',{configurable:true,get:()=>node.attributes.get('value')??node.textContent,set:value=>node.attributes.set('value',value)});
 }
 beforeAll(async()=>{
-  document=memoryDocument();(document as any).oninput=null;Object.assign(window,{setTimeout,clearTimeout,confirm:()=>true});const create=document.createElement.bind(document);
+  document=memoryDocument(); restoreNavigationMenuPort = installNavigationMenuRamPort(document);(document as any).oninput=null;Object.assign(window,{setTimeout,clearTimeout,confirm:()=>true});const create=document.createElement.bind(document);
   document.createElement=name=>{const node=create(name);if(name==='input'){let kind='text';Object.defineProperty(node,'type',{configurable:true,get:()=>kind,set:value=>{kind=value;node.attributes.set('type',value);}});}if(name==='option')installMemoryOption(node);if(name==='select'){Object.defineProperty(node,'options',{get:()=>node.querySelectorAll('option')});Object.defineProperty(node,'value',{configurable:true,get:()=>node.querySelectorAll('option').find(option=>(option as any).selected)?.value??'',set:value=>{for(const option of node.querySelectorAll('option'))(option as any).selected=option.value===value;}});}const set=node.setAttribute.bind(node),remove=node.removeAttribute.bind(node);node.setAttribute=(key,value)=>{set(key.toLowerCase(),value);if(key==='disabled')node.disabled=true;};node.removeAttribute=key=>{remove(key.toLowerCase());if(key==='disabled')node.disabled=false;};return node;};
-  observers=new Set();(globalThis as any).Element=create('div').constructor;(globalThis as any).MutationObserver=class{constructor(private callback:Function){observers.add(callback);}observe(){}disconnect(){observers.delete(this.callback);}};
+  observers=new Set();(globalThis as any).Element=create('div').constructor;(globalThis as any).MutationObserver=navigationMenuObservedMutationPort(observers);
   ({createRoot}=await import('react-dom/client'));({QueryTab}=await import('../../src/renderer/components/QueryTab'));({ResultsGrid:Grid}=await import('../../src/renderer/components/ResultsGrid'));({useWorkspace:store,flushSettings:flush}=await import('../../src/renderer/store'));
 });
 afterEach(async()=>{vi.useRealTimers();if(root){await act(async()=>root!.unmount());root=undefined;}await flush();delete(window as any).dbark;vi.restoreAllMocks();ports.grids=[];ports.scroll.mockClear();document.body.textContent='';});
-afterAll(()=>{for(const[name,descriptor]of globals)if(descriptor)Object.defineProperty(globalThis,name,descriptor);else Reflect.deleteProperty(globalThis,name);});
+afterAll(()=>{ restoreNavigationMenuPort();for(const[name,descriptor]of globals)if(descriptor)Object.defineProperty(globalThis,name,descriptor);else Reflect.deleteProperty(globalThis,name);});
 /** 只返回本地常量；query.execute是RAM服务端口，禁止网络、DB、实际文件或剪贴板。 */
 async function mount(prepare?: (result: QueryResult) => void){
   commands=[];exports=[];original={columns:[{key:'id',name:'同名',type:'LONGLONG'},{key:'value',name:'同名',type:'NEWDECIMAL'},{key:'words',name:'原文',type:'VAR_STRING'},{key:'bytes',name:'字节',type:'BLOB'}],rows:[{id:'18446744073709551615',value:'0.12345678901234567891',words:'晚行',bytes:{type:'binary',base64:'AA=='}},{id:'9007199254740993',value:'0.12345678901234567890',words:'中行',bytes:{type:'binary',base64:'AP8='}},{id:'2',value:'-0.00000000000000000001',words:'早行',bytes:{type:'binary',base64:''}}],truncated:true,elapsedMs:1,statement:'SELECT 原SQL'};
@@ -345,7 +347,9 @@ it.each(['key', 'name', 'type', 'order'] as const)('暂存整理：新结果%s�
   await mount(); await sort(); await click(memoryText.save);
   if (change === 'order') original.columns.reverse(); else original.columns[0][change] = '改变';
   await click(zh.query.text010); const rows = grid().rows; expect(button(memoryText.apply).disabled).toBe(true);
-  await act(async () => reactProps(button(memoryText.apply)).onClick()); expect(document.body.textContent).toContain(memoryText.mismatch);
+  // 菜单不能绕过disabled执行原处理器；原不匹配原因仍由该项完整title展示。
+  const blocked = button(memoryText.apply); expect(blocked.getAttribute('title')).toContain(memoryText.mismatch);
+  await act(async () => reactProps(blocked).onClick()); expect(button(memoryText.apply).getAttribute('title')).toContain(memoryText.mismatch);
   expect(grid().rows).toBe(rows); expect(button(historyText.undo).disabled).toBe(true); expect(document.body.textContent).toContain(memoryText.saved);
 });
 
@@ -369,7 +373,7 @@ it.each(['inactive', 'new', 'result', 'version', 'job', 'modal'] as const)('暂�
   expect(document.body.textContent.includes(memoryText.saved)).toBe(mode !== 'version');
   if (mode === 'inactive') { await click(memoryText.apply); expect(grid().sortColumns).toEqual([{ columnKey: 'id', direction: 'ASC' }]); }
 });
-function button(name:string){const node=document.querySelectorAll('button').find(node=>node.textContent===name||node.getAttribute('aria-label')===name||name===zh.query.text010&&node.textContent.startsWith(name)||name===zh.resultExport.chooseFile&&node.textContent.includes(name));expect(node,'缺少按钮：'+name).toBeDefined();return node!;}
+function button(name:string){const node=(navigationMenuRamButton(document, name) ?? document.querySelectorAll('button').find(node=>node.textContent===name||node.getAttribute('aria-label')===name||name===zh.query.text010&&node.textContent.startsWith(name)||name===zh.resultExport.chooseFile&&node.textContent.includes(name)));expect(node,'缺少按钮：'+name).toBeDefined();return node!;}
 async function click(name:string){const node=button(name);expect(node.disabled).toBe(false);await act(async()=>node.dispatchEvent(new MemoryEvent('click')));}
 async function sort(column='id',direction:'ASC'|'DESC'='ASC'){const before=grid();await act(async()=>before.onSortColumnsChange([{columnKey:column,direction}]));}
 /** 使用真实优先级控件；保留RAM外界端口，不能把此检查当成原生窗口或系统输入。 */
@@ -658,7 +662,9 @@ it('多列：选择复制及已选导出按同一视图原行，原SQL/会话/�
   await mountMulti();const originalRows=original.rows,saved=structuredClone(original);await headerAction('group');await headerAction('id',{ctrlKey:true});await act(async()=>grid().onSelectedRowsChange(new Set([0,2])));expect(JSON.parse(copy().get('application/x-dbark-cells')!).rows.map((row:any)=>row[1])).toEqual(['2','1']);await click(zh.resultExport.selectedTitle);await click(zh.resultExport.chooseFile);await click(zh.resultExport.start);expect(exports[0].result.rows.map((row:any)=>row.id)).toEqual(['2','1']);expect(original.rows).toBe(originalRows);expect(original).toEqual(saved);expect(commands.filter(c=>c==='query.execute')).toHaveLength(1);expect(commands.some(c=>c.startsWith('query.transaction'))).toBe(false);
 });
 it.each(['id','amount','stamp','duration'])('多列：%s次级键在React更新前漂移立即拒旧复制/导出/详情，恢复值不复活',async column=>{
-  await mountMulti();await act(async()=>grid().onSortColumnsChange(['group','id','amount','stamp','duration'].map(columnKey=>({columnKey,direction:'ASC'}))));await act(async()=>grid().onSelectedRowsChange(new Set([0])));await act(async()=>grid().onActivePositionChange({row:grid().rows[0],rowIdx:0}));const old=grid(),exportNode=button(zh.resultExport.selectedTitle),detailNode=button(detailsText.open),getAction=(node:any)=>node[Object.keys(node).find(key=>key.startsWith('__reactProps$'))!].onClick,exportAction=getAction(exportNode),detailAction=getAction(detailNode),raw=original.rows[0],saved=raw[column];
+  await mountMulti();await act(async()=>grid().onSortColumnsChange(['group','id','amount','stamp','duration'].map(columnKey=>({columnKey,direction:'ASC'}))));await act(async()=>grid().onSelectedRowsChange(new Set([0])));await act(async()=>grid().onActivePositionChange({row:grid().rows[0],rowIdx:0}));const old=grid(),getAction=(node:any)=>node[Object.keys(node).find(key=>key.startsWith('__reactProps$'))!].onClick;
+  // 切子菜单会卸载前一组DOM；必须在原节点仍挂载时捕获原回调，不能读已清理的ReactProps。
+  const exportAction=getAction(button(zh.resultExport.selectedTitle)),detailAction=getAction(button(detailsText.open)),raw=original.rows[0],saved=raw[column];
   raw[column]=column==='stamp'?'2026-10-19 12:00:00.000003':column==='duration'?'-100:00:00.000002':'7';expect(copy(old).size).toBe(0);await act(async()=>{exportAction();detailAction();});expect(document.querySelector('[role="dialog"]')).toBeNull();expect(document.querySelector('[role="region"]')).toBeNull();raw[column]=saved;expect(copy(old).size).toBe(0);await act(async()=>exportAction());expect(exports).toEqual([]);
 });
 it('多列：查找和行详情按同一视图，列布局变更和新查询撤销全部旧规则',async()=>{
@@ -1258,8 +1264,10 @@ it('命名方案：完整试算失败保留当前视图和历史，不发布部�
   await mount(); const port = installPresetPort(); await sort(); await savePreset(); await click(zh.common.close);
   original.rows[0].id = '新查询无效整数'; await click(zh.query.text010); const rows = grid().rows;
   await click(presetsText.open); await choosePreset(port.state().entries[0].id); await click(presetsText.apply);
-  expect(grid().rows).toBe(rows); expect(grid().sortColumns).toEqual([]); expect(button(historyText.undo).disabled).toBe(true);
+  expect(grid().rows).toBe(rows); expect(grid().sortColumns).toEqual([]);
   expect(document.body.textContent).toContain(text.value); expect(document.body.textContent).toContain(presetsText.refreshNeeded);
+  // 保留失败表单完整错误断言，关闭后才通过真实菜单检查页级Undo。
+  await click(zh.common.close); expect(button(historyText.undo).disabled).toBe(true);
 });
 
 it('命名方案：同连接另一标签显式读取应用，原标签整理保持独立', async () => {
@@ -1269,7 +1277,7 @@ it('命名方案：同连接另一标签显式读取应用，原标签整理保�
   const tabs = () => document.querySelectorAll('div').filter(node => node.getAttribute('class')?.split(' ').includes('query-tab'));
   const second = tabs()[1];
   /** 两标签仍真实挂载，仅按宿主节点选择当前标签的控件，避免全局同名按钮误点。 */
-  async function currentClick(name: string) { const node = second.querySelectorAll('button').find(node => node.textContent === name || name === zh.query.text010 && node.textContent.startsWith(name)); expect(node).toBeDefined(); expect(node!.disabled).toBe(false); await act(async () => node!.dispatchEvent(new MemoryEvent('click'))); }
+  async function currentClick(name: string) { const node = navigationMenuRamButton(second, name) ?? second.querySelectorAll('button').find(node => node.textContent === name || name === zh.query.text010 && node.textContent.startsWith(name)); expect(node).toBeDefined(); expect(node!.disabled).toBe(false); await act(async () => node!.dispatchEvent(new MemoryEvent('click'))); }
   await currentClick(zh.query.text010); expect(grid().sortColumns).toEqual([]); await currentClick(presetsText.open);
   await choosePreset(port.state().entries[0].id); await click(presetsText.apply);
   expect(grid().sortColumns).toEqual([{ columnKey: 'id', direction: 'DESC' }]);

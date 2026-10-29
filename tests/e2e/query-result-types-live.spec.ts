@@ -118,10 +118,13 @@ test('真实SELECT的wire BLOB文本与NULL不误开字节，实际字节及空�
     for (const position of [1, 3]) for (const row of [2, 3]) for (const action of ['double', 'enter'] as const) {
       const header = columns[position]; await activate(header, row, action);
       const modal = page.getByRole('dialog', { name: `${binary.title}：${header.name}`, exact: true }), hex = modal.getByRole('textbox', { name: binary.hexLabel, exact: true });
-      await expect(modal).toBeVisible(); await expect(hex).toHaveValue(row === 3 ? '' : position === 1 ? '00 ff 80' : '80 00 7f ff'); await expect(hex).toHaveJSProperty('readOnly', true); await expect(modal).toContainText(binary.readonly); await expect(modal.getByRole('button', { name: /暂存/ })).toHaveCount(0);
+      await expect(modal).toBeVisible(); await expect(hex).toHaveValue(row === 3 ? '' : position === 1 ? '00 ff 80' : '80 00 7f ff'); await expect(hex).toHaveJSProperty('readOnly', true); await expect(modal).toContainText(binary.readonly); await expect((await navigationMenuItem(modal, { name: /暂存/ }))).toHaveCount(0);
       if (row === 3) await expect(modal).toContainText(binary.empty);
-      await modal.getByRole('button', { name: zh.dialogs.text001, exact: true }).click(); await expect(modal).toHaveCount(0); await unchanged(context, before);
+      await (await navigationMenuItem(modal, { name: zh.dialogs.text001, exact: true })).click(); await expect(modal).toHaveCount(0); await unchanged(context, before);
     }
     await info.attach('只读结果命令摘要', { body: JSON.stringify(await observations()), contentType: 'application/json' }); await unchanged(context, before);
   }, info);
 });
+
+/** 原门进入具体动作后才加载真实菜单导航，不改变默认/列表阶段的资源边界。 */
+async function navigationMenuItem(...args: Parameters<typeof import('./navigation-menu')['navigationMenuItem']>): Promise<import('@playwright/test').Locator> { return (require('./navigation-menu') as typeof import('./navigation-menu')).navigationMenuItem(...args); }

@@ -1,3 +1,5 @@
+import { installNavigationMenuRamPort, navigationMenuRamButton, navigationMenuObservedMutationPort } from '../helpers/navigationMenuRamPort';
+let restoreNavigationMenuPort: () => void = () => {};
 import React, { act } from 'react';
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { randomUUID } from 'node:crypto';
@@ -23,7 +25,7 @@ const output = (input: ResultInsertPreviewInput): ResultInsertPreviewOutput => (
 const fact = (patch: Partial<ResultInsertProgress> = {}): ResultInsertProgress => ({ phase: 'inserting', rows: 0, totalRows: 3, dmlMayHaveBeenSent: false, commitMayHaveBeenSent: false, commitAcknowledged: false, rollbackAcknowledged: false, transactionProtected: true, outcome: 'not-sent', ...patch });
 function deferred<T>() { let resolve!: (value: T) => void, reject!: (reason: unknown) => void; const promise = new Promise<T>((yes, no) => { resolve = yes; reject = no; }); return { promise, resolve, reject }; }
 beforeAll(async () => {
-  doc = memoryDocument(); (doc as any).oninput = null; Object.assign(window, { setTimeout, clearTimeout, confirm: () => true }); const create = doc.createElement.bind(doc);
+  doc = memoryDocument(); restoreNavigationMenuPort = installNavigationMenuRamPort(doc); (doc as any).oninput = null; Object.assign(window, { setTimeout, clearTimeout, confirm: () => true }); const create = doc.createElement.bind(doc);
   /** 只补标准input/option/select布尔与选中反射，不注入产品状态。 */
   doc.createElement = name => {
     const node = create(name); if (name === 'input') { let kind = 'text'; Object.defineProperty(node, 'type', { configurable: true, get: () => kind, set: value => { kind = value; node.attributes.set('type', value); } }); }
@@ -31,11 +33,11 @@ beforeAll(async () => {
     if (name === 'select') { Object.defineProperty(node, 'options', { get: () => node.querySelectorAll('option') }); Object.defineProperty(node, 'value', { configurable: true, get: () => node.querySelectorAll('option').find(option => Reflect.get(option, 'selected'))?.value ?? '', set: value => { for (const option of node.querySelectorAll('option')) Reflect.set(option, 'selected', option.value === value); } }); }
     const set = node.setAttribute.bind(node), remove = node.removeAttribute.bind(node); node.setAttribute = (key, value) => { set(key.toLowerCase(), value); if (key === 'disabled') node.disabled = true; }; node.removeAttribute = key => { remove(key.toLowerCase()); if (key === 'disabled') node.disabled = false; }; return node;
   };
-  Object.defineProperty(globalThis, 'Element', { value: MemoryNode, configurable: true }); Object.defineProperty(globalThis, 'MutationObserver', { configurable: true, value: class { constructor(private callback: (records?: unknown[]) => void) { observers.add(callback); } observe() {} disconnect() { observers.delete(this.callback); } } });
+  Object.defineProperty(globalThis, 'Element', { value: MemoryNode, configurable: true }); Object.defineProperty(globalThis, 'MutationObserver', { configurable: true, value: navigationMenuObservedMutationPort(observers) });
   ({ createRoot } = await import('react-dom/client')); ({ ResultInsertDialog: Dialog } = await import('../../src/renderer/components/ResultInsertDialog')); ({ QueryTab } = await import('../../src/renderer/components/QueryTab')); ({ useWorkspace: store, flushSettings: flush } = await import('../../src/renderer/store'));
 });
 afterEach(async () => { if (root) await act(async () => root!.unmount()); root = undefined; if ((window as any).dbark) await flush(); delete (window as any).dbark; doc.body.textContent = ''; vi.restoreAllMocks(); });
-afterAll(() => { for (const [name, descriptor] of globals) if (descriptor) Object.defineProperty(globalThis, name, descriptor); else Reflect.deleteProperty(globalThis, name); });
+afterAll(() => { restoreNavigationMenuPort(); for (const [name, descriptor] of globals) if (descriptor) Object.defineProperty(globalThis, name, descriptor); else Reflect.deleteProperty(globalThis, name); });
 function seed() { store.setState({ settings: { theme: 'dark', sidebarWidth: 260, resultLimit: 1000, pageSize: 50, activeTabId: 'source', tabs: [{ id: 'source', kind: 'query', connectionId: 'source', title: '原查询', sql: 'SELECT 保留原稿', databaseContext: { state: 'known', database: null } }] }, connections: ['source', 'target'].map(id => ({ id, name: id === 'source' ? '原连接' : '目标连接', group: '', color: '', dialect: 'mysql' as const, host: 'offline.invalid', port: 1, user: 'ram' })), connectionVersions: { source: 1, target: 1 }, activeJobs: {}, dirtyTabs: {}, tasks: [], notice: undefined }); }
 async function mountDialog(overrides: Partial<ResultInsertServices> = {}) {
   seed(); const listeners = new Set<(event: TaskEvent) => void>(), source = data(), intent = new ResultInsertSourceIntent(source, false, randomUUID(), () => true);
@@ -45,7 +47,7 @@ async function mountDialog(overrides: Partial<ResultInsertServices> = {}) {
   await act(async () => root!.render(<Dialog intent={intent} initialConnectionId="target" services={services} onActivity={onActivity} onClose={onClose} onCommitted={onCommitted} onCleanupError={onCleanupError}/>));
   return { source, intent, services, preview, apply, release, cancel, onActivity, onClose, onCommitted, onCleanupError, async emit(value: ResultInsertProgress) { const input = (services.apply as typeof apply).mock.calls[0]?.[0]; expect(input).toBeDefined(); await act(async () => { for (const listener of listeners) listener({ taskId: input.taskId, status: 'running', progress: 60, message: 'RAM阶段', resultInsert: value }); }); } };
 }
-function button(label: string): MemoryNode { const node = doc.querySelectorAll('button').find(node => node.getAttribute('aria-label') === label || node.textContent === label || label === zh.query.text010 && node.textContent.startsWith(label)); expect(node, label).toBeDefined(); return node!; }
+function button(label: string): MemoryNode { const node = (navigationMenuRamButton(doc, label) ?? doc.querySelectorAll('button').find(node => node.getAttribute('aria-label') === label || node.textContent === label || label === zh.query.text010 && node.textContent.startsWith(label))); expect(node, label).toBeDefined(); return node!; }
 async function click(label: string) { const node = button(label); expect(node.disabled, label).toBe(false); await act(async () => node.dispatchEvent(new MemoryEvent('click'))); }
 function field(label: string, tag = 'input') { const node = doc.querySelectorAll(tag).find(node => node.getAttribute('aria-label') === label); expect(node, label).toBeDefined(); return node!; }
 async function select(label: string, value: string) { const node = field(label, 'select'); expect(node.disabled).toBe(false); await act(async () => { node.value = value; node.dispatchEvent(new MemoryEvent('change')); }); }

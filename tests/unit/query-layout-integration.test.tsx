@@ -1,3 +1,5 @@
+import { installNavigationMenuRamPort, navigationMenuRamButton } from '../helpers/navigationMenuRamPort';
+let restoreNavigationMenuPort: () => void = () => {};
 import React, { act } from 'react';
 import { beforeAll, afterAll, beforeEach, afterEach, expect, it, vi } from 'vitest';
 import { memoryDocument, MemoryEvent, MemoryNode } from '../fixtures/memory-dom';
@@ -27,7 +29,7 @@ const originalGlobals = globalNames.map(name => [name, Object.getOwnPropertyDesc
 const names = ['children', 'classList', 'getBoundingClientRect', 'setPointerCapture', 'hasPointerCapture', 'releasePointerCapture'];
 const originalProperties = names.map(name => [name, Object.getOwnPropertyDescriptor(MemoryNode.prototype, name)] as const);
 beforeAll(async () => {
-  doc = memoryDocument();
+  doc = memoryDocument(); restoreNavigationMenuPort = installNavigationMenuRamPort(doc);
   Object.defineProperty(MemoryNode.prototype, 'children', { configurable: true, get() { return this.childNodes.filter((node: MemoryNode) => node.nodeType === 1); } });
   Object.defineProperty(MemoryNode.prototype, 'classList', { configurable: true, get() { return { contains: (value: string) => (this.getAttribute('class') ?? '').split(' ').includes(value) }; } });
   Object.defineProperty(MemoryNode.prototype, 'getBoundingClientRect', { configurable: true, value(this: MemoryNode) { const name = this.getAttribute('class') ?? ''; return { height: name.includes('query-tab') ? rectangles : name === 'toolbar' ? 45 : name === 'result-toolbar' ? 35 : name === 'tab-status' ? 33 : name === 'query-layout-bar' ? 18 : 0 }; } });
@@ -43,7 +45,7 @@ beforeEach(() => {
   useWorkspace.setState({ settings: { theme: 'dark', sidebarWidth: 260, resultLimit: 1000, pageSize: 100, activeTabId: 'a', tabs: [{ id: 'a', kind: 'query', title: '查询A', connectionId: 'c', sql: 'SELECT 原SQL;' }, { id: 'b', kind: 'query', title: '查询B', connectionId: 'c', sql: 'SELECT B;' }] }, connections: [{ id: 'c', name: 'RAM连接', group: '', color: '', dialect: 'mysql', host: 'offline.invalid', port: 1, user: 'ram' }], tasks: [], activeJobs: {}, dirtyTabs: {}, connectionVersions: {}, notice: undefined });
 });
 afterEach(async () => { if (root) await act(async () => root!.unmount()); root = undefined; saveHook = undefined; await flushSettings(); expect([...listeners.values()].every(list => !list.size)).toBe(true); expect([...captures.values()].every(set => !set.size)).toBe(true); doc.body.textContent = ''; });
-afterAll(() => { for (const [name, descriptor] of originalProperties) if (descriptor) Object.defineProperty(MemoryNode.prototype, name, descriptor); else Reflect.deleteProperty(MemoryNode.prototype, name); for (const [name, descriptor] of originalGlobals) if (descriptor) Object.defineProperty(globalThis, name, descriptor); else Reflect.deleteProperty(globalThis, name); });
+afterAll(() => { restoreNavigationMenuPort(); for (const [name, descriptor] of originalProperties) if (descriptor) Object.defineProperty(MemoryNode.prototype, name, descriptor); else Reflect.deleteProperty(MemoryNode.prototype, name); for (const [name, descriptor] of originalGlobals) if (descriptor) Object.defineProperty(globalThis, name, descriptor); else Reflect.deleteProperty(globalThis, name); });
 async function mount() { function View() { const tabs = useWorkspace(state => state.settings.tabs); return <>{tabs.map(tab => <section key={tab.id} data-layout-tab={tab.id}><QueryTab tab={tab} onHistory={() => {}}/></section>)}</>; } const node = doc.createElement('div'); doc.body.appendChild(node); root = createRoot(node as any); await act(async () => root!.render(<View/>)); }
 function section(id = 'a') { return doc.querySelector(`[data-layout-tab="${id}"]`)!; }
 function splitter(id = 'a') { const node = section(id).querySelector('[role="separator"]'); if (!node) throw Error('真实QueryTab未接入分隔条'); return node; }

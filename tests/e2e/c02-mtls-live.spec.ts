@@ -51,7 +51,7 @@ async function runUi(remember: boolean, info: TestInfo): Promise<boolean> {
       const form = await editConnection(scope, name);
       if (remember) {
         await savedOrCleared(form, false); await testConnection(form, true);
-        await form.getByRole('button', { name: '取消', exact: true }).click();
+        await (await (await import('./navigation-menu')).navigationMenuItem(form, { name: '取消', exact: true })).click();
         assertDisk(await disk(), true, true); await utilitySelect(scope, lease, id);
         const clear = await editConnection(scope, name); await savedOrCleared(clear, true);
         const cleared = await overview(scope, name);
@@ -61,13 +61,13 @@ async function runUi(remember: boolean, info: TestInfo): Promise<boolean> {
         const final = await overview(scope, name);
         c02Assert(final.id === id && final.publicOnly && final.hasPassword && !final.hasTlsPassphrase, 'C02 清除 TLS 后重启误删数据库密码或恢复旧 TLS 口令');
         const negative = await editConnection(scope, name);
-        await negative.getByRole('button', { name: 'TLS / SSL', exact: true }).click(); await testConnection(negative, false);
-        await negative.getByRole('button', { name: '取消', exact: true }).click();
+        await (await (await import('./navigation-menu')).navigationMenuItem(negative, { name: 'TLS / SSL', exact: true })).click(); await testConnection(negative, false);
+        await (await (await import('./navigation-menu')).navigationMenuItem(negative, { name: '取消', exact: true })).click();
         assertDisk(await disk(), true, false);
       } else {
         // 不补填任何口令，真实测试必须拒绝；该分支独立证明 volatileSecrets 不跨进程恢复。
-        await form.getByRole('button', { name: 'TLS / SSL', exact: true }).click(); await testConnection(form, false);
-        await form.getByRole('button', { name: '取消', exact: true }).click(); assertDisk(await disk(), false, false);
+        await (await (await import('./navigation-menu')).navigationMenuItem(form, { name: 'TLS / SSL', exact: true })).click(); await testConnection(form, false);
+        await (await (await import('./navigation-menu')).navigationMenuItem(form, { name: '取消', exact: true })).click(); assertDisk(await disk(), false, false);
       }
     }, async () => { if (scope) await scope.dispose(); });
   });

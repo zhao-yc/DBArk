@@ -4,7 +4,7 @@ import ts from 'typescript';
 export function extractMainProductionFunction(source: string, name: string): string {
   const tree = ts.createSourceFile('main.ts', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
   const matches = tree.statements.filter((node): node is ts.FunctionDeclaration => ts.isFunctionDeclaration(node) && node.name?.text === name);
-  if (matches.length !== 1 || !matches[0].body) throw Error(`生产main必须含唯一且完整的顶层函数：${name}`);
+  if (matches.length !== 1 || !matches[0].body || matches[0].body.statements.length === 0) throw Error(`生产main必须含唯一且完整的非空顶层函数：${name}`);
   return matches[0].getText(tree);
 }
 

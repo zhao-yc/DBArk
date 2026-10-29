@@ -9,11 +9,11 @@ export function EditorIndentPreferences({ onVisibilityChange }: { onVisibilityCh
   const [open, setOpen] = useState(false);
   /** 沿用工作台模态门，开启/关闭均让原导航意图失效。 */
   function show() { if (document.querySelector('[role="dialog"]')) return; onVisibilityChange(); setOpen(true); }
-  return <><button type="button" onClick={show}>{text.entry}</button>{open && <IndentDialog onClose={() => { onVisibilityChange(); setOpen(false); }}/>}</>;
+  return <><button type="button" onClick={show}>{text.entry}</button>{open && <EditorIndentPreferencesDialog onClose={() => { onVisibilityChange(); setOpen(false); }}/>}</>;
 }
 
 /** 只暂存两个缩进字段；保存时合并当前store，不携带打开时的SQL或标签快照。 */
-function IndentDialog({ onClose }: { onClose(): void }) {
+export function EditorIndentPreferencesDialog({ onClose }: { onClose(): void }) {
   const width = useWorkspace(state => readEditorTabSize(state.settings.editorTabSize));
   const spaces = useWorkspace(state => readEditorInsertSpaces(state.settings.editorInsertSpaces));
   const [draftWidth, setDraftWidth] = useState(String(width)), [draftStyle, setDraftStyle] = useState(spaces ? 'spaces' : 'tabs');

@@ -53,10 +53,10 @@ test.describe('Sidebar异步节点受控回包产品UI补充', () => {
     ownedDesktopResources(info);
     name = 'Sidebar UI ' + randomUUID();
     // 正式连接表单与本地配置保存均使用产品路径，虚构目标只有loopback:1，未点击测试连接。
-    await page.locator('.app-commandbar').getByRole('button', { name: zh.common.newConnection, exact: true }).click();
+    await (await (await import('./navigation-menu')).navigationMenuItem(page.locator('.navigation-toolbar'), { name: zh.common.newConnection, exact: true })).click();
     const form = page.getByRole('dialog', { name: zh.common.newConnection, exact: true });
     await form.getByLabel(zh.connections.text006, { exact: true }).fill(name); await form.getByLabel(zh.connections.text009, { exact: true }).fill('127.0.0.1'); await form.getByLabel(zh.connections.text010, { exact: true }).fill('1'); await form.getByLabel(zh.common.user, { exact: true }).fill('sidebar-fixture');
-    await form.getByRole('button', { name: zh.connections.text036, exact: true }).click(); await expect(form).toBeHidden();
+    await (await (await import('./navigation-menu')).navigationMenuItem(form, { name: zh.connections.text036, exact: true })).click(); await expect(form).toBeHidden();
     const profile = await page.evaluate(async title => (await window.dbark.invoke('connections.list', {})).find(profile => profile.name === title), name);
     expect(profile).toMatchObject({ host: '127.0.0.1', port: 1, user: 'sidebar-fixture' }); connectionId = profile!.id;
     await desktop.evaluate(({ ipcMain }, id) => {
@@ -104,7 +104,7 @@ test.describe('Sidebar异步节点受控回包产品UI补充', () => {
   });
   test('SIDEBAR-ASYNC-UI-05：编辑连接重挂载等待旧断开，原取消错误保留且不补发close', async () => {
     await openConnection(); await (await action(connection().locator('.connection-row'), zh.sidebar.text013)).click(); await waitCall(2, 'connections.close');
-    await (await action(connection().locator('.connection-row'), formatText(zh.sidebar.text010, name))).click(); const form = page.getByRole('dialog', { name: zh.connections.text003, exact: true }); await form.getByLabel(zh.connections.text009, { exact: true }).fill('127.0.0.2'); await form.getByRole('button', { name: zh.connections.text036, exact: true }).click(); await expect(form).toBeHidden();
+    await (await action(connection().locator('.connection-row'), formatText(zh.sidebar.text010, name))).click(); const form = page.getByRole('dialog', { name: zh.connections.text003, exact: true }); await form.getByLabel(zh.connections.text009, { exact: true }).fill('127.0.0.2'); await (await (await import('./navigation-menu')).navigationMenuItem(form, { name: zh.connections.text036, exact: true })).click(); await expect(form).toBeHidden();
     await label().click(); await expect(label()).toHaveAttribute('aria-busy', 'true'); expect(await calls()).toHaveLength(3); await release(2, undefined, '本例受控回包取消收尾失败'); await expect(page.getByRole('alert')).toContainText('本例受控回包取消收尾失败'); await waitCall(3, 'connections.open'); await release(3, status); await waitCall(4, 'metadata.databases'); await release(4, [database]); await expect(databaseLabel()).toBeVisible(); expect((await calls()).filter(call => call.command === 'connections.close')).toHaveLength(1); expect(pageErrors).toEqual([]);
   });
 });

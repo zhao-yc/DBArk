@@ -62,15 +62,19 @@ async function waiting(id: number) {
 }
 /** 五条路径均经正式入口；原生菜单调用实际MenuItem处理器，不人工发渲染事件或改React状态。 */
 async function open(entry: Entry) {
-  if (entry === '工具栏') await page.locator('.app-commandbar').getByRole('button', { name: '新建查询', exact: true }).click();
+  if (entry === '工具栏') await (await (await import('./navigation-menu')).navigationMenuItem(page.locator('.navigation-toolbar'), { name: '新建查询', exact: true })).click();
   else if (entry === '标签加号') await page.locator('.tab-strip .add-tab').click();
   else if (entry === '欢迎页') await page.locator('.welcome-actions > button').nth(1).click();
   else if (entry === '快捷键') await page.keyboard.press(`${modifier}+T`);
-  else await desktop.evaluate(({ Menu, BrowserWindow }) => {
-    const menu = Menu.getApplicationMenu()?.items.find(item => item.label === '文件')?.submenu;
-    const item = menu?.items.find(item => item.label === '新建查询'); if (!item) throw Error('没有正式新建查询菜单');
-    item.click(item, BrowserWindow.getAllWindows()[0], {} as Electron.KeyboardEvent);
-  });
+  else {
+    // 等待真实注册器的封闭状态到达Main，再调用实际MenuItem；不伪造旧onMenu字符串。
+    await expect.poll(() => desktop.evaluate(({ Menu }) => Menu.getApplicationMenu()?.getMenuItemById('new-query')?.enabled === true)).toBe(true);
+    await desktop.evaluate(({ Menu, BrowserWindow }) => {
+      const item = Menu.getApplicationMenu()?.getMenuItemById('new-query');
+      if (!item?.enabled) throw Error('正式新建查询菜单尚未就绪');
+      item.click(item, BrowserWindow.getAllWindows()[0], {} as Electron.KeyboardEvent);
+    });
+  }
   await expect(form()).toBeVisible();
 }
 /** 恢复原IPC后再由桌面夹具退出；测试从未触碰系统剪贴板。 */
@@ -84,7 +88,7 @@ for (const entry of ['工具栏', '标签加号', '欢迎页', '快捷键', '原
     try {
       // 默认上下文由真实侧栏选择建立，不依赖本地连接列表的排序规则。
       const connection = page.locator('.connection-row').filter({ has: page.getByRole('button', { name: current.name, exact: true }) });
-      await connection.getByRole('button', { name: current.name, exact: true }).click(); await expect(connection).toHaveClass(/active/);
+      await (await (await import('./navigation-menu')).navigationMenuItem(connection, { name: current.name, exact: true })).click(); await expect(connection).toHaveClass(/active/);
       for (const [index, kind] of ['表页', '定义', '错误'].entries()) {
         const button = shelf().getByRole('button', { name: kind === '定义' ? /^打开对象：迟到定义 ·/ : /^打开对象：迟到表页 ·/ });
         await button.click(); await waiting(index + 1); await open(entry);
@@ -97,11 +101,11 @@ for (const entry of ['工具栏', '标签加号', '欢迎页', '快捷键', '原
         await expect(form().getByRole('combobox', { name: '默认数据库（可选）', exact: true })).toHaveValue('用户新草稿库');
         await expect(page.locator('.tab-strip .workspace-tab-button')).toHaveCount(0);
         await expect(page.locator('.toast').filter({ hasText: '旧导航专属错误不得出现' })).toHaveCount(0);
-        await form().getByRole('button', { name: '取消', exact: true }).click(); await expect(form()).toBeHidden();
+        await (await (await import('./navigation-menu')).navigationMenuItem(form(), { name: '取消', exact: true })).click(); await expect(form()).toBeHidden();
         // 重开读取正式工作区默认上下文，能发现旧响应只偷偷改变selection的情况。
         await open(entry); await expect(form().getByRole('combobox', { name: '数据库连接', exact: true })).toHaveValue(current.id);
         await expect(form().getByRole('combobox', { name: '默认数据库（可选）', exact: true })).toHaveValue('');
-        await form().getByRole('button', { name: '取消', exact: true }).click(); await expect(form()).toBeHidden();
+        await (await (await import('./navigation-menu')).navigationMenuItem(form(), { name: '取消', exact: true })).click(); await expect(form()).toBeHidden();
       }
       const latest = shelf().getByRole('button', { name: /^打开对象：最新有效导航 ·/ });
       await latest.click(); await waiting(4); await finish(4); await expect(latest).toBeEnabled();
@@ -115,16 +119,16 @@ for (const entry of ['工具栏', '标签加号', '欢迎页', '快捷键', '原
 test('正式对象链接关闭后迟到响应不影响查询表单，最新链接错误仍在本入口显示', async () => {
   const profiles = await seed(); await controlledResolutions();
   try {
-    await page.locator('.app-commandbar').getByRole('button', { name: '粘贴对象链接', exact: true }).click();
+    await (await (await import('./navigation-menu')).navigationMenuItem(page.locator('.navigation-toolbar'), { name: '粘贴对象链接', exact: true })).click();
     const link = page.getByRole('dialog', { name: '粘贴对象链接', exact: true });
     await link.getByLabel('DBArk 对象链接', { exact: true }).fill(objectUri({ connectionId: profiles[1].id, database: 'old_db', kind: 'procedure', name: 'old_proc' }));
-    await link.getByRole('button', { name: '打开链接', exact: true }).click(); await waiting(1);
-    await link.getByRole('button', { name: '取消', exact: true }).click(); await expect(link).toBeHidden();
+    await (await (await import('./navigation-menu')).navigationMenuItem(link, { name: '打开链接', exact: true })).click(); await waiting(1);
+    await (await (await import('./navigation-menu')).navigationMenuItem(link, { name: '取消', exact: true })).click(); await expect(link).toBeHidden();
     await open('工具栏'); await finish(1); await expect(form()).toBeVisible(); await expect(page.getByRole('dialog')).toHaveCount(1);
-    await form().getByRole('button', { name: '取消', exact: true }).click();
-    await page.locator('.app-commandbar').getByRole('button', { name: '粘贴对象链接', exact: true }).click();
+    await (await (await import('./navigation-menu')).navigationMenuItem(form(), { name: '取消', exact: true })).click();
+    await (await (await import('./navigation-menu')).navigationMenuItem(page.locator('.navigation-toolbar'), { name: '粘贴对象链接', exact: true })).click();
     await link.getByLabel('DBArk 对象链接', { exact: true }).fill(objectUri({ connectionId: profiles[1].id, database: 'old_db', kind: 'table', name: 'old_table' }));
-    await link.getByRole('button', { name: '打开链接', exact: true }).click(); await waiting(2); await finish(2, '最新对象连接修订错误');
+    await (await (await import('./navigation-menu')).navigationMenuItem(link, { name: '打开链接', exact: true })).click(); await waiting(2); await finish(2, '最新对象连接修订错误');
     await expect(link.getByRole('alert')).toContainText('最新对象连接修订错误'); expect(pageErrors).toEqual([]);
   } finally { await restore(); }
 });

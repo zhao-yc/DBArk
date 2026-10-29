@@ -120,10 +120,10 @@ test('SQL文件真实选择令牌、失败和成功新任务、原按钮取消�
       root.__sqlImportAudit = state; handlers.set('dbark:request', wrapped);
     }, { connectionId: context.connectionId, database }); auditInstalled = true;
     const row = page.locator('.database-row').filter({ has: page.getByRole('button', { name: database, exact: true }) });
-    await row.getByRole('button', { name: database, exact: true }).click();
-    await page.locator('.object-row').getByRole('button', { name: 'subject', exact: true }).click();
+    await (await (await import('./navigation-menu')).navigationMenuItem(row, { name: database, exact: true }, check)).click();
+    await (await (await import('./navigation-menu')).navigationMenuItem(page.locator('.object-row'), { name: 'subject', exact: true }, check)).click();
     const tab = page.locator('.table-tab:visible'); await expect(tab.getByRole('grid')).toBeVisible();
-    await tab.getByRole('button', { name: zh.common.import, exact: true }).click();
+    await (await (await import('./navigation-menu')).navigationMenuItem(tab, { name: zh.common.import, exact: true }, check)).click();
     const dialog = page.getByRole('dialog', { name: `${zh.transfer.text004} · ${database}.subject`, exact: true });
     await dialog.getByRole('combobox', { name: zh.transfer.text006, exact: true }).selectOption('sql');
     await dialog.getByRole('combobox', { name: zh.transfer.text009, exact: true }).selectOption('utf16le');
@@ -143,7 +143,7 @@ test('SQL文件真实选择令牌、失败和成功新任务、原按钮取消�
         const started = (await audit()).started[index]; expect(started).toBeDefined();
         expect(await observe('SELECT id FROM ' + table('subject') + ' ORDER BY id')).toEqual([{ id: 1 }, { id: 4 }, { id: 5 }]);
         await expect(dialog.locator('.file-picker')).toBeDisabled();
-        await dialog.getByRole('button', { name: zh.transfer.text027, exact: true }).click();
+        await (await (await import('./navigation-menu')).navigationMenuItem(dialog, { name: zh.transfer.text027, exact: true }, check)).click();
         await expect.poll(async () => (await audit()).cancels.length).toBe(1);
         expect((await audit()).cancels[0].taskId).toBe(started.taskId);
       }
@@ -185,7 +185,7 @@ test('SQL文件真实选择令牌、失败和成功新任务、原按钮取消�
     await info.attach('SQL文件原Main三次任务及取消旁观', { body: JSON.stringify(result, null, 2), contentType: 'application/json' });
     expect(pageErrors).toEqual([]);
     await application.evaluate(() => (globalThis as any).__sqlImportAudit.restore()); auditInstalled = false;
-    await dialog.getByRole('button', { name: zh.common.done, exact: true }).click();
+    await (await (await import('./navigation-menu')).navigationMenuItem(dialog, { name: zh.common.done, exact: true }, check)).click();
   } catch (error) { failed = true; failure = error; }
   try {
     await info.attach('SQL文件原收尾前登记', { body: JSON.stringify({ database, owner: marker, observerId, importThreads: [...threadIds], createAttempted: created, ownerConfirmed: marked, sourceFiles: [...sourceFiles].map(([path, bytes]) => ({ path, sha256: createHash('sha256').update(bytes).digest('hex') })) }), contentType: 'application/json' });

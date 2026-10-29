@@ -1,4 +1,5 @@
 import { assertSqlKeywordCaseWrite, readSqlKeywordCase } from '../shared/sqlKeywordCase';
+import { assertObjectBrowserTabs, readObjectBrowserTabs } from '../shared/objectBrowser';
 import { assertQueryFileSourceSettings, queryFileSourceRefSchema, sameQueryFileSource, type QueryFileSourceRef } from '../shared/queryFileSources';
 import { privateQueryFileSourceSchema, type PrivateQueryFileSource } from './queryFileSourceRecords';
 import { privateQueryRecentFilesSchema, rememberQueryFile, type PrivateQueryRecentFile } from './queryFileRecents';
@@ -816,8 +817,12 @@ export class LocalStore {
       if (tab.kind === 'query') return { ...tab, queryEditorHeight: readQueryEditorHeight(tab.queryEditorHeight) };
       const { queryEditorHeight: _height, ...unchanged } = tab; return unchanged;
     }) : stored?.tabs ?? defaultSettings.tabs;
+    const restoredTabs = this.queryFileCanonicalTabs(readObjectBrowserTabs(tabs));
+    // 过滤坏对象页后同步修复返回的活动ID，避免显示首标签但命令仍绑定已丢弃页；原配置不写盘。
+    const repairedActive = restoredTabs.length !== tabs.length && !restoredTabs.some(tab => tab.id === stored?.activeTabId)
+      ? { activeTabId: restoredTabs[0]?.id } : {};
     // 旧颜色标志只认true；缺项或损坏字号回退13，不迁移数据库或隐式强转。
-    return { ...defaultSettings, ...stored, tabs: this.queryFileCanonicalTabs(tabs), dataTypeColors: stored?.dataTypeColors === true, editorFontSize: readEditorFontSize(stored?.editorFontSize), editorWordWrap: readEditorWordWrap(stored?.editorWordWrap), editorTabSize: readEditorTabSize(stored?.editorTabSize), editorInsertSpaces: readEditorInsertSpaces(stored?.editorInsertSpaces), ...(stored && Object.hasOwn(stored, 'sqlKeywordCase') ? { sqlKeywordCase: readSqlKeywordCase(stored.sqlKeywordCase) } : {}) };
+    return { ...defaultSettings, ...stored, tabs: restoredTabs, ...repairedActive, dataTypeColors: stored?.dataTypeColors === true, editorFontSize: readEditorFontSize(stored?.editorFontSize), editorWordWrap: readEditorWordWrap(stored?.editorWordWrap), editorTabSize: readEditorTabSize(stored?.editorTabSize), editorInsertSpaces: readEditorInsertSpaces(stored?.editorInsertSpaces), ...(stored && Object.hasOwn(stored, 'sqlKeywordCase') ? { sqlKeywordCase: readSqlKeywordCase(stored.sqlKeywordCase) } : {}) };
   }
   /** 独立配置表按需创建，旧库无收藏时返回空配置，不把秘密或工作区 SQL 混入收藏。 */
   workbench(): WorkbenchSnapshot {
@@ -843,6 +848,7 @@ export class LocalStore {
     assertSqlKeywordCaseWrite(settings);
     assertQueryLayoutWrite(settings);
     assertQueryFileSourceSettings(settings);
+    assertObjectBrowserTabs(settings);
     // 直接存储入口同样拒绝非布尔值；未指定的旧调用仍兼容默认关闭。
     if (settings.dataTypeColors !== undefined && typeof settings.dataTypeColors !== 'boolean') throw new Error('类型颜色偏好必须是布尔值');
     // 兼容缺项的旧调用；显式字号不得越界或借字符串/小数绕过IPC。

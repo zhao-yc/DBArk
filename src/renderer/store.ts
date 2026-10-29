@@ -1,4 +1,5 @@
 import { readSqlKeywordCase } from '../shared/sqlKeywordCase';
+import { assertObjectBrowserTabs } from '../shared/objectBrowser';
 import { editorIndentationLimits, readEditorInsertSpaces, readEditorTabSize } from '../shared/editorIndentation';
 import { defaultEditorWordWrap, readEditorWordWrap } from '../shared/editorWordWrap';
 import { editorFontLimits, readEditorFontSize } from '../shared/editorFont';
@@ -49,6 +50,7 @@ export function wasQueryFileOpenTarget(tab: WorkspaceTab): boolean { return quer
 function commitWorkspaceSettings(update: Partial<AppSettings>, openings = useWorkspace.getState().queryFileOpenings): void {
   const state = useWorkspace.getState(), previous = state.settings, settings = { ...previous, ...update }, queryFileDirty = { ...state.queryFileDirty };
   try { tabOrder.observe(previous.tabs); } catch { /* 旧坏状态只撤销重排权限，仍允许原设置入口修复。 */ }
+  assertObjectBrowserTabs(settings);
   assertQueryFileSourceSettings(settings);
   // SQL或修订变化先同步标dirty，再等待摘要确认；关闭/退出不能借用上一次正文的clean缓存。
   for (const tab of settings.tabs) {
@@ -170,10 +172,12 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
   }));},
   /** 合并并立即展示配置修改，由持久化层合并连续写盘请求。 */
   updateSettings: update => commitWorkspaceSettings(update),
-  /** 相同数据表复用已有标签，SQL 查询始终新建独立标签和会话。 */
+  /** 表页与每库对象目录各自复用；SQL查询始终保持独立标签和会话。 */
   openTab: candidate => {
     const current = get().settings;
-    const existing = candidate.kind === 'table' ? current.tabs.find(tab => tab.kind === 'table' && tab.connectionId === candidate.connectionId && tab.database === candidate.database && tab.table === candidate.table) : undefined;
+    const existing = candidate.kind === 'table' ? current.tabs.find(tab => tab.kind === 'table' && tab.connectionId === candidate.connectionId && tab.database === candidate.database && tab.table === candidate.table)
+      : candidate.kind === 'objects' ? current.tabs.find(tab => tab.kind === 'objects' && tab.connectionId === candidate.connectionId && tab.database === candidate.database) : undefined;
+    if (existing && candidate.kind === 'objects') { get().updateTab(existing.id, { objectCategory: candidate.objectCategory }); get().updateSettings({ activeTabId: existing.id }); return; }
     if (existing) { get().updateSettings({ activeTabId: existing.id }); return; }
     const tab = { ...candidate, id: candidate.id ?? uid() };
     get().updateSettings({ tabs: [...current.tabs, tab], activeTabId: tab.id });

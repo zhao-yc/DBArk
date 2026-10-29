@@ -80,7 +80,7 @@ test('真实表结构模板及字段悬停：安全属性、SELECT执行、UPDAT
       await connection.query('INSERT INTO ' + qualified + ' VALUES ?', [Array.from({ length: 61 }, (_, index) => [index + 1, index === 0 || index === 60 ? '0.12345678901234567890' : '1.00000000000000000000', index === 0 ? '' : index === 60 ? null : '其他记录', Buffer.from([0, 255])])]);
       const [ddl] = await connection.query<any[]>('SHOW CREATE TABLE ' + qualified), [rows] = await connection.query<any[]>('SELECT * FROM ' + qualified + ' ORDER BY id'); expect(rows).toHaveLength(61); definition = digest(ddl); data = digest(rows);
     });
-    await step(() => page.locator('.app-commandbar').getByRole('button', { name: zh.common.newConnection, exact: true }).click()); const form = page.getByRole('dialog', { name: zh.common.newConnection, exact: true }), connectionName = '查询模板本例';
+    await step(() => page.locator('.navigation-toolbar').getByRole('button', { name: zh.common.newConnection, exact: true }).click()); const form = page.getByRole('dialog', { name: zh.common.newConnection, exact: true }), connectionName = '查询模板本例';
     await step(() => form.getByLabel(zh.connections.text006, { exact: true }).fill(connectionName));
     // 正式URI入口先拒绝不支持的加密参数，随后只填表；原连接、查询及草稿整例继续。
     await step(() => form.getByRole('button', { name: connectionUriZh.open, exact: true }).click());

@@ -1,4 +1,4 @@
-import { sidebarMenuRegistrationPort } from '../helpers/sidebarMenuRamPort';
+import { sidebarMenuRegistrationPort, navigationMenuRegistrationPort } from '../helpers/sidebarMenuRamPort';
 import { readFileSync } from 'node:fs';
 import { createContext, runInContext } from 'node:vm';
 import ts from 'typescript';
@@ -51,6 +51,7 @@ describe('既有索引UI回归的双门和列表短路', () => {
     runInContext(output, createContext({ exports, process: { env }, require(name: string) {
     // 对象树菜单是显式RAM展示依赖，不加载Playwright或计作原生/认证模块。
     if (name === './sidebar-menu') return sidebarMenuRegistrationPort;
+    if (name === './navigation-menu') return navigationMenuRegistrationPort;
       if (name === './desktop-fixture') return { test: fakeTest };
       if (name === './live-helpers') return { environment: { ...env } };
       if (name === '../helpers/tableDefaultEncodingTarget') return { assertDefaultEncodingLiveTarget: targetCheck };

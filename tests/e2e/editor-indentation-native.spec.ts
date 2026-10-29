@@ -93,7 +93,7 @@ async function seedOriginalTab(run: EditorIndentNativeRun, owner: IndentNativeOw
 /** 真正新建查询表单保留原端口拒连；不伪造连接成功，不建立SQL会话。 */
 async function newQuery(run: EditorIndentNativeRun, owner: IndentNativeOwner) {
   const page = owner.page;
-  await run.step(owner, () => page.locator('.app-commandbar').getByRole('button', { name: zh.common.newQuery, exact: true }).click());
+  await run.step(owner, () => page.locator('.navigation-toolbar').getByRole('button', { name: zh.common.newQuery, exact: true }).click());
   const dialog = page.getByRole('dialog', { name: zh.common.newQuery, exact: true });
   await run.step(owner, () => expect(dialog.locator('.error-box')).toContainText(/ECONNREFUSED|连接被拒绝|拒绝连接/i, { timeout: 20000 }));
   await run.step(owner, () => dialog.getByRole('button', { name: zh.app.text053, exact: true }).click());
@@ -102,7 +102,7 @@ async function newQuery(run: EditorIndentNativeRun, owner: IndentNativeOwner) {
 /** 创建无密码、无SSH的固定回环概要；连接测试按钮和所有执行按钮都不使用。 */
 async function prepareQuery(run: EditorIndentNativeRun, owner: IndentNativeOwner) {
   const page = owner.page;
-  await run.step(owner, () => page.locator('.app-commandbar').getByRole('button', { name: zh.common.newConnection, exact: true }).click());
+  await run.step(owner, () => page.locator('.navigation-toolbar').getByRole('button', { name: zh.common.newConnection, exact: true }).click());
   const dialog = page.getByRole('dialog', { name: zh.common.newConnection, exact: true });
   for (const [name, value] of [[zh.connections.text006, '缩进原生离线'], [zh.connections.text009, '127.0.0.1'], [zh.connections.text010, '1'], [zh.common.user, 'offline'], [zh.connections.text011, ''], [zh.connections.text012, '']]) await run.step(owner, () => dialog.getByLabel(name, { exact: true }).fill(value));
   await run.step(owner, () => dialog.getByRole('checkbox', { name: zh.connections.text016, exact: true }).uncheck());
@@ -111,7 +111,7 @@ async function prepareQuery(run: EditorIndentNativeRun, owner: IndentNativeOwner
 }
 /** 只有正式App入口可以更改偏好；等待存储与模型选项同时完成，不自动格式化。 */
 async function preference(run: EditorIndentNativeRun, owner: IndentNativeOwner, width: number, spaces: boolean) {
-  const page = owner.page; await run.step(owner, () => page.locator('.app-commandbar').getByRole('button', { name: text.entry, exact: true }).click());
+  const page = owner.page; await run.step(owner, () => page.locator('.navigation-toolbar').getByRole('button', { name: text.entry, exact: true }).click());
   const dialog = page.getByRole('dialog', { name: text.title, exact: true });
   await run.step(owner, () => dialog.getByLabel(text.width, { exact: true }).fill(String(width))); await run.step(owner, () => dialog.getByLabel(text.style, { exact: true }).selectOption(spaces ? 'spaces' : 'tabs'));
   await run.step(owner, () => dialog.getByRole('button', { name: text.save, exact: true }).click()); await run.step(owner, () => expect(dialog).toBeHidden());

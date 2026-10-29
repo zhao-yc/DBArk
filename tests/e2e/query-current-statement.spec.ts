@@ -34,8 +34,8 @@ async function caret(live: Live, marked: string) {
 
 /** 由真实任务按钮等待结束；用例自己判断成功或明确拒绝。 */
 async function current(shortcut = false) {
-  if (shortcut) await page.keyboard.press(`${modifier}+Shift+Enter`); else await query().getByRole('button', { name: currentStatementZh.action, exact: true }).click();
-  await expect(query().getByRole('button', { name: zh.common.stop, exact: true })).toBeDisabled({ timeout: 20000 });
+  if (shortcut) await page.keyboard.press(`${modifier}+Shift+Enter`); else await (await navigationMenuItem(query(), { name: currentStatementZh.action, exact: true })).click();
+  await expect((await navigationMenuItem(query(), { name: zh.common.stop, exact: true }))).toBeDisabled({ timeout: 20000 });
 }
 
 test('真实按钮只执行中句，源草稿完整且历史/结果不含前后写入', async ({}, info) => isolated(async ({ database, observer }, live) => {
@@ -53,8 +53,8 @@ test('新快捷键只执行当前，原CtrlCmdEnter选区与执行全部仍走�
   await caret(live, marked); await current(true);
   expect((await observer.query<RowDataPacket[]>(`SELECT id,n FROM \`${database}\`.subject ORDER BY id`))[0].map(row => [row.id, row.n])).toEqual([[2, 1]]);
   await page.keyboard.press(process.platform === 'darwin' ? 'Meta+ArrowLeft' : 'Home'); await page.keyboard.press(process.platform === 'darwin' ? 'Meta+Shift+ArrowRight' : 'Shift+End'); await page.keyboard.press(`${modifier}+Enter`);
-  await expect(query().getByRole('button', { name: zh.common.stop, exact: true })).toBeDisabled(); expect((await observer.query<RowDataPacket[]>(`SELECT n FROM \`${database}\`.subject WHERE id=2`))[0][0].n).toBe(2);
-  await query().getByRole('button', { name: zh.query.text011, exact: true }).click(); await expect(query().getByRole('button', { name: zh.common.stop, exact: true })).toBeDisabled(); await expect(query().locator('.error-box')).toHaveCount(0);
+  await expect((await navigationMenuItem(query(), { name: zh.common.stop, exact: true }))).toBeDisabled(); expect((await observer.query<RowDataPacket[]>(`SELECT n FROM \`${database}\`.subject WHERE id=2`))[0][0].n).toBe(2);
+  await (await navigationMenuItem(query(), { name: zh.query.text011, exact: true })).click(); await expect((await navigationMenuItem(query(), { name: zh.common.stop, exact: true }))).toBeDisabled(); await expect(query().locator('.error-box')).toHaveCount(0);
   expect((await observer.query<RowDataPacket[]>(`SELECT id,n FROM \`${database}\`.subject ORDER BY id`))[0].map(row => [row.id, row.n])).toEqual([[1, 0], [2, 3], [3, 0]]);
 }, info));
 
@@ -76,6 +76,9 @@ test('临时表、ROW_COUNT与LAST_INSERT_ID不被附加模式SQL覆盖，事务
   await live.openDatabaseQuery(database); await live.executeSql("CREATE TEMPORARY TABLE q02_t(id INT AUTO_INCREMENT PRIMARY KEY,v INT);INSERT INTO q02_t(v) VALUES(1)");
   await caret(live, 'SET @before=1;\nSELECT ROW_COUNT() AS rows_affected,LAST_INSERT_ID() ┃AS inserted_id;\nDROP TEMPORARY TABLE q02_t;'); await current(); await expect(query().locator('.error-box')).toHaveCount(0); await expect(query().locator('.result-body')).toContainText('rows_affected');
   const cells = query().locator('.result-body [role="gridcell"]'); await expect(cells.filter({ hasText: /^1$/ })).toHaveCount(2);
-  await query().getByRole('button', { name: zh.common.transactionBegin, exact: true }).click(); await caret(live, 'DROP TEMPORARY TABLE q02_t;\nINSERT INTO q02_t(v) ┃VALUES(2);\nCOMMIT;'); await current(); await query().getByRole('button', { name: zh.common.transactionRollback, exact: true }).click();
+  await (await navigationMenuItem(query(), { name: zh.common.transactionBegin, exact: true })).click(); await caret(live, 'DROP TEMPORARY TABLE q02_t;\nINSERT INTO q02_t(v) ┃VALUES(2);\nCOMMIT;'); await current(); await (await navigationMenuItem(query(), { name: zh.common.transactionRollback, exact: true })).click();
   await live.executeSql('SELECT COUNT(*) AS remaining FROM q02_t'); await expect(query().locator('.result-body [role="gridcell"]').filter({ hasText: /^1$/ })).toHaveCount(1);
 }, info));
+
+/** 原门进入具体动作后才加载真实菜单导航，不改变默认/列表阶段的资源边界。 */
+async function navigationMenuItem(...args: Parameters<typeof import('./navigation-menu')['navigationMenuItem']>): Promise<import('@playwright/test').Locator> { return (require('./navigation-menu') as typeof import('./navigation-menu')).navigationMenuItem(...args); }

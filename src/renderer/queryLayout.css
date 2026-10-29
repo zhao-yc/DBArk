@@ -4,10 +4,10 @@
 /* 执行选项使用既有上下文行，禁止中文标签被工具栏挤成竖排而侵占分栏空间。 */
 .query-execution-options{display:flex;align-items:center;gap:10px;flex:0 0 auto;white-space:nowrap}
 .query-execution-options>.check,.query-execution-options input{flex-shrink:0;white-space:nowrap}
-/* 极窄窗口及长来源允许横向浏览，控件不隐藏、不增加行高，键盘聚焦可滚动到目标。 */
-.query-tab>.context-bar,.query-tab>.toolbar{overflow-x:auto;overflow-y:hidden;scrollbar-width:none;white-space:nowrap}
-.query-tab>.context-bar>:not(.grow){flex-shrink:0}
-.query-tab>.context-bar>strong,.query-tab>.context-bar>[aria-label="当前查询默认库"]{max-width:240px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+/* 旧上下文行允许横向浏览；新会话行使用自身的弹性省略，保持菜单入口完整可见。 */
+.query-tab>.context-bar:not(.query-context-bar),.query-tab>.toolbar{overflow-x:auto;overflow-y:hidden;scrollbar-width:none;white-space:nowrap}
+.query-tab>.context-bar:not(.query-context-bar)>:not(.grow){flex-shrink:0}
+.query-tab>.context-bar:not(.query-context-bar)>strong,.query-tab>.context-bar:not(.query-context-bar)>[aria-label="当前查询默认库"]{max-width:240px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 /* 结果操作条保持单行并允许横向浏览，避免标签收缩断行侵占编辑区。 */
 .query-tab>.result-toolbar{overflow-x:auto;overflow-y:hidden;scrollbar-width:none;white-space:nowrap}
 .query-tab>.result-toolbar>:not(.grow){flex-shrink:0;white-space:nowrap}

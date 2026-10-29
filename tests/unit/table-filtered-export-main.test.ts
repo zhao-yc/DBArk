@@ -6,7 +6,7 @@ import ts from 'typescript';
 import { describe, expect, it, vi } from 'vitest';
 import { ColumnsMainCapabilities } from '../../src/main/columnsMainCapabilities';
 import { TableChecksMainCapabilities, tableChecksFailureProgress } from '../../src/main/tableChecksMainCapabilities';
-import { extractMainProductionBinding } from './main-production-function';
+import { extractMainProductionFunction, extractMainProductionBinding } from './main-production-function';
 import { TableFilteredExportOwners } from '../../src/main/tableFilteredExportOwners';
 import { TableFilteredUpdateOwners } from '../../src/main/tableFilteredUpdateOwners';
 import { SavedQuerySearchCancelled } from '../../src/main/savedQuerySearch';
@@ -24,10 +24,10 @@ async function flush() { for (let index = 0; index < 12; index++) await Promise.
 
 /** 执行生产Main分派和原AST IPC回调；真实文档能力及owner协调器，RAM替换存储、原生句柄与broker。 */
 function fixture() {
-  const source = readFileSync(new URL('../../src/main/index.ts', import.meta.url), 'utf8'), start = source.indexOf('async function dispatch('), end = source.indexOf('/** 按平台生成中文原生菜单');
+  const source = readFileSync(new URL('../../src/main/index.ts', import.meta.url), 'utf8');
   const tree = ts.createSourceFile('main.ts', source, ts.ScriptTarget.Latest, true); let callback: ts.ArrowFunction | undefined;
   function visit(node: ts.Node): void { if (ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression) && ts.isIdentifier(node.expression.expression) && node.expression.expression.text === 'ipcMain' && node.expression.name.text === 'handle' && ts.isStringLiteral(node.arguments[0]) && node.arguments[0].text === 'dbark:request' && ts.isArrowFunction(node.arguments[1])) callback = node.arguments[1]; ts.forEachChild(node, visit); }
-  visit(tree); if (start < 0 || end <= start || !callback) throw Error('生产Main入口已变化');
+  visit(tree); if (!callback) throw Error('生产Main入口已变化');
   let revision = 11, locked = false;
   const frame = { url: 'dbark-test:renderer', detached: false, processId: 1, frameToken: 'original' }, contents = Object.assign(new EventEmitter(), { mainFrame: frame, isDestroyed: () => false }), window = { webContents: contents, isDestroyed: () => false };
   const tasks = new Map<string, TaskRecord>(), events: TaskEvent[] = [], saves = vi.fn(), history = vi.fn(), releaseTarget = vi.fn();
@@ -47,7 +47,7 @@ function fixture() {
   });
   // 未登记跨页写入能力；仍使用真实owner协调器，意外越界即由原broker哨兵拒绝。
   context.filteredUpdates = new TableFilteredUpdateOwners({ assert: value => columnsMain.assertCapturedOwner(value), same: (left, right) => columnsMain.sharesDocumentOwner(left, right), revision: () => revision, closing: () => false, available: assertAvailable, run: async () => { throw Error('导出夹具不登记填充任务'); }, release: async () => { throw Error('导出夹具不登记填充快照'); }, stop: async () => { throw Error('导出夹具不登记填充取消'); } });
-  runInContext(ts.transpileModule(extractMainProductionBinding(source, 'tableChecksMain') + '\n' + source.slice(start, end) + '\nglobalThis.dispatch=dispatch;\nglobalThis.handleRequest=' + callback.getText(tree) + ';', { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText, context);
+  runInContext(ts.transpileModule(extractMainProductionBinding(source, 'tableChecksMain') + '\n' + extractMainProductionFunction(source, 'dispatch') + '\nglobalThis.dispatch=dispatch;\nglobalThis.handleRequest=' + callback.getText(tree) + ';', { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText, context);
   return { context, tasks, events, saves, history, files, profile, request, acquire, releaseTarget, owners, owner, contents, assertAvailable,
     revise() { revision++; owners.observe(); }, lock(value: boolean) { locked = value; }, navigate() { contents.emit('did-navigate'); },
     dispatch: (value: any = input) => context.dispatch('table.exportFiltered', value, owner) as Promise<any>,

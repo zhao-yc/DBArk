@@ -1,3 +1,4 @@
+import { extractMainProductionFunction } from './main-production-function';
 import { emptyTableFilteredDeleteOwners } from './table-filtered-delete-owner-fixture';
 import { emptyTableFilteredUpdateOwners } from './table-filtered-update-owner-fixture';
 import{SavedQuerySearchCancelled}from'../../src/main/savedQuerySearch';
@@ -8,7 +9,7 @@ import {describe,it,expect,vi} from 'vitest';
 import type {TaskEvent} from '../../src/shared/contracts';
 /** 执行生产dispatch和taskEvent原文，只替换Electron、存储和进程传输边界。 */
 function fixture(){
-  const source=readFileSync(new URL('../../src/main/index.ts',import.meta.url),'utf8'),event=source.slice(source.indexOf('function taskEvent('),source.indexOf('/** 文件只能来自')),dispatch=source.slice(source.indexOf('async function dispatch('),source.indexOf('/** 按平台生成中文原生菜单'));
+  const source=readFileSync(new URL('../../src/main/index.ts',import.meta.url),'utf8'),event=source.slice(source.indexOf('function taskEvent('),source.indexOf('/** 文件只能来自')),dispatch=extractMainProductionFunction(source, 'dispatch');
   if(!event||!dispatch)throw Error('生产入口位置改变，请核对测试');
   const saves=vi.fn(),history=vi.fn(),send=vi.fn(),assertAvailable=vi.fn(),request=vi.fn(async()=>({entries:[],incomplete:false}));
   const context=createContext({ filteredDeletes: emptyTableFilteredDeleteOwners(), filteredUpdates: emptyTableFilteredUpdateOwners(),SavedQuerySearchCancelled,savedQuerySearches:{has:()=>false},savedQueryPages:undefined,historyPages:undefined,Date,Error,Map,Set,tasks:new Map(),completionTasks:new Set(),tablePresetReads:new Map(),shuttingDown:false,structureTokens:new Map(),structureProgress:new Map(),exportProgress:new Map(),preparingTasks:new Map(),sessions:new Map(),lastPersist:new Map(),

@@ -1,4 +1,4 @@
-import { sidebarMenuRamPort } from '../helpers/sidebarMenuRamPort';
+import { sidebarMenuRamPort, navigationMenuRamPort } from '../helpers/sidebarMenuRamPort';
 import { readFileSync } from 'node:fs';
 import { createContext, runInContext } from 'node:vm';
 import ts from 'typescript';
@@ -20,6 +20,7 @@ function databaseCase(mismatch = false, loseAtVersion = false) {
   const context = createContext({ exports, process: { env: { ...environment, DBARK_TEST_EXPECTED_SERVER_UUID: uuid } }, require(name: string) {
     // 对象树菜单是显式RAM展示依赖，不加载Playwright或计作原生/认证模块。
     if (name === './sidebar-menu') return sidebarMenuRamPort;
+    if (name === './navigation-menu') return navigationMenuRamPort;
     if (name === 'node:crypto') return { randomUUID: () => uuid };
     if (name === 'mysql2/promise') return { createConnection: async () => observer };
     if (name === './desktop-fixture') return { test, expect, ownedDesktopResources: () => { if (!current) throw Error('owner已失效'); return { page, closed: false }; }, retainOwnedDesktopResources: retain, confirmOwnedDesktopExit: confirm };
@@ -54,7 +55,8 @@ describe('P0正式用例显式owner归属（仅RAM）', () => {
     const entered = deferred(), release = deferred(), nextActions: string[] = [];
     const wait = async () => { entered.resolve(); await release.promise; }, action = { click: wait, check: wait }, oldDialog = { getByRole: () => action };
     const desktop = { page: { locator: () => oldDialog, getByRole: () => oldDialog } as any };
-    const context = createContext({ desktop, text, expect }); runInContext(ts.transpileModule(access.getText(tree) + '\n' + fn.getText(tree), { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText, context);
+    // 提取函数仍走原owner，新增菜单只映射到原RAM定位端口，不导入真实UI模块。
+    const context = createContext({ desktop, text, expect, require(name: string) { if (name === './navigation-menu') return navigationMenuRamPort; throw Error('P0归属回放禁止其它依赖：' + name); } }); runInContext(ts.transpileModule(access.getText(tree) + '\n' + fn.getText(tree), { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS } }).outputText, context);
     const captured = desktop.page, owner = { page: captured, assertCurrent: () => { if (desktop.page !== captured) throw Error('本例owner已失效'); } };
     const pending = context[method](owner, ...args).catch((error: Error) => error); await entered.promise;
     desktop.page = { getByRole: () => ({ getByRole: () => ({ click: async () => { nextActions.push('click'); throw Error('禁止下一页面'); }, fill: async () => { nextActions.push('fill'); throw Error('禁止下一页面'); }, check: async () => { nextActions.push('check'); throw Error('禁止下一页面'); } }) }) };

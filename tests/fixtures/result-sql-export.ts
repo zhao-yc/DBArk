@@ -1,3 +1,4 @@
+import { extractMainProductionFunction } from '../unit/main-production-function';
 import { emptyTableFilteredDeleteOwners } from '../unit/table-filtered-delete-owner-fixture';
 import { emptyTableFilteredUpdateOwners } from '../unit/table-filtered-update-owner-fixture';
 import { readFileSync } from 'node:fs';
@@ -11,8 +12,8 @@ import type { TaskRecord } from '../../src/shared/contracts';
 
 /** 执行生产Main函数原文，外界仅提供原生选择、归属与broker端口；不另写一套派发逻辑。 */
 const source = readFileSync(new URL('../../src/main/index.ts', import.meta.url), 'utf8');
-const choose = source.slice(source.indexOf('async function chooseResultSqlFile('), source.indexOf('/** 布局请求到达'));
-const dispatch = source.slice(source.indexOf('async function dispatch('), source.indexOf('/** 按平台生成中文原生菜单'));
+const choose = extractMainProductionFunction(source, 'chooseResultSqlFile');
+const dispatch = extractMainProductionFunction(source, 'dispatch');
 const script = ts.transpileModule(choose + dispatch + '\nglobalThis.dispatch = dispatch;', { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
 export function resultSqlMain(filePath: string, request: (command: string, input: any) => Promise<unknown>, reserve: () => Promise<() => void> = async () => () => {}) {
   const files = new Map<string, SelectedFile>(), previews = new ResultSqlPreviews(files), owner = {}, tasks = new Map<string, TaskRecord>();

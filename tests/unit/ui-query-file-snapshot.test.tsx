@@ -1,3 +1,7 @@
+import { installNavigationMenuRamPort, navigationMenuRamButton } from '../helpers/navigationMenuRamPort';
+let uiCommands: typeof import('../../src/renderer/uiCommands')['uiCommands'], useUiCommandRuntime: typeof import('../../src/renderer/uiCommands')['useUiCommandRuntime'];
+import type { UiCommandId, UiCommandInvocation } from '../../src/shared/uiCommands';
+let restoreNavigationMenuPort: () => void = () => {};
 import React, { act } from 'react';
 import { createHash } from 'node:crypto';
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
@@ -112,7 +116,8 @@ const saved = (sql: string, revision = 2, name = '合成.sql') => ({ state: 'sav
 const uuid = () => expect.stringMatching(/^[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}$/);
 const globals = ['window', 'document', 'navigator', 'IS_REACT_ACT_ENVIRONMENT'].map(name => [name, Object.getOwnPropertyDescriptor(globalThis, name)] as const);
 beforeAll(async () => {
-  document = memoryDocument();
+  document = memoryDocument(); restoreNavigationMenuPort = installNavigationMenuRamPort(document);
+  ({ uiCommands, useUiCommandRuntime } = await import('../../src/renderer/uiCommands'));
   // ReactDOM受控select需要真实子option集合和值反射；只补RAM DOM只读端口。
   const create = document.createElement.bind(document);
   document.createElement = name => {
@@ -125,12 +130,14 @@ beforeAll(async () => {
   ({ TasksDialog } = await import('../../src/renderer/components/ActivityDialog'));
 });
 afterEach(async () => { if (root) { await act(async () => root!.unmount()); root = undefined; } await flushSettings(); hook = undefined; });
-afterAll(() => { for (const [name, descriptor] of globals) if (descriptor) Object.defineProperty(globalThis, name, descriptor); else Reflect.deleteProperty(globalThis, name); });
+afterAll(() => { restoreNavigationMenuPort(); for (const [name, descriptor] of globals) if (descriptor) Object.defineProperty(globalThis, name, descriptor); else Reflect.deleteProperty(globalThis, name); });
 
 /** Main、原生选择和文件写入全部为RAM端口，拒绝SQL执行、建连及其它外界命令。 */
 async function mount(bound = false) {
   commands = []; menus = new Set(); taskListeners = new Set(); hook = undefined; completed = []; fileView = bound ? sourceView() : undefined; io.entries = []; frozenFileTab = undefined; withholdFileTabs = false;
-  (window as any).dbark = { onTask: (listener: (event: TaskEvent) => void) => { taskListeners.add(listener); return () => { taskListeners.delete(listener); }; }, onMenu: (listener: (action: string) => void) => { menus.add(listener); return () => menus.delete(listener); }, invoke: async (command: string, input: any) => {
+  (window as any).dbark = { onMenu: () => () => {}, onTask: (listener: (event: TaskEvent) => void) => { taskListeners.add(listener); return () => { taskListeners.delete(listener); }; }, onCommand: (listener: (event: UiCommandInvocation) => void) => { const menu = (id: string) => listener({ id: id as UiCommandId, revision: uiCommands.getSnapshot().revision }); menus.add(menu); return () => menus.delete(menu); }, invoke: async (command: string, input: any) => {
+    // 原生命令状态属于新增展示桥；与原文件/SQL业务命令分开，不能被当成文件任务或外界IO。
+    if (command === 'app.menuState') return;
     commands.push({ command, input }); const pending = hook?.(command, input); if (pending) return pending;
     if (command === 'settings.save') return;
     if (command === 'queryFileSources.status') return fileView ? { state: 'bound', binding: fileView } : { state: 'unbound' };
@@ -144,6 +151,7 @@ async function mount(bound = false) {
   } };
   useWorkspace.setState({ settings: { theme: 'dark', sidebarWidth: 260, resultLimit: 1000, pageSize: 100, activeTabId: 't', tabs: [{ id: 't', kind: 'query', connectionId: 'c', title: '合成查询', sql: 'SELECT 初始;', ...(bound ? { fileSourceBinding: fileView.ref } : {}) }] }, connections: [{ id: 'c', name: '合成连接', group: '', color: '', dialect: 'mysql', host: 'offline.invalid', port: 1, user: 'offline' }], activeJobs: {}, dirtyTabs: {}, queryFileDirty: {}, queryFileTasks: {}, tasks: [], connectionVersions: {}, notice: undefined });
   function View() {
+    useUiCommandRuntime();
     const tabs = useWorkspace(state => state.settings.tabs), [request, setRequest] = React.useState<any>(), [tasks, setTasks] = React.useState(false); startClose = () => setRequest({ tabId: 't' }); showTaskCenter = () => setTasks(true);
     return <>{tabs.map(tab => <section key={tab.id} hidden={tab.id !== useWorkspace.getState().settings.activeTabId}>{withholdFileTabs && tab.id !== 't' ? null : <QueryTab tab={frozenFileTab?.id === tab.id ? frozenFileTab : tab} closeRequest={tab.id === 't' ? request : undefined} onCloseRequestFinished={(_request, close) => { completed.push(close); setRequest(undefined); if (close) useWorkspace.getState().closeTab(tab.id); }} onHistory={() => {}}/>}</section>)}{tasks && <TasksDialog onClose={() => setTasks(false)}/>}</>;
   }
@@ -151,7 +159,7 @@ async function mount(bound = false) {
   return io.editor as ContentEditorPort & { model: ContentModelPort };
 }
 async function click(label: string) {
-  const button = document.body.querySelectorAll('button').find(node => node.getAttribute('aria-label') === label || node.textContent === label);
+  const button = (navigationMenuRamButton(document.body, label) ?? document.body.querySelectorAll('button').find(node => node.getAttribute('aria-label') === label || node.textContent === label));
   expect(button, '应从真实界面找到入口：' + label).toBeDefined(); await act(async () => button!.dispatchEvent(new MemoryEvent('click')));
 }
 /** 只向真实受控select派发change，不能直接改控制器选项或伪造最终IPC。 */

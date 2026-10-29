@@ -72,12 +72,12 @@ function tlsCertificate():string|undefined{
 async function configureTls(form: ReturnType<Page['getByRole']>, owner: LiveOwner){
   const desktop = owner.desktop; owner.assertCurrent();
   const certificate=tlsCertificate();if(!certificate)return;
-  await form.getByRole('button',{name:'TLS / SSL',exact:true}).click();owner.assertCurrent();await form.getByLabel(zh.connections.text027,{exact:true}).check();owner.assertCurrent();await form.getByLabel(zh.connections.text028,{exact:true}).check(); owner.assertCurrent();
+  await (await (await import('./navigation-menu')).navigationMenuItem(form, {name:'TLS / SSL',exact:true}, () => owner.assertCurrent())).click();owner.assertCurrent();await form.getByLabel(zh.connections.text027,{exact:true}).check();owner.assertCurrent();await form.getByLabel(zh.connections.text028,{exact:true}).check(); owner.assertCurrent();
   await desktop.evaluate(({dialog},path)=>{
     const root=globalThis as typeof globalThis&{__liveTlsOpenDialog?:typeof dialog.showOpenDialog};if(root.__liveTlsOpenDialog)throw Error('TLS文件选择不可交叉覆盖');root.__liveTlsOpenDialog=dialog.showOpenDialog;
     dialog.showOpenDialog=(async()=>({canceled:false,filePaths:[path]}))as typeof dialog.showOpenDialog;
   },certificate); owner.assertCurrent();
-  try{await form.getByRole('button',{name:'选择CA 证书',exact:true}).click();owner.assertCurrent();await expect(form.getByRole('textbox',{name:'CA 证书 选择CA 证书',exact:true})).toHaveValue(certificate);}
+  try{await (await (await import('./navigation-menu')).navigationMenuItem(form, {name:'选择CA 证书',exact:true}, () => owner.assertCurrent())).click();owner.assertCurrent();await expect(form.getByRole('textbox',{name:'CA 证书 选择CA 证书',exact:true})).toHaveValue(certificate);}
   finally{owner.assertCurrent();await desktop.evaluate(({dialog})=>{const root=globalThis as typeof globalThis&{__liveTlsOpenDialog?:typeof dialog.showOpenDialog};if(root.__liveTlsOpenDialog){dialog.showOpenDialog=root.__liveTlsOpenDialog;delete root.__liveTlsOpenDialog;}});}
 }
 
@@ -85,7 +85,7 @@ async function configureTls(form: ReturnType<Page['getByRole']>, owner: LiveOwne
 export async function connectAndCreate(database: string, owner: LiveOwner): Promise<Omit<LiveContext, 'observer'>> {
   const page = owner.page; owner.assertCurrent();
   const connectionName = `E2E ${database}`;
-  await page.locator('.app-commandbar').getByRole('button', { name: '新建连接', exact: true }).click(); owner.assertCurrent();
+  await (await (await import('./navigation-menu')).navigationMenuItem(page.locator('.navigation-toolbar'), { name: '新建连接', exact: true }, () => owner.assertCurrent())).click(); owner.assertCurrent();
   const form = page.getByRole('dialog', { name: '新建连接', exact: true });
   await form.getByLabel('连接名称', { exact: true }).fill(connectionName); owner.assertCurrent();
   await form.getByLabel('主机地址', { exact: true }).fill(environment.DBARK_TEST_HOST!); owner.assertCurrent();
@@ -94,9 +94,9 @@ export async function connectAndCreate(database: string, owner: LiveOwner): Prom
   await form.getByLabel('数据库密码', { exact: true }).fill(environment.DBARK_TEST_PASSWORD ?? ''); owner.assertCurrent();
   await form.getByLabel('连接分组', { exact: true }).fill('隔离数据库验证'); owner.assertCurrent();
   await configureTls(form, owner); owner.assertCurrent();
-  await form.getByRole('button', { name: '测试连接', exact: true }).click(); owner.assertCurrent();
+  await (await (await import('./navigation-menu')).navigationMenuItem(form, { name: '测试连接', exact: true }, () => owner.assertCurrent())).click(); owner.assertCurrent();
   await expect(form.locator('.success-box')).toContainText('连接成功', { timeout: 20000 }); owner.assertCurrent();
-  await form.getByRole('button', { name: '保存连接', exact: true }).click(); owner.assertCurrent();
+  await (await (await import('./navigation-menu')).navigationMenuItem(form, { name: '保存连接', exact: true }, () => owner.assertCurrent())).click(); owner.assertCurrent();
   await expect(form).toBeHidden(); owner.assertCurrent();
   const profiles = await page.evaluate(() => window.dbark.invoke('connections.list', {})); owner.assertCurrent();
   const saved = profiles.find(profile => profile.name === connectionName)!;
@@ -120,19 +120,19 @@ export async function connectAndCreate(database: string, owner: LiveOwner): Prom
   // 复用实际目录配对、只读预览和完整名称确认，不能使用已移除的通用执行按钮。
   await create.getByRole('combobox', { name: databaseText.charset, exact: true }).selectOption('utf8mb4'); owner.assertCurrent();
   await create.getByRole('combobox', { name: databaseText.collation, exact: true }).selectOption('utf8mb4_bin'); owner.assertCurrent();
-  await create.getByRole('button', { name: databaseText.preview, exact: true }).click(); owner.assertCurrent();
+  await (await (await import('./navigation-menu')).navigationMenuItem(create, { name: databaseText.preview, exact: true }, () => owner.assertCurrent())).click(); owner.assertCurrent();
   await expect(create.locator('.monaco-editor .view-lines')).toContainText('CREATE DATABASE'); owner.assertCurrent();
   await create.getByRole('textbox', { name: databaseText.confirmation, exact: true }).fill(database); owner.assertCurrent();
   await create.getByRole('checkbox', { name: databaseText.ackDdl, exact: true }).check(); owner.assertCurrent();
   await create.getByRole('checkbox', { name: databaseText.ackCreate, exact: true }).check(); owner.assertCurrent();
   owner.submitting?.();
-  await create.getByRole('button', { name: databaseText.apply, exact: true }).click(); owner.assertCurrent();
+  await (await (await import('./navigation-menu')).navigationMenuItem(create, { name: databaseText.apply, exact: true }, () => owner.assertCurrent())).click(); owner.assertCurrent();
   await expect(create.getByRole('status')).toHaveText(databaseText.succeeded, { timeout: 20000 }); owner.assertCurrent();
   const acknowledged = await owner.desktop.evaluate(() => { const receipt = (globalThis as CreateRoot).__dbarkDefinitionCreate; return receipt?.phase === 'confirmed' && receipt.safe; }); owner.assertCurrent();
   if (!acknowledged) throw Error('W03未收到本例准确CREATE成功回包，保留未知'); owner.created?.();
-  await create.getByRole('button', { name: '关闭', exact: true }).click(); owner.assertCurrent();
+  await (await (await import('./navigation-menu')).navigationMenuItem(create, { name: '关闭', exact: true }, () => owner.assertCurrent())).click(); owner.assertCurrent();
   await expect(create).toBeHidden(); owner.assertCurrent();
-  await connectionRow.getByRole('button', { name: connectionName, exact: true }).click(); owner.assertCurrent();
+  await (await (await import('./navigation-menu')).navigationMenuItem(connectionRow, { name: connectionName, exact: true }, () => owner.assertCurrent())).click(); owner.assertCurrent();
   await expect(page.locator('.database-row').getByRole('button', { name: database, exact: true })).toBeVisible(); owner.assertCurrent();
   return { database, connectionName, connectionId, ...owner };
   } catch (reason) { primary = { reason }; throw reason; }

@@ -1,3 +1,5 @@
+import { workspaceCommandSource } from '../helpers/workspaceCommandSource';
+import { uiCommandLabels } from '../../src/shared/uiCommands.zh-CN';
 import React, { act, useEffect, useLayoutEffect, useRef, useState, type ComponentProps } from 'react';
 import * as jsxRuntime from 'react/jsx-runtime';
 import { readFileSync } from 'node:fs';
@@ -34,28 +36,30 @@ beforeEach(() => {
 afterEach(async () => { if (root) { await act(async () => root!.unmount()); root = undefined; } document.body.textContent = ''; delete (window as any).dbark; views.length = 0; });
 afterAll(() => { for (const [key, descriptor] of globals) if (descriptor) Object.defineProperty(globalThis, key, descriptor); else Reflect.deleteProperty(globalThis, key); });
 
-/** 只拼接正式App的本功能节点，保留真实方法、观察effect、窗口快捷键和JSX回调。 */
+/** 提取真实工作台命令与模块工具栏按钮，仅以RAM命令展示端口保留方法、观察effect和快捷键，不证明原生布局。 */
 function appEntry() {
   const source = readFileSync(new URL('../../src/renderer/App.tsx', import.meta.url), 'utf8'), file = ts.createSourceFile('App.tsx', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
-  const app = file.statements.find(node => ts.isFunctionDeclaration(node) && node.name?.text === 'App') as ts.FunctionDeclaration;
-  expect(app?.body).toBeDefined(); const declarations: string[] = [], methods: string[] = []; let observe = '', shortcut = '', button = '', modal = '';
+  const app = file.statements.find(node => ts.isFunctionDeclaration(node) && node.name?.text === 'WorkspaceApp') as ts.FunctionDeclaration;
+  expect(app?.body).toBeDefined(); const declarations: string[] = [], methods: string[] = []; let observe = '', shortcut = '', button = '', modal = ''; const registration = workspaceCommandSource(source, 'tab-search');
   const visit = (node: ts.Node) => {
     if (ts.isVariableStatement(node) && node.declarationList.declarations.some(item => ['[tabSearch, setTabSearch]', 'tabSearchRef', '[tabScrollRevision, setTabScrollRevision]'].includes(item.name.getText(file)))) declarations.push(node.getText(file));
     if (ts.isFunctionDeclaration(node) && ['openTabSearch', 'closeTabSearch', 'activateSearchedTab'].includes(node.name?.text ?? '')) methods.push(node.getText(file));
     if (ts.isCallExpression(node) && node.expression.getText(file) === 'useLayoutEffect' && node.arguments[0]?.getText(file).includes('tabSearch.registry.observe')) observe = node.getText(file) + ';';
     if (ts.isCallExpression(node) && node.expression.getText(file) === 'useEffect' && node.arguments[0]?.getText(file).includes("window.addEventListener('keydown', listener)") && node.arguments[0]?.getText(file).includes('openTabSearch()')) shortcut = node.getText(file) + ';';
-    if (ts.isJsxElement(node) && node.openingElement.tagName.getText(file) === 'button' && node.children.some(child => ts.isJsxExpression(child) && child.expression?.getText(file) === 'openTabSearchZh.entry')) button = node.getText(file);
     if (ts.isBinaryExpression(node) && node.left.getText(file) === 'tabSearch' && ts.isJsxSelfClosingElement(node.right) && node.right.tagName.getText(file) === 'OpenTabSearchDialog') modal = node.getText(file);
     ts.forEachChild(node, visit);
   };
-  visit(app); expect(declarations).toHaveLength(3); expect(methods).toHaveLength(3); expect([observe, shortcut, button, modal].every(Boolean)).toBe(true);
+  visit(app);
+  const toolbar = readFileSync(new URL('../../src/renderer/components/NavigationToolbar.tsx', import.meta.url), 'utf8'), toolbarTree = ts.createSourceFile('NavigationToolbar.tsx', toolbar, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
+  function findCommand(node: ts.Node) { if (ts.isVariableDeclaration(node) && node.name.getText(toolbarTree) === 'command') button = node.getText(toolbarTree); ts.forEachChild(node, findCommand); }
+  findCommand(toolbarTree); expect(declarations).toHaveLength(3); expect(methods).toHaveLength(3); expect([observe, shortcut, button, modal].every(Boolean)).toBe(true);
   let sequence = 0; const keyboard = new ActorWindow(), invalidate = vi.fn(), uid = vi.fn(() => `owner-${++sequence}`), openTab = vi.fn(() => { throw Error('查找入口不得创建新标签'); });
   // 持久化属于外界端口：记录正式action参数并更新真实store内存，不启动400ms磁盘持久化。
   const update = vi.fn((patch: Partial<AppSettings>) => store.setState({ settings: { ...store.getState().settings, ...patch } }));
   const workspace = { getState: () => ({ ...store.getState(), updateSettings: update, openTab }), subscribe: store.subscribe };
   function DialogPort(props: DialogProps) { views.push(props); return <Dialog {...props}/>; }
-  const context = createContext({ exports: {}, useState, useRef, useEffect, useLayoutEffect, document, window: keyboard, OpenTabSearchRegistry, OpenTabSearchDialog: DialogPort, openTabSearchZh: text, useWorkspace: workspace, uid, workbenchNavigation: { invalidate }, require(name: string) { if (name === 'react/jsx-runtime') return jsxRuntime; throw Error('禁止其它App依赖'); } });
-  runInContext(ts.transpileModule(`function Entry(){${declarations.join('\n')}\n${methods.join('\n')}\n${observe}\n${shortcut}\nreturn <>${button}{${modal}}</>};globalThis.Entry=Entry;`, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX } }).outputText, context);
+  const context = createContext({ exports: {}, useState, useRef, useEffect, useLayoutEffect, document, window: keyboard, OpenTabSearchRegistry, OpenTabSearchDialog: DialogPort, openTabSearchZh: text, uiCommandLabels, useWorkspace: workspace, uid, workbenchNavigation: { invalidate }, require(name: string) { if (name === 'react/jsx-runtime') return jsxRuntime; throw Error('禁止其它App依赖'); } });
+  runInContext(ts.transpileModule(`function Entry(){${declarations.join('\n')}\n${methods.join('\n')}\n${observe}\n${shortcut}\nconst state=useWorkspace.getState(),settings=state.settings,ready=true,closingOtherQueries=false,queryCloseRequest=undefined;const ${registration.available};const ${registration.handler};const registered=${registration.command};const commands={enabled:id=>id==='tab-search'&&registered.enabled,run:id=>{if(id==='tab-search'&&registered.enabled)registered.run();}};const ${button};return <>{command('tab-search')}{${modal}}</>};globalThis.Entry=Entry;`, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX } }).outputText, context);
   return { Entry: (context as any).Entry as React.ComponentType, keyboard, invalidate, uid, update, openTab };
 }
 async function mount(strict = false) { const f = appEntry(), host = document.createElement('div'); document.body.appendChild(host); root = createRoot(host as any); await act(async () => root!.render(strict ? <React.StrictMode><f.Entry/></React.StrictMode> : <f.Entry/>)); return f; }
@@ -66,8 +70,8 @@ async function shortcut(f: ReturnType<typeof appEntry>, fields: Record<string, u
 function view() { expect(views.length).toBeGreaterThan(0); return views.at(-1)!; }
 function setTabs(tabs: AppSettings['tabs']) { store.setState({ settings: { ...store.getState().settings, tabs } }); }
 
-it('真实commandbar空工作区可开空态，同轮连点只有一个owner，取消不写settings或建立连接', async () => {
-  store.setState({ settings: { ...store.getState().settings, tabs: [], activeTabId: undefined }, connections: [] }); const before = store.getState(), f = await mount(), open = callback(button(text.entry)); expect(button(text.entry).disabled).toBe(false); expect(button(text.entry).getAttribute('title')).toBe(text.shortcutHint);
+it('真实注册命令空工作区可开空态，同轮连点只有一个owner，取消不写settings或建立连接', async () => {
+  store.setState({ settings: { ...store.getState().settings, tabs: [], activeTabId: undefined }, connections: [] }); const before = store.getState(), f = await mount(), open = callback(button(text.entry)); expect(button(text.entry).disabled).toBe(false); expect(button(text.entry).textContent).toBe(uiCommandLabels['tab-search']);
   await act(async () => { open(); open(); }); expect(f.uid).toHaveBeenCalledOnce(); expect(f.invalidate).toHaveBeenCalledOnce(); expect(document.querySelectorAll('[role="dialog"]')).toHaveLength(1); expect(document.body.textContent).toContain(text.empty); await click(text.close); expect(document.querySelector('[role="dialog"]')).toBeNull(); expect(f.invalidate).toHaveBeenCalledTimes(2); expect(store.getState().settings).toBe(before.settings); expect(f.update).not.toHaveBeenCalled(); expect(f.openTab).not.toHaveBeenCalled(); expect(bridge).not.toHaveBeenCalled();
 });
 it('真实window effect接受Ctrl或Meta Shift A，明确阻止默认行为，关闭后新owner独立', async () => {

@@ -1,3 +1,4 @@
+import { workspaceCommandSource } from '../helpers/workspaceCommandSource';
 import React from 'react';
 import { readFileSync } from 'node:fs';
 import { createContext, runInContext } from 'node:vm';
@@ -11,12 +12,11 @@ import type { WorkspaceTab } from '../../src/renderer/store';
 
 /** 编译真实App入口和关闭方法；只替换React setter、确认和RAM工作区回执，不复制关闭实现。 */
 function fixture(sql = 'SELECT 原SQL;') {
-  const source = readFileSync(new URL('../../src/renderer/App.tsx', import.meta.url), 'utf8'), tree = ts.createSourceFile('App.tsx', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX), methods: string[] = []; let entry = '';
+  const source = readFileSync(new URL('../../src/renderer/App.tsx', import.meta.url), 'utf8'), tree = ts.createSourceFile('App.tsx', source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX), methods: string[] = []; const registration = workspaceCommandSource(source, 'close-other-queries');
   const visit = (node: ts.Node) => {
     if (ts.isFunctionDeclaration(node) && ['closeTab', 'finishQueryClose', 'closeOtherQueries', 'commitQueryClose'].includes(node.name?.text ?? '')) methods.push(node.getText(tree));
-    if (ts.isJsxElement(node) && node.openingElement.tagName.getText(tree) === 'button' && node.openingElement.attributes.properties.some(item => ts.isJsxAttribute(item) && item.name.getText(tree) === 'aria-label' && item.initializer?.getText(tree) === '{queryCloseZh.others}')) entry = node.getText(tree);
     ts.forEachChild(node, visit);
-  }; visit(tree); if (methods.length !== 4 || !entry) throw Error('实际App关闭入口或方法缺失');
+  }; visit(tree); if (methods.length !== 4) throw Error('实际App关闭入口或方法缺失');
   const make = (id: string): WorkspaceTab => ({ id, kind: 'query', connectionId: 'c', title: id, sql });
   const keep = make('keep'), a = make('a'), b = make('b'), table = { ...make('table'), kind: 'table' as const }, listeners = new Set<() => void>(), requests: QueryCloseRequest[] = [];
   const notify = () => { for (const fn of [...listeners]) fn(); };
@@ -24,12 +24,12 @@ function fixture(sql = 'SELECT 原SQL;') {
   const otherQueryClose = { current: null as QueryCloseQueue | null }, confirm = vi.fn(() => false), setClosing = vi.fn(), setRequest = vi.fn((request?: QueryCloseRequest) => { if (request) requests.push(request); });
   let commit: {queue:QueryCloseQueue;request:QueryCloseRequest}|undefined;
   const context = createContext({ React, QueryCloseQueue, otherQueryClose, closeRequests: new QueryCloseRequests(), useWorkspace: { getState: () => state, subscribe: (fn: () => void) => { listeners.add(fn); return () => { listeners.delete(fn); }; } }, window: { confirm }, document: { querySelector: () => null }, zh, queryCloseZh, setQueryCloseRequest: setRequest, setClosingOtherQueries: setClosing,setQueryCloseCommit:(next:typeof commit)=>{commit=next} });
-  const code = methods.join('\n') + '\nglobalThis.finish=finishQueryClose;globalThis.commit=commitQueryClose;globalThis.close=closeTab;globalThis.entry=(settings,activeTab,closingOtherQueries)=>(' + entry + ');';
+  const code = methods.join('\n') + '\nglobalThis.finish=finishQueryClose;globalThis.commit=commitQueryClose;globalThis.close=closeTab;globalThis.command=(settings,activeTab,closingOtherQueries)=>{const state=useWorkspace.getState(),ready=true,queryCloseRequest=undefined;const ' + registration.available + ';const ' + registration.handler + ';return (' + registration.command + ');};';
   runInContext(ts.transpileModule(code, { compilerOptions: { target: ts.ScriptTarget.ES2022, jsx: ts.JsxEmit.React } }).outputText, context);
-  const button = () => (context.entry as Function)(state.settings, state.settings.tabs.find(tab => tab.id === state.settings.activeTabId), otherQueryClose.current?.running ?? false) as React.ReactElement<any>;
+  const command = () => (context.command as Function)(state.settings, state.settings.tabs.find(tab => tab.id === state.settings.activeTabId), otherQueryClose.current?.running ?? false) as { enabled: boolean; run(): unknown };
   // 本文件是RAM受控回包：原断言在明确模拟提交后保留；真实React提交另由组件窄验覆盖。
   const finish=(request:QueryCloseRequest,close:boolean)=>{(context.finish as Function)(request,close);if(commit)(context.commit as Function)(commit,undefined)};
-  return { state, keep, a, b, table, requests, otherQueryClose, confirm, listeners, notify, setClosing, button, start: () => button().props.onClick(), finish, rawFinish:context.finish as (request:QueryCloseRequest,close:boolean)=>void,ticket:()=>commit,commitNow:(value:typeof commit,pending?:QueryCloseRequest)=>(context.commit as Function)(value,pending) };
+  return { state, keep, a, b, table, requests, otherQueryClose, confirm, listeners, notify, setClosing, command, start: () => command().run(), finish, rawFinish:context.finish as (request:QueryCloseRequest,close:boolean)=>void,ticket:()=>commit,commitNow:(value:typeof commit,pending?:QueryCloseRequest)=>(context.commit as Function)(value,pending) };
 }
 
 describe('实际App关闭其他查询入口及受控关闭回包', () => {
@@ -39,12 +39,12 @@ describe('实际App关闭其他查询入口及受控关闭回包', () => {
     f.commitNow(first);expect(f.requests.map(request=>request.tabId)).toEqual(['a','b']);f.rawFinish(f.requests[1],true);const second=f.ticket()!;
     f.commitNow(first);expect(f.ticket()).toBe(second);expect(f.requests).toHaveLength(2);f.commitNow(second);expect(f.requests.map(request=>request.tabId)).toEqual(['a','b','c']);f.finish(f.requests[2],false);
   });
-  it('入口可访问，空闲空草稿逐个走原closeTab；保留当前查询和全部表', () => {
-    const f = fixture('  '), button = f.button(); expect(button.props['aria-label']).toBe(queryCloseZh.others); expect(button.props.title).toBe(queryCloseZh.othersHint); expect(button.props.disabled).toBe(false);
+  it('实际注册命令可用，空闲空草稿逐个走原closeTab；保留当前查询和全部表', () => {
+    const f = fixture('  '), command = f.command(); expect(command.enabled).toBe(true); expect(command.run).toBeTypeOf('function');
     f.start(); expect(f.state.closeTab.mock.calls).toEqual([['a'], ['b']]); expect(f.state.settings.tabs).toEqual([f.keep, f.table]); expect(f.requests).toEqual([]);
   });
   it('三选只发一份请求，二次触发不并行；放弃第一项后取消第二项保留原SQL', () => {
-    const f = fixture(); f.start(); f.start(); expect(f.requests.map(request => request.tabId)).toEqual(['a']); expect(f.button().props.disabled).toBe(true);
+    const f = fixture(); f.start(); f.start(); expect(f.requests.map(request => request.tabId)).toEqual(['a']); expect(f.command().enabled).toBe(false);
     f.finish(f.requests[0], true); expect(f.requests.map(request => request.tabId)).toEqual(['a', 'b']); f.finish(f.requests[1], false);
     expect(f.state.settings.tabs).toEqual([f.keep, f.table, f.b]); expect(f.b.sql).toBe('SELECT 原SQL;'); expect(f.otherQueryClose.current?.running).toBe(false);
   });

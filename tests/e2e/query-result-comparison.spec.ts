@@ -45,13 +45,13 @@ function register(binding: QueryResultColumnsUiTarget): void {
       await step(async () => { observer = await mysql.createConnection({ host: binding.target.host, port: binding.target.port, user: binding.target.user, password: binding.target.password, connectTimeout: 15000 }); native = (observer as any).connection; stream = native?.stream; if (!native || !stream) throw Error('观察连接原生归属未知'); });
       assertQueryResultColumnsUiIdentity(await step(() => observer!.query('SELECT @@version AS version,@@version_compile_os AS os,@@lower_case_table_names AS names,@@server_uuid AS uuid')), binding.target.uuid);
       const connectionName = '固定结果对比本例';
-      await step(() => page.locator('.app-commandbar').getByRole('button', { name: zh.common.newConnection, exact: true }).click()); const form = page.getByRole('dialog', { name: zh.common.newConnection, exact: true });
+      await step(async () => (await navigationMenuItem(page.locator('.navigation-toolbar'), { name: zh.common.newConnection, exact: true }, () => life.check())).click()); const form = page.getByRole('dialog', { name: zh.common.newConnection, exact: true });
       for (const [label, value] of [[zh.connections.text006, connectionName], [zh.connections.text009, binding.target.host], [zh.connections.text010, String(binding.target.port)], [zh.common.user, binding.target.user], [zh.connections.text011, binding.target.password], [zh.connections.text012, '']]) await step(() => form.getByLabel(label, { exact: true }).fill(value));
-      await step(() => form.getByRole('combobox', { name: new RegExp('^' + zh.connections.text008) }).selectOption('mysql')); await step(() => form.getByLabel(zh.connections.text016, { exact: true }).uncheck()); await step(() => form.getByRole('button', { name: zh.connections.text036, exact: true }).click()); await step(() => expect(form).toBeHidden());
+      await step(() => form.getByRole('combobox', { name: new RegExp('^' + zh.connections.text008) }).selectOption('mysql')); await step(() => form.getByLabel(zh.connections.text016, { exact: true }).uncheck()); await step(async () => (await navigationMenuItem(form, { name: zh.connections.text036, exact: true }, () => life.check())).click()); await step(() => expect(form).toBeHidden());
       const profiles = await step(() => page.evaluate(() => window.dbark.invoke('connections.list', {}))); expect(profiles).toHaveLength(1); const profile = profiles[0];
       expect(Boolean(profile.name === connectionName && profile.host === binding.target.host && profile.port === binding.target.port && profile.user === binding.target.user && !profile.database && profile.rememberPassword === false && profile.password === undefined && profile.hasPassword === Boolean(binding.target.password) && !profile.tls?.enabled && !profile.ssh?.enabled)).toBe(true);
-      await step(() => page.locator('.app-commandbar').getByRole('button', { name: zh.common.newQuery, exact: true }).click()); const query = page.getByRole('dialog', { name: zh.common.newQuery, exact: true });
-      await step(() => query.getByRole('combobox', { name: new RegExp('^' + zh.app.text049) }).selectOption(profile.id)); await step(() => query.getByLabel(zh.app.text050, { exact: true }).fill('')); await step(() => query.getByRole('button', { name: zh.app.text053, exact: true }).click()); await step(() => expect(query).toBeHidden());
+      await step(async () => (await navigationMenuItem(page.locator('.navigation-toolbar'), { name: zh.common.newQuery, exact: true }, () => life.check())).click()); const query = page.getByRole('dialog', { name: zh.common.newQuery, exact: true });
+      await step(() => query.getByRole('combobox', { name: new RegExp('^' + zh.app.text049) }).selectOption(profile.id)); await step(() => query.getByLabel(zh.app.text050, { exact: true }).fill('')); await step(async () => (await navigationMenuItem(query, { name: zh.app.text053, exact: true }, () => life.check())).click()); await step(() => expect(query).toBeHidden());
       const tab = page.locator('.query-tab:visible');
       /** 清空后派发内存粘贴，经过编辑器正式paste处理，不直接写model或工作区。 */
       async function edit(sql: string) {
@@ -81,26 +81,26 @@ function register(binding: QueryResultColumnsUiTarget): void {
       const ownWindow = await step(() => application.browserWindow(page)), senderId = await step(() => ownWindow.evaluate(window => window.webContents.id)); await step(() => ownWindow.dispose());
       const auditTarget: import('../helpers/queryResultComparisonUi').ComparisonAuditTarget = { senderId, profileId: profile.id, tabId, sqls: [comparisonLeftSql, comparisonRightSql], maxRows: settings.resultLimit, deadline: (info as TestInfo & { _startWallTime?: number })._startWallTime! + 120000 }; await step(() => application.evaluate(installComparisonAudit, auditTarget)); armed = true;
       /** 两次执行分别固定原始结果，快照标签通过真实可见按钮取值，不读React状态。 */
-      async function executeAndPin() { await step(() => tab.getByRole('button', { name: zh.query.text011, exact: true }).click()); await step(() => expect(tab.getByRole('button', { name: zh.common.stop, exact: true })).toBeDisabled({ timeout: 20000 })); await step(() => expect(tab.locator('.error-box')).toHaveCount(0)); await step(() => tab.getByRole('button', { name: zh.query.pinResult, exact: true }).click()); }
+      async function executeAndPin() { await step(async () => (await navigationMenuItem(tab, { name: zh.query.text011, exact: true }, () => life.check())).click()); await step(async () => expect((await navigationMenuItem(tab, { name: zh.common.stop, exact: true }, () => life.check()))).toBeDisabled({ timeout: 20000 })); await step(() => expect(tab.locator('.error-box')).toHaveCount(0)); await step(async () => (await navigationMenuItem(tab, { name: zh.query.pinResult, exact: true }, () => life.check())).click()); }
       await executeAndPin(); const leftLabel = await step(() => tab.locator('.pinned-result > button[aria-pressed]').first().innerText());
-      await step(() => tab.getByRole('button', { name: zh.query.currentResults, exact: true }).click()); await edit(comparisonRightSql); await executeAndPin();
+      await step(async () => (await navigationMenuItem(tab, { name: zh.query.currentResults, exact: true }, () => life.check())).click()); await edit(comparisonRightSql); await executeAndPin();
       const rightLabel = await step(() => tab.locator('.pinned-result > button[aria-pressed]').nth(1).innerText()); expect(rightLabel).not.toBe(leftLabel);
-      await step(() => tab.getByRole('button', { name: text.open, exact: true }).click()); const comparison = page.getByRole('dialog', { name: text.title, exact: true }); await step(() => expect(comparison).toBeVisible());
+      await step(async () => (await navigationMenuItem(tab, { name: text.open, exact: true }, () => life.check())).click()); const comparison = page.getByRole('dialog', { name: text.title, exact: true }); await step(() => expect(comparison).toBeVisible());
       const leftSelect = comparison.getByRole('combobox', { name: text.left, exact: true }), rightSelect = comparison.getByRole('combobox', { name: text.right, exact: true });
       const leftId = await step(() => leftSelect.locator('option').filter({ hasText: leftLabel.trim() }).getAttribute('value')), rightId = await step(() => rightSelect.locator('option').filter({ hasText: rightLabel.trim() }).getAttribute('value'));
       if (!leftId || !rightId || leftId === rightId) throw Error('原固定快照选项身份不明确');
       await step(() => leftSelect.selectOption(leftId)); await step(() => rightSelect.selectOption(rightId));
       await step(() => expect(comparison.getByRole('checkbox', { name: text.key('c0'), exact: true })).not.toBeChecked());
-      await step(() => expect(comparison.getByRole('button', { name: text.start, exact: true })).toBeDisabled());
-      await step(() => comparison.getByRole('checkbox', { name: text.key('c0'), exact: true }).check()); await step(() => comparison.getByRole('button', { name: text.start, exact: true }).click());
+      await step(async () => expect((await navigationMenuItem(comparison, { name: text.start, exact: true }, () => life.check()))).toBeDisabled());
+      await step(() => comparison.getByRole('checkbox', { name: text.key('c0'), exact: true }).check()); await step(async () => (await navigationMenuItem(comparison, { name: text.start, exact: true }, () => life.check())).click());
       for (const label of [text.added, text.removed, text.changed, text.equal]) await step(() => expect(comparison.getByLabel(label, { exact: true })).toHaveText('1'));
       // 详情按全结果索引定位，先从实际分类行找到“修改”；不调用产品算法计算期望。
       const changed = comparison.locator('tbody > tr').filter({ hasText: text.changed });
-      await step(() => changed.getByRole('button', { name: /^查看差异 [0-9]+$/ }).click()); const detail = comparison.getByRole('region', { name: text.detailsTitle, exact: true });
+      await step(async () => (await navigationMenuItem(changed, { name: /^查看差异 [0-9]+$/ }, () => life.check())).click()); const detail = comparison.getByRole('region', { name: text.detailsTitle, exact: true });
       for (const [key, left, right] of [['c1', '"9007199254740993"', '"9007199254740994"'], ['c2', '"1.00000000000000000001"', '"1.00000000000000000002"'], ['c3', text.nullValue, '"" · ' + text.emptyString], ['c4', text.binary + ' AA==', text.binary + ' ']]) {
         await step(() => expect(detail.getByLabel(text.leftValue + ' ' + key, { exact: true })).toHaveText(text.leftValue + '：' + left)); await step(() => expect(detail.getByLabel(text.rightValue + ' ' + key, { exact: true })).toHaveText(text.rightValue + '：' + right));
       }
-      await step(() => comparison.getByRole('button', { name: zh.common.close, exact: true }).click()); await step(() => expect(comparison).toBeHidden());
+      await step(async () => (await navigationMenuItem(comparison, { name: zh.common.close, exact: true }, () => life.check())).click()); await step(() => expect(comparison).toBeHidden());
       const audit = await step(() => application.evaluate(readComparisonAudit)); expect(audit).toEqual({ queries: 2, pending: 0, revision: 0 }); expect(runtime.pageErrors).toEqual([]);
       expect(await step(() => page.evaluate(() => (window as unknown as { __dbarkComparisonClipboardAttempts: number }).__dbarkComparisonClipboardAttempts))).toBe(0);
       await step(() => info.attach('固定结果对比原始计数', { body: JSON.stringify(audit), contentType: 'application/json' }));
@@ -108,3 +108,6 @@ function register(binding: QueryResultColumnsUiTarget): void {
     } catch (reason) { life.preserve(); throw reason; } finally { life.endBody(); }
   });
 }
+
+/** 原门进入具体动作后才加载真实菜单导航，不改变默认/列表阶段的资源边界。 */
+async function navigationMenuItem(...args: Parameters<typeof import('./navigation-menu')['navigationMenuItem']>): Promise<import('@playwright/test').Locator> { return (require('./navigation-menu') as typeof import('./navigation-menu')).navigationMenuItem(...args); }

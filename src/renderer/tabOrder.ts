@@ -1,4 +1,5 @@
 import type { AppSettings } from '../shared/contracts';
+import { objectCategories, type ObjectCategory } from '../shared/objectBrowser';
 
 type Tab = AppSettings['tabs'][number];
 export interface TabOrderRef { readonly id: string; readonly token: object; }
@@ -26,7 +27,7 @@ function sourceId(tab: object, key: string): string | undefined { const source =
 /** 显式无库/未知与遗留库保持不同身份；不取连接配置的默认库推断目标。 */
 function identity(value: unknown): { id: string; scope: string; tab: Tab } {
   const tab = object(value), id = text(own(tab, 'id'), tabOrderLimits.idUnits)!, kind = own(tab, 'kind');
-  if (kind !== 'query' && kind !== 'table') return invalid();
+  if (kind !== 'query' && kind !== 'table' && kind !== 'objects') return invalid();
   const connectionId = text(own(tab, 'connectionId'), tabOrderLimits.idUnits)!, database = text(own(tab, 'database', true), tabOrderLimits.nameUnits, kind === 'query', kind === 'query');
   let context: unknown = null;
   if (kind === 'query') {
@@ -39,7 +40,9 @@ function identity(value: unknown): { id: string; scope: string; tab: Tab } {
     }
   }
   const table = kind === 'table' ? text(own(tab, 'table'), tabOrderLimits.nameUnits) : undefined;
-  return { id, tab: tab as Tab, scope: JSON.stringify([id, kind, connectionId, database, context, table, sourceId(tab, 'sourceBinding'), sourceId(tab, 'fileSourceBinding')]) };
+  const category = kind === 'objects' ? own(tab, 'objectCategory') : undefined;
+  if (kind === 'objects' && !objectCategories.includes(category as ObjectCategory)) return invalid();
+  return { id, tab: tab as Tab, scope: JSON.stringify([id, kind, connectionId, database, context, table, category, kind === 'query' ? sourceId(tab, 'sourceBinding') : undefined, kind === 'query' ? sourceId(tab, 'fileSourceBinding') : undefined]) };
 }
 function tabsOf(tabs: readonly Tab[]): Tab[] {
   if (!Array.isArray(tabs) || Object.getPrototypeOf(tabs) !== Array.prototype) return invalid();

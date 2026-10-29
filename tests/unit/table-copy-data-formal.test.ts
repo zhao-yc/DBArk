@@ -1,4 +1,4 @@
-import { sidebarMenuRamPort } from '../helpers/sidebarMenuRamPort';
+import { sidebarMenuRamPort, navigationMenuRamPort } from '../helpers/sidebarMenuRamPort';
 import { readFileSync } from 'node:fs';
 import { EventEmitter } from 'node:events';
 import { createContext, runInContext } from 'node:vm';
@@ -48,6 +48,7 @@ function formal(factsChange: Record<string, unknown> = {}, queryUnknown = false)
   const context = createContext({ exports: {} as Record<string, Function>, process: { env: environment() }, require(name: string) {
     // 对象树菜单是显式RAM展示依赖，不加载Playwright或计作原生/认证模块。
     if (name === './sidebar-menu') return sidebarMenuRamPort;
+    if (name === './navigation-menu') return navigationMenuRamPort;
     if (name === './desktop-fixture') return { test, expect, ownedDesktopResources: own, retainOwnedDesktopResources: retain, confirmOwnedDesktopExit: async () => { calls.push('exit'); resource.closed = true; } };
     if (name === 'node:crypto') return { randomUUID: () => uuid };
     if (name === 'mysql2/promise') return { __esModule: true, default: { createConnection: async () => { calls.push('open'); return observer; } } };

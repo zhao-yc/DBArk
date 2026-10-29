@@ -33,15 +33,15 @@ export function registerQueryResultSortCaseUi(binding:QueryResultColumnsUiTarget
    await observe(()=>mkdir(binding.target.output,{recursive:false}));
    await observe(async()=>{current.observer=await mysql.createConnection({host:binding.target.host,port:binding.target.port,user:binding.target.user,password:binding.target.password,connectTimeout:15000});current.native=(current.observer as mysql.Connection&{connection?:any}).connection;current.stream=current.native?.stream;life.check();if(!current.native||!current.stream)throw Error('结果列观察流原生归属未知');});
    assertQueryResultColumnsUiIdentity(await observe(()=>current.observer!.query('SELECT @@version AS version,@@version_compile_os AS os,@@lower_case_table_names AS names,@@server_uuid AS uuid')),binding.target.uuid);
-   const connectionName='结果列本例只读';await observe(()=>page.locator('.app-commandbar').getByRole('button',{name:zh.common.newConnection,exact:true}).click());const form=page.getByRole('dialog',{name:zh.common.newConnection,exact:true});
+   const connectionName='结果列本例只读';await observe(async ()=>(await navigationMenuItem(page.locator('.navigation-toolbar'), {name:zh.common.newConnection,exact:true}, () => life.check())).click());const form=page.getByRole('dialog',{name:zh.common.newConnection,exact:true});
    for(const[label,value]of [[zh.connections.text006,connectionName],[zh.connections.text009,binding.target.host],[zh.connections.text010,String(binding.target.port)],[zh.common.user,binding.target.user],[zh.connections.text011,binding.target.password],[zh.connections.text012,'']])await observe(()=>form.getByLabel(label,{exact:true}).fill(value));
    // 原生select的label文本可能包含option后代文字，按真实combobox角色与标签前缀定位。
    await observe(()=>form.getByRole('combobox',{name:new RegExp('^'+zh.connections.text008)}).selectOption('mysql'));await observe(()=>form.getByLabel(zh.connections.text016,{exact:true}).uncheck());await observe(()=>expect(form.getByLabel(zh.connections.text016,{exact:true})).not.toBeChecked());
    // 不测试连接或展开数据库树；实际查询负责本例唯一受管会话的建连。
-   await observe(()=>form.getByRole('button',{name:zh.connections.text036,exact:true}).click());await observe(()=>expect(form).toBeHidden());
+   await observe(async ()=>(await navigationMenuItem(form, {name:zh.connections.text036,exact:true}, () => life.check())).click());await observe(()=>expect(form).toBeHidden());
    const profiles=await observe(()=>page.evaluate(()=>window.dbark.invoke('connections.list',{}))),profile=profiles.length===1?profiles[0]:undefined;
    expect(Boolean(profile&&profile.name===connectionName&&profile.host===binding.target.host&&profile.port===binding.target.port&&profile.user===binding.target.user&&!profile.database&&profile.rememberPassword===false&&profile.password===undefined&&profile.hasPassword===Boolean(binding.target.password)&&!profile.tls?.enabled&&!profile.ssh?.enabled)).toBe(true);
-   await observe(()=>page.locator('.app-commandbar').getByRole('button',{name:zh.common.newQuery,exact:true}).click());const query=page.getByRole('dialog',{name:zh.common.newQuery,exact:true});await observe(()=>query.getByRole('combobox',{name:new RegExp('^'+zh.app.text049)}).selectOption(profile!.id));await observe(()=>query.getByLabel(zh.app.text050,{exact:true}).fill(''));await observe(()=>query.getByRole('button',{name:zh.app.text053,exact:true}).click());await observe(()=>expect(query).toBeHidden());
+   await observe(async ()=>(await navigationMenuItem(page.locator('.navigation-toolbar'), {name:zh.common.newQuery,exact:true}, () => life.check())).click());const query=page.getByRole('dialog',{name:zh.common.newQuery,exact:true});await observe(()=>query.getByRole('combobox',{name:new RegExp('^'+zh.app.text049)}).selectOption(profile!.id));await observe(()=>query.getByLabel(zh.app.text050,{exact:true}).fill(''));await observe(async ()=>(await navigationMenuItem(query, {name:zh.app.text053,exact:true}, () => life.check())).click());await observe(()=>expect(query).toBeHidden());
    const tab=page.locator('.query-tab:visible'),input=tab.locator('.monaco-editor').getByRole('textbox');
    // 常量SQL走可见编辑器既有paste处理，避免把整段文本解释为逐字符输入；不访问系统剪贴板或修改模型。
    await observe(()=>input.focus());await observe(()=>page.keyboard.press(`${process.platform==='darwin'?'Meta':'Control'}+A`));await observe(()=>page.keyboard.press('Backspace'));
@@ -55,10 +55,10 @@ export function registerQueryResultSortCaseUi(binding:QueryResultColumnsUiTarget
    await observe(()=>expect(separator).toHaveAttribute('aria-valuenow',minimum));
    const ownerWindow=await observe(()=>application.browserWindow(page));const senderId=await observe(()=>ownerWindow.evaluate(window=>window.webContents.id));await observe(()=>ownerWindow.dispose());
    await observe(()=>application.evaluate(installQueryResultColumnsAudit,{senderId,profileId:profile!.id,tabId,sql:queryResultSortCaseSql,deadline:(info as TestInfo&{_startWallTime?:number})._startWallTime!+120000}));armed=true;
-   await observe(()=>tab.getByRole('button',{name:zh.query.text011,exact:true}).click());await observe(()=>expect(tab.getByRole('button',{name:zh.common.stop,exact:true})).toBeDisabled({timeout:20000}));await observe(()=>expect(tab.locator('.error-box')).toHaveCount(0));
+   await observe(async ()=>(await navigationMenuItem(tab, {name:zh.query.text011,exact:true}, () => life.check())).click());await observe(async ()=>expect((await navigationMenuItem(tab, {name:zh.common.stop,exact:true}, () => life.check()))).toBeDisabled({timeout:20000}));await observe(()=>expect(tab.locator('.error-box')).toHaveCount(0));
    const before=await observe(()=>page.evaluate(async()=>(await window.dbark.invoke('history.list',{})).map(row=>row.id).sort()));expect((await observe(()=>application.evaluate(readQueryResultColumnsAudit))).queries).toBe(1);
    const grid=tab.locator('.result-body .results-grid'),heads=grid.locator('[role="columnheader"]:has(.column-type)');
-   const selected=tab.getByRole('button',{name:zh.resultExport.selectedTitle,exact:true}),manage=page.getByRole('dialog',{name:text.title,exact:true});
+   const selected=(await navigationMenuItem(tab, {name:zh.resultExport.selectedTitle,exact:true}, () => life.check())),manage=page.getByRole('dialog',{name:text.title,exact:true});
    const modifier=process.platform==='darwin'?'Meta':'Control';
    /** 完整矩阵沿真实虚拟表格滚动读取；每次保存实际几何，不借视口高度代替七行验证。 */
    let readingNumber=0;
@@ -73,9 +73,9 @@ export function registerQueryResultSortCaseUi(binding:QueryResultColumnsUiTarget
    });
    /** 每次只显示本轮需要的列，避免依赖屏幕分辨率或横向虚拟列是否已挂载。 */
    async function columns(visible:readonly number[]):Promise<void>{
-    await observe(()=>tab.getByRole('button',{name:text.open,exact:true}).click());
+    await observe(async ()=>(await navigationMenuItem(tab, {name:text.open,exact:true}, () => life.check())).click());
     for(let index=0;index<queryResultSortCaseHeaders.length;index++)await observe(()=>manage.getByRole('checkbox',{name:text.visible(index+1),exact:true}).setChecked(visible.includes(index)));
-    await observe(()=>manage.getByRole('button',{name:text.apply,exact:true}).click());
+    await observe(async ()=>(await navigationMenuItem(manage, {name:text.apply,exact:true}, () => life.check())).click());
     await observe(()=>expect.poll(ids).toEqual(['1','2','3','4','5','6','7']));
    }
    /** 原生combobox必须显示选择值；修改后同一ID矩阵给出排序行为证据。 */
@@ -88,12 +88,12 @@ export function registerQueryResultSortCaseUi(binding:QueryResultColumnsUiTarget
    await columns([0,1,2,3]);
    // 独立排序草稿一次配置多列；预览零重查，应用、取消、撤销及恢复原序都读真实网格。
    const sortPanel=tab.getByRole('region',{name:sortText.panelTitle,exact:true});
-   await observe(()=>tab.getByRole('button',{name:sortText.panelTitle,exact:true}).click());
-   await observe(()=>sortPanel.getByRole('button',{name:sortText.panelAdd,exact:true}).click());
+   await observe(async ()=>(await navigationMenuItem(tab, {name:sortText.panelTitle,exact:true}, () => life.check())).click());
+   await observe(async ()=>(await navigationMenuItem(sortPanel, {name:sortText.panelAdd,exact:true}, () => life.check())).click());
    await observe(()=>sortPanel.getByRole('combobox',{name:sortText.panelField(1),exact:true}).selectOption({index:1}));
    await observe(()=>sortPanel.getByRole('checkbox',{name:sortText.panelCase(1),exact:true}).check());
    await observe(()=>sortPanel.getByRole('combobox',{name:sortText.panelNulls(1),exact:true}).selectOption('LAST'));
-   await observe(()=>sortPanel.getByRole('button',{name:sortText.panelAdd,exact:true}).click());
+   await observe(async ()=>(await navigationMenuItem(sortPanel, {name:sortText.panelAdd,exact:true}, () => life.check())).click());
    await observe(()=>sortPanel.getByRole('combobox',{name:sortText.panelField(2),exact:true}).selectOption({index:2}));
    await observe(()=>expect.poll(ids).toEqual(['1','2','3','4','5','6','7']));
    await observe(()=>sortPanel.getByRole('combobox',{name:sortText.panelField(2),exact:true}).focus());
@@ -103,38 +103,38 @@ export function registerQueryResultSortCaseUi(binding:QueryResultColumnsUiTarget
    const historyCell=grid.locator('[role="row"][aria-rowindex="2"] [role="gridcell"][aria-colindex="2"]');
    await observe(()=>historyCell.click());await observe(()=>historyCell.press(`${modifier}+z`));await observe(()=>expect.poll(ids).toEqual(['1','2','3','4','5','6','7']));
    await observe(()=>historyCell.click());await observe(()=>historyCell.press(process.platform==='darwin'?'Meta+Shift+z':'Control+y'));await observe(()=>expect.poll(ids).toEqual(['5','3','1','2','7','6','4']));
-   await observe(()=>tab.getByRole('button',{name:historyText.undo,exact:true}).click());await observe(()=>expect.poll(ids).toEqual(['1','2','3','4','5','6','7']));
-   await observe(()=>tab.getByRole('button',{name:historyText.redo,exact:true}).click());await observe(()=>expect.poll(ids).toEqual(['5','3','1','2','7','6','4']));
-   await observe(()=>tab.getByRole('button',{name:sortText.panelTitle,exact:true}).click());
+   await observe(async ()=>(await navigationMenuItem(tab, {name:historyText.undo,exact:true}, () => life.check())).click());await observe(()=>expect.poll(ids).toEqual(['1','2','3','4','5','6','7']));
+   await observe(async ()=>(await navigationMenuItem(tab, {name:historyText.redo,exact:true}, () => life.check())).click());await observe(()=>expect.poll(ids).toEqual(['5','3','1','2','7','6','4']));
+   await observe(async ()=>(await navigationMenuItem(tab, {name:sortText.panelTitle,exact:true}, () => life.check())).click());
    await observe(()=>expect(sortPanel.getByRole('checkbox',{name:sortText.panelCase(1),exact:true})).toBeChecked());
    await observe(()=>sortPanel.getByRole('combobox',{name:sortText.panelDirection(2),exact:true}).selectOption('DESC'));
-   await observe(()=>sortPanel.getByRole('button',{name:sortText.panelEarlier(2),exact:true}).click());
+   await observe(async ()=>(await navigationMenuItem(sortPanel, {name:sortText.panelEarlier(2),exact:true}, () => life.check())).click());
    await observe(()=>sortPanel.getByRole('combobox',{name:sortText.panelField(1),exact:true}).focus());
    await observe(()=>sortPanel.getByRole('combobox',{name:sortText.panelField(1),exact:true}).press('Escape'));await observe(()=>expect.poll(ids).toEqual(['5','3','1','2','7','6','4']));
-   await observe(()=>tab.getByRole('button',{name:sortText.panelTitle,exact:true}).click());
-   await observe(()=>sortPanel.getByRole('button',{name:sortText.panelClear,exact:true}).click());await observe(()=>sortPanel.getByRole('button',{name:sortText.panelApply,exact:true}).click());
+   await observe(async ()=>(await navigationMenuItem(tab, {name:sortText.panelTitle,exact:true}, () => life.check())).click());
+   await observe(async ()=>(await navigationMenuItem(sortPanel, {name:sortText.panelClear,exact:true}, () => life.check())).click());await observe(async ()=>(await navigationMenuItem(sortPanel, {name:sortText.panelApply,exact:true}, () => life.check())).click());
    await observe(()=>expect.poll(ids).toEqual(['1','2','3','4','5','6','7']));
    await observe(()=>heads.nth(1).click());await observe(()=>expect.poll(ids).toEqual(['4','5','3','2','1','7','6']));
    await observe(()=>caseControl(1).check());await observe(()=>expect(caseControl(1)).toBeChecked());await observe(()=>expect.poll(ids).toEqual(['4','5','1','3','2','6','7']));
    await observe(()=>heads.nth(1).click());await observe(()=>expect(caseControl(1)).toBeChecked());await observe(()=>expect.poll(ids).toEqual(['6','7','2','1','3','5','4']));
    await nulls(1,'text_value','FIRST');await observe(()=>expect.poll(ids).toEqual(['4','6','7','2','1','3','5']));
-   await observe(()=>tab.getByRole('button',{name:sortText.changeDirection(1,'text_value'),exact:true}).click());await observe(()=>expect.poll(ids).toEqual(['4','5','1','3','2','6','7']));
+   await observe(async ()=>(await navigationMenuItem(tab, {name:sortText.changeDirection(1,'text_value'),exact:true}, () => life.check())).click());await observe(()=>expect.poll(ids).toEqual(['4','5','1','3','2','6','7']));
    await nulls(1,'text_value','LAST');await observe(()=>expect.poll(ids).toEqual(['5','1','3','2','6','7','4']));
    // 两种精确后续键给出不同顺序；移优先级后保留原文本选项和NULL位置。
    await observe(()=>heads.nth(2).click({modifiers:[modifier]}));await observe(()=>expect.poll(ids).toEqual(['5','3','1','2','7','6','4']));
    await observe(()=>expect(tab.getByRole('checkbox',{name:sortText.ignoreCase(2,'big_value'),exact:true})).toHaveCount(0));
-   await observe(()=>tab.getByRole('button',{name:sortText.earlier(2,'big_value'),exact:true}).click());await observe(()=>expect(caseControl(2)).toBeChecked());await observe(()=>expect.poll(ids).toEqual(['2','5','4','3','7','1','6']));
-   await observe(()=>tab.getByRole('button',{name:sortText.earlier(2,'text_value'),exact:true}).click());await observe(()=>expect(caseControl(1)).toBeChecked());await observe(()=>expect(tab.getByRole('combobox',{name:sortText.nulls(1,'text_value'),exact:true})).toHaveValue('LAST'));
-   await observe(()=>tab.getByRole('button',{name:sortText.remove(2,'big_value'),exact:true}).click());await observe(()=>heads.nth(3).click({modifiers:[modifier]}));await observe(()=>expect.poll(ids).toEqual(['5','1','3','2','7','6','4']));
-   await observe(()=>tab.getByRole('button',{name:sortText.remove(2,'exact_value'),exact:true}).click());await observe(()=>caseControl(1).uncheck());await observe(()=>expect.poll(ids).toEqual(['5','3','2','1','7','6','4']));
+   await observe(async ()=>(await navigationMenuItem(tab, {name:sortText.earlier(2,'big_value'),exact:true}, () => life.check())).click());await observe(()=>expect(caseControl(2)).toBeChecked());await observe(()=>expect.poll(ids).toEqual(['2','5','4','3','7','1','6']));
+   await observe(async ()=>(await navigationMenuItem(tab, {name:sortText.earlier(2,'text_value'),exact:true}, () => life.check())).click());await observe(()=>expect(caseControl(1)).toBeChecked());await observe(()=>expect(tab.getByRole('combobox',{name:sortText.nulls(1,'text_value'),exact:true})).toHaveValue('LAST'));
+   await observe(async ()=>(await navigationMenuItem(tab, {name:sortText.remove(2,'big_value'),exact:true}, () => life.check())).click());await observe(()=>heads.nth(3).click({modifiers:[modifier]}));await observe(()=>expect.poll(ids).toEqual(['5','1','3','2','7','6','4']));
+   await observe(async ()=>(await navigationMenuItem(tab, {name:sortText.remove(2,'exact_value'),exact:true}, () => life.check())).click());await observe(()=>caseControl(1).uncheck());await observe(()=>expect.poll(ids).toEqual(['5','3','2','1','7','6','4']));
    await observe(()=>heads.nth(1).click());await observe(()=>expect(caseControl(1)).not.toBeChecked());await observe(()=>expect.poll(ids).toEqual(['6','7','1','2','3','5','4']));
    await observe(()=>heads.nth(1).click());await observe(()=>expect(caseControl(1)).toHaveCount(0));await observe(()=>expect.poll(ids).toEqual(['1','2','3','4','5','6','7']));
    await observe(()=>heads.nth(1).click());await observe(()=>expect(caseControl(1)).not.toBeChecked());await observe(()=>expect(tab.getByRole('combobox',{name:sortText.nulls(1,'text_value'),exact:true})).toHaveValue(''));await observe(()=>expect.poll(ids).toEqual(['4','5','3','2','1','7','6']));
-   await observe(()=>tab.getByRole('button',{name:sortText.clear,exact:true}).click());await observe(()=>expect.poll(ids).toEqual(['1','2','3','4','5','6','7']));
+   await observe(async ()=>(await navigationMenuItem(tab, {name:sortText.clear,exact:true}, () => life.check())).click());await observe(()=>expect.poll(ids).toEqual(['1','2','3','4','5','6','7']));
    await columns([0,1,2,3,4,5,6,7]);
    const panel=tab.getByRole('region',{name:filterText.title,exact:true});
    // 两个小数简写只改变条件输入：1.上限排除原值1.00000000000000000001，不按浮点近似。
-   await observe(()=>tab.getByRole('button',{name:filterText.open,exact:true}).click());await observe(()=>panel.getByRole('button',{name:filterText.add,exact:true}).click());
+   await observe(async ()=>(await navigationMenuItem(tab, {name:filterText.open,exact:true}, () => life.check())).click());await observe(async ()=>(await navigationMenuItem(panel, {name:filterText.add,exact:true}, () => life.check())).click());
    await observe(()=>panel.getByRole('combobox',{name:filterText.column+' 1',exact:true}).selectOption({index:3}));
    await observe(()=>panel.getByRole('combobox',{name:filterText.operator+' 1',exact:true}).selectOption('between'));
    await observe(()=>panel.getByRole('textbox',{name:filterText.lower+' 1',exact:true}).fill('.12345678901234567890'));await observe(()=>panel.getByRole('textbox',{name:filterText.upper+' 1',exact:true}).fill('1.'));
@@ -142,42 +142,42 @@ export function registerQueryResultSortCaseUi(binding:QueryResultColumnsUiTarget
    await observe(()=>panel.getByRole('textbox',{name:filterText.lower+' 1',exact:true}).press('Shift+Escape'));
    await observe(()=>expect(panel).toBeVisible());
    await observe(()=>expect(panel.getByRole('textbox',{name:filterText.lower+' 1',exact:true})).toHaveValue('.12345678901234567890'));await observe(()=>expect(panel.getByRole('textbox',{name:filterText.upper+' 1',exact:true})).toHaveValue('1.'));
-   await observe(()=>panel.getByRole('button',{name:filterText.apply,exact:true}).click());await observe(()=>expect.poll(ids).toEqual(['1','6','7']));
-   await observe(()=>tab.getByRole('button',{name:filterText.open,exact:true}).click());
+   await observe(async ()=>(await navigationMenuItem(panel, {name:filterText.apply,exact:true}, () => life.check())).click());await observe(()=>expect.poll(ids).toEqual(['1','6','7']));
+   await observe(async ()=>(await navigationMenuItem(tab, {name:filterText.open,exact:true}, () => life.check())).click());
    await observe(()=>expect(panel.getByRole('textbox',{name:filterText.lower+' 1',exact:true})).toHaveValue('.12345678901234567890'));await observe(()=>expect(panel.getByRole('textbox',{name:filterText.upper+' 1',exact:true})).toHaveValue('1.'));
    await observe(()=>panel.getByRole('combobox',{name:filterText.operator+' 1',exact:true}).selectOption('notBetween'));
-   await observe(()=>panel.getByRole('button',{name:filterText.apply,exact:true}).click());await observe(()=>expect.poll(ids).toEqual(['3']));
-   await observe(()=>tab.getByRole('button',{name:filterText.clear,exact:true}).click());await observe(()=>expect.poll(ids).toEqual(['1','2','3','4','5','6','7']));
+   await observe(async ()=>(await navigationMenuItem(panel, {name:filterText.apply,exact:true}, () => life.check())).click());await observe(()=>expect.poll(ids).toEqual(['3']));
+   await observe(async ()=>(await navigationMenuItem(tab, {name:filterText.clear,exact:true}, () => life.check())).click());await observe(()=>expect.poll(ids).toEqual(['1','2','3','4','5','6','7']));
    // 手写微秒边界：日期上端点及负TIME下端点包含行2，闭区间之外只含行3，均排除NULL。
    for(const [column,lower,upper] of [[4,'2026-10-21 12:00:00.000000','2026-10-21 12:00:00.000001'],[5,'-100:00:00.000001','-100:00:00.000000']] as const){
-    await observe(()=>tab.getByRole('button',{name:filterText.open,exact:true}).click());
-    if(column===4)await observe(()=>panel.getByRole('button',{name:filterText.add,exact:true}).click());
+    await observe(async ()=>(await navigationMenuItem(tab, {name:filterText.open,exact:true}, () => life.check())).click());
+    if(column===4)await observe(async ()=>(await navigationMenuItem(panel, {name:filterText.add,exact:true}, () => life.check())).click());
     await observe(()=>panel.getByRole('combobox',{name:filterText.column+' 1',exact:true}).selectOption({index:column}));
     await observe(()=>panel.getByRole('combobox',{name:filterText.operator+' 1',exact:true}).selectOption('between'));
     await observe(()=>panel.getByRole('textbox',{name:filterText.lower+' 1',exact:true}).fill(lower));await observe(()=>panel.getByRole('textbox',{name:filterText.upper+' 1',exact:true}).fill(upper));
-    await observe(()=>panel.getByRole('button',{name:filterText.apply,exact:true}).click());await observe(()=>expect.poll(ids).toEqual(['2']));
-    await observe(()=>tab.getByRole('button',{name:filterText.open,exact:true}).click());
+    await observe(async ()=>(await navigationMenuItem(panel, {name:filterText.apply,exact:true}, () => life.check())).click());await observe(()=>expect.poll(ids).toEqual(['2']));
+    await observe(async ()=>(await navigationMenuItem(tab, {name:filterText.open,exact:true}, () => life.check())).click());
     await observe(()=>panel.getByRole('combobox',{name:filterText.operator+' 1',exact:true}).selectOption('notBetween'));
     await observe(()=>expect(panel.getByRole('textbox',{name:filterText.lower+' 1',exact:true})).toHaveValue(lower));await observe(()=>expect(panel.getByRole('textbox',{name:filterText.upper+' 1',exact:true})).toHaveValue(upper));
-    await observe(()=>panel.getByRole('button',{name:filterText.apply,exact:true}).click());await observe(()=>expect.poll(ids).toEqual(['3']));
+    await observe(async ()=>(await navigationMenuItem(panel, {name:filterText.apply,exact:true}, () => life.check())).click());await observe(()=>expect.poll(ids).toEqual(['3']));
    }
-   await observe(()=>tab.getByRole('button',{name:filterText.clear,exact:true}).click());await observe(()=>expect.poll(ids).toEqual(['1','2','3','4','5','6','7']));
+   await observe(async ()=>(await navigationMenuItem(tab, {name:filterText.clear,exact:true}, () => life.check())).click());await observe(()=>expect.poll(ids).toEqual(['1','2','3','4','5','6','7']));
    // 导出四个原文：a/A与İ/i+组合点；按明确成员选择，不从排序器生成文件期待。
-   await observe(()=>tab.getByRole('button',{name:filterText.open,exact:true}).click());
-   await observe(()=>panel.getByRole('button',{name:filterText.add,exact:true}).click());
+   await observe(async ()=>(await navigationMenuItem(tab, {name:filterText.open,exact:true}, () => life.check())).click());
+   await observe(async ()=>(await navigationMenuItem(panel, {name:filterText.add,exact:true}, () => life.check())).click());
    await observe(()=>panel.getByRole('combobox',{name:filterText.column+' 1',exact:true}).selectOption({index:0}));
    await observe(()=>panel.getByRole('combobox',{name:filterText.operator+' 1',exact:true}).selectOption('in'));
    for(const [member,value] of [[1,'1'],[2,'3'],[3,'6'],[4,'7']] as const){
-    if(member>1)await observe(()=>panel.getByRole('button',{name:filterText.addMember(1),exact:true}).click());
+    if(member>1)await observe(async ()=>(await navigationMenuItem(panel, {name:filterText.addMember(1),exact:true}, () => life.check())).click());
     await observe(()=>panel.getByRole('textbox',{name:filterText.member(1,member),exact:true}).fill(value));
    }
    // 只复制真实条件草稿；改副本后AND交集必须生效，重开确认原成员未被改写。
-   await observe(()=>panel.getByRole('button',{name:filterText.duplicate(1),exact:true}).click());
+   await observe(async ()=>(await navigationMenuItem(panel, {name:filterText.duplicate(1),exact:true}, () => life.check())).click());
    for(const [member,value] of [[1,'1'],[2,'3'],[3,'6'],[4,'7']] as const)await observe(()=>expect(panel.getByRole('textbox',{name:filterText.member(2,member),exact:true})).toHaveValue(value));
    await observe(()=>panel.getByRole('textbox',{name:filterText.member(2,1),exact:true}).fill('5'));
    await observe(()=>expect(panel.getByRole('textbox',{name:filterText.member(1,1),exact:true})).toHaveValue('1'));
-   await observe(()=>panel.getByRole('button',{name:filterText.apply,exact:true}).click());await observe(()=>expect.poll(ids).toEqual(['3','6','7']));
-   await observe(()=>tab.getByRole('button',{name:filterText.open,exact:true}).click());
+   await observe(async ()=>(await navigationMenuItem(panel, {name:filterText.apply,exact:true}, () => life.check())).click());await observe(()=>expect.poll(ids).toEqual(['3','6','7']));
+   await observe(async ()=>(await navigationMenuItem(tab, {name:filterText.open,exact:true}, () => life.check())).click());
    await observe(()=>expect(panel.getByRole('textbox',{name:filterText.member(1,1),exact:true})).toHaveValue('1'));await observe(()=>expect(panel.getByRole('textbox',{name:filterText.member(2,1),exact:true})).toHaveValue('5'));
    /** 真实复选框保留当前条件；每次应用后独立核对网格ID，不从控制器推导期待。 */
    async function enableCondition(index:number,value:boolean):Promise<void>{
@@ -185,93 +185,93 @@ export function registerQueryResultSortCaseUi(binding:QueryResultColumnsUiTarget
     await observe(()=>checkbox.setChecked(value));await observe(()=>value?expect(checkbox).toBeChecked():expect(checkbox).not.toBeChecked());
    }
    await enableCondition(2,false);
-   await observe(()=>panel.getByRole('button',{name:filterText.apply,exact:true}).click());await observe(()=>expect.poll(ids).toEqual(['1','3','6','7']));
-   await observe(()=>tab.getByRole('button',{name:filterText.open,exact:true}).click());
+   await observe(async ()=>(await navigationMenuItem(panel, {name:filterText.apply,exact:true}, () => life.check())).click());await observe(()=>expect.poll(ids).toEqual(['1','3','6','7']));
+   await observe(async ()=>(await navigationMenuItem(tab, {name:filterText.open,exact:true}, () => life.check())).click());
    await observe(()=>expect(panel.getByRole('checkbox',{name:filterText.enabled(2),exact:true})).not.toBeChecked());
    await observe(()=>expect(panel.getByRole('textbox',{name:filterText.member(2,1),exact:true})).toHaveValue('5'));
    await observe(()=>panel.getByRole('combobox',{name:filterText.mode,exact:true}).selectOption('OR'));
-   await observe(()=>panel.getByRole('button',{name:filterText.apply,exact:true}).click());await observe(()=>expect.poll(ids).toEqual(['1','3','6','7']));
-   await observe(()=>tab.getByRole('button',{name:filterText.open,exact:true}).click());await enableCondition(1,false);
-   await observe(()=>panel.getByRole('button',{name:filterText.apply,exact:true}).click());await observe(()=>expect.poll(ids).toEqual(['1','2','3','4','5','6','7']));
-   await observe(()=>tab.getByRole('button',{name:filterText.open,exact:true}).click());
+   await observe(async ()=>(await navigationMenuItem(panel, {name:filterText.apply,exact:true}, () => life.check())).click());await observe(()=>expect.poll(ids).toEqual(['1','3','6','7']));
+   await observe(async ()=>(await navigationMenuItem(tab, {name:filterText.open,exact:true}, () => life.check())).click());await enableCondition(1,false);
+   await observe(async ()=>(await navigationMenuItem(panel, {name:filterText.apply,exact:true}, () => life.check())).click());await observe(()=>expect.poll(ids).toEqual(['1','2','3','4','5','6','7']));
+   await observe(async ()=>(await navigationMenuItem(tab, {name:filterText.open,exact:true}, () => life.check())).click());
    await observe(()=>expect(panel.getByRole('checkbox',{name:filterText.enabled(1),exact:true})).not.toBeChecked());
    await observe(()=>expect(panel.getByRole('textbox',{name:filterText.member(1,1),exact:true})).toHaveValue('1'));
    await enableCondition(2,true);
-   await observe(()=>panel.getByRole('button',{name:filterText.apply,exact:true}).click());await observe(()=>expect.poll(ids).toEqual(['3','5','6','7']));
-   await observe(()=>tab.getByRole('button',{name:filterText.open,exact:true}).click());await enableCondition(1,true);
+   await observe(async ()=>(await navigationMenuItem(panel, {name:filterText.apply,exact:true}, () => life.check())).click());await observe(()=>expect.poll(ids).toEqual(['3','5','6','7']));
+   await observe(async ()=>(await navigationMenuItem(tab, {name:filterText.open,exact:true}, () => life.check())).click());await enableCondition(1,true);
    await observe(()=>panel.getByRole('combobox',{name:filterText.mode,exact:true}).selectOption('AND'));
-   await observe(()=>panel.getByRole('button',{name:filterText.apply,exact:true}).click());await observe(()=>expect.poll(ids).toEqual(['3','6','7']));
-   await observe(()=>tab.getByRole('button',{name:filterText.open,exact:true}).click());
+   await observe(async ()=>(await navigationMenuItem(panel, {name:filterText.apply,exact:true}, () => life.check())).click());await observe(()=>expect.poll(ids).toEqual(['3','6','7']));
+   await observe(async ()=>(await navigationMenuItem(tab, {name:filterText.open,exact:true}, () => life.check())).click());
    // 批量动作只改草稿；取消后原生效树和成员原文必须保持，再用子组验证递归启停。
-   const enableAll=panel.getByRole('button',{name:filterText.enableAll,exact:true}),disableAll=panel.getByRole('button',{name:filterText.disableAll,exact:true});
+   const enableAll=(await navigationMenuItem(panel, {name:filterText.enableAll,exact:true}, () => life.check())),disableAll=(await navigationMenuItem(panel, {name:filterText.disableAll,exact:true}, () => life.check()));
    await observe(()=>expect(enableAll).toBeDisabled());await observe(()=>disableAll.click());
    for(const index of [1,2])await observe(()=>expect(panel.getByRole('checkbox',{name:filterText.enabled(index),exact:true})).not.toBeChecked());
    await observe(()=>expect(disableAll).toBeDisabled());await observe(()=>expect.poll(ids).toEqual(['3','6','7']));
-   await observe(()=>panel.getByRole('button',{name:filterText.cancel,exact:true}).click());
-   await observe(()=>tab.getByRole('button',{name:filterText.open,exact:true}).click());
+   await observe(async ()=>(await navigationMenuItem(panel, {name:filterText.cancel,exact:true}, () => life.check())).click());
+   await observe(async ()=>(await navigationMenuItem(tab, {name:filterText.open,exact:true}, () => life.check())).click());
    for(const index of [1,2])await observe(()=>expect(panel.getByRole('checkbox',{name:filterText.enabled(index),exact:true})).toBeChecked());
-   await observe(()=>panel.getByRole('button',{name:filterText.addGroup,exact:true}).click());
+   await observe(async ()=>(await navigationMenuItem(panel, {name:filterText.addGroup,exact:true}, () => life.check())).click());
    await observe(()=>panel.getByRole('combobox',{name:filterText.operator+' 3',exact:true}).selectOption('eq'));
    await observe(()=>panel.getByRole('textbox',{name:filterText.input+' 3',exact:true}).fill('3'));
-   await observe(()=>panel.getByRole('button',{name:filterText.apply,exact:true}).click());await observe(()=>expect.poll(ids).toEqual(['3']));
-   await observe(()=>tab.getByRole('button',{name:filterText.open,exact:true}).click());await observe(()=>disableAll.click());
+   await observe(async ()=>(await navigationMenuItem(panel, {name:filterText.apply,exact:true}, () => life.check())).click());await observe(()=>expect.poll(ids).toEqual(['3']));
+   await observe(async ()=>(await navigationMenuItem(tab, {name:filterText.open,exact:true}, () => life.check())).click());await observe(()=>disableAll.click());
    for(const index of [1,2,3])await observe(()=>expect(panel.getByRole('checkbox',{name:filterText.enabled(index),exact:true})).not.toBeChecked());
-   await observe(()=>panel.getByRole('button',{name:filterText.apply,exact:true}).click());await observe(()=>expect.poll(ids).toEqual(['1','2','3','4','5','6','7']));
-   await observe(()=>tab.getByRole('button',{name:filterText.open,exact:true}).click());await observe(()=>expect(disableAll).toBeDisabled());await observe(()=>enableAll.click());
+   await observe(async ()=>(await navigationMenuItem(panel, {name:filterText.apply,exact:true}, () => life.check())).click());await observe(()=>expect.poll(ids).toEqual(['1','2','3','4','5','6','7']));
+   await observe(async ()=>(await navigationMenuItem(tab, {name:filterText.open,exact:true}, () => life.check())).click());await observe(()=>expect(disableAll).toBeDisabled());await observe(()=>enableAll.click());
    for(const index of [1,2,3])await observe(()=>expect(panel.getByRole('checkbox',{name:filterText.enabled(index),exact:true})).toBeChecked());
    await observe(()=>expect(enableAll).toBeDisabled());await observe(()=>expect(panel.getByRole('combobox',{name:filterText.groupMode('1'),exact:true})).toHaveValue('OR'));
    for(const [condition,value] of [[1,'1'],[2,'5']] as const)await observe(()=>expect(panel.getByRole('textbox',{name:filterText.member(condition,1),exact:true})).toHaveValue(value));
    await observe(()=>expect(panel.getByRole('textbox',{name:filterText.input+' 3',exact:true})).toHaveValue('3'));
-   await observe(()=>panel.getByRole('button',{name:filterText.apply,exact:true}).click());await observe(()=>expect.poll(ids).toEqual(['3']));
+   await observe(async ()=>(await navigationMenuItem(panel, {name:filterText.apply,exact:true}, () => life.check())).click());await observe(()=>expect.poll(ids).toEqual(['3']));
    // 真实分组选框保留条件B的成员与稳定身份：先取消，再实际移入／移出，原结果只在应用后改变。
-   await observe(()=>tab.getByRole('button',{name:filterText.open,exact:true}).click());
+   await observe(async ()=>(await navigationMenuItem(tab, {name:filterText.open,exact:true}, () => life.check())).click());
    await observe(()=>panel.getByRole('combobox',{name:filterText.destination(2),exact:true}).focus());
    await observe(()=>panel.getByRole('combobox',{name:filterText.destination(2),exact:true}).selectOption({label:filterText.group('1')}));
    await observe(()=>expect(panel.getByRole('combobox',{name:filterText.destination(3),exact:true})).toBeFocused());
    await observe(()=>expect(panel.getByRole('combobox',{name:filterText.destination(3),exact:true}).locator('option:checked')).toHaveText(filterText.group('1')));
    await observe(()=>expect(panel.getByRole('textbox',{name:filterText.member(3,1),exact:true})).toHaveValue('5'));await observe(()=>expect.poll(ids).toEqual(['3']));
-   await observe(()=>panel.getByRole('button',{name:filterText.cancel,exact:true}).click());
-   await observe(()=>tab.getByRole('button',{name:filterText.open,exact:true}).click());
+   await observe(async ()=>(await navigationMenuItem(panel, {name:filterText.cancel,exact:true}, () => life.check())).click());
+   await observe(async ()=>(await navigationMenuItem(tab, {name:filterText.open,exact:true}, () => life.check())).click());
    await observe(()=>expect(panel.getByRole('combobox',{name:filterText.destination(2),exact:true}).locator('option:checked')).toHaveText(filterText.rootGroup));
    await observe(()=>panel.getByRole('combobox',{name:filterText.destination(2),exact:true}).focus());
    await observe(()=>panel.getByRole('combobox',{name:filterText.destination(2),exact:true}).selectOption({label:filterText.group('1')}));
-   await observe(()=>panel.getByRole('button',{name:filterText.apply,exact:true}).click());await observe(()=>expect.poll(ids).toEqual(['3','6','7']));
-   await observe(()=>tab.getByRole('button',{name:filterText.open,exact:true}).click());
+   await observe(async ()=>(await navigationMenuItem(panel, {name:filterText.apply,exact:true}, () => life.check())).click());await observe(()=>expect.poll(ids).toEqual(['3','6','7']));
+   await observe(async ()=>(await navigationMenuItem(tab, {name:filterText.open,exact:true}, () => life.check())).click());
    await observe(()=>expect(panel.getByRole('textbox',{name:filterText.member(3,1),exact:true})).toHaveValue('5'));
    await observe(()=>panel.getByRole('combobox',{name:filterText.destination(3),exact:true}).focus());
    await observe(()=>panel.getByRole('combobox',{name:filterText.destination(3),exact:true}).selectOption({label:filterText.rootGroup}));
    await observe(()=>expect(panel.getByRole('combobox',{name:filterText.destination(3),exact:true})).toBeFocused());
    await observe(()=>expect(panel.getByRole('combobox',{name:filterText.destination(3),exact:true}).locator('option:checked')).toHaveText(filterText.rootGroup));
-   await observe(()=>panel.getByRole('button',{name:filterText.apply,exact:true}).click());await observe(()=>expect.poll(ids).toEqual(['3']));
-   await observe(()=>tab.getByRole('button',{name:filterText.open,exact:true}).click());await observe(()=>panel.getByRole('button',{name:filterText.removeGroup('1'),exact:true}).click());
-   await observe(()=>panel.getByRole('button',{name:filterText.apply,exact:true}).click());await observe(()=>expect.poll(ids).toEqual(['3','6','7']));
-   await observe(()=>tab.getByRole('button',{name:filterText.open,exact:true}).click());
-   await observe(()=>panel.getByRole('button',{name:filterText.remove(2),exact:true}).click());
-   await observe(()=>panel.getByRole('button',{name:filterText.apply,exact:true}).click());await observe(()=>expect.poll(ids).toEqual(['1','3','6','7']));
+   await observe(async ()=>(await navigationMenuItem(panel, {name:filterText.apply,exact:true}, () => life.check())).click());await observe(()=>expect.poll(ids).toEqual(['3']));
+   await observe(async ()=>(await navigationMenuItem(tab, {name:filterText.open,exact:true}, () => life.check())).click());await observe(async ()=>(await navigationMenuItem(panel, {name:filterText.removeGroup('1'),exact:true}, () => life.check())).click());
+   await observe(async ()=>(await navigationMenuItem(panel, {name:filterText.apply,exact:true}, () => life.check())).click());await observe(()=>expect.poll(ids).toEqual(['3','6','7']));
+   await observe(async ()=>(await navigationMenuItem(tab, {name:filterText.open,exact:true}, () => life.check())).click());
+   await observe(async ()=>(await navigationMenuItem(panel, {name:filterText.remove(2),exact:true}, () => life.check())).click());
+   await observe(async ()=>(await navigationMenuItem(panel, {name:filterText.apply,exact:true}, () => life.check())).click());await observe(()=>expect.poll(ids).toEqual(['1','3','6','7']));
    // 原单条常量SQL之后，显式暂存完整筛选＋两列排序；清空、应用、撤销重做均只改变本地视图。
-   await observe(()=>tab.getByRole('button',{name:sortText.panelTitle,exact:true}).click());
-   await observe(()=>sortPanel.getByRole('button',{name:sortText.panelAdd,exact:true}).click());
+   await observe(async ()=>(await navigationMenuItem(tab, {name:sortText.panelTitle,exact:true}, () => life.check())).click());
+   await observe(async ()=>(await navigationMenuItem(sortPanel, {name:sortText.panelAdd,exact:true}, () => life.check())).click());
    await observe(()=>sortPanel.getByRole('combobox',{name:sortText.panelField(1),exact:true}).selectOption({index:0}));
-   await observe(()=>sortPanel.getByRole('button',{name:sortText.panelAdd,exact:true}).click());
+   await observe(async ()=>(await navigationMenuItem(sortPanel, {name:sortText.panelAdd,exact:true}, () => life.check())).click());
    await observe(()=>sortPanel.getByRole('combobox',{name:sortText.panelField(2),exact:true}).selectOption({index:1}));
    await observe(()=>sortPanel.getByRole('checkbox',{name:sortText.panelCase(2),exact:true}).check());
    await observe(()=>sortPanel.getByRole('combobox',{name:sortText.panelNulls(2),exact:true}).selectOption('LAST'));
-   await observe(()=>sortPanel.getByRole('button',{name:sortText.panelApply,exact:true}).click());await observe(()=>expect.poll(ids).toEqual(['1','3','6','7']));
-   await observe(()=>tab.getByRole('button',{name:memoryText.save,exact:true}).click());
+   await observe(async ()=>(await navigationMenuItem(sortPanel, {name:sortText.panelApply,exact:true}, () => life.check())).click());await observe(()=>expect.poll(ids).toEqual(['1','3','6','7']));
+   await observe(async ()=>(await navigationMenuItem(tab, {name:memoryText.save,exact:true}, () => life.check())).click());
    // 重新应用筛选及清除筛选均保留完整两列规则；每次恢复仍只改当前返回行视图。
-   await observe(()=>tab.getByRole('button',{name:filterText.open,exact:true}).click());await observe(()=>panel.getByRole('button',{name:filterText.apply,exact:true}).click());
+   await observe(async ()=>(await navigationMenuItem(tab, {name:filterText.open,exact:true}, () => life.check())).click());await observe(async ()=>(await navigationMenuItem(panel, {name:filterText.apply,exact:true}, () => life.check())).click());
    await observe(()=>expect.poll(ids).toEqual(['1','3','6','7']));await observe(()=>expect(tab.getByRole('list',{name:sortText.priorities,exact:true}).getByRole('listitem')).toHaveCount(2));await observe(()=>expect(caseControl(2)).toBeChecked());
-   await observe(()=>tab.getByRole('button',{name:filterText.clear,exact:true}).click());
+   await observe(async ()=>(await navigationMenuItem(tab, {name:filterText.clear,exact:true}, () => life.check())).click());
    await observe(()=>expect.poll(ids).toEqual(['1','2','3','4','5','6','7']));
    await observe(()=>expect(tab.getByRole('list',{name:sortText.priorities,exact:true}).getByRole('listitem')).toHaveCount(2));await observe(()=>expect(caseControl(2)).toBeChecked());await observe(()=>expect(tab.getByRole('combobox',{name:sortText.nulls(2,'text_value'),exact:true})).toHaveValue('LAST'));
-   await observe(()=>tab.getByRole('button',{name:historyText.undo,exact:true}).click());await observe(()=>expect.poll(ids).toEqual(['1','3','6','7']));
-   await observe(()=>tab.getByRole('button',{name:historyText.redo,exact:true}).click());await observe(()=>expect.poll(ids).toEqual(['1','2','3','4','5','6','7']));
-   await observe(()=>tab.getByRole('button',{name:sortText.clear,exact:true}).click());await observe(()=>expect.poll(ids).toEqual(['1','2','3','4','5','6','7']));
-   await observe(()=>tab.getByRole('button',{name:memoryText.apply,exact:true}).click());await observe(()=>expect.poll(ids).toEqual(['1','3','6','7']));
+   await observe(async ()=>(await navigationMenuItem(tab, {name:historyText.undo,exact:true}, () => life.check())).click());await observe(()=>expect.poll(ids).toEqual(['1','3','6','7']));
+   await observe(async ()=>(await navigationMenuItem(tab, {name:historyText.redo,exact:true}, () => life.check())).click());await observe(()=>expect.poll(ids).toEqual(['1','2','3','4','5','6','7']));
+   await observe(async ()=>(await navigationMenuItem(tab, {name:sortText.clear,exact:true}, () => life.check())).click());await observe(()=>expect.poll(ids).toEqual(['1','2','3','4','5','6','7']));
+   await observe(async ()=>(await navigationMenuItem(tab, {name:memoryText.apply,exact:true}, () => life.check())).click());await observe(()=>expect.poll(ids).toEqual(['1','3','6','7']));
    await observe(()=>expect(caseControl(2)).toBeChecked());await observe(()=>expect(tab.getByRole('combobox',{name:sortText.nulls(2,'text_value'),exact:true})).toHaveValue('LAST'));
-   await observe(()=>tab.getByRole('button',{name:historyText.undo,exact:true}).click());await observe(()=>expect.poll(ids).toEqual(['1','2','3','4','5','6','7']));
-   await observe(()=>tab.getByRole('button',{name:historyText.redo,exact:true}).click());await observe(()=>expect.poll(ids).toEqual(['1','3','6','7']));
-   await observe(()=>tab.getByRole('button',{name:memoryText.clear,exact:true}).click());await observe(()=>expect.poll(ids).toEqual(['1','3','6','7']));
+   await observe(async ()=>(await navigationMenuItem(tab, {name:historyText.undo,exact:true}, () => life.check())).click());await observe(()=>expect.poll(ids).toEqual(['1','2','3','4','5','6','7']));
+   await observe(async ()=>(await navigationMenuItem(tab, {name:historyText.redo,exact:true}, () => life.check())).click());await observe(()=>expect.poll(ids).toEqual(['1','3','6','7']));
+   await observe(async ()=>(await navigationMenuItem(tab, {name:memoryText.clear,exact:true}, () => life.check())).click());await observe(()=>expect.poll(ids).toEqual(['1','3','6','7']));
    for(const index of [5,4,3,2])await observe(()=>grid.locator('[role="row"][aria-rowindex="'+index+'"]').getByRole('checkbox').check());
    await observe(()=>expect(selected).toBeEnabled());
    // 合成copy事件只读取本页DataTransfer，不执行复制按钮或覆盖系统剪贴板。
@@ -280,8 +280,8 @@ export function registerQueryResultSortCaseUi(binding:QueryResultColumnsUiTarget
    for(const format of ['csv','json'] as const){
     await observe(()=>selected.click());const dialog=page.getByRole('dialog',{name:zh.resultExport.selectedTitle,exact:true});
     await observe(()=>expect(dialog).toContainText('勾选的 4 行'));await observe(()=>dialog.getByRole('combobox',{name:zh.resultExport.format,exact:true}).selectOption(format));await observe(()=>dialog.getByRole('combobox',{name:zh.resultExport.encoding,exact:true}).selectOption('utf8'));
-    await observe(()=>application.evaluate(answerQueryResultColumnsSave,{senderId,path:binding.target[format]}));await observe(()=>dialog.locator('.file-picker').click());await observe(()=>dialog.getByRole('button',{name:zh.resultExport.start,exact:true}).click());await observe(()=>expect(dialog.locator('.success-box')).toHaveText('已导出 4 行已返回结果。'));
-    if((await observe(()=>stat(binding.target[format]))).size>32768)throw Error('本例输出超出常量结果读取预算');verifyQueryResultSortCaseFile(format,await observe(()=>readFile(binding.target[format])));await observe(()=>dialog.getByRole('button',{name:zh.common.done,exact:true}).click());
+    await observe(()=>application.evaluate(answerQueryResultColumnsSave,{senderId,path:binding.target[format]}));await observe(()=>dialog.locator('.file-picker').click());await observe(async ()=>(await navigationMenuItem(dialog, {name:zh.resultExport.start,exact:true}, () => life.check())).click());await observe(()=>expect(dialog.locator('.success-box')).toHaveText('已导出 4 行已返回结果。'));
+    if((await observe(()=>stat(binding.target[format]))).size>32768)throw Error('本例输出超出常量结果读取预算');verifyQueryResultSortCaseFile(format,await observe(()=>readFile(binding.target[format])));await observe(async ()=>(await navigationMenuItem(dialog, {name:zh.common.done,exact:true}, () => life.check())).click());
     if(format==='csv'){await observe(()=>expect(selected).toBeDisabled());for(const index of [5,4,3,2])await observe(()=>grid.locator('[role="row"][aria-rowindex="'+index+'"]').getByRole('checkbox').check());}
    }
    expect(await observe(()=>page.evaluate(async()=>(await window.dbark.invoke('history.list',{})).map(row=>row.id).sort()))).toEqual(before);const audit=await observe(()=>application.evaluate(readQueryResultColumnsAudit));expect(audit).toEqual({queries:1,exports:['csv','json'],pending:0,revision:0});expect(pageErrors).toEqual([]);
@@ -289,3 +289,6 @@ export function registerQueryResultSortCaseUi(binding:QueryResultColumnsUiTarget
   }catch(reason){life.preserve();throw reason;}finally{life.endBody();}
  });
 }
+
+/** 原门进入具体动作后才加载真实菜单导航，不改变默认/列表阶段的资源边界。 */
+async function navigationMenuItem(...args: Parameters<typeof import('./navigation-menu')['navigationMenuItem']>): Promise<import('@playwright/test').Locator> { return (require('./navigation-menu') as typeof import('./navigation-menu')).navigationMenuItem(...args); }

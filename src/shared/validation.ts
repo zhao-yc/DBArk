@@ -1,4 +1,5 @@
 import { tableCheckGetSchema, tableCheckPreviewSchema, tableCheckApplySchema, tableCheckReleaseSchema } from './tableChecks';
+import { uiMenuStateSchema, objectCategories, assertObjectBrowserTabs } from './uiCommands';
 import { tableFilteredDeletePreviewInputSchema, tableFilteredDeleteApplyInputSchema, tableFilteredDeleteReleaseInputSchema } from './tableFilteredDelete';
 import { binaryCellFileOpenSchema, binaryCellFileSaveSchema } from './binaryCellFiles';
 import { tableFilteredUpdatePreviewInputSchema, tableFilteredUpdateApplyInputSchema, tableFilteredUpdateReleaseInputSchema } from './tableFilteredUpdate';
@@ -178,11 +179,12 @@ function guardedTablePage<S extends z.ZodType>(schema:S){return z.unknown().tran
 /** 先检查原输入，再交给对象schema；解析后的自有字段无法证明原型来源。 */
 const settingsRawWriteSchema = z.unknown().superRefine((raw, context) => {
   if (!raw || typeof raw !== 'object') return;
-  try { assertSqlKeywordCaseWrite(raw as { sqlKeywordCase?: unknown }); assertQueryLayoutWrite(raw as { tabs?: unknown }); assertQueryFileSourceSettings(raw as { tabs?: unknown }); }
+  try { assertSqlKeywordCaseWrite(raw as { sqlKeywordCase?: unknown }); assertQueryLayoutWrite(raw as { tabs?: unknown }); assertQueryFileSourceSettings(raw as { tabs?: unknown }); assertObjectBrowserTabs(raw as { tabs?: unknown }); }
   catch (error) { context.addIssue({ code: z.ZodIssueCode.custom, message: error instanceof Error ? error.message : '查询布局无效' }); }
 });
 
 export const commandSchemas: Record<Command, z.ZodType> = {
+  'app.menuState': uiMenuStateSchema,
   'result.insertPreview': resultInsertPreviewInputSchema,
   'result.insertApply': resultInsertApplyInputSchema,
   'result.insertRelease': resultInsertReleaseInputSchema,
@@ -407,7 +409,7 @@ export const commandSchemas: Record<Command, z.ZodType> = {
   'explainFiles.save': z.object({ snapshot: z.unknown().transform(value => parsePlanSnapshot(value)) }).strict(),
   ...queryFileReloadSchemas,
   'queryFileSources.cancel': queryFileSourceCancelSchema, 'queryFileSources.open': queryFileSourceOpenSchema, 'queryFileSources.save': queryFileSourceSaveSchema, 'queryFileSources.saveAs': queryFileSourceSaveAsSchema, 'queryFileSources.status': queryFileSourceStatusSchema, 'queryFileSources.release': queryFileSourceReleaseSchema,
-  'settings.get': empty, 'settings.save': settingsRawWriteSchema.pipe(z.object({ theme: z.enum(['dark','light']), sidebarWidth: z.number().min(180).max(600), resultLimit: z.number().int().min(1).max(100000), pageSize: z.number().int().min(1).max(1000), dataTypeColors: z.boolean().optional(), editorFontSize: z.number().int().min(editorFontLimits.min).max(editorFontLimits.max).optional(), editorWordWrap: z.boolean().optional(), editorTabSize: z.number().int().min(editorIndentationLimits.min).max(editorIndentationLimits.max).optional(), editorInsertSpaces: z.boolean().optional(), sqlKeywordCase: z.enum(['preserve', 'upper', 'lower']).optional(), tabs: z.array(z.object({ id, kind: z.enum(['query','table']), title: name, connectionId: id, database: z.string().optional(), databaseContext:queryDatabaseContext.optional(), table: z.string().optional(), sql: text.optional(), sourceBinding: querySourceBindingSchema.optional(), fileSourceBinding: queryFileSourceRefSchema.optional(), queryEditorHeight: z.number().int().min(queryLayoutLimits.minEditorHeight).max(queryLayoutLimits.maxEditorHeight).optional() }).strict()).max(100), activeTabId: z.string().optional() }).strict().superRefine((value, context) => { try { assertEditorIndentationWrite(value); assertQueryLayoutWrite(value); assertQueryFileSourceSettings(value); } catch (error) { context.addIssue({ code: z.ZodIssueCode.custom, message: error instanceof Error ? error.message : '缩进偏好无效' }); } }))
+  'settings.get': empty, 'settings.save': settingsRawWriteSchema.pipe(z.object({ theme: z.enum(['dark','light']), sidebarWidth: z.number().min(180).max(600), resultLimit: z.number().int().min(1).max(100000), pageSize: z.number().int().min(1).max(1000), dataTypeColors: z.boolean().optional(), editorFontSize: z.number().int().min(editorFontLimits.min).max(editorFontLimits.max).optional(), editorWordWrap: z.boolean().optional(), editorTabSize: z.number().int().min(editorIndentationLimits.min).max(editorIndentationLimits.max).optional(), editorInsertSpaces: z.boolean().optional(), sqlKeywordCase: z.enum(['preserve', 'upper', 'lower']).optional(), tabs: z.array(z.object({ id, kind: z.enum(['query','table','objects']), title: name, connectionId: id, database: z.string().optional(), objectCategory: z.enum(objectCategories).optional(), databaseContext:queryDatabaseContext.optional(), table: z.string().optional(), sql: text.optional(), sourceBinding: querySourceBindingSchema.optional(), fileSourceBinding: queryFileSourceRefSchema.optional(), queryEditorHeight: z.number().int().min(queryLayoutLimits.minEditorHeight).max(queryLayoutLimits.maxEditorHeight).optional() }).strict()).max(100), activeTabId: z.string().optional() }).strict().superRefine((value, context) => { try { assertEditorIndentationWrite(value); assertQueryLayoutWrite(value); assertQueryFileSourceSettings(value); assertObjectBrowserTabs(value); } catch (error) { context.addIssue({ code: z.ZodIssueCode.custom, message: error instanceof Error ? error.message : '工作区偏好无效' }); } }))
 };
 
 /** 只接受已声明命令；剔除任意路径、原型字段和其他非约定输入。 */
@@ -426,7 +428,7 @@ export function validateCommand(command: string, input: unknown): unknown {
   }
   // 先检查原始自有字段，避免optional或对象解析把显式undefined/继承值变成缺项。
   if (command === 'settings.save' && input && typeof input === 'object') {
-    try { assertQueryLayoutWrite(input as { tabs?: unknown }); assertQueryFileSourceSettings(input as { tabs?: unknown }); }
+    try { assertQueryLayoutWrite(input as { tabs?: unknown }); assertQueryFileSourceSettings(input as { tabs?: unknown }); assertObjectBrowserTabs(input as { tabs?: unknown }); }
     catch (error) { throw new Error(`参数无效：${error instanceof Error ? error.message : '查询布局无效'}`); }
   }
   const result = commandSchemas[command as Command].safeParse(input);

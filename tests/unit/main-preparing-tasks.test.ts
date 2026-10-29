@@ -10,10 +10,8 @@ import type { TaskEvent, TaskRecord } from '../../src/shared/contracts';
 /** 调用生产函数原文，只替换 Electron/IO 边界，防止另写一套状态逻辑的测试误通过。 */
 function productionFunctions(): string {
   const source = readFileSync(new URL('../../src/main/index.ts', import.meta.url), 'utf8');
-  const dispatchStart = source.indexOf('async function dispatch('), dispatchEnd = source.indexOf('/** 按平台生成中文原生菜单');
-  if (dispatchStart < 0 || dispatchEnd <= dispatchStart) throw new Error('生产函数位置改变，请更新真实入口测试');
   const exited = extractMainProductionFunction(source, 'engineExited');
-  return ts.transpileModule(source.slice(dispatchStart, dispatchEnd) + exited + '\nglobalThis.handlers = { dispatch, engineExited };', { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
+  return ts.transpileModule(extractMainProductionFunction(source, 'dispatch') + exited + '\nglobalThis.handlers = { dispatch, engineExited };', { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText;
 }
 
 describe('主进程准备任务的进程退出竞态', () => {

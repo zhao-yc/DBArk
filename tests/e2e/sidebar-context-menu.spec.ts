@@ -30,6 +30,7 @@ type AuditRoot = typeof globalThis & { __sidebarMenuAcceptance?: MainAudit };
 /** 专项只注册新用例；原桌面夹具负责每例正常退出与精确临时目录收尾。 */
 function register(): void {
   const runtime = require('./desktop-fixture') as typeof import('./desktop-fixture');
+  const { navigationMenuItem } = require('./navigation-menu') as typeof import('./navigation-menu');
   const { test, expect } = runtime;
   test.use({ preserveOnUnconfirmedExit: true, trace: 'off', screenshot: 'off', video: 'off', ownedDesktopLaunchGuard: {
     /** 前例保留后在分配下一应用之前停链，避免遗留窗口与新owner混用。 */
@@ -48,7 +49,7 @@ function register(): void {
   ];
   let connectionId = '', connectionName = '', halted = false;
   let originalTab: { id: string; kind: 'query'; title: string; connectionId: string; sql: string; databaseContext: { state: 'known'; database: null } };
-  const menu = () => runtime.page.locator('.sidebar-context-menu[role="menu"]');
+  const menu = () => runtime.page.locator('.sidebar-context-menu[role="menu"]:not(.sidebar-context-child-menu)');
   const row = (kind: 'connection' | 'database' | DatabaseObject['kind'], database?: string, name?: string) => runtime.page.locator(`[data-sidebar-node=${JSON.stringify(JSON.stringify([connectionId, database ?? null, kind, name ?? null]))}]`);
   const connectionRow = () => row('connection');
   const databaseRow = (database = firstDatabase) => row('database', database);
@@ -104,7 +105,7 @@ function register(): void {
     runtime.ownedDesktopResources(info);
     await info.attach('对象树菜单原Main启动归属', { body: JSON.stringify({ actual, noRealDatabase: true, noSystemClipboard: true }, null, 2), contentType: 'application/json' });
     connectionName = '菜单离线验收 ' + randomUUID();
-    await runtime.page.locator('.app-commandbar').getByRole('button', { name: zh.common.newConnection, exact: true }).click();
+    await (await navigationMenuItem(runtime.page.locator('.navigation-toolbar'), { name: zh.common.newConnection, exact: true }, () => { runtime.ownedDesktopResources(info); })).click();
     const form = runtime.page.getByRole('dialog', { name: zh.common.newConnection, exact: true });
     for (const [name, value] of [[zh.connections.text006, connectionName], [zh.connections.text009, '127.0.0.1'], [zh.connections.text010, '1'], [zh.common.user, 'dbark_sidebar_menu']]) await form.getByLabel(name, { exact: true }).fill(value);
     await form.getByLabel(zh.connections.text016, { exact: true }).uncheck();
@@ -171,7 +172,7 @@ function register(): void {
     } catch (error) { halted = true; runtime.retainOwnedDesktopResources(info); throw error; }
   });
 
-  test('右键同步准确节点但不展开、不连接、不打开标签，查询上下文沿正式新建入口验证', async () => {
+  test('右键同步准确节点但不展开、不连接、不打开标签，查询上下文沿正式新建入口验证', async ({}, info) => {
     const before = await audit(); await openMenu(connectionRow());
     await expect(label(connectionRow())).toHaveAttribute('aria-expanded', 'false'); expect((await audit()).calls).toEqual(before.calls);
     await runtime.page.keyboard.press('Escape'); await expect(connectionRow()).toHaveClass(/\bactive\b/); await unchangedWorkspace();
@@ -183,7 +184,7 @@ function register(): void {
       await runtime.page.keyboard.press('Escape'); await expect(target).toHaveClass(/\bactive\b/); await unchangedWorkspace();
     }
     await openMenu(databaseRow(secondDatabase)); await runtime.page.keyboard.press('Escape');
-    await runtime.page.locator('.app-commandbar').getByRole('button', { name: zh.common.newQuery, exact: true }).click();
+    await (await navigationMenuItem(runtime.page.locator('.navigation-toolbar'), { name: zh.common.newQuery, exact: true }, () => { runtime.ownedDesktopResources(info); })).click();
     const form = runtime.page.getByRole('dialog', { name: zh.common.newQuery, exact: true });
     const connection = form.locator('select'), database = form.locator('input[list="query-databases"]');
     await expect(connection).toHaveCount(1); await expect(database).toHaveCount(1);
@@ -249,6 +250,14 @@ function register(): void {
     await runtime.page.keyboard.press('ArrowDown'); await expect(available.first()).toBeFocused();
     await runtime.page.keyboard.press('ArrowDown'); await expect(available.nth(1)).toBeFocused();
     await runtime.page.keyboard.press('ArrowUp'); await expect(available.first()).toBeFocused();
+    const structureGroup = menu().getByRole('menuitem', { name: '设计与结构', exact: true });
+    await structureGroup.focus(); await structureGroup.press('ArrowRight');
+    const childMenu = menu().locator('.sidebar-context-child-menu'); await expect(childMenu).toBeVisible();
+    await runtime.page.keyboard.press('Home'); await expect(childMenu.getByRole('menuitem').first()).toBeFocused();
+    await runtime.page.keyboard.press('End'); await expect(childMenu.getByRole('menuitem').last()).toBeFocused();
+    await runtime.page.keyboard.press('ArrowLeft'); await expect(childMenu).toHaveCount(0); await expect(structureGroup).toBeFocused();
+    await structureGroup.press('ArrowRight'); await expect(childMenu).toBeVisible();
+    await runtime.page.keyboard.press('Escape'); await expect(childMenu).toHaveCount(0); await expect(structureGroup).toBeFocused();
     await runtime.page.keyboard.press('Escape'); await expect(menu()).toHaveCount(0); await expect(label(target)).toBeFocused();
     await label(target).press('ContextMenu'); await expect(menu()).toBeVisible(); await runtime.page.locator('.sidebar-heading > span').click(); await expect(menu()).toHaveCount(0);
     await openMenu(target); const scroll = await runtime.page.locator('.tree-scroll').boundingBox(); if (!scroll) throw Error('缺少真实树滚动区域');
@@ -321,7 +330,8 @@ function register(): void {
     const form = runtime.page.getByRole('dialog', { name: zh.connections.text003, exact: true }); await expect(form.getByLabel(zh.connections.text006, { exact: true })).toHaveValue(connectionName);
     await expect(form.getByLabel(zh.connections.text009, { exact: true })).toHaveValue('127.0.0.1'); await expect(form.getByLabel(zh.connections.text010, { exact: true })).toHaveValue('1');
     await form.getByRole('button', { name: zh.common.cancel, exact: true }).click();
-    await openMenu(objectRow('table')); await expect(menu().getByRole('menuitem', { name: `${tableRenameZh.title} ${sameName}`, exact: true })).toBeVisible();
+    await openMenu(objectRow('table')); await menu().getByRole('menuitem', { name: '设计与结构', exact: true }).click();
+    await expect(menu().getByRole('menuitem', { name: `${tableRenameZh.title} ${sameName}`, exact: true })).toBeVisible();
     await menu().getByRole('menuitem', { name: workbenchZh.action(workbenchZh.add, sameName), exact: true }).click();
     await expect.poll(async () => (await runtime.page.evaluate(() => window.dbark.invoke('workbench.get', {}))).document.favorites.length).toBe(1);
     const favorites = (await runtime.page.evaluate(() => window.dbark.invoke('workbench.get', {}))).document.favorites;

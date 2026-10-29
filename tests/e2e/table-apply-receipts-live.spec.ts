@@ -40,7 +40,7 @@ test.beforeEach(async () => {
 async function open(c: Context) {
   const connection = page().locator('.connection-node').filter({ has: page().locator('.connection-row').getByText(c.connectionName, { exact: true }) });
   await connection.locator('.connection-row').hover(); await clickSidebarAction(connection, { name: '刷新连接', exact: true });
-  await connection.locator('.database-row').getByRole('button', { name: c.database, exact: true }).click();
+  await (await (await import('./navigation-menu')).navigationMenuItem(connection.locator('.database-row'), { name: c.database, exact: true })).click();
   await connection.locator('.object-row').getByText('receipt_subject', { exact: true }).click();
   await expect(table().locator('.context-bar')).toContainText('receipt_subject'); await expect(table().locator('.loading-overlay')).toHaveCount(0);
 }
@@ -52,11 +52,11 @@ async function cell(r: Locator, name: string) { return r.locator(`[role="gridcel
 async function edit(r: Locator, key: string, value: string) { await (await cell(r, key)).dblclick(); const input = table().locator('.grid-input'); await expect(input).toBeVisible(); await input.fill(value); await input.press('Enter'); await expect(input).toHaveCount(0); }
 /** NULL与BLOB使用原单元格编辑器和暂存按钮，不混淆空串、DEFAULT或字节。 */
 async function typed(r: Locator, key: string, mode: 'null' | 'binary', value = '') {
-  await (await cell(r, key)).click(); await table().getByRole('button', { name: zh.table.text005, exact: true }).click();
+  await (await cell(r, key)).click(); await (await (await import('./navigation-menu')).navigationMenuItem(table(), { name: zh.table.text005, exact: true })).click();
   const dialog = page().getByRole('dialog', { name: '编辑单元格：' + key, exact: true });
   await dialog.getByRole('combobox', { name: recordViewZh.mode, exact: true }).selectOption(mode);
   if (mode === 'binary') await dialog.getByRole('textbox', { name: key + ' · ' + recordViewZh.value, exact: true }).fill(value);
-  await dialog.getByRole('button', { name: recordViewZh.stageCell, exact: true }).click(); await expect(dialog).toBeHidden();
+  await (await (await import('./navigation-menu')).navigationMenuItem(dialog, { name: recordViewZh.stageCell, exact: true })).click(); await expect(dialog).toBeHidden();
 }
 /** 固定自有夹具；独立旁观连接只用于种子、并发修改、断言和原helper清理。 */
 async function seed(c: Context, cud: boolean) {
@@ -88,10 +88,10 @@ async function observe(connectionId: string) {
 async function calls(): Promise<Call[]> { return desktop!.desktop.evaluate(() => (globalThis as typeof globalThis & { __d08ReceiptCalls?: Call[] }).__d08ReceiptCalls ?? []); }
 /** 只读回执辅助核确切字段；所有写入动作已经由真实UI入口完成。 */
 async function receipts(c: Context) { return page().evaluate(id => window.dbark.invoke('table.applyReceipt.list', { connectionId: id }), c.connectionId); }
-async function preview() { await table().getByRole('button', { name: zh.table.text019, exact: true }).click(); const d = page().getByRole('dialog', { name: zh.table.text031, exact: true }); await expect(d).toBeVisible(); await expect(d.locator('.monaco-editor')).toBeVisible(); return d; }
+async function preview() { await (await (await import('./navigation-menu')).navigationMenuItem(table(), { name: zh.table.text019, exact: true })).click(); const d = page().getByRole('dialog', { name: zh.table.text031, exact: true }); await expect(d).toBeVisible(); await expect(d.locator('.monaco-editor')).toBeVisible(); return d; }
 /** 详情必须真实打开并显示事实和范围，不能仅靠接口对象冒称UI已经验收。 */
 async function detail(r: TableApplyReceipt) {
-  await table().getByRole('button', { name: '查看本次提交记录', exact: true }).click();
+  await (await (await import('./navigation-menu')).navigationMenuItem(table(), { name: '查看本次提交记录', exact: true })).click();
   const d = page().getByRole('dialog', { name: '数据提交记录', exact: true }), section = d.getByRole('region', { name: '提交记录详情' });
   await expect(section).toContainText(r.operationId); await expect(section).toContainText(r.previewId); await expect(section).toContainText(r.target.database); await expect(section).toContainText(r.target.table); await expect(section).toContainText('不包含触发器'); await expect(section).toContainText('不保存SQL');
   await expect(section).toContainText(r.target.connectionId); await expect(section).toContainText(r.startedAt); await expect(section).toContainText(r.finishedAt!);
@@ -115,14 +115,14 @@ test('网格CUD精确值与匹配行单次提交，关闭表及真实重启后�
     await edit(await row('1'), 'note', '更新后记录'); await edit(await row('1'), 'big_value', '18446744073709551614'); await edit(await row('1'), 'amount', '12345678901234567890.100001'); await typed(await row('1'), 'nullable_value', 'null'); await typed(await row('1'), 'payload', 'binary', '0x00FF8000');
     // 改为不同词法的同一BIGINT值，真实服务端内容不变，但FOUND_ROWS仍须报告匹配行。
     await edit(await row('2'), 'id', '02');
-    await table().getByRole('button', { name: zh.common.add, exact: true }).click(); const added = table().locator('.row-inserted');
+    await (await (await import('./navigation-menu')).navigationMenuItem(table(), { name: zh.common.add, exact: true })).click(); const added = table().locator('.row-inserted');
     for (const [key, value] of [['id', '4'], ['note', '新增记录'], ['big_value', '18446744073709551615'], ['amount', '-12345678901234567890.120000']]) await edit(added, key, value);
     await typed(added, 'nullable_value', 'null'); await typed(added, 'payload', 'binary', '0x0000FF');
-    await (await cell(await row('3'), 'note')).click(); await table().getByRole('button', { name: zh.common.delete, exact: true }).click();
+    await (await cell(await row('3'), 'note')).click(); await (await (await import('./navigation-menu')).navigationMenuItem(table(), { name: zh.common.delete, exact: true })).click();
     expect(await read(c)).toEqual(original); expect((await receipts(c)).total).toBe(0); await expect(undo()).toBeEnabled();
-    const first = await preview(); expect(await read(c)).toEqual(original); await first.getByRole('button', { name: zh.common.backToEdit, exact: true }).click(); await expect(undo()).toBeEnabled();
+    const first = await preview(); expect(await read(c)).toEqual(original); await (await (await import('./navigation-menu')).navigationMenuItem(first, { name: zh.common.backToEdit, exact: true })).click(); await expect(undo()).toBeEnabled();
     await undo().click(); await expect(redo()).toBeEnabled(); await redo().click();
-    const final = await preview(); expect(await read(c)).toEqual(original); await final.getByRole('button', { name: zh.common.confirmApply, exact: true }).click(); await expect(final).toBeHidden(); await expect(table().locator('.loading-overlay')).toHaveCount(0);
+    const final = await preview(); expect(await read(c)).toEqual(original); await (await (await import('./navigation-menu')).navigationMenuItem(final, { name: zh.common.confirmApply, exact: true })).click(); await expect(final).toBeHidden(); await expect(table().locator('.loading-overlay')).toHaveCount(0);
     const actual = await read(c); expect(actual).toEqual([
       { id: '1', note: '更新后记录', big_value: '18446744073709551614', amount: '12345678901234567890.100001', nullable_value: null, payload_hex: '00FF8000' },
       original[1],
@@ -133,7 +133,7 @@ test('网格CUD精确值与匹配行单次提交，关闭表及真实重启后�
     await page().locator('.workspace-tab-button.active .tab-close').click(); await expect(page().locator('.table-tab')).toHaveCount(0);
     const oldPid = desktop!.desktop.process().pid; await desktop!.quitDesktop(); expect(desktop!.closed).toBe(true); await desktop!.launchDesktop(); expect(desktop!.desktop.process().pid).not.toBe(oldPid);
     const restored = await page().evaluate(id => window.dbark.invoke('table.applyReceipt.detail', { operationId: id }), r.operationId); expect(restored).toEqual(r);
-    await page().locator('.app-statusbar').getByRole('button').click(); await page().getByRole('button', { name: '数据提交记录', exact: true }).click(); const history = page().getByRole('dialog', { name: '数据提交记录', exact: true }); await history.getByRole('textbox', { name: '提交连接筛选', exact: true }).fill(c.connectionId); await expect(history.getByRole('button', { name: '查看提交详情', exact: true })).toHaveCount(1); await history.getByRole('button', { name: '查看提交详情', exact: true }).click(); await expect(history.getByRole('region', { name: '提交记录详情' })).toContainText(r.operationId);
+    await (await (await import('./navigation-menu')).navigationMenuItem(page().locator('.app-statusbar'), undefined)).click(); await (await (await import('./navigation-menu')).navigationMenuItem(page(), { name: '数据提交记录', exact: true })).click(); const history = page().getByRole('dialog', { name: '数据提交记录', exact: true }); await history.getByRole('textbox', { name: '提交连接筛选', exact: true }).fill(c.connectionId); await expect(history.getByRole('button', { name: '查看提交详情', exact: true })).toHaveCount(1); await (await (await import('./navigation-menu')).navigationMenuItem(history, { name: '查看提交详情', exact: true })).click(); await expect(history.getByRole('region', { name: '提交记录详情' })).toContainText(r.operationId);
     expect(await read(c)).toEqual(actual); await info.attach('实际提交回执', { body: Buffer.from(JSON.stringify(r)), contentType: 'application/json' });
   }, info);
 });
@@ -143,9 +143,9 @@ test('第二行原值冲突使第一条修改真实回滚，回执保留确认�
     await seed(c, false); await observe(c.connectionId); const original = await read(c);
     await edit(await row('1'), 'note', '第一行草稿'); await edit(await row('2'), 'note', '第二行草稿'); const d = await preview(); expect(await read(c)).toEqual(original);
     await c.observer.query(`UPDATE ${target(c)} SET note='旁观并发新值' WHERE id=2`); const concurrent = await read(c); expect(concurrent[0]).toEqual(original[0]);
-    await d.getByRole('button', { name: zh.common.confirmApply, exact: true }).click(); await expect(d.locator('.error-box')).toContainText('目标表事务'); await expect(d.locator('.error-box')).toContainText('回滚'); await expect(d.getByRole('button', { name: zh.common.confirmApply, exact: true })).toBeDisabled();
+    await (await (await import('./navigation-menu')).navigationMenuItem(d, { name: zh.common.confirmApply, exact: true })).click(); await expect(d.locator('.error-box')).toContainText('目标表事务'); await expect(d.locator('.error-box')).toContainText('回滚'); await expect(d.getByRole('button', { name: zh.common.confirmApply, exact: true })).toBeDisabled();
     expect(await read(c)).toEqual(concurrent); const r = await proof(c, 1); expect(r.intent).toEqual({ insert: 0, update: 2, delete: 0, statementCount: 2 }); expect(r.outcome).toBe('rolled-back'); expect(r.reason).toBe('conflict'); expect(r.committedReportedRows).toBe(0); expect(r.evidence).toMatchObject({ dmlAcknowledged: 2, serverReportedRows: 1, commitMayHaveBeenSent: false, commitAcknowledged: false, rollbackAcknowledged: true, transactionProtected: true, transactionKnown: true, transactionOpen: false });
-    await d.getByRole('button', { name: zh.common.backToEdit, exact: true }).click(); await expect(undo()).toBeDisabled(); await expect(redo()).toBeDisabled(); await detail(r); expect((await calls()).filter(x => x.command === 'table.apply')).toHaveLength(1); expect(await read(c)).toEqual(concurrent);
+    await (await (await import('./navigation-menu')).navigationMenuItem(d, { name: zh.common.backToEdit, exact: true })).click(); await expect(undo()).toBeDisabled(); await expect(redo()).toBeDisabled(); await detail(r); expect((await calls()).filter(x => x.command === 'table.apply')).toHaveLength(1); expect(await read(c)).toEqual(concurrent);
     await info.attach('实际回滚回执', { body: Buffer.from(JSON.stringify(r)), contentType: 'application/json' });
   }, info);
 });

@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto';
 import { runInNewContext } from 'node:vm';
 import ts from 'typescript';
 import { expect, it, vi } from 'vitest';
-import { publicCommands } from '../../src/shared/commands';
+import { publicCommands, isUiCommandInvocation } from '../../src/shared/commands';
 import { validateCommand } from '../../src/shared/validation';
 import baseline from '../fixtures/application-info-v028-baseline.json';
 
@@ -45,6 +45,6 @@ it.each(['version','platform','crypto','path'])('Root28原app.info在%s保留原
 });
 it('实际preload只透传新白名单，原app.info错误消息保持',async()=>{
   let api:any;const request=vi.fn(async()=>({ok:true,result:{version:baseline.version,platform:'darwin',dataPath:'RAM'}} as any));const preload=readFileSync(new URL('../../src/main/preload.ts',import.meta.url),'utf8');
-  runInNewContext(ts.transpileModule(preload,{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS}}).outputText,{exports:{},require(name:string){if(name==='electron')return{contextBridge:{exposeInMainWorld(_name:string,value:unknown){api=value;}},ipcRenderer:{invoke:request}};if(name==='../shared/commands')return{publicCommands};throw Error('禁止其它preload依赖');}});
+  runInNewContext(ts.transpileModule(preload,{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS}}).outputText,{exports:{},require(name:string){if(name==='electron')return{contextBridge:{exposeInMainWorld(_name:string,value:unknown){api=value;}},ipcRenderer:{invoke:request}};if(name==='../shared/commands')return{publicCommands,isUiCommandInvocation};throw Error('禁止其它preload依赖');}});
   expect(await api.invoke('app.runtimeInfo',{})).toEqual({version:baseline.version,platform:'darwin',dataPath:'RAM'});expect(request.mock.calls[0]).toEqual(['dbark:request',{command:'app.runtimeInfo',input:{}}]);request.mockResolvedValueOnce({ok:false,error:'原保护器错误'});await expect(api.invoke('app.info',{})).rejects.toThrow('原保护器错误');
 });

@@ -22,7 +22,7 @@ export function registerInsertRowAliasUiTest(){
       assertOwner();
       if(trace!=='off'||screenshot!=='off'||video!=='off')throw Error('本片拒绝采集轨迹、截图或视频的实际覆盖参数');
       const target=insertRowAliasUiTarget(process.env),name='UPSERT只读界面 '+target.database;
-      await page().locator('.app-commandbar').getByRole('button',{name:'新建连接',exact:true}).click();assertOwner();
+      await (await (await import('./navigation-menu')).navigationMenuItem(page().locator('.navigation-toolbar'), {name:'新建连接',exact:true}, assertOwner)).click();assertOwner();
       const form=page().getByRole('dialog',{name:'新建连接',exact:true});
       await form.getByLabel('连接名称',{exact:true}).fill(name);assertOwner();
       await select(form,/^数据库类型/,'mysql');assertOwner();
@@ -32,17 +32,17 @@ export function registerInsertRowAliasUiTest(){
       await form.getByLabel('数据库密码',{exact:true}).fill(target.password);assertOwner();
       await form.getByLabel('默认数据库（可选）',{exact:true}).fill(target.database);assertOwner();
       const remember=form.getByRole('checkbox',{name:'安全保存密码',exact:true});await remember.uncheck();assertOwner();await expect(remember).not.toBeChecked();assertOwner();
-      await form.getByRole('button',{name:'测试连接',exact:true}).click();assertOwner();
+      await (await (await import('./navigation-menu')).navigationMenuItem(form, {name:'测试连接',exact:true}, assertOwner)).click();assertOwner();
       await expect(form.locator('.success-box')).toContainText(/MySQL.*8\.4\.11(?:\D|$)/,{timeout:20000});assertOwner();
-      await form.getByRole('button',{name:'保存连接',exact:true}).click();assertOwner();await expect(form).toBeHidden();assertOwner();
+      await (await (await import('./navigation-menu')).navigationMenuItem(form, {name:'保存连接',exact:true}, assertOwner)).click();assertOwner();await expect(form).toBeHidden();assertOwner();
       const saved=await page().evaluate(async input=>{const profiles=(await window.dbark.invoke('connections.list',{})).filter(item=>item.name===input.name);const profile=profiles[0];return{count:profiles.length,id:profiles.length===1?profile.id:undefined,matches:profiles.length===1&&profile.host===input.host&&profile.port===13384&&profile.dialect==='mysql'&&profile.database===input.database&&profile.rememberPassword===false&&!Object.hasOwn(profile,'password')};},{name,host:target.host,database:target.database});assertOwner();
       expect(saved.count).toBe(1);expect(saved.matches).toBe(true);if(!saved.id)throw Error('本例连接概要不唯一');const connectionId=saved.id;
-      await page().locator('.app-commandbar').getByRole('button',{name:'新建查询',exact:true}).click();assertOwner();
+      await (await (await import('./navigation-menu')).navigationMenuItem(page().locator('.navigation-toolbar'), {name:'新建查询',exact:true}, assertOwner)).click();assertOwner();
       const dialog=page().getByRole('dialog',{name:'新建查询',exact:true});await select(dialog,/^数据库连接/,connectionId);assertOwner();
       const databaseField=dialog.getByRole('combobox',{name:/^默认数据库（可选）/});await expect(databaseField).toHaveCount(1);assertOwner();await databaseField.fill(target.database);assertOwner();await expect(databaseField).toHaveValue(target.database);assertOwner();
       // 新查询原流程负责打开连接和缓存实际版本；等待真实目录完成，不主动调用执行接口。
       await expect(databaseField).toHaveAttribute('placeholder','选择或输入数据库名称',{timeout:20000});assertOwner();await expect(dialog.locator('.error-box')).toHaveCount(0);assertOwner();
-      await dialog.getByRole('button',{name:'打开查询',exact:true}).click();assertOwner();await expect(dialog).toBeHidden();assertOwner();
+      await (await (await import('./navigation-menu')).navigationMenuItem(dialog, {name:'打开查询',exact:true}, assertOwner)).click();assertOwner();await expect(dialog).toBeHidden();assertOwner();
       const query=page().locator('.query-tab:visible'),editor=query.locator('.monaco-editor').getByRole('textbox');await expect(editor).toHaveCount(1);assertOwner();await expect(editor).toBeEditable();assertOwner();
       const modifier=process.platform==='darwin'?'Meta':'Control',table='`'+target.database+'`.`subject`';
       const scenarios=[

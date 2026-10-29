@@ -7,6 +7,7 @@ import { connectionReplacementAcknowledgements } from '../../src/shared/connecti
 import { connectionsTransferZh as text } from '../../src/renderer/locales/connectionsTransfer.zh-CN';
 import { assertQueryFileSourceSettings, assertQueryFileSourceSql, sameQueryFileSource } from '../../src/shared/queryFileSources';
 import { queryFilesZh } from '../../src/renderer/locales/queryFiles.zh-CN';
+import { assertObjectBrowserTabs } from '../../src/shared/objectBrowser';
 
 /** 提取真实统一提交/持久化/打开lease；Zustand与校验器真实执行，仅IPC和计时器为RAM。 */
 function settingsFixture() {
@@ -22,7 +23,7 @@ function settingsFixture() {
   const store = createStore<any>(() => ({ settings: { tabs: [] }, queryFileDirty: {}, queryFileOpenings: {}, dirtyTabs: {}, connections: [{ id: 'target' }], connectionVersions: { target: 0 }, notify }));
   let sequence = 0;
   const timers = new Map<number, () => void>(), schedule = vi.fn((action: () => void, _delay: number) => { const id = ++sequence; timers.set(id, action); return id; });
-  const port = createContext({ exports: {}, JSON, Error, WeakSet, queryFileOpenTargets: new WeakSet(), useWorkspace: store, assertQueryFileSourceSettings, assertQueryFileSourceSql, sameQueryFileSource, queryFilesZh, invoke, errorMessage: String, saveTimer: undefined,
+  const port = createContext({ exports: {}, JSON, Error, WeakSet, queryFileOpenTargets: new WeakSet(), useWorkspace: store, assertObjectBrowserTabs, assertQueryFileSourceSettings, assertQueryFileSourceSql, sameQueryFileSource, queryFilesZh, invoke, errorMessage: String, saveTimer: undefined,
     setTimeout: schedule, clearTimeout: (id: number | undefined) => { if (id !== undefined) timers.delete(id); },
   });
   runInContext(ts.transpileModule(functions.join('\n') + '\nglobalThis.update=(' + update + ');', { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS } }).outputText, port);

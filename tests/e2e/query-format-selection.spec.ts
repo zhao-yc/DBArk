@@ -33,9 +33,9 @@ async function openSource(sql: string) {
     await window.dbark.invoke('queries.create', { name: '格式化来源', connectionId: connection.id, context: { state: 'known', database: null }, sql: source });
   }, sql);
   await page.reload(); await expect(page.locator('.app-statusbar')).toBeVisible();
-  await page.locator('.app-commandbar').getByRole('button', { name: '历史与查询', exact: true }).click();
-  const dialog = page.getByRole('dialog', { name: '历史与保存的查询', exact: true }); await dialog.getByRole('button', { name: '保存的查询', exact: true }).click();
-  await dialog.locator('.history-card').filter({ has: page.getByText('格式化来源', { exact: true }) }).getByRole('button', { name: '在新标签打开', exact: true }).click();
+  await (await navigationMenuItem(page.locator('.navigation-toolbar'), { name: '历史与查询', exact: true })).click();
+  const dialog = page.getByRole('dialog', { name: '历史与保存的查询', exact: true }); await (await navigationMenuItem(dialog, { name: '保存的查询', exact: true })).click();
+  await (await navigationMenuItem(dialog.locator('.history-card').filter({ has: page.getByText('格式化来源', { exact: true }) }), { name: '在新标签打开', exact: true })).click();
   await expect(page.locator('.query-tab:visible .monaco-editor')).toBeVisible();
   expect((await observe(desktop)).value.replaceAll('\r\n', '\n') === sql, '初始正文必须来自保存查询原文').toBe(true); return desktop;
 }
@@ -74,7 +74,7 @@ for (const selected of [true, false]) test(selected ? '真实选区格式化保�
     const chosen = await observe(desktop);
     expect(chosen.focused && chosen.selections?.length === 1 && (selected ? chosen.selections[0].start === start && chosen.selections[0].end === start + body.length : chosen.selections[0].start === chosen.selections[0].end), '真实按键必须得到唯一准确选区或空选区').toBe(true);
     if (entry === '快捷键') await page.keyboard.press('Alt+Shift+f');
-    else await page.getByRole('button', { name: '格式化 SQL', exact: true }).click();
+    else await (await navigationMenuItem(page, { name: '格式化 SQL', exact: true })).click();
     await exactSql(desktop, expected);
     const after = await observe(desktop); expect(after.focused, '格式化两入口完成后均须将焦点保留或返回真实编辑器').toBe(true);
     if (selected) expect(after.selections?.length === 1 && after.selections[0].start === start && after.selections[0].end === expected.length - (suffix.replaceAll('\n', initial.eol).length + 1), '选区跟随格式化范围且不纳入外部原文').toBe(true);
@@ -94,9 +94,12 @@ for (const [label, source, message] of [
   const desktop = await openSource(source), initial = await observe(desktop), before = await sideEffects(desktop);
   for (const entry of ['快捷键', '按钮']) {
     if (entry === '快捷键') { await desktop.page.locator('.query-tab:visible .monaco-editor').getByRole('textbox').focus(); await desktop.page.keyboard.press('Alt+Shift+f'); }
-    else await desktop.page.getByRole('button', { name: '格式化 SQL', exact: true }).click();
+    else await (await navigationMenuItem(desktop.page, { name: '格式化 SQL', exact: true })).click();
     await expect(desktop.page.getByText(message, { exact: true })).toBeVisible();
     const after = await observe(desktop); expect(after.value === initial.value && after.version === initial.version, '拒绝排版不得改模型或编辑版本').toBe(true);
   }
   expect(isDeepStrictEqual(await sideEffects(desktop), before), '拒绝路径不得执行或保存查询').toBe(true);
 });
+
+/** 原门进入具体动作后才加载真实菜单导航，不改变默认/列表阶段的资源边界。 */
+async function navigationMenuItem(...args: Parameters<typeof import('./navigation-menu')['navigationMenuItem']>): Promise<import('@playwright/test').Locator> { return (require('./navigation-menu') as typeof import('./navigation-menu')).navigationMenuItem(...args); }

@@ -88,7 +88,7 @@ export function registerBatchRecordDuplicate(binding: BatchDuplicateTarget): voi
       const probe = await observe(openObserver); await identity(probe); await observe(() => strictClose(probe));
       const observer = await observe(openObserver); await identity(observer); await definition(observer); const before = await baseline(observer);
       const connectionName = '批量复制只读验收 ' + randomUUID();
-      await observe(() => page.locator('.app-commandbar').getByRole('button', { name: zh.common.newConnection, exact: true }).click());
+      await observe(() => page.locator('.navigation-toolbar').getByRole('button', { name: zh.common.newConnection, exact: true }).click());
       const form = page.getByRole('dialog', { name: zh.common.newConnection, exact: true });
       await observe(() => form.getByLabel(zh.connections.text006, { exact: true }).fill(connectionName));
       const dialect = form.getByRole('combobox', { name: new RegExp('^' + zh.connections.text008) });

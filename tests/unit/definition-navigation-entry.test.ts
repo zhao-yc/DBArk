@@ -1,4 +1,4 @@
-import { sidebarMenuRegistrationPort, sidebarMenuRamPort } from '../helpers/sidebarMenuRamPort';
+import { sidebarMenuRegistrationPort, sidebarMenuRamPort, navigationMenuRegistrationPort, navigationMenuRamPort } from '../helpers/sidebarMenuRamPort';
 import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import vm from 'node:vm';
@@ -47,6 +47,7 @@ it('正式分支保留八项原场景，并明确关闭轨迹和启用所属资�
   vm.runInNewContext(ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 } }).outputText, { exports: {}, require(name: string) {
     // 对象树菜单是显式RAM展示依赖，不加载Playwright或计作原生/认证模块。
     if (name === './sidebar-menu') return sidebarMenuRegistrationPort;
+    if (name === './navigation-menu') return navigationMenuRegistrationPort;
     if (name === './desktop-fixture') return { test };
     if (name === './definition-navigation-live') return { enabled: true, environment: {} };
     if (name.endsWith('/tableDefaultEncodingTarget')) return {};
@@ -77,6 +78,7 @@ function formFixture(expireAfterFill = false, scenario?: 'success' | 'exitUnknow
     require(name: string) {
     // 对象树菜单是显式RAM展示依赖，不加载Playwright或计作原生/认证模块。
     if (name === './sidebar-menu') return sidebarMenuRamPort;
+    if (name === './navigation-menu') return navigationMenuRamPort;
       if (name === 'node:crypto') return { randomUUID() { if (scenario) return 'a'.repeat(32); throw Error('表单端口不生成资源'); } };
       if (name === 'node:fs') return new Proxy({}, { get() { throw Error('表单端口禁止证书或文件读取'); } });
       if (name === 'mysql2/promise') return { createConnection() { if (!scenario) throw Error('表单端口禁止实库'); return Promise.resolve({ query: async (sql: unknown) => { queries.push(sql); if (scenario === 'observerUnknown') throw Error('观察结果未知'); return [[]]; }, end }).then(raw => { if (!('connection' in raw)) Object.assign(raw, { connection: { stream: { closed: false, once() {}, removeListener() {}, end() {}, destroy() {} }, end() {}, destroy() {} } }); return raw; }); } };

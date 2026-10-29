@@ -32,13 +32,13 @@ test(explainDiagnosticTitle, async ({ trace }, testInfo) => {
     await root.locator('.explain-node-title > span').click(); await expect(view.getByRole('treeitem')).not.toHaveCount(1);
     await view.getByRole('treeitem').filter({ hasText: 'future_operation' }).click();
     await expect(view.getByLabel('节点详情')).toContainText('future_operation');
-    await view.getByRole('button', { name: '原始输出', exact: true }).click(); await expect(view.getByRole('tree')).toHaveCount(0);
+    await (await navigationMenuItem(view, { name: '原始输出', exact: true })).click(); await expect(view.getByRole('tree')).toHaveCount(0);
     await expect(view.getByLabel('原始输出', { exact: true })).toContainText('future_operation');
     diagnostic?.mark('before-plan-table');
-    await view.getByRole('button', { name: '计划结果表格', exact: true }).click(); await expect(view.getByRole('grid')).toBeVisible();
+    await (await navigationMenuItem(view, { name: '计划结果表格', exact: true })).click(); await expect(view.getByRole('grid')).toBeVisible();
     diagnostic?.mark('after-plan-table');
     expect(await view.evaluate(() => (window as unknown as { explainFixture: { textRequests: number } }).explainFixture.textRequests)).toBe(0);
-    await view.getByRole('button', { name: '获取文本计划', exact: true }).click();
+    await (await navigationMenuItem(view, { name: '获取文本计划', exact: true })).click();
     expect(await view.evaluate(() => (window as unknown as { explainFixture: { textRequests: number } }).explainFixture.textRequests)).toBe(1);
 
     await view.evaluate(() => (window as unknown as { explainFixture: { render(kind: string): void } }).explainFixture.render('maria'));
@@ -48,14 +48,14 @@ test(explainDiagnosticTitle, async ({ trace }, testInfo) => {
     await view.screenshot({ path: testInfo.outputPath('explain-minimum-maria.png') });
     // 模拟最小工作台扣除侧栏和编辑器后剩余的实际结果区域。
     await view.evaluate(() => { const root = document.getElementById('root')!; root.style.width = '720px'; root.style.height = '230px'; });
-    await expect(view.getByRole('button', { name: '获取文本计划', exact: true })).toBeVisible();
+    await expect((await navigationMenuItem(view, { name: '获取文本计划', exact: true }))).toBeVisible();
     await customer.press('ArrowUp'); await view.keyboard.press('ArrowDown'); await expect(customer).toBeFocused();
     expect(await view.locator('.explain-tree-pane').evaluate(element => element.scrollTop)).toBeGreaterThan(0);
     await view.screenshot({ path: testInfo.outputPath('explain-minimum-result-pane.png') });
     await view.evaluate(() => (window as unknown as { explainFixture: { render(kind: string): void } }).explainFixture.render('long'));
     await view.getByRole('treeitem').filter({ hasText: 'constructor' }).click(); await expect(view.getByLabel('节点详情')).toContainText('详情展示已截断');
     const overflow = await view.evaluate(() => document.documentElement.scrollWidth > innerWidth); expect(overflow).toBe(false);
-    await view.getByRole('button', { name: '原始输出', exact: true }).click(); await expect(view.getByLabel('原始输出', { exact: true })).toContainText('中文长条件');
+    await (await navigationMenuItem(view, { name: '原始输出', exact: true })).click(); await expect(view.getByLabel('原始输出', { exact: true })).toContainText('中文长条件');
     await view.screenshot({ path: testInfo.outputPath('explain-minimum-long.png') });
     await view.evaluate(() => (window as unknown as { explainFixture: { render(kind: string): void } }).explainFixture.render('invalid'));
     const warning = view.locator('.explain-warning[role="status"]');
@@ -68,3 +68,6 @@ test(explainDiagnosticTitle, async ({ trace }, testInfo) => {
     await desktop.evaluate(({ BrowserWindow }, id) => BrowserWindow.fromId(id)?.destroy(), windowId);
   }
 });
+
+/** 原门进入具体动作后才加载真实菜单导航，不改变默认/列表阶段的资源边界。 */
+async function navigationMenuItem(...args: Parameters<typeof import('./navigation-menu')['navigationMenuItem']>): Promise<import('@playwright/test').Locator> { return (require('./navigation-menu') as typeof import('./navigation-menu')).navigationMenuItem(...args); }

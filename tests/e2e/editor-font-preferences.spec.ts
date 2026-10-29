@@ -64,7 +64,7 @@ async function settings(owner: Owner) { return owner.page.evaluate(() => window.
 async function activeSql(owner: Owner) { const state = await settings(owner); return state.tabs.find(tab => tab.id === state.activeTabId)?.sql; }
 /** 沿实际命令栏打开设置，存储、preload、IPC和所有编辑器仍使用产品实现。 */
 async function dialog(owner: Owner) {
-  await owner.page.locator('.app-commandbar').getByRole('button', { name: '编辑器字号', exact: true }).click();
+  await (await (await import('./navigation-menu')).navigationMenuItem(owner.page.locator('.navigation-toolbar'), { name: '编辑器字号', exact: true })).click();
   return owner.page.getByRole('dialog', { name: 'SQL 编辑器字号', exact: true });
 }
 /** 仅观察真实Monaco绘制层；不替换updateOptions、模型或撤销操作。 */
@@ -99,9 +99,9 @@ test('字号及换行热更新保留正文与撤销，SQLite落盘并在独立�
     await first.page.keyboard.press(`${modifier}+z`); await expect.poll(() => activeSql(first)).not.toBe(sql + appended);
     const undoBaseline = await activeSql(first);
     await first.page.keyboard.press(`${modifier}+${process.platform === 'darwin' ? 'Shift+z' : 'y'}`); await expect.poll(() => activeSql(first)).toBe(sql + appended);
-    let modal = await dialog(first); await modal.getByLabel('字号（px）', { exact: true }).fill('28'); await modal.getByRole('button', { name: '取消', exact: true }).click();
+    let modal = await dialog(first); await modal.getByLabel('字号（px）', { exact: true }).fill('28'); await (await (await import('./navigation-menu')).navigationMenuItem(modal, { name: '取消', exact: true })).click();
     await expect(modal).toBeHidden(); expect((await style(first)).fontSize).toBe('13px');
-    modal = await dialog(first); await modal.getByLabel('字号（px）', { exact: true }).fill('18'); await modal.getByRole('button', { name: '保存字号', exact: true }).click();
+    modal = await dialog(first); await modal.getByLabel('字号（px）', { exact: true }).fill('18'); await (await (await import('./navigation-menu')).navigationMenuItem(modal, { name: '保存字号', exact: true })).click();
     await expect(modal).toBeHidden(); await expect.poll(() => style(first).then(value => value.fontSize)).toBe('18px');
     expect(await editor.evaluate((element, original) => element === original, originalNode)).toBe(true);
     expect(await style(first)).toEqual({ ...initial, fontSize: '18px', lineHeight: '32px' });
@@ -109,12 +109,12 @@ test('字号及换行热更新保留正文与撤销，SQLite落盘并在独立�
     await editor.getByRole('textbox').focus(); await first.page.keyboard.press(`${modifier}+z`); await expect.poll(() => activeSql(first)).toBe(undoBaseline);
     await first.page.keyboard.press(`${modifier}+${process.platform === 'darwin' ? 'Shift+z' : 'y'}`); await expect.poll(() => activeSql(first)).toBe(sql + appended);
     modal = await dialog(first); await expect(modal.getByLabel('字号（px）', { exact: true })).toHaveValue('18');
-    await modal.getByRole('button', { name: '恢复默认 13', exact: true }).click(); await expect(modal.getByLabel('字号（px）', { exact: true })).toHaveValue('13');
+    await (await (await import('./navigation-menu')).navigationMenuItem(modal, { name: '恢复默认 13', exact: true })).click(); await expect(modal.getByLabel('字号（px）', { exact: true })).toHaveValue('13');
     await first.page.keyboard.press('Escape'); await expect(modal).toBeHidden(); expect((await style(first)).fontSize).toBe('18px');
-    modal = await dialog(first); await modal.getByLabel('字号（px）', { exact: true }).fill('20'); await modal.getByRole('button', { name: '保存字号', exact: true }).click();
+    modal = await dialog(first); await modal.getByLabel('字号（px）', { exact: true }).fill('20'); await (await (await import('./navigation-menu')).navigationMenuItem(modal, { name: '保存字号', exact: true })).click();
     await expect(modal).toBeHidden(); await expect.poll(() => settings(first).then(value => value.editorFontSize)).toBe(20);
     // 用实际长行绘制证明换行开关，而不是只读aria属性或模拟Monaco回包。
-    const wrap = first.page.locator('.app-commandbar').getByRole('button', { name: '自动换行', exact: true });
+    const wrap = first.page.locator('.navigation-toolbar').getByRole('button', { name: '自动换行', exact: true });
     await expect(wrap).toHaveAttribute('aria-pressed', 'true'); await expect.poll(() => editor.locator('.view-line').count()).toBeGreaterThan(2);
     await wrap.click(); await expect(wrap).toHaveAttribute('aria-pressed', 'false'); await expect(editor.locator('.view-line')).toHaveCount(2);
     await wrap.click(); await expect(wrap).toHaveAttribute('aria-pressed', 'true'); await expect.poll(() => editor.locator('.view-line').count()).toBeGreaterThan(2);
@@ -133,7 +133,7 @@ test('字号及换行热更新保留正文与撤销，SQLite落盘并在独立�
     const second = await launch(directory, owners);
     await expect(second.page.locator('.query-tab:visible .monaco-editor').getByRole('textbox')).toBeEditable();
     await expect.poll(() => style(second).then(value => value.fontSize)).toBe('20px');
-    await expect(second.page.locator('.app-commandbar').getByRole('button', { name: '自动换行', exact: true })).toHaveAttribute('aria-pressed', 'false');
+    await expect(second.page.locator('.navigation-toolbar').getByRole('button', { name: '自动换行', exact: true })).toHaveAttribute('aria-pressed', 'false');
     await expect(second.page.locator('.query-tab:visible .monaco-editor .view-line')).toHaveCount(2);
     expect(await activeSql(second)).toBe(sql + appended); expect((await settings(second)).tabs).toEqual(before.tabs);
     expect(await second.page.evaluate(() => window.dbark.invoke('history.list', {}))).toEqual([]);

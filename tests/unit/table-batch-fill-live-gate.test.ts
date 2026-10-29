@@ -1,4 +1,4 @@
-import { sidebarMenuRegistrationPort } from '../helpers/sidebarMenuRamPort';
+import { sidebarMenuRegistrationPort, navigationMenuRegistrationPort } from '../helpers/sidebarMenuRamPort';
 import { readFileSync } from 'node:fs';
 import { runInNewContext } from 'node:vm';
 import ts from 'typescript';
@@ -95,6 +95,7 @@ it('真实正式模块注册原两例与多字段两例并交付严格准备门�
   runInNewContext(compile(live), { exports, require(name: string) {
     // 对象树菜单是显式RAM展示依赖，不加载Playwright或计作原生/认证模块。
     if (name === './sidebar-menu') return sidebarMenuRegistrationPort;
+    if (name === './navigation-menu') return navigationMenuRegistrationPort;
     if (name === 'mysql2') return { default: { createConnection: forbidden } };
     if (name === '../../src/engine/connection') return { closeMysqlConnection: forbidden };
     if (name === './desktop-fixture') return { test, expect, ownedDesktopResources: forbidden, retainOwnedDesktopResources: forbidden };

@@ -15,19 +15,19 @@ async function seed() {
 }
 /** 按实际分页列表打开完整原文，必须新建查询标签而不执行。 */
 async function openSource(name = '源查询') {
-  await page.locator('.app-commandbar').getByRole('button', { name: '历史与查询', exact: true }).click();
+  await (await navigationMenuItem(page.locator('.navigation-toolbar'), { name: '历史与查询', exact: true })).click();
   const dialog = page.getByRole('dialog', { name: '历史与保存的查询', exact: true });
-  await dialog.getByRole('button', { name: '保存的查询', exact: true }).click();
+  await (await navigationMenuItem(dialog, { name: '保存的查询', exact: true })).click();
   const row = dialog.locator('.history-card').filter({ has: page.getByText(name, { exact: true }) });
-  await row.getByRole('button', { name: '在新标签打开', exact: true }).click(); await expect(dialog).toBeHidden();
+  await (await navigationMenuItem(row, { name: '在新标签打开', exact: true })).click(); await expect(dialog).toBeHidden();
   await expect(query().locator('.monaco-editor')).toBeVisible();
 }
 /** 修改仅经过真实编辑器键盘输入，正文不通过保存 IPC 测试桩注入。 */
 async function edit(sql: string) { await query().locator('.monaco-editor').getByRole('textbox').focus(); await page.keyboard.press(`${modifier}+A`); await page.keyboard.insertText(sql); }
 async function save(action: '保存到原查询' | '另存为新查询', name?: string) {
-  await query().getByRole('button', { name: '保存查询', exact: true }).click();
+  await (await navigationMenuItem(query(), { name: '保存查询', exact: true })).click();
   if (name) await saveDialog().getByLabel('查询名称', { exact: true }).fill(name);
-  await saveDialog().getByRole('button', { name: action, exact: true }).click();
+  await (await navigationMenuItem(saveDialog(), { name: action, exact: true })).click();
 }
 
 test('原查询更新、另存独立记录、绑定重启恢复与关闭清除，不执行保存正文', async ({}, info) => {
@@ -62,12 +62,15 @@ test('同源标签陈旧 CAS 拒绝，保留草稿并可另存，不覆盖另一
   await page.locator('.tab-strip .tab-select').first().click(); await edit('SELECT 3; -- 陈旧草稿不得覆盖'); await save('保存到原查询');
   await expect(saveDialog().getByRole('alert')).toContainText('原查询已修改');
   expect((await page.evaluate(() => window.dbark.invoke('queries.list', {})))[0].sql).toContain('另一标签已保存');
-  await saveDialog().getByLabel('查询名称', { exact: true }).fill('冲突草稿副本'); await saveDialog().getByRole('button', { name: '另存为新查询', exact: true }).click(); await expect(saveDialog()).toBeHidden();
+  await saveDialog().getByLabel('查询名称', { exact: true }).fill('冲突草稿副本'); await (await navigationMenuItem(saveDialog(), { name: '另存为新查询', exact: true })).click(); await expect(saveDialog()).toBeHidden();
   const records = await page.evaluate(() => window.dbark.invoke('queries.list', {})); expect(records).toHaveLength(2); expect(records.find(record => record.id === first.source.id)?.sql).toContain('另一标签已保存'); expect(records.find(record => record.name === '冲突草稿副本')?.sql).toContain('陈旧草稿不得覆盖');
   const copyId = records.find(record => record.name === '冲突草稿副本')!.id;
   await page.evaluate(id => window.dbark.invoke('queries.delete', { id }), copyId); await save('保存到原查询');
   await expect(saveDialog().getByRole('alert')).toContainText('原查询已删除');
-  await saveDialog().getByRole('button', { name: '另存为新查询', exact: true }).click(); await expect(saveDialog()).toBeHidden();
+  await (await navigationMenuItem(saveDialog(), { name: '另存为新查询', exact: true })).click(); await expect(saveDialog()).toBeHidden();
   expect((await page.evaluate(() => window.dbark.invoke('queries.list', {}))).some(record => record.id === copyId)).toBe(false);
   expect(await page.evaluate(() => window.dbark.invoke('history.list', {}))).toEqual([]); expect(pageErrors).toEqual([]);
 });
+
+/** 原门进入具体动作后才加载真实菜单导航，不改变默认/列表阶段的资源边界。 */
+async function navigationMenuItem(...args: Parameters<typeof import('./navigation-menu')['navigationMenuItem']>): Promise<import('@playwright/test').Locator> { return (require('./navigation-menu') as typeof import('./navigation-menu')).navigationMenuItem(...args); }

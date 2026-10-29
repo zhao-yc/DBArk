@@ -57,14 +57,14 @@ test('显式采集、原生报告离线切换与参数消息隐藏、默认关�
     await observed(info,async()=>{
       await ownedDesktopResources(info).application.evaluate(({BrowserWindow})=>BrowserWindow.getAllWindows()[0].setSize(1460,980));
       await live.openDatabaseQuery(database);
-      const option=query().getByRole('checkbox',{name:t.option,exact:true});
-      await expect(option).not.toBeChecked();
+      const option=()=>navigationMenuCheckbox(query(),{name:t.option,exact:true},()=>{const owner=ownedDesktopResources(info);if(owner.closed||owner.page!==page)throw Error('警告选项原页面已变化');});
+      await expect(await option()).not.toBeChecked();
       /** 等待真实Main回执；详情查看不得再执行一次用户SQL。 */
       const run=async(source:string)=>{
         const before=(await audit(info)).queries.length; await live.writeSql(source);
-        await query().getByRole('button',{name:'执行全部',exact:true}).click();
+        await (await navigationMenuItem(query(), {name:'执行全部',exact:true})).click();
         await expect.poll(async()=>(await audit(info)).queries.length).toBe(before+1);
-        await expect(query().getByRole('button',{name:'停止',exact:true})).toBeDisabled();
+        await expect((await navigationMenuItem(query(), {name:'停止',exact:true}))).toBeDisabled();
         return (await audit(info)).queries.at(-1)!;
       };
       const original=await run("SELECT CAST('default-warning' AS UNSIGNED) AS value,CONNECTION_ID() AS diagnostic_thread");
@@ -72,14 +72,14 @@ test('显式采集、原生报告离线切换与参数消息隐藏、默认关�
       expect(original.outcome?.warnings).toBeUndefined(); expect(original.outcome?.results[0].warningCount).toBe(1);
       const originalThread=Number(original.outcome?.results[0].rows[0]?.c1); expect(Number.isSafeInteger(originalThread)&&originalThread>0).toBe(true);
       await info.attach('警告专项原产品线程',{body:JSON.stringify({database,originalThread}),contentType:'application/json'});
-      await expect(query().getByRole('button',{name:t.open,exact:true})).toHaveCount(0);
+      await expect((await navigationMenuItem(query(), {name:t.open,exact:true}))).toHaveCount(0);
       await expect(query().locator('.tab-status')).toContainText(t.count(1));
-      await option.check(); await expect(query()).toContainText('ROW_COUNT()');
+      await (await option()).check(); await expect(query()).toContainText('ROW_COUNT()');
       const result=await run("SELECT CAST('<b>ui-warning</b>' AS UNSIGNED) AS first; SELECT CAST('second-warning' AS UNSIGNED) AS second");
       expect(result).toMatchObject({enabled:true,ok:true,outcome:{warnings:{collection:'explicit',omittedStatements:0,truncated:false}}});
       expect(result.outcome?.warnings?.statements).toHaveLength(2);
       const beforeOpen=(await audit(info)).queries.length;
-      await query().getByRole('button',{name:t.open,exact:true}).click();
+      await (await navigationMenuItem(query(), {name:t.open,exact:true})).click();
       const dialog=page.getByRole('dialog',{name:t.title,exact:true});
       await expect(dialog.getByRole('columnheader',{name:t.level,exact:true})).toBeVisible();
       await expect(dialog.getByRole('columnheader',{name:t.code,exact:true})).toBeVisible();
@@ -89,29 +89,35 @@ test('显式采集、原生报告离线切换与参数消息隐藏、默认关�
       await dialog.getByRole('combobox',{name:t.statement,exact:true}).selectOption('1');
       await expect(dialog).toContainText('second-warning'); await expect(dialog).not.toContainText('<b>ui-warning</b>');
       await page.screenshot({path:info.outputPath('查询警告详情.png')});
-      await dialog.getByRole('button',{name:t.close,exact:true}).click(); await expect(dialog).toHaveCount(0);
-      await query().getByRole('button',{name:t.open,exact:true}).click(); await expect(dialog).toBeVisible();
-      await dialog.getByRole('button',{name:t.close,exact:true}).click(); expect((await audit(info)).queries).toHaveLength(beforeOpen);
+      await (await navigationMenuItem(dialog, {name:t.close,exact:true})).click(); await expect(dialog).toHaveCount(0);
+      await (await navigationMenuItem(query(), {name:t.open,exact:true})).click(); await expect(dialog).toBeVisible();
+      await (await navigationMenuItem(dialog, {name:t.close,exact:true})).click(); expect((await audit(info)).queries).toHaveLength(beforeOpen);
       const hidden='只在类型参数输入的警告值',source='SELECT CAST(:hidden AS UNSIGNED) AS parameter_value';
-      await live.writeSql(source); await query().getByRole('button',{name:parameterZh.open,exact:true}).click();
+      await live.writeSql(source); await (await navigationMenuItem(query(), {name:parameterZh.open,exact:true})).click();
       const modal=page.getByRole('dialog',{name:parameterZh.title,exact:true});
-      await expect(option).toBeDisabled(); await modal.getByRole('textbox',{name:parameterZh.value+' hidden',exact:true}).fill(hidden);
+      await expect(query().getByRole('button',{name:'会话与执行选项',exact:true})).toBeDisabled(); await expect(page.locator('.action-menu-panel').getByRole('checkbox',{name:t.option,exact:true})).toHaveCount(0); await modal.getByRole('textbox',{name:parameterZh.value+' hidden',exact:true}).fill(hidden);
       const beforeParameter=(await audit(info)).queries.length;
-      await modal.getByRole('button',{name:parameterZh.execute,exact:true}).click(); await expect(modal).toHaveCount(0);
+      await (await navigationMenuItem(modal, {name:parameterZh.execute,exact:true})).click(); await expect(modal).toHaveCount(0);
       await expect.poll(async()=>(await audit(info)).queries.length).toBe(beforeParameter+1);
-      await expect(query().getByRole('button',{name:'停止',exact:true})).toBeDisabled();
+      await expect((await navigationMenuItem(query(), {name:'停止',exact:true}))).toBeDisabled();
       const parameter=(await audit(info)).queries.at(-1)!;
       expect(parameter).toMatchObject({command:'query.executeParameterized',enabled:true,ok:true});
       expect(parameter.outcome?.warnings?.statements[0].conditions).toEqual([{level:'Warning',code:1292,messageHidden:true}]);
       expect(JSON.stringify(parameter.outcome?.warnings)).not.toContain(hidden);
-      await query().getByRole('button',{name:t.open,exact:true}).click(); await expect(dialog).toContainText(t.hidden);
-      await expect(dialog).not.toContainText(hidden); await dialog.getByRole('button',{name:t.close,exact:true}).click();
+      await (await navigationMenuItem(query(), {name:t.open,exact:true})).click(); await expect(dialog).toContainText(t.hidden);
+      await expect(dialog).not.toContainText(hidden); await (await navigationMenuItem(dialog, {name:t.close,exact:true})).click();
       const history=await page.evaluate(()=>window.dbark.invoke('history.list',{}));
       const entry=history.find(item=>item.sql===source); expect(entry?.success).toBe(true); expect(JSON.stringify(entry)).not.toContain(hidden);
-      await option.uncheck(); const clean=await run('SELECT 1 AS clean');
+      await (await option()).uncheck(); const clean=await run('SELECT 1 AS clean');
       expect(clean.enabled).toBe(false); expect(clean.outcome?.warnings).toBeUndefined();
-      await expect(query().getByRole('button',{name:t.open,exact:true})).toHaveCount(0);
+      await expect((await navigationMenuItem(query(), {name:t.open,exact:true}))).toHaveCount(0);
       expect((await audit(info)).queries).toHaveLength(4); expect(pageErrors).toEqual([]);
     });
   },info,{captureFailureScreenshot:false});
 });
+
+/** 原门进入具体动作后才加载真实菜单导航，不改变默认/列表阶段的资源边界。 */
+async function navigationMenuItem(...args: Parameters<typeof import('./navigation-menu')['navigationMenuItem']>): Promise<import('@playwright/test').Locator> { return (require('./navigation-menu') as typeof import('./navigation-menu')).navigationMenuItem(...args); }
+
+/** 实际进入会话菜单后取得原警告复选框，不引入默认阶段的资源加载。 */
+async function navigationMenuCheckbox(...args: Parameters<typeof import('./navigation-menu')['navigationMenuCheckbox']>): Promise<import('@playwright/test').Locator> { return (require('./navigation-menu') as typeof import('./navigation-menu')).navigationMenuCheckbox(...args); }

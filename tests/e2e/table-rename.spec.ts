@@ -13,14 +13,14 @@ const target = (context: LiveContext, name: string) => `\`${context.database}\`.
 async function open(context: LiveContext, name: string) {
   const connection = page.locator('.connection-node').filter({ has: page.locator('.connection-row').getByText(context.connectionName, { exact: true }) });
   await connection.locator('.connection-row').getByRole('button', { name: context.connectionName, exact: true }).focus(); await clickSidebarAction(connection, { name: '刷新连接', exact: true });
-  await connection.locator('.database-row').getByRole('button', { name: context.database, exact: true }).click();
+  await (await (await import('./navigation-menu')).navigationMenuItem(connection.locator('.database-row'), { name: context.database, exact: true })).click();
   const row = connection.locator('.object-row').filter({ has: page.getByText(name, { exact: true }) }); await row.getByText(name, { exact: true }).click();
   await expect(tablePage().locator('.context-bar')).toContainText(name); await expect(tablePage().locator('.loading-overlay')).toHaveCount(0); return row;
 }
 async function ddl(context: LiveContext, name: string) { const [rows] = await context.observer.query<RowDataPacket[]>('SHOW CREATE TABLE ' + target(context, name)); return String(rows[0]['Create Table']); }
 /** 只通过中文复选框确认三项风险，SQL编辑器必须保持只读。 */
 async function preview(context: LiveContext, sourceName: string, targetName: string) {
-  await dialog().getByRole('button', { name: text.preview, exact: true }).click();
+  await (await (await import('./navigation-menu')).navigationMenuItem(dialog(), { name: text.preview, exact: true })).click();
   await expect(dialog().getByRole('heading', { name: text.fixedSql, exact: true })).toBeVisible();
   const editor = dialog().locator('.monaco-editor'), lines = editor.locator('.view-lines');
   // 本例唯一单行SQL用静态限定名构造；预期空格按Monaco的NBSP展示编码，不调用生产计划器。
@@ -46,8 +46,8 @@ test.describe('同库表重命名：正式Electron与真实数据库准备', () 
     await isolatedDatabase(async context => {
       const name = 'rename_complex'; await context.observer.query(`CREATE TABLE ${target(context, name)}(id INT NOT NULL AUTO_INCREMENT,s VARCHAR(80) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin,g INT GENERATED ALWAYS AS(length(s)) STORED,PRIMARY KEY(id),KEY pref(s(8))) ENGINE=InnoDB COMMENT='原说明'`);
       const row = await open(context, name); await row.hover(); await clickSidebarAction(row, { name: `${text.title} ${name}`, exact: true });
-      await expect(dialog().getByRole('textbox', { name: text.newName, exact: true })).toBeEnabled(); await dialog().getByRole('button', { name: text.close, exact: true }).click();
-      await tablePage().getByRole('button', { name: text.title, exact: true }).click(); const before = await ddl(context, name);
+      await expect(dialog().getByRole('textbox', { name: text.newName, exact: true })).toBeEnabled(); await (await (await import('./navigation-menu')).navigationMenuItem(dialog(), { name: text.close, exact: true })).click();
+      await (await (await import('./navigation-menu')).navigationMenuItem(tablePage(), { name: text.title, exact: true })).click(); const before = await ddl(context, name);
       await dialog().getByRole('textbox', { name: text.newName, exact: true }).fill('renamed_complex'); await preview(context, name, 'renamed_complex'); expect(await ddl(context, name)).toBe(before);
       await dialog().getByRole('button', { name: text.apply, exact: true }).dblclick(); await expect(dialog()).toBeHidden({ timeout: 20000 });
       await expect(tablePage().locator('.context-bar')).toContainText('renamed_complex'); await expect(tablePage().locator('.loading-overlay')).toHaveCount(0);
@@ -58,21 +58,21 @@ test.describe('同库表重命名：正式Electron与真实数据库准备', () 
   test('实际目标已存在时预览拒绝，保留草稿和两张真实表', async ({}, info) => {
     await isolatedDatabase(async context => {
       for (const name of ['rename_conflict', 'occupied']) await context.observer.query(`CREATE TABLE ${target(context, name)}(id INT PRIMARY KEY) ENGINE=InnoDB`);
-      await open(context, 'rename_conflict'); await tablePage().getByRole('button', { name: text.title, exact: true }).click();
-      await dialog().getByRole('textbox', { name: text.newName, exact: true }).fill('occupied'); await dialog().getByRole('button', { name: text.preview, exact: true }).click();
+      await open(context, 'rename_conflict'); await (await (await import('./navigation-menu')).navigationMenuItem(tablePage(), { name: text.title, exact: true })).click();
+      await dialog().getByRole('textbox', { name: text.newName, exact: true }).fill('occupied'); await (await (await import('./navigation-menu')).navigationMenuItem(dialog(), { name: text.preview, exact: true })).click();
       await expect(dialog()).toContainText('占用'); await expect(dialog().getByRole('textbox', { name: text.newName, exact: true })).toHaveValue('occupied');
       expect(await ddl(context, 'rename_conflict')).toContain('CREATE TABLE `rename_conflict`'); expect(await ddl(context, 'occupied')).toContain('CREATE TABLE `occupied`');
-      await acceptNativeConfirmation(); await dialog().getByRole('button', { name: text.close, exact: true }).click();
+      await acceptNativeConfirmation(); await (await (await import('./navigation-menu')).navigationMenuItem(dialog(), { name: text.close, exact: true })).click();
     }, info);
   });
   test('返回编辑释放旧预览，草稿关闭确认，未确认风险不会执行', async ({}, info) => {
     await isolatedDatabase(async context => {
       await context.observer.query(`CREATE TABLE ${target(context, 'rename_back')}(id INT PRIMARY KEY) ENGINE=InnoDB`); await open(context, 'rename_back');
-      await tablePage().getByRole('button', { name: text.title, exact: true }).click(); await dialog().getByRole('textbox', { name: text.newName, exact: true }).fill('rename_back_new');
-      await dialog().getByRole('button', { name: text.preview, exact: true }).click(); await expect(dialog().getByRole('button', { name: text.apply, exact: true })).toBeDisabled();
-      await dialog().getByRole('button', { name: text.back, exact: true }).click(); await expect(dialog().getByRole('heading', { name: text.fixedSql, exact: true })).toHaveCount(0); await expect(dialog().getByRole('textbox', { name: text.newName, exact: true })).toHaveValue('rename_back_new');
+      await (await (await import('./navigation-menu')).navigationMenuItem(tablePage(), { name: text.title, exact: true })).click(); await dialog().getByRole('textbox', { name: text.newName, exact: true }).fill('rename_back_new');
+      await (await (await import('./navigation-menu')).navigationMenuItem(dialog(), { name: text.preview, exact: true })).click(); await expect(dialog().getByRole('button', { name: text.apply, exact: true })).toBeDisabled();
+      await (await (await import('./navigation-menu')).navigationMenuItem(dialog(), { name: text.back, exact: true })).click(); await expect(dialog().getByRole('heading', { name: text.fixedSql, exact: true })).toHaveCount(0); await expect(dialog().getByRole('textbox', { name: text.newName, exact: true })).toHaveValue('rename_back_new');
       const tasks = await page.evaluate(() => window.dbark.invoke('tasks.list', {})); expect(tasks.some(task => task.kind === 'schema.tableRename.apply')).toBe(false);
-      await acceptNativeConfirmation(); await dialog().getByRole('button', { name: text.close, exact: true }).click(); expect(await ddl(context, 'rename_back')).toContain('CREATE TABLE `rename_back`');
+      await acceptNativeConfirmation(); await (await (await import('./navigation-menu')).navigationMenuItem(dialog(), { name: text.close, exact: true })).click(); expect(await ddl(context, 'rename_back')).toContain('CREATE TABLE `rename_back`');
     }, info);
   });
   test('真实触发器使两个入口只读，保留原对象及定义', async ({}, info) => {
@@ -83,11 +83,11 @@ test.describe('同库表重命名：正式Electron与真实数据库准备', () 
       await row.hover(); await clickSidebarAction(row, { name: `${text.title} rename_readonly`, exact: true });
       await expect(dialog()).toContainText(text.readonly); await expect(dialog()).toContainText('触发器');
       await expect(dialog().getByRole('textbox', { name: text.newName, exact: true })).toBeDisabled();
-      await dialog().getByRole('button', { name: text.close, exact: true }).click();
-      await tablePage().getByRole('button', { name: text.title, exact: true }).click();
+      await (await (await import('./navigation-menu')).navigationMenuItem(dialog(), { name: text.close, exact: true })).click();
+      await (await (await import('./navigation-menu')).navigationMenuItem(tablePage(), { name: text.title, exact: true })).click();
       await expect(dialog()).toContainText(text.readonly); await expect(dialog()).toContainText('触发器');
       await expect(dialog().getByRole('textbox', { name: text.newName, exact: true })).toBeDisabled();
-      await dialog().getByRole('button', { name: text.close, exact: true }).click();
+      await (await (await import('./navigation-menu')).navigationMenuItem(dialog(), { name: text.close, exact: true })).click();
       expect(await ddl(context, 'rename_readonly')).toBe(before);
       const [triggers] = await context.observer.query<RowDataPacket[]>('SELECT TRIGGER_NAME FROM information_schema.TRIGGERS WHERE BINARY TRIGGER_SCHEMA=BINARY ? AND BINARY EVENT_OBJECT_TABLE=BINARY ?', [context.database, 'rename_readonly']);
       expect(triggers.map(row => row.TRIGGER_NAME)).toEqual(['rename_readonly_tr']);

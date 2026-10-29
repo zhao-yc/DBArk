@@ -1,4 +1,4 @@
-import { sidebarMenuRamPort } from '../helpers/sidebarMenuRamPort';
+import { sidebarMenuRamPort, navigationMenuRamPort } from '../helpers/sidebarMenuRamPort';
 import { readFileSync } from 'node:fs';
 import { createContext, runInContext } from 'node:vm';
 import ts from 'typescript';
@@ -18,6 +18,7 @@ function harness(quitFails: boolean, taskState?: 'running' | 'unknown') {
   const context = createContext({ exports, process: { env: { ...environment,DBARK_TEST_EXPECTED_SERVER_UUID:uuid } }, require(name: string) {
     // 对象树菜单是显式RAM展示依赖，不加载Playwright或计作原生/认证模块。
     if (name === './sidebar-menu') return sidebarMenuRamPort;
+    if (name === './navigation-menu') return navigationMenuRamPort;
     if (name === 'node:crypto') return { randomUUID: () => '00000000-0000-0000-0000-000000000001' };
     if (name === 'mysql2/promise') return { createConnection: async () => observer };
     if (name === './desktop-fixture') return { test, expect,ownedDesktopResources:()=>({page,closed:false}),retainOwnedDesktopResources:()=>calls.push('retain'),confirmOwnedDesktopExit:async()=>{calls.push('quit');if(quitFails)throw quit;} };

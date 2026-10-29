@@ -24,7 +24,7 @@ async function excelDialog(mode: 'import' | 'export', path: string) {
     if (input.mode === 'export') dialog.showSaveDialog = (async () => ({ canceled: false, filePath: input.path })) as typeof dialog.showSaveDialog;
     else dialog.showOpenDialog = (async () => ({ canceled: false, filePaths: [input.path] })) as typeof dialog.showOpenDialog;
   }, { mode, path });
-  await page.locator('.table-tab:visible').getByRole('button', { name: mode === 'import' ? '导入' : '导出', exact: true }).click();
+  await (await (await import('./navigation-menu')).navigationMenuItem(page.locator('.table-tab:visible'), { name: mode === 'import' ? '导入' : '导出', exact: true })).click();
   await page.getByRole('dialog').getByRole('combobox').first().selectOption('xlsx');
   const modal = page.getByRole('dialog'); await expect(modal).toContainText(mode === 'import' ? '导入 Excel' : '导出 Excel');
   await modal.locator('.file-picker').click(); return modal;
@@ -44,11 +44,11 @@ test('200 隔离库 Excel 样本与完整流式导出、字段映射导入及精
     await openTable(context, 'excel_source');
     const samplePath = join(dataDir, '样本.xlsx'), sample = await excelDialog('export', samplePath);
     await expect(sample.getByRole('combobox', { name: '导出范围', exact: true })).toHaveValue('sample');
-    await sample.getByRole('button', { name: '开始导出', exact: true }).click(); await expect(sample.locator('.success-box')).toContainText('1000 行', { timeout: 30000 }); await sample.getByRole('button', { name: '完成', exact: true }).click();
+    await (await (await import('./navigation-menu')).navigationMenuItem(sample, { name: '开始导出', exact: true })).click(); await expect(sample.locator('.success-box')).toContainText('1000 行', { timeout: 30000 }); await (await (await import('./navigation-menu')).navigationMenuItem(sample, { name: '完成', exact: true })).click();
     const sampleBook = new ExcelJS.Workbook(); await sampleBook.xlsx.readFile(samplePath); expect(sampleBook.worksheets[0].rowCount).toBe(1001);
     const fullPath = join(dataDir, '完整.xlsx'), full = await excelDialog('export', fullPath);
-    await full.getByRole('combobox', { name: '导出范围', exact: true }).selectOption('all'); await full.getByRole('button', { name: '开始导出', exact: true }).click();
-    await expect(full.locator('.success-box')).toContainText('1201 行', { timeout: 30000 }); await full.getByRole('button', { name: '完成', exact: true }).click();
+    await full.getByRole('combobox', { name: '导出范围', exact: true }).selectOption('all'); await (await (await import('./navigation-menu')).navigationMenuItem(full, { name: '开始导出', exact: true })).click();
+    await expect(full.locator('.success-box')).toContainText('1201 行', { timeout: 30000 }); await (await (await import('./navigation-menu')).navigationMenuItem(full, { name: '完成', exact: true })).click();
     const fullBook = new ExcelJS.Workbook(); await fullBook.xlsx.readFile(fullPath); expect(fullBook.worksheets[0].rowCount).toBe(1202);
     expect(fullBook.worksheets[0].getCell('A2').text).toBe('18446744073709550000'); expect(fullBook.worksheets[0].getCell('B2').text).toBe('123456789012345678.123456789012');
     expect(fullBook.worksheets[0].getCell('D5').type).not.toBe(ExcelJS.ValueType.Formula);
@@ -58,8 +58,8 @@ test('200 隔离库 Excel 样本与完整流式导出、字段映射导入及精
     await expect(input.getByRole('combobox', { name: '字段“id”的目标列', exact: true })).toHaveValue('id');
     await expect(input.getByRole('button', { name: '开始导入', exact: true })).toBeEnabled();
     await page.screenshot({ path: testInfo.outputPath('excel-live-mapping.png') });
-    await input.getByRole('button', { name: '开始导入', exact: true }).click(); await expect(input.locator('.success-box')).toContainText('1201 行', { timeout: 45000 });
-    await expect(input.locator('.error-box')).toHaveCount(0); await input.getByRole('button', { name: '完成', exact: true }).click();
+    await (await (await import('./navigation-menu')).navigationMenuItem(input, { name: '开始导入', exact: true })).click(); await expect(input.locator('.success-box')).toContainText('1201 行', { timeout: 45000 });
+    await expect(input.locator('.error-box')).toHaveCount(0); await (await (await import('./navigation-menu')).navigationMenuItem(input, { name: '完成', exact: true })).click();
     const comparison = `SELECT CAST(id AS CHAR) AS id, CAST(amount AS CHAR) AS amount, DATE_FORMAT(happened, '%Y-%m-%d %H:%i:%s.%f') AS happened, payload, HEX(bytes) AS bytes, CAST(flags AS UNSIGNED) AS flags`;
     const [actual] = await context.observer.query<RowDataPacket[]>(`${comparison} FROM ${q('excel_target')} ORDER BY id`);
     const [expected] = await context.observer.query<RowDataPacket[]>(`${comparison} FROM ${q('excel_source')} ORDER BY id`);

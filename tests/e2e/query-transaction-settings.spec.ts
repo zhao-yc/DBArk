@@ -49,20 +49,20 @@ async function audit(info: TestInfo): Promise<Audit> {
 /** 等待原读取落定，禁止把显示了一个旧快照当作新读取成功。 */
 async function open(info: TestInfo) {
   const before = (await audit(info)).settings.length;
-  await query().getByRole('button', { name: t.open, exact: true }).click(); await expect(dialog()).toBeVisible();
+  await (await navigationMenuItem(query(), { name: t.open, exact: true })).click(); await expect(dialog()).toBeVisible();
   await expect.poll(async () => (await audit(info)).settings.length).toBe(before + 1);
   expect((await audit(info)).settings.at(-1)?.ok).toBe(true);
-  await expect(dialog().getByRole('button', { name: t.refresh, exact: true })).toBeEnabled();
+  await expect((await navigationMenuItem(dialog(), { name: t.refresh, exact: true }))).toBeEnabled();
 }
 /** 只用正式控件修改默认值，等待原apply的真实回包。 */
 async function apply(info: TestInfo, isolation: string, readOnly: boolean) {
   const before = (await audit(info)).settings.length;
   await dialog().getByRole('combobox', { name: t.isolation, exact: true }).selectOption(isolation);
   await dialog().getByRole('checkbox', { name: t.readOnly, exact: true }).setChecked(readOnly);
-  await dialog().getByRole('button', { name: t.apply, exact: true }).click();
+  await (await navigationMenuItem(dialog(), { name: t.apply, exact: true })).click();
   await expect.poll(async () => (await audit(info)).settings.length).toBe(before + 1);
   expect((await audit(info)).settings.at(-1)).toMatchObject({ command: 'query.transactionSettings.apply', ok: true, result: { isolation, readOnly, transactionOpen: false } });
-  await expect(dialog().getByRole('button', { name: t.refresh, exact: true })).toBeEnabled();
+  await expect((await navigationMenuItem(dialog(), { name: t.refresh, exact: true }))).toBeEnabled();
 }
 
 test('正式事务设置保持结果与历史、只读拒写、未提交事务拒改并回滚、双标签默认隔离', async ({}, info) => {
@@ -83,30 +83,30 @@ test('正式事务设置保持结果与历史、只读拒写、未提交事务�
       const idA = await dialog().getByLabel(t.physicalId, { exact: true }).innerText();
       const baseline = { isolation: await dialog().getByRole('combobox', { name: t.isolation, exact: true }).inputValue(), readOnly: await dialog().getByRole('checkbox', { name: t.readOnly, exact: true }).isChecked() };
       await apply(info, 'READ COMMITTED', true);
-      await dialog().getByRole('button', { name: t.close, exact: true }).click();
+      await (await navigationMenuItem(dialog(), { name: t.close, exact: true })).click();
       expect(await query().locator('.result-body').innerText()).toBe(result); await expect(header).toHaveAttribute('aria-sort', 'ascending');
       await expect(query().locator('.monaco-editor .view-lines')).toContainText(source);
       expect((await audit(info)).commands.filter(command => command === 'query.execute')).toHaveLength(before.commands.filter(command => command === 'query.execute').length);
       expect(await page.evaluate(async () => (await window.dbark.invoke('history.list', {})).map(row => row.id))).toEqual(history);
-      await query().getByRole('button', { name: zh.common.transactionBegin, exact: true }).click();
-      await live.writeSql('INSERT INTO tx_subject VALUES(1,\'只读事务应拒绝\')'); await query().getByRole('button', { name: '执行全部', exact: true }).click();
-      await expect(query().getByRole('button', { name: '停止', exact: true })).toBeDisabled(); await expect(query().locator('.error-box')).toContainText(/read.only/i);
-      await open(info); await expect(dialog().getByRole('button', { name: t.apply, exact: true })).toBeDisabled(); await expect(dialog().getByRole('combobox', { name: t.isolation, exact: true })).toBeDisabled();
+      await (await navigationMenuItem(query(), { name: zh.common.transactionBegin, exact: true })).click();
+      await live.writeSql('INSERT INTO tx_subject VALUES(1,\'只读事务应拒绝\')'); await (await navigationMenuItem(query(), { name: '执行全部', exact: true })).click();
+      await expect((await navigationMenuItem(query(), { name: '停止', exact: true }))).toBeDisabled(); await expect(query().locator('.error-box')).toContainText(/read.only/i);
+      await open(info); await expect((await navigationMenuItem(dialog(), { name: t.apply, exact: true }))).toBeDisabled(); await expect(dialog().getByRole('combobox', { name: t.isolation, exact: true })).toBeDisabled();
       expect((await audit(info)).settings.at(-1)).toMatchObject({ ok: true, result: { transactionOpen: true, serverConnectionId: idA.trim() } });
-      await dialog().getByRole('button', { name: t.close, exact: true }).click(); await query().getByRole('button', { name: zh.common.transactionRollback, exact: true }).click();
-      await open(info); await apply(info, 'SERIALIZABLE', false); await dialog().getByRole('button', { name: t.close, exact: true }).click();
-      await query().getByRole('button', { name: zh.common.transactionBegin, exact: true }).click(); await live.executeSql('INSERT INTO tx_subject VALUES(2,\'必须保持未提交\')');
+      await (await navigationMenuItem(dialog(), { name: t.close, exact: true })).click(); await (await navigationMenuItem(query(), { name: zh.common.transactionRollback, exact: true })).click();
+      await open(info); await apply(info, 'SERIALIZABLE', false); await (await navigationMenuItem(dialog(), { name: t.close, exact: true })).click();
+      await (await navigationMenuItem(query(), { name: zh.common.transactionBegin, exact: true })).click(); await live.executeSql('INSERT INTO tx_subject VALUES(2,\'必须保持未提交\')');
       const count = async () => (await observer.query<RowDataPacket[]>(`SELECT id FROM \`${database}\`.tx_subject WHERE id IN(1,2)`))[0]; expect(await count()).toEqual([]);
-      await open(info); await expect(dialog().getByRole('button', { name: t.apply, exact: true })).toBeDisabled(); expect(await count()).toEqual([]);
+      await open(info); await expect((await navigationMenuItem(dialog(), { name: t.apply, exact: true }))).toBeDisabled(); expect(await count()).toEqual([]);
       await page.screenshot({ path: info.outputPath('活动事务禁止修改默认设置.png') });
-      await dialog().getByRole('button', { name: t.close, exact: true }).click(); await query().getByRole('button', { name: zh.common.transactionRollback, exact: true }).click(); expect(await count()).toEqual([]);
+      await (await navigationMenuItem(dialog(), { name: t.close, exact: true })).click(); await (await navigationMenuItem(query(), { name: zh.common.transactionRollback, exact: true })).click(); expect(await count()).toEqual([]);
       await live.openDatabaseQuery(database); await open(info);
       const idB = await dialog().getByLabel(t.physicalId, { exact: true }).innerText(); expect(idB.trim()).not.toBe(idA.trim());
       await expect(dialog().getByRole('combobox', { name: t.isolation, exact: true })).toHaveValue(baseline.isolation);
       await expect(dialog().getByRole('checkbox', { name: t.readOnly, exact: true })).toBeChecked({ checked: baseline.readOnly });
       expect((await audit(info)).settings.filter(item => item.command === 'query.transactionSettings.apply')).toHaveLength(2);
       expect((await audit(info)).settings.every(item => item.ok)).toBe(true);
-      await page.screenshot({ path: info.outputPath('第二标签独立默认事务设置.png') }); await dialog().getByRole('button', { name: t.close, exact: true }).click(); expect(pageErrors).toEqual([]);
+      await page.screenshot({ path: info.outputPath('第二标签独立默认事务设置.png') }); await (await navigationMenuItem(dialog(), { name: t.close, exact: true })).click(); expect(pageErrors).toEqual([]);
     });
   }, info, { captureFailureScreenshot: false });
 });
@@ -135,19 +135,19 @@ test('正式自动提交开关保持原结果、明确确认活动事务提交�
         await dialog().getByRole('checkbox', { name: t.autocommitChoice, exact: true }).setChecked(enabled);
         const label = enabled ? commit ? t.enableAndCommit : t.enableAutocommit : t.disableAutocommit;
         if (commit) {
-          await expect(dialog().getByRole('button', { name: label, exact: true })).toBeDisabled();
+          await expect((await navigationMenuItem(dialog(), { name: label, exact: true }))).toBeDisabled();
           expect((await audit(info)).settings.length).toBe(before);
           await expect(dialog()).toContainText(t.implicitCommit);
           await dialog().getByRole('checkbox', { name: t.acknowledgeCommit, exact: true }).check();
-          await dialog().getByRole('button', { name: label, exact: true }).scrollIntoViewIfNeeded();
+          await (await navigationMenuItem(dialog(), { name: label, exact: true })).scrollIntoViewIfNeeded();
           await page.screenshot({ path: info.outputPath('自动提交开启前明确确认.png') });
         }
-        await dialog().getByRole('button', { name: label, exact: true }).click();
+        await (await navigationMenuItem(dialog(), { name: label, exact: true })).click();
         await expect.poll(async () => (await audit(info)).settings.length).toBe(before + 1);
         expect((await audit(info)).settings.at(-1)).toMatchObject({ command: 'query.autocommit.apply', ok: true, input: { autocommit: enabled, allowImplicitCommit: commit }, result: { confirmed: true, changed: true, implicitCommitAcknowledged: commit, snapshot: { autocommit: enabled, serverConnectionId: idA, database } } });
-        await expect(dialog().getByRole('button', { name: t.refresh, exact: true })).toBeEnabled();
+        await expect((await navigationMenuItem(dialog(), { name: t.refresh, exact: true }))).toBeEnabled();
       };
-      await setAutomatic(false); await dialog().getByRole('button', { name: t.close, exact: true }).click();
+      await setAutomatic(false); await (await navigationMenuItem(dialog(), { name: t.close, exact: true })).click();
       expect(await query().locator('.result-body').innerText()).toBe(result); await expect(header).toHaveAttribute('aria-sort', 'ascending');
       await expect(query().locator('.monaco-editor .view-lines')).toContainText(source);
       expect(await page.evaluate(async () => (await window.dbark.invoke('history.list', {})).map(row => row.id))).toEqual(history);
@@ -156,11 +156,11 @@ test('正式自动提交开关保持原结果、明确确认活动事务提交�
       await open(info); await expect(dialog().getByLabel(t.transaction, { exact: true })).toHaveText(t.yes);
       await setAutomatic(true, true); await expect(dialog().getByRole('status', { name: t.status })).toContainText('原活动事务已确认提交');
       const committed = [{ id: 1, note: '已确认隐式提交' }, { id: 2, note: '控制二' }, { id: 3, note: '控制三' }]; expect(await rows()).toEqual(committed);
-      await dialog().getByRole('button', { name: t.close, exact: true }).click();
-      await query().getByRole('button', { name: zh.common.transactionBegin, exact: true }).click(); await live.executeSql("UPDATE tx_subject SET note='关闭不应提交' WHERE id=2");
-      await open(info); await expect(dialog().getByRole('button', { name: t.enableAutocommit, exact: true })).toBeDisabled();
+      await (await navigationMenuItem(dialog(), { name: t.close, exact: true })).click();
+      await (await navigationMenuItem(query(), { name: zh.common.transactionBegin, exact: true })).click(); await live.executeSql("UPDATE tx_subject SET note='关闭不应提交' WHERE id=2");
+      await open(info); await expect((await navigationMenuItem(dialog(), { name: t.enableAutocommit, exact: true }))).toBeDisabled();
       await setAutomatic(false); await expect(dialog().getByLabel(t.transaction, { exact: true })).toHaveText(t.yes); expect(await rows()).toEqual(committed);
-      await dialog().getByRole('button', { name: t.close, exact: true }).click(); await query().getByRole('button', { name: zh.common.transactionRollback, exact: true }).click(); expect(await rows()).toEqual(committed);
+      await (await navigationMenuItem(dialog(), { name: t.close, exact: true })).click(); await (await navigationMenuItem(query(), { name: zh.common.transactionRollback, exact: true })).click(); expect(await rows()).toEqual(committed);
       await live.openDatabaseQuery(database); await open(info); const idB = (await dialog().getByLabel(t.physicalId, { exact: true }).innerText()).trim(); expect(idB).not.toBe(idA);
       await expect(dialog().getByLabel(t.autocommit, { exact: true })).toHaveText(t.yes);
       await expect(dialog().getByRole('combobox', { name: t.isolation, exact: true })).toHaveValue(defaults.isolation);
@@ -170,7 +170,10 @@ test('正式自动提交开关保持原结果、明确确认活动事务提交�
       expect(taskRecords.some(record => record.status === 'completed' && record.message === '服务器已确认自动提交开启；原活动事务已确认提交')).toBe(true);
       await info.attach('自动提交已提交三行独立读回', { body: JSON.stringify({ database, idA, idB, rows: await rows() }), contentType: 'application/json' });
       expect((await audit(info)).settings.filter(item => item.command === 'query.autocommit.apply')).toHaveLength(3);
-      await dialog().getByRole('button', { name: t.close, exact: true }).click(); expect(pageErrors).toEqual([]);
+      await (await navigationMenuItem(dialog(), { name: t.close, exact: true })).click(); expect(pageErrors).toEqual([]);
     });
   }, info, { captureFailureScreenshot: false });
 });
+
+/** 原门进入具体动作后才加载真实菜单导航，不改变默认/列表阶段的资源边界。 */
+async function navigationMenuItem(...args: Parameters<typeof import('./navigation-menu')['navigationMenuItem']>): Promise<import('@playwright/test').Locator> { return (require('./navigation-menu') as typeof import('./navigation-menu')).navigationMenuItem(...args); }

@@ -155,7 +155,7 @@ export function registerTableFilteredSelectUiTests(environment: Environment): vo
     }, { database, senderId }));
     const state = () => step(() => application.evaluate(() => { const root = globalThis as any; if (!root.__filteredSelectUiHandler) throw Error('当前筛选SELECT审计缺失'); return structuredClone(root.__filteredSelectUi) as Audit; }));
     const settings = () => step(() => page.evaluate(() => window.dbark.invoke('settings.get', {})));
-    await step(() => page.locator('.app-commandbar').getByRole('button', { name: zh.common.newConnection, exact: true }).click()); const connection = page.getByRole('dialog', { name: zh.common.newConnection, exact: true });
+    await step(() => page.locator('.navigation-toolbar').getByRole('button', { name: zh.common.newConnection, exact: true }).click()); const connection = page.getByRole('dialog', { name: zh.common.newConnection, exact: true });
     for (const [label, value] of [[zh.connections.text006, '当前筛选SELECT本例'], [zh.connections.text009, values.DBARK_TEST_HOST], [zh.connections.text010, '13384'], [zh.common.user, values.DBARK_TEST_USER], [zh.connections.text011, values.DBARK_TEST_PASSWORD], [zh.connections.text012, database]]) await step(() => connection.getByLabel(label, { exact: true }).fill(value));
     await step(() => connection.getByLabel(zh.connections.text016, { exact: true }).uncheck()); await step(() => connection.getByRole('button', { name: zh.connections.text036, exact: true }).click()); await step(() => expect(connection).toBeHidden());
     const profiles = await step(() => page.evaluate(() => window.dbark.invoke('connections.list', {}))); expect(profiles).toHaveLength(1); const profile = profiles[0];

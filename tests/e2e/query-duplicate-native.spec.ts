@@ -71,7 +71,7 @@ test('离线原生复制当前全文、隔离保存来源及副本编辑，并�
   try {
     expect(trace).toBe('off'); expect(screenshot).toBe('off'); expect(video).toBe('off');
     await expect(page.locator('.tab-strip .tab-select')).toHaveCount(0);
-    await page.locator('.app-commandbar').getByRole('button', { name: zh.common.newConnection, exact: true }).click(); desktop(info);
+    await (await navigationMenuItem(page.locator('.navigation-toolbar'), { name: zh.common.newConnection, exact: true })).click(); desktop(info);
     const connection = page.getByRole('dialog', { name: zh.common.newConnection, exact: true });
     await connection.getByLabel(zh.connections.text006, { exact: true }).fill(connectionName); desktop(info);
     await connection.getByLabel(zh.connections.text009, { exact: true }).fill('127.0.0.1'); desktop(info);
@@ -83,10 +83,10 @@ test('离线原生复制当前全文、隔离保存来源及副本编辑，并�
     await expect(connection.getByLabel(zh.connections.text011, { exact: true })).toHaveValue('');
     await expect(connection.getByRole('checkbox', { name: zh.connections.text016, exact: true })).not.toBeChecked();
     // 不点“测试连接”，不提供密码、证书或文件授权。
-    await connection.getByRole('button', { name: zh.connections.text036, exact: true }).click(); desktop(info);
+    await (await navigationMenuItem(connection, { name: zh.connections.text036, exact: true })).click(); desktop(info);
     await expect(connection).toBeHidden();
 
-    await page.locator('.app-commandbar').getByRole('button', { name: zh.common.newQuery, exact: true }).click(); desktop(info);
+    await (await navigationMenuItem(page.locator('.navigation-toolbar'), { name: zh.common.newQuery, exact: true })).click(); desktop(info);
     const newQuery = page.getByRole('dialog', { name: zh.common.newQuery, exact: true });
     const connectionSelect = newQuery.getByRole('combobox', { name: new RegExp('^' + zh.app.text049) });
     await expect(connectionSelect).toHaveCount(1); await expect(connectionSelect).toHaveText(connectionName); desktop(info);
@@ -95,14 +95,14 @@ test('离线原生复制当前全文、隔离保存来源及副本编辑，并�
     await expect(newQuery.getByLabel(zh.app.text050, { exact: true })).toHaveValue('');
     // 原流程会尝试127.0.0.1:1并拒连；这是离线边界，不伪造服务器信息或补全状态。
     await expect(newQuery.locator('.error-box')).toContainText(/ECONNREFUSED|连接被拒绝|拒绝连接/i, { timeout: 20000 });
-    await newQuery.getByRole('button', { name: zh.app.text053, exact: true }).click(); desktop(info);
+    await (await navigationMenuItem(newQuery, { name: zh.app.text053, exact: true })).click(); desktop(info);
     await expect(newQuery).toBeHidden(); await write(info, savedSql);
 
     const query = page.locator('.query-tab:visible');
-    await query.getByRole('button', { name: zh.query.text015, exact: true }).click(); desktop(info);
+    await (await navigationMenuItem(query, { name: zh.query.text015, exact: true })).click(); desktop(info);
     const save = page.getByRole('dialog', { name: queryBindingZh.title, exact: true });
     await save.getByLabel(queryBindingZh.name, { exact: true }).fill(sourceName); desktop(info);
-    await save.getByRole('button', { name: queryBindingZh.create, exact: true }).click(); desktop(info);
+    await (await navigationMenuItem(save, { name: queryBindingZh.create, exact: true })).click(); desktop(info);
     await expect(save).toBeHidden();
     const records = await queries(info); expect(records).toHaveLength(1); expect(records[0].sql.replaceAll('\r\n', '\n')).toBe(savedSql);
     expect(records[0].databaseContext).toEqual({ state: 'known', database: null });
@@ -118,7 +118,7 @@ test('离线原生复制当前全文、隔离保存来源及副本编辑，并�
     await expect.poll(async () => (await settings(info)).tabs.find(tab => tab.id === sourceId)?.sql).toBe(draftRaw);
     const original = (await settings(info)).tabs.find(tab => tab.id === sourceId)!;
     expect(original.sourceBinding?.id).toBe(records[0].id); expect(original.databaseContext).toEqual({ state: 'known', database: null });
-    await query.getByRole('button', { name: queryDuplicateZh.action, exact: true }).click(); desktop(info);
+    await (await navigationMenuItem(query, { name: queryDuplicateZh.action, exact: true })).click(); desktop(info);
     await expect.poll(() => settings(info).then(value => value.tabs.length)).toBe(2);
     const copied = await settings(info), target = copied.tabs.find(tab => tab.id === copied.activeTabId)!;
     expect(target.id).not.toBe(sourceId); expect(target.title).toBe(sourceName + queryDuplicateZh.suffix);
@@ -161,3 +161,6 @@ test.afterAll(async ({}, info) => {
   expect(missing, '正常退出后临时配置目录必须由strict owner夹具清理').toBe(true);
   await info.attach('查询复制原生终态', { body: Buffer.from(JSON.stringify({ accepted: true, ...completed, directoryRemoved: true, launches: 1, explicitSqlExecution: 0, systemClipboard: 0, realDatabaseSessionIsolationProven: false })), contentType: 'application/json' });
 });
+
+/** 原门进入具体动作后才加载真实菜单导航，不改变默认/列表阶段的资源边界。 */
+async function navigationMenuItem(...args: Parameters<typeof import('./navigation-menu')['navigationMenuItem']>): Promise<import('@playwright/test').Locator> { return (require('./navigation-menu') as typeof import('./navigation-menu')).navigationMenuItem(...args); }

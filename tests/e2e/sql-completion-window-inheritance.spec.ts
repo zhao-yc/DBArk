@@ -143,13 +143,13 @@ async function withPhysicalSource(body: (caret: Caret) => Promise<void>, info: T
       // 用真实会话建立基准；后续所有继承样例只补全，不执行其正文。
       await live.executeSql('SELECT 1');
       const query = page.locator('.query-tab:visible');
-      await query.getByRole('button', { name: '会话临时对象', exact: true }).click();
+      await (await (await import('./navigation-menu')).navigationMenuItem(query, { name: '会话临时对象', exact: true })).click();
       const modal = page.getByRole('dialog', { name: '当前查询会话的临时对象', exact: true });
       await modal.getByLabel('数据库名称', { exact: true }).fill(database);
       await modal.getByLabel('表或视图名称', { exact: true }).fill('q01_window_subject');
-      await modal.getByRole('button', { name: '读取会话结构', exact: true }).click();
+      await (await (await import('./navigation-menu')).navigationMenuItem(modal, { name: '读取会话结构', exact: true })).click();
       await expect(modal.locator('.success-box')).toContainText('该名称当前不是临时表', { timeout: 20000 });
-      await modal.getByRole('button', { name: '关闭', exact: true }).click();
+      await (await (await import('./navigation-menu')).navigationMenuItem(modal, { name: '关闭', exact: true })).click();
       await body(caret);
       expect(pageErrors).toEqual([]);
     }, info);

@@ -10,8 +10,11 @@ test('200隔离实例：默认库恢复快照实际写盘失败时不发送用�
     await observer.query(`CREATE TABLE \`${database}\`.subject(id INT PRIMARY KEY)`);await openDatabaseQuery(database);await executeSql('SELECT 1');const sql='INSERT INTO subject VALUES(21)';await writeSql(sql);
     await expect.poll(()=>page.evaluate(async()=>{const s=await window.dbark.invoke('settings.get',{});return s.tabs.find(tab=>tab.id===s.activeTabId)?.sql;})).toBe(sql);
     const blocked=join(dataDir,'dbark.sqlite.tmp');if(resolve(blocked)!==resolve(dataDir,'dbark.sqlite.tmp'))throw Error('写盘故障目标不符');await mkdir(blocked);
-    try{const query=page.locator('.query-tab:visible');await query.getByRole('button',{name:'执行全部',exact:true}).click();await expect(query.getByRole('button',{name:'停止',exact:true})).toBeDisabled();await expect(query.locator('.error-box')).toContainText('未发送本次 SQL');expect(Number((await observer.query<RowDataPacket[]>(`SELECT COUNT(*) AS n FROM \`${database}\`.subject`))[0][0].n)).toBe(0);await page.screenshot({path:info.outputPath('context-write-failure-no-sql.png')});}
+    try{const query=page.locator('.query-tab:visible');await (await navigationMenuItem(query, {name:'执行全部',exact:true})).click();await expect((await navigationMenuItem(query, {name:'停止',exact:true}))).toBeDisabled();await expect(query.locator('.error-box')).toContainText('未发送本次 SQL');expect(Number((await observer.query<RowDataPacket[]>(`SELECT COUNT(*) AS n FROM \`${database}\`.subject`))[0][0].n)).toBe(0);await page.screenshot({path:info.outputPath('context-write-failure-no-sql.png')});}
     finally{await rmdir(blocked);}
     expect(Number((await observer.query<RowDataPacket[]>(`SELECT COUNT(*) AS n FROM \`${database}\`.subject`))[0][0].n)).toBe(0);await executeSql(sql);expect(Number((await observer.query<RowDataPacket[]>(`SELECT COUNT(*) AS n FROM \`${database}\`.subject`))[0][0].n)).toBe(1);
   },info);
 });
+
+/** 原门进入具体动作后才加载真实菜单导航，不改变默认/列表阶段的资源边界。 */
+async function navigationMenuItem(...args: Parameters<typeof import('./navigation-menu')['navigationMenuItem']>): Promise<import('@playwright/test').Locator> { return (require('./navigation-menu') as typeof import('./navigation-menu')).navigationMenuItem(...args); }

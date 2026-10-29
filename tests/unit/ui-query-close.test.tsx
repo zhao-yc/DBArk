@@ -1,3 +1,5 @@
+import { installNavigationMenuRamPort, navigationMenuRamButton } from '../helpers/navigationMenuRamPort';
+let restoreNavigationMenuPort: () => void = () => {};
 import React, { act, useState } from 'react';
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { memoryDocument, MemoryEvent } from '../fixtures/memory-dom';
@@ -24,8 +26,8 @@ let document: ReturnType<typeof memoryDocument>, commands: string[], records: an
 let invokeHook: undefined | ((command: string, input: any) => Promise<any> | undefined);
 const globals = ['window','document','navigator','IS_REACT_ACT_ENVIRONMENT'].map(name => [name, Object.getOwnPropertyDescriptor(globalThis, name)] as const);
 /** 测试终态恢复外界端口，不能把内存DOM带入同worker的其它用例。 */
-afterAll(() => { for (const [name, descriptor] of globals) { if (descriptor) Object.defineProperty(globalThis, name, descriptor); else Reflect.deleteProperty(globalThis, name); } });
-beforeAll(async () => { document = memoryDocument(); ({ createRoot } = await import('react-dom/client')); ({ QueryTab } = await import('../../src/renderer/components/QueryTab')); ({ useWorkspace, flushSettings } = await import('../../src/renderer/store')); });
+afterAll(() => { restoreNavigationMenuPort(); for (const [name, descriptor] of globals) { if (descriptor) Object.defineProperty(globalThis, name, descriptor); else Reflect.deleteProperty(globalThis, name); } });
+beforeAll(async () => { document = memoryDocument(); restoreNavigationMenuPort = installNavigationMenuRamPort(document); ({ createRoot } = await import('react-dom/client')); ({ QueryTab } = await import('../../src/renderer/components/QueryTab')); ({ useWorkspace, flushSettings } = await import('../../src/renderer/store')); });
 afterEach(async () => { if (root) { await act(async () => root!.unmount()); root = undefined; } await flushSettings(); invokeHook = undefined; });
 /** 使用真实组件状态及真实store；本地查询写入和settings写入仅作RAM IO。 */
 async function mount(bound = false) {
@@ -44,7 +46,7 @@ async function mount(bound = false) {
   return {failed,mutate};
 }
 function buttons() { return document.body.querySelectorAll('button'); }
-async function click(text: string) { const node = buttons().find(button => button.textContent === text); expect(node, '真实组件应渲染按钮：' + text).toBeDefined(); await act(async () => node!.dispatchEvent(new MemoryEvent('click'))); }
+async function click(text: string) { const node = navigationMenuRamButton(document.body, text) ?? buttons().find(button => button.textContent === text); expect(node, '真实组件应渲染按钮：' + text).toBeDefined(); await act(async () => node!.dispatchEvent(new MemoryEvent('click'))); }
 function deferred() { let resolve!: (value: any) => void; const promise = new Promise<any>(done => { resolve = done; }); return { promise, resolve }; }
 const saved = () => ({ name: '查询', source: { id: 'new', digest: 'b'.repeat(64), connectionId: 'c', context: { state: 'known', database: null } } });
 

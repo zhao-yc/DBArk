@@ -1,4 +1,4 @@
-import { sidebarMenuRamPort } from '../helpers/sidebarMenuRamPort';
+import { sidebarMenuRamPort, navigationMenuRamPort } from '../helpers/sidebarMenuRamPort';
 import { readFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { createContext, runInContext } from 'node:vm';
@@ -26,6 +26,8 @@ function fixture(options: { strict?: boolean; holdClose?: boolean; aliveAfterClo
   const rm = vi.fn(async () => { order.push('rm'); }), force = vi.fn(async () => { order.push('force-default'); });
   const assertion = Object.assign((value: unknown) => expect(value), { poll: (read: () => unknown) => ({ toEqual: async (value: unknown) => { order.push('process-proof'); expect(read()).toEqual(value); } }) });
   context = createContext({ ...sidebarMenuRamPort, Error, AggregateError, WeakMap, Number, Date, expect: assertion, desktop, closed: false, pageErrors: [], snippetsDiagnostics: undefined, snippetsDiagnosticsArmed: false, quitReady: Promise.resolve(),
+    // 原连接/TLS/退出函数只接纳本轮新增的导航展示模块，保留其它依赖拒绝边界。
+    require(name: string) { if (name === './navigation-menu') return navigationMenuRamPort; throw Error('退出归属回放禁止其它依赖：' + name); },
     createSnippetsNativeDiagnostics: () => undefined, mkdtemp: vi.fn(async () => join(tmpdir(), 'dbark-e2e-owned')), join, dirname, basename, resolve, tmpdir, rm, forceStopOwnProcess: force,
     launchDesktop: vi.fn(async () => { order.push('launch'); context.closed = false; }), requestQuit: vi.fn(async () => { order.push('quit-request'); }), answerDialogs: vi.fn(async () => { order.push('answer'); }),
     // Node真实process始终具有env；空RAM环境不领取显式离线重启能力，退出/清理断言保持原样。
@@ -36,7 +38,7 @@ function fixture(options: { strict?: boolean; holdClose?: boolean; aliveAfterClo
   });
   let state = ''; for (const statement of desktopSource.statements) if (ts.isVariableStatement(statement) && statement.declarationList.declarations.some(node => node.name.getText(desktopSource) === 'preservedDesktopExits')) state = statement.getText(desktopSource);
   const code = state + '\n' + functions(desktopSource, ['preservesUnconfirmedExit', 'retainOwnedDesktopResources', 'ownedDesktopState', 'ownedDesktopResources', 'recordOwnedDesktopProcesses', 'bindOwnedDesktopExit', 'quitOwnedDesktop', 'confirmOwnedDesktopExit', 'quitDesktop']).map(node => node.getText(desktopSource).replace(/^export /, '')).join('\n') + '\n' + functions(liveSource, ['isolatedDatabase'])[0].getText(liveSource).replace(/^export /, '') + '\nglobalThis.handlers={lifetime:' + lifetime().getText(desktopSource) + ',isolatedDatabase};';
-  runInContext(ts.transpileModule(code, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText, context);
+  runInContext(ts.transpileModule(code, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS } }).outputText, context);
   const run = () => context.handlers.lifetime({ trace: 'off', preserveOnUnconfirmedExit: options.strict !== false }, async () => context.handlers.isolatedDatabase(async () => { order.push('body'); if (original) throw original; }, info, { captureFailureScreenshot: false }), info) as Promise<void>;
   return { order, observer, context, desktop, rm, force, run, emitClose, close, info, listeners };
 }
@@ -61,7 +63,7 @@ function connectionFixture(pauseAt?: string, tls = false, strict = true) {
   f.context.databaseText = databaseText;
   const code = functions(desktopSource, ['answerDialogs']).map(node => node.getText(desktopSource).replace(/^export /, '')).join('\n') + '\n'
     + functions(liveSource, ['configureTls', 'acceptNativeConfirmation', 'connectAndCreate']).map(node => node.getText(liveSource).replace(/^export /, '')).join('\n');
-  runInContext(ts.transpileModule(code, { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText, f.context);
+  runInContext(ts.transpileModule(code, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS } }).outputText, f.context);
   const run = () => f.context.handlers.lifetime({ trace: 'off', preserveOnUnconfirmedExit: strict }, async () => {
     const owner = strict ? f.context.ownedDesktopResources(f.info) : undefined;
     return f.context.connectAndCreate('dbark_e2e_ram', owner ? { page: owner.page, application: owner.application, assertCurrent: () => { f.context.ownedDesktopResources(f.info); } } : undefined);
@@ -158,7 +160,7 @@ describe('TRUNCATE显式保留模式的真实收尾函数（仅RAM端口）', ()
     f.context.page.locator = vi.fn(() => ({ getByRole: () => ({ click: async () => { entered.resolve(); await release.promise; } }) }));
     const nextForm = { getByLabel: (label: string) => ({ fill: async (value: string) => { writes.push({ label, value }); throw Error('不能填写下一例'); } }) };
     const next = { getByRole: vi.fn(() => nextForm), evaluate: vi.fn(), screenshot: vi.fn() };
-    runInContext(ts.transpileModule(functions(liveSource, ['connectAndCreate'])[0].getText(liveSource).replace(/^export /, ''), { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText, f.context);
+    runInContext(ts.transpileModule(functions(liveSource, ['connectAndCreate'])[0].getText(liveSource).replace(/^export /, ''), { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS } }).outputText, f.context);
     const pending = f.run().catch(error => error); await entered.promise;
     const application = { evaluate: vi.fn(), close: vi.fn() }; f.context.page = next; f.context.desktop = application; release.resolve();
     const failure = await pending; expect(failure).toBeInstanceOf(AggregateError); expect(writes).toEqual([]); expect(next.getByRole).not.toHaveBeenCalled(); expect(application.evaluate).not.toHaveBeenCalled();

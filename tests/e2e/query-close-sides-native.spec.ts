@@ -65,7 +65,7 @@ async function openMenu(info: TestInfo, tab: Tab, rightClick = false) {
   const { page } = owner(info), active = (await settings(info)).activeTabId;
   const wrapper = page.locator(`.tab-strip [data-workspace-tab-id="${tab.id}"]`);
   if (rightClick) await wrapper.locator('.tab-select').click({ button: 'right' });
-  else await wrapper.getByRole('button', { name: close.menuButton(tab.title), exact: true }).click();
+  else await (await navigationMenuItem(wrapper, { name: close.menuButton(tab.title), exact: true }, () => { owner(info); })).click();
   owner(info); const menu = page.getByRole('menu', { name: close.menu(tab.title), exact: true }); await expect(menu).toBeVisible();
   expect((await settings(info)).activeTabId).toBe(active); return menu;
 }
@@ -92,10 +92,10 @@ test('非活动B的左侧关闭：取消保留三份全文，再明确放弃仅�
   try {
     expect([trace, screenshot, video]).toEqual(['off', 'off', 'off']); const [a, b, c] = await prepare(info), { page } = owner(info);
     let menu = await openMenu(info, b); await menu.getByRole('menuitem', { name: close.left, exact: true }).click(); owner(info);
-    await (await dialog(info, a)).getByRole('button', { name: close.cancel, exact: true }).click(); owner(info);
+    await (await navigationMenuItem((await dialog(info, a)), { name: close.cancel, exact: true }, () => { owner(info); })).click(); owner(info);
     await expect(page.getByRole('dialog')).toHaveCount(0); expect((await settings(info)).tabs).toEqual([a, b, c]);
     menu = await openMenu(info, b); await menu.getByRole('menuitem', { name: close.left, exact: true }).click(); owner(info);
-    await (await dialog(info, a)).getByRole('button', { name: close.discard, exact: true }).click(); owner(info);
+    await (await navigationMenuItem((await dialog(info, a)), { name: close.discard, exact: true }, () => { owner(info); })).click(); owner(info);
     await expect.poll(() => settings(info).then(value => value.tabs.map(tab => tab.id))).toEqual([b.id, c.id]);
     expect((await settings(info)).tabs).toEqual([b, c]); expect((await settings(info)).activeTabId).toBe(c.id); await expect(page.getByRole('dialog')).toHaveCount(0);
     menu = await openMenu(info, b); await expect(menu.getByRole('menuitem', { name: close.left, exact: true })).toBeDisabled();
@@ -110,16 +110,16 @@ test('非活动A的右键右侧关闭：保存B后真实推进C，取消C保留�
   try {
     expect([trace, screenshot, video]).toEqual(['off', 'off', 'off']); const [a, b, c] = await prepare(info), { page } = owner(info);
     let menu = await openMenu(info, a, true); await menu.getByRole('menuitem', { name: close.right, exact: true }).click(); owner(info);
-    await (await dialog(info, b)).getByRole('button', { name: close.save, exact: true }).click(); owner(info);
+    await (await navigationMenuItem((await dialog(info, b)), { name: close.save, exact: true }, () => { owner(info); })).click(); owner(info);
     const save = page.getByRole('dialog', { name: binding.title, exact: true }); await expect(save).toBeVisible();
     await save.getByLabel(binding.name, { exact: true }).fill('由右侧关闭明确保存B');
-    await save.getByRole('button', { name: binding.create, exact: true }).click(); owner(info);
-    await (await dialog(info, c)).getByRole('button', { name: close.cancel, exact: true }).click(); owner(info);
+    await (await navigationMenuItem(save, { name: binding.create, exact: true }, () => { owner(info); })).click(); owner(info);
+    await (await navigationMenuItem((await dialog(info, c)), { name: close.cancel, exact: true }, () => { owner(info); })).click(); owner(info);
     await expect(page.getByRole('dialog')).toHaveCount(0); expect((await settings(info)).tabs).toEqual([a, c]); expect((await settings(info)).activeTabId).toBe(c.id);
     const saved = await page.evaluate(() => window.dbark.invoke('queries.list', {})); owner(info); expect(saved).toHaveLength(1);
     expect(saved[0]).toMatchObject({ name: '由右侧关闭明确保存B', sql: b.sql, connectionId: b.connectionId });
     menu = await openMenu(info, a, true); await menu.getByRole('menuitem', { name: close.right, exact: true }).click(); owner(info);
-    await (await dialog(info, c)).getByRole('button', { name: close.discard, exact: true }).click(); owner(info);
+    await (await navigationMenuItem((await dialog(info, c)), { name: close.discard, exact: true }, () => { owner(info); })).click(); owner(info);
     await expect.poll(() => settings(info).then(value => value.tabs.map(tab => tab.id))).toEqual([a.id]);
     expect((await settings(info)).tabs).toEqual([a]); expect((await settings(info)).activeTabId).toBe(a.id); await expect(page.getByRole('dialog')).toHaveCount(0);
     expect(await page.evaluate(() => window.dbark.invoke('queries.list', {}))).toEqual(saved); owner(info);
@@ -136,3 +136,6 @@ test.afterAll(async ({}, info) => {
     await info.attach('左右关闭原生终态', { body: Buffer.from(JSON.stringify({ ...result, normalExitConfirmed: true, directoryRemoved: true, launches: 1, explicitSqlExecution: 0, systemClipboard: 0, realDatabaseProven: false, mixedTableTabsProven: false })), contentType: 'application/json' });
   }
 });
+
+/** 原门进入具体动作后才加载真实菜单导航，不改变默认/列表阶段的资源边界。 */
+async function navigationMenuItem(...args: Parameters<typeof import('./navigation-menu')['navigationMenuItem']>): Promise<import('@playwright/test').Locator> { return (require('./navigation-menu') as typeof import('./navigation-menu')).navigationMenuItem(...args); }

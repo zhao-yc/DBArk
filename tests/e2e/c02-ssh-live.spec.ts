@@ -33,7 +33,7 @@ async function choose(scope: C02Desktop, form: Locator, button: string, inputNam
     dialog.showOpenDialog = (async () => ({ canceled: false, filePaths: [file] })) as typeof dialog.showOpenDialog;
   }, path);
   const errors: unknown[] = [];
-  try { await form.getByRole('button', { name: button, exact: true }).click(); await expect.poll(async () => (await form.getByRole('textbox', { name: inputName, exact: true }).inputValue()) === path).toBe(true); }
+  try { await (await (await import('./navigation-menu')).navigationMenuItem(form, { name: button, exact: true })).click(); await expect.poll(async () => (await form.getByRole('textbox', { name: inputName, exact: true }).inputValue()) === path).toBe(true); }
   catch (error) { errors.push(c02Failure('C02 SSH 正式文件选择失败', error)); }
   try { await scope.app!.evaluate(({ dialog }) => { const root = globalThis as typeof globalThis & { __c02SshOpen?: typeof dialog.showOpenDialog }; if (root.__c02SshOpen) dialog.showOpenDialog = root.__c02SshOpen; delete root.__c02SshOpen; }); }
   catch (error) { errors.push(c02Failure('C02 SSH 文件选择回答恢复失败', error)); }
@@ -79,34 +79,34 @@ async function assertStorage(scope: C02Desktop, lease: C02SshLease, id: string):
 /** 正式表单只填既有未加密key，SSH密码及私钥口令保持空；错误指纹必须明确命中身份拒绝。 */
 async function createConnection(scope: C02Desktop, lease: C02SshLease): Promise<string> {
   const page = scope.page, profile = lease.profile, ssh = profile.ssh!;
-  await page.locator('.app-commandbar').getByRole('button', { name: '新建连接', exact: true }).click();
+  await (await (await import('./navigation-menu')).navigationMenuItem(page.locator('.navigation-toolbar'), { name: '新建连接', exact: true })).click();
   const form = page.getByRole('dialog', { name: '新建连接', exact: true });
   for (const [label, value] of [['连接名称', `C02 SSH ${lease.database}`], ['主机地址', profile.host], ['端口', String(profile.port)], ['用户名', lease.user], ['默认数据库（可选）', lease.database], ['连接分组', 'C02 SSH 隔离验收']]) await form.getByLabel(label, { exact: true }).fill(value);
   await form.getByRole('checkbox', { name: '安全保存密码', exact: true }).check(); await databasePassword(form, profile.password!);
   if (profile.tls?.enabled) {
-    await form.getByRole('button', { name: 'TLS / SSL', exact: true }).click(); await form.getByRole('checkbox', { name: '启用加密连接', exact: true }).check(); await form.getByRole('checkbox', { name: '验证服务器证书', exact: true }).check();
+    await (await (await import('./navigation-menu')).navigationMenuItem(form, { name: 'TLS / SSL', exact: true })).click(); await form.getByRole('checkbox', { name: '启用加密连接', exact: true }).check(); await form.getByRole('checkbox', { name: '验证服务器证书', exact: true }).check();
     await choose(scope, form, '选择CA 证书', 'CA 证书 选择CA 证书', profile.tls.caPath!);
   }
-  await form.getByRole('button', { name: 'SSH 隧道', exact: true }).click(); await form.getByRole('checkbox', { name: '通过 SSH 隧道连接', exact: true }).check();
+  await (await (await import('./navigation-menu')).navigationMenuItem(form, { name: 'SSH 隧道', exact: true })).click(); await form.getByRole('checkbox', { name: '通过 SSH 隧道连接', exact: true }).check();
   await form.getByLabel('SSH 主机', { exact: true }).fill(ssh.host); await form.getByLabel('SSH 端口', { exact: true }).fill(String(ssh.port)); await form.getByLabel('SSH 用户名', { exact: true }).fill(ssh.user);
   await choose(scope, form, '选择 SSH 私钥', '私钥文件 选择 SSH 私钥', ssh.privateKeyPath!);
   c02Assert((await form.getByLabel('SSH 密码', { exact: true }).inputValue()) === '' && (await form.getByLabel('私钥口令', { exact: true }).inputValue()) === '', 'C02 SSH 本片不能带入密码或私钥口令');
   await form.getByLabel('主机指纹', { exact: true }).fill(c02WrongSshFingerprint(ssh.hostFingerprint!)); await testConnection(form, false);
   c02Assert((await form.locator('.error-box').textContent())?.includes('Host denied (verification failed)'), 'C02 SSH 错指纹没有收到真实主机身份拒绝，不能用普通网络错误代替');
   await form.getByLabel('主机指纹', { exact: true }).fill(ssh.hostFingerprint!); await testConnection(form, true);
-  await form.getByRole('button', { name: '保存连接', exact: true }).click(); await expect.poll(async () => !(await form.isVisible())).toBe(true);
+  await (await (await import('./navigation-menu')).navigationMenuItem(form, { name: '保存连接', exact: true })).click(); await expect.poll(async () => !(await form.isVisible())).toBe(true);
   const facts = await overview(scope, lease); c02Assert(facts.id && facts.publicOnly && facts.correctSsh && facts.noSshSecrets && facts.hasPassword, 'C02 SSH 保存的公开身份或存在标记不正确'); return facts.id;
 }
 
 /** SQL只读本轮subject，从真实查询表单/Monaco执行，经实际utility与观察者线程对应，不重发。 */
 async function utilitySelect(scope: C02Desktop, lease: C02SshLease, id: string): Promise<void> {
   const page = scope.page;
-  await page.locator('.app-commandbar').getByRole('button', { name: '新建查询', exact: true }).click(); const form = page.getByRole('dialog', { name: '新建查询', exact: true });
+  await (await (await import('./navigation-menu')).navigationMenuItem(page.locator('.navigation-toolbar'), { name: '新建查询', exact: true })).click(); const form = page.getByRole('dialog', { name: '新建查询', exact: true });
   await form.getByRole('combobox', { name: '数据库连接', exact: true }).selectOption(id); await form.getByRole('combobox', { name: '默认数据库（可选）', exact: true }).fill(lease.database);
   await expect.poll(async () => !(await form.getByRole('combobox', { name: '默认数据库（可选）', exact: true }).getAttribute('placeholder'))?.includes('读取'), { timeout: 20000 }).toBe(true);
-  await form.getByRole('button', { name: '打开查询', exact: true }).click(); const query = page.locator('.query-tab:visible'), input = query.locator('.monaco-editor').getByRole('textbox');
+  await (await (await import('./navigation-menu')).navigationMenuItem(form, { name: '打开查询', exact: true })).click(); const query = page.locator('.query-tab:visible'), input = query.locator('.monaco-editor').getByRole('textbox');
   const execute = async (source: string, complete: (value: string) => boolean): Promise<string> => {
-    await input.focus(); await page.keyboard.press(`${process.platform === 'darwin' ? 'Meta' : 'Control'}+A`); await page.keyboard.insertText(source); await query.getByRole('button', { name: '执行全部', exact: true }).click();
+    await input.focus(); await page.keyboard.press(`${process.platform === 'darwin' ? 'Meta' : 'Control'}+A`); await page.keyboard.insertText(source); await (await (await import('./navigation-menu')).navigationMenuItem(query, { name: '执行全部', exact: true })).click();
     await expect(query.getByRole('button', { name: '停止', exact: true })).toBeDisabled({ timeout: 20000 }); c02Assert(await query.locator('.error-box').count() === 0, 'C02 SSH 真实utility查询失败');
     let result = ''; await expect.poll(async () => { const value = await query.locator('.result-body').innerText(); if (complete(value)) result = value; return !!result; }).toBe(true); return result;
   };
@@ -131,7 +131,7 @@ test('C02 正式SSH表单：错指纹拒绝、既有私钥、utility SELECT与�
         await assertStorage(scope, lease, id);
         const form = await editConnection(scope, `C02 SSH ${lease.database}`);
         c02Assert((await form.getByLabel('数据库密码', { exact: true }).inputValue()) === '', 'C02 SSH 重启不应回显数据库密码');
-        await form.getByRole('button', { name: 'SSH 隧道', exact: true }).click(); await testConnection(form, true); await form.getByRole('button', { name: '取消', exact: true }).click();
+        await (await (await import('./navigation-menu')).navigationMenuItem(form, { name: 'SSH 隧道', exact: true })).click(); await testConnection(form, true); await (await (await import('./navigation-menu')).navigationMenuItem(form, { name: '取消', exact: true })).click();
         await utilitySelect(scope, lease, id); restarted = true;
       }, async () => { if (scope) await scope.dispose(); });
     });

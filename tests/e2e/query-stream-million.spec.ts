@@ -41,20 +41,20 @@ test('百万行真实SQL导出CSV和JSON，逐行精度正确且预览与待写�
     // 固定小定义和服务器内造数；客户端仅接收状态包，不向驱动传入百万行数组。
     await observer.query({sql:'INSERT INTO `'+database+'`.million_export SELECT '+id+",CONCAT('第',"+id+",'行🚀'),CAST('"+amount+"' AS DECIMAL(40,12)),9007199254740992+"+id+' FROM '+Array.from({length:6},(_,i)=>digits+' d'+i).join(' CROSS JOIN '),timeout:120000});
     const[counts]=await observer.query<RowDataPacket[]>('SELECT COUNT(*) AS n FROM `'+database+'`.million_export');expect(Number(counts[0].n)).toBe(1000000);
-    await openDatabaseQuery(database);await query().getByLabel('查询结果行数上限',{exact:true}).fill('2');await writeSql('SELECT id,label,amount,large_id FROM million_export ORDER BY id');
+    await openDatabaseQuery(database);await (await navigationMenuInput(query(), {name:'查询结果行数上限',exact:true})).fill('2');await writeSql('SELECT id,label,amount,large_id FROM million_export ORDER BY id');
     // 只保留最新进度摘要，不在验收自身积累数据批次或全部事件。
     await page.evaluate(()=>{const state=window as MeasuredWindow;state.__millionExport={events:0};window.dbark.onTask(event=>{if(event.queryExport){state.__millionExport!.latest={taskId:event.taskId,status:event.status,queryExport:event.queryExport};state.__millionExport!.events++;}});});
     const directory=join(dataDir,'million-export');await mkdir(directory);const measurements=[];
     for(const format of ['csv','json'] as const){
       const target=join(directory,'all-million.'+format);await desktop.evaluate(({dialog},filePath)=>{dialog.showSaveDialog=(async()=>({canceled:false,filePath})) as typeof dialog.showSaveDialog;},target);
-      const before=await page.evaluate(async()=>(await window.dbark.invoke('tasks.list',{})).map(task=>task.id));await query().getByRole('button',{name:'新执行并完整导出',exact:true}).click();const modal=page.getByRole('dialog',{name:'完整流式导出（新执行 SQL）',exact:true});
-      await modal.getByRole('combobox',{name:'完整文件格式',exact:true}).selectOption(format);await modal.locator('.file-picker').click();await expect(modal.locator('.file-picker')).toContainText(basename(target));await modal.getByRole('checkbox',{name:'我确认这是一次新的 SQL 执行，写入不能由取消文件导出撤销',exact:true}).check();await modal.getByRole('button',{name:'确认新执行并导出',exact:true}).click();
+      const before=await page.evaluate(async()=>(await window.dbark.invoke('tasks.list',{})).map(task=>task.id));await (await navigationMenuItem(query(), {name:'新执行并完整导出',exact:true})).click();const modal=page.getByRole('dialog',{name:'完整流式导出（新执行 SQL）',exact:true});
+      await modal.getByRole('combobox',{name:'完整文件格式',exact:true}).selectOption(format);await modal.locator('.file-picker').click();await expect(modal.locator('.file-picker')).toContainText(basename(target));await modal.getByRole('checkbox',{name:'我确认这是一次新的 SQL 执行，写入不能由取消文件导出撤销',exact:true}).check();await (await navigationMenuItem(modal, {name:'确认新执行并导出',exact:true})).click();
       let taskId='';await expect.poll(async()=>{const tasks=await page.evaluate(async ids=>(await window.dbark.invoke('tasks.list',{})).filter(task=>!ids.includes(task.id)&&task.kind==='query.exportStream'),before);if(tasks.length===1)taskId=tasks[0].id;return tasks.length;}).toBe(1);
       await expect.poll(()=>page.evaluate(async id=>(await window.dbark.invoke('tasks.list',{})).find(task=>task.id===id)?.status,taskId),{timeout:240000}).toBe('completed');await expect(modal.locator('.success-box')).toContainText('完整文件已提交');await expect(modal.locator('.error-box')).toHaveCount(0);
       const observed=await page.evaluate(()=>(window as MeasuredWindow).__millionExport);expect(observed?.latest).toMatchObject({taskId,status:'completed',queryExport:{statementsCompleted:1,rowsWritten:1000000,fileCommitted:true}});const progress=observed!.latest!.queryExport!;
       expect(progress.peakBufferedRows).toBeLessThanOrEqual(queryStreamExportLimits.queueRows);expect(progress.peakBufferedBytes).toBeLessThanOrEqual(queryStreamExportLimits.queueBytes);
       measurements.push({...await inspectFile(target,format),peakBufferedRows:progress.peakBufferedRows,peakBufferedBytes:progress.peakBufferedBytes,events:observed!.events});
-      await modal.getByRole('button',{name:'关闭',exact:true}).click();await expect(modal).toBeHidden();await expect(query().locator('.tab-status')).toContainText('200');await expect(query().locator('.tab-status')).toContainText('已达到结果上限');expect(await query().locator('.result-body [role="row"]').count()).toBeLessThan(80);
+      await (await navigationMenuItem(modal, {name:'关闭',exact:true})).click();await expect(modal).toBeHidden();await expect(query().locator('.tab-status')).toContainText('200');await expect(query().locator('.tab-status')).toContainText('已达到结果上限');expect(await query().locator('.result-body [role="row"]').count()).toBeLessThan(80);
     }
     expect(pageErrors).toEqual([]);const path=info.outputPath('million-export-measurements.json');await writeFile(path,JSON.stringify({scope:'真实同会话SQL导出；两份文件独立流式逐行检查，不以预览替代完整文件',measurements},null,2));await info.attach('百万行完整导出规模记录',{path,contentType:'application/json'});await page.screenshot({path:info.outputPath('million-export-bounded-preview.png')});
   },info);
@@ -69,3 +69,9 @@ test.describe('Q05百万行CSV ZIP正式UI补充',()=>{
     const{runMillionArchiveUi}=await import('./query-csv-million-ui-helpers');await runMillionArchiveUi(info);
   });
 });
+
+/** 原门进入具体动作后才加载真实菜单导航，不改变默认/列表阶段的资源边界。 */
+async function navigationMenuItem(...args: Parameters<typeof import('./navigation-menu')['navigationMenuItem']>): Promise<import('@playwright/test').Locator> { return (require('./navigation-menu') as typeof import('./navigation-menu')).navigationMenuItem(...args); }
+
+/** 仅实际操作时加载结果设置菜单，默认及列表阶段不增加资源读取。 */
+async function navigationMenuInput(...args: Parameters<typeof import('./navigation-menu')['navigationMenuInput']>): Promise<import('@playwright/test').Locator> { return (require('./navigation-menu') as typeof import('./navigation-menu')).navigationMenuInput(...args); }

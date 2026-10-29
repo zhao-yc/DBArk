@@ -13,8 +13,8 @@ import type { HistoryInsertionTarget } from '../historyInsertion';
 import { borrowInsertion } from '../insertionLease';
 
 /** 两个资料源分别管理有界页和收尾，切换时不保留另一面板的活动读取。 */
-export function HistoryDialog({ onClose, insertion }: { onClose: () => void; insertion?: HistoryInsertionTarget | null }) {
-  const[section,setSection]=useState<'history'|'queries'>('history');
+export function HistoryDialog({ onClose, insertion, initialSection = 'history' }: { onClose: () => void; insertion?: HistoryInsertionTarget | null; initialSection?: 'history' | 'queries' }) {
+  const[section,setSection]=useState<'history'|'queries'>(initialSection);
   // App持有并释放父权限；子页关闭/切换撤销自身租约。不在effect清理中消费权限，避免StrictMode重订阅误撤销。
   const lease = useMemo(() => borrowInsertion(insertion), [insertion, section]);
   return section==='queries'?<SavedQueriesDialog insertion={lease} onClose={onClose} onHistory={()=>setSection('history')}/>:<HistoryPagesDialog insertion={lease} onClose={onClose} onQueries={()=>setSection('queries')}/>;
