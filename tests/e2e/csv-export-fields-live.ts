@@ -1,3 +1,4 @@
+import { clickSidebarAction } from './sidebar-menu';
 import { readFile, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { parse } from 'csv-parse/sync';
@@ -31,7 +32,7 @@ export function registerCsvExportFieldsUiTests() {
         await context.observer.query(`INSERT INTO ${table} VALUES(18446744073709551615,123456789012345678901234.123456,X'00FF')`); owned();
         const before = (await context.observer.query<RowDataPacket[]>(`SELECT CAST(id AS CHAR) AS id,CAST(price AS CHAR) AS price,HEX(raw_value) AS bytes FROM ${table}`))[0]; owned();
         const directory = await owned().application.evaluate(({ app }) => app.getPath('userData')); owned(); const output = join(directory, 'csv-selected-fields.csv'); await writeFile(output, '原文件'); owned();
-        const connection = page.locator('.connection-node').filter({ has: page.getByRole('button', { name: context.connectionName, exact: true }) }); await connection.getByRole('button', { name: context.connectionName, exact: true }).focus(); await connection.getByRole('button', { name: '刷新连接', exact: true }).click(); owned();
+        const connection = page.locator('.connection-node').filter({ has: page.getByRole('button', { name: context.connectionName, exact: true }) }); await connection.getByRole('button', { name: context.connectionName, exact: true }).focus(); await clickSidebarAction(connection, { name: '刷新连接', exact: true }, undefined, owned); owned();
         await connection.locator('.database-row').getByRole('button', { name: context.database, exact: true }).click(); await connection.locator('.object-row').getByText('csv_fields', { exact: true }).click(); owned();
         await page.locator('.table-tab:visible').getByRole('button', { name: zh.common.export, exact: true }).click(); const dialog = page.getByRole('dialog', { name: `${zh.transfer.text005} · ${context.database}.csv_fields`, exact: true });
         const fields = dialog.getByRole('region', { name: 'CSV导出字段' }); await expect(fields.getByRole('checkbox', { name: /^raw_value ·/ })).toBeEnabled(); await fields.getByRole('checkbox', { name: /^raw_value ·/ }).uncheck(); await fields.getByRole('button', { name: '上移CSV字段 price', exact: true }).click(); owned();

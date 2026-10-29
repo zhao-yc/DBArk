@@ -1,3 +1,4 @@
+import { clickSidebarAction } from './sidebar-menu';
 import { randomUUID } from 'node:crypto';
 import mysql, { type Connection, type RowDataPacket } from 'mysql2/promise';
 import { closeMysqlConnection } from '../../src/engine/connection';
@@ -46,7 +47,7 @@ export function registerTableCreateMariaUiTests(version: MariaCreateVersion) {
       const [existing] = await observe(() => connection.query<RowDataPacket[]>('SELECT SCHEMA_NAME FROM information_schema.SCHEMATA WHERE SCHEMA_NAME=?', [database])); expect(existing).toHaveLength(0); ownsName = true;
       const context = await connectAndCreate(database, { page, application: captured.application, assertCurrent: () => { own(); } }); own();
       const ui = (action: () => Promise<unknown>) => observe(action), node = page.locator('.connection-node').filter({ has: page.getByRole('button', { name: context.connectionName, exact: true }) }), db = node.locator('.database-row').filter({ has: page.getByRole('button', { name: database, exact: true }) });
-      await ui(() => db.getByRole('button', { name: database, exact: true }).click()); await ui(() => expect(db.getByRole('button', { name: database, exact: true })).toHaveAttribute('aria-expanded', 'true')); await ui(() => db.getByRole('button', { name: database, exact: true }).focus()); await ui(() => db.getByRole('button', { name: zh.sidebar.text017, exact: true }).click());
+      await ui(() => db.getByRole('button', { name: database, exact: true }).click()); await ui(() => expect(db.getByRole('button', { name: database, exact: true })).toHaveAttribute('aria-expanded', 'true')); await ui(() => db.getByRole('button', { name: database, exact: true }).focus()); await ui(() => clickSidebarAction(db, { name: zh.sidebar.text017, exact: true }));
       const designer = page.getByRole('dialog', { name: formatText(zh.schema.text009, database), exact: true }); await ui(() => designer.getByLabel(zh.schema.text010, { exact: true }).fill('daily_new_table'));
       // 显式普通INT主键；文字NULL经真实开关选择，另一个VARCHAR保留普通文字默认。
       await ui(() => designer.getByLabel(formatText(zh.schema.text019, 1), { exact: true }).fill('int')); await ui(() => designer.getByLabel(formatText(zh.schema.text021, 1), { exact: true }).uncheck());

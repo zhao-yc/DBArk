@@ -1,3 +1,4 @@
+import { clickSidebarAction } from './sidebar-menu';
 import type { RowDataPacket } from 'mysql2/promise';
 import { realpathSync } from 'node:fs';
 import { tableDefaultEncodingZh as text } from '../../src/renderer/locales/tableDefaultEncoding.zh-CN';
@@ -22,7 +23,7 @@ async function assertSavedTls(context: LiveContext) {
 /** 真实对象树入口，不注入React状态、候选或产品执行参数。 */
 async function open(context: LiveContext, name: string) {
   const connection = page.locator('.connection-node').filter({ has: page.locator('.connection-row').getByText(context.connectionName, { exact: true }) });
-  await connection.locator('.connection-row').getByRole('button', { name: context.connectionName, exact: true }).focus(); await connection.getByRole('button', { name: '刷新连接', exact: true }).click(); await connection.locator('.database-row').getByRole('button', { name: context.database, exact: true }).click();
+  await connection.locator('.connection-row').getByRole('button', { name: context.connectionName, exact: true }).focus(); await clickSidebarAction(connection, { name: '刷新连接', exact: true }); await connection.locator('.database-row').getByRole('button', { name: context.database, exact: true }).click();
   const row = connection.locator('.object-row').filter({ has: page.getByText(name, { exact: true }) }); await row.getByText(name, { exact: true }).click(); await expect(tablePage().locator('.context-bar')).toContainText(name); await expect(tablePage().locator('.loading-overlay')).toHaveCount(0); return row;
 }
 async function ddl(context: LiveContext, table: string) { const [rows] = await context.observer.query<RowDataPacket[]>('SHOW CREATE TABLE ' + target(context, table)); return String(rows[0]['Create Table']); }
@@ -50,7 +51,7 @@ test.describe('表默认编码：正式Electron和真实数据库入口', () => 
       await narrowSidebar();
       await assertSavedTls(context);
       const table = 'default_complex'; await context.observer.query(`CREATE TABLE ${target(context, table)}(id INT NOT NULL,s VARCHAR(80),g INT GENERATED ALWAYS AS(CHAR_LENGTH(s)) STORED,PRIMARY KEY(id),KEY pref(s(8))) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_bin ROW_FORMAT=DYNAMIC`); await context.observer.query(`INSERT INTO ${target(context, table)}(id,s) VALUES(1,'中文😀')`);
-      const row = await open(context, table); await row.hover(); await row.getByRole('button', { name: `${text.title} ${table}`, exact: true }).click(); await expect(dialog().getByRole('combobox', { name: text.charset, exact: true })).toBeEnabled(); await expect(dialog()).toContainText(text.scope);
+      const row = await open(context, table); await row.hover(); await clickSidebarAction(row, { name: `${text.title} ${table}`, exact: true }); await expect(dialog().getByRole('combobox', { name: text.charset, exact: true })).toBeEnabled(); await expect(dialog()).toContainText(text.scope);
       await dialog().getByRole('button', { name: text.close, exact: true }).click(); await tablePage().getByRole('button', { name: text.title, exact: true }).click(); await choose(); const before = await ddl(context, table); await preview(); expect(await ddl(context, table)).toBe(before);
       await dialog().getByRole('button', { name: text.apply, exact: true }).dblclick(); await expect(dialog().locator('.table-default-encoding-outcome')).toHaveText(text.succeeded, { timeout: 20000 }); await expect(dialog().getByRole('button', { name: text.apply, exact: true })).toBeDisabled();
       const [columns] = await context.observer.query<RowDataPacket[]>('SELECT CHARACTER_SET_NAME AS charset,COLLATION_NAME AS collation FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=? AND TABLE_NAME=? AND COLUMN_NAME=?', [context.database, table, 's']); expect(columns[0]).toMatchObject({ charset: 'utf8mb4', collation: 'utf8mb4_bin' });

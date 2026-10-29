@@ -1,3 +1,4 @@
+import { clickSidebarAction } from './sidebar-menu';
 import { randomUUID } from 'node:crypto';
 import mysql, { type Connection, type RowDataPacket } from 'mysql2/promise';
 import { closeMysqlConnection } from '../../src/engine/connection';
@@ -43,7 +44,7 @@ export function registerTableCreateEncodingUiTests() {
       const ui = (action: () => Promise<unknown>) => observe(action);
       const node = page.locator('.connection-node').filter({ has: page.getByRole('button', { name: context.connectionName, exact: true }) });
       const db = node.locator('.database-row').filter({ has: page.getByRole('button', { name: database, exact: true }) });
-      await ui(() => db.getByRole('button', { name: database, exact: true }).click()); await ui(() => expect(db.getByRole('button', { name: database, exact: true })).toHaveAttribute('aria-expanded', 'true')); await ui(() => db.getByRole('button', { name: database, exact: true }).focus()); await ui(() => db.getByRole('button', { name: zh.sidebar.text017, exact: true }).click());
+      await ui(() => db.getByRole('button', { name: database, exact: true }).click()); await ui(() => expect(db.getByRole('button', { name: database, exact: true })).toHaveAttribute('aria-expanded', 'true')); await ui(() => db.getByRole('button', { name: database, exact: true }).focus()); await ui(() => clickSidebarAction(db, { name: zh.sidebar.text017, exact: true }));
       const designer = page.getByRole('dialog', { name: formatText(zh.schema.text009, database), exact: true });
       await ui(() => designer.getByLabel(zh.schema.text010, { exact: true }).fill('encoded_new_table'));
       await ui(() => designer.getByRole('button', { name: zh.schema.text027, exact: true }).click());

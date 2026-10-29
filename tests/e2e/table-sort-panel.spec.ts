@@ -1,3 +1,4 @@
+import { clickSidebarAction } from './sidebar-menu';
 import { test as baseTest, expect } from '@playwright/test';
 import { createHash } from 'node:crypto';
 import { zh } from '../../src/renderer/locales/zh-CN';
@@ -65,7 +66,7 @@ test('真实表页多列排序及条件启停：跨页、精确筛选、优先�
     const profiles = await step(() => page.evaluate(() => window.dbark.invoke('connections.list', {}))); expect(profiles).toHaveLength(1); const profile = profiles[0]; expect(profile.database).toBe(target!.database!); expect(profile.rememberPassword).toBe(false); expect(profile.password).toBeUndefined();
     await step(() => application.evaluate(observePages, { connectionId: profile.id, database: target!.database! }));
     const connection = page.locator('.connection-node').filter({ has: page.locator('.connection-row').getByText(connectionName, { exact: true }) });
-    await step(() => connection.locator('.connection-row > .tree-label').focus()); await step(() => connection.getByRole('button', { name: zh.sidebar.text011, exact: true }).click()); await step(() => connection.locator('.database-row').getByRole('button', { name: target!.database!, exact: true }).click()); await step(() => connection.locator('.object-row').getByText('subject', { exact: true }).click());
+    await step(() => connection.locator('.connection-row > .tree-label').focus()); await step(() => clickSidebarAction(connection, { name: zh.sidebar.text011, exact: true })); await step(() => connection.locator('.database-row').getByRole('button', { name: target!.database!, exact: true }).click()); await step(() => connection.locator('.object-row').getByText('subject', { exact: true }).click());
     const table = page.locator('.table-tab:visible'), grid = table.locator('.results-grid'), panel = table.getByRole('region', { name: text.title, exact: true });
     const cell = (row: number, column: number) => grid.locator(`[role="row"][aria-rowindex="${row}"] [role="gridcell"][aria-colindex="${column}"]`);
     const choose = (label: string, value: string) => step(() => panel.getByRole('combobox', { name: label, exact: true }).selectOption(value));

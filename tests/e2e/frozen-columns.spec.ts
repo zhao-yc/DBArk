@@ -1,3 +1,4 @@
+import { clickSidebarAction } from './sidebar-menu';
 import type { Locator, TestInfo } from '@playwright/test';
 import type { RowDataPacket } from 'mysql2/promise';
 import { readFile } from 'node:fs/promises';
@@ -65,7 +66,7 @@ async function frozenPosition(grid: Locator, col: number) {
 /** 原对象树入口打开真实表，不向renderer注入表状态或行数据。 */
 async function openTable(connectionName: string, database: string) {
   const connection = page.locator('.connection-node').filter({ has: page.locator('.connection-row').getByText(connectionName, { exact: true }) });
-  await connection.locator('.connection-row').hover(); await connection.getByRole('button', { name: '刷新连接', exact: true }).click();
+  await connection.locator('.connection-row').hover(); await clickSidebarAction(connection, { name: '刷新连接', exact: true });
   const row = connection.locator('.database-row').filter({ has: page.getByRole('button', { name: database, exact: true }) });
   await row.getByRole('button', { name: database, exact: true }).click(); await connection.locator('.object-row').getByText('frozen_subject', { exact: true }).click();
   await expect(table().locator('.results-grid')).toBeVisible(); await expect(table().locator('.loading-overlay')).toHaveCount(0); await expect(table().locator(':scope > .error-box')).toHaveCount(0);

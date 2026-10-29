@@ -1,3 +1,4 @@
+import { clickSidebarAction } from './sidebar-menu';
 import { test as baseTest, expect, type TestInfo } from '@playwright/test';
 import { zh } from '../../src/renderer/locales/zh-CN';
 import { tablePageExportZh as text } from '../../src/renderer/locales/tablePageExport.zh-CN';
@@ -48,7 +49,7 @@ test('真实表页导出当前页及勾选快照：零重查、原序、精确�
     const profiles = await step(() => page.evaluate(() => window.dbark.invoke('connections.list', {}))); expect(profiles).toHaveLength(1); const profile = profiles[0]; expect(profile.host).toBe(target!.host); expect(profile.port).toBe(13384); expect(profile.database).toBe(target!.database); expect(profile.rememberPassword).toBe(false); expect(profile.password).toBeUndefined();
     await step(() => application.evaluate(observePages, { database: target!.database!, connectionId: profile.id }));
     const connection = page.locator('.connection-node').filter({ has: page.locator('.connection-row').getByText(connectionName, { exact: true }) });
-    await step(() => connection.locator('.connection-row > .tree-label').focus()); await step(() => connection.getByRole('button', { name: zh.sidebar.text011, exact: true }).click()); await step(() => connection.locator('.database-row').getByRole('button', { name: target!.database!, exact: true }).click()); await step(() => connection.locator('.object-row').getByText('subject', { exact: true }).click());
+    await step(() => connection.locator('.connection-row > .tree-label').focus()); await step(() => clickSidebarAction(connection, { name: zh.sidebar.text011, exact: true })); await step(() => connection.locator('.database-row').getByRole('button', { name: target!.database!, exact: true }).click()); await step(() => connection.locator('.object-row').getByText('subject', { exact: true }).click());
     const tab = page.locator('.table-tab:visible'), grid = tab.locator('.results-grid');
     await step(() => tab.getByRole('combobox', { name: zh.table.text021, exact: true }).selectOption('50')); await step(() => expect.poll(async () => (await state()).pages.at(-1)?.ids?.length).toBe(50));
     await step(() => tab.getByRole('columnheader', { name: /^id/ }).click()); await step(() => expect.poll(async () => (await state()).pages.at(-1)?.input.sort).toEqual([{ column: 'id', direction: 'ASC' }])); await step(() => expect.poll(async () => (await state()).pending).toBe(0)); await step(() => expect(tab.locator('.loading-overlay')).toHaveCount(0));

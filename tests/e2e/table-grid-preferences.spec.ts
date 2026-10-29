@@ -1,3 +1,4 @@
+import { clickSidebarAction } from './sidebar-menu';
 import type { Locator } from '@playwright/test';
 import type { RowDataPacket } from 'mysql2/promise';
 import { readFile, writeFile } from 'node:fs/promises';
@@ -16,7 +17,7 @@ const q = (database: string, name: string) => `\`${database}\`.\`${name}\``;
 async function openTable(connectionName: string, database: string, name: string) {
   const connection = page.locator('.connection-node').filter({ has: page.locator('.connection-row').getByText(connectionName, { exact: true }) });
   const row = connection.locator('.connection-row'); await row.hover();
-  await row.getByRole('button', { name: '刷新连接', exact: true }).click();
+  await clickSidebarAction(row, { name: '刷新连接', exact: true });
   const databaseRow = connection.locator('.database-row').filter({ has: page.getByRole('button', { name: database, exact: true }) });
   await expect(databaseRow).toBeVisible(); await databaseRow.getByRole('button', { name: database, exact: true }).click();
   await connection.locator('.object-row').getByText(name, { exact: true }).click();
@@ -94,7 +95,7 @@ async function restoreConnectionPassword(connectionName: string) {
   if (info.encryptionAvailable) return;
   const connection = page.locator('.connection-node').filter({ has: page.locator('.connection-row').getByText(connectionName, { exact: true }) });
   await connection.locator('.connection-row').hover();
-  await connection.getByRole('button', { name: `编辑连接 ${connectionName}`, exact: true }).click();
+  await clickSidebarAction(connection, { name: `编辑连接 ${connectionName}`, exact: true });
   const form = page.getByRole('dialog', { name: '编辑连接', exact: true });
   await form.getByLabel('数据库密码', { exact: true }).fill(environment.DBARK_TEST_PASSWORD ?? '');
   await form.getByRole('button', { name: '保存连接', exact: true }).click(); await expect(form).toBeHidden();

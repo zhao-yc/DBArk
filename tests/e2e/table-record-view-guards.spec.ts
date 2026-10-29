@@ -1,3 +1,4 @@
+import { clickSidebarAction } from './sidebar-menu';
 import type { Locator, TestInfo } from '@playwright/test';
 import type { RowDataPacket } from 'mysql2/promise';
 import type { FilterRule, SortRule } from '../../src/shared/contracts';
@@ -64,7 +65,7 @@ async function guardDatabase(body: (context: LiveContext) => Promise<void>, info
 /** 表的打开始终来自真实对象树，记录与元数据都由实际数据库读取。 */
 async function openTable(context: LiveContext, name = tableName) {
   const connection = page.locator('.connection-node').filter({ has: page.locator('.connection-row').getByText(context.connectionName, { exact: true }) });
-  await connection.locator('.connection-row').hover(); await connection.getByRole('button', { name: '刷新连接', exact: true }).click();
+  await connection.locator('.connection-row').hover(); await clickSidebarAction(connection, { name: '刷新连接', exact: true });
   await connection.locator('.database-row').getByRole('button', { name: context.database, exact: true }).click();
   await connection.locator('.object-row').getByText(name, { exact: true }).click();
   await expect(activeTable().locator('.context-bar')).toContainText(name);
@@ -320,7 +321,7 @@ test.describe('记录表单额外守卫：清页、编辑入口与只读边界',
       await context.observer.query(`INSERT INTO ${qualified(context.database, rejected)} VALUES(1,'小行'),(2,?)`, ['x'.repeat(262145)]);
       expect(Number((await context.observer.query<RowDataPacket[]>(`SELECT OCTET_LENGTH(note) AS bytes FROM ${qualified(context.database, rejected)} WHERE id=2`))[0][0].bytes)).toBe(262145);
       const connection = page.locator('.connection-node').filter({ has: page.locator('.connection-row').getByText(context.connectionName, { exact: true }) });
-      await connection.locator('.connection-row').hover(); await connection.getByRole('button', { name: '刷新连接', exact: true }).click();
+      await connection.locator('.connection-row').hover(); await clickSidebarAction(connection, { name: '刷新连接', exact: true });
       await connection.locator('.database-row').getByRole('button', { name: context.database, exact: true }).click(); await connection.locator('.object-row').getByText(rejected, { exact: true }).click();
       await expect(activeTable().locator('.context-bar')).toContainText(rejected);
       await expect(activeTable().locator(':scope > .error-box')).toContainText('超过 256 KiB'); await expect(activeTable().locator(':scope > .error-box')).toContainText('未返回可编辑数据');

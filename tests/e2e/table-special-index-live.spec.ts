@@ -1,3 +1,4 @@
+import { clickSidebarAction } from './sidebar-menu';
 import type { Locator, TestInfo } from '@playwright/test';
 import type { RowDataPacket } from 'mysql2/promise';
 import { indexPatchZh as text } from '../../src/renderer/locales/indexPatches.zh-CN';
@@ -42,7 +43,7 @@ async function fixture(context: LiveContext, table: string): Promise<void> {
 /** 真对象树打开表再打开IndexPatchDialog，不使用夹具按钮、直接引擎命令或React状态。 */
 async function openTable(context: LiveContext, name: string): Promise<void> {
   const connection = page.locator('.connection-node').filter({ has: page.getByRole('button', { name: context.connectionName, exact: true }) });
-  await connection.getByRole('button', { name: context.connectionName, exact: true }).focus(); await connection.getByRole('button', { name: '刷新连接', exact: true }).click();
+  await connection.getByRole('button', { name: context.connectionName, exact: true }).focus(); await clickSidebarAction(connection, { name: '刷新连接', exact: true });
   const object = connection.locator('.object-row').getByText(name, { exact: true });
   if (!(await object.isVisible())) await connection.locator('.database-row').getByRole('button', { name: context.database, exact: true }).click();
   await expect(object).toBeVisible(); await object.click();

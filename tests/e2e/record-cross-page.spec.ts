@@ -1,3 +1,4 @@
+import { clickSidebarAction } from './sidebar-menu';
 import type { TestInfo } from '@playwright/test';
 import type { LiveContext } from './live-helpers';
 import { test, expect, page, desktop, closed } from './desktop-fixture';
@@ -44,7 +45,7 @@ async function prepare(context: LiveContext) {
   await context.observer.query(`CREATE TABLE ${qualified(context)}(id BIGINT PRIMARY KEY,note VARCHAR(100),payload JSON) ENGINE=InnoDB`);
   await context.observer.query(`INSERT INTO ${qualified(context)} VALUES ?`, [Array.from({ length: 51 }, (_, index) => [index + 1, `记录${index + 1}`, '{"n":9007199254740993}'])]);
   const connection = page.locator('.connection-node').filter({ has: page.locator('.connection-row').getByText(context.connectionName, { exact: true }) });
-  await connection.locator('.connection-row > .tree-label').focus(); await connection.getByRole('button', { name: zh.sidebar.text011, exact: true }).click();
+  await connection.locator('.connection-row > .tree-label').focus(); await clickSidebarAction(connection, { name: zh.sidebar.text011, exact: true });
   await connection.locator('.database-row').getByRole('button', { name: context.database, exact: true }).click();
   await connection.locator('.object-row').getByText('records', { exact: true }).click(); await expect(table().locator('.loading-overlay')).toHaveCount(0);
   await table().getByRole('combobox', { name: zh.table.text021, exact: true }).selectOption('50'); await expect(table().locator('.loading-overlay')).toHaveCount(0);

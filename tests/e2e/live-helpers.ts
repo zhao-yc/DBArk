@@ -1,3 +1,4 @@
+import { sidebarMenuItem } from './sidebar-menu';
 import { randomUUID } from 'node:crypto';
 import { existsSync, readFileSync,realpathSync } from 'node:fs';
 import mysql, { type Connection, type RowDataPacket } from 'mysql2/promise';
@@ -90,9 +91,9 @@ export async function connectAndCreate(database: string, owner?: LiveDesktopOwne
   const profiles = await targetPage().evaluate(() => window.dbark.invoke('connections.list', {}));owner?.assertCurrent();
   const connectionId = profiles.find(profile => profile.name === connectionName)!.id;
   const connectionRow = targetPage().locator('.connection-row').filter({ has: targetPage().getByRole('button', { name: connectionName, exact: true }) });
-  // 使用既有键盘焦点入口显示操作区，避免窗口切换后残留鼠标位置使悬停状态失效；保持真实可见性和点击检查。
+  // 聚焦保留真实键盘入口，再从该连接的真实右键菜单进入创建数据库。
   await connectionRow.getByRole('button', { name: connectionName, exact: true }).focus();owner?.assertCurrent();
-  const createDatabase = connectionRow.getByRole('button', { name: '创建数据库', exact: true });
+  const createDatabase = await sidebarMenuItem(connectionRow, { name: '创建数据库', exact: true }, owner ? () => owner.assertCurrent() : undefined);
   await expect(createDatabase).toBeVisible();owner?.assertCurrent(); await createDatabase.click();owner?.assertCurrent();
   const create = targetPage().getByRole('dialog', { name: '创建数据库', exact: true });
   await create.getByLabel('数据库名称', { exact: true }).fill(database);owner?.assertCurrent();
@@ -176,9 +177,9 @@ export async function isolatedDatabase(body: (context: LiveContext) => Promise<v
 /** 选中数据库节点后通过对象树新建查询，确保 SQL 会话绑定正确的库。 */
 export async function openDatabaseQuery(database: string) {
   const row = page.locator('.database-row').filter({ has: page.getByRole('button', { name: database, exact: true }) });
-  // 数据库节点沿用同一 focus-within 操作入口，不依赖鼠标在其他窗口关闭前的位置。
+  // 数据库节点聚焦后通过真实右键菜单新建查询，不触发节点展开。
   await row.getByRole('button', { name: database, exact: true }).focus();
-  const newQuery = row.getByRole('button', { name: '新建数据库查询', exact: true });
+  const newQuery = (await sidebarMenuItem(row, { name: '新建数据库查询', exact: true }));
   await expect(newQuery).toBeVisible(); await newQuery.click();
   await expect(page.locator('.query-tab:visible .monaco-editor')).toBeVisible();
 }

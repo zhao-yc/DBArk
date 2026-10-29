@@ -1,3 +1,4 @@
+import { clickSidebarAction } from './sidebar-menu';
 import mysql, { type Connection, type RowDataPacket, type ResultSetHeader } from 'mysql2/promise';
 import { randomUUID } from 'node:crypto';
 import type { TestInfo, Page, ElectronApplication } from '@playwright/test';
@@ -104,7 +105,7 @@ export function registerTableCreateForeignKeysUiTests() {
           await ui(() => database.getByRole('button', { name: context.database, exact: true }).click());
           await ui(() => expect(database.getByRole('button', { name: context.database, exact: true })).toHaveAttribute('aria-expanded', 'true'));
           await ui(() => database.getByRole('button', { name: context.database, exact: true }).focus());
-          await ui(() => database.getByRole('button', { name: zh.sidebar.text017, exact: true }).click());
+          await ui(() => clickSidebarAction(database, { name: zh.sidebar.text017, exact: true }));
           const designer = page.getByRole('dialog', { name: formatText(zh.schema.text009, context.database), exact: true });
           await ui(() => designer.getByLabel(zh.schema.text010, { exact: true }).fill('fk_child'));
           await ui(() => designer.getByLabel(formatText(zh.schema.text018, 1), { exact: true }).fill('child_a'));

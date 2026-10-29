@@ -1,3 +1,4 @@
+import { clickSidebarAction } from './sidebar-menu';
 import type { Locator, TestInfo } from '@playwright/test';
 import type { RowDataPacket } from 'mysql2/promise';
 import { recordViewZh as formText } from '../../src/renderer/locales/recordViews.zh-CN';
@@ -28,10 +29,10 @@ async function observe(){await desktop.evaluate(({ipcMain})=>{
 /** 只返回脱敏命令名；失败也先恢复生产handler，再精确清理隔离库。 */
 async function calls(){return desktop.evaluate(()=>(globalThis as ProbeGlobal).__recordInputProbe?.calls??[]);}
 async function withDatabase(body:(context:LiveContext)=>Promise<void>,info:TestInfo){await isolatedDatabase(async context=>{try{await body(context);}catch(reason){if(!closed)await info.attach('整行输入命令名',{body:JSON.stringify(await calls()),contentType:'application/json'}).catch(()=>undefined);throw reason;}finally{if(!closed)await desktop.evaluate(()=>{const root=globalThis as ProbeGlobal;root.__recordInputProbe?.restore();delete root.__recordInputProbe;});}},info);}
-/** 从真实对象树进入表，聚焦可见操作区并等待原分页完成。 */
+/** 从真实对象树菜单刷新连接并进入表，等待原分页完成。 */
 async function openTable(context:LiveContext,name='record_inputs'){
   const connection=page.locator('.connection-node').filter({has:page.getByRole('button',{name:context.connectionName,exact:true})});
-  await connection.getByRole('button',{name:context.connectionName,exact:true}).focus();await connection.getByRole('button',{name:'刷新连接',exact:true}).click();
+  await connection.getByRole('button',{name:context.connectionName,exact:true}).focus();await clickSidebarAction(connection, {name:'刷新连接',exact:true});
   await connection.locator('.database-row').getByRole('button',{name:context.database,exact:true}).click();await connection.locator('.object-row').getByText(name,{exact:true}).click();
   await expect(table().locator('.context-bar')).toContainText(name);await expect(table().locator('.loading-overlay')).toHaveCount(0);await expect(table().locator(':scope > .error-box')).toHaveCount(0);
 }

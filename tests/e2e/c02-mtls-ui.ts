@@ -1,3 +1,4 @@
+import { clickSidebarAction } from './sidebar-menu';
 import { discardTestTab } from './query-close-ui';
 import { expect, type Locator } from '@playwright/test';
 import type { C02MtlSLease } from '../integration/helpers/c02-mtls-fixture';
@@ -103,7 +104,7 @@ export async function editConnection(scope: C02Desktop, name: string): Promise<L
   c02Assert(await scope.page.locator('.tab-close').count() === 0, 'C02 修改认证前必须先关闭真实查询标签');
   const row = scope.page.locator('.connection-row').filter({ has: scope.page.getByRole('button', { name, exact: true }) });
   await row.getByRole('button', { name, exact: true }).focus();
-  await row.getByRole('button', { name: `编辑连接 ${name}`, exact: true }).click();
+  await clickSidebarAction(row, { name: `编辑连接 ${name}`, exact: true });
   return scope.page.getByRole('dialog', { name: '编辑连接', exact: true });
 }
 

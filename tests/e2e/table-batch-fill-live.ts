@@ -1,3 +1,4 @@
+import { clickSidebarAction } from './sidebar-menu';
 import mysql, { type ConnectionOptions } from 'mysql2';
 import type { Connection as PromiseConnection, RowDataPacket, ResultSetHeader } from 'mysql2/promise';
 import type { Locator, TestInfo } from '@playwright/test';
@@ -117,7 +118,7 @@ export function registerTableBatchFill(binding: BatchFillTarget): void {
           });
           const connection = page.locator('.connection-node').filter({ has: page.locator('.connection-row').getByRole('button', { name: context.connectionName, exact: true }) });
           await checked(() => connection.locator('.connection-row').getByRole('button', { name: context.connectionName, exact: true }).focus());
-          await checked(() => connection.getByRole('button', { name: '刷新连接', exact: true }).click());
+          await checked(() => clickSidebarAction(connection, { name: '刷新连接', exact: true }));
           const database = connection.locator('.database-row').getByRole('button', { name: context.database, exact: true });
           await checked(() => expect(database).toBeVisible());
           if (await checked(() => database.getAttribute('aria-expanded')) !== 'true') await checked(() => database.click());

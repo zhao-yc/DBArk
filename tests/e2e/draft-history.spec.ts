@@ -1,3 +1,4 @@
+import { clickSidebarAction } from './sidebar-menu';
 import { test, expect, page } from './desktop-fixture';
 import { draftHistoryZh as history } from '../../src/renderer/locales/draftHistory.zh-CN';
 import { pasteInsertZh as paste } from '../../src/renderer/locales/pasteInsert.zh-CN';
@@ -19,7 +20,7 @@ async function isolated(body: (context: LiveContext) => Promise<void>, info: Par
     await context.observer.query(`INSERT INTO \`${context.database}\`.subject(note) VALUES ('原值')`);
     const connection = page.locator('.connection-node').filter({ has: page.locator('.connection-row').getByText(context.connectionName, { exact: true }) });
     await connection.locator('.connection-row').getByRole('button', { name: context.connectionName, exact: true }).focus();
-    await connection.getByRole('button', { name: '刷新连接', exact: true }).click();
+    await clickSidebarAction(connection, { name: '刷新连接', exact: true });
     await connection.locator('.database-row').getByRole('button', { name: context.database, exact: true }).click();
     await connection.locator('.object-row').filter({ has: page.getByText('subject', { exact: true }) }).getByText('subject', { exact: true }).click();
     await expect(table().locator('.loading-overlay')).toHaveCount(0); await body(context);

@@ -1,3 +1,4 @@
+import { clickSidebarAction } from './sidebar-menu';
 import type { RowDataPacket } from 'mysql2/promise';
 import type { Page, TestInfo } from '@playwright/test';
 import { test, expect, ownedDesktopResources, retainOwnedDesktopResources } from './desktop-fixture';
@@ -28,7 +29,7 @@ async function observe<T>(owner: CaseOwner, request: () => Promise<T>): Promise<
 async function open(owner: CaseOwner, context: LiveContext, name: string) {
   const connection = page(owner).locator('.connection-node').filter({ has: page(owner).locator('.connection-row').getByText(context.connectionName, { exact: true }) });
   await connection.locator('.connection-row').getByRole('button', { name: context.connectionName, exact: true }).focus(); owner.assertCurrent();
-  await connection.getByRole('button', { name: '刷新连接', exact: true }).click(); owner.assertCurrent();
+  await clickSidebarAction(connection, { name: '刷新连接', exact: true }, undefined, () => owner.assertCurrent()); owner.assertCurrent();
   await connection.locator('.database-row').getByRole('button', { name: context.database, exact: true }).click(); owner.assertCurrent();
   await connection.locator('.object-row').filter({ has: page(owner).getByText(name, { exact: true }) }).getByText(name, { exact: true }).click(); owner.assertCurrent();
   const table = page(owner).locator('.table-tab:visible'); await expect(table.locator('.loading-overlay')).toHaveCount(0); owner.assertCurrent();

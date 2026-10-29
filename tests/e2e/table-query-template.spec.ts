@@ -1,3 +1,4 @@
+import { clickSidebarAction } from './sidebar-menu';
 import { connectionUriZh } from '../../src/renderer/locales/connectionUri.zh-CN';
 import { connectionUriErrors } from '../../src/shared/connectionUri';
 import { test as baseTest, expect, type TestInfo } from '@playwright/test';
@@ -96,7 +97,7 @@ test('真实表结构模板及字段悬停：安全属性、SELECT执行、UPDAT
     const update = text.generatedComment + `\nUPDATE \`${target!.database!}\`.\`subject\`\nSET\n  \`amount\` = :value_1,\n  \`note\` = :value_2,\n  \`bin\` = :value_3\nWHERE\n  \`id\` = :key_1\nLIMIT 1;`;
     await step(() => application.evaluate(observeTemplates, { connectionId: profile.id, database: target!.database!, select, update }));
     const connection = page.locator('.connection-node').filter({ has: page.locator('.connection-row').getByText(connectionName, { exact: true }) });
-    await step(() => connection.locator('.connection-row > .tree-label').focus()); await step(() => connection.getByRole('button', { name: zh.sidebar.text011, exact: true }).click()); await step(() => connection.locator('.database-row').getByRole('button', { name: target!.database!, exact: true }).click()); await step(() => connection.locator('.object-row').getByText('subject', { exact: true }).click());
+    await step(() => connection.locator('.connection-row > .tree-label').focus()); await step(() => clickSidebarAction(connection, { name: zh.sidebar.text011, exact: true })); await step(() => connection.locator('.database-row').getByRole('button', { name: target!.database!, exact: true }).click()); await step(() => connection.locator('.object-row').getByText('subject', { exact: true }).click());
     const table = page.locator('.table-tab:visible'), cell = table.locator('[role="row"][aria-rowindex="2"] [role="gridcell"][aria-colindex="4"]');
     await step(() => expect(cell).toBeVisible()); await step(() => expect(table.locator('.loading-overlay')).toHaveCount(0));
     const tableTab = (await settings()).tabs.find(tab => tab.kind === 'table')!; expect(tableTab).toBeTruthy();

@@ -1,3 +1,4 @@
+import { clickSidebarAction } from './sidebar-menu';
 import type { Locator } from '@playwright/test';
 import type { RowDataPacket } from 'mysql2/promise';
 import { test, expect, page, pageErrors } from './desktop-fixture';
@@ -14,7 +15,7 @@ const replacementPreview = () => page.getByRole('dialog', { name: text.replaceTi
 async function openCaptureTable(connectionName: string, database: string, name: string) {
   const connection = page.locator('.connection-node').filter({ has: page.locator('.connection-row').getByText(connectionName, { exact: true }) });
   await connection.locator('.connection-row').getByRole('button', { name: connectionName, exact: true }).focus();
-  await connection.getByRole('button', { name: '刷新连接', exact: true }).click();
+  await clickSidebarAction(connection, { name: '刷新连接', exact: true });
   const databaseRow = connection.locator('.database-row').filter({ has: page.getByRole('button', { name: database, exact: true }) });
   await databaseRow.getByRole('button', { name: database, exact: true }).click();
   await connection.locator('.object-row').getByText(name, { exact: true }).click();

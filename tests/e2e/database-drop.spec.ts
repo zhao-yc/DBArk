@@ -1,3 +1,4 @@
+import { clickSidebarAction, sidebarMenuItem } from './sidebar-menu';
 import { test as baseTest } from '@playwright/test';
 
 const listing = process.argv.some(value => value === '--list' || value.startsWith('--list='));
@@ -77,7 +78,7 @@ function register(binding: ReturnType<typeof import('../helpers/databaseDropUi')
       const subject = node.locator('.object-row').filter({ has: page.getByRole('button', { name: 'subject', exact: true }) }); await step(() => subject.getByRole('button', { name: 'subject', exact: true }).click());
       const table = page.locator('.table-tab:visible'); await step(() => expect(table.locator('.results-grid')).toBeVisible()); await step(() => expect(table.locator('.loading-overlay')).toHaveCount(0)); await step(() => expect(table.locator(':scope > .error-box')).toHaveCount(0)); await step(() => expect(table).toContainText('9007199254740993'));
       const tableNode = await step(() => table.elementHandle()); if (!tableNode) throw Error('删除数据库缺少真实原表页');
-      await step(() => databaseRow.getByRole('button', { name: database, exact: true }).focus()); await step(() => databaseRow.getByRole('button', { name: zh.sidebar.text016, exact: true }).click());
+      await step(() => databaseRow.getByRole('button', { name: database, exact: true }).focus()); await step(() => clickSidebarAction(databaseRow, { name: zh.sidebar.text016, exact: true }, undefined, check));
       const queryEditor = page.locator('.query-tab:visible .monaco-editor'); await step(() => expect(queryEditor).toBeVisible()); await step(() => queryEditor.click()); await step(() => page.keyboard.insertText(preservedSql));
       await step(() => expect.poll(async () => { const value = await step(() => page.evaluate(() => window.dbark.invoke('settings.get', {}))); return value.tabs.find(tab => tab.kind === 'query')?.sql; }).toBe(preservedSql));
       const initialSettings = await step(() => page.evaluate(() => window.dbark.invoke('settings.get', {}))); expect(initialSettings.tabs).toHaveLength(2); const tableTab = initialSettings.tabs.find(tab => tab.kind === 'table')!, queryTab = initialSettings.tabs.find(tab => tab.kind === 'query')!;
@@ -85,8 +86,8 @@ function register(binding: ReturnType<typeof import('../helpers/databaseDropUi')
       const nativeWindow = await step(() => application.browserWindow(page)), senderId = await step(() => nativeWindow.evaluate(native => native.webContents.id)); await step(() => nativeWindow.evaluate(native => native.setSize(1280, 900))); await step(() => nativeWindow.dispose());
       await step(() => application.evaluate(installDatabaseDropUiAudit, { senderId, profileId: profile.id, database, tableTabId: tableTab.id, queryTabId: queryTab.id, sql: preservedSql })); armed = true;
       const dialog = page.getByRole('dialog', { name: text.title, exact: true });
-      /** 真实悬停与可见入口点击，不用force或直接调用删除IPC。 */
-      const open = async () => { await step(() => databaseRow.scrollIntoViewIfNeeded()); await step(() => databaseRow.hover()); const entry = databaseRow.getByRole('button', { name: text.title + ' ' + database, exact: true }); await step(() => expect(entry).toBeVisible()); await step(() => entry.click()); await step(() => expect(dialog.getByRole('button', { name: text.preview, exact: true })).toBeEnabled()); for (const label of [text.tables, text.views, text.procedures, text.functions, text.triggers, text.events]) await step(() => expect(dialog.locator('dl > div').filter({ has: page.locator('dt').filter({ hasText: new RegExp('^' + label + '$') }) }).locator('dd')).toHaveText('1')); };
+      /** 真实右键菜单与可见入口点击，不用force或直接调用删除IPC。 */
+      const open = async () => { await step(() => databaseRow.scrollIntoViewIfNeeded()); await step(() => databaseRow.hover()); const entry = (await step(() => sidebarMenuItem(databaseRow, { name: text.title + ' ' + database, exact: true }, check))); await step(() => expect(entry).toBeVisible()); await step(() => entry.click()); await step(() => expect(dialog.getByRole('button', { name: text.preview, exact: true })).toBeEnabled()); for (const label of [text.tables, text.views, text.procedures, text.functions, text.triggers, text.events]) await step(() => expect(dialog.locator('dl > div').filter({ has: page.locator('dt').filter({ hasText: new RegExp('^' + label + '$') }) }).locator('dd')).toHaveText('1')); };
       const prepare = async () => {
         await step(() => dialog.getByRole('button', { name: text.preview, exact: true }).click()); await step(() => expect(dialog.getByRole('heading', { name: text.fixedSql, exact: true })).toBeVisible());
         const editor = dialog.locator('.monaco-editor'), lines = editor.locator('.view-lines'); await step(() => expect.poll(async () => (await step(() => lines.innerText())).replace(/\r?\n/g, '').replaceAll('\u00a0', ' ')).toBe('DROP DATABASE ' + quote + ';'));

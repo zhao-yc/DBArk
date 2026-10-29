@@ -1,3 +1,4 @@
+import { clickSidebarAction } from './sidebar-menu';
 import {randomUUID} from 'node:crypto';
 import type {Connection,RowDataPacket} from 'mysql2/promise';
 import {test,expect,page,closed,answerDialogs,quitDesktop,launchDesktop} from './desktop-fixture';
@@ -44,7 +45,7 @@ test.describe('200隔离实例：查询上下文的实际入口',()=>{
   });
   test('确认无默认库的保存与重启不会回退连接配置中的A库',async({},info)=>{
     test.setTimeout(180000);await isolatedDatabase(async({observer,database,connectionName})=>otherDatabase(observer,async other=>{
-      const row=page.locator('.connection-row').filter({has:page.getByRole('button',{name:connectionName,exact:true})});await row.getByRole('button',{name:connectionName,exact:true}).focus();await row.getByRole('button',{name:`编辑连接 ${connectionName}`,exact:true}).click();const edit=page.getByRole('dialog',{name:'编辑连接',exact:true});await edit.getByLabel('默认数据库（可选）',{exact:true}).fill(database);await edit.getByRole('button',{name:'保存连接',exact:true}).click();await expect(edit).toBeHidden();
+      const row=page.locator('.connection-row').filter({has:page.getByRole('button',{name:connectionName,exact:true})});await row.getByRole('button',{name:connectionName,exact:true}).focus();await clickSidebarAction(row, {name:`编辑连接 ${connectionName}`,exact:true});const edit=page.getByRole('dialog',{name:'编辑连接',exact:true});await edit.getByLabel('默认数据库（可选）',{exact:true}).fill(database);await edit.getByRole('button',{name:'保存连接',exact:true}).click();await expect(edit).toBeHidden();
       // 使用独立SQL标签显式切到可丢弃库，再删除当前库，协议报告空库。
       await page.locator('.app-commandbar').getByRole('button',{name:'新建查询',exact:true}).click();await page.getByRole('dialog',{name:'新建查询',exact:true}).getByRole('button',{name:'打开查询',exact:true}).click();await executeSql(`USE \`${other}\`;DROP DATABASE \`${other}\``);await savedContext(null);await writeSql('SELECT DATABASE() AS restored_database');await save('确认无默认库');await reopen('确认无默认库',true);await quitDesktop();await launchDesktop();await expect(query().getByLabel('当前查询默认库',{exact:true})).toHaveText('未选择数据库');await executeSql('SELECT DATABASE() AS restored_database');await savedContext(null);await expect(query().locator('.result-body')).toContainText('NULL');
       const history=await page.evaluate(()=>window.dbark.invoke('history.list',{}));expect(history.find(item=>item.sql==='SELECT DATABASE() AS restored_database')?.databaseContext).toEqual({state:'known',database:null});

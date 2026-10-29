@@ -1,3 +1,4 @@
+import { clickSidebarAction, sidebarMenuItem } from './sidebar-menu';
 import { mkdir, open, readFile, readdir, rmdir, writeFile } from 'node:fs/promises';
 import { createServer, type AddressInfo } from 'node:net';
 import { join } from 'node:path';
@@ -109,7 +110,7 @@ test.describe('离线连接概要复制与迁移', () => {
     await page.evaluate(input => window.dbark.invoke('table.preferences.save', input), { ...target, preferences });
     await reloadWorkspace();
     const row = page.locator('.connection-row').filter({ hasText: original.name }); await row.hover();
-    await row.getByRole('button', { name: `复制连接概要 ${original.name}`, exact: true }).click();
+    await clickSidebarAction(row, { name: `复制连接概要 ${original.name}`, exact: true });
     const modal = page.getByRole('dialog', { name: '新建连接', exact: true });
     await expect(modal.getByLabel('连接名称', { exact: true })).toHaveValue(`${original.name} 副本`);
     await expect(modal.getByLabel('数据库密码', { exact: true })).toHaveValue('');
@@ -280,10 +281,10 @@ test.describe('离线连接概要复制与迁移', () => {
     await quitDesktop(); await launchDesktop();
     expect((await list())[0].pendingFiles).toEqual(imported.pendingFiles);
     const row = page.locator('.connection-row').filter({ has: page.getByRole('button', { name: imported.name, exact: true }) });
-    /** 重启或关闭弹窗后通过实际 focus-within 入口显示操作区，不依赖前一窗口的鼠标悬停，也不点击主按钮发起连接。 */
+    /** 重启或关闭弹窗后聚焦原节点并打开真实右键菜单，不点击主按钮发起连接。 */
     async function openImportedEditor() {
       await row.getByRole('button', { name: imported.name, exact: true }).focus();
-      const edit = row.getByRole('button', { name: `编辑连接 ${imported.name}`, exact: true });
+      const edit = (await sidebarMenuItem(row, { name: `编辑连接 ${imported.name}`, exact: true }));
       await expect(edit).toBeVisible(); await edit.click();
       const dialog = page.getByRole('dialog', { name: '编辑连接', exact: true }); await expect(dialog).toBeVisible(); return dialog;
     }
@@ -375,7 +376,7 @@ test.describe('连接迁移保持真实只读工作区', () => {
     }).toEqual({ connections: [first.id, second.id],databases:[first.database,second.database],contexts:[{state:'known',database:first.database},{state:'known',database:second.database}], activeConnection: second.id });
     const before = await page.evaluate(async () => ({ settings: await window.dbark.invoke('settings.get', {}), tasks: await window.dbark.invoke('tasks.list', {}), history: await window.dbark.invoke('history.list', {}) }));
     const row = page.locator('.connection-row').filter({ hasText: first.name }); await row.hover();
-    await row.getByRole('button', { name: `复制连接概要 ${first.name}`, exact: true }).click();
+    await clickSidebarAction(row, { name: `复制连接概要 ${first.name}`, exact: true });
     const copyDialog = page.getByRole('dialog', { name: '新建连接', exact: true });
     await copyDialog.getByRole('button', { name: '保存连接', exact: true }).click(); await expect(copyDialog).toBeHidden();
     const file = join(dataDir, '实际只读连接概要.json'); await chooseNative('save', file); const exporter = await transfer('export');

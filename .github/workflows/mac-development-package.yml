@@ -104,6 +104,18 @@ jobs:
           await writeFile('package-evidence/smoke.json',JSON.stringify(report,null,2)+'\n');
           if(!report.passed)process.exit(1);
           NODE
+      - name: 对象树菜单打包应用专项
+        shell: bash
+        env:
+          DBARK_SIDEBAR_CONTEXT_MENU_TEST: '1'
+          EXPECTED_ARCH: ${{ matrix.arch }}
+          PLAYWRIGHT_JSON_OUTPUT_FILE: package-evidence/sidebar-context-menu-report.json
+        run: |
+          set -euo pipefail
+          app_directory=mac
+          if [ "$EXPECTED_ARCH" = arm64 ]; then app_directory=mac-arm64; fi
+          export DBARK_EXECUTABLE_PATH="$GITHUB_WORKSPACE/release/$app_directory/DBArk.app/Contents/MacOS/DBArk"
+          pnpm exec playwright test tests/e2e/sidebar-context-menu.spec.ts --workers=1 --retries=0 --trace=off --reporter=line,json --output=package-evidence/sidebar-context-menu
       - uses: actions/upload-artifact@v4
         with:
           name: DBArk-macOS-${{ matrix.arch }}-开发包-${{ github.run_id }}

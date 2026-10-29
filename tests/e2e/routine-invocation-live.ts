@@ -1,3 +1,4 @@
+import { clickSidebarAction, sidebarMenuItem } from './sidebar-menu';
 import type { Locator, TestInfo } from '@playwright/test';
 import type { Connection, RowDataPacket } from 'mysql2';
 import { createHash } from 'node:crypto';
@@ -155,7 +156,7 @@ export function registerRoutineInvocationUi(): void {
       const profiles = await step(() => page.evaluate(() => window.dbark.invoke('connections.list', {}))); expect(profiles).toHaveLength(1); const profile = profiles[0]; expect(profile.rememberPassword).toBe(false); expect(profile.password).toBeUndefined(); expect(profile.database).toBe(database); expect(profile.port).toBe(13384);
       const node = page.locator('.connection-node').filter({ has: page.getByRole('button', { name: profile.name, exact: true }) }); await step(() => node.getByRole('button', { name: profile.name, exact: true }).click());
       const databaseRow = node.locator('.database-row').filter({ has: page.getByRole('button', { name: database, exact: true }) }); await step(() => databaseRow.getByRole('button', { name: database, exact: true }).click()); await step(() => expect(databaseRow.getByRole('button', { name: database, exact: true })).toHaveAttribute('aria-expanded', 'true'));
-      await step(() => databaseRow.getByRole('button', { name: zh.sidebar.text016, exact: true }).click()); const query = () => page.locator('.query-tab:visible'); const sourceSql = '-- 原查询保持，尚未执行\nSELECT 123 AS untouched;';
+      await step(() => clickSidebarAction(databaseRow, { name: zh.sidebar.text016, exact: true }, undefined, check)); const query = () => page.locator('.query-tab:visible'); const sourceSql = '-- 原查询保持，尚未执行\nSELECT 123 AS untouched;';
       await step(() => expect(query().locator('.monaco-editor').getByRole('textbox')).toBeVisible()); await step(() => query().locator('.monaco-editor').getByRole('textbox').focus()); await step(() => query().locator('.monaco-editor').getByRole('textbox').evaluate((element, value) => { const transfer = new DataTransfer(); transfer.setData('text/plain', value); element.dispatchEvent(new ClipboardEvent('paste', { clipboardData: transfer, bubbles: true, cancelable: true })); }, sourceSql));
       await step(() => expect.poll(async () => { const settings = await page.evaluate(() => window.dbark.invoke('settings.get', {})); return settings.tabs.find(tab => tab.id === settings.activeTabId)?.sql?.replaceAll('\r\n', '\n'); }).toBe(sourceSql));
       const initialSettings = await step(() => page.evaluate(() => window.dbark.invoke('settings.get', {}))), sourceTab = initialSettings.tabs.find(tab => tab.id === initialSettings.activeTabId)!; expect(sourceTab.kind).toBe('query'); const sourceResult = await step(() => query().locator('.result-body').innerText());
@@ -209,7 +210,7 @@ export function registerRoutineInvocationUi(): void {
       for (const [index, name] of names.entries()) {
         await step(() => expect.poll(async () => (await facts()).pending).toBe(0));
         await step(() => application.evaluate((_electron, phase) => { const state = (globalThis as any).__routineInvocationAudit; state.check(); if (state.pending || state.permission) throw Error('例程前一操作未结束'); state.phase = phase; state.sql = ''; state.parameters = []; }, name));
-        const entry = node.getByRole('button', { name: text.entry + ' ' + name, exact: true }); await step(() => expect(entry).toBeVisible()); await step(() => entry.click());
+        const entry = (await step(() => sidebarMenuItem(node.locator('.object-row').filter({ has: node.page().getByText(name, { exact: true }) }), { name: text.entry + ' ' + name, exact: true }, check))); await step(() => expect(entry).toBeVisible()); await step(() => entry.click());
         const modal = page.getByRole('dialog', { name: text.title, exact: true }); await step(() => expect(modal).toBeVisible());
         expect((await facts()).calls.filter(call => call.command === 'metadata.routineInvocation' && call.phase === name)).toHaveLength(0); expect((await facts()).executions).toBe(index);
         await step(() => modal.getByRole('button', { name: text.read, exact: true }).click()); await step(() => expect(modal.getByRole('button', { name: text.open, exact: true })).toBeEnabled());

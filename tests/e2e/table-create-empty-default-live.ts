@@ -1,3 +1,4 @@
+import { clickSidebarAction } from './sidebar-menu';
 import { randomUUID } from 'node:crypto';
 import { performance } from 'node:perf_hooks';
 import type { TestInfo } from '@playwright/test';
@@ -88,7 +89,7 @@ export function registerTableCreateEmptyDefaultUiTests() {
       const database = node.locator('.database-row').filter({ has: page.getByRole('button', { name: schema, exact: true }) });
       await ui(() => expect(database).toHaveCount(1)); await ui(() => database.getByRole('button', { name: schema, exact: true }).click());
       await ui(() => expect(database.getByRole('button', { name: schema, exact: true })).toHaveAttribute('aria-expanded', 'true'));
-      await ui(() => database.getByRole('button', { name: schema, exact: true }).focus()); await ui(() => database.getByRole('button', { name: zh.sidebar.text017, exact: true }).click());
+      await ui(() => database.getByRole('button', { name: schema, exact: true }).focus()); await ui(() => clickSidebarAction(database, { name: zh.sidebar.text017, exact: true }));
       const designer = page.getByRole('dialog', { name: formatText(zh.schema.text009, schema), exact: true });
       const input = (ordinal: number) => designer.getByLabel(formatText(zh.schema.text022, ordinal), { exact: true });
       const empty = designer.getByRole('checkbox', { name: formatText(zh.schema.emptyStringDefaultLabel, 2), exact: true });

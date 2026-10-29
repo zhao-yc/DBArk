@@ -1,3 +1,4 @@
+import { clickSidebarAction } from './sidebar-menu';
 import { test as baseTest, expect, type Locator, type TestInfo } from '@playwright/test';
 import type { RowDataPacket } from 'mysql2/promise';
 import type { TableApplyReceipt } from '../../src/shared/tableApplyReceipt';
@@ -38,7 +39,7 @@ test.beforeEach(async () => {
 /** 从真实对象树打开表；不调用table.page或内部React状态伪造界面。 */
 async function open(c: Context) {
   const connection = page().locator('.connection-node').filter({ has: page().locator('.connection-row').getByText(c.connectionName, { exact: true }) });
-  await connection.locator('.connection-row').hover(); await connection.getByRole('button', { name: '刷新连接', exact: true }).click();
+  await connection.locator('.connection-row').hover(); await clickSidebarAction(connection, { name: '刷新连接', exact: true });
   await connection.locator('.database-row').getByRole('button', { name: c.database, exact: true }).click();
   await connection.locator('.object-row').getByText('receipt_subject', { exact: true }).click();
   await expect(table().locator('.context-bar')).toContainText('receipt_subject'); await expect(table().locator('.loading-overlay')).toHaveCount(0);

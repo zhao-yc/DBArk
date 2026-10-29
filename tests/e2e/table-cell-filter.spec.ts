@@ -1,3 +1,4 @@
+import { clickSidebarAction } from './sidebar-menu';
 import { test as baseTest, expect, type TestInfo } from '@playwright/test';
 import { zh } from '../../src/renderer/locales/zh-CN';
 import { tableCellFilterZh as text } from '../../src/renderer/locales/tableCellFilter.zh-CN';
@@ -46,7 +47,7 @@ test('真实表页按单元格原值读取全表：跨页精确小数、空串�
     expect(profile.database).toBe(target!.database); expect(profile.rememberPassword).toBe(false); expect(profile.password).toBeUndefined();
     await step(() => application.evaluate(observePages, { database: target!.database!, connectionId: profile.id }));
     const connection = page.locator('.connection-node').filter({ has: page.locator('.connection-row').getByText(connectionName, { exact: true }) });
-    await step(() => connection.locator('.connection-row > .tree-label').focus()); await step(() => connection.getByRole('button', { name: zh.sidebar.text011, exact: true }).click());
+    await step(() => connection.locator('.connection-row > .tree-label').focus()); await step(() => clickSidebarAction(connection, { name: zh.sidebar.text011, exact: true }));
     await step(() => connection.locator('.database-row').getByRole('button', { name: target!.database!, exact: true }).click());
     await step(() => connection.locator('.object-row').getByText('subject', { exact: true }).click());
     const tab = page.locator('.table-tab:visible'), grid = tab.locator('.results-grid'), filter = tab.locator('.filter-panel');

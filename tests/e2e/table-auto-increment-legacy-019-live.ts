@@ -1,3 +1,4 @@
+import { sidebarMenuItem } from './sidebar-menu';
 import { randomUUID } from 'node:crypto';
 import { existsSync, readFileSync,realpathSync } from 'node:fs';
 import mysql, { type Connection, type RowDataPacket } from 'mysql2/promise';
@@ -65,9 +66,9 @@ export async function connectAndCreate(database: string): Promise<Omit<LiveConte
   assertTableAutoIncrementLegacyTarget({ host: environment.DBARK_TEST_HOST, port: environment.DBARK_TEST_PORT, tlsFlag: environment.DBARK_TEST_TLS, caPath: environment.DBARK_TEST_CA }, status, saved);
   console.info(JSON.stringify({ 正式界面版本: status.version, 方言: status.dialect, 端口: saved.port, 重启实测: false }));
   const connectionRow = page.locator('.connection-row').filter({ has: page.getByRole('button', { name: connectionName, exact: true }) });
-  // 使用既有键盘焦点入口显示操作区，避免窗口切换后残留鼠标位置使悬停状态失效；保持真实可见性和点击检查。
+  // 聚焦原连接后从真实右键菜单进入创建数据库，保持真实可见性和点击检查。
   await connectionRow.getByRole('button', { name: connectionName, exact: true }).focus();
-  const createDatabase = connectionRow.getByRole('button', { name: '创建数据库', exact: true });
+  const createDatabase = (await sidebarMenuItem(connectionRow, { name: '创建数据库', exact: true }));
   await expect(createDatabase).toBeVisible(); await createDatabase.click();
   const create = page.getByRole('dialog', { name: '创建数据库', exact: true });
   await create.getByLabel('数据库名称', { exact: true }).fill(database);

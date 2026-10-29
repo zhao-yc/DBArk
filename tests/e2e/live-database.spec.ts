@@ -1,3 +1,4 @@
+import { clickSidebarAction } from './sidebar-menu';
 import { discardTestTab } from './query-close-ui';
 import { mkdir, mkdtemp, readFile, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
@@ -11,7 +12,7 @@ test.use({ trace: 'off' });
 /** 打开的标签和真实会话分别保护 UI 与 IPC 保存入口，拒绝切换地址时必须保留原连接。 */
 async function verifyConnectionChangeGuard(database: string, connectionName: string, connectionId: string) {
   await page.locator('.connection-row').hover();
-  await page.getByRole('button', { name: `编辑连接 ${connectionName}`, exact: true }).click();
+  await clickSidebarAction(page.locator('.connection-row').filter({ has: page.getByRole('button', { name: connectionName, exact: true }) }), { name: `编辑连接 ${connectionName}`, exact: true });
   const form = page.getByRole('dialog', { name: '编辑连接', exact: true });
   await form.getByLabel('主机地址', { exact: true }).fill('127.0.0.1');
   await form.getByLabel('端口', { exact: true }).fill('1');
@@ -36,7 +37,7 @@ async function verifyConnectionChangeGuard(database: string, connectionName: str
   // 纯展示字段不改变底层传输配置，仍允许在当前会话保持打开时正常保存。
   const renamed = `${connectionName} 已改名`;
   await page.locator('.connection-row').hover();
-  await page.getByRole('button', { name: `编辑连接 ${connectionName}`, exact: true }).click();
+  await clickSidebarAction(page.locator('.connection-row').filter({ has: page.getByRole('button', { name: connectionName, exact: true }) }), { name: `编辑连接 ${connectionName}`, exact: true });
   await form.getByLabel('连接名称', { exact: true }).fill(renamed);
   await form.getByRole('button', { name: '保存连接', exact: true }).click();
   await expect(form).toBeHidden();
@@ -64,7 +65,7 @@ async function verifyConnectionContextInvalidation(database: string, connectionN
   await otherNode.locator('.connection-row .tree-label').click();
   const otherDatabase = otherNode.locator('.database-row').filter({ has: page.getByRole('button', { name: database, exact: true }) });
   await otherDatabase.hover();
-  await otherDatabase.getByRole('button', { name: '新建数据库查询', exact: true }).click();
+  await clickSidebarAction(otherDatabase, { name: '新建数据库查询', exact: true });
   await executeSql("SELECT '另一连接保持原库' AS ready, DATABASE() AS active_database;");
   await expect(page.locator('.query-tab:visible .result-body')).toContainText(database);
   await expect(page.locator('.workspace-tab-button')).toHaveCount(2);
@@ -79,7 +80,7 @@ async function verifyConnectionContextInvalidation(database: string, connectionN
   await expect(originalDatabase).toHaveClass(/active/);
   await expect(originalNode.getByRole('button', { name: 'transaction_probe', exact: true })).toBeVisible();
   await originalNode.locator('.connection-row').hover();
-  await originalNode.getByRole('button', { name: `编辑连接 ${connectionName}`, exact: true }).click();
+  await clickSidebarAction(originalNode, { name: `编辑连接 ${connectionName}`, exact: true });
   const edit = page.getByRole('dialog', { name: '编辑连接', exact: true });
   await edit.getByLabel('默认数据库（可选）', { exact: true }).fill('information_schema');
   if (!encryptionAvailable) await edit.getByLabel('数据库密码', { exact: true }).fill(environment.DBARK_TEST_PASSWORD ?? '');
@@ -242,7 +243,7 @@ test.describe('远程真实数据库桌面工作流', () => {
       const restored = await page.evaluate(() => window.dbark.invoke('connections.list', {}));
       expect(restored[0].hasPassword).toBe(encryptionAvailable);
       await page.locator('.connection-row').hover();
-      await page.getByRole('button', { name: `编辑连接 ${renamedConnection}`, exact: true }).click();
+      await clickSidebarAction(page.locator('.connection-row').filter({ has: page.getByRole('button', { name: renamedConnection, exact: true }) }), { name: `编辑连接 ${renamedConnection}`, exact: true });
       const form = page.getByRole('dialog', { name: '编辑连接', exact: true });
       if (!encryptionAvailable) await form.getByLabel('数据库密码', { exact: true }).fill(environment.DBARK_TEST_PASSWORD ?? '');
       await form.getByRole('button', { name: '测试连接', exact: true }).click();
