@@ -1,3 +1,4 @@
+import { sidebarMenuRamPort } from '../helpers/sidebarMenuRamPort';
 import { readFileSync } from 'node:fs';
 import { createContext, runInContext } from 'node:vm';
 import ts from 'typescript';
@@ -38,6 +39,8 @@ function harness(changes: { facts?: Record<string, unknown>; unknownQuery?: bool
   runInContext(ts.transpileModule(isolated, { compilerOptions }).outputText, sharedContext);
   const test = Object.assign((_title: string, value: Function) => { callback = value; }, { use: vi.fn(), afterEach: vi.fn() });
   const context = createContext({ exports: {}, require(name: string) {
+    // 对象树菜单是显式RAM展示依赖，不加载Playwright或计作原生/认证模块。
+    if (name === './sidebar-menu') return sidebarMenuRamPort;
     if (name === 'mysql2/promise') return { __esModule: true, default: mysql };
     if (name === 'node:fs') return { readFileSync: () => { calls.push('synthetic-ca'); return '合成CA内容'; } };
     if (name === './desktop-fixture') return { test, expect, ownedDesktopResources: owned, retainOwnedDesktopResources: retain };

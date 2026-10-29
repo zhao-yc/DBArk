@@ -1,3 +1,4 @@
+import { sidebarMenuRamPort } from '../helpers/sidebarMenuRamPort';
 import { EventEmitter } from 'node:events';
 import { readFileSync } from 'node:fs';
 import { createContext, runInContext } from 'node:vm';
@@ -27,6 +28,8 @@ function formal(changes: Changes = {}) {
     calls.push('drift');
   };
   const locator = (label = ''): any => new Proxy({ __locator: true }, { get(_object, key) {
+    // 真实Locator不是Promise；异步菜单返回值不能被通用Proxy误识别为thenable。
+    if (key === 'then') return undefined;
     if (key === '__locator') return true;
     if (key === '__label') return label;
     if (['getByRole', 'getByLabel', 'getByText'].includes(String(key))) return (name: string, options?: { name: string }) => locator(key === 'getByRole' ? options?.name ?? name : name);
@@ -42,7 +45,7 @@ function formal(changes: Changes = {}) {
   const actualExpect = (value: any) => value?.__locator ? new Proxy({}, { get: () => async () => { if (changes.afterForm && value.__label === 'dbark_encoding_' + uuid.replaceAll('-', '')) mutate(); } }) : expect(value);
   const helperSource = readFileSync(new URL('../e2e/live-helpers.ts', import.meta.url), 'utf8'), tree = ts.createSourceFile('helper.ts', helperSource, ts.ScriptTarget.Latest, true);
   const helperBody = tree.statements.find(node => ts.isFunctionDeclaration(node) && node.name?.text === 'connectAndCreate')!.getText(tree);
-  const helperContext = { exports: {} as Record<string, Function>, environment: helper, expect: actualExpect, configureTls: async (_form: unknown, owner: { assertCurrent(): void }) => owner.assertCurrent(), databaseText: { charset: '字符集', collation: '排序规则', preview: '建库预览', confirmation: '建库确认', ackDdl: '风险一', ackCreate: '风险二', apply: '执行建库', succeeded: '成功' } };
+  const helperContext = { ...sidebarMenuRamPort, exports: {} as Record<string, Function>, environment: helper, expect: actualExpect, configureTls: async (_form: unknown, owner: { assertCurrent(): void }) => owner.assertCurrent(), databaseText: { charset: '字符集', collation: '排序规则', preview: '建库预览', confirmation: '建库确认', ackDdl: '风险一', ackCreate: '风险二', apply: '执行建库', succeeded: '成功' } };
   runInContext(compile(helperBody), createContext(helperContext));
   const createConnection = async (options: Record<string, unknown>) => {
     const index = ++connectionCount; calls.push('connect'); targets.push(options); expect(options).not.toHaveProperty('database');
@@ -63,6 +66,8 @@ function formal(changes: Changes = {}) {
   };
   const test = Object.assign((_name: string, body: Function) => cases.push(body), { use: vi.fn(), setTimeout: vi.fn(), describe: { configure: vi.fn() }, afterEach: (callback: Function) => { after = callback; } });
   const context = { exports: {} as Record<string, Function>, process: { env: raw }, require(name: string) {
+    // 对象树菜单是显式RAM展示依赖，不加载Playwright或计作原生/认证模块。
+    if (name === './sidebar-menu') return sidebarMenuRamPort;
     if (name === './desktop-fixture') return { test, expect: actualExpect, ownedDesktopResources: own, retainOwnedDesktopResources: retain, confirmOwnedDesktopExit: async () => { calls.push('exit'); closed = true; } };
     if (name === 'node:crypto') return { randomUUID: () => uuid };
     if (name === 'mysql2/promise') return { __esModule: true, default: { createConnection } };

@@ -1,3 +1,4 @@
+import { sidebarMenuRegistrationPort } from '../helpers/sidebarMenuRamPort';
 import { readFileSync } from 'node:fs';
 import vm from 'node:vm';
 import ts from 'typescript';
@@ -15,7 +16,9 @@ it('双门开启但隔离库/UUID不明确时不加载正式例', () => {
 it('正式模块仅注册真实场景，关闭轨迹并保持原90秒期限', () => {
   const names: string[] = [], options: unknown[] = [], timeouts: number[] = []; let hooks = 0;
   const test = Object.assign((name: string, _body: unknown) => names.push(name), { use: (value: unknown) => options.push(value), setTimeout: (value: number) => timeouts.push(value), afterEach() { hooks++; } });
-  const exports: any = {}; vm.runInNewContext(code('table-create-prefix-live.ts'), { exports, require(name: string) { if (name === './desktop-fixture') return { test }; if (name === 'node:crypto' || name === './definition-navigation-live' || name.endsWith('/tableDefaultEncodingTarget') || name.endsWith('/zh-CN') || name.endsWith('/tableCreate.zh-CN') || name.endsWith('/tableCreatePrefix.zh-CN')) return {}; throw Error('仅注册不得加载其它模块：' + name); } }); exports.registerTableCreatePrefixTests(); expect(names).toHaveLength(1); expect(options).toEqual([{ trace: 'off', screenshot: 'off', video: 'off', preserveOnUnconfirmedExit: true }]); expect(timeouts).toEqual([90000]); expect(hooks).toBe(1);
+  const exports: any = {}; vm.runInNewContext(code('table-create-prefix-live.ts'), { exports, require(name: string) {
+    // 对象树菜单是显式RAM展示依赖，不加载Playwright或计作原生/认证模块。
+    if (name === './sidebar-menu') return sidebarMenuRegistrationPort; if (name === './desktop-fixture') return { test }; if (name === 'node:crypto' || name === './definition-navigation-live' || name.endsWith('/tableDefaultEncodingTarget') || name.endsWith('/zh-CN') || name.endsWith('/tableCreate.zh-CN') || name.endsWith('/tableCreatePrefix.zh-CN')) return {}; throw Error('仅注册不得加载其它模块：' + name); } }); exports.registerTableCreatePrefixTests(); expect(names).toHaveLength(1); expect(options).toEqual([{ trace: 'off', screenshot: 'off', video: 'off', preserveOnUnconfirmedExit: true }]); expect(timeouts).toEqual([90000]); expect(hooks).toBe(1);
 });
 
 it('本用途双门与完整显式参数通过后才加载注册模块，不读取回填文件', () => {

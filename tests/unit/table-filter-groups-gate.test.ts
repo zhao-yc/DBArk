@@ -1,3 +1,4 @@
+import { sidebarMenuRegistrationPort } from '../helpers/sidebarMenuRamPort';
 import { expect, it, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { runInNewContext } from 'node:vm';
@@ -17,6 +18,8 @@ function fixture(change: Record<string, string | undefined> = {}, args: string[]
   const context: any = {
     exports: {}, process: { env, argv: ['node', 'playwright', ...args] }, structuredClone,
     require(name: string) {
+    // 对象树菜单是显式RAM展示依赖，不加载Playwright或计作原生/认证模块。
+    if (name === './sidebar-menu') return sidebarMenuRegistrationPort;
       modules.push(name);
       if (name === '@playwright/test') return { test, expect: () => { throw Error('禁止执行真实测试体'); } };
       if (name === './desktop-fixture') return { test };

@@ -1,3 +1,4 @@
+import { sidebarMenuRamPort } from '../helpers/sidebarMenuRamPort';
 import { readFileSync } from 'node:fs';
 import { createContext, runInContext } from 'node:vm';
 import ts from 'typescript';
@@ -17,6 +18,8 @@ function databaseCase(mismatch = false, loseAtVersion = false) {
   const test = Object.assign((_title: string, body: (input: {}, info: unknown) => Promise<void>) => { run = () => body({}, info); }, { use() {}, setTimeout() {}, describe: { configure() {} } });
   const exports: any = {}, retain = vi.fn(() => { current = false; }), confirm = vi.fn(async () => {});
   const context = createContext({ exports, process: { env: { ...environment, DBARK_TEST_EXPECTED_SERVER_UUID: uuid } }, require(name: string) {
+    // 对象树菜单是显式RAM展示依赖，不加载Playwright或计作原生/认证模块。
+    if (name === './sidebar-menu') return sidebarMenuRamPort;
     if (name === 'node:crypto') return { randomUUID: () => uuid };
     if (name === 'mysql2/promise') return { createConnection: async () => observer };
     if (name === './desktop-fixture') return { test, expect, ownedDesktopResources: () => { if (!current) throw Error('owner已失效'); return { page, closed: false }; }, retainOwnedDesktopResources: retain, confirmOwnedDesktopExit: confirm };

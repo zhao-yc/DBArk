@@ -1,4 +1,3 @@
-import { sidebarMenuItem } from './sidebar-menu';
 import { test as baseTest } from '@playwright/test';
 
 const listing = process.argv.some(value => value === '--list' || value.startsWith('--list='));
@@ -10,6 +9,7 @@ if (!listing && process.env.DBARK_GENERATED_EXPRESSION_UI === '1') {
 
 /** 任一未知立即保留原App、控制连接、随机库与输出，不补做DROP或重新执行。 */
 function register(binding: ReturnType<typeof import('../helpers/generatedExpressionUi')['bindGeneratedExpressionUi']>): void {
+  const { sidebarMenuItem } = require('./sidebar-menu') as typeof import('./sidebar-menu');
   const runtime = require('./desktop-fixture') as typeof import('./desktop-fixture');
   const { bindEditorIndentNativeCase } = require('./editor-indentation-native-gate') as typeof import('./editor-indentation-native-gate');
   const { sealEditorIndentLaunchIdentity } = require('./editor-indentation-native-identity') as typeof import('./editor-indentation-native-identity');

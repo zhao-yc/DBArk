@@ -1,3 +1,4 @@
+import { sidebarMenuRamPort } from '../helpers/sidebarMenuRamPort';
 import { readFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { createContext, runInContext } from 'node:vm';
@@ -24,7 +25,7 @@ function fixture(options: { strict?: boolean; holdClose?: boolean; aliveAfterClo
   const desktop = { evaluate: vi.fn(async (call: Function) => { const source = String(call); if (source.includes('getAppMetrics')) return [101]; if (source.includes('__dbarkE2EDialogs')) order.push('answer'); if (source.includes('app.quit')) order.push('quit-request'); }), process: () => ({ pid: 101 }), on: (_event: string, listener: () => void) => listeners.add(listener), off: (_event: string, listener: () => void) => listeners.delete(listener), waitForEvent: vi.fn(() => close.promise), close: vi.fn(async () => { order.push('close-ack'); if (!options.holdClose) emitClose(); }) };
   const rm = vi.fn(async () => { order.push('rm'); }), force = vi.fn(async () => { order.push('force-default'); });
   const assertion = Object.assign((value: unknown) => expect(value), { poll: (read: () => unknown) => ({ toEqual: async (value: unknown) => { order.push('process-proof'); expect(read()).toEqual(value); } }) });
-  context = createContext({ Error, AggregateError, WeakMap, Number, Date, expect: assertion, desktop, closed: false, pageErrors: [], snippetsDiagnostics: undefined, snippetsDiagnosticsArmed: false, quitReady: Promise.resolve(),
+  context = createContext({ ...sidebarMenuRamPort, Error, AggregateError, WeakMap, Number, Date, expect: assertion, desktop, closed: false, pageErrors: [], snippetsDiagnostics: undefined, snippetsDiagnosticsArmed: false, quitReady: Promise.resolve(),
     createSnippetsNativeDiagnostics: () => undefined, mkdtemp: vi.fn(async () => join(tmpdir(), 'dbark-e2e-owned')), join, dirname, basename, resolve, tmpdir, rm, forceStopOwnProcess: force,
     launchDesktop: vi.fn(async () => { order.push('launch'); context.closed = false; }), requestQuit: vi.fn(async () => { order.push('quit-request'); }), answerDialogs: vi.fn(async () => { order.push('answer'); }),
     // Node真实process始终具有env；空RAM环境不领取显式离线重启能力，退出/清理断言保持原样。

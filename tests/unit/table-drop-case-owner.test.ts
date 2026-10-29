@@ -1,3 +1,4 @@
+import { sidebarMenuRamPort } from '../helpers/sidebarMenuRamPort';
 import { readFileSync } from 'node:fs';
 import { createContext, runInContext } from 'node:vm';
 import ts from 'typescript';
@@ -27,6 +28,8 @@ function fixture(){
  const desktop:any={test,expect:(value:unknown)=>{const assertion:any=expect(value);for(const method of['toHaveCount','toBeEnabled','toBeDisabled','toContainText','toBeVisible'])assertion[method]=async()=>{};return assertion;},ownedDesktopResources:(ownerInfo:unknown)=>{if(ownerInfo!==activeInfo||retained)throw lost;return{page:currentPage,application:currentApplication,closed};},retainOwnedDesktopResources:retain,confirmOwnedDesktopExit:exit,quitDesktop:exit};
  Object.defineProperty(desktop,'page',{get:()=>{globalReads++;return currentPage;}});
  const exports:any={},context=createContext({exports,process:{platform:'win32'},require(name:string){
+    // 对象树菜单是显式RAM展示依赖，不加载Playwright或计作原生/认证模块。
+    if (name === './sidebar-menu') return sidebarMenuRamPort;
   if(name==='./desktop-fixture')return desktop;
   if(name==='./live-helpers')return{environment:{DBARK_TEST_HOST:'192.168.31.200',DBARK_TEST_PORT:13384,DBARK_TEST_EXPECTED_SERVER_UUID:'00000000-0000-0000-0000-000000000001'},isolatedDatabase:async(body:Function)=>{await body({connectionId:'connection',connectionName:'RAM连接',database:'dbark_e2e_ram',observer});}};
   if(name==='../../src/renderer/locales/tableDrop.zh-CN')return{tableDropZh};

@@ -193,32 +193,52 @@ function register(): void {
   });
 
   test('31px单行在明暗主题及窄宽侧栏中不跳动，长名称和底部菜单完整可达', async ({}, info) => {
-    await openTree(); const recorded = [];
+    await openTree(); const recorded: { width: number; theme: string; rowCount: number; bounds: { rect: Record<string, number>; width: number; height: number } }[] = [];
     for (const width of [180, 260, 420]) {
       await sidebarWidth(width);
       for (const theme of ['dark', 'light']) {
-        if (await runtime.page.locator('html').getAttribute('data-theme') !== theme) await runtime.page.getByRole('button', { name: '切换主题', exact: true }).click();
-        await expect(runtime.page.locator('html')).toHaveAttribute('data-theme', theme);
-        const before = await geometry(); const target = objectRow('table', longName); await target.scrollIntoViewIfNeeded(); await target.hover(); expect(await geometry()).toEqual(before);
-        await expect(label(target)).toHaveAttribute('title', '表 · ' + longName);
-        const clipped = await target.locator('.truncate').evaluate(node => ({ client: node.clientWidth, scroll: node.scrollWidth, textOverflow: getComputedStyle(node).textOverflow }));
-        expect(clipped.scroll).toBeGreaterThan(clipped.client); expect(clipped.textOverflow).toBe('ellipsis');
-        await openMenu(target); expect(await geometry()).toEqual(before);
-        const bounds = await menu().evaluate(node => ({ rect: node.getBoundingClientRect().toJSON(), width: innerWidth, height: innerHeight }));
-        expect(bounds.rect.x).toBeGreaterThanOrEqual(7); expect(bounds.rect.y).toBeGreaterThanOrEqual(7); expect(bounds.rect.right).toBeLessThanOrEqual(bounds.width - 7); expect(bounds.rect.bottom).toBeLessThanOrEqual(bounds.height - 7);
-        await menu().getByRole('menuitem').last().scrollIntoViewIfNeeded(); await expect(menu().getByRole('menuitem').last()).toBeVisible();
-        if (width === 180 && theme === 'dark' || width === 420 && theme === 'light') await runtime.page.screenshot({ path: info.outputPath(`对象树菜单-${width}-${theme}.png`) });
-        recorded.push({ width, theme, rowCount: before.length, bounds }); await runtime.page.keyboard.press('Escape');
+        await test.step(`真实布局与菜单：${width}px / ${theme}`, async () => {
+          if (await runtime.page.locator('html').getAttribute('data-theme') !== theme) await runtime.page.getByRole('button', { name: '切换主题', exact: true }).click();
+          await expect(runtime.page.locator('html')).toHaveAttribute('data-theme', theme);
+          const before = await geometry(); const target = objectRow('table', longName); await target.scrollIntoViewIfNeeded(); await target.hover(); expect(await geometry()).toEqual(before);
+          await expect(label(target)).toHaveAttribute('title', '表 · ' + longName);
+          const clipped = await target.locator('.truncate').evaluate(node => ({ client: node.clientWidth, scroll: node.scrollWidth, textOverflow: getComputedStyle(node).textOverflow }));
+          expect(clipped.scroll).toBeGreaterThan(clipped.client); expect(clipped.textOverflow).toBe('ellipsis');
+          await openMenu(target); expect(await geometry()).toEqual(before);
+          const bounds = await menu().evaluate(node => ({ rect: node.getBoundingClientRect().toJSON(), width: innerWidth, height: innerHeight }));
+          expect(bounds.rect.x).toBeGreaterThanOrEqual(7); expect(bounds.rect.y).toBeGreaterThanOrEqual(7); expect(bounds.rect.right).toBeLessThanOrEqual(bounds.width - 7); expect(bounds.rect.bottom).toBeLessThanOrEqual(bounds.height - 7);
+          await menu().getByRole('menuitem').last().scrollIntoViewIfNeeded(); await expect(menu().getByRole('menuitem').last()).toBeVisible();
+          if (width === 180 && theme === 'dark' || width === 420 && theme === 'light') await runtime.page.screenshot({ path: info.outputPath(`对象树菜单-${width}-${theme}.png`) });
+          recorded.push({ width, theme, rowCount: before.length, bounds }); await runtime.page.keyboard.press('Escape'); await expect(menu()).toHaveCount(0);
+        });
       }
     }
-    // 滚到真实目录底部，右键点放在行的右下角，核对菜单没有越过窗口边缘。
-    const bottom = objectRow('table', '滚动表_44'); await bottom.scrollIntoViewIfNeeded();
-    const box = await bottom.boundingBox(); if (!box) throw Error('缺少底部对象真实盒模型');
-    await bottom.click({ button: 'right', position: { x: box.width - 2, y: box.height - 2 } }); await expect(menu()).toBeVisible();
-    const bottomBounds = await menu().evaluate(node => ({ rect: node.getBoundingClientRect().toJSON(), width: innerWidth, height: innerHeight }));
-    expect(bottomBounds.rect.right).toBeLessThanOrEqual(bottomBounds.width - 7); expect(bottomBounds.rect.bottom).toBeLessThanOrEqual(bottomBounds.height - 7);
-    recorded.push({ width: 420, theme: 'light', rowCount: (await geometry()).length, bounds: bottomBounds }); await runtime.page.keyboard.press('Escape');
-    await info.attach('对象树菜单实际行高及边界', { body: JSON.stringify(recorded, null, 2), contentType: 'application/json' }); await unchangedWorkspace();
+    const bottom = objectRow('table', '滚动表_44');
+    const position = await test.step('底部对象滚动、盒模型与实际点击命中', async () => {
+      await expect(menu()).toHaveCount(0); await bottom.scrollIntoViewIfNeeded();
+      const box = await bottom.boundingBox(); if (!box) throw Error('缺少底部对象真实盒模型');
+      // 点击原行内部中线并离右缘24px，避开Mac原生覆盖式滚动条，不强制穿透遮挡。
+      const point = { x: Math.max(1, Math.min(box.width - 1, box.width - 24)), y: Math.max(1, box.height / 2) };
+      const hit = await bottom.evaluate((row, relative) => {
+        const rect = row.getBoundingClientRect(), style = getComputedStyle(row);
+        const client = { x: rect.x + parseFloat(style.borderLeftWidth) + relative.x, y: rect.y + parseFloat(style.borderTopWidth) + relative.y };
+        const element = document.elementFromPoint(client.x, client.y);
+        return { box: rect.toJSON(), relative, client, belongsToOriginalRow: !!element && row.contains(element), originalNode: row.getAttribute('data-sidebar-node'),
+          hit: element ? { tag: element.tagName, className: element.getAttribute('class'), node: element.closest('[data-sidebar-node]')?.getAttribute('data-sidebar-node') ?? null } : null };
+      }, point);
+      await info.attach('底部对象右键点击点及命中归属', { body: JSON.stringify({ observedBox: box, ...hit }, null, 2), contentType: 'application/json' });
+      expect(hit.belongsToOriginalRow).toBe(true); expect(hit.hit?.node).toBe(hit.originalNode); return point;
+    });
+    await test.step('底部对象真实右键、菜单边界与行高', async () => {
+      await bottom.click({ button: 'right', position }); await expect(menu()).toBeVisible();
+      const bottomBounds = await menu().evaluate(node => ({ rect: node.getBoundingClientRect().toJSON(), width: innerWidth, height: innerHeight }));
+      expect(bottomBounds.rect.right).toBeLessThanOrEqual(bottomBounds.width - 7); expect(bottomBounds.rect.bottom).toBeLessThanOrEqual(bottomBounds.height - 7);
+      recorded.push({ width: 420, theme: 'light', rowCount: (await geometry()).length, bounds: bottomBounds });
+    });
+    await test.step('底部菜单关闭、证据落盘与原编辑工作区保持', async () => {
+      await runtime.page.keyboard.press('Escape'); await expect(menu()).toHaveCount(0);
+      await info.attach('对象树菜单实际行高及边界', { body: JSON.stringify(recorded, null, 2), contentType: 'application/json' }); await unchangedWorkspace();
+    });
   });
 
   test('菜单键盘、外部点击与树滚动关闭，目录回包变更永久撤销旧菜单', async ({}, info) => {
@@ -245,7 +265,7 @@ function register(): void {
     }
     const nativeWindow = await focusStep(() => focusOwner.application.browserWindow(focusOwner.page));
     const focusSession = await focusStep(() => focusOwner.page.context().newCDPSession(focusOwner.page));
-    // 仅取消Playwright默认的焦点模拟；实际DOM失焦仍须由原系统窗口最小化产生。
+    // 仅取消Playwright默认的焦点模拟；实际DOM失焦仍须由原生窗口焦点转换产生。
     await focusStep(() => focusSession.send('Emulation.setFocusEmulationEnabled', { enabled: false }));
     // CDP点击不证明系统焦点；先取得真实焦点，再用原窗口最小化产生可核验的失焦转换。
     await focusStep(() => focusOwner.application.evaluate(({ app }) => { if (process.platform === 'darwin') app.focus({ steal: true }); }));
@@ -253,9 +273,25 @@ function register(): void {
     await focusStep(() => openMenu(target)); expect(await focusStep(() => nativeWindow.evaluate(owner => owner.isFocused()))).toBe(true);
     await expect.poll(() => focusStep(() => focusOwner.page.evaluate(() => document.hasFocus()))).toBe(true);
     await focusStep(() => nativeWindow.evaluate(owner => owner.minimize())); await expect.poll(() => focusStep(() => nativeWindow.evaluate(owner => owner.isMinimized()))).toBe(true);
+    // 同应用无parent空白窗口实际接管焦点；不用其它应用、产品桥或伪造DOM事件。
+    const focusHelper = await focusStep(() => focusOwner.application.evaluateHandle(({ BrowserWindow }) => new BrowserWindow({
+      show: false, width: 240, height: 120, title: 'DBArk焦点验收',
+      webPreferences: { sandbox: true, contextIsolation: true, nodeIntegration: false }
+    })));
+    await focusStep(() => focusHelper.evaluate(helper => helper.loadURL('about:blank')));
+    const helperFacts = await focusStep(() => focusHelper.evaluate(helper => ({ mainPid: process.pid, windowId: helper.id, rendererPid: helper.webContents.getOSProcessId(), parentId: helper.getParentWindow()?.id ?? null, url: helper.webContents.getURL() })));
+    const originalWindowId = await focusStep(() => nativeWindow.evaluate(owner => owner.id));
+    await focusStep(() => info.attach('对象树菜单原应用焦点辅助窗口归属', { body: JSON.stringify({ originalWindowId, ...helperFacts }, null, 2), contentType: 'application/json' }));
+    expect(helperFacts.windowId).not.toBe(originalWindowId); expect(helperFacts.parentId).toBe(null); expect(helperFacts.url).toBe('about:blank'); expect(helperFacts.rendererPid).toBeGreaterThan(0);
+    await focusStep(() => focusHelper.evaluate(helper => { helper.show(); helper.focus(); }));
+    await expect.poll(() => focusStep(() => focusHelper.evaluate(helper => helper.isFocused()))).toBe(true);
     await expect.poll(() => focusStep(() => nativeWindow.evaluate(owner => owner.isFocused()))).toBe(false);
     await expect.poll(() => focusStep(() => focusOwner.page.evaluate(() => document.hasFocus()))).toBe(false);
     await focusStep(() => expect(menu()).toHaveCount(0));
+    // 只有以上原断言全部通过才正常关闭辅助窗口；失败保留全部所属现场。
+    const helperClosed = await focusStep(() => focusHelper.evaluate(helper => new Promise<boolean>(resolve => { helper.once('closed', () => resolve(helper.isDestroyed())); helper.close(); })));
+    expect(helperClosed).toBe(true); expect(await focusStep(() => focusHelper.evaluate(helper => helper.isDestroyed()))).toBe(true);
+    await focusStep(() => focusHelper.dispose());
     await focusStep(() => nativeWindow.evaluate(owner => owner.restore())); await expect.poll(() => focusStep(() => nativeWindow.evaluate(owner => owner.isMinimized()))).toBe(false);
     await focusStep(() => nativeWindow.evaluate(owner => owner.focus())); await expect.poll(() => focusStep(() => nativeWindow.evaluate(owner => owner.isFocused()))).toBe(true);
     await focusStep(() => focusSession.send('Emulation.setFocusEmulationEnabled', { enabled: true })); await focusStep(() => focusSession.detach());

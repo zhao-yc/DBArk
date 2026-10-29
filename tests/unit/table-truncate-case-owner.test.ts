@@ -1,3 +1,4 @@
+import { sidebarMenuRamPort } from '../helpers/sidebarMenuRamPort';
 import { readFileSync } from 'node:fs';
 import { createContext, runInContext } from 'node:vm';
 import ts from 'typescript';
@@ -44,6 +45,8 @@ function fixture() {
   Object.defineProperty(desktop, 'page', { get: () => { globalReads++; throw Error('禁止读取全局page'); } });
   const exports: any = {};
   runInContext(compiled, createContext({ exports, require(name: string) {
+    // 对象树菜单是显式RAM展示依赖，不加载Playwright或计作原生/认证模块。
+    if (name === './sidebar-menu') return sidebarMenuRamPort;
     if (name === './desktop-fixture') return desktop;
     if (name === './live-helpers') return { environment: {}, isolatedDatabase: async (body: Function) => body({ connectionId: 'RAM连接', connectionName: '本例连接', database: 'dbark_e2e_ram', observer }) };
     if (name === '../../src/renderer/locales/tableTruncate.zh-CN') return { tableTruncateZh: text };
