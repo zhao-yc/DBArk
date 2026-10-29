@@ -1,3 +1,4 @@
+import { sidebarMenuItem } from './sidebar-menu';
 import { randomUUID } from 'node:crypto';
 import { existsSync, readFileSync,realpathSync } from 'node:fs';
 import mysql, { type Connection, type RowDataPacket } from 'mysql2/promise';
@@ -110,9 +111,9 @@ export async function connectAndCreate(database: string, owner: LiveOwner): Prom
   let primary: { reason: unknown } | undefined;
   try {
   const connectionRow = page.locator('.connection-row').filter({ has: page.getByRole('button', { name: connectionName, exact: true }) });
-  // 使用既有键盘焦点入口显示操作区，避免窗口切换后残留鼠标位置使悬停状态失效；保持真实可见性和点击检查。
+  // 聚焦原连接后从真实右键菜单进入创建数据库，保持真实可见性和点击检查。
   await connectionRow.getByRole('button', { name: connectionName, exact: true }).focus(); owner.assertCurrent();
-  const createDatabase = connectionRow.getByRole('button', { name: '创建数据库', exact: true });
+  const createDatabase = (await sidebarMenuItem(connectionRow, { name: '创建数据库', exact: true }, () => owner.assertCurrent()));
   await expect(createDatabase).toBeVisible(); await createDatabase.click(); owner.assertCurrent();
   const create = page.getByRole('dialog', { name: '创建数据库', exact: true });
   await create.getByLabel('数据库名称', { exact: true }).fill(database); owner.assertCurrent();

@@ -1,3 +1,4 @@
+import { clickSidebarAction } from './sidebar-menu';
 import { randomUUID } from 'node:crypto';
 import mysql, { type RowDataPacket } from 'mysql2/promise';
 import type { TestInfo } from '@playwright/test';
@@ -69,7 +70,7 @@ async function foreignKeyDatabase(body: (context: Context) => Promise<void>, inf
 /** 真对象树打开表，复用已有数据标签且不清除其草稿。 */
 async function openTable(context: Context, name: string) {
   const connection = page.locator('.connection-node').filter({ has: page.locator('.connection-row').getByText(context.connectionName, { exact: true }) });
-  await connection.locator('.connection-row').hover(); await connection.getByRole('button', { name: '刷新连接', exact: true }).click();
+  await connection.locator('.connection-row').hover(); await clickSidebarAction(connection, { name: '刷新连接', exact: true });
   await connection.locator('.database-row').getByRole('button', { name: context.database, exact: true }).click();
   await connection.locator('.object-row').getByText(name, { exact: true }).click();
   await expect(tablePage().locator('.context-bar')).toContainText(name); await expect(tablePage().locator('.loading-overlay')).toHaveCount(0); await expect(tablePage().locator(':scope > .error-box')).toHaveCount(0);
@@ -145,7 +146,7 @@ test.describe('外键差异：真实 Electron 与隔离数据库', () => {
   test('两入口、只读预览零 DDL、双击只提交一次且保留其它原定义', async ({}, info) => {
     await foreignKeyDatabase(async context => {
       await simpleTables(context); const original = await ddl(context, 'child'); const connection = await openTable(context, 'child');
-      const row = connection.locator('.object-row').filter({ has: page.getByText('child', { exact: true }) }); await row.hover(); await row.getByRole('button', { name: `${text.title} child`, exact: true }).click();
+      const row = connection.locator('.object-row').filter({ has: page.getByText('child', { exact: true }) }); await row.hover(); await clickSidebarAction(row, { name: `${text.title} child`, exact: true });
       await expect(dialog().getByRole('button', { name: '编辑外键差异 fk_old', exact: true })).toBeEnabled({ timeout: 30000 }); await dialog().getByRole('button', { name: text.close, exact: true }).click(); await openDialog();
       await edit('fk_old'); await dialog().getByRole('textbox', { name: text.name, exact: true }).fill('fk_new'); await save(); await preview(); expect(await ddl(context, 'child')).toBe(original);
       await expect(dialog().locator('.monaco-editor .view-lines')).toContainText('DROP FOREIGN KEY'); await expect(dialog().locator('.monaco-editor .view-lines')).toContainText('ADD CONSTRAINT');

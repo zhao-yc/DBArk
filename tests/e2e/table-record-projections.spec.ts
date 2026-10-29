@@ -1,3 +1,4 @@
+import { clickSidebarAction } from './sidebar-menu';
 import type { Locator, TestInfo } from '@playwright/test';
 import type { RowDataPacket } from 'mysql2/promise';
 import { recordViewZh as formText } from '../../src/renderer/locales/recordViews.zh-CN';
@@ -38,11 +39,11 @@ async function projectionDatabase(body: (context: LiveContext) => Promise<void>,
     finally { await restore(); }
   }, info);
 }
-/** 按名称聚焦既有树操作区；实际打开表后等待原有读取结束，不注入页数据。 */
+/** 按名称聚焦原节点并从菜单刷新；实际打开表后等待原有读取结束，不注入页数据。 */
 async function openTable(context: LiveContext, name = 'projections') {
   const connection = page.locator('.connection-node').filter({ has: page.getByRole('button', { name: context.connectionName, exact: true }) });
   await connection.getByRole('button', { name: context.connectionName, exact: true }).focus();
-  await connection.getByRole('button', { name: '刷新连接', exact: true }).click();
+  await clickSidebarAction(connection, { name: '刷新连接', exact: true });
   await connection.locator('.database-row').getByRole('button', { name: context.database, exact: true }).click();
   await connection.locator('.object-row').getByText(name, { exact: true }).click();
   await expect(activeTable().locator('.context-bar')).toContainText(name); await expect(activeTable().locator('.loading-overlay')).toHaveCount(0);

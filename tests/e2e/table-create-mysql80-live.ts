@@ -1,3 +1,4 @@
+import { clickSidebarAction } from './sidebar-menu';
 // 创建主体及本例终态门沿用固定Root 869364d（含a734三处断言与显式展开）；仅替换准确版本的预检接线。
 import type { Page, TestInfo } from '@playwright/test';
 import type { RowDataPacket } from 'mysql2/promise';
@@ -50,7 +51,7 @@ export function registerTableCreateMysql80UiTests() {
         await database.getByRole('button', { name: context.database, exact: true }).click(); owner.assertCurrent();
         await expect(database.getByRole('button', { name: context.database, exact: true })).toHaveAttribute('aria-expanded', 'true'); owner.assertCurrent();
         await database.getByRole('button', { name: context.database, exact: true }).focus(); owner.assertCurrent();
-        await database.getByRole('button', { name: zh.sidebar.text017, exact: true }).click(); owner.assertCurrent();
+        await clickSidebarAction(database, { name: zh.sidebar.text017, exact: true }); owner.assertCurrent();
         const designer = page(owner).getByRole('dialog', { name: formatText(zh.schema.text009, context.database), exact: true });
         await designer.getByLabel(zh.schema.text010, { exact: true }).fill('daily_new_table'); owner.assertCurrent();
         await designer.getByRole('button', { name: zh.schema.text027, exact: true }).click(); owner.assertCurrent();

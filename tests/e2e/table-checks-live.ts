@@ -1,3 +1,4 @@
+import { clickSidebarAction } from './sidebar-menu';
 import type { TestInfo } from '@playwright/test';
 import type { RowDataPacket, ResultSetHeader } from 'mysql2';
 import { createHash } from 'node:crypto';
@@ -170,7 +171,7 @@ export function registerTableChecksNative(): void {
         root.__tableChecksNative = state; handlers.set('dbark:request', wrapped); check();
       }, { connectionId: savedProfile.id, database: resource.database, table: 'subject' })); armed = true;
       const facts = async () => step(audit), modal = page.getByRole('dialog', { name: text.title, exact: true });
-      await step(() => node.getByRole('button', { name: text.entry + ' subject', exact: true }).click()); await step(() => expect(modal).toBeVisible()); expect((await facts()).calls.filter(call => call.command === 'schema.tableChecks.get')).toHaveLength(0);
+      await step(() => clickSidebarAction(node.locator('.object-row').filter({ has: node.page().getByText('subject', { exact: true }) }), { name: text.entry + ' subject', exact: true }, undefined, check)); await step(() => expect(modal).toBeVisible()); expect((await facts()).calls.filter(call => call.command === 'schema.tableChecks.get')).toHaveLength(0);
       let snapshot: TableCheckGetOutput;
       const get = async (ownedName?: string, enforced?: boolean) => {
         const count = (await facts()).calls.filter(call => call.command === 'schema.tableChecks.get').length;

@@ -12,14 +12,14 @@ let compiled: Promise<string> | undefined;
 function compile(): Promise<string> {
   return compiled ??= build({ entryPoints: [resolve('src/renderer/components/Sidebar.tsx')], write: false, bundle: true, format: 'cjs', platform: 'node', jsx: 'automatic', plugins: [{ name: '侧栏纯组件测试端口', setup(builder) {
     builder.onLoad({ filter: /[\\/]Sidebar\.tsx$/ }, async args => ({ contents: await readFile(args.path, 'utf8') + '\nexport { ConnectionNode, DatabaseNode, completionServerFacts, beginSidebarConnectionEnd };', loader: 'tsx' }));
-    for (const [pattern, path] of [[/^react$/, 'react'], [/^react\/jsx-runtime$/, 'jsx'], [/^lucide-react$/, 'icons'], [/^\.\.\/lib$/, 'lib'], [/^\.\.\/store$/, 'store'], [/^\.\/(?:Workbench|ui)$/, 'ui']] as const) builder.onResolve({ filter: pattern }, () => ({ path, namespace: 'sidebar-test' }));
+    for (const [pattern, path] of [[/^react$/, 'react'], [/^react\/jsx-runtime$/, 'jsx'], [/^lucide-react$/, 'icons'], [/^\.\.\/lib$/, 'lib'], [/^\.\.\/store$/, 'store'], [/^\.\/(?:Workbench|ui|SidebarContextMenu)$/, 'ui']] as const) builder.onResolve({ filter: pattern }, () => ({ path, namespace: 'sidebar-test' }));
     builder.onLoad({ filter: /.*/, namespace: 'sidebar-test' }, args => ({ contents: ({
       react: 'export const useState=(...a)=>globalThis.host.state(...a),useRef=(...a)=>globalThis.host.ref(...a),useEffect=(...a)=>globalThis.host.effect(...a);',
       jsx: 'export const jsx=(type,props)=>({type,props}),jsxs=jsx,Fragment="fragment";',
       icons: 'export const ChevronDown="down",ChevronRight="right",Database="database",Table2="table",Search="search",Plus="plus",Pencil="pencil",RefreshCw="refresh",FileCode2="file",Folder="folder",Unplug="unplug",Trash2="trash",Copy="copy",ListChecks="list-checks";',
       lib: 'export const invoke=(...a)=>globalThis.sidebarIpcInvoke(...a),errorMessage=e=>e instanceof Error?e.message:String(e),kindLabels={table:"表",view:"视图"};',
       store: 'export const useWorkspace=s=>s(globalThis.store);useWorkspace.getState=()=>globalThis.store;',
-      ui: 'export const Spinner="spinner",FavoriteButton="favorite",WorkbenchShelf="shelf";'
+      ui: 'export const Spinner="spinner",FavoriteButton="favorite",WorkbenchShelf="shelf",SidebarTreeRow="tree-row",SidebarTreeProvider="tree-provider";'
     } as Record<string, string>)[args.path] }));
   } }] }).then(result => result.outputFiles[0].text);
 }
@@ -39,7 +39,8 @@ export class SidebarComponentRenderer {
   render(): this { if (!this.mounted) return this; this.context.host = this; this.index = 0; this.tree = this.component(this.props); const effects = this.effects; this.effects = []; effects.forEach(effect => effect()); return this; }
   /** 父组件按真实JSX传下新属性，保留本节点hooks和展开意图。 */
   update(props: Record<string, unknown>): this { Object.assign(this.props, props); return this.render(); }
-  all(predicate: (node: Node) => boolean): Node[] { const found: Node[] = []; function visit(node: any) { if (Array.isArray(node)) return node.forEach(visit); if (!node || typeof node !== 'object') return; if (predicate(node)) found.push(node); visit(node.props?.children); } visit(this.tree); return found; }
+  /** actions只读取生产动作定义以验证接线和请求门，不代表真实Portal菜单DOM；菜单交互另走E2E。 */
+  all(predicate: (node: Node) => boolean): Node[] { const found: Node[] = []; function visit(node: any) { if (Array.isArray(node)) return node.forEach(visit); if (!node || typeof node !== 'object') return; if (predicate(node)) found.push(node); visit(node.props?.children); visit(node.props?.actions); } visit(this.tree); return found; }
   label(): Node { return this.all(node => node.type === 'button' && node.props.className === 'tree-label')[0]; }
   button(name: string): Node { const values = this.all(node => node.type === 'button' && node.props['aria-label'] === name); if (values.length !== 1) throw Error('未找到唯一生产按钮：' + name); return values[0]; }
   click(node = this.label()): void { node.props.onClick(); this.render(); }

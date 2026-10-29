@@ -1,3 +1,4 @@
+import { clickSidebarAction } from './sidebar-menu';
 import type { RowDataPacket } from 'mysql2/promise';
 import { tableRenameZh as text } from '../../src/renderer/locales/tableRename.zh-CN';
 import { assertTableRenameLiveTarget } from '../helpers/tableRenameTarget';
@@ -11,7 +12,7 @@ const target = (context: LiveContext, name: string) => `\`${context.database}\`.
 /** 通过对象树真实名称打开；保持可见性和点击命中检查，禁止force click。 */
 async function open(context: LiveContext, name: string) {
   const connection = page.locator('.connection-node').filter({ has: page.locator('.connection-row').getByText(context.connectionName, { exact: true }) });
-  await connection.locator('.connection-row').getByRole('button', { name: context.connectionName, exact: true }).focus(); await connection.getByRole('button', { name: '刷新连接', exact: true }).click();
+  await connection.locator('.connection-row').getByRole('button', { name: context.connectionName, exact: true }).focus(); await clickSidebarAction(connection, { name: '刷新连接', exact: true });
   await connection.locator('.database-row').getByRole('button', { name: context.database, exact: true }).click();
   const row = connection.locator('.object-row').filter({ has: page.getByText(name, { exact: true }) }); await row.getByText(name, { exact: true }).click();
   await expect(tablePage().locator('.context-bar')).toContainText(name); await expect(tablePage().locator('.loading-overlay')).toHaveCount(0); return row;
@@ -44,7 +45,7 @@ test.describe('同库表重命名：正式Electron与真实数据库准备', () 
   test('两个专用入口，复杂定义零重述、只读预览、双击一次、新标签真实重读', async ({}, info) => {
     await isolatedDatabase(async context => {
       const name = 'rename_complex'; await context.observer.query(`CREATE TABLE ${target(context, name)}(id INT NOT NULL AUTO_INCREMENT,s VARCHAR(80) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin,g INT GENERATED ALWAYS AS(length(s)) STORED,PRIMARY KEY(id),KEY pref(s(8))) ENGINE=InnoDB COMMENT='原说明'`);
-      const row = await open(context, name); await row.hover(); await row.getByRole('button', { name: `${text.title} ${name}`, exact: true }).click();
+      const row = await open(context, name); await row.hover(); await clickSidebarAction(row, { name: `${text.title} ${name}`, exact: true });
       await expect(dialog().getByRole('textbox', { name: text.newName, exact: true })).toBeEnabled(); await dialog().getByRole('button', { name: text.close, exact: true }).click();
       await tablePage().getByRole('button', { name: text.title, exact: true }).click(); const before = await ddl(context, name);
       await dialog().getByRole('textbox', { name: text.newName, exact: true }).fill('renamed_complex'); await preview(context, name, 'renamed_complex'); expect(await ddl(context, name)).toBe(before);
@@ -79,7 +80,7 @@ test.describe('同库表重命名：正式Electron与真实数据库准备', () 
       await context.observer.query(`CREATE TABLE ${target(context, 'rename_readonly')}(id INT PRIMARY KEY) ENGINE=InnoDB`);
       await context.observer.query(`CREATE TRIGGER ${target(context, 'rename_readonly_tr')} BEFORE INSERT ON ${target(context, 'rename_readonly')} FOR EACH ROW SET NEW.id=NEW.id`);
       const before = await ddl(context, 'rename_readonly'), row = await open(context, 'rename_readonly');
-      await row.hover(); await row.getByRole('button', { name: `${text.title} rename_readonly`, exact: true }).click();
+      await row.hover(); await clickSidebarAction(row, { name: `${text.title} rename_readonly`, exact: true });
       await expect(dialog()).toContainText(text.readonly); await expect(dialog()).toContainText('触发器');
       await expect(dialog().getByRole('textbox', { name: text.newName, exact: true })).toBeDisabled();
       await dialog().getByRole('button', { name: text.close, exact: true }).click();

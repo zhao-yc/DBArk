@@ -1,3 +1,4 @@
+import { clickSidebarAction } from './sidebar-menu';
 import type { Locator, TestInfo } from '@playwright/test';
 import type { RowDataPacket } from 'mysql2/promise';
 import { test, expect, page, desktop, closed, pageErrors } from './desktop-fixture';
@@ -68,7 +69,7 @@ async function cell(key: string, row = 2): Promise<Locator> {
 async function loaded(previous?: number) { if (previous !== undefined) await expect.poll(() => count('table.page', true), { timeout: 20000 }).toBeGreaterThan(previous); await expect(table().locator('.loading-overlay')).toHaveCount(0); await expect(table().locator(':scope > .error-box')).toHaveCount(0); }
 /** 对象树打开及真实主键排序确定行序，不依赖服务器偶然扫描顺序。 */
 async function openTable(context: LiveContext) {
-  const connection = page.locator('.connection-node').filter({ has: page.getByRole('button', { name: context.connectionName, exact: true }) }); await connection.getByRole('button', { name: context.connectionName, exact: true }).focus(); await connection.getByRole('button', { name: '刷新连接', exact: true }).click();
+  const connection = page.locator('.connection-node').filter({ has: page.getByRole('button', { name: context.connectionName, exact: true }) }); await connection.getByRole('button', { name: context.connectionName, exact: true }).focus(); await clickSidebarAction(connection, { name: '刷新连接', exact: true });
   await connection.locator('.database-row').getByRole('button', { name: context.database, exact: true }).click(); const previous = await count('table.page', true); await connection.locator('.object-row').getByText(name, { exact: true }).click(); await loaded(previous);
   const sorted = await count('table.page', true); await table().getByRole('columnheader').filter({ hasText: /^id/ }).click(); await loaded(sorted); await expect(await cell('id')).toHaveText(firstId);
 }

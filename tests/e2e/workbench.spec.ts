@@ -1,4 +1,5 @@
 import { test, expect, page, desktop, pageErrors, quitDesktop, launchDesktop } from './desktop-fixture';
+import { clickSidebarAction } from './sidebar-menu';
 import { objectUri } from '../../src/shared/workbench';
 
 const modifier = process.platform === 'darwin' ? 'Meta' : 'Control';
@@ -83,7 +84,7 @@ test('收藏与虚拟分组真实增删改序、链接复制、失效连接及�
   // 删除原连接后收藏继续保留，链接打开明确失败且不能回退到别的连接。
   await desktop.evaluate(({ dialog }) => { dialog.showMessageBoxSync = (() => 0) as typeof dialog.showMessageBoxSync; });
   await page.getByRole('button', { name: '工作台离线连接', exact: true }).focus();
-  await page.getByRole('button', { name: '删除连接', exact: true }).click();
+  await clickSidebarAction(page.locator('.connection-row').filter({ has: page.getByRole('button', { name: '工作台离线连接', exact: true }) }), { name: '删除连接', exact: true });
   await expect.poll(async () => (await page.evaluate(() => window.dbark.invoke('connections.list', {}))).length).toBe(0);
   await page.keyboard.press(`${modifier}+Shift+O`);
   const link = page.getByRole('dialog', { name: '粘贴对象链接', exact: true });

@@ -1,3 +1,4 @@
+import { clickSidebarAction } from './sidebar-menu';
 import type { Locator } from '@playwright/test';
 import type { RowDataPacket } from 'mysql2/promise';
 import { test, expect, page } from './desktop-fixture';
@@ -33,7 +34,7 @@ async function addColumn(modal: Locator, number: number, name: string, type: str
 async function newTable(database: string, table: string) {
   const row = await databaseRow(database);
   await row.hover();
-  await row.getByRole('button', { name: '新建表', exact: true }).click();
+  await clickSidebarAction(row, { name: '新建表', exact: true });
   const modal = page.getByRole('dialog', { name: '创建表 · ' + database, exact: true });
   await modal.getByLabel('表名称', { exact: true }).fill(table);
   return modal;
@@ -46,7 +47,7 @@ async function editObject(database: string, name: string) {
   const object = page.locator('.object-row').filter({ has: page.getByText(name, { exact: true }) });
   await expect(object).toBeVisible();
   await object.hover();
-  await object.getByRole('button', { name: '设计 ' + name, exact: true }).click();
+  await clickSidebarAction(object, { name: '设计 ' + name, exact: true });
   return page.getByRole('dialog').last();
 }
 
@@ -129,7 +130,7 @@ test.describe('远程真实数据库对象设计与定义', () => {
       ];
       for (const definition of definitions) {
         const row = await databaseRow(database);
-        await row.hover(); await row.getByRole('button', { name: '创建数据库对象', exact: true }).click();
+        await row.hover(); await clickSidebarAction(row, { name: '创建数据库对象', exact: true });
         let modal = page.getByRole('dialog', { name: '创建数据库对象', exact: true });
         await modal.getByRole('combobox', { name: /^对象类型/ }).selectOption(definition.kind);
         await modal.getByLabel('对象名称', { exact: true }).fill(definition.name);

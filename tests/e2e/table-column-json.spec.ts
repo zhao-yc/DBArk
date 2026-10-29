@@ -1,3 +1,4 @@
+import { clickSidebarAction } from './sidebar-menu';
 import { columnPatchZh as text } from '../../src/renderer/locales/columnPatches.zh-CN';
 import { test as baseTest, expect, type TestInfo } from '@playwright/test';
 import { zh } from '../../src/renderer/locales/zh-CN';
@@ -42,7 +43,7 @@ test('真实字段设计器新增JSON：只读预览、单次DDL、类型重读�
     for (const [label, value] of [[zh.connections.text006, connectionName], [zh.connections.text009, target!.host!], [zh.connections.text010, target!.port!], [zh.common.user, target!.user!], [zh.connections.text011, target!.password!], [zh.connections.text012, target!.database!]]) await step(() => form.getByLabel(label, { exact: true }).fill(value));
     await step(() => form.getByRole('combobox', { name: new RegExp('^' + zh.connections.text008) }).selectOption('mysql')); await step(() => form.getByLabel(zh.connections.text016, { exact: true }).uncheck()); await step(() => form.getByRole('button', { name: zh.connections.text036, exact: true }).click()); await step(() => expect(form).toBeHidden());
     const connection = page.locator('.connection-node').filter({ has: page.locator('.connection-row').getByText(connectionName, { exact: true }) });
-    await step(() => connection.locator('.connection-row > .tree-label').focus()); await step(() => connection.getByRole('button', { name: zh.sidebar.text011, exact: true }).click()); await step(() => connection.locator('.database-row').getByRole('button', { name: target!.database!, exact: true }).click()); await step(() => connection.locator('.object-row').getByText('subject', { exact: true }).click());
+    await step(() => connection.locator('.connection-row > .tree-label').focus()); await step(() => clickSidebarAction(connection, { name: zh.sidebar.text011, exact: true })); await step(() => connection.locator('.database-row').getByRole('button', { name: target!.database!, exact: true }).click()); await step(() => connection.locator('.object-row').getByText('subject', { exact: true }).click());
     const table = page.locator('.table-tab:visible'), dialog = page.getByRole('dialog', { name: text.title, exact: true }); await step(() => expect(table.locator('.loading-overlay')).toHaveCount(0));
     await step(() => table.getByRole('button', { name: text.title, exact: true }).click()); await step(() => dialog.getByRole('button', { name: text.add, exact: true }).click());
     await step(() => dialog.getByRole('textbox', { name: text.name, exact: true }).fill('doc')); await step(() => dialog.getByRole('combobox', { name: new RegExp('^' + text.family) }).selectOption('json')); await step(() => expect(dialog).toContainText(text.jsonHint));

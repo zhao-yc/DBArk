@@ -1,3 +1,4 @@
+import { clickSidebarAction } from './sidebar-menu';
 import { test, expect, page } from './desktop-fixture';
 import { pasteInsertZh as text } from '../../src/renderer/locales/pasteInsert.zh-CN';
 import { cellClipboardType, encodeClipboard } from '../../src/renderer/gridClipboard';
@@ -18,7 +19,7 @@ async function isolated(body: (context: LiveContext) => Promise<void>, info: Par
     await context.observer.query(`CREATE TABLE \`${context.database}\`.subject(id BIGINT PRIMARY KEY AUTO_INCREMENT,note TEXT,bytes BLOB,doc JSON,generated_value INT AS(CHAR_LENGTH(note))) ENGINE=InnoDB`);
     const connection = page.locator('.connection-node').filter({ has: page.locator('.connection-row').getByText(context.connectionName, { exact: true }) });
     await connection.locator('.connection-row').getByRole('button', { name: context.connectionName, exact: true }).focus();
-    await connection.getByRole('button', { name: '刷新连接', exact: true }).click();
+    await clickSidebarAction(connection, { name: '刷新连接', exact: true });
     await connection.locator('.database-row').getByRole('button', { name: context.database, exact: true }).click();
     await connection.locator('.object-row').filter({ has: page.getByText('subject', { exact: true }) }).getByText('subject', { exact: true }).click();
     await expect(table().locator('.loading-overlay')).toHaveCount(0); await expect(table().getByRole('button', { name: text.action, exact: true })).toBeEnabled();

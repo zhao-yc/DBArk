@@ -1,3 +1,4 @@
+import { clickSidebarAction } from './sidebar-menu';
 import type { TestInfo } from '@playwright/test';
 import type { RowDataPacket } from 'mysql2/promise';
 import { test, expect, ownedDesktopResources } from './desktop-fixture';
@@ -43,7 +44,7 @@ async function database(body: (context: LiveContext) => Promise<void>, info: Tes
     const { page, desktop } = context; context.assertCurrent();
     // 用真实编辑器准备原查询草稿；等持久化正文快照就绪后才开始观察本次定位。
     const row = page.locator('.database-row').filter({ has: page.getByRole('button', { name: context.database, exact: true }) });
-    await row.getByRole('button', { name: context.database, exact: true }).focus(); await row.getByRole('button', { name: '新建数据库查询', exact: true }).click();
+    await row.getByRole('button', { name: context.database, exact: true }).focus(); await clickSidebarAction(row, { name: '新建数据库查询', exact: true }, undefined, () => context.assertCurrent());
     await page.locator('.query-tab:visible .monaco-editor').getByRole('textbox').focus(); await page.keyboard.press(`${process.platform === 'darwin' ? 'Meta' : 'Control'}+a`); const draft = '-- 保留原草稿 😀\nSELECT 9007199254740993'; await page.keyboard.insertText(draft);
     // Monaco按平台保存行尾；仅准备草稿统一CRLF为LF，后续tabs/history仍逐字比较原始快照。
     await expect.poll(async () => (await page.evaluate(() => window.dbark.invoke('settings.get', {}))).tabs.find(tab => tab.kind === 'query')?.sql?.replaceAll('\r\n', '\n')).toBe(draft);

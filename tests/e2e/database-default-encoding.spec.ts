@@ -1,3 +1,4 @@
+import { sidebarMenuItem } from './sidebar-menu';
 import { test as baseTest } from '@playwright/test';
 
 const listing = process.argv.some(value => value === '--list' || value.startsWith('--list='));
@@ -66,7 +67,7 @@ function register(binding: ReturnType<typeof import('../helpers/databaseDefaultE
       // 数据库行动作随hover/focus展示，先定位精确原库再走真实悬停，不绕过可见性或点击门槛。
       const databaseRow = page.locator('.database-row').filter({ has: page.getByRole('button', { name: database, exact: true }) });
       await step(() => expect(databaseRow).toHaveCount(1)); await step(() => databaseRow.scrollIntoViewIfNeeded()); await step(() => databaseRow.hover());
-      const entry = databaseRow.getByRole('button', { name: text.entry + ' ' + database, exact: true }); await step(() => expect(entry).toBeVisible()); await step(() => entry.click()); const dialog = page.getByRole('dialog', { name: text.title, exact: true });
+      const entry = (await step(() => sidebarMenuItem(databaseRow, { name: text.entry + ' ' + database, exact: true }, check))); await step(() => expect(entry).toBeVisible()); await step(() => entry.click()); const dialog = page.getByRole('dialog', { name: text.title, exact: true });
       await step(() => expect(dialog.getByRole('combobox', { name: text.collation, exact: true })).toBeEnabled()); await step(() => expect(dialog.getByRole('button', { name: text.preview, exact: true })).toBeDisabled()); await step(() => expect(dialog).toContainText(text.scope));
       await step(() => dialog.getByRole('combobox', { name: text.collation, exact: true }).selectOption('utf8mb4_general_ci')); await step(() => dialog.getByRole('button', { name: text.preview, exact: true }).click()); await step(() => expect(dialog.getByLabel(text.confirmation, { exact: true })).toBeVisible());
       const previewAudit = await step(() => application.evaluate(readDatabaseDefaultEncodingUiAudit)); expect(previewAudit).toEqual({ gets: 1, previews: 1, applies: 0, releases: 0, pending: 0, verified: false });

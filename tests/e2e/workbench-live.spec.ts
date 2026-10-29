@@ -1,3 +1,4 @@
+import { clickSidebarAction } from './sidebar-menu';
 import { test, expect, page, pageErrors } from './desktop-fixture';
 import { enabled, isolatedDatabase } from './live-helpers';
 import { objectUri } from '../../src/shared/workbench';
@@ -20,7 +21,7 @@ test('实库对象树星标、成功打开与对象删除后链接失败', async
     await dbRow.getByRole('button', { name: database, exact: true }).click();
     const row = page.locator('.object-row').filter({ has: page.getByTitle(`表 · ${table}`, { exact: true }) });
     await expect(row).toBeVisible(); await row.locator('.tree-label').focus();
-    await row.getByRole('button', { name: `添加收藏：${table}`, exact: true }).click();
+    await clickSidebarAction(row, { name: `添加收藏：${table}`, exact: true });
     await expect.poll(async () => (await page.evaluate(() => window.dbark.invoke('workbench.get', {}))).document.favorites.length).toBe(1);
     // 收藏操作前后数据库定义原样不变，未触发结构写入。
     const [after] = await observer.query(`SHOW CREATE TABLE ${quote(database)}.${quote(table)}`); expect(after).toEqual(before);

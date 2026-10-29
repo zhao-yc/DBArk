@@ -1,3 +1,4 @@
+import { clickSidebarAction } from './sidebar-menu';
 import { test, expect, type TestInfo } from '@playwright/test';
 import { lstat, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -91,7 +92,7 @@ async function createConnection(run: EditorIndentNativeRun, owner: IndentNativeO
 /** 重启后只在关闭标签的真实表单重新填临时秘密，不改连接概要或方案。 */
 async function restorePassword(run: EditorIndentNativeRun, owner: IndentNativeOwner, binding: QueryResultColumnsUiTarget): Promise<void> {
   const row = owner.page.locator('.connection-node').filter({ has: owner.page.locator('.connection-row').getByText(connectionName, { exact: true }) });
-  await step(run, owner, () => row.locator('.connection-row').hover()); await step(run, owner, () => row.getByRole('button', { name: `编辑连接 ${connectionName}`, exact: true }).click());
+  await step(run, owner, () => row.locator('.connection-row').hover()); await step(run, owner, () => clickSidebarAction(row, { name: `编辑连接 ${connectionName}`, exact: true }));
   const form = owner.page.getByRole('dialog', { name: '编辑连接', exact: true }); await step(run, owner, () => form.getByLabel(zh.connections.text011, { exact: true }).fill(binding.target.password));
   await step(run, owner, () => form.getByLabel(zh.connections.text016, { exact: true }).uncheck()); await step(run, owner, () => form.getByRole('button', { name: zh.connections.text036, exact: true }).click()); await step(run, owner, () => expect(form).toBeHidden());
 }

@@ -1,3 +1,4 @@
+import { clickSidebarAction } from './sidebar-menu';
 import type { Locator, TestInfo } from '@playwright/test';
 import type { RowDataPacket } from 'mysql2/promise';
 import { test, expect, page, desktop, closed, pageErrors } from './desktop-fixture';
@@ -70,7 +71,7 @@ async function loaded(previous?: number) {
 /** 表入口始终来自真实对象树；强制按精确主键升序，避免依赖服务器偶然返回顺序。 */
 async function openTable(context: LiveContext) {
   const connection = page.locator('.connection-node').filter({ has: page.locator('.connection-row').getByText(context.connectionName, { exact: true }) });
-  await connection.locator('.connection-row').getByRole('button', { name: context.connectionName, exact: true }).focus(); await connection.getByRole('button', { name: '刷新连接', exact: true }).click();
+  await connection.locator('.connection-row').getByRole('button', { name: context.connectionName, exact: true }).focus(); await clickSidebarAction(connection, { name: '刷新连接', exact: true });
   await connection.locator('.database-row').getByRole('button', { name: context.database, exact: true }).click();
   const before = await calls('table.page', true); await connection.locator('.object-row').getByText(name, { exact: true }).click();
   await expect(table().locator('.context-bar')).toContainText(name); await loaded(before);
@@ -236,7 +237,7 @@ test.describe('200隔离实库二进制单元格', () => {
     await inDatabase(async context => {
       await fixture(context); const before = await read(context); await openTable(context); await (await cell(table(), 'payload')).click(); await table().getByRole('button', { name: record.title, exact: true }).click();
       const payload = form().getByRole('region', { name: 'payload', exact: true }); await payload.getByRole('button', { name: record.editField, exact: true }).click(); await viewer(payload).getByRole('textbox').fill('0x010203');
-      const connection = page.locator('.connection-node').filter({ has: page.locator('.connection-row').getByText(context.connectionName, { exact: true }) }); await connection.locator('.connection-row').getByRole('button', { name: context.connectionName, exact: true }).focus(); await connection.getByRole('button', { name: formatText(zh.sidebar.text010, context.connectionName), exact: true }).click();
+      const connection = page.locator('.connection-node').filter({ has: page.locator('.connection-row').getByText(context.connectionName, { exact: true }) }); await connection.locator('.connection-row').getByRole('button', { name: context.connectionName, exact: true }).focus(); await clickSidebarAction(connection, { name: formatText(zh.sidebar.text010, context.connectionName), exact: true });
       const dialog = page.getByRole('dialog', { name: '编辑连接', exact: true }); await dialog.getByLabel(zh.connections.text012, { exact: true }).fill(context.database + '_changed'); await dialog.getByRole('button', { name: '保存连接', exact: true }).click();
       await expect(dialog.locator('.error-box')).toContainText(zh.connections.openTabsBlockChanges); expect(await calls('connections.save')).toBe(0); await dialog.getByRole('button', { name: '取消', exact: true }).click(); await expect(dialog).toHaveCount(0); await expect(viewer(payload).getByRole('textbox')).toHaveValue('0x010203');
       const { acceptNativeConfirmation } = await import('./live-helpers'); await acceptNativeConfirmation(); const pages = await calls('table.page', true); await table().getByRole('button', { name: '刷新', exact: true }).click(); await loaded(pages);

@@ -1,3 +1,4 @@
+import { clickSidebarAction } from './sidebar-menu';
 import type { TestInfo } from '@playwright/test';
 import type { Connection, RowDataPacket } from 'mysql2';
 import { createHash } from 'node:crypto';
@@ -205,8 +206,8 @@ export function registerTableRenameCompatUiTests() {
         expect(settings.tabs[0]).toMatchObject({ connectionId: profile.id, database, table: name, kind: 'table', title: name }); return settings.tabs[0].id;
       };
       const initialTabId = await visibleTable('subject'), initialNode = await step(() => table.elementHandle()); if (!initialNode) throw Error('原表页DOM缺失');
-      // focus-within让真实侧栏行操作可见，不使用force click或任意延时。
-      await step(() => object('subject').getByRole('button', { name: 'subject', exact: true }).focus()); await step(() => object('subject').getByRole('button', { name: text.title + ' subject', exact: true }).click());
+      // 聚焦原节点并打开真实右键菜单，不使用force click或任意延时。
+      await step(() => object('subject').getByRole('button', { name: 'subject', exact: true }).focus()); await step(() => clickSidebarAction(object('subject'), { name: text.title + ' subject', exact: true }, undefined, check));
       /** 两方向都通过名称输入和固定SQL只读预览；不发测试自造preview/apply IPC。 */
       const prepare = async (source: typeof names[number], destination: typeof names[number]) => {
         await step(() => expect(dialog.getByRole('textbox', { name: text.newName, exact: true })).toBeEnabled()); await step(() => expect(dialog.getByRole('textbox', { name: text.newName, exact: true })).toHaveValue(source));

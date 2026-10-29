@@ -1,3 +1,4 @@
+import { clickSidebarAction } from './sidebar-menu';
 import type { Locator, TestInfo } from '@playwright/test';
 import type { RowDataPacket } from 'mysql2/promise';
 import type { RowChange } from '../../src/shared/contracts';
@@ -59,7 +60,7 @@ async function recordDatabase(body: (context: LiveContext) => Promise<void>, inf
 /** 从真实对象树打开表或视图，不以 API 注入页数据。 */
 async function openTable(context: LiveContext, name: string) {
   const connection = page.locator('.connection-node').filter({ has: page.locator('.connection-row').getByText(context.connectionName, { exact: true }) });
-  await connection.locator('.connection-row').hover(); await connection.getByRole('button', { name: '刷新连接', exact: true }).click();
+  await connection.locator('.connection-row').hover(); await clickSidebarAction(connection, { name: '刷新连接', exact: true });
   await connection.locator('.database-row').getByRole('button', { name: context.database, exact: true }).click();
   await connection.locator('.object-row').getByText(name, { exact: true }).click();
   await expect(table().locator('.context-bar')).toContainText(name); await expect(table().locator('.loading-overlay')).toHaveCount(0);

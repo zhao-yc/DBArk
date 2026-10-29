@@ -1,3 +1,4 @@
+import { clickSidebarAction } from './sidebar-menu';
 import ExcelJS from 'exceljs';
 import { join } from 'node:path';
 import type { RowDataPacket } from 'mysql2/promise';
@@ -10,7 +11,7 @@ test.use({ trace: 'off' });
 async function openTable(context: LiveContext, table: string) {
   const connection = page.locator('.connection-node').filter({ has: page.locator('.connection-row').getByText(context.connectionName, { exact: true }) });
   const row = connection.locator('.connection-row'); await row.getByRole('button', { name: context.connectionName, exact: true }).focus();
-  await row.getByRole('button', { name: '刷新连接', exact: true }).click();
+  await clickSidebarAction(row, { name: '刷新连接', exact: true });
   const database = connection.locator('.database-row').getByRole('button', { name: context.database, exact: true }); await expect(database).toBeVisible();
   if (!(await connection.locator('.object-row').getByText(table, { exact: true }).isVisible())) await database.click();
   await connection.locator('.object-row').getByText(table, { exact: true }).click();

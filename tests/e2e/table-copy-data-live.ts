@@ -1,3 +1,4 @@
+import { clickSidebarAction } from './sidebar-menu';
 // 同库结构及数据复制正式定义；默认关闭，真实执行须由Root另行授权。实际0。
 import { randomUUID } from 'node:crypto';
 import mysql, { type Connection, type RowDataPacket } from 'mysql2/promise';
@@ -83,7 +84,7 @@ export function registerTableCopyDataUiTests() {
         { id: '9007199254740993', amount: '-123.000000000000000000000000000001', payload: null, payloadNull: 1, note: '合成行' },
         { id: '18446744073709551614', amount: null, payload: '', payloadNull: 0, note: '' },
       ]);
-      const node = page.locator('.connection-node').filter({ has: page.getByRole('button', { name: context.connectionName, exact: true }) }); await node.getByRole('button', { name: context.connectionName, exact: true }).focus(); own(); await node.getByRole('button', { name: '刷新连接', exact: true }).click(); own(); await node.locator('.database-row').getByRole('button', { name: database, exact: true }).click(); own(); await node.locator('.object-row').getByText('copy_source', { exact: true }).click(); own();
+      const node = page.locator('.connection-node').filter({ has: page.getByRole('button', { name: context.connectionName, exact: true }) }); await node.getByRole('button', { name: context.connectionName, exact: true }).focus(); own(); await clickSidebarAction(node, { name: '刷新连接', exact: true }); own(); await node.locator('.database-row').getByRole('button', { name: database, exact: true }).click(); own(); await node.locator('.object-row').getByText('copy_source', { exact: true }).click(); own();
       const table = page.locator('.table-tab:visible'); await expect(table.locator('.loading-overlay')).toHaveCount(0); own(); await table.getByRole('button', { name: text.title, exact: true }).click(); own();
       const dialog = page.getByRole('dialog', { name: text.title, exact: true }); await expect(dialog.getByRole('heading', { name: text.sourceDdl, exact: true })).toBeVisible(); own(); await dialog.getByRole('textbox', { name: text.newName, exact: true }).fill('copy_destination'); own(); await dialog.getByRole('button', { name: text.preview, exact: true }).click(); own(); await expect(dialog.locator('.monaco-editor .view-lines').last()).toContainText('LIKE'); own();
       const [absent] = await observe(() => connection.query<RowDataPacket[]>('SELECT TABLE_NAME FROM information_schema.TABLES WHERE TABLE_SCHEMA=? AND TABLE_NAME=?', [database, 'copy_destination'])); expect(absent).toHaveLength(0);

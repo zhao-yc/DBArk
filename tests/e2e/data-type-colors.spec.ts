@@ -1,3 +1,4 @@
+import { clickSidebarAction } from './sidebar-menu';
 import { test, expect, page, desktop, quitDesktop, launchDesktop, pageErrors } from './desktop-fixture';
 import { dataTypeColorsZh as text } from '../../src/renderer/locales/dataTypeColors.zh-CN';
 import { zh } from '../../src/renderer/locales/zh-CN';
@@ -39,7 +40,7 @@ test('D08真实表格与只读SQL的可靠类别一致，文本不猜类型，�
     await context.observer.query(`CREATE TABLE ${qualified}(id INT PRIMARY KEY, big_value BIGINT, amount DECIMAL(25,12), at_time DATETIME(6), bytes_value VARBINARY(8), text_value VARCHAR(40), null_value VARCHAR(40), ambiguous_text LONGTEXT)`);
     await context.observer.query(`INSERT INTO ${qualified} VALUES(1,9007199254740993,0.100000000001,'2026-10-16 12:34:56.123456',X'00FF','123',NULL,'2026-10-16')`);
     const connection = page.locator('.connection-node').filter({ has: page.locator('.connection-row').getByText(context.connectionName, { exact: true }) });
-    await connection.locator('.connection-row').hover(); await connection.getByRole('button', { name: '刷新连接', exact: true }).click();
+    await connection.locator('.connection-row').hover(); await clickSidebarAction(connection, { name: '刷新连接', exact: true });
     await connection.locator('.database-row').getByRole('button', { name: context.database, exact: true }).click(); await connection.locator('.object-row').getByText('d08_values', { exact: true }).click();
     const table = page.locator('.table-tab:visible'); await expect(table.locator('.loading-overlay')).toHaveCount(0); await expect(table.locator('[data-value-type]')).toHaveCount(0);
     await setColors(true); for (const kind of ['number', 'temporal', 'binary', 'text', 'null']) await expect(table.locator(`[data-value-type="${kind}"]`).first()).toBeVisible();

@@ -1,3 +1,4 @@
+import { clickSidebarAction } from './sidebar-menu';
 import type { RowDataPacket } from 'mysql2/promise';
 import { test, expect, page, pageErrors } from './desktop-fixture';
 import { enabled, environment, isolatedDatabase } from './live-helpers';
@@ -9,7 +10,7 @@ const panel = () => table().getByRole('region', { name: text.find, exact: true }
 /** 使用真实对象树打开新表，保持生产连接、元数据和分页 IPC。 */
 async function openTable(connectionName: string, database: string, name: string) {
   const connection = page.locator('.connection-node').filter({ has: page.locator('.connection-row').getByText(connectionName, { exact: true }) });
-  await connection.locator('.connection-row').hover(); await connection.getByRole('button', { name: '刷新连接', exact: true }).click();
+  await connection.locator('.connection-row').hover(); await clickSidebarAction(connection, { name: '刷新连接', exact: true });
   const databaseRow = connection.locator('.database-row').filter({ has: page.getByRole('button', { name: database, exact: true }) });
   await databaseRow.getByRole('button', { name: database, exact: true }).click(); await connection.locator('.object-row').getByText(name, { exact: true }).click();
   await expect(table().locator('.loading-overlay')).toHaveCount(0); await expect(table().getByRole('button', { name: text.find, exact: true })).toBeEnabled();

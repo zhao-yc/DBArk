@@ -1,3 +1,4 @@
+import { clickSidebarAction } from './sidebar-menu';
 import type { RowDataPacket } from 'mysql2/promise';
 import { tableCommentZh as text } from '../../src/renderer/locales/tableComment.zh-CN';
 import { test, expect, page } from './desktop-fixture';
@@ -11,7 +12,7 @@ const target = (context: LiveContext, table: string) => `\`${context.database}\`
 /** 原生对象树打开真实表，不注入React状态或模拟业务服务。 */
 async function open(context: LiveContext, name: string) {
   const connection = page.locator('.connection-node').filter({ has: page.locator('.connection-row').getByText(context.connectionName, { exact: true }) });
-  await connection.locator('.connection-row').getByRole('button', { name: context.connectionName, exact: true }).focus(); await connection.getByRole('button', { name: '刷新连接', exact: true }).click();
+  await connection.locator('.connection-row').getByRole('button', { name: context.connectionName, exact: true }).focus(); await clickSidebarAction(connection, { name: '刷新连接', exact: true });
   await connection.locator('.database-row').getByRole('button', { name: context.database, exact: true }).click();
   const row = connection.locator('.object-row').filter({ has: page.getByText(name, { exact: true }) }); await row.getByText(name, { exact: true }).click();
   await expect(tablePage().locator('.context-bar')).toContainText(name); await expect(tablePage().locator('.loading-overlay')).toHaveCount(0); return row;
@@ -39,7 +40,7 @@ test.describe('表注释：正式Electron与真实数据库入口', () => {
     await isolatedDatabase(async context => {
       await narrowSidebar();
       const table = 'comment_complex'; await context.observer.query(`CREATE TABLE ${target(context, table)}(id INT NOT NULL AUTO_INCREMENT,s VARCHAR(80) CHARACTER SET latin1 COLLATE latin1_bin,g INT GENERATED ALWAYS AS(length(s)) STORED,PRIMARY KEY(id),KEY pref(s(8))) ENGINE=InnoDB ROW_FORMAT=DYNAMIC COMMENT='原说明'`);
-      const row = await open(context, table); await row.hover(); await row.getByRole('button', { name: `${text.title} ${table}`, exact: true }).click(); await expect(dialog().getByRole('textbox', { name: text.comment, exact: true })).toBeEnabled();
+      const row = await open(context, table); await row.hover(); await clickSidebarAction(row, { name: `${text.title} ${table}`, exact: true }); await expect(dialog().getByRole('textbox', { name: text.comment, exact: true })).toBeEnabled();
       await dialog().getByRole('button', { name: text.close, exact: true }).click(); await tablePage().getByRole('button', { name: text.title, exact: true }).click();
       const before = await ddl(context, table), comment = "普通'说明\\路径\n第二行"; await dialog().getByRole('textbox', { name: text.comment, exact: true }).fill(comment); await preview(); expect(await ddl(context, table)).toBe(before);
       await expect(dialog().getByRole('button', { name: text.apply, exact: true })).toBeEnabled(); await dialog().getByRole('button', { name: text.apply, exact: true }).dblclick();

@@ -1,3 +1,4 @@
+import { clickSidebarAction } from './sidebar-menu';
 import { test, expect, desktop, page, retainOwnedDesktopResources } from './desktop-fixture';
 import { environment, isolatedDatabase } from './live-helpers';
 import { withNativeClipboard } from './native-clipboard';
@@ -6,7 +7,7 @@ import { copyInsertSqlZh as text } from '../../src/shared/copyInsertSql.zh-CN';
 /** 验收通过真实对象树打开明确表目标，不能注入 React 状态或伪造元数据。 */
 async function openTable(connectionName: string, database: string, name: string) {
   const connection = page.locator('.connection-node').filter({ has: page.locator('.connection-row').getByText(connectionName, { exact: true }) });
-  await connection.locator('.connection-row').hover(); await connection.locator('.connection-row').getByRole('button', { name: '刷新连接', exact: true }).click();
+  await connection.locator('.connection-row').hover(); await clickSidebarAction(connection.locator('.connection-row'), { name: '刷新连接', exact: true });
   const databaseRow = connection.locator('.database-row').filter({ has: page.getByRole('button', { name: database, exact: true }) });
   await expect(databaseRow).toBeVisible(); await databaseRow.getByRole('button', { name: database, exact: true }).click();
   await connection.locator('.object-row').getByText(name, { exact: true }).click();

@@ -1,3 +1,4 @@
+import { clickSidebarAction } from './sidebar-menu';
 import type { RowDataPacket } from 'mysql2/promise';
 import type { TestInfo } from '@playwright/test';
 import type { TaskEvent } from '../../src/shared/contracts';
@@ -71,7 +72,7 @@ async function lastApplyEvent() {
 /** 真对象树打开表，不注入 React 状态或模拟结构服务。 */
 async function openTable(context: LiveContext, name: string) {
   const connection = page.locator('.connection-node').filter({ has: page.locator('.connection-row').getByText(context.connectionName, { exact: true }) });
-  await connection.locator('.connection-row').hover(); await connection.getByRole('button', { name: '刷新连接', exact: true }).click();
+  await connection.locator('.connection-row').hover(); await clickSidebarAction(connection, { name: '刷新连接', exact: true });
   await connection.locator('.database-row').getByRole('button', { name: context.database, exact: true }).click(); await connection.locator('.object-row').getByText(name, { exact: true }).click();
   await expect(tablePage().locator('.context-bar')).toContainText(name); await expect(tablePage().locator('.loading-overlay')).toHaveCount(0); await expect(tablePage().locator(':scope > .error-box')).toHaveCount(0);
   return connection;
@@ -131,7 +132,7 @@ test.describe('索引与主键差异：真实 Electron 和数据库', () => {
   test('对象树和表页两入口、只读预览零 DDL、双击只改名一次', async ({}, info) => {
     await indexDatabase(async context => {
       const name = 'index_once'; await renameFixture(context, name); const original = await renameSnapshot(context, name);
-      const connection = await openTable(context, name), row = connection.locator('.object-row').filter({ has: page.getByText(name, { exact: true }) }); await row.hover(); await row.getByRole('button', { name: `${text.title} ${name}`, exact: true }).click();
+      const connection = await openTable(context, name), row = connection.locator('.object-row').filter({ has: page.getByText(name, { exact: true }) }); await row.hover(); await clickSidebarAction(row, { name: `${text.title} ${name}`, exact: true });
       await expect(dialog().getByRole('button', { name: '编辑索引差异 ia', exact: true })).toBeEnabled(); await dialog().getByRole('button', { name: text.close, exact: true }).click(); await openDialog();
       // PRIMARY名称固定；不可见/忽略索引只能保留，不能借普通改名入口变更。
       await edit('PRIMARY'); await expect(dialog().getByRole('textbox', { name: text.name, exact: true })).toBeDisabled(); await dialog().getByRole('button', { name: text.editorCancel, exact: true }).click();

@@ -1,3 +1,4 @@
+import { clickSidebarAction } from './sidebar-menu';
 import type { Locator } from '@playwright/test';
 import type { RowDataPacket } from 'mysql2/promise';
 import { test, expect, page } from './desktop-fixture';
@@ -18,7 +19,7 @@ const activeTable = () => page.locator('.table-tab:visible');
 /** 从真实对象树重新读取新建表，不通过脚本伪造表页或草稿状态。 */
 async function openTable(connectionName: string, database: string, table: string) {
   const connection = page.locator('.connection-node').filter({ has: page.locator('.connection-row').getByText(connectionName, { exact: true }) });
-  const row = connection.locator('.connection-row'); await row.hover(); await row.getByRole('button', { name: '刷新连接', exact: true }).click();
+  const row = connection.locator('.connection-row'); await row.hover(); await clickSidebarAction(row, { name: '刷新连接', exact: true });
   const databaseRow = connection.locator('.database-row').filter({ has: page.getByRole('button', { name: database, exact: true }) }); await expect(databaseRow).toBeVisible(); await databaseRow.getByRole('button', { name: database, exact: true }).click(); await connection.locator('.object-row').getByText(table, { exact: true }).click();
   await expect(activeTable().locator('.context-bar')).toContainText(table); await expect(activeTable().locator('.loading-overlay')).toHaveCount(0); return activeTable();
 }

@@ -1,3 +1,4 @@
+import { clickSidebarAction } from './sidebar-menu';
 import { recordJsonStructureInputZh as structureText } from '../../src/renderer/locales/recordJsonStructureInput.zh-CN';
 import type { RecordStructureKind } from '../../src/renderer/recordJsonStructureInput';
 import type { Locator, TestInfo } from '@playwright/test';
@@ -33,7 +34,7 @@ async function withDatabase(body:(context:LiveContext)=>Promise<void>,info:TestI
 /** 所有入口经真实对象树、分页、网格选择及表单按钮。 */
 async function openTable(context:LiveContext,name='record_nodes'){
   const connection=page.locator('.connection-node').filter({has:page.getByRole('button',{name:context.connectionName,exact:true})});
-  await connection.getByRole('button',{name:context.connectionName,exact:true}).focus();await connection.getByRole('button',{name:'刷新连接',exact:true}).click();
+  await connection.getByRole('button',{name:context.connectionName,exact:true}).focus();await clickSidebarAction(connection, {name:'刷新连接',exact:true});
   await connection.locator('.database-row').getByRole('button',{name:context.database,exact:true}).click();await connection.locator('.object-row').getByText(name,{exact:true}).click();
   await expect(table().locator('.context-bar')).toContainText(name);await expect(table().locator('.loading-overlay')).toHaveCount(0);await expect(table().locator(':scope > .error-box')).toHaveCount(0);
 }

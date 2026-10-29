@@ -1,3 +1,4 @@
+import { clickSidebarAction } from './sidebar-menu';
 import type { RowDataPacket } from 'mysql2/promise';
 import type { TestInfo } from '@playwright/test';
 import type { TaskEvent } from '../../src/shared/contracts';
@@ -16,7 +17,7 @@ type ObservedWindow = Window & { __columnEvents?: TaskEvent[] };
 async function openTable(context: LiveContext, name: string) {
   const connection = page.locator('.connection-node').filter({ has: page.locator('.connection-row').getByText(context.connectionName, { exact: true }) });
   await connection.locator('.connection-row').hover();
-  await connection.getByRole('button', { name: '刷新连接', exact: true }).click();
+  await clickSidebarAction(connection, { name: '刷新连接', exact: true });
   const database = connection.locator('.database-row').filter({ has: page.getByRole('button', { name: context.database, exact: true }) });
   await database.getByRole('button', { name: context.database, exact: true }).click();
   await connection.locator('.object-row').getByText(name, { exact: true }).click();
@@ -32,10 +33,10 @@ async function editColumn(name: string) {
   await expect(dialog().locator('.column-patch-editor')).toBeVisible();
 }
 
-/** 侧栏操作按钮仅在真实对象行悬停时显示；不强制点击隐藏按钮。 */
+/** 从真实对象行右键菜单进入字段编辑，不调用隐藏按钮或内部回调。 */
 async function openSidebarColumnDialog(connection: ReturnType<typeof page.locator>, name: string) {
   const row = connection.locator('.object-row').filter({ has: page.getByText(name, { exact: true }) });
-  await row.hover(); await row.getByRole('button', { name: `${text.title} ${name}`, exact: true }).click();
+  await row.hover(); await clickSidebarAction(row, { name: `${text.title} ${name}`, exact: true });
 }
 
 /** 行草稿保存不执行 DDL；属性开关与默认类型均走真实表单。 */

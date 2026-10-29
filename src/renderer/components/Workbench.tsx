@@ -23,11 +23,11 @@ function useWorkbenchOpenScope() {
 }
 
 /** 对象树星标只改变本地收藏；同名不同类型对象独立显示状态。 */
-export function FavoriteButton({ target }: { target: WorkbenchTarget }) {
+export function FavoriteButton({ target, menu = false, beforeAction }: { target: WorkbenchTarget; menu?: boolean; beforeAction?: () => boolean }) {
   const { snapshot, ready, busy } = useWorkbench();
   const saved = snapshot.document.favorites.some(item => targetKey(item.target) === targetKey(target));
   const name = target.kind === 'database' ? target.database : target.name;
-  return <button disabled={!ready || busy} aria-label={t.action(saved ? t.remove : t.add, name)} title={saved ? t.remove : t.add} aria-pressed={saved} onClick={() => void useWorkbench.getState().toggleFavorite(target)}><Star size={12} fill={saved ? 'currentColor' : 'none'}/></button>;
+  return <button role={menu ? 'menuitem' : undefined} disabled={!ready || busy} aria-label={t.action(saved ? t.remove : t.add, name)} title={saved ? t.remove : t.add} aria-pressed={menu ? undefined : saved} onClick={() => { if (!menu || beforeAction?.()) void useWorkbench.getState().toggleFavorite(target); }}><Star size={12} fill={saved ? 'currentColor' : 'none'}/>{menu && <span>{saved ? t.remove : t.add}</span>}</button>;
 }
 
 /** 收藏面板作为独立虚拟关系展示，不复用或更改真实连接分组。 */

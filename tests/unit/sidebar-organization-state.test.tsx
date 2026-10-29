@@ -4,15 +4,23 @@ import type { ConnectionProfile } from '../../src/shared/contracts';
 import { completionServerFacts } from '../../src/renderer/completionServerFacts';
 import { zh } from '../../src/renderer/locales/zh-CN';
 import { importNewTableZh } from '../../src/renderer/locales/importNewTable.zh-CN';
-import { memoryDocument, MemoryEvent } from '../fixtures/memory-dom';
+import { memoryDocument, MemoryEvent, MemoryNode } from '../fixtures/memory-dom';
 
 let document: ReturnType<typeof memoryDocument>, createRoot: typeof import('react-dom/client')['createRoot'], root: ReturnType<typeof createRoot> | undefined;
 let Sidebar: typeof import('../../src/renderer/components/Sidebar')['Sidebar'], useWorkspace: typeof import('../../src/renderer/store')['useWorkspace'], useWorkbench: typeof import('../../src/renderer/workbench')['useWorkbench'];
 type Node = ReturnType<typeof memoryDocument>['body'];
-const globals = ['window', 'document', 'navigator', 'IS_REACT_ACT_ENVIRONMENT'].map(name => [name, Object.getOwnPropertyDescriptor(globalThis, name)] as const);
-beforeAll(async () => { document = memoryDocument(); ({ createRoot } = await import('react-dom/client')); ({ useWorkspace } = await import('../../src/renderer/store')); ({ useWorkbench } = await import('../../src/renderer/workbench')); ({ Sidebar } = await import('../../src/renderer/components/Sidebar')); });
+const globals = ['window', 'document', 'navigator', 'IS_REACT_ACT_ENVIRONMENT', 'MutationObserver'].map(name => [name, Object.getOwnPropertyDescriptor(globalThis, name)] as const);
+const connectedDescriptor = Object.getOwnPropertyDescriptor(MemoryNode.prototype, 'isConnected');
+beforeAll(async () => {
+  document = memoryDocument();
+  // 本文件只核真实React事件、菜单目标和请求；布局/原生焦点与MutationObserver时序由专项和E2E覆盖。
+  Object.defineProperty(MemoryNode.prototype, 'isConnected', { configurable: true, get() { return this.getRootNode() === document; } });
+  Object.assign(window, { innerWidth: 1024, innerHeight: 768 });
+  Object.defineProperty(globalThis, 'MutationObserver', { configurable: true, value: class { observe() {} disconnect() {} takeRecords() { return []; } } });
+  ({ createRoot } = await import('react-dom/client')); ({ useWorkspace } = await import('../../src/renderer/store')); ({ useWorkbench } = await import('../../src/renderer/workbench')); ({ Sidebar } = await import('../../src/renderer/components/Sidebar'));
+});
 afterEach(async () => { if (root) await act(async () => root!.unmount()); root = undefined; document.body.textContent = ''; delete (window as any).dbark; completionServerFacts.clear('a'); completionServerFacts.clear('b'); vi.restoreAllMocks(); });
-afterAll(() => { for (const [name, descriptor] of globals) if (descriptor) Object.defineProperty(globalThis, name, descriptor); else Reflect.deleteProperty(globalThis, name); });
+afterAll(() => { for (const [name, descriptor] of globals) if (descriptor) Object.defineProperty(globalThis, name, descriptor); else Reflect.deleteProperty(globalThis, name); if (connectedDescriptor) Object.defineProperty(MemoryNode.prototype, 'isConnected', connectedDescriptor); else Reflect.deleteProperty(MemoryNode.prototype, 'isConnected'); });
 
 /** 使用真实Sidebar/子节点及Zustand，仅把IPC替换为明确可结算的RAM端口。 */
 async function mount(onImportNewTable?: (connectionId: string, database: string) => void) {
@@ -33,6 +41,12 @@ async function mount(onImportNewTable?: (connectionId: string, database: string)
 }
 /** 所有交互投递给真实ReactDOM事件委派，不调用节点内部函数或写其状态。 */
 async function click(node: Node) { await act(async () => node.dispatchEvent(new MemoryEvent('click'))); }
+/** 通过真实React右键事件和Portal菜单查找动作，不读取actions属性或组件内部回调。 */
+async function menuAction(label: Node, name: string) {
+  await act(async () => { const event = new MemoryEvent('contextmenu'); event.button = 2; label.dispatchEvent(event); });
+  const menu = document.querySelector('[role="menu"]'); expect(menu).not.toBeNull();
+  const entry = menu!.querySelectorAll('button').find(node => node.getAttribute('role') === 'menuitem' && node.getAttribute('aria-label') === name); expect(entry).toBeDefined(); return entry!;
+}
 function connection() { const button = document.querySelectorAll('button').find(node => node.getAttribute('aria-expanded') !== null && node.textContent === '连接a'); expect(button).toBeDefined(); return button!; }
 function connected(button: Node) { return button.querySelectorAll('span').some(node => (node.getAttribute('class') ?? '').split(' ').includes('connection-dot')); }
 function busy(button: Node) { return button.getAttribute('aria-busy'); }
@@ -41,7 +55,8 @@ function commands(f: Awaited<ReturnType<typeof mount>>) { return f.calls.map(cal
 
 it('数据库级从文件导入新表入口传递准确原目标，点击不创建表或查询记录', async () => {
   const open = vi.fn(), f = await mount(open); await click(connection()); await f.settle(0, status()); await f.settle(1, ['原数据库']);
-  const entry = document.querySelectorAll('button').find(node => node.getAttribute('aria-label') === `${importNewTableZh.title} 原数据库`); expect(entry).toBeDefined();
+  const database = document.querySelectorAll('button').find(node => node.textContent === '原数据库')!;
+  const entry = await menuAction(database, `${importNewTableZh.title} 原数据库`);
   await click(entry!); expect(open).toHaveBeenCalledExactlyOnceWith('a', '原数据库'); expect(commands(f)).toEqual(['connections.open', 'metadata.databases']);
 });
 
@@ -83,7 +98,7 @@ it.each(['connections.open', 'metadata.databases'])('真实connectionVersion换�
 
 it('主动连接刷新仍真实请求，外部refreshVersion换代仍撤销旧owner', async () => {
   const f = await mount(), original = connection(); await click(original); await f.settle(0, status()); await f.settle(1, ['原数据库']);
-  const refresh = original.parentNode!.querySelectorAll('button').find(node => node.getAttribute('aria-label') === zh.sidebar.text011)!;
+  const refresh = await menuAction(original, zh.sidebar.text011);
   await click(refresh); expect(commands(f)).toEqual(['connections.open', 'metadata.databases', 'connections.open']); expect(busy(original)).toBe('true');
   await f.render(1); const replacement = connection(); expect(replacement).not.toBe(original); await f.settle(2, status()); expect(f.calls).toHaveLength(3); expect(busy(replacement)).toBe('false'); expect(replacement.getAttribute('aria-expanded')).toBe('false');
   await click(replacement); await f.settle(3, status()); await f.settle(4, ['刷新数据库']); expect(document.body.textContent).toContain('刷新数据库'); expect(commands(f).includes('connections.close')).toBe(false);

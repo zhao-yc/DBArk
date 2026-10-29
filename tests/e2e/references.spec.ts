@@ -1,3 +1,4 @@
+import { clickSidebarAction } from './sidebar-menu';
 import { randomUUID } from 'node:crypto';
 import mysql, { type Connection, type RowDataPacket } from 'mysql2/promise';
 import type { Locator, TestInfo } from '@playwright/test';
@@ -34,7 +35,7 @@ async function withParentDatabase(body: (context: LiveContext & { parentDatabase
 async function openTable(connectionName: string, database: string, table: string) {
   const connection = page.locator('.connection-node').filter({ has: page.locator('.connection-row').getByText(connectionName, { exact: true }) });
   const row = connection.locator('.connection-row'); await row.hover();
-  await row.getByRole('button', { name: '刷新连接', exact: true }).click();
+  await clickSidebarAction(row, { name: '刷新连接', exact: true });
   const databaseRow = connection.locator('.database-row').filter({ has: page.getByRole('button', { name: database, exact: true }) });
   await expect(databaseRow).toBeVisible(); await databaseRow.getByRole('button', { name: database, exact: true }).click();
   const object = connection.locator('.object-row').getByText(table, { exact: true });

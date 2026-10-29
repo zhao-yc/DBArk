@@ -1,3 +1,4 @@
+import { clickSidebarAction } from './sidebar-menu';
 import { test as baseTest, expect } from '@playwright/test';
 import { createHash } from 'node:crypto';
 import { zh } from '../../src/renderer/locales/zh-CN';
@@ -116,7 +117,7 @@ test('真实表页嵌套筛选：精确值、两页、排序、停用子组及�
     const browserWindow = await step(() => application.browserWindow(page)); const senderId = await step(() => browserWindow.evaluate(window => window.webContents.id)); await step(() => browserWindow.dispose());
     await step(() => application.evaluate(observePages, { connectionId: profile.id, database: target!.database!, senderId }));
     const connection = page.locator('.connection-node').filter({ has: page.locator('.connection-row').getByText(connectionName, { exact: true }) });
-    await step(() => connection.locator('.connection-row > .tree-label').focus()); await step(() => connection.getByRole('button', { name: zh.sidebar.text011, exact: true }).click()); await step(() => connection.locator('.database-row').getByRole('button', { name: target!.database!, exact: true }).click()); await step(() => connection.locator('.object-row').getByText('subject', { exact: true }).click());
+    await step(() => connection.locator('.connection-row > .tree-label').focus()); await step(() => clickSidebarAction(connection, { name: zh.sidebar.text011, exact: true })); await step(() => connection.locator('.database-row').getByRole('button', { name: target!.database!, exact: true }).click()); await step(() => connection.locator('.object-row').getByText('subject', { exact: true }).click());
     const table = page.locator('.table-tab:visible'), grid = table.locator('.results-grid'), panel = table.getByRole('region', { name: text.title, exact: true });
     const cell = (row: number, column: number) => grid.locator(`[role="row"][aria-rowindex="${row}"] [role="gridcell"][aria-colindex="${column}"]`);
     const choose = (label: string, value: string) => step(() => panel.getByRole('combobox', { name: label, exact: true }).selectOption(value));
