@@ -42,6 +42,7 @@ import type { HistoryDeletePreviewInput, HistoryDeletePreviewOutput, HistoryDele
 import type { ExplainPlan } from './explain';
 import type { QueryAnalyzePlan } from './queryAnalyze';
 import type { QueryTransactionSettingsSnapshot, QueryTransactionIsolation } from './queryTransactionSettings';
+import type { QueryAutocommitApplyInput, QueryAutocommitOutput } from './queryAutocommit';
 import type { QueryScriptReport } from './queryContinueOnError';
 import type { QueryWarningsReport } from './queryWarnings';
 import type { PlanSnapshotDocument } from './explainSnapshot';
@@ -232,6 +233,7 @@ export interface CommandMap {
   /** 仅原会话默认事务属性；读取与应用均使用独立任务，不隐式提交。 */
   'query.transactionSettings.read': { input: { sessionId: string; taskId: string }; output: QueryTransactionSettingsSnapshot };
   'query.transactionSettings.apply': { input: { sessionId: string; taskId: string; expected: QueryTransactionSettingsSnapshot; isolation: QueryTransactionIsolation; readOnly: boolean }; output: QueryTransactionSettingsSnapshot };
+  'query.autocommit.apply': { input: QueryAutocommitApplyInput; output: QueryAutocommitOutput };
   'table.page': { input: { connectionId: string; database: string; table: string; page: number; pageSize: number; filters: FilterRule[]; filterMode?: FilterMode; filterGroup?: FilterGroup; sort: SortRule[]; copySource?: boolean; taskId?: string }; output: TablePage };
   'table.copySourceRead': { input: TableCopySourceReadInput; output: TableCopySourceReadResult };
   'table.copySourceRelease': { input: TableCopySourceReleaseInput; output: void };

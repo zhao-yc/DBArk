@@ -9,7 +9,7 @@ const enabled = !listing && process.env.DBARK_INTEGRATION_ENABLED === '1' && pro
 test.skip(!enabled, '事务设置正式窗口仅在统筹核对200隔离实例并显式开启双门后执行');
 test.use({ preserveOnUnconfirmedExit: true, trace: 'off', screenshot: 'off', video: 'off' });
 test.setTimeout(150000);
-interface Audit { commands: string[]; pending: number; settings: Array<{ command: string; sessionId: string; ok: boolean; result?: unknown; error?: string }>; }
+interface Audit { commands: string[]; pending: number; settings: Array<{ command: string; sessionId: string; ok: boolean; input?: unknown; result?: unknown; error?: string }>; }
 const query = () => page.locator('.query-tab:visible');
 const dialog = () => page.getByRole('dialog', { name: t.title, exact: true });
 
@@ -28,7 +28,7 @@ async function observed(info: TestInfo, body: () => Promise<void>) {
       state.commands.push(payload.command); state.pending++;
       try {
         const response = await original(event, payload); check();
-        if (payload.command === 'query.transactionSettings.read' || payload.command === 'query.transactionSettings.apply') state.settings.push({ command: payload.command, sessionId: payload.input.sessionId, ok: response?.ok === true, ...(response?.ok === true ? { result: response.result } : { error: response?.error }) });
+        if (payload.command === 'query.transactionSettings.read' || payload.command === 'query.transactionSettings.apply' || payload.command === 'query.autocommit.apply') state.settings.push({ command: payload.command, sessionId: payload.input.sessionId, ok: response?.ok === true, ...(payload.command === 'query.autocommit.apply' ? { input: payload.input } : {}), ...(response?.ok === true ? { result: response.result } : { error: response?.error }) });
         return response;
       } finally { state.pending--; }
     };
@@ -107,6 +107,70 @@ test('正式事务设置保持结果与历史、只读拒写、未提交事务�
       expect((await audit(info)).settings.filter(item => item.command === 'query.transactionSettings.apply')).toHaveLength(2);
       expect((await audit(info)).settings.every(item => item.ok)).toBe(true);
       await page.screenshot({ path: info.outputPath('第二标签独立默认事务设置.png') }); await dialog().getByRole('button', { name: t.close, exact: true }).click(); expect(pageErrors).toEqual([]);
+    });
+  }, info, { captureFailureScreenshot: false });
+});
+
+/** 正式入口切换自动提交；原Main旁观和独立观察连接分别证明调用与真实可见数据。 */
+test('正式自动提交开关保持原结果、明确确认活动事务提交、关闭不提交及双标签会话隔离', async ({}, info) => {
+  const live = await import('./live-helpers');
+  if (!enabled || !['192.168.31.200', 'deve-server.yinzon.com'].includes(live.environment.DBARK_TEST_HOST ?? '') || live.environment.DBARK_TEST_PORT !== '13384') throw Error('自动提交窗口验收仅限200隔离13384');
+  await live.isolatedDatabase(async context => {
+    const { observer, database } = context;
+    await info.attach('自动提交隔离资源', { body: JSON.stringify({ database, observerThreadId: (observer as unknown as { threadId?: number }).threadId }), contentType: 'application/json' });
+    await observer.query(`CREATE TABLE \`${database}\`.tx_subject(id INT PRIMARY KEY,note VARCHAR(64)) ENGINE=InnoDB`);
+    await observer.query(`INSERT INTO \`${database}\`.tx_subject VALUES(1,'控制一'),(2,'控制二'),(3,'控制三')`);
+    const rows = async () => (await observer.query<RowDataPacket[]>(`SELECT id,note FROM \`${database}\`.tx_subject ORDER BY id`))[0];
+    await observed(info, async () => {
+      await desktop.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(1400, 900));
+      await live.openDatabaseQuery(database); const source = 'SELECT id,note FROM tx_subject ORDER BY id DESC'; await live.executeSql(source);
+      const header = query().getByRole('grid').locator('[role="columnheader"][aria-colindex="2"]'); await header.click();
+      await expect(header).toHaveAttribute('aria-sort', 'ascending'); const result = await query().locator('.result-body').innerText();
+      const history = await page.evaluate(async () => (await window.dbark.invoke('history.list', {})).map(row => row.id));
+      await open(info); const idA = (await dialog().getByLabel(t.physicalId, { exact: true }).innerText()).trim();
+      const defaults = { isolation: await dialog().getByRole('combobox', { name: t.isolation, exact: true }).inputValue(), readOnly: await dialog().getByRole('checkbox', { name: t.readOnly, exact: true }).isChecked() };
+      /** 单个按钮等待原设置回包；未自动刷新或补发SQL。 */
+      const setAutomatic = async (enabled: boolean, commit = false) => {
+        const before = (await audit(info)).settings.length;
+        await dialog().getByRole('checkbox', { name: t.autocommitChoice, exact: true }).setChecked(enabled);
+        const label = enabled ? commit ? t.enableAndCommit : t.enableAutocommit : t.disableAutocommit;
+        if (commit) {
+          await expect(dialog().getByRole('button', { name: label, exact: true })).toBeDisabled();
+          expect((await audit(info)).settings.length).toBe(before);
+          await expect(dialog()).toContainText(t.implicitCommit);
+          await dialog().getByRole('checkbox', { name: t.acknowledgeCommit, exact: true }).check();
+          await dialog().getByRole('button', { name: label, exact: true }).scrollIntoViewIfNeeded();
+          await page.screenshot({ path: info.outputPath('自动提交开启前明确确认.png') });
+        }
+        await dialog().getByRole('button', { name: label, exact: true }).click();
+        await expect.poll(async () => (await audit(info)).settings.length).toBe(before + 1);
+        expect((await audit(info)).settings.at(-1)).toMatchObject({ command: 'query.autocommit.apply', ok: true, input: { autocommit: enabled, allowImplicitCommit: commit }, result: { confirmed: true, changed: true, implicitCommitAcknowledged: commit, snapshot: { autocommit: enabled, serverConnectionId: idA, database } } });
+        await expect(dialog().getByRole('button', { name: t.refresh, exact: true })).toBeEnabled();
+      };
+      await setAutomatic(false); await dialog().getByRole('button', { name: t.close, exact: true }).click();
+      expect(await query().locator('.result-body').innerText()).toBe(result); await expect(header).toHaveAttribute('aria-sort', 'ascending');
+      await expect(query().locator('.monaco-editor .view-lines')).toContainText(source);
+      expect(await page.evaluate(async () => (await window.dbark.invoke('history.list', {})).map(row => row.id))).toEqual(history);
+      await live.executeSql("UPDATE tx_subject SET note='已确认隐式提交' WHERE id=1");
+      expect(await rows()).toEqual([{ id: 1, note: '控制一' }, { id: 2, note: '控制二' }, { id: 3, note: '控制三' }]);
+      await open(info); await expect(dialog().getByLabel(t.transaction, { exact: true })).toHaveText(t.yes);
+      await setAutomatic(true, true); await expect(dialog().getByRole('status', { name: t.status })).toContainText('原活动事务已确认提交');
+      const committed = [{ id: 1, note: '已确认隐式提交' }, { id: 2, note: '控制二' }, { id: 3, note: '控制三' }]; expect(await rows()).toEqual(committed);
+      await dialog().getByRole('button', { name: t.close, exact: true }).click();
+      await query().getByRole('button', { name: zh.common.transactionBegin, exact: true }).click(); await live.executeSql("UPDATE tx_subject SET note='关闭不应提交' WHERE id=2");
+      await open(info); await expect(dialog().getByRole('button', { name: t.enableAutocommit, exact: true })).toBeDisabled();
+      await setAutomatic(false); await expect(dialog().getByLabel(t.transaction, { exact: true })).toHaveText(t.yes); expect(await rows()).toEqual(committed);
+      await dialog().getByRole('button', { name: t.close, exact: true }).click(); await query().getByRole('button', { name: zh.common.transactionRollback, exact: true }).click(); expect(await rows()).toEqual(committed);
+      await live.openDatabaseQuery(database); await open(info); const idB = (await dialog().getByLabel(t.physicalId, { exact: true }).innerText()).trim(); expect(idB).not.toBe(idA);
+      await expect(dialog().getByLabel(t.autocommit, { exact: true })).toHaveText(t.yes);
+      await expect(dialog().getByRole('combobox', { name: t.isolation, exact: true })).toHaveValue(defaults.isolation);
+      await expect(dialog().getByRole('checkbox', { name: t.readOnly, exact: true })).toBeChecked({ checked: defaults.readOnly });
+      await page.screenshot({ path: info.outputPath('自动提交第二标签独立会话.png') });
+      const taskRecords = await page.evaluate(() => window.dbark.invoke('tasks.list', {}));
+      expect(taskRecords.some(record => record.status === 'completed' && record.message === '服务器已确认自动提交开启；原活动事务已确认提交')).toBe(true);
+      await info.attach('自动提交已提交三行独立读回', { body: JSON.stringify({ database, idA, idB, rows: await rows() }), contentType: 'application/json' });
+      expect((await audit(info)).settings.filter(item => item.command === 'query.autocommit.apply')).toHaveLength(3);
+      await dialog().getByRole('button', { name: t.close, exact: true }).click(); expect(pageErrors).toEqual([]);
     });
   }, info, { captureFailureScreenshot: false });
 });

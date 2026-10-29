@@ -92,6 +92,8 @@ import { explainLimits } from '../shared/explain';
 import { analyzeQuery } from './queryAnalyze';
 import { queryAnalyzeCapability } from '../shared/queryAnalyze';
 import { applyQueryTransactionSettings, readQueryTransactionSettings, queryTransactionSettingsMayHaveChanged, type QueryTransactionSettingsContext } from './queryTransactionSettings';
+import { applyQueryAutocommit } from './queryAutocommit';
+import { queryAutocommitCleanup, queryAutocommitConfirmedMessage, queryAutocommitMayHaveChanged, type QueryAutocommitApplyInput, type QueryAutocommitOutput } from '../shared/queryAutocommit';
 import { switchQueryDatabase, queryDatabaseSwitchMayHaveChanged, type QueryDatabaseSwitchContext } from './queryDatabaseSwitch';
 import type { QueryDatabaseSwitchInput } from '../shared/queryDatabaseSwitch';
 import { consumeQueryFrames } from './queryStreamProtocol';
@@ -117,6 +119,8 @@ interface RunningTask {
   tableApply?: TableApplyEvidence;
   queryExport?: QueryExportProgress; fileCommitStarted?: boolean;
   transactionSettingsChangeSubmitted?: boolean;
+  autocommitSubmitted?: boolean;
+  autocommitAcknowledged?: QueryAutocommitOutput;
   databaseSwitchSubmitted?: boolean;
   databaseSwitchConfirmed?: boolean;
   continueOnErrorMode?: boolean;
@@ -465,6 +469,11 @@ export class Engine {
         await execute(managed, actions[input.action]);
       });
       case 'query.transactionSettings.read': return this.withSession(input.sessionId, managed => this.runTask(input.taskId, managed, '读取本会话事务默认设置', task => readQueryTransactionSettings(this.transactionSettingsContext(managed, task))));
+      case 'query.autocommit.apply': return this.withSession(input.sessionId, managed => this.runTask(input.taskId, managed, '设置本会话自动提交', async task => {
+        const output = await applyQueryAutocommit(input as QueryAutocommitApplyInput, this.transactionSettingsContext(managed, task, () => { task.autocommitSubmitted = true; }), acknowledged => { task.autocommitAcknowledged = acknowledged; });
+        if (task.autocommitAcknowledged) task.autocommitAcknowledged = output;
+        return output;
+      }));
       case 'query.transactionSettings.apply': return this.withSession(input.sessionId, async managed => {
         let setMayHaveBeenSent = false;
         try {
@@ -998,8 +1007,8 @@ export class Engine {
     const task: RunningTask = { id, managed, cancelled: false, inFlight: false, generation: 0, done, finish };
     this.tasks.set(id, task);
     // 在取得会话互斥后、发送用户SQL前固定历史上下文，避免完成后读到脚本切换后的库。
-    this.emit({ taskId: id, status: 'running', progress: 0, message: label, executionDatabase:queryDatabaseFromSession(completionSessionState(managed,false)) });
     try {
+      this.emit({ taskId: id, status: 'running', progress: 0, message: label, executionDatabase:queryDatabaseFromSession(completionSessionState(managed,false)) });
       const result = await action(task);
       if (task.fileImportConflict) {
         let cleanup: string | undefined;
@@ -1015,14 +1024,21 @@ export class Engine {
         this.emit({ taskId: id, status: task.cancelled ? 'cancelled' : retained.errors.length ? 'failed' : 'completed', progress: 100, message: retained.errors[0] ?? 'SQL文件执行完成；服务器影响计数不等于提交行数' });
         return retained as T;
       }
-      if (!task.tableApply?.commitAcknowledged && !task.fileImport?.commitAcknowledged) this.checkCancelled(task);
+      if (!task.tableApply?.commitAcknowledged && !task.fileImport?.commitAcknowledged && !task.autocommitAcknowledged) this.checkCancelled(task);
       if (task.tableApply?.commitAcknowledged || task.fileImport?.commitAcknowledged || task.fileImport?.failure) await task.cancelPending?.catch(() => undefined); else await task.cancelPending;
       const errors = (result as { errors?: string[] } | undefined)?.errors;
       // 仅显式查询策略可把保留前序结果的回包判为失败，不按任意对象的failure属性猜全局终态。
       const final = terminal?.(result);
-      this.emit({ taskId: id, status: final?.status ?? (errors?.length ? 'failed' : 'completed'), progress: 100, message: final?.message ?? (errors?.length ? errors[0] : `${label}完成`), ...(task.queryExport ? { queryExport: { ...task.queryExport } } : {}) });
+      this.emit({ taskId: id, status: final?.status ?? (errors?.length ? 'failed' : 'completed'), progress: 100, message: final?.message ?? (errors?.length ? errors[0] : task.autocommitAcknowledged ? queryAutocommitConfirmedMessage(task.autocommitAcknowledged) : `${label}完成`), ...(task.queryExport ? { queryExport: { ...task.queryExport } } : {}) });
       return result;
     } catch (error) {
+      if (task.autocommitAcknowledged) {
+        // 确认包已说明设置及隐式提交成功；晚取消、通知或取消连接收尾失败只能附加说明。
+        await task.cancelPending?.catch(() => undefined);
+        const retained = queryAutocommitCleanup(task.autocommitAcknowledged, error);
+        try { this.emit({ taskId: id, status: 'completed', progress: 100, message: queryAutocommitConfirmedMessage(retained) }); } catch { /* 通知失败不抹掉原确认。 */ }
+        return retained as T;
+      }
       if (task.fileImportConflict) {
         let cleanup = '导入任务收尾异常；原处理与提交回执已保留，不会自动重试';
         try { await task.cancelPending; } catch { cleanup += '；取消控制连接收尾未确认'; }
@@ -1061,7 +1077,8 @@ export class Engine {
         try { await task.cancelPending; }
         catch (cancelError) { error = new AggregateError([error, cancelError], '警告采集任务与取消收尾失败；原语句可能已执行，不会自动重试'); }
       } else await task.cancelPending;
-      if (task.transactionSettingsChangeSubmitted) error = queryTransactionSettingsMayHaveChanged(error);
+      if (task.autocommitSubmitted) error = queryAutocommitMayHaveChanged(error);
+      else if (task.transactionSettingsChangeSubmitted) error = queryTransactionSettingsMayHaveChanged(error);
       if (task.databaseSwitchSubmitted) {
         if (!task.databaseSwitchConfirmed) invalidateCompletionDatabase(managed);
         error = queryDatabaseSwitchMayHaveChanged(error);
@@ -1071,7 +1088,7 @@ export class Engine {
     } finally {
       // 取消连接仍在建立时，不能放开会话给下一条查询，以免 KILL 误伤复用线程。
       if (task.fileImportConflict || task.sqlFileImport) await task.cancelPending?.catch(() => undefined);
-      else if (task.tableApply?.commitAcknowledged || task.fileImport?.commitAcknowledged || task.fileImport?.failure) await task.cancelPending?.catch(() => undefined);
+      else if (task.tableApply?.commitAcknowledged || task.fileImport?.commitAcknowledged || task.fileImport?.failure || task.autocommitAcknowledged) await task.cancelPending?.catch(() => undefined);
       // 本功能取消收尾的原错误已在catch合并；finally仍须释放任务，不能再次抛出覆盖终态。
       else if (task.transactionSettingsChangeSubmitted || task.databaseSwitchSubmitted) await task.cancelPending?.catch(() => undefined);
       else if (task.continueOnErrorMode) await task.cancelPending?.catch(() => undefined);
@@ -1213,7 +1230,7 @@ export class Engine {
     if (task.fileImportConflict?.committing) { if (!task.fileImportConflict.finalCommit) task.cancelled = true; return; }
     // COMMIT一旦发送就不再KILL；中间批提交后仍响应取消，最后提交则保留真实ACK。
     if (task.fileImport?.committing) { if (!task.fileImport.finalCommit) task.cancelled = true; return; }
-    if (task.fileCommitStarted || task.tableApply?.commitMayHaveBeenSent) return;
+    if (task.fileCommitStarted || task.tableApply?.commitMayHaveBeenSent || task.autocommitSubmitted) return;
     task.cancelled = true;this.insertConfirmations.cancel(id);
     return this.stopTaskCommand(task);
   }
@@ -1347,7 +1364,7 @@ export class Engine {
       check: () => { this.checkCancelled(task); if (managed.broken) throw Error('原会话连接已断开；不会自动重连或重放'); },
       protocolState: () => ({ known: managed.transactionStateKnown === true, broken: managed.broken, serverStatus: managed.serverStatus }),
       onSetSent: () => { task.transactionSettingsChangeSubmitted = true; onSetSent?.(); },
-      query: async (sql, onSend) => {
+      query: async (sql, onSend, onAcknowledged) => {
         this.checkCancelled(task);
         if (managed.broken) throw Error('原会话连接已断开；不会自动重连或重放');
         task.inFlight = true; task.generation++;
@@ -1359,6 +1376,7 @@ export class Engine {
           if (result.rows && typeof result.rows === 'object' && 'serverStatus' in result.rows && Number.isInteger(result.rows.serverStatus)) {
             managed.serverStatus = Number(result.rows.serverStatus); managed.transactionStateKnown = true;
           }
+          onAcknowledged?.(result);
           return result;
         } finally { task.inFlight = false; await task.cancelPending; }
       },

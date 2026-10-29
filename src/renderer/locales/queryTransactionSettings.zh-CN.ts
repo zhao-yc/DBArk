@@ -9,6 +9,12 @@ export const queryTransactionSettingsZh = {
   changed: '原标签、活动标签、连接或会话已变化，本次设置已失效，请关闭后重新打开。',
   busy: '标签已有活动作业，请等待完成后再操作。',
   activeTransaction: '原会话正在事务中，可以读取；请先显式提交或回滚，再重新读取后修改默认值。',
-  defaultsNotice: '这里只设置原会话的 SESSION 默认值，不代表当前事务的实际隔离级别或读写属性；一次性事务 SQL 可以覆盖默认值。设置不会自动提交、回滚或重连。',
+  defaultsNotice: '隔离级别与只读属性只设置原会话的 SESSION 默认值，不代表当前事务的实际属性；一次性事务 SQL 可以覆盖默认值。这两项不会自动提交、回滚或重连。',
+  autocommitTitle: '本会话自动提交', autocommitChoice: '启用本会话自动提交',
+  autocommitNotice: '仅作用于当前查询会话，不保存为连接默认值。关闭后写入需要显式提交或回滚；关闭自动提交不会提交当前事务。',
+  implicitCommit: '从关闭切换为开启会提交当前活动事务，包括这个会话先前尚未提交的写入；提交后不能撤销。',
+  acknowledgeCommit: '我确认提交当前会话的活动事务并开启自动提交',
+  enableAutocommit: '开启自动提交', disableAutocommit: '关闭自动提交',
+  enableAndCommit: '开启自动提交并提交当前事务', autocommitApplying: '正在设置本会话自动提交…',
   diagnosticsNotice: '读取会改变原会话的 ROW_COUNT()、FOUND_ROWS() 和警告等诊断信息；已有可视查询结果保持不变。设置不保存到连接配置，重新打开时重新读取。',
 } as const;

@@ -5,6 +5,7 @@ export const publicCommands: Record<Command, true> = {
   'files.preflight': true,
   'tableDraftFiles.open': true, 'tableDraftFiles.save': true, 'table.draftVerify': true,
   'query.transactionSettings.read': true, 'query.transactionSettings.apply': true,
+  'query.autocommit.apply': true,
   'query.databaseSwitch': true,
   'table.filteredDelete.preview': true, 'table.filteredDelete.apply': true, 'table.filteredDelete.release': true,
   'table.filteredUpdate.preview': true, 'table.filteredUpdate.apply': true, 'table.filteredUpdate.release': true,
