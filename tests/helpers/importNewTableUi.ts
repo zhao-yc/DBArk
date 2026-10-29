@@ -22,6 +22,10 @@ export function bindImportNewTableUiEnvironment(read:()=>{env:NodeJS.ProcessEnv;
   const original=signature(),values=Object.freeze(Object.fromEntries(importNewTableUiKeys.map(key=>[key,read().env[key]!])) as Record<typeof importNewTableUiKeys[number],string>);let invalid=false;
   return{values,assertCurrent(){if(invalid)throw Error('新表导入原环境已失效，保留现场');try{if(signature()!==original)throw Error('新表导入原环境漂移');}catch(reason){invalid=true;throw reason;}}};
 }
+/** Windows的Playwright句柄属于shell启动器，实际Electron主进程须以其为父进程，不能只允许任意不同PID。 */
+export function assertImportNewTableUiProcess(actual:{pid:number;parent:number;platform:string},launcher:number|undefined,platform:string):void{
+  if(!Number.isSafeInteger(launcher)||launcher!<=0||!Number.isSafeInteger(actual.pid)||actual.pid<=0||actual.platform!==platform||(platform==='win32'?actual.parent!==launcher||actual.pid===launcher:actual.pid!==launcher))throw Error('新表导入原启动器与实际主进程关系未知');
+}
 /** 独立手写CSV协议及数学期望；本函数不调用产品解析器、SQL生成器或数据库。 */
 export function importNewTableUiFixture(database:string,marker:string){
   const nonce=/^dbark_importnewui_([a-f0-9]{12})$/.exec(database);if(!nonce||marker!=='dbark-import-new-table-ui:'+nonce[1])throw Error('新表导入资源必须属于同一本轮nonce');

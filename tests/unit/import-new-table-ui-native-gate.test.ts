@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { runInNewContext } from 'node:vm';
 import ts from 'typescript';
-import { assertImportNewTableUiEnvironment, bindImportNewTableUiEnvironment, importNewTableUiFixture, installImportNewTableUiChoice, readImportNewTableUiChoice } from '../helpers/importNewTableUi';
+import { assertImportNewTableUiEnvironment, bindImportNewTableUiEnvironment, importNewTableUiFixture, installImportNewTableUiChoice, readImportNewTableUiChoice, assertImportNewTableUiProcess } from '../helpers/importNewTableUi';
 
 const source=readFileSync(new URL('../e2e/import-new-table.spec.ts',import.meta.url),'utf8');
 /** 只转译真实入口并提供RAM哨兵，任何意外live/桌面/mysql/Engine加载都立即失败。 */
@@ -14,6 +14,8 @@ function fixture(values:NodeJS.ProcessEnv={},args:string[]=[],forbidReads=false,
 function environment():NodeJS.ProcessEnv{return{DBARK_INTEGRATION_ENABLED:'1',DBARK_IMPORT_NEW_TABLE_UI_TEST:'1',DBARK_TEST_HOST:'192.168.31.200',DBARK_TEST_PORT:'13384',DBARK_TEST_TLS:'0',DBARK_TEST_USER:'合成用户',DBARK_TEST_PASSWORD:'',DBARK_TEST_DATABASE:'dbark_importnewui_012345abcdef',DBARK_TEST_EXPECTED_SERVER_UUID:'00000000-0000-0000-0000-000000000001',DBARK_IMPORT_NEW_TABLE_UI_OWNER:'dbark-import-new-table-ui:012345abcdef',DBARK_IMPORT_NEW_TABLE_UI_MANIFEST:'D:\\isolated\\source.json',DBARK_IMPORT_NEW_TABLE_UI_MANIFEST_SHA256:'a'.repeat(64),DBARK_IMPORT_NEW_TABLE_UI_OUTPUT:'D:\\isolated\\output',DBARK_IMPORT_NEW_TABLE_UI_CSV_GOOD:'D:\\isolated\\good.csv',DBARK_IMPORT_NEW_TABLE_UI_CSV_GOOD_SHA256:'b'.repeat(64),DBARK_IMPORT_NEW_TABLE_UI_CSV_BAD:'D:\\isolated\\bad.csv',DBARK_IMPORT_NEW_TABLE_UI_CSV_BAD_SHA256:'c'.repeat(64)};}
 
 describe('新表导入正式窗口默认关闭门（纯RAM）',()=>{
+  it('Windows只接受原shell启动器的Electron子进程，POSIX须实际同一PID',()=>{expect(()=>assertImportNewTableUiProcess({pid:20,parent:10,platform:'win32'},10,'win32')).not.toThrow();expect(()=>assertImportNewTableUiProcess({pid:10,parent:5,platform:'linux'},10,'linux')).not.toThrow();});
+  it.each([{pid:20,parent:99,platform:'win32'},{pid:10,parent:10,platform:'win32'},{pid:0,parent:10,platform:'win32'},{pid:1.5,parent:10,platform:'win32'},{pid:20,parent:10,platform:'linux'}])('拒绝未归属的实际进程：%j',actual=>{expect(()=>assertImportNewTableUiProcess(actual,10,'win32')).toThrow();});
   it.each([{}, {DBARK_INTEGRATION_ENABLED:'1'},{DBARK_IMPORT_NEW_TABLE_UI_TEST:'1'},{DBARK_INTEGRATION_ENABLED:'1',DBARK_IMPORT_NEW_TABLE_UI_TEST:'true'}])('缺准确双门只登记跳过：%j',values=>{const current=fixture(values);expect(current.skip).toHaveBeenCalledOnce();expect(current.modules).toEqual(['@playwright/test']);});
   it.each(['list','--list','--list=true'])('%s先于所有环境读取和认证/live加载',flag=>{const current=fixture(environment(),[flag],true);expect(current.skip).toHaveBeenCalledOnce();expect(current.reads).toEqual([]);expect(current.modules).toEqual(['@playwright/test']);});
   it('准确双门只绑定RAM授权并注册live，不执行任何资源动作',()=>{const current=fixture(environment(),['--trace=off'],false,true);expect(current.skip).not.toHaveBeenCalled();expect(current.modules).toEqual(['@playwright/test','../helpers/importNewTableUi','./import-new-table-live']);expect(current.register).toHaveBeenCalledOnce();});
