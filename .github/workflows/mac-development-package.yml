@@ -1,0 +1,120 @@
+name: Mac开发安装包
+on:
+  workflow_dispatch:
+    inputs:
+      source_ref:
+        description: '要打包的准确源码提交或分支（仅开发预览，不创建Release）'
+        required: true
+        default: main
+        type: string
+      architecture:
+        description: 'Mac处理器架构'
+        required: true
+        default: both
+        type: choice
+        options: [both, arm64, x64]
+permissions:
+  contents: read
+jobs:
+  package:
+    name: Mac开发包 · ${{ matrix.arch }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(inputs.architecture == 'arm64' && '[{"os":"macos-latest","arch":"arm64"}]' || inputs.architecture == 'x64' && '[{"os":"macos-15-intel","arch":"x64"}]' || '[{"os":"macos-latest","arch":"arm64"},{"os":"macos-15-intel","arch":"x64"}]') }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.source_ref }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - run: corepack enable
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm exec install-electron
+      - name: 原生宿主及准确来源
+        shell: bash
+        env:
+          EXPECTED_ARCH: ${{ matrix.arch }}
+        run: |
+          set -euo pipefail
+          mkdir -p package-evidence
+          node -e 'if(process.platform!=="darwin" || process.arch!==process.env.EXPECTED_ARCH)throw Error("原生架构不匹配")'
+          git rev-parse HEAD HEAD:src HEAD:package.json > package-evidence/source.txt
+          sw_vers > package-evidence/platform.txt
+          uname -m >> package-evidence/platform.txt
+      - run: pnpm build
+      - name: 生成开发安装包（不发布、不使用发行证书）
+        shell: bash
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+        run: |
+          set -euo pipefail
+          source_commit="$(git rev-parse HEAD)"
+          pnpm exec electron-builder --mac --${{ matrix.arch }} --publish never --config.extraMetadata.dbarkBuildCommit="$source_commit"
+      - name: 打包应用真实启动与URI按钮布局检查
+        shell: bash
+        env:
+          EXPECTED_ARCH: ${{ matrix.arch }}
+        run: |
+          node --input-type=module <<'NODE'
+          import assert from 'node:assert/strict';
+          import {mkdtemp,writeFile} from 'node:fs/promises';
+          import {tmpdir} from 'node:os';
+          import {join,resolve} from 'node:path';
+          import {_electron} from '@playwright/test';
+          // 仅运行本job的打包应用与全新配置，不连接数据库或读系统剪贴板。
+          const arch=process.env.EXPECTED_ARCH;
+          const directory=arch==='arm64'?'mac-arm64':'mac';
+          const executable=resolve('release',directory,'DBArk.app/Contents/MacOS/DBArk');
+          const profile=await mkdtemp(join(tmpdir(),'dbark-mac-development-'));
+          const env={...process.env,DBARK_USER_DATA:profile};delete env.ELECTRON_RUN_AS_NODE;
+          const report={passed:false,architecture:arch,executable,profile,checks:[]};
+          let desktop;
+          try {
+            desktop=await _electron.launch({executablePath:executable,env});
+            const processHandle=desktop.process();
+            const page=await desktop.firstWindow();
+            report.runtime=await desktop.evaluate(({app})=>({packaged:app.isPackaged,version:app.getVersion(),architecture:process.arch,pid:process.pid,appPath:app.getAppPath()}));
+            assert(report.runtime.packaged && report.runtime.architecture===arch);
+            await page.getByRole('button',{name:'新建连接',exact:true}).first().click();
+            await page.getByRole('button',{name:'从连接URI填入',exact:true}).click();
+            // 真实布局分别检查普通和最小客户区，不用源码样式字符串代替坐标。
+            for(const size of [[1280,800],[1024,680]]) {
+              await desktop.evaluate(({BrowserWindow},[width,height])=>BrowserWindow.getAllWindows()[0].setSize(width,height),size);
+              const actions=page.locator('.connection-uri-actions');
+              await actions.waitFor({state:'visible'});
+              const fact=await actions.evaluate(node=>({parent:node.getBoundingClientRect().toJSON(),buttons:[...node.querySelectorAll('button')].map(button=>({text:button.textContent,rect:button.getBoundingClientRect().toJSON(),client:button.clientWidth,scroll:button.scrollWidth}))}));
+              assert.equal(fact.buttons.length,2);
+              for(const button of fact.buttons)assert(button.rect.width>35 && button.scroll<=button.client+1 && button.rect.x>=fact.parent.x-1 && button.rect.right<=fact.parent.right+1);
+              const [a,b]=fact.buttons.map(button=>button.rect);
+              assert(a.right<=b.left+1 || b.right<=a.left+1 || a.bottom<=b.top+1 || b.bottom<=a.top+1);
+              report.checks.push({size,...fact});
+              await page.screenshot({path:`package-evidence/uri-${size[0]}.png`});
+            }
+            await page.keyboard.press('Escape');
+            await desktop.close();
+            report.exitCode=processHandle.exitCode;assert.equal(report.exitCode,0);
+            report.passed=true;
+          } catch(error) {report.error=String(error);process.exitCode=1;}
+          // 失败保留原报告；不重试、不强杀，不声称完成完整安装或实库验收。
+          await writeFile('package-evidence/smoke.json',JSON.stringify(report,null,2)+'\n');
+          if(!report.passed)process.exit(1);
+          NODE
+      - uses: actions/upload-artifact@v4
+        with:
+          name: DBArk-macOS-${{ matrix.arch }}-开发包-${{ github.run_id }}
+          path: |
+            release/*.dmg
+            release/*.zip
+            release/*.blockmap
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: Mac开发包证据-${{ matrix.arch }}-${{ github.run_id }}
+          path: package-evidence/
+          if-no-files-found: error
