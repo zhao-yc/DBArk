@@ -1,13 +1,14 @@
 export const tableFilteredUpdateUiKeys = ['DBARK_INTEGRATION_ENABLED', 'DBARK_TABLE_FILTERED_UPDATE_UI_TEST', 'DBARK_TEST_HOST', 'DBARK_TEST_PORT', 'DBARK_TEST_TLS', 'DBARK_TEST_USER', 'DBARK_TEST_PASSWORD', 'DBARK_TEST_DATABASE', 'DBARK_TEST_EXPECTED_SERVER_UUID', 'DBARK_TABLE_FILTERED_UPDATE_UI_OWNER', 'DBARK_TABLE_FILTERED_UPDATE_UI_MANIFEST', 'DBARK_TABLE_FILTERED_UPDATE_UI_MANIFEST_SHA256', 'DBARK_TABLE_FILTERED_UPDATE_UI_OUTPUT'] as const;
+export const tableFilteredUpdateMultiUiKeys = [...tableFilteredUpdateUiKeys.filter(key => key !== 'DBARK_TABLE_FILTERED_UPDATE_UI_TEST'), 'DBARK_TABLE_FILTERED_UPDATE_MULTI_UI_TEST'] as const;
 
 /** 列表模式早于全部环境读取；未开双门不加载桌面、凭据或数据库驱动。 */
-export function tableFilteredUpdateUiActive(env: NodeJS.ProcessEnv, args: readonly string[]): boolean {
-  return !args.some(value => value === 'list' || value === '--list' || value.startsWith('--list=')) && env.DBARK_INTEGRATION_ENABLED === '1' && env.DBARK_TABLE_FILTERED_UPDATE_UI_TEST === '1';
+export function tableFilteredUpdateUiActive(env: NodeJS.ProcessEnv, args: readonly string[], gate = 'DBARK_TABLE_FILTERED_UPDATE_UI_TEST'): boolean {
+  return !args.some(value => value === 'list' || value === '--list' || value.startsWith('--list=')) && env.DBARK_INTEGRATION_ENABLED === '1' && env[gate] === '1';
 }
 
 /** 仅在RAM核对Root预置身份，不探测磁盘或数据库，不自行创建资源。 */
-export function assertTableFilteredUpdateUiEnvironment(env: NodeJS.ProcessEnv, args: readonly string[], platform: string): void {
-  if (platform !== 'win32' || !tableFilteredUpdateUiActive(env, args)) throw Error('全部筛选行填充专项须Windows及两个显式开关');
+function assertCommonUiEnvironment(env: NodeJS.ProcessEnv, args: readonly string[], platform: string, gate: string): void {
+  if (platform !== 'win32' || !tableFilteredUpdateUiActive(env, args, gate)) throw Error('全部筛选行填充专项须Windows及两个显式开关');
   if (env.DBARK_TEST_HOST !== '192.168.31.200' || env.DBARK_TEST_PORT !== '13384' || env.DBARK_TEST_TLS !== '0' || !env.DBARK_TEST_USER || typeof env.DBARK_TEST_PASSWORD !== 'string' || !/^dbark_filteredupdateui_[a-f0-9]{32}$/.test(env.DBARK_TEST_DATABASE ?? '') || !/^dbark-table-filtered-update-ui:[a-f0-9]{32}$/.test(env.DBARK_TABLE_FILTERED_UPDATE_UI_OWNER ?? '') || !/^[a-f0-9]{8}(?:-[a-f0-9]{4}){3}-[a-f0-9]{12}$/i.test(env.DBARK_TEST_EXPECTED_SERVER_UUID ?? '')) throw Error('全部筛选行填充原200/13384、UUID或随机资源身份无效');
   const absolute = (value: string | undefined) => typeof value === 'string' && /^(?:[a-z]:[\\/]|\\\\[^\\/]+[\\/][^\\/]+[\\/])/i.test(value);
   if (!absolute(env.DBARK_TABLE_FILTERED_UPDATE_UI_MANIFEST) || !absolute(env.DBARK_TABLE_FILTERED_UPDATE_UI_OUTPUT) || !/^[a-f0-9]{64}$/.test(env.DBARK_TABLE_FILTERED_UPDATE_UI_MANIFEST_SHA256 ?? '')) throw Error('全部筛选行填充缺少原来源清单及独占输出目录');
@@ -17,11 +18,31 @@ export function assertTableFilteredUpdateUiEnvironment(env: NodeJS.ProcessEnv, a
   for (const [index, value] of args.entries()) if (value === '--trace' && args[index + 1] !== 'off' || value.startsWith('--trace=') && value !== '--trace=off') throw Error('全部筛选行填充拒绝CLI开启trace');
 }
 
+/** 单字段与多字段专项独立开启，禁止混用同一配置并发执行。 */
+export function assertTableFilteredUpdateUiEnvironment(env: NodeJS.ProcessEnv, args: readonly string[], platform: string): void {
+  assertCommonUiEnvironment(env, args, platform, 'DBARK_TABLE_FILTERED_UPDATE_UI_TEST');
+  if (env.DBARK_TABLE_FILTERED_UPDATE_MULTI_UI_TEST === '1') throw Error('单字段专项不得同时开启多字段门');
+}
+/** 多字段只读RAM来源，不借旧门为新增数据库动作分配权限。 */
+export function assertTableFilteredUpdateMultiUiEnvironment(env: NodeJS.ProcessEnv, args: readonly string[], platform: string): void {
+  assertCommonUiEnvironment(env, args, platform, 'DBARK_TABLE_FILTERED_UPDATE_MULTI_UI_TEST');
+  if (env.DBARK_TABLE_FILTERED_UPDATE_UI_TEST === '1') throw Error('多字段专项不得同时开启单字段门');
+}
+
 /** 相关键存在性和argv发生漂移即永久停链；改回原值不能复活旧资源。 */
-export function bindTableFilteredUpdateUiEnvironment(read: () => { env: NodeJS.ProcessEnv; args: readonly string[]; platform: string }) {
-  const signature = () => { const current = read(); assertTableFilteredUpdateUiEnvironment(current.env, current.args, current.platform); return JSON.stringify([current.platform, current.args, Object.keys(current.env).filter(key => /^(?:DBARK_|NODE_OPTIONS$|NODE_PATH$|ELECTRON_RUN_AS_NODE$)/i.test(key)).sort().map(key => [key, current.env[key]])]); };
-  const original = signature(), values = Object.freeze(Object.fromEntries(tableFilteredUpdateUiKeys.map(key => [key, read().env[key]!])) as Record<typeof tableFilteredUpdateUiKeys[number], string>); let retained = false;
+function bindUiEnvironment<const Keys extends readonly string[]>(read: () => { env: NodeJS.ProcessEnv; args: readonly string[]; platform: string }, keys: Keys, validate: typeof assertTableFilteredUpdateUiEnvironment) {
+  const signature = () => { const current = read(); validate(current.env, current.args, current.platform); return JSON.stringify([current.platform, current.args, Object.keys(current.env).filter(key => /^(?:DBARK_|NODE_OPTIONS$|NODE_PATH$|ELECTRON_RUN_AS_NODE$)/i.test(key)).sort().map(key => [key, current.env[key]])]); };
+  const original = signature(), values = Object.freeze(Object.fromEntries(keys.map(key => [key, read().env[key]!])) as Record<Keys[number], string>); let retained = false;
   return { values, assertCurrent() { if (retained) throw Error('全部筛选行填充原环境失效，保留现场'); try { if (signature() !== original) throw Error('全部筛选行填充原环境或argv漂移'); } catch (error) { retained = true; throw error; } } };
+}
+/** 旧入口保持准确单字段值集合及原环境失效规则。 */
+export function bindTableFilteredUpdateUiEnvironment(read: () => { env: NodeJS.ProcessEnv; args: readonly string[]; platform: string }) { return { mode: 'single' as const, ...bindUiEnvironment(read, tableFilteredUpdateUiKeys, assertTableFilteredUpdateUiEnvironment) }; }
+/** 新入口只绑定多字段门，不能复活旧环境或并行消费同一源。 */
+export function bindTableFilteredUpdateMultiUiEnvironment(read: () => { env: NodeJS.ProcessEnv; args: readonly string[]; platform: string }) { return { mode: 'multi' as const, ...bindUiEnvironment(read, tableFilteredUpdateMultiUiKeys, assertTableFilteredUpdateMultiUiEnvironment) }; }
+
+/** Windows原句柄是shell启动器，真实主进程必须以其为父进程。 */
+export function assertTableFilteredUpdateUiProcess(actual: { pid: number; parent: number; platform: string }, launcher: number | undefined, platform: string): void {
+  if (!Number.isSafeInteger(launcher) || launcher! <= 0 || !Number.isSafeInteger(actual.pid) || actual.pid <= 0 || actual.platform !== platform || (platform === 'win32' ? actual.parent !== launcher || actual.pid === launcher : actual.pid !== launcher)) throw Error('全部筛选行填充原启动器与实际主进程关系未知');
 }
 
 /** Root资源计划及独立期望；所有81行和61行范围均用整数/原字节构造，不调用产品SQL或筛选器。 */
@@ -57,6 +78,18 @@ export function tableFilteredUpdateUiFixture(database: string, marker: string) {
     creates: ['CREATE DATABASE `' + database + '` DEFAULT CHARACTER SET utf8mb4 COLLATE utf8mb4_bin', 'CREATE TABLE `' + database + '`.`__owner` (marker VARCHAR(100) NOT NULL PRIMARY KEY) ENGINE=InnoDB', 'CREATE TABLE ' + table + ' (id BIGINT UNSIGNED NOT NULL PRIMARY KEY,label VARCHAR(80) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin NULL,amount DECIMAL(30,6) NULL,payload VARBINARY(16) NOT NULL,note VARCHAR(128) NULL,side_note VARCHAR(80) NOT NULL) ENGINE=InnoDB'],
     seeds: ['INSERT INTO `' + database + "`.`__owner` VALUES ('" + marker + "')", 'INSERT INTO ' + table + ' (id,label,amount,payload,note,side_note) VALUES ' + rows.map(row => '(' + row.id + ',' + literal(row.label) + ',' + (row.amount === null ? 'NULL' : "CAST('" + row.amount + "' AS DECIMAL(30,6))") + ",X'" + row.payloadHex.toLowerCase() + "'," + literal(row.note) + ',' + literal(row.sideNote) + ')').join(',')],
     drop: 'DROP DATABASE `' + database + '`',
+  };
+}
+
+/** 四列原值独立组合；NULL、定点金额、原字节及文本不经产品转换器生成期望。 */
+export function tableFilteredUpdateMultiUiFixture(database: string, marker: string) {
+  const base = tableFilteredUpdateUiFixture(database, marker), side = "整组中文🚢\n'\\", amount = '987654321098765432.123456', payload = Buffer.from([0, 255, 128, 39, 92]);
+  const assignments = [{ column: 'note', value: null }, { column: 'amount', value: amount }, { column: 'payload', value: { type: 'binary' as const, base64: payload.toString('base64') } }, { column: 'side_note', value: side }];
+  const secondAssignments = [{ column: 'note', value: '不应落库' }, { column: 'amount', value: null }, { column: 'payload', value: { type: 'binary' as const, base64: '' } }, { column: 'side_note', value: '另一组不应落库' }];
+  const sideHex = Buffer.from(side).toString('hex').toUpperCase(), expectedAfterFill = base.expectedInitial.map((row, index) => index < 61 ? { ...row, noteHex: null, amount, payloadHex: payload.toString('hex').toUpperCase(), sideHex } : row);
+  const expectedAfterConflict = expectedAfterFill.map((row, index) => index === 0 ? { ...row, sideHex: Buffer.from(base.concurrentValue).toString('hex').toUpperCase() } : row);
+  return { ...base, assignments, secondAssignments, fillColumns: assignments.map(item => item.column), expectedAfterFill, expectedAfterConflict,
+    conflict: { ...base.conflict, sql: 'UPDATE ' + base.table + ' SET side_note = ? WHERE id = CAST(CAST(? AS DECIMAL(20,0)) AS UNSIGNED) AND BINARY side_note = BINARY ?', parameters: [base.concurrentValue, base.conflict.id, side] },
   };
 }
 
