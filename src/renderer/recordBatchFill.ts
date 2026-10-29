@@ -10,6 +10,8 @@ import { recordInputLimits, recordReadonlyReason, recordTargetKey, type RecordCo
 import { recordViewZh } from './locales/recordViews.zh-CN';
 import { recordBatchFillZh as text } from './locales/recordBatchFill.zh-CN';
 
+export interface BatchFillAssignment { column: string; input: RecordInput }
+
 /** 普通列不含任何可靠定位键、自增或生成字段，使用原表页可编辑对象门。 */
 export function batchFillColumns(context: RecordContext): ColumnInfo[] {
   if (recordReadonlyReason(context)) return [];
@@ -71,22 +73,36 @@ export class BatchFillIntent {
   }
   /** 所有字段/行/输入/线路及历史预算通过后仅返回一个不可变新数组，调用方只发布一次。 */
   consume(columnName: string, input: RecordInput, rows: DraftRow[], ids: ReadonlySet<string>, context: RecordContext, binding: RecordCopyPage | null, page: TablePage | null): DraftRow[] {
+    return this.consumeAssignments([{ column: columnName, input }], rows, ids, context, binding, page);
+  }
+  /** 整组先验证再生成替换行；任何后续字段失败不能发布前面字段或拆成多步历史。 */
+  consumeAssignments(assignments: readonly BatchFillAssignment[], rows: DraftRow[], ids: ReadonlySet<string>, context: RecordContext, binding: RecordCopyPage | null, page: TablePage | null): DraftRow[] {
     const reason = this.reason(rows, ids, context, binding, page); if (reason) throw Error(reason);
-    const column = batchFillColumns(context).find(column => column.name === columnName); if (!column) throw Error(text.column);
-    if (!['text', 'json', 'binary', 'null'].includes(input.mode) || typeof input.text !== 'string' || input.text.length > recordInputLimits.field) throw Error(text.budget);
-    if (input.mode === 'null' && !column.nullable) throw Error(recordViewZh.nullForbidden);
-    if (/^(?:TINYBLOB|BLOB|MEDIUMBLOB|LONGBLOB|BINARY|VARBINARY|BIT)\b/i.test(column.type) && !['binary', 'null'].includes(input.mode)) throw Error(text.column);
-    const value = parseCell(input.text, input.mode as 'text' | 'json' | 'binary' | 'null'); bytes(value);
+    const columns = batchFillColumns(context), values = new Map<string, DraftRow['data'][string]>(); let preparedBytes = 0;
+    if (!Array.isArray(assignments) || !assignments.length || assignments.length > columns.length || assignments.length > limits.columns) throw Error(text.assignments);
+    for (const assignment of assignments) {
+      if (!assignment || values.has(assignment.column)) throw Error(text.assignments);
+      const column = columns.find(column => column.name === assignment.column); if (!column) throw Error(text.column);
+      const input = assignment.input;
+      if (!input || !['text', 'json', 'binary', 'null'].includes(input.mode) || typeof input.text !== 'string' || input.text.length > recordInputLimits.field) throw Error(text.budget);
+      if (input.mode === 'null' && !column.nullable) throw Error(recordViewZh.nullForbidden);
+      if (/^(?:TINYBLOB|BLOB|MEDIUMBLOB|LONGBLOB|BINARY|VARBINARY|BIT)\b/i.test(column.type) && !['binary', 'null'].includes(input.mode)) throw Error(text.column);
+      const value = parseCell(input.text, input.mode as 'text' | 'json' | 'binary' | 'null');
+      // 已准备字段就是最终线路的必要下界；扇出必超预算时不继续解析后续大值或分配行。
+      preparedBytes += bytes(column.name) + bytes(value) + 4;
+      if (preparedBytes * ids.size + 2 > limits.inputBytes) throw Error(text.budget);
+      values.set(column.name, value);
+    }
     let total = 2, history = 128; const replacements = new Map<string, DraftRow>();
     for (const row of rows) if (ids.has(row.id)) {
-      const data = Object.fromEntries(Object.entries(row.data).map(([key, old]) => [key, key === columnName ? value : old]));
+      const data = Object.fromEntries(Object.entries(row.data).map(([key, old]) => [key, values.has(key) ? values.get(key)! : old]));
       for (const [key, cell] of Object.entries(data)) { total += bytes(key) + bytes(cell) + 4; if (total > limits.inputBytes) throw Error(text.budget); }
       if (same(row.data, data)) continue;
       const next = { ...row, data }; history += changedDraftHistoryBytes(row, next); if (history > draftHistoryLimits.bytes) throw Error(text.budget);
       replacements.set(row.id, next);
     }
     // 最后才深复制新写入的二进制包装，各行不能共享可变值；original及无关字段引用保持。
-    const result = replacements.size ? rows.map(row => { const next = replacements.get(row.id); return next ? { ...next, data: Object.fromEntries(Object.entries(next.data).map(([key, cell]) => [key, key === columnName ? structuredClone(cell) : cell])) } : row; }) : rows;
+    const result = replacements.size ? rows.map(row => { const next = replacements.get(row.id); return next ? { ...next, data: Object.fromEntries(Object.entries(next.data).map(([key, cell]) => [key, values.has(key) ? structuredClone(cell) : cell])) } : row; }) : rows;
     this.stopped = true; return result;
   }
 }

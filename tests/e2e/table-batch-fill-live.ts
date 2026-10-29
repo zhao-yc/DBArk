@@ -58,6 +58,8 @@ export function registerTableBatchFill(binding: BatchFillTarget): void {
 
   for (const [scenario, name] of batchFillCaseNames.entries()) test(name, async ({}, info) => {
     const captured = ownedDesktopResources(info), page = captured.page;
+    const multi = scenario >= 2, conflict = scenario % 2 === 1;
+    let receipt: Record<string, unknown> | undefined, originalObserver: ProbeObserver['connection'] | undefined, originalStream: { closed?: boolean } | undefined;
     let ended = false;
     /** 每次等待前后都核目标和本例桌面归属；失败或超时后的迟到回包不得继续后续写入。 */
     function current() {
@@ -82,10 +84,15 @@ export function registerTableBatchFill(binding: BatchFillTarget): void {
       });
     }
     try {
+      const actualApp = await checked(() => captured.application.evaluate(({ app }) => ({ executable: process.execPath, appPath: app.getAppPath(), packaged: app.isPackaged, pid: process.pid, parent: process.ppid, platform: process.platform })));
+      const launcher = captured.application.process();
+      expect(actualApp.packaged).toBe(false); expect(actualApp.platform).toBe(process.platform);
+      if (process.platform === 'win32') { expect(actualApp.parent).toBe(launcher.pid); expect(actualApp.pid).not.toBe(launcher.pid); } else expect(actualApp.pid).toBe(launcher.pid);
       await preflight(); current();
       await isolatedDatabase(async context => {
         try {
           current();
+          originalObserver = (context.observer as ProbeObserver).connection; originalStream = (originalObserver as unknown as { stream: { closed?: boolean } }).stream;
           if (!/^dbark_e2e_[a-z0-9_]+$/.test(context.database)) throw Error('批量填充拒绝非本例随机隔离库');
           const qualified = `\`${context.database}\`.\`batch_fill_subject\``;
           const [server] = await checked(() => context.observer.query<RowDataPacket[]>('SELECT @@server_uuid AS uuid'));
@@ -141,18 +148,33 @@ export function registerTableBatchFill(binding: BatchFillTarget): void {
           const dialog = page.getByRole('dialog', { name: fill.title, exact: true });
           await checked(() => expect(dialog).toContainText(formatText(fill.count, 2)));
           await checked(() => dialog.getByLabel(fill.field, { exact: true }).selectOption('note'));
-          await checked(() => dialog.getByLabel(record.mode, { exact: true }).selectOption(scenario === 0 ? 'null' : 'text'));
-          if (scenario === 1) await checked(() => dialog.locator('.record-field-input').fill('整批待提交'));
+          const firstGroup = dialog.getByRole('group', { name: fill.assignment(1), exact: true });
+          await checked(() => firstGroup.getByLabel(record.mode, { exact: true }).selectOption(conflict ? 'text' : 'null'));
+          if (conflict) await checked(() => firstGroup.locator('.record-field-input').fill('整批待提交'));
+          if (multi) {
+            // 全部输入走正式字段编辑器，精确金额和BIGINT始终保留文本，二进制走Hex。
+            for (const [index, item] of [{ column: 'big_value', value: '18446744073709551614' }, { column: 'amount', value: '987654321098765432.123456' }, { column: 'payload', value: '00FF80275C' }].entries()) {
+              await checked(() => dialog.getByRole('button', { name: fill.add, exact: true }).click());
+              const group = dialog.getByRole('group', { name: fill.assignment(index + 2), exact: true });
+              await checked(() => group.getByRole('combobox', { name: fill.fieldAt(index + 2), exact: true }).selectOption(item.column));
+              await checked(() => group.locator('.record-field-input').fill(item.value));
+            }
+            const duplicate = dialog.getByRole('combobox', { name: fill.fieldAt(2), exact: true }).locator('option[value="note"]');
+            await checked(() => expect(duplicate).toHaveAttribute('disabled', '')); await checked(() => expect(duplicate).toHaveJSProperty('disabled', true));
+            await checked(() => expect(dialog.locator('fieldset')).toHaveCount(4));
+            await checked(async () => expect(await snapshot()).toEqual(before));
+            await checked(async () => info.attach('多字段暂存前原对话框', { body: await dialog.screenshot(), contentType: 'image/png' }));
+          }
           await checked(() => dialog.getByRole('button', { name: fill.stage, exact: true }).click());
           await checked(() => expect(dialog).toHaveCount(0));
-          const staged = scenario === 0 ? 'NULL' : '整批待提交';
+          const staged = conflict ? '整批待提交' : 'NULL';
           async function checkDraft(value: string | undefined) {
             await checked(() => expect(table.locator('.row-modified')).toHaveCount(value === undefined ? 0 : 2));
             for (const source of selected) await checked(async () => expect(await cell(row(source.code), 'note')).toHaveText(value ?? source.note!));
             await checked(async () => expect(await cell(row('control'), 'note')).toHaveText(before[2].note!));
           }
           await checkDraft(staged); await checked(async () => expect(await snapshot()).toEqual(before));
-          if (scenario === 0) {
+          if (!conflict) {
             await checked(() => table.getByRole('button', { name: history.undo, exact: false }).click());
             await checkDraft(undefined); await checked(async () => expect(await snapshot()).toEqual(before));
             await checked(() => table.getByRole('button', { name: history.redo, exact: false }).click());
@@ -165,16 +187,18 @@ export function registerTableBatchFill(binding: BatchFillTarget): void {
           await checked(() => expect(preview.locator('.monaco-editor .view-lines')).toContainText('UPDATE'));
           await checked(async () => expect(await snapshot()).toEqual(before));
           let expected = before.map(source => ({ ...source, note: source.code === 'control' ? source.note : null }));
-          if (scenario === 1) {
+          if (multi && !conflict) expected = before.map(source => source.code === 'control' ? { ...source } : { ...source, note: null, big_value: '18446744073709551614', amount: '987654321098765432.123456', payload: '00FF80275C' });
+          if (conflict) {
             // 外改实际网格顺序的第二条，让第一条已执行的修改也必须由同一事务回滚。
             const changed = before.find(source => source.code === order[1].code)!;
-            const [result] = await checked(() => context.observer.query<ResultSetHeader>(`UPDATE ${qualified} SET note=? WHERE id=?`, ['外部已提交', changed.id]));
+            const conflictColumn = multi ? 'code' : 'note';
+            const [result] = await checked(() => context.observer.query<ResultSetHeader>(`UPDATE ${qualified} SET ${conflictColumn}=? WHERE id=CAST(CAST(? AS DECIMAL(20,0)) AS UNSIGNED)`, ['外部已提交', changed.id]));
             await checked(async () => expect(result.affectedRows).toBe(1));
-            expected = before.map(source => ({ ...source, note: source.id === changed.id ? '外部已提交' : source.note }));
+            expected = before.map(source => source.id === changed.id ? { ...source, [conflictColumn]: '外部已提交' } : { ...source });
             await checked(async () => expect(await snapshot()).toEqual(expected));
           }
           await checked(() => preview.getByRole('button', { name: zh.common.confirmApply, exact: true }).click());
-          if (scenario === 0) {
+          if (!conflict) {
             await checked(() => expect(preview).toHaveCount(0));
             await checked(() => expect(table.locator('.row-modified')).toHaveCount(0));
             await checked(async () => expect(await snapshot()).toEqual(expected));
@@ -192,8 +216,14 @@ export function registerTableBatchFill(binding: BatchFillTarget): void {
             await checked(() => expect(table.getByRole('button', { name: history.redo, exact: false })).toBeDisabled());
             await checked(async () => expect(await snapshot()).toEqual(expected));
           }
+          receipt = { scenario: name, multi, conflict, database: context.database, actualApp, stagedRows: 2, fields: multi ? ['note', 'big_value', 'amount', 'payload'] : ['note'], originalAllThreeRows: before, expectedAllThreeRows: expected, originalObserverThreadId: originalObserver.threadId, noWritesUntilExplicitApply: true, fullSnapshotMatchedAfterApply: true, oneUndoRedo: !conflict, conflictBeforeSecondRowAndWholeRollback: conflict };
         } catch (reason) { retainOwnedDesktopResources(info); throw reason; }
       }, info, { captureFailureScreenshot: false });
+      // shared隔离夹具完成退出与精确清库后，再核原Observer物理流，不以Promise end代替close。
+      launchGuard.assertPreparation(info); expect(launcher.exitCode).toBe(0); expect(ownedDesktopResources(info).closed).toBe(true);
+      await expect.poll(() => originalStream?.closed === true).toBe(true); launchGuard.assertPreparation(info);
+      expect((originalObserver as unknown as { stream: unknown }).stream).toBe(originalStream);
+      await info.attach('批量填充原三行及正常收尾', { body: Buffer.from(JSON.stringify({ ...receipt, normalAppExitCode: launcher.exitCode, originalObserverStreamClosed: true, databaseRemovedByOriginalFixture: true, systemClipboard: 0, systemFileDialogInput: 0 })), contentType: 'application/json' });
     } catch (reason) { retainOwnedDesktopResources(info); throw reason; }
     finally { ended = true; }
   });

@@ -70,12 +70,40 @@ async function select(ids: ReadonlySet<string>) { await act(async () => grid.pro
 const dialog = () => document.querySelector(`[aria-label="${text.title}"]`);
 async function change(node: MemoryNode, value: string, event: string) { await act(async () => { node.value = value; node.dispatchEvent(new MemoryEvent(event)); }); }
 async function column(name: string) { await change(document.querySelector(`[aria-label="${text.field}"]`)!, name, 'change'); }
-async function mode(value: string) { const node = document.querySelectorAll('select').find(node => node.getAttribute('id')?.endsWith('-mode')); expect(node).toBeDefined(); await change(node!, value, 'change'); }
-async function input(value: string) { const node = document.querySelectorAll('textarea').find(node => node.getAttribute('class')?.includes('record-field-input')); expect(node).toBeDefined(); await change(node!, value, 'input'); }
+async function mode(value: string, index = 0) { const node = document.querySelectorAll('select').filter(node => node.getAttribute('id')?.endsWith('-mode'))[index]; expect(node).toBeDefined(); await change(node!, value, 'change'); }
+async function input(value: string, index = 0) { const node = document.querySelectorAll('textarea').filter(node => node.getAttribute('class')?.includes('record-field-input'))[index]; expect(node).toBeDefined(); await change(node!, value, 'input'); }
 /** 仅抓取已挂载真实React事件闭包，模拟节点移除后的迟到投递。 */
 function callback(node: MemoryNode, event = 'onClick'): Function { const key = Object.keys(node).find(key => key.startsWith('__reactProps$')); if (!key) throw Error('没有真实React事件'); return (node as any)[key][event]; }
 
 describe('真实React表页批量填充RAM', () => {
+  it('四字段整组通过原父页暂存、单步撤销重做，原SQL预览仍需明确点击', async () => {
+    await mount(); const before = grid.rows, calls = commands.length; await click(text.action);
+    await mode('null'); await click(text.add); await input('18446744073709551615.123456789012345678901', 1);
+    await click(text.add); await input('{ "n":900719925474099312345,"n":-0 }', 2);
+    await click(text.add); await input('00FF80275C', 3);
+    expect(button(text.add).disabled).toBe(true); expect(document.querySelectorAll('fieldset')).toHaveLength(4);
+    const duplicate = document.querySelector(`[aria-label="${text.fieldAt(2)}"]`)!.querySelectorAll('option').find(node => node.value === 'note'); expect(duplicate!.disabled).toBe(true);
+    await click(text.stage); expect(commands).toHaveLength(calls); expect(dialog()).toBeNull();
+    for (const row of grid.rows.slice(0, 2)) expect(row.data).toEqual({ id: row.original!.id, note: null, num: '18446744073709551615.123456789012345678901', doc: '{ "n":900719925474099312345,"n":-0 }', bin: { type: 'binary', base64: 'AP+AJ1w=' } });
+    expect(grid.rows[2]).toBe(before[2]); expect(button(historyText.undo).textContent).toContain('(1)'); const filled = grid.rows;
+    await click(historyText.undo); expect(grid.rows).toEqual(before); await click(historyText.redo); expect(grid.rows).toEqual(filled); expect(commands).toHaveLength(calls);
+    await click(zh.table.text019); expect(previews).toHaveLength(1); expect(previews[0].changes).toHaveLength(2); expect(previews[0].changes.every((change: any) => change.kind === 'update' && change.values.note === null && change.values.bin.base64 === 'AP+AJ1w=')).toBe(true);
+  });
+  it('后字段非法JSON不会部分暂存，修正后整组只产生一步', async () => {
+    await mount(); const before = grid.rows, calls = commands.length; await click(text.action); await input('一起填充'); await click(text.add);
+    await change(document.querySelector(`[aria-label="${text.fieldAt(2)}"]`)!, 'doc', 'change'); await input('{', 1); await click(text.stage);
+    expect(grid.rows).toBe(before); expect(dialog()).not.toBeNull(); expect(button(historyText.undo).disabled).toBe(true); expect(commands).toHaveLength(calls);
+    await input('{ "修正":true }', 1); await click(text.stage); expect(grid.rows[0].data.note).toBe('一起填充'); expect(grid.rows[0].data.doc).toBe('{ "修正":true }'); expect(button(historyText.undo).textContent).toContain('(1)'); expect(commands).toHaveLength(calls);
+  });
+  it('移除重加字段后旧输入和旧暂存不能复活，重复字段的合成事件也不能覆盖现有项', async () => {
+    await mount(); await click(text.action); await input('保持首列'); await click(text.add);
+    const second = document.querySelector(`[aria-label="${text.fieldAt(2)}"]`)!;
+    await act(async () => callback(second, 'onChange')({ target: { value: 'note' } })); expect(second.value).toBe('num');
+    const removedInput = document.querySelectorAll('textarea').filter(node => node.getAttribute('class')?.includes('record-field-input'))[1], oldInput = callback(removedInput, 'onChange'), oldStage = callback(button(text.stage));
+    await click(text.remove('num')); await click(text.add); await input('精确新值', 1);
+    await act(async () => { oldInput({ target: { value: '不可复活' } }); oldStage(); }); expect(dialog()).not.toBeNull(); expect(grid.rows[0].data.note).toBe('原1');
+    await click(text.stage); expect(grid.rows[0].data.note).toBe('保持首列'); expect(grid.rows[0].data.num).toBe('精确新值'); expect(button(historyText.undo).textContent).toContain('(1)');
+  });
   it('中文入口复用类型输入，仅改勾选记录，一步撤销/重做；手动预览进入原集中update路径', async () => {
     await mount(); const before = [...grid.rows], calls = commands.length; await click(text.action); expect(dialog()).not.toBeNull();
     expect(document.querySelector(`[aria-label="${text.field}"]`)!.querySelectorAll('option').map(node => node.value)).toEqual(['note', 'num', 'doc', 'bin']);

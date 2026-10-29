@@ -2,6 +2,8 @@ type Environment = Record<string, string | undefined>;
 export const batchFillCaseNames = [
   '批量填充：两条已有行暂存不写库，一步撤销重做后集中提交且精确旁列保持',
   '批量填充：预览后第二行外改导致整批冲突回滚，草稿保留且不自动重放',
+  '批量填充：四字段统一值一步暂存撤销重做，精确集中提交且控制行保持',
+  '批量填充：四字段预览后旁列外改，整组事务回滚且草稿保留',
 ] as const;
 export const batchFillTargetKeys = [
   'DBARK_INTEGRATION_ENABLED', 'DBARK_D02_BATCH_FILL_UI', 'DBARK_BATCH_FILL_SERVER_VERIFIED',

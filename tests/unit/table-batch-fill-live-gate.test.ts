@@ -85,7 +85,7 @@ it('缺少原TestInfo起点拒绝；合法同起点准备不无条件拦截', ()
   const preparation = new BatchFillPreparation({ _startWallTime: 0, timeout: 120000, status: 'passed' }, () => 119999); expect(() => preparation.assertCurrent()).not.toThrow();
 });
 
-it('真实正式模块仅注册两例并交付严格准备门，不启动窗口、连接或用例主体', () => {
+it('真实正式模块注册原两例与多字段两例并交付严格准备门，不启动窗口、连接或用例主体', () => {
   const env = environment(), binding = bindBatchFillTarget(() => env), names: string[] = [];
   const use = vi.fn(), configure = vi.fn(), forbidden = vi.fn(() => { throw Error('注册阶段不得运行真实端口'); });
   const test = Object.assign((name: string, _body: unknown) => names.push(name), { use, describe: { configure } });

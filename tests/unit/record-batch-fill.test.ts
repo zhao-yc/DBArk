@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { BatchFillIntent, batchFillColumns } from '../../src/renderer/recordBatchFill';
+import { BatchFillIntent, batchFillColumns, type BatchFillAssignment } from '../../src/renderer/recordBatchFill';
 import { DraftHistory } from '../../src/renderer/draftHistory';
 import { collectChanges, type DraftRow } from '../../src/renderer/dataChanges';
 import type { TableInfo, TablePage } from '../../src/shared/contracts';
@@ -19,6 +19,44 @@ function fixture() {
 }
 
 describe('当前页已有记录批量填充domain', () => {
+  it('四种typed字段整组暂存为一步，精度和原JSON词法保持，二进制包装逐行独立', () => {
+    const f = fixture(), before = structuredClone(f.rows), assignments: BatchFillAssignment[] = [
+      { column: 'note', input: { mode: 'null', text: '' } },
+      { column: 'num', input: { mode: 'text', text: '18446744073709551615.123456789012345678901234567890' } },
+      { column: 'doc', input: { mode: 'json', text: '{ "n":900719925474099312345,"n":-0 }' } },
+      { column: 'bin', input: { mode: 'binary', text: '0x00FF80275C' } },
+    ];
+    const intent = f.create(), next = intent.consumeAssignments(assignments, f.rows, f.ids, f.context, f.binding, f.page);
+    for (const row of next.slice(0, 2)) expect(row.data).toEqual({ id: row.original!.id, note: null, num: assignments[1].input.text, doc: assignments[2].input.text, bin: { type: 'binary', base64: 'AP+AJ1w=' } });
+    expect(f.rows).toEqual(before); expect(next[2]).toBe(f.rows[2]); expect(next[0].original).toBe(f.rows[0].original); expect(next[0].data.bin).not.toBe(next[1].data.bin);
+    const history = new DraftHistory(); history.record(f.rows, next); expect(history.status.undo).toBe(1); const undone = history.move(next, 'undo')!; expect(undone).toEqual(before); expect(history.move(undone, 'redo')).toEqual(next);
+    expect(collectChanges(next)).toHaveLength(2); expect(() => intent.consumeAssignments(assignments, f.rows, f.ids, f.context, f.binding, f.page)).toThrow();
+  });
+  it.each(['json', 'key', 'duplicate', 'empty', 'sparse', 'null', 'binary'] as const)('后续字段%s错误时，整组零发布且可修正原意图', mode => {
+    const f = fixture(), intent = f.create(), before = structuredClone(f.rows);
+    let assignments: BatchFillAssignment[] = [{ column: 'note', input: { mode: 'text', text: '不应部分暂存' } }, { column: 'doc', input: { mode: 'json', text: '{' } }];
+    if (mode === 'key') assignments[1] = { column: 'id', input: { mode: 'text', text: '3' } };
+    if (mode === 'duplicate') assignments[1] = assignments[0]; if (mode === 'empty') assignments = []; if (mode === 'sparse') delete assignments[1];
+    if (mode === 'null') assignments[1] = { column: 'num', input: { mode: 'null', text: '' } };
+    if (mode === 'binary') assignments[1] = { column: 'bin', input: { mode: 'binary', text: '0x0' } };
+    expect(() => intent.consumeAssignments(assignments, f.rows, f.ids, f.context, f.binding, f.page)).toThrow(); expect(f.rows).toEqual(before);
+    expect(intent.consumeAssignments([{ column: 'note', input: { mode: 'text', text: '修正后' } }], f.rows, f.ids, f.context, f.binding, f.page)[0].data.note).toBe('修正后');
+  });
+  it('两列合计扇出超预算时不拆批暂存，单列各自仍在预算内', () => {
+    const f = fixture(); f.rows.push(...Array.from({ length: 9 }, (_, i) => ({ ...f.rows[2], id: '更多' + i, data: { ...f.rows[2].data }, original: { ...f.rows[2].original! } }))); f.page.rows = f.rows.map(row => row.original!); f.rows.forEach(row => f.ids.add(row.id));
+    const assignments: BatchFillAssignment[] = ['note', 'doc'].map(column => ({ column, input: { mode: 'text', text: 'x'.repeat(50000) } }));
+    for (const assignment of assignments) expect(() => f.create().consumeAssignments([assignment], f.rows, f.ids, f.context, f.binding, f.page)).not.toThrow();
+    const before = structuredClone(f.rows); expect(() => f.create().consumeAssignments(assignments, f.rows, f.ids, f.context, f.binding, f.page)).toThrow('预算'); expect(f.rows).toEqual(before);
+    // 前两列的必要扇出已超预算，不能再解析最后一项的非法Hex，更不能先暂存已通过字段。
+    assignments.push({ column: 'bin', input: { mode: 'binary', text: '0x0' } });
+    expect(() => f.create().consumeAssignments(assignments, f.rows, f.ids, f.context, f.binding, f.page)).toThrow('预算'); expect(f.rows).toEqual(before);
+  });
+  it('整组全部相同时返回原引用，不变行与混合变更只产生必要草稿', () => {
+    const f = fixture(); f.ids.delete(f.rows[1].id);
+    const assignments: BatchFillAssignment[] = [{ column: 'note', input: { mode: 'text', text: '原1' } }, { column: 'num', input: { mode: 'text', text: f.rows[0].data.num as string } }];
+    expect(f.create().consumeAssignments(assignments, f.rows, f.ids, f.context, f.binding, f.page)).toBe(f.rows);
+    f.ids.add(f.rows[1].id); const next = f.create().consumeAssignments(assignments, f.rows, f.ids, f.context, f.binding, f.page); expect(next[0]).toBe(f.rows[0]); expect(next[1]).not.toBe(f.rows[1]); expect(collectChanges(next)).toHaveLength(1);
+  });
   it.each([['num', 'text', '18446744073709551615.123456789012345678901234567890'], ['doc', 'json', '{ "n":900719925474099312345,"n":-0 }'], ['bin', 'binary', '0x00FF00'], ['note', 'null', '忽略的输入'], ['note', 'text', 'NULL']] as const)('%s的%s类型保持精度/JSON原文/字节/NULL语义', (column, mode, text) => {
     const f = fixture(), original = f.rows.map(row => row.original), before = structuredClone(f.rows), next = f.consume(f.create(), column, { mode, text });
     const value = mode === 'null' ? null : mode === 'binary' ? { type: 'binary', base64: 'AP8A' } : text;

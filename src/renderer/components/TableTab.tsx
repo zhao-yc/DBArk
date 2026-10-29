@@ -105,7 +105,7 @@ import { tableCopyMetadataKey, type TableCopyPageSources } from '../../shared/ta
 import { PasteInsertIntent, type PasteInsertPlan } from '../pasteInsert';
 import { PasteInsertDialog } from './PasteInsertDialog';
 import { pasteInsertZh } from '../locales/pasteInsert.zh-CN';
-import { BatchFillIntent } from '../recordBatchFill';
+import { BatchFillIntent, type BatchFillAssignment } from '../recordBatchFill';
 import type { RecordInput } from '../recordViews';
 import { TableBatchFillDialog } from './TableBatchFillDialog';
 import { recordBatchFillZh } from '../locales/recordBatchFill.zh-CN';
@@ -1065,10 +1065,10 @@ export function TableTab({ tab, onOpenGeneratedQuery, onQueryTemplateNavigation,
   }
   function closeBatchFill(intent: BatchFillIntent) { intent.invalidate(); if (batchFillIntent.current === intent) { batchFillIntent.current = null; setBatchFillDialog(null); } }
   /** 无await且只setRows一次；原history、SQL预览及集中提交链保持唯一写入路径。 */
-  function stageBatchFill(intent: BatchFillIntent, column: string, input: RecordInput) {
+  function stageBatchFill(intent: BatchFillIntent, assignments: readonly BatchFillAssignment[]) {
     try { assertBatchFillTarget(); if (batchFillIntent.current !== intent) throw Error(recordBatchFillZh.changed); }
     catch (reason) { intent.invalidate(); throw reason; }
-    const next = intent.consume(column, input, rowsRef.current, selectedRowsRef.current, getRecordContext(), copyPage.current, page);
+    const next = intent.consumeAssignments(assignments, rowsRef.current, selectedRowsRef.current, getRecordContext(), copyPage.current, page);
     const changed = next.filter((row, index) => row !== rowsRef.current[index]).length;
     setRows(next); recordPages.cancel(); record.reset(); setError(''); setDuplicateNotice(changed ? formatText(recordBatchFillZh.staged, changed) : recordBatchFillZh.unchanged); closeBatchFill(intent);
   }
@@ -1252,7 +1252,7 @@ export function TableTab({ tab, onOpenGeneratedQuery, onQueryTemplateNavigation,
     {queryTemplate && <TableQueryTemplateDialog info={queryTemplate.info} limit={queryTemplate.limit} isCurrent={() => queryTemplateCurrent(queryTemplate)} onOpen={(sql, kind, options) => openGeneratedQuery(queryTemplate, sql, kind, options)} onClose={() => closeQueryTemplate(queryTemplate)}/>}
     {filteredSelectDialog && <TableQueryTemplateDialog info={filteredSelectDialog.info} limit={filteredSelectDialog.limit} readScope={filteredSelectDialog.readScope} isCurrent={() => filteredSelectDialog.current()} onOpen={(sql, kind, options) => openFilteredSelectQuery(filteredSelectDialog, sql, kind, options)} onClose={() => closeFilteredSelect(filteredSelectDialog)}/>}
     {pasteInsertDialog && <PasteInsertDialog info={pasteInsertDialog.context.info!} visibleKeys={pasteInsertDialog.visible} invalidReason={pasteInsertDialog.reason(rowsRef.current, getRecordContext())} onStage={plan => stagePasteInsert(pasteInsertDialog, plan)} onClose={() => closePasteInsert(pasteInsertDialog)}/>}
-    {batchFillDialog && <TableBatchFillDialog intent={batchFillDialog} initialColumn={selection?.key} invalidReason={batchFillDialog.reason(rowsRef.current, selectedRowsRef.current, getRecordContext(), copyPage.current, page)} onStage={(column, input) => stageBatchFill(batchFillDialog, column, input)} onClose={() => closeBatchFill(batchFillDialog)}/>}
+    {batchFillDialog && <TableBatchFillDialog intent={batchFillDialog} initialColumn={selection?.key} invalidReason={batchFillDialog.reason(rowsRef.current, selectedRowsRef.current, getRecordContext(), copyPage.current, page)} onStage={assignments => stageBatchFill(batchFillDialog, assignments)} onClose={() => closeBatchFill(batchFillDialog)}/>}
     {showPreferences && <TablePreferencesDialog preferences={preferences} pending={preferencesPending} dirty={preferencesDirty} error={preferencesError} onChange={updatePreferences} onSave={() => void savePreferences()} onReset={() => void savePreferences(true)} onClose={() => { if (!preferencesLock.current) setShowPreferences(false); }}/ >}
     {referenceDialog && <ForeignKeyDialog base={base} snapshot={referenceDialog.snapshot} keys={referenceDialog.keys} mode={referenceDialog.mode} onApply={applyReference} onClose={() => setReferenceDialog(null)} onActivity={referenceActivity}/ >}
     {childReferenceDialog && <ChildReferenceDialog base={base} intent={childReferenceDialog} onClose={() => closeChildReferences(childReferenceDialog)} onActivity={referenceActivity}/>}
