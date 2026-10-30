@@ -64,7 +64,7 @@ async function newQuery(run: EditorIndentNativeRun, owner: IndentNativeOwner) {
 }
 /** 正式表单创建无密码无SSH概要；只在Root后续明确运行时触及固定离线端口。 */
 async function prepareQuery(run: EditorIndentNativeRun, owner: IndentNativeOwner) {
-  const page = owner.page; await run.step(owner, () => page.locator('.navigation-toolbar').getByRole('button', { name: zh.common.newConnection, exact: true }).click());
+  const page = owner.page; await run.step(owner, async () => { const assertMenuCurrent = () => run.assert(owner); assertMenuCurrent(); const action = await navigationMenuItem(page.locator('.navigation-toolbar'), { name: zh.common.newConnection, exact: true }, assertMenuCurrent); assertMenuCurrent(); await action.click(); assertMenuCurrent(); });
   const dialog = page.getByRole('dialog', { name: zh.common.newConnection, exact: true });
   for (const [name, value] of [[zh.connections.text006, '关键字原生离线'], [zh.connections.text009, '127.0.0.1'], [zh.connections.text010, '1'], [zh.common.user, 'offline'], [zh.connections.text011, ''], [zh.connections.text012, '']]) await run.step(owner, () => dialog.getByLabel(name, { exact: true }).fill(value));
   await run.step(owner, () => dialog.getByRole('checkbox', { name: zh.connections.text016, exact: true }).uncheck());
@@ -191,3 +191,10 @@ for (const restoredCase of ['upper', 'lower'] as const) test(`离线原生关键
     throw reason;
   }
 });
+
+
+/** 仅在原用户动作中加载真实菜单展示入口；每个异步边界继续核原资源门。 */
+async function navigationMenuItem(...args: Parameters<typeof import('./navigation-menu')['navigationMenuItem']>) {
+  args[2]?.(); const menu = await import('./navigation-menu'); args[2]?.();
+  const item = await menu.navigationMenuItem(...args); args[2]?.(); return item;
+}

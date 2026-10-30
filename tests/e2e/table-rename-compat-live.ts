@@ -130,7 +130,7 @@ export function registerTableRenameCompatUiTests() {
       expect(originalTable).toHaveLength(1); expect(originalTable[0]).toMatchObject({ ENGINE: 'InnoDB', TABLE_COLLATION: 'utf8mb4_bin', AUTO_INCREMENT: '9007199254740994', TABLE_COMMENT: environment.values.DBARK_TABLE_RENAME_COMPAT_MARKER });
       expect(originalStatistics.map(row => [row.INDEX_NAME, Number(row.SEQ_IN_INDEX), row.COLUMN_NAME, Number(row.NON_UNIQUE), row.SUB_PART === null ? null : Number(row.SUB_PART)])).toEqual([['PRIMARY', 1, 'id', 0, null], ['pref', 1, 's', 1, 8]]);
       expect(originalColumns.map(row => row.COLUMN_NAME)).toEqual(['id', 's', 'g', 'amount', 'payload', 'at_time']); expect(originalColumns[2].EXTRA).toMatch(/STORED GENERATED|PERSISTENT/); expect(originalColumns[2].GENERATION_EXPRESSION).toMatch(/length/i);
-      await step(() => page.locator('.navigation-toolbar').getByRole('button', { name: zh.common.newConnection, exact: true }).click()); const form = page.getByRole('dialog', { name: zh.common.newConnection, exact: true });
+      await step(async () => { const assertMenuCurrent = check; assertMenuCurrent(); const action = await navigationMenuItem(page.locator('.navigation-toolbar'), { name: zh.common.newConnection, exact: true }, assertMenuCurrent); assertMenuCurrent(); await action.click(); assertMenuCurrent(); }); const form = page.getByRole('dialog', { name: zh.common.newConnection, exact: true });
       for (const [label, value] of [[zh.connections.text006, '表重命名兼容本例'], [zh.connections.text009, environment.values.DBARK_TEST_HOST!], [zh.connections.text010, String(port)], [zh.common.user, environment.values.DBARK_TEST_USER!], [zh.connections.text011, environment.values.DBARK_TEST_PASSWORD!], [zh.connections.text012, database]]) await step(() => form.getByLabel(label, { exact: true }).fill(value));
       // Field包裹select和全部选项，完整标签包含选项文字；按唯一真实控件及完整选项身份定位。
       const dialectControl = form.getByRole('combobox'); await step(() => expect(dialectControl).toHaveCount(1)); await step(() => expect(dialectControl).toBeEnabled());
@@ -252,4 +252,11 @@ export function registerTableRenameCompatUiTests() {
       })), contentType: 'application/json' })); finished.add(info);
     } catch (reason) { retained = true; clock.retain(); retainOwnedDesktopResources(info); throw reason; }
   });
+}
+
+
+/** 仅在原用户动作中加载真实菜单展示入口；每个异步边界继续核原资源门。 */
+async function navigationMenuItem(...args: Parameters<typeof import('./navigation-menu')['navigationMenuItem']>) {
+  args[2]?.(); const menu = await import('./navigation-menu'); args[2]?.();
+  const item = await menu.navigationMenuItem(...args); args[2]?.(); return item;
 }

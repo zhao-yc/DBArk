@@ -65,7 +65,7 @@ test('真实表浏览NULL四组合全121行、优先级/列头/取消草稿与�
       await connection.query('INSERT INTO ' + qualified + ' VALUES ?', [Array.from({ length: 121 }, (_, index) => { const id = index + 1; return [id, '9007199254740993.123456789012', [1, 61, 121].includes(id) ? null : [2, 62].includes(id) ? '' : id % 2 === 0 ? 'A' : 'B', Buffer.from([0, 255]), '18446744073709551615']; })]);
       const [ddl] = await connection.query<any[]>('SHOW CREATE TABLE ' + qualified), [rows] = await connection.query<any[]>('SELECT * FROM ' + qualified + ' ORDER BY id'); expect(rows).toHaveLength(121); definition = digest(ddl); data = digest(rows);
     });
-    await step(() => page.locator('.navigation-toolbar').getByRole('button', { name: zh.common.newConnection, exact: true }).click()); const form = page.getByRole('dialog', { name: zh.common.newConnection, exact: true }), connectionName = '多列排序本例';
+    await step(async () => { const assertMenuCurrent = () => { const current = runtime.ownedDesktopResources(info); if (current.page !== page || current.application !== application || current.closed) throw Error('原窗口已失效'); }; assertMenuCurrent(); const action = await navigationMenuItem(page.locator('.navigation-toolbar'), { name: zh.common.newConnection, exact: true }, assertMenuCurrent); assertMenuCurrent(); await action.click(); assertMenuCurrent(); }); const form = page.getByRole('dialog', { name: zh.common.newConnection, exact: true }), connectionName = '多列排序本例';
     for (const [label, value] of [[zh.connections.text006, connectionName], [zh.connections.text009, target!.host!], [zh.connections.text010, target!.port!], [zh.common.user, target!.user!], [zh.connections.text011, target!.password!], [zh.connections.text012, target!.database!]]) await step(() => form.getByLabel(label, { exact: true }).fill(value));
     await step(() => form.getByRole('combobox', { name: new RegExp('^' + zh.connections.text008) }).selectOption('mysql')); await step(() => form.getByLabel(zh.connections.text016, { exact: true }).uncheck()); await step(() => form.getByRole('button', { name: zh.connections.text036, exact: true }).click()); await step(() => expect(form).toBeHidden());
     const profiles = await step(() => page.evaluate(() => window.dbark.invoke('connections.list', {}))); expect(profiles).toHaveLength(1); const profile = profiles[0]; expect(profile.database).toBe(target!.database!); expect(profile.rememberPassword).toBe(false); expect(profile.password).toBeUndefined();
@@ -144,3 +144,10 @@ test('真实表浏览NULL四组合全121行、优先级/列头/取消草稿与�
     await info.attach('表数据多列排序', { body: Buffer.from(JSON.stringify({ audit: final, nullCombinations: 4, exactIdsAcrossAllPages: 121, headerPreservedNulls: true, presetRestoredNulls: true, draftPreserved: true, draftRestored: true, definitionUnchanged: true, fixtureRows: 121, fixtureDataUnchanged: true, databaseRemoved: true, closes })), contentType: 'application/json' });
   } catch (reason) { runtime.retainOwnedDesktopResources(info); await info.attach('排序隔离资源保留', { body: Buffer.from(JSON.stringify({ database: target!.database!, created, automaticCleanup: false, closes })), contentType: 'application/json' }); throw reason; }
 });
+
+
+/** 仅在原用户动作中加载真实菜单展示入口；每个异步边界继续核原资源门。 */
+async function navigationMenuItem(...args: Parameters<typeof import('./navigation-menu')['navigationMenuItem']>) {
+  args[2]?.(); const menu = await import('./navigation-menu'); args[2]?.();
+  const item = await menu.navigationMenuItem(...args); args[2]?.(); return item;
+}

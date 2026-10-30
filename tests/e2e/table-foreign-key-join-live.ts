@@ -150,7 +150,7 @@ export function registerTableForeignKeyJoinUi() {
       for (const table of resource.tables) { const ddl = await read(table.name === 'parent' ? statements.parentDdl : statements.childDdl); expect(ddl).toHaveLength(1); expect(hash(String(ddl[0]['Create Table']))).toBe(table.ddlSha256); }
       const beforeParent = await read(statements.parent), beforeChild = await read(statements.child); expect(beforeParent).toEqual(parentRows); expect(beforeChild).toEqual(childRows);
       await verifySource('实际启动及预置资源身份');
-      await step(() => page.locator('.navigation-toolbar').getByRole('button', { name: zh.common.newConnection, exact: true }).click()); const connection = page.getByRole('dialog', { name: zh.common.newConnection, exact: true });
+      await step(async () => { const assertMenuCurrent = check; assertMenuCurrent(); const action = await navigationMenuItem(page.locator('.navigation-toolbar'), { name: zh.common.newConnection, exact: true }, assertMenuCurrent); assertMenuCurrent(); await action.click(); assertMenuCurrent(); }); const connection = page.getByRole('dialog', { name: zh.common.newConnection, exact: true });
       for (const [label, value] of [[zh.connections.text006, 'JOIN本例'], [zh.connections.text009, resource.host], [zh.connections.text010, '13384'], [zh.common.user, environment.values.DBARK_TEST_USER!], [zh.connections.text011, environment.values.DBARK_TEST_PASSWORD!], [zh.connections.text012, database]]) await step(() => connection.getByLabel(label, { exact: true }).fill(value));
       await step(() => connection.getByLabel(zh.connections.text016, { exact: true }).uncheck()); await step(() => connection.getByRole('button', { name: zh.connections.text036, exact: true }).click()); await step(() => expect(connection).toBeHidden());
       const profiles = await step(() => page.evaluate(() => window.dbark.invoke('connections.list', {}))); expect(profiles).toHaveLength(1); const profile = profiles[0];
@@ -221,4 +221,11 @@ export function registerTableForeignKeyJoinUi() {
       finished.add(info);
     } catch (reason) { retained = true; clock.retain(); retainOwnedDesktopResources(info); throw reason; }
   });
+}
+
+
+/** 仅在原用户动作中加载真实菜单展示入口；每个异步边界继续核原资源门。 */
+async function navigationMenuItem(...args: Parameters<typeof import('./navigation-menu')['navigationMenuItem']>) {
+  args[2]?.(); const menu = await import('./navigation-menu'); args[2]?.();
+  const item = await menu.navigationMenuItem(...args); args[2]?.(); return item;
 }

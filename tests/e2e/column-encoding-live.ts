@@ -96,7 +96,7 @@ export function registerColumnEncodingUiTests() {
       expect(authority.map((row:any)=>row.id)).toEqual(['-9','0','0','7','9007199254740993']);expect(authority.map((row:any)=>row.tag)).toEqual(['1','2','3','4','5']);expect(authority.map((row:any)=>row.v)).toEqual([null,'','E9','4120','0080E9']);expect(originalBytes.map((row:any)=>row.v)).toEqual(authority.map((row:any)=>row.v));
       expect(originalStatistics.map((row:any)=>[row.INDEX_NAME,Number(row.SEQ_IN_INDEX),row.COLUMN_NAME,Number(row.NON_UNIQUE),row.SUB_PART===null?null:Number(row.SUB_PART)])).toEqual([['PRIMARY',1,'k',0,null],['idx_prefix',1,'v',1,3],['idx_prefix',2,'k',1,null],['uq_vtag',1,'v',0,null],['uq_vtag',2,'tag',0,null]]);
       const originalColumn=originalColumns.find((row:any)=>row.COLUMN_NAME==='v');expect(originalColumn).toMatchObject({COLUMN_TYPE:'varchar(24)',IS_NULLABLE:'YES',COLUMN_DEFAULT:'é',CHARACTER_SET_NAME:'latin1',COLLATION_NAME:'latin1_bin',COLUMN_COMMENT:'保留字符',CHARACTER_MAXIMUM_LENGTH:'24',CHARACTER_OCTET_LENGTH:'24'});
-      await step(()=>page.locator('.navigation-toolbar').getByRole('button',{name:zh.common.newConnection,exact:true}).click());const form=page.getByRole('dialog',{name:zh.common.newConnection,exact:true});
+      await step(async () => { const assertMenuCurrent = check; assertMenuCurrent(); const action = await navigationMenuItem(page.locator('.navigation-toolbar'), { name: zh.common.newConnection, exact: true }, assertMenuCurrent); assertMenuCurrent(); await action.click(); assertMenuCurrent(); });const form=page.getByRole('dialog',{name:zh.common.newConnection,exact:true});
       for(const[label,value]of [[zh.connections.text006,'列字符集转换本例'],[zh.connections.text009,environment.values.DBARK_TEST_HOST!],[zh.connections.text010,'13384'],[zh.common.user,environment.values.DBARK_TEST_USER!],[zh.connections.text011,environment.values.DBARK_TEST_PASSWORD!],[zh.connections.text012,database]])await step(()=>form.getByLabel(label,{exact:true}).fill(value));
       await step(()=>form.getByLabel(zh.connections.text016,{exact:true}).uncheck());await step(()=>form.getByRole('button',{name:zh.connections.text036,exact:true}).click());await step(()=>expect(form).toBeHidden());
       const profiles=await step(()=>page.evaluate(()=>window.dbark.invoke('connections.list',{})));expect(profiles).toHaveLength(1);const profile=profiles[0];expect(Boolean(profile.name==='列字符集转换本例'&&profile.host==='192.168.31.200'&&profile.port===13384&&profile.database===database&&profile.user===environment.values.DBARK_TEST_USER&&profile.rememberPassword===false&&!profile.ssh?.enabled&&!profile.tls?.enabled)).toBe(true);
@@ -162,4 +162,11 @@ export function registerColumnEncodingUiTests() {
       await step(()=>info.attach('列字符集转换专项终态',{body:Buffer.from(JSON.stringify({kind:'dbark.column-encoding-ui',version:1,platform:process.platform,database,normalExit:closed,observerClosed,originalProcessExitCode:originalProcess.exitCode,targetThreadsAfterExit:0,databaseRetainedForRoot:true,originalRowsPreserved:true,originalBytesRestored:true,convertedBytesVerified:true,originalDefinitionRestored:true,completeStableIndexCatalogPreserved:true,octetLengths:[24,96,24],audit:final,source:{manifestSha256:environment.values.DBARK_COLUMN_ENCODING_MANIFEST_SHA256,phases:sourceChecks},screenshot:{path:screenshotPath,sha256:screenshotSha256},mainIpcAuditVerified:false,systemClipboard:0,installerVerified:false,macOSVerified:false})),contentType:'application/json'}));finished.add(info);
     }catch(reason){retained=true;clock.retain();retainOwnedDesktopResources(info);throw reason;}
   });
+}
+
+
+/** 仅在原用户动作中加载真实菜单展示入口；每个异步边界继续核原资源门。 */
+async function navigationMenuItem(...args: Parameters<typeof import('./navigation-menu')['navigationMenuItem']>) {
+  args[2]?.(); const menu = await import('./navigation-menu'); args[2]?.();
+  const item = await menu.navigationMenuItem(...args); args[2]?.(); return item;
 }

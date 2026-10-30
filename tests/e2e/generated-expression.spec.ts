@@ -75,7 +75,7 @@ function register(binding: ReturnType<typeof import('../helpers/generatedExpress
       process.stdout.write(JSON.stringify({ 专项: '生成表达式GUI', 阶段: '原资源计划', 数据库: database, 端口: binding.target.port, 原观察线程: threadId }) + '\n'); expect(await query(sql.exists, [database])).toEqual([]); await query(sql.create); await query(sql.table); await query(sql.insert, inserted);
       const before = { definition: await query(sql.definition), columns: await query(sql.columns, [database]), rows: await query(sql.rows), generated: await query(sql.generated, [database]), values: await query(sql.values) }; expect(before.generated).toEqual([{ name: 'line_total', type: 'decimal(30,6)', nullable: 'YES', defaultValue: null, extra: 'VIRTUAL GENERATED', expression: '(`qty` * `price`)', comment: '原生成备注', ordinal: 7 }]); expect(before.values).toEqual([{ id: '9007199254740993', value: '27021597762.370368' }, { id: '18446744073709551615', value: null }]);
       expect(before.rows).toEqual([{ id: '9007199254740993', qty: '3', price: '9007199254.123456', moment: '2026-10-22 00:01:02.123456', payload: '00FF000A', unicode_value: '中文🙂' }, { id: '18446744073709551615', qty: null, price: null, moment: '2026-10-22 23:59:58.654321', payload: '', unicode_value: '' }]);
-      await step(() => page.locator('.navigation-toolbar').getByRole('button', { name: zh.common.newConnection, exact: true }).click()); const form = page.getByRole('dialog', { name: zh.common.newConnection, exact: true });
+      await step(async () => { const assertMenuCurrent = check; assertMenuCurrent(); const action = await navigationMenuItem(page.locator('.navigation-toolbar'), { name: zh.common.newConnection, exact: true }, assertMenuCurrent); assertMenuCurrent(); await action.click(); assertMenuCurrent(); }); const form = page.getByRole('dialog', { name: zh.common.newConnection, exact: true });
       for (const [label, value] of [[zh.connections.text006, '生成表达式本例'], [zh.connections.text009, binding.target.host], [zh.connections.text010, String(binding.target.port)], [zh.common.user, binding.target.user], [zh.connections.text011, binding.target.password], [zh.connections.text012, database]]) await step(() => form.getByLabel(label, { exact: true }).fill(value));
       await step(() => form.getByLabel(zh.connections.text016, { exact: true }).uncheck()); await step(() => form.getByRole('button', { name: zh.connections.text036, exact: true }).click()); await step(() => expect(form).toBeHidden());
       const profiles = await step(() => page.evaluate(() => window.dbark.invoke('connections.list', {}))); expect(profiles).toHaveLength(1); const profile = profiles[0]; expect(Boolean(profile.name === '生成表达式本例' && profile.host === binding.target.host && profile.port === 13384 && profile.user === binding.target.user && profile.database === database && profile.rememberPassword === false && profile.password === undefined && !profile.ssh?.enabled && !profile.tls?.enabled)).toBe(true);
@@ -97,4 +97,11 @@ function register(binding: ReturnType<typeof import('../helpers/generatedExpress
       await step(() => fs.writeFile(join(binding.target.output, 'evidence.json'), JSON.stringify(evidence, null, 2) + '\n', { flag: 'wx', mode: 0o600 })); completions.set(info, () => { check(); if (sourceFailed || sourcePending || sourceChecks.length !== phases.length || sourceChecks.some((phase, index) => phase !== phases[index]) || !closed || !observerClosed || originalProcess.exitCode !== 0) throw Error('生成表达式来源、退出或资源收尾未闭合'); });
     } catch (error) { retained = true; clock.retain(); runtime.retainOwnedDesktopResources(info); throw error; }
   });
+}
+
+
+/** 仅在原用户动作中加载真实菜单展示入口；每个异步边界继续核原资源门。 */
+async function navigationMenuItem(...args: Parameters<typeof import('./navigation-menu')['navigationMenuItem']>) {
+  args[2]?.(); const menu = await import('./navigation-menu'); args[2]?.();
+  const item = await menu.navigationMenuItem(...args); args[2]?.(); return item;
 }

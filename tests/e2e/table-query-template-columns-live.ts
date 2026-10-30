@@ -94,7 +94,7 @@ export function registerTableQueryTemplateColumnsUiTests() {
       expect({ version: facts[0].version, os: facts[0].os, names: Number(facts[0].names), uuid: facts[0].uuid }).toEqual({ version: '8.4.11', os: 'Linux', names: 0, uuid: environment.values.DBARK_TEST_EXPECTED_SERVER_UUID }); expect(Number.isSafeInteger(threadId) && threadId > 0).toBe(true);
       expect(await read(statements.exists, [database])).toEqual([{ name: 'subject' }, { name: 'subject_view' }, { name: 'wide' }]); const firstBefore = await read(statements.first);
       expect(firstBefore).toEqual([{ id: '9007199254740993', amount: '123456789012345678.000001', note: '' }]);
-      await step(() => page.locator('.navigation-toolbar').getByRole('button', { name: zh.common.newConnection, exact: true }).click()); const connection = page.getByRole('dialog', { name: zh.common.newConnection, exact: true });
+      await step(async () => { const assertMenuCurrent = check; assertMenuCurrent(); const action = await navigationMenuItem(page.locator('.navigation-toolbar'), { name: zh.common.newConnection, exact: true }, assertMenuCurrent); assertMenuCurrent(); await action.click(); assertMenuCurrent(); }); const connection = page.getByRole('dialog', { name: zh.common.newConnection, exact: true });
       for (const [label, value] of [[zh.connections.text006, '模板选列本例'], [zh.connections.text009, environment.values.DBARK_TEST_HOST!], [zh.connections.text010, '13384'], [zh.common.user, environment.values.DBARK_TEST_USER!], [zh.connections.text011, environment.values.DBARK_TEST_PASSWORD!], [zh.connections.text012, database]]) await step(() => connection.getByLabel(label, { exact: true }).fill(value));
       await step(() => connection.getByLabel(zh.connections.text016, { exact: true }).uncheck()); await step(() => connection.getByRole('button', { name: zh.connections.text036, exact: true }).click()); await step(() => expect(connection).toBeHidden());
       const profiles = await step(() => page.evaluate(() => window.dbark.invoke('connections.list', {}))); expect(profiles).toHaveLength(1); const profile = profiles[0];
@@ -179,4 +179,11 @@ export function registerTableQueryTemplateColumnsUiTests() {
       await step(() => info.attach('模板选列专项终态', { body: Buffer.from(JSON.stringify({ kind: 'dbark.table-query-template-columns-ui', version: 1, platform: process.platform, database, objects: ['subject', 'subject_view', 'wide'], serverVersion: '8.4.11', controlThreadId: threadId, selectedColumns: ['note', 'id', 'amount'], selectRows: 61, firstRow: firstBefore[0], parameterNames: [['value_1', 'value_2'], ['value_1', 'key_1']], wideWritableColumns: 205, maxRenderedColumnChoices: 50, wideNarrowedColumns: ['c204'], parentDraftPreserved: true, noAutomaticExecution: true, audit: final, normalExit: closed, originalProcessExitCode: originalProcess.exitCode, observerClosed, targetThreadsAfterExit: 0, databaseRetainedForRoot: true, source: { manifestSha256: environment.values.DBARK_TEMPLATE_COLUMNS_MANIFEST_SHA256, phases: sourceChecks }, screenshot: { path: screenshotPath, sha256: screenshotSha256 }, mainIpcAuditVerified: false, systemClipboard: 0, installerVerified: false, macOSVerified: false })), contentType: 'application/json' })); finished.add(info);
     } catch (reason) { retained = true; clock.retain(); retainOwnedDesktopResources(info); throw reason; }
   });
+}
+
+
+/** 仅在原用户动作中加载真实菜单展示入口；每个异步边界继续核原资源门。 */
+async function navigationMenuItem(...args: Parameters<typeof import('./navigation-menu')['navigationMenuItem']>) {
+  args[2]?.(); const menu = await import('./navigation-menu'); args[2]?.();
+  const item = await menu.navigationMenuItem(...args); args[2]?.(); return item;
 }

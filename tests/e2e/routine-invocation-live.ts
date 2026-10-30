@@ -150,7 +150,7 @@ export function registerRoutineInvocationUi(): void {
       expect(await read(sql.tables, [database])).toEqual([{ name: 'audit', ownerComment: resource.audit.ownerComment }]);
       for (const routine of resource.routines) { const shown = await read(sql['ddl_' + routine.name as keyof typeof sql]); expect(shown).toHaveLength(1); expect(hash(shown[0][routine.kind === 'function' ? 'Create Function' : 'Create Procedure'])).toBe(routine.ddlSha256); }
       const auditDdl = await read(sql.auditDdl); expect(auditDdl).toHaveLength(1); expect(hash(auditDdl[0]['Create Table'])).toBe(resource.audit.ddlSha256); expect(await read(sql.audit)).toEqual([]);
-      await step(() => page.locator('.navigation-toolbar').getByRole('button', { name: zh.common.newConnection, exact: true }).click()); const connection = page.getByRole('dialog', { name: zh.common.newConnection, exact: true });
+      await step(async () => { const assertMenuCurrent = check; assertMenuCurrent(); const action = await navigationMenuItem(page.locator('.navigation-toolbar'), { name: zh.common.newConnection, exact: true }, assertMenuCurrent); assertMenuCurrent(); await action.click(); assertMenuCurrent(); }); const connection = page.getByRole('dialog', { name: zh.common.newConnection, exact: true });
       for (const [label, value] of [[zh.connections.text006, '例程调用本例'], [zh.connections.text009, resource.host], [zh.connections.text010, '13384'], [zh.common.user, environment.values.DBARK_TEST_USER!], [zh.connections.text011, environment.values.DBARK_TEST_PASSWORD!], [zh.connections.text012, database]]) await step(() => connection.getByLabel(label, { exact: true }).fill(value));
       await step(() => connection.getByLabel(zh.connections.text016, { exact: true }).uncheck()); await step(() => connection.getByRole('button', { name: zh.connections.text036, exact: true }).click()); await step(() => expect(connection).toBeHidden());
       const profiles = await step(() => page.evaluate(() => window.dbark.invoke('connections.list', {}))); expect(profiles).toHaveLength(1); const profile = profiles[0]; expect(profile.rememberPassword).toBe(false); expect(profile.password).toBeUndefined(); expect(profile.database).toBe(database); expect(profile.port).toBe(13384);
@@ -279,4 +279,11 @@ export function registerRoutineInvocationUi(): void {
       void auditInstalled; throw reason;
     }
   });
+}
+
+
+/** 仅在原用户动作中加载真实菜单展示入口；每个异步边界继续核原资源门。 */
+async function navigationMenuItem(...args: Parameters<typeof import('./navigation-menu')['navigationMenuItem']>) {
+  args[2]?.(); const menu = await import('./navigation-menu'); args[2]?.();
+  const item = await menu.navigationMenuItem(...args); args[2]?.(); return item;
 }

@@ -103,7 +103,7 @@ export function registerBinaryCellFilesUiTests(environment: Environment): void {
       observer.connect(error => { if (error) { reject(error); return; } observerThread = observer!.threadId; if (!Number.isSafeInteger(observerThread) || observerThread! < 1) reject(Error('二进制单元格原观察线程未知')); else resolveConnect(); });
     }));
     await assertObserverIdentity(); expect(await readObserver('rows')).toEqual(plan.before);
-    await step(() => page.locator('.navigation-toolbar').getByRole('button', { name: zh.common.newConnection, exact: true }).click()); const connection = page.getByRole('dialog', { name: zh.common.newConnection, exact: true });
+    await step(async () => { const assertMenuCurrent = check; assertMenuCurrent(); const action = await navigationMenuItem(page.locator('.navigation-toolbar'), { name: zh.common.newConnection, exact: true }, assertMenuCurrent); assertMenuCurrent(); await action.click(); assertMenuCurrent(); }); const connection = page.getByRole('dialog', { name: zh.common.newConnection, exact: true });
     for (const [label, value] of [[zh.connections.text006, '二进制单元格文件本例'], [zh.connections.text009, values.DBARK_TEST_HOST], [zh.connections.text010, '13384'], [zh.common.user, values.DBARK_TEST_USER], [zh.connections.text011, values.DBARK_TEST_PASSWORD], [zh.connections.text012, database]]) await step(() => connection.getByLabel(label, { exact: true }).fill(value));
     await step(() => connection.getByLabel(zh.connections.text016, { exact: true }).uncheck()); await step(() => connection.getByRole('button', { name: zh.connections.text036, exact: true }).click()); await step(() => expect(connection).toBeHidden());
     const profiles = await step(() => page.evaluate(() => window.dbark.invoke('connections.list', {}))); expect(profiles).toHaveLength(1); const profile = profiles[0]; expect({ host: profile.host, port: profile.port, user: profile.user, database: profile.database, rememberPassword: profile.rememberPassword, password: profile.password, ssh: !!profile.ssh?.enabled, tls: !!profile.tls?.enabled }).toEqual({ host: '192.168.31.200', port: 13384, user: values.DBARK_TEST_USER, database, rememberPassword: false, password: undefined, ssh: false, tls: false });
@@ -190,4 +190,11 @@ export function registerBinaryCellFilesUiTests(environment: Environment): void {
     for (const saved of savedFiles) expect(hash(await step(() => fs.readFile(saved.path)))).toBe(saved.sha256);
     await step(() => info.attach('二进制单元格文件正式专项终态', { body: Buffer.from(JSON.stringify({ kind: 'dbark.binary-cell-files-ui', database, loadBufferOnlyBeforeStaging: true, stagingAndPreviewDidNotWrite: true, previewCancelledWithoutWrite: true, cancelledOpenPreservedBuffer: true, emptyFileIsZeroBytesNotNull: true, originalThirdRowPreserved: true, queryResultReadOnlyLoadAbsent: true, fullRawBytesVerified: true, audit: final, savedFiles, screenshots, picker, normalExit: true, originalProcessExitCode: original.exitCode, observerClosed, observerCommandsEnded: true, controlThreadId: observerThread, targetThreadsAfterExit: 0, databaseRetainedForRoot: true, sourceManifest: values.DBARK_BINARY_CELL_FILES_UI_MANIFEST_SHA256, sourceFiles: sourceFiles.map(file => ({ path: file.path, sha256: file.sha256 })), mainIpcAuditScope: '原窗口原handler透传；专用载入与原字节另存、原表页预览及两次明确单行更新；单条固定SELECT执行一次，无其它写入', systemClipboard: 0, systemFileDialogInput: 0, nativeInputVerified: false, installerVerified: false, macOSVerified: false })), contentType: 'application/json' })); finished.add(info);
   });
+}
+
+
+/** 仅在原用户动作中加载真实菜单展示入口；每个异步边界继续核原资源门。 */
+async function navigationMenuItem(...args: Parameters<typeof import('./navigation-menu')['navigationMenuItem']>) {
+  args[2]?.(); const menu = await import('./navigation-menu'); args[2]?.();
+  const item = await menu.navigationMenuItem(...args); args[2]?.(); return item;
 }

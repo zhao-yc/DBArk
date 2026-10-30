@@ -4,6 +4,7 @@ import ts from 'typescript';
 import { describe, expect, it, vi } from 'vitest';
 import { zh } from '../../src/renderer/locales/zh-CN';
 import { navigationZh } from '../../src/renderer/locales/navigation.zh-CN';
+import { actionMenuZh } from '../../src/renderer/locales/actionMenu.zh-CN';
 
 const source = readFileSync(new URL('../e2e/navigation-workbench.spec.ts', import.meta.url), 'utf8');
 const compiled = ts.transpileModule(source, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS } }).outputText;
@@ -23,13 +24,34 @@ function collect(args: string[], values: Record<string, string | undefined>) {
       if (name === '@playwright/test') return { test: { skip } };
       if (name === '../../src/renderer/locales/zh-CN') return { zh };
       if (name === '../../src/renderer/locales/navigation.zh-CN') return { navigationZh };
-      throw Error('RAM已到明确桌面注册边界');
+      if (name === '../../src/renderer/locales/actionMenu.zh-CN') return { actionMenuZh };
+      // 只有生产register里的准确夹具入口才是桌面边界；遗漏静态依赖必须明确失败。
+      if (name === './desktop-fixture') throw Error('RAM已到明确桌面注册边界');
+      throw Error('RAM未登记静态模块端口：' + name);
     }
   });
   return { run, reads, imports, skip, enumerations: () => enumerations };
 }
 
 describe('新导航专项默认及列表封闭门（纯RAM）', () => {
+  it('静态操作文案不会被认作桌面入口，真实require仍留在register内部', () => {
+    const tree = ts.createSourceFile('navigation-workbench.spec.ts', source, ts.ScriptTarget.Latest, true);
+    const staticModules = tree.statements.filter(ts.isImportDeclaration).map(node => (node.moduleSpecifier as ts.StringLiteral).text);
+    expect(staticModules).toContain('../../src/renderer/locales/actionMenu.zh-CN');
+    expect(staticModules).not.toContain('./desktop-fixture');
+    const registrations = tree.statements.filter((node): node is ts.FunctionDeclaration => ts.isFunctionDeclaration(node) && node.name?.text === 'register');
+    expect(registrations).toHaveLength(1); expect(registrations[0].body).toBeDefined();
+    const runtimeModules: string[] = [];
+    function visit(node: ts.Node): void {
+      if (ts.isCallExpression(node) && ts.isIdentifier(node.expression) && node.expression.text === 'require' && node.arguments.length === 1 && ts.isStringLiteral(node.arguments[0])) runtimeModules.push(node.arguments[0].text);
+      ts.forEachChild(node, visit);
+    }
+    visit(registrations[0].body!);
+    expect(runtimeModules).toEqual(['./desktop-fixture']);
+    const f = collect(['--list'], { DBARK_NAVIGATION_WORKBENCH_TEST: '1', DBARK_INTEGRATION_ENABLED: '0' });
+    f.run(); expect(f.imports).toContain('../../src/renderer/locales/actionMenu.zh-CN');
+    expect(f.imports).not.toContain('./desktop-fixture'); expect(f.reads).toEqual([]); expect(f.enumerations()).toBe(0); expect(f.skip).toHaveBeenCalledOnce();
+  });
   it.each(['--list', '--list=json'])('%s即使专项已开启也不读取环境或加载桌面', flag => {
     const f = collect([flag], { DBARK_NAVIGATION_WORKBENCH_TEST: '1', DBARK_INTEGRATION_ENABLED: '0', DBARK_TEST_PASSWORD: '不得读取的凭据' });
     f.run(); expect(f.reads).toEqual([]); expect(f.enumerations()).toBe(0); expect(f.imports).not.toContain('./desktop-fixture'); expect(f.skip).toHaveBeenCalledOnce();

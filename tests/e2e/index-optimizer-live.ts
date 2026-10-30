@@ -89,7 +89,7 @@ export function registerIndexOptimizerUiTests() {
       const facts=await read(statements.identity) as RowDataPacket[]; expect(facts).toHaveLength(1); const threadId=Number(facts[0].threadId);
       expect({version:facts[0].version,os:facts[0].os,names:Number(facts[0].names),uuid:facts[0].uuid}).toEqual({version:'8.4.11',os:'Linux',names:0,uuid:environment.values.DBARK_TEST_EXPECTED_SERVER_UUID}); expect(Number.isSafeInteger(threadId)&&threadId>0).toBe(true);
       expect(await read(statements.exists,[database])).toEqual([{name:'subject'}]); const authority=await read(statements.rows), originalDefinition=await read(statements.definition), originalStatistics=await read(statements.statistics,[database,'subject']); expect(authority.map((row:any)=>row.id)).toEqual(['-9','0','0','7','9007199254740993']); expect(originalStatistics.filter((row:any)=>row.INDEX_NAME==='idx_id')).toHaveLength(1); expect(originalStatistics.find((row:any)=>row.INDEX_NAME==='idx_id').IS_VISIBLE).toBe('YES');
-      await step(()=>page.locator('.navigation-toolbar').getByRole('button',{name:zh.common.newConnection,exact:true}).click()); const form=page.getByRole('dialog',{name:zh.common.newConnection,exact:true});
+      await step(async () => { const assertMenuCurrent = check; assertMenuCurrent(); const action = await navigationMenuItem(page.locator('.navigation-toolbar'), { name: zh.common.newConnection, exact: true }, assertMenuCurrent); assertMenuCurrent(); await action.click(); assertMenuCurrent(); }); const form=page.getByRole('dialog',{name:zh.common.newConnection,exact:true});
       for(const[label,value]of [[zh.connections.text006,'索引优化器状态本例'],[zh.connections.text009,environment.values.DBARK_TEST_HOST!],[zh.connections.text010,'13384'],[zh.common.user,environment.values.DBARK_TEST_USER!],[zh.connections.text011,environment.values.DBARK_TEST_PASSWORD!],[zh.connections.text012,database]]) await step(()=>form.getByLabel(label,{exact:true}).fill(value));
       await step(()=>form.getByLabel(zh.connections.text016,{exact:true}).uncheck()); await step(()=>form.getByRole('button',{name:zh.connections.text036,exact:true}).click()); await step(()=>expect(form).toBeHidden());
       const profiles=await step(()=>page.evaluate(()=>window.dbark.invoke('connections.list',{}))); expect(profiles).toHaveLength(1); const profile=profiles[0]; expect(Boolean(profile.name==='索引优化器状态本例'&&profile.host==='192.168.31.200'&&profile.port===13384&&profile.database===database&&profile.user===environment.values.DBARK_TEST_USER&&profile.rememberPassword===false&&!profile.ssh?.enabled&&!profile.tls?.enabled)).toBe(true);
@@ -132,4 +132,11 @@ export function registerIndexOptimizerUiTests() {
       await step(()=>info.attach('索引优化器状态专项终态',{body:Buffer.from(JSON.stringify({kind:'dbark.index-optimizer-ui',version:1,platform:process.platform,database,normalExit:closed,observerClosed,originalProcessExitCode:originalProcess.exitCode,targetThreadsAfterExit:0,databaseRetainedForRoot:true,originalRowsPreserved:true,originalDefinitionRestored:true,audit:final,source:{manifestSha256:environment.values.DBARK_INDEX_OPTIMIZER_MANIFEST_SHA256,phases:sourceChecks},screenshot:{path:screenshotPath,sha256:screenshotSha256},mainIpcAuditVerified:false,systemClipboard:0,installerVerified:false,macOSVerified:false})),contentType:'application/json'}));finished.add(info);
     } catch(reason){retained=true;clock.retain();retainOwnedDesktopResources(info);throw reason;}
   });
+}
+
+
+/** 仅在原用户动作中加载真实菜单展示入口；每个异步边界继续核原资源门。 */
+async function navigationMenuItem(...args: Parameters<typeof import('./navigation-menu')['navigationMenuItem']>) {
+  args[2]?.(); const menu = await import('./navigation-menu'); args[2]?.();
+  const item = await menu.navigationMenuItem(...args); args[2]?.(); return item;
 }

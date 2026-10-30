@@ -32,7 +32,7 @@ export function registerServerMonitorUi(binding: ServerMonitorUiTarget) {
       });
       assertServerMonitorUiIdentity(await observe(() => current.observer!.query('SELECT @@version AS version,@@version_compile_os AS os,@@lower_case_table_names AS names,@@server_uuid AS uuid')),binding.target.uuid);
       const connectionName = 'S02只读监控本例';
-      await observe(() => page.locator('.navigation-toolbar').getByRole('button',{name:zh.common.newConnection,exact:true}).click());
+      await observe(async () => { const assertMenuCurrent = () => life.check(); assertMenuCurrent(); const action = await navigationMenuItem(page.locator('.navigation-toolbar'), { name: zh.common.newConnection, exact: true }, assertMenuCurrent); assertMenuCurrent(); await action.click(); assertMenuCurrent(); });
       const form = page.getByRole('dialog',{name:zh.common.newConnection,exact:true});
       await observe(() => form.getByLabel(zh.connections.text006,{exact:true}).fill(connectionName));
       await observe(() => form.getByLabel(zh.connections.text008,{exact:true}).selectOption('mysql'));
@@ -76,4 +76,11 @@ export function registerServerMonitorUi(binding: ServerMonitorUiTarget) {
     } catch (reason) { life.preserve(); throw reason; }
     finally { life.endBody(); }
   });
+}
+
+
+/** 仅在原用户动作中加载真实菜单展示入口；每个异步边界继续核原资源门。 */
+async function navigationMenuItem(...args: Parameters<typeof import('./navigation-menu')['navigationMenuItem']>) {
+  args[2]?.(); const menu = await import('./navigation-menu'); args[2]?.();
+  const item = await menu.navigationMenuItem(...args); args[2]?.(); return item;
 }

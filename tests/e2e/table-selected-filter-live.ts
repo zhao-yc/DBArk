@@ -93,7 +93,7 @@ export function registerTableSelectedFilterUiTests() {
       const base = 9007199254740992n, lower = (base + 61n).toString(), upper = (base + 101n).toString(), beforeRows = authority.filter(row => BigInt(row.id) <= BigInt(lower) || BigInt(row.id) >= BigInt(upper)), secondPage = beforeRows.slice(50);
       expect(beforeRows).toHaveLength(82); expect(secondPage).toHaveLength(32);
       const included = beforeRows.filter(row => row.note === null || row.note === ''), nullOnly = beforeRows.filter(row => row.note === null); expect(included).toHaveLength(42); expect(nullOnly).toHaveLength(22);
-      await step(() => page.locator('.navigation-toolbar').getByRole('button', { name: zh.common.newConnection, exact: true }).click()); const form = page.getByRole('dialog', { name: zh.common.newConnection, exact: true });
+      await step(async () => { const assertMenuCurrent = check; assertMenuCurrent(); const action = await navigationMenuItem(page.locator('.navigation-toolbar'), { name: zh.common.newConnection, exact: true }, assertMenuCurrent); assertMenuCurrent(); await action.click(); assertMenuCurrent(); }); const form = page.getByRole('dialog', { name: zh.common.newConnection, exact: true });
       for (const [label, value] of [[zh.connections.text006, '勾选值筛选本例'], [zh.connections.text009, environment.values.DBARK_TEST_HOST!], [zh.connections.text010, '13384'], [zh.common.user, environment.values.DBARK_TEST_USER!], [zh.connections.text011, environment.values.DBARK_TEST_PASSWORD!], [zh.connections.text012, database]]) await step(() => form.getByLabel(label, { exact: true }).fill(value));
       await step(() => form.getByLabel(zh.connections.text016, { exact: true }).uncheck()); await step(() => form.getByRole('button', { name: zh.connections.text036, exact: true }).click()); await step(() => expect(form).toBeHidden());
       const profiles = await step(() => page.evaluate(() => window.dbark.invoke('connections.list', {}))); expect(profiles).toHaveLength(1); const profile = profiles[0]; expect(Boolean(profile.name === '勾选值筛选本例' && profile.host === '192.168.31.200' && profile.port === 13384 && profile.database === database && profile.user === environment.values.DBARK_TEST_USER && profile.rememberPassword === false && profile.password === undefined && !profile.ssh?.enabled && !profile.tls?.enabled)).toBe(true);
@@ -148,4 +148,11 @@ export function registerTableSelectedFilterUiTests() {
       await step(() => info.attach('表勾选值筛选专项终态', { body: Buffer.from(JSON.stringify({ kind: 'dbark.table-selected-filter-ui', version: 1, platform: process.platform, database, objects: ['subject'], serverVersion: '8.4.11', controlThreadId: threadId, sourceRows: 121, oldOrRows: 82, secondPageRows: 32, includedRows: 42, excludeEmptyKeepsNullRows: 22, excludeNullRows: 0, parentDraftPreserved: true, previewDidNotQuery: true, pageRequests: 10, productWrites: 0, historyRows: 0, finalPending: 0, audit: final, originalSortPreserved: true, normalExit: closed, originalProcessExitCode: originalProcess.exitCode, observerClosed, targetThreadsAfterExit: 0, databaseRetainedForRoot: true, source: { manifestSha256: environment.values.DBARK_SELECTED_FILTER_MANIFEST_SHA256, phases: sourceChecks }, screenshot: { path: screenshotPath, sha256: screenshotSha256 }, mainIpcAuditVerified: false, systemClipboard: 0, installerVerified: false, macOSVerified: false })), contentType: 'application/json' })); finished.add(info);
     } catch (reason) { retained = true; clock.retain(); retainOwnedDesktopResources(info); throw reason; }
   });
+}
+
+
+/** 仅在原用户动作中加载真实菜单展示入口；每个异步边界继续核原资源门。 */
+async function navigationMenuItem(...args: Parameters<typeof import('./navigation-menu')['navigationMenuItem']>) {
+  args[2]?.(); const menu = await import('./navigation-menu'); args[2]?.();
+  const item = await menu.navigationMenuItem(...args); args[2]?.(); return item;
 }

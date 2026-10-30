@@ -155,7 +155,7 @@ export function registerTableFilteredSelectUiTests(environment: Environment): vo
     }, { database, senderId }));
     const state = () => step(() => application.evaluate(() => { const root = globalThis as any; if (!root.__filteredSelectUiHandler) throw Error('当前筛选SELECT审计缺失'); return structuredClone(root.__filteredSelectUi) as Audit; }));
     const settings = () => step(() => page.evaluate(() => window.dbark.invoke('settings.get', {})));
-    await step(() => page.locator('.navigation-toolbar').getByRole('button', { name: zh.common.newConnection, exact: true }).click()); const connection = page.getByRole('dialog', { name: zh.common.newConnection, exact: true });
+    await step(async () => { const assertMenuCurrent = check; assertMenuCurrent(); const action = await navigationMenuItem(page.locator('.navigation-toolbar'), { name: zh.common.newConnection, exact: true }, assertMenuCurrent); assertMenuCurrent(); await action.click(); assertMenuCurrent(); }); const connection = page.getByRole('dialog', { name: zh.common.newConnection, exact: true });
     for (const [label, value] of [[zh.connections.text006, '当前筛选SELECT本例'], [zh.connections.text009, values.DBARK_TEST_HOST], [zh.connections.text010, '13384'], [zh.common.user, values.DBARK_TEST_USER], [zh.connections.text011, values.DBARK_TEST_PASSWORD], [zh.connections.text012, database]]) await step(() => connection.getByLabel(label, { exact: true }).fill(value));
     await step(() => connection.getByLabel(zh.connections.text016, { exact: true }).uncheck()); await step(() => connection.getByRole('button', { name: zh.connections.text036, exact: true }).click()); await step(() => expect(connection).toBeHidden());
     const profiles = await step(() => page.evaluate(() => window.dbark.invoke('connections.list', {}))); expect(profiles).toHaveLength(1); const profile = profiles[0];
@@ -222,4 +222,11 @@ export function registerTableFilteredSelectUiTests(environment: Environment): vo
     observerClosing = true; await step(() => closeMysqlConnection(observer!, true)); observerClosed = true; observerClosing = false; check(); expect(observerSawClose).toBe(true); expect(observerStream!.closed).toBe(true); await step(() => identity.assertCurrent());
     await step(() => info.attach('当前筛选SELECT正式专项终态', { body: Buffer.from(JSON.stringify({ kind: 'dbark.table-filtered-select-ui', database, selectedColumns: ['label', 'id', 'amount'], resultRows: 81, originalPage: 2, originalPageRows: 31, parentDraftPreserved: true, noAutomaticExecution: true, audit: { queryExecuteCount: final.queryExecuteCount, writes: final.writes, pending: final.pending, sessionsOpened: final.sessionsOpened, counts: final.counts }, normalExit: true, originalProcessExitCode: original.exitCode, observerClosed, observerCommandsEnded: true, controlThreadId: observerThread, targetThreadsAfterExit: 0, originalOwnerVerifiedBeforeAndAfter: true, serverUuidVerified: true, fixtureRowsUnchanged: true, databaseRetainedForRoot: true, sourceManifest: values.DBARK_FILTERED_SELECT_MANIFEST_SHA256, sourceVerifiedBeforeAndAfter: true, screenshot: { path: screenshotPath, sha256: screenshotHash }, mainIpcAudit: { scope: '原窗口dbark:request逐条透传计数；query.execute仅一次准确预览SELECT；schema及table.apply/table.preview和额外执行拒绝', otherIpcDomainsVerified: false, directServerSqlAuditVerified: false }, queryClosedThroughFormalDiscard: true, nativeConfirmationInputVerified: false, systemClipboard: 0, installerVerified: false, macOSVerified: false })), contentType: 'application/json' })); finished.add(info);
   });
+}
+
+
+/** 仅在原用户动作中加载真实菜单展示入口；每个异步边界继续核原资源门。 */
+async function navigationMenuItem(...args: Parameters<typeof import('./navigation-menu')['navigationMenuItem']>) {
+  args[2]?.(); const menu = await import('./navigation-menu'); args[2]?.();
+  const item = await menu.navigationMenuItem(...args); args[2]?.(); return item;
 }

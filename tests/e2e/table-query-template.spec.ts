@@ -80,7 +80,7 @@ test('真实表结构模板及字段悬停：安全属性、SELECT执行、UPDAT
       await connection.query('INSERT INTO ' + qualified + ' VALUES ?', [Array.from({ length: 61 }, (_, index) => [index + 1, index === 0 || index === 60 ? '0.12345678901234567890' : '1.00000000000000000000', index === 0 ? '' : index === 60 ? null : '其他记录', Buffer.from([0, 255])])]);
       const [ddl] = await connection.query<any[]>('SHOW CREATE TABLE ' + qualified), [rows] = await connection.query<any[]>('SELECT * FROM ' + qualified + ' ORDER BY id'); expect(rows).toHaveLength(61); definition = digest(ddl); data = digest(rows);
     });
-    await step(() => page.locator('.navigation-toolbar').getByRole('button', { name: zh.common.newConnection, exact: true }).click()); const form = page.getByRole('dialog', { name: zh.common.newConnection, exact: true }), connectionName = '查询模板本例';
+    await step(async () => { const assertMenuCurrent = () => { const current = runtime.ownedDesktopResources(info); if (current.page !== page || current.application !== application || current.closed) throw Error('原窗口已失效'); }; assertMenuCurrent(); const action = await navigationMenuItem(page.locator('.navigation-toolbar'), { name: zh.common.newConnection, exact: true }, assertMenuCurrent); assertMenuCurrent(); await action.click(); assertMenuCurrent(); }); const form = page.getByRole('dialog', { name: zh.common.newConnection, exact: true }), connectionName = '查询模板本例';
     await step(() => form.getByLabel(zh.connections.text006, { exact: true }).fill(connectionName));
     // 正式URI入口先拒绝不支持的加密参数，随后只填表；原连接、查询及草稿整例继续。
     await step(() => form.getByRole('button', { name: connectionUriZh.open, exact: true }).click());
@@ -138,3 +138,10 @@ test('真实表结构模板及字段悬停：安全属性、SELECT执行、UPDAT
     await info.attach('表结构SQL模板', { body: Buffer.from(JSON.stringify({ connectionUriVerified: true, generated: 4, fieldHoverVerified: true, hoverMarkupSafe: true, selectExecuted: true, parameterNames: 4, draftPreserved: true, draftRestored: true, noAutomaticExecution: true, noWrites: true, audit: final, definitionUnchanged: true, fixtureRows: 61, fixtureDataUnchanged: true, databaseRemoved: true, closes })), contentType: 'application/json' });
   } catch (reason) { runtime.retainOwnedDesktopResources(info); await info.attach('模板隔离资源保留', { body: Buffer.from(JSON.stringify({ database: target!.database!, created, automaticCleanup: false, closes })), contentType: 'application/json' }); throw reason; }
 });
+
+
+/** 仅在原用户动作中加载真实菜单展示入口；每个异步边界继续核原资源门。 */
+async function navigationMenuItem(...args: Parameters<typeof import('./navigation-menu')['navigationMenuItem']>) {
+  args[2]?.(); const menu = await import('./navigation-menu'); args[2]?.();
+  const item = await menu.navigationMenuItem(...args); args[2]?.(); return item;
+}

@@ -88,7 +88,7 @@ export function registerBatchRecordDuplicate(binding: BatchDuplicateTarget): voi
       const probe = await observe(openObserver); await identity(probe); await observe(() => strictClose(probe));
       const observer = await observe(openObserver); await identity(observer); await definition(observer); const before = await baseline(observer);
       const connectionName = '批量复制只读验收 ' + randomUUID();
-      await observe(() => page.locator('.navigation-toolbar').getByRole('button', { name: zh.common.newConnection, exact: true }).click());
+      await observe(async () => { const assertMenuCurrent = () => state.assertCurrent(); assertMenuCurrent(); const action = await navigationMenuItem(page.locator('.navigation-toolbar'), { name: zh.common.newConnection, exact: true }, assertMenuCurrent); assertMenuCurrent(); await action.click(); assertMenuCurrent(); });
       const form = page.getByRole('dialog', { name: zh.common.newConnection, exact: true });
       await observe(() => form.getByLabel(zh.connections.text006, { exact: true }).fill(connectionName));
       const dialect = form.getByRole('combobox', { name: new RegExp('^' + zh.connections.text008) });
@@ -161,4 +161,11 @@ export function registerBatchRecordDuplicate(binding: BatchDuplicateTarget): voi
     } catch (reason) { state.preserve(); throw reason; }
     finally { state.endBody(); }
   });
+}
+
+
+/** 仅在原用户动作中加载真实菜单展示入口；每个异步边界继续核原资源门。 */
+async function navigationMenuItem(...args: Parameters<typeof import('./navigation-menu')['navigationMenuItem']>) {
+  args[2]?.(); const menu = await import('./navigation-menu'); args[2]?.();
+  const item = await menu.navigationMenuItem(...args); args[2]?.(); return item;
 }

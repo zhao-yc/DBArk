@@ -98,7 +98,7 @@ export function registerChildReferenceUiTests() {
       expect(await read(statements.exists, [database])).toEqual([{ name: 'child' }, { name: 'child_no_pk' }, { name: 'parent' }]); const beforeRows = await read(statements.parent); expect(beforeRows).toEqual(expectedParent);
       expect(await read(statements.child, tuple)).toEqual(expectedChildren); expect(await read(statements.noKey, tuple)).toEqual(expectedChildren);
       process.stdout.write(JSON.stringify({ 专项: '父子关联GUI', 阶段: '原资源计划', 数据库: database, 表: ['parent', 'child', 'child_no_pk'], 端口: 13384, 原观察线程: threadId }) + '\n');
-      await step(() => page.locator('.navigation-toolbar').getByRole('button', { name: zh.common.newConnection, exact: true }).click()); const connection = page.getByRole('dialog', { name: zh.common.newConnection, exact: true });
+      await step(async () => { const assertMenuCurrent = check; assertMenuCurrent(); const action = await navigationMenuItem(page.locator('.navigation-toolbar'), { name: zh.common.newConnection, exact: true }, assertMenuCurrent); assertMenuCurrent(); await action.click(); assertMenuCurrent(); }); const connection = page.getByRole('dialog', { name: zh.common.newConnection, exact: true });
       for (const [label, value] of [[zh.connections.text006, '父子关联本例'], [zh.connections.text009, environment.values.DBARK_TEST_HOST!], [zh.connections.text010, '13384'], [zh.common.user, environment.values.DBARK_TEST_USER!], [zh.connections.text011, environment.values.DBARK_TEST_PASSWORD!], [zh.connections.text012, database]]) await step(() => connection.getByLabel(label, { exact: true }).fill(value));
       await step(() => connection.getByLabel(zh.connections.text016, { exact: true }).uncheck()); await step(() => connection.getByRole('button', { name: zh.connections.text036, exact: true }).click()); await step(() => expect(connection).toBeHidden());
       const profiles = await step(() => page.evaluate(() => window.dbark.invoke('connections.list', {}))); expect(profiles).toHaveLength(1); const profile = profiles[0]; expect(Boolean(profile.name === '父子关联本例' && profile.host === '192.168.31.200' && profile.port === 13384 && profile.user === environment.values.DBARK_TEST_USER && profile.database === database && profile.rememberPassword === false && profile.password === undefined && !profile.ssh?.enabled && !profile.tls?.enabled)).toBe(true);
@@ -121,4 +121,11 @@ export function registerChildReferenceUiTests() {
       await step(() => info.attach('父子记录只读关联专项终态', { body: Buffer.from(JSON.stringify({ kind: 'dbark.child-reference-ui', version: 1, platform: process.platform, database, tables: ['parent','child','child_no_pk'], serverVersion: '8.4.11', controlThreadId: threadId, rowsPerRelation: 2, nullAndMissingTupleNativeVerified: false, beforeParentSha256: createHash('sha256').update(JSON.stringify(beforeRows)).digest('hex'), afterParentSha256: createHash('sha256').update(JSON.stringify(afterRows)).digest('hex'), parentDraftPreserved: true, normalExit: closed, originalProcessExitCode, observerClosed, targetThreadsAfterExit: 0, databaseRetainedForRoot: true, source: { manifestSha256: environment.values.DBARK_CHILD_REFERENCE_MANIFEST_SHA256, phases: sourceChecks }, screenshot: { path: screenshotPath, sha256: screenshotSha256 }, mainIpcAuditVerified: false, systemClipboard: 0, installerVerified: false, macOSVerified: false })), contentType: 'application/json' })); finished.add(info);
     } catch (reason) { retained = true; clock.retain(); retainOwnedDesktopResources(info); throw reason; }
   });
+}
+
+
+/** 仅在原用户动作中加载真实菜单展示入口；每个异步边界继续核原资源门。 */
+async function navigationMenuItem(...args: Parameters<typeof import('./navigation-menu')['navigationMenuItem']>) {
+  args[2]?.(); const menu = await import('./navigation-menu'); args[2]?.();
+  const item = await menu.navigationMenuItem(...args); args[2]?.(); return item;
 }

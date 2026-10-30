@@ -35,7 +35,7 @@ function register(binding: ReturnType<typeof import('../helpers/connectionOrgani
       const nativeWindow = await step(() => application.browserWindow(page)), sender = await step(() => nativeWindow.evaluate(native => native.webContents.id)); await step(() => nativeWindow.dispose());
       await step(() => application.evaluate(installConnectionOrganizationAudit, sender)); armed = true;
       for (const [name, group] of [['整理甲', ''], ['整理乙', '未分组'], ['整理丙', '原开发组']]) {
-        await step(() => page.locator('.navigation-toolbar').getByRole('button', { name: zh.common.newConnection, exact: true }).click()); const form = page.getByRole('dialog', { name: zh.common.newConnection, exact: true });
+        await step(async () => { const assertMenuCurrent = () => { clock.assertCurrent(); if (closed) throw Error('原窗口已关闭'); }; assertMenuCurrent(); const action = await navigationMenuItem(page.locator('.navigation-toolbar'), { name: zh.common.newConnection, exact: true }, assertMenuCurrent); assertMenuCurrent(); await action.click(); assertMenuCurrent(); }); const form = page.getByRole('dialog', { name: zh.common.newConnection, exact: true });
         for (const [label, value] of [[zh.connections.text006, name], [zh.connections.text013, group], [zh.connections.text009, '127.0.0.1'], [zh.connections.text010, '3306'], [zh.common.user, 'dbark_synthetic'], [zh.connections.text011, '']]) await step(() => form.getByLabel(label, { exact: true }).fill(value));
         await step(() => form.getByLabel(zh.connections.text016, { exact: true }).uncheck()); await step(() => form.getByRole('button', { name: zh.connections.text036, exact: true }).click()); await step(() => expect(form).toBeHidden());
       }
@@ -62,4 +62,11 @@ function register(binding: ReturnType<typeof import('../helpers/connectionOrgani
       clock.assertCurrent(); completion.complete = true;
     } catch (error) { halted = true; clock.retain(); runtime.retainOwnedDesktopResources(info); throw error; }
   });
+}
+
+
+/** 仅在原用户动作中加载真实菜单展示入口；每个异步边界继续核原资源门。 */
+async function navigationMenuItem(...args: Parameters<typeof import('./navigation-menu')['navigationMenuItem']>) {
+  args[2]?.(); const menu = await import('./navigation-menu'); args[2]?.();
+  const item = await menu.navigationMenuItem(...args); args[2]?.(); return item;
 }

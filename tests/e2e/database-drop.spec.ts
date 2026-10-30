@@ -69,7 +69,7 @@ function register(binding: ReturnType<typeof import('../helpers/databaseDropUi')
       await query('CREATE EVENT ' + quote + '.`subject_event` ON SCHEDULE EVERY 1 DAY STARTS \'2099-01-01 00:00:00\' ON COMPLETION PRESERVE DISABLE DO SET @dbark_dbdrop_ui=1');
       const original = { definition: await query('SHOW CREATE TABLE ' + quote + '.`subject`'), rows: await actualRows(), marker: await query("SELECT TABLE_COMMENT AS marker FROM information_schema.TABLES WHERE TABLE_SCHEMA=? AND TABLE_NAME='subject'", [database]) };
       expect(original.marker).toEqual([{ marker }]); expect(original.rows).toEqual([{ id: '9007199254740993', moment: '2026-10-23 23:59:58.654321', unicode_value: '', payload: '', nullable_value: 'NULL' }, { id: '18446744073709551615', moment: '2026-10-23 00:01:02.123456', unicode_value: '中文🙂', payload: '00FF000A', nullable_value: null }]);
-      await step(() => page.locator('.navigation-toolbar').getByRole('button', { name: zh.common.newConnection, exact: true }).click()); const form = page.getByRole('dialog', { name: zh.common.newConnection, exact: true });
+      await step(async () => { const assertMenuCurrent = check; assertMenuCurrent(); const action = await navigationMenuItem(page.locator('.navigation-toolbar'), { name: zh.common.newConnection, exact: true }, assertMenuCurrent); assertMenuCurrent(); await action.click(); assertMenuCurrent(); }); const form = page.getByRole('dialog', { name: zh.common.newConnection, exact: true });
       for (const [label, value] of [[zh.connections.text006, '删除数据库本例'], [zh.connections.text009, binding.target.host], [zh.connections.text010, String(binding.target.port)], [zh.common.user, binding.target.user], [zh.connections.text011, binding.target.password], [zh.connections.text012, database]]) await step(() => form.getByLabel(label, { exact: true }).fill(value));
       await step(() => form.getByLabel(zh.connections.text016, { exact: true }).uncheck()); await step(() => form.getByRole('button', { name: zh.connections.text036, exact: true }).click()); await step(() => expect(form).toBeHidden());
       const profiles = await step(() => page.evaluate(() => window.dbark.invoke('connections.list', {}))); expect(profiles).toHaveLength(1); const profile = profiles[0]; expect(Boolean(profile.name === '删除数据库本例' && profile.host === binding.target.host && profile.port === 13384 && profile.user === binding.target.user && profile.database === database && profile.rememberPassword === false && profile.password === undefined && !profile.ssh?.enabled && !profile.tls?.enabled)).toBe(true);
@@ -126,4 +126,11 @@ function register(binding: ReturnType<typeof import('../helpers/databaseDropUi')
       await step(() => fs.writeFile(join(binding.target.output, 'evidence.json'), JSON.stringify(evidence, null, 2) + '\n', { flag: 'wx', mode: 0o600 })); await step(() => info.attach('删除数据库脱敏证据', { body: JSON.stringify(evidence), contentType: 'application/json' })); completed.set(info, () => { check(); if (!closed || !observerClosed) throw Error('删除数据库退出或原控制流未闭合'); });
     } catch (error) { halted = true; clock.retain(); runtime.retainOwnedDesktopResources(info); throw error; }
   });
+}
+
+
+/** 仅在原用户动作中加载真实菜单展示入口；每个异步边界继续核原资源门。 */
+async function navigationMenuItem(...args: Parameters<typeof import('./navigation-menu')['navigationMenuItem']>) {
+  args[2]?.(); const menu = await import('./navigation-menu'); args[2]?.();
+  const item = await menu.navigationMenuItem(...args); args[2]?.(); return item;
 }

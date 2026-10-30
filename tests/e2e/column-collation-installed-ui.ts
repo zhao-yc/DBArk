@@ -36,7 +36,7 @@ export function registerColumnCollationInstalledUi(binding: ColumnCollationInsta
       check();expect(trace).toBe('off');expect(screenshot).toBe('off');expect(video).toBe('off');
       const name=`列排序规则-${target.kind}-${target.marker}`;
       expect(await history()).toEqual([]);await step(()=>expect(page.locator('.tab-strip .tab-select')).toHaveCount(0));
-      await step(()=>page.locator('.navigation-toolbar').getByRole('button',{name:zh.common.newConnection,exact:true}).click());
+      await step(async () => { const assertMenuCurrent = check; assertMenuCurrent(); const action = await navigationMenuItem(page.locator('.navigation-toolbar'), { name: zh.common.newConnection, exact: true }, assertMenuCurrent); assertMenuCurrent(); await action.click(); assertMenuCurrent(); });
       const connection=page.getByRole('dialog',{name:zh.common.newConnection,exact:true}),dialect=connection.getByRole('combobox',{name:prefix(zh.connections.text008)});
       await step(()=>expect(dialect).toHaveCount(1));await step(()=>dialect.selectOption('mysql'));await step(()=>expect(dialect).toHaveValue('mysql'));
       await step(()=>connection.getByLabel(zh.connections.text006,{exact:true}).fill(name));
@@ -99,4 +99,11 @@ export function registerColumnCollationInstalledUi(binding: ColumnCollationInsta
     expect(missing,'strict owner收尾后临时配置目录应已由原夹具清除').toBe(true);
     await info.attach('列排序规则安装UI终态',{body:Buffer.from(JSON.stringify({...completed,directoryRemoved:true,launches:1,explicitApplyClicks:1,userSqlHistory:0,rootOwnsExactDatabaseBeforeAfterCleanup:true,systemClipboard:0,databaseCleanupBySpec:false,fullDatabaseAcceptance:false})),contentType:'application/json'});
   });
+}
+
+
+/** 仅在原用户动作中加载真实菜单展示入口；每个异步边界继续核原资源门。 */
+async function navigationMenuItem(...args: Parameters<typeof import('./navigation-menu')['navigationMenuItem']>) {
+  args[2]?.(); const menu = await import('./navigation-menu'); args[2]?.();
+  const item = await menu.navigationMenuItem(...args); args[2]?.(); return item;
 }
