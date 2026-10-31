@@ -1,4 +1,5 @@
-import { openSqliteObject, openSqliteDefinition } from '../sqliteNavigation';
+import { sqliteTableBrowseZh } from '../locales/sqliteTableBrowse.zh-CN';
+import { openSqliteObject, openSqliteDefinition, openSqliteSelect } from '../sqliteNavigation';
 import { sqliteZh } from '../locales/sqlite.zh-CN';
 import { importNewTableZh } from '../locales/importNewTable.zh-CN';
 import { ListChecks } from 'lucide-react';
@@ -46,7 +47,7 @@ export interface SidebarObjectActionProps {
 /** 树和中央对象列表复用原动作闭包；纯渲染函数使外层菜单仍能逐项消费原目标租约。 */
 export function sidebarObjectActions({ connectionId, database, object, onOpen, onDesign, onDdl, onColumnPatches, onIndexPatches, onForeignKeyPatches, onTableCopyData, onTableCopyStructure, onTableRename, onTableAutoIncrement, onTableChecks, onTableComment, onTableDefaultEncoding, onRoutineInvocation, onRefresh }: SidebarObjectActionProps) {
   if (useWorkspace.getState().connections.find(profile => profile.id === connectionId)?.dialect === 'sqlite') return <>
-    {(object.kind === 'table' || object.kind === 'view') && <button data-menu-group="open" title={sqliteZh.selectQuery} aria-label={sqliteZh.selectQuery + ' ' + object.name} onClick={onOpen}><FileCode2 size={12}/></button>}
+    {(object.kind === 'table' || object.kind === 'view') && <><button data-menu-group="open" title={sqliteTableBrowseZh.browse} aria-label={sqliteTableBrowseZh.browse + ' ' + object.name} onClick={onOpen}><Table2 size={12}/></button><button data-menu-group="open" title={sqliteZh.selectQuery} aria-label={sqliteZh.selectQuery + ' ' + object.name} onClick={() => openSqliteSelect(connectionId, database, object)}><FileCode2 size={12}/></button></>}
     <button data-menu-group="structure" title={sqliteZh.definition} aria-label={sqliteZh.definition + ' ' + object.name} onClick={() => void openSqliteDefinition(connectionId, database, object)}><Pencil size={12}/></button>
     {onRefresh && <button data-menu-group="refresh" title={zh.common.refresh} aria-label={sidebarContextMenuZh.refreshObject(object.name)} onClick={onRefresh}><RefreshCw size={12}/></button>}
   </>;

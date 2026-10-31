@@ -56,6 +56,8 @@ export class EngineBroker {
       })();
       return this.sqlite.request(command, input);
     }
+    // SQLite专属读接口不能因目标ID错误而加载网络驱动或套用MySQL实现。
+    if (command.startsWith('sqlite.')) return Promise.reject(Error('SQLite表浏览需要当前已保存的SQLite文件连接'));
     return this.networkRequest(command, input);
   }
 

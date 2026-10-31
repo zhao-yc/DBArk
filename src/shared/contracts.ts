@@ -245,6 +245,7 @@ export interface CommandMap {
   'query.transactionSettings.read': { input: { sessionId: string; taskId: string }; output: QueryTransactionSettingsSnapshot };
   'query.transactionSettings.apply': { input: { sessionId: string; taskId: string; expected: QueryTransactionSettingsSnapshot; isolation: QueryTransactionIsolation; readOnly: boolean }; output: QueryTransactionSettingsSnapshot };
   'query.autocommit.apply': { input: QueryAutocommitApplyInput; output: QueryAutocommitOutput };
+  'sqlite.tablePage': { input: import('./sqliteTableBrowse').SqliteTablePageInput; output: import('./sqliteTableBrowse').SqliteTablePage };
   'table.page': { input: { connectionId: string; database: string; table: string; page: number; pageSize: number; filters: FilterRule[]; filterMode?: FilterMode; filterGroup?: FilterGroup; sort: SortRule[]; copySource?: boolean; taskId?: string }; output: TablePage };
   'table.copySourceRead': { input: TableCopySourceReadInput; output: TableCopySourceReadResult };
   'table.copySourceRelease': { input: TableCopySourceReleaseInput; output: void };

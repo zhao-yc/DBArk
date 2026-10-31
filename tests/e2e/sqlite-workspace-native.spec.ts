@@ -41,6 +41,7 @@ test.afterEach(({}, info) => {
 test('SQLite原连接表单、查询精度及事务经真实utility执行，同profile正常重启只恢复草稿', async ({ trace, screenshot, video }, info) => {
   const runtime = require('./desktop-fixture') as Desktop, { join, resolve, dirname, basename } = require('node:path') as typeof import('node:path');
   const { DatabaseSync } = require('node:sqlite') as typeof import('node:sqlite');
+  const { realpathSync } = require('node:fs') as typeof import('node:fs');
   let owner = runtime.ownedDesktopResources(info), application = owner.application, page = owner.page, originalProcess = application.process();
   const directory = runtime.dataDir, database = join(directory, 'sqlite-workspace-native.sqlite');
   let closed = false, armed = false, stage = '独立磁盘准备';
@@ -127,6 +128,8 @@ test('SQLite原连接表单、查询精度及事务经真实utility执行，同p
       db.exec('PRAGMA journal_mode=WAL; CREATE TABLE subject(id INTEGER PRIMARY KEY,exact_int INTEGER,note TEXT,nullable TEXT,payload BLOB); CREATE TABLE "中文""航船🚢"(n TEXT); CREATE VIEW subject_view AS SELECT id,note FROM subject;');
       db.exec("INSERT INTO subject VALUES(1,9223372036854775807,'9007199254740993',NULL,x'00ff'),(2,-9223372036854775808,'中文🚢',NULL,x'ff00');");
     } finally { db.close(); }
+    // 在原创建句柄关闭后、选择器启动前冻结真实路径；macOS的/var链接不能误判为换文件。
+    const canonicalDatabase = realpathSync(database);
     check(); const baselineDisk = disk(); expect(baselineDisk).toEqual([{ id: 1, note: '9007199254740993' }, { id: 2, note: '中文🚢' }]);
     await arm(); armed = true; stage = '原连接表单选择文件与版本探测';
     await step(async () => (await navigationMenuItem(page.locator('.navigation-toolbar'), { name: zh.common.newConnection, exact: true }, check)).click());
@@ -147,7 +150,7 @@ test('SQLite原连接表单、查询精度及事务经真实utility执行，同p
     await step(() => form.getByRole('button', { name: zh.connections.text036, exact: true }).click()); await step(() => expect(form).toBeHidden());
     const profiles = await step(() => page.evaluate(() => window.dbark.invoke('connections.list', {}))); expect(profiles).toHaveLength(1);
     const profile = profiles[0]; expect(profile.dialect).toBe('sqlite'); if (profile.dialect !== 'sqlite') throw Error('SQLite原生表单错误保存为网络配置');
-    expect(profile.name).toBe(connectionName); expect(profile.sqlite.filePath).toBe(database); expect(profile.sqlite.readOnly).toBe(false); expect(profile.sqlite.fileToken).toBeUndefined();
+    expect(profile.name).toBe(connectionName); expect(profile.sqlite.filePath).toBe(canonicalDatabase); expect(profile.sqlite.readOnly).toBe(false); expect(profile.sqlite.fileToken).toBeUndefined();
     for (const key of ['host', 'port', 'user', 'password', 'rememberPassword', 'hasPassword', 'ssh', 'tls']) expect(profile).not.toHaveProperty(key);
     const pickerFacts = await step(audit); expect(pickerFacts.pickerCalls).toBe(1); expect(pickerFacts.connectionId).toBe(profile.id); expect(pickerFacts.executions).toBe(0);
 
@@ -155,7 +158,12 @@ test('SQLite原连接表单、查询精度及事务经真实utility执行，同p
     await step(() => page.locator('.connection-row .tree-label').filter({ hasText: connectionName }).click());
     await step(() => page.locator('.database-row .tree-label').filter({ hasText: /^main$/ }).click());
     await step(() => expect(page.locator('.object-row .tree-label').filter({ hasText: 'subject_view' })).toBeVisible());
-    await step(() => page.locator('.object-row .tree-label').filter({ hasText: quotedTable }).dblclick());
+    // 表双击现在进入只读数据页；生成草稿须明确点击真实树右键菜单，不能借隐藏按钮执行。
+    await step(async () => {
+      const row = page.locator('.object-row').filter({ has: page.getByRole('button', { name: quotedTable, exact: true }) });
+      const item = await (require('./sidebar-menu') as typeof import('./sidebar-menu')).sidebarMenuItem(row, { name: sqliteZh.selectQuery + ' ' + quotedTable, exact: true }, check);
+      check(); await item.click(); check();
+    });
     await step(() => expect(query().locator('.monaco-editor').getByRole('textbox')).toBeVisible());
     const generated = await settings(); expect(generated.tabs).toHaveLength(1); expect(generated.tabs[0].kind).toBe('query');
     expect(generated.tabs[0].sql).toBe('SELECT * FROM "main"."中文""航船🚢" LIMIT 100;'); expect(generated.tabs[0].databaseContext).toEqual({ state: 'known', database: 'main' });

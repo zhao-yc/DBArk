@@ -4,14 +4,22 @@ import { useWorkspace } from './store';
 import { sqliteSelectSource } from './sqliteWorkspace';
 import { sqliteZh } from './locales/sqlite.zh-CN';
 
-/** 文件对象沿原查询标签生成草稿，不创建 MySQL 表数据标签，也不自动执行 SQL。 */
+/** 文件表和视图沿原 table 标签打开只读浏览，触发器仍使用原定义草稿。 */
 export function openSqliteObject(connectionId: string, database: string, object: DatabaseObject): boolean {
   const workspace = useWorkspace.getState();
   if (workspace.connections.find(profile => profile.id === connectionId)?.dialect !== 'sqlite') return false;
   if (database !== 'main') { workspace.notify(sqliteZh.mainOnly, true); return true; }
-  if (object.kind === 'table' || object.kind === 'view') workspace.openTab({ kind: 'query', connectionId, database, databaseContext: { state: 'known', database }, title: object.name, sql: sqliteSelectSource(database, object) });
+  if (object.kind === 'table' || object.kind === 'view') workspace.openTab({ kind: 'table', connectionId, database, title: object.name, table: object.name });
   else void openSqliteDefinition(connectionId, database, object);
   return true;
+}
+/** SELECT 是独立且未执行的原查询草稿，不能由表浏览或右键打开菜单暗中执行。 */
+export function openSqliteSelect(connectionId: string, database: string, object: DatabaseObject): void {
+  const workspace = useWorkspace.getState();
+  if (workspace.connections.find(profile => profile.id === connectionId)?.dialect !== 'sqlite') return;
+  if (database !== 'main') { workspace.notify(sqliteZh.mainOnly, true); return; }
+  if (object.kind !== 'table' && object.kind !== 'view') return;
+  workspace.openTab({ kind: 'query', connectionId, database, databaseContext: { state: 'known', database }, title: object.name, sql: sqliteSelectSource(database, object) });
 }
 /** 定义只作为查询草稿打开；读取期间连接修订、标签或选择变化会撤销迟到导航。 */
 export async function openSqliteDefinition(connectionId: string, database: string, object: DatabaseObject): Promise<void> {

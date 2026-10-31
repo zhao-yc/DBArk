@@ -78,10 +78,14 @@ jobs:
           DBARK_INTEGRATION_ENABLED: '0'
           DBARK_SQLITE_WORKSPACE_NATIVE_TEST: '1'
           PLAYWRIGHT_JSON_OUTPUT_NAME: test-results/sqlite-workspace/report.json
+      - name: 单次运行SQLite只读表分页筛选排序专项
+        run: node scripts/sqlite-workspace-ci.mjs table
       - name: 始终保留本轮SQLite专项原始记录
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: SQLite原工作区-${{ matrix.artifact }}-${{ github.run_id }}-${{ github.run_attempt }}
-          path: test-results/sqlite-workspace/
+          path: |
+            test-results/sqlite-workspace/
+            test-results/sqlite-table-browse/
           if-no-files-found: warn

@@ -49,6 +49,13 @@ it('SQLite准备期尚未提交任务的取消不加载冷网络引擎；热网�
   broker.start(); const cancel = broker.request('query.cancel', input); reply(); await cancel;
   expect(child.postMessage).toHaveBeenCalledExactlyOnceWith(expect.objectContaining({ command: 'query.cancel', input }));
 });
+it('SQLite专属表页接口对缺失或网络连接直接拒绝，不能加载或发送到网络引擎', async () => {
+  const { broker } = fixture();
+  for (const connectionId of ['不存在的连接', 'mysql']) await expect(broker.request('sqlite.tablePage', { connectionId })).rejects.toThrow('SQLite文件连接');
+  expect(ports.fork).not.toHaveBeenCalled(); expect(ports.sqlite).not.toHaveBeenCalled();
+  await expect(broker.request('sqlite.tablePage', { connectionId: 'file' })).resolves.toBe('sqlite');
+  expect(ports.sqlite).toHaveBeenCalledOnce(); expect(ports.fork).not.toHaveBeenCalled();
+});
 it('冷网络保存SQLite不加载mysql2，热网络仍核验原ID占用并保留原错误', async () => {
   const { broker, child, reply } = fixture(), input = { id: profile.id, profile, transportChanged: true };
   await broker.request('__connections.prepareSave', input); expect(ports.fork).not.toHaveBeenCalled();

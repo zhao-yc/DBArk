@@ -1002,6 +1002,12 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
       try { await broker.request('connections.close', input); store.deleteConnection(input.id); return; }
       finally { if (tableValueOptionsClosing.get(input.id) === owner) tableValueOptionsClosing.delete(input.id); }
     }
+    case 'sqlite.tablePage': {
+      if (shuttingDown) throw Error('客户端正在退出，不能开始SQLite表浏览');
+      connectionConfig.assertAvailable(input.connectionId);
+      if (store.connections().find(profile => profile.id === input.connectionId)?.dialect !== 'sqlite') throw Error('SQLite表浏览需要当前已保存的SQLite文件连接');
+      break;
+    }
     case 'connections.open': input = { ...input, profile: store.resolveConnection(input.id) }; break;
     case 'connections.test': {
       const previous = store.connections().find(profile => profile.id === input.id);

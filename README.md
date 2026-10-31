@@ -4,7 +4,7 @@
 
 DBArk 保留连接树、多标签查询和表格编辑等熟悉的工作方式，使用独立的界面与实现。当前开发范围为 Windows 和 macOS 客户端。
 
-当前开发源码还提供 [SQLite 文件连接与原查询工作区](docs/development/sqlite-workspace-20261031.md)：现存文件、默认只读、表／视图查询草稿及事务控制。表格编辑、结构设计、导入和完整导出仍待接入；这项能力不属于下列已发布安装包。
+当前开发源码还提供 [SQLite 文件连接与原查询工作区](docs/development/sqlite-workspace-20261031.md)，以及[只读分页表格、筛选和多列排序](docs/development/sqlite-table-browse-20261031.md)。表格编辑、结构设计、导入和完整导出仍待接入；这些能力不属于下列已发布安装包。
 
 ## 下载
 

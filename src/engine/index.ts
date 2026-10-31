@@ -209,6 +209,7 @@ export class Engine {
 
   /** 主进程只注入可信 profile/filePath；其他字段按共享接口处理。 */
   async handle(command: EngineCommand, input: Input): Promise<any> {
+    if (command.startsWith('sqlite.')) throw Error('SQLite专用接口不能进入MySQL网络引擎');
     // 网络引擎只接受网络配置；跨进程误路由不能缓存SQLite身份或进入mysql2。
     if (command !== '__connections.prepareSave' && (input.dialect === 'sqlite' || [input.profile, input.sourceProfile, input.targetProfile].some(profile => profile?.dialect === 'sqlite'))) throw new Error('SQLite连接不能交给MySQL网络引擎');
     if (this.closing && command !== 'table.filteredDelete.release' && command !== 'table.filteredUpdate.release' && command !== 'result.insertRelease' && command !== 'schema.databaseDefaultEncoding.release' && command !== 'schema.databaseDrop.release' && command !== 'schema.tableChecks.release') throw new Error('数据库引擎正在关闭，不能开始新操作');
