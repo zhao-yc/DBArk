@@ -1,6 +1,6 @@
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
-import { fork, type ChildProcess } from 'node:child_process';
-import { mkdtempSync, renameSync, rmSync } from 'node:fs';
+import { spawnSync, fork, type ChildProcess } from 'node:child_process';
+import { mkdtempSync, realpathSync, renameSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join, resolve } from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
@@ -9,7 +9,7 @@ import { build } from 'esbuild';
 import type { SqliteConnectionProfile, TaskEvent } from '../../src/shared/contracts';
 import type { SqliteTablePage } from '../../src/shared/sqliteTableBrowse';
 import type { SqliteTableChange, SqliteTableEditOutcome, SqliteTableEditPreview, SqliteWriteFact } from '../../src/shared/sqliteTableEdit';
-import type { SqliteProcessExit, SqliteProcessTransport, SqliteWorkerRequest, SqliteWorkerResponse } from '../../src/engine/sqlite/protocol';
+import type { SqliteFileIdentity, SqliteProcessExit, SqliteProcessTransport, SqliteWorkerRequest, SqliteWorkerResponse } from '../../src/engine/sqlite/protocol';
 import type { SqliteEditApplyRequest } from '../../src/main/sqliteTableEdit';
 
 vi.mock('electron', () => ({ utilityProcess: { fork: () => { throw Error('SQLite编辑单测必须使用准确真实Node进程'); } } }));
@@ -58,6 +58,32 @@ const update = (row: number, note: string): SqliteTableChange => ({ kind: 'updat
 function notes(profile: SqliteConnectionProfile): unknown[] { return disk(profile, db => db.prepare('SELECT id,note FROM subject ORDER BY id').all()); }
 
 describe('SQLite表格编辑真实快照、参数预览与整批提交事实', () => {
+  it('真实Windows 8.3别名或本机native路径统一签发身份，typed原页预览后实际提交且原行保护不降门', async () => {
+    const profile = fixture(), original = profile.sqlite.filePath!, longPath = join(dirname(original), 'database-identity-long-file-name.sqlite'); renameSync(original, longPath);
+    let alias = longPath;
+    if (process.platform === 'win32') {
+      // 固定只读cmd命令仅查询本例准确文件的8.3名称；verbatim保留for语法及路径的原双引号。
+      const lookup = spawnSync('cmd.exe', ['/d', '/s', '/c', 'for %I in ("' + longPath + '") do @echo %~sI'], { windowsVerbatimArguments: true, windowsHide: true, encoding: 'utf8' });
+      expect(lookup.error).toBeUndefined(); expect(lookup.status).toBe(0); expect(lookup.signal).toBeNull(); alias = lookup.stdout.trim();
+      expect(alias.length).toBeGreaterThan(0);
+    }
+    const actual = statSync(alias, { bigint: true }), sourceIdentity = statSync(longPath, { bigint: true }), canonical = realpathSync.native(alias);
+    expect(actual.isFile()).toBe(true); expect(actual.dev).toBe(sourceIdentity.dev); expect(actual.ino).toBe(sourceIdentity.ino); expect(canonical).toBe(realpathSync.native(longPath));
+    if (process.platform === 'win32' && !/~\d/.test(alias)) console.info('当前Windows卷未提供本例8.3别名，已核同一真实文件并继续验证native身份及完整写入链；不宣称覆盖短路径分支。');
+    profile.sqlite.filePath = alias; const identities: (SqliteFileIdentity | undefined)[] = [];
+    const { app, events } = runtime(profile, () => transport((message, forward) => { if (message.kind === 'opened') identities.push(message.identity ? structuredClone(message.identity) : undefined); forward(); }));
+    const source = await page(app, profile); expect(source.edit).toMatchObject({ kind: 'editable', locator: { kind: 'rowid' } });
+    if (source.edit?.kind !== 'editable') throw Error('真实文件身份未能签发编辑快照');
+    expect(source.edit.rows[0][2]).toEqual({ kind: 'integer', value: '9223372036854775807' }); expect(source.edit.rows[0][3]).toEqual({ kind: 'blob', value: '00ff' });
+    const plan = await preview(app, source, [update(0, '原身份明确提交')]), operation = apply(app, plan);
+    expect(await operation.result).toMatchObject({ outcome: 'committed', fact: { appliedRows: 1, commitAcknowledged: true, commitMayHaveBeenSent: true, rollbackAcknowledged: false } });
+    expect(identities).toHaveLength(2); for (const identity of identities) expect(identity).toEqual({ path: canonical, device: sourceIdentity.dev.toString(), inode: sourceIdentity.ino.toString() });
+    expect(notes(profile)).toEqual([{ id: 1, note: '原身份明确提交' }, { id: 2, note: '原乙' }]); expect(events.at(-1)?.status).toBe('completed');
+    // 成功链之后仍以真实外部修改验证旧值冲突保护，没有为了兼容别名放宽原行校验。
+    const next = await page(app, profile), conflict = await preview(app, next, [update(0, '不得覆盖观察者')]); disk(profile, db => db.exec("UPDATE subject SET note='外部更新' WHERE id=1"));
+    expect(await apply(app, conflict).result).toMatchObject({ outcome: 'rolled-back', fact: { appliedRows: 0, commitAcknowledged: false, rollbackAcknowledged: true } }); expect(notes(profile)).toEqual([{ id: 1, note: '外部更新' }, { id: 2, note: '原乙' }]);
+  });
+
   it('显式非只读页才签typed快照，预览无SQL投递，混合增改删/默认/NULL/生成列及顶层changes真实提交', async () => {
     const profile = fixture(); disk(profile, db => db.exec('CREATE TABLE audit(note); CREATE TRIGGER changed AFTER UPDATE ON subject BEGIN INSERT INTO audit VALUES(NEW.note); END'));
     const { app, events } = runtime(profile); expect((await page(app, profile, 'subject', false)).edit).toBeUndefined(); const source = await page(app, profile);

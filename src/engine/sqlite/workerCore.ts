@@ -133,7 +133,7 @@ export class SqliteWorkerCore {
     let descriptor: number | undefined, opened: DatabaseSync | undefined;
     try {
       if (!object(options) || typeof options.path !== 'string' || !unicode(options.path) || !isAbsolute(options.path) || typeof options.readOnly !== 'boolean' || !integer(options.busyTimeoutMs, 0, 5000)) throw invalid();
-      const path = realpathSync(options.path); descriptor = openSync(path, options.readOnly ? 'r' : 'r+');
+      const path = realpathSync.native(options.path); descriptor = openSync(path, options.readOnly ? 'r' : 'r+');
       const before = fstatSync(descriptor, { bigint: true }); if (!before.isFile()) throw invalid();
       const uri = pathToFileURL(path); uri.searchParams.set('mode', options.readOnly ? 'ro' : 'rw');
       opened = new DatabaseSync(uri.href, { readOnly: options.readOnly, timeout: options.busyTimeoutMs, allowExtension: false, enableForeignKeyConstraints: true, enableDoubleQuotedStringLiterals: false, defensive: true });

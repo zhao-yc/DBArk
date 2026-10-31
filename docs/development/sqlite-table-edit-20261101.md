@@ -26,3 +26,11 @@
 前一提交 `c875a475` 的 SQLite 专项已在 Windows、macOS arm64／x64 全绿；本批新增编辑的两种 Mac 架构待新提交 CI。安装包及真实磁盘故障组合另验；本批不更新已安装客户端、不创建 Release，R02 仍为部分实现。
 
 首轮 Windows 窗口在本地删除确认处失败：既有 Main 夹具已回答确认框，新观察器再调用 CDP accept 导致二次回答错误。同期原件还暴露了 Broker 对令牌式编辑命令缺少路由，准确补接三个编辑命令并增加路由／退出屏障回归。原失败、后继收尾超时和临时配置保存在忽略目录 `.cache/sqlite-edit-20261101/`；实际进程已另核不存在，不追认该轮正常退出，不清理失败数据。
+
+## Windows 短路径兼容修复
+
+`28c18800` 的 SQLite CI `41224488069` 在 Mac arm64／x64 全部通过；Windows 的原查询、分页和导出通过，编辑在首次提交前返回 not-sent，DML／COMMIT 均未发送。原始 job、artifact 和失败附件保存在 `.cache/sqlite-schema-export-20261101/ci28-win-*`。
+
+本机真实 8.3 别名复现：默认 `realpathSync` 保留短名，而 `realpathSync.native` 和 Main 的 `fs.promises.realpath` 展开成长名；准确 fstat/stat 的 BigInt dev／ino 完全相同。worker 改用同一原生算法，保留 Main 三次路径／dev／ino 复核、driver 完整身份比对、取消与原值保护，不做大小写或字符串放宽。
+
+新增真实短路径页读取→预览→提交→外部更新→旧值冲突回滚用例，16 项编辑单元通过（`unit-identity10.log`）；最终 Windows 编辑整例通过（`native-edit14.log`），不将旧失败重记为成功。新的跨平台 CI 继续核对。
