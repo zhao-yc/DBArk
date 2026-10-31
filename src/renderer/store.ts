@@ -5,6 +5,9 @@ import { defaultEditorWordWrap, readEditorWordWrap } from '../shared/editorWordW
 import { editorFontLimits, readEditorFontSize } from '../shared/editorFont';
 import { zh } from './locales/zh-CN';
 import { sqliteWriteFactMessage, sqliteWriteFactSchema } from '../shared/sqliteWriteFact';
+import { assertSqliteTableCreateFactTransition, sqliteTableCreateFactSchema, sqliteTableCreateMessages } from '../shared/sqliteTableCreate';
+import { sqliteCreateFactMessage } from '../shared/sqliteTableCreateFact';
+import { sqliteTableCreateZh } from './locales/sqliteTableCreate.zh-CN';
 import { create } from 'zustand';
 import type { AppSettings, ConnectionProfile, TaskEvent, TaskRecord } from '../shared/contracts';
 import { errorMessage, invoke, uid } from './lib';
@@ -216,8 +219,32 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     // 已终态的文件任务不被迟到事件复活或改写；原RPC仍可通过专用收尾发布真实事实。
     if (state.queryFileTasks[event.taskId]?.running === false) return {};
     const previous = state.tasks.find(task => task.id === event.taskId);
+    const createKind = event.sqliteCreateOperation === 'apply' ? 'sqlite.tableCreate.apply' : event.sqliteCreateOperation === 'preview' ? 'sqlite.tableCreate.preview' : undefined;
+    // Main固定类别不能让同一个任务编号从预览换成写入，也不能接管其它已知种类。
+    if (createKind && previous && previous.kind !== createKind && previous.kind !== zh.workspace.text001) return {};
     const task: TaskRecord = { id: event.taskId, kind: previous?.kind ?? (event.queryFileSource ? queryFilesZh.taskTitle : zh.workspace.text001), startedAt: previous?.startedAt ?? new Date().toISOString(), ...previous, status: event.status, progress: event.progress, message: event.queryFileSource ? queryFilesZh.taskPhases[event.queryFileSource.phase] : event.message };
-    if (event.sqliteWrite) {
+    if (createKind) task.kind = createKind;
+    if (event.sqliteCreate && (createKind === 'sqlite.tableCreate.apply' || previous?.kind === 'sqlite.tableCreate.apply')) {
+      const parsed = sqliteTableCreateFactSchema.safeParse(event.sqliteCreate);
+      try {
+        if (!parsed.success) throw Error('SQLite建表回执无效');
+        if (previous?.sqliteCreate) assertSqliteTableCreateFactTransition(previous.sqliteCreate, parsed.data);
+        task.sqliteCreate = parsed.data;
+      } catch {
+        // 错误身份、计数倒退或坏回执的整个事件都不能改写原任务状态及已确认事实。
+        if (previous) return {};
+        task.status = 'failed'; task.progress = 0;
+      }
+    }
+    if (task.kind === 'sqlite.tableCreate.preview') task.message = sqliteTableCreateZh.previewTaskMessages[task.status];
+    if (task.kind === 'sqlite.tableCreate.apply') {
+      const fact = task.sqliteCreate;
+      task.message = fact ? sqliteCreateFactMessage(fact) : task.status === 'running' ? sqliteTableCreateMessages.running : sqliteTableCreateMessages.unknown;
+      if (fact?.commitAcknowledged) { task.status = 'completed'; task.progress = 100; }
+      else if (fact?.rollbackAcknowledged) task.status = previous?.status === 'cancelled' || event.status === 'cancelled' ? 'cancelled' : 'failed';
+      else if (fact?.phase === 'unknown' || task.status === 'completed') { task.status = 'failed'; task.progress = Math.min(task.progress, 99); }
+    }
+    if (event.sqliteWrite && !task.kind.startsWith('sqlite.tableCreate.')) {
       const fact = sqliteWriteFactSchema.safeParse(event.sqliteWrite);
       if (fact.success && (!previous?.sqliteWrite?.commitAcknowledged || fact.data.operationId === previous.sqliteWrite.operationId && fact.data.commitAcknowledged)) { task.sqliteWrite = fact.data; task.kind = 'sqlite.tableEdit.apply'; }
     }

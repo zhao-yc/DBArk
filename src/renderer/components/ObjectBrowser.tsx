@@ -79,7 +79,7 @@ export function ObjectBrowser({ tab, active, refreshVersion, onOpen, onNewTable,
   };
   return <div className="workspace-tab object-browser" aria-label={text.objects}>
     <div className="object-browser-header"><Database size={16}/><strong title={`${profile?.name ?? tab.connectionId} / ${tab.database}`}>{profile?.name ?? tab.connectionId} / {tab.database}</strong><span className="grow"/>
-      {profile?.dialect !== 'sqlite' && category === 'table' && <button disabled={busy || !profile} onClick={() => { if (contextCurrent()) onNewTable(); }}>{text.newTable}</button>}<button disabled={busy || !profile} onClick={() => { if (contextCurrent()) reload(); }}><RefreshCw size={13}/>{text.refresh}</button></div>
+      {category === 'table' && <button disabled={busy || !profile || profile.dialect === 'sqlite' && tab.database !== 'main'} onClick={() => { if (contextCurrent() && (profile?.dialect !== 'sqlite' || tab.database === 'main')) onNewTable(); }}>{text.newTable}</button>}<button disabled={busy || !profile} onClick={() => { if (contextCurrent()) reload(); }}><RefreshCw size={13}/>{text.refresh}</button></div>
     <div className="object-browser-filter"><select aria-label={text.type} value={category} onChange={event => { if (contextCurrent()) useWorkspace.getState().updateTab(tab.id, { objectCategory: event.target.value as ObjectCategory }); }}>
       {objectCategories.filter(kind => profile?.dialect !== 'sqlite' || kind === 'table' || kind === 'view' || kind === 'trigger').map(kind => <option key={kind} value={kind}>{text.categories[kind]}</option>)}</select>
       <input aria-label={text.search} placeholder={text.search} value={search} onChange={event => setSearch(event.target.value)}/>{busy && <Spinner/>}</div>

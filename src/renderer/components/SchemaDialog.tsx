@@ -32,6 +32,8 @@ import { ErrorBox, Field, Modal, Spinner, UsageHelp } from './ui';
 import type { DefinitionSearchOpen } from '../../shared/definitionNavigation';
 import { DatabaseCreateDialog } from './DatabaseCreateDialog';
 import { DefinitionViewer } from './DefinitionViewer';
+import { SqliteTableCreateDialog } from './SqliteTableCreateDialog';
+import type { SqliteTableCreateOutcome } from '../../shared/sqliteTableCreate';
 
 /** 新字段仅提供可编辑默认值，不在用户确认前生成数据库对象。 */
 const blankColumn = (): TableCreateDraft['columns'][number] => ({ name: '', type: 'varchar(255)', nullable: true, autoIncrement: false, comment: '' });
@@ -41,11 +43,17 @@ const splitColumns = (text: string) => text.split(',').map(item => item.trim());
 type SchemaDraft = Omit<TableDesign, 'indexes' | 'columns'> & { columns: TableCreateDraft['columns']; indexes: TableCreateIndex[]; checks?: TableCreateCheck[] };
 /** 已有表显式取回整字段模型，不能把新表前缀合同传给通用schema.preview。 */
 function existingDesign(design: SchemaDraft): TableDesign { if (tableCreateHasChecks(design)) throw Error(checksText.existing); return { ...design, indexes: design.indexes.map(index => { if (!('columns' in index)) throw Error('已有表不能使用新表专属键部分'); return index; }) }; }
-interface SchemaDialogProps { connectionId: string; database: string; table?: string; initialDesign?: TableCreateDraft; isParentCurrent?():boolean; invalidated?:boolean; onClose: () => void; onApplied: () => void; onCreated?(result: TableCreateApplyOutput, version: number): void; onDirtyChange?(dirty: boolean): void; }
+interface SchemaDialogProps { connectionId: string; database: string; table?: string; initialDesign?: TableCreateDraft; isParentCurrent?():boolean; invalidated?:boolean; onClose: () => void; onApplied: () => void; onCreated?(result: TableCreateApplyOutput, version: number): void; onSqliteCreated?(result: SqliteTableCreateOutcome, version: number): void; onDirtyChange?(dirty: boolean): void; }
 interface SchemaOperationContext { lifetime: object | null; connectionId: string; database: string; table?: string; version: number; revision: number; }
 interface SchemaPreviewContext { context: SchemaOperationContext; preview: SqlPreview; sql: string; }
 /** 已有表按准确目标隔离组件；新建草稿保持原失效保护，不因连接变动无声丢弃。 */
-export function SchemaDialog(props: SchemaDialogProps) { return <SchemaDialogContent key={props.table ? JSON.stringify([props.connectionId, props.database, props.table]) : 'new'} {...props}/>; }
+export function SchemaDialog(props: SchemaDialogProps) {
+  const profile = useWorkspace(state => state.connections.find(value => value.id === props.connectionId));
+  // 入口方言固定；原连接删除或被替换后不能把SQLite草稿重新解释成MySQL设计。
+  const sqlite = useRef(profile?.dialect === 'sqlite').current;
+  if (sqlite) return props.table ? <DefinitionViewer connectionId={props.connectionId} database={props.database} object={{ kind: 'table', name: props.table }} onClose={props.onClose}/> : <SqliteTableCreateDialog connectionId={props.connectionId} database={props.database} unsupportedSeed={props.initialDesign !== undefined} invalidated={props.invalidated} isParentCurrent={props.isParentCurrent} onClose={props.onClose} onDirtyChange={props.onDirtyChange} onCreated={props.onSqliteCreated}/>;
+  return <SchemaDialogContent key={props.table ? JSON.stringify([props.connectionId, props.database, props.table]) : 'new'} {...props}/>;
+}
 
 /** 设计器维护字段、索引及外键草稿，必须先生成预览后才允许执行 DDL。 */
 function SchemaDialogContent({ connectionId, database, table, initialDesign, isParentCurrent, invalidated=false, onClose, onApplied, onCreated, onDirtyChange }: SchemaDialogProps) {

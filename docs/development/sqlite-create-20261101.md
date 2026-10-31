@@ -27,3 +27,9 @@
 Root 最初的 Main 夹具遗漏既有分派外围依赖，两轮各六项在进入新建处理器前失败；补齐生产连接配置管理器及初始空令牌表后通过，未放宽产品检查。首轮日志与成功轮均保留。私有原件位于 `.cache/sqlite-create-20261101/`，包括上述日志、两份 `native-*results/report.json` 和两个 `native-*-independent-audit.json`，不入库。
 
 新建功能的 Mac 两架构、安装包及系统文件选择器物理交互仍待验。CI 已增加三平台串行 `create` 源码专项，旧八项及原失败记录保留；上一参数提交的三平台通过见[后续复验](sqlite-parameters-20261101.md#后续跨平台源码复验)，不能代替本增量验收。本轮仅提交开发源码，不创建正式 Release。
+
+## 后续跨平台源码复验
+
+准确提交 `03d8d5a9ba2a888e1b0885a6649d00206155478d` 的 [SQLite CI 41239437760](https://github.com/zhao-yc/DBArk/actions/runs/41239437760) 已在 Windows x64、macOS arm64／x64 全部完成，每平台九项、共 27 份单次零重试报告通过。Root 下载原 run、job 元数据和三份报告包，核全部终态，并独立复算三平台新建文件的私有 seed 协议、零隐式用户工作、精确类型值、三个显式用户查询／历史及双正常退出回执。远端目录删除只核 CI 原回执，不以本机 `stat` 冒充远端物理复查。
+
+原件在 `.cache/sqlite-table-create-20261101/ci-03d8-*` 及 `ci-03d8-independent-audit.json`，不入库。上述仅为源码应用验收；新建表后续增量、安装包和物理系统选择器各自另验。

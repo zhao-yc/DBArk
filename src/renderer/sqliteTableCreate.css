@@ -1,0 +1,9 @@
+.sqlite-table-create .sqlite-create-fields{display:flex;flex-direction:column;gap:10px;margin:12px 0}
+.sqlite-table-create fieldset{border:1px solid var(--border);border-radius:6px;padding:10px;margin:10px 0;min-width:0}
+.sqlite-table-create .sqlite-create-column{display:grid;grid-template-columns:minmax(120px,1fr) minmax(100px,1fr);gap:8px}
+.sqlite-table-create .sqlite-create-actions,.sqlite-table-create .sqlite-create-part{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:8px}
+.sqlite-table-create .sqlite-create-part>select,.sqlite-table-create .sqlite-create-part>input{flex:1;min-width:100px}
+.sqlite-table-create .sqlite-create-sql{max-height:40vh;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;user-select:text}
+.sqlite-table-create .sqlite-create-primary{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin:5px 0}
+.sqlite-table-create .sqlite-create-full{grid-column:1/-1}
+@media(max-width:650px){.sqlite-table-create .sqlite-create-column{grid-template-columns:minmax(0,1fr)}}

@@ -1,5 +1,12 @@
 import type { TaskEvent } from '../shared/contracts';
 import { taskCancelSnapshotSchema, type TaskCancelState } from '../shared/taskCancelState';
+import { sqliteTableCreateFactSchema, type SqliteTableCreateFact } from '../shared/sqliteTableCreate';
+
+/** COMMIT可能已投递或结果未知时取消无法保证撤销；只认可严格最小建表事实。 */
+export function sqliteTableCreateCancelLocked(fact?: SqliteTableCreateFact): boolean {
+  const parsed = sqliteTableCreateFactSchema.safeParse(fact);
+  return parsed.success && (parsed.data.commitMayHaveBeenSent || parsed.data.phase === 'commit-pending' || parsed.data.phase === 'unknown');
+}
 
 interface Entry { state: TaskCancelState; version: number; locked: boolean; }
 interface Ports {
@@ -45,7 +52,7 @@ export class TaskCancelStates {
     const entry = this.entries.get(event.taskId); if (!this.active || !entry) return;
     if (event.status !== 'running') { entry.state = 'finished'; entry.locked = true; }
     else if (!entry.locked) {
-      if (event.tableApply?.evidence.commitMayHaveBeenSent) { entry.state = 'confirming'; entry.locked = true; }
+      if (event.tableApply?.evidence.commitMayHaveBeenSent || sqliteTableCreateCancelLocked(event.sqliteCreate)) { entry.state = 'confirming'; entry.locked = true; }
       else entry.state = 'checking';
     }
     entry.version = ++this.clock;

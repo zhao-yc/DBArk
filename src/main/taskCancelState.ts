@@ -5,7 +5,9 @@ import type { TaskCancelSnapshot, TaskCancelState } from '../shared/taskCancelSt
 export function taskCancelSnapshot(taskIds: string[], tasks: ReadonlyMap<string, TaskRecord>, tableApplyState: (id: string, operationId: string | undefined) => TaskCancelState): TaskCancelSnapshot {
   return [...new Set(taskIds)].map(taskId => {
     const task = tasks.get(taskId);
-    const state = !task ? 'checking' : task.status !== 'running' ? 'finished' : task.kind === 'table.apply' ? tableApplyState(taskId, task.tableApplyReceiptId) : 'allowed';
+    const create = task?.kind === 'sqlite.tableCreate.apply' ? task.sqliteCreate : undefined;
+    const confirmingCreate = create && (create.phase === 'commit-pending' || create.phase === 'unknown' || create.commitMayHaveBeenSent && !create.commitAcknowledged && !create.rollbackAcknowledged);
+    const state = !task ? 'checking' : task.status !== 'running' || create?.commitAcknowledged || create?.rollbackAcknowledged ? 'finished' : confirmingCreate ? 'confirming' : task.kind === 'table.apply' ? tableApplyState(taskId, task.tableApplyReceiptId) : 'allowed';
     return { taskId, state };
   });
 }

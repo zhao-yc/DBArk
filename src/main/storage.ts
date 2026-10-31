@@ -1,5 +1,6 @@
 import { assertSqlKeywordCaseWrite, readSqlKeywordCase } from '../shared/sqlKeywordCase';
 import { recoverSqliteWriteTask } from '../shared/sqliteWriteFact';
+import { recoverSqliteTableCreateTask } from '../shared/sqliteTableCreateFact';
 import { assertObjectBrowserTabs, readObjectBrowserTabs } from '../shared/objectBrowser';
 import { assertQueryFileSourceSettings, queryFileSourceRefSchema, sameQueryFileSource, type QueryFileSourceRef } from '../shared/queryFileSources';
 import { privateQueryFileSourceSchema, type PrivateQueryFileSource } from './queryFileSourceRecords';
@@ -130,6 +131,11 @@ export class LocalStore {
       const restored = recoverSqliteWriteTask(task);
       // 已完成且已脱敏的记录无需每次启动重写整份本地配置。
       if (Object.keys(task).length !== Object.keys(restored).length || Object.entries(restored).some(([key, value]) => key === 'sqliteWrite' ? JSON.stringify(task.sqliteWrite) !== JSON.stringify(value) : task[key as keyof TaskRecord] !== value)) this.saveTask(restored);
+    }
+    // 原生建表以独立事务回执恢复，不把MySQL隐式提交语义或行数套到DDL语句数上。
+    for (const task of this.tasks()) if (task.kind === 'sqlite.tableCreate.apply') {
+      const restored = recoverSqliteTableCreateTask(task);
+      if (JSON.stringify(task) !== JSON.stringify(restored)) this.saveTask(restored);
     }
     // 上次异常退出的长任务不自动重试，尤其不能重放写操作。
     for (const task of this.tasks()) if (task.status === 'running') this.saveTask({ ...task, status: 'failed', finishedAt: new Date().toISOString(), message: '应用上次退出时任务未完成，请核对数据库状态' });
