@@ -289,7 +289,7 @@ export class SqliteRuntime {
     let failed = false, failure: unknown;
     const event = (status: TaskEvent['status'], message: string, progress = 0) => { this.options.emit({ taskId: task.input.taskId, status, progress, rows: task.rows, message }); };
     try {
-      event('running', '正在流式导出SQLite完整筛选结果'); this.exportCheck(task);
+      event('running', '正在导出SQLite文件'); this.exportCheck(task);
       const maximum = this.options.tableExport?.maxBytes;
       if (maximum !== undefined && (!Number.isSafeInteger(maximum) || maximum < 1 || maximum > 10 * 1024 ** 3)) throw Error('SQLite导出内部文件预算无效');
       const file = task.file = new SqliteTableExportFile(task.input, () => this.exportCheck(task), () => { this.exportCheck(task); task.committing = true; }, this.options.tableExport?.io, maximum);

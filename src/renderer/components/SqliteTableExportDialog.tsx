@@ -17,14 +17,14 @@ export interface SqliteTableExportServices {
 export const sqliteTableExportServices: SqliteTableExportServices = {
   choose: input => invoke('files.choose', input), execute: input => invoke('sqlite.tableExport', input), cancel: taskId => invoke('query.cancel', { taskId }), subscribe: listener => window.dbark.onTask(listener),
 };
-interface Props { intent: SqliteTableExportIntent; services?: SqliteTableExportServices; onActivity(delta: 1 | -1): void; onClose(): void; onCleanupError(message: string): void; onCommitted?(result: SqliteTableExportOutput, sourceChanged: boolean): void; }
-type Draft = { format: SqliteTableExportInput['format']; encoding: SqliteTableExportInput['encoding']; csvDelimiter: CsvExportDelimiter; columns: string[]; file?: FileChoice; problem?: string; done?: { output: SqliteTableExportOutput; changed: boolean } };
+interface Props { intent: SqliteTableExportIntent; services?: SqliteTableExportServices; onActivity(delta: 1 | -1): void; onClose(): void; onCleanupError(message: string): void; onCommitted?(result: SqliteTableExportOutput, sourceChanged: boolean, sqlContent?: SqliteTableExportInput['sqlContent']): void; }
+type Draft = { format: SqliteTableExportInput['format']; encoding: SqliteTableExportInput['encoding']; csvDelimiter: CsvExportDelimiter; columns: string[]; dataColumns: string[]; sqlContent?: SqliteTableExportInput['sqlContent']; file?: FileChoice; problem?: string; done?: { output: SqliteTableExportOutput; changed: boolean } };
 type Operation = { kind: 'choose' | 'export'; id?: string; cancelled: boolean; promise: Promise<void>; sent?: boolean; cancel?: Promise<void> };
 
 /** 全量SQLite 文件导出与本地数据草稿分离，所有异步回包只归属于原意图和原操作。 */
 export function SqliteTableExportDialog({ intent, services = sqliteTableExportServices, ...callbacks }: Props) {
   const owner = useRef({ intent, services, callbacks }).current;
-  const [draft, setDraft] = useState<Draft>({ format: 'csv', encoding: 'utf8', csvDelimiter: ',', columns: owner.intent.source.columns.map(column => column.name) }), live = useRef(draft); live.current = draft;
+  const [draft, setDraft] = useState<Draft>(() => { const columns = owner.intent.source.columns.map(column => column.name); return { format: 'csv', encoding: 'utf8', csvDelimiter: ',', columns, dataColumns: [...columns] }; }), live = useRef(draft); live.current = draft;
   const [busy, setBusy] = useState(false), [closing, setClosing] = useState(false), [stale, setStale] = useState(false), [progress, setProgress] = useState<TaskEvent>();
   const mounted = useRef(true), closed = useRef(false), invalid = useRef(false), operation = useRef<Operation | undefined>(undefined), committed = useRef<object | undefined>(undefined), consumed = useRef(false);
   const ticket = {};
@@ -51,15 +51,25 @@ export function SqliteTableExportDialog({ intent, services = sqliteTableExportSe
   function change(next: Omit<SqliteTableExportOptions, 'columns'> & { columns?: string[] }): void {
     if (!editable()) return;
     if (!['csv', 'json', 'sql', 'xlsx'].includes(next.format) || !['utf8', 'utf16le', 'gb18030'].includes(next.encoding)) return;
-    if (next.format === 'sql' && owner.intent.source.target.kind !== 'table') { replace({ ...draft, problem: text.viewSql }); return; }
+    const sqlContent = next.format === 'sql' ? next.sqlContent ?? (draft.format === 'sql' ? draft.sqlContent : owner.intent.source.target.kind === 'view' ? 'structure' : undefined) : undefined;
+    if (sqlContent !== undefined && !['data', 'structure', 'structure-data'].includes(sqlContent)) return;
+    if (next.format === 'sql' && owner.intent.source.target.kind !== 'table' && sqlContent !== 'structure') { replace({ ...draft, problem: text.viewSql }); return; }
     consumed.current = false; setProgress(undefined);
-    // SQL只呈现可写入INSERT的选择；返回其它格式不偷偷补回此前取消的字段。
-    const columns = [...(next.columns ?? draft.columns)].filter(name => next.format !== 'sql' || !owner.intent.source.columns.find(column => column.name === name)?.generated);
-    replace({ format: next.format, encoding: next.format === 'xlsx' ? 'utf8' : next.encoding, csvDelimiter: next.csvDelimiter ?? draft.csvDelimiter, columns });
+    const structure = next.format === 'sql' && sqlContent === 'structure', complete = next.format === 'sql' && sqlContent === 'structure-data';
+    const wasStructure = draft.format === 'sql' && ['structure', 'structure-data'].includes(draft.sqlContent ?? 'data');
+    // 结构模式不覆盖原字段草稿；结构及数据补齐所有非生成列，原有顺序可继续调整。
+    let columns = [...(next.columns ?? (wasStructure && !structure && !complete ? draft.dataColumns : draft.columns))].filter(name => next.format !== 'sql' || !owner.intent.source.columns.find(column => column.name === name)?.generated);
+    if (structure) columns = [];
+    if (complete) {
+      const required = owner.intent.source.columns.filter(column => !column.generated).map(column => column.name);
+      columns = [...columns.filter(name => required.includes(name)), ...required.filter(name => !columns.includes(name))];
+    }
+    replace({ format: next.format, encoding: next.format === 'xlsx' ? 'utf8' : next.encoding, csvDelimiter: next.csvDelimiter ?? draft.csvDelimiter, columns, dataColumns: structure || complete ? [...draft.dataColumns] : [...columns], ...(sqlContent !== undefined ? { sqlContent } : {}) });
   }
   /** 字段与顺序同属原草稿租约；旧渲染回调及运行中的选择不能替换已确定的输出范围。 */
   function changeFields(columns: string[]): void { change({ format: draft.format, encoding: draft.encoding, csvDelimiter: draft.csvDelimiter, columns }); }
   function selectField(name: string, selected: boolean): void {
+    if (draft.format === 'sql' && ['structure', 'structure-data'].includes(draft.sqlContent ?? 'data')) return;
     const column = owner.intent.source.columns.find(column => column.name === name);
     if (!column || draft.format === 'sql' && column.generated || draft.columns.includes(name) === selected) return;
     changeFields(selected ? [...draft.columns, name] : draft.columns.filter(value => value !== name));
@@ -73,7 +83,7 @@ export function SqliteTableExportDialog({ intent, services = sqliteTableExportSe
   /** 文件chooser等待期间父标签也保持占用，迟到文件令牌不会绑定新来源或新格式。 */
   function choose(): void {
     if (!editable()) return;
-    try { selectSqliteExportColumns(owner.intent.source, { format: draft.format, columns: draft.columns }); }
+    try { selectSqliteExportColumns(owner.intent.source, { format: draft.format, columns: draft.columns, ...(draft.format === 'sql' && draft.sqlContent !== undefined ? { sqlContent: draft.sqlContent } : {}) }); }
     catch (reason) { replace({ ...draft, problem: draft.columns.length ? errorMessage(reason) : text.emptyFields }); return; }
     try { owner.callbacks.onActivity(1); } catch (reason) { replace({ ...draft, file: undefined, problem: errorMessage(reason) }); return; }
     const previous = draft;
@@ -100,7 +110,7 @@ export function SqliteTableExportDialog({ intent, services = sqliteTableExportSe
   function execute(): void {
     if (!editable() || !draft.file || draft.done || consumed.current) return;
     let input: SqliteTableExportInput;
-    try { input = owner.intent.input({ format: draft.format, encoding: draft.encoding, columns: draft.columns, ...(draft.format === 'csv' ? { csvDelimiter: draft.csvDelimiter } : {}) }, draft.file.token, uid()); }
+    try { input = owner.intent.input({ format: draft.format, encoding: draft.encoding, columns: draft.columns, ...(draft.format === 'csv' ? { csvDelimiter: draft.csvDelimiter } : {}), ...(draft.format === 'sql' && draft.sqlContent !== undefined ? { sqlContent: draft.sqlContent } : {}) }, draft.file.token, uid()); }
     catch (reason) { replace({ ...draft, problem: errorMessage(reason) }); return; }
     try { owner.callbacks.onActivity(1); } catch (reason) { replace({ ...draft, file: undefined, problem: errorMessage(reason) }); return; }
     consumed.current = true; const chosen = { ...draft, problem: undefined }; replace(chosen); setProgress(undefined);
@@ -111,7 +121,7 @@ export function SqliteTableExportDialog({ intent, services = sqliteTableExportSe
       const output = checkSqliteTableExportOutput(await owner.services.execute(input)), changed = !owner.intent.current() || invalid.current;
       // 完整落盘成功是既成事实；晚到取消或页面变化不能把它改称未执行或自动重试。
       if (mounted.current && operation.current === active && !closed.current) replace({ ...live.current, done: { output, changed }, problem: undefined });
-      if (changed || closed.current || !mounted.current) { try { owner.callbacks.onCommitted?.(output, changed); } catch (reason) { cleanup(reason); } }
+      if (changed || closed.current || !mounted.current) { try { if (chosen.format === 'sql' && chosen.sqlContent !== undefined) owner.callbacks.onCommitted?.(output, changed, chosen.sqlContent); else owner.callbacks.onCommitted?.(output, changed); } catch (reason) { cleanup(reason); } }
     }).catch(reason => { if (mounted.current && !closed.current && operation.current === active) replace({ ...live.current, file: undefined, problem: errorMessage(reason) }); }).finally(async () => {
       // 两种结算顺序都要等：读取终结不能越过仍在等待的原取消ACK。
       if (active.cancel) await active.cancel;
@@ -141,25 +151,27 @@ export function SqliteTableExportDialog({ intent, services = sqliteTableExportSe
     return () => { mounted.current = false; unsubscribeIntent(); unsubscribe(); cancel(); document.removeEventListener('keydown', block, true); };
   }, []);
   const valid = current(), active = operation.current, disabled = busy || closing || !valid;
-  const sqlUnavailable = draft.format === 'sql' && (owner.intent.source.target.kind !== 'table' || !owner.intent.source.columns.some(column => !column.generated));
+  const structureOnly = draft.format === 'sql' && draft.sqlContent === 'structure', structureData = draft.format === 'sql' && draft.sqlContent === 'structure-data';
+  const sqlUnavailable = draft.format === 'sql' && !structureOnly && (owner.intent.source.target.kind !== 'table' || !owner.intent.source.columns.some(column => !column.generated));
   return <Modal title={text.title} wide onClose={close}><div className="modal-content" data-sqlite-table-export-dialog aria-busy={busy || closing}>
-    <p>{owner.intent.source.target.database}.{owner.intent.source.target.table}</p><p>{text.scope}</p><p className="warning-text">{text.committedOnly}</p><p className="muted small">{text.protocolHint}</p>
-    <section aria-label={text.conditions}><strong>{text.conditions}</strong>{owner.intent.query.filters.length ? <ul>{owner.intent.query.filters.map((filter, index) => <li key={index}>{filter.column} {browseText.operators[filter.operator]} {filter.value ? '[' + browseText.kinds[filter.value.kind] + '] ' + filter.value.value : ''}</li>)}</ul> : <p>{text.noConditions}</p>}<p>{owner.intent.query.mode === 'and' ? 'AND' : 'OR'}</p></section>
-    <section aria-label={text.sorts}><strong>{text.sorts}</strong>{owner.intent.query.sort.length ? <ol>{owner.intent.query.sort.map((rule, index) => <li key={index}>{rule.column} {rule.direction === 'asc' ? browseText.ascending : browseText.descending}</li>)}</ol> : <p>{text.noSorts}</p>}</section>
-    <div className="form-grid"><Field label={text.format}><select aria-label={text.format} disabled={disabled} value={draft.format} onChange={event => change({ format: event.target.value as Draft['format'], encoding: draft.encoding, csvDelimiter: draft.csvDelimiter })}><option value="csv">CSV</option><option value="json">JSON</option><option value="sql" disabled={owner.intent.source.target.kind !== 'table' || !owner.intent.source.columns.some(column => !column.generated)}>SQLite INSERT SQL</option><option value="xlsx">Excel（XLSX）</option></select></Field>
+    <p>{owner.intent.source.target.database}.{owner.intent.source.target.table}</p><p>{structureOnly ? text.structureScope : text.scope}</p>{!structureOnly && <><p className="warning-text">{text.committedOnly}</p><p className="muted small">{text.protocolHint}</p></>}
+    {structureOnly ? <p>{text.structureConditions}</p> : <><section aria-label={text.conditions}><strong>{text.conditions}</strong>{owner.intent.query.filters.length ? <ul>{owner.intent.query.filters.map((filter, index) => <li key={index}>{filter.column} {browseText.operators[filter.operator]} {filter.value ? '[' + browseText.kinds[filter.value.kind] + '] ' + filter.value.value : ''}</li>)}</ul> : <p>{text.noConditions}</p>}<p>{owner.intent.query.mode === 'and' ? 'AND' : 'OR'}</p></section>
+    <section aria-label={text.sorts}><strong>{text.sorts}</strong>{owner.intent.query.sort.length ? <ol>{owner.intent.query.sort.map((rule, index) => <li key={index}>{rule.column} {rule.direction === 'asc' ? browseText.ascending : browseText.descending}</li>)}</ol> : <p>{text.noSorts}</p>}</section></>}
+    <div className="form-grid"><Field label={text.format}><select aria-label={text.format} disabled={disabled} value={draft.format} onChange={event => change({ format: event.target.value as Draft['format'], encoding: draft.encoding, csvDelimiter: draft.csvDelimiter })}><option value="csv">CSV</option><option value="json">JSON</option><option value="sql">SQLite SQL</option><option value="xlsx">Excel（XLSX）</option></select></Field>
+      {draft.format === 'sql' && <Field label={text.sqlContent}><select aria-label={text.sqlContent} disabled={disabled} value={draft.sqlContent ?? 'data'} onChange={event => change({ format: draft.format, encoding: draft.encoding, csvDelimiter: draft.csvDelimiter, sqlContent: event.target.value as SqliteTableExportInput['sqlContent'] })}>{Object.entries(text.sqlContents).map(([value, label]) => <option key={value} value={value} disabled={owner.intent.source.target.kind !== 'table' && value !== 'structure'}>{label}</option>)}</select></Field>}
       <Field label={text.encoding}><select aria-label={text.encoding} disabled={disabled || draft.format === 'xlsx'} value={draft.encoding} onChange={event => change({ format: draft.format, encoding: event.target.value as Draft['encoding'], csvDelimiter: draft.csvDelimiter })}><option value="utf8">UTF-8</option><option value="utf16le">UTF-16LE</option><option value="gb18030">GB18030</option></select></Field>{draft.format === 'csv' && <CsvExportDelimiterField value={draft.csvDelimiter} disabled={disabled} onChange={csvDelimiter => change({ format: draft.format, encoding: draft.encoding, csvDelimiter })}/>}</div>
-    {draft.format === 'xlsx' && <UsageHelp><p>{text.xlsxEncoding}</p><p>{text.xlsxLimits}</p></UsageHelp>}{draft.format === 'sql' && <><p className="warning-text">{text.sqlScope}</p><p className="muted small">{text.generatedHint}</p></>}{owner.intent.source.target.kind !== 'table' && <p className="muted small">{text.viewSql}</p>}
-    <section aria-label={text.fields}><strong>{text.fields}</strong><UsageHelp><p>{text.allFields}</p><p>{text.atomic}</p></UsageHelp>
-      <button type="button" disabled={disabled} onClick={() => changeFields(owner.intent.source.columns.filter(column => draft.format !== 'sql' || !column.generated).map(column => column.name))}>{text.selectAllFields}</button><button type="button" disabled={disabled} onClick={() => changeFields([])}>{text.clearFields}</button>
-      <div className="check-row">{owner.intent.source.columns.map(column => <label className="check" key={column.name}><input type="checkbox" aria-label={text.fieldLabel(column.name)} checked={draft.columns.includes(column.name)} disabled={disabled || draft.format === 'sql' && !!column.generated} onChange={event => selectField(column.name, event.target.checked)}/>{column.name} · {column.declaredType || browseText.dynamic}{column.generated ? ` · ${text.generated}` : ''}</label>)}</div>
+    {draft.format === 'xlsx' && <UsageHelp><p>{text.xlsxEncoding}</p><p>{text.xlsxLimits}</p></UsageHelp>}{draft.format === 'sql' && <><p className="warning-text">{structureOnly ? text.structureSql : structureData ? text.structureDataSql : text.sqlScope}</p>{!structureOnly && <p className="muted small">{text.generatedHint}</p>}</>}{owner.intent.source.target.kind !== 'table' && <p className="muted small">{text.viewSql}</p>}
+    {structureOnly ? <p>{text.structureNoFields}</p> : <section aria-label={text.fields}><strong>{text.fields}</strong><UsageHelp><p>{structureData ? text.structureDataFields : text.allFields}</p><p>{text.atomic}</p></UsageHelp>
+      <button type="button" disabled={disabled || structureData} onClick={() => { if (!structureData) changeFields(owner.intent.source.columns.filter(column => draft.format !== 'sql' || !column.generated).map(column => column.name)); }}>{text.selectAllFields}</button><button type="button" disabled={disabled || structureData} onClick={() => { if (!structureData) changeFields([]); }}>{text.clearFields}</button>
+      <div className="check-row">{owner.intent.source.columns.map(column => <label className="check" key={column.name}><input type="checkbox" aria-label={text.fieldLabel(column.name)} checked={draft.columns.includes(column.name)} disabled={disabled || structureData || draft.format === 'sql' && !!column.generated} onChange={event => selectField(column.name, event.target.checked)}/>{column.name} · {column.declaredType || browseText.dynamic}{column.generated ? ` · ${text.generated}` : ''}</label>)}</div>
       <ol aria-label={text.fieldOrder}>{draft.columns.map((name, position) => <li key={name}><span>{name}</span> <button type="button" aria-label={text.fieldUp(name)} disabled={disabled || position === 0} onClick={() => moveField(name, -1)}>{text.moveUp}</button> <button type="button" aria-label={text.fieldDown(name)} disabled={disabled || position + 1 === draft.columns.length} onClick={() => moveField(name, 1)}>{text.moveDown}</button></li>)}</ol>
       {!draft.columns.length && <p className="warning-text">{text.emptyFields}</p>}
-    </section>
-    <button className="file-picker" aria-label={text.choose} disabled={disabled || sqlUnavailable || !draft.columns.length} onClick={choose}>{draft.file ? `${text.chooseAgain}：${draft.file.name}` : text.choose}</button>
+    </section>}
+    <button className="file-picker" aria-label={text.choose} disabled={disabled || sqlUnavailable || !structureOnly && !draft.columns.length} onClick={choose}>{draft.file ? `${text.chooseAgain}：${draft.file.name}` : text.choose}</button>
     {!draft.file && !draft.done && <p className="muted small">{text.fileRequired}</p>}
-    {busy && <Spinner text={active?.kind === 'choose' ? text.choosing : text.running}/>} {closing && <p>{text.closing}</p>}
+    {busy && <Spinner text={active?.kind === 'choose' ? text.choosing : structureOnly ? text.structureRunning : text.running}/>} {closing && <p>{text.closing}</p>}
     {progress && <div className="transfer-progress"><span>{progress.message}</span><progress value={progress.progress} max={100}/></div>}
-    {draft.done && <div className="success-box">{draft.done.changed ? text.committedChanged(draft.done.output.rows) : text.completed(draft.done.output.rows)}</div>}
+    {draft.done && <div className="success-box">{structureOnly ? draft.done.changed ? text.structureCommittedChanged : text.structureCompleted : draft.done.changed ? text.committedChanged(draft.done.output.rows) : text.completed(draft.done.output.rows)}</div>}
     <ErrorBox message={draft.done ? undefined : sqlUnavailable ? owner.intent.source.target.kind !== 'table' ? text.viewSql : text.noSqlFields : stale || !valid ? text.stale : draft.problem}/>
-  </div><footer className="modal-footer"><button aria-label={text.close} disabled={closing} onClick={close}>{draft.done ? text.done : text.close}</button><span className="grow"/>{busy && active?.kind === 'export' && <button aria-label={text.stop} disabled={closing || active.cancelled} onClick={() => { if (committed.current === ticket) cancel(active); }}>{text.cancel}</button>}<button className="primary" aria-label={text.start} disabled={disabled || !draft.file || !!draft.done || consumed.current || sqlUnavailable || !draft.columns.length} onClick={execute}>{text.start}</button></footer></Modal>;
+  </div><footer className="modal-footer"><button aria-label={text.close} disabled={closing} onClick={close}>{draft.done ? text.done : text.close}</button><span className="grow"/>{busy && active?.kind === 'export' && <button aria-label={text.stop} disabled={closing || active.cancelled} onClick={() => { if (committed.current === ticket) cancel(active); }}>{text.cancel}</button>}<button className="primary" aria-label={text.start} disabled={disabled || !draft.file || !!draft.done || consumed.current || sqlUnavailable || !structureOnly && !draft.columns.length} onClick={execute}>{text.start}</button></footer></Modal>;
 }

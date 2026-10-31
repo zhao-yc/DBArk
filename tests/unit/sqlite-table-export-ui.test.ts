@@ -45,3 +45,31 @@ describe('SQLite 全部筛选行意图不借 MySQL 元数据或当前页样本',
     const hostile = { fileCommitted: true }; Object.defineProperty(hostile, 'rows', { get() { throw Error('不得读取访问器'); }, enumerable: true }); expect(() => checkSqliteTableExportOutput(hostile)).toThrow();
   });
 });
+
+describe('SQLite SQL 内容模式的准确投影与旧合同兼容', () => {
+  it('旧SQL数据请求省略sqlContent，明确选择data后才携带该字段', () => {
+    const intent = new SqliteTableExportIntent(page(), applied(), [], () => true), data = { format: 'sql' as const, encoding: 'utf8' as const, columns: ['mixed', 'id'] };
+    expect(Object.hasOwn(intent.input(data, 'file', 'task'), 'sqlContent')).toBe(false); expect(intent.input({ ...data, sqlContent: 'data' }, 'file', 'task')).toHaveProperty('sqlContent', 'data');
+  });
+  it.each(['table', 'view'] as const)('%s仅结构固定空投影，准确schema/target仍沿原冻结意图', kind => {
+    const actual = page(); actual.target.kind = kind; const intent = new SqliteTableExportIntent(actual, applied(), [], () => true);
+    const input = intent.input({ format: 'sql', encoding: 'utf8', sqlContent: 'structure', columns: [] }, 'file', 'task'); expect(input).toMatchObject({ table: actual.target.table, schemaKey: actual.schemaKey, columns: [], sqlContent: 'structure', format: 'sql' });
+    expect(() => intent.input({ format: 'sql', encoding: 'utf8', sqlContent: 'structure', columns: ['id'] }, 'file', 'task')).toThrow();
+    if (kind === 'view') { expect(() => intent.input({ format: 'sql', encoding: 'utf8', columns: ['id'] }, 'file', 'task')).toThrow('视图'); expect(() => intent.input({ format: 'sql', encoding: 'utf8', sqlContent: 'data', columns: ['id'] }, 'file', 'task')).toThrow('视图'); expect(() => intent.input({ format: 'sql', encoding: 'utf8', sqlContent: 'structure-data', columns: ['id', 'mixed'] }, 'file', 'task')).toThrow('视图'); }
+  });
+  it('结构及数据接受全部非生成列显式重排，拒绝子集、重复、未知或生成列', () => {
+    const intent = new SqliteTableExportIntent(page(), applied(), [], () => true), base = { format: 'sql' as const, encoding: 'utf8' as const, sqlContent: 'structure-data' as const };
+    expect(intent.input({ ...base, columns: ['mixed', 'id'] }, 'file', 'task').columns).toEqual(['mixed', 'id']);
+    for (const columns of [[], ['id'], ['id', 'id'], ['id', 'mixed', 'g'], ['id', '不存在']]) expect(() => intent.input({ ...base, columns }, 'file', 'task')).toThrow();
+  });
+  it('非SQL或显式undefined不能夹带内容字段，数据模式仍不能空列', () => {
+    const intent = new SqliteTableExportIntent(page(), applied(), [], () => true);
+    for (const format of ['csv', 'json', 'xlsx'] as const) expect(() => intent.input({ format, encoding: 'utf8', columns: ['id'], sqlContent: 'structure' }, 'file', 'task')).toThrow();
+    expect(() => intent.input({ format: 'sql', encoding: 'utf8', columns: ['id'], sqlContent: undefined }, 'file', 'task')).toThrow();
+    expect(() => intent.input({ format: 'sql', encoding: 'utf8', columns: [], sqlContent: 'data' }, 'file', 'task')).toThrow();
+  });
+  it('结构模式也不能复活过期来源，0行可信提交回执仍表示已保存文件', () => {
+    const actual = page(), intent = new SqliteTableExportIntent(actual, applied(), [], () => true); actual.schemaKey = 'b'.repeat(64); expect(() => intent.input({ format: 'sql', encoding: 'utf8', columns: [], sqlContent: 'structure' }, 'file', 'task')).toThrow('失效');
+    expect(checkSqliteTableExportOutput({ rows: 0, fileCommitted: true })).toEqual({ rows: 0, fileCommitted: true });
+  });
+});

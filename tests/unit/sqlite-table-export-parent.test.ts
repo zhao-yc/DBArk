@@ -28,6 +28,18 @@ function fixture() {
 }
 
 describe('SQLite 全量导出 parent 的真实自有busy与来源失效', () => {
+  it('原JSX完成回调区分结构文件和数据行数，晚成功不把结构伪称0行数据', () => {
+    const callbacks: string[] = [];
+    /** 直接抽取实际组件属性，避免另写一个格式化函数掩盖父页接线遗漏。 */
+    function find(node: ts.Node): void {
+      if (ts.isJsxSelfClosingElement(node) && node.tagName.getText(file) === 'SqliteTableExportDialog') for (const property of node.attributes.properties) if (ts.isJsxAttribute(property) && property.name.getText(file) === 'onCommitted' && property.initializer && ts.isJsxExpression(property.initializer) && property.initializer.expression) callbacks.push(property.initializer.expression.getText(file));
+      ts.forEachChild(node, find);
+    }
+    find(file); expect(callbacks).toHaveLength(1); const notify = vi.fn(), context = createContext({ exportText, useWorkspace: { getState: () => ({ notify }) } });
+    runInContext(ts.transpileModule('globalThis.complete=' + callbacks[0], { compilerOptions: { target: ts.ScriptTarget.ES2022 } }).outputText, context);
+    const complete = (context as any).complete; complete({ rows: 0, fileCommitted: true }, true, 'structure'); expect(notify).toHaveBeenLastCalledWith(exportText.structureCommittedChanged);
+    for (const content of [undefined, 'data', 'structure-data']) { complete({ rows: 3, fileCommitted: true }, true, content); expect(notify).toHaveBeenLastCalledWith(exportText.committedChanged(3)); }
+  });
   it('chooser/导出自有busy同步通知不使意图自失效，结束仅释放原租约', () => {
     const f = fixture(); expect(f.owner.intent.current()).toBe(true); f.vm.handlers.fullExportActivity(f.owner, 1); expect(f.acquisitionObserved).toEqual([true]); expect(f.owner.intent.current()).toBe(true); expect(f.workspace.activeJobs.tab).toBe(true);
     f.vm.handlers.fullExportActivity(f.owner, -1); expect(f.releases).toHaveBeenCalledOnce(); expect(f.workspace.activeJobs.tab).toBe(false); expect(f.owner.intent.current()).toBe(true);

@@ -11,6 +11,7 @@ import { csvExportDelimiter } from '../shared/csvExport';
 import { csvCell, csvHeader } from '../engine/files';
 import { sqliteWorkspaceValue } from './sqliteQuerySession';
 import { buildSqliteTableSelect, quoteSqliteIdentifier, readSqliteTableCatalogue, type SqliteTableBrowseControl } from './sqliteTableBrowse';
+import { readSqliteSchemaExport } from './sqliteSchemaExport';
 
 export const sqliteTableExportLimits = { fileBytes: 10 * 1024 ** 3 } as const;
 /** 只有Main同进程可注入原窗口、目标复核及跨入口预留，公共IPC没有这些能力。 */
@@ -179,7 +180,7 @@ export class SqliteTableExportFile {
   }
 }
 
-/** 单条无LIMIT SELECT依次编码到文件；导出选择列和typed筛选/排序复用分页构建器。 */
+/** 有数据时只用单条无LIMIT SELECT流写；结构及附属对象沿同一只读快照，原data模式保持INSERT-only。 */
 export async function prepareSqliteTableExport(driver: SqliteDriverSession, input: SqliteTableExportRequest, file: SqliteTableExportFile, control: SqliteTableBrowseControl & { progress(rows: number): void }): Promise<number> {
   if (!driver.readOnly) throw Error('SQLite完整导出必须使用独立物理只读连接');
   const { filePath: _path, assertCurrent: _owner, validateDestination: _destination, retainDestinationUntil: _retain, ...publicInput } = input;
@@ -189,20 +190,27 @@ export async function prepareSqliteTableExport(driver: SqliteDriverSession, inpu
     control.check(); await driver.execute('BEGIN'); control.check();
     const source = await readSqliteTableCatalogue(driver, parsed.table, control);
     if (source.schemaKey !== parsed.schemaKey) throw Error('SQLite源表结构已变化，请刷新表浏览后重新导出');
+    const structure = parsed.format === 'sql' && (parsed.sqlContent === 'structure' || parsed.sqlContent === 'structure-data'), hasData = !(structure && parsed.sqlContent === 'structure');
     const names = new Map(source.columns.map(column => [column.name, column])), selected: SqliteTableColumn[] = parsed.columns.map(name => { const column = names.get(name); if (!column) throw Error('SQLite导出列已不存在，请刷新表结构'); return column; });
-    if (parsed.format === 'sql' && (source.kind !== 'table' || selected.some(column => column.generated))) throw Error('SQLite INSERT导出不接受视图或显式生成列，请改用CSV/JSON/XLSX或重新选择普通列');
+    if (parsed.format === 'sql' && (hasData && source.kind !== 'table' || selected.some(column => column.generated))) throw Error('SQLite INSERT导出不接受视图或显式生成列，请改用CSV/JSON/XLSX或重新选择普通列');
+    if (structure && hasData) {
+      const writable = source.columns.filter(column => !column.generated);
+      if (selected.length !== writable.length || writable.some(column => !parsed.columns.includes(column.name))) throw Error('SQLite结构及数据导出必须恰好选择全部非生成列，允许调整列顺序');
+    }
+    const schema = structure ? await readSqliteSchemaExport(driver, parsed.table, source, control) : undefined;
     // 只改变投影做原字节校验；WHERE/ORDER BY始终引用原表全限定列，保留原collation与动态类型。
-    const plan = buildSqliteTableSelect({ connectionId: parsed.connectionId, database: 'main', table: parsed.table, taskId: parsed.taskId, mode: parsed.mode, filters: parsed.filters, sort: parsed.sort, limit: 1, offset: 0 }, source.columns, parsed.columns, true,
-      column => 'CASE WHEN typeof(' + column + ")='text' THEN " + sqliteExportTextFunction + '(' + column + ', CAST(' + column + ' AS BLOB)) ELSE ' + column + ' END');
+    const plan = hasData ? buildSqliteTableSelect({ connectionId: parsed.connectionId, database: 'main', table: parsed.table, taskId: parsed.taskId, mode: parsed.mode, filters: parsed.filters, sort: parsed.sort, limit: 1, offset: 0 }, source.columns, parsed.columns, true,
+      column => 'CASE WHEN typeof(' + column + ")='text' THEN " + sqliteExportTextFunction + '(' + column + ', CAST(' + column + ' AS BLOB)) ELSE ' + column + ' END') : undefined;
     await file.open(); control.check(); const delimiter = csvExportDelimiter(parsed.format, parsed.csvDelimiter);
     if (parsed.format !== 'xlsx' && parsed.encoding === 'utf16le') await file.write('\uFEFF');
     if (parsed.format === 'csv') await file.write(selected.map(column => csvHeader(column.name, delimiter)).join(delimiter) + '\r\n');
     if (parsed.format === 'json') await file.write('[\n');
+    if (schema) await file.write(schema.beforeData);
     if (channel) {
       excel = exportExcelFile({ filePath: input.filePath, columns: selected.map(column => ({ name: column.name, type: 'SQLITE' })), rows: channel, deferredAtomicFile: file.excelFile(), checkCancelled: control.check, onCommitStart: () => { throw Error('SQLite Excel不能自行发布文件'); } });
       void excel.catch(reason => { channel.fail(reason); });
     }
-    const result = await driver.streamRead(plan.sql, {
+    const result = plan ? await driver.streamRead(plan.sql, {
       parameters: plan.parameters, batchRows: 100,
       onStatement: statement => { control.check(); if (statement.index !== 0 || statement.columns.length !== selected.length || statement.columns.some((column, index) => column.name !== selected[index].name)) throw Error('SQLite导出结果与真实选择列不一致'); },
       onBatch: async batch => {
@@ -218,10 +226,11 @@ export async function prepareSqliteTableExport(driver: SqliteDriverSession, inpu
           count++; if (count % 100 === 0) control.progress(count);
         }
       },
-    });
-    if (result.statements.length !== 1 || result.statements[0].truncated || result.statements[0].rows !== count) throw Error('SQLite完整导出没有取得完整原生终态，文件未发布');
+    }) : undefined;
+    if (result && (result.statements.length !== 1 || result.statements[0].truncated || result.statements[0].rows !== count)) throw Error('SQLite完整导出没有取得完整原生终态，文件未发布');
     channel?.end(); if (excel && (await excel).rows !== count) throw Error('SQLite Excel导出行数与原结果不一致');
     if (parsed.format === 'json') await file.write('\n]\n');
+    if (schema) await file.write(schema.afterData);
   } catch (reason) { failed = true; failure = reason; channel?.fail(reason); if (excel) await excel.catch(() => {}); }
   control.beginCleanup();
   if (driver.isUsable && driver.transaction === true) {

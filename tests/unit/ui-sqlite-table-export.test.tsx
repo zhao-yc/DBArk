@@ -88,9 +88,11 @@ describe('全量筛选行正式对话框真实React RAM（非原生文件/数据
   it('TaskEvent completed不替代IPC与原文件资源收尾，另task事件忽略', async () => { const pending = deferred<SqliteTableExportOutput>(), run = vi.fn((_input: Parameters<SqliteTableExportServices['execute']>[0]) => pending.promise), f = await mount({ execute: run }); await chooseFile(); await click(text.start); const id = run.mock.calls[0][0].taskId; await f.emit({ taskId: 'other', status: 'completed', progress: 100, message: '不属于本例' }); expect(document.body.textContent).not.toContain('不属于本例'); await f.emit({ taskId: id, status: 'completed', progress: 100, message: '原任务事件已到' }); expect(document.body.textContent).toContain('原任务事件已到'); expect(document.body.textContent).not.toContain(text.completed(1105)); expect(picker().disabled).toBe(true); await act(async () => pending.resolve({ rows: 1105, fileCommitted: true })); expect(document.body.textContent).toContain(text.completed(1105)); });
   it('取消请求错误汇报父级但不提前释放原导出', async () => { const pending = deferred<SqliteTableExportOutput>(), f = await mount({ execute: vi.fn(() => pending.promise), cancel: vi.fn(async () => { throw Error('取消网络错误'); }) }); await chooseFile(); await click(text.start); await click(text.cancel); expect(f.onCleanupError).toHaveBeenCalledWith('取消网络错误'); expect(picker().disabled).toBe(true); await act(async () => pending.reject(Error('原导出结束'))); expect(picker().disabled).toBe(false); expect(button(text.start).disabled).toBe(true); });
   it('同组件替换意图不能复用已选文件，旧close回调不消耗新草稿', async () => { const f = await mount(); await chooseFile(); const old = callback(button(text.close)); await f.replaceIntent(); expect(button(text.start).disabled).toBe(true); await act(async () => old()); expect(f.onClose).not.toHaveBeenCalled(); expect(f.execute).not.toHaveBeenCalled(); await click(text.close); expect(f.onClose).toHaveBeenCalledOnce(); });
-  it('视图SQL选项禁用且程序投递也拒绝，CSVJSONXLSX保持正式入口', async () => {
-    const f = await mount({}, 'view'); expect(select(text.format).querySelectorAll('option').find(option => option.value === 'sql')!.disabled).toBe(true); expect(document.body.textContent).toContain(text.viewSql);
-    await act(async () => callback(select(text.format), 'onChange')({ target: { value: 'sql' } })); expect(select(text.format).value).toBe('csv'); expect(f.choose).not.toHaveBeenCalled(); expect(f.execute).not.toHaveBeenCalled();
+  it('视图SQL仅新增structure能力，原data/structure-data选项禁用且程序投递也拒绝，CSVJSONXLSX保持正式入口', async () => {
+    const f = await mount({}, 'view'); expect(select(text.format).querySelectorAll('option').find(option => option.value === 'sql')!.disabled).toBe(false); expect(document.body.textContent).toContain(text.viewSql);
+    await change(text.format, 'sql'); expect(select(text.sqlContent).value).toBe('structure'); expect(select(text.sqlContent).querySelectorAll('option').filter(option => option.value !== 'structure').every(option => option.disabled)).toBe(true);
+    for (const value of ['data', 'structure-data']) { await act(async () => callback(select(text.sqlContent), 'onChange')({ target: { value } })); expect(select(text.sqlContent).value).toBe('structure'); }
+    expect(f.choose).not.toHaveBeenCalled(); expect(f.execute).not.toHaveBeenCalled();
     await change(text.format, 'json'); await chooseFile(); await click(text.start); expect(f.execute.mock.calls[0][0].format).toBe('json');
   });
 });
@@ -149,5 +151,44 @@ describe('全部筛选行导出字段选择及顺序真实React RAM', () => {
     await act(async () => oldGenerated({ target: { checked: true } })); expect(field('g').checked).toBe(false);
     await chooseFile(); await click(text.start); expect(f.execute.mock.calls[0][0]).toMatchObject({ format: 'sql', columns: ['id', 'name'] });
     await change(text.format, 'json'); expect(field('g').disabled).toBe(false); await checkField('g', true); expect(button(text.start).disabled).toBe(true);
+  });
+});
+
+describe('SQLite SQL 结构内容真实React RAM及原异步归属', () => {
+  it('table SQL默认仍是旧仅数据，未显式选内容时IPC省略sqlContent', async () => {
+    const f = await mount(); await change(text.format, 'sql'); expect(select(text.sqlContent).value).toBe('data'); expect(document.body.textContent).toContain(text.sqlScope); expect(f.execute).not.toHaveBeenCalled(); await chooseFile(); await click(text.start); expect(f.execute.mock.calls[0][0]).toMatchObject({ format: 'sql', columns: ['id'] }); expect(Object.hasOwn(f.execute.mock.calls[0][0], 'sqlContent')).toBe(false);
+  });
+  it('仅结构不展示筛选数据承诺或字段投影，明确选文件后0行提交显示结构成功', async () => {
+    const execute = vi.fn(async (_input: Parameters<SqliteTableExportServices['execute']>[0]): Promise<SqliteTableExportOutput> => ({ rows: 0, fileCommitted: true })); await mount({ execute }); await change(text.format, 'sql'); await change(text.sqlContent, 'structure');
+    expect(document.body.textContent).toContain(text.structureConditions); expect(document.body.textContent).toContain(text.structureNoFields); expect(document.body.textContent).toContain(text.structureSql); expect(document.body.textContent).not.toContain(text.scope); expect(document.body.textContent).not.toContain('9007199254740993'); expect(document.querySelector('[aria-label="' + text.fields + '"]')).toBeNull(); expect(picker().disabled).toBe(false); expect(execute).not.toHaveBeenCalled();
+    await chooseFile(); await click(text.start); expect(execute).toHaveBeenCalledOnce(); expect(execute.mock.calls[0][0]).toMatchObject({ format: 'sql', sqlContent: 'structure', columns: [] }); expect(document.body.textContent).toContain(text.structureCompleted); expect(document.body.textContent).not.toContain(text.completed(0));
+  });
+  it('结构及数据自动补齐非生成列并锁勾选，保重排且每次重排废旧文件；返回data恢复字段草稿', async () => {
+    const f = await mount({}, 'table', projectionSource()); await change(text.format, 'sql'); await checkField('id', false); expect(orderedFields()).toEqual(['name']); await change(text.sqlContent, 'structure-data');
+    expect(orderedFields()).toEqual(['name', 'id']); for (const name of ['id', 'name', 'g']) expect(field(name).disabled).toBe(true); expect(field('g').checked).toBe(false); expect(button(text.clearFields).disabled).toBe(true); expect(button(text.selectAllFields).disabled).toBe(true);
+    await act(async () => { callback(field('id'), 'onChange')({ target: { checked: false } }); callback(button(text.clearFields))(); }); expect(orderedFields()).toEqual(['name', 'id']);
+    await chooseFile(); await moveField('id', '上移'); expect(button(text.start).disabled).toBe(true); expect(orderedFields()).toEqual(['id', 'name']); await chooseFile(); await click(text.start); expect(f.execute.mock.calls[0][0]).toMatchObject({ sqlContent: 'structure-data', columns: ['id', 'name'], filters: f.intent.query.filters, sort: f.intent.query.sort });
+    await change(text.sqlContent, 'data'); expect(orderedFields()).toEqual(['name']); expect(field('name').disabled).toBe(false); expect(button(text.start).disabled).toBe(true);
+  });
+  it('模式ABA不复活文件，旧模式/字段/执行回调不能改后继draft', async () => {
+    const f = await mount({}, 'table', projectionSource()); await change(text.format, 'sql'); await chooseFile(); const oldStart = callback(button(text.start)), oldMode = callback(select(text.sqlContent), 'onChange'), oldField = callback(field('name'), 'onChange');
+    await change(text.sqlContent, 'structure'); await change(text.sqlContent, 'data'); await act(async () => { oldStart(); oldMode({ target: { value: 'structure-data' } }); oldField({ target: { checked: false } }); });
+    expect(select(text.sqlContent).value).toBe('data'); expect(orderedFields()).toEqual(['id', 'name']); expect(button(text.start).disabled).toBe(true); expect(f.execute).not.toHaveBeenCalled(); await chooseFile(); await click(text.start); expect(f.execute.mock.calls[0][0]).toHaveProperty('sqlContent', 'data');
+  });
+  it('选择取消完整恢复结构及数据模式、字段顺序和旧文件，不自动执行', async () => {
+    const f = await mount({}, 'table', projectionSource()); await change(text.format, 'sql'); await change(text.sqlContent, 'structure-data'); await moveField('name', '上移'); await chooseFile(); f.choose.mockResolvedValueOnce(null); await chooseFile();
+    expect(select(text.sqlContent).value).toBe('structure-data'); expect(orderedFields()).toEqual(['name', 'id']); expect(picker().textContent).toContain('synthetic.csv'); expect(button(text.start).disabled).toBe(false); expect(f.execute).not.toHaveBeenCalled(); await click(text.start); expect(f.execute.mock.calls[0][0]).toMatchObject({ sqlContent: 'structure-data', columns: ['name', 'id'], fileToken: 'file-token' });
+  });
+  it('chooser等待不接受模式变更，来源失效后的迟到文件不会交给结构draft', async () => {
+    const choice = deferred<FileChoice | null>(), f = await mount({ choose: vi.fn(() => choice.promise) }); await change(text.format, 'sql'); await change(text.sqlContent, 'structure'); const mode = callback(select(text.sqlContent), 'onChange'); await chooseFile(); expect(select(text.sqlContent).disabled).toBe(true); await act(async () => mode({ target: { value: 'data' } })); expect(select(text.sqlContent).value).toBe('structure'); await f.invalidate(); await act(async () => choice.resolve({ token: 'late', name: 'late.sql' })); expect(picker().textContent).not.toContain('late.sql'); expect(button(text.start).disabled).toBe(true); expect(f.execute).not.toHaveBeenCalled();
+  });
+  it('结构提交0行事实不被晚取消改写，原IPC先结束仍等待准确cancelACK', async () => {
+    const result = deferred<SqliteTableExportOutput>(), ack = deferred<unknown>(), f = await mount({ execute: vi.fn(() => result.promise), cancel: vi.fn(() => ack.promise) }); await change(text.format, 'sql'); await change(text.sqlContent, 'structure'); await chooseFile(); await click(text.start); await click(text.stop); await act(async () => result.resolve({ rows: 0, fileCommitted: true })); expect(document.body.textContent).toContain(text.structureCompleted); expect(picker().disabled).toBe(true); expect(f.onActivity.mock.calls).toEqual([[1], [-1], [1]]); await act(async () => ack.resolve(undefined)); expect(f.onActivity.mock.calls).toEqual([[1], [-1], [1], [-1]]); expect(button(text.start).disabled).toBe(true);
+  });
+  it('仅结构来源变化后成功仍通知准确第三参，回执不以行数伪报失败', async () => {
+    const result = deferred<SqliteTableExportOutput>(), f = await mount({ execute: vi.fn(() => result.promise) }); await change(text.format, 'sql'); await change(text.sqlContent, 'structure'); await chooseFile(); await click(text.start); await f.invalidate(); await act(async () => result.resolve({ rows: 0, fileCommitted: true })); expect(document.body.textContent).toContain(text.structureCommittedChanged); expect(f.onCommitted).toHaveBeenCalledWith({ rows: 0, fileCommitted: true }, true, 'structure'); expect(button(text.start).disabled).toBe(true);
+  });
+  it('view仅结构可保存SQL，返回交换格式时不夹带sqlContent且恢复合理列', async () => {
+    const execute = vi.fn(async (_input: Parameters<SqliteTableExportServices['execute']>[0]): Promise<SqliteTableExportOutput> => ({ rows: 0, fileCommitted: true })); await mount({ execute }, 'view'); await change(text.format, 'sql'); expect(select(text.sqlContent).value).toBe('structure'); expect(execute).not.toHaveBeenCalled(); await chooseFile(); await click(text.start); expect(execute).toHaveBeenCalledOnce(); expect(execute.mock.calls[0][0]).toMatchObject({ sqlContent: 'structure', columns: [] }); await change(text.format, 'json'); expect(orderedFields()).toEqual(['id', 'g']); await chooseFile(); await click(text.start); expect(execute).toHaveBeenCalledTimes(2); expect(Object.hasOwn(execute.mock.calls[1][0], 'sqlContent')).toBe(false); expect(execute.mock.calls[1][0].columns).toEqual(['id', 'g']);
   });
 });

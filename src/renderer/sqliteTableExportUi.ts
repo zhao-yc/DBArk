@@ -5,7 +5,7 @@ import type { SqliteTableQuery } from './sqliteTableBrowser';
 import { checkTableFilteredExportOutput } from './tableFilteredExportUi';
 import { sqliteTableExportZh as text } from './locales/sqliteTableExport.zh-CN';
 
-export type SqliteTableExportOptions = Pick<SqliteTableExportInput, 'format' | 'encoding' | 'csvDelimiter' | 'columns'>;
+export type SqliteTableExportOptions = Pick<SqliteTableExportInput, 'format' | 'encoding' | 'csvDelimiter' | 'columns' | 'sqlContent'>;
 export interface SqliteExportSource { target: SqliteTablePage['target']; columns: readonly { name: string; declaredType: string; generated: boolean }[]; schemaKey: string; }
 /** 来源仅保留元数据，不把当前页行值当作完整导出的文件数据。 */
 function source(page: SqliteTablePage): SqliteExportSource {
@@ -22,12 +22,15 @@ function source(page: SqliteTablePage): SqliteExportSource {
 /** 递归冻结准确条件与列目录，外部后改草稿不能改变已捕获请求。 */
 function freeze<T>(value: T): T { if (value && typeof value === 'object') { for (const child of Object.values(value)) freeze(child); Object.freeze(value); } return value; }
 /** 选择是 SQLite 文件真实列名的显式顺序；SQL 只允许原 table 的非生成列。 */
-export function selectSqliteExportColumns(source: SqliteExportSource, options: Pick<SqliteTableExportOptions, 'format' | 'columns'>): string[] {
+export function selectSqliteExportColumns(source: SqliteExportSource, options: Pick<SqliteTableExportOptions, 'format' | 'columns' | 'sqlContent'>): string[] {
+  if (Object.hasOwn(options, 'sqlContent') && (options.format !== 'sql' || !['data', 'structure', 'structure-data'].includes(options.sqlContent ?? ''))) throw Error(text.invalid);
+  if (options.format === 'sql' && options.sqlContent === 'structure') { if (!Array.isArray(options.columns) || options.columns.length) throw Error(text.invalid); return []; }
   if (options.format === 'sql' && source.target.kind !== 'table') throw Error(text.viewSql);
   if (options.format === 'sql' && !source.columns.some(column => !column.generated)) throw Error(text.noSqlFields);
   if (!Array.isArray(options.columns) || !options.columns.length) throw Error(text.emptyFields);
   const names = new Set(source.columns.map(column => column.name));
   if (new Set(options.columns).size !== options.columns.length || options.columns.some(name => !names.has(name) || options.format === 'sql' && source.columns.find(column => column.name === name)?.generated)) throw Error(text.invalid);
+  if (options.format === 'sql' && options.sqlContent === 'structure-data' && options.columns.length !== source.columns.filter(column => !column.generated).length) throw Error(text.structureDataFields);
   return [...options.columns];
 }
 /** 从准确当前页和已应用配置捕获意图；每次观察均留下来源 ABA 的永久失效墓碑。 */
@@ -57,7 +60,7 @@ export class SqliteTableExportIntent {
     if (!this.current()) throw Error(text.stale);
     if (options.format !== 'csv' && options.csvDelimiter !== undefined) throw Error(text.invalid);
     const columns = selectSqliteExportColumns(this.source, options);
-    return sqliteTableExportSchema.parse({ connectionId: this.source.target.connectionId, database: 'main', table: this.source.target.table, schemaKey: this.source.schemaKey, mode: this.query.mode, filters: structuredClone(this.query.filters), sort: structuredClone(this.query.sort), columns, format: options.format, encoding: options.format === 'xlsx' ? 'utf8' : options.encoding, ...(options.format === 'csv' && options.csvDelimiter !== undefined ? { csvDelimiter: options.csvDelimiter } : {}), fileToken, taskId });
+    return sqliteTableExportSchema.parse({ connectionId: this.source.target.connectionId, database: 'main', table: this.source.target.table, schemaKey: this.source.schemaKey, mode: this.query.mode, filters: structuredClone(this.query.filters), sort: structuredClone(this.query.sort), columns, format: options.format, encoding: options.format === 'xlsx' ? 'utf8' : options.encoding, ...(options.format === 'csv' && options.csvDelimiter !== undefined ? { csvDelimiter: options.csvDelimiter } : {}), ...(options.format === 'sql' && options.sqlContent !== undefined ? { sqlContent: options.sqlContent } : {}), fileToken, taskId });
   }
 }
 /** 复用完整原子提交回执校验；任务进度与取消意图不能取代已保存事实。 */

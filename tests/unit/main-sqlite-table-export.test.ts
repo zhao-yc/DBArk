@@ -37,8 +37,26 @@ describe('SQLite全部筛选行导出严格合同', () => {
       expect(message).toContain('SQLite'); expect(message).not.toContain('9007199254740993'); expect(message).not.toContain('private');
     }
   });
+  it('SQL内容显式区分结构和数据，旧省略请求不变；无意义或空投影组合在IPC门拒绝', () => {
+    const sql = { ...input, format: 'sql' };
+    expect(validateCommand('sqlite.tableExport', sql)).toEqual(sql);
+    for (const sqlContent of ['data', 'structure-data']) expect(validateCommand('sqlite.tableExport', { ...sql, sqlContent })).toEqual({ ...sql, sqlContent });
+    expect(validateCommand('sqlite.tableExport', { ...sql, sqlContent: 'structure', columns: [] })).toEqual({ ...sql, sqlContent: 'structure', columns: [] });
+    for (const patch of [{ sqlContent: undefined }, { sqlContent: 'all' }, { sqlContent: 'structure' }, { sqlContent: 'structure-data', columns: [] }, { sqlContent: 'data', columns: [] }, { sqlContent: 'structure', columns: [], format: 'csv' }, { sqlContent: 'data', format: 'json' }, { sqlContent: 'structure', columns: [], definition: 'CREATE TABLE 任意' }]) expect(() => validateCommand('sqlite.tableExport', { ...sql, ...patch })).toThrow();
+  });
 });
 describe('SQLite完整导出Main来源与文件能力', () => {
+  it.each(['structure', 'structure-data'])('SQL %s沿原文件能力与文档guard，不把DDL或任意源路径加入公共请求', async sqlContent => {
+    const f = fixture(); f.context.files.set('chosen', { purpose: 'export', format: 'sql', path: 'selected.sql' });
+    const request = { ...input, format: 'sql', sqlContent, columns: sqlContent === 'structure' ? [] : ['b', 'a'] };
+    f.request.mockImplementation(async (command, value) => {
+      expect(command).toBe('sqlite.tableExport'); expect(value).toMatchObject({ ...request, filePath: 'selected.sql' }); value.assertCurrent(); await value.validateDestination();
+      expect(value).not.toHaveProperty('sql'); expect(value).not.toHaveProperty('definition');
+      return { rows: sqlContent === 'structure' ? 0 : 2, fileCommitted: true };
+    });
+    await expect(f.run('sqlite.tableExport', request)).resolves.toEqual({ rows: sqlContent === 'structure' ? 0 : 2, fileCommitted: true });
+    expect(f.reserve).toHaveBeenCalledExactlyOnceWith('selected.sql'); expect(f.release).toHaveBeenCalledOnce(); expect(f.owners.has(input.taskId)).toBe(false);
+  });
   it('只投递已存SQLite身份及Main解析的目标，复用真实owner和reservation，不读取网络凭据或SQL历史', async () => {
     const f = fixture();
     f.request.mockImplementation(async (command, value) => {
