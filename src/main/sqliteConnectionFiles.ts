@@ -22,7 +22,7 @@ export class SqliteConnectionFiles<Owner> {
   }
 
   /** 对话框返回后先核原文档再登记；文件名只是展示，token不提供给通用files.path。 */
-  register(owner: Owner, path: string, connectionId: string): FileChoice {
+  register(owner: Owner, path: string, connectionId: string, created?: { path: string; device: bigint; inode: bigint }): FileChoice {
     this.owner.assert(owner);
     if (typeof connectionId !== 'string' || !connectionId || connectionId.length > 200) throw Error(stale);
     for (const [token, grant] of this.grants) {
@@ -31,6 +31,8 @@ export class SqliteConnectionFiles<Owner> {
     }
     if (this.grants.size >= 64) throw Error('SQLite文件选择已达上限，请关闭旧窗口后重新选择');
     const file = this.file(path), token = randomUUID();
+    // 新建返回与签发令牌在同一同步屏障核准确文件；被同路径替换的文件不能继承新建授权。
+    if (created && (file.path !== created.path || file.device !== created.device || file.inode !== created.inode)) throw Error('新建SQLite文件身份已变化，未授权连接；请核对所选文件');
     this.grants.set(token, { ...file, owner, connectionId, expires: Date.now() + 10 * 60 * 1000, revokedConnections: new Set() });
     return { token, name: basename(file.path) };
   }

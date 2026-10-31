@@ -43,3 +43,9 @@
 首轮后端会话用例误调用不存在的 `shutdownState` 统计接口，一项夹具失败保留；改核已登记原进程的真实正常退出回执后通过，没有修改产品以提供测试接口。主要私有原件在 `.cache/sqlite-parameters-20261101/`：`unit-backend02.log`、`unit-domain03.log`、`unit-ui04.log`、`unit-legacy05.log`、`build06.log`、`unit-full07.log`、`native-parameters09.log`、三份 `native-*10.log`、四份原报告副本及 `native-final-audit.json`。日志、合成数据及产物不入库。
 
 上一 `a5a37bf3` 的 SQLite CI `41233432829`，Windows 与 Mac arm64 七项专项均通过；Mac x64 在原查询工作区观察器撤销时遇到真实在途配置保存，后六项未执行。原三平台 ZIP／报告和失败日志私有保留。本轮候选将检查零在途请求和撤销观察器放入同一 Main 同步回合，仍保原 pending=0、5 秒／120 秒、零重试和原退出保护；不追认旧失败轮次通过。
+
+## 后续跨平台源码复验
+
+准确提交 `9b07a9bd7ee289fd39a315f0af52dc934e218ffe` 的 [SQLite CI 41236930521](https://github.com/zhao-yc/DBArk/actions/runs/41236930521) 已在 Windows x64、macOS arm64／x64 全部通过，每平台八项原生源码专项，共 24 个单次、零重试结果。Root 下载三份准确 run 附件，核对全部报告终态；另对三平台参数脚本原请求、九类型绑定、六次执行、七个拒绝、模板隐私、事务／部分成功及两个正常退出回执独立复算通过。远端目录清理仅核测试原回执，不冒称本机再次访问远端磁盘。
+
+原件保留在 `.cache/sqlite-create-20261101/ci-9b07-*` 及 `.cache/sqlite-parameters-20261101/ci-9b07-parameters-independent-audit.json`，不入库。上述是源码应用验收，不能替代安装包或系统文件选择器的物理操作验收，也不改写旧失败记录。

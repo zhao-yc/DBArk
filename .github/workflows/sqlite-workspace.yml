@@ -92,6 +92,8 @@ jobs:
         run: node scripts/sqlite-workspace-ci.mjs explain
       - name: 单次运行SQLite类型参数脚本原生专项
         run: node scripts/sqlite-workspace-ci.mjs parameters
+      - name: 单次运行SQLite新建数据库文件原生专项
+        run: node scripts/sqlite-workspace-ci.mjs create
       - name: 始终保留本轮SQLite专项原始记录
         if: always()
         uses: actions/upload-artifact@v4
@@ -106,4 +108,5 @@ jobs:
             test-results/sqlite-current-statement/
             test-results/sqlite-explain/
             test-results/sqlite-parameters/
+            test-results/sqlite-create/
           if-no-files-found: warn

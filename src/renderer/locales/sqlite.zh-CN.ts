@@ -1,6 +1,7 @@
 /** SQLite 文件连接与首版工作区能力的集中中文文案。 */
 export const sqliteZh = {
   file: 'SQLite 数据库文件', choose: '选择数据库文件', noFile: '请选择现有 SQLite 数据库文件',
+  create: '新建数据库文件', created: '数据库文件已创建，连接尚未保存。取消表单不会删除文件。',
   readOnly: '以只读方式打开', busyTimeout: '锁等待超时（毫秒）',
   hint: '文件选择仅授权当前连接。导入或复制的连接需要重新选择本机文件。',
   selectQuery: '生成 SELECT 查询', definition: '查看定义',

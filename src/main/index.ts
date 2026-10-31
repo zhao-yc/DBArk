@@ -34,6 +34,7 @@ import { TableFilteredExportOwners, type TableFilteredExportMainLease } from './
 import { tableFilteredExportText } from '../shared/tableFilteredExport';
 import { EngineBroker } from './broker';
 import { SqliteConnectionFiles } from './sqliteConnectionFiles';
+import { closeSqliteDatabaseCreates, createSqliteDatabaseFile } from './sqliteDatabaseCreate';
 import { assertSqliteExportDestination } from './sqliteExportDestination';
 import { sqliteTableExportMessages } from '../shared/sqliteTableExport';
 import { SqliteTableEditOwners, type SqliteEditLease } from './sqliteTableEditOwners';
@@ -477,6 +478,21 @@ async function chooseSqliteFile(owner: MainInvocation | undefined, connectionId:
     const result = await dialog.showOpenDialog(window!, { title: '选择SQLite数据库文件', properties: ['openFile'], filters: [{ name: 'SQLite数据库', extensions: ['sqlite', 'sqlite3', 'db', 'db3'] }, { name: '所有文件', extensions: ['*'] }] });
     columnsMain.assertCapturedOwner(owner);
     return result.canceled || !result.filePaths[0] ? null : sqliteFiles.register(owner!, result.filePaths[0], connectionId);
+  });
+}
+
+/** 原生确认只创建新文件；原文档与新建身份核验后才签发用途令牌，不保存连接或打开用户会话。 */
+async function createSqliteFile(owner: MainInvocation | undefined, connectionId: string) {
+  const assertOwner = () => { columnsMain.assertCapturedOwner(owner); if (shuttingDown) throw Error('客户端正在退出，不能新建SQLite数据库文件'); };
+  assertOwner();
+  return queryFileOperation(async () => {
+    assertOwner();
+    const chosen = await dialog.showSaveDialog(owner!.owner.window, { title: '新建SQLite数据库文件', defaultPath: '新数据库.sqlite', filters: [{ name: 'SQLite数据库', extensions: ['sqlite', 'sqlite3', 'db', 'db3'] }] });
+    assertOwner();
+    if (chosen.canceled || !chosen.filePath) return null;
+    const created = await createSqliteDatabaseFile(chosen.filePath, { assertOwner });
+    try { assertOwner(); return sqliteFiles.register(owner!, created.path, connectionId, created); }
+    catch (reason) { throw Error('SQLite文件已创建，但原选择已失效，连接未保存；请重新选择已创建文件，勿重复新建', { cause: reason }); }
   });
 }
 
@@ -1131,6 +1147,7 @@ async function dispatch(command: Command, input: any, columns?: MainInvocation):
       // 保留原generic task编号、准备取消和终态事件，不借用任何查询会话。
       input = { ...input, profile: store.resolveConnection(input.connectionId) }; break;
     case 'files.choose': return input.purpose === 'sqlite-database' ? chooseSqliteFile(columns, input.sqliteConnectionId) : input.queryInsertExport ? chooseQueryInsertFile(input,columns) : input.resultSqlPreviewId ? chooseResultSqlFile(input, columns) : chooseFile(input);
+    case 'files.createSqlite': return createSqliteFile(columns, input.connectionId);
     case 'files.path': { const file = files.get(input.token); if (!file) throw new Error('文件选择已失效，请重新选择'); return file.path; }
     case 'files.readQuery': return queryFileOperation(() => readQueryFile(resolveFileToken(files, input.fileToken, 'query', 'sql'), input.encoding));
     case 'table.exportFiltered':
@@ -1391,6 +1408,7 @@ app.on('before-quit', event => {
     await savedQuerySearches?.close();await savedQueryPages?.close();await historyPages?.close();await historyDelete?.close();await Promise.allSettled([...localSearchOperations]);
     await cancelFileImportPreflights();
     await Promise.allSettled([...queryFileOperations]);
+    await closeSqliteDatabaseCreates();
     await resultInserts.drain();
     await filteredUpdates.drain();
     await filteredDeletes.drain();
@@ -1408,6 +1426,8 @@ app.on('before-quit', event => {
       await savedQuerySearches?.close();await savedQueryPages?.close();await historyPages?.close();await historyDelete?.close();await Promise.allSettled([...localSearchOperations]);
       await cancelFileImportPreflights();
       await Promise.allSettled([...queryFileOperations]);
+      try { await closeSqliteDatabaseCreates(); }
+      catch (failure) { shuttingDown = false; window?.webContents.send('dbark:object-uri-pending'); window?.webContents.send('dbark:menu', 'refresh-command-state'); dialog.showErrorBox('强制退出失败', failure instanceof Error ? failure.message : 'SQLite新建文件资源尚未确认释放'); return; }
       try { await broker?.forceClose(); } catch (failure) { shuttingDown = false; window?.webContents.send('dbark:object-uri-pending'); window?.webContents.send('dbark:menu', 'refresh-command-state'); dialog.showErrorBox('强制退出失败', failure instanceof Error ? failure.message : '数据库执行进程未能终止'); return; }
       try { store?.close(); } catch { /* 用户已明确选择退出，避免退出状态永久锁死。 */ }
       externalObjectUris.close(); shutdownComplete = true; app.quit();
@@ -1555,7 +1575,7 @@ else {
         }
         if (payload.command.startsWith('explainFiles.')||payload.command.startsWith('schema.columns.')||payload.command.startsWith('table.presets.')||payload.command.startsWith('result.presets.')||payload.command.startsWith('queryFileSources.')||fileCancel||resultSql||insertRequest||payload.command.startsWith('snippets.transfer')||payload.command.startsWith('files.importPresets.')) columns = columnsMain.capture(event);
         const input = validateMainCommand(payload.command, payload.input);
-        if ((payload.command === 'connections.save' || payload.command === 'connections.test') && (input as ConnectionProfile).dialect === 'sqlite' || payload.command === 'files.choose' && (input as { purpose?: string }).purpose === 'sqlite-database') columns = columnsMain.capture(event);
+        if ((payload.command === 'connections.save' || payload.command === 'connections.test') && (input as ConnectionProfile).dialect === 'sqlite' || payload.command === 'files.choose' && (input as { purpose?: string }).purpose === 'sqlite-database' || payload.command === 'files.createSqlite') columns = columnsMain.capture(event);
         if (payload.command === 'app.menuState') columns = columnsMain.capture(event);
         if (payload.command.startsWith('tableDraftFiles.') || payload.command.startsWith('resultSnapshotFiles.') || payload.command.startsWith('workbench.protocol')) columns = columnsMain.capture(event);
         if (payload.command.startsWith('schema.databaseDrop.')) beginDatabaseDrop(payload.command, input, columns!);

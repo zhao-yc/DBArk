@@ -3,11 +3,11 @@ import { connectionProfileFromUri, connectionUriLimits } from '../../shared/conn
 import { connectionUriZh } from '../locales/connectionUri.zh-CN';
 import { tlsCredentialsZh } from '../locales/tlsCredentials.zh-CN';
 import { assertTlsPassphrase, tlsPassphraseMaxLength } from '../../shared/tlsCredentials';
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { FolderOpen, ShieldCheck, PlugZap } from 'lucide-react';
 import { sqliteZh } from '../locales/sqlite.zh-CN';
 import { sqliteFileName } from '../sqliteWorkspace';
-import type { ConnectionProfile, NetworkConnectionProfile } from '../../shared/contracts';
+import type { ConnectionProfile, FileChoice, NetworkConnectionProfile } from '../../shared/contracts';
 import { errorMessage, invoke, uid } from '../lib';
 import { saveConnectionUpdate } from '../connectionChanges';
 import { useWorkspace } from '../store';
@@ -18,10 +18,37 @@ import { assertConnectionReady } from '../../shared/connectionTransfer';
 
 /** 密码字段缺省表示保持原密码；界面仅提交新值，不读取解密后的保存值。 */
 export function ConnectionDialog({ profile, initialProfile, onClose, onTransportChanged }: { profile?: ConnectionProfile; initialProfile?: ConnectionProfile; onClose: () => void; onTransportChanged: (connectionId: string) => void }) {
+  // 先观察来源，再消费表单状态更新，拒绝与父级换源同批抵达的文件回包。
+  const fileOriginRef = useRef({ profile, initialProfile });
+  if (fileOriginRef.current.profile !== profile || fileOriginRef.current.initialProfile !== initialProfile) fileOriginRef.current = { profile, initialProfile };
+  const fileOrigin = fileOriginRef.current;
   const [form, setForm] = useState<ConnectionProfile>(() => profile ? structuredClone(profile) : initialProfile ? { ...structuredClone(initialProfile), id: initialProfile.dialect === 'sqlite' && !initialProfile.id ? uid() : initialProfile.id } : { id: uid(), name: '', group: '', color: '#52c5a2', dialect: 'mysql', host: '127.0.0.1', port: 3306, user: 'root', rememberPassword: true });
   const [section, setSection] = useState<'general' | 'ssh' | 'tls'>('general');
   const [busy, setBusy] = useState(''); const [error, setError] = useState(''); const [result, setResult] = useState('');
   const submitLock = useRef(false);
+  // 文件授权只属于准确表单来源；切换来源再切回也不能复活旧选择器回包。
+  const fileScopeRef = useRef({ profile, initialProfile, id: form.id, dialect: form.dialect });
+  if (fileScopeRef.current.profile !== profile || fileScopeRef.current.initialProfile !== initialProfile || fileScopeRef.current.id !== form.id || fileScopeRef.current.dialect !== form.dialect) fileScopeRef.current = { profile, initialProfile, id: form.id, dialect: form.dialect };
+  const fileScope = fileScopeRef.current;
+  const fileLifetime = useRef({ alive: true, generation: 0 });
+  useEffect(() => {
+    fileLifetime.current.alive = true;
+    return () => { fileLifetime.current.alive = false; fileLifetime.current.generation++; };
+  }, []);
+  const fileRequest = useRef<object | null>(null);
+  const [selectedSqliteFile, setSelectedSqliteFile] = useState<{ file: FileChoice; create: boolean; origin: typeof fileOrigin; scope: typeof fileScope; generation: number; ticket: object } | null>(null);
+  useEffect(() => {
+    if (!selectedSqliteFile) return;
+    const choice = selectedSqliteFile;
+    const current = () => fileLifetime.current.alive && fileLifetime.current.generation === choice.generation && fileOriginRef.current === choice.origin && fileScopeRef.current === choice.scope && fileRequest.current === choice.ticket;
+    // 在已提交的渲染后接收授权，父级同批换源时也不能把旧令牌合入表单。
+    if (current()) {
+      setForm(previous => current() && previous.dialect === 'sqlite' && previous.id === choice.scope.id ? { ...previous, sqlite: { ...previous.sqlite, filePath: undefined, fileToken: choice.file.token, fileName: choice.file.name, readOnly: choice.create ? false : previous.sqlite.readOnly }, pendingFiles: previous.pendingFiles?.filter(kind => kind !== 'sqliteDatabase') } : previous);
+      setResult(previous => current() ? choice.create ? sqliteZh.created : '' : previous);
+    }
+    if (fileRequest.current === choice.ticket) { submitLock.current = false; if (fileLifetime.current.alive) setBusy(''); }
+    setSelectedSqliteFile(null);
+  }, [selectedSqliteFile, fileOrigin, fileScope]);
   const [uriDraft, setUriDraft] = useState<string | null>(null), uriDraftRef = useRef<string | null>(null);
   /** URI仅在当前对话框内存保留，取消和成功填入立即清除。 */
   function changeUri(value: string | null) { uriDraftRef.current = value; setUriDraft(value); }
@@ -53,22 +80,29 @@ export function ConnectionDialog({ profile, initialProfile, onClose, onTransport
     // 已有网络连接仅切换兼容方言，原地址、凭据与传输配置全部保留。
     if (profile) {
       if (profile.dialect === 'sqlite' || form.dialect === 'sqlite' || dialect === 'sqlite') return;
+      fileScopeRef.current = { ...fileScopeRef.current, dialect };
       setForm({ ...form, dialect }); setError(''); setResult(''); return;
     }
     const common = { id: form.id, name: form.name, group: form.group, color: form.color };
+    fileScopeRef.current = { ...fileScopeRef.current, dialect };
     setForm(dialect === 'sqlite' ? { ...common, dialect, sqlite: { readOnly: true, busyTimeoutMs: 1000 } }
       : { ...common, dialect, host: '127.0.0.1', port: 3306, user: 'root', rememberPassword: true });
     changeUri(null); setSection('general'); setError(''); setResult('');
   }
-  /** 文件连接只保留用途令牌和文件名，不向主进程索取本机路径。 */
-  async function pickSqlite() {
-    if (submitLock.current || form.dialect !== 'sqlite') return;
+  /** 新建只创建文件并授权当前表单，选择现有文件仍保留用户的只读选项。 */
+  async function pickSqlite(create = false) {
+    if (submitLock.current || form.dialect !== 'sqlite' || !fileLifetime.current.alive || fileOriginRef.current !== fileOrigin || fileScopeRef.current !== fileScope) return;
+    const generation = fileLifetime.current.generation;
+    const ticket = {}; fileRequest.current = ticket; let staged = false;
+    const current = () => fileLifetime.current.alive && fileLifetime.current.generation === generation && fileOriginRef.current === fileOrigin && fileScopeRef.current === fileScope && fileRequest.current === ticket;
     submitLock.current = true; setBusy('file'); setError('');
     try {
-      const file = await invoke('files.choose', { purpose: 'sqlite-database', sqliteConnectionId: form.id });
-      if (file) setForm(current => current.dialect === 'sqlite' ? { ...current, sqlite: { ...current.sqlite, filePath: undefined, fileToken: file.token, fileName: file.name }, pendingFiles: current.pendingFiles?.filter(kind => kind !== 'sqliteDatabase') } : current);
-    } catch (reason) { setError(errorMessage(reason)); }
-    finally { submitLock.current = false; setBusy(''); }
+      const file = create ? await invoke('files.createSqlite', { connectionId: form.id }) : await invoke('files.choose', { purpose: 'sqlite-database', sqliteConnectionId: form.id });
+      if (!file || !current()) return;
+      // 函数式合并保留选择器打开期间的名称、分组和超时编辑；不保存连接或操作已有会话。
+      staged = true; setSelectedSqliteFile({ file, create, origin: fileOrigin, scope: fileScope, generation, ticket });
+    } catch (reason) { if (current()) setError(previous => current() ? errorMessage(reason) : previous); }
+    finally { if (!staged && fileRequest.current === ticket) { submitLock.current = false; if (fileLifetime.current.alive && fileLifetime.current.generation === generation) setBusy(''); } }
   }
   /** 测试连接不会写入配置，保存成功后刷新连接列表再关闭表单。 */
   async function submit(test: boolean) {
@@ -94,7 +128,7 @@ export function ConnectionDialog({ profile, initialProfile, onClose, onTransport
     {!profile && form.dialect !== 'sqlite' && <section aria-label={connectionUriZh.open}>
       {uriDraft === null ? <button type="button" disabled={!!busy} onClick={() => { if (submitLock.current) return; setError(''); setResult(''); changeUri(''); }}>{connectionUriZh.open}</button> : <><UsageHelp><p>{connectionUriZh.hint}</p></UsageHelp><Field label={connectionUriZh.title} full><input type="password" autoComplete="new-password" spellCheck={false} maxLength={connectionUriLimits.units} value={uriDraft} placeholder={connectionUriZh.placeholder} disabled={!!busy} onChange={event => changeUri(event.target.value)} onKeyDown={event => { if (event.key === 'Enter') event.preventDefault(); }}/></Field><div className="connection-uri-actions"><button type="button" disabled={!!busy} onClick={applyUri}>{connectionUriZh.apply}</button><button type="button" disabled={!!busy} onClick={() => { changeUri(null); setError(''); }}>{connectionUriZh.cancel}</button></div></>}
     </section>}
-    {section === 'general' && <div className="form-grid"><Field label={zh.connections.text006}><input value={form.name} placeholder={zh.connections.text007} onChange={event => update({ name: event.target.value })}/></Field><Field label={zh.connections.text008}><select value={form.dialect} disabled={profile?.dialect === 'sqlite' || !!busy} onChange={event => switchDialect(event.target.value as ConnectionProfile['dialect'])}><option value="mysql">MySQL</option><option value="mariadb">MariaDB</option><option value="sqlite" disabled={!!profile && profile.dialect !== 'sqlite'}>SQLite</option></select></Field>{form.dialect === 'sqlite' ? <><Field label={sqliteZh.file} full><div className="input-action"><input readOnly value={form.sqlite.fileName || form.sqlite.filePath || ''} placeholder={sqliteZh.noFile}/><button type="button" disabled={!!busy} onClick={() => void pickSqlite()} aria-label={sqliteZh.choose}><FolderOpen size={16}/></button></div><small className="muted small">{sqliteZh.hint}</small></Field><label className="check"><input type="checkbox" checked={form.sqlite.readOnly} onChange={event => { if (form.dialect === 'sqlite') update({ sqlite: { ...form.sqlite, readOnly: event.target.checked } }); }}/>{sqliteZh.readOnly}</label><Field label={sqliteZh.busyTimeout}><input type="number" min="0" max="5000" value={form.sqlite.busyTimeoutMs} onChange={event => { if (form.dialect === 'sqlite') update({ sqlite: { ...form.sqlite, busyTimeoutMs: Number(event.target.value) } }); }}/></Field></> : <><Field label={zh.connections.text009}><input required value={form.host} onChange={event => update({ host: event.target.value })}/></Field><Field label={zh.connections.text010}><input type="number" min="1" max="65535" value={form.port} onChange={event => update({ port: Number(event.target.value) })}/></Field><Field label={zh.common.user}><input required value={form.user} autoComplete="off" onChange={event => update({ user: event.target.value })}/></Field><Field label={zh.common.password}><SecretInput label={zh.connections.text011} value={form.password} hasSaved={form.hasPassword} onChange={password => update({ password })}/></Field><Field label={zh.connections.text012}><input value={form.database ?? ''} onChange={event => update({ database: event.target.value || undefined })}/></Field></>}<Field label={zh.connections.text013}><input value={form.group} placeholder={zh.connections.text014} onChange={event => update({ group: event.target.value })}/></Field><Field label={zh.connections.text015}><input type="color" value={form.color} onChange={event => update({ color: event.target.value })}/></Field>{form.dialect !== 'sqlite' && <label className="check"><input type="checkbox" checked={form.rememberPassword} onChange={event => update({ rememberPassword: event.target.checked })}/>{zh.connections.text016}</label>}</div>}
+    {section === 'general' && <div className="form-grid"><Field label={zh.connections.text006}><input value={form.name} placeholder={zh.connections.text007} onChange={event => update({ name: event.target.value })}/></Field><Field label={zh.connections.text008}><select value={form.dialect} disabled={profile?.dialect === 'sqlite' || !!busy} onChange={event => switchDialect(event.target.value as ConnectionProfile['dialect'])}><option value="mysql">MySQL</option><option value="mariadb">MariaDB</option><option value="sqlite" disabled={!!profile && profile.dialect !== 'sqlite'}>SQLite</option></select></Field>{form.dialect === 'sqlite' ? <><Field label={sqliteZh.file} full><div className="input-action"><input readOnly value={form.sqlite.fileName || form.sqlite.filePath || ''} placeholder={sqliteZh.noFile}/><button type="button" disabled={!!busy} onClick={() => void pickSqlite()} aria-label={sqliteZh.choose}><FolderOpen size={16}/></button></div><div className="connection-uri-actions"><button type="button" disabled={!!busy} onClick={() => void pickSqlite(true)} aria-label={sqliteZh.create}>{sqliteZh.create}</button></div><small className="muted small">{sqliteZh.hint}</small></Field><label className="check"><input type="checkbox" checked={form.sqlite.readOnly} onChange={event => { if (form.dialect === 'sqlite') update({ sqlite: { ...form.sqlite, readOnly: event.target.checked } }); }}/>{sqliteZh.readOnly}</label><Field label={sqliteZh.busyTimeout}><input type="number" min="0" max="5000" value={form.sqlite.busyTimeoutMs} onChange={event => { if (form.dialect === 'sqlite') update({ sqlite: { ...form.sqlite, busyTimeoutMs: Number(event.target.value) } }); }}/></Field></> : <><Field label={zh.connections.text009}><input required value={form.host} onChange={event => update({ host: event.target.value })}/></Field><Field label={zh.connections.text010}><input type="number" min="1" max="65535" value={form.port} onChange={event => update({ port: Number(event.target.value) })}/></Field><Field label={zh.common.user}><input required value={form.user} autoComplete="off" onChange={event => update({ user: event.target.value })}/></Field><Field label={zh.common.password}><SecretInput label={zh.connections.text011} value={form.password} hasSaved={form.hasPassword} onChange={password => update({ password })}/></Field><Field label={zh.connections.text012}><input value={form.database ?? ''} onChange={event => update({ database: event.target.value || undefined })}/></Field></>}<Field label={zh.connections.text013}><input value={form.group} placeholder={zh.connections.text014} onChange={event => update({ group: event.target.value })}/></Field><Field label={zh.connections.text015}><input type="color" value={form.color} onChange={event => update({ color: event.target.value })}/></Field>{form.dialect !== 'sqlite' && <label className="check"><input type="checkbox" checked={form.rememberPassword} onChange={event => update({ rememberPassword: event.target.checked })}/>{zh.connections.text016}</label>}</div>}
     {form.dialect !== 'sqlite' && section === 'ssh' && <><label className="check section-check"><input type="checkbox" checked={ssh.enabled} onChange={event => setSsh({ enabled: event.target.checked })}/>{zh.connections.text017}</label><fieldset disabled={!ssh.enabled} className="form-grid"><Field label={zh.connections.text018}><input value={ssh.host} onChange={event => setSsh({ host: event.target.value })}/></Field><Field label={zh.connections.text019}><input type="number" value={ssh.port} onChange={event => setSsh({ port: Number(event.target.value) })}/></Field><Field label={zh.connections.text020}><input value={ssh.user} onChange={event => setSsh({ user: event.target.value })}/></Field><Field label={zh.connections.text021}><SecretInput label={zh.connections.text021} value={ssh.password} hasSaved={ssh.hasPassword} onChange={password => setSsh({ password })}/></Field><Field label={zh.connections.text022} full><div className="input-action"><input value={ssh.privateKeyPath ?? ''} onChange={event => setSsh({ privateKeyPath: event.target.value })}/><button type="button" onClick={() => void pick('key', path => setForm(current => assignAuthorizedConnectionFile(current, 'sshPrivateKey', path)))} aria-label={zh.connections.text023}><FolderOpen size={16}/></button></div></Field><Field label={zh.connections.text024}><SecretInput label={zh.connections.text024} value={ssh.passphrase} hasSaved={ssh.hasPassphrase} onChange={passphrase => setSsh({ passphrase })}/></Field><Field label={zh.connections.text025}><input value={ssh.hostFingerprint ?? ''} placeholder="SHA256:…" onChange={event => setSsh({ hostFingerprint: event.target.value })}/></Field></fieldset><p className="muted small">{zh.connections.text026}</p></>}
     {form.dialect !== 'sqlite' && section === 'tls' && <><label className="check section-check"><input type="checkbox" checked={tls.enabled} onChange={event => setTls({ enabled: event.target.checked })}/>{zh.connections.text027}</label><fieldset disabled={!tls.enabled} className="form-grid"><label className="check full"><input type="checkbox" checked={tls.rejectUnauthorized} onChange={event => setTls({ rejectUnauthorized: event.target.checked })}/>{zh.connections.text028}</label>{([['caPath', zh.connections.text029], ['certPath', zh.connections.text030], ['keyPath', zh.connections.text031]] as const).map(([key, label]) => <Field key={key} label={label} full><div className="input-action"><input value={tls[key] ?? ''} onChange={event => setTls({ [key]: event.target.value })}/><button type="button" aria-label={formatText(zh.connections.text032, label)} onClick={() => void pick(key === 'keyPath' ? 'key' : 'certificate', path => setForm(current => assignAuthorizedConnectionFile(current, key === 'caPath' ? 'tlsCa' : key === 'certPath' ? 'tlsCert' : 'tlsKey', path)))}><FolderOpen size={16}/></button></div></Field>)}<Field label={tlsCredentialsZh.passphrase} full><SecretInput label={tlsCredentialsZh.passphrase} value={tls.passphrase} hasSaved={tls.hasPassphrase} maxLength={tlsPassphraseMaxLength} onChange={passphrase => setTls({ passphrase })}/><small className="muted small">{tlsCredentialsZh.hint}</small></Field></fieldset></>}
     {!!profile?.pendingFiles?.length && <p className="muted small">{connectionsTransferZh.saveBeforeTest}</p>}<ErrorBox message={error}/>{result && <div className="success-box"><ShieldCheck size={16}/>{result}</div>}
