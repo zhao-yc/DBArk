@@ -1,0 +1,7 @@
+.sqlite-table-import .sqlite-import-mapping{display:grid;grid-template-columns:minmax(90px,1fr) minmax(120px,1fr) minmax(140px,1fr);gap:8px;align-items:center;margin:8px 0}
+.sqlite-table-import .sqlite-import-scroll{max-height:28vh;overflow:auto;margin:10px 0}
+.sqlite-table-import table{border-collapse:collapse;min-width:100%;font-size:12px}
+.sqlite-table-import th,.sqlite-table-import td{border:1px solid var(--border);padding:5px 8px;max-width:260px;white-space:pre-wrap;overflow-wrap:anywhere;vertical-align:top}
+.sqlite-table-import pre{max-height:25vh;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;user-select:text}
+.sqlite-table-import .sqlite-import-actions{display:flex;gap:8px;flex-wrap:wrap;margin:10px 0}
+@media(max-width:650px){.sqlite-table-import .sqlite-import-mapping{grid-template-columns:minmax(0,1fr)}}

@@ -21,9 +21,13 @@ import { SqliteTableEditor, type SqliteEditView, type SqliteDraftRow } from '../
 import { SqliteTableEditGrid } from './SqliteTableEditGrid';
 import { SqliteTableValueDialog, SqliteTablePreviewDialog } from './SqliteTableEditDialog';
 import { sqliteTableEditZh as editText } from '../locales/sqliteTableEdit.zh-CN';
+import { SqliteTableImportDialog, SqliteTableImportSource } from './SqliteTableImportDialog';
+import { sqliteTableImportZh as importText } from '../locales/sqliteTableImport.zh-CN';
+import type { SqliteTableEditOutcome } from '../../shared/sqliteTableEdit';
 import '../sqliteTableBrowse.css';
 
 interface FullExportOwner { intent: SqliteTableExportIntent; acquiring: boolean; lease?: WorkspaceBusyLease; }
+interface ImportOwner { source: SqliteTableImportSource; page: SqliteTablePage; acquiring: boolean; dirty: boolean; refreshed: boolean; lease?: WorkspaceBusyLease; }
 interface EditInputTicket { id: string; editor: SqliteTableEditor; page: SqliteTablePage; rows: SqliteDraftRow[]; row: SqliteDraftRow; column?: number; }
 interface EditPreviewTicket { id: string; editor: SqliteTableEditor; page: SqliteTablePage; rows: SqliteDraftRow[]; }
 
@@ -41,6 +45,7 @@ export function SqliteTableTab({ tab, active }: { tab: WorkspaceTab; active: boo
   const [exportData, setExportData] = useState<ResultExportData | null>(null);
   const applied = useRef(initialQuery());
   const [fullExport, setFullExport] = useState<FullExportOwner | null>(null), fullExportRef = useRef<FullExportOwner | null>(null);
+  const [tableImport, setTableImport] = useState<ImportOwner | null>(null), importRef = useRef<ImportOwner | null>(null);
   const editorRef = useRef<SqliteTableEditor | null>(null), [editView, setEditView] = useState<SqliteEditView | null>(null);
   const [selectedRow, setSelectedRow] = useState<string>(), [cellInput, setCellInput] = useState<EditInputTicket | null>(null), inputRef = useRef<EditInputTicket | null>(null);
   const [previewOpen, setPreviewOpen] = useState<EditPreviewTicket | null>(null), previewRef = useRef<EditPreviewTicket | null>(null);
@@ -51,7 +56,7 @@ export function SqliteTableTab({ tab, active }: { tab: WorkspaceTab; active: boo
       const current = latest.current, workspace = useWorkspace.getState(), present = workspace.settings.tabs.find(item => item.id === current.tab.id), connection = workspace.connections.find(item => item.id === current.tab.connectionId);
       return { tab: present, profile: connection, connectionId: current.tab.connectionId, database: current.tab.database, table: current.tab.table, version: workspace.connectionVersions[current.tab.connectionId] ?? 0, present: present === current.tab && present?.kind === 'table', active: current.active && workspace.settings.activeTabId === current.tab.id, sqlite: connection?.dialect === 'sqlite', ...(connection?.dialect === 'sqlite' && !connection.sqlite.readOnly ? { editing: true } : {}) };
     },
-    acquire: () => acquireWorkspaceBusy(latest.current.tab.id), read: input => invoke('sqlite.tablePage', input), release: snapshotId => invoke('sqlite.tableEdit.release', { snapshotId }), cancel: taskId => invoke('query.cancel', { taskId }), id: uid, changed: next => { fullExportRef.current?.intent.current(); setView(next); }, subscribe: changed => useWorkspace.subscribe(changed),
+    acquire: () => acquireWorkspaceBusy(latest.current.tab.id), read: input => invoke('sqlite.tablePage', input), release: snapshotId => invoke('sqlite.tableEdit.release', { snapshotId }), cancel: taskId => invoke('query.cancel', { taskId }), id: uid, changed: next => { fullExportRef.current?.intent.current(); importRef.current?.source.observePage(next.page); setView(next); }, subscribe: changed => useWorkspace.subscribe(changed),
   }));
   useEffect(() => { controller.activate(); return () => controller.dispose(); }, [controller]);
   const target = useRef({ profile, version, connectionId: tab.connectionId, database: tab.database, table: tab.table });
@@ -61,12 +66,12 @@ export function SqliteTableTab({ tab, active }: { tab: WorkspaceTab; active: boo
     target.current = { profile, version, connectionId: tab.connectionId, database: tab.database, table: tab.table };
     editorRef.current?.observe();
     // 有草稿时保留原页；连接或目标变化只撤销提交权，不拿新回包替换本地内容。
-    if (editorRef.current?.dirty || editorRef.current?.busy) { controller.observe(); return; }
+    if (editorRef.current?.dirty || editorRef.current?.busy || importRef.current && (importRef.current.dirty || importRef.current.acquiring || importRef.current.lease)) { controller.observe(); return; }
     if (changed) { applied.current = initialQuery(); setLimit(100); setMode('and'); setFilters([]); setSort([]); setValidation(''); }
     if (active) { dropEditor(); void controller.load(applied.current, 0); } else controller.observe();
   }, [controller, active, profile, version, tab.connectionId, tab.database, tab.table]);
-  useLayoutEffect(() => { controller.observe(); editorRef.current?.observe(); fullExportRef.current?.intent.observe([view.page, applied.current, tab, profile, version, active]); });
-  useEffect(() => { const stop = useWorkspace.subscribe(() => fullExportRef.current?.intent.current()); return () => { stop(); fullExportRef.current?.intent.invalidate(); }; }, []);
+  useLayoutEffect(() => { controller.observe(); editorRef.current?.observe(); fullExportRef.current?.intent.observe([view.page, applied.current, tab, profile, version, active]); importRef.current?.source.observe([view.page, applied.current, tab, profile, version, active]); });
+  useEffect(() => { const stop = useWorkspace.subscribe(() => { fullExportRef.current?.intent.current(); importRef.current?.source.current(); }); return () => { stop(); fullExportRef.current?.intent.invalidate(); importRef.current?.source.invalidate(); }; }, []);
   /** 页面编辑能力只从后端签发的准确快照创建；同步订阅守住真实来源 ABA。 */
   useEffect(() => {
     const received = view.page;
@@ -79,7 +84,7 @@ export function SqliteTableTab({ tab, active }: { tab: WorkspaceTab; active: boo
         current: () => { const now = useWorkspace.getState(); return now.settings.tabs.find(item => item.id === captured.tab.id) === captured.tab && now.connections.find(item => item.id === captured.tab.connectionId) === captured.profile && captured.profile?.dialect === 'sqlite' && !captured.profile.sqlite.readOnly && (now.connectionVersions[captured.tab.connectionId] ?? 0) === captured.version; },
         active: () => latest.current.active && useWorkspace.getState().settings.activeTabId === captured.tab.id,
         available: () => !useWorkspace.getState().activeJobs[captured.tab.id], acquire: () => acquireWorkspaceBusy(captured.tab.id), id: uid, now: Date.now,
-        changed: setEditView, dirty: dirty => { const now = useWorkspace.getState(); if (now.settings.tabs.find(item => item.id === captured.tab.id) === captured.tab && !!now.dirtyTabs[captured.tab.id] !== dirty) now.setDirty(captured.tab.id, dirty); },
+        changed: setEditView, dirty: dirty => { const now = useWorkspace.getState(); if (importRef.current?.dirty && !dirty) return; if (now.settings.tabs.find(item => item.id === captured.tab.id) === captured.tab && !!now.dirtyTabs[captured.tab.id] !== dirty) now.setDirty(captured.tab.id, dirty); },
         preview: input => invoke('sqlite.tableEdit.preview', input), apply: input => invoke('sqlite.tableEdit.apply', input), release: input => invoke('sqlite.tableEdit.release', input), cancel: taskId => invoke('query.cancel', { taskId }),
         committed: () => { useWorkspace.getState().notify(editor.view.message); if (editorRef.current === editor) { const offset = editor.page.offset; dropEditor(); if (latest.current.active) void controller.load(applied.current, offset); } },
       });
@@ -89,7 +94,8 @@ export function SqliteTableTab({ tab, active }: { tab: WorkspaceTab; active: boo
     } catch (reason) { setValidation(errorMessage(reason)); controller.releaseUnadopted(received); }
   }, [view.page]);
   useEffect(() => { const unsubscribe = useWorkspace.subscribe(() => editorRef.current?.observe()); const timer = setInterval(() => editorRef.current?.observe(), 5000); return () => { unsubscribe(); clearInterval(timer); editorRef.current?.dispose(); }; }, []);
-  const page = editView && (editView.dirty || !view.page || editView.page === view.page) ? editView.page : view.page;
+  // 导入草稿/原租约存活时保留准确原页；即使controller撤销来源，也不以新页覆盖草稿背景。
+  const page = importRef.current && (importRef.current.dirty || importRef.current.acquiring || importRef.current.lease) ? importRef.current.page : editView && (editView.dirty || !view.page || editView.page === view.page) ? editView.page : view.page;
   const names = (page?.columns ?? view.columns).map(column => column.name), invalidTarget = profile?.dialect !== 'sqlite' || tab.database !== 'main' || !tab.table;
   /** 只有明确放弃或无草稿时可替换当前页，运行中写操作从不被读取入口打断。 */
   function dropEditor(): void { editorRef.current?.dispose(); editorRef.current = null; inputRef.current = null; previewRef.current = null; setEditView(null); setCellInput(null); setPreviewOpen(null); const now = useWorkspace.getState(); if (now.settings.tabs.find(item => item.id === tab.id) === tab && now.dirtyTabs[tab.id]) now.setDirty(tab.id, false); }
@@ -129,6 +135,37 @@ export function SqliteTableTab({ tab, active }: { tab: WorkspaceTab; active: boo
   }
   /** 对话框已等待原操作及取消确认收尾，关闭只撤销本次意图，不提前释放运行中的资源。 */
   function closeAllExport(owner: FullExportOwner) { owner.intent.invalidate(); if (fullExportRef.current === owner) { fullExportRef.current = null; setFullExport(null); } }
+  /** 导入只绑定准确原表页；表格草稿、输入框和未知提交必须先沿原流程处理。 */
+  function openImport(): void {
+    const now = useWorkspace.getState(), editor = editorRef.current;
+    if (!page || page.target.kind !== 'table' || !available() || !controller.pageCurrent(page) || importRef.current || fullExportRef.current || exportData || view.busy || now.activeJobs[tab.id]) return;
+    if (editor?.dirty || editor?.busy || editor?.view.unknown || inputRef.current || previewRef.current || now.dirtyTabs[tab.id]) { setValidation(importText.busyDraft); return; }
+    try {
+      const query = applied.current; let owner!: ImportOwner;
+      const source = new SqliteTableImportSource(page, profile?.dialect === 'sqlite' && profile.sqlite.readOnly, [page, query, tab, profile, version, active], () => {
+        const current = useWorkspace.getState();
+        return latest.current.active && latest.current.tab === tab && current.settings.activeTabId === tab.id && current.settings.tabs.find(item => item.id === tab.id) === tab && current.connections.find(item => item.id === tab.connectionId) === profile && (current.connectionVersions[tab.connectionId] ?? 0) === version && applied.current === query && controller.pageCurrent(page) && !editorRef.current?.dirty && !editorRef.current?.busy && !editorRef.current?.view.unknown && !inputRef.current && !previewRef.current && (!current.dirtyTabs[tab.id] || owner.dirty) && (!current.activeJobs[tab.id] || owner.acquiring || owner.lease?.owns() === true);
+      });
+      owner = { source, page, acquiring: false, dirty: false, refreshed: false }; if (!source.current()) throw Error(importText.stale);
+      importRef.current = owner; setTableImport(owner); setValidation('');
+    } catch (reason) { setValidation(errorMessage(reason)); }
+  }
+  /** 自有dirty与busy在同步store通知前登记；旧收尾不能清除后继草稿或他人的租约。 */
+  function importDirty(owner: ImportOwner, dirty: boolean): void {
+    if (importRef.current !== owner) return; owner.dirty = dirty;
+    const now = useWorkspace.getState(); if (now.settings.tabs.find(item => item.id === tab.id) === tab && !editorRef.current?.dirty && !!now.dirtyTabs[tab.id] !== dirty) now.setDirty(tab.id, dirty);
+  }
+  function importActivity(owner: ImportOwner, delta: 1 | -1): void {
+    if (delta === 1) { if (importRef.current !== owner || owner.lease || !owner.source.current()) throw Error(importText.stale); owner.acquiring = true; try { owner.lease = acquireWorkspaceBusy(tab.id); } finally { owner.acquiring = false; } }
+    else { const lease = owner.lease; owner.lease = undefined; lease?.release(); }
+  }
+  /** 只按确认COMMIT刷新原表一次，刷新失败不改写导入成功事实。 */
+  function imported(owner: ImportOwner, output: SqliteTableEditOutcome, changed: boolean): void {
+    if (output.outcome !== 'committed' || !output.fact.commitAcknowledged) return;
+    const current = importRef.current === owner && !changed && owner.source.current(); useWorkspace.getState().notify(current ? importText.committed(output.fact.appliedRows) : importText.committedStale, !current);
+    if (current && !owner.refreshed) { owner.refreshed = true; importDirty(owner, false); dropEditor(); void controller.load(applied.current, 0); }
+  }
+  function closeImport(owner: ImportOwner): void { owner.source.invalidate(); if (importRef.current !== owner) return; importDirty(owner, false); importRef.current = null; setTableImport(null); }
   /** 条件编辑只更新本地草稿，不附带任何读取。 */
   function updateFilter(id: string, patch: Partial<SqliteFilterDraft>) { setFilters(values => values.map(value => value.id === id ? { ...value, ...patch } : value)); }
   /** NULL 去掉值，包含固定文本；无效的类型比较由严格合同在应用前拒绝。 */
@@ -169,7 +206,7 @@ export function SqliteTableTab({ tab, active }: { tab: WorkspaceTab; active: boo
   const fieldOptions = (page?.columns ?? view.columns).map((column, index) => <option key={index} value={column.name}>{column.name} · {column.declaredType || text.dynamic}</option>);
   return <div className="workspace-tab table-tab sqlite-table-tab" aria-label={text.title} data-readonly={editView ? 'false' : 'true'}>
     <div className="context-bar"><span className="connection-dot" style={{ background: profile?.color }}/><strong>{profile?.name ?? tab.connectionId}</strong><span>/</span><span>{tab.database}</span><span>/</span><strong>{tab.table}</strong><span className="grow"/><span className="tag">SQLite · {text.title}</span></div>
-    <div className="toolbar"><button aria-label={text.refresh} disabled={!active || invalidTarget || !!exportData || externalBusy && !view.busy} onClick={() => read(page?.offset ?? 0)}>{text.refresh}</button><button aria-label={text.stop} disabled={!view.busy} onClick={() => void controller.stop()}>{text.stop}</button><button aria-expanded={conditions} onClick={() => setConditions(value => !value)}>{text.conditions}</button><button aria-label={sqliteZh.selectQuery} disabled={invalidTarget || view.busy || externalBusy} onClick={() => { if (available()) openSqliteSelect(tab.connectionId, tab.database!, { name: tab.table!, kind: page?.target.kind ?? 'table' }); }}>{sqliteZh.selectQuery}</button><button aria-label={text.export} disabled={!page || view.busy || externalBusy} onClick={exportPage}>{text.export}</button><button aria-label={exportText.entry} disabled={!page || view.busy || externalBusy || !!fullExport} onClick={openAllExport}>{exportText.entry}</button></div>
+    <div className="toolbar"><button aria-label={text.refresh} disabled={!active || invalidTarget || !!exportData || externalBusy && !view.busy} onClick={() => read(page?.offset ?? 0)}>{text.refresh}</button><button aria-label={text.stop} disabled={!view.busy} onClick={() => void controller.stop()}>{text.stop}</button><button aria-expanded={conditions} onClick={() => setConditions(value => !value)}>{text.conditions}</button><button aria-label={sqliteZh.selectQuery} disabled={invalidTarget || view.busy || externalBusy} onClick={() => { if (available()) openSqliteSelect(tab.connectionId, tab.database!, { name: tab.table!, kind: page?.target.kind ?? 'table' }); }}>{sqliteZh.selectQuery}</button><button aria-label={text.export} disabled={!page || view.busy || externalBusy} onClick={exportPage}>{text.export}</button><button aria-label={exportText.entry} disabled={!page || view.busy || externalBusy || !!fullExport} onClick={openAllExport}>{exportText.entry}</button>{page?.target.kind === 'table' && <button aria-label={importText.entry} title={editView?.dirty || editView?.busy || editView?.unknown || externalBusy ? importText.busyDraft : undefined} disabled={!active || invalidTarget || view.busy || externalBusy || !!fullExport || !!exportData || !!tableImport || !!editView?.dirty || !!editView?.busy || !!editView?.unknown || !!cellInput || !!previewOpen} onClick={openImport}>{importText.entry}</button>}</div>
     <p className="sqlite-browse-hint">{editView ? editText.editable : page?.edit?.kind === 'readonly' ? page.edit.reason : text.readonly}</p>
     {conditions && <div className="sqlite-browse-conditions"><p className="muted small">{text.typesHint}</p><fieldset aria-label={text.filters}><legend>{text.filters}</legend><select aria-label={text.mode} value={mode} onChange={event => setMode(event.target.value as 'and' | 'or')}><option value="and">AND</option><option value="or">OR</option></select><button disabled={!names.length || filters.length >= sqliteTableBrowseLimits.filters} onClick={() => setFilters(values => values.length >= sqliteTableBrowseLimits.filters ? values : [...values, { id: uid(), column: names[0], operator: 'eq', kind: 'text', value: '' }])}>{text.addFilter}</button>
       {filters.map((filter, index) => <div className="sqlite-browse-rule" key={filter.id}><select aria-label={text.filterColumn(index + 1)} value={filter.column} onChange={event => updateFilter(filter.id, { column: event.target.value })}>{fieldOptions}</select><select aria-label={text.filterOperator(index + 1)} value={filter.operator} onChange={event => changeOperator(filter.id, event.target.value as SqliteFilterDraft['operator'])}>{Object.entries(text.operators).map(([operator, label]) => <option key={operator} value={operator}>{label}</option>)}</select>{!['isNull', 'notNull'].includes(filter.operator) && <><select aria-label={text.filterKind(index + 1)} value={filter.kind} onChange={event => updateFilter(filter.id, { kind: event.target.value as SqliteFilterDraft['kind'] })}>{Object.entries(text.kinds).map(([kind, label]) => <option key={kind} value={kind} disabled={filter.operator === 'contains' && kind !== 'text' || kind === 'blob' && !['eq', 'ne'].includes(filter.operator)}>{label}</option>)}</select><input aria-label={text.filterValue(index + 1)} value={filter.value} maxLength={sqliteTableBrowseLimits.valueUnits} onChange={event => updateFilter(filter.id, { value: event.target.value })}/></>}<button aria-label={text.removeFilter(index + 1)} onClick={() => setFilters(values => values.filter(value => value.id !== filter.id))}>×</button></div>)}</fieldset>
@@ -181,6 +218,7 @@ export function SqliteTableTab({ tab, active }: { tab: WorkspaceTab; active: boo
     {editView?.message && <p role="status" className="sqlite-browse-hint">{editView.message}</p>}
     <div className="tab-status"><button aria-label={text.first} disabled={view.busy || !page || page.offset === 0 || externalBusy} onClick={() => read(0)}>{text.first}</button><button aria-label={text.previous} disabled={view.busy || !page || page.offset === 0 || externalBusy} onClick={() => read(Math.max(0, page!.offset - page!.limit))}>{text.previous}</button><button aria-label={text.next} disabled={view.busy || !page?.hasMore || externalBusy || page.offset + page.limit > sqliteTableBrowseLimits.offset} onClick={() => read(page!.offset + page!.limit)}>{text.next}</button><span>{page ? text.page(page.offset, page.result.rows.length, page.hasMore) : ''}</span><span className="grow"/><small title={text.noCount}>{text.noCount}</small></div>
     {fullExport && <SqliteTableExportDialog intent={fullExport.intent} onActivity={delta => fullExportActivity(fullExport, delta)} onClose={() => closeAllExport(fullExport)} onCleanupError={message => useWorkspace.getState().notify(message, true)} onCommitted={(output, _changed, content) => useWorkspace.getState().notify(content === 'structure' ? exportText.structureCommittedChanged : exportText.committedChanged(output.rows))}/>}
+    {tableImport && <SqliteTableImportDialog key={tableImport.source.id} source={tableImport.source} onActivity={delta => importActivity(tableImport, delta)} onDirtyChange={dirty => importDirty(tableImport, dirty)} onClose={() => closeImport(tableImport)} onCommitted={(output, changed) => imported(tableImport, output, changed)} onCleanupError={message => useWorkspace.getState().notify(message, true)}/>}
     {exportData && <ResultExportDialog result={exportData} tabId={tab.id} scope="table" allowSql={false} onClose={() => setExportData(null)}/>}
     {cellInput && <SqliteTableValueDialog key={cellInput.id} ticket={cellInput} page={cellInput.page} row={cellInput.row} column={cellInput.column} current={() => inputCurrent(cellInput)} onSave={values => saveInput(cellInput, values)} onClose={() => closeInput(cellInput)}/>}
     {previewOpen && editView && previewOpen.editor === renderedEditor && <SqliteTablePreviewDialog key={previewOpen.id + ':' + (editView.preview?.previewId ?? 'pending')} ticket={previewOpen} view={editView} current={() => previewCurrent(previewOpen, editView.preview, editView.taskId)} onApply={() => applyPreview(previewOpen, editView.preview)} onClose={() => closePreview(previewOpen, editView.preview)} onStop={() => stopPreview(previewOpen, editView.preview, editView.taskId)}/>}

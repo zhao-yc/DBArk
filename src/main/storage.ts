@@ -1,4 +1,5 @@
 import { assertSqlKeywordCaseWrite, readSqlKeywordCase } from '../shared/sqlKeywordCase';
+import { recoverSqliteImportTask } from '../shared/sqliteTableImportFact';
 import { recoverSqliteWriteTask } from '../shared/sqliteWriteFact';
 import { recoverSqliteTableCreateTask } from '../shared/sqliteTableCreateFact';
 import { assertObjectBrowserTabs, readObjectBrowserTabs } from '../shared/objectBrowser';
@@ -127,8 +128,8 @@ export class LocalStore {
       this.saveTask({ ...safe, status, ...(confirmed ? { progress: 100, finishedAt: confirmed.finishedAt } : {}), message: persistedTaskMessage('table.apply', { taskId: task.id, status, progress: task.progress, message: '' }) });
     }
     // SQLite最小提交事实独立恢复；已确认ACK不因旧running状态降级，COMMIT未知不重放。
-    for (const task of this.tasks()) if (task.kind === 'sqlite.tableEdit.apply') {
-      const restored = recoverSqliteWriteTask(task);
+    for (const task of this.tasks()) if (task.kind === 'sqlite.tableImport.apply' || task.kind === 'sqlite.tableEdit.apply') {
+      const restored = task.kind === 'sqlite.tableImport.apply' ? recoverSqliteImportTask(task) : recoverSqliteWriteTask(task);
       // 已完成且已脱敏的记录无需每次启动重写整份本地配置。
       if (Object.keys(task).length !== Object.keys(restored).length || Object.entries(restored).some(([key, value]) => key === 'sqliteWrite' ? JSON.stringify(task.sqliteWrite) !== JSON.stringify(value) : task[key as keyof TaskRecord] !== value)) this.saveTask(restored);
     }

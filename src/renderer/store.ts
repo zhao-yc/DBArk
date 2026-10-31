@@ -5,6 +5,8 @@ import { defaultEditorWordWrap, readEditorWordWrap } from '../shared/editorWordW
 import { editorFontLimits, readEditorFontSize } from '../shared/editorFont';
 import { zh } from './locales/zh-CN';
 import { sqliteWriteFactMessage, sqliteWriteFactSchema } from '../shared/sqliteWriteFact';
+import { sqliteImportWriteFactSchema, assertSqliteImportWriteFactTransition } from '../shared/sqliteTableImport';
+import { sqliteImportFactMessage, sqliteImportTaskMessage } from '../shared/sqliteTableImportFact';
 import { assertSqliteTableCreateFactTransition, sqliteTableCreateFactSchema, sqliteTableCreateMessages } from '../shared/sqliteTableCreate';
 import { sqliteCreateFactMessage } from '../shared/sqliteTableCreateFact';
 import { sqliteTableCreateZh } from './locales/sqliteTableCreate.zh-CN';
@@ -219,11 +221,28 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
     // 已终态的文件任务不被迟到事件复活或改写；原RPC仍可通过专用收尾发布真实事实。
     if (state.queryFileTasks[event.taskId]?.running === false) return {};
     const previous = state.tasks.find(task => task.id === event.taskId);
+    const importKind = event.sqliteImportOperation ? `sqlite.tableImport.${event.sqliteImportOperation}` : undefined;
+    if (importKind && previous && previous.kind !== importKind && previous.kind !== zh.workspace.text001) return {};
     const createKind = event.sqliteCreateOperation === 'apply' ? 'sqlite.tableCreate.apply' : event.sqliteCreateOperation === 'preview' ? 'sqlite.tableCreate.preview' : undefined;
     // Main固定类别不能让同一个任务编号从预览换成写入，也不能接管其它已知种类。
     if (createKind && previous && previous.kind !== createKind && previous.kind !== zh.workspace.text001) return {};
     const task: TaskRecord = { id: event.taskId, kind: previous?.kind ?? (event.queryFileSource ? queryFilesZh.taskTitle : zh.workspace.text001), startedAt: previous?.startedAt ?? new Date().toISOString(), ...previous, status: event.status, progress: event.progress, message: event.queryFileSource ? queryFilesZh.taskPhases[event.queryFileSource.phase] : event.message };
     if (createKind) task.kind = createKind;
+    if (importKind) task.kind = importKind;
+    if (task.kind.startsWith('sqlite.tableImport.')) {
+      if (task.kind === 'sqlite.tableImport.apply' && event.sqliteWrite) {
+        const parsed = sqliteImportWriteFactSchema.safeParse(event.sqliteWrite);
+        try {
+          if (!parsed.success) throw Error('SQLite导入事实无效');
+          if (previous?.sqliteWrite) assertSqliteImportWriteFactTransition(previous.sqliteWrite, parsed.data);
+          task.sqliteWrite = parsed.data;
+        } catch { if (previous) return {}; task.status = 'failed'; task.progress = 0; }
+      }
+      task.message = task.sqliteWrite ? sqliteImportFactMessage(task.sqliteWrite) : sqliteImportTaskMessage(task.kind, task.status);
+      if (task.sqliteWrite?.commitAcknowledged) { task.status = 'completed'; task.progress = 100; }
+      else if (task.sqliteWrite?.rollbackAcknowledged) task.status = previous?.status === 'cancelled' || event.status === 'cancelled' ? 'cancelled' : 'failed';
+      else if (task.kind === 'sqlite.tableImport.apply' && (task.sqliteWrite?.phase === 'unknown' || task.status === 'completed')) { task.status = 'failed'; task.progress = Math.min(task.progress, 99); }
+    }
     if (event.sqliteCreate && (createKind === 'sqlite.tableCreate.apply' || previous?.kind === 'sqlite.tableCreate.apply')) {
       const parsed = sqliteTableCreateFactSchema.safeParse(event.sqliteCreate);
       try {
@@ -244,11 +263,11 @@ export const useWorkspace = create<WorkspaceState>((set, get) => ({
       else if (fact?.rollbackAcknowledged) task.status = previous?.status === 'cancelled' || event.status === 'cancelled' ? 'cancelled' : 'failed';
       else if (fact?.phase === 'unknown' || task.status === 'completed') { task.status = 'failed'; task.progress = Math.min(task.progress, 99); }
     }
-    if (event.sqliteWrite && !task.kind.startsWith('sqlite.tableCreate.')) {
+    if (event.sqliteWrite && !task.kind.startsWith('sqlite.tableCreate.') && !task.kind.startsWith('sqlite.tableImport.')) {
       const fact = sqliteWriteFactSchema.safeParse(event.sqliteWrite);
       if (fact.success && (!previous?.sqliteWrite?.commitAcknowledged || fact.data.operationId === previous.sqliteWrite.operationId && fact.data.commitAcknowledged)) { task.sqliteWrite = fact.data; task.kind = 'sqlite.tableEdit.apply'; }
     }
-    if (task.sqliteWrite?.commitAcknowledged) { task.status = 'completed'; task.progress = 100; task.message = sqliteWriteFactMessage(task.sqliteWrite); }
+    if (task.sqliteWrite?.commitAcknowledged) { task.status = 'completed'; task.progress = 100; task.message = task.kind === 'sqlite.tableImport.apply' ? sqliteImportFactMessage(task.sqliteWrite) : sqliteWriteFactMessage(task.sqliteWrite); }
     const value = event.queryFileSource, queryFileTasks = { ...state.queryFileTasks };
     // 未持有本窗口操作租约的文件事件也明确分类，但不能借普通SQL取消命令获取取消权。
     if (value) queryFileTasks[event.taskId] = { taskId: event.taskId, tabId: value.tabId, operation: value.operation, phase: value.phase, bytesProcessed: value.bytesProcessed, ...(value.totalBytes === undefined ? {} : { totalBytes: value.totalBytes }), wrote: value.wrote, cancellable: false, running: event.status === 'running', committed: value.wrote !== 'no' || ['replacing', 'verifying', 'recording'].includes(value.phase), cancelState: 'denied', status: event.status, progress: event.progress, message: task.message, startedAt: task.startedAt };

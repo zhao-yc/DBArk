@@ -65,7 +65,49 @@ export async function* readRecords(filePath: string, format: 'csv' | 'json', enc
   const observed = new Transform({ transform(chunk: Buffer, _encoding, callback) {
     try { control?.onBytes?.(chunk); callback(null, chunk); } catch (error) { callback(error as Error); }
   } });
+  // iconv的GB18030解码缓冲按本次write字节数分配；跨write补完四字节字符时可能不足以输出代理对。
+  // 按原编码语法只保留末尾未完整的1..3字节，让每次write从完整序列边界开始，不改变原iconv映射。
+  let pendingGbBytes = Buffer.alloc(0);
+  const gbFrames = selectedEncoding === 'gb18030' ? new Transform({
+    transform(chunk: Buffer, _encoding, callback) {
+      const bytes = pendingGbBytes.length ? Buffer.concat([pendingGbBytes, chunk]) : chunk; let end = 0;
+      while (end < bytes.length) {
+        const first = bytes[end];
+        if (first < 0x81 || first > 0xfe) { end++; continue; }
+        if (end + 1 === bytes.length) break;
+        const second = bytes[end + 1];
+        if (second >= 0x30 && second <= 0x39) {
+          if (end + 2 === bytes.length) break;
+          const third = bytes[end + 2];
+          if (third >= 0x81 && third <= 0xfe) {
+            if (end + 3 === bytes.length) break;
+            const fourth = bytes[end + 3];
+            if (fourth >= 0x30 && fourth <= 0x39) { end += 4; continue; }
+          }
+        } else if (second >= 0x40 && second <= 0xfe && second !== 0x7f) { end += 2; continue; }
+        // 非法序列由原iconv处理：先跳过起始字节，再从下一字节重新扫描，不能吞掉后续合法字符。
+        end++;
+      }
+      pendingGbBytes = Buffer.from(bytes.subarray(end)); callback(null, bytes.subarray(0, end));
+    },
+    // EOF不完整尾仍原样交给iconv及其end容错；严格校验另由raw观察链拒绝，不在这里改写字节。
+    flush(callback) { const tail = pendingGbBytes; pendingGbBytes = Buffer.alloc(0); callback(null, tail); },
+  }) : undefined;
   const decoder = iconv.decodeStream(selectedEncoding) as Transform;
+  // iconv可能将合法非BMP字符拆成两个UTF16代理项string；不能让下游逐chunk转UTF8时各自替换。
+  // 仅暂存末尾一个高代理项，和下一块拼接后再编码，背压及原始字节观察链仍沿同一pipeline。
+  let pendingHighSurrogate = '';
+  const codepoints = new Transform({ writableObjectMode: true, decodeStrings: false,
+    transform(chunk: string, _encoding, callback) {
+      if (typeof chunk !== 'string') { callback(new Error('导入解码流未返回文本')); return; }
+      let text = pendingHighSurrogate + chunk; pendingHighSurrogate = '';
+      const last = text.charCodeAt(text.length - 1);
+      if (last >= 0xd800 && last <= 0xdbff) { pendingHighSurrogate = text.slice(-1); text = text.slice(0, -1); }
+      callback(null, Buffer.from(text, 'utf8'));
+    },
+    // 默认容错读取的孤立代理项仍由UTF8编码转换为U+FFFD；严格模式另在原字节链拒绝非法编码。
+    flush(callback) { const tail = pendingHighSurrogate; pendingHighSurrogate = ''; callback(null, Buffer.from(tail, 'utf8')); },
+  });
   const numberTokens = new Transform({ objectMode: true,
     /** 将数字 token 转为带标记的原始文本，同时保护合法原型同名键。 */
     transform(token, _encoding, callback) {
@@ -76,7 +118,8 @@ export async function* readRecords(filePath: string, format: 'csv' | 'json', enc
     ? parse({ columns: false, delimiter: selectedDelimiter, bom: true, skip_empty_lines: selectedHasHeader, max_record_size: 64 * 1024 * 1024 })
     : streamArray({ highWaterMark: 16 });
   const options = { signal: control?.signal };
-  const completed = format === 'csv' ? pipeline(source, observed, decoder, output, options) : pipeline(source, observed, decoder, parser(), numberTokens, output, options);
+  const decoding = [source, observed, ...(gbFrames ? [gbFrames] : []), decoder, codepoints];
+  const completed = format === 'csv' ? pipeline([...decoding, output], options) : pipeline([...decoding, parser(), numberTokens, output], options);
   // 避免迭代器尚未挂接时上游读取错误成为未处理的 Promise rejection。
   void completed.catch(() => undefined);
   let finished = false;
@@ -111,7 +154,7 @@ export async function* readRecords(filePath: string, format: 'csv' | 'json', enc
     await completed;
     finished = true;
   } finally {
-    source.destroy(); observed.destroy(); decoder.destroy(); numberTokens.destroy(); output.destroy();
+    source.destroy(); observed.destroy(); gbFrames?.destroy(); decoder.destroy(); codepoints.destroy(); numberTokens.destroy(); output.destroy();
     if (!finished) await completed.catch(() => undefined);
   }
 }

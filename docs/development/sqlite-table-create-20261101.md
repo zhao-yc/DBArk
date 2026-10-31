@@ -36,3 +36,9 @@ Root 从最终原始报告独立核对六类字段设计、原生两条 DDL、�
 最终私有原件在 `.cache/sqlite-table-create-20261101/`：`build-delivery19.log`、`unit-delivery20.log`、`native-delivery21.log`／`native-delivery22.log`、对应 `*-results/report.json` 和两份 `native-*-delivery-independent-audit.json`，不入库。三平台 CI 增加 `table-create` 源码专项；新提交的远端及安装验收另记。
 
 已有表结构重建设计、CHECK／生成列／表达式索引、更多原生拒绝的逐项诊断及导入仍继续开发。本增量不代表完整 R02 或 Navicat 全功能完成；新建表的 Mac 两架构、安装包及物理系统交互分别验收，暂不正式发布。
+
+## 后续跨平台源码复验
+
+准确提交 `fcd2c48614cde81cd44bb4436b461cf7af2fd5e9` 的 [SQLite CI 41245522288](https://github.com/zhao-yc/DBArk/actions/runs/41245522288) 在 Windows x64、macOS arm64／x64 各十项、共 30 份单次零重试报告通过。Root 下载同一 run 的元数据和三份原件包，核每份报告，并逐平台独立复算新建表六类字段、准确两条 DDL 与 COMMIT ACK、目录冲突零 DDL／ROLLBACK ACK、两份任务中心回执、原表与默认值精度、独立测试写入全部回滚、隐私记录及双正常退出。远端清理仅核原 CI 回执，不以本机文件检查冒充远端物理复查。
+
+原件与独审在 `.cache/sqlite-table-import-20261101/ci-fcd2-*`，不入库。这证明该准确提交的三平台源码流程，不代替后续导入增量、安装包或物理系统交互验收；没有创建 Release。

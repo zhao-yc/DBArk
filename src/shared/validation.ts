@@ -1,5 +1,6 @@
 import { sqliteTablePageSchema } from './sqliteTableBrowse';
 import { sqliteTableCreatePreviewSchema, sqliteTableCreateApplySchema, sqliteTableCreateReleaseSchema } from './sqliteTableCreate';
+import { sqliteTableImportInspectSchema, sqliteTableImportPreviewSchema, sqliteTableImportApplySchema, sqliteTableImportReleaseSchema } from './sqliteTableImport';
 import { sqliteTableExportSchema } from './sqliteTableExport';
 import { sqliteTableEditPreviewSchema, sqliteTableEditApplySchema, sqliteTableEditReleaseSchema } from './sqliteTableEdit';
 import { tableCheckGetSchema, tableCheckPreviewSchema, tableCheckApplySchema, tableCheckReleaseSchema } from './tableChecks';
@@ -208,6 +209,10 @@ export const commandSchemas: Record<Command, z.ZodType> = {
   'sqlite.tableCreate.preview': sqliteTableCreatePreviewSchema,
   'sqlite.tableCreate.apply': sqliteTableCreateApplySchema,
   'sqlite.tableCreate.release': sqliteTableCreateReleaseSchema,
+  'sqlite.tableImport.inspect': sqliteTableImportInspectSchema,
+  'sqlite.tableImport.preview': sqliteTableImportPreviewSchema,
+  'sqlite.tableImport.apply': sqliteTableImportApplySchema,
+  'sqlite.tableImport.release': sqliteTableImportReleaseSchema,
   'app.menuState': uiMenuStateSchema,
   'result.insertPreview': resultInsertPreviewInputSchema,
   'result.insertApply': resultInsertApplyInputSchema,

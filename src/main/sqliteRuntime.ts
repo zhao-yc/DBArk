@@ -13,6 +13,14 @@ import { SqliteTableEdits, applySqliteTableEdit, sqliteEditNotSent, type SqliteE
 import type { SqliteTableEditOutcome } from '../shared/sqliteTableEdit';
 import { sqliteTableCreatePreviewSchema, sqliteTableCreateApplySchema, sqliteTableCreateReleaseSchema, type SqliteTableCreatePreviewOutput, type SqliteTableCreateOutcome } from '../shared/sqliteTableCreate';
 import { SqliteTableCreates, prepareSqliteCreateSnapshot, applySqliteTableCreate, sqliteCreateNotSent, type SqliteTableCreatePreviewRequest, type SqliteTableCreateApplyRequest, type SqliteCreateClaim, type SqliteCreateSnapshot } from './sqliteTableCreate';
+import { sqliteTableImportInspectSchema, sqliteTableImportPreviewSchema, sqliteTableImportApplySchema, sqliteTableImportReleaseSchema, sqliteTableImportMessages as importText, type SqliteTableImportInspectOutput, type SqliteTableImportPreviewOutput, type SqliteTableImportOutcome } from '../shared/sqliteTableImport';
+import { SqliteTableImports, assertSqliteImportSource, readSqliteImportTarget, verifySqliteImportTarget, inspectSqliteImportFile, previewSqliteImport, applySqliteImport, sqliteImportNotSent, type SqliteImportInspection, type SqliteTableImportInspectRequest, type SqliteTableImportPreviewRequest, type SqliteTableImportApplyRequest, type SqliteTableImportControl } from './sqliteTableImport';
+
+/** SQLite文件导入独立并发上限；原任务settled之后才归还槽位。 */
+const sqliteImportConcurrency = 2;
+type SqliteImportResult = SqliteTableImportInspectOutput | SqliteTableImportPreviewOutput | SqliteTableImportOutcome;
+/** 用真实结果字段窄化，不以阶段字符串把任意泛型结果强转成写入事实。 */
+function importOutcome(value: SqliteImportResult | undefined): SqliteTableImportOutcome | undefined { return value && 'outcome' in value ? value : undefined; }
 
 interface Resource { transport: SqliteProcessTransport; driver?: SqliteDriverSession; }
 interface Connection {
@@ -40,10 +48,12 @@ interface FinishedEditTask { kind: 'edit-finished' | 'edit-preview-finished'; ac
 interface CreatePreviewTask extends Omit<BrowseTask, 'kind'> { kind: 'create-preview'; input: SqliteTableCreatePreviewRequest; exit?: SqliteProcessExit; }
 interface CreateTask extends Omit<BrowseTask, 'kind'> { kind: 'create'; input: SqliteTableCreateApplyRequest; claim: SqliteCreateClaim; committing: boolean; exit?: SqliteProcessExit; }
 interface FinishedCreateTask { kind: 'create-finished' | 'create-preview-finished'; active?: undefined; }
-type ReadTask = BrowseTask | ExportTask | EditTask | CreatePreviewTask | CreateTask;
-type Task = QueryTask | BrowseTask | FinishedBrowseTask | ExportTask | FinishedExportTask | EditTask | FinishedEditTask | CreatePreviewTask | CreateTask | FinishedCreateTask;
+interface ImportTask extends Omit<BrowseTask, 'kind'> { kind: 'import'; input: { taskId: string; assertCurrent(): void }; committing: boolean; abort: AbortController; exit?: SqliteProcessExit; }
+interface FinishedImportTask { kind: 'import-finished'; active?: undefined; }
+type ReadTask = BrowseTask | ExportTask | EditTask | CreatePreviewTask | CreateTask | ImportTask;
+type Task = QueryTask | BrowseTask | FinishedBrowseTask | ExportTask | FinishedExportTask | EditTask | FinishedEditTask | CreatePreviewTask | CreateTask | FinishedCreateTask | ImportTask | FinishedImportTask;
 /** 所有独立utility任务共用原连接取消/关闭账本，不因新增建表另建孤岛。 */
-function readTask(task: Task): task is ReadTask { return ['browse', 'export', 'edit', 'create-preview', 'create'].includes(task.kind); }
+function readTask(task: Task): task is ReadTask { return ['browse', 'export', 'edit', 'create-preview', 'create', 'import'].includes(task.kind); }
 function committing(task: ReadTask): boolean { return 'committing' in task && task.committing; }
 export interface SqliteRuntimeOptions {
   emit: (event: TaskEvent) => void;
@@ -75,6 +85,8 @@ export class SqliteRuntime {
   private forceWork?: Promise<void>;
   private readonly edits = new SqliteTableEdits();
   private readonly creates = new SqliteTableCreates();
+  private readonly imports = new SqliteTableImports();
+  private importsActive = 0;
 
   constructor(private readonly options: SqliteRuntimeOptions) {}
 
@@ -258,6 +270,7 @@ export class SqliteRuntime {
     if (committing(task)) return task.active?.then(() => {}, () => {}) ?? Promise.resolve();
     if (!task.active) { task.cancelled = true; return Promise.resolve(); }
     task.cancelled = true;
+    if (task.kind === 'import') task.abort.abort();
     const work = (async () => {
       try {
         if (task.driver) { if (!task.cleaning) await task.driver.cancel(); } else await this.stopOpening(task);
@@ -460,6 +473,86 @@ export class SqliteRuntime {
     return result;
   }
 
+  /** 有效导入任务编号立即留SQLite墓碑，失败、过期或错误确认也不能被其它任务复用。 */
+  private reserveImportTask(id: string): void { if (this.stopping || this.tasks.has(id)) throw Error('SQLite正在退出或任务编号已经使用'); this.tasks.set(id, { kind: 'import-finished' }); }
+  private importCheck(task: ImportTask): void { if (!task.committing) { this.browseCheck(task); task.input.assertCurrent(); } }
+  private importControl(task: ImportTask): SqliteTableImportControl { return { signal: task.abort.signal, check: () => this.importCheck(task), beginCleanup: () => { task.cleaning = true; }, cleanupFailed: reason => { task.cleanupFailure = reason; }, progress: records => { this.importCheck(task); this.options.emit({ taskId: task.input.taskId, status: 'running', progress: 0, message: '正在处理SQLite导入记录；概要不保存文件原值或路径', rows: records }); } }; }
+  private retireImport(task: ImportTask): void { if (!task.active && (!task.resource || !task.connection.resources.has(task.resource)) && this.tasks.get(task.input.taskId) === task) this.tasks.set(task.input.taskId, { kind: 'import-finished' }); }
+  /** 结束准确utility后释放重引用；流文件读取仍由同一任务/pending/AbortController持有。 */
+  private async closeImportDriver(task: ImportTask): Promise<void> {
+    let failure: unknown; const cancelledExit = task.cancelled && !task.committing && task.driver?.isClosed;
+    task.cleaning = true;
+    if (task.driver) {
+      if (!task.driver.isUsable && !cancelledExit) failure = Error('SQLite导入原会话提前失效');
+      try { await task.driver.close(); } catch (reason) { failure = reason; if (!task.driver.isClosed) this.block(task.connection, reason); }
+      if (!cancelledExit && (task.exit?.code !== 0 || task.exit?.signal !== null)) failure ??= Error('SQLite导入原进程未正常退出');
+    }
+    if (task.resource && task.connection.resources.has(task.resource)) { failure ??= Error('SQLite导入原进程退出未确认'); this.block(task.connection, failure); }
+    if (failure) { task.cleanupFailure = failure; throw failure; }
+    task.driver = undefined; task.resource = undefined; task.exit = undefined; task.cleaning = false;
+  }
+  /** 导入使用私有并发预算；实际原任务settled才归还槽位，不能以取消意图提前释放。 */
+  private startImport<T extends SqliteImportResult>(input: ImportTask['input'], connection: Connection, phase: 'inspect' | 'preview' | 'apply', action: (task: ImportTask) => Promise<T>): Promise<T> {
+    if (this.importsActive >= sqliteImportConcurrency) throw Error('SQLite导入已有活动文件任务，请等待原任务收尾');
+    this.importsActive++; const task: ImportTask = { kind: 'import', input, connection, abort: new AbortController(), committing: false, cancelled: false, boundaryCancelled: false, cleaning: false }; this.tasks.set(input.taskId, task);
+    const work = this.track(connection, async () => {
+      let result: T | undefined, failed = false, failure: unknown;
+      try { this.options.emit({ taskId: input.taskId, status: 'running', progress: 0, message: importText.running }); this.importCheck(task); result = await action(task); }
+      catch (reason) { failed = true; failure = reason; }
+      if (task.driver || task.resource) try { await this.closeImportDriver(task); } catch (reason) { const outcome = phase === 'apply' ? importOutcome(result) : undefined; if (outcome) outcome.cleanupWarning = true; else { failure = failed ? new AggregateError([failure, reason], 'SQLite导入操作及准确资源收尾失败') : reason; failed = true; } }
+      if (!failed && phase !== 'apply') try { this.importCheck(task); } catch (reason) { failed = true; failure = reason; }
+      if (failed) { const cancelled = task.cancelled && !task.cleanupFailure && !task.cancelFailure; try { this.options.emit({ taskId: input.taskId, status: cancelled ? 'cancelled' : 'failed', progress: 0, message: cancelled ? 'SQLite导入文件任务已取消，未确认提交' : 'SQLite导入文件任务未完成，请核对文件或原连接' }); } catch { /* 原错误事实优先，不重放。 */ } throw failure; }
+      const outcome = phase === 'apply' ? importOutcome(result) : undefined, invalid = phase === 'preview' && result && 'ok' in result && !result.ok;
+      if (outcome && task.cleanupFailure) outcome.cleanupWarning = true;
+      const cancelled = !!outcome && task.cancelled && !task.cleanupFailure && !task.cancelFailure && outcome.outcome !== 'committed' && outcome.outcome !== 'unknown';
+      try { this.options.emit({ taskId: input.taskId, status: outcome ? outcome.outcome === 'committed' ? 'completed' : cancelled ? 'cancelled' : 'failed' : invalid ? 'failed' : 'completed', progress: outcome && outcome.outcome !== 'committed' || invalid ? 0 : 100, message: outcome?.message ?? (invalid ? 'SQLite全文件预检发现问题，未签发提交能力' : 'SQLite导入文件检查已完成，未执行原表写入') }); } catch { /* 原ACK与完整文件事实不受通知失败覆盖。 */ }
+      return result!;
+    }); task.active = work; const done = () => { this.importsActive--; task.active = undefined; this.retireImport(task); }; void work.then(done, done); return work;
+  }
+  private tableImportInspect(source: unknown): Promise<SqliteTableImportInspectOutput> {
+    const raw = source as SqliteTableImportInspectRequest; if (!raw || typeof raw.filePath !== 'string' || typeof raw.assertCurrent !== 'function') throw Error('SQLite导入检查缺少Main文件和原文档能力');
+    const { filePath, assertCurrent, ...publicInput } = raw, input = sqliteTableImportInspectSchema.parse(publicInput); this.reserveImportTask(input.taskId); assertCurrent();
+    const profile = this.profile(this.options.resolveProfile(input.connectionId), input.connectionId), connection = this.connection(profile.id); this.assertTarget(connection, profile);
+    return this.startImport({ taskId: input.taskId, assertCurrent }, connection, 'inspect', async task => {
+      const control = this.importControl(task), request = { ...input, filePath, assertCurrent }, fileIdentity = await assertSqliteImportSource(filePath, profile, control);
+      task.driver = await this.driver(connection, profile, true, resource => { task.resource = resource; void resource.transport.exited.then(exit => { task.exit = exit; this.retireImport(task); }, () => {}); }); this.importCheck(task);
+      const target = await readSqliteImportTarget(task.driver, profile, input.table, control); await this.closeImportDriver(task); this.importCheck(task);
+      const checked = await inspectSqliteImportFile(request, target, fileIdentity, control); this.importCheck(task); return this.imports.publish(checked);
+    });
+  }
+  private tableImportPreview(source: unknown): Promise<SqliteTableImportPreviewOutput> {
+    const raw = source as SqliteTableImportPreviewRequest; if (!raw || typeof raw.assertCurrent !== 'function') throw Error('SQLite导入预检缺少Main原文档能力');
+    const { assertCurrent, ...publicInput } = raw, input = sqliteTableImportPreviewSchema.parse(publicInput); this.reserveImportTask(input.taskId); assertCurrent(); const inspection = this.imports.inspection(input.inspectionId);
+    const profile = this.profile(this.options.resolveProfile(inspection.target.connectionId)); if (!sameTarget(profile, inspection.profile)) throw Error(importText.stale); const connection = this.connection(profile.id);
+    return this.startImport({ taskId: input.taskId, assertCurrent }, connection, 'preview', async task => {
+      await this.verifyImportCatalogue(task, inspection);
+      const checked = await previewSqliteImport(inspection, { ...input, assertCurrent }, this.importControl(task)); this.importCheck(task);
+      await this.verifyImportCatalogue(task, inspection); this.importCheck(task);
+      return this.imports.publishPreview(inspection, checked);
+    });
+  }
+  /** 每次只读目录检查均使用原连接登记的独立utility，真实close/exit后才继续原文件任务。 */
+  private async verifyImportCatalogue(task: ImportTask, inspection: SqliteImportInspection): Promise<void> {
+    this.importCheck(task);
+    task.driver = await this.driver(task.connection, inspection.profile, true, resource => { task.resource = resource; void resource.transport.exited.then(exit => { task.exit = exit; this.retireImport(task); }, () => {}); }); this.importCheck(task);
+    await verifySqliteImportTarget(task.driver, inspection, this.importControl(task)); await this.closeImportDriver(task); this.importCheck(task);
+  }
+  private tableImportApply(source: unknown): Promise<SqliteTableImportOutcome> {
+    const raw = source as SqliteTableImportApplyRequest;
+    if (!raw || typeof raw.assertCurrent !== 'function' || typeof raw.recordWriteFact !== 'function' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(raw.operationId)) throw Error('SQLite导入提交缺少Main同步事实与原文档能力');
+    const { operationId, assertCurrent, recordWriteFact, ...publicInput } = raw, input = sqliteTableImportApplySchema.parse(publicInput); this.reserveImportTask(input.taskId); const claim = this.imports.claim(input), request = { ...input, operationId, assertCurrent, recordWriteFact }, connection = this.connections.get(claim.inspection.target.connectionId);
+    if (!connection) { const result = sqliteImportNotSent(claim, request); try { this.options.emit({ taskId: input.taskId, status: 'failed', progress: 0, message: importText.notSent }); } catch { /* not-sent不被通知覆盖。 */ } return Promise.resolve(result); }
+    return this.startImport({ taskId: input.taskId, assertCurrent }, connection, 'apply', async task => {
+      let result: SqliteTableImportOutcome;
+      try {
+        this.importCheck(task); const profile = this.profile(this.options.resolveProfile(claim.inspection.target.connectionId)); if (!claim.confirmed || profile.sqlite.readOnly || !sameTarget(profile, claim.inspection.profile)) throw Error(importText.stale);
+        task.driver = await this.driver(connection, profile, false, resource => { task.resource = resource; void resource.transport.exited.then(exit => { task.exit = exit; this.retireImport(task); }, () => {}); }); this.importCheck(task);
+        result = await applySqliteImport(task.driver, claim, request, { ...this.importControl(task), beginCommit: () => { this.importCheck(task); task.committing = true; } });
+      } catch { result = sqliteImportNotSent(claim, request); }
+      this.imports.settle(claim, result.outcome); return result;
+    });
+  }
+
   /** 仅列出已经接入原工作区的命令；其余命令在SQLite终点明确拒绝。 */
   async request(command: string, input: any): Promise<any> {
     switch (command) {
@@ -482,7 +575,7 @@ export class SqliteRuntime {
         const changed = input.transportChanged || connection && (!connection.profile || !sameTarget(connection.profile, next));
         if (!connection || !changed) return;
         if (connection.closing || connection.blocked || connection.pending.size || connection.resources.size || connection.files.size || [...this.sessions.values()].some(session => session.connection === connection)) throw Error('SQLite连接仍有打开的会话、运行操作或未确认资源；请先显式关闭标签并断开连接，现有任务未取消');
-        this.edits.releaseConnection(input.id); this.creates.releaseConnection(input.id); this.connections.delete(input.id); return;
+        this.edits.releaseConnection(input.id); this.creates.releaseConnection(input.id); this.imports.releaseConnection(input.id); this.connections.delete(input.id); return;
       }
       case 'connections.close': return this.closeConnection(input.id);
       case 'sessions.open': {
@@ -529,6 +622,10 @@ export class SqliteRuntime {
       case 'sqlite.tableCreate.preview': return this.tableCreatePreview(input);
       case 'sqlite.tableCreate.apply': return this.tableCreateApply(input);
       case 'sqlite.tableCreate.release': return this.creates.release(sqliteTableCreateReleaseSchema.parse(input).previewId);
+      case 'sqlite.tableImport.inspect': return this.tableImportInspect(input);
+      case 'sqlite.tableImport.preview': return this.tableImportPreview(input);
+      case 'sqlite.tableImport.apply': return this.tableImportApply(input);
+      case 'sqlite.tableImport.release': return this.imports.release(sqliteTableImportReleaseSchema.parse(input));
       case 'metadata.databases': return this.metadata(input, async () => ['main']);
       case 'metadata.objects': return this.metadata(input, async driver => {
         const rows = await this.rows(driver, "SELECT name,type FROM main.sqlite_schema WHERE type IN ('table','view','trigger') AND substr(name,1,7) <> 'sqlite_' ORDER BY type,name LIMIT 10001");
@@ -566,6 +663,7 @@ export class SqliteRuntime {
     connection.closing = true;
     this.edits.releaseConnection(id);
     this.creates.releaseConnection(id);
+    this.imports.releaseConnection(id);
     const work = (async () => {
       const browse = [...this.tasks.values()].filter((task): task is ReadTask => readTask(task) && task.connection === connection && !!task.active);
       const browseDrivers = new Set(browse.map(task => task.driver));
@@ -593,8 +691,8 @@ export class SqliteRuntime {
     if (this.forceWork) return this.forceWork;
     this.stopping = true;
     const work = (async () => {
-      for (const task of this.tasks.values()) if (readTask(task) && !committing(task) && task.active) task.cancelled = true;
-      for (const id of this.connections.keys()) { this.edits.releaseConnection(id); this.creates.releaseConnection(id); }
+      for (const task of this.tasks.values()) if (readTask(task) && !committing(task) && task.active) { task.cancelled = true; if (task.kind === 'import') task.abort.abort(); }
+      for (const id of this.connections.keys()) { this.edits.releaseConnection(id); this.creates.releaseConnection(id); this.imports.releaseConnection(id); }
       const protectedResources = new Set([...this.tasks.values()].filter((task): task is ReadTask => readTask(task) && committing(task) && !!task.active).map(task => task.resource));
       const resources = [...this.connections.values()].flatMap(connection => { connection.closing = true; return [...connection.resources]; });
       for (const resource of resources) if (!protectedResources.has(resource)) try { resource.transport.terminate(); } catch { /* 仍等待真实exit，终止调用异常不能跳过其它句柄。 */ }

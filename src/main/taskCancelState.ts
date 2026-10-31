@@ -6,8 +6,10 @@ export function taskCancelSnapshot(taskIds: string[], tasks: ReadonlyMap<string,
   return [...new Set(taskIds)].map(taskId => {
     const task = tasks.get(taskId);
     const create = task?.kind === 'sqlite.tableCreate.apply' ? task.sqliteCreate : undefined;
+    const imported = task?.kind === 'sqlite.tableImport.apply' ? task.sqliteWrite : undefined;
+    const confirmingImport = imported && (imported.phase === 'commit-pending' || imported.phase === 'unknown' || imported.commitMayHaveBeenSent && !imported.commitAcknowledged && !imported.rollbackAcknowledged);
     const confirmingCreate = create && (create.phase === 'commit-pending' || create.phase === 'unknown' || create.commitMayHaveBeenSent && !create.commitAcknowledged && !create.rollbackAcknowledged);
-    const state = !task ? 'checking' : task.status !== 'running' || create?.commitAcknowledged || create?.rollbackAcknowledged ? 'finished' : confirmingCreate ? 'confirming' : task.kind === 'table.apply' ? tableApplyState(taskId, task.tableApplyReceiptId) : 'allowed';
+    const state = !task ? 'checking' : task.status !== 'running' || create?.commitAcknowledged || create?.rollbackAcknowledged || imported?.commitAcknowledged || imported?.rollbackAcknowledged ? 'finished' : confirmingCreate || confirmingImport ? 'confirming' : task.kind === 'table.apply' ? tableApplyState(taskId, task.tableApplyReceiptId) : 'allowed';
     return { taskId, state };
   });
 }

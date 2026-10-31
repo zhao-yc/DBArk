@@ -25,6 +25,18 @@ function fixture() {
 }
 beforeEach(() => { vi.clearAllMocks(); ports.sqlite.mockReset().mockResolvedValue('sqlite'); ports.close.mockReset().mockResolvedValue(undefined); ports.force.mockReset().mockResolvedValue(undefined); });
 
+it.each(['sqlite.tableImport.inspect', 'sqlite.tableImport.preview', 'sqlite.tableImport.apply', 'sqlite.tableImport.release'])('%s沿SQLite原账本，缺连接或后端拒绝不能降级网络引擎', async command => {
+  const { broker, profiles } = fixture(); profiles.length = 0; const input = { inspectionId: '原检查', previewId: '原预检', taskId: '原任务' }, failure = Error('原SQLite能力已撤销');
+  ports.sqlite.mockRejectedValueOnce(failure); await expect(broker.request(command, input)).rejects.toBe(failure);
+  expect(ports.sqlite).toHaveBeenCalledExactlyOnceWith(command, input); expect(ports.fork).not.toHaveBeenCalled();
+});
+it('收尾中的导入只能释放准确能力，文件检查/预检/提交不能跨关闭屏障', async () => {
+  const { broker } = fixture(); let finish!: () => void; ports.close.mockReturnValueOnce(new Promise<void>(resolve => { finish = resolve; })); const closing = broker.close();
+  await expect(broker.request('sqlite.tableImport.release', { inspectionId: '原检查' })).resolves.toBe('sqlite');
+  for (const command of ['sqlite.tableImport.inspect', 'sqlite.tableImport.preview', 'sqlite.tableImport.apply']) await expect(broker.request(command, { taskId: '不得启动' })).rejects.toThrow('正在收尾');
+  expect(ports.sqlite).toHaveBeenCalledTimes(1); expect(ports.fork).not.toHaveBeenCalled(); finish(); await closing;
+});
+
 it.each(['sqlite.tableEdit.preview', 'sqlite.tableEdit.apply', 'sqlite.tableEdit.release'])('%s只有令牌也准确路由原SQLite账本，拒绝不加载网络驱动', async command => {
   const { broker, profiles } = fixture(); profiles.length = 0;
   const input = command.endsWith('preview') ? { snapshotId: '原页令牌', taskId: '新任务', changes: [] } : { previewId: '原预览令牌' };
