@@ -184,8 +184,8 @@ describe('SQLite 当前语句复用真实 QueryTab 意图与准入', () => {
     else f.port.cancelledQuery.current = f.port.task.current;
     held.release(); await pending; expect(f.invoke.mock.calls.some(([command]) => command === 'query.execute')).toBe(false); expect([...f.listeners.values()].every(group => !group.size)).toBe(true);
   });
-  it.each(['parameters', 'explain', 'analyze', 'continue', 'warnings'] as const)('显式%s仍在SQLite runQuery投递前拒绝，不因current开放旁路', async kind => {
-    const f = fixture('sqlite'), locator = { dispose: vi.fn() }; const result = await f.port.handlers.runQuery('SELECT 1', kind === 'explain' ? 'explain' : kind === 'analyze' ? 'analyze' : 'execute', kind === 'parameters' ? [] : undefined, undefined, locator, undefined, kind === 'continue', kind === 'warnings'); expect(result).toBe(false); expect(f.invoke).not.toHaveBeenCalled(); expect(f.port.setError).toHaveBeenCalledWith(f.port.sqliteZh.unsupported); expect(locator.dispose).toHaveBeenCalledOnce();
+  it.each(['parameters', 'explain-parameters', 'analyze', 'continue', 'warnings'] as const)('显式%s仍在SQLite runQuery投递前拒绝，不因current/计划开放旁路', async kind => {
+    const f = fixture('sqlite'), locator = { dispose: vi.fn() }; const result = await f.port.handlers.runQuery('SELECT 1', kind === 'explain-parameters' ? 'explain' : kind === 'analyze' ? 'analyze' : 'execute', kind === 'parameters' || kind === 'explain-parameters' ? [] : undefined, undefined, locator, undefined, kind === 'continue', kind === 'warnings'); expect(result).toBe(false); expect(f.invoke).not.toHaveBeenCalled(); expect(f.port.setError).toHaveBeenCalledWith(f.port.sqliteZh.unsupported); expect(locator.dispose).toHaveBeenCalledOnce();
   });
   it.each(['mysql', 'sqlite'] as const)('%s原生菜单声明命令使用同handler，busy/close/file/hidden/modal与旧revision均拒绝', async dialect => {
     let initializer = ''; function inspect(node: ts.Node) { if (ts.isPropertyAssignment(node) && node.name.getText(tree) === "'execute-current'") initializer = node.initializer.getText(tree); ts.forEachChild(node, inspect); } inspect(tree); expect(initializer).not.toBe('');
@@ -194,5 +194,33 @@ describe('SQLite 当前语句复用真实 QueryTab 意图与准入', () => {
       const registry = new UiCommandRegistry(); registry.update('tab:tab', {}, { active: blocked !== 'hidden', contextKey: 'current', handlers: { 'execute-current': port.command } }); registry.setBlocked(blocked === 'modal'); const revision = registry.getSnapshot().revision; if (blocked === 'revision') registry.invalidate();
       expect(await registry.execute({ id: 'execute-current', revision })).toBe(blocked === 'none'); expect(executeCurrentStatement).toHaveBeenCalledTimes(blocked === 'none' ? 1 : 0);
     }
+  });
+});
+
+describe('SQLite 执行计划复用真实 QueryTab 会话与入口', () => {
+  it('明确计划只发送原选区query.explain auto，沿原会话和事务，不夹current/参数/存留开关', async () => {
+    const f = fixture('sqlite'); f.port.sessionRef.current = 'session'; f.port.continueOnError = true; f.port.collectWarnings = true;
+    f.invoke.mockResolvedValueOnce({ results: [], elapsedMs: 1, transactionOpen: true, sqliteExplain: { dialect: 'sqlite', version: '合成', initialView: 'tree', nodes: [], raw: '', rawTruncated: false, warnings: [] } }); await f.original('explain');
+    expect(f.invoke).toHaveBeenCalledExactlyOnceWith('query.explain', { sessionId: 'session', sql: 'SELECT selected', taskId: 'task-1', maxRows: 10, format: 'auto' }); expect(f.port.setTransaction).toHaveBeenCalledWith(true); expect(f.workspace.setDirty).toHaveBeenCalledWith('tab', true); expect(f.port.sessionRef.current).toBe('session'); expect([...f.listeners.values()].every(group => !group.size)).toBe(true);
+  });
+  it('显式text请求仍走EQP原命令format text，没有调用MySQL fallback或analyze', async () => {
+    const f = fixture('sqlite'); f.port.sessionRef.current = 'session'; await f.port.handlers.runQuery('SELECT 7', 'explain-text'); expect(f.invoke).toHaveBeenCalledExactlyOnceWith('query.explain', { sessionId: 'session', sql: 'SELECT 7', taskId: 'task-1', maxRows: 10, format: 'text' });
+  });
+  it.each(['busy', 'modal', 'hidden', 'closing', 'file', 'other-job'] as const)('%s旧计划入口在任何建连/执行前拒绝', async kind => {
+    const f = fixture('sqlite'); if (kind === 'busy') f.port.busyRef.current = true; else if (kind === 'modal') f.modal(true); else if (kind === 'hidden') f.workspace.settings.activeTabId = 'other'; else if (kind === 'closing') f.port.closeRequestRef.current = {}; else if (kind === 'file') f.fileBusy(true); else f.workspace.activeJobs.tab = true;
+    await f.original('explain'); expect(f.invoke).not.toHaveBeenCalled(); expect(f.flushSettings).not.toHaveBeenCalled();
+  });
+  it.each(['connections.open', 'sessions.open', 'settings'] as const)('计划%s等待期间原source ABA撤权，不投递迟到计划', async phase => {
+    const f = fixture('sqlite'), held = gate(), original = f.model.getValue(); if (phase === 'settings') f.flushSettings.mockImplementationOnce(() => held.pending);
+    else f.invoke.mockImplementationOnce(async command => { expect(command).toBe('connections.open'); if (phase === 'connections.open') await held.pending; return {}; });
+    if (phase === 'sessions.open') f.invoke.mockImplementationOnce(async command => { expect(command).toBe('sessions.open'); await held.pending; return { sessionId: 'session' }; });
+    const pending = f.original('explain'); await vi.waitFor(() => expect(phase === 'settings' ? f.flushSettings : f.invoke).toHaveBeenCalledTimes(phase === 'sessions.open' ? 2 : 1)); f.edit('新规划正文'); f.edit(original); held.release(); await pending;
+    expect(f.invoke.mock.calls.some(([command]) => command === 'query.explain' || command === 'query.execute')).toBe(false); expect([...f.listeners.values()].every(group => !group.size)).toBe(true);
+  });
+  it('声明explain菜单对SQLite可用但其它未接能力仍禁用，模态/旧菜单revision拒执行', async () => {
+    const declarations = new Map<string, string>(); function inspect(node: ts.Node) { if (ts.isPropertyAssignment(node) && ['explain', 'analyze', 'parameters', "'transaction-settings'"].includes(node.name.getText(tree)) && node.initializer.getText(tree).includes('enabled:')) declarations.set(node.name.getText(tree), node.initializer.getText(tree)); ts.forEachChild(node, inspect); } inspect(tree); expect(declarations.size).toBe(4);
+    const execute = vi.fn(), port = createContext({ sqlite: true, busy: false, connection: {}, closeRequest: undefined, fileSource: { busy: false }, execute, openAnalyze: vi.fn(), openParameters: vi.fn(), openTransactionSettings: vi.fn() }); for (const [name, value] of declarations) runInContext('globalThis[' + JSON.stringify(name) + ']=' + value, port);
+    expect(port.explain.enabled).toBe(true); expect(port.analyze.enabled).toBe(false); expect(port.parameters.enabled).toBe(false); expect(port["'transaction-settings'"].enabled).toBe(false);
+    const registry = new UiCommandRegistry(); registry.update('tab:tab', {}, { active: true, contextKey: 'sqlite-plan', handlers: { explain: port.explain } }); registry.setBlocked(false); const old = registry.getSnapshot().revision; registry.setBlocked(true); registry.setBlocked(false); expect(await registry.execute({ id: 'explain', revision: old })).toBe(false); expect(execute).not.toHaveBeenCalled(); expect(await registry.execute({ id: 'explain', revision: registry.getSnapshot().revision })).toBe(true); expect(execute).toHaveBeenCalledExactlyOnceWith('explain');
   });
 });

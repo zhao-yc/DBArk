@@ -4,7 +4,7 @@
 
 DBArk 保留连接树、多标签查询和表格编辑等熟悉的工作方式，使用独立的界面与实现。当前开发范围为 Windows 和 macOS 客户端。
 
-当前开发源码还提供 [SQLite 文件连接与原查询工作区](docs/development/sqlite-workspace-20261031.md)、[执行光标所在语句](docs/development/sqlite-current-statement-20261101.md)、[分页表格、筛选和多列排序](docs/development/sqlite-table-browse-20261031.md)、[按已应用条件完整流式导出](docs/development/sqlite-table-export-20261031.md)、[SQL 结构及数据导出](docs/development/sqlite-schema-export-20261101.md)，以及[读写表格草稿、修改预览和集中提交](docs/development/sqlite-table-edit-20261101.md)。SQLite 结构设计和导入仍待接入；这些能力不属于下列已发布安装包。
+当前开发源码还提供 [SQLite 文件连接与原查询工作区](docs/development/sqlite-workspace-20261031.md)、[执行光标所在语句](docs/development/sqlite-current-statement-20261101.md)、[查看执行计划](docs/development/sqlite-explain-20261101.md)、[分页表格、筛选和多列排序](docs/development/sqlite-table-browse-20261031.md)、[按已应用条件完整流式导出](docs/development/sqlite-table-export-20261031.md)、[SQL 结构及数据导出](docs/development/sqlite-schema-export-20261101.md)，以及[读写表格草稿、修改预览和集中提交](docs/development/sqlite-table-edit-20261101.md)。SQLite 结构设计和导入仍待接入；这些能力不属于下列已发布安装包。
 
 ## 下载
 

@@ -17,12 +17,13 @@ describe('SQLite独立源码CI的原生门与环境隔离', () => {
     ['export', 'sqlite-table-export-native.spec.ts', 'sqlite-table-export', 'DBARK_SQLITE_TABLE_EXPORT_NATIVE_TEST'],
     ['edit', 'sqlite-table-edit-native.spec.ts', 'sqlite-table-edit', 'DBARK_SQLITE_TABLE_EDIT_NATIVE_TEST'],
     ['schema-export', 'sqlite-schema-export-native.spec.ts', 'sqlite-schema-export', 'DBARK_SQLITE_SCHEMA_EXPORT_NATIVE_TEST'],
-    ['current', 'sqlite-current-statement-native.spec.ts', 'sqlite-current-statement', 'DBARK_SQLITE_CURRENT_NATIVE_TEST']
+    ['current', 'sqlite-current-statement-native.spec.ts', 'sqlite-current-statement', 'DBARK_SQLITE_CURRENT_NATIVE_TEST'],
+    ['explain', 'sqlite-explain-native.spec.ts', 'sqlite-explain', 'DBARK_SQLITE_EXPLAIN_NATIVE_TEST']
   ])('%s仅发固定spec、单worker、零重试、trace关闭；不覆盖原120秒或提供认证参数', (kind, spec, output, gate) => {
     const args: string[] = sqliteOfflineCommand(kind); expect(args).toContain('--workers=1'); expect(args).toContain('--retries=0'); expect(args).toContain('--trace=off'); expect(args).toContain('--reporter=list,json');
     expect(args.some(value => /timeout|password|executable-path|grep|repeat-each/.test(value))).toBe(false);
     expect(args).toContain('tests/e2e/' + spec); expect(args).toContain('--output=test-results/' + output);
-    const { env } = sqliteOfflineEnvironment({ DBARK_SQLITE_WORKSPACE_NATIVE_TEST: '1', DBARK_SQLITE_TABLE_BROWSE_NATIVE_TEST: '1', DBARK_SQLITE_TABLE_EXPORT_NATIVE_TEST: '1', DBARK_SQLITE_TABLE_EDIT_NATIVE_TEST: '1', DBARK_SQLITE_SCHEMA_EXPORT_NATIVE_TEST: '1', DBARK_SQLITE_CURRENT_NATIVE_TEST: '1' }, kind); expect(env.DBARK_INTEGRATION_ENABLED).toBe('0'); expect(env[gate]).toBe('1');
+    const { env } = sqliteOfflineEnvironment({ DBARK_SQLITE_WORKSPACE_NATIVE_TEST: '1', DBARK_SQLITE_TABLE_BROWSE_NATIVE_TEST: '1', DBARK_SQLITE_TABLE_EXPORT_NATIVE_TEST: '1', DBARK_SQLITE_TABLE_EDIT_NATIVE_TEST: '1', DBARK_SQLITE_SCHEMA_EXPORT_NATIVE_TEST: '1', DBARK_SQLITE_CURRENT_NATIVE_TEST: '1', DBARK_SQLITE_EXPLAIN_NATIVE_TEST: '1' }, kind); expect(env.DBARK_INTEGRATION_ENABLED).toBe('0'); expect(env[gate]).toBe('1');
     expect(Object.keys(env).filter(key => key.endsWith('_NATIVE_TEST'))).toEqual([gate]);
     expect(env.PLAYWRIGHT_JSON_OUTPUT_NAME.replaceAll('\\', '/')).toContain('/test-results/' + output + '/report.json');
   });

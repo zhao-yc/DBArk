@@ -1,0 +1,5 @@
+/* SQLite 仅呈现原生说明与编号，不留 MySQL 成本/行数指标的空占位。 */
+.sqlite-explain-view .sqlite-explain-node { gap: 4px; }
+.sqlite-explain-node small { color: var(--muted); font-size: 10px; }
+.sqlite-explain-detail-text { white-space: pre-wrap; overflow-wrap: anywhere; }
+.sqlite-explain-view .explain-content > .results-grid { height: 100%; min-height: 160px; }

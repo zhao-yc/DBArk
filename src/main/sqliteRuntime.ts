@@ -418,11 +418,12 @@ export class SqliteRuntime {
       case 'sessions.close': { const session = this.sessions.get(input.sessionId); if (session) await this.closeSession(session); return; }
       case 'query.sessionState': return this.session(input.sessionId, true).query.state();
       case 'query.completionState': return this.session(input.sessionId, true).query.completionState();
-      case 'query.execute': {
+      case 'query.execute':
+      case 'query.explain': {
         const session = this.session(input.sessionId);
         if (typeof input.taskId !== 'string' || !input.taskId || input.taskId.length > 200 || this.tasks.has(input.taskId)) throw Error('SQLite任务编号无效或已经使用');
         const task: QueryTask = { kind: 'query', session }; this.tasks.set(input.taskId, task);
-        const work = this.sessionOperation(session, () => session.query.execute(input as CommandMap['query.execute']['input'])); task.active = work;
+        const work = this.sessionOperation(session, () => command === 'query.explain' ? session.query.explain(input as CommandMap['query.explain']['input']) : session.query.execute(input as CommandMap['query.execute']['input'])); task.active = work;
         void work.then(() => { task.active = undefined; }, () => { task.active = undefined; }); return work;
       }
       case 'query.transaction': { const session = this.session(input.sessionId, input.action === 'rollback'); return this.sessionOperation(session, () => session.query.transaction(input)); }

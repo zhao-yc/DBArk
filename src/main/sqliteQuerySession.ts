@@ -4,8 +4,12 @@ import type { CompletionSessionState } from '../shared/sqlCompletion';
 import { SqliteDriverError, type SqliteDriverSession } from '../engine/sqlite/session';
 import { sqliteDriverLimits, type SqliteCancellation, type SqliteStatementResult, type SqliteValue } from '../engine/sqlite/protocol';
 import { currentSqliteStatement } from '../engine/sqlite/currentStatement';
+import { sqliteExplainSource } from '../engine/sqlite/explainSource';
+import { buildSqliteExplainPlan } from '../shared/sqliteExplain';
 
 type ExecuteInput = CommandMap['query.execute']['input'];
+type ExplainInput = CommandMap['query.explain']['input'];
+interface RunOptions { single: boolean; sourceRange?: { start: number; end: number }; explainView?: 'tree' | 'table'; }
 type SessionState = CommandMap['query.sessionState']['output'];
 type TransactionInput = CommandMap['query.transaction']['input'];
 export type SqliteCompletionState = Omit<CompletionSessionState, 'dialect'> & { dialect: 'sqlite' };
@@ -56,6 +60,19 @@ export class SqliteQuerySession {
     if (input.continueOnError === true || input.collectWarnings === true) throw Error('SQLite遇错继续和MySQL警告采集尚未接入，本次没有发送SQL');
     const selected = input.currentStatement === undefined ? undefined : currentSqliteStatement(input.sql, input.currentStatement.offset);
     if (input.currentStatement !== undefined && !selected) throw Error('SQLite光标位置没有可执行的当前语句，本次没有发送SQL');
+    return this.run(input, selected?.sql ?? input.sql, { single: !!selected, ...(selected ? { sourceRange: { start: selected.start, end: selected.end } } : {}) });
+  }
+
+  /** 仅在原物理会话执行EQP包装，不执行原DML；只读会话仍由原authorizer拒绝其写目标授权。 */
+  async explain(input: ExplainInput): Promise<QueryOutcome> {
+    this.available(input.sessionId);
+    if (typeof input.taskId !== 'string' || !input.taskId || input.taskId.length > 200 || typeof input.sql !== 'string' || !Number.isSafeInteger(input.maxRows) || input.maxRows < 1 || input.maxRows > 100000 || input.format !== undefined && input.format !== 'auto' && input.format !== 'text') throw Error('SQLite执行计划请求或结果预算无效');
+    const source = sqliteExplainSource(input.sql);
+    return this.run({ ...input, maxRows: Math.min(input.maxRows, 1000) }, source.sql, { single: true, sourceRange: source.sourceRange, explainView: input.format === 'text' ? 'table' : 'tree' });
+  }
+
+  /** 查询与计划共用同一active任务、ACK、预算、原生终态和通知失效保护，不能绕开会话忙态或重放。 */
+  private async run(input: Pick<ExecuteInput, 'taskId' | 'maxRows'>, sql: string, options: RunOptions): Promise<QueryOutcome> {
     const operation: Execution = { taskId: input.taskId, results: [], started: performance.now(), rows: 0 };
     let resultLimitReached = false;
     this.active = operation;
@@ -79,10 +96,10 @@ export class SqliteQuerySession {
     };
     try {
       event({ executionDatabase: { state: 'known', database: 'main' } });
-      const outcome = await this.driver.execute(selected?.sql ?? input.sql, {
+      const outcome = await this.driver.execute(sql, {
         maxRows: input.maxRows, batchRows: 200, maxBytes: 16 * 1024 * 1024,
         // 空绑定数组显式启用原worker的原生单完整语句复核；词法定位错误也不能偷偷step第二句。
-        ...(selected ? { parameters: [] } : {}),
+        ...(options.single ? { parameters: [] } : {}),
         onStatement: statement => {
           if (statement.index !== operation.results.length) throw Error('SQLite结果集顺序与原任务不匹配');
           if (statement.index >= resultLimit) { resultLimitReached = true; throw Error('SQLite结果集数量超过200，后续语句尚未执行'); }
@@ -106,15 +123,20 @@ export class SqliteQuerySession {
       });
       if (!outcome.statements.length) throw Error('SQLite脚本中没有可执行语句');
       const results = complete(outcome.statements);
+      // 即使原表受行预算截断，也交共享builder显式降级为不完整表格；只有原生成功才附计划。
+      const sqliteExplain = options.explainView && results.length === 1 ? buildSqliteExplainPlan(results[0], this.driver.version, options.explainView) : undefined;
       terminalEvent({ status: 'completed', progress: 100, rows: operation.rows, message: 'SQLite查询执行完成' });
-      return { results, elapsedMs: performance.now() - operation.started, transactionOpen: outcome.transaction };
+      return { results, elapsedMs: performance.now() - operation.started, transactionOpen: outcome.transaction, ...(sqliteExplain ? { sqliteExplain } : {}) };
     } catch (reason) {
       const cancelled = reason instanceof SqliteDriverError && ['SQLITE_CANCELLED', 'SQLITE_CANCELLED_SESSION_CLOSED'].includes(reason.code);
-      terminalEvent({ status: cancelled ? 'cancelled' : 'failed', progress: 0, message: reason instanceof Error ? reason.message : 'SQLite查询失败' });
+      const message = options.explainView && this.driver.readOnly && reason instanceof SqliteDriverError && reason.code === 'SQLITE_NATIVE_23'
+        ? 'SQLite执行计划被原只读会话的原生权限检查拒绝；本次未执行原SQL，也未绕过写权限'
+        : reason instanceof Error ? reason.message : 'SQLite查询失败';
+      terminalEvent({ status: cancelled ? 'cancelled' : 'failed', progress: 0, message });
       // 只返回原生确认完成的前序结果；失败语句的部分流式行不能冒充完整结果。
-      if (reason instanceof SqliteDriverError && !cancelled && !reason.sessionClosed && (reason.code.startsWith('SQLITE_NATIVE_') || selected && reason.code === 'SQLITE_PARAMETERS_REQUIRE_SINGLE_STATEMENT' || resultLimitReached && reason.code === 'SQLITE_CONSUMER_FAILED')) {
+      if (reason instanceof SqliteDriverError && !cancelled && !reason.sessionClosed && (reason.code.startsWith('SQLITE_NATIVE_') || options.single && reason.code === 'SQLITE_PARAMETERS_REQUIRE_SINGLE_STATEMENT' || resultLimitReached && reason.code === 'SQLITE_CONSUMER_FAILED')) {
         if (reason.completedResults.length !== reason.completedStatements) throw Error('SQLite失败回执缺少前序完整结果，不能发布成功摘要');
-        return { results: complete(reason.completedResults), elapsedMs: performance.now() - operation.started, transactionOpen: reason.transaction ?? undefined, failure: { statementOrdinal: reason.completedStatements + 1, statementsCompleted: reason.completedStatements, message: reason.message, ...(selected ? { sourceRange: { start: selected.start, end: selected.end } } : {}) } };
+        return { results: complete(reason.completedResults), elapsedMs: performance.now() - operation.started, transactionOpen: reason.transaction ?? undefined, failure: { statementOrdinal: reason.completedStatements + 1, statementsCompleted: reason.completedStatements, message, ...(options.sourceRange ? { sourceRange: { ...options.sourceRange } } : {}) } };
       }
       throw reason;
     } finally { if (this.active === operation) this.active = undefined; }

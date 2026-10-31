@@ -88,6 +88,8 @@ jobs:
         run: node scripts/sqlite-workspace-ci.mjs schema-export
       - name: 单次运行SQLite当前语句原生专项
         run: node scripts/sqlite-workspace-ci.mjs current
+      - name: 单次运行SQLite执行计划原生专项
+        run: node scripts/sqlite-workspace-ci.mjs explain
       - name: 始终保留本轮SQLite专项原始记录
         if: always()
         uses: actions/upload-artifact@v4
@@ -100,4 +102,5 @@ jobs:
             test-results/sqlite-table-edit/
             test-results/sqlite-schema-export/
             test-results/sqlite-current-statement/
+            test-results/sqlite-explain/
           if-no-files-found: warn
